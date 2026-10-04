@@ -144,3 +144,297 @@ static void radius_cases(void)
         sheeted_close(&q);
     }
 }
+
+// Gradients (PILE3.md § Gradients): what libgarb kept, read into flow's.
+// The initial direction is down, 180 degrees; `to top right` is a corner,
+// whose angle the box's shape decides; 0.25turn is 90 degrees. A stop
+// written with two positions is two stops; a hint has no colour; a stop
+// with none is auto. A radial's initial is an ellipse to the farthest
+// corner at the centre; a circle given one length keeps it for both
+// radii. currentColor in a stop is the element's colour.
+// A sheet's list is copied into every element it reaches, so a page can
+// multiply it: one rule of 400 gradient layers on 500 elements asks for
+// far more than F_STYLE_LISTS_BUDGET. The styles are still built, the
+// first elements have their layers, and the ones past the budget keep the
+// initial single layer — styling stops growing instead of the page
+// failing.
+static void collect_divs(const os64_html_node_t *n, const os64_html_node_t **out, int *k, int cap)
+{
+    for (; n != NULL; n = n->next) {
+        if (n->kind == OS64_HTML_ELEMENT && n->tag == OS64_HTML_TAG_DIV && *k < cap)
+            out[(*k)++] = n;
+        collect_divs(n->first_child, out, k, cap);
+    }
+}
+
+static void list_budget_case(void)
+{
+    enum { LAYERS = 400, DIVS = 500 };
+    size_t cap = 64 + LAYERS * 40 + DIVS * 16;
+    char *html = malloc(cap);
+    size_t at = 0;
+    at += (size_t)snprintf(html + at, cap - at, "<!doctype html><style>div{background-image:");
+    for (int i = 0; i < LAYERS; i++)
+        at += (size_t)snprintf(html + at, cap - at, "%slinear-gradient(red,blue)", i ? "," : "");
+    at += (size_t)snprintf(html + at, cap - at, "}</style>");
+    for (int i = 0; i < DIVS; i++)
+        at += (size_t)snprintf(html + at, cap - at, "<div></div>");
+    Sheeted p;
+    sheeted_open(&p, html, 800, 600);
+    FStyles *styles = f_style_build(p.doc, p.page, &p.env);
+    expect("lists budget: a multiplied list still styles the page", styles != NULL, NULL);
+    if (styles != NULL) {
+        const os64_html_node_t *divs[DIVS];
+        int k = 0;
+        collect_divs(p.doc->document, divs, &k, DIVS);
+        const FStyled *first = k > 0 ? f_style_of(styles, divs[0]) : NULL;
+        const FStyled *last = k > 0 ? f_style_of(styles, divs[k - 1]) : NULL;
+        expect("lists budget: every div styled", k == DIVS && first != NULL && last != NULL,
+               NULL);
+        if (first != NULL && last != NULL) {
+            expect("lists budget: the first div has its layers",
+                   first->style.backgrounds.nimage == LAYERS, NULL);
+            expect("lists budget: a div past the budget keeps the initial layer",
+                   last->style.backgrounds.nimage == 1 &&
+                   last->style.backgrounds.image[0].gradient == NULL, NULL);
+        }
+        expect("lists budget: never spent past", styles->lists_left <= F_STYLE_LISTS_BUDGET,
+               NULL);
+    }
+    f_style_free(styles);
+    sheeted_close(&p);
+    free(html);
+}
+
+static void gradient_style_cases(void)
+{
+    list_budget_case();
+    cascade_case("gradients: what a page wrote, read", 400,
+        "<!doctype html><style>"
+        ".a{background-image:linear-gradient(red,blue)}"
+        ".b{background-image:linear-gradient(to top right,red 10%,30%,blue 2px 4px)}"
+        ".c{background-image:repeating-radial-gradient(circle 20px at 10px 50%,red,blue)}"
+        ".d{color:green;background-image:linear-gradient(0.25turn,red,currentColor)}"
+        ".e{background:radial-gradient(red,blue)}"
+        "</style><div class=a></div><div class=b></div><div class=c></div>"
+        "<div class=d></div><div class=e></div>",
+        "html block holds-block\n"
+        "  head none\n"
+        "  body block margin=8/8/8/8 holds-block\n"
+        "    div block gradient=linear:180000:#ff0000@auto,#0000ff@auto\n"
+        "    div block gradient=linear:to 1 -1:#ff0000@10%,@30%,#0000ff@2,#0000ff@4\n"
+        "    div block gradient=repeating-radial:circle size 20/20 at 10/50%:"
+        "#ff0000@auto,#0000ff@auto\n"
+        "    div block color=#008000 gradient=linear:90000:#ff0000@auto,currentColor@auto\n"
+        "    div block gradient=radial:ellipse farthest-corner at 50%/50%:"
+        "#ff0000@auto,#0000ff@auto\n");
+    // An angle is taken round the circle before it is scaled: 1e20 degrees
+    // is fmod's 280, not whatever an overflowed integer makes of it.
+    cascade_case("gradients: an angle of any size", 400,
+        "<!doctype html><style>"
+        ".a{background-image:linear-gradient(1e20deg,red,blue)}"
+        ".b{background-image:linear-gradient(-90deg,red,blue)}"
+        ".c{background-image:linear-gradient(720.5deg,red,blue)}"
+        "</style><div class=a></div><div class=b></div><div class=c></div>",
+        "html block holds-block\n"
+        "  head none\n"
+        "  body block margin=8/8/8/8 holds-block\n"
+        "    div block gradient=linear:280000:#ff0000@auto,#0000ff@auto\n"
+        "    div block gradient=linear:270000:#ff0000@auto,#0000ff@auto\n"
+        "    div block gradient=linear:500:#ff0000@auto,#0000ff@auto\n");
+    // Past 1e300 too, to the top of a double's range. The remainders are
+    // fmod's of the double libgarb reads, which is within a few units in
+    // the last place of the text (tokenize.c, BROWSER_DEBTS.md):
+    // 1.0000000000000002e301 reads as 1.0000000000000008e301 (48 degrees),
+    // 1e308 as 1.0000000000000006e308 (320).
+    cascade_case("gradients: every finite angle", 400,
+        "<!doctype html><style>"
+        ".d{background-image:linear-gradient(1.0000000000000002e301deg,red,blue)}"
+        ".e{background-image:linear-gradient(-1.0000000000000002e301deg,red,blue)}"
+        ".f{background-image:linear-gradient(1e308deg,red,blue)}"
+        "</style><div class=d></div><div class=e></div><div class=f></div>",
+        "html block holds-block\n"
+        "  head none\n"
+        "  body block margin=8/8/8/8 holds-block\n"
+        "    div block gradient=linear:48000:#ff0000@auto,#0000ff@auto\n"
+        "    div block gradient=linear:312000:#ff0000@auto,#0000ff@auto\n"
+        "    div block gradient=linear:320000:#ff0000@auto,#0000ff@auto\n");
+    // Every unit is taken round its own turn before it becomes degrees, so
+    // none overflows on the way: 1e307rad (libgarb reads 1.0000000000000005e307)
+    // is fmod's remainder by the double nearest 2 pi, as degrees.
+    cascade_case("gradients: an angle in any unit", 400,
+        "<!doctype html><style>"
+        ".g{background-image:linear-gradient(1e307rad,red,blue)}"
+        ".h{background-image:linear-gradient(-1e307rad,red,blue)}"
+        ".i{background-image:linear-gradient(2.5turn,red,blue)}"
+        ".j{background-image:linear-gradient(-0.25turn,red,blue)}"
+        ".k{background-image:linear-gradient(500grad,red,blue)}"
+        "</style><div class=g></div><div class=h></div><div class=i></div>"
+        "<div class=j></div><div class=k></div>",
+        "html block holds-block\n"
+        "  head none\n"
+        "  body block margin=8/8/8/8 holds-block\n"
+        "    div block gradient=linear:167463:#ff0000@auto,#0000ff@auto\n"
+        "    div block gradient=linear:192537:#ff0000@auto,#0000ff@auto\n"
+        "    div block gradient=linear:180000:#ff0000@auto,#0000ff@auto\n"
+        "    div block gradient=linear:270000:#ff0000@auto,#0000ff@auto\n"
+        "    div block gradient=linear:90000:#ff0000@auto,#0000ff@auto\n");
+    // currentColor is the colour of the element that USES it (CSS Color 4
+    // § 4.4): a background or border colour taken by `inherit` is the
+    // child's colour, and one written before `color` in the same rule is
+    // the colour the rule ends with.
+    cascade_case("currentColor resolves where it is used", 400,
+        "<!doctype html><style>"
+        ".p{color:#008000;background-color:currentColor;border:1px solid}"
+        ".c{color:#0000ff;background-color:inherit;border:1px solid;border-color:inherit}"
+        ".d{background-color:currentColor;color:#ff0000}"
+        "</style><div class=p><div class=c></div></div><div class=d></div>",
+        "html block holds-block\n"
+        "  head none\n"
+        "  body block margin=8/8/8/8 holds-block\n"
+        "    div block color=#008000 bg=#008000 border=1:solid:#008000 holds-block\n"
+        "      div block color=#0000ff bg=#0000ff border=1:solid:#0000ff\n"
+        "    div block color=#ff0000 bg=#ff0000\n");
+}
+
+// background-size, -origin and -clip as computed: an em is the box's
+// font's, a single length's height is auto, and the shorthand's one box
+// is both the origin and the clip.
+static void background_box_cases(void)
+{
+    cascade_case("backgrounds: size, origin and clip, read", 400,
+        "<!doctype html><style>"
+        ".a{background-size:cover;background-origin:border-box}"
+        ".b{font-size:10px;background-size:2em 50%;background-clip:content-box}"
+        ".c{background-size:30px}"
+        ".d{background:linear-gradient(red,blue) 0 0/contain content-box}"
+        ".e{background-size:20px 20px;background-clip:text}"
+        ".f{background-size:20px 20px;background:red}"
+        "</style><div class=a></div><div class=b></div><div class=c></div>"
+        "<div class=d></div><div class=e></div><div class=f></div>",
+        "html block holds-block\n"
+        "  head none\n"
+        "  body block margin=8/8/8/8 holds-block\n"
+        "    div block bg-size=cover bg-origin=border-box\n"
+        "    div block size=10 bg-size=20/50% bg-clip=content-box\n"
+        "    div block bg-size=30/auto\n"
+        "    div block bg-size=contain bg-origin=content-box bg-clip=content-box "
+        "gradient=linear:180000:#ff0000@auto,#0000ff@auto\n"
+        "    div block bg-size=20/20 bg-clip=text\n"
+        "    div block bg=#ff0000\n");
+    // Layers: the images say how many; a shorter list repeats (the one
+    // repeat, the two sizes taken in turn), a longer one is cut; `inherit`
+    // takes the parent's whole list.
+    cascade_case("backgrounds: every layer, read", 400,
+        "<!doctype html><style>"
+        ".a{background-image:url(a.png),url(b.png),url(c.png);background-repeat:no-repeat;"
+        "background-size:10px,cover;background-clip:content-box,padding-box,border-box,text}"
+        ".b{background:url(a.png) 1px 2px,linear-gradient(red,blue) content-box}"
+        ".c{background-image:inherit}"
+        "</style><div class=a></div><div class=b><div class=c></div></div>",
+        "html block holds-block\n"
+        "  head none\n"
+        "  body block margin=8/8/8/8 holds-block\n"
+        "    div block bg-image=\"a.png\"@0 no-repeat 0%/0% bg-size=10/auto bg-clip=content-box"
+        " layer=1 bg-image=\"b.png\"@0 no-repeat 0%/0% bg-size=cover bg-clip=padding-box"
+        " layer=2 bg-image=\"c.png\"@0 no-repeat 0%/0% bg-size=10/auto\n"
+        "    div block bg-image=\"a.png\"@0 repeat 1/2"
+        " layer=1 bg-origin=content-box bg-clip=content-box"
+        " gradient=linear:180000:#ff0000@auto,#0000ff@auto holds-block\n"
+        "      div block bg-image=\"a.png\"@0 repeat 0%/0%"
+        " layer=1 gradient=linear:180000:#ff0000@auto,#0000ff@auto\n");
+}
+
+// image-rendering is inherited, its crisp spellings one answer and every
+// other keyword the other.
+static void image_rendering_cases(void)
+{
+    cascade_case("image-rendering: pixelated inherited, auto back to smooth", 400,
+        "<!doctype html><style>.a{image-rendering:pixelated}.c{image-rendering:auto}"
+        ".d{image-rendering:-webkit-optimize-contrast}</style>"
+        "<div class=a><p></p><p class=c><span class=d></span></p></div>",
+        "html block holds-block\n"
+        "  head none\n"
+        "  body block margin=8/8/8/8 holds-block\n"
+        "    div block pixelated holds-block\n"
+        "      p block margin=16/0/16/0\n"
+        "      p block margin=16/0/16/0 smooth\n"
+        "        span inline pixelated\n");
+}
+
+// Zoom (PILE3.md § Zoom): at 2, every CSS pixel is two of the tree's. 1em
+// is the zoomed font's (32), 50px is 100, a 1px border 2, and 25vh is a
+// quarter of the 600 CSS px viewport, 300 device pixels.
+static void zoom_cases(void)
+{
+    kEnv.zoom = 2000;
+    cascade_layout_case("zoom 2: lengths, the font, the border and vh doubled",
+        "<!doctype html><style>body{margin:0}"
+        "div{width:50px;height:25vh;border-left:1px solid;margin-left:1em}</style><div></div>",
+        400,
+        "page 400 300\n"
+        "block html 0 0 400 300\n"
+        "  block body 0 0 400 300\n"
+        "    block div 32 0 102 300\n");
+    // A picture's size from its attributes, and the oracle's own 40 x 30,
+    // both in CSS pixels: 20 x 40 and 80 x 60 on the page.
+    char *got = cascade_layout_of("<!doctype html><img src=known.png width=10 height=20>"
+                                  "<img src=known.png>", 400);
+    int32_t size[2][2] = {{0}}, n = 0;
+    for (const char *at = got; at != NULL && n < 2 && (at = strstr(at, "atomic img ")) != NULL;
+         at++, n++) {
+        int x, y;
+        sscanf(at, "atomic img %d %d %d %d", &x, &y, &size[n][0], &size[n][1]);
+    }
+    expect("zoom 2: a picture's attribute size and its own size doubled",
+           n == 2 && size[0][0] == 20 && size[0][1] == 40 && size[1][0] == 80 && size[1][1] == 60,
+           got);
+    free(got);
+    // A 64px font at 5 is shaped at 320 device px, past the old 256 cap: any
+    // size a page draws at 100% is shaped at the size it is laid out at, so
+    // its run is five times as wide as at 1 (the style's size reads 320
+    // either way; the run's width is what was shaped).
+    {
+        int32_t wide[2] = {0, 0};
+        for (int z = 0; z < 2; z++) {
+            kEnv.zoom = z ? 5000 : 1000;
+            got = cascade_layout_of("<!doctype html><p style=\"font-size:64px;margin:0\">M",
+                                    2000);
+            const char *t = got != NULL ? strstr(got, "text \"M\" ") : NULL;
+            int x, y, w = 0, h;
+            if (t != NULL)
+                sscanf(t, "text \"M\" %d %d %d %d", &x, &y, &w, &h);
+            wide[z] = w;
+            free(got);
+        }
+        expect("zoom 5: a 64px font is shaped at 320, five times its width at 1",
+               wide[0] > 0 && wide[1] >= 5 * wide[0] - 1 && wide[1] <= 5 * wide[0] + 1, NULL);
+    }
+    kEnv.zoom = 5000;
+    // An auto-repeat counts a track of nothing as one CSS pixel (§ 7.2.3.2)
+    // — five of the tree's at 5 — so a 20px grid makes 20 columns, not 100:
+    // the 21st item starts the second row.
+    kEnv.zoom = 5000;
+    {
+        char html[1024];
+        int at = snprintf(html, sizeof(html),
+                          "<!doctype html><style>body{margin:0}.g{display:grid;width:20px;"
+                          "grid-template-columns:repeat(auto-fill,minmax(0,1fr))}"
+                          ".g div{height:1px}</style><div class=g>");
+        for (int i = 0; i < 21; i++)
+            at += snprintf(html + at, sizeof(html) - (size_t)at, "<div></div>");
+        snprintf(html + at, sizeof(html) - (size_t)at, "</div>");
+        got = cascade_layout_of(html, 400);
+        int ys[22] = {0}, k = 0;
+        for (const char *p = got; p != NULL && k < 22 && (p = strstr(p, "block div ")) != NULL;
+             p++, k++) {
+            int x, w, h;
+            sscanf(p, "block div %d %d %d %d", &x, &ys[k], &w, &h);
+        }
+        // ys[0] is the grid; ys[1..21] its items.
+        expect("zoom 5: an auto-repeat's 1px floor is a CSS pixel",
+               k == 22 && ys[20] == ys[1] && ys[21] > ys[1], got);
+        free(got);
+    }
+    kEnv.zoom = 0;
+}

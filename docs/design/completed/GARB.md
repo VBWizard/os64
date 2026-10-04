@@ -355,7 +355,7 @@ center`, a 400px line cut at its 120px `overflow: hidden` box, and a
 | A cache of sheets | a sheet is fetched again for every page that names it, and on every visit | a site whose sheets are slow to come again, measured |
 | An imported sheet's Referer | it names the page, not the sheet that imported it | a server that refuses an import for it |
 | More than 64 sheets on a page, or 16 `@import`s in one sheet, or an import chain 16 deep | the rest are not fetched; a chain deeper than the cascade's `NEST_MAX` is fetched but not applied, and the cascade says it is incomplete | a page that needs them |
-| Every layer of a background | yonder draws one picture behind a box, so the first layer of a list is kept and the rest are only checked | a page whose look depends on a lower layer |
+| Every layer of a background | — | done in PILE3.md's S4c |
 | Quirks mode's hashless colour (`color: ff0000`) | quirks mode's unitless lengths are read; its colours without a `#` are not yet | a quirks-mode page written that way |
 | Encodings beyond libhtml's | a sheet in ISO-8859-2 or Shift_JIS keeps its ASCII and loses the rest | the first sheet whose text is not ASCII and not UTF-8 |
 | Inline tables | `inline-table` is laid out as a table | pile 2 |
@@ -368,5 +368,5 @@ center`, a 400px line cut at its 120px `overflow: hidden` box, and a
 | A string list marker, and counter styles beyond the ten | libflow draws its ten marker kinds; any other name is decimal, as Counter Styles 3 says of an undefined one, and a string is ignored | G5's generated content |
 | A table column's `calc()` width | a column keeps a percentage's share of the table and no fixed part, so `calc(20% + 10px)` on a cell is 20% | a page whose tables are sized that way |
 | `font-variant: small-caps` | read by libgarb and not drawn: it needs a face's small capitals, or capitals made smaller, and yonder has one face today | brief 04's faces |
-| `background-size`, `-origin`, `-clip`, `-attachment`, and a gradient as a picture | a sheet's picture is drawn at its own size, positioned from the border box's corner, under the whole border box, and scrolls with the page; a gradient is no picture | pile 3 |
+| `background-attachment` (size, origin and clip are drawn since PILE3.md's S4b) | a sheet's picture scrolls with the page, `fixed` and `local` alike | a page whose fixed background matters |
 | The viewport's own overflow, and form controls inside a clipping box | the root's (or the body's) `overflow` is the viewport's and yonder always scrolls the page; a control is a widget of its own over the page and is not CUT by an ancestor's clip — a widget is whole or absent: one whose control's centre is clipped away is absent, since the pointer cannot reach it there (POSITION.md, ruling 9), and one whose centre shows is drawn whole, over the clip's edge | a page that hides its viewport's overflow on purpose (a modal), or a form inside a box that clips |

@@ -93,6 +93,24 @@ static os64_font_status_t new_font(os64_text_context_t *c, os64_text_font_t **ou
     *f=(os64_text_font_t){.context=c,.identity=c->next_identity++,.refs=1};
     *out=f;return OS64_FONT_OK;
 }
+/* The context's copy of a file with these bytes, shared, or a new one; the
+ * bytes are compared, never the caller's pointer, which may be reused. */
+static text_file *file_take(os64_text_context_t *c, const uint8_t *bytes, size_t length)
+{
+    for (text_file *f=c->files;f;f=f->next)
+        if (f->length==length && !os64_memcmp(f->bytes,bytes,length)) {f->refs++;return f;}
+    text_file *f=text_alloc(c,sizeof(*f)+length);
+    if (!f) return NULL;
+    f->refs=1;f->length=length;os64_memcpy(f->bytes,bytes,length);
+    f->next=c->files;c->files=f;return f;
+}
+static void file_release(os64_text_context_t *c, text_file *f)
+{
+    if (!f || --f->refs) return;
+    text_file **at=&c->files;
+    while (*at!=f) at=&(*at)->next;
+    *at=f->next;text_free(c,f);
+}
 os64_font_status_t os64_text_font_open(os64_text_context_t *c, const uint8_t *bytes,
     size_t length, const os64_font_face_options_t *o, os64_text_font_t **out)
 {
@@ -104,12 +122,11 @@ os64_font_status_t os64_text_font_open(os64_text_context_t *c, const uint8_t *by
     os64_text_font_t *f=NULL;
     os64_font_status_t status=new_font(c,&f);
     if (status!=OS64_FONT_OK) return status;
-    f->options=*o;f->bytes=text_alloc(c,length);
-    if (!f->bytes) {status=c->refusal;goto fail;}
-    os64_memcpy(f->bytes,bytes,length);
+    f->options=*o;f->file=file_take(c,bytes,length);
+    if (!f->file) {status=c->refusal;goto fail;}
     for (unsigned attempt=0;;attempt++) {
         c->refusal=OS64_FONT_OK;
-        status=c->backend->face_open(c->engine,f->bytes,length,o,&f->face);
+        status=c->backend->face_open(c->engine,f->file->bytes,length,o,&f->face);
         if (!attempt && status!=OS64_FONT_OK && text_retry(c,status)) continue;
         status=text_status(c,status);break;
     }
@@ -122,7 +139,7 @@ os64_font_status_t os64_text_font_open(os64_text_context_t *c, const uint8_t *by
     }
     f->next=c->fonts;c->fonts=f;*out=f;return OS64_FONT_OK;
 fail:
-    c->backend->face_close(f->face);text_free(c,f->bytes);text_free(c,f);return status;
+    c->backend->face_close(f->face);file_release(c,f->file);text_free(c,f);return status;
 }
 os64_font_status_t os64_text_font_bitmap(os64_text_context_t *c, os64_text_font_t **out)
 {
@@ -144,7 +161,7 @@ void os64_text_font_release(os64_text_font_t *f)
     os64_text_font_t **at=&c->fonts;
     while (*at!=f) at=&(*at)->next;
     *at=f->next;c->backend->face_close(f->face);
-    text_free(c,f->bytes);text_free(c,f);
+    file_release(c,f->file);text_free(c,f);
 }
 static size_t bucket(uint64_t identity, uint32_t index)
 {

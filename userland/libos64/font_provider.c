@@ -73,7 +73,7 @@ os64_font_status_t os64_font_set_prepare_checked(os64_text_context_t *text,
         const os64_font_role_spec_t *s=&specs[r];
         uint32_t size=s->pixel_height?s->pixel_height:16;
         if (problem) *problem=(os64_font_problem_t){(os64_font_role_t)r,0};
-        if (size<8 || size>96 || s->fallback_count>OS64_FONT_CONFIG_FALLBACK_MAX ||
+        if (size>OS64_FONT_PIXEL_MAX || s->fallback_count>OS64_FONT_CONFIG_FALLBACK_MAX ||
             !valid_source(&s->primary) ||
             (s->primary.kind==OS64_FONT_SOURCE_BUILTIN && size!=16)) return OS64_FONT_BAD_ARGUMENT;
         bool builtin=s->primary.kind==OS64_FONT_SOURCE_BUILTIN;

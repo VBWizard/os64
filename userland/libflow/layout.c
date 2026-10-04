@@ -270,6 +270,8 @@ static bool fonts_for(L *l, const flow_style_t *s, Fonts *f)
 {
     if (l->failed || l->env->fonts == NULL)
         return false;
+    // The engine's largest face (OS64_FONT_PIXEL_MAX) is the most a run is
+    // shaped at; its box keeps the size the style asked for.
     int64_t px = (s->font_size + 32) / 64;
     if (px < 1)
         px = 1;
@@ -403,7 +405,7 @@ static Replaced replaced_size(L *l, const os64_html_node_t *node, const flow_sty
     int32_t iw = 0, ih = 0;
     bool known = l->env->replaced_size != NULL &&
                  l->env->replaced_size(l->env->ctx, node, &iw, &ih) && iw >= 0 && ih >= 0;
-    int64_t kw = (int64_t)iw * 64, kh = (int64_t)ih * 64;
+    int64_t kw = f_css_units(l->env, iw), kh = f_css_units(l->env, ih);
     if (known) {
         if (w_set && h_set) {
             r.w = w;
@@ -450,7 +452,7 @@ static Replaced replaced_size(L *l, const os64_html_node_t *node, const flow_sty
         if (alt != NULL && alt->value != NULL && alt->value[0] != '\0') {
             r.alt = true;
         } else if (alt == NULL) {
-            r.w = r.h = 16 * 64;
+            r.w = r.h = f_css_units(l->env, 16);
         } else {
             // An empty alt says the picture is decoration: it takes no space.
             r.none = true;
@@ -460,8 +462,8 @@ static Replaced replaced_size(L *l, const os64_html_node_t *node, const flow_sty
     bool frame = node->ns == OS64_HTML_NS_HTML &&
                  (node->tag == OS64_HTML_TAG_IFRAME || node->tag == OS64_HTML_TAG_FRAME);
     if (frame) {
-        r.w = 300 * 64;
-        r.h = 150 * 64;
+        r.w = f_css_units(l->env, 300);
+        r.h = f_css_units(l->env, 150);
     } else {
         Fonts f;
         r.w = (int64_t)s->font_size * 10;
@@ -3106,7 +3108,8 @@ static int64_t repeat_size(const flow_track_t *t, int64_t avail)
 
 // How many times a template's auto-repeat fills `avail` (-1: once), held
 // so that the whole list stays within the bound; 1 without one too.
-static int32_t repeats(const flow_tracks_t *t, int64_t avail, int64_t gap)
+// `one_px` is one CSS pixel in the tree's units, at the zoom.
+static int32_t repeats(const flow_tracks_t *t, int64_t avail, int64_t gap, int64_t one_px)
 {
     if (t->repeat_n == 0 || avail < 0)
         return 1;
@@ -3114,10 +3117,10 @@ static int32_t repeats(const flow_tracks_t *t, int64_t avail, int64_t gap)
     int32_t nothers = t->n - t->repeat_n;
     for (int32_t i = 0; i < t->n; i++) {
         bool in = i >= t->repeat_at && i < t->repeat_at + t->repeat_n;
-        // Counted at 1px at least (§ 7.2.3.2), or a track of nothing
+        // Counted at 1 CSS px at least (§ 7.2.3.2), or a track of nothing
         // would repeat without end; its size is not changed.
         int64_t size = repeat_size(&t->tracks[i], avail);
-        *(in ? &rep : &others) += in ? max64(size, FLOW_UNITS_PER_PX) : size;
+        *(in ? &rep : &others) += in ? max64(size, one_px) : size;
     }
     int64_t per = rep + gap * t->repeat_n;
     int64_t room = avail - others - gap * (nothers - 1);
@@ -3429,7 +3432,7 @@ static bool grid_plan(L *l, FBox *b, int64_t cw, int64_t ch, GPlan *p)
     if (ch < 0 && s->max_height.kind == FLOW_LENGTH_PX)
         fill[1] = content_of(s, s->max_height, 0, vframe(b, max64(0, cw)));
     for (int ax = 0; ax < 2; ax++) {
-        reps[ax] = repeats(tmpl[ax], fill[ax], p->gap[ax]);
+        reps[ax] = repeats(tmpl[ax], fill[ax], p->gap[ax], f_css_units(l->env, 1));
         ntmpl[ax] = template_count(tmpl[ax], reps[ax]);
         nexp[ax] = max64(ntmpl[ax], ax == 0 ? s->grid_area_cols : s->grid_area_rows);
     }
@@ -6028,7 +6031,8 @@ FLayout *f_layout(FBoxes *boxes, const os64_html_document_t *doc, const os64_pag
         // viewport's own and the same numbers; the root is the owner when
         // one of those boxes stops.
         if (!l.failed) {
-            int64_t vh = env->viewport_height > 0 ? (int64_t)env->viewport_height * 64 : out->height;
+            int64_t vh = env->viewport_height > 0 ? f_css_units(env, env->viewport_height)
+                                                  : out->height;
             absolutes(&l, boxes->styles, boxes->icb_first, (Rect){0, 0, w, vh}, boxes->root);
         }
         out->width = max64(w, right_edge(boxes->root));

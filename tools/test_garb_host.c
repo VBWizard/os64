@@ -849,17 +849,22 @@ static int sweep_cascade(const char *what, const char *text, size_t len)
     return failures;
 }
 
-// A shadow list grows outside the arena (props.c's shadow_list), so its
-// failure is said by hand: each allocation of reading a shadow declaration
-// failed alone, the read must be the whole one or say it is incomplete —
-// never an invalid declaration with the sheet calling itself whole (Quinn,
-// #203).
-static int sweep_shadows(void)
+// A shadow list and a background's layers grow outside the arena
+// (props.c's shadow_list and Layers), so their failure is said by hand:
+// each allocation of reading such a declaration failed alone, the read must
+// be the whole one or say it is incomplete — never an invalid declaration
+// with the sheet calling itself whole (Quinn, #203).
+static int sweep_grown_lists(void)
 {
     static const char *const decls[] = {"box-shadow: 1px 1px red",
                                         "text-shadow: 1px 1px red, 2px 2px blue",
                                         "box-shadow: 1px 1px red, 2px 2px blue, 3px 3px green, "
-                                        "4px 4px, 5px 5px, 6px 6px, 7px 7px, 8px 8px, 9px 9px"};
+                                        "4px 4px, 5px 5px, 6px 6px, 7px 7px, 8px 8px, 9px 9px",
+                                        "background-image: url(a), url(b), url(c), url(d), url(e)",
+                                        "background: url(a) 0 0 / 2px, url(b), url(c) content-box, "
+                                        "url(d), linear-gradient(red, blue) red",
+                                        "background-position: 0 0, 1px 2px, center, right, top, "
+                                        "left 3px bottom"};
     int failures = 0;
     for (size_t d = 0; d < sizeof(decls) / sizeof(decls[0]); d++) {
         garb_set_t sets[GARB_SETS_MAX];
@@ -888,14 +893,14 @@ static int sweep_shadows(void)
             fail_at = 0;
             fail_single = false;
             if (n != whole && !r.incomplete) {
-                fprintf(stderr, "FAIL sweep shadows \"%s\": failure %zu read %d, sheet whole\n",
+                fprintf(stderr, "FAIL sweep lists \"%s\": failure %zu read %d, sheet whole\n",
                         decls[d], at, (int)n);
                 failures++;
             }
             garb_free(&r);
         }
     }
-    printf("libgarb sweep, shadow lists: every allocation of the read failed alone, %s\n",
+    printf("libgarb sweep, shadow and layer lists: every allocation of the read failed alone, %s\n",
            failures == 0 ? "each the whole read or marked incomplete" : "FAILED");
     return failures;
 }
@@ -926,7 +931,7 @@ static int sweep(const char *path)
     failures += sweep_text("a long identifier", long_ident, sizeof(long_ident) - 1);
     failures += sweep_ones();
     failures += sweep_lists();
-    failures += sweep_shadows();
+    failures += sweep_grown_lists();
     failures += sweep_selectors();
     failures += sweep_cascade(path, text, len);
     os64_html_document_free(s_sweep_doc);

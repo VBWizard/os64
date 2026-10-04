@@ -32,7 +32,6 @@ typedef struct {
     int32_t off;    // PCT: 26.6 px added to it, a calc()'s fixed part
 } Len;
 
-static Len px(int32_t n) { return (Len){L_PX, n * FLOW_UNITS_PER_PX, 0}; }
 static Len em(int32_t thousandths) { return (Len){L_EM, thousandths, 0}; }
 static const Len kAuto = {L_AUTO, 0, 0};
 static const Len kFitContent = {L_FIT, 0, 0};
@@ -75,7 +74,17 @@ typedef struct {
     bool has_body_link;
     uint32_t body_link;
     flow_unit_t root_font;      // the html element's font size: what `rem` is
+    double zoom;                // device pixels per CSS pixel (flow_env_t.zoom)
 } Ctx;
+
+// `n` CSS pixels in the tree's units, which are device pixels' (zoomed).
+static flow_unit_t css(const Ctx *c, double n)
+{
+    double u = n * FLOW_UNITS_PER_PX * c->zoom;
+    return (flow_unit_t)(u >= 0 ? u + 0.5 : u - 0.5);
+}
+
+static Len px(const Ctx *c, int32_t n) { return (Len){L_PX, css(c, n), 0}; }
 
 // ── Reading the tree ────────────────────────────────────────────────────
 
@@ -242,11 +251,11 @@ static void padding_all(Spec *sp, Len v)
         sp->padding[i] = v;
 }
 
-static void border(Spec *sp, flow_border_style_t style, int32_t width_px)
+static void border(const Ctx *c, Spec *sp, flow_border_style_t style, int32_t width_px)
 {
     for (int i = 0; i < 4; i++) {
         sp->s.border_style[i] = style;
-        sp->border_px[i] = width_px * FLOW_UNITS_PER_PX;
+        sp->border_px[i] = css(c, width_px);
     }
 }
 
@@ -263,28 +272,27 @@ static void monospace(Spec *sp)
     sp->s.family = (flow_family_list_t){NULL, 0, FLOW_GENERIC_MONO};
 }
 
-static Len dim(f_dim_kind_t kind, int32_t v)
-{
-    return kind == F_DIM_PERCENT ? (Len){L_PCT, v, 0} : (Len){L_PX, v, 0};
-}
-
 // "Maps to the dimension property": the attribute, read as a dimension,
-// sets the property; one that does not parse sets nothing.
-static void map_dimension(const os64_html_node_t *n, const char *name, bool nonzero, Len *out)
+// sets the property — a length in CSS pixels, zoomed — and one that does
+// not parse sets nothing.
+static void map_dimension(const Ctx *c, const os64_html_node_t *n, const char *name, bool nonzero,
+                          Len *out)
 {
     int32_t v;
     f_dim_kind_t kind = f_parse_dimension(attr(n, name), nonzero, &v);
-    if (kind != F_DIM_NONE)
-        *out = dim(kind, v);
+    if (kind == F_DIM_PERCENT)
+        *out = (Len){L_PCT, v, 0};
+    else if (kind == F_DIM_PX)
+        *out = (Len){L_PX, css(c, (double)v / FLOW_UNITS_PER_PX), 0};
 }
 
 // "Maps to the pixel length property": a non-negative integer, in px.
-static bool pixel_length(const os64_html_node_t *n, const char *name, Len *out)
+static bool pixel_length(const Ctx *c, const os64_html_node_t *n, const char *name, Len *out)
 {
     int32_t v;
     if (!f_parse_nonnegative(attr(n, name), &v))
         return false;
-    *out = px(v);
+    *out = px(c, v);
     return true;
 }
 
@@ -298,9 +306,22 @@ static void background(Spec *sp, uint32_t rgb)
 {
     sp->s.has_background = true;
     sp->s.background = rgb;
+    sp->s.current_colours &= (uint8_t)~FLOW_CURRENT_BACKGROUND;
 }
 
 // ── The initial style, and inheritance ──────────────────────────────────
+
+// One layer of nothing: no picture, repeated from the padding box's
+// corner at its own size, cut to the border box.
+static const flow_bg_image_t kNoImage = {NULL, 0, -1, NULL};
+static const flow_repeat_t kRepeat = FLOW_REPEAT;
+static const flow_length_t kAtStart = {FLOW_LENGTH_PERCENT, 0, 0};
+static const flow_bg_size_t kOwnSize = {FLOW_FIT_LENGTHS, {{FLOW_LENGTH_AUTO, 0, 0},
+                                                           {FLOW_LENGTH_AUTO, 0, 0}}};
+static const flow_edge_t kPaddingBox = FLOW_EDGE_PADDING, kBorderBox = FLOW_EDGE_BORDER;
+static const flow_backgrounds_t kBackgrounds = {&kNoImage, &kRepeat, &kAtStart, &kAtStart,
+                                                &kOwnSize, &kPaddingBox, &kBorderBox,
+                                                1, 1, 1, 1, 1, 1, 1};
 
 static flow_style_t initial(const Ctx *c)
 {
@@ -310,10 +331,9 @@ static flow_style_t initial(const Ctx *c)
     s.family = (flow_family_list_t){NULL, 0, c->env->default_generic};
     s.font_weight = 400;
     s.font_style = FLOW_FONT_NORMAL;
-    s.font_size = (flow_unit_t)c->env->viewport_font_px * FLOW_UNITS_PER_PX;
+    s.font_size = css(c, c->env->viewport_font_px);
     s.color = c->env->ink;
-    s.background_position[0] = s.background_position[1] = (flow_length_t){FLOW_LENGTH_PERCENT, 0, 0};
-    s.background_sheet = -1;
+    s.backgrounds = kBackgrounds;
     s.opacity = 1000;
     s.flex_shrink = 1000;
     s.align_self = FLOW_PLACE_AUTO;
@@ -352,6 +372,7 @@ static flow_style_t inherit(const Ctx *c, const flow_style_t *parent)
     s.text_transform = parent->text_transform;
     s.text_shadows = parent->text_shadows;
     s.ntext_shadows = parent->ntext_shadows;
+    s.pixelated = parent->pixelated;
     s.visibility = parent->visibility;
     s.pointer_events_none = parent->pointer_events_none;
     s.list_style_type = parent->list_style_type;
@@ -383,7 +404,7 @@ static int32_t scale(int32_t v, int32_t num, int32_t den)
 
 static flow_unit_t font_size(const Ctx *c, const Spec *sp, const flow_style_t *parent)
 {
-    flow_unit_t medium = (flow_unit_t)c->env->viewport_font_px * FLOW_UNITS_PER_PX;
+    flow_unit_t medium = css(c, c->env->viewport_font_px);
     flow_unit_t base = parent != NULL ? parent->font_size : medium;
     switch (sp->fs_kind) {
     case FS_PX: return sp->fs_v;
@@ -611,7 +632,7 @@ static void sheet(Ctx *c, const os64_html_node_t *n, Spec *sp)
     case OS64_HTML_TAG_BLOCKQUOTE: case OS64_HTML_TAG_FIGURE:
         s->display = FLOW_DISPLAY_BLOCK;
         margin_block(sp, em(1000));
-        margin_inline(sp, px(40));
+        margin_inline(sp, px(c, 40));
         break;
     case OS64_HTML_TAG_P:
         s->display = FLOW_DISPLAY_BLOCK;
@@ -635,11 +656,11 @@ static void sheet(Ctx *c, const os64_html_node_t *n, Spec *sp)
         }
         s->display = FLOW_DISPLAY_BLOCK;
         s->position = FLOW_POSITION_ABSOLUTE;
-        sp->inset[FLOW_LEFT] = sp->inset[FLOW_RIGHT] = px(0);
+        sp->inset[FLOW_LEFT] = sp->inset[FLOW_RIGHT] = px(c, 0);
         for (int i = 0; i < 4; i++)
             sp->margin[i] = kAuto;
         sp->width = kFitContent;
-        border(sp, FLOW_BORDER_SOLID, 3);   // `border: solid` is medium: 3px
+        border(c, sp, FLOW_BORDER_SOLID, 3);   // `border: solid` is medium: 3px
         padding_all(sp, em(1000));
         background(sp, c->env->paper);
         s->color = c->env->ink;
@@ -723,7 +744,7 @@ static void sheet(Ctx *c, const os64_html_node_t *n, Spec *sp)
     case OS64_HTML_TAG_UL: {
         s->display = FLOW_DISPLAY_BLOCK;
         margin_block(sp, em(1000));
-        sp->padding[FLOW_LEFT] = px(40);
+        sp->padding[FLOW_LEFT] = px(c, 40);
         if (n->tag == OS64_HTML_TAG_OL) {
             s->list_style_type = FLOW_LIST_DECIMAL;
         } else {
@@ -740,7 +761,7 @@ static void sheet(Ctx *c, const os64_html_node_t *n, Spec *sp)
     // §15.3.8 Tables.
     case OS64_HTML_TAG_TABLE:
         s->display = FLOW_DISPLAY_TABLE;
-        s->border_spacing[0] = s->border_spacing[1] = 2 * FLOW_UNITS_PER_PX;
+        s->border_spacing[0] = s->border_spacing[1] = css(c, 2);
         s->border_collapse = FLOW_SEPARATE;
         break;
     case OS64_HTML_TAG_CAPTION:
@@ -764,7 +785,7 @@ static void sheet(Ctx *c, const os64_html_node_t *n, Spec *sp)
         break;
     case OS64_HTML_TAG_TD: case OS64_HTML_TAG_TH:
         s->display = FLOW_DISPLAY_TABLE_CELL;
-        padding_all(sp, px(1));
+        padding_all(sp, px(c, 1));
         if (n->tag == OS64_HTML_TAG_TH)
             s->font_weight = 700;
         break;
@@ -786,7 +807,7 @@ static void sheet(Ctx *c, const os64_html_node_t *n, Spec *sp)
     case OS64_HTML_TAG_HR:
         s->display = FLOW_DISPLAY_BLOCK;
         s->color = 0x808080;
-        border(sp, FLOW_BORDER_INSET, 1);
+        border(c, sp, FLOW_BORDER_INSET, 1);
         margin_block(sp, em(500));
         margin_inline(sp, kAuto);
         break;
@@ -796,8 +817,8 @@ static void sheet(Ctx *c, const os64_html_node_t *n, Spec *sp)
     // reads (LAYOUT.md § Booked).
     case OS64_HTML_TAG_FIELDSET:
         s->display = FLOW_DISPLAY_BLOCK;
-        margin_inline(sp, px(2));
-        border(sp, FLOW_BORDER_GROOVE, 2);
+        margin_inline(sp, px(c, 2));
+        border(c, sp, FLOW_BORDER_GROOVE, 2);
         border_color(sp, 0xC0C0C0);     // ThreeDFace, the classic 3D grey
         sp->padding[FLOW_TOP] = em(350);
         sp->padding[FLOW_BOTTOM] = em(625);
@@ -805,12 +826,12 @@ static void sheet(Ctx *c, const os64_html_node_t *n, Spec *sp)
         break;
     case OS64_HTML_TAG_LEGEND:
         s->display = FLOW_DISPLAY_BLOCK;
-        sp->padding[FLOW_LEFT] = sp->padding[FLOW_RIGHT] = px(2);
+        sp->padding[FLOW_LEFT] = sp->padding[FLOW_RIGHT] = px(c, 2);
         break;
 
     // §15.4.1 Embedded content.
     case OS64_HTML_TAG_IFRAME:
-        border(sp, FLOW_BORDER_INSET, 2);
+        border(c, sp, FLOW_BORDER_INSET, 2);
         break;
     default:
         break;
@@ -825,10 +846,10 @@ static void sheet(Ctx *c, const os64_html_node_t *n, Spec *sp)
 
     // §15.3.7: a list inside a list keeps no block margins.
     if (is_list_or_dl(n) && above(c, n) != NULL && above(c, n)->lists_or_dls > 0)
-        margin_block(sp, px(0));
+        margin_block(sp, px(c, 0));
     // `dd { margin-inline-start: 40px }`
     if (is(n, OS64_HTML_TAG_DD))
-        sp->margin[FLOW_LEFT] = px(40);
+        sp->margin[FLOW_LEFT] = px(c, 40);
 
     // §15.3.8: cells take their vertical alignment from the row, and the
     // row from the group; `table > tr` without a group is middle itself.
@@ -950,15 +971,15 @@ static bool hints(Ctx *c, const os64_html_node_t *n, Spec *sp)
     case OS64_HTML_TAG_BODY: {
         // The FIRST of the attributes that exists decides, and one that
         // will not parse means the 8px default — not the next attribute.
-        Len v = px(8);
-        if (has(n, "marginheight") ? !pixel_length(n, "marginheight", &v)
-                                   : has(n, "topmargin") && !pixel_length(n, "topmargin", &v))
-            v = px(8);
+        Len v = px(c, 8);
+        if (has(n, "marginheight") ? !pixel_length(c, n, "marginheight", &v)
+                                   : has(n, "topmargin") && !pixel_length(c, n, "topmargin", &v))
+            v = px(c, 8);
         margin_block(sp, v);
-        v = px(8);
-        if (has(n, "marginwidth") ? !pixel_length(n, "marginwidth", &v)
-                                  : has(n, "leftmargin") && !pixel_length(n, "leftmargin", &v))
-            v = px(8);
+        v = px(c, 8);
+        if (has(n, "marginwidth") ? !pixel_length(c, n, "marginwidth", &v)
+                                  : has(n, "leftmargin") && !pixel_length(c, n, "leftmargin", &v))
+            v = px(c, 8);
         margin_inline(sp, v);
         if (legacy_color(n, "bgcolor", &rgb))
             background(sp, rgb);
@@ -1055,14 +1076,14 @@ static bool hints(Ctx *c, const os64_html_node_t *n, Spec *sp)
             s->float_side = FLOW_FLOAT_RIGHT;
         else if (attr_is(n, "align", "center"))
             margin_inline(sp, kAuto);
-        map_dimension(n, "width", true, &sp->width);
-        map_dimension(n, "height", false, &sp->height);
+        map_dimension(c, n, "width", true, &sp->width);
+        map_dimension(c, n, "height", false, &sp->height);
         if (legacy_color(n, "bgcolor", &rgb))
             background(sp, rgb);
         if (legacy_color(n, "bordercolor", &rgb))
             border_color(sp, rgb);
         Len spacing;
-        if (pixel_length(n, "cellspacing", &spacing))
+        if (pixel_length(c, n, "cellspacing", &spacing))
             s->border_spacing[0] = s->border_spacing[1] = spacing.v;
         const char *rules = attr(n, "rules");
         static const char *const rule_values[] = {"none", "groups", "rows", "cols", "all"};
@@ -1077,7 +1098,7 @@ static bool hints(Ctx *c, const os64_html_node_t *n, Spec *sp)
             if (!f_parse_nonnegative(attr(n, "border"), &width))
                 width = 1;
             for (int k = 0; k < 4; k++)
-                sp->border_px[k] = width * FLOW_UNITS_PER_PX;
+                sp->border_px[k] = css(c, width);
             if (border_not_zero(n))
                 for (int k = 0; k < 4; k++)
                     s->border_style[k] = FLOW_BORDER_OUTSET;
@@ -1106,7 +1127,7 @@ static bool hints(Ctx *c, const os64_html_node_t *n, Spec *sp)
     // A column group's width is its columns' when they give none (and a
     // group with no `col` in it is its `span` of columns).
     case OS64_HTML_TAG_COL: case OS64_HTML_TAG_COLGROUP:
-        map_dimension(n, "width", false, &sp->width);
+        map_dimension(c, n, "width", false, &sp->width);
         break;
     default:
         break;
@@ -1128,29 +1149,29 @@ static bool hints(Ctx *c, const os64_html_node_t *n, Spec *sp)
         if (legacy_color(n, "bgcolor", &rgb))
             background(sp, rgb);
         if (is_row_group(n) || is(n, OS64_HTML_TAG_TR))
-            map_dimension(n, "height", false, &sp->height);
+            map_dimension(c, n, "height", false, &sp->height);
     }
     if (is(n, OS64_HTML_TAG_TD) || is(n, OS64_HTML_TAG_TH)) {
         if (has(n, "nowrap"))
             s->white_space = FLOW_WS_NOWRAP;
-        map_dimension(n, "width", true, &sp->width);
-        map_dimension(n, "height", true, &sp->height);
+        map_dimension(c, n, "width", true, &sp->width);
+        map_dimension(c, n, "height", true, &sp->height);
         const os64_html_node_t *table = cell_table(n);
         if (table != NULL) {
             Len pad;
-            if (pixel_length(table, "cellpadding", &pad))
+            if (pixel_length(c, table, "cellpadding", &pad))
                 padding_all(sp, pad);
             if (has(table, "border") && border_not_zero(table))
-                border(sp, FLOW_BORDER_INSET, 1);
+                border(c, sp, FLOW_BORDER_INSET, 1);
             const char *rules = attr(table, "rules");
             if (f_eq_nocase(rules, "none") || f_eq_nocase(rules, "groups") ||
                 f_eq_nocase(rules, "rows")) {
-                border(sp, FLOW_BORDER_NONE, 1);
+                border(c, sp, FLOW_BORDER_NONE, 1);
             } else if (f_eq_nocase(rules, "cols")) {
-                border(sp, FLOW_BORDER_SOLID, 1);
+                border(c, sp, FLOW_BORDER_SOLID, 1);
                 s->border_style[FLOW_TOP] = s->border_style[FLOW_BOTTOM] = FLOW_BORDER_NONE;
             } else if (f_eq_nocase(rules, "all")) {
-                border(sp, FLOW_BORDER_SOLID, 1);
+                border(c, sp, FLOW_BORDER_SOLID, 1);
             }
         }
         // In quirks mode a nowrap cell with a width in PIXELS wraps after
@@ -1168,25 +1189,25 @@ static bool hints(Ctx *c, const os64_html_node_t *n, Spec *sp)
             bool rows_rule = f_eq_nocase(rules, "rows") && is(n, OS64_HTML_TAG_TR);
             bool groups_rule = f_eq_nocase(rules, "groups") && is_row_group(n);
             if (rows_rule || groups_rule) {
-                sp->border_px[FLOW_TOP] = sp->border_px[FLOW_BOTTOM] = FLOW_UNITS_PER_PX;
+                sp->border_px[FLOW_TOP] = sp->border_px[FLOW_BOTTOM] = css(c, 1);
                 s->border_style[FLOW_TOP] = s->border_style[FLOW_BOTTOM] = FLOW_BORDER_SOLID;
             }
         }
     }
     if (is(n, OS64_HTML_TAG_COLGROUP) && is(n->parent, OS64_HTML_TAG_TABLE) &&
         attr_is(n->parent, "rules", "groups")) {
-        sp->border_px[FLOW_LEFT] = sp->border_px[FLOW_RIGHT] = FLOW_UNITS_PER_PX;
+        sp->border_px[FLOW_LEFT] = sp->border_px[FLOW_RIGHT] = css(c, 1);
         s->border_style[FLOW_LEFT] = s->border_style[FLOW_RIGHT] = FLOW_BORDER_SOLID;
     }
 
     // §15.3.11 The hr element.
     if (is(n, OS64_HTML_TAG_HR)) {
         if (attr_is(n, "align", "left")) {
-            sp->margin[FLOW_LEFT] = px(0);
+            sp->margin[FLOW_LEFT] = px(c, 0);
             sp->margin[FLOW_RIGHT] = kAuto;
         } else if (attr_is(n, "align", "right")) {
             sp->margin[FLOW_LEFT] = kAuto;
-            sp->margin[FLOW_RIGHT] = px(0);
+            sp->margin[FLOW_RIGHT] = px(c, 0);
         } else if (attr_is(n, "align", "center")) {
             margin_inline(sp, kAuto);
         }
@@ -1198,14 +1219,14 @@ static bool hints(Ctx *c, const os64_html_node_t *n, Spec *sp)
         if (f_parse_nonnegative(attr(n, "size"), &size)) {
             if (solid) {
                 for (int k = 0; k < 4; k++)
-                    sp->border_px[k] = size * FLOW_UNITS_PER_PX / 2;
+                    sp->border_px[k] = css(c, size / 2.0);
             } else if (size == 1) {
                 sp->border_px[FLOW_BOTTOM] = 0;
             } else if (size > 1) {
-                sp->height = px(size - 2);
+                sp->height = px(c, size - 2);
             }
         }
-        map_dimension(n, "width", false, &sp->width);
+        map_dimension(c, n, "width", false, &sp->width);
         if (legacy_color(n, "color", &rgb))
             s->color = rgb;
     }
@@ -1228,23 +1249,23 @@ static bool hints(Ctx *c, const os64_html_node_t *n, Spec *sp)
             s->vertical_align = FLOW_VALIGN_BOTTOM;
         else if (attr_is(n, "align", "center") || attr_is(n, "align", "middle"))
             s->vertical_align = FLOW_VALIGN_HTML_MIDDLE;
-        map_dimension(n, "width", false, &sp->width);
-        map_dimension(n, "height", false, &sp->height);
+        map_dimension(c, n, "width", false, &sp->width);
+        map_dimension(c, n, "height", false, &sp->height);
     }
     if (is(n, OS64_HTML_TAG_EMBED) || is(n, OS64_HTML_TAG_IMG) || is(n, OS64_HTML_TAG_OBJECT) ||
         (is(n, OS64_HTML_TAG_INPUT) && attr_is(n, "type", "image"))) {
         Len v = {L_UNSET, 0, 0};
-        map_dimension(n, "hspace", false, &v);
+        map_dimension(c, n, "hspace", false, &v);
         if (v.kind != L_UNSET)
             margin_inline(sp, v);
         v = (Len){L_UNSET, 0, 0};
-        map_dimension(n, "vspace", false, &v);
+        map_dimension(c, n, "vspace", false, &v);
         if (v.kind != L_UNSET)
             margin_block(sp, v);
         if (!is(n, OS64_HTML_TAG_EMBED)) {
             int32_t b;
             if (f_parse_nonnegative(attr(n, "border"), &b) && b > 0)
-                border(sp, FLOW_BORDER_SOLID, b);
+                border(c, sp, FLOW_BORDER_SOLID, b);
         }
     }
     if (is(n, OS64_HTML_TAG_IFRAME)) {
@@ -1254,8 +1275,8 @@ static bool hints(Ctx *c, const os64_html_node_t *n, Spec *sp)
                 sp->border_px[k] = 0;
     }
     if (is(n, OS64_HTML_TAG_EMBED) && has(n, "hidden")) {
-        sp->width = px(0);
-        sp->height = px(0);
+        sp->width = px(c, 0);
+        sp->height = px(c, 0);
     }
 
     // §15.3.4: a link's colour, where libpage says the node IS a link
@@ -1274,9 +1295,9 @@ static void image_quirk(const Ctx *c, const os64_html_node_t *n, Spec *sp)
     if (!c->quirks || !is(n, OS64_HTML_TAG_IMG) || has(n, "hspace"))
         return;
     if (attr_is(n, "align", "left"))
-        sp->margin[FLOW_RIGHT] = px(3);
+        sp->margin[FLOW_RIGHT] = px(c, 3);
     else if (attr_is(n, "align", "right"))
-        sp->margin[FLOW_LEFT] = px(3);
+        sp->margin[FLOW_LEFT] = px(c, 3);
 }
 
 // §15.3.9 Margin collapsing quirks.
@@ -1288,18 +1309,39 @@ static void margin_quirks(const Ctx *c, const os64_html_node_t *n, Spec *sp)
     bool in_cell = is(p, OS64_HTML_TAG_TD) || is(p, OS64_HTML_TAG_TH);
     bool first = !substantial_before(n);
     if ((in_cell || is(p, OS64_HTML_TAG_BODY)) && first) {
-        sp->margin[FLOW_TOP] = px(0);
+        sp->margin[FLOW_TOP] = px(c, 0);
         if (blank(n))
-            sp->margin[FLOW_BOTTOM] = px(0);
+            sp->margin[FLOW_BOTTOM] = px(c, 0);
     }
     if (in_cell && !substantial_after(n) && blank(n))
-        sp->margin[FLOW_TOP] = px(0);
+        sp->margin[FLOW_TOP] = px(c, 0);
     if (in_cell && is(n, OS64_HTML_TAG_P) && !substantial_after(n))
-        sp->margin[FLOW_BOTTOM] = px(0);
+        sp->margin[FLOW_BOTTOM] = px(c, 0);
 }
 
 // ── The page's own sheets ───────────────────────────────────────────────
 //
+// A list a declaration hands ONE element — its font families, grid tracks
+// and areas, gradient stops, shadows, background layers — copied for every
+// element the declaration reaches (most hold lengths worked out at that
+// element's font size). That is the one cost of styling a page can
+// multiply: a sheet's long list times the elements it matches, without
+// end. So its bytes come out of a budget (F_STYLE_LISTS_BUDGET, far past
+// any real page's) as well as the arena; when the budget is spent, the
+// declaration is dropped as one libflow cannot read is — a hostile page is
+// styled plainly, and still laid out. NULL with *spent set for that; NULL
+// alone for no memory.
+static void *list_alloc(Ctx *c, size_t bytes, bool *spent)
+{
+    *spent = bytes > c->out->lists_left;
+    if (*spent)
+        return NULL;
+    void *p = f_arena_alloc(&c->out->arena, bytes);
+    if (p != NULL)
+        c->out->lists_left -= bytes;
+    return p;
+}
+
 // libgarb's cascade hands each element its AUTHOR-origin winners: declared
 // values, checked against their grammars, var() already replaced. Here
 // they are computed into the Spec the chapter and the hints wrote, which
@@ -1322,36 +1364,35 @@ static bool word(const garb_val_t *v, const char *w)
 }
 
 // A length in 26.6 px, `font` being the em it is relative to — the
-// element's own, or its parent's for font-size (Values 4 § 6).
+// element's own, or its parent's for font-size (Values 4 § 6). A font is
+// already in device pixels; every other unit is CSS pixels, zoomed here.
 static double length_px(const Author *a, const garb_val_t *v, double font)
 {
-    double n = v->number;
+    double n = v->number, css;
     switch (v->unit) {
-    case GARB_U_PX: return n * FLOW_UNITS_PER_PX;
     case GARB_U_EM: return n * font;
     case GARB_U_REM: return n * a->c->root_font;
     // No face metrics reach the style pass: an ex and a ch are taken as
     // half an em, the fallback Values 4 gives for both.
     case GARB_U_EX: case GARB_U_CH: return n * font / 2;
-    case GARB_U_VW: return n * a->view.width * FLOW_UNITS_PER_PX / 100;
-    case GARB_U_VH: return n * a->view.height * FLOW_UNITS_PER_PX / 100;
-    case GARB_U_VMIN: {
-        double m = a->view.width < a->view.height ? a->view.width : a->view.height;
-        return n * m * FLOW_UNITS_PER_PX / 100;
+    case GARB_U_PX: css = n; break;
+    case GARB_U_VW: css = n * a->view.width / 100; break;
+    case GARB_U_VH: css = n * a->view.height / 100; break;
+    case GARB_U_VMIN:
+        css = n * (a->view.width < a->view.height ? a->view.width : a->view.height) / 100;
+        break;
+    case GARB_U_VMAX:
+        css = n * (a->view.width > a->view.height ? a->view.width : a->view.height) / 100;
+        break;
+    case GARB_U_PT: css = n * 96 / 72; break;
+    case GARB_U_PC: css = n * 16; break;
+    case GARB_U_IN: css = n * 96; break;
+    case GARB_U_CM: css = n * 96 / 2.54; break;
+    case GARB_U_MM: css = n * 96 / 25.4; break;
+    case GARB_U_Q: css = n * 96 / 101.6; break;
+    default: return 0;              // a track's share (fr), never a length
     }
-    case GARB_U_VMAX: {
-        double m = a->view.width > a->view.height ? a->view.width : a->view.height;
-        return n * m * FLOW_UNITS_PER_PX / 100;
-    }
-    case GARB_U_PT: return n * 96 / 72 * FLOW_UNITS_PER_PX;
-    case GARB_U_PC: return n * 16 * FLOW_UNITS_PER_PX;
-    case GARB_U_IN: return n * 96 * FLOW_UNITS_PER_PX;
-    case GARB_U_CM: return n * 96 / 2.54 * FLOW_UNITS_PER_PX;
-    case GARB_U_MM: return n * 96 / 25.4 * FLOW_UNITS_PER_PX;
-    case GARB_U_Q: return n * 96 / 101.6 * FLOW_UNITS_PER_PX;
-    case GARB_U_FR: break;          // a track's share, never a length
-    }
-    return 0;
+    return css * FLOW_UNITS_PER_PX * a->c->zoom;
 }
 
 // A calc() as a fixed part and a percentage part — what libflow's lengths
@@ -1556,7 +1597,7 @@ static bool author_border_width(const Author *a, const garb_val_t *v, int32_t *o
     static const char *const words[] = {"thin", "medium", "thick"};
     int32_t i = pick(v, words, F_ARRAY(words));
     if (i >= 0) {
-        *out = (1 + 2 * i) * FLOW_UNITS_PER_PX;
+        *out = css(a->c, 1 + 2 * i);
         return true;
     }
     Len l;
@@ -1589,18 +1630,19 @@ static bool author_generic(const char *k, flow_generic_t *out)
 
 // `font-family`: the names in order and the first generic, as `<font
 // face>` builds them. The names point into the sheet.
-// The names are copied into the styles arena for every element the
-// declaration reaches: a `* { font-family: … }` reset costs one list an
-// element (48 bytes for three names). Bounded by the document, as the
-// styles arena is; one list per winning set would cost it once.
+// The names are copied for every element the declaration reaches: a
+// `* { font-family: … }` reset costs one list an element (48 bytes for
+// three names), out of the lists' budget (list_alloc), past which the
+// element keeps the family it inherited; one list per winning set would
+// cost it once.
 static bool author_family(Author *a, const garb_val_t *v, flow_family_list_t *out)
 {
     if (v->items == NULL || v->nitems <= 0)
         return true;
-    flow_family_name_t *names = f_arena_alloc(&a->c->out->arena,
-                                              (size_t)v->nitems * sizeof(*names));
+    bool spent;
+    flow_family_name_t *names = list_alloc(a->c, (size_t)v->nitems * sizeof(*names), &spent);
     if (names == NULL)
-        return false;
+        return spent;
     uint32_t n = 0;
     bool have_generic = false;
     flow_generic_t generic = FLOW_GENERIC_SANS;
@@ -1629,7 +1671,7 @@ static void author_font_size(Author *a, Spec *sp, const garb_val_t *v)
     static const char *const words[] = {"xx-small", "x-small", "small", "medium",
                                         "large", "x-large", "xx-large", "xxx-large"};
     double base = a->parent != NULL ? a->parent->font_size
-                                    : (double)a->c->env->viewport_font_px * FLOW_UNITS_PER_PX;
+                                    : (double)css(a->c, a->c->env->viewport_font_px);
     int32_t i = pick(v, words, F_ARRAY(words));
     if (i >= 0) {
         sp->fs_kind = FS_KEYWORD;
@@ -1713,15 +1755,39 @@ static void take(Spec *dst, const Spec *src, garb_prop_t prop)
     case GARB_BACKGROUND_COLOR:
         d->has_background = s->has_background;
         d->background = s->background;
+        d->current_colours = (uint8_t)((d->current_colours & ~FLOW_CURRENT_BACKGROUND) |
+                                       (s->current_colours & FLOW_CURRENT_BACKGROUND));
         break;
+    // A list is the style's, kept as long as any style is, so it is shared
+    // and not copied.
     case GARB_BACKGROUND_IMAGE:
-        d->background_image = s->background_image;
-        d->background_image_len = s->background_image_len;
-        d->background_sheet = s->background_sheet;
+        d->backgrounds.image = s->backgrounds.image;
+        d->backgrounds.nimage = s->backgrounds.nimage;
         break;
-    case GARB_BACKGROUND_REPEAT: d->background_repeat = s->background_repeat; break;
-    case GARB_BACKGROUND_POSITION_X: d->background_position[0] = s->background_position[0]; break;
-    case GARB_BACKGROUND_POSITION_Y: d->background_position[1] = s->background_position[1]; break;
+    case GARB_BACKGROUND_REPEAT:
+        d->backgrounds.repeat = s->backgrounds.repeat;
+        d->backgrounds.nrepeat = s->backgrounds.nrepeat;
+        break;
+    case GARB_BACKGROUND_POSITION_X:
+        d->backgrounds.x = s->backgrounds.x;
+        d->backgrounds.nx = s->backgrounds.nx;
+        break;
+    case GARB_BACKGROUND_POSITION_Y:
+        d->backgrounds.y = s->backgrounds.y;
+        d->backgrounds.ny = s->backgrounds.ny;
+        break;
+    case GARB_BACKGROUND_SIZE:
+        d->backgrounds.size = s->backgrounds.size;
+        d->backgrounds.nsize = s->backgrounds.nsize;
+        break;
+    case GARB_BACKGROUND_ORIGIN:
+        d->backgrounds.origin = s->backgrounds.origin;
+        d->backgrounds.norigin = s->backgrounds.norigin;
+        break;
+    case GARB_BACKGROUND_CLIP:
+        d->backgrounds.clip = s->backgrounds.clip;
+        d->backgrounds.nclip = s->backgrounds.nclip;
+        break;
     case GARB_MARGIN_TOP: case GARB_MARGIN_RIGHT: case GARB_MARGIN_BOTTOM: case GARB_MARGIN_LEFT:
         dst->margin[side(prop, GARB_MARGIN_TOP)] = src->margin[side(prop, GARB_MARGIN_TOP)];
         break;
@@ -1846,6 +1912,7 @@ static void take(Spec *dst, const Spec *src, garb_prop_t prop)
         d->text_shadows = s->text_shadows;
         d->ntext_shadows = s->ntext_shadows;
         break;
+    case GARB_IMAGE_RENDERING: d->pixelated = s->pixelated; break;
     default: break;
     }
 }
@@ -1868,15 +1935,15 @@ static void initial_spec(const Ctx *c, Spec *out)
     os64_memset(out, 0, sizeof(*out));
     out->s = initial(c);
     for (int i = 0; i < 4; i++) {
-        out->margin[i] = px(0);
-        out->padding[i] = px(0);
+        out->margin[i] = px(c, 0);
+        out->padding[i] = px(c, 0);
         out->inset[i] = kAuto;
-        out->border_px[i] = 3 * FLOW_UNITS_PER_PX;     // medium
+        out->border_px[i] = css(c, 3);     // medium
     }
     out->width = out->height = kAuto;
     out->min_width = out->max_width = out->min_height = out->max_height = kAuto;
     out->flex_basis = out->row_gap = out->column_gap = kAuto;
-    out->text_indent = px(0);
+    out->text_indent = px(c, 0);
     out->fs_kind = FS_KEYWORD;
     out->fs_v = 3;                                      // medium
 }
@@ -1895,7 +1962,9 @@ static void inherited_spec(const Ctx *c, const flow_style_t *parent, Spec *out)
         out->padding[i] = len_of(parent->padding[i]);
         out->inset[i] = len_of(parent->inset[i]);
         out->border_px[i] = parent->border_width[i];
-        out->border_color_set[i] = true;
+        // currentColor stays currentColor: finish resolves it against the
+        // child's own colour.
+        out->border_color_set[i] = !(parent->current_colours & FLOW_CURRENT_BORDER(i));
         out->radius[i][0] = len_of(parent->radius[i][0]);
         out->radius[i][1] = len_of(parent->radius[i][1]);
     }
@@ -1996,9 +2065,10 @@ static GridRead author_tracks(Author *a, const garb_val_t *v, flow_tracks_t *out
     }
     if (total > F_GRID_MAX)
         total = F_GRID_MAX;
-    flow_track_t *tracks = f_arena_alloc(&a->c->out->arena, (size_t)total * sizeof(*tracks));
+    bool spent;
+    flow_track_t *tracks = list_alloc(a->c, (size_t)total * sizeof(*tracks), &spent);
     if (tracks == NULL)
-        return GRID_READ_NO_MEMORY;
+        return spent ? GRID_READ_UNUSABLE : GRID_READ_NO_MEMORY;
     int32_t k = 0;
     for (int32_t i = 0; i < n && k < total; i++) {
         const garb_val_t *t = &items[i];
@@ -2044,10 +2114,10 @@ static GridRead author_areas(Author *a, const garb_val_t *v, flow_style_t *s)
         if (garb_area_cells(v->items[r].text, (uint32_t)v->items[r].len, cells + r * cols,
                             cols) != cols)
             return GRID_READ_UNUSABLE;
-    flow_grid_area_t *areas = f_arena_alloc(&a->c->out->arena,
-                                            (size_t)rows * cols * sizeof(*areas));
+    bool spent;
+    flow_grid_area_t *areas = list_alloc(a->c, (size_t)rows * cols * sizeof(*areas), &spent);
     if (areas == NULL)
-        return GRID_READ_NO_MEMORY;
+        return spent ? GRID_READ_UNUSABLE : GRID_READ_NO_MEMORY;
     int32_t n = 0;
     for (int32_t k = 0; k < rows * cols; k++) {
         garb_area_cell_t name = cells[k];
@@ -2060,9 +2130,9 @@ static GridRead author_areas(Author *a, const garb_val_t *v, flow_style_t *s)
                 found = j;
         int32_t r = k / cols, c = k % cols;
         if (found < 0) {
-            char *copy = f_arena_alloc(&a->c->out->arena, name.len);
+            char *copy = list_alloc(a->c, name.len, &spent);
             if (copy == NULL)
-                return GRID_READ_NO_MEMORY;
+                return spent ? GRID_READ_UNUSABLE : GRID_READ_NO_MEMORY;
             os64_memcpy(copy, name.text, name.len);
             areas[n++] = (flow_grid_area_t){copy, name.len, r, r + 1, c, c + 1};
             continue;
@@ -2099,9 +2169,10 @@ static GridRead author_line(Author *a, const garb_val_t *v, flow_grid_line_t *ou
         return GRID_READ_OK;
     }
     if (v->kind == GARB_V_STRING && v->len > 0) {
-        char *copy = f_arena_alloc(&a->c->out->arena, v->len);
+        bool spent;
+        char *copy = list_alloc(a->c, v->len, &spent);
         if (copy == NULL)
-            return GRID_READ_NO_MEMORY;
+            return spent ? GRID_READ_UNUSABLE : GRID_READ_NO_MEMORY;
         os64_memcpy(copy, v->text, v->len);
         out->kind = FLOW_GRID_LINE_NAME;
         out->name = copy;
@@ -2112,10 +2183,113 @@ static GridRead author_line(Author *a, const garb_val_t *v, flow_grid_line_t *ou
 }
 
 // One winner that is not a CSS-wide keyword.
+// A length-percentage as flow's, at the element's font size; `unset` for
+// what will not read.
+static flow_length_t author_lp(const Author *a, const garb_val_t *v, flow_length_t unset)
+{
+    Len l;
+    return author_len(a, v, false, &l) ? resolve(l, a->font, unset) : unset;
+}
+
+// An angle in degrees as thousandths in [0, 360000). libgarb hands it
+// already taken round the turn (values.h: in [0, 360), reduced in its own
+// unit so no unit overflows it); a value outside that would overflow the
+// narrowing, and is 0 rather than a guess.
+static int32_t angle_thousandths(double deg)
+{
+    if (!(deg >= 0 && deg < 360))
+        return 0;
+    int64_t t = (int64_t)(deg * 1000 + 0.5);
+    return (int32_t)(t >= 360000 ? t - 360000 : t);
+}
+
+// libgarb's gradient (values.h's GARB_V_IMAGE: its geometry, then its
+// stops) as flow's, out of the lists' budget (list_alloc) — past it, *out
+// is left as it was; a currentColor stop is marked `current`, for the box
+// it is drawn on to resolve. False only when memory runs out.
+static bool author_gradient(const Author *a, const flow_style_t *s, const garb_val_t *v,
+                            const flow_gradient_t **out)
+{
+    static const flow_length_t kUnwritten = {FLOW_LENGTH_AUTO, 0, 0};
+    static const flow_length_t kHalf = {FLOW_LENGTH_PERCENT, 50 * 64, 0};
+    // The gradient and its stops in one piece of the lists' budget; past
+    // it, the layer has no picture (*out stays NULL).
+    bool spent;
+    flow_gradient_t *g =
+        list_alloc(a->c, sizeof(*g) + (size_t)v->nitems * sizeof(flow_gradient_stop_t), &spent);
+    if (g == NULL)
+        return spent;
+    flow_gradient_stop_t *stops = (flow_gradient_stop_t *)(g + 1);
+    os64_memset(g, 0, sizeof(*g));
+    const char *name = v->text;             // one of libgarb's own names
+    g->repeating = name != NULL && (os64_streq(name, "repeating-linear-gradient") ||
+                                    os64_streq(name, "repeating-radial-gradient"));
+    const garb_val_t *geo = &v->items[0];
+    if (geo->kind == GARB_V_NUMBER) {
+        g->kind = FLOW_GRADIENT_LINEAR;
+        g->angle = angle_thousandths(geo->number);
+    } else if (geo->kind == GARB_V_KEYWORD && geo->nitems == 0) {
+        // "to top right" and the rest, libgarb's eight names: the side or
+        // corner each points toward.
+        static const struct { const char *name; int8_t x, y; } kTo[] = {
+            {"to top", 0, -1},          {"to right", 1, 0},         {"to bottom", 0, 1},
+            {"to left", -1, 0},         {"to top left", -1, -1},    {"to top right", 1, -1},
+            {"to bottom left", -1, 1},  {"to bottom right", 1, 1},
+        };
+        g->kind = FLOW_GRADIENT_LINEAR;
+        for (size_t k = 0; k < F_ARRAY(kTo); k++)
+            if (word(geo, kTo[k].name)) {
+                g->to_x = kTo[k].x;
+                g->to_y = kTo[k].y;
+            }
+    } else {
+        g->kind = FLOW_GRADIENT_RADIAL;
+        g->circle = word(geo, "circle");
+        g->extent = FLOW_EXTENT_FARTHEST_CORNER;
+        g->radii[0] = g->radii[1] = kUnwritten;
+        g->centre[0] = g->centre[1] = kHalf;
+        if (geo->nitems == 4) {
+            static const char *const kExtents[] = {"farthest-corner", "closest-side",
+                                                   "farthest-side", "closest-corner"};
+            int32_t e = pick(&geo->items[0], kExtents, F_ARRAY(kExtents));
+            if (e >= 0) {
+                g->extent = (flow_extent_t)e;
+            } else {
+                g->extent = FLOW_EXTENT_SIZE;
+                g->radii[0] = author_lp(a, &geo->items[0], kUnwritten);
+                g->radii[1] = word(&geo->items[1], "auto") ? g->radii[0]
+                                                            : author_lp(a, &geo->items[1], kUnwritten);
+            }
+            g->centre[0] = author_lp(a, &geo->items[2], kHalf);
+            g->centre[1] = author_lp(a, &geo->items[3], kHalf);
+        }
+    }
+    int32_t n = 0;
+    for (int32_t i = 1; i < v->nitems; i++) {
+        const garb_val_t *st = &v->items[i];
+        flow_gradient_stop_t *o = &stops[n++];
+        o->at = kUnwritten;
+        if (st->kind != GARB_V_COLOR) {
+            o->hint = true;
+            o->at = author_lp(a, st, kUnwritten);
+            continue;
+        }
+        o->current = st->color.current;
+        o->colour = st->color.current ? s->color : colour_of(st->color);
+        if (st->nitems > 0)
+            o->at = author_lp(a, &st->items[0], kUnwritten);
+    }
+    g->stops = stops;
+    g->nstops = n;
+    *out = g;
+    return true;
+}
+
 // `none`, or libgarb's shadows (G_SHADOW): each `inset` first when it is
 // there, four lengths and a colour. Lengths in pixels, at the element's
-// own font size, which is known by now; currentColor is the element's
-// colour, known by now too. False only when memory runs out.
+// own font size, which is known by now; a currentColor shadow is marked
+// `current`, for the box it is drawn for to resolve. False only when
+// memory runs out.
 static bool author_shadows(const Author *a, flow_style_t *s, const garb_val_t *v, bool box)
 {
     const flow_shadow_t **list = box ? &s->box_shadows : &s->text_shadows;
@@ -2125,9 +2299,10 @@ static bool author_shadows(const Author *a, flow_style_t *s, const garb_val_t *v
         *count = 0;
         return true;
     }
-    flow_shadow_t *out = f_arena_alloc(&a->c->out->arena, (size_t)v->nitems * sizeof(*out));
+    bool spent;
+    flow_shadow_t *out = list_alloc(a->c, (size_t)v->nitems * sizeof(*out), &spent);
     if (out == NULL)
-        return false;
+        return spent;                       // past the lists' budget: as it was
     for (int32_t i = 0; i < v->nitems; i++) {
         const garb_val_t *one = &v->items[i];
         int32_t k = 0;
@@ -2147,12 +2322,113 @@ static bool author_shadows(const Author *a, flow_style_t *s, const garb_val_t *v
         if (sh->blur < 0)
             sh->blur = 0;
         const garb_val_t *c = k < one->nitems ? &one->items[k] : NULL;
-        sh->colour = c == NULL || c->kind != GARB_V_COLOR || c->color.current ? s->color
-                                                                               : colour_of(c->color);
+        sh->current = c == NULL || c->kind != GARB_V_COLOR || c->color.current;
+        sh->colour = sh->current ? s->color : colour_of(c->color);
     }
     *list = out;
     *count = v->nitems;
     return true;
+}
+
+// A background property's list, one entry per layer libgarb read (a
+// LAYERS value, or one value for one layer); an entry flow cannot read is
+// the property's initial value. A url() is fetched by the face, a
+// gradient libgarb kept is drawn (values.h); a conic gradient or an
+// image-set is no picture yet (PILE3.md § Booked). Past the lists' budget
+// (list_alloc), the property's list is left as it was.
+static bool author_layers(const Author *a, flow_style_t *s, garb_prop_t p, const garb_val_t *v)
+{
+    const garb_val_t *items = v->kind == GARB_V_LAYERS ? v->items : v;
+    int32_t n = v->kind == GARB_V_LAYERS ? v->nitems : 1;
+    if (n <= 0)
+        return true;
+    flow_backgrounds_t *b = &s->backgrounds;
+    Len l, two[2];
+    int32_t w;
+    bool spent;                             // past the lists' budget: the list as it was
+    switch (p) {
+    case GARB_BACKGROUND_IMAGE: {
+        flow_bg_image_t *list = list_alloc(a->c, (size_t)n * sizeof(*list), &spent);
+        if (list == NULL)
+            return spent;
+        for (int32_t k = 0; k < n; k++) {
+            const garb_val_t *one = &items[k];
+            list[k] = kNoImage;
+            if (one->kind == GARB_V_URL && one->len > 0) {
+                list[k].url = one->text;
+                list[k].len = (uint32_t)one->len;
+                list[k].sheet = a->sheet;
+            } else if (one->kind == GARB_V_IMAGE && one->nitems > 0 &&
+                       !author_gradient(a, s, one, &list[k].gradient)) {
+                return false;
+            }
+        }
+        b->image = list;
+        b->nimage = n;
+        return true;
+    }
+    case GARB_BACKGROUND_REPEAT: {
+        static const char *const words[] = {"repeat", "repeat-x", "repeat-y", "no-repeat"};
+        flow_repeat_t *list = list_alloc(a->c, (size_t)n * sizeof(*list), &spent);
+        if (list == NULL)
+            return spent;
+        for (int32_t k = 0; k < n; k++)
+            list[k] = (w = pick(&items[k], words, F_ARRAY(words))) >= 0 ? (flow_repeat_t)w : kRepeat;
+        b->repeat = list;
+        b->nrepeat = n;
+        return true;
+    }
+    case GARB_BACKGROUND_POSITION_X: case GARB_BACKGROUND_POSITION_Y: {
+        flow_length_t *list = list_alloc(a->c, (size_t)n * sizeof(*list), &spent);
+        if (list == NULL)
+            return spent;
+        for (int32_t k = 0; k < n; k++)
+            list[k] = author_len(a, &items[k], false, &l)
+                          ? resolve(l, a->font, (flow_length_t){FLOW_LENGTH_PX, 0, 0})
+                          : kAtStart;
+        *(p == GARB_BACKGROUND_POSITION_X ? &b->x : &b->y) = list;
+        *(p == GARB_BACKGROUND_POSITION_X ? &b->nx : &b->ny) = n;
+        return true;
+    }
+    case GARB_BACKGROUND_SIZE: {
+        // A keyword, or libgarb's pair of width and height.
+        static const char *const fits[] = {"cover", "contain"};
+        flow_bg_size_t *list = list_alloc(a->c, (size_t)n * sizeof(*list), &spent);
+        if (list == NULL)
+            return spent;
+        for (int32_t k = 0; k < n; k++) {
+            const garb_val_t *one = &items[k];
+            list[k] = kOwnSize;
+            if ((w = pick(one, fits, F_ARRAY(fits))) >= 0) {
+                list[k].fit = (flow_bg_fit_t)(FLOW_FIT_COVER + w);
+            } else if (one->kind == GARB_V_LENGTH && one->nitems == 2 &&
+                       author_len(a, &one->items[0], true, &two[0]) &&
+                       author_len(a, &one->items[1], true, &two[1])) {
+                for (int j = 0; j < 2; j++)
+                    list[k].size[j] =
+                        resolve(two[j], a->font, (flow_length_t){FLOW_LENGTH_AUTO, 0, 0});
+            }
+        }
+        b->size = list;
+        b->nsize = n;
+        return true;
+    }
+    case GARB_BACKGROUND_ORIGIN: case GARB_BACKGROUND_CLIP: {
+        static const char *const edges[] = {"border-box", "padding-box", "content-box", "text"};
+        bool origin = p == GARB_BACKGROUND_ORIGIN;
+        flow_edge_t *list = list_alloc(a->c, (size_t)n * sizeof(*list), &spent);
+        if (list == NULL)
+            return spent;
+        for (int32_t k = 0; k < n; k++)
+            list[k] = (w = pick(&items[k], edges, F_ARRAY(edges))) >= 0 ? (flow_edge_t)w
+                      : origin ? kPaddingBox : kBorderBox;
+        *(origin ? &b->origin : &b->clip) = list;
+        *(origin ? &b->norigin : &b->nclip) = n;
+        return true;
+    }
+    default:
+        return true;
+    }
 }
 
 static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
@@ -2172,39 +2448,21 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
     case GARB_BACKGROUND_COLOR:
         if (v->kind != GARB_V_COLOR)
             break;
+        // currentColor is resolved in finish, which knows the final colour.
         if (v->color.current) {
-            s->has_background = flow_alpha(s->color) > 0;
-            s->background = s->color;
+            s->current_colours |= FLOW_CURRENT_BACKGROUND;
         } else {
+            s->current_colours &= (uint8_t)~FLOW_CURRENT_BACKGROUND;
             s->has_background = v->color.a > 0;
             s->background = colour_of(v->color);
         }
         break;
-    case GARB_BACKGROUND_IMAGE:
-        // A gradient is an image libflow cannot draw yet: no picture
-        // (GARB.md § Booked).
-        s->background_image = NULL;
-        s->background_image_len = 0;
-        s->background_sheet = -1;
-        if (v->kind == GARB_V_URL && v->len > 0) {
-            s->background_image = v->text;
-            s->background_image_len = (uint32_t)v->len;
-            s->background_sheet = a->sheet;
-        }
+    case GARB_BACKGROUND_IMAGE: case GARB_BACKGROUND_REPEAT: case GARB_BACKGROUND_POSITION_X:
+    case GARB_BACKGROUND_POSITION_Y: case GARB_BACKGROUND_SIZE: case GARB_BACKGROUND_ORIGIN:
+    case GARB_BACKGROUND_CLIP:
+        if (!author_layers(a, s, p, v))
+            return false;
         break;
-    case GARB_BACKGROUND_REPEAT: {
-        static const char *const words[] = {"repeat", "repeat-x", "repeat-y", "no-repeat"};
-        if ((i = pick(v, words, F_ARRAY(words))) >= 0)
-            s->background_repeat = (flow_repeat_t)i;
-        break;
-    }
-    case GARB_BACKGROUND_POSITION_X: case GARB_BACKGROUND_POSITION_Y: {
-        Len l;
-        if (author_len(a, v, false, &l))
-            s->background_position[p == GARB_BACKGROUND_POSITION_Y] =
-                resolve(l, a->font, (flow_length_t){FLOW_LENGTH_PX, 0, 0});
-        break;
-    }
     case GARB_MARGIN_TOP: case GARB_MARGIN_RIGHT: case GARB_MARGIN_BOTTOM: case GARB_MARGIN_LEFT:
         author_len(a, v, true, &sp->margin[side(p, GARB_MARGIN_TOP)]);
         break;
@@ -2330,6 +2588,14 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
                 s->text_decoration |= FLOW_DECORATION_LINE_THROUGH;
         }
         break;
+    case GARB_IMAGE_RENDERING: {
+        // The crisp spellings; every other keyword libgarb takes smooths.
+        static const char *const crisp[] = {"pixelated", "crisp-edges", "-moz-crisp-edges",
+                                            "-webkit-optimize-contrast", "optimizespeed"};
+        if (v->kind == GARB_V_KEYWORD)
+            s->pixelated = pick(v, crisp, F_ARRAY(crisp)) >= 0;
+        break;
+    }
     case GARB_VISIBILITY: {
         static const char *const words[] = {"visible", "hidden", "collapse"};
         if ((i = pick(v, words, F_ARRAY(words))) >= 0)
@@ -2608,7 +2874,7 @@ static bool author(Ctx *c, const os64_html_node_t *n, Spec *sp, const Spec *ua,
     for (int i = 0; i < 4; i++)
         if (sp->border_px[i] == 0 && author_sets(st, GARB_BORDER_TOP_STYLE + i) &&
             !author_declares(st, GARB_BORDER_TOP_WIDTH + i))
-            sp->border_px[i] = 3 * FLOW_UNITS_PER_PX;
+            sp->border_px[i] = css(c, 3);
     return true;
 }
 
@@ -2700,6 +2966,13 @@ static void finish(const Ctx *c, Spec *sp, const flow_style_t *parent, bool item
         s->border_width[i] = drawn ? sp->border_px[i] : 0;
         if (!sp->border_color_set[i])
             s->border_color[i] = s->color;
+        s->current_colours = (uint8_t)(sp->border_color_set[i]
+                                           ? s->current_colours & ~FLOW_CURRENT_BORDER(i)
+                                           : s->current_colours | FLOW_CURRENT_BORDER(i));
+    }
+    if (s->current_colours & FLOW_CURRENT_BACKGROUND) {
+        s->has_background = flow_alpha(s->color) > 0;
+        s->background = s->color;
     }
     s->width = resolve(sp->width, s->font_size, automatic);
     s->height = resolve(sp->height, s->font_size, automatic);
@@ -2861,14 +3134,19 @@ FStyles *f_style_build(const os64_html_document_t *doc, const os64_page_t *model
         return NULL;
     out->doc = doc;
     out->env = env;
-    // One record per element and the family names a `face` wrote: bounded
-    // by the document libhtml admitted, never multiplied, so no budget —
+    // One record per element and the family names a `face` wrote are
+    // bounded by the document libhtml admitted, so the arena has no cap —
     // pass 1 is all or nothing, and a cap here would blank a large page
-    // that the boxes' budget would merely cut short.
+    // that the boxes' budget would merely cut short. What a page CAN
+    // multiply — a sheet's list copied into every element it reaches — has
+    // a budget of its own (list_alloc), whose end costs a property, never
+    // the page.
     out->arena.cap = SIZE_MAX;
+    out->lists_left = F_STYLE_LISTS_BUDGET;
     Ctx c = {.doc = doc, .model = model, .env = env, .out = out,
              .quirks = doc->quirks == OS64_HTML_QUIRKS,
-             .root_font = (flow_unit_t)env->viewport_font_px * FLOW_UNITS_PER_PX};
+             .zoom = env->zoom != 0 ? env->zoom / 1000.0 : 1.0};
+    c.root_font = css(&c, env->viewport_font_px);
 
     // Pre-order down, and each element FINISHED on the way back up, when
     // everything under it has been styled — which is when its holds_block

@@ -37,5 +37,5 @@ cc -D_XOPEN_SOURCE=700 -pthread -std=c11 -fno-builtin-memmove -g -O1 -Wall -Wext
     userland/libos64/text_bitmap.c userland/libos64/text_draw.c tools/fonts/fake_backend.c \
     kernel/src/gui/event_queue.c kernel/src/appearance.c \
     userland/libos64/conf.c userland/libos64/fmt.c "$appearance_test_dir/freetype_stub.c" \
-    -Wl,--gc-sections,--wrap=os64_draw_ctx_refresh,--wrap=os64_conf_find_read,--wrap=os64_conf_find_bytes,--wrap=os64_conf_find,--wrap=os64_conf_target,--wrap=os64_conf_write_checked,--wrap=os64_slurp,--wrap=os64_font_config_install,--wrap=os64_font_config_discover -o "$appearance_test_dir/test_appearance"
+    -Wl,--gc-sections,--wrap=os64_draw_ctx_refresh,--wrap=os64_conf_find_read,--wrap=os64_conf_find_bytes,--wrap=os64_conf_find,--wrap=os64_conf_target,--wrap=os64_conf_write_checked,--wrap=os64_slurp,--wrap=os64_font_config_install,--wrap=os64_font_config_discover,--wrap=os64_font_config_web_prepare,--wrap=os64_ui_font_app -o "$appearance_test_dir/test_appearance"
 "$appearance_test_dir/test_appearance"

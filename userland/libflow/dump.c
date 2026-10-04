@@ -207,6 +207,67 @@ static bool family_eq(const flow_family_list_t *a, const flow_family_list_t *b)
     return true;
 }
 
+// One background layer; its gradient as its kind, its
+// geometry, then each stop as colour@position (a hint as @position alone).
+static void layer(Buf *b, const flow_env_t *env, const flow_layer_t *l)
+{
+    static const char *const kRepeat[] = {"repeat", "repeat-x", "repeat-y", "no-repeat"};
+    static const char *const kEdge[] = {"border-box", "padding-box", "content-box", "text"};
+    if (l->image != NULL) {
+        puts_(b, " bg-image=\"");
+        put(b, l->image, l->image_len);
+        putf(b, "\"@%d %s ", (int)l->sheet, kRepeat[l->repeat]);
+        length(b, l->position[0]);
+        puts_(b, "/");
+        length(b, l->position[1]);
+    }
+    if (l->fit != FLOW_FIT_LENGTHS) {
+        puts_(b, l->fit == FLOW_FIT_COVER ? " bg-size=cover" : " bg-size=contain");
+    } else if (l->size[0].kind != FLOW_LENGTH_AUTO || l->size[1].kind != FLOW_LENGTH_AUTO) {
+        puts_(b, " bg-size=");
+        length(b, l->size[0]);
+        puts_(b, "/");
+        length(b, l->size[1]);
+    }
+    if (l->origin != FLOW_EDGE_PADDING)
+        putf(b, " bg-origin=%s", kEdge[l->origin]);
+    if (l->clip != FLOW_EDGE_BORDER)
+        putf(b, " bg-clip=%s", kEdge[l->clip]);
+    const flow_gradient_t *g = l->gradient;
+    if (g == NULL)
+        return;
+    static const char *const kExtent[] = {"farthest-corner", "closest-side", "farthest-side",
+                                          "closest-corner", "size"};
+    putf(b, " gradient=%s%s:", g->repeating ? "repeating-" : "",
+         g->kind == FLOW_GRADIENT_LINEAR ? "linear" : "radial");
+    if (g->kind == FLOW_GRADIENT_LINEAR && (g->to_x != 0 || g->to_y != 0)) {
+        putf(b, "to %d %d", (int)g->to_x, (int)g->to_y);
+    } else if (g->kind == FLOW_GRADIENT_LINEAR) {
+        putf(b, "%d", (int)g->angle);
+    } else {
+        putf(b, "%s %s ", g->circle ? "circle" : "ellipse", kExtent[g->extent]);
+        if (g->extent == FLOW_EXTENT_SIZE) {
+            length(b, g->radii[0]);
+            puts_(b, "/");
+            length(b, g->radii[1]);
+            puts_(b, " ");
+        }
+        puts_(b, "at ");
+        length(b, g->centre[0]);
+        puts_(b, "/");
+        length(b, g->centre[1]);
+    }
+    for (int32_t i = 0; i < g->nstops; i++) {
+        puts_(b, i == 0 ? ":" : ",");
+        if (g->stops[i].current)
+            puts_(b, "currentColor");
+        else if (!g->stops[i].hint)
+            color(b, env, g->stops[i].colour);
+        puts_(b, "@");
+        length(b, g->stops[i].at);
+    }
+}
+
 static void four_lengths(Buf *b, const char *name, const flow_length_t v[4])
 {
     putf(b, " %s=", name);
@@ -272,14 +333,14 @@ static void element(Buf *b, const FStyles *styles, const os64_html_node_t *n,
         puts_(b, " bg=");
         color(b, env, s->background);
     }
-    if (s->background_image != NULL) {
-        static const char *const kRepeat[] = {"repeat", "repeat-x", "repeat-y", "no-repeat"};
-        puts_(b, " bg-image=\"");
-        put(b, s->background_image, s->background_image_len);
-        putf(b, "\"@%d %s ", (int)s->background_sheet, kRepeat[s->background_repeat]);
-        length(b, s->background_position[0]);
-        puts_(b, "/");
-        length(b, s->background_position[1]);
+    // Each layer, the top first, a later one after its number: its
+    // picture with its repeat and position, its size and boxes when not
+    // the initial ones, and its gradient.
+    for (int32_t i = 0; i < flow_background_layers(s); i++) {
+        flow_layer_t l = flow_background_layer(s, i);
+        if (i > 0)
+            putf(b, " layer=%d", (int)i);
+        layer(b, env, &l);
     }
     bool margins = false, paddings = false, borders = false;
     for (int i = 0; i < 4; i++) {
@@ -358,6 +419,8 @@ static void element(Buf *b, const FStyles *styles, const os64_html_node_t *n,
         puts_(b, " line-through");
     if (s->visibility != parent->visibility)
         putf(b, " visibility=%s", s_visibility[s->visibility]);
+    if (s->pixelated != parent->pixelated)
+        puts_(b, s->pixelated ? " pixelated" : " smooth");
     if (s->list_style_type != parent->list_style_type)
         putf(b, " list=%s", s_list[s->list_style_type]);
     if (s->list_style_position != parent->list_style_position)

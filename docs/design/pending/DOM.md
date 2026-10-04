@@ -1525,7 +1525,7 @@ stdout; alert reports on the status line.
 
 **Evidence.** `tools/test_yonder_scripts_host.sh` exercises the actual Yonder
 queue, publication and widget code with real libui editing and native libraries,
-a target-profile engine, ASan/UBSan and normal LSan. It passes **2009/0** checks:
+a target-profile engine, ASan/UBSan and normal LSan. It passes **2024/0** checks:
 one task per turn, wrapper identity, a real key edit and caret/selection/focus,
 control reorder/kind/hidden transitions, state-only refresh, invalid numeric
 input, password deletion through script reads and form requests, reset of
@@ -1534,7 +1534,9 @@ author-styled `noscript` in both scripting modes, current-link routing through
 older geometry, navigation cancellation, all sixteen classic MIME spellings
 with case/ASCII-whitespace handling, legacy language fallback/type precedence,
 and language changes between queue construction and execution,
-job/source/schedule caps, URL ownership and setting persistence. A 160-cut
+job/source/schedule caps, URL ownership and setting persistence alongside zoom.
+A pending DOM rebuild preserves its old controls face until it can publish
+zoomed geometry, CSS media queries and scroll anchoring together. A 160-cut
 native sweep reaches 18 model refusals and 21 layout refusals, with 121 completed
 rebuilds; a separate 64-cut stylesheet sweep covers duplicate parses/imports,
 rollback and retry. The ledger is empty after teardown. Worker services and
@@ -1542,9 +1544,9 @@ fixture transport are hosted; this suite does not simulate a compositor or
 claim guest timing performance. The real fetch suite adds a multi-chunk HTML
 case with scripts before/after the read boundary: **27/0**. Both libdom profiles
 pass **1527/0** and **4227/0** with sanitizers; libpage rebuild **68328/0**, libflow
-**18585/0** plus matching corpus dumps, libgarb's parser/cascade/allocation suites,
-and the painter **115/0** plus six matching paints pass. Strict userland build
-passes with bounded `-j4` concurrency.
+**18602/0** plus matching corpus dumps, libgarb's parser/cascade/allocation suites,
+and the painter **179/0** plus six matching paints pass. The UI font suite passes
+**148/0**. Strict userland build passes with bounded `-j2` concurrency.
 
 A private QEMU image/server loads `tools/yonder_script_fixture/index.html`.
 The first and final inline scripts change the visible heading to **Two JavaScript donuts!**;
@@ -1559,6 +1561,10 @@ off-mode fallback, and on-mode fallback suppression were checked on the guest.
 The 21 installed library/app/test/fixture files were byte-compared with their
 build inputs. Guest `domtest` passes four lifetimes; `pagetest` and `htmltest`
 pass, and `htmltest pinned` still exits with the HTML badge (`0x48544d4c`).
+The merged zoom/background integration was checked again in a private guest:
+22 installed files were byte-compared, legacy MIME and language scripts ran,
+VBScript/modules stayed skipped, and typing Q after 2.4 seconds survived the
+redraw. Both scripted pages retired with **heap problems=0**.
 No P5 scripting or ordinary-site compatibility evidence is claimed.
 
 **Remaining gates.** D6 detached reclamation, D7's event loop/execution order,

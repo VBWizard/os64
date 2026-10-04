@@ -373,6 +373,31 @@ static void test_face_open_bounds( void )
     fo.pixel_height = OS64_FONT_PIXEL_MAX + 1;
     check( ft->face_open( engine, SANS->bytes, SANS->length, &fo, &face )
                == OS64_FONT_BAD_ARGUMENT, "pixel_height above the cap accepted" );
+    /* AT the cap a face opens, and a capital renders inside the engine's
+     * memory cap and the mask fence — the cap is what a 256 px page heading
+     * zoomed to 500% asks for. */
+    fo.pixel_height = OS64_FONT_PIXEL_MAX;
+    check( ft->face_open( engine, SANS->bytes, SANS->length, &fo, &face ) == OS64_FONT_OK,
+           "pixel_height at the cap refused" );
+    if ( face != NULL )
+    {
+        uint32_t               index = 0;
+        os64_font_glyph_t     *big   = NULL;
+        os64_font_glyph_view_t view;
+        check( ft->lookup( face, 'M', &index ) == OS64_FONT_OK &&
+                   ft->render( face, index, &big ) == OS64_FONT_OK &&
+                   ft->glyph_view( big, &view ) == OS64_FONT_OK,
+               "an M at the cap did not render" );
+        if ( big != NULL )
+        {
+            check( view.height > OS64_FONT_PIXEL_MAX / 2 && view.height <= OS64_FONT_MASK_DIM_MAX &&
+                       view.width <= OS64_FONT_MASK_DIM_MAX,
+                   "an M at the cap is %ux%u", view.width, view.height );
+            ft->glyph_release( big );
+        }
+        ft->face_close( face );
+        face = NULL;
+    }
     fo.pixel_height = 16;
     fo.hint         = (os64_font_hint_t)7;
     check( ft->face_open( engine, SANS->bytes, SANS->length, &fo, &face )

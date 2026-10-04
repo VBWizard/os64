@@ -10,6 +10,15 @@
 #define TEXT_CP437_BASE 0x200000u
 
 typedef struct text_image text_image;
+/* A font file's bytes, kept once per context however many faces are opened
+ * from them: a face is one file at one size, and a page asks for many sizes
+ * of a few files. Freed with the last face. */
+typedef struct text_file text_file;
+struct text_file {
+    text_file *next;
+    size_t refs, length;
+    uint8_t bytes[];
+};
 struct os64_text_context {
     os64_font_memory_t memory;
     const os64_font_backend_t *backend;
@@ -18,6 +27,7 @@ struct os64_text_context {
     os64_font_status_t refusal;
     uint64_t next_identity;
     os64_text_font_t *fonts;
+    text_file *files;
     text_image *buckets[TEXT_BUCKETS], *oldest, *newest;
 };
 struct os64_text_font {
@@ -26,7 +36,7 @@ struct os64_text_font {
     os64_font_face_t *face;
     os64_font_face_info_t info;
     os64_font_face_options_t options;
-    uint8_t *bytes;
+    text_file *file;                /* NULL for the bitmap face */
     uint64_t identity;
     size_t refs;
 };

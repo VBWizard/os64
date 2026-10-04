@@ -54,6 +54,9 @@ Reset discarding unflushed edits in its owning form, and author CSS failing to
 reveal scripting-mode `noscript` fallback. Script qualification covers the
 sixteen JavaScript MIME essence strings, ASCII case/whitespace handling and
 legacy `language` fallback with `type` precedence.
+Zoom integration covers settings persistence, a pending DOM rebuild preserving
+its old controls face, and publishing zoomed layout, media queries and scroll
+anchoring together while keeping the form widget and its value.
 
 This is the D5b/J3 finished-document inline-classic-script fixture. External
 scripts, modules, browser execution order, events, timers, document.write,

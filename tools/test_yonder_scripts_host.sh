@@ -33,7 +33,7 @@ for source in tools/test_yonder_scripts_host.c tools/test_js_port_calendar.c too
     userland/libflow/{store,attrs,style,dump,boxes,layout,flow}.c \
     userland/libgarb/{tokenize,parse,decode,dump,select,values,props,media,cascade}.c \
     userland/libway/session.c \
-    userland/libos64/{str,fmt,bidi,url,arena,ui,ui_controls,ui_list,ui_text,ui_font,ui_theme,font_family,font_provider,font_adopt,text,text_cache,text_decode,text_bitmap,text_draw,draw}.c; do
+    userland/libos64/{str,fmt,bidi,url,arena,ui,ui_controls,ui_list,ui_text,ui_font,ui_theme,font_config,font_family,font_provider,font_adopt,text,text_cache,text_decode,text_bitmap,text_draw,draw}.c; do
     object="$work/${source//\//_}.o"
     private=()
     if [[ "$source" == userland/libdom/* ]]; then private=(-Dd_alloc=dom_fixture_private_alloc); fi

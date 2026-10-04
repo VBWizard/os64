@@ -1,0 +1,36 @@
+<!doctype html>
+<!-- pile 3, S4b: background-size, -origin and -clip. Compare with Chrome:
+     banner.png is 40x20, red | blue with a yellow diagonal. Each box is
+     160x80 with a 6px dashed border and 10px of padding, so the three boxes
+     (border, padding, content) are all visible. -->
+<html><head><title>backgrounds</title>
+<style>
+body { margin: 16px; font-family: sans-serif; background: #eee }
+.row { display: flex; gap: 16px; margin-bottom: 18px; flex-wrap: wrap }
+.b { width: 160px; height: 80px; padding: 10px; border: 6px dashed rgba(0, 0, 0, 0.4);
+     font-size: 12px; color: #000; background-color: #9c9 }
+.s1 { background-image: url(banner.png) }
+.s2 { background: #9c9 url(banner.png) no-repeat center / cover }
+.s3 { background: #9c9 url(banner.png) no-repeat center / contain }
+.s4 { background: #9c9 url(banner.png) 0 0 / 80px }
+.s5 { background: #9c9 url(banner.png) 0 0 / auto 50% repeat-x }
+.s6 { background: #9c9 url(banner.png) 0 0 / 25% 25% }
+.o1 { background: #9c9 url(banner.png) no-repeat border-box }
+.o2 { background: #9c9 url(banner.png) no-repeat padding-box }
+.o3 { background: #9c9 url(banner.png) no-repeat content-box }
+.o4 { background: #9c9 url(banner.png) no-repeat border-box content-box }
+.g1 { background: linear-gradient(to right, red, blue) 0 0 / 40px 100% }
+.g2 { background: radial-gradient(circle, #fff, #39c) center / 30px 30px }
+.g3 { background: linear-gradient(45deg, #fc0, #930) content-box }
+.g4 { background: linear-gradient(#fc0, #930) padding-box; border-radius: 24px }
+.g5 { background: #f66 linear-gradient(#fc0, #930) no-repeat center / 50% 50% content-box;
+      border-radius: 30px }
+.g6 { background: linear-gradient(red, blue) 0 0 / 0 0, #9c9 }
+</style></head>
+<body>
+<div class=row><div class="b s1">auto (40x20 tiles)</div><div class="b s2">cover, centred</div><div class="b s3">contain, centred</div></div>
+<div class=row><div class="b s4">80px (80x40 tiles)</div><div class="b s5">auto 50%, repeat-x</div><div class="b s6">25% 25%</div></div>
+<div class=row><div class="b o1">origin border-box</div><div class="b o2">origin padding-box</div><div class="b o3">origin + clip content-box</div><div class="b o4">origin border, clip content</div></div>
+<div class=row><div class="b g1">gradient / 40px 100%</div><div class="b g2">radial / 30px</div><div class="b g3">gradient content-box</div></div>
+<div class=row><div class="b g4">rounded, clip padding-box</div><div class="b g5">rounded, content-box, 50% centred</div><div class="b g6">size 0: colour only</div></div>
+</body></html>

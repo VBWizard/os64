@@ -15,6 +15,7 @@
 int64_t os64_open(const char *p, const char *m) { (void)p; (void)m; return -1; }
 int64_t os64_read(int32_t h, void *b, size_t n) { (void)h; (void)b; (void)n; return -1; }
 int64_t os64_close(int32_t h) { (void)h; return 0; }
+int64_t os64_stat(const char *p, os64_dirent_t *entry) { (void)p; (void)entry; return -1; }
 int64_t os64_micros(void) { return 10000000; }
 uint64_t os64_heap_verify(void) { return 0; }
 void os64_debug_log(const char *text) { (void)text; }
@@ -64,15 +65,18 @@ os64_slurp_status_t os64_slurp(const char *path, size_t cap, uint8_t **bytes, si
 bool os64_ui_theme_session(os64_ui_theme_t *theme, uint64_t *installed, uint64_t hint) {
     (void)theme; (void)installed; (void)hint; return false;
 }
-static char saved_scripts[8], settings_report[256];
+static char saved_scripts[8], saved_zoom[8], settings_report[256];
 int64_t os64_conf_get(const char *file, const char *key, char *out, size_t cap) {
     check(os64_streq(file,"yonder.conf"),"settings read Yonder configuration");
-    if(!os64_streq(key,"scripts") || !saved_scripts[0]) return OS64_CONF_NO_KEY;
-    os64_strcopy(out,cap,saved_scripts); return 0;
+    const char *value=os64_streq(key,"scripts") ? saved_scripts :
+        os64_streq(key,"zoom") ? saved_zoom : "";
+    if(!value[0]) return OS64_CONF_NO_KEY;
+    os64_strcopy(out,cap,value); return 0;
 }
 int64_t os64_conf_set(const char *file, const char *key, const char *value) {
     check(os64_streq(file,"yonder.conf"),"settings save Yonder configuration");
     if(os64_streq(key,"scripts")) os64_strcopy(saved_scripts,sizeof(saved_scripts),value);
+    if(os64_streq(key,"zoom")) os64_strcopy(saved_zoom,sizeof(saved_zoom),value);
     return 0;
 }
 void os64_ui_settings_report(os64_ui_settings_t *dialog, const char *text) {
@@ -83,6 +87,7 @@ void way_cache_set_cap(way_cache_t *cache, uint64_t cap) { (void)cap; check(cach
 
 static os64_text_context_t *probe_text;
 static os64_text_font_t *probe_font;
+static bool probe_borrow_font;
 static void *probe_alloc(void *ctx, size_t n) { (void)ctx; return os64_malloc(n); }
 static void probe_free(void *ctx, void *p, size_t n) { (void)ctx; (void)n; os64_free(p); }
 static os64_font_status_t probe_fonts(void *ctx, const flow_family_list_t *family,
@@ -96,7 +101,11 @@ static os64_font_status_t probe_fonts(void *ctx, const flow_family_list_t *famil
 static void probe_page(const char *html, bool scripts) {
     os64_memset(&g,0,sizeof(g));
     g.scripts_on=scripts; g.way.agent=YONDER_AGENT; g.settle_due=YONDER_NEVER;
+    g.zoom=g.zoom_default=1000;
     os64_ui_init(&g.ui,NULL);
+    if(probe_borrow_font)
+        check(os64_ui_font_borrow_context(&g.ui,probe_text)==OS64_FONT_OK,
+            "zoom fixture borrows real font context");
     os64_ui_panel(&g.root); os64_ui_panel(&g.view); g.view.focusable=true; os64_ui_label(&g.status,g.status_text);
     os64_ui_add_child(&g.root,&g.view); os64_ui_add_child(&g.root,&g.status);
     os64_ui_set_root(&g.ui,&g.root);
@@ -108,7 +117,7 @@ static void probe_page(const char *html, bool scripts) {
     check(g.page.way.model!=NULL,"fixture model builds");
     s_env.text=probe_text; s_env.fonts=probe_fonts; s_env.replaced_size=replaced_size;
     sheets_start(&g.page);
-    check(page_lay_out(&g.page,800,600),"fixture layout builds");
+    check(page_lay_out(&g.page,800,600,g.zoom),"fixture layout builds");
     g.page.model_version=g.page.rendered_version=os64_html_version(g.page.way.doc);
     g.page.state_version=os64_page_state_version(os64_page_shared_state(g.page.way.model));
     forms_build();
@@ -221,6 +230,43 @@ static void identity_and_edit(void) {
     check(g.page.rendered_version==os64_html_version(g.page.way.doc),"rendered tree matches mutation");
     probe_drop();
 }
+static void scripted_zoom(void) {
+    probe_borrow_font=true;
+    os64_font_config_defaults(&s_fonts_conf);
+    strcpy(s_fonts_conf.roles[OS64_FONT_CONFIG_WEB].face[0],"builtin");
+    probe_page("<style>body{width:1800px}#anchor{margin-top:700px}#tail{height:1800px}"
+        "@media(max-width:500px){#anchor{color:red}}</style>"
+        "<div id=anchor>anchor<input id=field value=kept></div><div id=tail>end</div>",true);
+    FormWidget *field=probe_field("field");
+    check(field && field->w->app_face,"scripted form control uses page face");
+    check(lay_out_page(&g.page,800,600) && s_controls_set!=NULL && s_controls_px==13,
+        "initial layout lends controls their real font set");
+    const flow_box_t *old_anchor=flow_box_for(g.page.tree,probe_id("anchor"));
+    g.sy=old_anchor->rect.y+1;g.sx=200;
+    int32_t old_offset=0;
+    const os64_html_node_t *held_anchor=anchor_of(&old_offset);
+    check(held_anchor!=NULL,"zoom fixture finds scroll anchor");
+    os64_font_set_t *old_face=s_controls_set;
+    flow_tree_t *old_tree=g.page.tree;
+    check(os64_html_set_attr(g.page.way.doc,probe_id("anchor"),"class","changed",7)==OS64_HTML_OK,
+        "native mutation owes script rebuild");
+    zoom_to(2000);
+    check(!lay_out_page(&g.page,800,600) && g.page.tree==old_tree && s_controls_set==old_face &&
+        g.page.laid_zoom==1000,"owed rebuild refuses zoom before lending another controls face");
+    check(script_rebuild() && g.page.laid_zoom==2000 && s_controls_px==26,
+        "script rebuild publishes current zoom and controls face request");
+    const flow_box_t *fresh_anchor=flow_box_for(g.page.tree,held_anchor);
+    check(fresh_anchor && g.sy==fresh_anchor->rect.y-scale_zoom(old_offset,2000,1000) && g.sx==400,
+        "script rebuild scales page scroll with zoom");
+    check(probe_field("field")==field && field->w->app_face && os64_streq(field->text,"kept"),
+        "zoomed script rebuild preserves control identity and value");
+    check(flow_box_for(g.page.tree,probe_id("anchor"))->style->color==0xff0000,
+        "script rebuild evaluates media queries in zoomed CSS viewport");
+    probe_drop();
+    os64_font_set_release(s_controls_set);s_controls_set=NULL;s_controls_px=0;
+    memset(&s_fonts_conf,0,sizeof(s_fonts_conf));
+    probe_borrow_font=false;
+}
 static void property_only(void) {
     probe_page("<input id=field value=before><input id=tick type=checkbox>"
         "<script>document.getElementById('field').value='property';"
@@ -307,6 +353,8 @@ static void native_refusals(void) {
 }
 
 static bool settings_applied;
+static uint32_t settings_zoom;
+static void settings_zoom_capture(uint32_t zoom) { settings_zoom=zoom; }
 static void settings_capture(const char *agent, bool enabled) {
     check(os64_streq(agent,YONDER_AGENT),"settings preserves agent while applying scripts");
     settings_applied=enabled;
@@ -319,11 +367,15 @@ static void switch_cases(void) {
     memset(&settings_fixture,0,sizeof(settings_fixture));
     strcpy(settings_fixture.field_buf,YONDER_AGENT);
     settings_fixture.use=settings_capture;
+    settings_fixture.zoom_use=settings_zoom_capture;
+    strcpy(settings_fixture.zoom_buf,"125");
     settings_fixture.scripts.checked=true;
     apply(&settings_fixture.d,false);
     check(settings_applied && os64_streq(saved_scripts,"bogus"),"Apply enables this window without saving default");
+    check(settings_zoom==1250 && saved_zoom[0]==0,"Apply keeps zoom independent of saved default");
     apply(&settings_fixture.d,true);
     check(settings_applied && yonder_settings_saved_scripts(),"Save as default persists on for new windows");
+    check(yonder_settings_saved_zoom()==1250,"Save persists zoom alongside script switch");
     settings_fixture.scripts.checked=false;
     apply(&settings_fixture.d,true);
     check(!settings_applied && !yonder_settings_saved_scripts() && os64_streq(saved_scripts,"off"),
@@ -527,7 +579,7 @@ static void stylesheet_reuse(void) {
             check(garb_parse_sheet_text(text,strlen(text),&sheet->parsed)==GARB_OK,"linked sheet fixture parses");
             sheet_ready(&g.page,i);
         }
-        check(g.page.nsheets==4 && page_lay_out(&g.page,800,600),"duplicate links and imports lay out");
+        check(g.page.nsheets==4 && page_lay_out(&g.page,800,600,g.zoom),"duplicate links and imports lay out");
         const void *arenas[4];
         for(int i=0; i<4; i++) arenas[i]=g.page.sheets[i].parsed.arena;
         check(os64_html_set_text(g.page.way.doc,probe_id("heading")->first_child,"new",3)==OS64_HTML_OK,
@@ -617,6 +669,7 @@ int main(void)
     check(os64_text_font_bitmap(probe_text,&probe_font)==OS64_FONT_OK,"bitmap face");
     script_types();
     identity_and_edit();
+    scripted_zoom();
     property_only();
     script_lifecycle();
     native_refusals();

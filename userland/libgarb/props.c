@@ -23,6 +23,9 @@ static const Prop kProps[GARB_NPROPS] = {
     [GARB_BACKGROUND_REPEAT] = {"background-repeat", false},
     [GARB_BACKGROUND_POSITION_X] = {"background-position-x", false},
     [GARB_BACKGROUND_POSITION_Y] = {"background-position-y", false},
+    [GARB_BACKGROUND_SIZE] = {"background-size", false},
+    [GARB_BACKGROUND_ORIGIN] = {"background-origin", false},
+    [GARB_BACKGROUND_CLIP] = {"background-clip", false},
     [GARB_MARGIN_TOP] = {"margin-top", false},
     [GARB_MARGIN_RIGHT] = {"margin-right", false},
     [GARB_MARGIN_BOTTOM] = {"margin-bottom", false},
@@ -111,6 +114,7 @@ static const Prop kProps[GARB_NPROPS] = {
     [GARB_BORDER_BOTTOM_LEFT_RADIUS] = {"border-bottom-left-radius", false},
     [GARB_BOX_SHADOW] = {"box-shadow", false},
     [GARB_TEXT_SHADOW] = {"text-shadow", true},
+    [GARB_IMAGE_RENDERING] = {"image-rendering", true},
 };
 
 const char *garb_prop_name(garb_prop_t prop)
@@ -131,31 +135,55 @@ static const char *const kDisplay[] = {
     "table-row-group", "table-header-group", "table-footer-group", "table-row",
     "table-column-group", "table-column", "table-cell", "table-caption", "contents",
     "flow-root", "flex", "inline-flex", "grid", "inline-grid", NULL};
-// Values this grammar reads but no slice lays out as written yet (GARB.md's
-// pile 2, POSITION.md's slices). Read, so the cascade keeps them; not
-// SUPPORTED, so @supports tells a page to use the fallback it wrote for
-// exactly this. flow-root is laid out as a block. `contents` is not here:
-// libflow gives such an element no box and flows its children into its
-// parent, which is what it says. The list is for the layouts a page writes
-// a fallback for — asks for one and is handed another — and each joins it
-// the day its mapping is written and leaves the day the slice that lays it
-// out lands.
+// Values this grammar reads but nothing lays out or draws as written yet
+// (GARB.md's pile 2, POSITION.md's slices, PILE3.md's booked rows). Read, so
+// the cascade keeps them; not SUPPORTED, so @supports tells a page to use
+// the fallback it wrote for exactly this. flow-root is laid out as a block;
+// a background clipped to the text is not drawn on a box. `contents` is not
+// here: libflow gives such an element no box and flows its children into
+// its parent, which is what it says. The list is for what a page writes a
+// fallback for — asks for one thing and is handed another, or nothing — and
+// each joins it the day its mapping is written and leaves the day the slice
+// that draws it lands.
 static const struct {
     garb_prop_t prop;
     const char *keyword;
 } kApproximated[] = {
     {GARB_DISPLAY, "flow-root"},
+    {GARB_BACKGROUND_CLIP, "text"},
 };
+
+// An image kept by name and drawn as nothing — a conic gradient, an
+// image-set — is approximated the same way; a linear or radial gradient and
+// a url() are drawn.
+static bool image_drawn(const garb_val_t *v)
+{
+    return v->kind != GARB_V_IMAGE || v->nitems > 0;
+}
+
+static bool value_approximated(garb_prop_t prop, const garb_val_t *v)
+{
+    if (!image_drawn(v))
+        return true;
+    // A list of layers is approximated when any layer is: the page asked
+    // for all of them.
+    if (v->kind == GARB_V_LAYERS) {
+        for (int32_t i = 0; i < v->nitems; i++)
+            if (value_approximated(prop, &v->items[i]))
+                return true;
+        return false;
+    }
+    if (v->kind != GARB_V_KEYWORD)
+        return false;
+    for (size_t k = 0; k < sizeof(kApproximated) / sizeof(kApproximated[0]); k++)
+        if (prop == kApproximated[k].prop && os64_streq(v->keyword, kApproximated[k].keyword))
+            return true;
+    return false;
+}
 
 bool garb_set_approximated(const garb_set_t *set)
 {
-    const garb_val_t *v = &set->value;
-    if (v->kind == GARB_V_WIDE || v->kind != GARB_V_KEYWORD)
-        return false;
-    for (size_t k = 0; k < sizeof(kApproximated) / sizeof(kApproximated[0]); k++)
-        if (set->prop == kApproximated[k].prop && os64_streq(v->keyword, kApproximated[k].keyword))
-            return true;
-    return false;
+    return value_approximated(set->prop, &set->value);
 }
 
 static const char *const kBorderStyle[] = {"none", "hidden", "dotted", "dashed", "solid", "double",
@@ -194,6 +222,10 @@ static const char *const kTransform[] = {"none", "capitalize", "uppercase", "low
                                          "full-width", "full-size-kana", NULL};
 static const char *const kIndentWords[] = {"hanging", "each-line", NULL};
 static const char *const kVisibility[] = {"visible", "hidden", "collapse", NULL};
+static const char *const kImageRendering[] = {
+    "auto", "smooth", "high-quality", "pixelated", "crisp-edges",
+    // Before pixelated: Firefox's, Chrome's, and SVG's two.
+    "-moz-crisp-edges", "-webkit-optimize-contrast", "optimizespeed", "optimizequality", NULL};
 static const char *const kListPosition[] = {"inside", "outside", NULL};
 static const char *const kCollapse[] = {"collapse", "separate", NULL};
 static const char *const kCaption[] = {"top", "bottom", NULL};
@@ -245,7 +277,8 @@ static const char *const kFirst[] = {"first", NULL};
 static const char *const kRepeat[] = {"repeat-x", "repeat-y", NULL};
 static const char *const kRepeat2[] = {"repeat", "space", "round", "no-repeat", NULL};
 static const char *const kAttachment[] = {"scroll", "fixed", "local", NULL};
-static const char *const kBox[] = {"border-box", "padding-box", "content-box", "text", NULL};
+static const char *const kBox[] = {"border-box", "padding-box", "content-box", NULL};
+static const char *const kClipBox[] = {"border-box", "padding-box", "content-box", "text", NULL};
 static const char *const kBgSize[] = {"cover", "contain", NULL};
 static const char *const kPosX[] = {"left", "right", "center", NULL};
 static const char *const kPosY[] = {"top", "bottom", "center", NULL};
@@ -910,12 +943,12 @@ static bool position(Sets *s, VCur *c, garb_val_t *x, garb_val_t *y)
 // One or two repeat keywords, as the single keyword they amount to.
 // ── Gradients (Images 3 § 3) ────────────────────────────────────────────
 //
-// A gradient is drawn by nobody yet, but whether one is VALID decides what
-// a `background` does: the pre-standard `linear-gradient(top, …)` (no
-// `to`) is refused by every browser, so the `background: #333` before it
-// stands, and a page that relied on that is dark. So a linear or radial
-// gradient is read against its grammar; conic gradients and image-set are
-// accepted by name (GARB.md's pile-3 row says so).
+// Whether a gradient is VALID decides what a `background` does: the
+// pre-standard `linear-gradient(top, …)` (no `to`) is refused by every
+// browser, so the `background: #333` before it stands, and a page that
+// relied on that is dark. So a linear or radial gradient is read against
+// its grammar and kept for drawing; conic gradients and image-set are
+// accepted by name, kept as nothing, and approximated for @supports.
 
 // One comma-separated argument group of a gradient: [from, to) of `v`.
 typedef struct {
@@ -999,9 +1032,30 @@ static bool linear_prelude(const Group *g)
     return angle(&c) && vc_done(&c);
 }
 
-// [<ending-shape> || <size>]? [at <position>]?, one of them at least. The
-// size's finer rules (a circle takes one length and no percentage) are not
-// checked: what they refuse is rare, and nothing draws it yet.
+static bool lp_val(Sets *s, VCur *c, garb_val_t *out);
+
+// Whether a calc() tree has a percentage in it anywhere: its type is then
+// a length-percentage, never a plain length.
+static bool calc_percent(const garb_calc_t *c)
+{
+    if (c == NULL)
+        return false;
+    if (c->op == GARB_CALC_LEAF)
+        return c->leaf.kind == GARB_V_PERCENTAGE;
+    for (int32_t k = 0; k < c->nargs; k++)
+        if (calc_percent(c->args[k]))
+            return true;
+    return false;
+}
+
+// [<ending-shape> || <size>]? [at <position>]?, one of them at least. A
+// size written as lengths is one length for a circle — never a percentage,
+// written or inside a calc() — and two length-percentages for an ellipse
+// (Images 3 § 3.2.1): anything else is drawn as SOME gradient, so it has
+// to be refused here or the declaration it is in would not fall back. A
+// negative LITERAL is refused too; a calc() that works out negative is not
+// — Values 4 § 10.12 range-checks a calculation where it is used, so the
+// painter takes it as 0, as Chrome computes it.
 static bool radial_prelude(Sets *s, const Group *g)
 {
     VCur c = {g->v, g->n, 0};
@@ -1009,17 +1063,30 @@ static bool radial_prelude(Sets *s, const Group *g)
     static const char *const kExtent[] = {"closest-side", "farthest-side", "closest-corner",
                                           "farthest-corner", NULL};
     static const char *const kAt[] = {"at", NULL};
-    bool shape = false, size = false, any = false;
+    const char *shape = NULL;
+    bool size = false, any = false, percent = false;
+    int lengths = 0;
     for (int k = 0; k < 2; k++) {
-        if (!shape && vc_keyword(&c, kShape) != NULL) {
-            shape = any = true;
+        garb_val_t r;
+        if (shape == NULL && (shape = vc_keyword(&c, kShape)) != NULL) {
+            any = true;
         } else if (!size && vc_keyword(&c, kExtent) != NULL) {
             size = any = true;
-        } else if (!size && length_percentage(s, &c)) {
-            (void)length_percentage(s, &c);     // an ellipse's second radius
+        } else if (!size && lp_val(s, &c, &r)) {
+            for (lengths = 1; ; lengths++) {
+                if (r.kind != GARB_V_CALC && r.number < 0)
+                    return false;
+                percent |= r.kind == GARB_V_PERCENTAGE ||
+                           (r.kind == GARB_V_CALC && calc_percent(r.calc));
+                if (lengths == 2 || !lp_val(s, &c, &r))
+                    break;
+            }
             size = any = true;
         }
     }
+    bool circle = shape != NULL ? os64_streq(shape, "circle") : lengths == 1;
+    if ((lengths == 1 && (percent || !circle)) || (lengths == 2 && circle))
+        return false;
     if (vc_keyword(&c, kAt) != NULL) {
         Sets strict = *s;
         strict.quirks = false;
@@ -1053,20 +1120,211 @@ static bool gradient_ok(Sets *s, const garb_value_t *f, bool radial)
     return stops(s, g, n);
 }
 
-// An <image>: a url, or a gradient the grammar above admits, or one this
-// library takes by name (vc_image).
+// ── A gradient kept (values.h's GARB_V_IMAGE) ──
+
+// One length-percentage, read.
+static bool lp_val(Sets *s, VCur *c, garb_val_t *out)
+{
+    return vc_dim(c, ACCEPT_LENGTH | ACCEPT_PERCENT, true, false, &s->a, out);
+}
+
+static garb_val_t number_val(double n)
+{
+    garb_val_t v;
+    os64_memset(&v, 0, sizeof(v));
+    v.kind = GARB_V_NUMBER;
+    v.number = n;
+    return v;
+}
+
+// The stops of groups [0, n), each a COLOR with its position or a hint,
+// appended to `out` from `*k`; a stop written with two positions is two.
+// The grammar is already checked.
+static bool gradient_stops(Sets *s, const Group *g, int32_t n, garb_val_t *out, int32_t *k)
+{
+    for (int32_t i = 0; i < n; i++) {
+        VCur c = {g[i].v, g[i].n, 0};
+        garb_val_t colour, pos;
+        if (!vc_color(&c, &colour)) {
+            if (!lp_val(s, &c, &out[*k]))
+                return false;
+            (*k)++;
+            continue;
+        }
+        int positions = 0;
+        while (!vc_done(&c) && lp_val(s, &c, &pos)) {
+            out[*k] = colour;
+            out[*k].items = keep(s, &pos, 1);
+            out[*k].nitems = 1;
+            if (out[*k].items == NULL)
+                return false;
+            (*k)++;
+            positions++;
+        }
+        if (positions == 0)
+            out[(*k)++] = colour;
+    }
+    return true;
+}
+
+// `v` taken into [0, whole), exactly, for every finite `v`: each step
+// subtracts the largest whole * 2^k not above what is left, and a
+// subtraction of two doubles within a factor of two of each other is exact
+// (Sterbenz), so this is fmod's answer without libmath. NaN and infinity
+// have no remainder and are 0.
+static double round_the_turn(double v, double whole)
+{
+    if (!(v - v == 0))
+        return 0;
+    double m = v < 0 ? -v : v;
+    while (m >= whole) {
+        double s = whole;
+        while (s <= m / 2)
+            s *= 2;
+        m -= s;
+    }
+    double r = v < 0 && m > 0 ? whole - m : m;
+    return r < whole ? r : 0;               // -1e-20 rounds to a whole turn
+}
+
+// The angle a linear gradient's prelude names, in degrees in [0, 360), or
+// its `to`.
+static garb_val_t linear_geometry(const Group *g, bool have)
+{
+    static const char *const kTo[] = {"to", NULL};
+    static const char *const kX[] = {"left", "right", NULL};
+    static const char *const kY[] = {"top", "bottom", NULL};
+    static const char *const kNames[3][3] = {
+        {"to top left", "to top", "to top right"},
+        {"to left", NULL, "to right"},
+        {"to bottom left", "to bottom", "to bottom right"},
+    };
+    if (!have)
+        return number_val(180);             // the initial direction: to bottom
+    VCur c = {g->v, g->n, 0};
+    if (vc_keyword(&c, kTo) != NULL) {
+        int x = 1, y = 1;
+        for (int k = 0; k < 2 && !vc_done(&c); k++) {
+            const char *w = vc_keyword(&c, kX);
+            if (w != NULL)
+                x = os64_streq(w, "left") ? 0 : 2;
+            else if ((w = vc_keyword(&c, kY)) != NULL)
+                y = os64_streq(w, "top") ? 0 : 2;
+        }
+        return kw(kNames[y][x]);
+    }
+    const garb_value_t *t = vc_peek(&c);
+    double n = t->number;
+    if (t->kind == GARB_DIMENSION) {
+        // Taken round its own unit's turn FIRST: `1e307rad` in degrees is
+        // past a double, and a direction is the remainder, not the size.
+        bool grad = ieq(t->unit, t->unit_len, "grad"), rad = ieq(t->unit, t->unit_len, "rad");
+        bool turn = ieq(t->unit, t->unit_len, "turn");
+        double whole = grad ? 400 : rad ? 6.283185307179586 : turn ? 1 : 360;
+        n = round_the_turn(n, whole) * (360 / whole);
+    }
+    return number_val(n);
+}
+
+// A radial gradient's prelude, or its initial one: an ellipse to the
+// farthest corner, at the centre. A shape left out is a circle when one
+// length is its size, else an ellipse (Images 3 § 3.2).
+static bool radial_geometry(Sets *s, const Group *g, bool have, garb_val_t *out)
+{
+    static const char *const kShape[] = {"circle", "ellipse", NULL};
+    static const char *const kExtent[] = {"closest-side", "farthest-side", "closest-corner",
+                                          "farthest-corner", NULL};
+    static const char *const kAt[] = {"at", NULL};
+    garb_val_t parts[4];
+    parts[0] = kw("farthest-corner");
+    parts[1] = kw("auto");
+    garb_val_t half;
+    os64_memset(&half, 0, sizeof(half));
+    half.kind = GARB_V_PERCENTAGE;
+    half.number = 50;
+    parts[2] = parts[3] = half;
+    const char *shape = NULL;
+    int lengths = 0;
+    if (have) {
+        VCur c = {g->v, g->n, 0};
+        for (int k = 0; k < 2 && !vc_done(&c); k++) {
+            const char *w;
+            garb_val_t a, b;
+            if (shape == NULL && (w = vc_keyword(&c, kShape)) != NULL) {
+                shape = w;
+            } else if ((w = vc_keyword(&c, kExtent)) != NULL) {
+                parts[0] = kw(w);
+            } else if (lp_val(s, &c, &a)) {
+                parts[0] = a;
+                lengths = 1;
+                if (lp_val(s, &c, &b)) {
+                    parts[1] = b;
+                    lengths = 2;
+                }
+            }
+        }
+        if (vc_keyword(&c, kAt) != NULL) {
+            Sets strict = *s;
+            strict.quirks = false;
+            bool ok = position(&strict, &c, &parts[2], &parts[3]);
+            s->a.short_of_memory |= strict.a.short_of_memory;
+            if (!ok)
+                return false;
+        }
+    }
+    *out = kw(shape != NULL ? shape : lengths == 1 ? "circle" : "ellipse");
+    out->items = keep(s, parts, 4);
+    out->nitems = 4;
+    return out->items != NULL;
+}
+
+// The gradient `f` (its grammar checked) as values.h describes it, into
+// `out`, which vc_image has made its IMAGE.
+static bool gradient_value(Sets *s, const garb_value_t *f, bool radial, garb_val_t *out)
+{
+    Group g[64];
+    int32_t n = 0, from = 0;
+    for (int32_t i = 0; i <= f->nchildren; i++)
+        if (i == f->nchildren || f->children[i].kind == GARB_COMMA) {
+            g[n++] = (Group){f->children + from, i - from};
+            from = i + 1;
+        }
+    // The prelude by gradient_ok's own test, which asks it first: a unitless
+    // 0 is an angle there, though it would read as a hint too.
+    bool prelude = n > 0 && (radial ? radial_prelude(s, &g[0]) : linear_prelude(&g[0]));
+    garb_val_t items[1 + 2 * 64];
+    int32_t k = 1;
+    if (radial) {
+        if (!radial_geometry(s, &g[0], prelude, &items[0]))
+            return false;
+    } else {
+        items[0] = linear_geometry(&g[0], prelude);
+    }
+    if (!gradient_stops(s, g + prelude, n - prelude, items, &k))
+        return false;
+    out->items = keep(s, items, k);
+    out->nitems = k;
+    out->comma = true;
+    return out->items != NULL;
+}
+
+// An <image>: a url, or a gradient the grammar above admits, kept whole,
+// or one this library takes by name (vc_image).
 static bool bg_image(Sets *s, VCur *c, garb_val_t *out)
 {
     const garb_value_t *t = vc_peek(c);
+    bool linear = false, radial = false;
     if (t != NULL && t->kind == GARB_FUNCTION) {
-        bool linear = ieq(t->text, t->len, "linear-gradient") ||
-                      ieq(t->text, t->len, "repeating-linear-gradient");
-        bool radial = ieq(t->text, t->len, "radial-gradient") ||
-                      ieq(t->text, t->len, "repeating-radial-gradient");
+        linear = ieq(t->text, t->len, "linear-gradient") ||
+                 ieq(t->text, t->len, "repeating-linear-gradient");
+        radial = ieq(t->text, t->len, "radial-gradient") ||
+                 ieq(t->text, t->len, "repeating-radial-gradient");
         if ((linear || radial) && !gradient_ok(s, t, radial))
             return false;
     }
-    return vc_image(c, out);
+    if (!vc_image(c, out))
+        return false;
+    return !(linear || radial) || gradient_value(s, t, radial, out);
 }
 
 static bool repeat(VCur *c, garb_val_t *out)
@@ -1086,87 +1344,177 @@ static bool repeat(VCur *c, garb_val_t *out)
     return true;
 }
 
-static bool bg_size(Sets *s, VCur *c)
+// A background value per layer, gathered as a list is read.
+typedef struct {
+    garb_val_t *v;
+    int32_t n, cap;
+} Layers;
+
+static bool layers_add(Sets *s, Layers *l, const garb_val_t *v)
 {
-    if (vc_keyword(c, kBgSize) != NULL)
-        return true;
-    garb_val_t v;
-    int n = 0;
-    while (n < 2 && kw_or_dim(s, c, kAuto, ACCEPT_LENGTH | ACCEPT_PERCENT, false, false, &v))
-        n++;
-    return n > 0;
+    if (l->n == l->cap) {
+        int32_t cap = l->cap != 0 ? l->cap * 2 : 4;
+        garb_val_t *grown = os64_realloc(l->v, (size_t)cap * sizeof(*grown));
+        if (grown == NULL) {
+            // Not the arena's, so said here, as shadow_list says it.
+            s->a.short_of_memory = true;
+            return false;
+        }
+        l->v = grown;
+        l->cap = cap;
+    }
+    l->v[l->n++] = *v;
+    return true;
 }
 
-// The `background` shorthand: comma-separated layers, the last of which may
-// carry the colour. What yonder paints is one picture, so the FIRST layer's
-// image, repeat and position are the ones set — the one on top — and the
-// rest are read for their validity (Backgrounds 3 § 3.10).
-static bool background(Sets *s, VCur *c)
+// The list as one value — its one layer's, or a LAYERS of them all — and
+// the list freed. False when the arena is out of room.
+static bool layers_done(Sets *s, Layers *l, garb_val_t *out)
 {
-    garb_val_t color = transparent(), image = kw("none"), rep = kw("repeat"), px = percent(0),
-               py = percent(0);
-    for (int layer = 0;; layer++) {
+    bool ok = l->n > 0;
+    if (ok && l->n == 1) {
+        *out = l->v[0];
+    } else if (ok) {
+        os64_memset(out, 0, sizeof(*out));
+        out->kind = GARB_V_LAYERS;
+        out->items = keep(s, l->v, l->n);
+        out->nitems = l->n;
+        out->comma = true;
+        ok = out->items != NULL;
+    }
+    os64_free(l->v);
+    *l = (Layers){0};
+    return ok;
+}
+
+// <bg-size> (Backgrounds 3 § 3.9): cover, contain, or a width and a height,
+// each a length-percentage or auto, the height auto when not written.
+static bool bg_size(Sets *s, VCur *c, garb_val_t *out)
+{
+    const char *k = vc_keyword(c, kBgSize);
+    if (k != NULL) {
+        *out = kw(k);
+        return true;
+    }
+    garb_val_t two[2];
+    int n = 0;
+    while (n < 2 && kw_or_dim(s, c, kAuto, ACCEPT_LENGTH | ACCEPT_PERCENT, false, false, &two[n]))
+        n++;
+    if (n == 0)
+        return false;
+    if (n == 1)
+        two[1] = kw("auto");
+    os64_memset(out, 0, sizeof(*out));
+    out->kind = GARB_V_LENGTH;
+    out->items = keep(s, two, 2);
+    out->nitems = 2;
+    return out->items != NULL;
+}
+
+static garb_val_t auto_size(Sets *s)
+{
+    garb_val_t v;
+    garb_val_t two[2] = {kw("auto"), kw("auto")};
+    os64_memset(&v, 0, sizeof(v));
+    v.kind = GARB_V_LENGTH;
+    v.items = keep(s, two, 2);
+    v.nitems = 2;
+    return v;
+}
+
+// The longhands each layer of the `background` shorthand sets, in the
+// order they are set.
+enum { L_IMAGE, L_REPEAT, L_X, L_Y, L_SIZE, L_ORIGIN, L_CLIP, L_N };
+static const garb_prop_t kLayerProps[L_N] = {
+    GARB_BACKGROUND_IMAGE, GARB_BACKGROUND_REPEAT, GARB_BACKGROUND_POSITION_X,
+    GARB_BACKGROUND_POSITION_Y, GARB_BACKGROUND_SIZE, GARB_BACKGROUND_ORIGIN,
+    GARB_BACKGROUND_CLIP,
+};
+
+// The shorthand's layers, each one's values added to `lists`, and the
+// colour the last may carry.
+static bool background_layers(Sets *s, VCur *c, Layers lists[L_N], garb_val_t *color)
+{
+    for (;;) {
         bool have_img = false, have_pos = false, have_rep = false, have_att = false,
              have_color = false;
         int boxes = 0;
-        garb_val_t li = kw("none"), lr = kw("repeat"), lx = percent(0), ly = percent(0), lc;
+        const char *box[2] = {NULL, NULL};
+        garb_val_t l[L_N] = {kw("none"), kw("repeat"), percent(0), percent(0), auto_size(s),
+                             kw("padding-box"), kw("border-box")};
+        if (l[L_SIZE].items == NULL)
+            return false;
         for (;;) {
             const garb_value_t *t = vc_peek(c);
             if (t == NULL || t->kind == GARB_COMMA)
                 break;
             garb_val_t v, x, y;
             if (!have_img && vc_keyword(c, kNone) != NULL) {
-                li = kw("none");
                 have_img = true;
             } else if (!have_img && bg_image(s, c, &v)) {
-                li = v;
+                l[L_IMAGE] = v;
                 have_img = true;
             } else if (!have_pos && position(s, c, &x, &y)) {
-                lx = x;
-                ly = y;
+                l[L_X] = x;
+                l[L_Y] = y;
                 have_pos = true;
                 if (is_delim_v(vc_peek(c), '/')) {
                     c->i++;
-                    if (!bg_size(s, c))
+                    if (!bg_size(s, c, &l[L_SIZE]))
                         return false;
                 }
             } else if (!have_rep && repeat(c, &v)) {
-                lr = v;
+                l[L_REPEAT] = v;
                 have_rep = true;
             } else if (!have_att && vc_keyword(c, kAttachment) != NULL) {
                 have_att = true;
-            } else if (boxes < 2 && vc_keyword(c, kBox) != NULL) {
+            } else if (boxes < 2 && (box[boxes] = vc_keyword(c, kClipBox)) != NULL) {
                 boxes++;
             } else if (!have_color && vc_color(c, &v)) {
-                lc = v;
+                *color = v;
                 have_color = true;
             } else {
                 return false;
             }
         }
-        const garb_value_t *t = vc_peek(c);
-        bool last = t == NULL;
+        bool last = vc_peek(c) == NULL;
         if (have_color && !last)
             return false;               // only the final layer has a colour
         if (!have_img && !have_pos && !have_rep && !have_att && boxes == 0 && !have_color)
             return false;               // an empty layer
-        if (layer == 0) {
-            image = li;
-            rep = lr;
-            px = lx;
-            py = ly;
+        // `text` clips and never places: the origin is the other box, or
+        // stays as it was when there is none.
+        if (boxes == 2 && os64_streq(box[0], "text"))
+            return false;
+        if (boxes > 0) {
+            l[L_CLIP] = kw(box[boxes - 1]);
+            if (!os64_streq(box[0], "text"))
+                l[L_ORIGIN] = kw(box[0]);
         }
-        if (have_color)
-            color = lc;
+        for (int k = 0; k < L_N; k++)
+            if (!layers_add(s, &lists[k], &l[k]))
+                return false;
         if (last)
-            break;
+            return true;
         c->i++;                         // the comma
     }
+}
+
+// The `background` shorthand: comma-separated layers, the top one first,
+// the last of which may carry the colour (Backgrounds 3 § 3.10). One box
+// sets the origin and the clip; two, the origin then the clip.
+static bool background(Sets *s, VCur *c)
+{
+    Layers lists[L_N] = {{0}};
+    garb_val_t color = transparent(), v[L_N];
+    bool ok = background_layers(s, c, lists, &color);
+    for (int k = 0; k < L_N; k++)
+        ok = layers_done(s, &lists[k], &v[k]) && ok;    // each list freed, whatever
+    if (!ok)
+        return false;
     set(s, GARB_BACKGROUND_COLOR, &color);
-    set(s, GARB_BACKGROUND_IMAGE, &image);
-    set(s, GARB_BACKGROUND_REPEAT, &rep);
-    set(s, GARB_BACKGROUND_POSITION_X, &px);
-    set(s, GARB_BACKGROUND_POSITION_Y, &py);
+    for (int k = 0; k < L_N; k++)
+        set(s, kLayerProps[k], &v[k]);
     return true;
 }
 
@@ -1307,7 +1655,9 @@ typedef enum {
     G_MAX,                  // max-*: none | lp >= 0 | the content words
     G_FAMILY, G_FONT_SIZE, G_FONT_WEIGHT, G_FONT_STYLE, G_LINE_HEIGHT,
     G_VALIGN, G_DECORATION_LINE, G_INDENT, G_LIST_TYPE, G_LIST_IMAGE, G_BG_IMAGE,
-    G_BG_REPEAT, G_BG_POS_X, G_BG_POS_Y, G_SPACING,
+    G_BG_REPEAT, G_BG_POS_X, G_BG_POS_Y, G_BG_SIZE,
+    G_BG_BOX,               // background-origin, -clip: a box from `words`
+    G_SPACING,
     G_Z_INDEX,              // auto | <integer>
     G_ALPHA,                // <alpha-value>: a number or a percentage, clamped when computed
     G_ALIGN,                // an alignment keyword from `words`, `unsafe` or `first` before it
@@ -1334,7 +1684,8 @@ static const Longhand kLonghands[] = {
     {GARB_DISPLAY, G_KEYWORDS, kDisplay}, {GARB_COLOR, G_COLOR, NULL},
     {GARB_BACKGROUND_COLOR, G_COLOR, NULL}, {GARB_BACKGROUND_IMAGE, G_BG_IMAGE, NULL},
     {GARB_BACKGROUND_REPEAT, G_BG_REPEAT, NULL}, {GARB_BACKGROUND_POSITION_X, G_BG_POS_X, NULL},
-    {GARB_BACKGROUND_POSITION_Y, G_BG_POS_Y, NULL},
+    {GARB_BACKGROUND_POSITION_Y, G_BG_POS_Y, NULL}, {GARB_BACKGROUND_SIZE, G_BG_SIZE, NULL},
+    {GARB_BACKGROUND_ORIGIN, G_BG_BOX, kBox}, {GARB_BACKGROUND_CLIP, G_BG_BOX, kClipBox},
     {GARB_MARGIN_TOP, G_MARGIN, NULL}, {GARB_MARGIN_RIGHT, G_MARGIN, NULL},
     {GARB_MARGIN_BOTTOM, G_MARGIN, NULL}, {GARB_MARGIN_LEFT, G_MARGIN, NULL},
     {GARB_PADDING_TOP, G_PADDING, NULL}, {GARB_PADDING_RIGHT, G_PADDING, NULL},
@@ -1386,6 +1737,7 @@ static const Longhand kLonghands[] = {
     {GARB_BORDER_BOTTOM_RIGHT_RADIUS, G_RADIUS, NULL},
     {GARB_BORDER_BOTTOM_LEFT_RADIUS, G_RADIUS, NULL},
     {GARB_BOX_SHADOW, G_SHADOW, NULL}, {GARB_TEXT_SHADOW, G_SHADOW, NULL},
+    {GARB_IMAGE_RENDERING, G_KEYWORDS, kImageRendering},
 };
 
 static bool longhand_one(Sets *s, VCur *c, const Longhand *l, garb_val_t *out);
@@ -1713,24 +2065,29 @@ static bool grid_line(Sets *s, VCur *c, garb_val_t *out)
 }
 
 // The background longhands take a comma-separated list, one per layer
-// (Backgrounds 3 § 3.1): the first — the layer on top, the one yonder
-// draws — is kept, and the rest are read for their validity.
+// (Backgrounds 3 § 3.1), the top layer first.
 static bool layered(const Longhand *l)
 {
-    return l->g == G_BG_IMAGE || l->g == G_BG_REPEAT || l->g == G_BG_POS_X || l->g == G_BG_POS_Y;
+    return l->g == G_BG_IMAGE || l->g == G_BG_REPEAT || l->g == G_BG_POS_X ||
+           l->g == G_BG_POS_Y || l->g == G_BG_SIZE || l->g == G_BG_BOX;
 }
 
 static bool longhand(Sets *s, VCur *c, const Longhand *l, garb_val_t *out)
 {
-    if (!longhand_one(s, c, l, out))
-        return false;
-    while (layered(l) && vc_peek(c) != NULL && vc_peek(c)->kind == GARB_COMMA) {
-        c->i++;
-        garb_val_t other;
-        if (!longhand_one(s, c, l, &other))
+    if (!layered(l))
+        return longhand_one(s, c, l, out);
+    Layers list = {0};
+    for (;;) {
+        garb_val_t one;
+        if (!longhand_one(s, c, l, &one) || !layers_add(s, &list, &one)) {
+            os64_free(list.v);
             return false;
+        }
+        if (vc_peek(c) == NULL || vc_peek(c)->kind != GARB_COMMA)
+            break;
+        c->i++;
     }
-    return true;
+    return layers_done(s, &list, out);
 }
 
 static bool longhand_one(Sets *s, VCur *c, const Longhand *l, garb_val_t *out)
@@ -1738,6 +2095,7 @@ static bool longhand_one(Sets *s, VCur *c, const Longhand *l, garb_val_t *out)
     const char *k;
     switch (l->g) {
     case G_KEYWORDS:
+    case G_BG_BOX:
         if ((k = vc_keyword(c, l->words)) == NULL)
             return false;
         *out = kw(k);
@@ -1788,6 +2146,7 @@ static bool longhand_one(Sets *s, VCur *c, const Longhand *l, garb_val_t *out)
         }
         return l->g == G_BG_IMAGE ? bg_image(s, c, out) : vc_url(c, out);
     case G_BG_REPEAT: return repeat(c, out);
+    case G_BG_SIZE: return bg_size(s, c, out);
     case G_BG_POS_X:
         if ((k = vc_keyword(c, kPosX)) != NULL) {
             garb_val_t off, *op = NULL;
@@ -1974,7 +2333,8 @@ static int shorthand_longhands(Shorthand sh, garb_prop_t *out)
 {
     static const garb_prop_t kBg[] = {GARB_BACKGROUND_COLOR, GARB_BACKGROUND_IMAGE,
                                       GARB_BACKGROUND_REPEAT, GARB_BACKGROUND_POSITION_X,
-                                      GARB_BACKGROUND_POSITION_Y};
+                                      GARB_BACKGROUND_POSITION_Y, GARB_BACKGROUND_SIZE,
+                                      GARB_BACKGROUND_ORIGIN, GARB_BACKGROUND_CLIP};
     static const garb_prop_t kFont[] = {GARB_FONT_STYLE, GARB_FONT_VARIANT, GARB_FONT_WEIGHT,
                                         GARB_FONT_SIZE, GARB_LINE_HEIGHT, GARB_FONT_FAMILY};
     static const garb_prop_t kList[] = {GARB_LIST_STYLE_TYPE, GARB_LIST_STYLE_POSITION,
@@ -1996,7 +2356,7 @@ static int shorthand_longhands(Shorthand sh, garb_prop_t *out)
     case SH_BORDER_WIDTH: for (int k = 0; k < 4; k++) out[n++] = (garb_prop_t)(GARB_BORDER_TOP_WIDTH + k); break;
     case SH_BORDER_STYLE: for (int k = 0; k < 4; k++) out[n++] = (garb_prop_t)(GARB_BORDER_TOP_STYLE + k); break;
     case SH_BORDER_COLOR: for (int k = 0; k < 4; k++) out[n++] = (garb_prop_t)(GARB_BORDER_TOP_COLOR + k); break;
-    case SH_BACKGROUND: for (int k = 0; k < 5; k++) out[n++] = kBg[k]; break;
+    case SH_BACKGROUND: for (size_t k = 0; k < sizeof(kBg) / sizeof(kBg[0]); k++) out[n++] = kBg[k]; break;
     case SH_BACKGROUND_POSITION: out[n++] = GARB_BACKGROUND_POSITION_X; out[n++] = GARB_BACKGROUND_POSITION_Y; break;
     case SH_FONT: for (int k = 0; k < 6; k++) out[n++] = kFont[k]; break;
     case SH_LIST_STYLE: for (int k = 0; k < 3; k++) out[n++] = kList[k]; break;
@@ -2111,21 +2471,28 @@ static bool shorthand(Sets *s, VCur *c, Shorthand sh)
     case SH_BORDER_STYLE: return box4(s, c, GARB_BORDER_TOP_STYLE, bstyle_one);
     case SH_BORDER_COLOR: return box4(s, c, GARB_BORDER_TOP_COLOR, bcolor_one);
     case SH_BACKGROUND: return background(s, c);
-    case SH_BACKGROUND_POSITION:
-        // A position per layer; the first is the one drawn.
-        if (!position(s, c, &x, &y))
-            return false;
-        while (vc_peek(c) != NULL && vc_peek(c)->kind == GARB_COMMA) {
-            garb_val_t ox, oy;
+    case SH_BACKGROUND_POSITION: {
+        // A position per layer, each split into its two longhands' lists.
+        Layers xs = {0}, ys = {0};
+        bool ok = true;
+        for (;;) {
+            if (!position(s, c, &x, &y) || !layers_add(s, &xs, &x) || !layers_add(s, &ys, &y)) {
+                ok = false;
+                break;
+            }
+            if (vc_peek(c) == NULL || vc_peek(c)->kind != GARB_COMMA)
+                break;
             c->i++;
-            if (!position(s, c, &ox, &oy))
-                return false;
         }
-        if (!vc_done(c))
+        ok = ok && vc_done(c);
+        ok = layers_done(s, &xs, &x) && ok;     // each list freed, whatever
+        ok = layers_done(s, &ys, &y) && ok;
+        if (!ok)
             return false;
         set(s, GARB_BACKGROUND_POSITION_X, &x);
         set(s, GARB_BACKGROUND_POSITION_Y, &y);
         return true;
+    }
     case SH_FONT: return font_shorthand(s, c);
     case SH_BORDER_RADIUS: return radius_shorthand(s, c);
     case SH_LIST_STYLE: return list_style(s, c);
@@ -2418,6 +2785,13 @@ static void calc(Out *o, const garb_calc_t *c, At at)
 
 static void val(Out *o, const garb_val_t *v)
 {
+    // An image is written by its function's name alone, whatever a gradient
+    // carries of itself.
+    if (v->kind == GARB_V_IMAGE) {
+        put_n(o, v->text, v->len);
+        put(o, "(...)");
+        return;
+    }
     if (v->kind == GARB_V_FUNCTION && os64_streq(v->keyword, "span")) {
         put(o, "span ");            // a keyword and its argument, not a call
         val(o, &v->items[0]);
@@ -2469,7 +2843,7 @@ static void val(Out *o, const garb_val_t *v)
     case GARB_V_STRING: put(o, "\""); put_n(o, v->text, v->len); put(o, "\""); break;
     case GARB_V_CALC: calc(o, v->calc, AT_TOP); break;
     case GARB_V_IMAGE: put_n(o, v->text, v->len); put(o, "(...)"); break;
-    case GARB_V_TRACKS: case GARB_V_FUNCTION: break;    // always with items, above
+    case GARB_V_TRACKS: case GARB_V_FUNCTION: case GARB_V_LAYERS: break;  // always with items, above
     }
 }
 
