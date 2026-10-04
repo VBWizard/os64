@@ -1077,6 +1077,7 @@ os64_page_t *os64_page_build(const os64_html_document_t *doc, const char *docume
         os64_free(page);
         return NULL;
     }
+    page->references = 1;
     page->doc = doc;
     page->version = os64_html_version(doc);
     if (doc != NULL) {
@@ -1148,10 +1149,27 @@ bool p_stale(const os64_page_t *page)
     return page != NULL && page->version != os64_html_version(page->doc);
 }
 
+os64_page_state_t *os64_page_shared_state(const os64_page_t *page)
+{
+    return page != NULL ? page->state : NULL;
+}
+
+bool os64_page_retain(const os64_page_t *page)
+{
+    if (page == NULL || page->references == SIZE_MAX)
+        return false;
+    ((os64_page_t *)page)->references++;
+    return true;
+}
+
 void os64_page_free(os64_page_t *page)
 {
     if (page == NULL)
         return;
+    if (page->references > 1) {
+        page->references--;
+        return;
+    }
     for (int32_t i = 0; i < page->ncontrols; i++)
         os64_free((void *)page->controls[i].options);
     if (page->initial != NULL)

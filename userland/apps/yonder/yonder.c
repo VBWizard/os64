@@ -40,6 +40,7 @@
 #include "sheet.h"
 #include "scale.h"
 #include "settings.h"
+#include "scripts.h"
 #include "ticker.h"
 #include "trip.h"
 
@@ -86,6 +87,7 @@
 #define BELL_MAIL (1u << 1)
 #define BELL_TICK (1u << 2)       // a moving picture's next frame is due
 #define BELL_SETTINGS (1u << 3)   // something arrived at the Settings window
+#define BELL_SCRIPTS (1u << 4)    // another finished-document script is queued
 
 // A GIF frame that asks for 10 ms or less is shown for this long, as every
 // browser shows the ones that ask for "as fast as you can".
@@ -252,7 +254,7 @@ static const char *faces_open(void)
 // libhtml as the transport's label, which outranks the page: when it fires,
 // the page's <meta> is not read at all. A page that declares
 // windows-1252 and is UTF-8 is the case it exists for.
-static os64_html_document_t *parse_file(const uint8_t *bytes, size_t len)
+static os64_html_document_t *parse_file(const uint8_t *bytes, size_t len, bool scripting)
 {
     bool wide = false, valid = true;
     for (size_t i = 0; i < len && valid;) {
@@ -264,6 +266,7 @@ static os64_html_document_t *parse_file(const uint8_t *bytes, size_t len)
     }
     os64_html_options_t opt = os64_html_options_default();
     opt.charset = wide && valid ? "utf-8" : NULL;
+    opt.scripting = scripting;
     os64_html_parser_t *p = os64_html_parser_new(&opt);
     if (p == NULL)
         return NULL;
@@ -271,17 +274,19 @@ static os64_html_document_t *parse_file(const uint8_t *bytes, size_t len)
     return os64_html_parser_finish(p);
 }
 
+// Developer fixture diagnostics, selected before any page is made.
+static bool s_script_audit;
+
 // ── Pages ───────────────────────────────────────────────────────────────
 
 // A picture of the page's, one per ADDRESS: forty spacer GIFs are one
-// fetch. Its address is the page model's, which lives as long as it does —
-// or, for one a sheet names, the table's own copy (`owned`). QUEUED is
+// fetch. The table owns its address so it survives replacement of the
+// model or cascade that named it. QUEUED is
 // yonder's to hand over; WAITING is in the pool.
 typedef enum { PIC_QUEUED, PIC_WAITING, PIC_SHOWN, PIC_FAILED, PIC_NOT_KEPT } PictureState;
 
 typedef struct {
     const char *url;
-    bool owned;
     PictureState state;
     os64_image_t image;             // a still picture's pixels
     os64_image_sequence_t *moving;  // or a moving one's, its frame on show
@@ -289,7 +294,7 @@ typedef struct {
     bool playing;                   // false once it stops: its loops done, or a frame failed
     os64_work_id_t id;              // while WAITING
     // An image naming it gives no width and height of its own, so its
-    // arrival moves the page. Decided once, as the pictures are gathered.
+    // arrival may require relayout; rebuilt models can add such a use.
     bool moves;
 } Picture;
 
@@ -301,8 +306,9 @@ typedef struct {
 #define SHEET_IMPORTS_MAX 16    // the @imports one sheet may make
 #define SHEETS_WAIT_MS 3000     // how long a page waits for its sheets before it is shown
 
-typedef struct {
+typedef struct Sheet {
     garb_parsed_t parsed;
+    struct Sheet *borrowed_from; // staged reuse; ownership moves after old layout is freed
     bool ready;                     // parsed: it is in the cascade
     bool waiting;                   // its job is out, as `id`
     // The first paint waits for it: its media holds on this glass now, or
@@ -328,8 +334,12 @@ typedef struct {
 // A page as the window holds it: libway's page (the tree, what it means,
 // the reader's flips) and its layout at the size it was laid out at. A
 // text/plain page has no tree of its own, so it is given one.
-typedef struct {
+typedef struct Page {
     way_page_t way;
+    struct Page *reuse_sheets;   // source of ready linked parses during a rebuild
+    bool scripting;
+    yonder_scripts_t *scripts;
+    uint64_t model_version, rendered_version, state_version;
     os64_html_document_t *plain;
     os64_page_t *plain_model;
     flow_tree_t *tree;
@@ -352,6 +362,7 @@ typedef struct {
     // these it is, -1 for one that will not be fetched.
     Picture *pics;
     int32_t npics, cap_pics, *pic_of, *bg_of;
+    int32_t nimage_map, nbackground_map;
     // The table's index by address (picture_for): open-addressed, at most
     // half full, grown with the table.
     int32_t *pic_slot;
@@ -360,7 +371,7 @@ typedef struct {
     // next picture to hand it.
     int32_t waiting, in_flight, next_pic;
     int32_t not_kept;
-    size_t kept_bytes;
+    size_t kept_bytes, picture_url_bytes;
     // The form whose reply this is, when the reply was to a POST: what
     // Reload sends again. Its url is NULL otherwise.
     os64_page_request_t sent;
@@ -395,13 +406,28 @@ static os64_page_t *page_model(const Page *p)
     return p->way.model != NULL ? p->way.model : p->plain_model;
 }
 
+static void sheets_free(Page *p)
+{
+    for (int32_t i = 0; i < p->nsheets; i++) {
+        if (p->sheets[i].borrowed_from == NULL)
+            garb_free(&p->sheets[i].parsed);
+        os64_free(p->sheets[i].url);
+        os64_free(p->sheets[i].imports);
+        os64_free(p->sheets[i].child);
+    }
+    os64_free(p->sheets);
+    p->sheets = NULL;
+    p->nsheets = p->sheets_waiting = p->sheets_ready = 0;
+}
+
 static void page_clear(Page *p)
 {
+    yonder_scripts_free(p->scripts);
+    p->scripts = NULL;
     for (int32_t i = 0; i < p->npics; i++) {
         os64_image_free(&p->pics[i].image);
         os64_image_sequence_free(p->pics[i].moving);
-        if (p->pics[i].owned)
-            os64_free((char *)p->pics[i].url);
+        os64_free((char *)p->pics[i].url);
     }
     os64_free(p->pics);
     os64_free(p->pic_slot);
@@ -409,19 +435,20 @@ static void page_clear(Page *p)
     os64_free(p->bg_of);
     flow_free(p->tree);
     garb_cascade_free(p->cascade);
-    for (int32_t i = 0; i < p->nsheets; i++) {
-        garb_free(&p->sheets[i].parsed);
-        os64_free(p->sheets[i].url);
-        os64_free(p->sheets[i].imports);
-        os64_free(p->sheets[i].child);
-    }
-    os64_free(p->sheets);
+    sheets_free(p);
     os64_page_free(p->plain_model);
     os64_html_document_free(p->plain);
     way_page_clear(&p->way);
     os64_page_request_free(&p->sent);
     os64_free(p->box_scrolls);
+    bool audit = s_script_audit && p->scripting;
     os64_memset(p, 0, sizeof(*p));
+    if (audit) {
+        char line[128];
+        os64_snprintf(line, sizeof(line), "yonder: scripted page retired; heap problems=%lu",
+                      (unsigned long)os64_heap_verify());
+        os64_debug_log(line);
+    }
 }
 
 // A text/plain body is laid out by handing libhtml `<plaintext>` and then
@@ -476,9 +503,13 @@ static int32_t sheet_emit(Page *p, int32_t e, garb_sheet_in_t *in, int32_t *entr
 // they changed or the size is not the one they were cascaded at — a media
 // query or a vw reads it. The new tree replaces the old only once it
 // exists (LAYOUT.md § Bounds), and the cascade the old one points into is
-// freed with it. False on no memory, the page on screen untouched.
+// freed with it. An owed DOM rebuild blocks resize/sheet relayouts too, so
+// those cannot publish new geometry from stale meaning or sheet inputs.
+// False on refusal, the page on screen untouched.
 static bool page_lay_out(Page *p, int32_t width, int32_t height)
 {
+    if (p->tree != NULL && p->rendered_version != os64_html_version(page_doc(p)))
+        return false;
     garb_cascade_t *cascade = p->cascade;
     int32_t entry[SHEETS_MAX] = {0};
     garb_env_t view = {width, height};
@@ -495,6 +526,7 @@ static bool page_lay_out(Page *p, int32_t width, int32_t height)
     }
     s_env.ctx = p;
     s_env.cascade = cascade;
+    s_env.scripting = p->scripting;
     // One height for `vh` and the initial containing block (flow_env_t).
     s_env.viewport_height = height;
     flow_tree_t *fresh = flow_layout(page_doc(p), page_model(p), width, &s_env);
@@ -559,13 +591,16 @@ typedef enum {
 // Whose question the bar is showing.
 typedef enum { ASK_NONE = 0, ASK_WORKER, ASK_REQUEST } Asker;
 
-// A control's widget (YONDER.md § Y4). The storage never moves once the
-// widget is in the window's tree, so a page's are allocated together.
+// A control's widget (YONDER.md § Y4), allocated individually so its
+// address and editor state survive a rebuilt model.
 typedef enum { FW_TEXT, FW_PASSWORD, FW_CHECK, FW_BUTTON, FW_LIST, FW_FILE } FormKind;
 
 typedef struct {
     FormKind kind;
-    int32_t control;                // libpage's index
+    const os64_html_node_t *node;   // stable across model indices
+    char synced[512], model_text[512];
+    size_t synced_len, model_text_len;
+    bool presented;
     union {
         os64_ui_textfield_t field;
         os64_ui_checkbox_t check;
@@ -602,6 +637,7 @@ static struct {
     char status_rest[512];
     int32_t pointer_x, pointer_y;   // where the pointer last was, for hover
     bool running;
+    bool scripts_on;
     // A resize is laid out once the events that arrived with it are
     // drained: a drag sends a stream of them, and a big page takes long
     // enough to lay out that doing it per event would freeze the window.
@@ -659,10 +695,10 @@ static struct {
     // pictures_settle, and when it finished.
     uint64_t laid_ms;
     os64_ticks_t laid_at;
-    // The page's control widgets, after every permanent widget in the
-    // window's tree; `by_control` finds one from libpage's index.
-    FormWidget *fw;
-    int32_t nfw, *by_control, ncontrols;
+    // Widgets have stable addresses and node keys; rebuilding replaces the
+    // pointer list while preserving surviving widgets and their caret.
+    FormWidget **fw;
+    int32_t nfw;
 } g;   // zeroed: the session's histories are large, and .data would carry them in the file
 
 // A select's list shows this many rows when the page does not say: enough
@@ -742,7 +778,7 @@ static bool replaced_size(void *ctx, const os64_html_node_t *node, int32_t *w, i
         return true;
     }
     int32_t i = p->pic_of != NULL ? os64_page_image_for(model, node) : -1;
-    if (i < 0 || p->pic_of[i] < 0 || p->pics[p->pic_of[i]].state != PIC_SHOWN)
+    if (i < 0 || i >= p->nimage_map || p->pic_of[i] < 0 || p->pics[p->pic_of[i]].state != PIC_SHOWN)
         return false;
     uint32_t pw, ph;
     (void)picture_pixels(&p->pics[p->pic_of[i]], &pw, &ph);
@@ -762,7 +798,8 @@ static const char *trim(const char *s)
 
 static void status_set(const char *text)
 {
-    os64_strcopy(g.status_text, sizeof(g.status_text), text);
+    os64_snprintf(g.status_text, sizeof(g.status_text), "%s%s",
+                  g.scripts_on ? "SCRIPTS ON | " : "", text);
     os64_ui_mark_dirty(&g.ui, &g.status);
 }
 
@@ -1033,6 +1070,8 @@ static void open_address(const char *url, NavKind kind, const way_position_t *cr
 // After a page arrives: a refresh it declares, judged by libway. A GO is a
 // new navigation that leaves no crumb; the chain it belongs to is counted
 // from the last place a person chose to go.
+static void script_alert(void *opaque, const char *text, size_t length);
+
 static void refresh_if_declared(void)
 {
     os64_page_request_t request;
@@ -1089,11 +1128,15 @@ static void arrive_now(Page *fresh, NavKind kind, const way_position_t *crumb,
     bar_forget();
     pictures_leave(&g.page);
     sheets_leave(&g.page);
+    yonder_scripts_free(g.page.scripts);
+    g.page.scripts = NULL;
     forms_drop();
     page_clear(&g.page);
     g.page = *fresh;
     os64_memset(fresh, 0, sizeof(*fresh));
     g.page_serial++;
+    g.page.model_version = g.page.rendered_version = os64_html_version(page_doc(&g.page));
+    g.page.state_version = os64_page_state_version(os64_page_shared_state(page_model(&g.page)));
     g.pictures_moved = false;
     g.settle_due = YONDER_NEVER;       // the deadline goes with the moves it was for
     g.laid_at = t1;
@@ -1114,6 +1157,15 @@ static void arrive_now(Page *fresh, NavKind kind, const way_position_t *crumb,
     say_laid_out(ms_between(&t0, &t1));
     if (fragment != NULL)
         scroll_to_fragment(fragment);
+    if (g.page.scripting && g.scripts_on) {
+        g.page.scripts = yonder_scripts_new((os64_html_document_t *)page_doc(&g.page),
+                                             os64_page_shared_state(page_model(&g.page)),
+                                             g.page.way.url, script_alert, NULL);
+        if (g.page.scripts == NULL)
+            status_rest("No memory to queue page scripts; this page runs without them.");
+        else if (yonder_scripts_pending(g.page.scripts))
+            (void)os64_gui_event_ring(g.win, BELL_SCRIPTS);
+    }
     refresh_if_declared();
     buttons_follow();
     os64_ui_mark_dirty(&g.ui, &g.view);
@@ -1178,7 +1230,8 @@ static void open_local(const char *path, NavKind kind, const way_position_t *cru
     Page fresh;
     os64_memset(&fresh, 0, sizeof(fresh));
     os64_snprintf(fresh.way.url, sizeof(fresh.way.url), "file://%s", path);
-    fresh.way.doc = parse_file(bytes, len);
+    fresh.scripting = g.scripts_on;
+    fresh.way.doc = parse_file(bytes, len, fresh.scripting);
     os64_free(bytes);
     fresh.way.model = fresh.way.doc != NULL ? os64_page_build(fresh.way.doc, fresh.way.url, NULL, NULL)
                                             : NULL;
@@ -1276,6 +1329,8 @@ static void bar_answered(bool yes)
 // for as long as the job still holds its own.
 static void stop_trip(void)
 {
+    yonder_scripts_free(g.page.scripts);
+    g.page.scripts = NULL;
     coming_drop();
     if (g.nav.id == 0) {
         buttons_follow();
@@ -1340,6 +1395,7 @@ static void start_trip(const char *url, os64_page_request_t *request, NavKind ki
     trip->mail = mail;
     trip->session = &g.way;
     trip->agent = g.way.agent;
+    trip->scripting = g.scripts_on;
     trip->window = g.win;
     trip->mail_bell = BELL_MAIL;
     os64_strcopy(trip->url, sizeof(trip->url), url);
@@ -1556,10 +1612,9 @@ static int32_t picture_find(const Page *p, const char *url)
 // The picture at `url`, gathered once however many times the page or its
 // sheets name it: its index in the page's table, QUEUED for pictures_feed
 // when it is new, or -1 for an address nothing here fetches (or no memory).
-// `own` keeps a copy of the address, for one no page model holds (a
-// sheet's). The index grows with the table, so a sheet's pictures found
+// The catalog owns each address. The index grows with the table, so pictures found
 // after a layout join the same one.
-static int32_t picture_for(Page *p, const char *url, bool own)
+static int32_t picture_for(Page *p, const char *url)
 {
     if (url == NULL)
         return -1;
@@ -1572,6 +1627,11 @@ static int32_t picture_for(Page *p, const char *url, bool own)
     int32_t found = picture_find(p, url);
     if (found >= 0)
         return found;
+    // Script-driven source changes may revisit many URLs between rebuilds.
+    // Keep the native catalog bounded as well as its decoded pixel storage.
+    size_t bytes = os64_strlen(url) + 1;
+    if (p->npics >= 4096 || bytes > 4u * 1024u * 1024u - p->picture_url_bytes)
+        return -1;
     if ((size_t)(p->npics + 1) * 2 > p->pic_slot_cap) {
         size_t cap = 16;
         while (cap < (size_t)(p->npics + 1) * 2)
@@ -1596,13 +1656,13 @@ static int32_t picture_for(Page *p, const char *url, bool own)
         p->pics = grown;
         p->cap_pics = cap;
     }
-    const char *kept = own ? copy_text(url) : url;
+    const char *kept = copy_text(url);
     if (kept == NULL)
         return -1;
     p->pic_slot[picture_slot(p, kept)] = p->npics;
     Picture *pic = &p->pics[p->npics];
     pic->url = kept;
-    pic->owned = own;
+    p->picture_url_bytes += bytes;
     pic->state = PIC_QUEUED;
     p->waiting++;
     return p->npics++;
@@ -1648,9 +1708,28 @@ static Sheet *sheet_new(Page *p, const char *media, int32_t importer, int32_t im
 
 // Sends a sheet's address to a worker. One that cannot be fetched stays
 // out of the cascade, and the page is drawn without it.
+static void sheet_ready(Page *p, int32_t e);
+
 static void sheet_fetch(Page *p, Sheet *sh, const char *url)
 {
     sh->url = copy_text(url);
+    if (sh->url != NULL && p->reuse_sheets != NULL) {
+        Page *old = p->reuse_sheets;
+        for (int32_t i = 0; i < old->nsheets; i++) {
+            Sheet *source = &old->sheets[i];
+            if (!source->ready || source->url == NULL || !os64_streq(source->url, url))
+                continue;
+            bool lent = false;
+            for (int32_t k = 0; k < p->nsheets; k++)
+                lent |= p->sheets[k].borrowed_from == source;
+            if (lent)
+                continue;
+            sh->parsed = source->parsed;
+            sh->borrowed_from = source;
+            sheet_ready(p, (int32_t)(sh - p->sheets));
+            return;
+        }
+    }
     bool fetchable = sh->url != NULL &&
                      ((os64_strlen(url) > 7 && os64_memcmp(url, "http://", 7) == 0) ||
                       (os64_strlen(url) > 8 && os64_memcmp(url, "https://", 8) == 0) ||
@@ -1864,7 +1943,7 @@ static void css_pictures_under(Page *p, const flow_box_t *b)
         if (b->node != NULL && b->style->background_image != NULL) {
             char url[OS64_FETCH_URL_MAX];
             if (css_url(p, b->style, url, sizeof(url)))
-                (void)picture_for(p, url, true);
+                (void)picture_for(p, url);
         }
         css_pictures_under(p, b->first);
     }
@@ -1887,33 +1966,37 @@ static void pictures_start(Page *p)
     const os64_page_t *model = page_model(p);
     int32_t n = model != NULL ? os64_page_nimages(model) : 0;
     int32_t nb = model != NULL ? os64_page_nbackgrounds(model) : 0;
-    if (n + nb <= 0 || g.pool == NULL)
-        return;
-    p->pic_of = os64_calloc((size_t)(n > 0 ? n : 1), sizeof(*p->pic_of));
-    p->bg_of = os64_calloc((size_t)(nb > 0 ? nb : 1), sizeof(*p->bg_of));
-    p->pics = os64_calloc((size_t)(n + nb), sizeof(*p->pics));
-    p->cap_pics = p->pics != NULL ? n + nb : 0;
-    if (p->pic_of == NULL || p->bg_of == NULL || p->pics == NULL) {
+    int32_t *images = n > 0 ? os64_malloc((size_t)n * sizeof(*images)) : NULL;
+    int32_t *backgrounds = nb > 0 ? os64_malloc((size_t)nb * sizeof(*backgrounds)) : NULL;
+    if ((n > 0 && images == NULL) || (nb > 0 && backgrounds == NULL)) {
+        os64_free(images);
+        os64_free(backgrounds);
+        // Old maps carry old model indices and cannot answer a new model.
         os64_free(p->pic_of);
         os64_free(p->bg_of);
-        os64_free(p->pics);
         p->pic_of = p->bg_of = NULL;
-        p->pics = NULL;
-        p->cap_pics = 0;
+        p->nimage_map = p->nbackground_map = 0;
         return;
     }
+    os64_free(p->pic_of);
+    os64_free(p->bg_of);
+    p->pic_of = images;
+    p->bg_of = backgrounds;
+    p->nimage_map = n;
+    p->nbackground_map = nb;
     // A picture moves the page when any element naming it leaves its box
     // to the picture; a background never does, being painted, not laid out.
     for (int32_t i = 0; i < n; i++) {
         const os64_page_image_t *img = os64_page_image(model, i);
-        int32_t k = picture_for(p, img->src.url, false);
+        int32_t k = picture_for(p, img->src.url);
         p->pic_of[i] = k;
         if (k >= 0 && !picture_sized(p, img->node))
             p->pics[k].moves = true;
     }
     for (int32_t i = 0; i < nb; i++)
-        p->bg_of[i] = picture_for(p, os64_page_background(model, i)->src.url, false);
-    pictures_feed(p);
+        p->bg_of[i] = picture_for(p, os64_page_background(model, i)->src.url);
+    if (g.pool != NULL)
+        pictures_feed(p);
 }
 
 // The page is being left: its pictures in the pool are cancelled, and the
@@ -2053,7 +2136,7 @@ static int32_t box_picture(const Page *p, const flow_box_t *b)
     if (b->style->background_image != NULL)
         return css_picture(p, b->style);
     int32_t i = b->node != NULL ? os64_page_background_for(page_model(p), b->node) : -1;
-    return i >= 0 && p->bg_of != NULL ? p->bg_of[i] : -1;
+    return i >= 0 && i < p->nbackground_map && p->bg_of != NULL ? p->bg_of[i] : -1;
 }
 
 // Whether any box showing picture `k` meets the view — one scrolled away is
@@ -2070,7 +2153,7 @@ static bool picture_on_screen(int32_t k, bool mark)
     for (int32_t i = 0; p->pic_of != NULL && i < flow_nimages(p->tree); i++) {
         const flow_box_t *b = flow_image(p->tree, i);
         int32_t at = os64_page_image_for(model, b->node);
-        if (at < 0 || p->pic_of[at] != k ||
+        if (at < 0 || at >= p->nimage_map || p->pic_of[at] != k ||
             !os64_rect_intersect(flow_box_doc_rect(b, scroll_now()), view, &meet))
             continue;
         seen = true;
@@ -2092,7 +2175,7 @@ static bool picture_on_screen(int32_t k, bool mark)
     }
     // Behind any other box: a `background` attribute's picture, and then a
     // sheet's behind any box the view shows (the walk visits only those).
-    for (int32_t i = 0; p->bg_of != NULL && i < os64_page_nbackgrounds(model); i++) {
+    for (int32_t i = 0; p->bg_of != NULL && i < os64_page_nbackgrounds(model) && i < p->nbackground_map; i++) {
         if (p->bg_of[i] != k)
             continue;
         const flow_box_t *b = flow_box_for(p->tree, os64_page_background(model, i)->node);
@@ -2160,12 +2243,23 @@ static void window_seen(void)
 
 // ── Forms ───────────────────────────────────────────────────────────────
 
+static FormKind control_kind(const os64_page_control_t *c);
+
+static int32_t widget_control(const FormWidget *fw)
+{
+    int32_t at = os64_page_control_for(page_model(&g.page), fw->node);
+    const os64_page_control_t *c = os64_page_control(page_model(&g.page), at);
+    return c != NULL && c->input != OS64_PAGE_INPUT_HIDDEN &&
+           c->input != OS64_PAGE_INPUT_IMAGE && control_kind(c) == fw->kind ? at : -1;
+}
+
 static FormWidget *form_widget(int32_t control)
 {
-    return g.by_control != NULL && control >= 0 && control < g.ncontrols &&
-                   g.by_control[control] >= 0
-               ? &g.fw[g.by_control[control]]
-               : NULL;
+    const os64_page_control_t *c = os64_page_control(page_model(&g.page), control);
+    for (int32_t i = 0; c != NULL && i < g.nfw; i++)
+        if (g.fw[i]->node == c->node)
+            return g.fw[i];
+    return NULL;
 }
 
 // The node after `n` in tree order, staying inside `root`.
@@ -2215,7 +2309,7 @@ static void button_caption(const os64_page_control_t *c, char *out, size_t cap)
 static const char *option_label(size_t i, void *user)
 {
     const FormWidget *fw = user;
-    const os64_page_control_t *c = os64_page_control(page_model(&g.page), fw->control);
+    const os64_page_control_t *c = os64_page_control(page_model(&g.page), widget_control(fw));
     return c != NULL && (int32_t)i < c->noptions && c->options[i].label != NULL
                ? c->options[i].label : "";
 }
@@ -2225,7 +2319,7 @@ static void form_send(int32_t control, os64_page_activation_t how);
 static void field_submitted(os64_ui_textfield_t *tf, void *user)
 {
     (void)tf;
-    form_send(((FormWidget *)user)->control, OS64_PAGE_ACTIVATE_IMPLICIT);
+    form_send(widget_control((FormWidget *)user), OS64_PAGE_ACTIVATE_IMPLICIT);
 }
 
 static void field_cancelled(os64_ui_textfield_t *tf, void *user)
@@ -2242,7 +2336,7 @@ static void forms_sync_from_model(bool text);
 static void check_changed(os64_ui_checkbox_t *cb, void *user)
 {
     const FormWidget *fw = user;
-    if (os64_page_set_checked(page_model(&g.page), fw->control, cb->checked) < 0)
+    if (os64_page_set_checked(page_model(&g.page), widget_control(fw), cb->checked) < 0)
         status_rest("the page keeps that one as it is");
     forms_sync_from_model(false);
 }
@@ -2251,7 +2345,7 @@ static void list_changed(os64_ui_listbox_t *list, void *user)
 {
     const FormWidget *fw = user;
     if (list->selected >= 0)
-        (void)os64_page_set_chosen(page_model(&g.page), fw->control, (int32_t)list->selected, true);
+        (void)os64_page_set_chosen(page_model(&g.page), widget_control(fw), (int32_t)list->selected, true);
     forms_sync_from_model(false);
 }
 
@@ -2259,13 +2353,28 @@ static void button_clicked(os64_ui_widget_t *w, void *user)
 {
     (void)w;
     const FormWidget *fw = user;
-    const os64_page_control_t *c = os64_page_control(page_model(&g.page), fw->control);
+    const os64_page_control_t *c = os64_page_control(page_model(&g.page), widget_control(fw));
     if (c != NULL && c->resets) {
-        (void)os64_page_reset(page_model(&g.page), c->form);
+        int32_t form = c->form;
+        int64_t result = os64_page_reset(page_model(&g.page), form);
+        if (result < 0) {
+            status_rest(os64_page_reason_name((os64_page_reason_t)-result));
+            return;
+        }
+        // Reset discards this form's unflushed edits even when its native
+        // values were already defaults. Other forms keep their editor state.
+        for (int32_t i = 0; i < g.nfw; i++) {
+            FormWidget *editor = g.fw[i];
+            const os64_page_control_t *control =
+                os64_page_control(page_model(&g.page), widget_control(editor));
+            if (control != NULL && control->form == form &&
+                (editor->kind == FW_TEXT || editor->kind == FW_PASSWORD))
+                editor->presented = false;
+        }
         forms_sync_from_model(true);
         return;
     }
-    form_send(fw->control, OS64_PAGE_ACTIVATE_CONTROL);
+    form_send(widget_control(fw), OS64_PAGE_ACTIVATE_CONTROL);
 }
 
 // A password field shows one bullet per character of the value yonder keeps.
@@ -2280,30 +2389,54 @@ static void password_show(FormWidget *fw)
     os64_ui_textfield_set(&g.ui, &fw->u.field, bullets);
 }
 
-// The widgets show what the model holds. A text field's edits reach the
-// model only when a form is sent (forms_flush), so until then the FIELD is
-// the newer of the two: `text` rewrites the text kinds too, and is for
-// when the model is the truth — the page arriving, a reset. A tick or a
-// choice changes only ticks and lists, and rewrites only those.
+// Project native values into the bounded editor. Passwords retain their span,
+// including embedded NUL; a textfield presents a C string.
+static size_t editor_value(const FormWidget *fw, const os64_page_control_t *c, char *out)
+{
+    size_t n = fw->kind == FW_PASSWORD ? c->value_len : os64_strlen(c->value);
+    if (n >= sizeof(fw->model_text))
+        n = sizeof(fw->model_text) - 1;
+    os64_memcpy(out, c->value, n);
+    out[n] = '\0';
+    return n;
+}
+
+// Text buffers keep intermediate edits. Native value changes and an explicit
+// successful reset replace them; unrelated scripts preserve caret/selection.
 static void forms_sync_from_model(bool text)
 {
     const os64_page_t *model = page_model(&g.page);
     for (int32_t i = 0; i < g.nfw; i++) {
-        FormWidget *fw = &g.fw[i];
-        const os64_page_control_t *c = os64_page_control(model, fw->control);
-        if (c == NULL)
+        FormWidget *fw = g.fw[i];
+        const os64_page_control_t *c = os64_page_control(model, widget_control(fw));
+        if (c == NULL) {
+            os64_ui_set_enabled(&g.ui, fw->w, false);
             continue;
-        if (!text && (fw->kind == FW_TEXT || fw->kind == FW_PASSWORD))
-            continue;
+        }
+        os64_ui_set_enabled(&g.ui, fw->w,
+                            !c->disabled && !c->readonly && fw->kind != FW_FILE);
         switch (fw->kind) {
         case FW_TEXT:
-            os64_ui_textfield_set(&g.ui, &fw->u.field, c->value);
-            break;
         case FW_PASSWORD: {
-            size_t n = c->value_len < sizeof(fw->secret) ? c->value_len : sizeof(fw->secret) - 1;
-            os64_memcpy(fw->secret, c->value, n);
-            fw->secret_len = n;
-            password_show(fw);
+            if (!text)
+                break;
+            char value[sizeof(fw->model_text)];
+            size_t n = editor_value(fw, c, value);
+            if (!fw->presented || n != fw->model_text_len ||
+                os64_memcmp(value, fw->model_text, n) != 0) {
+                if (fw->kind == FW_TEXT)
+                    os64_ui_textfield_set(&g.ui, &fw->u.field, value);
+                else {
+                    os64_memcpy(fw->secret, value, n + 1);
+                    fw->secret_len = n;
+                    password_show(fw);
+                }
+                os64_memcpy(fw->synced, value, n + 1);
+                fw->synced_len = n;
+            }
+            os64_memcpy(fw->model_text, value, n + 1);
+            fw->model_text_len = n;
+            fw->presented = true;
             break;
         }
         case FW_CHECK:
@@ -2315,29 +2448,43 @@ static void forms_sync_from_model(bool text)
                 if (c->options[k].selected)
                     selected = k;
             os64_ui_listbox_set(&g.ui, &fw->u.list, (size_t)c->noptions, selected);
+            os64_ui_mark_dirty(&g.ui, fw->w);
             break;
         }
-        default:
+        case FW_BUTTON:
+        case FW_FILE:
+            button_caption(c, fw->text, sizeof(fw->text));
+            os64_ui_mark_dirty(&g.ui, fw->w);
             break;
         }
     }
 }
 
-// Text fields tell nobody when they change, so what they hold is written
-// to the model before anything reads it to send.
+// Flush before script and activation so the binding observes a person's edit.
+// A stale/refused edit keeps its buffer and reports the native refusal.
 static void forms_flush(void)
 {
     os64_page_t *model = page_model(&g.page);
     for (int32_t i = 0; i < g.nfw; i++) {
-        FormWidget *fw = &g.fw[i];
-        const os64_page_control_t *c = os64_page_control(model, fw->control);
-        if (c == NULL || c->readonly || c->disabled)
+        FormWidget *fw = g.fw[i];
+        const os64_page_control_t *c = os64_page_control(model, widget_control(fw));
+        if (c == NULL || c->readonly || c->disabled ||
+            (fw->kind != FW_TEXT && fw->kind != FW_PASSWORD))
             continue;
         const char *v = fw->kind == FW_PASSWORD ? fw->secret : fw->text;
         size_t n = fw->kind == FW_PASSWORD ? fw->secret_len : os64_strlen(fw->text);
-        if ((fw->kind == FW_TEXT || fw->kind == FW_PASSWORD) &&
-            (n != c->value_len || os64_memcmp(v, c->value, n) != 0))
-            (void)os64_page_set_text(model, fw->control, v, n);
+        if (n == fw->synced_len && os64_memcmp(v, fw->synced, n) == 0)
+            continue;
+        int64_t result = os64_page_set_text(model, widget_control(fw), v, n);
+        if (result < 0) {
+            status_rest(os64_page_reason_name((os64_page_reason_t)-result));
+            continue;
+        }
+        os64_memcpy(fw->synced, v, n);
+        fw->synced[n] = '\0';
+        fw->synced_len = n;
+        c = os64_page_control(model, widget_control(fw));
+        fw->model_text_len = editor_value(fw, c, fw->model_text);
     }
 }
 
@@ -2375,15 +2522,15 @@ static bool password_key(const os64_gui_event_t *ev)
         return false;
     FormWidget *fw = NULL;
     for (int32_t i = 0; i < g.nfw && fw == NULL; i++)
-        if (g.fw[i].kind == FW_PASSWORD && g.fw[i].w == g.ui.focus)
-            fw = &g.fw[i];
+        if (g.fw[i]->kind == FW_PASSWORD && g.fw[i]->w == g.ui.focus)
+            fw = g.fw[i];
     if (fw == NULL)
         return false;
     unsigned char a = (unsigned char)ev->key.ascii;
     if (a == '\t' || a == 0x1b)
         return false;                           // traversal and leaving are libui's
     if (a == '\r' || a == '\n') {
-        form_send(fw->control, OS64_PAGE_ACTIVATE_IMPLICIT);
+        form_send(widget_control(fw), OS64_PAGE_ACTIVATE_IMPLICIT);
     } else if (a == '\b' || a == 0x7f) {
         while (fw->secret_len > 0 &&
                ((unsigned char)fw->secret[--fw->secret_len] & 0xc0) == 0x80)
@@ -2397,62 +2544,119 @@ static bool password_key(const os64_gui_event_t *ev)
     return true;                                // arrows, selection, the rest: swallowed
 }
 
-// The page's controls, one widget each, after the window's own widgets.
+static FormKind control_kind(const os64_page_control_t *c)
+{
+    if (c->element == OS64_PAGE_EL_SELECT)
+        return FW_LIST;
+    if (c->element == OS64_PAGE_EL_BUTTON || c->submits || c->resets ||
+        c->input == OS64_PAGE_INPUT_BUTTON || c->input == OS64_PAGE_INPUT_FILE)
+        return c->input == OS64_PAGE_INPUT_FILE ? FW_FILE : FW_BUTTON;
+    if (c->input == OS64_PAGE_INPUT_CHECKBOX || c->input == OS64_PAGE_INPUT_RADIO)
+        return FW_CHECK;
+    return c->input == OS64_PAGE_INPUT_PASSWORD ? FW_PASSWORD : FW_TEXT;
+}
+
+static void widget_destroy(FormWidget *fw)
+{
+    if (fw->w == g.ui.focus)
+        os64_ui_set_focus(&g.ui, &g.view);
+    os64_ui_cancel_gestures(&g.ui);
+    os64_ui_widget_t *w = fw->w;
+    if (w->cls != NULL && w->cls->destroy != NULL)
+        w->cls->destroy(w);
+    os64_ui_run_release(w->run);
+    os64_ui_run_release(w->run_staged);
+    os64_free(fw);
+}
+
+// Build a new list beside the old. Surviving widgets keep their addresses;
+// allocation refusal leaves the old list available, resolved by native node.
 static void forms_build(void)
 {
     const os64_page_t *model = page_model(&g.page);
-    int32_t n = g.page.tree != NULL ? flow_ncontrols(g.page.tree) : 0;
-    g.ncontrols = model != NULL ? os64_page_ncontrols(model) : 0;
-    if (n <= 0 || g.ncontrols <= 0)
-        return;
-    g.fw = os64_calloc((size_t)n, sizeof(*g.fw));
-    g.by_control = os64_calloc((size_t)g.ncontrols, sizeof(*g.by_control));
-    if (g.fw == NULL || g.by_control == NULL) {
-        os64_free(g.fw);
-        os64_free(g.by_control);
-        g.fw = NULL;
-        g.by_control = NULL;
-        status_rest("Out of memory making this page's controls; they are drawn but cannot be used.");
-        return;
-    }
-    for (int32_t k = 0; k < g.ncontrols; k++)
-        g.by_control[k] = -1;
-    for (int32_t i = 0; i < n; i++) {
-        const flow_box_t *b = flow_control(g.page.tree, i);
-        const os64_page_control_t *c = b != NULL ? os64_page_control(model, b->control) : NULL;
-        if (c == NULL || g.by_control[b->control] >= 0)
+    int32_t boxes = model != NULL ? os64_page_ncontrols(model) : 0;
+    FormWidget **fresh = boxes > 0 ? os64_calloc((size_t)boxes, sizeof(*fresh)) : NULL;
+    if (boxes > 0 && fresh == NULL)
+        goto refused;
+    int32_t n = 0;
+    for (int32_t i = 0; i < boxes; i++) {
+        const os64_page_control_t *c = os64_page_control(model, i);
+        int32_t at = i;
+        if (c == NULL || c->input == OS64_PAGE_INPUT_IMAGE || c->input == OS64_PAGE_INPUT_HIDDEN)
             continue;
-        FormWidget *fw = &g.fw[g.nfw];
-        fw->control = b->control;
-        if (c->element == OS64_PAGE_EL_SELECT) {
-            fw->kind = FW_LIST;
+        bool duplicate = false;
+        for (int32_t j = 0; j < n; j++)
+            duplicate |= fresh[j]->node == c->node;
+        if (duplicate)
+            continue;
+        FormKind kind = control_kind(c);
+        FormWidget *fw = form_widget(at);
+        if (fw != NULL && fw->kind == kind) {
+            fresh[n++] = fw;
+            continue;
+        }
+        const flow_box_t *box = flow_box_for(g.page.tree, c->node);
+        if (box == NULL || box->control < 0)
+            continue;
+        fw = os64_calloc(1, sizeof(*fw));
+        if (fw == NULL) {
+            for (int32_t j = 0; j < n; j++) {
+                bool kept = false;
+                for (int32_t k = 0; k < g.nfw; k++)
+                    kept |= fresh[j] == g.fw[k];
+                if (!kept)
+                    widget_destroy(fresh[j]);
+            }
+            os64_free(fresh);
+            goto refused;
+        }
+        fw->node = c->node;
+        fw->kind = kind;
+        switch (kind) {
+        case FW_LIST:
             os64_ui_listbox(&fw->u.list, (size_t)c->noptions, option_label, list_changed, fw);
             fw->w = &fw->u.list.w;
-        } else if (c->element == OS64_PAGE_EL_BUTTON || c->submits || c->resets ||
-                   c->input == OS64_PAGE_INPUT_BUTTON || c->input == OS64_PAGE_INPUT_FILE) {
-            fw->kind = c->input == OS64_PAGE_INPUT_FILE ? FW_FILE : FW_BUTTON;
+            break;
+        case FW_BUTTON:
+        case FW_FILE:
             button_caption(c, fw->text, sizeof(fw->text));
             os64_ui_button(&fw->u.button, fw->text, button_clicked, fw);
             fw->w = &fw->u.button;
-        } else if (c->input == OS64_PAGE_INPUT_CHECKBOX || c->input == OS64_PAGE_INPUT_RADIO) {
-            fw->kind = FW_CHECK;
+            break;
+        case FW_CHECK:
             os64_ui_checkbox(&fw->u.check, "", c->checked, check_changed, fw);
             fw->w = &fw->u.check.w;
-        } else if (c->input == OS64_PAGE_INPUT_IMAGE) {
-            continue;                   // a picture: a click on it sends the form
-        } else {
-            fw->kind = c->input == OS64_PAGE_INPUT_PASSWORD ? FW_PASSWORD : FW_TEXT;
+            break;
+        case FW_TEXT:
+        case FW_PASSWORD:
             os64_ui_textfield(&fw->u.field, fw->text, sizeof(fw->text), field_submitted,
                               field_cancelled, fw);
             fw->w = &fw->u.field.w;
+            break;
         }
         fw->w->hidden = true;
-        g.by_control[b->control] = g.nfw++;
-        os64_ui_add_child(&g.root, fw->w);
-        os64_ui_set_enabled(&g.ui, fw->w,
-                            !c->disabled && !c->readonly && fw->kind != FW_FILE);
+        fresh[n++] = fw;
     }
-    forms_place();                      // bounds first: a field's scroll is judged by them
+    for (int32_t i = 0; i < g.nfw; i++) {
+        bool kept = false;
+        for (int32_t j = 0; j < n; j++)
+            kept |= fresh[j] == g.fw[i];
+        if (!kept)
+            widget_destroy(g.fw[i]);
+    }
+    g.status.next_sibling = NULL;
+    for (int32_t i = 0; i < n; i++) {
+        fresh[i]->w->next_sibling = NULL;
+        os64_ui_add_child(&g.root, fresh[i]->w);
+    }
+    os64_free(g.fw);
+    g.fw = fresh;
+    g.nfw = n;
+    forms_place();
+    forms_sync_from_model(true);
+    return;
+refused:
+    status_rest("Out of memory making this page's controls; existing controls are kept.");
     forms_sync_from_model(true);
 }
 
@@ -2468,12 +2672,14 @@ static void forms_place(void)
     if (g.page.tree == NULL)
         return;
     const os64_gui_rect_t v = g.view.bounds;
-    int32_t n = flow_ncontrols(g.page.tree);
-    for (int32_t i = 0; i < n; i++) {
-        const flow_box_t *b = flow_control(g.page.tree, i);
-        FormWidget *fw = b != NULL ? form_widget(b->control) : NULL;
-        if (fw == NULL)
+    for (int32_t i = 0; i < g.nfw; i++) {
+        FormWidget *fw = g.fw[i];
+        const flow_box_t *b = flow_box_for(g.page.tree, fw->node);
+        if (b == NULL || b->control < 0 || widget_control(fw) < 0) {
+            if (!fw->w->hidden)
+                os64_ui_set_hidden(&g.ui, fw->w, true);
             continue;
+        }
         // The page's edges add in 64 bits (a box near INT32_MAX would wrap
         // back inside the view), and whatever is kept is clamped to int32.
         os64_gui_rect_t at = flow_box_doc_rect(b, scroll_now());
@@ -2507,29 +2713,126 @@ static void forms_place(void)
 // teardown releases them, then the list.
 static void forms_drop(void)
 {
-    if (g.fw == NULL)
-        return;
-    bool page_focus = false;
     for (int32_t i = 0; i < g.nfw; i++)
-        page_focus |= g.fw[i].w == g.ui.focus;
-    os64_ui_cancel_gestures(&g.ui);
-    if (page_focus)
-        os64_ui_set_focus(&g.ui, &g.view);
-    for (int32_t i = 0; i < g.nfw; i++) {
-        os64_ui_widget_t *w = g.fw[i].w;
-        if (w->cls != NULL && w->cls->destroy != NULL)
-            w->cls->destroy(w);
-        os64_ui_run_release(w->run);
-        os64_ui_run_release(w->run_staged);
-        w->run = w->run_staged = NULL;
-    }
-    g.status.next_sibling = NULL;       // the permanent widgets end at the status line
+        widget_destroy(g.fw[i]);
+    g.status.next_sibling = NULL;
     os64_free(g.fw);
-    os64_free(g.by_control);
     g.fw = NULL;
-    g.by_control = NULL;
-    g.nfw = g.ncontrols = 0;
+    g.nfw = 0;
     os64_ui_mark_dirty(&g.ui, &g.root);
+}
+
+static void script_alert(void *opaque, const char *text, size_t length)
+{
+    (void)opaque;
+    char line[512];
+    os64_snprintf(line, sizeof(line), "Page says: %.*s", (int)(length < 450 ? length : 450), text);
+    status_rest(line);
+}
+
+static bool script_rebuild(void)
+{
+    Page *p = &g.page;
+    uint64_t version = os64_html_version(page_doc(p));
+    if (version != p->model_version) {
+        os64_page_t *model = os64_page_rebuild(page_model(p));
+        if (model == NULL) {
+            status_rest("Out of memory rebuilding the page; actions wait for a current model.");
+            return false;
+        }
+        os64_page_t *old = page_model(p);
+        if (p->way.model != NULL)
+            p->way.model = model;
+        else
+            p->plain_model = model;
+        p->model_version = version;
+        g.hover_link = g.pressed_link = -1;
+        // The displayed layout retains old, including its control state.
+        os64_page_free(old);
+        pictures_start(p);
+    }
+    if (version != p->rendered_version) {
+        Page next = *p;
+        next.reuse_sheets = p;
+        next.tree = NULL;
+        next.cascade = NULL;
+        next.sheets = NULL;
+        next.nsheets = next.sheets_waiting = next.sheets_ready = 0;
+        next.sheets_changed = true;
+        next.serial = ++g.pages_made;
+        sheets_start(&next);
+        if (!page_lay_out(&next, g.view.bounds.w > 0 ? g.view.bounds.w : 1,
+                           g.view.bounds.h > 0 ? g.view.bounds.h : 1)) {
+            sheets_leave(&next);
+            garb_cascade_free(next.cascade);
+            sheets_free(&next);
+            status_rest("Out of memory laying out the changed page; this is the last layout that fit.");
+            forms_build();
+            return false;
+        }
+        sheets_leave(p);
+        flow_free(p->tree);
+        garb_cascade_free(p->cascade);
+        // A borrowed parse has one staged borrower. Once its old cascade
+        // is gone, transfer its arena before freeing the old sheet table.
+        for (int32_t i = 0; i < next.nsheets; i++)
+            if (next.sheets[i].borrowed_from != NULL) {
+                os64_memset(&next.sheets[i].borrowed_from->parsed, 0, sizeof(garb_parsed_t));
+                next.sheets[i].borrowed_from = NULL;
+            }
+        sheets_free(p);
+        p->laid_width = next.laid_width;
+        p->laid_height = next.laid_height;
+        p->tree = next.tree;
+        p->cascade = next.cascade;
+        p->sheets = next.sheets;
+        p->nsheets = next.nsheets;
+        p->sheets_waiting = next.sheets_waiting;
+        p->sheets_ready = next.sheets_ready;
+        p->sheets_changed = next.sheets_changed;
+        p->serial = next.serial;
+        os64_memcpy(p->cascade_entry, next.cascade_entry, sizeof(p->cascade_entry));
+        p->rendered_version = version;
+        g.hover_link = g.pressed_link = -1;
+        css_pictures(p);
+        forms_build();
+        clamp_scroll();
+        sync_bars();
+        forms_place();
+        pictures_schedule();
+        os64_ui_mark_dirty(&g.ui, &g.view);
+    }
+    os64_page_state_t *state = os64_page_shared_state(page_model(p));
+    uint64_t revision = os64_page_state_version(state);
+    if (revision != p->state_version) {
+        forms_sync_from_model(true);
+        p->state_version = revision;
+    }
+    return true;
+}
+
+static bool script_turn(void)
+{
+    if (g.page.tree == NULL)
+        return false;
+    // A failed native rebuild is retried before another script can run.
+    if (!script_rebuild())
+        return false;
+    if (!g.scripts_on || !yonder_scripts_pending(g.page.scripts))
+        return false;
+    forms_flush();
+    os64_js_outcome_t outcome;
+    if (!yonder_scripts_step(g.page.scripts, &outcome))
+        return false;
+    bool rendered = script_rebuild();
+    if (outcome.status != OS64_JS_OK) {
+        char line[512];
+        os64_snprintf(line, sizeof(line), "Script %s: %s%s", outcome.source_name,
+                      outcome.message[0] ? outcome.message : "execution stopped",
+                      yonder_scripts_pending(g.page.scripts) ? "" : " (no further scripts queued)");
+        status_rest(line);
+    }
+    return rendered;
 }
 
 // ── The doorbell ────────────────────────────────────────────────────────
@@ -2573,6 +2876,7 @@ static void reaped(os64_work_id_t id, void *job, void *product)
         fresh.way = a->page;
         os64_memset(&a->page, 0, sizeof(a->page));
         yonder_trip_t *trip = job;
+        fresh.scripting = trip->scripting;
         if (fresh.way.posted && trip->has_request) {
             fresh.sent = trip->request;     // moved: the job's release frees nothing
             trip->has_request = false;
@@ -2780,7 +3084,7 @@ static bool glass_backdrop(void *ctx, const flow_box_t *b, const os64_gui_rect_t
         int32_t i = b->node != NULL ? os64_page_background_for(page_model(p), b->node) : -1;
         if (i < 0)
             return false;
-        k = p->bg_of != NULL ? p->bg_of[i] : -1;
+        k = i >= 0 && i < p->nbackground_map && p->bg_of != NULL ? p->bg_of[i] : -1;
     }
     if (area == NULL || k < 0 || p->pics[k].state != PIC_SHOWN)
         return true;
@@ -2807,7 +3111,7 @@ static void glass_image(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_
         return;
     const Page *p = &g.page;
     int32_t i = p->pic_of != NULL ? os64_page_image_for(page_model(p), b->node) : -1;
-    if (i >= 0 && p->pic_of[i] >= 0 && p->pics[p->pic_of[i]].state == PIC_SHOWN) {
+    if (i >= 0 && i < p->nimage_map && p->pic_of[i] >= 0 && p->pics[p->pic_of[i]].state == PIC_SHOWN) {
         uint32_t w, h;
         const uint32_t *px = picture_pixels(&p->pics[p->pic_of[i]], &w, &h);
         os64_gui_rect_t box = {c.x + gl->dx, c.y + gl->dy, c.w, c.h};
@@ -2834,7 +3138,7 @@ static FormWidget *form_widget(int32_t control);
 // a sunken edge.
 static void glass_control(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_gui_rect_t clip)
 {
-    const FormWidget *fw = form_widget(b->control);
+    const FormWidget *fw = form_widget(os64_page_control_for(page_model(&g.page), b->node));
     if (fw != NULL && !fw->w->hidden)
         return;
     // The stand-in is drawn whole, so it is cut like a run or a picture: a
@@ -3039,7 +3343,9 @@ static int32_t link_at(int32_t x, int32_t y)
     if (g.page.tree == NULL || x < v.x || y < v.y || x >= v.x + v.w || y >= v.y + v.h)
         return -1;
     const flow_box_t *b = flow_hit(g.page.tree, x - v.x + g.sx, y - v.y + g.sy, scroll_now());
-    return b != NULL ? b->link : -1;
+    const os64_page_link_t *old = b != NULL
+                                     ? os64_page_link(flow_model(g.page.tree), b->link) : NULL;
+    return old != NULL ? os64_page_link_for(page_model(&g.page), old->node) : -1;
 }
 
 // A link followed: libpage says what it is — a place in this page is a
@@ -3071,9 +3377,10 @@ static void picture_button_at(int32_t x, int32_t y)
         return;
     const flow_box_t *b = flow_hit(g.page.tree, x - v.x + g.sx, y - v.y + g.sy, scroll_now());
     const os64_page_control_t *c =
-        b != NULL && b->control >= 0 ? os64_page_control(page_model(&g.page), b->control) : NULL;
+        b != NULL ? os64_page_control(page_model(&g.page),
+                                     os64_page_control_for(page_model(&g.page), b->node)) : NULL;
     if (c != NULL && c->input == OS64_PAGE_INPUT_IMAGE && !c->disabled)
-        form_send(b->control, OS64_PAGE_ACTIVATE_CONTROL);
+        form_send(os64_page_control_for(page_model(&g.page), b->node), OS64_PAGE_ACTIVATE_CONTROL);
 }
 
 // A wheel over the page scrolls the innermost box under the pointer that
@@ -3231,6 +3538,22 @@ static void click_reload(os64_ui_widget_t *w, void *user)
     char url[OS64_FETCH_URL_MAX];
     os64_strcopy(url, sizeof(url), g.page.way.url);
     start_trip(url, NULL, NAV_RELOAD, NULL);
+}
+
+// A mode change stops queued execution immediately. Reload re-parses noscript;
+// a POST reply uses the existing confirmation instead of silently resending.
+static void settings_use(const char *agent, bool scripts)
+{
+    agent_use(agent);
+    if (g.scripts_on == scripts)
+        return;
+    g.scripts_on = scripts;
+    status_set(g.status_rest);
+    stop_trip();
+    if (g.page.tree != NULL)
+        click_reload(NULL, NULL);
+    else
+        status_rest("Page-script setting applied; open a page to use it.");
 }
 
 static void click_stop(os64_ui_widget_t *w, void *user)
@@ -3457,13 +3780,16 @@ int main(int argc, char **argv)
     // The window is named after the page, and a window is named once, so a
     // FILE given on the command line is read before the window exists. A
     // page from the network arrives after it, and the window keeps its name.
-    const char *first = argc > 1 ? argv[1] : NULL;
+    s_script_audit = argc > 1 && os64_streq(argv[1], "--script-audit");
+    g.scripts_on = yonder_settings_saved_scripts();
+    int address_arg = s_script_audit ? 2 : 1;
+    const char *first = argc > address_arg ? argv[address_arg] : NULL;
     char title[OS64_GUI_TITLE_MAX] = "yonder";
     if (first != NULL && first[0] == '/') {
         uint8_t *bytes = NULL;
         size_t len = 0;
         if (os64_slurp(first, YONDER_FILE_MAX, &bytes, &len) == OS64_SLURP_OK) {
-            os64_html_document_t *doc = parse_file(bytes, len);
+            os64_html_document_t *doc = parse_file(bytes, len, g.scripts_on);
             char named[120];
             title_of(doc, named, sizeof(named));
             if (named[0] != '\0')
@@ -3563,7 +3889,8 @@ int main(int argc, char **argv)
                      ev.type == OS64_GUI_EVENT_WINDOW_UNCOVERED)
                 window_seen();
             if (ev.type == OS64_GUI_EVENT_SETTINGS)
-                yonder_settings_open(g.win, BELL_SETTINGS, g.way.agent, agent_use, g.cache);
+                yonder_settings_open(g.win, BELL_SETTINGS, g.way.agent, settings_use,
+                                     g.cache, g.scripts_on);
             else if (!bar_event(&ev) && !password_key(&ev))
                 os64_ui_dispatch(&g.ui, &ev);
         } while (g.running && os64_gui_event_poll(g.win, &ev) == 1);
@@ -3571,8 +3898,13 @@ int main(int argc, char **argv)
             g.relayout_due = false;
             relayout(false);
         }
+        if (!g.running || g.ui.quit)
+            break;
+        bool scripts_ready = script_turn();
         pictures_settle();
         os64_ui_paint(&g.ui);
+        if (scripts_ready && yonder_scripts_pending(g.page.scripts))
+            (void)os64_gui_event_ring(g.win, BELL_SCRIPTS);
         if (g.bar.up && !g.bar.armed) {
             if (os64_gui_event_poll(g.win, &ev) == 1) {
                 held = true;
@@ -3595,6 +3927,8 @@ int main(int argc, char **argv)
     if (g.asker == ASK_REQUEST)
         os64_page_request_free(&g.pending);
     yonder_mail_drop(g.nav.mail);
+    yonder_scripts_free(g.page.scripts);
+    g.page.scripts = NULL;
     forms_drop();
     page_clear(&g.page);
     page_clear(&g.coming.page);

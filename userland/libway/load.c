@@ -335,6 +335,7 @@ static os64_html_document_t *parse_body(way_leg_t *s, os64_fetch_t *f, const cha
 {
     os64_html_options_t opt = os64_html_options_default();
     opt.charset = charset && charset[0] ? charset : NULL;
+    opt.scripting = s->scripting;
     os64_html_parser_t *p = os64_html_parser_new(&opt);
     if (!p)
         return NULL;
@@ -344,7 +345,10 @@ static os64_html_document_t *parse_body(way_leg_t *s, os64_fetch_t *f, const cha
         int64_t n = os64_fetch_read(f, buf, sizeof(buf));
         if (n <= 0)
             break;
-        if (os64_html_parser_feed(p, buf, (size_t)n) != OS64_HTML_OK)
+        int64_t parsed = os64_html_parser_feed(p, buf, (size_t)n);
+        while (parsed == OS64_HTML_SCRIPT)
+            parsed = os64_html_parser_resume(p);
+        if (parsed != OS64_HTML_OK)
             break;
         const os64_fetch_progress_t *progress = os64_fetch_progress(f);
         if (progress->produced >= shown + 64u * 1024u) {

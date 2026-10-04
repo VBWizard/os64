@@ -509,6 +509,12 @@ private state shared until the last model, including rebuilt models, is
 freed. State does not itself pin the document; each model does. Freeing
 explicit state while models borrow it stops with the PAGE badge.
 
+`os64_page_retain` adds an owner-thread reference and `os64_page_free` drops
+one; the final release frees the model and its pin. Flow layouts retain their
+model, so callers may replace their own reference before replacing geometry.
+`os64_page_shared_state` returns a borrowed pointer to either explicit or
+private shared state, valid while a model reference remains alive.
+
 Text assignments share the sanitizer with initial values, using capped
 scratch. Record reservations complete before dirty properties change.
 Successful publication updates live model views before replaced text or

@@ -106,7 +106,10 @@ because `var()` needs them resolved before a value can even be parsed.
 The door is small, in LAYOUT.md's manner: `garb_sheet_parse` (bytes and
 the sheet's address in, a parsed sheet out, pure), `garb_cascade` (sheets,
 tree, viewport in, a cascade out), `garb_for(cascade, node)` (an element's
-declarations), `garb_free`. A text dump of a sheet and of a cascade, for
+declarations), `garb_free`. A cascade pins its document snapshot until
+`garb_cascade_free`; its document and parsed input sheets must outlive it.
+This protects borrowed attribute bytes when the tree changes underneath
+an older painted snapshot. A text dump of a sheet and of a cascade, for
 the harness and a probe in the guest.
 
 ## The cost

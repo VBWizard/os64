@@ -77,9 +77,9 @@ typedef struct {
     int32_t n;
 } garb_style_t;
 
-// Cascades `sheets` over `doc`. NULL on no memory only; a cascade that ran
-// short partway says so in garb_cascade_incomplete, and what it holds is
-// real.
+// Cascades `sheets` over `doc`, pinning document strings until free. NULL
+// on no memory or pin exhaustion; a partial cascade says so in
+// garb_cascade_incomplete. The input sheets outlive the cascade.
 garb_cascade_t *garb_cascade(const garb_sheet_in_t *sheets, int32_t n,
                              const os64_html_document_t *doc, garb_env_t env);
 bool garb_cascade_incomplete(const garb_cascade_t *c);
