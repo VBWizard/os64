@@ -671,6 +671,7 @@ blank on the way back.
 | A picture shrunk to less than half | four pixels are mixed, so a picture shrunk far shimmers where the browsers filter its whole area | a page whose thumbnails shimmer |
 | Zoom's cost | more device pixels to paint, and smoothing costs more than copying | the deferred painting work |
 | Heavy pages at a high zoom | on the P5 (Chris, 10/3) news.google.com breaks up from 250%, and news.yahoo.com goes wrong at 200% but recovers once zoomed back; the cause is not measured — the page's narrow-viewport sheets at a CSS width of 331 px and under, or a budget the layout still meets, are the suspects. A reading zoom of 200% or less is what yonder is for (Chris) | a page a person needs past 200%, or one that breaks at 200% or less |
+| Text past 1280 device px | the font engine's largest face (OS64_FONT_PIXEL_MAX, raised from 256 for zoom — Chris, 10/4 — so any size a page draws at 100% is shaped true at 500%); a larger run is shaped at 1280 and laid out at its own size | a page writing a font over 256 px that a person zooms |
 
 ## The Web face (slice S6)
 

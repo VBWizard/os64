@@ -390,6 +390,27 @@ static void zoom_cases(void)
            n == 2 && size[0][0] == 20 && size[0][1] == 40 && size[1][0] == 80 && size[1][1] == 60,
            got);
     free(got);
+    // A 64px font at 5 is shaped at 320 device px, past the old 256 cap: any
+    // size a page draws at 100% is shaped at the size it is laid out at, so
+    // its run is five times as wide as at 1 (the style's size reads 320
+    // either way; the run's width is what was shaped).
+    {
+        int32_t wide[2] = {0, 0};
+        for (int z = 0; z < 2; z++) {
+            kEnv.zoom = z ? 5000 : 1000;
+            got = cascade_layout_of("<!doctype html><p style=\"font-size:64px;margin:0\">M",
+                                    2000);
+            const char *t = got != NULL ? strstr(got, "text \"M\" ") : NULL;
+            int x, y, w = 0, h;
+            if (t != NULL)
+                sscanf(t, "text \"M\" %d %d %d %d", &x, &y, &w, &h);
+            wide[z] = w;
+            free(got);
+        }
+        expect("zoom 5: a 64px font is shaped at 320, five times its width at 1",
+               wide[0] > 0 && wide[1] >= 5 * wide[0] - 1 && wide[1] <= 5 * wide[0] + 1, NULL);
+    }
+    kEnv.zoom = 5000;
     // An auto-repeat counts a track of nothing as one CSS pixel (§ 7.2.3.2)
     // — five of the tree's at 5 — so a 20px grid makes 20 columns, not 100:
     // the 21st item starts the second row.
