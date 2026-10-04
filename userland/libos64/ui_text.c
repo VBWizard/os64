@@ -583,8 +583,9 @@ static bool field_event(os64_ui_widget_t *w, os64_ui_t *ui,
 		if (field_geom(tf, ui, &g) == OS64_FONT_OK) {
 			if (tf->rescroll)
 				field_scroll_caret(tf, ui, &g);
+			// A scroll still in the old face places nothing.
 			int32_t x = ev->mouse.x - w->bounds.x - field_inset(t) + tf->left_px;
-			if (geom_hit(&g, x > 0 ? x : 0, &at) == OS64_FONT_OK)
+			if (!tf->rescroll && geom_hit(&g, x > 0 ? x : 0, &at) == OS64_FONT_OK)
 				tf->cursor = at;
 		}
 		if (down) tf->anchor = tf->cursor;
@@ -1407,23 +1408,32 @@ static void tv_fire_view(os64_ui_textview_t *tv)
 // The horizontal scroll and the Up/Down goal after a face was replaced
 // (textview_reface): whichever is still pixels of the old face is worked out
 // afresh around the caret, as a view just opened would get it. The view's
-// own readers of either ask this first. True when the scroll moved. A caret
-// that cannot be located leaves both for later.
-static bool tv_rescroll(os64_ui_t *ui, os64_ui_textview_t *tv)
+// own readers of either ask this first, and an action that would move the
+// caret by them refuses when it fails: a caret that cannot be located
+// leaves both for later, and they are still the old face's. *moved, when
+// asked for, says whether the scroll moved.
+static os64_font_status_t tv_rescroll(os64_ui_t *ui, os64_ui_textview_t *tv, bool *moved)
 {
+	if (moved)
+		*moved = false;
+	if (!tv->rescroll && !tv->regoal)
+		return OS64_FONT_OK;
 	int32_t cx = 0;
 	line_geom_t g;
-	if ((!tv->rescroll && !tv->regoal) ||
-	    tv_line_geom(tv, ui, tv->cur_line, &g) != OS64_FONT_OK ||
-	    geom_caret(&g, tv->cur_col, &cx) != OS64_FONT_OK)
-		return false;
+	os64_font_status_t status = tv_line_geom(tv, ui, tv->cur_line, &g);
+	if (status == OS64_FONT_OK)
+		status = geom_caret(&g, tv->cur_col, &cx);
+	if (status != OS64_FONT_OK)
+		return status;
 	int64_t old_left = tv->left_px;
 	if (tv->rescroll)
 		tv->left_px = scroll_to_show(0, cx, os64_ui_textview_width(tv));
 	if (tv->regoal)
 		tv_set_goal(tv, cx);
 	tv->rescroll = false;
-	return tv->left_px != old_left;
+	if (moved)
+		*moved = tv->left_px != old_left;
+	return OS64_FONT_OK;
 }
 
 // Scroll the viewport (never the cursor) until the cursor is inside it.
@@ -1444,14 +1454,15 @@ static void tv_ensure_visible(os64_ui_t *ui, os64_ui_textview_t *tv)
 	// near an end of it: where the caret sits in the row depends on where
 	// the row starts.
 	tv_settle_window(tv);
-	(void)tv_rescroll(ui, tv);          // a moved scroll is fired below
+	// A moved scroll is fired below; one still in the old face is left alone.
+	bool fresh = tv_rescroll(ui, tv, NULL) == OS64_FONT_OK;
 
 	// A caret that cannot be located leaves the horizontal scroll alone
 	// rather than jumping somewhere arbitrary; the vertical half above is
 	// pure arithmetic and always right.
 	int32_t cx = 0;
 	line_geom_t g;
-	if (tv_line_geom(tv, ui, tv->cur_line, &g) == OS64_FONT_OK &&
+	if (fresh && tv_line_geom(tv, ui, tv->cur_line, &g) == OS64_FONT_OK &&
 	    geom_caret(&g, tv->cur_col, &cx) == OS64_FONT_OK)
 		tv->left_px = scroll_to_show(tv->left_px, cx, width);
 
@@ -1544,7 +1555,9 @@ static void textview_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
 	os64_gui_rect_t area = { w->bounds.x + VIEW_INSET, w->bounds.y + VIEW_INSET,
 	                         w->bounds.w - 2 * VIEW_INSET,
 	                         w->bounds.h - 2 * VIEW_INSET };
-	if (tv_rescroll(ui, tv))
+	// A scroll that cannot be measured again yet is drawn as it is.
+	bool moved;
+	if (tv_rescroll(ui, tv, &moved) == OS64_FONT_OK && moved)
 		tv_fire_view(tv);
 	int32_t origin = area.x - (int32_t)tv->left_px;
 
@@ -1706,10 +1719,14 @@ static void tv_remember_goal(os64_ui_textview_t *tv, os64_ui_t *ui)
 static os64_font_status_t tv_goal_offset(os64_ui_textview_t *tv, os64_ui_t *ui,
                                          size_t li, size_t *out)
 {
-	if (tv_rescroll(ui, tv))            // the goal in this face, from where the caret is
+	bool moved;                         // the goal in this face, from where the caret is
+	os64_font_status_t status = tv_rescroll(ui, tv, &moved);
+	if (status != OS64_FONT_OK)
+		return status;
+	if (moved)
 		tv_fire_view(tv);
 	line_geom_t g;
-	os64_font_status_t status = tv_line_geom(tv, ui, li, &g);
+	status = tv_line_geom(tv, ui, li, &g);
 	if (status != OS64_FONT_OK)
 		return status;
 	return geom_hit(&g, (int32_t)tv->goal_x, out);
@@ -1753,7 +1770,10 @@ static bool tv_place_from_point(os64_ui_textview_t *tv, os64_ui_t *ui,
 
 	// The pixel of the LINE the pointer is over, which is where the pointer
 	// is minus where the line starts on screen.
-	if (tv_rescroll(ui, tv))
+	bool moved;
+	if (tv_rescroll(ui, tv, &moved) != OS64_FONT_OK)
+		return false;                   // the scroll is still the old face's
+	if (moved)
 		tv_fire_view(tv);
 	int64_t x = (int64_t)(mx - tv->w.bounds.x - VIEW_INSET) + tv->left_px;
 	if (x < 0)

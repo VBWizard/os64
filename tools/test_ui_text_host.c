@@ -1305,6 +1305,12 @@ static void app_face_change_is_measured_again(const char *dir)
      * the goal is the caret's place in the new face, as in a view opened
      * in it. */
     os64_ui_textview_scroll_left(&ui, &keyed, 0);
+    /* A goal that cannot be measured again yet moves nothing, even when the
+     * line it would move to can be laid out. */
+    deny_countdown = 0;
+    ui_test_burst(&keyed.w, &ui, "[A");
+    deny_countdown = -1;
+    CHECK(keyed.cur_line == 1 && keyed.cur_col == 7);
     ui_test_burst(&keyed.w, &ui, "[A");
     os64_ui_textview_goto(&ui, &fresh_keyed, 1, 7, false);
     ui_test_burst(&fresh_keyed.w, &ui, "[A");
