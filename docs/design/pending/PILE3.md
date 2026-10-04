@@ -463,8 +463,66 @@ draws it.
 
 | Debt | Why it waits | Trigger |
 |---|---|---|
-| `background-size`, `-origin`, `-clip`, `background-position` for a gradient, and every layer of a list | S4b | S4b |
+| `background-size`, `-origin`, `-clip`, and `background-position` for a gradient | — | done in S4b, below |
 | An inline element's gradient across its pieces | each piece is its own tile, where the browsers lay the pieces end to end and draw one gradient along them; the public tree does not say which piece is first | a gradient on a span that wraps |
 | Conic gradients and image-set | no picture is made for them | a page whose look depends on one |
 | Interpolation in another colour space (`in oklab`) | Color 4's spaces are not converted | a page that writes one |
 | A gradient's cost | every pixel of it the view shows is worked out on every paint | a page whose gradients make painting slow, measured |
+
+## Background size, origin and clip (slice S4b)
+
+### How it is built
+
+**libgarb keeps three more longhands.** `background-size` is `cover`,
+`contain`, or a width and a height — each a length-percentage or `auto`,
+the height `auto` when only one is written; `background-origin` is one of
+the three boxes; `background-clip` is one of them or `text`. Like the other
+background longhands each takes a list, one per layer, and keeps the first.
+The `background` shorthand sets all three now: a size after the position's
+`/`, and one box for both the origin and the clip, or two for the origin
+then the clip. `text` only clips, so it places nothing; written first of
+two, the declaration is invalid.
+
+**libflow carries them** as `background_fit` and `background_size[2]`,
+`background_origin` (initially the padding box) and `background_clip`
+(initially the border box).
+
+**yonder sizes one copy, places it, and cuts it.** `yonder_box_edge` gives
+any of a box's three boxes, and `yonder_background_tile` turns the style
+and the ORIGIN box into the copy (§ 3.9): `cover` and `contain` scale a
+picture by the larger or smaller of the two ratios, keeping its shape; a
+written side is px or a percentage of the origin box, an `auto` side keeps
+the picture's shape against the other side, or is its own size when both
+are `auto`. A gradient has no size or shape of its own, so it takes the
+origin box's wherever a picture would take its own. A side of 0 draws
+nothing. The position is then worked out in the room that copy leaves,
+as before. The picture tiler scales each copy nearest-neighbour to its
+tile. The colour and the picture are both cut to the CLIP box, and on a
+rounded box the colour and the gradient follow that box's own curve: the
+outer radii less the inset, as the padding box's are.
+
+### Proof
+
+libgarb's corpus: the shorthand with a size and one box or two, `text`,
+`text` first (invalid), a size with no position (invalid), three boxes
+(invalid), and each longhand alone and as a list. libflow's
+`background_box_cases`: the computed values, an em size against the box's
+own font, and a later shorthand resetting an earlier size. yonder, worked
+by hand: a 2x2 picture doubled into a 4x4 tile; cover (160x80 from 20x10
+in 100x80), contain centred, a gradient's cover, each `auto` rule, 0, and
+a scale past INT32_MAX held there; the three edge boxes; and painted, a
+gradient in a 2px tile repeated, one placed in and cut to the content box,
+and a colour cut to the content box. In the guest,
+`/tests/pages/pile3-backgrounds.html` — sixteen boxes over a 40x20
+`banner.png` and gradients, two of them rounded — drew as headless Chrome
+draws it, but for the smoothing below.
+
+### Booked
+
+| Debt | Why it waits | Trigger |
+|---|---|---|
+| Every layer of a list | the longhands and the shorthand keep the first layer; the others are checked and dropped | S4c |
+| `background-clip: text` | the glyphs are drawn by the text verb, with no mask to fill with a picture; a background clipped to its text is not drawn on any box (the canvas's is drawn across the canvas whatever the clip says, as § 2.11.1 says and Chrome draws it), and `@supports (background-clip: text)` says no, so a page takes the fallback it wrote | a page whose gradient headline matters |
+| An inline box's origin and clip boxes | a piece in the public tree is its content area — inline padding and borders are neither laid out nor drawn — so every box of a piece is the piece itself | a page whose padded inline background matters |
+| A content box with percentage padding | the tree does not carry the width a percentage padding resolved against, so it counts as none, as for an atom's content | a page whose content-box background sits wrong |
+| A scaled picture's smoothing | a copy is scaled nearest-neighbour, where the browsers smooth it unless `image-rendering` says otherwise | the image-rendering slice |

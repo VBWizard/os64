@@ -29,13 +29,13 @@ static void paint_cases(void)
                "<!doctype html><body background=sky.gif><p>Hi", 100,
                (os64_gui_rect_t){0, 0, 100, 50},
                "fill 0 0 100 50 #fefefe\n"
-               "backdrop 0 0 100 50 from 0 0\n"
+               "backdrop 0 0 100 50 from 0 0 origin 0 0 100 52\n"
                "text \"Hi\" 8 30 #101010\n");
     paint_case("canvas: the body's picture over its colour, scrolled",
                "<!doctype html><body bgcolor=#ffff00 background=sky.gif><p>Hi", 100,
                (os64_gui_rect_t){0, 20, 100, 50},
                "fill 0 20 100 50 #ffff00\n"
-               "backdrop 0 20 100 50 from 0 0\n"
+               "backdrop 0 20 100 50 from 0 0 origin 0 0 100 52\n"
                "text \"Hi\" 8 30 #101010\n");
 
     // table border=2 is a 2px outset in the ink; its cell a 1px inset.
@@ -90,7 +90,7 @@ static void paint_cases(void)
                "fill 0 0 200 50 #fefefe\n"
                "fill 10 10 22 22 #ff6600\n"
                "fill 22 10 10 22 #00ff00\n"
-               "backdrop 22 10 10 22 from 22 10\n"
+               "backdrop 22 10 10 22 from 22 10 origin 22 10 10 22\n"
                "text \"x\" 11 25 #101010\n"
                "text \"y\" 23 25 #101010\n");
 
@@ -332,6 +332,33 @@ static void paint_cases(void)
                     "fill 0 0 200 100 #fefefe\n"
                     "pixels 0 0 200 100 ffdf0020 ff2000df\n");
 
+    // background-size, -origin and -clip (PILE3.md § Backgrounds). A 2px
+    // tile repeated across 4px: each copy's pixels 1/4 and 3/4 along.
+    paint_page_case("a gradient sized to a 2px tile repeats every 2px",
+                    "<!doctype html><style>body { margin: 0 } div { width: 4px; height: 1px;"
+                    " background: linear-gradient(to right, #000000, #ffffff) 0 0 / 2px 1px }"
+                    "</style><div></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "pixels 0 0 4 1 ff404040 ffbfbfbf ff404040 ffbfbfbf\n");
+    // One box keyword is the origin and the clip: the gradient's tile is
+    // the 2x1 content box inside 1px of padding, and only it is painted.
+    paint_page_case("a content-box gradient is placed in and cut to the content",
+                    "<!doctype html><style>body { margin: 0 } div { width: 2px; height: 1px;"
+                    " padding: 1px; background: linear-gradient(to right, #000000, #ffffff)"
+                    " content-box }</style><div></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "pixels 1 1 2 1 ff404040 ffbfbfbf\n");
+    // The colour is cut too, and to the text it is not drawn at all.
+    paint_page_case("a colour is cut to the clip box",
+                    "<!doctype html><style>body { margin: 0 } div { width: 2px; height: 2px;"
+                    " padding: 1px; background: #ff0000; background-clip: content-box }"
+                    " p { margin: 0; width: 2px; height: 2px; background: #00ff00;"
+                    " background-clip: text }</style><div></div><p></p>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "fill 1 1 2 2 #ff0000\n");
     // A colour stop left out is spread between the COLOUR stops round it,
     // not from a hint (§ 3.5.3): white sits at 50%, so black to white is
     // bent by the hint at 10% (a fifth of its stretch: f^(ln 0.5 / ln 0.2))
@@ -417,6 +444,15 @@ static void paint_cases(void)
                     "text \"Hi\" 9 32 #0000ff\n"
                     "text \"Hi\" 8 30 #0000ff\n");
 
+    // A background clipped to the text is not drawn, on an inline box as on
+    // a block (PILE3.md § Booked): neither its colour nor its gradient.
+    paint_page_case("an inline background clipped to the text is not drawn",
+                    "<!doctype html><style>body { margin: 0 } span {"
+                    " background: #00ff00 linear-gradient(#ff0000, #ff0000);"
+                    " background-clip: text }</style><span>Hi</span>",
+                    100, (os64_gui_rect_t){0, 0, 100, 50}, true,
+                    "fill 0 0 100 50 #fefefe\n"
+                    "text \"Hi\" 0 14 #101010\n");
     // An inline element's gradient is painted on its piece of the line,
     // the piece its tile: one solid-colour gradient covers the piece
     // exactly, under the text.
@@ -428,6 +464,30 @@ static void paint_cases(void)
                     "pixels 0 2 12 16 ffff0000 ffff0000\n"
                     "text \"Hi\" 0 14 #101010\n");
 
+    // The canvas's background is placed in the ROOT's origin box, whichever
+    // element it came from (Backgrounds 3 § 2.11.2): the body's 2px tile,
+    // its origin the content box, sits inside the root's 1px of padding.
+    paint_page_case("a canvas background is placed in the root's origin box",
+                    "<!doctype html><style>html { padding: 1px } body { margin: 0;"
+                    " background: linear-gradient(#ff0000, #ff0000) no-repeat;"
+                    " background-size: 2px 2px; background-origin: content-box }</style>",
+                    4, (os64_gui_rect_t){0, 0, 4, 4}, true,
+                    "fill 0 0 4 4 #fefefe\n"
+                    "pixels 0 0 4 4 00000000 00000000 00000000 00000000"
+                    " 00000000 ffff0000 ffff0000 00000000 00000000 ffff0000 ffff0000 00000000"
+                    " 00000000 00000000 00000000 00000000\n");
+    // The canvas's background is drawn across the canvas whatever
+    // background-clip says, `text` included (§ 2.11.1) — Chrome fills it —
+    // while the body's own box, the canvas owner, draws nothing of it.
+    paint_page_case("a canvas background ignores background-clip: text",
+                    "<!doctype html><style>html { height: 4px } body { margin: 0;"
+                    " background: #00ff00 linear-gradient(#ff0000, #ff0000);"
+                    " background-clip: text }</style>",
+                    4, (os64_gui_rect_t){0, 0, 4, 4}, true,
+                    "fill 0 0 4 4 #00ff00\n"
+                    "pixels 0 0 4 4 ffff0000 ffff0000 ffff0000 ffff0000 ffff0000 ffff0000"
+                    " ffff0000 ffff0000 ffff0000 ffff0000 ffff0000 ffff0000 ffff0000 ffff0000"
+                    " ffff0000 ffff0000\n");
     // Groups nest, each laid over what was under it when it opened, and a
     // group none of which shows opens empty: the far one at 520, cut to a
     // view that ends at 100, has no height.

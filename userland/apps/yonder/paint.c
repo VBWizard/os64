@@ -84,30 +84,99 @@ static uint32_t half_to_black(uint32_t c)
 }
 
 // n / d to nearest, ties up, for an n that may be negative (d > 0).
-static int32_t nearest(int64_t n, int64_t d)
+static int64_t nearest(int64_t n, int64_t d)
 {
     int64_t q = n + d / 2;
-    return (int32_t)(q >= 0 ? q / d : -((-q + d - 1) / d));
+    return q >= 0 ? q / d : -((-q + d - 1) / d);
 }
 
 // A position from `start`: pixels, or a percentage of `room` plus a
 // calc()'s fixed part. In units of 1/6400 px: a percentage is 64ths.
+// Held to what an int32_t says.
 static int32_t place_axis(flow_length_t at, int32_t start, int32_t room)
 {
-    if (at.kind == FLOW_LENGTH_PERCENT)
-        return start + nearest((int64_t)room * at.value + (int64_t)at.offset * 100, 100 * 64);
-    return start + (at.kind == FLOW_LENGTH_PX ? nearest(at.value, 64) : 0);
+    int64_t by = at.kind == FLOW_LENGTH_PERCENT
+                     ? nearest((int64_t)room * at.value + (int64_t)at.offset * 100, 100 * 64)
+                 : at.kind == FLOW_LENGTH_PX ? nearest(at.value, 64) : 0;
+    return (int32_t)max64(INT32_MIN, min64(INT32_MAX, start + by));
 }
 
-void yonder_background_place(const flow_box_t *box, os64_gui_rect_t rect, uint32_t iw,
-                             uint32_t ih, int32_t *ox, int32_t *oy, bool *repeat_x,
-                             bool *repeat_y)
+os64_gui_rect_t yonder_box_edge(const flow_box_t *box, os64_gui_rect_t rect, flow_edge_t edge)
 {
+    if (edge != FLOW_EDGE_PADDING && edge != FLOW_EDGE_CONTENT)
+        return rect;
     const flow_style_t *s = box->style;
-    *ox = place_axis(s->background_position[0], rect.x, rect.w - (int32_t)iw);
-    *oy = place_axis(s->background_position[1], rect.y, rect.h - (int32_t)ih);
-    *repeat_x = s->background_repeat == FLOW_REPEAT || s->background_repeat == FLOW_REPEAT_X;
-    *repeat_y = s->background_repeat == FLOW_REPEAT || s->background_repeat == FLOW_REPEAT_Y;
+    int64_t e[4];
+    for (int k = 0; k < 4; k++) {
+        e[k] = px(s->border_width[k]);
+        if (edge == FLOW_EDGE_CONTENT && s->padding[k].kind == FLOW_LENGTH_PX)
+            e[k] += px(s->padding[k].value);
+    }
+    int64_t w = max64(0, (int64_t)rect.w - e[FLOW_LEFT] - e[FLOW_RIGHT]);
+    int64_t h = max64(0, (int64_t)rect.h - e[FLOW_TOP] - e[FLOW_BOTTOM]);
+    int64_t x = min64((int64_t)rect.x + e[FLOW_LEFT], INT32_MAX);
+    int64_t y = min64((int64_t)rect.y + e[FLOW_TOP], INT32_MAX);
+    return (os64_gui_rect_t){(int32_t)x, (int32_t)y, (int32_t)min64(w, INT32_MAX - x),
+                             (int32_t)min64(h, INT32_MAX - y)};
+}
+
+// A size written for one axis of a `room`-px origin box, in px up to what
+// an int32_t says (so that scaling it by a picture's side fits 64 bits);
+// -1 for auto.
+static int64_t size_axis(flow_length_t l, int32_t room)
+{
+    int64_t n;
+    if (l.kind == FLOW_LENGTH_PX)
+        n = nearest(l.value, 64);
+    else if (l.kind == FLOW_LENGTH_PERCENT)
+        n = nearest((int64_t)room * l.value + (int64_t)l.offset * 100, 100 * 64);
+    else
+        return -1;
+    return max64(0, min64(n, INT32_MAX));
+}
+
+bool yonder_background_tile(const flow_style_t *s, os64_gui_rect_t area, uint32_t iw, uint32_t ih,
+                            yonder_tile_t *out)
+{
+    int64_t w = area.w, h = area.h;         // no size of its own: the origin box's
+    bool ratio = iw > 0 && ih > 0;
+    if (s->background_fit != FLOW_FIT_LENGTHS) {
+        // Scaled to the box's width or to its height, whichever covers it
+        // (or fits inside it): the width when the box is the wider shape.
+        bool wider = (int64_t)area.w * ih >= (int64_t)area.h * iw;
+        if (ratio && wider == (s->background_fit == FLOW_FIT_COVER))
+            h = nearest((int64_t)area.w * ih, iw);
+        else if (ratio)
+            w = nearest((int64_t)area.h * iw, ih);
+    } else {
+        int64_t gw = size_axis(s->background_size[0], area.w);
+        int64_t gh = size_axis(s->background_size[1], area.h);
+        // An auto side keeps the picture's shape against the other, or is
+        // its own size, or the box's (§ 3.9).
+        if (gw >= 0 && gh >= 0) {
+            w = gw;
+            h = gh;
+        } else if (gw >= 0) {
+            w = gw;
+            h = ratio ? nearest(gw * ih, iw) : area.h;
+        } else if (gh >= 0) {
+            h = gh;
+            w = ratio ? nearest(gh * iw, ih) : area.w;
+        } else if (ratio) {
+            w = iw;
+            h = ih;
+        }
+    }
+    if (w <= 0 || h <= 0)
+        return false;
+    w = min64(w, INT32_MAX);
+    h = min64(h, INT32_MAX);
+    out->at = (os64_gui_rect_t){place_axis(s->background_position[0], area.x, (int32_t)(area.w - w)),
+                                place_axis(s->background_position[1], area.y, (int32_t)(area.h - h)),
+                                (int32_t)w, (int32_t)h};
+    out->repeat_x = s->background_repeat == FLOW_REPEAT || s->background_repeat == FLOW_REPEAT_X;
+    out->repeat_y = s->background_repeat == FLOW_REPEAT || s->background_repeat == FLOW_REPEAT_Y;
+    return true;
 }
 
 uint32_t yonder_lighter(uint32_t colour)
@@ -294,26 +363,49 @@ static uint32_t at_share(uint32_t colour, int64_t share)
     return (colour & 0xffffffu) | (255u - alpha) << 24;
 }
 
-// The border box's shape, and the padding box's inside it: each inner
-// radius its outer one less the border beside it (§ 5.2).
+// A shape `in` px inside `outer` on each side: each radius its outer one
+// less the inset beside it (§ 5.2).
+static Round round_inset_by(const Round *outer, const int64_t in[4])
+{
+    Round s = {outer->l + in[FLOW_LEFT] * SUB, outer->t + in[FLOW_TOP] * SUB,
+               outer->r - in[FLOW_RIGHT] * SUB, outer->b - in[FLOW_BOTTOM] * SUB, {{0}}};
+    // Each corner's horizontal side and vertical side.
+    static const int kH[4] = {FLOW_LEFT, FLOW_RIGHT, FLOW_RIGHT, FLOW_LEFT};
+    static const int kV[4] = {FLOW_TOP, FLOW_TOP, FLOW_BOTTOM, FLOW_BOTTOM};
+    for (int c = 0; c < 4; c++) {
+        s.rad[c][0] = max64(0, outer->rad[c][0] - in[kH[c]] * SUB);
+        s.rad[c][1] = max64(0, outer->rad[c][1] - in[kV[c]] * SUB);
+    }
+    return s;
+}
+
+// The shape of `inner`, a box inside the border box `rect` whose shape is
+// `outer`.
+static Round round_inset(const Round *outer, os64_gui_rect_t rect, os64_gui_rect_t inner)
+{
+    int64_t in[4];
+    in[FLOW_LEFT] = (int64_t)inner.x - rect.x;
+    in[FLOW_TOP] = (int64_t)inner.y - rect.y;
+    in[FLOW_RIGHT] = ((int64_t)rect.x + rect.w) - ((int64_t)inner.x + inner.w);
+    in[FLOW_BOTTOM] = ((int64_t)rect.y + rect.h) - ((int64_t)inner.y + inner.h);
+    return round_inset_by(outer, in);
+}
+
+// The border box's shape, and the padding box's inside it.
 static void round_shapes(const flow_box_t *b, const int32_t radii[4][2], const int32_t w[4],
                          Round *outer, Round *inner)
 {
     os64_gui_rect_t r = b->rect;
     *outer = (Round){(int64_t)r.x * SUB, (int64_t)r.y * SUB, ((int64_t)r.x + r.w) * SUB,
                      ((int64_t)r.y + r.h) * SUB, {{0}}};
-    *inner = (Round){outer->l + (int64_t)w[FLOW_LEFT] * SUB, outer->t + (int64_t)w[FLOW_TOP] * SUB,
-                     outer->r - (int64_t)w[FLOW_RIGHT] * SUB,
-                     outer->b - (int64_t)w[FLOW_BOTTOM] * SUB, {{0}}};
-    // Each corner's horizontal side and vertical side.
-    static const int kH[4] = {FLOW_LEFT, FLOW_RIGHT, FLOW_RIGHT, FLOW_LEFT};
-    static const int kV[4] = {FLOW_TOP, FLOW_TOP, FLOW_BOTTOM, FLOW_BOTTOM};
     for (int c = 0; c < 4; c++) {
         outer->rad[c][0] = (int64_t)radii[c][0] * SUB;
         outer->rad[c][1] = (int64_t)radii[c][1] * SUB;
-        inner->rad[c][0] = max64(0, outer->rad[c][0] - (int64_t)w[kH[c]] * SUB);
-        inner->rad[c][1] = max64(0, outer->rad[c][1] - (int64_t)w[kV[c]] * SUB);
     }
+    int64_t in[4];
+    for (int k = 0; k < 4; k++)
+        in[k] = w[k];
+    *inner = round_inset_by(outer, in);
 }
 
 // The rows of the view the box reaches.
@@ -760,14 +852,13 @@ static double wrap(double x, double size)
     return x - size * floor(x / size);
 }
 
-// Gradient `g` with its tile at (tx, ty), w by h, drawn over `area` (and
-// the view), repeated on the axes `repeat` says, cut to `shape` when
-// `round`; a currentColor stop is `current`, the colour of the box it is
-// drawn on.
-static void gradient(const Painter *p, const flow_gradient_t *g, double tx, double ty, double w,
-                     double h, os64_gui_rect_t area, flow_repeat_t repeat, const Round *shape,
-                     bool round, uint32_t current)
+// Gradient `g` in `tile`, drawn over `area` (and the view), cut to `shape`
+// when `round`; a currentColor stop is `current`, the colour of the box it
+// is drawn on.
+static void gradient(const Painter *p, const flow_gradient_t *g, const yonder_tile_t *tile,
+                     os64_gui_rect_t area, const Round *shape, bool round, uint32_t current)
 {
+    double tx = tile->at.x, ty = tile->at.y, w = tile->at.w, h = tile->at.h;
     if (w <= 0 || h <= 0)
         return;
     int64_t x0 = max64(area.x, p->view.x), y0 = max64(area.y, p->view.y);
@@ -852,8 +943,7 @@ static void gradient(const Painter *p, const flow_gradient_t *g, double tx, doub
                           (g->kind == FLOW_GRADIENT_LINEAR ? len : fmin(rx, ry));
     bool solid = flat || (g->repeating && !(pixel_period >= 1));
     uint32_t solid_colour = g->repeating ? stops_average(&stops) : stops.colour[stops.n - 1];
-    bool rep_x = repeat == FLOW_REPEAT || repeat == FLOW_REPEAT_X;
-    bool rep_y = repeat == FLOW_REPEAT || repeat == FLOW_REPEAT_Y;
+    bool rep_x = tile->repeat_x, rep_y = tile->repeat_y;
     uint32_t *out = os64_malloc((size_t)((x1 - x0) * (y1 - y0)) * sizeof(*out));
     if (out == NULL)
         return;
@@ -896,9 +986,10 @@ static bool rounded(const int32_t radii[4][2])
 
 // A box's background and borders: every block-level box, and an atom. Its
 // outer shadows go under its colour, the last first so the first is on
-// top; its picture over its colour, tiled from the border box's corner;
-// its inset shadows over those and under its borders (Backgrounds 3 §
-// 7.1). Rounded, its colour, shadows and borders follow the curves.
+// top; its picture over its colour, sized and placed in its origin box and
+// cut, with the colour, to its clip box; its inset shadows over those and
+// under its borders (Backgrounds 3 § 7.1). Rounded, its colour, gradient,
+// shadows and borders follow the curves.
 static void frame(const Painter *p, const flow_box_t *b)
 {
     const flow_style_t *s = b->style;
@@ -907,7 +998,7 @@ static void frame(const Painter *p, const flow_box_t *b)
     bool round = rounded(radii);
     int32_t w[4];
     Round outer, inner;
-    if (round || s->nbox_shadows > 0 || s->background_gradient != NULL) {
+    if (round || s->nbox_shadows > 0) {
         for (int k = 0; k < 4; k++)
             w[k] = px(s->border_width[k]);
         round_shapes(b, round ? radii : (const int32_t[4][2]){{0}}, w, &outer, &inner);
@@ -915,20 +1006,28 @@ static void frame(const Painter *p, const flow_box_t *b)
     for (int32_t i = s->nbox_shadows - 1; i >= 0; i--)
         if (!s->box_shadows[i].inset)
             shadow(p, b, &outer, &inner, &s->box_shadows[i], !round);
-    if (b != p->canvas_owner) {
+    // The colour and the picture are cut to the clip box, rounded as the
+    // box is; the picture is placed in the origin box. A clip to the text
+    // is not drawn (PILE3.md § Booked).
+    if (b != p->canvas_owner && s->background_clip != FLOW_EDGE_TEXT) {
+        os64_gui_rect_t cut = yonder_box_edge(b, b->rect, s->background_clip);
+        Round shape = {0};
+        if (round)
+            shape = round_inset(&outer, b->rect, cut);
         if (s->has_background && round)
-            round_background(p, b, &outer, s->background);
+            round_background(p, b, &shape, s->background);
         else if (s->has_background)
-            fill(p, b->rect.x, b->rect.y, b->rect.w, b->rect.h, s->background);
+            fill(p, cut.x, cut.y, cut.w, cut.h, s->background);
+        yonder_tile_t tile;
         if (s->background_gradient != NULL) {
-            // Its tile the padding box, drawn across the border box.
-            gradient(p, s->background_gradient, b->rect.x + w[FLOW_LEFT], b->rect.y + w[FLOW_TOP],
-                     b->rect.w - w[FLOW_LEFT] - w[FLOW_RIGHT],
-                     b->rect.h - w[FLOW_TOP] - w[FLOW_BOTTOM], b->rect, s->background_repeat,
-                     &outer, round, s->color);
+            if (yonder_background_tile(s, yonder_box_edge(b, b->rect, s->background_origin), 0, 0,
+                                       &tile))
+                gradient(p, s->background_gradient, &tile, cut, &shape, round, s->color);
         } else {
-            os64_gui_rect_t area = on_page(p, b->rect);
-            (void)p->v->backdrop(p->v->ctx, b, &area, area.x, area.y, on_page(p, p->view));
+            os64_gui_rect_t area = on_page(p, cut);
+            os64_gui_rect_t origin = on_page(p, yonder_box_edge(b, b->rect, s->background_origin));
+            (void)p->v->backdrop(p->v->ctx, b, &area, origin, area.x, area.y,
+                                 on_page(p, p->view));
         }
     }
     for (int32_t i = s->nbox_shadows - 1; i >= 0; i--)
@@ -1115,13 +1214,20 @@ static void paint_box(void *ctx, const flow_box_t *b)
         // last, which the public tree does not say; its background colour is
         // right on every piece. Its gradient is tiled on each piece — the
         // browsers lay the pieces end to end and draw one gradient along
-        // them, which needs the same knowledge (PILE3.md § Booked).
+        // them, which needs the same knowledge (PILE3.md § Booked). A piece
+        // is its content area, with no padding or border laid out round it,
+        // so its origin and clip boxes are all the piece; a clip to the
+        // text draws nothing here either, as on a block's frame.
+        if (b->style->background_clip == FLOW_EDGE_TEXT)
+            return;
         if (b->style->has_background)
             fill(p, b->rect.x, b->rect.y, b->rect.w, b->rect.h, b->style->background);
-        if (b->style->background_gradient != NULL)
-            gradient(p, b->style->background_gradient, b->rect.x, b->rect.y, b->rect.w,
-                     b->rect.h, b->rect, b->style->background_repeat, NULL, false,
-                     b->style->color);
+        if (b->style->background_gradient != NULL) {
+            yonder_tile_t tile;
+            if (yonder_background_tile(b->style, b->rect, 0, 0, &tile))
+                gradient(p, b->style->background_gradient, &tile, b->rect, NULL, false,
+                         b->style->color);
+        }
         return;
     default:
         // An inline-block (or inline-flex, inline-grid) is two boxes of one
@@ -1162,7 +1268,7 @@ static void group_close(void *ctx, const flow_box_t *box)
 static bool has_background(const Painter *p, const flow_box_t *b)
 {
     return b->style->has_background || b->style->background_gradient != NULL ||
-           p->v->backdrop(p->v->ctx, b, NULL, 0, 0, p->view);
+           p->v->backdrop(p->v->ctx, b, NULL, (os64_gui_rect_t){0}, 0, 0, p->view);
 }
 
 // The root's background, or else the body's, is the canvas's.
@@ -1199,15 +1305,24 @@ void yonder_paint(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_
     if (flow_alpha(canvas) != 255)
         fill(&p, viewport.x, viewport.y, viewport.w, viewport.h, paper);
     fill(&p, viewport.x, viewport.y, viewport.w, viewport.h, canvas);
-    // The canvas's picture is tiled from the page's own corner, so it
-    // scrolls with the page; its gradient's tile is the root's box, so a
-    // page shorter than the view repeats it, as the browsers do.
-    if (owner != NULL && owner->style->background_gradient != NULL)
-        gradient(&p, owner->style->background_gradient, root->rect.x, root->rect.y, root->rect.w,
-                 root->rect.h, viewport, owner->style->background_repeat, NULL, false,
-                 owner->style->color);
-    else if (owner != NULL)
-        (void)verbs->backdrop(verbs->ctx, owner, &viewport, 0, 0, viewport);
+    // The canvas's picture and gradient are placed in the ROOT's origin
+    // box, whichever element they came from (Backgrounds 3 § 2.11.2: the
+    // body's background is drawn as if the root had it), so they scroll
+    // with the page and a page shorter than the view repeats them, as the
+    // browsers do; an attribute's picture is tiled from the page's corner.
+    // They are drawn across the whole view whatever background-clip says,
+    // `text` included: the canvas's painting area IS the canvas (§ 2.11.1),
+    // and Chrome fills it.
+    yonder_tile_t tile;
+    os64_gui_rect_t origin =
+        owner != NULL ? yonder_box_edge(root, root->rect, owner->style->background_origin)
+                      : (os64_gui_rect_t){0};
+    if (owner != NULL && owner->style->background_gradient != NULL) {
+        if (yonder_background_tile(owner->style, origin, 0, 0, &tile))
+            gradient(&p, owner->style->background_gradient, &tile, viewport, NULL, false,
+                     owner->style->color);
+    } else if (owner != NULL)
+        (void)verbs->backdrop(verbs->ctx, owner, &viewport, origin, 0, 0, viewport);
     if (root != NULL) {
         bool groups = verbs->group_open != NULL && verbs->group_close != NULL;
         flow_visitor_t v = {paint_box, groups ? group_open : NULL, groups ? group_close : NULL,

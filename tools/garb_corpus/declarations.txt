@@ -362,19 +362,51 @@ OUT: caption-side: bottom
 
 # ── Backgrounds (Backgrounds 3 § 3) ──
 IN: background: red
-OUT: background-color: rgb(255, 0, 0); background-image: none; background-repeat: repeat; background-position-x: 0%; background-position-y: 0%
+OUT: background-color: rgb(255, 0, 0); background-image: none; background-repeat: repeat; background-position-x: 0%; background-position-y: 0%; background-size: auto auto; background-origin: padding-box; background-clip: border-box
 IN: background: url(bg.gif) no-repeat center
-OUT: background-color: rgba(0, 0, 0, 0); background-image: url(bg.gif); background-repeat: no-repeat; background-position-x: 50%; background-position-y: 50%
+OUT: background-color: rgba(0, 0, 0, 0); background-image: url(bg.gif); background-repeat: no-repeat; background-position-x: 50%; background-position-y: 50%; background-size: auto auto; background-origin: padding-box; background-clip: border-box
 IN: background: #008080 url(bg.gif) repeat
-OUT: background-color: rgb(0, 128, 128); background-image: url(bg.gif); background-repeat: repeat; background-position-x: 0%; background-position-y: 0%
+OUT: background-color: rgb(0, 128, 128); background-image: url(bg.gif); background-repeat: repeat; background-position-x: 0%; background-position-y: 0%; background-size: auto auto; background-origin: padding-box; background-clip: border-box
 IN: background: url(a.png) right 10px top / cover no-repeat, blue
-OUT: background-color: rgb(0, 0, 255); background-image: url(a.png); background-repeat: no-repeat; background-position-x: calc(100% - 10px); background-position-y: 0%
+OUT: background-color: rgb(0, 0, 255); background-image: url(a.png); background-repeat: no-repeat; background-position-x: calc(100% - 10px); background-position-y: 0%; background-size: cover; background-origin: padding-box; background-clip: border-box
 IN: background: linear-gradient(red, blue)
-OUT: background-color: rgba(0, 0, 0, 0); background-image: linear-gradient(...); background-repeat: repeat; background-position-x: 0%; background-position-y: 0%
+OUT: background-color: rgba(0, 0, 0, 0); background-image: linear-gradient(...); background-repeat: repeat; background-position-x: 0%; background-position-y: 0%; background-size: auto auto; background-origin: padding-box; background-clip: border-box
 IN: background: red, blue
 OUT: invalid
+IN: background: url(a.png) center / 50% content-box
+OUT: background-color: rgba(0, 0, 0, 0); background-image: url(a.png); background-repeat: repeat; background-position-x: 50%; background-position-y: 50%; background-size: 50% auto; background-origin: content-box; background-clip: content-box
+IN: background: border-box padding-box 0 0 / 10px 2em url(a.png)
+OUT: background-color: rgba(0, 0, 0, 0); background-image: url(a.png); background-repeat: repeat; background-position-x: 0px; background-position-y: 0px; background-size: 10px 2em; background-origin: border-box; background-clip: padding-box
+IN: background: linear-gradient(red, blue) text
+OUT: background-color: rgba(0, 0, 0, 0); background-image: linear-gradient(...); background-repeat: repeat; background-position-x: 0%; background-position-y: 0%; background-size: auto auto; background-origin: padding-box; background-clip: text
+IN: background: text border-box red
+OUT: invalid
+IN: background: url(a.png) / cover
+OUT: invalid
+IN: background: border-box padding-box content-box
+OUT: invalid
+IN: background-size: cover
+OUT: background-size: cover
+IN: background-size: 40px
+OUT: background-size: 40px auto
+IN: background-size: auto 25%
+OUT: background-size: auto 25%
+IN: background-size: 10px, cover
+OUT: background-size: 10px auto
+IN: background-size: -1px
+OUT: invalid
+IN: background-size: cover contain
+OUT: invalid
+IN: background-origin: content-box
+OUT: background-origin: content-box
+IN: background-origin: text
+OUT: invalid
+IN: background-clip: padding-box, text
+OUT: background-clip: padding-box
+IN: background-clip: text
+OUT: background-clip: text
 IN: background: none
-OUT: background-color: rgba(0, 0, 0, 0); background-image: none; background-repeat: repeat; background-position-x: 0%; background-position-y: 0%
+OUT: background-color: rgba(0, 0, 0, 0); background-image: none; background-repeat: repeat; background-position-x: 0%; background-position-y: 0%; background-size: auto auto; background-origin: padding-box; background-clip: border-box
 IN: background-position: right bottom
 OUT: background-position-x: 100%; background-position-y: 100%
 IN: background-position: top

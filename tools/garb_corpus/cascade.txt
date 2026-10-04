@@ -95,6 +95,27 @@ p: color: rgb(0, 0, 255); margin-top: 1px; margin-bottom: 4px; margin-left: 2px;
 (end)
 END
 
+# Backgrounds in @supports: SUPPORTED is what is drawn. A gradient, a
+# url() and the boxes it is placed in and cut to are; a background
+# clipped to its text, a conic gradient and an image-set are read and not
+# drawn (PILE3.md § Booked), so a page takes the fallback it wrote.
+VIEWPORT 800x600
+PAGE
+<!doctype html><style>
+@supports (background-image: linear-gradient(red, blue)) { p { margin-top: 1px } }
+@supports (background-image: url(a.png)) { p { margin-right: 2px } }
+@supports (background-clip: content-box) { p { margin-bottom: 3px } }
+@supports (background-clip: text) { p { margin-left: 4px } }
+@supports (background-image: conic-gradient(red, blue)) { p { padding-top: 5px } }
+@supports (background: image-set("a.png" 1x)) { p { padding-right: 6px } }
+@supports not (background-clip: text) { p { padding-bottom: 7px } }
+</style>
+<p>x
+WANT
+p: margin-top: 1px; margin-right: 2px; margin-bottom: 3px; padding-bottom: 7px
+(end)
+END
+
 # Positioning in @supports: absolute, relative, fixed and sticky are laid
 # out as they say, and so is `z-index`, and any opacity, which the painter
 # blends (PILE3.md § The blend).

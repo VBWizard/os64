@@ -1461,6 +1461,7 @@ int main(int argc, char **argv)
     blend_cases();
     radius_cases();
     gradient_style_cases();
+    background_box_cases();
     flex_cases();
     grid_cases();
     fixed_cases();

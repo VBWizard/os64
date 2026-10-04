@@ -281,6 +281,21 @@ static void element(Buf *b, const FStyles *styles, const os64_html_node_t *n,
         puts_(b, "/");
         length(b, s->background_position[1]);
     }
+    // Size and boxes when not the initial ones.
+    static const char *const kEdge[] = {"border-box", "padding-box", "content-box", "text"};
+    if (s->background_fit != FLOW_FIT_LENGTHS) {
+        puts_(b, s->background_fit == FLOW_FIT_COVER ? " bg-size=cover" : " bg-size=contain");
+    } else if (s->background_size[0].kind != FLOW_LENGTH_AUTO ||
+               s->background_size[1].kind != FLOW_LENGTH_AUTO) {
+        puts_(b, " bg-size=");
+        length(b, s->background_size[0]);
+        puts_(b, "/");
+        length(b, s->background_size[1]);
+    }
+    if (s->background_origin != FLOW_EDGE_PADDING)
+        putf(b, " bg-origin=%s", kEdge[s->background_origin]);
+    if (s->background_clip != FLOW_EDGE_BORDER)
+        putf(b, " bg-clip=%s", kEdge[s->background_clip]);
     // A gradient: its kind, its geometry, then each stop as colour@position
     // (a hint as @position alone).
     const flow_gradient_t *g = s->background_gradient;

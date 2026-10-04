@@ -241,3 +241,30 @@ static void gradient_style_cases(void)
         "      div block color=#0000ff bg=#0000ff border=1:solid:#0000ff\n"
         "    div block color=#ff0000 bg=#ff0000\n");
 }
+
+// background-size, -origin and -clip as computed: an em is the box's
+// font's, a single length's height is auto, and the shorthand's one box
+// is both the origin and the clip.
+static void background_box_cases(void)
+{
+    cascade_case("backgrounds: size, origin and clip, read", 400,
+        "<!doctype html><style>"
+        ".a{background-size:cover;background-origin:border-box}"
+        ".b{font-size:10px;background-size:2em 50%;background-clip:content-box}"
+        ".c{background-size:30px}"
+        ".d{background:linear-gradient(red,blue) 0 0/contain content-box}"
+        ".e{background-size:20px 20px;background-clip:text}"
+        ".f{background-size:20px 20px;background:red}"
+        "</style><div class=a></div><div class=b></div><div class=c></div>"
+        "<div class=d></div><div class=e></div><div class=f></div>",
+        "html block holds-block\n"
+        "  head none\n"
+        "  body block margin=8/8/8/8 holds-block\n"
+        "    div block bg-size=cover bg-origin=border-box\n"
+        "    div block size=10 bg-size=20/50% bg-clip=content-box\n"
+        "    div block bg-size=30/auto\n"
+        "    div block bg-size=contain bg-origin=content-box bg-clip=content-box "
+        "gradient=linear:180000:#ff0000@auto,#0000ff@auto\n"
+        "    div block bg-size=20/20 bg-clip=text\n"
+        "    div block bg=#ff0000\n");
+}

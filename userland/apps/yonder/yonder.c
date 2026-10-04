@@ -2043,8 +2043,8 @@ static void sheet_picture_seen(void *ctx, const flow_box_t *b)
         mark_part(meet);
 }
 
-static bool glass_backdrop(void *ctx, const flow_box_t *b, const os64_gui_rect_t *area, int32_t ox,
-                           int32_t oy, os64_gui_rect_t clip);
+static bool glass_backdrop(void *ctx, const flow_box_t *b, const os64_gui_rect_t *area,
+                           os64_gui_rect_t origin, int32_t ox, int32_t oy, os64_gui_rect_t clip);
 
 // The picture behind a box, as glass_backdrop draws it — a sheet's
 // outranking a `background` attribute's — or -1.
@@ -2775,10 +2775,11 @@ static void glass_text(void *ctx, const flow_box_t *b, int32_t x, int32_t baseli
 }
 
 // A picture behind a box: the box's sheets, or else libpage's list, say
-// whether there is one, and one that has arrived is tiled, unscaled, over
-// the box's colour — a sheet's where its position and repeat say.
-static bool glass_backdrop(void *ctx, const flow_box_t *b, const os64_gui_rect_t *area, int32_t ox,
-                           int32_t oy, os64_gui_rect_t clip)
+// whether there is one, and one that has arrived is tiled across `area`
+// over the box's colour — a sheet's at the size, position and repeat its
+// style says, an attribute's unscaled from (ox, oy).
+static bool glass_backdrop(void *ctx, const flow_box_t *b, const os64_gui_rect_t *area,
+                           os64_gui_rect_t origin, int32_t ox, int32_t oy, os64_gui_rect_t clip)
 {
     const Glass *gl = ctx;
     const Page *p = &g.page;
@@ -2798,14 +2799,18 @@ static bool glass_backdrop(void *ctx, const flow_box_t *b, const os64_gui_rect_t
         return true;
     uint32_t w, h;
     const uint32_t *px = picture_pixels(&p->pics[k], &w, &h);
-    bool rx = true, ry = true;
-    if (css)
-        yonder_background_place(b, flow_box_doc_rect(b, scroll_now()), w, h, &ox, &oy, &rx, &ry);
+    // A sheet's picture is sized and placed in the origin box the painter
+    // names; an attribute's is tiled from (ox, oy) at its own size.
+    yonder_tile_t tile = {{ox, oy, (int32_t)w, (int32_t)h}, true, true};
+    if (css && !yonder_background_tile(b->style, origin, w, h, &tile))
+        return true;
     os64_gui_rect_t on = {area->x + gl->dx, area->y + gl->dy, area->w, area->h};
     os64_gui_rect_t cut = on_glass(gl, clip);
+    tile.at.x += gl->dx;
+    tile.at.y += gl->dy;
     if (cut.w > 0 && cut.h > 0)
-        yonder_tile_picture(gl->surf->pixels, gl->surf->pitch_px, cut, on, ox + gl->dx,
-                            oy + gl->dy, rx, ry, px, w, h);
+        yonder_tile_picture(gl->surf->pixels, gl->surf->pitch_px, cut, on, tile.at, tile.repeat_x,
+                            tile.repeat_y, px, w, h);
     return true;
 }
 
