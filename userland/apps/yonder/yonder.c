@@ -881,22 +881,38 @@ static void scroll_to(int32_t x, int32_t y)
     hover(g.pointer_x, g.pointer_y);
 }
 
-// Where the person is, as libway keeps it for the history: the scroll.
+// Where the person is, as libway keeps it for the history: the scroll, in
+// device pixels, and the zoom it was measured at.
 static way_position_t position_now(void)
 {
     way_position_t at;
     os64_memset(&at, 0, sizeof(at));
+    uint32_t zoom = g.page.laid_zoom;
+    _Static_assert(sizeof(g.sx) + sizeof(g.sy) + sizeof(zoom) <= WAY_POSITION_MAX,
+                   "a position fits libway's bytes");
     os64_memcpy(at.bytes, &g.sx, sizeof(g.sx));
     os64_memcpy(at.bytes + sizeof(g.sx), &g.sy, sizeof(g.sy));
+    os64_memcpy(at.bytes + sizeof(g.sx) + sizeof(g.sy), &zoom, sizeof(zoom));
     return at;
 }
 
 // A remembered position is a HINT: the page that came back need not be the
-// page that was left, so it is clamped to the page that did.
+// page that was left, so it is clamped to the page that did — and scaled to
+// the zoom that page is laid out at, when the zoom changed while it was
+// away (a position with no zoom is taken as it is).
 static void position_restore(const way_position_t *at)
 {
-    os64_memcpy(&g.sx, at->bytes, sizeof(g.sx));
-    os64_memcpy(&g.sy, at->bytes + sizeof(g.sx), sizeof(g.sy));
+    int32_t x, y;
+    uint32_t zoom;
+    os64_memcpy(&x, at->bytes, sizeof(x));
+    os64_memcpy(&y, at->bytes + sizeof(x), sizeof(y));
+    os64_memcpy(&zoom, at->bytes + sizeof(x) + sizeof(y), sizeof(zoom));
+    if (zoom != 0 && g.page.laid_zoom != 0 && zoom != g.page.laid_zoom) {
+        x = scale_zoom(x, g.page.laid_zoom, zoom);
+        y = scale_zoom(y, g.page.laid_zoom, zoom);
+    }
+    g.sx = x;
+    g.sy = y;
     clamp_scroll();
 }
 
