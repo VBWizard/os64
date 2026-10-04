@@ -623,7 +623,10 @@ typedef struct {
     // The tree is laid out in device pixels: a CSS length, the page's
     // `medium`, a replaced element's own size and the viewport height
     // above (all CSS pixels as handed in) are multiplied by it where they
-    // enter, so text is shaped at the size it is drawn. A face zooms by
+    // enter, so text is shaped at the size it is drawn — up to the font
+    // engine's OS64_FONT_PIXEL_MAX (1280 device px: any size a page draws
+    // at 100%, at 500%), past which a run is shaped at that and laid out at
+    // its own size (PILE3.md § Booked). A face zooms by
     // passing it, the layout width in device pixels, and a cascade judged
     // at the device size divided by it.
     uint32_t zoom;

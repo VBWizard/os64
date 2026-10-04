@@ -270,6 +270,8 @@ static bool fonts_for(L *l, const flow_style_t *s, Fonts *f)
 {
     if (l->failed || l->env->fonts == NULL)
         return false;
+    // The engine's largest face (OS64_FONT_PIXEL_MAX) is the most a run is
+    // shaped at; its box keeps the size the style asked for.
     int64_t px = (s->font_size + 32) / 64;
     if (px < 1)
         px = 1;
