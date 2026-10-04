@@ -1052,10 +1052,13 @@ static void relayout(bool again)
     int32_t offset = 0;
     const os64_html_node_t *anchor = anchor_of(&offset);
     // How far into the anchor the view starts, and how far across the page
-    // it is, scaled with the page when the zoom changed.
+    // it is, scaled with the page when the zoom changed — held aside, and
+    // taken only with the layout they belong to: a layout that fails keeps
+    // the old page at the old zoom, and its scroll with it.
+    int32_t sx = g.sx;
     if (g.page.laid_zoom != 0 && g.page.laid_zoom != g.zoom) {
         offset = scale_zoom(offset, g.zoom, g.page.laid_zoom);
-        g.sx = scale_zoom(g.sx, g.zoom, g.page.laid_zoom);
+        sx = scale_zoom(g.sx, g.zoom, g.page.laid_zoom);
     }
     os64_ticks_t t0, t1;
     os64_ticks(&t0);
@@ -1070,6 +1073,7 @@ static void relayout(bool again)
         return;
     }
     g.laid_at = t1;
+    g.sx = sx;
     css_pictures(&g.page);
     if (anchor != NULL) {
         const flow_box_t *b = flow_box_for(g.page.tree, anchor);
