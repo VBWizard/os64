@@ -371,6 +371,25 @@ static void paint_cases(void)
                     200, (os64_gui_rect_t){0, 0, 200, 100}, true,
                     "fill 0 0 200 100 #fefefe\n"
                     "pixels 0 0 4 1 ff4000bf ffbf0040 ffbf0040 ff4000bf\n");
+    // A repeat shorter than a pixel is its average (§ 3.6), each pair of
+    // stops weighted by its share of the length: red to white is a tenth
+    // of it, white to blue nine tenths (both exact in libflow's 1/64 px),
+    // so (r, g, b) = (.55, .5, .95).
+    paint_page_case("a repeat shorter than a pixel is its weighted average",
+                    "<!doctype html><style>body { margin: 0 } div { width: 4px; height: 1px;"
+                    " background: repeating-linear-gradient(to right, #ff0000 0, #ffffff .0625px,"
+                    " #0000ff .625px) }</style><div></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "pixels 0 0 4 1 ff8c80f2 ff8c80f2 ff8c80f2 ff8c80f2\n");
+    // A repeating ellipse of no height is the same weighted average.
+    paint_page_case("a repeating ellipse of no height is its weighted average",
+                    "<!doctype html><style>body { margin: 0 } div { width: 4px; height: 1px;"
+                    " background: repeating-radial-gradient(10px 0, #ff0000 0, #ffffff 1px,"
+                    " #0000ff 10px) }</style><div></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "pixels 0 0 4 1 ff8c80f2 ff8c80f2 ff8c80f2 ff8c80f2\n");
     // One of no height is the last stop's colour everywhere.
     paint_page_case("an ellipse of no height is its last colour",
                     "<!doctype html><style>body { margin: 0 } div { width: 4px; height: 1px;"

@@ -669,36 +669,42 @@ static bool stops_resolve(const flow_gradient_t *g, double len, uint32_t current
     return true;
 }
 
-// A repeating gradient with no length to repeat over (§ 3.6): the average
-// of the same colours spread evenly from 0 to 1 — each stretch between two
-// neighbours averages to their midpoint — premultiplied, as one colour.
+// The gradient's average colour (Images 3 § 3.6): each pair of
+// neighbouring colour stops lends each of its two colours half its
+// distance over the whole length, premultiplied. A gradient with no
+// length is averaged as its colours spread evenly from first to last,
+// so each pair weighs the same. Hints are not colour stops and lend
+// nothing.
 static uint32_t stops_average(const Stops *s)
 {
-    double sum[4] = {0, 0, 0, 0};
-    int32_t prev = -1, stretches = 0;
+    double total = s->at[s->n - 1] - s->at[0];
+    bool even = !(total > 0);
+    double sum[4] = {0, 0, 0, 0}, weights = 0;
+    int32_t prev = -1;
     for (int32_t i = 0; i < s->n; i++) {
         if (s->hint[i])
             continue;
         if (prev >= 0) {
+            double w = even ? 1 : (s->at[i] - s->at[prev]) / total;
             const uint32_t two[2] = {s->colour[prev], s->colour[i]};
             for (int k = 0; k < 2; k++) {
                 double a = flow_alpha(two[k]) / 255.0;
-                sum[3] += a / 2;
+                sum[3] += a * w / 2;
                 for (int c = 0; c < 3; c++)
-                    sum[c] += ((two[k] >> (8 * c)) & 0xff) * a / 2;
+                    sum[c] += ((two[k] >> (8 * c)) & 0xff) * a * w / 2;
             }
-            stretches++;
+            weights += w;
         }
         prev = i;
     }
-    if (stretches == 0 || sum[3] <= 0)
+    if (!(weights > 0) || sum[3] <= 0)
         return 0xff000000u;                 // wholly transparent
     uint32_t out = 0;
     for (int c = 0; c < 3; c++) {
         double v = sum[c] / sum[3];
         out |= (uint32_t)(v + 0.5 > 255 ? 255 : v + 0.5) << (8 * c);
     }
-    uint32_t al = (uint32_t)(sum[3] / stretches * 255 + 0.5);
+    uint32_t al = (uint32_t)(sum[3] / weights * 255 + 0.5);
     return out | (255u - (al > 255 ? 255 : al)) << 24;
 }
 
@@ -819,7 +825,10 @@ static void gradient(const Painter *p, const flow_gradient_t *g, double tx, doub
         // and very tall one, so its stops spread across x as a linear
         // gradient mirrored about the centre (and a percentage stop sits at
         // 0); one of no height a very wide and flat one, which is the last
-        // stop's colour everywhere, or the average if it repeats.
+        // stop's colour everywhere, or the average if it repeats — the
+        // look § 3.2.3 says that shape gives, and what Chrome draws even on
+        // a box one pixel high, whose pixel middles lie ON the flat line,
+        // where sampling the limiting shape would give the first colour.
         const double kSmall = 1e-6, kLarge = 1e9;
         if (g->circle && !(rx > 0)) {
             rx = ry = kSmall;
@@ -836,8 +845,12 @@ static void gradient(const Painter *p, const flow_gradient_t *g, double tx, doub
     if (!(len > 0) || !stops_resolve(g, len, current, &stops))
         return;
     // One colour everywhere: the flat ellipse, and a repeating gradient
-    // with no length to repeat over (§ 3.6).
-    bool solid = flat || (g->repeating && !(stops.at[stops.n - 1] > stops.at[0]));
+    // whose repeat is shorter than a pixel along the way it runs — none
+    // at all, or one no pixel can show (§ 3.6) — which is its average. A
+    // radial's repeat is shortest along its shorter radius.
+    double pixel_period = (stops.at[stops.n - 1] - stops.at[0]) *
+                          (g->kind == FLOW_GRADIENT_LINEAR ? len : fmin(rx, ry));
+    bool solid = flat || (g->repeating && !(pixel_period >= 1));
     uint32_t solid_colour = g->repeating ? stops_average(&stops) : stops.colour[stops.n - 1];
     bool rep_x = repeat == FLOW_REPEAT || repeat == FLOW_REPEAT_X;
     bool rep_y = repeat == FLOW_REPEAT || repeat == FLOW_REPEAT_Y;

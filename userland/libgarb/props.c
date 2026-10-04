@@ -1134,7 +1134,28 @@ static bool gradient_stops(Sets *s, const Group *g, int32_t n, garb_val_t *out, 
     return true;
 }
 
-// The angle a linear gradient's prelude names, in degrees, or its `to`.
+// `v` taken into [0, whole), exactly, for every finite `v`: each step
+// subtracts the largest whole * 2^k not above what is left, and a
+// subtraction of two doubles within a factor of two of each other is exact
+// (Sterbenz), so this is fmod's answer without libmath. NaN and infinity
+// have no remainder and are 0.
+static double round_the_turn(double v, double whole)
+{
+    if (!(v - v == 0))
+        return 0;
+    double m = v < 0 ? -v : v;
+    while (m >= whole) {
+        double s = whole;
+        while (s <= m / 2)
+            s *= 2;
+        m -= s;
+    }
+    double r = v < 0 && m > 0 ? whole - m : m;
+    return r < whole ? r : 0;               // -1e-20 rounds to a whole turn
+}
+
+// The angle a linear gradient's prelude names, in degrees in [0, 360), or
+// its `to`.
 static garb_val_t linear_geometry(const Group *g, bool have)
 {
     static const char *const kTo[] = {"to", NULL};
@@ -1162,9 +1183,12 @@ static garb_val_t linear_geometry(const Group *g, bool have)
     const garb_value_t *t = vc_peek(&c);
     double n = t->number;
     if (t->kind == GARB_DIMENSION) {
-        n = ieq(t->unit, t->unit_len, "grad") ? n * 0.9
-            : ieq(t->unit, t->unit_len, "rad") ? n * 57.29577951308232
-            : ieq(t->unit, t->unit_len, "turn") ? n * 360 : n;
+        // Taken round its own unit's turn FIRST: `1e307rad` in degrees is
+        // past a double, and a direction is the remainder, not the size.
+        bool grad = ieq(t->unit, t->unit_len, "grad"), rad = ieq(t->unit, t->unit_len, "rad");
+        bool turn = ieq(t->unit, t->unit_len, "turn");
+        double whole = grad ? 400 : rad ? 6.283185307179586 : turn ? 1 : 360;
+        n = round_the_turn(n, whole) * (360 / whole);
     }
     return number_val(n);
 }
