@@ -29,13 +29,13 @@ static void paint_cases(void)
                "<!doctype html><body background=sky.gif><p>Hi", 100,
                (os64_gui_rect_t){0, 0, 100, 50},
                "fill 0 0 100 50 #fefefe\n"
-               "backdrop 0 0 100 50 from 0 0\n"
+               "backdrop 0 0 100 50 from 0 0 origin 0 0 100 52\n"
                "text \"Hi\" 8 30 #101010\n");
     paint_case("canvas: the body's picture over its colour, scrolled",
                "<!doctype html><body bgcolor=#ffff00 background=sky.gif><p>Hi", 100,
                (os64_gui_rect_t){0, 20, 100, 50},
                "fill 0 20 100 50 #ffff00\n"
-               "backdrop 0 20 100 50 from 0 0\n"
+               "backdrop 0 20 100 50 from 0 0 origin 0 0 100 52\n"
                "text \"Hi\" 8 30 #101010\n");
 
     // table border=2 is a 2px outset in the ink; its cell a 1px inset.
@@ -90,7 +90,7 @@ static void paint_cases(void)
                "fill 0 0 200 50 #fefefe\n"
                "fill 10 10 22 22 #ff6600\n"
                "fill 22 10 10 22 #00ff00\n"
-               "backdrop 22 10 10 22 from 22 10\n"
+               "backdrop 22 10 10 22 from 22 10 origin 22 10 10 22\n"
                "text \"x\" 11 25 #101010\n"
                "text \"y\" 23 25 #101010\n");
 
@@ -464,6 +464,18 @@ static void paint_cases(void)
                     "pixels 0 2 12 16 ffff0000 ffff0000\n"
                     "text \"Hi\" 0 14 #101010\n");
 
+    // The canvas's background is placed in the ROOT's origin box, whichever
+    // element it came from (Backgrounds 3 § 2.11.2): the body's 2px tile,
+    // its origin the content box, sits inside the root's 1px of padding.
+    paint_page_case("a canvas background is placed in the root's origin box",
+                    "<!doctype html><style>html { padding: 1px } body { margin: 0;"
+                    " background: linear-gradient(#ff0000, #ff0000) no-repeat;"
+                    " background-size: 2px 2px; background-origin: content-box }</style>",
+                    4, (os64_gui_rect_t){0, 0, 4, 4}, true,
+                    "fill 0 0 4 4 #fefefe\n"
+                    "pixels 0 0 4 4 00000000 00000000 00000000 00000000"
+                    " 00000000 ffff0000 ffff0000 00000000 00000000 ffff0000 ffff0000 00000000"
+                    " 00000000 00000000 00000000 00000000\n");
     // Groups nest, each laid over what was under it when it opened, and a
     // group none of which shows opens empty: the far one at 520, cut to a
     // view that ends at 100, has no height.
