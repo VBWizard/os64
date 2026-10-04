@@ -1310,6 +1310,27 @@ static void margin_quirks(const Ctx *c, const os64_html_node_t *n, Spec *sp)
 
 // ── The page's own sheets ───────────────────────────────────────────────
 //
+// A list a declaration hands ONE element — its font families, grid tracks
+// and areas, gradient stops, shadows, background layers — copied for every
+// element the declaration reaches (most hold lengths worked out at that
+// element's font size). That is the one cost of styling a page can
+// multiply: a sheet's long list times the elements it matches, without
+// end. So its bytes come out of a budget (F_STYLE_LISTS_BUDGET, far past
+// any real page's) as well as the arena; when the budget is spent, the
+// declaration is dropped as one libflow cannot read is — a hostile page is
+// styled plainly, and still laid out. NULL with *spent set for that; NULL
+// alone for no memory.
+static void *list_alloc(Ctx *c, size_t bytes, bool *spent)
+{
+    *spent = bytes > c->out->lists_left;
+    if (*spent)
+        return NULL;
+    void *p = f_arena_alloc(&c->out->arena, bytes);
+    if (p != NULL)
+        c->out->lists_left -= bytes;
+    return p;
+}
+
 // libgarb's cascade hands each element its AUTHOR-origin winners: declared
 // values, checked against their grammars, var() already replaced. Here
 // they are computed into the Spec the chapter and the hints wrote, which
@@ -1599,18 +1620,19 @@ static bool author_generic(const char *k, flow_generic_t *out)
 
 // `font-family`: the names in order and the first generic, as `<font
 // face>` builds them. The names point into the sheet.
-// The names are copied into the styles arena for every element the
-// declaration reaches: a `* { font-family: … }` reset costs one list an
-// element (48 bytes for three names). Bounded by the document, as the
-// styles arena is; one list per winning set would cost it once.
+// The names are copied for every element the declaration reaches: a
+// `* { font-family: … }` reset costs one list an element (48 bytes for
+// three names), out of the lists' budget (list_alloc), past which the
+// element keeps the family it inherited; one list per winning set would
+// cost it once.
 static bool author_family(Author *a, const garb_val_t *v, flow_family_list_t *out)
 {
     if (v->items == NULL || v->nitems <= 0)
         return true;
-    flow_family_name_t *names = f_arena_alloc(&a->c->out->arena,
-                                              (size_t)v->nitems * sizeof(*names));
+    bool spent;
+    flow_family_name_t *names = list_alloc(a->c, (size_t)v->nitems * sizeof(*names), &spent);
     if (names == NULL)
-        return false;
+        return spent;
     uint32_t n = 0;
     bool have_generic = false;
     flow_generic_t generic = FLOW_GENERIC_SANS;
@@ -2032,9 +2054,10 @@ static GridRead author_tracks(Author *a, const garb_val_t *v, flow_tracks_t *out
     }
     if (total > F_GRID_MAX)
         total = F_GRID_MAX;
-    flow_track_t *tracks = f_arena_alloc(&a->c->out->arena, (size_t)total * sizeof(*tracks));
+    bool spent;
+    flow_track_t *tracks = list_alloc(a->c, (size_t)total * sizeof(*tracks), &spent);
     if (tracks == NULL)
-        return GRID_READ_NO_MEMORY;
+        return spent ? GRID_READ_UNUSABLE : GRID_READ_NO_MEMORY;
     int32_t k = 0;
     for (int32_t i = 0; i < n && k < total; i++) {
         const garb_val_t *t = &items[i];
@@ -2080,10 +2103,10 @@ static GridRead author_areas(Author *a, const garb_val_t *v, flow_style_t *s)
         if (garb_area_cells(v->items[r].text, (uint32_t)v->items[r].len, cells + r * cols,
                             cols) != cols)
             return GRID_READ_UNUSABLE;
-    flow_grid_area_t *areas = f_arena_alloc(&a->c->out->arena,
-                                            (size_t)rows * cols * sizeof(*areas));
+    bool spent;
+    flow_grid_area_t *areas = list_alloc(a->c, (size_t)rows * cols * sizeof(*areas), &spent);
     if (areas == NULL)
-        return GRID_READ_NO_MEMORY;
+        return spent ? GRID_READ_UNUSABLE : GRID_READ_NO_MEMORY;
     int32_t n = 0;
     for (int32_t k = 0; k < rows * cols; k++) {
         garb_area_cell_t name = cells[k];
@@ -2096,9 +2119,9 @@ static GridRead author_areas(Author *a, const garb_val_t *v, flow_style_t *s)
                 found = j;
         int32_t r = k / cols, c = k % cols;
         if (found < 0) {
-            char *copy = f_arena_alloc(&a->c->out->arena, name.len);
+            char *copy = list_alloc(a->c, name.len, &spent);
             if (copy == NULL)
-                return GRID_READ_NO_MEMORY;
+                return spent ? GRID_READ_UNUSABLE : GRID_READ_NO_MEMORY;
             os64_memcpy(copy, name.text, name.len);
             areas[n++] = (flow_grid_area_t){copy, name.len, r, r + 1, c, c + 1};
             continue;
@@ -2135,9 +2158,10 @@ static GridRead author_line(Author *a, const garb_val_t *v, flow_grid_line_t *ou
         return GRID_READ_OK;
     }
     if (v->kind == GARB_V_STRING && v->len > 0) {
-        char *copy = f_arena_alloc(&a->c->out->arena, v->len);
+        bool spent;
+        char *copy = list_alloc(a->c, v->len, &spent);
         if (copy == NULL)
-            return GRID_READ_NO_MEMORY;
+            return spent ? GRID_READ_UNUSABLE : GRID_READ_NO_MEMORY;
         os64_memcpy(copy, v->text, v->len);
         out->kind = FLOW_GRID_LINE_NAME;
         out->name = copy;
@@ -2169,19 +2193,22 @@ static int32_t angle_thousandths(double deg)
 }
 
 // libgarb's gradient (values.h's GARB_V_IMAGE: its geometry, then its
-// stops) as flow's, in the style's arena; a currentColor stop is marked
-// `current`, for the box it is drawn on to resolve. False only when memory
-// runs out.
+// stops) as flow's, out of the lists' budget (list_alloc) — past it, *out
+// is left as it was; a currentColor stop is marked `current`, for the box
+// it is drawn on to resolve. False only when memory runs out.
 static bool author_gradient(const Author *a, const flow_style_t *s, const garb_val_t *v,
                             const flow_gradient_t **out)
 {
     static const flow_length_t kUnwritten = {FLOW_LENGTH_AUTO, 0, 0};
     static const flow_length_t kHalf = {FLOW_LENGTH_PERCENT, 50 * 64, 0};
-    flow_gradient_t *g = f_arena_alloc(&a->c->out->arena, sizeof(*g));
-    flow_gradient_stop_t *stops =
-        f_arena_alloc(&a->c->out->arena, (size_t)v->nitems * sizeof(*stops));
-    if (g == NULL || stops == NULL)
-        return false;
+    // The gradient and its stops in one piece of the lists' budget; past
+    // it, the layer has no picture (*out stays NULL).
+    bool spent;
+    flow_gradient_t *g =
+        list_alloc(a->c, sizeof(*g) + (size_t)v->nitems * sizeof(flow_gradient_stop_t), &spent);
+    if (g == NULL)
+        return spent;
+    flow_gradient_stop_t *stops = (flow_gradient_stop_t *)(g + 1);
     os64_memset(g, 0, sizeof(*g));
     const char *name = v->text;             // one of libgarb's own names
     g->repeating = name != NULL && (os64_streq(name, "repeating-linear-gradient") ||
@@ -2261,9 +2288,10 @@ static bool author_shadows(const Author *a, flow_style_t *s, const garb_val_t *v
         *count = 0;
         return true;
     }
-    flow_shadow_t *out = f_arena_alloc(&a->c->out->arena, (size_t)v->nitems * sizeof(*out));
+    bool spent;
+    flow_shadow_t *out = list_alloc(a->c, (size_t)v->nitems * sizeof(*out), &spent);
     if (out == NULL)
-        return false;
+        return spent;                       // past the lists' budget: as it was
     for (int32_t i = 0; i < v->nitems; i++) {
         const garb_val_t *one = &v->items[i];
         int32_t k = 0;
@@ -2295,22 +2323,23 @@ static bool author_shadows(const Author *a, flow_style_t *s, const garb_val_t *v
 // LAYERS value, or one value for one layer); an entry flow cannot read is
 // the property's initial value. A url() is fetched by the face, a
 // gradient libgarb kept is drawn (values.h); a conic gradient or an
-// image-set is no picture yet (PILE3.md § Booked).
+// image-set is no picture yet (PILE3.md § Booked). Past the lists' budget
+// (list_alloc), the property's list is left as it was.
 static bool author_layers(const Author *a, flow_style_t *s, garb_prop_t p, const garb_val_t *v)
 {
     const garb_val_t *items = v->kind == GARB_V_LAYERS ? v->items : v;
     int32_t n = v->kind == GARB_V_LAYERS ? v->nitems : 1;
     if (n <= 0)
         return true;
-    FArena *arena = &a->c->out->arena;
     flow_backgrounds_t *b = &s->backgrounds;
     Len l, two[2];
     int32_t w;
+    bool spent;                             // past the lists' budget: the list as it was
     switch (p) {
     case GARB_BACKGROUND_IMAGE: {
-        flow_bg_image_t *list = f_arena_alloc(arena, (size_t)n * sizeof(*list));
+        flow_bg_image_t *list = list_alloc(a->c, (size_t)n * sizeof(*list), &spent);
         if (list == NULL)
-            return false;
+            return spent;
         for (int32_t k = 0; k < n; k++) {
             const garb_val_t *one = &items[k];
             list[k] = kNoImage;
@@ -2329,9 +2358,9 @@ static bool author_layers(const Author *a, flow_style_t *s, garb_prop_t p, const
     }
     case GARB_BACKGROUND_REPEAT: {
         static const char *const words[] = {"repeat", "repeat-x", "repeat-y", "no-repeat"};
-        flow_repeat_t *list = f_arena_alloc(arena, (size_t)n * sizeof(*list));
+        flow_repeat_t *list = list_alloc(a->c, (size_t)n * sizeof(*list), &spent);
         if (list == NULL)
-            return false;
+            return spent;
         for (int32_t k = 0; k < n; k++)
             list[k] = (w = pick(&items[k], words, F_ARRAY(words))) >= 0 ? (flow_repeat_t)w : kRepeat;
         b->repeat = list;
@@ -2339,9 +2368,9 @@ static bool author_layers(const Author *a, flow_style_t *s, garb_prop_t p, const
         return true;
     }
     case GARB_BACKGROUND_POSITION_X: case GARB_BACKGROUND_POSITION_Y: {
-        flow_length_t *list = f_arena_alloc(arena, (size_t)n * sizeof(*list));
+        flow_length_t *list = list_alloc(a->c, (size_t)n * sizeof(*list), &spent);
         if (list == NULL)
-            return false;
+            return spent;
         for (int32_t k = 0; k < n; k++)
             list[k] = author_len(a, &items[k], false, &l)
                           ? resolve(l, a->font, (flow_length_t){FLOW_LENGTH_PX, 0, 0})
@@ -2353,9 +2382,9 @@ static bool author_layers(const Author *a, flow_style_t *s, garb_prop_t p, const
     case GARB_BACKGROUND_SIZE: {
         // A keyword, or libgarb's pair of width and height.
         static const char *const fits[] = {"cover", "contain"};
-        flow_bg_size_t *list = f_arena_alloc(arena, (size_t)n * sizeof(*list));
+        flow_bg_size_t *list = list_alloc(a->c, (size_t)n * sizeof(*list), &spent);
         if (list == NULL)
-            return false;
+            return spent;
         for (int32_t k = 0; k < n; k++) {
             const garb_val_t *one = &items[k];
             list[k] = kOwnSize;
@@ -2376,9 +2405,9 @@ static bool author_layers(const Author *a, flow_style_t *s, garb_prop_t p, const
     case GARB_BACKGROUND_ORIGIN: case GARB_BACKGROUND_CLIP: {
         static const char *const edges[] = {"border-box", "padding-box", "content-box", "text"};
         bool origin = p == GARB_BACKGROUND_ORIGIN;
-        flow_edge_t *list = f_arena_alloc(arena, (size_t)n * sizeof(*list));
+        flow_edge_t *list = list_alloc(a->c, (size_t)n * sizeof(*list), &spent);
         if (list == NULL)
-            return false;
+            return spent;
         for (int32_t k = 0; k < n; k++)
             list[k] = (w = pick(&items[k], edges, F_ARRAY(edges))) >= 0 ? (flow_edge_t)w
                       : origin ? kPaddingBox : kBorderBox;
@@ -3082,11 +3111,15 @@ FStyles *f_style_build(const os64_html_document_t *doc, const os64_page_t *model
         return NULL;
     out->doc = doc;
     out->env = env;
-    // One record per element and the family names a `face` wrote: bounded
-    // by the document libhtml admitted, never multiplied, so no budget —
+    // One record per element and the family names a `face` wrote are
+    // bounded by the document libhtml admitted, so the arena has no cap —
     // pass 1 is all or nothing, and a cap here would blank a large page
-    // that the boxes' budget would merely cut short.
+    // that the boxes' budget would merely cut short. What a page CAN
+    // multiply — a sheet's list copied into every element it reaches — has
+    // a budget of its own (list_alloc), whose end costs a property, never
+    // the page.
     out->arena.cap = SIZE_MAX;
+    out->lists_left = F_STYLE_LISTS_BUDGET;
     Ctx c = {.doc = doc, .model = model, .env = env, .out = out,
              .quirks = doc->quirks == OS64_HTML_QUIRKS,
              .root_font = (flow_unit_t)env->viewport_font_px * FLOW_UNITS_PER_PX};
