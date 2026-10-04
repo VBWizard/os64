@@ -20,6 +20,13 @@ leans, not specifications, and a wrong call there is a hunt rather than a
 review round. The remaining briefs below are for slices whose rules are already
 written down.
 
+**D7 policy handoff.** Its execution-time default is not settled by D5b's
+one-second fixture deadline. Consider a script-timeout control in Settings,
+as Chris proposed on 2026-10-03; choose the default/range from P5 workloads and
+define Apply/Save behavior. DOM.md's execution-time policy decision records
+the per-turn scope and the existing expiry behavior. This remains Fable's D7
+work.
+
 ## What every DOM slice does the same way
 
 **Read first, in this order.** DOM.md whole, then the "as built"

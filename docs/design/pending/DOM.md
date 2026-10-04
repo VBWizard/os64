@@ -589,6 +589,15 @@ owed, paint. The standard's loop maps onto it without a second loop.
   chose where and nobody pressed anything. A chain of them is capped as a
   refresh chain is. A script cannot take a person from https to http
   without the question bar.
+- **Execution-time policy is a D7 decision.** D5b's one-second wall-clock
+  deadline is a fixture choice, not a JavaScript requirement or a settled
+  ordinary-browsing default. It covers one script invocation and its Promise
+  checkpoint, not the page's lifetime; later turns receive fresh budgets.
+  D7 should consider Chris's proposed script-timeout control in Settings.
+  Choose its default and allowed range using real P5 workloads, define when
+  an applied change takes effect, use Apply for this window and Save as default
+  for persistence. The expiry behavior below remains the design unless revised
+  in that review.
 - **A script that runs too long is stopped, and the page goes on without
   script.** Its task ends at the deadline, the runtime is finished with
   (R0's rule for an exceeded limit), timers and listeners go quiet, and
@@ -1493,7 +1502,11 @@ model; decoded pictures and pending work survive unrelated changes.
 scripts. Each script source is copied before evaluation, capped at 4 MiB, so
 self-modification cannot invalidate it. Runtime heap/stack/source use the
 measured 64 MiB/256 KiB/4 MiB profile; this fixture chooses a one-second deadline
-and 4096 jobs per turn, with the binding's default 8 MiB cap. Exceptions and
+and 4096 jobs per turn, with the binding's default 8 MiB cap. The one-second
+wall-clock limit covers evaluation and its Promise checkpoint; it is neither
+a browser-standard threshold nor a page-lifetime allowance. The ordinary
+browsing default and a possible Settings control belong to D7's execution-time
+policy decision above. Exceptions and
 unhandled rejections report inline source diagnostics and allow later scripts.
 Limit, cancellation and host failure retire the remaining schedule and runtime.
 The per-page picture catalog admits at most 4096 URLs and 4 MiB of owned URL
@@ -1549,6 +1562,7 @@ recommending this switch for ordinary browsing. D4 and D7 remain Fable's slices.
 | `document.write` after the parse has ended | it replaces the document | a page that needs it |
 | `unload` and `beforeunload` | teardown must be bounded | a ruling that a page may delay leaving |
 | Namespaced attribute verbs | no caller until SVG is scripted | that |
+| Script execution-time default/range and a possible Settings control | the one-second D5b deadline bounds the fixture; ordinary browsing needs workload evidence and a reviewed policy | D7, including P5 measurements and Apply/Save behavior |
 | A text field's change callback in libui | `input` and `change` events need it | D7 |
 | A modal `alert`, `confirm` and `prompt` | each needs a loop nested inside a script; the first cut answers without waiting | a page that cannot be used without a real `confirm` |
 | A process per page | a different browser | tabs |

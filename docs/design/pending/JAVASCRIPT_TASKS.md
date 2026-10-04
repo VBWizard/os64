@@ -40,7 +40,7 @@ independent review. "In progress" records an authorized slice being implemented.
 | D4 parser stream handoff | **Pending** | Yonder parser-thread handoff and responsive streaming; no script execution in this slice. |
 | D5 DOM binding/first page fixture | **D5a merged; D5b implemented, awaiting review** | [D5a PR #214](https://github.com/VBWizard/os64/pull/214), merge `72b2e710`, supplies libdom and state-aware mutation/clone transactions; evidence in DOM.md § D5a, as built. DOM.md § D5b, as built records the default-off settings switch and host/guest mutation, widget and queued-navigation proof; D4 is not a prerequisite. |
 | D6 detached-subtree reclamation | **Pending** | Reclaim unheld detached trees and prove bounded long-running churn. |
-| D7 browser event loop | **Pending** | Tasks/checkpoints, timers/events, script order and J4 evidence. |
+| D7 browser event loop | **Pending** | Tasks/checkpoints, timers/events, script order and J4 evidence. Resolve the execution-time default/range and consider a script-timeout Settings control; D5b's one-second fixture deadline does not settle ordinary-browsing policy (DOM.md). |
 
 The DOM slice definitions and detailed acceptance cases belong to
 [DOM.md](DOM.md); this table tracks their place in the overall campaign.
