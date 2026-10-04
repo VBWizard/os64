@@ -11,7 +11,7 @@ goes in DOM.md and its brief here is struck.
 |---|---|---|---|
 | D2b fragments and serialisation — **Merged #212** | Quinn and two scoped subagents | Fable, then an outside round (Codex); Chris schedules reviews | [D2b as built](DOM.md#d2b-as-built); merged after D3 |
 | D3 — **Merged #211** | Quinn and two scoped subagents | Fable | [D3 as built](DOM.md#d3-as-built) |
-| D6 reclaiming unheld detached subtrees | Available | Fable | D2b (its churn driver) |
+| D6 — **Implemented; awaiting review** | Quinn and two scoped subagents | Fable | [D6 as built](DOM.md#d6-as-built); stacked on D5b |
 | D5 — **D5a merged #214; D5b implemented; awaiting review** | Quinn with scoped subagents | Fable | D2b and D3; D4 is not needed |
 | D4 the parser on the window's thread; D7 the loop | Fable | — | D4 any time; D7 after D5 |
 
@@ -140,124 +140,13 @@ Implementation is in [PR #211](https://github.com/VBWizard/os64/pull/211),
 `codex/dom-d3`; D5 consumes the state revision and the
 attribute-transition handoff, and D6 adds holds for state and model keys.
 
-## D6 — reclaiming detached subtrees nothing holds
+## D6 — implemented; awaiting review
 
-**Storage contract.** D2b packs returned node bodies, names and original
-attributes into individually owned ledger blocks and gives text its own
-blocks; parser scaffolding is discarded. D6 must reclaim those payloads,
-later private attribute records and empty result containers as well as
-reuse permanent-chunk nodes, without weakening the hour-long churn proof.
-D3's persistent state retains node keys, including option keys and
-default-value caches: those records need holds and paired releases when
-D6 introduces reclamation. D5a stages new state records before tree mutation;
-those reservations must acquire their holds before the native verb and release
-them on abort, so post-mutation normalization can still read their keys.
-
-**What it is.** DOM.md § Wrappers, the paragraph that begins "So the
-reclamation JAVASCRIPT.md booked is not a someday item", and the DEBTS.md
-row "libhtml keeps a detached node until its document is freed". A page
-that replaces a hundred nodes sixty times a second meets the 64 MiB
-budget in about a minute; this slice makes that page run for an hour.
-The first cut reclaims a removed subtree in which nothing is held, which
-is the `innerHTML` case. The full answer (a weak wrapper table, the
-collector deciding) is booked and is not this slice.
-
-**The mechanism DOM.md sketches, and the brief adopts:**
-
-- **A `held` mark on a node** says something outside the tree points at
-  it: a wrapper (D5's table), the parser's own references while it is
-  building (its open elements, active formatting list, form and head
-  pointers, the script it stopped at), or a face's own node pointer. Two
-  verbs expose it: `os64_html_hold(doc, node)` and
-  `os64_html_release(doc, node)`, counted so two holders do not cancel
-  each other. Where the mark lives is the builder's: the private word
-  after a node carries a text buffer's capacity or an element's flags, and
-  a node's public struct was given its document mark in spare bytes by D1;
-  the as-built section records whether a node grew.
-- **Detachment is the moment.** When `remove`, `replace`, or an `insert`
-  that moves a fragment's children out leaves a subtree with no parent,
-  the subtree is walked once: if no node in it is held, it is retired as a
-  unit, stamped with the version, like a replaced string (DOM.md § The
-  mutation core, the retired list). The pins then say when it can be
-  reclaimed: a snapshot built before the detach may still point at those
-  nodes, so they are freed when no live pin is below the stamp, the same
-  rule the ledger already applies to strings. With no pins out, at once.
-- **What reclaiming frees.** Document-parser and creation-verb nodes live
-  in permanent chunks and have one size (the public struct plus the
-  private word), so a reclaimed node goes on a free list that `node_new`
-  and `h_node` draw from before the chunk. D2b's returned nodes are packed
-  ledger blocks: the node, its name and its original attributes share one
-  individually freeable allocation. Their text buffers and any later
-  private attribute records have their own ledger blocks. The reclaim
-  walk distinguishes these storage kinds and frees or retires each owned
-  allocation once; inline attributes are not freed separately. A string
-  from the document parser's permanent chunks stays charged. D2b's
-  temporary scaffolding is discarded during parsing, so repeated fragment
-  replacement retains no permanent payload chunks. `node_count` and the
-  arena figures move accordingly, which is what the proof measures.
-- **Form-owner records.** A control inside the reclaimed subtree with a
-  record, or a form inside it that a record elsewhere names, must leave
-  the record count right. The verbs' own rule says a move that parts a
-  control from its form clears the record, so by the time a subtree is
-  detached no record crosses its edge; the walk asserts that rather than
-  assuming it, and the record count comes down for each record it frees.
-- **Explicit-input count.** `os64_html_form_input_count` counts owned HTML
-  inputs with an unnamespaced `form` attribute, including detached/template
-  nodes and retained clone preparation. Its zero gate skips D5a's ID peer scan.
-  Physical reclamation subtracts an input's contribution before freeing its
-  attributes; detachment/retirement alone does not. `H_ATTRS_INLINE` and
-  `H_ATTRS_PRIVATE` can coexist, so reclamation must not assume exclusivity.
-- **Template contents** are a tree of their own under their template; a
-  reclaimed template takes its contents with it.
-
-**Read.** DOM.md § The mutation core, § Wrappers (the whole section: the
-teardown order is what the hold calls must respect), § D1, as built and
-§ D2a, as built (the grow-in-place rule and the retirement stamps are the
-machinery this reuses). `core.c`: `d_alloc`, `h_free`, `d_retire` and the
-reclaim pass; `dom.c`: `node_new`, `moved`, the form-owner walks;
-`internal.h`: `HDoc`, `h_word`.
-
-**Rules already settled:** a node with a wrapper is never reclaimed in this
-slice (the table holds it strongly until teardown); nodes created and
-never inserted (`createElement` then dropped, a `clone` dropped) are the
-full answer's and stay charged; the parser holds what it references and
-releases at `finish` and `abandon`, so a tree changed under a stopped
-parser (D2a's disturbed mode) cannot have an open element reclaimed from
-under it; `os64_html_document_free` frees everything regardless and the
-pin check stays.
-
-**The builder decides, and records why:** whether the subtree walk at
-detach time is charged as work (the D2a checks charge their walks); the
-free list's shape; whether a held count or a held bit (a count is the
-lean: the binding and a face can both hold one node); and what
-`os64_html_release` of an unheld node does (ending the program, as a
-stale unpin does, is the lean: it is the same class of fault).
-
-**The proof.** The DOM.md row is "the churn page that met the budget in a
-minute runs for an hour", and the libhtml half of it runs on the host
-without a page: in `tools/test_html_dom_host.c`, a loop that replaces a
-hundred-node subtree through `parse_fragment` and `insert`/`remove`
-216,000 times (an hour at sixty a second) under a 64 MiB budget, with
-`arena_bytes` and `node_count` read every thousand steps and required to
-stay flat after the first. Then the same loop with one node of the
-subtree held: nothing reclaimed, the budget met, the refusal named. The
-same with a pin taken before the detach: nothing reclaimed until the
-unpin, everything after. A reclaimed node's memory reused by the next
-`create_element` (the free list is live). The D1 random walk extended:
-the model forgets a detached unheld subtree the way the library does and
-asserts the node count, and holds are taken and dropped at random so
-that reclaim and no-reclaim both happen under every verb. The allocation
-sweep over the walk at detach time. Mutants over the hold check, the
-stamp, the pin rule, the free list and the record count. In the guest,
-`/tests/htmltest` runs a short churn loop under a small budget and reads
-the arena figures back.
-
-**Docs.** `html.h` gains the hold verbs and a paragraph under A NODE
-LIVES AS LONG AS ITS DOCUMENT that is no longer the whole truth and must
-be rewritten (it becomes "as long as its document, or until nothing holds
-a subtree it was removed in"); the DEBTS.md row is paid and the full
-answer's row stays; DOM.md's D6 row and as-built section; the consumer
-harnesses and the corpus numbers unchanged with scripting off.
+The lifetime contract, counted holds, whole-subtree retirement, parser-reference
+protection, consumer ownership and measured proof are in
+[DOM.md § D6, as built](DOM.md#d6-as-built) and `html.h`.
+The full weak-wrapper/collector answer remains booked. D5b is merged in
+PR #216; D6 targets userland in PR #217 and awaits Fable's re-review.
 
 ## D5 — the binding library (libdom) and J3's fixture
 
@@ -266,7 +155,7 @@ The library contract and measured proof are
 in [DOM.md § D5a, as built](DOM.md#d5a-as-built),
 `userland/libdom/include/dom/dom.h` and `userland/libdom/LIBDOM.md`.
 D5b implements the Yonder integration, default-off settings switch and guest
-acceptance; it awaits review. [DOM.md § D5b, as built](DOM.md#d5b-as-built)
+acceptance; it is merged in PR #216. [DOM.md § D5b, as built](DOM.md#d5b-as-built)
 records the implementation, evidence and remaining ordinary-browsing gates.
 
 **What it is.** A new library, `userland/libdom` (name ruled, DOM.md

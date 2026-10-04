@@ -15,6 +15,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 // ── What the library asks of the system ─────────────────────────────────
 
@@ -228,6 +229,8 @@ static void t_validity(void)
     HNode *doctype2 = os64_html_clone(doc, doctype, false, NULL);
     check(st == OS64_HTML_OK && text && comment && div && html2 && svg_html && doctype2,
           "detached nodes made");
+    // These pointers are reused after successful detachments below.
+    os64_html_hold(doc, html); os64_html_hold(doc, text); os64_html_hold(doc, doctype);
     char *before = spelled(root);
     uint64_t version = os64_html_version(doc);
 
@@ -305,6 +308,7 @@ static void t_validity(void)
 
     // Fragments under the document, by what they hold.
     HNode *frag = os64_html_create_fragment(doc, NULL);
+    os64_html_hold(doc, frag);
     os64_html_insert(doc, frag, os64_html_create_comment(doc, "1", 1, NULL), NULL);
     os64_html_insert(doc, frag, os64_html_create_comment(doc, "2", 1, NULL), NULL);
     check(os64_html_insert(doc, root, frag, html) == OS64_HTML_OK && !frag->first_child,
@@ -350,6 +354,8 @@ static void t_validity(void)
 
     HDoc *d = (HDoc *)doc;
     check(links_ok(d, root, 0) == d->records, "links after the validity cases");
+    os64_html_release(doc, frag); os64_html_release(doc, html);
+    os64_html_release(doc, text); os64_html_release(doc, doctype);
     os64_html_document_free(doc);
     check(live == 0, "validity cases freed");
 }
@@ -393,6 +399,7 @@ static void t_structure(void)
 
     // A fragment gives up its children in order, at the place asked for.
     HNode *frag = os64_html_create_fragment(doc, NULL);
+    os64_html_hold(doc, frag);
     for (int i = 0; i < 3; i++) {
         char name[2] = {(char)('x' + i), 0};
         os64_html_insert(doc, frag, os64_html_create_element(doc, OS64_HTML_NS_HTML, name, NULL), NULL);
@@ -405,6 +412,7 @@ static void t_structure(void)
 
     // Replace: by a node, by a sibling, by itself, by a fragment.
     HNode *x = a->prev->prev->prev, *z = a->prev;
+    os64_html_hold(doc, x); os64_html_hold(doc, c);
     check(os64_html_replace(doc, body, a, x) == OS64_HTML_OK && !x->parent, "div replaces x");
     expect_tree(body, "<body>[<p id='c'>[<span id='b'>[\"B\"\"one\"\"A\"]\"two\"]<div id='a'><y><z><!--note-->]",
                 "replaced by a later sibling");
@@ -415,7 +423,7 @@ static void t_structure(void)
     expect_tree(body, "<body>[<p id='c'>[<span id='b'>[\"B\"\"one\"\"A\"]\"two\"]<div id='a'><y><x>\"!\"<!--note-->]",
                 "replaced by a fragment");
 
-    // Remove unlinks; the node stays whole and can come back.
+    // A held removed node stays whole and can come back.
     check(os64_html_remove(doc, c) == OS64_HTML_OK && !c->parent && !c->prev && !c->next, "p removed");
     expect_tree(c, "<p id='c'>[<span id='b'>[\"B\"\"one\"\"A\"]\"two\"]", "the removed subtree is whole");
     v = os64_html_version(doc);
@@ -438,6 +446,7 @@ static void t_structure(void)
     HDoc *d = (HDoc *)doc;
     check(links_ok(d, doc->document, 0) + links_ok(d, deep, 0) + links_ok(d, shallow, 0) == d->records,
           "links after the structure cases");
+    os64_html_release(doc, frag); os64_html_release(doc, x); os64_html_release(doc, c);
     os64_html_document_free(doc);
     check(live == 0, "structure cases freed");
 }
@@ -640,10 +649,12 @@ static void t_form_owners(void)
     HNode *r = id_in(doc, "r");
     d = (HDoc *)doc;
     check(q->form_owner == f && r->form_owner == f && d->records == 2, "the fixture: two records to one form");
+    os64_html_hold(doc, f);
     check(os64_html_remove(doc, f) == OS64_HTML_OK && !q->form_owner && !r->form_owner && d->records == 0,
           "removing the form clears the records of the controls left behind");
     os64_html_insert(doc, id_in(doc, "t"), f, NULL);
     check(!q->form_owner, "and putting the form back does not restore them");
+    os64_html_release(doc, f);
     os64_html_document_free(doc);
 
     // A pair inside a template's contents is in the tree those contents are
@@ -657,6 +668,7 @@ static void t_form_owners(void)
           "a pair moved into a template's contents together stays tied");
     check(os64_html_insert(doc, x, m, NULL) == OS64_HTML_OK && q->form_owner == f && d->records == 1,
           "moving the template leaves a pair in its contents tied");
+    os64_html_hold(doc, x);
     check(os64_html_remove(doc, x) == OS64_HTML_OK && q->form_owner == f && d->records == 1,
           "and so does removing what holds the template");
     HNode *outer = os64_html_clone(doc, m, false, NULL);
@@ -665,6 +677,7 @@ static void t_form_owners(void)
     check(os64_html_insert(doc, doc->body, f, NULL) == OS64_HTML_OK && !q->form_owner && d->records == 0,
           "the form leaving the contents parts them");
     check(links_ok(d, doc->document, 0) + links_ok(d, outer, 0) == d->records, "records after the template cases");
+    os64_html_release(doc, x);
     os64_html_document_free(doc);
 
     // An ordinary nested control: the record is the ancestor, and a move
@@ -1196,6 +1209,9 @@ struct R {
     R *contents, *host;     // a template's fragment, and the fragment's template
     R *owner;               // the form a control is tied to
     HNode *real;
+    unsigned holds;
+    bool candidate, deferred;
+    uint64_t retired_at;
 };
 static R **all;
 static int nall, capall;
@@ -1434,7 +1450,7 @@ static void r_part(R *moved)
 {
     for (int i = 0; i < nall; i++) {
         R *control = all[i];
-        if (control->owner && r_inside(control, moved) != r_inside(control->owner, moved) &&
+        if (control->real && control->owner && r_inside(control, moved) != r_inside(control->owner, moved) &&
             (r_root(control) == moved || r_root(control->owner) == moved))
             control->owner = NULL;
     }
@@ -1443,11 +1459,13 @@ static int r_tied(void)
 {
     int tied = 0;
     for (int i = 0; i < nall; i++)
-        tied += all[i]->owner != NULL;
+        tied += all[i]->real && all[i]->owner != NULL;
     return tied;
 }
 static void r_move(R *parent, R *node, R *before)
 {
+    node->candidate = false;
+    node->retired_at = 0;
     if (node->parent) {
         r_take(node);
         r_part(node);
@@ -1521,10 +1539,7 @@ static void r_compare(os64_html_document_t *doc, R *document, unsigned step, con
     for (int i = 0; i < nall && checks_failed == bad; i++) {
         const R *r = all[i];
         const HNode *n = r->real;
-        if (!n) {
-            check(false, "step %u (%s): a model node with no real node", step, did);
-            break;
-        }
+        if (!n) continue;
         bool same = (int)n->kind == r->kind && (r->kind != OS64_HTML_ELEMENT || (int)n->ns == r->ns);
         same = same && (r->name ? n->name && strcmp(n->name, r->name) == 0 : true);
         if (r->kind == OS64_HTML_TEXT || r->kind == OS64_HTML_COMMENT)
@@ -1546,7 +1561,7 @@ static void r_compare(os64_html_document_t *doc, R *document, unsigned step, con
         same = same && a == NULL;
         if (!same) {
             char *got = spelled(n);
-            check(false, "step %u (%s): node %d differs from the model; real is %s", step, did, i, got);
+            check(false, "step %u (%s): node %d kind=%d candidate=%d deferred=%d stamp=%llu holds=%u parent=%p host=%p differs from model; real is %s", step, did, i, r->kind, r->candidate, r->deferred, (unsigned long long)r->retired_at, r->holds, (void *)r->parent, (void *)r->host, got);
             free(got);
         }
     }
@@ -1571,11 +1586,11 @@ static void r_compare(os64_html_document_t *doc, R *document, unsigned step, con
               doc->body == (body ? body->real : NULL),
           "step %u (%s): the landmarks", step, did);
     for (int i = 0; i < nall; i++)
-        if (!all[i]->parent && !all[i]->host)
+        if (all[i]->real && !all[i]->parent && !all[i]->host)
             (void)links_ok(d, all[i]->real, (size_t)r_depth(all[i]));
 }
 
-// What a snapshot borrowed: every string in the tree when it was taken.
+// Strings a snapshot borrowed from nodes available when it was taken.
 typedef struct {
     const char *at;
     char *copy;
@@ -1592,12 +1607,14 @@ static void borrow(Snapshot *s, const char *at)
     s->items = realloc(s->items, (s->n + 1) * sizeof(*s->items));
     s->items[s->n++] = (Borrowed){at, strdup(at)};
 }
+static bool r_available(const R *r);
 static void snapshot_take(os64_html_document_t *doc, Snapshot *s)
 {
     s->pin = os64_html_pin(doc);
     s->items = NULL;
     s->n = 0;
     for (int i = 0; i < nall; i++) {
+        if (!r_available(all[i])) continue;
         const HNode *n = all[i]->real;
         borrow(s, n->name);
         borrow(s, n->text);
@@ -1633,6 +1650,55 @@ static uint32_t pick(uint32_t n)
     rng ^= rng << 5;
     return rng % n;
 }
+// Reclamation decisions use model ownership and holds, independently of
+// libhtml's metadata and live-node registry. A pin-only retired unit is no
+// longer offered to the operation picker; its counters remain until unpin.
+static bool r_held(const R *r)
+{
+    if (r->holds) return true;
+    if (r->contents && r_held(r->contents)) return true;
+    for (int i = 0; i < r->nkids; i++) if (r_held(r->kids[i])) return true;
+    return false;
+}
+static void r_forget(R *r)
+{
+    if (r->contents) r_forget(r->contents);
+    for (int i = 0; i < r->nkids; i++) r_forget(r->kids[i]);
+    ties[tie_slot(r->real)].r = NULL;
+    r->real = NULL;
+}
+static bool r_available(const R *r)
+{
+    if (!r->real) return false;
+    for (const R *a = r; a; a = a->parent ? a->parent : a->host)
+        if (a->retired_at) return false;
+    return true;
+}
+static R *r_pick(void)
+{
+    R *r;
+    do r = all[pick((uint32_t)nall)]; while (!r_available(r));
+    return r;
+}
+static size_t r_live(void)
+{
+    size_t n = 0;
+    for (int i = 0; i < nall; i++) n += all[i]->real != NULL;
+    return n;
+}
+static void r_collect(Snapshot *snaps, size_t nsnaps, uint64_t version, const uint64_t *pin_versions)
+{
+    for (int i = 0; i < nall; i++) {
+        R *r = all[i];
+        if (!r->real || !r->candidate || r->parent || r->host || r_held(r)) continue;
+        if (!r->retired_at) r->retired_at = version + (r->deferred ? 1 : 0);
+        bool protected = false;
+        for (size_t j = 0; j < nsnaps; j++)
+            protected |= snaps[j].pin && pin_versions[j] < r->retired_at;
+        if (!protected) r_forget(r);
+    }
+}
+static size_t oracle_success[14][2], oracle_freed[14];
 static void t_random(const char *markup, uint32_t seed, unsigned steps, size_t max_depth)
 {
     static const char *const names[] = {"div",  "span", "p",      "b",     "form",   "input", "select",
@@ -1650,25 +1716,29 @@ static void t_random(const char *markup, uint32_t seed, unsigned steps, size_t m
     r_compare(doc, document, 0, "import");
     rng = seed;
     Snapshot snaps[3] = {{0}};
+    uint64_t pin_versions[3] = {0};
+    size_t coverage[14][2] = {{0}}, reclaimed[14] = {0};
     size_t refused = 0, done = 0, by_name[11] = {0};
     for (unsigned step = 1; step <= steps && !checks_failed; step++) {
-        R *x = all[pick((uint32_t)nall)], *y = all[pick((uint32_t)nall)];
+        R *x = r_pick(), *y = r_pick();
         // Under a low limit, lean towards deep parents: left to chance a
         // random tree stays too shallow to meet the limit at all.
         for (int tries = 0; max_depth < 8 && tries < 6; tries++) {
-            R *other = all[pick((uint32_t)nall)];
+            R *other = r_pick();
             if (r_depth(other) > r_depth(y))
                 y = other;
         }
-        R *z = pick(3) ? NULL : all[pick((uint32_t)nall)];
+        R *z = pick(3) ? NULL : r_pick();
         if (z == NULL && y->nkids && pick(2))
             z = y->kids[pick((uint32_t)y->nkids)];
         char did[64];
         int64_t want = OS64_HTML_OK, got = OS64_HTML_OK;
         uint64_t version = os64_html_version(doc);
         bool changes = true;
-        uint32_t what_to_do = pick(12);
-        if (nall > 1500 && (what_to_do == 9 || what_to_do == 10))
+        uint32_t what_to_do = pick(14);
+        size_t owned_before = r_live();
+        bool held_before = r_held(x);
+        if (r_live() > 1500 && (what_to_do == 9 || what_to_do == 10))
             what_to_do = 4;         // the walk has made enough nodes: take one out instead
         switch (what_to_do) {
         case 0:
@@ -1683,6 +1753,7 @@ static void t_random(const char *markup, uint32_t seed, unsigned steps, size_t m
                 R *was_under = x->parent;
                 int was_at = was_under ? r_index(was_under, x) : -1, tied = r_tied();
                 bool brought = x->kind != OS64_HTML_FRAGMENT || x->nkids > 0;
+                if (x->kind == OS64_HTML_FRAGMENT) { x->candidate = true; x->deferred = x->holds != 0 || !x->nkids; }
                 r_insert(y, x, z);
                 changes = brought && (x->kind == OS64_HTML_FRAGMENT || x->parent != was_under ||
                                       r_index(x->parent, x) != was_at || r_tied() != tied);
@@ -1699,6 +1770,8 @@ static void t_random(const char *markup, uint32_t seed, unsigned steps, size_t m
                     int xat = r_index(y, x);
                     before = xat + 1 < y->nkids ? y->kids[xat + 1] : NULL;
                 }
+                z->candidate = true; z->deferred = r_held(z);
+                if (x->kind == OS64_HTML_FRAGMENT) { x->candidate = true; x->deferred = x->holds != 0; }
                 r_take(z);
                 r_part(z);
                 r_insert(y, x, before);
@@ -1712,6 +1785,7 @@ static void t_random(const char *markup, uint32_t seed, unsigned steps, size_t m
             changes = x->parent != NULL;
             got = os64_html_remove(doc, x->real);
             if (!want && x->parent) {
+                x->candidate = true; x->deferred = r_held(x);
                 r_take(x);
                 r_part(x);
             }
@@ -1818,6 +1892,31 @@ static void t_random(const char *markup, uint32_t seed, unsigned steps, size_t m
                 want = OS64_HTML_NO_MEMORY;
             break;
         }
+        case 12: {
+            snprintf(did, sizeof(did), "hold/release");
+            changes = false;
+            if (x->holds && pick(2)) {
+                x->holds--;
+                os64_html_release(doc, x->real);
+            } else {
+                x->holds++;
+                os64_html_hold(doc, x->real);
+            }
+            break;
+        }
+        case 13: {
+            snprintf(did, sizeof(did), "parse_fragment");
+            changes = false;
+            const char *payload = "<div><input form=f><template><span>x</span></template></div>";
+            HNode *real = os64_html_parse_fragment(doc, doc->body ? doc->body : doc->html,
+                                                   payload, strlen(payload), false, &got);
+            if (real) {
+                int start = nall;
+                r_import(real);
+                for (int i = start; i < nall; i++) all[i]->owner = r_of(all[i]->real->form_owner);
+            } else want = got;
+            break;
+        }
         default: {  // take a snapshot, or let one go
             snprintf(did, sizeof(did), "pin");
             changes = false;
@@ -1825,8 +1924,10 @@ static void t_random(const char *markup, uint32_t seed, unsigned steps, size_t m
             if (s->pin) {
                 snapshot_check(s, step);
                 snapshot_drop(doc, s);
-            } else
+            } else {
+                pin_versions[s - snaps] = os64_html_version(doc);
                 snapshot_take(doc, s);
+            }
             break;
         }
         }
@@ -1840,6 +1941,16 @@ static void t_random(const char *markup, uint32_t seed, unsigned steps, size_t m
             done++;
         check(got || !changes ? os64_html_version(doc) == version : os64_html_version(doc) > version,
               "step %u (%s): the version %s", step, did, got || !changes ? "moved" : "stood still");
+        coverage[what_to_do][held_before]++;
+        if (!got) oracle_success[what_to_do][held_before]++;
+        r_collect(snaps, H_ARRAY(snaps), os64_html_version(doc), pin_versions);
+        size_t now_owned = r_live();
+        if (now_owned < owned_before) {
+            reclaimed[what_to_do] += owned_before - now_owned;
+            oracle_freed[what_to_do] += owned_before - now_owned;
+        }
+        check(doc->node_count == now_owned, "step %u (%s): model owns %zu nodes, document counts %zu",
+              step, did, now_owned, doc->node_count);
         r_compare(doc, document, step, did);
         bool pinned = false;
         for (size_t i = 0; i < H_ARRAY(snaps); i++)
@@ -1855,18 +1966,32 @@ static void t_random(const char *markup, uint32_t seed, unsigned steps, size_t m
             snapshot_check(&snaps[i], steps);
             snapshot_drop(doc, &snaps[i]);
         }
+    r_collect(snaps, H_ARRAY(snaps), os64_html_version(doc), pin_versions);
+    for (int i = 0; i < nall; i++) {
+        R *r = all[i];
+        while (r->real && r->holds) {
+            r->holds--;
+            os64_html_release(doc, r->real);
+            r_collect(snaps, H_ARRAY(snaps), os64_html_version(doc), pin_versions);
+        }
+    }
+    check(doc->node_count == r_live(), "random walk: model node count after releasing borrowers");
     check(os64_html_retired_bytes(doc) == 0, "random walk: nothing retired once every pin is gone");
+    printf("D6 oracle coverage seed=0x%x:", seed);
+    for (unsigned i = 0; i < H_ARRAY(coverage); i++)
+        printf(" op%u=%zu/%zu freed=%zu", i, coverage[i][0], coverage[i][1], reclaimed[i]);
+    putchar('\n');
     printf("Random walk seed=0x%x: %u steps, %zu done, %zu refused (hierarchy %zu, not found %zu, root %zu, "
-           "too deep %zu, bad text %zu, bad argument %zu), %d nodes, version %llu\n",
+           "too deep %zu, bad text %zu, bad argument %zu), %zu nodes, version %llu\n",
            seed, steps, done, refused, by_name[6], by_name[7], by_name[9], by_name[4], by_name[8], by_name[10],
-           nall, (unsigned long long)os64_html_version(doc));
+           r_live(), (unsigned long long)os64_html_version(doc));
     r_free_all();
     os64_html_document_free(doc);
     check(live == 0, "random walk freed");
 }
 
-// Count ownership rather than connectivity: detached nodes can be inserted
-// later, and fragment publication transfers the count with its node ledger.
+// Count allocated ownership rather than connectivity: held detached nodes
+// can be inserted later, and fragment publication transfers its owned count.
 static void t_form_input_count(void)
 {
     const char *markup="<div id=host></div><input id=a form=missing><input id=plain>"
@@ -1904,6 +2029,7 @@ static void t_form_input_count(void)
     check(copy&&os64_html_form_input_count(doc)==4,"form count: detached shallow clone");
     check(os64_html_clone(doc,t,true,&why)&&os64_html_form_input_count(doc)==5,
           "form count: deep template clone");
+    os64_html_hold(doc,copy);
     check(os64_html_insert(doc,host,copy,NULL)==0&&os64_html_remove(doc,copy)==0&&
           os64_html_form_input_count(doc)==5,"form count: detach does not destroy ownership");
     os64_html_document_t *other=parse("<p>foreign clone target</p>");
@@ -1913,6 +2039,7 @@ static void t_form_input_count(void)
     const char *fragment="<input form=f><input><div>fragment</div>";
     check(os64_html_parse_fragment(doc,host,fragment,strlen(fragment),false,&why)&&
           os64_html_form_input_count(doc)==6,"form count: published fragment count");
+    os64_html_release(doc,copy);
     os64_html_document_free(doc);
     check(live==0,"form count: fixture teardown");
 
@@ -1942,25 +2069,487 @@ static void t_form_input_count(void)
     }
 }
 
+// The unheld churn workload drops pointers to replaced units.
+// A section, 49 elements with text children and one comment total 100 nodes.
+static char *churn_markup(void)
+{
+    char *s = calloc(4096, 1);
+    strcat(s, "<section>");
+    for (unsigned i = 0; i < 49; i++) strcat(s, "<i class=x>payload</i>");
+    strcat(s, "<!--tail--></section>");
+    return s;
+}
+static void t_reclaim_churn(unsigned cycles, unsigned mode)
+{
+    char *markup = churn_markup();
+    os64_html_options_t opt = os64_html_options_default();
+    opt.max_arena_bytes = 64u * 1024u * 1024u;
+    os64_html_document_t *doc = parse_with("<body>", &opt);
+    size_t base_nodes = doc->node_count, flat_bytes = 0, flat_nodes = 0;
+    HNode *current = NULL;
+    HNode **held = mode == 1 ? calloc(cycles + 1, sizeof(*held)) : NULL;
+    size_t nheld = 0;
+    os64_html_pin_t pin = mode == 2 ? os64_html_pin(doc) : 0;
+    unsigned done = 0;
+    int64_t why = 0;
+    for (unsigned i = 1; i <= cycles; i++) {
+        HNode *fragment = os64_html_parse_fragment(doc, doc->body, markup, strlen(markup), false, &why);
+        if (!fragment) break;
+        HNode *next = fragment->first_child;
+        if (mode == 1) {
+            held[nheld] = next->first_child->first_child;
+            os64_html_hold(doc, held[nheld++]);
+        }
+        int64_t status = current ? os64_html_replace(doc, doc->body, fragment, current)
+                                 : os64_html_insert(doc, doc->body, fragment, NULL);
+        check(!status, "churn mode %u step %u insertion: %s", mode, i, os64_html_status_name(status));
+        if (status) break;
+        current = next;
+        done = i;
+        if (!mode && i % 1000 == 0) {
+            if (!flat_bytes) { flat_bytes = doc->arena_bytes; flat_nodes = doc->node_count; }
+            check(doc->arena_bytes == flat_bytes && doc->node_count == flat_nodes,
+                  "churn step %u: bytes %zu/%zu nodes %zu/%zu", i, doc->arena_bytes, flat_bytes,
+                  doc->node_count, flat_nodes);
+            check(doc->node_count == base_nodes + 100, "churn step %u: exactly 100 live payload nodes", i);
+        }
+    }
+    if (!mode) check(done == cycles, "churn: completed %u/%u replacements (%s)", done, cycles,
+                     os64_html_status_name(why));
+    else {
+        check(done < cycles && why == OS64_HTML_ARENA_EXHAUSTED,
+              "retained churn mode %u: budget refuses by name after %u steps (%s)", mode, done,
+              os64_html_status_name(why));
+        check(doc->node_count >= base_nodes + (size_t)done * 100,
+              "retained churn mode %u keeps removed payloads", mode);
+        if (pin) os64_html_unpin(doc, pin);
+        for (size_t i = 0; i < nheld; i++) os64_html_release(doc, held[i]);
+        check(doc->node_count == base_nodes + 100 && !os64_html_retired_bytes(doc),
+              "retained churn mode %u: releasing borrowers frees obsolete units", mode);
+    }
+    printf("D6 churn mode=%u steps=%u bytes=%zu nodes=%zu first_sample=%zu/%zu\n", mode, done,
+           doc->arena_bytes, doc->node_count, flat_bytes, flat_nodes);
+    os64_html_document_free(doc); free(held); free(markup);
+    check(live == 0, "churn mode %u teardown", mode);
+}
+static void t_reclaim_fatal(void)
+{
+    os64_html_document_t *doc = parse("<body><div>");
+    os64_html_document_t *other = parse("<body>");
+    HNode *node = doc->body->first_child;
+    for (unsigned mode = 0; mode < 8; mode++) {
+        death_code = 0; death_said[0] = 0; expecting_death = true;
+        if (!setjmp(death_landing)) {
+            if (mode == 0) os64_html_release(doc, node);
+            if (mode == 1) os64_html_hold(other, node);
+            if (mode == 2) os64_html_release(NULL, node);
+            if (mode == 3) os64_html_hold(doc, NULL);
+            if (mode == 4) { h_meta(node)->holds = UINT32_MAX; os64_html_hold(doc, node); }
+            if (mode == 5) { os64_html_hold(doc, node); os64_html_document_free(doc); }
+            if (mode == 6) { os64_html_hold(doc, node); os64_html_remove(doc, node); os64_html_document_free(doc); }
+            if (mode == 7) { ((HDoc *)doc)->held = SIZE_MAX; os64_html_hold(doc, node); }
+            check(false, "fatal lifetime mode %u returned", mode);
+        } else check(death_code == OS64_HTML_FATAL_EXIT && strstr(death_said, "html"),
+                     "fatal lifetime mode %u names HTML and exits", mode);
+        expecting_death = false;
+        if (mode == 5 || mode == 6) os64_html_release(doc, node);
+        else h_meta(node)->holds = 0;
+        if (mode == 6) node = os64_html_create_element(doc, OS64_HTML_NS_HTML, "div", NULL);
+        if (mode == 7) ((HDoc *)doc)->held = 0;
+    }
+    os64_html_document_free(other); os64_html_document_free(doc);
+    check(live == 0, "fatal lifetime cases teardown");
+}
+static size_t reclaim_tree_nodes(const HNode *node)
+{
+    size_t count = 1;
+    if (node->template_contents) count += reclaim_tree_nodes(node->template_contents);
+    for (const HNode *child = node->first_child; child; child = child->next)
+        count += reclaim_tree_nodes(child);
+    return count;
+}
+static void t_reclaim_parser(void)
+{
+    for (unsigned finish = 0; finish < 3; finish++) {
+        os64_html_options_t opt = os64_html_options_default();
+        opt.charset = "utf-8"; opt.scripting = true;
+        os64_html_parser_t *parser = os64_html_parser_new(&opt);
+        char input[1400]; memset(input, ' ', 1024);
+        strcpy(input + 1024, "<body><div id=open><b>text<script>stop</script><i>tail</i></b></div><p>end</p>");
+        check(os64_html_parser_feed(parser, input, strlen(input)) == OS64_HTML_SCRIPT,
+              "parser mode %u stops", finish);
+        os64_html_document_t *doc = os64_html_parser_document(parser);
+        HNode *open = id_in(doc, "open"), *script = os64_html_parser_script(parser);
+        size_t nodes = doc->node_count;
+        check(open && script && !os64_html_remove(doc, open) && doc->node_count == nodes,
+              "parser's references protect entire removed open subtree");
+        check(script == os64_html_parser_script(parser) && !strcmp(script->first_child->text, "stop"),
+              "stopped script remains readable without external hold");
+        if (finish == 0) {
+            check(os64_html_parser_resume(parser) == OS64_HTML_OK, "resume parses remaining held input safely");
+            doc = os64_html_parser_finish(parser);
+        } else if (finish == 1) doc = os64_html_parser_finish(parser);
+        else doc = os64_html_parser_abandon(parser);
+        check(doc && doc->node_count == reclaim_tree_nodes(doc->document),
+              "finish/abandon releases parser-held detached unit with exact reachable node count");
+        os64_html_document_free(doc);
+        check(live == 0, "parser mode %u teardown", finish);
+    }
+}
+static void t_reclaim_parser_nonstack_refs(void)
+{
+    for (unsigned which = 0; which < 2; which++) {
+        os64_html_options_t opt = os64_html_options_default();
+        opt.charset = "utf-8"; opt.scripting = true;
+        os64_html_parser_t *parser = os64_html_parser_new(&opt);
+        char input[1500]; memset(input, ' ', 1024);
+        strcpy(input + 1024, "<head><title>t</title></head><body><table><form id=f><tr><td><script>stop</script></table><p>tail</p>");
+        check(os64_html_parser_feed(parser, input, strlen(input)) == OS64_HTML_SCRIPT, "nonstack reference stop");
+        os64_html_document_t *doc = os64_html_parser_document(parser);
+        HNode *node = which ? id_in(doc, "f") : doc->head;
+        bool on_stack = false;
+        for (size_t i = 0; i < parser->stack.n; i++) on_stack |= parser->stack.v[i] == node;
+        check(node && !on_stack && node == (which ? parser->form : parser->head),
+              "head/form reference is outside the open-element stack");
+        size_t nodes = doc->node_count;
+        check(!os64_html_remove(doc, node) && doc->node_count == nodes,
+              "parser's nonstack head/form reference protects removal");
+        check(!os64_html_parser_resume(parser), "nonstack reference resume");
+        doc = os64_html_parser_finish(parser);
+        check(doc->node_count == reclaim_tree_nodes(doc->document), "finish frees removed nonstack reference exactly");
+        os64_html_document_free(doc);
+        check(live == 0, "nonstack parser reference teardown");
+    }
+}
+static void t_reclaim_order(void)
+{
+    for (unsigned order = 0; order < 2; order++) {
+        os64_html_document_t *doc = parse("<body><div id=r><span id=k>x</span></div>");
+        HNode *root = id_in(doc, "r"), *kid = id_in(doc, "k");
+        size_t nodes = doc->node_count;
+        os64_html_hold(doc, root); os64_html_hold(doc, kid);
+        check(!os64_html_remove(doc, root), "release-order removal");
+        os64_html_release(doc, order ? kid : root);
+        check(doc->node_count == nodes, "ancestor/descendant order %u retains whole unit", order);
+        os64_html_release(doc, order ? root : kid);
+        check(doc->node_count == nodes - 3, "ancestor/descendant order %u last release reclaims", order);
+        os64_html_document_free(doc);
+    }
+    os64_html_document_t *doc = parse("<body><div id=r><span id=k>x</span></div>");
+    HNode *root = id_in(doc, "r"), *kid = id_in(doc, "k");
+    size_t nodes = doc->node_count;
+    os64_html_hold(doc, kid);
+    check(!os64_html_remove(doc, root) && !os64_html_insert(doc, doc->body, root, NULL),
+          "retained removed root reinserted");
+    os64_html_release(doc, kid);
+    check(doc->node_count == nodes && root->parent == doc->body && !strcmp(kid->first_child->text, "x"),
+          "reinsertion cancels obsolete retirement candidate");
+    os64_html_document_free(doc);
+    doc = parse("<body><div id=r><span id=k>x</span></div>");
+    root = id_in(doc, "r"); kid = id_in(doc, "k"); nodes = doc->node_count;
+    os64_html_hold(doc, kid);
+    check(!os64_html_remove(doc, root), "held subtree detached before snapshot");
+    os64_html_pin_t later = os64_html_pin(doc);
+    uint64_t version = os64_html_version(doc);
+    os64_html_release(doc, kid);
+    check(doc->node_count == nodes && os64_html_version(doc) == version &&
+              !strcmp(kid->first_child->text, "x"), "snapshot acquired while held protects last-release bytes");
+    os64_html_unpin(doc, later);
+    check(doc->node_count == nodes - 3, "unpin reclaims delayed retirement");
+    os64_html_document_free(doc);
+    // Pin-only retired roots can move beneath another retained candidate.
+    doc = parse("<body><div id=a><span>A</span></div><div id=b><span>B</span></div>");
+    HNode *a = id_in(doc, "a"), *b = id_in(doc, "b");
+    os64_html_pin_t old = os64_html_pin(doc);
+    nodes = doc->node_count;
+    check(!os64_html_remove(doc, a) && !os64_html_remove(doc, b), "two retired roots protected by old snapshot");
+    os64_html_hold(doc, a);
+    check(!os64_html_insert(doc, a, b, NULL), "retired root moved under another retained candidate");
+    os64_html_unpin(doc, old);
+    check(doc->node_count == nodes && b->parent == a, "outer hold preserves nested unit after unpin");
+    os64_html_release(doc, a);
+    check(doc->node_count == 4, "nested pending root canceled before whole outer unit freed");
+    os64_html_document_free(doc);
+    check(live == 0, "release order teardown");
+}
+/* Compare parser slot multiplicities with node counts independently of the
+ * library's reference helpers, including duplicate stack/formatting entries. */
+static void parser_refs_match(os64_html_parser_t *p)
+{
+    for (HNode *n = p->d->live_nodes; n; n = h_meta(n)->live_next) {
+        size_t refs = (n == &p->d->root) + (n == &p->d->html);
+        refs += (n == p->head) + (n == p->script);
+        refs += !p->form_borrowed && n == p->form;
+        for (size_t i = 0; i < p->stack.n; i++) refs += p->stack.v[i] == n;
+        for (size_t i = 0; i < p->formatting.n; i++) refs += p->formatting.v[i] == n;
+        check(refs == h_meta(n)->parser_refs, "parser reference multiplicity %s: %zu/%u",
+              n->name ? n->name : "#text", refs, h_meta(n)->parser_refs);
+    }
+}
+static void t_reclaim_parser_slots(void)
+{
+    const char *cases[] = {
+        "<body><b><i>x</b>y<script>one</script></i><script>two</script>",
+        "<body><table><b><tr><td><i>x</b><script>one</script></table><script>two</script>",
+        "<body><template><form><b>x</form><script>one</script></template><script>two</script>",
+        "<body><form><div></form><p><b><p>y<script>one</script></b><script>two</script>",
+    };
+    for (size_t i = 0; i < H_ARRAY(cases); i++) {
+        os64_html_options_t opt = os64_html_options_default(); opt.charset = "utf-8"; opt.scripting = true;
+        os64_html_parser_t *p = os64_html_parser_new(&opt);
+        char input[1536]; memset(input, ' ', 1024); strcpy(input + 1024, cases[i]);
+        int64_t status = os64_html_parser_feed(p, input, strlen(input));
+        unsigned stops = 0;
+        while (status == OS64_HTML_SCRIPT) {
+            parser_refs_match(p); stops++;
+            HNode *script = os64_html_parser_script(p);
+            check(!os64_html_remove(&p->d->pub, script) && !script->parent &&
+                  h_meta(script)->parser_refs && script->first_child && script->first_child->text,
+                  "script field holds removed script after it left the open stack");
+            parser_refs_match(p);
+            status = os64_html_parser_resume(p);
+        }
+        check(!status && stops, "parser slots fixture %zu resumes", i);
+        parser_refs_match(p);
+        os64_html_document_t *doc = os64_html_parser_finish(p);
+        for (HNode *n = ((HDoc *)doc)->live_nodes; n; n = h_meta(n)->live_next)
+            check(!h_meta(n)->parser_refs, "finish balances parser slots");
+        check(!((HDoc *)doc)->pending_units, "finish collects removed scripts");
+        os64_html_document_free(doc);
+        check(!live, "parser slots fixture %zu teardown", i);
+    }
+}
+#ifdef HTML_RECLAIM_TEST
+static double reclaim_time(void)
+{
+    struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t);
+    return t.tv_sec + t.tv_nsec / 1e9;
+}
+static size_t reclaim_cost(unsigned count, bool stopped)
+{
+    const char *unit = "<div><span>x</span></div>";
+    size_t len = strlen(unit), size = 6 + count * len;
+    char *markup = malloc(size + 32);
+    memcpy(markup, "<body>", 6);
+    for (unsigned i = 0; i < count; i++) memcpy(markup + 6 + i * len, unit, len);
+    strcpy(markup + size, stopped ? "<script>stop</script>" : "");
+    os64_html_options_t opt = os64_html_options_default(); opt.charset = "utf-8"; opt.scripting = stopped;
+    os64_html_parser_t *parser = stopped ? os64_html_parser_new(&opt) : NULL;
+    if (stopped) check(os64_html_parser_feed(parser, markup, strlen(markup)) == OS64_HTML_SCRIPT,
+                       "cost probe stopped parser");
+    os64_html_document_t *doc = stopped ? os64_html_parser_document(parser) : parse_with(markup, &opt);
+    HNode **held = calloc(count, sizeof(*held));
+    HNode *n = doc->body->first_child;
+    double start = reclaim_time();
+    for (unsigned i = 0; i < count; i++) {
+        HNode *next = n->next; held[i] = n->first_child;
+        os64_html_hold(doc, held[i]);
+        check(!os64_html_remove(doc, n), "cost probe detach %u", i);
+        check(h_meta(n)->unit_holds == 1, "detachment sums the named unit's holders");
+        n = next;
+    }
+    double detach_time = reclaim_time() - start;
+    check(((HDoc *)doc)->pending_units == count && !((HDoc *)doc)->pending_nodes &&
+          !((HDoc *)doc)->waiting_nodes, "held units require no collection queue scan");
+    h_reclaim_visits = 0;
+    start = reclaim_time();
+    for (unsigned i = 0; i < 10000; i++) {
+        HNode *fresh = os64_html_create_element(doc, OS64_HTML_NS_HTML, "p", NULL);
+        check(fresh && !os64_html_insert(doc, doc->body, fresh, NULL) && !os64_html_remove(doc, fresh),
+              "cost probe unrelated edit");
+    }
+    double edit_time = reclaim_time() - start;
+    size_t visits = h_reclaim_visits;
+    start = reclaim_time();
+    for (unsigned i = 0; i < count; i++) os64_html_release(doc, held[i]);
+    double release_time = reclaim_time() - start;
+    check(!((HDoc *)doc)->held && !((HDoc *)doc)->pending_units, "cost probe releases every unit");
+    printf("D6 cost stopped=%u held=%u detach=%.3fms edit=%.3fus release=%.3fms visits=%zu\n",
+           stopped, count, detach_time * 1000, edit_time * 1e6 / 10000, release_time * 1000, visits);
+    if (stopped) { parser_refs_match(parser); doc = os64_html_parser_finish(parser); }
+    check(doc->node_count == reclaim_tree_nodes(doc->document), "cost probe exact reachable nodes");
+    os64_html_document_free(doc); free(held); free(markup);
+    check(!live, "cost probe teardown");
+    return visits;
+}
+static void t_reclaim_cost(void)
+{
+    for (unsigned stopped = 0; stopped < 2; stopped++) {
+        size_t small = reclaim_cost(2000, stopped), large = reclaim_cost(10000, stopped);
+        check(small == large && large < 100000, "unrelated edit work independent of held unit/page count");
+    }
+}
+#endif
+static void t_reclaim_empty(void)
+{
+    os64_html_document_t *doc = parse("<body>");
+    size_t nodes = doc->node_count, bytes = doc->arena_bytes;
+    uint64_t version = os64_html_version(doc);
+    for (unsigned i = 0; i < 1000; i++) {
+        HNode *fragment = os64_html_parse_fragment(doc, doc->body, "", 0, false, NULL);
+        check(fragment && !os64_html_insert(doc, doc->body, fragment, NULL), "empty fragment consumed %u", i);
+        check(doc->node_count == nodes && doc->arena_bytes == bytes && os64_html_version(doc) == version,
+              "empty fragment flat counters and unchanged tree version %u", i);
+    }
+    HNode *fragment = os64_html_parse_fragment(doc, doc->body, "", 0, false, NULL);
+    os64_html_hold(doc, fragment);
+    check(!os64_html_insert(doc, doc->body, fragment, NULL) && doc->node_count == nodes + 1 &&
+              !fragment->first_child, "hold preserves consumed empty fragment");
+    os64_html_release(doc, fragment);
+    check(doc->node_count == nodes && doc->arena_bytes == bytes, "empty fragment final release restores counters");
+    fragment = os64_html_parse_fragment(doc, doc->body, "", 0, false, NULL);
+    os64_html_pin_t pin = os64_html_pin(doc);
+    check(!os64_html_insert(doc, doc->body, fragment, NULL) && doc->node_count == nodes + 1,
+          "unchanged-version empty consumption protects earlier pin");
+    os64_html_unpin(doc, pin);
+    check(doc->node_count == nodes && doc->arena_bytes == bytes, "empty fragment unpin restores counters");
+    os64_html_document_free(doc);
+    check(live == 0, "empty fragments teardown");
+}
+static void t_reclaim_allocations(void)
+{
+    for (unsigned operation = 0; operation < 3; operation++) {
+        for (unsigned retained = 0; retained < 3; retained++) {
+            os64_html_document_t *doc = parse("<body>");
+            const char *payload = "<form><input><template><input form=f></template><span>text</span></form>";
+            HNode *fragment = os64_html_parse_fragment(doc, doc->body, payload, strlen(payload), false, NULL);
+            HNode *unit = fragment->first_child;
+            check(!os64_html_insert(doc, doc->body, fragment, NULL), "detach allocation fixture inserted");
+            if (retained == 1) os64_html_hold(doc, unit->last_child->first_child);
+            os64_html_pin_t pin = retained == 2 ? os64_html_pin(doc) : 0;
+            HNode *replacement = os64_html_create_element(doc, OS64_HTML_NS_HTML, "div", NULL);
+            HNode *incoming = os64_html_parse_fragment(doc, doc->body, "<p>next</p>", 11, false, NULL);
+            size_t before = allocations;
+            uint64_t version = os64_html_version(doc);
+            fail_at = allocations + 1;
+            int64_t status = operation == 0 ? os64_html_remove(doc, unit)
+                           : operation == 1 ? os64_html_replace(doc, doc->body, replacement, unit)
+                                            : os64_html_replace(doc, doc->body, incoming, unit);
+            fail_at = 0;
+            check(!status && allocations == before && os64_html_version(doc) == version + 1,
+                  "detach operation %u retention %u succeeds without allocation", operation, retained);
+            if (retained == 1) os64_html_release(doc, unit->last_child->first_child);
+            if (pin) os64_html_unpin(doc, pin);
+            os64_html_document_free(doc);
+            check(live == 0, "detach allocation operation %u retention %u teardown", operation, retained);
+        }
+    }
+}
+static void t_reclaim_rules(void)
+{
+    os64_html_document_t *doc = parse("<body><div id=r><span id=k>text</span></div>");
+    HNode *r = id_in(doc, "r"), *k = id_in(doc, "k");
+    size_t nodes = doc->node_count, allocs = allocations;
+    os64_html_hold(doc, k); os64_html_hold(doc, k);
+    fail_at = allocations + 1;
+    check(!os64_html_remove(doc, r) && doc->node_count == nodes,
+          "held descendant protects entire removed subtree without allocation");
+    fail_at = 0;
+    check(allocations == allocs, "hold/remove allocate nothing");
+    os64_html_release(doc, k);
+    check(doc->node_count == nodes && !strcmp(k->first_child->text, "text"), "one of two holders remains");
+    os64_html_release(doc, k);
+    check(doc->node_count == nodes - 3, "last release reconsiders the whole removed unit");
+    os64_html_document_free(doc);
+
+    doc = parse("<body><template id=t><input form=f><template><b>x</b></template></template>");
+    HNode *t = id_in(doc, "t"), *contents = t->template_contents;
+    nodes = doc->node_count;
+    os64_html_hold(doc, contents);
+    check(!os64_html_remove(doc, t) && doc->node_count == nodes && os64_html_form_input_count(doc) == 1,
+          "held template fragment protects template and nested contents");
+    os64_html_release(doc, contents);
+    check(doc->node_count == 4 && os64_html_form_input_count(doc) == 0,
+          "template reclamation includes fragments and explicit inputs");
+    os64_html_document_free(doc);
+
+    doc = parse("<body>");
+    HNode *made = os64_html_create_element(doc, OS64_HTML_NS_HTML, "div", NULL);
+    nodes = doc->node_count;
+    os64_html_hold(doc, made); os64_html_release(doc, made);
+    check(doc->node_count == nodes, "never-inserted creation remains charged after release");
+    check(!os64_html_insert(doc, doc->body, made, NULL) && !os64_html_remove(doc, made), "creation removed");
+    HNode *reuse = os64_html_create_element(doc, OS64_HTML_NS_HTML, "span", NULL);
+    check(reuse == made, "next creation reuses reclaimed permanent node address");
+    check(!reuse->parent && !reuse->attrs && !reuse->first_child && !strcmp(reuse->name, "span"),
+          "reused node starts with clean public fields");
+    os64_html_document_free(doc);
+
+    doc = parse("<body>");
+    size_t empty_bytes = doc->arena_bytes;
+    const char *payload = "<form id=f><input><input form=f><template><input form=f></template>text</form>";
+    HNode *fragment = os64_html_parse_fragment(doc, doc->body, payload, strlen(payload), false, NULL);
+    r = fragment->first_child;
+    size_t baseline;
+    check(!os64_html_set_attr(doc, r, "private", "value", 5) && os64_html_attr(r, "id") &&
+              (*h_word(r) & (H_ATTRS_INLINE | H_ATTRS_PRIVATE)) == (H_ATTRS_INLINE | H_ATTRS_PRIVATE),
+          "packed original inline attribute and later private attributes coexist");
+    check(!os64_html_insert(doc, doc->body, fragment, NULL), "packed payload inserted");
+    check(((HDoc *)doc)->records > 0 && os64_html_form_input_count(doc) == 2, "packed payload owner/input counts");
+    os64_html_pin_t old = os64_html_pin(doc);
+    baseline = doc->arena_bytes;
+    nodes = doc->node_count;
+    check(!os64_html_remove(doc, r) && doc->node_count == nodes && doc->arena_bytes == baseline &&
+              os64_html_form_input_count(doc) == 2, "old pin protects payload, attributes, text and counts");
+    os64_html_pin_t fresh = os64_html_pin(doc);
+    os64_html_unpin(doc, old);
+    check(doc->node_count == 4 && os64_html_form_input_count(doc) == 0 && ((HDoc *)doc)->records == 0 &&
+              !os64_html_retired_bytes(doc) && doc->arena_bytes == empty_bytes,
+          "pin taken after retirement does not protect old units or owned payload bytes");
+    os64_html_unpin(doc, fresh);
+    os64_html_document_free(doc);
+    check(live == 0, "reclamation rules teardown");
+}
 int main(int argc, char **argv)
 {
+#ifdef HTML_RECLAIM_TEST
+    if (argc == 2 && !strcmp(argv[1], "--reclaim-cost")) {
+        t_reclaim_cost();
+        printf("html reclamation cost: %zu checks, %zu failed\n", checks_run, checks_failed);
+        return checks_failed ? 1 : 0;
+    }
+#endif
     if (argc == 2 && strcmp(argv[1], "--form-input-count") == 0) {
         t_form_input_count();
         printf("html form-input count: %zu checks, %zu failed\n", checks_run, checks_failed);
         return checks_failed ? 1 : 0;
     }
-    t_validity();
-    t_structure();
-    t_templates();
-    t_attributes();
-    t_text();
-    t_form_owners();
-    t_form_input_count();
-    t_depth();
-    t_deep();
-    t_pins();
-    t_documents();
-    t_out_of_memory();
+    if (argc == 2 && (!strcmp(argv[1], "--reclaim") || !strcmp(argv[1], "--reclaim-rules"))) {
+        t_reclaim_fatal();
+        t_reclaim_parser();
+        t_reclaim_parser_nonstack_refs();
+        t_reclaim_parser_slots();
+#ifdef HTML_RECLAIM_TEST
+        t_reclaim_cost();
+#endif
+        t_reclaim_order();
+        t_reclaim_empty();
+        t_reclaim_allocations();
+        t_reclaim_rules();
+        if (!strcmp(argv[1], "--reclaim-rules")) {
+            printf("html reclamation rules: %zu checks, %zu failed\n", checks_run, checks_failed);
+            return checks_failed ? 1 : 0;
+        }
+        t_reclaim_churn(216000, 0);
+        t_reclaim_churn(216000, 1);
+        t_reclaim_churn(216000, 2);
+        printf("html reclamation: %zu checks, %zu failed\n", checks_run, checks_failed);
+        return checks_failed ? 1 : 0;
+    }
+    if (!(argc == 2 && !strcmp(argv[1], "--random"))) {
+        t_validity();
+        t_structure();
+        t_templates();
+        t_attributes();
+        t_text();
+        t_form_owners();
+        t_form_input_count();
+        t_depth();
+        t_deep();
+        t_pins();
+        t_documents();
+        t_out_of_memory();
+    }
     static const char *const pages[] = {
         "<!doctype html><html><head><title>t</title></head><body><div id=a class=x><span>one</span></div>"
         "<p>two</p><!--c--></body></html>",
@@ -1976,6 +2565,14 @@ int main(int argc, char **argv)
     // A limit low enough for a random walk to keep running into it.
     for (uint32_t seed = 1; seed <= 4; seed++)
         t_random("<body><div><p>x</p></div>", 0x64d00100u + seed, 4000, 4);
+    for (unsigned held = 0; held < 2; held++) {
+        check(oracle_success[0][held] + oracle_success[1][held] + oracle_success[2][held] > 0,
+              "oracle: successful insert with held=%u input", held);
+        check(oracle_success[3][held] > 0 && oracle_success[4][held] > 0,
+              "oracle: successful replace/remove with held=%u input", held);
+    }
+    check(oracle_freed[0] + oracle_freed[1] + oracle_freed[2] > 0 && oracle_freed[3] > 0 &&
+              oracle_freed[4] > 0 && oracle_freed[11] > 0, "oracle: physical reclamation under insert/replace/remove/unpin");
     printf("html dom: %zu checks, %zu failed\n", checks_run, checks_failed);
     return checks_failed ? 1 : 0;
 }

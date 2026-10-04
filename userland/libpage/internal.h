@@ -124,7 +124,7 @@ struct os64_page {
     const os64_html_document_t *doc;
     os64_page_options_t opt;
     PArena arena;
-    bool incomplete, initial_ready;
+    bool incomplete, initial_ready, nodes_held;
     uint64_t version;
     os64_html_pin_t pin;
     os64_page_state_t *state;

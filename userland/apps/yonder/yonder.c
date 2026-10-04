@@ -440,6 +440,8 @@ static void page_clear(Page *p)
     os64_free(p->pic_slot);
     os64_free(p->pic_of);
     os64_free(p->bg_of);
+    for (int32_t i = 0; i < p->nbox_scrolls; i++)
+        os64_html_release(page_doc(p), p->box_scrolls[i].node);
     flow_free(p->tree);
     garb_cascade_free(p->cascade);
     sheets_free(p);
@@ -634,6 +636,7 @@ static void page_keep_box_scroll(Page *p, const os64_html_node_t *node, flow_poi
         p->box_scrolls = grown;
         p->cap_box_scrolls = cap;
     }
+    os64_html_hold(page_doc(p), node);
     p->box_scrolls[p->nbox_scrolls++] = (BoxScroll){node, at};
 }
 
@@ -657,6 +660,7 @@ typedef enum { FW_TEXT, FW_PASSWORD, FW_CHECK, FW_BUTTON, FW_LIST, FW_FILE } For
 typedef struct {
     FormKind kind;
     const os64_html_node_t *node;   // stable across model indices
+    const os64_html_document_t *document; // owns the widget's node hold
     char synced[512], model_text[512];
     size_t synced_len, model_text_len;
     bool presented;
@@ -2709,6 +2713,7 @@ static void widget_destroy(FormWidget *fw)
         w->cls->destroy(w);
     os64_ui_run_release(w->run);
     os64_ui_run_release(w->run_staged);
+    os64_html_release(fw->document, fw->node);
     os64_free(fw);
 }
 
@@ -2754,6 +2759,8 @@ static void forms_build(void)
             goto refused;
         }
         fw->node = c->node;
+        fw->document = page_doc(&g.page);
+        os64_html_hold(fw->document, fw->node);
         fw->kind = kind;
         switch (kind) {
         case FW_LIST:

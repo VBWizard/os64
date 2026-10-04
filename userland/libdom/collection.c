@@ -19,8 +19,8 @@ static bool matches(const DQuery *query, const os64_html_node_t *node)
         os64_strcmp(node->name, node->ns == OS64_HTML_NS_HTML ? query->folded : query->name) == 0;
 }
 
-/* Never replace an answer until its full successor fits. D6 must introduce
- * node holds for registry/query keys before it permits node reclamation. */
+/* Build and hold the full successor before releasing the previous answer:
+ * a live query can retain detached nodes until its next successful refresh. */
 static bool refresh(DQuery *query, JSContext *ctx)
 {
     if (!d_context(query->dom, ctx, OS64_JS_ABI_ID)) return false;
@@ -34,11 +34,17 @@ static bool refresh(DQuery *query, JSContext *ctx)
     if (count != 0 && nodes == NULL) goto quota;
     size_t index = 0;
     for (const os64_html_node_t *at = query->root->first_child; at != NULL; at = query_next(query, at))
-        if (matches(query, at)) nodes[index++] = at;
+        if (matches(query, at)) {
+            os64_html_hold(query->dom->document, at);
+            nodes[index++] = at;
+        }
     const os64_html_node_t **old = query->nodes;
+    size_t old_count = query->count;
     query->nodes = nodes;
     query->count = count;
     query->version = version;
+    for (size_t i = 0; i < old_count; i++)
+        os64_html_release(query->dom->document, old[i]);
     d_free(query->dom, old);
     return true;
 quota:
@@ -46,8 +52,11 @@ quota:
     return false;
 }
 
-static void query_free(os64_dom_t *dom, DQuery *query)
+void d_query_free(os64_dom_t *dom, DQuery *query)
 {
+    for (size_t i = 0; i < query->count; i++)
+        os64_html_release(dom->document, query->nodes[i]);
+    os64_html_release(dom->document, query->root);
     d_free(dom, query->nodes);
     d_free(dom, query->folded);
     d_free(dom, query->name);
@@ -62,6 +71,7 @@ JSValue d_collection(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *ro
     if (query == NULL) return d_error(ctx, "QuotaExceededError", "DOM query quota exceeded");
     query->dom = dom;
     query->root = root;
+    os64_html_hold(dom->document, root);
     query->descendants = descendants;
     query->elements = elements;
     if (name != NULL) {
@@ -69,7 +79,7 @@ JSValue d_collection(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *ro
         query->name = d_alloc(dom, size);
         query->folded = d_alloc(dom, size);
         if (query->name == NULL || query->folded == NULL) {
-            query_free(dom, query);
+            d_query_free(dom, query);
             return d_error(ctx, "QuotaExceededError", "DOM query-name quota exceeded");
         }
         os64_memcpy(query->name, name, size);
@@ -77,11 +87,11 @@ JSValue d_collection(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *ro
         d_fold(query->folded);
     }
     JSValue object = JS_NewObjectClass(ctx, dom->collection_class);
-    if (JS_IsException(object)) { query_free(dom, query); return object; }
+    if (JS_IsException(object)) { d_query_free(dom, query); return object; }
     /* Set opaque only after native registry storage exists; a failed registry
      * allocation frees the engine object without a dangling query pointer. */
     DValue *entry = d_retain(dom, ctx, object);
-    if (entry == NULL) { query_free(dom, query); return JS_EXCEPTION; }
+    if (entry == NULL) { d_query_free(dom, query); return JS_EXCEPTION; }
     JS_SetOpaque(object, query);
     query->entry = entry;
     query->next = dom->queries;

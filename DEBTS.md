@@ -379,7 +379,7 @@ how a worklist fills with things nobody intends to do.
 
 | Debt | Class | Size | Trigger | Where |
 |---|---|---|---|---|
-| **libhtml keeps a detached node until its document is freed.** A removed node is unlinked and stays charged to the document's arena, so a script that makes and drops nodes spends the budget and then gets `OS64_HTML_ARENA_EXHAUSTED` as an exception. Reclaiming an unheld subtree is D6: wrappers, parser references, model node references and D3's persistent state keys (including options and default caches) need holds and paired releases. Model pins protect snapshot bytes; state itself takes no pin. D2b discards temporary fragment scaffolding and packs returned names/attributes into individually owned node blocks; D6 must reclaim those blocks, text buffers and later private attribute records as well as reuse permanent-chunk nodes for its flat-arena churn proof | Capacity | M | before scripting is something a person is told to turn on (DOM.md § Wrappers) | `userland/libhtml/dom.c`, `fragment.c`; DOM_BRIEFS.md § D6; DOM.md § Slices, D6 |
+| **Node collection beyond D6.** Unheld removed subtrees are reclaimed; binding wrappers and persistent page-state records retain strong holds until teardown. Created/cloned/failed-staged nodes never inserted remain charged. Permanent parser/creation names and original attributes stay in document chunks even when their node bodies are recycled. A weak wrapper table and collector-driven reachability require a separate design; D6's flat packed-fragment churn proof does not cover arbitrary create-and-drop workloads | Capacity | M | a page needs sustained create-and-drop or wrapper collection | `userland/libhtml/dom.c`, `core.c`; DOM.md § D6, as built and § Booked |
 
 ## husk (the shell, ongoing)
 

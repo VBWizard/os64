@@ -164,9 +164,10 @@ ASan-instrumented target-profile engine, with sanitized bindings/tree/state.
 library proofs; Yonder repaint, script scheduling and navigation acceptance
 remain D5b. Result counts are recorded in DOM.md after the final source freeze.
 
-D6 must hold wrapper identity keys and query roots during reclamation, and
-release those holds at drain. Cached query answers need paired holds or a
-proved version check before dereferencing an answer after reclamation.
+D6 holds wrapper identity keys, query roots and cached query answers. A
+successful refresh holds its complete successor before releasing the old
+answer; refusal preserves the old holds. Native holds survive drain and
+engine finalizers and are released by `os64_dom_free` after engine destruction.
 Copied JavaScript strings retain no native snapshot bytes. A reporting/reclaiming runtime destroy remains a separate reviewed
 extension before scripting is enabled for ordinary browsing; D5a retains
 libjs's R0 fatal invariant check and requires a clean registry teardown.

@@ -1,8 +1,8 @@
 # DOM.md — one tree, and a script that may change it
 
 *Written 2026-10-01 by Fable. This is packet D0 of
-[JAVASCRIPT_TASKS.md](JAVASCRIPT_TASKS.md): the design J3 waits on. D1, D2a, D2b, D3 and D5a are merged (§ Slices); D5b is implemented
-and awaiting review. The remaining slices are proposals. Read
+[JAVASCRIPT_TASKS.md](JAVASCRIPT_TASKS.md): the design J3 waits on. D1, D2a, D2b, D3, D5a and D5b are merged (§ Slices). D6 is implemented and awaiting re-review.
+D4 and D7 remain proposals. Read
 against the tree at `b55c3770`, the vendored QuickJS 2026-06-04 source
 (`userland/libjs/upstream/`) and the R0 runtime contract
 (`userland/libjs/CONTRACT.md`). Names of functions that do not exist yet
@@ -77,7 +77,7 @@ stand on.
 How the tree's memory is laid out matters as much. libhtml has two
 allocators over one budget (`core.c`): `h_permanent` carves nodes,
 attribute records, names and attribute values out of chunks that are freed
-only with the document, and `h_alloc` makes individually freeable blocks on
+only with the document; reclaimed node slots are reused. `h_alloc` makes individually freeable blocks on
 a ledger. A text node's bytes are already a ledger block, because the
 parser grows them a character at a time. So "retire, then reclaim" needs no
 new allocator. It needs the verbs to put what they write on the ledger.
@@ -156,8 +156,8 @@ does *not* set `doc->refusal`: that field records how the parse ended, and
 a script that runs the document out of budget has not unparsed it. The
 binding turns the status into an exception.
 
-Nodes a failed verb had already made stay charged until the document is
-freed, like any detached node.
+Nodes a failed verb had already made but never inserted stay charged until
+the document is freed. Removed subtrees follow D6's hold/pin rules below.
 
 ## The verbs
 
@@ -170,7 +170,7 @@ verb and turn a status into an exception.
 | `create_element(doc, ns, name)`, `create_text`, `create_comment`, `create_fragment` | a detached node, owned by the document |
 | `clone(doc, node, deep)` | a detached copy; form-owner records are not copied. `node` may be another document's, and the copy then shares no memory with it |
 | `insert(doc, parent, node, before)` | moves `node` (or a fragment's children) under `parent`; adjacent text is not merged, as the DOM does not |
-| `remove(doc, node)` | unlinks it; the node lives on |
+| `remove(doc, node)` | unlinks it; an unheld subtree can retire and be reclaimed after older pins leave |
 | `replace(doc, parent, node, old)` | one validity check for the pair, then both moves |
 | `set_attr(doc, element, name, value)`, `remove_attr` | first-wins order is kept: a set on an existing name replaces its value in place in the list |
 | `set_text(doc, node, utf8, len)` | replaces a text or comment node's data whole |
@@ -410,8 +410,9 @@ keeps the widget of a control that survived, and with it the caret.
 | the cascade or the layout | the last layout that fit, as today's "this is the last layout that fit" | nothing: the model is current, and a click is resolved by node |
 | a verb, for budget | everything | that one change; the script gets an exception |
 
-Old layouts point at nodes that may since have been detached. That is safe
-(a node lives as long as its document) and it is correct: a click on a box
+Old layouts point at nodes that may since have been detached. Their document
+pin keeps those bytes alive, and their retained model holds its node references:
+a click on a box
 whose node is no longer a link in the current model does nothing.
 
 **When rebuilds happen.** Once per turn of the loop, in the rendering step,
@@ -430,26 +431,19 @@ answers the same object both times.
 **The table holds each wrapper strongly until the page is torn down.**
 That is what makes `element.myState = 1` and a listener still be there the
 next time the element is reached, with no tracing between two heaps. Its
-cost is the cost of the review's finding 2 (nodes live as long as the
-document), and the two are honest about the same thing:
+cost is retaining wrapped native nodes until the binding is torn down.
+Unwrapped removed subtrees follow D6's counted-hold and pin rules and can
+be reclaimed during repeated `innerHTML` replacement. A hold anywhere in
+a detached unit protects that whole unit. A page that retains wrappers for
+each discarded rendering can still meet the arena budget; the full answer
+makes the table weak and lets the collector's verdict decide each wrapper's
+node lifetime, and requires its own design.
 
-- For the old web and for J3's fixture it is right. A page's nodes are
-  bounded by what it was served plus what its scripts add, and they add
-  little.
-- For a page that rebuilds itself it is wrong, and soon. A page that
-  replaces a hundred nodes sixty times a second writes about a megabyte a
-  second, and meets the 64 MiB budget in about a minute. That is not a
-  rare page; it is any page built on a rendering framework.
-
-So the reclamation JAVASCRIPT.md booked is not a someday item. It is the
-first slice after J3's fixture and before scripting is something a person
-is told to turn on. The design leaves the door open on purpose: nodes are
-one size, so a free list serves; the pins already say when no snapshot can
-be holding a detached node; and a private `held` bit on a node says a
-wrapper, the parser's stack or a face holds it. The first cut reclaims a
-removed subtree in which nothing is held, which is the `innerHTML` case.
-The full answer makes the table weak and lets the collector's verdict on a
-wrapper decide its node, and is its own design.
+Private counted holds also protect state/model keys, collection answers
+and a face's retained node pointers. Active parser references protect their
+nodes between calls. D6's first cut and hour-sized churn proof are recorded
+in § D6, as built. Review and the browser event-loop/teardown gates remain
+before recommending scripting for ordinary browsing.
 
 **Every engine value C holds is in a registry that has a drain.** Three
 exist: the wrapper table, the listener lists, and the task and timer
@@ -719,8 +713,8 @@ builder decides, and the proof in this house's shape.
 | D2b | **Merged (#212, `dca2fe46`).** Fragment parsing and serialisation | All 192 fragment fixtures, contextual serialisation, transactional allocation/work cuts and bounded-buffer proof; § D2b, as built |
 | D3 | **Merged (#211, `3f5fa28a`).** `os64_page_rebuild`, pinned models, the `STALE` gate, shared node state and script property APIs | `tools/test_libpage_rebuild.inc`: detach/reinsert, never-inserted state, value modes, option identity, current-type sanitization, person/script origin, pins, transactional allocation sweeps and independent random walks; § D3, as built |
 | D4 | The stream: yonder parses on its own thread. No script | yonder's and libway's harnesses unchanged in result; the guest walk that proved Y3, its server log identical; the window live through a stalled body |
-| D5 | **D5a merged (#214, `72b2e710`); D5b implemented, awaiting review.** The binding library and J3's fixture | § D5a, as built records library host/guest proof. § D5b, as built records J3 fixture proof: a script changes text and the page redraws; a held reference and a typed-in field survive an unrelated change; a navigation with a script queued tears down clean; the leak count is zero |
-| D6 | Reclaiming unheld detached subtrees | The churn page that met the budget in a minute runs for an hour |
+| D5 | **D5a merged (#214, `72b2e710`); D5b merged (#216, `7acce890`).** The binding library and J3's fixture | § D5a, as built records library host/guest proof. § D5b, as built records J3 fixture proof: a script changes text and the page redraws; a held reference and a typed-in field survive an unrelated change; a navigation with a script queued tears down clean; the leak count is zero |
+| D6 | **Implemented; awaiting Fable re-review in PR #217 against userland.** Reclaiming unheld detached subtrees | 216,000 packed-fragment refresh cycles stay flat under 64 MiB; § D6, as built |
 | D7 | The loop: tasks, checkpoints, timers, events and their attributes, script order | J4's evidence, per contract |
 | later | `document.write`; geometry; the libjs reclaim slice | each with its own |
 
@@ -931,8 +925,8 @@ attributes are packed into individually owned ledger blocks; text buffers
 have their own blocks. Inline attributes and names are copied when a clone
 would otherwise share reclaimable storage. Parser scaffolding, ignored
 tokens and temporary payload chunks are discarded, rather than charged
-permanently for each replacement. Collection remains D6's task: detached
-result nodes stay alive until document teardown under the current contract.
+permanently for each replacement. D6's collection uses this ownership seam:
+removed unheld nodes and consumed result containers retire under pins.
 
 **Serialisation allocates nothing.** `children_only` selects inner or outer
 markup, templates use their contents, HTML void elements omit their end
@@ -1028,8 +1022,8 @@ The VM is stopped. There is no independent P5 or browser scripting run.
 
 **Review handoff.** Read the public contract in `html.h`, this section and
 the allocation/attribute changes alongside the parser and serializer.
-D6 must reclaim packed node payloads, text and later private attributes;
-clones must not retain pointers into a reclaimed source. D5 consumes the
+D6 reclaims packed node payloads, text and later private attributes;
+clones do not retain pointers into a reclaimed source. D5 consumes the
 verbs; D3's state API remains independent.
 
 ### D3, as built
@@ -1163,10 +1157,10 @@ by D5a below), and
 watch both document and state revisions when refreshing presentation.
 Option insertion/removal and select `size`/`multiple` changes must also
 release explicit-empty selectedness and run the select's normalization.
-D6 must add holds for persistent state keys, including option/default-cache
-records, and model node references, with paired releases. Pins protect
-snapshot bytes; they do not replace those holds. Both requirements are in
-DOM_BRIEFS.md and DEBTS.md. D3 adds neither DOM bindings nor reclamation.
+D6 adds holds for persistent state keys, including option/default-cache
+records and pre-mutation reservations, and model node references, with paired
+releases. Pins protect snapshot bytes; they do not replace those holds.
+D3 adds neither DOM bindings nor reclamation.
 
 ### D5a, as built
 
@@ -1210,7 +1204,7 @@ State-aware tree entrances reserve affected records before insertion,
 replacement or removal, then publish group/selection changes. Content setters
 prepare detached text/fragments and use the shared replace-children entrance.
 Refusal leaves visible children intact, although successful detached staging
-can remain document-owned until D6. Tree methods prepare return wrappers before
+that was never inserted remains document-owned until teardown. Tree methods prepare return wrappers before
 making a visible change. Model presentation must observe both HTML and state
 revisions; libdom does not own a rendering loop.
 
@@ -1379,8 +1373,8 @@ fragment publication transfers its staged count. Attribute/fragment refusal
 leaves the owner's count unchanged. Detached nodes, template contents and
 retained clone preparation still count. Zero lets the tree planner omit its
 ID set and explicit-owner scan; nonzero remains a conservative trigger rather
-than an index of connected radios. D6's brief records the physical-reclamation
-decrement and the nonexclusive inline/private attribute flags.
+than an index of connected radios. D6 physically decrements that count and
+handles the nonexclusive inline/private attribute flags.
 
 An independent O2 host probe uses a live model and repeatedly inserts/removes
 a fresh `div id=moved` into body. These are medians of seven batches of 100
@@ -1422,8 +1416,8 @@ the difference was below sample variation. Both produced the same tree,
 a host parser measurement, not Yonder/P5 scripting performance.
 
 **Next seam.** D5b below seats the library in Yonder and adds cascade/layout
-pins before changing a tree beneath those snapshots. D6 adds paired holds for wrapper keys, query roots, state/model keys
-and either cached query answers or a proven version-before-dereference rule.
+pins before changing a tree beneath those snapshots. D6 adds paired holds
+for wrapper keys, query roots, state/model keys and cached query answers.
 New control-state reservations need their holds before calling a tree verb,
 with releases on abort, because normalization reads those keys after mutation.
 Strings copied into JavaScript hold no native snapshot bytes. Libjs retains
@@ -1434,7 +1428,7 @@ are Fable's slices.
 
 ### D5b, as built
 
-**Implemented 2026-10-03; awaiting Fable review.** Yonder links libdom/libjs
+**Merged in PR #216 (`7acce890`), 2026-10-04.** Yonder links libdom/libjs
 and runs a bounded finished-document fixture. The loader finishes HTML on a
 worker with the chosen scripting policy, resuming parser script stops without
 executing them. The window thread queues connected HTML inline classic scripts
@@ -1577,9 +1571,179 @@ VBScript/modules stayed skipped, and typing Q after 2.4 seconds survived the
 redraw. Both scripted pages retired with **heap problems=0**.
 No P5 scripting or ordinary-site compatibility evidence is claimed.
 
-**Remaining gates.** D6 detached reclamation, D7's event loop/execution order,
+**Remaining gates.** D6 review, D7's event loop/execution order,
 and reporting/reclaiming runtime teardown remain separate reviewed work before
 recommending this switch for ordinary browsing. D4 and D7 remain Fable's slices.
+
+### D6, as built
+
+**Implemented; awaiting Fable re-review in PR #217 against userland.** This slice reclaims
+removed subtrees that no native holder retains. It does not change the
+default-off JavaScript policy or implement the weak wrapper/collector answer.
+`html.h` specifies the lifetime contract; the following records its choices
+and proof.
+
+**Counted identities, pinned bytes.** `os64_html_hold` and `release` are
+allocation-free counted operations. Invalid ownership, releasing an unheld
+node and count overflow end the program with the HTML badge (`0x48544D4C`);
+NULL is invalid. A hold on any descendant, including a template's contents
+fragment, protects the complete detached unit. A pin protects snapshot bytes
+under the retirement-version rule, separately from holds. The caller keeps
+the document alive; document teardown refuses outstanding public holds as
+well as live pins, then releases the remaining allocations.
+
+Remove, replace and successful fragment insertion identify detached roots.
+Each unit sums its native and parser references once at detachment. Holds,
+releases and parser slot changes adjust that root tally. Link/unlink updates
+tallies when retained units join or split, including template-host edges.
+Held units require no polling; ready units and units awaiting older pins use
+separate intrusive queues. Reinsertion cancels a queue entry in constant time.
+Verbs and releases collect ready units; unpin revisits the pin-wait queue.
+An unheld unit retires at the mutation's version; pins below that stamp delay
+physical reclamation. A unit held at detachment retires when its holders
+leave, at current version plus one without changing the visible tree version.
+That also protects a pin acquired while the node was held. Acquiring a new
+hold cancels queued retirement; moving a candidate beneath another root
+cancels its separate queue entry before collection. Empty-fragment insertion
+consumes the unheld container even when the visible tree/version does not
+change; a hold preserves that container's identity.
+
+**Storage and parser boundaries.** Public node bodies remain 120 bytes.
+Their trailing metadata grows from 8 to 72 bytes (64 more per allocated
+node), holding native/parser counts, a detached-unit tally, flags, stamp and
+intrusive list links. `HDoc` grows from 992 to 1,176 bytes, including the
+document-wide public hold count that makes teardown reject leaked holds. Permanent-chunk node bodies are
+zeroed and recycled through a free list; their original chunk strings stay
+charged. Packed fragment node/name/original-attribute blocks, ledger text
+and later private attributes are freed once. Inline and private attribute
+flags can coexist. Collection checks form-owner edges/counts and subtracts
+owned explicit-input contributions before freeing attributes. Physical
+collection updates `node_count`; arena accounting includes retained chunk
+capacity and allocation headers.
+
+The active parser's stack, formatting entries, head/form/script references
+and embedded landmarks protect their units between public calls. Stack and
+formatting push/pop/replacement, and head/form/script assignments, balance
+per-node parser reference counts and affected detached-unit tallies. Borrowed
+fragment-context form sentinels acquire no owned reference. Collection does
+not scan the live-node list to refresh parser protection. Parser token
+algorithms do not collect transient nodes; finish/abandon drops their counted
+references before collection at the stable transfer boundary. Lifetime walks do not consume `max_work`:
+release/unpin must finish without an allocation or a quota refusal, and the
+arena bounds their finite traversal. Native mutation validation retains its
+existing charged-work/refusal rules.
+
+**Consumer ownership.** Wrapper identities, query roots and cached answers
+hold nodes. Refresh holds a complete successor before publishing it and
+releasing the old answer; refusal preserves the previous holds. Native
+binding holds survive drain and engine finalizers, then leave at
+`os64_dom_free`. State reservations acquire holds before a tree verb, transfer
+them to persistent records on commit, and release them on abort. State
+teardown releases persistent keys, including option/default-cache keys.
+Models hold their node fields/maps, including partial models, and keep their
+snapshot pin for strings. Their final reference releases both. Yonder's
+script queue, form widgets and box-scroll records, and libway's details-flip
+records pair their own holds with teardown; retained identities remain safe
+when a previous presentation's model/pin leaves.
+
+**Measured proof.** `tools/test_html_reclaim_host.sh` runs 216,000
+100-node packed-fragment refresh cycles under 64 MiB: one initial insertion
+and 215,999 replacements. Every thousand-cycle sample stays at **34,183 arena
+bytes / 104 nodes** from the first sample through the last. Held and older-pin
+controls refuse with named arena exhaustion after 2,323 and 2,304 cycles;
+releasing those borrowers restores the same baseline. This is an hour of
+60-per-second operations, executed faster on the host, rather than a
+wall-clock hour of browser painting.
+
+The independent DOM oracle passes **540,023 checks**, including 88,000 random
+steps with counted holds, pins, refusal sweeps and exact live-node counts.
+Focused lifetime rules pass **90,424 checks**; the complete churn suite passes
+**311,493 / 0**. **18 native reclamation mutants**
+compile and are caught, including parser head/form references, free-list
+reuse, form counts and inline/private payloads. The binding suite passes
+**4,253 checks** with 551 binding allocation cuts, and all **seven binding
+ownership mutants** compile and are caught. Real binding `innerHTML` and
+empty-content loops each run 1,000 replacements with flat accounting; empty
+content preserves the tree version. Model/state, detached queued-script and
+box-scroll ownership have separate consumer regressions.
+
+The initial implementation at `9f5cce26` passed all **10,525 reference cases**, 384
+fragment/chunk cases with 5,270 allocation refusals and 21,504 work cuts,
+20,000 stopped-parser random walks, all six corpus pages and 133,632 fuzz
+mutations across four chunkings. ASan, UBSan and LSan remain enabled.
+Its full consumers passed: libpage **254,069 / 0** (397 allocation cuts), focused
+D3/D6 **68,342 / 0**, libway **231 / 0** (31 cuts), loader **27 / 0**,
+wend **177,854 / 0**, libflow **18,585 / 0** with twelve matching dumps,
+Yonder painting **115 / 0** with six matching images and scripted-page host
+**1,548 / 0**. CSS/parser/cascade suites and their refusal/size checks pass;
+the separate contextual-fragment harness passes **326 / 0**. The aborted
+state-reservation regression uses no model/pin, proves planning ran before
+refusal, then requires native removal to reclaim the affected nodes before
+state teardown could mask that unit's premature retention; document teardown
+also rejects any public hold left outstanding. A refused widget rebuild keeps
+an old detached button; after all model/layout pins and state leave, its
+widget alone retains the node. Destroying the widget reclaims that button
+and its text before document teardown.
+
+The initial strict full userland build passed. A private copied-disk QEMU guest
+byte-compares its 21 installed library/app/test/fixture files with the build.
+`htmltest` passes 2,000 replacements under 64 KiB with flat accounting,
+counted holds, a late pin and final heap verification. `pagetest` passes;
+`domtest` passes four document/runtime lifetimes and heap teardown. Yonder
+visibly displays **Two JavaScript donuts!**, preserves the typed **Q** across
+redraw and reports **heap problems=0** on scripted-page retirement. The
+owned guest is stopped. This adds no P5 evidence or ordinary-site scripting
+compatibility claim.
+
+Review rework also passes the strict userland build, the independent DOM
+oracle **540,023 / 0**, model/state **254,071 / 0**, binding **4,253 / 0**,
+and scripted-page host **2,070 / 0**. The HTML host suite again passes all
+10,525 reference cases, fragment/refusal/work cuts, 20,000 stopped-parser
+random walks, six corpus pages and **129,792 fuzz mutations across four
+chunkings**, with ASan, UBSan and LSan enabled. A new private copied-disk
+QEMU run byte-compares 21 installed files, passes `htmltest` (2,000
+replacements, 6,920 arena bytes / 9 live nodes), `pagetest` and all four
+`domtest` lifetimes; Yonder preserves typed Q across scripted redraw and
+reports **heap problems=0** at retirement. Its owned guest is stopped. Teardown misuse cases cover attached
+and detached held nodes, underflow and both node/document counter overflow.
+Parser slot multiplicities are checked independently across reconstruction,
+adoption, templates, forms and multiple script stops. The cost probe in
+`test_html_dom_host.sh --reclaim-cost` checks 10,000 unrelated create/insert/
+remove edits with 2,000 and 10,000 held three-node units, on finished and
+stopped-parser documents. Both sizes take **70,000 instrumented lifetime
+visits**; the test rejects a deliberately restored whole-live-node scan.
+Unsanitized `-O2` runs on one pinned host CPU measure **0.197–0.218 µs per
+edit**, **0.085–0.643 ms** to detach the held units, and **0.174–0.890 ms**
+to release them. These timings describe this host probe, not browser painting.
+
+Seven warmed, alternating unsanitized `-O2` parses of the saved 797,390-byte
+Wikipedia page, on one pinned host CPU, compare D5b parent `50f1ceaa` with D6.
+Timing spans parser construction through finish, excluding file reads and
+document teardown.
+
+| Measurement | D5b parent | D6 |
+|---|---:|---:|
+| Median elapsed | 21.614 ms | 22.783 ms (+5.41%) |
+| Peak arena bytes | 4,377,408 | 5,426,360 (+23.96%) |
+| Live arena bytes | 4,371,168 | 5,420,120 |
+| Nodes | 15,470 | 15,470 |
+| Charged work | 1,210,567 | 1,210,567 |
+
+The added lifetime metadata costs storage even with scripting off; these
+host measurements establish neither guest speed nor a universal page-size
+promise. The six sanitized corpus runs retain their trees and node counts;
+work follows the existing parser rules. Their current peaks are 8,616
+(example), 290,184 (Floodgap), 564,376 (Hacker News), 1,479,656
+(textfiles computers), 591,624 (68k.news) and 5,426,440 (Wikipedia). The
+corpus driver supplies a charset label, accounting for its 80-byte difference
+from the default-options timing probe.
+
+**Remaining capacity boundary.** Created/cloned/failed-staged nodes never
+inserted remain charged, and strong wrappers/state keys remain until their
+owner is torn down. Permanent parser/creation names and original attributes
+remain in chunks even when bodies recycle. The flat packed-fragment proof
+does not promise arbitrary create-and-drop workloads are flat. The separate
+collector/weak-wrapper debt remains in DEBTS.md and § Booked.
 
 ## Booked, with their triggers
 

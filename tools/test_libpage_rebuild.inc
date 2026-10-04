@@ -738,6 +738,55 @@ static void rebuild_random_oracle(void)
 
 #include "test_libpage_d3_followup.inc"
 
+static void rebuild_reclamation_holders(void)
+{
+    RebuildFixture f=rebuild_fixture("<p id=paragraph>kept by the model</p>",0);
+    os64_html_node_t *paragraph=rebuild_id(f.doc,"paragraph");
+    size_t count=f.doc->node_count;
+    rebuild_expect("reclaim: model node reference survives detach",
+        os64_html_remove(f.doc,paragraph)==OS64_HTML_OK && f.doc->node_count==count);
+    rebuild_expect("reclaim: stale model anchor still names its held identity",
+        os64_page_anchor(f.page,"paragraph")==paragraph && paragraph->text==NULL &&
+        paragraph->first_child!=NULL);
+    os64_page_free(f.page);f.page=NULL;
+    rebuild_expect("reclaim: model teardown releases node and string protection",
+        f.doc->node_count==count-2);
+    rebuild_clear(&f);
+
+    f=rebuild_fixture("<select id=select><option id=option selected>first</select>",0);
+    os64_html_node_t *select=rebuild_id(f.doc,"select"), *option=rebuild_id(f.doc,"option");
+    rebuild_expect("reclaim: create persistent option selectedness key",
+        os64_page_node_set_selected_index(f.state,select,-1)==0 &&
+        os64_page_node_set_selected_index(f.state,select,0)==0);
+    rebuild_node_value("reclaim: create select default cache and option state",f.state,select,"first");
+    count=f.doc->node_count;
+    rebuild_expect("reclaim: state-key subtree detaches",os64_html_remove(f.doc,select)==OS64_HTML_OK);
+    os64_page_free(f.page);f.page=NULL;
+    rebuild_expect("reclaim: state holds outlive model pin",f.doc->node_count==count);
+    rebuild_node_value("reclaim: detached default cache remains readable",f.state,select,"first");
+    rebuild_expect("reclaim: option key remains held independently of its select",
+        os64_html_remove(f.doc,option)==OS64_HTML_OK && f.doc->node_count==count &&
+        option->first_child!=NULL && strcmp(option->first_child->text,"first")==0);
+    os64_page_state_free(f.state);f.state=NULL;
+    rebuild_expect("reclaim: state teardown releases select and option holds",f.doc->node_count==count-3);
+    rebuild_clear(&f);
+
+    // No model or snapshot pin can mask a reservation hold left on abort.
+    f=(RebuildFixture){.doc=parse("<select id=select><option id=option>first</select>","utf-8")};
+    f.state=os64_page_state_create(f.doc,0);
+    select=rebuild_id(f.doc,"select"); option=rebuild_id(f.doc,"option");
+    count=f.doc->node_count;
+    size_t bytes=os64_page_state_bytes(f.state), start=allocations;
+    uint64_t version=os64_html_version(f.doc);
+    int64_t status=os64_page_node_insert(f.state,f.doc->body,select,option);
+    rebuild_expect("reclaim: invalid placement reaches state reservations then refuses",
+        status!=OS64_HTML_OK && allocations>start &&
+        os64_page_state_bytes(f.state)==bytes && os64_html_version(f.doc)==version);
+    rebuild_expect("reclaim: aborted reservations release their select and option holds",
+        os64_html_remove(f.doc,select)==OS64_HTML_OK && f.doc->node_count==count-3);
+    rebuild_clear(&f);
+}
+
 static void rebuild_contract(void)
 {
     rebuild_lifetime_and_stale();
@@ -751,6 +800,7 @@ static void rebuild_contract(void)
     rebuild_setter_failure_sweeps();
     rebuild_random_oracle();
     rebuild_review_followup();
+    rebuild_reclamation_holders();
 }
 
 static void rebuild_live_state_free(void)

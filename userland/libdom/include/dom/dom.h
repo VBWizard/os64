@@ -50,7 +50,9 @@ static inline os64_dom_options_t os64_dom_default_options(void)
  * evaluation, engine exhaustion follows libjs's sticky LIMIT/MEMORY contract,
  * not a resumable DOM exception. Retired bindings throw InvalidStateError.
  *
- * Wrappers retain identity and expandos through detach/reinsert and GC.
+ * Wrappers hold their native nodes and retain identity and expandos through
+ * detach/reinsert and GC. Collection roots and cached answers also hold nodes;
+ * successful refresh releases the previous answer after holding its successor.
  * Collections are live objects exposing length, item(index) and indexed
  * access. Child collections omit template contents; innerHTML uses them.
  * Strings replace NUL and lone UTF-16 surrogates with U+FFFD. HTML names are
@@ -73,7 +75,8 @@ os64_dom_t *os64_dom_create(os64_js_runtime_t *runtime,
 /* Owner-thread only, outside JS callbacks. Idempotent; NULL is a no-op.
  * Drain closes bindings and releases C-retained JS values even when libjs
  * has entered a sticky failed state. Native records remain alive through
- * engine finalizers. The required order is drain, os64_js_destroy, then
+ * engine finalizers; os64_dom_free releases their native node holds.
+ * The required order is drain, os64_js_destroy, then
  * os64_dom_free, followed by model/state/document teardown. */
 void os64_dom_drain(os64_dom_t *dom);
 void os64_dom_free(os64_dom_t *dom);

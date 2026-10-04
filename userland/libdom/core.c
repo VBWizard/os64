@@ -284,14 +284,13 @@ void os64_dom_free(os64_dom_t *dom)
      * call belongs here because its runtime has already been destroyed. */
     for (DQuery *query = dom->queries; query != NULL;) {
         DQuery *next = query->next;
-        d_free(dom, query->nodes);
-        d_free(dom, query->name);
-        d_free(dom, query->folded);
-        d_free(dom, query);
+        d_query_free(dom, query);
         query = next;
     }
     for (DValue *entry = dom->values; entry != NULL;) {
         DValue *next = entry->next;
+        if (entry->node != NULL)
+            os64_html_release(dom->document, entry->node);
         d_free(dom, entry);
         entry = next;
     }

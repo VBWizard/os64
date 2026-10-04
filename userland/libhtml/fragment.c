@@ -64,12 +64,12 @@ static const char *pack_string(char **at, const char *from)
 }
 /* Original names and attributes belong to this node's single ledger block.
  * COW and clone copy these inline attributes, so another node cannot keep a
- * pointer into this allocation after D6 reclaims its owner. */
+ * pointer into this allocation after its owner is reclaimed. */
 static HNode *pack_node(os64_html_parser_t *p, const HNode *from, bool root)
 {
     if (!h_work(p, 1))
         return NULL;
-    size_t size = sizeof(HNode) + sizeof(size_t), attrs = 0;
+    size_t size = sizeof(HNode) + sizeof(HMeta), attrs = 0;
     if (!root) {
         for (const HAttr *a = from->attrs; a; a = a->next) {
             if (!h_work(p, 1) || !size_add(p, &size, sizeof(HAttr)))
@@ -96,7 +96,7 @@ static HNode *pack_node(os64_html_parser_t *p, const HNode *from, bool root)
         return n;
     n->ns = from->ns;
     n->tag = from->tag;
-    HAttr *records = (HAttr *)(h_word(n) + 1);
+    HAttr *records = (HAttr *)(h_meta(n) + 1);
     char *at = (char *)(records + attrs);
     n->name = pack_string(&at, from->name);
     n->public_id = pack_string(&at, from->public_id);
@@ -171,13 +171,13 @@ static HNode *copy_result(os64_html_parser_t *p, const HNode *root, size_t maxim
             if (!copy)
                 break;
             pairs[count] = (FPair){child, copy};
-            map[*(h_word(child) + 1)] = copy;
+            map[h_meta(child)->ordinal] = copy;
             depth[count++] = depth[i] + 1;
             if (contents) {
                 to->template_contents = copy;
                 *h_word(copy) = (size_t)to;
             } else
-                h_attach(to, NULL, copy);
+                h_attach(p->d, to, NULL, copy);
         }
     }
     for (size_t i = 1; i < count && !p->d->pub.refusal; i++) {
@@ -194,7 +194,7 @@ static HNode *copy_result(os64_html_parser_t *p, const HNode *root, size_t maxim
                 break;
             if (form_root != root->parent)
                 continue;
-            size_t ordinal = *(h_word(form) + 1);
+            size_t ordinal = h_meta(form)->ordinal;
             if (ordinal < maximum && map[ordinal]) {
                 pairs[i].to->form_owner = map[ordinal];
                 p->d->records++;
@@ -253,7 +253,12 @@ HNode *h_parse_fragment(os64_html_document_t *doc, const HNode *context,
     temp->pub.document = &temp->root;
     temp->pub.html = &temp->html;
     temp->pub.node_count = 2;
-    h_attach(&temp->root, NULL, &temp->html);
+    d_node_register(temp, &temp->root, H_NODE_EMBEDDED);
+    d_node_register(temp, &temp->html, H_NODE_EMBEDDED);
+    temp->parser = p;
+    d_ref(temp, &temp->root, true, true);
+    d_ref(temp, &temp->html, true, true);
+    h_attach(temp, &temp->root, NULL, &temp->html);
     if (!h_work(p, 1))
         goto parsed;
     if (!owner->max_depth) {
@@ -267,6 +272,7 @@ HNode *h_parse_fragment(os64_html_document_t *doc, const HNode *context,
             goto parsed;
         if (html_named(n, "form")) {
             p->form = (HNode *)n; /* read-only sentinel; never on the open stack */
+            p->form_borrowed = true;
             break;
         }
     }
