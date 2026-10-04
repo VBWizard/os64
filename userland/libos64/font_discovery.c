@@ -126,7 +126,7 @@ os64_font_config_status_t os64_font_config_discover(os64_text_context_t *context
     if (out) *out = NULL;
     if (!context || !config || !out) return OS64_FONT_CONFIG_SYNTAX;
     /* Encoding validates edited path arrays before any string traversal. */
-    char checked[4096];
+    char checked[OS64_FONT_CONFIG_BYTES_MAX + 1]; // a whole config, as encode writes it
     if (os64_font_config_encode(config, checked, sizeof(checked)) < 0)
         return OS64_FONT_CONFIG_PATH;
     os64_font_catalog_t *catalog = os64_malloc(sizeof(*catalog));
@@ -137,7 +137,7 @@ os64_font_config_status_t os64_font_config_discover(os64_text_context_t *context
     (void)inspect(&d, "builtin");
     /* Configured paths win representative selection. Keep aliases so two
      * roles selecting identical copies still highlight the shared row. */
-    for (size_t r = 0; r < OS64_FONT_ROLE_COUNT; ++r)
+    for (size_t r = 0; r < OS64_FONT_CONFIG_ROLES; ++r)
         for (size_t s = 0; s < 3; ++s) {
             const char *path = config->roles[r].face[s];
             if (!path[0]) continue;

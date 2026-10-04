@@ -112,7 +112,8 @@ static os64_font_config_status_t decode(const char *s, os64_font_config_t *c,
 static const char choices[] =
     "# role choices\nUI.face = fonts/sans\nui.size = 18\n"
     "terminal.face = fonts/mono\nterminal.size = 20\n"
-    "document.face = fonts/sans\ndocument.size = 24\n";
+    "document.face = fonts/sans\ndocument.size = 24\n"
+    "web.face = fonts/sans\nweb.size = 20\n";
 
 static void parsing(void)
 {
@@ -154,9 +155,12 @@ static void parsing(void)
     CHECK(!strcmp(moved.roles[0].face[0], c.roles[0].face[0]));
     char small[5] = "keep";
     CHECK(os64_font_config_encode(&c, small, sizeof(small)) < 0 && !strcmp(small,"keep"));
-    char maximal[8192]; memset(maximal, ' ', sizeof(maximal)); maximal[0] = '#';
-    CHECK(os64_font_config_decode(maximal, 8191, "/cfg/fonts.conf", &c, &e) == 0);
-    CHECK(os64_font_config_decode(maximal, 8192, "/cfg/fonts.conf", &c, &e) == OS64_FONT_CONFIG_LIMIT);
+    static char maximal[OS64_FONT_CONFIG_BYTES_MAX + 1];
+    memset(maximal, ' ', sizeof(maximal)); maximal[0] = '#';
+    CHECK(os64_font_config_decode(maximal, OS64_FONT_CONFIG_BYTES_MAX, "/cfg/fonts.conf",
+                                  &c, &e) == 0);
+    CHECK(os64_font_config_decode(maximal, OS64_FONT_CONFIG_BYTES_MAX + 1, "/cfg/fonts.conf",
+                                  &c, &e) == OS64_FONT_CONFIG_LIMIT);
     saved = c; deny = calls + 1;
     CHECK(decode(choices, &c, &e) == OS64_FONT_CONFIG_NO_MEMORY);
     deny = 0; CHECK(!memcmp(&c, &saved, sizeof(c)) && live == 0);
@@ -371,6 +375,190 @@ static void loading(void)
     printf("Preparation allocation-denial cases: %zu\n", failures);
 }
 
+/* The Web setting: a role's shape after the roles, defaulting to the shipped
+ * sans, saved and read back, refused by its own line, and opened only on
+ * request, at the size asked. */
+static void web_setting(void)
+{
+    os64_font_config_t c, moved;
+    os64_font_config_error_t e;
+    CHECK(!decode("", &c, &e));
+    CHECK(!strcmp(c.roles[OS64_FONT_CONFIG_WEB].face[0], "/etc/fonts/DejaVuSans.ttf"));
+    CHECK(c.roles[OS64_FONT_CONFIG_WEB].size == 16);
+    CHECK(!decode(choices, &c, &e));
+    CHECK(!strcmp(c.roles[OS64_FONT_CONFIG_WEB].face[0], "/cfg/fonts/sans"));
+    CHECK(c.roles[OS64_FONT_CONFIG_WEB].size == 20 && c.roles[OS64_FONT_CONFIG_WEB].size_line == 9);
+    char encoded[4096];
+    int64_t n = os64_font_config_encode(&c, encoded, sizeof(encoded)); CHECK(n > 0);
+    CHECK(strstr(encoded, "web.face = /cfg/fonts/sans\nweb.size = 20\n") != NULL);
+    CHECK(!os64_font_config_decode(encoded, (size_t)n, "/home/fonts.conf", &moved, &e));
+    CHECK(!strcmp(moved.roles[OS64_FONT_CONFIG_WEB].face[0], "/cfg/fonts/sans"));
+    CHECK(moved.roles[OS64_FONT_CONFIG_WEB].size == 20);
+
+    /* A refusal names the Web setting, never a role. */
+    CHECK(decode("ui.size = 18\nweb.size = 7", &c, &e) == OS64_FONT_CONFIG_SIZE);
+    CHECK(e.web && e.role == OS64_FONT_ROLE_COUNT && e.line == 2);
+    CHECK(decode("web.face = ../sans", &c, &e) == OS64_FONT_CONFIG_PATH && e.web);
+    CHECK(decode("web.face = builtin\nweb.size = 20", &c, &e) == OS64_FONT_CONFIG_SIZE && e.web);
+    CHECK(decode("ui.size = 7", &c, &e) == OS64_FONT_CONFIG_SIZE && !e.web);
+
+    os64_text_options_t options = {.memory={NULL,allocate,release}};
+    os64_text_context_t *text = NULL;
+    CHECK(!os64_font_context_create(&options, &text));
+    CHECK(!decode(choices, &c, &e));
+    os64_font_set_t *set = NULL;
+    os64_font_role_view_t view;
+    int32_t rows[3];
+    const uint32_t sizes[3] = {12, 30, 200};
+    for (int i = 0; i < 3; ++i) {
+        CHECK(!os64_font_config_web_prepare(text, &c, sizes[i], &set, &e));
+        CHECK(set && !os64_font_set_view(set, OS64_FONT_ROLE_UI, &view));
+        CHECK(!strcmp(view.primary.family, "DejaVu Sans"));
+        rows[i] = view.row_height_px;
+        CHECK(!os64_font_set_view(set, OS64_FONT_ROLE_DOCUMENT, &view));
+        CHECK(view.row_height_px == 16);        /* the other roles are builtin */
+        os64_font_set_release(set); set = NULL;
+    }
+    CHECK(rows[0] < rows[1] && rows[1] < rows[2]);
+    /* The face opens at the size the page draws, past either end of what a
+     * person may configure: a zoomed-out control is 3px, a zoomed-in one
+     * 200px. Only the engine's own range clamps. */
+    int32_t at3 = 0, at96 = 0, atmax = 0;
+    const struct { uint32_t ask; int32_t *row; } ends[] = {
+        {3, &at3}, {96, &at96}, {OS64_FONT_PIXEL_MAX, &atmax},
+    };
+    for (size_t i = 0; i < sizeof ends / sizeof ends[0]; ++i) {
+        CHECK(!os64_font_config_web_prepare(text, &c, ends[i].ask, &set, &e));
+        CHECK(!os64_font_set_view(set, OS64_FONT_ROLE_UI, &view));
+        *ends[i].row = view.row_height_px;
+        os64_font_set_release(set); set = NULL;
+    }
+    CHECK(at3 > 0 && at3 < rows[0] && at96 < rows[2] && rows[2] < atmax);
+    int32_t clamped[3];
+    const uint32_t outside[3] = {1, 0, OS64_FONT_PIXEL_MAX + 1};
+    for (size_t i = 0; i < 3; ++i) {
+        CHECK(!os64_font_config_web_prepare(text, &c, outside[i], &set, &e));
+        CHECK(!os64_font_set_view(set, OS64_FONT_ROLE_UI, &view));
+        clamped[i] = view.row_height_px;
+        os64_font_set_release(set); set = NULL;
+    }
+    CHECK(clamped[1] == clamped[0] && clamped[2] == atmax);
+    /* A builtin Web face has one size, whatever is asked. */
+    CHECK(!decode("web.face = builtin", &c, &e));
+    CHECK(!os64_font_config_web_prepare(text, &c, 40, &set, &e));
+    CHECK(!os64_font_set_view(set, OS64_FONT_ROLE_UI, &view) && view.row_height_px == 16);
+    os64_font_set_release(set); set = NULL;
+    /* A face that will not open is the Web setting's line. */
+    CHECK(!decode("ui.size = 16\nweb.face = fonts/bad", &c, &e));
+    CHECK(os64_font_config_web_prepare(text, &c, 16, &set, &e) == OS64_FONT_CONFIG_FACE);
+    CHECK(!set && e.web && e.line == 2 && e.role == OS64_FONT_ROLE_COUNT);
+    /* The same error, reused for a Web face that opens, says nothing failed. */
+    os64_font_config_t opens = c;
+    snprintf(opens.roles[OS64_FONT_CONFIG_WEB].face[0], OS64_FONT_PATH_CAP, "%s", "builtin");
+    opens.roles[OS64_FONT_CONFIG_WEB].size = 16;
+    CHECK(!os64_font_config_web_prepare(text, &opens, 16, &set, &e) && set != NULL);
+    CHECK(e.status == OS64_FONT_CONFIG_OK && !e.web && e.line == 0);
+    os64_font_set_release(set); set = NULL;
+    /* The role door does not open it, so a broken Web face cannot cost the
+     * desktop its fonts. */
+    CHECK(!os64_font_config_prepare(text, &c, &set, &e));
+    os64_font_set_release(set);
+    set = NULL;
+    /* Nor is a failure the role door meets laid on the Web setting: the
+     * provider's "no one role" is not the Web index. Every allocation of a
+     * preparation refused in turn; whatever fails, `web` stays false. */
+    CHECK(!decode(choices, &c, &e));
+    for (size_t pos = 1; pos < 2000; ++pos) {
+        deny = calls + pos;
+        os64_font_config_status_t st = os64_font_config_prepare(text, &c, &set, &e);
+        bool fired = calls >= deny;
+        deny = 0;
+        if (st)
+            CHECK(!e.web && set == NULL);
+        os64_font_set_release(set);
+        set = NULL;
+        if (!fired)
+            break;
+    }
+    /* And the other way: whatever stops the Web face's set — its face, or
+     * memory any role of the set needed — is the Web setting's. */
+    size_t web_failures = 0;
+    for (size_t pos = 1; pos < 2000; ++pos) {
+        deny = calls + pos;
+        os64_font_config_status_t st = os64_font_config_web_prepare(text, &c, 16, &set, &e);
+        bool fired = calls >= deny;
+        deny = 0;
+        if (st) {
+            ++web_failures;
+            CHECK(e.web && e.role == OS64_FONT_ROLE_COUNT && set == NULL);
+        }
+        os64_font_set_release(set);
+        set = NULL;
+        if (!fired)
+            break;
+    }
+    CHECK(web_failures > 0);
+    CHECK(!os64_text_destroy(text));
+
+    /* A whole config past 4096 bytes encoded, inside the limit a config may
+     * be, is a config like any other to the readers that encode it to check
+     * it — discovery among them. */
+    os64_font_config_defaults(&c);
+    snprintf(c.path, OS64_FONT_PATH_CAP, "%s", "/cfg/fonts.conf");
+    for (size_t f = 0; f < OS64_FONT_FAMILY_COUNT; ++f)
+        for (size_t k = 0; k < OS64_FONT_FAMILY_STYLES + OS64_FONT_CONFIG_FALLBACK_MAX; ++k) {
+            char path[OS64_FONT_PATH_CAP];
+            snprintf(path, sizeof(path), "/cfg/fonts/%zu%zu-%0220d.ttf", f, k, 0);
+            snprintf(c.families[f].face[k], OS64_FONT_PATH_CAP, "%s", path);
+        }
+    char big[OS64_FONT_CONFIG_BYTES_MAX + 1];
+    int64_t bytes = os64_font_config_encode(&c, big, sizeof(big));
+    CHECK(bytes > 4096 && bytes <= OS64_FONT_CONFIG_BYTES_MAX);
+    os64_text_options_t opts = {.memory={NULL,allocate,release}};
+    CHECK(!os64_font_context_create(&opts, &text));
+    os64_font_catalog_t *catalog = NULL;
+    CHECK(os64_font_config_discover(text, &c, &catalog) == OS64_FONT_CONFIG_OK && catalog);
+    os64_font_catalog_release(catalog);
+    CHECK(!os64_text_destroy(text));
+
+    /* WHAT DECODE ACCEPTS, ENCODE WRITES. A file naming every face and no
+     * size grows when encode spells the sizes out; across path lengths, one
+     * that is accepted encodes, and one that fits the limit as written but
+     * not as encoded is refused when it is read. */
+    static const char *const role_keys[] = {"ui", "terminal", "document", "web"};
+    static const char *const fam_keys[] = {"serif", "sans", "mono"};
+    static const char *const fam_slots[] = {"", ".bold", ".italic", ".bolditalic",
+                                            ".fallback.1", ".fallback.2"};
+    static char file[OS64_FONT_CONFIG_BYTES_MAX * 2], encoded_back[OS64_FONT_CONFIG_BYTES_MAX + 1];
+    bool refused_under_limit = false;
+    for (int width = 200; width < (int)OS64_FONT_PATH_CAP - 8; ++width) {
+        size_t used = 0;
+        for (size_t r = 0; r < 4; ++r) {
+            used += (size_t)snprintf(file + used, sizeof(file) - used, "%s.face = /r%zu0-%0*d\n",
+                                     role_keys[r], r, width, 0);
+            for (size_t s = 1; s < 3; ++s)
+                used += (size_t)snprintf(file + used, sizeof(file) - used,
+                                         "%s.fallback.%zu = /r%zu%zu-%0*d\n",
+                                         role_keys[r], s, r, s, width, 0);
+        }
+        for (size_t f = 0; f < 3; ++f)
+            for (size_t k = 0; k < 6; ++k)
+                used += (size_t)snprintf(file + used, sizeof(file) - used,
+                                         "family.%s%s = /f%zu%zu-%0*d\n",
+                                         fam_keys[f], fam_slots[k], f, k, width, 0);
+        os64_font_config_t read_back;
+        os64_font_config_status_t st =
+            os64_font_config_decode(file, used, "/cfg/fonts.conf", &read_back, &e);
+        if (st == OS64_FONT_CONFIG_OK)
+            CHECK(os64_font_config_encode(&read_back, encoded_back, sizeof(encoded_back)) > 0);
+        else
+            CHECK(st == OS64_FONT_CONFIG_LIMIT);
+        if (st == OS64_FONT_CONFIG_LIMIT && used <= OS64_FONT_CONFIG_BYTES_MAX)
+            refused_under_limit = true;
+    }
+    CHECK(refused_under_limit);            /* the case was really reached */
+}
+
 int main(int argc, char **argv)
 {
     CHECK(argc == 2);
@@ -384,7 +572,7 @@ int main(int argc, char **argv)
     files[7].data = malloc(files[1].length + 1); CHECK(files[7].data);
     memcpy(files[7].data, files[1].data, files[1].length);
     files[7].data[files[1].length] = 0; ++files[7].length;
-    parsing(); families(argv[1]); loading();
+    parsing(); families(argv[1]); web_setting(); loading();
     free(files[6].data); free(files[7].data);
     free(files[1].data); free(files[2].data);
     printf("font_config: %zu checks, 0 failures; no live allocations\n", checks);

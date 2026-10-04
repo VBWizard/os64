@@ -117,7 +117,16 @@ static void suitability(void)
     CHECK(os64_font_set_prepare(c,specs,&set)==OS64_FONT_OK);
     os64_font_role_view_t v;CHECK(os64_font_set_view(set,1,&v)==OS64_FONT_OK);
     CHECK(v.cell_width_px==8 && v.font_count==2);
-    os64_font_set_release(set);finish(c);
+    os64_font_set_release(set);
+    /* A role opens across the engine's range; 8..96 is fonts.conf's policy. */
+    const uint32_t opens[2]={3,OS64_FONT_PIXEL_MAX};
+    for (int i=0;i<2;i++) {
+        specs[1].pixel_height=opens[i];
+        CHECK(os64_font_set_prepare(c,specs,&set)==OS64_FONT_OK);os64_font_set_release(set);
+    }
+    specs[1].pixel_height=OS64_FONT_PIXEL_MAX+1;
+    CHECK(os64_font_set_prepare(c,specs,&set)==OS64_FONT_BAD_ARGUMENT && !set);
+    specs[1].pixel_height=0;finish(c);
     backend.face_info=fixed_info;backend.lookup=varying_ascii;
     c=context(&backend);specs[1].primary=source(&p,1);
     CHECK(os64_font_set_prepare(c,specs,&set)==OS64_FONT_UNSUPPORTED && !set);finish(c);

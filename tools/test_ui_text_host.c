@@ -285,7 +285,7 @@ static void probe_metrics(os64_ui_widget_t *w, os64_ui_t *ui)
 static const os64_ui_class_t kProbeClass = {
     "probe", NULL, NULL, NULL,
     os64_ui_stage_caption, os64_ui_commit_caption, os64_ui_discard_caption,
-    NULL, probe_metrics
+    NULL, probe_metrics, NULL
 };
 static os64_ui_widget_t gProbe;
 
@@ -825,6 +825,136 @@ static void button_paints_from_its_run(const char *dir)
     current = "";
 }
 
+/* The application's face: lent beside the settings' set, worn only by the
+ * widgets that ask for it, followed when it changes, kept across an
+ * adoption, and let go of with the window. */
+static const char *app_face_row(size_t index, void *user)
+{ (void)user; return index < 3 ? "row" : ""; }
+
+static void app_face_beside_the_settings(const char *dir)
+{
+    current = "application face";
+    os64_ui_t ui;
+    memset(&ui, 0, sizeof(ui));
+    ui.theme = (os64_ui_theme_t){ .pad = 6, .button_h = 20, .gap = 4 };
+    os64_ui_widget_t root, chrome, page;
+    os64_ui_listbox_t list;
+    os64_ui_panel(&root);
+    os64_ui_button(&chrome, "WWWW", NULL, NULL);
+    os64_ui_button(&page, "WWWW", NULL, NULL);
+    os64_ui_listbox(&list, 3, app_face_row, NULL, NULL);
+    chrome.bounds = page.bounds = (os64_gui_rect_t){0, 0, 300, 60};
+    list.w.bounds = (os64_gui_rect_t){0, 0, 300, 200};
+    os64_ui_add_child(&root, &chrome);
+    os64_ui_add_child(&root, &page);
+    os64_ui_add_child(&root, &list.w);
+    os64_ui_set_root(&ui, &root);
+    os64_ui_widget_app_face(&ui, &page, true);
+    os64_ui_widget_app_face(&ui, &list.w, true);
+
+    /* Nothing lent: the application's role is the Interface role. */
+    int32_t ui_w = measured(&ui, "WWWW", 4), app_w = 0;
+    CHECK(os64_ui_text_measure(&ui, OS64_UI_FONT_APP, "WWWW", 4, &app_w) == OS64_FONT_OK);
+    CHECK(app_w == ui_w);
+    CHECK(page.natural_h == chrome.natural_h);
+
+    os64_text_context_t *text = os64_ui_font_context(&ui);
+    os64_font_set_t *big = outline_set(text, dir, "DejaVuSans.ttf", 32);
+    os64_font_set_t *small = outline_set(text, dir, "DejaVuSans.ttf", 12);
+    CHECK(big && small);
+    if (!big || !small) { current = ""; return; }
+    CHECK(os64_ui_font_app(&ui, big, OS64_FONT_ROLE_COUNT) == OS64_FONT_BAD_ARGUMENT);
+    CHECK(os64_ui_font_app(&ui, big, OS64_FONT_ROLE_UI) == OS64_FONT_OK);
+    os64_font_set_release(big);           /* the window holds its own reference */
+
+    int32_t big_row = os64_ui_font_row_height(&ui, OS64_UI_FONT_APP);
+    CHECK(big_row > os64_ui_font_row_height(&ui, OS64_FONT_ROLE_UI));
+    CHECK(os64_ui_text_measure(&ui, OS64_UI_FONT_APP, "WWWW", 4, &app_w) == OS64_FONT_OK);
+    CHECK(app_w > ui_w);
+    CHECK(measured(&ui, "WWWW", 4) == ui_w);           /* the chrome is untouched */
+    CHECK(page.natural_h > chrome.natural_h);           /* re-derived at the lend */
+    CHECK(list.row_h == big_row);
+
+    /* Paint both buttons so each retains a run, then change the lent face:
+     * only the page's run goes, and the next paint lays it out again. */
+    canvas_t c;
+    canvas_init(&c, 0xff000000);
+    os64_draw_ctx_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.surf = c.s;
+    chrome.cls->paint(&chrome, &ctx, &ui.theme);
+    page.cls->paint(&page, &ctx, &ui.theme);
+    list.w.cls->paint(&list.w, &ctx, &ui.theme);
+    void *chrome_run = chrome.run;
+    CHECK(chrome_run != NULL && page.run != NULL);
+    CHECK(os64_ui_font_app(&ui, small, OS64_FONT_ROLE_UI) == OS64_FONT_OK);
+    CHECK(page.run == NULL && chrome.run == chrome_run);
+    CHECK(os64_ui_font_row_height(&ui, OS64_UI_FONT_APP) < big_row);
+    CHECK(list.row_h == os64_ui_font_row_height(&ui, OS64_UI_FONT_APP));
+    page.cls->paint(&page, &ctx, &ui.theme);
+    CHECK(page.run != NULL);
+
+    /* An adoption replaces the settings' set and leaves the lent face. */
+    int32_t small_row = os64_ui_font_row_height(&ui, OS64_UI_FONT_APP);
+    os64_font_set_t *settings = outline_set(text, dir, "DejaVuSans.ttf", 24);
+    CHECK(settings != NULL);
+    if (settings) {
+        os64_font_consumer_t consumer;
+        os64_ui_font_consumer(&ui, &consumer);
+        CHECK(os64_font_adopt(settings, &consumer, 1, NULL) == OS64_FONT_OK);
+        os64_font_set_release(settings);
+        CHECK(os64_ui_font_row_height(&ui, OS64_UI_FONT_APP) == small_row);
+        CHECK(os64_ui_font_row_height(&ui, OS64_FONT_ROLE_UI) != small_row);
+    }
+
+    /* A widget leaving the face drops what it laid out in it. */
+    page.cls->paint(&page, &ctx, &ui.theme);
+    os64_ui_widget_app_face(&ui, &page, false);
+    CHECK(page.run == NULL && !page.app_face);
+    CHECK(page.natural_h == chrome.natural_h);
+
+    /* A lend allocates nothing, so a caller may make it after another
+     * change and need no way back; the face's tab stop is measured at its
+     * first layout instead, which then works as any does. */
+    unsigned long before = allocations;
+    CHECK(os64_ui_font_app(&ui, small, OS64_FONT_ROLE_UI) == OS64_FONT_OK);
+    CHECK(allocations == before);
+    int32_t tabbed = 0;
+    CHECK(os64_ui_text_measure(&ui, OS64_UI_FONT_APP, "a\tb", 3, &tabbed) == OS64_FONT_OK &&
+          tabbed > 0);
+
+    /* A window holding a lent face may not move to another engine: the
+     * face's fonts are this context's. */
+    // A window whose ONLY font is the lent face — no role set bound, no
+    // text drawn yet — is the case the guard must see.
+    // It borrowed its context (A, the owner's), so nothing else marks it.
+    os64_ui_t lone, owner, spare;
+    memset(&lone, 0, sizeof(lone));
+    memset(&owner, 0, sizeof(owner));
+    memset(&spare, 0, sizeof(spare));
+    os64_text_context_t *mine = os64_ui_font_context(&owner);
+    os64_text_context_t *other = os64_ui_font_context(&spare);
+    CHECK(mine != NULL && os64_ui_font_borrow_context(&lone, mine) == OS64_FONT_OK);
+    os64_font_set_t *only = mine ? outline_set(mine, dir, "DejaVuSans.ttf", 20) : NULL;
+    CHECK(only != NULL && other != NULL);
+    if (only != NULL) {
+        CHECK(os64_ui_font_app(&lone, only, OS64_FONT_ROLE_UI) == OS64_FONT_OK);
+        os64_font_set_release(only);
+        CHECK(os64_ui_font_borrow_context(&lone, other) == OS64_FONT_BUSY);
+    }
+    CHECK(os64_ui_font_release(&lone) == OS64_FONT_OK);
+    CHECK(os64_ui_font_release(&owner) == OS64_FONT_OK);
+    CHECK(os64_ui_font_release(&spare) == OS64_FONT_OK);
+
+    /* Lending nothing lets the set go; the window then owes nothing. */
+    CHECK(os64_ui_font_app(&ui, NULL, OS64_FONT_ROLE_UI) == OS64_FONT_OK);
+    CHECK(list.row_h == os64_ui_font_row_height(&ui, OS64_FONT_ROLE_UI));
+    os64_font_set_release(small);
+    CHECK(os64_ui_font_release(&ui) == OS64_FONT_OK);
+    CHECK(os64_ui_font_live_bytes(&ui) == 0);
+    current = "";
+}
+
 /* R2c + R5 — a list that the adoption makes TALLER must have runs prepared
  * for the rows it will be able to show, not the rows it can show now; and
  * whatever it retains must be released when the window's fonts go. */
@@ -1100,6 +1230,118 @@ static void ui_test_view_theme(os64_ui_theme_t *t)
     t->text_caret = 0xffff0000;
     t->font_w = OS64_FONT_GLYPH_W; t->font_h = OS64_FONT_GLYPH_H;
 }
+
+/* A lent face replaced under widgets that have scrolled and kept rows: each
+ * ends up as one opened in the new face would be — the scroll measured
+ * afresh, not carried over in the old face's pixels — and a list keeps the
+ * slots its next paint fills, so the paint after that lays nothing out. */
+static void ui_test_burst(os64_ui_widget_t *w, os64_ui_t *ui, const char *seq);
+static void app_face_change_is_measured_again(const char *dir)
+{
+    current = "application face changed";
+    os64_ui_t ui;
+    memset(&ui, 0, sizeof(ui));
+    ui_test_view_theme(&ui.theme);
+    os64_ui_widget_t root;
+    os64_ui_panel(&root);
+    char text[40], fresh_text[40];
+    os64_ui_textfield_t field, fresh_field;
+    os64_ui_textview_t view, fresh_view, keyed, fresh_keyed;
+    os64_ui_listbox_t list;
+    os64_ui_textfield(&field, text, sizeof(text), NULL, NULL, NULL);
+    os64_ui_textfield(&fresh_field, fresh_text, sizeof(fresh_text), NULL, NULL, NULL);
+    os64_ui_textview(&view, &kUiTestBuf, NULL, NULL, NULL);
+    os64_ui_textview(&fresh_view, &kUiTestBuf, NULL, NULL, NULL);
+    os64_ui_textview(&keyed, &kUiTestBuf, NULL, NULL, NULL);
+    os64_ui_textview(&fresh_keyed, &kUiTestBuf, NULL, NULL, NULL);
+    os64_ui_listbox(&list, 3, app_face_row, NULL, NULL);
+    field.w.bounds = fresh_field.w.bounds = (os64_gui_rect_t){0, 0, 90, 60};
+    view.w.bounds = fresh_view.w.bounds = (os64_gui_rect_t){0, 0, 90, 60};
+    keyed.w.bounds = fresh_keyed.w.bounds = (os64_gui_rect_t){0, 0, 300, 80};
+    list.w.bounds = (os64_gui_rect_t){0, 0, 300, 200};
+    os64_ui_widget_t *all[] = {&field.w, &fresh_field.w, &view.w, &fresh_view.w, &list.w,
+                               &keyed.w, &fresh_keyed.w};
+    for (size_t i = 0; i < sizeof all / sizeof all[0]; ++i)
+        os64_ui_add_child(&root, all[i]);
+    os64_ui_set_root(&ui, &root);
+    for (size_t i = 0; i < sizeof all / sizeof all[0]; ++i)
+        os64_ui_widget_app_face(&ui, all[i], true);
+
+    os64_text_context_t *text_ctx = os64_ui_font_context(&ui);
+    os64_font_set_t *big = outline_set(text_ctx, dir, "DejaVuSans.ttf", 32);
+    os64_font_set_t *small = outline_set(text_ctx, dir, "DejaVuSans.ttf", 12);
+    CHECK(big && small);
+    if (!big || !small) { current = ""; return; }
+    CHECK(os64_ui_font_app(&ui, big, OS64_FONT_ROLE_UI) == OS64_FONT_OK);
+    /* The settings' adoption is what gives a list its row slots. */
+    os64_font_set_t *settings = outline_set(text_ctx, dir, "DejaVuSans.ttf", 16);
+    CHECK(settings != NULL);
+    if (settings) {
+        os64_font_consumer_t consumer;
+        os64_ui_font_consumer(&ui, &consumer);
+        CHECK(os64_font_adopt(settings, &consumer, 1, NULL) == OS64_FONT_OK);
+        os64_font_set_release(settings);
+    }
+    const char *long_line = "WWWWWWWWWWWWWWWWWWWW";
+    os64_ui_textfield_set(&ui, &field, long_line);          /* caret at the end */
+    os64_ui_textview_goto(&ui, &view, 1, strlen(kUiTestDoc[1]), false);
+    os64_ui_textview_goto(&ui, &keyed, 1, 7, false);         /* after "kerning" */
+    canvas_t c;
+    canvas_init(&c, 0xff000000);
+    os64_draw_ctx_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.surf = c.s;
+    field.w.cls->paint(&field.w, &ctx, &ui.theme);
+    view.w.cls->paint(&view.w, &ctx, &ui.theme);
+    list.w.cls->paint(&list.w, &ctx, &ui.theme);
+    int32_t big_left = field.left_px;
+    int64_t big_view_left = view.left_px;
+    CHECK(big_left > 0 && big_view_left > 0);
+    size_t slots = list.row_run_count;
+    CHECK(slots > 0 && list.row_runs != NULL && list.row_runs[0] != NULL);
+
+    CHECK(os64_ui_font_app(&ui, small, OS64_FONT_ROLE_UI) == OS64_FONT_OK);
+    /* Up before any paint, after the application set the scroll itself:
+     * the goal is the caret's place in the new face, as in a view opened
+     * in it. */
+    os64_ui_textview_scroll_left(&ui, &keyed, 0);
+    /* A goal that cannot be measured again yet moves nothing, even when the
+     * line it would move to can be laid out. */
+    deny_countdown = 0;
+    ui_test_burst(&keyed.w, &ui, "[A");
+    deny_countdown = -1;
+    CHECK(keyed.cur_line == 1 && keyed.cur_col == 7);
+    ui_test_burst(&keyed.w, &ui, "[A");
+    os64_ui_textview_goto(&ui, &fresh_keyed, 1, 7, false);
+    ui_test_burst(&fresh_keyed.w, &ui, "[A");
+    CHECK(keyed.cur_line == 0 && fresh_keyed.cur_line == 0);
+    CHECK(keyed.cur_col == fresh_keyed.cur_col && keyed.cur_col < strlen(kUiTestDoc[0]));
+    bool kept = list.row_run_count == slots && list.row_runs != NULL;
+    CHECK(kept);
+    for (size_t i = 0; kept && i < slots; ++i)
+        CHECK(list.row_runs[i] == NULL);       /* the runs went; the slots stayed */
+    field.w.cls->paint(&field.w, &ctx, &ui.theme);
+    view.w.cls->paint(&view.w, &ctx, &ui.theme);
+    list.w.cls->paint(&list.w, &ctx, &ui.theme);
+
+    /* The same caret in widgets opened under the small face. */
+    os64_ui_textfield_set(&ui, &fresh_field, long_line);
+    os64_ui_textview_goto(&ui, &fresh_view, 1, strlen(kUiTestDoc[1]), false);
+    CHECK(field.left_px == fresh_field.left_px && field.left_px < big_left);
+    CHECK(view.left_px == fresh_view.left_px && view.left_px < big_view_left);
+    CHECK(view.goal_x == fresh_view.goal_x);
+    CHECK(kept && list.row_runs[0] != NULL);
+    unsigned long before = allocations;
+    list.w.cls->paint(&list.w, &ctx, &ui.theme);
+    CHECK(allocations == before);              /* the kept slots are reused */
+
+    CHECK(os64_ui_font_app(&ui, NULL, OS64_FONT_ROLE_UI) == OS64_FONT_OK);
+    os64_font_set_release(big);
+    os64_font_set_release(small);
+    CHECK(os64_ui_font_release(&ui) == OS64_FONT_OK);
+    current = "";
+}
+
 
 static void textview_geometry_and_painting(const char *dir)
 {
@@ -2870,6 +3112,8 @@ int main(int argc, char **argv)
     tab_interval_failure_travels(dir);
     button_paints_from_its_run(dir);
     list_stages_its_candidate_rows(dir);
+    app_face_beside_the_settings(dir);
+    app_face_change_is_measured_again(dir);
     changed_caption_is_not_placed_from_nothing(dir);
     staged_children_follow_their_staged_parent(dir);
     textview_geometry_and_painting(dir);

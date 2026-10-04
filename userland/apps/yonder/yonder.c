@@ -116,6 +116,10 @@ static struct {
     os64_font_family_cache_t *families;
 } s_faces;
 
+// fonts.conf as read at start, or its defaults: the families above, and the
+// Web setting — the page's default font size, and the controls' face.
+static os64_font_config_t s_fonts_conf;
+
 // libflow's family list and the provider's are the same shape in the same
 // generic order, so a style's list is handed over as it is.
 _Static_assert(sizeof(flow_family_name_t) == sizeof(os64_font_family_name_t) &&
@@ -226,11 +230,13 @@ static const char *faces_open(void)
     if (os64_text_create(&o, &s_faces.text) != OS64_FONT_OK)
         return "no text context for the page";
     s_env.text = s_faces.text;
-    os64_font_config_t config;
     os64_font_config_error_t error;
-    if (os64_font_config_read(&config, &error) == OS64_FONT_CONFIG_OK &&
-        os64_font_config_family_prepare(s_faces.text, &config, &s_faces.families, &error) ==
-            OS64_FONT_CONFIG_OK)
+    bool read = os64_font_config_read(&s_fonts_conf, &error) == OS64_FONT_CONFIG_OK;
+    if (!read)
+        os64_font_config_defaults(&s_fonts_conf);
+    s_env.viewport_font_px = (int32_t)s_fonts_conf.roles[OS64_FONT_CONFIG_WEB].size;
+    if (read && os64_font_config_family_prepare(s_faces.text, &s_fonts_conf, &s_faces.families,
+                                                &error) == OS64_FONT_CONFIG_OK)
         return NULL;
     // Whatever failed — a line that will not parse, a family named twice, a
     // face that will not open, or the file itself unreadable — is said
@@ -507,6 +513,8 @@ static int32_t scale_zoom(int32_t v, uint32_t to, uint32_t from)
     return (int32_t)(r > INT32_MAX ? INT32_MAX : r < INT32_MIN ? INT32_MIN : r);
 }
 
+static bool lay_out_page(Page *p, int32_t width, int32_t height);
+
 static bool page_lay_out(Page *p, int32_t width, int32_t height, uint32_t zoom)
 {
     garb_cascade_t *cascade = p->cascade;
@@ -746,9 +754,9 @@ static int64_t size_rows(const char *v)
 }
 
 // A select's box: the rows its list shows, as wide as its longest option.
-// Measured in the window's own face, the one its widget paints in. The
-// page chooses `size` (at most INT32_MAX rows, by size_rows), so the
-// arithmetic is 64-bit and the answer clamped.
+// Measured in the controls' face (controls_face_at), the one its widget
+// paints in. The page chooses `size` (at most INT32_MAX rows, by
+// size_rows), so the arithmetic is 64-bit and the answer clamped.
 static void select_size(const os64_page_control_t *c, const os64_html_node_t *node,
                         int32_t *w, int32_t *h)
 {
@@ -762,14 +770,20 @@ static void select_size(const os64_page_control_t *c, const os64_html_node_t *no
     for (int32_t k = 0; k < c->noptions; k++) {
         int32_t px = 0;
         const char *label = c->options[k].label != NULL ? c->options[k].label : "";
-        if (os64_ui_text_measure(&g.ui, OS64_FONT_ROLE_UI, label, os64_strlen(label), &px) ==
+        if (os64_ui_text_measure(&g.ui, OS64_UI_FONT_APP, label, os64_strlen(label), &px) ==
                 OS64_FONT_OK && px > widest)
             widest = px;
     }
     // The listbox's own arithmetic: a two-pixel frame, rows eight pixels
-    // taller than the face's, labels six pixels in.
-    *h = clamp32(rows * ((int64_t)os64_ui_font_row_height(&g.ui, OS64_FONT_ROLE_UI) + 8) + 4);
-    *w = clamp32((int64_t)widest + 2 * 6 + 4);
+    // taller than the face's, labels six pixels in. The face is already at
+    // the zoom and libflow scales a replaced box's own size by it, so the
+    // answer goes back in CSS pixels, rounded up so no row is cut. At most
+    // INT32_MAX rows of a face under a thousand pixels, so 64 bits hold it.
+    int64_t zoom = s_env.zoom > 0 ? s_env.zoom : 1000;
+    int64_t dh = rows * ((int64_t)os64_ui_font_row_height(&g.ui, OS64_UI_FONT_APP) + 8) + 4;
+    int64_t dw = (int64_t)widest + 2 * 6 + 4;
+    *h = clamp32((dh * 1000 + zoom - 1) / zoom);
+    *w = clamp32((dw * 1000 + zoom - 1) / zoom);
     if (*w < 48)
         *w = 48;
 }
@@ -1075,7 +1089,7 @@ static void relayout(bool again)
     }
     os64_ticks_t t0, t1;
     os64_ticks(&t0);
-    bool laid = page_lay_out(&g.page, width, height, g.zoom);
+    bool laid = lay_out_page(&g.page, width, height);
     os64_ticks(&t1);
     // The attempt consumes the moves whether or not it fits: kept, they
     // would retry a layout that just failed at every event batch.
@@ -1149,7 +1163,7 @@ static void arrive_now(Page *fresh, NavKind kind, const way_position_t *crumb,
     int32_t height = g.view.bounds.h > 0 ? g.view.bounds.h : 1;
     os64_ticks_t t0, t1;
     os64_ticks(&t0);
-    bool laid = page_lay_out(fresh, width, height, g.zoom);
+    bool laid = lay_out_page(fresh, width, height);
     os64_ticks(&t1);
     if (!laid) {
         sheets_leave(fresh);
@@ -2577,6 +2591,7 @@ static void forms_build(void)
         fw->w->hidden = true;
         g.by_control[b->control] = g.nfw++;
         os64_ui_add_child(&g.root, fw->w);
+        os64_ui_widget_app_face(&g.ui, fw->w, true);   // the page's face, not the toolbar's
         os64_ui_set_enabled(&g.ui, fw->w,
                             !c->disabled && !c->readonly && fw->kind != FW_FILE);
     }
@@ -3188,8 +3203,89 @@ static void toggle_positioning(void)
 static const uint32_t kZoomSteps[] = {250,  330,  500,  670,  750,  800,  900,  1000, 1100,
                                       1250, 1500, 1750, 2000, 2500, 3000, 4000, 5000};
 
+// The page's form controls draw in the Web face (fonts.conf's `web.face`)
+// at the size browsers give a control — 13/16 of the page's default size,
+// 13 px at 16 (Chrome's small-control) — at the zoom in force, lent to the
+// window so only those widgets wear it. A face that will not open leaves
+// them in the Interface font, and says so once. yonder keeps its own
+// reference to the set it lent, so the one before can be lent back.
+static os64_font_set_t *s_controls_set;
+static uint32_t s_controls_px;
+static bool s_controls_refused;
+
+// Lends the controls the Web face for `zoom`. False when the face they wear
+// does not change — that size's face is lent already, or it could not be
+// opened and they are in the Interface font already; true, with the face it
+// replaced and that face's size in *was and *was_px (yonder's reference, now
+// the caller's), when it changed. A size whose face could not be lent is not
+// one they wear, so the next layout asks again: a refusal for want of memory
+// passes.
+static bool controls_face_at(uint32_t zoom, os64_font_set_t **was, uint32_t *was_px)
+{
+    uint32_t px = (uint32_t)(((uint64_t)(uint32_t)s_env.viewport_font_px * 13 * zoom + 8000) /
+                             16000);
+    if (px == s_controls_px && s_controls_set != NULL)
+        return false;
+    os64_text_context_t *text = os64_ui_font_context(&g.ui);
+    os64_font_set_t *set = NULL;
+    os64_font_config_error_t error = {0};
+    os64_font_config_status_t st =
+        text != NULL ? os64_font_config_web_prepare(text, &s_fonts_conf, px, &set, &error)
+                     : OS64_FONT_CONFIG_NO_MEMORY;
+    // A lend allocates nothing (os64_ui_font_app); one that is refused all
+    // the same leaves the controls in the Interface font.
+    if (st == OS64_FONT_CONFIG_OK && os64_ui_font_app(&g.ui, set, OS64_FONT_ROLE_UI) != OS64_FONT_OK) {
+        os64_font_set_release(set);
+        set = NULL;
+        st = OS64_FONT_CONFIG_LIMIT;
+    }
+    if (set == NULL) {
+        if (!s_controls_refused)
+            os64_printf("yonder: the Web face (%s) could not be used (%s); form controls are "
+                        "drawn in the Interface font\n",
+                        s_fonts_conf.roles[OS64_FONT_CONFIG_WEB].face[0],
+                        os64_font_config_status_name(st));
+        s_controls_refused = true;
+        // Already in the Interface font: a lend would only throw away what
+        // the controls have laid out in it.
+        if (s_controls_set == NULL)
+            return false;
+        (void)os64_ui_font_app(&g.ui, NULL, OS64_FONT_ROLE_UI);
+    }
+    *was = s_controls_set;
+    *was_px = s_controls_px;
+    s_controls_set = set;
+    s_controls_px = px;
+    return true;
+}
+
+// Lays a page out at the zoom in force, its controls' face with it: the face
+// for the zoom is lent first, because the layout measures the controls in it
+// (select_size), and lent back as it was when the layout fails — the page on
+// screen stays at its zoom, its controls in the face they wore. The lend
+// allocates nothing, so the way back cannot fail; but a lend lets go of the
+// controls' runs, so they are laid out again at their next paint, which
+// under the same shortage can draw them empty (BROWSER_DEBTS.md).
+static bool lay_out_page(Page *p, int32_t width, int32_t height)
+{
+    os64_font_set_t *was = NULL;
+    uint32_t was_px = 0;
+    bool changed = controls_face_at(g.zoom, &was, &was_px);
+    bool laid = page_lay_out(p, width, height, g.zoom);
+    if (changed && !laid) {
+        (void)os64_ui_font_app(&g.ui, was, OS64_FONT_ROLE_UI);
+        os64_font_set_release(s_controls_set);
+        s_controls_set = was;
+        s_controls_px = was_px;
+    } else if (changed) {
+        os64_font_set_release(was);
+    }
+    return laid;
+}
+
 // The zoom in force from now on; the page follows once the events queued
-// with this one are drained, so presses in a row lay it out once.
+// with this one are drained, so presses in a row lay it out once, and the
+// controls' face with it (lay_out_page).
 static void zoom_to(uint32_t zoom)
 {
     if (zoom == g.zoom)
@@ -3745,6 +3841,12 @@ int main(int argc, char **argv)
     layout();
     os64_ui_set_root(&g.ui, &g.root);
     (void)os64_ui_font_follow(&g.ui);
+    {
+        os64_font_set_t *was = NULL;
+        uint32_t was_px = 0;
+        if (controls_face_at(g.zoom, &was, &was_px))
+            os64_font_set_release(was);
+    }
     bar_show(false);
     layout();
 
@@ -3827,6 +3929,7 @@ int main(int argc, char **argv)
         way_cache_close(g.cache);
     // Nothing is left to read an agent: the workers are gone, and the pages.
     yonder_agents_release();
+    os64_font_set_release(s_controls_set);  // yonder's own reference to the lent face
     os64_ui_font_release(&g.ui);
     os64_font_family_cache_destroy(s_faces.families);
     os64_text_destroy(s_faces.text);

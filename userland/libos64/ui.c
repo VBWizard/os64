@@ -4,6 +4,7 @@
 // away and left the desktop with nothing to click.
 
 #include "os64/ui.h"
+#include "ui_internal.h"
 #include "os64/fmt.h"
 #include "os64/io.h"
 
@@ -534,24 +535,29 @@ static void panel_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
 	os64_draw_rect(&ctx->surf, w->bounds, t->panel_border);
 }
 
-int32_t os64_ui_control_min_height(os64_ui_t *ui)
+int32_t ui_control_min_height(os64_ui_t *ui, os64_font_role_t role)
 {
-	int32_t row = os64_ui_font_row_height(ui, OS64_FONT_ROLE_UI);
+	int32_t row = os64_ui_font_row_height(ui, role);
 	int32_t want = row + 2 * (ui ? ui->theme.pad : 0);
 	int32_t floor = ui ? ui->theme.button_h : 0;
 	return want > floor ? want : floor;
+}
+
+int32_t os64_ui_control_min_height(os64_ui_t *ui)
+{
+	return ui_control_min_height(ui, OS64_FONT_ROLE_UI);
 }
 
 // A label is one row of text, a button is a control: same face, different
 // furniture around it.
 static void label_metrics(os64_ui_widget_t *w, os64_ui_t *ui)
 {
-	w->natural_h = os64_ui_font_row_height(ui, OS64_FONT_ROLE_UI);
+	w->natural_h = os64_ui_font_row_height(ui, ui_role(w, OS64_FONT_ROLE_UI));
 }
 
 static void button_metrics(os64_ui_widget_t *w, os64_ui_t *ui)
 {
-	w->natural_h = os64_ui_control_min_height(ui);
+	w->natural_h = ui_control_min_height(ui, ui_role(w, OS64_FONT_ROLE_UI));
 }
 
 static void label_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
@@ -561,8 +567,9 @@ static void label_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
 	// a text change never shows the old glyphs underneath.
 	os64_draw_fill_rect(&ctx->surf, w->bounds, t->panel_bg);
 	os64_ui_t *ui = os64_ui_of(w);
-	int32_t ty = w->bounds.y + (w->bounds.h - os64_ui_font_row_height(ui, OS64_FONT_ROLE_UI)) / 2;
-	os64_ui_draw_text(ui, &w->run, OS64_FONT_ROLE_UI, &ctx->surf, w->bounds,
+	os64_font_role_t role = ui_role(w, OS64_FONT_ROLE_UI);
+	int32_t ty = w->bounds.y + (w->bounds.h - os64_ui_font_row_height(ui, role)) / 2;
+	os64_ui_draw_text(ui, &w->run, role, &ctx->surf, w->bounds,
 	                  w->bounds.x, ty < w->bounds.y ? w->bounds.y : ty,
 	                  w->text ? w->text : "", ui_strlen(w->text),
 	                  t->label_fg, t->panel_bg);
@@ -596,6 +603,7 @@ static void button_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
 		os64_draw_round_rect(&ctx->surf, edge, radius > i ? radius - i : 0, light, dark);
 	}
 	os64_ui_t *ui = os64_ui_of(w);
+	os64_font_role_t role = ui_role(w, OS64_FONT_ROLE_UI);
 	size_t len = ui_strlen(w->text);
 	// ASK THE RUN THAT WILL BE PAINTED, AND BELIEVE IT WHEN IT SAYS NO.
 	// Measuring separately meant a second layout on every paint; ignoring
@@ -607,11 +615,11 @@ static void button_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
 	// the SAME choice the width came from, the slot's run or the bitmap
 	// cell: a second lookup could find a face the first one did not.
 	int32_t tw = 0;
-	bool placed = os64_ui_run_width(ui, &w->run, OS64_FONT_ROLE_UI,
+	bool placed = os64_ui_run_width(ui, &w->run, role,
 	                                w->text, len, &tw) == OS64_FONT_OK;
 	int32_t tx = w->bounds.x + (w->bounds.w - tw) / 2;
 	int32_t ty = w->bounds.y +
-	             (w->bounds.h - os64_ui_font_row_height(ui, OS64_FONT_ROLE_UI)) / 2;
+	             (w->bounds.h - os64_ui_font_row_height(ui, role)) / 2;
 	if (tx < w->bounds.x + t->pad)
 		tx = w->bounds.x + t->pad;
 	if (ty < w->bounds.y)
@@ -619,7 +627,7 @@ static void button_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
 	os64_gui_rect_t text_clip = w->bounds;
 	if (radius > 0) { text_clip.x += radius; text_clip.w -= 2 * radius; }
 	if (placed)
-		os64_ui_draw_run(ui, w->run, OS64_FONT_ROLE_UI, &ctx->surf, text_clip,
+		os64_ui_draw_run(ui, w->run, role, &ctx->surf, text_clip,
 		                 tx, ty, w->text ? w->text : "", len, t->button_fg, face);
 }
 
@@ -683,11 +691,12 @@ static bool button_event(os64_ui_widget_t *w, os64_ui_t *ui,
 }
 
 const os64_ui_class_t os64_ui_panel_class  = { "panel",  panel_paint,  0, 0,
-	0, 0, 0, 0, 0 };
+	0, 0, 0, 0, 0, 0 };
 const os64_ui_class_t os64_ui_label_class  = { "label",  label_paint,  0, 0,
-	os64_ui_stage_caption, os64_ui_commit_caption, os64_ui_discard_caption, 0, label_metrics };
+	os64_ui_stage_caption, os64_ui_commit_caption, os64_ui_discard_caption, 0, label_metrics, 0 };
 const os64_ui_class_t os64_ui_button_class = { "button", button_paint, button_event, 0,
-	os64_ui_stage_caption, os64_ui_commit_caption, os64_ui_discard_caption, 0, button_metrics };
+	os64_ui_stage_caption, os64_ui_commit_caption, os64_ui_discard_caption, 0, button_metrics,
+	0 };
 
 static void widget_zero(os64_ui_widget_t *w)
 {
