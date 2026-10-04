@@ -7,9 +7,9 @@ input { width: 280px; }
 </style>
 <h1 id="heading">JavaScript is off</h1>
 <p>This is the finished-document D5b integration fixture.</p>
-<p>Tab into this field during the first script's short pause, and type Q:</p>
+<p>Click this field (or Tab into it) and type Q during the countdown:</p>
 <input id="field" value="">
-<p id="result">Waiting for the two inline scripts.</p>
+<p id="result">Waiting for the script checks.</p>
 <noscript><p id="fallback">Scripts are disabled. This fallback should be visible.</p></noscript>
 <script>
 var heldHeading = document.getElementById('heading');
@@ -19,6 +19,108 @@ var firstUntil = Date.now() + 600;
 while (Date.now() < firstUntil) {}
 heldHeading.textContent = 'JavaScript donuts!';
 console.log('J3:first-ready');
+</script>
+<!-- Short fixture turns leave about six seconds for human input without
+     raising the runtime deadline or requiring browser timers. -->
+<script>
+document.getElementById('result').textContent = 'Click the field and type Q. Checking in about 6 seconds.';
+var inputUntil = Date.now() + 300;
+while (Date.now() < inputUntil) {}
+</script>
+<script>
+document.getElementById('result').textContent = 'Click the field and type Q. Checking in about 6 seconds.';
+var inputUntil = Date.now() + 300;
+while (Date.now() < inputUntil) {}
+</script>
+<script>
+document.getElementById('result').textContent = 'Click the field and type Q. Checking in about 6 seconds.';
+var inputUntil = Date.now() + 300;
+while (Date.now() < inputUntil) {}
+</script>
+<script>
+document.getElementById('result').textContent = 'Click the field and type Q. Checking in about 6 seconds.';
+var inputUntil = Date.now() + 300;
+while (Date.now() < inputUntil) {}
+</script>
+<script>
+document.getElementById('result').textContent = 'Click the field and type Q. Checking in about 5 seconds.';
+var inputUntil = Date.now() + 300;
+while (Date.now() < inputUntil) {}
+</script>
+<script>
+document.getElementById('result').textContent = 'Click the field and type Q. Checking in about 5 seconds.';
+var inputUntil = Date.now() + 300;
+while (Date.now() < inputUntil) {}
+</script>
+<script>
+document.getElementById('result').textContent = 'Click the field and type Q. Checking in about 5 seconds.';
+var inputUntil = Date.now() + 300;
+while (Date.now() < inputUntil) {}
+</script>
+<script>
+document.getElementById('result').textContent = 'Click the field and type Q. Checking in about 4 seconds.';
+var inputUntil = Date.now() + 300;
+while (Date.now() < inputUntil) {}
+</script>
+<script>
+document.getElementById('result').textContent = 'Click the field and type Q. Checking in about 4 seconds.';
+var inputUntil = Date.now() + 300;
+while (Date.now() < inputUntil) {}
+</script>
+<script>
+document.getElementById('result').textContent = 'Click the field and type Q. Checking in about 4 seconds.';
+var inputUntil = Date.now() + 300;
+while (Date.now() < inputUntil) {}
+</script>
+<script>
+document.getElementById('result').textContent = 'Click the field and type Q. Checking in about 3 seconds.';
+var inputUntil = Date.now() + 300;
+while (Date.now() < inputUntil) {}
+</script>
+<script>
+document.getElementById('result').textContent = 'Click the field and type Q. Checking in about 3 seconds.';
+var inputUntil = Date.now() + 300;
+while (Date.now() < inputUntil) {}
+</script>
+<script>
+document.getElementById('result').textContent = 'Click the field and type Q. Checking in about 3 seconds.';
+var inputUntil = Date.now() + 300;
+while (Date.now() < inputUntil) {}
+</script>
+<script>
+document.getElementById('result').textContent = 'Click the field and type Q. Checking in about 3 seconds.';
+var inputUntil = Date.now() + 300;
+while (Date.now() < inputUntil) {}
+</script>
+<script>
+document.getElementById('result').textContent = 'Click the field and type Q. Checking in about 2 seconds.';
+var inputUntil = Date.now() + 300;
+while (Date.now() < inputUntil) {}
+</script>
+<script>
+document.getElementById('result').textContent = 'Click the field and type Q. Checking in about 2 seconds.';
+var inputUntil = Date.now() + 300;
+while (Date.now() < inputUntil) {}
+</script>
+<script>
+document.getElementById('result').textContent = 'Click the field and type Q. Checking in about 2 seconds.';
+var inputUntil = Date.now() + 300;
+while (Date.now() < inputUntil) {}
+</script>
+<script>
+document.getElementById('result').textContent = 'Click the field and type Q. Checking in about 1 seconds.';
+var inputUntil = Date.now() + 300;
+while (Date.now() < inputUntil) {}
+</script>
+<script>
+document.getElementById('result').textContent = 'Click the field and type Q. Checking in about 1 seconds.';
+var inputUntil = Date.now() + 300;
+while (Date.now() < inputUntil) {}
+</script>
+<script>
+document.getElementById('result').textContent = 'Click the field and type Q. Checking in about 1 seconds.';
+var inputUntil = Date.now() + 300;
+while (Date.now() < inputUntil) {}
 </script>
 <script>
 if (heldHeading !== document.getElementById('heading') ||

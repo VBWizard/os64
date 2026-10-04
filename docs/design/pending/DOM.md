@@ -1519,8 +1519,10 @@ and the painter **115/0** plus six matching paints pass. Strict userland build
 passes with bounded `-j4` concurrency.
 
 A private QEMU image/server loads `tools/yonder_script_fixture/index.html`.
-Two inline scripts change the visible heading to **Two JavaScript donuts!**;
-a real typed **Q** remains and the held wrapper matches after redraw. Navigation
+The first and final inline scripts change the visible heading to **Two JavaScript donuts!**;
+a real typed **Q** remains and the held wrapper matches after redraw. The manual
+fixture includes twenty 300 ms turns with a countdown, giving about six seconds
+for input without increasing the runtime deadline. Navigation
 from `cancel.html` discards its queued sentinel and shows `quiet.html`.
 `yonder --script-audit URL` reports **heap problems=0** on scripted-page retirement:
 this is heap integrity, while the host ledger/LSan and libjs destroy invariant

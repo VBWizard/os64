@@ -17,11 +17,13 @@ The status line shows **SCRIPTS ON** while the setting is enabled.
 
 With scripts off, the page says **JavaScript is off**, shows its fallback,
 and leaves the field empty. With scripts on, its first inline script captures
-a field wrapper and changes the heading. During that script's short pause,
-Tab into the field and type **Q**. After the second task, expect
+a field wrapper and changes the heading. Twenty short fixture tasks provide
+about six seconds for human input, with a countdown on the page. Click the
+field, or Tab into it, and type **Q**. After the final check, expect
 **Two JavaScript donuts!**, **Reference kept; field = Q**, and Q still in the
-field. The fallback is absent. Reload to repeat. The pause is a bounded test
-input window, not a performance benchmark; scripts run on the UI thread.
+field. The fallback is absent. Reload to repeat. Each input-window task pauses
+for 300 ms, within the existing one-second script deadline. This is a bounded
+manual test, not a performance benchmark; scripts run on the UI thread.
 
 For queued-task cancellation, open `cancel.html`, then navigate to another
 page while its schedule remains queued. Its first task pauses briefly and
