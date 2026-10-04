@@ -94,7 +94,8 @@ typedef enum {
     GARB_V_CALC,            // `calc`: a length-percentage (or number) to work out at compute time
     // An image named by its function (`text`). A linear or radial gradient
     // carries itself in `items` (comma): items[0] its geometry, then its
-    // stops. Linear: a NUMBER, the angle in degrees, or a KEYWORD, "to top",
+    // stops. Linear: a NUMBER, the angle in degrees in [0, 360) (taken round
+    // the turn in its own unit, so no unit overflows it), or a KEYWORD, "to top",
     // "to top right" and the rest. Radial: a KEYWORD "circle" or "ellipse"
     // whose items are its size — an extent KEYWORD, or a length-percentage
     // and a second one or "auto" — and its centre, x then y. A stop: a COLOR

@@ -487,6 +487,8 @@ IN: background-image: radial-gradient(20%, red, blue)
 OUT: invalid
 IN: background-image: radial-gradient(-10px, red, blue)
 OUT: invalid
+IN: background-image: linear-gradient(1e307rad, red, blue)
+OUT: background-image: linear-gradient(...)
 IN: background-image: radial-gradient(circle calc(10% + 1px), red, blue)
 OUT: invalid
 IN: background-image: radial-gradient(circle calc(1px - 2px), red, blue)
