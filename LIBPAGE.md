@@ -566,8 +566,8 @@ Failure preserves tree/state revisions, borrowed values and accounting.
 The node-based insert, replace, remove and replace-children entrances stage
 affected control state before changing the tree, then publish without another
 allocation. Radio groups and select choices therefore reflect each move,
-including moves between detached trees. Replaced children remain
-document-owned; reclamation belongs to D6. Bindings use these state-aware
+including moves between detached trees. Replaced children are subject to
+libhtml's hold/pin reclamation rules. Bindings use these state-aware
 entrances, and presentation watches both HTML and state revisions.
 Plans walk moving subtrees, reserve affected old/new option lists and clean
 textarea parents, and scan named radio peers when a move or explicit form-owner
@@ -707,13 +707,14 @@ cache refresh checks the HTML version; returned bytes last through unchanged
 reads and equal assignments, until their value changes, that cache refreshes
 after a tree mutation, or state is freed.
 
-D6's node holds are a required follow-on protocol: every retained state key
-must hold its node, and state destruction must release those holds. Models
-must hold node references as well as pin strings; document pins govern when
-a detached retired subtree can be reclaimed, while holds govern whether it
-may be retired. D3 uses the present document-lifetime node contract and does
-not implement reclamation. Yonder's rebuild loop and widget migration remain
-D5's integration work.
+Every persistent state key holds its node, including option/default-cache
+records. A reservation acquires the hold before a native mutation; abort
+releases it and commit transfers it to state until destruction. Models hold
+their node fields, option nodes and identity-map values, with paired releases
+at final model teardown. Their document pins separately protect snapshot
+strings. Holds decide whether a detached subtree can retire; pins decide when
+its bytes can be reclaimed. Yonder's node-keyed widgets, script schedule,
+details flips and saved box-scroll positions follow the same pairing rule.
 
 The independent `tools/test_libpage_rebuild.inc` checks detach/reinsert,
 never-inserted assignment, both setter entrances and value modes, option

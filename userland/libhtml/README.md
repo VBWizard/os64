@@ -56,7 +56,8 @@ reconstruction share one list of attribute records, so a verb copies an
 element's list before it first changes it. A document owns the
 allocation ledger; scratch buffers are charged to the same budget and released
 on finish. (Input held while a parse is stopped is the heap's: `max_bytes`
-bounds it.) Document-parser node/string storage uses geometric arena chunks.
+bounds it.) Document-parser node/string storage uses geometric arena chunks;
+reclaimed node bodies are reused, while those chunks remain charged.
 Fragment results use individually reclaimable ledger blocks, described below. A parser
 needs serialized calls, and so do a document's verbs; distinct documents
 share two counters (document marks and pin numbers), advanced atomically, and
@@ -66,6 +67,11 @@ copies one across.
 `os64_html_owns_node(doc, node)` answers ownership for a live connected or
 detached node without walking the tree or changing it. Consumers use this
 query rather than interpreting the library's opaque document mark.
+`os64_html_hold/release` count external node holders. A removed subtree is
+reclaimed as a unit when none of its nodes is held and its retirement is newer
+than every live snapshot pin. This includes template contents and consumed
+fragment containers. A node needed after a mutation must be held beforehand;
+newly created nodes never inserted remain document-owned until teardown.
 
 `core.c` owns allocations, pins and retirement, topology primitives, limits,
 and the parsing API, with the stop at a script and the input held meanwhile.
@@ -129,10 +135,11 @@ Returned nodes pack their names and original attributes into tagged ledger
 blocks. Text buffers and later private attribute records have separate blocks.
 Clone and attribute COW copy inline attributes and names rather than borrow
 another node's packed payload. Temporary scaffolding and unreachable parser
-payloads are freed before return. D6 must reclaim packed node blocks and
-owned text/private attributes after its holds and document pins allow it;
-inline attributes are not separate allocations. Collection itself is outside
-these APIs, so detached results remain owned until document teardown.
+payloads are freed before return. Reclamation frees packed node blocks and
+owned text/private attributes after holds and document pins allow it;
+inline attributes are not separate allocations. Inserting a fragment consumes
+its unheld container, even when empty, without changing the version for an
+empty insertion. Hold the fragment if its identity must remain usable.
 
 Serialization takes `children_only` for innerHTML and clears it for outerHTML.
 Document and fragment nodes have no wrapper. It follows current WHATWG HTML

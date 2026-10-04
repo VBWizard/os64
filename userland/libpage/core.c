@@ -1067,6 +1067,28 @@ static bool capture_initial(os64_page_t *page)
     return true;
 }
 
+// Each borrowed node field owns a hold, including partial models. Snapshot
+// pins separately protect the strings those fields borrowed at build time.
+static void model_nodes(const os64_page_t *page,
+                         void (*visit)(const os64_html_document_t *, const os64_html_node_t *))
+{
+    for (int32_t i = 0; i < page->nlinks; i++) visit(page->doc, page->links[i].node);
+    for (int32_t i = 0; i < page->nforms; i++) visit(page->doc, page->forms[i].node);
+    for (int32_t i = 0; i < page->ncontrols; i++) {
+        visit(page->doc, page->controls[i].node);
+        for (int32_t j = 0; page->controls[i].options != NULL && j < page->controls[i].noptions; j++)
+            visit(page->doc, page->controls[i].options[j].node);
+    }
+    for (int32_t i = 0; i < page->nimages; i++) visit(page->doc, page->images[i].node);
+    for (int32_t i = 0; i < page->nbackgrounds; i++) visit(page->doc, page->backgrounds[i].node);
+    for (int32_t i = 0; i < page->nsheets; i++) visit(page->doc, page->sheets[i].node);
+    if (page->has_refresh) visit(page->doc, page->refresh.node);
+    const PStrMap *maps[] = {&page->id_map, &page->aname_map};
+    for (size_t i = 0; i < P_ARRAY(maps); i++)
+        for (size_t j = 0; j < maps[i]->cap; j++)
+            if (maps[i]->keys[j] != NULL) visit(page->doc, maps[i]->vals[j]);
+}
+
 os64_page_t *os64_page_build(const os64_html_document_t *doc, const char *document_url,
                              const os64_page_options_t *opt, os64_page_state_t *state)
 {
@@ -1129,6 +1151,8 @@ os64_page_t *os64_page_build(const os64_html_document_t *doc, const char *docume
     }
     if (!page->incomplete && !p_state_normalize(page))
         page->incomplete = true;
+    model_nodes(page, os64_html_hold);
+    page->nodes_held = true;
     return page;
 }
 
@@ -1170,6 +1194,8 @@ void os64_page_free(os64_page_t *page)
         page->references--;
         return;
     }
+    if (page->nodes_held)
+        model_nodes(page, os64_html_release);
     for (int32_t i = 0; i < page->ncontrols; i++)
         os64_free((void *)page->controls[i].options);
     if (page->initial != NULL)

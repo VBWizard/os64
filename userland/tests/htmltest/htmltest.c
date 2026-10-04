@@ -96,12 +96,16 @@ static void verbs(void)
                 os64_html_remove(doc, doc->html) == OS64_HTML_ROOT_REQUIRED &&
                 os64_html_set_text(doc, text, "\xff", 1) == OS64_HTML_BAD_TEXT,
             "refusals by name");
+    os64_html_hold(doc, div);
     require(os64_html_replace(doc, doc->body, p2, div) == OS64_HTML_OK && !div->parent &&
                 doc->body->first_child == p2,
             "replace");
+    os64_html_release(doc, div);
+    os64_html_hold(doc, p2);
     require(os64_html_remove(doc, p2) == OS64_HTML_OK && !p2->parent &&
                 os64_html_insert(doc, doc->body, p2, NULL) == OS64_HTML_OK && doc->body->last_child == p2,
             "remove and put back");
+    os64_html_release(doc, p2);
     require(os64_html_version(doc) > version, "the version moved");
 
     /* Two elements from one start tag share an attribute list until one changes. */
@@ -309,6 +313,46 @@ static void fragments(void)
     require(os64_heap_verify() == 0, "heap after fragments and serialisation");
     os64_printf("htmltest: fragments and serialisation PASS\n");
 }
+static void reclamation(void)
+{
+    os64_html_options_t options=os64_html_options_default();
+    options.max_arena_bytes=64*1024;
+    os64_html_parser_t *parser=os64_html_parser_new(&options);
+    require(parser!=NULL,"reclaim constructor");
+    static const char start[]="<body><div></div>";
+    require(os64_html_parser_feed(parser,start,sizeof(start)-1)==OS64_HTML_OK,"reclaim feed");
+    os64_html_document_t *doc=os64_html_parser_finish(parser);
+    require(doc!=NULL&&!doc->refusal,"reclaim document");
+    os64_html_node_t *target=doc->body->first_child;
+    static const char content[]="<p a=one>first</p><template><b>inside</b></template>";
+    size_t arena=0,count=0;
+    for(unsigned round=0;round<2000;round++) {
+        int64_t status=0;
+        os64_html_node_t *fragment=os64_html_parse_fragment(doc,target,content,sizeof(content)-1,false,&status);
+        require(fragment!=NULL&&status==OS64_HTML_OK,"reclaim bounded fragment");
+        while(target->first_child)
+            require(os64_html_remove(doc,target->first_child)==OS64_HTML_OK,"reclaim old child");
+        require(os64_html_insert(doc,target,fragment,NULL)==OS64_HTML_OK,"reclaim replacement");
+        if(round==0) {arena=doc->arena_bytes;count=doc->node_count;}
+        else require(doc->arena_bytes==arena&&doc->node_count==count,"reclaim flat arena and node count");
+    }
+    os64_html_node_t *held=target->first_child;
+    os64_html_hold(doc,held);os64_html_hold(doc,held);
+    count=doc->node_count;
+    require(os64_html_remove(doc,held)==OS64_HTML_OK&&doc->node_count==count,"reclaim held subtree");
+    os64_html_release(doc,held);
+    require(os64_streq(held->first_child->text,"first"),"reclaim second holder");
+    os64_html_pin_t pin=os64_html_pin(doc);
+    require(pin!=0,"reclaim late pin");
+    os64_html_release(doc,held);
+    require(doc->node_count==count&&os64_html_retired_bytes(doc)>0,"reclaim late pin protects bytes");
+    os64_html_unpin(doc,pin);
+    require(doc->node_count==count-2&&os64_html_retired_bytes(doc)==0,"reclaim after late pin");
+    os64_printf("htmltest: reclamation PASS (2000 replacements, arena=%lu, nodes=%lu)\n",
+        (unsigned long)arena,(unsigned long)doc->node_count);
+    os64_html_document_free(doc);
+}
+
 static void attribute_batches(void)
 {
     os64_html_document_t *doc = parsed("<input id=q type=text value=before>");
@@ -390,6 +434,7 @@ int main(int argc, char **argv)
     stops();
     fragments();
     attribute_batches();
+    reclamation();
     os64_html_options_t options = os64_html_options_default();
     options.max_depth = 3;
     os64_html_parser_t *p = os64_html_parser_new(&options);
@@ -404,6 +449,6 @@ int main(int argc, char **argv)
     os64_html_parser_destroy(p);
     require(os64_heap_verify() == 0, "heap after free/cancel");
     os64_printf(
-        "htmltest: PASS (streaming, tree repair, UTF-8, namespaces, templates, form owners, verbs, stops, fragments, serialisation, attribute batches, bounds, heap)\n");
+        "htmltest: PASS (streaming, tree repair, UTF-8, namespaces, templates, form owners, verbs, stops, fragments, serialisation, attribute batches, reclamation, bounds, heap)\n");
     return HTMLTEST_OK;
 }

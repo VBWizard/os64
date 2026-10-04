@@ -14,6 +14,7 @@ import tempfile
 parser=argparse.ArgumentParser()
 parser.add_argument('objects',type=pathlib.Path)
 parser.add_argument('--logs',type=pathlib.Path,default=pathlib.Path('/tmp/dom-d5a-mutants'))
+parser.add_argument('--reclaim',action='store_true',help='run D6 binding ownership mutants')
 args=parser.parse_args()
 root=pathlib.Path(__file__).resolve().parent.parent
 args.logs.mkdir(parents=True,exist_ok=True)
@@ -51,6 +52,16 @@ mutants=[
  ('attribute-name-equals','content'," || *at == '='",''),
  ('error-prototype-setter','core','JS_DefinePropertyValueStr(ctx, error, "name", text, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE)','JS_SetPropertyStr(ctx, error, "name", text)'),
 ]
+if args.reclaim:
+    mutants=[
+      ('wrapper-hold','node','os64_html_hold(dom->document, node);','(void)node;'),
+      ('wrapper-release','core','os64_html_release(dom->document, entry->node);','(void)entry->node;'),
+      ('query-root-hold','collection','os64_html_hold(dom->document, root);','(void)root;'),
+      ('query-root-release','collection','os64_html_release(dom->document, query->root);','(void)query->root;'),
+      ('query-answer-hold','collection','os64_html_hold(query->dom->document, at);','(void)at;'),
+      ('query-answer-release','collection','os64_html_release(query->dom->document, old[i]);','(void)old[i];'),
+      ('empty-content-consumption','page-state','return node != NULL ? os64_html_insert(state->doc, (os64_html_node_t *)parent,\n            (os64_html_node_t *)node, NULL) : OS64_HTML_OK;','return OS64_HTML_OK;'),
+    ]
 flags=['-O2','-g','-std=gnu11','-Wall','-Wextra','-Werror','-ffreestanding','-fno-builtin','-fno-tree-loop-distribute-patterns','-fno-stack-protector','-DOS64_JS_TARGET','-fsanitize=address,undefined','-fno-sanitize-recover=all']
 for directory in ['libmath/include','libjs/port','libjs/include','libdom/include','libdom','libhtml/include','libpage/include','libpage/upstream/ryu','libos64/include']:
     flags+=['-I'+str(root/'userland'/directory)]
@@ -83,7 +94,7 @@ with tempfile.TemporaryDirectory(prefix='os64-dom-mutants.') as directory:
             result=subprocess.run(['cc','-fsanitize=address,undefined','-pthread','-Wl,-z,noexecstack',*maths,*map(str,selected),str(obj),'-o',str(binary)],cwd=root,stdout=log,stderr=log)
             if result.returncode: print(f'LINK ERROR {name}');continue
             compiled+=1
-            try: result=subprocess.run([str(binary),'--mutants'],stdout=log,stderr=log,timeout=45)
+            try: result=subprocess.run([str(binary),'--reclaim' if args.reclaim else '--mutants'],stdout=log,stderr=log,timeout=45)
             except subprocess.TimeoutExpired:
                 print(f'TIMEOUT {name} (not counted)');continue
             if result.returncode:

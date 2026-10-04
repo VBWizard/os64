@@ -26,7 +26,7 @@ typedef enum {
 } os64_html_status_t;
 
 /* What the program exits with when a document is freed while a snapshot
- * still has it pinned, or a pin that is not held is released ("HTML"). */
+ * still has it pinned, or a pin/hold lifetime contract is broken ("HTML"). */
 #define OS64_HTML_FATAL_EXIT 0x48544D4C
 
 typedef enum {
@@ -213,9 +213,15 @@ bool os64_html_encode_windows_1252(uint32_t cp, uint8_t *out);
  * reader can see, and answers OS64_HTML_OK or the name of why not; a verb's
  * failure is the verb's, and `doc->refusal` stays what the parse said.
  *
- * A NODE LIVES AS LONG AS ITS DOCUMENT. `remove` unlinks; nothing frees a
- * node before os64_html_document_free. What a verb allocates is charged to
- * the document's `max_arena_bytes`.
+ * A REMOVED SUBTREE LIVES WHILE SOMETHING HOLDS IT. A successful remove,
+ * replace, or insertion draining a fragment can reclaim the detached subtree
+ * when no node in it is held and no older snapshot pin remains. A counted
+ * hold preserves node identity across mutations; a pin preserves snapshot
+ * bytes. Hold a node before a verb if it must remain usable afterwards.
+ * A successful insertion consumes even an empty fragment container unless
+ * it is held; an empty insertion still leaves the document version unchanged.
+ * Creation results never inserted stay charged until document teardown.
+ * What a verb allocates is charged to the document's `max_arena_bytes`.
  *
  * A VERB REPLACES A STRING; IT DOES NOT WRITE INTO ONE. Replacing a node's
  * text or an attribute's value swaps the pointer and RETIRES the old bytes,
@@ -239,13 +245,20 @@ bool os64_html_encode_windows_1252(uint32_t cp, uint8_t *out);
  * document while one is held, or releasing what is not held (a pin let go
  * already, or one taken on another document), ends the program
  * (OS64_HTML_FATAL_EXIT): the holder is about to read freed memory.
- * `os64_html_retired_bytes` is what the pins are keeping alive right now.
+ * `os64_html_retired_bytes` counts individually owned blocks kept by pins,
+ * including unheld retired subtrees. Permanent chunks remain charged.
  *
  * EVERY NODE A VERB IS HANDED BELONGS TO `doc`, the source of a clone
- * excepted. A node lies in its document's arena and goes when that document
- * is freed, so one document's node in another's tree would be a pointer to
+ * excepted. A node lies in its document's arena and can be reclaimed when
+ * removed or when that document is freed, so a foreign node would point to
  * freed memory in waiting; a verb refuses it (OS64_HTML_BAD_ARGUMENT). */
 typedef uint64_t os64_html_pin_t;
+/* Allocation-free, counted identity protection. The document must own the
+ * node; invalid ownership, overflow, and an unheld release end the program
+ * with OS64_HTML_FATAL_EXIT. Releasing the last hold may reclaim a formerly
+ * detached subtree, so the node must not be read after release. */
+void os64_html_hold(const os64_html_document_t *doc, const os64_html_node_t *node);
+void os64_html_release(const os64_html_document_t *doc, const os64_html_node_t *node);
 uint64_t os64_html_version(const os64_html_document_t *doc);
 /* Owned HTML input nodes carrying an unnamespaced form attribute. Includes
  * detached nodes and template contents, independent of input type/value.

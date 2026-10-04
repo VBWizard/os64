@@ -421,6 +421,60 @@ static void noscript_author_styles(void) {
         probe_drop();
     }
 }
+static void reclaim_browser_holders(void) {
+    probe_page("<body><script>document.body.innerHTML='<h1 id=heading>replacement</h1>';</script>"
+        "<script>document.getElementById('heading').textContent='removed script ran';</script>",true);
+    script_turn();
+    check(probe_text_is("heading","replacement") && yonder_scripts_pending(g.page.scripts),
+        "replacement drops queued script after publishing a fresh layout");
+    script_turn();
+    check(probe_text_is("heading","replacement") && !yonder_scripts_pending(g.page.scripts),
+        "queue hold permits safely skipping detached script after old layout release");
+    probe_drop();
+
+    probe_page("<div id=scroll style='overflow:auto;width:50px;height:30px'><p>content</p></div>",false);
+    os64_html_node_t *scroll=probe_id("scroll");
+    size_t count=g.page.way.doc->node_count;
+    page_keep_box_scroll(&g.page,scroll,(flow_point_t){3,4});
+    page_keep_box_scroll(&g.page,scroll,(flow_point_t){5,6});
+    check(g.page.nbox_scrolls==1,"scroll identity has one retained record");
+    check(os64_html_remove(g.page.way.doc,scroll)==OS64_HTML_OK && script_rebuild(),
+        "scroller removal replaces native model, cascade and layout");
+    check(g.page.way.doc->node_count==count && scroll->parent==NULL &&
+        g.page.box_scrolls[0].node==scroll && g.page.box_scrolls[0].at.x==5,
+        "scroll record retains detached identity across snapshot replacement");
+    probe_drop();
+
+    probe_page("<button id=gone type=submit>old</button><button id=keep type=submit>keep</button>",false);
+    FormWidget *gone=probe_field("gone");
+    os64_html_node_t *button=probe_id("gone");
+    count=g.page.way.doc->node_count;
+    check(os64_html_remove(g.page.way.doc,button)==OS64_HTML_OK,"detach a widget-held button");
+    os64_page_t *old=page_model(&g.page), *fresh=os64_page_rebuild(old);
+    check(fresh!=NULL,"widget replacement model builds");
+    g.page.way.model=fresh;
+    os64_page_free(old);
+    flow_free(g.page.tree);g.page.tree=NULL;
+    garb_cascade_free(g.page.cascade);g.page.cascade=NULL;
+    g.page.sheets_changed=true;
+    check(page_lay_out(&g.page,800,600),"widget replacement layout builds");
+    fail_at=attempts+1;
+    forms_build();
+    fail_at=0;
+    check(g.nfw==2 && g.fw[0]==gone,"refused widget replacement retains the previous widget");
+    // Release presentation/state owners before inspecting the retained widget:
+    // neither an older nor a late model pin may mask its own node hold.
+    flow_free(g.page.tree);g.page.tree=NULL;
+    garb_cascade_free(g.page.cascade);g.page.cascade=NULL;
+    os64_page_free(g.page.way.model);g.page.way.model=NULL;
+    check(g.page.way.doc->node_count==count && gone->node==button && button->parent==NULL,
+        "widget alone retains detached identity after snapshot and state teardown");
+    forms_drop();
+    check(g.page.way.doc->node_count==count-2,
+        "widget destruction reclaims button and text before document teardown");
+    probe_drop();
+}
+
 static void snapshot_actions(void) {
     probe_page("<a id=old href=/old>old link</a><p>after</p>",false);
     int32_t x=0,y=0;
@@ -564,6 +618,7 @@ int main(void)
     password_edits();
     reset_editors();
     noscript_author_styles();
+    reclaim_browser_holders();
     snapshot_actions();
     bounded_resources();
     stylesheet_reuse();

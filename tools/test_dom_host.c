@@ -209,13 +209,16 @@ static char *native_serialized(const os64_html_node_t *node)
 }
 #include "test_dom_cases.inc"
 #include "test_libpage_clone.inc"
+#include "test_dom_reclaim.inc"
 int main(int argc, char **argv)
 {
+    if(argc==2&&!strcmp(argv[1],"--reclaim")){dom_reclaim_cases();printf("DOM reclaim probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--clone")){dom_clone_control_cases();dom_clone_native_cases();dom_clone_state_cap_cases();dom_clone_character_data_cases();dom_clone_allocation_cases();printf("DOM clone probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     bool mutation_mode=argc==2&&!strcmp(argv[1],"--mutants");
     dom_surface_cases();
     dom_identity_cases();
     dom_collection_cases();
+    dom_reclaim_cases();
     dom_unicode_cases();
     dom_control_cases();
     dom_clone_control_cases();

@@ -41,7 +41,8 @@ typedef struct os64_page_state os64_page_state_t;
 // script assignments can spend the cap on records for their whole group.
 // Zero selects the default cap. NULL means no memory (or no document).
 // Freeing explicit state with models still borrowing it ends the program
-// with OS64_PAGE_FATAL_EXIT. State does not pin the document itself.
+// with OS64_PAGE_FATAL_EXIT. State holds its persistent and reserved node keys;
+// it does not pin snapshot strings in the document.
 os64_page_state_t *os64_page_state_create(os64_html_document_t *doc, size_t max_bytes);
 // Borrowed document; NULL state answers NULL. The caller keeps it alive.
 os64_html_document_t *os64_page_state_document(const os64_page_state_t *state);
@@ -334,7 +335,8 @@ os64_page_options_t os64_page_options_default(void);
 // the defaults.
 // A supplied state must belong to doc and outlive the model. NULL makes
 // private shared state, released with its last model, including rebuilds.
-// Each model takes one document pin; pin exhaustion returns NULL.
+// Each model holds its node references and takes one document pin for
+// snapshot strings; pin exhaustion returns NULL.
 os64_page_t *os64_page_build(const os64_html_document_t *doc, const char *document_url,
                              const os64_page_options_t *opt, os64_page_state_t *state);
 // Build beside old at the document's current version, sharing control state.

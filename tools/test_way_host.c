@@ -396,6 +396,17 @@ static void typed(void)
     bool ok = way_details_flip(&p, a) && way_details_flip(&p, b) && p.nflipped == 2 &&
               way_details_flip(&p, a) && p.nflipped == 1 && p.flipped[0] == b;
     expect("details: a flip flips back", ok, NULL);
+    size_t count=p.doc->node_count;
+    expect("details: flipped identity survives model replacement",
+           os64_html_remove(p.doc,(os64_html_node_t *)b)==OS64_HTML_OK, NULL);
+    os64_page_t *fresh=os64_page_rebuild(p.model);
+    expect("details: new model builds after removal",fresh!=NULL,NULL);
+    os64_page_free(p.model);p.model=fresh;
+    expect("details: flip hold retains detached node",p.doc->node_count==count,NULL);
+    expect("details: flipping back releases detached identity",
+           way_details_flip(&p,b),NULL);
+    os64_page_free(p.model);p.model=NULL;
+    expect("details: released identity reclaimed after snapshots",p.doc->node_count==count-1,NULL);
     way_page_clear(&p);
 }
 
