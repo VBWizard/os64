@@ -434,6 +434,10 @@ static inline int64_t os64_gui_window_get_state(int64_t handle,
                                   (uint64_t)handle, (uint64_t)out);
 }
 
+// Restore and focus an owned ordinary window, within its stacking band.
+static inline int64_t os64_gui_window_focus(int64_t handle)
+{ return (int64_t)os64_syscall1(SYSCALL_GUI_WINDOW_FOCUS, (uint64_t)handle); }
+
 // Set minimum drawable dimensions, excluding borders/titlebar. Zero or a
 // value below the WM floor uses that floor (64x32). The minimum must fit the
 // window's existing canvas reservation; otherwise BAD_ARGS leaves it unchanged.
@@ -444,10 +448,6 @@ static inline int64_t os64_gui_window_get_state(int64_t handle,
 // and restore honor these content limits even if the resulting frame extends
 // beyond the screen. Returns 0 or a GUI error;
 // only the owning task can change a window's limits.
-// Restore and focus an owned ordinary window, within its stacking band.
-static inline int64_t os64_gui_window_focus(int64_t handle)
-{ return (int64_t)os64_syscall1(SYSCALL_GUI_WINDOW_FOCUS, (uint64_t)handle); }
-
 static inline int64_t os64_gui_window_set_min_size(int64_t handle,
                                                    uint32_t width, uint32_t height)
 {

@@ -295,18 +295,26 @@ static void rec_control(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_
     out(&rec->out, "control %d %d %d %d %d\n", b->control, c.x, c.y, c.w, c.h);
 }
 
-// A box has a picture behind it when libpage lists one for its element;
-// the recording says where it would be tiled, and from where.
-static bool rec_backdrop(void *ctx, const flow_box_t *b, const os64_gui_rect_t *area, int32_t ox,
+// A box has a picture behind it when libpage lists one for its element or
+// a sheet's layer names one; the recording says which layer (-1 the
+// attribute's), where it would be tiled, and from where.
+static bool rec_backdrop(void *ctx, const flow_box_t *b, int32_t layer,
+                         const os64_gui_rect_t *area, os64_gui_rect_t origin, int32_t ox,
                          int32_t oy, os64_gui_rect_t clip)
 {
     (void)clip;
     Rec *rec = ctx;
-    if (b->node == NULL || os64_page_background_for(rec->page, b->node) < 0)
+    bool sheet = false;
+    for (int32_t i = 0; i < flow_background_layers(b->style); i++)
+        sheet |= flow_background_layer(b->style, i).image != NULL;
+    if (!sheet && (b->node == NULL || os64_page_background_for(rec->page, b->node) < 0))
         return false;
-    if (area != NULL)
-        out(&rec->out, "backdrop %d %d %d %d from %d %d\n", area->x, area->y, area->w, area->h, ox,
-            oy);
+    if (area != NULL && layer < 0)
+        out(&rec->out, "backdrop %d %d %d %d from %d %d origin %d %d %d %d\n", area->x, area->y,
+            area->w, area->h, ox, oy, origin.x, origin.y, origin.w, origin.h);
+    else if (area != NULL)
+        out(&rec->out, "backdrop %d %d %d %d layer %d origin %d %d %d %d\n", area->x, area->y,
+            area->w, area->h, (int)layer, origin.x, origin.y, origin.w, origin.h);
     return true;
 }
 
@@ -346,6 +354,21 @@ static void rec_mask(void *ctx, os64_gui_rect_t r, const uint8_t *alpha, uint32_
     }
     out(&rec->out, "mask %d %d %d %d #%06x sum %ld max %d\n", r.x, r.y, r.w, r.h, colour, sum,
         most);
+}
+
+// A painted picture: where, and every pixel when it is small enough to be
+// worked by hand, else its first and last.
+static void rec_pixels(void *ctx, os64_gui_rect_t r, const uint32_t *argb)
+{
+    Rec *rec = ctx;
+    if (!inside(r, rec->view))
+        rec->escaped = true;
+    out(&rec->out, "pixels %d %d %d %d", r.x, r.y, r.w, r.h);
+    int32_t n = r.w * r.h;
+    for (int32_t k = 0; k < n; k++)
+        if (n <= 16 || k == 0 || k == n - 1)
+            out(&rec->out, " %08x", argb[k]);
+    out(&rec->out, "\n");
 }
 
 static const char *kPage = "http://host/dir/page.html";
@@ -393,7 +416,7 @@ static char *paint_of(const char *html, size_t len, int32_t width, os64_gui_rect
     out(&rec.out, "%s", "");
     yonder_verbs_t v = {&rec,          rec_fill,     rec_text,       rec_image,
                         rec_control,   rec_backdrop, rec_group_open, rec_group_close,
-                        rec_mask};
+                        rec_mask,      rec_pixels};
     if (t != NULL)
         yonder_paint(t, view, (flow_point_t){view.x, view.y}, kEnv.paper, &v);
     if (s_canvas_owner != NULL) {
@@ -553,7 +576,7 @@ static void scale_cases(void)
     const uint32_t A = 0xff112233u, B = 0xff445566u, C = 0xff778899u;
     uint32_t dst[16] = {0};
     const uint32_t two[4] = {A, B, C, A};
-    yonder_draw_picture(dst, 4, (os64_gui_rect_t){0, 0, 4, 4}, (os64_gui_rect_t){1, 1, 2, 2}, two, 2, 2);
+    yonder_draw_picture(dst, 4, (os64_gui_rect_t){0, 0, 4, 4}, (os64_gui_rect_t){1, 1, 2, 2}, false, two, 2, 2);
     const uint32_t copied[16] = {0, 0, 0, 0, 0, A, B, 0, 0, C, A, 0, 0, 0, 0, 0};
     expect("picture: a box its own size is a copy", pixels_are(dst, copied, 16), NULL);
 
@@ -562,20 +585,20 @@ static void scale_cases(void)
     uint32_t wide[4] = {0};
     const uint32_t one[1] = {A};
     yonder_draw_picture(wide, 4, (os64_gui_rect_t){0, 0, 4, 1},
-                        (os64_gui_rect_t){2, 0, INT32_MAX, INT32_MAX}, one, 1, 1);
+                        (os64_gui_rect_t){2, 0, INT32_MAX, INT32_MAX}, false, one, 1, 1);
     const uint32_t wide_want[4] = {0, 0, A, A};
     expect("picture: a box past INT32_MAX clips, its edge added in 64 bits",
            pixels_are(wide, wide_want, 4), NULL);
 
     uint32_t row[4] = {0};
     const uint32_t ab[2] = {A, B};
-    yonder_draw_picture(row, 4, (os64_gui_rect_t){0, 0, 4, 1}, (os64_gui_rect_t){0, 0, 4, 1}, ab, 2, 1);
+    yonder_draw_picture(row, 4, (os64_gui_rect_t){0, 0, 4, 1}, (os64_gui_rect_t){0, 0, 4, 1}, false, ab, 2, 1);
     const uint32_t doubled[4] = {A, A, B, B};
     expect("picture: twice as wide doubles each column", pixels_are(row, doubled, 4), NULL);
 
     uint32_t pair[2] = {0};
     const uint32_t abc[3] = {A, B, C};
-    yonder_draw_picture(pair, 2, (os64_gui_rect_t){0, 0, 2, 1}, (os64_gui_rect_t){0, 0, 2, 1}, abc, 3, 1);
+    yonder_draw_picture(pair, 2, (os64_gui_rect_t){0, 0, 2, 1}, (os64_gui_rect_t){0, 0, 2, 1}, false, abc, 3, 1);
     const uint32_t shrunk[2] = {A, C};
     expect("picture: three into two takes the columns under the middles",
            pixels_are(pair, shrunk, 2), NULL);
@@ -584,12 +607,12 @@ static void scale_cases(void)
     // (255*127 + 127) / 255 = 127.
     uint32_t blend[1] = {0xff0000ffu};
     const uint32_t red_half[1] = {0x80ff0000u};
-    yonder_draw_picture(blend, 1, (os64_gui_rect_t){0, 0, 1, 1}, (os64_gui_rect_t){0, 0, 1, 1}, red_half, 1, 1);
+    yonder_draw_picture(blend, 1, (os64_gui_rect_t){0, 0, 1, 1}, (os64_gui_rect_t){0, 0, 1, 1}, false, red_half, 1, 1);
     expect("picture: half-transparent red over blue", blend[0] == 0xff80007fu, NULL);
 
     uint32_t clear[1] = {0xff0000ffu};
     const uint32_t none[1] = {0x00ff0000u};
-    yonder_draw_picture(clear, 1, (os64_gui_rect_t){0, 0, 1, 1}, (os64_gui_rect_t){0, 0, 1, 1}, none, 1, 1);
+    yonder_draw_picture(clear, 1, (os64_gui_rect_t){0, 0, 1, 1}, (os64_gui_rect_t){0, 0, 1, 1}, false, none, 1, 1);
     expect("picture: a transparent pixel leaves what is beneath", clear[0] == 0xff0000ffu, NULL);
 
     // A 4x4 picture in a 4x4 box, clipped to the middle 2x2: only those
@@ -597,21 +620,21 @@ static void scale_cases(void)
     uint32_t src[16], clip[16] = {0};
     for (int i = 0; i < 16; i++)
         src[i] = 0xff000000u | (uint32_t)i;
-    yonder_draw_picture(clip, 4, (os64_gui_rect_t){1, 1, 2, 2}, (os64_gui_rect_t){0, 0, 4, 4}, src, 4, 4);
+    yonder_draw_picture(clip, 4, (os64_gui_rect_t){1, 1, 2, 2}, (os64_gui_rect_t){0, 0, 4, 4}, false, src, 4, 4);
     const uint32_t cut[16] = {0, 0, 0, 0, 0, src[5], src[6], 0, 0, src[9], src[10], 0, 0, 0, 0, 0};
     expect("picture: a clip cuts all four sides", pixels_are(clip, cut, 16), NULL);
 
     // A box partly off the surface's left and top: the clip is what keeps
     // the writes inside it.
     uint32_t edge[4] = {0};
-    yonder_draw_picture(edge, 2, (os64_gui_rect_t){0, 0, 2, 2}, (os64_gui_rect_t){-2, -2, 4, 4}, src, 4, 4);
+    yonder_draw_picture(edge, 2, (os64_gui_rect_t){0, 0, 2, 2}, (os64_gui_rect_t){-2, -2, 4, 4}, false, src, 4, 4);
     const uint32_t shifted[4] = {src[10], src[11], src[14], src[15]};
     expect("picture: a box hanging off the top left", pixels_are(edge, shifted, 4), NULL);
 
     // Tiling a 2x2 picture {A,B / C,A} unscaled from the area's corner.
     uint32_t tiles[25] = {0};
-    yonder_tile_picture(tiles, 5, (os64_gui_rect_t){0, 0, 5, 5}, (os64_gui_rect_t){0, 0, 5, 5}, 0, 0,
-                        true, true, two, 2, 2);
+    yonder_tile_picture(tiles, 5, (os64_gui_rect_t){0, 0, 5, 5}, (os64_gui_rect_t){0, 0, 5, 5},
+                        (os64_gui_rect_t){0, 0, 2, 2}, true, true, false, two, 2, 2);
     const uint32_t tiled[25] = {A, B, A, B, A, C, A, C, A, C, A, B, A, B, A,
                                 C, A, C, A, C, A, B, A, B, A};
     expect("tile: whole copies, and the last cut at the area's edge", pixels_are(tiles, tiled, 25),
@@ -621,7 +644,7 @@ static void scale_cases(void)
     // origin put them, and nothing outside the clip is written.
     uint32_t cut_tiles[25] = {0};
     yonder_tile_picture(cut_tiles, 5, (os64_gui_rect_t){1, 1, 3, 3}, (os64_gui_rect_t){0, 0, 5, 5},
-                        0, 0, true, true, two, 2, 2);
+                        (os64_gui_rect_t){0, 0, 2, 2}, true, true, false, two, 2, 2);
     bool inside_same = true, outside_clear = true;
     for (int y = 0; y < 5; y++)
         for (int x = 0; x < 5; x++) {
@@ -637,7 +660,8 @@ static void scale_cases(void)
     // edge is past INT32_MAX, which int32 sums wrapped to a draw of nothing.
     uint32_t wide_tiles[25] = {0};
     yonder_tile_picture(wide_tiles, 5, (os64_gui_rect_t){0, 0, 5, 5},
-                        (os64_gui_rect_t){1, 0, INT32_MAX, 5}, 0, 0, true, true, two, 2, 2);
+                        (os64_gui_rect_t){1, 0, INT32_MAX, 5}, (os64_gui_rect_t){0, 0, 2, 2}, true,
+                        true, false, two, 2, 2);
     bool wide_ok = true;
     for (int y = 0; y < 5; y++)
         for (int x = 0; x < 5; x++)
@@ -649,51 +673,160 @@ static void scale_cases(void)
     // view is scrolled into): the area starts one pixel into a tile.
     uint32_t shifted_tiles[4] = {0};
     yonder_tile_picture(shifted_tiles, 2, (os64_gui_rect_t){0, 0, 2, 2}, (os64_gui_rect_t){0, 0, 2, 2},
-                        -1, -3, true, true, two, 2, 2);
+                        (os64_gui_rect_t){-1, -3, 2, 2}, true, true, false, two, 2, 2);
     const uint32_t from_origin[4] = {A, C, B, A};
     expect("tile: an origin outside the area lays the tiles from there",
            pixels_are(shifted_tiles, from_origin, 4), NULL);
 
     uint32_t over_blue[2] = {0xff0000ffu, 0xff0000ffu};
     const uint32_t half_and_none[2] = {0x80ff0000u, 0x00ff0000u};
-    yonder_tile_picture(over_blue, 2, (os64_gui_rect_t){0, 0, 2, 1}, (os64_gui_rect_t){0, 0, 2, 1}, 0,
-                        0, true, true, half_and_none, 2, 1);
+    yonder_tile_picture(over_blue, 2, (os64_gui_rect_t){0, 0, 2, 1}, (os64_gui_rect_t){0, 0, 2, 1},
+                        (os64_gui_rect_t){0, 0, 2, 1}, true, true, false, half_and_none, 2, 1);
     expect("tile: blended by alpha over the colour beneath",
            over_blue[0] == 0xff80007fu && over_blue[1] == 0xff0000ffu, NULL);
 
     // repeat-x at (1, 2) in a 5x5 area: the one row of tiles, two tall
     // from y 2, laid from x 1 both ways; no-repeat: the one copy at (1, 2).
     uint32_t strip[25] = {0};
-    yonder_tile_picture(strip, 5, (os64_gui_rect_t){0, 0, 5, 5}, (os64_gui_rect_t){0, 0, 5, 5}, 1, 2,
-                        true, false, two, 2, 2);
+    yonder_tile_picture(strip, 5, (os64_gui_rect_t){0, 0, 5, 5}, (os64_gui_rect_t){0, 0, 5, 5},
+                        (os64_gui_rect_t){1, 2, 2, 2}, true, false, false, two, 2, 2);
     const uint32_t row_want[25] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, B, A, B, A, B,
                                    A, C, A, C, A, 0, 0, 0, 0, 0};
     expect("tile: repeat-x draws one row of tiles", pixels_are(strip, row_want, 25), NULL);
     uint32_t single[25] = {0};
-    yonder_tile_picture(single, 5, (os64_gui_rect_t){0, 0, 5, 5}, (os64_gui_rect_t){0, 0, 5, 5}, 1, 2,
-                        false, false, two, 2, 2);
+    yonder_tile_picture(single, 5, (os64_gui_rect_t){0, 0, 5, 5}, (os64_gui_rect_t){0, 0, 5, 5},
+                        (os64_gui_rect_t){1, 2, 2, 2}, false, false, false, two, 2, 2);
     const uint32_t single_want[25] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, A, B, 0, 0,
                                    0, C, A, 0, 0, 0, 0, 0, 0, 0};
     expect("tile: no-repeat draws the one copy", pixels_are(single, single_want, 25), NULL);
 
+    // The 2x2 picture in a 4x4 tile: column u shows source
+    // floor((u + 1/2) * 2 / 4), so 0, 0, 1, 1 — each pixel doubled.
+    uint32_t scaled[16] = {0};
+    yonder_tile_picture(scaled, 4, (os64_gui_rect_t){0, 0, 4, 4}, (os64_gui_rect_t){0, 0, 4, 4},
+                        (os64_gui_rect_t){0, 0, 4, 4}, true, true, false, two, 2, 2);
+    const uint32_t each_doubled[16] = {A, A, B, B, A, A, B, B, C, C, A, A, C, C, A, A};
+    expect("tile: a copy scaled to its tile", pixels_are(scaled, each_doubled, 16), NULL);
+
+    // Smoothed: black then white, 2 px drawn 4 px wide. Column u falls at
+    // (u + 1/2) * 2 / 4 - 1/2 = -1/4, 1/4, 3/4, 5/4 of the source: the ends
+    // held to the edge pixels, the middle two a quarter and three quarters
+    // of the way from black to white (63.75 and 191.25, to 0x40 and 0xbf).
+    const uint32_t bw[2] = {0xff000000u, 0xffffffffu};
+    uint32_t ramp[4] = {0};
+    yonder_draw_picture(ramp, 4, (os64_gui_rect_t){0, 0, 4, 1}, (os64_gui_rect_t){0, 0, 4, 1},
+                        true, bw, 2, 1);
+    const uint32_t ramp_want[4] = {0xff000000u, 0xff404040u, 0xffbfbfbfu, 0xffffffffu};
+    expect("smooth: a scaled picture mixes the pixels round each one", pixels_are(ramp, ramp_want, 4),
+           NULL);
+    // Red then nothing, over black: a transparent neighbour lends no colour,
+    // only less alpha — a quarter of the way along is red at 191/255, laid
+    // over black as 0xbf0000, where mixing its black in would give 0x8f.
+    const uint32_t red_none[2] = {0xffff0000u, 0x00000000u};
+    uint32_t fade[4] = {0};
+    yonder_tile_picture(fade, 4, (os64_gui_rect_t){0, 0, 4, 1}, (os64_gui_rect_t){0, 0, 4, 1},
+                        (os64_gui_rect_t){0, 0, 4, 1}, false, false, true, red_none, 2, 1);
+    const uint32_t fade_want[4] = {0xffff0000u, 0xffbf0000u, 0xff400000u, 0};
+    expect("smooth: a transparent neighbour lends no colour", pixels_are(fade, fade_want, 4), NULL);
+    // At its own size a picture is copied, smoothing or not.
+    uint32_t same[4] = {0};
+    yonder_draw_picture(same, 2, (os64_gui_rect_t){0, 0, 2, 2}, (os64_gui_rect_t){0, 0, 2, 2}, true,
+                        two, 2, 2);
+    expect("smooth: unscaled is the picture itself", pixels_are(same, two, 4), NULL);
+
     // A sheet's picture, 20x10, behind a 100x50 box at (10, 20):
     // `right 10px center repeat-x` is calc(100% - 10px) and 50%, so x is
     // 10 + (100 - 20) - 10 = 80 and y is 20 + (50 - 10) / 2 = 40.
-    flow_style_t st;
+    flow_layer_t st;
     memset(&st, 0, sizeof(st));
-    st.background_position[0] = (flow_length_t){FLOW_LENGTH_PERCENT, 100 * 64, -10 * 64};
-    st.background_position[1] = (flow_length_t){FLOW_LENGTH_PERCENT, 50 * 64, 0};
-    st.background_repeat = FLOW_REPEAT_X;
+    st.position[0] = (flow_length_t){FLOW_LENGTH_PERCENT, 100 * 64, -10 * 64};
+    st.position[1] = (flow_length_t){FLOW_LENGTH_PERCENT, 50 * 64, 0};
+    st.repeat = FLOW_REPEAT_X;
+    os64_gui_rect_t area = {10, 20, 100, 50};
+    yonder_tile_t t;
+    bool got = yonder_background_tile(&st, area, 20, 10, &t);
+    expect("background: a position from the far edge, and one centred",
+           got && t.at.x == 80 && t.at.y == 40 && t.at.w == 20 && t.at.h == 10, NULL);
+    expect("background: repeat-x repeats across and not down", t.repeat_x && !t.repeat_y, NULL);
+}
+
+static bool tile_is(const flow_layer_t *s, os64_gui_rect_t area, uint32_t iw, uint32_t ih,
+                    int32_t x, int32_t y, int32_t w, int32_t h)
+{
+    yonder_tile_t t;
+    return yonder_background_tile(s, area, iw, ih, &t) && t.at.x == x && t.at.y == y &&
+           t.at.w == w && t.at.h == h;
+}
+
+// background-size worked by hand (Backgrounds 3 § 3.9), a 20x10 picture
+// in a 100x80 origin box at (10, 20) unless said otherwise.
+static void background_size_cases(void)
+{
+    os64_gui_rect_t area = {10, 20, 100, 80};
+    flow_layer_t st;
+    memset(&st, 0, sizeof(st));
+    st.fit = FLOW_FIT_COVER;
+    // Covering: the larger scale, 80 / 10 = 8 over 100 / 20 = 5.
+    expect("size: cover scales to the side that covers",
+           tile_is(&st, area, 20, 10, 10, 20, 160, 80), NULL);
+    // Fitting: the smaller, 5, and centred, 20 + (80 - 50) / 2 = 35.
+    st.fit = FLOW_FIT_CONTAIN;
+    st.position[0] = st.position[1] =
+        (flow_length_t){FLOW_LENGTH_PERCENT, 50 * 64, 0};
+    expect("size: contain scales to fit, and is placed in the room left",
+           tile_is(&st, area, 20, 10, 10, 35, 100, 50), NULL);
+    // A gradient has no shape of its own: covering is the box.
+    expect("size: cover with no picture size is the origin box",
+           tile_is(&st, area, 0, 0, 10, 20, 100, 80), NULL);
+
+    memset(&st, 0, sizeof(st));
+    st.size[0] = (flow_length_t){FLOW_LENGTH_PX, 40 * 64, 0};
+    expect("size: a width, the height keeping the picture's shape",
+           tile_is(&st, area, 20, 10, 10, 20, 40, 20), NULL);
+    expect("size: a width, with no shape the height is the box's",
+           tile_is(&st, area, 0, 0, 10, 20, 40, 80), NULL);
+    st.size[0] = (flow_length_t){FLOW_LENGTH_AUTO, 0, 0};
+    st.size[1] = (flow_length_t){FLOW_LENGTH_PERCENT, 25 * 64, 0};
+    expect("size: a height of 25% is 20, the width 40 to keep the shape",
+           tile_is(&st, area, 20, 10, 10, 20, 40, 20), NULL);
+    st.size[0] = (flow_length_t){FLOW_LENGTH_PERCENT, 50 * 64, 0};
+    st.size[1] = (flow_length_t){FLOW_LENGTH_PX, 10 * 64, 0};
+    expect("size: both written, both taken", tile_is(&st, area, 20, 10, 10, 20, 50, 10), NULL);
+    st.size[1] = (flow_length_t){FLOW_LENGTH_PX, 0, 0};
+    yonder_tile_t t;
+    expect("size: a side of 0 draws nothing", !yonder_background_tile(&st, area, 20, 10, &t),
+           NULL);
+    st.size[0] = st.size[1] = (flow_length_t){FLOW_LENGTH_AUTO, 0, 0};
+    expect("size: auto auto is the picture's own",
+           tile_is(&st, area, 20, 10, 10, 20, 20, 10), NULL);
+    expect("size: auto auto with no picture size is the box",
+           tile_is(&st, area, 0, 0, 10, 20, 100, 80), NULL);
+    // A huge picture scaled from a huge box stays inside an int32_t.
+    st.fit = FLOW_FIT_COVER;
+    expect("size: a scale past INT32_MAX is held there",
+           tile_is(&st, (os64_gui_rect_t){0, 0, INT32_MAX, 1}, 1, 65536, 0, 0, INT32_MAX,
+                   INT32_MAX),
+           NULL);
+
+    // The boxes: borders of 2, padding of 3, round a 100x80 box at (10, 20).
+    flow_style_t edged;
+    memset(&edged, 0, sizeof(edged));
+    for (int k = 0; k < 4; k++) {
+        edged.border_width[k] = 2 * 64;
+        edged.padding[k] = (flow_length_t){FLOW_LENGTH_PX, 3 * 64, 0};
+    }
     flow_box_t box;
     memset(&box, 0, sizeof(box));
-    box.style = &st;
-    box.rect = (os64_gui_rect_t){10, 20, 100, 50};
-    int32_t ox = 0, oy = 0;
-    bool rx = false, ry = true;
-    yonder_background_place(&box, box.rect, 20, 10, &ox, &oy, &rx, &ry);
-    expect("background: a position from the far edge, and one centred", ox == 80 && oy == 40,
-           NULL);
-    expect("background: repeat-x repeats across and not down", rx && !ry, NULL);
+    box.style = &edged;
+    os64_gui_rect_t pad = yonder_box_edge(&box, area, FLOW_EDGE_PADDING);
+    os64_gui_rect_t content = yonder_box_edge(&box, area, FLOW_EDGE_CONTENT);
+    os64_gui_rect_t border = yonder_box_edge(&box, area, FLOW_EDGE_BORDER);
+    expect("edge: the padding box is inside the borders",
+           pad.x == 12 && pad.y == 22 && pad.w == 96 && pad.h == 76, NULL);
+    expect("edge: the content box is inside the padding too",
+           content.x == 15 && content.y == 25 && content.w == 90 && content.h == 70, NULL);
+    expect("edge: the border box is the box",
+           border.x == 10 && border.y == 20 && border.w == 100 && border.h == 80, NULL);
 }
 
 // ── The question bar: no click made before a question may answer it ─────
@@ -999,6 +1132,7 @@ int main(int argc, char **argv)
         shadow_split_cases();
         canvas_owner_cases();
         scale_cases();
+        background_size_cases();
         bar_cases();
         mail_cases();
         cost_cases();

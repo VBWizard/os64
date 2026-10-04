@@ -39,6 +39,28 @@ os64_font_config_status_t __wrap_os64_font_config_discover(os64_text_context_t *
     if (installed_file) strcpy((*out)->entries[1].path, "/test/scalable");
     return OS64_FONT_CONFIG_OK;
 }
+/* The Web face's door, refusable on demand; and every lend counted. */
+static bool fail_web;
+static unsigned lends;
+os64_font_config_status_t __real_os64_font_config_web_prepare(os64_text_context_t *,
+    const os64_font_config_t *, uint32_t, os64_font_set_t **, os64_font_config_error_t *);
+os64_font_config_status_t __wrap_os64_font_config_web_prepare(os64_text_context_t *ctx,
+    const os64_font_config_t *config, uint32_t px, os64_font_set_t **out,
+    os64_font_config_error_t *error)
+{
+    if (!fail_web) return __real_os64_font_config_web_prepare(ctx,config,px,out,error);
+    if (out) *out = NULL;
+    if (error) memset(error, 0, sizeof(*error));
+    return OS64_FONT_CONFIG_NO_MEMORY;
+}
+os64_font_status_t __real_os64_ui_font_app(os64_ui_t *, os64_font_set_t *, os64_font_role_t);
+os64_font_status_t __wrap_os64_ui_font_app(os64_ui_t *ui, os64_font_set_t *set,
+                                           os64_font_role_t role)
+{
+    ++lends;
+    return __real_os64_ui_font_app(ui,set,role);
+}
+
 static void capture_status(const char *s) { os64_strcopy(status_text,sizeof(status_text),s); }
 static os64_font_status_t refuse_preview(os64_ui_t *ui, void *user, void **out)
 { (void)ui; (void)user; *out = NULL; ++plans; return OS64_FONT_LIMIT; }
@@ -81,4 +103,34 @@ void font_page_install_contracts(void)
     }
     int status; assert(waitpid(pid,&status,0) == pid && !status);
     puts("font install: refused preview refreshes list without changing draft/undo/fonts; discovery failure is reported");
+
+    /* A Web face that will not open again for an UNCHANGED setting keeps the
+     * face already lent for it: the roles change, the lend does not. One
+     * that will not open for a CHANGED setting refuses the whole candidate. */
+    pid = fork(); assert(pid >= 0);
+    if (!pid) {
+        os64_ui_t edit, sample;
+        os64_ui_widget_t page, root;
+        os64_ui_init(&edit, NULL); os64_ui_init(&sample, NULL);
+        os64_ui_panel(&page); os64_ui_set_root(&edit, &page);
+        os64_ui_panel(&root); os64_ui_set_root(&sample, &root);
+        font_page_init(&edit, &sample, &page, capture_status);
+        font_page_activate();
+        os64_font_config_t candidate = draft;
+        os64_strcopy(candidate.roles[OS64_FONT_ROLE_UI].face[0], OS64_FONT_PATH_CAP, "builtin");
+        candidate.roles[OS64_FONT_ROLE_UI].size = 16;
+        fail_web = true;
+        unsigned before = lends;
+        assert(show_candidate(&candidate));
+        assert(lends == before);                 /* nothing lent over the old face */
+        os64_strcopy(candidate.roles[OS64_FONT_CONFIG_WEB].face[0], OS64_FONT_PATH_CAP,
+                     "/test/other-web");
+        assert(!show_candidate(&candidate) && lends == before);
+        fail_web = false;
+        font_page_close();
+        os64_ui_font_release(&edit); os64_ui_font_release(&sample);
+        _exit(0);
+    }
+    assert(waitpid(pid,&status,0) == pid && !status);
+    puts("font page: an unchanged Web face that will not reopen keeps the one lent; a changed one refuses");
 }

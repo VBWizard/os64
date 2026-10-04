@@ -7,6 +7,7 @@ mkdir -p "$saved_test_dir/include/os64" "$saved_test_dir/conf"
 cat > "$saved_test_dir/include/os64/syscall.h" <<'HEADER'
 #include <stdint.h>
 #include "os64/syscall_numbers.h"
+uint64_t os64_syscall1(uint64_t, uint64_t);
 uint64_t os64_syscall2(uint64_t, uint64_t, uint64_t);
 uint64_t os64_syscall3(uint64_t, uint64_t, uint64_t, uint64_t);
 uint64_t os64_syscall6(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);

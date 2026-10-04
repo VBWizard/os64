@@ -928,7 +928,8 @@ flow_tree_t *flow_layout(const os64_html_document_t *doc, const os64_page_t *mod
     tree->incomplete = tree->layout->incomplete;
     const FBox *root = tree->boxes->root;
     if (root != NULL && root->placed) {
-        Build bd = {.t = tree, .view_w = width, .view_h = env->viewport_height};
+        Build bd = {.t = tree, .view_w = width,
+                    .view_h = (int32_t)((f_css_units(env, env->viewport_height) + 32) / 64)};
         if (bd.view_h <= 0)
             bd.view_h = flow_height(tree);
         flow_box_t *none = NULL;
@@ -1094,6 +1095,36 @@ flow_point_t flow_box_doc_offset(const flow_box_t *box, flow_point_t scroll)
 {
     Frames m = {.n = 0};
     return box != NULL ? frame_of(&m, box->frame, box->fixed, scroll) : (flow_point_t){0, 0};
+}
+
+int32_t flow_background_layers(const flow_style_t *s)
+{
+    return s->backgrounds.nimage;
+}
+
+flow_layer_t flow_background_layer(const flow_style_t *s, int32_t i)
+{
+    const flow_backgrounds_t *b = &s->backgrounds;
+    const flow_bg_image_t *im = &b->image[i % b->nimage];
+    const flow_bg_size_t *sz = &b->size[i % b->nsize];
+    return (flow_layer_t){im->url,
+                          im->len,
+                          im->sheet,
+                          im->gradient,
+                          b->repeat[i % b->nrepeat],
+                          {b->x[i % b->nx], b->y[i % b->ny]},
+                          sz->fit,
+                          {sz->size[0], sz->size[1]},
+                          b->origin[i % b->norigin],
+                          b->clip[i % b->nclip]};
+}
+
+bool flow_background_has_image(const flow_style_t *s)
+{
+    for (int32_t i = 0; i < s->backgrounds.nimage; i++)
+        if (s->backgrounds.image[i].url != NULL || s->backgrounds.image[i].gradient != NULL)
+            return true;
+    return false;
 }
 
 void flow_box_radii(const flow_box_t *box, int32_t radii[4][2])

@@ -1,10 +1,13 @@
 #ifndef YONDER_SCALE_H
 #define YONDER_SCALE_H
 
-// A picture drawn into its box: scaled nearest-neighbour to the box's size
-// and blended by its alpha over what is already there, only where the box
-// meets `clip` (YONDER.md § Y5); and a background tiled (§ Y5b). Pure over
-// pixels, so the host harness checks them pixel by pixel.
+// A picture drawn into its box: scaled to the box's size and blended by its
+// alpha over what is already there, only where the box meets `clip`
+// (YONDER.md § Y5); and a background tiled (§ Y5b). A scaled picture is
+// SMOOTHED — each pixel mixed from the four source pixels round where it
+// falls — or, not, nearest-neighbour, its pixels kept square
+// (`image-rendering: pixelated`). Pure over pixels, so the host harness
+// checks them pixel by pixel.
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -15,14 +18,14 @@
 // in the surface's coordinates. `src` is 0xAARRGGBB, `sw` x `sh`, tightly
 // packed. What is written is opaque.
 void yonder_draw_picture(uint32_t *dst, uint32_t pitch, os64_gui_rect_t clip, os64_gui_rect_t box,
-                         const uint32_t *src, uint32_t sw, uint32_t sh);
+                         bool smooth, const uint32_t *src, uint32_t sw, uint32_t sh);
 
-// A picture TILED across `area`, its copies laid from (`ox`, `oy`) in
-// every direction — or, on an axis that does not repeat, the one copy at
-// the origin — blended the same way, only where `area` meets `clip`.
-// Unscaled: a background is drawn at its own size.
+// A picture TILED across `area`: each copy scaled to `tile`'s size, laid
+// from `tile` in every direction — or, on an axis that does not repeat,
+// the one copy at `tile` — blended the same way, only where `area` meets
+// `clip`.
 void yonder_tile_picture(uint32_t *dst, uint32_t pitch, os64_gui_rect_t clip, os64_gui_rect_t area,
-                         int32_t ox, int32_t oy, bool repeat_x, bool repeat_y,
+                         os64_gui_rect_t tile, bool repeat_x, bool repeat_y, bool smooth,
                          const uint32_t *src, uint32_t sw, uint32_t sh);
 
 #endif

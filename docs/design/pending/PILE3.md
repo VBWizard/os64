@@ -217,7 +217,7 @@ list and the page; both positions surviving a relayout.
 | `scroll-padding`, `scroll-margin`: a fragment target under a sticky heading | a target is brought to the box's top, where a heading painted over it hides it — as Chrome does without them | a page that sets them |
 | Smooth scrolling, `scroll-snap`, `overscroll-behavior` | a wheel moves a box at once, three lines a notch | a page whose carousel snaps |
 | Classic bars that take room from the content (`scrollbar-gutter`, `scrollbar-width`) | the overlay bar changes no layout, which is the point of it | a page whose layout counts on the gutter |
-| `filter`, `cursor`, `image-rendering` | not GARB.md's pile 3, and measured above | the slice that takes them, re-measured |
+| `filter`, `cursor` | not GARB.md's pile 3, and measured above (`image-rendering` was taken in § Zoom) | the slice that takes them, re-measured |
 
 ## The blend (slice S2)
 
@@ -371,7 +371,7 @@ the shadow's colour at its offset, under it.
 libgarb's declaration corpus gains eleven corner and twelve shadow cases.
 `radius_cases`: a percentage, the overlap scale, a slash, a zero corner,
 and the radii scaled as written (Firefox's 50 x 50 and 45 x 45).
-`sweep_shadows`: every allocation of a shadow read failed alone, each
+`sweep_grown_lists`: every allocation of a shadow read failed alone, each
 answer whole or marked incomplete.
 yonder, each worked by hand: the four border styles on a top side; a
 4px square with 2px corners to the pixel; an unblurred square shadow as
@@ -395,3 +395,362 @@ leaves to the browser.
 | Round dots | a dot is a square a width across | a page where it shows |
 | Clipping to the curve | a picture behind a rounded box, its `overflow`, its hit test and its children are all still cut square | a rounded box whose picture or content shows past the curve |
 | A shadow past its box's overflow | the walk prunes on overflow rects, which leave shadows out, so a shadow reaching into the view from a box outside it is not painted, and a group's bounds leave it out | a page whose shadow is cut where a box leaves the view |
+
+## Gradients (slice S4a)
+
+### How it is built
+
+**libgarb keeps the gradient it already checked.** A linear or radial
+gradient (`repeating-` too) was read against its grammar and thrown away;
+now the IMAGE value carries itself (values.h): its geometry — an angle in
+degrees, or `to` one of eight sides and corners; a radial's shape, size and
+centre — then its stops, a stop written with two positions becoming two
+and a hint a position alone. It is still written out as `name(...)`, so the
+declaration corpus does not churn; what was kept is proven through
+libflow's style dump. Conic gradients and image-set are taken by name and
+drawn as nothing.
+
+**libflow carries `flow_gradient_t`** in a background layer's image, beside
+the url() — one picture per layer, never both (S4c, below). The geometry stays
+as written (a `to` corner, percentages of the box), because only the box's
+size turns it into a line. A currentColor stop is marked, not resolved:
+it is the colour of the box the gradient is drawn on, which is a child's
+own when the child takes the gradient by `inherit` (CSS Color 4 § 4.4).
+Shadows are marked the same way — a text shadow is inherited — and a
+background or border colour written as currentColor is resolved when the
+element's style is finished, its mark kept for `inherit` to resolve again.
+
+**yonder paints it pixel by pixel** where a box's picture goes, between its
+colour and its inset shadows. Its tile is the padding box (the positioning
+area), drawn across the border box and repeated as `background-repeat`
+says, and cut to the curve of a rounded box. A pixel's middle is projected
+onto the line — toward a corner it is square to the box's diagonal (§
+3.1.1), its length |w·dx| + |h·dy| — or measured out along the ray of an
+ellipse or circle sized by its extent. Stops are fixed up by § 3.5.3 (the
+ends 0 and 1 when left out, none earlier than the one before, a run left
+of colour stops left out spread evenly between the colour stops round it,
+a hint among them keeping its place); a hint bends the mix with the power
+§ 3.5.3 gives; a repeating gradient wraps between its first stop and its
+last, and one with nothing between them is one colour, the average of its
+stops spread from 0 to 1 (§ 3.6); colours mix premultiplied. A radial
+whose ending shape has no size still paints (§ 3.2.3): a circle of no
+radius as a very small one, an ellipse of no width as a narrow tall one,
+one of no height as its last colour. An inline element's gradient is
+painted on each piece of its line, the piece its tile. The pixels reach the face through a new verb, `pixels`,
+blended there. **A body's gradient is the canvas's**, its tile the root's
+box — a page shorter than the view repeats it in bands, as the browsers
+do.
+
+### Proof
+
+`gradient_style_cases`: five gradients read into flow's (the initial
+direction, a `to` corner, a stop with two positions and a hint, a circle's
+one radius, a turn, currentColor, an ellipse's initial size). yonder, each
+pixel worked by hand: a 4px black-to-white line (t = 1/8 … 7/8), repeated
+hard stops, a 4px radial circle (its inner, edge and corner pixels), and a
+body gradient tiled by a 4px root; Codex's #208 round — a hint that does
+not move the stops left out, a repeating gradient of no length, ellipses
+of no width and no height, an inherited gradient's and an inherited text
+shadow's currentColor, an inline element's gradient (each failing on the
+code before it), an angle of 1e20 degrees, background and border colours
+by `inherit`, and libgarb refusing a circle's percentage or two radii, an
+ellipse's one, and a negative one. In the guest, `/tests/pages/
+pile3-gradients.html` — twelve gradients of every kind, a rounded one, a
+translucent one over stripes, and the body's own — drew as headless Chrome
+draws it.
+
+### Booked
+
+| Debt | Why it waits | Trigger |
+|---|---|---|
+| `background-size`, `-origin`, `-clip`, and `background-position` for a gradient | — | done in S4b, below |
+| An inline element's gradient across its pieces | each piece is its own tile, where the browsers lay the pieces end to end and draw one gradient along them; the public tree does not say which piece is first | a gradient on a span that wraps |
+| Conic gradients and image-set | no picture is made for them | a page whose look depends on one |
+| Interpolation in another colour space (`in oklab`) | Color 4's spaces are not converted | a page that writes one |
+| A gradient's cost | every pixel of it the view shows is worked out on every paint | a page whose gradients make painting slow, measured |
+
+## Background size, origin and clip (slice S4b)
+
+### How it is built
+
+**libgarb keeps three more longhands.** `background-size` is `cover`,
+`contain`, or a width and a height — each a length-percentage or `auto`,
+the height `auto` when only one is written; `background-origin` is one of
+the three boxes; `background-clip` is one of them or `text`. Like the other
+background longhands each takes a list, one per layer (S4c, below).
+The `background` shorthand sets all three now: a size after the position's
+`/`, and one box for both the origin and the clip, or two for the origin
+then the clip. `text` only clips, so it places nothing; written first of
+two, the declaration is invalid.
+
+**libflow carries them** in a layer as `fit` and `size[2]`, `origin`
+(initially the padding box) and `clip` (initially the border box).
+
+**yonder sizes one copy, places it, and cuts it.** `yonder_box_edge` gives
+any of a box's three boxes, and `yonder_background_tile` turns the style
+and the ORIGIN box into the copy (§ 3.9): `cover` and `contain` scale a
+picture by the larger or smaller of the two ratios, keeping its shape; a
+written side is px or a percentage of the origin box, an `auto` side keeps
+the picture's shape against the other side, or is its own size when both
+are `auto`. A gradient has no size or shape of its own, so it takes the
+origin box's wherever a picture would take its own. A side of 0 draws
+nothing. The position is then worked out in the room that copy leaves,
+as before. The picture tiler scales each copy nearest-neighbour to its
+tile. The colour and the picture are both cut to the CLIP box, and on a
+rounded box the colour and the gradient follow that box's own curve: the
+outer radii less the inset, as the padding box's are.
+
+### Proof
+
+libgarb's corpus: the shorthand with a size and one box or two, `text`,
+`text` first (invalid), a size with no position (invalid), three boxes
+(invalid), and each longhand alone and as a list. libflow's
+`background_box_cases`: the computed values, an em size against the box's
+own font, and a later shorthand resetting an earlier size. yonder, worked
+by hand: a 2x2 picture doubled into a 4x4 tile; cover (160x80 from 20x10
+in 100x80), contain centred, a gradient's cover, each `auto` rule, 0, and
+a scale past INT32_MAX held there; the three edge boxes; and painted, a
+gradient in a 2px tile repeated, one placed in and cut to the content box,
+and a colour cut to the content box. In the guest,
+`/tests/pages/pile3-backgrounds.html` — sixteen boxes over a 40x20
+`banner.png` and gradients, two of them rounded — drew as headless Chrome
+draws it, but for the smoothing below.
+
+### Booked
+
+| Debt | Why it waits | Trigger |
+|---|---|---|
+| Every layer of a list | — | done in S4c, below |
+| `background-clip: text` | the glyphs are drawn by the text verb, with no mask to fill with a picture; a background clipped to its text is not drawn on any box (the canvas's is drawn across the canvas whatever the clip says, as § 2.11.1 says and Chrome draws it), and `@supports (background-clip: text)` says no, so a page takes the fallback it wrote | a page whose gradient headline matters |
+| An inline box's origin and clip boxes | a piece in the public tree is its content area — inline padding and borders are neither laid out nor drawn — so every box of a piece is the piece itself | a page whose padded inline background matters |
+| A content box with percentage padding | the tree does not carry the width a percentage padding resolved against, so it counts as none, as for an atom's content | a page whose content-box background sits wrong |
+| A scaled picture's smoothing | — | done in § Zoom, below |
+
+## Layers (slice S4c)
+
+### How it is built
+
+**libgarb keeps every layer.** A background longhand written for more than
+one layer is a LAYERS value, one item per layer, the top first (values.h);
+written for one it is that one value, as before, so nothing that read a
+single layer changes. The `background` shorthand gives each longhand its
+list — a layer that leaves something out gives it the initial value — and
+so does `background-position`, split into its two longhands' lists. The
+lists grow outside the arena, so running out of memory partway is said by
+hand: the read is the whole one or marked incomplete.
+
+**libflow keeps a list per property**, as CSS computes them
+(`flow_backgrounds_t`), each at least one long; `inherit` and the other
+wide keywords take a whole list. `flow_background_layer` puts layer *i*
+together: the images say how many layers there are, a shorter list is
+repeated to fill them and a longer one cut (§ 3.1). An entry flow cannot
+read is that property's initial value.
+
+**yonder paints from the bottom up**: the colour first, cut by the BOTTOM
+layer's clip, then each layer cut by its own clip and placed in its own
+origin box. A gradient is painted as before; a picture is asked of the face
+by its layer's index, and the face draws that layer's picture. With no
+picture or gradient from any sheet, a `background` attribute's picture is
+the one layer, as it was. The canvas paints its owner's layers the same way
+across the whole view.
+
+**A list is copied into every element its declaration reaches**, which is
+the one cost of styling a page can multiply — a sheet's 400 layers on 500
+elements (Codex, #210). Every such list — layers, gradients, shadows, font
+families, grid tracks, areas and line names — comes out of a budget of its
+own (`list_alloc`, `F_STYLE_LISTS_BUDGET`, 32 MB, far past any real page's);
+past it, a declaration is dropped as one libflow cannot read is, so a
+hostile page is styled plainly and still laid out, where an arena cap would
+have blanked it.
+
+### Proof
+
+libgarb's corpus: the shorthand over two layers with the colour in the
+last, an empty layer and a trailing comma (both invalid), the longhands as lists, and the
+position shorthand split into lists. `sweep_grown_lists` now also fails
+each allocation of a five-layer longhand, a five-layer shorthand and a
+six-layer position, alone. libflow: three images with one repeat, two sizes
+in turn and four clips cut to three; the shorthand's layers; `inherit`.
+yonder, by hand: two gradients painted bottom first; the colour taking the
+bottom layer's border-box clip while the top layer is cut to the content
+box; a picture layer asked for by its index over the gradient under it. In
+the guest, `/tests/pages/pile3-layers.html` — six boxes and a body of two
+layers — drew as headless Chrome draws it.
+
+### Booked
+
+| Debt | Why it waits | Trigger |
+|---|---|---|
+| An attribute's picture under a sheet's `none` | a `background` attribute's picture shows whenever no sheet gives the box a picture or gradient, though a sheet's `background-image: none` should hide it | a page that hides a table's background attribute that way |
+
+## Zoom (slice S5, with image-rendering)
+
+Chris asked for zoom before pile 3 ends (9/27, Hacker News's tiny type):
+not CSS's `zoom` property, but the browser's own — Ctrl and + or -.
+
+### How it is built
+
+**libflow lays the page out in device pixels**, as a browser does for a
+screen denser than 96 dpi. `flow_env_t.zoom` says how many device pixels a
+CSS pixel is (thousandths), and a CSS pixel becomes device pixels at the few
+places one enters: the unit converter (`length_px` — px, pt, in and the
+rest, and vw and vh), the Rendering chapter's own lengths and the HTML
+attributes' (`px()`, `map_dimension`, the border widths), `medium`, a
+replaced element's own size, the frame and broken-picture defaults, and the
+viewport's height. An em, a rem and a percentage follow by themselves. So a
+`16px` font at 150% is shaped at 24 px, and drawn as sharp as at 100%:
+nothing is stretched.
+
+**yonder** lays out at the window's width in device pixels and judges the
+sheets at the window's size divided by the zoom — so a media query sees
+the narrower CSS viewport and a page's narrow layout arrives as it does in
+Chrome. The zoom is the WINDOW's (Chris, 10/3): kept across navigation,
+started from the settings' default. Ctrl with = or + and Ctrl with - step
+through Chrome's zooms (25% to 500%), Ctrl+0 goes back to the default, and
+Ctrl and the wheel step too, wherever focus is in the window. A zoom
+change keeps the element at the top of the view there, its offset scaled.
+The status line says `zoomed 125%` when it is not 100%. **The Settings
+window** gains a row, `Zoom every page to [ ] %`, saved as `zoom =` in
+`yonder.conf`; the shared settings dialog grows taller for a body with
+more rows. Presses in a row are laid out ONCE, after the events that came
+with them (the same deferral a window drag gets).
+
+**Zoom found the text engine's two ceilings** (Chris on the P5, 10/3: a
+page zoomed to 500% stayed broken when zoomed back). Every size of a face
+is a face of its own, and the text engine COPIED the whole font file for
+each — 0.75 MB of DejaVuSans per size — and refused a 65th live face. A
+page using thirty-odd sizes in four styles met both at 100%; a zoom asks
+for every size again while the tree on screen still holds the old ones.
+Both were booked in 04-web-faces.md, and both are paid: a context keeps
+ONE copy of a file's bytes, shared by every face opened from the same
+bytes and freed with the last (`text_cache.c`'s `text_file`, matched by
+content, never by the caller's pointer), and `OS64_FONT_FACE_MAX` is 1024
+— measured with FreeType on the host, a face costs 22 KB once its file is
+shared (sixty sizes of DejaVuSans: 2.2 MB, where the copies made it 47).
+A page of 32 sizes now lays out complete in 1.5 s where it stopped partway
+in 8. And when a relayout still comes back incomplete while the old tree
+exists, yonder frees both and lays the page out once more in the whole
+budget, so a page is never stuck behind the tree it is replacing.
+
+**`image-rendering`** (Images 3 § 5.3, inherited): `pixelated` and
+`crisp-edges` — and the spellings older pixel-art pages wrote,
+`-moz-crisp-edges`, `-webkit-optimize-contrast`, `optimizeSpeed` — keep a
+scaled picture's pixels square; every other value SMOOTHS it: each pixel is
+mixed from the four source pixels round where it falls, by how near each
+is, their colours weighed by their alphas so that a transparent neighbour
+lends no colour. A picture drawn at its own size is copied either way.
+
+### Proof
+
+libgarb: the property, an SVG spelling, Chrome's, and a word it is not.
+libflow: `pixelated` inherited, `auto` back to smooth, Chrome's spelling
+crisp; at zoom 2, a box whose `1em` margin, `50px` width, `1px` border and
+`25vh` height are each doubled, and a picture's attribute size and its own
+size doubled. yonder, by hand: black to white drawn twice as wide (0x40
+and 0xbf between), red beside transparency (0xbf over black, where mixing
+the transparent black in would give 0x8f), and a picture at its own size
+copied. In the guest: Ctrl+=, Ctrl+-, Ctrl+0 and Ctrl+wheel on the
+corpus's Wikipedia page and `/tests/pages/pile3-zoom.html`, which drew at
+150% as headless Chrome does at a device scale of 1.5; the Settings row
+applied at once and saved `zoom = 125` to /home's `yonder.conf`. The text
+engine: `test_text_host`'s "one copy per file" (two sizes, one file, the
+file outliving the first face; equal bytes from another buffer the same
+file, and the same buffer with new bytes a new one, as "reload identity"
+already held), the family cache pinning `OS64_FONT_FACE_MAX` faces with
+runs and refused one more, and the whole font battery green, real FreeType
+included. In the guest, a page of 32 sizes in four styles laid out complete
+at 100%, at 500% and at 100% again — before, INCOMPLETE at all three, and
+blank on the way back.
+
+### Booked
+
+| Debt | Why it waits | Trigger |
+|---|---|---|
+| A zoom per site | one zoom for the window (Chris, 10/3) | a person who wants one site bigger than the rest |
+| Form controls at the zoom | — | done in § The Web face, below |
+| A picture shrunk to less than half | four pixels are mixed, so a picture shrunk far shimmers where the browsers filter its whole area | a page whose thumbnails shimmer |
+| Zoom's cost | more device pixels to paint, and smoothing costs more than copying | the deferred painting work |
+| Heavy pages at a high zoom | on the P5 (Chris, 10/3) news.google.com breaks up from 250%, and news.yahoo.com goes wrong at 200% but recovers once zoomed back; the cause is not measured — the page's narrow-viewport sheets at a CSS width of 331 px and under, or a budget the layout still meets, are the suspects. A reading zoom of 200% or less is what yonder is for (Chris) | a page a person needs past 200%, or one that breaks at 200% or less |
+| Text past 1280 device px | the font engine's largest face (OS64_FONT_PIXEL_MAX, raised from 256 for zoom — Chris, 10/4 — so any size a page draws at 100% is shaped true at 500%); a larger run is shaped at 1280 and laid out at its own size | a page writing a font over 256 px that a person zooms |
+
+## The Web face (slice S6)
+
+A page's form controls drew in the desktop's Interface font, at its size,
+whatever the zoom — the debt § Zoom booked. Chris chose the cure (10/3): a
+**Web** button in the Appearance Workshop's Fonts tab, so the choice is the
+system's and any later browser shares it — and then its shape: the
+desktop's applications keep the Interface font for their own controls, and a
+control decides its font from a property the browser sets.
+
+### How it is built
+
+**`fonts.conf` gains the Web setting**: `web.face` (and `web.fallback.1`,
+`.2`) is the face a browser draws a page's form controls in, and `web.size`
+is the page's default font size, CSS's `medium` — what Chrome calls "Font
+size". Unset, it is the shipped DejaVu Sans at 16. It is the shape of a role
+and rides after the three in the config (`OS64_FONT_CONFIG_WEB`), but it is
+**not a role**: no window's role set carries it, so a program that never
+shows a page never loads it. A browser opens it itself,
+`os64_font_config_web_prepare(context, config, px)`, at the size it needs.
+The session carries it with the roles, so a Workshop draft read back keeps
+it, and Save writes it; Apply publishes it, but yonder reads it when it
+starts and does not follow it.
+
+**libui gains the application's face.** `os64_ui_font_app(ui, set, role)`
+lends a window a face beside the role set the settings choose;
+`os64_ui_widget_app_face(ui, w, true)` puts a widget in it, and the role
+`OS64_UI_FONT_APP` measures in it. A widget that asks draws in it instead
+of its class's role, a textview's Document role included; one that has not
+asked is untouched, so yonder's toolbar keeps the Interface font while its
+page's controls change. An adoption — a new Interface or Document font —
+leaves the lent face alone. A new lend lets the widgets wearing it go of
+the runs laid out in the old face, keeps what their next paint reuses (a
+list's row slots), and has them measure a scroll again in the new one — so
+it is cheap enough to follow a zoom, and allocates nothing. Nothing lent, the application's role is the Interface role.
+
+**yonder** reads `web.size` as the page's `medium`, and lends its window the
+Web face at the size a browser gives a control — 13/16 of `medium` (Chrome's
+small-control, 13 px at 16) — times the zoom, again at every zoom change.
+A select's box is measured in that face, and handed to libflow in CSS
+pixels, since libflow scales a replaced box by the zoom itself. Its frame,
+row padding and label inset are the listbox's own, which libui draws in
+device pixels, so they stay that size at any zoom (BROWSER_DEBTS.md). A Web face
+that will not open leaves the controls in the Interface font, and yonder
+says so once on its terminal.
+
+**The Workshop** has a fourth button, Web, and a fourth specimen line drawn
+in the Web face lent to the preview window. A Web face that will not open
+refuses only a candidate that changes it: the shipped default is absent
+without the fonts lot, and that must not stop anyone choosing the roles.
+
+### Proof
+
+Host: `test_ui_text_host --real`'s "application face" — a lent face worn by
+the widgets that asked and no other, a list's rows and a button's height
+re-derived at the lend, a new lend dropping only those widgets' runs, an
+adoption leaving it, a widget leaving it, nothing lent being the Interface
+role, and the window owing nothing at release. `test_font_config_host`'s Web
+setting: the default, a round trip through encode and decode, refusals that
+name the Web line (and not a role) — every refused allocation of the Web
+door's set among them — the face opened at sizes past both ends of the
+configurable 8..96 and clamped only outside the engine's 1..1280, a builtin
+face at 16 whatever is asked, a broken face refused by the Web door and not
+by the role door. `test_ui_text_host --real`'s "application face changed":
+a field, a view and a list re-lent a smaller face end scrolled as fresh ones
+would be, the list keeping its slots. `test_appearance_session_host`:
+the Web setting survives the session. In the guest:
+`/tests/pages/pile3-controls.html` with the controls in DejaVu Sans at 13 px
+beside a bitmap toolbar; at 200% the controls' text doubled and the
+select's box grew with its rows, and back at 100% as before; the Workshop's Web button
+previewing DejaVu Sans Mono Bold, Save writing `web.face` and `web.size`
+beside unchanged roles, and yonder started afterwards drawing the controls
+in it; `web.size = 20` giving a 20 px paragraph and 16 px controls.
+
+### Booked
+
+| Debt | Why it waits | Trigger |
+|---|---|---|
+| yonder following a Web change live | it reads `fonts.conf` when it starts, as it reads the families | a person who changes the Web face with a page open and expects it to follow |
+| A page's own `font` on a control | controls wear the Web face at the small-control size, whatever the page's CSS says | a page whose styled inputs look wrong |
+| A checkbox at the zoom | its box grows, but the tick is the theme's size | a page of checkboxes at 150% or more |
+| Textviews in the application's face | no browser control is one (a `<textarea>` is a field) | a `<textarea>` drawn as a textview |

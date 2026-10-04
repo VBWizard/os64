@@ -51,7 +51,15 @@ services and fonts are hosted; it does not boot a compositor. Set
 `YONDER_SCRIPTS_KEEP=1` to keep successful host artifacts.
 The suite also covers password deletion reaching scripts and submission,
 Reset discarding unflushed edits in its owning form, and author CSS failing to
-reveal scripting-mode `noscript` fallback.
+reveal scripting-mode `noscript` fallback. Script qualification covers the
+sixteen JavaScript MIME essence strings, ASCII case/whitespace handling and
+legacy `language` fallback with `type` precedence.
+Zoom integration covers settings persistence, a pending DOM rebuild preserving
+its old controls face, and publishing zoomed layout, media queries and scroll
+anchoring together while keeping the form widget and its value.
+A three-face backend with the real family cache checks that a staged rebuild
+reclaims the old layout's faces before retrying. Refusal of that retry keeps
+scripts pending, hides stale controls and permits recovery on the next turn.
 
 This is the D5b/J3 finished-document inline-classic-script fixture. External
 scripts, modules, browser execution order, events, timers, document.write,

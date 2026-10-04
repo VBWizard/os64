@@ -7,6 +7,15 @@
 
 #define F_ARRAY(a) ((int32_t)(sizeof(a) / sizeof((a)[0])))
 
+// `n` CSS pixels in the tree's 26.6 units, which are device pixels'
+// (flow_env_t.zoom), rounded to the nearest unit.
+static inline int64_t f_css_units(const flow_env_t *env, int64_t n)
+{
+    uint32_t z = env->zoom != 0 ? env->zoom : 1000;
+    int64_t u = n * 64 * (int64_t)z;
+    return u >= 0 ? (u + 500) / 1000 : -((-u + 500) / 1000);
+}
+
 // White-space's two questions (CSS Text 3 § 3), answered in one place so
 // the box builder and layout agree: does a run of spaces collapse, and
 // may a line wrap?
@@ -202,11 +211,17 @@ typedef struct {
     bool lays_out_items;
 } FStyled;
 
+// What is left of the budget for the lists a declaration hands each element
+// it reaches (style.c, list_alloc): the one part of styling a page can
+// multiply.
+#define F_STYLE_LISTS_BUDGET ((size_t)32 << 20)
+
 typedef struct {
     const os64_html_document_t *doc;
     const flow_env_t *env;
     FArena arena;
     FMap map;               // element node -> FStyled
+    size_t lists_left;      // of F_STYLE_LISTS_BUDGET
 } FStyles;
 
 // ALL OR NOTHING: NULL when memory runs out anywhere. A style is a few

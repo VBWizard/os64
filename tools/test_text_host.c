@@ -67,6 +67,18 @@ static void lifetimes(void)
     CHECK(a->images[0]!=b->images[0]);
     os64_text_run_release(a);os64_text_run_release(b);os64_text_font_release(f);os64_text_font_release(g);
     CHECK(os64_text_destroy(c)==OS64_FONT_OK && live==0);
+    /* Two sizes of one file are two faces over one copy of its bytes, which
+     * lives until the last of them is released; equal bytes from another
+     * buffer are the same file. */
+    current="one copy per file";c=create(0,0);
+    uint8_t one='P',two='P';os64_font_face_options_t small={16,0},big={32,0};
+    CHECK(os64_text_font_open(c,&one,1,&small,&f)==OS64_FONT_OK);
+    CHECK(os64_text_font_open(c,&two,1,&big,&g)==OS64_FONT_OK);
+    CHECK(f->identity!=g->identity && f->file==g->file && f->file->refs==2 && c->files->next==NULL);
+    os64_text_font_release(f);CHECK(c->files==g->file && g->file->refs==1);
+    a=layout(c,g,(uint8_t *)"i",1,0,0);CHECK(a->view.glyph_count==1);
+    os64_text_run_release(a);os64_text_font_release(g);
+    CHECK(c->files==NULL && os64_text_destroy(c)==OS64_FONT_OK && live==0);
 }
 static void failures(void)
 {

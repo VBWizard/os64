@@ -362,19 +362,63 @@ OUT: caption-side: bottom
 
 # ── Backgrounds (Backgrounds 3 § 3) ──
 IN: background: red
-OUT: background-color: rgb(255, 0, 0); background-image: none; background-repeat: repeat; background-position-x: 0%; background-position-y: 0%
+OUT: background-color: rgb(255, 0, 0); background-image: none; background-repeat: repeat; background-position-x: 0%; background-position-y: 0%; background-size: auto auto; background-origin: padding-box; background-clip: border-box
 IN: background: url(bg.gif) no-repeat center
-OUT: background-color: rgba(0, 0, 0, 0); background-image: url(bg.gif); background-repeat: no-repeat; background-position-x: 50%; background-position-y: 50%
+OUT: background-color: rgba(0, 0, 0, 0); background-image: url(bg.gif); background-repeat: no-repeat; background-position-x: 50%; background-position-y: 50%; background-size: auto auto; background-origin: padding-box; background-clip: border-box
 IN: background: #008080 url(bg.gif) repeat
-OUT: background-color: rgb(0, 128, 128); background-image: url(bg.gif); background-repeat: repeat; background-position-x: 0%; background-position-y: 0%
+OUT: background-color: rgb(0, 128, 128); background-image: url(bg.gif); background-repeat: repeat; background-position-x: 0%; background-position-y: 0%; background-size: auto auto; background-origin: padding-box; background-clip: border-box
 IN: background: url(a.png) right 10px top / cover no-repeat, blue
-OUT: background-color: rgb(0, 0, 255); background-image: url(a.png); background-repeat: no-repeat; background-position-x: calc(100% - 10px); background-position-y: 0%
+OUT: background-color: rgb(0, 0, 255); background-image: url(a.png), none; background-repeat: no-repeat, repeat; background-position-x: calc(100% - 10px), 0%; background-position-y: 0%, 0%; background-size: cover, auto auto; background-origin: padding-box, padding-box; background-clip: border-box, border-box
 IN: background: linear-gradient(red, blue)
-OUT: background-color: rgba(0, 0, 0, 0); background-image: linear-gradient(...); background-repeat: repeat; background-position-x: 0%; background-position-y: 0%
+OUT: background-color: rgba(0, 0, 0, 0); background-image: linear-gradient(...); background-repeat: repeat; background-position-x: 0%; background-position-y: 0%; background-size: auto auto; background-origin: padding-box; background-clip: border-box
 IN: background: red, blue
 OUT: invalid
+IN: background: url(a.png) center / 50% content-box
+OUT: background-color: rgba(0, 0, 0, 0); background-image: url(a.png); background-repeat: repeat; background-position-x: 50%; background-position-y: 50%; background-size: 50% auto; background-origin: content-box; background-clip: content-box
+IN: background: border-box padding-box 0 0 / 10px 2em url(a.png)
+OUT: background-color: rgba(0, 0, 0, 0); background-image: url(a.png); background-repeat: repeat; background-position-x: 0px; background-position-y: 0px; background-size: 10px 2em; background-origin: border-box; background-clip: padding-box
+IN: background: linear-gradient(red, blue) text
+OUT: background-color: rgba(0, 0, 0, 0); background-image: linear-gradient(...); background-repeat: repeat; background-position-x: 0%; background-position-y: 0%; background-size: auto auto; background-origin: padding-box; background-clip: text
+IN: background: text border-box red
+OUT: invalid
+IN: background: url(a.png) / cover
+OUT: invalid
+IN: background: border-box padding-box content-box
+OUT: invalid
+IN: background-size: cover
+OUT: background-size: cover
+IN: background-size: 40px
+OUT: background-size: 40px auto
+IN: background-size: auto 25%
+OUT: background-size: auto 25%
+IN: background: url(a.png) no-repeat 0 0 / 10px border-box, linear-gradient(red, blue) content-box #fff
+OUT: background-color: rgb(255, 255, 255); background-image: url(a.png), linear-gradient(...); background-repeat: no-repeat, repeat; background-position-x: 0px, 0%; background-position-y: 0px, 0%; background-size: 10px auto, auto auto; background-origin: border-box, content-box; background-clip: border-box, content-box
+IN: background: url(a.png), , red
+OUT: invalid
+IN: background-position: left top, center, right 5px bottom
+OUT: background-position-x: 0%, 50%, calc(100% - 5px); background-position-y: 0%, 50%, 100%
+IN: background-position: left top,
+OUT: invalid
+IN: background-position-x: 0, 50%, right
+OUT: background-position-x: 0px, 50%, 100%
+IN: background-image: url(a.png),
+OUT: invalid
+IN: background-size: 10px, cover
+OUT: background-size: 10px auto, cover
+IN: background-size: -1px
+OUT: invalid
+IN: background-size: cover contain
+OUT: invalid
+IN: background-origin: content-box
+OUT: background-origin: content-box
+IN: background-origin: text
+OUT: invalid
+IN: background-clip: padding-box, text
+OUT: background-clip: padding-box, text
+IN: background-clip: text
+OUT: background-clip: text
 IN: background: none
-OUT: background-color: rgba(0, 0, 0, 0); background-image: none; background-repeat: repeat; background-position-x: 0%; background-position-y: 0%
+OUT: background-color: rgba(0, 0, 0, 0); background-image: none; background-repeat: repeat; background-position-x: 0%; background-position-y: 0%; background-size: auto auto; background-origin: padding-box; background-clip: border-box
 IN: background-position: right bottom
 OUT: background-position-x: 100%; background-position-y: 100%
 IN: background-position: top
@@ -396,7 +440,7 @@ OUT: background-image: url(x.png)
 IN: background-repeat: no-repeat repeat
 OUT: background-repeat: repeat-y
 IN: background-image: url(a.png), linear-gradient(red, blue)
-OUT: background-image: url(a.png)
+OUT: background-image: url(a.png), linear-gradient(...)
 # Gradients by their grammar (Images 3 § 3): what the browsers refuse is
 # refused, so the colour set before it stands.
 IN: background-image: linear-gradient(to right, red, blue)
@@ -433,12 +477,36 @@ IN: background-image: linear-gradient(to, red, blue)
 OUT: invalid
 IN: background-image: radial-gradient(at, red, blue)
 OUT: invalid
+IN: background-image: radial-gradient(circle 20%, red, blue)
+OUT: invalid
+IN: background-image: radial-gradient(circle 10px 20px, red, blue)
+OUT: invalid
+IN: background-image: radial-gradient(ellipse 10px, red, blue)
+OUT: invalid
+IN: background-image: radial-gradient(20%, red, blue)
+OUT: invalid
+IN: background-image: radial-gradient(-10px, red, blue)
+OUT: invalid
+IN: background-image: linear-gradient(1e307rad, red, blue)
+OUT: background-image: linear-gradient(...)
+IN: background-image: radial-gradient(circle calc(10% + 1px), red, blue)
+OUT: invalid
+IN: background-image: radial-gradient(circle calc(1px - 2px), red, blue)
+OUT: background-image: radial-gradient(...)
+IN: background-image: radial-gradient(calc(1px - 2px) 10px, red, blue)
+OUT: background-image: radial-gradient(...)
+IN: background-image: radial-gradient(10px 20% at 0 0, red, blue)
+OUT: background-image: radial-gradient(...)
+IN: background-image: radial-gradient(10px circle, red, blue)
+OUT: background-image: radial-gradient(...)
+IN: background-image: radial-gradient(ellipse 0 20px, red, blue)
+OUT: background-image: radial-gradient(...)
 IN: background-image: linear-gradient(red,, blue)
 OUT: invalid
 IN: background-image: url(a.png), 10px
 OUT: invalid
 IN: background-position: 0 0, 17px 11px, 50% 50%
-OUT: background-position-x: 0px; background-position-y: 0px
+OUT: background-position-x: 0px, 17px, 50%; background-position-y: 0px, 11px, 50%
 IN: background-position-x: right 5px
 OUT: background-position-x: calc(100% - 5px)
 
@@ -678,3 +746,13 @@ OUT: unknown
 # A value holding var() is the cascade's to read, once the variable is known.
 IN: color: var(--x)
 OUT: held
+
+# ── image-rendering (Images 3 § 5.3) ──
+IN: image-rendering: pixelated
+OUT: image-rendering: pixelated
+IN: image-rendering: optimizeSpeed
+OUT: image-rendering: optimizespeed
+IN: image-rendering: -webkit-optimize-contrast
+OUT: image-rendering: -webkit-optimize-contrast
+IN: image-rendering: blurry
+OUT: invalid

@@ -1437,9 +1437,14 @@ in tree order and runs at most one per turn, followed by its budgeted Promise
 checkpoint and one native rebuild. This does not implement D4/D7 execution
 order: external `src`, module, async/defer scheduling, inserted-script
 execution, DOM events, timers, document.write, geometry and location APIs are
-outside this slice. A type absent or empty, or exactly `text/javascript`,
-`application/javascript`, `text/ecmascript` or `application/ecmascript`, qualifies;
-other types and template contents are excluded.
+outside this slice. Qualification follows [HTML's script-type preparation](https://html.spec.whatwg.org/multipage/scripting.html#prepare-the-script-element):
+an empty `type` defaults to JavaScript; a nonempty `type` has leading/trailing
+ASCII whitespace stripped and matches the [sixteen JavaScript MIME essence
+strings](https://mimesniff.spec.whatwg.org/#javascript-mime-type) ASCII-case-insensitively.
+With `type` absent, empty/absent `language` defaults, while nonempty `language`
+supplies `text/` plus its value without whitespace trimming. Present `type`
+overrides `language`; whitespace-only `type` and padded `language` do not
+default. Other types and template contents are excluded.
 
 **The switch.** Settings adds **Run page scripts**, default off. Apply changes
 this window; Save as default writes `scripts = on/off` to `yonder.conf`.
@@ -1451,8 +1456,8 @@ An empty window waits for its next page. The status line begins **SCRIPTS ON**
 while enabled. The document's captured mode also reaches `flow_env_t.scripting`,
 so raw `noscript` fallback text is hidden when enabled, even under author
 `display` declarations, including `!important`; ordinary fallback markup is
-parsed and drawn when disabled. The agent list scrolls within one
-fewer nominal row so the added switch fits the existing settings window.
+parsed and drawn when disabled. The Settings dialog is sized for the agent
+list, cache, zoom and script-switch rows.
 
 **Owners and snapshots.** The runtime is created lazily before the first
 runnable script. Its native queue holds nodes, not JavaScript values. Page
@@ -1468,8 +1473,13 @@ alive until their borrowers are released.
 
 **Publication.** HTML version and page-state revision are observed separately.
 A failed model rebuild preserves the old drawing and its native STALE action
-gate. Once a new model exists, a failed cascade/layout leaves older geometry
-and its retained model alive. Links and controls resolve through native nodes
+gate. Once a new model exists, a failed initial cascade/layout leaves older
+geometry and its retained model alive. An incomplete attempt may instead
+release that old tree and cascade to reclaim font capacity, then retry once;
+the staged rebuild passes its shown Page to the same retry as an ordinary
+relayout. If this retry is refused, the view has no geometry, its controls
+hide, and the DOM version stays owed for the next external event. Links and
+controls resolve through native nodes
 before consulting current meaning; detached old links do nothing. Resize and
 sheet completion cannot publish layout while a DOM rebuild is owed. Failures
 retry on another external event before running the next script, without a
@@ -1479,12 +1489,14 @@ parses, including imports and duplicate links, transfer ownership after their
 old cascade is released; text mutations therefore preserve loaded CSS without
 refetching it. A parse has one staged borrower; abort leaves its old owner intact.
 Stylesheet metadata retains the loader's omission-on-allocation-refusal policy.
-Page scroll offsets are retained and clamped; box scroll positions remain node
-keyed. Node-based page scroll anchoring across DOM changes is not added.
+At the same zoom, page scroll offsets are retained and clamped; a deferred zoom
+scales and anchors them with the rebuilt geometry. Box scroll positions remain
+node keyed.
 
 **Controls and pictures.** Widgets are individually allocated and node keyed.
-Surviving controls preserve widget identity, focus, caret, selection and typed
-buffers across index changes and even a partial layout omitting their boxes.
+Surviving controls preserve widget identity, caret, selection and typed buffers
+across index changes and even a partial layout omitting their boxes. Focus
+persists while the widget remains reachable; hiding it also reconciles focus.
 Before a script or activation, changed editor buffers flush to shared state.
 Password comparisons and copies use explicit lengths, including deletion to
 empty. A successful Reset refreshes that form's editors even when the native
@@ -1515,14 +1527,21 @@ stdout; alert reports on the status line.
 
 **Evidence.** `tools/test_yonder_scripts_host.sh` exercises the actual Yonder
 queue, publication and widget code with real libui editing and native libraries,
-a target-profile engine, ASan/UBSan and normal LSan. It passes **1531/0** checks:
+a target-profile engine, ASan/UBSan and normal LSan. It passes **2053/0** checks:
 one task per turn, wrapper identity, a real key edit and caret/selection/focus,
 control reorder/kind/hidden transitions, state-only refresh, invalid numeric
 input, password deletion through script reads and form requests, reset of
 unflushed editors and externally owned controls, refusal/other-form preservation,
 author-styled `noscript` in both scripting modes, current-link routing through
-older geometry, navigation cancellation,
-job/source/schedule caps, URL ownership and setting persistence. A 160-cut
+older geometry, navigation cancellation, all sixteen classic MIME spellings
+with case/ASCII-whitespace handling, legacy language fallback/type precedence,
+and language changes between queue construction and execution,
+job/source/schedule caps, URL ownership and setting persistence alongside zoom.
+A pending DOM rebuild preserves its old controls face until it can publish
+zoomed geometry, CSS media queries and scroll anchoring together. A three-face
+backend and the real family cache reproduce old geometry exhausting the new
+zoom's faces, then verify a whole retry. A refused retry releases its staging,
+hides stale controls and recovers before running the queued script. A 160-cut
 native sweep reaches 18 model refusals and 21 layout refusals, with 121 completed
 rebuilds; a separate 64-cut stylesheet sweep covers duplicate parses/imports,
 rollback and retry. The ledger is empty after teardown. Worker services and
@@ -1530,9 +1549,9 @@ fixture transport are hosted; this suite does not simulate a compositor or
 claim guest timing performance. The real fetch suite adds a multi-chunk HTML
 case with scripts before/after the read boundary: **27/0**. Both libdom profiles
 pass **1527/0** and **4227/0** with sanitizers; libpage rebuild **68328/0**, libflow
-**18585/0** plus matching corpus dumps, libgarb's parser/cascade/allocation suites,
-and the painter **115/0** plus six matching paints pass. Strict userland build
-passes with bounded `-j4` concurrency.
+**18602/0** plus matching corpus dumps, libgarb's parser/cascade/allocation suites,
+and the painter **179/0** plus six matching paints pass. The UI font suite passes
+**148/0**. Strict userland build passes with bounded `-j2` concurrency.
 
 A private QEMU image/server loads `tools/yonder_script_fixture/index.html`.
 The first and final inline scripts change the visible heading to **Two JavaScript donuts!**;
@@ -1547,6 +1566,10 @@ off-mode fallback, and on-mode fallback suppression were checked on the guest.
 The 21 installed library/app/test/fixture files were byte-compared with their
 build inputs. Guest `domtest` passes four lifetimes; `pagetest` and `htmltest`
 pass, and `htmltest pinned` still exits with the HTML badge (`0x48544d4c`).
+The merged zoom/background integration was checked again in a private guest:
+22 installed files were byte-compared, legacy MIME and language scripts ran,
+VBScript/modules stayed skipped, and typing Q after 2.4 seconds survived the
+redraw. Both scripted pages retired with **heap problems=0**.
 No P5 scripting or ordinary-site compatibility evidence is claimed.
 
 **Remaining gates.** D6 review, D7's event loop/execution order,

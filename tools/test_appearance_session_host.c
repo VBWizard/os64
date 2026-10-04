@@ -499,6 +499,19 @@ static void font_envelope_contracts(void)
     count = appearance_snapshot(snapshot, sizeof(snapshot)-1); snapshot[count] = 0;
     assert(strstr(snapshot, "future.texture = linen  # silk later\n"));
 
+    // The Web setting travels with the roles: a draft read back from the
+    // session keeps the face and size it was published with.
+    os64_font_config_t web = config;
+    strcpy(web.roles[OS64_FONT_CONFIG_WEB].face[0], "/etc/fonts/Other.ttf");
+    web.roles[OS64_FONT_CONFIG_WEB].size = 20;
+    assert(!os64_font_settings_apply(context, &web, &published, NULL));
+    assert(!os64_font_settings_current(&current, &serial) && serial == published);
+    assert(!strcmp(current.roles[OS64_FONT_CONFIG_WEB].face[0], "/etc/fonts/Other.ttf"));
+    assert(current.roles[OS64_FONT_CONFIG_WEB].size == 20);
+    count = appearance_snapshot(snapshot, sizeof(snapshot)-1); snapshot[count] = 0;
+    assert(strstr(snapshot, "fonts.web.size = 20\n"));
+    assert(!os64_font_settings_apply(context, &config, &published, NULL));
+
     // Another writer wins the exact CAS: preserve its raw bytes and retry.
     racing_length = encode(racing, &theme, generation());
     race_write = true;

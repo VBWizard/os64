@@ -486,7 +486,7 @@ APP_EXTRA_LIBS_$(1) := $(if $(filter $(1),htmltest wend pagetest flowdump yonder
                        $(if $(filter $(1),jpegtest),$(LIBJPEG_SO)) \
                        $(if $(filter $(1),fonttest texttest flowdump yonder),$(LIBFREETYPE_SO)) \
                        $(if $(filter $(1),js),$(LIBJS_SO)) \
-                       $(if $(filter $(1),mathtest),$(LIBMATH_SO)) \
+                       $(if $(filter $(1),mathtest yonder),$(LIBMATH_SO)) \
                        $(if $(filter $(1),$(LIBGZIP_PROGRAMS)),$(LIBGZIP_SO)) \
                        $(if $(filter $(1),$(LIBPNG_PROGRAMS)),$(LIBPNG_SO)) \
                        $(if $(filter $(1),$(LIBFETCH_PROGRAMS)),$(LIBFETCH_SO)) \

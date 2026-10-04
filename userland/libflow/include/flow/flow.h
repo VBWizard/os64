@@ -32,8 +32,11 @@
 
 // ── Units ───────────────────────────────────────────────────────────────
 //
-// A length is CSS pixels in 26.6 fixed point — the text engine's own unit,
-// so a font size and a margin computed from it never cross a conversion.
+// A length is DEVICE pixels in 26.6 fixed point — CSS pixels times the
+// page's zoom (flow_env_t.zoom), the same thing at 100% — and the text
+// engine's own unit, so a font size and a margin computed from it never
+// cross a conversion. Every length in the tree, and every box coordinate,
+// is in it.
 // Layout keeps 26.6 until a box coordinate is written, and rounds there
 // once (LAYOUT.md § Rounding).
 typedef int32_t flow_unit_t;
@@ -65,6 +68,11 @@ typedef struct {
 
 // Box sides, in CSS's own order.
 enum { FLOW_TOP = 0, FLOW_RIGHT = 1, FLOW_BOTTOM = 2, FLOW_LEFT = 3 };
+
+// flow_style_t.current_colours: a side's border colour (1 << side), and
+// the background colour.
+#define FLOW_CURRENT_BORDER(side) ((uint8_t)(1u << (side)))
+#define FLOW_CURRENT_BACKGROUND ((uint8_t)0x10)
 
 // ── Colours ─────────────────────────────────────────────────────────────
 //
@@ -230,6 +238,10 @@ typedef enum { FLOW_CAPTION_TOP = 0, FLOW_CAPTION_BOTTOM } flow_caption_side_t;
 typedef enum { FLOW_FLOAT_NONE = 0, FLOW_FLOAT_LEFT, FLOW_FLOAT_RIGHT } flow_float_t;
 typedef enum { FLOW_CONTENT_BOX = 0, FLOW_BORDER_BOX } flow_box_sizing_t;
 typedef enum { FLOW_REPEAT = 0, FLOW_REPEAT_X, FLOW_REPEAT_Y, FLOW_NO_REPEAT } flow_repeat_t;
+typedef enum { FLOW_FIT_LENGTHS = 0, FLOW_FIT_COVER, FLOW_FIT_CONTAIN } flow_bg_fit_t;
+typedef enum {
+    FLOW_EDGE_BORDER = 0, FLOW_EDGE_PADDING, FLOW_EDGE_CONTENT, FLOW_EDGE_TEXT
+} flow_edge_t;
 typedef enum {
     FLOW_OVERFLOW_VISIBLE = 0,
     FLOW_OVERFLOW_HIDDEN,
@@ -320,14 +332,63 @@ typedef struct {
     uint32_t name_len;
     int32_t row0, row1, col0, col1;
 } flow_grid_area_t;
+// A gradient (Images 3 § 3), as a page wrote it: what it needs to be drawn
+// on a box is the box's size, which a face has and the style has not.
+typedef enum { FLOW_GRADIENT_LINEAR = 0, FLOW_GRADIENT_RADIAL } flow_gradient_kind_t;
+// How big a radial gradient's ending shape is: to a side or a corner of
+// its box, the nearest or the farthest, or a SIZE written out (`radii`).
+typedef enum {
+    FLOW_EXTENT_FARTHEST_CORNER = 0,
+    FLOW_EXTENT_CLOSEST_SIDE,
+    FLOW_EXTENT_FARTHEST_SIDE,
+    FLOW_EXTENT_CLOSEST_CORNER,
+    FLOW_EXTENT_SIZE,
+} flow_extent_t;
+
+// A colour stop at a position along the gradient line (PX, or PERCENT of
+// the line), AUTO where the page left it out; or a HINT, where between its
+// two neighbours their colours meet half and half, its colour unused.
+// `current`: the page wrote currentColor, which is the colour of the box
+// the gradient is drawn on — not of the element that wrote it, since a
+// child takes the gradient by `inherit` with its own colour (CSS Color 4
+// § 4.4). `colour` is then the writer's, for a reader with no box.
+typedef struct {
+    uint32_t colour;
+    flow_length_t at;
+    bool hint;
+    bool current;
+} flow_gradient_stop_t;
+
+typedef struct {
+    flow_gradient_kind_t kind;
+    bool repeating;
+    // LINEAR: the line's angle in thousandths of a degree, clockwise from
+    // up (180000 is the initial, down) — or, when `to_x` or `to_y` is not
+    // 0, toward that side or corner: -1 left or top, 1 right or bottom,
+    // which only the box's shape turns into an angle.
+    int32_t angle;
+    int8_t to_x, to_y;
+    // RADIAL: a circle or an ellipse, how big — an extent, or `radii` (a
+    // circle's in radii[0]; PX, or for an ellipse PERCENT of its box too)
+    // — and its centre, x then y (PX or PERCENT of the box).
+    bool circle;
+    flow_extent_t extent;
+    flow_length_t radii[2];
+    flow_length_t centre[2];
+    const flow_gradient_stop_t *stops;
+    int32_t nstops;
+} flow_gradient_t;
+
 // A shadow (Backgrounds 3 § 7; Text Decoration 3 § 4): its offsets, its
-// blur radius (not negative) and its spread in whole pixels, its colour
-// (currentColor resolved), and whether it falls inside a box rather than
-// outside it. A text's has no spread and is never inset.
+// blur radius (not negative) and its spread in whole pixels, its colour,
+// and whether it falls inside a box rather than outside it. A text's has
+// no spread and is never inset. `current` as a gradient stop's: the colour
+// of the box it is drawn for, since text shadows are inherited.
 typedef struct {
     int32_t x, y, blur, spread;
     uint32_t colour;
     bool inset;
+    bool current;
 } flow_shadow_t;
 
 // CSS Position 3 § 2 (POSITION.md).
@@ -338,6 +399,57 @@ typedef enum {
     FLOW_POSITION_FIXED,
     FLOW_POSITION_STICKY,
 } flow_position_t;
+
+// One layer of a box's background (CSS Backgrounds 3 § 3).
+typedef struct {
+    // A picture from the page's own sheets: its url() as written, not
+    // terminated, and the index in the cascade's input of the sheet it was
+    // written in (-1 for a `style` attribute), which the face resolves it
+    // against and fetches — or a gradient in its place; both NULL for
+    // none. A `background` ATTRIBUTE's picture is libpage's list, and a
+    // sheet's picture or gradient outranks it.
+    const char *image;
+    uint32_t image_len;
+    int32_t sheet;
+    const flow_gradient_t *gradient;
+    flow_repeat_t repeat;
+    // From the origin box's top-left corner: PX, or PERCENT of the room
+    // the picture leaves (a picture at 100% sits against the far edge).
+    flow_length_t position[2];
+    // How big a copy of the picture is drawn (§ 3.9): the LENGTHS, each
+    // AUTO, PX or PERCENT of the origin box — or scaled, keeping its shape,
+    // to COVER the origin box or to fit inside it.
+    flow_bg_fit_t fit;
+    flow_length_t size[2];
+    // The box the picture is placed in, and the box it is cut to (§ 3.7,
+    // § 3.8). TEXT cuts to the glyphs. The bottom layer's clip cuts the
+    // colour too.
+    flow_edge_t origin;
+    flow_edge_t clip;
+} flow_layer_t;
+
+typedef struct {
+    const char *url;
+    uint32_t len;
+    int32_t sheet;
+    const flow_gradient_t *gradient;
+} flow_bg_image_t;
+
+typedef struct {
+    flow_bg_fit_t fit;
+    flow_length_t size[2];
+} flow_bg_size_t;
+
+// Each background property's list (§ 3.1). The images say how many layers
+// there are; a shorter list is repeated to fill them, a longer one cut.
+typedef struct {
+    const flow_bg_image_t *image;
+    const flow_repeat_t *repeat;
+    const flow_length_t *x, *y;
+    const flow_bg_size_t *size;
+    const flow_edge_t *origin, *clip;
+    int32_t nimage, nrepeat, nx, ny, nsize, norigin, nclip;
+} flow_backgrounds_t;
 
 typedef struct {
     flow_display_t display;
@@ -350,19 +462,15 @@ typedef struct {
     uint32_t color;                 // a colour (above)
     bool has_background;            // false = transparent
     uint32_t background;            // a colour
-    // A picture behind the box from the page's own sheets (CSS Backgrounds
-    // 3 § 3): its url() as written, not terminated, and the index in the
-    // cascade's input of the sheet it was written in (-1 for a `style`
-    // attribute), which the face resolves it against and fetches. NULL
-    // for none. A `background` ATTRIBUTE's picture is libpage's list, and
-    // a sheet's outranks it.
-    const char *background_image;
-    uint32_t background_image_len;
-    int32_t background_sheet;
-    flow_repeat_t background_repeat;
-    // From the box's top-left corner: PX, or PERCENT of the room the
-    // picture leaves (a picture at 100% sits against the far edge).
-    flow_length_t background_position[2];
+    // Which of `background` and `border_color` the page wrote as
+    // currentColor (FLOW_CURRENT_*): resolved against this element's colour
+    // above, and kept so that a child taking them by `inherit` resolves
+    // them against its own (CSS Color 4 § 4.4).
+    uint8_t current_colours;
+    // The layers over the colour, as CSS computes them: a list per
+    // property, each at least one long. flow_background_layer puts a layer
+    // together. The style's, and they live as it does.
+    flow_backgrounds_t backgrounds;
 
     flow_length_t margin[4];        // PX, PERCENT or AUTO
     flow_length_t padding[4];       // PX or PERCENT
@@ -370,7 +478,7 @@ typedef struct {
     // so a width here is a width that will be drawn.
     flow_unit_t border_width[4];
     flow_border_style_t border_style[4];
-    uint32_t border_color[4];       // colours; `currentColor` resolved
+    uint32_t border_color[4];       // colours; `currentColor` resolved (current_colours)
     // Each corner's radii (Backgrounds 3 § 5.1), top-left, top-right,
     // bottom-right, bottom-left, each horizontal then vertical: PX, or
     // PERCENT of the border box's width and height. flow_box_radii is what
@@ -381,6 +489,10 @@ typedef struct {
     // styles', and live as long as they do.
     const flow_shadow_t *box_shadows, *text_shadows;
     int32_t nbox_shadows, ntext_shadows;
+    // A picture scaled is drawn with its pixels kept square and hard
+    // (`image-rendering: pixelated`, `crisp-edges` and their older
+    // spellings), not smoothed. Inherited.
+    bool pixelated;
     flow_length_t width, height;    // AUTO, PX or PERCENT
     // The limits: PX or PERCENT, AUTO for none (`min-*: auto` is none too,
     // outside flex and grid). A percentage on a height limit binds
@@ -484,10 +596,11 @@ typedef struct {
                                 bool bold, bool italic, uint32_t px,
                                 os64_text_font_t *const **list, size_t *count,
                                 os64_font_face_info_t *primary);
-    // Replaced sizes: the face's oracle. False = unknown.
+    // Replaced sizes: the face's oracle, in CSS pixels (zoomed by libflow,
+    // `zoom` below). False = unknown.
     bool (*replaced_size)(void *ctx, const os64_html_node_t *node, int32_t *w, int32_t *h);
     os64_text_context_t *text;      // the page context the runs are laid out on
-    uint32_t viewport_font_px;      // `medium`; 16 unless the face says otherwise
+    uint32_t viewport_font_px;      // `medium`, CSS px; 16 unless the face says otherwise
     flow_generic_t default_generic; // the family a page that names none is drawn in
     uint32_t ink, link_ink, paper;  // opaque colours; the dumps name these, never print them
     // The page's own sheets, cascaded against this document (garb/cascade.h),
@@ -511,6 +624,17 @@ typedef struct {
     // pixels, so a face cascades at a whole height too. 0 for none known,
     // and the page's own height stands in.
     int32_t viewport_height;
+    // How many device pixels a CSS pixel is, in thousandths; 0 is 1000.
+    // The tree is laid out in device pixels: a CSS length, the page's
+    // `medium`, a replaced element's own size and the viewport height
+    // above (all CSS pixels as handed in) are multiplied by it where they
+    // enter, so text is shaped at the size it is drawn — up to the font
+    // engine's OS64_FONT_PIXEL_MAX (1280 device px: any size a page draws
+    // at 100%, at 500%), past which a run is shaped at that and laid out at
+    // its own size (PILE3.md § Booked). A face zooms by
+    // passing it, the layout width in device pixels, and a cascade judged
+    // at the device size divided by it.
+    uint32_t zoom;
     // Every box laid out as `static`, whatever the page positioned: the
     // page as it reads in document order, one keypress from the page as it
     // was designed to look (POSITION.md § What positioning costs).
@@ -647,7 +771,9 @@ struct flow_box {
 
 typedef struct flow_tree flow_tree_t;
 
-// Styles, boxes and lays out the page at `width` CSS pixels. NULL when
+// Styles, boxes and lays out the page at `width` DEVICE pixels — the
+// window's, whatever the zoom; libflow zooms the CSS lengths, not the width
+// (flow_env_t.zoom). NULL when
 // memory runs out outside the budget, or when there is no document, no
 // environment, no text context or font resolver, the width is negative,
 // or the cascade was judged at another viewport height than
@@ -687,6 +813,12 @@ os64_gui_rect_t flow_box_doc_rect(const flow_box_t *box, flow_point_t scroll);
 // would together be longer than it — the radii as written, so a corner
 // keeps its shape (Backgrounds 3 § 5.5). All 0 for square corners.
 void flow_box_radii(const flow_box_t *box, int32_t radii[4][2]);
+// A style's background layers: how many, and layer `i` (0 the top) put
+// together from its properties' lists, each repeated to the images' count.
+int32_t flow_background_layers(const flow_style_t *s);
+flow_layer_t flow_background_layer(const flow_style_t *s, int32_t i);
+// Whether any layer has a picture or a gradient from the page's sheets.
+bool flow_background_has_image(const flow_style_t *s);
 // Its clip, meaningful when `clipped`: its own, met with what clips each
 // frame it is in from outside that frame, each where its own frame is.
 os64_gui_rect_t flow_box_doc_clip(const flow_box_t *box, flow_point_t scroll);

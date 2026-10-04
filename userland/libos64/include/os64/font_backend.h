@@ -11,9 +11,11 @@
 #define OS64_FONT_FILE_MAX (32u * 1024u * 1024u)
 #define OS64_FONT_MEMORY_DEFAULT (64u * 1024u * 1024u)
 #define OS64_FONT_MEMORY_MAX (128u * 1024u * 1024u)
-#define OS64_FONT_PIXEL_MAX 256u
+/* 1280 = the 256 px a page can draw at 100%, at the 500% a browser zooms
+ * to; the engine's memory cap, not this, bounds what large glyphs cost. */
+#define OS64_FONT_PIXEL_MAX 1280u
 #define OS64_FONT_MASK_DIM_MAX 4096u
-#define OS64_FONT_FACE_MAX 64u
+#define OS64_FONT_FACE_MAX 1024u
 #define OS64_FONT_NAME_CAP 128u
 
 /* Signed 26.6 pixels. X increases right; Y increases down. Rectangles are

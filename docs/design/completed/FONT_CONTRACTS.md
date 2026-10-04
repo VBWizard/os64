@@ -52,8 +52,12 @@ fixtures and affected work packets together.
   bytes must remain immutable until face_close; F2 owns their retained copy.
   Face/glyph handles belong to the engine that created them. Pointers to foreign,
   destroyed or fabricated handles are caller errors, not safe validation input.
-- Inputs are nonempty and at most 32 MiB. At most 64 live faces per engine;
-  pixel height 1..256. Enforce these before expensive work. Reject collections,
+- Inputs are nonempty and at most 32 MiB. At most 1024 live faces per engine
+  (raised from 64 with one shared copy of a file's bytes, pile 3's zoom);
+  pixel height 1..1280 (raised from 256, Chris 2026-10-04: a 256 px heading
+  zoomed to yonder's 500% must still be shaped at the size it is laid out
+  at; the memory cap bounds what large glyphs cost). Enforce these before
+  expensive work. Reject collections,
   variable fonts and fonts lacking a usable Unicode charmap with UNSUPPORTED in
   this profile. Detect `fvar` and `CFF2` tables explicitly: disabling upstream
   variation support also removes flags that might otherwise identify them.

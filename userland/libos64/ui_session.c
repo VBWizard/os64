@@ -285,8 +285,9 @@ int os64_font_settings_current(os64_font_config_t *out, uint64_t *generation)
     return 0;
 }
 
-/* The session and Workshop own roles. Family lines belong to the startup
- * file and survive Save through conf's line-preserving merge. */
+/* The session and Workshop own the roles and the Web setting. Family lines
+ * belong to the startup file and survive Save through conf's line-preserving
+ * merge. */
 static int64_t role_settings_encode(const os64_font_config_t *config, char *out, size_t cap)
 {
     if (!config) return -1;
@@ -297,7 +298,7 @@ static int64_t role_settings_encode(const os64_font_config_t *config, char *out,
 
 static int64_t font_component(const os64_font_config_t *config, char *out, size_t cap)
 {
-    char settings[4096];
+    char settings[OS64_FONT_CONFIG_BYTES_MAX + 1];
     int64_t n = role_settings_encode(config, settings, sizeof(settings));
     if (n < 0) return -1;
     size_t used = 0, start = 0;
@@ -368,7 +369,7 @@ static bool saved_fonts_valid(const char *text, size_t length, void *user)
 
 int os64_font_settings_save(const os64_font_config_t *config, os64_font_config_error_t *error)
 {
-    char encoded[4096], target[OS64_FONT_PATH_CAP];
+    char encoded[OS64_FONT_CONFIG_BYTES_MAX + 1], target[OS64_FONT_PATH_CAP];
     int64_t n = role_settings_encode(config, encoded, sizeof(encoded));
     if (n < 0) return OS64_UI_APPLY_INVALID;
     if (os64_conf_target("fonts.conf", target, sizeof(target)) < 0) return OS64_UI_APPLY_IO;
@@ -398,11 +399,11 @@ int os64_font_settings_save(const os64_font_config_t *config, os64_font_config_e
     session_unlock();
     if (result) return result;
 
-    const char *const roles[] = {"ui", "terminal", "document"};
+    const char *const roles[OS64_FONT_CONFIG_ROLES] = {"ui", "terminal", "document", "web"};
     const char *const suffix[] = {"face", "fallback.1", "fallback.2", "size"};
-    os64_conf_pair_t pairs[12];
-    char keys[12][32], sizes[3][8];
-    for (size_t r = 0; r < 3; ++r) {
+    os64_conf_pair_t pairs[OS64_FONT_CONFIG_ROLES * 4];
+    char keys[OS64_FONT_CONFIG_ROLES * 4][32], sizes[OS64_FONT_CONFIG_ROLES][8];
+    for (size_t r = 0; r < OS64_FONT_CONFIG_ROLES; ++r) {
         os64_snprintf(sizes[r], sizeof(sizes[r]), "%u", desired.roles[r].size);
         for (size_t f = 0; f < 4; ++f) {
             size_t i = r * 4 + f;
@@ -411,6 +412,6 @@ int os64_font_settings_save(const os64_font_config_t *config, os64_font_config_e
             pairs[i] = (os64_conf_pair_t){keys[i], *value ? value : NULL};
         }
     }
-    return os64_conf_update_checked("fonts.conf", pairs, 12, saved_fonts_valid, target) < 0 ?
-           OS64_UI_APPLY_IO : 0;
+    return os64_conf_update_checked("fonts.conf", pairs, OS64_FONT_CONFIG_ROLES * 4,
+                                    saved_fonts_valid, target) < 0 ? OS64_UI_APPLY_IO : 0;
 }

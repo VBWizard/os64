@@ -32,6 +32,11 @@ typedef enum {
     GARB_BACKGROUND_REPEAT,
     GARB_BACKGROUND_POSITION_X,
     GARB_BACKGROUND_POSITION_Y,
+    // cover or contain as a KEYWORD, or a LENGTH whose two items are the
+    // width and the height, each a length-percentage or the KEYWORD auto.
+    GARB_BACKGROUND_SIZE,
+    GARB_BACKGROUND_ORIGIN,
+    GARB_BACKGROUND_CLIP,
     GARB_MARGIN_TOP, GARB_MARGIN_RIGHT, GARB_MARGIN_BOTTOM, GARB_MARGIN_LEFT,
     GARB_PADDING_TOP, GARB_PADDING_RIGHT, GARB_PADDING_BOTTOM, GARB_PADDING_LEFT,
     GARB_BORDER_TOP_WIDTH, GARB_BORDER_RIGHT_WIDTH, GARB_BORDER_BOTTOM_WIDTH, GARB_BORDER_LEFT_WIDTH,
@@ -65,6 +70,9 @@ typedef enum {
     GARB_BORDER_BOTTOM_RIGHT_RADIUS, GARB_BORDER_BOTTOM_LEFT_RADIUS,
     // Backgrounds 3 § 7.1 and Text Decoration 3 § 4: `none`, or a list.
     GARB_BOX_SHADOW, GARB_TEXT_SHADOW,
+    // Images 3 § 5.3, with the spellings older pages wrote for crisp
+    // pixels kept as they were written.
+    GARB_IMAGE_RENDERING,
     GARB_NPROPS
 } garb_prop_t;
 
@@ -84,7 +92,17 @@ typedef enum {
     GARB_V_URL,             // `text`, as written: resolved against the SHEET by whoever fetches
     GARB_V_STRING,          // `text`: a family name, a list marker
     GARB_V_CALC,            // `calc`: a length-percentage (or number) to work out at compute time
-    GARB_V_IMAGE,           // an image this library does not draw yet (a gradient): `text` is its function
+    // An image named by its function (`text`). A linear or radial gradient
+    // carries itself in `items` (comma): items[0] its geometry, then its
+    // stops. Linear: a NUMBER, the angle in degrees in [0, 360) (taken round
+    // the turn in its own unit, so no unit overflows it), or a KEYWORD, "to top",
+    // "to top right" and the rest. Radial: a KEYWORD "circle" or "ellipse"
+    // whose items are its size — an extent KEYWORD, or a length-percentage
+    // and a second one or "auto" — and its centre, x then y. A stop: a COLOR
+    // whose items are its one position, or none (a stop written with two is
+    // two stops); a hint: a length-percentage alone. Others (conic,
+    // image-set) carry nothing.
+    GARB_V_IMAGE,
     // A grid track list (Grid 2 § 7.2): its tracks in `items` — each a
     // LENGTH (in GARB_U_FR for a flexible one), a PERCENTAGE, a CALC, a
     // KEYWORD (auto, min-content, max-content) or a FUNCTION. Its line
@@ -96,6 +114,10 @@ typedef enum {
     // first is its count (a NUMBER, or the KEYWORD auto-fill or auto-fit)
     // and its second the TRACKS repeated.
     GARB_V_FUNCTION,
+    // A background longhand written for more than one layer (Backgrounds 3
+    // § 3.1): one value per layer in `items`, the top layer first. A list
+    // of one is that one value, never this.
+    GARB_V_LAYERS,
 } garb_vkind_t;
 
 typedef enum {

@@ -23,6 +23,16 @@ typedef enum
 
 ui_key_t os64_ui_decode_key(uint8_t *seq, const os64_gui_event_t *ev, char *ch);
 
+// The role a widget measures and draws in: its class's own, or the face the
+// application lent the window when the widget asked for that one.
+static inline os64_font_role_t ui_role(const os64_ui_widget_t *w, os64_font_role_t usual)
+{
+	return w && w->app_face ? OS64_UI_FONT_APP : usual;
+}
+// os64_ui_control_min_height for a control drawn in `role`.
+__attribute__((visibility("hidden")))
+int32_t ui_control_min_height(os64_ui_t *ui, os64_font_role_t role);
+
 // The cluster starting at `at` (after) or ending there (before), if it is at
 // most `limit` bytes long; false when it is longer. `at` must be a cluster
 // edge. Each costs at most about `limit` bytes of scanning, however long the

@@ -28,7 +28,7 @@ typedef struct {
 } os64_font_source_t;
 
 typedef struct {
-    uint32_t pixel_height; /* zero selects 16; otherwise 8..96 */
+    uint32_t pixel_height; /* zero selects 16; otherwise 1..OS64_FONT_PIXEL_MAX */
     os64_font_source_t primary;
     os64_font_source_t fallbacks[OS64_FONT_CONFIG_FALLBACK_MAX];
     size_t fallback_count;

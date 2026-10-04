@@ -15,6 +15,7 @@
 int64_t os64_open(const char *p, const char *m) { (void)p; (void)m; return -1; }
 int64_t os64_read(int32_t h, void *b, size_t n) { (void)h; (void)b; (void)n; return -1; }
 int64_t os64_close(int32_t h) { (void)h; return 0; }
+int64_t os64_stat(const char *p, os64_dirent_t *entry) { (void)p; (void)entry; return -1; }
 int64_t os64_micros(void) { return 10000000; }
 uint64_t os64_heap_verify(void) { return 0; }
 void os64_debug_log(const char *text) { (void)text; }
@@ -64,15 +65,18 @@ os64_slurp_status_t os64_slurp(const char *path, size_t cap, uint8_t **bytes, si
 bool os64_ui_theme_session(os64_ui_theme_t *theme, uint64_t *installed, uint64_t hint) {
     (void)theme; (void)installed; (void)hint; return false;
 }
-static char saved_scripts[8], settings_report[256];
+static char saved_scripts[8], saved_zoom[8], settings_report[256];
 int64_t os64_conf_get(const char *file, const char *key, char *out, size_t cap) {
     check(os64_streq(file,"yonder.conf"),"settings read Yonder configuration");
-    if(!os64_streq(key,"scripts") || !saved_scripts[0]) return OS64_CONF_NO_KEY;
-    os64_strcopy(out,cap,saved_scripts); return 0;
+    const char *value=os64_streq(key,"scripts") ? saved_scripts :
+        os64_streq(key,"zoom") ? saved_zoom : "";
+    if(!value[0]) return OS64_CONF_NO_KEY;
+    os64_strcopy(out,cap,value); return 0;
 }
 int64_t os64_conf_set(const char *file, const char *key, const char *value) {
     check(os64_streq(file,"yonder.conf"),"settings save Yonder configuration");
     if(os64_streq(key,"scripts")) os64_strcopy(saved_scripts,sizeof(saved_scripts),value);
+    if(os64_streq(key,"zoom")) os64_strcopy(saved_zoom,sizeof(saved_zoom),value);
     return 0;
 }
 void os64_ui_settings_report(os64_ui_settings_t *dialog, const char *text) {
@@ -83,12 +87,57 @@ void way_cache_set_cap(way_cache_t *cache, uint64_t cap) { (void)cap; check(cach
 
 static os64_text_context_t *probe_text;
 static os64_text_font_t *probe_font;
+static bool probe_borrow_font;
+static os64_font_family_cache_t *probe_family;
+static os64_font_engine_t *budget_engine;
+static unsigned budget_refusals, budget_partial_layouts, budget_retry_refusals;
+static bool budget_active, budget_refuse_retry;
+static os64_font_status_t budget_engine_create(const os64_font_engine_options_t *options,
+    os64_font_engine_t **out) {
+    os64_font_status_t status=flow_test_backend()->engine_create(options,out);
+    if(status==OS64_FONT_OK) budget_engine=*out;
+    return status;
+}
+static os64_font_status_t budget_face_open(os64_font_engine_t *engine,
+    const uint8_t *bytes, size_t length, const os64_font_face_options_t *options,
+    os64_font_face_t **out) {
+    os64_font_engine_stats_t stats;
+    os64_font_status_t status=flow_test_backend()->engine_stats(engine,&stats);
+    if(status!=OS64_FONT_OK) return status;
+    if(stats.live_faces>=3) {
+        *out=NULL;budget_refusals++;
+        return OS64_FONT_LIMIT;
+    }
+    return flow_test_backend()->face_open(engine,bytes,length,options,out);
+}
+flow_tree_t *__real_flow_layout(const os64_html_document_t *,const os64_page_t *,int32_t,
+    const flow_env_t *);
+flow_tree_t *__wrap_flow_layout(const os64_html_document_t *doc,const os64_page_t *model,
+    int32_t width,const flow_env_t *env) {
+    // A refusal after reclaiming the old geometry exercises the retry's
+    // teardown and recovery, rather than the usual preserve-old-tree path.
+    if(budget_active && budget_refuse_retry && g.page.tree==NULL) {
+        budget_refuse_retry=false;budget_retry_refusals++;
+        return NULL;
+    }
+    flow_tree_t *tree=__real_flow_layout(doc,model,width,env);
+    if(budget_active && flow_incomplete(tree)) budget_partial_layouts++;
+    return tree;
+}
 static void *probe_alloc(void *ctx, size_t n) { (void)ctx; return os64_malloc(n); }
 static void probe_free(void *ctx, void *p, size_t n) { (void)ctx; (void)n; os64_free(p); }
 static os64_font_status_t probe_fonts(void *ctx, const flow_family_list_t *family,
     bool bold, bool italic, uint32_t px, os64_text_font_t *const **fonts, size_t *n,
     os64_font_face_info_t *info) {
     (void)ctx; (void)family; (void)bold; (void)italic; (void)px;
+    if(probe_family!=NULL) {
+        os64_font_family_list_t list={.generic=OS64_FONT_FAMILY_SERIF};
+        os64_font_role_view_t view;
+        os64_font_status_t status=os64_font_family_open(probe_family,&list,bold,italic,px,&view);
+        if(status!=OS64_FONT_OK) return status;
+        *fonts=view.fonts;*n=view.font_count;*info=view.primary;
+        return OS64_FONT_OK;
+    }
     *fonts = &probe_font; *n=1; memset(info,0,sizeof(*info));
     info->ascent=12*64; info->descent=4*64; info->line_height=20*64;
     return OS64_FONT_OK;
@@ -96,7 +145,11 @@ static os64_font_status_t probe_fonts(void *ctx, const flow_family_list_t *famil
 static void probe_page(const char *html, bool scripts) {
     os64_memset(&g,0,sizeof(g));
     g.scripts_on=scripts; g.way.agent=YONDER_AGENT; g.settle_due=YONDER_NEVER;
+    g.zoom=g.zoom_default=1000;
     os64_ui_init(&g.ui,NULL);
+    if(probe_borrow_font)
+        check(os64_ui_font_borrow_context(&g.ui,probe_text)==OS64_FONT_OK,
+            "zoom fixture borrows real font context");
     os64_ui_panel(&g.root); os64_ui_panel(&g.view); g.view.focusable=true; os64_ui_label(&g.status,g.status_text);
     os64_ui_add_child(&g.root,&g.view); os64_ui_add_child(&g.root,&g.status);
     os64_ui_set_root(&g.ui,&g.root);
@@ -108,7 +161,7 @@ static void probe_page(const char *html, bool scripts) {
     check(g.page.way.model!=NULL,"fixture model builds");
     s_env.text=probe_text; s_env.fonts=probe_fonts; s_env.replaced_size=replaced_size;
     sheets_start(&g.page);
-    check(page_lay_out(&g.page,800,600),"fixture layout builds");
+    check(page_lay_out(&g.page,800,600,g.zoom,&g.page),"fixture layout builds");
     g.page.model_version=g.page.rendered_version=os64_html_version(g.page.way.doc);
     g.page.state_version=os64_page_state_version(os64_page_shared_state(g.page.way.model));
     forms_build();
@@ -135,6 +188,66 @@ static bool probe_text_is(const char *id, const char *text) {
     return n && n->first_child && n->first_child->kind==OS64_HTML_TEXT &&
         os64_streq(n->first_child->text,text);
 }
+static void script_type_case(const char *attributes, bool runs) {
+    char html[512];
+    os64_snprintf(html,sizeof(html),"<p id=result>before</p><script %s>"
+        "document.getElementById('result').textContent='ran';</script>",attributes);
+    unsigned before=failures;
+    probe_page(html,true);
+    check(yonder_scripts_pending(g.page.scripts)==runs,"script type decides queue qualification");
+    script_turn();
+    check(probe_text_is("result",runs ? "ran" : "before"),"qualified script executes; other languages stay inert");
+    check(!yonder_scripts_pending(g.page.scripts),"script type fixture consumes its schedule");
+    probe_drop();
+    if(failures!=before) fprintf(stderr,"script type attributes: %s\n",attributes);
+}
+static void script_types(void) {
+    // Expected types come from MIME Sniffing's JavaScript essence list.
+    static const char *const accepted[]={
+        "application/ecmascript","application/javascript","application/x-ecmascript","application/x-javascript",
+        "text/ecmascript","text/javascript","text/javascript1.0","text/javascript1.1","text/javascript1.2",
+        "text/javascript1.3","text/javascript1.4","text/javascript1.5","text/jscript","text/livescript",
+        "text/x-ecmascript","text/x-javascript"
+    };
+    for(size_t i=0;i<sizeof(accepted)/sizeof(accepted[0]);i++) {
+        char attribute[128],upper[64];
+        size_t n=strlen(accepted[i]);
+        for(size_t j=0;j<=n;j++) {
+            char c=accepted[i][j];
+            upper[j]=c>='a' && c<='z' ? c+'A'-'a' : c;
+        }
+        os64_snprintf(attribute,sizeof(attribute),"type='%s'",accepted[i]);
+        script_type_case(attribute,true);
+        os64_snprintf(attribute,sizeof(attribute),"type='%s'",upper);
+        script_type_case(attribute,true);
+        os64_snprintf(attribute,sizeof(attribute),"type=' \t\n\f\r%s\r\f\n\t '",upper);
+        script_type_case(attribute,true);
+        if(strncmp(accepted[i],"text/",5)==0) {
+            os64_snprintf(attribute,sizeof(attribute),"language='%s'",accepted[i]+5);
+            script_type_case(attribute,true);
+            os64_snprintf(attribute,sizeof(attribute),"language='%s'",upper+5);
+            script_type_case(attribute,true);
+        }
+    }
+    static const char *const defaults[]={"","type=''","language=''","type='' language=VBScript",
+        "type='text/JavaScript' language=VBScript","type=' application/x-javascript ' language=VBScript"};
+    for(size_t i=0;i<sizeof(defaults)/sizeof(defaults[0]);i++) script_type_case(defaults[i],true);
+    static const char *const rejected[]={
+        "type=' \t\n\f\r '","type=' \t ' language=JavaScript","type=module language=JavaScript",
+        "type='text/javascript; charset=utf-8'","type='application/javascript;charset=utf-8'",
+        "type=javascript","type=text/javascript1.6","type='text/ javascript'",
+        "type='\vtext/javascript'","type='&#160;text/javascript&#160;'","type='text/java&#383;cript'",
+        "language=VBScript","language=' JavaScript '","language='\tJavaScript'","language='text/javascript'",
+        "language='application/javascript'","src='' type='text/JavaScript'"
+    };
+    for(size_t i=0;i<sizeof(rejected)/sizeof(rejected[0]);i++) script_type_case(rejected[i],false);
+
+    probe_page("<p id=result>before</p><script>document.getElementById('next').setAttribute('language','VBScript');</script>"
+        "<script id=next language=JavaScript>document.getElementById('result').textContent='ran';</script>",true);
+    script_turn();script_turn();
+    check(probe_text_is("result","before"),"queued script rechecks changed language before execution");
+    probe_drop();
+}
 static void identity_and_edit(void) {
     probe_page("<h1 id=heading>before</h1><input id=field value=start>"
         "<script>var held=document.getElementById('field');"
@@ -160,6 +273,110 @@ static void identity_and_edit(void) {
     check(probe_field("added")!=NULL && widget_control(field)==1,"new control inserted before existing index");
     check(g.page.rendered_version==os64_html_version(g.page.way.doc),"rendered tree matches mutation");
     probe_drop();
+}
+static void scripted_zoom(void) {
+    probe_borrow_font=true;
+    os64_font_config_defaults(&s_fonts_conf);
+    strcpy(s_fonts_conf.roles[OS64_FONT_CONFIG_WEB].face[0],"builtin");
+    probe_page("<style>body{width:1800px}#anchor{margin-top:700px}#tail{height:1800px}"
+        "@media(max-width:500px){#anchor{color:red}}</style>"
+        "<div id=anchor>anchor<input id=field value=kept></div><div id=tail>end</div>",true);
+    FormWidget *field=probe_field("field");
+    check(field && field->w->app_face,"scripted form control uses page face");
+    check(lay_out_page(&g.page,800,600) && s_controls_set!=NULL && s_controls_px==13,
+        "initial layout lends controls their real font set");
+    const flow_box_t *old_anchor=flow_box_for(g.page.tree,probe_id("anchor"));
+    g.sy=old_anchor->rect.y+1;g.sx=200;
+    int32_t old_offset=0;
+    const os64_html_node_t *held_anchor=anchor_of(&old_offset);
+    check(held_anchor!=NULL,"zoom fixture finds scroll anchor");
+    os64_font_set_t *old_face=s_controls_set;
+    flow_tree_t *old_tree=g.page.tree;
+    check(os64_html_set_attr(g.page.way.doc,probe_id("anchor"),"class","changed",7)==OS64_HTML_OK,
+        "native mutation owes script rebuild");
+    zoom_to(2000);
+    check(!lay_out_page(&g.page,800,600) && g.page.tree==old_tree && s_controls_set==old_face &&
+        g.page.laid_zoom==1000,"owed rebuild refuses zoom before lending another controls face");
+    check(script_rebuild() && g.page.laid_zoom==2000 && s_controls_px==26,
+        "script rebuild publishes current zoom and controls face request");
+    const flow_box_t *fresh_anchor=flow_box_for(g.page.tree,held_anchor);
+    check(fresh_anchor && g.sy==fresh_anchor->rect.y-scale_zoom(old_offset,2000,1000) && g.sx==400,
+        "script rebuild scales page scroll with zoom");
+    check(probe_field("field")==field && field->w->app_face && os64_streq(field->text,"kept"),
+        "zoomed script rebuild preserves control identity and value");
+    check(flow_box_for(g.page.tree,probe_id("anchor"))->style->color==0xff0000,
+        "script rebuild evaluates media queries in zoomed CSS viewport");
+    probe_drop();
+    os64_font_set_release(s_controls_set);s_controls_set=NULL;s_controls_px=0;
+    memset(&s_fonts_conf,0,sizeof(s_fonts_conf));
+    probe_borrow_font=false;
+}
+static void scripted_face_budget(void) {
+    os64_text_context_t *saved_text=probe_text;
+    os64_text_font_t *saved_font=probe_font;
+    for(unsigned refused=0;refused<2;refused++) {
+        os64_font_backend_t backend=*flow_test_backend();
+        backend.engine_create=budget_engine_create;backend.face_open=budget_face_open;
+        os64_text_options_t options={.memory={.alloc=probe_alloc,.free=probe_free},
+            .backend=&backend,.memory_cap=8*1024*1024};
+        check(os64_text_create(&options,&probe_text)==OS64_FONT_OK,"face-budget text context");
+        check(os64_text_font_bitmap(probe_text,&probe_font)==OS64_FONT_OK,"face-budget bitmap font");
+        const uint8_t face='S';
+        os64_font_family_spec_t specs[OS64_FONT_FAMILY_COUNT]={0};
+        for(size_t f=0;f<OS64_FONT_FAMILY_COUNT;f++)
+            for(size_t s=0;s<OS64_FONT_FAMILY_STYLES;s++)
+                specs[f].styles[s]=(os64_font_source_t){OS64_FONT_SOURCE_OUTLINE,&face,1};
+        check(os64_font_family_cache_create(probe_text,specs,&probe_family,NULL,NULL)==OS64_FONT_OK,
+            "face-budget uses real family cache");
+        probe_borrow_font=true;
+        os64_font_config_defaults(&s_fonts_conf);
+        strcpy(s_fonts_conf.roles[OS64_FONT_CONFIG_WEB].face[0],"builtin");
+        probe_page("<style>#one{font-size:16px}#two{font-size:20px}#three{font-size:24px}</style>"
+            "<p id=one>one<input id=field value=kept></p><p id=two>two</p><p id=three>three</p>"
+            "<script>document.getElementById('one').setAttribute('class','changed');</script>"
+            "<script>document.getElementById('three').textContent='last';</script>",true);
+        os64_font_engine_stats_t stats;
+        check(flow_test_backend()->engine_stats(budget_engine,&stats)==OS64_FONT_OK &&
+            stats.live_faces==3 && !flow_incomplete(g.page.tree),
+            "old whole layout pins three sizes, filling face budget");
+        FormWidget *field=probe_field("field");
+        os64_js_outcome_t out;
+        check(yonder_scripts_step(g.page.scripts,&out) && out.status==OS64_JS_OK,
+            "script mutation owes a layout before zoom");
+        zoom_to(2000);
+        budget_refusals=budget_partial_layouts=budget_retry_refusals=0;
+        budget_active=true;budget_refuse_retry=refused!=0;
+        bool rebuilt=script_rebuild();
+        if(refused) {
+            check(!rebuilt && budget_retry_refusals==1 && g.page.tree==NULL && g.page.cascade==NULL,
+                "refused reclaimed layout drops obsolete tree and cascade");
+            check(g.page.rendered_version!=os64_html_version(g.page.way.doc) &&
+                yonder_scripts_pending(g.page.scripts) && field->w->hidden,
+                "refused retry keeps rebuild owed, queue pending and stale controls hidden");
+            check(!lay_out_page(&g.page,800,600) && g.page.tree==NULL,
+                "ordinary relayout cannot bypass owed DOM rebuild after reclaim");
+            script_turn();
+            check(probe_text_is("three","last") && !yonder_scripts_pending(g.page.scripts),
+                "next UI turn recovers a tree before executing the queued script");
+        } else {
+            check(rebuilt,"staged font-budget rebuild succeeds");
+        }
+        check(budget_refusals>0 && budget_partial_layouts==1,
+            "new zoom first exhausts faces retained by old geometry");
+        check(g.page.tree && !flow_incomplete(g.page.tree) && g.page.laid_zoom==2000 &&
+            g.page.rendered_version==os64_html_version(g.page.way.doc),
+            "reclaim retry publishes whole current DOM at new zoom");
+        check(probe_field("field")==field && os64_streq(field->text,"kept"),
+            "face-budget retry preserves form widget and value");
+        budget_active=budget_refuse_retry=false;
+        probe_drop();
+        os64_font_set_release(s_controls_set);s_controls_set=NULL;s_controls_px=0;
+        os64_font_family_cache_destroy(probe_family);probe_family=NULL;
+        os64_text_font_release(probe_font);
+        check(os64_text_destroy(probe_text)==OS64_FONT_OK,"face-budget text and runs released");
+    }
+    probe_text=saved_text;probe_font=saved_font;probe_borrow_font=false;
+    memset(&s_fonts_conf,0,sizeof(s_fonts_conf));
 }
 static void property_only(void) {
     probe_page("<input id=field value=before><input id=tick type=checkbox>"
@@ -247,6 +464,8 @@ static void native_refusals(void) {
 }
 
 static bool settings_applied;
+static uint32_t settings_zoom;
+static void settings_zoom_capture(uint32_t zoom) { settings_zoom=zoom; }
 static void settings_capture(const char *agent, bool enabled) {
     check(os64_streq(agent,YONDER_AGENT),"settings preserves agent while applying scripts");
     settings_applied=enabled;
@@ -259,11 +478,15 @@ static void switch_cases(void) {
     memset(&settings_fixture,0,sizeof(settings_fixture));
     strcpy(settings_fixture.field_buf,YONDER_AGENT);
     settings_fixture.use=settings_capture;
+    settings_fixture.zoom_use=settings_zoom_capture;
+    strcpy(settings_fixture.zoom_buf,"125");
     settings_fixture.scripts.checked=true;
     apply(&settings_fixture.d,false);
     check(settings_applied && os64_streq(saved_scripts,"bogus"),"Apply enables this window without saving default");
+    check(settings_zoom==1250 && saved_zoom[0]==0,"Apply keeps zoom independent of saved default");
     apply(&settings_fixture.d,true);
     check(settings_applied && yonder_settings_saved_scripts(),"Save as default persists on for new windows");
+    check(yonder_settings_saved_zoom()==1250,"Save persists zoom alongside script switch");
     settings_fixture.scripts.checked=false;
     apply(&settings_fixture.d,true);
     check(!settings_applied && !yonder_settings_saved_scripts() && os64_streq(saved_scripts,"off"),
@@ -521,7 +744,7 @@ static void stylesheet_reuse(void) {
             check(garb_parse_sheet_text(text,strlen(text),&sheet->parsed)==GARB_OK,"linked sheet fixture parses");
             sheet_ready(&g.page,i);
         }
-        check(g.page.nsheets==4 && page_lay_out(&g.page,800,600),"duplicate links and imports lay out");
+        check(g.page.nsheets==4 && page_lay_out(&g.page,800,600,g.zoom,&g.page),"duplicate links and imports lay out");
         const void *arenas[4];
         for(int i=0; i<4; i++) arenas[i]=g.page.sheets[i].parsed.arena;
         check(os64_html_set_text(g.page.way.doc,probe_id("heading")->first_child,"new",3)==OS64_HTML_OK,
@@ -609,7 +832,10 @@ int main(void)
         .backend=flow_test_backend(),.memory_cap=8*1024*1024};
     check(os64_text_create(&options,&probe_text)==OS64_FONT_OK,"text context");
     check(os64_text_font_bitmap(probe_text,&probe_font)==OS64_FONT_OK,"bitmap face");
+    script_types();
     identity_and_edit();
+    scripted_zoom();
+    scripted_face_budget();
     property_only();
     script_lifecycle();
     native_refusals();

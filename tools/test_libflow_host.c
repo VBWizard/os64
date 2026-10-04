@@ -1460,6 +1460,10 @@ int main(int argc, char **argv)
     scroll_cases();
     blend_cases();
     radius_cases();
+    gradient_style_cases();
+    background_box_cases();
+    image_rendering_cases();
+    zoom_cases();
     flex_cases();
     grid_cases();
     fixed_cases();
