@@ -2790,6 +2790,10 @@ static FStyled *style_element(Ctx *c, const os64_html_node_t *n)
         }
         if (!author(c, n, &sp, &ua, parent))
             return NULL;
+        // The scripting-mode noscript rule has user-agent importance;
+        // author display declarations must not reveal its raw fallback text.
+        if (is(n, OS64_HTML_TAG_NOSCRIPT) && c->env->scripting)
+            sp.s.display = FLOW_DISPLAY_NONE;
     }
     finish(c, &sp, parent, up != NULL && up->lays_out_items);
     out->style = sp.s;

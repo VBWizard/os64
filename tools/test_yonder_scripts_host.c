@@ -301,6 +301,126 @@ static void edit_and_kind_changes(void) {
     check(probe_field("field")==NULL,"hidden controls have no interactive widget");
     probe_drop();
 }
+static void password_edits(void) {
+    const char *starts[]={"abc","a",""};
+    for(size_t i=0;i<3;i++) {
+        char html[600];
+        os64_snprintf(html,sizeof(html),"<h1 id=heading>before</h1><form action=/send>"
+            "<input id=secret type=password name=p value='%s'><button id=send>Send</button></form>"
+            "<script>document.getElementById('heading').textContent=document.getElementById('secret').value;</script>",starts[i]);
+        probe_page(html,true);
+        FormWidget *secret=probe_field("secret");
+        os64_ui_set_focus(&g.ui,secret->w);
+        if(i==2) {
+            os64_gui_event_t a={.type=OS64_GUI_EVENT_KEY_DOWN,.key={.ascii='a'}};
+            os64_gui_event_t e={.type=OS64_GUI_EVENT_KEY_DOWN,.key={.ascii=(char)0xe9}};
+            check(password_key(&a) && password_key(&e),"real password keys append ASCII and Latin-1");
+            forms_flush();
+        }
+        os64_gui_event_t back={.type=OS64_GUI_EVENT_KEY_DOWN,.key={.ascii='\b'}};
+        check(password_key(&back),"real password Backspace consumed");
+        forms_flush();
+        const os64_page_control_t *c=os64_page_control(page_model(&g.page),widget_control(secret));
+        const char *want=i==0?"ab":i==1?"":"a";
+        check(c->value_len==strlen(want) && memcmp(c->value,want,c->value_len)==0,
+            "initial, empty and previously flushed UTF-8 password deletions reach native state");
+        os64_page_request_t request;
+        char destination[128];
+        os64_snprintf(destination,sizeof(destination),"https://fixture.test/send?p=%s",want);
+        check(os64_page_activate(page_model(&g.page),(os64_page_what_t){OS64_PAGE_ACTIVATE_CONTROL,
+            widget_control(probe_field("send")),0,0},&request)==OS64_PAGE_NAVIGATE &&
+            os64_streq(request.url,destination),
+            "password deletion reaches actual form request");
+        os64_page_request_free(&request);
+        script_turn();
+        check(want[0]?probe_text_is("heading",want):probe_id("heading")->first_child==NULL,
+            "next queued script observes password deletion");
+        probe_drop();
+    }
+    probe_page("<h1 id=heading>before</h1><form action=/send><input id=secret type=password name=p>"
+        "<button id=send>Send</button></form>"
+        "<script>var p=document.getElementById('secret');document.getElementById('heading').textContent="
+        "p.value.length===2&&p.value.charCodeAt(1)===0?'nul-kept':'lost span';</script>",true);
+    FormWidget *secret=probe_field("secret");
+    // The DOM setter replaces NUL with U+FFFD; the native value API also
+    // accepts explicit spans, so exercise that editor projection directly.
+    check(os64_page_set_text(page_model(&g.page),widget_control(secret),"a\0b",3)==0,
+        "native password value accepts explicit span");
+    forms_sync_from_model(true);
+    check(secret->secret_len==3 && memcmp(secret->secret,"a\0b",3)==0,
+        "native password value projects its full embedded-NUL span");
+    os64_ui_set_focus(&g.ui,secret->w);
+    os64_gui_event_t back={.type=OS64_GUI_EVENT_KEY_DOWN,.key={.ascii='\b'}};
+    check(password_key(&back),"delete password byte after embedded NUL");
+    script_turn();
+    check(probe_text_is("heading","nul-kept"),"password edit flush preserves embedded NUL through binding");
+    os64_page_request_t request;
+    check(os64_page_activate(page_model(&g.page),(os64_page_what_t){OS64_PAGE_ACTIVATE_CONTROL,
+        widget_control(probe_field("send")),0,0},&request)==OS64_PAGE_NAVIGATE &&
+        os64_streq(request.url,"https://fixture.test/send?p=a%00"),"password span reaches encoded form request");
+    os64_page_request_free(&request);
+    probe_drop();
+
+}
+static void reset_editors(void) {
+    probe_page("<form id=one action=/send><input id=text name=t value=seed>"
+        "<input id=secret type=password name=p value=seed><input id=number type=number name=n>"
+        "<button id=reset type=reset>Reset</button><button id=send>Send</button></form>"
+        "<form><input id=other value=other></form><input id=owned form=one name=ext value=owned>",false);
+    FormWidget *text=probe_field("text"), *secret=probe_field("secret"), *number=probe_field("number");
+    FormWidget *other=probe_field("other"), *owned=probe_field("owned"), *reset=probe_field("reset");
+    os64_ui_textfield_set(&g.ui,&text->u.field,"pending");
+    os64_ui_textfield_set(&g.ui,&number->u.field,"-");
+    os64_ui_textfield_set(&g.ui,&owned->u.field,"pending external");
+    os64_ui_textfield_set(&g.ui,&other->u.field,"keep other edit");
+    os64_ui_set_focus(&g.ui,secret->w);
+    os64_gui_event_t key={.type=OS64_GUI_EVENT_KEY_DOWN,.key={.ascii='Q'}};
+    check(password_key(&key),"unflushed password edit before reset");
+    os64_ui_set_focus(&g.ui,other->w);
+    other->u.field.cursor=3; other->u.field.anchor=1; other->u.field.selected=true;
+    button_clicked(reset->w,reset);
+    check(os64_streq(text->text,"seed") && secret->secret_len==4 &&
+        memcmp(secret->secret,"seed",4)==0 && os64_streq(number->text,"") &&
+        os64_streq(owned->text,"owned"),"reset discards unflushed editors, including externally owned control");
+    check(os64_streq(other->text,"keep other edit") && g.ui.focus==other->w &&
+        other->u.field.cursor==3 && other->u.field.selected,"reset preserves another form's edit and caret");
+    forms_flush();
+    os64_page_request_t request;
+    check(os64_page_activate(page_model(&g.page),(os64_page_what_t){OS64_PAGE_ACTIVATE_CONTROL,
+        widget_control(probe_field("send")),0,0},&request)==OS64_PAGE_NAVIGATE &&
+        strstr(request.url,"t=seed") && strstr(request.url,"p=seed") &&
+        strstr(request.url,"ext=owned") && !strstr(request.url,"pending"),
+        "submission after reset contains defaults rather than discarded edits");
+    os64_page_request_free(&request);
+    os64_ui_textfield_set(&g.ui,&text->u.field,"keep refused edit");
+    check(os64_html_set_attr(g.page.way.doc,g.page.way.doc->body,"class","changed",7)==OS64_HTML_OK,
+        "stale reset fixture mutation");
+    button_clicked(reset->w,reset);
+    check(os64_streq(text->text,"keep refused edit") &&
+        strstr(g.status_text,os64_page_reason_name(OS64_PAGE_REASON_STALE)),
+        "refused reset retains editor and reports native refusal");
+    probe_drop();
+}
+static void noscript_author_styles(void) {
+    const char *styles[]={"display:block", "display:block!important", "display:contents!important"};
+    for(size_t i=0;i<3;i++) for(int scripting=0;scripting<2;scripting++) {
+        char html[512];
+        os64_snprintf(html,sizeof(html),"<h1>lead</h1><style>noscript{%s}</style>"
+            "<noscript id=fallback style='%s'><input id=inside value=fallback></noscript>",styles[i],styles[i]);
+        probe_page(html,scripting!=0);
+        os64_html_node_t *fallback=probe_id("fallback");
+        check(fallback!=NULL,"noscript style fixture parsed");
+        if(scripting) {
+            check(flow_box_for(g.page.tree,fallback)==NULL &&
+                flow_box_for(g.page.tree,fallback->first_child)==NULL,
+                "author and inline display rules cannot expose scripting-mode raw fallback");
+        } else {
+            check(probe_field("inside")!=NULL && flow_box_for(g.page.tree,probe_id("inside"))!=NULL,
+                "same author rules retain usable fallback with scripting off");
+        }
+        probe_drop();
+    }
+}
 static void snapshot_actions(void) {
     probe_page("<a id=old href=/old>old link</a><p>after</p>",false);
     int32_t x=0,y=0;
@@ -441,6 +561,9 @@ int main(void)
     native_refusals();
     switch_cases();
     edit_and_kind_changes();
+    password_edits();
+    reset_editors();
+    noscript_author_styles();
     snapshot_actions();
     bounded_resources();
     stylesheet_reuse();

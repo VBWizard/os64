@@ -1454,8 +1454,9 @@ reload with the new parser mode. POST reload retains the resend question;
 refusing it leaves the already drawn page with no remaining script runtime.
 An empty window waits for its next page. The status line begins **SCRIPTS ON**
 while enabled. The document's captured mode also reaches `flow_env_t.scripting`,
-so raw `noscript` fallback text is hidden when enabled and ordinary fallback
-markup is parsed and drawn when disabled. The agent list scrolls within one
+so raw `noscript` fallback text is hidden when enabled, even under author
+`display` declarations, including `!important`; ordinary fallback markup is
+parsed and drawn when disabled. The agent list scrolls within one
 fewer nominal row so the added switch fits the existing settings window.
 
 **Owners and snapshots.** The runtime is created lazily before the first
@@ -1490,6 +1491,10 @@ keyed. Node-based page scroll anchoring across DOM changes is not added.
 Surviving controls preserve widget identity, focus, caret, selection and typed
 buffers across index changes and even a partial layout omitting their boxes.
 Before a script or activation, changed editor buffers flush to shared state.
+Password comparisons and copies use explicit lengths, including deletion to
+empty. A successful Reset refreshes that form's editors even when the native
+values were already defaults; refused resets preserve edits and report their
+native reason. Controls owned by another form retain their edit state.
 Native-value changes refresh editors; unchanged projected values leave partial
 numeric edits alone. State-only property changes refresh controls without
 rebuilding HTML geometry. Widget allocation refusal preserves the old list;
@@ -1515,10 +1520,13 @@ stdout; alert reports on the status line.
 
 **Evidence.** `tools/test_yonder_scripts_host.sh` exercises the actual Yonder
 queue, publication and widget code with real libui editing and native libraries,
-a target-profile engine, ASan/UBSan and normal LSan. It passes **1473/0** checks:
+a target-profile engine, ASan/UBSan and normal LSan. It passes **1531/0** checks:
 one task per turn, wrapper identity, a real key edit and caret/selection/focus,
 control reorder/kind/hidden transitions, state-only refresh, invalid numeric
-input, current-link routing through older geometry, navigation cancellation,
+input, password deletion through script reads and form requests, reset of
+unflushed editors and externally owned controls, refusal/other-form preservation,
+author-styled `noscript` in both scripting modes, current-link routing through
+older geometry, navigation cancellation,
 job/source/schedule caps, URL ownership and setting persistence. A 160-cut
 native sweep reaches 18 model refusals and 21 layout refusals, with 121 completed
 rebuilds; a separate 64-cut stylesheet sweep covers duplicate parses/imports,

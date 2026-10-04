@@ -599,6 +599,7 @@ typedef struct {
     FormKind kind;
     const os64_html_node_t *node;   // stable across model indices
     char synced[512], model_text[512];
+    size_t synced_len, model_text_len;
     bool presented;
     union {
         os64_ui_textfield_t field;
@@ -2354,7 +2355,22 @@ static void button_clicked(os64_ui_widget_t *w, void *user)
     const FormWidget *fw = user;
     const os64_page_control_t *c = os64_page_control(page_model(&g.page), widget_control(fw));
     if (c != NULL && c->resets) {
-        (void)os64_page_reset(page_model(&g.page), c->form);
+        int32_t form = c->form;
+        int64_t result = os64_page_reset(page_model(&g.page), form);
+        if (result < 0) {
+            status_rest(os64_page_reason_name((os64_page_reason_t)-result));
+            return;
+        }
+        // Reset discards this form's unflushed edits even when its native
+        // values were already defaults. Other forms keep their editor state.
+        for (int32_t i = 0; i < g.nfw; i++) {
+            FormWidget *editor = g.fw[i];
+            const os64_page_control_t *control =
+                os64_page_control(page_model(&g.page), widget_control(editor));
+            if (control != NULL && control->form == form &&
+                (editor->kind == FW_TEXT || editor->kind == FW_PASSWORD))
+                editor->presented = false;
+        }
         forms_sync_from_model(true);
         return;
     }
@@ -2373,8 +2389,20 @@ static void password_show(FormWidget *fw)
     os64_ui_textfield_set(&g.ui, &fw->u.field, bullets);
 }
 
-// Text buffers keep intermediate edits. Replacing their content only when
-// the native value changes preserves caret/selection across unrelated scripts.
+// Project native values into the bounded editor. Passwords retain their span,
+// including embedded NUL; a textfield presents a C string.
+static size_t editor_value(const FormWidget *fw, const os64_page_control_t *c, char *out)
+{
+    size_t n = fw->kind == FW_PASSWORD ? c->value_len : os64_strlen(c->value);
+    if (n >= sizeof(fw->model_text))
+        n = sizeof(fw->model_text) - 1;
+    os64_memcpy(out, c->value, n);
+    out[n] = '\0';
+    return n;
+}
+
+// Text buffers keep intermediate edits. Native value changes and an explicit
+// successful reset replace them; unrelated scripts preserve caret/selection.
 static void forms_sync_from_model(bool text)
 {
     const os64_page_t *model = page_model(&g.page);
@@ -2393,18 +2421,21 @@ static void forms_sync_from_model(bool text)
             if (!text)
                 break;
             char value[sizeof(fw->model_text)];
-            os64_strcopy(value, sizeof(value), c->value);
-            if (!fw->presented || !os64_streq(value, fw->model_text)) {
+            size_t n = editor_value(fw, c, value);
+            if (!fw->presented || n != fw->model_text_len ||
+                os64_memcmp(value, fw->model_text, n) != 0) {
                 if (fw->kind == FW_TEXT)
                     os64_ui_textfield_set(&g.ui, &fw->u.field, value);
                 else {
-                    os64_strcopy(fw->secret, sizeof(fw->secret), value);
-                    fw->secret_len = os64_strlen(fw->secret);
+                    os64_memcpy(fw->secret, value, n + 1);
+                    fw->secret_len = n;
                     password_show(fw);
                 }
-                os64_strcopy(fw->synced, sizeof(fw->synced), value);
+                os64_memcpy(fw->synced, value, n + 1);
+                fw->synced_len = n;
             }
-            os64_strcopy(fw->model_text, sizeof(fw->model_text), value);
+            os64_memcpy(fw->model_text, value, n + 1);
+            fw->model_text_len = n;
             fw->presented = true;
             break;
         }
@@ -2442,16 +2473,18 @@ static void forms_flush(void)
             continue;
         const char *v = fw->kind == FW_PASSWORD ? fw->secret : fw->text;
         size_t n = fw->kind == FW_PASSWORD ? fw->secret_len : os64_strlen(fw->text);
-        if (os64_streq(v, fw->synced))
+        if (n == fw->synced_len && os64_memcmp(v, fw->synced, n) == 0)
             continue;
         int64_t result = os64_page_set_text(model, widget_control(fw), v, n);
         if (result < 0) {
             status_rest(os64_page_reason_name((os64_page_reason_t)-result));
             continue;
         }
-        os64_strcopy(fw->synced, sizeof(fw->synced), v);
+        os64_memcpy(fw->synced, v, n);
+        fw->synced[n] = '\0';
+        fw->synced_len = n;
         c = os64_page_control(model, widget_control(fw));
-        os64_strcopy(fw->model_text, sizeof(fw->model_text), c->value);
+        fw->model_text_len = editor_value(fw, c, fw->model_text);
     }
 }
 
