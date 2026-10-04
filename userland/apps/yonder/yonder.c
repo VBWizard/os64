@@ -3213,14 +3213,16 @@ static os64_font_set_t *s_controls_set;
 static uint32_t s_controls_px;
 static bool s_controls_refused;
 
-// Lends the controls the Web face for `zoom`. False when the size is the one
-// lent already; true, with the face it replaced and that face's size in
-// *was and *was_px (yonder's reference, now the caller's), when it changed.
+// Lends the controls the Web face for `zoom`. False when that size is the
+// face they wear already; true, with the face it replaced and that face's
+// size in *was and *was_px (yonder's reference, now the caller's), when it
+// changed. A size whose face could not be lent is not one they wear, so the
+// next layout asks again: a refusal for want of memory passes.
 static bool controls_face_at(uint32_t zoom, os64_font_set_t **was, uint32_t *was_px)
 {
     uint32_t px = (uint32_t)(((uint64_t)(uint32_t)s_env.viewport_font_px * 13 * zoom + 8000) /
                              16000);
-    if (px == s_controls_px)
+    if (px == s_controls_px && s_controls_set != NULL)
         return false;
     os64_text_context_t *text = os64_ui_font_context(&g.ui);
     os64_font_set_t *set = NULL;

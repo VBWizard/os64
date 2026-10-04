@@ -285,7 +285,7 @@ static void probe_metrics(os64_ui_widget_t *w, os64_ui_t *ui)
 static const os64_ui_class_t kProbeClass = {
     "probe", NULL, NULL, NULL,
     os64_ui_stage_caption, os64_ui_commit_caption, os64_ui_discard_caption,
-    NULL, probe_metrics
+    NULL, probe_metrics, NULL
 };
 static os64_ui_widget_t gProbe;
 
@@ -1230,6 +1230,97 @@ static void ui_test_view_theme(os64_ui_theme_t *t)
     t->text_caret = 0xffff0000;
     t->font_w = OS64_FONT_GLYPH_W; t->font_h = OS64_FONT_GLYPH_H;
 }
+
+/* A lent face replaced under widgets that have scrolled and kept rows: each
+ * ends up as one opened in the new face would be — the scroll measured
+ * afresh, not carried over in the old face's pixels — and a list keeps the
+ * slots its next paint fills, so the paint after that lays nothing out. */
+static void app_face_change_is_measured_again(const char *dir)
+{
+    current = "application face changed";
+    os64_ui_t ui;
+    memset(&ui, 0, sizeof(ui));
+    ui_test_view_theme(&ui.theme);
+    os64_ui_widget_t root;
+    os64_ui_panel(&root);
+    char text[40], fresh_text[40];
+    os64_ui_textfield_t field, fresh_field;
+    os64_ui_textview_t view, fresh_view;
+    os64_ui_listbox_t list;
+    os64_ui_textfield(&field, text, sizeof(text), NULL, NULL, NULL);
+    os64_ui_textfield(&fresh_field, fresh_text, sizeof(fresh_text), NULL, NULL, NULL);
+    os64_ui_textview(&view, &kUiTestBuf, NULL, NULL, NULL);
+    os64_ui_textview(&fresh_view, &kUiTestBuf, NULL, NULL, NULL);
+    os64_ui_listbox(&list, 3, app_face_row, NULL, NULL);
+    field.w.bounds = fresh_field.w.bounds = (os64_gui_rect_t){0, 0, 90, 60};
+    view.w.bounds = fresh_view.w.bounds = (os64_gui_rect_t){0, 0, 90, 60};
+    list.w.bounds = (os64_gui_rect_t){0, 0, 300, 200};
+    os64_ui_widget_t *all[] = {&field.w, &fresh_field.w, &view.w, &fresh_view.w, &list.w};
+    for (size_t i = 0; i < sizeof all / sizeof all[0]; ++i)
+        os64_ui_add_child(&root, all[i]);
+    os64_ui_set_root(&ui, &root);
+    for (size_t i = 0; i < sizeof all / sizeof all[0]; ++i)
+        os64_ui_widget_app_face(&ui, all[i], true);
+
+    os64_text_context_t *text_ctx = os64_ui_font_context(&ui);
+    os64_font_set_t *big = outline_set(text_ctx, dir, "DejaVuSans.ttf", 32);
+    os64_font_set_t *small = outline_set(text_ctx, dir, "DejaVuSans.ttf", 12);
+    CHECK(big && small);
+    if (!big || !small) { current = ""; return; }
+    CHECK(os64_ui_font_app(&ui, big, OS64_FONT_ROLE_UI) == OS64_FONT_OK);
+    /* The settings' adoption is what gives a list its row slots. */
+    os64_font_set_t *settings = outline_set(text_ctx, dir, "DejaVuSans.ttf", 16);
+    CHECK(settings != NULL);
+    if (settings) {
+        os64_font_consumer_t consumer;
+        os64_ui_font_consumer(&ui, &consumer);
+        CHECK(os64_font_adopt(settings, &consumer, 1, NULL) == OS64_FONT_OK);
+        os64_font_set_release(settings);
+    }
+    const char *long_line = "WWWWWWWWWWWWWWWWWWWW";
+    os64_ui_textfield_set(&ui, &field, long_line);          /* caret at the end */
+    os64_ui_textview_goto(&ui, &view, 1, strlen(kUiTestDoc[1]), false);
+    canvas_t c;
+    canvas_init(&c, 0xff000000);
+    os64_draw_ctx_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.surf = c.s;
+    field.w.cls->paint(&field.w, &ctx, &ui.theme);
+    view.w.cls->paint(&view.w, &ctx, &ui.theme);
+    list.w.cls->paint(&list.w, &ctx, &ui.theme);
+    int32_t big_left = field.left_px;
+    int64_t big_view_left = view.left_px;
+    CHECK(big_left > 0 && big_view_left > 0);
+    size_t slots = list.row_run_count;
+    CHECK(slots > 0 && list.row_runs != NULL && list.row_runs[0] != NULL);
+
+    CHECK(os64_ui_font_app(&ui, small, OS64_FONT_ROLE_UI) == OS64_FONT_OK);
+    bool kept = list.row_run_count == slots && list.row_runs != NULL;
+    CHECK(kept);
+    for (size_t i = 0; kept && i < slots; ++i)
+        CHECK(list.row_runs[i] == NULL);       /* the runs went; the slots stayed */
+    field.w.cls->paint(&field.w, &ctx, &ui.theme);
+    view.w.cls->paint(&view.w, &ctx, &ui.theme);
+    list.w.cls->paint(&list.w, &ctx, &ui.theme);
+
+    /* The same caret in widgets opened under the small face. */
+    os64_ui_textfield_set(&ui, &fresh_field, long_line);
+    os64_ui_textview_goto(&ui, &fresh_view, 1, strlen(kUiTestDoc[1]), false);
+    CHECK(field.left_px == fresh_field.left_px && field.left_px < big_left);
+    CHECK(view.left_px == fresh_view.left_px && view.left_px < big_view_left);
+    CHECK(view.goal_x == fresh_view.goal_x);
+    CHECK(kept && list.row_runs[0] != NULL);
+    unsigned long before = allocations;
+    list.w.cls->paint(&list.w, &ctx, &ui.theme);
+    CHECK(allocations == before);              /* the kept slots are reused */
+
+    CHECK(os64_ui_font_app(&ui, NULL, OS64_FONT_ROLE_UI) == OS64_FONT_OK);
+    os64_font_set_release(big);
+    os64_font_set_release(small);
+    CHECK(os64_ui_font_release(&ui) == OS64_FONT_OK);
+    current = "";
+}
+
 
 static void textview_geometry_and_painting(const char *dir)
 {
@@ -3001,6 +3092,7 @@ int main(int argc, char **argv)
     button_paints_from_its_run(dir);
     list_stages_its_candidate_rows(dir);
     app_face_beside_the_settings(dir);
+    app_face_change_is_measured_again(dir);
     changed_caption_is_not_placed_from_nothing(dir);
     staged_children_follow_their_staged_parent(dir);
     textview_geometry_and_painting(dir);

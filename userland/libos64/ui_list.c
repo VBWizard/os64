@@ -248,9 +248,20 @@ static bool list_event(os64_ui_widget_t *w, os64_ui_t *ui, const os64_gui_event_
     }
 }
 
+// A new face: every row's run goes, its slot stays for the paint to fill.
+static void list_reface(os64_ui_widget_t *w)
+{
+    os64_ui_listbox_t *list = (os64_ui_listbox_t *)w;
+    for (size_t i = 0; i < list->row_run_count; ++i) {
+        os64_ui_run_release(list->row_runs[i]);
+        list->row_runs[i] = NULL;
+    }
+    free_runs(&list->row_runs_staged, &list->row_runs_staged_count);
+}
+
 static const os64_ui_class_t kListClass = {"listbox", list_paint, list_event, list_cancel,
                                           list_prepare, list_commit, list_discard,
-                                          list_destroy, list_metrics};
+                                          list_destroy, list_metrics, list_reface};
 
 void os64_ui_listbox(os64_ui_listbox_t *list, size_t count,
                      const char *(*label)(size_t, void *),

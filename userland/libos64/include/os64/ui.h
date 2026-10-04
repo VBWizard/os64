@@ -258,6 +258,16 @@ typedef struct os64_ui_class
     // os64_ui_listbox_rows is handed a THEME and needs a row pitch, so the
     // listbox stores its own.
     void (*metrics)(os64_ui_widget_t *w, os64_ui_t *ui);
+
+    // THE FACE THIS WIDGET DRAWS IN WAS REPLACED without an adoption
+    // (os64_ui_font_app, os64_ui_widget_app_face). Let go of the runs it
+    // keeps, as destroy does, but keep any storage the next paint reuses,
+    // and mark every position measured in the old face — a scroll, a
+    // remembered caret X — to be measured again where the widget next lays
+    // its text out. It must not allocate and must not fail: a face is lent
+    // back after a failed layout, and that way back cannot be refused. A
+    // class without one is torn down with destroy.
+    void (*reface)(os64_ui_widget_t *w);
 } os64_ui_class_t;
 
 struct os64_ui_widget
@@ -906,9 +916,10 @@ struct os64_ui_textfield
     size_t cap;                  // bytes including the NUL
     size_t len, cursor, anchor;
     bool selected;              // anchor and cursor delimit cluster boundaries
-    int32_t left_px;             // horizontal scroll, in pixels of the UI face
+    int32_t left_px;             // horizontal scroll, in pixels of its face
     int32_t left_staged;         // the scroll a font change in progress would
                                  // commit: pixels of the CANDIDATE face
+    bool rescroll;               // left_px is pixels of a face since replaced
     void (*on_submit)(os64_ui_textfield_t *tf, void *user);
     void (*on_cancel)(os64_ui_textfield_t *tf, void *user);
     void *edit_user;
@@ -975,6 +986,8 @@ struct os64_ui_textview
     bool    sel;                 // selection live?
     size_t  sel_line, sel_col;   // the anchor (byte index)
     int64_t goal_x;              // remembered pixel X for Up/Down runs
+    bool    rescroll;            // left_px and goal_x are pixels of a face
+                                 // since replaced
 
     void (*on_change)(os64_ui_textview_t *tv, void *user);  // buffer edited
     void (*on_view)(os64_ui_textview_t *tv, void *user);    // viewport moved
@@ -991,7 +1004,7 @@ struct os64_ui_textview
     // motion needs whether or not it is on screen.
     void **row_runs, **row_runs_staged;
     size_t row_run_count, row_runs_staged_count;
-    // Row pitch from the DOCUMENT face, cached for the same reason the
+    // Row pitch from the view's face, cached for the same reason the
     // listbox caches its own: os64_ui_textview_rows is handed a theme.
     int32_t row_h;
 
@@ -1043,8 +1056,9 @@ void os64_ui_textview(os64_ui_textview_t *tv, const os64_ui_textbuf_t *buf,
                       void (*on_change)(os64_ui_textview_t *, void *),
                       void (*on_view)(os64_ui_textview_t *, void *),
                       void *user);
-// Rows that fit the current bounds. The row pitch comes from the DOCUMENT
-// face when the window is wearing one, and from the theme's bitmap cell
+// Rows that fit the current bounds. The row pitch comes from the view's
+// face — DOCUMENT, or the application's when the view wears it — when the
+// window is wearing one, and from the theme's bitmap cell
 // otherwise; a widget caches it, so this keeps the theme-only signature an
 // application already calls.
 int32_t os64_ui_textview_rows(const os64_ui_textview_t *tv,
@@ -1062,7 +1076,7 @@ void os64_ui_textview_scroll_to(os64_ui_t *ui, os64_ui_textview_t *tv,
 // widest line, the view doesn't). Fires on_view.
 void os64_ui_textview_scroll_left(os64_ui_t *ui, os64_ui_textview_t *tv,
                                   int64_t left_px);
-// A line's width in pixels under the DOCUMENT face — the number a
+// A line's width in pixels under the view's face — the number a
 // horizontal scrollbar's `total` is made of. Measuring can fail, so this
 // says whether it did; on failure `*out` is untouched and the caller keeps
 // whatever extent it already had rather than shrinking the bar to a lie.

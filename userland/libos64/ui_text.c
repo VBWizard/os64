@@ -232,7 +232,7 @@ static void scrollbar_cancel(os64_ui_widget_t *w)
 }
 
 const os64_ui_class_t os64_ui_scrollbar_class =
-    { "scrollbar", scrollbar_paint, scrollbar_event, scrollbar_cancel, 0, 0, 0, 0, 0 };
+    { "scrollbar", scrollbar_paint, scrollbar_event, scrollbar_cancel, 0, 0, 0, 0, 0, 0 };
 
 void os64_ui_scrollbar(os64_ui_scrollbar_t *sb,
                        void (*on_scroll)(os64_ui_scrollbar_t *, void *),
@@ -428,15 +428,26 @@ static int64_t scroll_to_show(int64_t left, int64_t cx, int32_t width)
 	return left < 0 ? 0 : left;
 }
 
-static void field_keep_caret_visible(os64_ui_textfield_t *tf, os64_ui_t *ui)
+// Scrolls the field so its caret, located in `g`, shows. A scroll measured
+// in a face since replaced (field_reface) is no position in this one, so it
+// is worked out afresh, as a field just opened would get it. A caret that
+// cannot be located keeps the scroll rather than guess one.
+static void field_scroll_caret(os64_ui_textfield_t *tf, os64_ui_t *ui,
+                               const line_geom_t *g)
 {
 	int32_t width = tf->w.bounds.w - 2 * field_inset(&ui->theme);
 	int32_t cx = 0;
+	if (geom_caret(g, tf->cursor, &cx) != OS64_FONT_OK)
+		return;
+	tf->left_px = (int32_t)scroll_to_show(tf->rescroll ? 0 : tf->left_px, cx, width);
+	tf->rescroll = false;
+}
+
+static void field_keep_caret_visible(os64_ui_textfield_t *tf, os64_ui_t *ui)
+{
 	line_geom_t g;
-	if (field_geom(tf, ui, &g) != OS64_FONT_OK ||
-	    geom_caret(&g, tf->cursor, &cx) != OS64_FONT_OK)
-		return;                        // keep the scroll rather than guess one
-	tf->left_px = (int32_t)scroll_to_show(tf->left_px, cx, width);
+	if (field_geom(tf, ui, &g) == OS64_FONT_OK)
+		field_scroll_caret(tf, ui, &g);
 }
 
 // A font change moves every pixel the field holds: the caret's X is in the
@@ -470,6 +481,12 @@ static void field_commit(os64_ui_widget_t *w)
 	os64_ui_textfield_t *tf = (os64_ui_textfield_t *)w;
 	os64_ui_commit_caption(w);
 	tf->left_px = tf->left_staged;
+	tf->rescroll = false;
+}
+
+static void field_reface(os64_ui_widget_t *w)
+{
+	((os64_ui_textfield_t *)w)->rescroll = true;
 }
 
 // A field is one row of text inside a control's furniture — a button's
@@ -494,7 +511,6 @@ static void field_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
 	                          w->bounds.w - 2 * inset, w->bounds.h };
 	int32_t row = os64_ui_font_row_height(ui, ui_role(w, OS64_FONT_ROLE_UI));
 	int32_t ty = w->bounds.y + (w->bounds.h - row) / 2;
-	int32_t origin = inner.x - tf->left_px;
 
 	// ONE rendering for the whole paint, chosen here: the text and the
 	// caret are both drawn from it, so they cannot disagree about where
@@ -502,6 +518,9 @@ static void field_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
 	line_geom_t g;
 	if (field_geom(tf, ui, &g) != OS64_FONT_OK)
 		return;
+	if (tf->rescroll)
+		field_scroll_caret(tf, ui, &g);
+	int32_t origin = inner.x - tf->left_px;
 	os64_ui_draw_run(ui, g.run, ui_role(w, OS64_FONT_ROLE_UI), &ctx->surf, inner,
 	                 origin, ty, tf->buf, tf->len, t->field_fg, t->field_bg);
 
@@ -557,13 +576,17 @@ static bool field_event(os64_ui_widget_t *w, os64_ui_t *ui,
 		bool down = ev->type == OS64_GUI_EVENT_MOUSE_BUTTON_DOWN;
 		if (down) os64_ui_set_focus(ui, w);
 		// The pixel of the TEXT under the pointer, which the geometry turns
-		// into a letter edge — never the middle of a letter.
-		int32_t x = ev->mouse.x - w->bounds.x - field_inset(t) + tf->left_px;
+		// into a letter edge — never the middle of a letter. The scroll it
+		// is measured from is the one this face would paint.
 		line_geom_t g;
 		size_t at = 0;
-		if (field_geom(tf, ui, &g) == OS64_FONT_OK &&
-		    geom_hit(&g, x > 0 ? x : 0, &at) == OS64_FONT_OK)
-			tf->cursor = at;
+		if (field_geom(tf, ui, &g) == OS64_FONT_OK) {
+			if (tf->rescroll)
+				field_scroll_caret(tf, ui, &g);
+			int32_t x = ev->mouse.x - w->bounds.x - field_inset(t) + tf->left_px;
+			if (geom_hit(&g, x > 0 ? x : 0, &at) == OS64_FONT_OK)
+				tf->cursor = at;
+		}
 		if (down) tf->anchor = tf->cursor;
 		tf->selected = !down && tf->anchor != tf->cursor;
 		field_keep_caret_visible(tf, ui);
@@ -673,7 +696,7 @@ static void field_cancel(os64_ui_widget_t *w)
 const os64_ui_class_t os64_ui_textfield_class =
     { "textfield", field_paint, field_event, field_cancel,
       field_prepare, field_commit, os64_ui_discard_caption,
-      0, field_metrics };
+      0, field_metrics, field_reface };
 
 void os64_ui_textfield(os64_ui_textfield_t *tf, char *buf, size_t cap,
                        void (*on_submit)(os64_ui_textfield_t *, void *),
@@ -833,7 +856,7 @@ size_t os64_ui_textfield_paste(os64_ui_t *ui, os64_ui_textfield_t *tf)
 
 #define VIEW_INSET 2
 
-// The pitch this view lays rows out on: the DOCUMENT face's line box, cached
+// The pitch this view lays rows out on: its face's line box (tv_role), cached
 // on the widget because the call that asks for a row count is handed a theme
 // and a theme cannot carry a face. An unstamped view reads as the bitmap
 // cell, which is what the builtin set gives anyway.
@@ -856,10 +879,17 @@ int32_t os64_ui_textview_width(const os64_ui_textview_t *tv)
 	return width > 0 ? width : 1;
 }
 
+// A document is set in the DOCUMENT face, unless the application lent the
+// view its own.
+static os64_font_role_t tv_role(const os64_ui_textview_t *tv)
+{
+	return ui_role(&tv->w, OS64_FONT_ROLE_DOCUMENT);
+}
+
 static void textview_metrics(os64_ui_widget_t *w, os64_ui_t *ui)
 {
-	((os64_ui_textview_t *)w)->row_h =
-		os64_ui_font_row_height(ui, OS64_FONT_ROLE_DOCUMENT);
+	os64_ui_textview_t *tv = (os64_ui_textview_t *)w;
+	tv->row_h = os64_ui_font_row_height(ui, tv_role(tv));
 }
 
 static size_t tv_window_bytes(const os64_ui_textview_t *tv)
@@ -877,7 +907,7 @@ os64_font_status_t os64_ui_textview_line_width(os64_ui_t *ui,
 		return OS64_FONT_OK;
 	int32_t width = 0;
 	os64_font_status_t status =
-		os64_ui_text_measure(ui, OS64_FONT_ROLE_DOCUMENT, s, len, &width);
+		os64_ui_text_measure(ui, tv_role(tv), s, len, &width);
 	if (status == OS64_FONT_OK)
 		*out = width;
 	return status;
@@ -922,10 +952,10 @@ static void tv_grow_slots(os64_ui_textview_t *tv, size_t want)
 // and the bitmap cell is drawing; any other status means a layout was
 // refused, the slot keeps what it had, and whatever needed the run's pixels
 // does not happen.
-static os64_font_status_t tv_run(os64_ui_t *ui, void **slot,
-                                 const char *s, size_t len, void **out)
+static os64_font_status_t tv_run(const os64_ui_textview_t *tv, os64_ui_t *ui,
+                                 void **slot, const char *s, size_t len, void **out)
 {
-	return os64_ui_run_resolve(ui, slot, OS64_FONT_ROLE_DOCUMENT, s, len, out);
+	return os64_ui_run_resolve(ui, slot, tv_role(tv), s, len, out);
 }
 
 // ── a long line's window ────────────────────────────────────────────────────
@@ -1080,7 +1110,7 @@ static os64_font_status_t tv_row_geom(os64_ui_textview_t *tv, os64_ui_t *ui,
 		                    edge_width(sp.lead, pitch), edge_width(sp.trail, pitch),
 		                    sp.lead, sp.trail };
 		os64_font_status_t status =
-			tv_run(ui, slot, s + sp.from, sp.to - sp.from, &g->run);
+			tv_run(tv, ui, slot, s + sp.from, sp.to - sp.from, &g->run);
 		if (status != OS64_FONT_LIMIT || *budget / 2 < TV_WINDOW_FLOOR)
 			return status;
 		*budget /= 2;
@@ -1235,7 +1265,7 @@ static os64_font_status_t tv_pass(os64_ui_textview_t *tv, os64_ui_t *ui,
 static os64_font_status_t textview_prepare(os64_ui_widget_t *w, os64_ui_t *ui)
 {
 	os64_ui_textview_t *tv = (os64_ui_textview_t *)w;
-	int32_t pitch = os64_ui_font_row_height(ui, OS64_FONT_ROLE_DOCUMENT);
+	int32_t pitch = os64_ui_font_row_height(ui, tv_role(tv));
 	os64_gui_rect_t planned = os64_ui_widget_planned_bounds(w);
 	int32_t fits = pitch > 0 ? (planned.h - 2 * VIEW_INSET) / pitch : 0;
 	size_t rows = fits > 0 ? (size_t)fits : 1;
@@ -1291,6 +1321,7 @@ static void textview_commit(os64_ui_widget_t *w)
 	tv->top = tv->top_staged;
 	tv->left_px = tv->left_staged;
 	tv->goal_x = tv->goal_staged;
+	tv->rescroll = false;
 	// The budget those runs were laid out with, so every lookup after this
 	// resolves the spans they hold rather than reaching for a wider window.
 	tv->win_budget = tv->win_budget_staged;
@@ -1309,6 +1340,19 @@ static void textview_destroy(os64_ui_widget_t *w)
 	os64_ui_textview_t *tv = (os64_ui_textview_t *)w;
 	tv_free_runs(&tv->row_runs, &tv->row_run_count);
 	tv_free_runs(&tv->row_runs_staged, &tv->row_runs_staged_count);
+}
+
+// A new face: every row's run goes, its slot stays for the paint to fill,
+// and the pixels measured in the old face are measured again (tv_rescroll).
+static void textview_reface(os64_ui_widget_t *w)
+{
+	os64_ui_textview_t *tv = (os64_ui_textview_t *)w;
+	for (size_t i = 0; i < tv->row_run_count; ++i) {
+		os64_ui_run_release(tv->row_runs[i]);
+		tv->row_runs[i] = NULL;
+	}
+	tv_free_runs(&tv->row_runs_staged, &tv->row_runs_staged_count);
+	tv->rescroll = true;
 }
 
 static const char *tv_line(const os64_ui_textview_t *tv, size_t i, size_t *len)
@@ -1353,6 +1397,24 @@ static void tv_fire_view(os64_ui_textview_t *tv)
 		tv->on_view(tv, tv->view_user);
 }
 
+// The horizontal scroll and the Up/Down goal after a face was replaced
+// (textview_reface): both are pixels of the old face, so they are worked out
+// afresh around the caret, as a view just opened would get them. True when
+// the scroll moved. A caret that cannot be located leaves both for later.
+static bool tv_rescroll(os64_ui_t *ui, os64_ui_textview_t *tv)
+{
+	int32_t cx = 0;
+	line_geom_t g;
+	if (!tv->rescroll || tv_line_geom(tv, ui, tv->cur_line, &g) != OS64_FONT_OK ||
+	    geom_caret(&g, tv->cur_col, &cx) != OS64_FONT_OK)
+		return false;
+	int64_t old_left = tv->left_px;
+	tv->left_px = scroll_to_show(0, cx, os64_ui_textview_width(tv));
+	tv->goal_x = cx;
+	tv->rescroll = false;
+	return tv->left_px != old_left;
+}
+
 // Scroll the viewport (never the cursor) until the cursor is inside it.
 static void tv_ensure_visible(os64_ui_t *ui, os64_ui_textview_t *tv)
 {
@@ -1378,8 +1440,10 @@ static void tv_ensure_visible(os64_ui_t *ui, os64_ui_textview_t *tv)
 	int32_t cx = 0;
 	line_geom_t g;
 	if (tv_line_geom(tv, ui, tv->cur_line, &g) == OS64_FONT_OK &&
-	    geom_caret(&g, tv->cur_col, &cx) == OS64_FONT_OK)
-		tv->left_px = scroll_to_show(tv->left_px, cx, width);
+	    geom_caret(&g, tv->cur_col, &cx) == OS64_FONT_OK) {
+		tv->left_px = scroll_to_show(tv->rescroll ? 0 : tv->left_px, cx, width);
+		tv->rescroll = false;
+	}
 
 	if (tv->top != old_top || tv->left_px != old_left || tv->win_from != old_win)
 		tv_fire_view(tv);
@@ -1433,7 +1497,8 @@ static void tv_draw_edge(os64_gui_surface_t *surf, os64_gui_rect_t clip,
 // One row as its geometry describes it: the leading decoration, the span,
 // the trailing decoration. Everything is drawn from `g`'s one rendering and
 // nothing is looked up again.
-static void tv_draw_row(os64_ui_t *ui, os64_gui_surface_t *surf,
+static void tv_draw_row(const os64_ui_textview_t *tv, os64_ui_t *ui,
+                        os64_gui_surface_t *surf,
                         const line_geom_t *g, os64_gui_rect_t clip,
                         int32_t origin, int32_t y, int32_t pitch,
                         uint32_t fg, uint32_t bg, uint32_t edge_bg, uint32_t edge_fg)
@@ -1441,7 +1506,7 @@ static void tv_draw_row(os64_ui_t *ui, os64_gui_surface_t *surf,
 	if (g->lead)
 		tv_draw_edge(surf, clip, (os64_gui_rect_t){ origin, y, g->lead, pitch },
 		             g->lead_kind, true, edge_bg, edge_fg);
-	os64_ui_draw_run(ui, g->run, OS64_FONT_ROLE_DOCUMENT, surf, clip,
+	os64_ui_draw_run(ui, g->run, tv_role(tv), surf, clip,
 	                 origin + g->lead, y, g->s + g->from, g->to - g->from, fg, bg);
 	if (g->trail) {
 		int32_t end = g->lead;
@@ -1469,6 +1534,8 @@ static void textview_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
 	os64_gui_rect_t area = { w->bounds.x + VIEW_INSET, w->bounds.y + VIEW_INSET,
 	                         w->bounds.w - 2 * VIEW_INSET,
 	                         w->bounds.h - 2 * VIEW_INSET };
+	if (tv_rescroll(ui, tv))
+		tv_fire_view(tv);
 	int32_t origin = area.x - (int32_t)tv->left_px;
 
 	// A slot for every row, so an unchanged line repaints from the run it
@@ -1528,7 +1595,7 @@ static void textview_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
 		// second pass costs no layout and its glyphs land on the first
 		// pass's pixels. A decoration standing for selected bytes is lit
 		// with them.
-		tv_draw_row(ui, &ctx->surf, &g, clip, origin, y, pitch,
+		tv_draw_row(tv, ui, &ctx->surf, &g, clip, origin, y, pitch,
 		            t->text_fg, t->text_bg, t->scroll_track, t->scroll_thumb);
 		if (lit) {
 			os64_gui_rect_t sel;
@@ -1539,7 +1606,7 @@ static void textview_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
 				os64_gui_rect_t lit_rect = { origin + sel.x, y, sel.w, pitch };
 				os64_gui_rect_t sel_clip;
 				if (os64_rect_intersect(lit_rect, clip, &sel_clip))
-					tv_draw_row(ui, &ctx->surf, &g, sel_clip, origin, y, pitch,
+					tv_draw_row(tv, ui, &ctx->surf, &g, sel_clip, origin, y, pitch,
 					            t->text_sel_fg, t->text_sel_bg,
 					            t->text_sel_bg, t->text_sel_fg);
 			}
@@ -1674,6 +1741,8 @@ static bool tv_place_from_point(os64_ui_textview_t *tv, os64_ui_t *ui,
 
 	// The pixel of the LINE the pointer is over, which is where the pointer
 	// is minus where the line starts on screen.
+	if (tv_rescroll(ui, tv))
+		tv_fire_view(tv);
 	int64_t x = (int64_t)(mx - tv->w.bounds.x - VIEW_INSET) + tv->left_px;
 	if (x < 0)
 		x = 0;
@@ -1922,7 +1991,7 @@ static void textview_cancel(os64_ui_widget_t *w)
 const os64_ui_class_t os64_ui_textview_class =
     { "textview", textview_paint, textview_event, textview_cancel,
       textview_prepare, textview_commit, textview_discard, textview_destroy,
-      textview_metrics };
+      textview_metrics, textview_reface };
 
 void os64_ui_textview(os64_ui_textview_t *tv, const os64_ui_textbuf_t *buf,
                       void (*on_change)(os64_ui_textview_t *, void *),
@@ -1944,6 +2013,7 @@ void os64_ui_textview_scroll_left(os64_ui_t *ui, os64_ui_textview_t *tv,
 {
 	if (left_px < 0)
 		left_px = 0;
+	tv->rescroll = false;               // a position the caller chose in this face
 	if (left_px == tv->left_px)
 		return;
 	tv->left_px = left_px;

@@ -617,21 +617,37 @@ os64_font_status_t os64_ui_font_bind(os64_ui_t *ui, os64_font_set_t *set)
 // Everything one widget retains: the runs the generic slots hold and, first,
 // whatever only its class can see — a listbox keeps one run per visible row
 // in its own array. A run kept anywhere at all holds the text context BUSY.
-static void drop_widget_runs(os64_ui_widget_t *w)
+//
+// A widget whose face was replaced without an adoption asks its class to
+// REFACE instead: keep what the next paint reuses and re-measure what the
+// old face measured. A class with no reface is torn down with destroy.
+static void drop_widget_runs_as(os64_ui_widget_t *w, bool refaced)
 {
-	if (w->cls && w->cls->destroy)
+	if (w->cls && refaced && w->cls->reface)
+		w->cls->reface(w);
+	else if (w->cls && w->cls->destroy)
 		w->cls->destroy(w);
 	os64_text_run_release((os64_text_run_t *)w->run);
 	os64_text_run_release((os64_text_run_t *)w->run_staged);
 	w->run = w->run_staged = (void *)0;
 }
 
-static void drop_app_runs(os64_ui_widget_t *w)
+static void drop_widget_runs(os64_ui_widget_t *w)
+{
+	drop_widget_runs_as(w, false);
+}
+
+static void reface_widget(os64_ui_widget_t *w)
+{
+	drop_widget_runs_as(w, true);
+}
+
+static void reface_app_widgets(os64_ui_widget_t *w)
 {
 	for (; w; w = w->next_sibling) {
 		if (w->app_face)
-			drop_widget_runs(w);
-		drop_app_runs(w->first_child);
+			reface_widget(w);
+		reface_app_widgets(w->first_child);
 	}
 }
 
@@ -662,7 +678,7 @@ os64_font_status_t os64_ui_font_app(os64_ui_t *ui, os64_font_set_t *set,
 	}
 	// The runs go BEFORE the set that made them, and are laid out again in
 	// the new face by the next paint.
-	drop_app_runs(ui->root);
+	reface_app_widgets(ui->root);
 	os64_font_set_release(b->app_set);
 	b->app_set = set;
 	b->app_view = view;
@@ -677,7 +693,7 @@ void os64_ui_widget_app_face(os64_ui_t *ui, os64_ui_widget_t *w, bool app)
 {
 	if (!w || w->app_face == app)
 		return;
-	drop_widget_runs(w);
+	reface_widget(w);
 	w->app_face = app;
 	if (w->cls && w->cls->metrics && ui)
 		w->cls->metrics(w, ui);

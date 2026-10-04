@@ -691,11 +691,12 @@ static bool button_event(os64_ui_widget_t *w, os64_ui_t *ui,
 }
 
 const os64_ui_class_t os64_ui_panel_class  = { "panel",  panel_paint,  0, 0,
-	0, 0, 0, 0, 0 };
+	0, 0, 0, 0, 0, 0 };
 const os64_ui_class_t os64_ui_label_class  = { "label",  label_paint,  0, 0,
-	os64_ui_stage_caption, os64_ui_commit_caption, os64_ui_discard_caption, 0, label_metrics };
+	os64_ui_stage_caption, os64_ui_commit_caption, os64_ui_discard_caption, 0, label_metrics, 0 };
 const os64_ui_class_t os64_ui_button_class = { "button", button_paint, button_event, 0,
-	os64_ui_stage_caption, os64_ui_commit_caption, os64_ui_discard_caption, 0, button_metrics };
+	os64_ui_stage_caption, os64_ui_commit_caption, os64_ui_discard_caption, 0, button_metrics,
+	0 };
 
 static void widget_zero(os64_ui_widget_t *w)
 {
