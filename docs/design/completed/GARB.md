@@ -352,7 +352,7 @@ center`, a 400px line cut at its 120px `overflow: hidden` box, and a
 | A cache of sheets | a sheet is fetched again for every page that names it, and on every visit | a site whose sheets are slow to come again, measured |
 | An imported sheet's Referer | it names the page, not the sheet that imported it | a server that refuses an import for it |
 | More than 64 sheets on a page, or 16 `@import`s in one sheet, or an import chain 16 deep | the rest are not fetched; a chain deeper than the cascade's `NEST_MAX` is fetched but not applied, and the cascade says it is incomplete | a page that needs them |
-| Every layer of a background | yonder draws one picture behind a box, so the first layer of a list is kept and the rest are only checked | a page whose look depends on a lower layer |
+| Every layer of a background | — | done in PILE3.md's S4c |
 | Quirks mode's hashless colour (`color: ff0000`) | quirks mode's unitless lengths are read; its colours without a `#` are not yet | a quirks-mode page written that way |
 | Encodings beyond libhtml's | a sheet in ISO-8859-2 or Shift_JIS keeps its ASCII and loses the rest | the first sheet whose text is not ASCII and not UTF-8 |
 | Inline tables | `inline-table` is laid out as a table | pile 2 |

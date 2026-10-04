@@ -303,6 +303,18 @@ static void background(Spec *sp, uint32_t rgb)
 
 // ── The initial style, and inheritance ──────────────────────────────────
 
+// One layer of nothing: no picture, repeated from the padding box's
+// corner at its own size, cut to the border box.
+static const flow_bg_image_t kNoImage = {NULL, 0, -1, NULL};
+static const flow_repeat_t kRepeat = FLOW_REPEAT;
+static const flow_length_t kAtStart = {FLOW_LENGTH_PERCENT, 0, 0};
+static const flow_bg_size_t kOwnSize = {FLOW_FIT_LENGTHS, {{FLOW_LENGTH_AUTO, 0, 0},
+                                                           {FLOW_LENGTH_AUTO, 0, 0}}};
+static const flow_edge_t kPaddingBox = FLOW_EDGE_PADDING, kBorderBox = FLOW_EDGE_BORDER;
+static const flow_backgrounds_t kBackgrounds = {&kNoImage, &kRepeat, &kAtStart, &kAtStart,
+                                                &kOwnSize, &kPaddingBox, &kBorderBox,
+                                                1, 1, 1, 1, 1, 1, 1};
+
 static flow_style_t initial(const Ctx *c)
 {
     flow_style_t s;
@@ -313,9 +325,7 @@ static flow_style_t initial(const Ctx *c)
     s.font_style = FLOW_FONT_NORMAL;
     s.font_size = (flow_unit_t)c->env->viewport_font_px * FLOW_UNITS_PER_PX;
     s.color = c->env->ink;
-    s.background_position[0] = s.background_position[1] = (flow_length_t){FLOW_LENGTH_PERCENT, 0, 0};
-    s.background_sheet = -1;
-    s.background_origin = FLOW_EDGE_PADDING;
+    s.backgrounds = kBackgrounds;
     s.opacity = 1000;
     s.flex_shrink = 1000;
     s.align_self = FLOW_PLACE_AUTO;
@@ -1300,6 +1310,27 @@ static void margin_quirks(const Ctx *c, const os64_html_node_t *n, Spec *sp)
 
 // ── The page's own sheets ───────────────────────────────────────────────
 //
+// A list a declaration hands ONE element — its font families, grid tracks
+// and areas, gradient stops, shadows, background layers — copied for every
+// element the declaration reaches (most hold lengths worked out at that
+// element's font size). That is the one cost of styling a page can
+// multiply: a sheet's long list times the elements it matches, without
+// end. So its bytes come out of a budget (F_STYLE_LISTS_BUDGET, far past
+// any real page's) as well as the arena; when the budget is spent, the
+// declaration is dropped as one libflow cannot read is — a hostile page is
+// styled plainly, and still laid out. NULL with *spent set for that; NULL
+// alone for no memory.
+static void *list_alloc(Ctx *c, size_t bytes, bool *spent)
+{
+    *spent = bytes > c->out->lists_left;
+    if (*spent)
+        return NULL;
+    void *p = f_arena_alloc(&c->out->arena, bytes);
+    if (p != NULL)
+        c->out->lists_left -= bytes;
+    return p;
+}
+
 // libgarb's cascade hands each element its AUTHOR-origin winners: declared
 // values, checked against their grammars, var() already replaced. Here
 // they are computed into the Spec the chapter and the hints wrote, which
@@ -1589,18 +1620,19 @@ static bool author_generic(const char *k, flow_generic_t *out)
 
 // `font-family`: the names in order and the first generic, as `<font
 // face>` builds them. The names point into the sheet.
-// The names are copied into the styles arena for every element the
-// declaration reaches: a `* { font-family: … }` reset costs one list an
-// element (48 bytes for three names). Bounded by the document, as the
-// styles arena is; one list per winning set would cost it once.
+// The names are copied for every element the declaration reaches: a
+// `* { font-family: … }` reset costs one list an element (48 bytes for
+// three names), out of the lists' budget (list_alloc), past which the
+// element keeps the family it inherited; one list per winning set would
+// cost it once.
 static bool author_family(Author *a, const garb_val_t *v, flow_family_list_t *out)
 {
     if (v->items == NULL || v->nitems <= 0)
         return true;
-    flow_family_name_t *names = f_arena_alloc(&a->c->out->arena,
-                                              (size_t)v->nitems * sizeof(*names));
+    bool spent;
+    flow_family_name_t *names = list_alloc(a->c, (size_t)v->nitems * sizeof(*names), &spent);
     if (names == NULL)
-        return false;
+        return spent;
     uint32_t n = 0;
     bool have_generic = false;
     flow_generic_t generic = FLOW_GENERIC_SANS;
@@ -1716,22 +1748,36 @@ static void take(Spec *dst, const Spec *src, garb_prop_t prop)
         d->current_colours = (uint8_t)((d->current_colours & ~FLOW_CURRENT_BACKGROUND) |
                                        (s->current_colours & FLOW_CURRENT_BACKGROUND));
         break;
+    // A list is the style's, kept as long as any style is, so it is shared
+    // and not copied.
     case GARB_BACKGROUND_IMAGE:
-        d->background_image = s->background_image;
-        d->background_image_len = s->background_image_len;
-        d->background_sheet = s->background_sheet;
-        d->background_gradient = s->background_gradient;
+        d->backgrounds.image = s->backgrounds.image;
+        d->backgrounds.nimage = s->backgrounds.nimage;
         break;
-    case GARB_BACKGROUND_REPEAT: d->background_repeat = s->background_repeat; break;
-    case GARB_BACKGROUND_POSITION_X: d->background_position[0] = s->background_position[0]; break;
-    case GARB_BACKGROUND_POSITION_Y: d->background_position[1] = s->background_position[1]; break;
+    case GARB_BACKGROUND_REPEAT:
+        d->backgrounds.repeat = s->backgrounds.repeat;
+        d->backgrounds.nrepeat = s->backgrounds.nrepeat;
+        break;
+    case GARB_BACKGROUND_POSITION_X:
+        d->backgrounds.x = s->backgrounds.x;
+        d->backgrounds.nx = s->backgrounds.nx;
+        break;
+    case GARB_BACKGROUND_POSITION_Y:
+        d->backgrounds.y = s->backgrounds.y;
+        d->backgrounds.ny = s->backgrounds.ny;
+        break;
     case GARB_BACKGROUND_SIZE:
-        d->background_fit = s->background_fit;
-        d->background_size[0] = s->background_size[0];
-        d->background_size[1] = s->background_size[1];
+        d->backgrounds.size = s->backgrounds.size;
+        d->backgrounds.nsize = s->backgrounds.nsize;
         break;
-    case GARB_BACKGROUND_ORIGIN: d->background_origin = s->background_origin; break;
-    case GARB_BACKGROUND_CLIP: d->background_clip = s->background_clip; break;
+    case GARB_BACKGROUND_ORIGIN:
+        d->backgrounds.origin = s->backgrounds.origin;
+        d->backgrounds.norigin = s->backgrounds.norigin;
+        break;
+    case GARB_BACKGROUND_CLIP:
+        d->backgrounds.clip = s->backgrounds.clip;
+        d->backgrounds.nclip = s->backgrounds.nclip;
+        break;
     case GARB_MARGIN_TOP: case GARB_MARGIN_RIGHT: case GARB_MARGIN_BOTTOM: case GARB_MARGIN_LEFT:
         dst->margin[side(prop, GARB_MARGIN_TOP)] = src->margin[side(prop, GARB_MARGIN_TOP)];
         break;
@@ -2008,9 +2054,10 @@ static GridRead author_tracks(Author *a, const garb_val_t *v, flow_tracks_t *out
     }
     if (total > F_GRID_MAX)
         total = F_GRID_MAX;
-    flow_track_t *tracks = f_arena_alloc(&a->c->out->arena, (size_t)total * sizeof(*tracks));
+    bool spent;
+    flow_track_t *tracks = list_alloc(a->c, (size_t)total * sizeof(*tracks), &spent);
     if (tracks == NULL)
-        return GRID_READ_NO_MEMORY;
+        return spent ? GRID_READ_UNUSABLE : GRID_READ_NO_MEMORY;
     int32_t k = 0;
     for (int32_t i = 0; i < n && k < total; i++) {
         const garb_val_t *t = &items[i];
@@ -2056,10 +2103,10 @@ static GridRead author_areas(Author *a, const garb_val_t *v, flow_style_t *s)
         if (garb_area_cells(v->items[r].text, (uint32_t)v->items[r].len, cells + r * cols,
                             cols) != cols)
             return GRID_READ_UNUSABLE;
-    flow_grid_area_t *areas = f_arena_alloc(&a->c->out->arena,
-                                            (size_t)rows * cols * sizeof(*areas));
+    bool spent;
+    flow_grid_area_t *areas = list_alloc(a->c, (size_t)rows * cols * sizeof(*areas), &spent);
     if (areas == NULL)
-        return GRID_READ_NO_MEMORY;
+        return spent ? GRID_READ_UNUSABLE : GRID_READ_NO_MEMORY;
     int32_t n = 0;
     for (int32_t k = 0; k < rows * cols; k++) {
         garb_area_cell_t name = cells[k];
@@ -2072,9 +2119,9 @@ static GridRead author_areas(Author *a, const garb_val_t *v, flow_style_t *s)
                 found = j;
         int32_t r = k / cols, c = k % cols;
         if (found < 0) {
-            char *copy = f_arena_alloc(&a->c->out->arena, name.len);
+            char *copy = list_alloc(a->c, name.len, &spent);
             if (copy == NULL)
-                return GRID_READ_NO_MEMORY;
+                return spent ? GRID_READ_UNUSABLE : GRID_READ_NO_MEMORY;
             os64_memcpy(copy, name.text, name.len);
             areas[n++] = (flow_grid_area_t){copy, name.len, r, r + 1, c, c + 1};
             continue;
@@ -2111,9 +2158,10 @@ static GridRead author_line(Author *a, const garb_val_t *v, flow_grid_line_t *ou
         return GRID_READ_OK;
     }
     if (v->kind == GARB_V_STRING && v->len > 0) {
-        char *copy = f_arena_alloc(&a->c->out->arena, v->len);
+        bool spent;
+        char *copy = list_alloc(a->c, v->len, &spent);
         if (copy == NULL)
-            return GRID_READ_NO_MEMORY;
+            return spent ? GRID_READ_UNUSABLE : GRID_READ_NO_MEMORY;
         os64_memcpy(copy, v->text, v->len);
         out->kind = FLOW_GRID_LINE_NAME;
         out->name = copy;
@@ -2145,19 +2193,22 @@ static int32_t angle_thousandths(double deg)
 }
 
 // libgarb's gradient (values.h's GARB_V_IMAGE: its geometry, then its
-// stops) as flow's, in the style's arena; a currentColor stop is marked
-// `current`, for the box it is drawn on to resolve. False only when memory
-// runs out.
+// stops) as flow's, out of the lists' budget (list_alloc) — past it, *out
+// is left as it was; a currentColor stop is marked `current`, for the box
+// it is drawn on to resolve. False only when memory runs out.
 static bool author_gradient(const Author *a, const flow_style_t *s, const garb_val_t *v,
                             const flow_gradient_t **out)
 {
     static const flow_length_t kUnwritten = {FLOW_LENGTH_AUTO, 0, 0};
     static const flow_length_t kHalf = {FLOW_LENGTH_PERCENT, 50 * 64, 0};
-    flow_gradient_t *g = f_arena_alloc(&a->c->out->arena, sizeof(*g));
-    flow_gradient_stop_t *stops =
-        f_arena_alloc(&a->c->out->arena, (size_t)v->nitems * sizeof(*stops));
-    if (g == NULL || stops == NULL)
-        return false;
+    // The gradient and its stops in one piece of the lists' budget; past
+    // it, the layer has no picture (*out stays NULL).
+    bool spent;
+    flow_gradient_t *g =
+        list_alloc(a->c, sizeof(*g) + (size_t)v->nitems * sizeof(flow_gradient_stop_t), &spent);
+    if (g == NULL)
+        return spent;
+    flow_gradient_stop_t *stops = (flow_gradient_stop_t *)(g + 1);
     os64_memset(g, 0, sizeof(*g));
     const char *name = v->text;             // one of libgarb's own names
     g->repeating = name != NULL && (os64_streq(name, "repeating-linear-gradient") ||
@@ -2237,9 +2288,10 @@ static bool author_shadows(const Author *a, flow_style_t *s, const garb_val_t *v
         *count = 0;
         return true;
     }
-    flow_shadow_t *out = f_arena_alloc(&a->c->out->arena, (size_t)v->nitems * sizeof(*out));
+    bool spent;
+    flow_shadow_t *out = list_alloc(a->c, (size_t)v->nitems * sizeof(*out), &spent);
     if (out == NULL)
-        return false;
+        return spent;                       // past the lists' budget: as it was
     for (int32_t i = 0; i < v->nitems; i++) {
         const garb_val_t *one = &v->items[i];
         int32_t k = 0;
@@ -2265,6 +2317,107 @@ static bool author_shadows(const Author *a, flow_style_t *s, const garb_val_t *v
     *list = out;
     *count = v->nitems;
     return true;
+}
+
+// A background property's list, one entry per layer libgarb read (a
+// LAYERS value, or one value for one layer); an entry flow cannot read is
+// the property's initial value. A url() is fetched by the face, a
+// gradient libgarb kept is drawn (values.h); a conic gradient or an
+// image-set is no picture yet (PILE3.md § Booked). Past the lists' budget
+// (list_alloc), the property's list is left as it was.
+static bool author_layers(const Author *a, flow_style_t *s, garb_prop_t p, const garb_val_t *v)
+{
+    const garb_val_t *items = v->kind == GARB_V_LAYERS ? v->items : v;
+    int32_t n = v->kind == GARB_V_LAYERS ? v->nitems : 1;
+    if (n <= 0)
+        return true;
+    flow_backgrounds_t *b = &s->backgrounds;
+    Len l, two[2];
+    int32_t w;
+    bool spent;                             // past the lists' budget: the list as it was
+    switch (p) {
+    case GARB_BACKGROUND_IMAGE: {
+        flow_bg_image_t *list = list_alloc(a->c, (size_t)n * sizeof(*list), &spent);
+        if (list == NULL)
+            return spent;
+        for (int32_t k = 0; k < n; k++) {
+            const garb_val_t *one = &items[k];
+            list[k] = kNoImage;
+            if (one->kind == GARB_V_URL && one->len > 0) {
+                list[k].url = one->text;
+                list[k].len = (uint32_t)one->len;
+                list[k].sheet = a->sheet;
+            } else if (one->kind == GARB_V_IMAGE && one->nitems > 0 &&
+                       !author_gradient(a, s, one, &list[k].gradient)) {
+                return false;
+            }
+        }
+        b->image = list;
+        b->nimage = n;
+        return true;
+    }
+    case GARB_BACKGROUND_REPEAT: {
+        static const char *const words[] = {"repeat", "repeat-x", "repeat-y", "no-repeat"};
+        flow_repeat_t *list = list_alloc(a->c, (size_t)n * sizeof(*list), &spent);
+        if (list == NULL)
+            return spent;
+        for (int32_t k = 0; k < n; k++)
+            list[k] = (w = pick(&items[k], words, F_ARRAY(words))) >= 0 ? (flow_repeat_t)w : kRepeat;
+        b->repeat = list;
+        b->nrepeat = n;
+        return true;
+    }
+    case GARB_BACKGROUND_POSITION_X: case GARB_BACKGROUND_POSITION_Y: {
+        flow_length_t *list = list_alloc(a->c, (size_t)n * sizeof(*list), &spent);
+        if (list == NULL)
+            return spent;
+        for (int32_t k = 0; k < n; k++)
+            list[k] = author_len(a, &items[k], false, &l)
+                          ? resolve(l, a->font, (flow_length_t){FLOW_LENGTH_PX, 0, 0})
+                          : kAtStart;
+        *(p == GARB_BACKGROUND_POSITION_X ? &b->x : &b->y) = list;
+        *(p == GARB_BACKGROUND_POSITION_X ? &b->nx : &b->ny) = n;
+        return true;
+    }
+    case GARB_BACKGROUND_SIZE: {
+        // A keyword, or libgarb's pair of width and height.
+        static const char *const fits[] = {"cover", "contain"};
+        flow_bg_size_t *list = list_alloc(a->c, (size_t)n * sizeof(*list), &spent);
+        if (list == NULL)
+            return spent;
+        for (int32_t k = 0; k < n; k++) {
+            const garb_val_t *one = &items[k];
+            list[k] = kOwnSize;
+            if ((w = pick(one, fits, F_ARRAY(fits))) >= 0) {
+                list[k].fit = (flow_bg_fit_t)(FLOW_FIT_COVER + w);
+            } else if (one->kind == GARB_V_LENGTH && one->nitems == 2 &&
+                       author_len(a, &one->items[0], true, &two[0]) &&
+                       author_len(a, &one->items[1], true, &two[1])) {
+                for (int j = 0; j < 2; j++)
+                    list[k].size[j] =
+                        resolve(two[j], a->font, (flow_length_t){FLOW_LENGTH_AUTO, 0, 0});
+            }
+        }
+        b->size = list;
+        b->nsize = n;
+        return true;
+    }
+    case GARB_BACKGROUND_ORIGIN: case GARB_BACKGROUND_CLIP: {
+        static const char *const edges[] = {"border-box", "padding-box", "content-box", "text"};
+        bool origin = p == GARB_BACKGROUND_ORIGIN;
+        flow_edge_t *list = list_alloc(a->c, (size_t)n * sizeof(*list), &spent);
+        if (list == NULL)
+            return spent;
+        for (int32_t k = 0; k < n; k++)
+            list[k] = (w = pick(&items[k], edges, F_ARRAY(edges))) >= 0 ? (flow_edge_t)w
+                      : origin ? kPaddingBox : kBorderBox;
+        *(origin ? &b->origin : &b->clip) = list;
+        *(origin ? &b->norigin : &b->nclip) = n;
+        return true;
+    }
+    default:
+        return true;
+    }
 }
 
 static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
@@ -2293,58 +2446,12 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
             s->background = colour_of(v->color);
         }
         break;
-    case GARB_BACKGROUND_IMAGE:
-        // A url() to fetch, or a gradient libgarb kept (values.h); a conic
-        // gradient or an image-set is no picture yet (PILE3.md § Booked).
-        s->background_image = NULL;
-        s->background_image_len = 0;
-        s->background_sheet = -1;
-        s->background_gradient = NULL;
-        if (v->kind == GARB_V_URL && v->len > 0) {
-            s->background_image = v->text;
-            s->background_image_len = (uint32_t)v->len;
-            s->background_sheet = a->sheet;
-        } else if (v->kind == GARB_V_IMAGE && v->nitems > 0 &&
-                   !author_gradient(a, s, v, &s->background_gradient)) {
+    case GARB_BACKGROUND_IMAGE: case GARB_BACKGROUND_REPEAT: case GARB_BACKGROUND_POSITION_X:
+    case GARB_BACKGROUND_POSITION_Y: case GARB_BACKGROUND_SIZE: case GARB_BACKGROUND_ORIGIN:
+    case GARB_BACKGROUND_CLIP:
+        if (!author_layers(a, s, p, v))
             return false;
-        }
         break;
-    case GARB_BACKGROUND_REPEAT: {
-        static const char *const words[] = {"repeat", "repeat-x", "repeat-y", "no-repeat"};
-        if ((i = pick(v, words, F_ARRAY(words))) >= 0)
-            s->background_repeat = (flow_repeat_t)i;
-        break;
-    }
-    case GARB_BACKGROUND_POSITION_X: case GARB_BACKGROUND_POSITION_Y: {
-        Len l;
-        if (author_len(a, v, false, &l))
-            s->background_position[p == GARB_BACKGROUND_POSITION_Y] =
-                resolve(l, a->font, (flow_length_t){FLOW_LENGTH_PX, 0, 0});
-        break;
-    }
-    case GARB_BACKGROUND_SIZE: {
-        // A keyword, or libgarb's pair of width and height.
-        static const char *const fits[] = {"cover", "contain"};
-        if ((i = pick(v, fits, F_ARRAY(fits))) >= 0) {
-            s->background_fit = (flow_bg_fit_t)(FLOW_FIT_COVER + i);
-            break;
-        }
-        Len two[2];
-        if (v->kind != GARB_V_LENGTH || v->nitems != 2 || !author_len(a, &v->items[0], true, &two[0]) ||
-            !author_len(a, &v->items[1], true, &two[1]))
-            break;
-        s->background_fit = FLOW_FIT_LENGTHS;
-        for (int k = 0; k < 2; k++)
-            s->background_size[k] = resolve(two[k], a->font, (flow_length_t){FLOW_LENGTH_AUTO, 0, 0});
-        break;
-    }
-    case GARB_BACKGROUND_ORIGIN: case GARB_BACKGROUND_CLIP: {
-        static const char *const edges[] = {"border-box", "padding-box", "content-box", "text"};
-        if ((i = pick(v, edges, F_ARRAY(edges))) >= 0)
-            *(p == GARB_BACKGROUND_ORIGIN ? &s->background_origin : &s->background_clip) =
-                (flow_edge_t)i;
-        break;
-    }
     case GARB_MARGIN_TOP: case GARB_MARGIN_RIGHT: case GARB_MARGIN_BOTTOM: case GARB_MARGIN_LEFT:
         author_len(a, v, true, &sp->margin[side(p, GARB_MARGIN_TOP)]);
         break;
@@ -3004,11 +3111,15 @@ FStyles *f_style_build(const os64_html_document_t *doc, const os64_page_t *model
         return NULL;
     out->doc = doc;
     out->env = env;
-    // One record per element and the family names a `face` wrote: bounded
-    // by the document libhtml admitted, never multiplied, so no budget —
+    // One record per element and the family names a `face` wrote are
+    // bounded by the document libhtml admitted, so the arena has no cap —
     // pass 1 is all or nothing, and a cap here would blank a large page
-    // that the boxes' budget would merely cut short.
+    // that the boxes' budget would merely cut short. What a page CAN
+    // multiply — a sheet's list copied into every element it reaches — has
+    // a budget of its own (list_alloc), whose end costs a property, never
+    // the page.
     out->arena.cap = SIZE_MAX;
+    out->lists_left = F_STYLE_LISTS_BUDGET;
     Ctx c = {.doc = doc, .model = model, .env = env, .out = out,
              .quirks = doc->quirks == OS64_HTML_QUIRKS,
              .root_font = (flow_unit_t)env->viewport_font_px * FLOW_UNITS_PER_PX};

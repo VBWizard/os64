@@ -344,7 +344,7 @@ typedef struct {
     bool sheets_changed;
     garb_cascade_t *cascade;
     // For each of the cascade's inputs, the sheet entry it is: what a url()
-    // in a winner is resolved against (flow_style_t.background_sheet).
+    // in a winner is resolved against (flow_layer_t.sheet).
     int32_t cascade_entry[SHEETS_MAX];
     uint64_t serial;
     // The pictures, one per address, and for each of libpage's pictures
@@ -1820,18 +1820,18 @@ static void sheet_arrived(const yonder_sheet_job_t *job, yonder_sheet_t *got)
 
 // ── Pictures a sheet names ──────────────────────────────────────────────
 
-// A style's background url() resolved, as the cascade that chose it saw
+// A background layer's url() resolved, as the cascade that chose it saw
 // it: against the sheet it was written in after that sheet's redirects, or
 // the page's base for a `style` attribute or a `style` element.
-static bool css_url(const Page *p, const flow_style_t *s, char *out, size_t cap)
+static bool css_url(const Page *p, const flow_layer_t *l, char *out, size_t cap)
 {
     char written[OS64_FETCH_URL_MAX];
-    if (s->background_image == NULL || s->background_image_len >= sizeof(written))
+    if (l->image == NULL || l->image_len >= sizeof(written))
         return false;
-    os64_memcpy(written, s->background_image, s->background_image_len);
-    written[s->background_image_len] = '\0';
+    os64_memcpy(written, l->image, l->image_len);
+    written[l->image_len] = '\0';
     const char *base = os64_page_base(page_model(p));
-    int32_t in = s->background_sheet;
+    int32_t in = l->sheet;
     if (in >= 0) {
         if (in >= SHEETS_MAX || p->cascade == NULL)
             return false;
@@ -1842,17 +1842,28 @@ static bool css_url(const Page *p, const flow_style_t *s, char *out, size_t cap)
     return os64_page_url_absolute(base, written, out, cap);
 }
 
-// The picture a style's background names, in the page's table, or -1.
-// Asked for every box with a background on every paint: a copy, a resolve
+// The picture a background layer names, in the page's table, or -1.
+// Asked for every layer with a picture on every paint: a copy, a resolve
 // and one index probe, small beside drawing the box. The layout-time walk
 // has the same answer; keeping it per box would mean a field on libflow's
 // tree for yonder's table, and one to keep true across relayouts.
-static int32_t css_picture(const Page *p, const flow_style_t *s)
+static int32_t css_picture(const Page *p, const flow_layer_t *l)
 {
     char url[OS64_FETCH_URL_MAX];
-    if (!css_url(p, s, url, sizeof(url)))
+    if (!css_url(p, l, url, sizeof(url)))
         return -1;
     return picture_find(p, url);
+}
+
+// Whether any of a style's layers shows picture `k`.
+static bool css_shows(const Page *p, const flow_style_t *s, int32_t k)
+{
+    for (int32_t i = 0; i < flow_background_layers(s); i++) {
+        flow_layer_t l = flow_background_layer(s, i);
+        if (l.image != NULL && css_picture(p, &l) == k)
+            return true;
+    }
+    return false;
 }
 
 // After a layout: every picture the laid-out boxes' sheets put behind them
@@ -1861,9 +1872,10 @@ static int32_t css_picture(const Page *p, const flow_style_t *s)
 static void css_pictures_under(Page *p, const flow_box_t *b)
 {
     for (; b != NULL; b = b->next) {
-        if (b->node != NULL && b->style->background_image != NULL) {
+        for (int32_t i = 0; b->node != NULL && i < flow_background_layers(b->style); i++) {
+            flow_layer_t l = flow_background_layer(b->style, i);
             char url[OS64_FETCH_URL_MAX];
-            if (css_url(p, b->style, url, sizeof(url)))
+            if (l.image != NULL && css_url(p, &l, url, sizeof(url)))
                 (void)picture_for(p, url, true);
         }
         css_pictures_under(p, b->first);
@@ -2032,8 +2044,7 @@ typedef struct {
 static void sheet_picture_seen(void *ctx, const flow_box_t *b)
 {
     SheetPictureSeen *look = ctx;
-    if (b == look->owner || b->style->background_image == NULL || (look->seen && !look->mark) ||
-        css_picture(&g.page, b->style) != look->k)
+    if (b == look->owner || (look->seen && !look->mark) || !css_shows(&g.page, b->style, look->k))
         return;
     os64_gui_rect_t meet;
     if (!os64_rect_intersect(flow_box_doc_rect(b, scroll_now()), look->view, &meet))
@@ -2043,17 +2054,25 @@ static void sheet_picture_seen(void *ctx, const flow_box_t *b)
         mark_part(meet);
 }
 
-static bool glass_backdrop(void *ctx, const flow_box_t *b, const os64_gui_rect_t *area,
-                           os64_gui_rect_t origin, int32_t ox, int32_t oy, os64_gui_rect_t clip);
+static bool glass_backdrop(void *ctx, const flow_box_t *b, int32_t layer,
+                           const os64_gui_rect_t *area, os64_gui_rect_t origin, int32_t ox,
+                           int32_t oy, os64_gui_rect_t clip);
 
-// The picture behind a box, as glass_backdrop draws it — a sheet's
-// outranking a `background` attribute's — or -1.
-static int32_t box_picture(const Page *p, const flow_box_t *b)
+// A `background` attribute's picture behind a box, or -1.
+static int32_t attribute_picture(const Page *p, const flow_box_t *b)
 {
-    if (b->style->background_image != NULL)
-        return css_picture(p, b->style);
     int32_t i = b->node != NULL ? os64_page_background_for(page_model(p), b->node) : -1;
     return i >= 0 && p->bg_of != NULL ? p->bg_of[i] : -1;
+}
+
+// Whether picture `k` is behind a box as glass_backdrop draws it: in a
+// sheet's layer, or the attribute's when no sheet gives the box a picture
+// or a gradient.
+static bool box_shows(const Page *p, const flow_box_t *b, int32_t k)
+{
+    if (flow_background_has_image(b->style))
+        return css_shows(p, b->style, k);
+    return attribute_picture(p, b) == k;
 }
 
 // Whether any box showing picture `k` meets the view — one scrolled away is
@@ -2084,7 +2103,7 @@ static bool picture_on_screen(int32_t k, bool mark)
     // the view shows (Quinn, #206).
     const yonder_verbs_t asking = {.backdrop = glass_backdrop};
     const flow_box_t *owner = yonder_canvas_owner(p->tree, &asking);
-    if (owner != NULL && box_picture(p, owner) == k) {
+    if (owner != NULL && box_shows(p, owner, k)) {
         seen = true;
         if (!mark)
             return true;
@@ -2776,33 +2795,39 @@ static void glass_text(void *ctx, const flow_box_t *b, int32_t x, int32_t baseli
 
 // A picture behind a box: the box's sheets, or else libpage's list, say
 // whether there is one, and one that has arrived is tiled across `area`
-// over the box's colour — a sheet's at the size, position and repeat its
-// style says, an attribute's unscaled from (ox, oy).
-static bool glass_backdrop(void *ctx, const flow_box_t *b, const os64_gui_rect_t *area,
-                           os64_gui_rect_t origin, int32_t ox, int32_t oy, os64_gui_rect_t clip)
+// over what is under it — sheet layer `layer`'s at the size, position and
+// repeat it says, in the origin box the painter names, or (`layer` -1) an
+// attribute's unscaled from (ox, oy).
+static bool glass_backdrop(void *ctx, const flow_box_t *b, int32_t layer,
+                           const os64_gui_rect_t *area, os64_gui_rect_t origin, int32_t ox,
+                           int32_t oy, os64_gui_rect_t clip)
 {
     const Glass *gl = ctx;
     const Page *p = &g.page;
-    // A sheet's picture outranks a `background` attribute's, as an author
-    // rule outranks a presentational hint.
-    bool css = b->style->background_image != NULL;
     int32_t k = -1;
-    if (css) {
-        k = css_picture(p, b->style);
-    } else {
-        int32_t i = b->node != NULL ? os64_page_background_for(page_model(p), b->node) : -1;
-        if (i < 0)
-            return false;
-        k = p->bg_of != NULL ? p->bg_of[i] : -1;
+    flow_layer_t l = {0};
+    if (area == NULL) {
+        // Only asking: a sheet's picture, whether it has come or not, or
+        // an attribute's.
+        for (int32_t i = 0; i < flow_background_layers(b->style); i++)
+            if (flow_background_layer(b->style, i).image != NULL)
+                return true;
+        return b->node != NULL && os64_page_background_for(page_model(p), b->node) >= 0;
     }
-    if (area == NULL || k < 0 || p->pics[k].state != PIC_SHOWN)
+    if (layer >= 0) {
+        l = flow_background_layer(b->style, layer);
+        k = css_picture(p, &l);
+    } else {
+        k = attribute_picture(p, b);
+    }
+    if (k < 0 || p->pics[k].state != PIC_SHOWN)
         return true;
     uint32_t w, h;
     const uint32_t *px = picture_pixels(&p->pics[k], &w, &h);
     // A sheet's picture is sized and placed in the origin box the painter
     // names; an attribute's is tiled from (ox, oy) at its own size.
     yonder_tile_t tile = {{ox, oy, (int32_t)w, (int32_t)h}, true, true};
-    if (css && !yonder_background_tile(b->style, origin, w, h, &tile))
+    if (layer >= 0 && !yonder_background_tile(&l, origin, w, h, &tile))
         return true;
     os64_gui_rect_t on = {area->x + gl->dx, area->y + gl->dy, area->w, area->h};
     os64_gui_rect_t cut = on_glass(gl, clip);

@@ -395,6 +395,57 @@ typedef enum {
     FLOW_POSITION_STICKY,
 } flow_position_t;
 
+// One layer of a box's background (CSS Backgrounds 3 § 3).
+typedef struct {
+    // A picture from the page's own sheets: its url() as written, not
+    // terminated, and the index in the cascade's input of the sheet it was
+    // written in (-1 for a `style` attribute), which the face resolves it
+    // against and fetches — or a gradient in its place; both NULL for
+    // none. A `background` ATTRIBUTE's picture is libpage's list, and a
+    // sheet's picture or gradient outranks it.
+    const char *image;
+    uint32_t image_len;
+    int32_t sheet;
+    const flow_gradient_t *gradient;
+    flow_repeat_t repeat;
+    // From the origin box's top-left corner: PX, or PERCENT of the room
+    // the picture leaves (a picture at 100% sits against the far edge).
+    flow_length_t position[2];
+    // How big a copy of the picture is drawn (§ 3.9): the LENGTHS, each
+    // AUTO, PX or PERCENT of the origin box — or scaled, keeping its shape,
+    // to COVER the origin box or to fit inside it.
+    flow_bg_fit_t fit;
+    flow_length_t size[2];
+    // The box the picture is placed in, and the box it is cut to (§ 3.7,
+    // § 3.8). TEXT cuts to the glyphs. The bottom layer's clip cuts the
+    // colour too.
+    flow_edge_t origin;
+    flow_edge_t clip;
+} flow_layer_t;
+
+typedef struct {
+    const char *url;
+    uint32_t len;
+    int32_t sheet;
+    const flow_gradient_t *gradient;
+} flow_bg_image_t;
+
+typedef struct {
+    flow_bg_fit_t fit;
+    flow_length_t size[2];
+} flow_bg_size_t;
+
+// Each background property's list (§ 3.1). The images say how many layers
+// there are; a shorter list is repeated to fill them, a longer one cut.
+typedef struct {
+    const flow_bg_image_t *image;
+    const flow_repeat_t *repeat;
+    const flow_length_t *x, *y;
+    const flow_bg_size_t *size;
+    const flow_edge_t *origin, *clip;
+    int32_t nimage, nrepeat, nx, ny, nsize, norigin, nclip;
+} flow_backgrounds_t;
+
 typedef struct {
     flow_display_t display;
 
@@ -411,32 +462,10 @@ typedef struct {
     // above, and kept so that a child taking them by `inherit` resolves
     // them against its own (CSS Color 4 § 4.4).
     uint8_t current_colours;
-    // A picture behind the box from the page's own sheets (CSS Backgrounds
-    // 3 § 3): its url() as written, not terminated, and the index in the
-    // cascade's input of the sheet it was written in (-1 for a `style`
-    // attribute), which the face resolves it against and fetches. NULL
-    // for none. A `background` ATTRIBUTE's picture is libpage's list, and
-    // a sheet's outranks it.
-    const char *background_image;
-    uint32_t background_image_len;
-    int32_t background_sheet;
-    // Or a gradient from the page's sheets in its place, NULL for none:
-    // one picture behind a box, never both. It outranks an attribute's
-    // picture as a sheet's url() does. The style's, and lives as it does.
-    const flow_gradient_t *background_gradient;
-    flow_repeat_t background_repeat;
-    // From the origin box's top-left corner: PX, or PERCENT of the room
-    // the picture leaves (a picture at 100% sits against the far edge).
-    flow_length_t background_position[2];
-    // How big a copy of the picture is drawn (Backgrounds 3 § 3.9): the
-    // LENGTHS, each AUTO, PX or PERCENT of the origin box — or scaled,
-    // keeping its shape, to COVER the origin box or to fit inside it.
-    flow_bg_fit_t background_fit;
-    flow_length_t background_size[2];
-    // The box the picture is placed in, and the box the colour and the
-    // picture are cut to (§ 3.7, § 3.8). TEXT cuts to the glyphs.
-    flow_edge_t background_origin;
-    flow_edge_t background_clip;
+    // The layers over the colour, as CSS computes them: a list per
+    // property, each at least one long. flow_background_layer puts a layer
+    // together. The style's, and they live as it does.
+    flow_backgrounds_t backgrounds;
 
     flow_length_t margin[4];        // PX, PERCENT or AUTO
     flow_length_t padding[4];       // PX or PERCENT
@@ -755,6 +784,12 @@ os64_gui_rect_t flow_box_doc_rect(const flow_box_t *box, flow_point_t scroll);
 // would together be longer than it — the radii as written, so a corner
 // keeps its shape (Backgrounds 3 § 5.5). All 0 for square corners.
 void flow_box_radii(const flow_box_t *box, int32_t radii[4][2]);
+// A style's background layers: how many, and layer `i` (0 the top) put
+// together from its properties' lists, each repeated to the images' count.
+int32_t flow_background_layers(const flow_style_t *s);
+flow_layer_t flow_background_layer(const flow_style_t *s, int32_t i);
+// Whether any layer has a picture or a gradient from the page's sheets.
+bool flow_background_has_image(const flow_style_t *s);
 // Its clip, meaningful when `clipped`: its own, met with what clips each
 // frame it is in from outside that frame, each where its own frame is.
 os64_gui_rect_t flow_box_doc_clip(const flow_box_t *box, flow_point_t scroll);

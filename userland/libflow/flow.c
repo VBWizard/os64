@@ -1078,6 +1078,36 @@ flow_point_t flow_box_doc_offset(const flow_box_t *box, flow_point_t scroll)
     return box != NULL ? frame_of(&m, box->frame, box->fixed, scroll) : (flow_point_t){0, 0};
 }
 
+int32_t flow_background_layers(const flow_style_t *s)
+{
+    return s->backgrounds.nimage;
+}
+
+flow_layer_t flow_background_layer(const flow_style_t *s, int32_t i)
+{
+    const flow_backgrounds_t *b = &s->backgrounds;
+    const flow_bg_image_t *im = &b->image[i % b->nimage];
+    const flow_bg_size_t *sz = &b->size[i % b->nsize];
+    return (flow_layer_t){im->url,
+                          im->len,
+                          im->sheet,
+                          im->gradient,
+                          b->repeat[i % b->nrepeat],
+                          {b->x[i % b->nx], b->y[i % b->ny]},
+                          sz->fit,
+                          {sz->size[0], sz->size[1]},
+                          b->origin[i % b->norigin],
+                          b->clip[i % b->nclip]};
+}
+
+bool flow_background_has_image(const flow_style_t *s)
+{
+    for (int32_t i = 0; i < s->backgrounds.nimage; i++)
+        if (s->backgrounds.image[i].url != NULL || s->backgrounds.image[i].gradient != NULL)
+            return true;
+    return false;
+}
+
 void flow_box_radii(const flow_box_t *box, int32_t radii[4][2])
 {
     // Each radius as written, never capped on its own: a cap would change

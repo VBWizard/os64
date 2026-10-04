@@ -26,15 +26,17 @@ typedef struct {
     void (*image)(void *ctx, const flow_box_t *box, os64_gui_rect_t content, os64_gui_rect_t clip);
     void (*control)(void *ctx, const flow_box_t *box, os64_gui_rect_t content,
                     os64_gui_rect_t clip);
-    // A picture BEHIND a box (YONDER.md § Y5b): true when the box has one,
-    // and then, unless `area` is NULL (only asking), it is tiled across
-    // `area` — the box's clip box, or the view for the canvas's — from
-    // (ox, oy) for an attribute's picture, or as a sheet's size and
-    // position place it in `origin` (yonder_background_tile); drawn if it
-    // has arrived, nothing yet if not. `origin` is the painter's answer to
-    // which box: the box's own origin box, or for the canvas the ROOT's,
-    // whichever element the picture came from (Backgrounds 3 § 2.11.2).
-    bool (*backdrop)(void *ctx, const flow_box_t *box, const os64_gui_rect_t *area,
+    // A picture BEHIND a box (YONDER.md § Y5b). With `area` NULL, only
+    // asks: true when a sheet or an attribute puts one there. Otherwise
+    // sheet layer `layer`'s picture — or, at -1, the `background`
+    // attribute's — is tiled across `area` (the layer's clip box, or the
+    // view for the canvas's): a layer's as its size and position place it
+    // in `origin` (yonder_background_tile), an attribute's from (ox, oy);
+    // drawn if it has arrived, nothing yet if not. `origin` is the
+    // painter's answer to which box: the layer's origin box of the box, or
+    // for the canvas the ROOT's, whichever element the picture came from
+    // (Backgrounds 3 § 2.11.2).
+    bool (*backdrop)(void *ctx, const flow_box_t *box, int32_t layer, const os64_gui_rect_t *area,
                      os64_gui_rect_t origin, int32_t ox, int32_t oy, os64_gui_rect_t clip);
     // A GROUP (flow_visit_groups): everything painted between an open and
     // its close is laid over what was under it at `alpha` of 255 (CSS
@@ -71,8 +73,8 @@ void yonder_paint(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_
 // none, as content_of's does; TEXT is the border box.
 os64_gui_rect_t yonder_box_edge(const flow_box_t *box, os64_gui_rect_t rect, flow_edge_t edge);
 
-// A sheet's background, one copy of it: where it is and how big, and on
-// which axes it repeats (CSS Backgrounds 3 § 3.4–§ 3.9), from style `s`
+// A sheet's background layer, one copy of it: where it is and how big, and
+// on which axes it repeats (CSS Backgrounds 3 § 3.4–§ 3.9), from layer `l`
 // and its ORIGIN box `area`. `iw` x `ih` is the picture's own size, 0 x 0
 // for one with none (a gradient), which is then the origin box's. A
 // percentage position is of the room the copy leaves, so 100% puts it
@@ -82,7 +84,7 @@ typedef struct {
     os64_gui_rect_t at;
     bool repeat_x, repeat_y;
 } yonder_tile_t;
-bool yonder_background_tile(const flow_style_t *s, os64_gui_rect_t area, uint32_t iw, uint32_t ih,
+bool yonder_background_tile(const flow_layer_t *l, os64_gui_rect_t area, uint32_t iw, uint32_t ih,
                             yonder_tile_t *out);
 
 // The two tones a bevelled border is drawn in, from its colour.
