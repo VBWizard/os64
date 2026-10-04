@@ -24,7 +24,7 @@ if not a.settings: flags += ['-Wl,--wrap=os64_conf_find,--wrap=os64_conf_target'
 if a.settings:
     include = out/'include/os64'
     include.mkdir(parents=True, exist_ok=True)
-    (include/'syscall.h').write_text('#include <stdint.h>\n#include "os64/syscall_numbers.h"\nuint64_t os64_syscall2(uint64_t,uint64_t,uint64_t);\nuint64_t os64_syscall3(uint64_t,uint64_t,uint64_t,uint64_t);\nuint64_t os64_syscall6(uint64_t,uint64_t,uint64_t,uint64_t,uint64_t,uint64_t,uint64_t);\n')
+    (include/'syscall.h').write_text('#include <stdint.h>\n#include "os64/syscall_numbers.h"\nuint64_t os64_syscall1(uint64_t,uint64_t);\nuint64_t os64_syscall2(uint64_t,uint64_t,uint64_t);\nuint64_t os64_syscall3(uint64_t,uint64_t,uint64_t,uint64_t);\nuint64_t os64_syscall6(uint64_t,uint64_t,uint64_t,uint64_t,uint64_t,uint64_t,uint64_t);\n')
     flags += ['-I'+str(out/'include')]
 flags += ['-I'+str(root/d) for d in ['userland/libos64/include', 'userland/libos64', 'abi/include']]
 objects = sorted(a.backend_objects.glob('ft*.o')) if a.backend_objects else []

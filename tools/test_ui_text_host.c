@@ -1412,6 +1412,7 @@ static void textview_geometry_and_painting(const char *dir)
     CHECK(os64_ui_run_selection(run, 0, 4, &sel) == OS64_FONT_OK);
     CHECK(sel.x == 0 && sel.w == after_i);
 
+    CHECK(os64_ui_font_release(&ui) == OS64_FONT_OK);
     current = "";
 }
 

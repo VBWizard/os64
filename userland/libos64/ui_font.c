@@ -1299,11 +1299,13 @@ os64_font_status_t os64_ui_font_release(os64_ui_t *ui)
 {
 	if (!ui)
 		return OS64_FONT_BAD_ARGUMENT;
+	// The tree goes first and whether or not a binding exists: a view that
+	// never adopted a face still grows its row slots when it paints.
+	release_tree_runs(ui->root);
 	ui_font_binding_t *b = binding_of(ui);
 	if (!b)
 		return OS64_FONT_OK;
 
-	release_tree_runs(ui->root);
 	os64_font_set_release(b->set);
 	b->set = (os64_font_set_t *)0;
 	os64_memset(&b->faces, 0, sizeof(b->faces));
