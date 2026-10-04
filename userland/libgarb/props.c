@@ -134,31 +134,55 @@ static const char *const kDisplay[] = {
     "table-row-group", "table-header-group", "table-footer-group", "table-row",
     "table-column-group", "table-column", "table-cell", "table-caption", "contents",
     "flow-root", "flex", "inline-flex", "grid", "inline-grid", NULL};
-// Values this grammar reads but no slice lays out as written yet (GARB.md's
-// pile 2, POSITION.md's slices). Read, so the cascade keeps them; not
-// SUPPORTED, so @supports tells a page to use the fallback it wrote for
-// exactly this. flow-root is laid out as a block. `contents` is not here:
-// libflow gives such an element no box and flows its children into its
-// parent, which is what it says. The list is for the layouts a page writes
-// a fallback for — asks for one and is handed another — and each joins it
-// the day its mapping is written and leaves the day the slice that lays it
-// out lands.
+// Values this grammar reads but nothing lays out or draws as written yet
+// (GARB.md's pile 2, POSITION.md's slices, PILE3.md's booked rows). Read, so
+// the cascade keeps them; not SUPPORTED, so @supports tells a page to use
+// the fallback it wrote for exactly this. flow-root is laid out as a block;
+// a background clipped to the text is not drawn at all. `contents` is not
+// here: libflow gives such an element no box and flows its children into
+// its parent, which is what it says. The list is for what a page writes a
+// fallback for — asks for one thing and is handed another, or nothing — and
+// each joins it the day its mapping is written and leaves the day the slice
+// that draws it lands.
 static const struct {
     garb_prop_t prop;
     const char *keyword;
 } kApproximated[] = {
     {GARB_DISPLAY, "flow-root"},
+    {GARB_BACKGROUND_CLIP, "text"},
 };
+
+// An image kept by name and drawn as nothing — a conic gradient, an
+// image-set — is approximated the same way; a linear or radial gradient and
+// a url() are drawn.
+static bool image_drawn(const garb_val_t *v)
+{
+    return v->kind != GARB_V_IMAGE || v->nitems > 0;
+}
+
+static bool value_approximated(garb_prop_t prop, const garb_val_t *v)
+{
+    if (!image_drawn(v))
+        return true;
+    // A list of layers is approximated when any layer is: the page asked
+    // for all of them.
+    if (v->kind == GARB_V_LAYERS) {
+        for (int32_t i = 0; i < v->nitems; i++)
+            if (value_approximated(prop, &v->items[i]))
+                return true;
+        return false;
+    }
+    if (v->kind != GARB_V_KEYWORD)
+        return false;
+    for (size_t k = 0; k < sizeof(kApproximated) / sizeof(kApproximated[0]); k++)
+        if (prop == kApproximated[k].prop && os64_streq(v->keyword, kApproximated[k].keyword))
+            return true;
+    return false;
+}
 
 bool garb_set_approximated(const garb_set_t *set)
 {
-    const garb_val_t *v = &set->value;
-    if (v->kind == GARB_V_WIDE || v->kind != GARB_V_KEYWORD)
-        return false;
-    for (size_t k = 0; k < sizeof(kApproximated) / sizeof(kApproximated[0]); k++)
-        if (set->prop == kApproximated[k].prop && os64_streq(v->keyword, kApproximated[k].keyword))
-            return true;
-    return false;
+    return value_approximated(set->prop, &set->value);
 }
 
 static const char *const kBorderStyle[] = {"none", "hidden", "dotted", "dashed", "solid", "double",
@@ -914,12 +938,12 @@ static bool position(Sets *s, VCur *c, garb_val_t *x, garb_val_t *y)
 // One or two repeat keywords, as the single keyword they amount to.
 // ── Gradients (Images 3 § 3) ────────────────────────────────────────────
 //
-// A gradient is drawn by nobody yet, but whether one is VALID decides what
-// a `background` does: the pre-standard `linear-gradient(top, …)` (no
-// `to`) is refused by every browser, so the `background: #333` before it
-// stands, and a page that relied on that is dark. So a linear or radial
-// gradient is read against its grammar; conic gradients and image-set are
-// accepted by name (GARB.md's pile-3 row says so).
+// Whether a gradient is VALID decides what a `background` does: the
+// pre-standard `linear-gradient(top, …)` (no `to`) is refused by every
+// browser, so the `background: #333` before it stands, and a page that
+// relied on that is dark. So a linear or radial gradient is read against
+// its grammar and kept for drawing; conic gradients and image-set are
+// accepted by name, kept as nothing, and approximated for @supports.
 
 // One comma-separated argument group of a gradient: [from, to) of `v`.
 typedef struct {

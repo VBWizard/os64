@@ -521,7 +521,8 @@ draws it, but for the smoothing below.
 | Debt | Why it waits | Trigger |
 |---|---|---|
 | Every layer of a list | — | done in S4c, below |
-| `background-clip: text` | the glyphs are drawn by the text verb, with no mask to fill with a picture; a background clipped to its text is not drawn at all | a page whose gradient headline matters |
+| `background-clip: text` | the glyphs are drawn by the text verb, with no mask to fill with a picture; a background clipped to its text is not drawn at all, on any box, and `@supports (background-clip: text)` says no, so a page takes the fallback it wrote | a page whose gradient headline matters |
+| An inline box's origin and clip boxes | a piece in the public tree is its content area — inline padding and borders are neither laid out nor drawn — so every box of a piece is the piece itself | a page whose padded inline background matters |
 | A content box with percentage padding | the tree does not carry the width a percentage padding resolved against, so it counts as none, as for an atom's content | a page whose content-box background sits wrong |
 | A scaled picture's smoothing | a copy is scaled nearest-neighbour, where the browsers smooth it unless `image-rendering` says otherwise | the image-rendering slice |
 
