@@ -138,7 +138,7 @@ static const char *const kDisplay[] = {
 // (GARB.md's pile 2, POSITION.md's slices, PILE3.md's booked rows). Read, so
 // the cascade keeps them; not SUPPORTED, so @supports tells a page to use
 // the fallback it wrote for exactly this. flow-root is laid out as a block;
-// a background clipped to the text is not drawn at all. `contents` is not
+// a background clipped to the text is not drawn on a box. `contents` is not
 // here: libflow gives such an element no box and flows its children into
 // its parent, which is what it says. The list is for what a page writes a
 // fallback for — asks for one thing and is handed another, or nothing — and

@@ -1217,7 +1217,7 @@ static void paint_box(void *ctx, const flow_box_t *b)
         // them, which needs the same knowledge (PILE3.md § Booked). A piece
         // is its content area, with no padding or border laid out round it,
         // so its origin and clip boxes are all the piece; a clip to the
-        // text draws nothing here either, as on every box.
+        // text draws nothing here either, as on a block's frame.
         if (b->style->background_clip == FLOW_EDGE_TEXT)
             return;
         if (b->style->has_background)
@@ -1310,6 +1310,9 @@ void yonder_paint(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_
     // body's background is drawn as if the root had it), so they scroll
     // with the page and a page shorter than the view repeats them, as the
     // browsers do; an attribute's picture is tiled from the page's corner.
+    // They are drawn across the whole view whatever background-clip says,
+    // `text` included: the canvas's painting area IS the canvas (§ 2.11.1),
+    // and Chrome fills it.
     yonder_tile_t tile;
     os64_gui_rect_t origin =
         owner != NULL ? yonder_box_edge(root, root->rect, owner->style->background_origin)

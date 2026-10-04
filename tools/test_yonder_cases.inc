@@ -476,6 +476,18 @@ static void paint_cases(void)
                     "pixels 0 0 4 4 00000000 00000000 00000000 00000000"
                     " 00000000 ffff0000 ffff0000 00000000 00000000 ffff0000 ffff0000 00000000"
                     " 00000000 00000000 00000000 00000000\n");
+    // The canvas's background is drawn across the canvas whatever
+    // background-clip says, `text` included (§ 2.11.1) — Chrome fills it —
+    // while the body's own box, the canvas owner, draws nothing of it.
+    paint_page_case("a canvas background ignores background-clip: text",
+                    "<!doctype html><style>html { height: 4px } body { margin: 0;"
+                    " background: #00ff00 linear-gradient(#ff0000, #ff0000);"
+                    " background-clip: text }</style>",
+                    4, (os64_gui_rect_t){0, 0, 4, 4}, true,
+                    "fill 0 0 4 4 #00ff00\n"
+                    "pixels 0 0 4 4 ffff0000 ffff0000 ffff0000 ffff0000 ffff0000 ffff0000"
+                    " ffff0000 ffff0000 ffff0000 ffff0000 ffff0000 ffff0000 ffff0000 ffff0000"
+                    " ffff0000 ffff0000\n");
     // Groups nest, each laid over what was under it when it opened, and a
     // group none of which shows opens empty: the far one at 520, cut to a
     // view that ends at 100, has no height.
