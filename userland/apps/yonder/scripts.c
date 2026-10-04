@@ -27,18 +27,68 @@ static os64_html_node_t *after(os64_html_node_t *node)
     return node != NULL ? node->next : NULL;
 }
 
+static bool ascii_space(unsigned char c)
+{
+    return c == ' ' || c == '\t' || c == '\n' || c == '\f' || c == '\r';
+}
+
+static bool javascript_type(const char *value, size_t length, bool from_language)
+{
+    /* MIME Sniffing's JavaScript essence strings. language supplies a
+     * virtual text/ prefix, so matching it needs no temporary allocation. */
+    static const char *const essences[] = {
+        "application/ecmascript", "application/javascript",
+        "application/x-ecmascript", "application/x-javascript",
+        "text/ecmascript", "text/javascript", "text/javascript1.0",
+        "text/javascript1.1", "text/javascript1.2", "text/javascript1.3",
+        "text/javascript1.4", "text/javascript1.5", "text/jscript",
+        "text/livescript", "text/x-ecmascript", "text/x-javascript"
+    };
+    for (size_t i = 0; i < sizeof(essences) / sizeof(essences[0]); i++) {
+        const char *essence = essences[i];
+        if (from_language) {
+            if (os64_memcmp(essence, "text/", 5) != 0)
+                continue;
+            essence += 5;
+        }
+        if (os64_strlen(essence) != length)
+            continue;
+        size_t j = 0;
+        for (; j < length; j++) {
+            unsigned char c = (unsigned char)value[j];
+            if (c >= 'A' && c <= 'Z')
+                c += 'a' - 'A';
+            if (c != (unsigned char)essence[j])
+                break;
+        }
+        if (j == length)
+            return true;
+    }
+    return false;
+}
+
 static bool classic(const os64_html_node_t *n)
 {
     if (n->kind != OS64_HTML_ELEMENT || n->ns != OS64_HTML_NS_HTML ||
         !os64_streq(n->name, "script") || os64_html_attr(n, "src") != NULL)
         return false;
     const os64_html_attr_t *type = os64_html_attr(n, "type");
-    if (type == NULL || type->value == NULL || type->value[0] == '\0')
+    const os64_html_attr_t *language = type == NULL ? os64_html_attr(n, "language") : NULL;
+    const char *value = type != NULL ? type->value : language != NULL ? language->value : NULL;
+    if (value == NULL || value[0] == '\0')
         return true;
-    return os64_streq(type->value, "text/javascript") ||
-           os64_streq(type->value, "application/javascript") ||
-           os64_streq(type->value, "text/ecmascript") ||
-           os64_streq(type->value, "application/ecmascript");
+    size_t length = os64_strlen(value);
+    /* Only a present type is trimmed. Empty attributes default before
+     * trimming, so whitespace-only type and padded language do not default. */
+    if (type != NULL) {
+        while (length != 0 && ascii_space((unsigned char)*value)) {
+            value++;
+            length--;
+        }
+        while (length != 0 && ascii_space((unsigned char)value[length - 1]))
+            length--;
+    }
+    return javascript_type(value, length, type == NULL);
 }
 
 yonder_scripts_t *yonder_scripts_new(os64_html_document_t *doc,

@@ -524,6 +524,8 @@ static bool page_lay_out(Page *p, int32_t width, int32_t height)
         if (n > 0 && cascade == NULL)
             return false;
     }
+    // Context is valid for this layout only and may name a stack Page;
+    // libflow consults replaced_size inside flow_layout, which uses it here.
     s_env.ctx = p;
     s_env.cascade = cascade;
     s_env.scripting = p->scripting;
@@ -1162,7 +1164,7 @@ static void arrive_now(Page *fresh, NavKind kind, const way_position_t *crumb,
                                              os64_page_shared_state(page_model(&g.page)),
                                              g.page.way.url, script_alert, NULL);
         if (g.page.scripts == NULL)
-            status_rest("No memory to queue page scripts; this page runs without them.");
+            status_rest("Could not queue page scripts; this page runs without them.");
         else if (yonder_scripts_pending(g.page.scripts))
             (void)os64_gui_event_ring(g.win, BELL_SCRIPTS);
     }

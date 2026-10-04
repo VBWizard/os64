@@ -1442,9 +1442,14 @@ in tree order and runs at most one per turn, followed by its budgeted Promise
 checkpoint and one native rebuild. This does not implement D4/D7 execution
 order: external `src`, module, async/defer scheduling, inserted-script
 execution, DOM events, timers, document.write, geometry and location APIs are
-outside this slice. A type absent or empty, or exactly `text/javascript`,
-`application/javascript`, `text/ecmascript` or `application/ecmascript`, qualifies;
-other types and template contents are excluded.
+outside this slice. Qualification follows [HTML's script-type preparation](https://html.spec.whatwg.org/multipage/scripting.html#prepare-the-script-element):
+an empty `type` defaults to JavaScript; a nonempty `type` has leading/trailing
+ASCII whitespace stripped and matches the [sixteen JavaScript MIME essence
+strings](https://mimesniff.spec.whatwg.org/#javascript-mime-type) ASCII-case-insensitively.
+With `type` absent, empty/absent `language` defaults, while nonempty `language`
+supplies `text/` plus its value without whitespace trimming. Present `type`
+overrides `language`; whitespace-only `type` and padded `language` do not
+default. Other types and template contents are excluded.
 
 **The switch.** Settings adds **Run page scripts**, default off. Apply changes
 this window; Save as default writes `scripts = on/off` to `yonder.conf`.
@@ -1520,13 +1525,15 @@ stdout; alert reports on the status line.
 
 **Evidence.** `tools/test_yonder_scripts_host.sh` exercises the actual Yonder
 queue, publication and widget code with real libui editing and native libraries,
-a target-profile engine, ASan/UBSan and normal LSan. It passes **1531/0** checks:
+a target-profile engine, ASan/UBSan and normal LSan. It passes **2009/0** checks:
 one task per turn, wrapper identity, a real key edit and caret/selection/focus,
 control reorder/kind/hidden transitions, state-only refresh, invalid numeric
 input, password deletion through script reads and form requests, reset of
 unflushed editors and externally owned controls, refusal/other-form preservation,
 author-styled `noscript` in both scripting modes, current-link routing through
-older geometry, navigation cancellation,
+older geometry, navigation cancellation, all sixteen classic MIME spellings
+with case/ASCII-whitespace handling, legacy language fallback/type precedence,
+and language changes between queue construction and execution,
 job/source/schedule caps, URL ownership and setting persistence. A 160-cut
 native sweep reaches 18 model refusals and 21 layout refusals, with 121 completed
 rebuilds; a separate 64-cut stylesheet sweep covers duplicate parses/imports,

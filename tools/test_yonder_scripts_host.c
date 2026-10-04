@@ -135,6 +135,66 @@ static bool probe_text_is(const char *id, const char *text) {
     return n && n->first_child && n->first_child->kind==OS64_HTML_TEXT &&
         os64_streq(n->first_child->text,text);
 }
+static void script_type_case(const char *attributes, bool runs) {
+    char html[512];
+    os64_snprintf(html,sizeof(html),"<p id=result>before</p><script %s>"
+        "document.getElementById('result').textContent='ran';</script>",attributes);
+    unsigned before=failures;
+    probe_page(html,true);
+    check(yonder_scripts_pending(g.page.scripts)==runs,"script type decides queue qualification");
+    script_turn();
+    check(probe_text_is("result",runs ? "ran" : "before"),"qualified script executes; other languages stay inert");
+    check(!yonder_scripts_pending(g.page.scripts),"script type fixture consumes its schedule");
+    probe_drop();
+    if(failures!=before) fprintf(stderr,"script type attributes: %s\n",attributes);
+}
+static void script_types(void) {
+    // Expected types come from MIME Sniffing's JavaScript essence list.
+    static const char *const accepted[]={
+        "application/ecmascript","application/javascript","application/x-ecmascript","application/x-javascript",
+        "text/ecmascript","text/javascript","text/javascript1.0","text/javascript1.1","text/javascript1.2",
+        "text/javascript1.3","text/javascript1.4","text/javascript1.5","text/jscript","text/livescript",
+        "text/x-ecmascript","text/x-javascript"
+    };
+    for(size_t i=0;i<sizeof(accepted)/sizeof(accepted[0]);i++) {
+        char attribute[128],upper[64];
+        size_t n=strlen(accepted[i]);
+        for(size_t j=0;j<=n;j++) {
+            char c=accepted[i][j];
+            upper[j]=c>='a' && c<='z' ? c+'A'-'a' : c;
+        }
+        os64_snprintf(attribute,sizeof(attribute),"type='%s'",accepted[i]);
+        script_type_case(attribute,true);
+        os64_snprintf(attribute,sizeof(attribute),"type='%s'",upper);
+        script_type_case(attribute,true);
+        os64_snprintf(attribute,sizeof(attribute),"type=' \t\n\f\r%s\r\f\n\t '",upper);
+        script_type_case(attribute,true);
+        if(strncmp(accepted[i],"text/",5)==0) {
+            os64_snprintf(attribute,sizeof(attribute),"language='%s'",accepted[i]+5);
+            script_type_case(attribute,true);
+            os64_snprintf(attribute,sizeof(attribute),"language='%s'",upper+5);
+            script_type_case(attribute,true);
+        }
+    }
+    static const char *const defaults[]={"","type=''","language=''","type='' language=VBScript",
+        "type='text/JavaScript' language=VBScript","type=' application/x-javascript ' language=VBScript"};
+    for(size_t i=0;i<sizeof(defaults)/sizeof(defaults[0]);i++) script_type_case(defaults[i],true);
+    static const char *const rejected[]={
+        "type=' \t\n\f\r '","type=' \t ' language=JavaScript","type=module language=JavaScript",
+        "type='text/javascript; charset=utf-8'","type='application/javascript;charset=utf-8'",
+        "type=javascript","type=text/javascript1.6","type='text/ javascript'",
+        "type='\vtext/javascript'","type='&#160;text/javascript&#160;'","type='text/java&#383;cript'",
+        "language=VBScript","language=' JavaScript '","language='\tJavaScript'","language='text/javascript'",
+        "language='application/javascript'","src='' type='text/JavaScript'"
+    };
+    for(size_t i=0;i<sizeof(rejected)/sizeof(rejected[0]);i++) script_type_case(rejected[i],false);
+
+    probe_page("<p id=result>before</p><script>document.getElementById('next').setAttribute('language','VBScript');</script>"
+        "<script id=next language=JavaScript>document.getElementById('result').textContent='ran';</script>",true);
+    script_turn();script_turn();
+    check(probe_text_is("result","before"),"queued script rechecks changed language before execution");
+    probe_drop();
+}
 static void identity_and_edit(void) {
     probe_page("<h1 id=heading>before</h1><input id=field value=start>"
         "<script>var held=document.getElementById('field');"
@@ -555,6 +615,7 @@ int main(void)
         .backend=flow_test_backend(),.memory_cap=8*1024*1024};
     check(os64_text_create(&options,&probe_text)==OS64_FONT_OK,"text context");
     check(os64_text_font_bitmap(probe_text,&probe_font)==OS64_FONT_OK,"bitmap face");
+    script_types();
     identity_and_edit();
     property_only();
     script_lifecycle();
