@@ -554,6 +554,15 @@ picture or gradient from any sheet, a `background` attribute's picture is
 the one layer, as it was. The canvas paints its owner's layers the same way
 across the whole view.
 
+**A list is copied into every element its declaration reaches**, which is
+the one cost of styling a page can multiply — a sheet's 400 layers on 500
+elements (Codex, #210). Every such list — layers, gradients, shadows, font
+families, grid tracks, areas and line names — comes out of a budget of its
+own (`list_alloc`, `F_STYLE_LISTS_BUDGET`, 32 MB, far past any real page's);
+past it, a declaration is dropped as one libflow cannot read is, so a
+hostile page is styled plainly and still laid out, where an arena cap would
+have blanked it.
+
 ### Proof
 
 libgarb's corpus: the shorthand over two layers with the colour in the
