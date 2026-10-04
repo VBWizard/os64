@@ -480,6 +480,15 @@ static void paint_cases(void)
                     "text \"Hi\" 9 32 #0000ff\n"
                     "text \"Hi\" 8 30 #0000ff\n");
 
+    // A background clipped to the text is not drawn, on an inline box as on
+    // a block (PILE3.md § Booked): neither its colour nor its gradient.
+    paint_page_case("an inline background clipped to the text is not drawn",
+                    "<!doctype html><style>body { margin: 0 } span {"
+                    " background: #00ff00 linear-gradient(#ff0000, #ff0000);"
+                    " background-clip: text }</style><span>Hi</span>",
+                    100, (os64_gui_rect_t){0, 0, 100, 50}, true,
+                    "fill 0 0 100 50 #fefefe\n"
+                    "text \"Hi\" 0 14 #101010\n");
     // An inline element's gradient is painted on its piece of the line,
     // the piece its tile: one solid-colour gradient covers the piece
     // exactly, under the text.
