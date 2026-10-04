@@ -145,8 +145,8 @@ attribute-transition handoff, and D6 adds holds for state and model keys.
 The lifetime contract, counted holds, whole-subtree retirement, parser-reference
 protection, consumer ownership and measured proof are in
 [DOM.md § D6, as built](DOM.md#d6-as-built) and `html.h`.
-The full weak-wrapper/collector answer remains booked. D6 is stacked on D5b;
-Fable's review is required before either slice is merged.
+The full weak-wrapper/collector answer remains booked. D5b is merged in
+PR #216; D6 targets userland in PR #217 and awaits Fable's re-review.
 
 ## D5 — the binding library (libdom) and J3's fixture
 
@@ -155,7 +155,7 @@ The library contract and measured proof are
 in [DOM.md § D5a, as built](DOM.md#d5a-as-built),
 `userland/libdom/include/dom/dom.h` and `userland/libdom/LIBDOM.md`.
 D5b implements the Yonder integration, default-off settings switch and guest
-acceptance; it awaits review. [DOM.md § D5b, as built](DOM.md#d5b-as-built)
+acceptance; it is merged in PR #216. [DOM.md § D5b, as built](DOM.md#d5b-as-built)
 records the implementation, evidence and remaining ordinary-browsing gates.
 
 **What it is.** A new library, `userland/libdom` (name ruled, DOM.md

@@ -76,6 +76,8 @@ static void remove_index(os64_html_parser_t *p, HNodes *list, size_t i)
     if (i >= list->n || !h_work(p, list->n - i))
         return;
 
+    if (list->v[i])
+        d_ref(p->d, list->v[i], true, false);
     for (size_t j = i + 1; j < list->n; j++)
         list->v[j - 1] = list->v[j];
     list->n--;
@@ -93,7 +95,7 @@ static bool insert_index(os64_html_parser_t *p, HNodes *list, size_t i, HNode *n
 static void pop(os64_html_parser_t *p)
 {
     if (p->stack.n)
-        p->stack.n--;
+        h_nodes_trim(p, &p->stack, p->stack.n - 1);
 }
 /* Scope boundaries include foreign integration elements even though the
  * target searched for is an HTML element. */
@@ -164,14 +166,15 @@ static void close_p(os64_html_parser_t *p)
 
     if (!named(h_current(p), "p"))
         h_error(p, "unexpected-end-tag");
-    p->stack.n = at;
+    h_nodes_trim(p, &p->stack, at);
 }
 static void clear_formatting(os64_html_parser_t *p)
 {
     while (p->formatting.n) {
         if (!h_work(p, 1))
             return;
-        HNode *n = p->formatting.v[--p->formatting.n];
+        HNode *n = p->formatting.v[p->formatting.n - 1];
+        h_nodes_trim(p, &p->formatting, p->formatting.n - 1);
         if (!n)
             break;
     }
@@ -197,7 +200,7 @@ static bool attach(os64_html_parser_t *p, HNode *parent, HNode *before, HNode *n
 {
     HDoc *d = p->d;
     if (!d->disturbed) {
-        h_attach(parent, before, n);
+        h_attach(d, parent, before, n);
         return true;
     }
     uint64_t steps = 0;
@@ -211,7 +214,7 @@ static void detach(os64_html_parser_t *p, HNode *n)
 {
     HDoc *d = p->d;
     if (!d->disturbed) {
-        h_detach(n);
+        h_detach(d, n);
         return;
     }
     uint64_t steps = 0;
@@ -399,7 +402,7 @@ static HNode *element(os64_html_parser_t *p, HToken *t, os64_html_ns_t ns, bool 
     /* In a tree a verb has moved, the landmarks are what the links make
      * them (d_place), which need not be the elements the parser made. */
     if (named(n, "head")) {
-        p->head = n;
+        h_ref_set(p, &p->head, n);
         if (!p->d->disturbed)
             p->d->pub.head = n;
     }
@@ -506,7 +509,7 @@ static void reconstruct(os64_html_parser_t *p)
         HNode *n = clone(p, p->formatting.v[i], true);
         if (!n)
             return;
-        p->formatting.v[i] = n;
+        h_ref_set(p, &p->formatting.v[i], n);
     }
 }
 static bool same_attrs(os64_html_parser_t *p, HNode *a, HNode *b)
@@ -577,7 +580,7 @@ static void ordinary_end(os64_html_parser_t *p, const char *name)
             implied(p, name, false);
             if (h_current(p) != n)
                 h_error(p, "unexpected-end-tag");
-            p->stack.n = i - 1;
+            h_nodes_trim(p, &p->stack, i - 1);
             return;
         }
         if (special(n)) {
@@ -620,8 +623,8 @@ static HNode *adopt(os64_html_parser_t *p, HNode *format, size_t furthest, HNode
         if (!copy)
             return NULL;
 
-        p->formatting.v[ai] = copy;
-        p->stack.v[index] = copy;
+        h_ref_set(p, &p->formatting.v[ai], copy);
+        h_ref_set(p, &p->stack.v[index], copy);
 
         if (*last == block)
             *bookmark = ai + 1;
@@ -706,7 +709,7 @@ static void adoption(os64_html_parser_t *p, const char *subject)
             }
         }
         if (furthest == NONE) {
-            p->stack.n = si;
+            h_nodes_trim(p, &p->stack, si);
             remove_index(p, &p->formatting, fi);
             return;
         }
@@ -859,7 +862,7 @@ static void script_done(os64_html_parser_t *p, HNode *script)
 {
     if (!p->opt.scripting || template_open(p) || p->straight || p->d->pub.refusal)
         return;
-    p->script = script;
+    h_ref_set(p, &p->script, script);
 }
 static void raw_element(os64_html_parser_t *p, HToken *t, HState state)
 {
@@ -1029,7 +1032,7 @@ static bool body(os64_html_parser_t *p, HToken *t)
             detach(p, p->stack.v[1]);
             if (!p->d->disturbed)
                 p->d->pub.body = NULL;
-            p->stack.n = 1;
+            h_nodes_trim(p, &p->stack, 1);
             element(p, t, HTML, true);
             p->mode = M_FRAMESET;
             return false;
@@ -1066,7 +1069,7 @@ static bool body(os64_html_parser_t *p, HToken *t)
             close_p(p);
             HNode *n = element(p, t, HTML, true);
             if (!templ)
-                p->form = n;
+                h_ref_set(p, &p->form, n);
             return false;
         }
         if (h_in(name, "li dd dt")) {
@@ -1082,7 +1085,7 @@ static bool body(os64_html_parser_t *p, HToken *t)
                     implied(p, n->name, false);
                     if (h_current(p) != n)
                         h_error(p, "unexpected-start-tag");
-                    p->stack.n = i - 1;
+                    h_nodes_trim(p, &p->stack, i - 1);
                     break;
                 }
                 if (special(n) && !named_in(n, "address div p"))
@@ -1103,7 +1106,7 @@ static bool body(os64_html_parser_t *p, HToken *t)
             if (at != NONE) {
                 h_error(p, "unexpected-start-tag");
                 implied(p, NULL, false);
-                p->stack.n = at;
+                h_nodes_trim(p, &p->stack, at);
             }
             reconstruct(p);
             element(p, t, HTML, true);
@@ -1287,7 +1290,7 @@ static bool body(os64_html_parser_t *p, HToken *t)
     if (h_eq(name, "form")) {
         if (!template_open(p)) {
             HNode *form = p->form;
-            p->form = NULL;
+            h_ref_set(p, &p->form, NULL);
 
             if (!form || scope(p, "form", 0) == NONE) {
                 h_error(p, "unexpected-end-tag");
@@ -1306,7 +1309,7 @@ static bool body(os64_html_parser_t *p, HToken *t)
                 implied(p, NULL, false);
                 if (!named(h_current(p), "form"))
                     h_error(p, "unexpected-end-tag");
-                p->stack.n = at;
+                h_nodes_trim(p, &p->stack, at);
             }
         }
         return false;
@@ -1331,7 +1334,7 @@ static bool body(os64_html_parser_t *p, HToken *t)
         implied(p, h_in(name, "li dd dt") ? name : NULL, false);
         if (!named(h_current(p), name))
             h_error(p, "unexpected-end-tag");
-        p->stack.n = at;
+        h_nodes_trim(p, &p->stack, at);
         return false;
     }
     if (h_in(name, "h1 h2 h3 h4 h5 h6")) {
@@ -1355,7 +1358,7 @@ static bool body(os64_html_parser_t *p, HToken *t)
         implied(p, NULL, false);
         if (!named(h_current(p), name))
             h_error(p, "unexpected-end-tag");
-        p->stack.n = at;
+        h_nodes_trim(p, &p->stack, at);
         return false;
     }
     if (h_in(name, "a b big code em font i nobr s small strike strong tt u")) {
@@ -1371,7 +1374,7 @@ static bool body(os64_html_parser_t *p, HToken *t)
         implied(p, NULL, false);
         if (!named(h_current(p), name))
             h_error(p, "unexpected-end-tag");
-        p->stack.n = at;
+        h_nodes_trim(p, &p->stack, at);
         clear_formatting(p);
         return false;
     }
@@ -1776,7 +1779,7 @@ static bool process(os64_html_parser_t *p, HToken *t, HMode mode)
                     h_error(p, "unexpected-end-tag");
                 return false;
             }
-            p->stack.n = at;
+            h_nodes_trim(p, &p->stack, at);
             reset_mode(p);
             return start(t, "table");
         }
@@ -1807,7 +1810,7 @@ static bool process(os64_html_parser_t *p, HToken *t, HMode mode)
             h_error(p, "unexpected-start-tag");
             if (p->form || template_open(p))
                 return false;
-            p->form = element(p, t, HTML, false);
+            h_ref_set(p, &p->form, element(p, t, HTML, false));
             return false;
         }
         if (t->type == H_END_INPUT)
@@ -1845,7 +1848,7 @@ static bool process(os64_html_parser_t *p, HToken *t, HMode mode)
             implied(p, NULL, false);
             if (!named(h_current(p), "caption"))
                 h_error(p, "unexpected-end-tag");
-            p->stack.n = at;
+            h_nodes_trim(p, &p->stack, at);
             clear_formatting(p);
             p->mode = M_TABLE;
             return !end(t, "caption");
@@ -2022,7 +2025,7 @@ static bool process(os64_html_parser_t *p, HToken *t, HMode mode)
             at = scope(p, "select", 4);
             if (at == NONE)
                 return false;
-            p->stack.n = at;
+            h_nodes_trim(p, &p->stack, at);
             reset_mode(p);
             return true;
         }
@@ -2033,7 +2036,7 @@ static bool process(os64_html_parser_t *p, HToken *t, HMode mode)
             at = scope(p, "select", 4);
             if (at == NONE)
                 return false;
-            p->stack.n = at;
+            h_nodes_trim(p, &p->stack, at);
             reset_mode(p);
             return true;
         }
@@ -2108,7 +2111,7 @@ static bool process(os64_html_parser_t *p, HToken *t, HMode mode)
                 h_error(p, "unexpected-end-tag");
                 return false;
             }
-            p->stack.n = at;
+            h_nodes_trim(p, &p->stack, at);
             reset_mode(p);
             return false;
         }
@@ -2117,7 +2120,7 @@ static bool process(os64_html_parser_t *p, HToken *t, HMode mode)
             at = scope(p, "select", 4);
             if (at == NONE)
                 return false;
-            p->stack.n = at;
+            h_nodes_trim(p, &p->stack, at);
             reset_mode(p);
             return true;
         }
@@ -2411,7 +2414,7 @@ static bool foreign(os64_html_parser_t *p, HToken *t)
 
             if (ascii_ci_equal(n->name, t->name.s)) {
                 bool current = i == p->stack.n;
-                p->stack.n = i - 1;
+                h_nodes_trim(p, &p->stack, i - 1);
                 if (current && n->ns == SVG && h_eq(n->name, "script"))
                     script_done(p, n);
                 return false;

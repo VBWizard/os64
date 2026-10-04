@@ -25,8 +25,8 @@ typedef enum {
     OS64_HTML_BAD_ARGUMENT = -10
 } os64_html_status_t;
 
-/* What the program exits with when a document is freed while a snapshot
- * still has it pinned, or a pin/hold lifetime contract is broken ("HTML"). */
+/* Exit badge for a broken node-hold or snapshot-pin lifetime contract,
+ * including document teardown with outstanding holds or pins ("HTML"). */
 #define OS64_HTML_FATAL_EXIT 0x48544D4C
 
 typedef enum {
@@ -256,7 +256,8 @@ typedef uint64_t os64_html_pin_t;
 /* Allocation-free, counted identity protection. The document must own the
  * node; invalid ownership, overflow, and an unheld release end the program
  * with OS64_HTML_FATAL_EXIT. Releasing the last hold may reclaim a formerly
- * detached subtree, so the node must not be read after release. */
+ * detached subtree, so the node must not be read after release. Document
+ * teardown refuses outstanding holds as well as live snapshot pins. */
 void os64_html_hold(const os64_html_document_t *doc, const os64_html_node_t *node);
 void os64_html_release(const os64_html_document_t *doc, const os64_html_node_t *node);
 uint64_t os64_html_version(const os64_html_document_t *doc);

@@ -680,7 +680,10 @@ static void reclaim_browser_holders(void) {
     flow_free(g.page.tree);g.page.tree=NULL;
     garb_cascade_free(g.page.cascade);g.page.cascade=NULL;
     g.page.sheets_changed=true;
-    check(page_lay_out(&g.page,800,600),"widget replacement layout builds");
+    // This fixture publishes the rebuilt model directly before exercising
+    // widget refusal; the layout gate requires its matching document version.
+    g.page.rendered_version=os64_html_version(page_doc(&g.page));
+    check(page_lay_out(&g.page,800,600,g.zoom,NULL),"widget replacement layout builds");
     fail_at=attempts+1;
     forms_build();
     fail_at=0;

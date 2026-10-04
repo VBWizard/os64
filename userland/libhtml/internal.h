@@ -18,16 +18,19 @@ typedef struct HBlock HBlock;
  * isolated fragment staging. The first word retains the kind-specific data. */
 typedef struct {
     size_t word;
-    uint32_t holds, flags;
+    uint32_t holds;
+    uint16_t flags, parser_refs;
+    size_t unit_holds; /* sum of native and parser references in a pending unit */
     uint64_t stamp;
-    HNode *pending_next, *live_prev, *live_next;
+    HNode *pending_next, *pending_prev, *live_prev, *live_next;
     size_t ordinal;
 } HMeta;
 #define H_NODE_PACKED 1u
 #define H_NODE_EMBEDDED 2u
 #define H_NODE_PENDING 4u
-#define H_NODE_PARSER 8u
+#define H_NODE_QUEUED 8u
 #define H_NODE_RETIRED 16u /* unheld candidate with its retirement stamp fixed */
+#define H_NODE_WAIT 64u    /* queued for an older snapshot to leave */
 #define H_NODE_FRESH 32u   /* detachment just completed at the mutation version */
 static inline HMeta *h_meta(const HNode *n) { return (HMeta *)(n + 1); }
 /* Snapshots that borrow from the tree, each by the version it was built at. */
@@ -55,7 +58,6 @@ typedef struct {
      * says it is, so it stops relying on the stack for what a link needs to
      * be true (tree.c, attach). */
     bool disturbed;
-    bool parser_marked; /* collection has installed parser-reference flags */
     /* How many of `pins` are held, so that the parser's every character need
      * not look through them when none is. */
     uint8_t pinned;
@@ -74,7 +76,8 @@ typedef struct {
      * reclaiming such a node must remove its contribution. */
     size_t form_inputs;
     size_t max_depth;   /* the parse's limit on open elements: see h_depth_limit */
-    HNode *live_nodes, *pending_nodes, *free_nodes;
+    size_t held, pending_units; /* public holds and detached unit identities */
+    HNode *live_nodes, *pending_nodes, *waiting_nodes, *free_nodes;
     os64_html_parser_t *parser; /* active parser references protect identity */
 } HDoc;
 _Static_assert(offsetof(HDoc, root_meta) == offsetof(HDoc, root) + sizeof(HNode) &&
@@ -236,7 +239,7 @@ struct os64_html_parser {
     size_t templates_n, templates_cap;
     HNode *form, *head;
     const HNode *fragment_context; /* borrowed read-only for this isolated parse */
-    bool started, eof_sent, previous_cr;
+    bool started, eof_sent, previous_cr, form_borrowed;
     unsigned char prescan[1024];
     size_t prescan_len;
     unsigned encoding;
@@ -284,6 +287,13 @@ HNode *d_node_new(HDoc *d, os64_html_node_kind_t kind, int64_t *why);
  * verb's links and form-owner repairs are complete. Neither allocates. */
 void d_detached(HDoc *d, HNode *node);
 void d_collect(HDoc *d);
+#ifdef HTML_RECLAIM_TEST
+extern size_t h_reclaim_visits; /* host-only cost probe, absent from target builds */
+#endif
+void d_unpin_collect(HDoc *d);
+void d_ref(HDoc *d, const HNode *node, bool parser, bool add);
+void d_linking(HDoc *d, HNode *parent, HNode *node);
+void d_unlinking(HDoc *d, HNode *node);
 void d_fatal(const char *sentence);
 size_t d_owned_bytes(const HNode *node);
 size_t d_pending_bytes(const HDoc *d);
@@ -343,6 +353,10 @@ bool h_space(uint32_t cp);
 bool h_alpha(uint32_t cp);
 uint32_t h_lower(uint32_t cp);
 bool h_nodes_push(os64_html_parser_t *p, HNodes *list, HNode *n);
+/* These helpers balance the parser-owned references without collecting
+ * transient token-algorithm pointers. */
+void h_nodes_trim(os64_html_parser_t *p, HNodes *list, size_t length);
+void h_ref_set(os64_html_parser_t *p, HNode **slot, HNode *node);
 HNode *h_current(os64_html_parser_t *p);
 /* Keep the ordinary document dispatch to one current-node call. */
 static inline HNode *h_adjusted_current(os64_html_parser_t *p)
@@ -351,8 +365,8 @@ static inline HNode *h_adjusted_current(os64_html_parser_t *p)
                                                 : h_current(p);
 }
 HNode *h_node(os64_html_parser_t *p, os64_html_node_kind_t kind);
-void h_detach(HNode *n);
-void h_attach(HNode *parent, HNode *before, HNode *n);
+void h_detach(HDoc *d, HNode *n);
+void h_attach(HDoc *d, HNode *parent, HNode *before, HNode *n);
 void h_tokenize(os64_html_parser_t *p, uint32_t cp);
 void h_emit(os64_html_parser_t *p);
 void h_tree(os64_html_parser_t *p, HToken *token);

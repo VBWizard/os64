@@ -252,8 +252,8 @@ static bool pinned_since(const HDoc *d, uint64_t born)
             return true;
     return false;
 }
-/* A broken promise about memory ends the program, as a stomped heap canary
- * does: whoever still holds the pin is about to read what is being freed. */
+/* Lifetime misuse ends the program rather than freeing identities or bytes
+ * whose holders may still read them, as a stomped heap canary does. */
 static void fatal(const char *sentence)
 {
     os64_write(2, sentence, h_len(sentence));
@@ -287,33 +287,24 @@ HNode *d_node_new(HDoc *d, os64_html_node_kind_t kind, int64_t *why)
     return n;
 }
 void d_fatal(const char *sentence) { fatal(sentence); }
-static const HNode *held_root(const HNode *n)
-{
-    while (n->parent || (n->kind == OS64_HTML_FRAGMENT && *h_word(n)))
-        n = n->parent ? n->parent : (HNode *)*h_word(n);
-    return n;
-}
 void os64_html_hold(const os64_html_document_t *doc, const HNode *node)
 {
     if (!os64_html_owns_node(doc, node))
         fatal("libhtml: hold of a node not owned by the document\n");
-    HMeta *m = h_meta(node);
-    if (m->holds == UINT32_MAX)
-        fatal("libhtml: node hold count overflow\n");
-    m->holds++;
-    /* A new holder postpones a queued unit's retirement. Follow the
-     * template boundary as well as ordinary parents to find that unit. */
-    const HNode *root = held_root(node);
-    if (h_meta(root)->flags & H_NODE_PENDING)
-        h_meta(root)->flags &= ~(H_NODE_FRESH | H_NODE_RETIRED);
+    HDoc *d = (HDoc *)doc;
+    if (d->held == SIZE_MAX)
+        fatal("libhtml: document hold count overflow\n");
+    d_ref(d, node, false, true);
+    d->held++;
 }
 void os64_html_release(const os64_html_document_t *doc, const HNode *node)
 {
-    if (!os64_html_owns_node(doc, node) || !h_meta(node)->holds)
+    if (!os64_html_owns_node(doc, node) || !h_meta(node)->holds || !((HDoc *)doc)->held)
         fatal("libhtml: release of a node that is not held\n");
-    h_meta(node)->holds--;
-    if (!h_meta(node)->holds && (h_meta(held_root(node))->flags & H_NODE_PENDING))
-        d_collect((HDoc *)doc);
+    HDoc *d = (HDoc *)doc;
+    d_ref(d, node, false, false);
+    d->held--;
+    d_collect(d);
 }
 size_t d_owned_bytes(const HNode *n)
 {
@@ -380,7 +371,7 @@ void os64_html_unpin(const os64_html_document_t *doc, os64_html_pin_t pin)
     d->pins[slot] = 0;
     d->pinned--;
     reclaim(d);
-    d_collect(d);
+    d_unpin_collect(d);
 }
 size_t os64_html_retired_bytes(const os64_html_document_t *doc)
 {
@@ -558,7 +549,29 @@ bool h_nodes_push(os64_html_parser_t *p, HNodes *list, HNode *n)
         list->cap = cap;
     }
     list->v[list->n++] = n;
+    if (n)
+        d_ref(p->d, n, true, true);
     return true;
+}
+void h_nodes_trim(os64_html_parser_t *p, HNodes *list, size_t length)
+{
+    while (list->n > length) {
+        HNode *n = list->v[--list->n];
+        if (n)
+            d_ref(p->d, n, true, false);
+    }
+}
+void h_ref_set(os64_html_parser_t *p, HNode **slot, HNode *n)
+{
+    if (*slot == n)
+        return;
+    if (n)
+        d_ref(p->d, n, true, true);
+    if (*slot && !(slot == &p->form && p->form_borrowed))
+        d_ref(p->d, *slot, true, false);
+    *slot = n;
+    if (slot == &p->form)
+        p->form_borrowed = false;
 }
 HNode *h_current(os64_html_parser_t *p)
 {
@@ -577,10 +590,11 @@ HNode *h_node(os64_html_parser_t *p, os64_html_node_kind_t kind)
         h_refuse(p, why);
     return n;
 }
-void h_detach(HNode *n)
+void h_detach(HDoc *d, HNode *n)
 {
     if (!n->parent)
         return;
+    d_unlinking(d, n);
     if (n->prev)
         n->prev->next = n->next;
     else
@@ -591,9 +605,10 @@ void h_detach(HNode *n)
         n->parent->last_child = n->prev;
     n->parent = n->prev = n->next = NULL;
 }
-void h_attach(HNode *parent, HNode *before, HNode *n)
+void h_attach(HDoc *d, HNode *parent, HNode *before, HNode *n)
 {
-    h_detach(n);
+    h_detach(d, n);
+    d_linking(d, parent, n);
     n->parent = parent;
     n->next = before;
     n->prev = before ? before->prev : parent->last_child;
@@ -662,6 +677,8 @@ void os64_html_document_free(os64_html_document_t *doc)
     if (!doc)
         return;
     HDoc *d = (HDoc *)doc;
+    if (d->held)
+        fatal("libhtml: a document was freed while nodes were still held\n");
     for (size_t i = 0; i < H_PINS; i++)
         if (d->pins[i])
             fatal("libhtml: a document was freed while a snapshot still had it pinned\n");
@@ -738,6 +755,8 @@ os64_html_parser_t *os64_html_parser_new(const os64_html_options_t *options)
     d_node_register(d, &d->root, H_NODE_EMBEDDED);
     d_node_register(d, &d->html, H_NODE_EMBEDDED);
     d->parser = p;
+    d_ref(d, &d->root, true, true);
+    d_ref(d, &d->html, true, true);
     if (opt.charset) {
         if (!h_buf_bytes(p, &p->charset_label, opt.charset, h_len(opt.charset))) {
             os64_html_document_free(&d->pub);
@@ -889,7 +908,7 @@ int64_t os64_html_parser_resume(os64_html_parser_t *p)
     if (!p->script)
         return OS64_HTML_BAD_ARGUMENT;
     p->moved = false;
-    p->script = NULL;
+    h_ref_set(p, &p->script, NULL);
     h_pump(p);
     return settle(p);
 }
@@ -916,6 +935,13 @@ static os64_html_document_t *release(os64_html_parser_t *p)
     d_seat_html(d);
     /* Internal tree algorithms do not collect their transient nodes. The
      * transfer drops protection for parser references at a stable boundary. */
+    h_nodes_trim(p, &p->stack, 0);
+    h_nodes_trim(p, &p->formatting, 0);
+    h_ref_set(p, &p->head, NULL);
+    h_ref_set(p, &p->form, NULL);
+    h_ref_set(p, &p->script, NULL);
+    d_ref(d, &d->root, true, false);
+    d_ref(d, &d->html, true, false);
     d->parser = NULL;
     d_collect(d);
     HBuf *buffers[] = {&p->token.name, &p->token.data,   &p->token.public_id, &p->token.system_id,
@@ -938,7 +964,7 @@ os64_html_document_t *os64_html_parser_finish(os64_html_parser_t *p)
      * straight through, a script in it included. */
     p->moved = false;
     p->ended = p->straight = true;
-    p->script = NULL;
+    h_ref_set(p, &p->script, NULL);
     h_pump(p);
     settle(p);
     return release(p);

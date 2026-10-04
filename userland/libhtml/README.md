@@ -68,10 +68,12 @@ copies one across.
 detached node without walking the tree or changing it. Consumers use this
 query rather than interpreting the library's opaque document mark.
 `os64_html_hold/release` count external node holders. A removed subtree is
-reclaimed as a unit when none of its nodes is held and its retirement is newer
-than every live snapshot pin. This includes template contents and consumed
+reclaimed as a unit when none of its nodes is held and no live snapshot pin
+predates its retirement. This includes template contents and consumed
 fragment containers. A node needed after a mutation must be held beforehand;
 newly created nodes never inserted remain document-owned until teardown.
+Document teardown rejects outstanding node holds and snapshot pins;
+consumers must release their references before freeing the document.
 
 `core.c` owns allocations, pins and retirement, topology primitives, limits,
 and the parsing API, with the stop at a script and the input held meanwhile.

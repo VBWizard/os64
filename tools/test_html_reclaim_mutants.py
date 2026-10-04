@@ -8,14 +8,16 @@ import tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 MUTANTS = [
-    ("external-hold", "dom.c", "if (h_meta(n)->holds || (h_meta(n)->flags & H_NODE_PARSER))", "if (h_meta(n)->flags & H_NODE_PARSER)"),
-    ("parser-hold", "dom.c", "if (h_meta(n)->holds || (h_meta(n)->flags & H_NODE_PARSER))", "if (h_meta(n)->holds)"),
-    ("parser-head-ref", "dom.c", "    parser_mark(d, p->head);", "    /* mutated parser head reference */"),
-    ("parser-form-ref", "dom.c", "    parser_mark(d, p->form);", "    /* mutated parser form reference */"),
-    ("counted-holders", "core.c", "m->holds++;", "m->holds = 1;"),
+    ("external-hold", "dom.c", "(size_t)h_meta(n)->holds + h_meta(n)->parser_refs", "(size_t)0 + h_meta(n)->parser_refs"),
+    ("parser-hold", "dom.c", "(size_t)h_meta(n)->holds + h_meta(n)->parser_refs", "(size_t)h_meta(n)->holds + 0"),
+    ("parser-head-ref", "core.c", "    *slot = n;", "    if (slot == &p->head && n) d_ref(p->d, n, true, false);\n    *slot = n;"),
+    ("parser-form-ref", "core.c", "    *slot = n;", "    if (slot == &p->form && n) d_ref(p->d, n, true, false);\n    *slot = n;"),
+    ("counted-holders", "dom.c", "if (add) m->holds++; else m->holds--;", "if (add) m->holds = 1; else m->holds--;"),
+    ("leaked-hold", "core.c", "    if (d->held)\n        fatal", "    if (false && d->held)\n        fatal"),
+    ("unrelated-scan", "dom.c", "void d_collect(HDoc *d)\n{", "void d_collect(HDoc *d)\n{\n    for (HNode *n = d->live_nodes; n; n = h_meta(n)->live_next) RECLAIM_VISIT();"),
     ("delayed-stamp", "dom.c", "m->stamp = d->version + 1;", "m->stamp = d->version;"),
     ("pin-equality", "dom.c", "d->pins[i] < stamp", "d->pins[i] <= stamp"),
-    ("pin-protection", "dom.c", "if (!older_pin(d, m->stamp))", "if (true || !older_pin(d, m->stamp))"),
+    ("pin-protection", "dom.c", "if (older_pin(d, m->stamp))", "if (false && older_pin(d, m->stamp))"),
     ("free-list", "core.c", "HNode *n = d->free_nodes;", "HNode *n = NULL;"),
     ("form-record-count", "dom.c", "        d->records--;", "        /* mutated record subtraction */"),
     ("explicit-input-count", "dom.c", "        d->form_inputs--;", "        /* mutated input subtraction */"),
@@ -28,7 +30,7 @@ MUTANTS = [
 
 
 def build(library, output):
-    command = ["cc", "-std=c11", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-pthread",
+    command = ["cc", "-DHTML_RECLAIM_TEST", "-std=c11", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-pthread",
                "-fsanitize=address,undefined", "-fno-sanitize-recover=all"]
     command += ["-I" + str(ROOT / path) for path in
                 ["userland/libhtml/include", "userland/libos64/include", "abi/include"]]

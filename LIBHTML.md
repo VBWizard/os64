@@ -739,13 +739,14 @@ boundary and D5/D6 handoff are in
 
 D6 adds counted node holds, whole-unit retirement under snapshot pins,
 permanent-node reuse and packed-payload reclamation. The public node remains
-120 bytes; trailing metadata adds 48 bytes per allocated node and the
-document header adds 128 bytes. Parser references and retained consumer
-identities protect nodes through public mutation boundaries.
+120 bytes; trailing metadata adds 64 bytes per allocated node and the
+document header adds 184 bytes. Detached-unit tallies and balanced parser
+references keep collection independent of the number of held units.
+Document teardown rejects unbalanced public holds. Parser references and
+retained consumer identities protect nodes through public mutation boundaries.
 
-The 216,000-cycle packed-fragment proof stays flat at 32,527 arena bytes and
+The 216,000-cycle packed-fragment proof stays flat at 34,183 arena bytes and
 104 nodes under 64 MiB. Strong wrappers/state records, never-inserted created
 nodes and permanent chunk strings retain their documented capacity boundary.
 The contract, ownership decisions, complete validation and parser-cost
 comparison are in [DOM.md § D6, as built](docs/design/pending/DOM.md#d6-as-built).
-The implementation is stacked on D5b and awaits Fable's review.

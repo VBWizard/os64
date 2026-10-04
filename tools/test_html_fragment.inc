@@ -79,6 +79,7 @@ static char *serialization_check(const HNode *node, bool children, bool scriptin
 static void fragment_invariants(os64_html_document_t *doc, HNode *context, HNode *fragment)
 {
     known_reset();
+    known_doc = doc;
     known_add(context);
     known_add(fragment);
     everything_holds(doc);
@@ -384,6 +385,7 @@ static uint64_t fragment_host_hash(os64_html_document_t *doc)
     uint64_t hash = hash_string(1469598103934665603ull, dump);
     free(dump);
     known_reset();
+    known_doc = doc;
     known_add(doc->document);
     known_close();
     for (size_t i = 0; i < known.n; i++) {

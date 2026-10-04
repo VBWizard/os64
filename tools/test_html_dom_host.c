@@ -15,6 +15,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 // ── What the library asks of the system ─────────────────────────────────
 
@@ -353,6 +354,8 @@ static void t_validity(void)
 
     HDoc *d = (HDoc *)doc;
     check(links_ok(d, root, 0) == d->records, "links after the validity cases");
+    os64_html_release(doc, frag); os64_html_release(doc, html);
+    os64_html_release(doc, text); os64_html_release(doc, doctype);
     os64_html_document_free(doc);
     check(live == 0, "validity cases freed");
 }
@@ -443,6 +446,7 @@ static void t_structure(void)
     HDoc *d = (HDoc *)doc;
     check(links_ok(d, doc->document, 0) + links_ok(d, deep, 0) + links_ok(d, shallow, 0) == d->records,
           "links after the structure cases");
+    os64_html_release(doc, frag); os64_html_release(doc, x); os64_html_release(doc, c);
     os64_html_document_free(doc);
     check(live == 0, "structure cases freed");
 }
@@ -650,6 +654,7 @@ static void t_form_owners(void)
           "removing the form clears the records of the controls left behind");
     os64_html_insert(doc, id_in(doc, "t"), f, NULL);
     check(!q->form_owner, "and putting the form back does not restore them");
+    os64_html_release(doc, f);
     os64_html_document_free(doc);
 
     // A pair inside a template's contents is in the tree those contents are
@@ -672,6 +677,7 @@ static void t_form_owners(void)
     check(os64_html_insert(doc, doc->body, f, NULL) == OS64_HTML_OK && !q->form_owner && d->records == 0,
           "the form leaving the contents parts them");
     check(links_ok(d, doc->document, 0) + links_ok(d, outer, 0) == d->records, "records after the template cases");
+    os64_html_release(doc, x);
     os64_html_document_free(doc);
 
     // An ordinary nested control: the record is the ancestor, and a move
@@ -2033,6 +2039,7 @@ static void t_form_input_count(void)
     const char *fragment="<input form=f><input><div>fragment</div>";
     check(os64_html_parse_fragment(doc,host,fragment,strlen(fragment),false,&why)&&
           os64_html_form_input_count(doc)==6,"form count: published fragment count");
+    os64_html_release(doc,copy);
     os64_html_document_free(doc);
     check(live==0,"form count: fixture teardown");
 
@@ -2130,7 +2137,7 @@ static void t_reclaim_fatal(void)
     os64_html_document_t *doc = parse("<body><div>");
     os64_html_document_t *other = parse("<body>");
     HNode *node = doc->body->first_child;
-    for (unsigned mode = 0; mode < 5; mode++) {
+    for (unsigned mode = 0; mode < 8; mode++) {
         death_code = 0; death_said[0] = 0; expecting_death = true;
         if (!setjmp(death_landing)) {
             if (mode == 0) os64_html_release(doc, node);
@@ -2138,11 +2145,17 @@ static void t_reclaim_fatal(void)
             if (mode == 2) os64_html_release(NULL, node);
             if (mode == 3) os64_html_hold(doc, NULL);
             if (mode == 4) { h_meta(node)->holds = UINT32_MAX; os64_html_hold(doc, node); }
+            if (mode == 5) { os64_html_hold(doc, node); os64_html_document_free(doc); }
+            if (mode == 6) { os64_html_hold(doc, node); os64_html_remove(doc, node); os64_html_document_free(doc); }
+            if (mode == 7) { ((HDoc *)doc)->held = SIZE_MAX; os64_html_hold(doc, node); }
             check(false, "fatal lifetime mode %u returned", mode);
         } else check(death_code == OS64_HTML_FATAL_EXIT && strstr(death_said, "html"),
                      "fatal lifetime mode %u names HTML and exits", mode);
         expecting_death = false;
-        h_meta(node)->holds = 0;
+        if (mode == 5 || mode == 6) os64_html_release(doc, node);
+        else h_meta(node)->holds = 0;
+        if (mode == 6) node = os64_html_create_element(doc, OS64_HTML_NS_HTML, "div", NULL);
+        if (mode == 7) ((HDoc *)doc)->held = 0;
     }
     os64_html_document_free(other); os64_html_document_free(doc);
     check(live == 0, "fatal lifetime cases teardown");
@@ -2259,6 +2272,114 @@ static void t_reclaim_order(void)
     os64_html_document_free(doc);
     check(live == 0, "release order teardown");
 }
+/* Compare parser slot multiplicities with node counts independently of the
+ * library's reference helpers, including duplicate stack/formatting entries. */
+static void parser_refs_match(os64_html_parser_t *p)
+{
+    for (HNode *n = p->d->live_nodes; n; n = h_meta(n)->live_next) {
+        size_t refs = (n == &p->d->root) + (n == &p->d->html);
+        refs += (n == p->head) + (n == p->script);
+        refs += !p->form_borrowed && n == p->form;
+        for (size_t i = 0; i < p->stack.n; i++) refs += p->stack.v[i] == n;
+        for (size_t i = 0; i < p->formatting.n; i++) refs += p->formatting.v[i] == n;
+        check(refs == h_meta(n)->parser_refs, "parser reference multiplicity %s: %zu/%u",
+              n->name ? n->name : "#text", refs, h_meta(n)->parser_refs);
+    }
+}
+static void t_reclaim_parser_slots(void)
+{
+    const char *cases[] = {
+        "<body><b><i>x</b>y<script>one</script></i><script>two</script>",
+        "<body><table><b><tr><td><i>x</b><script>one</script></table><script>two</script>",
+        "<body><template><form><b>x</form><script>one</script></template><script>two</script>",
+        "<body><form><div></form><p><b><p>y<script>one</script></b><script>two</script>",
+    };
+    for (size_t i = 0; i < H_ARRAY(cases); i++) {
+        os64_html_options_t opt = os64_html_options_default(); opt.charset = "utf-8"; opt.scripting = true;
+        os64_html_parser_t *p = os64_html_parser_new(&opt);
+        char input[1536]; memset(input, ' ', 1024); strcpy(input + 1024, cases[i]);
+        int64_t status = os64_html_parser_feed(p, input, strlen(input));
+        unsigned stops = 0;
+        while (status == OS64_HTML_SCRIPT) {
+            parser_refs_match(p); stops++;
+            HNode *script = os64_html_parser_script(p);
+            check(!os64_html_remove(&p->d->pub, script) && !script->parent &&
+                  h_meta(script)->parser_refs && script->first_child && script->first_child->text,
+                  "script field holds removed script after it left the open stack");
+            parser_refs_match(p);
+            status = os64_html_parser_resume(p);
+        }
+        check(!status && stops, "parser slots fixture %zu resumes", i);
+        parser_refs_match(p);
+        os64_html_document_t *doc = os64_html_parser_finish(p);
+        for (HNode *n = ((HDoc *)doc)->live_nodes; n; n = h_meta(n)->live_next)
+            check(!h_meta(n)->parser_refs, "finish balances parser slots");
+        check(!((HDoc *)doc)->pending_units, "finish collects removed scripts");
+        os64_html_document_free(doc);
+        check(!live, "parser slots fixture %zu teardown", i);
+    }
+}
+#ifdef HTML_RECLAIM_TEST
+static double reclaim_time(void)
+{
+    struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t);
+    return t.tv_sec + t.tv_nsec / 1e9;
+}
+static size_t reclaim_cost(unsigned count, bool stopped)
+{
+    const char *unit = "<div><span>x</span></div>";
+    size_t len = strlen(unit), size = 6 + count * len;
+    char *markup = malloc(size + 32);
+    memcpy(markup, "<body>", 6);
+    for (unsigned i = 0; i < count; i++) memcpy(markup + 6 + i * len, unit, len);
+    strcpy(markup + size, stopped ? "<script>stop</script>" : "");
+    os64_html_options_t opt = os64_html_options_default(); opt.charset = "utf-8"; opt.scripting = stopped;
+    os64_html_parser_t *parser = stopped ? os64_html_parser_new(&opt) : NULL;
+    if (stopped) check(os64_html_parser_feed(parser, markup, strlen(markup)) == OS64_HTML_SCRIPT,
+                       "cost probe stopped parser");
+    os64_html_document_t *doc = stopped ? os64_html_parser_document(parser) : parse_with(markup, &opt);
+    HNode **held = calloc(count, sizeof(*held));
+    HNode *n = doc->body->first_child;
+    double start = reclaim_time();
+    for (unsigned i = 0; i < count; i++) {
+        HNode *next = n->next; held[i] = n->first_child;
+        os64_html_hold(doc, held[i]);
+        check(!os64_html_remove(doc, n), "cost probe detach %u", i);
+        check(h_meta(n)->unit_holds == 1, "detachment sums the named unit's holders");
+        n = next;
+    }
+    double detach_time = reclaim_time() - start;
+    check(((HDoc *)doc)->pending_units == count && !((HDoc *)doc)->pending_nodes &&
+          !((HDoc *)doc)->waiting_nodes, "held units require no collection queue scan");
+    h_reclaim_visits = 0;
+    start = reclaim_time();
+    for (unsigned i = 0; i < 10000; i++) {
+        HNode *fresh = os64_html_create_element(doc, OS64_HTML_NS_HTML, "p", NULL);
+        check(fresh && !os64_html_insert(doc, doc->body, fresh, NULL) && !os64_html_remove(doc, fresh),
+              "cost probe unrelated edit");
+    }
+    double edit_time = reclaim_time() - start;
+    size_t visits = h_reclaim_visits;
+    start = reclaim_time();
+    for (unsigned i = 0; i < count; i++) os64_html_release(doc, held[i]);
+    double release_time = reclaim_time() - start;
+    check(!((HDoc *)doc)->held && !((HDoc *)doc)->pending_units, "cost probe releases every unit");
+    printf("D6 cost stopped=%u held=%u detach=%.3fms edit=%.3fus release=%.3fms visits=%zu\n",
+           stopped, count, detach_time * 1000, edit_time * 1e6 / 10000, release_time * 1000, visits);
+    if (stopped) { parser_refs_match(parser); doc = os64_html_parser_finish(parser); }
+    check(doc->node_count == reclaim_tree_nodes(doc->document), "cost probe exact reachable nodes");
+    os64_html_document_free(doc); free(held); free(markup);
+    check(!live, "cost probe teardown");
+    return visits;
+}
+static void t_reclaim_cost(void)
+{
+    for (unsigned stopped = 0; stopped < 2; stopped++) {
+        size_t small = reclaim_cost(2000, stopped), large = reclaim_cost(10000, stopped);
+        check(small == large && large < 100000, "unrelated edit work independent of held unit/page count");
+    }
+}
+#endif
 static void t_reclaim_empty(void)
 {
     os64_html_document_t *doc = parse("<body>");
@@ -2381,6 +2502,13 @@ static void t_reclaim_rules(void)
 }
 int main(int argc, char **argv)
 {
+#ifdef HTML_RECLAIM_TEST
+    if (argc == 2 && !strcmp(argv[1], "--reclaim-cost")) {
+        t_reclaim_cost();
+        printf("html reclamation cost: %zu checks, %zu failed\n", checks_run, checks_failed);
+        return checks_failed ? 1 : 0;
+    }
+#endif
     if (argc == 2 && strcmp(argv[1], "--form-input-count") == 0) {
         t_form_input_count();
         printf("html form-input count: %zu checks, %zu failed\n", checks_run, checks_failed);
@@ -2390,6 +2518,10 @@ int main(int argc, char **argv)
         t_reclaim_fatal();
         t_reclaim_parser();
         t_reclaim_parser_nonstack_refs();
+        t_reclaim_parser_slots();
+#ifdef HTML_RECLAIM_TEST
+        t_reclaim_cost();
+#endif
         t_reclaim_order();
         t_reclaim_empty();
         t_reclaim_allocations();

@@ -1,8 +1,7 @@
 # DOM.md — one tree, and a script that may change it
 
 *Written 2026-10-01 by Fable. This is packet D0 of
-[JAVASCRIPT_TASKS.md](JAVASCRIPT_TASKS.md): the design J3 waits on. D1, D2a, D2b, D3 and D5a are merged (§ Slices); D5b is implemented
-and awaiting review. D6 is implemented, stacked on D5b and awaiting review.
+[JAVASCRIPT_TASKS.md](JAVASCRIPT_TASKS.md): the design J3 waits on. D1, D2a, D2b, D3, D5a and D5b are merged (§ Slices). D6 is implemented and awaiting re-review.
 D4 and D7 remain proposals. Read
 against the tree at `b55c3770`, the vendored QuickJS 2026-06-04 source
 (`userland/libjs/upstream/`) and the R0 runtime contract
@@ -714,8 +713,8 @@ builder decides, and the proof in this house's shape.
 | D2b | **Merged (#212, `dca2fe46`).** Fragment parsing and serialisation | All 192 fragment fixtures, contextual serialisation, transactional allocation/work cuts and bounded-buffer proof; § D2b, as built |
 | D3 | **Merged (#211, `3f5fa28a`).** `os64_page_rebuild`, pinned models, the `STALE` gate, shared node state and script property APIs | `tools/test_libpage_rebuild.inc`: detach/reinsert, never-inserted state, value modes, option identity, current-type sanitization, person/script origin, pins, transactional allocation sweeps and independent random walks; § D3, as built |
 | D4 | The stream: yonder parses on its own thread. No script | yonder's and libway's harnesses unchanged in result; the guest walk that proved Y3, its server log identical; the window live through a stalled body |
-| D5 | **D5a merged (#214, `72b2e710`); D5b implemented, awaiting review.** The binding library and J3's fixture | § D5a, as built records library host/guest proof. § D5b, as built records J3 fixture proof: a script changes text and the page redraws; a held reference and a typed-in field survive an unrelated change; a navigation with a script queued tears down clean; the leak count is zero |
-| D6 | **Implemented; awaiting Fable review, stacked on D5b.** Reclaiming unheld detached subtrees | 216,000 packed-fragment refresh cycles stay flat under 64 MiB; § D6, as built |
+| D5 | **D5a merged (#214, `72b2e710`); D5b merged (#216, `7acce890`).** The binding library and J3's fixture | § D5a, as built records library host/guest proof. § D5b, as built records J3 fixture proof: a script changes text and the page redraws; a held reference and a typed-in field survive an unrelated change; a navigation with a script queued tears down clean; the leak count is zero |
+| D6 | **Implemented; awaiting Fable re-review in PR #217 against userland.** Reclaiming unheld detached subtrees | 216,000 packed-fragment refresh cycles stay flat under 64 MiB; § D6, as built |
 | D7 | The loop: tasks, checkpoints, timers, events and their attributes, script order | J4's evidence, per contract |
 | later | `document.write`; geometry; the libjs reclaim slice | each with its own |
 
@@ -1429,7 +1428,7 @@ are Fable's slices.
 
 ### D5b, as built
 
-**Implemented 2026-10-03; awaiting Fable review.** Yonder links libdom/libjs
+**Merged in PR #216 (`7acce890`), 2026-10-04.** Yonder links libdom/libjs
 and runs a bounded finished-document fixture. The loader finishes HTML on a
 worker with the chosen scripting policy, resuming parser script stops without
 executing them. The window thread queues connected HTML inline classic scripts
@@ -1576,9 +1575,9 @@ No P5 scripting or ordinary-site compatibility evidence is claimed.
 and reporting/reclaiming runtime teardown remain separate reviewed work before
 recommending this switch for ordinary browsing. D4 and D7 remain Fable's slices.
 
-## D6, as built
+### D6, as built
 
-**Implemented; awaiting Fable review, stacked on D5b.** This slice reclaims
+**Implemented; awaiting Fable re-review in PR #217 against userland.** This slice reclaims
 removed subtrees that no native holder retains. It does not change the
 default-off JavaScript policy or implement the weak wrapper/collector answer.
 `html.h` specifies the lifetime contract; the following records its choices
@@ -1590,10 +1589,16 @@ node and count overflow end the program with the HTML badge (`0x48544D4C`);
 NULL is invalid. A hold on any descendant, including a template's contents
 fragment, protects the complete detached unit. A pin protects snapshot bytes
 under the retirement-version rule, separately from holds. The caller keeps
-the document alive; document teardown releases remaining allocations and
-still refuses live pins.
+the document alive; document teardown refuses outstanding public holds as
+well as live pins, then releases the remaining allocations.
 
-Remove, replace and successful fragment insertion queue detached roots.
+Remove, replace and successful fragment insertion identify detached roots.
+Each unit sums its native and parser references once at detachment. Holds,
+releases and parser slot changes adjust that root tally. Link/unlink updates
+tallies when retained units join or split, including template-host edges.
+Held units require no polling; ready units and units awaiting older pins use
+separate intrusive queues. Reinsertion cancels a queue entry in constant time.
+Verbs and releases collect ready units; unpin revisits the pin-wait queue.
 An unheld unit retires at the mutation's version; pins below that stamp delay
 physical reclamation. A unit held at detachment retires when its holders
 leave, at current version plus one without changing the visible tree version.
@@ -1604,9 +1609,10 @@ consumes the unheld container even when the visible tree/version does not
 change; a hold preserves that container's identity.
 
 **Storage and parser boundaries.** Public node bodies remain 120 bytes.
-Their trailing metadata grows from 8 to 56 bytes (48 more per allocated
-node), holding the count, storage/retirement flags, stamp and intrusive list
-links. `HDoc` grows from 992 to 1,120 bytes. Permanent-chunk node bodies are
+Their trailing metadata grows from 8 to 72 bytes (64 more per allocated
+node), holding native/parser counts, a detached-unit tally, flags, stamp and
+intrusive list links. `HDoc` grows from 992 to 1,176 bytes, including the
+document-wide public hold count that makes teardown reject leaked holds. Permanent-chunk node bodies are
 zeroed and recycled through a free list; their original chunk strings stay
 charged. Packed fragment node/name/original-attribute blocks, ledger text
 and later private attributes are freed once. Inline and private attribute
@@ -1616,11 +1622,13 @@ collection updates `node_count`; arena accounting includes retained chunk
 capacity and allocation headers.
 
 The active parser's stack, formatting entries, head/form/script references
-and embedded landmarks protect their units between public calls. Collection
-refreshes those marks only when candidates exist; parser token algorithms
-do not collect transient nodes. Finish/abandon drops parser protection at a
-stable transfer boundary. Finished-document churn does not scan all live
-nodes to clear absent parser marks. Lifetime walks do not consume `max_work`:
+and embedded landmarks protect their units between public calls. Stack and
+formatting push/pop/replacement, and head/form/script assignments, balance
+per-node parser reference counts and affected detached-unit tallies. Borrowed
+fragment-context form sentinels acquire no owned reference. Collection does
+not scan the live-node list to refresh parser protection. Parser token
+algorithms do not collect transient nodes; finish/abandon drops their counted
+references before collection at the stable transfer boundary. Lifetime walks do not consume `max_work`:
 release/unpin must finish without an allocation or a quota refusal, and the
 arena bounds their finite traversal. Native mutation validation retains its
 existing charged-work/refusal rules.
@@ -1640,16 +1648,17 @@ when a previous presentation's model/pin leaves.
 
 **Measured proof.** `tools/test_html_reclaim_host.sh` runs 216,000
 100-node packed-fragment refresh cycles under 64 MiB: one initial insertion
-and 215,999 replacements. Every thousand-cycle sample stays at **32,527 arena
+and 215,999 replacements. Every thousand-cycle sample stays at **34,183 arena
 bytes / 104 nodes** from the first sample through the last. Held and older-pin
-controls refuse with named arena exhaustion after 2,459 and 2,439 cycles;
+controls refuse with named arena exhaustion after 2,323 and 2,304 cycles;
 releasing those borrowers restores the same baseline. This is an hour of
 60-per-second operations, executed faster on the host, rather than a
 wall-clock hour of browser painting.
 
 The independent DOM oracle passes **540,023 checks**, including 88,000 random
 steps with counted holds, pins, refusal sweeps and exact live-node counts.
-Focused lifetime rules pass **2,098 checks**; **16 native reclamation mutants**
+Focused lifetime rules pass **90,424 checks**; the complete churn suite passes
+**311,493 / 0**. **18 native reclamation mutants**
 compile and are caught, including parser head/form references, free-list
 reuse, form counts and inline/private payloads. The binding suite passes
 **4,253 checks** with 551 binding allocation cuts, and all **seven binding
@@ -1658,11 +1667,11 @@ empty-content loops each run 1,000 replacements with flat accounting; empty
 content preserves the tree version. Model/state, detached queued-script and
 box-scroll ownership have separate consumer regressions.
 
-The existing HTML host suite passes all **10,525 reference cases**, 384
+The initial implementation at `9f5cce26` passed all **10,525 reference cases**, 384
 fragment/chunk cases with 5,270 allocation refusals and 21,504 work cuts,
 20,000 stopped-parser random walks, all six corpus pages and 133,632 fuzz
 mutations across four chunkings. ASan, UBSan and LSan remain enabled.
-Full consumers pass: libpage **254,069 / 0** (397 allocation cuts), focused
+Its full consumers passed: libpage **254,069 / 0** (397 allocation cuts), focused
 D3/D6 **68,342 / 0**, libway **231 / 0** (31 cuts), loader **27 / 0**,
 wend **177,854 / 0**, libflow **18,585 / 0** with twelve matching dumps,
 Yonder painting **115 / 0** with six matching images and scripted-page host
@@ -1670,12 +1679,13 @@ Yonder painting **115 / 0** with six matching images and scripted-page host
 the separate contextual-fragment harness passes **326 / 0**. The aborted
 state-reservation regression uses no model/pin, proves planning ran before
 refusal, then requires native removal to reclaim the affected nodes before
-state/document teardown can hide a hold leak. A refused widget rebuild keeps
+state teardown could mask that unit's premature retention; document teardown
+also rejects any public hold left outstanding. A refused widget rebuild keeps
 an old detached button; after all model/layout pins and state leave, its
 widget alone retains the node. Destroying the widget reclaims that button
 and its text before document teardown.
 
-The strict full userland build passes. A private copied-disk QEMU guest
+The initial strict full userland build passed. A private copied-disk QEMU guest
 byte-compares its 21 installed library/app/test/fixture files with the build.
 `htmltest` passes 2,000 replacements under 64 KiB with flat accounting,
 counted holds, a late pin and final heap verification. `pagetest` passes;
@@ -1685,6 +1695,27 @@ redraw and reports **heap problems=0** on scripted-page retirement. The
 owned guest is stopped. This adds no P5 evidence or ordinary-site scripting
 compatibility claim.
 
+Review rework also passes the strict userland build, the independent DOM
+oracle **540,023 / 0**, model/state **254,071 / 0**, binding **4,253 / 0**,
+and scripted-page host **2,070 / 0**. The HTML host suite again passes all
+10,525 reference cases, fragment/refusal/work cuts, 20,000 stopped-parser
+random walks, six corpus pages and **129,792 fuzz mutations across four
+chunkings**, with ASan, UBSan and LSan enabled. A new private copied-disk
+QEMU run byte-compares 21 installed files, passes `htmltest` (2,000
+replacements, 6,920 arena bytes / 9 live nodes), `pagetest` and all four
+`domtest` lifetimes; Yonder preserves typed Q across scripted redraw and
+reports **heap problems=0** at retirement. Its owned guest is stopped. Teardown misuse cases cover attached
+and detached held nodes, underflow and both node/document counter overflow.
+Parser slot multiplicities are checked independently across reconstruction,
+adoption, templates, forms and multiple script stops. The cost probe in
+`test_html_dom_host.sh --reclaim-cost` checks 10,000 unrelated create/insert/
+remove edits with 2,000 and 10,000 held three-node units, on finished and
+stopped-parser documents. Both sizes take **70,000 instrumented lifetime
+visits**; the test rejects a deliberately restored whole-live-node scan.
+Unsanitized `-O2` runs on one pinned host CPU measure **0.197–0.218 µs per
+edit**, **0.085–0.643 ms** to detach the held units, and **0.174–0.890 ms**
+to release them. These timings describe this host probe, not browser painting.
+
 Seven warmed, alternating unsanitized `-O2` parses of the saved 797,390-byte
 Wikipedia page, on one pinned host CPU, compare D5b parent `50f1ceaa` with D6.
 Timing spans parser construction through finish, excluding file reads and
@@ -1692,18 +1723,18 @@ document teardown.
 
 | Measurement | D5b parent | D6 |
 |---|---:|---:|
-| Median elapsed | 22.152 ms | 22.795 ms (+2.90%) |
-| Peak arena bytes | 4,377,408 | 5,164,112 (+17.97%) |
-| Live arena bytes | 4,371,168 | 5,157,872 |
+| Median elapsed | 21.614 ms | 22.783 ms (+5.41%) |
+| Peak arena bytes | 4,377,408 | 5,426,360 (+23.96%) |
+| Live arena bytes | 4,371,168 | 5,420,120 |
 | Nodes | 15,470 | 15,470 |
 | Charged work | 1,210,567 | 1,210,567 |
 
 The added lifetime metadata costs storage even with scripting off; these
 host measurements establish neither guest speed nor a universal page-size
 promise. The six sanitized corpus runs retain their trees and node counts;
-work follows the existing parser rules. Their current peaks are 8,560
-(example), 290,128 (Floodgap), 564,320 (Hacker News), 1,217,408
-(textfiles computers), 591,568 (68k.news) and 5,164,192 (Wikipedia). The
+work follows the existing parser rules. Their current peaks are 8,616
+(example), 290,184 (Floodgap), 564,376 (Hacker News), 1,479,656
+(textfiles computers), 591,624 (68k.news) and 5,426,440 (Wikipedia). The
 corpus driver supplies a charset label, accounting for its 80-byte difference
 from the default-options timing probe.
 

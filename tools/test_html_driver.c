@@ -844,8 +844,8 @@ static void form_owners(void)
     HNode *form = node_with_id(p->d->pub.document, "f");
     check(form != NULL, "detached form fixture created");
     if (form) {
-        h_detach(form);
-        p->form = form;
+        h_detach(p->d, form);
+        h_ref_set(p, &p->form, form);
         const char *input = "<input id=q>";
         os64_html_parser_feed(p, input, strlen(input));
     }
@@ -1287,6 +1287,8 @@ static struct {
 static os64_html_document_t *known_doc;
 static void known_reset(void)
 {
+    if (known_doc)
+        for (size_t i = 0; i < known.n; i++) os64_html_release(known_doc, known.list[i]);
     free(known.list);
     free(known.slots);
     memset(&known, 0, sizeof(known));
@@ -1525,8 +1527,8 @@ static HNode *by_id(os64_html_document_t *doc, const char *id)
 }
 static void disturbed_free(os64_html_document_t *doc)
 {
-    os64_html_document_free(doc);
     known_reset();
+    os64_html_document_free(doc);
     if (live)
         safety_fail("a disturbed parse leaked");
 }

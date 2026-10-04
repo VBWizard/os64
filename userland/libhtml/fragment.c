@@ -177,7 +177,7 @@ static HNode *copy_result(os64_html_parser_t *p, const HNode *root, size_t maxim
                 to->template_contents = copy;
                 *h_word(copy) = (size_t)to;
             } else
-                h_attach(to, NULL, copy);
+                h_attach(p->d, to, NULL, copy);
         }
     }
     for (size_t i = 1; i < count && !p->d->pub.refusal; i++) {
@@ -256,7 +256,9 @@ HNode *h_parse_fragment(os64_html_document_t *doc, const HNode *context,
     d_node_register(temp, &temp->root, H_NODE_EMBEDDED);
     d_node_register(temp, &temp->html, H_NODE_EMBEDDED);
     temp->parser = p;
-    h_attach(&temp->root, NULL, &temp->html);
+    d_ref(temp, &temp->root, true, true);
+    d_ref(temp, &temp->html, true, true);
+    h_attach(temp, &temp->root, NULL, &temp->html);
     if (!h_work(p, 1))
         goto parsed;
     if (!owner->max_depth) {
@@ -270,6 +272,7 @@ HNode *h_parse_fragment(os64_html_document_t *doc, const HNode *context,
             goto parsed;
         if (html_named(n, "form")) {
             p->form = (HNode *)n; /* read-only sentinel; never on the open stack */
+            p->form_borrowed = true;
             break;
         }
     }

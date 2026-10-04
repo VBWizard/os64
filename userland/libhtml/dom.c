@@ -164,54 +164,143 @@ static HNode *lifetime_next(HNode *root, HNode *n)
     }
     return NULL;
 }
-static bool subtree_held(HNode *root)
+/* Held units need no polling. Only ready units and units awaiting pins
+ * are linked; both queues permit constant-time cancellation on reinsertion. */
+#ifdef HTML_RECLAIM_TEST
+size_t h_reclaim_visits;
+#define RECLAIM_VISIT() (h_reclaim_visits++)
+#else
+#define RECLAIM_VISIT() ((void)0)
+#endif
+static void unqueue(HDoc *d, HNode *n)
 {
-    for (HNode *n = root; n; n = lifetime_next(root, n))
-        if (h_meta(n)->holds || (h_meta(n)->flags & H_NODE_PARSER))
-            return true;
-    return false;
+    HMeta *m = h_meta(n);
+    if (!(m->flags & H_NODE_QUEUED))
+        return;
+    HNode **head = (m->flags & H_NODE_WAIT) ? &d->waiting_nodes : &d->pending_nodes;
+    if (m->pending_prev)
+        h_meta(m->pending_prev)->pending_next = m->pending_next;
+    else
+        *head = m->pending_next;
+    if (m->pending_next)
+        h_meta(m->pending_next)->pending_prev = m->pending_prev;
+    m->pending_next = m->pending_prev = NULL;
+    m->flags &= ~(H_NODE_QUEUED | H_NODE_WAIT);
+}
+static void queue(HDoc *d, HNode *n, bool wait)
+{
+    HMeta *m = h_meta(n);
+    unqueue(d, n);
+    HNode **head = wait ? &d->waiting_nodes : &d->pending_nodes;
+    m->pending_next = *head;
+    if (*head)
+        h_meta(*head)->pending_prev = n;
+    *head = n;
+    m->flags |= H_NODE_QUEUED | (wait ? H_NODE_WAIT : 0);
+}
+static void unit_changed(HDoc *d, HNode *root)
+{
+    HMeta *m = h_meta(root);
+    if (!(m->flags & H_NODE_PENDING))
+        return;
+    if (m->unit_holds) {
+        unqueue(d, root);
+        m->flags &= ~(H_NODE_FRESH | H_NODE_RETIRED);
+    } else if (!(m->flags & H_NODE_QUEUED))
+        queue(d, root, false);
+}
+static HNode *unit_root(const HNode *n)
+{
+    while (above(n)) {
+        RECLAIM_VISIT();
+        n = above(n);
+    }
+    return (HNode *)n;
+}
+static size_t subtree_holds(HNode *root)
+{
+    if (h_meta(root)->flags & H_NODE_PENDING)
+        return h_meta(root)->unit_holds;
+    size_t count = 0;
+    for (HNode *n = root; n; n = lifetime_next(root, n)) {
+        RECLAIM_VISIT();
+        size_t holds = (size_t)h_meta(n)->holds + h_meta(n)->parser_refs;
+        if (holds > SIZE_MAX - count)
+            d_fatal("libhtml: unit hold count overflow\n");
+        count += holds;
+    }
+    return count;
+}
+void d_ref(HDoc *d, const HNode *n, bool parser, bool add)
+{
+    HMeta *m = h_meta(n);
+    uint32_t count = parser ? m->parser_refs : m->holds;
+    if (add ? count == (parser ? UINT16_MAX : UINT32_MAX) : !count)
+        d_fatal("libhtml: node reference count overflow or underflow\n");
+    HNode *root = d->pending_units ? unit_root(n) : NULL;
+    HMeta *unit = root ? h_meta(root) : NULL;
+    if (unit && (unit->flags & H_NODE_PENDING)) {
+        if (add ? unit->unit_holds == SIZE_MAX : !unit->unit_holds)
+            d_fatal("libhtml: unit reference count overflow or underflow\n");
+        if (add) unit->unit_holds++; else unit->unit_holds--;
+        unit_changed(d, root);
+    }
+    if (parser) {
+        if (add) m->parser_refs++; else m->parser_refs--;
+    } else {
+        if (add) m->holds++; else m->holds--;
+    }
 }
 void d_detached(HDoc *d, HNode *n)
 {
-    if (above(n))
+    if (!n || above(n))
         return;
     HMeta *m = h_meta(n);
+    if (!(m->flags & H_NODE_PENDING)) {
+        m->unit_holds = subtree_holds(n);
+        m->flags |= H_NODE_PENDING;
+        d->pending_units++;
+    }
     m->stamp = d->version;
     m->flags = (m->flags & ~H_NODE_RETIRED) | H_NODE_FRESH;
-    if (!(m->flags & H_NODE_PENDING)) {
-        m->flags |= H_NODE_PENDING;
-        m->pending_next = d->pending_nodes;
-        d->pending_nodes = n;
+    unit_changed(d, n);
+}
+/* Link accounting happens before pointer changes. A verb may split or join
+ * retained units, including across a template's host edge; collection waits
+ * until its links and form-owner records have reached a stable boundary. */
+void d_unlinking(HDoc *d, HNode *n)
+{
+    if (!d->pending_units || !n->parent)
+        return;
+    HNode *root = unit_root(n);
+    HMeta *m = h_meta(root);
+    if (m->flags & H_NODE_PENDING) {
+        size_t count = subtree_holds(n);
+        if (count > m->unit_holds)
+            d_fatal("libhtml: unlink unit hold count underflow\n");
+        m->unit_holds -= count;
+        unit_changed(d, root);
     }
 }
-static void parser_mark(HDoc *d, HNode *n)
+void d_linking(HDoc *d, HNode *parent, HNode *n)
 {
-    if (n && n->document_id == d->id)
-        h_meta(n)->flags |= H_NODE_PARSER;
-}
-/* Public mutations, release and unpin run between parser calls. Internal
- * token algorithms do not collect: their temporary pointers and partially
- * repaired links remain valid until the next stable public boundary. */
-static void parser_holds(HDoc *d)
-{
-    os64_html_parser_t *p = d->parser;
-    if (!p && !d->parser_marked)
+    if (!d->pending_units)
         return;
-    if (d->parser_marked)
-        for (HNode *n = d->live_nodes; n; n = h_meta(n)->live_next)
-            h_meta(n)->flags &= ~H_NODE_PARSER;
-    d->parser_marked = p != NULL;
-    if (!p)
-        return;
-    parser_mark(d, &d->root);
-    parser_mark(d, &d->html);
-    for (size_t i = 0; i < p->stack.n; i++)
-        parser_mark(d, p->stack.v[i]);
-    for (size_t i = 0; i < p->formatting.n; i++)
-        parser_mark(d, p->formatting.v[i]);
-    parser_mark(d, p->form);
-    parser_mark(d, p->head);
-    parser_mark(d, p->script);
+    HNode *root = unit_root(parent);
+    HMeta *unit = h_meta(root), *m = h_meta(n);
+    if (unit->flags & H_NODE_PENDING) {
+        size_t count = subtree_holds(n);
+        if (count > SIZE_MAX - unit->unit_holds)
+            d_fatal("libhtml: link unit hold count overflow\n");
+        unit->unit_holds += count;
+        unit_changed(d, root);
+    }
+    if (m->flags & H_NODE_PENDING) {
+        unqueue(d, n);
+        m->flags &= ~(H_NODE_PENDING | H_NODE_FRESH | H_NODE_RETIRED);
+        m->unit_holds = 0;
+        d->pending_units--;
+    }
 }
 static bool older_pin(const HDoc *d, uint64_t stamp)
 {
@@ -294,7 +383,7 @@ static void subtree_free(HDoc *d, HNode *root)
         if (host(n))
             up->template_contents = NULL;
         else
-            h_detach(n);
+            h_detach(d, n);
         node_free(d, n);
         if (done)
             break;
@@ -303,35 +392,16 @@ static void subtree_free(HDoc *d, HNode *root)
 }
 void d_collect(HDoc *d)
 {
-    if (!d->pending_nodes)
-        return;
-    parser_holds(d);
-    /* Cancel reinserted roots before freeing any unit: a candidate moved
-     * beneath another candidate must not survive on this intrusive list. */
-    HNode **slot = &d->pending_nodes;
-    while (*slot) {
-        HNode *n = *slot;
+    while (d->pending_nodes) {
+        RECLAIM_VISIT();
+        HNode *n = d->pending_nodes;
         HMeta *m = h_meta(n);
-        if (above(n)) {
-            *slot = m->pending_next;
-            m->pending_next = NULL;
-            m->flags &= ~(H_NODE_PENDING | H_NODE_FRESH | H_NODE_RETIRED);
-        } else
-            slot = &m->pending_next;
-    }
-    slot = &d->pending_nodes;
-    while (*slot) {
-        HNode *n = *slot;
-        HMeta *m = h_meta(n);
-        if (subtree_held(n)) {
-            m->flags &= ~(H_NODE_FRESH | H_NODE_RETIRED);
-            slot = &m->pending_next;
-            continue;
-        }
+        unqueue(d, n);
+        if (above(n) || m->unit_holds)
+            d_fatal("libhtml: invalid ready unit\n");
         if (!(m->flags & H_NODE_RETIRED)) {
-            /* A held candidate is retired when its holders leave. Pins
-             * acquired while held may have borrowed its current bytes; the
-             * next-version stamp protects them without changing content. */
+            /* Pins acquired while held may borrow this unit's current bytes.
+             * Protect them without changing the visible content version. */
             if (!(m->flags & H_NODE_FRESH)) {
                 if (d->version == UINT64_MAX)
                     d_fatal("libhtml: subtree retirement version overflow\n");
@@ -339,21 +409,30 @@ void d_collect(HDoc *d)
             }
             m->flags = (m->flags & ~H_NODE_FRESH) | H_NODE_RETIRED;
         }
-        if (!older_pin(d, m->stamp)) {
-            *slot = m->pending_next;
+        if (older_pin(d, m->stamp))
+            queue(d, n, true);
+        else {
             m->flags &= ~(H_NODE_PENDING | H_NODE_FRESH | H_NODE_RETIRED);
+            d->pending_units--;
             subtree_free(d, n);
-        } else
-            slot = &m->pending_next;
+        }
     }
+}
+void d_unpin_collect(HDoc *d)
+{
+    for (HNode *n = d->waiting_nodes, *next; n; n = next) {
+        next = h_meta(n)->pending_next;
+        if (!older_pin(d, h_meta(n)->stamp))
+            queue(d, n, false);
+    }
+    d_collect(d);
 }
 size_t d_pending_bytes(const HDoc *d)
 {
     size_t bytes = 0;
-    for (HNode *root = d->pending_nodes; root; root = h_meta(root)->pending_next)
-        if (!above(root) && (h_meta(root)->flags & H_NODE_RETIRED) && !subtree_held(root))
-            for (HNode *n = root; n; n = lifetime_next(root, n))
-                bytes += d_owned_bytes(n);
+    for (HNode *root = d->waiting_nodes; root; root = h_meta(root)->pending_next)
+        for (HNode *n = root; n; n = lifetime_next(root, n))
+            bytes += d_owned_bytes(n);
     return bytes;
 }
 
@@ -526,7 +605,7 @@ static void take_out(HDoc *d, HNode *node, uint64_t *steps)
     if (!node->parent)
         return;
     HNode *left_behind = root_of(node->parent, steps);
-    h_detach(node);
+    h_detach(d, node);
     split_records(d, node, left_behind, steps);
 }
 /* A verb moved a node. A parser still building the document checks each
@@ -543,11 +622,11 @@ static void place(HDoc *d, HNode *parent, HNode *node, HNode *before)
     if (node->kind == FRAGMENT) {
         for (HNode *c; (c = node->first_child) != NULL;) {
             take_out(d, c, NULL);
-            h_attach(parent, before, c);
+            h_attach(d, parent, before, c);
         }
     } else {
         take_out(d, node, NULL);
-        h_attach(parent, before, node);
+        h_attach(d, parent, before, node);
     }
     if (touched)
         landmarks(d, NULL);
@@ -652,7 +731,7 @@ int64_t d_place(HDoc *d, HNode *parent, HNode *node, HNode *before, uint64_t *st
         return verdict;
     bool touched = is_landmark(d, parent, node) ||
                    (node->parent && is_landmark(d, node->parent, node));
-    h_attach(parent, before, node);
+    h_attach(d, parent, before, node);
     if (touched)
         landmarks(d, steps);
     return OS64_HTML_OK;
@@ -705,7 +784,7 @@ void d_seat_html(HDoc *d)
 {
     if (child_of_kind(&d->root, ELEMENT, NULL, NULL))
         return;
-    h_attach(&d->root, NULL, &d->html);
+    h_attach(d, &d->root, NULL, &d->html);
     d->version++;
     if (d->disturbed)
         landmarks(d, NULL);
@@ -1192,7 +1271,7 @@ os64_html_node_t *os64_html_clone(os64_html_document_t *doc, const os64_html_nod
             mirror = mirror->parent ? mirror->parent : host(mirror);
             at = up;
         }
-        h_attach(at == n->parent ? mirror : mirror->template_contents, NULL, made);
+        h_attach(d, at == n->parent ? mirror : mirror->template_contents, NULL, made);
         at = n;
         mirror = made;
     }
