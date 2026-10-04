@@ -70,6 +70,7 @@ void os64_page_state_free(os64_page_state_t *state)
         PNodeState *next = edit->next;
         p_state_dealloc(state, edit->text);
         p_state_dealloc(state, edit->cache);
+        os64_html_release(state->doc, edit->node);
         p_state_dealloc(state, edit);
         edit = next;
     }
@@ -189,6 +190,9 @@ bool p_reserve_node(PReserve *reserve, const os64_html_node_t *node)
         return false;
     os64_memset(edit, 0, sizeof(*edit));
     edit->node = node;
+    // Reservations protect their keys before a native verb can detach them.
+    // Commit transfers this hold to persistent state; abort gives it back.
+    os64_html_hold(state->doc, node);
     edit->on = edit->selected = -1;
     edit->next = reserve->records;
     reserve->records = edit;
@@ -242,6 +246,7 @@ void p_reserve_abort(PReserve *reserve)
     values_discard(reserve, false);
     while (reserve->records != NULL) {
         PNodeState *next = reserve->records->next;
+        os64_html_release(reserve->state->doc, reserve->records->node);
         p_state_dealloc(reserve->state, reserve->records);
         reserve->records = next;
     }
@@ -1811,7 +1816,8 @@ static int64_t tree_change(os64_page_state_t *state, PTreeVerb verb,
                               (os64_html_node_t *)reference);
     if (verb == P_TREE_CHILDREN && parent->first_child == NULL &&
         (node == NULL || (node->kind == OS64_HTML_FRAGMENT && node->first_child == NULL)))
-        return OS64_HTML_OK;
+        return node != NULL ? os64_html_insert(state->doc, (os64_html_node_t *)parent,
+            (os64_html_node_t *)node, NULL) : OS64_HTML_OK;
     PReserve reserve = {.state = state};
     PArena scratch = {.budget = state};
     PAttrStage *stages = NULL;

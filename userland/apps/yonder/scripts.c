@@ -61,8 +61,10 @@ yonder_scripts_t *yonder_scripts_new(os64_html_document_t *doc,
     s->opaque = opaque;
     os64_strcopy(s->url, sizeof(s->url), url);
     for (os64_html_node_t *n = doc->document; n != NULL; n = after(n))
-        if (classic(n))
+        if (classic(n)) {
+            os64_html_hold(doc, n);
             s->nodes[s->count++] = n;
+        }
     return s;
 }
 
@@ -79,6 +81,13 @@ static void retire(yonder_scripts_t *s)
     os64_dom_free(s->dom);
     s->runtime = NULL;
     s->dom = NULL;
+    // Queue identities remain valid even when a preceding script detaches
+    // them. Teardown releases each queue hold after the engine is gone.
+    for (size_t i = 0; i < s->count; i++)
+        if (s->nodes[i] != NULL) {
+            os64_html_release(s->doc, s->nodes[i]);
+            s->nodes[i] = NULL;
+        }
 }
 
 bool yonder_scripts_step(yonder_scripts_t *s, os64_js_outcome_t *out)

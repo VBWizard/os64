@@ -11,4 +11,4 @@ cc -std=c11 -O2 -g -Wall -Wextra -Werror -fsanitize=address,undefined -pthread \
   userland/libhtml/core.c userland/libhtml/encoding.c userland/libhtml/tokenizer.c \
   userland/libhtml/tree.c userland/libhtml/dom.c userland/libhtml/fragment.c userland/libhtml/serialize.c \
   tools/test_html_dom_host.c -o "$work/dom"
-"$work/dom"
+"$work/dom" "$@"

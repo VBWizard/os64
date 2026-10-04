@@ -37,6 +37,8 @@ way_leg_t way_leg(const way_session_t *s)
 
 void way_page_clear(way_page_t *p)
 {
+    for (int32_t i = 0; i < p->nflipped; i++)
+        os64_html_release(p->doc, p->flipped[i]);
     // The model points into the tree, so it goes first.
     os64_page_free(p->model);
     if (p->doc)
@@ -57,6 +59,7 @@ bool way_details_flip(way_page_t *p, const os64_html_node_t *details)
     for (int32_t i = 0; i < p->nflipped; i++)
         if (p->flipped[i] == details) {
             p->flipped[i] = p->flipped[--p->nflipped];   // flipped back
+            os64_html_release(p->doc, details);
             return true;
         }
     if (p->nflipped == p->flippedcap) {
@@ -67,6 +70,7 @@ bool way_details_flip(way_page_t *p, const os64_html_node_t *details)
         p->flipped = grown;
         p->flippedcap = cap;
     }
+    os64_html_hold(p->doc, details);
     p->flipped[p->nflipped++] = details;
     return true;
 }

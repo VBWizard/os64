@@ -68,6 +68,7 @@ const os64_html_node_t *d_node(os64_dom_t *dom, JSContext *ctx, JSValueConst val
 DValue *d_find(os64_dom_t *dom, const os64_html_node_t *node);
 int d_node_install(os64_dom_t *dom, JSContext *ctx);
 int d_collection_install(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype);
+void d_query_free(os64_dom_t *dom, DQuery *query);
 extern JSClassExoticMethods d_collection_exotic;
 JSValue d_collection(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *root,
                      bool descendants, bool elements, const char *name);

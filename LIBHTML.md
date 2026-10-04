@@ -172,9 +172,11 @@ step. The tree holds no NULs, so every string in it is also a C string.
 
 ## What comes out
 
-A document, its nodes carved from **one arena that `document_free` releases
-in one call**. No node is freed alone, no consumer keeps a node past the
-document, and a page's whole cost is one number.
+A document owns arena chunks and individually freeable ledger blocks.
+Removed subtrees without holders can be reclaimed after older pins leave;
+`document_free` releases the remaining storage. Consumers keep the document
+alive and hold node identities they retain across mutations. Arena counters
+include charged capacity and allocation headers.
 
 ```c
 typedef enum { OS64_HTML_DOCUMENT, OS64_HTML_FRAGMENT, OS64_HTML_DOCTYPE,
@@ -207,8 +209,8 @@ typedef struct os64_html_node {
 /* form_owner records the form element pointer when the parser associates an
  * element under HTML section 13.2.6.1. It may point outside the ancestor chain.
  * NULL means no parser association; consumers resolve form= and the nearest
- * ancestor themselves. Tree repair does not recompute this insertion record.
- * The pointer remains valid until document_free, including on partial trees. */
+ * ancestor themselves. Mutation verbs clear records whose endpoints move
+ * into different trees; retained identities follow the hold/pin contract. */
 
 typedef struct os64_html_document {
     os64_html_node_t *document;     // the DOCUMENT node: doctype, comments and <html> are its children
@@ -524,7 +526,8 @@ The original sketch's comment claimed the fixture dump distinguishes absent
 and empty doctype identifiers. The public tree preserves that distinction;
 the upstream tree fixture format normalizes the pair when serializing it.
 The header and document now state the API's actual distinction. Nodes and
-attributes are read-only to consumers and live until `document_free`.
+attributes are read-only to consumers; their current hold/pin lifetime
+contract is in `html.h` and DOM.md § D6, as built.
 `node_count` includes allocated nodes detached by recovery; `arena_bytes`
 includes retained capacity and allocator headers, rather than payload alone.
 `charset` can be NULL if a resource refusal prevents encoding selection.
@@ -538,9 +541,10 @@ the changes go through libhtml. The design is
 [DOM.md](docs/design/pending/DOM.md); `html.h` carries the contract and
 `dom.c` the verbs. What that changes here:
 
-- **Nodes still live until `document_free`.** A removed node is unlinked and
-  kept. A replaced string that a verb wrote is freed once no pinned snapshot
-  can be pointing at it; one the parser wrote stays in its chunk.
+- **Removed nodes follow the hold/pin lifetime contract.** D6 reclaims an
+  unheld detached subtree as a unit after older snapshots leave. A replaced
+  string that a verb wrote is freed once no pinned snapshot can be pointing
+  at it; one the parser wrote stays in its chunk.
 - **`max_depth` bounds the stack of open elements, and a tree can be deeper
   than its stack.** `</form>` takes the form off the stack while what it
   holds stays open, so `<form><div></form>` repeated nests two levels for
@@ -730,3 +734,18 @@ byte-identical to the built library. No kernel or libos64 source changed.
 The detailed contract, proof receipts, measured document cost, compatibility
 boundary and D5/D6 handoff are in
 [DOM.md § D2b, as built](docs/design/pending/DOM.md#d2b-as-built).
+
+### 2026-10-03: detached-subtree reclamation (DOM.md, slice D6)
+
+D6 adds counted node holds, whole-unit retirement under snapshot pins,
+permanent-node reuse and packed-payload reclamation. The public node remains
+120 bytes; trailing metadata adds 48 bytes per allocated node and the
+document header adds 128 bytes. Parser references and retained consumer
+identities protect nodes through public mutation boundaries.
+
+The 216,000-cycle packed-fragment proof stays flat at 32,527 arena bytes and
+104 nodes under 64 MiB. Strong wrappers/state records, never-inserted created
+nodes and permanent chunk strings retain their documented capacity boundary.
+The contract, ownership decisions, complete validation and parser-cost
+comparison are in [DOM.md § D6, as built](docs/design/pending/DOM.md#d6-as-built).
+The implementation is stacked on D5b and awaits Fable's review.

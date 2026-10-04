@@ -14,6 +14,22 @@ typedef struct {
     size_t len, cap;
 } HBuf;
 typedef struct HBlock HBlock;
+/* Node bodies carry uniform lifetime metadata, including embedded nodes and
+ * isolated fragment staging. The first word retains the kind-specific data. */
+typedef struct {
+    size_t word;
+    uint32_t holds, flags;
+    uint64_t stamp;
+    HNode *pending_next, *live_prev, *live_next;
+    size_t ordinal;
+} HMeta;
+#define H_NODE_PACKED 1u
+#define H_NODE_EMBEDDED 2u
+#define H_NODE_PENDING 4u
+#define H_NODE_PARSER 8u
+#define H_NODE_RETIRED 16u /* unheld candidate with its retirement stamp fixed */
+#define H_NODE_FRESH 32u   /* detachment just completed at the mutation version */
+static inline HMeta *h_meta(const HNode *n) { return (HMeta *)(n + 1); }
 /* Snapshots that borrow from the tree, each by the version it was built at. */
 #define H_PINS 16
 typedef struct {
@@ -22,24 +38,24 @@ typedef struct {
     size_t budget;
     unsigned char *permanent;
     size_t permanent_left, permanent_chunk;
-    /* A node is followed by one private word (h_word). The two nodes that
-     * live here and not in a chunk carry theirs beside them. */
+    /* Embedded nodes carry the same trailing metadata as allocated bodies. */
     HNode root;
-    size_t root_word;
+    HMeta root_meta;
     HNode html;
-    size_t html_word;
+    HMeta html_meta;
     /* What each node of this document carries in `document_id`, and no other
-     * document's does (h_document_serial). A node's memory and its strings
-     * go when its document is freed, and its replaced strings are retired on
-     * its document's ledger, so a verb has to tell its own document's nodes
-     * from another's. Never zero, which is what a node nobody stamped
-     * carries. */
+     * document's does (h_document_serial). Nodes and strings are document
+     * owned; unheld removed subtrees are reclaimable after snapshot pins
+     * permit it, and replaced strings retire on the same document's ledger.
+     * A verb must distinguish its document's nodes from another's. Never
+     * zero, which is what a node nobody stamped carries. */
     uint32_t id;
     /* Set by a verb that moves a node. A parser still building the document
      * reads it: the tree is then no longer what its stack of open elements
      * says it is, so it stops relying on the stack for what a link needs to
      * be true (tree.c, attach). */
     bool disturbed;
+    bool parser_marked; /* collection has installed parser-reference flags */
     /* How many of `pins` are held, so that the parser's every character need
      * not look through them when none is. */
     uint8_t pinned;
@@ -58,9 +74,11 @@ typedef struct {
      * reclaiming such a node must remove its contribution. */
     size_t form_inputs;
     size_t max_depth;   /* the parse's limit on open elements: see h_depth_limit */
+    HNode *live_nodes, *pending_nodes, *free_nodes;
+    os64_html_parser_t *parser; /* active parser references protect identity */
 } HDoc;
-_Static_assert(offsetof(HDoc, root_word) == offsetof(HDoc, root) + sizeof(HNode) &&
-               offsetof(HDoc, html_word) == offsetof(HDoc, html) + sizeof(HNode),
+_Static_assert(offsetof(HDoc, root_meta) == offsetof(HDoc, root) + sizeof(HNode) &&
+               offsetof(HDoc, html_meta) == offsetof(HDoc, html) + sizeof(HNode),
                "an embedded node's private word must sit where h_word looks for it");
 
 /* The private word after a node: a TEXT or COMMENT's buffer capacity (zero
@@ -68,7 +86,7 @@ _Static_assert(offsetof(HDoc, root_word) == offsetof(HDoc, root) + sizeof(HNode)
  * freed alone); an ELEMENT's flags; a template-contents FRAGMENT's host. */
 static inline size_t *h_word(const HNode *n)
 {
-    return (size_t *)(n + 1);
+    return &h_meta(n)->word;
 }
 #define H_ATTRS_INLINE ((size_t)2) /* ELEMENT: attributes lie in its reclaimable node block */
 #define H_ATTRS_PRIVATE ((size_t)1)   /* ELEMENT: its attribute records are its own blocks */
@@ -260,6 +278,15 @@ void *d_permanent(HDoc *d, size_t size, int64_t *why);
 void *d_alloc(HDoc *d, size_t size, int64_t *why);
 void *d_node_alloc(HDoc *d, size_t size, int64_t *why);
 void d_transfer_blocks(HDoc *to, HDoc *from);
+void d_node_register(HDoc *d, HNode *node, uint32_t flags);
+HNode *d_node_new(HDoc *d, os64_html_node_kind_t kind, int64_t *why);
+/* Queue after the mutation's version change, then collect after all of the
+ * verb's links and form-owner repairs are complete. Neither allocates. */
+void d_detached(HDoc *d, HNode *node);
+void d_collect(HDoc *d);
+void d_fatal(const char *sentence);
+size_t d_owned_bytes(const HNode *node);
+size_t d_pending_bytes(const HDoc *d);
 bool d_form_input(const HNode *node);
 HNode *h_parse_fragment(os64_html_document_t *doc, const HNode *context,
                        const char *utf8, size_t len, bool scripting,

@@ -1284,11 +1284,13 @@ static struct {
     HNode **list, **slots;
     size_t n, cap, size;
 } known;
+static os64_html_document_t *known_doc;
 static void known_reset(void)
 {
     free(known.list);
     free(known.slots);
     memset(&known, 0, sizeof(known));
+    known_doc = NULL;
 }
 static void known_add(HNode *n)
 {
@@ -1321,6 +1323,8 @@ static void known_add(HNode *n)
             exit(2);
     }
     known.list[known.n++] = n;
+    // This oracle caches nodes through later actions and parser calls.
+    if (known_doc) os64_html_hold(known_doc, n);
 }
 static HNode *host_of(const HNode *n)
 {
@@ -1344,6 +1348,7 @@ static void known_close(void)
 }
 static void known_scan(os64_html_parser_t *p)
 {
+    known_doc = &p->d->pub;
     known_add(&p->d->root);
     known_add(&p->d->html);
     for (size_t i = 0; i < p->stack.n; i++)
@@ -1365,6 +1370,7 @@ static HNode *top_of(HNode *n)
 /* What every reader of a document relies on, asked of every node it has. */
 static void everything_holds(os64_html_document_t *doc)
 {
+    known_doc = doc;
     const HDoc *d = (const HDoc *)doc;
     size_t limit = h_depth_limit(d), records = 0;
     known_add(doc->document);

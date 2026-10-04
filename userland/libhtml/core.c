@@ -129,6 +129,8 @@ void *d_node_alloc(HDoc *d, size_t size, int64_t *why)
     void *out = d_alloc(d, size, why);
     if (out)
         ((HBlock *)out - 1)->node = 1;
+    if (out)
+        d_node_register(d, out, H_NODE_PACKED);
     return out;
 }
 /* Publish the complete staged ledger without allocating. */
@@ -146,6 +148,16 @@ void d_transfer_blocks(HDoc *to, HDoc *from)
         to->blocks->prev = tail;
     to->blocks = from->blocks;
     from->blocks = NULL;
+    if (from->live_nodes) {
+        HNode *last = from->live_nodes;
+        while (h_meta(last)->live_next)
+            last = h_meta(last)->live_next;
+        h_meta(last)->live_next = to->live_nodes;
+        if (to->live_nodes)
+            h_meta(to->live_nodes)->live_prev = last;
+        to->live_nodes = from->live_nodes;
+        from->live_nodes = NULL;
+    }
     to->pub.arena_bytes += from->pub.arena_bytes - sizeof(*from);
     to->pub.node_count += from->pub.node_count;
     to->records += from->records;
@@ -247,6 +259,72 @@ static void fatal(const char *sentence)
     os64_write(2, sentence, h_len(sentence));
     os64_exit((int32_t)OS64_HTML_FATAL_EXIT);
 }
+void d_node_register(HDoc *d, HNode *n, uint32_t flags)
+{
+    HMeta *m = h_meta(n);
+    m->flags = flags;
+    m->live_next = d->live_nodes;
+    if (d->live_nodes)
+        h_meta(d->live_nodes)->live_prev = n;
+    d->live_nodes = n;
+}
+HNode *d_node_new(HDoc *d, os64_html_node_kind_t kind, int64_t *why)
+{
+    HNode *n = d->free_nodes;
+    if (n) {
+        d->free_nodes = n->next;
+        unsigned char *bytes = (unsigned char *)n;
+        for (size_t i = 0; i < sizeof(*n) + sizeof(HMeta); i++)
+            bytes[i] = 0;
+    } else
+        n = d_permanent(d, sizeof(*n) + sizeof(HMeta), why);
+    if (n) {
+        n->kind = kind;
+        n->document_id = d->id;
+        d_node_register(d, n, 0);
+        d->pub.node_count++;
+    }
+    return n;
+}
+void d_fatal(const char *sentence) { fatal(sentence); }
+static const HNode *held_root(const HNode *n)
+{
+    while (n->parent || (n->kind == OS64_HTML_FRAGMENT && *h_word(n)))
+        n = n->parent ? n->parent : (HNode *)*h_word(n);
+    return n;
+}
+void os64_html_hold(const os64_html_document_t *doc, const HNode *node)
+{
+    if (!os64_html_owns_node(doc, node))
+        fatal("libhtml: hold of a node not owned by the document\n");
+    HMeta *m = h_meta(node);
+    if (m->holds == UINT32_MAX)
+        fatal("libhtml: node hold count overflow\n");
+    m->holds++;
+    /* A new holder postpones a queued unit's retirement. Follow the
+     * template boundary as well as ordinary parents to find that unit. */
+    const HNode *root = held_root(node);
+    if (h_meta(root)->flags & H_NODE_PENDING)
+        h_meta(root)->flags &= ~(H_NODE_FRESH | H_NODE_RETIRED);
+}
+void os64_html_release(const os64_html_document_t *doc, const HNode *node)
+{
+    if (!os64_html_owns_node(doc, node) || !h_meta(node)->holds)
+        fatal("libhtml: release of a node that is not held\n");
+    h_meta(node)->holds--;
+    if (!h_meta(node)->holds && (h_meta(held_root(node))->flags & H_NODE_PENDING))
+        d_collect((HDoc *)doc);
+}
+size_t d_owned_bytes(const HNode *n)
+{
+    size_t size = (h_meta(n)->flags & H_NODE_PACKED) ? ((HBlock *)n - 1)->size : 0;
+    if ((n->kind == OS64_HTML_TEXT || n->kind == OS64_HTML_COMMENT) && *h_word(n))
+        size += ((HBlock *)n->text - 1)->size;
+    if (n->kind == OS64_HTML_ELEMENT && (*h_word(n) & H_ATTRS_PRIVATE))
+        for (const HAttr *a = n->attrs; a; a = a->next)
+            size += ((HBlock *)a - 1)->size;
+    return size;
+}
 uint64_t os64_html_version(const os64_html_document_t *doc)
 {
     return doc ? ((const HDoc *)doc)->version : 0;
@@ -302,10 +380,11 @@ void os64_html_unpin(const os64_html_document_t *doc, os64_html_pin_t pin)
     d->pins[slot] = 0;
     d->pinned--;
     reclaim(d);
+    d_collect(d);
 }
 size_t os64_html_retired_bytes(const os64_html_document_t *doc)
 {
-    return doc ? ((const HDoc *)doc)->retired_bytes : 0;
+    return doc ? ((const HDoc *)doc)->retired_bytes + d_pending_bytes((const HDoc *)doc) : 0;
 }
 
 /* Stable nodes and strings share geometrically grown arena chunks. Scratch
@@ -487,16 +566,15 @@ HNode *h_current(os64_html_parser_t *p)
 }
 HNode *h_node(os64_html_parser_t *p, os64_html_node_kind_t kind)
 {
-    /* Fragment staging adds a temporary allocation ordinal for deterministic
-     * form-owner remapping. Ordinary document nodes keep one private word. */
-    HNode *n = h_permanent(p, sizeof(*n) + sizeof(size_t) * (p->fragment_context ? 2 : 1));
-    if (n) {
-        n->kind = kind;
-        n->document_id = p->d->id;
-        if (p->fragment_context)
-            *(h_word(n) + 1) = p->d->pub.node_count;
-        p->d->pub.node_count++;
-    }
+    if (p->d->pub.refusal)
+        return NULL;
+    int64_t why = OS64_HTML_OK;
+    size_t ordinal = p->d->pub.node_count;
+    HNode *n = d_node_new(p->d, kind, &why);
+    if (n)
+        h_meta(n)->ordinal = ordinal;
+    else
+        h_refuse(p, why);
     return n;
 }
 void h_detach(HNode *n)
@@ -603,9 +681,9 @@ void os64_html_parser_destroy(os64_html_parser_t *p)
 
 os64_html_options_t os64_html_options_default(void)
 {
-    /* The saved Wikipedia page peaks near 4.3 MB of charged bytes and 1.2M
-     * work units. 64 MiB and 100M leave about 15x/82x headroom for real pages;
-     * crafted growth still refuses by name (tools/test_html_driver.c). */
+    /* Defaults leave corpus headroom while bounding arena growth and charged
+     * parser work. Refusal tests use smaller explicit limits
+     * (tools/test_html_driver.c); measured costs are recorded in LIBHTML.md. */
     return (os64_html_options_t){NULL, 8u * 1024u * 1024u, 64u * 1024u * 1024u, 512, 100000000,
                                  false};
 }
@@ -657,6 +735,9 @@ os64_html_parser_t *os64_html_parser_new(const os64_html_options_t *options)
     d->pub.document = &d->root;
     d->pub.html = &d->html;
     d->pub.node_count = 2;
+    d_node_register(d, &d->root, H_NODE_EMBEDDED);
+    d_node_register(d, &d->html, H_NODE_EMBEDDED);
+    d->parser = p;
     if (opt.charset) {
         if (!h_buf_bytes(p, &p->charset_label, opt.charset, h_len(opt.charset))) {
             os64_html_document_free(&d->pub);
@@ -833,6 +914,10 @@ static os64_html_document_t *release(os64_html_parser_t *p)
 {
     HDoc *d = p->d;
     d_seat_html(d);
+    /* Internal tree algorithms do not collect their transient nodes. The
+     * transfer drops protection for parser references at a stable boundary. */
+    d->parser = NULL;
+    d_collect(d);
     HBuf *buffers[] = {&p->token.name, &p->token.data,   &p->token.public_id, &p->token.system_id,
                        &p->attr_name,  &p->attr_value,   &p->temporary,       &p->last_start,
                        &p->table_text, &p->charset_label};

@@ -146,6 +146,217 @@ static HNode *next_in(HNode *root, HNode *n, size_t *depth)
     }
     return NULL;
 }
+/* Lifetime walks include the contents fragment itself, since callers can
+ * hold that identity independently of its template and its children. */
+static HNode *lifetime_next(HNode *root, HNode *n)
+{
+    if (n->template_contents)
+        return n->template_contents;
+    if (n->first_child)
+        return n->first_child;
+    while (n != root) {
+        if (n->next)
+            return n->next;
+        HNode *up = above(n);
+        if (host(n) && up->first_child)
+            return up->first_child;
+        n = up;
+    }
+    return NULL;
+}
+static bool subtree_held(HNode *root)
+{
+    for (HNode *n = root; n; n = lifetime_next(root, n))
+        if (h_meta(n)->holds || (h_meta(n)->flags & H_NODE_PARSER))
+            return true;
+    return false;
+}
+void d_detached(HDoc *d, HNode *n)
+{
+    if (above(n))
+        return;
+    HMeta *m = h_meta(n);
+    m->stamp = d->version;
+    m->flags = (m->flags & ~H_NODE_RETIRED) | H_NODE_FRESH;
+    if (!(m->flags & H_NODE_PENDING)) {
+        m->flags |= H_NODE_PENDING;
+        m->pending_next = d->pending_nodes;
+        d->pending_nodes = n;
+    }
+}
+static void parser_mark(HDoc *d, HNode *n)
+{
+    if (n && n->document_id == d->id)
+        h_meta(n)->flags |= H_NODE_PARSER;
+}
+/* Public mutations, release and unpin run between parser calls. Internal
+ * token algorithms do not collect: their temporary pointers and partially
+ * repaired links remain valid until the next stable public boundary. */
+static void parser_holds(HDoc *d)
+{
+    os64_html_parser_t *p = d->parser;
+    if (!p && !d->parser_marked)
+        return;
+    if (d->parser_marked)
+        for (HNode *n = d->live_nodes; n; n = h_meta(n)->live_next)
+            h_meta(n)->flags &= ~H_NODE_PARSER;
+    d->parser_marked = p != NULL;
+    if (!p)
+        return;
+    parser_mark(d, &d->root);
+    parser_mark(d, &d->html);
+    for (size_t i = 0; i < p->stack.n; i++)
+        parser_mark(d, p->stack.v[i]);
+    for (size_t i = 0; i < p->formatting.n; i++)
+        parser_mark(d, p->formatting.v[i]);
+    parser_mark(d, p->form);
+    parser_mark(d, p->head);
+    parser_mark(d, p->script);
+}
+static bool older_pin(const HDoc *d, uint64_t stamp)
+{
+    for (size_t i = 0; i < H_PINS; i++)
+        if (d->pins[i] && d->pins[i] < stamp)
+            return true;
+    return false;
+}
+/* Form-owner edges are within DOM trees, including separate template trees.
+ * Verify both directions before freeing nodes: an incoming external record
+ * would otherwise become a dangling pointer. The zero-record gate keeps
+ * ordinary fragment churn from walking the document's retained allocations. */
+static void assert_records(HDoc *d)
+{
+    if (!d->records)
+        return;
+    size_t count = 0;
+    for (HNode *n = d->live_nodes; n; n = h_meta(n)->live_next)
+        if (n->form_owner) {
+            if (n->form_owner->document_id != d->id ||
+                root_of(n, NULL) != root_of(n->form_owner, NULL))
+                d_fatal("libhtml: form-owner record crosses a reclaimed tree edge\n");
+            count++;
+        }
+    if (count != d->records)
+        d_fatal("libhtml: form-owner record count mismatch\n");
+}
+static void node_free(HDoc *d, HNode *n)
+{
+    HMeta *m = h_meta(n);
+    if (n->form_owner) {
+        if (!d->records)
+            d_fatal("libhtml: form-owner record count underflow\n");
+        d->records--;
+    }
+    if (d_form_input(n)) {
+        if (!d->form_inputs)
+            d_fatal("libhtml: explicit input count underflow\n");
+        d->form_inputs--;
+    }
+    if (n->kind == ELEMENT && (*h_word(n) & H_ATTRS_PRIVATE))
+        for (HAttr *a = n->attrs, *next; a; a = next) {
+            next = a->next;
+            h_free(d, a);
+        }
+    if ((n->kind == TEXT || n->kind == COMMENT) && *h_word(n))
+        h_free(d, (char *)n->text);
+    if (m->live_prev)
+        h_meta(m->live_prev)->live_next = m->live_next;
+    else
+        d->live_nodes = m->live_next;
+    if (m->live_next)
+        h_meta(m->live_next)->live_prev = m->live_prev;
+    d->pub.node_count--;
+    if (m->flags & H_NODE_PACKED)
+        h_free(d, n);
+    else {
+        unsigned char *bytes = (unsigned char *)n;
+        for (size_t i = 0; i < sizeof(*n) + sizeof(*m); i++)
+            bytes[i] = 0;
+        n->next = d->free_nodes;
+        d->free_nodes = n;
+    }
+}
+static void subtree_free(HDoc *d, HNode *root)
+{
+    assert_records(d);
+    HNode *n = root;
+    for (;;) {
+        if (n->template_contents) {
+            n = n->template_contents;
+            continue;
+        }
+        if (n->first_child) {
+            n = n->first_child;
+            continue;
+        }
+        bool done = n == root;
+        HNode *up = above(n);
+        if (host(n))
+            up->template_contents = NULL;
+        else
+            h_detach(n);
+        node_free(d, n);
+        if (done)
+            break;
+        n = up;
+    }
+}
+void d_collect(HDoc *d)
+{
+    if (!d->pending_nodes)
+        return;
+    parser_holds(d);
+    /* Cancel reinserted roots before freeing any unit: a candidate moved
+     * beneath another candidate must not survive on this intrusive list. */
+    HNode **slot = &d->pending_nodes;
+    while (*slot) {
+        HNode *n = *slot;
+        HMeta *m = h_meta(n);
+        if (above(n)) {
+            *slot = m->pending_next;
+            m->pending_next = NULL;
+            m->flags &= ~(H_NODE_PENDING | H_NODE_FRESH | H_NODE_RETIRED);
+        } else
+            slot = &m->pending_next;
+    }
+    slot = &d->pending_nodes;
+    while (*slot) {
+        HNode *n = *slot;
+        HMeta *m = h_meta(n);
+        if (subtree_held(n)) {
+            m->flags &= ~(H_NODE_FRESH | H_NODE_RETIRED);
+            slot = &m->pending_next;
+            continue;
+        }
+        if (!(m->flags & H_NODE_RETIRED)) {
+            /* A held candidate is retired when its holders leave. Pins
+             * acquired while held may have borrowed its current bytes; the
+             * next-version stamp protects them without changing content. */
+            if (!(m->flags & H_NODE_FRESH)) {
+                if (d->version == UINT64_MAX)
+                    d_fatal("libhtml: subtree retirement version overflow\n");
+                m->stamp = d->version + 1;
+            }
+            m->flags = (m->flags & ~H_NODE_FRESH) | H_NODE_RETIRED;
+        }
+        if (!older_pin(d, m->stamp)) {
+            *slot = m->pending_next;
+            m->flags &= ~(H_NODE_PENDING | H_NODE_FRESH | H_NODE_RETIRED);
+            subtree_free(d, n);
+        } else
+            slot = &m->pending_next;
+    }
+}
+size_t d_pending_bytes(const HDoc *d)
+{
+    size_t bytes = 0;
+    for (HNode *root = d->pending_nodes; root; root = h_meta(root)->pending_next)
+        if (!above(root) && (h_meta(root)->flags & H_NODE_RETIRED) && !subtree_held(root))
+            for (HNode *n = root; n; n = lifetime_next(root, n))
+                bytes += d_owned_bytes(n);
+    return bytes;
+}
+
 static size_t height_of(HNode *root, uint64_t *steps)
 {
     size_t depth = 0, deepest = 0;
@@ -355,8 +566,15 @@ int64_t os64_html_insert(os64_html_document_t *doc, HNode *parent, HNode *node, 
      * fragment brings nothing. A node put where it already sits is still
      * taken out and put back, which parts a control from a form outside
      * what moved; if that parted nobody, nothing is different. */
-    if (node->kind == FRAGMENT && !node->first_child)
+    if (node->kind == FRAGMENT && !node->first_child) {
+        /* Empty insertion changes no visible tree, but consumes the result
+         * container's lifetime just as draining a nonempty fragment does.
+         * A pin at this unchanged version may still borrow the container. */
+        d_detached(d, node);
+        h_meta(node)->flags &= ~H_NODE_FRESH;
+        d_collect(d);
         return OS64_HTML_OK;
+    }
     if (before == node)
         before = node->next;
     bool stays = node->parent == parent && node->next == before;
@@ -364,6 +582,9 @@ int64_t os64_html_insert(os64_html_document_t *doc, HNode *parent, HNode *node, 
     place(d, parent, node, before);
     if (!stays || d->records != records)
         moved(d);
+    if (node->kind == FRAGMENT)
+        d_detached(d, node);
+    d_collect(d);
     return OS64_HTML_OK;
 }
 
@@ -386,6 +607,10 @@ int64_t os64_html_replace(os64_html_document_t *doc, HNode *parent, HNode *node,
     place(d, parent, node, before);
     if (touched)
         landmarks(d, NULL);
+    d_detached(d, old);
+    if (node->kind == FRAGMENT)
+        d_detached(d, node);
+    d_collect(d);
     return OS64_HTML_OK;
 }
 
@@ -403,6 +628,8 @@ int64_t os64_html_remove(os64_html_document_t *doc, HNode *node)
     take_out(d, node, NULL);
     if (touched)
         landmarks(d, NULL);
+    d_detached(d, node);
+    d_collect(d);
     return OS64_HTML_OK;
 }
 
@@ -488,13 +715,7 @@ void d_seat_html(HDoc *d)
 
 static HNode *node_new(HDoc *d, os64_html_node_kind_t kind, int64_t *why)
 {
-    HNode *n = d_permanent(d, sizeof(*n) + sizeof(size_t), why);
-    if (n) {
-        n->kind = kind;
-        n->document_id = d->id;
-        d->pub.node_count++;
-    }
-    return n;
+    return d_node_new(d, kind, why);
 }
 /* A text buffer on the ledger, so that replacing it later can retire it. */
 static char *bytes_new(HDoc *d, const char *s, size_t len, int64_t *why)

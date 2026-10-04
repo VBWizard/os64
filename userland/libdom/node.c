@@ -51,6 +51,7 @@ static JSValue wrapper_attach(os64_dom_t *dom, JSContext *ctx, DValue *entry,
 {
     JS_SetOpaque(entry->value, (void *)node);
     entry->node = node;
+    os64_html_hold(dom->document, node);
     size_t slot = bucket(node);
     entry->hash_next = dom->buckets[slot];
     dom->buckets[slot] = entry;

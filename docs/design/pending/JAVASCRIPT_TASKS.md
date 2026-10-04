@@ -39,7 +39,7 @@ independent review. "In progress" records an authorized slice being implemented.
 | D3 page rebuild/control state | **Merged** | [PR #211](https://github.com/VBWizard/os64/pull/211), merge `3f5fa28a`: shared node state, pinned models, STALE gates, script property APIs and transactional rebuilds. Evidence and D5/D6 handoffs in DOM.md § D3, as built. |
 | D4 parser stream handoff | **Pending** | Yonder parser-thread handoff and responsive streaming; no script execution in this slice. |
 | D5 DOM binding/first page fixture | **D5a merged; D5b implemented, awaiting review** | [D5a PR #214](https://github.com/VBWizard/os64/pull/214), merge `72b2e710`, supplies libdom and state-aware mutation/clone transactions; evidence in DOM.md § D5a, as built. DOM.md § D5b, as built records the default-off settings switch and host/guest mutation, widget and queued-navigation proof; D4 is not a prerequisite. |
-| D6 detached-subtree reclamation | **Pending** | Reclaim unheld detached trees and prove bounded long-running churn. |
+| D6 detached-subtree reclamation | **Implemented; review pending** | Counted holds, parser-reference protection and paired binding/state/model/browser ownership; 216,000 fragment refresh cycles stay flat under 64 MiB. Stacked on D5b, with Fable review required. Evidence and retained weak-wrapper/collector debt in DOM.md § D6, as built. |
 | D7 browser event loop | **Pending** | Tasks/checkpoints, timers/events, script order and J4 evidence. Resolve the execution-time default/range and consider a script-timeout Settings control; D5b's one-second fixture deadline does not settle ordinary-browsing policy (DOM.md). |
 
 The DOM slice definitions and detailed acceptance cases belong to
@@ -60,9 +60,10 @@ Next steps:
 
 1. Review D5b/J3: finished-document inline scripts and the default-off settings
    switch. D3, D2b and D5a have merged; J2 has closed the standalone milestone.
-2. D4 and D7 remain Fable's work; D6 is available while Opus finishes Yonder
-   pile 3. Reclamation, browser function-call/checkpoint and audited runtime
-   teardown retain their own acceptance before ordinary browsing runs scripts.
+2. Review D6 after D5b; its bounded reclamation implementation is stacked on
+   that slice. D4 and D7 remain Fable's work. Browser function-call/checkpoint
+   and audited runtime teardown retain their own acceptance before ordinary
+   browsing runs scripts.
 
 ## Agreed standalone scope
 
@@ -97,7 +98,7 @@ Next steps:
 | V1 | Quinn implements the consumer suite; another reviewer accepts the independent gate | Consumer-level validation of capability boundaries, failure behaviour, and fixture coverage. | Based on merged M1/R2/C1; owns tools/js_acceptance and tools/test_js_acceptance_host.sh. R2's fixture files remain separate. |
 | I1 | Runtime owner as integration coordinator | Shared build/image registration, final dependency checks, combined strict build and QEMU evidence. | M1, R2, C1, and V1 evidence. |
 | D0 | Fable | DOM.md covering mutable libhtml, document/wrapper lifetime, retired storage, parser handoff, and browser event scheduling. | This design and the existing browser libraries. Design runs alongside M1/R1; reviewed completion gates J3, not the runner. |
-| D1–D7 | Per [DOM_BRIEFS.md](DOM_BRIEFS.md): D2b, D3 and D5 Quinn with scoped subagents; D4 and D7 reserved for Fable; D6 available, with Opus on Yonder pile 3. Fable reviews the shared DOM slices | Mutable-document, parser, presentation, bindings and event-loop slices defined in DOM.md. | D0; detailed dependencies and acceptance belong to DOM.md, the builder's brief to DOM_BRIEFS.md. D1 and D2a are merged; later slices remain separate from the standalone milestone. |
+| D1–D7 | Per [DOM_BRIEFS.md](DOM_BRIEFS.md): D2b, D3 and D5 Quinn with scoped subagents; D4 and D7 reserved for Fable; D6 Quinn with a scoped builder/tester team, stacked on D5b; Opus on Yonder pile 3. Fable reviews the shared DOM slices | Mutable-document, parser, presentation, bindings and event-loop slices defined in DOM.md. | D0; detailed dependencies and acceptance belong to DOM.md, the builder's brief to DOM_BRIEFS.md. D1 and D2a are merged; later slices remain separate from the standalone milestone. |
 
 The runtime owner is the coordinating implementer working with Chris in this
 thread. Review of a packet is separate from ownership of its implementation.
