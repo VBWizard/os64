@@ -3,10 +3,10 @@
 
 // yonder's Settings window (YONDER.md § Settings), opened by the title
 // bar's Settings action: who yonder says it is, picked from the presets or
-// typed, and whether pictures and style sheets are kept on disk
-// (CACHE.md), with what the cache holds and a button that empties it.
-// Apply changes both for this window; Save as default writes them to
-// yonder.conf, where the next yonder reads them.
+// typed; whether pictures and style sheets are kept on disk (CACHE.md),
+// with what the cache holds and a button that empties it; and the zoom a
+// page is laid out at. Apply changes them for this window; Save as default
+// writes them to yonder.conf, where the next yonder reads them.
 //
 // The dialog is a window of its own, and yonder's loop waits on its own
 // window alone, so a thread waits on the dialog's and rings `bell` on
@@ -19,11 +19,13 @@
 
 #include "way/cache.h"
 
-// Opens the dialog over `parent`, showing `agent` and `cache` (NULL: there
-// is none), or focuses it if it is open. `use` is handed each agent
-// applied, one yonder_agent_valid passed.
+// Opens the dialog over `parent`, showing `agent`, `cache` (NULL: there
+// is none) and the default `zoom` (thousandths), or focuses it if it is
+// open. `use` is handed each agent applied, one yonder_agent_valid
+// passed; `zoom_use` each zoom applied, a whole percent from 25 to 500.
 void yonder_settings_open(int64_t parent, uint32_t bell, const char *agent,
-                          void (*use)(const char *agent), way_cache_t *cache);
+                          void (*use)(const char *agent), way_cache_t *cache, uint32_t zoom,
+                          void (*zoom_use)(uint32_t thousandths));
 // The bell rang: what arrived at the dialog is handled and painted.
 void yonder_settings_rung(void);
 // Closes the dialog if it is open.
@@ -36,6 +38,9 @@ way_cache_t *yonder_settings_cache_open(void);
 // The agent yonder.conf saves, into `out` (YONDER_AGENT_MAX bytes): true
 // when there is one and it is valid.
 bool yonder_settings_saved_agent(char *out, size_t cap);
+// The zoom yonder.conf saves (`zoom = 125`, a whole percent), in
+// thousandths; 1000 when there is none or it is not one from 25 to 500.
+uint32_t yonder_settings_saved_zoom(void);
 
 // An agent that lives as long as yonder does: a preset's own string, or a
 // copy of a typed one. Work already submitted reads the agent it was handed

@@ -484,6 +484,10 @@ typedef struct {
     // styles', and live as long as they do.
     const flow_shadow_t *box_shadows, *text_shadows;
     int32_t nbox_shadows, ntext_shadows;
+    // A picture scaled is drawn with its pixels kept square and hard
+    // (`image-rendering: pixelated`, `crisp-edges` and their older
+    // spellings), not smoothed. Inherited.
+    bool pixelated;
     flow_length_t width, height;    // AUTO, PX or PERCENT
     // The limits: PX or PERCENT, AUTO for none (`min-*: auto` is none too,
     // outside flex and grid). A percentage on a height limit binds
@@ -587,10 +591,11 @@ typedef struct {
                                 bool bold, bool italic, uint32_t px,
                                 os64_text_font_t *const **list, size_t *count,
                                 os64_font_face_info_t *primary);
-    // Replaced sizes: the face's oracle. False = unknown.
+    // Replaced sizes: the face's oracle, in CSS pixels (zoomed by libflow,
+    // `zoom` below). False = unknown.
     bool (*replaced_size)(void *ctx, const os64_html_node_t *node, int32_t *w, int32_t *h);
     os64_text_context_t *text;      // the page context the runs are laid out on
-    uint32_t viewport_font_px;      // `medium`; 16 unless the face says otherwise
+    uint32_t viewport_font_px;      // `medium`, CSS px; 16 unless the face says otherwise
     flow_generic_t default_generic; // the family a page that names none is drawn in
     uint32_t ink, link_ink, paper;  // opaque colours; the dumps name these, never print them
     // The page's own sheets, cascaded against this document (garb/cascade.h),
@@ -614,6 +619,14 @@ typedef struct {
     // pixels, so a face cascades at a whole height too. 0 for none known,
     // and the page's own height stands in.
     int32_t viewport_height;
+    // How many device pixels a CSS pixel is, in thousandths; 0 is 1000.
+    // The tree is laid out in device pixels: a CSS length, the page's
+    // `medium`, a replaced element's own size and the viewport height
+    // above (all CSS pixels as handed in) are multiplied by it where they
+    // enter, so text is shaped at the size it is drawn. A face zooms by
+    // passing it, the layout width in device pixels, and a cascade judged
+    // at the device size divided by it.
+    uint32_t zoom;
     // Every box laid out as `static`, whatever the page positioned: the
     // page as it reads in document order, one keypress from the page as it
     // was designed to look (POSITION.md § What positioning costs).

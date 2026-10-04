@@ -47,8 +47,57 @@ static uint32_t source_at(uint32_t u, uint32_t n, int32_t size)
     return (uint32_t)(((int64_t)u * 2 + 1) * n / ((int64_t)size * 2));
 }
 
+// Where `u` of a copy `size` across falls among `n` source pixels, between
+// pixel *i and the next at *f of 256: (u + 1/2) * n / size - 1/2, each end
+// held to the picture's edge pixel.
+static void between(uint32_t u, uint32_t n, int32_t size, uint32_t *i, uint32_t *f)
+{
+    double s = ((double)u + 0.5) * n / size - 0.5;
+    if (s <= 0) {
+        *i = 0;
+        *f = 0;
+    } else if (s >= n - 1) {
+        *i = n - 1;
+        *f = 0;
+    } else {
+        *i = (uint32_t)s;
+        *f = (uint32_t)((s - *i) * 256 + 0.5);
+        if (*f == 256) {
+            (*i)++;
+            *f = 0;
+        }
+    }
+}
+
+// The picture at (u, v) of a copy `tw` x `th`, mixed from the four source
+// pixels round it by how near each is — their colours weighed by their
+// alphas, so a transparent neighbour lends no colour — as 0xAARRGGBB.
+static uint32_t smooth_at(const uint32_t *src, uint32_t sw, uint32_t sh, uint32_t u, int32_t tw,
+                          uint32_t v, int32_t th)
+{
+    uint32_t x, fx, y, fy;
+    between(u, sw, tw, &x, &fx);
+    between(v, sh, th, &y, &fy);
+    uint32_t x1 = x + 1 < sw ? x + 1 : x, y1 = y + 1 < sh ? y + 1 : y;
+    const uint32_t p[4] = {src[(uint64_t)y * sw + x], src[(uint64_t)y * sw + x1],
+                           src[(uint64_t)y1 * sw + x], src[(uint64_t)y1 * sw + x1]};
+    const uint32_t w[4] = {(256 - fx) * (256 - fy), fx * (256 - fy), (256 - fx) * fy, fx * fy};
+    uint64_t a = 0, r = 0, g = 0, b = 0;
+    for (int k = 0; k < 4; k++) {
+        uint64_t wa = (uint64_t)w[k] * (p[k] >> 24);
+        a += wa;
+        r += wa * ((p[k] >> 16) & 0xff);
+        g += wa * ((p[k] >> 8) & 0xff);
+        b += wa * (p[k] & 0xff);
+    }
+    if (a == 0)
+        return 0;
+    return (uint32_t)((a + 32768) >> 16) << 24 | (uint32_t)((r + a / 2) / a) << 16 |
+           (uint32_t)((g + a / 2) / a) << 8 | (uint32_t)((b + a / 2) / a);
+}
+
 void yonder_tile_picture(uint32_t *dst, uint32_t pitch, os64_gui_rect_t clip, os64_gui_rect_t area,
-                         os64_gui_rect_t tile, bool repeat_x, bool repeat_y,
+                         os64_gui_rect_t tile, bool repeat_x, bool repeat_y, bool smooth,
                          const uint32_t *src, uint32_t sw, uint32_t sh)
 {
     if (area.w <= 0 || area.h <= 0 || tile.w <= 0 || tile.h <= 0 || sw == 0 || sh == 0)
@@ -68,15 +117,18 @@ void yonder_tile_picture(uint32_t *dst, uint32_t pitch, os64_gui_rect_t clip, os
         y1 = (int32_t)min64(y1, (int64_t)tile.y + tile.h);
     }
     // A copy at the picture's own size steps through its row; a scaled one
-    // asks which source pixel each of its columns shows.
+    // asks which source pixel each of its columns shows, or, smoothed, what
+    // the four round it make.
     bool own = (uint32_t)tile.w == sw;
+    smooth = smooth && !(own && (uint32_t)tile.h == sh);
     for (int32_t y = y0; y < y1; y++) {
         uint32_t v = wrap((int64_t)y - tile.y, (uint32_t)tile.h);
         const uint32_t *row = src + (uint64_t)source_at(v, sh, tile.h) * sw;
         uint32_t *out = dst + (uint64_t)y * pitch;
         uint32_t u = x0 < x1 ? wrap((int64_t)x0 - tile.x, (uint32_t)tile.w) : 0;
         for (int32_t x = x0; x < x1; x++) {
-            put(&out[x], row[own ? u : source_at(u, sw, tile.w)]);
+            put(&out[x], smooth ? smooth_at(src, sw, sh, u, tile.w, v, tile.h)
+                                : row[own ? u : source_at(u, sw, tile.w)]);
             if (++u == (uint32_t)tile.w)
                 u = 0;
         }
@@ -84,10 +136,11 @@ void yonder_tile_picture(uint32_t *dst, uint32_t pitch, os64_gui_rect_t clip, os
 }
 
 void yonder_draw_picture(uint32_t *dst, uint32_t pitch, os64_gui_rect_t clip, os64_gui_rect_t box,
-                         const uint32_t *src, uint32_t sw, uint32_t sh)
+                         bool smooth, const uint32_t *src, uint32_t sw, uint32_t sh)
 {
     if (box.w <= 0 || box.h <= 0 || sw == 0 || sh == 0)
         return;
+    smooth = smooth && !((uint32_t)box.w == sw && (uint32_t)box.h == sh);
     // Edges are added in 64 bits: a picture may be as wide as an int32_t
     // says (a width of 1000000% three tables deep), and its box need not
     // start at zero. What is walked is cut to `clip`, a real surface's.
@@ -101,6 +154,11 @@ void yonder_draw_picture(uint32_t *dst, uint32_t pitch, os64_gui_rect_t clip, os
         const uint32_t *row = src + (uint64_t)sy * sw;
         uint32_t *out = dst + (uint64_t)y * pitch;
         for (int32_t x = x0; x < x1; x++) {
+            if (smooth) {
+                put(&out[x], smooth_at(src, sw, sh, (uint32_t)((int64_t)x - box.x), box.w,
+                                       (uint32_t)((int64_t)y - box.y), box.h));
+                continue;
+            }
             uint32_t sx = (uint32_t)(((int64_t)(x - box.x) * 2 + 1) * sw / ((int64_t)box.w * 2));
             put(&out[x], row[sx]);
         }

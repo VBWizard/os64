@@ -910,7 +910,8 @@ flow_tree_t *flow_layout(const os64_html_document_t *doc, const os64_page_t *mod
     tree->incomplete = tree->layout->incomplete;
     const FBox *root = tree->boxes->root;
     if (root != NULL && root->placed) {
-        Build bd = {.t = tree, .view_w = width, .view_h = env->viewport_height};
+        Build bd = {.t = tree, .view_w = width,
+                    .view_h = (int32_t)((f_css_units(env, env->viewport_height) + 32) / 64)};
         if (bd.view_h <= 0)
             bd.view_h = flow_height(tree);
         flow_box_t *none = NULL;

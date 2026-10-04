@@ -419,6 +419,8 @@ static void element(Buf *b, const FStyles *styles, const os64_html_node_t *n,
         puts_(b, " line-through");
     if (s->visibility != parent->visibility)
         putf(b, " visibility=%s", s_visibility[s->visibility]);
+    if (s->pixelated != parent->pixelated)
+        puts_(b, s->pixelated ? " pixelated" : " smooth");
     if (s->list_style_type != parent->list_style_type)
         putf(b, " list=%s", s_list[s->list_style_type]);
     if (s->list_style_position != parent->list_style_position)

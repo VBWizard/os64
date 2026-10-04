@@ -223,8 +223,8 @@ nothing the byte budget does not).
 | Live family changes through Workshop's Apply | the adoption dance (prepare/barrier/commit) is per role today; families are yonder's own cache | when Workshop grows a Web page |
 | Weights beyond bold (100..900) | CSS's numeric weights want the cascade first | the cascade |
 | Font matching by family NAME from a page (`font-family: Georgia`) | the cascade; and matching by name is a resolver over installed metadata | the cascade (it has ARRIVED: libgarb hands libflow the names as written, `flow_family_list_t`) |
-| One copy of a font file's bytes per text context, however many sizes open it | each open copies the whole file (41 MiB of the 42.7 measured for 96 opens) | a page whose faces meet the byte budget before the face count |
-| A higher `OS64_FONT_FACE_MAX` | 64 live faces per engine is the binding limit (Q2); the state it guards is 18.6 KiB a face | a page that uses more than 32 face-sizes in one layout |
+| One copy of a font file's bytes per text context, however many sizes open it | — | done (PILE3.md § Zoom): zoom made every page ask for new sizes |
+| A higher `OS64_FONT_FACE_MAX` | — | done (PILE3.md § Zoom): 1024, about 22 KiB a face, with the file shared |
 
 ## Implementation contract (Quinn, 2026-09-27)
 
