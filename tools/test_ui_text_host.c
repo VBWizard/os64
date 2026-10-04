@@ -1235,6 +1235,7 @@ static void ui_test_view_theme(os64_ui_theme_t *t)
  * ends up as one opened in the new face would be — the scroll measured
  * afresh, not carried over in the old face's pixels — and a list keeps the
  * slots its next paint fills, so the paint after that lays nothing out. */
+static void ui_test_burst(os64_ui_widget_t *w, os64_ui_t *ui, const char *seq);
 static void app_face_change_is_measured_again(const char *dir)
 {
     current = "application face changed";
@@ -1245,17 +1246,21 @@ static void app_face_change_is_measured_again(const char *dir)
     os64_ui_panel(&root);
     char text[40], fresh_text[40];
     os64_ui_textfield_t field, fresh_field;
-    os64_ui_textview_t view, fresh_view;
+    os64_ui_textview_t view, fresh_view, keyed, fresh_keyed;
     os64_ui_listbox_t list;
     os64_ui_textfield(&field, text, sizeof(text), NULL, NULL, NULL);
     os64_ui_textfield(&fresh_field, fresh_text, sizeof(fresh_text), NULL, NULL, NULL);
     os64_ui_textview(&view, &kUiTestBuf, NULL, NULL, NULL);
     os64_ui_textview(&fresh_view, &kUiTestBuf, NULL, NULL, NULL);
+    os64_ui_textview(&keyed, &kUiTestBuf, NULL, NULL, NULL);
+    os64_ui_textview(&fresh_keyed, &kUiTestBuf, NULL, NULL, NULL);
     os64_ui_listbox(&list, 3, app_face_row, NULL, NULL);
     field.w.bounds = fresh_field.w.bounds = (os64_gui_rect_t){0, 0, 90, 60};
     view.w.bounds = fresh_view.w.bounds = (os64_gui_rect_t){0, 0, 90, 60};
+    keyed.w.bounds = fresh_keyed.w.bounds = (os64_gui_rect_t){0, 0, 300, 80};
     list.w.bounds = (os64_gui_rect_t){0, 0, 300, 200};
-    os64_ui_widget_t *all[] = {&field.w, &fresh_field.w, &view.w, &fresh_view.w, &list.w};
+    os64_ui_widget_t *all[] = {&field.w, &fresh_field.w, &view.w, &fresh_view.w, &list.w,
+                               &keyed.w, &fresh_keyed.w};
     for (size_t i = 0; i < sizeof all / sizeof all[0]; ++i)
         os64_ui_add_child(&root, all[i]);
     os64_ui_set_root(&ui, &root);
@@ -1280,6 +1285,7 @@ static void app_face_change_is_measured_again(const char *dir)
     const char *long_line = "WWWWWWWWWWWWWWWWWWWW";
     os64_ui_textfield_set(&ui, &field, long_line);          /* caret at the end */
     os64_ui_textview_goto(&ui, &view, 1, strlen(kUiTestDoc[1]), false);
+    os64_ui_textview_goto(&ui, &keyed, 1, 7, false);         /* after "kerning" */
     canvas_t c;
     canvas_init(&c, 0xff000000);
     os64_draw_ctx_t ctx;
@@ -1295,6 +1301,15 @@ static void app_face_change_is_measured_again(const char *dir)
     CHECK(slots > 0 && list.row_runs != NULL && list.row_runs[0] != NULL);
 
     CHECK(os64_ui_font_app(&ui, small, OS64_FONT_ROLE_UI) == OS64_FONT_OK);
+    /* Up before any paint, after the application set the scroll itself:
+     * the goal is the caret's place in the new face, as in a view opened
+     * in it. */
+    os64_ui_textview_scroll_left(&ui, &keyed, 0);
+    ui_test_burst(&keyed.w, &ui, "[A");
+    os64_ui_textview_goto(&ui, &fresh_keyed, 1, 7, false);
+    ui_test_burst(&fresh_keyed.w, &ui, "[A");
+    CHECK(keyed.cur_line == 0 && fresh_keyed.cur_line == 0);
+    CHECK(keyed.cur_col == fresh_keyed.cur_col && keyed.cur_col < strlen(kUiTestDoc[0]));
     bool kept = list.row_run_count == slots && list.row_runs != NULL;
     CHECK(kept);
     for (size_t i = 0; kept && i < slots; ++i)

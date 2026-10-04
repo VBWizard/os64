@@ -986,8 +986,8 @@ struct os64_ui_textview
     bool    sel;                 // selection live?
     size_t  sel_line, sel_col;   // the anchor (byte index)
     int64_t goal_x;              // remembered pixel X for Up/Down runs
-    bool    rescroll;            // left_px and goal_x are pixels of a face
-                                 // since replaced
+    bool    rescroll;            // left_px is pixels of a face since replaced
+    bool    regoal;              // goal_x is pixels of a face since replaced
 
     void (*on_change)(os64_ui_textview_t *tv, void *user);  // buffer edited
     void (*on_view)(os64_ui_textview_t *tv, void *user);    // viewport moved

@@ -3262,8 +3262,10 @@ static bool controls_face_at(uint32_t zoom, os64_font_set_t **was, uint32_t *was
 // Lays a page out at the zoom in force, its controls' face with it: the face
 // for the zoom is lent first, because the layout measures the controls in it
 // (select_size), and lent back as it was when the layout fails — the page on
-// screen stays at its zoom, and its controls with it. The lend allocates
-// nothing, so the way back cannot fail.
+// screen stays at its zoom, its controls in the face they wore. The lend
+// allocates nothing, so the way back cannot fail; but a lend lets go of the
+// controls' runs, so they are laid out again at their next paint, which
+// under the same shortage can draw them empty (BROWSER_DEBTS.md).
 static bool lay_out_page(Page *p, int32_t width, int32_t height)
 {
     os64_font_set_t *was = NULL;

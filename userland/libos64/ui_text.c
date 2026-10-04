@@ -1306,6 +1306,13 @@ static os64_font_status_t textview_prepare(os64_ui_widget_t *w, os64_ui_t *ui)
 	return OS64_FONT_OK;
 }
 
+// The Up/Down goal, in pixels of the face the view wears.
+static void tv_set_goal(os64_ui_textview_t *tv, int64_t x)
+{
+	tv->goal_x = x;
+	tv->regoal = false;
+}
+
 // Everything here was decided in preparation; commit only moves it into
 // place, so it cannot allocate and cannot fail. It fires no callback either
 // — the application's own commit runs next and brings its scrollbars along.
@@ -1320,8 +1327,8 @@ static void textview_commit(os64_ui_widget_t *w)
 	os64_ui_commit_caption(w);          // the caret line's run
 	tv->top = tv->top_staged;
 	tv->left_px = tv->left_staged;
-	tv->goal_x = tv->goal_staged;
 	tv->rescroll = false;
+	tv_set_goal(tv, tv->goal_staged);
 	// The budget those runs were laid out with, so every lookup after this
 	// resolves the spans they hold rather than reaching for a wider window.
 	tv->win_budget = tv->win_budget_staged;
@@ -1352,7 +1359,7 @@ static void textview_reface(os64_ui_widget_t *w)
 		tv->row_runs[i] = NULL;
 	}
 	tv_free_runs(&tv->row_runs_staged, &tv->row_runs_staged_count);
-	tv->rescroll = true;
+	tv->rescroll = tv->regoal = true;
 }
 
 static const char *tv_line(const os64_ui_textview_t *tv, size_t i, size_t *len)
@@ -1398,19 +1405,23 @@ static void tv_fire_view(os64_ui_textview_t *tv)
 }
 
 // The horizontal scroll and the Up/Down goal after a face was replaced
-// (textview_reface): both are pixels of the old face, so they are worked out
-// afresh around the caret, as a view just opened would get them. True when
-// the scroll moved. A caret that cannot be located leaves both for later.
+// (textview_reface): whichever is still pixels of the old face is worked out
+// afresh around the caret, as a view just opened would get it. The view's
+// own readers of either ask this first. True when the scroll moved. A caret
+// that cannot be located leaves both for later.
 static bool tv_rescroll(os64_ui_t *ui, os64_ui_textview_t *tv)
 {
 	int32_t cx = 0;
 	line_geom_t g;
-	if (!tv->rescroll || tv_line_geom(tv, ui, tv->cur_line, &g) != OS64_FONT_OK ||
+	if ((!tv->rescroll && !tv->regoal) ||
+	    tv_line_geom(tv, ui, tv->cur_line, &g) != OS64_FONT_OK ||
 	    geom_caret(&g, tv->cur_col, &cx) != OS64_FONT_OK)
 		return false;
 	int64_t old_left = tv->left_px;
-	tv->left_px = scroll_to_show(0, cx, os64_ui_textview_width(tv));
-	tv->goal_x = cx;
+	if (tv->rescroll)
+		tv->left_px = scroll_to_show(0, cx, os64_ui_textview_width(tv));
+	if (tv->regoal)
+		tv_set_goal(tv, cx);
 	tv->rescroll = false;
 	return tv->left_px != old_left;
 }
@@ -1433,6 +1444,7 @@ static void tv_ensure_visible(os64_ui_t *ui, os64_ui_textview_t *tv)
 	// near an end of it: where the caret sits in the row depends on where
 	// the row starts.
 	tv_settle_window(tv);
+	(void)tv_rescroll(ui, tv);          // a moved scroll is fired below
 
 	// A caret that cannot be located leaves the horizontal scroll alone
 	// rather than jumping somewhere arbitrary; the vertical half above is
@@ -1440,10 +1452,8 @@ static void tv_ensure_visible(os64_ui_t *ui, os64_ui_textview_t *tv)
 	int32_t cx = 0;
 	line_geom_t g;
 	if (tv_line_geom(tv, ui, tv->cur_line, &g) == OS64_FONT_OK &&
-	    geom_caret(&g, tv->cur_col, &cx) == OS64_FONT_OK) {
-		tv->left_px = scroll_to_show(tv->rescroll ? 0 : tv->left_px, cx, width);
-		tv->rescroll = false;
-	}
+	    geom_caret(&g, tv->cur_col, &cx) == OS64_FONT_OK)
+		tv->left_px = scroll_to_show(tv->left_px, cx, width);
 
 	if (tv->top != old_top || tv->left_px != old_left || tv->win_from != old_win)
 		tv_fire_view(tv);
@@ -1686,7 +1696,7 @@ static void tv_remember_goal(os64_ui_textview_t *tv, os64_ui_t *ui)
 	int32_t cx = 0;
 	if (tv_line_geom(tv, ui, tv->cur_line, &g) == OS64_FONT_OK &&
 	    geom_caret(&g, tv->cur_col, &cx) == OS64_FONT_OK)
-		tv->goal_x = cx;
+		tv_set_goal(tv, cx);
 }
 
 // Where the remembered X lands on line `li`: the half of Up and Down that
@@ -1696,6 +1706,8 @@ static void tv_remember_goal(os64_ui_textview_t *tv, os64_ui_t *ui)
 static os64_font_status_t tv_goal_offset(os64_ui_textview_t *tv, os64_ui_t *ui,
                                          size_t li, size_t *out)
 {
+	if (tv_rescroll(ui, tv))            // the goal in this face, from where the caret is
+		tv_fire_view(tv);
 	line_geom_t g;
 	os64_font_status_t status = tv_line_geom(tv, ui, li, &g);
 	if (status != OS64_FONT_OK)
@@ -1756,7 +1768,7 @@ static bool tv_place_from_point(os64_ui_textview_t *tv, os64_ui_t *ui,
 		return false;
 	tv->cur_line = (size_t)li;
 	tv->cur_col = offset;
-	tv->goal_x = cx;
+	tv_set_goal(tv, cx);
 	return true;
 }
 
@@ -1911,7 +1923,7 @@ static bool textview_event(os64_ui_widget_t *w, os64_ui_t *ui,
 		case K_HOME:
 			tv_motion_prologue(tv, shift);
 			tv->cur_col = 0;
-			tv->goal_x = 0;
+			tv_set_goal(tv, 0);
 			break;
 		case K_END:
 			tv_motion_prologue(tv, shift);
@@ -2013,7 +2025,8 @@ void os64_ui_textview_scroll_left(os64_ui_t *ui, os64_ui_textview_t *tv,
 {
 	if (left_px < 0)
 		left_px = 0;
-	tv->rescroll = false;               // a position the caller chose in this face
+	tv->rescroll = false;               // a position the caller chose in this face;
+	                                    // the goal is still the caret's to measure
 	if (left_px == tv->left_px)
 		return;
 	tv->left_px = left_px;
