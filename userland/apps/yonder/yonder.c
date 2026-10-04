@@ -490,6 +490,14 @@ static garb_env_t css_view(int32_t w, int32_t h, uint32_t zoom)
 // False on no memory, the page on screen untouched — unless a first try
 // stopped partway, when the old tree is let go to make room for a second
 // (below), and with no memory even for that the page has no tree.
+// A position in device pixels, laid out at zoom `from`, at zoom `to`
+// (thousandths), held to an int32_t.
+static int32_t scale_zoom(int32_t v, uint32_t to, uint32_t from)
+{
+    int64_t r = (int64_t)v * to / (from != 0 ? from : 1000);
+    return (int32_t)(r > INT32_MAX ? INT32_MAX : r < INT32_MIN ? INT32_MIN : r);
+}
+
 static bool page_lay_out(Page *p, int32_t width, int32_t height, uint32_t zoom)
 {
     garb_cascade_t *cascade = p->cascade;
@@ -540,8 +548,13 @@ static bool page_lay_out(Page *p, int32_t width, int32_t height, uint32_t zoom)
     p->tree = fresh;
     // A box keeps where it was scrolled to, as near as the new layout lets
     // it: the range may have shrunk, and the element may make no scroll
-    // container now.
+    // container now. Where it was is in device pixels, so a new zoom
+    // scales it with everything else the page holds.
     for (int32_t i = 0; i < p->nbox_scrolls; i++) {
+        if (p->laid_zoom != 0 && p->laid_zoom != zoom) {
+            p->box_scrolls[i].at.x = scale_zoom(p->box_scrolls[i].at.x, zoom, p->laid_zoom);
+            p->box_scrolls[i].at.y = scale_zoom(p->box_scrolls[i].at.y, zoom, p->laid_zoom);
+        }
         int32_t s = flow_scroller_for(fresh, p->box_scrolls[i].node);
         if (s >= 0)
             flow_scroll_set(fresh, s, p->box_scrolls[i].at);
@@ -1026,10 +1039,12 @@ static void relayout(bool again)
         return;
     int32_t offset = 0;
     const os64_html_node_t *anchor = anchor_of(&offset);
-    // How far into the anchor the view starts, scaled with the page when
-    // the zoom changed.
-    if (g.page.laid_zoom != 0 && g.page.laid_zoom != g.zoom)
-        offset = (int32_t)((int64_t)offset * g.zoom / g.page.laid_zoom);
+    // How far into the anchor the view starts, and how far across the page
+    // it is, scaled with the page when the zoom changed.
+    if (g.page.laid_zoom != 0 && g.page.laid_zoom != g.zoom) {
+        offset = scale_zoom(offset, g.zoom, g.page.laid_zoom);
+        g.sx = scale_zoom(g.sx, g.zoom, g.page.laid_zoom);
+    }
     os64_ticks_t t0, t1;
     os64_ticks(&t0);
     bool laid = page_lay_out(&g.page, width, height, g.zoom);

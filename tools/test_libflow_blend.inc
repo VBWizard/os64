@@ -390,5 +390,30 @@ static void zoom_cases(void)
            n == 2 && size[0][0] == 20 && size[0][1] == 40 && size[1][0] == 80 && size[1][1] == 60,
            got);
     free(got);
+    // An auto-repeat counts a track of nothing as one CSS pixel (§ 7.2.3.2)
+    // — five of the tree's at 5 — so a 20px grid makes 20 columns, not 100:
+    // the 21st item starts the second row.
+    kEnv.zoom = 5000;
+    {
+        char html[1024];
+        int at = snprintf(html, sizeof(html),
+                          "<!doctype html><style>body{margin:0}.g{display:grid;width:20px;"
+                          "grid-template-columns:repeat(auto-fill,minmax(0,1fr))}"
+                          ".g div{height:1px}</style><div class=g>");
+        for (int i = 0; i < 21; i++)
+            at += snprintf(html + at, sizeof(html) - (size_t)at, "<div></div>");
+        snprintf(html + at, sizeof(html) - (size_t)at, "</div>");
+        got = cascade_layout_of(html, 400);
+        int ys[22] = {0}, k = 0;
+        for (const char *p = got; p != NULL && k < 22 && (p = strstr(p, "block div ")) != NULL;
+             p++, k++) {
+            int x, w, h;
+            sscanf(p, "block div %d %d %d %d", &x, &ys[k], &w, &h);
+        }
+        // ys[0] is the grid; ys[1..21] its items.
+        expect("zoom 5: an auto-repeat's 1px floor is a CSS pixel",
+               k == 22 && ys[20] == ys[1] && ys[21] > ys[1], got);
+        free(got);
+    }
     kEnv.zoom = 0;
 }
