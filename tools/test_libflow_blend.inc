@@ -204,6 +204,26 @@ static void gradient_style_cases(void)
         "    div block gradient=linear:48000:#ff0000@auto,#0000ff@auto\n"
         "    div block gradient=linear:312000:#ff0000@auto,#0000ff@auto\n"
         "    div block gradient=linear:320000:#ff0000@auto,#0000ff@auto\n");
+    // Every unit is taken round its own turn before it becomes degrees, so
+    // none overflows on the way: 1e307rad (libgarb reads 1.0000000000000005e307)
+    // is fmod's remainder by the double nearest 2 pi, as degrees.
+    cascade_case("gradients: an angle in any unit", 400,
+        "<!doctype html><style>"
+        ".g{background-image:linear-gradient(1e307rad,red,blue)}"
+        ".h{background-image:linear-gradient(-1e307rad,red,blue)}"
+        ".i{background-image:linear-gradient(2.5turn,red,blue)}"
+        ".j{background-image:linear-gradient(-0.25turn,red,blue)}"
+        ".k{background-image:linear-gradient(500grad,red,blue)}"
+        "</style><div class=g></div><div class=h></div><div class=i></div>"
+        "<div class=j></div><div class=k></div>",
+        "html block holds-block\n"
+        "  head none\n"
+        "  body block margin=8/8/8/8 holds-block\n"
+        "    div block gradient=linear:167463:#ff0000@auto,#0000ff@auto\n"
+        "    div block gradient=linear:192537:#ff0000@auto,#0000ff@auto\n"
+        "    div block gradient=linear:180000:#ff0000@auto,#0000ff@auto\n"
+        "    div block gradient=linear:270000:#ff0000@auto,#0000ff@auto\n"
+        "    div block gradient=linear:90000:#ff0000@auto,#0000ff@auto\n");
     // currentColor is the colour of the element that USES it (CSS Color 4
     // § 4.4): a background or border colour taken by `inherit` is the
     // child's colour, and one written before `color` in the same rule is
