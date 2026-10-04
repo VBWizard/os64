@@ -417,9 +417,29 @@ static void web_setting(void)
         os64_font_set_release(set); set = NULL;
     }
     CHECK(rows[0] < rows[1] && rows[1] < rows[2]);
-    CHECK(!os64_font_config_web_prepare(text, &c, 96, &set, &e));
-    CHECK(!os64_font_set_view(set, OS64_FONT_ROLE_UI, &view) && view.row_height_px == rows[2]);
-    os64_font_set_release(set); set = NULL;
+    /* The face opens at the size the page draws, past either end of what a
+     * person may configure: a zoomed-out control is 3px, a zoomed-in one
+     * 200px. Only the engine's own range clamps. */
+    int32_t at3 = 0, at96 = 0, atmax = 0;
+    const struct { uint32_t ask; int32_t *row; } ends[] = {
+        {3, &at3}, {96, &at96}, {OS64_FONT_PIXEL_MAX, &atmax},
+    };
+    for (size_t i = 0; i < sizeof ends / sizeof ends[0]; ++i) {
+        CHECK(!os64_font_config_web_prepare(text, &c, ends[i].ask, &set, &e));
+        CHECK(!os64_font_set_view(set, OS64_FONT_ROLE_UI, &view));
+        *ends[i].row = view.row_height_px;
+        os64_font_set_release(set); set = NULL;
+    }
+    CHECK(at3 > 0 && at3 < rows[0] && at96 < rows[2] && rows[2] < atmax);
+    int32_t clamped[3];
+    const uint32_t outside[3] = {1, 0, OS64_FONT_PIXEL_MAX + 1};
+    for (size_t i = 0; i < 3; ++i) {
+        CHECK(!os64_font_config_web_prepare(text, &c, outside[i], &set, &e));
+        CHECK(!os64_font_set_view(set, OS64_FONT_ROLE_UI, &view));
+        clamped[i] = view.row_height_px;
+        os64_font_set_release(set); set = NULL;
+    }
+    CHECK(clamped[1] == clamped[0] && clamped[2] == atmax);
     /* A builtin Web face has one size, whatever is asked. */
     CHECK(!decode("web.face = builtin", &c, &e));
     CHECK(!os64_font_config_web_prepare(text, &c, 40, &set, &e));

@@ -68,9 +68,12 @@ os64_font_config_status_t os64_font_config_read(os64_font_config_t *out,
 os64_font_config_status_t os64_font_config_prepare(os64_text_context_t *,
     const os64_font_config_t *, os64_font_set_t **out, os64_font_config_error_t *);
 /* Open the Web setting's face (and its fallbacks) at `pixel_height`, clamped
- * to 8..96, as the UI role of a new set whose other roles are builtin — the
- * shape os64_ui_font_app lends. A builtin Web face is opened at 16, the only
- * size it has. Errors name the Web setting's line with `web` set. */
+ * to 1..OS64_FONT_PIXEL_MAX, as the UI role of a new set whose other roles
+ * are builtin — the shape os64_ui_font_app lends. The setting is validated as
+ * configured (8..96 is what a person may choose); the open is at the size the
+ * page draws, which zoom takes past either end. A builtin Web face is opened
+ * at 16, the only size it has. Errors name the Web setting's line with `web`
+ * set. */
 os64_font_config_status_t os64_font_config_web_prepare(os64_text_context_t *,
     const os64_font_config_t *, uint32_t pixel_height, os64_font_set_t **out,
     os64_font_config_error_t *);

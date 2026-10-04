@@ -1,4 +1,5 @@
 #include "os64/font_config.h"
+#include "os64/font_backend.h"
 #include "os64/conf.h"
 #include "os64/slurp.h"
 #include "os64/mem.h"
@@ -268,6 +269,9 @@ os64_font_config_status_t os64_font_config_read(os64_font_config_t *out,
     return status;
 }
 
+static os64_font_config_status_t prepare_valid(os64_text_context_t *,
+    const os64_font_config_t *, os64_font_set_t **, os64_font_config_error_t *);
+
 os64_font_config_status_t os64_font_config_prepare(os64_text_context_t *context,
     const os64_font_config_t *config, os64_font_set_t **out, os64_font_config_error_t *e)
 {
@@ -278,6 +282,17 @@ os64_font_config_status_t os64_font_config_prepare(os64_text_context_t *context,
     os64_font_config_t c = *config;
     os64_font_config_status_t status = validate(&c, e);
     if (status) return status;
+    return prepare_valid(context, &c, out, e);
+}
+
+/* Opens the roles of a config validate() has already resolved. Role sizes are
+ * taken as given: 8..96 is what a person may configure, not what the provider
+ * can open, and the Web face is opened at whatever size the page draws it. */
+static os64_font_config_status_t prepare_valid(os64_text_context_t *context,
+    const os64_font_config_t *config, os64_font_set_t **out, os64_font_config_error_t *e)
+{
+    const os64_font_config_t c = *config;
+    os64_font_config_status_t status = OS64_FONT_CONFIG_OK;
     os64_font_role_spec_t specs[OS64_FONT_ROLE_COUNT] = {0};
     struct { const char *path; uint8_t *bytes; size_t length; } files[9] = {0};
     size_t count = 0, remaining = OS64_FONT_SOURCE_BYTES_MAX;
@@ -339,9 +354,15 @@ os64_font_config_status_t os64_font_config_web_prepare(os64_text_context_t *cont
     os64_strcopy(c.path, OS64_FONT_PATH_CAP, config->path);
     os64_font_config_role_t *web = &c.roles[OS64_FONT_ROLE_UI];
     *web = config->roles[OS64_FONT_CONFIG_WEB];
-    web->size = pixel_height < 8 ? 8 : pixel_height > 96 ? 96 : pixel_height;
-    if (os64_streq(web->face[0], "builtin")) web->size = 16;
-    os64_font_config_status_t status = os64_font_config_prepare(context, &c, out, e);
+    problem(e, OS64_FONT_CONFIG_OK, 0, NO_ROLE, 0);
+    os64_font_config_status_t status = context && out ? validate(&c, e)
+        : problem(e, OS64_FONT_CONFIG_SYNTAX, 0, NO_ROLE, 0);
+    if (!status) {
+        if (!os64_streq(web->face[0], "builtin"))
+            web->size = pixel_height < 1 ? 1 : pixel_height > OS64_FONT_PIXEL_MAX
+                ? OS64_FONT_PIXEL_MAX : pixel_height;
+        status = prepare_valid(context, &c, out, e);
+    }
     if (status && e && e->role == OS64_FONT_ROLE_UI) {
         e->role = OS64_FONT_ROLE_COUNT;
         e->web = true;
