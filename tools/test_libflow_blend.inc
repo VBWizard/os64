@@ -344,3 +344,97 @@ static void background_box_cases(void)
         "      div block bg-image=\"a.png\"@0 repeat 0%/0%"
         " layer=1 gradient=linear:180000:#ff0000@auto,#0000ff@auto\n");
 }
+
+// image-rendering is inherited, its crisp spellings one answer and every
+// other keyword the other.
+static void image_rendering_cases(void)
+{
+    cascade_case("image-rendering: pixelated inherited, auto back to smooth", 400,
+        "<!doctype html><style>.a{image-rendering:pixelated}.c{image-rendering:auto}"
+        ".d{image-rendering:-webkit-optimize-contrast}</style>"
+        "<div class=a><p></p><p class=c><span class=d></span></p></div>",
+        "html block holds-block\n"
+        "  head none\n"
+        "  body block margin=8/8/8/8 holds-block\n"
+        "    div block pixelated holds-block\n"
+        "      p block margin=16/0/16/0\n"
+        "      p block margin=16/0/16/0 smooth\n"
+        "        span inline pixelated\n");
+}
+
+// Zoom (PILE3.md § Zoom): at 2, every CSS pixel is two of the tree's. 1em
+// is the zoomed font's (32), 50px is 100, a 1px border 2, and 25vh is a
+// quarter of the 600 CSS px viewport, 300 device pixels.
+static void zoom_cases(void)
+{
+    kEnv.zoom = 2000;
+    cascade_layout_case("zoom 2: lengths, the font, the border and vh doubled",
+        "<!doctype html><style>body{margin:0}"
+        "div{width:50px;height:25vh;border-left:1px solid;margin-left:1em}</style><div></div>",
+        400,
+        "page 400 300\n"
+        "block html 0 0 400 300\n"
+        "  block body 0 0 400 300\n"
+        "    block div 32 0 102 300\n");
+    // A picture's size from its attributes, and the oracle's own 40 x 30,
+    // both in CSS pixels: 20 x 40 and 80 x 60 on the page.
+    char *got = cascade_layout_of("<!doctype html><img src=known.png width=10 height=20>"
+                                  "<img src=known.png>", 400);
+    int32_t size[2][2] = {{0}}, n = 0;
+    for (const char *at = got; at != NULL && n < 2 && (at = strstr(at, "atomic img ")) != NULL;
+         at++, n++) {
+        int x, y;
+        sscanf(at, "atomic img %d %d %d %d", &x, &y, &size[n][0], &size[n][1]);
+    }
+    expect("zoom 2: a picture's attribute size and its own size doubled",
+           n == 2 && size[0][0] == 20 && size[0][1] == 40 && size[1][0] == 80 && size[1][1] == 60,
+           got);
+    free(got);
+    // A 64px font at 5 is shaped at 320 device px, past the old 256 cap: any
+    // size a page draws at 100% is shaped at the size it is laid out at, so
+    // its run is five times as wide as at 1 (the style's size reads 320
+    // either way; the run's width is what was shaped).
+    {
+        int32_t wide[2] = {0, 0};
+        for (int z = 0; z < 2; z++) {
+            kEnv.zoom = z ? 5000 : 1000;
+            got = cascade_layout_of("<!doctype html><p style=\"font-size:64px;margin:0\">M",
+                                    2000);
+            const char *t = got != NULL ? strstr(got, "text \"M\" ") : NULL;
+            int x, y, w = 0, h;
+            if (t != NULL)
+                sscanf(t, "text \"M\" %d %d %d %d", &x, &y, &w, &h);
+            wide[z] = w;
+            free(got);
+        }
+        expect("zoom 5: a 64px font is shaped at 320, five times its width at 1",
+               wide[0] > 0 && wide[1] >= 5 * wide[0] - 1 && wide[1] <= 5 * wide[0] + 1, NULL);
+    }
+    kEnv.zoom = 5000;
+    // An auto-repeat counts a track of nothing as one CSS pixel (§ 7.2.3.2)
+    // — five of the tree's at 5 — so a 20px grid makes 20 columns, not 100:
+    // the 21st item starts the second row.
+    kEnv.zoom = 5000;
+    {
+        char html[1024];
+        int at = snprintf(html, sizeof(html),
+                          "<!doctype html><style>body{margin:0}.g{display:grid;width:20px;"
+                          "grid-template-columns:repeat(auto-fill,minmax(0,1fr))}"
+                          ".g div{height:1px}</style><div class=g>");
+        for (int i = 0; i < 21; i++)
+            at += snprintf(html + at, sizeof(html) - (size_t)at, "<div></div>");
+        snprintf(html + at, sizeof(html) - (size_t)at, "</div>");
+        got = cascade_layout_of(html, 400);
+        int ys[22] = {0}, k = 0;
+        for (const char *p = got; p != NULL && k < 22 && (p = strstr(p, "block div ")) != NULL;
+             p++, k++) {
+            int x, w, h;
+            sscanf(p, "block div %d %d %d %d", &x, &ys[k], &w, &h);
+        }
+        // ys[0] is the grid; ys[1..21] its items.
+        expect("zoom 5: an auto-repeat's 1px floor is a CSS pixel",
+               k == 22 && ys[20] == ys[1] && ys[21] > ys[1], got);
+        free(got);
+    }
+    kEnv.zoom = 0;
+}

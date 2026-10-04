@@ -111,12 +111,12 @@ static void pinned_limit(void)
     os64_text_context_t *text=context(128u*1024u*1024u);
     os64_font_family_cache_t *cache=NULL;
     CHECK(!os64_font_family_cache_create(text,specs,&cache,NULL,NULL));
-    os64_text_run_t *runs[64]; os64_font_role_view_t v;
-    for (unsigned k=0;k<64;++k) {CHECK(!open_key(cache,k,&v)); runs[k]=run(&v);}
-    CHECK(faces(text)==64);
-    CHECK(open_key(cache,64,&v)==OS64_FONT_LIMIT && !v.fonts);
-    for (unsigned k=0;k<64;++k) os64_text_run_release(runs[k]);
-    CHECK(!open_key(cache,64,&v));
+    static os64_text_run_t *runs[OS64_FONT_FACE_MAX]; os64_font_role_view_t v;
+    for (unsigned k=0;k<OS64_FONT_FACE_MAX;++k) {CHECK(!open_key(cache,k,&v)); runs[k]=run(&v);}
+    CHECK(faces(text)==OS64_FONT_FACE_MAX);
+    CHECK(open_key(cache,OS64_FONT_FACE_MAX,&v)==OS64_FONT_LIMIT && !v.fonts);
+    for (unsigned k=0;k<OS64_FONT_FACE_MAX;++k) os64_text_run_release(runs[k]);
+    CHECK(!open_key(cache,OS64_FONT_FACE_MAX,&v));
     os64_font_family_cache_destroy(cache); CHECK(!os64_text_destroy(text)); CHECK(!live);
 }
 static void fallbacks(void)
@@ -131,7 +131,12 @@ static void fallbacks(void)
     os64_font_family_cache_t *cache=NULL;
     CHECK(!os64_font_family_cache_create(text,with,&cache,NULL,NULL));
     os64_font_role_view_t v;
-    for (unsigned k=0;k<96;++k) {CHECK(!open_key(cache,k,&v)); CHECK(v.font_count==4); CHECK(faces(text)<=63);}
+    /* Three engine faces an entry (the fourth is the bitmap face), and the
+     * cache's entries are all that hold them: no run is kept. */
+    for (unsigned k=0;k<96;++k) {
+        CHECK(!open_key(cache,k,&v)); CHECK(v.font_count==4);
+        CHECK(faces(text)<=OS64_FONT_FAMILY_CACHE_MAX*3);
+    }
     os64_font_family_cache_destroy(cache); CHECK(!os64_text_destroy(text)); CHECK(!live);
 }
 #ifndef FAMILY_REAL

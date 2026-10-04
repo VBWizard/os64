@@ -333,7 +333,8 @@ typedef struct {
     os64_html_document_t *plain;
     os64_page_t *plain_model;
     flow_tree_t *tree;
-    int32_t laid_width, laid_height;
+    int32_t laid_width, laid_height;    // device pixels
+    uint32_t laid_zoom;                 // thousandths (flow_env_t.zoom)
     // The page's sheets, and their cascade at the size the tree was laid
     // out at; it is judged again when the size or the sheets change. The
     // tree points into both. `serial` names the page to a sheet's job.
@@ -472,16 +473,45 @@ static int32_t sheet_emit(Page *p, int32_t e, garb_sheet_in_t *in, int32_t *entr
     return at;
 }
 
-// Lays the page out at `width` x `height`, cascading its sheets again when
-// they changed or the size is not the one they were cascaded at — a media
-// query or a vw reads it. The new tree replaces the old only once it
-// exists (LAYOUT.md § Bounds), and the cascade the old one points into is
-// freed with it. False on no memory, the page on screen untouched.
-static bool page_lay_out(Page *p, int32_t width, int32_t height)
+// A view `w` x `h` device pixels as the page's sheets see it: in CSS
+// pixels at `zoom` (thousandths), never less than one.
+static garb_env_t css_view(int32_t w, int32_t h, uint32_t zoom)
+{
+    int64_t cw = ((int64_t)w * 1000 + zoom / 2) / zoom;
+    int64_t ch = ((int64_t)h * 1000 + zoom / 2) / zoom;
+    return (garb_env_t){cw > 0 ? (int32_t)cw : 1, ch > 0 ? (int32_t)ch : 1};
+}
+
+// Lays the page out at `width` x `height` device pixels and `zoom`
+// (thousandths), cascading its sheets again when they changed or the size they
+// see is not the one they were cascaded at — a media query or a vw reads
+// it. The new tree replaces the old only once it exists (LAYOUT.md §
+// Bounds), and the cascade the old one points into is freed with it.
+// False on no memory, the page on screen untouched — unless a first try
+// stopped partway, when the old tree is let go to make room for a second
+// (below), and with no memory even for that the page has no tree.
+// `n` CSS pixels as device pixels at `zoom` (thousandths; 0 is 1000),
+// rounded, never below 1 for a picture that has a size, held to INT32_MAX.
+static uint32_t zoomed_px(uint32_t n, uint32_t zoom)
+{
+    uint64_t z = zoom != 0 ? zoom : 1000;
+    uint64_t r = ((uint64_t)n * z + 500) / 1000;
+    return (uint32_t)(r > INT32_MAX ? INT32_MAX : r < 1 && n > 0 ? 1 : r);
+}
+
+// A position in device pixels, laid out at zoom `from`, at zoom `to`
+// (thousandths), held to an int32_t.
+static int32_t scale_zoom(int32_t v, uint32_t to, uint32_t from)
+{
+    int64_t r = (int64_t)v * to / (from != 0 ? from : 1000);
+    return (int32_t)(r > INT32_MAX ? INT32_MAX : r < INT32_MIN ? INT32_MIN : r);
+}
+
+static bool page_lay_out(Page *p, int32_t width, int32_t height, uint32_t zoom)
 {
     garb_cascade_t *cascade = p->cascade;
     int32_t entry[SHEETS_MAX] = {0};
-    garb_env_t view = {width, height};
+    garb_env_t view = css_view(width, height, zoom);
     if (p->sheets_changed || (cascade != NULL && (garb_cascade_env(cascade).width != view.width ||
                                                   garb_cascade_env(cascade).height != view.height))) {
         garb_sheet_in_t in[SHEETS_MAX];
@@ -495,9 +525,23 @@ static bool page_lay_out(Page *p, int32_t width, int32_t height)
     }
     s_env.ctx = p;
     s_env.cascade = cascade;
-    // One height for `vh` and the initial containing block (flow_env_t).
-    s_env.viewport_height = height;
+    // One height for `vh` and the initial containing block (flow_env_t),
+    // in CSS pixels at `zoom`.
+    s_env.viewport_height = view.height;
+    s_env.zoom = zoom;
     flow_tree_t *fresh = flow_layout(page_doc(p), page_model(p), width, &s_env);
+    // The tree on screen holds the faces its runs were shaped in until it
+    // is freed — each one a size of a file, counted against the text
+    // engine's budget and its face limit — so a layout at new sizes (a
+    // zoom, most of all) can stop partway for want of the room the old tree
+    // holds. Then both go, and the page is laid out once more in the whole
+    // budget.
+    if (fresh != NULL && flow_incomplete(fresh) && p->tree != NULL) {
+        flow_free(fresh);
+        flow_free(p->tree);
+        p->tree = NULL;
+        fresh = flow_layout(page_doc(p), page_model(p), width, &s_env);
+    }
     s_env.cascade = NULL;
     if (fresh == NULL) {
         if (cascade != p->cascade)
@@ -513,14 +557,20 @@ static bool page_lay_out(Page *p, int32_t width, int32_t height)
     p->tree = fresh;
     // A box keeps where it was scrolled to, as near as the new layout lets
     // it: the range may have shrunk, and the element may make no scroll
-    // container now.
+    // container now. Where it was is in device pixels, so a new zoom
+    // scales it with everything else the page holds.
     for (int32_t i = 0; i < p->nbox_scrolls; i++) {
+        if (p->laid_zoom != 0 && p->laid_zoom != zoom) {
+            p->box_scrolls[i].at.x = scale_zoom(p->box_scrolls[i].at.x, zoom, p->laid_zoom);
+            p->box_scrolls[i].at.y = scale_zoom(p->box_scrolls[i].at.y, zoom, p->laid_zoom);
+        }
         int32_t s = flow_scroller_for(fresh, p->box_scrolls[i].node);
         if (s >= 0)
             flow_scroll_set(fresh, s, p->box_scrolls[i].at);
     }
     p->laid_width = width;
     p->laid_height = height;
+    p->laid_zoom = zoom;
     p->sheets_changed = false;
     return true;
 }
@@ -602,9 +652,10 @@ static struct {
     char status_rest[512];
     int32_t pointer_x, pointer_y;   // where the pointer last was, for hover
     bool running;
-    // A resize is laid out once the events that arrived with it are
-    // drained: a drag sends a stream of them, and a big page takes long
-    // enough to lay out that doing it per event would freeze the window.
+    // A resize or a zoom is laid out once the events that arrived with it
+    // are drained: a drag sends a stream of them, a person zooming presses
+    // several times, and a big page takes long enough to lay out that
+    // doing it per event would freeze the window.
     bool relayout_due;
     uint8_t seq;                    // the view's VT100 key-burst state
 
@@ -615,6 +666,10 @@ static struct {
     os64_work_pool_t *pool;
     Page page;                      // the page on screen
     int32_t sx, sy;                 // where it is scrolled to, in page pixels
+    // The zoom every page is laid out at, in thousandths: a window's, kept
+    // across navigation, starting at the settings' default (yonder.conf),
+    // which Ctrl+0 goes back to.
+    uint32_t zoom, zoom_default;
     int32_t hover_link, pressed_link;
     int32_t chain;                  // refresh hops since a person last went anywhere
 
@@ -835,22 +890,38 @@ static void scroll_to(int32_t x, int32_t y)
     hover(g.pointer_x, g.pointer_y);
 }
 
-// Where the person is, as libway keeps it for the history: the scroll.
+// Where the person is, as libway keeps it for the history: the scroll, in
+// device pixels, and the zoom it was measured at.
 static way_position_t position_now(void)
 {
     way_position_t at;
     os64_memset(&at, 0, sizeof(at));
+    uint32_t zoom = g.page.laid_zoom;
+    _Static_assert(sizeof(g.sx) + sizeof(g.sy) + sizeof(zoom) <= WAY_POSITION_MAX,
+                   "a position fits libway's bytes");
     os64_memcpy(at.bytes, &g.sx, sizeof(g.sx));
     os64_memcpy(at.bytes + sizeof(g.sx), &g.sy, sizeof(g.sy));
+    os64_memcpy(at.bytes + sizeof(g.sx) + sizeof(g.sy), &zoom, sizeof(zoom));
     return at;
 }
 
 // A remembered position is a HINT: the page that came back need not be the
-// page that was left, so it is clamped to the page that did.
+// page that was left, so it is clamped to the page that did — and scaled to
+// the zoom that page is laid out at, when the zoom changed while it was
+// away (a position with no zoom is taken as it is).
 static void position_restore(const way_position_t *at)
 {
-    os64_memcpy(&g.sx, at->bytes, sizeof(g.sx));
-    os64_memcpy(&g.sy, at->bytes + sizeof(g.sx), sizeof(g.sy));
+    int32_t x, y;
+    uint32_t zoom;
+    os64_memcpy(&x, at->bytes, sizeof(x));
+    os64_memcpy(&y, at->bytes + sizeof(x), sizeof(y));
+    os64_memcpy(&zoom, at->bytes + sizeof(x) + sizeof(y), sizeof(zoom));
+    if (zoom != 0 && g.page.laid_zoom != 0 && zoom != g.page.laid_zoom) {
+        x = scale_zoom(x, g.page.laid_zoom, zoom);
+        y = scale_zoom(y, g.page.laid_zoom, zoom);
+    }
+    g.sx = x;
+    g.sy = y;
     clamp_scroll();
 }
 
@@ -940,9 +1011,12 @@ static void say_laid_out(uint64_t ms)
         const char *name = yonder_agent_name(g.way.agent);
         os64_snprintf(asking, sizeof(asking), " - asking as %s", name != NULL ? name : "a typed agent");
     }
-    os64_snprintf(line, sizeof(line), "%s%s%s - laid out at %d px in %lu ms%s%s%s%s",
+    char zoomed[24] = "";
+    if (g.zoom != 1000)
+        os64_snprintf(zoomed, sizeof(zoomed), " zoomed %d%%", (int)((g.zoom + 5) / 10));
+    os64_snprintf(line, sizeof(line), "%s%s%s - laid out at %d px%s in %lu ms%s%s%s%s",
                   g.page.way.url, g.page.way.note[0] ? " - " : "", g.page.way.note,
-                  g.page.laid_width, (unsigned long)ms, pictures, asking,
+                  g.page.laid_width, zoomed, (unsigned long)ms, pictures, asking,
                   s_env.static_only ? " - POSITIONING OFF (p)" : "",
                   flow_incomplete(g.page.tree) ? " - INCOMPLETE: the layout stopped partway" : "");
     status_rest(line);
@@ -986,13 +1060,22 @@ static void relayout(bool again)
     bool height_matters = g.page.sheets_ready != 0 || flow_npositioned(g.page.tree) > 0;
     if (page_doc(&g.page) == NULL || width <= 0 ||
         (!again && g.page.tree != NULL && width == g.page.laid_width &&
-         (!height_matters || height == g.page.laid_height)))
+         g.zoom == g.page.laid_zoom && (!height_matters || height == g.page.laid_height)))
         return;
     int32_t offset = 0;
     const os64_html_node_t *anchor = anchor_of(&offset);
+    // How far into the anchor the view starts, and how far across the page
+    // it is, scaled with the page when the zoom changed — held aside, and
+    // taken only with the layout they belong to: a layout that fails keeps
+    // the old page at the old zoom, and its scroll with it.
+    int32_t sx = g.sx;
+    if (g.page.laid_zoom != 0 && g.page.laid_zoom != g.zoom) {
+        offset = scale_zoom(offset, g.zoom, g.page.laid_zoom);
+        sx = scale_zoom(g.sx, g.zoom, g.page.laid_zoom);
+    }
     os64_ticks_t t0, t1;
     os64_ticks(&t0);
-    bool laid = page_lay_out(&g.page, width, height);
+    bool laid = page_lay_out(&g.page, width, height, g.zoom);
     os64_ticks(&t1);
     // The attempt consumes the moves whether or not it fits: kept, they
     // would retry a layout that just failed at every event batch.
@@ -1003,6 +1086,7 @@ static void relayout(bool again)
         return;
     }
     g.laid_at = t1;
+    g.sx = sx;
     css_pictures(&g.page);
     if (anchor != NULL) {
         const flow_box_t *b = flow_box_for(g.page.tree, anchor);
@@ -1065,7 +1149,7 @@ static void arrive_now(Page *fresh, NavKind kind, const way_position_t *crumb,
     int32_t height = g.view.bounds.h > 0 ? g.view.bounds.h : 1;
     os64_ticks_t t0, t1;
     os64_ticks(&t0);
-    bool laid = page_lay_out(fresh, width, height);
+    bool laid = page_lay_out(fresh, width, height, g.zoom);
     os64_ticks(&t1);
     if (!laid) {
         sheets_leave(fresh);
@@ -1619,6 +1703,21 @@ static bool same_origin(const char *a, const char *b)
            ua.port == ub.port;
 }
 
+// Whether the first paint waits for a sheet: its media holds on this glass
+// as it is now, at its size and zoom — an import's own media list as well
+// as its importer's. An import's supports() is the cascade's to judge and
+// is not asked here, so one that fails is waited for all the same; rare,
+// and never wrong about what applies.
+static bool sheet_holds(const Page *p, const Sheet *sh)
+{
+    garb_env_t view = css_view(g.view.bounds.w, g.view.bounds.h, g.zoom);
+    if (sh->importer >= 0) {
+        const garb_import_t *im = &p->sheets[sh->importer].imports[sh->import_index];
+        return p->sheets[sh->importer].holds && garb_media_matches(im->media, im->nmedia, view);
+    }
+    return sh->media == NULL || garb_media_text_matches(sh->media, view);
+}
+
 // A new entry, NULL when the page has as many as it may.
 static Sheet *sheet_new(Page *p, const char *media, int32_t importer, int32_t import_index)
 {
@@ -1630,20 +1729,30 @@ static Sheet *sheet_new(Page *p, const char *media, int32_t importer, int32_t im
     sh->media = media;
     sh->importer = importer;
     sh->import_index = import_index;
-    // Whether the first paint waits for it: its media holds on this glass
-    // now — an import's own media list as well as its importer's. An
-    // import's supports() is the cascade's to judge and is not asked here,
-    // so one that fails is waited for all the same; rare, and never wrong
-    // about what applies.
-    garb_env_t view = {g.view.bounds.w > 0 ? g.view.bounds.w : 1,
-                       g.view.bounds.h > 0 ? g.view.bounds.h : 1};
-    if (importer >= 0) {
-        const garb_import_t *im = &p->sheets[importer].imports[import_index];
-        sh->holds = p->sheets[importer].holds && garb_media_matches(im->media, im->nmedia, view);
-    } else {
-        sh->holds = media == NULL || garb_media_text_matches(media, view);
-    }
+    sh->holds = sheet_holds(p, sh);
     return sh;
+}
+
+static void coming_show(void);
+
+// The glass changed size or zoom while a page waits for its sheets: which
+// of them the first paint waits for is judged again against the glass it
+// will be shown on, so a sheet that applies now is waited for and one that
+// no longer does is not. An import follows its importer, which comes
+// before it in the table. Nothing left to wait for shows the page.
+static void coming_rejudge(void)
+{
+    if (!g.coming.active)
+        return;
+    Page *p = &g.coming.page;
+    p->sheets_waiting = 0;
+    for (int32_t i = 0; i < p->nsheets; i++) {
+        p->sheets[i].holds = sheet_holds(p, &p->sheets[i]);
+        if (p->sheets[i].waiting && p->sheets[i].holds)
+            p->sheets_waiting++;
+    }
+    if (p->sheets_waiting == 0)
+        coming_show();
 }
 
 // Sends a sheet's address to a worker. One that cannot be fetched stays
@@ -2824,10 +2933,15 @@ static bool glass_backdrop(void *ctx, const flow_box_t *b, int32_t layer,
         return true;
     uint32_t w, h;
     const uint32_t *px = picture_pixels(&p->pics[k], &w, &h);
+    // A picture's own size is in CSS pixels, so at the page's zoom it is
+    // that many device pixels times the zoom, as every CSS length is: an
+    // `auto` size and an attribute's tile are its size zoomed, and the
+    // tiler scales the picture to it.
+    uint32_t zw = zoomed_px(w, p->laid_zoom), zh = zoomed_px(h, p->laid_zoom);
     // A sheet's picture is sized and placed in the origin box the painter
     // names; an attribute's is tiled from (ox, oy) at its own size.
-    yonder_tile_t tile = {{ox, oy, (int32_t)w, (int32_t)h}, true, true};
-    if (layer >= 0 && !yonder_background_tile(&l, origin, w, h, &tile))
+    yonder_tile_t tile = {{ox, oy, (int32_t)zw, (int32_t)zh}, true, true};
+    if (layer >= 0 && !yonder_background_tile(&l, origin, zw, zh, &tile))
         return true;
     os64_gui_rect_t on = {area->x + gl->dx, area->y + gl->dy, area->w, area->h};
     os64_gui_rect_t cut = on_glass(gl, clip);
@@ -2835,7 +2949,7 @@ static bool glass_backdrop(void *ctx, const flow_box_t *b, int32_t layer,
     tile.at.y += gl->dy;
     if (cut.w > 0 && cut.h > 0)
         yonder_tile_picture(gl->surf->pixels, gl->surf->pitch_px, cut, on, tile.at, tile.repeat_x,
-                            tile.repeat_y, px, w, h);
+                            tile.repeat_y, !b->style->pixelated, px, w, h);
     return true;
 }
 
@@ -2853,7 +2967,8 @@ static void glass_image(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_
         uint32_t w, h;
         const uint32_t *px = picture_pixels(&p->pics[p->pic_of[i]], &w, &h);
         os64_gui_rect_t box = {c.x + gl->dx, c.y + gl->dy, c.w, c.h};
-        yonder_draw_picture(gl->surf->pixels, gl->surf->pitch_px, cut, box, px, w, h);
+        yonder_draw_picture(gl->surf->pixels, gl->surf->pitch_px, cut, box, !b->style->pixelated,
+                            px, w, h);
         return;
     }
     // The frame of one still coming, cut the same way.
@@ -3068,10 +3183,74 @@ static void toggle_positioning(void)
                                   : "Positioning on.");
 }
 
-// One line of scrolling: the default font's line, as the view shows it.
+// The zooms Ctrl+= and Ctrl+- step through, in thousandths: Chrome's, so a
+// hand that knows one knows the other.
+static const uint32_t kZoomSteps[] = {250,  330,  500,  670,  750,  800,  900,  1000, 1100,
+                                      1250, 1500, 1750, 2000, 2500, 3000, 4000, 5000};
+
+// The zoom in force from now on; the page follows once the events queued
+// with this one are drained, so presses in a row lay it out once.
+static void zoom_to(uint32_t zoom)
+{
+    if (zoom == g.zoom)
+        return;
+    g.zoom = zoom;
+    g.relayout_due = true;
+    coming_rejudge();
+}
+
+// The next step in (`in`) or out from the zoom in force; one between steps
+// (the settings' default may be any whole percent) goes to the next step
+// that way.
+static uint32_t zoom_step(bool in)
+{
+    int32_t n = (int32_t)(sizeof(kZoomSteps) / sizeof(kZoomSteps[0]));
+    for (int32_t i = 0; i < n; i++) {
+        uint32_t s = kZoomSteps[in ? i : n - 1 - i];
+        if (in ? s > g.zoom : s < g.zoom)
+            return s;
+    }
+    return g.zoom;
+}
+
+// A zoom applied from the Settings window: the default Ctrl+0 goes back to,
+// and the zoom in force from now on.
+static void zoom_use(uint32_t zoom)
+{
+    g.zoom_default = zoom;
+    zoom_to(zoom);
+}
+
+// Ctrl with = or + zooms in, with - out, with 0 back to the settings'
+// default; Ctrl and the wheel steps too, up to zoom in. Wherever focus is
+// in the window, as a browser does. True when the event was one.
+static bool zoom_event(const os64_gui_event_t *ev)
+{
+    if (ev->type == OS64_GUI_EVENT_KEY_DOWN && (ev->key.modifiers & OS64_GUI_MOD_CTRL)) {
+        char a = ev->key.ascii;
+        if (a == '=' || a == '+')
+            zoom_to(zoom_step(true));
+        else if (a == '-')
+            zoom_to(zoom_step(false));
+        else if (a == '0')
+            zoom_to(g.zoom_default);
+        else
+            return false;
+        return true;
+    }
+    if (ev->type == OS64_GUI_EVENT_MOUSE_WHEEL && (ev->mouse.modifiers & OS64_GUI_MOD_CTRL) &&
+        ev->mouse.dy != 0) {
+        zoom_to(zoom_step(ev->mouse.dy < 0));
+        return true;
+    }
+    return false;
+}
+
+// One line of scrolling: the default font's line, as the view shows it at
+// the zoom in force.
 static int32_t line_step(void)
 {
-    return (int32_t)s_env.viewport_font_px * 5 / 4;
+    return (int32_t)((int64_t)s_env.viewport_font_px * 5 * g.zoom / 4000);
 }
 
 // The link under a point of the view, or -1.
@@ -3339,6 +3518,7 @@ static void on_resize(os64_ui_t *ui)
     (void)ui;
     layout();
     g.relayout_due = true;
+    coming_rejudge();
     clamp_scroll();
     sync_bars();
     forms_place();
@@ -3525,6 +3705,7 @@ int main(int argc, char **argv)
     }
     g.hover_link = g.pressed_link = -1;
     s_env.replaced_size = replaced_size;
+    g.zoom = g.zoom_default = yonder_settings_saved_zoom();
     g.way.name = "yonder";
     char saved[YONDER_AGENT_MAX];
     const char *agent = yonder_settings_saved_agent(saved, sizeof(saved)) ? yonder_agent_keep(saved)
@@ -3605,8 +3786,9 @@ int main(int argc, char **argv)
                      ev.type == OS64_GUI_EVENT_WINDOW_UNCOVERED)
                 window_seen();
             if (ev.type == OS64_GUI_EVENT_SETTINGS)
-                yonder_settings_open(g.win, BELL_SETTINGS, g.way.agent, agent_use, g.cache);
-            else if (!bar_event(&ev) && !password_key(&ev))
+                yonder_settings_open(g.win, BELL_SETTINGS, g.way.agent, agent_use, g.cache,
+                                     g.zoom_default, zoom_use);
+            else if (!bar_event(&ev) && !zoom_event(&ev) && !password_key(&ev))
                 os64_ui_dispatch(&g.ui, &ev);
         } while (g.running && os64_gui_event_poll(g.win, &ev) == 1);
         if (g.relayout_due) {

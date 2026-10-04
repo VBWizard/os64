@@ -7,6 +7,15 @@
 
 #define F_ARRAY(a) ((int32_t)(sizeof(a) / sizeof((a)[0])))
 
+// `n` CSS pixels in the tree's 26.6 units, which are device pixels'
+// (flow_env_t.zoom), rounded to the nearest unit.
+static inline int64_t f_css_units(const flow_env_t *env, int64_t n)
+{
+    uint32_t z = env->zoom != 0 ? env->zoom : 1000;
+    int64_t u = n * 64 * (int64_t)z;
+    return u >= 0 ? (u + 500) / 1000 : -((-u + 500) / 1000);
+}
+
 // White-space's two questions (CSS Text 3 § 3), answered in one place so
 // the box builder and layout agree: does a run of spaces collapse, and
 // may a line wrap?
