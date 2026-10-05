@@ -14,19 +14,20 @@ goes in DOM.md and its brief here is struck.
 | D6 — **Implemented; awaiting review** | Quinn and two scoped subagents | Fable | [D6 as built](DOM.md#d6-as-built); stacked on D5b |
 | D5 — **D5a merged #214; D5b implemented; awaiting review** | Quinn with scoped subagents | Fable | D2b and D3; D4 is not needed |
 | D4 — **Built; in review** | Fable | Chris | [DOM_D4.md](DOM_D4.md) is the design, [DOM.md § D4, as built](DOM.md#d4-as-built) the record |
-| D7 the loop | Fable | — | after D5, on D4 |
+| D7 the loop — **Designed; Opus builds** | Opus, from [DOM_D7.md](DOM_D7.md) | Fable (the loop); Quinn may take D7a's libjs/libdom half first | on D4, as two stacked PRs (D7a registry and turn, D7b the loop) |
 
 D4 and D7 stay with Fable because their sections of DOM.md are findings and
 leans, not specifications, and a wrong call there is a hunt rather than a
 review round. The remaining briefs below are for slices whose rules are already
 written down.
 
-**D7 policy handoff.** Its execution-time default is not settled by D5b's
-one-second fixture deadline. Consider a script-timeout control in Settings,
-as Chris proposed on 2026-10-03; choose the default/range from P5 workloads and
-define Apply/Save behavior. DOM.md's execution-time policy decision records
-the per-turn scope and the existing expiry behavior. This remains Fable's D7
-work.
+**D7 is briefed in [DOM_D7.md](DOM_D7.md)** (2026-10-05): the libjs task
+entries, libdom's listener and timer registries, the stream's turn with
+runs, script order, input events, the execution-time policy (5 s per task,
+1 to 60, a Settings slider, `script_seconds` in `yonder.conf`; the number
+is a lean until the P5 audit moves it) and the cut into D7a and D7b. Fable
+designed it and reviews it; Opus builds. Everything that file leaves to
+"the builder" is Opus's to decide and record in the as-built section.
 
 ## What every DOM slice does the same way
 
