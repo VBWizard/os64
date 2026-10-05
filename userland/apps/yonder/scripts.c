@@ -11,6 +11,9 @@ struct yonder_scripts {
     os64_page_state_t *state;
     os64_js_runtime_t *runtime;
     os64_dom_t *dom;
+    os64_dom_geometry_provider_t geometry;
+    void *geometry_opaque;
+    os64_dom_geometry_stats_t last_geometry_stats;
     void (*alert)(void *, const char *, size_t);
     void *opaque;
     char url[OS64_JS_SOURCE_NAME_CAP];
@@ -118,6 +121,23 @@ yonder_scripts_t *yonder_scripts_new(os64_html_document_t *doc,
     return s;
 }
 
+void yonder_scripts_set_geometry(yonder_scripts_t *s, os64_dom_geometry_provider_t provider, void *opaque)
+{
+    if (s == NULL) return;
+    s->geometry = provider;
+    s->geometry_opaque = opaque;
+    os64_dom_set_geometry(s->dom, provider, opaque);
+}
+
+os64_dom_geometry_stats_t yonder_scripts_geometry_stats(yonder_scripts_t *s, bool reset)
+{
+    if (s == NULL) return (os64_dom_geometry_stats_t){0};
+    if (s->dom != NULL) return os64_dom_geometry_stats(s->dom, reset);
+    os64_dom_geometry_stats_t result = s->last_geometry_stats;
+    if (reset) s->last_geometry_stats = (os64_dom_geometry_stats_t){0};
+    return result;
+}
+
 bool yonder_scripts_pending(const yonder_scripts_t *s)
 {
     return s != NULL && s->next < s->count;
@@ -126,6 +146,7 @@ bool yonder_scripts_pending(const yonder_scripts_t *s)
 static void retire(yonder_scripts_t *s)
 {
     s->next = s->count;
+    if (s->dom != NULL) s->last_geometry_stats = os64_dom_geometry_stats(s->dom, false);
     os64_dom_drain(s->dom);
     os64_js_destroy(s->runtime);
     os64_dom_free(s->dom);
@@ -161,9 +182,12 @@ bool yonder_scripts_step(yonder_scripts_t *s, os64_js_outcome_t *out)
     os64_snprintf(name, sizeof(name), "%.*s#inline-%lu", (int)(sizeof(name) - 32),
                   s->url, (unsigned long)s->next);
     if (s->runtime == NULL) {
-        /* A fixture turn has a finite one-second deadline and 4096 jobs.
-         * Stack/heap/source keep the measured libdom target profile. */
+        /* Geometry shares this stack with native layout. The measured 128 KiB
+         * engine cap leaves headroom for deep layout frames; heap/source keep
+         * the standalone profile. The one-second/4096-job fixture turn is not
+         * ordinary-browsing execution policy (D7). */
         os64_js_config_t config = {os64_js_default_limits()};
+        config.limits.stack_bytes = 128 * 1024;
         config.limits.execution_ms = 1000;
         config.limits.jobs_per_turn = 4096;
         if (os64_js_create(&config, OS64_JS_ABI_ID, &s->runtime, out) != OS64_JS_OK)
@@ -172,6 +196,7 @@ bool yonder_scripts_step(yonder_scripts_t *s, os64_js_outcome_t *out)
         options.alert = s->alert;
         options.alert_opaque = s->opaque;
         s->dom = os64_dom_create(s->runtime, s->doc, s->state, &options, out);
+        os64_dom_set_geometry(s->dom, s->geometry, s->geometry_opaque);
         if (s->dom == NULL || os64_js_install_output(s->runtime, 1,
                                                    OS64_JS_OUTPUT_CONSOLE_LOG, out) != OS64_JS_OK)
             goto failed;

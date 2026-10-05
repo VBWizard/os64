@@ -29,6 +29,22 @@ static inline os64_dom_options_t os64_dom_default_options(void)
     return options;
 }
 
+/* Numeric snapshot in CSS pixels. Offset/client members are integer pixels;
+ * rect members can be fractional after device-pixel layout is unzoomed.
+ * offset_parent is borrowed from the provider's live document. */
+typedef struct {
+    double x, y, width, height;
+    int32_t offset_left, offset_top, offset_width, offset_height;
+    int32_t client_left, client_top, client_width, client_height;
+    const os64_html_node_t *offset_parent;
+    uint64_t layouts, elapsed_us;
+} os64_dom_geometry_t;
+
+typedef bool (*os64_dom_geometry_provider_t)(void *opaque,
+    const os64_html_node_t *node, os64_dom_geometry_t *out);
+
+typedef struct { uint64_t layouts, elapsed_us; } os64_dom_geometry_stats_t;
+
 #pragma GCC visibility push(default)
 
 /* Installs one document into a fresh, idle runtime before evaluation. All
@@ -71,6 +87,17 @@ os64_dom_t *os64_dom_create(os64_js_runtime_t *runtime,
                             os64_page_state_t *state,
                             const os64_dom_options_t *options,
                             os64_js_outcome_t *outcome);
+
+/* Install/replace the native provider outside script callbacks. A provider
+ * ensures a current layout, copies a snapshot and records attempted layouts
+ * and elapsed work even on refusal. It must not enter JS or pump events.
+ * NULL removes it; subsequent geometry reads refuse. Existing options ABI is
+ * unchanged. Browser owners install this before their first script. */
+void os64_dom_set_geometry(os64_dom_t *dom, os64_dom_geometry_provider_t provider,
+                            void *opaque);
+/* Owner-thread counters for forced native layouts and elapsed time. Reset at
+ * the start of a host task; records survive script exceptions/failed reads. */
+os64_dom_geometry_stats_t os64_dom_geometry_stats(os64_dom_t *dom, bool reset);
 
 /* Owner-thread only, outside JS callbacks. Idempotent; NULL is a no-op.
  * Drain closes bindings and releases C-retained JS values even when libjs
