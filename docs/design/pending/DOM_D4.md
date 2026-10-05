@@ -139,8 +139,8 @@ id, nothing else now) and `g.coming` (a page waiting for its sheets):
 
 1. A new head makes the parser. HTML: libhtml's options with the head's
    charset and the captured scripting mode, as `parse_body` does. Text: the
-   same parser given `<!doctype html><plaintext>` first, the way
-   `page_from_text` does today, with the encoding decided by
+   same parser given `<!doctype html><plaintext>` first, the way yonder
+   has always laid a text body out, with the encoding decided by
    `way_text_utf8` at the first chunk (the byte order mark needs three
    bytes of body, and the first chunk has them or the body is shorter than
    three bytes).
@@ -229,28 +229,38 @@ way), on the host first:
   scripted peers) gains the pieces-by-hand case above and runs it with
   scripting on and off; `tools/test_way_host.sh` (the pure half) gains a
   case per sentence of `way_note` and per rule of `way_text_utf8`.
-- **A new `tools/test_yonder_stream_host.sh`**, under ASan, UBSan and LSan,
-  in two parts. The mailbox, with real pipes and two threads: 1,000 chunks
+- **A new `tools/test_yonder_stream_host.sh`** for the mailbox, under
+  ASan, UBSan and LSan, with real pipes and two threads: 1,000 chunks
   through a 16-slot ring arrive whole and in order; a poster blocked on a
-  full ring is woken by the room note and waits are counted so a build
-  that never blocks or never wakes is caught; a stale answer in the pipe
-  does not pass for room; cancellation ends a blocked post; the head and
-  the verdict each arrive once; the mailbox and its pipe go with the last
-  holder. The window, hosting `yonder.c` the way `test_yonder_scripts_host`
-  does with the test playing the worker through the mailbox: a slice
-  feeds at most its budget and asks to be rung again; the head makes the
-  parser with the captured mode; a text/plain body decides its encoding
-  from its first bytes; a verdict before the ring is drained defers the
-  finish; a parser refusal cancels the job (the stub records it) and
-  arrives with the parser's sentence; a stream dropped mid-body frees
-  everything; a broken pool drops the stream; a request copy survives the
-  job's release; and the arrived document serialises identically to the
-  same bytes through `way_load`.
-- **Mutants**, one per rule the slice adds, against the finished harness:
-  the ring's wrap, the waiting flag, the note's number, the slice budget,
-  the verdict-before-drain, the scripting capture, the resume loop, the
-  cancel on refusal, the request copy, the generation check. The counts go
-  in the as-built section.
+  full ring is woken by the room note, and the harness counts the notes
+  the window writes so a build that never wakes, or wakes without a
+  waiter, is caught; a stale answer in the pipe does not pass for room;
+  cancellation ends a blocked post; the head and the verdict each arrive
+  once; the mailbox and its pipe go with the last holder.
+- **The window's side joins `tools/test_yonder_scripts_host.sh`**, the
+  harness that already hosts `yonder.c`, with the test playing the worker
+  through a single-threaded stand-in for the mailbox (the ring's own proof
+  is the harness above): a slice feeds at most its budget and asks to be
+  rung again; the head makes the parser with the captured mode and a
+  script's stop is resumed, not refused; a text/plain body decides its
+  encoding from its first bytes; a verdict before the ring is drained
+  defers the finish; a parser refusal cancels the job (the stub records
+  it) and arrives with the parser's sentence; a stream dropped mid-body
+  frees everything; a broken pool drops the stream; a request copy
+  reaches the page that comes back; mail of another generation is not
+  read; and the arrived document serialises identically to the same bytes
+  parsed whole.
+- **Mutants** (`tools/test_yonder_stream_mutants.py`), one per rule the
+  slice adds, each applied to the worktree's copy of its file and put
+  back byte for byte: the ring's wrap, its count, a post larger than a
+  slot, the waiting flag, a note per take, the small-cap refusal, the
+  verdict in `streaming`, the cancel in a wait; the slice budget, the
+  verdict-before-drain, the scripting capture, the resume loop, the cancel
+  on refusal, the request copy, the form kept, Stop lit by the stream, the
+  parser freed, the text encoding, the generation check, the plaintext
+  prefix; the progress sentence, the head's address, the text judgement,
+  the two note sentences, the byte order mark and the label's precedence.
+  The counts go in the as-built section.
 - **Consumers unchanged**: `test_yonder_host.sh` (the painter links
   `mail.c`), `test_yonder_scripts_host.sh` (it includes `yonder.c`, so its
   stubs grow with the mailbox's surface), `test_wend_host.sh`,

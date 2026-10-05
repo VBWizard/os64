@@ -253,15 +253,20 @@ answering its close box while a page loads, and hears the job through
 07's doorbell (`on_doorbell`, `OS64_GUI_EVENT_DOORBELL`). One pool, made
 at start with four workers, which Y5's pictures will share.
 
-**What runs where.** The worker does `way_load`: the fetch, the parse, the
-model — libfetch, libhtml and libpage are pure over their buffers and the
-heap is thread-safe (07's audit). Everything else happens on the UI
-thread: layout, because every page shares one text context and a context
-is not for two threads at once; the history; the painting. The job's
-product is the arrived `way_page_t` with its fetch verdict and sentence;
-on the bell, the UI thread reaps it, lays it out BESIDE the page on
-screen, and swaps only when the layout exists (the rule wend has always
-kept, now in two faces).
+**What runs where.** The worker does the FETCH, and only that, since
+DOM D4 ([DOM_D4.md](../pending/DOM_D4.md)): it opens the address and
+judges the head with libway's `way_open`, and posts the head, the body in
+chunks and the fetch's verdict down the navigation's mailbox. The parse
+and the model are the window's, a slice per turn of its loop, because the
+thread that parses a page is the thread that will run its scripts (DOM.md
+ruling 5). Everything else was always the UI thread's: layout, because
+every page shares one text context and a context is not for two threads
+at once; the history; the painting. Once the verdict is in and the ring is
+drained the window finishes the parse, builds the model, and lays the page
+out BESIDE the page on screen, swapping only when the layout exists (the
+rule wend has always kept, now in two faces). Until D4 the worker ran the
+whole of `way_load` and handed over a finished `way_page_t`; wend still
+loads that way, on its own thread.
 
 **A load gets its own leg of the session.** `way_load` writes its
 sentences into the session and reaches the person through its face, and a
@@ -274,7 +279,8 @@ screens do not change; yonder builds one per job. (A leg of a journey, the
 part between two stops.)
 
 **The mailbox outlives whoever lets go of it last.** Progress and a
-question travel between a job and the window through a MAILBOX, and the
+question travel between a job and the window through a MAILBOX (and, since
+D4, the page's head, body and verdict: `mail.h`), and the
 job cannot own it: cancelling a job hands it to the pool's `release`,
 which may free it at once — immediately, if the job had already finished
 — and a lock protects concurrent access, not freed memory. So the mailbox

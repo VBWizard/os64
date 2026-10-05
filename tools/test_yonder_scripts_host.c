@@ -32,16 +32,118 @@ void os64_ui_theme_current(os64_ui_theme_t *theme, uint64_t *installed) {
 int64_t os64_ticks(os64_ticks_t *ticks) { *ticks=(os64_ticks_t){.ticks=100,.per_second=1000}; return 0; }
 uint64_t yonder_now_ms(void) { return 100; }
 void yonder_ticker_set(yonder_ticker_t *ticker, uint64_t due) { (void)ticker; (void)due; }
-void os64_work_cancel(os64_work_pool_t *pool, os64_work_id_t id) { (void)pool; (void)id; }
+/* THE POOL, FAKED. A stream case (below) lets one navigation be submitted
+ * and plays its worker itself; every other case still treats a submission
+ * as a mistake. */
+static bool pool_open;
+static os64_work_t pool_work;
+static os64_work_id_t pool_ids, pool_cancelled;
+static int64_t pool_error;
+static int pool_fake;
+/* A cancelled job is the pool's to release (work.h), and the window never
+ * sees it again. */
+void os64_work_cancel(os64_work_pool_t *pool, os64_work_id_t id) {
+    (void)pool; pool_cancelled=id;
+    if(id==pool_ids && pool_work.job!=NULL) {
+        pool_work.release(pool_work.job,NULL); memset(&pool_work,0,sizeof(pool_work));
+    }
+}
 os64_work_id_t os64_work_submit(os64_work_pool_t *pool, const os64_work_t *work) {
-    (void)pool; (void)work; check(false,"unexpected background submission"); return 0;
+    (void)pool;
+    if(!pool_open) { check(false,"unexpected background submission"); return 0; }
+    pool_work=*work; return ++pool_ids;
 }
-yonder_mail_t *yonder_mail_new(uint64_t generation) { (void)generation; return NULL; }
-void yonder_mail_drop(yonder_mail_t *mail) { check(mail==NULL,"no mailbox unexpectedly retained"); }
-void yonder_mail_hold(yonder_mail_t *mail) { (void)mail; }
-void yonder_mail_answer(yonder_mail_t *mail, uint32_t number, bool yes) {
-    (void)mail; (void)number; (void)yes;
+bool os64_work_reap(os64_work_pool_t *pool, os64_work_id_t *id, int64_t *verdict, void **job,
+                    void **product) {
+    (void)pool; (void)id; (void)verdict; (void)job; (void)product; return false;
 }
+int64_t os64_work_pool_error(os64_work_pool_t *pool) { (void)pool; return pool_error; }
+void os64_work_pool_destroy(os64_work_pool_t *pool) { (void)pool; }
+/* The trip's release, as trip.c spells it: the job's request, its mailbox
+ * reference, the job. trip.c itself is not linked (its run is a fetch). */
+int64_t yonder_trip_run(void *job, bool (*cancelled)(void *), void *ctx, void **out) {
+    (void)job; (void)cancelled; (void)ctx; (void)out;
+    check(false,"unexpected worker execution"); return -1;
+}
+void yonder_trip_release(void *job, void *product) {
+    (void)product;
+    yonder_trip_t *trip=job;
+    if(trip==NULL) return;
+    os64_page_request_free(&trip->request);
+    yonder_mail_drop(trip->mail);
+    os64_free(trip);
+}
+/* THE MAILBOX, FAKED, single-threaded: the ring's own two-thread proof is
+ * tools/test_yonder_stream_host.sh; here the test is the worker and posts
+ * straight into what the window takes from, in order. */
+typedef struct mail_chunk { struct mail_chunk *next; size_t len; uint8_t bytes[]; } mail_chunk_t;
+struct yonder_mail {
+    uint32_t refs; uint64_t generation;
+    char progress[512]; bool progress_new;
+    uint32_t asked; char question[512]; bool question_new;
+    uint32_t answered; bool answered_yes; unsigned answers;
+    way_head_t head; bool head_new;
+    yonder_verdict_t verdict; bool verdict_new;
+    mail_chunk_t *first, *last;
+};
+yonder_mail_t *yonder_mail_new(uint64_t generation) {
+    yonder_mail_t *m=os64_calloc(1,sizeof(*m));
+    if(m) { m->refs=1; m->generation=generation; }
+    return m;
+}
+void yonder_mail_hold(yonder_mail_t *m) { m->refs++; }
+void yonder_mail_drop(yonder_mail_t *m) {
+    if(m==NULL || --m->refs!=0) return;
+    while(m->first) { mail_chunk_t *c=m->first; m->first=c->next; os64_free(c); }
+    os64_free(m);
+}
+uint64_t yonder_mail_generation(const yonder_mail_t *m) { return m->generation; }
+void yonder_mail_progress(yonder_mail_t *m, const char *s) {
+    os64_strcopy(m->progress,sizeof(m->progress),s); m->progress_new=true;
+}
+uint32_t yonder_mail_ask(yonder_mail_t *m, const char *q) {
+    os64_strcopy(m->question,sizeof(m->question),q); m->question_new=true; return ++m->asked;
+}
+bool yonder_mail_wait(yonder_mail_t *m, uint32_t n, bool (*c)(void *), void *x) {
+    (void)m; (void)n; (void)c; (void)x; check(false,"the window never waits"); return false;
+}
+bool yonder_mail_take_progress(yonder_mail_t *m, char *out, size_t cap) {
+    bool fresh=m->progress_new; if(fresh) os64_strcopy(out,cap,m->progress);
+    m->progress_new=false; return fresh;
+}
+bool yonder_mail_take_question(yonder_mail_t *m, uint32_t *n, char *out, size_t cap) {
+    bool fresh=m->question_new;
+    if(fresh) { os64_strcopy(out,cap,m->question); *n=m->asked; }
+    m->question_new=false; return fresh;
+}
+void yonder_mail_answer(yonder_mail_t *m, uint32_t number, bool yes) {
+    m->answered=number; m->answered_yes=yes; m->answers++;
+}
+void yonder_mail_post_head(yonder_mail_t *m, const way_head_t *h) { m->head=*h; m->head_new=true; }
+bool yonder_mail_post(yonder_mail_t *m, const void *bytes, size_t len, bool (*c)(void *), void *x) {
+    (void)c; (void)x;
+    while(len>0) {
+        size_t take=len<YONDER_STREAM_CHUNK ? len : YONDER_STREAM_CHUNK;
+        mail_chunk_t *k=os64_malloc(sizeof(*k)+take);
+        k->next=NULL; k->len=take; memcpy(k->bytes,bytes,take);
+        if(m->last) m->last->next=k; else m->first=k;
+        m->last=k; bytes=(const uint8_t *)bytes+take; len-=take;
+    }
+    return true;
+}
+void yonder_mail_post_verdict(yonder_mail_t *m, const yonder_verdict_t *v) { m->verdict=*v; m->verdict_new=true; }
+bool yonder_mail_take_head(yonder_mail_t *m, way_head_t *out) {
+    bool fresh=m->head_new; if(fresh) *out=m->head; m->head_new=false; return fresh;
+}
+size_t yonder_mail_take(yonder_mail_t *m, void *buf, size_t cap) {
+    if(cap<YONDER_STREAM_CHUNK || m->first==NULL) return 0;
+    mail_chunk_t *k=m->first; m->first=k->next; if(m->first==NULL) m->last=NULL;
+    size_t len=k->len; memcpy(buf,k->bytes,len); os64_free(k); return len;
+}
+bool yonder_mail_take_verdict(yonder_mail_t *m, yonder_verdict_t *out) {
+    bool fresh=m->verdict_new; if(fresh) *out=m->verdict; m->verdict_new=false; return fresh;
+}
+bool yonder_mail_streaming(yonder_mail_t *m) { return m->head_new || m->first!=NULL || m->verdict_new; }
 #define JOB_STUB(kind) \
 int64_t yonder_##kind##_run(void *job, bool (*cancelled)(void *), void *ctx, void **out) { \
     (void)job; (void)cancelled; (void)ctx; (void)out; \
@@ -50,9 +152,14 @@ int64_t yonder_##kind##_run(void *job, bool (*cancelled)(void *), void *ctx, voi
 void yonder_##kind##_release(void *job, void *product) { \
     (void)job; (void)product; check(false,"unexpected worker product"); \
 }
-JOB_STUB(trip)
 JOB_STUB(picture)
 JOB_STUB(sheet)
+/* Reached from the doorbell's other bits, which no case rings. */
+int64_t os64_thread_join(int32_t handle, int64_t *retval) { (void)handle; (void)retval; return -1; }
+void os64_ui_settings_pump(os64_ui_settings_t *dialog) { (void)dialog; check(false,"no settings relay"); }
+os64_image_status_t os64_image_sequence_next(os64_image_sequence_t *seq) {
+    (void)seq; check(false,"no moving picture"); return OS64_IMAGE_OK;
+}
 void os64_image_free(os64_image_t *image) { os64_free(image->pixels); memset(image,0,sizeof(*image)); }
 void os64_image_sequence_free(os64_image_sequence_t *sequence) { check(sequence==NULL,"no unexpected moving image"); }
 const os64_image_frame_t *os64_image_sequence_frame(const os64_image_sequence_t *sequence) {
@@ -829,6 +936,312 @@ static void bounded_resources(void) {
     probe_drop();
 }
 
+/* ── THE STREAM (docs/design/pending/DOM_D4.md) ─────────────────────────
+ * The window's side: a navigation started, its head, body and verdict
+ * posted by the test standing in for the worker, and stream_turn feeding
+ * the parser a slice per turn until the page arrives through the same
+ * arrive() a worker's page used to take. */
+static void stream_window(void) {
+    os64_memset(&g,0,sizeof(g));
+    g.scripts_on=false; g.way.agent=YONDER_AGENT; g.way.name="yonder"; g.settle_due=YONDER_NEVER;
+    g.zoom=g.zoom_default=1000;
+    os64_ui_init(&g.ui,NULL);
+    os64_ui_panel(&g.root);
+    os64_ui_button(&g.back,"Back",NULL,NULL); os64_ui_button(&g.forward,"Forward",NULL,NULL);
+    os64_ui_button(&g.reload,"Reload",NULL,NULL); os64_ui_button(&g.stop,"Stop",NULL,NULL);
+    os64_ui_textfield(&g.field,g.field_buf,sizeof(g.field_buf),NULL,NULL,NULL);
+    os64_ui_label(&g.status,g.status_text);
+    g.view.cls=&kViewClass; g.view.focusable=true;
+    os64_ui_scrollbar(&g.vbar,NULL,NULL); os64_ui_scrollbar(&g.hbar,NULL,NULL);
+    os64_ui_panel(&g.qpanel); os64_ui_label(&g.qlabel,g.qtext);
+    os64_ui_button(&g.qyes,"Yes",NULL,NULL); os64_ui_button(&g.qno,"No",NULL,NULL);
+    os64_ui_widget_t *kids[]={&g.back,&g.forward,&g.reload,&g.stop,&g.field.w,&g.view,&g.vbar.w,
+        &g.hbar.w,&g.qpanel,&g.qlabel,&g.qyes,&g.qno,&g.status};
+    for(size_t i=0;i<sizeof(kids)/sizeof(kids[0]);i++) os64_ui_add_child(&g.root,kids[i]);
+    g.root.bounds=(os64_gui_rect_t){0,0,860,640};
+    os64_ui_set_root(&g.ui,&g.root);
+    g.view.bounds=(os64_gui_rect_t){0,0,800,600};
+    s_env.text=probe_text; s_env.fonts=probe_fonts; s_env.replaced_size=replaced_size;
+    g.pool=(os64_work_pool_t *)&pool_fake;
+    pool_open=true; pool_ids=0; pool_cancelled=0; pool_error=0; memset(&pool_work,0,sizeof(pool_work));
+}
+static void stream_window_drop(void) {
+    pool_open=false;
+    if(g.stream.active) stream_drop();
+    if(pool_work.job!=NULL) { yonder_trip_release(pool_work.job,NULL); memset(&pool_work,0,sizeof(pool_work)); }
+    forms_drop(); page_clear(&g.page); page_clear(&g.coming.page); os64_ui_font_release(&g.ui);
+}
+/* The worker's part: a head for `url`, the body in `chunk`-sized posts, the verdict. */
+static way_head_t stream_head(const char *type, const char *charset, bool posted) {
+    way_head_t h; memset(&h,0,sizeof(h));
+    h.status=200; os64_strcopy(h.reason,sizeof(h.reason),"OK");
+    os64_strcopy(h.content_type,sizeof(h.content_type),type);
+    os64_strcopy(h.charset,sizeof(h.charset),charset);
+    os64_strcopy(h.url,sizeof(h.url),"http://fixture.test/final");
+    h.posted=posted; h.body=os64_streq(type,"text/html") ? WAY_BODY_HTML : WAY_BODY_TEXT;
+    return h;
+}
+static void stream_post_body(const uint8_t *bytes, size_t len, size_t chunk) {
+    for(size_t at=0;at<len;at+=chunk)
+        yonder_mail_post(g.stream.mail,bytes+at,len-at<chunk ? len-at : chunk,NULL,NULL);
+}
+static void stream_post_verdict(bool page, os64_fetch_status_t fetch, const char *reason) {
+    yonder_verdict_t v; memset(&v,0,sizeof(v));
+    v.page=page; v.fetch=fetch; os64_strcopy(v.reason,sizeof(v.reason),reason);
+    yonder_mail_post_verdict(g.stream.mail,&v);
+}
+static bool stream_same_tree(const uint8_t *bytes, size_t len) {
+    os64_html_document_t *want=parse_file(bytes,len,false);
+    const os64_html_document_t *got=page_doc(&g.page);
+    char a[1<<17], b[1<<17];
+    size_t na=want ? os64_html_serialize(want->document,true,false,a,sizeof(a)) : 0;
+    size_t nb=got ? os64_html_serialize(got->document,true,false,b,sizeof(b)) : 1;
+    bool same=want && got && na==nb && na<sizeof(a) && memcmp(a,b,na)==0;
+    os64_html_document_free(want);
+    return same;
+}
+static void stream_slices(void) {
+    /* Five slot-sized chunks: one turn feeds four (the 64 KiB slice) and
+     * asks to be rung again; the next finishes, with the verdict already
+     * waiting behind the chunks. */
+    stream_window();
+    start_trip("http://fixture.test/p",NULL,NAV_GO,NULL);
+    check(g.stream.active && g.nav.id==1 && pool_work.job!=NULL && g.stop.disabled==false,
+        "stream: a navigation starts a stream and lights Stop");
+    size_t len=5*YONDER_STREAM_CHUNK;
+    uint8_t *body=os64_malloc(len);
+    memset(body,'x',len);
+    const char *open="<!doctype html><title>T</title><p>";
+    memcpy(body,open,strlen(open));
+    const char *close="</p><h1 id=t>end</h1>";
+    memcpy(body+len-strlen(close),close,strlen(close));
+    way_head_t h=stream_head("text/html","",false);
+    yonder_mail_post_head(g.stream.mail,&h);
+    stream_post_body(body,len,YONDER_STREAM_CHUNK);
+    stream_post_verdict(true,OS64_FETCH_OK,"");
+    check(stream_turn()==true && g.stream.active && g.page.tree==NULL,
+        "stream: one slice feeds four chunks and asks for another turn");
+    check(stream_turn()==false && !g.stream.active && g.page.tree!=NULL,
+        "stream: the verdict behind the last chunk finishes the page");
+    check(stream_same_tree(body,len),"stream: the tree is the one the same bytes parse to whole");
+    check(os64_streq(g.page.way.note,"200 OK") && os64_streq(g.page.way.url,"http://fixture.test/final") &&
+        !g.page.way.posted,"stream: the standing line and address are the head's");
+    check(g.stop.disabled==true && g.reload.disabled==false,"stream: Stop goes out when the page is in");
+    check(probe_text_is("t","end"),"stream: the last chunk's text is in the page");
+    os64_free(body);
+    stream_window_drop();
+}
+static void stream_reaped_first(void) {
+    /* The job returns the moment its last post lands; the window may hear
+     * the reap before it has parsed a byte. The parse goes on from the
+     * mailbox the stream holds. */
+    stream_window();
+    start_trip("http://fixture.test/p",NULL,NAV_GO,NULL);
+    way_head_t h=stream_head("text/html","utf-8",false);
+    yonder_mail_post_head(g.stream.mail,&h);
+    const char *html="<p id=t>caf\xC3\xA9</p>";
+    stream_post_body((const uint8_t *)html,strlen(html),YONDER_STREAM_CHUNK);
+    stream_post_verdict(true,OS64_FETCH_OK,"");
+    reaped(1,pool_work.job,NULL); memset(&pool_work,0,sizeof(pool_work));
+    check(g.nav.id==0 && g.stream.active && g.stop.disabled==false,
+        "stream: a reaped job leaves the stream, and Stop, alive");
+    check(stream_turn()==false && g.page.tree!=NULL && probe_text_is("t","caf\xC3\xA9"),
+        "stream: the page arrives after its job is gone");
+    stream_window_drop();
+}
+static void stream_text(void) {
+    /* text/plain through the same parser, after <plaintext>, in the
+     * encoding the first bytes decide. */
+    stream_window();
+    start_trip("http://fixture.test/t",NULL,NAV_GO,NULL);
+    way_head_t h=stream_head("text/plain","",false);
+    yonder_mail_post_head(g.stream.mail,&h);
+    const char *text="\xEF\xBB\xBF" "plain <b>not bold</b> caf\xC3\xA9";
+    stream_post_body((const uint8_t *)text,strlen(text),YONDER_STREAM_CHUNK);
+    stream_post_verdict(true,OS64_FETCH_OK,"");
+    check(stream_turn()==false && g.page.plain!=NULL && g.page.way.doc==NULL && g.page.way.text_utf8 &&
+        page_doc(&g.page)==g.page.plain && g.page.tree!=NULL,
+        "stream: text arrives as its own tree, UTF-8 by its byte order mark");
+    const os64_html_node_t *pre=g.page.plain->body ? g.page.plain->body->first_child : NULL;
+    check(pre && os64_streq(pre->name,"plaintext") && pre->first_child &&
+        pre->first_child->kind==OS64_HTML_TEXT && strstr(pre->first_child->text,"<b>not bold</b>")!=NULL,
+        "stream: the text is literal under plaintext");
+    check(os64_streq(g.page.way.note,"200 OK"),"stream: a text page's standing line");
+    stream_window_drop();
+    /* No label, no mark, not JSON: windows-1252. */
+    stream_window();
+    start_trip("http://fixture.test/t",NULL,NAV_GO,NULL);
+    h=stream_head("text/plain","",false);
+    yonder_mail_post_head(g.stream.mail,&h);
+    stream_post_body((const uint8_t *)"\x93quoted\x94",8,YONDER_STREAM_CHUNK);
+    stream_post_verdict(true,OS64_FETCH_OK,"");
+    check(stream_turn()==false && g.page.plain!=NULL && !g.page.way.text_utf8,
+        "stream: unlabelled text reads as windows-1252");
+    pre=g.page.plain->body ? g.page.plain->body->first_child : NULL;
+    check(pre && pre->first_child && strstr(pre->first_child->text,"\xE2\x80\x9Cquoted\xE2\x80\x9D")!=NULL,
+        "stream: a smart quote draws as one");
+    stream_window_drop();
+}
+static void stream_no_page(void) {
+    stream_window();
+    start_trip("http://fixture.test/x",NULL,NAV_GO,NULL);
+    stream_post_verdict(false,OS64_FETCH_OK," that is image/png, not a page - save it with:  os64get 'x'");
+    check(stream_turn()==false && !g.stream.active && g.page.tree==NULL &&
+        os64_streq(g.status_rest,"that is image/png, not a page - save it with:  os64get 'x'") &&
+        g.stop.disabled==true,"stream: no page, libway's sentence, and Stop goes out");
+    stream_window_drop();
+}
+static void stream_refused(void) {
+    /* Deeper than twice the parser's stack: the parser refuses, the fetch
+     * is cancelled, and the page arrives as far as it got, saying so. */
+    stream_window();
+    start_trip("http://fixture.test/deep",NULL,NAV_GO,NULL);
+    way_head_t h=stream_head("text/html","",false);
+    yonder_mail_post_head(g.stream.mail,&h);
+    size_t depth=1200, len=depth*5+64;
+    uint8_t *body=os64_malloc(len);
+    size_t at=0;
+    const char *lead="<p id=t>deep</p>";
+    memcpy(body+at,lead,strlen(lead)); at+=strlen(lead);
+    for(size_t i=0;i<depth;i++) { memcpy(body+at,"<div>",5); at+=5; }
+    stream_post_body(body,at,YONDER_STREAM_CHUNK);
+    bool arrived=false;
+    for(int turns=0;turns<8 && g.stream.active;turns++) { stream_turn(); arrived=g.page.tree!=NULL; }
+    check(arrived && pool_cancelled==1 && g.nav.id==0 && !g.stream.active,
+        "stream: a parser refusal cancels the fetch and arrives with what it has");
+    check(strstr(g.page.way.note,"200 OK - the page is bigger than this browser will parse (")!=NULL &&
+        probe_text_is("t","deep"),"stream: the standing line names the refusal");
+    os64_free(body);
+    /* The verdict of a cancelled job never comes; the chunks it posted
+     * before it noticed are nobody's now. */
+    stream_window_drop();
+}
+static void stream_stopped(void) {
+    stream_window();
+    start_trip("http://fixture.test/p",NULL,NAV_GO,NULL);
+    way_head_t h=stream_head("text/html","",false);
+    yonder_mail_post_head(g.stream.mail,&h);
+    stream_post_body((const uint8_t *)"<p>half",7,YONDER_STREAM_CHUNK);
+    check(stream_turn()==false && g.stream.active && g.stream.parser!=NULL,"stream: a parse under way");
+    stop_trip();
+    check(!g.stream.active && g.stream.parser==NULL && g.stream.mail==NULL && pool_cancelled==1 &&
+        g.nav.id==0 && g.stop.disabled==true,"stream: Stop drops the parse, cancels the fetch, lets go");
+    stream_window_drop();
+}
+static void stream_pool_breaks(void) {
+    stream_window();
+    start_trip("http://fixture.test/p",NULL,NAV_GO,NULL);
+    way_head_t h=stream_head("text/html","",false);
+    yonder_mail_post_head(g.stream.mail,&h);
+    stream_turn();
+    pool_error=-1;
+    os64_gui_event_t bell={.type=OS64_GUI_EVENT_DOORBELL,.doorbell={.mask=BELL_WORK}};
+    on_doorbell(&g.ui,&bell);
+    check(!g.stream.active && g.pool==NULL && g.nav.id==0 &&
+        strstr(g.status_rest,"background workers stopped")!=NULL,
+        "stream: a broken pool drops the stream with the pool");
+    stream_window_drop();
+}
+static void stream_keeps_the_form(void) {
+    /* The window's own copy of a form being sent reaches the page that
+     * comes back, whose Reload then sends it again. */
+    stream_window();
+    os64_page_request_t request; memset(&request,0,sizeof(request));
+    request.method=OS64_PAGE_METHOD_POST; request.control=-1;
+    char *url=os64_malloc(32); strcpy(url,"http://fixture.test/send"); request.url=url;
+    char *type=os64_malloc(40); strcpy(type,"application/x-www-form-urlencoded"); request.content_type=type;
+    char *body=os64_malloc(4); memcpy(body,"q=1",4); request.body=body; request.body_len=3;
+    start_trip(request.url,&request,NAV_GO,NULL);
+    yonder_trip_t *trip=pool_work.job;
+    check(g.stream.has_sent && os64_streq(g.stream.sent.url,"http://fixture.test/send") &&
+        trip->has_request && os64_streq(trip->request.url,"http://fixture.test/send") &&
+        trip->request.url!=g.stream.sent.url,"stream: the job and the window each hold a copy of the form");
+    way_head_t h=stream_head("text/html","",true);
+    yonder_mail_post_head(g.stream.mail,&h);
+    stream_post_body((const uint8_t *)"<p>sent</p>",11,YONDER_STREAM_CHUNK);
+    stream_post_verdict(true,OS64_FETCH_OK,"");
+    check(stream_turn()==false && g.page.way.posted && g.page.sent.url!=NULL &&
+        os64_streq(g.page.sent.url,"http://fixture.test/send") && g.page.sent.body_len==3,
+        "stream: the reply to a form keeps the form");
+    stream_window_drop();
+}
+static void stream_mail_wiring(void) {
+    /* Progress and a worker's question still reach the status line and the
+     * bar through the stream's mailbox; a new navigation answers No. */
+    stream_window();
+    start_trip("http://fixture.test/p",NULL,NAV_GO,NULL);
+    yonder_mail_progress(g.stream.mail," reading 64 KB of http://fixture.test/p");
+    os64_gui_event_t bell={.type=OS64_GUI_EVENT_DOORBELL,.doorbell={.mask=BELL_MAIL}};
+    on_doorbell(&g.ui,&bell);
+    check(os64_streq(g.status_rest,"reading 64 KB of http://fixture.test/p"),"stream: progress reaches the status line");
+    /* A bell for a navigation that is not this one is not read. */
+    g.generation++;
+    yonder_mail_progress(g.stream.mail," reading 128 KB of somewhere else");
+    on_doorbell(&g.ui,&bell);
+    check(os64_streq(g.status_rest,"reading 64 KB of http://fixture.test/p"),"stream: another generation's mail is not read");
+    g.generation--;
+    uint32_t number=yonder_mail_ask(g.stream.mail," follow to http?");
+    on_doorbell(&g.ui,&bell);
+    check(g.asker==ASK_WORKER && g.bar.up && g.bar.number==number,"stream: a worker's question raises the bar");
+    /* A new navigation CANCELS the job rather than answering it (YONDER.md
+     * § Y3): the cancel ends the worker's wait, which is No. A replaced
+     * question is the one that gets an explicit No. */
+    yonder_mail_t *old=g.stream.mail; yonder_mail_hold(old);
+    uint32_t second=yonder_mail_ask(old," and again?");
+    on_doorbell(&g.ui,&bell);
+    check(old->answers==1 && old->answered==number && !old->answered_yes && g.bar.number==second,
+        "stream: a newer question answers the older one No");
+    start_trip("http://fixture.test/q",NULL,NAV_GO,NULL);
+    check(old->answers==1 && g.asker==ASK_NONE && !g.bar.up && pool_cancelled==1 && g.nav.id==2 &&
+        g.stream.mail!=old,"stream: the next navigation cancels the job, lowers the bar and starts afresh");
+    yonder_mail_drop(old);
+    stream_window_drop();
+}
+static void stream_captures_mode(void) {
+    /* The parser mode is the one the navigation started with, and a script's
+     * stop is resumed at once: with scripting on, noscript is text and the
+     * fallback control does not exist; off, it does. The script is a module
+     * because the parser stops at any script's end tag while yonder queues
+     * only classic ones: a queued script rings the window's doorbell, which
+     * on the host is a raw syscall instruction nobody can answer. */
+    /* The parser reads its first 1024 bytes for an encoding before it parses
+     * any of them, so a stop inside that window would wait for finish, which
+     * runs straight through; a comment carries the script past it so the
+     * feed itself stops and the resume is the window's. */
+    static char html[2048];
+    os64_snprintf(html,sizeof(html),"<!doctype html><!-- %0*d --><noscript><input id=fallback></noscript>"
+        "<script type=module>var one=1;</script><p id=t>page</p>",1200,0);
+    for(int on=0;on<2;on++) {
+        stream_window();
+        g.scripts_on=on!=0;
+        start_trip("http://fixture.test/mode",NULL,NAV_GO,NULL);
+        g.scripts_on=!g.scripts_on;     /* changed after the start: the stream keeps what it captured */
+        way_head_t h=stream_head("text/html","",false);
+        yonder_mail_post_head(g.stream.mail,&h);
+        stream_post_body((const uint8_t *)html,strlen(html),YONDER_STREAM_CHUNK);
+        stream_post_verdict(true,OS64_FETCH_OK,"");
+        g.scripts_on=on!=0;
+        check(stream_turn()==false && g.page.tree!=NULL && g.page.scripting==(on!=0) &&
+            os64_page_ncontrols(page_model(&g.page))==(on ? 0 : 1) && probe_text_is("t","page") &&
+            pool_cancelled==0 && os64_streq(g.page.way.note,"200 OK"),
+            on ? "stream: scripting on is captured at the start, and a script's stop is resumed, not refused"
+               : "stream: scripting off is captured at the start");
+        stream_window_drop();
+    }
+}
+static void stream_cases(void) {
+    stream_captures_mode();
+    stream_slices();
+    stream_reaped_first();
+    stream_text();
+    stream_no_page();
+    stream_refused();
+    stream_stopped();
+    stream_pool_breaks();
+    stream_keeps_the_form();
+    stream_mail_wiring();
+}
+
 int main(void)
 {
     os64_text_options_t options={.memory={.alloc=probe_alloc,.free=probe_free},
@@ -851,6 +1264,7 @@ int main(void)
     snapshot_actions();
     bounded_resources();
     stylesheet_reuse();
+    if(getenv("YONDER_NO_STREAM")==NULL) stream_cases();
     os64_text_font_release(probe_font);
     check(os64_text_destroy(probe_text)==OS64_FONT_OK,"all layout text released");
     check(live==0,"native and engine heap is empty");

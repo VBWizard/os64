@@ -55,24 +55,36 @@
 
 #define YONDER_ACCEPT "text/html, application/xhtml+xml, text/*;q=0.8"
 
-// The work pool. A navigation declares what one page can cost: libhtml's
-// 8 MiB of input and 64 MiB of tree, and the model beside them; a picture
-// declares PICTURE_RESERVE. The budget fits a page and PICTURES_AT_ONCE.
-#define POOL_WORKERS 4
-#define TRIP_RESERVE (80u << 20)
-#define POOL_BUDGET  (768u << 20)
+// The work pool. A navigation's job is a FETCH (trip.h; the parse is this
+// thread's, DOM_D4.md), so what it declares is one connection's worth of
+// libfetch and libtls — a few hundred KiB — with room to spare; a picture
+// declares PICTURE_RESERVE and a sheet SHEET_RESERVE, each its worst case.
+// The budget admits twelve sheets at once beside a page's fetch: a page
+// with twenty-eight linked sheets, none cached, was spending five seconds
+// fetching them four at a time (Chris, 2026-10-05, on a twelve-core
+// machine that was asked to use its cores and its memory).
+#define POOL_WORKERS 12
+#define TRIP_RESERVE (4u << 20)
+#define POOL_BUDGET  ((size_t)2u << 30)
+
+// THE STREAM (DOM_D4.md): how much of an arriving page is fed to its parser
+// per turn of the loop before the window goes back to its events. A byte
+// budget, because the window's clock is the 10 ms tick and bytes are
+// deterministic on the host; the as-built section records what one costs
+// in the guest.
+#define STREAM_SLICE_BYTES (64u * 1024u)
 
 // What a page's pictures may cost to keep — a still one's pixels, a moving
 // one's whole sequence; past it a picture draws as its frame.
 #define PICTURES_KEPT_MAX ((size_t)256u << 20)
 
-// A page's pictures in the pool at once: one fewer than its workers. The
-// pool admits in the order it was given work, so a navigation submitted
-// after a page's pictures would wait for every one of them; yonder keeps
-// the rest itself and hands over the next as each comes back, which keeps
-// a worker free for the person — once any pictures of a page left behind
-// have seen they were cancelled.
-#define PICTURES_AT_ONCE (POOL_WORKERS - 1)
+// A page's pictures in the pool at once: half its workers. The pool admits
+// in the order it was given work, so a navigation submitted after a page's
+// pictures would wait for every one of them; yonder keeps the rest itself
+// and hands over the next as each comes back, which keeps workers free for
+// the person and for the next page's sheets — once any pictures of a page
+// left behind have seen they were cancelled.
+#define PICTURES_AT_ONCE (POOL_WORKERS / 2)
 
 // A layout at most this slow is repeated for every batch of pictures that
 // moves the page. A slower one waits for the page's last picture, or until
@@ -88,6 +100,7 @@
 #define BELL_TICK (1u << 2)       // a moving picture's next frame is due
 #define BELL_SETTINGS (1u << 3)   // something arrived at the Settings window
 #define BELL_SCRIPTS (1u << 4)    // another finished-document script is queued
+#define BELL_STREAM (1u << 5)     // an arriving page has more to parse than one slice
 
 // A GIF frame that asks for 10 ms or less is shown for this long, as every
 // browser shows the ones that ask for "as fast as you can".
@@ -280,7 +293,9 @@ static os64_html_document_t *parse_file(const uint8_t *bytes, size_t len, bool s
     return os64_html_parser_finish(p);
 }
 
-// Developer fixture diagnostics, selected before any page is made.
+// Developer fixture diagnostics, selected before any page is made: a
+// scripted page's heap verdict at retirement, and what each slice of an
+// arriving page cost to parse.
 static bool s_script_audit;
 
 // ── Pages ───────────────────────────────────────────────────────────────
@@ -458,26 +473,6 @@ static void page_clear(Page *p)
                       (unsigned long)os64_heap_verify());
         os64_debug_log(line);
     }
-}
-
-// A text/plain body is laid out by handing libhtml `<plaintext>` and then
-// the bytes: the standard's own element for "everything after this is
-// text", so libflow sees preformatted text and needs nothing new. The
-// encoding is the one libway chose for the body.
-static bool page_from_text(Page *p)
-{
-    static const char kOpen[] = "<!doctype html><plaintext>";
-    os64_html_options_t opt = os64_html_options_default();
-    opt.charset = p->way.text_utf8 ? "utf-8" : "windows-1252";
-    os64_html_parser_t *parser = os64_html_parser_new(&opt);
-    if (parser == NULL)
-        return false;
-    os64_html_parser_feed(parser, kOpen, sizeof(kOpen) - 1);
-    os64_html_parser_feed(parser, p->way.text, p->way.textlen);
-    p->plain = os64_html_parser_finish(parser);
-    if (p->plain != NULL)
-        p->plain_model = os64_page_build(p->plain, p->way.url, NULL, NULL);
-    return p->plain != NULL && p->plain_model != NULL;
 }
 
 // An entry of the cascade's input for sheet `e` and, before it, for the
@@ -722,16 +717,35 @@ static struct {
     int32_t hover_link, pressed_link;
     int32_t chain;                  // refresh hops since a person last went anywhere
 
-    // The one navigation in flight. Its mailbox is held here while it is
-    // current; a bell from any other is not read.
+    // The one navigation's job in flight: the fetch, on a worker. Zero
+    // once it is reaped, which may be before the page it carried has been
+    // parsed — the parse is the stream's.
     struct {
         os64_work_id_t id;
+    } nav;
+    // THE PAGE ARRIVING (DOM_D4.md): parsed here, on the window's thread, a
+    // slice per turn of the loop, from what the fetch posts down the
+    // mailbox. Its mailbox is held here while it is current; a bell from
+    // any other is not read. `kind`, `crumb` and `fragment` are what
+    // arriving needs; `sent` is the window's own copy of a form being sent,
+    // kept for the page that comes back (Reload sends it again).
+    struct {
+        bool active;
         yonder_mail_t *mail;
         NavKind kind;
         way_position_t crumb;       // BACK, FORWARD: where the person was
         bool has_fragment;
         char fragment[256];
-    } nav;
+        bool scripting;             // the parser mode, captured when the navigation started
+        bool has_head;
+        way_head_t head;
+        os64_html_parser_t *parser; // NULL until the head (HTML) or the first chunk (text)
+        bool text_utf8;
+        bool has_verdict;
+        yonder_verdict_t verdict;
+        os64_page_request_t sent;
+        bool has_sent;
+    } stream;
     uint64_t generation;
     // Which page is on screen, so a picture finished for another is let go.
     uint64_t page_serial;
@@ -1169,6 +1183,7 @@ static void forms_drop(void);
 static void bar_forget(void);
 static void open_address(const char *url, NavKind kind, const way_position_t *crumb,
                          os64_page_request_t *request);
+static bool request_copy(const os64_page_request_t *from, os64_page_request_t *to);
 
 // After a page arrives: a refresh it declares, judged by libway. A GO is a
 // new navigation that leaves no crumb; the chain it belongs to is counted
@@ -1348,7 +1363,7 @@ static void open_local(const char *path, NavKind kind, const way_position_t *cru
 
 static void buttons_follow(void)
 {
-    bool loading = g.nav.id != 0 || g.coming.active;
+    bool loading = g.stream.active || g.coming.active;
     os64_ui_set_enabled(&g.ui, &g.stop, loading);
     os64_ui_set_enabled(&g.ui, &g.reload, !loading && g.page.tree != NULL);
 }
@@ -1391,8 +1406,8 @@ static void bar_forget(void)
 // have to agree.
 static void bar_ask(Asker asker, uint32_t number, const char *question)
 {
-    if (g.asker == ASK_WORKER && g.nav.mail != NULL)
-        yonder_mail_answer(g.nav.mail, g.bar.number, false);
+    if (g.asker == ASK_WORKER && g.stream.mail != NULL)
+        yonder_mail_answer(g.stream.mail, g.bar.number, false);
     if (g.asker == ASK_REQUEST)
         os64_page_request_free(&g.pending);
     g.asker = asker;
@@ -1411,8 +1426,8 @@ static void bar_answered(bool yes)
     g.asker = ASK_NONE;
     yonder_bar_lower(&g.bar);
     bar_show(false);
-    if (asker == ASK_WORKER && g.nav.mail != NULL) {
-        yonder_mail_answer(g.nav.mail, number, yes);
+    if (asker == ASK_WORKER && g.stream.mail != NULL) {
+        yonder_mail_answer(g.stream.mail, number, yes);
     } else if (asker == ASK_REQUEST) {
         if (yes) {
             start_trip(g.pending.url, &g.pending, g.pending_kind, NULL);
@@ -1425,25 +1440,37 @@ static void bar_answered(bool yes)
 
 // ── The navigation in flight ────────────────────────────────────────────
 
+// The page arriving is not wanted after all. Its parser goes with its
+// document: nothing points into a tree that has no model, no snapshot and
+// no runtime yet (DOM.md's teardown abandons a parser instead, for a page
+// that has those; D7 brings that here). The mailbox this window held is
+// let go, and outlives it for as long as the job still holds its own.
+static void stream_drop(void)
+{
+    if (g.asker == ASK_WORKER)
+        bar_forget();
+    if (g.stream.parser != NULL)
+        os64_html_parser_destroy(g.stream.parser);
+    yonder_mail_drop(g.stream.mail);
+    if (g.stream.has_sent)
+        os64_page_request_free(&g.stream.sent);
+    os64_memset(&g.stream, 0, sizeof(g.stream));
+}
+
 // Ends the navigation in flight, if there is one, and lets go of a page
 // that arrived and is waiting for its sheets: somewhere else was asked
-// for. The pool's own cancellation reaches its fetch and any question it
-// is waiting on; the mailbox this window held is let go, and outlives it
-// for as long as the job still holds its own.
+// for. The pool's own cancellation reaches its fetch, any question it is
+// waiting on, and a post waiting for room in the ring.
 static void stop_trip(void)
 {
     yonder_scripts_free(g.page.scripts);
     g.page.scripts = NULL;
     coming_drop();
-    if (g.nav.id == 0) {
-        buttons_follow();
-        return;
-    }
-    os64_work_cancel(g.pool, g.nav.id);
-    if (g.asker == ASK_WORKER)
-        bar_forget();
-    yonder_mail_drop(g.nav.mail);
-    os64_memset(&g.nav, 0, sizeof(g.nav));
+    if (g.nav.id != 0 && g.pool != NULL)
+        os64_work_cancel(g.pool, g.nav.id);
+    g.nav.id = 0;
+    if (g.stream.active)
+        stream_drop();
     buttons_follow();
 }
 
@@ -1498,7 +1525,6 @@ static void start_trip(const char *url, os64_page_request_t *request, NavKind ki
     trip->mail = mail;
     trip->session = &g.way;
     trip->agent = g.way.agent;
-    trip->scripting = g.scripts_on;
     trip->window = g.win;
     trip->mail_bell = BELL_MAIL;
     os64_strcopy(trip->url, sizeof(trip->url), url);
@@ -1506,12 +1532,22 @@ static void start_trip(const char *url, os64_page_request_t *request, NavKind ki
     // even one sending a form again, names nothing.
     if (request != NULL && kind != NAV_RELOAD && g.page.tree != NULL)
         os64_strcopy(trip->referrer, sizeof(trip->referrer), g.page.way.url);
-    g.nav.has_fragment = false;
+    os64_memset(&g.stream, 0, sizeof(g.stream));
     if (request != NULL) {
-        g.nav.has_fragment = request->has_fragment;
+        g.stream.has_fragment = request->has_fragment;
         if (request->has_fragment)
-            os64_strcopy(g.nav.fragment, sizeof(g.nav.fragment),
+            os64_strcopy(g.stream.fragment, sizeof(g.stream.fragment),
                          request->fragment != NULL ? request->fragment : "");
+        // The job sends the request; the page that comes back keeps the
+        // window's own copy, since it arrives on its own schedule now.
+        if (!request_copy(request, &g.stream.sent)) {
+            yonder_trip_release(trip, NULL);    // drops the job's reference
+            yonder_mail_drop(mail);
+            os64_page_request_free(request);
+            status_rest("Out of memory starting that page.");
+            return;
+        }
+        g.stream.has_sent = true;
         trip->request = *request;
         trip->has_request = true;
         os64_memset(request, 0, sizeof(*request));
@@ -1522,14 +1558,19 @@ static void start_trip(const char *url, os64_page_request_t *request, NavKind ki
     if (id == 0) {
         yonder_trip_release(trip, NULL);    // drops the job's reference
         yonder_mail_drop(mail);
+        if (g.stream.has_sent)
+            os64_page_request_free(&g.stream.sent);
+        os64_memset(&g.stream, 0, sizeof(g.stream));
         status_rest("Too busy to start another page; try again in a moment.");
         return;
     }
     g.nav.id = id;
-    g.nav.mail = mail;
-    g.nav.kind = kind;
+    g.stream.active = true;
+    g.stream.mail = mail;
+    g.stream.kind = kind;
+    g.stream.scripting = g.scripts_on;
     if (crumb != NULL)
-        g.nav.crumb = *crumb;
+        g.stream.crumb = *crumb;
     char line[512];
     os64_snprintf(line, sizeof(line), "fetching %s", url);
     status_rest(line);
@@ -3013,8 +3054,10 @@ static bool script_turn(void)
 
 // ── The doorbell ────────────────────────────────────────────────────────
 
-// A job the pool finished. Only the current navigation's is looked at; any
-// other finished before its cancel was noticed, and is let go unread.
+// A job the pool finished. A picture's or a sheet's is read here; a
+// navigation's fetch said everything it had to say down the mailbox before
+// it returned, so its job is only let go, and one finished before its
+// cancel was noticed is let go the same way.
 static void reaped(os64_work_id_t id, void *job, void *product)
 {
     if (*(const uint32_t *)job == YONDER_JOB_PICTURE) {
@@ -3028,58 +3071,203 @@ static void reaped(os64_work_id_t id, void *job, void *product)
         yonder_sheet_release(job, product);
         return;
     }
-    if (id == 0 || id != g.nav.id) {
-        yonder_trip_release(job, product);
+    // A fetch is done. Everything it had to say went down the mailbox
+    // before it returned, and the stream reads that at its own pace; here
+    // the job is let go.
+    if (id != 0 && id == g.nav.id)
+        g.nav.id = 0;
+    yonder_trip_release(job, product);
+}
+
+// ── The stream ──────────────────────────────────────────────────────────
+//
+// The page arriving is parsed here (DOM_D4.md): the head makes the parser,
+// each turn of the loop feeds it a slice of what the fetch has posted, and
+// the verdict, once the ring is drained, finishes it and hands the page to
+// arrive() exactly as a page from a worker used to be handed over.
+
+// The parser for the page whose head has arrived. HTML takes the head's
+// charset; text is laid out by handing libhtml `<plaintext>` and then the
+// bytes — the standard's own element for "everything after this is text",
+// so libflow sees preformatted text and needs nothing new — in the
+// encoding libway's rule chooses from the head and the body's first bytes.
+static bool stream_parser(const void *first, size_t n)
+{
+    os64_html_options_t opt = os64_html_options_default();
+    opt.scripting = g.stream.scripting;
+    if (g.stream.head.body == WAY_BODY_HTML) {
+        opt.charset = g.stream.head.charset[0] ? g.stream.head.charset : NULL;
+    } else {
+        g.stream.text_utf8 = way_text_utf8(&g.stream.head, first, n);
+        opt.charset = g.stream.text_utf8 ? "utf-8" : "windows-1252";
+    }
+    g.stream.parser = os64_html_parser_new(&opt);
+    if (g.stream.parser == NULL)
+        return false;
+    if (g.stream.head.body == WAY_BODY_TEXT) {
+        static const char kOpen[] = "<!doctype html><plaintext>";
+        os64_html_parser_feed(g.stream.parser, kOpen, sizeof(kOpen) - 1);
+    }
+    return true;
+}
+
+// The parse is over: finish it, build what the page means, write its
+// standing line, and arrive. `fetch` and `reason` are the wire's verdict,
+// or OK and NULL when the window cut the fetch short itself.
+static void stream_finish(os64_fetch_status_t fetch, const char *reason)
+{
+    NavKind kind = g.stream.kind;
+    way_position_t crumb = g.stream.crumb;
+    char fragment[sizeof(g.stream.fragment)];
+    bool has_fragment = g.stream.has_fragment;
+    os64_strcopy(fragment, sizeof(fragment), g.stream.fragment);
+    if (g.stream.parser == NULL && !stream_parser(NULL, 0)) {
+        stream_drop();
+        buttons_follow();
+        status_rest("Out of memory reading that page.");
         return;
     }
-    NavKind kind = g.nav.kind;
-    way_position_t crumb = g.nav.crumb;
-    char fragment[sizeof(g.nav.fragment)];
-    bool has_fragment = g.nav.has_fragment;
-    os64_strcopy(fragment, sizeof(fragment), g.nav.fragment);
-    if (g.asker == ASK_WORKER)
-        bar_forget();
-    yonder_mail_drop(g.nav.mail);
-    os64_memset(&g.nav, 0, sizeof(g.nav));
-    buttons_follow();
-
-    yonder_arrival_t *a = product;
-    if (a == NULL || !a->loaded) {
-        status_rest(a != NULL ? a->status : "Out of memory fetching that page.");
+    Page fresh;
+    os64_memset(&fresh, 0, sizeof(fresh));
+    fresh.scripting = g.stream.scripting;
+    os64_html_document_t *doc = os64_html_parser_finish(g.stream.parser);
+    g.stream.parser = NULL;
+    if (doc == NULL) {
+        stream_drop();
+        buttons_follow();
+        status_rest("Out of memory reading that page.");
+        return;
+    }
+    // WHAT THE PAGE MEANS, from the tree and the address it came from —
+    // `<base href>` included, which libpage reads. A page it cannot build
+    // a model of is still a page worth reading: what it costs is the links
+    // and boxes, and the status line says so. A text page's tree is the
+    // window's own, beside libway's page, as page_doc() reads it.
+    os64_page_t *model = os64_page_build(doc, g.stream.head.url, NULL, NULL);
+    if (g.stream.head.body == WAY_BODY_HTML) {
+        fresh.way.doc = doc;
+        fresh.way.model = model;
+        way_note(&fresh.way, &g.stream.head, false, fetch, reason);
     } else {
-        Page fresh;
-        os64_memset(&fresh, 0, sizeof(fresh));
-        fresh.way = a->page;
-        os64_memset(&a->page, 0, sizeof(a->page));
-        yonder_trip_t *trip = job;
-        fresh.scripting = trip->scripting;
-        if (fresh.way.posted && trip->has_request) {
-            fresh.sent = trip->request;     // moved: the job's release frees nothing
-            trip->has_request = false;
-            os64_memset(&trip->request, 0, sizeof(trip->request));
-        }
-        if (fresh.way.doc == NULL && !page_from_text(&fresh)) {
-            page_clear(&fresh);
-            status_rest("Out of memory reading that text.");
-        } else {
-            arrive(&fresh, kind, &crumb, has_fragment ? fragment : NULL);
+        fresh.plain = doc;
+        fresh.plain_model = model;
+        fresh.way.text_utf8 = g.stream.text_utf8;
+        // The standing line reads the tree's refusal from the page it is
+        // given, so the text's tree stands in for the moment it is written.
+        way_page_t noted = fresh.way;
+        noted.doc = doc;
+        way_note(&noted, &g.stream.head, false, fetch, reason);
+        os64_strcopy(fresh.way.url, sizeof(fresh.way.url), noted.url);
+        os64_strcopy(fresh.way.note, sizeof(fresh.way.note), noted.note);
+        fresh.way.posted = noted.posted;
+    }
+    if (fresh.way.posted && g.stream.has_sent) {
+        fresh.sent = g.stream.sent;     // moved: stream_drop frees nothing
+        g.stream.has_sent = false;
+        os64_memset(&g.stream.sent, 0, sizeof(g.stream.sent));
+    }
+    bool text = g.stream.head.body == WAY_BODY_TEXT;
+    stream_drop();
+    buttons_follow();
+    if (model == NULL && text) {
+        page_clear(&fresh);
+        status_rest("Out of memory reading that text.");
+        return;
+    }
+    arrive(&fresh, kind, &crumb, has_fragment ? fragment : NULL);
+}
+
+// One slice of the arriving page. True when there is more to do than this
+// turn did — chunks still in the ring, or a verdict not yet acted on — so
+// the loop should ring itself and come back after it has looked at the
+// glass.
+static bool stream_turn(void)
+{
+    if (!g.stream.active || g.stream.mail == NULL)
+        return false;
+    yonder_mail_t *mail = g.stream.mail;
+    if (!g.stream.has_head && yonder_mail_take_head(mail, &g.stream.head)) {
+        g.stream.has_head = true;
+        if (g.stream.head.body == WAY_BODY_HTML && !stream_parser(NULL, 0)) {
+            stop_trip();
+            status_rest("Out of memory reading that page.");
+            return false;
         }
     }
-    yonder_trip_release(job, product);
+    if (!g.stream.has_verdict && yonder_mail_take_verdict(mail, &g.stream.verdict))
+        g.stream.has_verdict = true;
+    size_t fed = 0;
+    int64_t began = s_script_audit ? os64_micros() : 0;
+    uint8_t chunk[YONDER_STREAM_CHUNK];
+    while (g.stream.has_head && fed < STREAM_SLICE_BYTES) {
+        size_t n = yonder_mail_take(mail, chunk, sizeof(chunk));
+        if (n == 0)
+            break;
+        fed += n;
+        if (g.stream.parser == NULL && !stream_parser(chunk, n)) {
+            stop_trip();
+            status_rest("Out of memory reading that page.");
+            return false;
+        }
+        int64_t r = os64_html_parser_feed(g.stream.parser, chunk, n);
+        while (r == OS64_HTML_SCRIPT)
+            r = os64_html_parser_resume(g.stream.parser);
+        if (r != OS64_HTML_OK) {
+            // The parser refused — the page is bigger or deeper than this
+            // browser parses — and what it built is a page you can read the
+            // beginning of. The rest of the body is not wanted: the fetch
+            // is cancelled, as way_load closes its fetch at the same point,
+            // and the page arrives with the parser's sentence.
+            if (g.nav.id != 0 && g.pool != NULL)
+                os64_work_cancel(g.pool, g.nav.id);
+            g.nav.id = 0;
+            stream_finish(OS64_FETCH_OK, NULL);
+            return false;
+        }
+    }
+    // The developer audit says what a slice cost: the number the byte
+    // budget is held to (DOM_D4.md).
+    if (s_script_audit && fed != 0) {
+        char line[96];
+        os64_snprintf(line, sizeof(line), "yonder: stream slice %lu bytes in %ld us",
+                      (unsigned long)fed, (long)(os64_micros() - began));
+        os64_debug_log(line);
+    }
+    if (!g.stream.has_verdict)
+        return false;
+    if (yonder_mail_streaming(mail))
+        return true;                    // chunks remain: next turn
+    if (!g.stream.verdict.page) {
+        // There never was a page: a head that did not come, or one that was
+        // not a page. libway's sentence says which.
+        char line[WAY_SENTENCE_MAX];
+        os64_strcopy(line, sizeof(line), g.stream.verdict.reason);
+        stream_drop();
+        buttons_follow();
+        status_rest(trim(line));
+        return false;
+    }
+    if (!g.stream.has_head)
+        return true;                    // the head is behind the verdict in the mail: next turn
+    yonder_verdict_t verdict = g.stream.verdict;
+    stream_finish(verdict.fetch, verdict.reason);
+    return false;
 }
 
 static void on_doorbell(os64_ui_t *ui, const os64_gui_event_t *ev)
 {
     (void)ui;
     uint32_t mask = ev->doorbell.mask;
-    if ((mask & BELL_MAIL) && g.nav.mail != NULL &&
-        yonder_mail_generation(g.nav.mail) == g.generation) {
+    if ((mask & BELL_MAIL) && g.stream.mail != NULL &&
+        yonder_mail_generation(g.stream.mail) == g.generation) {
         char line[WAY_SENTENCE_MAX];
         uint32_t number = 0;
-        if (yonder_mail_take_progress(g.nav.mail, line, sizeof(line)))
+        if (yonder_mail_take_progress(g.stream.mail, line, sizeof(line)))
             status_rest(line);
-        if (yonder_mail_take_question(g.nav.mail, &number, line, sizeof(line)))
+        if (yonder_mail_take_question(g.stream.mail, &number, line, sizeof(line)))
             bar_ask(ASK_WORKER, number, line);
+        // The head, the body and the verdict are the stream's: the loop
+        // feeds a slice after the events (stream_turn, in main).
     }
     if (mask & BELL_SETTINGS)
         yonder_settings_rung();
@@ -3101,10 +3289,9 @@ static void on_doorbell(os64_ui_t *ui, const os64_gui_event_t *ev)
         // A broken pool is destroyed, which cancels and releases what it
         // held; the window goes on showing what it has.
         if (os64_work_pool_error(g.pool) != 0) {
-            if (g.asker == ASK_WORKER)
-                bar_forget();
-            yonder_mail_drop(g.nav.mail);
-            os64_memset(&g.nav, 0, sizeof(g.nav));
+            if (g.stream.active)
+                stream_drop();
+            g.nav.id = 0;
             os64_work_pool_destroy(g.pool);
             g.pool = NULL;
             buttons_follow();
@@ -3924,7 +4111,7 @@ static void click_stop(os64_ui_widget_t *w, void *user)
         coming_show();
         return;
     }
-    if (g.nav.id == 0)
+    if (!g.stream.active)
         return;
     stop_trip();
     status_rest("stopped");
@@ -4267,9 +4454,12 @@ int main(int argc, char **argv)
         }
         if (!g.running || g.ui.quit)
             break;
+        bool stream_more = stream_turn();
         bool scripts_ready = script_turn();
         pictures_settle();
         os64_ui_paint(&g.ui);
+        if (stream_more)
+            (void)os64_gui_event_ring(g.win, BELL_STREAM);
         if (scripts_ready && yonder_scripts_pending(g.page.scripts))
             (void)os64_gui_event_ring(g.win, BELL_SCRIPTS);
         if (g.bar.up && !g.bar.armed) {
@@ -4293,7 +4483,8 @@ int main(int argc, char **argv)
     os64_work_pool_destroy(g.pool);
     if (g.asker == ASK_REQUEST)
         os64_page_request_free(&g.pending);
-    yonder_mail_drop(g.nav.mail);
+    if (g.stream.active)
+        stream_drop();
     yonder_scripts_free(g.page.scripts);
     g.page.scripts = NULL;
     forms_drop();

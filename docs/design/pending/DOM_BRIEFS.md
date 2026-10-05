@@ -13,7 +13,8 @@ goes in DOM.md and its brief here is struck.
 | D3 — **Merged #211** | Quinn and two scoped subagents | Fable | [D3 as built](DOM.md#d3-as-built) |
 | D6 — **Implemented; awaiting review** | Quinn and two scoped subagents | Fable | [D6 as built](DOM.md#d6-as-built); stacked on D5b |
 | D5 — **D5a merged #214; D5b implemented; awaiting review** | Quinn with scoped subagents | Fable | D2b and D3; D4 is not needed |
-| D4 the parser on the window's thread; D7 the loop | Fable | — | D4 any time; D7 after D5 |
+| D4 — **Built; in review** | Fable | Chris | [DOM_D4.md](DOM_D4.md) is the design, [DOM.md § D4, as built](DOM.md#d4-as-built) the record |
+| D7 the loop | Fable | — | after D5, on D4 |
 
 D4 and D7 stay with Fable because their sections of DOM.md are findings and
 leans, not specifications, and a wrong call there is a hunt rather than a
