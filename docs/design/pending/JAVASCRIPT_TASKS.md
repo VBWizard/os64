@@ -37,7 +37,7 @@ independent review. "In progress" records an authorized slice being implemented.
 | D2a scripting-enabled parsing | **Merged** | [PR #199](https://github.com/VBWizard/os64/pull/199), merge `8016dd43`: stop/resume, the end of the input, abandon, and a tree read and changed between calls; evidence in DOM.md § D2a, as built. |
 | D2b fragment parsing | **Merged** | [PR #212](https://github.com/VBWizard/os64/pull/212), merge `dca2fe46`: transactional contextual parsing and allocation-free serialization. All 192 fragment fixtures and failure/mutation proof pass; evidence, compatibility boundary and D6 storage handoff in DOM.md § D2b, as built. |
 | D3 page rebuild/control state | **Merged** | [PR #211](https://github.com/VBWizard/os64/pull/211), merge `3f5fa28a`: shared node state, pinned models, STALE gates, script property APIs and transactional rebuilds. Evidence and D5/D6 handoffs in DOM.md § D3, as built. |
-| D4 parser stream handoff | **Pending** | Yonder parser-thread handoff and responsive streaming; no script execution in this slice. |
+| D4 parser stream handoff | **Built; in review** | yonder parses on its window's thread from a body the worker streams through the navigation mailbox; libway's loader split into its pieces with `way_load` kept for wend; no script execution in this slice. Design in [DOM_D4.md](DOM_D4.md), record in DOM.md § D4, as built. |
 | D5 DOM binding/first page fixture | **D5a and D5b merged** | [D5a PR #214](https://github.com/VBWizard/os64/pull/214), merge `72b2e710`, supplies libdom and state-aware mutation/clone transactions; evidence in DOM.md § D5a, as built. [D5b PR #216](https://github.com/VBWizard/os64/pull/216), merge `7acce890`, records the default-off settings switch and host/guest mutation, widget and queued-navigation proof; D4 is not a prerequisite. |
 | D6 detached-subtree reclamation | **Implemented; review pending** | Counted holds, parser-reference protection and paired binding/state/model/browser ownership; 216,000 fragment refresh cycles stay flat under 64 MiB. [PR #217](https://github.com/VBWizard/os64/pull/217) now targets userland after D5b merged; five Fable findings are addressed and re-review is required. Evidence and retained weak-wrapper/collector debt in DOM.md § D6, as built. |
 | D7 browser event loop | **Pending** | Tasks/checkpoints, timers/events, script order and J4 evidence. Resolve the execution-time default/range and consider a script-timeout Settings control; D5b's one-second fixture deadline does not settle ordinary-browsing policy (DOM.md). |
@@ -48,22 +48,38 @@ The implementation and validation evidence for libjs belongs to
 [VALIDATION.md](../../../userland/libjs/VALIDATION.md). The milestone criteria
 belong to [JAVASCRIPT.md](JAVASCRIPT.md#delivery-and-validation):
 
-| Milestone | Status on 2026-10-04 | Evidence and remaining work |
+| Milestone | Status on 2026-10-05 | Evidence and remaining work |
 | --- | --- | --- |
 | J0 reviewed foundation | **Complete** | Pinned QuickJS source/profile, maths selection, dependency inventory and reviewed runtime contract are delivered. |
 | J1 library and runner on os64 | **Complete** | Merged M1/R1/R2/C1, strict target build/link, expected shared dependencies, script execution and exception output in QEMU. Chris's P5 prime-count pipeline adds a hardware smoke test. J1 does not require standard-image installation. |
 | J2 lifecycle and failure acceptance | **Complete; merged** | [PR #200](https://github.com/VBWizard/os64/pull/200), merge `6fda4b79`: existing lifecycle/failure/cancellation/Promise/fatal and upstream evidence is supplemented by 105 guest measurement checks passing on one and eight CPUs. Twelve recursion/native-frame cases retain sampled headroom and permit reuse; two competing runtimes preserve XMM/x87/control state across yield/sleep with a deliberate-disturbance negative control. Six workloads fit the retained 64 MiB/256 KiB/4 MiB/60 s profile, now published by `os64_js_default_limits()` and shared by the runner. Both final boots also pass V1's 375 checks, CLI/default/768 KiB-cap cases and the fatal status; host runner suites pass 196/38 checks. |
 | J3 first scripted Yonder fixture | **Complete; merged in PR #216** | D0/D1/D2a/D2b/D3/D5a are merged. D5b passes the visible mutation/rebuild/reference/form/navigation fixture and default-off Apply/Save switch; see DOM.md § D5b, as built. |
-| J4 browser execution and events | **Pending** | Browser script order, parser mode, timers/events, origins/cookies and their acceptance fixtures remain. D6 reclamation and D7's event loop are separate deliverables. |
+| J4 browser execution and events | **Pending** | D7's evidence: browser script order at the parser's stops, timers, events and their attributes, external scripts, the overrun policy, each with its fixture. D4, its prerequisite, is built and in review on `fable/dom-d4` (DOM.md § D4, as built); D6 is merged (PR #217). Origins and cookies move to the modern-web campaign. |
+| J5 three real pages | **Pending** | With the switch turned on by hand, three real pages Chris chose work as a 1998 browser shows them: a `document.write` counter, a DHTML menu, a form validator. Needs D7, D9 and D10; D11 is driven by whatever these three still lack. Chris confirms on the P5. |
+| J6 scripts on by default | **Pending** | D8's reporting destroy in, J5 passed, and Chris's ruling to change DOM.md ruling 1. The switch stays in Settings either way. |
 
 Next steps:
 
-1. Re-review D6 in PR #217: bounded detached-subtree reclamation, balanced
-   parser references and fatal teardown for leaked holds. D5b/J3 merged in
-   PR #216; J2 has closed the standalone milestone.
-2. Continue the browser stream and execution work. D4 and D7 remain Fable's
-   work. Browser function-call/checkpoint and audited runtime teardown retain
+1. Review and merge D4 (`fable/dom-d4`): the stream, DOM.md § D4, as built.
+2. D7, Fable's: the loop over the parser D4 put on the window's thread.
+   Browser function-call/checkpoint and audited runtime teardown retain
    their own acceptance before ordinary browsing runs scripts.
+
+**The road from D7 to scripts on**, as laid out on 2026-10-04 and restored
+here from Chris's copy after the original was lost. Each row is its own
+slice with its own design or brief; the gates are the rows J6 waits on.
+
+| Row | Owner | Why it is there |
+| --- | --- | --- |
+| D7 the loop: tasks, checkpoints, timers, events and their attributes, script order | Fable | J4's evidence; everything after it runs inside this loop |
+| D8 reporting runtime destroy (DOM.md ruling 8, § A leak at teardown; CONTRACT.md's third browser extension) | Quinn | first gate before the default can change |
+| D9 `document.write` (`os64_html_parser_write`, legal only while the parser is stopped at a script) | Fable | second gate; coupled to D7's stop semantics |
+| D10 geometry (DOM.md § Geometry: a forced layout, charged to the script) | Quinn | third gate; menus and fit-to-window scripts |
+| D11 the surface the old web calls | Quinn builds, Chris chooses the pages | consumer-driven from three real pages (J5) |
+| The switch's default (DOM.md ruling 1) | Chris rules | after D8, D9, D10 and J5 |
+| D12 weak wrappers and the collector (DOM.md § Booked, node reclamation beyond D6) | Quinn, design first | capacity for long sessions |
+| D13 finer invalidation and incremental relayout (DOM.md § Booked, LAYOUT.md's row) | Opus | speed; belongs with the performance work |
+| The modern web: `fetch`, origins, CORS, `document.cookie`, storage, `requestAnimationFrame`, frames | Fable as architect | its own campaign and design document |
 
 ## Agreed standalone scope
 
