@@ -288,12 +288,29 @@ static char s_dir[600];
 static way_cache_t *s_cache;
 static way_jar_t *s_jar;
 
-static void fresh(void)
+/* Every recursive remove in this file goes through here. The path must be
+ * the mkdtemp root (or something beneath it) and nothing else: on 2026-10-04
+ * an edit left s_dir empty, fresh() ran rm -rf on the root with a glob, and it took the home
+ * directory and three mounted drives with it before an I/O error stopped it. */
+static const char SCRATCH_PREFIX[] = "/tmp/way_fetch";
+
+static void remove_tree(const char *path, int contents_only)
 {
-    char cmd[700];
-    snprintf(cmd, sizeof(cmd), "rm -rf %s/*", s_dir);
+    if (path == NULL || strncmp(path, SCRATCH_PREFIX, sizeof(SCRATCH_PREFIX) - 1) != 0 ||
+        strstr(path, "..") != NULL || strchr(path, '\'') != NULL ||
+        strlen(path) <= sizeof(SCRATCH_PREFIX) - 1) {
+        fprintf(stderr, "refusing to remove '%s': not under %s\n", path ? path : "(null)", SCRATCH_PREFIX);
+        abort();
+    }
+    char cmd[800];
+    snprintf(cmd, sizeof(cmd), "rm -rf -- '%s'%s", path, contents_only ? "/*" : "");
     if (system(cmd) != 0)
         abort();
+}
+
+static void fresh(void)
+{
+    remove_tree(s_dir, 1);
     s_npeers = 0;
     s_dials = 0;
     memset(s_last_request, 0, sizeof(s_last_request));
@@ -597,10 +614,7 @@ int main(void)
     field_too_long();
     way_cache_close(s_cache);
     way_jar_free(s_jar);
-    char cmd[600];
-    snprintf(cmd, sizeof(cmd), "rm -rf %s", root);
-    if (system(cmd) != 0)
-        printf("could not remove %s\n", root);
+    remove_tree(root, 0);
     printf("way_fetch_whole: %d checks, %d failed\n", checks, failures);
     return failures != 0;
 }
