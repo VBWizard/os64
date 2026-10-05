@@ -87,6 +87,20 @@ typedef struct {
     os64_js_limits_t limits;
 } os64_js_config_t;
 
+/* Reclamation is for audited hosts whose C-held values are drained before
+ * destroy and whose finalizers own no native resources. Other engine aborts
+ * remain fatal. The ordinary create entry selects FATAL. */
+typedef enum {
+    OS64_JS_TEARDOWN_FATAL = 0,
+    OS64_JS_TEARDOWN_RECLAIM = 1
+} os64_js_teardown_policy_t;
+
+typedef struct {
+    bool leaked;
+    size_t reclaimed_blocks;
+    size_t reclaimed_bytes; /* allocator charge, including ledger headers */
+} os64_js_teardown_report_t;
+
 /* Outcome and output pointers are required. Source bytes and names are borrowed
  * during the call; the library supplies engine-required termination/storage.
  * Caller-header identity is checked before runtime/context publication. */
@@ -94,6 +108,11 @@ os64_js_status_t os64_js_create(const os64_js_config_t *config,
                                 const char *caller_abi,
                                 os64_js_runtime_t **out,
                                 os64_js_outcome_t *outcome);
+os64_js_status_t os64_js_create_with_teardown(const os64_js_config_t *config,
+                                              os64_js_teardown_policy_t policy,
+                                              const char *caller_abi,
+                                              os64_js_runtime_t **out,
+                                              os64_js_outcome_t *outcome);
 os64_js_status_t os64_js_eval(os64_js_runtime_t *runtime,
                               const void *source, size_t length,
                               const char *source_name,
@@ -121,7 +140,14 @@ os64_js_status_t os64_js_install_args(os64_js_runtime_t *runtime,
 /* Cancellation is sticky. This is the cross-thread operation; callers keep the
  * runtime alive until requesting threads have stopped using its handle. */
 void os64_js_cancel(os64_js_runtime_t *runtime);
-/* Owner-thread only, outside active calls/callbacks. NULL is a no-op. Engine
- * invariant violations use the fatal path, not a recoverable outcome. */
+/* Owner-thread only, outside active calls/callbacks. Both destroy entries
+ * consume the runtime and invalidate its context/values. NULL is a no-op.
+ * Reporting destruction follows the creation policy; FATAL retains its
+ * object/weakref assertions and returns a zero report after clean destroy.
+ * RECLAIM reports allocator leftovers without further engine entry. Hosts must
+ * inspect/log a nonzero report. Other invariant violations remain fatal.
+ * A NULL report discards the verdict, as the void destroy entry does. */
+void os64_js_destroy_report(os64_js_runtime_t *runtime,
+                             os64_js_teardown_report_t *report);
 void os64_js_destroy(os64_js_runtime_t *runtime);
 #endif
