@@ -15,6 +15,7 @@ parser=argparse.ArgumentParser()
 parser.add_argument('objects',type=pathlib.Path)
 parser.add_argument('--logs',type=pathlib.Path,default=pathlib.Path('/tmp/dom-d5a-mutants'))
 parser.add_argument('--reclaim',action='store_true',help='run D6 binding ownership mutants')
+parser.add_argument('--events',action='store_true',help='run D7a event, timer and ask mutants')
 args=parser.parse_args()
 root=pathlib.Path(__file__).resolve().parent.parent
 args.logs.mkdir(parents=True,exist_ok=True)
@@ -62,6 +63,54 @@ if args.reclaim:
       ('query-answer-release','collection','os64_html_release(query->dom->document, old[i]);','(void)old[i];'),
       ('empty-content-consumption','page-state','return node != NULL ? os64_html_insert(state->doc, (os64_html_node_t *)parent,\n            (os64_html_node_t *)node, NULL) : OS64_HTML_OK;','return OS64_HTML_OK;'),
     ]
+if args.events:
+    mutants=[
+      ('capture-top-down','event','for (size_t i = count; result == 0 && i > 1; i--)\n        result = invoke_target(d, path[i - 1], PHASE_CAPTURING, true);','for (size_t i = 2; result == 0 && i <= count; i++)\n        result = invoke_target(d, path[i - 1], PHASE_CAPTURING, true);'),
+      ('target-capture-first','event','if (result == 0) result = invoke_target(d, path[0], PHASE_AT_TARGET, true);\n    if (result == 0) result = invoke_target(d, path[0], PHASE_AT_TARGET, false);','if (result == 0) result = invoke_target(d, path[0], PHASE_AT_TARGET, false);\n    if (result == 0) result = invoke_target(d, path[0], PHASE_AT_TARGET, true);'),
+      ('bubbles-flag','event','result == 0 && event->bubbles && i < count','result == 0 && i < count'),
+      ('window-in-path','event','bool to_window = node == NULL || (top == document_node(dom) && kind != D_EVENT_LOAD);','bool to_window = node == NULL || (top == NULL && kind != D_EVENT_LOAD);'),
+      ('once-removed','event','if (listener->once) remove_listener(dom, entry, listener);','(void)0;'),
+      ('list-cut-at-reach','event','bool final = listener == last;','bool final = false;'),
+            ('stop-immediate','event','if (event->stop_now) break;','(void)0;'),
+      ('stop-propagation','event','if (entry == NULL || event->stop) return 0;','if (entry == NULL) return 0;'),
+      ('handler-false-cancels','event','if (state != NULL) cancel(state);','(void)state;'),
+      ('listener-false-ignored','event','if (listener->handler != D_LISTENER && JS_VALUE_GET_TAG(result) == JS_TAG_BOOL &&','if (JS_VALUE_GET_TAG(result) == JS_TAG_BOOL &&'),
+      ('uncancelable','event','    if (event->cancelable) event->canceled = true;','    event->canceled = true;'),
+      ('return-value-false','event','if (magic == E_RETURN_VALUE && !flag) cancel(event);','if (magic == E_RETURN_VALUE && flag) cancel(event);'),
+      ('checkpoint-per-listener','event','os64_js_checkpoint(dom->runtime, OS64_JS_ABI_ID, &point);','os64_memset(&point, 0, sizeof(point));'),
+      ('throwing-listener-next','event','if (!sticky(call.status)) {','if (call.status == OS64_JS_OK) {'),
+      ('nested-error-reported','event','if (runtime_failed(dom)) {\n                        JS_Throw(d->ctx, error);','if (true) {\n                        JS_Throw(d->ctx, error);'),
+      ('listener-dedupe','event','os64_strcmp(listener->type, type.data) == 0) found = listener;','os64_strcmp(listener->type, type.data) == 0 && magic == M_REMOVE) found = listener;'),
+      ('document-scope','event','d_wrap(dom, ctx, document_node(dom)),\n        form != NULL','JS_NewObject(ctx),\n        form != NULL'),
+      ('form-scope','event','form != NULL ? d_wrap(dom, ctx, form) : JS_NewObject(ctx),','form != NULL && false ? d_wrap(dom, ctx, form) : JS_NewObject(ctx),'),
+      ('attribute-change-seen','event','    if (text == NULL ? slot->seen == NULL : slot->seen != NULL && os64_strcmp(text, slot->seen) == 0)\n        return 0;','    if (slot->handler != D_SLOT_EMPTY || text == NULL) return 0;'),
+      ('failed-handler-absent','event','if (slot->handler == D_SLOT_UNCOMPILED && slot_compile(dom, ctx, entry, slot) < 0)','if ((slot->handler == D_SLOT_UNCOMPILED || slot->handler == D_SLOT_ERROR) && slot_compile(dom, ctx, entry, slot) < 0)'),
+      ('body-reflects-window','event','return kind == D_EVENT_LOAD || kind == D_EVENT_FOCUS || kind == D_EVENT_BLUR;','return kind < 0;'),
+      ('load-reads-document','event','node == NULL && d_event_kind(ev->type) == D_EVENT_LOAD};','false};'),
+      ('parser-attribute-first','event','return slot_for(dom, ctx, entry, kind, true) != NULL ? 0 : -1;','return slot_for(dom, ctx, entry, kind, false) != NULL ? 0 : -1;'),
+      ('ancestor-attribute-wrapped','event','if (entry == NULL && element_has_handler(at, kind)) {','if (entry == NULL && element_has_handler(at, kind) && false) {'),
+      ('silent-without-listeners','event','    if (!os64_dom_listens(dom, ev->type)) return OS64_JS_OK;\n','\n'),
+      ('attribute-count-version','event','if (dom->attribute_scanned && dom->attribute_version == version) return dom->attribute_mask;','if (dom->attribute_scanned) return dom->attribute_mask;'),
+      ('report-folded','event','    if (outcome->status == OS64_JS_OK && dom->report.status != OS64_JS_OK) {\n        *outcome = dom->report;','    if (false) {\n        *outcome = dom->report;'),
+      ('listener-drain','event','            if (!JS_IsUndefined(listener->callback)) JS_FreeValueRT(dom->engine, listener->callback);\n            listener->callback = JS_UNDEFINED;','            listener->callback = JS_UNDEFINED;'),
+      ('timer-order','timer','((*link)->due == timer->due && (*link)->id < timer->id)','((*link)->due == timer->due && (*link)->id > timer->id)'),
+      ('timer-negative-zero','timer','    if (delay < 0) delay = 0;\n','\n'),
+      ('timer-cap','timer','if (dom->timer_count >= OS64_DOM_TIMERS_MAX','if (dom->timer_count > OS64_DOM_TIMERS_MAX'),
+      ('timer-arguments','timer','timer->argc = extra;','timer->argc = 0;'),
+      ('timer-clear','timer','if (timer != NULL) timer_free(dom, timer);','if (timer != NULL && false) timer_free(dom, timer);'),
+      ('timer-drain','timer','    for (DTimer *timer = dom->timers; timer != NULL; timer = timer->next)\n        release_values(dom, timer);','    (void)0;'),
+      ('navigation-last-wins','window','    /* The last ask of a task wins, as the last location= does in a browser. */','    if (dom->navigation.kind != OS64_DOM_NAVIGATE_NONE && kind != OS64_DOM_NAVIGATE_NONE) return;'),
+      ('navigation-resolved','window','    return os64_url_absolute(&base, reference, out, cap);','    return os64_strcopy(out, cap, reference) < cap;'),
+      ('hash-fragment','window','return set ? ask_url(dom, ctx, OS64_DOM_NAVIGATE_URL, value, true) : location_part(dom, ctx, magic);','return set ? ask_url(dom, ctx, OS64_DOM_NAVIGATE_URL, value, false) : location_part(dom, ctx, magic);'),
+      ('checkbox-put-back','window','        if (result == 0) {\n            int64_t status = os64_page_node_set_checked(dom->state, node, was);','        if (false) {\n            int64_t status = os64_page_node_set_checked(dom->state, node, was);'),
+      ('submit-event','window','return submit(dom, ctx, form, node, true);','return submit(dom, ctx, form, node, false);'),
+      ('document-write-throws','window','return d_error(ctx, "InvalidStateError", "document.write is not supported yet");','return JS_UNDEFINED;'),
+      ('module-not-classic','window','if (i == 6) return OS64_DOM_SCRIPT_MODULE;','if (i == 6) return OS64_DOM_SCRIPT_CLASSIC;'),
+      ('connected-once','window','if (d_script_mark(dom, script) == 1) dom->options.script_connected','if (d_script_mark(dom, script) >= 0) dom->options.script_connected'),
+      ('innerhtml-born-started','content','if (fragment != NULL && d_script_mark_tree(dom, fragment) < 0) status = OS64_HTML_NO_MEMORY;\n        else if','if (false) status = OS64_HTML_NO_MEMORY;\n        else if'),
+      ('clone-carries-started','node','if (copy != NULL && d_script_copy_marks(dom, node, copy) >= 0)','if (copy != NULL)'),
+      ('script-attribute-slot','node','} else if (d_handler_attribute_set(dom, ctx, node, name.data) < 0) {','} else if (false) {'),
+    ]
 flags=['-O2','-g','-std=gnu11','-Wall','-Wextra','-Werror','-ffreestanding','-fno-builtin','-fno-tree-loop-distribute-patterns','-fno-stack-protector','-DOS64_JS_TARGET','-fsanitize=address,undefined','-fno-sanitize-recover=all']
 for directory in ['libmath/include','libjs/port','libjs/include','libdom/include','libdom','libhtml/include','libpage/include','libpage/upstream/ryu','libos64/include']:
     flags+=['-I'+str(root/'userland'/directory)]
@@ -94,7 +143,7 @@ with tempfile.TemporaryDirectory(prefix='os64-dom-mutants.') as directory:
             result=subprocess.run(['cc','-fsanitize=address,undefined','-pthread','-Wl,-z,noexecstack',*maths,*map(str,selected),str(obj),'-o',str(binary)],cwd=root,stdout=log,stderr=log)
             if result.returncode: print(f'LINK ERROR {name}');continue
             compiled+=1
-            try: result=subprocess.run([str(binary),'--reclaim' if args.reclaim else '--mutants'],stdout=log,stderr=log,timeout=45)
+            try: result=subprocess.run([str(binary),'--reclaim' if args.reclaim else '--events' if args.events else '--mutants'],stdout=log,stderr=log,timeout=45)
             except subprocess.TimeoutExpired:
                 print(f'TIMEOUT {name} (not counted)');continue
             if result.returncode:

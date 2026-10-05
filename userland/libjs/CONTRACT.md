@@ -1,9 +1,11 @@
 # JavaScript runtime API contract
 
-Status: reviewed R0 contract with the two R2 implementation slices, 2026-10-02.
-`libjs.so` exports eleven embedding operations: create,
-context access, class-ID allocation, eval, run, file execution, job draining,
-output/argument setup, cancellation and destruction. Their review/merge state
+Status: reviewed R0 contract with the two R2 implementation slices, 2026-10-02,
+and D7a's host tasks, 2026-10-05.
+`libjs.so` exports the embedding operations `js.h` and `js_engine.h` declare:
+create, context access, class-ID allocation, eval, run, file execution, job
+draining, output/argument setup, cancellation, destruction, and the host-task
+entries (§ Host tasks). Their review/merge state
 and Opus's C1 integration are tracked in JAVASCRIPT_TASKS.md. The default image
 installs the runner, library, dependencies and QuickJS licence;
 `js-runtime-test` builds an optional guest consumer.
@@ -181,9 +183,9 @@ are not reported again on the next turn. Engine notification of a later handler
 for an already-reported rejection is harmless. If an exception is the primary
 outcome at the same queue exhaustion, EXCEPTION takes precedence and checkpoint
 bookkeeping is still released. The standalone outcome carries one diagnostic;
-per-rejection browser events are later checkpoint work. Browser task/checkpoint
-policy requires the extensions listed below; the standalone profile does not
-implement the HTML event loop.
+per-rejection browser events are later checkpoint work. A browser's tasks and
+checkpoints use § Host tasks; the standalone profile does not implement the
+HTML event loop.
 
 ## Results, limits, and reuse
 
@@ -262,24 +264,83 @@ before. A leaked value or engine invariant violation diagnoses and exits the
 host with `OS64_JS_FATAL_EXIT`; it is not an outcome. Teardown-leak containment
 for Yonder remains D0 work under the conditions in JAVASCRIPT.md.
 
-## Browser extensions reserved for later work
+## Host tasks
 
-DOM.md's event-loop and teardown design asks for three reviewed extensions,
-outside R0 implementation:
+A browser runs script in TASKS (a timer's callback, the listeners of one
+event), and a task is more than one entry into the engine: each listener is
+a call, and HTML puts a microtask checkpoint after each. D7a builds the two
+extensions DOM.md reserved for that, declared in `js_engine.h` because they
+take engine values:
 
-- Start a budgeted turn by calling a function value (timer or listener), with
-  the same outcomes and ownership rules. A raw JS_Call outside a wrapper turn
-  does not arm its deadline and is not a browser dispatch mechanism.
-- Drain to a microtask checkpoint inside a host task, including between
-  listeners. The task's deadline and total job cap continue across checkpoints;
-  each checkpoint judges unhandled rejections without opening a fresh budget.
-  R2 must separate budget lifetime from queue exhaustion so this can be added.
-- Select a known-teardown-leak reporting/reclamation policy at creation. This
-  requires a reviewed detection patch, dead runtime/handle guarantees, native
-  resource/finalizer rules, allocator-ledger and global-reference audits, and
-  repeated-leak tests proving no cumulative growth. R0 destruction stays fatal
-  until that narrower contract is implemented and validated; unrelated engine
-  invariant failures remain fatal. An outcome cannot make unsafe cleanup safe.
+- `os64_js_task_begin(runtime, abi, name, outcome)` opens a task: it arms one
+  execution deadline (`now + execution_ms`) and zeroes the job count. The
+  name is the outcome's source name for everything the task reports.
+- `os64_js_call(runtime, abi, function, this, argc, argv, returned_false,
+  outcome)` calls a function value inside the open task, with eval's
+  outcomes. The host owns the function, `this` and the arguments; the return
+  value is discarded, except that a strict `false` is reported through
+  `returned_false`.
+- `os64_js_checkpoint(runtime, abi, outcome)` drains runnable jobs to
+  exhaustion and judges unhandled rejections.
+- `os64_js_task_end(runtime, abi, outcome)` is a final checkpoint, then closes
+  the task.
+- `os64_js_set_execution_ms(runtime, ms, outcome)` replaces the execution
+  limit for tasks and turns started from then on.
+
+The rules:
+
+- **One task at a time.** `task_begin` is BUSY while a task is open, or while
+  an earlier turn still has runnable jobs (eval's own rule). Inside an open
+  task, eval, run, run_file, drain_jobs and the installers are BUSY: the
+  task's checkpoints are what drain its jobs.
+- **One budget per task.** The deadline and the job cap armed by
+  `task_begin` hold across every call and checkpoint until `task_end`.
+  Neither a call nor a checkpoint opens a fresh budget, and a checkpoint is
+  not a turn's end: the task keeps its turn until it is closed.
+- **Rejections are judged at checkpoints.** A call that leaves a rejected
+  promise unhandled reports nothing; the next checkpoint (or `task_end`'s)
+  reports UNHANDLED_REJECTION, with eval's diagnostic rules, and releases
+  the bookkeeping once.
+- **A checkpoint never stops early for an exception.** A Promise reaction
+  that throws is a rejection, not a job exception; what a job can throw is
+  a host job's own error. The first such exception is the outcome and the
+  checkpoint drains the rest, so a task never ends with runnable jobs it
+  could not run.
+- **A sticky failure ends the task's work.** LIMIT, CANCELLED and
+  HOST_FAILURE inside any entry make every later entry of the task answer
+  FAILED_RUNTIME, except `task_end`, which closes the task and reports the
+  sticky status. After that, as before, nothing is accepted but destroy.
+- **Calls are not re-entrant.** `os64_js_call` and `task_begin` are refused
+  from inside a callback, as eval is. A native binding that must run script
+  synchronously under a call (a script's `dispatchEvent`) uses the raw
+  engine call: it runs inside the task, so the interrupt hook bounds it by
+  the task's deadline. A raw call OUTSIDE an open task or turn is not
+  bounded by anything; that is what the task bracket exists to prevent.
+- **A new limit applies to the next task.** `set_execution_ms` is refused
+  during a call and accepted between them; the task that is open keeps the
+  deadline it was armed with. Zero or an unrepresentable value is
+  BAD_ARGUMENT, as creation refuses.
+
+`os64_js_run` is unchanged: a script element is one eval-and-drain turn, the
+same budget a one-call task would have.
+
+`tools/test_js_runtime_host.c`'s task cases hold each rule: refusals outside
+and inside a task, a throwing callback followed by a call that still runs,
+`returned_false`, a rejection left for the checkpoint, a throwing host job,
+the job cap spanning checkpoints, a nested raw call overrunning, every later
+entry answering FAILED_RUNTIME, and a changed limit arming the next task
+only.
+
+## Reserved for later work
+
+DOM.md's teardown design asks for one more reviewed extension, outside this
+implementation: select a known-teardown-leak reporting/reclamation policy at
+creation. This requires a reviewed detection patch, dead runtime/handle
+guarantees, native resource/finalizer rules, allocator-ledger and
+global-reference audits, and repeated-leak tests proving no cumulative
+growth. R0 destruction stays fatal until that narrower contract is
+implemented and validated; unrelated engine invariant failures remain fatal.
+An outcome cannot make unsafe cleanup safe.
 
 ## Review and implementation gates
 

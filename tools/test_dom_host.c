@@ -14,8 +14,11 @@ int64_t os64_read(int32_t handle, void *buffer, size_t size)
 { (void)handle; (void)buffer; (void)size; return -1; }
 int64_t os64_close(int32_t handle)
 { (void)handle; return 0; }
+/* A clock that stands still unless a case makes it step, so a deadline is
+ * met only where a case means it to be. */
+static int64_t dom_clock = 10000000, dom_clock_step;
 int64_t os64_micros(void)
-{ return 10000000; }
+{ return dom_clock += dom_clock_step; }
 static os64_js_config_t fixture_config(void)
 {
     return (os64_js_config_t){.limits={16*1024*1024,256*1024,64*1024,1000,100}};
@@ -210,10 +213,12 @@ static char *native_serialized(const os64_html_node_t *node)
 #include "test_dom_cases.inc"
 #include "test_libpage_clone.inc"
 #include "test_dom_reclaim.inc"
+#include "test_dom_events.inc"
 int main(int argc, char **argv)
 {
     if(argc==2&&!strcmp(argv[1],"--reclaim")){dom_reclaim_cases();printf("DOM reclaim probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--clone")){dom_clone_control_cases();dom_clone_native_cases();dom_clone_state_cap_cases();dom_clone_character_data_cases();dom_clone_allocation_cases();printf("DOM clone probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--events")){dom_event_cases();printf("DOM events probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     bool mutation_mode=argc==2&&!strcmp(argv[1],"--mutants");
     dom_surface_cases();
     dom_identity_cases();
@@ -231,6 +236,7 @@ int main(int argc, char **argv)
     dom_exception_ownership_cases();
     dom_fragment_mode_cases();
     dom_budget_cases();
+    dom_event_cases();
     if(!mutation_mode){dom_allocation_cases();dom_clone_allocation_cases();}
     printf("DOM host: %u checks, %u failed; binding allocation sweeps=%zu\n", checks, failures, dom_sweeps);
     return failures ? 1 : 0;

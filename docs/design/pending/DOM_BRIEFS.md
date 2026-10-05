@@ -14,7 +14,7 @@ goes in DOM.md and its brief here is struck.
 | D6 — **Implemented; awaiting review** | Quinn and two scoped subagents | Fable | [D6 as built](DOM.md#d6-as-built); stacked on D5b |
 | D5 — **D5a merged #214; D5b implemented; awaiting review** | Quinn with scoped subagents | Fable | D2b and D3; D4 is not needed |
 | D4 — **Built; in review** | Fable | Chris | [DOM_D4.md](DOM_D4.md) is the design, [DOM.md § D4, as built](DOM.md#d4-as-built) the record |
-| D7 the loop — **Designed; Opus builds** | Opus, from [DOM_D7.md](DOM_D7.md) | Fable (the loop); Quinn may take D7a's libjs/libdom half first | on D4, as two stacked PRs (D7a registry and turn, D7b the loop) |
+| D7 the loop — **Designed; D7a built (in review); Opus builds D7b** | Opus, from [DOM_D7.md](DOM_D7.md) | Fable (the loop); Quinn may take D7a's libjs/libdom half first | on D4, as two stacked PRs (D7a registry and turn, D7b the loop) |
 
 D4 and D7 stay with Fable because their sections of DOM.md are findings and
 leans, not specifications, and a wrong call there is a hunt rather than a
@@ -235,8 +235,8 @@ and attribute entrances must release the explicit-empty selection marker
 at those transitions, with refusal preserving both tree and state.
 
 **The leak count.** DOM.md § A leak at teardown asks libjs for a destroy
-that reports instead of aborting (CONTRACT.md § Browser extensions, the
-third), with a reviewed patch and a ledger allocator. For J3 the fixture
+that reports instead of aborting (CONTRACT.md § Reserved for later work),
+with a reviewed patch and a ledger allocator. For J3 the fixture
 may run on the fatal destroy: "the leak count is zero" is then the
 engine's own assertion not firing after the registries are drained, and
 the host harness's leak check passing. Whether the reporting destroy is

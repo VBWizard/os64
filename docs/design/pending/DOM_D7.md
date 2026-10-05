@@ -454,6 +454,8 @@ window's close reach the same `page_clear`.
 ## The cut: two PRs, stacked
 
 **D7a — the registry and the turn** (inert in yonder; proven on the host).
+**Built:** DOM.md § D7a, as built records what was built and where it
+departs from this brief.
 libjs: the five entries and the contract rewrite, with `test_js_runtime_host`
 cases. libdom: EventTarget, Event, handler attributes and properties,
 dispatch, `os64_dom_dispatch`/`os64_dom_listens`, timers and their two

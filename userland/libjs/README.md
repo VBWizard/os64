@@ -22,7 +22,7 @@ application addresses.
 Read CONTRACT.md before implementing a consumer and port/README.md for the
 adapter's accounting, headers and diagnostic formats. Upstream originals stay
 byte-identical; generated copies receive the hash-checked manifest patch series.
-`exports.map` publishes 186 engine symbols and eleven runtime symbols, with
+`exports.map` publishes 186 engine symbols and sixteen runtime symbols, with
 adapter/compiler helpers private. The two R2 slices provide the complete
 standalone embedding interface. Their review/merge, Opus's C1 runner integration,
 image/licence installation and independent

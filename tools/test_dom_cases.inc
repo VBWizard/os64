@@ -368,7 +368,10 @@ static void dom_allocation_cases(void)
     }
     const char *operations[]={"document.body.textContent='replacement'","document.getElementById('box').innerHTML='<b>replacement</b>'",
         "document.body.appendChild(document.createElement('aside'))","document.getElementsByTagName('p').item(1)","document.getElementById('box').setAttribute('data-test','replacement')",
-        "document.getElementById('field').value='replacement'","document.getElementById('field').cloneNode(false)"};
+        "document.getElementById('field').value='replacement'","document.getElementById('field').cloneNode(false)",
+        "document.body.addEventListener('click',()=>{},{once:true})","setTimeout(()=>{},5,1,2)",
+        "document.body.setAttribute('onclick','1')","document.body.dispatchEvent(new Event('x'))",
+        "location.href='http://example.test/x'"};
     for(size_t op=0;op<sizeof(operations)/sizeof(*operations);op++){
         DomFixture f=fixture_new(NULL);if(!fixture_ready(&f))continue;
         start=dom_attempts;dom_script(&f,operations[op],"allocation-baseline.js");count=dom_attempts-start;printf("Native operation %zu allocation points: %zu\n",op,count);fixture_free(&f);
