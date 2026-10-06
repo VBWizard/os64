@@ -80,18 +80,34 @@ static JSValue timer_method(JSContext *ctx, JSValueConst self, int argc, JSValue
         if (timer != NULL) timer_free(dom, timer);
         return JS_UNDEFINED;
     }
-    if (dom->timer_count >= OS64_DOM_TIMERS_MAX || dom->timer_id == INT32_MAX)
-        return d_error(ctx, "QuotaExceededError", "Too many timers");
+    /* Both conversions run script (a string handler's toString, the delay's
+     * valueOf), and that script may set timers of its own. They happen
+     * first, in WebIDL's argument order, so the quota below counts every
+     * timer that exists by the time this one is added. */
+    JSValueConst handler = argc > 0 ? argv[0] : JS_UNDEFINED;
+    DString source = {0};
+    bool function = JS_IsFunction(ctx, handler);
+    // The old web's setTimeout("tick()", 1000): a string is a script.
+    if (!function && !d_string(dom, ctx, handler, &source)) return JS_EXCEPTION;
     /* WebIDL's long: the delay wraps as a 32-bit integer, and below zero is
      * zero. */
     int32_t delay = 0;
-    if (argc > 1 && JS_ToInt32(ctx, &delay, argv[1]) < 0) return JS_EXCEPTION;
+    if (argc > 1 && JS_ToInt32(ctx, &delay, argv[1]) < 0) {
+        d_free(dom, source.data);
+        return JS_EXCEPTION;
+    }
     if (delay < 0) delay = 0;
+    if (dom->timer_count >= OS64_DOM_TIMERS_MAX || dom->timer_id == INT32_MAX) {
+        d_free(dom, source.data);
+        return d_error(ctx, "QuotaExceededError", "Too many timers");
+    }
     DTimer *timer = d_alloc(dom, sizeof(*timer));
-    if (timer == NULL) return d_error(ctx, "QuotaExceededError", "DOM timer quota exceeded");
+    if (timer == NULL) {
+        d_free(dom, source.data);
+        return d_error(ctx, "QuotaExceededError", "DOM timer quota exceeded");
+    }
     timer->callback = JS_UNDEFINED;
-    JSValueConst handler = argc > 0 ? argv[0] : JS_UNDEFINED;
-    if (JS_IsFunction(ctx, handler)) {
+    if (function) {
         int extra = argc > 2 ? argc - 2 : 0;
         if (extra != 0) {
             timer->argv = d_alloc(dom, (size_t)extra * sizeof(*timer->argv));
@@ -105,9 +121,6 @@ static JSValue timer_method(JSContext *ctx, JSValueConst self, int argc, JSValue
         timer->callback = JS_DupValue(ctx, handler);
         dom->timers_held += held_values(timer);
     } else {
-        /* The old web's setTimeout("tick()", 1000): a string is a script. */
-        DString source = {0};
-        if (!d_string(dom, ctx, handler, &source)) { d_free(dom, timer); return JS_EXCEPTION; }
         timer->source = source.data;
         timer->source_length = source.length;
     }

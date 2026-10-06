@@ -282,8 +282,10 @@ element's activation unless a listener cancelled it. A checkbox or radio
 changes before its click and is put back when the click is cancelled
 (otherwise `input` and `change` follow); a link asks to be followed; a
 submit button fires `submit` at its form and, uncancelled, asks for the
-submission; a reset button fires `reset`. `form.submit()` asks without a
-`submit` event, `requestSubmit()` with one, and `reset()` fires `reset`. A
+submission; a reset button fires `reset`. An element already being
+clicked ignores another `click()` until its own finishes (HTML's
+click-in-progress flag); another element can still be clicked from its
+listener. `form.submit()` asks without a `submit` event, `requestSubmit()` with one, and `reset()` fires `reset`. A
 reset not cancelled, `focus()` and `blur()` reach the host through
 `options.activate`, which records them.
 
