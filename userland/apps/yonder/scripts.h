@@ -112,4 +112,6 @@ uint64_t yonder_scripts_written(const yonder_scripts_t *scripts);
 void yonder_scripts_set_geometry(yonder_scripts_t *scripts, os64_dom_geometry_provider_t provider, void *opaque);
 os64_dom_geometry_stats_t yonder_scripts_geometry_stats(yonder_scripts_t *scripts, bool reset);
 
+void yonder_scripts_set_user_agent(yonder_scripts_t *scripts, const char *(*provider)(void *), void *opaque);
+
 #endif

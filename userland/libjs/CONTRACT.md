@@ -368,4 +368,17 @@ cannot interrupt it midway.
 
 Yonder selects a 128 KiB engine stack for synchronous geometry callbacks. The
 standalone default remains 256 KiB. Combined native/engine guest evidence and
-the integration boundary are recorded in [DOM_D10.md](../../docs/design/pending/DOM_D10.md).
+the integration boundary are recorded in [DOM_D10.md](../../../docs/design/pending/DOM_D10.md).
+
+### Explicit browser legacy arguments helper
+
+The patched binding header exports `JS_GetLegacyFunctionArguments`. A browser
+may install an accessor which calls it; standalone context construction leaves
+QuickJS's throwing `Function.prototype.arguments` unchanged. The helper accepts
+an ordinary non-strict function from the calling context, copies its innermost
+active frame into an unmapped arguments object, and returns null if inactive.
+Strict, arrow, native and other unsupported function kinds throw TypeError.
+The snapshot owns its values and does not expose or alias stack storage. The
+calling binding charges this synchronous work to its active task. D11's
+consumer and regression evidence is in
+[DOM_D11.md](../../../docs/design/pending/DOM_D11.md).

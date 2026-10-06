@@ -1,7 +1,7 @@
 #include "internal.h"
 
 typedef struct { size_t size; } DBlock;
-static JSClassID anchor_slot, node_slot, collection_slot;
+static JSClassID anchor_slot, node_slot, collection_slot, style_slot;
 
 void *d_alloc(os64_dom_t *dom, size_t size)
 {
@@ -212,19 +212,22 @@ os64_dom_t *os64_dom_create(os64_js_runtime_t *runtime, os64_html_document_t *do
     dom->anchor_class = os64_js_class_id(&anchor_slot);
     dom->node_class = os64_js_class_id(&node_slot);
     dom->collection_class = os64_js_class_id(&collection_slot);
+    dom->style_class = os64_js_class_id(&style_slot);
     if (JS_IsRegisteredClass(dom->engine, dom->anchor_class)) {
         outcome->status = OS64_JS_BAD_ARGUMENT;
         os64_free(dom);
         return NULL;
     }
     const JSClassDef anchor_definition = {.class_name = "DOMBinding", .finalizer = clear_opaque};
-    const JSClassDef node_definition = {.class_name = "Node", .finalizer = clear_opaque};
+    const JSClassDef node_definition = {.class_name = "Node", .finalizer = clear_opaque, .exotic = &d_node_exotic};
+    const JSClassDef style_definition = {.class_name = "CSSStyleDeclaration", .finalizer = clear_opaque};
     const JSClassDef collection_definition = {
         .class_name = "HTMLCollection", .finalizer = clear_opaque, .exotic = &d_collection_exotic
     };
     if (JS_NewClass(dom->engine, dom->anchor_class, &anchor_definition) < 0 ||
         JS_NewClass(dom->engine, dom->node_class, &node_definition) < 0 ||
-        JS_NewClass(dom->engine, dom->collection_class, &collection_definition) < 0) goto fail;
+        JS_NewClass(dom->engine, dom->collection_class, &collection_definition) < 0 ||
+        JS_NewClass(dom->engine, dom->style_class, &style_definition) < 0) goto fail;
     JSValue anchor = JS_NewObjectClass(ctx, dom->anchor_class);
     if (JS_IsException(anchor)) goto fail;
     JS_SetOpaque(anchor, dom);
@@ -274,7 +277,7 @@ fail:
     construction_error(ctx, outcome);
     for (DValue *entry = dom->values; entry != NULL; entry = entry->next) {
         JSClassID id = JS_GetClassID(entry->value);
-        if (id == dom->anchor_class || id == dom->node_class || id == dom->collection_class)
+        if (id == dom->anchor_class || id == dom->node_class || id == dom->collection_class || id == dom->style_class)
             JS_SetOpaque(entry->value, NULL);
     }
     os64_dom_drain(dom);
@@ -312,6 +315,8 @@ void os64_dom_free(os64_dom_t *dom)
         d_event_free(dom, entry);
         if (entry->node != NULL)
             os64_html_release(dom->document, entry->node);
+        if (entry->style_target != NULL)
+            os64_html_release(dom->document, entry->style_target);
         d_free(dom, entry);
         entry = next;
     }

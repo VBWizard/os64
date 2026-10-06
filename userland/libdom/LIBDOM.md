@@ -358,5 +358,23 @@ without asking the HTML provider. SVG layout and getClientRects are outside
 this slice. Layout counts and
 elapsed microseconds are available through `os64_dom_geometry_stats`, including
 failed attempts. Callback budget checks bracket native work and preserve the
-turn's sticky limit classification. See [D10](../../docs/design/pending/DOM_D10.md)
+turn's sticky limit classification. See [D10](../../../docs/design/pending/DOM_D10.md)
 for provider semantics, stack measurements and the browser integration boundary.
+
+## D11 classic consumers
+
+The bounded widget surface is specified in
+[DOM_D11.md](../../../docs/design/pending/DOM_D11.md). Live image/form/control
+collections and named properties use the same native tree and state as D3.
+Stable inline style objects hold their elements and edit typed style attributes
+through libgarb validation. Browser identity is a borrowed owner-thread provider;
+active event values live in nested dispatch frames. Readonly scroll snapshots
+extend the geometry result at its tail. Providers and consumers are rebuilt
+from the matching public header.
+
+The browser explicitly installs the engine's legacy function-arguments helper;
+standalone contexts retain the upstream property. No finalizer owns native tree
+storage. Detached image prefetch is deferred with Chris; displayed images use
+the native picture-loading path. Source-preserving CSS text and attribute image
+dimensions are bounded consumer implementations, not complete CSSOM/image
+interfaces. Host acceptance and remaining J5/P5 work are in the design record.

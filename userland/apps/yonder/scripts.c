@@ -35,6 +35,8 @@ struct yonder_scripts {
     char url[OS64_DOM_URL_MAX];
     os64_js_runtime_t *runtime;
     os64_dom_t *dom;
+    const char *(*user_agent)(void *);
+    void *user_agent_opaque;
     os64_dom_geometry_provider_t geometry;
     void *geometry_opaque;
     os64_dom_geometry_stats_t last_geometry_stats;
@@ -163,6 +165,7 @@ static bool ensure_runtime(yonder_scripts_t *s, os64_js_outcome_t *out)
     options.host_opaque = s;
     s->dom = os64_dom_create(s->runtime, s->doc, s->state, &options, out);
     os64_dom_set_geometry(s->dom, s->geometry, s->geometry_opaque);
+    os64_dom_set_user_agent(s->dom, s->user_agent, s->user_agent_opaque);
     if (s->dom == NULL || os64_js_install_output(s->runtime, 1, OS64_JS_OUTPUT_CONSOLE_LOG, out) != OS64_JS_OK) {
         // A runtime a binding could not be built in is not evaluated again.
         out->status = OS64_JS_HOST_FAILURE;
@@ -635,4 +638,12 @@ os64_dom_geometry_stats_t yonder_scripts_geometry_stats(yonder_scripts_t *s, boo
     os64_dom_geometry_stats_t result = s->last_geometry_stats;
     if (reset) s->last_geometry_stats = (os64_dom_geometry_stats_t){0};
     return result;
+}
+
+void yonder_scripts_set_user_agent(yonder_scripts_t *s, const char *(*provider)(void *), void *opaque)
+{
+    if (s == NULL) return;
+    s->user_agent = provider;
+    s->user_agent_opaque = opaque;
+    os64_dom_set_user_agent(s->dom, provider, opaque);
 }

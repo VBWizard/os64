@@ -52,6 +52,7 @@ typedef enum {
 typedef struct {
     flow_style_t s;             // everything that needs no font to resolve
     Len margin[4], padding[4], inset[4], width, height;
+    Len clip[4];
     Len radius[4][2];
     Len flex_basis, row_gap, column_gap;     // AUTO: auto, and `normal`
     Len min_width, max_width, min_height, max_height;
@@ -1863,6 +1864,10 @@ static void take(Spec *dst, const Spec *src, garb_prop_t prop)
         d->has_z_index = s->has_z_index;
         d->z_index = s->z_index;
         break;
+    case GARB_CLIP:
+        d->legacy_clip_set = s->legacy_clip_set;
+        os64_memcpy(dst->clip,src->clip,sizeof(dst->clip));
+        break;
     case GARB_OPACITY: d->opacity = s->opacity; break;
     case GARB_POINTER_EVENTS: d->pointer_events_none = s->pointer_events_none; break;
     case GARB_FLEX_DIRECTION: d->flex_direction = s->flex_direction; break;
@@ -1961,6 +1966,7 @@ static void inherited_spec(const Ctx *c, const flow_style_t *parent, Spec *out)
         out->margin[i] = len_of(parent->margin[i]);
         out->padding[i] = len_of(parent->padding[i]);
         out->inset[i] = len_of(parent->inset[i]);
+        out->clip[i] = len_of(parent->legacy_clip[i]);
         out->border_px[i] = parent->border_width[i];
         // currentColor stays currentColor: finish resolves it against the
         // child's own colour.
@@ -2637,6 +2643,11 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
             s->clear = as[i];
         break;
     }
+    case GARB_CLIP:
+        s->legacy_clip_set = v->kind == GARB_V_FUNCTION && v->nitems == 4;
+        if (s->legacy_clip_set) for (int k = 0; k < 4; k++)
+            author_len(a,&v->items[k],true,&sp->clip[k]);
+        break;
     case GARB_POSITION: {
         static const char *const words[] = {"static", "relative", "absolute", "fixed", "sticky"};
         if ((i = pick(v, words, F_ARRAY(words))) >= 0)
@@ -2976,8 +2987,10 @@ static void finish(const Ctx *c, Spec *sp, const flow_style_t *parent, bool item
     }
     s->width = resolve(sp->width, s->font_size, automatic);
     s->height = resolve(sp->height, s->font_size, automatic);
-    for (int i = 0; i < 4; i++)
+    for (int i = 0; i < 4; i++) {
         s->inset[i] = resolve(sp->inset[i], s->font_size, automatic);
+        s->legacy_clip[i] = resolve(sp->clip[i], s->font_size, automatic);
+    }
     positioning(c, sp);
     if (item && !f_out_of_flow(s))
         (void)blockify(s);

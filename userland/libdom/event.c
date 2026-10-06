@@ -627,6 +627,8 @@ static int dispatch(Dispatch *d, const os64_html_node_t *node)
     if (to_window) path[count++] = dom->window;
     JS_FreeValue(ctx, event->target);
     event->target = target;
+    DActiveEvent active = {dom->current_event, JS_DupValue(ctx,d->object)};
+    dom->current_event = &active;
     event->dispatching = true;
     dom->dispatching++;
     int result = 0;
@@ -636,6 +638,8 @@ static int dispatch(Dispatch *d, const os64_html_node_t *node)
     if (result == 0) result = invoke_target(d, path[0], PHASE_AT_TARGET, false);
     for (size_t i = 1; result == 0 && event->bubbles && i < count; i++)
         result = invoke_target(d, path[i], PHASE_BUBBLING, false);
+    dom->current_event = active.previous;
+    JS_FreeValue(ctx,active.value);
     dom->dispatching--;
     event->dispatching = false;
     event->phase = PHASE_NONE;
@@ -675,7 +679,8 @@ static bool event_fields(os64_dom_t *dom, JSContext *ctx, JSValueConst object, c
         define_bool(ctx, object, "altKey", ev->alt) && define_bool(ctx, object, "metaKey", ev->meta);
     if (ok && ev->kind == OS64_DOM_EVENT_MOUSE) {
         ok = define_number(ctx, object, "clientX", ev->client_x) && define_number(ctx, object, "clientY", ev->client_y) &&
-            define_number(ctx, object, "pageX", ev->client_x) && define_number(ctx, object, "pageY", ev->client_y) &&
+            define_number(ctx, object, "pageX", ev->page_coordinates ? ev->page_x : ev->client_x) &&
+            define_number(ctx, object, "pageY", ev->page_coordinates ? ev->page_y : ev->client_y) &&
             define_number(ctx, object, "x", ev->client_x) && define_number(ctx, object, "y", ev->client_y) &&
             define_number(ctx, object, "screenX", ev->screen_x) && define_number(ctx, object, "screenY", ev->screen_y) &&
             define_number(ctx, object, "button", ev->button) && define_number(ctx, object, "which", ev->button + 1);

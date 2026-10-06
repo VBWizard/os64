@@ -671,11 +671,19 @@ named stack/defaults/scheduling measurement gaps. It does not claim full
 ECMAScript conformance, a complete interrupt-coverage audit, arbitrary native
 stack safety, browser scheduling/layout acceptance or a new P5 run.
 
-## D10 callback budget extension
+## Combined D7/D10 callback interfaces
 
-The additive callback-safe budget check preserves existing ABI layouts and the
-standalone profile. The current target audit reports twelve runtime exports
-and the unchanged 186 engine exports. Runtime suites pass 906 target-core host
-checks and 3098 sanitized-core host checks, with 53 native calls and no live
-allocations. D10's browser/DOM/guest geometry evidence is recorded in
-[DOM_D10.md](../../docs/design/pending/DOM_D10.md).
+The combined task/checkpoint and callback-safe budget APIs preserve existing
+ABI layouts and the standalone profile. D11's target audit reports seventeen
+runtime exports and 187 engine exports. Runtime suites pass 968 target-core
+host checks and 3160 sanitized-core host checks, with 53 native calls and no
+live allocations. D10's browser/DOM/guest geometry evidence is recorded in
+[DOM_D10.md](../../../docs/design/pending/DOM_D10.md).
+
+D11 adds a hash-checked browser legacy arguments helper without changing the
+standalone inherited property. Browser binding tests cover explicit installation,
+snapshots retained beyond return, recursive innermost-frame selection and
+strict/arrow refusals. Source and header audits pass. Its primary-widget
+consumer proof is recorded in
+[DOM_D11.md](../../../docs/design/pending/DOM_D11.md); it does not claim a new
+P5 run or full legacy-engine conformance.

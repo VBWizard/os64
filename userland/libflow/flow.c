@@ -273,10 +273,28 @@ static Clip content_clip(const FBox *b)
     return f_box_scrolls(b) ? kNoClip : inner_clip(b, outer_clip(b));
 }
 
-// The clip a box hands its content: its own, met with its padding box on
-// the axes it clips — for a scroll container, what its frame keeps.
+// An absolute/fixed rectangle clips its own painting and descendants,
+// intersecting the clip inherited through its containing-block chain.
+static Clip legacy_clip(const FBox *src, Clip c)
+{
+    if (!src->out_of_flow || !src->style->legacy_clip_set) return c;
+    const flow_length_t *sides = src->style->legacy_clip;
+    int64_t top = sides[FLOW_TOP].kind == FLOW_LENGTH_AUTO ? 0 : sides[FLOW_TOP].value;
+    int64_t left = sides[FLOW_LEFT].kind == FLOW_LENGTH_AUTO ? 0 : sides[FLOW_LEFT].value;
+    int64_t right = sides[FLOW_RIGHT].kind == FLOW_LENGTH_AUTO ? src->w : sides[FLOW_RIGHT].value;
+    int64_t bottom = sides[FLOW_BOTTOM].kind == FLOW_LENGTH_AUTO ? src->h : sides[FLOW_BOTTOM].value;
+    os64_gui_rect_t rect = rect_of(src->x+left,src->y+top,right > left ? right-left : 0,bottom > top ? bottom-top : 0);
+    if (c.x) meet_axis(&c.r.x,&c.r.w,rect.x,rect.w);
+    else { c.r.x = rect.x;c.r.w = rect.w; }
+    if (c.y) meet_axis(&c.r.y,&c.r.h,rect.y,rect.h);
+    else { c.r.y = rect.y;c.r.h = rect.h; }
+    c.x = c.y = true;
+    return c;
+}
+
 static Clip inner_clip(const FBox *src, Clip c)
 {
+    c = legacy_clip(src,c);
     bool x = f_box_clips(src, true), y = f_box_clips(src, false);
     if (!x && !y)
         return c;
@@ -628,7 +646,11 @@ static flow_box_t *public_box(Build *bd, const FBox *src, flow_box_t *parent, fl
         return b;
     if (is_sticky(src))
         clip = kNoClip;         // its frame's, where it stays as the box moves
-    set_clip(b, clip);
+    b->content = rect_of(src->x + src->border[FLOW_LEFT] + src->padding[FLOW_LEFT],
+        src->y + src->border[FLOW_TOP] + src->padding[FLOW_TOP],
+        src->w - src->border[FLOW_LEFT] - src->border[FLOW_RIGHT] - src->padding[FLOW_LEFT] - src->padding[FLOW_RIGHT],
+        src->h - src->border[FLOW_TOP] - src->border[FLOW_BOTTOM] - src->padding[FLOW_TOP] - src->padding[FLOW_BOTTOM]);
+    set_clip(b, legacy_clip(src,clip));
     Clip in = inner_clip(src, clip);
     flow_frame_t *scroll = NULL;
     if (f_box_scrolls(src)) {
@@ -702,6 +724,8 @@ static flow_box_t *public_box(Build *bd, const FBox *src, flow_box_t *parent, fl
         b->overflow.y = b->rect.y;
         b->overflow.h = b->rect.h;
     }
+    if (src->out_of_flow && src->style->legacy_clip_set)
+        b->overflow = cut_to(b->overflow,b->clip);
     return b;
 }
 

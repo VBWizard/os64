@@ -1,8 +1,9 @@
 # D10: synchronous script geometry
 
 Status: implemented and locally validated, based on `userland` `29641e20`.
-Governing design: DOM.md § Geometry. D8 is a separate review; D7's dispatcher
-is concurrent work. This slice keeps both interfaces additive.
+Governing design: DOM.md § Geometry. D10 was built independently; the combined
+D7/D9/D10 host uses its provider for shown and loading documents. D11 records
+the arriving lifecycle handoff and readonly scroll readers.
 
 ## Scope and host seam
 

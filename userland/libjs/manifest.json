@@ -104,6 +104,11 @@
       "path": "patches/0005-backtrace-error-lifetime.patch",
       "sha256": "bfccbb28a13d46352407921cc8d0e046c275fc4cc003b5f67fc24a3b4c4d1083",
       "reason": "Retain the borrowed error during backtrace assembly when diagnostic allocation failures replace current_exception; release temporary buffer on early failure."
+    },
+    {
+      "path": "patches/0006-browser-legacy-function-arguments.patch",
+      "sha256": "bf38933b00801a77f643831a60b82b854f0566bea642811f3d990e2fb2548eb4",
+      "reason": "Add an explicitly installed browser helper for snapshots of active ordinary non-strict function arguments; needed by Dreamweaver rollovers."
     }
   ],
   "configuration_scope": "Atomics-disabled, stack-checked target engine and complete standalone embedding interface; slice review/merge and runner integration are tracked in JAVASCRIPT_TASKS.md"
