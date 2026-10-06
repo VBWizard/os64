@@ -1,7 +1,9 @@
 # FRAMES: the physical allocator at the scale of the machine
 
-Status: DESIGN, approved by Chris and reviewed by Fable (2026-10-06).
-Phase 1 is approved to build; Phase 2 waits on its P5 measurement.
+Status: Slices 1 and 2 of Phase 1 BUILT (PR #230), with /sys/memory;
+approved by Chris, reviewed by Fable and Quinn (2026-10-06). Remaining:
+Slice 3 (burial batching, on measurement), Slice 4 (the P5 with the browser
+stack), and Slice 5 / Phase 2 (only on the ledger's evidence).
 Evidence: Quinn's P5 diagnostic (`codex/p5-image-load-diag`,
 `docs/design/pending/P5_IMAGE_LOAD_DIAGNOSTIC.md`, the DEBTS.md handoff
 "Physical allocator scalability"). Author: Opus.
@@ -422,14 +424,23 @@ becomes the routing layer: frame runs for page-shaped requests, the ledger
 (on lent chunks) for small ones, liveness answered as described. The HHDM
 hooks, zero and poison move as described, along with the retro-map,
 snapshot, health line and shutdown summary. CLAUDE.md's allocator section
-is rewritten in the same commit. Kernel-level refusals are tested here,
-not in Slice 1: `allocate_memory_try` on a full table, a ledger that cannot
-borrow a chunk, and zero-on-allocate through the HHDM. Verified with every
-built-in QEMU test, `memory_test`'s reconciliation, mallochavoc, and a new
-built-in test holding well over 100,000 live frames (600 MiB on the 8 GiB
-guest), then releasing them with the books checked.
+is rewritten in the same commit. Kernel-level checks live here, not in
+Slice 1: `allocator_try_refuses` (an impossible `allocate_memory_try`
+answers 0, changes no books and is counted) and `allocator_zero_after_free`
+(a poisoned frame run and a poisoned ledger object come back zeroed, the
+path the out-of-lock zeroing changed). A ledger that cannot borrow a chunk
+needs real exhaustion to reach, so it is not faked. Verified with every
+built-in QEMU test, `memory_test`'s reconciliation, and
+`frame_table_scale`: 120,000 live frames at once (the old wall was
+100,000 rows), released with the books checked.
 
-**Slice 3: burial batching**, if Slice 2's measured exit says so.
+**Slice 3: burial batching**, if Slice 2's measured exit says so. Decided
+by the same measurement: poison-on-free still runs under the frame lock
+(Fable's review), where a 16 MiB run's poison holds every other core's
+allocations. Moving it out costs a second lock acquisition on every free
+(check, unlock, poison, relock, check again), which is the wrong trade if
+the frees that dominate are single pages; `/sys/memory/frames`' worst hold
+says which.
 
 **Slice 4: the P5.** The Museum load to completion with `ALLOCATOR_P5_REPORT`'s
 successor counters, external commands and htop timed while loading, then

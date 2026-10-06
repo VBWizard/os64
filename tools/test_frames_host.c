@@ -597,6 +597,14 @@ int main(int argc, char **argv)
 	case_tlsf_bound();
 	case_p5_shape();
 	case_churn_bound();
+	// A failed hand case names the broken rule; a differential run over the
+	// same broken table only cascades, and can hang (an unpin that never
+	// reaches zero), turning a verdict into a timeout. Stop here instead.
+	if (failures) {
+		printf("frames host: %lu checks, %lu failed in the hand cases (seed %llu)\n", checks,
+		       failures, (unsigned long long)seed);
+		return 1;
+	}
 	// Small tables audited after every operation, then a larger one audited
 	// periodically with far more operations. FRAMES_QUICK (the mutant
 	// harness) keeps the every-operation audits and drops the long run.

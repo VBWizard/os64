@@ -483,9 +483,9 @@ static uintptr_t draw_table_page(struct arena *source, const char *level, uint64
 /// concurrent contexts every day. The CAS stays load-bearing.)
 ///
 /// The fix is CAS, deliberately NOT a lock: draw_table_page can kmalloc (an
-/// arena grows on demand), kmalloc takes kMemoryStatusLock, and the
-/// allocator's HHDM choke points call back into paging while HOLDING that
-/// lock — a create-lock here is an ABBA deadlock with a fuse timed to the
+/// arena grows on demand), kmalloc takes the allocator's locks (kFrameLock,
+/// kMemoryStatusLock), and the allocator maps and unmaps the HHDM while
+/// HOLDING them — a create-lock here is an ABBA deadlock with a fuse timed to the
 /// first concurrent workload. Losing the install CAS orphans the drawn page:
 /// an arena page dies with its task at burial anyway, and a pool page is a
 /// one-page leak on an event rare enough to be a log line (two cores racing

@@ -231,6 +231,60 @@ static bool test_frame_table_scale(void)
     return true;
 }
 
+// A refusal is clean: allocate_memory_try of more frames than the table has
+// answers 0, panics nothing, changes no books, and is counted.
+static bool test_allocator_try_refuses(void)
+{
+    allocator_stats_t before, after;
+    allocator_stats(&before, 0);
+    uint64_t got = allocate_memory_try((before.frames_usable + 1) * PAGE_SIZE);
+    allocator_stats(&after, 0);
+    if (got != 0)
+        TEST_FAIL("allocate_memory_try of more than all memory answered an address");
+    if (after.free_bytes != before.free_bytes || after.used_bytes != before.used_bytes)
+        TEST_FAIL("a refused allocation changed the books");
+    if (after.refusals != before.refusals + 1)
+        TEST_FAIL("the refusal was not counted");
+    return true;
+}
+
+// Zero-on-allocate after a poisoned free, through both layers. Frame runs zero
+// OUTSIDE the frame lock, and the exact-length list hands a freed run straight
+// back to the next request of its size, so "free, then allocate the same
+// size" is exactly the path where a missed zero would hand out 0xFE poison
+// (or the previous owner's bytes).
+static bool zeroed(const uint8_t *p, uint64_t n)
+{
+    for (uint64_t i = 0; i < n; i++)
+        if (p[i] != 0)
+            return false;
+    return true;
+}
+
+static bool test_allocator_zero_after_free(void)
+{
+    const uint64_t run = 3 * PAGE_SIZE;
+    uint64_t a = allocate_memory_aligned(run);
+    memset((void *)(a | kHHDMOffset), 0xAB, run);
+    free_memory(a);
+    uint64_t b = allocate_memory_aligned(run);
+    bool same_run = a == b;
+    if (!zeroed((const uint8_t *)(b | kHHDMOffset), run))
+        TEST_FAIL("a frame run came back after a free with nonzero bytes");
+    free_memory(b);
+
+    uint8_t *s = kmalloc(48);
+    memset(s, 0xAB, 48);
+    kfree(s);
+    uint8_t *t = kmalloc(48);
+    if (!zeroed(t, 48))
+        TEST_FAIL("a ledger object came back after a free with nonzero bytes");
+    printd(DEBUG_TESTS, "\tallocator_zero_after_free: run %s, ledger object %s\n",
+           same_run ? "reused" : "moved", s == t ? "reused" : "moved");
+    kfree(t);
+    return true;
+}
+
 static bool test_fpu_state_round_trip(void)
 {
 	// Preboot runs only on the BSP before the scheduler starts. Static storage
@@ -5912,6 +5966,8 @@ static void register_builtin_tests(void)
     test_register("window_minimum_clamp", test_window_minimum_clamp, TEST_PHASE_PREBOOT);
 	test_register("kmalloc_not_null", test_kmalloc_not_null, TEST_PHASE_PREBOOT);
 	test_register("frame_table_scale", test_frame_table_scale, TEST_PHASE_PREBOOT);
+	test_register("allocator_try_refuses", test_allocator_try_refuses, TEST_PHASE_PREBOOT);
+	test_register("allocator_zero_after_free", test_allocator_zero_after_free, TEST_PHASE_PREBOOT);
 	test_register("fpu_state_round_trip", test_fpu_state_round_trip, TEST_PHASE_PREBOOT);
     test_register("page_fault_test_mode_returns", test_page_fault_does_not_panic_when_testing_flag_is_set, TEST_PHASE_PREBOOT);
     test_register_policy("page_zero_unmapped", test_page_zero_unmapped, TEST_PHASE_PREBOOT, TEST_POLICY_PANIC);
