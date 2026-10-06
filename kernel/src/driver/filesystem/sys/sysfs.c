@@ -25,7 +25,7 @@
 //
 // The namespace (grown consumer-first, like everything else):
 //
-//   /sys/                        the root: "bus", "console", "cpu", "net",
+//   /sys/                        the root: "bus", "console", "cpu", "memory", "net",
 //                                "block", "cache", "conf", "gui", "log", "mounts",
 //                                "openfiles", "random", "shlib", "clipboard", "appearance", "decorations"
 //   /sys/console/font            the face the virtual terminals draw with.
@@ -36,6 +36,13 @@
 //                                at CLOSE — or the word "boot". The write
 //                                side is console_font.h; CONSOLE_FONTS.md
 //                                is the design.
+//   /sys/memory/frames           the frame table (FRAMES.md): the books,
+//                                frames by owner, runs by length, and its
+//                                lock's waits and holds. Read it FIRST when
+//                                memory or a stall is the question
+//   /sys/memory/ledger           the small-object ledger: rows against its
+//                                wall, entries, borrowed chunks, policy
+//                                counters, common free holes, its lock
 //   /sys/random                  the entropy pool: which instructions the
 //                                CPU advertises and which passed the boot
 //                                variation check, what seeded the pool,
@@ -172,6 +179,7 @@
 #include "clipboard.h"      // /sys/clipboard — the snarf store behind the file
 #include "console_font.h"   // /sys/console/font — the VTs' face, and its door
 #include "shared_object.h"  // /sys/shlib — the loaded-shared-object registry
+#include "allocator.h"      // /sys/memory — the frame table and the ledger
 
 extern volatile uint64_t kTicksSinceStart;   // /sys/log stamps the sink heartbeat against it
 extern task_t   *kIdleTasks[];         // per-core idle tasks — their runCycles IS idle time
@@ -354,6 +362,9 @@ typedef enum
 	SYS_NODE_RANDOMFILE, // /random — the entropy pool: sources, seeding, counters (RANDOM.md)
 	SYS_NODE_CONSOLEDIR, // /console
 	SYS_NODE_CONSOLEFONT,// /console/font — the VTs' face, readable and writable (CONSOLE_FONTS.md)
+	SYS_NODE_MEMDIR,     // /memory — the physical allocator (FRAMES.md)
+	SYS_NODE_MEMFRAMES,  // /memory/frames — the frame table and its lock
+	SYS_NODE_MEMLEDGER,  // /memory/ledger — the small-object ledger and its lock
 } sys_node_type_t;
 
 #define SYS_NAME_MAX 32
@@ -519,6 +530,21 @@ static void sys_parse_path(const char *path, sys_path_t *out)
 		if (synth_next_component(path, &pos, comp, sizeof(comp)))
 			return;
 		out->type = SYS_NODE_CLIPFILE;
+		return;
+	}
+
+	if (strcmp(comp, "memory") == 0)
+	{
+		if (!synth_next_component(path, &pos, comp, sizeof(comp)))
+		{
+			out->type = SYS_NODE_MEMDIR;
+			return;
+		}
+		bool is_frames = strcmp(comp, "frames") == 0;
+		if ((!is_frames && strcmp(comp, "ledger") != 0) ||
+		    synth_next_component(path, &pos, comp, sizeof(comp)))
+			return;
+		out->type = is_frames ? SYS_NODE_MEMFRAMES : SYS_NODE_MEMLEDGER;
 		return;
 	}
 
@@ -814,6 +840,74 @@ static void sys_gen_random(synth_text_t *t)
 
 // single readable table answers it in one `cat`. The clipboard's ruling
 // applies in reverse — a file that wants to stay a file.
+// ── /sys/memory ─────────────────────────────────────────────────────────────
+
+static void sys_gen_memory_lock(synth_text_t *t, const char *name, const allocator_lock_stats_t *l)
+{
+	synth_text_addf(t, "%s lock: %lu acquisitions, %lu waited, %lu us waiting in all\n",
+	                name, l->acquires, l->contended, sys_cycles_to_us(l->wait_cycles));
+	synth_text_addf(t, "  worst wait %lu us, worst hold %lu us since boot\n",
+	                sys_cycles_to_us(l->max_wait_cycles), sys_cycles_to_us(l->max_hold_cycles));
+	synth_text_addf(t, "  worst wait %lu us, worst hold %lu us since this file was last read\n",
+	                sys_cycles_to_us(l->window_max_wait_cycles), sys_cycles_to_us(l->window_max_hold_cycles));
+}
+
+static void sys_gen_memory_frames(synth_text_t *t)
+{
+	allocator_stats_t s;
+	allocator_stats(&s, ALLOCATOR_WINDOW_FRAMES);
+	// THE BOOKS FIRST: everything else is detail on them.
+	uint64_t accounted = s.free_bytes + s.used_bytes;
+	if (accounted == s.usable_bytes)
+		synth_text_addf(t, "books: usable %lu = free %lu + used %lu (held %lu): balanced\n",
+		                s.usable_bytes, s.free_bytes, s.used_bytes, s.held_bytes);
+	else
+		synth_text_addf(t, "books: usable %lu != free %lu + used %lu (held %lu): DRIFT of %ld bytes\n",
+		                s.usable_bytes, s.free_bytes, s.used_bytes, s.held_bytes,
+		                (int64_t)(accounted - s.usable_bytes));
+	synth_text_addf(t, "frames: %lu usable = %lu free + %lu in runs + %lu lent to the ledger\n",
+	                s.frames_usable, s.frames_free, s.frames_run, s.frames_ledger);
+	synth_text_addf(t, "free runs: %lu, longest %lu frames (%lu MiB)\n",
+	                s.free_runs, s.largest_free_frames, s.largest_free_frames * PAGE_SIZE >> 20);
+	synth_text_addf(t, "allocations: %lu, refused %lu; fallback walks %lu over %lu runs\n",
+	                s.allocs, s.refusals, s.fallback_walks, s.fallback_examined);
+	synth_text_addf(t, "runs by length    live      free\n");
+	for (unsigned b = 0; b < FRAMES_SIZE_BUCKETS; b++)
+	{
+		char range[24];
+		if (b + 1 < FRAMES_SIZE_BUCKETS && frames_bucket_low(b + 1) == frames_bucket_low(b) + 1)
+			snprintf(range, sizeof(range), "%lu", frames_bucket_low(b));
+		else if (b + 1 < FRAMES_SIZE_BUCKETS)
+			snprintf(range, sizeof(range), "%lu-%lu", frames_bucket_low(b), frames_bucket_low(b + 1) - 1);
+		else
+			snprintf(range, sizeof(range), "%lu+", frames_bucket_low(b));
+		synth_text_addf(t, "  %-12s %9lu %9lu\n", range, s.live_runs_sized[b], s.free_runs_sized[b]);
+	}
+	sys_gen_memory_lock(t, "frame", &s.frame_lock);
+}
+
+static void sys_gen_memory_ledger(synth_text_t *t)
+{
+	allocator_stats_t s;
+	allocator_stats(&s, ALLOCATOR_WINDOW_LEDGER);
+	synth_text_addf(t, "rows: %lu of %lu (high water %lu)\n",
+	                s.ledger_rows, s.ledger_rows_max, s.ledger_high_water);
+	synth_text_addf(t, "entries: %lu live, %lu free, %lu dead\n",
+	                s.ledger_inuse, s.ledger_free, s.ledger_dead);
+	synth_text_addf(t, "chunks: %lu frames lent (%lu KiB); %lu bytes live, %lu free, longest free hole %lu\n",
+	                s.frames_ledger, s.frames_ledger * PAGE_SIZE / 1024,
+	                s.ledger_live_bytes, s.ledger_free_bytes, s.ledger_largest_free);
+	synth_text_addf(t, "policy: exactfit %lu, splits %lu, merges %lu, compactions %lu\n",
+	                s.exactfit, s.splits, s.merges, s.compactions);
+	synth_text_addf(t, "common free holes: %lux%lu %lux%lu %lux%lu %lux%lu\n",
+	                s.top_hole_count[0], s.top_hole_size[0], s.top_hole_count[1], s.top_hole_size[1],
+	                s.top_hole_count[2], s.top_hole_size[2], s.top_hole_count[3], s.top_hole_size[3]);
+	// The ledger lock's holds include report walks like the one that
+	// produced this file: the walk is real time other allocations waited.
+	// Reading a file restarts its own lock's "since last read" window.
+	sys_gen_memory_lock(t, "ledger", &s.ledger_lock);
+}
+
 static void sys_gen_shlib(synth_text_t *t)
 {
 	synth_text_addf(t, "window: 0x%016lx-0x%016lx\n",
@@ -1974,7 +2068,8 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 	         && sp.type != SYS_NODE_NETCARD
 	         && sp.type != SYS_NODE_SHLIBFILE && sp.type != SYS_NODE_CONFFILE
 	         && sp.type != SYS_NODE_MOUNTSFILE && sp.type != SYS_NODE_BLOCKFILE
-	         && sp.type != SYS_NODE_OPENFILESFILE && sp.type != SYS_NODE_RANDOMFILE)
+	         && sp.type != SYS_NODE_OPENFILESFILE && sp.type != SYS_NODE_RANDOMFILE
+	         && sp.type != SYS_NODE_MEMFRAMES && sp.type != SYS_NODE_MEMLEDGER)
 		return -1;   // directories go through dops; everything else is not a file
 
 	synth_text_t text;
@@ -1993,6 +2088,10 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 		sys_gen_shlib(&text);
 	else if (sp.type == SYS_NODE_RANDOMFILE)
 		sys_gen_random(&text);
+	else if (sp.type == SYS_NODE_MEMFRAMES)
+		sys_gen_memory_frames(&text);
+	else if (sp.type == SYS_NODE_MEMLEDGER)
+		sys_gen_memory_ledger(&text);
 	else if (sp.type == SYS_NODE_CONFFILE)
 		sys_gen_conf(&text);
 	else if (sp.type == SYS_NODE_MOUNTSFILE)
@@ -2179,7 +2278,7 @@ static int sys_open_dir(vfs_directory_t **vfs_dir, const char *path,
 	if (sp.type != SYS_NODE_ROOT && sp.type != SYS_NODE_BUSDIR &&
 	    sp.type != SYS_NODE_PCIDIR && sp.type != SYS_NODE_CPUDIR &&
 	    sp.type != SYS_NODE_CPUCORE && sp.type != SYS_NODE_NETDIR &&
-	    sp.type != SYS_NODE_CONSOLEDIR)
+	    sp.type != SYS_NODE_CONSOLEDIR && sp.type != SYS_NODE_MEMDIR)
 		return -1;
 
 	sys_dir_handle_t *h = kmalloc(sizeof(sys_dir_handle_t));
@@ -2222,7 +2321,7 @@ static int sys_read_dir(vfs_directory_t *vfs_dir, os64_dirent_t *entry)
 			// as the "log" entry that went missing from a merge in August —
 			// a listing that drops a name reads exactly like a name that
 			// does not exist.)
-			static const char *kSysRootDirs[] = { "bus", "console", "cpu", "net" };
+			static const char *kSysRootDirs[] = { "bus", "console", "cpu", "memory", "net" };
 			static const char *kSysRootFiles[] = { "block", "cache", "conf", "gui", "log", "mounts", "openfiles", "random", "shlib", "clipboard", "appearance", "decorations" };
 			const int kDirCount  = (int)(sizeof(kSysRootDirs) / sizeof(kSysRootDirs[0]));
 			const int kFileCount = (int)(sizeof(kSysRootFiles) / sizeof(kSysRootFiles[0]));
@@ -2299,6 +2398,16 @@ static int sys_read_dir(vfs_directory_t *vfs_dir, os64_dirent_t *entry)
 			h->index = 1;
 			strncpy(entry->name, "font", OS64_DIRENT_NAME_MAX);
 			return 1;
+
+		case SYS_NODE_MEMDIR:
+		{
+			static const char *kSysMemoryFiles[] = { "frames", "ledger" };
+			if (h->index >= (int)(sizeof(kSysMemoryFiles) / sizeof(kSysMemoryFiles[0])))
+				return 0;
+			strncpy(entry->name, kSysMemoryFiles[h->index], OS64_DIRENT_NAME_MAX);
+			h->index++;
+			return 1;
+		}
 
 		case SYS_NODE_NETDIR:
 		{
@@ -2495,6 +2604,19 @@ static int sys_stat(const char *path, os64_dirent_t *entry, vfs_filesystem_t *vf
 
 		case SYS_NODE_CONSOLEFONT:
 			strncpy(entry->name, "font", OS64_DIRENT_NAME_MAX);
+			return 0;
+
+		case SYS_NODE_MEMDIR:
+			entry->flags = OS64_DE_DIR;
+			strncpy(entry->name, "memory", OS64_DIRENT_NAME_MAX);
+			return 0;
+
+		case SYS_NODE_MEMFRAMES:
+			strncpy(entry->name, "frames", OS64_DIRENT_NAME_MAX);
+			return 0;
+
+		case SYS_NODE_MEMLEDGER:
+			strncpy(entry->name, "ledger", OS64_DIRENT_NAME_MAX);
 			return 0;
 
 		case SYS_NODE_NETIP:

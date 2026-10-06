@@ -31,6 +31,10 @@
 
 typedef uint64_t frame_t;
 
+// Runs counted by length for reports: bucket b holds lengths from
+// frames_bucket_low(b) up to the next bucket's low, the last unbounded.
+#define FRAMES_SIZE_BUCKETS 8
+
 typedef enum {
 	FRAMES_RESERVED = 0,  // not usable memory, or not yet described; never handed out
 	FRAMES_FREE = 1,
@@ -63,12 +67,17 @@ typedef struct {
 	// usable == free + run + ledger, always (frames_audit checks it).
 	uint64_t usable_frames, free_frames, run_frames, ledger_frames;
 	uint64_t free_runs;
+	uint64_t live_runs_sized[FRAMES_SIZE_BUCKETS];   // allocated runs, RUN and LEDGER
+	uint64_t free_runs_sized[FRAMES_SIZE_BUCKETS];
 
 	// Cost evidence. A refusal is an allocation that found nothing; a
 	// fallback walk is the one list the TLSF round-up skipped, walked only
 	// on the way to refusing, and `fallback_examined` counts its runs.
 	uint64_t allocs, refusals, fallback_walks, fallback_examined;
 } frames_t;
+
+unsigned frames_size_bucket(uint64_t len);
+uint64_t frames_bucket_low(unsigned bucket);
 
 // Bytes of table needed to describe frames 0..nframes-1.
 size_t frames_table_bytes(uint64_t nframes);

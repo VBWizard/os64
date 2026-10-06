@@ -8,6 +8,7 @@
 #include "panic.h"
 #include "memcpy.h"
 #include "spinlock.h"
+#include "driver/system/x86_64.h"   // rdtsc — the locks time themselves for /sys/memory
 
 // ── Two owners of physical memory (docs/design/pending/FRAMES.md) ────────────
 //
@@ -35,8 +36,18 @@
 // pins the chunk's frames under an extent (frames_ledger_pin) after mapping
 // and unpins them before unmapping, so a pinned frame is mapped too.
 
+// A lock that keeps its own numbers for /sys/memory: how often it was taken,
+// how often a taker had to wait, and the worst wait and hold, in TSC cycles.
+// Every field is written under the lock it describes.
+typedef struct
+{
+	spinlock_t lock;
+	allocator_lock_stats_t stats;
+	uint64_t held_since;
+} timed_lock_t;
+
 static frames_t kFrames;
-static spinlock_t kFrameLock = 0;
+static timed_lock_t kFrameLock;
 
 // Usable bytes the frame table never describes (frame 0, if a usable entry
 // starts there, and any part of an entry that is not whole frames). The
@@ -50,27 +61,40 @@ memory_status_t *kMemoryStatus;
 //Points to the next available kernel status - increment AFTER use
 uint64_t kMemoryStatusCurrentPtr = 0;
 
-static spinlock_t kMemoryStatusLock = 0;
+static timed_lock_t kMemoryStatusLock;
 
-static inline uint64_t frames_lock(void)
+static inline uint64_t timed_acquire(timed_lock_t *l)
 {
-	return spinlock_acquire_irqsave(&kFrameLock);
+	uint64_t waited;
+	uint64_t flags = spinlock_acquire_irqsave_measured(&l->lock, rdtsc, &waited);
+	l->stats.acquires++;
+	if (waited != 0)
+	{
+		l->stats.contended++;
+		l->stats.wait_cycles += waited;
+		if (waited > l->stats.max_wait_cycles)
+			l->stats.max_wait_cycles = waited;
+		if (waited > l->stats.window_max_wait_cycles)
+			l->stats.window_max_wait_cycles = waited;
+	}
+	l->held_since = rdtsc();
+	return flags;
 }
 
-static inline void frames_unlock(uint64_t flags)
+static inline void timed_release(timed_lock_t *l, uint64_t flags)
 {
-	spinlock_release_irqrestore(&kFrameLock, flags);
+	uint64_t hold = rdtsc() - l->held_since;
+	if (hold > l->stats.max_hold_cycles)
+		l->stats.max_hold_cycles = hold;
+	if (hold > l->stats.window_max_hold_cycles)
+		l->stats.window_max_hold_cycles = hold;
+	spinlock_release_irqrestore(&l->lock, flags);
 }
 
-static inline uint64_t ledger_lock(void)
-{
-	return spinlock_acquire_irqsave(&kMemoryStatusLock);
-}
-
-static inline void ledger_unlock(uint64_t flags)
-{
-	spinlock_release_irqrestore(&kMemoryStatusLock, flags);
-}
+static inline uint64_t frames_lock(void) { return timed_acquire(&kFrameLock); }
+static inline void frames_unlock(uint64_t flags) { timed_release(&kFrameLock, flags); }
+static inline uint64_t ledger_lock(void) { return timed_acquire(&kMemoryStatusLock); }
+static inline void ledger_unlock(uint64_t flags) { timed_release(&kMemoryStatusLock, flags); }
 
 //NOTE: Will return the passed address if it is already page aligned
 static inline uintptr_t round_up_to_nearest_page(uintptr_t addr) {
@@ -747,6 +771,86 @@ const char *allocator_audit(uint64_t *where)
 	const char *why = frames_audit(&kFrames, where);
 	frames_unlock(flags);
 	return why;
+}
+
+// Everything /sys/memory shows, at one instant: both locks are held while it
+// is gathered, so the ledger walk below counts in the ledger lock's hold.
+void allocator_stats(allocator_stats_t *out, unsigned restart_windows)
+{
+	memset(out, 0, sizeof(*out));
+	uint64_t sizes[16] = {0}, counts[16] = {0};
+	uint32_t tracked = 0;
+
+	uint64_t lflags = ledger_lock();
+	out->ledger_rows = kMemoryStatusCurrentPtr;
+	out->ledger_rows_max = INITIAL_MEMORY_STATUS_COUNT;
+	out->ledger_high_water = kMemoryStatusHighWater;
+	for (uint64_t i = 0; i < kMemoryStatusCurrentPtr; i++)
+	{
+		memory_status_t *e = &kMemoryStatus[i];
+		if (e->length == 0) { out->ledger_dead++; continue; }
+		if (e->in_use) { out->ledger_inuse++; out->ledger_live_bytes += e->length; continue; }
+		out->ledger_free++;
+		out->ledger_free_bytes += e->length;
+		if (e->length > out->ledger_largest_free)
+			out->ledger_largest_free = e->length;
+		for (uint32_t s = 0; s < 16; s++)
+		{
+			if (s == tracked) { sizes[s] = e->length; counts[s] = 1; tracked++; break; }
+			if (sizes[s] == e->length) { counts[s]++; break; }
+		}
+	}
+	out->exactfit = kAllocExactFitHits;
+	out->splits = kAllocSplits;
+	out->merges = kAllocMerges;
+	out->compactions = kAllocCompactions;
+
+	uint64_t fflags = frames_lock();
+	out->frames_usable = kFrames.usable_frames;
+	out->frames_free = kFrames.free_frames;
+	out->frames_run = kFrames.run_frames;
+	out->frames_ledger = kFrames.ledger_frames;
+	out->free_runs = kFrames.free_runs;
+	out->largest_free_frames = frames_largest_free(&kFrames);
+	out->allocs = kFrames.allocs;
+	out->refusals = kFrames.refusals;
+	out->fallback_walks = kFrames.fallback_walks;
+	out->fallback_examined = kFrames.fallback_examined;
+	for (unsigned b = 0; b < FRAMES_SIZE_BUCKETS; b++)
+	{
+		out->live_runs_sized[b] = kFrames.live_runs_sized[b];
+		out->free_runs_sized[b] = kFrames.free_runs_sized[b];
+	}
+	out->frame_lock = kFrameLock.stats;
+	out->ledger_lock = kMemoryStatusLock.stats;
+	// Restarted while held, so no hold can land between capture and reset;
+	// this report's own hold opens the next window, as it should.
+	if (restart_windows & ALLOCATOR_WINDOW_FRAMES)
+		kFrameLock.stats.window_max_wait_cycles = kFrameLock.stats.window_max_hold_cycles = 0;
+	if (restart_windows & ALLOCATOR_WINDOW_LEDGER)
+		kMemoryStatusLock.stats.window_max_wait_cycles = kMemoryStatusLock.stats.window_max_hold_cycles = 0;
+	frames_unlock(fflags);
+	ledger_unlock(lflags);
+
+	out->held_bytes = kFramesHeldBytes;
+	out->usable_bytes = kAvailableMemory;
+	out->free_bytes = out->frames_free * PAGE_SIZE + out->ledger_free_bytes;
+	out->used_bytes = out->frames_run * PAGE_SIZE + out->ledger_live_bytes + out->held_bytes;
+
+	// The four most common free hole sizes, by count.
+	for (uint32_t s = 0; s < tracked; s++)
+		for (int t = 0; t < 4; t++)
+			if (counts[s] > out->top_hole_count[t])
+			{
+				for (int m = 3; m > t; m--)
+				{
+					out->top_hole_count[m] = out->top_hole_count[m - 1];
+					out->top_hole_size[m] = out->top_hole_size[m - 1];
+				}
+				out->top_hole_count[t] = counts[s];
+				out->top_hole_size[t] = sizes[s];
+				break;
+			}
 }
 
 // Every allocated extent, for init_os64_paging_tables' retro-map: frame

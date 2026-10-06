@@ -166,6 +166,24 @@ static void compare(rig_t *r, model_t *m, const char *when)
 	CHECK(frames_largest_free(&r->f) == model_largest_free(m), "%s: largest free %llu vs %llu",
 	      when, (unsigned long long)frames_largest_free(&r->f),
 	      (unsigned long long)model_largest_free(m));
+	// Runs by length, counted from the model: its live runs, and its free
+	// stretches (one free run each, since the table never leaves two free
+	// runs side by side).
+	uint64_t live_sized[FRAMES_SIZE_BUCKETS] = {0}, free_sized[FRAMES_SIZE_BUCKETS] = {0};
+	for (size_t i = 0; i < m->nlive; i++)
+		live_sized[frames_size_bucket(m->live[i].count)]++;
+	for (uint64_t i = 0, run = 0; i <= m->n; i++) {
+		if (i < m->n && m->owner[i] == M_FREE) { run++; continue; }
+		if (run) free_sized[frames_size_bucket(run)]++;
+		run = 0;
+	}
+	for (unsigned b = 0; b < FRAMES_SIZE_BUCKETS; b++)
+		CHECK(r->f.live_runs_sized[b] == live_sized[b] && r->f.free_runs_sized[b] == free_sized[b],
+		      "%s: runs of length >= %llu: live %llu/%llu free %llu/%llu", when,
+		      (unsigned long long)frames_bucket_low(b),
+		      (unsigned long long)r->f.live_runs_sized[b], (unsigned long long)live_sized[b],
+		      (unsigned long long)r->f.free_runs_sized[b], (unsigned long long)free_sized[b]);
+
 	// The runs the iterator reports tile the described memory exactly as the
 	// model's owners do, kind by kind.
 	uint64_t cursor = 0, first, count, by_kind[4] = {0, 0, 0, 0}, last_end = 0;

@@ -334,22 +334,30 @@ only if the measured exit cost after the table change says it should.
 
 ### Observability
 
-The health line and `SYSCALL_MEMORY` read counters instead of walking the
-table: FREE, RUN and LEDGER frames (which must sum to usable), runs per
-list, and the ledger's live and free bytes inside its chunks (which must
-sum to its LEDGER frames); slab pages per class in Phase 2. Reported free
-is FREE frames plus the ledger's free bytes; used is RUN frames plus its
-live bytes. Nothing is counted twice, and `free + used == usable` still
-holds. The **largest free extent** is not a counter; it is computed exactly
-on read, at human pace: the larger of the frame table's largest run (found
-by walking only its highest non-empty list, usually one run) and the
-ledger's largest free hole (its own walk, under its own lock). An **audit walk** (every descriptor, every list, every
-boundary tag, and `free + used == usable` recomputed from scratch) exists
-for tests and for `DEBUG_ALLOCATOR` boots, and never runs on a timer by
-default. Quinn's `searches`/`examined` counters keep their meaning and
-split by layer: frame-table allocations should read as a small constant per
-search, and the ledger's (Phase 1) as its few-thousand-row walk. That second
-number is the evidence Slice 5 is decided on.
+**`/sys/memory/frames` and `/sys/memory/ledger`**, read with `cat`, no
+logging needed. `frames`: the books (usable = free + used, with a
+`balanced` or `DRIFT` verdict), frames by owner, free runs and the longest,
+allocations, refusals and fallback walks, live and free runs by length
+(1, 2-4, 5-16, 17-64, 65-256, 257-1024, 1025-4096, 4097+), and the frame
+lock. `ledger`: rows against its wall and the high water, entries, chunks
+borrowed, live and free bytes, the policy counters, the commonest free
+holes, and the ledger lock. Each lock reports acquisitions, how many had to
+wait, total wait, and the worst wait and hold twice: since boot, and since
+that file was last read, so reading it before and after a workload
+measures just the workload. The run histograms are counters kept at every
+list insert, removal, allocation and free, and `frames_audit` checks them;
+the lock numbers come from the locks timing themselves (two TSC reads per
+acquisition, and none for the wait unless the first try fails). Reading the
+ledger file walks the ledger under its lock, and that hold is counted too.
+The ledger's lock waits and holds, and its rows against the wall, are the
+evidence Slice 5 is decided on.
+
+The health line reads the same counters. An **audit walk** (every
+descriptor, every list, every boundary tag, the histograms, and
+`free + run + ledger == usable` recomputed from scratch) exists for tests
+and debug boots, and never runs on a timer: on the 8 GiB guest it holds the
+frame lock for about 260 ms, which `/sys/memory/frames` shows as boot's
+worst hold.
 
 ## What goes away
 

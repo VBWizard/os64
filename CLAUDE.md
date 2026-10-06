@@ -194,6 +194,11 @@ make -C kernel test-elf
   from the frame table; its 100,000-row wall is that population's own limit.
 - Seeded from the Limine memory map in `allocator_init`, which places the
   table in the first usable region with room for it.
+- **`/sys/memory/frames` and `/sys/memory/ledger` report it all live** — the
+  books (with a balanced/DRIFT verdict), frames by owner, runs by length,
+  the ledger's rows against its wall, and each lock's waits and holds, since
+  boot and since the file was last read. Read them FIRST when memory or a
+  stall is the question; `cat` before and after a workload measures it.
 - `frames.c` has no kernel headers: `tools/test_frames_host.sh` runs it
   under ASan/UBSan against a reference model, and
   `tools/test_frames_mutants.py` proves the suite catches each rule broken.

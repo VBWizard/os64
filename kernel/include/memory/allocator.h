@@ -5,6 +5,8 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#include "frames.h"   // FRAMES_SIZE_BUCKETS — the run-length histograms
+
 #define RESERVED_PAGES 9
 
 typedef struct memory_status_s
@@ -51,6 +53,40 @@ const char *allocator_audit(uint64_t *where);
 // Every allocated extent (frame runs whole, the ledger's live extents), for
 // init_os64_paging_tables' retro-map. Holds both allocator locks throughout.
 void allocator_for_each_allocated(void (*fn)(void *ctx, uintptr_t phys, uint64_t length), void *ctx);
+
+// One allocator lock's own numbers, in TSC cycles (kCPUCyclesPerSecond
+// converts). `contended` counts acquisitions that had to wait. The worst
+// wait and hold are kept twice: since boot, and since the window was last
+// restarted (allocator_stats' reset), so a reader can measure one stretch of
+// time without boot's own work in the answer.
+typedef struct
+{
+	uint64_t acquires, contended, wait_cycles, max_wait_cycles, max_hold_cycles;
+	uint64_t window_max_wait_cycles, window_max_hold_cycles;
+} allocator_lock_stats_t;
+
+// Everything /sys/memory reports, captured at one instant (allocator_stats).
+typedef struct
+{
+	// The books, in bytes: free + used == usable when nothing has drifted.
+	uint64_t usable_bytes, free_bytes, used_bytes, held_bytes;
+	// The frame table, in frames.
+	uint64_t frames_usable, frames_free, frames_run, frames_ledger;
+	uint64_t free_runs, largest_free_frames;
+	uint64_t allocs, refusals, fallback_walks, fallback_examined;
+	uint64_t live_runs_sized[FRAMES_SIZE_BUCKETS], free_runs_sized[FRAMES_SIZE_BUCKETS];
+	allocator_lock_stats_t frame_lock, ledger_lock;
+	// The ledger.
+	uint64_t ledger_rows, ledger_rows_max, ledger_high_water;
+	uint64_t ledger_inuse, ledger_free, ledger_dead;
+	uint64_t ledger_live_bytes, ledger_free_bytes, ledger_largest_free;
+	uint64_t exactfit, splits, merges, compactions;
+	uint64_t top_hole_size[4], top_hole_count[4];
+} allocator_stats_t;
+
+// Restart the named locks' windows after capturing them.
+enum { ALLOCATOR_WINDOW_FRAMES = 1, ALLOCATOR_WINDOW_LEDGER = 2 };
+void allocator_stats(allocator_stats_t *out, unsigned restart_windows);
 
 // ── kworker-side maintenance + observability (2026-08-07) ───────────────────
 // The ledger's counters: cheap O(1) increments under the ledger lock,

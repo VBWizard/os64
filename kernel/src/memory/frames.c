@@ -50,6 +50,23 @@ static inline uint64_t run_length(const frames_t *f, uint64_t head)
 	return pos_of(w) == POS_SINGLE ? 1 : a_of(w);
 }
 
+// ── Sizes, for the reports ──────────────────────────────────────────────
+
+static const uint64_t kBucketLow[FRAMES_SIZE_BUCKETS] = {1, 2, 5, 17, 65, 257, 1025, 4097};
+
+unsigned frames_size_bucket(uint64_t len)
+{
+	unsigned b = 0;
+	while (b + 1 < FRAMES_SIZE_BUCKETS && len >= kBucketLow[b + 1])
+		b++;
+	return b;
+}
+
+uint64_t frames_bucket_low(unsigned bucket)
+{
+	return bucket < FRAMES_SIZE_BUCKETS ? kBucketLow[bucket] : 0;
+}
+
 // ── Which list a free run belongs on ────────────────────────────────────
 
 static inline unsigned floor_log2(uint64_t x) { return 63u - (unsigned)__builtin_clzll(x); }
@@ -131,6 +148,7 @@ static void list_insert(frames_t *f, uint64_t head, uint64_t len)
 		set_prev(f, *lh, head);
 	*lh = head;
 	list_mark(f, len, true);
+	f->free_runs_sized[frames_size_bucket(len)]++;
 }
 
 static void list_remove(frames_t *f, uint64_t head, uint64_t len)
@@ -145,6 +163,7 @@ static void list_remove(frames_t *f, uint64_t head, uint64_t len)
 		set_prev(f, next, prev);
 	if (*lh == FRAMES_NONE)
 		list_mark(f, len, false);
+	f->free_runs_sized[frames_size_bucket(len)]--;
 }
 
 // ── Writing runs ────────────────────────────────────────────────────────
@@ -161,6 +180,7 @@ static void mark_interior(frames_t *f, uint64_t first, uint64_t count, unsigned 
 
 static void write_allocated(frames_t *f, uint64_t first, uint64_t count, unsigned kind)
 {
+	f->live_runs_sized[frames_size_bucket(count)]++;
 	if (count == 1) {
 		f->table[first] = make(kind, POS_SINGLE, 1, 0);
 		return;
@@ -243,6 +263,8 @@ frames_status_t frames_init(frames_t *f, frame_t *table, uint64_t nframes)
 	f->fl_mask = 0;
 	f->usable_frames = f->free_frames = f->run_frames = f->ledger_frames = 0;
 	f->free_runs = 0;
+	for (unsigned i = 0; i < FRAMES_SIZE_BUCKETS; i++)
+		f->live_runs_sized[i] = f->free_runs_sized[i] = 0;
 	f->allocs = f->refusals = f->fallback_walks = f->fallback_examined = 0;
 	return FRAMES_OK;
 }
@@ -418,6 +440,7 @@ frames_status_t frames_free(frames_t *f, uint64_t first, uint64_t *count_out)
 	unsigned kind = (unsigned)k;
 
 	mark_interior(f, first, count, FRAMES_FREE);
+	f->live_runs_sized[frames_size_bucket(count)]--;
 	if (kind == FRAMES_RUN)
 		f->run_frames -= count;
 	else
@@ -564,6 +587,7 @@ const char *frames_audit(const frames_t *f, uint64_t *where)
 		AUDIT_FAIL("frame 0 is described as memory", 0);
 
 	uint64_t counted[4] = {0, 0, 0, 0}, free_runs = 0;
+	uint64_t live_sized[FRAMES_SIZE_BUCKETS] = {0}, free_sized[FRAMES_SIZE_BUCKETS] = {0};
 	unsigned last_kind = FRAMES_RESERVED;
 	for (uint64_t i = 0; i < f->nframes;) {
 		frame_t w = f->table[i];
@@ -604,8 +628,12 @@ const char *frames_audit(const frames_t *f, uint64_t *where)
 		if (kind == FRAMES_RUN && len > 1 && b_of(f->table[i + len - 1]) != 0)
 			AUDIT_FAIL("pin count on a frame the ledger does not hold", i + len - 1);
 		counted[kind] += len;
-		if (kind == FRAMES_FREE)
+		if (kind == FRAMES_FREE) {
 			free_runs++;
+			free_sized[frames_size_bucket(len)]++;
+		} else {
+			live_sized[frames_size_bucket(len)]++;
+		}
 		last_kind = kind;
 		i += len;
 	}
@@ -620,6 +648,12 @@ const char *frames_audit(const frames_t *f, uint64_t *where)
 		AUDIT_FAIL("free + run + ledger != usable", f->usable_frames);
 	if (free_runs != f->free_runs)
 		AUDIT_FAIL("free run counter disagrees with the table", free_runs);
+	for (unsigned b = 0; b < FRAMES_SIZE_BUCKETS; b++) {
+		if (live_sized[b] != f->live_runs_sized[b])
+			AUDIT_FAIL("live runs by length disagree with the table", b);
+		if (free_sized[b] != f->free_runs_sized[b])
+			AUDIT_FAIL("free runs by length disagree with the table", b);
+	}
 
 	uint64_t listed = 0, members;
 	const char *why;
