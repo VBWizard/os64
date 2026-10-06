@@ -96,6 +96,18 @@ uint64_t frames_alloc(frames_t *f, uint64_t count, frames_kind_t kind);
 // On success *count_out, if given, is the run's length.
 frames_status_t frames_free(frames_t *f, uint64_t first, uint64_t *count_out);
 
+// frames_free's checks without the free: OK when `first` starts an
+// allocated run, with its kind and length. The kernel poisons and unmaps a
+// run between this answer and the free, under the same lock.
+frames_status_t frames_check_start(const frames_t *f, uint64_t first, frames_kind_t *kind_out,
+                                   uint64_t *count_out);
+
+// The next run of any kind except RESERVED at or after *cursor: true with
+// its first frame, length and kind, and *cursor moved past it; false at the
+// end of the table. A walk of the whole table, for boot and reports.
+bool frames_next_run(const frames_t *f, uint64_t *cursor, uint64_t *first, uint64_t *count,
+                     frames_kind_t *kind);
+
 // A LEDGER frame counts the live ledger extents overlapping it. The ledger
 // adds after its carve has mapped the extent and subtracts before its free
 // unmaps it, so a count above zero means mapped. All frames in the range

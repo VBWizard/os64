@@ -1,5 +1,6 @@
 #include "CONFIG.h"
 #include "allocator.h"
+#include "frames.h"
 #include "memmap.h"
 #include "paging.h"
 #include "memset.h"
@@ -8,27 +9,65 @@
 #include "memcpy.h"
 #include "spinlock.h"
 
+// ── Two owners of physical memory (docs/design/pending/FRAMES.md) ────────────
+//
+// THE FRAME TABLE (frames.c) owns every usable 4 KiB frame, one 8-byte
+// descriptor each, so allocating, freeing and "is this frame live?" never
+// search. Page-aligned requests and anything a page or larger are frame runs.
+//
+// THE LEDGER (kMemoryStatus) carves the kernel's small unaligned objects at
+// 8-byte granularity, by the same exact-fit-first policy it always has, out
+// of chunks it borrows from the frame table. Its rows describe only those
+// chunks, so it stays as long as the kernel's small objects are numerous,
+// however much memory tasks use. Chunks are never returned.
+//
+// LOCKS. kFrameLock guards the frame table, kMemoryStatusLock the ledger.
+// Both are irqsave: allocations happen concurrently from page-fault handlers
+// on multiple cores, and a holder preempted mid-update would deadlock a
+// fault-context spinner (IF=0) on the same core. The order is ledger, then
+// frames, never the reverse.
+//
+// HHDM ("allocated <=> HHDM-mapped", paging.h). A frame run is mapped before
+// kFrameLock is released at allocation and unmapped before the run is
+// released at free, so a frame that reads as live is mapped. Inside a ledger
+// chunk the LEDGER owns HHDM state: a chunk is lent unmapped, the ledger maps
+// each extent it carves and unmaps the pages its frees fully contain, and it
+// pins the chunk's frames under an extent (frames_ledger_pin) after mapping
+// and unpins them before unmapping, so a pinned frame is mapped too.
+
+static frames_t kFrames;
+static spinlock_t kFrameLock = 0;
+
+// Usable bytes the frame table never describes (frame 0, if a usable entry
+// starts there, and any part of an entry that is not whole frames). The
+// snapshot reports them as used, so free + used == usable still holds.
+static uint64_t kFramesHeldBytes;
+
+// A ledger chunk: 64 KiB, so each borrow serves many small objects.
+#define LEDGER_CHUNK_FRAMES 16
+
 memory_status_t *kMemoryStatus;
 //Points to the next available kernel status - increment AFTER use
 uint64_t kMemoryStatusCurrentPtr = 0;
-uintptr_t memoryBaseAddress;
 
-// Serializes ALL allocator state (kMemoryStatus, kMemoryStatusCurrentPtr) and
-// the HHDM map/unmap that rides along with allocate/free. Allocations happen
-// concurrently from page-fault handlers on multiple cores (CoW privatization,
-// demand paging, shared-object page resolution all kmalloc in fault context),
-// and this ledger was previously completely unguarded. Interrupts are
-// disabled while held (irqsave pattern): a holder preempted mid-update on one
-// core would deadlock a fault-context spinner (IF=0) on that same core.
-// The lock/unlock mechanics live in spinlock.h (this was their birthplace).
 static spinlock_t kMemoryStatusLock = 0;
 
-static inline uint64_t allocator_lock(void)
+static inline uint64_t frames_lock(void)
+{
+	return spinlock_acquire_irqsave(&kFrameLock);
+}
+
+static inline void frames_unlock(uint64_t flags)
+{
+	spinlock_release_irqrestore(&kFrameLock, flags);
+}
+
+static inline uint64_t ledger_lock(void)
 {
 	return spinlock_acquire_irqsave(&kMemoryStatusLock);
 }
 
-static inline void allocator_unlock(uint64_t flags)
+static inline void ledger_unlock(uint64_t flags)
 {
 	spinlock_release_irqrestore(&kMemoryStatusLock, flags);
 }
@@ -38,19 +77,38 @@ static inline uintptr_t round_up_to_nearest_page(uintptr_t addr) {
     return (addr + 0xFFF) & ~0xFFF;
 }
 
+static const char *frames_status_name(frames_status_t s)
+{
+	switch (s)
+	{
+		case FRAMES_OK:             return "ok";
+		case FRAMES_OUT_OF_RANGE:   return "past the frame table";
+		case FRAMES_NOT_ALLOCATED:  return "not allocated (a double or stray free)";
+		case FRAMES_NOT_A_START:    return "inside a run, not its first frame";
+		case FRAMES_LEDGER_PINNED:  return "a ledger chunk still holding live extents";
+		case FRAMES_NOT_LEDGER:     return "not a ledger chunk frame";
+		case FRAMES_PIN_RANGE:      return "pin count out of range";
+		case FRAMES_NOT_RESERVED:   return "already described";
+		case FRAMES_BAD_ARGUMENT:   return "bad argument";
+	}
+	return "unknown";
+}
+
+// ── The ledger: small objects inside borrowed chunks ────────────────────────
+
 void compact_memory_array() {
     size_t writeIndex = 0; // Where the next valid entry will be written
 	kAllocCompactions++;
 	kAllocZeroedEntries = 0;   // every dead entry dies in the sweep below
 	printd(DEBUG_ALLOCATOR | DEBUG_DETAILED, "allocator: Compacting memory status array\n");
 
-    for (size_t i = 0; i < kMemoryStatusCurrentPtr; i++) 
+    for (size_t i = 0; i < kMemoryStatusCurrentPtr; i++)
 	{
 		//If the current entry is in use
-        if (kMemoryStatus[i].length > 0) 
+        if (kMemoryStatus[i].length > 0)
 		{
             //And the "write to" index isn't the same as the current entry
-            if (i != writeIndex) 
+            if (i != writeIndex)
 			{
 			// Copy the valid entry to the "write to" index
                 kMemoryStatus[writeIndex] = kMemoryStatus[i];
@@ -142,55 +200,28 @@ bool merge_freed_block(uint64_t freedIndex) {
 	return true;
 }
 
-//Identify whether any statuses allocate on the page passed.
-bool physical_page_is_allocated_on(uintptr_t physical_page)
-{
-	for (uint64_t cnt=0;cnt<kMemoryStatusCurrentPtr;cnt++)
-		if ((kMemoryStatus[cnt].startAddress & 0xFFFFFFFFFFFFF000) == physical_page && kMemoryStatus[cnt].in_use == true)
-			return true;
-	return false;
-}
-
-// Is this physical page inside a LIVE allocator extent? Caller holds
-// kMemoryStatusLock. A RANGE test, not physical_page_is_allocated_on above —
-// that helper answers "does an extent START here?", which is false for every
-// interior page of a multi-page allocation. A page that passes is
-// HHDM-mapped and safe to dereference; whether its CONTENTS are current is
-// the caller's validation problem (magic words, seqlocks), never a fault.
-static bool phys_page_live_locked(uintptr_t page)
-{
-	for (uint64_t i = 0; i < kMemoryStatusCurrentPtr; i++)
-	{
-		if (!kMemoryStatus[i].in_use)
-			continue;
-		uintptr_t s = kMemoryStatus[i].startAddress & ~(uintptr_t)0xFFF;
-		uintptr_t e = round_up_to_nearest_page(kMemoryStatus[i].startAddress
-		                                       + kMemoryStatus[i].length);
-		if (page >= s && page < e)
-			return true;
-	}
-	return false;
-}
-
 // Copy len bytes OUT OF A TASK'S ADDRESS SPACE, fault-proof (PR #26, rounds
 // two and seven). The whole journey — walking the task's page tables AND the
-// final data copy — happens under kMemoryStatusLock, with EVERY page
-// liveness-verified before it is dereferenced:
+// final data copy — happens under kFrameLock, with EVERY page
+// liveness-verified before it is dereferenced. Liveness is the frame table's
+// one-load answer (frames_live), and holding kFrameLock is what keeps it
+// true until the copy is done: a frame run is unmapped only under that lock,
+// and a ledger frame only after its pins are dropped under it.
 //
 //   Round two's race: the task unmaps the DATA region from another thread
 //   mid-copy; free_memory HHDM-unmaps the alias and a raw memcpy faults
 //   ring 0. Cured by verifying the leaf page under the lock.
 //
 //   Round seven's race, one level up: phase-2 burial's arena_destroy frees
-//   the task's PAGE TABLES mid-walk. The arena is kmalloc-backed, so the
-//   table pages themselves stay HHDM-mapped as recycled garbage — but a
-//   GARBAGE table entry points anywhere, and dereferencing the next level
-//   through `garbage | kHHDMOffset` can hit genuinely unmapped territory:
-//   the fault is one hop removed, not absent. Cured by verifying every
-//   table page too, so a wild "next level" fails the range test instead of
-//   being followed. Garbage that happens to land in live extents copies
-//   garbage BYTES — which the caller's magic/version/seqlock validation
-//   exists to reject. Nonsense is survivable; faults are not.
+//   the task's PAGE TABLES mid-walk, and the memory they lived in may be
+//   reissued: a GARBAGE table entry points anywhere, and dereferencing the
+//   next level through `garbage | kHHDMOffset` can hit genuinely unmapped
+//   territory, so the fault is one hop removed, not absent. Cured by
+//   verifying every table page too, so a wild "next level" fails the
+//   liveness test instead of being followed. Garbage that happens to land in
+//   live frames copies garbage BYTES — which the caller's
+//   magic/version/seqlock validation exists to reject. Nonsense is
+//   survivable; faults are not.
 //
 // Large pages (PS) where a table should be are refused rather than decoded:
 // task address spaces are built 4K-only, so a PS bit here IS garbage.
@@ -218,13 +249,13 @@ bool allocator_copy_from_task_va(void *pml4v, uintptr_t va,
 		table_virt |= kHHDMOffset;
 
 	bool ok = false;
-	uint64_t flags = allocator_lock();
+	uint64_t flags = frames_lock();
 
 	uint64_t entry = 0;
 	for (int level = 0; level < 4; level++)
 	{
 		uintptr_t table_phys = (table_virt - kHHDMOffset) & ~(uintptr_t)0xFFF;
-		if (!phys_page_live_locked(table_phys))
+		if (!frames_live(&kFrames, table_phys / PAGE_SIZE))
 			goto out;                       // a freed table — burial won the race
 		entry = ((pt_entry_t *)table_virt)[idx[level]];
 		if (!(entry & PAGE_PRESENT))
@@ -237,14 +268,14 @@ bool allocator_copy_from_task_va(void *pml4v, uintptr_t va,
 
 	{
 		uintptr_t data_phys = (entry & ~0xFFFULL) & 0x0000FFFFFFFFFFFFULL;
-		if (!phys_page_live_locked(data_phys))
+		if (!frames_live(&kFrames, data_phys / PAGE_SIZE))
 			goto out;                       // the round-two race, caught at the leaf
 		memcpy(dst, (const void *)((data_phys | kHHDMOffset) + (va & (uintptr_t)0xFFF)), len);
 		ok = true;
 	}
 
 out:
-	allocator_unlock(flags);
+	frames_unlock(flags);
 	return ok;
 }
 
@@ -256,10 +287,7 @@ uint64_t kAllocMerges = 0;         // free-time neighbor merges (either side)
 uint64_t kAllocCompactions = 0;    // compact_memory_array passes
 uint64_t kAllocZeroedEntries = 0;  // dead (length 0) entries awaiting compaction
 
-/// @brief Find a free block for the request: EXACT fit first, else first fit.
-/// @param requestedLength
-/// @param aligned
-/// @return
+/// @brief Find a free ledger block for the request: EXACT fit first, else first fit.
 ///
 /// Why exact-first (2026-08-07, the "top slows down" autopsy): first-fit alone
 /// always carved fresh pieces off the big low-index donor block, while the
@@ -270,11 +298,10 @@ uint64_t kAllocZeroedEntries = 0;  // dead (length 0) entries awaiting compactio
 /// repeats the same sizes by nature, so preferring an exact-size hole recycles
 /// yesterday's free instead of minting a new one, and the table plateaus.
 /// Still ONE pass: remember the first adequate block as the fallback and keep
-/// looking for an exact hole. Honesty note: old first-fit stopped at the first
-/// adequate block; this scans to the end when no exact hole exists. That trade
-/// is the bargain: a full scan of the SMALL table this policy maintains costs
-/// less than the old early exit over the ever-growing one it caused.
-memory_status_t* get_status_entry_for_first_available_address(uint64_t requested_length, bool page_aligned)
+/// looking for an exact hole, which scans to the end when none exists. That
+/// costs the length of the ledger, which since FRAMES holds only the kernel's
+/// small objects; the page frames that once filled it are the frame table's.
+memory_status_t* get_status_entry_for_first_available_address(uint64_t requested_length)
 {
 	memory_status_t *firstFit = NULL;
 
@@ -282,38 +309,16 @@ memory_status_t* get_status_entry_for_first_available_address(uint64_t requested
 	{
 		memory_status_t *entry = &kMemoryStatus[cnt];
 
-		// Don't allow page 0 to be allocated.
+		// Dead entries (start 0, length 0) and live ones are not candidates.
 		if (entry->startAddress == 0 || entry->in_use)
 			continue;
 
-		if (!page_aligned)
-		{
-			if (entry->length == requested_length)
-			{
-				kAllocExactFitHits++;
-				return entry;      // the whole point: reuse, don't carve
-			}
-			if (firstFit == NULL && entry->length >= requested_length)
-				firstFit = entry;
-			continue;
-		}
-
-		// An aligned allocation consumes the bytes before the next page boundary too;
-		// checking only requested_length can select a block that is actually too small.
-		if (requested_length > entry->length)
-			continue;
-		uint64_t alignment_padding = round_up_to_nearest_page(entry->startAddress) - entry->startAddress;
-
-		// Already-aligned AND exactly sized: the aligned flavor of a perfect
-		// recycle (padding 0 means the == below is the whole block).
-		if (alignment_padding == 0 && entry->length == requested_length)
+		if (entry->length == requested_length)
 		{
 			kAllocExactFitHits++;
-			return entry;
+			return entry;      // the whole point: reuse, don't carve
 		}
-
-		// Use <= so a block whose padding plus request exactly fills it is a valid fit.
-		if (firstFit == NULL && alignment_padding <= entry->length - requested_length)
+		if (firstFit == NULL && entry->length >= requested_length)
 			firstFit = entry;
 	}
 	return firstFit;
@@ -338,20 +343,6 @@ uint64_t get_status_index_for_requested_address(uint64_t address,uint64_t reques
 	return 0;
 }
 
-memory_status_t* get_status_entry_for_requested_address(uint64_t address,uint64_t requested_length, bool in_use)
-{
-	for (uint64_t cnt = 0; cnt < kMemoryStatusCurrentPtr; cnt++)
-	{
-		if ( (kMemoryStatus[cnt].startAddress <= address && kMemoryStatus[cnt].startAddress + kMemoryStatus[cnt].length > address) &&
-			kMemoryStatus[cnt].in_use == in_use &&
-			kMemoryStatus[cnt].length >= requested_length
-		)
-			return &kMemoryStatus[cnt];
-	}
-	panic("get_status_entry_for_requested_address: Can't find the index!!! :-(\n");
-	return NULL;
-}
-
 void update_existing_status_entry(memory_status_t* entry, uint64_t address, uint64_t length, bool in_use)
 {
 	entry->startAddress = address;
@@ -370,36 +361,24 @@ memory_status_t* make_new_status_entry(uint64_t address, uint64_t length, bool i
 	//
 	// This function appended an entry and incremented the index, forever, with
 	// no bound of any kind. INITIAL_MEMORY_STATUS_COUNT (CONFIG.h) sizes the
-	// table at allocator_init and nothing has ever grown it or checked it — the
-	// word INITIAL was carrying the whole plan.
-	//
-	// What that costs, in full: when the table fills, the next entry is written
-	// PAST THE END, into whatever allocation follows it in physical memory. On
-	// the P5 that neighbour is the paging pool, whose very first page is the
-	// KERNEL'S OWN PML4 — so entry number 100,001 landed on PML4[0] and cleared
-	// its flag bits, unmapping the entire lower half of the kernel address
-	// space in one store. The machine kept running (kernel text and the HHDM
-	// live in the upper half) until the next disk write touched the NVMe DMA
-	// bounce buffer at its low identity address, and died there, four levels
-	// and a whole subsystem away from the actual bug.
-	//
-	// The tell was the timing: it happened between 5200 and 5800 seconds into
-	// EVERY run of the same workload (`watch -n 1 "ps -ef"` — a husk and a ps
-	// created and buried every second). That is not a race, it is a monotonic
-	// overrun reaching a fixed wall at a fixed rate. Chris called "it's being
-	// re-allocated" off the zeroes on the screen, and a hardware watchpoint on
-	// PML4[0] named this function on the first hit.
+	// table and nothing grows it — the word INITIAL was carrying the whole
+	// plan. When the table filled, the next entry was written PAST THE END,
+	// into whatever allocation followed it in physical memory; on the P5 that
+	// neighbour was the paging pool, whose first page is the KERNEL'S OWN
+	// PML4, and entry number 100,001 unmapped the lower half of the kernel
+	// address space in one store. A hardware watchpoint on PML4[0] named this
+	// function on the first hit.
 	//
 	// So: PANIC at the wall, never write past it. This guard is deliberately
-	// panic-ONLY (2026-08-15 review find): its first cut compacted here, but
-	// the carve path (allocate_memory_at_address_internal) holds `memaddr` —
-	// a raw pointer INTO kMemoryStatus — across its calls to this function,
-	// and compaction RELOCATES entries, so the carve's fixup would then write
-	// through a dangling pointer onto an arbitrary row: handing out memory
-	// somebody owns, the exact crime this guard exists to prevent. The
-	// compact-with-headroom pass now runs at the TOP of the carve, before
-	// any pointer into the table is taken; by the time execution reaches
-	// here, a full table means compaction already failed to help.
+	// panic-ONLY (2026-08-15 review find): the carve path (ledger_alloc) holds
+	// `memaddr` — a raw pointer INTO kMemoryStatus — across its calls to this
+	// function, and compaction RELOCATES entries, so compacting here would
+	// leave that pointer naming an arbitrary row. The compact-with-headroom
+	// pass runs at the TOP of the carve, before any pointer into the table is
+	// taken; by the time execution reaches here, a full table means
+	// compaction already failed to help. Since FRAMES the ledger holds only
+	// small kernel objects, so reaching this wall is that population's own
+	// capacity limit (FRAMES.md § Phase 1).
 	if (kMemoryStatusCurrentPtr >= INITIAL_MEMORY_STATUS_COUNT)
 		panic("allocator: memory status table is full (%lu of %u entries). The next "
 		      "entry would be written PAST THE END of the table, over whatever "
@@ -428,209 +407,114 @@ memory_status_t* make_new_status_entry(uint64_t address, uint64_t length, bool i
 	return &kMemoryStatus[kMemoryStatusCurrentPtr-1];
 }
 
-static uint64_t allocate_memory_at_address_internal(uint64_t requested_address, uint64_t requested_length, bool use_address, bool page_aligned, bool fallible)
+// Pin or unpin the chunk frames under a ledger extent. Every frame the
+// extent touches is pinned, partial ones included: a frame stays live while
+// ANY live extent overlaps it, which is exactly when it stays mapped.
+static void ledger_pin_extent(uint64_t start, uint64_t length, int delta)
 {
-	if (fallible && (!requested_length || requested_length > UINT64_MAX - 7))
-		return 0;
-	uint64_t irqflags = allocator_lock();
+	uint64_t first = start / PAGE_SIZE;
+	uint64_t last = (start + length - 1) / PAGE_SIZE;
+	uint64_t flags = frames_lock();
+	frames_status_t s = frames_ledger_pin(&kFrames, first, last - first + 1, delta);
+	frames_unlock(flags);
+	if (s != FRAMES_OK)
+		panic("allocator: ledger extent 0x%016lx (len 0x%lx) cannot %s its frames: %s\n",
+		      start, length, delta > 0 ? "pin" : "unpin", frames_status_name(s));
+}
+
+// Borrow a chunk for the ledger: frames lent UNMAPPED (the ledger maps what
+// it carves), added as one free extent. Caller holds kMemoryStatusLock and
+// has left a row of headroom for the new entry.
+static bool ledger_borrow_chunk(void)
+{
+	uint64_t flags = frames_lock();
+	uint64_t frame = frames_alloc(&kFrames, LEDGER_CHUNK_FRAMES, FRAMES_LEDGER);
+	frames_unlock(flags);
+	if (frame == FRAMES_NONE)
+		return false;
+	make_new_status_entry(frame * PAGE_SIZE, LEDGER_CHUNK_FRAMES * PAGE_SIZE, false);
+	return true;
+}
+
+static uint64_t ledger_alloc(uint64_t requested_length, bool fallible)
+{
+	if (requested_length == 0 || requested_length > UINT64_MAX - 7)
+	{
+		if (fallible)
+			return 0;
+		panic("allocator: a %lu-byte allocation cannot be served\n", requested_length);
+	}
+	uint64_t irqflags = ledger_lock();
 
 	// THE TABLE-FULL GUARD'S COMPACTION LIVES HERE, NOT AT MINT TIME
-	// (2026-08-15 review find). A carve mints up to TWO new entries (the
-	// allocation, plus a block-before split) while holding `memaddr` — a raw
-	// pointer INTO kMemoryStatus — across the mints, then writes the leftover
-	// fixup through it. Compacting inside make_new_status_entry relocates the
-	// entry memaddr names and that fixup rewrites an arbitrary row. So the
-	// recovery attempt runs NOW, before any pointer into the table exists;
-	// the guard at mint time is a panic-only backstop that can no longer
-	// corrupt what it protects. Headroom of 2 = this function's worst case.
-	if (kMemoryStatusCurrentPtr + 2 >= INITIAL_MEMORY_STATUS_COUNT)
+	// (2026-08-15 review find). This function holds `memaddr` — a raw
+	// pointer INTO kMemoryStatus — across a mint, then writes the leftover
+	// through it, so compaction must run NOW, before any pointer into the
+	// table exists. Headroom of 3: a borrowed chunk's entry, the carve's
+	// entry, and the one the guard refuses.
+	if (kMemoryStatusCurrentPtr + 3 >= INITIAL_MEMORY_STATUS_COUNT)
 	{
 		printd(DEBUG_ALLOCATOR, "allocator: status table full (%lu entries) — compacting before the carve\n",
 		       (uint64_t)kMemoryStatusCurrentPtr);
 		compact_memory_array();
 	}
-
-	if (fallible && kMemoryStatusCurrentPtr + 2 >= INITIAL_MEMORY_STATUS_COUNT) {
-		allocator_unlock(irqflags);
+	if (fallible && kMemoryStatusCurrentPtr + 3 >= INITIAL_MEMORY_STATUS_COUNT) {
+		ledger_unlock(irqflags);
 		return 0;
 	}
 
-	memory_status_t* memaddr;
-	uint64_t retVal = 0;
-	uint64_t found_block_original_length = 0;
-	uint64_t block_before_length = 0;
-	uint64_t aligned_start;
-	uint64_t aligned_length = 0;
-	// The full extent recorded in kMemoryStatus for this allocation — captured
-	// per-branch (memaddr gets repurposed to describe the leftover block below,
-	// so it can't be read afterwards) and HHDM-mapped just before returning.
-	// This is what makes `phys | kHHDMOffset` valid for every allocator-owned
-	// byte, on every memory map — see paging_hhdm_map_range (paging.h).
-	uint64_t hhdm_extent_start = 0;
-	uint64_t hhdm_extent_length = 0;
-
-	if (requested_length >= 200000000)
+	// Align to 8 bytes: the architecture is 64-bit.
+	requested_length = (requested_length + 7) & ~((uint64_t)7);
+	memory_status_t *memaddr = get_status_entry_for_first_available_address(requested_length);
+	if (memaddr == NULL)
 	{
-		int a = 0;
-		a+=1;
-	}
-
-	//Find the appropriate memory status page
-	if (!use_address)
-	{
-		//When a specific address is NOT requested, internally align request to 8 bytes since our architecture is 64-bit
-		// Align to the next multiple of 8
-		requested_length = (requested_length + 7) & ~((size_t)7);
-		memaddr = get_status_entry_for_first_available_address(requested_length, page_aligned);
-		// Ordinary allocations panic on exhaustion. The opt-in try path
-		// returns zero before changing ownership or mapping unowned bytes.
-		if (memaddr == NULL && fallible) {
-			allocator_unlock(irqflags);
-			return 0;
+		// No hole fits: borrow a chunk. Every ledger request is smaller than a
+		// chunk, so the search after it finds one.
+		if (!ledger_borrow_chunk())
+		{
+			ledger_unlock(irqflags);
+			if (fallible)
+				return 0;
+			panic("allocator: OUT OF MEMORY — no frames left to lend the ledger for %lu bytes\n",
+			      requested_length);
 		}
-		if (memaddr == NULL)
-			panic("allocator: OUT OF MEMORY — no free block for %lu bytes (%s)\n",
-			      requested_length, page_aligned ? "page-aligned" : "unaligned");
+		memaddr = get_status_entry_for_first_available_address(requested_length);
 	}
+	// The try entry point prepares its HHDM tables before carving, so mapping
+	// after ownership changes cannot exhaust the table pool.
+	if (fallible && !paging_hhdm_prepare_range(memaddr->startAddress, requested_length)) {
+		ledger_unlock(irqflags);
+		return 0;
+	}
+
+	uint64_t start = memaddr->startAddress;
+	if (memaddr->length == requested_length)
+		memaddr->in_use = true;
 	else
 	{
-		memaddr = get_status_entry_for_requested_address(requested_address, requested_length, false);
-		if ( memaddr == NULL)
-			panic("allocator: no free block covering the requested address 0x%016lx (%lu bytes)\n",
-			      requested_address, requested_length);
+		kAllocSplits++;   // a carve mints a new table entry
+		make_new_status_entry(start, requested_length, true);
+		update_existing_status_entry(memaddr, start + requested_length,
+		                             memaddr->length - requested_length, false);
 	}
-	// The try entry point requests unaligned memory. Prepare its HHDM tables
-	// before carving, so mapping after ownership changes cannot exhaust the
-	// table pool. This check runs under the allocator lock with memaddr stable.
-	if (fallible && !paging_hhdm_prepare_range(memaddr->startAddress, requested_length)) {
-		allocator_unlock(irqflags);
-		return 0;
-	}
+	// DETAILED since 2026-08-07: this fires on every ledger allocation, and
+	// plain DEBUG_ALLOCATOR means the ~10s health line, not a per-call diary.
+	printd(DEBUG_ALLOCATOR | DEBUG_DETAILED, "allocator: ledger allocated 0x%08x bytes at phys 0x%08x\n",
+	       requested_length, start);
 
-	if (memaddr->length < requested_length)
-		retVal = 0;
-	else if (memaddr->length == requested_length)
-	{
-		memaddr->in_use = true;
-		retVal = memaddr->startAddress;
-		hhdm_extent_start = memaddr->startAddress;
-		hhdm_extent_length = requested_length;
-	}
-	else //memory available is > requested memory
-	{
-		kAllocSplits++;   // a carve mints at least one new table entry
-		found_block_original_length = memaddr->length;
+	// Map, then pin: a pinned frame is a mapped frame (see the top of file).
+	paging_hhdm_map_range(start, requested_length);
+	ledger_pin_extent(start, requested_length, 1);
 
-		//The starting address for the new Status entry, aligned if necessary.  THIS IS ONLY USED AS A RETURN VALUE FROM THIS METHOD
-		uint64_t true_start = memaddr->startAddress;
-		if (page_aligned)
-		{
-			aligned_start = round_up_to_nearest_page(memaddr->startAddress);
-			//Count the extra bytes between the aligned start and the real start, and add the requested length
-			aligned_length = aligned_start - memaddr->startAddress + requested_length;
-		}
-		else
-		{
-			aligned_start = memaddr->startAddress;
-			aligned_length = requested_length;
-		}
-		uint64_t aligned_end = true_start + aligned_length;
+	//SECURITY: never hand out memory containing another allocation's stale
+	//data. Zero through the HHDM alias, now that it's mapped. Guarded on
+	//kHHDMMaintenanceEnabled because before the real page tables are live
+	//the HHDM alias is not guaranteed.
+	if (kHHDMMaintenanceEnabled)
+		memset((void *)(start | kHHDMOffset), 0, requested_length);
 
-		//Create an entry for the memory being utilized
-		//NOTE that even if an aligned address was requested, the new entry will start with the unaligned start address. 
-		//The address RETURNED will be the aligned address
-		/*memory_status_t* new_entry = */make_new_status_entry(
-							  use_address?requested_address:
-							  	memaddr->startAddress,
-							  aligned_length,
-							  true);
-		//Same extent the status entry just recorded — free_memory will unmap this same range later
-		hhdm_extent_start = use_address?requested_address:memaddr->startAddress;
-		hhdm_extent_length = aligned_length;
-		//If a specific address was requested and there was memory before the requested address, make a block from its starting address to the requested address - 1
-		if (use_address && memaddr->startAddress != requested_address)
-		{
-			block_before_length = requested_address - memaddr->startAddress;
-			make_new_status_entry(memaddr->startAddress, requested_address - memaddr->startAddress, false);
-		}
-
-		//Fixup the exiting entry to just point to what's left after the allocated memory
-		//If a specific address was requested, make the current status point to the address after the requested memory
-		if (use_address)
-			update_existing_status_entry(memaddr, requested_address + requested_length, found_block_original_length - block_before_length - requested_length, false);
-		else
-			//Otherwise just update the starting address and length of the existing address to point to after the allocated memory
-			update_existing_status_entry(memaddr, 
-			                             //The end of the created block which is the new startAddress of the existing block
-										 aligned_end,
-										 memaddr->length - aligned_length,
-										 false
-										 );
-		retVal = use_address?requested_address:aligned_start;
-
-	}
-	// DETAILED since 2026-08-07: this fires on EVERY allocation, and plain
-	// DEBUG_ALLOCATOR now means the ~10s health line, not a per-call diary —
-	// Chris's first flag-on run exploded the log in minutes on this line
-	// (and the noise's own logd-buffer churn skewed the very free-hole
-	// numbers the health line exists to watch).
-	printd(DEBUG_ALLOCATOR | DEBUG_DETAILED, "allocate_memory_at_address_internal: Allocated 0x%08x bytes at phys address 0x%08x (%s - %s)\n", aligned_length, use_address?requested_address:aligned_start,
-			use_address?"requested address":"",page_aligned?"aligned":"");
-
-	//Keep the "allocated <=> HHDM-mapped" invariant: map the extent's pages at
-	//their HHDM addresses in the kernel tables (no-op until the real kernel
-	//page tables are live — early allocations are retro-mapped when
-	//init_os64_paging_tables builds them).
-	if (retVal != 0)
-	{
-		paging_hhdm_map_range(hhdm_extent_start, hhdm_extent_length);
-
-		//SECURITY: never hand out memory containing another allocation's stale
-		//data. Zero the whole extent through its HHDM alias, now that it's mapped.
-		//This is THE single zero-on-alloc choke point — it covers kmalloc(),
-		//allocate_memory(), allocate_memory_aligned(), and the demand-paged
-		//anonymous/BSS/heap pages resolved through the fault path — so callers no
-		//longer memset individually (except kmalloc_dma, which must zero through
-		//its uncached mapping for device coherency).
-		//
-		//Guarded on kHHDMMaintenanceEnabled because before the real page tables
-		//are live the HHDM alias is not valid (paging_hhdm_map_range above is a
-		//no-op then). The only pre-flag allocations are page-table pages, which
-		//are fully written when populated and so need no zeroing here.
-		if (kHHDMMaintenanceEnabled)
-			memset((void *)(hhdm_extent_start | kHHDMOffset), 0, hhdm_extent_length);
-	}
-
-	allocator_unlock(irqflags);
-	return retVal;
-}
-
-/// @brief Allocate memory, possibly at a specific address (not block aligned unless you pass a block aligned address)
-/// @param address - The address of the requested memory range.  Pass 0 if no specific address is requested
-/// @param requestedLength - The length of the requested memory range.  If 0 method returns 0
-/// @param aligned - Should the starting address be aligned to a block based on system block size.
-/// @return 
-uint64_t allocate_memory_at_address(uint64_t address, uint64_t requested_length, bool use_address)
-{
-	return allocate_memory_at_address_internal(address, requested_length, use_address, false, false);
-}
-
-uint64_t allocate_memory_aligned(uint64_t requested_length)
-{
-	return allocate_memory_at_address_internal(0, requested_length, false, true, false);
-}
-
-//NOTE: Only the kernel can request unaligned memory.  User space allocations MUST be on a page boundry and be the full page
-uint64_t allocate_memory(uint64_t requested_length)
-{
-	return allocate_memory_at_address_internal(0, requested_length, false, false, false);
-}
-
-// Optional allocations may refuse; existing allocation APIs retain their
-// panic-on-exhaustion contract. No physical address zero is handed out.
-uint64_t allocate_memory_try(uint64_t length)
-{
-	return allocate_memory_at_address_internal(0, length, false, false, true);
+	ledger_unlock(irqflags);
+	return start;
 }
 
 //The free-path compaction BACKSTOP: normally the kworker's maintenance pass
@@ -639,171 +523,366 @@ uint64_t allocate_memory_try(uint64_t length)
 //unbounded — the same disease the 2026-08-07 fix cured, via a second door.
 #define FREE_COMPACT_BACKSTOP_DEAD_ENTRIES 512
 
+static void ledger_free(uint64_t address)
+{
+	uint64_t irqflags = ledger_lock();
+	uint64_t statusIdx = get_status_index_for_requested_address(address, 0, true);
+	memory_status_t *status_entry = &kMemoryStatus[statusIdx];
+
+	// THE EXACT-BASE TRIPWIRE (2026-08-14, the scribbled-text hunt). The
+	// lookup above matches by CONTAINMENT: any address INSIDE a live extent
+	// finds that extent, so a stray or stale free — a page-table walk that
+	// resolved to somebody else's frame, a double-free of an address that was
+	// reallocated in the interim — would release the ENTIRE innocent extent
+	// to be reissued and zeroed under its living owner. That is how a running
+	// task's TEXT page turned into garbage instructions mid-run (hog -n 6).
+	// A ledger extent is unaligned and handed out at its base, so its base is
+	// the only legal free.
+	if (address != status_entry->startAddress)
+		panic("free_memory: 0x%016lx is INSIDE ledger extent 0x%016lx (len 0x%lx) but is not "
+		      "its base — stray or stale free; refusing to release the extent\n",
+		      address, status_entry->startAddress, status_entry->length);
+	printd(DEBUG_ALLOCATOR | DEBUG_DETAILED, "allocator: ledger freeing 0x%016lx, length=0x%016lx\n",
+	       status_entry->startAddress, status_entry->length);
+	status_entry->in_use = false;
+	// POISON-ON-FREE, enabled 2026-08-14 for the scribbled-text hunt and
+	// kept on by ruling (Chris, 2026-08-15) as a CONFIG.h knob — see
+	// ALLOCATOR_POISON_ON_FREE there for the what and the why. Runtime-gated
+	// on kHHDMMaintenanceEnabled exactly like the zeroing: before maintenance
+	// is live the HHDM alias is not guaranteed mapped.
+#if ALLOCATOR_POISON_ON_FREE
+	if (kHHDMMaintenanceEnabled)
+		memset((void*)(status_entry->startAddress + kHHDMOffset), 0xFE, status_entry->length);
+#endif
+
+	// Unpin, then unmap: once the pins drop, a liveness check under
+	// kFrameLock already says "not live" for the pages about to go.
+	ledger_pin_extent(status_entry->startAddress, status_entry->length, -1);
+	//Drop the HHDM mapping of every page this extent fully owns (partial
+	//boundary pages that may host live neighbouring allocations stay
+	//mapped). From here on, touching this memory through the HHDM faults:
+	//that's the use-after-free tripwire, by design. Also broadcasts a TLB
+	//shootdown to the other cores.
+	paging_hhdm_unmap_range(status_entry->startAddress, status_entry->length);
+
+	//Coalescing and the compaction backstop run under the ledger lock — both
+	//rewrite kMemoryStatus (and compaction invalidates every index).
+	merge_freed_block(statusIdx);
+	if (kAllocZeroedEntries >= FREE_COMPACT_BACKSTOP_DEAD_ENTRIES)
+		compact_memory_array();
+
+	ledger_unlock(irqflags);
+}
+
+// ── Frame runs ──────────────────────────────────────────────────────────────
+
+static uint64_t frames_alloc_bytes(uint64_t length, bool fallible)
+{
+	if (length == 0 || length > (FRAMES_NONE - 1) * PAGE_SIZE)
+	{
+		if (fallible)
+			return 0;
+		panic("allocator: a %lu-byte allocation cannot be served\n", length);
+	}
+	uint64_t count = (length + PAGE_SIZE - 1) / PAGE_SIZE;
+	uint64_t flags = frames_lock();
+	uint64_t frame = frames_alloc(&kFrames, count, FRAMES_RUN);
+	if (frame == FRAMES_NONE)
+	{
+		frames_unlock(flags);
+		if (fallible)
+			return 0;
+		panic("allocator: OUT OF MEMORY — no free run of %lu frames (%lu bytes); longest free run is %lu frames\n",
+		      count, length, frames_largest_free(&kFrames));
+	}
+	uint64_t phys = frame * PAGE_SIZE, bytes = count * PAGE_SIZE;
+	// The try entry point prepares HHDM tables first, so the map below cannot
+	// exhaust the table pool once the run is owned; refused, the run goes back.
+	if (fallible && !paging_hhdm_prepare_range(phys, bytes))
+	{
+		frames_free(&kFrames, frame, NULL);
+		frames_unlock(flags);
+		return 0;
+	}
+	// Mapped before kFrameLock goes, so no liveness check can see this run
+	// live and unmapped. Mapping is a no-op until the real kernel page tables
+	// exist; the retro-map pass covers runs handed out before that.
+	paging_hhdm_map_range(phys, bytes);
+	frames_unlock(flags);
+
+	printd(DEBUG_ALLOCATOR | DEBUG_DETAILED, "allocator: %lu frames at phys 0x%016lx\n", count, phys);
+
+	// SECURITY: zero on allocate, through the HHDM alias. Outside the lock:
+	// the run is already its caller's and nobody else can reach it, and a
+	// 16 MiB zero no longer holds every other core's allocations waiting.
+	if (kHHDMMaintenanceEnabled)
+		memset((void *)(phys | kHHDMOffset), 0, bytes);
+	return phys;
+}
+
+static void frames_free_bytes(uint64_t address)
+{
+	uint64_t frame = address / PAGE_SIZE;
+	uint64_t flags = frames_lock();
+	frames_kind_t kind;
+	uint64_t count;
+	frames_status_t s = frames_check_start(&kFrames, frame, &kind, &count);
+	// THE EXACT-BASE TRIPWIRE, frame edition: a run is freed by its first
+	// byte and nothing else. An address inside a run is a stray or stale free
+	// (see ledger_free for the hunt that earned the rule); name it and the
+	// run it landed in, and release nothing.
+	if (s == FRAMES_OK && (address & (PAGE_SIZE - 1)) != 0)
+		s = FRAMES_NOT_A_START;
+	if (s != FRAMES_OK)
+	{
+		uint64_t run = frames_run_start(&kFrames, frame);
+		panic("free_memory: 0x%016lx refused, %s (run at frame 0x%lx) — refusing to release anything\n",
+		      address, frames_status_name(s), run);
+	}
+	uint64_t bytes = count * PAGE_SIZE;
+#if ALLOCATOR_POISON_ON_FREE
+	if (kHHDMMaintenanceEnabled)
+		memset((void *)(address | kHHDMOffset), 0xFE, bytes);
+#endif
+	// Unmapped before the run is released, under the same lock, so no
+	// liveness check sees it free and still mapped, or live and unmapped.
+	paging_hhdm_unmap_range(address, bytes);
+	frames_free(&kFrames, frame, NULL);
+	frames_unlock(flags);
+	printd(DEBUG_ALLOCATOR | DEBUG_DETAILED, "allocator: freed %lu frames at phys 0x%016lx\n", count, address);
+}
+
+// ── The public entry points ─────────────────────────────────────────────────
+
+uint64_t allocate_memory_aligned(uint64_t requested_length)
+{
+	return frames_alloc_bytes(requested_length, false);
+}
+
+//NOTE: Only the kernel can request unaligned memory.  User space allocations MUST be on a page boundry and be the full page
+uint64_t allocate_memory(uint64_t requested_length)
+{
+	return requested_length >= PAGE_SIZE ? frames_alloc_bytes(requested_length, false)
+	                                     : ledger_alloc(requested_length, false);
+}
+
+// Optional allocations may refuse; existing allocation APIs retain their
+// panic-on-exhaustion contract. No physical address zero is handed out.
+uint64_t allocate_memory_try(uint64_t length)
+{
+	return length >= PAGE_SIZE ? frames_alloc_bytes(length, true)
+	                           : ledger_alloc(length, true);
+}
+
 uint64_t free_memory(uint64_t address)
 {
 	printd(DEBUG_ALLOCATOR | DEBUG_DETAILED, "allocator: Freeing memory at 0x%016lx\n", address);
-	uint64_t irqflags = allocator_lock();
-	uint64_t statusIdx = get_status_index_for_requested_address(address, 0, true);
-	memory_status_t *status_entry = &kMemoryStatus[statusIdx];
-	if (status_entry != NULL)
-	{
-		// THE EXACT-BASE TRIPWIRE (2026-08-14, the scribbled-text hunt). The
-		// lookup above matches by CONTAINMENT: any address INSIDE a live
-		// extent finds that extent, so a stray or stale free — a page-table
-		// walk that resolved to somebody else's frame, a double-free of an
-		// address that was reallocated in the interim — silently released the
-		// ENTIRE innocent extent, whose frames the allocator then re-issued
-		// and zeroed under their living owner. That is how a running task's
-		// TEXT page turns into garbage instructions mid-run (hog -n 6, task
-		// 55, three simultaneous impossible segfaults). Every legitimate
-		// caller in the tree frees the extent BASE it was handed: kfree, the
-		// guarded-stack free, the trampoline free, unmap's per-page extents.
-		// A mid-extent free can only be the bug class above — refuse loudly,
-		// naming the address, the extent it landed inside, and its owner-shape.
-		//
-		// TWO legal shapes, not one (the first cut of this tripwire wedged
-		// boot at NVMe init by rejecting the second): an ALIGNED allocation's
-		// extent is recorded from the UNALIGNED carve start, while the caller
-		// is handed the rounded-up address — the allocator's own carve comment
-		// says so in as many words. So a free of either the extent base OR its
-		// first page boundary is a caller returning exactly what it was given;
-		// anything else landed mid-extent through arithmetic or staleness.
-		if (address != status_entry->startAddress &&
-		    address != round_up_to_nearest_page(status_entry->startAddress))
-			panic("free_memory: 0x%016lx is INSIDE extent 0x%016lx (len 0x%lx) but is neither its base "
-			      "nor its aligned base — stray or stale free; refusing to release the extent\n",
-			      address, status_entry->startAddress, status_entry->length);
-		printd(DEBUG_ALLOCATOR | DEBUG_DETAILED, "allocator: Found block to free, address = 0x%016lx, length=0x%016lx\n", status_entry->startAddress, status_entry->length);
-		status_entry->in_use = false;
-		// POISON-ON-FREE, enabled 2026-08-14 for the scribbled-text hunt and
-		// kept on by ruling (Chris, 2026-08-15) as a CONFIG.h knob — see
-		// ALLOCATOR_POISON_ON_FREE there for the what and the why. Its first
-		// out-of-guest catch came the day of the ruling: a remote qISleep
-		// walk stepped through a stale ->next into a wall of 0xFE and knew
-		// INSTANTLY it was reading a freed thread_t. Runtime-gated on
-		// kHHDMMaintenanceEnabled EXACTLY like the zero-on-allocate choke
-		// point above: before maintenance is live the HHDM alias is not
-		// guaranteed mapped, and the first ungated build wedged at tick 8
-		// poisoning an early-boot free.
-#if ALLOCATOR_POISON_ON_FREE
-		if (kHHDMMaintenanceEnabled)
-			memset((void*)(status_entry->startAddress + kHHDMOffset), 0xFE, status_entry->length);
-#endif
-
-		//Drop the HHDM mapping of every page this extent fully owns (partial
-		//boundary pages that may host live neighbouring allocations stay
-		//mapped). From here on, touching this memory through the HHDM faults:
-		//that's the use-after-free tripwire, by design. Also broadcasts a TLB
-		//shootdown to the other cores.
-		paging_hhdm_unmap_range(status_entry->startAddress, status_entry->length);
-
-		//Coalescing and periodic compaction moved here from kfree so they run
-		//under the allocator lock — both rewrite kMemoryStatus (and compaction
-		//invalidates every index), so doing them outside the lock raced any
-		//concurrent allocation on another core. NOTE: after these, statusIdx
-		//may no longer refer to the freed entry — callers must not use it to
-		//index kMemoryStatus, only to detect failure.
-		merge_freed_block(statusIdx);
-		//Compaction is a KWORKER job now (allocator_maintain below) — the
-		//requestor stops paying an O(table) sweep every tenth free. This
-		//backstop stays for boots without a kworker (no KWORKER flag) and
-		//for the window before it starts: only when the DEAD-entry count
-		//says the table is actually littered does the free path sweep.
-		if (kAllocZeroedEntries >= FREE_COMPACT_BACKSTOP_DEAD_ENTRIES)
-			compact_memory_array();
-
-		allocator_unlock(irqflags);
-		return statusIdx;
-	}
-	panic("ALLOCATOR: Did not find kMemoryStatus entry to mark not in use, address was: 0x%016lx\n",address);
-	return 0xFFFFFFFF;
+	// A frame lent to the ledger stays the ledger's (chunks are never
+	// returned), so reading its kind without kFrameLock cannot race a change
+	// of owner. Anything else is the frame table's to judge.
+	if (frames_kind(&kFrames, address / PAGE_SIZE) == FRAMES_LEDGER)
+		ledger_free(address);
+	else
+		frames_free_bytes(address);
+	return 0;
 }
 
-// One atomic reading of the ledger for SYSCALL_MEMORY (and anyone else who
+// One atomic reading of the books for SYSCALL_MEMORY (and anyone else who
 // asks): free bytes, used bytes, and the largest contiguous free extent, all
-// captured under the allocator lock in ONE walk so the numbers describe the
-// SAME instant — separate walks could disagree after a context switch.
-// The ledger is seeded from every USABLE memmap entry (allocator_init), so
-// free + used must equal kAvailableMemory EXACTLY, forever. That identity is
-// the point of counting used here rather than deriving it: the moment a
-// merge/compaction/split bug drops or double-counts an extent, the books
-// stop balancing and the drift is visible from ring 3 (the memory_test
-// fixture asserts the reconciliation every boot).
-// O(kMemoryStatusCurrentPtr) under an irqsave spinlock: microseconds at our
-// entry counts, and top polls at human speed. If a profile ever disagrees,
-// running counters slot in behind this same signature.
+// captured with both locks held so the numbers describe the SAME instant.
+// free + used must equal kAvailableMemory EXACTLY, forever: the frame table
+// counts every usable frame as free, a run, or lent to the ledger; the
+// ledger's free and live bytes add up to what it was lent; and the usable
+// bytes no frame describes are counted as used. The moment any of those
+// books drifts, the identity stops holding and the drift is visible from
+// ring 3 (the memory_test fixture asserts it every boot).
+// The ledger walk is a few thousand rows; top polls at human speed.
 void allocator_memory_snapshot(uint64_t *free_bytes, uint64_t *used_bytes,
                                uint64_t *largest_free_extent)
 {
-	uint64_t irqflags = allocator_lock();
-
-	uint64_t free_total = 0;
-	uint64_t used_total = 0;
-	uint64_t largest = 0;
+	uint64_t ledger_used = 0, ledger_free_total = 0, ledger_largest = 0;
+	uint64_t lflags = ledger_lock();
 	for (uint64_t cnt = 0; cnt < kMemoryStatusCurrentPtr; cnt++)
 	{
 		if (kMemoryStatus[cnt].length == 0)
 			continue;   // cleared slot (compaction/merge leftovers)
 		if (kMemoryStatus[cnt].in_use)
-			used_total += kMemoryStatus[cnt].length;
+			ledger_used += kMemoryStatus[cnt].length;
 		else
 		{
-			free_total += kMemoryStatus[cnt].length;
-			if (kMemoryStatus[cnt].length > largest)
-				largest = kMemoryStatus[cnt].length;
+			ledger_free_total += kMemoryStatus[cnt].length;
+			if (kMemoryStatus[cnt].length > ledger_largest)
+				ledger_largest = kMemoryStatus[cnt].length;
 		}
 	}
-
-	allocator_unlock(irqflags);
+	uint64_t fflags = frames_lock();
+	uint64_t frames_free_bytes_now = kFrames.free_frames * PAGE_SIZE;
+	uint64_t frames_run_bytes = kFrames.run_frames * PAGE_SIZE;
+	uint64_t largest_run = frames_largest_free(&kFrames) * PAGE_SIZE;
+	frames_unlock(fflags);
+	ledger_unlock(lflags);
 
 	if (free_bytes)
-		*free_bytes = free_total;
+		*free_bytes = frames_free_bytes_now + ledger_free_total;
 	if (used_bytes)
-		*used_bytes = used_total;
+		*used_bytes = frames_run_bytes + ledger_used + kFramesHeldBytes;
 	if (largest_free_extent)
-		*largest_free_extent = largest;
+		*largest_free_extent = largest_run > ledger_largest ? largest_run : ledger_largest;
+}
+
+void allocator_frame_counts(uint64_t *usable, uint64_t *free_frames, uint64_t *run_frames,
+                            uint64_t *ledger_frames)
+{
+	uint64_t flags = frames_lock();
+	if (usable) *usable = kFrames.usable_frames;
+	if (free_frames) *free_frames = kFrames.free_frames;
+	if (run_frames) *run_frames = kFrames.run_frames;
+	if (ledger_frames) *ledger_frames = kFrames.ledger_frames;
+	frames_unlock(flags);
+}
+
+const char *allocator_audit(uint64_t *where)
+{
+	uint64_t flags = frames_lock();
+	const char *why = frames_audit(&kFrames, where);
+	frames_unlock(flags);
+	return why;
+}
+
+// Every allocated extent, for init_os64_paging_tables' retro-map: frame
+// runs whole, and the ledger's LIVE extents (not its chunks, whose free
+// holes must stay unmapped).
+void allocator_for_each_allocated(void (*fn)(void *ctx, uintptr_t phys, uint64_t length), void *ctx)
+{
+	uint64_t lflags = ledger_lock();
+	uint64_t fflags = frames_lock();
+	uint64_t cursor = 0, first, count;
+	frames_kind_t kind;
+	while (frames_next_run(&kFrames, &cursor, &first, &count, &kind))
+		if (kind == FRAMES_RUN)
+			fn(ctx, first * PAGE_SIZE, count * PAGE_SIZE);
+	frames_unlock(fflags);
+	for (uint64_t cnt = 0; cnt < kMemoryStatusCurrentPtr; cnt++)
+		if (kMemoryStatus[cnt].in_use && kMemoryStatus[cnt].length != 0)
+			fn(ctx, kMemoryStatus[cnt].startAddress, kMemoryStatus[cnt].length);
+	ledger_unlock(lflags);
+}
+
+// ── Boot ────────────────────────────────────────────────────────────────────
+
+// Describe the usable stretch [lo, hi) as free, minus the ranges already
+// described as allocated (`skip`, sorted, non-overlapping). Only whole frames
+// are described; anything else is counted into kFramesHeldBytes by the caller.
+static void add_usable(uint64_t lo, uint64_t hi, const uint64_t skip[][2], int nskip)
+{
+	uint64_t first = (lo + PAGE_SIZE - 1) / PAGE_SIZE, end = hi / PAGE_SIZE;
+	for (int i = 0; i <= nskip && first < end; i++)
+	{
+		uint64_t stop = end, next = end;
+		if (i < nskip)
+		{
+			if (skip[i][1] <= first || skip[i][0] >= end)
+				continue;
+			stop = skip[i][0] > first ? skip[i][0] : first;
+			next = skip[i][1];
+		}
+		if (stop > first)
+		{
+			frames_status_t s = frames_add_region(&kFrames, first, stop - first);
+			if (s != FRAMES_OK)
+				panic("allocator: usable frames 0x%lx..0x%lx cannot be described: %s\n",
+				      first, stop, frames_status_name(s));
+		}
+		first = next;
+	}
 }
 
 void allocator_init()
 {
+	// 1. The highest usable frame sizes the table: one descriptor per frame
+	//    below it, holes in the physical map included.
+	uint64_t top = 0;
+	for (uint64_t cnt = 0; cnt < kMemMapEntryCount; cnt++)
+		if (kMemMap[cnt]->type == LIMINE_MEMMAP_USABLE &&
+		    kMemMap[cnt]->base + kMemMap[cnt]->length > top)
+			top = kMemMap[cnt]->base + kMemMap[cnt]->length;
+	uint64_t nframes = top / PAGE_SIZE;
+	if (nframes > FRAMES_NONE)
+		nframes = FRAMES_NONE;   // past 4 TiB; frames above go undescribed
+	uint64_t table_bytes = round_up_to_nearest_page(frames_table_bytes(nframes));
 
-	//uint64_t allocate_size = sizeof(memory_status_t) * INITIAL_MEMORY_STATUS_COUNT;
-	//uint64_t page_count = round_up_to_nearest_page(allocate_size) / PAGE_SIZE;
-	
-	//Get the lowest available address above or equal to 0x1000 (don't include the zero page)
-	//NOTE: First pages went to paging structures
-	memoryBaseAddress = getLowestAvailableMemoryAddress(0x1000) + (RESERVED_PAGES * PAGE_SIZE);
+	// 2. paging_init wrote its early page tables into the first pages of the
+	//    lowest usable region; they are live until init_os64_paging_tables
+	//    switches CR3, so they are allocated, never handed out.
+	uint64_t boot_base = getLowestAvailableMemoryAddress(0x1000);
+	uint64_t boot_end = boot_base + RESERVED_PAGES * PAGE_SIZE;
+	for (uint64_t cnt = 0; cnt < kMemMapEntryCount; cnt++)
+		if (kMemMap[cnt]->type == LIMINE_MEMMAP_USABLE && kMemMap[cnt]->base == boot_base &&
+		    boot_end > boot_base + kMemMap[cnt]->length)
+			boot_end = boot_base + kMemMap[cnt]->length;
 
-	//Update the kernel page tables for the memory used by kMemoryStatus
-	//paging_map_pages((pt_entry_t*)kKernelPML4v, memoryBaseAddress, memoryBaseAddress, page_count, PAGE_PRESENT | PAGE_WRITE);
-
-	//Create an allocator entry for kMemoryStatus which is MAX_MEMORY_STATUS_COUNT entries long
-	//kMemoryStatus = (memory_status_t*)allocate_memory(allocate_size);
-	kMemoryStatus = (memory_status_t*)(memoryBaseAddress + kHHDMOffset);
-
-	//Parse the memory map into the newly created kMemoryStatus
-	for (uint64_t cnt=0;cnt<kMemMapEntryCount;cnt++)
+	// 3. The table goes in the first usable region with room for it, clear of
+	//    those pages, written through Limine's full HHDM like everything the
+	//    allocator touches before the real kernel tables exist.
+	uint64_t table_phys = 0;
+	for (uint64_t cnt = 0; cnt < kMemMapEntryCount && table_phys == 0; cnt++)
 	{
+		if (kMemMap[cnt]->type != LIMINE_MEMMAP_USABLE)
+			continue;
+		uint64_t lo = round_up_to_nearest_page(kMemMap[cnt]->base);
+		uint64_t hi = (kMemMap[cnt]->base + kMemMap[cnt]->length) & ~(uint64_t)(PAGE_SIZE - 1);
+		if (lo < PAGE_SIZE)
+			lo = PAGE_SIZE;
+		if (lo < boot_end && boot_base < hi)
+			lo = boot_end;
+		if (hi > lo && hi - lo >= table_bytes)
+			table_phys = lo;
+	}
+	if (table_phys == 0)
+		panic("allocator: no usable region can hold the %lu-byte frame table\n", table_bytes);
+	if (frames_init(&kFrames, (frame_t *)(table_phys | kHHDMOffset), nframes) != FRAMES_OK)
+		panic("allocator: frame table init refused %lu frames\n", nframes);
+
+	// 4. What is already in use, then everything else usable as free.
+	uint64_t skip[2][2] = {
+		{ boot_base / PAGE_SIZE, boot_end / PAGE_SIZE },
+		{ table_phys / PAGE_SIZE, (table_phys + table_bytes) / PAGE_SIZE },
+	};
+	if (skip[0][0] > skip[1][0])
+	{
+		uint64_t t0 = skip[0][0], t1 = skip[0][1];
+		skip[0][0] = skip[1][0]; skip[0][1] = skip[1][1];
+		skip[1][0] = t0; skip[1][1] = t1;
+	}
+	for (int i = 0; i < 2; i++)
+	{
+		frames_status_t s = frames_add_allocated(&kFrames, skip[i][0], skip[i][1] - skip[i][0], FRAMES_RUN);
+		if (s != FRAMES_OK)
+			panic("allocator: frames 0x%lx..0x%lx cannot be reserved at boot: %s\n",
+			      skip[i][0], skip[i][1], frames_status_name(s));
+	}
+	for (uint64_t cnt = 0; cnt < kMemMapEntryCount; cnt++)
 		if (kMemMap[cnt]->type == LIMINE_MEMMAP_USABLE)
 		{
-			kMemoryStatus[kMemoryStatusCurrentPtr].startAddress = kMemMap[cnt]->base;
-			kMemoryStatus[kMemoryStatusCurrentPtr].length = kMemMap[cnt]->length;
-			//CLR 11/24/2024 - Removed claiming LIMINE_MEMMAP_BOOTLOADER_RECLAIMABLE as usable memory
-			kMemoryStatus[kMemoryStatusCurrentPtr].in_use = kMemMap[cnt]->type != LIMINE_MEMMAP_USABLE;  //If the type isn't 0/5 then the area is in use
-			kMemoryStatusCurrentPtr++;
+			uint64_t lo = kMemMap[cnt]->base, hi = lo + kMemMap[cnt]->length;
+			if (hi > nframes * PAGE_SIZE)
+				hi = nframes * PAGE_SIZE;
+			if (hi > lo)
+				add_usable(lo, hi, (const uint64_t (*)[2])skip, 2);
 		}
-	}
+	kFramesHeldBytes = kAvailableMemory - kFrames.usable_frames * PAGE_SIZE;
 
-	//Officially allocate our allocator entries and map them, along with the reverved pages where we created our initial paging pages
-	uint64_t size = sizeof(memory_status_t);
-	uint64_t allocSize = size*INITIAL_MEMORY_STATUS_COUNT;
-	uint64_t newAddress = allocate_memory(allocSize) | kHHDMOffset;
-	uint64_t mapSize = allocSize/PAGE_SIZE;
-	if (allocSize%PAGE_SIZE)
-		mapSize++;
-	//paging_map_pages((pt_entry_t*)kKernelPML4v, newAddress, newAddress - kHHDMOffset, mapSize, PAGE_PRESENT | PAGE_WRITE);
-	memcpy((void*)newAddress, kMemoryStatus, kMemoryStatusCurrentPtr * size);
-	kMemoryStatus = (memory_status_t*)newAddress;
+	// 5. The ledger's rows come from the frame table, and the ledger starts
+	//    empty: it borrows its first chunk on its first allocation.
+	uint64_t ledger_bytes = sizeof(memory_status_t) * INITIAL_MEMORY_STATUS_COUNT;
+	uint64_t ledger_frame = frames_alloc(&kFrames, (ledger_bytes + PAGE_SIZE - 1) / PAGE_SIZE, FRAMES_RUN);
+	if (ledger_frame == FRAMES_NONE)
+		panic("allocator: no frames for the ledger's %lu-byte table\n", ledger_bytes);
+	kMemoryStatus = (memory_status_t *)((ledger_frame * PAGE_SIZE) | kHHDMOffset);
+	kMemoryStatusCurrentPtr = 0;
+
+	printd(DEBUG_BOOT, "allocator: frame table %lu frames (%lu KiB) at 0x%016lx; %lu usable, %lu held\n",
+	       nframes, table_bytes / 1024, table_phys, kFrames.usable_frames, kFramesHeldBytes);
 }
 
 // ── kworker-side maintenance + observability (2026-08-07) ────────────────────
@@ -815,7 +894,8 @@ void allocator_init()
 // passes are BOUNDED (a cursor walks at most maxEntries per visit), so any
 // requestor unlucky enough to contend waits out a short pass, not a
 // full-table sweep. The free-path backstop above fires only on kworker-less
-// boots.
+// boots. The frame table needs none of this: it has no dead entries and
+// merges at free time.
 
 extern __uint128_t kDebugLevel;   // printd's runtime gate — checked here so a
                                   // disabled DEBUG_ALLOCATOR skips the WALK,
@@ -830,7 +910,7 @@ uint32_t allocator_maintain(uint32_t maxEntries)
 	static uint64_t sCursor = 0;   // kworker-only caller — no reentrancy
 	uint32_t merges = 0;
 
-	uint64_t irqflags = allocator_lock();
+	uint64_t irqflags = ledger_lock();
 
 	if (kMemoryStatusCurrentPtr > 0)
 	{
@@ -857,17 +937,15 @@ uint32_t allocator_maintain(uint32_t maxEntries)
 	if (kAllocZeroedEntries >= 64)
 		compact_memory_array();
 
-	allocator_unlock(irqflags);
+	ledger_unlock(irqflags);
 	return merges;
 }
 
-// The DEBUG_ALLOCATOR ledger line — the 2026-08-07 autopsy, self-service.
-// Designed to cost nothing when off: the kDebugLevel check gates the whole
-// walk, and the caller (kworker) invokes at a human cadence, not per-alloc.
-// One O(table) walk under the lock (same cost class as
-// allocator_memory_snapshot, which top polls every second) collecting the
-// counts and the top-4 free sizes — the exact shape that named first-fit
-// fragmentation the day pmemsave dragged the table out of a live guest.
+// The DEBUG_ALLOCATOR health lines — the 2026-08-07 autopsy, self-service:
+// the ledger's walk (counts and the top-4 free-hole sizes, the exact shape
+// that named first-fit fragmentation the day pmemsave dragged the table out
+// of a live guest) and the frame table's counters, which need no walk.
+// The caller (kworker) invokes at a human cadence, not per allocation.
 void allocator_debug_report(void)
 {
 	if (!(kDebugLevel & DEBUG_ALLOCATOR))
@@ -882,7 +960,7 @@ void allocator_debug_report(void)
 	uint32_t tracked = 0;
 	uint64_t inUse = 0, freeCnt = 0, dead = 0;
 
-	uint64_t irqflags = allocator_lock();
+	uint64_t irqflags = ledger_lock();
 	uint64_t entries = kMemoryStatusCurrentPtr;
 	for (uint64_t i = 0; i < entries; i++)
 	{
@@ -906,7 +984,12 @@ void allocator_debug_report(void)
 			}
 		}
 	}
-	allocator_unlock(irqflags);
+	uint64_t exactfit = kAllocExactFitHits, splits = kAllocSplits;
+	uint64_t merges = kAllocMerges, compactions = kAllocCompactions;
+	uint64_t fflags = frames_lock();
+	frames_t f = kFrames;   // the counters, captured at one instant
+	frames_unlock(fflags);
+	ledger_unlock(irqflags);
 
 	// Pick the top 4 by count (tiny N — selection is fine).
 	uint64_t topSize[4] = {0}, topCount[4] = {0};
@@ -927,9 +1010,13 @@ void allocator_debug_report(void)
 	}
 
 	printd(DEBUG_ALLOCATOR,
-	       "allocator: entries=%lu inuse=%lu free=%lu dead=%lu | exactfit=%lu splits=%lu merges=%lu compactions=%lu\n",
+	       "allocator: frames usable=%lu free=%lu run=%lu ledger=%lu free_runs=%lu | allocs=%lu refusals=%lu fallback_walks=%lu examined=%lu\n",
+	       f.usable_frames, f.free_frames, f.run_frames, f.ledger_frames, f.free_runs,
+	       f.allocs, f.refusals, f.fallback_walks, f.fallback_examined);
+	printd(DEBUG_ALLOCATOR,
+	       "allocator: ledger entries=%lu inuse=%lu free=%lu dead=%lu | exactfit=%lu splits=%lu merges=%lu compactions=%lu\n",
 	       entries, inUse, freeCnt, dead,
-	       kAllocExactFitHits, kAllocSplits, kAllocMerges, kAllocCompactions);
+	       exactfit, splits, merges, compactions);
 	printd(DEBUG_ALLOCATOR,
 	       "allocator: top free holes: %lux%lu %lux%lu %lux%lu %lux%lu\n",
 	       topCount[0], topSize[0], topCount[1], topSize[1],

@@ -382,7 +382,8 @@ uint64_t frames_alloc(frames_t *f, uint64_t count, frames_kind_t kind)
 
 // ── Freeing ─────────────────────────────────────────────────────────────
 
-frames_status_t frames_free(frames_t *f, uint64_t first, uint64_t *count_out)
+frames_status_t frames_check_start(const frames_t *f, uint64_t first, frames_kind_t *kind_out,
+                                   uint64_t *count_out)
 {
 	if (f == NULL)
 		return FRAMES_BAD_ARGUMENT;
@@ -400,6 +401,21 @@ frames_status_t frames_free(frames_t *f, uint64_t first, uint64_t *count_out)
 		for (uint64_t i = 0; i < count; i++)
 			if (b_of(f->table[first + i]) != 0)
 				return FRAMES_LEDGER_PINNED;
+	if (kind_out != NULL)
+		*kind_out = (frames_kind_t)kind;
+	if (count_out != NULL)
+		*count_out = count;
+	return FRAMES_OK;
+}
+
+frames_status_t frames_free(frames_t *f, uint64_t first, uint64_t *count_out)
+{
+	frames_kind_t k;
+	uint64_t count;
+	frames_status_t s = frames_check_start(f, first, &k, &count);
+	if (s != FRAMES_OK)
+		return s;
+	unsigned kind = (unsigned)k;
 
 	mark_interior(f, first, count, FRAMES_FREE);
 	if (kind == FRAMES_RUN)
@@ -453,6 +469,33 @@ frames_kind_t frames_kind(const frames_t *f, uint64_t frame)
 	if (f == NULL || frame >= f->nframes)
 		return FRAMES_RESERVED;
 	return (frames_kind_t)kind_of(f->table[frame]);
+}
+
+bool frames_next_run(const frames_t *f, uint64_t *cursor, uint64_t *first, uint64_t *count,
+                     frames_kind_t *kind)
+{
+	if (f == NULL || cursor == NULL)
+		return false;
+	uint64_t i = *cursor;
+	while (i < f->nframes && f->table[i] == 0)
+		i++;
+	if (i >= f->nframes) {
+		*cursor = f->nframes;
+		return false;
+	}
+	// A cursor that lands mid-run (it should not: it only ever moves past
+	// whole runs) starts from that run's head.
+	while (pos_of(f->table[i]) == POS_INTERIOR || pos_of(f->table[i]) == POS_TAIL)
+		i--;
+	uint64_t len = run_length(f, i);
+	if (first != NULL)
+		*first = i;
+	if (count != NULL)
+		*count = len;
+	if (kind != NULL)
+		*kind = (frames_kind_t)kind_of(f->table[i]);
+	*cursor = i + len;
+	return true;
 }
 
 uint64_t frames_run_start(const frames_t *f, uint64_t frame)

@@ -166,6 +166,27 @@ static void compare(rig_t *r, model_t *m, const char *when)
 	CHECK(frames_largest_free(&r->f) == model_largest_free(m), "%s: largest free %llu vs %llu",
 	      when, (unsigned long long)frames_largest_free(&r->f),
 	      (unsigned long long)model_largest_free(m));
+	// The runs the iterator reports tile the described memory exactly as the
+	// model's owners do, kind by kind.
+	uint64_t cursor = 0, first, count, by_kind[4] = {0, 0, 0, 0}, last_end = 0;
+	frames_kind_t kind;
+	while (frames_next_run(&r->f, &cursor, &first, &count, &kind)) {
+		if (first < last_end || (int)kind == M_RESERVED || first + count > m->n) {
+			CHECK(false, "%s: run iterator out of order at %llu", when, (unsigned long long)first);
+			break;
+		}
+		for (uint64_t k = 0; k < count; k++)
+			if (m->owner[first + k] != (int)kind) {
+				CHECK(false, "%s: run [%llu,+%llu) of kind %d covers frame owned %d", when,
+				      (unsigned long long)first, (unsigned long long)count, (int)kind,
+				      m->owner[first + k]);
+				break;
+			}
+		by_kind[kind] += count;
+		last_end = first + count;
+	}
+	CHECK(by_kind[M_FREE] == m->free_frames && by_kind[M_RUN] == m->run_frames &&
+	      by_kind[M_LEDGER] == m->ledger_frames, "%s: the runs iterated do not add up", when);
 	for (uint64_t i = 0; i < m->n; i++) {
 		if (frames_live(&r->f, i) != model_live(m, i)) {
 			CHECK(false, "%s: liveness of frame %llu", when, (unsigned long long)i);
@@ -254,6 +275,16 @@ static void case_tripwires(void)
 #define UNCHANGED(what) CHECK(memcmp(before, r.table, sizeof(before)) == 0 && \
 	memcmp(&fbefore, &r.f, sizeof(fbefore)) == 0, "a refused %s changed something", what)
 
+	frames_kind_t k = FRAMES_RESERVED;
+	uint64_t n = 0;
+	CHECK(frames_check_start(&r.f, a, &k, &n) == FRAMES_OK && k == FRAMES_RUN && n == 5,
+	      "check_start names a run's kind and length");
+	CHECK(frames_check_start(&r.f, l, &k, &n) == FRAMES_OK && k == FRAMES_LEDGER && n == 4,
+	      "and a ledger run's");
+	CHECK(frames_check_start(&r.f, a + 1, NULL, NULL) == FRAMES_NOT_A_START &&
+	      frames_check_start(&r.f, 50, NULL, NULL) == FRAMES_NOT_ALLOCATED,
+	      "check_start refuses what free refuses");
+	UNCHANGED("check_start");
 	CHECK(frames_free(&r.f, a + 2, NULL) == FRAMES_NOT_A_START, "interior free refused");
 	UNCHANGED("interior free");
 	CHECK(frames_free(&r.f, a + 4, NULL) == FRAMES_NOT_A_START, "tail free refused");
