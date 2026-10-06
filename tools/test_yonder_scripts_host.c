@@ -1617,7 +1617,34 @@ static void loop_downgrade(void) {
     bar_forget();
     probe_drop();
 }
+// What a script changed is what the page uses: a src resolves against the
+// document's base, a DOMContentLoaded edit reaches the arriving model, and
+// an image's default action finds the image again after its listener.
+static void loop_script_changes_hold(void) {
+    loop_page("<base href='http://assets.test/js/'><script src='app.js'></script>");
+    check(loop_settle() && nscript_jobs==1,"review base: source fetch submitted");
+    check(nscript_jobs==1 && os64_streq(script_jobs[0].job->url,"http://assets.test/js/app.js"),
+        "review base: source resolves against document base");
+    loop_drop();
+    loop_page("<form id=f action=/send></form><script>"
+        "document.addEventListener('DOMContentLoaded',()=>{var i=document.createElement('input');"
+        "i.id='late';document.getElementById('f').appendChild(i)});</script>");
+    check(loop_settle() && g.page.tree!=NULL && probe_id("late")!=NULL,
+        "review DCL: handler inserted control before arrival");
+    check(os64_page_ncontrols(page_model(&g.page))==1 && probe_field("late")!=NULL,
+        "review DCL: arrived model includes lifecycle mutation");
+    loop_drop();
+    probe_page("<form id=f action=/send><input id=pic type=image name=pic></form><script>"
+        "var p=document.getElementById('pic');p.onclick=()=>{var i=document.createElement('input');"
+        "i.id='first';document.getElementById('f').insertBefore(i,p)};</script>",true);
+    script_turn();
+    pool_open=true;g.pool=(os64_work_pool_t *)&pool_fake;
+    input_queue(IN_CLICK,probe_id("pic"),NULL,0,0,false);inputs_run();
+    check(g.nav.id!=0,"review image click: original image submits after control renumbering");
+    stop_trip();pool_open=false;g.pool=NULL;probe_drop();
+}
 static void loop_cases(void) {
+    loop_script_changes_hold();
     loop_state_adopted();
     loop_typed_value();
     loop_downgrade();

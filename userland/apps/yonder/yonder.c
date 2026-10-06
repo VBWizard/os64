@@ -539,6 +539,7 @@ static int32_t scale_zoom(int32_t v, uint32_t to, uint32_t from)
     return (int32_t)(r > INT32_MAX ? INT32_MAX : r < INT32_MIN ? INT32_MIN : r);
 }
 
+static bool page_model_refresh(Page *p);
 static bool lay_out_page(Page *p, int32_t width, int32_t height);
 static bool lay_out_page_reclaim(Page *p, int32_t width, int32_t height, Page *reclaim);
 
@@ -1304,7 +1305,10 @@ static void arrive_now(Page *fresh, NavKind kind, const way_position_t *crumb,
     int32_t height = g.view.bounds.h > 0 ? g.view.bounds.h : 1;
     os64_ticks_t t0, t1;
     os64_ticks(&t0);
-    bool laid = lay_out_page(fresh, width, height);
+    // DOMContentLoaded's listeners, and an async script or a timer while
+    // the page waited for its sheets, may have changed the tree since its
+    // model was built: the layout and the controls are made from both.
+    bool laid = page_model_refresh(fresh) && lay_out_page(fresh, width, height);
     os64_ticks(&t1);
     if (!laid) {
         sheets_leave(fresh);
@@ -1336,7 +1340,7 @@ static void arrive_now(Page *fresh, NavKind kind, const way_position_t *crumb,
     g.page = *fresh;
     os64_memset(fresh, 0, sizeof(*fresh));
     g.page_serial++;
-    g.page.model_version = g.page.rendered_version = os64_html_version(page_doc(&g.page));
+    g.page.rendered_version = os64_html_version(page_doc(&g.page));
     g.page.state_version = os64_page_state_version(os64_page_shared_state(page_model(&g.page)));
     g.pictures_moved = false;
     g.settle_due = YONDER_NEVER;       // the deadline goes with the moves it was for
@@ -3076,25 +3080,39 @@ static void script_alert(void *opaque, const char *text, size_t length)
     status_rest(line);
 }
 
+// The model brought up to the tree's version, if scripts moved it: false
+// when the rebuild does not fit, which leaves the old model in place.
+// model_version is the version the model was BUILT at, never assumed.
+static bool page_model_refresh(Page *p)
+{
+    uint64_t version = os64_html_version(page_doc(p));
+    if (version == p->model_version)
+        return true;
+    os64_page_t *model = os64_page_rebuild(page_model(p));
+    if (model == NULL)
+        return false;
+    os64_page_t *old = page_model(p);
+    if (p->way.model != NULL)
+        p->way.model = model;
+    else
+        p->plain_model = model;
+    p->model_version = version;
+    os64_page_free(old);
+    return true;
+}
+
 static bool script_rebuild(void)
 {
     Page *p = &g.page;
     uint64_t version = os64_html_version(page_doc(p));
     if (version != p->model_version) {
-        os64_page_t *model = os64_page_rebuild(page_model(p));
-        if (model == NULL) {
+        // The displayed layout retains the old model, including its
+        // control state, past the refresh's free of it.
+        if (!page_model_refresh(p)) {
             status_rest("Out of memory rebuilding the page; actions wait for a current model.");
             return false;
         }
-        os64_page_t *old = page_model(p);
-        if (p->way.model != NULL)
-            p->way.model = model;
-        else
-            p->plain_model = model;
-        p->model_version = version;
         g.hover_link = g.pressed_link = -1;
-        // The displayed layout retains old, including its control state.
-        os64_page_free(old);
         pictures_start(p);
     }
     if (version != p->rendered_version) {
@@ -3738,6 +3756,9 @@ static void inputs_run(void)
             os64_dom_event_t ev = mouse_event("click", true, &in);
             if (page_event(&ev, in.node))
                 break;
+            // The listeners may have rebuilt the page: the image is found
+            // again, and is gone if they took it away.
+            control = os64_page_control_for(page_model(&g.page), in.node);
             int32_t link = in.related != NULL ? os64_page_link_for(page_model(&g.page), in.related) : -1;
             const os64_page_control_t *c = os64_page_control(page_model(&g.page), control);
             if (link >= 0)
@@ -3998,6 +4019,7 @@ static void stream_finish(os64_fetch_status_t fetch, const char *reason)
     // and boxes, and the status line says so. A text page's tree is the
     // window's own, beside libway's page, as page_doc() reads it.
     os64_page_t *model = os64_page_build(doc, g.stream.head.url, NULL, fresh.state);
+    fresh.model_version = os64_html_version(doc);
     if (g.stream.head.body == WAY_BODY_HTML) {
         fresh.way.doc = doc;
         fresh.way.model = model;
