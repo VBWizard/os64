@@ -271,8 +271,8 @@ of the page is recorded and performed by the host after the task.
 (`os64_dom_take_navigation`): `location.href =`, `location = `,
 `location.assign`, `replace`, `reload`, `hash =` (the address with its
 fragment replaced), `history.back/forward/go` (`go(0)` reloads), a link's
-`click()`, and a form's submission. Addresses are resolved as a link's are,
-against the first `base` with an href as the tree stands, else the page
+`click()`, and a form's submission. Addresses are resolved exactly as a
+link's are, by libpage's own steps with the base as the tree stands
 (`os64_dom_resolve`, which a host uses for a script's `src` too); `hash =`
 stays in the page. A taken ask's nodes come held. `location` reads the page's
 address and its parts; `history.length` reads 1. `window.status` and

@@ -48,57 +48,12 @@ bool os64_dom_take_report(os64_dom_t *dom, os64_js_outcome_t *outcome)
     return true;
 }
 
-/* The first `base` with an href in tree order, the body included. An empty
- * href counts: it names the document's own address and outranks a later
- * base, as libpage's find_base rules. */
-static const char *first_base(const os64_html_node_t *n)
-{
-    for (; n != NULL; n = n->next) {
-        if (n->kind == OS64_HTML_ELEMENT && n->ns == OS64_HTML_NS_HTML && n->tag == OS64_HTML_TAG_BASE) {
-            const os64_html_attr_t *href = os64_html_attr(n, "href");
-            if (href != NULL) return href->value;
-        }
-        const char *found = first_base(n->first_child);
-        if (found != NULL) return found;
-    }
-    return NULL;
-}
-
+/* One rule for every address on a page: libpage resolves a script's exactly
+ * as it resolves a link's, so the two cannot drift apart. */
 bool os64_dom_resolve(const os64_html_document_t *document, const char *document_url,
                       const char *reference, char *out, size_t cap)
 {
-    if (reference == NULL || out == NULL || cap == 0) return false;
-    char scheme[OS64_URL_SCHEME_MAX];
-    if (os64_url_scheme_of(reference, scheme, sizeof(scheme)))
-        return os64_strcopy(out, cap, reference) < cap;
-    const char *href = document != NULL ? first_base(document->document) : NULL;
-    char based[OS64_DOM_URL_MAX];
-    const char *base = document_url;
-    // libpage's rule for a base (p_base): an address that resolves and
-    // parses is adopted, canonical, against the document or (an absolute
-    // one under about:blank) on its own; an opaque one (`mailto:`, which
-    // the grammar calls NOT_A_URL) is adopted as written, and nothing
-    // relative resolves against it; anything else, `http://` with no host,
-    // is no base and the document's own address stands.
-    os64_url_t opaque;
-    bool absolute = href != NULL && os64_url_scheme_of(href, scheme, sizeof(scheme));
-    if (href == NULL || href[0] == '\0')
-        ;
-    else if (document_url != NULL && os64_page_url_absolute(document_url, href, based, sizeof(based)))
-        base = based;
-    else if (absolute && os64_page_url_absolute(href, href, based, sizeof(based)))
-        base = based;
-    else if (absolute && os64_url_parse(href, &opaque) == OS64_URL_NOT_A_URL)
-        base = href;
-    if (base == NULL) return false;
-    // libpage's resolver, so a local page's file:/// address (an empty
-    // authority the bare URL grammar refuses) resolves as its links do.
-    if (reference[0] != '\0') return os64_page_url_absolute(base, reference, out, cap);
-    // An empty reference names the base itself, without its fragment.
-    if (!os64_page_url_absolute(base, base, out, cap)) return false;
-    char *hash = os64_strchr(out, '#');
-    if (hash != NULL) *hash = '\0';
-    return true;
+    return os64_page_resolve_in(document, document_url, reference, out, cap);
 }
 
 /* A reference resolved against the page, as a link's href is. An absolute
