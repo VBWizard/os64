@@ -73,7 +73,7 @@ slice with its own design or brief; the gates are the rows J6 waits on.
 | --- | --- | --- |
 | D7 the loop: tasks, checkpoints, timers, events and their attributes, script order | Fable | J4's evidence; everything after it runs inside this loop |
 | D8 reporting runtime destroy (DOM.md ruling 8, § A leak at teardown; CONTRACT.md's third browser extension) | Quinn | first gate before the default can change |
-| D9 `document.write` (`os64_html_parser_write`, legal only while the parser is stopped at a script) | Fable | second gate; coupled to D7's stop semantics |
+| D9 `document.write` (`os64_html_parser_write`, legal only while the parser is stopped at a script) — **designed 2026-10-05, DOM_D9.md; built on `fable/dom-d9`, DOM.md § D9, as built** | Fable designs and reviews, Opus builds | second gate; coupled to D7's stop semantics |
 | D10 geometry (DOM.md § Geometry: a forced layout, charged to the script) | Quinn | third gate; menus and fit-to-window scripts |
 | D11 the surface the old web calls | Quinn builds, Chris chooses the pages | consumer-driven from three real pages (J5). A likely first finding: libdom has no `navigator` (`userAgent`, `appName`, `appVersion`, `platform`), which old-web browser sniffing reads before anything else; nor `document.referrer`, `readyState` or `lastModified` |
 | The switch's default (DOM.md ruling 1) | Chris rules | after D8, D9, D10 and J5 |

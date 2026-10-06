@@ -1,5 +1,17 @@
 <!doctype html>
 <title>document.write</title>
 <h1>A counter the 1998 way</h1>
-<script>document.write('You are visitor number 42');</script>
-<p>document.write is D9's; until then it fails loudly by name on the status line.</p>
+<script>
+var visits = 42;
+document.write('<p id=counter>You are visitor number <b>' + visits + '</b></p>');
+document.write('<p id=date>Today is ' + new Date().toDateString() + '</p>');
+</script>
+<script>
+function note(what) { document.write('<p id=loaded>The script it loaded says: ' + what + '</p>'); }
+document.write('<script src="blocking.js"></scr' + 'ipt>');
+</script>
+<script>
+document.write('<script>document.write("<p id=inner>Second: written by a written script</p>")</scr' + 'ipt>');
+document.write('<p id=outer>Third: written after it, by its writer</p>');
+</script>
+<p>Last: this paragraph was in the page all along.</p>

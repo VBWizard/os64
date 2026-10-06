@@ -11,6 +11,10 @@ import tempfile
 from html_reference import ROOT, cases, identity, inventory, scripting_modes
 STATES={'Data state':0,'RCDATA state':1,'RAWTEXT state':2,'Script data state':3,'PLAINTEXT state':4,'CDATA section state':5}
 SCRIPTING=0x100  # added to a tree record's kind: parse it as a host that runs scripts does
+RUNS=0x200       # and run its scripts, which are document.write (html_reference.WRITE)
+# A case whose scripts run is driven whole, a byte at a time and in random
+# pieces (the record's state field is the chunk; UINT32_MAX is random).
+CHUNKINGS=(0,1,0xffffffff)
 
 def main():
     ap=argparse.ArgumentParser();ap.add_argument('--driver',required=True);ap.add_argument('--tokenizer-only',action='store_true');args=ap.parse_args()
@@ -24,24 +28,25 @@ def main():
     assert excluded==(ROOT/'SKIPS.tsv').read_text().splitlines(), 'stale skip manifest'
     skips={line.split('\t')[0] for line in (ROOT/'SKIPS.tsv').read_text().splitlines()}
     selected=[c for c in cases() if identity(c) not in skips and (not args.tokenizer_only or c['suite']=='tokenizer')]
-    runs=[(c,scripting) for c in selected for scripting in scripting_modes(c)]
+    runs=[(c,scripting,chunk) for c in selected for scripting in scripting_modes(c)
+          for chunk in (CHUNKINGS if c.get('runs') else (0,))]
     with tempfile.TemporaryFile() as batch, tempfile.TemporaryFile() as output:
-        for c,scripting in runs:
+        for c,scripting,chunk in runs:
             if c['suite']=='tokenizer':
                 data=b''.join(struct.pack('<I',ord(ch)) for ch in c['input']);last=c['lastStartTag'].encode();kind=0;state=STATES[c['state']]
             else:
-                data=c['input'].encode('utf-8');last=(c.get('fragment') or '').encode();kind=(3 if c.get('fragment') is not None else 1)|(SCRIPTING if scripting else 0);state=0
+                data=c['input'].encode('utf-8');last=(c.get('fragment') or '').encode();kind=(3 if c.get('fragment') is not None else 1)|(SCRIPTING if scripting else 0)|(RUNS if c.get('runs') else 0);state=chunk
             batch.write(struct.pack('<4I',kind,state,len(data),len(last))+data+last)
         batch.seek(0)
         subprocess.run([args.driver],stdin=batch,stdout=output,check=True,timeout=120)
         output.seek(0);failures=[];roundtrips=[]
-        for (c,scripting),line in zip(runs,output,strict=True):
+        for (c,scripting,chunk),line in zip(runs,output,strict=True):
             result=json.loads(line.decode('utf-8','surrogatepass'))
             if c['suite']=='tree':
                 if c.get('fragment') is not None:
                     roundtrips.append({'id':identity(c),'scripting':scripting,'context':c['fragment'],'exclusion':result['roundtrip_exclusion']})
                 if result['tree']!=c['expected'] or result['refusal']:
-                    failures.append({'id':identity(c),'scripting':scripting,'input':c['input'],'expected':c['expected'],'actual':result['tree'],'refusal':result['refusal']})
+                    failures.append({'id':identity(c),'scripting':scripting,'chunk':chunk,'input':c['input'],'expected':c['expected'],'actual':result['tree'],'refusal':result['refusal']})
                 continue
             tokens=[]
             for t in result['tokens']:
@@ -60,11 +65,13 @@ def main():
             failure_path=Path(args.driver).parent/'failures.json'
             failure_path.write_text(json.dumps(failures,indent=2,ensure_ascii=True)+'\n')
             print(f'Failure details: {failure_path}')
-        print(f'Reference: cases={len(selected)} run={len(runs)} scripting={sum(s for _,s in runs)} passed={len(runs)-len(failures)} failed={len(failures)} skipped={len(skips)}')
+        print(f'Reference: cases={len(selected)} run={len(runs)} scripting={sum(s for _,s,_ in runs)} written={sum(bool(c.get("runs")) for c,_,_ in runs)} passed={len(runs)-len(failures)} failed={len(failures)} skipped={len(skips)}')
         for f in failures[:10]:print(json.dumps(f,ensure_ascii=True)[:1600])
         if failures:return True
     with tempfile.TemporaryFile() as batch:
-        for c,scripting in runs:
+        for c,scripting,chunk in runs:
+            if chunk:
+                continue
             data=c['input'].encode('utf-8','surrogatepass')
             context=(c.get('fragment') or '').encode()
             kind=(3 if c.get('fragment') is not None else 1)|(SCRIPTING if scripting else 0)

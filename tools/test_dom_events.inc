@@ -22,6 +22,20 @@ static void event_activate(void *opaque, const os64_html_node_t *node, os64_dom_
     activated_what = what;
     activations++;
 }
+/* document.write's host end: what each call handed over, and what the
+ * host answers (BAD_ARGUMENT: no insertion point, as a finished page has). */
+static char written[256];
+static size_t writes, last_write_length;
+static int64_t write_answer = OS64_HTML_BAD_ARGUMENT;
+static int64_t event_write(void *opaque, const char *utf8, size_t length)
+{
+    check(opaque == &event_clock, "write receives the host's context");
+    writes++;
+    last_write_length = length;
+    if (write_answer != OS64_HTML_BAD_ARGUMENT && strlen(written) + length < sizeof(written))
+        strncat(written, utf8, length);
+    return write_answer;
+}
 static const char event_html[] =
     "<!doctype html><html><head><title>events</title></head>"
     "<body onload=\"log.push('body onload '+(event.target===document)+' '+(this===window))\">"
@@ -53,6 +67,7 @@ static DomFixture event_fixture(const char *html, const char *url)
     options.now_ms = event_now;
     options.script_connected = event_connected;
     options.activate = event_activate;
+    options.write = event_write;
     options.host_opaque = &event_clock;
     os64_js_outcome_t outcome;
     if (fixture.runtime && fixture.state)
@@ -60,6 +75,9 @@ static DomFixture event_fixture(const char *html, const char *url)
     connected_count = activations = 0;
     activated_node = NULL;
     event_clock = 1000;
+    written[0] = '\0';
+    writes = last_write_length = 0;
+    write_answer = OS64_HTML_BAD_ARGUMENT;
     return fixture;
 }
 static os64_dom_event_t plain_event(const char *type, bool bubbles, bool cancelable)
@@ -358,7 +376,7 @@ static void dom_navigation_cases(void)
         "assert(location.hash==='#top'&&location.origin==='http://example.test:8080'&&document.location===location);"
         "window.status='ignored';assert(window.status==='');"
         "throws('InvalidStateError',()=>document.write('x'));"
-        "try{document.writeln('x')}catch(e){assert(e.message==='document.write is not supported yet',e.message)}"
+        "try{document.writeln('x')}catch(e){assert(e.message==='document.write after the parse has ended would replace the document, which this browser does not do',e.message)}"
         "location.href='first.html';location.assign('../second.html');",
         "navigation-location.js");
     check(os64_dom_take_navigation(f.binding, &ask) && ask.kind == OS64_DOM_NAVIGATE_URL &&
@@ -473,6 +491,74 @@ static void dom_event_failure_cases(void)
     fixture_free(&f);
 }
 
+static void dom_write_cases(void)
+{
+    DomFixture f = event_fixture(event_html, "http://example.test/");
+    if (!fixture_ready(&f)) return;
+    write_answer = OS64_HTML_SCRIPT;
+    dom_script(&f, "document.write('a', 1, null, {toString(){return 'o'}});", "write-arguments.js");
+    check(!strcmp(written, "a1nullo") && writes == 1, "write: every argument, as a string, joined, in one call");
+    written[0] = '\0';
+    dom_script(&f, "document.writeln(); document.writeln('x', 'y'); document.write();", "write-lines.js");
+    check(!strcmp(written, "\nxy\n") && writes == 4 && last_write_length == 0,
+          "writeln: a newline after its arguments, and with none; write() hands over nothing");
+    written[0] = '\0';
+    dom_script(&f, "document.write('caf\\u00e9 \\u0000 \\ud800');", "write-text.js");
+    check(!strcmp(written, "caf\xc3\xa9 \xef\xbf\xbd \xef\xbf\xbd"),
+          "write: UTF-8, a NUL and a lone surrogate as U+FFFD, before the host sees them");
+    write_answer = OS64_HTML_TOO_LARGE;
+    dom_script(&f, DOM_ASSERT "assert(document.write('x')===undefined);", "write-refused.js");
+    write_answer = OS64_HTML_SCRIPT;
+    size_t before = writes;
+    dom_script(&f, DOM_ASSERT "assert(document.open()===document);document.close();assert(document.close()===undefined);",
+               "write-open.js");
+    check(writes == before + 1 && last_write_length == 0, "open: asks the host with an empty write, and answers the document");
+    write_answer = OS64_HTML_BAD_ARGUMENT;
+    dom_script(&f, DOM_ASSERT
+        "const said='document.write after the parse has ended would replace the document, which this browser does not do';"
+        "for(const f of [()=>document.write('x'),()=>document.writeln(),()=>document.open()]){"
+        "let e=null;try{f()}catch(x){e=x}assert(e&&e.name==='InvalidStateError'&&e.message===said,String(e))}",
+        "write-no-insertion-point.js");
+    /* A timer is not the parser's script: the host has no insertion point to
+     * give it, and the script hears so. */
+    os64_js_outcome_t outcome;
+    dom_script(&f, "setTimeout(()=>document.write('late'),10);", "write-timer.js");
+    event_clock = 1010;
+    check(os64_dom_timer_fire(f.binding, 1010, &outcome) && outcome.status == OS64_JS_EXCEPTION &&
+              strstr(outcome.message, "would replace the document"),
+          "write: from a timer, with no insertion point, throws");
+    write_answer = OS64_HTML_SCRIPT;
+    written[0] = '\0';
+    before = writes;
+    dom_script(&f, DOM_ASSERT "let big='x'.repeat(5*1024*1024);"
+        "let e=null;try{document.write(big,big)}catch(x){e=x}assert(e&&e.name==='QuotaExceededError',String(e));",
+        "write-budget.js");
+    check(writes == before, "write: past the binding's budget, nothing is written");
+    /* Every allocation of a write refused in turn: nothing written, nothing leaked. */
+    size_t start = dom_attempts;
+    dom_script(&f, "document.write('ab', 1)", "write-measure.js");
+    size_t count = dom_attempts - start;
+    for (size_t cut = 1; cut <= count; cut++) {
+        before = writes;
+        size_t target = dom_attempts + cut;
+        dom_fail_at = target;
+        int ok = dom_script(&f, "try{document.write('ab',1);globalThis.refused=false}"
+                                "catch(e){if(e.name!=='QuotaExceededError')throw e;globalThis.refused=true}",
+                            "write-allocation-cut.js");
+        dom_fail_at = 0;
+        dom_sweeps++;
+        if (ok) dom_script(&f, DOM_ASSERT "assert(refused)", "write-allocation-caught.js");
+        check(writes == before, "write: an allocation refused before the host is called writes nothing");
+    }
+    fixture_free(&f);
+    /* A host with no parser (no write callback) has no insertion point. */
+    f = fixture_new(NULL);
+    if (!fixture_ready(&f)) return;
+    dom_script(&f, DOM_ASSERT "throws('InvalidStateError',()=>document.write('x'));"
+                              "throws('InvalidStateError',()=>document.open());",
+               "write-no-host.js");
+    fixture_free(&f);
+}
 static void dom_event_cases(void)
 {
     dom_event_dispatch_cases();
@@ -481,6 +567,7 @@ static void dom_event_cases(void)
     dom_event_listens_cases();
     dom_timer_cases();
     dom_navigation_cases();
+    dom_write_cases();
     dom_script_flag_cases();
     dom_event_failure_cases();
 }

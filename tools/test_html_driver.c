@@ -9,6 +9,9 @@
 
 /* Added to a tree record's kind: parse it as a host that runs scripts does. */
 #define SCRIPTING 0x100u
+/* And run its scripts, each of which is a document.write of string literals
+ * (html_reference.py's WRITE, the shape tree-construction/scripted/ uses). */
+#define RUNS 0x200u
 static size_t allocations, fail_at, live;
 void *os64_malloc(size_t n)
 {
@@ -1285,6 +1288,319 @@ static struct {
     size_t n, cap, size;
 } known;
 static os64_html_document_t *known_doc;
+/* The corpus's scripts, run: `document.write(` string literals joined by `+`
+ * `)`, the literals' escapes read as JavaScript reads them. Anything else is
+ * a case html_reference.py should have skipped, and stops the run. */
+static size_t literal_utf8(char *out, uint32_t cp)
+{
+    if (cp < 0x80) {
+        out[0] = (char)cp;
+        return 1;
+    }
+    if (cp < 0x800) {
+        out[0] = (char)(0xc0 | cp >> 6);
+        out[1] = (char)(0x80 | (cp & 63));
+        return 2;
+    }
+    out[0] = (char)(0xe0 | cp >> 12);
+    out[1] = (char)(0x80 | (cp >> 6 & 63));
+    out[2] = (char)(0x80 | (cp & 63));
+    return 3;
+}
+static const char *skip_space(const char *s)
+{
+    while (*s == ' ' || *s == '\t' || *s == '\n' || *s == '\r')
+        s++;
+    return s;
+}
+static void corpus_write(os64_html_parser_t *p)
+{
+    char source[4096] = "";
+    for (HNode *c = os64_html_parser_script(p)->first_child; c; c = c->next)
+        if (c->kind == OS64_HTML_TEXT)
+            strncat(source, c->text, sizeof(source) - strlen(source) - 1);
+    char text[4096];
+    size_t len = 0;
+    const char *s = skip_space(source);
+    if (strncmp(s, "document.write(", 15) != 0)
+        safety_fail("a scripted case whose script is not document.write");
+    s = skip_space(s + 15);
+    for (;;) {
+        char quote = *s++;
+        if (quote != '"' && quote != '\'')
+            safety_fail("document.write of something not a string literal");
+        while (*s != quote) {
+            if (!*s || len + 3 >= sizeof(text))
+                safety_fail("an unterminated or oversized literal");
+            if (*s != '\\') {
+                text[len++] = *s++;
+                continue;
+            }
+            s++;
+            char e = *s++;
+            uint32_t cp = (unsigned char)e;
+            if (e == 'n')
+                cp = '\n';
+            else if (e == 't')
+                cp = '\t';
+            else if (e == 'r')
+                cp = '\r';
+            else if (e == 'x' || e == 'u') {
+                unsigned digits = e == 'x' ? 2 : 4;
+                char hex[5] = {0};
+                memcpy(hex, s, digits);
+                cp = (uint32_t)strtoul(hex, NULL, 16);
+                s += digits;
+            }
+            len += literal_utf8(text + len, cp);
+        }
+        s = skip_space(s + 1);
+        if (*s != '+')
+            break;
+        s = skip_space(s + 1);
+    }
+    if (*s++ != ')')
+        safety_fail("document.write with more than literals");
+    s = skip_space(s);
+    if (*s == ';')
+        s = skip_space(s + 1);
+    if (*s)
+        safety_fail("a script with more than one document.write");
+    int64_t status = os64_html_parser_write(p, text, len);
+    if (status != OS64_HTML_SCRIPT)
+        safety_fail("a corpus write was refused");
+}
+
+/* ── document.write (DOM_D9.md) ─────────────────────────────────────────
+ *
+ * The oracle for every written page is the same text parsed whole with the
+ * writes spliced in where they went, which is what a browser's parser reads. */
+static int64_t write_text(os64_html_parser_t *p, const char *s)
+{
+    return os64_html_parser_write(p, s, strlen(s));
+}
+/* A parser stopped at the first script of `page`, past the sniff window. */
+static os64_html_parser_t *stopped_at(os64_html_options_t *opt, const char *page)
+{
+    os64_html_parser_t *p = os64_html_parser_new(opt);
+    if (!p || feed_text(p, window()) != OS64_HTML_OK || feed_text(p, page) != OS64_HTML_SCRIPT)
+        safety_fail("write fixture did not stop");
+    return p;
+}
+/* Ends the parse as a host does and answers whether its tree is the one
+ * `spliced` parses to. Frees both. */
+static bool spliced_as(os64_html_parser_t *p, const char *spliced)
+{
+    os64_html_options_t opt = scripted();
+    int64_t status = os64_html_parser_end(p);
+    while (status == OS64_HTML_SCRIPT)
+        status = os64_html_parser_resume(p);
+    os64_html_document_t *doc = os64_html_parser_finish(p);
+    char *got = tree_text(doc);
+    bool refused = doc->refusal != 0;
+    os64_html_document_free(doc);
+    char whole[4096];
+    snprintf(whole, sizeof(whole), "%s%s", window(), spliced);
+    void (*kept)(os64_html_parser_t *) = at_stop;
+    at_stop = NULL;
+    doc = parse_raw((const unsigned char *)whole, strlen(whole), 0, &opt);
+    at_stop = kept;
+    char *want = tree_text(doc);
+    bool same = !refused && !doc->refusal && strcmp(got, want) == 0;
+    if (!same)
+        fprintf(stderr, "written tree:\n%s\nspliced tree:\n%s\n", got, want);
+    os64_html_document_free(doc);
+    free(got);
+    free(want);
+    return same;
+}
+static void write_checks(void)
+{
+    os64_html_options_t on = scripted();
+
+    /* Who may write: only while the parse is stopped at a script. */
+    os64_html_parser_t *p = os64_html_parser_new(&on);
+    os64_html_document_t *doc = os64_html_parser_document(p);
+    feed_text(p, window());
+    feed_text(p, "<p>a");
+    uint64_t version = os64_html_version(doc);
+    size_t bytes = doc->input_bytes;
+    check(write_text(p, "<b>x</b>") == OS64_HTML_BAD_ARGUMENT && !doc->refusal &&
+              os64_html_version(doc) == version && doc->input_bytes == bytes && !p->written,
+          "write: refused when no script is running, and nothing changes");
+    check(feed_text(p, "<script>s</script>") == OS64_HTML_SCRIPT && os64_html_parser_resume(p) == OS64_HTML_OK &&
+              os64_html_parser_end(p) == OS64_HTML_OK && write_text(p, "x") == OS64_HTML_BAD_ARGUMENT,
+          "write: refused after the end has answered OK");
+    os64_html_document_free(os64_html_parser_finish(p));
+
+    /* Written text goes ahead of the hold, and the writer sees only its own. */
+    p = stopped_at(&on, "<p>a<script>s</script>");
+    doc = os64_html_parser_document(p);
+    feed_text(p, "<b>held</b>");
+    version = os64_html_version(doc);
+    bytes = doc->input_bytes;
+    check(write_text(p, "<i>w</i>") == OS64_HTML_SCRIPT && find_named(doc->document, "i") &&
+              !find_named(doc->document, "b") && os64_html_version(doc) == version + 1 &&
+              doc->input_bytes == bytes + 8,
+          "write: parsed at once, as far as the insertion point and no further, moving the version once");
+    version = os64_html_version(doc);
+    check(write_text(p, "") == OS64_HTML_SCRIPT && os64_html_version(doc) == version && p->running,
+          "write: an empty write parses nothing and keeps the version");
+    check(write_text(p, "<u>second</u>") == OS64_HTML_SCRIPT && !find_named(doc->document, "b") &&
+              os64_html_version(doc) == version + 1,
+          "write: a second write by the same script is parsed too, moving the version again, the hold still behind it");
+    check(spliced_as(p, "<p>a<script>s</script><i>w</i><u>second</u><b>held</b>"),
+          "write: two writes by one script, then the hold, are the text spliced in order");
+
+    /* Resume's three outcomes. 1: the script never wrote. */
+    p = stopped_at(&on, "<p>a<script>s</script>b");
+    check(os64_html_parser_resume(p) == OS64_HTML_OK && !p->running && spliced_as(p, "<p>a<script>s</script>b"),
+          "resume: a script that never wrote carries on as before");
+    /* 2: it wrote and nothing it wrote stopped the parse. */
+    p = stopped_at(&on, "<p>a<script>s</script>b");
+    write_text(p, "w");
+    check(os64_html_parser_resume(p) == OS64_HTML_OK && !p->running && !os64_html_parser_script(p) &&
+              !p->written && spliced_as(p, "<p>a<script>s</script>wb"),
+          "resume: a script whose writes stopped nothing carries on after them");
+    /* 3: what it wrote stopped the parse at W. W runs next; its own writes go
+     * just after it, ahead of what S wrote after W and of what S wrote later. */
+    p = stopped_at(&on, "<p>a<script>s</script>tail");
+    doc = os64_html_parser_document(p);
+    HNode *s = os64_html_parser_script(p);
+    check(write_text(p, "<script>w</script>rest") == OS64_HTML_SCRIPT && os64_html_parser_script(p) != s &&
+              strcmp(script_source(os64_html_parser_script(p)), "w") == 0,
+          "write: a written script stops the parse and is named");
+    HNode *w = os64_html_parser_script(p);
+    check(write_text(p, "more") == OS64_HTML_SCRIPT && os64_html_parser_script(p) == w,
+          "write: the writer's later text waits behind the written script");
+    version = os64_html_version(doc);
+    check(os64_html_parser_resume(p) == OS64_HTML_SCRIPT && os64_html_parser_script(p) == w &&
+              os64_html_version(doc) == version && !p->running,
+          "resume: the written script is the next stop, and nothing is parsed");
+    check(write_text(p, "mi") == OS64_HTML_SCRIPT && write_text(p, "ne") == OS64_HTML_SCRIPT,
+          "write: the written script writes in its own turn, twice, with text waiting beyond");
+    check(spliced_as(p, "<p>a<script>s</script><script>w</script>minerestmoretail"),
+          "write: the written script's text lands before what followed it, then the writer's later text");
+
+    /* A written script with a src is named like any other. */
+    p = stopped_at(&on, "<script>s</script>");
+    check(write_text(p, "<script src=\"a.js\"></script>") == OS64_HTML_SCRIPT &&
+              os64_html_attr(os64_html_parser_script(p), "src") &&
+              strcmp(os64_html_attr(os64_html_parser_script(p), "src")->value, "a.js") == 0,
+          "write: a written src script stops the parse");
+    os64_html_parser_destroy(p);
+
+    /* What a write may hold. */
+    p = stopped_at(&on, "<script>s</script>");
+    doc = os64_html_parser_document(p);
+    version = os64_html_version(doc);
+    bytes = doc->input_bytes;
+    check(os64_html_parser_write(p, "a\0b", 3) == OS64_HTML_BAD_TEXT &&
+              os64_html_parser_write(p, "\xc3", 1) == OS64_HTML_BAD_TEXT && !doc->refusal &&
+              os64_html_version(doc) == version && doc->input_bytes == bytes && !p->written && !p->running,
+          "write: a NUL or broken UTF-8 is refused whole, and nothing is parsed");
+    check(write_text(p, "\xf0\x9f\x8d\xa9 caf\xc3\xa9") == OS64_HTML_SCRIPT,
+          "write: four-byte and two-byte characters");
+    check(spliced_as(p, "<script>s</script>\xf0\x9f\x8d\xa9 caf\xc3\xa9"),
+          "write: written characters are decoded as UTF-8");
+    /* A windows-1252 page: its bytes are 1252, a script's string is UTF-8. */
+    os64_html_options_t latin = scripted();
+    latin.charset = "windows-1252";
+    p = os64_html_parser_new(&latin);
+    feed_text(p, window());
+    check(feed_text(p, "\xe9<script>s</script>") == OS64_HTML_SCRIPT && write_text(p, "\xc3\xa9") == OS64_HTML_SCRIPT &&
+              os64_html_parser_resume(p) == OS64_HTML_OK,
+          "write: into a windows-1252 page");
+    doc = os64_html_parser_finish(p);
+    HNode *last = doc->body->last_child;
+    check(last && last->kind == OS64_HTML_TEXT && strcmp(last->text, "\xc3\xa9") == 0 &&
+              strcmp(doc->body->first_child->text, "\xc3\xa9") == 0,
+          "write: the page's byte and the script's character are the same e-acute");
+    os64_html_document_free(doc);
+
+    /* Refusals inside a write are the parse's. */
+    os64_html_options_t tight = scripted();
+    p = stopped_at(&tight, "<script>s</script>");
+    doc = os64_html_parser_document(p);
+    bytes = doc->input_bytes;
+    p->opt.max_bytes = bytes + 4;
+    check(write_text(p, "abc\xc3\xa9xyz") == OS64_HTML_SCRIPT && !doc->refusal && doc->input_bytes == bytes + 3,
+          "write: a write past max_bytes is cut on a character, and the script keeps running");
+    check(os64_html_parser_resume(p) == OS64_HTML_TOO_LARGE && doc->truncated &&
+              strcmp(doc->body->last_child->text, "abc") == 0,
+          "write: the refusal is met where the cut falls, the document readable");
+    check(write_text(p, "x") == OS64_HTML_TOO_LARGE && os64_html_parser_resume(p) == OS64_HTML_TOO_LARGE,
+          "write: every later call answers the refusal");
+    os64_html_document_free(os64_html_parser_finish(p));
+    os64_html_options_t shallow = scripted();
+    shallow.max_depth = 8;
+    p = stopped_at(&shallow, "<script>s</script>");
+    doc = os64_html_parser_document(p);
+    check(write_text(p, "<div><div><div><div><div><div><div><div><div>deep") == OS64_HTML_TOO_DEEP &&
+              doc->refusal == OS64_HTML_TOO_DEEP && doc->body,
+          "write: a written tree past the depth limit refuses the parse, the document readable");
+    check(os64_html_parser_resume(p) == OS64_HTML_TOO_DEEP, "write: and resume answers it");
+    os64_html_document_free(os64_html_parser_finish(p));
+
+    /* A script that end found may write, and the end is met after its text. */
+    p = os64_html_parser_new(&on);
+    feed_text(p, window());
+    feed_text(p, "<p>a<script>first</script>");
+    feed_text(p, "<script>last</script>");
+    check(os64_html_parser_end(p) == OS64_HTML_SCRIPT && os64_html_parser_resume(p) == OS64_HTML_SCRIPT &&
+              strcmp(script_source(os64_html_parser_script(p)), "last") == 0 &&
+              write_text(p, "<i>end</i>") == OS64_HTML_SCRIPT,
+          "write: the last script, met in the hold after the end, writes");
+    check(spliced_as(p, "<p>a<script>first</script><script>last</script><i>end</i>"),
+          "write: the end of the input follows the last script's text");
+
+    /* finish parses written text straight through; abandon frees it. */
+    p = stopped_at(&on, "<script>s</script>tail");
+    write_text(p, "<script>w</script>rest");
+    write_text(p, "more");
+    doc = os64_html_parser_finish(p);
+    char *got = tree_text(doc);
+    os64_html_document_free(doc);
+    char whole[2048];
+    snprintf(whole, sizeof(whole), "%s<script>s</script><script>w</script>restmoretail", window());
+    doc = parse_raw((const unsigned char *)whole, strlen(whole), 0, &on);
+    char *want = tree_text(doc);
+    check(strcmp(got, want) == 0, "finish: written text is parsed with the rest, a script in it included");
+    free(got);
+    free(want);
+    os64_html_document_free(doc);
+    size_t before = live;
+    p = stopped_at(&on, "<script>s</script>tail");
+    write_text(p, "<script>w</script>rest");
+    write_text(p, "more");
+    feed_text(p, "<b>held</b>");
+    doc = os64_html_parser_abandon(p);
+    check(doc && !find_named(doc->document, "b"), "abandon: nothing more is parsed");
+    os64_html_document_free(doc);
+    check(live == before, "abandon: the written text and the hold are freed");
+
+    /* A script in the sniff window: written text goes ahead of the window's
+     * remainder, which is still being replayed. */
+    p = os64_html_parser_new(&on);
+    char early[1100];
+    snprintf(early, sizeof(early), "<script>s</script>%s<p>tail", window());
+    check(os64_html_parser_feed(p, early, 1024) == OS64_HTML_SCRIPT && p->parsed < p->prescan_len &&
+              write_text(p, "<i>w</i>") == OS64_HTML_SCRIPT,
+          "write: a script in the sniff window writes while the window is replayed");
+    check(os64_html_parser_feed(p, early + 1024, strlen(early) - 1024) == OS64_HTML_SCRIPT &&
+              os64_html_parser_resume(p) == OS64_HTML_OK && os64_html_parser_end(p) == OS64_HTML_OK,
+          "write: the rest of the page follows");
+    doc = os64_html_parser_finish(p);
+    got = tree_text(doc);
+    os64_html_document_free(doc);
+    snprintf(whole, sizeof(whole), "<script>s</script><i>w</i>%s<p>tail", window());
+    doc = parse_raw((const unsigned char *)whole, strlen(whole), 0, &on);
+    want = tree_text(doc);
+    check(strcmp(got, want) == 0, "write: ahead of the window's remainder, as spliced");
+    free(got);
+    free(want);
+    os64_html_document_free(doc);
+}
 static void known_reset(void)
 {
     if (known_doc)
@@ -2202,6 +2518,7 @@ int main(int argc, char **argv)
         integration_end_tags();
         byte_order_marks();
         stop_checks();
+        write_checks();
         disturbed_checks();
         random_walks(argc > 2 ? (unsigned)atoi(argv[2]) : 20000,
                      argc > 3 ? (unsigned)atoi(argv[3]) : 0);
@@ -2223,7 +2540,7 @@ int main(int argc, char **argv)
         data[hdr[2]] = 0;
         read_exact(last, hdr[3]);
         last[hdr[3]] = 0;
-        unsigned kind = hdr[0] & ~SCRIPTING;
+        unsigned kind = hdr[0] & ~(SCRIPTING | RUNS);
         if (kind == 3) {
             if (fuzz) {
                 uint64_t budget = 100 + (random_next(&fuzz_seed) >> 16) % 20000;
@@ -2291,6 +2608,7 @@ int main(int argc, char **argv)
         if (!p)
             return 2;
         stops_reset();
+        at_stop = hdr[0] & RUNS ? corpus_write : NULL;
         if (kind == 0) {
             p->token_sink = token_sink;
             const HState states[] = {T_DATA, T_RCDATA, T_RAWTEXT, T_SCRIPT, T_PLAIN, T_CDATA};
@@ -2323,6 +2641,7 @@ int main(int argc, char **argv)
             }
             if (options.scripting)
                 run_scripts(p, os64_html_parser_end(p));
+            at_stop = NULL;
             fputs("{", stdout);
         }
         os64_html_document_t *doc = os64_html_parser_finish(p);

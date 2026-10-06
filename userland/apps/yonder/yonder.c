@@ -3253,11 +3253,21 @@ static void script_activate(void *opaque, const os64_html_node_t *node, os64_dom
     g.nasks++;
 }
 
+// document.write, from the script the arriving page's parse is stopped at:
+// the stream's parser takes it at its insertion point. A host whose
+// document is not the one being parsed has no parser to write into.
+static int64_t script_write(void *opaque, const char *utf8, size_t length)
+{
+    if (g.stream.parser == NULL || os64_html_parser_document(g.stream.parser) != opaque)
+        return OS64_HTML_BAD_ARGUMENT;
+    return os64_html_parser_write(g.stream.parser, utf8, length);
+}
+
 static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state_t *state,
                                       const char *url, uint64_t serial)
 {
     yonder_scripts_options_t options = {url, g.script_ms, serial, script_alert, script_fetch,
-                                        script_cancel, script_activate, script_now, doc};
+                                        script_cancel, script_activate, script_write, script_now, doc};
     return yonder_scripts_new(doc, state, &options);
 }
 
@@ -3285,14 +3295,16 @@ static void script_arrived(const yonder_script_job_t *job, const yonder_script_t
 
 // What a task said, on the status line: an error by its script's name, and
 // a runtime its task retired by the sentence that says the page goes on
-// without script. The audit logs every task and what it cost.
+// without script. The audit logs every task, what it cost, and what it
+// wrote: a page that writes its whole body shows as one.
 static void task_said(const yonder_scripts_t *host, bool was_alive, const char *what,
                       const os64_js_outcome_t *out, int64_t began)
 {
     if (s_script_audit) {
         char line[OS64_JS_SOURCE_NAME_CAP + 96];
-        os64_snprintf(line, sizeof(line), "yonder: task %s %s: status %d in %ld us", what,
-                      out->source_name, (int)out->status, (long)(os64_micros() - began));
+        os64_snprintf(line, sizeof(line), "yonder: task %s %s: status %d in %ld us, wrote %lu bytes",
+                      what, out->source_name, (int)out->status, (long)(os64_micros() - began),
+                      (unsigned long)yonder_scripts_written(host));
         os64_debug_log(line);
     }
     if (out->status == OS64_JS_OK)

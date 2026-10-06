@@ -45,13 +45,20 @@ typedef struct {
      * Both pass borrowed nodes; the host holds what it keeps. */
     void (*script_connected)(void *opaque, const os64_html_node_t *script);
     void (*activate)(void *opaque, const os64_html_node_t *node, os64_dom_activation_t what);
+    /* document.write's text, `length` bytes of UTF-8 borrowed for the call,
+     * for the host to hand to its parser (os64_html_parser_write): it answers
+     * libhtml's status. OS64_HTML_BAD_ARGUMENT means there is no insertion
+     * point, and the script gets InvalidStateError; anything else is not the
+     * script's business. An empty write asks without writing (open()). NULL
+     * is a host with no parser: every write is BAD_ARGUMENT. */
+    int64_t (*write)(void *opaque, const char *utf8, size_t length);
     void *host_opaque;
 } os64_dom_options_t;
 
 static inline os64_dom_options_t os64_dom_default_options(void)
 {
     const os64_dom_options_t options = {
-        OS64_DOM_DEFAULT_MAX_BYTES, true, NULL, NULL, NULL, NULL, NULL, NULL, NULL
+        OS64_DOM_DEFAULT_MAX_BYTES, true, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
     };
     return options;
 }

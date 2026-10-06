@@ -44,10 +44,15 @@ def main():
             save('standard/LICENSE', get(raw + 'LICENSE'))
             continue
         folder = 'tokenizer' if key == 'tokenizer' else 'tree-construction'
-        entries = json.loads(get(f'https://api.github.com/repos/{repo}/contents/{folder}?ref={commit}'))
-        for entry in entries:
-            if entry['type'] == 'file' and (entry['name'].endswith(('.test', '.dat')) or entry['name'].startswith('README')):
-                save(key + '/' + entry['name'], get(raw + entry['path']))
+        # tree-construction/scripted/ holds the cases whose scripts RUN
+        # (document.write among them); they keep their directory, because
+        # that is what tells a reader to run them.
+        subfolders = [('', folder)] + ([('scripted/', folder + '/scripted')] if key == 'tree' else [])
+        for prefix, listing in subfolders:
+            entries = json.loads(get(f'https://api.github.com/repos/{repo}/contents/{listing}?ref={commit}'))
+            for entry in entries:
+                if entry['type'] == 'file' and (entry['name'].endswith(('.test', '.dat')) or entry['name'].startswith('README')):
+                    save(key + '/' + prefix + entry['name'], get(raw + entry['path']))
         save(key + '/LICENSE', get(raw + 'LICENSE'))
     entities = get('https://html.spec.whatwg.org/entities.json')
     if hashlib.sha256(entities).hexdigest() != args.entities_sha256:

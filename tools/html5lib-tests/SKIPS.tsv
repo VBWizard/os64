@@ -2,3 +2,5 @@ tokenizer/xmlViolation.test:0:Data state:46ffba3ea87983b1b8f44479d275dfd96120402
 tokenizer/xmlViolation.test:1:Data state:1fde8ba60c8ea5cd122bedc76b4ae87973874bf8e766e565838fd013f06da4b5	xml-output-coercion
 tokenizer/xmlViolation.test:2:Data state:92e159d265f2b86b60af6d663b4678ed110848814f794850cecbc24685ac2834	xml-output-coercion
 tokenizer/xmlViolation.test:3:Data state:c12d76eabec668717767bdcf732d484545434ed0e4e3f5de6285701e8cfbed25	xml-output-coercion
+tree/scripted/adoption01.dat:0::860d900da65d5fba204bf3446a0a318c139416a2aaf47f42ef44ae929dde139e	script-not-document-write
+tree/scripted/ark.dat:0::3f16c37d5baf050d2de9198e91fbdff4b3410ea7c704c3edadd03541b252cf7e	script-not-document-write

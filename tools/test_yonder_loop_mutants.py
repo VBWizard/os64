@@ -132,6 +132,14 @@ mutants = [
     ('libpage-script-submit-not-validated', ACTIVATE,
      '    if (what.how == OS64_PAGE_ACTIVATE_FORM)\n        novalidate = true;',
      '', PAGE),
+    # document.write (DOM_D9.md): only the script the parse is stopped at
+    # writes, and what it writes reaches the stream's parser and the audit.
+    ('write-while-blocking', SCRIPTS,
+     '    s->writing = true;\n    bool ran', '    bool ran', WINDOW),
+    ('write-only-while-blocking', SCRIPTS,
+     '    if (!s->writing || s->options.write == NULL)', '    if (s->options.write == NULL)', WINDOW),
+    ('write-counted-for-the-audit', SCRIPTS,
+     '    s->written += length;\n', '', WINDOW),
 ]
 
 caught, missed, unbuilt = [], [], []
