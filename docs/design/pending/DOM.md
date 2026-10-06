@@ -607,6 +607,10 @@ keeps `HttpOnly`; nothing reads it for a script yet), storage,
 
 ## Geometry
 
+As-built provider interfaces, browser stack profile and validation evidence:
+[DOM_D10.md](DOM_D10.md). D7 must join the loading-document provider to its
+dispatch path.
+
 `offsetWidth`, `getBoundingClientRect` and their kind need a layout that
 matches the tree. When the version has moved, the read rebuilds what is
 stale and lays the page out, then answers. The page being loaded can be
@@ -2111,8 +2115,8 @@ is one teardown road.
   bytes now ride the same turn as a fetch's (a local source beside the
   mailbox), so there is one order scripts run in.
 - **Sheets are not awaited at a script's stop.** No script can read style
-  until geometry (D10), so the wait would change nothing a page can see;
-  booked for D10.
+  before geometry. The joined provider waits up to the stylesheet deadline
+  before running a blocking script.
 - **A page whose only script is a handler attribute** gets a host at arrival,
   whose runtime is made by the first event that could reach a handler: one
   walk of the document per tree version until then.
@@ -2201,7 +2205,6 @@ microseconds.
 
 | Debt | Why it waits | Trigger |
 |---|---|---|
-| A script waits for the sheets named before it | no script can read style before geometry | D10 |
 | Arrow keys and other VT100 bursts as key events | libui owns the burst decoder; a key event per byte would lie | a page that steers with arrow keys |
 | `history.go(n)` past one step, and a script's refresh chain cap | one step covers back and forward; a chain of script navigations is not counted as a declared refresh's is | a page that walks history, or a page that navigates itself in a loop |
 | A link or form a page still arriving asks to follow or send | it has no model until it arrives | a page that clicks itself before it has loaded |

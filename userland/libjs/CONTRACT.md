@@ -5,7 +5,7 @@ and D7a's host tasks, 2026-10-05.
 `libjs.so` exports the embedding operations `js.h` and `js_engine.h` declare:
 create, context access, class-ID allocation, eval, run, file execution, job
 draining, output/argument setup, cancellation, destruction, and the host-task
-entries (§ Host tasks). Their review/merge state
+entries (§ Host tasks), plus callback budget checking. Their review/merge state
 and Opus's C1 integration are tracked in JAVASCRIPT_TASKS.md. The default image
 installs the runner, library, dependencies and QuickJS licence;
 `js-runtime-test` builds an optional guest consumer.
@@ -354,3 +354,18 @@ bringing host libc into the exported binding header. R2 implements and tests
 the lifecycle, limits, installers, error fallback, job tracking, cancellation,
 header mismatch, custom callbacks, and fatal teardown contracts. J2 records
 the standalone production profile's guest evidence. M1 supplies the maths library.
+
+## Native callback budget checking
+
+`os64_js_check_budget` accepts the runtime, caller ABI and a separate outcome.
+It requires an active turn and observes its existing deadline, cancellation and
+sticky failure state without entering JavaScript, draining jobs or restarting
+the clock. Passing the outer active outcome is refused as BUSY without changing
+it. Hosts can check before and after synchronous native work; elapsed native
+work belongs to that turn, even when JavaScript catches the resulting exception.
+A native operation still needs its own bounded behavior because this check
+cannot interrupt it midway.
+
+Yonder selects a 128 KiB engine stack for synchronous geometry callbacks. The
+standalone default remains 256 KiB. Combined native/engine guest evidence and
+the integration boundary are recorded in [DOM_D10.md](../../docs/design/pending/DOM_D10.md).

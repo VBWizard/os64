@@ -670,3 +670,12 @@ Promise, date/numeric and separate fatal evidence; this packet closes the
 named stack/defaults/scheduling measurement gaps. It does not claim full
 ECMAScript conformance, a complete interrupt-coverage audit, arbitrary native
 stack safety, browser scheduling/layout acceptance or a new P5 run.
+
+## D10 callback budget extension
+
+The additive callback-safe budget check preserves existing ABI layouts and the
+standalone profile. The current target audit reports twelve runtime exports
+and the unchanged 186 engine exports. Runtime suites pass 906 target-core host
+checks and 3098 sanitized-core host checks, with 53 native calls and no live
+allocations. D10's browser/DOM/guest geometry evidence is recorded in
+[DOM_D10.md](../../docs/design/pending/DOM_D10.md).

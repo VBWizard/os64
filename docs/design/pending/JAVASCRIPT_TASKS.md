@@ -553,3 +553,13 @@ post-stop ext2/home filesystem checks pass; both owned final VMs are stopped.
 Exact workloads, tables, hashes and evidence paths are in libjs/VALIDATION.md.
 The suite does not claim a full interrupt-coverage audit, arbitrary native-
 callback safety, browser layout headroom or a new P5 run.
+
+## D10 implementation evidence
+
+Synchronous HTML geometry is implemented independently from D7 and D8 on
+`codex/dom-d10`, based on `userland` `29641e20`. The provider interface,
+forced-layout budget checks, status telemetry and combined JavaScript/native
+stack evidence are recorded in [DOM_D10.md](DOM_D10.md), implementing
+[DOM.md § Geometry](DOM.md#geometry). D7's loading-document provider and joined
+dispatch validation remain integration work. This adds no dependency on D8's
+teardown policy.

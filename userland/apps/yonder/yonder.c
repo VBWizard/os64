@@ -42,6 +42,7 @@
 #include "settings.h"
 #include "scripts.h"
 #include "script_job.h"
+#include "geometry.h"
 #include "ticker.h"
 #include "trip.h"
 
@@ -541,8 +542,13 @@ static int32_t scale_zoom(int32_t v, uint32_t to, uint32_t from)
 
 static bool page_model_refresh(Page *p);
 static void sheets_restage(Page *p);
+static bool script_geometry(void *opaque, const os64_html_node_t *node,
+                            os64_dom_geometry_t *out);
 static bool lay_out_page(Page *p, int32_t width, int32_t height);
 static bool lay_out_page_reclaim(Page *p, int32_t width, int32_t height, Page *reclaim);
+
+// Window-owner count: a provider takes its delta to include layout retries.
+static uint64_t geometry_layout_total;
 
 // Publish a layout beside the old one. `reclaim` owns geometry whose faces
 // an incomplete attempt may release before retrying; it may be this Page
@@ -562,8 +568,9 @@ static bool page_lay_out(Page *p, int32_t width, int32_t height, uint32_t zoom, 
         for (int32_t e = 0; e < p->nsheets; e++)
             if (p->sheets[e].importer < 0)
                 (void)sheet_emit(p, e, in, entry, &n);
-        cascade = n > 0 ? garb_cascade(in, n, page_doc(p), view) : NULL;
-        if (n > 0 && cascade == NULL)
+        // Inline style attributes also need a cascade when no sheet is linked.
+        cascade = garb_cascade(in, n, page_doc(p), view);
+        if (cascade == NULL)
             return false;
     }
     // Context is valid for this layout only and may name a stack Page;
@@ -575,6 +582,7 @@ static bool page_lay_out(Page *p, int32_t width, int32_t height, uint32_t zoom, 
     // in CSS pixels at `zoom`.
     s_env.viewport_height = view.height;
     s_env.zoom = zoom;
+    geometry_layout_total++;
     flow_tree_t *fresh = flow_layout(page_doc(p), page_model(p), width, &s_env);
     // The tree on screen holds the faces its runs were shaped in until it
     // is freed — each one a size of a file, counted against the text
@@ -590,6 +598,7 @@ static bool page_lay_out(Page *p, int32_t width, int32_t height, uint32_t zoom, 
             garb_cascade_free(reclaim->cascade);
             reclaim->cascade = NULL;
         }
+        geometry_layout_total++;
         fresh = flow_layout(page_doc(p), page_model(p), width, &s_env);
     }
     s_env.cascade = NULL;
@@ -784,6 +793,9 @@ static struct {
         // `stopped`: the parse waits for the blocking script.
         yonder_scripts_t *scripts;
         os64_page_state_t *state;
+        // Measurement-only Page borrows the parser document and shared state.
+        Page measurement;
+        uint64_t measure_due;
         uint64_t serial;
         // `ending`: the parser has been told the input ended; `ended`: it
         // said OK to that, and the deferred scripts may run.
@@ -1189,19 +1201,21 @@ static const os64_html_node_t *anchor_of(int32_t *offset)
 
 static void css_pictures(Page *p);
 
-// Lays the page on screen out again at the view's size. `again` lays it
+// Lays the page out and publishes scroll, controls and paint state. Answers
+// whether the resulting layout is complete. `again` lays it
 // out even at the size it has: a picture's size arrived. Without sheets
 // or positioned boxes only the width moves anything; with sheets the
 // height does too, which is what their media queries and vh units read,
 // and with a positioned box, whose initial containing block is the view.
-static void relayout(bool again)
+static bool relayout(bool again)
 {
     int32_t width = g.view.bounds.w, height = g.view.bounds.h;
     bool height_matters = g.page.sheets_ready != 0 || flow_npositioned(g.page.tree) > 0;
-    if (page_doc(&g.page) == NULL || width <= 0 ||
-        (!again && g.page.tree != NULL && width == g.page.laid_width &&
-         g.zoom == g.page.laid_zoom && (!height_matters || height == g.page.laid_height)))
-        return;
+    if (page_doc(&g.page) == NULL || width <= 0 || height <= 0)
+        return false;
+    if (!again && g.page.tree != NULL && width == g.page.laid_width &&
+         g.zoom == g.page.laid_zoom && (!height_matters || height == g.page.laid_height))
+        return !flow_incomplete(g.page.tree);
     int32_t offset = 0;
     const os64_html_node_t *anchor = anchor_of(&offset);
     // How far into the anchor the view starts, and how far across the page
@@ -1223,7 +1237,7 @@ static void relayout(bool again)
     g.settle_due = YONDER_NEVER;       // the deadline goes with the moves it was for
     if (!laid) {
         status_rest("Out of memory laying the page out; this is the last layout that fit.");
-        return;
+        return false;
     }
     g.laid_at = t1;
     g.sx = sx;
@@ -1239,6 +1253,7 @@ static void relayout(bool again)
     pictures_schedule();
     say_laid_out(ms_between(&t0, &t1));
     os64_ui_mark_dirty(&g.ui, &g.view);
+    return !flow_incomplete(g.page.tree);
 }
 
 static void request_navigate(os64_page_request_t *request, NavKind kind, way_ask_t ask);
@@ -1311,8 +1326,16 @@ static void arrive_now(Page *fresh, NavKind kind, const way_position_t *crumb,
     // are all made from the model, so all three follow the tree.
     uint64_t built = fresh->model_version;
     bool laid = page_model_refresh(fresh);
-    if (laid && fresh->model_version != built)
+    if (laid && fresh->model_version != built) {
+        // A waiting page may have been measured by one of its scripts.
+        // Drop that obsolete measurement before restaging its sheet parses.
+        flow_free(fresh->tree);
+        fresh->tree = NULL;
+        garb_cascade_free(fresh->cascade);
+        fresh->cascade = NULL;
         sheets_restage(fresh);
+        fresh->rendered_version = 0;
+    }
     laid = laid && lay_out_page(fresh, width, height);
     os64_ticks(&t1);
     if (!laid) {
@@ -1567,12 +1590,25 @@ static void bar_answered(bool yes)
 // it; then the scripts (lists, registries, engine), then the state, then
 // the document. The mailbox this window held is let go, and outlives it for
 // as long as the job still holds its own.
+static void stream_measure_drop(void)
+{
+    Page *p = &g.stream.measurement;
+    sheets_leave(p);
+    for (int32_t i = 0; i < p->nbox_scrolls; i++)
+        os64_html_release(page_doc(p), p->box_scrolls[i].node);
+    p->nbox_scrolls = 0;
+    p->way.doc = NULL;
+    p->state = NULL;
+    page_clear(p);
+}
+
 static void stream_drop(void)
 {
     if (g.asker == ASK_WORKER)
         bar_forget();
     os64_html_document_t *doc = g.stream.parser != NULL ? os64_html_parser_abandon(g.stream.parser) : NULL;
     yonder_scripts_free(g.stream.scripts);
+    stream_measure_drop();
     os64_page_state_free(g.stream.state);
     os64_html_document_free(doc);
     os64_free(g.stream.local);
@@ -2164,7 +2200,8 @@ static void coming_drop(void)
 static void sheet_arrived(const yonder_sheet_job_t *job, yonder_sheet_t *got)
 {
     Page *p = g.coming.active && g.coming.page.serial == job->page ? &g.coming.page
-            : g.page.serial == job->page ? &g.page : NULL;
+            : g.page.serial == job->page ? &g.page
+            : g.stream.measurement.serial == job->page ? &g.stream.measurement : NULL;
     if (p == NULL || job->index < 0 || job->index >= p->nsheets)
         return;
     Sheet *sh = &p->sheets[job->index];
@@ -2187,7 +2224,7 @@ static void sheet_arrived(const yonder_sheet_job_t *job, yonder_sheet_t *got)
     if (p == &g.coming.page) {
         if (p->sheets_waiting == 0)
             coming_show();
-    } else if (p->sheets_changed) {
+    } else if (p == &g.page && p->sheets_changed) {
         relayout(true);
     }
 }
@@ -2516,6 +2553,8 @@ static void pictures_schedule(void)
     uint64_t next = g.covered ? YONDER_NEVER : g.settle_due;
     if (g.coming.active && g.coming.due < next)
         next = g.coming.due;
+    if (g.stream.active && g.stream.measure_due != 0 && g.stream.measure_due < next)
+        next = g.stream.measure_due;
     // A page's timers, covered or not: a page that counts down keeps
     // counting while another window is in front (DOM_D7.md § The clock).
     const yonder_scripts_t *hosts[] = {g.page.scripts, g.stream.scripts,
@@ -3330,7 +3369,9 @@ static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state
 {
     yonder_scripts_options_t options = {url, g.script_ms, serial, script_alert, script_fetch,
                                         script_cancel, script_activate, script_write, script_now, doc};
-    return yonder_scripts_new(doc, state, &options);
+    yonder_scripts_t *host = yonder_scripts_new(doc, state, &options);
+    yonder_scripts_set_geometry(host, script_geometry, doc);
+    return host;
 }
 
 // The host a fetch job's serial names: the page arriving, the page waiting
@@ -3369,8 +3410,17 @@ static void task_said(const yonder_scripts_t *host, bool was_alive, const char *
                       (unsigned long)yonder_scripts_written(host));
         os64_debug_log(line);
     }
-    if (out->status == OS64_JS_OK)
+    os64_dom_geometry_stats_t geometry = yonder_scripts_geometry_stats((yonder_scripts_t *)host, false);
+    if (out->status == OS64_JS_OK) {
+        if (geometry.layouts != 0) {
+            char report[256];
+            os64_snprintf(report, sizeof(report), "Script forced %lu layouts in %lu.%03lu ms",
+                (unsigned long)geometry.layouts, (unsigned long)(geometry.elapsed_us / 1000),
+                (unsigned long)(geometry.elapsed_us % 1000));
+            status_rest(report);
+        }
         return;
+    }
     char line[512];
     const char *name = out->source_name[0] ? out->source_name : what;
     if (was_alive && !yonder_scripts_alive(host)) {
@@ -3384,6 +3434,12 @@ static void task_said(const yonder_scripts_t *host, bool was_alive, const char *
     } else {
         os64_snprintf(line, sizeof(line), "Script %s: %s", name,
                       out->message[0] ? out->message : "error");
+    }
+    if (geometry.layouts != 0) {
+        size_t used = os64_strlen(line);
+        os64_snprintf(line + used, sizeof(line) - used, "; forced %lu layouts in %lu.%03lu ms",
+            (unsigned long)geometry.layouts, (unsigned long)(geometry.elapsed_us / 1000),
+            (unsigned long)(geometry.elapsed_us % 1000));
     }
     status_rest(line);
     yonder_scripts_set_note((yonder_scripts_t *)host, line);
@@ -3549,6 +3605,89 @@ static bool scripts_task(yonder_scripts_t *host, const os64_html_document_t *doc
 static bool scripts_owed(const yonder_scripts_t *host)
 {
     return yonder_scripts_pending(host) || yonder_scripts_timer_next(host) <= yonder_now_ms();
+}
+
+// Refresh the stopped parser's model and stylesheet catalogue. Its Page
+// borrows the parser document/state and owns only measurement resources.
+static bool stream_measure_prepare(void)
+{
+    if (g.stream.parser == NULL || g.stream.state == NULL) return false;
+    Page *p = &g.stream.measurement;
+    p->way.doc = os64_html_parser_document(g.stream.parser);
+    p->state = g.stream.state;
+    p->scripting = g.stream.scripting;
+    os64_strcopy(p->way.url, sizeof(p->way.url), g.stream.head.url);
+    uint64_t before = p->model_version;
+    if (page_model(p) == NULL) {
+        p->way.model = os64_page_build(p->way.doc, p->way.url, NULL, p->state);
+        if (p->way.model == NULL) return false;
+        p->model_version = os64_html_version(p->way.doc);
+    } else if (!page_model_refresh(p)) return false;
+    if (p->model_version != before) {
+        flow_free(p->tree);
+        p->tree = NULL;
+        garb_cascade_free(p->cascade);
+        p->cascade = NULL;
+        sheets_restage(p);
+        p->rendered_version = 0;
+    }
+    return true;
+}
+
+static bool script_geometry(void *opaque, const os64_html_node_t *node,
+                            os64_dom_geometry_t *out)
+{
+    const os64_html_document_t *doc = opaque != NULL ? opaque : page_doc(&g.page);
+    if (!os64_html_owns_node(doc, node)) return false;
+    int64_t began = os64_micros();
+    uint64_t before = geometry_layout_total;
+    int32_t width = g.view.bounds.w > 0 ? g.view.bounds.w : 1;
+    int32_t height = g.view.bounds.h > 0 ? g.view.bounds.h : 1;
+    Page *p = NULL;
+    bool ready = began >= 0;
+    flow_point_t scroll = {0};
+    if (doc == page_doc(&g.page)) {
+        p = &g.page;
+        ready = ready && script_rebuild();
+        if (ready && (p->tree == NULL || flow_incomplete(p->tree) || p->laid_width != width ||
+                      p->laid_height != height || p->laid_zoom != g.zoom || p->sheets_changed))
+            ready = relayout(true);
+        scroll = (flow_point_t){g.sx, g.sy};
+    } else if (g.coming.active && doc == page_doc(&g.coming.page)) {
+        p = &g.coming.page;
+        uint64_t built = p->model_version;
+        ready = ready && page_model_refresh(p);
+        if (ready && built != p->model_version) {
+            flow_free(p->tree);
+            p->tree = NULL;
+            garb_cascade_free(p->cascade);
+            p->cascade = NULL;
+            sheets_restage(p);
+        }
+        if (ready && (p->tree == NULL || flow_incomplete(p->tree) ||
+                      p->rendered_version != p->model_version || p->laid_width != width ||
+                      p->laid_height != height || p->laid_zoom != g.zoom || p->sheets_changed)) {
+            p->rendered_version = 0;
+            ready = lay_out_page(p, width, height);
+            if (ready) p->rendered_version = p->model_version;
+        }
+    } else if (g.stream.parser != NULL && doc == os64_html_parser_document(g.stream.parser)) {
+        p = &g.stream.measurement;
+        ready = ready && stream_measure_prepare();
+        if (ready && (p->tree == NULL || flow_incomplete(p->tree) ||
+                      p->rendered_version != p->model_version || p->laid_width != width ||
+                      p->laid_height != height || p->laid_zoom != g.zoom || p->sheets_changed)) {
+            p->rendered_version = 0;
+            ready = lay_out_page(p, width, height);
+            if (ready) p->rendered_version = p->model_version;
+        }
+    } else ready = false;
+    if (ready)
+        ready = yonder_geometry_snapshot(doc, p->tree, node, width, height, g.zoom, scroll, out);
+    int64_t ended = os64_micros();
+    out->layouts = geometry_layout_total - before;
+    out->elapsed_us = out->layouts != 0 && began >= 0 && ended >= began ? (uint64_t)(ended - began) : 0;
+    return ready && ended >= began;
 }
 
 // THE SHOWN PAGE'S TURN: at most one task, then the rendering step.
@@ -4043,6 +4182,7 @@ static void stream_finish(os64_fetch_status_t fetch, const char *reason)
     Page fresh;
     os64_memset(&fresh, 0, sizeof(fresh));
     fresh.scripting = g.stream.scripting;
+    stream_measure_drop();
     os64_html_document_t *doc = os64_html_parser_finish(g.stream.parser);
     g.stream.parser = NULL;
     if (doc == NULL) {
@@ -4246,6 +4386,15 @@ static bool stream_turn(void)
         // waits for the next turn.
         if (yonder_scripts_alive(host) && !yonder_scripts_blocking_ready(host))
             return false;
+        if (yonder_scripts_alive(host) && stream_measure_prepare() &&
+            g.stream.measurement.sheets_waiting != 0) {
+            if (g.stream.measure_due == 0) g.stream.measure_due = yonder_now_ms() + SHEETS_WAIT_MS;
+            if (yonder_now_ms() < g.stream.measure_due) {
+                pictures_schedule();
+                return false;
+            }
+        }
+        g.stream.measure_due = 0;
         os64_js_outcome_t out;
         int64_t began = s_script_audit ? os64_micros() : 0;
         if (yonder_scripts_run_blocking(host, &out)) {

@@ -364,6 +364,25 @@ JS_PUBLIC JSContext *os64_js_context(os64_js_runtime_t *runtime, const char *cal
     return runtime->context;
 }
 
+JS_PUBLIC os64_js_status_t os64_js_check_budget(os64_js_runtime_t *runtime,
+                                               const char *caller_abi,
+                                               os64_js_outcome_t *outcome)
+{
+    if (outcome == NULL) return OS64_JS_BAD_ARGUMENT;
+    if (runtime != NULL && runtime->active_outcome == outcome) return OS64_JS_BUSY;
+    os64_memset(outcome, 0, sizeof(*outcome));
+    if (runtime == NULL || caller_abi == NULL)
+        return status(outcome, OS64_JS_BAD_ARGUMENT, "runtime and ABI are required");
+    if (os64_strcmp(caller_abi, OS64_JS_ABI_ID) != 0)
+        return status(outcome, OS64_JS_ABI_MISMATCH, "binding header ABI mismatch");
+    if (!runtime->active || !runtime->turn)
+        return status(outcome, OS64_JS_BAD_ARGUMENT, "an active budgeted callback is required");
+    if (!observe(runtime)) return OS64_JS_OK;
+    outcome->limit = runtime->failed_limit;
+    outcome->host_error = runtime->host_error;
+    return status(outcome, runtime->failure, "native work exceeded the active runtime budget");
+}
+
 JS_PUBLIC JSClassID os64_js_class_id(JSClassID *slot)
 {
     if (slot == NULL) return 0;

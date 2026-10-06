@@ -35,6 +35,9 @@ struct yonder_scripts {
     char url[OS64_DOM_URL_MAX];
     os64_js_runtime_t *runtime;
     os64_dom_t *dom;
+    os64_dom_geometry_provider_t geometry;
+    void *geometry_opaque;
+    os64_dom_geometry_stats_t last_geometry_stats;
     bool dead;                      // a sticky outcome retired the runtime
     bool parse_ended;
     Item *items;
@@ -82,6 +85,7 @@ static void retire(yonder_scripts_t *s)
     for (uint32_t i = 0; i < s->count; i++)
         if (s->items[i].state == STATE_FETCHING || s->items[i].state == STATE_READY)
             release_item(s, &s->items[i]);
+    if (s->dom != NULL) s->last_geometry_stats = os64_dom_geometry_stats(s->dom, false);
     os64_dom_drain(s->dom);
     os64_js_destroy(s->runtime);
     os64_dom_free(s->dom);
@@ -133,8 +137,9 @@ static uint64_t now_ms(void *opaque)
     return s->options.now_ms != NULL ? s->options.now_ms(s->options.opaque) : 0;
 }
 
-// The runtime and its binding, made at the first script that runs. Stack,
-// heap and source keep the profile measured for libdom (DOM.md § D5b); the
+// The runtime and its binding, made at the first script that runs. The
+// 128 KiB engine stack leaves room for synchronous native layout (DOM_D10.md);
+// heap and source keep the libdom profile (DOM.md § D5b). The
 // deadline is the page's task budget, and the job cap a backstop only: a
 // job costs time, which the deadline already bounds.
 static bool ensure_runtime(yonder_scripts_t *s, os64_js_outcome_t *out)
@@ -142,6 +147,7 @@ static bool ensure_runtime(yonder_scripts_t *s, os64_js_outcome_t *out)
     if (s->runtime != NULL)
         return true;
     os64_js_config_t config = {os64_js_default_limits()};
+    config.limits.stack_bytes = 128 * 1024;
     config.limits.execution_ms = s->options.execution_ms;
     config.limits.jobs_per_turn = (uint64_t)1 << 20;
     if (os64_js_create(&config, OS64_JS_ABI_ID, &s->runtime, out) != OS64_JS_OK)
@@ -156,6 +162,7 @@ static bool ensure_runtime(yonder_scripts_t *s, os64_js_outcome_t *out)
     options.write = write;
     options.host_opaque = s;
     s->dom = os64_dom_create(s->runtime, s->doc, s->state, &options, out);
+    os64_dom_set_geometry(s->dom, s->geometry, s->geometry_opaque);
     if (s->dom == NULL || os64_js_install_output(s->runtime, 1, OS64_JS_OUTPUT_CONSOLE_LOG, out) != OS64_JS_OK) {
         // A runtime a binding could not be built in is not evaluated again.
         out->status = OS64_JS_HOST_FAILURE;
@@ -346,6 +353,7 @@ static bool run_item(yonder_scripts_t *s, uint32_t index, os64_js_outcome_t *out
 {
     os64_memset(out, 0, sizeof(*out));
     s->written = 0;
+    (void)yonder_scripts_geometry_stats(s, true);
     Item *it = &s->items[index];
     const os64_html_node_t *root = it->node;
     while (root->parent != NULL)
@@ -517,6 +525,7 @@ os64_js_status_t yonder_scripts_dispatch(yonder_scripts_t *s, const os64_html_no
     if (s == NULL || s->dead)
         return OS64_JS_OK;
     s->written = 0;
+    (void)yonder_scripts_geometry_stats(s, true);
     // A page that never ran a script still runs its handler attributes:
     // their runtime is made by the first event that could reach one.
     if (s->dom == NULL) {
@@ -560,8 +569,10 @@ uint64_t yonder_scripts_timer_next(const yonder_scripts_t *s)
 bool yonder_scripts_timer_fire(yonder_scripts_t *s, uint64_t now, os64_js_outcome_t *out)
 {
     os64_memset(out, 0, sizeof(*out));
-    if (s != NULL)
+    if (s != NULL) {
         s->written = 0;
+        (void)yonder_scripts_geometry_stats(s, true);
+    }
     if (s == NULL || s->dead || !os64_dom_timer_fire(s->dom, now, out))
         return false;
     judged(s, out);
@@ -607,4 +618,21 @@ uint64_t yonder_scripts_written(const yonder_scripts_t *s)
 uint64_t yonder_scripts_serial(const yonder_scripts_t *s)
 {
     return s != NULL ? s->options.serial : 0;
+}
+
+void yonder_scripts_set_geometry(yonder_scripts_t *s, os64_dom_geometry_provider_t provider, void *opaque)
+{
+    if (s == NULL) return;
+    s->geometry = provider;
+    s->geometry_opaque = opaque;
+    os64_dom_set_geometry(s->dom, provider, opaque);
+}
+
+os64_dom_geometry_stats_t yonder_scripts_geometry_stats(yonder_scripts_t *s, bool reset)
+{
+    if (s == NULL) return (os64_dom_geometry_stats_t){0};
+    if (s->dom != NULL) return os64_dom_geometry_stats(s->dom, reset);
+    os64_dom_geometry_stats_t result = s->last_geometry_stats;
+    if (reset) s->last_geometry_stats = (os64_dom_geometry_stats_t){0};
+    return result;
 }
