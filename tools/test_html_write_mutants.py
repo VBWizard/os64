@@ -62,9 +62,11 @@ MUTANTS = [
     ("write-cut-ends-input", "core.c",
      "    if (take < len)\n        end_at_cut(p);",
      "    if (take < len)\n        p->cut = true;\n    (void)end_at_cut;"),
-    ("cut-closes-the-write", "core.c",
-     "    size_t left = p->cut ? 0 : p->opt.max_bytes - d->pub.input_bytes;\n    size_t take = len;",
-     "    size_t left = p->opt.max_bytes - d->pub.input_bytes;\n    size_t take = len;"),
+    # ...and a write after the cut is ignored whole: it neither takes the
+    # bytes a boundary cut left nor moves the end back to its own cursor.
+    ("cut-ignores-a-later-write", "core.c",
+     "    if (!len || p->cut)\n        return settle(p);",
+     "    if (!len)\n        return settle(p);"),
     ("cut-closes-the-feed", "core.c",
      "    const unsigned char *s = bytes;\n    size_t left = p->cut ? 0 : ",
      "    const unsigned char *s = bytes;\n    size_t left = "),

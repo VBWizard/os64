@@ -881,6 +881,7 @@ static bool hold_bytes(os64_html_parser_t *p, const unsigned char *s, size_t n)
  * it takes; a written one falls at the insertion point, in the middle, so
  * what waited behind it (the written text after that point, the sniff
  * window's unreplayed rest, the hold) is past the end and is dropped too.
+ * There is one end: the first cut makes it and nothing later moves it.
  * Whatever comes later, fed or written, is not taken: the limit is spent,
  * including the few bytes a character-boundary cut left unused. Script
  * stops before the cut still stop; they come before the end. */
@@ -994,7 +995,10 @@ int64_t os64_html_parser_write(os64_html_parser_t *p, const char *utf8, size_t l
         return OS64_HTML_BAD_ARGUMENT;
     if (!d_text_ok(utf8, len))
         return OS64_HTML_BAD_TEXT;
-    if (!len)
+    /* Once the input is cut there is no room, and no second end either: a
+     * later write is ignored whole, and what was taken before the cut stands,
+     * script stops and all, wherever this writer's cursor happens to be. */
+    if (!len || p->cut)
         return settle(p);
     p->moved = false;
     /* The first write of a run: its text goes just before the next input
@@ -1006,7 +1010,7 @@ int64_t os64_html_parser_write(os64_html_parser_t *p, const char *utf8, size_t l
     /* Written bytes are input, and `max_bytes` bounds them as it bounds fed
      * ones: what fits is parsed, cut on a character, and the end of the input
      * is met where the cut falls (end_at_cut). */
-    size_t left = p->cut ? 0 : p->opt.max_bytes - d->pub.input_bytes;
+    size_t left = p->opt.max_bytes - d->pub.input_bytes;
     size_t take = len;
     if (take > left) {
         take = left;

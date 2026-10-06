@@ -1575,6 +1575,42 @@ static void write_checks(void)
           "write cut: after it, the kept text and then the end, nothing that waited");
     os64_html_document_free(os64_html_parser_finish(p));
 
+    /* There is one end: a write after the cut, from a script before it,
+     * is ignored and moves nothing back. */
+    p = stopped_at(&on, "<script>s</script>");
+    doc = os64_html_parser_document(p);
+    p->opt.max_bytes = doc->input_bytes + strlen("<script>w</script>xy");
+    write_text(p, "<script>w</script>xyzzy");
+    os64_html_parser_resume(p);
+    write_text(p, "ignored");
+    os64_html_parser_resume(p);
+    check(doc->body && doc->body->last_child && doc->body->last_child->kind == OS64_HTML_TEXT &&
+        strcmp(doc->body->last_child->text,"xy") == 0,
+        "write cut: a later write cannot move the end back over the kept text");
+    os64_html_document_free(os64_html_parser_finish(p));
+
+    p = stopped_at(&on, "<p>a<script>s</script><b>held</b>");
+    doc = os64_html_parser_document(p);
+    p->opt.max_bytes = doc->input_bytes;
+    feed_text(p, "past end");
+    write_text(p, "ignored");
+    os64_html_parser_resume(p);
+    check(find_named(doc->document,"b") != NULL,
+        "write cut: a write after a fed cut keeps the hold taken before it");
+    os64_html_document_free(os64_html_parser_finish(p));
+
+    /* The end is where the first refused byte was offered. A feed that
+     * filled the limit exactly refused nothing, so a write after it is the
+     * first refusal, and the hold behind its insertion point is past the end
+     * (where a feed that ran over keeps its hold, above). */
+    p = stopped_at(&on, "<p>a<script>s</script><b>held</b>");
+    doc = os64_html_parser_document(p);
+    p->opt.max_bytes = doc->input_bytes;
+    write_text(p, "x");
+    check(os64_html_parser_resume(p) == OS64_HTML_TOO_LARGE && !find_named(doc->document, "b"),
+          "write cut: with the limit exactly full, the first write refused is the end");
+    os64_html_document_free(os64_html_parser_finish(p));
+
     /* A nested writer's cut ends its writer's own text too: what the outer
      * script wrote after the inner one is behind the cut. */
     p = stopped_at(&on, "<script>s</script>");
