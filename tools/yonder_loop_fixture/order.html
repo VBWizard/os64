@@ -1,0 +1,35 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Script order</title>
+<!-- D7's order fixture (DOM_D7.md § The proof): each script and event
+     notes its name; the heading shows the order they ran in. -->
+<script>
+var order = [];
+function note(n) {
+  order.push(n);
+  var o = document.getElementById('out');
+  if (o) o.textContent = order.join(' | ');
+}
+note('head inline');
+document.addEventListener('DOMContentLoaded', function () { note('DOMContentLoaded'); });
+window.addEventListener('load', function () { note('load listener'); });
+setTimeout(function () { note('timer'); }, 500);
+</script>
+<script src="blocking.js"></script>
+<script defer src="deferred.js"></script>
+<script async src="async.js"></script>
+<script type="module">note('module - must not run');</script>
+<body onload="note('body onload')">
+<h1>Script order</h1>
+<p id="out">scripts have not run</p>
+<p>Expected (async may land anywhere after blocking):<br>
+head inline | blocking | body inline | connected | body inline 2 | deferred |
+DOMContentLoaded | load listener | body onload | timer</p>
+<script>
+note('body inline');
+var s = document.createElement('script');
+s.textContent = "note('connected')";
+document.body.appendChild(s);
+</script>
+<script>note('body inline 2');</script>
+</body>

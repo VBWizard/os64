@@ -283,9 +283,13 @@ static int slot_refresh(os64_dom_t *dom, JSContext *ctx, DValue *entry, DListene
     return 0;
 }
 
-/* A slot for an attribute nobody has looked at yet goes to the head of the
- * list: the parser and innerHTML give an element its attributes before any
- * script can reach it, and a script's own setAttribute makes its slot then. */
+/* A slot for an attribute nobody has looked at yet goes to the head of an
+ * ELEMENT's list: the parser and innerHTML give an element its attributes
+ * before any script can reach it, and a script's own setAttribute makes its
+ * slot then. Window's slots come from the body, which window predates: one
+ * found late goes to the tail, and window takes in the body's attributes
+ * before every listener added to it (target_method), so each lands where
+ * the body was parsed among them. */
 static DListener *slot_for(os64_dom_t *dom, JSContext *ctx, DValue *entry, int kind, bool at_head)
 {
     DListener *slot = slot_find(entry, kinds[kind]);
@@ -300,7 +304,7 @@ static int slot_attribute_pending(os64_dom_t *dom, JSContext *ctx, DValue *entry
     const os64_html_node_t *source = attribute_source(dom, entry, kind);
     if (source == NULL || slot_find(entry, kinds[kind]) != NULL ||
         handler_attribute(source, kind) == NULL) return 0;
-    return slot_for(dom, ctx, entry, kind, true) != NULL ? 0 : -1;
+    return slot_for(dom, ctx, entry, kind, entry != dom->window) != NULL ? 0 : -1;
 }
 
 /* Whether an attribute name is on<type> for a handler type, ignoring ASCII
@@ -864,6 +868,11 @@ static JSValue target_method(JSContext *ctx, JSValueConst self, int argc, JSValu
     if (magic == M_REMOVE) {
         if (found != NULL) remove_listener(dom, entry, found);
     } else if (found == NULL) {
+        for (int kind = 0; entry == dom->window && kind < D_EVENT_COUNT; kind++)
+            if (window_reflecting(kind) && slot_attribute_pending(dom, ctx, entry, kind) < 0) {
+                d_string_free(dom, &type);
+                return JS_EXCEPTION;
+            }
         DListener *listener = listener_new(dom, ctx, entry, type.data, false);
         if (listener == NULL) result = JS_EXCEPTION;
         else {

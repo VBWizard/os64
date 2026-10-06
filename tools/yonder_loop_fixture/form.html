@@ -1,0 +1,8 @@
+<!doctype html>
+<title>Form validator</title>
+<h1>Sign the guestbook</h1>
+<form action="/signed" onsubmit="if (document.getElementById('name').value === '') { document.getElementById('said').textContent = 'Please type your name first.'; return false; } return true;">
+  Name: <input name="name" id="name">
+  <input type="submit" value="Sign">
+</form>
+<p id="said">An empty name is refused by the page; a filled one reaches the server's log as /signed?name=...</p>

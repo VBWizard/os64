@@ -2,7 +2,7 @@
 
 *Written 2026-10-01 by Fable. This is packet D0 of
 [JAVASCRIPT_TASKS.md](JAVASCRIPT_TASKS.md): the design J3 waits on. D1, D2a, D2b, D3, D5a, D5b and D6 are merged (§ Slices). D4 is built and in review;
-D7 is designed in [DOM_D7.md](DOM_D7.md), and its first half, D7a, is built. Read
+D7 is designed in [DOM_D7.md](DOM_D7.md) and built in two halves, D7a and D7b. Read
 against the tree at `b55c3770`, the vendored QuickJS 2026-06-04 source
 (`userland/libjs/upstream/`) and the R0 runtime contract
 (`userland/libjs/CONTRACT.md`). Names of functions that do not exist yet
@@ -715,7 +715,7 @@ builder decides, and the proof in this house's shape.
 | D4 | **Built; in review.** The stream: yonder parses on its own thread. No script | libway's harnesses unchanged in result and grown; the ring's two-thread harness; the window's slices in the harness that hosts yonder.c; the Y3 walk again; the window live through a stalled body: § D4, as built |
 | D5 | **D5a merged (#214, `72b2e710`); D5b merged (#216, `7acce890`).** The binding library and J3's fixture | § D5a, as built records library host/guest proof. § D5b, as built records J3 fixture proof: a script changes text and the page redraws; a held reference and a typed-in field survive an unrelated change; a navigation with a script queued tears down clean; the leak count is zero |
 | D6 | **Implemented; awaiting Fable re-review in PR #217 against userland.** Reclaiming unheld detached subtrees | 216,000 packed-fragment refresh cycles stay flat under 64 MiB; § D6, as built |
-| D7 | The loop: tasks, checkpoints, timers, events and their attributes, script order. Designed in [DOM_D7.md](DOM_D7.md); **D7a (the registry and the turn) built** | D7a: § D7a, as built. D7b: J4's evidence, per contract |
+| D7 | The loop: tasks, checkpoints, timers, events and their attributes, script order. Designed in [DOM_D7.md](DOM_D7.md); **D7a (the registry and the turn) and D7b (the loop, with D7c's input events) built** | § D7a, as built; § D7b, as built |
 | later | `document.write`; geometry; the libjs reclaim slice | each with its own |
 
 ### D1, as built
@@ -2060,6 +2060,150 @@ to the binding's classes.
 | A handler body parsed as a FunctionBody | QuickJS has no entry that parses one; the Function constructor joins strings | a page whose malformed handler attribute runs where a browser refuses it |
 | A cancelled radio `click()` restores its group | libpage's set-checked unchecks the group; the restore resets only the clicked radio | a page that cancels a radio's click and reads its group |
 | `focus`/`blur` dispatched by libdom for `focus()`/`blur()` | they reach the host's widgets first, which D7b owns | D7b's focus sites |
+
+### D7b, as built
+
+DOM_D7.md § The loop, in yonder, built by Opus on `opus/dom-d7b`, stacked on
+D7a. The input events and libui's change callback, which the brief allowed to
+split off as D7c, are in this slice: they share the queue and the turn the
+rest of the loop runs on. A reviewer who wants them apart can have them apart.
+
+**The page's script host** (`scripts.c`, rewritten; `scripts.h` is the
+contract). It owns a page's runtime and binding, made at the first script
+that runs, and HTML's lists as held nodes: the script the parse is stopped
+at, the `defer` scripts in document order, and a ready ring (an `async`
+script whose source landed, a script a verb connected) run in the order they
+became ready. A `src` script is a pool job (`script_job.c`,
+`YONDER_JOB_SCRIPT`, the page's serial and the script's token), decoded to
+UTF-8 on the worker by a pure rule the host's tests hold. One task per call.
+A sticky outcome retires the runtime and drops the lists; the host is then
+dead and answers nothing. A script that cannot run is not dropped in silence:
+an inline source past the limit, an address that cannot be fetched or a fetch
+that fails is reported in its place, by name. An inline script's source is
+copied when it is prepared, as HTML takes it.
+
+**The stream's turn** (`stream_turn`): a ready script or a due timer of the
+arriving page first, then the script the parse is stopped at once its source
+is in hand, then one slice of parsing; one task a turn. A wait for a fetch
+rings no bell; the pool's reap does. `end` replaces the blind `finish`, the
+deferred scripts run one a turn after it, then `finish`, the model (adopting
+the scripts' control state, so a value a script set mid-parse is the one the
+widget shows), `DOMContentLoaded`, and arrival. `load` is dispatched at
+window when the page is shown. A navigation a task asks for is performed
+after the task; asked at `DOMContentLoaded`, it replaces the page before it
+is ever shown. `stream_drop` abandons the parser for every stream, so there
+is one teardown road.
+
+**Departures from the brief, each for a reason:**
+
+- **Ready scripts and timers run while the parse waits for a `src`.** The
+  brief kept the arriving page's timers off while it was stopped; HTML's loop
+  runs other tasks while a parser-blocking script is fetched, and a script a
+  verb connected runs before the parser's next script that way, which is the
+  order a browser that runs it inside `appendChild` shows.
+- **The page on screen keeps running while the next one loads.** D5b dropped
+  its scripts at `stop_trip`; DOM.md says the old page stays live, so its
+  scripts and timers stop when it is replaced or when the scripts mode
+  changes, and not before.
+- **A file from disk takes the stream.** `open_local` parsed whole; a file's
+  bytes now ride the same turn as a fetch's (a local source beside the
+  mailbox), so there is one order scripts run in.
+- **Sheets are not awaited at a script's stop.** No script can read style
+  until geometry (D10), so the wait would change nothing a page can see;
+  booked for D10.
+- **A page whose only script is a handler attribute** gets a host at arrival,
+  whose runtime is made by the first event that could reach a handler: one
+  walk of the document per tree version until then.
+- **What a page's scripts said survives its arrival**: the arrival writes the
+  status line, and the last script sentence is said again after it.
+- **libpage gains `OS64_PAGE_ACTIVATE_FORM`** for `form.submit()`: the form
+  itself, no submitter, no validation, which the activation door had no way
+  to express.
+- The host's stop answer is one `BLOCK`: yonder never told an inline stop
+  from a fetching one (the mutants found the distinction dead).
+
+**Input events** (`yonder.c` § Input events). An event that starts in a
+widget's own callback is QUEUED with its node held and dispatched once
+libui's dispatch has returned (`inputs_run`): a listener may take away the
+very control whose callback is running, and the rebuild after it would free
+the widget under libui. Each is one task, with its rendering step and asks
+after it; its default action then runs by the door it always has, the
+control found again by node. Clicks on the view (mousedown, mouseup, click,
+the link or picture button after), pointer moves (mouseover and mouseout by
+element with `relatedTarget`, mousemove only when listened to and coalesced),
+buttons (click, then submit or reset at the form), Enter in a field (change,
+then submit), boxes (the click, put back when cancelled, else input and
+change), lists (input, change), every edit of a field (`input`, through
+libui's new `on_change`), focus moves (`focus`, `blur`, and `change` when
+the value differs from the one it had at focus), and keys (`keydown`, and
+`keypress` for a character, at the focused control or the body, before libui
+sees them, so a cancelled key is not typed). Without page scripts nothing is
+queued and every site acts where it always did.
+
+**The policy** (`settings.c`): Settings' **Script time limit** slider, 1 to
+60 seconds, 5 by default; Apply reaches every page's next task, Save writes
+`script_seconds` to `yonder.conf`. The overrun sentence names the limit the
+runtime actually had. `--script-audit` logs every task, its name and its
+microseconds.
+
+**Proof.**
+
+- `tools/test_yonder_scripts_host.sh`: **2,179 / 0** (2,099 at D7a). The
+  D5b finished-document cases now queue their scripts as connected scripts;
+  the new cases run through the real stream with the test playing the worker
+  for the page and every `src` fetch: the order fixture (head inline, a
+  blocking `src`, `defer` landing early, `async` landing mid-parse, a module
+  that never runs, a connected script, `DOMContentLoaded`, a `load` listener,
+  `<body onload>`, then a head script's timer on the shown page), a failed
+  fetch said and skipped, an overrun mid-parse whose sentence survives
+  arrival, script navigations (resolved, and at `DOMContentLoaded`), an https
+  page asking for http raising the bar, teardown mid-stream three ways
+  (Stop, the scripts switch, the window's close) with a listener, a timer and
+  a kept event under LSan, the Settings limit reaching the next task, a page
+  from disk, a value set mid-parse reaching the widget, a person's typing read by a
+  timer on the arrived page, a handler-only page;
+  and the input sites: links clicked and cancelled with their mouse fields,
+  hover with relatedTarget and no task on a page that listens to nothing, a
+  real libui edit raising `input`, a cancelled `keydown`, `change` on Enter
+  and at blur, submit and reset cancelled, a box put back, a form sent after
+  its listeners.
+- `tools/test_yonder_loop_mutants.py`: **31 / 31** caught. The first run
+  caught 22 of the 26 that compiled; two of the four it missed were
+  equivalent (rewritten to break what they meant to), and two were real gaps
+  in the cases (a `defer` script run before the parse ended, and `change`
+  at blur), which the cases above now close.
+- `tools/test_libpage_host.sh`: **254,075 / 0** with four `form.submit()`
+  cases and the 397-allocation sweep; `tools/test_ui_text_host.py --real`:
+  **1,626 / 0** with the `on_change` case; `tools/test_dom_host.sh` with
+  window's slot order: **2,049 / 0** and **9,537 / 0**.
+- **The guest**, on a scratch copy of the image with `scripts = on`:
+  `tools/yonder_loop_fixture/` served over slirp. The order page drew the
+  standard's order; the clock ticked behind gterm; `<body onload>` ran; the
+  runaway page stopped at 5 seconds with the sentence and its link
+  working, and again at 2 seconds after the Settings slider moved and
+  Apply said "scripts on (2 s)"; `document.write` failed by name; the DHTML
+  menu opened and closed; the validator refused an empty field and sent a
+  filled one (`GET /signed?name=chris` in the server's log). D4's walk
+  against `httptestd.py`: `/stall-body` kept the window live, Stop ended
+  it at once, and left alone it arrived with "the server went silent for
+  30 seconds after 12053 bytes"; a 404 drawn as a page, a redirect
+  followed and skipped by Back. D5b's fixture shows **Two JavaScript
+  donuts!** and **Reference kept; field = Q**, with one change to the
+  fixture: its countdown was twenty parser-blocking busy-waits, which D5b
+  ran after arrival and D7 runs, correctly, while the page is read and
+  before it is drawn (progressive display stays booked), so no one could
+  type during it. The countdown is now `setTimeout`, each tick its own task
+  on the shown page.
+
+**Booked from D7b** (beside DOM_D7.md's own):
+
+| Debt | Why it waits | Trigger |
+|---|---|---|
+| A script waits for the sheets named before it | no script can read style before geometry | D10 |
+| Arrow keys and other VT100 bursts as key events | libui owns the burst decoder; a key event per byte would lie | a page that steers with arrow keys |
+| `history.go(n)` past one step, and a script's refresh chain cap | one step covers back and forward; a chain of script navigations is not counted as a declared refresh's is | a page that walks history, or a page that navigates itself in a loop |
+| A link or form a page still arriving asks to follow or send | it has no model until it arrives | a page that clicks itself before it has loaded |
+| Inline script source captured once, at prepare | HTML's rule; a script whose text is changed after it is connected runs what it had then | none expected |
 
 ## Booked, with their triggers
 

@@ -217,6 +217,47 @@ static void dom_event_handler_cases(void)
     fixture_free(&f);
 }
 
+/* Window predates the body: a load listener a head script added runs before
+ * the body's onload, and one added after the body was parsed runs after it. */
+static void dom_event_window_order_cases(void)
+{
+    os64_html_options_t html_options = os64_html_options_default();
+    html_options.charset = "utf-8";
+    html_options.scripting = true;
+    os64_html_parser_t *parser = os64_html_parser_new(&html_options);
+    /* The parser reads its first 1024 bytes for an encoding before it parses
+     * any, so a comment carries the head's script past that window. */
+    char head[1400];
+    snprintf(head, sizeof(head), "<!doctype html><!-- %01200d --><html><head><script>1</script>", 0);
+    const char body[] = "</head><body onload=\"log.push('attribute')\"><script>2</script><p>x</p></body></html>";
+    check(parser && os64_html_parser_feed(parser, head, strlen(head)) == OS64_HTML_SCRIPT, "parse stops in head");
+    DomFixture f = {0};
+    f.document = os64_html_parser_document(parser);
+    f.state = os64_page_state_create(f.document, 0);
+    os64_js_config_t config = fixture_config();
+    f.runtime = create_fixture(&config);
+    os64_js_outcome_t outcome;
+    f.binding = os64_dom_create(f.runtime, f.document, f.state, NULL, &outcome);
+    if (!fixture_ready(&f)) { os64_html_parser_destroy(parser); return; }
+    dom_script(&f, "globalThis.log=[];window.addEventListener('load',()=>log.push('head listener'))", "window-head.js");
+    int64_t r = os64_html_parser_resume(parser);
+    if (r == OS64_HTML_OK) r = os64_html_parser_feed(parser, body, strlen(body));
+    check(r == OS64_HTML_SCRIPT, "parse stops in body");
+    dom_script(&f, "window.addEventListener('load',()=>log.push('body listener'))", "window-body.js");
+    while (os64_html_parser_resume(parser) == OS64_HTML_SCRIPT) {}
+    bool prevented;
+    os64_dom_event_t load = plain_event("load", false, false);
+    check(os64_dom_dispatch(f.binding, NULL, &load, &prevented, &outcome) == OS64_JS_OK, "load at window");
+    dom_script(&f, DOM_ASSERT "assert(log.join()==='head listener,attribute,body listener',log.join())",
+               "window-order.js");
+    os64_dom_drain(f.binding);
+    os64_js_destroy(f.runtime);
+    os64_dom_free(f.binding);
+    os64_page_state_free(f.state);
+    os64_html_document_free(os64_html_parser_finish(parser));
+    check(live == 0 && dom_live == 0, "window order fixture releases everything");
+}
+
 static void dom_event_listens_cases(void)
 {
     DomFixture f = event_fixture("<!doctype html><body><p id=p>quiet</p></body>", "http://example.test/");
@@ -436,6 +477,7 @@ static void dom_event_cases(void)
 {
     dom_event_dispatch_cases();
     dom_event_handler_cases();
+    dom_event_window_order_cases();
     dom_event_listens_cases();
     dom_timer_cases();
     dom_navigation_cases();

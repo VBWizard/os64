@@ -602,14 +602,22 @@ static bool field_event(os64_ui_widget_t *w, os64_ui_t *ui,
 		if (!tf->seq && (ev->key.modifiers & OS64_GUI_MOD_CTRL) &&
 			!(ev->key.modifiers & OS64_GUI_MOD_ALT)) {
 			unsigned key = (unsigned char)ev->key.ascii;
+			bool cut = false;
 			if (key == 1) { tf->anchor = 0; tf->cursor = tf->len; tf->selected = tf->len != 0; }
 			else if (key == 3) { (void)os64_ui_textfield_copy(tf); return true; }
-			else if (key == 22) { (void)os64_ui_textfield_paste(ui, tf); return true; }
-			else if (key == 24) { if (os64_ui_textfield_copy(tf) > 0) field_delete_selection(tf); }
+			else if (key == 22) {
+				if (os64_ui_textfield_paste(ui, tf) > 0 && tf->on_change)
+					tf->on_change(tf, tf->edit_user);
+				return true;
+			}
+			else if (key == 24) { if (os64_ui_textfield_copy(tf) > 0) cut = field_delete_selection(tf); }
 			else if (ev->key.ascii != 0x1b) return true;
 			if (key == 1 || key == 24) {
 				tf->cursor = os64_ui_text_snap(tf->buf, tf->len, tf->cursor, true);
-				field_keep_caret_visible(tf, ui); os64_ui_mark_dirty(ui, w); return true;
+				field_keep_caret_visible(tf, ui); os64_ui_mark_dirty(ui, w);
+				if (cut && tf->on_change)
+					tf->on_change(tf, tf->edit_user);
+				return true;
 			}
 		}
 		char c = 0;
@@ -618,18 +626,20 @@ static bool field_event(os64_ui_widget_t *w, os64_ui_t *ui,
 		size_t lo = 0, hi = 0;
 		bool selection = field_range(tf, &lo, &hi);
 		if (motion && shift && !tf->selected) tf->anchor = tf->cursor;
+		bool changed = false;
 		switch (key) {
 		case K_CHAR:
-			field_delete_selection(tf);
+			changed = field_delete_selection(tf);
 			if (tf->len + 1 < tf->cap) {
 				os64_memmove(tf->buf + tf->cursor + 1, tf->buf + tf->cursor,
 				             tf->len - tf->cursor + 1);   // +1 rides the NUL
 				tf->buf[tf->cursor++] = c;
 				tf->len++;
+				changed = true;
 			}
 			break;
 		case K_BACKSPACE:
-			if (field_delete_selection(tf)) break;
+			if ((changed = field_delete_selection(tf))) break;
 			// A whole cluster: the span from the previous boundary to here,
 			// found from the bytes, so no layout can refuse it.
 			if (tf->cursor > 0) {
@@ -639,16 +649,18 @@ static bool field_event(os64_ui_widget_t *w, os64_ui_t *ui,
 				             tf->len - tf->cursor + 1);   // +1 rides the NUL
 				tf->cursor = from;
 				tf->len -= gone;
+				changed = true;
 			}
 			break;
 		case K_DELETE:
-			if (field_delete_selection(tf)) break;
+			if ((changed = field_delete_selection(tf))) break;
 			if (tf->cursor < tf->len) {
 				size_t to = os64_ui_text_step(tf->buf, tf->len, tf->cursor, true);
 				size_t gone = to - tf->cursor;
 				os64_memmove(tf->buf + tf->cursor, tf->buf + to,
 				             tf->len - to + 1);
 				tf->len -= gone;
+				changed = true;
 			}
 			break;
 		case K_LEFT:
@@ -680,6 +692,8 @@ static bool field_event(os64_ui_widget_t *w, os64_ui_t *ui,
 		tf->cursor = os64_ui_text_snap(tf->buf, tf->len, tf->cursor, true);
 		field_keep_caret_visible(tf, ui);
 		os64_ui_mark_dirty(ui, w);
+		if (changed && tf->on_change)
+			tf->on_change(tf, tf->edit_user);
 		return true;
 	}
 	case OS64_GUI_EVENT_KEY_UP:

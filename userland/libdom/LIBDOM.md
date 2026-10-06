@@ -222,7 +222,11 @@ window have an on<type> property, and an on<type> content attribute is a
 handler. A target's handler is one slot in its listener list, in the place
 it was first set; a slot for an attribute the parser or innerHTML wrote goes
 first (an element has its attributes before any script can reach it), and a
-script's `setAttribute` makes its slot then. The slot remembers the attribute
+script's `setAttribute` makes its slot then. Window's slots come from the
+body, which window predates: window takes in the body's attributes before
+each listener added to it, and one found only at dispatch goes last, so
+`<body onload>` runs after a `load` listener a head script added and before
+one added once the body was parsed. The slot remembers the attribute
 text it last saw, so a set, changed or removed attribute is noticed by
 whichever route it changed. It compiles at the first dispatch or read that
 needs it: `function on<type>(event){BODY}` inside `with(document)
