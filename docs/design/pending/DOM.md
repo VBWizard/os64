@@ -551,8 +551,9 @@ or is checked against it.
 
 ## The event loop
 
-yonder's loop today: wait for an event, dispatch the batch, lay out if
-owed, paint. The standard's loop maps onto it without a second loop.
+yonder's loop today: wait for an event, dispatch a bounded input batch, lay
+out if owed, paint. P5-tested idle-motion coalescing lets rendering proceed
+while input remains queued (DOM_D11.md § P5 testing). The standard's loop maps onto it without a second loop.
 
 - **A task** is one of: a slice of parsing, a script run to completion, a
   timer's callback, the dispatch of one input event, a result arriving

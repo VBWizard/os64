@@ -43,6 +43,7 @@
 #include "scripts.h"
 #include "script_job.h"
 #include "geometry.h"
+#include "events.h"
 #include "ticker.h"
 #include "trip.h"
 
@@ -3199,6 +3200,9 @@ static bool script_rebuild(void)
     Page *p = &g.page;
     uint64_t version = os64_html_version(page_doc(p));
     if (version != p->model_version) {
+        // P5 testing: task timing excludes this host rebuild. Audit its cost
+        // separately to distinguish a slow update from queued mouse samples.
+        int64_t began = s_script_audit ? os64_micros() : 0;
         // The displayed layout retains the old model, including its
         // control state, past the refresh's free of it.
         if (!page_model_refresh(p)) {
@@ -3207,8 +3211,15 @@ static bool script_rebuild(void)
         }
         g.hover_link = g.pressed_link = -1;
         pictures_start(p);
+        if (s_script_audit) {
+            char line[128];
+            os64_snprintf(line,sizeof(line),"yonder: model refresh in %ld us",
+                (long)(os64_micros()-began));
+            os64_debug_log(line);
+        }
     }
     if (version != p->rendered_version) {
+        int64_t began = s_script_audit ? os64_micros() : 0;
         bool zoom_changed = p->laid_zoom != 0 && p->laid_zoom != g.zoom;
         int32_t offset = 0, sx = g.sx;
         const os64_html_node_t *anchor = zoom_changed ? anchor_of(&offset) : NULL;
@@ -3281,6 +3292,12 @@ static bool script_rebuild(void)
         forms_place();
         pictures_schedule();
         os64_ui_mark_dirty(&g.ui, &g.view);
+        if (s_script_audit) {
+            char line[128];
+            os64_snprintf(line,sizeof(line),"yonder: rendering rebuild in %ld us",
+                (long)(os64_micros()-began));
+            os64_debug_log(line);
+        }
     }
     os64_page_state_t *state = os64_page_shared_state(page_model(p));
     uint64_t revision = os64_page_state_version(state);
@@ -5651,6 +5668,12 @@ static void fit_title(const char *page, char out[OS64_GUI_TITLE_MAX])
     out[at] = '\0';
 }
 
+static int64_t event_poll(void *opaque, os64_gui_event_t *event)
+{
+    (void)opaque;
+    return os64_gui_event_poll(g.win,event);
+}
+
 int main(int argc, char **argv)
 {
     const char *why = faces_open();
@@ -5758,9 +5781,12 @@ int main(int argc, char **argv)
     os64_ui_set_focus(&g.ui, first != NULL ? &g.view : &g.field.w);
     sync_bars();
 
-    // libui's loop, with two things read first: the pointer, because a
-    // widget is handed moves only while a button is held and the status
-    // line wants every one; and the question bar, which answers only by its
+    // P5 testing: Million Dollar Homepage's popup stalled while motion kept
+    // the queue busy. Bound input and coalesce idle moves before their scripts
+    // run, so each batch reaches painting without waiting for an empty queue.
+    // The pointer is read before libui because a widget is handed moves only
+    // while a button is held and the status
+    // line follows its current position; the question bar answers by its
     // own rules. After painting, a bar not yet armed is armed only if the
     // queue is EMPTY: anything waiting may have been done before the bar
     // could be seen, so it is dispatched to a disarmed bar first.
@@ -5772,7 +5798,8 @@ int main(int argc, char **argv)
         if (!held && os64_gui_event_wait(g.win, &ev) != 1)
             break;
         held = false;
-        do {
+        YonderEventBatch batch = {.held=true,.pending=ev};
+        while (g.running && !g.ui.quit && yonder_event_batch_next(&batch,&ev,event_poll,NULL)) {
             if (ev.type == OS64_GUI_EVENT_MOUSE_MOVE)
                 hover(ev.mouse.x, ev.mouse.y);
             else if (ev.type == OS64_GUI_EVENT_POINTER_STATE)
@@ -5788,7 +5815,11 @@ int main(int argc, char **argv)
                 os64_ui_dispatch(&g.ui, &ev);
             // What the event became, as DOM events, now libui is done with it.
             inputs_run();
-        } while (g.running && os64_gui_event_poll(g.win, &ev) == 1);
+        }
+        if (batch.held) {
+            ev = batch.pending;
+            held = true;
+        }
         if (g.relayout_due) {
             g.relayout_due = false;
             relayout(false);
@@ -5807,7 +5838,9 @@ int main(int argc, char **argv)
         // A task may have set or cleared a timer: the ticker hears of it.
         pictures_schedule();
         if (g.bar.up && !g.bar.armed) {
-            if (os64_gui_event_poll(g.win, &ev) == 1) {
+            // P5 batching may hold a lookahead event. Preserve it and leave
+            // the bar disarmed until that older input has been dispatched.
+            if (held || os64_gui_event_poll(g.win, &ev) == 1) {
                 held = true;
             } else {
                 yonder_bar_settled(&g.bar);
