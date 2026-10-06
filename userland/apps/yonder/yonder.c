@@ -540,6 +540,7 @@ static int32_t scale_zoom(int32_t v, uint32_t to, uint32_t from)
 }
 
 static bool page_model_refresh(Page *p);
+static void sheets_restage(Page *p);
 static bool lay_out_page(Page *p, int32_t width, int32_t height);
 static bool lay_out_page_reclaim(Page *p, int32_t width, int32_t height, Page *reclaim);
 
@@ -1305,10 +1306,14 @@ static void arrive_now(Page *fresh, NavKind kind, const way_position_t *crumb,
     int32_t height = g.view.bounds.h > 0 ? g.view.bounds.h : 1;
     os64_ticks_t t0, t1;
     os64_ticks(&t0);
-    // DOMContentLoaded's listeners, and an async script or a timer while
-    // the page waited for its sheets, may have changed the tree since its
-    // model was built: the layout and the controls are made from both.
-    bool laid = page_model_refresh(fresh) && lay_out_page(fresh, width, height);
+    // An async script or a timer may have changed the tree while the page
+    // waited for its sheets: the layout, the controls and the sheet table
+    // are all made from the model, so all three follow the tree.
+    uint64_t built = fresh->model_version;
+    bool laid = page_model_refresh(fresh);
+    if (laid && fresh->model_version != built)
+        sheets_restage(fresh);
+    laid = laid && lay_out_page(fresh, width, height);
     os64_ticks(&t1);
     if (!laid) {
         sheets_leave(fresh);
@@ -1396,6 +1401,13 @@ static void arrive(Page *fresh, NavKind kind, const way_position_t *crumb, const
     // scripts' fetches already carry it.
     if (fresh->serial == 0)
         fresh->serial = ++g.pages_made;
+    // DOMContentLoaded's listeners may have changed the tree since the
+    // model was built; the sheet table is read from the model.
+    if (!page_model_refresh(fresh)) {
+        page_clear(fresh);
+        status_rest("Out of memory reading that page; this is still the page you were on.");
+        return;
+    }
     sheets_start(fresh);
     if (fresh->sheets_waiting == 0) {
         arrive_now(fresh, kind, crumb, fragment);
@@ -3099,6 +3111,38 @@ static bool page_model_refresh(Page *p)
     p->model_version = version;
     os64_page_free(old);
     return true;
+}
+
+// A page not yet laid out whose model was just refreshed takes its sheet
+// table from that model, as script_rebuild's staged page does: parses
+// already in are borrowed, waits on the old table are cancelled, and a new
+// serial keeps an old table's job out of the new one. Sheets the scripts
+// linked are fetched and join when they arrive; the first paint does not
+// wait for them.
+static void sheets_restage(Page *p)
+{
+    Page next = *p;
+    next.reuse_sheets = p;
+    next.sheets = NULL;
+    next.nsheets = next.sheets_waiting = next.sheets_ready = 0;
+    next.sheets_changed = true;
+    next.serial = ++g.pages_made;
+    sheets_start(&next);
+    sheets_leave(p);
+    // A borrowed parse moves to its borrower before the old table goes.
+    for (int32_t i = 0; i < next.nsheets; i++)
+        if (next.sheets[i].borrowed_from != NULL) {
+            os64_memset(&next.sheets[i].borrowed_from->parsed, 0, sizeof(garb_parsed_t));
+            next.sheets[i].borrowed_from = NULL;
+        }
+    sheets_free(p);
+    p->sheets = next.sheets;
+    p->nsheets = next.nsheets;
+    p->sheets_waiting = next.sheets_waiting;
+    p->sheets_ready = next.sheets_ready;
+    p->sheets_changed = next.sheets_changed;
+    p->serial = next.serial;
+    p->reuse_sheets = NULL;
 }
 
 static bool script_rebuild(void)
