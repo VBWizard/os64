@@ -120,6 +120,7 @@ how a worklist fills with things nobody intends to do.
 
 | Debt | Sev | Cost | Gate | Source |
 |---|---|---|---|---|
+| **Physical allocator scalability: live-page bookkeeping exhausts the 100,000-entry ledger, and allocation searches scan it under a global irqsave lock.** P5 image loading reaches about 70,000 predominantly live entries and averages about 63,000 entries examined per search; the earlier run panics at the ledger limit. Treat lookup cost and live-allocation capacity as one kernel feature with separate acceptance criteria. Increasing the table or reducing browser concurrency alone does not pay it | Hole / Performance | L | **Triggered: Chris's P5 testing, 2026-10-06; independent feature for Opus** | Detailed handoff below; [P5_IMAGE_LOAD_DIAGNOSTIC.md](docs/design/pending/P5_IMAGE_LOAD_DIAGNOSTIC.md); `kernel/src/memory/allocator.c` |
 | **`wait()` SPINS, and ~39 callers read as if it sleeps.** `waitTicks` burns a core on `pause` until the global tick arrives — right before there is a scheduler, and free for years because everything using it ran when nothing else wanted the core. It stopped being free the day a caller ran beside userland: the LATE test phase held a core at 100% for its whole run (Chris, 2026-08-29, watching `top`). `nap()` (time.c) is the sleeping twin — same tick cadence, parks via SIGSLEEP, falls back to the spin where no scheduler exists — and the LATE-phase loops plus `tcp_conn_dial`'s handshake poll now use it. THE REST HAVE NOT BEEN AUDITED, and a sweep is exactly the wrong shape: `nap()` is unsafe while holding a spinlock and unsafe in interrupt context, so each call site needs reading, not replacing. Worth doing where a caller can wait a long time on a live machine (the device-init paths are the interesting ones — most run pre-scheduler and are already correct by the fallback). The tell that this is worth someone's afternoon: tcp's poll loop had a comment saying "short naps" above a call that spun, so the belief is already in the tree | Performance | M | when a spinning waiter is caught costing a core on a machine somebody is using | `time.c` wait/nap; `grep -n '\bwait('` across kernel/src |
 | **PAID 2026-08-06 — the buffer cache (block_cache.c).** The old row: one NVMe command per fs block, 30MB ≈ 10s. The cache's 64KB line fills ARE the coalescing (one command per 64KB cold, zero warm — 46MB wc: warm pass ≈ 2s, memcpy-bound), and both filesystems plus the partition scanner ride through the interposed bops with zero call-site changes. RESIDUE, kept honest: `ext2_bmap` still kmallocs scratch and re-asks for indirect blocks per data block — the cache absorbs the DISK cost of that (indirect lines stay hot) but the CPU churn remains; a per-handle indirect-block cache in ext2_handle_t retires it if it ever shows in a profile | Perf | S (residue) | if ext2 CPU time ever matters | the grep autopsy → the caching arc, 8/6 |
 | ~~**`kmalloc_dma` guarantees nothing about WHERE.**~~ **THE IDENTITY TOOTH IS PAID, 2026-08-19** — kmalloc_dma now returns the HHDM pointer and hands the physical address back separately (the fix this row prescribed, and the doctrine e1000 refused kmalloc_dma over — its ring code is now the acknowledged original of the style). The SAME conversion retires the row's third tooth, grown on the rtl8125 branch 2026-08-16 (the kworker burial-close #PF: the identity mapping lived at a lower-half VA in kKernelPML4 ONLY, so a DMA buffer was dereferenceable from exactly one address space, and a file close doing disk I/O from a task's CR3 faulted on `dmaWriteBuffer`) — the HHDM alias is valid under EVERY CR3, so that class is structurally gone; the convention it enforced ("every file-I/O path runs in kernel context") outlived it as doctrine until 2026-09-06, when the NVMe register window — the last lower-half dependency on the disk path — moved to its HHDM alias too, after a doorbell rung under a task's CR3 on a block-cache miss killed the P5 (CLAUDE.md's ext2 section carries what the wrappers still buy). What the conversion also killed, found during the payment: identity mappings were NEVER UNMAPPED on free, so every per-I/O NVMe PRP list left a stale writable PCD mapping over a recycled physical page — a standing hole through the lazy-HHDM use-after-free tripwire, ~1,100 new holes/sec under a logd-on-ext2 soak, plus the paging-pool churn that found the intermediate-table CAS race. All callers converted (NVMe queues/identify/bounce-buffers/PRP lists, AHCI read buffer); the PCD cache-disable was deliberately not recreated (x86 DMA is coherent; e1000 proved cacheable rings on QEMU/VBox/P5 since 8/06); `kmalloc_dma32_address` (zero callers) buried in the same grave. **THE REACHABILITY TOOTH SURVIVES, narrower**: there is still no address ceiling and no device-reachability contract — today's devices are 64-bit-DMA capable, and the first 32-bit-DMA device needs a designed bounded-phys allocator, not the buried fossil | Hole | S | before any 32-bit-DMA device | Chris's allocator experiment 2026-08-05; the HHDM conversion 8/19 |
@@ -145,6 +146,122 @@ how a worklist fills with things nobody intends to do.
 | Pipe waiter slots are SINGLE (one parked reader + one parked writer per pipe). A second waiter on the same end is still correct — it falls back on its ~1s SIGSLEEP backstop and re-checks — but it is slow. Fix = a real wait list per end | Cleanup | S | when >1 reader or >1 writer on one pipe becomes normal | `pipe.c` |
 | Console scroll runs with **interrupts off**: the renderer spinlock is held across a ~3MB full-screen `memmove`, so a scroll can delay that core's tick by a few hundred µs. Correctness beats the jitter (the console is not a hot path), but if it ever matters the fix is a scroll that does NOT hold the lock — not a lock that does not cover the scroll | Cleanup | S | if the console ever gets hot | `BasicRenderer.c` kRendererLock |
 | ~~`handle_alloc`/`handle_close` take no lock~~ **PAID 2026-08-25 (PR #29).** The gate this row named — "the day handles are shared between threads of one task" — had already passed when ring-3 threads landed, which is how the two-closers race (Codex #29 rd4) and the two-allocators race (Fable's rd-review) both got in. There is still no lock: the slot's TYPE is an atomic claim token. `handle_close` exchanges live→`HANDLE_CLOSING`, `handle_alloc` CASes `NONE`→`CLOSING` before publishing the real type, and neither touches a slot it did not win. A LOCK is the fallback if this table ever grows an operation that cannot be expressed as one atomic on the type | Cleanup (PAID) | — | done | `handle.c` |
+
+### Physical allocator scalability — P5 handoff, 2026-10-06
+
+**Scope:** an independent kernel feature, discovered during D11 hardware
+testing. Address both allocator lookup cost and capacity for live allocations.
+This is distinct from recycling the kernel paging-table pool. Do not merge
+the browser PRs to `userland` as part of this work; they still require Fable's
+review. The reproducing browser stack and instrumentation are available on
+`codex/p5-image-load-diag`, based on `codex/dom-d11`; the diagnostic commits
+are `15ce2a0c` and `5435e483`. The kernel feature need not inherit the browser
+implementation to change allocator behavior.
+
+**Reproduction and controls.** On Chris's twelve-core P5, open
+`http://www.007museum.com/`, which redirects to `www.nybrobildelar.se` and
+loads more than 400 images. With six simultaneous image jobs, aggregate
+Yonder CPU is approximately 550–700% and external commands and htop pause
+for more than ten seconds. GUI interaction, VT switching and terminal
+typing stay responsive; Husk's builtin `export` is immediate, while `ls`
+is delayed. Nine CPU-only hogs and a 100,000-operation mallochavoc run do
+not reproduce the stalls. Disabling the picture/style cache does not
+reliably improve them. D4 raised the worker pool from four to twelve and
+image concurrency from three to six. The diagnostic keeps twelve workers
+and the existing budget but limits images to three: images load faster,
+`ls` pauses about two seconds, and htop still pauses six to seven seconds.
+At around 200 loaded images an earlier run reaches
+`allocator: memory status table is full (100000 of 100000 entries)`.
+
+**Measured growth.** The instrumented three-image run starts near 2,800
+ledger entries and 1,000 live, aligned, exactly 4 KiB allocations. Around
+80 loaded images it reaches 70,767 entries: 70,250 live, 498 free, 19 dead;
+66,220 entries have the live 4 KiB shape. After killing Yonder and allowing
+cleanup, the ledger falls to 4,808 entries, 4,094 live and 1,158 live 4 KiB
+entries. Most growth is released on exit; it is not primarily dead-entry
+accumulation awaiting compaction. The residual difference from the initial
+baseline is not attributed to an owner and does not prove zero leakage.
+The extra page-shaped allocations represent about 255 MiB, consistent in
+scale with Yonder's 256 MiB retained-image budget, before temporary decode
+buffers and other allocations. Allocation shape does not identify ownership.
+
+| P5 interval | Allocation searches | Ledger entries examined | Mean entries/search |
+|---|---:|---:|---:|
+| 15:58:10–15:58:20, early | 8,423 | 19,157,248 | 2,274 |
+| 15:59:20–15:59:30, loading | 15,255 | 732,677,672 | 48,029 |
+| 15:59:30–15:59:40, loading | 17,043 | 921,377,371 | 54,062 |
+| 16:00:12–16:00:22, loading | 7,426 | 468,114,988 | 63,037 |
+| 16:03:05–16:03:15, after exit | 416 | 1,340,322 | 3,222 |
+
+During that run the separate paging pool grows from 391 to 529 pages out
+of 12,616. Its exhaustion message is `get_paging_table_page: paging page
+pool exhausted`, not the observed ledger panic. The scan measurements are
+cumulative-counter differences, not elapsed lock hold/wait timings. They
+strongly support scan growth as a contributor, but do not apportion all
+observed latency or establish that procfs is the primary cause.
+
+**Code paths and constraints.** `kernel/src/memory/vma.c`,
+`vma_resolve_backing_page`, allocates anonymous demand-faulted heap backing
+one physical page at a time through `allocate_memory_aligned(PAGE_SIZE)`.
+In `kernel/src/memory/allocator.c`,
+`get_status_entry_for_first_available_address` remembers a first fit but
+continues looking for an exact-size free hole, traversing the ledger when
+none exists. The search runs under `kMemoryStatusLock`, with interrupts
+disabled. Read the other ledger walkers too: address lookup, allocation
+liveness checks, `allocator_copy_from_task_va`, free/coalescing, compaction,
+maintenance and `allocator_memory_snapshot`. Improving only allocation
+search leaves other scaling costs in place, including monitoring and frees.
+
+Preserve the exact-fit policy's purpose: recycling repeating-size holes
+prevented the earlier procfs/kernel allocation-churn fragmentation problem.
+Simply returning the first adequate block can reintroduce it. Increasing
+`INITIAL_MEMORY_STATUS_COUNT` leaves linear scans growing; indexing searches
+alone leaves the live-entry capacity panic. Choose a representation that
+addresses both, rather than prescribing an algorithm from these observations.
+Keep allocator/HHDM ownership and liveness checks synchronized, reserved
+memory and page zero protected, aligned allocation/free semantics intact,
+and memory accounting reconciled. Compaction relocates ledger entries;
+indexes or caches must not retain stale pointers or indices. New metadata
+needs a bootstrap and exhaustion strategy that avoids recursive allocation
+through the allocator it describes. Fault/IRQ callers cannot depend on a
+sleeping lock or on another thread making progress on the same core.
+
+**Acceptance and verification.**
+
+- Exercise well over 100,000 simultaneously live 4 KiB allocations with
+  available physical RAM, without exhausting a fixed bookkeeping table.
+  Release them and verify ownership, accounting and metadata reclamation.
+- Demonstrate that allocation lookup does not scan the live ledger for each
+  ordinary page fault; measure contention/latency under concurrent faults,
+  frees and unrelated process launch or monitoring. Keep critical sections
+  appropriate for fault/interrupt contexts.
+- Preserve repeating-size recycling and test fragmented holes, alignment,
+  explicit-address allocation, split/coalesce behavior, compaction/index
+  consistency, allocation refusal and bootstrap metadata exhaustion.
+- Verify SMP page faults/unmaps/task teardown, signal/procfs liveness reads
+  and the memory identity `free + used == usable`; run relevant built-in
+  allocator, memory and teardown tests. Make controlled kernel changes and
+  compare each with the immediately preceding behavior.
+- Repeat the P5 Museum load through completion, then exit Yonder and verify
+  reclamation. Check external commands and htop while loading. Compare
+  three and six image jobs; choose browser concurrency based on the measured
+  result after the kernel fix, rather than treating the diagnostic cap as
+  the permanent solution. Independent paging-pool recycling remains separate.
+
+**Available instrumentation.** `ALLOCATOR_P5_REPORT=1` in the diagnostic
+kernel enables a buffered logd report at least ten seconds apart via kworker's
+elapsed ticks, without verbose per-allocation logging. It captures live/free/
+dead counts, page-shaped entries, bytes, search/visit counters and paging-pool
+usage; compare consecutive counter values. Reports perform a full ledger
+walk under the existing lock and therefore have nonzero overhead. The normal
+physical-root log destination is `/home/os64.log`; some ramdisk entries use
+`/fat/os64.log`—follow the active boot's LOGD setting. An optional
+`/tests/loadprobe`, started before navigation, times file open/read/close,
+child spawn/wait, allocation/touch/free, memory snapshots and monitor samples
+with and without threads. The diagnostic image builds, all 37 built-in QEMU
+tests pass, and timed reports were verified in logd's saved file. Changes
+driven by these P5 tests must explain the observed failure and present
+rationale in code comments, as Chris requested.
 
 ## Threads (os64's first ring-3 threads, 2026-08-02)
 
