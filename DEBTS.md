@@ -185,6 +185,16 @@ The extra page-shaped allocations represent about 255 MiB, consistent in
 scale with Yonder's 256 MiB retained-image budget, before temporary decode
 buffers and other allocations. Allocation shape does not identify ownership.
 
+**Second reproduction, reported by Chris on the P5:** navigating to
+`https://github.com/gkostka/lwext4` reaches the same 100,000-entry allocator
+panic in approximately two minutes. Yonder still reports loading 27 style
+sheets, with no visible page content. Reproduce this case as well as the
+Museum image load: bookkeeping pressure can arise before visible image
+loading. The status text does not identify all concurrently executing jobs
+or establish that stylesheet storage alone accounts for the allocations;
+capture ledger growth and attribute live memory in the fetch/TLS/parser/CSS
+paths rather than assuming the decoded-image budget explains this case.
+
 | P5 interval | Allocation searches | Ledger entries examined | Mean entries/search |
 |---|---:|---:|---:|
 | 15:58:10–15:58:20, early | 8,423 | 19,157,248 | 2,274 |
@@ -247,6 +257,9 @@ sleeping lock or on another thread making progress on the same core.
   three and six image jobs; choose browser concurrency based on the measured
   result after the kernel fix, rather than treating the diagnostic cap as
   the permanent solution. Independent paging-pool recycling remains separate.
+- Repeat the GitHub repository navigation through stylesheet loading and
+  visible page publication without the ledger panic. Measure and attribute
+  its live-allocation growth separately from the Museum's image workload.
 
 **Available instrumentation.** `ALLOCATOR_P5_REPORT=1` in the diagnostic
 kernel enables a buffered logd report at least ten seconds apart via kworker's

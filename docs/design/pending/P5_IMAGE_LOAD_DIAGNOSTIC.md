@@ -94,3 +94,15 @@ Increasing capacity leaves the scan cost; indexing searches alone leaves
 the capacity limit. Reverting exact-fit preference also reintroduces the
 free-hole fragmentation problem that motivated the allocator's current
 policy. A fix must preserve recycling while accounting for live-page scale.
+
+## Second P5 reproduction: GitHub stylesheet loading
+
+Chris reports that `https://github.com/gkostka/lwext4` reaches the same
+100,000-entry allocator panic in about two minutes, while Yonder still says
+it is loading 27 style sheets and before visible page content. There are
+no ledger samples for this case yet. It broadens the reproduction beyond
+the Museum's visible image-loading phase; the status message alone does
+not attribute the allocations to CSS or prove which other jobs are active.
+Capture its ledger growth and inspect live fetch/TLS/parser/CSS memory
+separately. This case is also recorded in the DEBTS feature handoff and its
+acceptance criteria.
