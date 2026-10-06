@@ -18,6 +18,10 @@
 #define PAGE_SIZE 0x1000
 #define KERNEL_PAGED_BASE_ADDRESS 0xFFFFFFFF80000000
 #define INITIAL_MEMORY_STATUS_COUNT 100000
+// P5 testing: periodic ledger reports and allocation-search visit counters
+// diagnose image-loading stalls without changing allocation or table limits.
+// Set to 0 to retain DEBUG_ALLOCATOR-gated reporting and omit these counters.
+#define ALLOCATOR_P5_REPORT 1
 #define KERNEL_STACK_SIZE 20 * PAGE_SIZE
 // Poison every freed extent with 0xFE through its HHDM alias (allocator.c,
 // free_memory). A use-after-free then reads as unmistakable 0xFE bytes —

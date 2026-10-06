@@ -81,13 +81,16 @@
 // one's whole sequence; past it a picture draws as its frame.
 #define PICTURES_KEPT_MAX ((size_t)256u << 20)
 
-// A page's pictures in the pool at once: half its workers. The pool admits
+// P5 testing comparison: three simultaneous picture jobs reproduce the
+// pre-D4 image limit while leaving the sheet worker pool and budget intact.
+// This isolates image concurrency in the reported external-command stalls.
+// The pool admits
 // in the order it was given work, so a navigation submitted after a page's
 // pictures would wait for every one of them; yonder keeps the rest itself
 // and hands over the next as each comes back, which keeps workers free for
 // the person and for the next page's sheets — once any pictures of a page
 // left behind have seen they were cancelled.
-#define PICTURES_AT_ONCE (POOL_WORKERS / 2)
+#define PICTURES_AT_ONCE 3
 
 // A layout at most this slow is repeated for every batch of pictures that
 // moves the page. A slower one waits for the page's last picture, or until

@@ -18,7 +18,8 @@
 #define KWORKER_REAP_BATCH_SIZE 8
 // Allocator hygiene knobs: entries examined per visit (bounds the lock hold —
 // tens of microseconds, never a full-table sweep), and how many visits pass
-// between DEBUG_ALLOCATOR health lines (~10s at the 2s sleep cadence).
+// between allocator health lines (~10s at the 2s sleep cadence). P5 diagnostic
+// builds emit these through the buffered log path without DEBUG_ALLOCATOR.
 #define KWORKER_ALLOC_MAINTAIN_BATCH 32
 #define KWORKER_ALLOC_REPORT_EVERY 5
 
@@ -58,7 +59,14 @@ static bool kworker_run_maintenance(void)
 	// Deliberately NOT counted as did_work — same reasoning as the log flush
 	// below: maintenance that reschedules itself as "work" never sleeps, and
 	// a bounded idempotent pass has nothing urgent to stay awake for.
+#if ALLOCATOR_P5_REPORT
+	// P5 testing: bound reports by elapsed ticks rather than maintenance visits;
+	// a worker reaping tasks without sleeping must not flood the log. A delayed
+	// worker emits one current snapshot rather than catching up missed reports.
+	static uint64_t alloc_report_tick;
+#else
 	static uint32_t alloc_report_countdown = KWORKER_ALLOC_REPORT_EVERY;
+#endif
 	// The other bracket (2026-08-14): compaction REWRITES the allocator's
 	// bookkeeping, and a merge that swallowed a live block would hand somebody
 	// else's memory out — page tables included. Cheap to ask, and it runs on
@@ -66,8 +74,14 @@ static bool kworker_run_maintenance(void)
 	paging_sentinel_check("kworker: before allocator_maintain");
 	allocator_maintain(KWORKER_ALLOC_MAINTAIN_BATCH);
 	paging_sentinel_check("kworker: after allocator_maintain");
+#if ALLOCATOR_P5_REPORT
+	uint64_t report_tick = kTicksSinceStart;
+	if (report_tick - alloc_report_tick >= KWORKER_SLEEP_TICKS * KWORKER_ALLOC_REPORT_EVERY) {
+		alloc_report_tick = report_tick;
+#else
 	if (--alloc_report_countdown == 0) {
 		alloc_report_countdown = KWORKER_ALLOC_REPORT_EVERY;
+#endif
 		allocator_debug_report();
 	}
 

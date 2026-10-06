@@ -256,6 +256,14 @@ uint64_t kAllocMerges = 0;         // free-time neighbor merges (either side)
 uint64_t kAllocCompactions = 0;    // compact_memory_array passes
 uint64_t kAllocZeroedEntries = 0;  // dead (length 0) entries awaiting compaction
 
+#if ALLOCATOR_P5_REPORT
+// P5 testing: cumulative searches and ledger entries examined let successive
+// timed reports expose scan growth. Updated under kMemoryStatusLock; recording
+// an exit avoids adding a counter update to each iteration of the search.
+static uint64_t p5Searches;
+static uint64_t p5SearchEntries;
+#endif
+
 /// @brief Find a free block for the request: EXACT fit first, else first fit.
 /// @param requestedLength
 /// @param aligned
@@ -277,6 +285,9 @@ uint64_t kAllocZeroedEntries = 0;  // dead (length 0) entries awaiting compactio
 memory_status_t* get_status_entry_for_first_available_address(uint64_t requested_length, bool page_aligned)
 {
 	memory_status_t *firstFit = NULL;
+#if ALLOCATOR_P5_REPORT
+	p5Searches++;
+#endif
 
 	for (uint64_t cnt = 0; cnt < kMemoryStatusCurrentPtr; cnt++)
 	{
@@ -291,6 +302,9 @@ memory_status_t* get_status_entry_for_first_available_address(uint64_t requested
 			if (entry->length == requested_length)
 			{
 				kAllocExactFitHits++;
+#if ALLOCATOR_P5_REPORT
+				p5SearchEntries += cnt + 1;
+#endif
 				return entry;      // the whole point: reuse, don't carve
 			}
 			if (firstFit == NULL && entry->length >= requested_length)
@@ -309,6 +323,9 @@ memory_status_t* get_status_entry_for_first_available_address(uint64_t requested
 		if (alignment_padding == 0 && entry->length == requested_length)
 		{
 			kAllocExactFitHits++;
+#if ALLOCATOR_P5_REPORT
+			p5SearchEntries += cnt + 1;
+#endif
 			return entry;
 		}
 
@@ -316,6 +333,9 @@ memory_status_t* get_status_entry_for_first_available_address(uint64_t requested
 		if (firstFit == NULL && alignment_padding <= entry->length - requested_length)
 			firstFit = entry;
 	}
+#if ALLOCATOR_P5_REPORT
+	p5SearchEntries += kMemoryStatusCurrentPtr;
+#endif
 	return firstFit;
 }
 
@@ -862,16 +882,23 @@ uint32_t allocator_maintain(uint32_t maxEntries)
 }
 
 // The DEBUG_ALLOCATOR ledger line — the 2026-08-07 autopsy, self-service.
-// Designed to cost nothing when off: the kDebugLevel check gates the whole
-// walk, and the caller (kworker) invokes at a human cadence, not per-alloc.
+// The walk is gated by DEBUG_ALLOCATOR unless P5 diagnostic reporting is
+// enabled. The caller (kworker) invokes at a human cadence, not per allocation.
 // One O(table) walk under the lock (same cost class as
 // allocator_memory_snapshot, which top polls every second) collecting the
 // counts and the top-4 free sizes — the exact shape that named first-fit
 // fragmentation the day pmemsave dragged the table out of a live guest.
 void allocator_debug_report(void)
 {
+#if ALLOCATOR_P5_REPORT
+	// P5 testing: use the existing buffered log path without enabling verbose
+	// per-allocation messages. A zero mask bypasses printd's level filter.
+	const __uint128_t report_level = 0;
+#else
+	const __uint128_t report_level = DEBUG_ALLOCATOR;
 	if (!(kDebugLevel & DEBUG_ALLOCATOR))
 		return;
+#endif
 
 	// Top-4 free-hole sizes by count, gathered in one pass with a tiny
 	// insertion table — 16 tracked sizes is plenty for a health line, and
@@ -881,6 +908,9 @@ void allocator_debug_report(void)
 	uint64_t counts[AR_TRACKED] = {0};
 	uint32_t tracked = 0;
 	uint64_t inUse = 0, freeCnt = 0, dead = 0;
+#if ALLOCATOR_P5_REPORT
+	uint64_t liveBytes = 0, pageEntries = 0;
+#endif
 
 	uint64_t irqflags = allocator_lock();
 	uint64_t entries = kMemoryStatusCurrentPtr;
@@ -888,7 +918,15 @@ void allocator_debug_report(void)
 	{
 		memory_status_t *e = &kMemoryStatus[i];
 		if (e->length == 0) { dead++; continue; }
-		if (e->in_use) { inUse++; continue; }
+		if (e->in_use) {
+			inUse++;
+#if ALLOCATOR_P5_REPORT
+			liveBytes += e->length;
+			if (e->length == PAGE_SIZE && !(e->startAddress & (PAGE_SIZE - 1)))
+				pageEntries++;
+#endif
+			continue;
+		}
 		freeCnt++;
 		for (uint32_t s = 0; s < AR_TRACKED; s++)
 		{
@@ -906,6 +944,13 @@ void allocator_debug_report(void)
 			}
 		}
 	}
+	// Capture counters with the ledger so allocations after unlocking cannot
+	// make this report combine counts from different instants.
+	uint64_t exactfit = kAllocExactFitHits, splits = kAllocSplits;
+	uint64_t merges = kAllocMerges, compactions = kAllocCompactions;
+#if ALLOCATOR_P5_REPORT
+	uint64_t searches = p5Searches, examined = p5SearchEntries;
+#endif
 	allocator_unlock(irqflags);
 
 	// Pick the top 4 by count (tiny N — selection is fine).
@@ -926,11 +971,20 @@ void allocator_debug_report(void)
 			}
 	}
 
-	printd(DEBUG_ALLOCATOR,
+	printd(report_level,
 	       "allocator: entries=%lu inuse=%lu free=%lu dead=%lu | exactfit=%lu splits=%lu merges=%lu compactions=%lu\n",
 	       entries, inUse, freeCnt, dead,
-	       kAllocExactFitHits, kAllocSplits, kAllocMerges, kAllocCompactions);
-	printd(DEBUG_ALLOCATOR,
+	       exactfit, splits, merges, compactions);
+#if ALLOCATOR_P5_REPORT
+	// Page-shaped entries do not identify an owner: they include heap backing
+	// pages and other aligned 4 KiB allocations. liveBytes includes reserved
+	// entries seeded from the memory map as well as subsequent allocations.
+	printd(report_level,
+	       "allocator P5: live_page_entries=%lu live_bytes=%lu searches=%lu examined=%lu paging_used=%lu/%lu\n",
+	       pageEntries, liveBytes, searches, examined,
+	       paging_pool_pages_used(), kPagingPagesCount);
+#endif
+	printd(report_level,
 	       "allocator: top free holes: %lux%lu %lux%lu %lux%lu %lux%lu\n",
 	       topCount[0], topSize[0], topCount[1], topSize[1],
 	       topCount[2], topSize[2], topCount[3], topSize[3]);

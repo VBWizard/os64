@@ -55,7 +55,8 @@ extern uint64_t kAllocZeroedEntries;
 uint32_t allocator_maintain(uint32_t maxEntries);
 
 // The DEBUG_ALLOCATOR health line (entries/inuse/free/dead + counters + top-4
-// free-hole sizes). Free when the level is off — the walk itself is gated.
+// free-hole sizes). The walk is gated by the level unless ALLOCATOR_P5_REPORT
+// enables periodic P5 diagnostic output and allocation-search counters.
 void allocator_debug_report(void);
 // Atomic {free, used, largest free extent} reading under the allocator lock —
 // the source of truth behind SYSCALL_MEMORY, in ONE walk so the numbers agree
