@@ -166,7 +166,9 @@ void os64_html_document_free(os64_html_document_t *doc);
  * that script next, and its own writes go just after it. Written text is
  * INPUT and not tree: it is kept on the heap and counted against
  * `max_bytes`, which ends the input where it falls as it does for fed
- * bytes (a write is cut there on a character, not a byte); it moves the
+ * bytes (a write is cut there on a character, not a byte): whatever was
+ * waiting behind the cut is dropped unparsed, and nothing fed or written
+ * after it is taken, a script before it still stops the parse; it moves the
  * version as any parsing call does, and an empty write changes nothing. A write that
  * is not UTF-8 or holds a NUL is OS64_HTML_BAD_TEXT and nothing of it is
  * parsed. A write when the parse is not stopped at a script (before the

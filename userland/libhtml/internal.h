@@ -275,8 +275,10 @@ struct os64_html_parser {
     char *written;
     size_t written_len, written_cap, written_at, insertion;
     /* `ended`: the host said the input is over. `cut`: it ran past
-     * `max_bytes`. Either is acted on when everything waiting has been
-     * parsed. `straight`: os64_html_parser_finish is running, which does not
+     * `max_bytes`, and the input ends at the cut: nothing behind a written
+     * cut waits, and nothing later is taken (end_at_cut). Either is acted
+     * on when everything waiting has been parsed. `straight`:
+     * os64_html_parser_finish is running, which does not
      * stop. `moved`: this call has moved the document's version. */
     bool ended, cut, straight, moved;
 };

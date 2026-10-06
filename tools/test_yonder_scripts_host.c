@@ -7,6 +7,7 @@
 #include "../userland/apps/yonder/yonder.c"
 #undef main
 #include "test_libflow_fonts.h"
+#include "../userland/libhtml/internal.h"
 #include "os64/conf.h"
 #define s settings_fixture
 #include "../userland/apps/yonder/settings.c"
@@ -1685,6 +1686,17 @@ static void loop_write_refused(void) {
     check(probe_text_is("late","InvalidStateError"),"write: from the shown page, refused");
     probe_drop();
 }
+static void loop_write_byte_cut(void) {
+    loop_page("<p id=out>before</p><script>document.write('abcdef');</script>"
+        "<b id=held>held tail</b><script>document.getElementById('out').textContent='later ran'</script>");
+    stream_turn();
+    check(g.stream.stopped && g.stream.parser!=NULL,"write cut: stopped before the truncated write");
+    g.stream.parser->opt.max_bytes=os64_html_parser_document(g.stream.parser)->input_bytes+3;
+    check(loop_settle() && g.page.tree!=NULL,"write cut: the byte-cut page arrives");
+    check(probe_text_is("out","before") && probe_id("held")==NULL,
+        "write cut: nothing behind the cut is built, and its later script never runs");
+    loop_drop();
+}
 static void loop_write_cut(void) {
     loop_page("<p id=out>before</p><script>document.write('<div>'.repeat(600)+'deep');</script><p>tail</p>");
     check(loop_settle() && g.page.tree!=NULL,"write: a write past the depth limit still lets the page arrive");
@@ -1721,6 +1733,7 @@ static void loop_write_cases(void) {
     loop_write_src();
     loop_write_refused();
     loop_write_cut();
+    loop_write_byte_cut();
     loop_write_audit();
     loop_write_teardown();
 }

@@ -1542,6 +1542,78 @@ static void write_checks(void)
     check(os64_html_parser_resume(p) == OS64_HTML_TOO_DEEP, "write: and resume answers it");
     os64_html_document_free(os64_html_parser_finish(p));
 
+    /* A cut inside written text ends the input there. */
+    p = stopped_at(&on, "<script>s</script><b>held</b><script>later</script>");
+    doc = os64_html_parser_document(p);
+    p->opt.max_bytes = doc->input_bytes + 3;
+    write_text(p, "abcdef");
+    int64_t cut_status = os64_html_parser_resume(p);
+    check(cut_status == OS64_HTML_TOO_LARGE && !find_named(doc->document, "b") &&
+              os64_html_parser_script(p) == NULL,
+          "write cut: the hold behind it is past the end, its script never found");
+    os64_html_document_free(os64_html_parser_finish(p));
+
+    p = stopped_at(&on, "<script>s</script>");
+    doc = os64_html_parser_document(p);
+    p->opt.max_bytes = doc->input_bytes + 4;
+    write_text(p, "abc\xc3\xa9xyz");
+    write_text(p, "Z");
+    os64_html_parser_resume(p);
+    check(strcmp(doc->body->last_child->text, "abc") == 0,
+          "write cut: a later write cannot spend what a character-boundary cut left");
+    os64_html_document_free(os64_html_parser_finish(p));
+
+    /* A script inside the kept prefix comes before the end, and stops. */
+    p = stopped_at(&on, "<script>s</script><p>tail</p>");
+    doc = os64_html_parser_document(p);
+    p->opt.max_bytes = doc->input_bytes + strlen("<script>w</script>xy");
+    check(write_text(p, "<script>w</script>xyzzy") == OS64_HTML_SCRIPT &&
+              os64_html_parser_resume(p) == OS64_HTML_SCRIPT,
+          "write cut: a script before the cut still stops the parse");
+    check(os64_html_parser_resume(p) == OS64_HTML_TOO_LARGE && !find_named(doc->document, "p") &&
+              strcmp(doc->body->last_child->text, "xy") == 0,
+          "write cut: after it, the kept text and then the end, nothing that waited");
+    os64_html_document_free(os64_html_parser_finish(p));
+
+    /* A nested writer's cut ends its writer's own text too: what the outer
+     * script wrote after the inner one is behind the cut. */
+    p = stopped_at(&on, "<script>s</script>");
+    doc = os64_html_parser_document(p);
+    check(write_text(p, "<script>w</script><u>TAIL</u>") == OS64_HTML_SCRIPT &&
+              os64_html_parser_resume(p) == OS64_HTML_SCRIPT,
+          "write cut: the outer writer's script stops first");
+    p->opt.max_bytes = doc->input_bytes + 2;
+    write_text(p, "xyzzy");
+    check(os64_html_parser_resume(p) == OS64_HTML_TOO_LARGE && !find_named(doc->document, "u") &&
+              strcmp(doc->body->last_child->text, "xy") == 0,
+          "write cut: the outer writer's text behind an inner cut is past the end");
+    os64_html_document_free(os64_html_parser_finish(p));
+
+    /* Bytes fed after a write's cut are past the end: not held, not counted,
+     * even into the byte a character-boundary cut left unspent. */
+    p = stopped_at(&on, "<script>s</script>");
+    doc = os64_html_parser_document(p);
+    p->opt.max_bytes = doc->input_bytes + 4;
+    write_text(p, "abc\xc3\xa9xyz");
+    size_t spent = doc->input_bytes;
+    check(feed_text(p, "<b>late</b>") == OS64_HTML_SCRIPT && doc->input_bytes == spent,
+          "write cut: a later feed takes nothing");
+    check(os64_html_parser_resume(p) == OS64_HTML_TOO_LARGE && !find_named(doc->document, "b"),
+          "write cut: and nothing fed after it is parsed");
+    os64_html_document_free(os64_html_parser_finish(p));
+
+    /* The sniff window's unreplayed rest is behind a write's cut too: a
+     * short page stops at `end` with its tail still in the window. */
+    p = os64_html_parser_new(&on);
+    feed_text(p, "<script>s</script><i>tail</i>");
+    check(os64_html_parser_end(p) == OS64_HTML_SCRIPT, "write cut: a short page stops at end");
+    doc = os64_html_parser_document(p);
+    p->opt.max_bytes = doc->input_bytes + 2;
+    write_text(p, "xyz");
+    check(os64_html_parser_resume(p) == OS64_HTML_TOO_LARGE && !find_named(doc->document, "i"),
+          "write cut: the sniff window's rest is past the end");
+    os64_html_document_free(os64_html_parser_finish(p));
+
     /* A script that end found may write, and the end is met after its text. */
     p = os64_html_parser_new(&on);
     feed_text(p, window());

@@ -144,8 +144,11 @@ nothing, like a `resume` of a parse that is not stopped.
 
 **Budgets and refusals.** Written bytes count against `input_bytes` and
 so against `max_bytes` (a page that writes in a loop forever meets the
-same wall as a page that never ends; the `cut` rule and the TOO_LARGE
-refusal are the same ones). A write the heap cannot hold is
+same wall as a page that never ends, and the TOO_LARGE refusal is the
+same one). The cut ends the input where it falls, and because a write
+goes in mid-stream, what waited behind it (older written text, the sniff
+window's rest, the hold) is dropped unparsed, and nothing fed or written
+later is taken. A write the heap cannot hold is
 `OS64_HTML_NO_MEMORY`. A written tree deeper than the limit is
 `OS64_HTML_TOO_DEEP`. Each refusal is the parse's: it is recorded in the
 document as today, the document stays readable, and every later call

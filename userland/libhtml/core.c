@@ -876,6 +876,23 @@ static bool hold_bytes(os64_html_parser_t *p, const unsigned char *s, size_t n)
     p->hold_len += n;
     return true;
 }
+/* `max_bytes` has cut the input, and the input ends at the cut. A fed cut
+ * falls at the end of everything, so dropping the rest of the chunk is all
+ * it takes; a written one falls at the insertion point, in the middle, so
+ * what waited behind it (the written text after that point, the sniff
+ * window's unreplayed rest, the hold) is past the end and is dropped too.
+ * Whatever comes later, fed or written, is not taken: the limit is spent,
+ * including the few bytes a character-boundary cut left unused. Script
+ * stops before the cut still stop; they come before the end. */
+static void end_at_cut(os64_html_parser_t *p)
+{
+    p->cut = true;
+    if (p->running)
+        p->written_len = p->insertion;
+    if (p->prescan_len > p->parsed)
+        p->prescan_len = p->parsed;
+    hold_free(p);
+}
 /* What a call answers. The end of the input, said by the host or met at
  * `max_bytes`, is acted on here, once nothing is waiting to be parsed: a
  * parse that is not stopped and not refused has parsed all it was given. */
@@ -911,7 +928,7 @@ int64_t os64_html_parser_feed(os64_html_parser_t *p, const void *bytes, size_t l
         return OS64_HTML_BAD_ARGUMENT;
     p->moved = false;
     const unsigned char *s = bytes;
-    size_t left = p->opt.max_bytes - d->pub.input_bytes;
+    size_t left = p->cut ? 0 : p->opt.max_bytes - d->pub.input_bytes;
     size_t take = len < left ? len : left;
     /* Past the sniff window and not stopped, the bytes are parsed as they
      * come. */
@@ -988,20 +1005,21 @@ int64_t os64_html_parser_write(os64_html_parser_t *p, const char *utf8, size_t l
     }
     /* Written bytes are input, and `max_bytes` bounds them as it bounds fed
      * ones: what fits is parsed, cut on a character, and the end of the input
-     * is met where the cut falls. */
-    size_t left = p->opt.max_bytes - d->pub.input_bytes;
+     * is met where the cut falls (end_at_cut). */
+    size_t left = p->cut ? 0 : p->opt.max_bytes - d->pub.input_bytes;
     size_t take = len;
     if (take > left) {
         take = left;
         while (take && ((unsigned char)utf8[take] & 0xc0) == 0x80)
             take--;
-        p->cut = true;
     }
     if (take) {
         if (!written_insert(p, utf8, take))
             return d->pub.refusal;
         d->pub.input_bytes += take;
     }
+    if (take < len)
+        end_at_cut(p);
     h_pump(p);
     return settle(p);
 }
