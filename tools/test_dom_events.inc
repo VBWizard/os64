@@ -332,6 +332,16 @@ static void dom_navigation_cases(void)
     dom_script(&f, "window.location='/root'", "navigation-assign-location.js");
     check(os64_dom_take_navigation(f.binding, &ask) && !strcmp(ask.url, "http://example.test:8080/root"),
           "assigning location navigates");
+    dom_script(&f, "var b=document.createElement('base');b.setAttribute('href','http://assets.test/js/');"
+        "document.head.appendChild(b);location.href='app.html'", "navigation-base.js");
+    check(os64_dom_take_navigation(f.binding, &ask) && !strcmp(ask.url, "http://assets.test/js/app.html"),
+          "a relative location resolves against the document's base, read as it is now");
+    dom_script(&f, "location.hash='again'", "navigation-base-hash.js");
+    check(os64_dom_take_navigation(f.binding, &ask) &&
+          !strcmp(ask.url, "http://example.test:8080/dir/page.html?q=1#again"), "a hash stays in this page under a base");
+    check(os64_dom_resolve(NULL, "http://example.test/a/b", "c", ask.url, sizeof(ask.url)) &&
+          !strcmp(ask.url, "http://example.test/a/c"), "no document resolves against the document's address");
+    dom_script(&f, "var b=document.getElementsByTagName('base')[0];b.parentNode.removeChild(b)", "navigation-base-gone.js");
     dom_script(&f, "history.back()", "navigation-back.js");
     check(os64_dom_take_navigation(f.binding, &ask) && ask.kind == OS64_DOM_NAVIGATE_HISTORY && ask.delta == -1,
           "history.back is a delta");

@@ -48,16 +48,46 @@ bool os64_dom_take_report(os64_dom_t *dom, os64_js_outcome_t *outcome)
     return true;
 }
 
-/* A reference resolved against the page, as a link's href is. An absolute
- * reference needs no base, so about:blank still reaches one. */
-static bool resolve(os64_dom_t *dom, const char *reference, char *out, size_t cap)
+/* The first `base` with an href in tree order, the body included. An empty
+ * href counts: it names the document's own address and outranks a later
+ * base, as libpage's find_base rules. */
+static const char *first_base(const os64_html_node_t *n)
 {
+    for (; n != NULL; n = n->next) {
+        if (n->kind == OS64_HTML_ELEMENT && n->ns == OS64_HTML_NS_HTML && n->tag == OS64_HTML_TAG_BASE) {
+            const os64_html_attr_t *href = os64_html_attr(n, "href");
+            if (href != NULL) return href->value;
+        }
+        const char *found = first_base(n->first_child);
+        if (found != NULL) return found;
+    }
+    return NULL;
+}
+
+bool os64_dom_resolve(const os64_html_document_t *document, const char *document_url,
+                      const char *reference, char *out, size_t cap)
+{
+    if (reference == NULL || out == NULL || cap == 0) return false;
     char scheme[OS64_URL_SCHEME_MAX];
     if (os64_url_scheme_of(reference, scheme, sizeof(scheme)))
         return os64_strcopy(out, cap, reference) < cap;
     os64_url_t base;
-    if (os64_url_parse(page_url(dom), &base) != OS64_URL_OK) return false;
+    if (document_url == NULL || os64_url_parse(document_url, &base) != OS64_URL_OK) return false;
+    const char *href = document != NULL ? first_base(document->document) : NULL;
+    char based[OS64_DOM_URL_MAX];
+    os64_url_t moved;
+    if (href != NULL && href[0] != '\0' &&
+        os64_dom_resolve(NULL, document_url, href, based, sizeof(based)) &&
+        os64_url_parse(based, &moved) == OS64_URL_OK)
+        base = moved;
     return os64_url_absolute(&base, reference, out, cap);
+}
+
+/* A reference resolved against the page, as a link's href is. An absolute
+ * reference needs no base, so about:blank still reaches one. */
+static bool resolve(os64_dom_t *dom, const char *reference, char *out, size_t cap)
+{
+    return os64_dom_resolve(dom->document, page_url(dom), reference, out, cap);
 }
 
 enum {
