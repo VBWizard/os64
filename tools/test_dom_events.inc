@@ -544,8 +544,50 @@ static void dom_event_reentry_cases(void)
         "review-click-other-element.js");
     fixture_free(&f);
 }
+/* A script's address resolves as the document's own links do: libpage's
+ * model is the oracle, over bases good, bad and opaque, on pages served,
+ * local and blank. A malformed base is no base; an opaque one is a base
+ * nothing relative resolves against. */
+static void dom_resolve_matches_page(void)
+{
+    const char *url="http://example.test/dir/page.html";
+    DomFixture f=event_fixture("<!doctype html><base href='http://'><p>page</p>",url);
+    if(!fixture_ready(&f))return;
+    char resolved[OS64_DOM_URL_MAX];
+    os64_page_t *model=os64_page_build(f.document,url,NULL,f.state);
+    check(model!=NULL && !strcmp(os64_page_base(model),url),"a malformed base: the document falls back to its own address");
+    check(os64_dom_resolve(f.document,url,"app.js",resolved,sizeof(resolved)) &&
+        !strcmp(resolved,"http://example.test/dir/app.js"),"a malformed base: a script resolves against the document");
+    os64_page_free(model);
+    fixture_free(&f);
+    static const char *const bases[]={"http://","mailto:someone@example.test","http://cdn.test/a/",
+        "HTTP://CDN.test:80/b/","sub/","","file:///assets/","../up/","https://x.test:443/p/q#frag"};
+    static const char *const pages[]={"http://example.test/dir/page.html","file:///pages/local.html","about:blank"};
+    static const char *const refs[]={"app.js","../lib/x.js","/root.js","?q=1"};
+    for(size_t b=0;b<sizeof(bases)/sizeof(bases[0]);b++)
+        for(size_t p=0;p<sizeof(pages)/sizeof(pages[0]);p++) {
+            char html[256];
+            snprintf(html,sizeof(html),"<!doctype html><base href='%s'><p>page</p>",bases[b]);
+            f=event_fixture(html,pages[p]);
+            if(!fixture_ready(&f))return;
+            model=os64_page_build(f.document,pages[p],NULL,f.state);
+            for(size_t r=0;model!=NULL && r<sizeof(refs)/sizeof(refs[0]);r++) {
+                char want[OS64_DOM_URL_MAX],got[OS64_DOM_URL_MAX];
+                bool w=os64_page_url_absolute(os64_page_base(model),refs[r],want,sizeof(want));
+                bool g=os64_dom_resolve(f.document,pages[p],refs[r],got,sizeof(got));
+                if(w!=g || (w && strcmp(want,got)!=0))
+                    fprintf(stderr,"resolve differs: base '%s' page %s ref %s: page %s '%s', dom %s '%s'\n",
+                            bases[b],pages[p],refs[r],w?"ok":"refused",w?want:"",g?"ok":"refused",g?got:"");
+                check(w==g && (!w || strcmp(want,got)==0),"a script's address resolves as the document's links do");
+            }
+            check(model!=NULL,"resolve oracle: the page builds");
+            os64_page_free(model);
+            fixture_free(&f);
+        }
+}
 static void dom_event_cases(void)
 {
+    dom_resolve_matches_page();
     dom_event_dispatch_cases();
     dom_event_handler_cases();
     dom_event_window_order_cases();
