@@ -204,11 +204,13 @@ bool os64_dom_take_report(os64_dom_t *dom, os64_js_outcome_t *outcome);
 os64_dom_script_kind_t os64_dom_script_kind(const os64_html_node_t *node);
 int os64_dom_script_start(os64_dom_t *dom, const os64_html_node_t *node);
 
-/* A relative reference resolved as the document resolves its own: against
- * the first `base` with an href, read from the tree as it is NOW, else
- * against document_url. A base that will not resolve is no base. An
- * absolute reference needs neither. False when nothing resolves or the
- * answer does not fit in cap. Works without a binding. */
+/* A relative reference resolved as the document resolves its own links
+ * (libpage's os64_page_url_absolute, file:/// included): against the first
+ * `base` with an href, read from the tree as it is NOW, else against
+ * document_url. A base that will not resolve is no base; an empty
+ * reference names the base without its fragment; an absolute reference is
+ * returned as written. False when nothing resolves or the answer does not
+ * fit in cap. Works without a binding. */
 bool os64_dom_resolve(const os64_html_document_t *document, const char *document_url,
                       const char *reference, char *out, size_t cap);
 

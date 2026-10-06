@@ -351,6 +351,9 @@ static void dom_navigation_cases(void)
     if (!fixture_ready(&f)) return;
     os64_dom_navigation_t ask;
     check(!os64_dom_take_navigation(f.binding, &ask) && ask.kind == OS64_DOM_NAVIGATE_NONE, "no ask yet");
+    char resolved[OS64_DOM_URL_MAX];
+    check(os64_dom_resolve(f.document,"file:///pages/local.html","app.js",resolved,sizeof(resolved)) &&
+          !strcmp(resolved,"file:///pages/app.js"),"a local page's relative reference resolves beside it");
     dom_script(&f, DOM_ASSERT
         "assert(location.href==='http://example.test:8080/dir/page.html?q=1#top'&&String(location)===location.href);"
         "assert(location.protocol==='http:'&&location.host==='example.test:8080'&&location.hostname==='example.test');"
@@ -382,6 +385,12 @@ static void dom_navigation_cases(void)
           !strcmp(ask.url, "http://example.test:8080/dir/page.html?q=1#again"), "a hash stays in this page under a base");
     check(os64_dom_resolve(NULL, "http://example.test/a/b", "c", ask.url, sizeof(ask.url)) &&
           !strcmp(ask.url, "http://example.test/a/c"), "no document resolves against the document's address");
+    check(os64_dom_resolve(f.document, "file:///pages/local.html", "app.js", ask.url, sizeof(ask.url)) &&
+          !strcmp(ask.url, "http://assets.test/js/app.js"), "a local page with an absolute base resolves against the base");
+    check(os64_dom_resolve(NULL, "file:///pages/local.html", "../lib/x.js", ask.url, sizeof(ask.url)) &&
+          !strcmp(ask.url, "file:///lib/x.js"), "a local page resolves upward as its links do");
+    check(os64_dom_resolve(NULL, "http://example.test/a/b?q#frag", "", ask.url, sizeof(ask.url)) &&
+          !strcmp(ask.url, "http://example.test/a/b?q"), "an empty reference names the base without its fragment");
     dom_script(&f, "var b=document.getElementsByTagName('base')[0];b.parentNode.removeChild(b)", "navigation-base-gone.js");
     dom_script(&f, "history.back()", "navigation-back.js");
     check(os64_dom_take_navigation(f.binding, &ask) && ask.kind == OS64_DOM_NAVIGATE_HISTORY && ask.delta == -1,
