@@ -369,6 +369,9 @@ static void dom_navigation_cases(void)
     if (!fixture_ready(&f)) return;
     os64_dom_navigation_t ask;
     check(!os64_dom_take_navigation(f.binding, &ask) && ask.kind == OS64_DOM_NAVIGATE_NONE, "no ask yet");
+    char resolved[OS64_DOM_URL_MAX];
+    check(os64_dom_resolve(f.document,"file:///pages/local.html","app.js",resolved,sizeof(resolved)) &&
+          !strcmp(resolved,"file:///pages/app.js"),"a local page's relative reference resolves beside it");
     dom_script(&f, DOM_ASSERT
         "assert(location.href==='http://example.test:8080/dir/page.html?q=1#top'&&String(location)===location.href);"
         "assert(location.protocol==='http:'&&location.host==='example.test:8080'&&location.hostname==='example.test');"
@@ -391,6 +394,22 @@ static void dom_navigation_cases(void)
     dom_script(&f, "window.location='/root'", "navigation-assign-location.js");
     check(os64_dom_take_navigation(f.binding, &ask) && !strcmp(ask.url, "http://example.test:8080/root"),
           "assigning location navigates");
+    dom_script(&f, "var b=document.createElement('base');b.setAttribute('href','http://assets.test/js/');"
+        "document.head.appendChild(b);location.href='app.html'", "navigation-base.js");
+    check(os64_dom_take_navigation(f.binding, &ask) && !strcmp(ask.url, "http://assets.test/js/app.html"),
+          "a relative location resolves against the document's base, read as it is now");
+    dom_script(&f, "location.hash='again'", "navigation-base-hash.js");
+    check(os64_dom_take_navigation(f.binding, &ask) &&
+          !strcmp(ask.url, "http://example.test:8080/dir/page.html?q=1#again"), "a hash stays in this page under a base");
+    check(os64_dom_resolve(NULL, "http://example.test/a/b", "c", ask.url, sizeof(ask.url)) &&
+          !strcmp(ask.url, "http://example.test/a/c"), "no document resolves against the document's address");
+    check(os64_dom_resolve(f.document, "file:///pages/local.html", "app.js", ask.url, sizeof(ask.url)) &&
+          !strcmp(ask.url, "http://assets.test/js/app.js"), "a local page with an absolute base resolves against the base");
+    check(os64_dom_resolve(NULL, "file:///pages/local.html", "../lib/x.js", ask.url, sizeof(ask.url)) &&
+          !strcmp(ask.url, "file:///lib/x.js"), "a local page resolves upward as its links do");
+    check(os64_dom_resolve(NULL, "http://example.test/a/b?q#frag", "", ask.url, sizeof(ask.url)) &&
+          !strcmp(ask.url, "http://example.test/a/b?q"), "an empty reference names the base without its fragment");
+    dom_script(&f, "var b=document.getElementsByTagName('base')[0];b.parentNode.removeChild(b)", "navigation-base-gone.js");
     dom_script(&f, "history.back()", "navigation-back.js");
     check(os64_dom_take_navigation(f.binding, &ask) && ask.kind == OS64_DOM_NAVIGATE_HISTORY && ask.delta == -1,
           "history.back is a delta");
@@ -559,12 +578,123 @@ static void dom_write_cases(void)
                "write-no-host.js");
     fixture_free(&f);
 }
+/* Re-entry and retained state: a redispatch keeps its veto, conversions that
+ * run script cannot slip a timer past the quota, and a click on a clicking
+ * element returns while a click on another still runs. */
+static void dom_event_reentry_cases(void)
+{
+    DomFixture f=event_fixture(event_html,"http://example.test/review");
+    if(!fixture_ready(&f))return;
+    dom_script(&f,DOM_ASSERT
+        "var t=document.getElementById('inner'),log=[];"
+        "t.addEventListener('click',e=>{log.push('capture');e.stopPropagation()},true);"
+        "t.addEventListener('click',()=>log.push('bubble'));"
+        "t.dispatchEvent(new Event('click',{bubbles:true}));"
+        "assert(log.join('|')==='capture','review target propagation: '+log);",
+        "review-target-propagation.js");
+    fixture_free(&f);
+    f=event_fixture(event_html,"http://example.test/review");
+    if(!fixture_ready(&f))return;
+    dom_script(&f,DOM_ASSERT
+        "var e=new Event('review',{cancelable:true});e.preventDefault();"
+        "assert(!document.body.dispatchEvent(e)&&e.defaultPrevented,'review cancellation lost');",
+        "review-retained-cancellation.js");
+    fixture_free(&f);
+    f=event_fixture(event_html,"http://example.test/review");
+    if(!fixture_ready(&f))return;
+    dom_script(&f,DOM_ASSERT
+        "for(var i=0;i<4095;i++)setTimeout(()=>{},1000);"
+        "throws('QuotaExceededError',()=>setTimeout(()=>{},{valueOf(){setTimeout(()=>{},1000);return 1000}}));",
+        "review-timer-reentrant-quota.js");
+    fixture_free(&f);
+    f=event_fixture(event_html,"http://example.test/review");
+    if(!fixture_ready(&f))return;
+    dom_script(&f,DOM_ASSERT
+        "for(var i=0;i<4095;i++)setTimeout(()=>{},1000);"
+        "throws('QuotaExceededError',()=>setTimeout({toString(){setTimeout(()=>{},1000);return 'void 0'}},1000));",
+        "review-timer-reentrant-source-quota.js");
+    fixture_free(&f);
+    f=event_fixture(event_html,"http://example.test/review");
+    if(!fixture_ready(&f))return;
+    dom_script(&f,DOM_ASSERT
+        "var t=document.getElementById('inner'),n=0;t.onclick=()=>{if(++n===1)t.click()};t.click();"
+        "assert(n===1,'review recursive click: '+n);",
+        "review-click-in-progress.js");
+    fixture_free(&f);
+    f=event_fixture(event_html,"http://example.test/review");
+    if(!fixture_ready(&f))return;
+    dom_script(&f,DOM_ASSERT
+        "var t=document.getElementById('inner'),b=document.body,log=[];"
+        "b.onclick=e=>{if(e.target===b)log.push('body')};t.onclick=()=>{log.push('inner');b.click()};t.click();"
+        "assert(log.join('|')==='inner|body','review nested click elsewhere: '+log);",
+        "review-click-other-element.js");
+    fixture_free(&f);
+}
+/* A script's address resolves as the document's own links do: libpage's
+ * model is the oracle, over bases good, bad and opaque, on pages served,
+ * local and blank. A malformed base is no base; an opaque one is a base
+ * nothing relative resolves against. */
+static void dom_resolve_matches_page(void)
+{
+    const char *url="http://example.test/dir/page.html";
+    DomFixture f=event_fixture("<!doctype html><base href='http://'><p>page</p>",url);
+    if(!fixture_ready(&f))return;
+    char resolved[OS64_DOM_URL_MAX];
+    os64_page_t *model=os64_page_build(f.document,url,NULL,f.state);
+    check(model!=NULL && !strcmp(os64_page_base(model),url),"a malformed base: the document falls back to its own address");
+    check(os64_dom_resolve(f.document,url,"app.js",resolved,sizeof(resolved)) &&
+        !strcmp(resolved,"http://example.test/dir/app.js"),"a malformed base: a script resolves against the document");
+    os64_page_free(model);
+    fixture_free(&f);
+    static const char *const bases[]={"http://","mailto:someone@example.test","http://cdn.test/a/",
+        "HTTP://CDN.test:80/b/","sub/","","file:///assets/","../up/","https://x.test:443/p/q#frag",
+        " http://cdn.test/a/ "," sub/ "};
+    static const char *const pages[]={"http://example.test/dir/page.html","file:///pages/local.html","about:blank"};
+    /* The oracle is a LINK in the same document: its href went through
+     * every step a page's address does, the reference's own cleaning
+     * included. A link's fragment comes back decoded, so the address is
+     * compared without it and the fragment's presence beside it. */
+    static const char *const refs[]={"app.js","../lib/x.js","/root.js","?q=1"," app.js ","a\tb\nc.js",
+        "caf\xc3\xa9/\xc3\xbc.js","x.js#Sec tion","","#top","mailto:x@y.test","HTTP://Other.test:80/Z"};
+    for(size_t b=0;b<sizeof(bases)/sizeof(bases[0]);b++)
+        for(size_t p=0;p<sizeof(pages)/sizeof(pages[0]);p++) {
+            char html[2048];
+            int at=snprintf(html,sizeof(html),"<!doctype html><meta charset=utf-8><base href='%s'>",bases[b]);
+            for(size_t r=0;r<sizeof(refs)/sizeof(refs[0]);r++)
+                at+=snprintf(html+at,sizeof(html)-(size_t)at,"<a href='%s'>%zu</a>",refs[r],r);
+            f=event_fixture(html,pages[p]);
+            if(!fixture_ready(&f))return;
+            model=os64_page_build(f.document,pages[p],NULL,f.state);
+            for(int32_t i=0;model!=NULL && i<os64_page_nlinks(model);i++) {
+                const os64_page_link_t *link=os64_page_link(model,i);
+                const os64_html_node_t *text=link->node->first_child;
+                size_t r=0;
+                for(size_t k=0;text!=NULL && k<text->text_len;k++) r=r*10+(size_t)(text->text[k]-'0');
+                const char *ref=os64_html_attr(link->node,"href")->value;
+                char got[OS64_DOM_URL_MAX];
+                bool w=link->href.url!=NULL;
+                bool g=os64_dom_resolve(f.document,pages[p],ref,got,sizeof(got));
+                char *hash=g?strchr(got,'#'):NULL;
+                if(hash) *hash='\0';
+                bool same=w==g && (!w || (strcmp(link->href.url,got)==0 && link->href.has_fragment==(hash!=NULL)));
+                if(!same)
+                    fprintf(stderr,"resolve differs: base '%s' page %s ref #%zu: link %s '%s', dom %s '%s'\n",
+                            bases[b],pages[p],r,w?"ok":"refused",w?link->href.url:"",g?"ok":"refused",g?got:"");
+                check(same,"a script's address resolves as the document's links do");
+            }
+            check(model!=NULL && os64_page_nlinks(model)>=8,"resolve oracle: the page builds with its links");
+            os64_page_free(model);
+            fixture_free(&f);
+        }
+}
 static void dom_event_cases(void)
 {
+    dom_resolve_matches_page();
     dom_event_dispatch_cases();
     dom_event_handler_cases();
     dom_event_window_order_cases();
     dom_event_listens_cases();
+    dom_event_reentry_cases();
     dom_timer_cases();
     dom_navigation_cases();
     dom_write_cases();

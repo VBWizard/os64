@@ -271,8 +271,10 @@ of the page is recorded and performed by the host after the task.
 (`os64_dom_take_navigation`): `location.href =`, `location = `,
 `location.assign`, `replace`, `reload`, `hash =` (the address with its
 fragment replaced), `history.back/forward/go` (`go(0)` reloads), a link's
-`click()`, and a form's submission. Addresses are resolved against the page
-as a link's are. A taken ask's nodes come held. `location` reads the page's
+`click()`, and a form's submission. Addresses are resolved exactly as a
+link's are, by libpage's own steps with the base as the tree stands
+(`os64_dom_resolve`, which a host uses for a script's `src` too); `hash =`
+stays in the page. A taken ask's nodes come held. `location` reads the page's
 address and its parts; `history.length` reads 1. `window.status` and
 `defaultStatus` accept an assignment and read empty: the status line is the
 browser's.
@@ -282,8 +284,10 @@ element's activation unless a listener cancelled it. A checkbox or radio
 changes before its click and is put back when the click is cancelled
 (otherwise `input` and `change` follow); a link asks to be followed; a
 submit button fires `submit` at its form and, uncancelled, asks for the
-submission; a reset button fires `reset`. `form.submit()` asks without a
-`submit` event, `requestSubmit()` with one, and `reset()` fires `reset`. A
+submission; a reset button fires `reset`. An element already being
+clicked ignores another `click()` until its own finishes (HTML's
+click-in-progress flag); another element can still be clicked from its
+listener. `form.submit()` asks without a `submit` event, `requestSubmit()` with one, and `reset()` fires `reset`. A
 reset not cancelled, `focus()` and `blur()` reach the host through
 `options.activate`, which records them.
 

@@ -3,7 +3,6 @@
 #include "os64/fmt.h"
 #include "os64/mem.h"
 #include "os64/str.h"
-#include "os64/url.h"
 
 // A page's scripts, at most: a page with more is refused the rest, as a
 // page with more sheets than SHEETS_MAX is.
@@ -284,14 +283,10 @@ static bool src_fetch(yonder_scripts_t *s, Item *it)
     const os64_html_attr_t *src = os64_html_attr(it->node, "src");
     char url[OS64_DOM_URL_MAX];
     os64_strcopy(it->name, sizeof(it->name), src != NULL ? src->value : "script");
-    os64_url_t base;
-    char scheme[OS64_URL_SCHEME_MAX];
-    if (src == NULL || src->value[0] == '\0')
-        return false;
-    if (os64_url_scheme_of(src->value, scheme, sizeof(scheme)))
-        os64_strcopy(url, sizeof(url), src->value);
-    else if (os64_url_parse(s->url, &base) != OS64_URL_OK ||
-             !os64_url_absolute(&base, src->value, url, sizeof(url)))
+    // The base as the tree stands at preparation: a script before this one
+    // may have added or moved it.
+    if (src == NULL || src->value[0] == '\0' ||
+        !os64_dom_resolve(s->doc, s->url, src->value, url, sizeof(url)))
         return false;
     os64_strcopy(it->name, sizeof(it->name), url);
     const os64_html_attr_t *charset = os64_html_attr(it->node, "charset");

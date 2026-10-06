@@ -197,7 +197,11 @@ page read from disk resolves its references beside it and they keep the
 empty host. `os64_page_url_absolute` applies the file-host rule to an
 address a page's resource names in turn — a style sheet's `@import` — but
 not the encoding rule above it: an `@import` of a name past ASCII is
-refused where a link to it is encoded and followed.
+refused where a link to it is encoded and followed. `os64_page_resolve_in`
+applies ALL of it, for an address a script names (a `src`, a `location`
+ask): the document's own steps, its base as the tree stands now, on a
+scratch page with no model, so a script and a link in one document can
+never disagree about where an address goes.
 
 **B. Form owner** (§4.10.17.3). One door: `page_form_owner(page, control)`,
 settled ONCE for every control after the walk and before anything asks, so

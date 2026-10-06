@@ -115,6 +115,9 @@ struct os64_dom {
     DTimer *timers;
     size_t timer_count;
     uint32_t timer_id, timer_nesting;
+    /* HTML's click-in-progress flags, one link per element.click() on the
+     * C stack (window.c). */
+    const struct DClicking *clicking;
     DScript *scripts[64];
     char *url;
     DNavigation navigation;

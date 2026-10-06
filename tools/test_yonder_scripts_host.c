@@ -53,10 +53,18 @@ static int pool_fake;
 static struct { os64_work_id_t id; yonder_script_job_t *job; } script_jobs[32];
 static int nscript_jobs;
 static unsigned script_cancels;
+/* A sheet's fetch job is held the same way, never run: a case that wants a
+ * page waiting for its sheets gets one that waits until it is cancelled or
+ * the window drops it. */
+static struct { os64_work_id_t id; void *job; } sheet_jobs[32];
+static int nsheet_jobs;
 void os64_work_cancel(os64_work_pool_t *pool, os64_work_id_t id) {
     (void)pool;
     for(int i=0;i<nscript_jobs;i++) if(script_jobs[i].id==id) {
         os64_free(script_jobs[i].job); script_jobs[i]=script_jobs[--nscript_jobs]; script_cancels++; return;
+    }
+    for(int i=0;i<nsheet_jobs;i++) if(sheet_jobs[i].id==id) {
+        os64_free(sheet_jobs[i].job); sheet_jobs[i]=sheet_jobs[--nsheet_jobs]; return;
     }
     pool_cancelled=id;
     if(id==pool_ids && pool_work.job!=NULL) {
@@ -70,6 +78,11 @@ os64_work_id_t os64_work_submit(os64_work_pool_t *pool, const os64_work_t *work)
         if(nscript_jobs==32) return 0;
         script_jobs[nscript_jobs].id=++pool_ids; script_jobs[nscript_jobs].job=work->job;
         return script_jobs[nscript_jobs++].id;
+    }
+    if(*(const uint32_t *)work->job==YONDER_JOB_SHEET) {
+        if(nsheet_jobs==32) return 0;
+        sheet_jobs[nsheet_jobs].id=++pool_ids; sheet_jobs[nsheet_jobs].job=work->job;
+        return sheet_jobs[nsheet_jobs++].id;
     }
     pool_work=*work; return ++pool_ids;
 }
@@ -1166,6 +1179,7 @@ static void stream_window_drop(void) {
     if(g.stream.active) stream_drop();
     if(pool_work.job!=NULL) { yonder_trip_release(pool_work.job,NULL); memset(&pool_work,0,sizeof(pool_work)); }
     inputs_drop(); forms_drop(); page_clear(&g.page); page_clear(&g.coming.page); os64_ui_font_release(&g.ui);
+    while(nsheet_jobs>0) os64_free(sheet_jobs[--nsheet_jobs].job);
 }
 /* The worker's part: a head for `url`, the body in `chunk`-sized posts, the verdict. */
 static way_head_t stream_head(const char *type, const char *charset, bool posted) {
@@ -1718,7 +1732,72 @@ static void loop_downgrade(void) {
     bar_forget();
     probe_drop();
 }
+// What a script changed is what the page uses: a src resolves against the
+// document's base, a DOMContentLoaded edit reaches the arriving model, and
+// an image's default action finds the image again after its listener.
+static void loop_script_changes_hold(void) {
+    loop_page("<base href='http://assets.test/js/'><script src='app.js'></script>");
+    check(loop_settle() && nscript_jobs==1,"review base: source fetch submitted");
+    check(nscript_jobs==1 && os64_streq(script_jobs[0].job->url,"http://assets.test/js/app.js"),
+        "review base: source resolves against document base");
+    loop_drop();
+    loop_page("<form id=f action=/send></form><script>"
+        "document.addEventListener('DOMContentLoaded',()=>{var i=document.createElement('input');"
+        "i.id='late';document.getElementById('f').appendChild(i)});</script>");
+    check(loop_settle() && g.page.tree!=NULL && probe_id("late")!=NULL,
+        "review DCL: handler inserted control before arrival");
+    check(os64_page_ncontrols(page_model(&g.page))==1 && probe_field("late")!=NULL,
+        "review DCL: arrived model includes lifecycle mutation");
+    loop_drop();
+    probe_page("<form id=f action=/send><input id=pic type=image name=pic></form><script>"
+        "var p=document.getElementById('pic');p.onclick=()=>{var i=document.createElement('input');"
+        "i.id='first';document.getElementById('f').insertBefore(i,p)};</script>",true);
+    script_turn();
+    pool_open=true;g.pool=(os64_work_pool_t *)&pool_fake;
+    input_queue(IN_CLICK,probe_id("pic"),NULL,0,0,false);inputs_run();
+    check(g.nav.id!=0,"review image click: original image submits after control renumbering");
+    stop_trip();pool_open=false;g.pool=NULL;probe_drop();
+}
+// What arrives is what the scripts left: a style a DOMContentLoaded listener
+// or a waiting page's timer added is in the first paint, and a local page's
+// script loads from beside it.
+static void loop_arrival_follows_scripts(void) {
+    loop_page("<p id=styled>visible</p><script>document.addEventListener('DOMContentLoaded',()=>{"
+        "var s=document.createElement('style');s.textContent='#styled{display:none}';"
+        "document.head.appendChild(s)});</script>");
+    check(loop_settle() && g.page.tree!=NULL && os64_page_nsheets(page_model(&g.page))==1,
+        "arrival: refreshed model includes lifecycle stylesheet");
+    check(flow_box_for(g.page.tree,probe_id("styled"))==NULL,
+        "arrival: lifecycle stylesheet applied before publication");
+    loop_drop();
+    stream_window();g.scripts_on=true;g.script_ms=5000;
+    slurp_path="/pages/local.html";slurp_bytes="<script src='app.js'></script>";
+    open_address("/pages/local.html",NAV_GO,NULL,NULL);
+    check(loop_settle() && nscript_jobs==1 && os64_streq(script_jobs[0].job->url,"file:///pages/app.js"),
+        "local page: relative external script beside local page fetches");
+    slurp_path=NULL;loop_drop();
+    /* The sibling: a timer edits the page while it waits for a sheet, and
+     * the page shown takes its sheet table from the tree it has by then. */
+    loop_page("<link rel=stylesheet href=wait.css><p id=styled>visible</p><script>"
+        "setTimeout(()=>{var s=document.createElement('style');s.textContent='#styled{display:none}';"
+        "document.head.appendChild(s)},10);</script>");
+    check(loop_settle() && g.coming.active && g.coming.page.sheets_waiting==1,
+        "coming page: waits for its linked sheet");
+    uint64_t waited_serial=g.coming.page.serial;
+    now_ms+=50;
+    check(loop_settle() && g.coming.active &&
+          os64_html_version(page_doc(&g.coming.page))!=g.coming.page.model_version,
+        "coming page: its timer edited the tree while it waited");
+    coming_show();
+    check(g.page.tree!=NULL && os64_page_nsheets(page_model(&g.page))==2 && g.page.serial!=waited_serial,
+        "coming page: shown with a sheet table restaged from the edited tree");
+    check(probe_id("styled")!=NULL && flow_box_for(g.page.tree,probe_id("styled"))==NULL,
+        "coming page: the timer's style applies to the first paint");
+    loop_drop();
+}
 static void loop_cases(void) {
+    loop_arrival_follows_scripts();
+    loop_script_changes_hold();
     loop_state_adopted();
     loop_typed_value();
     loop_downgrade();

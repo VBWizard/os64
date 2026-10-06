@@ -211,5 +211,13 @@ bool os64_dom_take_report(os64_dom_t *dom, os64_js_outcome_t *outcome);
 os64_dom_script_kind_t os64_dom_script_kind(const os64_html_node_t *node);
 int os64_dom_script_start(os64_dom_t *dom, const os64_html_node_t *node);
 
+/* A reference a script names, resolved exactly as a link in the document
+ * would be: os64_page_resolve_in, so the input cleaning, the `<base href>`
+ * as the tree stands NOW, the fallbacks and the canonical spelling are
+ * libpage's, not a copy of them. False when it will not resolve or does
+ * not fit in cap. Works without a binding. */
+bool os64_dom_resolve(const os64_html_document_t *document, const char *document_url,
+                      const char *reference, char *out, size_t cap);
+
 #pragma GCC visibility pop
 #endif

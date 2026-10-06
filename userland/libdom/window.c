@@ -48,16 +48,19 @@ bool os64_dom_take_report(os64_dom_t *dom, os64_js_outcome_t *outcome)
     return true;
 }
 
+/* One rule for every address on a page: libpage resolves a script's exactly
+ * as it resolves a link's, so the two cannot drift apart. */
+bool os64_dom_resolve(const os64_html_document_t *document, const char *document_url,
+                      const char *reference, char *out, size_t cap)
+{
+    return os64_page_resolve_in(document, document_url, reference, out, cap);
+}
+
 /* A reference resolved against the page, as a link's href is. An absolute
  * reference needs no base, so about:blank still reaches one. */
 static bool resolve(os64_dom_t *dom, const char *reference, char *out, size_t cap)
 {
-    char scheme[OS64_URL_SCHEME_MAX];
-    if (os64_url_scheme_of(reference, scheme, sizeof(scheme)))
-        return os64_strcopy(out, cap, reference) < cap;
-    os64_url_t base;
-    if (os64_url_parse(page_url(dom), &base) != OS64_URL_OK) return false;
-    return os64_url_absolute(&base, reference, out, cap);
+    return os64_dom_resolve(dom->document, page_url(dom), reference, out, cap);
 }
 
 enum {
@@ -356,9 +359,8 @@ static int reset(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *form)
  * activation behaviour unless a listener cancelled it. A checkbox or radio
  * changes before its click is dispatched and is put back when the click is
  * cancelled (HTML's legacy-pre-activation behaviour). */
-static int click(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node)
+static int click_activate(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node)
 {
-    if (disabled(node)) return 1;
     bool checkable = html_element(node, OS64_HTML_TAG_INPUT) &&
         (type_is(node, "checkbox", false) || type_is(node, "radio", false));
     bool was = false;
@@ -396,6 +398,27 @@ static int click(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node)
         return submit(dom, ctx, form, node, true);
     if ((button || input) && type_is(node, "reset", false)) return reset(dom, ctx, form);
     return 1;
+}
+
+struct DClicking {
+    const os64_html_node_t *node;
+    const struct DClicking *next;
+};
+
+/* HTML's click-in-progress flag: an onclick that clicks its own element
+ * returns at once instead of recursing until the engine's stack gives out.
+ * A different element may still be clicked from inside the listener. The
+ * flag is a link in a chain on the C stack, so every exit clears it. */
+static int click(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node)
+{
+    if (disabled(node)) return 1;
+    for (const struct DClicking *at = dom->clicking; at != NULL; at = at->next)
+        if (at->node == node) return 1;
+    struct DClicking self = {node, dom->clicking};
+    dom->clicking = &self;
+    int result = click_activate(dom, ctx, node);
+    dom->clicking = self.next;
+    return result;
 }
 
 JSValue d_element_action(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node, int action)
