@@ -71,16 +71,21 @@ bool os64_dom_resolve(const os64_html_document_t *document, const char *document
     char scheme[OS64_URL_SCHEME_MAX];
     if (os64_url_scheme_of(reference, scheme, sizeof(scheme)))
         return os64_strcopy(out, cap, reference) < cap;
-    os64_url_t base;
-    if (document_url == NULL || os64_url_parse(document_url, &base) != OS64_URL_OK) return false;
     const char *href = document != NULL ? first_base(document->document) : NULL;
     char based[OS64_DOM_URL_MAX];
-    os64_url_t moved;
+    const char *base = document_url;
     if (href != NULL && href[0] != '\0' &&
-        os64_dom_resolve(NULL, document_url, href, based, sizeof(based)) &&
-        os64_url_parse(based, &moved) == OS64_URL_OK)
-        base = moved;
-    return os64_url_absolute(&base, reference, out, cap);
+        os64_dom_resolve(NULL, document_url, href, based, sizeof(based)))
+        base = based;
+    if (base == NULL) return false;
+    // libpage's resolver, so a local page's file:/// address (an empty
+    // authority the bare URL grammar refuses) resolves as its links do.
+    if (reference[0] != '\0') return os64_page_url_absolute(base, reference, out, cap);
+    // An empty reference names the base itself, without its fragment.
+    if (!os64_page_url_absolute(base, base, out, cap)) return false;
+    char *hash = os64_strchr(out, '#');
+    if (hash != NULL) *hash = '\0';
+    return true;
 }
 
 /* A reference resolved against the page, as a link's href is. An absolute
