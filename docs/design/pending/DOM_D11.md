@@ -151,3 +151,44 @@ whole-page/P5 acceptance is claimed. J5 and scripts-on-by-default stay pending.
 ASan/UBSan and leak detection remained enabled for host verification. The
 image is `os64_kernel.iso` in `.worktrees/dom-d11`; the small visible fixture is
 installed as `/tests/pages/dom-classic.html`. This is local proof, not a P5 run.
+
+## P5 testing: hover repaint starvation
+
+Chris reported Million Dollar Homepage hover descriptions appearing only after
+about ten seconds of main-thread CPU work, and remaining unchanged until mouse
+motion stopped. Links still navigated. The original widget moves its popup and
+replaces text on each mousemove, causing model/layout rebuilding. Yonder's loop
+processed each raw input sample, drained its DOM input queue immediately, and
+painted only when the GUI event queue emptied; its per-DOM-queue move merging
+could not combine samples dispatched in separate GUI events.
+
+A local profile of the downloaded page's 3,316-link tree and original primary
+script measured approximately 1 ms in JavaScript, 16–17 ms rebuilding the model
+and 25–27 ms rebuilding rendering per move. These are host measurements, not
+P5 timings. They expose repeated work; continuous input also prevented the
+rendering boundary from being reached.
+
+The P5-driven fix is marked in code comments. Input work now yields after at
+most 32 consumed samples. Consecutive idle moves with unchanged modifiers merge
+before DOM dispatch; buttons, drags, wheels, keys, doorbells and pointer-state
+changes preserve their order. Rendering, stream work and timers run between
+batches even when more input waits. Lookahead remains unconsumed input for the
+question bar, which stays disarmed until the queue is empty.
+
+The browser regression feeds 1,000 pointer samples through the same iterator
+and native hover/DOM/rendering paths: 32 current-position updates result, and
+the first popup/layout update is ready with 968 samples still queued. Mixed
+input checks preserve click/drag/wheel/modifier/key/timer/pointer-state order.
+The optional `D11_HOVER_PROFILE` host proof reads `million-primary.html` from a
+local download directory; its third-party scripts are removed and the original
+`gsc3.js` is retained. `--script-audit` now reports model and rendering rebuild
+time separately from script execution for the next P5 check.
+
+This fixes the unbounded input drain and redundant pointer sampling. It does
+not introduce incremental layout; P5 confirmation of latency remains pending.
+
+Follow-up verification: 2,409 scripted-page host checks with the original-widget
+and full-tree profiling options, zero failures; the native Yonder suite passes
+179 checks and six paint references. Full updated boot-image build passes.
+Only the Yonder executable changes for this follow-up on an existing D11
+installation. The rebuilt P5 artifact still awaits Chris's retry.

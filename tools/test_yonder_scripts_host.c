@@ -2793,6 +2793,119 @@ static void classic_downloaded_cases(void)
     probe_drop();
 }
 
+typedef struct {
+    const os64_gui_event_t *events;
+    size_t count, at;
+} HoverQueue;
+static int64_t hover_poll(void *opaque,os64_gui_event_t *event)
+{
+    HoverQueue *queue=opaque;
+    if(queue->at==queue->count) return 0;
+    *event=queue->events[queue->at++];return 1;
+}
+/* P5 regression: the description must become drawable while motion remains
+ * queued. Check that sampling reduction preserves input boundaries, rather
+ * than imposing a host-speed deadline which cannot describe the P5. */
+static void hover_batch_cases(void)
+{
+    os64_gui_event_t samples[1000];
+    for(unsigned i=0;i<1000;i++) samples[i]=(os64_gui_event_t){
+        .type=OS64_GUI_EVENT_MOUSE_MOVE,.mouse={.x=20+(int32_t)(i%100),.y=20}};
+    probe_page("<!DOCTYPE HTML PUBLIC '-//W3C//DTD HTML 4.01 Transitional//EN'>"
+        "<style>body{margin:0}img{display:block;width:200px;height:100px}"
+        "#popup{position:absolute;top:150px}</style><img usemap='#regions'><map name=regions>"
+        "<area coords='0,0,200,100' title='site' onmouseover=\"document.getElementById('popup').title=this.title\">"
+        "</map><div id=popup></div><script>var moves=0;document.onmousemove=function(e){"
+        "var popup=document.getElementById('popup');var width=document.body.offsetWidth;"
+        "popup.style.left=e.pageX+10;popup.textContent=(++moves)+':'+e.clientX;};</script>",true);
+    check(script_turn(),"hover burst: page's tracker installs");
+    HoverQueue queue={samples,1000,0};
+    unsigned turns=0,dispatched=0;
+    while(queue.at<queue.count) {
+        YonderEventBatch batch={0};os64_gui_event_t event;
+        while(yonder_event_batch_next(&batch,&event,hover_poll,&queue)) {
+            dispatched++;
+            hover(event.mouse.x,event.mouse.y);inputs_run();
+        }
+        turns++;
+        check(batch.consumed<=YONDER_EVENT_BATCH_MAX,"hover burst: turn has bounded input work");
+        if(turns==1) {
+            check(queue.at<queue.count && probe_text_is("popup","1:51"),
+                "hover burst: current popup rendered before queued motion drains");
+            check(g.page.rendered_version==os64_html_version(page_doc(&g.page)),
+                "hover burst: popup layout is current at first rendering boundary");
+        }
+    }
+    check(turns==32 && dispatched==32 && probe_text_is("popup","32:119"),
+        "hover burst: thousand samples collapse to current positions and final description");
+    probe_drop();
+    os64_gui_event_t ordered[]={
+        {.type=OS64_GUI_EVENT_MOUSE_MOVE,.mouse={.x=1}},
+        {.type=OS64_GUI_EVENT_MOUSE_MOVE,.mouse={.x=2}},
+        {.type=OS64_GUI_EVENT_MOUSE_BUTTON_DOWN,.mouse={.x=3,.buttons=1}},
+        {.type=OS64_GUI_EVENT_MOUSE_MOVE,.mouse={.x=4,.buttons=1}},
+        {.type=OS64_GUI_EVENT_MOUSE_MOVE,.mouse={.x=5,.buttons=1}},
+        {.type=OS64_GUI_EVENT_MOUSE_BUTTON_UP,.mouse={.x=6}},
+        {.type=OS64_GUI_EVENT_MOUSE_MOVE,.mouse={.x=7}},
+        {.type=OS64_GUI_EVENT_MOUSE_MOVE,.mouse={.x=8,.modifiers=OS64_GUI_MOD_SHIFT}},
+        {.type=OS64_GUI_EVENT_MOUSE_WHEEL,.mouse={.dy=-2}},
+        {.type=OS64_GUI_EVENT_KEY_DOWN,.key={.ascii='a'}},
+        {.type=OS64_GUI_EVENT_DOORBELL,.doorbell={.mask=BELL_TICK}},
+        {.type=OS64_GUI_EVENT_POINTER_STATE,.pointer={.inside=false}},
+        {.type=OS64_GUI_EVENT_MOUSE_MOVE,.mouse={.x=9}},
+    };
+    queue=(HoverQueue){ordered,sizeof(ordered)/sizeof(*ordered),1};
+    YonderEventBatch batch={.held=true,.pending=ordered[0]};os64_gui_event_t event;
+    unsigned index=1;
+    while(yonder_event_batch_next(&batch,&event,hover_poll,&queue)) {
+        const os64_gui_event_t *expected=index<queue.count ? &ordered[index] : NULL;
+        bool same=expected!=NULL && event.type==expected->type;
+        if(same) switch(event.type) {
+            case OS64_GUI_EVENT_MOUSE_WHEEL: same=event.mouse.dx==expected->mouse.dx && event.mouse.dy==expected->mouse.dy;break;
+            case OS64_GUI_EVENT_KEY_DOWN: same=event.key.ascii==expected->key.ascii;break;
+            case OS64_GUI_EVENT_DOORBELL: same=event.doorbell.mask==expected->doorbell.mask;break;
+            case OS64_GUI_EVENT_POINTER_STATE: same=event.pointer.inside==expected->pointer.inside;break;
+            default: same=event.mouse.x==expected->mouse.x && event.mouse.buttons==expected->mouse.buttons &&
+                event.mouse.modifiers==expected->mouse.modifiers;break;
+        }
+        check(same,
+            "hover burst: click, drag, modifier, key, timer and pointer state order preserved");
+        index++;
+    }
+    check(index==queue.count,"hover burst: lookahead delivers every nonmerged event");
+}
+
+#include <time.h>
+static double hover_seconds(void)
+{
+    struct timespec ts;clock_gettime(CLOCK_MONOTONIC,&ts);
+    return ts.tv_sec+ts.tv_nsec/1e9;
+}
+static void classic_hover_profile(void)
+{
+    const char *directory=getenv("D11_HOVER_PROFILE");if(directory==NULL) return;
+    char *source=classic_source(directory,"million-primary.html");if(source==NULL) return;
+    double began=hover_seconds();probe_page(source,true);free(source);
+    fprintf(stderr,"HOVER profile load %.3f s links=%d\n",hover_seconds()-began,os64_page_nlinks(page_model(&g.page)));
+    began=hover_seconds();script_turn();fprintf(stderr,"HOVER script %.3f s\n",hover_seconds()-began);
+    const os64_html_node_t *area=NULL;
+    for(const os64_html_node_t *n=page_doc(&g.page)->document;n;n=next_within(n,page_doc(&g.page)->document))
+        if(n->tag==OS64_HTML_TAG_AREA) {area=n;break;}
+    os64_dom_event_t ev={.type="mouseover",.bubbles=true,.kind=OS64_DOM_EVENT_MOUSE};os64_js_outcome_t out;
+    began=hover_seconds();yonder_scripts_dispatch(g.page.scripts,area,&ev,NULL,&out);
+    fprintf(stderr,"HOVER over %.3f s outcome=%d %s\n",hover_seconds()-began,out.status,out.message);
+    for(int i=0;i<3;i++) {
+        ev.type="mousemove";ev.client_x=100+i;ev.client_y=100;ev.page_coordinates=true;ev.page_x=100+i;ev.page_y=100;
+        began=hover_seconds();yonder_scripts_dispatch(g.page.scripts,area,&ev,NULL,&out);
+        fprintf(stderr,"HOVER move %.3f s outcome=%d %s\n",hover_seconds()-began,out.status,out.message);
+        began=hover_seconds();check(page_model_refresh(&g.page),"profile model refresh");
+        fprintf(stderr,"HOVER model %.3f s\n",hover_seconds()-began);
+        began=hover_seconds();check(script_rebuild(),"profile rendering rebuild");
+        fprintf(stderr,"HOVER render %.3f s\n",hover_seconds()-began);
+    }
+    probe_drop();
+}
+
 int main(void)
 {
     os64_text_options_t options={.memory={.alloc=probe_alloc,.free=probe_free},
@@ -2801,6 +2914,8 @@ int main(void)
     check(os64_text_font_bitmap(probe_text,&probe_font)==OS64_FONT_OK,"bitmap face");
     classic_browser_cases();
     classic_downloaded_cases();
+    hover_batch_cases();
+    classic_hover_profile();
     geometry_cases();
     geometry_body_cases();
     geometry_publish_cases();
