@@ -13,6 +13,7 @@
 // document.
 
 #include "internal.h"
+#include "os64/fmt.h"
 
 uint16_t p_default_port(const char *scheme)
 {
@@ -456,6 +457,34 @@ void p_resolve(os64_page_t *page, const char *ref, os64_page_ref_t *out)
         return;
     }
     out->refused = OS64_PAGE_REASON_BAD_ACTION;
+}
+
+bool os64_page_resolve_in(const os64_html_document_t *doc, const char *document_url,
+                          const char *reference, char *out, size_t cap)
+{
+    if (reference == NULL || out == NULL || cap == 0)
+        return false;
+    // A scratch page: resolution reads the document, its address and its
+    // base, and nothing else a model carries.
+    os64_page_t *page = os64_calloc(1, sizeof(*page));
+    if (page == NULL)
+        return false;
+    page->doc = doc;
+    bool ok = false;
+    if (p_document_url(page, document_url) && p_base(page)) {
+        os64_page_ref_t ref;
+        p_resolve(page, reference, &ref);
+        // p_resolve hands the fragment back decoded, for matching; an
+        // address keeps it as the page wrote it, so it comes from the same
+        // cleaned input.
+        const char *clean = ref.url != NULL ? url_input(page, reference) : NULL;
+        const char *hash = clean != NULL && ref.has_fragment ? os64_strchr(clean, '#') : NULL;
+        if (clean != NULL)
+            ok = (size_t)os64_snprintf(out, cap, "%s%s", ref.url, hash != NULL ? hash : "") < cap;
+    }
+    p_arena_free(&page->arena);
+    os64_free(page);
+    return ok;
 }
 
 void p_resolve_action(os64_page_t *page, const char *ref, os64_page_ref_t *out)

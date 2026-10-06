@@ -156,6 +156,44 @@ static void url_absolute(void)
     }
 }
 
+// os64_page_resolve_in: a script's address, resolved as a link in the same
+// document is, without a model; and every allocation it makes failed in
+// turn refuses cleanly, leaving nothing behind.
+static void resolve_in(void)
+{
+    os64_html_document_t *doc = parse("<base href=' http://cdn.test/a/ '><p>x</p>", NULL);
+    static const struct { const char *ref, *want; } k[] = {
+        {" app.js ", "http://cdn.test/a/app.js"},
+        {"caf\xc3\xa9.js#Top Part", "http://cdn.test/a/caf%C3%A9.js#Top Part"},
+        {"", "http://cdn.test/a/"},
+        {"HTTP://Other.test:80/Z", "http://other.test/Z"},
+    };
+    for (int32_t i = 0; doc != NULL && i < (int32_t)(sizeof(k) / sizeof(k[0])); i++) {
+        char out[512];
+        bool ok = os64_page_resolve_in(doc, "http://example.test/dir/page.html", k[i].ref, out, sizeof(out));
+        checks++;
+        if (!ok || strcmp(out, k[i].want) != 0)
+            fail("os64_page_resolve_in", "'%s' -> '%s'", k[i].ref, ok ? out : "(refused)");
+    }
+    char out[512];
+    checks++;
+    if (doc == NULL || os64_page_resolve_in(doc, "about:blank", "x", out, 8))
+        fail("os64_page_resolve_in", "an answer longer than cap is refused");
+    size_t before = allocations, held = live;
+    (void)os64_page_resolve_in(doc, "http://example.test/dir/page.html", " app.js ", out, sizeof(out));
+    size_t count = allocations - before;
+    for (size_t i = 1; doc != NULL && i <= count; i++) {
+        fail_at = allocations + i;
+        bool ok = os64_page_resolve_in(doc, "http://example.test/dir/page.html", " app.js ", out, sizeof(out));
+        fail_at = 0;
+        checks++;
+        if (ok || live != held)
+            fail("os64_page_resolve_in", "allocation %zu of %zu failed: %s", i, count,
+                 ok ? "still answered" : "leaked");
+    }
+    os64_html_document_free(doc);
+}
+
 static void long_reference(void)
 {
     // A8. An action too long to resolve was once sent to the page's own host
@@ -1445,6 +1483,7 @@ static void cases(void)
 {
     family_a();
     url_absolute();
+    resolve_in();
     long_reference();
     family_b();
     family_b_outranks();
