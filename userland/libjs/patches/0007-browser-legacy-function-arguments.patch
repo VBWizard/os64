@@ -1,0 +1,31 @@
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -16225,0 +16226,23 @@
++}
++
++/* Browser compatibility: a detached, unmapped snapshot of the innermost
++ * active ordinary non-strict function's arguments. No stack storage escapes. */
++JSValue JS_GetLegacyFunctionArguments(JSContext *ctx, JSValueConst function)
++{
++    JSObject *object;
++    JSFunctionBytecode *bytecode;
++    JSStackFrame *frame;
++    if (!JS_IsObject(function))
++        return JS_ThrowTypeError(ctx, "legacy arguments requires an ordinary function");
++    object = JS_VALUE_GET_OBJ(function);
++    if (object->class_id != JS_CLASS_BYTECODE_FUNCTION)
++        return JS_ThrowTypeError(ctx, "legacy arguments requires an ordinary function");
++    bytecode = object->u.func.function_bytecode;
++    if ((bytecode->js_mode & JS_MODE_STRICT) || !bytecode->has_prototype ||
++        bytecode->realm != ctx)
++        return JS_ThrowTypeError(ctx, "legacy arguments is unavailable for this function");
++    for (frame = ctx->rt->current_stack_frame; frame != NULL; frame = frame->prev_frame) {
++        if (JS_IsObject(frame->cur_func) && JS_VALUE_GET_OBJ(frame->cur_func) == object)
++            return js_build_arguments(ctx, frame->arg_count, frame->arg_buf);
++    }
++    return JS_NULL;
+--- a/quickjs.h
++++ b/quickjs.h
+@@ -846,0 +847,2 @@
++/* Browser-only legacy accessor helper; install explicitly in that context. */
++JSValue JS_GetLegacyFunctionArguments(JSContext *ctx, JSValueConst function);

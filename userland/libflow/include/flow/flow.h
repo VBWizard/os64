@@ -533,6 +533,9 @@ typedef struct {
     // or PERCENT of the containing block.
     flow_position_t position;
     flow_length_t inset[4];
+    // CSS2 clip rect, border-box coordinates in top/right/bottom/left order.
+    bool legacy_clip_set;
+    flow_length_t legacy_clip[4];
     // `z-index`: an integer when `has_z_index`, else `auto`, the initial.
     bool has_z_index;
     int32_t z_index;
@@ -698,6 +701,8 @@ struct flow_box {
     // word wider than its line), so a walk that prunes on `rect` would
     // miss what is drawn.
     os64_gui_rect_t overflow;
+    // Content box in the same frame coordinates as rect; set for box nodes.
+    os64_gui_rect_t content;
     int32_t baseline;               // LINE, TEXT, ATOMIC, MARKER: the line's
     // TEXT, MARKER: the fragment's run, owned by the tree, and its bytes.
     const os64_text_run_t *run;
@@ -709,8 +714,8 @@ struct flow_box {
     // marks, an `rt`'s parentheses, a picture's alt), and `begin` indexes
     // nothing of the node's.
     uint32_t begin;
-    // What of this box may be drawn: the padding boxes of the ancestors
-    // whose `overflow` clips, met together, on the axes they clip. When
+    // What of this box may be drawn: ancestor overflow padding clips and
+    // positioned legacy clip rectangles, met on the axes they clip. When
     // `clipped` is false nothing clips it and `clip` means nothing. In a
     // frame `clip` holds only what clips inside the frame — what clips it
     // from outside stays where it is while it moves, a scroll container's

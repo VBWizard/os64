@@ -386,6 +386,14 @@ how a worklist fills with things nobody intends to do.
 | **The arriving page is not shown until it is whole.** D4 keeps the old page on screen and live while the new one streams in; drawing the half-parsed tree is its own slice with its own proof (what a reader sees, when the old page goes, what a click on a box that is still moving does) | Feature | M | a page slow enough that a blank wait is worse than a growing one | yonder.c `g.stream` / DOM_D4.md § Booked |
 | **The stream's slice is a byte budget (64 KiB).** The window's clock is the 10 ms tick, so bytes were chosen over time, and what one slice costs in the guest is recorded in DOM.md § D4, as built. A page whose bytes parse at very unequal speed would want a time budget off `micros()` | Performance | XS | the first page whose slices visibly hitch the window | yonder.c `STREAM_SLICE_BYTES` |
 
+## Classic browser scripting
+
+| Debt | Class | Size | Trigger | Where |
+|---|---|---|---|---|
+| Detached `new Image()` sources load when displayed, rather than prefetching. Chris accepted the first-hover fetch delay for D11 on 2026-10-06. Native cache jobs and detached-image load/error delivery need their own lifetime contract | Performance / feature | M | the next image-loading slice, or a real rollover whose first-hover delay matters | [DOM_D11.md](docs/design/pending/DOM_D11.md), libdom `classic.c`, yonder picture jobs |
+| Inline styles preserve source text rather than exposing full CSSOM canonical serialization, shorthand expansion and indexed declarations. D11 implements the longhand properties used by the chosen widgets | Fidelity | M | a selected page reads normalized CSS text or shorthand state | [DOM_D11.md](docs/design/pending/DOM_D11.md), libdom `style.c` |
+| Arbitrary `clip-path` shapes require path clipping; D11 pays the rectangular legacy `clip` path | Feature | M | a page needs a clipped path to be readable | [POSITION.md](docs/design/completed/POSITION.md#booked-with-their-triggers) |
+
 ## Browser layout
 
 | Debt | Class | Size | Trigger | Where |

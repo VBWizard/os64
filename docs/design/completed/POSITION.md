@@ -490,7 +490,7 @@ he said, not a CSS one — and Fable ruled as he had recommended:
 | Debt | Why it waits | Trigger |
 |---|---|---|
 | `transform` (and `translate()` centring) | a transform is a new kind of geometry: a box's rect is no longer where it is drawn | the first centred modal that matters after P1, which will be the first one |
-| `clip`, `clip-path` | the first is deprecated; the second is a path (Bootstrap's `.visually-hidden` hides without `clip`, from P1) | a page that needs one to be readable |
+| `clip-path` | arbitrary shapes need path clipping | a page that needs one to be readable |
 | Floats beside positioned boxes | libflow has no floats; a static position among floats is not computed | floats |
 | `position: relative` or `sticky` on table rows, row groups and columns | undefined in CSS 2.1, defined in Position 3; a sticky heading CELL sticks (P4), and that is the common spelling | a page whose sticky `thead` or `tr` matters |
 | A sticky inline, or inline-block | it has pieces on lines, not a box of its own to push, as a relative one has (below) | a page whose sticky inline matters |
@@ -535,3 +535,18 @@ answered above:
 
 And on the fourth ruling, the three P1 answers to positioning without
 script, which were Fable's.
+
+## Legacy rectangular clipping, D11
+
+Million Dollar Homepage's original zoom widget uses `clip: rect(...)` on an
+absolute pane. libgarb reads four lengths or `auto`, with comma-separated or
+whitespace-separated coordinates. libflow computes border-origin sides for
+absolute and fixed boxes, intersects their paint/hit clips with inherited
+clips, and excludes clipped far edges from scrollable overflow. Other
+positioning modes ignore the rectangle. Negative lengths and empty rectangles
+remain valid; percentages and mixed separators are rejected.
+
+`tools/test_libflow_position.inc` supplies hand-computed rectangles, descendant
+hits, relative-position exclusion, empty fixed clips and page extents.
+`tools/garb_corpus/declarations.txt` supplies the independent grammar cases.
+The consumer proof and acceptance are in [DOM_D11.md](../pending/DOM_D11.md).

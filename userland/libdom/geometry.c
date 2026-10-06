@@ -2,7 +2,7 @@
 
 enum {
     G_OFFSET_LEFT, G_OFFSET_TOP, G_OFFSET_WIDTH, G_OFFSET_HEIGHT, G_OFFSET_PARENT,
-    G_CLIENT_LEFT, G_CLIENT_TOP, G_CLIENT_WIDTH, G_CLIENT_HEIGHT, G_RECT
+    G_CLIENT_LEFT, G_CLIENT_TOP, G_CLIENT_WIDTH, G_CLIENT_HEIGHT, G_SCROLL_LEFT, G_SCROLL_TOP, G_RECT
 };
 
 void os64_dom_set_geometry(os64_dom_t *dom, os64_dom_geometry_provider_t provider, void *opaque)
@@ -71,6 +71,8 @@ static JSValue geometry(JSContext *ctx, JSValueConst self, int argc,
     case G_CLIENT_TOP: return JS_NewInt32(ctx, snapshot.client_top);
     case G_CLIENT_WIDTH: return JS_NewInt32(ctx, snapshot.client_width);
     case G_CLIENT_HEIGHT: return JS_NewInt32(ctx, snapshot.client_height);
+    case G_SCROLL_LEFT: return JS_NewInt32(ctx, snapshot.scroll_left);
+    case G_SCROLL_TOP: return JS_NewInt32(ctx, snapshot.scroll_top);
     default: break;
     }
     JSValue rect = JS_NewObject(ctx);
@@ -96,7 +98,7 @@ int d_geometry_install(os64_dom_t *dom, JSContext *ctx)
     JSValueConst prototype = dom->prototypes[D_PROTO_ELEMENT]->value;
     static const char *const names[] = {
         "offsetLeft", "offsetTop", "offsetWidth", "offsetHeight", "offsetParent",
-        "clientLeft", "clientTop", "clientWidth", "clientHeight"
+        "clientLeft", "clientTop", "clientWidth", "clientHeight", "scrollLeft", "scrollTop"
     };
     for (unsigned i = 0; i < sizeof(names) / sizeof(names[0]); i++)
         if (d_accessor(dom, ctx, prototype, names[i], geometry, (int)i, false) < 0)

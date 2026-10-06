@@ -73,6 +73,7 @@ typedef enum {
     // Images 3 § 5.3, with the spellings older pages wrote for crisp
     // pixels kept as they were written.
     GARB_IMAGE_RENDERING,
+    GARB_CLIP,
     GARB_NPROPS
 } garb_prop_t;
 

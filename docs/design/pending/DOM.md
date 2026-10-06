@@ -451,8 +451,9 @@ exist: the wrapper table, the listener lists, and the task and timer
 queues. A value stored anywhere else is a finding. This is what makes
 teardown checkable, and what makes ruling 8 possible.
 
-**No finalizer owns a native resource.** A wrapper's opaque pointer is a
-node, which the document owns. Finalizers at most clear a slot.
+**No finalizer owns a native resource.** A wrapper's opaque pointer names a
+binding registry entry; that entry holds the document-owned node. Finalizers
+clear the slot; the ordered binding drain releases native holds.
 
 **Three budgets, and nothing a script causes is outside them:** the
 engine's heap (libjs's limit), the document's arena (nodes and strings),
@@ -723,7 +724,9 @@ builder decides, and the proof in this house's shape.
 | D6 | **Implemented; awaiting Fable re-review in PR #217 against userland.** Reclaiming unheld detached subtrees | 216,000 packed-fragment refresh cycles stay flat under 64 MiB; § D6, as built |
 | D7 | The loop: tasks, checkpoints, timers, events and their attributes, script order. Designed in [DOM_D7.md](DOM_D7.md); **D7a (the registry and the turn), D7b (the loop, with the input events), D7c (the join with D8 and D10) and D7d (the sheets before a script) built** | § D7a, as built; § D7b, as built; § D7c, as built; § D7d, as built |
 | D9 | `document.write`: libhtml's `os64_html_parser_write`, libdom's `write`/`writeln`/`open`/`close`, the blocking script's writes reaching yonder's stream. Designed in [DOM_D9.md](DOM_D9.md); **built** | § D9, as built |
-| later | geometry; the libjs reclaim slice | each with its own |
+| D10 | **Built; approved, unmerged.** Synchronous geometry, [DOM_D10.md](DOM_D10.md); combined with D7/D9 on frozen `codex/dom-play` | Native/browser/guest geometry proof in DOM_D10.md |
+| D11 | **Built; awaiting Fable review and P5 acceptance.** Classic widget surface, [DOM_D11.md](DOM_D11.md), stacked on `codex/dom-play` | § D11, as built |
+| later | the libjs reclaim slice | each with its own |
 
 ### D1, as built
 
@@ -2654,3 +2657,39 @@ how much of a model libflow borrows beyond the indices; the cost of a parse in s
 in the guest; libflow's stack depth under a script frame; and every claim
 in § A leak at teardown beyond the lines cited, which is why that section
 ends in an acceptance list and not a verdict.
+
+### D11, as built
+
+Implemented on `codex/dom-d11`, based on combined D7/D9/D10 `28f1d785`.
+[DOM_D11.md](DOM_D11.md) records the consumer evidence, bounded surface,
+ownership, engine helper and acceptance. Chris chose Lileks Minneapolis,
+007museum and Million Dollar Homepage, prioritizing their own visible widgets.
+Modern embedded stacks are outside that scope; J5 remains pending his P5 check.
+
+- libdom adds live images/forms and named control lookup, `Image`, resolved
+  image sources, reflected names/titles, stable inline style objects and native
+  navigator values. It exposes nested-dispatch-safe `window.event`, page/client
+  mouse coordinates and readonly native scroll positions.
+- A hash-checked QuickJS patch adds an explicit browser helper for unmapped
+  legacy `function.arguments` snapshots. Strict/unsupported functions refuse;
+  standalone engines keep the upstream inherited throwing property.
+- Yonder targets image-map areas in content-relative CSS coordinates, using
+  libpage for links and D7 for events. libgarb/libflow implement legacy
+  rectangular clipping of absolute/fixed painting, hit testing and overflow.
+- Arriving lifecycle tasks can read current geometry. Measured-then-edited
+  arrivals reclaim their old layout before restaging sheets. Initial layouts
+  build the inline-style cascade even without a stylesheet.
+
+Original tests in `tools/test_dom_classic.inc`, browser-host cases and the
+hand-computed CSS/layout clip cases cover these paths. Optional locally
+downloaded-source proof in `tools/test_yonder_scripts_host.c` exercises the
+selected pages' original primary scripts without committing their sources.
+`/tests/pages/dom-classic.html` supplies a small visible P5 check. Allocation
+refusals and leak detection remain enabled in the host suites.
+
+Chris accepted deferring eager detached-image prefetch on 2026-10-06: first
+hover can wait for an image fetch. That work, full inline CSSOM serialization
+and arbitrary clip paths are tracked in DEBTS.md. Image dimensions currently
+reflect attributes. Document metadata, window geometry, scroll setters,
+frames/layers and modern application APIs are outside this widget slice.
+Scripts-on-by-default remains gated by J5 and Chris's ruling.

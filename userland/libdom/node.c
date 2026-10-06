@@ -28,6 +28,7 @@ static int node_prototype_kind(const os64_html_node_t *node)
         if (node->tag == OS64_HTML_TAG_SELECT) return D_PROTO_SELECT;
         if (node->tag == OS64_HTML_TAG_BUTTON) return D_PROTO_BUTTON;
         if (node->tag == OS64_HTML_TAG_FORM) return D_PROTO_FORM;
+        if (node->tag == OS64_HTML_TAG_IMG) return D_PROTO_IMAGE;
     }
     return D_PROTO_ELEMENT;
 }
@@ -50,7 +51,8 @@ static DValue *wrapper_prepare(os64_dom_t *dom, JSContext *ctx,
 static JSValue wrapper_attach(os64_dom_t *dom, JSContext *ctx, DValue *entry,
                                 const os64_html_node_t *node)
 {
-    JS_SetOpaque(entry->value, (void *)node);
+    entry->dom = dom;
+    JS_SetOpaque(entry->value, entry);
     entry->node = node;
     os64_html_hold(dom->document, node);
     size_t slot = bucket(node);
@@ -71,7 +73,8 @@ JSValue d_wrap(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node)
 
 const os64_html_node_t *d_node(os64_dom_t *dom, JSContext *ctx, JSValueConst value)
 {
-    const os64_html_node_t *node = JS_GetOpaque(value, dom->node_class);
+    DValue *entry = JS_GetOpaque(value, dom->node_class);
+    const os64_html_node_t *node = entry != NULL ? entry->node : NULL;
     if (node == NULL || !os64_html_owns_node(dom->document, node)) {
         JS_ThrowTypeError(ctx, "Expected a node from this document");
         return NULL;
@@ -459,7 +462,7 @@ static unsigned method_prototypes(int magic)
 int d_node_install(os64_dom_t *dom, JSContext *ctx)
 {
     if (!d_context(dom, ctx, OS64_JS_ABI_ID)) return -1;
-    // Kind prototypes inherit Node; HTML control prototypes inherit Element.
+    // Kind prototypes inherit Node; HTML-specific prototypes inherit Element.
     // The registry retains these engine values through the same drain as wrappers.
     for (int kind = 0; kind < D_PROTO_COUNT; kind++) {
         int parent = kind >= D_PROTO_INPUT ? D_PROTO_ELEMENT : D_PROTO_NODE;

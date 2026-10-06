@@ -5907,6 +5907,18 @@ static void table_body(L *l, const FStyles *styles, FBox *t, int64_t cbx, int64_
 
 // ── The layout ──────────────────────────────────────────────────────────
 
+static int64_t legacy_far_edge(const FBox *b, bool horizontal, int64_t edge)
+{
+    if (!b->out_of_flow || !b->style->legacy_clip_set) return edge;
+    const flow_length_t *sides = b->style->legacy_clip;
+    int64_t left = sides[FLOW_LEFT].kind == FLOW_LENGTH_AUTO ? 0 : sides[FLOW_LEFT].value;
+    int64_t top = sides[FLOW_TOP].kind == FLOW_LENGTH_AUTO ? 0 : sides[FLOW_TOP].value;
+    int64_t right = sides[FLOW_RIGHT].kind == FLOW_LENGTH_AUTO ? b->w : sides[FLOW_RIGHT].value;
+    int64_t bottom = sides[FLOW_BOTTOM].kind == FLOW_LENGTH_AUTO ? b->h : sides[FLOW_BOTTOM].value;
+    if (right <= left || bottom <= top) return 0;
+    return min64(edge,horizontal ? b->x+right : b->y+bottom);
+}
+
 // What is not placed is not on the page — a failed table's unplaced cells
 // keep their lines, and those reach no edge. A positioned child is not
 // reached through its parent: its edges are the list's (page_extent).
@@ -5919,7 +5931,7 @@ static int64_t right_edge(const FBox *b)
     // inside it, if it scrolls — so it widens nothing (CSS Overflow 3 §
     // 2.2). The viewport's overflow clips nothing: it is the page's.
     if (f_box_clips(b, true))
-        return r;
+        return legacy_far_edge(b,true,r);
     for (const FLine *ln = b->lines; ln != NULL; ln = ln->next)
         for (const FFrag *fr = ln->frags; fr != NULL; fr = fr->next) {
             r = max64(r, fr->x + fr->w - fr->hang);
@@ -5929,7 +5941,7 @@ static int64_t right_edge(const FBox *b)
     for (const FBox *c = b->first; c != NULL; c = c->next)
         if (!c->positioned)
             r = max64(r, right_edge(c));
-    return r;
+    return legacy_far_edge(b,true,r);
 }
 
 // How far down anything is drawn: a box's own bottom, and anything inside
@@ -5940,7 +5952,7 @@ static int64_t bottom_edge(const FBox *b)
         return 0;
     int64_t r = b->y + b->h;
     if (f_box_clips(b, false))
-        return r;
+        return legacy_far_edge(b,false,r);
     for (const FLine *ln = b->lines; ln != NULL; ln = ln->next)
         for (const FFrag *fr = ln->frags; fr != NULL; fr = fr->next) {
             r = max64(r, fr->y + fr->h);
@@ -5950,7 +5962,7 @@ static int64_t bottom_edge(const FBox *b)
     for (const FBox *c = b->first; c != NULL; c = c->next)
         if (!c->positioned)
             r = max64(r, bottom_edge(c));
-    return r;
+    return legacy_far_edge(b,false,r);
 }
 
 // What clips a box: its tree parent in the flow, its containing block out
@@ -5981,6 +5993,8 @@ static void page_extent(const FBox *b, int64_t *width, int64_t *height)
     if (b->positioned) {
         int64_t r = right_edge(b), bottom = bottom_edge(b);
         for (const FBox *c = clip_parent(b); c != NULL; c = clip_parent(c)) {
+            r = legacy_far_edge(c,true,r);
+            bottom = legacy_far_edge(c,false,bottom);
             if (f_box_clips(c, true))
                 r = min64(r, c->x + c->w);
             if (f_box_clips(c, false))
