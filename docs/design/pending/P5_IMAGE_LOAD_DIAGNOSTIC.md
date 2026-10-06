@@ -56,3 +56,41 @@ boot passes 34 initial and three deferred built-in tests. Logd's saved file
 contains four reports spaced about ten seconds apart, with 760–806 ledger
 entries and paging usage stable at 280/5191. This verifies the report's timer
 and file delivery; the P5 image-loading workload remains the required check.
+
+## P5 ledger-growth results
+
+Chris's run of this diagnostic starts around 2,800 entries and 1,000 live
+page-shaped entries. At roughly 80 loaded images it reaches 70,767 entries:
+70,250 in use, 498 free, 19 dead, with 66,220 live page-shaped entries.
+The paging pool uses 523/12,616 pages. After Yonder is killed and cleanup
+settles, the ledger has 4,808 entries, 4,094 in use and 1,158 live
+page-shaped entries; paging usage is 529/12,616. The remaining difference
+from the initial baseline is not attributed to a particular owner.
+
+Differences between successive cumulative counters show the search cost:
+
+| Interval | Searches | Entries examined | Mean entries per search |
+| --- | ---: | ---: | ---: |
+| 15:58:10–15:58:20 | 8,423 | 19,157,248 | 2,274 |
+| 15:59:20–15:59:30 | 15,255 | 732,677,672 | 48,029 |
+| 15:59:30–15:59:40 | 17,043 | 921,377,371 | 54,062 |
+| 16:00:12–16:00:22 | 7,426 | 468,114,988 | 63,037 |
+| 16:03:05–16:03:15 | 416 | 1,340,322 | 3,222 |
+
+The growth is predominantly live allocations rather than dead entries
+awaiting compaction. The increase from 1,034 to 66,220 live page-shaped
+entries represents approximately 254.6 MiB of 4 KiB allocations, consistent
+in scale with Yonder's 256 MiB retained-image budget. This shape is not proof
+of the owning subsystem, but most page-shaped entries disappear on exit.
+Repeated allocation searches scan tens of thousands of entries while
+holding the allocator's global irqsave lock; this strongly supports scan
+growth as a contributor to the system stalls. These counters measure visits,
+not elapsed lock hold or wait time, so they do not apportion all observed
+latency. The paging pool remains well below its separate limit.
+
+Two issues need separate treatment: lookup cost grows with the live ledger,
+and the fixed ledger can exhaust on legitimate demand-paged image memory.
+Increasing capacity leaves the scan cost; indexing searches alone leaves
+the capacity limit. Reverting exact-fit preference also reintroduces the
+free-hole fragmentation problem that motivated the allocator's current
+policy. A fix must preserve recycling while accounting for live-page scale.
