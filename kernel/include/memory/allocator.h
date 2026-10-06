@@ -81,7 +81,11 @@ typedef struct
 	uint64_t ledger_inuse, ledger_free, ledger_dead;
 	uint64_t ledger_live_bytes, ledger_free_bytes, ledger_largest_free;
 	uint64_t exactfit, splits, merges, compactions;
+	// The four most common free-hole sizes below one chunk, counted exactly
+	// (size 0 = fewer than four sizes exist); holes of a chunk or more are
+	// counted apart, as ledger_chunk_holes.
 	uint64_t top_hole_size[4], top_hole_count[4];
+	uint64_t ledger_chunk_holes;
 } allocator_stats_t;
 
 // Restart the named locks' windows after capturing them.

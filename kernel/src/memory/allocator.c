@@ -448,11 +448,21 @@ static void ledger_pin_extent(uint64_t start, uint64_t length, int delta)
 
 // Borrow a chunk for the ledger: frames lent UNMAPPED (the ledger maps what
 // it carves), added as one free extent. Caller holds kMemoryStatusLock and
-// has left a row of headroom for the new entry.
-static bool ledger_borrow_chunk(void)
+// has left a row of headroom for the new entry. A nonzero `prepare` is the
+// try entry point's carve length: its HHDM tables are prepared at the
+// chunk's base BEFORE the chunk is committed, and a refusal hands the frames
+// straight back — the ledger never returns a chunk it has recorded, so a
+// failed try must not leave one behind.
+static bool ledger_borrow_chunk(uint64_t prepare)
 {
 	uint64_t flags = frames_lock();
 	uint64_t frame = frames_alloc(&kFrames, LEDGER_CHUNK_FRAMES, FRAMES_LEDGER);
+	if (frame != FRAMES_NONE && prepare != 0 &&
+	    !paging_hhdm_prepare_range(frame * PAGE_SIZE, prepare))
+	{
+		frames_free(&kFrames, frame, NULL);
+		frame = FRAMES_NONE;
+	}
 	frames_unlock(flags);
 	if (frame == FRAMES_NONE)
 		return false;
@@ -493,8 +503,9 @@ static uint64_t ledger_alloc(uint64_t requested_length, bool fallible)
 	if (memaddr == NULL)
 	{
 		// No hole fits: borrow a chunk. Every ledger request is smaller than a
-		// chunk, so the search after it finds one.
-		if (!ledger_borrow_chunk())
+		// chunk, so the search after it finds one: the chunk itself, at the
+		// base its tables were prepared for.
+		if (!ledger_borrow_chunk(fallible ? requested_length : 0))
 		{
 			ledger_unlock(irqflags);
 			if (fallible)
@@ -505,7 +516,9 @@ static uint64_t ledger_alloc(uint64_t requested_length, bool fallible)
 		memaddr = get_status_entry_for_first_available_address(requested_length);
 	}
 	// The try entry point prepares its HHDM tables before carving, so mapping
-	// after ownership changes cannot exhaust the table pool.
+	// after ownership changes cannot exhaust the table pool. For a borrowed
+	// chunk this finds them already prepared; a refusal here comes only from
+	// an existing hole, so it leaves the ledger as it found it.
 	if (fallible && !paging_hhdm_prepare_range(memaddr->startAddress, requested_length)) {
 		ledger_unlock(irqflags);
 		return 0;
@@ -773,15 +786,22 @@ const char *allocator_audit(uint64_t *where)
 	return why;
 }
 
+// The hole census: one count per free-hole size below a chunk. A ledger
+// length is a multiple of 8, so a hole smaller than a chunk has one of
+// LEDGER_CHUNK_FRAMES * PAGE_SIZE / 8 sizes and every one of them gets an
+// exact count. Static because 32 KiB is no stack frame; the ledger lock,
+// held for the whole census, is what makes one copy safe.
+#define LEDGER_HOLE_SIZES (LEDGER_CHUNK_FRAMES * PAGE_SIZE / 8)
+static uint32_t s_hole_census[LEDGER_HOLE_SIZES];
+
 // Everything /sys/memory shows, at one instant: both locks are held while it
 // is gathered, so the ledger walk below counts in the ledger lock's hold.
 void allocator_stats(allocator_stats_t *out, unsigned restart_windows)
 {
 	memset(out, 0, sizeof(*out));
-	uint64_t sizes[16] = {0}, counts[16] = {0};
-	uint32_t tracked = 0;
 
 	uint64_t lflags = ledger_lock();
+	memset(s_hole_census, 0, sizeof(s_hole_census));
 	out->ledger_rows = kMemoryStatusCurrentPtr;
 	out->ledger_rows_max = INITIAL_MEMORY_STATUS_COUNT;
 	out->ledger_high_water = kMemoryStatusHighWater;
@@ -794,12 +814,26 @@ void allocator_stats(allocator_stats_t *out, unsigned restart_windows)
 		out->ledger_free_bytes += e->length;
 		if (e->length > out->ledger_largest_free)
 			out->ledger_largest_free = e->length;
-		for (uint32_t s = 0; s < 16; s++)
-		{
-			if (s == tracked) { sizes[s] = e->length; counts[s] = 1; tracked++; break; }
-			if (sizes[s] == e->length) { counts[s]++; break; }
-		}
+		if (e->length / 8 < LEDGER_HOLE_SIZES)
+			s_hole_census[e->length / 8]++;
+		else
+			out->ledger_chunk_holes++;
 	}
+	// The four most common sizes below a chunk, by count; ties go to the
+	// smaller size.
+	for (uint64_t i = 1; i < LEDGER_HOLE_SIZES; i++)
+		for (int t = 0; t < 4; t++)
+			if (s_hole_census[i] > out->top_hole_count[t])
+			{
+				for (int m = 3; m > t; m--)
+				{
+					out->top_hole_count[m] = out->top_hole_count[m - 1];
+					out->top_hole_size[m] = out->top_hole_size[m - 1];
+				}
+				out->top_hole_count[t] = s_hole_census[i];
+				out->top_hole_size[t] = i * 8;
+				break;
+			}
 	out->exactfit = kAllocExactFitHits;
 	out->splits = kAllocSplits;
 	out->merges = kAllocMerges;
@@ -836,21 +870,6 @@ void allocator_stats(allocator_stats_t *out, unsigned restart_windows)
 	out->usable_bytes = kAvailableMemory;
 	out->free_bytes = out->frames_free * PAGE_SIZE + out->ledger_free_bytes;
 	out->used_bytes = out->frames_run * PAGE_SIZE + out->ledger_live_bytes + out->held_bytes;
-
-	// The four most common free hole sizes, by count.
-	for (uint32_t s = 0; s < tracked; s++)
-		for (int t = 0; t < 4; t++)
-			if (counts[s] > out->top_hole_count[t])
-			{
-				for (int m = 3; m > t; m--)
-				{
-					out->top_hole_count[m] = out->top_hole_count[m - 1];
-					out->top_hole_size[m] = out->top_hole_size[m - 1];
-				}
-				out->top_hole_count[t] = counts[s];
-				out->top_hole_size[t] = sizes[s];
-				break;
-			}
 }
 
 // Every allocated extent, for init_os64_paging_tables' retro-map: frame

@@ -899,9 +899,10 @@ static void sys_gen_memory_ledger(synth_text_t *t)
 	                s.ledger_live_bytes, s.ledger_free_bytes, s.ledger_largest_free);
 	synth_text_addf(t, "policy: exactfit %lu, splits %lu, merges %lu, compactions %lu\n",
 	                s.exactfit, s.splits, s.merges, s.compactions);
-	synth_text_addf(t, "common free holes: %lux%lu %lux%lu %lux%lu %lux%lu\n",
+	synth_text_addf(t, "common free holes: %lux%lu %lux%lu %lux%lu %lux%lu; %lu of a chunk or more\n",
 	                s.top_hole_count[0], s.top_hole_size[0], s.top_hole_count[1], s.top_hole_size[1],
-	                s.top_hole_count[2], s.top_hole_size[2], s.top_hole_count[3], s.top_hole_size[3]);
+	                s.top_hole_count[2], s.top_hole_size[2], s.top_hole_count[3], s.top_hole_size[3],
+	                s.ledger_chunk_holes);
 	// The ledger lock's holds include report walks like the one that
 	// produced this file: the walk is real time other allocations waited.
 	// Reading a file restarts its own lock's "since last read" window.
