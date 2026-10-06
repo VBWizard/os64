@@ -115,6 +115,16 @@ bool os64_streq_nocase(const char *a, const char *b)
     return fold(*a) == fold(*b);
 }
 
+// THESE LOOPS ARE WHAT memset, memcpy AND memmove CALL, so they must never
+// become calls to them. An optimizing GCC turns a byte-store loop into
+// `call memset` (-ftree-loop-distribute-patterns, on at -O2); -ffreestanding
+// stops it, but a hosted build of this file at -O2 — any host test that
+// omits the flag — is then infinite recursion in the first memset, which a
+// sanitizer's own memset hides. The attribute travels with the function, so
+// no build of it has to remember.
+#define OS64_NO_LIBCALL_LOOPS __attribute__((optimize("no-tree-loop-distribute-patterns")))
+
+OS64_NO_LIBCALL_LOOPS
 void *os64_memcpy(void *dst, const void *src, size_t n)
 {
     unsigned char *d = (unsigned char *)dst;
@@ -125,6 +135,7 @@ void *os64_memcpy(void *dst, const void *src, size_t n)
     return dst;
 }
 
+OS64_NO_LIBCALL_LOOPS
 void *os64_memmove(void *dst, const void *src, size_t n)
 {
     unsigned char *d = (unsigned char *)dst;
@@ -180,6 +191,7 @@ int os64_memcmp(const void *a, const void *b, size_t n)
     return 0;
 }
 
+OS64_NO_LIBCALL_LOOPS
 void *os64_memset(void *dst, int c, size_t n)
 {
     unsigned char *d = (unsigned char *)dst;
