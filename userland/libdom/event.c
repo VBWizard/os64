@@ -843,8 +843,9 @@ static JSValue target_method(JSContext *ctx, JSValueConst self, int argc, JSValu
         if (event == NULL) return JS_EXCEPTION;
         if (event->dispatching || !event->initialized)
             return d_error(ctx, "InvalidStateError", "The event is already being dispatched or is not initialized");
+        // A redispatched event stays cancelled: initEvent is the reset, and
+        // a vetoed default action must not come back on the second try.
         event->trusted = false;
-        event->canceled = false;
         int result = d_dispatch(dom, ctx, argv[0], entry == dom->window ? NULL : entry->node);
         return result < 0 ? JS_EXCEPTION : JS_NewBool(ctx, result != 0);
     }

@@ -432,11 +432,64 @@ static void dom_event_failure_cases(void)
     fixture_free(&f);
 }
 
+/* Re-entry and retained state: a redispatch keeps its veto, conversions that
+ * run script cannot slip a timer past the quota, and a click on a clicking
+ * element returns while a click on another still runs. */
+static void dom_event_reentry_cases(void)
+{
+    DomFixture f=event_fixture(event_html,"http://example.test/review");
+    if(!fixture_ready(&f))return;
+    dom_script(&f,DOM_ASSERT
+        "var t=document.getElementById('inner'),log=[];"
+        "t.addEventListener('click',e=>{log.push('capture');e.stopPropagation()},true);"
+        "t.addEventListener('click',()=>log.push('bubble'));"
+        "t.dispatchEvent(new Event('click',{bubbles:true}));"
+        "assert(log.join('|')==='capture','review target propagation: '+log);",
+        "review-target-propagation.js");
+    fixture_free(&f);
+    f=event_fixture(event_html,"http://example.test/review");
+    if(!fixture_ready(&f))return;
+    dom_script(&f,DOM_ASSERT
+        "var e=new Event('review',{cancelable:true});e.preventDefault();"
+        "assert(!document.body.dispatchEvent(e)&&e.defaultPrevented,'review cancellation lost');",
+        "review-retained-cancellation.js");
+    fixture_free(&f);
+    f=event_fixture(event_html,"http://example.test/review");
+    if(!fixture_ready(&f))return;
+    dom_script(&f,DOM_ASSERT
+        "for(var i=0;i<4095;i++)setTimeout(()=>{},1000);"
+        "throws('QuotaExceededError',()=>setTimeout(()=>{},{valueOf(){setTimeout(()=>{},1000);return 1000}}));",
+        "review-timer-reentrant-quota.js");
+    fixture_free(&f);
+    f=event_fixture(event_html,"http://example.test/review");
+    if(!fixture_ready(&f))return;
+    dom_script(&f,DOM_ASSERT
+        "for(var i=0;i<4095;i++)setTimeout(()=>{},1000);"
+        "throws('QuotaExceededError',()=>setTimeout({toString(){setTimeout(()=>{},1000);return 'void 0'}},1000));",
+        "review-timer-reentrant-source-quota.js");
+    fixture_free(&f);
+    f=event_fixture(event_html,"http://example.test/review");
+    if(!fixture_ready(&f))return;
+    dom_script(&f,DOM_ASSERT
+        "var t=document.getElementById('inner'),n=0;t.onclick=()=>{if(++n===1)t.click()};t.click();"
+        "assert(n===1,'review recursive click: '+n);",
+        "review-click-in-progress.js");
+    fixture_free(&f);
+    f=event_fixture(event_html,"http://example.test/review");
+    if(!fixture_ready(&f))return;
+    dom_script(&f,DOM_ASSERT
+        "var t=document.getElementById('inner'),b=document.body,log=[];"
+        "b.onclick=e=>{if(e.target===b)log.push('body')};t.onclick=()=>{log.push('inner');b.click()};t.click();"
+        "assert(log.join('|')==='inner|body','review nested click elsewhere: '+log);",
+        "review-click-other-element.js");
+    fixture_free(&f);
+}
 static void dom_event_cases(void)
 {
     dom_event_dispatch_cases();
     dom_event_handler_cases();
     dom_event_listens_cases();
+    dom_event_reentry_cases();
     dom_timer_cases();
     dom_navigation_cases();
     dom_script_flag_cases();
