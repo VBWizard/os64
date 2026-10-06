@@ -240,6 +240,14 @@ static void dom_geometry_cases(void)
     dom_script(&f,GEOMETRY_ASSERT
         "throws('InvalidStateError',()=>document.body.offsetWidth);"
         "throws('InvalidStateError',()=>document.body.getBoundingClientRect());", "geometry-without-provider");
+    dom_script(&f,GEOMETRY_ASSERT
+        "var holder=document.createElement('div');holder.innerHTML='<svg><rect/></svg>';"
+        "for(const foreign of [holder.firstChild,holder.firstChild.firstChild]){"
+        "for(const name of ['offsetLeft','offsetTop','offsetWidth','offsetHeight',"
+        "'clientLeft','clientTop','clientWidth','clientHeight'])assert(foreign[name]===0);"
+        "assert(foreign.offsetParent===null);"
+        "for(const value of Object.values(foreign.getBoundingClientRect()))assert(value===0);}",
+        "foreign-geometry-without-provider");
     GeometryFixture provider={.fixture=&f};
     os64_dom_set_geometry(f.binding,fake_geometry,&provider);
     dom_script(&f,GEOMETRY_ASSERT
@@ -257,6 +265,11 @@ static void dom_geometry_cases(void)
     os64_dom_geometry_stats_t stats=os64_dom_geometry_stats(f.binding,true);
     check(stats.layouts==11&&stats.elapsed_us==2750&&os64_dom_geometry_stats(f.binding,false).layouts==0,
           "geometry telemetry counts provider work and resets independently");
+    unsigned before_foreign=provider.calls;
+    dom_script(&f,GEOMETRY_ASSERT
+        "assert(holder.firstChild.clientWidth===0);assert(holder.firstChild.firstChild.getBoundingClientRect().width===0);",
+        "foreign-geometry-with-provider");
+    check(provider.calls==before_foreign,"foreign geometry does not ask the HTML layout provider");
     provider.refuse=true;
     dom_script(&f,GEOMETRY_ASSERT "throws('InvalidStateError',()=>document.body.offsetHeight);", "geometry-refusal");
     check(os64_dom_geometry_stats(f.binding,false).layouts==1,

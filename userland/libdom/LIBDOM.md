@@ -177,10 +177,12 @@ libjs's R0 fatal invariant check and requires a clean registry teardown.
 `os64_dom_set_geometry` installs an owner-thread native provider separately from
 the binding options. The provider supplies fresh layout at the current view
 size and zoom, copies CSS-pixel values into `os64_dom_geometry_t`, and retains
-no engine values. Missing or refused geometry throws InvalidStateError.
-HTML Element exposes offset and client dimensions/positions, offsetParent,
+no engine values. Missing or refused HTML geometry throws InvalidStateError.
+Element exposes offset and client dimensions/positions, offsetParent,
 and getBoundingClientRect. Rectangles are ordinary detached numeric snapshots;
-SVG geometry and getClientRects are outside this slice. Layout counts and
+Non-HTML elements return numeric zeros, a null offsetParent and a zero rect
+without asking the HTML provider. SVG layout and getClientRects are outside
+this slice. Layout counts and
 elapsed microseconds are available through `os64_dom_geometry_stats`, including
 failed attempts. Callback budget checks bracket native work and preserve the
 turn's sticky limit classification. See [D10](../../docs/design/pending/DOM_D10.md)

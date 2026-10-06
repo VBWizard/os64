@@ -91,8 +91,9 @@ os64_dom_t *os64_dom_create(os64_js_runtime_t *runtime,
 /* Install/replace the native provider outside script callbacks. A provider
  * ensures a current layout, copies a snapshot and records attempted layouts
  * and elapsed work even on refusal. It must not enter JS or pump events.
- * NULL removes it; subsequent geometry reads refuse. Existing options ABI is
- * unchanged. Browser owners install this before their first script. */
+ * NULL removes it; subsequent HTML geometry reads refuse. Non-HTML elements
+ * return zero snapshots without a provider. Existing options ABI is unchanged.
+ * Browser owners install this before their first script. */
 void os64_dom_set_geometry(os64_dom_t *dom, os64_dom_geometry_provider_t provider,
                             void *opaque);
 /* Owner-thread counters for forced native layouts and elapsed time. Reset at

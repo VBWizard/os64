@@ -14,17 +14,19 @@ dimensions/rectangles and null offsetParent. Client sizes of non-atomic inlines
 are zero. Connected root client sizes answer the viewport in standards mode;
 the connected body supplies viewport client sizes in quirks mode.
 Offset positions use the first border fragment and the offset parent's padding
-edge; widths/heights use the unscrolled union. Body/root/fixed offset parents
-are null; a positioned ancestor, body, or table/cell for static elements is
-the offset parent. SVG geometry, getClientRects, scroll setters and window
-geometry remain outside this HTML first slice.
+edge, except a static body uses the document origin. Widths/heights use the
+unscrolled union. Body/root/fixed offset parents are null; a positioned ancestor, body, or table/cell for static elements is
+the offset parent. Non-HTML elements return zero geometry. SVG layout,
+getClientRects, scroll setters and window geometry remain outside this HTML
+first slice.
 
 libdom accepts an owner-thread geometry provider through a separate setter,
 without growing the options struct. Providers copy results and retain no engine
 values. They ensure model/layout freshness before answering, using the view's
 size and zoom; a partial parser document can be supplied through the same
-snapshot interface. No provider or refusal throws InvalidStateError; failed
-fresh rebuilds throw a bounded error rather than return stale coordinates.
+snapshot interface. A missing provider or a refused HTML layout throws
+InvalidStateError; failed fresh rebuilds throw a bounded error rather than
+return stale coordinates.
 Prototype accessors preserve ordinary receiver validation and ABI checks.
 
 A callback-safe libjs budget check observes the current turn's deadline,

@@ -877,6 +877,49 @@ static void geometry_cases(void)
     probe_drop();
 }
 
+static void geometry_body_cases(void)
+{
+    probe_page("<!doctype html><div id=box style='height:20px'></div>",false);
+    os64_dom_geometry_t value;
+    check(yonder_geometry_snapshot(g.page.way.doc,g.page.tree,probe_id("box"),800,600,1000,
+        (flow_point_t){0,0},&value) && value.offset_parent==g.page.way.doc->body &&
+        value.offset_left==8 && value.offset_top==8,
+        "static body offsets retain the default body margin from the document origin");
+    probe_drop();
+    probe_page("<!doctype html><style>body{position:relative;margin:8px;padding:5px;border:3px solid}</style>"
+        "<div id=box style='height:20px'></div>",false);
+    check(yonder_geometry_snapshot(g.page.way.doc,g.page.tree,probe_id("box"),800,600,1000,
+        (flow_point_t){0,0},&value) && value.offset_parent==g.page.way.doc->body &&
+        value.offset_left==5 && value.offset_top==5,
+        "positioned body offsets still use its padding edge");
+    probe_drop();
+}
+
+static void geometry_publish_cases(void)
+{
+    probe_page("<!doctype html><style>html,body{margin:0;padding:0}</style>"
+        "<input id=field style='display:block;width:50vw;height:20px'><div style='height:900px;width:3000px'></div>",true);
+    FormWidget *field=probe_field("field");
+    int32_t old_width=field->w->bounds.w;
+    g.view.bounds.w=400;
+    g.relayout_due=true;
+    g.sy=1000000;
+    os64_dom_geometry_t value;
+    check(script_geometry(NULL,probe_id("field"),&value),"geometry forces a pending resize layout");
+    const flow_box_t *box=flow_box_for(g.page.tree,probe_id("field"));
+    os64_gui_rect_t rect=flow_box_doc_rect(box,scroll_now());
+    check(field->w->bounds.w==rect.w && field->w->bounds.w<old_width,
+        "forced geometry publishes resized control bounds before the pending relayout");
+    check(g.sy<=page_height()-g.view.bounds.h,"forced geometry clamps the scroll to the new layout");
+    check(g.vbar.total==page_height() && g.vbar.visible==g.view.bounds.h && g.vbar.pos==g.sy &&
+        g.hbar.total==page_width() && g.hbar.visible==g.view.bounds.w && g.hbar.pos==g.sx,
+        "forced geometry publishes scrollbar ranges and positions");
+    g.sx=10;g.sy=0;g.zoom=2000;
+    check(script_geometry(NULL,probe_id("field"),&value) && g.sx==20,
+        "forced geometry scales horizontal scroll when publishing a pending zoom");
+    probe_drop();
+}
+
 static void geometry_scroll_cases(void)
 {
     probe_page("<!doctype html><style>html,body{margin:0;padding:0}"
@@ -971,6 +1014,8 @@ int main(void)
     check(os64_text_create(&options,&probe_text)==OS64_FONT_OK,"text context");
     check(os64_text_font_bitmap(probe_text,&probe_font)==OS64_FONT_OK,"bitmap face");
     geometry_cases();
+    geometry_body_cases();
+    geometry_publish_cases();
     geometry_scroll_cases();
     geometry_fragment_cases();
     geometry_failure_cases();

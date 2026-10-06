@@ -122,7 +122,11 @@ bool yonder_geometry_snapshot(const os64_html_document_t *document,
         out->offset_parent = parent != NULL ? parent->node : NULL;
         int64_t x, y;
         offset_position(tree, first, scroll, &x, &y);
-        if (parent != NULL) {
+        // A static body's offset children use the document origin; its
+        // margin/padding is not an origin to subtract from their offsets.
+        bool static_body = parent != NULL && parent->node == document->body &&
+                           parent->style->position == FLOW_POSITION_STATIC;
+        if (parent != NULL && !static_body) {
             int64_t px, py;
             offset_position(tree, parent, scroll, &px, &py);
             x -= px + border(parent, FLOW_LEFT);

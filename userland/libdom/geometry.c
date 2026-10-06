@@ -45,18 +45,22 @@ static JSValue geometry(JSContext *ctx, JSValueConst self, int argc,
     if (dom == NULL) return JS_EXCEPTION;
     const os64_html_node_t *node = d_node(dom, ctx, self);
     if (node == NULL) return JS_EXCEPTION;
-    if (node->kind != OS64_HTML_ELEMENT || node->ns != OS64_HTML_NS_HTML)
-        return JS_ThrowTypeError(ctx, "Geometry requires an HTML element");
-    if (dom->geometry == NULL)
-        return d_error(ctx, "InvalidStateError", "No layout provider is installed");
-    if (!budget(dom, ctx)) return JS_EXCEPTION;
+    if (node->kind != OS64_HTML_ELEMENT)
+        return JS_ThrowTypeError(ctx, "Geometry requires an element");
     os64_dom_geometry_t snapshot = {0};
-    bool ready = dom->geometry(dom->geometry_opaque, node, &snapshot);
-    dom->geometry_stats.layouts = add_count(dom->geometry_stats.layouts, snapshot.layouts);
-    dom->geometry_stats.elapsed_us = add_count(dom->geometry_stats.elapsed_us, snapshot.elapsed_us);
-    if (!budget(dom, ctx)) return JS_EXCEPTION;
-    if (!ready)
-        return d_error(ctx, "InvalidStateError", "A current layout could not be produced");
+    // Foreign elements share the Element prototype but their geometry is
+    // outside the HTML provider contract: return the empty snapshot.
+    if (node->ns == OS64_HTML_NS_HTML) {
+        if (dom->geometry == NULL)
+            return d_error(ctx, "InvalidStateError", "No layout provider is installed");
+        if (!budget(dom, ctx)) return JS_EXCEPTION;
+        bool ready = dom->geometry(dom->geometry_opaque, node, &snapshot);
+        dom->geometry_stats.layouts = add_count(dom->geometry_stats.layouts, snapshot.layouts);
+        dom->geometry_stats.elapsed_us = add_count(dom->geometry_stats.elapsed_us, snapshot.elapsed_us);
+        if (!budget(dom, ctx)) return JS_EXCEPTION;
+        if (!ready)
+            return d_error(ctx, "InvalidStateError", "A current layout could not be produced");
+    } else if (!budget(dom, ctx)) return JS_EXCEPTION;
     switch (magic) {
     case G_OFFSET_LEFT: return JS_NewInt32(ctx, snapshot.offset_left);
     case G_OFFSET_TOP: return JS_NewInt32(ctx, snapshot.offset_top);

@@ -848,7 +848,11 @@ LIBPAGE.md's rule restated for geometry:
   the boxes, so that one count bounds them all. The intrinsic-sizing
   RECURSION is bounded by table NESTING, which is at most a third of it
   (a nested table is at least `table > tr > td` deeper). Native stack use also
-  depends on the caller and compiled callbacks.
+  depends on the caller and compiled callbacks. At the shipped `-O2`, standalone
+  block chains and table nests at the bound used under 448KB. Inline-block
+  chains needed 640-768KB before double weighting; absolute chains needed
+  668KB, with frames of 1472 bytes per level versus a block's 704. With double
+  weighting, positioned chains used under 448KB on the 1 MiB thread stack.
   Layout invoked synchronously from JavaScript must budget engine frames and
   native layout together; a standalone profile does not prove that combination.
   [D10's guest measurements](../pending/DOM_D10.md) cover block, table,

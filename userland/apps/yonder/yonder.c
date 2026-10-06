@@ -1114,19 +1114,21 @@ static const os64_html_node_t *anchor_of(int32_t *offset)
 
 static void css_pictures(Page *p);
 
-// Lays the page on screen out again at the view's size. `again` lays it
+// Lays the page out and publishes scroll, controls and paint state. Answers
+// whether the resulting layout is complete. `again` lays it
 // out even at the size it has: a picture's size arrived. Without sheets
 // or positioned boxes only the width moves anything; with sheets the
 // height does too, which is what their media queries and vh units read,
 // and with a positioned box, whose initial containing block is the view.
-static void relayout(bool again)
+static bool relayout(bool again)
 {
     int32_t width = g.view.bounds.w, height = g.view.bounds.h;
     bool height_matters = g.page.sheets_ready != 0 || flow_npositioned(g.page.tree) > 0;
-    if (page_doc(&g.page) == NULL || width <= 0 ||
-        (!again && g.page.tree != NULL && width == g.page.laid_width &&
-         g.zoom == g.page.laid_zoom && (!height_matters || height == g.page.laid_height)))
-        return;
+    if (page_doc(&g.page) == NULL || width <= 0 || height <= 0)
+        return false;
+    if (!again && g.page.tree != NULL && width == g.page.laid_width &&
+         g.zoom == g.page.laid_zoom && (!height_matters || height == g.page.laid_height))
+        return !flow_incomplete(g.page.tree);
     int32_t offset = 0;
     const os64_html_node_t *anchor = anchor_of(&offset);
     // How far into the anchor the view starts, and how far across the page
@@ -1148,7 +1150,7 @@ static void relayout(bool again)
     g.settle_due = YONDER_NEVER;       // the deadline goes with the moves it was for
     if (!laid) {
         status_rest("Out of memory laying the page out; this is the last layout that fit.");
-        return;
+        return false;
     }
     g.laid_at = t1;
     g.sx = sx;
@@ -1164,6 +1166,7 @@ static void relayout(bool again)
     pictures_schedule();
     say_laid_out(ms_between(&t0, &t1));
     os64_ui_mark_dirty(&g.ui, &g.view);
+    return !flow_incomplete(g.page.tree);
 }
 
 static void request_navigate(os64_page_request_t *request, NavKind kind, way_ask_t ask);
@@ -3009,7 +3012,7 @@ static bool script_geometry(void *opaque, const os64_html_node_t *node,
     if (ready && (g.page.tree == NULL || flow_incomplete(g.page.tree) || g.page.laid_width != width ||
                   g.page.laid_height != height || g.page.laid_zoom != g.zoom ||
                   g.page.sheets_changed))
-        ready = lay_out_page(&g.page, width, height);
+        ready = relayout(true);
     if (ready)
         ready = yonder_geometry_snapshot(page_doc(&g.page), g.page.tree, node,
                     width, height, g.zoom, (flow_point_t){g.sx, g.sy}, out);
