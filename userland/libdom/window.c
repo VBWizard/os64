@@ -74,9 +74,22 @@ bool os64_dom_resolve(const os64_html_document_t *document, const char *document
     const char *href = document != NULL ? first_base(document->document) : NULL;
     char based[OS64_DOM_URL_MAX];
     const char *base = document_url;
-    if (href != NULL && href[0] != '\0' &&
-        os64_dom_resolve(NULL, document_url, href, based, sizeof(based)))
+    // libpage's rule for a base (p_base): an address that resolves and
+    // parses is adopted, canonical, against the document or (an absolute
+    // one under about:blank) on its own; an opaque one (`mailto:`, which
+    // the grammar calls NOT_A_URL) is adopted as written, and nothing
+    // relative resolves against it; anything else, `http://` with no host,
+    // is no base and the document's own address stands.
+    os64_url_t opaque;
+    bool absolute = href != NULL && os64_url_scheme_of(href, scheme, sizeof(scheme));
+    if (href == NULL || href[0] == '\0')
+        ;
+    else if (document_url != NULL && os64_page_url_absolute(document_url, href, based, sizeof(based)))
         base = based;
+    else if (absolute && os64_page_url_absolute(href, href, based, sizeof(based)))
+        base = based;
+    else if (absolute && os64_url_parse(href, &opaque) == OS64_URL_NOT_A_URL)
+        base = href;
     if (base == NULL) return false;
     // libpage's resolver, so a local page's file:/// address (an empty
     // authority the bare URL grammar refuses) resolves as its links do.

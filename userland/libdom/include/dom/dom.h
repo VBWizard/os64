@@ -207,7 +207,8 @@ int os64_dom_script_start(os64_dom_t *dom, const os64_html_node_t *node);
 /* A relative reference resolved as the document resolves its own links
  * (libpage's os64_page_url_absolute, file:/// included): against the first
  * `base` with an href, read from the tree as it is NOW, else against
- * document_url. A base that will not resolve is no base; an empty
+ * document_url. A base that will not resolve is no base, and an opaque
+ * one (`mailto:`) is a base nothing relative resolves against; an empty
  * reference names the base without its fragment; an absolute reference is
  * returned as written. False when nothing resolves or the answer does not
  * fit in cap. Works without a binding. */
