@@ -14,12 +14,14 @@ static void outb(uint16_t port, uint8_t value);
 #include "../kernel/src/gui/input.c"
 #include "../kernel/src/driver/system/mouse.c"
 #include "../kernel/src/driver/system/hid_mouse.c"
+#include "../kernel/src/driver/system/usb/bt_intel.c"
 #include "../kernel/src/driver/system/usb/xhci.c"
 #include "../kernel/src/tty.c"
 #include "../kernel/src/vt_select.c"
 extern int puts(const char *);
 extern _Noreturn void abort(void);
 volatile uint64_t kTicksSinceStart;
+uintptr_t kHHDMOffset;
 __uint128_t kDebugLevel;
 struct Framebuffer kFrameBuffer = {.width=1024, .height=768};
 static bool test_gui = true;
@@ -150,7 +152,7 @@ int main(void)
     // handler: a full packet completes once, and rearming requests nine bytes.
     xhci_t hc = {0}; xhci_trb_t trbs[RING_TRBS] = {0};
     uint8_t buffers[HID_INFLIGHT * HID_REPORT_BYTES] = {0};
-    uint32_t doorbells[2] = {0};
+    uint32_t doorbells[4] = {0};
     hc.db = doorbells;
     hc.mouse = (xhci_device_t){.present=true,.kind=HID_MOUSE,.slot=1,.dci=3,
         .reports=buffers,.reports_phys=(uintptr_t)buffers,.report_bytes=9,
@@ -197,6 +199,53 @@ int main(void)
     hc.control_status_trb=0x1030; hc.xfer_actual=0; completion.param=0x1030;
     completion.status=TRB_CC_SUCCESS << 24;
     xhci_handle_transfer_event(&completion); CHECK(hc.xfer_done && hc.xfer_actual==0);
+
+    // Bluetooth receives use endpoint-local framing, reject stale completions,
+    // and stop rearming after a result, an error, or the packet budget.
+    xhci_device_t bt_device={.slot=3};
+    xhci_trb_t bt_rings[2][RING_TRBS]={0};
+    uint8_t bt_buffers[2][64]={0};
+    xhci_bt_probe_t probe={.device=&bt_device,.listening=true};
+    hc.bt_probe=&probe;
+    for (unsigned i=0;i<2;i++) {
+        probe.rx[i].endpoint=(bt_usb_endpoint_t){0x81+i,64,1};
+        probe.rx[i].ring=(xhci_ring_t){.trb=bt_rings[i],
+            .phys=(uintptr_t)bt_rings[i],.cycle=1};
+        probe.rx[i].buffer=bt_buffers[i];
+        xhci_bt_arm(&probe,&probe.rx[i]);
+    }
+    const uint8_t version[]={0x0e,7,1,5,0xfc,0,0x1c,1,1};
+    memcpy(bt_buffers[0],version,2);
+    completion=(xhci_trb_t){.param=probe.rx[0].pending_trb+16,
+        .status=(TRB_CC_SHORT_PACKET << 24) | 62,
+        .control=(3u << 24) | (3u << 16)};
+    xhci_handle_transfer_event(&completion); CHECK(probe.packets==0);
+    completion.param=probe.rx[0].pending_trb;
+    xhci_handle_transfer_event(&completion);
+    CHECK(probe.packets==1 && probe.rx[0].stream.used==2 && probe.listening);
+    uint64_t previous=completion.param;
+    xhci_handle_transfer_event(&completion); CHECK(probe.packets==1);
+    CHECK(probe.rx[0].pending_trb!=previous);
+    // Bulk receives must not append to an unfinished interrupt event.
+    memcpy(bt_buffers[1],version,sizeof(version));
+    completion.param=probe.rx[1].pending_trb;
+    completion.control=(3u << 24) | (5u << 16);
+    completion.status=(TRB_CC_SHORT_PACKET << 24) | (64-sizeof(version));
+    xhci_handle_transfer_event(&completion);
+    CHECK(probe.reply.result==BT_INTEL_VERSION && probe.reply.image==1);
+    CHECK(!probe.listening && probe.packets==2 && probe.rx[0].stream.used==2);
+    xhci_handle_transfer_event(&completion); CHECK(probe.packets==2);
+    probe.reply=(bt_intel_reply_t){0}; probe.listening=true;
+    completion.status=(TRB_CC_SUCCESS << 24) | 65;
+    xhci_handle_transfer_event(&completion); CHECK(probe.failed && !probe.listening);
+    probe.failed=false; probe.listening=true; completion.status=6u << 24;
+    xhci_handle_transfer_event(&completion); CHECK(probe.failed && !probe.listening);
+    probe.failed=false; probe.listening=true; probe.packets=63;
+    completion.status=(TRB_CC_SHORT_PACKET << 24) | 64;
+    xhci_handle_transfer_event(&completion);
+    CHECK(!probe.failed && !probe.listening && probe.packets==64);
+    CHECK(probe.reply.result==BT_INTEL_WAITING);
+    hc.bt_probe=NULL;
 
     // A delayed command completion cannot authorize Disable Slot cleanup.
     xhci_trb_t events[RING_TRBS]={0}; uint64_t runtime[16]={0};
