@@ -213,7 +213,11 @@ call or an evaluation that is already armed.
 listener or a handler property is counted as it changes, and on<type>
 content attributes are counted once per tree version by one walk of the
 document. A host asks before it builds anything, so a `mousemove` over a
-page with no handler costs no allocation and no engine entry.
+page with no handler costs no allocation and no engine entry. That walk is
+public as `os64_dom_handler_attributes(doc)`, a mask `os64_dom_handler_bit
+(type)` reads, and needs no runtime: a host whose page has not run a script
+asks it before making one, so a page with one `onclick` gets its runtime at
+the first click.
 
 **Event handlers.** For `click`, `mousedown`, `mouseup`, `mouseover`,
 `mouseout`, `mousemove`, `keydown`, `keypress`, `keyup`, `input`, `change`,

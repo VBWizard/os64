@@ -178,6 +178,13 @@ os64_js_status_t os64_dom_dispatch(os64_dom_t *dom, const os64_html_node_t *node
  * tree moved since the last answer, when the attributes are counted again. A
  * type outside the ones the host dispatches is not counted and answers true. */
 bool os64_dom_listens(os64_dom_t *dom, const char *type);
+/* Which event types the document's on<type> content attributes name, as a
+ * mask os64_dom_handler_bit reads: the walk os64_dom_listens counts with.
+ * It needs no runtime, so a host can ask before making one. */
+uint32_t os64_dom_handler_attributes(const os64_html_document_t *doc);
+/* The bit for `type` in that mask; 0 for a type no attribute can name
+ * (DOMContentLoaded, or one outside the types the host dispatches). */
+uint32_t os64_dom_handler_bit(const char *type);
 
 /* TIMERS, in the host's clock (options.now_ms). next answers the earliest due
  * time, or UINT64_MAX with none. fire runs AT MOST ONE timer due at or before

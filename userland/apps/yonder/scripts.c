@@ -47,11 +47,12 @@ struct yonder_scripts {
     uint32_t defer_next;            // the next `defer` item to consider, by index
     uint32_t inline_count;          // names an inline script: #inline-<n>
     uint64_t tasks;
-    // Whether the document carries any on<type> attribute, at the tree
+    // Which types the document's on<type> attributes name, at the tree
     // version it was last looked at: a page whose only script is a handler
-    // attribute has no runtime until an event finds one.
+    // attribute has no runtime until an event one of them names.
     uint64_t handlers_version;
-    bool handlers_scanned, handlers;
+    bool handlers_scanned;
+    uint32_t handlers;
     char note[256];
 };
 
@@ -416,6 +417,34 @@ bool yonder_scripts_step(yonder_scripts_t *s, os64_js_outcome_t *out)
     return run_item(s, (uint32_t)(next_defer(s) - s->items), out);
 }
 
+// The ring position of the first ready connected inline script, or -1.
+static int32_t connected_at(const yonder_scripts_t *s)
+{
+    for (uint32_t i = 0; i < s->ready_count; i++)
+        if (s->items[s->ready[(s->ready_head + i) % s->cap]].mode == MODE_INLINE)
+            return (int32_t)i;
+    return -1;
+}
+
+bool yonder_scripts_connected_pending(const yonder_scripts_t *s)
+{
+    return s != NULL && !s->dead && connected_at(s) >= 0;
+}
+
+bool yonder_scripts_step_connected(yonder_scripts_t *s, os64_js_outcome_t *out)
+{
+    os64_memset(out, 0, sizeof(*out));
+    if (!yonder_scripts_connected_pending(s))
+        return false;
+    uint32_t at = (uint32_t)connected_at(s);
+    uint32_t index = s->ready[(s->ready_head + at) % s->cap];
+    // Taken out of the ring; the ones behind it keep their order.
+    for (uint32_t i = at; i + 1 < s->ready_count; i++)
+        s->ready[(s->ready_head + i) % s->cap] = s->ready[(s->ready_head + i + 1) % s->cap];
+    s->ready_count--;
+    return run_item(s, index, out);
+}
+
 void yonder_scripts_connected(yonder_scripts_t *s, const os64_html_node_t *script)
 {
     if (s == NULL || s->dead)
@@ -459,31 +488,17 @@ void yonder_scripts_fetched(yonder_scripts_t *s, uint32_t token, const char *sou
     make_ready(s, it);
 }
 
-// Whether any element of the document has an on<type> attribute: one walk
-// per tree version, and only while the page has no runtime.
-static bool has_handlers(yonder_scripts_t *s)
+// Which types the document's on<type> attributes name (libdom's own walk):
+// one walk per tree version, and only while the page has no runtime.
+static uint32_t handler_types(yonder_scripts_t *s)
 {
     uint64_t version = os64_html_version(s->doc);
     if (s->handlers_scanned && s->handlers_version == version)
         return s->handlers;
-    bool found = false;
-    const os64_html_node_t *root = s->doc->document;
-    for (const os64_html_node_t *at = root; at != NULL && !found;) {
-        if (at->kind == OS64_HTML_ELEMENT)
-            for (const os64_html_attr_t *a = at->attrs; a != NULL && !found; a = a->next)
-                found = (a->name[0] | 0x20) == 'o' && (a->name[1] | 0x20) == 'n' && a->name[2] != '\0';
-        if (at->first_child != NULL) {
-            at = at->first_child;
-            continue;
-        }
-        while (at != root && at->next == NULL)
-            at = at->parent;
-        at = at != root ? at->next : NULL;
-    }
+    s->handlers = os64_dom_handler_attributes(s->doc);
     s->handlers_version = version;
     s->handlers_scanned = true;
-    s->handlers = found;
-    return found;
+    return s->handlers;
 }
 
 os64_js_status_t yonder_scripts_dispatch(yonder_scripts_t *s, const os64_html_node_t *node,
@@ -496,9 +511,9 @@ os64_js_status_t yonder_scripts_dispatch(yonder_scripts_t *s, const os64_html_no
     if (s == NULL || s->dead)
         return OS64_JS_OK;
     // A page that never ran a script still runs its handler attributes:
-    // their runtime is made by the first event that could reach one.
+    // their runtime is made by the first event one of them names.
     if (s->dom == NULL) {
-        if (!has_handlers(s))
+        if ((handler_types(s) & os64_dom_handler_bit(event->type)) == 0)
             return OS64_JS_OK;
         if (!ensure_runtime(s, out)) {
             retire(s);
@@ -516,7 +531,8 @@ bool yonder_scripts_listens(yonder_scripts_t *s, const char *type)
 {
     if (s == NULL || s->dead)
         return false;
-    return s->dom != NULL ? os64_dom_listens(s->dom, type) : has_handlers(s);
+    return s->dom != NULL ? os64_dom_listens(s->dom, type)
+                          : (handler_types(s) & os64_dom_handler_bit(type)) != 0;
 }
 
 void yonder_scripts_set_note(yonder_scripts_t *s, const char *line)

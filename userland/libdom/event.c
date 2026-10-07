@@ -765,12 +765,10 @@ os64_js_status_t os64_dom_dispatch(os64_dom_t *dom, const os64_html_node_t *node
 
 /* Attributes are counted once per tree version: a walk of the connected tree
  * for on<type> names. Listener and property counts are kept as they change. */
-static uint32_t attribute_mask(os64_dom_t *dom)
+uint32_t os64_dom_handler_attributes(const os64_html_document_t *doc)
 {
-    uint64_t version = os64_html_version(dom->document);
-    if (dom->attribute_scanned && dom->attribute_version == version) return dom->attribute_mask;
     uint32_t mask = 0;
-    const os64_html_node_t *root = document_node(dom);
+    const os64_html_node_t *root = doc != NULL ? doc->document : NULL;
     for (const os64_html_node_t *at = root; at != NULL;) {
         if (at->kind == OS64_HTML_ELEMENT)
             for (const os64_html_attr_t *attr = at->attrs; attr != NULL; attr = attr->next) {
@@ -781,10 +779,24 @@ static uint32_t attribute_mask(os64_dom_t *dom)
         while (at != NULL && at != root && at->next == NULL) at = at->parent;
         at = at != NULL && at != root ? at->next : NULL;
     }
+    return mask;
+}
+
+static uint32_t attribute_mask(os64_dom_t *dom)
+{
+    uint64_t version = os64_html_version(dom->document);
+    if (dom->attribute_scanned && dom->attribute_version == version) return dom->attribute_mask;
+    uint32_t mask = os64_dom_handler_attributes(dom->document);
     dom->attribute_mask = mask;
     dom->attribute_version = version;
     dom->attribute_scanned = true;
     return mask;
+}
+
+uint32_t os64_dom_handler_bit(const char *type)
+{
+    int kind = type != NULL ? d_event_kind(type) : -1;
+    return has_handler_name(kind) ? 1u << kind : 0;
 }
 
 bool os64_dom_listens(os64_dom_t *dom, const char *type)

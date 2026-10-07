@@ -10,7 +10,7 @@
 #include "os64/js.h"
 
 static unsigned checks, failures;
-static size_t live, attempts, fail_at;
+static size_t live, live_bytes, attempts, fail_at;
 os64_time_t js_test_clock = {.epoch = 1700000000, .tz_offset_minutes = 330,
                             .ticks_into_second = 37, .ticks_per_second = 100};
 int js_test_clock_failed;
@@ -25,11 +25,11 @@ void *os64_malloc(size_t n)
     n = (n + 15) & ~(size_t)15;
     Block *block = malloc(sizeof(*block) + n);
     if (!block) return NULL;
-    block->meta.size = n; live++;
+    block->meta.size = n; live++; live_bytes += n;
     return block + 1;
 }
 size_t os64_malloc_size(const void *p) { return ((const Block *)p)[-1].meta.size; }
-void os64_free(void *p) { if (p) { live--; free((Block *)p - 1); } }
+void os64_free(void *p) { if (p) { live--; live_bytes -= os64_malloc_size(p); free((Block *)p - 1); } }
 void *os64_realloc(void *p, size_t n)
 {
     if (!p) return os64_malloc(n);

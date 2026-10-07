@@ -1495,12 +1495,15 @@ static void loop_order(void) {
      * and still waits for it. */
     check(script_land("/deferred.js","note('deferred')"),"loop: the deferred script's fetch was out");
     check(loop_settle() && !g.stream.active && g.page.tree!=NULL,"loop: the page arrives after its deferred script");
-    check(probe_text_is("out","head inline|blocking|async|body inline|connected|body inline 2|deferred|"
+    /* The async script landed while the parse had its next script in hand,
+     * so it runs when the parse next waits: after the parse, before the
+     * deferred script. */
+    check(probe_text_is("out","head inline|blocking|body inline|connected|body inline 2|async|deferred|"
         "DOMContentLoaded|load listener|body onload"),
         "loop: scripts, DOMContentLoaded and load run in the standard's order");
     now_ms=200;
-    check(script_turn() && probe_text_is("out","head inline|blocking|async|body inline|connected|"
-        "body inline 2|deferred|DOMContentLoaded|load listener|body onload|timer"),
+    check(script_turn() && probe_text_is("out","head inline|blocking|body inline|connected|"
+        "body inline 2|async|deferred|DOMContentLoaded|load listener|body onload|timer"),
         "loop: a timer a head script set fires on the shown page, and the page redraws");
     loop_drop();
 }
@@ -1694,7 +1697,105 @@ static void loop_arrival_follows_scripts(void) {
         "coming page: the timer's style applies to the first paint");
     loop_drop();
 }
+// The parse comes first while it has input: a parser-blocking script runs
+// before a 0 ms timer an earlier one set, and that timer before
+// DOMContentLoaded, which HTML queues behind it.
+static void loop_parse_first(void) {
+    loop_page("<p id=out></p><script>var o=[];function n(x){o.push(x);"
+        "document.getElementById('out').textContent=o.join('|')}"
+        "document.addEventListener('DOMContentLoaded',function(){n('DOMContentLoaded')});"
+        "setTimeout(function(){n('f')},0);</script><script>n('g')</script><p>tail</p>");
+    check(loop_settle() && g.page.tree!=NULL && probe_text_is("out","g|f|DOMContentLoaded"),
+        "loop: an inline script runs before a 0 ms timer set ahead of it, and the timer before DOMContentLoaded");
+    loop_drop();
+    /* A 0 ms chain set after the parse ended cannot hold the page back,
+     * with the clock moving as it does on a machine: 10 ms a turn, past
+     * the 4 ms a nested timer is clamped to, so one is due every turn. */
+    loop_page("<p id=out>-</p><script>document.addEventListener('DOMContentLoaded',function(){"
+        "document.getElementById('out').textContent='arrived'});"
+        "function again(){setTimeout(again,0)}setTimeout(again,0);</script>");
+    for(int i=0;i<200 && g.stream.active;i++) { now_ms+=10; stream_turn(); }
+    check(!g.stream.active && g.page.tree!=NULL && probe_text_is("out","arrived"),
+        "loop: a page that keeps setting 0 ms timers still arrives");
+    loop_drop();
+}
+// While the parse waits for a blocking `src`, a landed async script runs and
+// a landed deferred one does not; a deferred fetch still out holds the page.
+static void loop_waits(void) {
+    const char *note="<p id=out></p><script>var o=[];function n(x){o.push(x);"
+        "document.getElementById('out').textContent=o.join('|')}</script>";
+    char page[1024];
+    snprintf(page,sizeof(page),"%s<script defer src=d.js></script><script async src=a.js></script>"
+        "<script src=b.js></script><p>tail</p>",note);
+    loop_page(page);
+    check(loop_settle() && g.stream.stopped && nscript_jobs==3,
+        "loop: stopped at a blocking src with a deferred and an async fetch out");
+    check(script_land("/d.js","n('deferred')") && script_land("/a.js","n('async')"),
+        "loop: the deferred and async sources land while the blocking one is out");
+    check(loop_settle() && g.stream.stopped,"loop: the parse still waits for its blocking src");
+    check(script_land("/b.js","n('blocking')") && loop_settle() && g.page.tree!=NULL &&
+          probe_text_is("out","async|blocking|deferred"),
+        "loop: the async script ran while the parse waited, the deferred one after the parse");
+    loop_drop();
+    snprintf(page,sizeof(page),"%s<script defer src=late.js></script><p>tail</p>",note);
+    loop_page(page);
+    check(loop_settle() && g.stream.active && g.page.tree==NULL && nscript_jobs==1,
+        "loop: a deferred fetch still out holds the page after the parse");
+    check(script_land("/late.js","n('late')") && loop_settle() && g.page.tree!=NULL &&
+          probe_text_is("out","late"),
+        "loop: the page arrives once its deferred script has run");
+    loop_drop();
+}
+// A fragment-only location from a page not yet shown is a place in that
+// page, never a fetch of it: from the parse, at DOMContentLoaded, and from
+// a page waiting for its sheets.
+static void loop_hash_unshown(void) {
+    const char *at_dcl="<h2 id=top>top</h2><h2 id=x>x</h2><script>"
+        "document.addEventListener('DOMContentLoaded',function(){location.hash='x'});</script>";
+    const char *mid_parse="<h2 id=x>x</h2><script>location.hash='x';</script><p>tail</p>";
+    const char *pages[2]={at_dcl,mid_parse};
+    for(int i=0;i<2;i++) {
+        loop_page(pages[i]);
+        check(loop_settle() && !g.stream.active && g.page.tree!=NULL &&
+              os64_streq(g.page.way.url,"http://fixture.test/final"),
+            i==0 ? "loop: location.hash at DOMContentLoaded arrives instead of fetching the page again"
+                 : "loop: location.hash mid-parse arrives instead of fetching the page again");
+        check(!status_says("fragment") && !status_says("anchor"),
+            "loop: the page arrives at the fragment the script named");
+        loop_drop();
+    }
+    loop_page("<link rel=stylesheet href=wait.css><h2 id=x>x</h2><script>"
+        "setTimeout(function(){location.hash='x'},10);</script>");
+    check(loop_settle() && g.coming.active,"loop: a page waiting for its sheet");
+    now_ms+=50;
+    check(loop_settle() && g.coming.active && !g.stream.active && g.coming.has_fragment &&
+          os64_streq(g.coming.fragment,"x"),
+        "loop: its timer's location.hash is kept for its arrival, not fetched");
+    coming_show();
+    check(g.page.tree!=NULL,"loop: the waiting page is shown");
+    loop_drop();
+}
+// A page whose only handler is an onclick makes its runtime at the click,
+// not at DOMContentLoaded or load, which no attribute in it names.
+static void loop_handler_runtime_at_click(void) {
+    loop_page("<p id=h onclick=\"this.textContent='clicked'\">plain</p>");
+    check(loop_settle() && g.page.tree!=NULL && g.page.scripts!=NULL,"loop: a page with one onclick arrives");
+    check(!yonder_scripts_listens(g.page.scripts,"DOMContentLoaded") &&
+          yonder_scripts_listens(g.page.scripts,"click"),
+        "loop: before a runtime, a handler page hears click and not DOMContentLoaded");
+    /* A runtime costs a few hundred KiB of engine heap; a click on a page
+     * that already has one costs a few KiB. */
+    size_t before=live_bytes;
+    input_click_at("h");
+    check(probe_text_is("h","clicked") && live_bytes>before+100*1024,
+        "loop: the runtime is made by the click, the first event an attribute names");
+    loop_drop();
+}
 static void loop_cases(void) {
+    loop_parse_first();
+    loop_waits();
+    loop_hash_unshown();
+    loop_handler_runtime_at_click();
     loop_arrival_follows_scripts();
     loop_script_changes_hold();
     loop_state_adopted();

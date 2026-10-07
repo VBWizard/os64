@@ -2082,16 +2082,27 @@ an inline source past the limit, an address that cannot be fetched or a fetch
 that fails is reported in its place, by name. An inline script's source is
 copied when it is prepared, as HTML takes it.
 
-**The stream's turn** (`stream_turn`): a ready script or a due timer of the
-arriving page first, then the script the parse is stopped at once its source
-is in hand, then one slice of parsing; one task a turn. A wait for a fetch
-rings no bell; the pool's reap does. `end` replaces the blind `finish`, the
-deferred scripts run one a turn after it, then `finish`, the model (adopting
-the scripts' control state, so a value a script set mid-parse is the one the
+**The stream's turn** (`stream_turn`): the parse comes first while it has
+input. The script the parse is stopped at runs once its source is in hand,
+else one slice of parsing; only a turn that finds the parse waiting (a `src`
+out, a deferred fetch out, or the mailbox empty) runs a ready script or a due
+timer of the arriving page. One task a turn. So
+`<script>setTimeout(f,0)</script><script>g()</script>` runs g before f, as a
+browser does, where a parser-blocking script runs inside the parser's own
+task. A wait for a fetch rings no bell; the pool's reap does. `end` replaces
+the blind `finish`, the deferred scripts run one a turn after it, then the
+ready scripts and the timers that were due when the parse ended (HTML queues
+`DOMContentLoaded` behind them; a timer set later waits for arrival, so a 0 ms
+chain cannot hold the page back), then `finish`, the model (adopting the
+scripts' control state, so a value a script set mid-parse is the one the
 widget shows), `DOMContentLoaded`, and arrival. `load` is dispatched at
 window when the page is shown. A navigation a task asks for is performed
 after the task; asked at `DOMContentLoaded`, it replaces the page before it
-is ever shown. `stream_drop` abandons the parser for every stream, so there
+is ever shown. One that changes only the fragment of the asking page's own
+address is no navigation, on any of the three hosts: the page on screen
+scrolls to it, and a page not yet shown keeps it as its arrival fragment, so
+`location.hash = 'x'` at `DOMContentLoaded` restores a section instead of
+fetching the page again. `stream_drop` abandons the parser for every stream, so there
 is one teardown road.
 
 **Departures from the brief, each for a reason:**
@@ -2112,8 +2123,10 @@ is one teardown road.
   until geometry (D10), so the wait would change nothing a page can see;
   booked for D10.
 - **A page whose only script is a handler attribute** gets a host at arrival,
-  whose runtime is made by the first event that could reach a handler: one
-  walk of the document per tree version until then.
+  whose runtime is made by the first event an attribute in the document names
+  (`os64_dom_handler_attributes`, libdom's own walk): a page with one `onclick`
+  makes it at the first click, not at `DOMContentLoaded` or `load`. One walk of
+  the document per tree version until then.
 - **What a page's scripts said survives its arrival**: the arrival writes the
   status line, and the last script sentence is said again after it.
 - **libpage gains `OS64_PAGE_ACTIVATE_FORM`** for `form.submit()`: the form
@@ -2161,17 +2174,31 @@ microseconds.
   (Stop, the scripts switch, the window's close) with a listener, a timer and
   a kept event under LSan, the Settings limit reaching the next task, a page
   from disk, a value set mid-parse reaching the widget, a person's typing read by a
-  timer on the arrived page, a handler-only page;
+  timer on the arrived page, a handler-only page and its runtime made at the
+  first click, the parse before a 0 ms timer and that timer before
+  `DOMContentLoaded`, a 0 ms chain that cannot hold the page back, an async
+  script run while a blocking `src` is out and a deferred one held to the
+  end, `location.hash` from a page not yet shown kept for its arrival;
   and the input sites: links clicked and cancelled with their mouse fields,
   hover with relatedTarget and no task on a page that listens to nothing, a
   real libui edit raising `input`, a cancelled `keydown`, `change` on Enter
   and at blur, submit and reset cancelled, a box put back, a form sent after
   its listeners.
-- `tools/test_yonder_loop_mutants.py`: **31 / 31** caught. The first run
+- `tools/test_yonder_loop_mutants.py`: **37 / 37** caught. The first run
   caught 22 of the 26 that compiled; two of the four it missed were
   equivalent (rewritten to break what they meant to), and two were real gaps
   in the cases (a `defer` script run before the parse ended, and `change`
-  at blur), which the cases above now close.
+  at blur), which the cases above now close. Fable's round added six for
+  the parse-first turn, the timers before `DOMContentLoaded`, the bounded
+  0 ms chain, connected scripts before the parse, the kept fragment and the
+  runtime at its event; reordering the turn left two old ones reaching no
+  case (a deferred script landed while a `src` is out, a deferred fetch still
+  out at the end), which `loop_waits` now closes.
+- `tools/test_yonder_stream_mutants.py`: **27 / 27** caught. Six of D4's had
+  gone stale against D7b's turn (their text no longer existed, so they
+  "did not build" and proved nothing) and are re-aimed at today's code; the
+  harness now tells a compiler's error from a sanitizer's "runtime error",
+  which is a catch, as the loop harness does.
 - `tools/test_libpage_host.sh`: **254,075 / 0** with four `form.submit()`
   cases and the 397-allocation sweep; `tools/test_ui_text_host.py --real`:
   **1,626 / 0** with the `on_change` case; `tools/test_dom_host.sh` with
@@ -2204,6 +2231,7 @@ microseconds.
 | `history.go(n)` past one step, and a script's refresh chain cap | one step covers back and forward; a chain of script navigations is not counted as a declared refresh's is | a page that walks history, or a page that navigates itself in a loop |
 | A link or form a page still arriving asks to follow or send | it has no model until it arrives | a page that clicks itself before it has loaded |
 | Inline script source captured once, at prepare | HTML's rule; a script whose text is changed after it is connected runs what it had then | none expected |
+| `location.hash` reads the old fragment after a fragment-only assignment | the document's URL is set when it is made, and a hash scroll does not change it | a page that reads `location.hash` back after setting it |
 
 ## Booked, with their triggers
 

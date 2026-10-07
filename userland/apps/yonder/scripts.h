@@ -65,6 +65,11 @@ bool yonder_scripts_deferring(const yonder_scripts_t *scripts);
 // False when nothing is ready (a fetch may still be out).
 bool yonder_scripts_step(yonder_scripts_t *scripts, os64_js_outcome_t *outcome);
 bool yonder_scripts_pending(const yonder_scripts_t *scripts);
+// A script a verb connected with no `src`, which a browser runs inside the
+// verb: so it runs before the parse goes on, ahead of any async script that
+// landed first. False when none waits.
+bool yonder_scripts_step_connected(yonder_scripts_t *scripts, os64_js_outcome_t *outcome);
+bool yonder_scripts_connected_pending(const yonder_scripts_t *scripts);
 // A connected script, as libdom reports one (and the finished-document
 // fixtures queue them): inline is ready at once, `src` is fetched.
 void yonder_scripts_connected(yonder_scripts_t *scripts, const os64_html_node_t *script);
@@ -73,13 +78,15 @@ void yonder_scripts_fetched(yonder_scripts_t *scripts, uint32_t token, const cha
                             size_t length);
 
 // One event at `node`, or at window (NULL), as os64_dom_dispatch. A page
-// whose script never ran makes its runtime here if any element carries an
-// on<type> attribute (a page may be all handlers); otherwise nothing hears.
+// whose script never ran makes its runtime here if an element carries an
+// on<type> attribute for this event (a page may be all handlers); otherwise
+// nothing hears.
 os64_js_status_t yonder_scripts_dispatch(yonder_scripts_t *scripts, const os64_html_node_t *node,
                                          const os64_dom_event_t *event, bool *prevented,
                                          os64_js_outcome_t *outcome);
-// Whether `type` could be heard. Before the page has a runtime, whether it
-// has any handler attribute at all, looked at once per tree version.
+// Whether `type` could be heard. Before the page has a runtime, whether an
+// on<type> attribute in the document names it, looked at once per tree
+// version.
 bool yonder_scripts_listens(yonder_scripts_t *scripts, const char *type);
 // The last thing the page's scripts said on the status line, kept so the
 // page's arrival, which writes the status line, can say it again. NULL when
