@@ -180,7 +180,9 @@ static void decode_loader_event(void *context, const uint8_t *event, size_t byte
         }
     } else if (event[0] == 0xff && bytes >= 3) {
         if (event[2] == 6 && e->watch_download) {
-            if (bytes != 7 || read16(event + 4) != 0xfc09) {
+            // The vendor subevent identifies the secure-download result.
+            // AX210 success can carry opcode zero instead of echoing fc09.
+            if (bytes != 7) {
                 e->malformed = true;
                 return;
             }

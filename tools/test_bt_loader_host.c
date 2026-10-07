@@ -60,7 +60,8 @@ void kfree(void *p)
 
 enum { COLD_RSA, COLD_ECDSA, WARM, WRONG_ID, REJECT_FRAGMENT, BAD_USB_OUT,
        NO_USB_OUT, SECURE_FAIL, NO_SECURE_EVENT, NO_BOOT_EVENT, STILL_BOOTLOADER,
-       DISABLE_FAIL, BAD_DDC, CONFIGURE_FAIL, ALLOCATION_FAIL, DEFERRED_BAD_SECURE };
+       DISABLE_FAIL, BAD_DDC, CONFIGURE_FAIL, ALLOCATION_FAIL,
+       DEFERRED_ZERO_OPCODE_SUCCESS, DEFERRED_SECURE_FAILURE };
 static unsigned scenario, secure_commands, resets, reads, ddc_commands, pump;
 static uint64_t seen_control, seen_command, seen_tx;
 static unsigned event_write, event_cycle, queued_bytes, queued_offset, receive_endpoint;
@@ -105,8 +106,8 @@ static void test_controller_step(void)
     if (++pump%16==0) ++kTicksSinceStart;
     if (deferred && queued_bytes==queued_offset) {
         // A notification arriving after the final fragment's acknowledgment
-        // exercises the final wait, which previously returned without a reason.
-        const uint8_t notify[]={0xff,5,6,0,0,0,0};
+        // exercises the final wait independently of command completion.
+        const uint8_t notify[]={0xff,5,6,scenario==DEFERRED_SECURE_FAILURE,0,0,0};
         queue(notify,sizeof(notify),1);
         deferred=false;
     }
@@ -185,7 +186,8 @@ static void test_controller_step(void)
                  TRB_TYPE(TRB_EV_TRANSFER)|(2u<<24)|(4u<<16));
             command_complete(0xfc09,scenario==REJECT_FRAGMENT ? 0x0c : 0);
             if (firmware_offset==(size_t)(bt_ax210_sfi_end-bt_ax210_sfi) && scenario!=NO_SECURE_EVENT) {
-                if (scenario==DEFERRED_BAD_SECURE) deferred=true;
+                if (scenario==DEFERRED_ZERO_OPCODE_SUCCESS || scenario==DEFERRED_SECURE_FAILURE)
+                    deferred=true;
                 else {
                     const uint8_t notify[]={0xff,5,6,scenario==SECURE_FAIL,9,0xfc,0};
                     memcpy(queued+queued_bytes,notify,sizeof(notify)); queued_bytes+=sizeof(notify);
@@ -206,7 +208,7 @@ int main(void)
 {
     const uint8_t config[]={9,2,39,0,1,1,0,0x80,50, 9,4,0,0,3,0xe0,1,1,0,
         7,5,0x81,3,64,0,1, 7,5,2,2,64,0,1, 7,5,0x82,2,64,0,1};
-    for (scenario=COLD_RSA;scenario<=DEFERRED_BAD_SECURE;scenario++) {
+    for (scenario=COLD_RSA;scenario<=DEFERRED_SECURE_FAILURE;scenario++) {
         xhci_t hc={0}; s_hc=&hc;
         uint64_t dcbaa[4]={0}, runtime[16]={0}; uint32_t doorbell[4]={0};
         xhci_trb_t events[RING_TRBS]={0};
@@ -233,12 +235,13 @@ int main(void)
         else if (scenario==NO_BOOT_EVENT) CHECK(resets==1 && reads==1);
         else if (scenario==STILL_BOOTLOADER) CHECK(resets==1 && reads==2 && !ddc_commands);
         else if (scenario==BAD_DDC) CHECK(ddc_commands==1);
-        else if (scenario==DEFERRED_BAD_SECURE) {
+        else if (scenario==DEFERRED_SECURE_FAILURE) {
             CHECK(!resets && firmware_offset==(size_t)(bt_ax210_sfi_end-bt_ax210_sfi));
-            CHECK(strstr(failure_log,"wait failed kind=1") && strstr(failure_log,"malformed=1"));
-            CHECK(strstr(failure_log,"rejected event len=7 prefix=ff 05 06 00 00 00 00"));
+            CHECK(strstr(failure_log,"wait failed kind=1") && strstr(failure_log,"secure_failed=1"));
+            CHECK(strstr(failure_log,"rejected event len=7 prefix=ff 05 06 01 00 00 00"));
         }
         else CHECK(secure_commands>2900 && resets==1 && reads==2 && ddc_commands==2);
+        if (scenario==DEFERRED_ZERO_OPCODE_SUCCESS) CHECK(!failure_log[0]);
         if (scenario==DISABLE_FAIL) CHECK(!released && frees==5 && dcbaa[2]);
         else CHECK(released && allocations-frees==1 && !dcbaa[2]);
         // The command ring is controller-owned. Failed Disable Slot deliberately

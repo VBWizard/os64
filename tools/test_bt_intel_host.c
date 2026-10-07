@@ -126,11 +126,23 @@ int main(void)
     // A later event cannot replace the evidence for the original rejection.
     bt_intel_feed_events(&stream,&e,notify,sizeof(notify));
     assert(e.failure_bytes==sizeof(malformed) && !memcmp(e.failure_event,malformed,sizeof(malformed)));
-    const uint8_t other_opcode[]={0xff,5,6,0,0,0,0};
+    // The P5's AX210 reports secure success with a zero opcode field.
+    const uint8_t p5_secure_success[]={0xff,5,6,0,0,0,0};
+    for (unsigned split=0; split<=sizeof(p5_secure_success); split++) {
+        e=(bt_intel_events_t){.watch_download=true}; stream=(bt_hci_stream_t){0};
+        bt_intel_feed_events(&stream,&e,p5_secure_success,split);
+        bt_intel_feed_events(&stream,&e,p5_secure_success+split,sizeof(p5_secure_success)-split);
+        assert(e.download_done && !e.download_failed && !e.malformed && !e.failure_bytes);
+    }
+    const uint8_t zero_opcode_failure[]={0xff,5,6,1,0,0,0};
     e=(bt_intel_events_t){.watch_download=true}; stream=(bt_hci_stream_t){0};
-    bt_intel_feed_events(&stream,&e,other_opcode,sizeof(other_opcode));
-    assert(e.malformed && e.failure_bytes==sizeof(other_opcode));
-    assert(!memcmp(e.failure_event,other_opcode,sizeof(other_opcode)));
+    bt_intel_feed_events(&stream,&e,zero_opcode_failure,sizeof(zero_opcode_failure));
+    assert(e.download_done && e.download_failed && !e.malformed);
+    assert(e.failure_bytes==sizeof(zero_opcode_failure));
+    assert(!memcmp(e.failure_event,zero_opcode_failure,sizeof(zero_opcode_failure)));
+    e=(bt_intel_events_t){0}; stream=(bt_hci_stream_t){0};
+    bt_intel_feed_events(&stream,&e,p5_secure_success,sizeof(p5_secure_success));
+    assert(!e.download_done && !e.malformed);
     e=(bt_intel_events_t){.opcode=0xfc09}; stream=(bt_hci_stream_t){0};
     bt_intel_feed_events(&stream,&e,rejected,sizeof(rejected));
     assert(!e.command_done); // fc05 cannot complete fc09.
