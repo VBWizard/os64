@@ -1028,6 +1028,21 @@ static void stream_slices(void) {
         !g.page.way.posted,"stream: the standing line and address are the head's");
     check(g.stop.disabled==true && g.reload.disabled==false,"stream: Stop goes out when the page is in");
     check(probe_text_is("t","end"),"stream: the last chunk's text is in the page");
+    stream_window_drop();
+    /* The same five chunks with the verdict still to come: the worker rang
+     * once per post and a stalled socket rings nothing more, so the slice
+     * that left a chunk in the ring asks for the turn that reads it. */
+    stream_window();
+    start_trip("http://fixture.test/p",NULL,NAV_GO,NULL);
+    yonder_mail_post_head(g.stream.mail,&h);
+    stream_post_body(body,len,YONDER_STREAM_CHUNK);
+    check(stream_turn()==true && g.stream.active && yonder_mail_streaming(g.stream.mail),
+        "stream: a slice at its budget asks for another turn before the verdict");
+    check(stream_turn()==false && g.stream.active && !yonder_mail_streaming(g.stream.mail),
+        "stream: the ring read empty, the turn waits for the verdict");
+    stream_post_verdict(true,OS64_FETCH_OK,"");
+    check(stream_turn()==false && !g.stream.active && g.page.tree!=NULL && probe_text_is("t","end"),
+        "stream: the verdict then finishes the page");
     os64_free(body);
     stream_window_drop();
 }
@@ -1056,17 +1071,35 @@ static void stream_text(void) {
     start_trip("http://fixture.test/t",NULL,NAV_GO,NULL);
     way_head_t h=stream_head("text/plain","",false);
     yonder_mail_post_head(g.stream.mail,&h);
+    /* Posted a byte at a time: the mark arrives in three reads, and the
+     * accent after it in two. */
     const char *text="\xEF\xBB\xBF" "plain <b>not bold</b> caf\xC3\xA9";
-    stream_post_body((const uint8_t *)text,strlen(text),YONDER_STREAM_CHUNK);
+    stream_post_body((const uint8_t *)text,strlen(text),1);
     stream_post_verdict(true,OS64_FETCH_OK,"");
     check(stream_turn()==false && g.page.plain!=NULL && g.page.way.doc==NULL && g.page.way.text_utf8 &&
         page_doc(&g.page)==g.page.plain && g.page.tree!=NULL,
-        "stream: text arrives as its own tree, UTF-8 by its byte order mark");
+        "stream: text arrives as its own tree, UTF-8 by its byte order mark, however the wire cut it");
     const os64_html_node_t *pre=g.page.plain->body ? g.page.plain->body->first_child : NULL;
     check(pre && os64_streq(pre->name,"plaintext") && pre->first_child &&
         pre->first_child->kind==OS64_HTML_TEXT && strstr(pre->first_child->text,"<b>not bold</b>")!=NULL,
         "stream: the text is literal under plaintext");
+    check(pre && pre->first_child && strstr(pre->first_child->text,"caf\xC3\xA9")!=NULL &&
+        strstr(pre->first_child->text,"\xC3\xAF")==NULL,
+        "stream: the mark is not drawn and the accent is whole");
     check(os64_streq(g.page.way.note,"200 OK"),"stream: a text page's standing line");
+    stream_window_drop();
+    /* A body shorter than a mark: judged at the end, on what there is. */
+    stream_window();
+    start_trip("http://fixture.test/t",NULL,NAV_GO,NULL);
+    h=stream_head("text/plain","",false);
+    yonder_mail_post_head(g.stream.mail,&h);
+    stream_post_body((const uint8_t *)"hi",2,1);
+    stream_post_verdict(true,OS64_FETCH_OK,"");
+    check(stream_turn()==false && g.page.plain!=NULL && !g.page.way.text_utf8,
+        "stream: a two-byte text arrives, windows-1252");
+    pre=g.page.plain->body ? g.page.plain->body->first_child : NULL;
+    check(pre && pre->first_child && os64_streq(pre->first_child->text,"hi"),
+        "stream: both of its bytes are in the page");
     stream_window_drop();
     /* No label, no mark, not JSON: windows-1252. */
     stream_window();

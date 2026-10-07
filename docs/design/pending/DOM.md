@@ -1208,9 +1208,13 @@ parser, and its OWN copy of a form being sent (`request_copy`), because
 arrival no longer coincides with the job's end. `stream_turn` runs once
 per loop turn beside `script_turn`: the head makes the parser (HTML with
 the head's charset; text through the same parser after `<plaintext>`, the
-encoding decided by `way_text_utf8` at the first chunk), each turn feeds at
-most `STREAM_SLICE_BYTES` (64 KiB) and rings `BELL_STREAM` when more
-waits, a script's stop is resumed at once, and a parser refusal cancels the
+encoding decided by `way_text_utf8` once a text body's first three bytes
+are in hand, gathered across reads when the head leaves the decision to
+them, since the wire may hand a byte order mark over in pieces), each turn
+feeds at most `STREAM_SLICE_BYTES` (64 KiB) and rings `BELL_STREAM` when
+more waits, before the verdict as after it (a slice that stops at its
+budget with chunks in the ring gets no further bell from a worker that
+has already posted them), a script's stop is resumed at once, and a parser refusal cancels the
 job and arrives with the parser's sentence as `way_load` would. With the
 verdict in and the ring drained, `stream_finish` finishes the parse, builds
 the model, writes the standing line with `way_note` and calls the same
@@ -1247,12 +1251,14 @@ requests of a fixture page land within one second of the page's own.
   go with the last holder.
 - `tools/test_yonder_scripts_host.sh`, which hosts `yonder.c`, gains the
   window's side with the test standing in for the worker through a
-  single-threaded mailbox stand-in: 2,099 checks (2,070 before). A slice
-  feeds four chunks and asks for another turn; the verdict behind the last
+  single-threaded mailbox stand-in: 2,105 checks (2,070 before). A slice
+  feeds four chunks and asks for another turn, with the verdict behind
+  them or still to come; the verdict behind the last
   chunk finishes the page, whose tree is the one the same bytes parse to
   whole; a job reaped before a byte was parsed leaves the stream and Stop
-  alive; text arrives as its own tree, UTF-8 by its byte order mark and
-  windows-1252 without one; no page shows libway's sentence; a parser
+  alive; text arrives as its own tree, UTF-8 by its byte order mark posted
+  a byte at a time and windows-1252 without one, and a two-byte body
+  arrives whole; no page shows libway's sentence; a parser
   refusal (a tree deeper than twice the stack) cancels the fetch and
   arrives with the standing line naming it; Stop drops the parse and
   cancels the fetch; a broken pool drops the stream; the form being sent

@@ -739,8 +739,13 @@ static struct {
         bool scripting;             // the parser mode, captured when the navigation started
         bool has_head;
         way_head_t head;
-        os64_html_parser_t *parser; // NULL until the head (HTML) or the first chunk (text)
+        os64_html_parser_t *parser; // NULL until the head (HTML), or until a text body's first bytes are in hand (stream_open)
         bool text_utf8;
+        // A text body's first bytes, gathered whole before its encoding is
+        // judged (way_text_sniffs): the wire may hand a byte order mark
+        // over in pieces, and a parser once made has chosen.
+        uint8_t sniff[3];
+        size_t sniff_len;
         bool has_verdict;
         yonder_verdict_t verdict;
         os64_page_request_t sent;
@@ -3111,6 +3116,8 @@ static bool stream_parser(const void *first, size_t n)
     return true;
 }
 
+static bool stream_open(void);
+
 // The parse is over: finish it, build what the page means, write its
 // standing line, and arrive. `fetch` and `reason` are the wire's verdict,
 // or OK and NULL when the window cut the fetch short itself.
@@ -3121,7 +3128,8 @@ static void stream_finish(os64_fetch_status_t fetch, const char *reason)
     char fragment[sizeof(g.stream.fragment)];
     bool has_fragment = g.stream.has_fragment;
     os64_strcopy(fragment, sizeof(fragment), g.stream.fragment);
-    if (g.stream.parser == NULL && !stream_parser(NULL, 0)) {
+    // A body too short to have filled the sniff is judged on what there is.
+    if (g.stream.parser == NULL && !stream_open()) {
         stream_drop();
         buttons_follow();
         status_rest("Out of memory reading that page.");
@@ -3177,6 +3185,41 @@ static void stream_finish(os64_fetch_status_t fetch, const char *reason)
     arrive(&fresh, kind, &crumb, has_fragment ? fragment : NULL);
 }
 
+// The parser for a text body, made from what decides its encoding — the
+// sniffed first bytes when the head left it to them (way_text_sniffs), as
+// many as arrived — which then go to the parser, so the caller feeds only
+// what follows them. False on no memory.
+static bool stream_open(void)
+{
+    if (!stream_parser(g.stream.sniff, g.stream.sniff_len))
+        return false;
+    // Three bytes after <plaintext> cannot stop at a script or refuse.
+    if (g.stream.sniff_len != 0)
+        (void)os64_html_parser_feed(g.stream.parser, g.stream.sniff, g.stream.sniff_len);
+    g.stream.sniff_len = 0;
+    return true;
+}
+
+// One piece of the body into the parser. False when the parse is over:
+// the parser refused — the page is bigger or deeper than this browser
+// parses — and what it built is a page you can read the beginning of. The
+// rest of the body is not wanted: the fetch is cancelled, as way_load
+// closes its fetch at the same point, and the page arrives with the
+// parser's sentence.
+static bool stream_feed(const uint8_t *bytes, size_t n)
+{
+    int64_t r = os64_html_parser_feed(g.stream.parser, bytes, n);
+    while (r == OS64_HTML_SCRIPT)
+        r = os64_html_parser_resume(g.stream.parser);
+    if (r == OS64_HTML_OK)
+        return true;
+    if (g.nav.id != 0 && g.pool != NULL)
+        os64_work_cancel(g.pool, g.nav.id);
+    g.nav.id = 0;
+    stream_finish(OS64_FETCH_OK, NULL);
+    return false;
+}
+
 // One slice of the arriving page. True when there is more to do than this
 // turn did — chunks still in the ring, or a verdict not yet acted on — so
 // the loop should ring itself and come back after it has looked at the
@@ -3204,26 +3247,26 @@ static bool stream_turn(void)
         if (n == 0)
             break;
         fed += n;
-        if (g.stream.parser == NULL && !stream_parser(chunk, n)) {
-            stop_trip();
-            status_rest("Out of memory reading that page.");
-            return false;
+        size_t at = 0;
+        if (g.stream.parser == NULL) {
+            // A text body's encoding is read off its first three bytes when
+            // the head left it to them: they are gathered whole first,
+            // however the wire cut them, and go to the parser the moment it
+            // exists. A body shorter than that is judged at the end.
+            if (way_text_sniffs(&g.stream.head)) {
+                while (g.stream.sniff_len < sizeof(g.stream.sniff) && at < n)
+                    g.stream.sniff[g.stream.sniff_len++] = chunk[at++];
+                if (g.stream.sniff_len < sizeof(g.stream.sniff))
+                    continue;
+            }
+            if (!stream_open()) {
+                stop_trip();
+                status_rest("Out of memory reading that page.");
+                return false;
+            }
         }
-        int64_t r = os64_html_parser_feed(g.stream.parser, chunk, n);
-        while (r == OS64_HTML_SCRIPT)
-            r = os64_html_parser_resume(g.stream.parser);
-        if (r != OS64_HTML_OK) {
-            // The parser refused — the page is bigger or deeper than this
-            // browser parses — and what it built is a page you can read the
-            // beginning of. The rest of the body is not wanted: the fetch
-            // is cancelled, as way_load closes its fetch at the same point,
-            // and the page arrives with the parser's sentence.
-            if (g.nav.id != 0 && g.pool != NULL)
-                os64_work_cancel(g.pool, g.nav.id);
-            g.nav.id = 0;
-            stream_finish(OS64_FETCH_OK, NULL);
+        if (!stream_feed(chunk + at, n - at))
             return false;
-        }
     }
     // The developer audit says what a slice cost: the number the byte
     // budget is held to (DOM_D4.md).
@@ -3233,8 +3276,12 @@ static bool stream_turn(void)
                       (unsigned long)fed, (long)(os64_micros() - began));
         os64_debug_log(line);
     }
+    // A slice that ended at its budget may have left chunks in the ring
+    // with no bell to come for them: the worker rang when it posted, and a
+    // quiet socket rings nothing more. The verdict is waited for; the
+    // chunks are not.
     if (!g.stream.has_verdict)
-        return false;
+        return fed >= STREAM_SLICE_BYTES;
     if (yonder_mail_streaming(mail))
         return true;                    // chunks remain: next turn
     if (!g.stream.verdict.page) {
