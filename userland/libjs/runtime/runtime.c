@@ -26,7 +26,9 @@ struct os64_js_runtime {
     os64_js_status_t failure;
     os64_js_limit_t failed_limit;
     unsigned cancelled;
-    bool active, turn, source_truncated;
+    /* A host task holds one turn open across several calls and checkpoints;
+     * rejections are judged only at a checkpoint while it is open. */
+    bool active, turn, task, checkpointing, source_truncated;
     bool evaluated, output_installed, args_installed;
     int32_t output_handle;
     char source_name[OS64_JS_SOURCE_NAME_CAP];
@@ -229,12 +231,26 @@ static os64_js_status_t refuse(os64_js_runtime_t *runtime, os64_js_outcome_t *ou
     return status(out, value, message);
 }
 
+static void sticky(os64_js_runtime_t *runtime, os64_js_outcome_t *out)
+{
+    const char *message = "host service failed";
+    if (runtime->failure == OS64_JS_CANCELLED) message = "execution cancelled";
+    else if (runtime->failure == OS64_JS_LIMIT) message = "runtime limit exceeded";
+    else if (runtime->allocator.failures & JSPORT_ALLOC_OOM) message = "host allocation failed";
+    status(out, runtime->failure, message);
+    out->limit = runtime->failed_limit;
+    out->host_error = runtime->host_error;
+}
+
+/* A turn ends at queue exhaustion, except that an open task keeps its turn
+ * (and so its deadline and job count) until os64_js_task_end closes it. */
 static os64_js_status_t leave(os64_js_runtime_t *runtime, os64_js_outcome_t *out)
 {
     bool pending = JS_IsJobPending(runtime->engine);
     if (pending && runtime->jobs == runtime->limits.jobs_per_turn)
         latch(runtime, OS64_JS_LIMIT, OS64_JS_LIMIT_JOBS, 0);
-    if (!observe(runtime) && !pending && runtime->turn) {
+    if (!observe(runtime) && !pending && runtime->turn &&
+        (!runtime->task || runtime->checkpointing)) {
         if (out->status == OS64_JS_OK && runtime->rejections != NULL) {
             out->status = OS64_JS_UNHANDLED_REJECTION;
             rejection_diagnostic(runtime, runtime->rejections->reason, out);
@@ -242,20 +258,12 @@ static os64_js_status_t leave(os64_js_runtime_t *runtime, os64_js_outcome_t *out
         pending = JS_IsJobPending(runtime->engine);
         if (!pending) clear_rejections(runtime);
     }
-    if (observe(runtime)) {
-        const char *message = "host service failed";
-        if (runtime->failure == OS64_JS_CANCELLED) message = "execution cancelled";
-        else if (runtime->failure == OS64_JS_LIMIT) message = "runtime limit exceeded";
-        else if (runtime->allocator.failures & JSPORT_ALLOC_OOM) message = "host allocation failed";
-        status(out, runtime->failure, message);
-        out->limit = runtime->failed_limit;
-        out->host_error = runtime->host_error;
-    }
+    if (observe(runtime)) sticky(runtime, out);
     out->jobs_pending = pending;
     out->jobs_executed = runtime->jobs;
     out->diagnostic_truncated |= runtime->source_truncated |
         copy_text(out->source_name, sizeof(out->source_name), runtime->source_name);
-    if (!pending || runtime->failure != OS64_JS_OK) runtime->turn = false;
+    if ((!pending && !runtime->task) || runtime->failure != OS64_JS_OK) runtime->turn = false;
     runtime->active_outcome = NULL;
     runtime->active = false;
     return out->status;
@@ -470,6 +478,8 @@ JS_PUBLIC os64_js_status_t os64_js_drain_jobs(os64_js_runtime_t *runtime,
     if (slice_jobs == 0) {
         return refuse(runtime, outcome, OS64_JS_BAD_ARGUMENT, "job slice must be positive");
     }
+    if (runtime->task)
+        return refuse(runtime, outcome, OS64_JS_BUSY, "a task is open; its checkpoints drain jobs");
     if (!runtime->turn && JS_IsJobPending(runtime->engine))
         jsport_fatal("jobs outside a runtime turn", __FILE__, __LINE__);
     uint64_t count = 0;
@@ -593,6 +603,143 @@ JS_PUBLIC os64_js_status_t os64_js_run_file(os64_js_runtime_t *runtime,
         runtime->source_truncated = copy_text(runtime->source_name, sizeof(runtime->source_name), path);
     }
     return complete_run(runtime, leave(runtime, outcome), outcome);
+}
+
+/* The task entries share enter()'s guard, and the ABI check that the engine
+ * values crossing os64_js_call need. */
+static os64_js_status_t enter_task(os64_js_runtime_t *runtime, const char *caller_abi,
+                                   bool open, os64_js_outcome_t *outcome)
+{
+    os64_js_status_t result = enter(runtime, outcome);
+    if (result != OS64_JS_OK) return result;
+    if (caller_abi == NULL)
+        return refuse(runtime, outcome, OS64_JS_BAD_ARGUMENT, "ABI is required");
+    if (os64_strcmp(caller_abi, OS64_JS_ABI_ID) != 0)
+        return refuse(runtime, outcome, OS64_JS_ABI_MISMATCH, "binding header ABI mismatch");
+    if (runtime->task != open)
+        return refuse(runtime, outcome, open ? OS64_JS_BAD_ARGUMENT : OS64_JS_BUSY,
+                      open ? "no task is open" : "a task is already open");
+    return OS64_JS_OK;
+}
+
+JS_PUBLIC os64_js_status_t os64_js_task_begin(os64_js_runtime_t *runtime, const char *caller_abi,
+                                            const char *source_name, os64_js_outcome_t *outcome)
+{
+    os64_js_status_t result = enter_task(runtime, caller_abi, false, outcome);
+    if (result != OS64_JS_OK) return result;
+    if (source_name == NULL)
+        return refuse(runtime, outcome, OS64_JS_BAD_ARGUMENT, "task name is required");
+    if (runtime->turn || JS_IsJobPending(runtime->engine))
+        return refuse(runtime, outcome, OS64_JS_BUSY, "the previous turn has queued jobs");
+    if (observe(runtime)) return leave(runtime, outcome);
+    int64_t now = os64_micros();
+    if (now < 0) {
+        latch(runtime, OS64_JS_HOST_FAILURE, OS64_JS_LIMIT_NONE, now);
+        return leave(runtime, outcome);
+    }
+    if (runtime->limits.execution_ms * 1000 > (uint64_t)(INT64_MAX - now))
+        return refuse(runtime, outcome, OS64_JS_BAD_ARGUMENT, "deadline is not representable");
+    runtime->jobs = 0;
+    runtime->source_truncated = copy_text(runtime->source_name, sizeof(runtime->source_name), source_name);
+    runtime->deadline = now + (int64_t)(runtime->limits.execution_ms * 1000);
+    runtime->turn = true;
+    runtime->task = true;
+    runtime->evaluated = true;
+    return leave(runtime, outcome);
+}
+
+JS_PUBLIC os64_js_status_t os64_js_call(os64_js_runtime_t *runtime, const char *caller_abi,
+                                      JSValue function, JSValue this_value, int argc,
+                                      JSValue *argv, bool *returned_false,
+                                      os64_js_outcome_t *outcome)
+{
+    if (returned_false != NULL) *returned_false = false;
+    os64_js_status_t result = enter_task(runtime, caller_abi, true, outcome);
+    if (result != OS64_JS_OK) return result;
+    if (argc < 0 || (argc != 0 && argv == NULL))
+        return refuse(runtime, outcome, OS64_JS_BAD_ARGUMENT, "argument array is invalid");
+    if (observe(runtime)) return leave(runtime, outcome);
+    JSValue value = JS_Call(runtime->context, function, this_value, argc, argv);
+    if (JS_IsException(value)) {
+        JSValue error = JS_GetException(runtime->context);
+        outcome->status = OS64_JS_EXCEPTION;
+        diagnostic(runtime, error, outcome);
+        JS_FreeValue(runtime->context, error);
+    } else if (returned_false != NULL && JS_VALUE_GET_TAG(value) == JS_TAG_BOOL &&
+               !JS_VALUE_GET_BOOL(value)) {
+        *returned_false = true;
+    }
+    JS_FreeValue(runtime->context, value);
+    return leave(runtime, outcome);
+}
+
+/* A checkpoint drains to exhaustion. A job that throws is reported (the first
+ * one is the outcome's) and the checkpoint carries on, so a task never ends
+ * with runnable jobs it could not run. */
+static void checkpoint(os64_js_runtime_t *runtime, os64_js_outcome_t *outcome)
+{
+    while (JS_IsJobPending(runtime->engine) && !observe(runtime)) {
+        if (runtime->jobs == runtime->limits.jobs_per_turn) break;
+        runtime->jobs++;
+        JSContext *context = NULL;
+        if (JS_ExecutePendingJob(runtime->engine, &context) < 0) {
+            if (context == NULL) context = runtime->context;
+            JSValue error = JS_GetException(context);
+            if (outcome->status == OS64_JS_OK) {
+                outcome->status = OS64_JS_EXCEPTION;
+                diagnostic(runtime, error, outcome);
+            }
+            JS_FreeValue(context, error);
+        }
+    }
+    runtime->checkpointing = true;
+}
+
+JS_PUBLIC os64_js_status_t os64_js_checkpoint(os64_js_runtime_t *runtime, const char *caller_abi,
+                                            os64_js_outcome_t *outcome)
+{
+    os64_js_status_t result = enter_task(runtime, caller_abi, true, outcome);
+    if (result != OS64_JS_OK) return result;
+    checkpoint(runtime, outcome);
+    result = leave(runtime, outcome);
+    runtime->checkpointing = false;
+    return result;
+}
+
+JS_PUBLIC os64_js_status_t os64_js_task_end(os64_js_runtime_t *runtime, const char *caller_abi,
+                                          os64_js_outcome_t *outcome)
+{
+    if (outcome == NULL) return OS64_JS_BAD_ARGUMENT;
+    if (runtime != NULL && runtime->active_outcome == outcome) return OS64_JS_BUSY;
+    /* A sticky failure ended the task's work, not the task: closing it is
+     * what lets the host see one verdict and go on to drain and destroy. */
+    if (runtime != NULL && !runtime->active && runtime->task && runtime->failure != OS64_JS_OK) {
+        os64_memset(outcome, 0, sizeof(*outcome));
+        runtime->task = false;
+        runtime->turn = false;
+        sticky(runtime, outcome);
+        outcome->jobs_executed = runtime->jobs;
+        copy_text(outcome->source_name, sizeof(outcome->source_name), runtime->source_name);
+        return outcome->status;
+    }
+    os64_js_status_t result = enter_task(runtime, caller_abi, true, outcome);
+    if (result != OS64_JS_OK) return result;
+    checkpoint(runtime, outcome);
+    runtime->task = false;
+    result = leave(runtime, outcome);
+    runtime->checkpointing = false;
+    return result;
+}
+
+JS_PUBLIC os64_js_status_t os64_js_set_execution_ms(os64_js_runtime_t *runtime, uint64_t ms,
+                                                  os64_js_outcome_t *outcome)
+{
+    os64_js_status_t result = enter(runtime, outcome);
+    if (result != OS64_JS_OK) return result;
+    if (ms == 0 || ms > INT64_MAX / 1000)
+        return refuse(runtime, outcome, OS64_JS_BAD_ARGUMENT, "limits must be positive and representable");
+    runtime->limits.execution_ms = ms;
+    return refuse(runtime, outcome, OS64_JS_OK, NULL);
 }
 
 static bool write_output(os64_js_runtime_t *runtime, const char *bytes, size_t size)

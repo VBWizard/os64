@@ -243,6 +243,14 @@ os64_dom_t *os64_dom_create(os64_js_runtime_t *runtime, os64_html_document_t *do
         goto fail;
     }
     JS_SetClassProto(ctx, dom->collection_class, collection_prototype);
+    if (selected.url != NULL) {
+        size_t size = os64_strlen(selected.url) + 1;
+        dom->url = d_alloc(dom, size);
+        if (dom->url == NULL) goto fail;
+        os64_memcpy(dom->url, selected.url, size);
+    }
+    /* The page's address is the binding's own copy from here on. */
+    dom->options.url = NULL;
     JSValue global = JS_GetGlobalObject(ctx);
     if (JS_IsException(global)) goto fail;
     JSValue doc = d_wrap(dom, ctx, document->document);
@@ -251,16 +259,24 @@ os64_dom_t *os64_dom_create(os64_js_runtime_t *runtime, os64_html_document_t *do
     if (installed >= 0) installed = d_method(dom, ctx, global, "alert", dialog, 1, 0);
     if (installed >= 0) installed = d_method(dom, ctx, global, "confirm", dialog, 1, 1);
     if (installed >= 0) installed = d_method(dom, ctx, global, "prompt", dialog, 2, 2);
+    if (installed >= 0) installed = d_event_install(dom, ctx, global);
+    if (installed >= 0) installed = d_timer_install(dom, ctx, global);
+    if (installed >= 0) installed = d_window_install(dom, ctx, global);
     JS_FreeValue(ctx, global);
     if (installed < 0) goto fail;
     outcome->status = OS64_JS_OK;
     return dom;
 fail:
     /* Partially installed functions may outlive construction. Clear their
-     * anchor before releasing native storage; the host retires this runtime. */
+     * anchor before releasing native storage; the host retires this runtime.
+     * Only the binding's own classes carry an opaque slot: JS_SetOpaque writes
+     * any object's union, and the registry also holds engine functions. */
     construction_error(ctx, outcome);
-    for (DValue *entry = dom->values; entry != NULL; entry = entry->next)
-        JS_SetOpaque(entry->value, NULL);
+    for (DValue *entry = dom->values; entry != NULL; entry = entry->next) {
+        JSClassID id = JS_GetClassID(entry->value);
+        if (id == dom->anchor_class || id == dom->node_class || id == dom->collection_class)
+            JS_SetOpaque(entry->value, NULL);
+    }
     os64_dom_drain(dom);
     os64_dom_free(dom);
     return NULL;
@@ -270,6 +286,8 @@ void os64_dom_drain(os64_dom_t *dom)
 {
     if (dom == NULL || dom->closed) return;
     dom->closed = true;
+    d_event_drain(dom);
+    d_timer_drain(dom);
     for (DValue *entry = dom->values; entry != NULL; entry = entry->next) {
         JS_FreeValueRT(dom->engine, entry->value);
         entry->value = JS_UNDEFINED;
@@ -287,8 +305,11 @@ void os64_dom_free(os64_dom_t *dom)
         d_query_free(dom, query);
         query = next;
     }
+    d_timer_free(dom);
+    d_window_free(dom);
     for (DValue *entry = dom->values; entry != NULL;) {
         DValue *next = entry->next;
+        d_event_free(dom, entry);
         if (entry->node != NULL)
             os64_html_release(dom->document, entry->node);
         d_free(dom, entry);
@@ -298,4 +319,9 @@ void os64_dom_free(os64_dom_t *dom)
 }
 
 size_t os64_dom_bytes(const os64_dom_t *dom) { return dom != NULL ? dom->bytes : 0; }
-size_t os64_dom_registry_count(const os64_dom_t *dom) { return dom != NULL ? dom->retained : 0; }
+/* The three registries: wrappers and other held values, listener callbacks,
+ * and timer callbacks with their arguments. */
+size_t os64_dom_registry_count(const os64_dom_t *dom)
+{
+    return dom != NULL ? dom->retained + dom->listeners_held + dom->timers_held : 0;
+}

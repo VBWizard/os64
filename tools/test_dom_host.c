@@ -14,9 +14,11 @@ int64_t os64_read(int32_t handle, void *buffer, size_t size)
 { (void)handle; (void)buffer; (void)size; return -1; }
 int64_t os64_close(int32_t handle)
 { (void)handle; return 0; }
-static int64_t dom_geometry_clock = 10000000;
+/* A clock that stands still unless a case makes it step, so a deadline is
+ * met only where a case means it to be. */
+static int64_t dom_clock = 10000000, dom_clock_step;
 int64_t os64_micros(void)
-{ return dom_geometry_clock; }
+{ return dom_clock += dom_clock_step; }
 static os64_js_config_t fixture_config(void)
 {
     return (os64_js_config_t){.limits={16*1024*1024,256*1024,64*1024,1000,100}};
@@ -211,6 +213,7 @@ static char *native_serialized(const os64_html_node_t *node)
 #include "test_dom_cases.inc"
 #include "test_libpage_clone.inc"
 #include "test_dom_reclaim.inc"
+#include "test_dom_events.inc"
 #define GEOMETRY_ASSERT "function assert(x,m){if(!x)throw Error(m||'assertion');}" \
     "function throws(n,f){let ok=false;try{f()}catch(e){ok=e.name===n}assert(ok,n)}"
 
@@ -229,7 +232,7 @@ static bool fake_geometry(void *opaque, const os64_html_node_t *node, os64_dom_g
         .offset_left=2,.offset_top=3,.offset_width=21,.offset_height=30,
         .client_left=1,.client_top=2,.client_width=19,.client_height=27,
         .offset_parent=fixture->fixture->document->body,.layouts=1,.elapsed_us=250};
-    if(fixture->slow) dom_geometry_clock+=2000000;
+    if(fixture->slow) dom_clock+=2000000;
     return !fixture->refuse;
 }
 
@@ -280,7 +283,7 @@ static void dom_geometry_cases(void)
     check(os64_js_run(f.runtime,source,strlen(source),"geometry-overrun",&outcome)==OS64_JS_LIMIT&&
           outcome.limit==OS64_JS_LIMIT_EXECUTION&&provider.calls==1,
           "caught native geometry overrun remains sticky and stops later provider work");
-    dom_geometry_clock=10000000;
+    dom_clock=10000000;
     fixture_free(&f);
 }
 
@@ -288,6 +291,7 @@ int main(int argc, char **argv)
 {
     if(argc==2&&!strcmp(argv[1],"--reclaim")){dom_reclaim_cases();printf("DOM reclaim probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--clone")){dom_clone_control_cases();dom_clone_native_cases();dom_clone_state_cap_cases();dom_clone_character_data_cases();dom_clone_allocation_cases();printf("DOM clone probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--events")){dom_event_cases();printf("DOM events probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     bool mutation_mode=argc==2&&!strcmp(argv[1],"--mutants");
     dom_geometry_cases();
     dom_surface_cases();
@@ -306,6 +310,7 @@ int main(int argc, char **argv)
     dom_exception_ownership_cases();
     dom_fragment_mode_cases();
     dom_budget_cases();
+    dom_event_cases();
     if(!mutation_mode){dom_allocation_cases();dom_clone_allocation_cases();}
     printf("DOM host: %u checks, %u failed; binding allocation sweeps=%zu\n", checks, failures, dom_sweeps);
     return failures ? 1 : 0;

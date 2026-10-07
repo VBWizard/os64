@@ -70,9 +70,14 @@ Only `on` enables scripting at startup. Changing the mode cancels queued
 scripts and in-flight navigation, destroys the current runtime, and reloads
 the shown page with the chosen `noscript` parsing policy. A POST reply keeps
 the existing resend confirmation. The status line begins **SCRIPTS ON** while
-the setting is enabled. This is D5b's finished-document inline-script fixture;
-[DOM.md § D5b, as built](../pending/DOM.md#d5b-as-built) records its scope and
-the remaining gates before recommending scripts for ordinary browsing.
+the setting is enabled. Beside it, **Script time limit** (a slider, 1 to 60
+seconds, 5 by default, `script_seconds` in `yonder.conf`) is how long one
+script task may run before the page is stopped and goes on without script;
+Apply reaches every page's next task. Scripts run in the order HTML gives
+them, as the page is parsed, with timers, events and handler attributes:
+[DOM_D7.md](../pending/DOM_D7.md) is the design and
+[DOM.md § D7a](../pending/DOM.md#d7a-as-built) and § D7b the record, with the
+remaining gates before recommending scripts for ordinary browsing.
 
 - **The presets** (`agent.c`) are yonder's own, Chrome and Firefox on
   Windows, Safari on an iPhone (a lighter page from many sites), Netscape
@@ -549,9 +554,10 @@ text field.
 
 **The values are the page model's.** A checkbox, radio or list writes its
 change to libpage at once (`os64_page_set_checked`,
-`os64_page_set_chosen`). A text field has no change callback, so every
-text field's contents are written to libpage (`os64_page_set_text`) before
-anything is sent — the model is what a submission reads. Until then the
+`os64_page_set_chosen`). A text field's edits are not (libui's `on_change`
+raises the page's `input` event and nothing else), so every text field's
+contents are written to libpage (`os64_page_set_text`) before anything is
+sent — the model is what a submission reads. Until then the
 FIELD holds the newer value, so a tick or a choice rewrites only ticks and
 lists from the model. Text buffers flush before a script task as well as
 activation. Widgets are keyed by native node and retain their addresses,
@@ -592,9 +598,9 @@ a reply fetch its address, as wend does (booked).
 `text/*`, and the application types that are text in all but name — JSON
 and `+json` (what an API, and httpbin, answers a form with), JavaScript,
 XML and `+xml`. JSON with no charset is read as UTF-8, its RFC's rule. This
-is what arrives as the PAGE. Named external scripts are not fetched by the
-D5b fixture; enabled inline classic scripts run against a finished HTML
-document on the window thread, one per turn.
+is what arrives as the PAGE. A page's own scripts, inline and `src`, run on
+the window thread as the parser reaches them (DOM_D7.md); a script's source
+is fetched as a sheet is, on the pool.
 
 **Evidence, as run.** The guest, against a local server that echoes what
 it is sent: a page of every kind of control drawn as widgets at their

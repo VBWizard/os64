@@ -22,10 +22,13 @@
 #define CONF_CACHE_MB "cache_mb"
 
 #define CONF_ZOOM "zoom"
+#define CONF_SCRIPT_SECONDS "script_seconds"
 
 // The list's height, in rows; the dialog's rows are a line of words, the
-// list, field, cache row, zoom row and page-script switch. Cache usage
-// appears on the dialog's status line; a body must fit the helper's window.
+// list, field, cache row, zoom row, and the page-script switch with the
+// script time limit beside it. Cache usage appears on the dialog's status
+// line; a body must fit the helper's window, which is sized for this many
+// rows and no more.
 #define LIST_ROWS 6
 #define BODY_ROWS (LIST_ROWS + 5)
 
@@ -39,8 +42,13 @@ static struct {
     os64_ui_listbox_t list;
     os64_ui_textfield_t field;
     char field_buf[YONDER_AGENT_MAX];
-    void (*use)(const char *agent, bool scripts);
+    void (*use)(const char *agent, bool scripts, uint32_t script_seconds);
     os64_ui_checkbox_t scripts;
+    // "Script time limit: [----o----] 5 s", beside the switch: the slider,
+    // and its value in words.
+    os64_ui_widget_t limit_words, limit_value;
+    os64_ui_slider_t limit;
+    char limit_text[16];
     way_cache_t *cache;
     bool usable;                    // the cache has a directory it can keep things in
     os64_ui_checkbox_t keep;
@@ -100,6 +108,20 @@ bool yonder_settings_saved_scripts(void)
     char value[8];
     return os64_conf_get(CONF_NAME, CONF_SCRIPTS, value, sizeof(value)) == 0 &&
            os64_streq(value, "on");
+}
+
+uint32_t yonder_settings_saved_script_seconds(void)
+{
+    char v[16];
+    uint64_t seconds;
+    if (os64_conf_get(CONF_NAME, CONF_SCRIPT_SECONDS, v, sizeof(v)) != 0)
+        return YONDER_SCRIPT_SECONDS_DEFAULT;
+    if (!os64_parse_u64(v, &seconds) || seconds < YONDER_SCRIPT_SECONDS_MIN ||
+        seconds > YONDER_SCRIPT_SECONDS_MAX) {
+        os64_debug_log("yonder: yonder.conf's script_seconds is not 1 to 60; using 5");
+        return YONDER_SCRIPT_SECONDS_DEFAULT;
+    }
+    return (uint32_t)seconds;
 }
 
 bool yonder_settings_saved_agent(char *out, size_t cap)
@@ -291,8 +313,43 @@ static bool arrange(os64_ui_settings_t *d, os64_gui_rect_t b, int32_t row, bool 
     place(&s.zoom.w, (os64_gui_rect_t){b.x + words_w, zoom_y, field, row}, staged);
     place(&s.percent, (os64_gui_rect_t){b.x + words_w + field + row / 2, zoom_y,
                                         widths[6] + row / 2, row}, staged);
-    place(&s.scripts.w, (os64_gui_rect_t){b.x, last + 2 * row, b.w, row}, staged);
+    // The switch, and on the same row its time limit: "Script time limit:",
+    // the slider, and the number it is at.
+    int32_t switch_w = 0, limit_words = 0, limit_value = 0;
+    if (os64_ui_text_measure(&d->ui, OS64_FONT_ROLE_UI, s.scripts.w.text,
+                             os64_strlen(s.scripts.w.text), &switch_w) ||
+        os64_ui_text_measure(&d->ui, OS64_FONT_ROLE_UI, s.limit_words.text,
+                             os64_strlen(s.limit_words.text), &limit_words) ||
+        os64_ui_text_measure(&d->ui, OS64_FONT_ROLE_UI, "60 s", 4, &limit_value))
+        return false;
+    switch_w += 2 * row;
+    limit_words += row / 2;
+    limit_value += row;
+    int32_t slider = b.w - switch_w - limit_words - limit_value;
+    if (slider < 3 * row)
+        return false;
+    int32_t script_y = last + 2 * row, at = b.x;
+    place(&s.scripts.w, (os64_gui_rect_t){at, script_y, switch_w, row}, staged);
+    at += switch_w;
+    place(&s.limit_words, (os64_gui_rect_t){at, script_y, limit_words, row}, staged);
+    at += limit_words;
+    place(&s.limit.w, (os64_gui_rect_t){at, script_y, slider, row}, staged);
+    at += slider;
+    place(&s.limit_value, (os64_gui_rect_t){at + row / 2, script_y, limit_value - row / 2, row}, staged);
     return true;
+}
+
+static void limit_say(void)
+{
+    os64_snprintf(s.limit_text, sizeof(s.limit_text), "%d s", (int)s.limit.value);
+}
+
+static void limit_moved(os64_ui_slider_t *slider, void *user)
+{
+    (void)slider;
+    (void)user;
+    limit_say();
+    os64_ui_mark_dirty(&s.d.ui, &s.limit_value);
 }
 
 static void apply(os64_ui_settings_t *d, bool save)
@@ -317,7 +374,10 @@ static void apply(os64_ui_settings_t *d, bool save)
         os64_ui_settings_report(d, "No memory to keep that agent; nothing changed.");
         return;
     }
-    s.use(agent, s.scripts.checked);
+    uint32_t seconds = (uint32_t)s.limit.value;
+    char seconds_text[8];
+    os64_snprintf(seconds_text, sizeof(seconds_text), "%u", (unsigned)seconds);
+    s.use(agent, s.scripts.checked, seconds);
     s.zoom_use(zoom);
     const char *name = yonder_agent_name(agent);
     // A cache that cannot keep anything has no box to tick, and saves no
@@ -327,11 +387,12 @@ static void apply(os64_ui_settings_t *d, bool save)
         way_cache_enable(s.cache, keeping);
         way_cache_set_cap(s.cache, mb * 1024 * 1024);
     }
-    char line[160], kept[40];
+    char line[200], kept[40];
     os64_snprintf(kept, sizeof(kept), "keeping up to %lu MB", (unsigned long)mb);
     bool saved = !save || (os64_conf_set(CONF_NAME, CONF_AGENT, agent) == 0 &&
                            os64_conf_set(CONF_NAME, CONF_SCRIPTS,
                                           s.scripts.checked ? "on" : "off") == 0 &&
+                           os64_conf_set(CONF_NAME, CONF_SCRIPT_SECONDS, seconds_text) == 0 &&
                            os64_conf_set(CONF_NAME, CONF_ZOOM, s.zoom_buf) == 0 &&
                            (!s.usable || (os64_conf_set(CONF_NAME, CONF_CACHE,
                                                         keeping ? "on" : "off") == 0 &&
@@ -340,17 +401,18 @@ static void apply(os64_ui_settings_t *d, bool save)
     if (!saved)
         os64_strcopy(line, sizeof(line), "Applied here, but yonder.conf could not be written.");
     else
-        os64_snprintf(line, sizeof(line), "%s: zoom %d%%, asking as %s, %s, scripts %s%s",
+        os64_snprintf(line, sizeof(line), "%s: zoom %d%%, asking as %s, %s, scripts %s (%u s)%s",
                       save ? "Saved" : "Applied", (int)(zoom / 10),
                       name != NULL ? name : "the agent typed", keeping ? kept : "keeping nothing",
-                      s.scripts.checked ? "on" : "off",
+                      s.scripts.checked ? "on" : "off", (unsigned)seconds,
                       save ? ", here and in new windows." : ", here.");
     os64_ui_settings_report(d, line);
 }
 
 void yonder_settings_open(int64_t parent, uint32_t bell, const char *agent,
-                          void (*use)(const char *agent, bool scripts), way_cache_t *cache,
-                          bool scripts, uint32_t zoom, void (*zoom_use)(uint32_t thousandths))
+                          void (*use)(const char *agent, bool scripts, uint32_t script_seconds),
+                          way_cache_t *cache, bool scripts, uint32_t script_seconds, uint32_t zoom,
+                          void (*zoom_use)(uint32_t thousandths))
 {
     // Open already: the helper brings it forward and keeps what was typed.
     if (!os64_ui_settings_open(&s.d, parent, "yonder Settings", BODY_ROWS, arrange, apply, NULL))
@@ -372,6 +434,13 @@ void yonder_settings_open(int64_t parent, uint32_t bell, const char *agent,
                      NULL, NULL);
     os64_ui_textfield(&s.size, s.size_buf, sizeof(s.size_buf), NULL, NULL, NULL);
     os64_ui_checkbox(&s.scripts, "Run page scripts", scripts, NULL, NULL);
+    // Enabled whether or not scripts are on: it is the limit they will
+    // have when they are.
+    os64_ui_label(&s.limit_words, "Script time limit:");
+    os64_ui_slider(&s.limit, YONDER_SCRIPT_SECONDS_MIN, YONDER_SCRIPT_SECONDS_MAX, 1,
+                   (int32_t)script_seconds, limit_moved, NULL);
+    limit_say();
+    os64_ui_label(&s.limit_value, s.limit_text);
     os64_ui_label(&s.mb, "MB");
     os64_ui_button(&s.empty, "Empty the cache", emptied, NULL);
     os64_ui_label(&s.zoom_words, "Zoom every page to");
@@ -379,7 +448,7 @@ void yonder_settings_open(int64_t parent, uint32_t bell, const char *agent,
     os64_ui_label(&s.percent, "%");
     os64_ui_widget_t *kids[] = {&s.heading, &s.list.w,     &s.field.w, &s.keep.w,  &s.size.w,
                                 &s.mb,      &s.empty,      &s.zoom_words, &s.zoom.w, &s.percent,
-                                &s.scripts.w};
+                                &s.scripts.w, &s.limit_words, &s.limit.w, &s.limit_value};
     for (size_t i = 0; i < sizeof(kids) / sizeof(kids[0]); i++)
         os64_ui_add_child(&s.d.body, kids[i]);
     os64_ui_listbox_set(&s.d.ui, &s.list, yonder_agent_npresets(), selected);

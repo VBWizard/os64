@@ -271,17 +271,27 @@ static char *mail_plain(const char *s, size_t len, size_t *out_len)
 static os64_page_verdict_t submit(const os64_page_t *page, os64_page_what_t what,
                                   os64_page_request_t *out)
 {
-    const os64_page_control_t *c = os64_page_control(page, what.index);
-    if (c == NULL)
-        return refuse(out, OS64_PAGE_REASON_NO_CONTROL);
-    int32_t form = c->form, submitter = -1;
+    int32_t form = -1, submitter = -1;
     os64_page_reason_t reason = OS64_PAGE_REASON_OK;
-    if (!p_submitter(page, form, what, &submitter, &reason))
-        return nothing(out, reason);
+    if (what.how == OS64_PAGE_ACTIVATE_FORM) {
+        if (os64_page_form(page, what.index) == NULL)
+            return nothing(out, OS64_PAGE_REASON_NO_FORM);
+        form = what.index;
+    } else {
+        const os64_page_control_t *c = os64_page_control(page, what.index);
+        if (c == NULL)
+            return refuse(out, OS64_PAGE_REASON_NO_CONTROL);
+        form = c->form;
+        if (!p_submitter(page, form, what, &submitter, &reason))
+            return nothing(out, reason);
+    }
 
     const os64_page_ref_t *action = NULL;
     bool novalidate = false;
     p_effective(page, form, submitter, &action, &out->method, &out->enctype, &novalidate);
+    // A form a script sends itself is not validated: the script chose to.
+    if (what.how == OS64_PAGE_ACTIVATE_FORM)
+        novalidate = true;
 
     // VALIDATION IS ACTED ON BEFORE THE METHOD IS, which is the standard's
     // order and matters for a `dialog` form: it still has to be filled in

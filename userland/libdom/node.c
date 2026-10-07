@@ -27,6 +27,7 @@ static int node_prototype_kind(const os64_html_node_t *node)
         if (node->tag == OS64_HTML_TAG_TEXTAREA) return D_PROTO_TEXTAREA;
         if (node->tag == OS64_HTML_TAG_SELECT) return D_PROTO_SELECT;
         if (node->tag == OS64_HTML_TAG_BUTTON) return D_PROTO_BUTTON;
+        if (node->tag == OS64_HTML_TAG_FORM) return D_PROTO_FORM;
     }
     return D_PROTO_ELEMENT;
 }
@@ -294,6 +295,10 @@ static JSValue attribute(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t
     } else if (magic == D_REMOVE_ATTR && os64_html_attr(node, name.data) == NULL) {
         /* Reading/removing an absent qualified name does not validate it. */
         result = JS_UNDEFINED;
+    } else if (d_handler_attribute_set(dom, ctx, node, name.data) < 0) {
+        /* An on<type> attribute's handler slot takes its place among the
+         * listeners now, before the attribute it will read exists. */
+        result = JS_EXCEPTION;
     } else {
         int64_t status = os64_page_node_set_attr(dom->state, node, name.data, value.data,
                                                 value.length, magic == D_REMOVE_ATTR);
@@ -328,10 +333,29 @@ static JSValue method(JSContext *ctx, JSValueConst self, int argc,
             return d_error(ctx, "NotFoundError", "Node is not a child of this parent");
         JSValue result = d_wrap(dom, ctx, magic == D_REPLACE ? other : child);
         if (JS_IsException(result)) return result;
+        /* Scripts the move may connect are found before it, while a fragment
+         * still holds its children, and handed to the host after it. */
+        const os64_html_node_t *few[8], **scripts = few;
+        size_t found = 0;
+        if (magic != D_REMOVE && dom->options.script_connected != NULL) {
+            found = d_script_collect(child, few, 8);
+            if (found > 8) {
+                scripts = d_alloc(dom, found * sizeof(*scripts));
+                if (scripts == NULL) {
+                    JS_FreeValue(ctx, result);
+                    return d_error(ctx, "QuotaExceededError", "DOM script list quota exceeded");
+                }
+                d_script_collect(child, scripts, found);
+            }
+            for (size_t i = 0; i < found; i++) os64_html_hold(dom->document, scripts[i]);
+        }
         int64_t status = magic == D_REMOVE ? d_remove(dom, (os64_html_node_t *)child) :
             magic == D_REPLACE ? d_replace(dom, (os64_html_node_t *)node, (os64_html_node_t *)child,
                                            (os64_html_node_t *)other) :
             d_insert(dom, (os64_html_node_t *)node, (os64_html_node_t *)child, (os64_html_node_t *)other);
+        if (status >= 0) d_script_connected(dom, scripts, found);
+        for (size_t i = 0; i < found; i++) os64_html_release(dom->document, scripts[i]);
+        if (scripts != few) d_free(dom, scripts);
         if (status < 0) { JS_FreeValue(ctx, result); return d_html_error(ctx, status); }
         return result;
     }
@@ -342,7 +366,10 @@ static JSValue method(JSContext *ctx, JSValueConst self, int argc,
         DValue *entry = wrapper_prepare(dom, ctx, node);
         if (entry == NULL) return JS_EXCEPTION;
         os64_html_node_t *copy = os64_page_node_clone(dom->state, node, deep != 0, &status);
-        if (copy != NULL) return wrapper_attach(dom, ctx, entry, copy);
+        /* HTML's cloning steps carry a script's ALREADY STARTED to its copy. */
+        if (copy != NULL && d_script_copy_marks(dom, node, copy) >= 0)
+            return wrapper_attach(dom, ctx, entry, copy);
+        if (copy != NULL) status = OS64_HTML_NO_MEMORY;
         dom->values = entry->next;
         dom->retained--;
         JS_FreeValue(ctx, entry->value);

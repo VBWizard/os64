@@ -367,6 +367,13 @@ const char *os64_page_base(const os64_page_t *page);
 // either will not resolve (an opaque base, an address with no host) or the
 // answer will not fit in `cap`.
 bool os64_page_url_absolute(const char *base, const char *reference, char *out, size_t cap);
+// `reference` resolved exactly as a link in `doc` would be, without
+// building a model: the same input cleaning, the first `<base href>` as the
+// tree stands now, the same fallbacks, the same canonical spelling. A
+// fragment is kept as written. False when the reference will not resolve
+// or the answer will not fit in `cap`. For an address a script names.
+bool os64_page_resolve_in(const os64_html_document_t *doc, const char *document_url,
+                          const char *reference, char *out, size_t cap);
 // Where the page came from, canonical. Never NULL.
 const char *os64_page_document_url(const os64_page_t *page);
 
@@ -579,6 +586,10 @@ typedef enum {
     // Follow the refresh this page declares; `index` is not read. NOTHING
     // with OS64_PAGE_REASON_NO_REFRESH for a page that declares none.
     OS64_PAGE_ACTIVATE_REFRESH,
+    // Send form `index` itself, as a script's form.submit() does: no
+    // submitter, so no button's overrides and no button's name in the data,
+    // and no constraint validation (HTML's "submitted from submit() method").
+    OS64_PAGE_ACTIVATE_FORM,
 } os64_page_activation_t;
 
 typedef struct {

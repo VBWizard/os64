@@ -4,8 +4,10 @@ libdom makes the script-visible document over libhtml's mutable tree and
 libpage's persistent control state. It uses libjs's pinned QuickJS binding
 surface; it neither parses JavaScript nor owns a browser loop.
 
-This is D5a. D5b seats this library in Yonder and proves J3's visible changes,
-field preservation and navigation teardown. D4 and D7 remain Fable's slices.
+D5a built the document surface; D5b seated it in Yonder. D7a adds the
+EventTarget half of the DOM, HTML's event handlers and timers, and the asks a
+script makes of the page around it (§ Events, § Timers, § Asks). The browser
+loop that drives them is yonder's (DOM_D7.md); this library owns no loop.
 
 ## Ownership and calls
 
@@ -153,16 +155,167 @@ JavaScript exceptions follow the existing runtime outcome contract.
 
 Alert borrows normalized UTF-8 during a synchronous host callback. The host
 copies it if needed and does not enter a nested loop or JavaScript. Confirm
-returns false; prompt returns null. Events, timers, document.write,
-cookies and browser script scheduling belong to their integration slices.
+returns false; prompt returns null. Cookies and the browser's script
+scheduling belong to later work (geometry is § Synchronous geometry); `document.write` and `writeln` throw
+`InvalidStateError` ("document.write is not supported yet") until D9.
+
+Listener records, handler text, timer records and their argument arrays, the
+event path of a dispatch and the started-script table are charged to the
+binding's budget like any other native record; a refusal is
+`QuotaExceededError` before anything changes. Event state lives in engine
+memory (§ Events).
+
+## Events
+
+`addEventListener`, `removeEventListener` and `dispatchEvent` are on every
+node and on window. A listener is a function or an object with `handleEvent`;
+the third argument is the old boolean `useCapture` or `{capture, once}`
+(`passive` is accepted and changes nothing). `new Event(type, {bubbles,
+cancelable})` and the old `document.createEvent(...)` with `initEvent` make
+events. An event reads `type`, `target`, `srcElement`, `currentTarget`,
+`eventPhase`, `bubbles`, `cancelable`, `defaultPrevented`, `timeStamp` (the
+host's clock), `isTrusted`, and the writable old spellings `returnValue` and
+`cancelBubble`. Host events also carry the mouse fields (`clientX/Y`,
+`pageX/Y`, `screenX/Y`, `button`, `which`, `relatedTarget`) or the key fields
+(`key`, `keyCode`, `charCode`, `which`) and the modifier flags, as data.
+
+**Where the values live.** A target's listener list hangs off its wrapper
+record, in the order listeners were added; window's off a record of its own.
+Each listener's callback is a C-held engine value, the registry's second
+list, released by drain. An Event's own state is engine memory traced by the
+collector (`gc_mark`), because a script may keep an event long after its
+dispatch: its finalizer frees engine storage and nothing native.
+
+**Dispatch** is the DOM Standard's: the path is the target and its ancestors,
+then window past the document (except for `load`); capture listeners top
+down, then the target's capture listeners and its others, then bubbling up
+when the event bubbles. A list is cut where it ended when its target was
+reached, so a listener added during the dispatch waits for the next one; a
+listener removed during it does not run (its record is swept when the last
+dispatch leaves). `once` listeners are removed before they run. A listener
+that throws is reported and the next one runs.
+
+Two callers, two shapes. **The host** (`os64_dom_dispatch`) opens a libjs
+task, runs each listener as one `os64_js_call` followed by a checkpoint, and
+closes the task; its outcome is the task's first exception or rejection, a
+sticky status when the runtime died under it, or a nested error (below).
+**A script** (`dispatchEvent`) runs the listeners as nested engine calls with
+no checkpoint between them, which is what DOM.md asks: a checkpoint follows a
+callback that returns with no script on the stack. A nested listener's error
+is kept in the binding (`os64_dom_take_report`) rather than thrown into the
+script that dispatched, as the standard reports it; the host folds it into
+the task's outcome when it opened the task through libdom. Every engine
+entry the binding makes is inside a task or a turn: the host's own calls are
+`os64_js_call` on one invoking function, and everything else runs under a
+call or an evaluation that is already armed.
+
+`os64_dom_listens(type)` answers whether anything could hear a type: a
+listener or a handler property is counted as it changes, and on<type>
+content attributes are counted once per tree version by one walk of the
+document. A host asks before it builds anything, so a `mousemove` over a
+page with no handler costs no allocation and no engine entry. That walk is
+public as `os64_dom_handler_attributes(doc)`, a mask `os64_dom_handler_bit
+(type)` reads, and needs no runtime: a host whose page has not run a script
+asks it before making one, so a page with one `onclick` gets its runtime at
+the first click.
+
+**Event handlers.** For `click`, `mousedown`, `mouseup`, `mouseover`,
+`mouseout`, `mousemove`, `keydown`, `keypress`, `keyup`, `input`, `change`,
+`submit`, `reset`, `focus`, `blur` and `load`, elements, the document and
+window have an on<type> property, and an on<type> content attribute is a
+handler. A target's handler is one slot in its listener list, in the place
+it was first set; a slot for an attribute the parser or innerHTML wrote goes
+first (an element has its attributes before any script can reach it), and a
+script's `setAttribute` makes its slot then. Window's slots come from the
+body, which window predates: window takes in the body's attributes before
+each listener added to it, and one found only at dispatch goes last, so
+`<body onload>` runs after a `load` listener a head script added and before
+one added once the body was parsed. The slot remembers the attribute
+text it last saw, so a set, changed or removed attribute is noticed by
+whichever route it changed. It compiles at the first dispatch or read that
+needs it: `function on<type>(event){BODY}` inside `with(document)
+with(form owner) with(element)`, HTML's three scopes. A body that does not
+compile is reported once and stays absent until the attribute changes;
+reading the property answers null. A handler that returns `false` cancels.
+The body's window-reflecting handlers (`load`, `focus`, `blur`) are window's,
+from `<body onload>` or `document.body.onload` alike.
+
+The body is first checked by the intrinsic Function constructor, taken
+before any page script could replace it. QuickJS builds that function by
+joining strings, so a body written to close the function early in both
+shapes (`} + (f(), function(){`) still compiles, where a browser that parses
+a FunctionBody refuses it. It is the page's own code in its own realm: it can
+change when that code runs, not what it may do. A compiled value that is not
+a function is a compile failure.
+
+## Timers
+
+`setTimeout`, `setInterval`, `clearTimeout` and `clearInterval`, on window.
+Ids count from 1 and are never reused within a page; 4096 may be live at
+once, and one more throws `QuotaExceededError`. A string handler is a script
+evaluated in global scope (the old web's `setTimeout("tick()", 1000)`); a
+function is called with `this` as window and the extra arguments. A delay
+wraps as a 32-bit integer and below zero is zero; a timer nested more than
+five deep is clamped to 4 ms, as HTML clamps it. The table holds callbacks
+and arguments, so it is the registry's third list.
+
+The host drives it in its own clock (`options.now_ms`):
+`os64_dom_timer_next` answers the earliest due time, and
+`os64_dom_timer_fire` runs at most one due timer as one task. Two timers due
+together fire in the order they were set. An interval is re-armed before its
+callback runs, so a callback that clears its own interval wins; a callback
+that clears the timer that is running finishes running.
+
+## Asks
+
+A script's task must not reach widgets or the model, so what a script asks
+of the page is recorded and performed by the host after the task.
+
+**Navigation**, one slot, the last ask of a task winning
+(`os64_dom_take_navigation`): `location.href =`, `location = `,
+`location.assign`, `replace`, `reload`, `hash =` (the address with its
+fragment replaced), `history.back/forward/go` (`go(0)` reloads), a link's
+`click()`, and a form's submission. Addresses are resolved exactly as a
+link's are, by libpage's own steps with the base as the tree stands
+(`os64_dom_resolve`, which a host uses for a script's `src` too); `hash =`
+stays in the page. A taken ask's nodes come held. `location` reads the page's
+address and its parts; `history.length` reads 1. `window.status` and
+`defaultStatus` accept an assignment and read empty: the status line is the
+browser's.
+
+**Element actions.** `click()` is a synthetic click: the event, then the
+element's activation unless a listener cancelled it. A checkbox or radio
+changes before its click and is put back when the click is cancelled
+(otherwise `input` and `change` follow); a link asks to be followed; a
+submit button fires `submit` at its form and, uncancelled, asks for the
+submission; a reset button fires `reset`. An element already being
+clicked ignores another `click()` until its own finishes (HTML's
+click-in-progress flag); another element can still be clicked from its
+listener. `form.submit()` asks without a `submit` event, `requestSubmit()` with one, and `reset()` fires `reset`. A
+reset not cancelled, `focus()` and `blur()` reach the host through
+`options.activate`, which records them.
+
+## Script elements
+
+`os64_dom_script_kind` is HTML's type rule (type, else language, the sixteen
+JavaScript MIME essences, `module`), and every caller asks it. ALREADY
+STARTED is a held node in the binding's table: `os64_dom_script_start` marks
+a script the host runs, a script innerHTML parses is born started, and a
+clone of a started script is started. When a verb connects a classic script
+that has not started (an `appendChild` of a `createElement('script')`), the
+binding marks it and tells the host through `options.script_connected`;
+moving a started script tells nobody. A host that sets no callback gets no
+notices and no marks.
 
 ## Proof boundary
 
 `tools/test_dom_host.sh` tests the actual target engine core and a separately
 ASan-instrumented target-profile engine, with sanitized bindings/tree/state.
-`domtest` exercises the shared-library boundary and heap in ring 3. These are
-library proofs; Yonder repaint, script scheduling and navigation acceptance
-remain D5b. Result counts are recorded in DOM.md after the final source freeze.
+`tools/test_dom_events.inc` holds a case per rule of § Events, § Timers,
+§ Asks and § Script elements, and `tools/test_dom_mutants.py --events` a
+mutant per rule. `domtest` exercises the shared-library boundary and heap in
+ring 3. These are library proofs; yonder's loop is proven with its own
+harness. Result counts are recorded in DOM.md after the final source freeze.
 
 D6 holds wrapper identity keys, query roots and cached query answers. A
 successful refresh holds its complete successor before releasing the old

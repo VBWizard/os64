@@ -174,7 +174,9 @@ JSValue d_content_set(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *n
     if (property == D_INNER_HTML) {
         os64_html_node_t *fragment = os64_html_parse_fragment(dom->document, node, string.data,
                                                string.length, dom->options.scripting, &status);
-        if (fragment != NULL) status = d_replace_content(dom, node->template_contents != NULL ?
+        /* A script innerHTML inserts never runs: it is born started. */
+        if (fragment != NULL && d_script_mark_tree(dom, fragment) < 0) status = OS64_HTML_NO_MEMORY;
+        else if (fragment != NULL) status = d_replace_content(dom, node->template_contents != NULL ?
                                           node->template_contents : (os64_html_node_t *)node, fragment);
     } else if (node->kind == OS64_HTML_TEXT || node->kind == OS64_HTML_COMMENT)
         status = os64_page_node_set_text(dom->state, (os64_html_node_t *)node, string.data, string.length);

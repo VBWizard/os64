@@ -703,6 +703,185 @@ static void setup_allocation_cases(void)
     }
     os64_js_destroy(runtime);
 }
+/* Host tasks (CONTRACT.md § Host tasks): a function value called under one
+ * deadline and job cap that span every call and checkpoint of the task. */
+/* Values are looked up and freed through a context borrowed while the runtime
+ * was healthy: the accessor refuses a failed runtime, and these cases go on
+ * calling into one to prove it answers FAILED_RUNTIME. */
+static JSContext *task_context;
+static JSValue task_global(os64_js_runtime_t *runtime, const char *name)
+{
+    (void)runtime;
+    JSValue global = JS_GetGlobalObject(task_context);
+    JSValue value = JS_GetPropertyStr(task_context, global, name);
+    JS_FreeValue(task_context, global);
+    return value;
+}
+static void task_free(os64_js_runtime_t *runtime, JSValue value)
+{
+    (void)runtime;
+    JS_FreeValue(task_context, value);
+}
+static os64_js_status_t task_call(os64_js_runtime_t *runtime, const char *name, bool *returned_false,
+                                  os64_js_outcome_t *outcome)
+{
+    JSValue function = task_global(runtime, name);
+    os64_js_status_t result = os64_js_call(runtime, OS64_JS_ABI_ID, function, JS_UNDEFINED, 0, NULL,
+                                           returned_false, outcome);
+    check(result == outcome->status, "task call status matches outcome");
+    task_free(runtime, function);
+    return result;
+}
+static JSValue native_job_throws(JSContext *context, int argc, JSValueConst *argv)
+{
+    (void)argc; (void)argv;
+    return JS_ThrowTypeError(context, "native job");
+}
+static JSValue native_enqueue_throw(JSContext *context, JSValueConst self, int argc, JSValueConst *argv)
+{
+    (void)self; (void)argc; (void)argv;
+    return JS_EnqueueJob(context, native_job_throws, 0, NULL) < 0 ? JS_EXCEPTION : JS_UNDEFINED;
+}
+static JSValue native_task_nested(JSContext *context, JSValueConst self, int argc, JSValueConst *argv);
+static os64_js_runtime_t *task_fixture(const os64_js_config_t *config, const char *source)
+{
+    os64_js_outcome_t outcome;
+    os64_js_runtime_t *runtime = create_fixture(config);
+    if (!runtime) return NULL;
+    fixture_runtime = runtime;
+    task_context = os64_js_context(runtime, OS64_JS_ABI_ID, &outcome);
+    check(install_native(runtime, "nest", native_task_nested) >= 0 &&
+          install_native(runtime, "enqueueThrow", native_enqueue_throw) >= 0 &&
+          execute_fixture(runtime, source, &outcome) == OS64_JS_OK, "task fixture defined");
+    return runtime;
+}
+static os64_js_status_t nested_call, nested_begin;
+static JSValue native_task_nested(JSContext *context, JSValueConst self, int argc, JSValueConst *argv)
+{
+    (void)self;
+    os64_js_outcome_t outcome;
+    nested_call = os64_js_call(fixture_runtime, OS64_JS_ABI_ID, argv[0], JS_UNDEFINED, 0, NULL, NULL, &outcome);
+    nested_begin = os64_js_task_begin(fixture_runtime, OS64_JS_ABI_ID, "nested", &outcome);
+    /* A binding's own dispatch nests with the raw call, inside the task. */
+    return argc > 0 ? JS_Call(context, argv[0], JS_UNDEFINED, 0, NULL) : JS_UNDEFINED;
+}
+static void task_cases(void)
+{
+    os64_js_config_t config = fixture_config();
+    os64_js_outcome_t outcome;
+    os64_js_runtime_t *runtime = task_fixture(&config,
+          "globalThis.log=[];globalThis.ok=()=>{log.push('ok')};globalThis.fails=()=>{throw Error('listener')};"
+          "globalThis.no=()=>false;globalThis.zero=()=>0;"
+          "globalThis.later=()=>{Promise.resolve().then(()=>log.push('job'))};"
+          "globalThis.reject=()=>{Promise.reject(Error('lost'))};"
+          "globalThis.jobs=()=>{for(let i=0;i<60;i++)Promise.resolve().then(()=>{})};"
+          "globalThis.badJob=()=>{Promise.resolve().then(()=>{throw Error('job one')});"
+          "Promise.resolve().then(()=>log.push('job two'))};"
+          "globalThis.native=()=>{enqueueThrow();Promise.resolve().then(()=>log.push('native after'))};"
+          "globalThis.spin=()=>{for(;;){}};globalThis.nested=()=>nest(spin);globalThis.reenter=()=>nest(ok);");
+    if (!runtime) return;
+    JSValue ok = task_global(runtime, "ok");
+    check(os64_js_call(runtime, OS64_JS_ABI_ID, ok, JS_UNDEFINED, 0, NULL, NULL, &outcome) == OS64_JS_BAD_ARGUMENT,
+          "call is refused outside a task");
+    check(os64_js_checkpoint(runtime, OS64_JS_ABI_ID, &outcome) == OS64_JS_BAD_ARGUMENT &&
+          os64_js_task_end(runtime, OS64_JS_ABI_ID, &outcome) == OS64_JS_BAD_ARGUMENT,
+          "checkpoint and task end are refused outside a task");
+    check(os64_js_task_begin(runtime, "other-abi", "abi", &outcome) == OS64_JS_ABI_MISMATCH,
+          "task begin checks the caller's ABI");
+    check(os64_js_task_begin(runtime, OS64_JS_ABI_ID, "task.js", &outcome) == OS64_JS_OK, "task opens");
+    check(os64_js_task_begin(runtime, OS64_JS_ABI_ID, "second", &outcome) == OS64_JS_BUSY &&
+          os64_js_eval(runtime, "true", 4, "inside", &outcome) == OS64_JS_BUSY &&
+          os64_js_drain_jobs(runtime, 1, &outcome) == OS64_JS_BUSY,
+          "an open task refuses a second task, eval and manual draining");
+    bool returned_false = true;
+    check(task_call(runtime, "fails", &returned_false, &outcome) == OS64_JS_EXCEPTION &&
+          strstr(outcome.message, "listener") && !returned_false &&
+          !strcmp(outcome.source_name, "task.js"), "a throwing callback reports its exception under the task name");
+    check(task_call(runtime, "ok", &returned_false, &outcome) == OS64_JS_OK && !returned_false,
+          "the next call in the same task still runs");
+    check(task_call(runtime, "no", &returned_false, &outcome) == OS64_JS_OK && returned_false,
+          "a strict false return is reported");
+    check(task_call(runtime, "zero", &returned_false, &outcome) == OS64_JS_OK && !returned_false,
+          "a falsy non-boolean return is not false");
+    check(task_call(runtime, "reject", NULL, &outcome) == OS64_JS_OK,
+          "a rejection is not judged by the call that made it");
+    check(task_call(runtime, "later", NULL, &outcome) == OS64_JS_OK && outcome.jobs_pending,
+          "a call leaves its jobs for the checkpoint");
+    check(os64_js_checkpoint(runtime, OS64_JS_ABI_ID, &outcome) == OS64_JS_UNHANDLED_REJECTION &&
+          strstr(outcome.message, "lost") && outcome.jobs_executed == 1 && !outcome.jobs_pending,
+          "a checkpoint between calls runs the job and judges the rejection");
+    check(os64_js_checkpoint(runtime, OS64_JS_ABI_ID, &outcome) == OS64_JS_OK,
+          "a judged rejection is not reported twice");
+    check(task_call(runtime, "badJob", NULL, &outcome) == OS64_JS_OK, "throwing job queued");
+    check(os64_js_checkpoint(runtime, OS64_JS_ABI_ID, &outcome) == OS64_JS_UNHANDLED_REJECTION &&
+          strstr(outcome.message, "job one") && !outcome.jobs_pending,
+          "a Promise reaction that throws is a rejection, and the next job still runs");
+    check(task_call(runtime, "native", NULL, &outcome) == OS64_JS_OK, "throwing native job queued");
+    check(os64_js_checkpoint(runtime, OS64_JS_ABI_ID, &outcome) == OS64_JS_EXCEPTION &&
+          strstr(outcome.message, "native job") && !outcome.jobs_pending,
+          "a checkpoint reports the first job exception and drains the rest");
+    check(task_call(runtime, "reenter", NULL, &outcome) == OS64_JS_OK &&
+          nested_call == OS64_JS_BUSY && nested_begin == OS64_JS_BUSY,
+          "call and task begin are refused from inside a callback");
+    check(task_call(runtime, "reject", NULL, &outcome) == OS64_JS_OK, "rejection left for the end");
+    check(os64_js_task_end(runtime, OS64_JS_ABI_ID, &outcome) == OS64_JS_UNHANDLED_REJECTION,
+          "task end is a final checkpoint");
+    check(execute_fixture(runtime, "if(log.join()!=='ok,job,job two,native after,ok')throw Error(log.join())", &outcome) == OS64_JS_OK,
+          "a closed task accepts evaluation and every call ran once");
+    check(os64_js_task_begin(runtime, OS64_JS_ABI_ID, "jobs", &outcome) == OS64_JS_OK, "job cap task opens");
+    check(task_call(runtime, "jobs", NULL, &outcome) == OS64_JS_OK &&
+          os64_js_checkpoint(runtime, OS64_JS_ABI_ID, &outcome) == OS64_JS_OK && outcome.jobs_executed == 60,
+          "first checkpoint counts its jobs");
+    check(task_call(runtime, "jobs", NULL, &outcome) == OS64_JS_OK &&
+          os64_js_checkpoint(runtime, OS64_JS_ABI_ID, &outcome) == OS64_JS_LIMIT &&
+          outcome.limit == OS64_JS_LIMIT_JOBS, "the job cap spans the task's checkpoints");
+    check(os64_js_task_end(runtime, OS64_JS_ABI_ID, &outcome) == OS64_JS_LIMIT &&
+          outcome.limit == OS64_JS_LIMIT_JOBS, "task end closes a failed task with its sticky status");
+    check(os64_js_task_begin(runtime, OS64_JS_ABI_ID, "after", &outcome) == OS64_JS_FAILED_RUNTIME &&
+          os64_js_eval(runtime, "true", 4, "after", &outcome) == OS64_JS_FAILED_RUNTIME,
+          "nothing runs after a sticky task failure");
+    task_free(runtime, ok);
+    os64_js_destroy(runtime);
+
+    config.limits.execution_ms = 1000;
+    const char *deadline_source = "globalThis.ok=()=>{};globalThis.spin=()=>{for(;;){}};"
+                                  "globalThis.nested=()=>nest(spin)";
+    runtime = task_fixture(&config, deadline_source);
+    if (!runtime) return;
+    check(os64_js_set_execution_ms(runtime, 0, &outcome) == OS64_JS_BAD_ARGUMENT &&
+          os64_js_set_execution_ms(runtime, (uint64_t)INT64_MAX, &outcome) == OS64_JS_BAD_ARGUMENT,
+          "an execution limit must be positive and representable");
+    check(os64_js_task_begin(runtime, OS64_JS_ABI_ID, "armed", &outcome) == OS64_JS_OK &&
+          os64_js_set_execution_ms(runtime, 5, &outcome) == OS64_JS_OK, "limit changed inside an open task");
+    monotonic += 100000;
+    check(task_call(runtime, "ok", NULL, &outcome) == OS64_JS_OK &&
+          os64_js_task_end(runtime, OS64_JS_ABI_ID, &outcome) == OS64_JS_OK,
+          "the open task keeps the deadline it was armed with");
+    check(os64_js_task_begin(runtime, OS64_JS_ABI_ID, "rearmed", &outcome) == OS64_JS_OK, "next task opens");
+    monotonic += 100000;
+    check(task_call(runtime, "ok", NULL, &outcome) == OS64_JS_LIMIT && outcome.limit == OS64_JS_LIMIT_EXECUTION,
+          "the next task is armed with the new limit");
+    os64_js_destroy(runtime);
+
+    runtime = task_fixture(&config, deadline_source);
+    if (!runtime) return;
+    check(os64_js_task_begin(runtime, OS64_JS_ABI_ID, "overrun", &outcome) == OS64_JS_OK, "overrun task opens");
+    clock_step = 1000;
+    check(task_call(runtime, "nested", NULL, &outcome) == OS64_JS_LIMIT &&
+          outcome.limit == OS64_JS_LIMIT_EXECUTION, "a binding's nested raw call is bounded by the task");
+    clock_step = 0;
+    check(task_call(runtime, "ok", NULL, &outcome) == OS64_JS_FAILED_RUNTIME &&
+          os64_js_checkpoint(runtime, OS64_JS_ABI_ID, &outcome) == OS64_JS_FAILED_RUNTIME,
+          "every later entry of the task answers failed");
+    check(os64_js_task_end(runtime, OS64_JS_ABI_ID, &outcome) == OS64_JS_LIMIT &&
+          outcome.limit == OS64_JS_LIMIT_EXECUTION && !strcmp(outcome.source_name, "overrun"),
+          "task end reports the overrun");
+    check(os64_js_task_end(runtime, OS64_JS_ABI_ID, &outcome) == OS64_JS_FAILED_RUNTIME,
+          "a closed failed task is not closed twice");
+    os64_js_destroy(runtime);
+    fixture_runtime = NULL;
+    task_context = NULL;
+}
 int main(int argc, char **argv)
 {
     if (argc >= 2 && !strcmp(argv[1], "--raw-construction")) {
@@ -746,6 +925,7 @@ int main(int argc, char **argv)
     }
     tracked_allocator_cases(); tracked_construction_cases(); teardown_cases(); runtime_cases(); clock_cases(); diagnostic_cases(); allocation_cases(); thread_cases();
     file_cases(); file_boundary_cases(); output_cases(); transaction_descriptor_cases(); transaction_trap_case(); setup_allocation_cases();
+    task_cases();
     check(live == 0, "runtime suite releases every fixture allocation");
     printf("libjs runtime: %u checks, %u failures, %zu live allocations, %u native calls\n",
            checks, failures, live, native_calls);
