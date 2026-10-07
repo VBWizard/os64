@@ -31,8 +31,15 @@ uint64_t os64_heap_verify(void) { return 0; }
 static char last_debug[256];
 static size_t teardown_log_count;
 static char teardown_log[OS64_JS_SOURCE_NAME_CAP + 128];
+/* Every audit line a case asks to keep, one per line. */
+static char audit_lines[16384];
+static bool audit_keep;
 void os64_debug_log(const char *text) {
     snprintf(last_debug,sizeof(last_debug),"%s",text);
+    if (audit_keep) {
+        size_t at=strlen(audit_lines);
+        snprintf(audit_lines+at,sizeof(audit_lines)-at,"%s\n",text);
+    }
     if (strstr(text, "reclaimed JavaScript teardown leak") != NULL) {
         teardown_log_count++;
         os64_strcopy(teardown_log, sizeof(teardown_log), text);
@@ -366,7 +373,6 @@ static void probe_page(const char *html, bool scripts) {
         for (os64_html_node_t *n=g.page.way.doc->document;n;n=(os64_html_node_t *)next_within(n,g.page.way.doc->document))
             if(os64_dom_script_kind(n)==OS64_DOM_SCRIPT_CLASSIC && os64_html_attr(n,"src")==NULL)
                 yonder_scripts_connected(g.page.scripts,n);
-        yonder_scripts_set_geometry(g.page.scripts, script_geometry, NULL);
     }
 }
 static void probe_drop(void) {
@@ -375,12 +381,18 @@ static void probe_drop(void) {
     forms_drop(); page_clear(&g.page); os64_ui_font_release(&g.ui);
 }
 
-static os64_html_node_t *probe_id(const char *id) {
-    for (os64_html_node_t *n=g.page.way.doc->document;n;n=(os64_html_node_t *)next_within(n,g.page.way.doc->document)) {
+static os64_html_node_t *probe_id_in(const os64_html_document_t *doc, const char *id) {
+    for (os64_html_node_t *n=doc->document;n;n=(os64_html_node_t *)next_within(n,doc->document)) {
         const os64_html_attr_t *a=os64_html_attr(n,"id");
         if(a && os64_streq(a->value,id)) return n;
     }
     return NULL;
+}
+static os64_html_node_t *probe_id(const char *id) { return probe_id_in(g.page.way.doc,id); }
+/* Whether `node` carries `name` with exactly `value`. */
+static bool attr_is(const os64_html_node_t *node, const char *name, const char *value) {
+    const os64_html_attr_t *a=node!=NULL ? os64_html_attr(node,name) : NULL;
+    return a!=NULL && os64_streq(a->value,value);
 }
 static FormWidget *probe_field(const char *id) {
     return form_widget(os64_page_control_for(page_model(&g.page),probe_id(id)));
@@ -2057,7 +2069,7 @@ static void geometry_publish_cases(void)
     g.relayout_due=true;
     g.sy=1000000;
     os64_dom_geometry_t value;
-    check(script_geometry(NULL,probe_id("field"),&value),"geometry forces a pending resize layout");
+    check(script_geometry(g.page.way.doc,probe_id("field"),&value),"geometry forces a pending resize layout");
     const flow_box_t *box=flow_box_for(g.page.tree,probe_id("field"));
     os64_gui_rect_t rect=flow_box_doc_rect(box,scroll_now());
     check(field->w->bounds.w==rect.w && field->w->bounds.w<old_width,
@@ -2067,7 +2079,7 @@ static void geometry_publish_cases(void)
         g.hbar.total==page_width() && g.hbar.visible==g.view.bounds.w && g.hbar.pos==g.sx,
         "forced geometry publishes scrollbar ranges and positions");
     g.sx=10;g.sy=0;g.zoom=2000;
-    check(script_geometry(NULL,probe_id("field"),&value) && g.sx==20,
+    check(script_geometry(g.page.way.doc,probe_id("field"),&value) && g.sx==20,
         "forced geometry scales horizontal scroll when publishing a pending zoom");
     probe_drop();
 }
@@ -2156,8 +2168,8 @@ static void geometry_failure_cases(void)
           "native overrun retires the task queue and preserves its layout telemetry");
     char overrun_ms[32];
     snprintf(overrun_ms,sizeof(overrun_ms),"%ld.000 ms",(long)(overrun_us/1000));
-    check(strstr(g.status_text,"runtime limit exceeded")!=NULL &&
-          strstr(g.status_text,overrun_ms)!=NULL, "status reports the charged native overrun");
+    check(strstr(g.status_text,"execution stopped after")!=NULL &&
+          strstr(g.status_text,overrun_ms)!=NULL, "status reports the charged native overrun with the overrun sentence");
     check(os64_html_attr(probe_id("box"),"data-after")==NULL,
           "later scripts do not run after a native geometry deadline");
     probe_drop();
@@ -2211,6 +2223,209 @@ static void reporting_teardown(void)
     check(teardown_log_count == 1, "clean next-page retirement emits no additional reclaimed-leak log");
 }
 
+/* THE JOIN (DOM_D7.md § The cut, D7c): D8's reporting teardown, D10's
+ * geometry and D7's loop, proven together through the real stream. */
+
+/* Whether the audit kept a line for a task of kind `what` that forced
+ * exactly `layouts` layouts. */
+static bool audit_forced(const char *what, unsigned layouts) {
+    char head[96], count[48];
+    snprintf(head,sizeof(head),"yonder: task %s",what);
+    snprintf(count,sizeof(count),"forced %u layouts in",layouts);
+    for(const char *line=audit_lines;*line;) {
+        const char *end=strchr(line,'\n');
+        size_t n=end ? (size_t)(end-line) : strlen(line);
+        char one[512];
+        snprintf(one,sizeof(one),"%.*s",(int)n,line);
+        char after=one[strlen(head)];
+        if(strncmp(one,head,strlen(head))==0 && (after==' ' || after==':') && strstr(one,count)!=NULL)
+            return true;
+        line+=n+(end!=NULL);
+    }
+    return false;
+}
+
+/* The lost-wrapper page of D8 with a listener installed and a timer
+ * pending: its retirement, by the window's close mid-life, is one log line
+ * and one count, the next page runs, and nothing is left live. */
+static void join_lost_wrapper(void) {
+    const char *quiet="<p id=heading>keep the window</p><script>globalThis.nextPage=true;"
+        "document.getElementById('heading').setAttribute('data-ran','yes')</script>";
+    /* Warm the shared glyph cache with the text both pages draw. */
+    loop_page(quiet);
+    check(loop_settle() && g.page.tree!=NULL,"join: the warm-up page arrives");
+    loop_drop();
+    size_t leaks=yonder_scripts_teardown_leaks(), logged=teardown_log_count, before=live;
+    loop_page("<p id=heading>keep the window</p><script>globalThis.held=document.getElementById('heading');"
+        "document.addEventListener('click',function(){held.textContent='clicked'});"
+        "setTimeout(function(){held.textContent='late'},100000);</script>");
+    check(loop_settle() && g.page.tree!=NULL && yonder_scripts_alive(g.page.scripts) &&
+          yonder_scripts_timer_next(g.page.scripts)!=YONDER_NEVER,
+        "join: the lost-wrapper page arrives with a listener and a timer pending");
+    os64_js_outcome_t outcome;
+    JSContext *context=os64_js_context(teardown_fixture_runtime,OS64_JS_ABI_ID,&outcome);
+    JSValue global=JS_GetGlobalObject(context);
+    JSValue held=JS_GetPropertyStr(context,global,"held");
+    check(JS_IsObject(held),"join: the page's wrapper is deliberately lost");
+    JS_FreeValue(context,global);
+    loop_drop();
+    teardown_fixture_runtime=NULL;
+    check(yonder_scripts_teardown_leaks()==leaks+1 && teardown_log_count==logged+1 &&
+          strstr(teardown_log,"at http://fixture.test/final (")!=NULL,
+        "join: its retirement is one count and one log line naming the page");
+    check(live==before,"join: the listener, the timer and the lost wrapper leave nothing live");
+    loop_page(quiet);
+    check(loop_settle() && g.page.tree!=NULL && os64_html_attr(probe_id("heading"),"data-ran")!=NULL,
+        "join: the next page runs its script");
+    loop_drop();
+    teardown_fixture_runtime=NULL;
+    check(yonder_scripts_teardown_leaks()==leaks+1 && live==before,
+        "join: the next page neither leaks nor keeps anything");
+}
+
+/* Measurements on pages not on screen: the parse so far at the view's size,
+ * DOMContentLoaded's laid-out number, and a page waiting for its sheets.
+ * None of them is published. */
+static void join_unshown_geometry(void) {
+    /* The widths come from a style element, which a page with no sheet
+     * table yet is measured against. */
+    loop_page("<head><style>body{margin:0}#box{width:50%;height:10px}#later{width:120px;padding:4px}</style>"
+        "<script>document.documentElement.setAttribute('data-w',"
+        "String(document.documentElement.clientWidth))</script></head>"
+        "<body><div id=box></div><script>var b=document.getElementById('box');"
+        "b.setAttribute('data-w',String(b.offsetWidth));"
+        "b.setAttribute('data-later',String(document.getElementById('later')===null));"
+        "document.addEventListener('DOMContentLoaded',function(){"
+        "document.getElementById('later').setAttribute('data-w',"
+        "String(document.getElementById('later').offsetWidth))});"
+        "</script><div id=later></div></body>");
+    check(loop_settle() && g.page.tree!=NULL,"join: the measuring page arrives");
+    const os64_html_node_t *root=page_doc(&g.page)->html;
+    /* The view's width, and half of it: the style element took the body's
+     * margins away. */
+    char view[16], half[16];
+    snprintf(view,sizeof(view),"%d",(int)g.view.bounds.w);
+    snprintf(half,sizeof(half),"%d",(int)g.view.bounds.w/2);
+    check(root!=NULL && attr_is(root,"data-w",view),
+        "join: a head script, before there is a body, measures the view's width");
+    check(attr_is(probe_id("box"),"data-w",half) &&
+          attr_is(probe_id("box"),"data-later","true"),
+        "join: a mid-parse script measures an element before it at the view's size, the rest unparsed");
+    check(attr_is(probe_id("later"),"data-w","128"),
+        "join: a DOMContentLoaded listener reads the laid-out number");
+    check(s_measured.doc==NULL,"join: the measured layout is let go once the page is shown");
+    loop_drop();
+    /* A page waiting for its sheet measures itself beside itself: the
+     * sheet it has applies, and nothing of its own is laid out. */
+    loop_page("<link rel=stylesheet href=wait.css><style>#box{width:200px}</style><div id=box></div><script>"
+        "setTimeout(function(){var b=document.getElementById('box');"
+        "b.setAttribute('data-w',String(b.offsetWidth))},10);</script>");
+    check(loop_settle() && g.coming.active,"join: a page waits for its sheet");
+    now_ms+=50;
+    check(loop_settle() && g.coming.active && g.coming.page.tree==NULL && g.coming.page.cascade==NULL &&
+          attr_is(probe_id_in(page_doc(&g.coming.page),"box"),"data-w","200"),
+        "join: its timer measures it at the view's size, and the waiting page is not laid out");
+    coming_show();
+    check(g.page.tree!=NULL && s_measured.doc==NULL,"join: the waiting page is shown");
+    loop_drop();
+}
+
+/* Every task kind counts the layouts it forced from zero and says so in
+ * the audit: a blocking script, a connected one, a ready one,
+ * DOMContentLoaded, load, a timer and an event. */
+static void join_every_kind_counts(void) {
+    s_script_audit=true;
+    audit_keep=true;
+    audit_lines[0]='\0';
+    loop_page("<div id=box style='width:10px;height:10px'></div><script>var b=document.getElementById('box');"
+        "function m(w){b.setAttribute('style','height:10px;width:'+w+'px');return b.offsetWidth}"
+        "m(11);document.addEventListener('DOMContentLoaded',function(){m(12)});"
+        "window.addEventListener('load',function(){m(13)});setTimeout(function(){m(14)},10);"
+        "b.addEventListener('click',function(){m(15)});"
+        "var s=document.createElement('script');s.textContent='m(16)';document.body.appendChild(s);"
+        "</script><script async src=a.js></script><script src=b.js></script><p>tail</p>");
+    check(loop_settle() && g.stream.stopped && script_land("/a.js","m(17)") && script_land("/b.js","0"),
+        "join: every kind of task is on its way");
+    check(loop_settle() && g.page.tree!=NULL,"join: the counting page arrives");
+    now_ms+=50;
+    check(script_turn() && status_says("Script forced 1 layouts in"),
+        "join: a timer that forces a layout says so on the status line");
+    input_click_at("box");
+    check(attr_is(probe_id("box"),"style","height:10px;width:15px"),
+        "join: the click listener ran");
+    check(audit_forced("script http://fixture.test/final#inline-1",1) &&
+          audit_forced("script http://fixture.test/final#inline-2",1) &&
+          audit_forced("script http://fixture.test/a.js",1),
+        "join: blocking, connected and ready scripts each count their own layout");
+    check(audit_forced("DOMContentLoaded",1) && audit_forced("load",1) && audit_forced("timer",1) &&
+          audit_forced("click",1),
+        "join: DOMContentLoaded, load, a timer and an event each count their own layout");
+    audit_keep=false;
+    s_script_audit=false;
+    loop_drop();
+}
+
+/* A click listener that runs out its time inside a forced layout: the
+ * overrun sentence after the count, the runtime retired, and the link it
+ * was on still followed by its default action. */
+static void join_click_overrun(void) {
+    loop_page("<a id=go href=next.html>go</a><div id=box></div><script>"
+        "document.getElementById('go').addEventListener('click',function(){"
+        "var b=document.getElementById('box');b.setAttribute('style','width:300px');b.offsetWidth;"
+        "b.setAttribute('data-after','bad')});</script>");
+    check(loop_settle() && g.page.tree!=NULL && !g.stream.active,"join: the overrunning page arrives");
+    geometry_layout_delay=((int64_t)g.script_ms+1000)*1000;
+    input_click_at("go");
+    geometry_layout_delay=0;
+    clock_us=10000000;
+    /* The navigation the link starts writes the status line after it; the
+     * page keeps what its scripts said. */
+    const char *said=yonder_scripts_note(g.page.scripts);
+    check(said!=NULL && strstr(said,"Script forced 1 layouts in")==said &&
+          strstr(said,"; Script click event: execution stopped after 5 s (this page runs without script)")!=NULL,
+        "join: the overrun inside a forced layout gets the count and the overrun sentence");
+    check(!yonder_scripts_alive(g.page.scripts) && os64_html_attr(probe_id("box"),"data-after")==NULL,
+        "join: the runtime is retired and the listener stops where it was");
+    check(g.stream.active && pool_work.job!=NULL &&
+          os64_streq(((yonder_trip_t *)pool_work.job)->url,"http://fixture.test/next.html"),
+        "join: the link still navigates by its default action");
+    loop_drop();
+}
+
+/* One measured layout at a time: measuring a second page lets go of the
+ * first's, whichever page it was, so both documents free cleanly and
+ * nothing is left live. */
+static void join_one_measured_layout(void) {
+    stream_window();
+    static const char a[]="<!doctype html><style>p{width:100px}</style><p id=p>first</p>";
+    static const char b[]="<!doctype html><style>p{width:200px}</style><p id=p>second</p>";
+    os64_html_document_t *docs[2]={parse_file((const uint8_t *)a,sizeof(a)-1,true),
+                                   parse_file((const uint8_t *)b,sizeof(b)-1,true)};
+    size_t before=live;
+    os64_page_state_t *states[2];
+    bool measured=true;
+    for(int i=0;i<2;i++) {
+        states[i]=os64_page_state_create(docs[i],0);
+        Page page; memset(&page,0,sizeof(page));
+        page.way.doc=docs[i]; page.scripting=true;
+        measured=measured && measured_layout(&page,states[i],"http://fixture.test/",800,600);
+    }
+    check(measured && s_measured.doc==docs[1],"join: a second page's measurement replaces the first's");
+    measured_forget(docs[1]);
+    for(int i=0;i<2;i++) { os64_page_state_free(states[i]); os64_html_document_free(docs[i]); }
+    check(live<=before && s_measured.doc==NULL,
+        "join: both documents free with nothing of the first measurement left live");
+    stream_window_drop();
+}
+
+static void join_cases(void) {
+    join_one_measured_layout();
+    join_unshown_geometry();
+    join_every_kind_counts();
+    join_click_overrun();
+    join_lost_wrapper();
+}
+
 int main(void)
 {
     os64_text_options_t options={.memory={.alloc=probe_alloc,.free=probe_free},
@@ -2242,6 +2457,7 @@ int main(void)
     input_cases();
     if(getenv("YONDER_NO_STREAM")==NULL) stream_cases();
     reporting_teardown();
+    if(getenv("YONDER_NO_STREAM")==NULL) join_cases();
     os64_text_font_release(probe_font);
     check(os64_text_destroy(probe_text)==OS64_FONT_OK,"all layout text released");
     check(live==0,"native and engine heap is empty");

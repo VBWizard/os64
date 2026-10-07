@@ -251,7 +251,20 @@ static void partial_document(void)
     drop(&page);
 }
 
-static void stack_case(const char *name, const char *open, const char *close, unsigned count)
+/* The recursion that forces a layout at increasing JavaScript depth until the
+ * engine's stack guard ends it; `dive` is defined by the caller's setup. */
+static const char kDive[] =
+    "var image=document.getElementById('probe');var layouts=0;var n=0;"
+    "function dive(d){if(d){return dive(d-1)+1}"
+    "image.setAttribute('width',String(20+layouts++));return image.offsetWidth}"
+    "function descend(){for(n=0;n<4096;n+=32){try{recordDepth(n);dive(n)}catch(e){"
+    "if(e.name!=='RangeError'&&e.name!=='InternalError')throw e;break}}}";
+
+/* `dispatch`: the descent runs in a listener the host dispatches to, which
+ * dispatches to a second listener (D7's path: os64_dom_dispatch, libdom's
+ * invoke and run_record, JS_Call, and a nested dispatchEvent beneath it). */
+static void stack_case(const char *name, const char *open, const char *close, unsigned count,
+                       bool dispatch)
 {
     size_t a = os64_strlen(open), b = os64_strlen(close);
     size_t capacity = (a + b) * count + 256;
@@ -275,13 +288,20 @@ static void stack_case(const char *name, const char *open, const char *close, un
     check(stack_bounds(&page), "combined layout probe reads mapped native stack");
     check(attach(&page), "combined layout probe attaches a budgeted runtime");
     os64_js_outcome_t outcome;
-    check(run(&page,
-        "var image=document.getElementById('probe');var layouts=0;"
-        "function dive(n){if(n){return dive(n-1)+1}"
-        "image.setAttribute('width',String(20+layouts++));return image.offsetWidth}"
-        "for(var n=0;n<4096;n+=32){try{recordDepth(n);dive(n)}catch(e){"
-        "if(e.name!=='RangeError'&&e.name!=='InternalError')throw e;break}}"
-        "if(n<64||n===4096)throw Error('stack guard not exercised');", &outcome),
+    check(run(&page, kDive, &outcome), "deep layout probe defines its descent");
+    if (dispatch) {
+        check(run(&page,
+            "image.addEventListener('probe',function(){descend()});"
+            "document.body.addEventListener('click',function(){image.dispatchEvent(new Event('probe'))});",
+            &outcome), "listener chain installs");
+        os64_dom_event_t click = {.type = "click", .bubbles = true};
+        bool prevented = false;
+        check(os64_dom_dispatch(page.dom, page.doc->body, &click, &prevented, &outcome) == OS64_JS_OK,
+              "host dispatch reaches the nested listener's descent");
+    } else {
+        check(run(&page, "descend()", &outcome), "descent runs from a script");
+    }
+    check(run(&page, "if(n<64||n===4096)throw Error('stack guard not exercised');", &outcome),
         "native layout runs beneath increasing JavaScript frames and engine guard remains reusable");
     check(page.calls != 0 && page.lowest >= page.bottom + 128 * 1024,
           "sampled combined layout retains at least 128 KiB native headroom");
@@ -294,10 +314,11 @@ static void stack_case(const char *name, const char *open, const char *close, un
 int main(void)
 {
     partial_document();
-    stack_case("blocks", "<div>", "</div>", 509);
-    stack_case("tables", "<table><tr><td>", "</td></tr></table>", 126);
-    stack_case("inline-blocks", "<span style='display:inline-block'>", "</span>", 254);
-    stack_case("absolute", "<div style='position:absolute;width:100px;height:100px'>", "</div>", 254);
+    stack_case("blocks", "<div>", "</div>", 509, false);
+    stack_case("tables", "<table><tr><td>", "</td></tr></table>", 126, false);
+    stack_case("inline-blocks", "<span style='display:inline-block'>", "</span>", 254, false);
+    stack_case("absolute", "<div style='position:absolute;width:100px;height:100px'>", "</div>", 254, false);
+    stack_case("blocks-dispatch", "<div>", "</div>", 509, true);
     os64_printf("domgeometrytest: %u checks, %u failures\n", checks, failures);
     return failures ? 1 : 0x47454F4D; /* GEOM */
 }

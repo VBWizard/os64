@@ -434,22 +434,33 @@ static os64_page_t *page_model(const Page *p)
     return p->way.model != NULL ? p->way.model : p->plain_model;
 }
 
+static void measured_forget(const os64_html_document_t *doc);
+static Sheet *sheet_new(Page *p, const char *media, int32_t importer, int32_t import_index);
+
+// A sheet table's parses and records, and the table.
+static void sheet_table_free(Sheet *sheets, int32_t n)
+{
+    for (int32_t i = 0; i < n; i++) {
+        if (sheets[i].borrowed_from == NULL)
+            garb_free(&sheets[i].parsed);
+        os64_free(sheets[i].url);
+        os64_free(sheets[i].imports);
+        os64_free(sheets[i].child);
+    }
+    os64_free(sheets);
+}
+
 static void sheets_free(Page *p)
 {
-    for (int32_t i = 0; i < p->nsheets; i++) {
-        if (p->sheets[i].borrowed_from == NULL)
-            garb_free(&p->sheets[i].parsed);
-        os64_free(p->sheets[i].url);
-        os64_free(p->sheets[i].imports);
-        os64_free(p->sheets[i].child);
-    }
-    os64_free(p->sheets);
+    measured_forget(page_doc(p));
+    sheet_table_free(p->sheets, p->nsheets);
     p->sheets = NULL;
     p->nsheets = p->sheets_waiting = p->sheets_ready = 0;
 }
 
 static void page_clear(Page *p)
 {
+    measured_forget(page_doc(p));
     yonder_scripts_free(p->scripts);
     p->scripts = NULL;
     for (int32_t i = 0; i < p->npics; i++) {
@@ -766,8 +777,10 @@ static struct {
     } nav;
     // The page stream_finish holds while its DOMContentLoaded runs: no
     // longer the stream's, not yet coming or shown. A fragment its scripts
-    // ask for lands in `fragment`, which arrive scrolls to.
+    // ask for lands in `fragment`, which arrive scrolls to; a measurement
+    // they make is of `page` (measured_layout).
     struct {
+        Page *page;
         const yonder_scripts_t *scripts;
         const char *url;
         char *fragment;
@@ -878,6 +891,138 @@ static struct {
     size_t focus_len;
     uint8_t key_seq;
 } g;   // zeroed: the session's histories are large, and .data would carry them in the file
+
+// THE MEASURED LAYOUT (DOM.md § Geometry): a page not on screen, laid out
+// for its scripts' measurements at the view's size — the stream's parse as
+// far as it has gone, the page stream_finish holds, the page waiting for
+// its sheets. It is made from a copy of the page and never published: the
+// page's own model, cascade and tree are left as they were (arrival lays
+// the page out for itself), and nothing is clamped, placed or painted. It
+// is kept for the reads after it while nothing it was made from has moved,
+// and let go before its document, its control state or its sheets are.
+// The page waiting for its sheets is measured against its own table; a page
+// with no table yet, against its `style` elements, parsed into `sheets`
+// here — what they @import and the sheets it links are not asked for before
+// it arrives.
+static struct {
+    const os64_html_document_t *doc;
+    uint64_t version, serial;
+    int32_t width, height, sheets_ready;
+    uint32_t zoom;
+    os64_page_t *model;
+    Sheet *sheets;
+    int32_t nsheets;
+    garb_cascade_t *cascade;
+    flow_tree_t *tree;
+} s_measured;
+static Page s_measuring;            // the copy a measured layout is made from
+
+// Lets go of the measured layout if it is `doc`'s.
+static void measured_forget(const os64_html_document_t *doc)
+{
+    if (doc == NULL || s_measured.doc != doc)
+        return;
+    flow_free(s_measured.tree);
+    garb_cascade_free(s_measured.cascade);
+    sheet_table_free(s_measured.sheets, s_measured.nsheets);
+    os64_page_free(s_measured.model);
+    os64_memset(&s_measured, 0, sizeof(s_measured));
+}
+
+// The `style` elements `model` lists, parsed into a table of their own on
+// `p`, which has none. A sheet that will not parse is left out, as
+// sheets_start leaves it out.
+static void measured_style_elements(Page *p, const os64_page_t *model)
+{
+    int32_t n = os64_page_nsheets(model);
+    for (int32_t i = 0; i < n; i++) {
+        const os64_page_sheet_t *one = os64_page_sheet(model, i);
+        if (one->linked)
+            continue;
+        Sheet *sh = sheet_new(p, one->media, -1, -1);
+        if (sh == NULL)
+            break;
+        if (garb_parse_style_element(one->node, &sh->parsed) == GARB_OK) {
+            sh->ready = true;
+            p->sheets_ready++;
+        } else {
+            garb_free(&sh->parsed);
+        }
+    }
+}
+
+// `p`'s measured layout at `width` x `height` and the window's zoom, in
+// s_measured. The model is the tree's version: the last measured one or the
+// page's own while current, else one built beside it, sharing `state`
+// (`url` is where a page with no model came from). There is one measured
+// layout at a time: the one held, whichever page's, is let go first. False
+// when it cannot be had, or the layout ran short: no stale answer is kept.
+static bool measured_layout(const Page *p, os64_page_state_t *state, const char *url,
+                            int32_t width, int32_t height)
+{
+    const os64_html_document_t *doc = page_doc(p);
+    uint64_t version = os64_html_version(doc);
+    bool mine = s_measured.doc == doc && s_measured.model != NULL;
+    if (mine && s_measured.version == version && s_measured.width == width &&
+        s_measured.height == height && s_measured.zoom == g.zoom && s_measured.serial == p->serial &&
+        s_measured.sheets_ready == p->sheets_ready)
+        return true;
+    os64_page_t *model = NULL;
+    if (mine && s_measured.version == version)
+        model = os64_page_retain(s_measured.model) ? s_measured.model : NULL;
+    else if (page_model(p) != NULL && p->model_version == version)
+        model = os64_page_retain(page_model(p)) ? page_model(p) : NULL;
+    else if (mine)
+        model = os64_page_rebuild(s_measured.model);
+    else if (page_model(p) != NULL)
+        model = os64_page_rebuild(page_model(p));
+    else
+        model = os64_page_build(doc, url, NULL, state);
+    measured_forget(s_measured.doc);
+    if (model == NULL)
+        return false;
+    s_measuring = *p;
+    s_measuring.way.model = model;
+    s_measuring.plain_model = NULL;
+    s_measuring.tree = NULL;
+    s_measuring.cascade = NULL;
+    s_measuring.sheets_changed = true;
+    if (p->sheets == NULL) {
+        s_measuring.nsheets = s_measuring.sheets_waiting = s_measuring.sheets_ready = 0;
+        measured_style_elements(&s_measuring, model);
+    }
+    s_measuring.box_scrolls = NULL;
+    s_measuring.nbox_scrolls = s_measuring.cap_box_scrolls = 0;
+    s_measuring.rendered_version = 0;
+    bool laid = page_lay_out(&s_measuring, width, height, g.zoom, NULL);
+    if (laid && flow_incomplete(s_measuring.tree)) {
+        flow_free(s_measuring.tree);
+        garb_cascade_free(s_measuring.cascade);
+        laid = false;
+    }
+    Sheet *sheets = p->sheets == NULL ? s_measuring.sheets : NULL;
+    int32_t nsheets = sheets != NULL ? s_measuring.nsheets : 0;
+    if (!laid) {
+        sheet_table_free(sheets, nsheets);
+        os64_page_free(model);
+        os64_memset(&s_measuring, 0, sizeof(s_measuring));
+        return false;
+    }
+    s_measured.doc = doc;
+    s_measured.version = version;
+    s_measured.serial = p->serial;
+    s_measured.width = width;
+    s_measured.height = height;
+    s_measured.sheets_ready = p->sheets_ready;
+    s_measured.zoom = g.zoom;
+    s_measured.model = model;
+    s_measured.sheets = sheets;
+    s_measured.nsheets = nsheets;
+    s_measured.cascade = s_measuring.cascade;
+    s_measured.tree = s_measuring.tree;
+    os64_memset(&s_measuring, 0, sizeof(s_measuring));
+    return true;
+}
 
 // A select's list shows this many rows when the page does not say: enough
 // to pick with the pointer, since yonder has no drop-down (YONDER.md § Y4).
@@ -1295,7 +1440,8 @@ static void follow_link_asked(int32_t link, way_ask_t ask);
 static void follow_link(int32_t link);
 static bool script_rebuild(void);
 static void stream_drop(void);
-static void task_said(const yonder_scripts_t *host, bool was_alive, const char *what,
+static int64_t task_begin(yonder_scripts_t *host);
+static void task_said(yonder_scripts_t *host, bool was_alive, const char *what,
                       const os64_js_outcome_t *out, int64_t began);
 static void asks_perform(yonder_scripts_t *host, const os64_html_document_t *doc, bool shown);
 static bool scripts_live(void);
@@ -1373,6 +1519,8 @@ static void arrive_now(Page *fresh, NavKind kind, const way_position_t *crumb,
     page_clear(&g.page);
     g.page = *fresh;
     os64_memset(fresh, 0, sizeof(*fresh));
+    // On screen, its scripts measure the page's own layout from now on.
+    measured_forget(page_doc(&g.page));
     g.page_serial++;
     g.page.rendered_version = os64_html_version(page_doc(&g.page));
     g.page.state_version = os64_page_state_version(os64_page_shared_state(page_model(&g.page)));
@@ -1400,12 +1548,9 @@ static void arrive_now(Page *fresh, NavKind kind, const way_position_t *crumb,
     // after its pictures (DOM_D7.md § Booked). The document reads as its
     // target, as HTML's legacy target override has it.
     if (g.page.scripts != NULL) {
-        // The page on screen answers geometry from its own layout (DOM.md
-        // § Geometry); its scripts may measure from `load` on.
-        yonder_scripts_set_geometry(g.page.scripts, script_geometry, NULL);
         os64_dom_event_t loaded = {.type = "load"};
         os64_js_outcome_t out;
-        int64_t began = s_script_audit ? os64_micros() : 0;
+        int64_t began = task_begin(g.page.scripts);
         const os64_html_document_t *doc = page_doc(&g.page);
         yonder_scripts_dispatch(g.page.scripts, NULL, &loaded, NULL, &out);
         task_said(g.page.scripts, true, "load", &out, began);
@@ -1604,6 +1749,7 @@ static void stream_drop(void)
     if (g.asker == ASK_WORKER)
         bar_forget();
     os64_html_document_t *doc = g.stream.parser != NULL ? os64_html_parser_abandon(g.stream.parser) : NULL;
+    measured_forget(doc);
     yonder_scripts_free(g.stream.scripts);
     os64_page_state_free(g.stream.state);
     os64_html_document_free(doc);
@@ -3361,7 +3507,8 @@ static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state
                                       const char *url, uint64_t serial)
 {
     yonder_scripts_options_t options = {url, g.script_ms, serial, script_alert, script_fetch,
-                                        script_cancel, script_activate, script_write, script_now, doc};
+                                        script_cancel, script_activate, script_write, script_now,
+                                        script_geometry, doc};
     return yonder_scripts_new(doc, state, &options);
 }
 
@@ -3387,38 +3534,65 @@ static void script_arrived(const yonder_script_job_t *job, const yonder_script_t
                                got != NULL ? got->length : 0);
 }
 
-// What a task said, on the status line: an error by its script's name, and
-// a runtime its task retired by the sentence that says the page goes on
-// without script. The audit logs every task, what it cost, and what it
-// wrote: a page that writes its whole body shows as one.
-static void task_said(const yonder_scripts_t *host, bool was_alive, const char *what,
+// A task is about to run: the layouts it forces are counted from zero
+// (DOM.md § Geometry), and the audit's clock starts. Every task kind
+// begins here and ends at task_said.
+static int64_t task_begin(yonder_scripts_t *host)
+{
+    (void)yonder_scripts_geometry_stats(host, true);
+    return s_script_audit ? os64_micros() : 0;
+}
+
+// What a task said, on the status line: the layouts it forced and what they
+// cost, then an error by its script's name, and a runtime its task retired
+// by the sentence that says the page goes on without script. The audit
+// logs every task, what it cost, what it forced and what it wrote: a page
+// that writes its whole body shows as one.
+static void task_said(yonder_scripts_t *host, bool was_alive, const char *what,
                       const os64_js_outcome_t *out, int64_t began)
 {
+    os64_dom_geometry_stats_t forced = yonder_scripts_geometry_stats(host, false);
     if (s_script_audit) {
-        char line[OS64_JS_SOURCE_NAME_CAP + 96];
-        os64_snprintf(line, sizeof(line), "yonder: task %s %s: status %d in %ld us, wrote %lu bytes",
+        char line[OS64_JS_SOURCE_NAME_CAP + 160];
+        os64_snprintf(line, sizeof(line), "yonder: task %s %s: status %d in %ld us, wrote %lu bytes, "
+                      "forced %lu layouts in %lu us",
                       what, out->source_name, (int)out->status, (long)(os64_micros() - began),
-                      (unsigned long)yonder_scripts_written(host));
+                      (unsigned long)yonder_scripts_written(host), (unsigned long)forced.layouts,
+                      (unsigned long)forced.elapsed_us);
         os64_debug_log(line);
     }
-    if (out->status == OS64_JS_OK)
-        return;
     char line[512];
+    size_t at = 0;
+    if (forced.layouts != 0) {
+        os64_snprintf(line, sizeof(line), "Script forced %lu layouts in %lu.%03lu ms",
+                      (unsigned long)forced.layouts, (unsigned long)(forced.elapsed_us / 1000),
+                      (unsigned long)(forced.elapsed_us % 1000));
+        at = os64_strlen(line);
+    }
+    if (out->status == OS64_JS_OK) {
+        if (at != 0)
+            status_rest(line);
+        return;
+    }
+    if (at != 0) {
+        os64_strcopy(line + at, sizeof(line) - at, "; ");
+        at += 2;
+    }
     const char *name = out->source_name[0] ? out->source_name : what;
     if (was_alive && !yonder_scripts_alive(host)) {
         if (out->status == OS64_JS_LIMIT && out->limit == OS64_JS_LIMIT_EXECUTION)
-            os64_snprintf(line, sizeof(line), "Script %s: execution stopped after %lu s "
+            os64_snprintf(line + at, sizeof(line) - at, "Script %s: execution stopped after %lu s "
                           "(this page runs without script)", name,
                           (unsigned long)(yonder_scripts_execution_ms(host) / 1000));
         else
-            os64_snprintf(line, sizeof(line), "Script %s: %s (this page runs without script)", name,
-                          out->message[0] ? out->message : "the runtime failed");
+            os64_snprintf(line + at, sizeof(line) - at, "Script %s: %s (this page runs without script)",
+                          name, out->message[0] ? out->message : "the runtime failed");
     } else {
-        os64_snprintf(line, sizeof(line), "Script %s: %s", name,
+        os64_snprintf(line + at, sizeof(line) - at, "Script %s: %s", name,
                       out->message[0] ? out->message : "error");
     }
     status_rest(line);
-    yonder_scripts_set_note((yonder_scripts_t *)host, line);
+    yonder_scripts_set_note(host, line);
 }
 
 // A request for an address a script named, owning its own storage as
@@ -3610,7 +3784,7 @@ static bool scripts_task(yonder_scripts_t *host, const os64_html_document_t *doc
     if (host == NULL || !yonder_scripts_alive(host))
         return false;
     os64_js_outcome_t out;
-    int64_t began = s_script_audit ? os64_micros() : 0;
+    int64_t began = task_begin(host);
     const char *what = "script";
     bool ran = yonder_scripts_step(host, &out);
     if (!ran) {
@@ -3630,26 +3804,57 @@ static bool scripts_owed(const yonder_scripts_t *host)
     return yonder_scripts_pending(host) || yonder_scripts_timer_next(host) <= yonder_now_ms();
 }
 
-// The page on screen's current-layout provider (DOM.md § Geometry): its
-// pending rebuild and an owed layout happen now, charged to the asking
-// script, and the box is read from the layout that results.
+// The measured layout of the page whose document is `doc`, when that page
+// is not on screen: the one stream_finish holds, the one waiting for its
+// sheets, or the stream's parse so far. False for none of them.
+static bool measured_for(const os64_html_document_t *doc, int32_t width, int32_t height)
+{
+    if (g.finishing.page != NULL && page_doc(g.finishing.page) == doc)
+        return measured_layout(g.finishing.page, g.finishing.page->state, g.finishing.page->way.url,
+                               width, height);
+    if (g.coming.active && page_doc(&g.coming.page) == doc)
+        return measured_layout(&g.coming.page, g.coming.page.state, g.coming.page.way.url, width, height);
+    if (g.stream.parser == NULL || os64_html_parser_document(g.stream.parser) != doc)
+        return false;
+    // The parse so far has no page yet: it stands in as one with no
+    // sheets, which are not asked for before it arrives.
+    static Page parsed;
+    os64_memset(&parsed, 0, sizeof(parsed));
+    parsed.way.doc = (os64_html_document_t *)doc;
+    parsed.scripting = true;
+    return measured_layout(&parsed, g.stream.state, g.stream.head.url, width, height);
+}
+
+// A script host's current-layout provider (DOM.md § Geometry), whose opaque
+// is its page's document. The page on screen has its pending rebuild and an
+// owed layout done now and published; a page not on screen is measured
+// beside itself (measured_layout). Either way the work is charged to the
+// asking script, and the box is read from the layout that results.
 static bool script_geometry(void *opaque, const os64_html_node_t *node,
                             os64_dom_geometry_t *out)
 {
-    (void)opaque;
-    if (!os64_html_owns_node(page_doc(&g.page), node)) return false;
+    const os64_html_document_t *doc = opaque;
+    if (!os64_html_owns_node(doc, node)) return false;
     int64_t began = os64_micros();
     uint64_t before = geometry_layout_total;
     int32_t width = g.view.bounds.w > 0 ? g.view.bounds.w : 1;
     int32_t height = g.view.bounds.h > 0 ? g.view.bounds.h : 1;
-    bool ready = began >= 0 && script_rebuild();
-    if (ready && (g.page.tree == NULL || flow_incomplete(g.page.tree) || g.page.laid_width != width ||
-                  g.page.laid_height != height || g.page.laid_zoom != g.zoom ||
-                  g.page.sheets_changed))
-        ready = relayout(true);
-    if (ready)
-        ready = yonder_geometry_snapshot(page_doc(&g.page), g.page.tree, node,
-                    width, height, g.zoom, (flow_point_t){g.sx, g.sy}, out);
+    bool ready = began >= 0;
+    if (doc != page_doc(&g.page)) {
+        ready = ready && measured_for(doc, width, height);
+        if (ready)
+            ready = yonder_geometry_snapshot(doc, s_measured.tree, node, width, height, g.zoom,
+                                             (flow_point_t){0, 0}, out);
+    } else {
+        ready = ready && script_rebuild();
+        if (ready && (g.page.tree == NULL || flow_incomplete(g.page.tree) || g.page.laid_width != width ||
+                      g.page.laid_height != height || g.page.laid_zoom != g.zoom ||
+                      g.page.sheets_changed))
+            ready = relayout(true);
+        if (ready)
+            ready = yonder_geometry_snapshot(doc, g.page.tree, node,
+                        width, height, g.zoom, (flow_point_t){g.sx, g.sy}, out);
+    }
     int64_t ended = os64_micros();
     out->layouts = geometry_layout_total - before;
     out->elapsed_us = out->layouts != 0 && began >= 0 && ended >= began ? (uint64_t)(ended - began) : 0;
@@ -3672,9 +3877,8 @@ static bool script_turn(void)
     forms_flush();
     const os64_html_document_t *doc = page_doc(&g.page);
     os64_js_outcome_t out;
-    int64_t began = s_script_audit ? os64_micros() : 0;
+    int64_t began = task_begin(g.page.scripts);
     const char *what = "script";
-    (void)yonder_scripts_geometry_stats(g.page.scripts, true);
     bool ran = yonder_scripts_step(g.page.scripts, &out);
     if (!ran) {
         what = "timer";
@@ -3683,16 +3887,6 @@ static bool script_turn(void)
     if (!ran)
         return false;
     task_said(g.page.scripts, true, what, &out, began);
-    // The layouts the task forced, and what they cost (DOM.md § Geometry).
-    os64_dom_geometry_stats_t geometry = yonder_scripts_geometry_stats(g.page.scripts, false);
-    if (geometry.layouts != 0) {
-        char line[512];
-        os64_snprintf(line, sizeof(line), "Script forced %lu layouts in %lu.%03lu ms%s%.*s",
-            (unsigned long)geometry.layouts, (unsigned long)(geometry.elapsed_us / 1000),
-            (unsigned long)(geometry.elapsed_us % 1000), out.status == OS64_JS_OK ? "" : "; ",
-            out.status == OS64_JS_OK ? 0 : 300, out.message);
-        status_rest(line);
-    }
     // The rendering step before the asks: a form a script sent is read
     // from a model as current as its tree.
     bool rendered = script_rebuild();
@@ -3818,7 +4012,7 @@ static bool page_event(const os64_dom_event_t *ev, const os64_html_node_t *node)
     forms_flush();
     os64_js_outcome_t out;
     bool prevented = false;
-    int64_t began = s_script_audit ? os64_micros() : 0;
+    int64_t began = task_begin(host);
     yonder_scripts_dispatch(host, node, ev, &prevented, &out);
     task_said(host, true, ev->type, &out, began);
     if (script_rebuild())
@@ -4236,7 +4430,8 @@ static void stream_finish(os64_fetch_status_t fetch, const char *reason)
     if (fresh.scripts != NULL) {
         os64_dom_event_t loaded = {.type = "DOMContentLoaded", .bubbles = true};
         os64_js_outcome_t out;
-        int64_t began = s_script_audit ? os64_micros() : 0;
+        int64_t began = task_begin(fresh.scripts);
+        g.finishing.page = &fresh;
         g.finishing.scripts = fresh.scripts;
         g.finishing.url = fresh.way.url;
         g.finishing.fragment = fragment;
@@ -4349,7 +4544,7 @@ static bool stream_connected(void)
     yonder_scripts_t *host = g.stream.scripts;
     uint64_t serial = g.stream.serial;
     os64_js_outcome_t out;
-    int64_t began = s_script_audit ? os64_micros() : 0;
+    int64_t began = task_begin(host);
     if (!yonder_scripts_step_connected(host, &out))
         return false;
     task_said(host, true, "script", &out, began);
@@ -4415,7 +4610,7 @@ static bool stream_turn(void)
         if (yonder_scripts_alive(host) && !yonder_scripts_blocking_ready(host))
             return scripts_owed(host) ? stream_task() : false;
         os64_js_outcome_t out;
-        int64_t began = s_script_audit ? os64_micros() : 0;
+        int64_t began = task_begin(host);
         if (yonder_scripts_run_blocking(host, &out)) {
             task_said(host, true, "script", &out, began);
             asks_perform(host, os64_html_parser_document(g.stream.parser), false);

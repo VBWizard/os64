@@ -1,0 +1,47 @@
+<!doctype html>
+<title>D7c join check</title>
+<style>
+body { margin: 0; font-family: sans-serif }
+#box { width: 50%; height: 20px; background: #c7dff2 }
+#late { width: 120px; padding: 4px; background: #f2dfc7 }
+</style>
+<script>
+// Each task that measures says how it went; the line below collects them.
+var results = [];
+function say(name, ok, detail) {
+    results.push((ok ? 'PASS ' : 'FAIL ') + name + ' (' + detail + ')');
+    var out = document.getElementById('result');
+    if (out) out.textContent = results.join('; ');
+}
+// Before there is a body: the view's width.
+var view = document.documentElement.clientWidth;
+</script>
+<h1>The join: geometry from every kind of task</h1>
+<div id="box">half the view</div>
+<script>
+// Mid-parse: the box before this script, with the rest of the page unparsed.
+var box = document.getElementById('box');
+var mid = box.offsetWidth;
+var unparsed = document.getElementById('late') === null;
+</script>
+<div id="late">120 wide, 4 padding</div>
+<p id="result">Waiting for scripts</p>
+<p><a id="go" href="dom-geometry.html">On to D10's check</a></p>
+<script>
+say('head', view > 0, 'view ' + view);
+say('mid-parse', Math.abs(mid * 2 - view) <= 1 && unparsed, 'box ' + mid + ' of ' + view +
+    (unparsed ? ', rest unparsed' : ', rest PARSED'));
+document.addEventListener('DOMContentLoaded', function () {
+    var w = document.getElementById('late').offsetWidth;
+    say('DOMContentLoaded', w === 128, 'late ' + w);
+});
+// On the shown page: forces a layout, which the status line counts.
+setTimeout(function () {
+    box.setAttribute('style', 'width:200px');
+    var w = box.offsetWidth;
+    say('timer', w === 200, 'box ' + w);
+}, 1000);
+// Left pending, with a listener, for the page's retirement.
+setTimeout(function () {}, 1000000);
+document.getElementById('go').addEventListener('click', function () { box.offsetWidth; });
+</script>

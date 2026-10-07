@@ -3,7 +3,7 @@
 Status: implemented and locally validated; originally based on `userland`
 `29641e20`, joined with `userland` `7c5431e3` after D8 and FRAMES merged.
 Governing design: DOM.md § Geometry. D8's reporting teardown is included;
-D7's dispatcher remains a separate integration. The runtime interfaces are
+the join with D7's loop is DOM.md § D7c, as built. The runtime interfaces are
 additive.
 
 ## Scope and host seam
@@ -57,8 +57,9 @@ remain regression checks.
 Combined engine/native stack measurements use script recursion plus the
 actual flow layout, with deepest observed native frames sampled and retained
 headroom reported in host and guest evidence. Measurements establish tested
-workloads rather than arbitrary callback safety. D7's joined dispatch and
-loading-page geometry provider require their own integration validation.
+workloads rather than arbitrary callback safety. D7c validated the joined
+dispatch path and the providers for pages not on screen (DOM.md § D7c, as
+built).
 
 ## Guest stack evidence
 
@@ -72,14 +73,22 @@ forcing native layout. Native font/image callback samples produced:
 | Tables | 126 | 194913 | 853663 |
 | Inline-blocks | 254 | 783617 | 264959 |
 | Absolute | 254 | 662721 | 385855 |
+| Blocks from a listener chain (D7c) | 509 | 870481 | 178095 |
 
 All 42 guest checks passed, including parser-stop geometry, mutation freshness,
 engine reuse and heap integrity. These are sampled workload measurements, not
 an exact deepest-instruction bound. A 256 KiB engine profile left only 71231
 sampled bytes in the block fixture; the browser's 128 KiB selection retains more
 than the tested 128 KiB native headroom threshold. Standalone libjs is unchanged.
-D7 must install the provider for its loading document and validate its joined
-dispatch path; this branch's Yonder provider serves the shown page.
+
+D7c's row drives the blocks shape from a listener the host dispatches to,
+which dispatches to a second listener: `os64_dom_dispatch`, `invoke`,
+`run_record`, `JS_Call` and a nested `dispatchEvent` under the recursion,
+which still ends at depth 160. Measured on D7c's build (61 checks, 0
+failures) beside the four shapes again, which moved by under 1 KiB each
+(blocks 858897 used, 189679 headroom); the chain costs 11.6 KiB more than
+the same shape from a script, and its 178095 bytes of headroom keep the
+browser at 128 KiB.
 
 ## Final verification
 

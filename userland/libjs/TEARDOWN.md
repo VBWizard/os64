@@ -83,7 +83,7 @@ proof for future bindings or unreviewed engine profiles. The existing manifest
 and target-symbol audits also pass. Custom bindings must satisfy the host
 contract before selecting reclamation.
 
-## Browser ownership and D7 handoff
+## Browser ownership and D7's join
 
 Yonder selects RECLAIM when lazily constructing its page runtime. Retirement
 stops its native script queue, drains libdom's C-held values, reports/destroys
@@ -97,14 +97,14 @@ saturating owner-thread session count exposed by
 `yonder_scripts_teardown_leaks()`. Ordinary fixtures require zero; the deliberate
 leak case expects one and proves that a subsequent page still executes.
 
-D7 can keep its function-call/checkpoint work independent of these additive
-APIs. Its join must select RECLAIM at page runtime creation and retain reporting
-at retirement. Drain timer callbacks/arguments, listeners and event registries
-before destroy; clear their handles and free native records afterward without
-engine entry. Its event finalizer may own engine-allocator memory, but not an
-external/native resource requiring finalization. Audit the joined ownership
-paths and run the browser leak fixture again. The D8 tests here cover the merged
-D5/D6 browser, not the concurrent, unmerged D7 implementation.
+D7's registries join that order (DOM.md § D7c, as built): `os64_dom_drain`
+frees the C-held listener callbacks, timer callbacks and arguments and event
+values before destroy, and `os64_dom_free` frees their native records
+afterward without entering the engine. The event finalizer owns engine-allocator
+memory only, never an external or native resource that needs finalizing, and
+must stay that way: a leaked event's finalizer does not run. The browser leak
+fixture runs again through D7's stream with a listener installed and a timer
+pending (`test_yonder_scripts_host.c`, the join cases).
 
 ## Validation
 
