@@ -608,8 +608,8 @@ keeps `HttpOnly`; nothing reads it for a script yet), storage,
 ## Geometry
 
 As-built provider interfaces, browser stack profile and validation evidence:
-[DOM_D10.md](DOM_D10.md). D7 must join the loading-document provider to its
-dispatch path.
+[DOM_D10.md](DOM_D10.md); its join with the loop (a provider per page, the
+count per task, the stack with dispatch on it) is § D7c, as built.
 
 `offsetWidth`, `getBoundingClientRect` and their kind need a layout that
 matches the tree. When the version has moved, the read rebuilds what is
@@ -632,8 +632,8 @@ stack row is waiting for.
 ## What this asks of libjs
 
 Four things. The first is in the R0 contract as approved. The second and
-third are built by D7a (CONTRACT.md § Host tasks); the fourth is still
-reserved (CONTRACT.md § Reserved for later work) and is built with D8.
+third are built by D7a (CONTRACT.md § Host tasks); the fourth by D8
+(DOM_D8.md).
 
 1. **A thrown exception does not finish the runtime.** In a page, the
    first script error, which most pages have, must not silence every
@@ -720,7 +720,7 @@ builder decides, and the proof in this house's shape.
 | D4 | **Built; in review.** The stream: yonder parses on its own thread. No script | libway's harnesses unchanged in result and grown; the ring's two-thread harness; the window's slices in the harness that hosts yonder.c; the Y3 walk again; the window live through a stalled body: § D4, as built |
 | D5 | **D5a merged (#214, `72b2e710`); D5b merged (#216, `7acce890`).** The binding library and J3's fixture | § D5a, as built records library host/guest proof. § D5b, as built records J3 fixture proof: a script changes text and the page redraws; a held reference and a typed-in field survive an unrelated change; a navigation with a script queued tears down clean; the leak count is zero |
 | D6 | **Implemented; awaiting Fable re-review in PR #217 against userland.** Reclaiming unheld detached subtrees | 216,000 packed-fragment refresh cycles stay flat under 64 MiB; § D6, as built |
-| D7 | The loop: tasks, checkpoints, timers, events and their attributes, script order. Designed in [DOM_D7.md](DOM_D7.md); **D7a (the registry and the turn) and D7b (the loop, with D7c's input events) built** | § D7a, as built; § D7b, as built |
+| D7 | The loop: tasks, checkpoints, timers, events and their attributes, script order. Designed in [DOM_D7.md](DOM_D7.md); **D7a (the registry and the turn), D7b (the loop, with the input events) and D7c (the join with D8 and D10) built** | § D7a, as built; § D7b, as built; § D7c, as built |
 | D9 | `document.write`: libhtml's `os64_html_parser_write`, libdom's `write`/`writeln`/`open`/`close`, the blocking script's writes reaching yonder's stream. Designed in [DOM_D9.md](DOM_D9.md); **built** | § D9, as built |
 | later | geometry; the libjs reclaim slice | each with its own |
 
@@ -2077,8 +2077,8 @@ to the binding's classes.
 
 DOM_D7.md § The loop, in yonder, built by Opus on `opus/dom-d7b`, stacked on
 D7a. The input events and libui's change callback, which the brief allowed to
-split off as D7c, are in this slice: they share the queue and the turn the
-rest of the loop runs on. A reviewer who wants them apart can have them apart.
+split off as a third slice, are in this one: they share the queue and the turn
+the rest of the loop runs on. The name D7c went to the join with D8 and D10.
 
 **The page's script host** (`scripts.c`, rewritten; `scripts.h` is the
 contract). It owns a page's runtime and binding, made at the first script
@@ -2240,22 +2240,108 @@ as the build requires: `ensure_runtime` creates with
 `os64_js_create_with_teardown` and `RECLAIM` at D10's 128 KiB stack,
 `retire` destroys with `os64_js_destroy_report` and logs and counts a
 reclaimed leak, and the provider and its stats ride the host. The page on
-screen installs D10's provider at arrival, and the shown page's turn resets
-and reports its layouts. What remains is DOM_D7.md § D7c's, unchanged: a
-provider for the stream's and the coming page's hosts, the count and
-sentence for the other five task kinds, the stack remeasured with dispatch on
-it, one CONTRACT.md, and the joined proof.
+screen installed D10's provider at arrival, and the shown page's turn reset
+and reported its layouts. D7c did the rest (§ D7c, as built).
 
 **Booked from D7b** (beside DOM_D7.md's own):
 
 | Debt | Why it waits | Trigger |
 |---|---|---|
-| A script waits for the sheets named before it | no script can read style before geometry | D10 |
+| A script waits for the sheets named before it | its own slice, D7d: since D10 a parser-blocking script can measure, and one that runs before the sheets named above it reads a layout they will change; the wait is in the stream's turn and needs its own cases and mutants | D7d (DOM_D7.md) |
 | Arrow keys and other VT100 bursts as key events | libui owns the burst decoder; a key event per byte would lie | a page that steers with arrow keys |
 | `history.go(n)` past one step, and a script's refresh chain cap | one step covers back and forward; a chain of script navigations is not counted as a declared refresh's is | a page that walks history, or a page that navigates itself in a loop |
 | A link or form a page still arriving asks to follow or send | it has no model until it arrives | a page that clicks itself before it has loaded |
 | Inline script source captured once, at prepare | HTML's rule; a script whose text is changed after it is connected runs what it had then | none expected |
 | `location.hash` reads the old fragment after a fragment-only assignment | the document's URL is set when it is made, and a hash scroll does not change it | a page that reads `location.hash` back after setting it |
+
+### D7c, as built
+
+DOM_D7.md § The cut (D7c), built by Opus on `opus/dom-d7c` from `userland`
+after D4, D7a, D7b, D8, D9 and D10 had merged.
+
+**Teardown** came with D7b's merge and is unchanged: `ensure_runtime`
+creates with `RECLAIM`, `retire` drains, destroys with
+`os64_js_destroy_report`, logs a reclaimed leak by the page's address with
+its block and byte totals, and counts it.
+
+**Geometry, per page.** `yonder_scripts_options_t` carries the provider
+beside `fetch`, `activate` and `now_ms`, with the page's document as its
+opaque, and `ensure_runtime` installs it. The setter is gone: the host
+travels from the stream to the page stream_finish holds, to the page waiting
+for its sheets, to the screen, and its document goes with it, so one
+provider finds where the page is now. The page on screen is measured as D10
+built it, published. A page not on screen is measured BESIDE itself
+(`measured_layout`): a copy of the page laid out at the view's size and the
+window's zoom, from the model at the tree's version (its own while current,
+else one built beside it, sharing the control state). The page waiting for
+its sheets is measured against its own sheet table; the stream's parse so
+far and the page stream_finish holds have no table yet, and are measured
+against their `style` elements, parsed for the measurement — what those
+@import and the sheets the page links are not asked for before it arrives:
+the departure "A script waits for the sheets named before it" books under
+§ D7b, as built. A `style` a script adds to a page waiting for
+its sheets joins its table at arrival, when the table is restaged; measured
+before then, the page answers against the table it has. Nothing of the page's
+own is touched — not its model, whose refresh at arrival is what restages
+its sheet table, nor its cascade, which is judged again when its sheets
+come — and nothing is clamped, placed or painted. The layout is kept for
+the reads after it while the document's version, the size, the zoom and the
+page's sheets hold, and is let go before its document, its control state or
+its sheets are, and when the page is shown. Unscrolled, it answers
+viewport-relative boxes as if from the top.
+
+**The count and the sentence, per task.** Every task begins at
+`task_begin` (the count to zero, the audit's clock started) and ends at
+`task_said`, which puts `Script forced N layouts in T ms` on the status line
+and the count in the `--script-audit` line, for all six kinds: a blocking
+script (and one a verb connected), a ready script, a timer, an input event,
+`DOMContentLoaded` and `load`. A task that forced layouts and failed says
+both, the count first: an overrun inside a forced layout reads `Script
+forced 1 layouts in 6000.000 ms; Script click event: execution stopped after
+5 s (this page runs without script)`. D10's version of that line appended
+the engine's message, which lost the overrun sentence.
+
+**The stack, with dispatch on it.** DOM_D10.md's probe gained a shape: the
+deepest layout (509 nested blocks) driven from a listener the host
+dispatches to, which dispatches to a second one, so `os64_dom_dispatch`,
+`invoke`, `run_record`, `JS_Call` and a nested `dispatchEvent` sit under
+the recursion. It costs 11.6 KiB more than the same shape from a script and
+keeps 178,095 bytes of sampled headroom; 128 KiB stays (DOM_D10.md's table).
+
+**One CONTRACT.md** came with D7a's merge of `userland`: one status line,
+and "the embedding operations" rather than a count.
+
+**Proof.** `tools/test_yonder_scripts_host.c`'s join cases, through the real
+stream: D8's lost-wrapper page with a listener and a timer pending, retired
+by the window's close to one log line naming the page, a count of one, a
+next page that runs and nothing live; a head script measuring the view
+before there is a body; a mid-parse script measuring an element before it
+at the view's size, the rest unparsed; a `DOMContentLoaded` listener reading
+the laid-out number; a waiting page's timer measuring it against its
+sheet, the page itself not laid out; every task kind counting exactly its
+own layout in the audit; a timer's sentence on the status line; a click
+listener overrunning inside a forced layout, its sentence kept, its runtime
+retired and its link followed. Mutants in `test_yonder_loop_mutants.py`, one
+or more per obligation.
+
+In the guest (QEMU, scratch copies of the images, the "Bosgame GUI" entry for
+its ext2 root, `scripts = on`): the geometry probe's five shapes, 61 checks; and yonder with
+`--script-audit` through the real stream on two fixtures beside each other in
+`fixtures/`. [dom-join.html](fixtures/dom-join.html) measures from a head
+script (the view, 828), mid-parse (half of it, 414, the rest unparsed), a
+`DOMContentLoaded` listener (128) and a timer on the shown page (200, the
+status line saying `Script forced 1 layouts in 15.375 ms`), all PASS; its
+audit lines carry each task's count; and leaving it, with a timer pending and
+a listener installed, retired it with no reclaimed leak and `heap problems=0`.
+[dom-geometry.html](fixtures/dom-geometry.html), D10's own, whose script runs
+mid-parse under D7 and so measures the stream's page, shows PASS (110, 150,
+146). The first walk of `dom-join.html` failed its mid-parse and
+`DOMContentLoaded` rows (812, the body's default margins): the page with no
+sheet table was measured with no sheets at all, so its `style` element did
+not apply. The host cases had used `style` attributes only; they read a
+`style` element now, and a mutant holds the rule. D8's lost wrapper has no
+guest page: a wrapper is lost by C code holding a reference, which no page
+can do, so it stays host evidence, as DOM_D8.md says.
 
 ### D9, as built
 

@@ -489,7 +489,7 @@ join below.
 
 **D7c — the join** (on `userland`, once D4, D7a, D7b, D8 and D10 have all
 merged there; Opus builds, Fable reviews; it is the first thing the play
-branch takes). D8 (DOM_D8.md, the reporting destroy) and D10 (DOM_D10.md,
+branch takes). **Built:** DOM.md § D7c, as built. D8 (DOM_D8.md, the reporting destroy) and D10 (DOM_D10.md,
 geometry) were built beside D7 on plain `userland`, and each was approved
 with a list of what D7b's rewrite of the script host has to adopt. None of
 the three can prove the joined behaviour on its own, so the list is a slice

@@ -41,11 +41,8 @@ struct yonder_scripts {
     char url[OS64_DOM_URL_MAX];
     os64_js_runtime_t *runtime;
     os64_dom_t *dom;
-    // The page owner's current-layout provider (DOM.md § Geometry), kept
-    // so the runtime made later is given it; the counts a retired
-    // binding had are kept for the report that asks after it.
-    os64_dom_geometry_provider_t geometry;
-    void *geometry_opaque;
+    // The layout counts a retired binding had, kept for the report that
+    // asks after its task.
     os64_dom_geometry_stats_t last_geometry_stats;
     bool dead;                      // a sticky outcome retired the runtime
     bool parse_ended;
@@ -186,7 +183,7 @@ static bool ensure_runtime(yonder_scripts_t *s, os64_js_outcome_t *out)
     options.write = write;
     options.host_opaque = s;
     s->dom = os64_dom_create(s->runtime, s->doc, s->state, &options, out);
-    os64_dom_set_geometry(s->dom, s->geometry, s->geometry_opaque);
+    os64_dom_set_geometry(s->dom, s->options.geometry, s->options.opaque);
     if (s->dom == NULL || os64_js_install_output(s->runtime, 1, OS64_JS_OUTPUT_CONSOLE_LOG, out) != OS64_JS_OK) {
         // A runtime a binding could not be built in is not evaluated again.
         out->status = OS64_JS_HOST_FAILURE;
@@ -210,15 +207,6 @@ yonder_scripts_t *yonder_scripts_new(os64_html_document_t *doc, os64_page_state_
     os64_strcopy(s->url, sizeof(s->url), options->url != NULL ? options->url : "about:blank");
     s->blocking = -1;
     return s;
-}
-
-void yonder_scripts_set_geometry(yonder_scripts_t *s, os64_dom_geometry_provider_t provider, void *opaque)
-{
-    if (s == NULL)
-        return;
-    s->geometry = provider;
-    s->geometry_opaque = opaque;
-    os64_dom_set_geometry(s->dom, provider, opaque);
 }
 
 os64_dom_geometry_stats_t yonder_scripts_geometry_stats(yonder_scripts_t *s, bool reset)
