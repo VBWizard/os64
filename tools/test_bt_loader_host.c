@@ -61,8 +61,14 @@ void kfree(void *p)
 enum { COLD_RSA, COLD_ECDSA, WARM, WRONG_ID, REJECT_FRAGMENT, BAD_USB_OUT,
        NO_USB_OUT, SECURE_FAIL, NO_SECURE_EVENT, NO_BOOT_EVENT, STILL_BOOTLOADER,
        DISABLE_FAIL, BAD_DDC, CONFIGURE_FAIL, ALLOCATION_FAIL,
-       DEFERRED_ZERO_OPCODE_SUCCESS, DEFERRED_SECURE_FAILURE };
+       DEFERRED_ZERO_OPCODE_SUCCESS, DEFERRED_SECURE_FAILURE,
+       BOOT_BULK_ERROR, BOOT_INTR_ERROR, BOOT_REPEAT_ERROR, BOOT_RESET_FAIL,
+       BOOT_ERROR_NO_NOTIFY, EARLY_BULK_ERROR, BOOT_STALL_ERROR, BOOT_PARTIAL_ERROR };
 static unsigned scenario, secure_commands, resets, reads, ddc_commands, pump;
+static unsigned endpoint_resets, halted_enqueue;
+static bool rx_halted[2], repeated_error;
+static int resume_endpoint;
+static uint64_t halted_trb;
 static uint64_t seen_control, seen_command, seen_tx;
 static unsigned event_write, event_cycle, queued_bytes, queued_offset, receive_endpoint;
 static uint8_t queued[257];
@@ -100,10 +106,30 @@ static void command_complete(uint16_t opcode,uint8_t status)
     uint8_t reply[]={0x0e,4,1,opcode&255,opcode>>8,status};
     queue(reply,sizeof(reply),secure_commands%2);
 }
+static void receive_error(unsigned index,unsigned cc)
+{
+    xhci_bt_endpoint_t *rx=&s_hc->bt_probe->rx[index];
+    rx_halted[index]=true; halted_enqueue=rx->ring.enqueue; halted_trb=rx->pending_trb;
+    emit(rx->pending_trb,(cc<<24)|(scenario==BOOT_PARTIAL_ERROR ? 63 : 64),
+         TRB_TYPE(TRB_EV_TRANSFER)|(2u<<24)|((index==0?3u:5u)<<16));
+}
 
 static void test_controller_step(void)
 {
     if (++pump%16==0) ++kTicksSinceStart;
+    if (resume_endpoint>=0) {
+        // Hardware cannot retry the halted TD until its doorbell is rung.
+        unsigned dci=resume_endpoint==0 ? 3 : 5;
+        CHECK(s_hc->db[2]==dci);
+        CHECK(s_hc->bt_probe->rx[resume_endpoint].pending_trb==halted_trb);
+        CHECK(s_hc->bt_probe->rx[resume_endpoint].ring.enqueue==halted_enqueue);
+        rx_halted[resume_endpoint]=false;
+        resume_endpoint=-1;
+    }
+    if (scenario==BOOT_REPEAT_ERROR && endpoint_resets && !repeated_error) {
+        repeated_error=true;
+        receive_error(1,4);
+    }
     if (deferred && queued_bytes==queued_offset) {
         // A notification arriving after the final fragment's acknowledgment
         // exercises the final wait independently of command completion.
@@ -115,15 +141,25 @@ static void test_controller_step(void)
         seen_command=s_hc->command_trb;
         const xhci_trb_t *cmd=(void *)(uintptr_t)seen_command;
         uint32_t kind=TRB_GET_TYPE(cmd->control);
-        CHECK(kind==TRB_CONFIG_ENDPOINT || kind==TRB_DISABLE_SLOT);
+        CHECK(kind==TRB_CONFIG_ENDPOINT || kind==TRB_DISABLE_SLOT || kind==TRB_RESET_ENDPOINT);
         if (kind==TRB_CONFIG_ENDPOINT) {
             const uint32_t *ctx=(void *)(uintptr_t)cmd->param;
             CHECK(ctx[1]==(1u|1u<<3|1u<<4|1u<<5));
             CHECK(((ctx[4*8+1]>>3)&7)==7); // Interrupt IN DCI 3.
             CHECK(((ctx[5*8+1]>>3)&7)==2); // Bulk OUT DCI 4.
             CHECK(((ctx[6*8+1]>>3)&7)==6); // Bulk IN DCI 5.
+        } else if (kind==TRB_RESET_ENDPOINT) {
+            unsigned index=scenario==BOOT_INTR_ERROR ? 0 : 1;
+            CHECK(resets==1 && rx_halted[index]);
+            CHECK(cmd->control==(TRB_TYPE(TRB_RESET_ENDPOINT)|(1u<<9)|
+                                (2u<<24)|((index==0?3u:5u)<<16)|TRB_CYCLE));
+            CHECK(!cmd->param && !cmd->status);
+            CHECK(s_hc->bt_probe->rx[index].ring.enqueue==halted_enqueue);
+            endpoint_resets++;
+            if (scenario!=BOOT_RESET_FAIL) resume_endpoint=index;
         } else released=scenario!=DISABLE_FAIL;
         emit(seen_command,((kind==TRB_DISABLE_SLOT && !released) ||
+                           (kind==TRB_RESET_ENDPOINT && scenario==BOOT_RESET_FAIL) ||
                            (kind==TRB_CONFIG_ENDPOINT && scenario==CONFIGURE_FAIL) ? 6u:1u)<<24,
              TRB_TYPE(TRB_EV_CMD_COMPLETE)|(2u<<24));
     }
@@ -138,14 +174,21 @@ static void test_controller_step(void)
             const uint8_t *command=(void *)(uintptr_t)data->param;
             unsigned op=command[0]|command[1]<<8;
             CHECK(data->status==(uint32_t)command[2]+3);
-            if (op==0xfc05) { CHECK(command[2]==1 && command[3]==255); version_reply(); }
+            if (op==0xfc05) {
+                CHECK(command[2]==1 && command[3]==255); version_reply();
+                if (scenario==EARLY_BULK_ERROR && reads==1) receive_error(1,4);
+            }
             else if (op==0xfc01) {
                 CHECK(firmware_offset==(size_t)(bt_ax210_sfi_end-bt_ax210_sfi));
                 CHECK(command[2]==8 && read32(command+7)==0x100800);
                 CHECK(command[3]==0 && command[4]==1 && command[5]==0 && command[6]==1);
                 resets++; booted=true;
                 const uint8_t notification[]={0xff,7,2,0,1,0,0,0,0};
-                if (scenario!=NO_BOOT_EVENT) queue(notification,sizeof(notification),1);
+                unsigned endpoint=scenario==BOOT_INTR_ERROR ? 0 : 1;
+                if (scenario>=BOOT_BULK_ERROR && scenario!=EARLY_BULK_ERROR)
+                    receive_error(endpoint,scenario==BOOT_STALL_ERROR ? 6 : 4);
+                if (scenario!=NO_BOOT_EVENT && scenario!=BOOT_ERROR_NO_NOTIFY)
+                    queue(notification,sizeof(notification),endpoint);
             } else {
                 CHECK(op==0xfc8b && booted);
                 size_t offset=ddc_commands ? 4 : 0;
@@ -195,7 +238,7 @@ static void test_controller_step(void)
             }
         }
     }
-    if (p && p->listening && queued_offset<queued_bytes) {
+    if (p && p->listening && queued_offset<queued_bytes && !rx_halted[receive_endpoint]) {
         xhci_bt_endpoint_t *rx=&p->rx[receive_endpoint];
         unsigned n=queued_bytes-queued_offset; if (n>64) n=64;
         memcpy(rx->buffer,queued+queued_offset,n); queued_offset+=n;
@@ -208,7 +251,7 @@ int main(void)
 {
     const uint8_t config[]={9,2,39,0,1,1,0,0x80,50, 9,4,0,0,3,0xe0,1,1,0,
         7,5,0x81,3,64,0,1, 7,5,2,2,64,0,1, 7,5,0x82,2,64,0,1};
-    for (scenario=COLD_RSA;scenario<=DEFERRED_SECURE_FAILURE;scenario++) {
+    for (scenario=COLD_RSA;scenario<=BOOT_PARTIAL_ERROR;scenario++) {
         xhci_t hc={0}; s_hc=&hc;
         uint64_t dcbaa[4]={0}, runtime[16]={0}; uint32_t doorbell[4]={0};
         xhci_trb_t events[RING_TRBS]={0};
@@ -216,6 +259,9 @@ int main(void)
         hc.ctx_size=32; hc.evt_cycle=1;
         allocations=frees=secure_commands=resets=reads=ddc_commands=pump=0;
         failure_log[0]=0; deferred=false;
+        endpoint_resets=halted_enqueue=0;
+        resume_endpoint=-1; halted_trb=0;
+        rx_halted[0]=rx_halted[1]=repeated_error=false;
         fail_after=scenario==ALLOCATION_FAIL ? 5 : UINT32_MAX;
         seen_control=seen_command=seen_tx=0; event_write=0; event_cycle=1;
         queued_bytes=queued_offset=auth_region=auth_offset=0;
@@ -228,6 +274,7 @@ int main(void)
         xhci_ax210_bringup(&device,config,sizeof(config));
         CHECK(hc.bt_probe==NULL);
         if (scenario==CONFIGURE_FAIL || scenario==ALLOCATION_FAIL) CHECK(!secure_commands && !reads);
+        else if (scenario==EARLY_BULK_ERROR) CHECK(reads==1 && !secure_commands && !endpoint_resets);
         else if (scenario==WARM || scenario==WRONG_ID) CHECK(!secure_commands && !resets && reads==1);
         else if (scenario==REJECT_FRAGMENT || scenario==BAD_USB_OUT || scenario==NO_USB_OUT)
             CHECK(secure_commands==1 && !resets);
@@ -235,12 +282,18 @@ int main(void)
         else if (scenario==NO_BOOT_EVENT) CHECK(resets==1 && reads==1);
         else if (scenario==STILL_BOOTLOADER) CHECK(resets==1 && reads==2 && !ddc_commands);
         else if (scenario==BAD_DDC) CHECK(ddc_commands==1);
+        else if (scenario==BOOT_REPEAT_ERROR || scenario==BOOT_RESET_FAIL || scenario==BOOT_ERROR_NO_NOTIFY)
+            CHECK(endpoint_resets==1 && resets==1 && reads==1 && !ddc_commands);
+        else if (scenario==BOOT_STALL_ERROR || scenario==BOOT_PARTIAL_ERROR)
+            CHECK(!endpoint_resets && resets==1 && reads==1);
         else if (scenario==DEFERRED_SECURE_FAILURE) {
             CHECK(!resets && firmware_offset==(size_t)(bt_ax210_sfi_end-bt_ax210_sfi));
             CHECK(strstr(failure_log,"wait failed kind=1") && strstr(failure_log,"secure_failed=1"));
             CHECK(strstr(failure_log,"rejected event len=7 prefix=ff 05 06 01 00 00 00"));
         }
         else CHECK(secure_commands>2900 && resets==1 && reads==2 && ddc_commands==2);
+        if (scenario==BOOT_BULK_ERROR || scenario==BOOT_INTR_ERROR)
+            CHECK(endpoint_resets==1 && !failure_log[0]);
         if (scenario==DEFERRED_ZERO_OPCODE_SUCCESS) CHECK(!failure_log[0]);
         if (scenario==DISABLE_FAIL) CHECK(!released && frees==5 && dcbaa[2]);
         else CHECK(released && allocations-frees==1 && !dcbaa[2]);
@@ -248,6 +301,6 @@ int main(void)
         // retains device DMA as well; the fixture frees it after hardware stops.
         for (unsigned i=0;i<allocations;i++) if (allocated[i]) free(allocated[i]);
     }
-    puts("test_bt_loader_host: RSA/ECDSA upload, warm skip, failures and DMA cleanup passed");
+    puts("test_bt_loader_host: RSA/ECDSA upload, boot receive recovery, warm skip, failures and DMA cleanup passed");
     return 0;
 }

@@ -95,9 +95,11 @@ extern bool kUSBQuiet;   // USBQUIET — the opt-in 2.4GHz hygiene flashlight
 #define TRB_IOC              (1u << 5)
 #define TRB_ISP              (1u << 2)   // event on short packet
 #define TRB_IDT              (1u << 6)   // immediate data (Setup stage)
+#define TRB_RESET_TSP        (1u << 9)   // Reset Endpoint: preserve transfer state
 
 #define TRB_CC(status)       (((status) >> 24) & 0xFF)
 #define TRB_CC_SUCCESS       1
+#define TRB_CC_USB_TRANSACTION_ERROR 4
 #define TRB_CC_SHORT_PACKET  13
 
 typedef struct {
@@ -160,6 +162,7 @@ typedef struct {
 	uint64_t pending_trb;
 	bt_usb_endpoint_t endpoint;
 	bt_hci_stream_t stream;
+	bool retry_pending, retried;
 } xhci_bt_endpoint_t;
 
 // Boot-time Intel transport state. The controller pointer is cleared before this
@@ -564,6 +567,17 @@ static bool xhci_bt_transfer(xhci_trb_t *ev, uint32_t slot, uint32_t dci, uint8_
 		if (!probe->listening || ev->param != rx->pending_trb)
 			return true;
 		uint32_t residual = ev->status & 0xffffff;
+		// Firmware startup can interrupt a receive without transferring data.
+		// Defer one host-side soft reset per endpoint to the wait loop; issuing
+		// a synchronous command here would recursively drain this same event.
+		if (cc == TRB_CC_USB_TRANSACTION_ERROR && residual == rx->endpoint.packet_bytes &&
+		    probe->events.watch_boot && probe->events.opcode == 0xfc01 &&
+		    !rx->retried && !rx->retry_pending) {
+			rx->retry_pending = true;
+			printd(DEBUG_USB, "xhci: AX210 receive endpoint %02x transaction error during firmware start; scheduling retry\n",
+			       rx->endpoint.address);
+			return true;
+		}
 		if ((cc != TRB_CC_SUCCESS && cc != TRB_CC_SHORT_PACKET) ||
 		    residual > rx->endpoint.packet_bytes) {
 			printd(DEBUG_USB, "xhci: AX210 receive endpoint %02x failed cc=%u residual=%u\n",
@@ -684,6 +698,32 @@ static bool xhci_release_probe(xhci_device_t *dev)
 
 enum { BT_WAIT_COMMAND, BT_WAIT_DOWNLOAD, BT_WAIT_BOOT };
 
+static bool xhci_bt_retry_receive(xhci_bt_probe_t *p)
+{
+	for (unsigned i = 0; i < 2; i++) {
+		xhci_bt_endpoint_t *rx = &p->rx[i];
+		if (!rx->retry_pending) continue;
+		rx->retry_pending = false;
+		rx->retried = true;
+		uint32_t dci = (rx->endpoint.address & 15) * 2 + 1;
+		// TSP resumes the halted TD with its transfer state intact. Keep the
+		// pending TRB and buffer; neither a new receive nor Set Dequeue is needed.
+		uint8_t cc = xhci_run_command(0, 0, TRB_TYPE(TRB_RESET_ENDPOINT) |
+		    TRB_RESET_TSP | (dci << 16) | (p->device->slot << 24));
+		if (cc != TRB_CC_SUCCESS) {
+			printd(DEBUG_USB, "xhci: AX210 receive endpoint %02x soft reset failed cc=%u\n",
+			       rx->endpoint.address, cc);
+			p->failed = true;
+		} else if (!p->failed && p->listening) {
+			mmio_w32((uint8_t *)s_hc->db, 4 * p->device->slot, dci);
+			printd(DEBUG_USB, "xhci: AX210 receive endpoint %02x resumed after soft reset\n",
+			       rx->endpoint.address);
+		}
+		return true;
+	}
+	return false;
+}
+
 static bool xhci_bt_wait(xhci_bt_probe_t *p, unsigned kind, unsigned timeout_ms)
 {
 	uint64_t start = kTicksSinceStart;
@@ -704,6 +744,7 @@ static bool xhci_bt_wait(xhci_bt_probe_t *p, unsigned kind, unsigned timeout_ms)
 			}
 			return false;
 		}
+		if (xhci_bt_retry_receive(p)) continue;
 		bool done = kind == BT_WAIT_BOOT ? p->events.booted :
 		            kind == BT_WAIT_DOWNLOAD ? p->events.download_done :
 		            p->events.command_done && p->events.credits;
