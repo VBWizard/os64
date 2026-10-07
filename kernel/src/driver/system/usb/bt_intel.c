@@ -158,7 +158,7 @@ void bt_intel_feed(bt_hci_stream_t *stream, bt_intel_reply_t *reply,
     feed(stream, version_event, reply, data, bytes);
 }
 
-static void loader_event(void *context, const uint8_t *event, size_t bytes)
+static void decode_loader_event(void *context, const uint8_t *event, size_t bytes)
 {
     bt_intel_events_t *e = context;
     if (event[0] == 0x0e && bytes >= 5) {
@@ -191,6 +191,18 @@ static void loader_event(void *context, const uint8_t *event, size_t bytes)
             e->booted = true;
             e->credits = event[4];
         }
+    }
+}
+
+static void loader_event(void *context, const uint8_t *event, size_t bytes)
+{
+    bt_intel_events_t *e = context;
+    decode_loader_event(context, event, bytes);
+    if (!e->failure_bytes && (e->malformed || e->download_failed ||
+                             (e->command_done && e->status))) {
+        e->failure_bytes = bytes;
+        size_t count = bytes < sizeof(e->failure_event) ? bytes : sizeof(e->failure_event);
+        for (size_t i = 0; i < count; i++) e->failure_event[i] = event[i];
     }
 }
 

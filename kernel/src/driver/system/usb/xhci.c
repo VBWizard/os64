@@ -691,7 +691,19 @@ static bool xhci_bt_wait(xhci_bt_probe_t *p, unsigned kind, unsigned timeout_ms)
 	for (;;) {
 		xhci_drain_events();
 		if (p->failed || p->events.malformed || p->events.download_failed ||
-		    (p->events.command_done && p->events.status)) return false;
+		    (p->events.command_done && p->events.status)) {
+			const bt_intel_events_t *e = &p->events;
+			printd(DEBUG_USB, "xhci: AX210 wait failed kind=%u opcode=%04x status=%02x malformed=%u secure_failed=%u probe_failed=%u packets=%u partial=%u/%u\n",
+			       kind, e->opcode, e->status, e->malformed, e->download_failed,
+			       p->failed, p->packets, p->rx[0].stream.used, p->rx[1].stream.used);
+			if (e->failure_bytes) {
+				const uint8_t *b = e->failure_event;
+				printd(DEBUG_USB, "xhci: AX210 rejected event len=%u prefix=%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
+				       e->failure_bytes, b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
+				       b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]);
+			}
+			return false;
+		}
 		bool done = kind == BT_WAIT_BOOT ? p->events.booted :
 		            kind == BT_WAIT_DOWNLOAD ? p->events.download_done :
 		            p->events.command_done && p->events.credits;
@@ -802,6 +814,8 @@ static bool xhci_ax210_load(xhci_bt_probe_t *p)
 		if (++groups % 512 == 0)
 			printd(DEBUG_USB, "xhci: AX210 firmware transferred %u/%u bytes\n", (unsigned)off, (unsigned)size);
 	}
+	printd(DEBUG_USB, "xhci: AX210 firmware payload sent: %u/%u bytes; waiting for secure result\n",
+	       (unsigned)size, (unsigned)size);
 	if (!xhci_bt_wait(p, BT_WAIT_DOWNLOAD, 5000)) return false;
 	printd(DEBUG_USB, "xhci: AX210 secure download complete; starting firmware\n");
 	p->events.watch_download = false;

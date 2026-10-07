@@ -69,6 +69,10 @@ typedef struct {
     bool command_done, malformed;
     bool watch_download, download_done, download_failed;
     bool watch_boot, booted;
+    // Preserve the first rejected event, even if another event shares its USB
+    // packet. Length is the full event size; the snapshot is a bounded prefix.
+    uint16_t failure_bytes;
+    uint8_t failure_event[16];
 } bt_intel_events_t;
 
 void bt_intel_feed_events(bt_hci_stream_t *stream, bt_intel_events_t *events,

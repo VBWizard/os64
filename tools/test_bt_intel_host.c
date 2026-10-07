@@ -122,6 +122,15 @@ int main(void)
     e=(bt_intel_events_t){.watch_download=true}; stream=(bt_hci_stream_t){0};
     bt_intel_feed_events(&stream,&e,malformed,sizeof(malformed));
     assert(e.malformed && !e.download_done);
+    assert(e.failure_bytes==sizeof(malformed) && !memcmp(e.failure_event,malformed,sizeof(malformed)));
+    // A later event cannot replace the evidence for the original rejection.
+    bt_intel_feed_events(&stream,&e,notify,sizeof(notify));
+    assert(e.failure_bytes==sizeof(malformed) && !memcmp(e.failure_event,malformed,sizeof(malformed)));
+    const uint8_t other_opcode[]={0xff,5,6,0,0,0,0};
+    e=(bt_intel_events_t){.watch_download=true}; stream=(bt_hci_stream_t){0};
+    bt_intel_feed_events(&stream,&e,other_opcode,sizeof(other_opcode));
+    assert(e.malformed && e.failure_bytes==sizeof(other_opcode));
+    assert(!memcmp(e.failure_event,other_opcode,sizeof(other_opcode)));
     e=(bt_intel_events_t){.opcode=0xfc09}; stream=(bt_hci_stream_t){0};
     bt_intel_feed_events(&stream,&e,rejected,sizeof(rejected));
     assert(!e.command_done); // fc05 cannot complete fc09.

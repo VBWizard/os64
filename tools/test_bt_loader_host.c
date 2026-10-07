@@ -2,6 +2,7 @@
 // ring entries. Time advances without sleeping; no real MMIO or port I/O runs.
 #include <stdint.h>
 #include <stdbool.h>
+#include <stdarg.h>
 #define SPINLOCK_H
 typedef volatile uint32_t spinlock_t;
 static inline uint64_t spinlock_acquire_irqsave(spinlock_t *p) { (void)p; return 0; }
@@ -9,16 +10,28 @@ static inline void spinlock_release_irqrestore(spinlock_t *p,uint64_t f) { (void
 static void test_controller_step(void);
 #include "../kernel/src/driver/system/usb/bt_intel.c"
 #include "xhci_bt_host.inc"
+#include "strings/strlen.h"
+#include "strings/sprintf.h"
 extern void *aligned_alloc(size_t,size_t);
 extern void free(void *);
 extern int memcmp(const void *,const void *,size_t);
+extern char *strstr(const char *,const char *);
 extern int puts(const char *);
 extern _Noreturn void abort(void);
 #define CHECK(x) do { if (!(x)) { puts(#x); abort(); } } while (0)
 uintptr_t kHHDMOffset;
 volatile uint64_t kTicksSinceStart;
 __uint128_t kDebugLevel;
-void printd(__uint128_t level,const char *fmt,...) { (void)level; (void)fmt; }
+static char failure_log[1024];
+void printd(__uint128_t level,const char *fmt,...)
+{
+    (void)level;
+    if (!strstr(fmt,"AX210 wait failed") && !strstr(fmt,"AX210 rejected event")) return;
+    size_t used=strlen(failure_log);
+    va_list ap; va_start(ap,fmt);
+    vsnprintf(failure_log+used,sizeof(failure_log)-used,fmt,ap);
+    va_end(ap);
+}
 void hid_keyboard_report(hid_keyboard_t *k,const uint8_t r[8]) { (void)k; (void)r; abort(); }
 bool hid_mouse_decode(const hid_mouse_layout_t *l,const uint8_t *r,size_t n,hid_mouse_sample_t *s)
 { (void)l; (void)r; (void)n; (void)s; abort(); }
@@ -47,12 +60,12 @@ void kfree(void *p)
 
 enum { COLD_RSA, COLD_ECDSA, WARM, WRONG_ID, REJECT_FRAGMENT, BAD_USB_OUT,
        NO_USB_OUT, SECURE_FAIL, NO_SECURE_EVENT, NO_BOOT_EVENT, STILL_BOOTLOADER,
-       DISABLE_FAIL, BAD_DDC, CONFIGURE_FAIL, ALLOCATION_FAIL };
+       DISABLE_FAIL, BAD_DDC, CONFIGURE_FAIL, ALLOCATION_FAIL, DEFERRED_BAD_SECURE };
 static unsigned scenario, secure_commands, resets, reads, ddc_commands, pump;
 static uint64_t seen_control, seen_command, seen_tx;
 static unsigned event_write, event_cycle, queued_bytes, queued_offset, receive_endpoint;
 static uint8_t queued[257];
-static bool booted, released;
+static bool booted, released, deferred;
 static size_t firmware_offset, auth_offset;
 static unsigned auth_region;
 
@@ -90,6 +103,13 @@ static void command_complete(uint16_t opcode,uint8_t status)
 static void test_controller_step(void)
 {
     if (++pump%16==0) ++kTicksSinceStart;
+    if (deferred && queued_bytes==queued_offset) {
+        // A notification arriving after the final fragment's acknowledgment
+        // exercises the final wait, which previously returned without a reason.
+        const uint8_t notify[]={0xff,5,6,0,0,0,0};
+        queue(notify,sizeof(notify),1);
+        deferred=false;
+    }
     if (s_hc->command_trb && seen_command!=s_hc->command_trb) {
         seen_command=s_hc->command_trb;
         const xhci_trb_t *cmd=(void *)(uintptr_t)seen_command;
@@ -165,8 +185,11 @@ static void test_controller_step(void)
                  TRB_TYPE(TRB_EV_TRANSFER)|(2u<<24)|(4u<<16));
             command_complete(0xfc09,scenario==REJECT_FRAGMENT ? 0x0c : 0);
             if (firmware_offset==(size_t)(bt_ax210_sfi_end-bt_ax210_sfi) && scenario!=NO_SECURE_EVENT) {
-                const uint8_t notify[]={0xff,5,6,scenario==SECURE_FAIL,9,0xfc,0};
-                memcpy(queued+queued_bytes,notify,sizeof(notify)); queued_bytes+=sizeof(notify);
+                if (scenario==DEFERRED_BAD_SECURE) deferred=true;
+                else {
+                    const uint8_t notify[]={0xff,5,6,scenario==SECURE_FAIL,9,0xfc,0};
+                    memcpy(queued+queued_bytes,notify,sizeof(notify)); queued_bytes+=sizeof(notify);
+                }
             }
         }
     }
@@ -183,13 +206,14 @@ int main(void)
 {
     const uint8_t config[]={9,2,39,0,1,1,0,0x80,50, 9,4,0,0,3,0xe0,1,1,0,
         7,5,0x81,3,64,0,1, 7,5,2,2,64,0,1, 7,5,0x82,2,64,0,1};
-    for (scenario=COLD_RSA;scenario<=ALLOCATION_FAIL;scenario++) {
+    for (scenario=COLD_RSA;scenario<=DEFERRED_BAD_SECURE;scenario++) {
         xhci_t hc={0}; s_hc=&hc;
         uint64_t dcbaa[4]={0}, runtime[16]={0}; uint32_t doorbell[4]={0};
         xhci_trb_t events[RING_TRBS]={0};
         hc.dcbaa=dcbaa; hc.rt=(void *)runtime; hc.db=doorbell; hc.evt=events;
         hc.ctx_size=32; hc.evt_cycle=1;
         allocations=frees=secure_commands=resets=reads=ddc_commands=pump=0;
+        failure_log[0]=0; deferred=false;
         fail_after=scenario==ALLOCATION_FAIL ? 5 : UINT32_MAX;
         seen_control=seen_command=seen_tx=0; event_write=0; event_cycle=1;
         queued_bytes=queued_offset=auth_region=auth_offset=0;
@@ -209,6 +233,11 @@ int main(void)
         else if (scenario==NO_BOOT_EVENT) CHECK(resets==1 && reads==1);
         else if (scenario==STILL_BOOTLOADER) CHECK(resets==1 && reads==2 && !ddc_commands);
         else if (scenario==BAD_DDC) CHECK(ddc_commands==1);
+        else if (scenario==DEFERRED_BAD_SECURE) {
+            CHECK(!resets && firmware_offset==(size_t)(bt_ax210_sfi_end-bt_ax210_sfi));
+            CHECK(strstr(failure_log,"wait failed kind=1") && strstr(failure_log,"malformed=1"));
+            CHECK(strstr(failure_log,"rejected event len=7 prefix=ff 05 06 00 00 00 00"));
+        }
         else CHECK(secure_commands>2900 && resets==1 && reads==2 && ddc_commands==2);
         if (scenario==DISABLE_FAIL) CHECK(!released && frees==5 && dcbaa[2]);
         else CHECK(released && allocations-frees==1 && !dcbaa[2]);
