@@ -282,6 +282,7 @@ FRAME_COMPOSITIONS := $(wildcard frames/*.frame)
 KERNEL_FIXTURES := $(addprefix kernel/bin/,test_elf arg_echo dyn_consumer \
                      syscall_smoke exit_by_return file_io redirect_io dir_list map_unmap cwd_test stat_test sleep_test memory_test nosyscall env_fill glutton libtest.so)
 KERNEL_BIN      := kernel/bin/$(IMAGE_NAME)
+BT_FIRMWARE_LICENSE := firmware/intel/LICENCE.ibt_firmware
 
 # THE TRIPWIRE FOR THE COLLISION THAT STARTED ALL THIS. Two source trees feed
 # /tests, and neither image builder complains when they claim one name: debugfs
@@ -496,7 +497,7 @@ userland:
 # that rides it changes.
 TLS_PUBLIC_ROOTS := trust/mozilla/2026-08-13/install/roots.pem
 
-$(EXT2_TEST_IMAGE): license/libpage-numeric-LICENSE license/libjpeg-turbo-LICENSE license/freetype-LICENSE license/unicode-LICENSE license/libmath-LICENSE $(QUICKJS_LICENSE) $(FONT_FIXTURES) $(FONT_PRODUCT) $(PAGE_FIXTURES) tools/html_corpus/SOURCES.json $(FRAME_COMPOSITIONS) $(TLS_PUBLIC_ROOTS) tools/gen_ext2_testdata.py $(USERLAND_BINS) $(USERLAND_TESTBINS) $(USERLAND_LIBS) $(KERNEL_FIXTURES) kernel/test/partition_info.txt etc/husk.rc etc/logd.conf etc/os64get.conf etc/hosts etc/crontab etc/net.conf etc/desktop.conf etc/gclock.conf etc/gterm.conf etc/os64.conf etc/gui.conf etc/menu.conf etc/bootenv.conf etc/sshd.conf etc/vncd.conf etc/fonts.conf GNUmakefile
+$(EXT2_TEST_IMAGE): $(BT_FIRMWARE_LICENSE) license/libpage-numeric-LICENSE license/libjpeg-turbo-LICENSE license/freetype-LICENSE license/unicode-LICENSE license/libmath-LICENSE $(QUICKJS_LICENSE) $(FONT_FIXTURES) $(FONT_PRODUCT) $(PAGE_FIXTURES) tools/html_corpus/SOURCES.json $(FRAME_COMPOSITIONS) $(TLS_PUBLIC_ROOTS) tools/gen_ext2_testdata.py $(USERLAND_BINS) $(USERLAND_TESTBINS) $(USERLAND_LIBS) $(KERNEL_FIXTURES) kernel/test/partition_info.txt etc/husk.rc etc/logd.conf etc/os64get.conf etc/hosts etc/crontab etc/net.conf etc/desktop.conf etc/gclock.conf etc/gterm.conf etc/os64.conf etc/gui.conf etc/menu.conf etc/bootenv.conf etc/sshd.conf etc/vncd.conf etc/fonts.conf GNUmakefile
 	@mkdir -p "$$(dirname $(EXT2_TEST_IMAGE))"
 	python3 tools/gen_ext2_testdata.py $(EXT2_STAGING)
 	rm -f $(EXT2_TEST_IMAGE)
@@ -529,6 +530,7 @@ $(EXT2_TEST_IMAGE): license/libpage-numeric-LICENSE license/libjpeg-turbo-LICENS
 	printf 'write license/freetype-LICENSE /etc/licenses/freetype.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
 	printf 'write license/unicode-LICENSE /etc/licenses/unicode.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
 	printf 'write license/libmath-LICENSE /etc/licenses/libmath.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
+	printf 'write $(BT_FIRMWARE_LICENSE) /etc/licenses/intel-bluetooth.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
 	printf 'write %s /etc/licenses/quickjs.txt\n' "$(QUICKJS_LICENSE)" >> $(EXT2_STAGING)/debugfs_bins.cmds
 	printf 'mkdir /etc/fonts\nwrite etc/fonts.conf /etc/fonts.conf\nwrite $(FONT_FIXTURE_DIR)/LICENSE-DejaVu.txt /etc/licenses/DejaVu.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
 	$(foreach f,$(FONT_PRODUCT),printf 'write %s /etc/fonts/%s\n' "$(f)" "$(notdir $(f))" >> $(EXT2_STAGING)/debugfs_bins.cmds;)
@@ -568,7 +570,7 @@ $(EXT2_TEST_IMAGE): license/libpage-numeric-LICENSE license/libjpeg-turbo-LICENS
 # arrived (2026-08-23) — editing it left the image stale, which presents as "I
 # changed my wallpaper and nothing happened". Any file the recipe copies belongs
 # here; that is the whole contract of a prerequisite list.
-$(DISK_IMAGE): license/libpage-numeric-LICENSE license/libjpeg-turbo-LICENSE license/freetype-LICENSE license/unicode-LICENSE license/libmath-LICENSE $(QUICKJS_LICENSE) $(KERNEL_BIN) $(KERNEL_FIXTURES) $(USERLAND_BINS) $(USERLAND_TESTBINS) $(USERLAND_LIBS) $(FONT_FIXTURES) $(FONT_PRODUCT) $(PAGE_FIXTURES) tools/html_corpus/SOURCES.json $(FRAME_COMPOSITIONS) kernel/test/partition_info.txt etc/husk.rc etc/desktop.conf etc/gclock.conf etc/gterm.conf etc/os64.conf etc/gui.conf etc/bootenv.conf etc/fonts.conf limine-hd.conf $(wildcard external/*) $(EXT2_TEST_IMAGE) GNUmakefile
+$(DISK_IMAGE): $(BT_FIRMWARE_LICENSE) license/libpage-numeric-LICENSE license/libjpeg-turbo-LICENSE license/freetype-LICENSE license/unicode-LICENSE license/libmath-LICENSE $(QUICKJS_LICENSE) $(KERNEL_BIN) $(KERNEL_FIXTURES) $(USERLAND_BINS) $(USERLAND_TESTBINS) $(USERLAND_LIBS) $(FONT_FIXTURES) $(FONT_PRODUCT) $(PAGE_FIXTURES) tools/html_corpus/SOURCES.json $(FRAME_COMPOSITIONS) kernel/test/partition_info.txt etc/husk.rc etc/desktop.conf etc/gclock.conf etc/gterm.conf etc/os64.conf etc/gui.conf etc/bootenv.conf etc/fonts.conf limine-hd.conf $(wildcard external/*) $(EXT2_TEST_IMAGE) GNUmakefile
 	@mkdir -p "$$(dirname $(DISK_IMAGE))"
 	# rm + truncate instead of dd-from-/dev/zero: creates a sparse file, so
 	# rebuilding the image doesn't write $(DISK_SIZE_MB)MB of zeros each time.
@@ -655,6 +657,7 @@ $(DISK_IMAGE): license/libpage-numeric-LICENSE license/libjpeg-turbo-LICENSE lic
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) license/freetype-LICENSE ::/etc/licenses/freetype.txt
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) license/unicode-LICENSE ::/etc/licenses/unicode.txt
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) license/libmath-LICENSE ::/etc/licenses/libmath.txt
+	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(BT_FIRMWARE_LICENSE) ::/etc/licenses/intel-bluetooth.txt
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(QUICKJS_LICENSE) ::/etc/licenses/quickjs.txt
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) etc/desktop.conf ::/etc/desktop.conf
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) etc/gclock.conf ::/etc/gclock.conf
@@ -826,9 +829,10 @@ vbox-sync: $(DISK_IMAGE)
 # guaranteed a full repack on every single make). Nearly all of the ISO's bulk
 # is $(DISK_IMAGE) riding along as a Limine module for the RAMDISK entries —
 # sparse on disk here, dense once xorriso writes it out.
-$(IMAGE_NAME).iso: limine/limine $(KERNEL_BIN) $(DISK_IMAGE) limine.conf tools/p5-refresh.sh
+$(IMAGE_NAME).iso: $(BT_FIRMWARE_LICENSE) limine/limine $(KERNEL_BIN) $(DISK_IMAGE) limine.conf tools/p5-refresh.sh
 	@mkdir -p iso_root/boot
 	cp kernel/bin/$(IMAGE_NAME) iso_root/boot/
+	cp $(BT_FIRMWARE_LICENSE) iso_root/
 	# The P5 refresh script rides at the ISO root: boot the target machine's
 	# Linux, mount the stick, `sudo bash <stick>/p5-refresh.sh <stick>` — the
 	# ISO carries its own installer (one-time setup lives in its header).
@@ -911,6 +915,7 @@ $(IMAGE_NAME).hdd: limine/limine kernel
 #	@mmd -i $(IMAGE_NAME).hdd@@1048576 ::/EFI ::/EFI/BOOT ::/boot ::/boot/limine
 	# Copy bootloader and kernel files to the EFI partition
 	@mcopy -i $(IMAGE_NAME).hdd@@1048576 kernel/bin/os64_kernel ::/boot
+	@mcopy -o -i $(IMAGE_NAME).hdd@@1048576 $(BT_FIRMWARE_LICENSE) ::/boot/LICENCE.ibt_firmware
 #	@mcopy -i $(IMAGE_NAME).hdd@@1048576 limine.conf limine/limine-bios.sys ::/boot/limine
 #	@mcopy -i $(IMAGE_NAME).hdd@@1048576 limine/BOOTX64.EFI ::/EFI/BOOT
 #	@mcopy -i $(IMAGE_NAME).hdd@@1048576 limine/BOOTIA32.EFI ::/EFI/BOOT

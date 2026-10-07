@@ -1,7 +1,7 @@
 #ifndef XHCI_H
 #define XHCI_H
 
-// xHCI (USB 3.x host controller), HID input and AX210 boot-state probing.
+// xHCI (USB 3.x host controller), HID input and AX210 firmware bring-up.
 //
 // WHY THIS EXISTS: the Bosgame P5 has no PS/2 port. Every keystroke it will
 // ever receive arrives over USB, so "os64 runs on real hardware" requires
@@ -19,8 +19,10 @@
 //   - ENUMERATION AT BOOT ONLY: no hotplug. Plug it in, then power on.
 //   - Root ports on up to eight controllers are probed, binding the first
 //     boot-protocol keyboard and mouse and probing the Intel AX210's USB
-//     descriptors and firmware image type. The full-speed AX210 query ends
-//     by disabling its slot; there is no firmware upload or radio connection.
+//     descriptors and firmware image type. A matching cold AX210 receives the
+//     embedded Intel firmware and DDC configuration. Bring-up attempts Disable
+//     Slot before returning and retains DMA storage if it fails. Pairing and
+//     radio connections require a runtime Bluetooth stack.
 //     Mouse descriptors can select report protocol for a
 //     relative X/Y/wheel layout; unsupported descriptors retain boot mode.
 //   - Handles BOTH context sizes (HCCPARAMS1.CSZ): QEMU uses 32-byte

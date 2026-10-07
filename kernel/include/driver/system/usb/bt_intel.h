@@ -28,6 +28,10 @@ enum {
     BT_INTEL_TIMESTAMP = 1u << 3,
     BT_INTEL_BUILD = 1u << 4,
     BT_INTEL_SHA1 = 1u << 5,
+    BT_INTEL_TOP = 1u << 6,
+    BT_INTEL_RADIO_TOP = 1u << 7,
+    BT_INTEL_SBE = 1u << 8,
+    BT_INTEL_LIMITED = 1u << 9,
 };
 
 typedef enum {
@@ -42,6 +46,8 @@ typedef struct {
     uint8_t status, image;
     uint32_t fields, cnvi, cnvr, build, sha1;
     uint16_t timestamp;
+    uint32_t cnvi_top, cnvr_top;
+    uint8_t sbe, limited;
 } bt_intel_reply_t;
 
 // A USB packet boundary is not an HCI event boundary. Each receive endpoint
@@ -53,5 +59,34 @@ typedef struct {
 
 void bt_intel_feed(bt_hci_stream_t *stream, bt_intel_reply_t *reply,
                    const uint8_t *data, size_t bytes);
+
+// One outstanding command; download and boot notifications may share its USB
+// packet and must survive resetting command completion state for the next send.
+typedef struct {
+    bt_intel_reply_t version;
+    uint16_t opcode;
+    uint8_t status, credits;
+    bool command_done, malformed;
+    bool watch_download, download_done, download_failed;
+    bool watch_boot, booted;
+} bt_intel_events_t;
+
+void bt_intel_feed_events(bt_hci_stream_t *stream, bt_intel_events_t *events,
+                          const uint8_t *data, size_t bytes);
+bool bt_intel_is_ax210_bootloader(const bt_intel_reply_t *version);
+
+#define BT_INTEL_SFI_PAYLOAD 964u
+typedef struct {
+    const uint8_t *data;
+    size_t size;
+    uint32_t boot_address;
+    uint8_t build, week, year;
+} bt_intel_sfi_t;
+
+// Validate the complete container before publishing any firmware to the HC.
+// Cryptographic authentication is performed by the controller's secure loader.
+bool bt_intel_sfi_validate(const uint8_t *data, size_t size, bt_intel_sfi_t *out);
+size_t bt_intel_sfi_group(const bt_intel_sfi_t *sfi, size_t offset);
+bool bt_intel_ddc_valid(const uint8_t *data, size_t size);
 
 #endif

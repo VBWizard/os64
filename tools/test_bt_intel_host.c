@@ -2,6 +2,7 @@
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include "driver/system/usb/bt_intel.h"
 
 static bt_intel_reply_t decode(const uint8_t *event, size_t bytes)
@@ -101,6 +102,75 @@ int main(void)
             assert(reply.result == BT_INTEL_VERSION && reply.image == 1 && !stream.used);
         }
     }
-    puts("test_bt_intel_host: all checks passed");
+    // A completion and secure-download result may occupy the same packet.
+    const uint8_t notify[] = {0x0e,4,1,9,0xfc,0, 0xff,5,6,0,9,0xfc,0,
+                             0xff,7,2,0,1,0,0,0,0};
+    for (unsigned split = 0; split <= sizeof(notify); split++) {
+        bt_intel_events_t e = {.opcode=0xfc09,.watch_download=true,.watch_boot=true};
+        bt_hci_stream_t stream = {0};
+        bt_intel_feed_events(&stream,&e,notify,split);
+        bt_intel_feed_events(&stream,&e,notify+split,sizeof(notify)-split);
+        assert(e.command_done && e.download_done && e.booted && e.credits==1);
+        assert(!e.status && !e.malformed && !e.download_failed);
+    }
+    bt_intel_events_t e = {.opcode=0xfc09,.watch_download=true};
+    bt_hci_stream_t stream = {0};
+    const uint8_t failure[] = {0xff,5,6,1,9,0xfc,0};
+    bt_intel_feed_events(&stream,&e,failure,sizeof(failure));
+    assert(e.download_done && e.download_failed);
+    const uint8_t malformed[] = {0xff,4,6,0,9,0xfc};
+    e=(bt_intel_events_t){.watch_download=true}; stream=(bt_hci_stream_t){0};
+    bt_intel_feed_events(&stream,&e,malformed,sizeof(malformed));
+    assert(e.malformed && !e.download_done);
+    e=(bt_intel_events_t){.opcode=0xfc09}; stream=(bt_hci_stream_t){0};
+    bt_intel_feed_events(&stream,&e,rejected,sizeof(rejected));
+    assert(!e.command_done); // fc05 cannot complete fc09.
+
+    bt_intel_reply_t identity = {.result=BT_INTEL_VERSION,.image=1,
+        .fields=BT_INTEL_IMAGE|BT_INTEL_CNVI|BT_INTEL_TOP|BT_INTEL_RADIO_TOP|BT_INTEL_SBE|BT_INTEL_LIMITED,
+        .cnvi=0x173700,.cnvi_top=0x410,.cnvr_top=0x410,.sbe=1};
+    assert(bt_intel_is_ax210_bootloader(&identity));
+    identity.sbe=0; assert(bt_intel_is_ax210_bootloader(&identity));
+    identity.sbe=2; assert(!bt_intel_is_ax210_bootloader(&identity)); identity.sbe=1;
+    identity.cnvi_top=0x01000410; assert(!bt_intel_is_ax210_bootloader(&identity)); identity.cnvi_top=0x410;
+    identity.image=3; assert(!bt_intel_is_ax210_bootloader(&identity)); identity.image=1;
+    identity.limited=1; assert(!bt_intel_is_ax210_bootloader(&identity)); identity.limited=0;
+    for (unsigned bit=0;bit<10;bit++) {
+        if (!(identity.fields & (1u<<bit))) continue;
+        bt_intel_reply_t missing=identity; missing.fields &= ~(1u<<bit);
+        assert(!bt_intel_is_ax210_bootloader(&missing));
+    }
+
+    uint8_t fixture[980] = {6,0,0,0,0,0,0,0,0,0,1,0};
+    fixture[644]=6; fixture[654]=2;
+    const uint8_t commands[]={0x0e,0xfc,7,0,8,0x10,0,60,48,23, 2,0xfc,3,0,0,0};
+    memcpy(fixture+964,commands,sizeof(commands));
+    bt_intel_sfi_t sfi;
+    assert(bt_intel_sfi_validate(fixture,sizeof(fixture),&sfi));
+    assert(sfi.boot_address==0x100800 && sfi.build==60 && sfi.week==48 && sfi.year==23);
+    assert(bt_intel_sfi_group(&sfi,964)==16 && bt_intel_sfi_group(&sfi,980)==0);
+    for (unsigned n=0;n<sizeof(fixture);n++) assert(!bt_intel_sfi_validate(fixture,n,&sfi));
+    fixture[966]=255; assert(!bt_intel_sfi_validate(fixture,sizeof(fixture),&sfi)); fixture[966]=7;
+    fixture[654]=1; assert(!bt_intel_sfi_validate(fixture,sizeof(fixture),&sfi)); fixture[654]=2;
+    fixture[974]=0x0e; // A duplicate boot record is ambiguous, even with a short body.
+    assert(!bt_intel_sfi_validate(fixture,sizeof(fixture),&sfi));
+    const uint8_t ddc[]={3,0x28,1,0x18,4,0x29,1,3,0};
+    assert(bt_intel_ddc_valid(ddc,sizeof(ddc)));
+    assert(!bt_intel_ddc_valid(ddc,0) && !bt_intel_ddc_valid(ddc,sizeof(ddc)-1));
+
+    FILE *f=fopen("firmware/intel/ibt-0041-0041.sfi","rb"); assert(f);
+    assert(!fseek(f,0,SEEK_END)); long length=ftell(f); assert(length>0);
+    rewind(f); uint8_t *blob=malloc(length); assert(blob);
+    assert(fread(blob,1,length,f)==(size_t)length); fclose(f);
+    assert(bt_intel_sfi_validate(blob,length,&sfi));
+    assert(sfi.boot_address==0x100800 && sfi.build==60 && sfi.week==48 && sfi.year==23);
+    size_t offset=964; unsigned groups=0;
+    while (offset<sfi.size) {
+        size_t n=bt_intel_sfi_group(&sfi,offset); assert(n && !(n%4));
+        offset+=n; groups++;
+    }
+    assert(offset==sfi.size && groups==2972);
+    free(blob);
+    puts("test_bt_intel_host: framing, identity, firmware container and notifications passed");
     return 0;
 }

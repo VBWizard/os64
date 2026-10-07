@@ -201,11 +201,12 @@ int main(void)
     xhci_handle_transfer_event(&completion); CHECK(hc.xfer_done && hc.xfer_actual==0);
 
     // Bluetooth receives use endpoint-local framing, reject stale completions,
-    // and stop rearming after a result, an error, or the packet budget.
+    // and keep receiving notifications until an error or the packet budget.
     xhci_device_t bt_device={.slot=3};
     xhci_trb_t bt_rings[2][RING_TRBS]={0};
     uint8_t bt_buffers[2][64]={0};
-    xhci_bt_probe_t probe={.device=&bt_device,.listening=true};
+    xhci_bt_probe_t probe={.device=&bt_device,.listening=true,
+        .events={.opcode=BT_INTEL_READ_VERSION}};
     hc.bt_probe=&probe;
     for (unsigned i=0;i<2;i++) {
         probe.rx[i].endpoint=(bt_usb_endpoint_t){0x81+i,64,1};
@@ -232,10 +233,11 @@ int main(void)
     completion.control=(3u << 24) | (5u << 16);
     completion.status=(TRB_CC_SHORT_PACKET << 24) | (64-sizeof(version));
     xhci_handle_transfer_event(&completion);
-    CHECK(probe.reply.result==BT_INTEL_VERSION && probe.reply.image==1);
-    CHECK(!probe.listening && probe.packets==2 && probe.rx[0].stream.used==2);
+    CHECK(probe.events.version.result==BT_INTEL_VERSION && probe.events.version.image==1);
+    CHECK(probe.listening && probe.packets==2 && probe.rx[0].stream.used==2);
     xhci_handle_transfer_event(&completion); CHECK(probe.packets==2);
-    probe.reply=(bt_intel_reply_t){0}; probe.listening=true;
+    probe.events.version=(bt_intel_reply_t){0}; probe.listening=true;
+    completion.param=probe.rx[1].pending_trb;
     completion.status=(TRB_CC_SUCCESS << 24) | 65;
     xhci_handle_transfer_event(&completion); CHECK(probe.failed && !probe.listening);
     probe.failed=false; probe.listening=true; completion.status=6u << 24;
@@ -243,8 +245,8 @@ int main(void)
     probe.failed=false; probe.listening=true; probe.packets=63;
     completion.status=(TRB_CC_SHORT_PACKET << 24) | 64;
     xhci_handle_transfer_event(&completion);
-    CHECK(!probe.failed && !probe.listening && probe.packets==64);
-    CHECK(probe.reply.result==BT_INTEL_WAITING);
+    CHECK(probe.failed && !probe.listening && probe.packets==64);
+    CHECK(probe.events.version.result==BT_INTEL_WAITING);
     hc.bt_probe=NULL;
 
     // A delayed command completion cannot authorize Disable Slot cleanup.
