@@ -787,7 +787,6 @@ static struct {
     way_cache_t *cache;
     os64_work_pool_t *pool;
     Page page;                      // the page on screen
-    Page *dispatch_page;            // arriving page during its lifecycle task
     int32_t sx, sy;                 // where it is scrolled to, in page pixels
     // The zoom every page is laid out at, in thousandths: a window's, kept
     // across navigation, starting at the settings' default (yonder.conf),
@@ -1587,16 +1586,7 @@ static void arrive(Page *fresh, NavKind kind, const way_position_t *crumb, const
         status_rest("Out of memory reading that page; this is still the page you were on.");
         return;
     }
-    // A lifecycle callback can measure and then edit this arriving page.
-    // Reclaim that measurement before its model's sheet parses are restaged.
-    if (fresh->rendered_version != 0 && fresh->rendered_version != fresh->model_version) {
-        flow_free(fresh->tree);
-        fresh->tree = NULL;
-        garb_cascade_free(fresh->cascade);
-        fresh->cascade = NULL;
-        sheets_restage(fresh);
-        fresh->rendered_version = 0;
-    } else if (fresh->sheets == NULL) sheets_start(fresh);
+    sheets_start(fresh);
     if (fresh->sheets_waiting == 0) {
         arrive_now(fresh, kind, crumb, fragment);
         return;
@@ -4539,7 +4529,6 @@ static void stream_finish(os64_fetch_status_t fetch, const char *reason)
         g.finishing.cap = sizeof(fragment);
         g.finishing.has_fragment = &has_fragment;
         yonder_scripts_dispatch(fresh.scripts, doc->document, &loaded, NULL, &out);
-        g.dispatch_page = NULL;
         task_said(fresh.scripts, true, "DOMContentLoaded", &out, began);
         asks_perform(fresh.scripts, doc, false);
         os64_memset(&g.finishing, 0, sizeof(g.finishing));

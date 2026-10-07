@@ -719,8 +719,9 @@ original scope.
 
 ## D11 legacy arguments validation
 
-D11 adds a hash-checked browser legacy arguments helper without changing the
-standalone inherited property. Browser binding tests cover explicit installation,
+D11 adds a hash-checked browser legacy arguments helper (patch 0007, after
+D8's 0006) without changing the standalone inherited property. On `userland`
+the target audit reports 187 engine exports and nineteen runtime exports. Browser binding tests cover explicit installation,
 snapshots retained beyond return, recursive innermost-frame selection and
 strict/arrow refusals. Source and header audits pass. Its primary-widget
 consumer proof is recorded in

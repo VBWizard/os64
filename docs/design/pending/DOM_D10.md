@@ -4,8 +4,8 @@ Status: implemented and locally validated; originally based on `userland`
 `29641e20`, joined with `userland` `7c5431e3` after D8 and FRAMES merged.
 Governing design: DOM.md § Geometry. D8's reporting teardown is included;
 the join with D7's loop is DOM.md § D7c, as built. The runtime interfaces are
-additive. D11 records
-the arriving lifecycle handoff and readonly scroll readers.
+additive. D11 adds
+readonly `scrollLeft`/`scrollTop` readers to the geometry result.
 
 ## Scope and host seam
 

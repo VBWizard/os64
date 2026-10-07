@@ -727,8 +727,8 @@ builder decides, and the proof in this house's shape.
 | D6 | **Implemented; awaiting Fable re-review in PR #217 against userland.** Reclaiming unheld detached subtrees | 216,000 packed-fragment refresh cycles stay flat under 64 MiB; § D6, as built |
 | D7 | The loop: tasks, checkpoints, timers, events and their attributes, script order. Designed in [DOM_D7.md](DOM_D7.md); **D7a (the registry and the turn), D7b (the loop, with the input events), D7c (the join with D8 and D10) and D7d (the sheets before a script) built** | § D7a, as built; § D7b, as built; § D7c, as built; § D7d, as built |
 | D9 | `document.write`: libhtml's `os64_html_parser_write`, libdom's `write`/`writeln`/`open`/`close`, the blocking script's writes reaching yonder's stream. Designed in [DOM_D9.md](DOM_D9.md); **built** | § D9, as built |
-| D10 | **Built; approved, unmerged.** Synchronous geometry, [DOM_D10.md](DOM_D10.md); combined with D7/D9 on frozen `codex/dom-play` | Native/browser/guest geometry proof in DOM_D10.md |
-| D11 | **Built; awaiting Fable review and P5 acceptance.** Classic widget surface, [DOM_D11.md](DOM_D11.md), stacked on `codex/dom-play` | § D11, as built |
+| D10 | **Merged** (#225). Synchronous geometry, [DOM_D10.md](DOM_D10.md); joined with the loop in § D7c, as built | Native/browser/guest geometry proof in DOM_D10.md |
+| D11 | **Built; in review; P5 acceptance pending.** Classic widget surface, [DOM_D11.md](DOM_D11.md), on `userland` after D7d | § D11, as built |
 | later | the libjs reclaim slice | each with its own |
 
 ### D1, as built
@@ -2663,7 +2663,9 @@ ends in an acceptance list and not a verdict.
 
 ### D11, as built
 
-Implemented on `codex/dom-d11`, based on combined D7/D9/D10 `28f1d785`.
+Built by Quinn on `codex/dom-d11` against the combined D7/D9/D10 play branch,
+then rebased onto `userland` after D7d merged: the measured layout a
+lifecycle task reads is D7c's, and the sheets a page arrives with are D7d's.
 [DOM_D11.md](DOM_D11.md) records the consumer evidence, bounded surface,
 ownership, engine helper and acceptance. Chris chose Lileks Minneapolis,
 007museum and Million Dollar Homepage, prioritizing their own visible widgets.
@@ -2679,9 +2681,8 @@ Modern embedded stacks are outside that scope; J5 remains pending his P5 check.
 - Yonder targets image-map areas in content-relative CSS coordinates, using
   libpage for links and D7 for events. libgarb/libflow implement legacy
   rectangular clipping of absolute/fixed painting, hit testing and overflow.
-- Arriving lifecycle tasks can read current geometry. Measured-then-edited
-  arrivals reclaim their old layout before restaging sheets. Initial layouts
-  build the inline-style cascade even without a stylesheet.
+- Initial layouts build the inline-style cascade even without a stylesheet,
+  so a `style` attribute takes effect on a page with no sheet.
 
 Original tests in `tools/test_dom_classic.inc`, browser-host cases and the
 hand-computed CSS/layout clip cases cover these paths. Optional locally

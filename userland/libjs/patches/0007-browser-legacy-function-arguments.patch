@@ -1,6 +1,6 @@
 --- a/quickjs.c
 +++ b/quickjs.c
-@@ -16225,0 +16226,23 @@
+@@ -16242,0 +16243,23 @@
 +}
 +
 +/* Browser compatibility: a detached, unmapped snapshot of the innermost

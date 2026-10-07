@@ -1,8 +1,8 @@
 # D11: the classic page surface
 
-Status: implementation on `codex/dom-d11`, stacked on `codex/dom-play`
-(`28f1d785`, the combined D7/D9/D10 branch). Fable review and Chris's P5
-acceptance remain pending. The transferred play build remains frozen.
+Status: implementation on `codex/dom-d11`, built against the combined
+D7/D9/D10 play branch and rebased onto `userland` after D7d merged. Fable
+review and Chris's P5 acceptance remain pending.
 Governing design: DOM.md and JAVASCRIPT_TASKS.md, D11/J5.
 
 ## Consumer scope
@@ -112,11 +112,11 @@ negative values, and uniform comma or whitespace separators. Empty rectangles
 clip everything. Relative/static boxes ignore it. Arbitrary clip paths remain
 booked in POSITION.md and DEBTS.md.
 
-Lifecycle geometry can find the arriving Page during `DOMContentLoaded`,
-before publication. A measured-then-edited arrival releases its old layout and
-cascade before restaging sheets. Initial layout builds a cascade even with no
-stylesheet, so inline attributes take effect. Native callbacks neither pump
-events nor publish the arriving page during its task.
+A lifecycle task that measures during `DOMContentLoaded` reads D7c's measured
+layout of the arriving page, made beside it and never published. Initial
+layout builds a cascade even with no stylesheet, so inline attributes take
+effect. Native callbacks neither pump events nor publish the arriving page
+during its task.
 
 ## Acceptance and remaining work
 

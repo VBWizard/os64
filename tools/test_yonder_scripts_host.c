@@ -2639,6 +2639,8 @@ static void join_cases(void) {
     join_every_kind_counts();
     join_click_overrun();
     join_lost_wrapper();
+}
+
 static void classic_browser_cases(void)
 {
     probe_page("<!doctype html><style>body{margin:0}img{display:block;width:200px;height:100px;"
