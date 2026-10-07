@@ -40,9 +40,19 @@ typedef struct {
 // No runtime yet. NULL on no memory.
 yonder_scripts_t *yonder_scripts_new(os64_html_document_t *doc, os64_page_state_t *state,
                                      const yonder_scripts_options_t *options);
-// Drops the lists, drains the binding, destroys the runtime, frees the
-// binding's records and releases every hold, in DOM.md's teardown order.
-// Cancels the fetches still out. NULL is a no-op.
+// Bind the page owner's synchronous current-layout provider. Kept for the
+// runtime made later; may be replaced outside callbacks as the owner moves.
+void yonder_scripts_set_geometry(yonder_scripts_t *scripts,
+    os64_dom_geometry_provider_t provider, void *opaque);
+// The binding's layout counts; after retirement, the last ones it had.
+os64_dom_geometry_stats_t yonder_scripts_geometry_stats(yonder_scripts_t *scripts, bool reset);
+// Session count of reclaimed teardown leaks, including owners already freed.
+// Owner-thread only. Fixtures require zero except deliberate leak probes.
+size_t yonder_scripts_teardown_leaks(void);
+// Drops the lists, drains the binding, destroys the runtime (reporting and
+// reclaiming a leak, DOM_D8.md; other engine invariant violations stay
+// fatal), frees the binding's records and releases every hold, in DOM.md's
+// teardown order. Cancels the fetches still out. NULL is a no-op.
 void yonder_scripts_free(yonder_scripts_t *scripts);
 
 // The parser stopped at `script`. What the stream does next: RESUME at
@@ -71,6 +81,11 @@ bool yonder_scripts_deferring(const yonder_scripts_t *scripts);
 // False when nothing is ready (a fetch may still be out).
 bool yonder_scripts_step(yonder_scripts_t *scripts, os64_js_outcome_t *outcome);
 bool yonder_scripts_pending(const yonder_scripts_t *scripts);
+// A script a verb connected with no `src`, which a browser runs inside the
+// verb: so it runs before the parse goes on, ahead of any async script that
+// landed first. False when none waits.
+bool yonder_scripts_step_connected(yonder_scripts_t *scripts, os64_js_outcome_t *outcome);
+bool yonder_scripts_connected_pending(const yonder_scripts_t *scripts);
 // A connected script, as libdom reports one (and the finished-document
 // fixtures queue them): inline is ready at once, `src` is fetched.
 void yonder_scripts_connected(yonder_scripts_t *scripts, const os64_html_node_t *script);
@@ -79,13 +94,15 @@ void yonder_scripts_fetched(yonder_scripts_t *scripts, uint32_t token, const cha
                             size_t length);
 
 // One event at `node`, or at window (NULL), as os64_dom_dispatch. A page
-// whose script never ran makes its runtime here if any element carries an
-// on<type> attribute (a page may be all handlers); otherwise nothing hears.
+// whose script never ran makes its runtime here if an element carries an
+// on<type> attribute for this event (a page may be all handlers); otherwise
+// nothing hears.
 os64_js_status_t yonder_scripts_dispatch(yonder_scripts_t *scripts, const os64_html_node_t *node,
                                          const os64_dom_event_t *event, bool *prevented,
                                          os64_js_outcome_t *outcome);
-// Whether `type` could be heard. Before the page has a runtime, whether it
-// has any handler attribute at all, looked at once per tree version.
+// Whether `type` could be heard. Before the page has a runtime, whether an
+// on<type> attribute in the document names it, looked at once per tree
+// version.
 bool yonder_scripts_listens(yonder_scripts_t *scripts, const char *type);
 // The last thing the page's scripts said on the status line, kept so the
 // page's arrival, which writes the status line, can say it again. NULL when

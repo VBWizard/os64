@@ -10,7 +10,8 @@ userland build produces it for the `js` runner; the image installs it with I1.
 
 `jsport_malloc_functions` uses `os64_malloc_size` for actual usable payload.
 The callback counters charge that capacity, including allocator rounding, and
-exclude libos64's private heap metadata. There is no second allocation header.
+exclude libos64's private heap metadata. The fatal profile has no second allocation header. The opt-in tracked profile
+uses an aligned ledger header and charges it with usable engine payload.
 QuickJS's arena and large-block headers are payload and therefore charged.
 Both a requested-size preflight and a post-allocation capacity check enforce
 limits. Failed allocation or budget refusal leaves counters unchanged.
@@ -21,8 +22,8 @@ allocating; resizing an existing pointer to zero releases it.
 Resize allocates, checks the rounded capacity, copies, then frees the original.
 This keeps the original pointer, bytes and counters valid when rounding exceeds
 the replacement budget. During copying both blocks exist: the budget measures
-retained payload, with a transient extra old block. When the callbacks' opaque
-pointer names a caller-owned `JSPortAllocator`, its payload ceiling applies
+retained allocator charge, with a transient extra old block. When the callbacks' opaque
+pointer names a caller-owned `JSPortAllocator`, its allocation ceiling applies
 from the first constructor allocation and combines with the engine's own limit.
 Failure flags distinguish budget refusal from OS allocation failure and persist
 until the owner clears them. This state must outlive the runtime. A NULL opaque
@@ -32,9 +33,10 @@ R2 supplies that state and accounts separately for its own storage.
 The target patch makes `JS_NewRuntime` use these callbacks too, so retained
 upstream default-allocator code does not import a libc size query. The generic
 buffer/Unicode fallback realloc paths map to `os64_realloc`; they are included
-in the symbol inventory. Proving every runtime allocation participates in an
-allocator ledger remains the later teardown-reclamation audit. Fatal teardown
-is preserved.
+in the symbol inventory. Runtime callers supply non-NULL allocation callbacks;
+[TEARDOWN.md](../TEARDOWN.md) records the source and linked-object audit.
+`jsport_tracked_malloc_functions` and its per-runtime ledger support opt-in
+reclamation. Raw `JS_NewRuntime` and ordinary wrapper creation keep fatal teardown.
 
 ## Headers and strings
 

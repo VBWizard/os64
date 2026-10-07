@@ -51,7 +51,7 @@ for probe in probe sanitized-probe; do
     # This arena-allocation index is a separate regression for the actual
     # target core; the sanitized sweep measures its own larger inventory.
     if [ "$probe" = probe ]; then "$js_runtime_work/$probe" --raw-construction; fi
-    for mode in --leak --active-destroy; do
+    for mode in --leak --active-destroy --reclaim-raw-leak --reclaim-active-destroy --reclaim-fatal; do
         set +e
         "$js_runtime_work/$probe" "$mode" > "$js_runtime_work/fatal.out" 2> "$js_runtime_work/fatal.err"
         result=$?

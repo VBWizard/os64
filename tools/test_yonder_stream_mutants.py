@@ -11,6 +11,7 @@ from a clean tree and read the summary; the per-mutant logs are in --logs.
 """
 import argparse
 import pathlib
+import re
 import subprocess
 import sys
 
@@ -58,19 +59,20 @@ mutants = [
      '        (void)cancelled;\n        (void)ctx;\n        os64_lock_acquire(&m->lock);\n        if (m->count < YONDER_STREAM_CHUNKS) {', RING),
     # The window
     ('window-slice-budget', YONDER,
-     'while (g.stream.has_head && fed < STREAM_SLICE_BYTES) {',
-     'while (g.stream.has_head) {', WINDOW),
+     'while (g.stream.has_head && !g.stream.ending && fed < STREAM_SLICE_BYTES) {',
+     'while (g.stream.has_head && !g.stream.ending) {', WINDOW),
     ('window-verdict-before-drain', YONDER,
-     '    if (yonder_mail_streaming(mail))\n        return true;                    // chunks remain: next turn\n',
-     '', WINDOW),
+     '    if (stream_streaming())\n        return true;                    // chunks remain: next turn\n',
+     '    if (false && stream_streaming())\n        return true;\n', WINDOW),
     ('window-mode-captured', YONDER,
-     '    g.stream.scripting = g.scripts_on;', '    g.stream.scripting = false;', WINDOW),
+     '    g.stream.scripting = g.scripts_on;\n    if (crumb != NULL)',
+     '    g.stream.scripting = false;\n    if (crumb != NULL)', WINDOW),
     ('window-resume-past-script', YONDER,
-     '        while (r == OS64_HTML_SCRIPT)\n            r = os64_html_parser_resume(g.stream.parser);',
-     '', WINDOW),
+     '        r = os64_html_parser_resume(g.stream.parser);\n    }\n    return r;',
+     '        break;\n    }\n    return r;', WINDOW),
     ('window-cancel-on-refusal', YONDER,
-     '            if (g.nav.id != 0 && g.pool != NULL)\n                os64_work_cancel(g.pool, g.nav.id);\n            g.nav.id = 0;\n            stream_finish(OS64_FETCH_OK, NULL);',
-     '            stream_finish(OS64_FETCH_OK, NULL);', WINDOW),
+     '    if (g.nav.id != 0 && g.pool != NULL)\n        os64_work_cancel(g.pool, g.nav.id);\n    g.nav.id = 0;\n    stream_finish(OS64_FETCH_OK, NULL);',
+     '    stream_finish(OS64_FETCH_OK, NULL);', WINDOW),
     ('window-request-copy', YONDER,
      '        g.stream.has_sent = true;\n        trip->request = *request;',
      '        trip->request = *request;', WINDOW),
@@ -81,8 +83,8 @@ mutants = [
      'bool loading = g.stream.active || g.coming.active;',
      'bool loading = g.nav.id != 0 || g.coming.active;', WINDOW),
     ('window-parser-freed', YONDER,
-     '    if (g.stream.parser != NULL)\n        os64_html_parser_destroy(g.stream.parser);',
-     '', WINDOW),
+     '    os64_html_document_free(doc);\n    os64_free(g.stream.local);',
+     '    (void)doc;\n    os64_free(g.stream.local);', WINDOW),
     ('window-text-encoding', YONDER,
      'opt.charset = g.stream.text_utf8 ? "utf-8" : "windows-1252";',
      'opt.charset = "utf-8";', WINDOW),
@@ -144,7 +146,8 @@ for name, rel, old, new, harness in mutants:
             print(f'{name}: {rel} WAS NOT RESTORED', file=sys.stderr)
             sys.exit(2)
     body = log.read_text(errors='replace')
-    built = 'error:' not in body and 'undefined reference' not in body
+    # A compiler's error, not a sanitizer's "runtime error:", which is a catch.
+    built = re.search(r'\.(c|h|inc):\d+:\d+: error:', body) is None and 'undefined reference' not in body
     if not built:
         unbuilt.append(name)
         verdict = 'did not build'

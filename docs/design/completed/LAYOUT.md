@@ -847,16 +847,18 @@ LIBPAGE.md's rule restated for geometry:
   way, rather than flattening. Every pass after the build recurses along
   the boxes, so that one count bounds them all. The intrinsic-sizing
   RECURSION is bounded by table NESTING, which is at most a third of it
-  (a nested table is at least `table > tr > td` deeper). Measured at the
-  shipped `-O2` with the whole stack's slices in, a block chain 512
-  deep and a table nest at the bound lay out in under 448KB, and a
-  chain of inline-blocks, which needed 640-768KB before it was charged
-  double, now stops at half the depth — as does a chain of absolute
-  boxes (1472 bytes a level by the shipped frames, against a block's 704),
-  which needed 668KB in the host's -O2 build before it was charged double;
-  every positioned chain, absolute, relative or both, now lays out in
-  under 448KB too; a thread has 1MB. The host suite lays out pages nested
-  to and past the bound, all three kinds, and asserts where each stops.
+  (a nested table is at least `table > tr > td` deeper). Native stack use also
+  depends on the caller and compiled callbacks. At the shipped `-O2`, standalone
+  block chains and table nests at the bound used under 448KB. Inline-block
+  chains needed 640-768KB before double weighting; absolute chains needed
+  668KB, with frames of 1472 bytes per level versus a block's 704. With double
+  weighting, positioned chains used under 448KB on the 1 MiB thread stack.
+  Layout invoked synchronously from JavaScript must budget engine frames and
+  native layout together; a standalone profile does not prove that combination.
+  [D10's guest measurements](../pending/DOM_D10.md) cover block, table,
+  inline-block and absolute chains near the weighted depth bound on the 1 MiB
+  thread stack. The host suite lays out pages nested to and past the bound and
+  asserts where each stops.
 - **Nothing blocks and nothing is cached across calls.** Every layout is
   from scratch; the face owns the pacing.
 - **The run cap** (1 MiB per run) is honoured by windowing a long text

@@ -3,6 +3,12 @@
 #include "os64/fmt.h"
 #include "os64/mem.h"
 #include "os64/str.h"
+#include "os64/io.h"
+
+/* Read on the window owner thread, including after a page owner is freed. */
+static size_t teardown_leaks;
+
+size_t yonder_scripts_teardown_leaks(void) { return teardown_leaks; }
 
 // A page's scripts, at most: a page with more is refused the rest, as a
 // page with more sheets than SHEETS_MAX is.
@@ -35,6 +41,12 @@ struct yonder_scripts {
     char url[OS64_DOM_URL_MAX];
     os64_js_runtime_t *runtime;
     os64_dom_t *dom;
+    // The page owner's current-layout provider (DOM.md § Geometry), kept
+    // so the runtime made later is given it; the counts a retired
+    // binding had are kept for the report that asks after it.
+    os64_dom_geometry_provider_t geometry;
+    void *geometry_opaque;
+    os64_dom_geometry_stats_t last_geometry_stats;
     bool dead;                      // a sticky outcome retired the runtime
     bool parse_ended;
     Item *items;
@@ -51,11 +63,12 @@ struct yonder_scripts {
     // parser. `written` is what the last task handed over, for the audit.
     bool writing;
     uint64_t written;
-    // Whether the document carries any on<type> attribute, at the tree
+    // Which types the document's on<type> attributes name, at the tree
     // version it was last looked at: a page whose only script is a handler
-    // attribute has no runtime until an event finds one.
+    // attribute has no runtime until an event one of them names.
     uint64_t handlers_version;
-    bool handlers_scanned, handlers;
+    bool handlers_scanned;
+    uint32_t handlers;
     char note[256];
 };
 
@@ -82,8 +95,21 @@ static void retire(yonder_scripts_t *s)
     for (uint32_t i = 0; i < s->count; i++)
         if (s->items[i].state == STATE_FETCHING || s->items[i].state == STATE_READY)
             release_item(s, &s->items[i]);
+    if (s->dom != NULL)
+        s->last_geometry_stats = os64_dom_geometry_stats(s->dom, false);
     os64_dom_drain(s->dom);
-    os64_js_destroy(s->runtime);
+    os64_js_teardown_report_t report;
+    os64_js_destroy_report(s->runtime, &report);
+    if (report.leaked) {
+        if (teardown_leaks != SIZE_MAX) teardown_leaks++;
+        // A desktop launch's stderr belongs to another VT. Keep the verdict
+        // in the kernel log so logd preserves the page and reclaimed totals.
+        char line[OS64_JS_SOURCE_NAME_CAP + 128];
+        os64_snprintf(line, sizeof(line),
+                      "Yonder: reclaimed JavaScript teardown leak at %s (%lu blocks, %lu bytes)",
+                      s->url, (unsigned long)report.reclaimed_blocks, (unsigned long)report.reclaimed_bytes);
+        os64_debug_log(line);
+    }
     os64_dom_free(s->dom);
     s->runtime = NULL;
     s->dom = NULL;
@@ -133,18 +159,22 @@ static uint64_t now_ms(void *opaque)
     return s->options.now_ms != NULL ? s->options.now_ms(s->options.opaque) : 0;
 }
 
-// The runtime and its binding, made at the first script that runs. Stack,
-// heap and source keep the profile measured for libdom (DOM.md § D5b); the
-// deadline is the page's task budget, and the job cap a backstop only: a
-// job costs time, which the deadline already bounds.
+// The runtime and its binding, made at the first script that runs. Heap
+// and source keep the profile measured for libdom (DOM.md § D5b); the stack
+// is the 128 KiB DOM_D10.md measured, because geometry shares it with native
+// layout. The deadline is the page's task budget, and the job cap a backstop
+// only: a job costs time, which the deadline already bounds. Teardown
+// reclaims and reports a leak rather than ending the window (DOM_D8.md).
 static bool ensure_runtime(yonder_scripts_t *s, os64_js_outcome_t *out)
 {
     if (s->runtime != NULL)
         return true;
     os64_js_config_t config = {os64_js_default_limits()};
+    config.limits.stack_bytes = 128 * 1024;
     config.limits.execution_ms = s->options.execution_ms;
     config.limits.jobs_per_turn = (uint64_t)1 << 20;
-    if (os64_js_create(&config, OS64_JS_ABI_ID, &s->runtime, out) != OS64_JS_OK)
+    if (os64_js_create_with_teardown(&config, OS64_JS_TEARDOWN_RECLAIM, OS64_JS_ABI_ID,
+                                     &s->runtime, out) != OS64_JS_OK)
         return false;
     os64_dom_options_t options = os64_dom_default_options();
     options.alert = s->options.alert;
@@ -156,6 +186,7 @@ static bool ensure_runtime(yonder_scripts_t *s, os64_js_outcome_t *out)
     options.write = write;
     options.host_opaque = s;
     s->dom = os64_dom_create(s->runtime, s->doc, s->state, &options, out);
+    os64_dom_set_geometry(s->dom, s->geometry, s->geometry_opaque);
     if (s->dom == NULL || os64_js_install_output(s->runtime, 1, OS64_JS_OUTPUT_CONSOLE_LOG, out) != OS64_JS_OK) {
         // A runtime a binding could not be built in is not evaluated again.
         out->status = OS64_JS_HOST_FAILURE;
@@ -179,6 +210,27 @@ yonder_scripts_t *yonder_scripts_new(os64_html_document_t *doc, os64_page_state_
     os64_strcopy(s->url, sizeof(s->url), options->url != NULL ? options->url : "about:blank");
     s->blocking = -1;
     return s;
+}
+
+void yonder_scripts_set_geometry(yonder_scripts_t *s, os64_dom_geometry_provider_t provider, void *opaque)
+{
+    if (s == NULL)
+        return;
+    s->geometry = provider;
+    s->geometry_opaque = opaque;
+    os64_dom_set_geometry(s->dom, provider, opaque);
+}
+
+os64_dom_geometry_stats_t yonder_scripts_geometry_stats(yonder_scripts_t *s, bool reset)
+{
+    if (s == NULL)
+        return (os64_dom_geometry_stats_t){0};
+    if (s->dom != NULL)
+        return os64_dom_geometry_stats(s->dom, reset);
+    os64_dom_geometry_stats_t result = s->last_geometry_stats;
+    if (reset)
+        s->last_geometry_stats = (os64_dom_geometry_stats_t){0};
+    return result;
 }
 
 void yonder_scripts_free(yonder_scripts_t *s)
@@ -437,6 +489,34 @@ bool yonder_scripts_step(yonder_scripts_t *s, os64_js_outcome_t *out)
     return run_item(s, (uint32_t)(next_defer(s) - s->items), out);
 }
 
+// The ring position of the first ready connected inline script, or -1.
+static int32_t connected_at(const yonder_scripts_t *s)
+{
+    for (uint32_t i = 0; i < s->ready_count; i++)
+        if (s->items[s->ready[(s->ready_head + i) % s->cap]].mode == MODE_INLINE)
+            return (int32_t)i;
+    return -1;
+}
+
+bool yonder_scripts_connected_pending(const yonder_scripts_t *s)
+{
+    return s != NULL && !s->dead && connected_at(s) >= 0;
+}
+
+bool yonder_scripts_step_connected(yonder_scripts_t *s, os64_js_outcome_t *out)
+{
+    os64_memset(out, 0, sizeof(*out));
+    if (!yonder_scripts_connected_pending(s))
+        return false;
+    uint32_t at = (uint32_t)connected_at(s);
+    uint32_t index = s->ready[(s->ready_head + at) % s->cap];
+    // Taken out of the ring; the ones behind it keep their order.
+    for (uint32_t i = at; i + 1 < s->ready_count; i++)
+        s->ready[(s->ready_head + i) % s->cap] = s->ready[(s->ready_head + i + 1) % s->cap];
+    s->ready_count--;
+    return run_item(s, index, out);
+}
+
 void yonder_scripts_connected(yonder_scripts_t *s, const os64_html_node_t *script)
 {
     if (s == NULL || s->dead)
@@ -480,31 +560,17 @@ void yonder_scripts_fetched(yonder_scripts_t *s, uint32_t token, const char *sou
     make_ready(s, it);
 }
 
-// Whether any element of the document has an on<type> attribute: one walk
-// per tree version, and only while the page has no runtime.
-static bool has_handlers(yonder_scripts_t *s)
+// Which types the document's on<type> attributes name (libdom's own walk):
+// one walk per tree version, and only while the page has no runtime.
+static uint32_t handler_types(yonder_scripts_t *s)
 {
     uint64_t version = os64_html_version(s->doc);
     if (s->handlers_scanned && s->handlers_version == version)
         return s->handlers;
-    bool found = false;
-    const os64_html_node_t *root = s->doc->document;
-    for (const os64_html_node_t *at = root; at != NULL && !found;) {
-        if (at->kind == OS64_HTML_ELEMENT)
-            for (const os64_html_attr_t *a = at->attrs; a != NULL && !found; a = a->next)
-                found = (a->name[0] | 0x20) == 'o' && (a->name[1] | 0x20) == 'n' && a->name[2] != '\0';
-        if (at->first_child != NULL) {
-            at = at->first_child;
-            continue;
-        }
-        while (at != root && at->next == NULL)
-            at = at->parent;
-        at = at != root ? at->next : NULL;
-    }
+    s->handlers = os64_dom_handler_attributes(s->doc);
     s->handlers_version = version;
     s->handlers_scanned = true;
-    s->handlers = found;
-    return found;
+    return s->handlers;
 }
 
 os64_js_status_t yonder_scripts_dispatch(yonder_scripts_t *s, const os64_html_node_t *node,
@@ -518,9 +584,9 @@ os64_js_status_t yonder_scripts_dispatch(yonder_scripts_t *s, const os64_html_no
         return OS64_JS_OK;
     s->written = 0;
     // A page that never ran a script still runs its handler attributes:
-    // their runtime is made by the first event that could reach one.
+    // their runtime is made by the first event one of them names.
     if (s->dom == NULL) {
-        if (!has_handlers(s))
+        if ((handler_types(s) & os64_dom_handler_bit(event->type)) == 0)
             return OS64_JS_OK;
         if (!ensure_runtime(s, out)) {
             retire(s);
@@ -538,7 +604,8 @@ bool yonder_scripts_listens(yonder_scripts_t *s, const char *type)
 {
     if (s == NULL || s->dead)
         return false;
-    return s->dom != NULL ? os64_dom_listens(s->dom, type) : has_handlers(s);
+    return s->dom != NULL ? os64_dom_listens(s->dom, type)
+                          : (handler_types(s) & os64_dom_handler_bit(type)) != 0;
 }
 
 void yonder_scripts_set_note(yonder_scripts_t *s, const char *line)

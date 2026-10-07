@@ -10,7 +10,7 @@
 #include "os64/js.h"
 
 static unsigned checks, failures;
-static size_t live, attempts, fail_at;
+static size_t live, live_bytes, attempts, fail_at;
 os64_time_t js_test_clock = {.epoch = 1700000000, .tz_offset_minutes = 330,
                             .ticks_into_second = 37, .ticks_per_second = 100};
 int js_test_clock_failed;
@@ -25,11 +25,11 @@ void *os64_malloc(size_t n)
     n = (n + 15) & ~(size_t)15;
     Block *block = malloc(sizeof(*block) + n);
     if (!block) return NULL;
-    block->meta.size = n; live++;
+    block->meta.size = n; live++; live_bytes += n;
     return block + 1;
 }
 size_t os64_malloc_size(const void *p) { return ((const Block *)p)[-1].meta.size; }
-void os64_free(void *p) { if (p) { live--; free((Block *)p - 1); } }
+void os64_free(void *p) { if (p) { live--; live_bytes -= os64_malloc_size(p); free((Block *)p - 1); } }
 void *os64_realloc(void *p, size_t n)
 {
     if (!p) return os64_malloc(n);
@@ -86,19 +86,19 @@ static void allocators(void)
           "null zero resize and usable-size contracts");
     f->js_free(&s, NULL);
     check(live == 0, "allocator fixtures release every block");
-    JSPortAllocator owner = {.payload_limit = 17};
+    JSPortAllocator owner = {.allocation_limit = 17};
     s = (JSMallocState){.malloc_limit = SIZE_MAX, .opaque = &owner};
     check(!f->js_malloc(&s, 17) && owner.failures == JSPORT_ALLOC_LIMIT && live == 0,
           "caller ceiling includes allocator rounding");
-    owner.payload_limit = SIZE_MAX; owner.failures = 0; fail_at = attempts + 1;
+    owner.allocation_limit = SIZE_MAX; owner.failures = 0; fail_at = attempts + 1;
     check(!f->js_malloc(&s, 17) && owner.failures == JSPORT_ALLOC_OOM && live == 0,
           "OS allocation failure distinguished from ceiling");
     fail_at = 0;
-    owner.payload_limit = 1; owner.failures = 0;
+    owner.allocation_limit = 1; owner.failures = 0;
     JSRuntime *rt = JS_NewRuntime2(f, &owner);
     check(rt == NULL && owner.failures == JSPORT_ALLOC_LIMIT && live == 0,
           "runtime construction obeys caller ceiling");
-    owner.payload_limit = SIZE_MAX; owner.failures = 0; fail_at = attempts + 1;
+    owner.allocation_limit = SIZE_MAX; owner.failures = 0; fail_at = attempts + 1;
     rt = JS_NewRuntime2(f, &owner);
     check(rt == NULL && owner.failures == JSPORT_ALLOC_OOM && live == 0,
           "runtime construction reports OS allocation failure");

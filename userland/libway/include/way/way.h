@@ -208,6 +208,9 @@ int64_t way_read(way_leg_t *leg, way_opening_t *opening, void *buf, size_t cap);
 // Whether a text/plain body is UTF-8: by its label, else by JSON's own
 // rule, else by a byte order mark in its first bytes.
 bool way_text_utf8(const way_head_t *head, const void *first, size_t n);
+// Whether that answer waits on the body: nothing in the head decides, so
+// the first three bytes do, and a reader must have them whole before asking.
+bool way_text_sniffs(const way_head_t *head);
 
 // The page's address, whether it was posted, and its standing line: the
 // status and reason, then a sentence for every way it is incomplete — our

@@ -42,6 +42,7 @@
 #include "settings.h"
 #include "scripts.h"
 #include "script_job.h"
+#include "geometry.h"
 #include "ticker.h"
 #include "trip.h"
 
@@ -541,8 +542,13 @@ static int32_t scale_zoom(int32_t v, uint32_t to, uint32_t from)
 
 static bool page_model_refresh(Page *p);
 static void sheets_restage(Page *p);
+static bool script_geometry(void *opaque, const os64_html_node_t *node,
+                            os64_dom_geometry_t *out);
 static bool lay_out_page(Page *p, int32_t width, int32_t height);
 static bool lay_out_page_reclaim(Page *p, int32_t width, int32_t height, Page *reclaim);
+
+// Window-owner count: a provider takes its delta to include layout retries.
+static uint64_t geometry_layout_total;
 
 // Publish a layout beside the old one. `reclaim` owns geometry whose faces
 // an incomplete attempt may release before retrying; it may be this Page
@@ -562,8 +568,9 @@ static bool page_lay_out(Page *p, int32_t width, int32_t height, uint32_t zoom, 
         for (int32_t e = 0; e < p->nsheets; e++)
             if (p->sheets[e].importer < 0)
                 (void)sheet_emit(p, e, in, entry, &n);
-        cascade = n > 0 ? garb_cascade(in, n, page_doc(p), view) : NULL;
-        if (n > 0 && cascade == NULL)
+        // Inline style attributes also need a cascade when no sheet is linked.
+        cascade = garb_cascade(in, n, page_doc(p), view);
+        if (cascade == NULL)
             return false;
     }
     // Context is valid for this layout only and may name a stack Page;
@@ -575,6 +582,7 @@ static bool page_lay_out(Page *p, int32_t width, int32_t height, uint32_t zoom, 
     // in CSS pixels at `zoom`.
     s_env.viewport_height = view.height;
     s_env.zoom = zoom;
+    geometry_layout_total++;
     flow_tree_t *fresh = flow_layout(page_doc(p), page_model(p), width, &s_env);
     // The tree on screen holds the faces its runs were shaped in until it
     // is freed — each one a size of a file, counted against the text
@@ -590,6 +598,7 @@ static bool page_lay_out(Page *p, int32_t width, int32_t height, uint32_t zoom, 
             garb_cascade_free(reclaim->cascade);
             reclaim->cascade = NULL;
         }
+        geometry_layout_total++;
         fresh = flow_layout(page_doc(p), page_model(p), width, &s_env);
     }
     s_env.cascade = NULL;
@@ -755,6 +764,16 @@ static struct {
     struct {
         os64_work_id_t id;
     } nav;
+    // The page stream_finish holds while its DOMContentLoaded runs: no
+    // longer the stream's, not yet coming or shown. A fragment its scripts
+    // ask for lands in `fragment`, which arrive scrolls to.
+    struct {
+        const yonder_scripts_t *scripts;
+        const char *url;
+        char *fragment;
+        size_t cap;
+        bool *has_fragment;
+    } finishing;
     // THE PAGE ARRIVING (DOM_D4.md): parsed here, on the window's thread, a
     // slice per turn of the loop, from what the fetch posts down the
     // mailbox. Its mailbox is held here while it is current; a bell from
@@ -771,8 +790,13 @@ static struct {
         bool scripting;             // the parser mode, captured when the navigation started
         bool has_head;
         way_head_t head;
-        os64_html_parser_t *parser; // NULL until the head (HTML) or the first chunk (text)
+        os64_html_parser_t *parser; // NULL until the head (HTML), or until a text body's first bytes are in hand (stream_open)
         bool text_utf8;
+        // A text body's first bytes, gathered whole before its encoding is
+        // judged (way_text_sniffs): the wire may hand a byte order mark
+        // over in pieces, and a parser once made has chosen.
+        uint8_t sniff[3];
+        size_t sniff_len;
         bool has_verdict;
         yonder_verdict_t verdict;
         os64_page_request_t sent;
@@ -786,8 +810,10 @@ static struct {
         os64_page_state_t *state;
         uint64_t serial;
         // `ending`: the parser has been told the input ended; `ended`: it
-        // said OK to that, and the deferred scripts may run.
+        // said OK to that, and the deferred scripts may run. `ended_ms` is
+        // when: the timers due by then run before DOMContentLoaded.
         bool stopped, ending, ended;
+        uint64_t ended_ms;
         bool scriptless;                // its host could not be made: no script runs
         // A file's bytes, fed through the same turn as a fetch's, so a page
         // from disk arrives by the one road a page from the network takes.
@@ -1189,19 +1215,21 @@ static const os64_html_node_t *anchor_of(int32_t *offset)
 
 static void css_pictures(Page *p);
 
-// Lays the page on screen out again at the view's size. `again` lays it
+// Lays the page out and publishes scroll, controls and paint state. Answers
+// whether the resulting layout is complete. `again` lays it
 // out even at the size it has: a picture's size arrived. Without sheets
 // or positioned boxes only the width moves anything; with sheets the
 // height does too, which is what their media queries and vh units read,
 // and with a positioned box, whose initial containing block is the view.
-static void relayout(bool again)
+static bool relayout(bool again)
 {
     int32_t width = g.view.bounds.w, height = g.view.bounds.h;
     bool height_matters = g.page.sheets_ready != 0 || flow_npositioned(g.page.tree) > 0;
-    if (page_doc(&g.page) == NULL || width <= 0 ||
-        (!again && g.page.tree != NULL && width == g.page.laid_width &&
-         g.zoom == g.page.laid_zoom && (!height_matters || height == g.page.laid_height)))
-        return;
+    if (page_doc(&g.page) == NULL || width <= 0 || height <= 0)
+        return false;
+    if (!again && g.page.tree != NULL && width == g.page.laid_width &&
+         g.zoom == g.page.laid_zoom && (!height_matters || height == g.page.laid_height))
+        return !flow_incomplete(g.page.tree);
     int32_t offset = 0;
     const os64_html_node_t *anchor = anchor_of(&offset);
     // How far into the anchor the view starts, and how far across the page
@@ -1223,7 +1251,7 @@ static void relayout(bool again)
     g.settle_due = YONDER_NEVER;       // the deadline goes with the moves it was for
     if (!laid) {
         status_rest("Out of memory laying the page out; this is the last layout that fit.");
-        return;
+        return false;
     }
     g.laid_at = t1;
     g.sx = sx;
@@ -1239,6 +1267,7 @@ static void relayout(bool again)
     pictures_schedule();
     say_laid_out(ms_between(&t0, &t1));
     os64_ui_mark_dirty(&g.ui, &g.view);
+    return !flow_incomplete(g.page.tree);
 }
 
 static void request_navigate(os64_page_request_t *request, NavKind kind, way_ask_t ask);
@@ -1371,6 +1400,9 @@ static void arrive_now(Page *fresh, NavKind kind, const way_position_t *crumb,
     // after its pictures (DOM_D7.md § Booked). The document reads as its
     // target, as HTML's legacy target override has it.
     if (g.page.scripts != NULL) {
+        // The page on screen answers geometry from its own layout (DOM.md
+        // § Geometry); its scripts may measure from `load` on.
+        yonder_scripts_set_geometry(g.page.scripts, script_geometry, NULL);
         os64_dom_event_t loaded = {.type = "load"};
         os64_js_outcome_t out;
         int64_t began = s_script_audit ? os64_micros() : 0;
@@ -3418,23 +3450,70 @@ static size_t before_fragment(const char *url)
     return n;
 }
 
+// Where a page not on screen keeps a fragment its scripts ask for, and the
+// address it came from: the stream's, the page stream_finish holds, or the
+// coming page's. False for a host that is none of them.
+static bool unshown_place(const yonder_scripts_t *host, const char **url, char **fragment,
+                          size_t *cap, bool **has_fragment)
+{
+    if (host == NULL)
+        return false;
+    if (g.stream.active && host == g.stream.scripts) {
+        *url = g.stream.head.url;
+        *fragment = g.stream.fragment;
+        *cap = sizeof(g.stream.fragment);
+        *has_fragment = &g.stream.has_fragment;
+        return true;
+    }
+    if (host == g.finishing.scripts) {
+        *url = g.finishing.url;
+        *fragment = g.finishing.fragment;
+        *cap = g.finishing.cap;
+        *has_fragment = g.finishing.has_fragment;
+        return true;
+    }
+    if (g.coming.active && host == g.coming.page.scripts) {
+        *url = g.coming.page.way.url;
+        *fragment = g.coming.fragment;
+        *cap = sizeof(g.coming.fragment);
+        *has_fragment = &g.coming.has_fragment;
+        return true;
+    }
+    return false;
+}
+
 // A navigation a script asked for, performed once its task is over, by the
 // door a person's own request takes (DOM.md § The event loop): judged as a
 // page's own refresh is (WAY_ASK_GO), so a script cannot take a person
 // from https to http without the question bar. `shown` says whether the
 // asking page is on screen; a page still arriving has no model, so a link
 // or a form of its own waits for it (DOM.md § D7b, as built: Booked).
-static void navigation_perform(const os64_dom_navigation_t *ask, bool shown)
+static void navigation_perform(const yonder_scripts_t *host, const os64_dom_navigation_t *ask,
+                               bool shown)
 {
     switch (ask->kind) {
     case OS64_DOM_NAVIGATE_URL:
     case OS64_DOM_NAVIGATE_REPLACE: {
-        // Only the fragment changed: a place in this page, no request.
+        // Only the fragment changed: a place in the asking page, no
+        // request. On screen it scrolls now; a page not yet shown keeps
+        // the fragment, and arriving scrolls to it.
         size_t n = before_fragment(ask->url);
-        const char *here = shown ? g.page.way.url : g.stream.head.url;
-        if (shown && ask->url[n] == '#' && n == before_fragment(here) &&
+        const char *here = NULL;
+        char *fragment = NULL;
+        size_t cap = 0;
+        bool *has_fragment = NULL;
+        if (shown)
+            here = g.page.way.url;
+        else if (!unshown_place(host, &here, &fragment, &cap, &has_fragment))
+            here = NULL;
+        if (here != NULL && ask->url[n] == '#' && n == before_fragment(here) &&
             os64_memcmp(ask->url, here, n) == 0) {
-            scroll_to_fragment(ask->url + n + 1);
+            if (shown) {
+                scroll_to_fragment(ask->url + n + 1);
+            } else {
+                os64_strcopy(fragment, cap, ask->url + n + 1);
+                *has_fragment = true;
+            }
             return;
         }
         os64_page_request_t request;
@@ -3510,10 +3589,10 @@ static void asks_perform(yonder_scripts_t *host, const os64_html_document_t *doc
         if (ask.submitter != NULL)
             os64_html_release(doc, ask.submitter);
         held.node = held.submitter = NULL;
-        navigation_perform(&held, false);
+        navigation_perform(host, &held, false);
         return;
     }
-    navigation_perform(&held, true);
+    navigation_perform(host, &held, true);
     // A shown page's model was read while the nodes were held; the page
     // may since have been replaced, and its document freed with them.
     if (page_doc(&g.page) == doc) {
@@ -3551,6 +3630,32 @@ static bool scripts_owed(const yonder_scripts_t *host)
     return yonder_scripts_pending(host) || yonder_scripts_timer_next(host) <= yonder_now_ms();
 }
 
+// The page on screen's current-layout provider (DOM.md § Geometry): its
+// pending rebuild and an owed layout happen now, charged to the asking
+// script, and the box is read from the layout that results.
+static bool script_geometry(void *opaque, const os64_html_node_t *node,
+                            os64_dom_geometry_t *out)
+{
+    (void)opaque;
+    if (!os64_html_owns_node(page_doc(&g.page), node)) return false;
+    int64_t began = os64_micros();
+    uint64_t before = geometry_layout_total;
+    int32_t width = g.view.bounds.w > 0 ? g.view.bounds.w : 1;
+    int32_t height = g.view.bounds.h > 0 ? g.view.bounds.h : 1;
+    bool ready = began >= 0 && script_rebuild();
+    if (ready && (g.page.tree == NULL || flow_incomplete(g.page.tree) || g.page.laid_width != width ||
+                  g.page.laid_height != height || g.page.laid_zoom != g.zoom ||
+                  g.page.sheets_changed))
+        ready = relayout(true);
+    if (ready)
+        ready = yonder_geometry_snapshot(page_doc(&g.page), g.page.tree, node,
+                    width, height, g.zoom, (flow_point_t){g.sx, g.sy}, out);
+    int64_t ended = os64_micros();
+    out->layouts = geometry_layout_total - before;
+    out->elapsed_us = out->layouts != 0 && began >= 0 && ended >= began ? (uint64_t)(ended - began) : 0;
+    return ready && ended >= began;
+}
+
 // THE SHOWN PAGE'S TURN: at most one task, then the rendering step.
 static bool script_turn(void)
 {
@@ -3569,6 +3674,7 @@ static bool script_turn(void)
     os64_js_outcome_t out;
     int64_t began = s_script_audit ? os64_micros() : 0;
     const char *what = "script";
+    (void)yonder_scripts_geometry_stats(g.page.scripts, true);
     bool ran = yonder_scripts_step(g.page.scripts, &out);
     if (!ran) {
         what = "timer";
@@ -3577,6 +3683,16 @@ static bool script_turn(void)
     if (!ran)
         return false;
     task_said(g.page.scripts, true, what, &out, began);
+    // The layouts the task forced, and what they cost (DOM.md § Geometry).
+    os64_dom_geometry_stats_t geometry = yonder_scripts_geometry_stats(g.page.scripts, false);
+    if (geometry.layouts != 0) {
+        char line[512];
+        os64_snprintf(line, sizeof(line), "Script forced %lu layouts in %lu.%03lu ms%s%.*s",
+            (unsigned long)geometry.layouts, (unsigned long)(geometry.elapsed_us / 1000),
+            (unsigned long)(geometry.elapsed_us % 1000), out.status == OS64_JS_OK ? "" : "; ",
+            out.status == OS64_JS_OK ? 0 : 300, out.message);
+        status_rest(line);
+    }
     // The rendering step before the asks: a form a script sent is read
     // from a model as current as its tree.
     bool rendered = script_rebuild();
@@ -4023,6 +4139,8 @@ static bool stream_parser(const void *first, size_t n)
     return true;
 }
 
+static bool stream_open(void);
+
 // The parse is over: finish it, build what the page means — adopting the
 // control state the page's scripts already changed — write its standing
 // line, fire DOMContentLoaded, and arrive. `fetch` and `reason` are the
@@ -4034,7 +4152,8 @@ static void stream_finish(os64_fetch_status_t fetch, const char *reason)
     char fragment[sizeof(g.stream.fragment)];
     bool has_fragment = g.stream.has_fragment;
     os64_strcopy(fragment, sizeof(fragment), g.stream.fragment);
-    if (g.stream.parser == NULL && !stream_parser(NULL, 0)) {
+    // A body too short to have filled the sniff is judged on what there is.
+    if (g.stream.parser == NULL && !stream_open()) {
         stream_drop();
         buttons_follow();
         status_rest("Out of memory reading that page.");
@@ -4118,15 +4237,36 @@ static void stream_finish(os64_fetch_status_t fetch, const char *reason)
         os64_dom_event_t loaded = {.type = "DOMContentLoaded", .bubbles = true};
         os64_js_outcome_t out;
         int64_t began = s_script_audit ? os64_micros() : 0;
+        g.finishing.scripts = fresh.scripts;
+        g.finishing.url = fresh.way.url;
+        g.finishing.fragment = fragment;
+        g.finishing.cap = sizeof(fragment);
+        g.finishing.has_fragment = &has_fragment;
         yonder_scripts_dispatch(fresh.scripts, doc->document, &loaded, NULL, &out);
         task_said(fresh.scripts, true, "DOMContentLoaded", &out, began);
         asks_perform(fresh.scripts, doc, false);
+        os64_memset(&g.finishing, 0, sizeof(g.finishing));
         if (g.stream.active) {
             page_clear(&fresh);
             return;
         }
     }
     arrive(&fresh, kind, &crumb, has_fragment ? fragment : NULL);
+}
+
+// The parser for a text body, made from what decides its encoding — the
+// sniffed first bytes when the head left it to them (way_text_sniffs), as
+// many as arrived — which then go to the parser, so the caller feeds only
+// what follows them. False on no memory.
+static bool stream_open(void)
+{
+    if (!stream_parser(g.stream.sniff, g.stream.sniff_len))
+        return false;
+    // Three bytes after <plaintext> cannot stop at a script or refuse.
+    if (g.stream.sniff_len != 0)
+        (void)os64_html_parser_feed(g.stream.parser, g.stream.sniff, g.stream.sniff_len);
+    g.stream.sniff_len = 0;
+    return true;
 }
 
 // The bytes the arriving page has to give: the mailbox's chunks, or the
@@ -4201,6 +4341,31 @@ static void stream_cut_short(void)
     stream_finish(OS64_FETCH_OK, NULL);
 }
 
+// A script a verb connected with no `src`, as its own task: a browser runs
+// it inside the verb, so it runs before the parse goes on. False when none
+// ran, or when it navigated and dropped this stream.
+static bool stream_connected(void)
+{
+    yonder_scripts_t *host = g.stream.scripts;
+    uint64_t serial = g.stream.serial;
+    os64_js_outcome_t out;
+    int64_t began = s_script_audit ? os64_micros() : 0;
+    if (!yonder_scripts_step_connected(host, &out))
+        return false;
+    task_said(host, true, "script", &out, began);
+    asks_perform(host, os64_html_parser_document(g.stream.parser), false);
+    return g.stream.active && g.stream.serial == serial;
+}
+
+// The parse is over: the deferred scripts may run, and what is due by now
+// runs before DOMContentLoaded, which HTML queues behind it.
+static void stream_parse_over(void)
+{
+    g.stream.ended = true;
+    g.stream.ended_ms = yonder_now_ms();
+    yonder_scripts_parse_ended(g.stream.scripts);
+}
+
 // One task of the arriving page's own: a ready script or a due timer. The
 // task may navigate, which drops this stream; false then.
 static bool stream_task(void)
@@ -4210,13 +4375,17 @@ static bool stream_task(void)
     return g.stream.active && g.stream.serial == serial;
 }
 
-// ONE TURN OF THE ARRIVING PAGE (DOM_D7.md § The stream's turn): a ready
-// script or a due timer of the page's, else the script the parse is
-// stopped at, else one slice of parsing — at most one task, so a page of a
-// hundred small scripts still lets the window read its events a hundred
-// times. True when
-// the turn should come straight back; a wait for a fetch rings no bell, the
-// pool's reap does.
+// ONE TURN OF THE ARRIVING PAGE (DOM_D7.md § The stream's turn): a script
+// a verb connected with no `src` (a browser runs it inside the verb), else
+// the script the parse is stopped at when its source is in hand, else one slice
+// of parsing, else, when the parse is waiting (a `src` out, a deferred
+// fetch out, or the mailbox empty), a ready script or a due timer. The
+// parse comes first while it has input, as in a browser, where a
+// parser-blocking script runs inside the parser's own task and a 0 ms timer
+// it set waits for the parser to yield. At most one task a turn, so a page
+// of a hundred small scripts still lets the window read its events a
+// hundred times. True when the turn should come straight back; a wait for a
+// fetch rings no bell, the pool's reap does.
 static bool stream_turn(void)
 {
     if (!g.stream.active)
@@ -4234,18 +4403,17 @@ static bool stream_turn(void)
         g.stream.has_verdict = true;
     yonder_scripts_t *host = g.stream.scripts;
     uint64_t serial = g.stream.serial;
-    // A ready script (async, or one a script connected) or a due timer runs
-    // first, even while the parse waits: HTML's loop runs other tasks
-    // while a parser-blocking script is being fetched.
-    if (host != NULL && scripts_owed(host))
-        return stream_task();
+    if (yonder_scripts_connected_pending(host))
+        return stream_connected();
     if (g.stream.stopped) {
         // The script the parse waits for: run it when its source is in
         // hand (a dead runtime runs nothing), then carry on. The resume is
         // the parser carrying on, not a task; the next script it meets
-        // waits for the next turn.
+        // waits for the next turn. While its `src` is out, a ready script
+        // (async, or one a script connected) or a due timer runs: HTML's
+        // loop runs other tasks while a parser-blocking script is fetched.
         if (yonder_scripts_alive(host) && !yonder_scripts_blocking_ready(host))
-            return false;
+            return scripts_owed(host) ? stream_task() : false;
         os64_js_outcome_t out;
         int64_t began = s_script_audit ? os64_micros() : 0;
         if (yonder_scripts_run_blocking(host, &out)) {
@@ -4262,11 +4430,10 @@ static bool stream_turn(void)
         }
         // A stop after the input ended was the end's own: an OK now is the
         // end of the parse.
-        if (r == OS64_HTML_OK && g.stream.ending) {
-            g.stream.ended = true;
-            yonder_scripts_parse_ended(g.stream.scripts);
-        }
-        return !g.stream.stopped || yonder_scripts_blocking_ready(host);
+        if (r == OS64_HTML_OK && g.stream.ending)
+            stream_parse_over();
+        return !g.stream.stopped || yonder_scripts_blocking_ready(host) ||
+               yonder_scripts_connected_pending(g.stream.scripts);
     }
     size_t fed = 0;
     int64_t began = s_script_audit ? os64_micros() : 0;
@@ -4276,12 +4443,25 @@ static bool stream_turn(void)
         if (n == 0)
             break;
         fed += n;
-        if (g.stream.parser == NULL && !stream_parser(chunk, n)) {
-            stop_trip();
-            status_rest("Out of memory reading that page.");
-            return false;
+        size_t at = 0;
+        if (g.stream.parser == NULL) {
+            // A text body's encoding is read off its first three bytes when
+            // the head left it to them: they are gathered whole first,
+            // however the wire cut them, and go to the parser the moment it
+            // exists. A body shorter than that is judged at the end.
+            if (way_text_sniffs(&g.stream.head)) {
+                while (g.stream.sniff_len < sizeof(g.stream.sniff) && at < n)
+                    g.stream.sniff[g.stream.sniff_len++] = chunk[at++];
+                if (g.stream.sniff_len < sizeof(g.stream.sniff))
+                    continue;
+            }
+            if (!stream_open()) {
+                stop_trip();
+                status_rest("Out of memory reading that page.");
+                return false;
+            }
         }
-        int64_t r = stream_parsed(os64_html_parser_feed(g.stream.parser, chunk, n));
+        int64_t r = stream_parsed(os64_html_parser_feed(g.stream.parser, chunk + at, n - at));
         if (r == OS64_HTML_SCRIPT)
             break;                      // the slice ends at a script the page runs
         if (r != OS64_HTML_OK) {
@@ -4298,9 +4478,21 @@ static bool stream_turn(void)
         os64_debug_log(line);
     }
     if (g.stream.stopped)
-        return yonder_scripts_blocking_ready(g.stream.scripts);
-    if (!g.stream.has_verdict)
-        return false;
+        return yonder_scripts_blocking_ready(g.stream.scripts) ||
+               yonder_scripts_connected_pending(g.stream.scripts);
+    // A slice that fed something was this turn's work; a task waits for a
+    // turn that finds the parse with nothing to do.
+    host = g.stream.scripts;            // the slice may have made it
+    bool owed = host != NULL && scripts_owed(host);
+    // A slice that ended at its budget may have left chunks in the ring
+    // with no bell to come for them: the worker rang when it posted, and a
+    // quiet socket rings nothing more. The verdict is waited for; the
+    // chunks are not.
+    if (!g.stream.has_verdict) {
+        if (fed == 0)
+            return owed ? stream_task() : false;
+        return owed || fed >= STREAM_SLICE_BYTES;   // a task, or chunks, wait for the next turn
+    }
     if (stream_streaming())
         return true;                    // chunks remain: next turn
     if (!g.stream.verdict.page) {
@@ -4317,7 +4509,9 @@ static bool stream_turn(void)
         return true;                    // the head is behind the verdict in the mail: next turn
     if (!g.stream.ending) {
         // The input has ended. `end` may stop at a script still in the hold.
-        if (g.stream.parser == NULL && !stream_parser(NULL, 0)) {
+        // A text body too short to have filled the sniff is judged on what
+        // there is.
+        if (g.stream.parser == NULL && !stream_open()) {
             stop_trip();
             status_rest("Out of memory reading that page.");
             return false;
@@ -4325,20 +4519,29 @@ static bool stream_turn(void)
         g.stream.ending = true;
         int64_t r = stream_parsed(os64_html_parser_end(g.stream.parser));
         if (r == OS64_HTML_SCRIPT)
-            return yonder_scripts_blocking_ready(g.stream.scripts);
+            return yonder_scripts_blocking_ready(g.stream.scripts) ||
+                   yonder_scripts_connected_pending(g.stream.scripts);
         if (r != OS64_HTML_OK) {
             stream_cut_short();
             return false;
         }
-        g.stream.ended = true;
-        yonder_scripts_parse_ended(g.stream.scripts);
+        stream_parse_over();
+        fed = 1;                        // ending the input was this turn's work
     }
-    // The deferred scripts, one a turn, each when its source is in hand.
+    // The deferred scripts, one a turn, each when its source is in hand; a
+    // turn that parsed comes back for its task.
     if (yonder_scripts_deferring(g.stream.scripts)) {
         if (scripts_owed(g.stream.scripts))
-            return stream_task();
+            return fed != 0 || stream_task();
         return false;                   // a deferred script's fetch is out
     }
+    // A ready script, and a timer that was due when the parse ended, run
+    // before DOMContentLoaded. A timer set later waits for the page to
+    // arrive, so a chain of 0 ms timers cannot hold the page back.
+    host = g.stream.scripts;
+    if (host != NULL && (yonder_scripts_pending(host) ||
+                         yonder_scripts_timer_next(host) <= g.stream.ended_ms))
+        return fed != 0 || stream_task();
     yonder_verdict_t verdict = g.stream.verdict;
     stream_finish(verdict.fetch, verdict.reason);
     return false;

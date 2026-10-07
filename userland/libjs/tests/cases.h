@@ -149,6 +149,20 @@ static os64_js_status_t execute_fixture(os64_js_runtime_t *runtime, const char *
     return result;
 }
 
+static JSValue native_budget(JSContext *context, JSValueConst self, int argc, JSValueConst *argv)
+{
+    (void)context; (void)self; (void)argc; (void)argv;
+    native_calls++;
+    os64_js_outcome_t out;
+    check(os64_js_check_budget(fixture_runtime, OS64_JS_ABI_ID, fixture_outcome) == OS64_JS_BUSY,
+          "budget check refuses an alias of the outer outcome");
+    check(os64_js_check_budget(fixture_runtime, "wrong-binding", &out) == OS64_JS_ABI_MISMATCH,
+          "native budget boundary checks caller ABI");
+    check(os64_js_check_budget(fixture_runtime, OS64_JS_ABI_ID, &out) == OS64_JS_OK &&
+          out.status == OS64_JS_OK, "native budget check preserves a live outer turn");
+    return JS_UNDEFINED;
+}
+
 static void lifecycle_cases(void)
 {
     os64_js_config_t config = fixture_config();
@@ -173,6 +187,12 @@ static void lifecycle_cases(void)
         check(os64_js_context(runtime, "wrong-binding", &access) == NULL &&
               access.status == OS64_JS_ABI_MISMATCH, "per-binding ABI check");
         fixture_runtime = runtime;
+        check(os64_js_check_budget(runtime, OS64_JS_ABI_ID, &access) == OS64_JS_BAD_ARGUMENT,
+              "native budget check refuses idle runtime work");
+        check(install_native(runtime, "checkBudget", native_budget) >= 0,
+              "budget boundary fixture installed");
+        check(execute_fixture(runtime, "checkBudget()", &outcome) == OS64_JS_OK,
+              "callback-safe budget check does not finish the outer turn");
         check(install_native(runtime, "twice", native_twice) >= 0 &&
               install_native(runtime, "reenter", native_reentry) >= 0, "explicit native installation");
         unsigned before_finalization = finalized;
