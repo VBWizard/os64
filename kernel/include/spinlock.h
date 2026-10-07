@@ -32,6 +32,30 @@ static inline uint64_t spinlock_acquire_irqsave(spinlock_t *lock)
 	return flags;
 }
 
+// The irqsave acquire, measured, for a lock that reports its own contention
+// (the allocator's, in /sys/memory). *waited is how long it spun with
+// interrupts already off, by the caller's clock; zero when the lock was free
+// at the first try, which is also the only case that reads no clock at all.
+static inline uint64_t spinlock_acquire_irqsave_measured(spinlock_t *lock, uint64_t (*clock)(void),
+                                                         uint64_t *waited)
+{
+	uint64_t flags;
+	__asm__ volatile("pushfq\n\tpop %0" : "=r"(flags) :: "memory");
+	__asm__ volatile("cli" ::: "memory");
+	uint64_t spun = 0;
+	if (__sync_lock_test_and_set(lock, 1))
+	{
+		uint64_t started = clock();
+		while (__sync_lock_test_and_set(lock, 1))
+			__builtin_ia32_pause();
+		spun = clock() - started;
+		if (spun == 0)
+			spun = 1;   // it did wait: never report a contended acquire as free
+	}
+	*waited = spun;
+	return flags;
+}
+
 // Release the lock and restore the interrupt flag to its pre-acquire state.
 static inline void spinlock_release_irqrestore(spinlock_t *lock, uint64_t flags)
 {

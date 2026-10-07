@@ -321,6 +321,11 @@ bool way_text_utf8(const way_head_t *head, const void *first, size_t n)
     return way_type_is_json(head->content_type) || bytes_begin_utf8(first, n);
 }
 
+bool way_text_sniffs(const way_head_t *head)
+{
+    return head->charset[0] == '\0' && !way_type_is_json(head->content_type);
+}
+
 void way_note(way_page_t *out, const way_head_t *head, bool short_of_memory,
               os64_fetch_status_t fetch, const char *reason)
 {

@@ -15,8 +15,8 @@ void kmalloc_common(uint64_t physical_address, uint64_t virtual_address, uint64_
 	if (virtual_address % PAGE_SIZE)
 		page_count++;
 	paging_map_pages((pt_entry_t*)kKernelPML4v, virtual_address & PAGE_ADDRESS_MASK, physical_address & PAGE_ADDRESS_MASK, page_count, PAGE_PRESENT | PAGE_WRITE);
-	// Page contents are already zeroed centrally by the allocator choke point
-	// (allocate_memory_at_address_internal). kmalloc always runs after
+	// Page contents are already zeroed centrally by the allocator's
+	// allocation paths (allocator.c). kmalloc always runs after
 	// kHHDMMaintenanceEnabled is set, so that zeroing is guaranteed to have run.
 }
 
@@ -126,21 +126,17 @@ void kfree(void *address)
 	// The below-kHHDMOffset arm is VESTIGIAL since 2026-08-19: kmalloc_dma
 	// was the last allocator that returned non-HHDM pointers, and it now
 	// returns HHDM like everything else. Kept as a defensive pass-through
-	// (a wild low pointer will still be rejected loudly by free_memory's
-	// index lookup rather than by an underflowed subtraction here).
+	// (a wild low pointer will still be rejected loudly by free_memory
+	// rather than by an underflowed subtraction here).
 	uintptr_t physicalAddress = (uintptr_t)address > kHHDMOffset?(uintptr_t)address - kHHDMOffset:(uintptr_t)address;
     // Free the allocation (remove the HHDM offset from the address when freeing it)
 	// DETAILED: per-free diary line — same demotion (and reason) as the
 	// per-allocation line in allocator.c; plain DEBUG_ALLOCATOR = health line.
 	printd(DEBUG_KMALLOC | DEBUG_DETAILED, "KMALLOC: Freeing address 0x%016lx (0x%016lx)\n",address, physicalAddress);
 
-	uint64_t idx = free_memory(physicalAddress);
-	if (idx==0xFFFFFFFF)
-		panic("kFree: free_memory returned 0xFFFFFFFF indicating it could not find the block of memory to free for physical address 0x%016lx\n",physicalAddress);
-	//Merging + periodic compaction now happen inside free_memory, under the
-	//allocator lock — they rewrite kMemoryStatus and raced concurrent
-	//allocations when done here, outside it. (idx is only valid as an error
-	//signal after free_memory returns, not as an array index.)
+	// free_memory refuses anything that is not an allocation's own address by
+	// panicking, naming it; merging happens inside it, under its locks.
+	free_memory(physicalAddress);
 #ifdef KMALLOC_CLEAR_FREED_POINTERS
 	address = (void*)0xBADBADBA;
 #endif

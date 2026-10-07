@@ -104,6 +104,22 @@ typedef enum {
     OS64_DOM_SCRIPT_MODULE      /* recognised, never run */
 } os64_dom_script_kind_t;
 
+/* Numeric snapshot in CSS pixels. Offset/client members are integer pixels;
+ * rect members can be fractional after device-pixel layout is unzoomed.
+ * offset_parent is borrowed from the provider's live document. */
+typedef struct {
+    double x, y, width, height;
+    int32_t offset_left, offset_top, offset_width, offset_height;
+    int32_t client_left, client_top, client_width, client_height;
+    const os64_html_node_t *offset_parent;
+    uint64_t layouts, elapsed_us;
+} os64_dom_geometry_t;
+
+typedef bool (*os64_dom_geometry_provider_t)(void *opaque,
+    const os64_html_node_t *node, os64_dom_geometry_t *out);
+
+typedef struct { uint64_t layouts, elapsed_us; } os64_dom_geometry_stats_t;
+
 #pragma GCC visibility push(default)
 
 /* Installs one document into a fresh, idle runtime before evaluation. All
@@ -147,11 +163,23 @@ os64_dom_t *os64_dom_create(os64_js_runtime_t *runtime,
                             const os64_dom_options_t *options,
                             os64_js_outcome_t *outcome);
 
+/* Install/replace the native provider outside script callbacks. A provider
+ * ensures a current layout, copies a snapshot and records attempted layouts
+ * and elapsed work even on refusal. It must not enter JS or pump events.
+ * NULL removes it; subsequent HTML geometry reads refuse. Non-HTML elements
+ * return zero snapshots without a provider. Existing options ABI is unchanged.
+ * Browser owners install this before their first script. */
+void os64_dom_set_geometry(os64_dom_t *dom, os64_dom_geometry_provider_t provider,
+                            void *opaque);
+/* Owner-thread counters for forced native layouts and elapsed time. Reset at
+ * the start of a host task; records survive script exceptions/failed reads. */
+os64_dom_geometry_stats_t os64_dom_geometry_stats(os64_dom_t *dom, bool reset);
+
 /* Owner-thread only, outside JS callbacks. Idempotent; NULL is a no-op.
  * Drain closes bindings and releases C-retained JS values even when libjs
  * has entered a sticky failed state. Native records remain alive through
  * engine finalizers; os64_dom_free releases their native node holds.
- * The required order is drain, os64_js_destroy, then
+ * The required order is drain, os64_js_destroy (or destroy_report), then
  * os64_dom_free, followed by model/state/document teardown. */
 void os64_dom_drain(os64_dom_t *dom);
 void os64_dom_free(os64_dom_t *dom);

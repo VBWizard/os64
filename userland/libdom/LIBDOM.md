@@ -155,8 +155,8 @@ JavaScript exceptions follow the existing runtime outcome contract.
 
 Alert borrows normalized UTF-8 during a synchronous host callback. The host
 copies it if needed and does not enter a nested loop or JavaScript. Confirm
-returns false; prompt returns null. Geometry, cookies and the browser's script
-scheduling belong to later work; `document.write` and `writeln` throw
+returns false; prompt returns null. Cookies and the browser's script
+scheduling belong to later work (geometry is § Synchronous geometry); `document.write` and `writeln` throw
 `InvalidStateError` ("document.write is not supported yet") until D9.
 
 Listener records, handler text, timer records and their argument arrays, the
@@ -313,6 +313,24 @@ D6 holds wrapper identity keys, query roots and cached query answers. A
 successful refresh holds its complete successor before releasing the old
 answer; refusal preserves the old holds. Native holds survive drain and
 engine finalizers and are released by `os64_dom_free` after engine destruction.
-Copied JavaScript strings retain no native snapshot bytes. A reporting/reclaiming runtime destroy remains a separate reviewed
-extension before scripting is enabled for ordinary browsing; D5a retains
-libjs's R0 fatal invariant check and requires a clean registry teardown.
+Copied JavaScript strings retain no native snapshot bytes. Hosts select fatal
+or D8's opt-in reporting/reclaiming destruction at runtime creation. Both use
+the same drain/destroy/free ordering; the reporting host consumes the teardown
+report and logs/counts leaks. Independent D8 acceptance is required before
+scripting is enabled for ordinary browsing.
+
+## Synchronous geometry
+
+`os64_dom_set_geometry` installs an owner-thread native provider separately from
+the binding options. The provider supplies fresh layout at the current view
+size and zoom, copies CSS-pixel values into `os64_dom_geometry_t`, and retains
+no engine values. Missing or refused HTML geometry throws InvalidStateError.
+Element exposes offset and client dimensions/positions, offsetParent,
+and getBoundingClientRect. Rectangles are ordinary detached numeric snapshots;
+Non-HTML elements return numeric zeros, a null offsetParent and a zero rect
+without asking the HTML provider. SVG layout and getClientRects are outside
+this slice. Layout counts and
+elapsed microseconds are available through `os64_dom_geometry_stats`, including
+failed attempts. Callback budget checks bracket native work and preserve the
+turn's sticky limit classification. See [D10](../../docs/design/pending/DOM_D10.md)
+for provider semantics, stack measurements and the browser integration boundary.

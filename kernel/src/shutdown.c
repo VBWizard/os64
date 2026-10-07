@@ -31,7 +31,11 @@ void kernel_park(void)
 	uint64_t memInUse=0;
     uint64_t lastTime = 0;
     char heartbeat[2] = "*";
-    printd(DEBUG_BOOT | DEBUG_DETAILED, "BOOT END: Status of memory status (%u entries):\n",kMemoryStatusCurrentPtr);
+    uint64_t usable = 0, freeFrames = 0, runFrames = 0, ledgerFrames = 0;
+    allocator_frame_counts(&usable, &freeFrames, &runFrames, &ledgerFrames);
+    printd(DEBUG_BOOT | DEBUG_DETAILED, "BOOT END: frame table: %lu usable frames, %lu free, %lu in runs, %lu lent to the ledger\n",
+           usable, freeFrames, runFrames, ledgerFrames);
+    printd(DEBUG_BOOT | DEBUG_DETAILED, "BOOT END: Status of the ledger (%u entries):\n",kMemoryStatusCurrentPtr);
 	for (uint64_t cnt=0;cnt<kMemoryStatusCurrentPtr;cnt++)
 	{
         printd(DEBUG_BOOT | DEBUG_DETAILED, "\tMemory at 0x%016Lx for 0x%016Lx (%Lu) bytes is %s\n", kMemoryStatus[cnt].startAddress, kMemoryStatus[cnt].length, kMemoryStatus[cnt].length, kMemoryStatus[cnt].in_use ? "in use" : "not in use");
