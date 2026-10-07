@@ -954,8 +954,9 @@ static void measured_style_elements(Page *p, const os64_page_t *model)
 // `p`'s measured layout at `width` x `height` and the window's zoom, in
 // s_measured. The model is the tree's version: the last measured one or the
 // page's own while current, else one built beside it, sharing `state`
-// (`url` is where a page with no model came from). False when it cannot be
-// had, or the layout ran short: no stale answer is kept.
+// (`url` is where a page with no model came from). There is one measured
+// layout at a time: the one held, whichever page's, is let go first. False
+// when it cannot be had, or the layout ran short: no stale answer is kept.
 static bool measured_layout(const Page *p, os64_page_state_t *state, const char *url,
                             int32_t width, int32_t height)
 {
@@ -977,7 +978,7 @@ static bool measured_layout(const Page *p, os64_page_state_t *state, const char 
         model = os64_page_rebuild(page_model(p));
     else
         model = os64_page_build(doc, url, NULL, state);
-    measured_forget(doc);
+    measured_forget(s_measured.doc);
     if (model == NULL)
         return false;
     s_measuring = *p;

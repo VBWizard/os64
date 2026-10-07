@@ -2392,7 +2392,34 @@ static void join_click_overrun(void) {
     loop_drop();
 }
 
+/* One measured layout at a time: measuring a second page lets go of the
+ * first's, whichever page it was, so both documents free cleanly and
+ * nothing is left live. */
+static void join_one_measured_layout(void) {
+    stream_window();
+    static const char a[]="<!doctype html><style>p{width:100px}</style><p id=p>first</p>";
+    static const char b[]="<!doctype html><style>p{width:200px}</style><p id=p>second</p>";
+    os64_html_document_t *docs[2]={parse_file((const uint8_t *)a,sizeof(a)-1,true),
+                                   parse_file((const uint8_t *)b,sizeof(b)-1,true)};
+    size_t before=live;
+    os64_page_state_t *states[2];
+    bool measured=true;
+    for(int i=0;i<2;i++) {
+        states[i]=os64_page_state_create(docs[i],0);
+        Page page; memset(&page,0,sizeof(page));
+        page.way.doc=docs[i]; page.scripting=true;
+        measured=measured && measured_layout(&page,states[i],"http://fixture.test/",800,600);
+    }
+    check(measured && s_measured.doc==docs[1],"join: a second page's measurement replaces the first's");
+    measured_forget(docs[1]);
+    for(int i=0;i<2;i++) { os64_page_state_free(states[i]); os64_html_document_free(docs[i]); }
+    check(live<=before && s_measured.doc==NULL,
+        "join: both documents free with nothing of the first measurement left live");
+    stream_window_drop();
+}
+
 static void join_cases(void) {
+    join_one_measured_layout();
     join_unshown_geometry();
     join_every_kind_counts();
     join_click_overrun();

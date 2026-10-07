@@ -2276,10 +2276,10 @@ window's zoom, from the model at the tree's version (its own while current,
 else one built beside it, sharing the control state). The page waiting for
 its sheets is measured against its own sheet table; the stream's parse so
 far and the page stream_finish holds have no table yet, and are measured
-against their `style` elements, parsed for the measurement — what those
-@import and the sheets the page links are not asked for before it arrives:
-the departure "A script waits for the sheets named before it" books under
-§ D7b, as built. A `style` a script adds to a page waiting for
+against their `style` elements, parsed for the measurement. The sheets
+those elements @import and the sheets the page links are not asked for
+before it arrives; that is the departure "A script waits for the sheets
+named before it", booked under § D7b, as built, and D7d's to pay. A `style` a script adds to a page waiting for
 its sheets joins its table at arrival, when the table is restaged; measured
 before then, the page answers against the table it has. Nothing of the page's
 own is touched — not its model, whose refresh at arrival is what restages

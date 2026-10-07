@@ -451,7 +451,7 @@ window's close reach the same `page_clear`.
   every teardown path (departure, mode change, overrun, window close,
   stream drop).
 
-## The cut: two PRs, stacked
+## The cut: four slices
 
 **D7a — the registry and the turn** (inert in yonder; proven on the host).
 **Built:** DOM.md § D7a, as built records what was built and where it
@@ -546,6 +546,78 @@ layout gets the overrun sentence, the runtime retired, and its link still
 working through the default action. One mutant per obligation. In the
 guest: D8's lost-wrapper page and D10's `dom-geometry.html` through the
 real stream with scripts on, and D7b's walk unchanged.
+
+**D7d — the sheets before a script** (on `userland`, after D7c; Opus builds,
+Fable reviews). This is item 3 of § The stream's turn, which D7b departed
+from ("Sheets are not awaited at a script's stop", DOM.md § D7b, as built)
+because nothing a script could read depended on it. D10 ended that: a
+parser-blocking script can measure, and one that runs before the sheets
+named above it have landed reads a layout those sheets will change, and
+D7c's measured layout answers it faithfully from the wrong sheets. HTML's
+rule is the one item 3 wrote down: a classic script the parser stops at,
+inline or `src`, does not run while a style sheet the parser added before
+it is still loading; a `defer`, `async`, module or connected script, a
+timer and an event never wait. The slice owes four things, and each has a
+record:
+
+1. **Sheets are sent for as the parse reveals them** (pays DEBTS.md's row
+   "Linked sheets are fetched when the parse ends, not as it finds them",
+   and DOM_D7.md item 3's first half). The stream's page has a sheet table
+   from its first stop: at every stop and at `end`, the `link
+   rel=stylesheet` and `style` elements the tree holds that the table does
+   not are added in document order — a `style` parsed at once as
+   `sheets_start` parses it, a `link` sent as `sheet_fetch` sends it, with
+   the stream's serial, so `sheet_arrived` finds the stream's page as a
+   third home beside the coming page and the page on screen. Whether the
+   new elements come from a model built on the partial tree or a walk of
+   the tree since the last look is the builder's, measured on the saved
+   Wikipedia page as item 3 says. At `stream_finish` the table MOVES to the
+   arriving page: no sheet is fetched twice in one page's life, and
+   `sheets_start` becomes "the rest" — what the arrival model lists that
+   the table does not have (a `style` a script added mid-parse is already
+   there; an `@import` a landed sheet named is already out). The coming
+   page's wait, `holds` and `coming_rejudge` are unchanged, and so is the
+   restaging that borrows a sheet's parse.
+2. **The blocking script waits for the sheets named before it that are
+   still out.** In the stream's turn, a stopped script whose source is in
+   hand still answers "nothing to do" while a sheet above it in the
+   document is waiting and `holds` on this glass (the same judgement as
+   the first paint: a `media=print` sheet holds nothing); the reap that
+   brings the sheet is what carries the turn on, as a `src`'s reap does,
+   and a sheet that cannot be fetched holds nothing from the moment its
+   job fails. The wait is bounded as the first paint's is, by
+   `SHEETS_WAIT_MS` on the ticker, like `g.coming.due`: at expiry the
+   script runs with the sheets that came. A script the parse is not stopped at never waits.
+   D9 falls in by itself: a written `<link>` before a written `<script>`
+   is a tree the parser reached.
+3. **The measured layout measures against the table.** D7c's stand-in
+   page for the stream, measured against its `style` elements, retires:
+   the stream's page is a real `Page` with a table, and `measured_layout`
+   takes the table it has, as it does for the coming page. The cache key
+   already follows `sheets_ready`. The DOM.md departure "A script waits for
+   the sheets named before it" (§ D7b, as built) and the booked row that
+   points here are struck.
+4. **One teardown road.** `stream_drop` cancels the stream's sheet jobs
+   (`sheets_leave`) and frees its table through `sheets_free`, before the
+   document; a sheet landing for a stream that is gone is dropped by
+   serial as a script's is.
+
+The proof, on the host in `test_yonder_scripts_host.c`, with the test
+playing the worker for the sheets as it does for scripts: a slow `link`
+above an inline script that measures, and the script answers the styled
+number (today it answers the unstyled one); the same script above the
+`link`, and it runs at once; a `media=print` link above it holds nothing; a
+`link` that fails holds nothing; the wait expires and the script runs with
+what came; the sheet job is out while the
+mailbox still holds body chunks (fetched as found, not at the end); one
+job per sheet across the page's life, counted from the stop to the
+arrival; a `style` element added by a mid-parse script in the arrived
+page's table; teardown mid-wait, three ways, with nothing live; a written
+`link` before a written `script` holding it. One mutant per rule in
+`test_yonder_loop_mutants.py`. In the guest: the saved Wikipedia page's
+sheets requested from the first stop, and a page that measures in its
+`head` under a slow sheet (`httptestd.py`'s stall) drawing the styled
+number.
 
 ## The proof
 
