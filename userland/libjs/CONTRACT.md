@@ -1,7 +1,7 @@
 # JavaScript runtime API contract
 
-Status: reviewed R0 contract with the two R2 implementation slices, 2026-10-02.
-`libjs.so` exports eleven embedding operations: create,
+Status: R0/R2 contract with D8 opt-in teardown extensions, implementation awaiting independent review.
+`libjs.so` exports the embedding operations for creation,
 context access, class-ID allocation, eval, run, file execution, job draining,
 output/argument setup, cancellation and destruction. Their review/merge state
 and Opus's C1 integration are tracked in JAVASCRIPT_TASKS.md. The default image
@@ -229,8 +229,8 @@ exception text. Otherwise stack overflow remains EXCEPTION. Memory accounting
 uses `os64_malloc_size` plus documented metadata charges; realloc failures keep
 old allocation/accounting intact. The wrapper reserves its rounded allocation
 capacity before constructing the engine; its allocator ceiling is the remainder
-of the configured memory limit. Engine arenas, source copies and rejection
-bookkeeping are charged through the same allocator. Native binding allocations
+of the configured memory limit. Engine arenas, source copies, rejection
+bookkeeping and opt-in teardown ledger headers are charged through the same allocator. Native binding allocations
 outside the engine require their host's own budget. DOM allocations have their
 separate budget. `host_error` preserves negative monotonic-clock service codes;
 file and output operations preserve their service verdicts too;
@@ -255,17 +255,54 @@ caller keeps the runtime alive until cancellation callers have finished. It is
 not a signal-handler API and does not interrupt arbitrary blocking native code.
 
 Destroy runs on the owner outside active callbacks, frees queued values and
-contexts, and runs native finalizers before releasing the engine. NULL is a
-no-op. The wrapper holds its entry guard and closes context access before
-running finalizers. The host must end access to its native state after finalization, not
-before. A leaked value or engine invariant violation diagnoses and exits the
-host with `OS64_JS_FATAL_EXIT`; it is not an outcome. Teardown-leak containment
-for Yonder remains D0 work under the conditions in JAVASCRIPT.md.
+contexts, and runs eligible native finalizers before releasing the engine.
+NULL is a no-op. The wrapper holds its entry guard and closes context access
+before running finalizers. Native state remains alive through destruction.
+`os64_js_create` selects fatal teardown: a leaked object/weak reference or
+engine invariant diagnoses and exits with `OS64_JS_FATAL_EXIT`.
+
+### Opt-in reporting destruction
+
+`os64_js_create_with_teardown` has the same creation arguments and outcomes,
+plus `OS64_JS_TEARDOWN_FATAL` or `OS64_JS_TEARDOWN_RECLAIM`. Unknown policies
+return BAD_ARGUMENT and publish no handle. This additive entry does not change
+the existing config, outcome, limits or binding ABI layouts.
+
+RECLAIM is restricted to audited hosts: C-held values are in registries drained
+before destruction; native cleanup does not depend on an engine finalizer; no
+process-global reference retains a runtime handle; cross-thread cancellation
+users have stopped. External ArrayBuffer backing stores, custom finalizers
+owning host allocations/handles and shared-buffer callbacks violate this
+profile unless their host releases those resources independently. Built-in
+engine allocations belong to the runtime's allocator ledger.
+
+`os64_js_destroy_report(runtime, report)` consumes the runtime under its selected
+policy and writes an allocation-free report. A NULL report discards it;
+`os64_js_destroy` calls this entry with NULL. A NULL runtime clears a supplied
+report. A clean tracked result has `leaked == false` and zero reclaimed counts.
+FATAL retains the object/weakref assertions and has no allocator ledger or
+raw-buffer/string leak reporting; if it returns, its report is zero.
+In RECLAIM mode the engine returns at its object/weakref assertions if objects
+remain. The wrapper then frees the allocator ledger without engine entry or
+additional finalizers. After clean engine destruction, remaining raw buffers
+or ordinary strings are also detected and reclaimed through that ledger.
+`leaked == true` is a binding bug, not successful reference ownership.
+`reclaimed_blocks/bytes` describe storage freed by bulk reclamation, including
+ledger metadata; they do not count leaked JavaScript values. Hosts log/count
+leaks and fixtures fail on unexpected counts. Both entries invalidate every
+context, value and buffer from that runtime, including leaked handles.
+
+Ledger headers are aligned and charged to the memory budget. Fatal-profile
+allocations retain their original header-free adapter. Reallocation preserves
+links, payload and charge on refusal, with the existing temporary-copy budget
+semantics. Other engine aborts, allocator corruption and destroy during active
+calls remain fatal in both policies. Reclamation is not safe continuation of a
+failed engine. Detection, allocation/global audits, native ownership and
+acceptance evidence are recorded in [TEARDOWN.md](TEARDOWN.md).
 
 ## Browser extensions reserved for later work
 
-DOM.md's event-loop and teardown design asks for three reviewed extensions,
-outside R0 implementation:
+DOM.md's event loop reserves the following two extensions outside R0:
 
 - Start a budgeted turn by calling a function value (timer or listener), with
   the same outcomes and ownership rules. A raw JS_Call outside a wrapper turn
@@ -274,12 +311,8 @@ outside R0 implementation:
   listeners. The task's deadline and total job cap continue across checkpoints;
   each checkpoint judges unhandled rejections without opening a fresh budget.
   R2 must separate budget lifetime from queue exhaustion so this can be added.
-- Select a known-teardown-leak reporting/reclamation policy at creation. This
-  requires a reviewed detection patch, dead runtime/handle guarantees, native
-  resource/finalizer rules, allocator-ledger and global-reference audits, and
-  repeated-leak tests proving no cumulative growth. R0 destruction stays fatal
-  until that narrower contract is implemented and validated; unrelated engine
-  invariant failures remain fatal. An outcome cannot make unsafe cleanup safe.
+The creation-selected reporting/reclamation extension is specified above.
+Its independent review is separate from the event-loop extensions.
 
 ## Review and implementation gates
 

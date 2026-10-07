@@ -8,6 +8,11 @@ hosts register capabilities through the borrowed context using the pinned
 QuickJS API. Creation removes SharedArrayBuffer exposure and grants no host
 output, arguments, filesystem, networking or process functions.
 
+D8 adds creation-selected teardown reporting/reclamation for audited browser
+hosts. Ordinary creation and raw engine destruction retain the fatal policy.
+The contract and audits are in [TEARDOWN.md](TEARDOWN.md); independent review
+is required before treating this as an accepted browser gate.
+
 `make -C userland js-core` builds the freestanding engine and compiler helpers.
 `make -C userland js-library` links the engine and runtime against the real
 libmath/libos64 libraries. The default build also produces `libjs.so`, as the

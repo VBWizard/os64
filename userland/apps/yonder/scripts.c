@@ -2,6 +2,12 @@
 #include "os64/fmt.h"
 #include "os64/mem.h"
 #include "os64/str.h"
+#include "os64/io.h"
+
+/* Read on the window owner thread, including after a page owner is freed. */
+static size_t teardown_leaks;
+
+size_t yonder_scripts_teardown_leaks(void) { return teardown_leaks; }
 
 #define SCRIPT_COUNT_MAX 4096
 #define SCRIPT_SOURCE_MAX ((size_t)4 * 1024 * 1024)
@@ -127,7 +133,18 @@ static void retire(yonder_scripts_t *s)
 {
     s->next = s->count;
     os64_dom_drain(s->dom);
-    os64_js_destroy(s->runtime);
+    os64_js_teardown_report_t report;
+    os64_js_destroy_report(s->runtime, &report);
+    if (report.leaked) {
+        if (teardown_leaks != SIZE_MAX) teardown_leaks++;
+        // A desktop launch's stderr belongs to another VT. Keep the verdict
+        // in the kernel log so logd preserves the page and reclaimed totals.
+        char line[OS64_JS_SOURCE_NAME_CAP + 128];
+        os64_snprintf(line, sizeof(line),
+                      "Yonder: reclaimed JavaScript teardown leak at %s (%lu blocks, %lu bytes)",
+                      s->url, (unsigned long)report.reclaimed_blocks, (unsigned long)report.reclaimed_bytes);
+        os64_debug_log(line);
+    }
     os64_dom_free(s->dom);
     s->runtime = NULL;
     s->dom = NULL;
@@ -166,7 +183,8 @@ bool yonder_scripts_step(yonder_scripts_t *s, os64_js_outcome_t *out)
         os64_js_config_t config = {os64_js_default_limits()};
         config.limits.execution_ms = 1000;
         config.limits.jobs_per_turn = 4096;
-        if (os64_js_create(&config, OS64_JS_ABI_ID, &s->runtime, out) != OS64_JS_OK)
+        if (os64_js_create_with_teardown(&config, OS64_JS_TEARDOWN_RECLAIM,
+                                         OS64_JS_ABI_ID, &s->runtime, out) != OS64_JS_OK)
             goto failed;
         os64_dom_options_t options = os64_dom_default_options();
         options.alert = s->alert;

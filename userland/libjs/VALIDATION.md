@@ -670,3 +670,27 @@ Promise, date/numeric and separate fatal evidence; this packet closes the
 named stack/defaults/scheduling measurement gaps. It does not claim full
 ECMAScript conformance, a complete interrupt-coverage audit, arbitrary native
 stack safety, browser scheduling/layout acceptance or a new P5 run.
+
+## D8 opt-in teardown validation, 2026-10-05
+
+Implementation on `codex/dom-d8` is validated and awaits independent review.
+The additive creation/reporting APIs preserve the existing fatal default and
+public ABI layouts. [TEARDOWN.md](TEARDOWN.md) records the allocator/global and
+native-ownership audit; [DOM_D8.md](../../docs/design/pending/DOM_D8.md) records
+commands, counts, guest hashes, limitations and the D7 integration handoff.
+
+Maintained runtime suites pass **939 target-engine host checks** and **4,163
+sanitized-engine host checks**, zero failures/live allocations, including 10,000
+reclaimed leaks per profile, tracked constructor refusal sweeps and a live
+peer runtime. Five separate fatal controls pass per profile. Independent V1
+consumer suites retain **383 checks each**, 55 upstream functions passing and
+four explicit skips. Runner suites retain **196/38 checks**. Manifest/header,
+production symbol/dependency/relink and teardown object audits pass.
+
+Final QEMU VM 56309 passes **437 checks**, zero failures, 41 native calls and
+JSRT status. Across 10,000 leaked runtimes its live heap bytes and block count
+are unchanged, and heap verification passes. The delivered library and fixture
+match the build byte for byte. The default leak still returns the full JSFA
+badge. Yonder's host fixture passes **2,080 checks**, including counted/logged
+lost-wrapper reclamation and a subsequent clean page. Joined D7 validation and
+independent review remain separate gates.
