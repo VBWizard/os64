@@ -264,9 +264,21 @@ struct os64_html_parser {
     HNode *script;
     unsigned char *hold;
     size_t hold_len, hold_cap, hold_at, parsed;
+    /* document.write (DOM_D9.md). `written` is text a script wrote, UTF-8,
+     * read from `written_at` ahead of every other input. `running` is the
+     * script whose task is writing, from its first write until the host
+     * says it is done (`resume`) or the parser ends: its text goes in at
+     * `insertion`, and the input is read only as far as that point, because
+     * it may write again. The written text is input, the heap's and not the
+     * arena's, as the hold is. */
+    HNode *running;
+    char *written;
+    size_t written_len, written_cap, written_at, insertion;
     /* `ended`: the host said the input is over. `cut`: it ran past
-     * `max_bytes`. Either is acted on when everything waiting has been
-     * parsed. `straight`: os64_html_parser_finish is running, which does not
+     * `max_bytes`, and the input ends at the cut: nothing behind a written
+     * cut waits, and nothing later is taken (end_at_cut). Either is acted
+     * on when everything waiting has been parsed. `straight`:
+     * os64_html_parser_finish is running, which does not
      * stop. `moved`: this call has moved the document's version. */
     bool ended, cut, straight, moved;
 };
@@ -311,6 +323,10 @@ void d_retire(HDoc *d, void *ptr);
 bool h_text_put(os64_html_parser_t *p, HNode *n, uint32_t cp);
 /* Parse what is waiting, as far as the next stop (core.c). */
 void h_pump(os64_html_parser_t *p);
+/* UTF-8 as the Encoding Standard decodes it, and no NUL: the rule for text a
+ * verb puts in the tree and for text a script writes into the parser
+ * (dom.c). */
+bool d_text_ok(const char *s, size_t n);
 /* Said before a call of the parser parses its first byte, or the end of the
  * input: the document's version moves, once for the call (core.c). */
 void h_moving(os64_html_parser_t *p);

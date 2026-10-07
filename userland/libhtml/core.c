@@ -693,6 +693,7 @@ void os64_html_parser_destroy(os64_html_parser_t *p)
     if (!p)
         return;
     os64_free(p->hold);     /* the heap's, so the ledger below does not free it */
+    os64_free(p->written);
     os64_html_document_free(&p->d->pub);
 }
 
@@ -772,7 +773,9 @@ os64_html_parser_t *os64_html_parser_new(const os64_html_options_t *options)
  * sniff window (`prescan`) once the encoding is chosen, then the hold, then
  * the caller's own buffer, which is read where it lies when nothing is
  * waiting ahead of it. A parse stopped at a script takes no byte further:
- * what is fed meanwhile joins the hold. */
+ * what is fed meanwhile joins the hold. Text a script writes is read ahead of
+ * all three: the standard inserts it just before the next input character,
+ * and a script may run while the window is still being replayed. */
 /* The document's version moves once in each call of the parser that parses
  * anything, and before the first thing it parses: whatever was built or
  * pinned between two calls is then older than every block this call makes
@@ -792,16 +795,51 @@ static void hold_free(os64_html_parser_t *p)
     p->hold = NULL;
     p->hold_len = p->hold_cap = p->hold_at = 0;
 }
+static void written_free(os64_html_parser_t *p)
+{
+    os64_free(p->written);
+    p->written = NULL;
+    p->written_len = p->written_cap = p->written_at = p->insertion = 0;
+}
+/* The next character of the written text, which was checked as UTF-8 when it
+ * was written. */
+static uint32_t written_next(os64_html_parser_t *p)
+{
+    const unsigned char *u = (const unsigned char *)p->written + p->written_at;
+    unsigned n = u[0] < 0x80 ? 1 : u[0] < 0xe0 ? 2 : u[0] < 0xf0 ? 3 : 4;
+    uint32_t cp = n == 1 ? u[0] : u[0] & (0x7fu >> n);
+    for (unsigned i = 1; i < n; i++)
+        cp = cp << 6 | (u[i] & 0x3fu);
+    p->written_at += n;
+    return cp;
+}
+/* Stopped: at a script, and not the one whose writes are being parsed. */
+static bool stopped(const os64_html_parser_t *p)
+{
+    return p->script && p->script != p->running;
+}
 void h_pump(os64_html_parser_t *p)
 {
     HDoc *d = p->d;
     if (!p->started)
         return;
-    if (!d->pub.refusal && !p->script &&
-        (p->parsed < p->prescan_len || p->hold_at < p->hold_len))
+    /* While a script runs, what it wrote is read as far as where it writes
+     * next, and nothing behind that point: the rest of the input follows
+     * whatever it writes after. */
+    size_t written_end = p->running ? p->insertion : p->written_len;
+    bool waiting = p->written_at < written_end ||
+                   (!p->running && (p->parsed < p->prescan_len || p->hold_at < p->hold_len));
+    if (!d->pub.refusal && !stopped(p) && waiting)
         h_moving(p);
-    while (!d->pub.refusal && !p->script) {
-        if (p->parsed < p->prescan_len) {
+    while (!d->pub.refusal && !stopped(p)) {
+        if (p->written_at < written_end) {
+            /* Written text has no byte offset of its own: a diagnostic gets
+             * the input's position at the point it went in. */
+            p->offset = p->parsed;
+            h_codepoint(p, written_next(p));
+        } else if (p->running)
+            break;
+        else if (p->parsed < p->prescan_len) {
             size_t at = p->parsed++;
             h_decode(p, p->prescan[at], at);
         } else if (p->hold_at < p->hold_len)
@@ -809,6 +847,8 @@ void h_pump(os64_html_parser_t *p)
         else
             break;
     }
+    if (p->written_at == p->written_len)
+        written_free(p);
     if (p->hold_at == p->hold_len)
         hold_free(p);
 }
@@ -835,6 +875,24 @@ static bool hold_bytes(os64_html_parser_t *p, const unsigned char *s, size_t n)
         p->hold[p->hold_len + i] = s[i];
     p->hold_len += n;
     return true;
+}
+/* `max_bytes` has cut the input, and the input ends at the cut. A fed cut
+ * falls at the end of everything, so dropping the rest of the chunk is all
+ * it takes; a written one falls at the insertion point, in the middle, so
+ * what waited behind it (the written text after that point, the sniff
+ * window's unreplayed rest, the hold) is past the end and is dropped too.
+ * There is one end: the first cut makes it and nothing later moves it.
+ * Whatever comes later, fed or written, is not taken: the limit is spent,
+ * including the few bytes a character-boundary cut left unused. Script
+ * stops before the cut still stop; they come before the end. */
+static void end_at_cut(os64_html_parser_t *p)
+{
+    p->cut = true;
+    if (p->running)
+        p->written_len = p->insertion;
+    if (p->prescan_len > p->parsed)
+        p->prescan_len = p->parsed;
+    hold_free(p);
 }
 /* What a call answers. The end of the input, said by the host or met at
  * `max_bytes`, is acted on here, once nothing is waiting to be parsed: a
@@ -871,7 +929,7 @@ int64_t os64_html_parser_feed(os64_html_parser_t *p, const void *bytes, size_t l
         return OS64_HTML_BAD_ARGUMENT;
     p->moved = false;
     const unsigned char *s = bytes;
-    size_t left = p->opt.max_bytes - d->pub.input_bytes;
+    size_t left = p->cut ? 0 : p->opt.max_bytes - d->pub.input_bytes;
     size_t take = len < left ? len : left;
     /* Past the sniff window and not stopped, the bytes are parsed as they
      * come. */
@@ -899,6 +957,76 @@ os64_html_node_t *os64_html_parser_script(const os64_html_parser_t *p)
 {
     return p ? p->script : NULL;
 }
+/* `n` bytes of a write, at the insertion point, which moves past them. False,
+ * and the parse refused, when the heap has no room. */
+static bool written_insert(os64_html_parser_t *p, const char *s, size_t n)
+{
+    if (n > p->written_cap - p->written_len) {
+        size_t cap = p->written_cap ? p->written_cap : 256;
+        while (cap - p->written_len < n)
+            cap = cap > SIZE_MAX / 2 ? SIZE_MAX : cap * 2;
+        char *grown = os64_malloc(cap);
+        if (!grown) {
+            h_refuse(p, OS64_HTML_NO_MEMORY);
+            return false;
+        }
+        for (size_t i = 0; i < p->written_len; i++)
+            grown[i] = p->written[i];
+        os64_free(p->written);
+        p->written = grown;
+        p->written_cap = cap;
+    }
+    for (size_t i = p->written_len; i > p->insertion; i--)
+        p->written[i - 1 + n] = p->written[i - 1];
+    for (size_t i = 0; i < n; i++)
+        p->written[p->insertion + i] = s[i];
+    p->written_len += n;
+    p->insertion += n;
+    return true;
+}
+int64_t os64_html_parser_write(os64_html_parser_t *p, const char *utf8, size_t len)
+{
+    if (!p)
+        return OS64_HTML_NO_MEMORY;
+    HDoc *d = p->d;
+    if (d->pub.refusal)
+        return d->pub.refusal;
+    if (!p->script || (!utf8 && len))
+        return OS64_HTML_BAD_ARGUMENT;
+    if (!d_text_ok(utf8, len))
+        return OS64_HTML_BAD_TEXT;
+    /* Once the input is cut there is no room, and no second end either: a
+     * later write is ignored whole, and what was taken before the cut stands,
+     * script stops and all, wherever this writer's cursor happens to be. */
+    if (!len || p->cut)
+        return settle(p);
+    p->moved = false;
+    /* The first write of a run: its text goes just before the next input
+     * character, which is where the cursor is. */
+    if (!p->running) {
+        h_ref_set(p, &p->running, p->script);
+        p->insertion = p->written_at;
+    }
+    /* Written bytes are input, and `max_bytes` bounds them as it bounds fed
+     * ones: what fits is parsed, cut on a character, and the end of the input
+     * is met where the cut falls (end_at_cut). */
+    size_t left = p->opt.max_bytes - d->pub.input_bytes;
+    size_t take = len;
+    if (take > left) {
+        take = left;
+        while (take && ((unsigned char)utf8[take] & 0xc0) == 0x80)
+            take--;
+    }
+    if (take) {
+        if (!written_insert(p, utf8, take))
+            return d->pub.refusal;
+        d->pub.input_bytes += take;
+    }
+    if (take < len)
+        end_at_cut(p);
+    h_pump(p);
+    return settle(p);
+}
 int64_t os64_html_parser_resume(os64_html_parser_t *p)
 {
     if (!p)
@@ -908,6 +1036,15 @@ int64_t os64_html_parser_resume(os64_html_parser_t *p)
     if (!p->script)
         return OS64_HTML_BAD_ARGUMENT;
     p->moved = false;
+    /* The script that wrote is done. If what it wrote stopped the parse at a
+     * script of its own, that one is the next stop, and nothing more is
+     * parsed until it has run. */
+    if (p->running) {
+        bool found = p->script != p->running;
+        h_ref_set(p, &p->running, NULL);
+        if (found)
+            return settle(p);
+    }
     h_ref_set(p, &p->script, NULL);
     h_pump(p);
     return settle(p);
@@ -940,6 +1077,7 @@ static os64_html_document_t *release(os64_html_parser_t *p)
     h_ref_set(p, &p->head, NULL);
     h_ref_set(p, &p->form, NULL);
     h_ref_set(p, &p->script, NULL);
+    h_ref_set(p, &p->running, NULL);
     d_ref(d, &d->root, true, false);
     d_ref(d, &d->html, true, false);
     d->parser = NULL;
@@ -950,6 +1088,7 @@ static os64_html_document_t *release(os64_html_parser_t *p)
     for (size_t i = 0; i < H_ARRAY(buffers); i++)
         h_free(d, buffers[i]->s);
     hold_free(p);
+    written_free(p);
     h_free(d, p->stack.v);
     h_free(d, p->formatting.v);
     h_free(d, p->templates);
@@ -960,11 +1099,12 @@ os64_html_document_t *os64_html_parser_finish(os64_html_parser_t *p)
 {
     if (!p)
         return NULL;
-    /* The input has ended and finish does not stop: what is held is parsed
-     * straight through, a script in it included. */
+    /* The input has ended and finish does not stop: what is written and what
+     * is held are parsed straight through, a script in them included. */
     p->moved = false;
     p->ended = p->straight = true;
     h_ref_set(p, &p->script, NULL);
+    h_ref_set(p, &p->running, NULL);
     h_pump(p);
     settle(p);
     return release(p);

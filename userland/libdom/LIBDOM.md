@@ -7,7 +7,8 @@ surface; it neither parses JavaScript nor owns a browser loop.
 D5a built the document surface; D5b seated it in Yonder. D7a adds the
 EventTarget half of the DOM, HTML's event handlers and timers, and the asks a
 script makes of the page around it (§ Events, § Timers, § Asks). The browser
-loop that drives them is yonder's (DOM_D7.md); this library owns no loop.
+loop that drives them is yonder's (DOM_D7.md); this library owns no loop. D9
+adds `document.write`, which is the host's parser's (§ `document.write`).
 
 ## Ownership and calls
 
@@ -156,8 +157,7 @@ JavaScript exceptions follow the existing runtime outcome contract.
 Alert borrows normalized UTF-8 during a synchronous host callback. The host
 copies it if needed and does not enter a nested loop or JavaScript. Confirm
 returns false; prompt returns null. Cookies and the browser's script
-scheduling belong to later work (geometry is § Synchronous geometry); `document.write` and `writeln` throw
-`InvalidStateError` ("document.write is not supported yet") until D9.
+scheduling belong to later work (geometry is § Synchronous geometry).
 
 Listener records, handler text, timer records and their argument arrays, the
 event path of a dispatch and the started-script table are charged to the
@@ -307,14 +307,39 @@ binding marks it and tells the host through `options.script_connected`;
 moving a started script tells nobody. A host that sets no callback gets no
 notices and no marks.
 
+## `document.write`
+
+The host's `options.write` is the whole of this library's knowledge of
+parsing. `write` and `writeln` join their arguments, each converted as
+`String()` would and normalized as every other string the binding hands
+over (a NUL or a lone surrogate becomes U+FFFD), `writeln` adding a newline
+even with no arguments; the joined text is one allocation charged to the
+binding's budget, refused as `QuotaExceededError` before the host hears of
+it, and borrowed by the host for the call. The host answers libhtml's
+status. Only `OS64_HTML_BAD_ARGUMENT` — there is no insertion point: the
+parse has ended, or the caller is not the script the parse is stopped at —
+reaches the script, as `InvalidStateError` with one sentence: "document.write
+after the parse has ended would replace the document, which this browser
+does not do". Anything else, a refusal of the parse included, is the page's
+and not the script's, and `write` returns `undefined`. A host with no
+callback has no parser, and every write is that refusal.
+
+`document.open()` asks the host with an empty write and answers the
+document when there is an insertion point (an open over the running parser
+changes nothing); otherwise it throws the same `InvalidStateError`, since any
+other `open()` would make a new document. `document.close()` does nothing:
+it acts only on a parser `open()` made, and none is ever made. Which writes
+have an insertion point is the host's rule, not this library's (yonder's is
+DOM_D9.md's: only the script the parse is stopped at, while it runs).
+
 ## Proof boundary
 
 `tools/test_dom_host.sh` tests the actual target engine core and a separately
 ASan-instrumented target-profile engine, with sanitized bindings/tree/state.
 `tools/test_dom_events.inc` holds a case per rule of § Events, § Timers,
-§ Asks and § Script elements, and `tools/test_dom_mutants.py --events` a
-mutant per rule. `domtest` exercises the shared-library boundary and heap in
-ring 3. These are library proofs; yonder's loop is proven with its own
+§ Asks, § Script elements and § `document.write`, and
+`tools/test_dom_mutants.py --events` a mutant per rule. `domtest` exercises
+the shared-library boundary and heap in ring 3. These are library proofs; yonder's loop is proven with its own
 harness. Result counts are recorded in DOM.md after the final source freeze.
 
 D6 holds wrapper identity keys, query roots and cached query answers. A

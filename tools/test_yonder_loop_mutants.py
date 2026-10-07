@@ -152,6 +152,14 @@ mutants = [
     ('handler-runtime-at-its-event', SCRIPTS,
      '        if ((handler_types(s) & os64_dom_handler_bit(event->type)) == 0)\n            return OS64_JS_OK;',
      '        if (handler_types(s) == 0)\n            return OS64_JS_OK;', WINDOW),
+    # document.write (DOM_D9.md): only the script the parse is stopped at
+    # writes, and what it writes reaches the stream's parser and the audit.
+    ('write-while-blocking', SCRIPTS,
+     '    s->writing = true;\n    bool ran', '    bool ran', WINDOW),
+    ('write-only-while-blocking', SCRIPTS,
+     '    if (!s->writing || s->options.write == NULL)', '    if (s->options.write == NULL)', WINDOW),
+    ('write-counted-for-the-audit', SCRIPTS,
+     '    s->written += length;\n', '', WINDOW),
 ]
 
 caught, missed, unbuilt = [], [], []

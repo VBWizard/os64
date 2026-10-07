@@ -7,6 +7,7 @@
 #include "../userland/apps/yonder/yonder.c"
 #undef main
 #include "test_libflow_fonts.h"
+#include "../userland/libhtml/internal.h"
 #include "os64/conf.h"
 #include "os64/js_engine.h"
 os64_js_status_t __real_os64_js_create_with_teardown(const os64_js_config_t *,
@@ -27,9 +28,11 @@ static int64_t clock_us=10000000, clock_step, geometry_layout_delay;
 static bool geometry_refuse_layout;
 int64_t os64_micros(void) { return clock_us+=clock_step; }
 uint64_t os64_heap_verify(void) { return 0; }
+static char last_debug[256];
 static size_t teardown_log_count;
 static char teardown_log[OS64_JS_SOURCE_NAME_CAP + 128];
 void os64_debug_log(const char *text) {
+    snprintf(last_debug,sizeof(last_debug),"%s",text);
     if (strstr(text, "reclaimed JavaScript teardown leak") != NULL) {
         teardown_log_count++;
         os64_strcopy(teardown_log, sizeof(teardown_log), text);
@@ -1674,6 +1677,118 @@ static void loop_typed_value(void) {
     check(probe_text_is("out","field=Q"),"loop: a timer reads what a person typed into an arrived page's field");
     loop_drop();
 }
+/* ── DOCUMENT.WRITE (docs/design/pending/DOM_D9.md) ─────────────────── */
+/* An element of the page still arriving, by id. */
+static const os64_html_node_t *stream_id(const char *id) {
+    const os64_html_document_t *doc=os64_html_parser_document(g.stream.parser);
+    for (const os64_html_node_t *n=doc->document;n;n=next_within(n,doc->document)) {
+        const os64_html_attr_t *a=os64_html_attr(n,"id");
+        if(a && os64_streq(a->value,id)) return n;
+    }
+    return NULL;
+}
+static void loop_write_order(void) {
+    loop_page("<html><head><script>document.write('<p id=written>from the head</p>');</script></head>"
+        "<body><p id=own>the body's own</p></body></html>");
+    check(loop_settle() && g.page.tree!=NULL,"write: a page whose head script writes arrives");
+    const os64_html_node_t *written=probe_id("written"),*own=probe_id("own");
+    check(written && own && written->parent==own->parent && written->next==own,
+        "write: the written paragraph is in the arrived tree, before the body's own");
+    loop_drop();
+    loop_page("<p id=out>start</p><script>document.write('<script>document.write(\"<b id=inner>inner</b>\")</scr'+'ipt>after');"
+        "document.write(' and later');</script><i id=tail>tail</i>");
+    check(loop_settle() && g.page.tree!=NULL,"write: a page whose written script writes arrives");
+    const os64_html_node_t *inner=probe_id("inner"),*tail=probe_id("tail");
+    check(inner && tail && inner->next && inner->next->kind==OS64_HTML_TEXT &&
+        !strcmp(inner->next->text,"after and later") && inner->next->next==tail,
+        "write: the written script's text lands before the text after it, the writer's later text behind");
+    loop_drop();
+}
+static void loop_write_src(void) {
+    loop_page("<p id=out>start</p><script>document.write('<script src=\"written.js\"></scr'+'ipt>');</script>"
+        "<p id=after>after</p>");
+    check(loop_settle() && g.stream.stopped && nscript_jobs==1 && stream_id("after")==NULL,
+        "write: a written src script is fetched, and the parse waits for it");
+    check(script_land("/written.js","document.getElementById('out').textContent='ran '+(document.getElementById('after')===null)"),
+        "write: its fetch was out");
+    check(loop_settle() && g.page.tree!=NULL && probe_text_is("out","ran true"),
+        "write: it runs before the parser goes on");
+    loop_drop();
+}
+static void loop_write_refused(void) {
+    /* A timer of the arriving page has no insertion point. */
+    loop_page("<p id=out>-</p><script>setTimeout(function(){try{document.write('<b>timer</b>');"
+        "document.getElementById('out').textContent='wrote'}catch(e){document.getElementById('out').textContent=e.name}},0);</script>"
+        "<script src=slow.js></script><p id=tail>tail</p>");
+    check(loop_settle() && g.stream.stopped,"write: stopped at a script whose fetch is out");
+    now_ms+=10;
+    loop_settle();
+    check(script_land("/slow.js","1") && loop_settle() && g.page.tree!=NULL,"write: the page arrives");
+    check(probe_text_is("out","InvalidStateError") && probe_id("tail")!=NULL,
+        "write: from a timer of the arriving page, refused, and the parse unharmed");
+    loop_drop();
+    /* The shown page has no parser at all. */
+    os64_js_outcome_t out;
+    os64_dom_event_t click={.type="click",.bubbles=true,.cancelable=true};
+    probe_page("<p id=late>-</p><script>window.onclick=function(){try{document.write('x')}catch(e){"
+        "document.getElementById('late').textContent=e.name}}</script>",true);
+    script_turn();
+    yonder_scripts_dispatch(g.page.scripts,NULL,&click,NULL,&out);
+    script_rebuild();
+    check(probe_text_is("late","InvalidStateError"),"write: from the shown page, refused");
+    probe_drop();
+}
+static void loop_write_byte_cut(void) {
+    loop_page("<p id=out>before</p><script>document.write('abcdef');</script>"
+        "<b id=held>held tail</b><script>document.getElementById('out').textContent='later ran'</script>");
+    stream_turn();
+    check(g.stream.stopped && g.stream.parser!=NULL,"write cut: stopped before the truncated write");
+    g.stream.parser->opt.max_bytes=os64_html_parser_document(g.stream.parser)->input_bytes+3;
+    check(loop_settle() && g.page.tree!=NULL,"write cut: the byte-cut page arrives");
+    check(probe_text_is("out","before") && probe_id("held")==NULL,
+        "write cut: nothing behind the cut is built, and its later script never runs");
+    loop_drop();
+}
+static void loop_write_cut(void) {
+    loop_page("<p id=out>before</p><script>document.write('<div>'.repeat(600)+'deep');</script><p>tail</p>");
+    check(loop_settle() && g.page.tree!=NULL,"write: a write past the depth limit still lets the page arrive");
+    check(probe_text_is("out","before") && strstr(g.status_text,"bigger than this browser will parse (OS64_HTML_TOO_DEEP)")!=NULL,
+        "write: the page arrives as far as it came, with the parser's sentence");
+    loop_drop();
+}
+static void loop_write_audit(void) {
+    s_script_audit=true;
+    loop_page("<script>document.write('<p>12345</p>');</script>");
+    stream_turn();
+    stream_turn();
+    check(strstr(last_debug,"wrote 12 bytes")!=NULL,"write: the audit line counts what a task wrote");
+    loop_settle();
+    s_script_audit=false;
+    loop_drop();
+}
+static void loop_write_teardown(void) {
+    /* Written text pending behind a written script whose fetch never comes. */
+    const char *page="<script>document.write('<script src=\"never.js\"></scr'+'ipt><p>pending</p>');"
+        "document.write('<p>more pending</p>');</script><p>x</p>";
+    for(int how=0;how<3;how++) {
+        loop_page(page);
+        check(loop_settle() && g.stream.stopped && nscript_jobs==1 && stream_id("x")==NULL,
+            "write: stopped at a written script, with written text pending behind it");
+        if(how==0) click_stop(NULL,NULL);
+        else if(how==1) settings_use(YONDER_AGENT,false,5);
+        if(how<2) check(!g.stream.active,"write: the page is let go with its written text");
+        loop_drop();
+    }
+}
+static void loop_write_cases(void) {
+    loop_write_order();
+    loop_write_src();
+    loop_write_refused();
+    loop_write_cut();
+    loop_write_byte_cut();
+    loop_write_audit();
+    loop_write_teardown();
+}
 static void loop_downgrade(void) {
     probe_page("<p id=out>secure</p><script>location.href='http://insecure.test/';</script>",true);
     script_turn();
@@ -1857,6 +1972,7 @@ static void loop_cases(void) {
     loop_teardown();
     loop_limit();
     loop_local_file();
+    loop_write_cases();
 }
 static void stream_cases(void) {
     stream_captures_mode();

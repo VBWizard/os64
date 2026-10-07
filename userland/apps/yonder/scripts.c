@@ -59,6 +59,10 @@ struct yonder_scripts {
     uint32_t defer_next;            // the next `defer` item to consider, by index
     uint32_t inline_count;          // names an inline script: #inline-<n>
     uint64_t tasks;
+    // The blocking script is running: its document.write reaches the
+    // parser. `written` is what the last task handed over, for the audit.
+    bool writing;
+    uint64_t written;
     // Which types the document's on<type> attributes name, at the tree
     // version it was last looked at: a page whose only script is a handler
     // attribute has no runtime until an event one of them names.
@@ -137,6 +141,18 @@ static void activate(void *opaque, const os64_html_node_t *node, os64_dom_activa
         s->options.activate(s->options.opaque, node, what);
 }
 
+// document.write from the page's binding. Only the script the parse is
+// stopped at has an insertion point; a listener, a timer or a script that
+// did not stop the parse has none, as HTML's would open a new document.
+static int64_t write(void *opaque, const char *utf8, size_t length)
+{
+    yonder_scripts_t *s = opaque;
+    if (!s->writing || s->options.write == NULL)
+        return OS64_HTML_BAD_ARGUMENT;
+    s->written += length;
+    return s->options.write(s->options.opaque, utf8, length);
+}
+
 static uint64_t now_ms(void *opaque)
 {
     yonder_scripts_t *s = opaque;
@@ -167,6 +183,7 @@ static bool ensure_runtime(yonder_scripts_t *s, os64_js_outcome_t *out)
     options.now_ms = now_ms;
     options.script_connected = connected;
     options.activate = activate;
+    options.write = write;
     options.host_opaque = s;
     s->dom = os64_dom_create(s->runtime, s->doc, s->state, &options, out);
     os64_dom_set_geometry(s->dom, s->geometry, s->geometry_opaque);
@@ -380,6 +397,7 @@ bool yonder_scripts_blocking_ready(const yonder_scripts_t *s)
 static bool run_item(yonder_scripts_t *s, uint32_t index, os64_js_outcome_t *out)
 {
     os64_memset(out, 0, sizeof(*out));
+    s->written = 0;
     Item *it = &s->items[index];
     const os64_html_node_t *root = it->node;
     while (root->parent != NULL)
@@ -421,7 +439,10 @@ bool yonder_scripts_run_blocking(yonder_scripts_t *s, os64_js_outcome_t *out)
         return false;
     uint32_t index = (uint32_t)s->blocking;
     s->blocking = -1;
-    return run_item(s, index, out);
+    s->writing = true;
+    bool ran = run_item(s, index, out);
+    s->writing = false;
+    return ran;
 }
 
 void yonder_scripts_parse_ended(yonder_scripts_t *s)
@@ -561,6 +582,7 @@ os64_js_status_t yonder_scripts_dispatch(yonder_scripts_t *s, const os64_html_no
         *prevented = false;
     if (s == NULL || s->dead)
         return OS64_JS_OK;
+    s->written = 0;
     // A page that never ran a script still runs its handler attributes:
     // their runtime is made by the first event one of them names.
     if (s->dom == NULL) {
@@ -605,6 +627,8 @@ uint64_t yonder_scripts_timer_next(const yonder_scripts_t *s)
 bool yonder_scripts_timer_fire(yonder_scripts_t *s, uint64_t now, os64_js_outcome_t *out)
 {
     os64_memset(out, 0, sizeof(*out));
+    if (s != NULL)
+        s->written = 0;
     if (s == NULL || s->dead || !os64_dom_timer_fire(s->dom, now, out))
         return false;
     judged(s, out);
@@ -640,6 +664,11 @@ bool yonder_scripts_alive(const yonder_scripts_t *s)
 uint64_t yonder_scripts_tasks(const yonder_scripts_t *s)
 {
     return s != NULL ? s->tasks : 0;
+}
+
+uint64_t yonder_scripts_written(const yonder_scripts_t *s)
+{
+    return s != NULL ? s->written : 0;
 }
 
 uint64_t yonder_scripts_serial(const yonder_scripts_t *s)

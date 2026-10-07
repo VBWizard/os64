@@ -186,6 +186,25 @@
     "skip": {},
     "total": 26
   },
+  "tree/scripted/adoption01.dat": {
+    "run": 0,
+    "skip": {
+      "script-not-document-write": 1
+    },
+    "total": 1
+  },
+  "tree/scripted/ark.dat": {
+    "run": 0,
+    "skip": {
+      "script-not-document-write": 1
+    },
+    "total": 1
+  },
+  "tree/scripted/webkit01.dat": {
+    "run": 2,
+    "skip": {},
+    "total": 2
+  },
   "tree/search-element.dat": {
     "run": 3,
     "skip": {},

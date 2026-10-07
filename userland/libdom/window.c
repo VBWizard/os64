@@ -66,8 +66,61 @@ static bool resolve(os64_dom_t *dom, const char *reference, char *out, size_t ca
 enum {
     L_HREF, L_PROTOCOL, L_HOST, L_HOSTNAME, L_PORT, L_PATHNAME, L_SEARCH, L_HASH, L_ORIGIN,
     L_ASSIGN, L_REPLACE, L_RELOAD, L_TO_STRING,
-    H_BACK, H_FORWARD, H_GO, H_LENGTH, W_STATUS, W_WRITE
+    H_BACK, H_FORWARD, H_GO, H_LENGTH, W_STATUS, W_WRITE, W_WRITELN, W_OPEN, W_CLOSE
 };
+
+/* document.write is the host's parser taking the text (LIBDOM.md
+ * § document.write): the binding joins the arguments, the host's `write`
+ * answers libhtml's status, and that answer is all the binding knows of
+ * parsing. A refusal of the parse is the page's and not the script's; only
+ * "there is no insertion point" throws. */
+#define WRITE_ENDED "document.write after the parse has ended would replace the document, which this browser does not do"
+
+static int64_t host_write(os64_dom_t *dom, const char *utf8, size_t length)
+{
+    return dom->options.write != NULL ? dom->options.write(dom->options.host_opaque, utf8, length)
+                                      : OS64_HTML_BAD_ARGUMENT;
+}
+
+static JSValue document_write(os64_dom_t *dom, JSContext *ctx, int argc, JSValueConst *argv, bool line)
+{
+    DString *parts = argc > 0 ? d_alloc(dom, sizeof(*parts) * (size_t)argc) : NULL;
+    if (argc > 0 && parts == NULL) return d_error(ctx, "QuotaExceededError", "document.write quota exceeded");
+    size_t length = line ? 1 : 0;
+    int done = 0;
+    bool ok = true;
+    for (; done < argc && ok; done++) {
+        ok = d_string(dom, ctx, argv[done], &parts[done]);
+        if (ok && parts[done].length > SIZE_MAX - 1 - length) {
+            d_string_free(dom, &parts[done]);
+            d_error(ctx, "QuotaExceededError", "document.write quota exceeded");
+            ok = false;
+        }
+        if (ok) length += parts[done].length;
+    }
+    if (!ok) done--;
+    char *text = ok ? d_alloc(dom, length + 1) : NULL;
+    if (ok && text == NULL) {
+        d_error(ctx, "QuotaExceededError", "document.write quota exceeded");
+        ok = false;
+    }
+    if (ok) {
+        size_t at = 0;
+        for (int i = 0; i < argc; i++) {
+            os64_memcpy(text + at, parts[i].data, parts[i].length);
+            at += parts[i].length;
+        }
+        if (line) text[at++] = '\n';
+        text[at] = '\0';
+    }
+    for (int i = 0; i < done; i++) d_string_free(dom, &parts[i]);
+    d_free(dom, parts);
+    if (!ok) return JS_EXCEPTION;
+    int64_t status = host_write(dom, text, length);
+    d_free(dom, text);
+    if (status == OS64_HTML_BAD_ARGUMENT) return d_error(ctx, "InvalidStateError", WRITE_ENDED);
+    return JS_UNDEFINED;
+}
 
 /* The page's address taken apart for location's readers. The parser drops
  * a fragment and keeps the query in the path; location splits them. */
@@ -141,7 +194,6 @@ static JSValue ask_url(os64_dom_t *dom, JSContext *ctx, os64_dom_navigation_kind
 static JSValue window_member(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv,
                              int magic, JSValue *data)
 {
-    (void)self;
     os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
     if (dom == NULL) return JS_EXCEPTION;
     bool set = (magic & D_SET) != 0;
@@ -175,8 +227,18 @@ static JSValue window_member(JSContext *ctx, JSValueConst self, int argc, JSValu
         /* The status line is the browser's; the old web assigns window.status
          * on every mouseover and expects no complaint. */
         return set ? JS_UNDEFINED : JS_NewString(ctx, "");
-    case W_WRITE:
-        return d_error(ctx, "InvalidStateError", "document.write is not supported yet");
+    case W_WRITE: case W_WRITELN:
+        return document_write(dom, ctx, argc, argv, magic == W_WRITELN);
+    case W_OPEN:
+        /* open() over the parser that is running answers the document and
+         * changes nothing; any other open() would make a new document. An
+         * empty write asks the host whether there is an insertion point. */
+        if (host_write(dom, "", 0) == OS64_HTML_BAD_ARGUMENT)
+            return d_error(ctx, "InvalidStateError", WRITE_ENDED);
+        return JS_DupValue(ctx, self);
+    case W_CLOSE:
+        /* close() acts only on a parser open() created, and none is. */
+        return JS_UNDEFINED;
     default: return JS_ThrowTypeError(ctx, "Unknown window member");
     }
 }
@@ -431,7 +493,9 @@ int d_window_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
         d_accessor(dom, ctx, global, "status", window_member, W_STATUS, true) < 0 ||
         d_accessor(dom, ctx, global, "defaultStatus", window_member, W_STATUS, true) < 0 ||
         d_method(dom, ctx, document_prototype, "write", window_member, 1, W_WRITE) < 0 ||
-        d_method(dom, ctx, document_prototype, "writeln", window_member, 1, W_WRITE) < 0 ||
+        d_method(dom, ctx, document_prototype, "writeln", window_member, 1, W_WRITELN) < 0 ||
+        d_method(dom, ctx, document_prototype, "open", window_member, 0, W_OPEN) < 0 ||
+        d_method(dom, ctx, document_prototype, "close", window_member, 0, W_CLOSE) < 0 ||
         d_method(dom, ctx, element_prototype, "click", element_method, 0, A_CLICK) < 0 ||
         d_method(dom, ctx, element_prototype, "focus", element_method, 0, A_FOCUS) < 0 ||
         d_method(dom, ctx, element_prototype, "blur", element_method, 0, A_BLUR) < 0 ||

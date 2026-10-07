@@ -151,6 +151,32 @@ void os64_html_document_free(os64_html_document_t *doc);
  * built, to be freed like any other. (`destroy` frees the document with the
  * parser, which is right when nothing can be pointing into it.)
  *
+ * `write` IS document.write (docs/design/pending/DOM_D9.md). The host
+ * calls it for the script the parse is stopped at, while that script runs
+ * (which caller is writing is the host's to know; the parser knows only
+ * that it is stopped). `len` bytes of UTF-8 go into the input just before
+ * its next character and are parsed at once, as far as that point and no
+ * further. The script's next write goes after everything it has written,
+ * however the bytes around it were cut.
+ * A script it wrote stops the parse as one fed would: the call answers
+ * OS64_HTML_SCRIPT and `os64_html_parser_script` names the new one, and
+ * the writer's later writes wait behind it. `resume` then means "the
+ * script that was running is done": if what it wrote stopped the parse, it
+ * answers OS64_HTML_SCRIPT at once and parses nothing, so the host runs
+ * that script next, and its own writes go just after it. Written text is
+ * INPUT and not tree: it is kept on the heap and counted against
+ * `max_bytes`, which ends the input where it falls as it does for fed
+ * bytes (a write is cut there on a character, not a byte): whatever was
+ * waiting behind the cut is dropped unparsed, and nothing fed or written
+ * after it is taken, a script before it still stops the parse; it moves the
+ * version as any parsing call does, and an empty write changes nothing. A write that
+ * is not UTF-8 or holds a NUL is OS64_HTML_BAD_TEXT and nothing of it is
+ * parsed. A write when the parse is not stopped at a script (before the
+ * first stop, after a `resume` or an `end` that answered OK) is
+ * OS64_HTML_BAD_ARGUMENT and changes nothing. A refusal met while parsing
+ * it is the parse's, as for `feed`.
+ * `finish` parses what was written with the rest; `abandon` frees it.
+ *
  * BETWEEN TWO CALLS THE TREE IS A DOCUMENT. `os64_html_parser_document`
  * answers it, the same one `finish` will hand over. It can be read, pinned
  * and changed with the verbs at the foot of this file, with one
@@ -176,6 +202,7 @@ void os64_html_document_free(os64_html_document_t *doc);
  * first of each. */
 os64_html_node_t *os64_html_parser_script(const os64_html_parser_t *p);
 int64_t os64_html_parser_resume(os64_html_parser_t *p);
+int64_t os64_html_parser_write(os64_html_parser_t *p, const char *utf8, size_t len);
 int64_t os64_html_parser_end(os64_html_parser_t *p);
 os64_html_document_t *os64_html_parser_document(os64_html_parser_t *p);
 os64_html_document_t *os64_html_parser_abandon(os64_html_parser_t *p);

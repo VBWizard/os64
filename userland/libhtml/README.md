@@ -45,8 +45,12 @@ os64_html_document_t *doc = os64_html_parser_finish(p);
 
 Between two calls the tree is a document: it can be read, pinned and changed
 with the verbs. A page left mid-load keeps what was built with
-`os64_html_parser_abandon(p)`. The contract is in `html.h` under THE PARSE
-THAT STOPS.
+`os64_html_parser_abandon(p)`. While the script the parse is stopped at runs,
+`os64_html_parser_write(p, utf8, len)` is its `document.write`: the text goes
+into the input just before the next character and is parsed at once, and a
+script it contains stops the parse, the next `resume` answering
+`OS64_HTML_SCRIPT` for it. The contract is in `html.h` under THE PARSE THAT
+STOPS.
 
 Nodes and attributes are read-only views. A document is changed
 through the verbs at the foot of `html.h` (create, insert, replace, remove,
@@ -55,8 +59,8 @@ is [DOM.md](../../docs/design/pending/DOM.md). Elements made by formatting
 reconstruction share one list of attribute records, so a verb copies an
 element's list before it first changes it. A document owns the
 allocation ledger; scratch buffers are charged to the same budget and released
-on finish. (Input held while a parse is stopped is the heap's: `max_bytes`
-bounds it.) Document-parser node/string storage uses geometric arena chunks;
+on finish. (Input held while a parse is stopped, and text a script writes,
+are the heap's: `max_bytes` bounds both.) Document-parser node/string storage uses geometric arena chunks;
 reclaimed node bodies are reused, while those chunks remain charged.
 Fragment results use individually reclaimable ledger blocks, described below. A parser
 needs serialized calls, and so do a document's verbs; distinct documents
@@ -76,7 +80,8 @@ Document teardown rejects outstanding node holds and snapshot pins;
 consumers must release their references before freeing the document.
 
 `core.c` owns allocations, pins and retirement, topology primitives, limits,
-and the parsing API, with the stop at a script and the input held meanwhile.
+and the parsing API, with the stop at a script, the input held meanwhile and
+the text a script writes.
 `dom.c` holds the verbs that change a document, and the rules the parser
 keeps once a verb has moved a node under it.
 `encoding.c` selects/decodes the byte stream and preprocesses newlines.
@@ -182,7 +187,12 @@ with scripting off and on, chunking, every byte prefix, heap failure points,
 topology/UTF-8, encoding, resource refusals, saved trees, a 30-second mutation
 pass, and the parse that stops: each call's contract by hand, a parser
 abandoned at every stop, and random verbs run at every stop of random
-documents (`html_driver --checks <walks> [first]` runs more of those, or one). It does not fetch
+documents (`html_driver --checks <walks> [first]` runs more of those, or one).
+html5lib's `tree-construction/scripted/` cases run their scripts: those that
+are `document.write` of string literals are written in each script's place,
+whole, a byte at a time and in random pieces, and the rest are listed in
+`SKIPS.tsv` by name. `tools/test_html_write_mutants.py` breaks each rule of
+`write` in turn and requires the hand cases to notice. It does not fetch
 network resources or update expected results. `HTML_FUZZ_SECONDS` selects a
 longer fuzz budget. `tools/update_html_fixtures.py` and
 `tools/update_html_corpus.py` are explicit refresh commands; review their inputs

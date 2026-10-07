@@ -27,7 +27,7 @@ static void step(uint64_t *steps)
 
 /* UTF-8 as the Encoding Standard decodes it, and no NUL: what every string
  * already in the tree is, so that each is also a C string. */
-static bool text_ok(const char *s, size_t n)
+bool d_text_ok(const char *s, size_t n)
 {
     const unsigned char *u = (const unsigned char *)s;
     for (size_t i = 0; i < n;) {
@@ -54,7 +54,7 @@ static bool text_ok(const char *s, size_t n)
 }
 
 /* Whether the C string `held` is exactly the `n` bytes at `s`, which hold no
- * NUL (text_ok). A held string that is NULL is the empty one. */
+ * NUL (d_text_ok). A held string that is NULL is the empty one. */
 static bool same_bytes(const char *held, const char *s, size_t n)
 {
     if (!held)
@@ -829,7 +829,7 @@ os64_html_node_t *os64_html_create_element(os64_html_document_t *doc, os64_html_
         say(status, OS64_HTML_BAD_ARGUMENT);
         return NULL;
     }
-    if (!text_ok(name, len)) {
+    if (!d_text_ok(name, len)) {
         say(status, OS64_HTML_BAD_TEXT);
         return NULL;
     }
@@ -858,7 +858,7 @@ static HNode *data_new(os64_html_document_t *doc, os64_html_node_kind_t kind, co
         say(status, OS64_HTML_BAD_ARGUMENT);
         return NULL;
     }
-    if (!text_ok(utf8, len)) {
+    if (!d_text_ok(utf8, len)) {
         say(status, OS64_HTML_BAD_TEXT);
         return NULL;
     }
@@ -1039,8 +1039,8 @@ int64_t os64_html_set_attrs(os64_html_document_t *doc, HNode *e,
         const os64_html_attr_change_t *c = &changes[i];
         if (!c->name || !*c->name || (!c->remove && !c->value && c->value_len))
             return OS64_HTML_BAD_ARGUMENT;
-        if (!text_ok(c->name, h_len(c->name)) ||
-            (!c->remove && !text_ok(c->value, c->value_len)))
+        if (!d_text_ok(c->name, h_len(c->name)) ||
+            (!c->remove && !d_text_ok(c->value, c->value_len)))
             return OS64_HTML_BAD_TEXT;
         const HAttr *a = *attr_slot(e, c->name);
         effective |= c->remove ? a != NULL : !a || !same_bytes(a->value, c->value, c->value_len);
@@ -1104,7 +1104,7 @@ int64_t os64_html_set_attr(os64_html_document_t *doc, HNode *e, const char *name
     HDoc *d = (HDoc *)doc;
     if (!d || !e || !ours(d, e) || e->kind != ELEMENT || !name || !*name || (!value && value_len))
         return OS64_HTML_BAD_ARGUMENT;
-    if (!text_ok(name, h_len(name)) || !text_ok(value, value_len))
+    if (!d_text_ok(name, h_len(name)) || !d_text_ok(value, value_len))
         return OS64_HTML_BAD_TEXT;
     const HAttr *existing = *attr_slot(e, name);
     /* The value it has already: no string a reader holds is replaced, and
@@ -1158,7 +1158,7 @@ int64_t os64_html_set_text(os64_html_document_t *doc, HNode *n, const char *utf8
     HDoc *d = (HDoc *)doc;
     if (!d || !n || !ours(d, n) || (n->kind != TEXT && n->kind != COMMENT) || (!utf8 && len))
         return OS64_HTML_BAD_ARGUMENT;
-    if (!text_ok(utf8, len))
+    if (!d_text_ok(utf8, len))
         return OS64_HTML_BAD_TEXT;
     /* The text it has already: as in set_attr, nothing is replaced. */
     if (same_bytes(n->text, utf8, len))

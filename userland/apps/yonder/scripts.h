@@ -27,6 +27,11 @@ typedef struct {
                       const char *fallback);
     void (*cancel)(void *opaque, uint64_t job);
     void (*activate)(void *opaque, const os64_html_node_t *node, os64_dom_activation_t what);
+    // document.write: the stream's parser takes the text (os64_html_parser_
+    // write) and answers its status. Asked only while the script the parse
+    // is stopped at runs; any other write is OS64_HTML_BAD_ARGUMENT without
+    // asking.
+    int64_t (*write)(void *opaque, const char *utf8, size_t length);
     uint64_t (*now_ms)(void *opaque);
     void *opaque;
 } yonder_scripts_options_t;
@@ -60,8 +65,9 @@ yonder_stop_t yonder_scripts_parser_stop(yonder_scripts_t *scripts, os64_html_no
 // Whether the script the parse is stopped at can run now: its source is in
 // hand, or its fetch failed (it is then skipped).
 bool yonder_scripts_blocking_ready(const yonder_scripts_t *scripts);
-// Runs the script the parse is stopped at (one task). False when there is
-// none to run; a failed fetch is said in the outcome and runs nothing.
+// Runs the script the parse is stopped at (one task), the one task whose
+// document.write reaches the parser. False when there is none to run; a
+// failed fetch is said in the outcome and runs nothing.
 bool yonder_scripts_run_blocking(yonder_scripts_t *scripts, os64_js_outcome_t *outcome);
 
 // The parse has ended (`os64_html_parser_end` answered OK): the `defer`
@@ -116,5 +122,7 @@ bool yonder_scripts_alive(const yonder_scripts_t *scripts);
 uint64_t yonder_scripts_serial(const yonder_scripts_t *scripts);
 // How many tasks this host has run: the audit's count.
 uint64_t yonder_scripts_tasks(const yonder_scripts_t *scripts);
+// How many bytes the last task handed to document.write: the audit's too.
+uint64_t yonder_scripts_written(const yonder_scripts_t *scripts);
 
 #endif

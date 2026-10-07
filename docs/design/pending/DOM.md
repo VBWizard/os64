@@ -2,7 +2,8 @@
 
 *Written 2026-10-01 by Fable. This is packet D0 of
 [JAVASCRIPT_TASKS.md](JAVASCRIPT_TASKS.md): the design J3 waits on. D1, D2a, D2b, D3, D5a, D5b and D6 are merged (§ Slices). D4 is built and in review;
-D7 is designed in [DOM_D7.md](DOM_D7.md) and built in two halves, D7a and D7b. Read
+D7 is designed in [DOM_D7.md](DOM_D7.md) and built in two halves, D7a and D7b; D9
+is designed in [DOM_D9.md](DOM_D9.md) and built. Read
 against the tree at `b55c3770`, the vendored QuickJS 2026-06-04 source
 (`userland/libjs/upstream/`) and the R0 runtime contract
 (`userland/libjs/CONTRACT.md`). Names of functions that do not exist yet
@@ -720,7 +721,8 @@ builder decides, and the proof in this house's shape.
 | D5 | **D5a merged (#214, `72b2e710`); D5b merged (#216, `7acce890`).** The binding library and J3's fixture | § D5a, as built records library host/guest proof. § D5b, as built records J3 fixture proof: a script changes text and the page redraws; a held reference and a typed-in field survive an unrelated change; a navigation with a script queued tears down clean; the leak count is zero |
 | D6 | **Implemented; awaiting Fable re-review in PR #217 against userland.** Reclaiming unheld detached subtrees | 216,000 packed-fragment refresh cycles stay flat under 64 MiB; § D6, as built |
 | D7 | The loop: tasks, checkpoints, timers, events and their attributes, script order. Designed in [DOM_D7.md](DOM_D7.md); **D7a (the registry and the turn) and D7b (the loop, with D7c's input events) built** | § D7a, as built; § D7b, as built |
-| later | `document.write`; geometry; the libjs reclaim slice | each with its own |
+| D9 | `document.write`: libhtml's `os64_html_parser_write`, libdom's `write`/`writeln`/`open`/`close`, the blocking script's writes reaching yonder's stream. Designed in [DOM_D9.md](DOM_D9.md); **built** | § D9, as built |
+| later | geometry; the libjs reclaim slice | each with its own |
 
 ### D1, as built
 
@@ -2255,6 +2257,113 @@ it, one CONTRACT.md, and the joined proof.
 | Inline script source captured once, at prepare | HTML's rule; a script whose text is changed after it is connected runs what it had then | none expected |
 | `location.hash` reads the old fragment after a fragment-only assignment | the document's URL is set when it is made, and a hash scroll does not change it | a page that reads `location.hash` back after setting it |
 
+### D9, as built
+
+Built by Opus on `fable/dom-d9`, stacked on D7b, from
+[DOM_D9.md](DOM_D9.md), which is the design and is not repeated here. The
+order argument there is what was built: a written script runs after its
+writer's task, from the parse's next stop, with the input in the standard's
+order.
+
+**The three halves.** libhtml's `os64_html_parser_write` (core.c; the
+contract in `html.h` under THE PARSE THAT STOPS). libdom's `write`,
+`writeln`, `open` and `close` over a new `options.write` (window.c;
+LIBDOM.md § `document.write`). In yonder, the script host lets the blocking
+script's task write (a `writing` flag around `run_blocking`, scripts.c) and
+`script_write` hands the text to the stream's parser (yonder.c); everything
+after the task is D7's protocol unchanged: `resume` answers the written
+script as the next stop and `stream_stop` registers it. The audit line of a
+task ends `wrote N bytes`.
+
+**What the design left to the builder, and what was decided:**
+
+- **`running` is a parser reference** (`h_ref_set`), as `script` is, so the
+  node it names cannot be reclaimed while the parser compares it with the
+  stop; `finish` and the parser's release drop it.
+- **The written text is one heap buffer**, the insertion a move of what lies
+  past it, freed (the insertion with it) when the cursor reaches its end, as
+  the hold is.
+- **A write past `max_bytes` is cut, not refused.** What fits is kept, cut on
+  a character boundary, and the end of the input falls where the cut does,
+  as for fed bytes: the TOO_LARGE refusal, `truncated` set, arrives from the
+  call that parses to the cut — normally the host's `resume` after the task
+  — while the write itself answers `OS64_HTML_SCRIPT` and the script runs on.
+  This is the design's "the `cut` rule and the TOO_LARGE refusal are the
+  same ones" taken literally; its hand case "a write past `max_bytes`
+  refused as TOO_LARGE" holds in that form.
+- **An empty write changes nothing**: it answers the parser's status and does
+  not make the script `running`, so `open()`'s question cannot move the
+  insertion point.
+- **`open()` asks with an empty write**, not a second callback.
+- **A written character's diagnostic offset** is the input's byte position at
+  the point it went in (`parsed`).
+- **The UTF-8 rule is shared**: the verbs' `text_ok` became `d_text_ok`, the
+  one rule for text a verb puts in the tree and text a script writes.
+- **`script_write` also checks** that the host's document is the one the
+  stream is parsing, beside the host's own `writing` gate.
+- **The corpus.** `update_html_fixtures.py` pins
+  `tree-construction/scripted/` at the commit the rest is pinned at, as
+  `tree/scripted/` (every existing fixture came back byte-identical).
+  html_reference.py marks those cases as ones whose scripts run and judges
+  each script from the EXPECTED tree, where written scripts appear too; the
+  driver's interpreter reads `document.write(` string literals joined by `+`
+  `)`, because webkit01's second case is spelled that way. adoption01 and
+  ark run DOM verbs, not `document.write`, and are listed in `SKIPS.tsv` as
+  `script-not-document-write`.
+- **D7b's two rows** in the general booked table below (the script time
+  limit and libui's change callback, both with the trigger "D7") were paid
+  by D7b and are struck here.
+
+**Proof.**
+
+- `tools/test_html_host.sh`: the driver's checks **1,250 / 0**, the 32 write
+  cases among them (one per rule of DOM_D9.md § The proof, each written page
+  compared with the same text parsed whole with the writes spliced in); the
+  reference corpus **10,531 runs, 0 failed**, `written=6` (webkit01's two
+  cases, whole, a byte at a time and in random pieces), 6 skipped; safety,
+  fragments and the 30-second fuzz unchanged in shape and green.
+- `tools/test_html_write_mutants.py`: **16 / 16** caught — the pump's
+  insertion bound and its stop at the writer, the insertion's advance and
+  its start at the cursor, `resume` ending the run and answering the
+  written script first, the BAD_ARGUMENT and BAD_TEXT guards, the byte
+  count, the cut and its character boundary, the version move, the buffer
+  freed when read and at release, `finish` reading all of it, and the
+  four-byte decode. The first run let the version mutant survive (a feed
+  before the write had already reset the flag it needed) and found that the
+  run that never ends hangs rather than fails; both are closed.
+- `tools/test_dom_host.sh`: **2,101 / 0** and **9,649 / 0**, with `write`'s
+  allocation sweep; `tools/test_dom_mutants.py --events`: **53 / 53**, D7a's
+  write mutant replaced by seven for D9's rules.
+- `tools/test_yonder_scripts_host.sh`: **2,209 / 0** under LSan (the stream's
+  cases: a head script's paragraph before the body's own, a written `src`
+  script fetched and run before the parse goes on, a written script's write
+  before its writer's next, a timer's and the shown page's writes refused, a
+  write past the depth limit arriving with the parser's sentence, the audit's
+  byte count, and Stop, the switch and the close with written text pending);
+  `tools/test_yonder_loop_mutants.py`: **34 / 34**, D7b's 31 and three for
+  D9 (only the blocking script writes, nothing else reaches the parser, and
+  the audit counts what was written).
+- Consumers, all 0 failed: `test_html_dom_host.sh`, `test_html_fragment_host.sh`,
+  `test_html_reclaim_host.sh`, libflow (18,602), libpage, libgarb, libway and
+  `way_fetch`, wend, yonder's painter (179) and stream (19).
+- **The guest**, on a scratch copy of the image with `scripts = on`:
+  `write.html` drew the counter, the date, the loaded `blocking.js`'s own
+  write, the written script's write ahead of its writer's next one, and the
+  page's last paragraph, in that order; the audit lines counted 89, 35, 52,
+  140 and 51 bytes for its five scripts and 0 for DOMContentLoaded and
+  `load`. D7's order page and runaway (5 s, with the sentence) and D4's
+  `/stall-body` (Stop at once; left alone, "the server went silent for 30
+  seconds after 12053 bytes") are unchanged.
+
+**Booked from D9** (DOM_D9.md's, unchanged):
+
+| Debt | Why it waits | Trigger |
+|---|---|---|
+| A written inline script runs after its writer's task, not inside the write call | libjs refuses nested top-level evaluation; the document order is the same | a page whose writer reads what its written script defined, in the same script |
+| `document.open()` as a new document, and `document.write` after the parse ended | it replaces the document (the row below) | a page that needs it |
+| A written `<meta charset>` | the encoding is chosen before any script runs, and libhtml never re-parses | none expected |
+| A stack of insertion points | one script runs at a time; the index is the stack's base case | a nested run, which the first row would bring |
+
 ## Booked, with their triggers
 
 | Debt | Why it waits | Trigger |
@@ -2267,8 +2376,6 @@ it, one CONTRACT.md, and the joined proof.
 | `document.write` after the parse has ended | it replaces the document | a page that needs it |
 | `unload` and `beforeunload` | teardown must be bounded | a ruling that a page may delay leaving |
 | Namespaced attribute verbs | no caller until SVG is scripted | that |
-| Script execution-time default/range and a possible Settings control | the one-second D5b deadline bounds the fixture; ordinary browsing needs workload evidence and a reviewed policy | D7, including P5 measurements and Apply/Save behavior |
-| A text field's change callback in libui | `input` and `change` events need it | D7 |
 | A modal `alert`, `confirm` and `prompt` | each needs a loop nested inside a script; the first cut answers without waiting | a page that cannot be used without a real `confirm` |
 | A process per page | a different browser | tabs |
 
