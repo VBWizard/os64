@@ -19,7 +19,9 @@ int64_t os64_open(const char *p, const char *m) { (void)p; (void)m; return -1; }
 int64_t os64_read(int32_t h, void *b, size_t n) { (void)h; (void)b; (void)n; return -1; }
 int64_t os64_close(int32_t h) { (void)h; return 0; }
 int64_t os64_stat(const char *p, os64_dirent_t *entry) { (void)p; (void)entry; return -1; }
-int64_t os64_micros(void) { return 10000000; }
+static int64_t geometry_clock = 10000000, geometry_layout_delay;
+static bool geometry_refuse_layout;
+int64_t os64_micros(void) { return geometry_clock; }
 uint64_t os64_heap_verify(void) { return 0; }
 static size_t teardown_log_count;
 static char teardown_log[OS64_JS_SOURCE_NAME_CAP + 128];
@@ -130,7 +132,9 @@ flow_tree_t *__wrap_flow_layout(const os64_html_document_t *doc,const os64_page_
         budget_refuse_retry=false;budget_retry_refusals++;
         return NULL;
     }
+    if(geometry_refuse_layout) return NULL;
     flow_tree_t *tree=__real_flow_layout(doc,model,width,env);
+    geometry_clock+=geometry_layout_delay;
     if(budget_active && flow_incomplete(tree)) budget_partial_layouts++;
     return tree;
 }
@@ -175,8 +179,11 @@ static void probe_page(const char *html, bool scripts) {
     g.page.model_version=g.page.rendered_version=os64_html_version(g.page.way.doc);
     g.page.state_version=os64_page_state_version(os64_page_shared_state(g.page.way.model));
     forms_build();
-    if(scripts) g.page.scripts=yonder_scripts_new(g.page.way.doc,
-        os64_page_shared_state(g.page.way.model),g.page.way.url,NULL,NULL);
+    if(scripts) {
+        g.page.scripts=yonder_scripts_new(g.page.way.doc,
+            os64_page_shared_state(g.page.way.model),g.page.way.url,NULL,NULL);
+        yonder_scripts_set_geometry(g.page.scripts, script_geometry, NULL);
+    }
 }
 static void probe_drop(void) {
     yonder_scripts_free(g.page.scripts); g.page.scripts=NULL;
@@ -839,6 +846,177 @@ static void bounded_resources(void) {
     probe_drop();
 }
 
+static void geometry_cases(void)
+{
+    probe_page("<!doctype html><style>html,body{margin:0;padding:0}"
+        "#outer{position:relative;width:200px;height:120px;border:4px solid;padding:8px}"
+        "#box{position:absolute;left:20px;top:30px;width:100px;height:40px;padding:3px;border:2px solid}"
+        "#fixed{position:fixed;left:11px;top:13px;width:17px;height:19px}"
+        "</style><div id=outer><div id=box></div></div><div id=fixed></div><script>"
+        "function eq(a,b){if(a!==b)throw Error(a+' != '+b)};"
+        "var box=document.getElementById('box');var outer=document.getElementById('outer');"
+        "eq(box.offsetWidth,110);eq(box.offsetHeight,50);eq(box.clientWidth,106);eq(box.clientHeight,46);"
+        "eq(box.clientLeft,2);eq(box.clientTop,2);eq(box.offsetParent,outer);eq(box.offsetLeft,20);eq(box.offsetTop,30);"
+        "var first=box.getBoundingClientRect();eq(first.width,110);eq(first.height,50);eq(first.right-first.left,110);"
+        "box.setAttribute('style','width:140px');eq(box.offsetWidth,150);eq(first.width,110);"
+        "var fresh=box.getBoundingClientRect();eq(fresh.width,150);eq(box.offsetWidth,150);"
+        "eq(document.documentElement.clientWidth,800);eq(document.documentElement.clientHeight,600);"
+        "var hidden=document.createElement('div');eq(hidden.offsetWidth,0);eq(hidden.offsetParent,null);"
+        "eq(hidden.getBoundingClientRect().width,0);"
+        "document.body.appendChild(hidden);hidden.setAttribute('style','display:none');eq(hidden.offsetHeight,0);"
+        "box.setAttribute('data-geometry-pass','yes');"
+        "</script>",true);
+    check(script_turn(), "geometry script task completes and rebuilds");
+    const os64_html_attr_t *passed=os64_html_attr(probe_id("box"),"data-geometry-pass");
+    check(passed!=NULL && os64_streq(passed->value,"yes"), "geometry script reaches every numeric assertion");
+    check(strstr(g.status_text,"forced 2 layouts") != NULL, "status reports forced layouts and repeated reads reuse them");
+    os64_dom_geometry_t value;
+    const os64_html_node_t *fixed=probe_id("fixed");
+    check(yonder_geometry_snapshot(g.page.way.doc,g.page.tree,fixed,800,600,1000,
+          (flow_point_t){7,9},&value) && value.x==11 && value.y==13 &&
+          value.width==17 && value.offset_left==11 && value.offset_top==13 && value.offset_parent==NULL, "fixed viewport geometry ignores page scrolling");
+    const os64_html_node_t *box=probe_id("box");
+    check(yonder_geometry_snapshot(g.page.way.doc,g.page.tree,box,800,600,1000,
+          (flow_point_t){7,9},&value) && value.x==17 && value.y==25,
+          "ordinary bounding rectangle subtracts page scroll");
+    g.zoom=2000;
+    check(lay_out_page(&g.page,800,600), "geometry zoom layout");
+    check(yonder_geometry_snapshot(g.page.way.doc,g.page.tree,box,800,600,2000,
+          (flow_point_t){0,0},&value) && value.width==150 && value.client_width==146 &&
+          value.offset_left==20, "geometry unzooms device layout to CSS pixels");
+    probe_drop();
+}
+
+static void geometry_body_cases(void)
+{
+    probe_page("<!doctype html><div id=box style='height:20px'></div>",false);
+    os64_dom_geometry_t value;
+    check(yonder_geometry_snapshot(g.page.way.doc,g.page.tree,probe_id("box"),800,600,1000,
+        (flow_point_t){0,0},&value) && value.offset_parent==g.page.way.doc->body &&
+        value.offset_left==8 && value.offset_top==8,
+        "static body offsets retain the default body margin from the document origin");
+    probe_drop();
+    probe_page("<!doctype html><style>body{position:relative;margin:8px;padding:5px;border:3px solid}</style>"
+        "<div id=box style='height:20px'></div>",false);
+    check(yonder_geometry_snapshot(g.page.way.doc,g.page.tree,probe_id("box"),800,600,1000,
+        (flow_point_t){0,0},&value) && value.offset_parent==g.page.way.doc->body &&
+        value.offset_left==5 && value.offset_top==5,
+        "positioned body offsets still use its padding edge");
+    probe_drop();
+}
+
+static void geometry_publish_cases(void)
+{
+    probe_page("<!doctype html><style>html,body{margin:0;padding:0}</style>"
+        "<input id=field style='display:block;width:50vw;height:20px'><div style='height:900px;width:3000px'></div>",true);
+    FormWidget *field=probe_field("field");
+    int32_t old_width=field->w->bounds.w;
+    g.view.bounds.w=400;
+    g.relayout_due=true;
+    g.sy=1000000;
+    os64_dom_geometry_t value;
+    check(script_geometry(NULL,probe_id("field"),&value),"geometry forces a pending resize layout");
+    const flow_box_t *box=flow_box_for(g.page.tree,probe_id("field"));
+    os64_gui_rect_t rect=flow_box_doc_rect(box,scroll_now());
+    check(field->w->bounds.w==rect.w && field->w->bounds.w<old_width,
+        "forced geometry publishes resized control bounds before the pending relayout");
+    check(g.sy<=page_height()-g.view.bounds.h,"forced geometry clamps the scroll to the new layout");
+    check(g.vbar.total==page_height() && g.vbar.visible==g.view.bounds.h && g.vbar.pos==g.sy &&
+        g.hbar.total==page_width() && g.hbar.visible==g.view.bounds.w && g.hbar.pos==g.sx,
+        "forced geometry publishes scrollbar ranges and positions");
+    g.sx=10;g.sy=0;g.zoom=2000;
+    check(script_geometry(NULL,probe_id("field"),&value) && g.sx==20,
+        "forced geometry scales horizontal scroll when publishing a pending zoom");
+    probe_drop();
+}
+
+static void geometry_scroll_cases(void)
+{
+    probe_page("<!doctype html><style>html,body{margin:0;padding:0}"
+        "#outer{width:100px;height:80px;overflow:auto}"
+        "#inner{width:100px;height:160px;overflow:auto}"
+        "#target{margin-top:300px;width:30px;height:20px}"
+        "</style><div id=outer><div id=inner><div id=target></div></div></div>",false);
+    int32_t outer=flow_scroller_for(g.page.tree,probe_id("outer"));
+    int32_t inner=flow_scroller_for(g.page.tree,probe_id("inner"));
+    check(outer>=0 && inner>=0,"geometry nested scroll frames exist");
+    flow_scroll_set(g.page.tree,outer,(flow_point_t){0,30});
+    flow_scroll_set(g.page.tree,inner,(flow_point_t){0,40});
+    os64_dom_geometry_t value;
+    check(yonder_geometry_snapshot(g.page.way.doc,g.page.tree,probe_id("target"),800,600,1000,
+        (flow_point_t){0,0},&value) && value.y==230 && value.offset_top==300,
+        "nested scrolling moves viewport rect without changing offset position");
+    probe_drop();
+    probe_page("<!doctype html><style>html,body{margin:0;padding:0}"
+        "#outer{width:100px;height:80px;overflow:auto}"
+        "#before{height:100px}#target{position:sticky;top:0;height:20px}#after{height:300px}"
+        "</style><div id=outer><div id=before></div><div id=target></div><div id=after></div></div>",false);
+    outer=flow_scroller_for(g.page.tree,probe_id("outer"));
+    flow_scroll_set(g.page.tree,outer,(flow_point_t){0,120});
+    check(yonder_geometry_snapshot(g.page.way.doc,g.page.tree,probe_id("target"),800,600,1000,
+        (flow_point_t){0,0},&value) && value.y==0 && value.offset_top==120,
+        "sticky offset preserves current placement while ignoring container scroll");
+    probe_drop();
+}
+
+static void geometry_fragment_cases(void)
+{
+    probe_page("<!doctype html><style>html,body{margin:0;padding:0}"
+        "#wrap{width:40px}#target{font-size:16px}"
+        "</style><div id=wrap><span id=target>aaaa aaaa aaaa</span></div>",false);
+    os64_dom_geometry_t value;
+    check(yonder_geometry_snapshot(g.page.way.doc,g.page.tree,probe_id("target"),800,600,1000,
+        (flow_point_t){0,0},&value) && value.height>16 && value.width<=40 &&
+        value.offset_height==value.height && value.client_width==0 && value.client_height==0,
+        "multiline inline unions fragments and has no client box");
+    probe_drop();
+    probe_page("<!doctype html><style>html,body{margin:0;padding:0}"
+        "table{border-spacing:0}caption{height:20px}td{padding:0;height:10px;width:30px}"
+        "</style><table id=target><caption></caption><tr><td></td></tr></table>",false);
+    check(yonder_geometry_snapshot(g.page.way.doc,g.page.tree,probe_id("target"),800,600,1000,
+        (flow_point_t){0,0},&value) && value.height==30 && value.offset_height==30 && value.client_height==10,
+        "table rectangle includes caption while client height describes table box");
+    probe_drop();
+}
+
+static void geometry_failure_cases(void)
+{
+    probe_page("<div id=box style='width:100px;height:20px'></div><script>"
+        "var box=document.getElementById('box');box.setAttribute('style','width:150px;height:20px');"
+        "try{box.offsetWidth;box.setAttribute('data-stale','returned')}catch(e){"
+        "if(e.name!=='InvalidStateError')throw e;box.setAttribute('data-refused','yes')}"
+        "</script><script>if(box.offsetWidth!==150)throw Error('retry');"
+        "box.setAttribute('data-retried','yes')</script>",true);
+    uint64_t before=g.page.rendered_version;
+    geometry_refuse_layout=true;
+    script_turn();
+    const os64_html_node_t *box=probe_id("box");
+    check(os64_html_attr(box,"data-stale")==NULL && os64_html_attr(box,"data-refused")!=NULL &&
+          g.page.rendered_version==before, "failed forced layout refuses stale dimensions and keeps its rendered version");
+    check(yonder_scripts_geometry_stats(g.page.scripts,false).layouts==1,
+          "failed forced layout is counted");
+    geometry_refuse_layout=false;
+    script_turn();
+    check(os64_html_attr(box,"data-retried")!=NULL, "fresh geometry succeeds after an allocation refusal");
+    probe_drop();
+    probe_page("<div id=box></div><script>var box=document.getElementById('box');"
+        "box.setAttribute('style','width:150px;height:20px');"
+        "try{box.offsetWidth}catch(e){};try{box.offsetWidth}catch(e){};"
+        "</script><script>box.setAttribute('data-after','bad')</script>",true);
+    geometry_layout_delay=2000000;
+    script_turn();
+    geometry_layout_delay=0;
+    geometry_clock=10000000;
+    os64_dom_geometry_stats_t stats=yonder_scripts_geometry_stats(g.page.scripts,false);
+    check(stats.layouts==1 && stats.elapsed_us==2000000 && !yonder_scripts_pending(g.page.scripts),
+          "native overrun retires the task queue and preserves its layout telemetry");
+    check(strstr(g.status_text,"runtime limit exceeded")!=NULL &&
+          strstr(g.status_text,"2000.000 ms")!=NULL, "status reports the charged native overrun");
+    check(os64_html_attr(probe_id("box"),"data-after")==NULL,
+          "later scripts do not run after a native geometry deadline");
+    probe_drop();
+}
+
 static os64_js_runtime_t *teardown_fixture_runtime;
 os64_js_status_t __wrap_os64_js_create_with_teardown(const os64_js_config_t *config,
     os64_js_teardown_policy_t policy, const char *abi, os64_js_runtime_t **out,
@@ -893,6 +1071,12 @@ int main(void)
         .backend=flow_test_backend(),.memory_cap=8*1024*1024};
     check(os64_text_create(&options,&probe_text)==OS64_FONT_OK,"text context");
     check(os64_text_font_bitmap(probe_text,&probe_font)==OS64_FONT_OK,"bitmap face");
+    geometry_cases();
+    geometry_body_cases();
+    geometry_publish_cases();
+    geometry_scroll_cases();
+    geometry_fragment_cases();
+    geometry_failure_cases();
     script_types();
     identity_and_edit();
     scripted_zoom();

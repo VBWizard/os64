@@ -14,8 +14,9 @@ int64_t os64_read(int32_t handle, void *buffer, size_t size)
 { (void)handle; (void)buffer; (void)size; return -1; }
 int64_t os64_close(int32_t handle)
 { (void)handle; return 0; }
+static int64_t dom_geometry_clock = 10000000;
 int64_t os64_micros(void)
-{ return 10000000; }
+{ return dom_geometry_clock; }
 static os64_js_config_t fixture_config(void)
 {
     return (os64_js_config_t){.limits={16*1024*1024,256*1024,64*1024,1000,100}};
@@ -210,11 +211,85 @@ static char *native_serialized(const os64_html_node_t *node)
 #include "test_dom_cases.inc"
 #include "test_libpage_clone.inc"
 #include "test_dom_reclaim.inc"
+#define GEOMETRY_ASSERT "function assert(x,m){if(!x)throw Error(m||'assertion');}" \
+    "function throws(n,f){let ok=false;try{f()}catch(e){ok=e.name===n}assert(ok,n)}"
+
+typedef struct {
+    DomFixture *fixture;
+    unsigned calls;
+    bool refuse, slow;
+} GeometryFixture;
+
+static bool fake_geometry(void *opaque, const os64_html_node_t *node, os64_dom_geometry_t *out)
+{
+    GeometryFixture *fixture=opaque;
+    check(node->kind==OS64_HTML_ELEMENT, "geometry provider receives a native element");
+    fixture->calls++;
+    *out=(os64_dom_geometry_t){.x=1.25,.y=-3.5,.width=20.5,.height=30.25,
+        .offset_left=2,.offset_top=3,.offset_width=21,.offset_height=30,
+        .client_left=1,.client_top=2,.client_width=19,.client_height=27,
+        .offset_parent=fixture->fixture->document->body,.layouts=1,.elapsed_us=250};
+    if(fixture->slow) dom_geometry_clock+=2000000;
+    return !fixture->refuse;
+}
+
+static void dom_geometry_cases(void)
+{
+    DomFixture f=fixture_new(NULL);
+    if(!fixture_ready(&f)) return;
+    dom_script(&f,GEOMETRY_ASSERT
+        "throws('InvalidStateError',()=>document.body.offsetWidth);"
+        "throws('InvalidStateError',()=>document.body.getBoundingClientRect());", "geometry-without-provider");
+    dom_script(&f,GEOMETRY_ASSERT
+        "var holder=document.createElement('div');holder.innerHTML='<svg><rect/></svg>';"
+        "for(const foreign of [holder.firstChild,holder.firstChild.firstChild]){"
+        "for(const name of ['offsetLeft','offsetTop','offsetWidth','offsetHeight',"
+        "'clientLeft','clientTop','clientWidth','clientHeight'])assert(foreign[name]===0);"
+        "assert(foreign.offsetParent===null);"
+        "for(const value of Object.values(foreign.getBoundingClientRect()))assert(value===0);}",
+        "foreign-geometry-without-provider");
+    GeometryFixture provider={.fixture=&f};
+    os64_dom_set_geometry(f.binding,fake_geometry,&provider);
+    dom_script(&f,GEOMETRY_ASSERT
+        "var node=document.getElementById('one');var rect=node.getBoundingClientRect();"
+        "assert(rect.x===1.25&&rect.y===-3.5&&rect.width===20.5&&rect.height===30.25);"
+        "assert(rect.left===rect.x&&rect.top===rect.y&&rect.right===21.75&&rect.bottom===26.75);"
+        "assert(node.offsetLeft===2&&node.offsetTop===3&&node.offsetWidth===21&&node.offsetHeight===30);"
+        "assert(node.clientLeft===1&&node.clientTop===2&&node.clientWidth===19&&node.clientHeight===27);"
+        "assert(node.offsetParent===document.body);"
+        "Object.defineProperty(Object.prototype,'x',{set(){throw Error('setter ran')},configurable:true});"
+        "assert(node.getBoundingClientRect().x===1.25);delete Object.prototype.x;"
+        "const getter=Object.getOwnPropertyDescriptor(Object.getPrototypeOf(node),'offsetWidth').get;"
+        "throws('TypeError',()=>getter.call(document));throws('TypeError',()=>getter.call(node.firstChild));"
+        "throws('TypeError',()=>node.getBoundingClientRect.call({}));", "geometry-values-and-receivers");
+    os64_dom_geometry_stats_t stats=os64_dom_geometry_stats(f.binding,true);
+    check(stats.layouts==11&&stats.elapsed_us==2750&&os64_dom_geometry_stats(f.binding,false).layouts==0,
+          "geometry telemetry counts provider work and resets independently");
+    unsigned before_foreign=provider.calls;
+    dom_script(&f,GEOMETRY_ASSERT
+        "assert(holder.firstChild.clientWidth===0);assert(holder.firstChild.firstChild.getBoundingClientRect().width===0);",
+        "foreign-geometry-with-provider");
+    check(provider.calls==before_foreign,"foreign geometry does not ask the HTML layout provider");
+    provider.refuse=true;
+    dom_script(&f,GEOMETRY_ASSERT "throws('InvalidStateError',()=>document.body.offsetHeight);", "geometry-refusal");
+    check(os64_dom_geometry_stats(f.binding,false).layouts==1,
+          "failed geometry retains attempted-layout telemetry");
+    provider.refuse=false;provider.slow=true;provider.calls=0;
+    os64_js_outcome_t outcome;
+    const char *source="try{document.body.offsetWidth}catch(e){};try{document.body.offsetWidth}catch(e){}";
+    check(os64_js_run(f.runtime,source,strlen(source),"geometry-overrun",&outcome)==OS64_JS_LIMIT&&
+          outcome.limit==OS64_JS_LIMIT_EXECUTION&&provider.calls==1,
+          "caught native geometry overrun remains sticky and stops later provider work");
+    dom_geometry_clock=10000000;
+    fixture_free(&f);
+}
+
 int main(int argc, char **argv)
 {
     if(argc==2&&!strcmp(argv[1],"--reclaim")){dom_reclaim_cases();printf("DOM reclaim probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--clone")){dom_clone_control_cases();dom_clone_native_cases();dom_clone_state_cap_cases();dom_clone_character_data_cases();dom_clone_allocation_cases();printf("DOM clone probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     bool mutation_mode=argc==2&&!strcmp(argv[1],"--mutants");
+    dom_geometry_cases();
     dom_surface_cases();
     dom_identity_cases();
     dom_collection_cases();

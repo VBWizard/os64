@@ -41,6 +41,7 @@
 #include "scale.h"
 #include "settings.h"
 #include "scripts.h"
+#include "geometry.h"
 #include "ticker.h"
 #include "trip.h"
 
@@ -534,8 +535,13 @@ static int32_t scale_zoom(int32_t v, uint32_t to, uint32_t from)
     return (int32_t)(r > INT32_MAX ? INT32_MAX : r < INT32_MIN ? INT32_MIN : r);
 }
 
+static bool script_geometry(void *opaque, const os64_html_node_t *node,
+                            os64_dom_geometry_t *out);
 static bool lay_out_page(Page *p, int32_t width, int32_t height);
 static bool lay_out_page_reclaim(Page *p, int32_t width, int32_t height, Page *reclaim);
+
+// Window-owner count: a provider takes its delta to include layout retries.
+static uint64_t geometry_layout_total;
 
 // Publish a layout beside the old one. `reclaim` owns geometry whose faces
 // an incomplete attempt may release before retrying; it may be this Page
@@ -555,8 +561,9 @@ static bool page_lay_out(Page *p, int32_t width, int32_t height, uint32_t zoom, 
         for (int32_t e = 0; e < p->nsheets; e++)
             if (p->sheets[e].importer < 0)
                 (void)sheet_emit(p, e, in, entry, &n);
-        cascade = n > 0 ? garb_cascade(in, n, page_doc(p), view) : NULL;
-        if (n > 0 && cascade == NULL)
+        // Inline style attributes also need a cascade when no sheet is linked.
+        cascade = garb_cascade(in, n, page_doc(p), view);
+        if (cascade == NULL)
             return false;
     }
     // Context is valid for this layout only and may name a stack Page;
@@ -568,6 +575,7 @@ static bool page_lay_out(Page *p, int32_t width, int32_t height, uint32_t zoom, 
     // in CSS pixels at `zoom`.
     s_env.viewport_height = view.height;
     s_env.zoom = zoom;
+    geometry_layout_total++;
     flow_tree_t *fresh = flow_layout(page_doc(p), page_model(p), width, &s_env);
     // The tree on screen holds the faces its runs were shaped in until it
     // is freed — each one a size of a file, counted against the text
@@ -583,6 +591,7 @@ static bool page_lay_out(Page *p, int32_t width, int32_t height, uint32_t zoom, 
             garb_cascade_free(reclaim->cascade);
             reclaim->cascade = NULL;
         }
+        geometry_layout_total++;
         fresh = flow_layout(page_doc(p), page_model(p), width, &s_env);
     }
     s_env.cascade = NULL;
@@ -1105,19 +1114,21 @@ static const os64_html_node_t *anchor_of(int32_t *offset)
 
 static void css_pictures(Page *p);
 
-// Lays the page on screen out again at the view's size. `again` lays it
+// Lays the page out and publishes scroll, controls and paint state. Answers
+// whether the resulting layout is complete. `again` lays it
 // out even at the size it has: a picture's size arrived. Without sheets
 // or positioned boxes only the width moves anything; with sheets the
 // height does too, which is what their media queries and vh units read,
 // and with a positioned box, whose initial containing block is the view.
-static void relayout(bool again)
+static bool relayout(bool again)
 {
     int32_t width = g.view.bounds.w, height = g.view.bounds.h;
     bool height_matters = g.page.sheets_ready != 0 || flow_npositioned(g.page.tree) > 0;
-    if (page_doc(&g.page) == NULL || width <= 0 ||
-        (!again && g.page.tree != NULL && width == g.page.laid_width &&
-         g.zoom == g.page.laid_zoom && (!height_matters || height == g.page.laid_height)))
-        return;
+    if (page_doc(&g.page) == NULL || width <= 0 || height <= 0)
+        return false;
+    if (!again && g.page.tree != NULL && width == g.page.laid_width &&
+         g.zoom == g.page.laid_zoom && (!height_matters || height == g.page.laid_height))
+        return !flow_incomplete(g.page.tree);
     int32_t offset = 0;
     const os64_html_node_t *anchor = anchor_of(&offset);
     // How far into the anchor the view starts, and how far across the page
@@ -1139,7 +1150,7 @@ static void relayout(bool again)
     g.settle_due = YONDER_NEVER;       // the deadline goes with the moves it was for
     if (!laid) {
         status_rest("Out of memory laying the page out; this is the last layout that fit.");
-        return;
+        return false;
     }
     g.laid_at = t1;
     g.sx = sx;
@@ -1155,6 +1166,7 @@ static void relayout(bool again)
     pictures_schedule();
     say_laid_out(ms_between(&t0, &t1));
     os64_ui_mark_dirty(&g.ui, &g.view);
+    return !flow_incomplete(g.page.tree);
 }
 
 static void request_navigate(os64_page_request_t *request, NavKind kind, way_ask_t ask);
@@ -1266,8 +1278,11 @@ static void arrive_now(Page *fresh, NavKind kind, const way_position_t *crumb,
                                              g.page.way.url, script_alert, NULL);
         if (g.page.scripts == NULL)
             status_rest("Could not queue page scripts; this page runs without them.");
-        else if (yonder_scripts_pending(g.page.scripts))
-            (void)os64_gui_event_ring(g.win, BELL_SCRIPTS);
+        else {
+            yonder_scripts_set_geometry(g.page.scripts, script_geometry, NULL);
+            if (yonder_scripts_pending(g.page.scripts))
+                (void)os64_gui_event_ring(g.win, BELL_SCRIPTS);
+        }
     }
     refresh_if_declared();
     buttons_follow();
@@ -2984,6 +2999,29 @@ static bool script_rebuild(void)
     return true;
 }
 
+static bool script_geometry(void *opaque, const os64_html_node_t *node,
+                            os64_dom_geometry_t *out)
+{
+    (void)opaque;
+    if (!os64_html_owns_node(page_doc(&g.page), node)) return false;
+    int64_t began = os64_micros();
+    uint64_t before = geometry_layout_total;
+    int32_t width = g.view.bounds.w > 0 ? g.view.bounds.w : 1;
+    int32_t height = g.view.bounds.h > 0 ? g.view.bounds.h : 1;
+    bool ready = began >= 0 && script_rebuild();
+    if (ready && (g.page.tree == NULL || flow_incomplete(g.page.tree) || g.page.laid_width != width ||
+                  g.page.laid_height != height || g.page.laid_zoom != g.zoom ||
+                  g.page.sheets_changed))
+        ready = relayout(true);
+    if (ready)
+        ready = yonder_geometry_snapshot(page_doc(&g.page), g.page.tree, node,
+                    width, height, g.zoom, (flow_point_t){g.sx, g.sy}, out);
+    int64_t ended = os64_micros();
+    out->layouts = geometry_layout_total - before;
+    out->elapsed_us = out->layouts != 0 && began >= 0 && ended >= began ? (uint64_t)(ended - began) : 0;
+    return ready && ended >= began;
+}
+
 static bool script_turn(void)
 {
     // A font-capacity retry may have released the old tree. Keep retrying
@@ -2998,6 +3036,7 @@ static bool script_turn(void)
         return false;
     forms_flush();
     os64_js_outcome_t outcome;
+    (void)yonder_scripts_geometry_stats(g.page.scripts, true);
     if (!yonder_scripts_step(g.page.scripts, &outcome))
         return false;
     bool rendered = script_rebuild();
@@ -3006,6 +3045,15 @@ static bool script_turn(void)
         os64_snprintf(line, sizeof(line), "Script %s: %s%s", outcome.source_name,
                       outcome.message[0] ? outcome.message : "execution stopped",
                       yonder_scripts_pending(g.page.scripts) ? "" : " (no further scripts queued)");
+        status_rest(line);
+    }
+    os64_dom_geometry_stats_t geometry = yonder_scripts_geometry_stats(g.page.scripts, false);
+    if (geometry.layouts != 0) {
+        char line[512];
+        os64_snprintf(line, sizeof(line), "Script forced %lu layouts in %lu.%03lu ms%s%.*s",
+            (unsigned long)geometry.layouts, (unsigned long)(geometry.elapsed_us / 1000),
+            (unsigned long)(geometry.elapsed_us % 1000), outcome.status == OS64_JS_OK ? "" : "; ",
+            outcome.status == OS64_JS_OK ? 0 : 300, outcome.message);
         status_rest(line);
     }
     return rendered;

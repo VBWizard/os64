@@ -21,4 +21,10 @@ JSContext *os64_js_context(os64_js_runtime_t *runtime, const char *caller_abi,
  * calls. Access the shared slot through this function; register the returned
  * ID separately in each runtime. NULL returns zero without engine entry. */
 JSClassID os64_js_class_id(JSClassID *slot);
+/* Native-callback budget boundary: uses a separate caller-owned outcome.
+ * Requires an active budgeted call; does not enter JS, drain jobs, reset a
+ * deadline or release the outer call's guard. Observed failures remain sticky.
+ * Native work cannot be preempted here; check before and after bounded work. */
+os64_js_status_t os64_js_check_budget(os64_js_runtime_t *runtime, const char *caller_abi,
+                                      os64_js_outcome_t *outcome);
 #endif

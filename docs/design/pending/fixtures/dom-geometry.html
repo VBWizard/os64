@@ -1,0 +1,19 @@
+<!doctype html>
+<title>D10 geometry check</title>
+<style>
+body { margin: 24px; font-family: sans-serif }
+#box { width: 100px; height: 40px; padding: 3px; border: 2px solid; background: #c7dff2 }
+</style>
+<h1>Synchronous geometry</h1>
+<div id="box">Measured box</div>
+<p id="result">Waiting for script</p>
+<script>
+var box = document.getElementById('box');
+var first = box.getBoundingClientRect();
+box.setAttribute('style', 'width:140px');
+var fresh = box.getBoundingClientRect();
+var passed = first.width === 110 && fresh.width === 150 && box.clientWidth === 146;
+document.getElementById('result').textContent = (passed ? 'PASS' : 'FAIL') +
+    ': original width ' + first.width + ', fresh width ' + fresh.width +
+    ', client width ' + box.clientWidth + '. The original snapshot stays unchanged.';
+</script>
