@@ -8,6 +8,9 @@
 #undef main
 #include "test_libflow_fonts.h"
 #include "os64/conf.h"
+#include "os64/js_engine.h"
+os64_js_status_t __real_os64_js_create_with_teardown(const os64_js_config_t *,
+    os64_js_teardown_policy_t, const char *, os64_js_runtime_t **, os64_js_outcome_t *);
 #define s settings_fixture
 #include "../userland/apps/yonder/settings.c"
 #undef s
@@ -20,7 +23,14 @@ static int64_t geometry_clock = 10000000, geometry_layout_delay;
 static bool geometry_refuse_layout;
 int64_t os64_micros(void) { return geometry_clock; }
 uint64_t os64_heap_verify(void) { return 0; }
-void os64_debug_log(const char *text) { (void)text; }
+static size_t teardown_log_count;
+static char teardown_log[OS64_JS_SOURCE_NAME_CAP + 128];
+void os64_debug_log(const char *text) {
+    if (strstr(text, "reclaimed JavaScript teardown leak") != NULL) {
+        teardown_log_count++;
+        os64_strcopy(teardown_log, sizeof(teardown_log), text);
+    }
+}
 void *os64_calloc(size_t n, size_t z) {
     if (z && n > SIZE_MAX/z) return NULL;
     void *p = os64_malloc(n*z);
@@ -1007,6 +1017,54 @@ static void geometry_failure_cases(void)
     probe_drop();
 }
 
+static os64_js_runtime_t *teardown_fixture_runtime;
+os64_js_status_t __wrap_os64_js_create_with_teardown(const os64_js_config_t *config,
+    os64_js_teardown_policy_t policy, const char *abi, os64_js_runtime_t **out,
+    os64_js_outcome_t *outcome)
+{
+    os64_js_status_t result = __real_os64_js_create_with_teardown(config, policy, abi, out, outcome);
+    if (result == OS64_JS_OK) teardown_fixture_runtime = *out;
+    return result;
+}
+
+static void reporting_teardown(void)
+{
+    check(yonder_scripts_teardown_leaks() == 0, "ordinary browser fixtures have no teardown leaks");
+    check(teardown_log_count == 0, "ordinary browser retirement emits no reclaimed-leak log");
+    size_t before = live;
+    probe_page("<p id='heading'>keep the window</p><script>globalThis.held=document.getElementById('heading')</script>", true);
+    os64_js_outcome_t outcome;
+    check(yonder_scripts_step(g.page.scripts, &outcome) && outcome.status == OS64_JS_OK,
+          "browser teardown fixture script runs");
+    JSContext *context = os64_js_context(teardown_fixture_runtime, OS64_JS_ABI_ID, &outcome);
+    JSValue global = JS_GetGlobalObject(context);
+    JSValue held = JS_GetPropertyStr(context, global, "held");
+    check(JS_IsObject(held), "browser fixture deliberately loses a retained DOM wrapper");
+    JS_FreeValue(context, global);
+    /* The lost value cannot be touched after destroy. Native holds must still
+     * drain even though this wrapper's finalizer cannot run. */
+    probe_drop();
+    teardown_fixture_runtime = NULL;
+    check(yonder_scripts_teardown_leaks() == 1 && live == before,
+          "browser leak is counted and engine/native storage is reclaimed");
+    unsigned long reclaimed_blocks = 0, reclaimed_bytes = 0;
+    check(teardown_log_count == 1 &&
+          sscanf(teardown_log,
+                 "Yonder: reclaimed JavaScript teardown leak at https://fixture.test/page (%lu blocks, %lu bytes)",
+                 &reclaimed_blocks, &reclaimed_bytes) == 2 && reclaimed_blocks > 0 && reclaimed_bytes > 0,
+          "kernel log receives the reclaimed leak's page URL and block/byte totals once");
+    /* Reuse the rendered text so the shared glyph cache does not grow while
+     * we compare page-owned storage against the pre-navigation baseline. */
+    probe_page("<p id='heading'>keep the window</p><script>globalThis.nextPage=true</script>", true);
+    check(yonder_scripts_step(g.page.scripts, &outcome) && outcome.status == OS64_JS_OK,
+          "browser can execute the next page after a reclaimed leak");
+    probe_drop();
+    teardown_fixture_runtime = NULL;
+    check(yonder_scripts_teardown_leaks() == 1 && live == before,
+          "clean navigation neither adds a leak nor retains page storage");
+    check(teardown_log_count == 1, "clean next-page retirement emits no additional reclaimed-leak log");
+}
+
 int main(void)
 {
     os64_text_options_t options={.memory={.alloc=probe_alloc,.free=probe_free},
@@ -1035,6 +1093,7 @@ int main(void)
     snapshot_actions();
     bounded_resources();
     stylesheet_reuse();
+    reporting_teardown();
     os64_text_font_release(probe_font);
     check(os64_text_destroy(probe_text)==OS64_FONT_OK,"all layout text released");
     check(live==0,"native and engine heap is empty");

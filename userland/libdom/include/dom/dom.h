@@ -104,7 +104,7 @@ os64_dom_geometry_stats_t os64_dom_geometry_stats(os64_dom_t *dom, bool reset);
  * Drain closes bindings and releases C-retained JS values even when libjs
  * has entered a sticky failed state. Native records remain alive through
  * engine finalizers; os64_dom_free releases their native node holds.
- * The required order is drain, os64_js_destroy, then
+ * The required order is drain, os64_js_destroy (or destroy_report), then
  * os64_dom_free, followed by model/state/document teardown. */
 void os64_dom_drain(os64_dom_t *dom);
 void os64_dom_free(os64_dom_t *dom);

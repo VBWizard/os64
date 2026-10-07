@@ -559,9 +559,9 @@ invariant below.
 
 - **ANY allocator-owned memory** — `kmalloc()`, `kmalloc_aligned()`, AND
   `allocate_memory_aligned()` — **IS** accessible via `phys | kHHDMOffset`
-  **while allocated**, on every memory map. The allocator's single alloc choke
-  point (`allocate_memory_at_address_internal`) calls `paging_hhdm_map_range()`
-  on every extent and even zeroes it through the alias; the free path unmaps.
+  **while allocated**, on every memory map. The allocator's allocation paths
+  (allocator.c: frame runs and ledger carves) call `paging_hhdm_map_range()`
+  on every extent and zero it through the alias; the free paths unmap.
   Task stacks and heap pages come from `allocate_memory_aligned()`, so they are
   kernel-visible via the HHDM while allocated — which is what makes the
   documented "Writing to Task Memory via the HHDM" idiom correct.

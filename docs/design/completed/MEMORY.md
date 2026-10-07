@@ -1,5 +1,9 @@
 # os64 Memory Subsystem
 
+> **The physical allocator described here is superseded** by the frame table
+> and the demoted ledger: docs/design/pending/FRAMES.md is the current design.
+> The HHDM contract below still holds.
+
 *The design record for physical allocation, the kernel heap, paging, and the
 HHDM contract. Written so a future contributor (human or model) can extend
 this without re-deriving any decision. The single most important thing in

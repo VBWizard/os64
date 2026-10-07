@@ -261,7 +261,8 @@ static os64_js_status_t leave(os64_js_runtime_t *runtime, os64_js_outcome_t *out
     return out->status;
 }
 
-JS_PUBLIC os64_js_status_t os64_js_create(const os64_js_config_t *config,
+JS_PUBLIC os64_js_status_t os64_js_create_with_teardown(const os64_js_config_t *config,
+                                         os64_js_teardown_policy_t policy,
                                         const char *caller_abi,
                                         os64_js_runtime_t **out,
                                         os64_js_outcome_t *outcome)
@@ -273,6 +274,8 @@ JS_PUBLIC os64_js_status_t os64_js_create(const os64_js_config_t *config,
         return status(outcome, OS64_JS_BAD_ARGUMENT, "configuration, ABI and output are required");
     if (os64_strcmp(caller_abi, OS64_JS_ABI_ID) != 0)
         return status(outcome, OS64_JS_ABI_MISMATCH, "runtime header ABI mismatch");
+    if (policy != OS64_JS_TEARDOWN_FATAL && policy != OS64_JS_TEARDOWN_RECLAIM)
+        return status(outcome, OS64_JS_BAD_ARGUMENT, "unknown teardown policy");
     const os64_js_limits_t *limits = &config->limits;
     if (limits->memory_bytes == 0 || limits->stack_bytes == 0 ||
         limits->stack_bytes > PTRDIFF_MAX || limits->source_bytes == 0 ||
@@ -300,12 +303,14 @@ JS_PUBLIC os64_js_status_t os64_js_create(const os64_js_config_t *config,
     size_t storage = os64_malloc_size(runtime);
     os64_memset(runtime, 0, sizeof(*runtime));
     runtime->limits = *limits;
-    runtime->allocator.payload_limit = storage < limits->memory_bytes
+    runtime->allocator.tracked = policy == OS64_JS_TEARDOWN_RECLAIM;
+    runtime->allocator.allocation_limit = storage < limits->memory_bytes
         ? limits->memory_bytes - storage : 0;
     if (storage < limits->memory_bytes)
-        runtime->engine = JS_NewRuntime2(&jsport_malloc_functions, &runtime->allocator);
+        runtime->engine = JS_NewRuntime2(runtime->allocator.tracked
+            ? &jsport_tracked_malloc_functions : &jsport_malloc_functions, &runtime->allocator);
     if (runtime->engine != NULL) {
-        JS_SetMemoryLimit(runtime->engine, runtime->allocator.payload_limit);
+        JS_SetMemoryLimit(runtime->engine, runtime->allocator.allocation_limit);
         JS_SetMaxStackSize(runtime->engine, limits->stack_bytes);
         JS_SetRuntimeOpaque(runtime->engine, runtime);
         runtime->context = JS_NewContext(runtime->engine);
@@ -324,6 +329,10 @@ JS_PUBLIC os64_js_status_t os64_js_create(const os64_js_config_t *config,
             (runtime->allocator.failures & JSPORT_ALLOC_LIMIT);
         if (runtime->context != NULL) JS_FreeContext(runtime->context);
         if (runtime->engine != NULL) JS_FreeRuntime(runtime->engine);
+        /* Construction owns no caller handles; leftovers here are an invariant
+         * failure, not the binding-leak exception selected for normal destroy. */
+        if (runtime->allocator.blocks != NULL)
+            jsport_fatal("construction allocator ledger", __FILE__, __LINE__);
         os64_free(runtime);
         if (limited) outcome->limit = OS64_JS_LIMIT_MEMORY;
         return status(outcome, limited ? OS64_JS_LIMIT : OS64_JS_HOST_FAILURE,
@@ -334,6 +343,14 @@ JS_PUBLIC os64_js_status_t os64_js_create(const os64_js_config_t *config,
     JS_SetHostPromiseRejectionTracker(runtime->engine, rejection, runtime);
     *out = runtime;
     return OS64_JS_OK;
+}
+
+JS_PUBLIC os64_js_status_t os64_js_create(const os64_js_config_t *config,
+                                         const char *caller_abi,
+                                         os64_js_runtime_t **out,
+                                         os64_js_outcome_t *outcome)
+{
+    return os64_js_create_with_teardown(config, OS64_JS_TEARDOWN_FATAL, caller_abi, out, outcome);
 }
 
 JS_PUBLIC JSContext *os64_js_context(os64_js_runtime_t *runtime, const char *caller_abi,
@@ -823,8 +840,10 @@ JS_PUBLIC void os64_js_cancel(os64_js_runtime_t *runtime)
     if (runtime != NULL) __atomic_store_n(&runtime->cancelled, 1, __ATOMIC_RELEASE);
 }
 
-JS_PUBLIC void os64_js_destroy(os64_js_runtime_t *runtime)
+JS_PUBLIC void os64_js_destroy_report(os64_js_runtime_t *runtime,
+                                      os64_js_teardown_report_t *report)
 {
+    if (report != NULL) os64_memset(report, 0, sizeof(*report));
     if (runtime == NULL) return;
     if (runtime->active) jsport_fatal("destroy during an active runtime call", __FILE__, __LINE__);
     runtime->active = true;
@@ -832,6 +851,26 @@ JS_PUBLIC void os64_js_destroy(os64_js_runtime_t *runtime)
     JS_SetHostPromiseRejectionTracker(runtime->engine, NULL, NULL);
     clear_rejections(runtime);
     JS_FreeContext(runtime->context);
-    JS_FreeRuntime(runtime->engine);
+    if (runtime->allocator.tracked) {
+        bool leaked = jsport_free_runtime_report(runtime->engine) != 0;
+        /* A clean engine verdict may still leave raw buffers/strings retained
+         * by C. They also belong to this dead runtime's allocator ledger. */
+        leaked |= runtime->allocator.blocks != NULL;
+        if (report != NULL) {
+            report->leaked = leaked;
+            report->reclaimed_blocks = runtime->allocator.live_blocks;
+            report->reclaimed_bytes = runtime->allocator.live_bytes;
+        }
+        runtime->engine = NULL;
+        runtime->context = NULL;
+        jsport_allocator_reclaim(&runtime->allocator);
+    } else {
+        JS_FreeRuntime(runtime->engine);
+    }
     os64_free(runtime);
+}
+
+JS_PUBLIC void os64_js_destroy(os64_js_runtime_t *runtime)
+{
+    os64_js_destroy_report(runtime, NULL);
 }

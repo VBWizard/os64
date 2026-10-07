@@ -23,7 +23,11 @@ bool yonder_scripts_pending(const yonder_scripts_t *scripts);
  * Exceptions permit later scripts; terminal runtime failures drop the queue.
  * False means no runnable script remained. Outcome has inline diagnostics. */
 bool yonder_scripts_step(yonder_scripts_t *scripts, os64_js_outcome_t *outcome);
-/* Drops queued nodes, drains bindings, destroys the engine, then native records.
+/* Session count of reclaimed teardown leaks, including owners already freed.
+ * Owner-thread only. Fixtures require zero except deliberate leak probes. */
+size_t yonder_scripts_teardown_leaks(void);
+/* Drops queued nodes, drains bindings, reports/reclaims a leaking engine, then
+ * frees native records. Other engine invariant violations remain fatal.
  * NULL is a no-op; call outside script before widgets/model/document teardown. */
 void yonder_scripts_free(yonder_scripts_t *scripts);
 

@@ -50,6 +50,6 @@ import shlex,sys
 for line in sys.stdin:
     if line.startswith("MATH_OBJS="): print("\n".join(shlex.split(line.split("=",1)[1])[0].split()))
 ')
-cc -fsanitize=address,undefined -pthread -Wl,-z,noexecstack,--gc-sections,--wrap=flow_layout \
+cc -fsanitize=address,undefined -pthread -Wl,-z,noexecstack,--gc-sections,--wrap=flow_layout,--wrap=os64_js_create_with_teardown \
     userland/obj/js/core.o "${maths[@]}" "${objects[@]}" -o "$work/yonder-scripts"
 "$work/yonder-scripts" "$@"

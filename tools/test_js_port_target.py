@@ -11,7 +11,7 @@ math = set('acos acosh asin asinh atan atan2 atanh cbrt ceil cos cosh exp expm1 
 services = set('os64_exit os64_free os64_hprintf os64_localtime os64_malloc os64_malloc_size os64_memchr os64_memcmp os64_memcpy os64_memmove os64_memset os64_realloc os64_strchr os64_strcmp os64_strlen os64_strrchr os64_time os64_write'.split())
 runtime_services = services | {'os64_micros', 'os64_open', 'os64_read', 'os64_close'}
 runtime_exports = {'os64_js_' + name for name in
-                   'create context class_id eval run run_file install_output install_args drain_jobs cancel destroy check_budget'.split()}
+                   'create context class_id eval run run_file install_output install_args drain_jobs cancel destroy check_budget create_with_teardown destroy_report'.split()}
 
 def run(*args):
     return subprocess.check_output(args, cwd=root, text=True)

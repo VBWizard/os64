@@ -168,9 +168,11 @@ D6 holds wrapper identity keys, query roots and cached query answers. A
 successful refresh holds its complete successor before releasing the old
 answer; refusal preserves the old holds. Native holds survive drain and
 engine finalizers and are released by `os64_dom_free` after engine destruction.
-Copied JavaScript strings retain no native snapshot bytes. A reporting/reclaiming runtime destroy remains a separate reviewed
-extension before scripting is enabled for ordinary browsing; D5a retains
-libjs's R0 fatal invariant check and requires a clean registry teardown.
+Copied JavaScript strings retain no native snapshot bytes. Hosts select fatal
+or D8's opt-in reporting/reclaiming destruction at runtime creation. Both use
+the same drain/destroy/free ordering; the reporting host consumes the teardown
+report and logs/counts leaks. Independent D8 acceptance is required before
+scripting is enabled for ordinary browsing.
 
 ## Synchronous geometry
 

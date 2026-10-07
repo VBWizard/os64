@@ -1,8 +1,10 @@
 # D10: synchronous script geometry
 
-Status: implemented and locally validated, based on `userland` `29641e20`.
-Governing design: DOM.md § Geometry. D8 is a separate review; D7's dispatcher
-is concurrent work. This slice keeps both interfaces additive.
+Status: implemented and locally validated; originally based on `userland`
+`29641e20`, joined with `userland` `7c5431e3` after D8 and FRAMES merged.
+Governing design: DOM.md § Geometry. D8's reporting teardown is included;
+D7's dispatcher remains a separate integration. The runtime interfaces are
+additive.
 
 ## Scope and host seam
 
@@ -94,3 +96,15 @@ The validation VMs are stopped.
 Yonder shows PASS with widths 110 then 150 and client width 146. The status line
 reports forced layouts and elapsed time. Serve the file through the existing
 browser fixture route or copy it to a browser-accessible location.
+
+## Joined userland verification
+
+The merge with `userland` `7c5431e3` preserves D10 geometry and D8's reviewed
+reporting teardown, including the kernel-log sink and lost-wrapper recovery.
+Both test groups run in the browser suite. The combined validation passes:
+2,128 sanitized browser checks; 4,592 sanitized DOM checks; 1,023 target-core
+and 4,247 sanitized-core runtime checks, zero failures/live allocations.
+The strict full image build, contract-header checks, teardown allocation/global
+audit and production symbol/dependency/relink audit pass. The joined library
+exports fourteen runtime APIs and the unchanged 186 engine APIs. The guest
+measurements above are the original D10 evidence, not a new guest run.

@@ -104,6 +104,11 @@
       "path": "patches/0005-backtrace-error-lifetime.patch",
       "sha256": "bfccbb28a13d46352407921cc8d0e046c275fc4cc003b5f67fc24a3b4c4d1083",
       "reason": "Retain the borrowed error during backtrace assembly when diagnostic allocation failures replace current_exception; release temporary buffer on early failure."
+    },
+    {
+      "path": "patches/0006-reporting-runtime-teardown.patch",
+      "sha256": "a0196e8b73ae1be1c6c50c8cd944c59ae8621a699ca664e09d6e168df0b9ae5a",
+      "reason": "Return at the object/weakref teardown leak gate for an audited allocator-ledger host; raw and default destruction retain the assertions."
     }
   ],
   "configuration_scope": "Atomics-disabled, stack-checked target engine and complete standalone embedding interface; slice review/merge and runner integration are tracked in JAVASCRIPT_TASKS.md"
