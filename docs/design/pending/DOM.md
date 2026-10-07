@@ -2366,7 +2366,7 @@ scripts sit above its links, so the third stop, deep in the body after
 eleven slices, was the first look that found them, and a model of that tree
 cost 77-104 ms in the guest. libpage now exports the walk instead:
 `os64_page_sheets_in` lists the sheets by the same predicate the model uses
-(`sheet_named`, one rule for both) in the model's order, without building
+(`sheet_wanted`, one rule for both) in the model's order, without building
 one, and its host suite holds the walk against the model on the HTML
 corpus. It costs 1-15 ms on the whole page, so it runs after every slice as
 well as at every stop and the end. Wikipedia's links went out after the
@@ -2379,12 +2379,21 @@ sheet holds nothing, nor does one whose fetch failed. Other tasks run
 meanwhile, as they do while a `src` is out; the reap or the ticker carries
 the turn on. Each stop waits at most `SHEETS_WAIT_MS` of its own, on the
 ticker (`pictures_schedule`), and then the script runs with the sheets that
-came. The table at a stop holds what the parser has reached, all above the
-script except a sheet an earlier script inserted below it, which is waited
-for too: HTML's rule is the document's script-blocking sheets, not only the
-ones above. A resize rejudges the stream's holds with the coming page's. D9
-falls in by itself: a written `link` before a written `script` is in the
-tree when the parse stops at it.
+came. The sheets still out then have had their time: they LAPSE
+(`Sheet.lapsed`), and hold no later script and, once the table moves, not
+the first paint either, so a sheet that never lands costs a page one wait,
+not one per script. A sheet found after the expiry starts a wait of its own.
+The wait is document-wide, as HTML's is: any sheet still out holds the
+script, not only those above it. A resize rejudges the stream's holds with
+the coming page's. D9 falls in by itself: a written `link` before a written
+`script` is in the tree when the parse stops at it.
+
+A slice can end inside a `style`, which libhtml then holds with part of its
+text. The slice's look leaves that element alone
+(`os64_html_parser_open_text`, libhtml's answer to "whose text is still
+arriving"), so a later look takes it whole; one is never open at a stop or
+at the end. Taken early, its text so far would be parsed as the whole sheet
+and never read again, and the arrived page would draw without its tail.
 
 **Departures beyond the brief, each because the table is now filled as the
 tree is revealed:**
@@ -2404,18 +2413,27 @@ tree is revealed:**
 - **The measured layout of the stream's page measures against its table**
   (D7c's stand-in of `style` elements alone is retired), and the page
   stream_finish holds measures against the table it was handed.
+- **A sheet a script inserted blocks scripts too.** HTML blocks a script
+  only on a sheet whose element the PARSER created; one a script inserts
+  does not. The walk cannot tell the two apart, so here both hold the wait.
+  Booked below.
 
 **Booked:**
 
 | Debt | Why it waits | Trigger |
 |---|---|---|
 | A `link` whose `href` a script changes before the page arrives keeps the sheet it was found with | the table matches sheets by element, and the arrival adds only elements it lacks; the shown page's staged rebuild re-reads every `href` | a page that swaps its theme sheet while it is parsed |
+| A sheet a script inserted holds the next script's wait, which HTML's "created by the parser" rule would not | libhtml's tree does not record which elements the parser made, and the walk lists elements, not their origin | a page whose script inserts a slow sheet mid-parse and then runs a script |
 
 **Proof.** In `tools/test_yonder_scripts_host.c`, with the test landing the
 sheet jobs as the worker would (`sheet_land`):
 - a slow `link` above a measuring script, sent for at the first stop with
   the body still in the mailbox; the script waits, then measures the styled
   300;
+- a `style` straddling the 64 KiB slice, taken whole: 300 for the script and
+  on the shown page (Fable's probe);
+- a sheet that never lands, lapsing at its expiry: the second script runs at
+  once and the page is shown without waiting again;
 - one job for that sheet from the stop to the arrival, and the sheet in the
   arrived page's cascade;
 - a `link` found by a slice with no stop yet;
@@ -2433,8 +2451,9 @@ sheet jobs as the worker would (`sheet_land`):
 - teardown mid-wait by Stop, by scripts off and by the window's close, with
   no job left.
 
-Fourteen `sheets-*` mutants in `test_yonder_loop_mutants.py`, one per rule,
-all caught. In libpage's suite, the walk and `os64_page_base_in` against
+Sixteen `sheets-*` mutants in `test_yonder_loop_mutants.py`, one per rule,
+all caught. In libhtml's suite, `os64_html_parser_open_text` for a `style`,
+a `title` and a `textarea` cut mid-text, and none at a stop or the end. In libpage's suite, the walk and `os64_page_base_in` against
 the model on hand-made edges (alternate, disabled, foreign `type`, SVG,
 `template`, `noscript`, a broken base) and the six corpus pages.
 

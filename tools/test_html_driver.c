@@ -1037,6 +1037,36 @@ static void byte_order_marks(void)
         }
     }
 }
+/* The element whose text is still arriving, between two feeds. */
+static void open_text_checks(void)
+{
+    os64_html_options_t on = scripted();
+    os64_html_parser_t *p = os64_html_parser_new(&on);
+    if (!p)
+        safety_fail("open text fixture allocation");
+    check(os64_html_parser_open_text(NULL) == NULL && os64_html_parser_open_text(p) == NULL,
+          "open text: none before anything is fed");
+    check(feed_text(p, window()) == OS64_HTML_OK && feed_text(p, "<style>p{col") == OS64_HTML_OK,
+          "open text: a style cut mid-text feeds");
+    os64_html_node_t *open = os64_html_parser_open_text(p);
+    check(open != NULL && open == find_named(os64_html_parser_document(p)->document, "style") &&
+              open->first_child != NULL && !strcmp(open->first_child->text, "p{col"),
+          "open text: the style is open, with the text that has come");
+    check(feed_text(p, "or:red}</style><title>ti") == OS64_HTML_OK &&
+              os64_html_parser_open_text(p) == find_named(os64_html_parser_document(p)->document, "title"),
+          "open text: the style closes and a title cut mid-text is open");
+    check(feed_text(p, "</title><p>x<textarea>ab") == OS64_HTML_OK &&
+              os64_html_parser_open_text(p) != NULL && os64_html_parser_open_text(p)->first_child != NULL,
+          "open text: a textarea cut mid-text is open");
+    check(feed_text(p, "</textarea><script>s</script>") == OS64_HTML_SCRIPT &&
+              os64_html_parser_open_text(p) == NULL,
+          "open text: none at a script stop");
+    check(os64_html_parser_resume(p) == OS64_HTML_OK && os64_html_parser_end(p) == OS64_HTML_OK &&
+              os64_html_parser_open_text(p) == NULL,
+          "open text: none at the end");
+    os64_html_document_free(os64_html_parser_finish(p));
+}
+
 static void stop_checks(void)
 {
     os64_html_options_t on = scripted(), off = scripted();
@@ -2626,6 +2656,7 @@ int main(int argc, char **argv)
         integration_end_tags();
         byte_order_marks();
         stop_checks();
+        open_text_checks();
         write_checks();
         disturbed_checks();
         random_walks(argc > 2 ? (unsigned)atoi(argv[2]) : 20000,

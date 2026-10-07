@@ -342,6 +342,10 @@ typedef struct Sheet {
     // it is an import of a sheet that does. One that does not is fetched
     // all the same, and laid in when it lands.
     bool holds;
+    // A script waited its SHEETS_WAIT_MS for it and it did not come: it
+    // holds nothing from then on, neither a later script nor the first
+    // paint (stream_sheets_hold).
+    bool lapsed;
     os64_work_id_t id;
     const os64_html_node_t *node;   // a sheet the page names: its element, held; NULL otherwise
     const char *media;              // a sheet the page names: its element's; NULL otherwise
@@ -2134,6 +2138,8 @@ static bool same_origin(const char *a, const char *b)
 // and never wrong about what applies.
 static bool sheet_holds(const Page *p, const Sheet *sh)
 {
+    if (sh->lapsed)
+        return false;
     garb_env_t view = css_view(g.view.bounds.w, g.view.bounds.h, g.zoom);
     if (sh->importer >= 0) {
         const garb_import_t *im = &p->sheets[sh->importer].imports[sh->import_index];
@@ -4609,6 +4615,17 @@ static void stream_parse_over(void)
     yonder_scripts_parse_ended(g.stream.scripts);
 }
 
+// A sheet the parse has revealed, unless it is the `style` whose text is
+// still arriving: a slice can end inside one, and its text so far would be
+// parsed as the whole sheet. A later look takes it whole; it is never open
+// at a stop or at the end.
+static bool stream_sheet_add(void *page, const os64_page_sheet_t *one)
+{
+    if (one->node == os64_html_parser_open_text(g.stream.parser))
+        return true;
+    return sheet_add(page, one);
+}
+
 // The stream's page, with the stream's document, address and serial.
 static Page *stream_page(void)
 {
@@ -4634,7 +4651,7 @@ static void stream_sheets(void)
     Page *p = stream_page();
     int64_t began = s_script_audit ? os64_micros() : 0;
     int32_t had = p->nsheets;
-    int32_t listed = os64_page_sheets_in(page_doc(p), g.stream.head.url, sheet_add, p);
+    int32_t listed = os64_page_sheets_in(page_doc(p), g.stream.head.url, stream_sheet_add, p);
     if (s_script_audit) {
         char line[128];
         os64_snprintf(line, sizeof(line), "yonder: stream sheets: %d listed, %d new, %d out, in %ld us",
@@ -4649,17 +4666,28 @@ static void stream_sheets(void)
 // them would read a layout they will change. Only a sheet whose media
 // holds on this glass is waited for, as the first paint waits; one whose
 // fetch failed holds nothing. The wait lasts SHEETS_WAIT_MS at most, on
-// the ticker; the script then runs with what came.
+// the ticker; the script then runs with what came, and the sheets still
+// out have had their time: they lapse, and hold no later script and not
+// the first paint. A sheet found after that starts a wait of its own.
 static bool stream_sheets_hold(void)
 {
-    if (g.stream.page.sheets_waiting == 0)
+    Page *p = &g.stream.page;
+    if (p->sheets_waiting == 0)
         return false;
     uint64_t now = yonder_now_ms();
     if (g.stream.sheets_due == 0) {
         g.stream.sheets_due = now + SHEETS_WAIT_MS;
         pictures_schedule();
     }
-    return now < g.stream.sheets_due;
+    if (now < g.stream.sheets_due)
+        return true;
+    for (int32_t e = 0; e < p->nsheets; e++)
+        if (p->sheets[e].waiting) {
+            p->sheets[e].lapsed = true;
+            p->sheets[e].holds = false;
+        }
+    p->sheets_waiting = 0;
+    return false;
 }
 
 // One task of the arriving page's own: a ready script or a due timer. The

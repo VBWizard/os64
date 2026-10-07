@@ -957,6 +957,10 @@ os64_html_node_t *os64_html_parser_script(const os64_html_parser_t *p)
 {
     return p ? p->script : NULL;
 }
+os64_html_node_t *os64_html_parser_open_text(const os64_html_parser_t *p)
+{
+    return p != NULL && p->mode == M_TEXT && p->stack.n != 0 ? p->stack.v[p->stack.n - 1] : NULL;
+}
 /* `n` bytes of a write, at the insertion point, which moves past them. False,
  * and the parse refused, when the heap has no room. */
 static bool written_insert(os64_html_parser_t *p, const char *s, size_t n)

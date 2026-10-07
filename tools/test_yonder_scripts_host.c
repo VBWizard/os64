@@ -2323,6 +2323,25 @@ static void sheets_wait_cases(void) {
     check(sheet_land("/i.css","#box{width:300px}") && loop_settle() && os64_streq(stream_box_width(),"300"),
         "sheets: and the script measures what it imported");
     loop_drop();
+    /* A style that straddles the slice boundary is taken whole: its text
+     * so far is not parsed as the sheet (Fable's probe, PR #233). */
+    static char split[8*YONDER_STREAM_CHUNK], comment[5*YONDER_STREAM_CHUNK];
+    memset(comment,'z',sizeof(comment)-1); comment[sizeof(comment)-1]='\0';
+    snprintf(split,sizeof(split),"<style>/*%s*/ #box{width:300px}</style>" D7D_MEASURE "<p>tail</p>",comment);
+    loop_page(split);
+    check(loop_settle() && g.page.tree!=NULL && os64_streq(box_width(),"300") &&
+          flow_box_for(g.page.tree,probe_id("box"))->rect.w==300,
+        "sheets: a style split by a slice is parsed whole, for the script and on the shown page");
+    loop_drop();
+    /* A sheet that never lands holds one wait, not one per script: at
+     * expiry it lapses, and neither a later script nor the first paint
+     * waits for it again. */
+    loop_page("<link rel=stylesheet href=never.css><script>var one=1</script>" D7D_MEASURE "<p>tail</p>");
+    check(loop_settle() && g.stream.stopped && stream_box_width()[0]=='\0',"sheets: the first script waits");
+    now_ms+=SHEETS_WAIT_MS;
+    check(loop_settle() && strcmp(stream_box_width(),"")!=0 && g.page.tree!=NULL && !g.coming.active,
+        "sheets: at expiry the sheet lapses; the second script runs at once and the page is shown without it");
+    loop_drop();
     /* The same script above the link runs at once. */
     loop_page(D7D_MEASURE "<link rel=stylesheet href=s.css><p>tail</p>");
     check(loop_settle() && !g.stream.active && strcmp(stream_box_width(),"")!=0 &&
