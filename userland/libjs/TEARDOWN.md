@@ -91,7 +91,8 @@ the engine, frees DOM native records, then releases queued node holds. Native
 models/state/document survive this sequence. libdom's finalizers only clear
 opaque slots; its query/node records and node holds are freed independently by
 `os64_dom_free`. A leaked wrapper therefore cannot suppress their cleanup.
-Yonder logs the page URL and reclaimed block/byte counts on stderr and keeps a
+Yonder logs the page URL and reclaimed block/byte counts through
+`os64_debug_log`, so logd preserves the verdict from a desktop launch, and keeps a
 saturating owner-thread session count exposed by
 `yonder_scripts_teardown_leaks()`. Ordinary fixtures require zero; the deliberate
 leak case expects one and proves that a subsequent page still executes.

@@ -137,8 +137,13 @@ static void retire(yonder_scripts_t *s)
     os64_js_destroy_report(s->runtime, &report);
     if (report.leaked) {
         if (teardown_leaks != SIZE_MAX) teardown_leaks++;
-        os64_hprintf(2, "Yonder: reclaimed JavaScript teardown leak at %s (%lu blocks, %lu bytes)\n",
-                     s->url, (unsigned long)report.reclaimed_blocks, (unsigned long)report.reclaimed_bytes);
+        // A desktop launch's stderr belongs to another VT. Keep the verdict
+        // in the kernel log so logd preserves the page and reclaimed totals.
+        char line[OS64_JS_SOURCE_NAME_CAP + 128];
+        os64_snprintf(line, sizeof(line),
+                      "Yonder: reclaimed JavaScript teardown leak at %s (%lu blocks, %lu bytes)",
+                      s->url, (unsigned long)report.reclaimed_blocks, (unsigned long)report.reclaimed_bytes);
+        os64_debug_log(line);
     }
     os64_dom_free(s->dom);
     s->runtime = NULL;

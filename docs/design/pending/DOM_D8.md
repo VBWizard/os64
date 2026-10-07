@@ -1,6 +1,6 @@
 # D8: reporting runtime destruction
 
-Status: implemented and validated, independent review pending, 2026-10-05.
+Status: implemented and validated; approved by Fable, 2026-10-06.
 Branch `codex/dom-d8`, worktree `.worktrees/dom-d8`, based on merged `userland`
 `29641e20` (including D6). D7 is concurrent work and is not required for these
 results. This slice implements DOM.md ruling 8 and its teardown acceptance.
@@ -16,7 +16,8 @@ frees its tracked allocation ledger without engine entry. Remaining raw buffers
 and ordinary strings after clean engine cleanup are also reported/reclaimed.
 Native DOM records and node holds are freed independently afterward.
 
-A reclaimed leak is logged with the page URL and counted through
+A reclaimed leak is sent to the kernel log with the page URL, preserved by
+logd, and counted through
 `yonder_scripts_teardown_leaks()`. Unexpected counts fail browser fixtures.
 The deliberate lost-wrapper fixture proves that native state is reclaimed and
 that a subsequent page can still execute. Existing runner creation retains
@@ -35,13 +36,13 @@ allocator/global-reference audit and D7 handoff are in
 | --- | --- |
 | `make -j8` | Full strict target/userland build and boot image pass. Fresh worktree dependency downloads required network escalation. |
 | `bash tools/test_js_runtime_host.sh` | Target engine: 939 checks; sanitized engine: 4,163 checks; zero failures/live allocations. Each runs 10,000 leaked runtimes. Five fatal controls per profile pass with full JSFA badge verification. |
-| `bash tools/test_yonder_scripts_host.sh` | 2,080 checks, zero failures; ordinary fixtures have zero teardown leaks. The deliberate lost-wrapper case logs/counts one and leaves page/native/engine storage reclaimed; the next page runs. |
+| `bash tools/test_yonder_scripts_host.sh` | 2,083 checks, zero failures; ordinary fixtures have zero teardown leaks/logs. The deliberate lost-wrapper case sends one kernel-log message with the page URL and reclaimed block/byte totals, counts one leak and leaves page/native/engine storage reclaimed; the next page runs and retires without another leak log. |
 | `bash tools/test_js_acceptance_host.sh` | Each engine profile passes 383 independent checks; 55 upstream functions pass, four unsupported-feature skips. Diagnostic refusal leaves zero live allocations; separate fatal control passes. |
 | `bash tools/test_js_cli_host.sh` | 196 runner checks and 38 real-library checks pass. |
 | `bash tools/test_js_contract_headers.sh` | Manifest hashes, cross-header and binding syntax pass. |
 | `python3 tools/test_js_port_target.py` | 13 runtime exports, unchanged 186 engine exports; real dependency, visibility, binding and relink audits pass. |
 | `python3 tools/test_js_teardown_audit.py` | Target direct-allocation/global-state/private-symbol audit passes. |
-| QEMU, final VM 56309 | `/tests/d8embedtest`: 437 checks, zero failures, 41 native calls; status `0x4A535254` (JSRT). Ten thousand leaked runtimes preserve `/proc/self/heap` live bytes and blocks; heap verification passes. |
+| QEMU, final VM 56309 | `/tests/jsembedtest`: 437 checks, zero failures, 41 native calls; status `0x4A535254` (JSRT). Ten thousand leaked runtimes preserve `/proc/self/heap` live bytes and blocks; heap verification passes. |
 | Guest fatal policy | Intentional default leak reports its engine invariant and exits `0x4A534641` (JSFA). |
 | Shipped guest runner | `js -e "print(6*7)"` outputs `42`, status zero. |
 | Post-stop filesystems | Read-only ext2 checks on final copied root and home images pass. |
@@ -60,14 +61,18 @@ root image and the production built library. Final delivered bytes match:
 | Artifact | Bytes | SHA-256 |
 | --- | --- | --- |
 | `libjs.so` | 4,527,960 | `8d550baae7b213c0cb7f83834aea72282b993ab5417918696e43813994cee866` |
-| `d8embedtest` | 97,680 | `f3497584a436d05114fa45a2ba23768df7620af9d51b7bfc5998b298b0056106` |
+| `jsembedtest` | 97,680 | `f3497584a436d05114fa45a2ba23768df7620af9d51b7bfc5998b298b0056106` |
 
 Raw outputs are `/tmp/dom-d8-runtime.log`, `/tmp/dom-d8-yonder.log`,
 `/tmp/dom-d8-acceptance.log`, `/tmp/dom-d8-cli.log`, `/tmp/dom-d8-target.log`,
 `/tmp/dom-d8-final-runtime.txt` and `/tmp/dom-d8-final-status.txt`.
 Browser lost-wrapper recovery is host evidence against the merged D5/D6 browser;
 this does not claim an interactive guest recovery demonstration, D7 integration,
-new P5 evidence or independent review acceptance.
+new P5 evidence. Fable's independent review approved the implementation;
+the review follow-up routes the reclaimed-leak verdict through the kernel
+log and corrects the guest fixture name to the installed `jsembedtest` name.
+The follow-up target Yonder rebuild and sanitized browser suite pass; the
+runtime implementation and original guest validation artifacts are unchanged.
 
 ## Integration handoff
 

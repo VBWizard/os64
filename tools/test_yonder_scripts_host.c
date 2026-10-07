@@ -21,7 +21,14 @@ int64_t os64_close(int32_t h) { (void)h; return 0; }
 int64_t os64_stat(const char *p, os64_dirent_t *entry) { (void)p; (void)entry; return -1; }
 int64_t os64_micros(void) { return 10000000; }
 uint64_t os64_heap_verify(void) { return 0; }
-void os64_debug_log(const char *text) { (void)text; }
+static size_t teardown_log_count;
+static char teardown_log[OS64_JS_SOURCE_NAME_CAP + 128];
+void os64_debug_log(const char *text) {
+    if (strstr(text, "reclaimed JavaScript teardown leak") != NULL) {
+        teardown_log_count++;
+        os64_strcopy(teardown_log, sizeof(teardown_log), text);
+    }
+}
 void *os64_calloc(size_t n, size_t z) {
     if (z && n > SIZE_MAX/z) return NULL;
     void *p = os64_malloc(n*z);
@@ -845,6 +852,7 @@ os64_js_status_t __wrap_os64_js_create_with_teardown(const os64_js_config_t *con
 static void reporting_teardown(void)
 {
     check(yonder_scripts_teardown_leaks() == 0, "ordinary browser fixtures have no teardown leaks");
+    check(teardown_log_count == 0, "ordinary browser retirement emits no reclaimed-leak log");
     size_t before = live;
     probe_page("<p id='heading'>keep the window</p><script>globalThis.held=document.getElementById('heading')</script>", true);
     os64_js_outcome_t outcome;
@@ -861,6 +869,12 @@ static void reporting_teardown(void)
     teardown_fixture_runtime = NULL;
     check(yonder_scripts_teardown_leaks() == 1 && live == before,
           "browser leak is counted and engine/native storage is reclaimed");
+    unsigned long reclaimed_blocks = 0, reclaimed_bytes = 0;
+    check(teardown_log_count == 1 &&
+          sscanf(teardown_log,
+                 "Yonder: reclaimed JavaScript teardown leak at https://fixture.test/page (%lu blocks, %lu bytes)",
+                 &reclaimed_blocks, &reclaimed_bytes) == 2 && reclaimed_blocks > 0 && reclaimed_bytes > 0,
+          "kernel log receives the reclaimed leak's page URL and block/byte totals once");
     /* Reuse the rendered text so the shared glyph cache does not grow while
      * we compare page-owned storage against the pre-navigation baseline. */
     probe_page("<p id='heading'>keep the window</p><script>globalThis.nextPage=true</script>", true);
@@ -870,6 +884,7 @@ static void reporting_teardown(void)
     teardown_fixture_runtime = NULL;
     check(yonder_scripts_teardown_leaks() == 1 && live == before,
           "clean navigation neither adds a leak nor retains page storage");
+    check(teardown_log_count == 1, "clean next-page retirement emits no additional reclaimed-leak log");
 }
 
 int main(void)
