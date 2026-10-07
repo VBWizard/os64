@@ -1,7 +1,7 @@
 #ifndef XHCI_H
 #define XHCI_H
 
-// xHCI (USB 3.x host controller), boot keyboard and relative mouse input.
+// xHCI (USB 3.x host controller), HID input and AX210 descriptor discovery.
 //
 // WHY THIS EXISTS: the Bosgame P5 has no PS/2 port. Every keystroke it will
 // ever receive arrives over USB, so "os64 runs on real hardware" requires
@@ -17,9 +17,10 @@
 //     the machine. (Devices with built-in hubs enumerate AS hubs — those
 //     need the hub slice, which is future work.)
 //   - ENUMERATION AT BOOT ONLY: no hotplug. Plug it in, then power on.
-//   - Controllers are searched until the first boot-protocol keyboard and
-//     first boot-protocol mouse have been found; they may live on different
-//     controllers. Mouse descriptors can select report protocol for a
+//   - Root ports on up to eight controllers are probed, binding the first
+//     boot-protocol keyboard and mouse and reporting Intel AX210 descriptors.
+//     The AX210 is left unbound: no firmware upload or Bluetooth traffic.
+//     Mouse descriptors can select report protocol for a
 //     relative X/Y/wheel layout; unsupported descriptors retain boot mode.
 //   - Handles BOTH context sizes (HCCPARAMS1.CSZ): QEMU uses 32-byte
 //     contexts, real hardware frequently uses 64 — the P5 gets to choose.
@@ -33,9 +34,9 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-// Probe PCI for an xHCI controller (class 0x0C / subclass 0x03 / prog-if
-// 0x30), bring it up, and enumerate root-port devices looking for a HID
-// boot keyboard and mouse interfaces. Safe to call when no controller exists.
+// Probe PCI for xHCI controllers (class 0x0C / subclass 0x03 / prog-if 0x30),
+// enumerate their root-port devices, bind HID input and describe the AX210.
+// Safe to call when no controller exists.
 // Call BEFORE task creation: the MMIO mapping lands in the kernel PML4's
 // upper half so every later task inherits it.
 void init_xHCI(void);

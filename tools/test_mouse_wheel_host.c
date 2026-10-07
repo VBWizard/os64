@@ -117,7 +117,7 @@ int main(void)
     s_packet_length=3; packet(8,0,0,127); empty();
     packet(8,1,0,127); event(INPUT_EVENT_MOUSE_MOVE); empty();
 
-    xhci_hid_t usb={0}; uint8_t report[4]={0,0,0,255};
+    xhci_device_t usb={0}; uint8_t report[4]={0,0,0,255};
     hid_process_mouse_report(&usb,report,3); empty(); // stale fourth byte
     CHECK(usb.mouse_lengths_seen == 0); // tracing disabled
     kDebugLevel = DEBUG_USB; diagnostic_lines = 0;
@@ -152,7 +152,7 @@ int main(void)
     uint8_t buffers[HID_INFLIGHT * HID_REPORT_BYTES] = {0};
     uint32_t doorbells[2] = {0};
     hc.db = doorbells;
-    hc.mouse = (xhci_hid_t){.present=true,.kind=HID_MOUSE,.slot=1,.dci=3,
+    hc.mouse = (xhci_device_t){.present=true,.kind=HID_MOUSE,.slot=1,.dci=3,
         .reports=buffers,.reports_phys=(uintptr_t)buffers,.report_bytes=9,
         .mouse_report_protocol=true,
         .intr={.trb=trbs,.phys=(uintptr_t)trbs,.enqueue=1,.cycle=1}};
@@ -173,9 +173,66 @@ int main(void)
     xhci_handle_transfer_event(&completion); empty(); // eight bytes is truncated
     input_release_pointer(&hc.mouse.pointer); event(INPUT_EVENT_MOUSE_BUTTON_UP); empty();
 
+    // EP0 short data must not complete the request before Status. Unrelated
+    // slots and stale TRBs must not finish the current descriptor read either.
+    hc.control_slot=2; hc.control_setup_trb=0x1fe0;
+    hc.control_data_trb=0x1000; hc.control_status_trb=0x1010;
+    hc.xfer_actual=64;
+    completion=(xhci_trb_t){.param=0x1000,
+        .status=(TRB_CC_SHORT_PACKET << 24) | 46,
+        .control=(2u << 24) | (1u << 16)};
+    xhci_handle_transfer_event(&completion);
+    CHECK(!hc.xfer_done && hc.xfer_actual==18);
+    completion.param=0x1010; completion.status=TRB_CC_SUCCESS << 24;
+    completion.control=(3u << 24) | (1u << 16);
+    xhci_handle_transfer_event(&completion); CHECK(!hc.xfer_done);
+    completion.control=(2u << 24) | (1u << 16); completion.param=0x1100;
+    xhci_handle_transfer_event(&completion); CHECK(!hc.xfer_done);
+    completion.param=0x1010;
+    xhci_handle_transfer_event(&completion);
+    CHECK(hc.xfer_done && hc.xfer_actual==18 && hc.xfer_cc==TRB_CC_SUCCESS);
+    hc.xfer_done=false; completion.param=0x1fe0; completion.status=6u << 24;
+    xhci_handle_transfer_event(&completion); CHECK(hc.xfer_done && hc.xfer_cc==6);
+    hc.xfer_done=false; hc.control_data_trb=0; hc.control_setup_trb=0x1020;
+    hc.control_status_trb=0x1030; hc.xfer_actual=0; completion.param=0x1030;
+    completion.status=TRB_CC_SUCCESS << 24;
+    xhci_handle_transfer_event(&completion); CHECK(hc.xfer_done && hc.xfer_actual==0);
+
+    // A delayed command completion cannot authorize Disable Slot cleanup.
+    xhci_trb_t events[RING_TRBS]={0}; uint64_t runtime[16]={0};
+    hc.evt=events; hc.evt_cycle=1; hc.rt=(uint8_t *)runtime;
+    hc.command_trb=0x2000;
+    events[0]=(xhci_trb_t){.param=0x2010,.status=TRB_CC_SUCCESS << 24,
+        .control=TRB_TYPE(TRB_EV_CMD_COMPLETE) | TRB_CYCLE | (2u << 24)};
+    CHECK(xhci_drain_events()==1 && !hc.cmd_done);
+    events[1]=events[0]; events[1].param=0x2000;
+    CHECK(xhci_drain_events()==1 && hc.cmd_done && hc.cmd_slot==2);
+
+    // Configuration walks cover alternate settings and reject truncation,
+    // zero lengths, short standard descriptors and endpoints with no interface.
+    uint8_t config[]={9,2,41,0,1,1,0,0x80,50,
+        9,4,0,0,1,0xe0,1,1,0, 7,5,0x81,3,16,0,1,
+        9,4,0,1,1,0xe0,1,1,0, 7,5,0x82,2,64,0,0};
+    CHECK(xhci_valid_config(config,sizeof(config)));
+    for (unsigned n=0;n<sizeof(config);++n)
+        CHECK(!xhci_valid_config(config,n));
+    config[9]=0; CHECK(!xhci_valid_config(config,sizeof(config))); config[9]=9;
+    config[10]=5; CHECK(!xhci_valid_config(config,sizeof(config))); config[10]=4;
+    config[18]=6; CHECK(!xhci_valid_config(config,sizeof(config))); config[18]=7;
+    config[25]=255; CHECK(!xhci_valid_config(config,sizeof(config))); config[25]=9;
+    CHECK(xhci_valid_config(config,sizeof(config)));
+    uint8_t large_config[sizeof(config)+255]={0};
+    memcpy(large_config,config,sizeof(config));
+    large_config[2]=sizeof(large_config) & 255;
+    large_config[3]=sizeof(large_config) >> 8;
+    large_config[sizeof(config)]=255; large_config[sizeof(config)+1]=0xff;
+    CHECK(xhci_valid_config(large_config,sizeof(large_config)));
+    large_config[sizeof(config)]=254;
+    CHECK(!xhci_valid_config(large_config,sizeof(large_config)));
+
     uint8_t wide_desc[sizeof(basic)]; memcpy(wide_desc,basic,sizeof(basic));
     wide_desc[sizeof(basic)-7]=16;
-    xhci_hid_t wide_dev={.mouse_report_protocol=true};
+    xhci_device_t wide_dev={.mouse_report_protocol=true};
     CHECK(hid_mouse_parse(wide_desc,sizeof(wide_desc),&wide_dev.mouse_layout));
     const uint8_t wide_report[]={0,0,0,0,0,0,0x80};
     hid_process_mouse_report(&wide_dev,wide_report,sizeof(wide_report));

@@ -1,4 +1,4 @@
-// xhci.c — xHCI controller, boot keyboard and descriptor-aware mouse input.
+// xhci.c — xHCI controller, HID input and AX210 descriptor discovery.
 // The design rationale and v1 limits live in xhci.h; this file is the
 // machine. Register/TRB layouts follow the xHCI 1.x specification;
 // section references below are to that spec.
@@ -77,6 +77,7 @@ extern bool kUSBQuiet;   // USBQUIET — the opt-in 2.4GHz hygiene flashlight
 #define TRB_STATUS           4
 #define TRB_LINK             6
 #define TRB_ENABLE_SLOT      9
+#define TRB_DISABLE_SLOT     10
 #define TRB_ADDRESS_DEVICE   11
 #define TRB_CONFIG_ENDPOINT  12
 #define TRB_EVALUATE_CONTEXT 13
@@ -89,6 +90,7 @@ extern bool kUSBQuiet;   // USBQUIET — the opt-in 2.4GHz hygiene flashlight
 #define TRB_CYCLE            (1u << 0)
 #define TRB_TOGGLE_CYCLE     (1u << 1)
 #define TRB_IOC              (1u << 5)
+#define TRB_ISP              (1u << 2)   // event on short packet
 #define TRB_IDT              (1u << 6)   // immediate data (Setup stage)
 
 #define TRB_CC(status)       (((status) >> 24) & 0xFF)
@@ -119,8 +121,8 @@ typedef enum {
 	HID_MOUSE,
 } hid_kind_t;
 
-// One HID interface attached directly to a root port. Keyboards use boot
-// reports; mice use a parsed layout when available, with boot fallback.
+// Root-port enumeration state, retained for a bound HID interface. Keyboards
+// use boot reports; mice use a parsed layout when available, with boot fallback.
 typedef struct {
 	bool         present;
 	hid_kind_t   kind;
@@ -147,7 +149,7 @@ typedef struct {
 	uint8_t      mouse_wheel_samples;
 	bool         mouse_report_protocol;
 	hid_mouse_layout_t mouse_layout;
-} xhci_hid_t;
+} xhci_device_t;
 
 // One controller. The P5 may place its keyboard and mouse on different xHCI
 // controllers, so initialized controllers remain live and are all polled.
@@ -171,14 +173,19 @@ typedef struct {
 	volatile bool     cmd_done;
 	volatile uint8_t  cmd_cc;
 	volatile uint32_t cmd_slot;   // slot id byte from the completion
+	uint64_t          command_trb;
 
-	xhci_hid_t   keyboard;
-	xhci_hid_t   mouse;
+	xhci_device_t keyboard;
+	xhci_device_t mouse;
 
 	// EP0 completion currently awaited during boot-time enumeration.
 	volatile uint32_t control_slot;
 	volatile bool     xfer_done;
 	volatile uint8_t  xfer_cc;
+	uint64_t          control_setup_trb;
+	uint64_t          control_data_trb;
+	uint64_t          control_status_trb;
+	volatile uint16_t xfer_actual;
 } xhci_t;
 
 #define MAX_XHCI_CONTROLLERS 8
@@ -189,6 +196,7 @@ static xhci_t s_controllers[MAX_XHCI_CONTROLLERS];
 static uint32_t s_controller_count;
 static bool s_keyboard_claimed;
 static bool s_mouse_claimed;
+static uint32_t s_ax210_described;
 // Active controller while boot-time setup runs, or while xhci_poll owns its
 // global serialization lock. It is never changed concurrently.
 static xhci_t *s_hc;
@@ -257,7 +265,7 @@ static uint64_t ring_push(xhci_ring_t *r, uint64_t param, uint32_t status, uint3
 // ── Event ring drain ────────────────────────────────────────────────────────
 
 static void xhci_handle_transfer_event(xhci_trb_t *ev);
-static void xhci_hid_lost(xhci_hid_t *dev);
+static void xhci_hid_lost(xhci_device_t *dev);
 
 // Consume every event the controller has posted. Returns the count.
 // This is the whole "interrupt handler", minus the interrupt.
@@ -273,6 +281,9 @@ static uint32_t xhci_drain_events(void)
 
 		switch (TRB_GET_TYPE(control)) {
 			case TRB_EV_CMD_COMPLETE:
+				// A late completion must not authorize freeing another slot's DMA.
+				if (ev->param != s_hc->command_trb)
+					break;
 				s_hc->cmd_cc = (uint8_t)TRB_CC(ev->status);
 				s_hc->cmd_slot = (control >> 24) & 0xFF;
 				s_hc->cmd_done = true;
@@ -330,7 +341,7 @@ static uint32_t xhci_drain_events(void)
 static uint8_t xhci_run_command(uint64_t param, uint32_t status, uint32_t control)
 {
 	s_hc->cmd_done = false;
-	ring_push(&s_hc->cmd, param, status, control);
+	s_hc->command_trb = ring_push(&s_hc->cmd, param, status, control);
 	mmio_w32((uint8_t *)s_hc->db, 0, 0);   // doorbell 0, target 0 = command ring
 
 	for (int spin = 0; spin < 1000; spin++) {
@@ -352,23 +363,16 @@ static uint8_t xhci_run_command(uint64_t param, uint32_t status, uint32_t contro
 
 // One GET/SET request. `data` NULL for no-data-stage requests. Direction
 // is encoded in bmRequestType bit 7 (IN = device-to-host).
-static bool xhci_control_request(xhci_hid_t *dev,
+static bool xhci_control_request(xhci_device_t *dev,
                                  uint8_t bmRequestType, uint8_t bRequest,
                                  uint16_t wValue, uint16_t wIndex,
                                  void *data, uint16_t wLength)
 {
 	bool dir_in = (bmRequestType & 0x80) != 0;
-
-	// Setup stage: the 8 setup bytes ride IN the TRB (IDT). TRT (bits
-	// 16-17 of control): 0 = no data, 2 = OUT data, 3 = IN data.
-	uint64_t setup = (uint64_t)bmRequestType | ((uint64_t)bRequest << 8) |
-	                 ((uint64_t)wValue << 16) | ((uint64_t)wIndex << 32) |
-	                 ((uint64_t)wLength << 48);
-	uint32_t trt = (wLength == 0) ? 0 : (dir_in ? 3 : 2);
-	ring_push(&dev->ep0, setup, 8, TRB_TYPE(TRB_SETUP) | TRB_IDT | (trt << 16));
-
-	// Data stage (bounced through an HHDM scratch buffer — caller's buffer
-	// may be anywhere; DMA needs a physical address we control).
+	if (wLength > PAGE_SIZE || (wLength && data == NULL))
+		return false;
+	// Allocate before publishing Setup: an allocation failure must not leave
+	// half a request on EP0's ring. Timeouts retain storage for possible late DMA.
 	uint8_t *bounce = NULL;
 	if (wLength > 0) {
 		bounce = kmalloc_aligned(PAGE_SIZE);
@@ -376,8 +380,24 @@ static bool xhci_control_request(xhci_hid_t *dev,
 			return false;
 		if (!dir_in)
 			memcpy(bounce, data, wLength);
-		ring_push(&dev->ep0, virt_to_phys(bounce), wLength,
-		          TRB_TYPE(TRB_DATA) | (dir_in ? (1u << 16) : 0));
+	}
+
+	// Setup stage: the 8 setup bytes ride IN the TRB (IDT). TRT (bits
+	// 16-17 of control): 0 = no data, 2 = OUT data, 3 = IN data.
+	uint64_t setup = (uint64_t)bmRequestType | ((uint64_t)bRequest << 8) |
+	                 ((uint64_t)wValue << 16) | ((uint64_t)wIndex << 32) |
+	                 ((uint64_t)wLength << 48);
+	uint32_t trt = (wLength == 0) ? 0 : (dir_in ? 3 : 2);
+	s_hc->control_setup_trb = ring_push(&dev->ep0, setup, 8,
+	                                   TRB_TYPE(TRB_SETUP) | TRB_IDT | (trt << 16));
+
+	// Data stage (bounced through an HHDM scratch buffer — caller's buffer
+	// may be anywhere; DMA needs a physical address we control).
+	s_hc->control_data_trb = 0;
+	s_hc->xfer_actual = wLength;
+	if (wLength > 0) {
+		s_hc->control_data_trb = ring_push(&dev->ep0, virt_to_phys(bounce), wLength,
+		          TRB_TYPE(TRB_DATA) | TRB_ISP | (dir_in ? (1u << 16) : 0));
 	}
 
 	// Status stage: direction opposite the data stage (or IN when no data).
@@ -386,7 +406,8 @@ static bool xhci_control_request(xhci_hid_t *dev,
 	s_hc->control_slot = dev->slot;
 	s_hc->xfer_done = false;
 	s_hc->xfer_cc = 0;
-	ring_push(&dev->ep0, 0, 0, TRB_TYPE(TRB_STATUS) | status_dir | TRB_IOC);
+	s_hc->control_status_trb = ring_push(&dev->ep0, 0, 0,
+	                                    TRB_TYPE(TRB_STATUS) | status_dir | TRB_IOC);
 
 	mmio_w32((uint8_t *)s_hc->db, 4 * dev->slot, 1);   // doorbell: slot, DCI 1 = EP0
 
@@ -402,8 +423,8 @@ static bool xhci_control_request(xhci_hid_t *dev,
 	}
 
 	if (ok && dir_in && wLength > 0)
-		memcpy(data, bounce, wLength);
-	if (bounce != NULL)
+		memcpy(data, bounce, s_hc->xfer_actual);
+	if (bounce != NULL && s_hc->xfer_done)
 		kfree(bounce);
 	if (!ok)
 	{
@@ -417,7 +438,7 @@ static bool xhci_control_request(xhci_hid_t *dev,
 // Decode before injecting: unrelated report IDs and truncated reports must
 // not synthesize movement or release buttons. HID Y is screen-positive;
 // the wheel has the opposite sign to os64's positive-down convention.
-static void hid_process_mouse_report(xhci_hid_t *dev, const uint8_t *rep, uint32_t length)
+static void hid_process_mouse_report(xhci_device_t *dev, const uint8_t *rep, uint32_t length)
 {
     hid_mouse_sample_t sample;
     bool decoded = false;
@@ -458,7 +479,7 @@ static void hid_process_mouse_report(xhci_hid_t *dev, const uint8_t *rep, uint32
 // so a keyboard pulled with Ctrl held would leave Ctrl on every pointer
 // packet until reboot. Its keys, modifiers and buttons are released as if
 // it had reported letting go. Idempotent: a second call finds nothing held.
-static void xhci_hid_lost(xhci_hid_t *dev)
+static void xhci_hid_lost(xhci_device_t *dev)
 {
 	if (dev->kind == HID_KEYBOARD) {
 		static const uint8_t none[8];
@@ -470,7 +491,7 @@ static void xhci_hid_lost(xhci_hid_t *dev)
 
 // ── Transfer events (keyboard/mouse reports arriving) ────────────────────────
 
-static void xhci_arm_report_trb(xhci_hid_t *dev, uint32_t buf_index)
+static void xhci_arm_report_trb(xhci_device_t *dev, uint32_t buf_index)
 {
 	uint64_t buf_phys = dev->reports_phys + buf_index * HID_REPORT_BYTES;
 	ring_push(&dev->intr, buf_phys, dev->report_bytes,
@@ -484,15 +505,28 @@ static void xhci_handle_transfer_event(xhci_trb_t *ev)
 	uint32_t dci  = (ev->control >> 16) & 0x1F;
 	uint8_t  cc   = (uint8_t)TRB_CC(ev->status);
 
-	// EP0 completions during boot-time control transfers. Match the slot as
-	// well as DCI: another already-live HID endpoint may complete meanwhile.
+	// A short Data stage reports its actual length, but the request is complete
+	// at the Status stage. Match TRBs too, so a late timed-out request cannot
+	// satisfy the next wait on this slot. HID endpoints may complete meanwhile.
 	if (dci == 1 && slot == s_hc->control_slot) {
+		if (ev->param == s_hc->control_data_trb && cc == TRB_CC_SHORT_PACKET) {
+			uint32_t residual = ev->status & 0xffffff;
+			if (residual <= s_hc->xfer_actual)
+				s_hc->xfer_actual -= residual;
+			else
+				s_hc->xfer_actual = 0;
+			return;
+		}
+		if (ev->param != s_hc->control_status_trb &&
+		    ev->param != s_hc->control_data_trb &&
+		    ev->param != s_hc->control_setup_trb)
+			return;
 		s_hc->xfer_cc = cc;
 		s_hc->xfer_done = true;
 		return;
 	}
 
-	xhci_hid_t *dev = NULL;
+	xhci_device_t *dev = NULL;
 	if (s_hc->keyboard.present && slot == s_hc->keyboard.slot &&
 	    dci == s_hc->keyboard.dci)
 		dev = &s_hc->keyboard;
@@ -538,14 +572,91 @@ static void xhci_handle_transfer_event(xhci_trb_t *ev)
 // Write one endpoint/slot context field set. `ctx` points at the START of
 // the input context; index 0 = input control, 1 = slot, 2 = EP0 (DCI 1),
 // DCI n lives at index n+1. Context size honors HCCPARAMS1.CSZ.
-static uint32_t *ictx(xhci_hid_t *dev, uint32_t index)
+static uint32_t *ictx(xhci_device_t *dev, uint32_t index)
 {
 	return (uint32_t *)(dev->input_ctx + index * s_hc->ctx_size);
 }
 
-static bool xhci_setup_hid(uint32_t port, uint32_t speed)
+// Called after completed descriptor requests, before arming data endpoints.
+// Disable the slot before releasing memory the controller can still reference.
+static void xhci_release_probe(xhci_device_t *dev)
 {
-	xhci_hid_t candidate;
+	if (xhci_run_command(0, 0, TRB_TYPE(TRB_DISABLE_SLOT) |
+	                     (dev->slot << 24)) != TRB_CC_SUCCESS)
+		return; // Retain DMA storage if the controller did not relinquish it.
+	s_hc->dcbaa[dev->slot] = 0;
+	kfree(dev->input_ctx);
+	kfree(dev->ep0.trb);
+	kfree(dev->dev_ctx);
+}
+
+// Validate lengths and descriptor ordering before walking untrusted USB data.
+static bool xhci_valid_config(const uint8_t *cfg, uint16_t total)
+{
+	if (total < 9 || cfg[0] != 9 || cfg[1] != 2 || (cfg[2] | (cfg[3] << 8)) != total)
+		return false;
+	bool have_interface = false;
+	for (uint16_t off = 9; off < total; off += cfg[off]) {
+		if (total - off < 2 || cfg[off] < 2 || cfg[off] > total - off)
+			return false;
+		if (cfg[off + 1] == 4) {
+			if (cfg[off] < 9)
+				return false;
+			have_interface = true;
+		} else if (cfg[off + 1] == 5 && (!have_interface || cfg[off] < 7)) {
+			return false;
+		}
+	}
+	return have_interface;
+}
+
+// Inspect the AX210 without selecting a configuration or issuing HCI commands.
+// Include alternate settings: the isochronous interface can make its complete
+// configuration larger than the buffer used for HID interface selection.
+static bool xhci_describe_ax210(xhci_device_t *dev, const uint8_t *desc)
+{
+	uint8_t cfg[PAGE_SIZE] = {0};
+	if (!xhci_control_request(dev, 0x80, 6, 0x0200, 0, cfg, 9) || s_hc->xfer_actual != 9)
+		return false;
+	uint16_t total = cfg[2] | (cfg[3] << 8);
+	if (cfg[0] != 9 || cfg[1] != 2 || total < 9 || total > sizeof(cfg)) {
+		printd(DEBUG_USB, "xhci: AX210 invalid/oversized configuration length %u\n", total);
+		return false;
+	}
+	if (!xhci_control_request(dev, 0x80, 6, 0x0200, 0, cfg, total) || s_hc->xfer_actual != total)
+		return false;
+	if (!xhci_valid_config(cfg, total))
+		return false;
+
+	printd(DEBUG_USB, "xhci: AX210 controller %u port %u slot %u speed %u VID:PID 8087:0032 revision %04x USB %04x class %02x/%02x/%02x EP0 mps %u configurations %u\n",
+	       s_controller_count + 1, dev->port, dev->slot, dev->speed,
+	       desc[12] | (desc[13] << 8), desc[2] | (desc[3] << 8),
+	       desc[4], desc[5], desc[6], desc[7], desc[17]);
+	printd(DEBUG_USB, "xhci: AX210 configuration %u bytes %u interfaces %u\n",
+	       cfg[5], total, cfg[4]);
+	uint8_t iface = 0, alternate = 0;
+	static const char *const transfer_types[] = {
+		"control", "isochronous", "bulk", "interrupt"
+	};
+	for (uint16_t off = 9; off < total; off += cfg[off]) {
+		if (cfg[off + 1] == 4) {
+			iface = cfg[off + 2];
+			alternate = cfg[off + 3];
+			printd(DEBUG_USB, "xhci: AX210 interface %u alternate %u class %02x/%02x/%02x endpoints %u\n",
+			       iface, alternate, cfg[off + 5], cfg[off + 6], cfg[off + 7], cfg[off + 4]);
+		} else if (cfg[off + 1] == 5) {
+			uint16_t packet = cfg[off + 4] | (cfg[off + 5] << 8);
+			printd(DEBUG_USB, "xhci: AX210 interface %u alternate %u endpoint %02x %s %s maxpacket %u interval %u\n",
+			       iface, alternate, cfg[off + 2], (cfg[off + 2] & 0x80) ? "IN" : "OUT",
+			       transfer_types[cfg[off + 3] & 3], packet & 0x7ff, cfg[off + 6]);
+		}
+	}
+	return true;
+}
+
+static bool xhci_probe_device(uint32_t port, uint32_t speed)
+{
+	xhci_device_t candidate;
 	memset(&candidate, 0, sizeof(candidate));
 	candidate.port = port;
 	candidate.speed = speed;
@@ -595,14 +706,39 @@ static bool xhci_setup_hid(uint32_t port, uint32_t speed)
 	// 4. Device descriptor — and the real bMaxPacketSize0.
 	uint8_t desc[18];
 	memset(desc, 0, sizeof(desc));
-	if (!xhci_control_request(&candidate, 0x80, 6 /*GET_DESCRIPTOR*/, 0x0100, 0, desc, 8))
+	if (!xhci_control_request(&candidate, 0x80, 6 /*GET_DESCRIPTOR*/, 0x0100, 0, desc, 8) ||
+	    s_hc->xfer_actual != 8)
+		return false;
+	if (desc[0] != sizeof(desc) || desc[1] != 1 ||
+	    (speed == 4 ? desc[7] != 9 :
+	     (desc[7] != 8 && desc[7] != 16 && desc[7] != 32 && desc[7] != 64)))
 		return false;
 	uint32_t real_mps0 = (speed == 4) ? (1u << desc[7]) : desc[7];
 	if (real_mps0 != mps0 && real_mps0 != 0) {
 		ictx(&candidate, 0)[1] = 0x2;                              // touch only EP0
 		ictx(&candidate, 2)[1] = (4u << 3) | (3u << 1) | (real_mps0 << 16);
-		xhci_run_command(candidate.input_ctx_phys, 0,
-		    TRB_TYPE(TRB_EVALUATE_CONTEXT) | (slot << 24));
+		if (xhci_run_command(candidate.input_ctx_phys, 0,
+		    TRB_TYPE(TRB_EVALUATE_CONTEXT) | (slot << 24)) != TRB_CC_SUCCESS)
+			return false;
+	}
+	if (!xhci_control_request(&candidate, 0x80, 6, 0x0100, 0, desc, sizeof(desc)) ||
+	    s_hc->xfer_actual != sizeof(desc) || desc[0] != sizeof(desc) || desc[1] != 1)
+		return false;
+	uint16_t vendor = desc[8] | (desc[9] << 8);
+	uint16_t product = desc[10] | (desc[11] << 8);
+	printd(DEBUG_USB, "xhci: device controller %u port %u slot %u VID:PID %04x:%04x revision %04x\n",
+	       s_controller_count + 1, port, slot, vendor, product, desc[12] | (desc[13] << 8));
+	if (vendor == 0x8087 && product == 0x0032) {
+		if (xhci_describe_ax210(&candidate, desc)) {
+			s_ax210_described++;
+			printf("USB Bluetooth: Intel AX210 8087:0032 on controller %u port %u (descriptors only)\n",
+			       s_controller_count + 1, port);
+			// This probe has no runtime endpoints. Leave the device unbound.
+			xhci_release_probe(&candidate);
+		} else {
+			printf("USB Bluetooth: Intel AX210 found; descriptor read failed\n");
+		}
+		return false;
 	}
 
 	// 5. Configuration descriptor: find a HID boot keyboard (protocol 1) or
@@ -665,6 +801,7 @@ static bool xhci_setup_hid(uint32_t port, uint32_t speed)
 	}
 	if (candidate.kind == HID_NONE) {
 		printd(DEBUG_USB, "xhci: device on port %u has no wanted boot HID interface\n", port);
+		xhci_release_probe(&candidate);
 		return false;
 	}
 	if (ep_addr == 0) {
@@ -694,17 +831,6 @@ static bool xhci_setup_hid(uint32_t port, uint32_t speed)
 	if (boot_protocol && candidate.kind == HID_KEYBOARD)
 		xhci_control_request(&candidate, 0x21, 0x0A /*SET_IDLE*/, 0,
 		                     (uint16_t)iface_num, NULL, 0);
-	// Identification is diagnostic only. Avoid another EP0 request after a
-	// protocol STALL; the endpoint may remain halted in that case.
-	if (boot_protocol && (kDebugLevel & DEBUG_USB)) {
-		memset(desc, 0, sizeof(desc));
-		if (xhci_control_request(&candidate, 0x80, 6, 0x0100, 0, desc, sizeof(desc)) &&
-		    desc[0] == sizeof(desc) && desc[1] == 1)
-			printd(DEBUG_USB, "xhci: HID identity port %u slot %u VID:PID %04x:%04x revision %04x\n",
-			       port, slot, desc[8] | (desc[9] << 8), desc[10] | (desc[11] << 8),
-			       desc[12] | (desc[13] << 8));
-	}
-
     // Boot mode is established before probing the report descriptor. A
     // rejected descriptor leaves the working boot decoder in place.
     if (boot_protocol && candidate.kind == HID_MOUSE && report_length &&
@@ -790,7 +916,7 @@ static bool xhci_setup_hid(uint32_t port, uint32_t speed)
 	candidate.reports_phys = virt_to_phys(candidate.reports);
 	candidate.dci = dci;
 	candidate.present = true;
-	xhci_hid_t *dev = candidate.kind == HID_KEYBOARD ?
+	xhci_device_t *dev = candidate.kind == HID_KEYBOARD ?
 	                  &s_hc->keyboard : &s_hc->mouse;
 	*dev = candidate;
 	if (dev->kind == HID_KEYBOARD)
@@ -1055,13 +1181,10 @@ static void xhci_scan_ports(void)
 
 		uint32_t speed = PORTSC_SPEED(sc);
 		printd(DEBUG_USB, "xhci: port %u enabled, speed %u\n", port, speed);
-		xhci_setup_hid(port, speed);
-		if (s_keyboard_claimed && s_mouse_claimed)
-			return;   // both input classes are now live, possibly across HCs
-
-		// Not a wanted HID device (or setup failed): leave the slot as-is and keep
-		// scanning. v1 doesn't disable-slot on failure — boot-time only,
-		// nothing leaks that matters, and the code stays readable.
+		xhci_probe_device(port, speed);
+		// Continue beyond the input devices: the AX210 can occupy a later port.
+		// Unbound successful probes release their slots; failed probes retain
+		// DMA storage because a timed-out operation may still reference it.
 	}
 	if (!s_hc->keyboard.present && !s_hc->mouse.present)
 		printd(DEBUG_USB, "xhci: no boot-protocol keyboard or mouse found on root ports\n");
@@ -1092,10 +1215,9 @@ void init_xHCI(void)
 		return;
 	}
 
-	// Keep every controller that owns a supported input device. This matters
-	// on the P5, where physical USB ports may belong to different controllers.
-	// Controllers with no supported root-port device remain running but need
-	// no polling; their small boot-time allocations are deliberately orphaned.
+	// Retain initialized controllers and drain their event rings even without
+	// bound HID devices. Bluetooth discovery must reach controllers after the
+	// ones owning the keyboard and mouse.
 	for (int c = 0; c < nctrl; c++) {
 		if (s_controller_count >= MAX_XHCI_CONTROLLERS)
 			break;
@@ -1113,22 +1235,16 @@ void init_xHCI(void)
 			continue;
 		}
 		xhci_scan_ports();
-		// The hygiene pass runs ONLY under USBQUIET (kernel.c has the two
-		// burn scars — paired-VBUS twins, possibly ACROSS controllers on
-		// this AMD platform). When enabled, every scanned controller gets
-		// the pass, kept or not — an idle controller is all empty powered
-		// ports, the loudest radio nuisance of the lot.
+		// USBQUIET gates the hygiene pass: shared VBUS between paired ports
+		// makes powering down a seemingly empty port unsafe on some hardware.
 		if (kUSBQuiet)
 			xhci_unpower_empty_ports();
-		if (s_hc->keyboard.present || s_hc->mouse.present) {
-			s_controller_count++;
-		}
-		if (s_keyboard_claimed && s_mouse_claimed)
-			break;
+		s_controller_count++;
 	}
 	printf("USB input: %s, %s\n",
 	       s_keyboard_claimed ? "keyboard attached" : "no keyboard",
 	       s_mouse_claimed ? "mouse attached" : "no mouse");
+	printd(DEBUG_USB, "xhci: AX210 discovery complete: %u described\n", s_ax210_described);
 }
 
 void xhci_poll(void)
