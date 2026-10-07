@@ -53,4 +53,10 @@ os64_js_status_t os64_js_task_end(os64_js_runtime_t *runtime, const char *caller
  * call. Zero or unrepresentable is BAD_ARGUMENT, as creation refuses. */
 os64_js_status_t os64_js_set_execution_ms(os64_js_runtime_t *runtime, uint64_t ms,
                                           os64_js_outcome_t *outcome);
+/* Native-callback budget boundary: uses a separate caller-owned outcome.
+ * Requires an active budgeted call; does not enter JS, drain jobs, reset a
+ * deadline or release the outer call's guard. Observed failures remain sticky.
+ * Native work cannot be preempted here; check before and after bounded work. */
+os64_js_status_t os64_js_check_budget(os64_js_runtime_t *runtime, const char *caller_abi,
+                                      os64_js_outcome_t *outcome);
 #endif

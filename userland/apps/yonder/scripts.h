@@ -35,9 +35,19 @@ typedef struct {
 // No runtime yet. NULL on no memory.
 yonder_scripts_t *yonder_scripts_new(os64_html_document_t *doc, os64_page_state_t *state,
                                      const yonder_scripts_options_t *options);
-// Drops the lists, drains the binding, destroys the runtime, frees the
-// binding's records and releases every hold, in DOM.md's teardown order.
-// Cancels the fetches still out. NULL is a no-op.
+// Bind the page owner's synchronous current-layout provider. Kept for the
+// runtime made later; may be replaced outside callbacks as the owner moves.
+void yonder_scripts_set_geometry(yonder_scripts_t *scripts,
+    os64_dom_geometry_provider_t provider, void *opaque);
+// The binding's layout counts; after retirement, the last ones it had.
+os64_dom_geometry_stats_t yonder_scripts_geometry_stats(yonder_scripts_t *scripts, bool reset);
+// Session count of reclaimed teardown leaks, including owners already freed.
+// Owner-thread only. Fixtures require zero except deliberate leak probes.
+size_t yonder_scripts_teardown_leaks(void);
+// Drops the lists, drains the binding, destroys the runtime (reporting and
+// reclaiming a leak, DOM_D8.md; other engine invariant violations stay
+// fatal), frees the binding's records and releases every hold, in DOM.md's
+// teardown order. Cancels the fetches still out. NULL is a no-op.
 void yonder_scripts_free(yonder_scripts_t *scripts);
 
 // The parser stopped at `script`. What the stream does next: RESUME at

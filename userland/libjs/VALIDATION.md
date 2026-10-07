@@ -670,3 +670,49 @@ Promise, date/numeric and separate fatal evidence; this packet closes the
 named stack/defaults/scheduling measurement gaps. It does not claim full
 ECMAScript conformance, a complete interrupt-coverage audit, arbitrary native
 stack safety, browser scheduling/layout acceptance or a new P5 run.
+
+## D10 callback budget extension
+
+The additive callback-safe budget check preserves existing ABI layouts and the
+standalone profile. The pre-D8 D10 target audit reports twelve runtime exports
+and the unchanged 186 engine exports. Runtime suites pass 906 target-core host
+checks and 3098 sanitized-core host checks, with 53 native calls and no live
+allocations. D10's browser/DOM/guest geometry evidence is recorded in
+[DOM_D10.md](../../docs/design/pending/DOM_D10.md).
+
+## D8 opt-in teardown validation, 2026-10-05
+
+Implementation on `codex/dom-d8` is validated and approved by Fable.
+The additive creation/reporting APIs preserve the existing fatal default and
+public ABI layouts. [TEARDOWN.md](TEARDOWN.md) records the allocator/global and
+native-ownership audit; [DOM_D8.md](../../docs/design/pending/DOM_D8.md) records
+commands, counts, guest hashes, limitations and the D7 integration handoff.
+
+Maintained runtime suites pass **939 target-engine host checks** and **4,163
+sanitized-engine host checks**, zero failures/live allocations, including 10,000
+reclaimed leaks per profile, tracked constructor refusal sweeps and a live
+peer runtime. Five separate fatal controls pass per profile. Independent V1
+consumer suites retain **383 checks each**, 55 upstream functions passing and
+four explicit skips. Runner suites retain **196/38 checks**. Manifest/header,
+production symbol/dependency/relink and teardown object audits pass.
+
+Final QEMU VM 56309 passes **437 checks**, zero failures, 41 native calls and
+JSRT status. Across 10,000 leaked runtimes its live heap bytes and block count
+are unchanged, and heap verification passes. The delivered library and fixture
+match the build byte for byte. The default leak still returns the full JSFA
+badge. Yonder's host fixture passes **2,080 checks**, including counted/logged
+lost-wrapper reclamation and a subsequent clean page. Joined D7 validation and
+new P5 acceptance remain separate gates.
+
+## D8/D10 joined userland validation
+
+Joining D10 with `userland` `7c5431e3` retains callback-safe budgeting and
+creation-selected teardown reclamation together. The target audit verifies
+fourteen runtime exports and 186 engine exports. Runtime host suites pass
+1,023 target-core and 4,247 sanitized-core checks, with zero failures/live
+allocations. The browser suite passes 2,128 checks with geometry, native
+overrun retirement and logged lost-wrapper recovery; the DOM suite passes
+4,592 checks. Header, production link and teardown allocation/global audits
+and the strict image build pass. These joined results are host/target-build
+evidence; the guest measurements in the preceding sections retain their
+original scope.

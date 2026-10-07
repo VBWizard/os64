@@ -86,19 +86,19 @@ static void allocators(void)
           "null zero resize and usable-size contracts");
     f->js_free(&s, NULL);
     check(live == 0, "allocator fixtures release every block");
-    JSPortAllocator owner = {.payload_limit = 17};
+    JSPortAllocator owner = {.allocation_limit = 17};
     s = (JSMallocState){.malloc_limit = SIZE_MAX, .opaque = &owner};
     check(!f->js_malloc(&s, 17) && owner.failures == JSPORT_ALLOC_LIMIT && live == 0,
           "caller ceiling includes allocator rounding");
-    owner.payload_limit = SIZE_MAX; owner.failures = 0; fail_at = attempts + 1;
+    owner.allocation_limit = SIZE_MAX; owner.failures = 0; fail_at = attempts + 1;
     check(!f->js_malloc(&s, 17) && owner.failures == JSPORT_ALLOC_OOM && live == 0,
           "OS allocation failure distinguished from ceiling");
     fail_at = 0;
-    owner.payload_limit = 1; owner.failures = 0;
+    owner.allocation_limit = 1; owner.failures = 0;
     JSRuntime *rt = JS_NewRuntime2(f, &owner);
     check(rt == NULL && owner.failures == JSPORT_ALLOC_LIMIT && live == 0,
           "runtime construction obeys caller ceiling");
-    owner.payload_limit = SIZE_MAX; owner.failures = 0; fail_at = attempts + 1;
+    owner.allocation_limit = SIZE_MAX; owner.failures = 0; fail_at = attempts + 1;
     rt = JS_NewRuntime2(f, &owner);
     check(rt == NULL && owner.failures == JSPORT_ALLOC_OOM && live == 0,
           "runtime construction reports OS allocation failure");

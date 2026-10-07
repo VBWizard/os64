@@ -53,7 +53,7 @@ have and prove the pieces by proving it.
 |---|---|---|
 | `way_open(leg, url, request, &opening, why)` | opens the fetch with the leg's options (agent, accept, the parser's byte cap as `max_body`, the downgrade question, cookies, Referer, a POST's body), reads the head, and JUDGES it: a page (`WAY_BODY_HTML`), text (`WAY_BODY_TEXT`), or not a page at all. The last is false with the sentence `way_load` writes today ("that is image/png, not a page - save it with: os64get ..."), fetch closed. A head that never came is false with `why`. True leaves the fetch open in the opening, with the head COPIED beside it (`way_head_t`: status, reason, content type, charset, final address, whether the final method was POST) | the fetcher's |
 | `way_read(leg, &opening, buf, cap)` | one `os64_fetch_read`, and the "reading N KB of url" sentence every 64 KB through the leg's face. `parse_body` and `read_body` each carry a copy of that sentence today; this is the one copy | the fetcher's |
-| `way_text_utf8(head, first, n)` | the text/plain encoding decision — the label through libhtml's table, else JSON's own rule, else a byte order mark in the first bytes — pure, so the window can make it at the first chunk | either |
+| `way_text_utf8(head, first, n)` | the text/plain encoding decision — the label through libhtml's table, else JSON's own rule, else a byte order mark in the first bytes — pure, so the window can make it once the first three bytes are in hand; `way_text_sniffs(head)` says whether it has to wait for them | either |
 | `way_note(page, head, short_of_memory, fetch, reason)` | writes `page->url`, `page->posted` and the standing line: status, reason, and a sentence for every way the page is incomplete (ours, the wire's, the parser's `refusal` read from `page->doc`). Pure. The fetch's reason sentence is a string argument because `os64_fetch_reason` lives inside the fetch object, which is on the other thread | either |
 
 The head is copied rather than pointed at because `os64_fetch_head_t` is
@@ -141,9 +141,11 @@ id, nothing else now) and `g.coming` (a page waiting for its sheets):
    charset and the captured scripting mode, as `parse_body` does. Text: the
    same parser given `<!doctype html><plaintext>` first, the way yonder
    has always laid a text body out, with the encoding decided by
-   `way_text_utf8` at the first chunk (the byte order mark needs three
-   bytes of body, and the first chunk has them or the body is shorter than
-   three bytes).
+   `way_text_utf8` once the first three bytes of body are in hand: a read
+   may answer fewer than three, so when the head leaves the decision to
+   the bytes they are gathered across chunks before the parser is made,
+   and a body shorter than three bytes is judged at the end on what there
+   is (Quinn's round-one finding, 2026-10-05).
 2. Chunks are taken and fed until the ring is empty or
    `STREAM_SLICE_BYTES` have been fed this turn (64 KiB to start: four
    chunks). A stop at a script is resumed at once. Chunk boundaries are
@@ -243,7 +245,10 @@ way), on the host first:
   is the harness above): a slice feeds at most its budget and asks to be
   rung again; the head makes the parser with the captured mode and a
   script's stop is resumed, not refused; a text/plain body decides its
-  encoding from its first bytes; a verdict before the ring is drained
+  encoding from its first bytes however the wire cut them; a slice that
+  stops at its budget asks for the next turn with or without the verdict
+  (a worker rings when it posts, and a stalled socket rings nothing more:
+  Quinn's other round-one finding); a verdict before the ring is drained
   defers the finish; a parser refusal cancels the job (the stub records
   it) and arrives with the parser's sentence; a stream dropped mid-body
   frees everything; a broken pool drops the stream; a request copy

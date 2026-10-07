@@ -483,9 +483,9 @@ static uintptr_t draw_table_page(struct arena *source, const char *level, uint64
 /// concurrent contexts every day. The CAS stays load-bearing.)
 ///
 /// The fix is CAS, deliberately NOT a lock: draw_table_page can kmalloc (an
-/// arena grows on demand), kmalloc takes kMemoryStatusLock, and the
-/// allocator's HHDM choke points call back into paging while HOLDING that
-/// lock — a create-lock here is an ABBA deadlock with a fuse timed to the
+/// arena grows on demand), kmalloc takes the allocator's locks (kFrameLock,
+/// kMemoryStatusLock), and the allocator maps and unmaps the HHDM while
+/// HOLDING them — a create-lock here is an ABBA deadlock with a fuse timed to the
 /// first concurrent workload. Losing the install CAS orphans the drawn page:
 /// an arena page dies with its task at burial anyway, and a pool page is a
 /// one-page leak on an event rare enough to be a log line (two cores racing
@@ -920,6 +920,18 @@ void paging_map_kernel_into_pml4(uintptr_t* pml4v)
 	printd(DEBUG_PAGING | DEBUG_DETAILED, "PAGING (paging_map_kernel_into_pml4): %u kernel page mappings copied\n",kKernelPageMappingsCount);
 }
 
+// One allocated extent into the not-yet-live kernel tables at its HHDM
+// address (init_os64_paging_tables' retro-map pass).
+static void retro_map_extent(void *ctx, uintptr_t phys, uint64_t length)
+{
+	pt_entry_t *pml4v = ctx;
+	uintptr_t first_page = phys & PAGE_ADDRESS_MASK;
+	uintptr_t end_page = (phys + length + PAGE_SIZE - 1) & PAGE_ADDRESS_MASK;
+	printd(DEBUG_PAGING | DEBUG_DETAILED,"\tPAGING: HHDM retro-map 0x%016lx, %u pages\n", first_page, (end_page - first_page) / PAGE_SIZE);
+	paging_map_pages(pml4v, first_page | kHHDMOffset, first_page,
+	                 (end_page - first_page) / PAGE_SIZE, PAGE_PRESENT | PAGE_WRITE);
+}
+
 void init_os64_paging_tables()
 {
 	
@@ -1154,24 +1166,15 @@ void init_os64_paging_tables()
 
 	// Retro-map pass for lazy HHDM maintenance (see paging.h): everything the
 	// allocator handed out BEFORE these tables existed (the paging page pool,
-	// kMemoryStatus itself, anything else early boot grabbed) was reached
-	// through Limine's full-HHDM tables until now. Walk the allocator's
-	// ledger and HHDM-map every currently-allocated extent into the new
-	// tables, so the "allocated <=> HHDM-mapped" invariant holds from the
-	// moment we switch CR3. Free extents deliberately stay unmapped — that's
-	// the tripwire. From here on, allocate/free maintain this incrementally.
+	// the frame table and the ledger's rows, anything else early boot
+	// grabbed) was reached through Limine's full-HHDM tables until now. Ask
+	// the allocator for every currently-allocated extent and HHDM-map it into
+	// the new tables, so the "allocated <=> HHDM-mapped" invariant holds from
+	// the moment we switch CR3. Free memory deliberately stays unmapped —
+	// that's the tripwire. From here on, allocate/free maintain this
+	// incrementally.
 	printd(DEBUG_PAGING | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "* PAGING: Retro-map allocated extents at HHDM\n");
-	for (uint64_t cnt = 0; cnt < kMemoryStatusCurrentPtr; cnt++)
-	{
-		memory_status_t *entry = &kMemoryStatus[cnt];
-		if (!entry->in_use || entry->length == 0 || entry->startAddress == 0)
-			continue;
-		uintptr_t first_page = entry->startAddress & PAGE_ADDRESS_MASK;
-		uintptr_t end_page = (entry->startAddress + entry->length + PAGE_SIZE - 1) & PAGE_ADDRESS_MASK;
-		printd(DEBUG_PAGING | DEBUG_DETAILED,"\tPAGING: HHDM retro-map 0x%016lx, %u pages\n", first_page, (end_page - first_page) / PAGE_SIZE);
-		paging_map_pages(pml4v, first_page | kHHDMOffset, first_page,
-		                 (end_page - first_page) / PAGE_SIZE, PAGE_PRESENT | PAGE_WRITE);
-	}
+	allocator_for_each_allocated(retro_map_extent, pml4v);
 
 	kKernelPML4 = (uintptr_t)pml4p;
 	kKernelPML4v = (uintptr_t)pml4v;

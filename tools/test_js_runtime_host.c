@@ -9,6 +9,8 @@
 #include <sched.h>
 #include "../userland/libjs/tests/cases.h"
 #include "os64/io.h"
+#define JS_TEARDOWN_HOST
+#include "../userland/libjs/tests/teardown.h"
 
 static const char *input_bytes;
 static size_t input_length, input_position, read_limit = SIZE_MAX;
@@ -59,6 +61,84 @@ int64_t os64_micros(void)
     if (clock_error) return clock_error;
     monotonic += clock_step;
     return monotonic;
+}
+
+static void tracked_allocator_cases(void)
+{
+    JSPortAllocator owner = {.allocation_limit = 4096, .tracked = true};
+    JSMallocState state = {.malloc_limit = SIZE_MAX, .opaque = &owner};
+    const JSMallocFunctions *f = &jsport_tracked_malloc_functions;
+    void *a = f->js_malloc(&state, 17);
+    check(a != NULL && (uintptr_t)a % _Alignof(max_align_t) == 0 &&
+          f->js_malloc_usable_size(a) >= 17 && owner.live_blocks == 1 &&
+          owner.live_bytes == state.malloc_size, "tracked payload is aligned and metadata is charged");
+    if (a == NULL) return;
+    memset(a, 0x5a, 17);
+    void *b = f->js_malloc(&state, 31);
+    check(b != NULL && owner.live_blocks == 2, "ledger links a second block");
+    size_t bytes = state.malloc_size;
+    owner.allocation_limit = bytes;
+    check(f->js_realloc(&state, a, 4096) == NULL && state.malloc_size == bytes &&
+          owner.live_bytes == bytes && ((unsigned char *)a)[16] == 0x5a,
+          "tracked over-budget growth preserves bytes links and charge");
+    owner.allocation_limit = SIZE_MAX;
+    check(f->js_malloc(&state, SIZE_MAX) == NULL && f->js_realloc(&state, a, SIZE_MAX) == NULL &&
+          owner.live_bytes == bytes, "tracked header arithmetic refuses overflow");
+    fail_at = attempts + 1;
+    check(f->js_realloc(&state, a, 4096) == NULL && owner.live_bytes == bytes,
+          "tracked allocation refusal preserves the ledger");
+    fail_at = 0;
+    a = f->js_realloc(&state, a, 257);
+    check(a != NULL && ((unsigned char *)a)[16] == 0x5a && owner.live_blocks == 2 &&
+          owner.live_bytes == state.malloc_size, "tracked resize replaces an interior ledger link");
+    f->js_free(&state, b);
+    check(owner.live_blocks == 1 && owner.live_bytes == state.malloc_size,
+          "tracked free repairs neighboring links");
+    check(f->js_realloc(&state, a, 0) == NULL && owner.live_blocks == 0 &&
+          owner.live_bytes == 0 && state.malloc_size == 0, "tracked zero resize releases the ledger");
+    void *raw = f->js_malloc(&state, 111);
+    check(raw != NULL && owner.live_blocks == 1, "direct reclamation fixture allocated");
+    jsport_allocator_reclaim(&owner);
+    check(owner.blocks == NULL && owner.live_blocks == 0 && owner.live_bytes == 0 && live == 0,
+          "ledger bulk reclaim frees storage without allocator state or engine entry");
+}
+
+static void tracked_construction_cases(void)
+{
+    os64_js_config_t config = fixture_config();
+    os64_js_runtime_t *runtime = NULL;
+    os64_js_outcome_t outcome;
+    size_t begin = attempts;
+    check(os64_js_create_with_teardown(&config, OS64_JS_TEARDOWN_RECLAIM,
+          OS64_JS_ABI_ID, &runtime, &outcome) == OS64_JS_OK, "tracked constructor baseline");
+    size_t inventory = attempts - begin;
+    if (runtime == NULL) return;
+    os64_js_destroy(runtime);
+    for (size_t cut = 1; cut <= inventory; cut++) {
+        fail_at = attempts + cut;
+        os64_js_status_t result = os64_js_create_with_teardown(&config, OS64_JS_TEARDOWN_RECLAIM,
+            OS64_JS_ABI_ID, &runtime, &outcome);
+        fail_at = 0;
+        check(result == OS64_JS_HOST_FAILURE && runtime == NULL && live == 0,
+              "tracked constructor allocation refusal publishes no handle and reclaims its ledger");
+        if (runtime != NULL) os64_js_destroy(runtime);
+    }
+    runtime = create_fixture(&config);
+    if (runtime == NULL) return;
+    size_t baseline = live;
+    for (unsigned i = 0; i < 3; i++) {
+        os64_js_runtime_t *leaking = NULL;
+        check(os64_js_create_with_teardown(&config, OS64_JS_TEARDOWN_RECLAIM,
+              OS64_JS_ABI_ID, &leaking, &outcome) == OS64_JS_OK, "peer leaking runtime constructed");
+        if (leaking == NULL) break;
+        JSContext *context = os64_js_context(leaking, OS64_JS_ABI_ID, &outcome);
+        check(!JS_IsException(JS_NewObject(context)), "peer object deliberately lost");
+        os64_js_teardown_report_t report;
+        os64_js_destroy_report(leaking, &report);
+        check(report.leaked && live == baseline && execute_fixture(runtime, "42", &outcome) == OS64_JS_OK,
+              "reclamation leaves a separate runtime and its allocations usable");
+    }
+    os64_js_destroy(runtime);
 }
 
 static void clock_cases(void)
@@ -816,21 +896,34 @@ int main(int argc, char **argv)
     }
     if (argc == 2) {
         os64_js_config_t config = fixture_config();
-        fixture_runtime = create_fixture(&config);
+        if (!strncmp(argv[1], "--reclaim-", 10)) {
+            os64_js_outcome_t outcome;
+            os64_js_create_with_teardown(&config, OS64_JS_TEARDOWN_RECLAIM, OS64_JS_ABI_ID,
+                                         &fixture_runtime, &outcome);
+        } else fixture_runtime = create_fixture(&config);
         if (!fixture_runtime) return 1;
         if (!strcmp(argv[1], "--leak")) {
             os64_js_outcome_t outcome;
             JSContext *context = os64_js_context(fixture_runtime, OS64_JS_ABI_ID, &outcome);
             (void)JS_NewObject(context);
             os64_js_destroy(fixture_runtime);
-        } else if (!strcmp(argv[1], "--active-destroy")) {
+        } else if (!strcmp(argv[1], "--reclaim-raw-leak")) {
+            os64_js_outcome_t outcome;
+            JSContext *context = os64_js_context(fixture_runtime, OS64_JS_ABI_ID, &outcome);
+            (void)JS_NewObject(context);
+            JSRuntime *engine = JS_GetRuntime(context);
+            JS_FreeContext(context);
+            JS_FreeRuntime(engine);
+        } else if (!strcmp(argv[1], "--reclaim-fatal")) {
+            jsport_fatal("unrelated invariant fixture", __FILE__, __LINE__);
+        } else if (!strcmp(argv[1], "--active-destroy") || !strcmp(argv[1], "--reclaim-active-destroy")) {
             os64_js_outcome_t outcome;
             install_native(fixture_runtime, "destroy", native_destroy);
             execute_fixture(fixture_runtime, "destroy()", &outcome);
         }
         return 1;
     }
-    runtime_cases(); clock_cases(); diagnostic_cases(); allocation_cases(); thread_cases();
+    tracked_allocator_cases(); tracked_construction_cases(); teardown_cases(); runtime_cases(); clock_cases(); diagnostic_cases(); allocation_cases(); thread_cases();
     file_cases(); file_boundary_cases(); output_cases(); transaction_descriptor_cases(); transaction_trap_case(); setup_allocation_cases();
     task_cases();
     check(live == 0, "runtime suite releases every fixture allocation");

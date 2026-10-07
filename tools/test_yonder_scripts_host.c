@@ -8,6 +8,9 @@
 #undef main
 #include "test_libflow_fonts.h"
 #include "os64/conf.h"
+#include "os64/js_engine.h"
+os64_js_status_t __real_os64_js_create_with_teardown(const os64_js_config_t *,
+    os64_js_teardown_policy_t, const char *, os64_js_runtime_t **, os64_js_outcome_t *);
 #define s settings_fixture
 #include "../userland/apps/yonder/settings.c"
 #undef s
@@ -17,12 +20,21 @@ int64_t os64_read(int32_t h, void *b, size_t n) { (void)h; (void)b; (void)n; ret
 int64_t os64_close(int32_t h) { (void)h; return 0; }
 int64_t os64_stat(const char *p, os64_dirent_t *entry) { (void)p; (void)entry; return -1; }
 /* The clocks stand still unless a case moves them: micros steps by
- * clock_step at every read (an overrun is a loop that reads it), and the
- * window's milliseconds are what a case sets. */
-static int64_t clock_us=10000000, clock_step;
+ * clock_step at every read (an overrun is a loop that reads it) and by
+ * geometry_layout_delay at every forced layout (a slow native layout), and
+ * the window's milliseconds are what a case sets. */
+static int64_t clock_us=10000000, clock_step, geometry_layout_delay;
+static bool geometry_refuse_layout;
 int64_t os64_micros(void) { return clock_us+=clock_step; }
 uint64_t os64_heap_verify(void) { return 0; }
-void os64_debug_log(const char *text) { (void)text; }
+static size_t teardown_log_count;
+static char teardown_log[OS64_JS_SOURCE_NAME_CAP + 128];
+void os64_debug_log(const char *text) {
+    if (strstr(text, "reclaimed JavaScript teardown leak") != NULL) {
+        teardown_log_count++;
+        os64_strcopy(teardown_log, sizeof(teardown_log), text);
+    }
+}
 void *os64_calloc(size_t n, size_t z) {
     if (z && n > SIZE_MAX/z) return NULL;
     void *p = os64_malloc(n*z);
@@ -295,7 +307,9 @@ flow_tree_t *__wrap_flow_layout(const os64_html_document_t *doc,const os64_page_
         budget_refuse_retry=false;budget_retry_refusals++;
         return NULL;
     }
+    if(geometry_refuse_layout) return NULL;
     flow_tree_t *tree=__real_flow_layout(doc,model,width,env);
+    clock_us+=geometry_layout_delay;
     if(budget_active && flow_incomplete(tree)) budget_partial_layouts++;
     return tree;
 }
@@ -349,6 +363,7 @@ static void probe_page(const char *html, bool scripts) {
         for (os64_html_node_t *n=g.page.way.doc->document;n;n=(os64_html_node_t *)next_within(n,g.page.way.doc->document))
             if(os64_dom_script_kind(n)==OS64_DOM_SCRIPT_CLASSIC && os64_html_attr(n,"src")==NULL)
                 yonder_scripts_connected(g.page.scripts,n);
+        yonder_scripts_set_geometry(g.page.scripts, script_geometry, NULL);
     }
 }
 static void probe_drop(void) {
@@ -1237,6 +1252,21 @@ static void stream_slices(void) {
         !g.page.way.posted,"stream: the standing line and address are the head's");
     check(g.stop.disabled==true && g.reload.disabled==false,"stream: Stop goes out when the page is in");
     check(probe_text_is("t","end"),"stream: the last chunk's text is in the page");
+    stream_window_drop();
+    /* The same five chunks with the verdict still to come: the worker rang
+     * once per post and a stalled socket rings nothing more, so the slice
+     * that left a chunk in the ring asks for the turn that reads it. */
+    stream_window();
+    start_trip("http://fixture.test/p",NULL,NAV_GO,NULL);
+    yonder_mail_post_head(g.stream.mail,&h);
+    stream_post_body(body,len,YONDER_STREAM_CHUNK);
+    check(stream_turn()==true && g.stream.active && yonder_mail_streaming(g.stream.mail),
+        "stream: a slice at its budget asks for another turn before the verdict");
+    check(stream_turn()==false && g.stream.active && !yonder_mail_streaming(g.stream.mail),
+        "stream: the ring read empty, the turn waits for the verdict");
+    stream_post_verdict(true,OS64_FETCH_OK,"");
+    check(stream_turn()==false && !g.stream.active && g.page.tree!=NULL && probe_text_is("t","end"),
+        "stream: the verdict then finishes the page");
     os64_free(body);
     stream_window_drop();
 }
@@ -1265,17 +1295,35 @@ static void stream_text(void) {
     start_trip("http://fixture.test/t",NULL,NAV_GO,NULL);
     way_head_t h=stream_head("text/plain","",false);
     yonder_mail_post_head(g.stream.mail,&h);
+    /* Posted a byte at a time: the mark arrives in three reads, and the
+     * accent after it in two. */
     const char *text="\xEF\xBB\xBF" "plain <b>not bold</b> caf\xC3\xA9";
-    stream_post_body((const uint8_t *)text,strlen(text),YONDER_STREAM_CHUNK);
+    stream_post_body((const uint8_t *)text,strlen(text),1);
     stream_post_verdict(true,OS64_FETCH_OK,"");
     check(stream_turn()==false && g.page.plain!=NULL && g.page.way.doc==NULL && g.page.way.text_utf8 &&
         page_doc(&g.page)==g.page.plain && g.page.tree!=NULL,
-        "stream: text arrives as its own tree, UTF-8 by its byte order mark");
+        "stream: text arrives as its own tree, UTF-8 by its byte order mark, however the wire cut it");
     const os64_html_node_t *pre=g.page.plain->body ? g.page.plain->body->first_child : NULL;
     check(pre && os64_streq(pre->name,"plaintext") && pre->first_child &&
         pre->first_child->kind==OS64_HTML_TEXT && strstr(pre->first_child->text,"<b>not bold</b>")!=NULL,
         "stream: the text is literal under plaintext");
+    check(pre && pre->first_child && strstr(pre->first_child->text,"caf\xC3\xA9")!=NULL &&
+        strstr(pre->first_child->text,"\xC3\xAF")==NULL,
+        "stream: the mark is not drawn and the accent is whole");
     check(os64_streq(g.page.way.note,"200 OK"),"stream: a text page's standing line");
+    stream_window_drop();
+    /* A body shorter than a mark: judged at the end, on what there is. */
+    stream_window();
+    start_trip("http://fixture.test/t",NULL,NAV_GO,NULL);
+    h=stream_head("text/plain","",false);
+    yonder_mail_post_head(g.stream.mail,&h);
+    stream_post_body((const uint8_t *)"hi",2,1);
+    stream_post_verdict(true,OS64_FETCH_OK,"");
+    check(stream_turn()==false && g.page.plain!=NULL && !g.page.way.text_utf8,
+        "stream: a two-byte text arrives, windows-1252");
+    pre=g.page.plain->body ? g.page.plain->body->first_child : NULL;
+    check(pre && pre->first_child && os64_streq(pre->first_child->text,"hi"),
+        "stream: both of its bytes are in the page");
     stream_window_drop();
     /* No label, no mark, not JSON: windows-1252. */
     stream_window();
@@ -1824,12 +1872,241 @@ static void stream_cases(void) {
     loop_cases();
 }
 
+static void geometry_cases(void)
+{
+    probe_page("<!doctype html><style>html,body{margin:0;padding:0}"
+        "#outer{position:relative;width:200px;height:120px;border:4px solid;padding:8px}"
+        "#box{position:absolute;left:20px;top:30px;width:100px;height:40px;padding:3px;border:2px solid}"
+        "#fixed{position:fixed;left:11px;top:13px;width:17px;height:19px}"
+        "</style><div id=outer><div id=box></div></div><div id=fixed></div><script>"
+        "function eq(a,b){if(a!==b)throw Error(a+' != '+b)};"
+        "var box=document.getElementById('box');var outer=document.getElementById('outer');"
+        "eq(box.offsetWidth,110);eq(box.offsetHeight,50);eq(box.clientWidth,106);eq(box.clientHeight,46);"
+        "eq(box.clientLeft,2);eq(box.clientTop,2);eq(box.offsetParent,outer);eq(box.offsetLeft,20);eq(box.offsetTop,30);"
+        "var first=box.getBoundingClientRect();eq(first.width,110);eq(first.height,50);eq(first.right-first.left,110);"
+        "box.setAttribute('style','width:140px');eq(box.offsetWidth,150);eq(first.width,110);"
+        "var fresh=box.getBoundingClientRect();eq(fresh.width,150);eq(box.offsetWidth,150);"
+        "eq(document.documentElement.clientWidth,800);eq(document.documentElement.clientHeight,600);"
+        "var hidden=document.createElement('div');eq(hidden.offsetWidth,0);eq(hidden.offsetParent,null);"
+        "eq(hidden.getBoundingClientRect().width,0);"
+        "document.body.appendChild(hidden);hidden.setAttribute('style','display:none');eq(hidden.offsetHeight,0);"
+        "box.setAttribute('data-geometry-pass','yes');"
+        "</script>",true);
+    check(script_turn(), "geometry script task completes and rebuilds");
+    const os64_html_attr_t *passed=os64_html_attr(probe_id("box"),"data-geometry-pass");
+    check(passed!=NULL && os64_streq(passed->value,"yes"), "geometry script reaches every numeric assertion");
+    check(strstr(g.status_text,"forced 2 layouts") != NULL, "status reports forced layouts and repeated reads reuse them");
+    os64_dom_geometry_t value;
+    const os64_html_node_t *fixed=probe_id("fixed");
+    check(yonder_geometry_snapshot(g.page.way.doc,g.page.tree,fixed,800,600,1000,
+          (flow_point_t){7,9},&value) && value.x==11 && value.y==13 &&
+          value.width==17 && value.offset_left==11 && value.offset_top==13 && value.offset_parent==NULL, "fixed viewport geometry ignores page scrolling");
+    const os64_html_node_t *box=probe_id("box");
+    check(yonder_geometry_snapshot(g.page.way.doc,g.page.tree,box,800,600,1000,
+          (flow_point_t){7,9},&value) && value.x==17 && value.y==25,
+          "ordinary bounding rectangle subtracts page scroll");
+    g.zoom=2000;
+    check(lay_out_page(&g.page,800,600), "geometry zoom layout");
+    check(yonder_geometry_snapshot(g.page.way.doc,g.page.tree,box,800,600,2000,
+          (flow_point_t){0,0},&value) && value.width==150 && value.client_width==146 &&
+          value.offset_left==20, "geometry unzooms device layout to CSS pixels");
+    probe_drop();
+}
+
+static void geometry_body_cases(void)
+{
+    probe_page("<!doctype html><div id=box style='height:20px'></div>",false);
+    os64_dom_geometry_t value;
+    check(yonder_geometry_snapshot(g.page.way.doc,g.page.tree,probe_id("box"),800,600,1000,
+        (flow_point_t){0,0},&value) && value.offset_parent==g.page.way.doc->body &&
+        value.offset_left==8 && value.offset_top==8,
+        "static body offsets retain the default body margin from the document origin");
+    probe_drop();
+    probe_page("<!doctype html><style>body{position:relative;margin:8px;padding:5px;border:3px solid}</style>"
+        "<div id=box style='height:20px'></div>",false);
+    check(yonder_geometry_snapshot(g.page.way.doc,g.page.tree,probe_id("box"),800,600,1000,
+        (flow_point_t){0,0},&value) && value.offset_parent==g.page.way.doc->body &&
+        value.offset_left==5 && value.offset_top==5,
+        "positioned body offsets still use its padding edge");
+    probe_drop();
+}
+
+static void geometry_publish_cases(void)
+{
+    probe_page("<!doctype html><style>html,body{margin:0;padding:0}</style>"
+        "<input id=field style='display:block;width:50vw;height:20px'><div style='height:900px;width:3000px'></div>",true);
+    FormWidget *field=probe_field("field");
+    int32_t old_width=field->w->bounds.w;
+    g.view.bounds.w=400;
+    g.relayout_due=true;
+    g.sy=1000000;
+    os64_dom_geometry_t value;
+    check(script_geometry(NULL,probe_id("field"),&value),"geometry forces a pending resize layout");
+    const flow_box_t *box=flow_box_for(g.page.tree,probe_id("field"));
+    os64_gui_rect_t rect=flow_box_doc_rect(box,scroll_now());
+    check(field->w->bounds.w==rect.w && field->w->bounds.w<old_width,
+        "forced geometry publishes resized control bounds before the pending relayout");
+    check(g.sy<=page_height()-g.view.bounds.h,"forced geometry clamps the scroll to the new layout");
+    check(g.vbar.total==page_height() && g.vbar.visible==g.view.bounds.h && g.vbar.pos==g.sy &&
+        g.hbar.total==page_width() && g.hbar.visible==g.view.bounds.w && g.hbar.pos==g.sx,
+        "forced geometry publishes scrollbar ranges and positions");
+    g.sx=10;g.sy=0;g.zoom=2000;
+    check(script_geometry(NULL,probe_id("field"),&value) && g.sx==20,
+        "forced geometry scales horizontal scroll when publishing a pending zoom");
+    probe_drop();
+}
+
+static void geometry_scroll_cases(void)
+{
+    probe_page("<!doctype html><style>html,body{margin:0;padding:0}"
+        "#outer{width:100px;height:80px;overflow:auto}"
+        "#inner{width:100px;height:160px;overflow:auto}"
+        "#target{margin-top:300px;width:30px;height:20px}"
+        "</style><div id=outer><div id=inner><div id=target></div></div></div>",false);
+    int32_t outer=flow_scroller_for(g.page.tree,probe_id("outer"));
+    int32_t inner=flow_scroller_for(g.page.tree,probe_id("inner"));
+    check(outer>=0 && inner>=0,"geometry nested scroll frames exist");
+    flow_scroll_set(g.page.tree,outer,(flow_point_t){0,30});
+    flow_scroll_set(g.page.tree,inner,(flow_point_t){0,40});
+    os64_dom_geometry_t value;
+    check(yonder_geometry_snapshot(g.page.way.doc,g.page.tree,probe_id("target"),800,600,1000,
+        (flow_point_t){0,0},&value) && value.y==230 && value.offset_top==300,
+        "nested scrolling moves viewport rect without changing offset position");
+    probe_drop();
+    probe_page("<!doctype html><style>html,body{margin:0;padding:0}"
+        "#outer{width:100px;height:80px;overflow:auto}"
+        "#before{height:100px}#target{position:sticky;top:0;height:20px}#after{height:300px}"
+        "</style><div id=outer><div id=before></div><div id=target></div><div id=after></div></div>",false);
+    outer=flow_scroller_for(g.page.tree,probe_id("outer"));
+    flow_scroll_set(g.page.tree,outer,(flow_point_t){0,120});
+    check(yonder_geometry_snapshot(g.page.way.doc,g.page.tree,probe_id("target"),800,600,1000,
+        (flow_point_t){0,0},&value) && value.y==0 && value.offset_top==120,
+        "sticky offset preserves current placement while ignoring container scroll");
+    probe_drop();
+}
+
+static void geometry_fragment_cases(void)
+{
+    probe_page("<!doctype html><style>html,body{margin:0;padding:0}"
+        "#wrap{width:40px}#target{font-size:16px}"
+        "</style><div id=wrap><span id=target>aaaa aaaa aaaa</span></div>",false);
+    os64_dom_geometry_t value;
+    check(yonder_geometry_snapshot(g.page.way.doc,g.page.tree,probe_id("target"),800,600,1000,
+        (flow_point_t){0,0},&value) && value.height>16 && value.width<=40 &&
+        value.offset_height==value.height && value.client_width==0 && value.client_height==0,
+        "multiline inline unions fragments and has no client box");
+    probe_drop();
+    probe_page("<!doctype html><style>html,body{margin:0;padding:0}"
+        "table{border-spacing:0}caption{height:20px}td{padding:0;height:10px;width:30px}"
+        "</style><table id=target><caption></caption><tr><td></td></tr></table>",false);
+    check(yonder_geometry_snapshot(g.page.way.doc,g.page.tree,probe_id("target"),800,600,1000,
+        (flow_point_t){0,0},&value) && value.height==30 && value.offset_height==30 && value.client_height==10,
+        "table rectangle includes caption while client height describes table box");
+    probe_drop();
+}
+
+static void geometry_failure_cases(void)
+{
+    probe_page("<div id=box style='width:100px;height:20px'></div><script>"
+        "var box=document.getElementById('box');box.setAttribute('style','width:150px;height:20px');"
+        "try{box.offsetWidth;box.setAttribute('data-stale','returned')}catch(e){"
+        "if(e.name!=='InvalidStateError')throw e;box.setAttribute('data-refused','yes')}"
+        "</script><script>if(box.offsetWidth!==150)throw Error('retry');"
+        "box.setAttribute('data-retried','yes')</script>",true);
+    uint64_t before=g.page.rendered_version;
+    geometry_refuse_layout=true;
+    script_turn();
+    const os64_html_node_t *box=probe_id("box");
+    check(os64_html_attr(box,"data-stale")==NULL && os64_html_attr(box,"data-refused")!=NULL &&
+          g.page.rendered_version==before, "failed forced layout refuses stale dimensions and keeps its rendered version");
+    check(yonder_scripts_geometry_stats(g.page.scripts,false).layouts==1,
+          "failed forced layout is counted");
+    geometry_refuse_layout=false;
+    script_turn();
+    check(os64_html_attr(box,"data-retried")!=NULL, "fresh geometry succeeds after an allocation refusal");
+    probe_drop();
+    probe_page("<div id=box></div><script>var box=document.getElementById('box');"
+        "box.setAttribute('style','width:150px;height:20px');"
+        "try{box.offsetWidth}catch(e){};try{box.offsetWidth}catch(e){};"
+        "</script><script>box.setAttribute('data-after','bad')</script>",true);
+    /* One native layout a second longer than the page's whole task budget. */
+    int64_t overrun_us=((int64_t)g.script_ms+1000)*1000;
+    geometry_layout_delay=overrun_us;
+    script_turn();
+    geometry_layout_delay=0;
+    clock_us=10000000;
+    os64_dom_geometry_stats_t stats=yonder_scripts_geometry_stats(g.page.scripts,false);
+    check(stats.layouts==1 && stats.elapsed_us==(uint64_t)overrun_us && !yonder_scripts_pending(g.page.scripts),
+          "native overrun retires the task queue and preserves its layout telemetry");
+    char overrun_ms[32];
+    snprintf(overrun_ms,sizeof(overrun_ms),"%ld.000 ms",(long)(overrun_us/1000));
+    check(strstr(g.status_text,"runtime limit exceeded")!=NULL &&
+          strstr(g.status_text,overrun_ms)!=NULL, "status reports the charged native overrun");
+    check(os64_html_attr(probe_id("box"),"data-after")==NULL,
+          "later scripts do not run after a native geometry deadline");
+    probe_drop();
+}
+
+static os64_js_runtime_t *teardown_fixture_runtime;
+os64_js_status_t __wrap_os64_js_create_with_teardown(const os64_js_config_t *config,
+    os64_js_teardown_policy_t policy, const char *abi, os64_js_runtime_t **out,
+    os64_js_outcome_t *outcome)
+{
+    os64_js_status_t result = __real_os64_js_create_with_teardown(config, policy, abi, out, outcome);
+    if (result == OS64_JS_OK) teardown_fixture_runtime = *out;
+    return result;
+}
+
+static void reporting_teardown(void)
+{
+    check(yonder_scripts_teardown_leaks() == 0, "ordinary browser fixtures have no teardown leaks");
+    check(teardown_log_count == 0, "ordinary browser retirement emits no reclaimed-leak log");
+    size_t before = live;
+    probe_page("<p id='heading'>keep the window</p><script>globalThis.held=document.getElementById('heading')</script>", true);
+    os64_js_outcome_t outcome;
+    check(yonder_scripts_step(g.page.scripts, &outcome) && outcome.status == OS64_JS_OK,
+          "browser teardown fixture script runs");
+    JSContext *context = os64_js_context(teardown_fixture_runtime, OS64_JS_ABI_ID, &outcome);
+    JSValue global = JS_GetGlobalObject(context);
+    JSValue held = JS_GetPropertyStr(context, global, "held");
+    check(JS_IsObject(held), "browser fixture deliberately loses a retained DOM wrapper");
+    JS_FreeValue(context, global);
+    /* The lost value cannot be touched after destroy. Native holds must still
+     * drain even though this wrapper's finalizer cannot run. */
+    probe_drop();
+    teardown_fixture_runtime = NULL;
+    check(yonder_scripts_teardown_leaks() == 1 && live == before,
+          "browser leak is counted and engine/native storage is reclaimed");
+    unsigned long reclaimed_blocks = 0, reclaimed_bytes = 0;
+    check(teardown_log_count == 1 &&
+          sscanf(teardown_log,
+                 "Yonder: reclaimed JavaScript teardown leak at https://fixture.test/page (%lu blocks, %lu bytes)",
+                 &reclaimed_blocks, &reclaimed_bytes) == 2 && reclaimed_blocks > 0 && reclaimed_bytes > 0,
+          "kernel log receives the reclaimed leak's page URL and block/byte totals once");
+    /* Reuse the rendered text so the shared glyph cache does not grow while
+     * we compare page-owned storage against the pre-navigation baseline. */
+    probe_page("<p id='heading'>keep the window</p><script>globalThis.nextPage=true</script>", true);
+    check(yonder_scripts_step(g.page.scripts, &outcome) && outcome.status == OS64_JS_OK,
+          "browser can execute the next page after a reclaimed leak");
+    probe_drop();
+    teardown_fixture_runtime = NULL;
+    check(yonder_scripts_teardown_leaks() == 1 && live == before,
+          "clean navigation neither adds a leak nor retains page storage");
+    check(teardown_log_count == 1, "clean next-page retirement emits no additional reclaimed-leak log");
+}
+
 int main(void)
 {
     os64_text_options_t options={.memory={.alloc=probe_alloc,.free=probe_free},
         .backend=flow_test_backend(),.memory_cap=8*1024*1024};
     check(os64_text_create(&options,&probe_text)==OS64_FONT_OK,"text context");
     check(os64_text_font_bitmap(probe_text,&probe_font)==OS64_FONT_OK,"bitmap face");
+    geometry_cases();
+    geometry_body_cases();
+    geometry_publish_cases();
+    geometry_scroll_cases();
+    geometry_fragment_cases();
+    geometry_failure_cases();
     script_types();
     identity_and_edit();
     scripted_zoom();
@@ -1848,6 +2125,7 @@ int main(void)
     stylesheet_reuse();
     input_cases();
     if(getenv("YONDER_NO_STREAM")==NULL) stream_cases();
+    reporting_teardown();
     os64_text_font_release(probe_font);
     check(os64_text_destroy(probe_text)==OS64_FONT_OK,"all layout text released");
     check(live==0,"native and engine heap is empty");

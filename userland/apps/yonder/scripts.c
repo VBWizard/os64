@@ -3,6 +3,12 @@
 #include "os64/fmt.h"
 #include "os64/mem.h"
 #include "os64/str.h"
+#include "os64/io.h"
+
+/* Read on the window owner thread, including after a page owner is freed. */
+static size_t teardown_leaks;
+
+size_t yonder_scripts_teardown_leaks(void) { return teardown_leaks; }
 
 // A page's scripts, at most: a page with more is refused the rest, as a
 // page with more sheets than SHEETS_MAX is.
@@ -35,6 +41,12 @@ struct yonder_scripts {
     char url[OS64_DOM_URL_MAX];
     os64_js_runtime_t *runtime;
     os64_dom_t *dom;
+    // The page owner's current-layout provider (DOM.md § Geometry), kept
+    // so the runtime made later is given it; the counts a retired
+    // binding had are kept for the report that asks after it.
+    os64_dom_geometry_provider_t geometry;
+    void *geometry_opaque;
+    os64_dom_geometry_stats_t last_geometry_stats;
     bool dead;                      // a sticky outcome retired the runtime
     bool parse_ended;
     Item *items;
@@ -79,8 +91,21 @@ static void retire(yonder_scripts_t *s)
     for (uint32_t i = 0; i < s->count; i++)
         if (s->items[i].state == STATE_FETCHING || s->items[i].state == STATE_READY)
             release_item(s, &s->items[i]);
+    if (s->dom != NULL)
+        s->last_geometry_stats = os64_dom_geometry_stats(s->dom, false);
     os64_dom_drain(s->dom);
-    os64_js_destroy(s->runtime);
+    os64_js_teardown_report_t report;
+    os64_js_destroy_report(s->runtime, &report);
+    if (report.leaked) {
+        if (teardown_leaks != SIZE_MAX) teardown_leaks++;
+        // A desktop launch's stderr belongs to another VT. Keep the verdict
+        // in the kernel log so logd preserves the page and reclaimed totals.
+        char line[OS64_JS_SOURCE_NAME_CAP + 128];
+        os64_snprintf(line, sizeof(line),
+                      "Yonder: reclaimed JavaScript teardown leak at %s (%lu blocks, %lu bytes)",
+                      s->url, (unsigned long)report.reclaimed_blocks, (unsigned long)report.reclaimed_bytes);
+        os64_debug_log(line);
+    }
     os64_dom_free(s->dom);
     s->runtime = NULL;
     s->dom = NULL;
@@ -118,18 +143,22 @@ static uint64_t now_ms(void *opaque)
     return s->options.now_ms != NULL ? s->options.now_ms(s->options.opaque) : 0;
 }
 
-// The runtime and its binding, made at the first script that runs. Stack,
-// heap and source keep the profile measured for libdom (DOM.md § D5b); the
-// deadline is the page's task budget, and the job cap a backstop only: a
-// job costs time, which the deadline already bounds.
+// The runtime and its binding, made at the first script that runs. Heap
+// and source keep the profile measured for libdom (DOM.md § D5b); the stack
+// is the 128 KiB DOM_D10.md measured, because geometry shares it with native
+// layout. The deadline is the page's task budget, and the job cap a backstop
+// only: a job costs time, which the deadline already bounds. Teardown
+// reclaims and reports a leak rather than ending the window (DOM_D8.md).
 static bool ensure_runtime(yonder_scripts_t *s, os64_js_outcome_t *out)
 {
     if (s->runtime != NULL)
         return true;
     os64_js_config_t config = {os64_js_default_limits()};
+    config.limits.stack_bytes = 128 * 1024;
     config.limits.execution_ms = s->options.execution_ms;
     config.limits.jobs_per_turn = (uint64_t)1 << 20;
-    if (os64_js_create(&config, OS64_JS_ABI_ID, &s->runtime, out) != OS64_JS_OK)
+    if (os64_js_create_with_teardown(&config, OS64_JS_TEARDOWN_RECLAIM, OS64_JS_ABI_ID,
+                                     &s->runtime, out) != OS64_JS_OK)
         return false;
     os64_dom_options_t options = os64_dom_default_options();
     options.alert = s->options.alert;
@@ -140,6 +169,7 @@ static bool ensure_runtime(yonder_scripts_t *s, os64_js_outcome_t *out)
     options.activate = activate;
     options.host_opaque = s;
     s->dom = os64_dom_create(s->runtime, s->doc, s->state, &options, out);
+    os64_dom_set_geometry(s->dom, s->geometry, s->geometry_opaque);
     if (s->dom == NULL || os64_js_install_output(s->runtime, 1, OS64_JS_OUTPUT_CONSOLE_LOG, out) != OS64_JS_OK) {
         // A runtime a binding could not be built in is not evaluated again.
         out->status = OS64_JS_HOST_FAILURE;
@@ -163,6 +193,27 @@ yonder_scripts_t *yonder_scripts_new(os64_html_document_t *doc, os64_page_state_
     os64_strcopy(s->url, sizeof(s->url), options->url != NULL ? options->url : "about:blank");
     s->blocking = -1;
     return s;
+}
+
+void yonder_scripts_set_geometry(yonder_scripts_t *s, os64_dom_geometry_provider_t provider, void *opaque)
+{
+    if (s == NULL)
+        return;
+    s->geometry = provider;
+    s->geometry_opaque = opaque;
+    os64_dom_set_geometry(s->dom, provider, opaque);
+}
+
+os64_dom_geometry_stats_t yonder_scripts_geometry_stats(yonder_scripts_t *s, bool reset)
+{
+    if (s == NULL)
+        return (os64_dom_geometry_stats_t){0};
+    if (s->dom != NULL)
+        return os64_dom_geometry_stats(s->dom, reset);
+    os64_dom_geometry_stats_t result = s->last_geometry_stats;
+    if (reset)
+        s->last_geometry_stats = (os64_dom_geometry_stats_t){0};
+    return result;
 }
 
 void yonder_scripts_free(yonder_scripts_t *s)
