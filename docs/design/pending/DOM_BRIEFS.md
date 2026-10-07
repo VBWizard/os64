@@ -14,7 +14,7 @@ goes in DOM.md and its brief here is struck.
 | D6 — **Implemented; awaiting review** | Quinn and two scoped subagents | Fable | [D6 as built](DOM.md#d6-as-built); stacked on D5b |
 | D5 — **D5a merged #214; D5b implemented; awaiting review** | Quinn with scoped subagents | Fable | D2b and D3; D4 is not needed |
 | D4 — **Built; in review** | Fable | Chris | [DOM_D4.md](DOM_D4.md) is the design, [DOM.md § D4, as built](DOM.md#d4-as-built) the record |
-| D7 the loop — **Designed; D7a built (in review); Opus builds D7b** | Opus, from [DOM_D7.md](DOM_D7.md) | Fable (the loop); Quinn may take D7a's libjs/libdom half first | on D4, as two stacked PRs (D7a registry and turn, D7b the loop) |
+| D7 the loop — **D7a and D7b built, in review; D7c the join briefed** | Opus, from [DOM_D7.md](DOM_D7.md) | Fable | D7a and D7b on D4, stacked; D7c on `userland` once D4, D7a, D7b, D8 and D10 have merged (DOM_D7.md § The cut) |
 
 D4 and D7 stay with Fable because their sections of DOM.md are findings and
 leans, not specifications, and a wrong call there is a hunt rather than a

@@ -481,10 +481,70 @@ runs, `src`/`defer`/`async`/connected scripts and the script job, sheets
 at a stop, `end` before `finish`, DOMContentLoaded and load, the shown
 page's turn, timers on the ticker, every input-event site, libui's
 `on_change`, the policy and its Settings control and `yonder.conf` key,
-abandon at `stream_drop`, the audit lines. If D7b runs past what one
-review can hold, the input-event sites and libui's `on_change` split off
-as D7c on top of it; the seam is the table above, and D7b without them
-still proves the order, the timers, the lifecycle events and the policy.
+abandon at `stream_drop`, the audit lines. The input-event sites and
+libui's `on_change` were allowed to split off as a third PR if D7b ran past
+what one review could hold; D7b carried them, and the name went to the
+join below.
+
+**D7c — the join** (on `userland`, once D4, D7a, D7b, D8 and D10 have all
+merged there; Opus builds, Fable reviews; it is the first thing the play
+branch takes). D8 (DOM_D8.md, the reporting destroy) and D10 (DOM_D10.md,
+geometry) were built beside D7 on plain `userland`, and each was approved
+with a list of what D7b's rewrite of the script host has to adopt. None of
+the three can prove the joined behaviour on its own, so the list is a slice
+with its own proof rather than a note pinned to D7b.
+
+What D7c owes, each with the record it comes from:
+
+1. **Teardown** (TEARDOWN.md § Browser ownership). `ensure_runtime` creates
+   the page's runtime with `os64_js_create_with_teardown` and `RECLAIM`;
+   `retire` destroys it with `os64_js_destroy_report`, sends a reclaimed
+   leak through `os64_debug_log` with the page's address and the reclaimed
+   block and byte totals, and counts it in `yonder_scripts_teardown_leaks`.
+   The order stays DOM.md's: the lists dropped, the registries drained
+   (listener callbacks, timer callbacks and arguments, the event objects,
+   whose records are the engine's ledger or `d_alloc`), destroy,
+   `os64_dom_free`, the holds released. No native resource of D7's may need
+   a finalizer to release it; `event.c`'s finalizer frees engine memory
+   only, and that stays the rule.
+2. **Geometry** (DOM.md § Geometry, DOM_D10.md). The provider is per script
+   host, with the host's own page as its opaque: `yonder_scripts_options_t`
+   carries it beside `fetch`, `activate` and `now_ms`, and `ensure_runtime`
+   installs it with `os64_dom_set_geometry`. The stream's host lays the
+   parser's document out at the view's size as far as it has been parsed,
+   which is the design's "the page being loaded can be asked too"; the
+   coming page's host answers from its own model and a layout at the view's
+   size; the shown page's answers as D10 has it. A layout made for a page
+   not on screen is not published: no scroll clamp, no widgets, no paint.
+3. **The count and the sentence, per task kind.** D10 resets the layout
+   count before a task and reports `Script forced N layouts in T ms` after
+   it, for the one task kind its host ran. D7b runs six: a blocking script,
+   a ready script, a timer, a dispatched input event, `DOMContentLoaded`,
+   `load`. Every one of them resets before and reports after, through
+   `task_said` or beside it, and the `--script-audit` line carries the
+   count.
+4. **The stack, remeasured with dispatch on it.** D10 chose a 128 KiB engine
+   stack for the browser from script depth 160 plus the deepest layout
+   shape. D7b puts `invoke`, `run_record` and `JS_Call` between the task
+   and the listener; the join lays out the deepest shape from a listener
+   chain and adds that row to DOM_D10.md's table. If the headroom falls
+   under the 128 KiB native threshold D10 held, the number moves and the
+   doc says why.
+5. **One CONTRACT.md.** D7a, D8 and D10 each rewrote its status line and
+   its count of exported operations; the join leaves one status and the
+   phrase "the embedding operations" rather than a number.
+
+The proof, on the host in `test_yonder_scripts_host.c`: the lost-wrapper
+page with a listener installed and a timer pending retires to one log line,
+a count of one, a next page that runs, and nothing live; a `DOMContentLoaded`
+listener that reads `offsetWidth` answers the laid-out number; a mid-parse
+script that measures an element before it, with the rest of the page
+unparsed, answers at the view's size; a timer that forces a layout puts the
+sentence on the status line; a click listener that overruns inside a forced
+layout gets the overrun sentence, the runtime retired, and its link still
+working through the default action. One mutant per obligation. In the
+guest: D8's lost-wrapper page and D10's `dom-geometry.html` through the
+real stream with scripts on, and D7b's walk unchanged.
 
 ## The proof
 
