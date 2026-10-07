@@ -779,29 +779,91 @@ static bool css_type(const os64_html_node_t *n)
     return type == NULL || type[0] == '\0' || os64_streq_nocase(type, "text/css");
 }
 
+// Whether `n` names a sheet: os64_page_sheet's rule, the one both the model
+// and os64_page_sheets_in list by.
+static bool sheet_wanted(const os64_html_node_t *n)
+{
+    if (n->kind != OS64_HTML_ELEMENT || n->ns != OS64_HTML_NS_HTML ||
+        (!p_is(n, OS64_HTML_TAG_STYLE) && !p_is(n, OS64_HTML_TAG_LINK)) || !css_type(n))
+        return false;
+    if (!p_is(n, OS64_HTML_TAG_LINK))
+        return true;
+    const char *rel = p_attr(n, "rel");
+    return rel != NULL && has_token(rel, "stylesheet") && !has_token(rel, "alternate") &&
+           names_something(n, "href") && !p_has_attr(n, "disabled");
+}
+
+// The sheet `n` names, its `href` resolved into the page's arena. Both
+// tree walks recurse, so neither keeps a sheet on its own frame: the model
+// fills its array, the sheets walk the one in its context.
+static void sheet_fill(os64_page_t *page, const os64_html_node_t *n, os64_page_sheet_t *s)
+{
+    os64_memset(s, 0, sizeof(*s));
+    s->node = n;
+    s->linked = p_is(n, OS64_HTML_TAG_LINK);
+    if (s->linked)
+        p_resolve(page, p_attr(n, "href"), &s->href);
+    s->media = p_attr(n, "media");
+}
+
 static void add_sheet(os64_page_t *page, const os64_html_node_t *n)
 {
-    bool linked = p_is(n, OS64_HTML_TAG_LINK);
-    if (!css_type(n))
+    if (!sheet_wanted(n))
         return;
-    if (linked) {
-        const char *rel = p_attr(n, "rel");
-        if (rel == NULL || !has_token(rel, "stylesheet") || has_token(rel, "alternate") ||
-            !names_something(n, "href") || p_has_attr(n, "disabled"))
-            return;
-    }
     if (!p_grow((void **)&page->sheets, &page->sheetcap, page->nsheets, sizeof(*page->sheets))) {
         page->incomplete = true;
         return;
     }
-    os64_page_sheet_t *s = &page->sheets[page->nsheets];
-    os64_memset(s, 0, sizeof(*s));
-    s->node = n;
-    s->linked = linked;
-    if (linked)
-        p_resolve(page, p_attr(n, "href"), &s->href);
-    s->media = p_attr(n, "media");
-    page->nsheets++;
+    sheet_fill(page, n, &page->sheets[page->nsheets++]);
+}
+
+typedef struct {
+    os64_page_t *page;
+    bool (*each)(void *ctx, const os64_page_sheet_t *sheet);
+    void *ctx;
+    int32_t count;
+    os64_page_sheet_t one;
+} SheetsWalk;
+
+// Every node under `n`, in tree order, as the model's walk visits them for
+// its sheets: `template` contents hang off their own pointer and are not
+// followed. False once `each` said stop.
+static bool walk_sheets(SheetsWalk *w, const os64_html_node_t *n)
+{
+    for (; n != NULL; n = n->next) {
+        if (sheet_wanted(n)) {
+            sheet_fill(w->page, n, &w->one);
+            w->count++;
+            if (!w->each(w->ctx, &w->one))
+                return false;
+        }
+        if (!walk_sheets(w, n->first_child))
+            return false;
+    }
+    return true;
+}
+
+int32_t os64_page_sheets_in(const os64_html_document_t *doc, const char *document_url,
+                            bool (*each)(void *ctx, const os64_page_sheet_t *sheet), void *ctx)
+{
+    if (doc == NULL || each == NULL)
+        return -1;
+    // A scratch page, as os64_page_resolve_in makes one: the walk reads the
+    // document, its address and its base, and nothing else a model carries.
+    os64_page_t *page = os64_calloc(1, sizeof(*page));
+    if (page == NULL)
+        return -1;
+    page->doc = doc;
+    int32_t count = -1;
+    if (p_document_url(page, document_url) && p_base(page)) {
+        const os64_html_node_t *root = doc->document != NULL ? doc->document : doc->html;
+        SheetsWalk w = {page, each, ctx, 0, {0}};
+        (void)walk_sheets(&w, root);
+        count = w.count;
+    }
+    p_arena_free(&page->arena);
+    os64_free(page);
+    return count;
 }
 
 static void add_control(os64_page_t *page, const os64_html_node_t *n, os64_page_element_t element,
@@ -937,8 +999,7 @@ static void collect_node(os64_page_t *page, const os64_html_node_t *n, bool off)
             add_image(page, n);
         if (takes_background(n))
             add_background(page, n);
-        if (p_is(n, OS64_HTML_TAG_STYLE) || p_is(n, OS64_HTML_TAG_LINK))
-            add_sheet(page, n);
+        add_sheet(page, n);
         // A `meta` inside `noscript` counts, and that is the case that
         // matters: with scripting off those contents ARE the document's,
         // which is the whole reason the element exists.

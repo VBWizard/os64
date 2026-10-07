@@ -201,7 +201,14 @@ refused where a link to it is encoded and followed. `os64_page_resolve_in`
 applies ALL of it, for an address a script names (a `src`, a `location`
 ask): the document's own steps, its base as the tree stands now, on a
 scratch page with no model, so a script and a link in one document can
-never disagree about where an address goes.
+never disagree about where an address goes. Two more answers come off the
+same kind of scratch page, for a document still being parsed, so they
+cannot disagree with the model that will be built when it ends:
+`os64_page_sheets_in` lists the sheets the tree names by the model's own
+rule and order (one predicate, `sheet_named`, serves both, and the host
+suite holds the walk against the model on the corpus), and
+`os64_page_base_in` answers the base a model would have, which a `style`
+element's `@import` resolves against.
 
 **B. Form owner** (§4.10.17.3). One door: `page_form_owner(page, control)`,
 settled ONCE for every control after the walk and before anything asks, so

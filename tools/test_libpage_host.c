@@ -485,6 +485,111 @@ static void script_submit_cases(void)
                 .reason = OS64_PAGE_REASON_NO_FORM});
 }
 
+// os64_page_sheets_in against its oracle, the model: built on the same tree
+// at the same moment, the two lists must be the same sheets, in the same
+// order, with the same addresses.
+typedef struct {
+    const os64_page_t *model;
+    int32_t at;
+    bool same;
+    int32_t stop_after;
+} SheetsWalk;
+
+static bool same_text(const char *a, const char *b)
+{
+    return (a == NULL && b == NULL) || (a != NULL && b != NULL && strcmp(a, b) == 0);
+}
+
+static bool sheets_walk_one(void *ctx, const os64_page_sheet_t *sheet)
+{
+    SheetsWalk *w = ctx;
+    const os64_page_sheet_t *want = os64_page_sheet(w->model, w->at++);
+    if (want == NULL || want->node != sheet->node || want->linked != sheet->linked ||
+        want->media != sheet->media || !same_text(want->href.url, sheet->href.url) ||
+        want->href.refused != sheet->href.refused || want->href.spelled != sheet->href.spelled)
+        w->same = false;
+    return w->stop_after == 0 || w->at < w->stop_after;
+}
+
+static void sheets_walk_case(const char *name, os64_html_document_t *doc, const char *url)
+{
+    checks++;
+    os64_page_t *model = doc != NULL ? os64_page_build(doc, url, NULL, NULL) : NULL;
+    if (model == NULL) {
+        fail(name, "no model to compare the walk with");
+        os64_html_document_free(doc);
+        return;
+    }
+    SheetsWalk w = {model, 0, true, 0};
+    int32_t n = os64_page_sheets_in(doc, url, sheets_walk_one, &w);
+    if (n != os64_page_nsheets(model) || !w.same)
+        fail(name, "the walk listed %d sheets, the model %d%s", n, os64_page_nsheets(model),
+             w.same ? "" : ", and they differ");
+    // The base the walk's pages resolve against is the model's.
+    checks++;
+    char base[2048];
+    if (!os64_page_base_in(doc, url, base, sizeof(base)) || strcmp(base, os64_page_base(model)) != 0)
+        fail(name, "os64_page_base_in differs from the model's base");
+    checks++;
+    if (os64_page_base_in(doc, url, base, 4))
+        fail(name, "os64_page_base_in fit a base into four bytes");
+    // `each` answering false stops the walk at once.
+    if (os64_page_nsheets(model) > 1) {
+        checks++;
+        SheetsWalk stop = {model, 0, true, 1};
+        if (os64_page_sheets_in(doc, url, sheets_walk_one, &stop) != 1 || !stop.same)
+            fail(name, "a walk told to stop after one went on");
+    }
+    os64_page_free(model);
+    os64_html_document_free(doc);
+}
+
+static void sheets_walk_cases(void)
+{
+    static const char *const pages[] = {
+        "<link rel=stylesheet href=a.css><style>p{}</style><link rel='alternate stylesheet' href=b.css>",
+        "<link rel=STYLESHEET href=a.css><link rel=stylesheet href='  '><link rel=stylesheet>",
+        "<link rel=stylesheet href=a.css disabled><link rel=stylesheet type=text/less href=b.css>"
+        "<style type=TEXT/CSS>p{}</style><style type=text/plain>p{}</style>",
+        "<base href=http://elsewhere/dir/><link rel=stylesheet href=a.css media=print>",
+        "<svg><style>circle{}</style><foreignObject><style>p{}</style></foreignObject></svg>",
+        "<template><style>p{}</style><link rel=stylesheet href=t.css></template><style>q{}</style>",
+        "<fieldset disabled><style>p{}</style></fieldset><noscript><link rel=stylesheet href=n.css></noscript>",
+        "<link rel=stylesheet href='http://[bad'><link rel=stylesheet href=javascript:x>",
+        "<base href=../up/><base href=http://ignored/><style>@import 'i.css';</style>",
+        "<base href='http://[bad'><link rel=stylesheet href=a.css>",
+        "<p>no sheets at all</p>",
+    };
+    for (size_t i = 0; i < sizeof(pages) / sizeof(pages[0]); i++) {
+        char name[64];
+        snprintf(name, sizeof(name), "sheets walk: case %zu", i);
+        sheets_walk_case(name, parse(pages[i], "utf-8"), kPage);
+    }
+    // The corpus: real pages, Wikipedia's among them, named by the harness
+    // in LIBPAGE_CORPUS, one path a line.
+    const char *corpus = getenv("LIBPAGE_CORPUS");
+    FILE *list = corpus != NULL ? fopen(corpus, "r") : NULL;
+    char path[512];
+    while (list != NULL && fgets(path, sizeof(path), list) != NULL) {
+        path[strcspn(path, "\n")] = '\0';
+        FILE *f = fopen(path, "rb");
+        if (f == NULL)
+            continue;
+        static char bytes[4 << 20];
+        size_t len = fread(bytes, 1, sizeof(bytes) - 1, f);
+        fclose(f);
+        bytes[len] = '\0';
+        char name[600];
+        snprintf(name, sizeof(name), "sheets walk: %s", path);
+        sheets_walk_case(name, parse(bytes, NULL), "https://corpus.test/dir/page.html");
+    }
+    checks++;
+    if (list == NULL)
+        fail("sheets walk", "no corpus list in LIBPAGE_CORPUS");
+    else
+        fclose(list);
+}
+
 int main(int argc, char **argv)
 {
     if (argc > 1 && strcmp(argv[1], "--rebuild-live-state-free") == 0) {
@@ -524,6 +629,7 @@ int main(int argc, char **argv)
         navigation_cases();
         review3_cases();
         script_submit_cases();
+        sheets_walk_cases();
     }
     if (sweep)
         allocation_sweep();

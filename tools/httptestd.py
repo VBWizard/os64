@@ -94,6 +94,8 @@ Routes, and what each is FOR:
     /reason-latin1  404 with a Latin-1 reason phrase       high bytes are glyphs
     /stall          half a head, then 45s of silence       the idle deadline
     /stall-body     a whole head, half the body, silence   the window stays live (DOM_D4.md)
+    /sheet-wait.html a script below a slow style sheet      it waits for it (DOM_D7.md § D7d)
+    /slow-sheet.css that sheet, 1.5s late                   the sheet it waits for
 
 NOTE ON /redirect-https: it REDIRECTS to an https address, it does not fetch
 one. The first name for it was `/tohttps`, which read to Chris as "the server
@@ -141,6 +143,15 @@ def visible(text):
 
 HELLO = b"hello from the host, over HTTP.\n"
 DIRPAGE = b"<html><body><h1>a directory</h1></body></html>\n"
+# A script below a style sheet that is slow to come must wait for it: the
+# box it measures is 300px wide only once the sheet has applied.
+SHEET_WAIT_PAGE = (b"<!doctype html><title>D7d sheet wait</title>"
+                   b"<link rel=stylesheet href=/slow-sheet.css>"
+                   b"<div id=box style='height:20px;background:#c7dff2'>the box</div>"
+                   b"<script>var w=document.getElementById('box').offsetWidth;</script>"
+                   b"<p id=out>Waiting for script</p><script>document.getElementById('out').textContent="
+                   b"(w===300?'PASS':'FAIL')+': the script below the sheet measured '+w;</script>\n")
+SLOW_SHEET = b"#box { width: 300px }\n"
 QUERYPAGE = b"the query survived the trip\n"
 NOLENGTH = b"no Content-Length here; the close is the length.\n" * 40
 SLOW = b"dribbled out, a piece at a time, so the meter has something to do.\n" * 700
@@ -551,6 +562,13 @@ class Handler(socketserver.StreamRequestHandler):
             # went silent, not sit until someone presses Ctrl+C.
             self.send(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n")
             time.sleep(45)
+        elif route == "/sheet-wait.html":
+            self.send(head(200, "OK", [("Content-Type", "text/html"),
+                                       ("Content-Length", len(SHEET_WAIT_PAGE))]) + SHEET_WAIT_PAGE)
+        elif route == "/slow-sheet.css":
+            time.sleep(1.5)
+            self.send(head(200, "OK", [("Content-Type", "text/css"),
+                                       ("Content-Length", len(SLOW_SHEET))]) + SLOW_SHEET)
         elif route == "/stall-body":
             # A whole head and half of a declared HTML body, then silence
             # for longer than the idle deadline. yonder parses on its

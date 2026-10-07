@@ -361,6 +361,12 @@ bool os64_page_incomplete(const os64_page_t *page);
 // The address every reference resolved against: `<base href>` when the page
 // carries one, else where the page came from. Never NULL.
 const char *os64_page_base(const os64_page_t *page);
+// The base a model built on `doc` now would have (os64_page_base), without
+// building one: what a `style` element's @import resolves against while
+// the page is still being parsed. False when it will not fit in `cap`, or
+// there was no memory to look.
+bool os64_page_base_in(const os64_html_document_t *doc, const char *document_url, char *out,
+                       size_t cap);
 // `reference` resolved against `base` by the rule the page resolves its own
 // by, canonical — for an address a page's resources name in turn, as a
 // style sheet's @import does against the sheet's own address. False when
@@ -436,6 +442,14 @@ typedef struct {
 
 int32_t os64_page_nsheets(const os64_page_t *page);
 const os64_page_sheet_t *os64_page_sheet(const os64_page_t *page, int32_t i);
+// The sheets `doc` names as its tree stands now, by the rule above and in
+// the order a model built now would list them, without building one: for a
+// page still being parsed, whose sheets are sent for as the parse reveals
+// them. `document_url` is os64_page_build's. Each is handed to `each`, its
+// `href` valid only during the call; `each` answers false to stop. The
+// count handed over, or -1 when there was no memory to look.
+int32_t os64_page_sheets_in(const os64_html_document_t *doc, const char *document_url,
+                            bool (*each)(void *ctx, const os64_page_sheet_t *sheet), void *ctx);
 
 // Decoded fragment lookup: IDs take precedence over legacy <a name> matches;
 // first in tree order wins within each group. NULL means absent or incomplete.

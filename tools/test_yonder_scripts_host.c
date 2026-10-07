@@ -79,6 +79,7 @@ static unsigned script_cancels;
  * the window drops it. */
 static struct { os64_work_id_t id; void *job; } sheet_jobs[32];
 static int nsheet_jobs;
+static unsigned sheet_submits;      /* every sheet job the window ever sent */
 void os64_work_cancel(os64_work_pool_t *pool, os64_work_id_t id) {
     (void)pool;
     for(int i=0;i<nscript_jobs;i++) if(script_jobs[i].id==id) {
@@ -102,6 +103,7 @@ os64_work_id_t os64_work_submit(os64_work_pool_t *pool, const os64_work_t *work)
     }
     if(*(const uint32_t *)work->job==YONDER_JOB_SHEET) {
         if(nsheet_jobs==32) return 0;
+        sheet_submits++;
         sheet_jobs[nsheet_jobs].id=++pool_ids; sheet_jobs[nsheet_jobs].job=work->job;
         return sheet_jobs[nsheet_jobs++].id;
     }
@@ -207,7 +209,16 @@ void yonder_##kind##_release(void *job, void *product) { \
     (void)job; (void)product; check(false,"unexpected worker product"); \
 }
 JOB_STUB(picture)
-JOB_STUB(sheet)
+int64_t yonder_sheet_run(void *job, bool (*cancelled)(void *), void *ctx, void **out) {
+    (void)job; (void)cancelled; (void)ctx; (void)out;
+    check(false,"unexpected worker execution"); return -1;
+}
+/* As sheet.c releases a sheet job and what it made. */
+void yonder_sheet_release(void *job, void *product) {
+    yonder_sheet_t *got=product;
+    if(got) { garb_free(&got->parsed); os64_free(got); }
+    os64_free(job);
+}
 int64_t yonder_script_run(void *job, bool (*cancelled)(void *), void *ctx, void **out) {
     (void)job; (void)cancelled; (void)ctx; (void)out;
     check(false,"unexpected worker execution"); return -1;
@@ -382,6 +393,7 @@ static void probe_drop(void) {
 }
 
 static os64_html_node_t *probe_id_in(const os64_html_document_t *doc, const char *id) {
+    if(doc==NULL) return NULL;
     for (os64_html_node_t *n=doc->document;n;n=(os64_html_node_t *)next_within(n,doc->document)) {
         const os64_html_attr_t *a=os64_html_attr(n,"id");
         if(a && os64_streq(a->value,id)) return n;
@@ -1855,9 +1867,11 @@ static void loop_arrival_follows_scripts(void) {
     slurp_path=NULL;loop_drop();
     /* The sibling: a timer edits the page while it waits for a sheet, and
      * the page shown takes its sheet table from the tree it has by then. */
-    loop_page("<link rel=stylesheet href=wait.css><p id=styled>visible</p><script>"
+    /* The link is below the script, which would otherwise wait for it
+     * (DOM_D7.md § D7d). */
+    loop_page("<p id=styled>visible</p><script>"
         "setTimeout(()=>{var s=document.createElement('style');s.textContent='#styled{display:none}';"
-        "document.head.appendChild(s)},10);</script>");
+        "document.head.appendChild(s)},10);</script><link rel=stylesheet href=wait.css>");
     check(loop_settle() && g.coming.active && g.coming.page.sheets_waiting==1,
         "coming page: waits for its linked sheet");
     uint64_t waited_serial=g.coming.page.serial;
@@ -1939,8 +1953,8 @@ static void loop_hash_unshown(void) {
             "loop: the page arrives at the fragment the script named");
         loop_drop();
     }
-    loop_page("<link rel=stylesheet href=wait.css><h2 id=x>x</h2><script>"
-        "setTimeout(function(){location.hash='x'},10);</script>");
+    loop_page("<h2 id=x>x</h2><script>"
+        "setTimeout(function(){location.hash='x'},10);</script><link rel=stylesheet href=wait.css>");
     check(loop_settle() && g.coming.active,"loop: a page waiting for its sheet");
     now_ms+=50;
     check(loop_settle() && g.coming.active && !g.stream.active && g.coming.has_fragment &&
@@ -2223,6 +2237,179 @@ static void reporting_teardown(void)
     check(teardown_log_count == 1, "clean next-page retirement emits no additional reclaimed-leak log");
 }
 
+/* The worker's answer to the sheet job whose address ends with `tail`: the
+ * sheet `css`, or NULL for a fetch that failed. False when no such job is
+ * out. */
+static bool sheet_land(const char *tail, const char *css) {
+    for(int i=0;i<nsheet_jobs;i++) {
+        yonder_sheet_job_t *job=sheet_jobs[i].job;
+        size_t n=strlen(job->url), t=strlen(tail);
+        if(n<t || strcmp(job->url+n-t,tail)!=0) continue;
+        os64_work_id_t id=sheet_jobs[i].id;
+        sheet_jobs[i]=sheet_jobs[--nsheet_jobs];
+        yonder_sheet_t *got=os64_calloc(1,sizeof(*got));
+        if(css!=NULL) got->ok=garb_parse_sheet_text(css,strlen(css),&got->parsed)==GARB_OK;
+        os64_strcopy(got->url,sizeof(got->url),job->url);
+        reaped(id,job,got);
+        return true;
+    }
+    return false;
+}
+static bool sheet_out(const char *tail) {
+    for(int i=0;i<nsheet_jobs;i++) {
+        const char *url=((yonder_sheet_job_t *)sheet_jobs[i].job)->url;
+        size_t n=strlen(url), t=strlen(tail);
+        if(n>=t && strcmp(url+n-t,tail)==0) return true;
+    }
+    return false;
+}
+
+/* THE SHEETS BEFORE A SCRIPT (DOM_D7.md § The cut, D7d): the parse sends
+ * for the sheets it finds as it finds them, and a script the parse is
+ * stopped at waits for those still out. Each script writes the box's
+ * width into data-w; the sheet makes it 300. */
+#define D7D_MEASURE "<div id=box style='height:10px'></div><script>var b=document.getElementById('box');" \
+    "b.setAttribute('data-w',String(b.offsetWidth))</script>"
+static const char *box_width(void) {
+    const os64_html_node_t *box=probe_id_in(page_doc(&g.page),"box");
+    const os64_html_attr_t *a=box!=NULL ? os64_html_attr(box,"data-w") : NULL;
+    return a!=NULL ? a->value : "";
+}
+/* The box's data-w wherever the page is now: still streaming, waiting for
+ * its sheets, or shown. */
+static const char *stream_box_width(void) {
+    const os64_html_document_t *doc=g.stream.parser!=NULL ? os64_html_parser_document(g.stream.parser)
+        : g.coming.active ? page_doc(&g.coming.page) : page_doc(&g.page);
+    const os64_html_node_t *box=probe_id_in(doc,"box");
+    const os64_html_attr_t *a=box!=NULL ? os64_html_attr(box,"data-w") : NULL;
+    return a!=NULL ? a->value : "";
+}
+static void sheets_wait_cases(void) {
+    /* A slow link above a measuring script: sent for while the body is
+     * still in the mailbox, the script waits, and answers styled. */
+    /* More body than one of the mailbox's chunks holds. */
+    static char page[3*YONDER_STREAM_CHUNK], tail[2*YONDER_STREAM_CHUNK];
+    memset(tail,'x',sizeof(tail)-1); tail[sizeof(tail)-1]='\0';
+    snprintf(page,sizeof(page),"<link rel=stylesheet href=s.css>" D7D_MEASURE "<p>%s</p>",tail);
+    unsigned submits=sheet_submits;
+    loop_page(page);
+    check(loop_settle() && g.stream.stopped && sheet_out("/s.css") && g.stream.mail->first!=NULL,
+        "sheets: a link is sent for at the first stop, while the body is still in the mailbox");
+    check(stream_box_width()[0]=='\0',"sheets: the script below it waits for it");
+    check(sheet_land("/s.css","#box{width:300px}") && loop_settle() && g.page.tree!=NULL &&
+          os64_streq(box_width(),"300"),
+        "sheets: the sheet lands, and the script measures the styled box");
+    check(sheet_submits==submits+1,"sheets: one job for the sheet across the page's life, from the stop to the arrival");
+    check(g.page.nsheets==1 && g.page.sheets[0].ready && flow_box_for(g.page.tree,probe_id("box"))->rect.w==300,
+        "sheets: the arrived page has the sheet the stream sent for, in its cascade");
+    loop_drop();
+    /* A link in the first slice is sent for after that slice, with no
+     * stop to find it: the first script is further down than one slice
+     * reaches (Wikipedia's head has its links after its first scripts). */
+    static char deep[8*YONDER_STREAM_CHUNK], filler[6*YONDER_STREAM_CHUNK];
+    memset(filler,'y',sizeof(filler)-1); filler[sizeof(filler)-1]='\0';
+    snprintf(deep,sizeof(deep),"<link rel=stylesheet href=s.css><p>%s</p>" D7D_MEASURE,filler);
+    loop_page(deep);
+    stream_turn();
+    check(!g.stream.stopped && sheet_out("/s.css") && g.stream.mail->first!=NULL,
+        "sheets: a slice that reveals a link sends for it, with no stop and the body still coming");
+    loop_drop();
+    /* A style element's @import on the stream's page resolves against the
+     * base a model would have, and the script below waits for it too. */
+    loop_page("<base href=http://other.test/css/><style>@import 'i.css';</style>" D7D_MEASURE "<p>tail</p>");
+    check(loop_settle() && g.stream.stopped && sheet_out("http://other.test/css/i.css") &&
+          stream_box_width()[0]=='\0',
+        "sheets: a style's @import is sent for against the page's base, and holds the script below");
+    check(sheet_land("/i.css","#box{width:300px}") && loop_settle() && os64_streq(stream_box_width(),"300"),
+        "sheets: and the script measures what it imported");
+    loop_drop();
+    /* The same script above the link runs at once. */
+    loop_page(D7D_MEASURE "<link rel=stylesheet href=s.css><p>tail</p>");
+    check(loop_settle() && !g.stream.active && strcmp(stream_box_width(),"")!=0 &&
+          strcmp(stream_box_width(),"300")!=0,
+        "sheets: a script above the link does not wait for it");
+    loop_drop();
+    /* A print sheet holds nothing; a failed one holds nothing once it fails. */
+    loop_page("<link rel=stylesheet media=print href=p.css>" D7D_MEASURE "<p>tail</p>");
+    check(loop_settle() && !g.stream.active && sheet_out("/p.css") && strcmp(stream_box_width(),"")!=0,
+        "sheets: a link whose media does not hold on this glass is fetched and not waited for");
+    loop_drop();
+    loop_page("<link rel=stylesheet href=gone.css>" D7D_MEASURE "<p>tail</p>");
+    check(loop_settle() && g.stream.stopped && sheet_land("/gone.css",NULL) && loop_settle() &&
+          g.page.tree!=NULL && strcmp(box_width(),"")!=0,
+        "sheets: a link whose fetch fails holds nothing from then on");
+    loop_drop();
+    /* The wait is bounded: past SHEETS_WAIT_MS the script runs with what came. */
+    loop_page("<link rel=stylesheet href=slow.css>" D7D_MEASURE "<p>tail</p>");
+    check(loop_settle() && g.stream.stopped && stream_box_width()[0]=='\0',"sheets: waiting for a slow sheet");
+    now_ms+=SHEETS_WAIT_MS;
+    check(loop_settle() && strcmp(stream_box_width(),"")!=0 && strcmp(stream_box_width(),"300")!=0,
+        "sheets: the wait expires and the script runs with the sheets that came");
+    loop_drop();
+    /* Each stop waits its own SHEETS_WAIT_MS, not what is left of an
+     * earlier one's. */
+    loop_page("<link rel=stylesheet href=a.css><script>var one=1</script>"
+        "<link rel=stylesheet href=b.css>" D7D_MEASURE "<p>tail</p>");
+    check(loop_settle() && g.stream.stopped,"sheets: the first script waits");
+    now_ms+=SHEETS_WAIT_MS-1000;
+    check(sheet_land("/a.css","") && loop_settle() && g.stream.stopped && sheet_out("/b.css"),
+        "sheets: its sheet lands, it runs, and the second stops behind the next link");
+    now_ms+=2000;
+    check(loop_settle() && g.stream.stopped && stream_box_width()[0]=='\0',
+        "sheets: the second script's wait starts at its own stop");
+    loop_drop();
+    /* A style a mid-parse script adds is in the arrived page's table once;
+     * a style a mid-parse script removes is not in its cascade. */
+    loop_page("<style id=gone>#box{width:50px}</style><script>"
+        "var s=document.createElement('style');s.textContent='#box{width:120px}';document.head.appendChild(s);"
+        "document.getElementById('gone').remove();</script><div id=box style='height:10px'></div><script></script><p>tail</p>");
+    check(loop_settle() && g.page.tree!=NULL && flow_box_for(g.page.tree,probe_id("box"))->rect.w==120,
+        "sheets: a style a script adds applies and one it removes does not");
+    int added=0;
+    for(int32_t e=0;e<g.page.nsheets;e++) added+=g.page.sheets[e].node!=NULL;
+    check(added==2,"sheets: each style element has one entry, however many looks found it");
+    loop_drop();
+    /* Found out of document order, applied in it: the style a script puts
+     * above an earlier one loses to it, as it comes first. */
+    loop_page("<style id=a>#box{width:200px}</style><script>var s=document.createElement('style');"
+        "s.textContent='#box{width:100px}';document.head.insertBefore(s,document.getElementById('a'));</script>"
+        "<div id=box style='height:10px'></div><script></script><p>tail</p>");
+    check(loop_settle() && g.page.tree!=NULL && flow_box_for(g.page.tree,probe_id("box"))->rect.w==200,
+        "sheets: the cascade takes the sheets in document order, not the order they were found");
+    loop_drop();
+    /* The end of the parse looks again: a style below the last script is
+     * in the table DOMContentLoaded measures against. */
+    loop_page("<script>document.addEventListener('DOMContentLoaded',function(){var b=document.getElementById('box');"
+        "b.setAttribute('data-w',String(b.offsetWidth))})</script>"
+        "<style>#box{width:300px}</style><div id=box style='height:10px'></div>");
+    check(loop_settle() && g.page.tree!=NULL && os64_streq(box_width(),"300"),
+        "sheets: the end of the parse finds the sheets below the last script, before DOMContentLoaded");
+    loop_drop();
+    /* A written link before a written script holds it (D9). */
+    loop_page("<script>document.write('<link rel=stylesheet href=w.css><div id=box style=\"height:10px\"></div>"
+        "<scr'+'ipt>var b=document.getElementById(\"box\");b.setAttribute(\"data-w\",String(b.offsetWidth))</scr'+'ipt>')"
+        "</script><p>tail</p>");
+    check(loop_settle() && g.stream.stopped && sheet_out("/w.css") && stream_box_width()[0]=='\0',
+        "sheets: a written link before a written script holds it");
+    check(sheet_land("/w.css","#box{width:300px}") && loop_settle() && g.page.tree!=NULL &&
+          os64_streq(box_width(),"300"),"sheets: and the written script measures it styled");
+    loop_drop();
+    /* Teardown mid-wait, three ways: Stop, scripts off, the window's close. */
+    for(int how=0;how<3;how++) {
+        size_t before=live;
+        loop_page("<link rel=stylesheet href=s.css>" D7D_MEASURE "<p>tail</p>");
+        check(loop_settle() && g.stream.stopped && sheet_out("/s.css"),"sheets: waiting for a sheet");
+        if(how==0) click_stop(NULL,NULL);
+        else if(how==1) settings_use(YONDER_AGENT,false,5);
+        if(how<2) check(!g.stream.active && nsheet_jobs==0,
+            how==0 ? "sheets: Stop mid-wait cancels the sheet's job"
+                   : "sheets: turning scripts off mid-wait cancels it too");
+        loop_drop();
+        check(nsheet_jobs==0,"sheets: no sheet job outlives its page");
+        (void)before;
+    }
+}
+
 /* THE JOIN (DOM_D7.md § The cut, D7c): D8's reporting teardown, D10's
  * geometry and D7's loop, proven together through the real stream. */
 
@@ -2317,9 +2504,9 @@ static void join_unshown_geometry(void) {
     loop_drop();
     /* A page waiting for its sheet measures itself beside itself: the
      * sheet it has applies, and nothing of its own is laid out. */
-    loop_page("<link rel=stylesheet href=wait.css><style>#box{width:200px}</style><div id=box></div><script>"
+    loop_page("<style>#box{width:200px}</style><div id=box></div><script>"
         "setTimeout(function(){var b=document.getElementById('box');"
-        "b.setAttribute('data-w',String(b.offsetWidth))},10);</script>");
+        "b.setAttribute('data-w',String(b.offsetWidth))},10);</script><link rel=stylesheet href=wait.css>");
     check(loop_settle() && g.coming.active,"join: a page waits for its sheet");
     now_ms+=50;
     check(loop_settle() && g.coming.active && g.coming.page.tree==NULL && g.coming.page.cascade==NULL &&
@@ -2419,6 +2606,7 @@ static void join_one_measured_layout(void) {
 }
 
 static void join_cases(void) {
+    sheets_wait_cases();
     join_one_measured_layout();
     join_unshown_geometry();
     join_every_kind_counts();
