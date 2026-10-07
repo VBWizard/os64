@@ -475,7 +475,8 @@ navigation slot's last-wins, `innerHTML` scripts never running and
 events and timers sections. Merges when the host suites are green and
 yonder's behaviour is unchanged (`test_yonder_scripts_host` 2099/0).
 
-**D7b — the loop** (proven on the host and in the guest). Everything under
+**D7b — the loop** (proven on the host and in the guest).
+**Built, with the input events (D7c) in it:** DOM.md § D7b, as built. Everything under
 "The loop, in yonder": the script host's lists, the stream's turn with
 runs, `src`/`defer`/`async`/connected scripts and the script job, sheets
 at a stop, `end` before `finish`, DOMContentLoaded and load, the shown

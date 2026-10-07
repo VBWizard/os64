@@ -213,7 +213,11 @@ call or an evaluation that is already armed.
 listener or a handler property is counted as it changes, and on<type>
 content attributes are counted once per tree version by one walk of the
 document. A host asks before it builds anything, so a `mousemove` over a
-page with no handler costs no allocation and no engine entry.
+page with no handler costs no allocation and no engine entry. That walk is
+public as `os64_dom_handler_attributes(doc)`, a mask `os64_dom_handler_bit
+(type)` reads, and needs no runtime: a host whose page has not run a script
+asks it before making one, so a page with one `onclick` gets its runtime at
+the first click.
 
 **Event handlers.** For `click`, `mousedown`, `mouseup`, `mouseover`,
 `mouseout`, `mousemove`, `keydown`, `keypress`, `keyup`, `input`, `change`,
@@ -222,7 +226,11 @@ window have an on<type> property, and an on<type> content attribute is a
 handler. A target's handler is one slot in its listener list, in the place
 it was first set; a slot for an attribute the parser or innerHTML wrote goes
 first (an element has its attributes before any script can reach it), and a
-script's `setAttribute` makes its slot then. The slot remembers the attribute
+script's `setAttribute` makes its slot then. Window's slots come from the
+body, which window predates: window takes in the body's attributes before
+each listener added to it, and one found only at dispatch goes last, so
+`<body onload>` runs after a `load` listener a head script added and before
+one added once the body was parsed. The slot remembers the attribute
 text it last saw, so a set, changed or removed attribute is noticed by
 whichever route it changed. It compiles at the first dispatch or read that
 needs it: `function on<type>(event){BODY}` inside `with(document)

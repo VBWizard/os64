@@ -283,9 +283,13 @@ static int slot_refresh(os64_dom_t *dom, JSContext *ctx, DValue *entry, DListene
     return 0;
 }
 
-/* A slot for an attribute nobody has looked at yet goes to the head of the
- * list: the parser and innerHTML give an element its attributes before any
- * script can reach it, and a script's own setAttribute makes its slot then. */
+/* A slot for an attribute nobody has looked at yet goes to the head of an
+ * ELEMENT's list: the parser and innerHTML give an element its attributes
+ * before any script can reach it, and a script's own setAttribute makes its
+ * slot then. Window's slots come from the body, which window predates: one
+ * found late goes to the tail, and window takes in the body's attributes
+ * before every listener added to it (target_method), so each lands where
+ * the body was parsed among them. */
 static DListener *slot_for(os64_dom_t *dom, JSContext *ctx, DValue *entry, int kind, bool at_head)
 {
     DListener *slot = slot_find(entry, kinds[kind]);
@@ -300,7 +304,7 @@ static int slot_attribute_pending(os64_dom_t *dom, JSContext *ctx, DValue *entry
     const os64_html_node_t *source = attribute_source(dom, entry, kind);
     if (source == NULL || slot_find(entry, kinds[kind]) != NULL ||
         handler_attribute(source, kind) == NULL) return 0;
-    return slot_for(dom, ctx, entry, kind, true) != NULL ? 0 : -1;
+    return slot_for(dom, ctx, entry, kind, entry != dom->window) != NULL ? 0 : -1;
 }
 
 /* Whether an attribute name is on<type> for a handler type, ignoring ASCII
@@ -761,12 +765,10 @@ os64_js_status_t os64_dom_dispatch(os64_dom_t *dom, const os64_html_node_t *node
 
 /* Attributes are counted once per tree version: a walk of the connected tree
  * for on<type> names. Listener and property counts are kept as they change. */
-static uint32_t attribute_mask(os64_dom_t *dom)
+uint32_t os64_dom_handler_attributes(const os64_html_document_t *doc)
 {
-    uint64_t version = os64_html_version(dom->document);
-    if (dom->attribute_scanned && dom->attribute_version == version) return dom->attribute_mask;
     uint32_t mask = 0;
-    const os64_html_node_t *root = document_node(dom);
+    const os64_html_node_t *root = doc != NULL ? doc->document : NULL;
     for (const os64_html_node_t *at = root; at != NULL;) {
         if (at->kind == OS64_HTML_ELEMENT)
             for (const os64_html_attr_t *attr = at->attrs; attr != NULL; attr = attr->next) {
@@ -777,10 +779,24 @@ static uint32_t attribute_mask(os64_dom_t *dom)
         while (at != NULL && at != root && at->next == NULL) at = at->parent;
         at = at != NULL && at != root ? at->next : NULL;
     }
+    return mask;
+}
+
+static uint32_t attribute_mask(os64_dom_t *dom)
+{
+    uint64_t version = os64_html_version(dom->document);
+    if (dom->attribute_scanned && dom->attribute_version == version) return dom->attribute_mask;
+    uint32_t mask = os64_dom_handler_attributes(dom->document);
     dom->attribute_mask = mask;
     dom->attribute_version = version;
     dom->attribute_scanned = true;
     return mask;
+}
+
+uint32_t os64_dom_handler_bit(const char *type)
+{
+    int kind = type != NULL ? d_event_kind(type) : -1;
+    return has_handler_name(kind) ? 1u << kind : 0;
 }
 
 bool os64_dom_listens(os64_dom_t *dom, const char *type)
@@ -865,6 +881,11 @@ static JSValue target_method(JSContext *ctx, JSValueConst self, int argc, JSValu
     if (magic == M_REMOVE) {
         if (found != NULL) remove_listener(dom, entry, found);
     } else if (found == NULL) {
+        for (int kind = 0; entry == dom->window && kind < D_EVENT_COUNT; kind++)
+            if (window_reflecting(kind) && slot_attribute_pending(dom, ctx, entry, kind) < 0) {
+                d_string_free(dom, &type);
+                return JS_EXCEPTION;
+            }
         DListener *listener = listener_new(dom, ctx, entry, type.data, false);
         if (listener == NULL) result = JS_EXCEPTION;
         else {

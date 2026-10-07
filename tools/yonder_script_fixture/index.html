@@ -20,113 +20,24 @@ while (Date.now() < firstUntil) {}
 heldHeading.textContent = 'JavaScript donuts!';
 console.log('J3:first-ready');
 </script>
-<!-- Short fixture turns leave about six seconds for human input without
-     raising the runtime deadline or requiring browser timers. -->
+<!-- The countdown is timers: the page arrives at once, and each tick is a
+     task of its own, so the field takes typing between them. -->
 <script>
-document.getElementById('result').textContent = 'Click the field and type Q. Checking in about 6 seconds.';
-var inputUntil = Date.now() + 300;
-while (Date.now() < inputUntil) {}
-</script>
-<script>
-document.getElementById('result').textContent = 'Click the field and type Q. Checking in about 6 seconds.';
-var inputUntil = Date.now() + 300;
-while (Date.now() < inputUntil) {}
-</script>
-<script>
-document.getElementById('result').textContent = 'Click the field and type Q. Checking in about 6 seconds.';
-var inputUntil = Date.now() + 300;
-while (Date.now() < inputUntil) {}
-</script>
-<script>
-document.getElementById('result').textContent = 'Click the field and type Q. Checking in about 6 seconds.';
-var inputUntil = Date.now() + 300;
-while (Date.now() < inputUntil) {}
-</script>
-<script>
-document.getElementById('result').textContent = 'Click the field and type Q. Checking in about 5 seconds.';
-var inputUntil = Date.now() + 300;
-while (Date.now() < inputUntil) {}
-</script>
-<script>
-document.getElementById('result').textContent = 'Click the field and type Q. Checking in about 5 seconds.';
-var inputUntil = Date.now() + 300;
-while (Date.now() < inputUntil) {}
-</script>
-<script>
-document.getElementById('result').textContent = 'Click the field and type Q. Checking in about 5 seconds.';
-var inputUntil = Date.now() + 300;
-while (Date.now() < inputUntil) {}
-</script>
-<script>
-document.getElementById('result').textContent = 'Click the field and type Q. Checking in about 4 seconds.';
-var inputUntil = Date.now() + 300;
-while (Date.now() < inputUntil) {}
-</script>
-<script>
-document.getElementById('result').textContent = 'Click the field and type Q. Checking in about 4 seconds.';
-var inputUntil = Date.now() + 300;
-while (Date.now() < inputUntil) {}
-</script>
-<script>
-document.getElementById('result').textContent = 'Click the field and type Q. Checking in about 4 seconds.';
-var inputUntil = Date.now() + 300;
-while (Date.now() < inputUntil) {}
-</script>
-<script>
-document.getElementById('result').textContent = 'Click the field and type Q. Checking in about 3 seconds.';
-var inputUntil = Date.now() + 300;
-while (Date.now() < inputUntil) {}
-</script>
-<script>
-document.getElementById('result').textContent = 'Click the field and type Q. Checking in about 3 seconds.';
-var inputUntil = Date.now() + 300;
-while (Date.now() < inputUntil) {}
-</script>
-<script>
-document.getElementById('result').textContent = 'Click the field and type Q. Checking in about 3 seconds.';
-var inputUntil = Date.now() + 300;
-while (Date.now() < inputUntil) {}
-</script>
-<script>
-document.getElementById('result').textContent = 'Click the field and type Q. Checking in about 3 seconds.';
-var inputUntil = Date.now() + 300;
-while (Date.now() < inputUntil) {}
-</script>
-<script>
-document.getElementById('result').textContent = 'Click the field and type Q. Checking in about 2 seconds.';
-var inputUntil = Date.now() + 300;
-while (Date.now() < inputUntil) {}
-</script>
-<script>
-document.getElementById('result').textContent = 'Click the field and type Q. Checking in about 2 seconds.';
-var inputUntil = Date.now() + 300;
-while (Date.now() < inputUntil) {}
-</script>
-<script>
-document.getElementById('result').textContent = 'Click the field and type Q. Checking in about 2 seconds.';
-var inputUntil = Date.now() + 300;
-while (Date.now() < inputUntil) {}
-</script>
-<script>
-document.getElementById('result').textContent = 'Click the field and type Q. Checking in about 1 seconds.';
-var inputUntil = Date.now() + 300;
-while (Date.now() < inputUntil) {}
-</script>
-<script>
-document.getElementById('result').textContent = 'Click the field and type Q. Checking in about 1 seconds.';
-var inputUntil = Date.now() + 300;
-while (Date.now() < inputUntil) {}
-</script>
-<script>
-document.getElementById('result').textContent = 'Click the field and type Q. Checking in about 1 seconds.';
-var inputUntil = Date.now() + 300;
-while (Date.now() < inputUntil) {}
-</script>
-<script>
-if (heldHeading !== document.getElementById('heading') ||
-    heldField !== document.getElementById('field'))
-    throw Error('A reference lost its identity');
-heldHeading.textContent = 'Two JavaScript donuts!';
-document.getElementById('result').textContent = 'Reference kept; field = ' + heldField.value;
-console.log('J3:second-ready field=' + heldField.value);
+var left = 6;
+function tick() {
+    if (left > 0) {
+        document.getElementById('result').textContent =
+            'Click the field and type Q. Checking in about ' + left + ' seconds.';
+        left--;
+        setTimeout(tick, 1000);
+        return;
+    }
+    if (heldHeading !== document.getElementById('heading') ||
+        heldField !== document.getElementById('field'))
+        throw Error('A reference lost its identity');
+    heldHeading.textContent = 'Two JavaScript donuts!';
+    document.getElementById('result').textContent = 'Reference kept; field = ' + heldField.value;
+    console.log('J3:second-ready field=' + heldField.value);
+}
+tick();
 </script>

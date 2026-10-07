@@ -924,6 +924,10 @@ struct os64_ui_textfield
     void (*on_cancel)(os64_ui_textfield_t *tf, void *user);
     void *edit_user;
     uint8_t seq;                 // VT100 burst parser state (see ui_text.c)
+    // After an edit a PERSON made changed the text — a letter typed, one
+    // deleted, a cut or a paste — never after os64_ui_textfield_set. NULL
+    // by default; set it after os64_ui_textfield(). Receives edit_user.
+    void (*on_change)(os64_ui_textfield_t *tf, void *user);
 };
 
 void os64_ui_textfield(os64_ui_textfield_t *tf, char *buf, size_t cap,

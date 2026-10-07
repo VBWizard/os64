@@ -1808,6 +1808,43 @@ static void ui_test_field_shift_left(os64_ui_textfield_t *tf, os64_ui_t *ui)
     ui_test_field_chord(tf,ui,'[',OS64_GUI_MOD_SHIFT);
     ui_test_field_chord(tf,ui,'D',OS64_GUI_MOD_SHIFT);
 }
+/* on_change: once per edit a person makes, never for motion, selection,
+ * copy, a refused cut, or a program's own set. */
+static unsigned ui_test_changes;
+static void ui_test_changed(os64_ui_textfield_t *tf, void *user)
+{
+    (void)tf; CHECK(user==&ui_test_changes); ui_test_changes++;
+}
+static void ui_test_field_on_change(void)
+{
+    current="field change callback";
+    os64_ui_t ui={0};ui_test_view_theme(&ui.theme);
+    char buf[16];os64_ui_textfield_t tf;
+    os64_ui_textfield(&tf,buf,sizeof(buf),NULL,NULL,&ui_test_changes);
+    CHECK(tf.on_change==NULL);
+    tf.on_change=ui_test_changed;
+    tf.w.bounds=(os64_gui_rect_t){0,0,180,28};os64_ui_set_root(&ui,&tf.w);
+    ui_test_changes=0;
+    os64_ui_textfield_set(&ui,&tf,"ab");
+    CHECK(ui_test_changes==0);
+    ui_test_field_key(&tf,&ui,'c');CHECK(ui_test_changes==1 && !strcmp(buf,"abc"));
+    ui_test_field_burst(&tf,&ui,'D');CHECK(ui_test_changes==1);
+    ui_test_field_key(&tf,&ui,'\b');CHECK(ui_test_changes==2 && !strcmp(buf,"ac"));
+    ui_test_field_delete(&tf,&ui);CHECK(ui_test_changes==3 && !strcmp(buf,"a"));
+    ui_test_field_delete(&tf,&ui);CHECK(ui_test_changes==3);
+    ui_test_field_chord(&tf,&ui,1,OS64_GUI_MOD_CTRL);CHECK(ui_test_changes==3 && tf.selected);
+    ui_test_field_chord(&tf,&ui,3,OS64_GUI_MOD_CTRL);CHECK(ui_test_changes==3);
+    ui_test_clip_fail=true;
+    ui_test_field_chord(&tf,&ui,24,OS64_GUI_MOD_CTRL);CHECK(ui_test_changes==3 && !strcmp(buf,"a"));
+    ui_test_clip_fail=false;
+    ui_test_field_chord(&tf,&ui,24,OS64_GUI_MOD_CTRL);CHECK(ui_test_changes==4 && !strcmp(buf,""));
+    ui_test_field_chord(&tf,&ui,22,OS64_GUI_MOD_CTRL);CHECK(ui_test_changes==5 && !strcmp(buf,"a"));
+    for (int i=0;i<20;i++) ui_test_field_key(&tf,&ui,'z');
+    CHECK(tf.len==sizeof(buf)-1);
+    unsigned full=ui_test_changes;
+    ui_test_field_key(&tf,&ui,'y');CHECK(ui_test_changes==full);
+    CHECK(os64_ui_font_release(&ui)==OS64_FONT_OK);
+}
 static void ui_test_field_selection(void)
 {
     current="field selection and clipboard";
@@ -3124,6 +3161,7 @@ int main(int argc, char **argv)
     textview_keys_without_layout(dir);
 #if __INCLUDE_LEVEL__ == 0
     ui_test_field_selection();
+    ui_test_field_on_change();
 #endif
     textfield_edits_by_cluster(dir);
     textfield_scroll_follows_the_face(dir);

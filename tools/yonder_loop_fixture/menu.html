@@ -1,0 +1,16 @@
+<!doctype html>
+<title>DHTML menu</title>
+<style>
+#menu { background: #dde; padding: 4px; width: 200px; }
+#items { display: none; background: #eef; padding: 4px; width: 200px; }
+#items.open { display: block; }
+</style>
+<h1>A 1999 menu</h1>
+<!-- className, not style: element.style is not in libdom's surface yet. -->
+<div id="menu" onmouseover="document.getElementById('items').className = 'open'; document.getElementById('said').textContent = 'menu open'"
+     onmouseout="document.getElementById('items').className = ''; document.getElementById('said').textContent = 'menu closed'">
+  Products (point here)
+</div>
+<div id="items"><a href="order.html">Order of scripts</a><br><a href="clock.html">The clock</a></div>
+<p id="said">menu closed</p>
+<p>Point at Products: the list opens on mouseover and closes on mouseout.</p>

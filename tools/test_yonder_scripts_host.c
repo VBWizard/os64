@@ -19,9 +19,13 @@ int64_t os64_open(const char *p, const char *m) { (void)p; (void)m; return -1; }
 int64_t os64_read(int32_t h, void *b, size_t n) { (void)h; (void)b; (void)n; return -1; }
 int64_t os64_close(int32_t h) { (void)h; return 0; }
 int64_t os64_stat(const char *p, os64_dirent_t *entry) { (void)p; (void)entry; return -1; }
-static int64_t geometry_clock = 10000000, geometry_layout_delay;
+/* The clocks stand still unless a case moves them: micros steps by
+ * clock_step at every read (an overrun is a loop that reads it) and by
+ * geometry_layout_delay at every forced layout (a slow native layout), and
+ * the window's milliseconds are what a case sets. */
+static int64_t clock_us=10000000, clock_step, geometry_layout_delay;
 static bool geometry_refuse_layout;
-int64_t os64_micros(void) { return geometry_clock; }
+int64_t os64_micros(void) { return clock_us+=clock_step; }
 uint64_t os64_heap_verify(void) { return 0; }
 static size_t teardown_log_count;
 static char teardown_log[OS64_JS_SOURCE_NAME_CAP + 128];
@@ -42,7 +46,8 @@ void os64_ui_theme_current(os64_ui_theme_t *theme, uint64_t *installed) {
     os64_ui_theme_defaults(theme); *installed=0;
 }
 int64_t os64_ticks(os64_ticks_t *ticks) { *ticks=(os64_ticks_t){.ticks=100,.per_second=1000}; return 0; }
-uint64_t yonder_now_ms(void) { return 100; }
+static uint64_t now_ms=100;
+uint64_t yonder_now_ms(void) { return now_ms; }
 void yonder_ticker_set(yonder_ticker_t *ticker, uint64_t due) { (void)ticker; (void)due; }
 /* THE POOL, FAKED. A stream case (below) lets one navigation be submitted
  * and plays its worker itself; every other case still treats a submission
@@ -54,8 +59,25 @@ static int64_t pool_error;
 static int pool_fake;
 /* A cancelled job is the pool's to release (work.h), and the window never
  * sees it again. */
+/* A script's fetch job is kept until the case LANDS it (script_land) or the
+ * window cancels it; the pool's own release then frees it. */
+static struct { os64_work_id_t id; yonder_script_job_t *job; } script_jobs[32];
+static int nscript_jobs;
+static unsigned script_cancels;
+/* A sheet's fetch job is held the same way, never run: a case that wants a
+ * page waiting for its sheets gets one that waits until it is cancelled or
+ * the window drops it. */
+static struct { os64_work_id_t id; void *job; } sheet_jobs[32];
+static int nsheet_jobs;
 void os64_work_cancel(os64_work_pool_t *pool, os64_work_id_t id) {
-    (void)pool; pool_cancelled=id;
+    (void)pool;
+    for(int i=0;i<nscript_jobs;i++) if(script_jobs[i].id==id) {
+        os64_free(script_jobs[i].job); script_jobs[i]=script_jobs[--nscript_jobs]; script_cancels++; return;
+    }
+    for(int i=0;i<nsheet_jobs;i++) if(sheet_jobs[i].id==id) {
+        os64_free(sheet_jobs[i].job); sheet_jobs[i]=sheet_jobs[--nsheet_jobs]; return;
+    }
+    pool_cancelled=id;
     if(id==pool_ids && pool_work.job!=NULL) {
         pool_work.release(pool_work.job,NULL); memset(&pool_work,0,sizeof(pool_work));
     }
@@ -63,6 +85,16 @@ void os64_work_cancel(os64_work_pool_t *pool, os64_work_id_t id) {
 os64_work_id_t os64_work_submit(os64_work_pool_t *pool, const os64_work_t *work) {
     (void)pool;
     if(!pool_open) { check(false,"unexpected background submission"); return 0; }
+    if(*(const uint32_t *)work->job==YONDER_JOB_SCRIPT) {
+        if(nscript_jobs==32) return 0;
+        script_jobs[nscript_jobs].id=++pool_ids; script_jobs[nscript_jobs].job=work->job;
+        return script_jobs[nscript_jobs++].id;
+    }
+    if(*(const uint32_t *)work->job==YONDER_JOB_SHEET) {
+        if(nsheet_jobs==32) return 0;
+        sheet_jobs[nsheet_jobs].id=++pool_ids; sheet_jobs[nsheet_jobs].job=work->job;
+        return sheet_jobs[nsheet_jobs++].id;
+    }
     pool_work=*work; return ++pool_ids;
 }
 bool os64_work_reap(os64_work_pool_t *pool, os64_work_id_t *id, int64_t *verdict, void **job,
@@ -166,6 +198,36 @@ void yonder_##kind##_release(void *job, void *product) { \
 }
 JOB_STUB(picture)
 JOB_STUB(sheet)
+int64_t yonder_script_run(void *job, bool (*cancelled)(void *), void *ctx, void **out) {
+    (void)job; (void)cancelled; (void)ctx; (void)out;
+    check(false,"unexpected worker execution"); return -1;
+}
+void yonder_script_release(void *job, void *product) {
+    yonder_script_t *got=product;
+    if(got) { os64_free(got->source); os64_free(got); }
+    os64_free(job);
+}
+/* The worker's answer to the script job whose address ends with `tail`:
+ * its source, or NULL for a fetch that failed. False when no such job is
+ * out. */
+static bool script_land(const char *tail, const char *source) {
+    for(int i=0;i<nscript_jobs;i++) {
+        const char *url=script_jobs[i].job->url;
+        size_t n=strlen(url), t=strlen(tail);
+        if(n<t || strcmp(url+n-t,tail)!=0) continue;
+        os64_work_id_t id=script_jobs[i].id; yonder_script_job_t *job=script_jobs[i].job;
+        script_jobs[i]=script_jobs[--nscript_jobs];
+        yonder_script_t *got=os64_calloc(1,sizeof(*got));
+        if(source) {
+            got->ok=true; got->length=strlen(source);
+            got->source=os64_malloc(got->length+1); memcpy(got->source,source,got->length+1);
+        }
+        os64_strcopy(got->url,sizeof(got->url),url);
+        reaped(id,job,got);
+        return true;
+    }
+    return false;
+}
 /* Reached from the doorbell's other bits, which no case rings. */
 int64_t os64_thread_join(int32_t handle, int64_t *retval) { (void)handle; (void)retval; return -1; }
 void os64_ui_settings_pump(os64_ui_settings_t *dialog) { (void)dialog; check(false,"no settings relay"); }
@@ -177,18 +239,23 @@ void os64_image_sequence_free(os64_image_sequence_t *sequence) { check(sequence=
 const os64_image_frame_t *os64_image_sequence_frame(const os64_image_sequence_t *sequence) {
     (void)sequence; check(false,"unexpected animation read"); return NULL;
 }
+/* A file a case serves (open_local), or none. */
+static const char *slurp_path, *slurp_bytes;
 os64_slurp_status_t os64_slurp(const char *path, size_t cap, uint8_t **bytes, size_t *length) {
-    (void)path; (void)cap; *bytes=NULL; *length=0; return OS64_SLURP_NO_FILE;
+    (void)cap; *bytes=NULL; *length=0;
+    if(slurp_path==NULL || !os64_streq(path,slurp_path)) return OS64_SLURP_NO_FILE;
+    *length=strlen(slurp_bytes); *bytes=os64_malloc(*length+1); memcpy(*bytes,slurp_bytes,*length+1);
+    return OS64_SLURP_OK;
 }
 
 bool os64_ui_theme_session(os64_ui_theme_t *theme, uint64_t *installed, uint64_t hint) {
     (void)theme; (void)installed; (void)hint; return false;
 }
-static char saved_scripts[8], saved_zoom[8], settings_report[256];
+static char saved_scripts[8], saved_zoom[8], saved_seconds[8], settings_report[256];
 int64_t os64_conf_get(const char *file, const char *key, char *out, size_t cap) {
     check(os64_streq(file,"yonder.conf"),"settings read Yonder configuration");
     const char *value=os64_streq(key,"scripts") ? saved_scripts :
-        os64_streq(key,"zoom") ? saved_zoom : "";
+        os64_streq(key,"zoom") ? saved_zoom : os64_streq(key,"script_seconds") ? saved_seconds : "";
     if(!value[0]) return OS64_CONF_NO_KEY;
     os64_strcopy(out,cap,value); return 0;
 }
@@ -196,6 +263,7 @@ int64_t os64_conf_set(const char *file, const char *key, const char *value) {
     check(os64_streq(file,"yonder.conf"),"settings save Yonder configuration");
     if(os64_streq(key,"scripts")) os64_strcopy(saved_scripts,sizeof(saved_scripts),value);
     if(os64_streq(key,"zoom")) os64_strcopy(saved_zoom,sizeof(saved_zoom),value);
+    if(os64_streq(key,"script_seconds")) os64_strcopy(saved_seconds,sizeof(saved_seconds),value);
     return 0;
 }
 void os64_ui_settings_report(os64_ui_settings_t *dialog, const char *text) {
@@ -241,7 +309,7 @@ flow_tree_t *__wrap_flow_layout(const os64_html_document_t *doc,const os64_page_
     }
     if(geometry_refuse_layout) return NULL;
     flow_tree_t *tree=__real_flow_layout(doc,model,width,env);
-    geometry_clock+=geometry_layout_delay;
+    clock_us+=geometry_layout_delay;
     if(budget_active && flow_incomplete(tree)) budget_partial_layouts++;
     return tree;
 }
@@ -286,13 +354,20 @@ static void probe_page(const char *html, bool scripts) {
     g.page.model_version=g.page.rendered_version=os64_html_version(g.page.way.doc);
     g.page.state_version=os64_page_state_version(os64_page_shared_state(g.page.way.model));
     forms_build();
+    g.script_ms=5000;
     if(scripts) {
-        g.page.scripts=yonder_scripts_new(g.page.way.doc,
-            os64_page_shared_state(g.page.way.model),g.page.way.url,NULL,NULL);
+        /* A finished document's inline scripts are queued as CONNECTED
+         * scripts, in tree order: the shown page's ready list, one a turn. */
+        g.page.scripts=scripts_host(g.page.way.doc,os64_page_shared_state(g.page.way.model),
+            g.page.way.url,++g.pages_made);
+        for (os64_html_node_t *n=g.page.way.doc->document;n;n=(os64_html_node_t *)next_within(n,g.page.way.doc->document))
+            if(os64_dom_script_kind(n)==OS64_DOM_SCRIPT_CLASSIC && os64_html_attr(n,"src")==NULL)
+                yonder_scripts_connected(g.page.scripts,n);
         yonder_scripts_set_geometry(g.page.scripts, script_geometry, NULL);
     }
 }
 static void probe_drop(void) {
+    inputs_drop();
     yonder_scripts_free(g.page.scripts); g.page.scripts=NULL;
     forms_drop(); page_clear(&g.page); os64_ui_font_release(&g.ui);
 }
@@ -544,13 +619,18 @@ static void script_lifecycle(void) {
         "document.getElementById('heading').textContent='first';</script>"
         "<script>document.getElementById('heading').textContent='must not run';</script>",true);
     script_turn(); stop_trip(); script_turn();
-    check(probe_text_is("heading","first") && g.page.scripts==NULL,"navigation drops queued script and held wrapper");
+    check(probe_text_is("heading","must not run") && g.page.scripts!=NULL,
+        "the page on screen keeps running its scripts while a navigation starts (DOM.md: the old page stays live)");
     probe_drop();
     probe_page("<h1 id=heading>before</h1><script>function again(){return Promise.resolve().then(again)}again();</script>"
         "<script>document.getElementById('heading').textContent='must not run';</script>",true);
+    clock_step=1000;
     script_turn();
-    check(!yonder_scripts_pending(g.page.scripts) && probe_text_is("heading","before"),
-          "job limit retires runtime and queued scripts");
+    clock_step=0;
+    check(!yonder_scripts_pending(g.page.scripts) && probe_text_is("heading","before") &&
+          !yonder_scripts_alive(g.page.scripts) &&
+          strstr(g.status_text,"execution stopped after 5 s (this page runs without script)"),
+          "an endless Promise chain meets the task's deadline, retires the runtime and drops the queue");
     probe_drop();
 }
 static void native_refusals(void) {
@@ -590,9 +670,11 @@ static void native_refusals(void) {
 static bool settings_applied;
 static uint32_t settings_zoom;
 static void settings_zoom_capture(uint32_t zoom) { settings_zoom=zoom; }
-static void settings_capture(const char *agent, bool enabled) {
+static uint32_t settings_seconds;
+static void settings_capture(const char *agent, bool enabled, uint32_t seconds) {
     check(os64_streq(agent,YONDER_AGENT),"settings preserves agent while applying scripts");
     settings_applied=enabled;
+    settings_seconds=seconds;
 }
 static void switch_cases(void) {
     saved_scripts[0]=0;
@@ -605,19 +687,29 @@ static void switch_cases(void) {
     settings_fixture.zoom_use=settings_zoom_capture;
     strcpy(settings_fixture.zoom_buf,"125");
     settings_fixture.scripts.checked=true;
+    settings_fixture.limit.value=12;
+    check(yonder_settings_saved_script_seconds()==5,"a missing script time limit is the 5 s lean");
+    strcpy(saved_seconds,"61");
+    check(yonder_settings_saved_script_seconds()==5,"a time limit outside 1 to 60 is the lean");
+    saved_seconds[0]=0;
     apply(&settings_fixture.d,false);
+    check(settings_seconds==12 && saved_seconds[0]==0,"Apply hands this window the slider's limit without saving it");
     check(settings_applied && os64_streq(saved_scripts,"bogus"),"Apply enables this window without saving default");
     check(settings_zoom==1250 && saved_zoom[0]==0,"Apply keeps zoom independent of saved default");
     apply(&settings_fixture.d,true);
     check(settings_applied && yonder_settings_saved_scripts(),"Save as default persists on for new windows");
     check(yonder_settings_saved_zoom()==1250,"Save persists zoom alongside script switch");
+    check(yonder_settings_saved_script_seconds()==12 && os64_streq(saved_seconds,"12"),
+        "Save persists the script time limit as script_seconds");
     settings_fixture.scripts.checked=false;
     apply(&settings_fixture.d,true);
     check(!settings_applied && !yonder_settings_saved_scripts() && os64_streq(saved_scripts,"off"),
         "Save as default persists off");
     probe_page("<script>var kept=document.body;</script><script>document.body.id='later';</script>",true);
     script_turn();
-    settings_use(YONDER_AGENT,false);
+    settings_use(YONDER_AGENT,true,7);
+    check(g.script_ms==7000 && g.page.scripts!=NULL,"a new limit reaches the window and keeps the page's scripts");
+    settings_use(YONDER_AGENT,false,7);
     check(!g.scripts_on && g.page.scripts==NULL,"applying off drops queued scripts and runtime");
     script_turn();
     check(os64_html_attr(g.page.way.doc->body,"id")==NULL,"off cannot execute remaining script");
@@ -922,8 +1014,8 @@ static void bounded_resources(void) {
     probe_page("<script>var held=document.body;</script><script>document.body.id='later';</script>",true);
     yonder_scripts_free(g.page.scripts); g.page.scripts=NULL;
     fail_at=attempts+1;
-    check(yonder_scripts_new(g.page.way.doc,os64_page_shared_state(page_model(&g.page)),g.page.way.url,
-        NULL,NULL)==NULL,"script queue allocation refusal publishes no runtime");
+    check(scripts_host(g.page.way.doc,os64_page_shared_state(page_model(&g.page)),g.page.way.url,1)==NULL,
+        "a script host the heap refuses publishes nothing");
     fail_at=0;
     probe_drop();
     size_t count=4097, one=sizeof("<script></script>")-1;
@@ -931,26 +1023,140 @@ static void bounded_resources(void) {
     check(many!=NULL,"script count fixture allocation");
     for(size_t i=0;i<count;i++) memcpy(many+i*one,"<script></script>",one);
     many[count*one]='\0';
-    probe_page(many,false); free(many);
-    check(yonder_scripts_new(g.page.way.doc,os64_page_shared_state(page_model(&g.page)),
-        g.page.way.url,NULL,NULL)==NULL,"over-cap script schedule is refused atomically");
-    probe_drop();
-    probe_page("<script id=source></script><script>document.body.id='must not run';</script>",true);
-    size_t bytes=4*1024*1024+1;
-    char *huge=malloc(bytes);
-    check(huge!=NULL,"script source fixture allocation");
-    memset(huge,' ',bytes);
-    int64_t status;
-    os64_html_node_t *source=os64_html_create_text(g.page.way.doc,huge,bytes,&status);
-    check(source && status==OS64_HTML_OK &&
-        os64_html_insert(g.page.way.doc,probe_id("source"),source,NULL)==OS64_HTML_OK,
-        "oversized inline source staged natively");
-    free(huge);
+    probe_page(many,true); free(many);
+    unsigned ran=0;
     os64_js_outcome_t out;
-    check(yonder_scripts_step(g.page.scripts,&out) && out.status==OS64_JS_LIMIT &&
-        out.limit==OS64_JS_LIMIT_SOURCE && strstr(out.source_name,"#inline-1") &&
-        !yonder_scripts_pending(g.page.scripts),"source cap reports location and retires later scripts");
+    while(yonder_scripts_step(g.page.scripts,&out)) ran++;
+    check(ran==4096,"a page's scripts past the 4096th are not queued");
     probe_drop();
+    size_t big=4*1024*1024+1;
+    const char *head="<script>", *tail="</script><script>document.body.id='after';</script>";
+    char *huge=malloc(strlen(head)+big+strlen(tail)+1);
+    check(huge!=NULL,"script source fixture allocation");
+    strcpy(huge,head); memset(huge+strlen(head),' ',big); strcpy(huge+strlen(head)+big,tail);
+    probe_page(huge,true); free(huge);
+    check(yonder_scripts_step(g.page.scripts,&out) && out.status==OS64_JS_EXCEPTION &&
+        strstr(out.message,"longer than a script may be") && strstr(out.source_name,"#inline-1"),
+        "an inline script past the source limit is reported in its place");
+    check(yonder_scripts_step(g.page.scripts,&out) && out.status==OS64_JS_OK &&
+        os64_html_attr(g.page.way.doc->body,"id") && os64_streq(os64_html_attr(g.page.way.doc->body,"id")->value,"after"),
+        "the scripts after it still run");
+    probe_drop();
+}
+
+/* ── INPUT EVENTS (docs/design/pending/DOM_D7.md § Input events) ────────
+ * The window's real input sites — view_event, hover, the widgets' own
+ * callbacks, key_event — with the queue run as the loop runs it. */
+static void input_click_at(const char *id) {
+    const flow_box_t *b=flow_box_for(g.page.tree,probe_id(id));
+    int32_t x=g.view.bounds.x+b->rect.x+2-g.sx, y=g.view.bounds.y+b->rect.y+2-g.sy;
+    os64_gui_event_t ev={.type=OS64_GUI_EVENT_MOUSE_BUTTON_DOWN};
+    ev.mouse.x=x; ev.mouse.y=y; ev.mouse.button=OS64_GUI_MOUSE_LEFT;
+    view_event(&g.view,&g.ui,&ev); inputs_run();
+    ev.type=OS64_GUI_EVENT_MOUSE_BUTTON_UP;
+    view_event(&g.view,&g.ui,&ev); inputs_run();
+}
+static void input_key(char ascii) {
+    os64_gui_event_t ev={.type=OS64_GUI_EVENT_KEY_DOWN,.key={.ascii=ascii}};
+    if(!key_event(&ev) && !password_key(&ev)) os64_ui_dispatch(&g.ui,&ev);
+    inputs_run();
+}
+static bool status_says(const char *text) { return strstr(g.status_text,text)!=NULL; }
+static void input_links(void) {
+    probe_page("<p><a id=stay href=/away>stay</a> <a id=go href=/gone>go</a></p><p id=log>-</p>"
+        "<script>var log=[];function note(n){log.push(n);document.getElementById('log').textContent=log.join('|');}"
+        "document.getElementById('stay').onclick=function(){note('stay');return false};"
+        "document.getElementById('go').addEventListener('mousedown',function(){note('down')});"
+        "document.getElementById('go').addEventListener('mouseup',function(){note('up')});"
+        "document.getElementById('go').addEventListener('click',function(e){note('go '+e.clientX+' '+e.isTrusted)});</script>",true);
+    script_turn();
+    input_click_at("stay");
+    check(probe_text_is("log","stay") && !status_says("background workers"),
+        "input: a click a handler cancels follows no link");
+    input_click_at("go");
+    const flow_box_t *b=flow_box_for(g.page.tree,probe_id("go"));
+    char want[64]; snprintf(want,sizeof(want),"stay|down|up|go %d true",b->rect.x+2);
+    check(probe_text_is("log",want),"input: mousedown, mouseup and click reach the element, with clientX and isTrusted");
+    check(status_says("background workers"),"input: an uncancelled click follows its link after its listeners");
+    probe_drop();
+}
+static void input_hover(void) {
+    probe_page("<p id=quiet>no handlers here</p><script>var x=1;</script>",true);
+    script_turn();
+    uint64_t tasks=yonder_scripts_tasks(g.page.scripts);
+    size_t before=attempts;
+    const flow_box_t *b=flow_box_for(g.page.tree,probe_id("quiet"));
+    for(int i=0;i<20;i++) { hover(b->rect.x+2+i,b->rect.y+2); inputs_run(); }
+    check(yonder_scripts_tasks(g.page.scripts)==tasks && attempts-before<200,
+        "input: pointer moves over a page that listens to nothing run no task");
+    probe_drop();
+    probe_page("<p><b id=a>first</b> <b id=b>second</b></p><p id=log>-</p>"
+        "<script>var log=[];function note(n){log.push(n);document.getElementById('log').textContent=log.join('|');}"
+        "document.getElementById('a').onmouseover=function(e){note('over a from '+(e.relatedTarget?e.relatedTarget.id:'none'))};"
+        "document.getElementById('a').onmouseout=function(e){note('out a to '+e.relatedTarget.id)};"
+        "document.getElementById('b').onmouseover=function(){note('over b')};</script>",true);
+    script_turn();
+    /* A listener's change relays the page out: each box is found again. */
+    #define AT(id,dx) flow_box_for(g.page.tree,probe_id(id))->rect.x+(dx),flow_box_for(g.page.tree,probe_id(id))->rect.y+2
+    hover(AT("a",2)); inputs_run();
+    hover(AT("a",3)); inputs_run();
+    hover(AT("b",2)); inputs_run();
+    #undef AT
+    check(probe_text_is("log","over a from none|out a to b|over b"),
+        "input: mouseover and mouseout follow the element under the pointer, with relatedTarget");
+    probe_drop();
+}
+static void input_forms(void) {
+    probe_page("<form id=f action=/send><input id=field name=q><input id=tick type=checkbox name=t>"
+        "<button id=send>send</button><button id=undo type=reset>undo</button></form><p id=log>-</p>"
+        "<script>var log=[];function note(n){log.push(n);document.getElementById('log').textContent=log.join('|');}"
+        "var f=document.getElementById('f'),q=document.getElementById('field');"
+        "q.addEventListener('input',function(){note('input '+q.value)});"
+        "q.addEventListener('change',function(){note('change '+q.value)});"
+        "q.addEventListener('focus',function(){note('focus')});q.addEventListener('blur',function(){note('blur')});"
+        "q.addEventListener('keydown',function(e){if(e.key==='x'){e.preventDefault();note('no x')}});"
+        "f.onsubmit=function(){note('submit');return q.value==='go'};"
+        "f.onreset=function(){note('reset');return false};"
+        "document.getElementById('tick').onclick=function(){note('tick');return false};</script>",true);
+    script_turn();
+    FormWidget *field=probe_field("field");
+    os64_ui_set_focus(&g.ui,field->w); inputs_run();
+    input_key('a'); input_key('x'); input_key('b');
+    check(os64_streq(field->text,"ab"),"input: a cancelled keydown is not typed");
+    check(probe_text_is("log","focus|input a|no x|input ab"),
+        "input: focus, then an input event per edit with the value already the script's");
+    input_key('\r');
+    check(probe_text_is("log","focus|input a|no x|input ab|change ab|submit") && !status_says("background workers"),
+        "input: Enter fires change, then submit, which the handler cancels");
+    os64_ui_set_focus(&g.ui,&g.view); inputs_run();
+    check(probe_text_is("log","focus|input a|no x|input ab|change ab|submit|blur"),
+        "input: blur, with no second change for an unchanged value");
+    os64_ui_set_focus(&g.ui,field->w); inputs_run();
+    input_key('c');
+    os64_ui_set_focus(&g.ui,&g.view); inputs_run();
+    check(probe_text_is("log","focus|input a|no x|input ab|change ab|submit|blur|focus|input abc|change abc|blur"),
+        "input: a value changed since focus fires change before blur");
+    os64_ui_textfield_set(&g.ui,&field->u.field,"ab"); forms_flush();
+    FormWidget *undo=probe_field("undo");
+    button_clicked(undo->w,undo); inputs_run();
+    check(probe_text_is("log","focus|input a|no x|input ab|change ab|submit|blur|focus|input abc|change abc|blur|reset") &&
+        os64_streq(field->text,"ab"),
+        "input: a cancelled reset keeps the values");
+    FormWidget *tick=probe_field("tick");
+    tick->u.check.checked=true; check_changed(&tick->u.check,tick); inputs_run();
+    check(!probe_field("tick")->u.check.checked && !os64_page_control(page_model(&g.page),
+        os64_page_control_for(page_model(&g.page),probe_id("tick")))->checked,
+        "input: a cancelled click puts the box back, in the widget and the model");
+    os64_ui_textfield_set(&g.ui,&field->u.field,"go");
+    FormWidget *send=probe_field("send");
+    button_clicked(send->w,send); inputs_run();
+    check(status_says("background workers"),"input: an uncancelled submit sends the form after its listeners");
+    probe_drop();
+}
+static void input_cases(void) {
+    input_links();
+    input_hover();
+    input_forms();
 }
 
 /* ── THE STREAM (docs/design/pending/DOM_D4.md) ─────────────────────────
@@ -986,7 +1192,8 @@ static void stream_window_drop(void) {
     pool_open=false;
     if(g.stream.active) stream_drop();
     if(pool_work.job!=NULL) { yonder_trip_release(pool_work.job,NULL); memset(&pool_work,0,sizeof(pool_work)); }
-    forms_drop(); page_clear(&g.page); page_clear(&g.coming.page); os64_ui_font_release(&g.ui);
+    inputs_drop(); forms_drop(); page_clear(&g.page); page_clear(&g.coming.page); os64_ui_font_release(&g.ui);
+    while(nsheet_jobs>0) os64_free(sheet_jobs[--nsheet_jobs].job);
 }
 /* The worker's part: a head for `url`, the body in `chunk`-sized posts, the verdict. */
 static way_head_t stream_head(const char *type, const char *charset, bool posted) {
@@ -1279,6 +1486,378 @@ static void stream_captures_mode(void) {
         stream_window_drop();
     }
 }
+/* ── THE LOOP (docs/design/pending/DOM_D7.md) ───────────────────────────
+ * Scripts run as the parser reaches them, through the stream: the test
+ * plays the worker for the page and, through script_land, for every
+ * `src` script's fetch. */
+static char *pad_page(const char *rest) {
+    size_t n=strlen(rest)+1400;
+    char *html=malloc(n);
+    /* A comment carries the first script past the parser's 1024-byte
+     * encoding window, so the feed itself stops at it. */
+    snprintf(html,n,"<!doctype html><!-- %01200d -->%s",0,rest);
+    return html;
+}
+static void loop_page(const char *rest) {
+    stream_window();
+    g.scripts_on=true; g.script_ms=5000; now_ms=100;
+    start_trip("http://fixture.test/p",NULL,NAV_GO,NULL);
+    char *html=pad_page(rest);
+    way_head_t h=stream_head("text/html","",false);
+    yonder_mail_post_head(g.stream.mail,&h);
+    stream_post_body((const uint8_t *)html,strlen(html),YONDER_STREAM_CHUNK);
+    stream_post_verdict(true,OS64_FETCH_OK,"");
+    free(html);
+}
+/* Turns until one says there is nothing more to do now; false if the
+ * stream never said so (a loop that rings itself for ever). */
+static bool loop_settle(void) {
+    for(int i=0;i<200;i++) if(!stream_turn() && !coming_turn()) return true;
+    return false;
+}
+static void loop_drop(void) {
+    stream_window_drop();
+    check(nscript_jobs==0,"loop: every script fetch was landed or cancelled");
+    nscript_jobs=0;
+}
+static void loop_order(void) {
+    loop_page("<html><head><script>var order=[];function note(n){order.push(n);var o=document.getElementById('out');"
+        "if(o)o.textContent=order.join('|');}note('head inline');"
+        "document.addEventListener('DOMContentLoaded',function(){note('DOMContentLoaded')});"
+        "window.addEventListener('load',function(){note('load listener')});"
+        "setTimeout(function(){note('timer')},50);</script>"
+        "<script src=blocking.js></script><script defer src=deferred.js></script>"
+        "<script async src=async.js></script><script type=module>note('module')</script>"
+        "</head><body onload=\"note('body onload')\"><p id=out></p>"
+        "<script>note('body inline');var s=document.createElement('script');"
+        "s.textContent=\"note('connected')\";document.body.appendChild(s);</script>"
+        "<script>note('body inline 2')</script></body></html>");
+    check(loop_settle() && g.stream.stopped && nscript_jobs==1 && g.page.tree==NULL,
+        "loop: the parse stops at a blocking src and waits for its fetch, ringing nothing");
+    check(script_land("/blocking.js","note('blocking')"),"loop: the blocking script's fetch is out");
+    check(stream_turn() && g.stream.stopped && nscript_jobs==2,
+        "loop: one turn runs the blocking script, passes the defer and async ones (their fetches go out) "
+        "and stops at the next inline script");
+    check(script_land("/async.js","note('async')"),"loop: an async script is fetched beside the parse");
+    /* The deferred script's source is in hand long before the parse ends,
+     * and still waits for it. */
+    check(script_land("/deferred.js","note('deferred')"),"loop: the deferred script's fetch was out");
+    check(loop_settle() && !g.stream.active && g.page.tree!=NULL,"loop: the page arrives after its deferred script");
+    /* The async script landed while the parse had its next script in hand,
+     * so it runs when the parse next waits: after the parse, before the
+     * deferred script. */
+    check(probe_text_is("out","head inline|blocking|body inline|connected|body inline 2|async|deferred|"
+        "DOMContentLoaded|load listener|body onload"),
+        "loop: scripts, DOMContentLoaded and load run in the standard's order");
+    now_ms=200;
+    check(script_turn() && probe_text_is("out","head inline|blocking|body inline|connected|"
+        "body inline 2|async|deferred|DOMContentLoaded|load listener|body onload|timer"),
+        "loop: a timer a head script set fires on the shown page, and the page redraws");
+    loop_drop();
+}
+static void loop_fetch_failed(void) {
+    loop_page("<p id=out>start</p><script src=gone.js></script>"
+        "<script>document.getElementById('out').textContent='after';</script>");
+    check(loop_settle() && g.stream.stopped,"loop: stopped at a src that will fail");
+    check(script_land("/gone.js",NULL),"loop: the failing fetch comes back");
+    stream_turn();
+    check(strstr(g.status_text,"could not fetch the script")!=NULL && strstr(g.status_text,"/gone.js")!=NULL,
+        "loop: a script that could not be fetched is said, by its address");
+    check(loop_settle() && g.page.tree!=NULL && probe_text_is("out","after"),
+        "loop: it is skipped and the parse carries on");
+    loop_drop();
+}
+static void loop_overrun(void) {
+    loop_page("<p id=out>before</p><script>for(;;){}</script>"
+        "<script>document.getElementById('out').textContent='must not run';</script><p>tail</p>");
+    stream_turn();                       /* stops at the first script */
+    clock_step=1000;
+    stream_turn();                       /* runs it: the deadline ends it */
+    clock_step=0;
+    check(strstr(g.status_text,"execution stopped after 5 s (this page runs without script)")!=NULL,
+        "loop: a script that runs too long says so on the status line");
+    check(loop_settle() && g.page.tree!=NULL && probe_text_is("out","before") &&
+        !yonder_scripts_alive(g.page.scripts),
+        "loop: the parse goes on to the end without script, and the page arrives");
+    check(strstr(g.status_text,"execution stopped after 5 s (this page runs without script)")!=NULL,
+        "loop: the sentence is still on the status line once the page has arrived");
+    loop_drop();
+}
+static void loop_navigates(void) {
+    loop_page("<p>leaving</p><script>location.href='next.html';</script><p id=out>never shown</p>");
+    loop_settle();
+    check(g.stream.active && pool_work.job!=NULL &&
+        os64_streq(((yonder_trip_t *)pool_work.job)->url,"http://fixture.test/next.html") && g.page.tree==NULL,
+        "loop: a script's location= starts a navigation to the address resolved against the page");
+    loop_drop();
+    loop_page("<script>document.addEventListener('DOMContentLoaded',function(){location.replace('/elsewhere')});</script>"
+        "<p id=out>never shown</p>");
+    loop_settle();
+    check(g.stream.active && g.page.tree==NULL &&
+        os64_streq(((yonder_trip_t *)pool_work.job)->url,"http://fixture.test/elsewhere"),
+        "loop: a navigation asked for at DOMContentLoaded replaces the page before it is shown");
+    loop_drop();
+}
+static void loop_teardown(void) {
+    const char *page="<script>var kept;document.addEventListener('click',function(e){kept=e});"
+        "setTimeout(function(){},100000);</script><script src=never.js></script><p>x</p>";
+    for(int how=0;how<3;how++) {
+        loop_page(page);
+        check(loop_settle() && g.stream.stopped && nscript_jobs==1,
+            "loop: stopped at a script whose fetch never comes, with a listener and a timer");
+        unsigned cancels=script_cancels;
+        if(how==0) click_stop(NULL,NULL);
+        else if(how==1) settings_use(YONDER_AGENT,false,5);
+        if(how<2) check(!g.stream.active && script_cancels==cancels+1,
+            how==0 ? "loop: Stop abandons the parse, drains the page's scripts and cancels its fetch"
+                   : "loop: turning scripts off does the same");
+        loop_drop();                    /* the third: the window's close, mid-stream */
+    }
+}
+static void loop_limit(void) {
+    loop_page("<script>setTimeout(function(){for(;;){}},10);</script><p id=out>x</p>");
+    check(loop_settle() && g.page.tree!=NULL,"loop: a page with a runaway timer arrives");
+    settings_use(YONDER_AGENT,true,1);
+    check(g.script_ms==1000,"loop: Settings' limit reaches the window");
+    now_ms=200; clock_step=500;
+    script_turn();
+    clock_step=0;
+    check(strstr(g.status_text,"execution stopped after 1 s (this page runs without script)")!=NULL &&
+        !yonder_scripts_alive(g.page.scripts),
+        "loop: the next task runs under the limit Settings applied");
+    loop_drop();
+}
+static void loop_local_file(void) {
+    stream_window();
+    g.scripts_on=true; g.script_ms=5000;
+    slurp_path="/pages/local.html";
+    slurp_bytes="<p id=out>disk</p><script>document.getElementById('out').textContent='ran from disk';</script>";
+    open_address("/pages/local.html",NAV_GO,NULL,NULL);
+    check(g.stream.active && g.stream.local!=NULL,"loop: a file takes the stream");
+    check(loop_settle() && !g.stream.active && probe_text_is("out","ran from disk") &&
+        os64_streq(g.page.way.url,"file:///pages/local.html") && g.page.way.note[0]=='\0',
+        "loop: a page from disk runs its scripts as it is parsed and arrives with no standing line");
+    slurp_path=NULL;
+    loop_drop();
+}
+static void loop_handlers_only(void) {
+    loop_page("<body onload=\"document.getElementById('h').textContent='onload ran '+(this===window)\">"
+        "<h1 id=h>waiting</h1></body>");
+    check(loop_settle() && g.page.tree!=NULL && g.page.scripts!=NULL && probe_text_is("h","onload ran true"),
+        "loop: a page whose only script is <body onload> gets a runtime at load, and runs it as window's");
+    loop_drop();
+    loop_page("<p id=h>plain</p>");
+    check(loop_settle() && g.page.scripts!=NULL && !yonder_scripts_listens(g.page.scripts,"click"),
+        "loop: a page with no handler hears nothing, and makes no runtime to find that out");
+    loop_drop();
+}
+static void loop_state_adopted(void) {
+    loop_page("<input id=field value=markup><script>document.getElementById('field').value='set mid-parse';</script>"
+        "<p>after</p>");
+    check(loop_settle() && g.page.tree!=NULL && probe_field("field")!=NULL &&
+        os64_streq(probe_field("field")->text,"set mid-parse"),
+        "loop: a value a script set mid-parse is the one the arrived page's control shows");
+    loop_drop();
+}
+static void loop_typed_value(void) {
+    /* A tick that redraws before the person types, and one after. */
+    loop_page("<input id=field value=><p id=out>-</p><script>var held=document.getElementById('field'),left=2;"
+        "function tick(){if(left-->0){document.getElementById('out').textContent='wait '+left;setTimeout(tick,1000);return}"
+        "document.getElementById('out').textContent='field='+held.value}tick();</script>");
+    check(loop_settle() && g.page.tree!=NULL,"loop: a page with a field and a timer arrives");
+    now_ms+=1000; script_turn();
+    FormWidget *field=probe_field("field");
+    os64_ui_set_focus(&g.ui,field->w); inputs_run();
+    input_key('Q');
+    now_ms+=1000; script_turn();
+    now_ms+=1000; script_turn();
+    check(probe_text_is("out","field=Q"),"loop: a timer reads what a person typed into an arrived page's field");
+    loop_drop();
+}
+static void loop_downgrade(void) {
+    probe_page("<p id=out>secure</p><script>location.href='http://insecure.test/';</script>",true);
+    script_turn();
+    check(g.asker==ASK_REQUEST && !status_says("background workers"),
+        "loop: a script cannot take a person from https to http without the question bar");
+    bar_forget();
+    probe_drop();
+}
+// What a script changed is what the page uses: a src resolves against the
+// document's base, a DOMContentLoaded edit reaches the arriving model, and
+// an image's default action finds the image again after its listener.
+static void loop_script_changes_hold(void) {
+    loop_page("<base href='http://assets.test/js/'><script src='app.js'></script>");
+    check(loop_settle() && nscript_jobs==1,"review base: source fetch submitted");
+    check(nscript_jobs==1 && os64_streq(script_jobs[0].job->url,"http://assets.test/js/app.js"),
+        "review base: source resolves against document base");
+    loop_drop();
+    loop_page("<form id=f action=/send></form><script>"
+        "document.addEventListener('DOMContentLoaded',()=>{var i=document.createElement('input');"
+        "i.id='late';document.getElementById('f').appendChild(i)});</script>");
+    check(loop_settle() && g.page.tree!=NULL && probe_id("late")!=NULL,
+        "review DCL: handler inserted control before arrival");
+    check(os64_page_ncontrols(page_model(&g.page))==1 && probe_field("late")!=NULL,
+        "review DCL: arrived model includes lifecycle mutation");
+    loop_drop();
+    probe_page("<form id=f action=/send><input id=pic type=image name=pic></form><script>"
+        "var p=document.getElementById('pic');p.onclick=()=>{var i=document.createElement('input');"
+        "i.id='first';document.getElementById('f').insertBefore(i,p)};</script>",true);
+    script_turn();
+    pool_open=true;g.pool=(os64_work_pool_t *)&pool_fake;
+    input_queue(IN_CLICK,probe_id("pic"),NULL,0,0,false);inputs_run();
+    check(g.nav.id!=0,"review image click: original image submits after control renumbering");
+    stop_trip();pool_open=false;g.pool=NULL;probe_drop();
+}
+// What arrives is what the scripts left: a style a DOMContentLoaded listener
+// or a waiting page's timer added is in the first paint, and a local page's
+// script loads from beside it.
+static void loop_arrival_follows_scripts(void) {
+    loop_page("<p id=styled>visible</p><script>document.addEventListener('DOMContentLoaded',()=>{"
+        "var s=document.createElement('style');s.textContent='#styled{display:none}';"
+        "document.head.appendChild(s)});</script>");
+    check(loop_settle() && g.page.tree!=NULL && os64_page_nsheets(page_model(&g.page))==1,
+        "arrival: refreshed model includes lifecycle stylesheet");
+    check(flow_box_for(g.page.tree,probe_id("styled"))==NULL,
+        "arrival: lifecycle stylesheet applied before publication");
+    loop_drop();
+    stream_window();g.scripts_on=true;g.script_ms=5000;
+    slurp_path="/pages/local.html";slurp_bytes="<script src='app.js'></script>";
+    open_address("/pages/local.html",NAV_GO,NULL,NULL);
+    check(loop_settle() && nscript_jobs==1 && os64_streq(script_jobs[0].job->url,"file:///pages/app.js"),
+        "local page: relative external script beside local page fetches");
+    slurp_path=NULL;loop_drop();
+    /* The sibling: a timer edits the page while it waits for a sheet, and
+     * the page shown takes its sheet table from the tree it has by then. */
+    loop_page("<link rel=stylesheet href=wait.css><p id=styled>visible</p><script>"
+        "setTimeout(()=>{var s=document.createElement('style');s.textContent='#styled{display:none}';"
+        "document.head.appendChild(s)},10);</script>");
+    check(loop_settle() && g.coming.active && g.coming.page.sheets_waiting==1,
+        "coming page: waits for its linked sheet");
+    uint64_t waited_serial=g.coming.page.serial;
+    now_ms+=50;
+    check(loop_settle() && g.coming.active &&
+          os64_html_version(page_doc(&g.coming.page))!=g.coming.page.model_version,
+        "coming page: its timer edited the tree while it waited");
+    coming_show();
+    check(g.page.tree!=NULL && os64_page_nsheets(page_model(&g.page))==2 && g.page.serial!=waited_serial,
+        "coming page: shown with a sheet table restaged from the edited tree");
+    check(probe_id("styled")!=NULL && flow_box_for(g.page.tree,probe_id("styled"))==NULL,
+        "coming page: the timer's style applies to the first paint");
+    loop_drop();
+}
+// The parse comes first while it has input: a parser-blocking script runs
+// before a 0 ms timer an earlier one set, and that timer before
+// DOMContentLoaded, which HTML queues behind it.
+static void loop_parse_first(void) {
+    loop_page("<p id=out></p><script>var o=[];function n(x){o.push(x);"
+        "document.getElementById('out').textContent=o.join('|')}"
+        "document.addEventListener('DOMContentLoaded',function(){n('DOMContentLoaded')});"
+        "setTimeout(function(){n('f')},0);</script><script>n('g')</script><p>tail</p>");
+    check(loop_settle() && g.page.tree!=NULL && probe_text_is("out","g|f|DOMContentLoaded"),
+        "loop: an inline script runs before a 0 ms timer set ahead of it, and the timer before DOMContentLoaded");
+    loop_drop();
+    /* A 0 ms chain set after the parse ended cannot hold the page back,
+     * with the clock moving as it does on a machine: 10 ms a turn, past
+     * the 4 ms a nested timer is clamped to, so one is due every turn. */
+    loop_page("<p id=out>-</p><script>document.addEventListener('DOMContentLoaded',function(){"
+        "document.getElementById('out').textContent='arrived'});"
+        "function again(){setTimeout(again,0)}setTimeout(again,0);</script>");
+    for(int i=0;i<200 && g.stream.active;i++) { now_ms+=10; stream_turn(); }
+    check(!g.stream.active && g.page.tree!=NULL && probe_text_is("out","arrived"),
+        "loop: a page that keeps setting 0 ms timers still arrives");
+    loop_drop();
+}
+// While the parse waits for a blocking `src`, a landed async script runs and
+// a landed deferred one does not; a deferred fetch still out holds the page.
+static void loop_waits(void) {
+    const char *note="<p id=out></p><script>var o=[];function n(x){o.push(x);"
+        "document.getElementById('out').textContent=o.join('|')}</script>";
+    char page[1024];
+    snprintf(page,sizeof(page),"%s<script defer src=d.js></script><script async src=a.js></script>"
+        "<script src=b.js></script><p>tail</p>",note);
+    loop_page(page);
+    check(loop_settle() && g.stream.stopped && nscript_jobs==3,
+        "loop: stopped at a blocking src with a deferred and an async fetch out");
+    check(script_land("/d.js","n('deferred')") && script_land("/a.js","n('async')"),
+        "loop: the deferred and async sources land while the blocking one is out");
+    check(loop_settle() && g.stream.stopped,"loop: the parse still waits for its blocking src");
+    check(script_land("/b.js","n('blocking')") && loop_settle() && g.page.tree!=NULL &&
+          probe_text_is("out","async|blocking|deferred"),
+        "loop: the async script ran while the parse waited, the deferred one after the parse");
+    loop_drop();
+    snprintf(page,sizeof(page),"%s<script defer src=late.js></script><p>tail</p>",note);
+    loop_page(page);
+    check(loop_settle() && g.stream.active && g.page.tree==NULL && nscript_jobs==1,
+        "loop: a deferred fetch still out holds the page after the parse");
+    check(script_land("/late.js","n('late')") && loop_settle() && g.page.tree!=NULL &&
+          probe_text_is("out","late"),
+        "loop: the page arrives once its deferred script has run");
+    loop_drop();
+}
+// A fragment-only location from a page not yet shown is a place in that
+// page, never a fetch of it: from the parse, at DOMContentLoaded, and from
+// a page waiting for its sheets.
+static void loop_hash_unshown(void) {
+    const char *at_dcl="<h2 id=top>top</h2><h2 id=x>x</h2><script>"
+        "document.addEventListener('DOMContentLoaded',function(){location.hash='x'});</script>";
+    const char *mid_parse="<h2 id=x>x</h2><script>location.hash='x';</script><p>tail</p>";
+    const char *pages[2]={at_dcl,mid_parse};
+    for(int i=0;i<2;i++) {
+        loop_page(pages[i]);
+        check(loop_settle() && !g.stream.active && g.page.tree!=NULL &&
+              os64_streq(g.page.way.url,"http://fixture.test/final"),
+            i==0 ? "loop: location.hash at DOMContentLoaded arrives instead of fetching the page again"
+                 : "loop: location.hash mid-parse arrives instead of fetching the page again");
+        check(!status_says("fragment") && !status_says("anchor"),
+            "loop: the page arrives at the fragment the script named");
+        loop_drop();
+    }
+    loop_page("<link rel=stylesheet href=wait.css><h2 id=x>x</h2><script>"
+        "setTimeout(function(){location.hash='x'},10);</script>");
+    check(loop_settle() && g.coming.active,"loop: a page waiting for its sheet");
+    now_ms+=50;
+    check(loop_settle() && g.coming.active && !g.stream.active && g.coming.has_fragment &&
+          os64_streq(g.coming.fragment,"x"),
+        "loop: its timer's location.hash is kept for its arrival, not fetched");
+    coming_show();
+    check(g.page.tree!=NULL,"loop: the waiting page is shown");
+    loop_drop();
+}
+// A page whose only handler is an onclick makes its runtime at the click,
+// not at DOMContentLoaded or load, which no attribute in it names.
+static void loop_handler_runtime_at_click(void) {
+    loop_page("<p id=h onclick=\"this.textContent='clicked'\">plain</p>");
+    check(loop_settle() && g.page.tree!=NULL && g.page.scripts!=NULL,"loop: a page with one onclick arrives");
+    check(!yonder_scripts_listens(g.page.scripts,"DOMContentLoaded") &&
+          yonder_scripts_listens(g.page.scripts,"click"),
+        "loop: before a runtime, a handler page hears click and not DOMContentLoaded");
+    /* A runtime costs a few hundred KiB of engine heap; a click on a page
+     * that already has one costs a few KiB. */
+    size_t before=live_bytes;
+    input_click_at("h");
+    check(probe_text_is("h","clicked") && live_bytes>before+100*1024,
+        "loop: the runtime is made by the click, the first event an attribute names");
+    loop_drop();
+}
+static void loop_cases(void) {
+    loop_parse_first();
+    loop_waits();
+    loop_hash_unshown();
+    loop_handler_runtime_at_click();
+    loop_arrival_follows_scripts();
+    loop_script_changes_hold();
+    loop_state_adopted();
+    loop_typed_value();
+    loop_downgrade();
+    loop_handlers_only();
+    loop_order();
+    loop_fetch_failed();
+    loop_overrun();
+    loop_navigates();
+    loop_teardown();
+    loop_limit();
+    loop_local_file();
+}
 static void stream_cases(void) {
     stream_captures_mode();
     stream_slices();
@@ -1290,6 +1869,7 @@ static void stream_cases(void) {
     stream_pool_breaks();
     stream_keeps_the_form();
     stream_mail_wiring();
+    loop_cases();
 }
 
 static void geometry_cases(void)
@@ -1449,15 +2029,19 @@ static void geometry_failure_cases(void)
         "box.setAttribute('style','width:150px;height:20px');"
         "try{box.offsetWidth}catch(e){};try{box.offsetWidth}catch(e){};"
         "</script><script>box.setAttribute('data-after','bad')</script>",true);
-    geometry_layout_delay=2000000;
+    /* One native layout a second longer than the page's whole task budget. */
+    int64_t overrun_us=((int64_t)g.script_ms+1000)*1000;
+    geometry_layout_delay=overrun_us;
     script_turn();
     geometry_layout_delay=0;
-    geometry_clock=10000000;
+    clock_us=10000000;
     os64_dom_geometry_stats_t stats=yonder_scripts_geometry_stats(g.page.scripts,false);
-    check(stats.layouts==1 && stats.elapsed_us==2000000 && !yonder_scripts_pending(g.page.scripts),
+    check(stats.layouts==1 && stats.elapsed_us==(uint64_t)overrun_us && !yonder_scripts_pending(g.page.scripts),
           "native overrun retires the task queue and preserves its layout telemetry");
+    char overrun_ms[32];
+    snprintf(overrun_ms,sizeof(overrun_ms),"%ld.000 ms",(long)(overrun_us/1000));
     check(strstr(g.status_text,"runtime limit exceeded")!=NULL &&
-          strstr(g.status_text,"2000.000 ms")!=NULL, "status reports the charged native overrun");
+          strstr(g.status_text,overrun_ms)!=NULL, "status reports the charged native overrun");
     check(os64_html_attr(probe_id("box"),"data-after")==NULL,
           "later scripts do not run after a native geometry deadline");
     probe_drop();
@@ -1539,6 +2123,7 @@ int main(void)
     snapshot_actions();
     bounded_resources();
     stylesheet_reuse();
+    input_cases();
     if(getenv("YONDER_NO_STREAM")==NULL) stream_cases();
     reporting_teardown();
     os64_text_font_release(probe_font);

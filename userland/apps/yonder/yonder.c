@@ -41,6 +41,7 @@
 #include "scale.h"
 #include "settings.h"
 #include "scripts.h"
+#include "script_job.h"
 #include "geometry.h"
 #include "ticker.h"
 #include "trip.h"
@@ -100,7 +101,7 @@
 #define BELL_MAIL (1u << 1)
 #define BELL_TICK (1u << 2)       // a moving picture's next frame is due
 #define BELL_SETTINGS (1u << 3)   // something arrived at the Settings window
-#define BELL_SCRIPTS (1u << 4)    // another finished-document script is queued
+#define BELL_SCRIPTS (1u << 4)    // a page has another script or timer to run
 #define BELL_STREAM (1u << 5)     // an arriving page has more to parse than one slice
 
 // A GIF frame that asks for 10 ms or less is shown for this long, as every
@@ -360,7 +361,11 @@ typedef struct Page {
     way_page_t way;
     struct Page *reuse_sheets;   // source of ready linked parses during a rebuild
     bool scripting;
+    // The page's script host (scripts.h), and the control state its
+    // scripts and its models share: made by the stream at the first script
+    // that runs, owned by the page from then on, freed after the models.
     yonder_scripts_t *scripts;
+    os64_page_state_t *state;
     uint64_t model_version, rendered_version, state_version;
     os64_html_document_t *plain;
     os64_page_t *plain_model;
@@ -463,6 +468,11 @@ static void page_clear(Page *p)
     sheets_free(p);
     os64_page_free(p->plain_model);
     os64_html_document_free(p->plain);
+    // The models borrow the scripts' control state, so they go first, then
+    // the state, then (in way_page_clear) the document under all of them.
+    os64_page_free(p->way.model);
+    p->way.model = NULL;
+    os64_page_state_free(p->state);
     way_page_clear(&p->way);
     os64_page_request_free(&p->sent);
     os64_free(p->box_scrolls);
@@ -530,6 +540,8 @@ static int32_t scale_zoom(int32_t v, uint32_t to, uint32_t from)
     return (int32_t)(r > INT32_MAX ? INT32_MAX : r < INT32_MIN ? INT32_MIN : r);
 }
 
+static bool page_model_refresh(Page *p);
+static void sheets_restage(Page *p);
 static bool script_geometry(void *opaque, const os64_html_node_t *node,
                             os64_dom_geometry_t *out);
 static bool lay_out_page(Page *p, int32_t width, int32_t height);
@@ -680,6 +692,23 @@ typedef struct {
     size_t secret_len;
 } FormWidget;
 
+// A person's input waiting to be dispatched as a DOM event (inputs_run).
+typedef enum {
+    IN_MOUSEDOWN, IN_MOUSEUP, IN_CLICK, IN_OVER, IN_OUT, IN_MOVE, IN_BUTTON, IN_IMPLICIT,
+    IN_CHECK, IN_LIST, IN_INPUT, IN_FOCUS, IN_BLUR, IN_CHANGE
+} InputKind;
+
+typedef struct {
+    InputKind kind;
+    const os64_html_node_t *node;       // held, in `doc`
+    const os64_html_node_t *related;    // held: over/out's other node, a click's link
+    const os64_html_document_t *doc;
+    int32_t x, y;                       // window coordinates, for a mouse event
+    bool was;                           // IN_CHECK: the box before the click
+} Input;
+
+#define INPUTS_MAX 32
+
 static struct {
     int64_t win;
     os64_draw_ctx_t ctx;
@@ -705,6 +734,9 @@ static struct {
     int32_t pointer_x, pointer_y;   // where the pointer last was, for hover
     bool running;
     bool scripts_on;
+    // Each script task's budget (Settings' script time limit, yonder.conf's
+    // script_seconds), in milliseconds.
+    uint64_t script_ms;
     // A resize or a zoom is laid out once the events that arrived with it
     // are drained: a drag sends a stream of them, a person zooming presses
     // several times, and a big page takes long enough to lay out that
@@ -732,6 +764,16 @@ static struct {
     struct {
         os64_work_id_t id;
     } nav;
+    // The page stream_finish holds while its DOMContentLoaded runs: no
+    // longer the stream's, not yet coming or shown. A fragment its scripts
+    // ask for lands in `fragment`, which arrive scrolls to.
+    struct {
+        const yonder_scripts_t *scripts;
+        const char *url;
+        char *fragment;
+        size_t cap;
+        bool *has_fragment;
+    } finishing;
     // THE PAGE ARRIVING (DOM_D4.md): parsed here, on the window's thread, a
     // slice per turn of the loop, from what the fetch posts down the
     // mailbox. Its mailbox is held here while it is current; a bell from
@@ -759,6 +801,24 @@ static struct {
         yonder_verdict_t verdict;
         os64_page_request_t sent;
         bool has_sent;
+        // THE PAGE'S SCRIPTS WHILE IT ARRIVES (DOM_D7.md § The stream's
+        // turn): the host and the control state it shares with the model
+        // to come, both made at the first script that runs. `serial` names
+        // the page to a script's fetch from the start of the navigation.
+        // `stopped`: the parse waits for the blocking script.
+        yonder_scripts_t *scripts;
+        os64_page_state_t *state;
+        uint64_t serial;
+        // `ending`: the parser has been told the input ended; `ended`: it
+        // said OK to that, and the deferred scripts may run. `ended_ms` is
+        // when: the timers due by then run before DOMContentLoaded.
+        bool stopped, ending, ended;
+        uint64_t ended_ms;
+        bool scriptless;                // its host could not be made: no script runs
+        // A file's bytes, fed through the same turn as a fetch's, so a page
+        // from disk arrives by the one road a page from the network takes.
+        uint8_t *local;
+        size_t local_len, local_at;
     } stream;
     uint64_t generation;
     // Which page is on screen, so a picture finished for another is let go.
@@ -795,6 +855,28 @@ static struct {
     // pointer list while preserving surviving widgets and their caret.
     FormWidget **fw;
     int32_t nfw;
+    // What a script asked of the page's widgets during its task (focus,
+    // blur, a reset), performed after it: a task does not reach widgets.
+    struct {
+        const os64_html_node_t *node;   // held
+        const os64_html_document_t *doc;
+        os64_dom_activation_t what;
+    } asks[8];
+    int32_t nasks;
+    // INPUT EVENTS (DOM_D7.md § Input events): what waits to be dispatched,
+    // the element under the pointer and the one pressed on (each held in
+    // `pointer_doc`), the control holding focus and its value when it got
+    // it (for `change`), and the VT100 burst a key belongs to.
+    Input inputs[INPUTS_MAX];
+    int32_t ninputs;
+    const os64_html_node_t *hover_node, *pressed_node;
+    const os64_html_document_t *pointer_doc;
+    const os64_ui_widget_t *focus_seen;
+    const os64_html_node_t *focus_node;
+    const os64_html_document_t *focus_doc;
+    char focus_value[512];
+    size_t focus_len;
+    uint8_t key_seq;
 } g;   // zeroed: the session's histories are large, and .data would carry them in the file
 
 // A select's list shows this many rows when the page does not say: enough
@@ -1206,6 +1288,20 @@ static bool request_copy(const os64_page_request_t *from, os64_page_request_t *t
 // new navigation that leaves no crumb; the chain it belongs to is counted
 // from the last place a person chose to go.
 static void script_alert(void *opaque, const char *text, size_t length);
+static void click_back(os64_ui_widget_t *w, void *user);
+static void click_forward(os64_ui_widget_t *w, void *user);
+static void click_reload(os64_ui_widget_t *w, void *user);
+static void follow_link_asked(int32_t link, way_ask_t ask);
+static void follow_link(int32_t link);
+static bool script_rebuild(void);
+static void stream_drop(void);
+static void task_said(const yonder_scripts_t *host, bool was_alive, const char *what,
+                      const os64_js_outcome_t *out, int64_t began);
+static void asks_perform(yonder_scripts_t *host, const os64_html_document_t *doc, bool shown);
+static bool scripts_live(void);
+static void input_queue(InputKind kind, const os64_html_node_t *node, const os64_html_node_t *related,
+                        int32_t x, int32_t y, bool was);
+static void inputs_drop(void);
 
 static void refresh_if_declared(void)
 {
@@ -1239,7 +1335,14 @@ static void arrive_now(Page *fresh, NavKind kind, const way_position_t *crumb,
     int32_t height = g.view.bounds.h > 0 ? g.view.bounds.h : 1;
     os64_ticks_t t0, t1;
     os64_ticks(&t0);
-    bool laid = lay_out_page(fresh, width, height);
+    // An async script or a timer may have changed the tree while the page
+    // waited for its sheets: the layout, the controls and the sheet table
+    // are all made from the model, so all three follow the tree.
+    uint64_t built = fresh->model_version;
+    bool laid = page_model_refresh(fresh);
+    if (laid && fresh->model_version != built)
+        sheets_restage(fresh);
+    laid = laid && lay_out_page(fresh, width, height);
     os64_ticks(&t1);
     if (!laid) {
         sheets_leave(fresh);
@@ -1263,6 +1366,7 @@ static void arrive_now(Page *fresh, NavKind kind, const way_position_t *crumb,
     bar_forget();
     pictures_leave(&g.page);
     sheets_leave(&g.page);
+    inputs_drop();
     yonder_scripts_free(g.page.scripts);
     g.page.scripts = NULL;
     forms_drop();
@@ -1270,7 +1374,7 @@ static void arrive_now(Page *fresh, NavKind kind, const way_position_t *crumb,
     g.page = *fresh;
     os64_memset(fresh, 0, sizeof(*fresh));
     g.page_serial++;
-    g.page.model_version = g.page.rendered_version = os64_html_version(page_doc(&g.page));
+    g.page.rendered_version = os64_html_version(page_doc(&g.page));
     g.page.state_version = os64_page_state_version(os64_page_shared_state(page_model(&g.page)));
     g.pictures_moved = false;
     g.settle_due = YONDER_NEVER;       // the deadline goes with the moves it was for
@@ -1292,17 +1396,26 @@ static void arrive_now(Page *fresh, NavKind kind, const way_position_t *crumb,
     say_laid_out(ms_between(&t0, &t1));
     if (fragment != NULL)
         scroll_to_fragment(fragment);
-    if (g.page.scripting && g.scripts_on) {
-        g.page.scripts = yonder_scripts_new((os64_html_document_t *)page_doc(&g.page),
-                                             os64_page_shared_state(page_model(&g.page)),
-                                             g.page.way.url, script_alert, NULL);
-        if (g.page.scripts == NULL)
-            status_rest("Could not queue page scripts; this page runs without them.");
-        else {
-            yonder_scripts_set_geometry(g.page.scripts, script_geometry, NULL);
-            if (yonder_scripts_pending(g.page.scripts))
-                (void)os64_gui_event_ring(g.win, BELL_SCRIPTS);
-        }
+    // `load`, at window, now the page is shown: after its sheets' wait, not
+    // after its pictures (DOM_D7.md § Booked). The document reads as its
+    // target, as HTML's legacy target override has it.
+    if (g.page.scripts != NULL) {
+        // The page on screen answers geometry from its own layout (DOM.md
+        // § Geometry); its scripts may measure from `load` on.
+        yonder_scripts_set_geometry(g.page.scripts, script_geometry, NULL);
+        os64_dom_event_t loaded = {.type = "load"};
+        os64_js_outcome_t out;
+        int64_t began = s_script_audit ? os64_micros() : 0;
+        const os64_html_document_t *doc = page_doc(&g.page);
+        yonder_scripts_dispatch(g.page.scripts, NULL, &loaded, NULL, &out);
+        task_said(g.page.scripts, true, "load", &out, began);
+        if (script_rebuild())
+            asks_perform(g.page.scripts, doc, true);
+        // What the page's scripts said while it arrived is said again: the
+        // arrival wrote the status line over it.
+        const char *note = yonder_scripts_note(g.page.scripts);
+        if (note != NULL && page_doc(&g.page) == doc)
+            status_rest(note);
     }
     refresh_if_declared();
     buttons_follow();
@@ -1316,7 +1429,17 @@ static void arrive_now(Page *fresh, NavKind kind, const way_position_t *crumb,
 static void arrive(Page *fresh, NavKind kind, const way_position_t *crumb, const char *fragment)
 {
     coming_drop();
-    fresh->serial = ++g.pages_made;
+    // A streamed page has its serial from the start of its navigation: its
+    // scripts' fetches already carry it.
+    if (fresh->serial == 0)
+        fresh->serial = ++g.pages_made;
+    // DOMContentLoaded's listeners may have changed the tree since the
+    // model was built; the sheet table is read from the model.
+    if (!page_model_refresh(fresh)) {
+        page_clear(fresh);
+        status_rest("Out of memory reading that page; this is still the page you were on.");
+        return;
+    }
     sheets_start(fresh);
     if (fresh->sheets_waiting == 0) {
         arrive_now(fresh, kind, crumb, fragment);
@@ -1342,8 +1465,12 @@ static void arrive(Page *fresh, NavKind kind, const way_position_t *crumb, const
 
 // ── Going somewhere ─────────────────────────────────────────────────────
 
-// A file is read here, on this thread, as it always was: it is local, and
-// the parse is the least of what a page costs.
+// A file is read here, on this thread: it is local, and the read is the
+// least of what a page costs. Its bytes then take the stream, as a fetch's
+// do, so a page from disk runs its scripts in the order a page from the
+// network does.
+static bool stream_parser(const void *first, size_t n);
+
 static void open_local(const char *path, NavKind kind, const way_position_t *crumb)
 {
     uint8_t *bytes = NULL;
@@ -1365,20 +1492,26 @@ static void open_local(const char *path, NavKind kind, const way_position_t *cru
         status_rest(line);
         return;
     }
-    Page fresh;
-    os64_memset(&fresh, 0, sizeof(fresh));
-    os64_snprintf(fresh.way.url, sizeof(fresh.way.url), "file://%s", path);
-    fresh.scripting = g.scripts_on;
-    fresh.way.doc = parse_file(bytes, len, fresh.scripting);
-    os64_free(bytes);
-    fresh.way.model = fresh.way.doc != NULL ? os64_page_build(fresh.way.doc, fresh.way.url, NULL, NULL)
-                                            : NULL;
-    if (fresh.way.model == NULL) {
-        page_clear(&fresh);
+    os64_memset(&g.stream, 0, sizeof(g.stream));
+    g.stream.local = bytes;
+    g.stream.local_len = len;
+    g.stream.kind = kind;
+    if (crumb != NULL)
+        g.stream.crumb = *crumb;
+    g.stream.scripting = g.scripts_on;
+    g.stream.serial = ++g.pages_made;
+    g.stream.has_head = true;
+    g.stream.head.body = WAY_BODY_HTML;
+    os64_snprintf(g.stream.head.url, sizeof(g.stream.head.url), "file://%s", path);
+    g.stream.has_verdict = true;
+    g.stream.verdict.page = true;
+    g.stream.verdict.fetch = OS64_FETCH_OK;
+    g.stream.active = true;
+    if (!stream_parser(NULL, 0)) {
+        stream_drop();
         status_rest("Out of memory reading the page.");
-        return;
     }
-    arrive(&fresh, kind, crumb, NULL);
+    buttons_follow();
 }
 
 static void buttons_follow(void)
@@ -1460,17 +1593,21 @@ static void bar_answered(bool yes)
 
 // ── The navigation in flight ────────────────────────────────────────────
 
-// The page arriving is not wanted after all. Its parser goes with its
-// document: nothing points into a tree that has no model, no snapshot and
-// no runtime yet (DOM.md's teardown abandons a parser instead, for a page
-// that has those; D7 brings that here). The mailbox this window held is
-// let go, and outlives it for as long as the job still holds its own.
+// The page arriving is not wanted after all, in DOM.md's teardown order:
+// the parser is ABANDONED, handing over the document as far as it was
+// built, because a runtime, wrappers and the control state may point into
+// it; then the scripts (lists, registries, engine), then the state, then
+// the document. The mailbox this window held is let go, and outlives it for
+// as long as the job still holds its own.
 static void stream_drop(void)
 {
     if (g.asker == ASK_WORKER)
         bar_forget();
-    if (g.stream.parser != NULL)
-        os64_html_parser_destroy(g.stream.parser);
+    os64_html_document_t *doc = g.stream.parser != NULL ? os64_html_parser_abandon(g.stream.parser) : NULL;
+    yonder_scripts_free(g.stream.scripts);
+    os64_page_state_free(g.stream.state);
+    os64_html_document_free(doc);
+    os64_free(g.stream.local);
     yonder_mail_drop(g.stream.mail);
     if (g.stream.has_sent)
         os64_page_request_free(&g.stream.sent);
@@ -1480,11 +1617,11 @@ static void stream_drop(void)
 // Ends the navigation in flight, if there is one, and lets go of a page
 // that arrived and is waiting for its sheets: somewhere else was asked
 // for. The pool's own cancellation reaches its fetch, any question it is
-// waiting on, and a post waiting for room in the ring.
+// waiting on, and a post waiting for room in the ring. The page on screen
+// and its scripts stay live until another page replaces it (DOM.md § What
+// the old page does meanwhile).
 static void stop_trip(void)
 {
-    yonder_scripts_free(g.page.scripts);
-    g.page.scripts = NULL;
     coming_drop();
     if (g.nav.id != 0 && g.pool != NULL)
         os64_work_cancel(g.pool, g.nav.id);
@@ -1586,6 +1723,7 @@ static void start_trip(const char *url, os64_page_request_t *request, NavKind ki
     }
     g.nav.id = id;
     g.stream.active = true;
+    g.stream.serial = ++g.pages_made;
     g.stream.mail = mail;
     g.stream.kind = kind;
     g.stream.scripting = g.scripts_on;
@@ -2400,16 +2538,25 @@ static bool picture_on_screen(int32_t k, bool mark)
     return seen || look.seen;
 }
 
-// Hands the ticker the earliest of three deadlines: the next frame among
-// the pictures on screen and the moment a slow page's layout goes stale
-// (pictures_settle) — neither for a covered window — and the moment a page
-// waiting for its sheets is shown whatever is still coming, covered or
-// not, since that page has to arrive either way.
+// Hands the ticker the earliest of its deadlines: the next frame among the
+// pictures on screen and the moment a slow page's layout goes stale
+// (pictures_settle) — neither for a covered window — the moment a page
+// waiting for its sheets is shown whatever is still coming, and the next
+// timer of each page's scripts, covered or not.
 static void pictures_schedule(void)
 {
     uint64_t next = g.covered ? YONDER_NEVER : g.settle_due;
     if (g.coming.active && g.coming.due < next)
         next = g.coming.due;
+    // A page's timers, covered or not: a page that counts down keeps
+    // counting while another window is in front (DOM_D7.md § The clock).
+    const yonder_scripts_t *hosts[] = {g.page.scripts, g.stream.scripts,
+                                       g.coming.active ? g.coming.page.scripts : NULL};
+    for (size_t i = 0; i < sizeof(hosts) / sizeof(hosts[0]); i++) {
+        uint64_t due = yonder_scripts_timer_next(hosts[i]);
+        if (due < next)
+            next = due;
+    }
     for (int32_t k = 0; !g.covered && k < g.page.npics; k++) {
         const Picture *pic = &g.page.pics[k];
         if (pic->playing && pic->due < next && picture_on_screen(k, false))
@@ -2527,7 +2674,19 @@ static void form_send(int32_t control, os64_page_activation_t how);
 static void field_submitted(os64_ui_textfield_t *tf, void *user)
 {
     (void)tf;
+    if (scripts_live()) {
+        input_queue(IN_IMPLICIT, ((FormWidget *)user)->node, NULL, 0, 0, false);
+        return;
+    }
     form_send(widget_control((FormWidget *)user), OS64_PAGE_ACTIVATE_IMPLICIT);
+}
+
+// A person's edit changed a field: its `input` event (libui's on_change).
+static void field_changed(os64_ui_textfield_t *tf, void *user)
+{
+    (void)tf;
+    if (scripts_live())
+        input_queue(IN_INPUT, ((FormWidget *)user)->node, NULL, 0, 0, false);
 }
 
 static void field_cancelled(os64_ui_textfield_t *tf, void *user)
@@ -2544,9 +2703,17 @@ static void forms_sync_from_model(bool text);
 static void check_changed(os64_ui_checkbox_t *cb, void *user)
 {
     const FormWidget *fw = user;
+    bool was = false;
+    const os64_page_control_t *c = os64_page_control(page_model(&g.page), widget_control(fw));
+    if (c != NULL)
+        was = c->checked;
     if (os64_page_set_checked(page_model(&g.page), widget_control(fw), cb->checked) < 0)
         status_rest("the page keeps that one as it is");
     forms_sync_from_model(false);
+    // The box changed before its click, as HTML's legacy-pre-activation
+    // behaviour has it; the click may still put it back (inputs_run).
+    if (scripts_live())
+        input_queue(IN_CHECK, fw->node, NULL, g.pointer_x, g.pointer_y, was);
 }
 
 static void list_changed(os64_ui_listbox_t *list, void *user)
@@ -2555,31 +2722,42 @@ static void list_changed(os64_ui_listbox_t *list, void *user)
     if (list->selected >= 0)
         (void)os64_page_set_chosen(page_model(&g.page), widget_control(fw), (int32_t)list->selected, true);
     forms_sync_from_model(false);
+    if (scripts_live())
+        input_queue(IN_LIST, fw->node, NULL, 0, 0, false);
+}
+
+// A form reset, by a reset button or a script's reset(): libpage puts the
+// values back, and this form's unflushed edits go even when its native
+// values were already defaults. Other forms keep their editor state.
+static void form_reset(int32_t form)
+{
+    int64_t result = os64_page_reset(page_model(&g.page), form);
+    if (result < 0) {
+        status_rest(os64_page_reason_name((os64_page_reason_t)-result));
+        return;
+    }
+    for (int32_t i = 0; i < g.nfw; i++) {
+        FormWidget *editor = g.fw[i];
+        const os64_page_control_t *control =
+            os64_page_control(page_model(&g.page), widget_control(editor));
+        if (control != NULL && control->form == form &&
+            (editor->kind == FW_TEXT || editor->kind == FW_PASSWORD))
+            editor->presented = false;
+    }
+    forms_sync_from_model(true);
 }
 
 static void button_clicked(os64_ui_widget_t *w, void *user)
 {
     (void)w;
     const FormWidget *fw = user;
+    if (scripts_live()) {
+        input_queue(IN_BUTTON, fw->node, NULL, g.pointer_x, g.pointer_y, false);
+        return;
+    }
     const os64_page_control_t *c = os64_page_control(page_model(&g.page), widget_control(fw));
     if (c != NULL && c->resets) {
-        int32_t form = c->form;
-        int64_t result = os64_page_reset(page_model(&g.page), form);
-        if (result < 0) {
-            status_rest(os64_page_reason_name((os64_page_reason_t)-result));
-            return;
-        }
-        // Reset discards this form's unflushed edits even when its native
-        // values were already defaults. Other forms keep their editor state.
-        for (int32_t i = 0; i < g.nfw; i++) {
-            FormWidget *editor = g.fw[i];
-            const os64_page_control_t *control =
-                os64_page_control(page_model(&g.page), widget_control(editor));
-            if (control != NULL && control->form == form &&
-                (editor->kind == FW_TEXT || editor->kind == FW_PASSWORD))
-                editor->presented = false;
-        }
-        forms_sync_from_model(true);
+        form_reset(c->form);
         return;
     }
     form_send(widget_control(fw), OS64_PAGE_ACTIVATE_CONTROL);
@@ -2738,16 +2916,20 @@ static bool password_key(const os64_gui_event_t *ev)
     if (a == '\t' || a == 0x1b)
         return false;                           // traversal and leaving are libui's
     if (a == '\r' || a == '\n') {
-        form_send(widget_control(fw), OS64_PAGE_ACTIVATE_IMPLICIT);
+        field_submitted(&fw->u.field, fw);
     } else if (a == '\b' || a == 0x7f) {
+        bool edited = fw->secret_len > 0;
         while (fw->secret_len > 0 &&
                ((unsigned char)fw->secret[--fw->secret_len] & 0xc0) == 0x80)
             ;
         password_show(fw);
+        if (edited)
+            field_changed(&fw->u.field, fw);
     } else if (a >= 0x20 && fw->secret_len + 4 < sizeof(fw->secret)) {
         // A key's byte is Latin-1; the value is UTF-8.
         fw->secret_len += os64_utf8_encode(a, fw->secret + fw->secret_len);
         password_show(fw);
+        field_changed(&fw->u.field, fw);
     }
     return true;                                // arrows, selection, the rest: swallowed
 }
@@ -2842,6 +3024,7 @@ static void forms_build(void)
         case FW_PASSWORD:
             os64_ui_textfield(&fw->u.field, fw->text, sizeof(fw->text), field_submitted,
                               field_cancelled, fw);
+            fw->u.field.on_change = field_changed;
             fw->w = &fw->u.field.w;
             break;
         }
@@ -2941,25 +3124,71 @@ static void script_alert(void *opaque, const char *text, size_t length)
     status_rest(line);
 }
 
+// The model brought up to the tree's version, if scripts moved it: false
+// when the rebuild does not fit, which leaves the old model in place.
+// model_version is the version the model was BUILT at, never assumed.
+static bool page_model_refresh(Page *p)
+{
+    uint64_t version = os64_html_version(page_doc(p));
+    if (version == p->model_version)
+        return true;
+    os64_page_t *model = os64_page_rebuild(page_model(p));
+    if (model == NULL)
+        return false;
+    os64_page_t *old = page_model(p);
+    if (p->way.model != NULL)
+        p->way.model = model;
+    else
+        p->plain_model = model;
+    p->model_version = version;
+    os64_page_free(old);
+    return true;
+}
+
+// A page not yet laid out whose model was just refreshed takes its sheet
+// table from that model, as script_rebuild's staged page does: parses
+// already in are borrowed, waits on the old table are cancelled, and a new
+// serial keeps an old table's job out of the new one. Sheets the scripts
+// linked are fetched and join when they arrive; the first paint does not
+// wait for them.
+static void sheets_restage(Page *p)
+{
+    Page next = *p;
+    next.reuse_sheets = p;
+    next.sheets = NULL;
+    next.nsheets = next.sheets_waiting = next.sheets_ready = 0;
+    next.sheets_changed = true;
+    next.serial = ++g.pages_made;
+    sheets_start(&next);
+    sheets_leave(p);
+    // A borrowed parse moves to its borrower before the old table goes.
+    for (int32_t i = 0; i < next.nsheets; i++)
+        if (next.sheets[i].borrowed_from != NULL) {
+            os64_memset(&next.sheets[i].borrowed_from->parsed, 0, sizeof(garb_parsed_t));
+            next.sheets[i].borrowed_from = NULL;
+        }
+    sheets_free(p);
+    p->sheets = next.sheets;
+    p->nsheets = next.nsheets;
+    p->sheets_waiting = next.sheets_waiting;
+    p->sheets_ready = next.sheets_ready;
+    p->sheets_changed = next.sheets_changed;
+    p->serial = next.serial;
+    p->reuse_sheets = NULL;
+}
+
 static bool script_rebuild(void)
 {
     Page *p = &g.page;
     uint64_t version = os64_html_version(page_doc(p));
     if (version != p->model_version) {
-        os64_page_t *model = os64_page_rebuild(page_model(p));
-        if (model == NULL) {
+        // The displayed layout retains the old model, including its
+        // control state, past the refresh's free of it.
+        if (!page_model_refresh(p)) {
             status_rest("Out of memory rebuilding the page; actions wait for a current model.");
             return false;
         }
-        os64_page_t *old = page_model(p);
-        if (p->way.model != NULL)
-            p->way.model = model;
-        else
-            p->plain_model = model;
-        p->model_version = version;
         g.hover_link = g.pressed_link = -1;
-        // The displayed layout retains old, including its control state.
-        os64_page_free(old);
         pictures_start(p);
     }
     if (version != p->rendered_version) {
@@ -3045,6 +3274,353 @@ static bool script_rebuild(void)
     return true;
 }
 
+// ── Scripts ─────────────────────────────────────────────────────────────
+//
+// A page's scripts live in its host (scripts.h): the stream's while the page
+// arrives, the page's once it has. These are the host's services — a
+// script's fetch on the pool, the clock, the asks a task makes — and the
+// turn of the page on screen (DOM_D7.md § The shown page's turn).
+
+static bool fetchable(const char *url)
+{
+    return (os64_strlen(url) > 7 && os64_memcmp(url, "http://", 7) == 0) ||
+           (os64_strlen(url) > 8 && os64_memcmp(url, "https://", 8) == 0) ||
+           (os64_strlen(url) > 7 && os64_memcmp(url, "file://", 7) == 0);
+}
+
+// The address of the page a host belongs to, for a fetch's Referer.
+static const char *scripts_page_url(uint64_t serial)
+{
+    if (g.stream.scripts != NULL && yonder_scripts_serial(g.stream.scripts) == serial)
+        return g.stream.head.url;
+    if (g.coming.active && yonder_scripts_serial(g.coming.page.scripts) == serial)
+        return g.coming.page.way.url;
+    return g.page.way.url;
+}
+
+static uint64_t script_fetch(void *opaque, uint64_t serial, uint32_t token, const char *url,
+                             const char *fallback)
+{
+    (void)opaque;
+    yonder_script_job_t *job = fetchable(url) && g.pool != NULL ? os64_calloc(1, sizeof(*job)) : NULL;
+    if (job == NULL)
+        return 0;
+    job->kind = YONDER_JOB_SCRIPT;
+    job->page = serial;
+    job->token = token;
+    job->agent = g.way.agent;
+    os64_strcopy(job->url, sizeof(job->url), url);
+    os64_strcopy(job->fallback, sizeof(job->fallback), fallback);
+    job->hooks.jar = g.way.jar;
+    job->hooks.cache = g.cache;
+    os64_strcopy(job->hooks.referrer, sizeof(job->hooks.referrer), scripts_page_url(serial));
+    os64_work_t work = {yonder_script_run, yonder_script_release, job, SCRIPT_RESERVE};
+    os64_work_id_t id = os64_work_submit(g.pool, &work);
+    if (id == 0)
+        os64_free(job);
+    return id;
+}
+
+static void script_cancel(void *opaque, uint64_t job)
+{
+    (void)opaque;
+    if (g.pool != NULL)
+        os64_work_cancel(g.pool, job);
+}
+
+static uint64_t script_now(void *opaque)
+{
+    (void)opaque;
+    return yonder_now_ms();
+}
+
+// focus(), blur() and a reset nobody cancelled reach widgets, which a task
+// must not: each is kept, held, and performed when the task is over.
+static void script_activate(void *opaque, const os64_html_node_t *node, os64_dom_activation_t what)
+{
+    if (g.nasks == (int32_t)(sizeof(g.asks) / sizeof(g.asks[0])))
+        return;
+    os64_html_hold(opaque, node);
+    g.asks[g.nasks].node = node;
+    g.asks[g.nasks].doc = opaque;
+    g.asks[g.nasks].what = what;
+    g.nasks++;
+}
+
+static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state_t *state,
+                                      const char *url, uint64_t serial)
+{
+    yonder_scripts_options_t options = {url, g.script_ms, serial, script_alert, script_fetch,
+                                        script_cancel, script_activate, script_now, doc};
+    return yonder_scripts_new(doc, state, &options);
+}
+
+// The host a fetch job's serial names: the page arriving, the page waiting
+// for its sheets, or the page on screen. NULL: its page is gone.
+static yonder_scripts_t *scripts_for(uint64_t serial)
+{
+    if (g.stream.scripts != NULL && yonder_scripts_serial(g.stream.scripts) == serial)
+        return g.stream.scripts;
+    if (g.coming.active && g.coming.page.scripts != NULL &&
+        yonder_scripts_serial(g.coming.page.scripts) == serial)
+        return g.coming.page.scripts;
+    if (g.page.scripts != NULL && yonder_scripts_serial(g.page.scripts) == serial)
+        return g.page.scripts;
+    return NULL;
+}
+
+static void script_arrived(const yonder_script_job_t *job, const yonder_script_t *got)
+{
+    yonder_scripts_t *host = scripts_for(job->page);
+    if (host != NULL)
+        yonder_scripts_fetched(host, job->token, got != NULL && got->ok ? got->source : NULL,
+                               got != NULL ? got->length : 0);
+}
+
+// What a task said, on the status line: an error by its script's name, and
+// a runtime its task retired by the sentence that says the page goes on
+// without script. The audit logs every task and what it cost.
+static void task_said(const yonder_scripts_t *host, bool was_alive, const char *what,
+                      const os64_js_outcome_t *out, int64_t began)
+{
+    if (s_script_audit) {
+        char line[OS64_JS_SOURCE_NAME_CAP + 96];
+        os64_snprintf(line, sizeof(line), "yonder: task %s %s: status %d in %ld us", what,
+                      out->source_name, (int)out->status, (long)(os64_micros() - began));
+        os64_debug_log(line);
+    }
+    if (out->status == OS64_JS_OK)
+        return;
+    char line[512];
+    const char *name = out->source_name[0] ? out->source_name : what;
+    if (was_alive && !yonder_scripts_alive(host)) {
+        if (out->status == OS64_JS_LIMIT && out->limit == OS64_JS_LIMIT_EXECUTION)
+            os64_snprintf(line, sizeof(line), "Script %s: execution stopped after %lu s "
+                          "(this page runs without script)", name,
+                          (unsigned long)(yonder_scripts_execution_ms(host) / 1000));
+        else
+            os64_snprintf(line, sizeof(line), "Script %s: %s (this page runs without script)", name,
+                          out->message[0] ? out->message : "the runtime failed");
+    } else {
+        os64_snprintf(line, sizeof(line), "Script %s: %s", name,
+                      out->message[0] ? out->message : "error");
+    }
+    status_rest(line);
+    yonder_scripts_set_note((yonder_scripts_t *)host, line);
+}
+
+// A request for an address a script named, owning its own storage as
+// libpage's do. False when memory ran out.
+static bool request_for(const char *url, os64_page_request_t *out)
+{
+    os64_memset(out, 0, sizeof(*out));
+    out->control = -1;
+    out->method = OS64_PAGE_METHOD_GET;
+    if (!os64_url_scheme_of(url, out->scheme, sizeof(out->scheme)))
+        return false;
+    char *copy = copy_text(url);
+    if (copy == NULL)
+        return false;
+    out->url = copy;
+    out->leaves_machine = !os64_streq(out->scheme, "mailto") && !os64_streq(out->scheme, "data") &&
+                          !os64_streq(out->scheme, "javascript");
+    out->downgrade = os64_strlen(g.page.way.url) > 8 && os64_memcmp(g.page.way.url, "https://", 8) == 0 &&
+                     os64_streq(out->scheme, "http");
+    return true;
+}
+
+// The part of an address before its fragment, as a length.
+static size_t before_fragment(const char *url)
+{
+    size_t n = 0;
+    while (url[n] != '\0' && url[n] != '#')
+        n++;
+    return n;
+}
+
+// Where a page not on screen keeps a fragment its scripts ask for, and the
+// address it came from: the stream's, the page stream_finish holds, or the
+// coming page's. False for a host that is none of them.
+static bool unshown_place(const yonder_scripts_t *host, const char **url, char **fragment,
+                          size_t *cap, bool **has_fragment)
+{
+    if (host == NULL)
+        return false;
+    if (g.stream.active && host == g.stream.scripts) {
+        *url = g.stream.head.url;
+        *fragment = g.stream.fragment;
+        *cap = sizeof(g.stream.fragment);
+        *has_fragment = &g.stream.has_fragment;
+        return true;
+    }
+    if (host == g.finishing.scripts) {
+        *url = g.finishing.url;
+        *fragment = g.finishing.fragment;
+        *cap = g.finishing.cap;
+        *has_fragment = g.finishing.has_fragment;
+        return true;
+    }
+    if (g.coming.active && host == g.coming.page.scripts) {
+        *url = g.coming.page.way.url;
+        *fragment = g.coming.fragment;
+        *cap = sizeof(g.coming.fragment);
+        *has_fragment = &g.coming.has_fragment;
+        return true;
+    }
+    return false;
+}
+
+// A navigation a script asked for, performed once its task is over, by the
+// door a person's own request takes (DOM.md § The event loop): judged as a
+// page's own refresh is (WAY_ASK_GO), so a script cannot take a person
+// from https to http without the question bar. `shown` says whether the
+// asking page is on screen; a page still arriving has no model, so a link
+// or a form of its own waits for it (DOM.md § D7b, as built: Booked).
+static void navigation_perform(const yonder_scripts_t *host, const os64_dom_navigation_t *ask,
+                               bool shown)
+{
+    switch (ask->kind) {
+    case OS64_DOM_NAVIGATE_URL:
+    case OS64_DOM_NAVIGATE_REPLACE: {
+        // Only the fragment changed: a place in the asking page, no
+        // request. On screen it scrolls now; a page not yet shown keeps
+        // the fragment, and arriving scrolls to it.
+        size_t n = before_fragment(ask->url);
+        const char *here = NULL;
+        char *fragment = NULL;
+        size_t cap = 0;
+        bool *has_fragment = NULL;
+        if (shown)
+            here = g.page.way.url;
+        else if (!unshown_place(host, &here, &fragment, &cap, &has_fragment))
+            here = NULL;
+        if (here != NULL && ask->url[n] == '#' && n == before_fragment(here) &&
+            os64_memcmp(ask->url, here, n) == 0) {
+            if (shown) {
+                scroll_to_fragment(ask->url + n + 1);
+            } else {
+                os64_strcopy(fragment, cap, ask->url + n + 1);
+                *has_fragment = true;
+            }
+            return;
+        }
+        os64_page_request_t request;
+        if (!request_for(ask->url, &request)) {
+            status_rest("A script asked for an address this browser cannot go to.");
+            return;
+        }
+        request_navigate(&request, ask->kind == OS64_DOM_NAVIGATE_REPLACE ? NAV_REFRESH : NAV_GO,
+                         WAY_ASK_GO);
+        return;
+    }
+    case OS64_DOM_NAVIGATE_RELOAD:
+        if (shown)
+            click_reload(NULL, NULL);
+        return;
+    case OS64_DOM_NAVIGATE_HISTORY:
+        if (ask->delta < 0)
+            click_back(NULL, NULL);
+        else
+            click_forward(NULL, NULL);
+        return;
+    case OS64_DOM_NAVIGATE_FOLLOW:
+        if (shown) {
+            int32_t link = os64_page_link_for(page_model(&g.page), ask->node);
+            if (link >= 0)
+                follow_link_asked(link, WAY_ASK_GO);
+        }
+        return;
+    case OS64_DOM_NAVIGATE_SUBMIT:
+        if (shown) {
+            int32_t control = ask->submitter != NULL
+                ? os64_page_control_for(page_model(&g.page), ask->submitter) : -1;
+            if (control >= 0)
+                form_send(control, OS64_PAGE_ACTIVATE_CONTROL);
+            else
+                form_send(os64_page_form_for(page_model(&g.page), ask->node), OS64_PAGE_ACTIVATE_FORM);
+        }
+        return;
+    case OS64_DOM_NAVIGATE_NONE:
+        return;
+    }
+}
+
+// After a task: what it asked of the widgets, then the navigation it asked
+// for. The ask's nodes are let go before it is performed, since going
+// somewhere may free the very page they belong to.
+static void asks_perform(yonder_scripts_t *host, const os64_html_document_t *doc, bool shown)
+{
+    for (int32_t i = 0; i < g.nasks; i++) {
+        if (shown && g.asks[i].doc == page_doc(&g.page)) {
+            int32_t control = os64_page_control_for(page_model(&g.page), g.asks[i].node);
+            FormWidget *fw = control >= 0 ? form_widget(control) : NULL;
+            if (g.asks[i].what == OS64_DOM_ACTIVATE_RESET) {
+                int32_t form = os64_page_form_for(page_model(&g.page), g.asks[i].node);
+                if (form >= 0)
+                    form_reset(form);
+            } else if (fw != NULL && !fw->w->hidden && g.asks[i].what == OS64_DOM_ACTIVATE_FOCUS) {
+                os64_ui_set_focus(&g.ui, fw->w);
+            } else if (fw != NULL && g.ui.focus == fw->w && g.asks[i].what == OS64_DOM_ACTIVATE_BLUR) {
+                os64_ui_set_focus(&g.ui, &g.view);
+            }
+        }
+        os64_html_release(g.asks[i].doc, g.asks[i].node);
+    }
+    g.nasks = 0;
+    os64_dom_navigation_t ask;
+    if (!yonder_scripts_take_navigation(host, &ask))
+        return;
+    os64_dom_navigation_t held = ask;
+    if (!shown) {
+        if (ask.node != NULL)
+            os64_html_release(doc, ask.node);
+        if (ask.submitter != NULL)
+            os64_html_release(doc, ask.submitter);
+        held.node = held.submitter = NULL;
+        navigation_perform(host, &held, false);
+        return;
+    }
+    navigation_perform(host, &held, true);
+    // A shown page's model was read while the nodes were held; the page
+    // may since have been replaced, and its document freed with them.
+    if (page_doc(&g.page) == doc) {
+        if (ask.node != NULL)
+            os64_html_release(doc, ask.node);
+        if (ask.submitter != NULL)
+            os64_html_release(doc, ask.submitter);
+    }
+}
+
+// One task of a page's: a ready script, else a due timer. True when one
+// ran. `shown` decides whether its asks may reach the page on screen.
+static bool scripts_task(yonder_scripts_t *host, const os64_html_document_t *doc, bool shown)
+{
+    if (host == NULL || !yonder_scripts_alive(host))
+        return false;
+    os64_js_outcome_t out;
+    int64_t began = s_script_audit ? os64_micros() : 0;
+    const char *what = "script";
+    bool ran = yonder_scripts_step(host, &out);
+    if (!ran) {
+        what = "timer";
+        ran = yonder_scripts_timer_fire(host, yonder_now_ms(), &out);
+    }
+    if (!ran)
+        return false;
+    task_said(host, true, what, &out, began);
+    asks_perform(host, doc, shown);
+    return true;
+}
+
+// Whether a host has a task to run now: a script ready, or a timer due.
+static bool scripts_owed(const yonder_scripts_t *host)
+{
+    return yonder_scripts_pending(host) || yonder_scripts_timer_next(host) <= yonder_now_ms();
+}
+
+// The page on screen's current-layout provider (DOM.md § Geometry): its
+// pending rebuild and an owed layout happen now, charged to the asking
+// script, and the box is read from the layout that results.
 static bool script_geometry(void *opaque, const os64_html_node_t *node,
                             os64_dom_geometry_t *out)
 {
@@ -3068,41 +3644,423 @@ static bool script_geometry(void *opaque, const os64_html_node_t *node,
     return ready && ended >= began;
 }
 
+// THE SHOWN PAGE'S TURN: at most one task, then the rendering step.
 static bool script_turn(void)
 {
     // A font-capacity retry may have released the old tree. Keep retrying
-    // its owed DOM version before allowing another queued script to run.
+    // its owed DOM version before allowing another task to run.
     if (g.page.tree == NULL && (page_doc(&g.page) == NULL ||
         g.page.rendered_version == os64_html_version(page_doc(&g.page))))
         return false;
     // A failed native rebuild is retried before another script can run.
     if (!script_rebuild())
         return false;
-    if (!g.scripts_on || !yonder_scripts_pending(g.page.scripts))
+    if (!g.scripts_on || g.page.scripts == NULL)
         return false;
     forms_flush();
-    os64_js_outcome_t outcome;
+    const os64_html_document_t *doc = page_doc(&g.page);
+    os64_js_outcome_t out;
+    int64_t began = s_script_audit ? os64_micros() : 0;
+    const char *what = "script";
     (void)yonder_scripts_geometry_stats(g.page.scripts, true);
-    if (!yonder_scripts_step(g.page.scripts, &outcome))
-        return false;
-    bool rendered = script_rebuild();
-    if (outcome.status != OS64_JS_OK) {
-        char line[512];
-        os64_snprintf(line, sizeof(line), "Script %s: %s%s", outcome.source_name,
-                      outcome.message[0] ? outcome.message : "execution stopped",
-                      yonder_scripts_pending(g.page.scripts) ? "" : " (no further scripts queued)");
-        status_rest(line);
+    bool ran = yonder_scripts_step(g.page.scripts, &out);
+    if (!ran) {
+        what = "timer";
+        ran = yonder_scripts_timer_fire(g.page.scripts, yonder_now_ms(), &out);
     }
+    if (!ran)
+        return false;
+    task_said(g.page.scripts, true, what, &out, began);
+    // The layouts the task forced, and what they cost (DOM.md § Geometry).
     os64_dom_geometry_stats_t geometry = yonder_scripts_geometry_stats(g.page.scripts, false);
     if (geometry.layouts != 0) {
         char line[512];
         os64_snprintf(line, sizeof(line), "Script forced %lu layouts in %lu.%03lu ms%s%.*s",
             (unsigned long)geometry.layouts, (unsigned long)(geometry.elapsed_us / 1000),
-            (unsigned long)(geometry.elapsed_us % 1000), outcome.status == OS64_JS_OK ? "" : "; ",
-            outcome.status == OS64_JS_OK ? 0 : 300, outcome.message);
+            (unsigned long)(geometry.elapsed_us % 1000), out.status == OS64_JS_OK ? "" : "; ",
+            out.status == OS64_JS_OK ? 0 : 300, out.message);
         status_rest(line);
     }
+    // The rendering step before the asks: a form a script sent is read
+    // from a model as current as its tree.
+    bool rendered = script_rebuild();
+    if (rendered)
+        asks_perform(g.page.scripts, doc, true);
     return rendered;
+}
+
+// ── Input events ────────────────────────────────────────────────────────
+//
+// A person's input becomes DOM events (DOM_D7.md § Input events), each one
+// task, dispatched BEFORE the action it precedes, which is skipped when a
+// listener cancelled it. An event that starts inside a widget's own callback
+// — a button, a box, a list, a field's edit — is QUEUED with its node held
+// and dispatched once libui's dispatch has returned (inputs_run): a listener
+// may take away the very control whose callback is running, and the rebuild
+// after it would free the widget under libui's feet. Its default action then
+// runs by the door it always has, found again by node, since the rebuild may
+// have renumbered the controls. Without page scripts nothing is queued and
+// every action runs where it always did.
+
+static bool scripts_live(void)
+{
+    return g.scripts_on && g.page.scripts != NULL && yonder_scripts_alive(g.page.scripts);
+}
+
+static void input_queue(InputKind kind, const os64_html_node_t *node, const os64_html_node_t *related,
+                        int32_t x, int32_t y, bool was)
+{
+    const os64_html_document_t *doc = page_doc(&g.page);
+    if (node == NULL || doc == NULL)
+        return;
+    // One pointer move waits at a time: a page that listens to mousemove is
+    // told where the pointer is, not every sample on the way there.
+    for (int32_t i = 0; kind == IN_MOVE && i < g.ninputs; i++)
+        if (g.inputs[i].kind == IN_MOVE && g.inputs[i].node == node) {
+            g.inputs[i].x = x;
+            g.inputs[i].y = y;
+            return;
+        }
+    if (g.ninputs == INPUTS_MAX)
+        return;
+    os64_html_hold(doc, node);
+    if (related != NULL)
+        os64_html_hold(doc, related);
+    g.inputs[g.ninputs++] = (Input){kind, node, related, doc, x, y, was};
+}
+
+static void input_release(const Input *in)
+{
+    os64_html_release(in->doc, in->node);
+    if (in->related != NULL)
+        os64_html_release(in->doc, in->related);
+}
+
+// The page is being replaced: what waits for it, and what the pointer and
+// the focus were resting on in it, are let go.
+static void inputs_drop(void)
+{
+    for (int32_t i = 0; i < g.ninputs; i++)
+        input_release(&g.inputs[i]);
+    g.ninputs = 0;
+    if (g.hover_node != NULL)
+        os64_html_release(g.pointer_doc, g.hover_node);
+    if (g.pressed_node != NULL)
+        os64_html_release(g.pointer_doc, g.pressed_node);
+    if (g.focus_node != NULL)
+        os64_html_release(g.focus_doc, g.focus_node);
+    g.hover_node = g.pressed_node = g.focus_node = NULL;
+    g.focus_seen = NULL;
+}
+
+// The element an event at `node` is dispatched at: a hit on a word is a hit
+// on the element holding it.
+static const os64_html_node_t *element_of(const os64_html_node_t *node)
+{
+    while (node != NULL && node->kind != OS64_HTML_ELEMENT)
+        node = node->parent;
+    return node;
+}
+
+// The element under a window position, and the link it is in, if any.
+static const os64_html_node_t *element_at(int32_t x, int32_t y, const os64_html_node_t **link)
+{
+    os64_gui_rect_t v = g.view.bounds;
+    if (link != NULL)
+        *link = NULL;
+    if (g.page.tree == NULL || x < v.x || y < v.y || x >= v.x + v.w || y >= v.y + v.h)
+        return NULL;
+    const flow_box_t *b = flow_hit(g.page.tree, x - v.x + g.sx, y - v.y + g.sy, scroll_now());
+    if (b == NULL)
+        return NULL;
+    if (link != NULL) {
+        const os64_page_link_t *l = os64_page_link(flow_model(g.page.tree), b->link);
+        *link = l != NULL ? l->node : NULL;
+    }
+    return element_of(b->node);
+}
+
+static os64_dom_event_t mouse_event(const char *type, bool cancelable, const Input *in)
+{
+    os64_dom_event_t ev = {.type = type, .bubbles = true, .cancelable = cancelable,
+                           .kind = OS64_DOM_EVENT_MOUSE};
+    ev.client_x = in->x - g.view.bounds.x;
+    ev.client_y = in->y - g.view.bounds.y;
+    ev.screen_x = in->x;
+    ev.screen_y = in->y;
+    return ev;
+}
+
+// One event at `node` of the page on screen, as one task: the page's edits
+// flushed first so its script reads what was typed, then the event, then
+// the rendering step and the asks the task made. True when a listener
+// cancelled the default. Nothing at all when nothing could hear it.
+static bool page_event(const os64_dom_event_t *ev, const os64_html_node_t *node)
+{
+    yonder_scripts_t *host = g.page.scripts;
+    if (!scripts_live() || !yonder_scripts_listens(host, ev->type))
+        return false;
+    const os64_html_document_t *doc = page_doc(&g.page);
+    if (node != NULL && !os64_html_owns_node(doc, node))
+        return false;
+    forms_flush();
+    os64_js_outcome_t out;
+    bool prevented = false;
+    int64_t began = s_script_audit ? os64_micros() : 0;
+    yonder_scripts_dispatch(host, node, ev, &prevented, &out);
+    task_said(host, true, ev->type, &out, began);
+    if (script_rebuild())
+        asks_perform(host, doc, true);
+    return prevented;
+}
+
+static bool plain_event(const char *type, bool bubbles, bool cancelable, const os64_html_node_t *node)
+{
+    os64_dom_event_t ev = {.type = type, .bubbles = bubbles, .cancelable = cancelable};
+    return page_event(&ev, node);
+}
+
+// The form node a control belongs to, for its submit and reset events.
+static const os64_html_node_t *control_form(int32_t control)
+{
+    const os64_page_control_t *c = os64_page_control(page_model(&g.page), control);
+    const os64_page_form_t *f = c != NULL ? os64_page_form(page_model(&g.page), c->form) : NULL;
+    return f != NULL ? f->node : NULL;
+}
+
+// A text control's value as its editor holds it, for `change`.
+static bool editor_text(const os64_html_node_t *node, const char **text, size_t *len)
+{
+    int32_t control = os64_page_control_for(page_model(&g.page), node);
+    FormWidget *fw = control >= 0 ? form_widget(control) : NULL;
+    if (fw == NULL || (fw->kind != FW_TEXT && fw->kind != FW_PASSWORD))
+        return false;
+    *text = fw->kind == FW_PASSWORD ? fw->secret : fw->text;
+    *len = fw->kind == FW_PASSWORD ? fw->secret_len : os64_strlen(fw->text);
+    return true;
+}
+
+// HTML's `change` for a text control: its value now differs from the one
+// it had when it got focus (or when `change` last fired).
+static void change_if_edited(const os64_html_node_t *node)
+{
+    const char *text;
+    size_t len;
+    if (node != g.focus_node || !editor_text(node, &text, &len) ||
+        (len == g.focus_len && os64_memcmp(text, g.focus_value, len) == 0))
+        return;
+    g.focus_len = len < sizeof(g.focus_value) ? len : sizeof(g.focus_value) - 1;
+    os64_memcpy(g.focus_value, text, g.focus_len);
+    plain_event("change", true, false, node);
+}
+
+// The focus moved between libui's widgets: `blur` and `change` for the
+// control it left, `focus` for the one it reached (neither bubbles).
+static void focus_follow(void)
+{
+    if (g.ui.focus == g.focus_seen)
+        return;
+    g.focus_seen = g.ui.focus;
+    if (g.focus_node != NULL) {
+        // Judged now, while the value it had at focus is still at hand.
+        const char *text;
+        size_t len;
+        if (editor_text(g.focus_node, &text, &len) &&
+            (len != g.focus_len || os64_memcmp(text, g.focus_value, len) != 0))
+            input_queue(IN_CHANGE, g.focus_node, NULL, 0, 0, false);
+        input_queue(IN_BLUR, g.focus_node, NULL, 0, 0, false);
+        os64_html_release(g.focus_doc, g.focus_node);
+        g.focus_node = NULL;
+    }
+    FormWidget *fw = NULL;
+    for (int32_t i = 0; i < g.nfw && fw == NULL; i++)
+        if (g.fw[i]->w == g.ui.focus)
+            fw = g.fw[i];
+    if (fw == NULL || !scripts_live())
+        return;
+    g.focus_doc = page_doc(&g.page);
+    g.focus_node = fw->node;
+    os64_html_hold(g.focus_doc, g.focus_node);
+    const char *text;
+    size_t len = 0;
+    if (!editor_text(fw->node, &text, &len))
+        text = "";
+    g.focus_len = len < sizeof(g.focus_value) ? len : sizeof(g.focus_value) - 1;
+    os64_memcpy(g.focus_value, text, g.focus_len);
+    input_queue(IN_FOCUS, fw->node, NULL, 0, 0, false);
+}
+
+// What waits, dispatched in order, each with its default action after it.
+// A page replaced meanwhile drops its own (inputs_drop); one that is still
+// on screen but changed is answered by node.
+static void inputs_run(void)
+{
+    if (scripts_live())
+        focus_follow();
+    for (int32_t i = 0; i < g.ninputs; i++) {
+        Input in = g.inputs[i];
+        if (in.doc != page_doc(&g.page)) {
+            input_release(&in);
+            continue;
+        }
+        int32_t control = os64_page_control_for(page_model(&g.page), in.node);
+        switch (in.kind) {
+        case IN_MOUSEDOWN: case IN_MOUSEUP: case IN_MOVE: case IN_OVER: case IN_OUT: {
+            static const char *const names[] = {"mousedown", "mouseup", "", "mouseover", "mouseout", "mousemove"};
+            os64_dom_event_t ev = mouse_event(names[in.kind], in.kind != IN_MOVE, &in);
+            ev.related = in.kind == IN_OVER || in.kind == IN_OUT ? in.related : NULL;
+            page_event(&ev, in.node);
+            break;
+        }
+        case IN_CLICK: {
+            os64_dom_event_t ev = mouse_event("click", true, &in);
+            if (page_event(&ev, in.node))
+                break;
+            // The listeners may have rebuilt the page: the image is found
+            // again, and is gone if they took it away.
+            control = os64_page_control_for(page_model(&g.page), in.node);
+            int32_t link = in.related != NULL ? os64_page_link_for(page_model(&g.page), in.related) : -1;
+            const os64_page_control_t *c = os64_page_control(page_model(&g.page), control);
+            if (link >= 0)
+                follow_link(link);
+            else if (c != NULL && c->input == OS64_PAGE_INPUT_IMAGE && !c->disabled)
+                form_send(control, OS64_PAGE_ACTIVATE_CONTROL);
+            break;
+        }
+        case IN_BUTTON: {
+            os64_dom_event_t ev = mouse_event("click", true, &in);
+            if (page_event(&ev, in.node))
+                break;
+            control = os64_page_control_for(page_model(&g.page), in.node);
+            const os64_page_control_t *c = os64_page_control(page_model(&g.page), control);
+            if (c == NULL)
+                break;
+            bool resets = c->resets, submits = c->submits;
+            const char *type = resets ? "reset" : "submit";
+            if ((!resets && !submits) || plain_event(type, true, true, control_form(control)))
+                break;
+            // The listeners may have rebuilt the page: the button is found
+            // again, and is gone if they took it away.
+            control = os64_page_control_for(page_model(&g.page), in.node);
+            c = os64_page_control(page_model(&g.page), control);
+            if (c != NULL && resets)
+                form_reset(c->form);
+            else if (c != NULL)
+                form_send(control, OS64_PAGE_ACTIVATE_CONTROL);
+            break;
+        }
+        case IN_IMPLICIT:
+            change_if_edited(in.node);
+            control = os64_page_control_for(page_model(&g.page), in.node);
+            if (!plain_event("submit", true, true, control_form(control)))
+                form_send(os64_page_control_for(page_model(&g.page), in.node), OS64_PAGE_ACTIVATE_IMPLICIT);
+            break;
+        case IN_CHECK: {
+            os64_dom_event_t ev = mouse_event("click", true, &in);
+            if (page_event(&ev, in.node)) {
+                // A cancelled click puts the box back.
+                control = os64_page_control_for(page_model(&g.page), in.node);
+                (void)os64_page_set_checked(page_model(&g.page), control, in.was);
+                forms_sync_from_model(false);
+                break;
+            }
+            plain_event("input", true, false, in.node);
+            plain_event("change", true, false, in.node);
+            break;
+        }
+        case IN_LIST:
+            plain_event("input", true, false, in.node);
+            plain_event("change", true, false, in.node);
+            break;
+        case IN_INPUT:
+            plain_event("input", true, false, in.node);
+            break;
+        case IN_FOCUS:
+            plain_event("focus", false, false, in.node);
+            break;
+        case IN_BLUR:
+            plain_event("blur", false, false, in.node);
+            break;
+        case IN_CHANGE:
+            plain_event("change", true, false, in.node);
+            break;
+        }
+        input_release(&in);
+        if (scripts_live())
+            focus_follow();
+    }
+    g.ninputs = 0;
+}
+
+// A key, before libui sees it: keydown, and keypress for a character, at
+// the control holding focus (the page's body when the view has it). A
+// cancelled one is not typed. Keys in a VT100 burst (the arrows, ESC [ A)
+// are libui's own and are not dispatched (DOM.md § D7b, as built: Booked).
+static bool key_event(const os64_gui_event_t *ev)
+{
+    if (!scripts_live() || (ev->type != OS64_GUI_EVENT_KEY_DOWN && ev->type != OS64_GUI_EVENT_KEY_UP))
+        return false;
+    unsigned char a = (unsigned char)ev->key.ascii;
+    if (ev->type == OS64_GUI_EVENT_KEY_DOWN) {
+        if (a == 0x1b) {
+            g.key_seq = 1;
+            return false;
+        }
+        if (g.key_seq != 0) {
+            if (g.key_seq == 1 && (a == '[' || a == 'O'))
+                g.key_seq = 2;
+            else if (!(g.key_seq == 2 && ((a >= '0' && a <= '9') || a == ';')))
+                g.key_seq = 0;
+            return false;
+        }
+    }
+    bool printable = a >= 0x20 && a != 0x7f;
+    if (!printable && a != '\r' && a != '\n' && a != '\b' && a != 0x7f && a != '\t')
+        return false;
+    const os64_html_node_t *target = NULL;
+    for (int32_t i = 0; i < g.nfw && target == NULL; i++)
+        if (g.fw[i]->w == g.ui.focus)
+            target = g.fw[i]->node;
+    if (target == NULL)
+        target = page_doc(&g.page)->body != NULL ? page_doc(&g.page)->body : page_doc(&g.page)->document;
+    char name[8];
+    if (printable)
+        name[os64_utf8_encode(a, name)] = '\0';
+    os64_dom_event_t key = {.bubbles = true, .cancelable = true, .kind = OS64_DOM_EVENT_KEY,
+                            .key = printable ? name : a == '\t' ? "Tab" : a == '\b' || a == 0x7f
+                                   ? "Backspace" : "Enter",
+                            .key_code = a >= 'a' && a <= 'z' ? (uint32_t)(a - 'a' + 'A')
+                                      : a == '\n' ? 13 : a == 0x7f ? 8 : a,
+                            .shift = (ev->key.modifiers & OS64_GUI_MOD_SHIFT) != 0,
+                            .ctrl = (ev->key.modifiers & OS64_GUI_MOD_CTRL) != 0,
+                            .alt = (ev->key.modifiers & OS64_GUI_MOD_ALT) != 0};
+    if (ev->type == OS64_GUI_EVENT_KEY_UP) {
+        key.type = "keyup";
+        page_event(&key, target);
+        return false;
+    }
+    key.type = "keydown";
+    if (page_event(&key, target))
+        return true;
+    if (!printable)
+        return false;
+    key.type = "keypress";
+    key.char_code = a;
+    return page_event(&key, target);
+}
+
+// A page waiting for its sheets keeps running its async scripts and its
+// timers, one task a turn: it is the page arriving, not yet shown.
+static bool coming_turn(void)
+{
+    if (!g.coming.active || g.coming.page.scripts == NULL)
+        return false;
+    yonder_scripts_t *host = g.coming.page.scripts;
+    if (!scripts_owed(host))
+        return false;
+    uint64_t serial = g.coming.page.serial;
+    (void)scripts_task(host, page_doc(&g.coming.page), false);
+    return g.coming.active && g.coming.page.serial == serial && scripts_owed(g.coming.page.scripts);
 }
 
 // ── The doorbell ────────────────────────────────────────────────────────
@@ -3122,6 +4080,11 @@ static void reaped(os64_work_id_t id, void *job, void *product)
     if (*(const uint32_t *)job == YONDER_JOB_SHEET) {
         sheet_arrived(job, product);
         yonder_sheet_release(job, product);
+        return;
+    }
+    if (*(const uint32_t *)job == YONDER_JOB_SCRIPT) {
+        script_arrived(job, product);
+        yonder_script_release(job, product);
         return;
     }
     // A fetch is done. Everything it had to say went down the mailbox
@@ -3166,9 +4129,10 @@ static bool stream_parser(const void *first, size_t n)
 
 static bool stream_open(void);
 
-// The parse is over: finish it, build what the page means, write its
-// standing line, and arrive. `fetch` and `reason` are the wire's verdict,
-// or OK and NULL when the window cut the fetch short itself.
+// The parse is over: finish it, build what the page means — adopting the
+// control state the page's scripts already changed — write its standing
+// line, fire DOMContentLoaded, and arrive. `fetch` and `reason` are the
+// wire's verdict, or OK and NULL when the window cut the fetch short itself.
 static void stream_finish(os64_fetch_status_t fetch, const char *reason)
 {
     NavKind kind = g.stream.kind;
@@ -3194,16 +4158,38 @@ static void stream_finish(os64_fetch_status_t fetch, const char *reason)
         status_rest("Out of memory reading that page.");
         return;
     }
+    // The scripts, their state and the document are the page's from here.
+    // A scripted page that ran no script still gets its host: its handler
+    // attributes, `<body onload>` first of all, are scripts too.
+    if (g.stream.scripts == NULL && fresh.scripting && !g.stream.scriptless &&
+        g.stream.head.body == WAY_BODY_HTML) {
+        g.stream.state = os64_page_state_create(doc, 0);
+        g.stream.scripts = g.stream.state != NULL
+            ? scripts_host(doc, g.stream.state, g.stream.head.url, g.stream.serial) : NULL;
+        if (g.stream.scripts == NULL) {
+            os64_page_state_free(g.stream.state);
+            g.stream.state = NULL;
+        }
+    }
+    fresh.scripts = g.stream.scripts;
+    fresh.state = g.stream.state;
+    fresh.serial = g.stream.serial;
+    g.stream.scripts = NULL;
+    g.stream.state = NULL;
     // WHAT THE PAGE MEANS, from the tree and the address it came from —
     // `<base href>` included, which libpage reads. A page it cannot build
     // a model of is still a page worth reading: what it costs is the links
     // and boxes, and the status line says so. A text page's tree is the
     // window's own, beside libway's page, as page_doc() reads it.
-    os64_page_t *model = os64_page_build(doc, g.stream.head.url, NULL, NULL);
+    os64_page_t *model = os64_page_build(doc, g.stream.head.url, NULL, fresh.state);
+    fresh.model_version = os64_html_version(doc);
     if (g.stream.head.body == WAY_BODY_HTML) {
         fresh.way.doc = doc;
         fresh.way.model = model;
-        way_note(&fresh.way, &g.stream.head, false, fetch, reason);
+        if (g.stream.local != NULL)
+            os64_strcopy(fresh.way.url, sizeof(fresh.way.url), g.stream.head.url);
+        else
+            way_note(&fresh.way, &g.stream.head, false, fetch, reason);
     } else {
         fresh.plain = doc;
         fresh.plain_model = model;
@@ -3225,10 +4211,33 @@ static void stream_finish(os64_fetch_status_t fetch, const char *reason)
     bool text = g.stream.head.body == WAY_BODY_TEXT;
     stream_drop();
     buttons_follow();
-    if (model == NULL && text) {
+    if (model == NULL && (text || fresh.state != NULL)) {
+        // A page whose scripts share the state needs the model that adopts
+        // it; without one it is a text that could not be read.
         page_clear(&fresh);
-        status_rest("Out of memory reading that text.");
+        status_rest(text ? "Out of memory reading that text." : "Out of memory reading that page.");
         return;
+    }
+    // DOMContentLoaded: the parse and the deferred scripts are done (DOM_D7.md
+    // § The stream's turn, step 6). A navigation it asks for replaces the
+    // page before it is ever shown.
+    if (fresh.scripts != NULL) {
+        os64_dom_event_t loaded = {.type = "DOMContentLoaded", .bubbles = true};
+        os64_js_outcome_t out;
+        int64_t began = s_script_audit ? os64_micros() : 0;
+        g.finishing.scripts = fresh.scripts;
+        g.finishing.url = fresh.way.url;
+        g.finishing.fragment = fragment;
+        g.finishing.cap = sizeof(fragment);
+        g.finishing.has_fragment = &has_fragment;
+        yonder_scripts_dispatch(fresh.scripts, doc->document, &loaded, NULL, &out);
+        task_said(fresh.scripts, true, "DOMContentLoaded", &out, began);
+        asks_perform(fresh.scripts, doc, false);
+        os64_memset(&g.finishing, 0, sizeof(g.finishing));
+        if (g.stream.active) {
+            page_clear(&fresh);
+            return;
+        }
     }
     arrive(&fresh, kind, &crumb, has_fragment ? fragment : NULL);
 }
@@ -3248,36 +4257,129 @@ static bool stream_open(void)
     return true;
 }
 
-// One piece of the body into the parser. False when the parse is over:
-// the parser refused — the page is bigger or deeper than this browser
+// The bytes the arriving page has to give: the mailbox's chunks, or the
+// file's, one chunk at a time.
+static size_t stream_take(uint8_t *chunk, size_t cap)
+{
+    if (g.stream.local == NULL)
+        return yonder_mail_take(g.stream.mail, chunk, cap);
+    size_t n = g.stream.local_len - g.stream.local_at;
+    if (n > cap)
+        n = cap;
+    os64_memcpy(chunk, g.stream.local + g.stream.local_at, n);
+    g.stream.local_at += n;
+    return n;
+}
+
+static bool stream_streaming(void)
+{
+    return g.stream.local != NULL ? g.stream.local_at < g.stream.local_len
+                                  : yonder_mail_streaming(g.stream.mail);
+}
+
+// The parser stopped at `script`: the page's host decides (scripts.h). Its
+// host is made at the first script that runs, with the control state the
+// model will adopt when the parse is over.
+static yonder_stop_t stream_stop(os64_html_node_t *script)
+{
+    if (!g.stream.scripting || g.stream.scriptless ||
+        os64_dom_script_kind(script) != OS64_DOM_SCRIPT_CLASSIC)
+        return YONDER_STOP_RESUME;
+    if (g.stream.scripts == NULL) {
+        os64_html_document_t *doc = os64_html_parser_document(g.stream.parser);
+        g.stream.state = os64_page_state_create(doc, 0);
+        g.stream.scripts = g.stream.state != NULL
+            ? scripts_host(doc, g.stream.state, g.stream.head.url, g.stream.serial) : NULL;
+        if (g.stream.scripts == NULL) {
+            os64_page_state_free(g.stream.state);
+            g.stream.state = NULL;
+            g.stream.scriptless = true;
+            status_rest("Out of memory for the page's scripts; it is read without them.");
+            return YONDER_STOP_RESUME;
+        }
+    }
+    return yonder_scripts_parser_stop(g.stream.scripts, script);
+}
+
+// A parser call's answer, acted on: a stop at a script the page does not
+// run is resumed at once, as D4 resumed every stop; one it runs leaves the
+// stream STOPPED, for this turn or a later one to run.
+static int64_t stream_parsed(int64_t r)
+{
+    while (r == OS64_HTML_SCRIPT) {
+        if (stream_stop(os64_html_parser_script(g.stream.parser)) != YONDER_STOP_RESUME) {
+            g.stream.stopped = true;
+            return r;
+        }
+        r = os64_html_parser_resume(g.stream.parser);
+    }
+    return r;
+}
+
+// The parser refused — the page is bigger or deeper than this browser
 // parses — and what it built is a page you can read the beginning of. The
 // rest of the body is not wanted: the fetch is cancelled, as way_load
 // closes its fetch at the same point, and the page arrives with the
-// parser's sentence.
-static bool stream_feed(const uint8_t *bytes, size_t n)
+// parser's sentence. Its deferred scripts do not run: the parse did not end.
+static void stream_cut_short(void)
 {
-    int64_t r = os64_html_parser_feed(g.stream.parser, bytes, n);
-    while (r == OS64_HTML_SCRIPT)
-        r = os64_html_parser_resume(g.stream.parser);
-    if (r == OS64_HTML_OK)
-        return true;
     if (g.nav.id != 0 && g.pool != NULL)
         os64_work_cancel(g.pool, g.nav.id);
     g.nav.id = 0;
     stream_finish(OS64_FETCH_OK, NULL);
-    return false;
 }
 
-// One slice of the arriving page. True when there is more to do than this
-// turn did — chunks still in the ring, or a verdict not yet acted on — so
-// the loop should ring itself and come back after it has looked at the
-// glass.
+// A script a verb connected with no `src`, as its own task: a browser runs
+// it inside the verb, so it runs before the parse goes on. False when none
+// ran, or when it navigated and dropped this stream.
+static bool stream_connected(void)
+{
+    yonder_scripts_t *host = g.stream.scripts;
+    uint64_t serial = g.stream.serial;
+    os64_js_outcome_t out;
+    int64_t began = s_script_audit ? os64_micros() : 0;
+    if (!yonder_scripts_step_connected(host, &out))
+        return false;
+    task_said(host, true, "script", &out, began);
+    asks_perform(host, os64_html_parser_document(g.stream.parser), false);
+    return g.stream.active && g.stream.serial == serial;
+}
+
+// The parse is over: the deferred scripts may run, and what is due by now
+// runs before DOMContentLoaded, which HTML queues behind it.
+static void stream_parse_over(void)
+{
+    g.stream.ended = true;
+    g.stream.ended_ms = yonder_now_ms();
+    yonder_scripts_parse_ended(g.stream.scripts);
+}
+
+// One task of the arriving page's own: a ready script or a due timer. The
+// task may navigate, which drops this stream; false then.
+static bool stream_task(void)
+{
+    uint64_t serial = g.stream.serial;
+    (void)scripts_task(g.stream.scripts, os64_html_parser_document(g.stream.parser), false);
+    return g.stream.active && g.stream.serial == serial;
+}
+
+// ONE TURN OF THE ARRIVING PAGE (DOM_D7.md § The stream's turn): a script
+// a verb connected with no `src` (a browser runs it inside the verb), else
+// the script the parse is stopped at when its source is in hand, else one slice
+// of parsing, else, when the parse is waiting (a `src` out, a deferred
+// fetch out, or the mailbox empty), a ready script or a due timer. The
+// parse comes first while it has input, as in a browser, where a
+// parser-blocking script runs inside the parser's own task and a 0 ms timer
+// it set waits for the parser to yield. At most one task a turn, so a page
+// of a hundred small scripts still lets the window read its events a
+// hundred times. True when the turn should come straight back; a wait for a
+// fetch rings no bell, the pool's reap does.
 static bool stream_turn(void)
 {
-    if (!g.stream.active || g.stream.mail == NULL)
+    if (!g.stream.active)
         return false;
     yonder_mail_t *mail = g.stream.mail;
-    if (!g.stream.has_head && yonder_mail_take_head(mail, &g.stream.head)) {
+    if (mail != NULL && !g.stream.has_head && yonder_mail_take_head(mail, &g.stream.head)) {
         g.stream.has_head = true;
         if (g.stream.head.body == WAY_BODY_HTML && !stream_parser(NULL, 0)) {
             stop_trip();
@@ -3285,13 +4387,47 @@ static bool stream_turn(void)
             return false;
         }
     }
-    if (!g.stream.has_verdict && yonder_mail_take_verdict(mail, &g.stream.verdict))
+    if (mail != NULL && !g.stream.has_verdict && yonder_mail_take_verdict(mail, &g.stream.verdict))
         g.stream.has_verdict = true;
+    yonder_scripts_t *host = g.stream.scripts;
+    uint64_t serial = g.stream.serial;
+    if (yonder_scripts_connected_pending(host))
+        return stream_connected();
+    if (g.stream.stopped) {
+        // The script the parse waits for: run it when its source is in
+        // hand (a dead runtime runs nothing), then carry on. The resume is
+        // the parser carrying on, not a task; the next script it meets
+        // waits for the next turn. While its `src` is out, a ready script
+        // (async, or one a script connected) or a due timer runs: HTML's
+        // loop runs other tasks while a parser-blocking script is fetched.
+        if (yonder_scripts_alive(host) && !yonder_scripts_blocking_ready(host))
+            return scripts_owed(host) ? stream_task() : false;
+        os64_js_outcome_t out;
+        int64_t began = s_script_audit ? os64_micros() : 0;
+        if (yonder_scripts_run_blocking(host, &out)) {
+            task_said(host, true, "script", &out, began);
+            asks_perform(host, os64_html_parser_document(g.stream.parser), false);
+            if (!g.stream.active || g.stream.serial != serial)
+                return false;
+        }
+        g.stream.stopped = false;
+        int64_t r = stream_parsed(os64_html_parser_resume(g.stream.parser));
+        if (r != OS64_HTML_OK && r != OS64_HTML_SCRIPT) {
+            stream_cut_short();
+            return false;
+        }
+        // A stop after the input ended was the end's own: an OK now is the
+        // end of the parse.
+        if (r == OS64_HTML_OK && g.stream.ending)
+            stream_parse_over();
+        return !g.stream.stopped || yonder_scripts_blocking_ready(host) ||
+               yonder_scripts_connected_pending(g.stream.scripts);
+    }
     size_t fed = 0;
     int64_t began = s_script_audit ? os64_micros() : 0;
     uint8_t chunk[YONDER_STREAM_CHUNK];
-    while (g.stream.has_head && fed < STREAM_SLICE_BYTES) {
-        size_t n = yonder_mail_take(mail, chunk, sizeof(chunk));
+    while (g.stream.has_head && !g.stream.ending && fed < STREAM_SLICE_BYTES) {
+        size_t n = stream_take(chunk, sizeof(chunk));
         if (n == 0)
             break;
         fed += n;
@@ -3313,8 +4449,13 @@ static bool stream_turn(void)
                 return false;
             }
         }
-        if (!stream_feed(chunk + at, n - at))
+        int64_t r = stream_parsed(os64_html_parser_feed(g.stream.parser, chunk + at, n - at));
+        if (r == OS64_HTML_SCRIPT)
+            break;                      // the slice ends at a script the page runs
+        if (r != OS64_HTML_OK) {
+            stream_cut_short();
             return false;
+        }
     }
     // The developer audit says what a slice cost: the number the byte
     // budget is held to (DOM_D4.md).
@@ -3324,13 +4465,23 @@ static bool stream_turn(void)
                       (unsigned long)fed, (long)(os64_micros() - began));
         os64_debug_log(line);
     }
+    if (g.stream.stopped)
+        return yonder_scripts_blocking_ready(g.stream.scripts) ||
+               yonder_scripts_connected_pending(g.stream.scripts);
+    // A slice that fed something was this turn's work; a task waits for a
+    // turn that finds the parse with nothing to do.
+    host = g.stream.scripts;            // the slice may have made it
+    bool owed = host != NULL && scripts_owed(host);
     // A slice that ended at its budget may have left chunks in the ring
     // with no bell to come for them: the worker rang when it posted, and a
     // quiet socket rings nothing more. The verdict is waited for; the
     // chunks are not.
-    if (!g.stream.has_verdict)
-        return fed >= STREAM_SLICE_BYTES;
-    if (yonder_mail_streaming(mail))
+    if (!g.stream.has_verdict) {
+        if (fed == 0)
+            return owed ? stream_task() : false;
+        return owed || fed >= STREAM_SLICE_BYTES;   // a task, or chunks, wait for the next turn
+    }
+    if (stream_streaming())
         return true;                    // chunks remain: next turn
     if (!g.stream.verdict.page) {
         // There never was a page: a head that did not come, or one that was
@@ -3344,6 +4495,41 @@ static bool stream_turn(void)
     }
     if (!g.stream.has_head)
         return true;                    // the head is behind the verdict in the mail: next turn
+    if (!g.stream.ending) {
+        // The input has ended. `end` may stop at a script still in the hold.
+        // A text body too short to have filled the sniff is judged on what
+        // there is.
+        if (g.stream.parser == NULL && !stream_open()) {
+            stop_trip();
+            status_rest("Out of memory reading that page.");
+            return false;
+        }
+        g.stream.ending = true;
+        int64_t r = stream_parsed(os64_html_parser_end(g.stream.parser));
+        if (r == OS64_HTML_SCRIPT)
+            return yonder_scripts_blocking_ready(g.stream.scripts) ||
+                   yonder_scripts_connected_pending(g.stream.scripts);
+        if (r != OS64_HTML_OK) {
+            stream_cut_short();
+            return false;
+        }
+        stream_parse_over();
+        fed = 1;                        // ending the input was this turn's work
+    }
+    // The deferred scripts, one a turn, each when its source is in hand; a
+    // turn that parsed comes back for its task.
+    if (yonder_scripts_deferring(g.stream.scripts)) {
+        if (scripts_owed(g.stream.scripts))
+            return fed != 0 || stream_task();
+        return false;                   // a deferred script's fetch is out
+    }
+    // A ready script, and a timer that was due when the parse ended, run
+    // before DOMContentLoaded. A timer set later waits for the page to
+    // arrive, so a chain of 0 ms timers cannot hold the page back.
+    host = g.stream.scripts;
+    if (host != NULL && (yonder_scripts_pending(host) ||
+                         yonder_scripts_timer_next(host) <= g.stream.ended_ms))
+        return fed != 0 || stream_task();
     yonder_verdict_t verdict = g.stream.verdict;
     stream_finish(verdict.fetch, verdict.reason);
     return false;
@@ -3990,9 +5176,10 @@ static int32_t link_at(int32_t x, int32_t y)
 }
 
 // A link followed: libpage says what it is — a place in this page is a
-// move, anywhere else is judged by libway — and a person pressed it, so a
-// link is never asked about.
-static void follow_link(int32_t link)
+// move, anywhere else is judged by libway with `ask`. A person pressing it
+// is never asked about (WAY_ASK_NEVER); a script's click() is judged as
+// the page's own choice (WAY_ASK_GO).
+static void follow_link_asked(int32_t link, way_ask_t ask)
 {
     os64_page_what_t what = {OS64_PAGE_ACTIVATE_LINK, link, 0, 0};
     os64_page_request_t request;
@@ -4002,11 +5189,16 @@ static void follow_link(int32_t link)
         os64_page_request_free(&request);
     } else if (verdict == OS64_PAGE_NAVIGATE) {
         g.chain = 0;
-        request_navigate(&request, NAV_GO, WAY_ASK_NEVER);
+        request_navigate(&request, NAV_GO, ask);
     } else {
         status_rest(os64_page_reason_name(request.reason));
         os64_page_request_free(&request);
     }
+}
+
+static void follow_link(int32_t link)
+{
+    follow_link_asked(link, WAY_ASK_NEVER);
 }
 
 // An `input type=image` is a picture that sends its form: libflow gave it
@@ -4072,8 +5264,33 @@ static bool view_event(os64_ui_widget_t *w, os64_ui_t *ui, const os64_gui_event_
         os64_ui_set_focus(&g.ui, w);
         g.pressed_link = ev->mouse.button == OS64_GUI_MOUSE_LEFT
                              ? link_at(ev->mouse.x, ev->mouse.y) : -1;
+        if (scripts_live() && ev->mouse.button == OS64_GUI_MOUSE_LEFT) {
+            const os64_html_node_t *at = element_at(ev->mouse.x, ev->mouse.y, NULL);
+            if (g.pressed_node != NULL)
+                os64_html_release(g.pointer_doc, g.pressed_node);
+            g.pressed_node = at;
+            g.pointer_doc = page_doc(&g.page);
+            if (at != NULL)
+                os64_html_hold(g.pointer_doc, at);
+            input_queue(IN_MOUSEDOWN, at, NULL, ev->mouse.x, ev->mouse.y, false);
+        }
         return true;
     case OS64_GUI_EVENT_MOUSE_BUTTON_UP: {
+        // With page scripts the press and the release are events, and a
+        // click on the same element is one too; its default action, the
+        // link or the picture button, follows the click (inputs_run).
+        if (scripts_live() && ev->mouse.button == OS64_GUI_MOUSE_LEFT) {
+            const os64_html_node_t *link_node = NULL;
+            const os64_html_node_t *at = element_at(ev->mouse.x, ev->mouse.y, &link_node);
+            input_queue(IN_MOUSEUP, at, NULL, ev->mouse.x, ev->mouse.y, false);
+            if (at != NULL && at == g.pressed_node)
+                input_queue(IN_CLICK, at, link_node, ev->mouse.x, ev->mouse.y, false);
+            if (g.pressed_node != NULL)
+                os64_html_release(g.pointer_doc, g.pressed_node);
+            g.pressed_node = NULL;
+            g.pressed_link = -1;
+            return true;
+        }
         // A click is a press and a release on the same link.
         int32_t link = link_at(ev->mouse.x, ev->mouse.y);
         if (link >= 0 && link == g.pressed_link && ev->mouse.button == OS64_GUI_MOUSE_LEFT)
@@ -4113,6 +5330,25 @@ static void hover(int32_t x, int32_t y)
 {
     g.pointer_x = x;
     g.pointer_y = y;
+    // The element under the pointer, for mouseover and mouseout: hover
+    // tracks the node now, not only the link (DOM_D7.md § Input events).
+    if (scripts_live()) {
+        const os64_html_node_t *over = element_at(x, y, NULL);
+        if (over != g.hover_node) {
+            if (g.hover_node != NULL) {
+                input_queue(IN_OUT, g.hover_node, over, x, y, false);
+                os64_html_release(g.pointer_doc, g.hover_node);
+            }
+            if (over != NULL) {
+                input_queue(IN_OVER, over, g.hover_node, x, y, false);
+                os64_html_hold(page_doc(&g.page), over);
+            }
+            g.hover_node = over;
+            g.pointer_doc = page_doc(&g.page);
+        }
+        if (over != NULL && yonder_scripts_listens(g.page.scripts, "mousemove"))
+            input_queue(IN_MOVE, over, NULL, x, y, false);
+    }
     int32_t link = link_at(x, y);
     if (link == g.hover_link)
         return;
@@ -4183,13 +5419,25 @@ static void click_reload(os64_ui_widget_t *w, void *user)
 
 // A mode change stops queued execution immediately. Reload re-parses noscript;
 // a POST reply uses the existing confirmation instead of silently resending.
-static void settings_use(const char *agent, bool scripts)
+// A new script time limit reaches every page's host now, for its next
+// task: the arriving page's, the one waiting for its sheets, and the one on
+// screen.
+static void settings_use(const char *agent, bool scripts, uint32_t script_seconds)
 {
     agent_use(agent);
+    g.script_ms = (uint64_t)script_seconds * 1000;
+    yonder_scripts_set_execution_ms(g.page.scripts, g.script_ms);
+    yonder_scripts_set_execution_ms(g.stream.scripts, g.script_ms);
+    yonder_scripts_set_execution_ms(g.coming.page.scripts, g.script_ms);
     if (g.scripts_on == scripts)
         return;
     g.scripts_on = scripts;
     status_set(g.status_rest);
+    // The page on screen keeps its scripts across a navigation, but not
+    // across a change of the mode its document was parsed in.
+    inputs_drop();
+    yonder_scripts_free(g.page.scripts);
+    g.page.scripts = NULL;
     stop_trip();
     if (g.page.tree != NULL)
         click_reload(NULL, NULL);
@@ -4424,6 +5672,7 @@ int main(int argc, char **argv)
     // page from the network arrives after it, and the window keeps its name.
     s_script_audit = argc > 1 && os64_streq(argv[1], "--script-audit");
     g.scripts_on = yonder_settings_saved_scripts();
+    g.script_ms = (uint64_t)yonder_settings_saved_script_seconds() * 1000;
     int address_arg = s_script_audit ? 2 : 1;
     const char *first = argc > address_arg ? argv[address_arg] : NULL;
     char title[OS64_GUI_TITLE_MAX] = "yonder";
@@ -4510,6 +5759,9 @@ int main(int argc, char **argv)
 
     if (first != NULL)
         open_address(first, NAV_GO, NULL, NULL);
+    // A file's stream starts with no event to wake the loop for it.
+    if (g.stream.active)
+        (void)os64_gui_event_ring(g.win, BELL_STREAM);
     else
         status_rest("Type an address, or a path to an HTML file, and press Enter.");
     os64_ui_set_focus(&g.ui, first != NULL ? &g.view : &g.field.w);
@@ -4538,10 +5790,13 @@ int main(int argc, char **argv)
                      ev.type == OS64_GUI_EVENT_WINDOW_UNCOVERED)
                 window_seen();
             if (ev.type == OS64_GUI_EVENT_SETTINGS)
-                yonder_settings_open(g.win, BELL_SETTINGS, g.way.agent, settings_use,
-                                     g.cache, g.scripts_on, g.zoom_default, zoom_use);
-            else if (!bar_event(&ev) && !zoom_event(&ev) && !password_key(&ev))
+                yonder_settings_open(g.win, BELL_SETTINGS, g.way.agent, settings_use, g.cache,
+                                     g.scripts_on, (uint32_t)(g.script_ms / 1000), g.zoom_default,
+                                     zoom_use);
+            else if (!bar_event(&ev) && !zoom_event(&ev) && !key_event(&ev) && !password_key(&ev))
                 os64_ui_dispatch(&g.ui, &ev);
+            // What the event became, as DOM events, now libui is done with it.
+            inputs_run();
         } while (g.running && os64_gui_event_poll(g.win, &ev) == 1);
         if (g.relayout_due) {
             g.relayout_due = false;
@@ -4550,13 +5805,16 @@ int main(int argc, char **argv)
         if (!g.running || g.ui.quit)
             break;
         bool stream_more = stream_turn();
+        bool coming_more = coming_turn();
         bool scripts_ready = script_turn();
         pictures_settle();
         os64_ui_paint(&g.ui);
         if (stream_more)
             (void)os64_gui_event_ring(g.win, BELL_STREAM);
-        if (scripts_ready && yonder_scripts_pending(g.page.scripts))
+        if (coming_more || (scripts_ready && scripts_owed(g.page.scripts)))
             (void)os64_gui_event_ring(g.win, BELL_SCRIPTS);
+        // A task may have set or cleared a timer: the ticker hears of it.
+        pictures_schedule();
         if (g.bar.up && !g.bar.armed) {
             if (os64_gui_event_poll(g.win, &ev) == 1) {
                 held = true;
@@ -4580,6 +5838,7 @@ int main(int argc, char **argv)
         os64_page_request_free(&g.pending);
     if (g.stream.active)
         stream_drop();
+    inputs_drop();
     yonder_scripts_free(g.page.scripts);
     g.page.scripts = NULL;
     forms_drop();

@@ -325,6 +325,8 @@ typedef struct {
     // control: the enum's own zero is a link, and a case that forgot to say
     // would have quietly asked a different question.
     bool link, implicit, refresh;
+    // A script's form.submit(): `index` names the FORM (OS64_PAGE_ACTIVATE_FORM).
+    bool form;
     // The markup in this file is UTF-8 and is labelled so unless a case is
     // about the encoding ladder itself, which `sniff` hands to libhtml.
     bool sniff;
@@ -372,6 +374,7 @@ static void run(PCase c)
     os64_page_activation_t how = c.link      ? OS64_PAGE_ACTIVATE_LINK
                                  : c.implicit ? OS64_PAGE_ACTIVATE_IMPLICIT
                                  : c.refresh  ? OS64_PAGE_ACTIVATE_REFRESH
+                                 : c.form     ? OS64_PAGE_ACTIVATE_FORM
                                               : OS64_PAGE_ACTIVATE_CONTROL;
     // A NEGATIVE index counts back from the end, so a case whose markup is
     // generated can name its submit button without counting the fields.
@@ -445,6 +448,43 @@ static void model(const char *step_ids, const char *name, const char *html,
 #include "test_libpage_navigation.inc"
 #include "test_libpage_review3.inc"
 
+// A script sending a form itself (HTML's "submitted from submit() method"):
+// no submitter, so no button's name and value in the data and no button's
+// overrides, and no constraint validation.
+static void script_submit_cases(void)
+{
+    run((PCase){.steps = "F1",
+                .name = "S: form.submit() carries no submitter",
+                .html = "<form action=/go><input name=q value=x><button name=b value=v>send</button></form>",
+                .form = true,
+                .index = 0,
+                .verdict = OS64_PAGE_NAVIGATE,
+                .url = "http://host/go?q=x"});
+    run((PCase){.steps = "F1",
+                .name = "S: form.submit() takes no button's formaction",
+                .html = "<form action=/go><input name=q value=x>"
+                        "<button formaction=/other name=b>send</button></form>",
+                .form = true,
+                .index = 0,
+                .verdict = OS64_PAGE_NAVIGATE,
+                .url = "http://host/go?q=x"});
+    run((PCase){.steps = "F1",
+                .name = "S: form.submit() is not validated",
+                .html = "<form action=/go><input name=q required></form>",
+                .form = true,
+                .index = 0,
+                .verdict = OS64_PAGE_NAVIGATE,
+                .url = "http://host/go?q="});
+    run((PCase){.steps = "F1",
+                .name = "S: a form that is not there sends nothing",
+                .html = "<form action=/go><input name=q></form>",
+                .form = true,
+                .index = 3,
+                .verdict = OS64_PAGE_NOTHING,
+                .check_reason = true,
+                .reason = OS64_PAGE_REASON_NO_FORM});
+}
+
 int main(int argc, char **argv)
 {
     if (argc > 1 && strcmp(argv[1], "--rebuild-live-state-free") == 0) {
@@ -483,6 +523,7 @@ int main(int argc, char **argv)
         boundary_cases();
         navigation_cases();
         review3_cases();
+        script_submit_cases();
     }
     if (sweep)
         allocation_sweep();

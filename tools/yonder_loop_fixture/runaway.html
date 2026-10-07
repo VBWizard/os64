@@ -1,0 +1,7 @@
+<!doctype html>
+<title>Runaway</title>
+<h1 id="h">before the runaway script</h1>
+<p><a href="order.html">This link still works afterwards.</a></p>
+<script>while (true) {}</script>
+<script>document.getElementById('h').textContent = 'must not run';</script>
+<p>The status line should say the script was stopped and the page runs without script.</p>

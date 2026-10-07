@@ -586,6 +586,10 @@ typedef enum {
     // Follow the refresh this page declares; `index` is not read. NOTHING
     // with OS64_PAGE_REASON_NO_REFRESH for a page that declares none.
     OS64_PAGE_ACTIVATE_REFRESH,
+    // Send form `index` itself, as a script's form.submit() does: no
+    // submitter, so no button's overrides and no button's name in the data,
+    // and no constraint validation (HTML's "submitted from submit() method").
+    OS64_PAGE_ACTIVATE_FORM,
 } os64_page_activation_t;
 
 typedef struct {
