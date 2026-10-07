@@ -184,9 +184,24 @@ make -C kernel test-elf
   - `paging_walk_paging_table()`: Walk page tables to resolve virtual address
 
 **Physical Memory Allocator (`kernel/src/memory/allocator.c`):**
-- Bitmap-based allocator
-- Tracks free/used physical pages
-- Uses Limine memory map to determine usable memory
+- **Two owners of physical memory** (docs/design/pending/FRAMES.md is the
+  design). The FRAME TABLE (`frames.c`) gives every 4 KiB frame an 8-byte
+  descriptor: boundary-tagged runs on exact-length lists (1-64 frames) and
+  TLSF bins above, so allocating, freeing and "is this frame live?" never
+  search, and capacity is RAM. Page-aligned requests and anything a page or
+  larger are frame runs. The LEDGER (`kMemoryStatus`) carves the kernel's
+  small unaligned objects by exact-fit-first inside 64 KiB chunks borrowed
+  from the frame table; its 100,000-row wall is that population's own limit.
+- Seeded from the Limine memory map in `allocator_init`, which places the
+  table in the first usable region with room for it.
+- **`/sys/memory/frames` and `/sys/memory/ledger` report it all live** — the
+  books (with a balanced/DRIFT verdict), frames by owner, runs by length,
+  the ledger's rows against its wall, and each lock's waits and holds, since
+  boot and since the file was last read. Read them FIRST when memory or a
+  stall is the question; `cat` before and after a workload measures it.
+- `frames.c` has no kernel headers: `tools/test_frames_host.sh` runs it
+  under ASan/UBSan against a reference model, and
+  `tools/test_frames_mutants.py` proves the suite catches each rule broken.
 
 **Heap Allocator (`kernel/src/memory/kmalloc.c`):**
 - Kernel-space malloc/free
@@ -1310,9 +1325,12 @@ page tables exactly while the allocator considers it allocated.**
   the HHDM page-faults with a "use-after-free or wild pointer?" panic. This
   is a designed tripwire (DEBUG_PAGEALLOC-style), chosen over an eager
   Linux-style full direct map.
-- Mechanics: the allocator's single alloc/free choke points call
-  `paging_hhdm_map_range()` / `paging_hhdm_unmap_range()` (see paging.h for
-  the boundary-page rules); frees broadcast a TLB-shootdown IPI. Early-boot
+- Mechanics: a frame run is mapped (`paging_hhdm_map_range()`) before the
+  frame lock is released and unmapped (`paging_hhdm_unmap_range()`) before
+  the run is freed; inside a ledger chunk the ledger maps each extent it
+  carves and unmaps what its frees fully contain (see paging.h for the
+  boundary-page rules), pinning the chunk's frames in between so liveness
+  stays a one-load answer. Frees broadcast a TLB-shootdown IPI. Early-boot
   allocations are retro-mapped when `init_os64_paging_tables()` builds the
   real tables. MMIO/reserved regions still require explicit mappings.
 
@@ -1334,8 +1352,9 @@ page tables exactly while the allocator considers it allocated.**
 - Physical to HHDM: `phys | kHHDMOffset` (valid iff the memory is currently allocated)
 - HHDM to Physical: `hhdm - kHHDMOffset`
 
-**Locking**: all allocator entry points take an interrupts-disabled spinlock
-(`kMemoryStatusLock`) — allocations happen concurrently from page-fault
+**Locking**: two interrupts-disabled spinlocks, `kFrameLock` (the frame
+table) and `kMemoryStatusLock` (the ledger); when both are held, the
+ledger's is taken first — allocations happen concurrently from page-fault
 handlers on multiple cores. Never call allocate/free while holding another
 spinlock that a fault path might also take.
 

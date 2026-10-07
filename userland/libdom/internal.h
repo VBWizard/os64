@@ -41,6 +41,9 @@ struct os64_dom {
     os64_dom_options_t options;
     size_t bytes, retained;
     bool closed;
+    os64_dom_geometry_provider_t geometry;
+    void *geometry_opaque;
+    os64_dom_geometry_stats_t geometry_stats;
     JSClassID anchor_class, node_class, collection_class;
     DValue *values, *anchor, *index_guard;
     DValue *prototypes[D_PROTO_COUNT];
@@ -66,6 +69,7 @@ int d_accessor(os64_dom_t *dom, JSContext *ctx, JSValueConst target,
 JSValue d_wrap(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node);
 const os64_html_node_t *d_node(os64_dom_t *dom, JSContext *ctx, JSValueConst value);
 DValue *d_find(os64_dom_t *dom, const os64_html_node_t *node);
+int d_geometry_install(os64_dom_t *dom, JSContext *ctx);
 int d_node_install(os64_dom_t *dom, JSContext *ctx);
 int d_collection_install(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype);
 void d_query_free(os64_dom_t *dom, DQuery *query);

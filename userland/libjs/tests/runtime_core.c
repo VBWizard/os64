@@ -6,6 +6,33 @@ static void check(int passed, const char *name)
     if (!passed) { failures++; os64_printf("FAIL: %s\n", name); }
 }
 #include "cases.h"
+static bool teardown_guest_heap(uint64_t *bytes, uint64_t *blocks)
+{
+    char text[4096];
+    int64_t handle = os64_open("/proc/self/heap", "r");
+    if (handle < 0) return false;
+    int64_t length = os64_read((int32_t)handle, text, sizeof(text) - 1);
+    int64_t closed = os64_close((int32_t)handle);
+    if (length <= 0 || closed != 0) return false;
+    text[length] = 0;
+    const char *names[] = {"live\t", "blocks_live\t"};
+    uint64_t *values[] = {bytes, blocks};
+    for (unsigned i = 0; i < 2; i++) {
+        const char *value = fixture_contains(text, names[i]);
+        if (value == NULL || (value != text && value[-1] != '\n')) return false;
+        value += os64_strlen(names[i]);
+        if (*value < '0' || *value > '9') return false;
+        *values[i] = 0;
+        while (*value >= '0' && *value <= '9') {
+            if (*values[i] > (UINT64_MAX - (unsigned)(*value - '0')) / 10) return false;
+            *values[i] = *values[i] * 10 + (unsigned)(*value++ - '0');
+        }
+        if (*value != '\n') return false;
+    }
+    return true;
+}
+#define JS_TEARDOWN_GUEST
+#include "teardown.h"
 
 static void file_helpers(int32_t output_handle)
 {
@@ -107,7 +134,7 @@ int main(int argc, char **argv)
         }
         return 1;
     }
-    runtime_cases(); guest_helpers();
+    teardown_cases(); runtime_cases(); guest_helpers();
     os64_js_config_t config = fixture_config();
     config.limits.execution_ms = 10;
     os64_js_runtime_t *runtime = create_fixture(&config);

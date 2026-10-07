@@ -606,6 +606,10 @@ keeps `HttpOnly`; nothing reads it for a script yet), storage,
 
 ## Geometry
 
+As-built provider interfaces, browser stack profile and validation evidence:
+[DOM_D10.md](DOM_D10.md). D7 must join the loading-document provider to its
+dispatch path.
+
 `offsetWidth`, `getBoundingClientRect` and their kind need a layout that
 matches the tree. When the version has moved, the read rebuilds what is
 stale and lays the page out, then answers. The page being loaded can be

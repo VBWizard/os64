@@ -1,0 +1,44 @@
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -2402,7 +2402,7 @@
+         rt->rt_info = s;
+ }
+
+-void JS_FreeRuntime(JSRuntime *rt)
++static int JS_FreeRuntimeInternal(JSRuntime *rt, BOOL report)
+ {
+     struct list_head *el, *el1;
+     int i;
+@@ -2461,6 +2461,10 @@
+             printf("Secondary object leaks: %d\n", count);
+     }
+ #endif
++    /* At this gate finalizers have run. A reporting host must abandon engine
++       entry and reclaim its allocator ledger rather than continue cleanup. */
++    if (report && (!list_empty(&rt->gc_obj_list) || !list_empty(&rt->weakref_list)))
++        return 1;
+     assert(list_empty(&rt->gc_obj_list));
+     assert(list_empty(&rt->weakref_list));
+
+@@ -2588,7 +2592,20 @@
+         JSMallocState ms = rt->malloc_ctx.malloc_state;
+         rt->malloc_ctx.mf.js_free(&ms, rt);
+     }
+-}
++    return 0;
++}
++
++void JS_FreeRuntime(JSRuntime *rt)
++{
++    JS_FreeRuntimeInternal(rt, FALSE);
++}
++
++#ifdef OS64_JS_TARGET
++int jsport_free_runtime_report(JSRuntime *rt)
++{
++    return JS_FreeRuntimeInternal(rt, TRUE);
++}
++#endif
+
+ JSContext *JS_NewContextRaw(JSRuntime *rt)
+ {

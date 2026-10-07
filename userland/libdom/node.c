@@ -477,5 +477,5 @@ int d_node_install(os64_dom_t *dom, JSContext *ctx)
             if ((method_prototypes(methods[i].magic) & (1u << kind)) != 0 &&
                 d_method(dom, ctx, prototype, methods[i].name, method, methods[i].argc, methods[i].magic) < 0) return -1;
     }
-    return 0;
+    return d_geometry_install(dom, ctx);
 }

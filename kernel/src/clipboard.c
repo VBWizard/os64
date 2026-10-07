@@ -9,8 +9,8 @@
 //
 // LOCK DISCIPLINE, stated once because it is the only subtle thing here:
 // allocate and copy OUTSIDE the lock, swap pointers UNDER it, free the loser
-// OUTSIDE it. kmalloc takes the allocator's own spinlock (kMemoryStatusLock,
-// which page-fault paths also take), and MEMORY.md's rule is never to call
+// OUTSIDE it. kmalloc takes the allocator's locks (kFrameLock,
+// kMemoryStatusLock; page-fault paths take them too), and MEMORY.md's rule is never to call
 // allocate/free while holding another lock a fault path might want. Since the
 // pending entry belongs to exactly one handle until the instant it is
 // published, every byte of copying happens with no lock held at all — the

@@ -41,6 +41,7 @@ independent review. "In progress" records an authorized slice being implemented.
 | D5 DOM binding/first page fixture | **D5a and D5b merged** | [D5a PR #214](https://github.com/VBWizard/os64/pull/214), merge `72b2e710`, supplies libdom and state-aware mutation/clone transactions; evidence in DOM.md § D5a, as built. [D5b PR #216](https://github.com/VBWizard/os64/pull/216), merge `7acce890`, records the default-off settings switch and host/guest mutation, widget and queued-navigation proof; D4 is not a prerequisite. |
 | D6 detached-subtree reclamation | **Implemented; review pending** | Counted holds, parser-reference protection and paired binding/state/model/browser ownership; 216,000 fragment refresh cycles stay flat under 64 MiB. [PR #217](https://github.com/VBWizard/os64/pull/217) now targets userland after D5b merged; five Fable findings are addressed and re-review is required. Evidence and retained weak-wrapper/collector debt in DOM.md § D6, as built. |
 | D7 browser event loop | **Pending** | Tasks/checkpoints, timers/events, script order and J4 evidence. Resolve the execution-time default/range and consider a script-timeout Settings control; D5b's one-second fixture deadline does not settle ordinary-browsing policy (DOM.md). |
+| D8 reporting runtime destroy | **Implemented; approved by Fable** | `codex/dom-d8`, based on `29641e20`: opt-in allocator-ledger reclamation, browser logging/counting, host and guest repeated-leak proof; [DOM_D8.md](DOM_D8.md). D7 integration requires a joined ownership audit and validation. |
 
 The DOM slice definitions and detailed acceptance cases belong to
 [DOM.md](DOM.md); this table tracks their place in the overall campaign.
@@ -553,3 +554,13 @@ post-stop ext2/home filesystem checks pass; both owned final VMs are stopped.
 Exact workloads, tables, hashes and evidence paths are in libjs/VALIDATION.md.
 The suite does not claim a full interrupt-coverage audit, arbitrary native-
 callback safety, browser layout headroom or a new P5 run.
+
+## D10 implementation evidence
+
+Synchronous HTML geometry is implemented independently from D7 and D8 on
+`codex/dom-d10`, based on `userland` `29641e20`. The provider interface,
+forced-layout budget checks, status telemetry and combined JavaScript/native
+stack evidence are recorded in [DOM_D10.md](DOM_D10.md), implementing
+[DOM.md § Geometry](DOM.md#geometry). D7's loading-document provider and joined
+dispatch validation remain integration work. This adds no dependency on D8's
+teardown policy.
