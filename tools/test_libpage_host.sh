@@ -31,7 +31,9 @@ cc -std=c11 -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined \
    -o "$work/libpage_driver"
 
 if [ "$#" -eq 0 ]; then set -- --sweep; fi
-"$work/libpage_driver" "$@"
+# The real pages os64_page_sheets_in is compared with the model on.
+ls tools/html_corpus/*.html > "$work/corpus.list"
+LIBPAGE_CORPUS="$work/corpus.list" "$work/libpage_driver" "$@"
 
 # A live model borrows explicit state, so freeing that state must stop with
 # the PAGE badge rather than leave the model pointing at freed storage.
