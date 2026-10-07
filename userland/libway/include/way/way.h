@@ -158,6 +158,68 @@ way_leg_t way_leg(const way_session_t *session);
 way_leg_t way_leg_as(const way_session_t *session, const char *agent);
 
 // ── The I/O half ────────────────────────────────────────────────────────
+//
+// A LOAD IN PIECES (docs/design/pending/DOM_D4.md). way_load is the four
+// pieces below in a row, on one thread, which is how wend loads. yonder
+// runs the first two on a worker and the last two on its window: the
+// parser lives on the thread that will run the page's scripts (DOM.md
+// ruling 5), and the worker carries only bytes. Each judgement is written
+// once, here, so the two faces cannot drift.
+
+// What a body is, judged from its head. A head that is neither is not a
+// page: way_open says so and refuses.
+typedef enum { WAY_BODY_HTML = 0, WAY_BODY_TEXT } way_body_t;
+
+// The head, COPIED out of the fetch: os64_fetch_head_t is storage inside
+// the fetch and dies with it, and the note is written from the head after
+// the fetch is closed, on another thread.
+typedef struct {
+    int32_t status;
+    char reason[HTTP_REASON_MAX];
+    char content_type[HTTP_TYPE_MAX];
+    char charset[HTTP_CHARSET_MAX];
+    char url[OS64_FETCH_URL_MAX];       // where the body came from, after redirects
+    bool posted;                        // the FINAL method was POST
+    way_body_t body;
+} way_head_t;
+
+// A fetch open with its head read and judged a page. The fetch is the
+// caller's to read (way_read) and to close (os64_fetch_close).
+typedef struct {
+    os64_fetch_t *fetch;
+    way_head_t head;
+    char asked[OS64_FETCH_URL_MAX];     // the address asked for, which the sentences name
+    uint64_t shown;                     // bytes read when the sentence was last said
+} way_opening_t;
+
+// Opens `url` with the leg's own options (agent, accept, the parser's byte
+// cap, the downgrade question, cookies and Referer, a POST's body when
+// `request` is a form), reads the head and judges it. True leaves the fetch
+// open in `out`. False closes it: a head that never came (`why` says what
+// stopped it), or a reply that is not a page, with the sentence saying what
+// it is and how to keep it in `leg->status`.
+bool way_open(way_leg_t *leg, const char *url, const os64_page_request_t *request,
+              way_opening_t *out, os64_fetch_status_t *why);
+
+// One read of the body, os64_fetch_read's answer, and the "reading N KB"
+// sentence through the leg's face every 64 KB.
+int64_t way_read(way_leg_t *leg, way_opening_t *opening, void *buf, size_t cap);
+
+// Whether a text/plain body is UTF-8: by its label, else by JSON's own
+// rule, else by a byte order mark in its first bytes.
+bool way_text_utf8(const way_head_t *head, const void *first, size_t n);
+// Whether that answer waits on the body: nothing in the head decides, so
+// the first three bytes do, and a reader must have them whole before asking.
+bool way_text_sniffs(const way_head_t *head);
+
+// The page's address, whether it was posted, and its standing line: the
+// status and reason, then a sentence for every way it is incomplete — our
+// memory (`short_of_memory`), the wire (`fetch` and its `reason` sentence,
+// os64_fetch_reason's, read only when `fetch` is not OK; a NULL there says
+// only that the fetch did not finish), and the parser (`page->doc->refusal`,
+// when there is a doc).
+void way_note(way_page_t *page, const way_head_t *head, bool short_of_memory,
+              os64_fetch_status_t fetch, const char *reason);
 
 // Fetch and parse one address into `out`, which the caller zeroed.
 // `request` is the form a page is sending, or NULL for a GET of `url`: a

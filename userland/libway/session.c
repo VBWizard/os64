@@ -271,6 +271,91 @@ const char *way_delayed_refresh(const way_page_t *page)
     return refresh->url.url;
 }
 
+// ── A load's two pure judgements ────────────────────────────────────────
+//
+// way_load makes these inline; yonder's window makes them on its own once
+// the body has crossed from the worker (DOM_D4.md). They live here, with
+// no network under them, so tools/test_way_host.sh holds each sentence.
+
+static bool ends_with(const char *s, const char *tail)
+{
+    size_t n = os64_strlen(s), t = os64_strlen(tail);
+    return n >= t && os64_streq(s + n - t, tail);
+}
+
+bool way_type_is_json(const char *type)
+{
+    return os64_streq(type, "application/json") || ends_with(type, "+json");
+}
+
+// What the reply's own charset label says about a text/plain body. UTF-8 is
+// the modern answer, and everything else is read as windows-1252 — which is
+// what libhtml does with the markup half of the same web, so a smart quote
+// cannot draw as `"` in a page and as `?` in the text file beside it. The
+// label is asked of libhtml's own table, so every spelling of UTF-8 the
+// markup half knows (`unicode-1-1-utf-8` among them) is known here too. A
+// server that says nothing about a .txt file written in 1994 is not talking
+// about UTF-8. A label naming an encoding in neither family is booked in
+// BROWSER.md; it reads as windows-1252 rather than as a refusal.
+//
+// BUT A FILE MAY SAY IT ITSELF. The three bytes `EF BB BF` are a UTF-8 byte
+// order mark, put there to be read by whatever opens the file, and a server
+// that mentioned no charset has not contradicted them. Taken as
+// windows-1252 they draw as `ï»¿` and every accented character after them
+// breaks into pieces.
+static bool charset_is_utf8(const char *charset)
+{
+    const char *named = os64_html_encoding_for_label(charset, os64_strlen(charset));
+    return named != NULL && os64_streq(named, "utf-8");
+}
+
+static bool bytes_begin_utf8(const uint8_t *text, size_t len)
+{
+    return text && len >= 3 && text[0] == 0xEF && text[1] == 0xBB && text[2] == 0xBF;
+}
+
+bool way_text_utf8(const way_head_t *head, const void *first, size_t n)
+{
+    if (head->charset[0] != '\0')
+        return charset_is_utf8(head->charset);
+    return way_type_is_json(head->content_type) || bytes_begin_utf8(first, n);
+}
+
+bool way_text_sniffs(const way_head_t *head)
+{
+    return head->charset[0] == '\0' && !way_type_is_json(head->content_type);
+}
+
+void way_note(way_page_t *out, const way_head_t *head, bool short_of_memory,
+              os64_fetch_status_t fetch, const char *reason)
+{
+    os64_strcopy(out->url, sizeof(out->url), head->url);
+    out->posted = head->posted;
+
+    // EVERY WAY THE WIRE OR THE PARSE LEFT A PAGE INCOMPLETE GETS A
+    // SENTENCE, each of them and not only the first, because half a page
+    // that says so is worth reading and half a page that pretends to be
+    // whole is not. (A model libpage could not finish costs links and boxes,
+    // which are the face's to offer, so the face says that one.)
+    char trouble[WAY_SENTENCE_MAX];
+    size_t said = 0;
+    trouble[0] = '\0';
+    if (short_of_memory && said < sizeof(trouble))
+        said += (size_t)os64_snprintf(trouble + said, sizeof(trouble) - said,
+                                      " - this machine ran out of memory partway, so the page"
+                                      " stops where it does");
+    if (fetch != OS64_FETCH_OK && said < sizeof(trouble))
+        said += (size_t)os64_snprintf(trouble + said, sizeof(trouble) - said, " - %s",
+                                      reason != NULL && reason[0] != '\0'
+                                          ? reason : "the fetch did not finish");
+    if (out->doc && out->doc->refusal && said < sizeof(trouble))
+        said += (size_t)os64_snprintf(trouble + said, sizeof(trouble) - said,
+                                      " - the page is bigger than this browser will parse (%s)",
+                                      os64_html_status_name(out->doc->refusal));
+    os64_snprintf(out->note, sizeof(out->note), "%ld%s%s%s", (long)head->status,
+                  head->reason[0] ? " " : "", head->reason, trouble);
+}
+
 // ── What a person types ─────────────────────────────────────────────────
 
 // A bare `host/path` means http, the way a bare host means gopher to the

@@ -1,4 +1,4 @@
-// trip.c — a navigation, run on a worker (trip.h).
+// trip.c — a navigation's fetch, run on a worker (trip.h).
 
 #include "trip.h"
 #include "os64/gui.h"
@@ -7,8 +7,8 @@
 
 // What the leg's face needs, alive for the run: the mailbox, and the pool's
 // own cancellation predicate — the only one, so that Stop, a new
-// navigation, the close box and the pool's own failures all reach a fetch
-// and a question alike.
+// navigation, the close box and the pool's own failures all reach a fetch,
+// a question and a post alike.
 typedef struct {
     yonder_trip_t *trip;
     bool (*cancelled)(void *ctx);
@@ -21,11 +21,16 @@ static bool run_cancelled(void *ctx)
     return r->cancelled(r->ctx);
 }
 
+static void ring(const yonder_trip_t *trip)
+{
+    (void)os64_gui_event_ring(trip->window, trip->mail_bell);
+}
+
 static void run_progress(void *ctx, const char *sentence)
 {
     Run *r = ctx;
     yonder_mail_progress(r->trip->mail, sentence);
-    (void)os64_gui_event_ring(r->trip->window, r->trip->mail_bell);
+    ring(r->trip);
 }
 
 // Asked mid-fetch, on this worker, by libfetch's downgrade hop: the window
@@ -36,37 +41,59 @@ static bool run_confirm(void *ctx, const char *question, bool security, const ch
     (void)refused;              // the fetch's own reason says why it stopped
     Run *r = ctx;
     uint32_t number = yonder_mail_ask(r->trip->mail, question);
-    (void)os64_gui_event_ring(r->trip->window, r->trip->mail_bell);
+    ring(r->trip);
     return yonder_mail_wait(r->trip->mail, number, r->cancelled, r->ctx);
 }
 
 int64_t yonder_trip_run(void *job, bool (*cancelled)(void *ctx), void *ctx, void **out)
 {
+    (void)out;                  // no product: the verdict rides the mailbox
     yonder_trip_t *trip = job;
-    yonder_arrival_t *a = os64_calloc(1, sizeof(*a));
-    if (a == NULL)
-        return -1;
     Run r = {trip, cancelled, ctx};
     // Not way_leg, which reads the session's agent: Settings may be writing
     // it on the window's thread while this runs.
     way_leg_t leg = way_leg_as(trip->session, trip->agent);
-    leg.scripting = trip->scripting;
     os64_strcopy(leg.referrer, sizeof(leg.referrer), trip->referrer);
     leg.face = (way_face_t){&r, run_confirm, run_cancelled, run_progress};
-    a->loaded = way_load(&leg, trip->url, trip->has_request ? &trip->request : NULL, &a->page,
-                         &a->why);
-    os64_strcopy(a->status, sizeof(a->status), leg.status);
-    *out = a;
-    return a->loaded ? 1 : 0;
+
+    yonder_verdict_t verdict;
+    os64_memset(&verdict, 0, sizeof(verdict));
+    way_opening_t o;
+    if (!way_open(&leg, trip->url, trip->has_request ? &trip->request : NULL, &o, &verdict.fetch)) {
+        // No page: libway's sentence says what there was instead.
+        os64_strcopy(verdict.reason, sizeof(verdict.reason), leg.status);
+        yonder_mail_post_verdict(trip->mail, &verdict);
+        ring(trip);
+        return 0;
+    }
+    yonder_mail_post_head(trip->mail, &o.head);
+    ring(trip);
+    // The body, a chunk at a time. A post that cannot find room waits, and
+    // while it waits nothing is read from the socket: a window that parses
+    // slower than the wire delivers slows the wire.
+    uint8_t buf[YONDER_STREAM_CHUNK];
+    for (;;) {
+        int64_t n = way_read(&leg, &o, buf, sizeof(buf));
+        if (n <= 0)
+            break;
+        if (!yonder_mail_post(trip->mail, buf, (size_t)n, cancelled, ctx)) {
+            os64_fetch_close(o.fetch);
+            return -1;
+        }
+        ring(trip);
+    }
+    verdict.page = true;
+    verdict.fetch = os64_fetch_status(o.fetch);
+    os64_strcopy(verdict.reason, sizeof(verdict.reason), os64_fetch_reason(o.fetch));
+    os64_fetch_close(o.fetch);
+    yonder_mail_post_verdict(trip->mail, &verdict);
+    ring(trip);
+    return 1;
 }
 
 void yonder_trip_release(void *job, void *product)
 {
-    yonder_arrival_t *a = product;
-    if (a != NULL) {
-        way_page_clear(&a->page);
-        os64_free(a);
-    }
+    (void)product;
     yonder_trip_t *trip = job;
     if (trip != NULL) {
         os64_page_request_free(&trip->request);

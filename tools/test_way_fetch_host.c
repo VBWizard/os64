@@ -597,6 +597,152 @@ static void scripted_document_load(void)
     }
 }
 
+// The pieces way_load is made of, driven by hand the way yonder's worker
+// and window drive them (DOM_D4.md), must make the page way_load makes
+// from the same bytes: the same tree, the same note, the same text, the
+// same sentence when there is no page. The body is read in 1,000-byte
+// pieces here where way_load reads 8 KiB, since the parser's contract is
+// that the cut does not show.
+static size_t spelled(const os64_html_document_t *doc, char *out, size_t cap)
+{
+    return doc != NULL ? os64_html_serialize(doc->document, true, false, out, cap) : 0;
+}
+
+static bool by_hand(const char *url, bool scripting, way_page_t *page, os64_fetch_status_t *why,
+                    char *status, size_t status_cap)
+{
+    way_session_t session = {.name="fixture", .agent="fixture", .accept="text/html"};
+    way_leg_t leg = way_leg(&session);
+    leg.scripting = scripting;
+    way_opening_t o;
+    bool opened = way_open(&leg, url, NULL, &o, why);
+    snprintf(status, status_cap, "%s", leg.status);
+    if (!opened)
+        return false;
+    char buf[1000];
+    if (o.head.body == WAY_BODY_HTML) {
+        os64_html_options_t opt = os64_html_options_default();
+        opt.charset = o.head.charset[0] ? o.head.charset : NULL;
+        opt.scripting = scripting;
+        os64_html_parser_t *parser = os64_html_parser_new(&opt);
+        for (;;) {
+            int64_t n = way_read(&leg, &o, buf, sizeof(buf));
+            if (n <= 0)
+                break;
+            int64_t r = os64_html_parser_feed(parser, buf, (size_t)n);
+            while (r == OS64_HTML_SCRIPT)
+                r = os64_html_parser_resume(parser);
+            if (r != OS64_HTML_OK)
+                break;
+        }
+        page->doc = os64_html_parser_finish(parser);
+        page->model = os64_page_build(page->doc, o.head.url, NULL, NULL);
+    } else {
+        size_t cap = 1 << 20;
+        page->text = malloc(cap);
+        for (;;) {
+            int64_t n = way_read(&leg, &o, page->text + page->textlen, cap - page->textlen);
+            if (n <= 0)
+                break;
+            page->textlen += (size_t)n;
+        }
+        page->text_utf8 = way_text_utf8(&o.head, page->text, page->textlen);
+    }
+    *why = os64_fetch_status(o.fetch);
+    way_note(page, &o.head, false, *why, os64_fetch_reason(o.fetch));
+    os64_fetch_close(o.fetch);
+    snprintf(status, status_cap, "%s", leg.status);
+    return true;
+}
+
+static void pieces_make_the_same_page(void)
+{
+    static const char *const replies[] = {
+        "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 114\r\n\r\n"
+        "<!doctype html><title>t</title><noscript><input id=f></noscript>"
+        "<script>var a=1;</script><p>one<a href=/x>x</a> two</p>",
+        "HTTP/1.1 404 Nope\r\nContent-Type: text/plain\r\nContent-Length: 11\r\n\r\n"
+        "\xEF\xBB\xBF" "found not",
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 7\r\n\r\n"
+        "{\"a\":1}",
+        "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: 3\r\n\r\nPNG",
+        "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 500\r\n\r\n<p>cut",
+        NULL,                           // a body past 64 KB, made below
+    };
+    static char big[70000 + 128];
+    {
+        int header = snprintf(big, sizeof(big), "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n"
+                              "Content-Length: 70000\r\n\r\n<p>");
+        memset(big + header, 'y', 70000 - 3);
+        big[header + 70000 - 3] = '\0';
+    }
+    for (size_t r = 0; r < sizeof(replies) / sizeof(replies[0]); r++) {
+        const char *reply = replies[r] != NULL ? replies[r] : big;
+        for (int scripting = 0; scripting < 2; scripting++) {
+            fresh();
+            script("pieces.test", reply);
+            script("pieces.test", reply);
+            way_session_t session = {.name="fixture", .agent="fixture", .accept="text/html"};
+            way_leg_t leg = way_leg(&session);
+            leg.scripting = scripting != 0;
+            way_page_t whole = {0}, hand = {0};
+            os64_fetch_status_t why_whole, why_hand;
+            char status[WAY_SENTENCE_MAX];
+            bool loaded = way_load(&leg, "http://pieces.test/p", NULL, &whole, &why_whole);
+            bool loaded_hand = by_hand("http://pieces.test/p", scripting != 0, &hand, &why_hand,
+                                       status, sizeof(status));
+            char name[96];
+            snprintf(name, sizeof(name), "pieces: reply %zu, scripting %d", r, scripting);
+            expect(name, loaded == loaded_hand && why_whole == why_hand, "loaded or why differ");
+            // Both paths share the judgement, so the harness also says what
+            // the judgement must be: text and JSON are pages, a PNG is not,
+            // and a page's address is the one the head named.
+            expect(name, loaded == (r != 3), "page or not a page");
+            if (loaded)
+                expect(name, strcmp(hand.url, "http://pieces.test/p") == 0, hand.url);
+            if (replies[r] != NULL) {
+                expect(name, strcmp(leg.status, status) == 0, status);
+            } else {
+                // Past 64 KB both say how far they have got; the count is the
+                // fetch's at the read that crossed, which depends on how the
+                // transport cut the body, so only the sentence is held.
+                expect(name, strncmp(leg.status, " reading 6", 10) == 0 &&
+                       strstr(leg.status, " KB of http://pieces.test/p") != NULL, leg.status);
+                expect(name, strncmp(status, " reading 6", 10) == 0, status);
+            }
+            if (loaded && loaded_hand) {
+                char a[4096], b[4096];
+                size_t na = spelled(whole.doc, a, sizeof(a)), nb = spelled(hand.doc, b, sizeof(b));
+                expect(name, na == nb && (na == 0 || strcmp(a, b) == 0), "trees differ");
+                expect(name, strcmp(whole.note, hand.note) == 0, hand.note);
+                expect(name, strcmp(whole.url, hand.url) == 0 && whole.posted == hand.posted,
+                       "address or method differ");
+                expect(name, whole.textlen == hand.textlen && whole.text_utf8 == hand.text_utf8 &&
+                       (whole.textlen == 0 || memcmp(whole.text, hand.text, whole.textlen) == 0),
+                       "text differs");
+                expect(name, (whole.model == NULL) == (hand.model == NULL) &&
+                       (whole.model == NULL || os64_page_nlinks(whole.model) == os64_page_nlinks(hand.model)),
+                       "models differ");
+            }
+            way_page_clear(&whole);
+            way_page_clear(&hand);
+        }
+    }
+    // A head that never comes: the same why and the same sentence.
+    fresh();
+    script("pieces.test", NULL);
+    script("pieces.test", NULL);
+    way_session_t session = {.name="fixture", .agent="fixture", .accept="text/html"};
+    way_leg_t leg = way_leg(&session);
+    way_page_t whole = {0}, hand = {0};
+    os64_fetch_status_t why_whole, why_hand;
+    char status[WAY_SENTENCE_MAX];
+    bool loaded = way_load(&leg, "http://pieces.test/p", NULL, &whole, &why_whole);
+    bool loaded_hand = by_hand("http://pieces.test/p", false, &hand, &why_hand, status, sizeof(status));
+    expect("pieces: a refused dial", !loaded && !loaded_hand && why_whole == why_hand &&
+           why_whole == OS64_FETCH_DIAL_FAILED && strcmp(leg.status, status) == 0, status);
+}
+
 int main(void)
 {
     setvbuf(stdout, NULL, _IONBF, 0);
@@ -607,6 +753,7 @@ int main(void)
     s_cache = way_cache_open(s_dir, 1 << 24);
     s_jar = way_jar_new();
     scripted_document_load();
+    pieces_make_the_same_page();
     options_left_alone();
     validator_identity();
     restrictive_304();

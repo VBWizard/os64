@@ -93,6 +93,7 @@ Routes, and what each is FOR:
     /junk           not HTTP at all                        a bad header line
     /reason-latin1  404 with a Latin-1 reason phrase       high bytes are glyphs
     /stall          half a head, then 45s of silence       the idle deadline
+    /stall-body     a whole head, half the body, silence   the window stays live (DOM_D4.md)
 
 NOTE ON /redirect-https: it REDIRECTS to an https address, it does not fetch
 one. The first name for it was `/tohttps`, which read to Chris as "the server
@@ -151,6 +152,9 @@ def big_bytes(size=1024 * 1024, seed=0x05064A17):
 
 
 BIG = big_bytes()
+STALL_BODY = (b"<!doctype html><title>Stalled</title><h1>The first half</h1>\n"
+              + b"<p>This paragraph arrived before the server went quiet.</p>\n" * 400
+              + b"<h1 id=tail>The second half never comes</h1>\n")
 CHUNKED = BIG[:200000]
 INDEX = (__doc__.strip() + "\n").encode("utf-8")
 
@@ -546,6 +550,19 @@ class Handler(socketserver.StreamRequestHandler):
             # deadline. The fetch must FAIL on its own, saying the server
             # went silent, not sit until someone presses Ctrl+C.
             self.send(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n")
+            time.sleep(45)
+        elif route == "/stall-body":
+            # A whole head and half of a declared HTML body, then silence
+            # for longer than the idle deadline. yonder parses on its
+            # window's thread as the body arrives (DOM_D4.md), so this is
+            # the body that proves the window stays live while a page is
+            # stuck mid-way: it must scroll and paint the page it was on,
+            # Stop must end the load at once, and left alone the deadline
+            # must end it with the page as far as it came and the sentence
+            # saying the server went silent.
+            half = STALL_BODY[:len(STALL_BODY) // 2]
+            self.send(head(200, "OK", [("Content-Type", "text/html"),
+                                       ("Content-Length", len(STALL_BODY))]) + half)
             time.sleep(45)
         else:
             body = f"no such thing here: {route}\n".encode("latin-1")

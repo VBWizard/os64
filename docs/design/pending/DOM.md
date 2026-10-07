@@ -1,8 +1,8 @@
 # DOM.md — one tree, and a script that may change it
 
 *Written 2026-10-01 by Fable. This is packet D0 of
-[JAVASCRIPT_TASKS.md](JAVASCRIPT_TASKS.md): the design J3 waits on. D1, D2a, D2b, D3, D5a and D5b are merged (§ Slices). D6 is implemented and awaiting re-review.
-D4 and D7 remain proposals. Read
+[JAVASCRIPT_TASKS.md](JAVASCRIPT_TASKS.md): the design J3 waits on. D1, D2a, D2b, D3, D5a, D5b and D6 are merged (§ Slices). D4 is built and in review;
+D7 remains a proposal. Read
 against the tree at `b55c3770`, the vendored QuickJS 2026-06-04 source
 (`userland/libjs/upstream/`) and the R0 runtime contract
 (`userland/libjs/CONTRACT.md`). Names of functions that do not exist yet
@@ -716,7 +716,7 @@ builder decides, and the proof in this house's shape.
 | D2a | **Built.** Scripting-enabled parsing: stop and resume, the end of the input, abandon, the tree read and changed between calls | A parser abandoned at every stop leaves a document that walks and frees; the `#script-on` cases un-skipped and passing, whole and chunked; a stop at every script of each corpus page: § D2a, as built |
 | D2b | **Merged (#212, `dca2fe46`).** Fragment parsing and serialisation | All 192 fragment fixtures, contextual serialisation, transactional allocation/work cuts and bounded-buffer proof; § D2b, as built |
 | D3 | **Merged (#211, `3f5fa28a`).** `os64_page_rebuild`, pinned models, the `STALE` gate, shared node state and script property APIs | `tools/test_libpage_rebuild.inc`: detach/reinsert, never-inserted state, value modes, option identity, current-type sanitization, person/script origin, pins, transactional allocation sweeps and independent random walks; § D3, as built |
-| D4 | The stream: yonder parses on its own thread. No script | yonder's and libway's harnesses unchanged in result; the guest walk that proved Y3, its server log identical; the window live through a stalled body |
+| D4 | **Built; in review.** The stream: yonder parses on its own thread. No script | libway's harnesses unchanged in result and grown; the ring's two-thread harness; the window's slices in the harness that hosts yonder.c; the Y3 walk again; the window live through a stalled body: § D4, as built |
 | D5 | **D5a merged (#214, `72b2e710`); D5b merged (#216, `7acce890`).** The binding library and J3's fixture | § D5a, as built records library host/guest proof. § D5b, as built records J3 fixture proof: a script changes text and the page redraws; a held reference and a typed-in field survive an unrelated change; a navigation with a script queued tears down clean; the leak count is zero |
 | D6 | **Implemented; awaiting Fable re-review in PR #217 against userland.** Reclaiming unheld detached subtrees | 216,000 packed-fragment refresh cycles stay flat under 64 MiB; § D6, as built |
 | D7 | The loop: tasks, checkpoints, timers, events and their attributes, script order | J4's evidence, per contract |
@@ -1165,6 +1165,170 @@ D6 adds holds for persistent state keys, including option/default-cache
 records and pre-mutation reservations, and model node references, with paired
 releases. Pins protect snapshot bytes; they do not replace those holds.
 D3 adds neither DOM bindings nor reclamation.
+
+### D4, as built
+
+The design is [DOM_D4.md](DOM_D4.md); this records what was built against
+it, on `fable/dom-d4`, from `userland` at `29641e20`.
+
+**libway's loader is four pieces and itself.** `way_open` (the fetch
+opened with the leg's options, the head read, judged and COPIED into a
+`way_head_t`), `way_read` (one read and the "reading N KB" sentence, which
+had been written twice), `way_text_utf8` and `way_note` (the two pure
+judgements, now in `session.c` beside the other pure half so the pure
+harness holds every sentence). `way_load` is the pieces in a row and
+builds the page it built: the real-fetch harness's cases answer as they
+did, and a new case drives the pieces by hand in 1,000-byte reads against
+the same scripted replies and compares the result with `way_load`'s
+whole: the same serialised tree, the same note, the same text and
+encoding, the same sentence when there is no page, with scripting on and
+off and for a refused dial. Past 64 KB the progress sentence's number
+depends on how the transport cut the body, so only its shape is held.
+A fetch reason that nobody wrote (`way_note` given NULL) says "the fetch
+did not finish" rather than nothing.
+
+**The stream rides the mailbox** (`mail.h`): the head once, the body
+through a fixed ring of sixteen 16 KiB slots made with the mailbox, the
+verdict once. A post with no room waits in 100 ms steps on the answer pipe,
+asking the pool's predicate between them, and the window wakes it early
+with a note numbered 0 — written only while the worker's `waiting` flag is
+set under the lock, so notes are one per wait and a pipe write can never
+block the window. The two waits ignore each other's notes. Taking never
+blocks and never holds the lock across a parse; `yonder_mail_take` copies
+one chunk out and refuses a buffer smaller than a chunk rather than
+splitting one.
+
+**The worker fetches and nothing else** (`trip.c`): `way_open`, the head
+posted, `way_read` into a 16 KiB stack buffer and posted until the body
+ends, the verdict with the fetch's status and reason sentence; a head that
+never came or was not a page posts a verdict with no page and libway's
+sentence. The job has no product. The window's doorbell is rung after
+every post.
+
+**The window parses** (`yonder.c`, `g.stream`): the navigation's job is
+now only an id; the stream holds the window's mailbox reference, what
+arriving needs, the parser mode captured when the navigation started, the
+parser, and its OWN copy of a form being sent (`request_copy`), because
+arrival no longer coincides with the job's end. `stream_turn` runs once
+per loop turn beside `script_turn`: the head makes the parser (HTML with
+the head's charset; text through the same parser after `<plaintext>`, the
+encoding decided by `way_text_utf8` once a text body's first three bytes
+are in hand, gathered across reads when the head leaves the decision to
+them, since the wire may hand a byte order mark over in pieces), each turn
+feeds at most `STREAM_SLICE_BYTES` (64 KiB) and rings `BELL_STREAM` when
+more waits, before the verdict as after it (a slice that stops at its
+budget with chunks in the ring gets no further bell from a worker that
+has already posted them), a script's stop is resumed at once, and a parser refusal cancels the
+job and arrives with the parser's sentence as `way_load` would. With the
+verdict in and the ring drained, `stream_finish` finishes the parse, builds
+the model, writes the standing line with `way_note` and calls the same
+`arrive()` as before. `stream_drop` destroys the parser with its document
+(nothing points into a D4 tree; the abandon that D7 will need is booked),
+drops the mailbox and frees the request copy; `stop_trip` cancels the job
+and drops the stream; a broken pool drops it; the window's close drops it
+after the pool is destroyed. Stop is lit while the stream is active or a
+page waits for its sheets, so a stream still draining after its job was
+reaped is still a load. The reap only clears the job's id.
+
+**The pool.** `TRIP_RESERVE` is 4 MiB (one connection's libfetch and
+libtls) instead of 80 MiB (the parser's input, tree and model, which are
+the window's now and bounded by libhtml's own caps). At Chris's word on
+2026-10-05 — twelve cores, use them and the memory — `POOL_WORKERS` is 12,
+`POOL_BUDGET` 2 GiB and `PICTURES_AT_ONCE` half the workers: a page with
+twenty-eight linked sheets, none cached, had spent five seconds fetching
+them four at a time (danlegt.com on the P5). On the guest the twenty-eight
+requests of a fixture page land within one second of the page's own.
+
+**What the harnesses hold it to.**
+
+- `tools/test_way_fetch_host.sh`: 126 checks (27 before), the pieces-by-hand
+  case among them; `tools/test_way_host.sh`: 248 (231 before), a case per
+  sentence of `way_note` and per rule of `way_text_utf8`.
+- `tools/test_yonder_stream_host.sh`, new, two threads over real pipes
+  under ASan, UBSan and LSan: 19 checks — a thousand chunks of every shape
+  through sixteen slots arrive whole and in order; a full ring holds the
+  poster, a stale answer is not room, and room wakes it without waiting
+  out the step (thirty-two chunks taken one a millisecond go in well under
+  the 1.6 s the steps would cost); cancellation ends a wait with the
+  slots' worth still there to take; a take with nobody waiting writes no
+  note, and a wait reads past a note to its answer; the ring and the pipe
+  go with the last holder.
+- `tools/test_yonder_scripts_host.sh`, which hosts `yonder.c`, gains the
+  window's side with the test standing in for the worker through a
+  single-threaded mailbox stand-in: 2,105 checks (2,070 before). A slice
+  feeds four chunks and asks for another turn, with the verdict behind
+  them or still to come; the verdict behind the last
+  chunk finishes the page, whose tree is the one the same bytes parse to
+  whole; a job reaped before a byte was parsed leaves the stream and Stop
+  alive; text arrives as its own tree, UTF-8 by its byte order mark posted
+  a byte at a time and windows-1252 without one, and a two-byte body
+  arrives whole; no page shows libway's sentence; a parser
+  refusal (a tree deeper than twice the stack) cancels the fetch and
+  arrives with the standing line naming it; Stop drops the parse and
+  cancels the fetch; a broken pool drops the stream; the form being sent
+  reaches the page that comes back; progress and a worker's question reach
+  the status line and the bar through the stream's mailbox, another
+  generation's mail is not read, a newer question answers the older one
+  No, and the next navigation cancels the job rather than answering; and
+  the parser mode is the one captured at the start, with a script's stop
+  resumed. (A queued classic script would ring the doorbell, which on the
+  host is a raw syscall nobody can answer, so that case's script is a
+  module: the parser stops at it and yonder never queues it.)
+- **Mutants** (`tools/test_yonder_stream_mutants.py`): twenty-nine
+  deliberate breaks, one per rule, each applied to the worktree's copy of
+  its file and put back byte for byte; twenty-nine caught. The first pass
+  caught nineteen, and what it missed is where the harnesses grew: a
+  resume loop whose removal nothing noticed because the fixture's script
+  sat inside the parser's 1,024-byte encoding window, so the feed never
+  stopped and `finish` ran past it (the script now rides behind a comment
+  that carries it past the window); a ring that never woke its poster but
+  passed because the step's hundred milliseconds were lost in the noise
+  (the harness now counts the room notes the window writes); and two
+  judgements in libway's pieces that the by-hand case could not see
+  because both paths it compared share them (the case now says outright
+  which replies are pages and what address a page carries). Seven more
+  did not build at first because `-Werror` refused an unused parameter;
+  they were respelled to keep the parameter and all seven are caught.
+- **Consumers unchanged**: the painter (`test_yonder_host.sh`, which links
+  `mail.c`) 179 checks and six paints matching; wend 177,854; libpage
+  254,071; libflow 18,602 with twelve dumps matching; libgarb's suites and
+  sweeps; libhtml 1,218 native checks and 10,525 reference runs. All under
+  the sanitizers, all 0 failed.
+
+**In the guest**, a scratch copy of the image on its own monitor port with
+slirp networking, `tools/httptestd.py` on the host and two fixture servers
+beside it, driven through the vm tools: hello.txt (text), `/dir/` (HTML),
+a chain of three redirects, a redirect to mailto handed back as the 302 it
+is, `/big.bin` and `/cut` refused with their os64get sentences, the
+close-delimited HTTP/1.0 text, the dribbled text, each arriving as it did
+and the server's request log naming the same requests. `/stall` keeps the
+window live with Stop lit and Stop answers "stopped"; `/stall-body`, the
+new route (a whole head, half the body, then silence), leaves the old page
+on screen and SCROLLING while the body hangs, Stop ends it at once, and
+left alone the idle deadline arrives with the first half and the standing
+line "200 OK - the server went silent for 30 seconds after 12053 bytes".
+The twenty-eight-sheet fixture page colours all twenty-eight paragraphs
+with its sheets requested within a second. D5b's fixture, with `scripts =
+on` in `yonder.conf`, shows **Two JavaScript donuts!** under SCRIPTS ON:
+the scripts a page carries still run after the stream has resumed past
+them. wend walked the same eight addresses from a text boot of the same
+image and the server's log named the same requests in the same order,
+redirect hops included.
+
+**What a slice costs.** `yonder --script-audit` now logs each slice's bytes
+and microseconds (the flag that already reported a scripted page's heap
+verdict). The saved 797,390-byte Wikipedia page arrived in thirteen slices
+on the QEMU guest: twelve of 64 KiB at 35 to 73 ms each and the last of
+8 KiB at 6 ms, between which the window read its events, and the page laid
+out in 5,800 ms after. That guest runs without KVM, so every number is the
+emulator's; the same library parses the same page in 22 ms whole on the
+host at `-O2`, which puts a slice near 2 ms on real hardware. The budget
+stays at 64 KiB until a page on the P5 shows a hitch.
+
+**Review tier.** Reviewed here, as DOM.md ruling 4 has it for the slices
+after D2; the two-thread ring is the one piece a reviewer should read with
+the lost-wakeup question in mind, and the harness's "room wakes the
+poster" case is the one that answers it.
 
 ### D5a, as built
 

@@ -458,6 +458,94 @@ static void sweep(void)
     printf("libway sweep: each of %zu allocations failed in turn, nothing leaked\n", count);
 }
 
+// ── The standing line, and a text body's encoding ───────────────────────
+//
+// way_note and way_text_utf8 are the two judgements way_load used to make
+// inline that yonder's window now makes on its own (DOM_D4.md), so each
+// sentence and each rule is held here, where no network is needed.
+
+static way_head_t head_of(int32_t status, const char *reason, const char *type,
+                          const char *charset, const char *url, bool posted)
+{
+    way_head_t h;
+    memset(&h, 0, sizeof(h));
+    h.status = status;
+    snprintf(h.reason, sizeof(h.reason), "%s", reason);
+    snprintf(h.content_type, sizeof(h.content_type), "%s", type);
+    snprintf(h.charset, sizeof(h.charset), "%s", charset);
+    snprintf(h.url, sizeof(h.url), "%s", url);
+    h.posted = posted;
+    h.body = WAY_BODY_TEXT;
+    return h;
+}
+
+static void note_is(const char *name, const way_page_t *p, const char *want)
+{
+    expect(name, strcmp(p->note, want) == 0, p->note);
+}
+
+static void notes(void)
+{
+    way_page_t p;
+    memset(&p, 0, sizeof(p));
+    way_head_t h = head_of(200, "OK", "text/html", "", "http://h/final", false);
+    way_note(&p, &h, false, OS64_FETCH_OK, NULL);
+    note_is("note: a whole page is its status and reason", &p, "200 OK");
+    expect("note: the address is the head's, after redirects", strcmp(p.url, "http://h/final") == 0 &&
+           !p.posted, p.url);
+
+    h = head_of(404, "", "text/html", "", "http://h/", true);
+    way_note(&p, &h, false, OS64_FETCH_OK, NULL);
+    note_is("note: no reason, no space", &p, "404");
+    expect("note: posted follows the head", p.posted, NULL);
+
+    h = head_of(200, "OK", "text/html", "", "http://h/", false);
+    way_note(&p, &h, true, OS64_FETCH_OK, NULL);
+    note_is("note: our memory", &p,
+            "200 OK - this machine ran out of memory partway, so the page stops where it does");
+
+    way_note(&p, &h, false, OS64_FETCH_CUT, "the server hung up early");
+    note_is("note: the wire's sentence", &p, "200 OK - the server hung up early");
+    way_note(&p, &h, false, OS64_FETCH_CUT, NULL);
+    note_is("note: the wire's failure when nobody wrote a sentence", &p,
+            "200 OK - the fetch did not finish");
+
+    // A parser that refused: a real refusal, from a byte cap the page passes.
+    os64_html_options_t opt = os64_html_options_default();
+    opt.charset = "utf-8";
+    opt.max_bytes = 16;
+    os64_html_parser_t *parser = os64_html_parser_new(&opt);
+    if (parser != NULL) {
+        const char *html = "<p>this page is longer than sixteen bytes</p>";
+        os64_html_parser_feed(parser, html, strlen(html));
+        p.doc = os64_html_parser_finish(parser);
+    }
+    expect("note: the fixture's parse refused", p.doc != NULL && p.doc->refusal != 0, NULL);
+    way_note(&p, &h, false, OS64_FETCH_OK, NULL);
+    expect("note: the parser's sentence names the refusal",
+           strncmp(p.note, "200 OK - the page is bigger than this browser will parse (", 58) == 0,
+           p.note);
+    way_note(&p, &h, true, OS64_FETCH_SILENT, "the server went silent");
+    expect("note: every trouble, in order",
+           strncmp(p.note, "200 OK - this machine ran out of memory partway, so the page stops where"
+                           " it does - the server went silent - the page is bigger", 120) == 0,
+           p.note);
+    way_page_clear(&p);
+
+    h = head_of(200, "OK", "text/plain", "UNICODE-1-1-UTF-8", "http://h/", false);
+    expect("text: a UTF-8 label in any spelling", way_text_utf8(&h, "abc", 3), NULL);
+    h = head_of(200, "OK", "text/plain", "iso-8859-1", "http://h/", false);
+    expect("text: another label wins over a byte order mark", !way_text_utf8(&h, "\xEF\xBB\xBFx", 4),
+           NULL);
+    h = head_of(200, "OK", "application/ld+json", "", "http://h/", false);
+    expect("text: JSON is UTF-8 by its own rule", way_text_utf8(&h, "{}", 2), NULL);
+    h = head_of(200, "OK", "text/plain", "", "http://h/", false);
+    expect("text: a byte order mark says so itself", way_text_utf8(&h, "\xEF\xBB\xBFx", 4), NULL);
+    expect("text: no label, no mark: windows-1252", !way_text_utf8(&h, "plain", 5), NULL);
+    expect("text: two bytes are not a mark", !way_text_utf8(&h, "\xEF\xBB", 2), NULL);
+    expect("text: an empty body", !way_text_utf8(&h, NULL, 0), NULL);
+}
+
 #include "test_way_jar.inc"
 #include "internal.h"
 #include "test_way_cache.inc"
@@ -471,6 +559,7 @@ int main(void)
     history();
     forward();
     typed();
+    notes();
     sweep();
     expect("nothing leaked", live == 0, NULL);
     printf("libway: %d checks, %d failed\n", checks, failures);
