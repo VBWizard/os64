@@ -51,11 +51,15 @@ typedef struct {
 } bt_intel_reply_t;
 
 // A USB packet boundary is not an HCI event boundary. Each receive endpoint
-// owns a separate accumulator; completed events update the shared query reply.
+// owns a separate accumulator; complete events are passed to its decoder.
 typedef struct {
     uint8_t bytes[BT_HCI_EVENT_BYTES];
     uint16_t used;
 } bt_hci_stream_t;
+
+void bt_hci_feed(bt_hci_stream_t *stream,
+                 void (*event)(void *, const uint8_t *, size_t), void *context,
+                 const uint8_t *data, size_t bytes);
 
 void bt_intel_feed(bt_hci_stream_t *stream, bt_intel_reply_t *reply,
                    const uint8_t *data, size_t bytes);

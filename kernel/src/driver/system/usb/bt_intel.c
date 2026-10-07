@@ -128,7 +128,7 @@ malformed:
     reply->result = BT_INTEL_BAD_REPLY;
 }
 
-static void feed(bt_hci_stream_t *stream,
+void bt_hci_feed(bt_hci_stream_t *stream,
                  void (*event)(void *, const uint8_t *, size_t), void *context,
                  const uint8_t *data, size_t bytes)
 {
@@ -155,7 +155,7 @@ static void version_event(void *context, const uint8_t *event, size_t bytes)
 void bt_intel_feed(bt_hci_stream_t *stream, bt_intel_reply_t *reply,
                    const uint8_t *data, size_t bytes)
 {
-    feed(stream, version_event, reply, data, bytes);
+    bt_hci_feed(stream, version_event, reply, data, bytes);
 }
 
 static void decode_loader_event(void *context, const uint8_t *event, size_t bytes)
@@ -211,7 +211,7 @@ static void loader_event(void *context, const uint8_t *event, size_t bytes)
 void bt_intel_feed_events(bt_hci_stream_t *stream, bt_intel_events_t *events,
                           const uint8_t *data, size_t bytes)
 {
-    feed(stream, loader_event, events, data, bytes);
+    bt_hci_feed(stream, loader_event, events, data, bytes);
 }
 
 static uint16_t firmware_id(uint32_t top)

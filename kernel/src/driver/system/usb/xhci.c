@@ -1,4 +1,4 @@
-// xhci.c — xHCI controller, HID input and AX210 firmware bring-up.
+// xhci.c — xHCI controller, HID input and AX210 discovery transport.
 // The design rationale and v1 limits live in xhci.h; this file is the
 // machine. Register/TRB layouts follow the xHCI 1.x specification;
 // section references below are to that spec.
@@ -27,6 +27,8 @@
 #include "gui/input.h"
 #include "driver/system/usb/xhci.h"
 #include "driver/system/usb/bt_intel.h"
+#include "driver/system/usb/bt_scan.h"
+#include "strings/sprintf.h"
 #include "driver/system/hid_mouse.h"
 
 extern pci_device_t* kPCIDeviceHeaders;
@@ -162,11 +164,11 @@ typedef struct {
 	uint64_t pending_trb;
 	bt_usb_endpoint_t endpoint;
 	bt_hci_stream_t stream;
-	bool retry_pending, retried;
+	bool retry_pending, retried, rearm_pending;
 } xhci_bt_endpoint_t;
 
-// Boot-time Intel transport state. The controller pointer is cleared before this
-// stack object expires; DMA allocations outlive it if Disable Slot fails.
+// Intel transport state. Bring-up uses a stack instance, then transfers a
+// successful device into controller-owned storage for runtime discovery.
 typedef struct {
 	xhci_device_t *device;
 	xhci_bt_endpoint_t rx[2]; // Interrupt events and Intel bootloader bulk events.
@@ -177,6 +179,8 @@ typedef struct {
 	bool tx_done;
 	bool listening, failed;
 	unsigned packets;
+	bool runtime;
+	bt_scan_t scan;
 } xhci_bt_probe_t;
 
 // One controller. The P5 may place its keyboard and mouse on different xHCI
@@ -206,8 +210,11 @@ typedef struct {
 	xhci_device_t keyboard;
 	xhci_device_t mouse;
 	xhci_bt_probe_t *bt_probe;
+	xhci_bt_probe_t bluetooth;
+	xhci_device_t bluetooth_device;
 
-	// EP0 completion currently awaited during boot-time enumeration.
+	// One EP0 request per controller: synchronous during enumeration,
+	// asynchronous from the serialized runtime Bluetooth poll path.
 	volatile uint32_t control_slot;
 	volatile bool     xfer_done;
 	volatile uint8_t  xfer_cc;
@@ -229,8 +236,10 @@ static uint32_t s_ax210_described;
 // Active controller while boot-time setup runs, or while xhci_poll owns its
 // global serialization lock. It is never changed concurrently.
 static xhci_t *s_hc;
+static xhci_t *s_bluetooth_hc; // First operational AX210 retained for /sys/bluetooth.
+static volatile uint32_t s_poll_busy;
 
-extern volatile uint64_t kTicksSinceStart;   // Typematic and boot-time deadlines.
+extern volatile uint64_t kTicksSinceStart;   // Typematic and USB/Bluetooth deadlines.
 
 // ── MMIO accessors ──────────────────────────────────────────────────────────
 
@@ -586,6 +595,15 @@ static bool xhci_bt_transfer(xhci_trb_t *ev, uint32_t slot, uint32_t dci, uint8_
 			probe->listening = false;
 			return true;
 		}
+		if (probe->runtime) {
+			// Operational HCI events use interrupt IN; bulk IN carries ACL data.
+			// Re-arm after the drain so radio traffic cannot monopolize a pass.
+			if (i == 0)
+				bt_hci_feed(&rx->stream, bt_scan_event, &probe->scan, rx->buffer,
+				            rx->endpoint.packet_bytes - residual);
+			rx->rearm_pending = true;
+			return true;
+		}
 		probe->packets++;
 		bt_intel_feed_events(&rx->stream, &probe->events, rx->buffer,
 		                     rx->endpoint.packet_bytes - residual);
@@ -885,6 +903,12 @@ static bool xhci_ax210_load(xhci_bt_probe_t *p)
 
 static void xhci_ax210_bringup(xhci_device_t *dev, const uint8_t *cfg, uint16_t bytes)
 {
+	// The discovery interface owns one adapter. Do not replace its live probe
+	// if another matching USB device is enumerated on this controller.
+	if (s_bluetooth_hc) {
+		xhci_release_probe(dev);
+		return;
+	}
 	bt_intel_usb_t usb;
 	xhci_bt_probe_t probe = {.device = dev, .tx_done = true,
 	    .deadline = kTicksSinceStart + 120u * TICKS_PER_SECOND};
@@ -972,6 +996,18 @@ static void xhci_ax210_bringup(xhci_device_t *dev, const uint8_t *cfg, uint16_t 
 		if (v->image == 1 && !xhci_ax210_load(&probe)) {
 			printd(DEBUG_USB, "xhci: AX210 firmware load failed (no retry this boot)\n");
 			printf("USB Bluetooth: Intel AX210 firmware load failed (see USB log)\n");
+			goto cleanup;
+		}
+		if (probe.events.version.image == 3 && !probe.failed) {
+			s_hc->bluetooth_device = *dev;
+			s_hc->bluetooth = probe;
+			s_hc->bluetooth.device = &s_hc->bluetooth_device;
+			s_hc->bluetooth.runtime = true;
+			s_hc->bt_probe = &s_hc->bluetooth;
+			s_bluetooth_hc = s_hc;
+			printd(DEBUG_USB, "xhci: AX210 slot %u retained for runtime discovery\n", dev->slot);
+			printf("USB Bluetooth: discovery ready at /sys/bluetooth/scan\n");
+			return;
 		}
 	} else {
 		printd(DEBUG_USB, "xhci: AX210 Read Version incomplete: query_ok=%u receive_error=%u result=%u status=%02x packets=%u partial=%u/%u\n",
@@ -998,6 +1034,82 @@ cleanup:
 			if (endpoint->ring.trb) kfree(endpoint->ring.trb);
 		}
 	}
+}
+
+// Runtime commands use the firmware bulk-OUT buffer as stable EP0 storage.
+// The scan state machine submits after USB Status and the HCI reply agree;
+// it never waits or allocates while processSignals owns the scheduler lock.
+static void xhci_bt_scan_send(void *context, uint16_t opcode,
+                              const uint8_t *params, uint8_t length)
+{
+	xhci_bt_probe_t *p = context;
+	uint8_t *command = p->tx.buffer;
+	command[0] = opcode & 255; command[1] = opcode >> 8; command[2] = length;
+	memcpy(command + 3, params, length);
+	uint16_t bytes = 3u + length;
+	s_hc->control_slot = p->device->slot;
+	s_hc->xfer_done = false;
+	s_hc->xfer_cc = 0;
+	s_hc->xfer_actual = bytes;
+	s_hc->control_setup_trb = ring_push(&p->device->ep0,
+	    0x20ull | ((uint64_t)bytes << 48), 8, TRB_TYPE(TRB_SETUP) | TRB_IDT | (2u << 16));
+	s_hc->control_data_trb = ring_push(&p->device->ep0, virt_to_phys(command), bytes,
+	    TRB_TYPE(TRB_DATA) | TRB_ISP);
+	s_hc->control_status_trb = ring_push(&p->device->ep0, 0, 0,
+	    TRB_TYPE(TRB_STATUS) | (1u << 16) | TRB_IOC);
+	mmio_w32((uint8_t *)s_hc->db, 4 * p->device->slot, 1);
+	printd(DEBUG_USB, "xhci: AX210 discovery command %04x\n", opcode);
+}
+
+static void xhci_bt_scan_poll(void)
+{
+	xhci_bt_probe_t *p = s_hc->bt_probe;
+	if (!p || !p->runtime) return;
+	for (unsigned i = 0; i < 2; i++) {
+		if (p->listening && !p->failed && p->rx[i].rearm_pending) {
+			p->rx[i].rearm_pending = false;
+			xhci_bt_arm(p, &p->rx[i]);
+		}
+	}
+	bool usb_failed = p->failed || (s_hc->control_slot == p->device->slot &&
+	    s_hc->xfer_done && (s_hc->xfer_cc != TRB_CC_SUCCESS ||
+	    (p->scan.pending && s_hc->xfer_actual != 3u + p->tx.buffer[2])));
+	bool usb_done = s_hc->control_slot != p->device->slot || s_hc->xfer_done;
+	bt_scan_phase_t phase = p->scan.phase;
+	bt_scan_tick(&p->scan, kTicksSinceStart * 1000 / TICKS_PER_SECOND,
+	             usb_done, usb_failed, xhci_bt_scan_send, p);
+	if (p->scan.phase != phase && (p->scan.phase == BT_SCAN_DONE || p->scan.phase == BT_SCAN_FAILED))
+		printd(DEBUG_USB, "xhci: AX210 discovery %s devices=%u error=%s opcode=%04x status=%02x\n",
+		       p->scan.phase == BT_SCAN_DONE ? "complete" : "failed", p->scan.count,
+		       p->scan.error ? p->scan.error : "none", p->scan.error_opcode, p->scan.error_status);
+}
+
+bool xhci_bluetooth_scan(void)
+{
+	if (__sync_lock_test_and_set(&s_poll_busy, 1)) return false;
+	bool ok = s_bluetooth_hc && !s_bluetooth_hc->bluetooth.failed &&
+	    bt_scan_start(&s_bluetooth_hc->bluetooth.scan, kTicksSinceStart * 1000 / TICKS_PER_SECOND);
+	__sync_lock_release(&s_poll_busy);
+	return ok;
+}
+
+size_t xhci_bluetooth_read(char *out, size_t capacity, bool devices)
+{
+	if (!capacity) return 0;
+	if (__sync_lock_test_and_set(&s_poll_busy, 1)) {
+		int n = snprintf(out, capacity, "USB busy; retry this read\n");
+		return n < 0 ? 0 : (size_t)n < capacity ? (size_t)n : capacity - 1;
+	}
+	size_t n;
+	if (!s_bluetooth_hc) {
+		int written = snprintf(out, capacity, "No operational AX210 available\n");
+		n = written < 0 ? 0 : (size_t)written < capacity ? (size_t)written : capacity - 1;
+	} else {
+		const bt_scan_t *scan = &s_bluetooth_hc->bluetooth.scan;
+		n = devices ? bt_scan_devices(scan, out, capacity) : bt_scan_status(scan, out, capacity);
+	}
+	__sync_lock_release(&s_poll_busy);
+	return n;
 }
 
 // Validate lengths and descriptor ordering before walking untrusted USB data.
@@ -1658,14 +1770,9 @@ void init_xHCI(void)
 
 void xhci_poll(void)
 {
-	// Called every scheduler pass, potentially from any core. The guards
-	// make the idle cost one predictable branch; the drain itself reads
-	// cached RAM and only touches MMIO (ERDP/doorbells) when something
-	// actually happened. The event ring is single-consumer state, so a
-	// non-blocking busy flag serializes cores: a pass that loses the race
-	// just skips — the winner drains everything anyway.
-	static volatile uint32_t s_poll_busy = 0;
-
+	// Called every scheduler pass, potentially from any core. Serialize event
+	// consumption and scan commands with sysfs snapshots/requests using a
+	// non-blocking busy flag. A losing caller leaves work for a later pass.
 	if (s_controller_count == 0)
 		return;
 	if (__sync_lock_test_and_set(&s_poll_busy, 1) != 0)
@@ -1673,6 +1780,7 @@ void xhci_poll(void)
 	for (uint32_t i = 0; i < s_controller_count; i++) {
 		s_hc = &s_controllers[i];
 		xhci_drain_events();
+		xhci_bt_scan_poll();
 		if (s_hc->keyboard.present)
 			hid_keyboard_tick(&s_hc->keyboard.kbd);
 	}

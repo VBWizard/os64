@@ -9,6 +9,7 @@ static inline uint64_t spinlock_acquire_irqsave(spinlock_t *p) { (void)p; return
 static inline void spinlock_release_irqrestore(spinlock_t *p,uint64_t f) { (void)p; (void)f; }
 static void test_controller_step(void);
 #include "../kernel/src/driver/system/usb/bt_intel.c"
+#include "../kernel/src/driver/system/usb/bt_scan.c"
 #include "xhci_bt_host.inc"
 #include "strings/strlen.h"
 #include "strings/sprintf.h"
@@ -174,7 +175,17 @@ static void test_controller_step(void)
             const uint8_t *command=(void *)(uintptr_t)data->param;
             unsigned op=command[0]|command[1]<<8;
             CHECK(data->status==(uint32_t)command[2]+3);
-            if (op==0xfc05) {
+            if (s_hc->bt_probe && s_hc->bt_probe->runtime) {
+                CHECK(data->param==(uintptr_t)s_hc->bt_probe->tx.buffer);
+                uint8_t reply[14]={0x0e,4,1,op&255,op>>8,0};
+                unsigned n=6;
+                if (op==0x1003) { n=14; reply[1]=12; reply[10]=0x40; reply[12]=1; }
+                if (op==0x1009) { n=12; reply[1]=10; reply[6]=0xab; }
+                if (op==0x0401) {
+                    const uint8_t inquiry[]={0x0f,4,0,1,1,4, 1,1,0};
+                    queue(inquiry,sizeof(inquiry),0);
+                } else queue(reply,n,0);
+            } else if (op==0xfc05) {
                 CHECK(command[2]==1 && command[3]==255); version_reply();
                 if (scenario==EARLY_BULK_ERROR && reads==1) receive_error(1,4);
             }
@@ -194,7 +205,7 @@ static void test_controller_step(void)
                 size_t offset=ddc_commands ? 4 : 0;
                 CHECK(ddc_commands<2 && command[2]==bt_ax210_ddc[offset]+1);
                 CHECK(!memcmp(command+3,bt_ax210_ddc+offset,command[2]));
-                ddc_commands++; command_complete(op,scenario==BAD_DDC ? 0x12 : 0);
+                ddc_commands++; command_complete(op,scenario==BAD_DDC || scenario==DISABLE_FAIL ? 0x12 : 0);
             }
         }
         emit(seen_control,1u<<24,TRB_TYPE(TRB_EV_TRANSFER)|(2u<<24)|(1u<<16));
@@ -252,7 +263,7 @@ int main(void)
     const uint8_t config[]={9,2,39,0,1,1,0,0x80,50, 9,4,0,0,3,0xe0,1,1,0,
         7,5,0x81,3,64,0,1, 7,5,2,2,64,0,1, 7,5,0x82,2,64,0,1};
     for (scenario=COLD_RSA;scenario<=BOOT_PARTIAL_ERROR;scenario++) {
-        xhci_t hc={0}; s_hc=&hc;
+        xhci_t hc={0}; s_hc=&hc; s_bluetooth_hc=NULL;
         uint64_t dcbaa[4]={0}, runtime[16]={0}; uint32_t doorbell[4]={0};
         xhci_trb_t events[RING_TRBS]={0};
         hc.dcbaa=dcbaa; hc.rt=(void *)runtime; hc.db=doorbell; hc.evt=events;
@@ -272,7 +283,9 @@ int main(void)
         device.input_ctx=kmalloc_aligned(PAGE_SIZE); device.input_ctx_phys=(uintptr_t)device.input_ctx;
         device.dev_ctx=kmalloc_aligned(PAGE_SIZE); dcbaa[2]=(uintptr_t)device.dev_ctx;
         xhci_ax210_bringup(&device,config,sizeof(config));
-        CHECK(hc.bt_probe==NULL);
+        bool retained=scenario==COLD_RSA || scenario==COLD_ECDSA || scenario==WARM ||
+            scenario==DEFERRED_ZERO_OPCODE_SUCCESS || scenario==BOOT_BULK_ERROR || scenario==BOOT_INTR_ERROR;
+        CHECK((hc.bt_probe!=NULL)==retained);
         if (scenario==CONFIGURE_FAIL || scenario==ALLOCATION_FAIL) CHECK(!secure_commands && !reads);
         else if (scenario==EARLY_BULK_ERROR) CHECK(reads==1 && !secure_commands && !endpoint_resets);
         else if (scenario==WARM || scenario==WRONG_ID) CHECK(!secure_commands && !resets && reads==1);
@@ -281,7 +294,7 @@ int main(void)
         else if (scenario==SECURE_FAIL || scenario==NO_SECURE_EVENT) CHECK(!resets);
         else if (scenario==NO_BOOT_EVENT) CHECK(resets==1 && reads==1);
         else if (scenario==STILL_BOOTLOADER) CHECK(resets==1 && reads==2 && !ddc_commands);
-        else if (scenario==BAD_DDC) CHECK(ddc_commands==1);
+        else if (scenario==BAD_DDC || scenario==DISABLE_FAIL) CHECK(ddc_commands==1);
         else if (scenario==BOOT_REPEAT_ERROR || scenario==BOOT_RESET_FAIL || scenario==BOOT_ERROR_NO_NOTIFY)
             CHECK(endpoint_resets==1 && resets==1 && reads==1 && !ddc_commands);
         else if (scenario==BOOT_STALL_ERROR || scenario==BOOT_PARTIAL_ERROR)
@@ -295,7 +308,20 @@ int main(void)
         if (scenario==BOOT_BULK_ERROR || scenario==BOOT_INTR_ERROR)
             CHECK(endpoint_resets==1 && !failure_log[0]);
         if (scenario==DEFERRED_ZERO_OPCODE_SUCCESS) CHECK(!failure_log[0]);
-        if (scenario==DISABLE_FAIL) CHECK(!released && frees==5 && dcbaa[2]);
+        if (retained) {
+            CHECK(hc.bt_probe==&hc.bluetooth && hc.bluetooth.device==&hc.bluetooth_device);
+            CHECK(!released && allocations-frees==10 && dcbaa[2]);
+            // The original stack device can change after enumeration returns.
+            device.slot=99;
+            CHECK(xhci_bluetooth_scan());
+            CHECK(!xhci_bluetooth_scan());
+            for (unsigned poll=0;poll<5000 && hc.bluetooth.scan.phase!=BT_SCAN_DONE;poll++) {
+                kTicksSinceStart++;
+                xhci_drain_events(); xhci_bt_scan_poll();
+            }
+            CHECK(hc.bluetooth.scan.phase==BT_SCAN_DONE && !hc.bluetooth.scan.radio_active);
+            CHECK(!released && allocations-frees==10);
+        } else if (scenario==DISABLE_FAIL) CHECK(!released && allocations-frees==10 && dcbaa[2]);
         else CHECK(released && allocations-frees==1 && !dcbaa[2]);
         // The command ring is controller-owned. Failed Disable Slot deliberately
         // retains device DMA as well; the fixture frees it after hardware stops.

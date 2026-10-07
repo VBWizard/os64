@@ -1,7 +1,7 @@
 #ifndef XHCI_H
 #define XHCI_H
 
-// xHCI (USB 3.x host controller), HID input and AX210 firmware bring-up.
+// xHCI (USB 3.x host controller), HID input and AX210 discovery transport.
 //
 // WHY THIS EXISTS: the Bosgame P5 has no PS/2 port. Every keystroke it will
 // ever receive arrives over USB, so "os64 runs on real hardware" requires
@@ -12,7 +12,7 @@
 //   - POLLING, not interrupts: no MSI/IOAPIC wiring. The event ring lives in
 //     ordinary RAM; xhci_poll() checks one cycle bit per scheduler pass
 //     (processSignals), the same liveness path the console reader uses.
-//     ~10ms worst-case key latency — the PS/2 wake path's class.
+//     Latency follows scheduler dispatch frequency (see DEBTS.md).
 //   - ROOT PORTS ONLY, no hubs: input devices must be plugged straight into
 //     the machine. (Devices with built-in hubs enumerate AS hubs — those
 //     need the hub slice, which is future work.)
@@ -20,9 +20,10 @@
 //   - Root ports on up to eight controllers are probed, binding the first
 //     boot-protocol keyboard and mouse and probing the Intel AX210's USB
 //     descriptors and firmware image type. A matching cold AX210 receives the
-//     embedded Intel firmware and DDC configuration. Bring-up attempts Disable
-//     Slot before returning and retains DMA storage if it fails. Pairing and
-//     radio connections require a runtime Bluetooth stack.
+//     embedded Intel firmware and DDC configuration. The first operational
+//     AX210 keeps its USB slot and DMA storage for on-demand Classic/LE scans
+//     through /sys/bluetooth. Failed bring-up attempts Disable Slot before
+//     freeing DMA storage. Discovery does not establish paired connections.
 //     Mouse descriptors can select report protocol for a
 //     relative X/Y/wheel layout; unsupported descriptors retain boot mode.
 //   - Handles BOTH context sizes (HCCPARAMS1.CSZ): QEMU uses 32-byte
@@ -35,6 +36,7 @@
 // not need to know whether input arrived over PS/2 or USB.
 
 #include <stdint.h>
+#include <stddef.h>
 #include <stdbool.h>
 
 // Probe PCI for xHCI controllers (class 0x0C / subclass 0x03 / prog-if 0x30),
@@ -45,9 +47,14 @@
 void init_xHCI(void);
 
 // Drain every active controller's event ring: completed keyboard/mouse reports
-// are translated and delivered, and transfer TRBs are re-armed. Called every
+// are translated and delivered, transfer TRBs are re-armed, and Bluetooth
+// discovery advances without waiting for commands. Called every
 // scheduler pass from processSignals; internally serialized across cores and
 // cheap when idle. Safe to call before init or with no USB input devices.
 void xhci_poll(void);
+
+// Non-blocking sysfs interface. False means absent, busy, or failed until reboot.
+bool xhci_bluetooth_scan(void);
+size_t xhci_bluetooth_read(char *out, size_t capacity, bool devices);
 
 #endif
