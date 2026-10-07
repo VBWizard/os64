@@ -17,6 +17,8 @@
 
 #define PAGE_SIZE 0x1000
 #define KERNEL_PAGED_BASE_ADDRESS 0xFFFFFFFF80000000
+// Rows in the allocator's ledger, which carves the kernel's small unaligned
+// objects; page frames are the frame table's and cost no rows (FRAMES.md).
 #define INITIAL_MEMORY_STATUS_COUNT 100000
 #define KERNEL_STACK_SIZE 20 * PAGE_SIZE
 // Poison every freed extent with 0xFE through its HHDM alias (allocator.c,

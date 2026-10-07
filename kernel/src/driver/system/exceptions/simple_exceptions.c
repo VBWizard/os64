@@ -72,8 +72,9 @@ volatile uint64_t kPageFaultCount;
 // table, and the racer who finds the page already present frees its own frame
 // instead of mapping over the winner's. No I/O and no allocation ever happens
 // with this lock held (paging_map_page can draw a table page, which takes
-// kMemoryStatusLock — that nests publish→memory, and nothing takes them in
-// the other order), so the spin is bounded by a map, not a disk.
+// the allocator's locks (kFrameLock, kMemoryStatusLock) — that nests
+// publish→allocator, and nothing takes them in the other order), so the
+// spin is bounded by a map, not a disk.
 //
 // One global lock, not per-task: the critical section is a walk plus at most
 // one map, and a lock that small doesn't earn a per-task field.
@@ -956,8 +957,9 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
             page_fault_panic("CoW fault — page table walk did not find the original page",
                              cr2, error_code, rip);
 
-        // kmalloc_aligned guarantees the page is accessible via HHDM in kKernelPML4.
-        // allocate_memory_aligned() does not make that guarantee.
+        // Any allocator-owned page, kmalloc_aligned's or
+        // allocate_memory_aligned's alike, is reachable through the HHDM
+        // while it is allocated (the lazy-HHDM contract, paging.h).
         void *new_virt = kmalloc_aligned(PAGE_SIZE);
         if (!new_virt)
             page_fault_panic("CoW fault — failed to allocate replacement page",
@@ -1126,8 +1128,9 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
         // frame holds an identical copy; give it back BY ITS OWN ALLOCATOR —
         // the same fork vma_resolve_backing_page allocates on: anonymous
         // pages come from the physical allocator, file-backed from kmalloc.
-        // (Freed OUTSIDE the publish lock: both frees take kMemoryStatusLock,
-        // and holding two locks where one will do is how ABBAs are born.)
+        // (Freed OUTSIDE the publish lock: both frees take the allocator's
+        // locks (kFrameLock, kMemoryStatusLock), and holding two locks where
+        // one will do is how ABBAs are born.)
         if ((vma->flags & MAP_ANONYMOUS) || vma->file == NULL)
             free_memory(phys);
         else
