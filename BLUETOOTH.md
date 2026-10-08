@@ -161,7 +161,11 @@ reads reported complete, no malformed reports, no error and discovery inactive.
 The first P5 LE attempt established a connection and received a Pairing Response,
 then refused capabilities outside the initial pairing policy and reset cleanly.
 That build did not retain the rejected capability bytes; the diagnostic view
-preserves them for the next attempt. Pairing, encryption and typing still require
+preserves them for the next attempt. That attempt returned
+`02 03 00 01 10 00 00`: NoInputNoOutput, no OOB data, bonding requested,
+16-byte key, and no distributed keys. The passkey-only request was refused
+without starting encryption; cleanup reported the link inactive.
+Pairing, encryption and typing still require
 their own P5 validation; simulated success does not establish keyboard compatibility.
 
 Wire references: [Bluetooth Core Security Manager](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/host/security-manager-specification.html),

@@ -254,6 +254,14 @@ static void framing(void)
 }
 static void pairing_diagnostics(void)
 {
+    // P5 keyboard's actual response: NoInputNoOutput, bonding flag, 16-byte
+    // key, no key distribution. A passkey request must not silently downgrade.
+    const uint8_t p5_response[]={2,3,0,1,16,0,0};
+    session=(bt_le_t){.phase=BT_LE_PAIR_WAIT,.connected=true,.handle=11,.now=1};
+    incoming(6,p5_response,sizeof(p5_response));
+    assert(session.phase==BT_LE_CLEANUP && !session.passkey_visible);
+    assert(!strcmp(session.error,"peer cannot enter a displayed passkey"));
+    assert(!memcmp(session.response,p5_response,sizeof(p5_response)));
     const uint8_t changed_field[]={1,2,4,5,6,3};
     const uint8_t changed_value[]={3,1,12,1,1,0xc0};
     const char *reasons[]={"peer cannot enter a displayed passkey", "peer OOB pairing flag unsupported",
