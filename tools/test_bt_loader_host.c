@@ -10,6 +10,7 @@ static inline void spinlock_release_irqrestore(spinlock_t *p,uint64_t f) { (void
 static void test_controller_step(void);
 #include "../kernel/src/driver/system/usb/bt_intel.c"
 #include "../kernel/src/driver/system/usb/bt_scan.c"
+#include "../kernel/src/driver/system/usb/bt_le.c"
 #include "xhci_bt_host.inc"
 #include "strings/strlen.h"
 #include "strings/sprintf.h"
@@ -18,8 +19,9 @@ extern void free(void *);
 extern int memcmp(const void *,const void *,size_t);
 extern char *strstr(const char *,const char *);
 extern int puts(const char *);
+extern int fflush(void *);
 extern _Noreturn void abort(void);
-#define CHECK(x) do { if (!(x)) { puts(#x); abort(); } } while (0)
+#define CHECK(x) do { if (!(x)) { puts(#x); fflush(NULL); abort(); } } while (0)
 uintptr_t kHHDMOffset;
 volatile uint64_t kTicksSinceStart;
 __uint128_t kDebugLevel;
@@ -33,7 +35,14 @@ void printd(__uint128_t level,const char *fmt,...)
     vsnprintf(failure_log+used,sizeof(failure_log)-used,fmt,ap);
     va_end(ap);
 }
-void hid_keyboard_report(hid_keyboard_t *k,const uint8_t r[8]) { (void)k; (void)r; abort(); }
+static unsigned bt_keys, bt_releases;
+void hid_keyboard_tick(hid_keyboard_t *k) { (void)k; }
+void hid_keyboard_report(hid_keyboard_t *k,const uint8_t r[8])
+{
+    CHECK(k->name && !memcmp(k->name,"bluetooth",10));
+    if (r[2]) { CHECK(r[0]==2 && r[2]==4); bt_keys++; }
+    else bt_releases++;
+}
 bool hid_mouse_decode(const hid_mouse_layout_t *l,const uint8_t *r,size_t n,hid_mouse_sample_t *s)
 { (void)l; (void)r; (void)n; (void)s; abort(); }
 void input_release_pointer(input_pointer_source_t *p) { (void)p; abort(); }
@@ -176,7 +185,7 @@ static void test_controller_step(void)
             unsigned op=command[0]|command[1]<<8;
             CHECK(data->status==(uint32_t)command[2]+3);
             if (s_hc->bt_probe && s_hc->bt_probe->runtime) {
-                CHECK(data->param==(uintptr_t)s_hc->bt_probe->tx.buffer);
+                CHECK(data->param==(uintptr_t)(s_hc->bt_probe->tx.buffer+512));
                 uint8_t reply[14]={0x0e,4,1,op&255,op>>8,0};
                 unsigned n=6;
                 if (op==0x1003) { n=14; reply[1]=12; reply[10]=0x40; reply[12]=1; }
@@ -258,6 +267,36 @@ static void test_controller_step(void)
     }
 }
 
+static void runtime_transport(void)
+{
+    xhci_bt_probe_t *p=s_hc->bt_probe;
+    p->le=(bt_le_t){.phase=BT_LE_READY,.connected=true,.encrypted=true,.handle=11,.boot_value=10,
+        .now=kTicksSinceStart*1000/TICKS_PER_SECOND};
+    CHECK(!xhci_bluetooth_scan());
+    const uint8_t key[]={0x0b,0x20,15,0,11,0,4,0,0x1b,10,0,2,0,4,0,0,0,0,0};
+    memcpy(p->rx[1].buffer,key,sizeof(key));
+    xhci_trb_t ev={.param=p->rx[1].pending_trb,.status=p->rx[1].endpoint.packet_bytes-sizeof(key)};
+    CHECK(xhci_bt_transfer(&ev,p->device->slot,5,TRB_CC_SHORT_PACKET));
+    CHECK(bt_keys==1 && p->rx[1].rearm_pending && p->le.reports==1);
+    uint8_t params[32],saved[35]; memset(params,0xa7,sizeof(params));
+    xhci_bt_runtime_send(p,0x2017,params,sizeof(params));
+    memcpy(saved,p->tx.buffer+512,sizeof(saved));
+    xhci_bt_acl_send(p,key,sizeof(key));
+    CHECK(!memcmp(saved,p->tx.buffer+512,sizeof(saved)) && !p->tx_done);
+    ev=(xhci_trb_t){.param=p->tx.pending_trb};
+    CHECK(xhci_bt_transfer(&ev,p->device->slot,4,TRB_CC_SUCCESS) && p->tx_done);
+    s_hc->xfer_done=true; s_hc->xfer_cc=TRB_CC_SUCCESS; s_hc->xfer_actual=35;
+    const uint8_t disconnect[]={5,4,0,11,0,0x13};
+    memcpy(p->rx[0].buffer,disconnect,sizeof(disconnect));
+    ev=(xhci_trb_t){.param=p->rx[0].pending_trb,.status=p->rx[0].endpoint.packet_bytes-sizeof(disconnect)};
+    CHECK(xhci_bt_transfer(&ev,p->device->slot,3,TRB_CC_SHORT_PACKET));
+    CHECK(p->le.phase==BT_LE_CLEANUP && !p->le.encrypted);
+    xhci_bt_runtime_poll();
+    CHECK(bt_releases==1 && !p->rx[0].rearm_pending && !p->rx[1].rearm_pending);
+    CHECK(!memcmp(p->tx.buffer+512,"\x03\x0c\0",3));
+    puts("PASS: production xHCI ACL receive, key delivery/release and disjoint control/bulk DMA");
+}
+
 int main(void)
 {
     const uint8_t config[]={9,2,39,0,1,1,0,0x80,50, 9,4,0,0,3,0xe0,1,1,0,
@@ -317,10 +356,11 @@ int main(void)
             CHECK(!xhci_bluetooth_scan());
             for (unsigned poll=0;poll<5000 && hc.bluetooth.scan.phase!=BT_SCAN_DONE;poll++) {
                 kTicksSinceStart++;
-                xhci_drain_events(); xhci_bt_scan_poll();
+                xhci_drain_events(); xhci_bt_runtime_poll();
             }
             CHECK(hc.bluetooth.scan.phase==BT_SCAN_DONE && !hc.bluetooth.scan.radio_active);
             CHECK(!released && allocations-frees==10);
+            if (scenario==WARM) runtime_transport();
         } else if (scenario==DISABLE_FAIL) CHECK(!released && allocations-frees==10 && dcbaa[2]);
         else CHECK(released && allocations-frees==1 && !dcbaa[2]);
         // The command ring is controller-owned. Failed Disable Slot deliberately

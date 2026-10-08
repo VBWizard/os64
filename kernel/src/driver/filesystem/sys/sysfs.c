@@ -29,6 +29,7 @@
 //                                "block", "cache", "conf", "gui", "log", "mounts",
 //                                "openfiles", "random", "shlib", "clipboard", "appearance", "decorations"
 //   /sys/bluetooth/scan          discovery status; write "scan" to request.
+//   /sys/bluetooth/connection    LE keyboard status; connect/disconnect command.
 //   /sys/bluetooth/devices       snapshot of the latest Classic/LE results.
 //   /sys/console/font            the face the virtual terminals draw with.
 //                                READ: which face, its cell, the grid it
@@ -358,6 +359,7 @@ typedef enum
 	SYS_NODE_NETCARD,    // /net/<name> — one registered NIC
 	SYS_NODE_BTDIR,      // /bluetooth — on-demand discovery
 	SYS_NODE_BTSCAN,     // /bluetooth/scan — status, write "scan" to request
+	SYS_NODE_BTCONNECTION, // /bluetooth/connection — LE keyboard session
 	SYS_NODE_BTDEVICES,  // /bluetooth/devices — most recent scan results
 	SYS_NODE_MOUNTSFILE, // /mounts — the mount table, one line per live mount (df's data)
 	SYS_NODE_BLOCKFILE,  // /block — devices and partitions, named and located (lsblk's data)
@@ -451,7 +453,8 @@ static void sys_parse_path(const char *path, sys_path_t *out)
 			return;
 		}
 		sys_node_type_t type = strcmp(comp, "scan") == 0 ? SYS_NODE_BTSCAN :
-		    strcmp(comp, "devices") == 0 ? SYS_NODE_BTDEVICES : SYS_NODE_INVALID;
+		    strcmp(comp, "devices") == 0 ? SYS_NODE_BTDEVICES :
+		    strcmp(comp, "connection") == 0 ? SYS_NODE_BTCONNECTION : SYS_NODE_INVALID;
 		if (synth_next_component(path, &pos, comp, sizeof(comp))) return;
 		out->type = type;
 		return;
@@ -1910,7 +1913,7 @@ typedef enum
 	SYS_HANDLE_CLIPREAD,       // /sys/clipboard opened "r" — holds a ref
 	SYS_HANDLE_CLIPWRITE,      // /sys/clipboard opened "w" — holds a pending
 	SYS_HANDLE_FONTWRITE,      // /sys/console/font opened "w" — holds an image
-	SYS_HANDLE_BTWRITE,        // /sys/bluetooth/scan — command assembled until close
+	SYS_HANDLE_BTWRITE,        // Bluetooth commands assembled until close
 } sys_handle_kind_t;
 
 typedef struct
@@ -1931,7 +1934,8 @@ typedef struct
 	snarf_pending_t  *pending;   // CLIPWRITE: the copy being accumulated
 	decoration_pending_t *decoration;
 	console_font_pending_t *font; // FONTWRITE: the image being accumulated
-	char bt_command[32];
+	char bt_command[64];
+	bool bt_connection;
 	uint8_t bt_length;
 	bool bt_refused;
 } sys_file_handle_t;
@@ -1950,7 +1954,7 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 	bool is_decoration = (sp.type == SYS_NODE_DECORATIONS);
 	bool is_appearance = (sp.type == SYS_NODE_APPEARANCE);
 	bool is_font = (sp.type == SYS_NODE_CONSOLEFONT);
-	bool is_bt = (sp.type == SYS_NODE_BTSCAN);
+	bool is_bt = (sp.type == SYS_NODE_BTSCAN || sp.type == SYS_NODE_BTCONNECTION);
 	if (mode == NULL || mode[0] == '\0' || mode[1] != '\0' || (mode[0] != 'r' && mode[0] != 'w'))
 		return -1;
 	if (mode[0] == 'w' && !is_probe && !is_clip && !is_appearance && !is_font && !is_decoration && !is_bt)
@@ -1960,12 +1964,14 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 		synth_text_t text = {0};
 		if (mode[0] == 'r') {
 			if (!synth_text_init(&text, BT_SCAN_TEXT_BYTES)) return -1;
-			text.len = xhci_bluetooth_read(text.buf, text.cap, !is_bt);
+			text.len = xhci_bluetooth_read(text.buf, text.cap,
+			    sp.type == SYS_NODE_BTCONNECTION ? 2 : sp.type == SYS_NODE_BTDEVICES ? 1 : 0);
 		}
 		sys_file_handle_t *h = synth_snapshot_publish(vfs_file, &text, path, vfs_fs,
 		    sizeof(sys_file_handle_t), FILETYPE_SYSFILE);
 		if (!h) return -1;
 		if (mode[0] == 'w') h->kind = SYS_HANDLE_BTWRITE;
+		h->bt_connection = sp.type == SYS_NODE_BTCONNECTION;
 		return 0;
 	}
 
@@ -2182,7 +2188,7 @@ static int sys_write(vfs_file_t *vfs_file, const void *buffer, size_t size)
 	if (h == NULL || buffer == NULL)
 		return -1;
 	if (h->kind == SYS_HANDLE_BTWRITE) {
-		if (h->bt_refused || size > sizeof(h->bt_command) - h->bt_length) {
+		if (h->bt_refused || size > (h->bt_connection ? sizeof(h->bt_command) : 32u) - h->bt_length) {
 			h->bt_refused = true;
 			return -1;
 		}
@@ -2260,7 +2266,7 @@ static int sys_write(vfs_file_t *vfs_file, const void *buffer, size_t size)
 
 // Close releases borrowed clipboard storage and submits accumulated writes.
 // Bluetooth assembles the command here because echo can write its word and
-// newline separately; malformed or oversized writes must not start a scan.
+// newline separately; malformed or oversized writes must not start a procedure.
 static int sys_close(vfs_file_t *vfs_file)
 {
 	sys_file_handle_t *h = (sys_file_handle_t *)vfs_file->handle;
@@ -2270,7 +2276,8 @@ static int sys_close(vfs_file_t *vfs_file)
 	{
 		if (h->kind == SYS_HANDLE_BTWRITE) {
 			if (h->bt_refused || (h->bt_length &&
-			    (!bt_scan_request_valid(h->bt_command, h->bt_length) || !xhci_bluetooth_scan())))
+			    (h->bt_connection ? !xhci_bluetooth_connection(h->bt_command, h->bt_length) :
+			     (!bt_scan_request_valid(h->bt_command, h->bt_length) || !xhci_bluetooth_scan()))))
 				verdict = -1;
 		}
 		else if (h->kind == SYS_HANDLE_DECORATIONS_WRITE) {
@@ -2460,8 +2467,9 @@ static int sys_read_dir(vfs_directory_t *vfs_dir, os64_dirent_t *entry)
 		}
 
 		case SYS_NODE_BTDIR:
-			if (h->index >= 2) return 0;
-			strncpy(entry->name, h->index++ == 0 ? "scan" : "devices", OS64_DIRENT_NAME_MAX);
+			if (h->index >= 3) return 0;
+			strncpy(entry->name, h->index == 0 ? "scan" : h->index == 1 ? "devices" : "connection", OS64_DIRENT_NAME_MAX);
+			h->index++;
 			return 1;
 		case SYS_NODE_NETDIR:
 		{
@@ -2557,6 +2565,9 @@ static int sys_stat(const char *path, os64_dirent_t *entry, vfs_filesystem_t *vf
 			return 0;
 		case SYS_NODE_BTSCAN:
 			strncpy(entry->name, "scan", OS64_DIRENT_NAME_MAX);
+			return 0;
+		case SYS_NODE_BTCONNECTION:
+			strncpy(entry->name, "connection", OS64_DIRENT_NAME_MAX);
 			return 0;
 		case SYS_NODE_BTDEVICES:
 			strncpy(entry->name, "devices", OS64_DIRENT_NAME_MAX);

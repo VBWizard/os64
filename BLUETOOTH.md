@@ -1,4 +1,4 @@
-# Bluetooth discovery
+# Bluetooth discovery and LE keyboard input
 
 The first operational Intel AX210 USB adapter (`8087:0032`) stays attached after
 firmware bring-up. Discovery uses the existing polled xHCI transport. USB interrupt
@@ -39,6 +39,59 @@ read` rather than waiting under a scheduler-related lock.
 Periodic discovery and device-cache policy are recorded in DEBTS.md. No periodic
 radio scanning is enabled by this slice.
 
+## LE boot keyboard session
+
+Put the keyboard's LE ("BT 5.0") slot in pairing mode. Select its current address
+and address type from `devices`, then request a connection:
+
+```sh
+echo connect random f8:2c:fe:ff:f0:1a > /sys/bluetooth/connection
+cat /sys/bluetooth/connection
+```
+
+The address above was observed on the P5; it is not a default or an automatic
+connection target. `public` and `random` are distinct address types. Read the
+connection file again while pairing. When it displays a six-digit passkey, type
+that code **on the Bluetooth keyboard**, including leading zeroes, then Enter.
+The passkey window lasts up to sixty seconds. `keyboard ready` means link
+encryption, HID service discovery, Boot Protocol selection and notification
+subscription succeeded. `key reports` counts matching notifications; ordinary
+keys then use the existing HID input path, including modifiers and repeat.
+
+```sh
+echo disconnect > /sys/bluetooth/connection
+```
+
+Disconnect resets the Bluetooth controller and releases held keys. Once status
+returns to `idle`, another scan or connection can be requested. Scanning is
+refused during an active connection or connection attempt. Connection commands
+are bounded to 64 bytes, validated as a whole on close, and never wait for radio
+or USB completion in the syscall. Empty writes do nothing. Invalid/busy requests
+are refused. One peer is supported. No implicit pairing, automatic reconnection,
+or selection by an advertised name occurs.
+
+This implementation negotiates **LE legacy Passkey Entry**, with a 16-byte key,
+a DisplayOnly host and a KeyboardOnly/KeyboardDisplay peer. It refuses Just Works
+and smaller keys. It uses the controller's LE Rand and LE Encrypt commands for
+random generation and the Core c1/s1 functions, verifies the peer's confirm value,
+and waits for successful Encryption Change before discovering HID. This is not
+LE Secure Connections; legacy six-digit pairing lacks its resistance to passive
+capture of the pairing exchange. Pairing is session-only: no bond or identity
+keys are distributed or stored, so a later connection requires pairing again.
+
+The keyboard must expose HID service 0x1812, Boot Keyboard Input 0x2a22 with
+notifications and its CCC descriptor, and Protocol Mode 0x2a4e with Write Without
+Response. Generic Report Map interpretation, consumer/media keys, LED output,
+mice, Classic HID and audio are not implemented. An unsupported service reports
+an explicit error instead of treating an arbitrary eight-byte report as keys.
+
+Connection initiation has a twenty-second wait; HCI commands have two seconds,
+ATT requests and ACL completion have five seconds, and setup has an overall
+150-second bound. Runtime errors release held keys and attempt a bounded HCI
+Reset after outstanding USB transfers finish. Failure status is retained and
+requires reboot; it never claims the link is inactive unless a disconnect or
+successful reset proves it. USB DMA remains allocated if transport fails.
+
 ## Controller and transport
 
 Firmware loading and its boot-time receive recovery precede runtime discovery.
@@ -58,7 +111,7 @@ Extended/coded-PHY advertising is not decoded by this slice.
 The runtime state machine submits one EP0 command at a time and waits across
 poll passes for both USB completion and the matching HCI reply. Inquiry uses
 Command Status followed by Inquiry Complete. Interrupt IN carries operational
-HCI events; bulk IN is not decoded as events after the firmware handoff. Receive
+HCI events; bulk IN carries ACL data after the firmware handoff. Receive
 rearming is deferred until after the event drain to bound radio work per pass.
 The decoder allocates no memory, waits on nothing and sanitizes untrusted names.
 
@@ -71,6 +124,16 @@ adapter requires reboot before another scan; DMA storage remains owned.
 Timing depends on scheduler polling continuing to run, as recorded by the xHCI
 dispatch-frequency debt.
 
+LE input has separate USB packet, HCI ACL and L2CAP framing. Receive storage is
+bounded (1024-byte HCI ACL payload, 64-byte L2CAP payload); ATT uses the default
+23-byte MTU. The transmit queue is bounded to eight packets and uses one
+controller ACL credit at a time, returned by Number Of Completed Packets. USB
+completion independently gates DMA reuse. EP0 commands and bulk OUT have disjoint
+regions in the retained transmit page. Protocol decoders allocate no memory or
+perform blocking waits. Optional peripheral L2CAP connection-parameter updates
+are rejected, retaining the central's chosen interval. Input stops on encryption
+loss or disconnect, with an empty report releasing held keys.
+
 ## Validation
 
 `tools/test_bt_scan_host.sh` exercises HCI sequencing, command credits/replies,
@@ -81,6 +144,22 @@ then checks retained state and runtime discovery without additional allocation.
 `tools/test_bt_intel_host.sh` covers firmware wire/container parsing, and
 `tools/test_mouse_wheel_host.sh` covers existing HID decoding.
 
-The P5 confirmed cold firmware bring-up at commit `9b21368b`. Runtime discovery
-requires its own hardware validation; simulated HCI success does not prove what
-will be discoverable around a real desk.
+`tools/test_bt_le_host.sh` uses an independent OpenSSL-backed controller/peer
+simulation and Core c1/s1 example values. It exercises authenticated pairing,
+encryption, paginated GATT discovery, key notification, disconnect, malformed
+framing, unsupported keyboards, wrong confirmation, command rejection, credits
+and USB ordering. OpenSSL is a host-test dependency, not linked into the kernel.
+The production xHCI harness also checks bulk receive delivery/release and
+non-overlapping control/ACL DMA storage.
+
+The P5 confirmed cold firmware bring-up at commit `9b21368b` and discovery at
+`76c6eedc`: fifteen LE addresses on the first scan, followed by eighteen results
+including `BT 3.0 Keyboard?` (Classic) and `BT 5.0 Keyboard` (LE). Both scan status
+reads reported complete, no malformed reports, no error and discovery inactive.
+LE pairing and typing still require their own P5 validation; simulated success
+does not establish compatibility with that keyboard.
+
+Wire references: [Bluetooth Core Security Manager](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/host/security-manager-specification.html),
+[ATT](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/host/attribute-protocol--att-.html),
+[L2CAP](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/host/logical-link-control-and-adaptation-protocol-specification.html),
+and [Linux v6.12 HCI definitions](https://github.com/torvalds/linux/blob/v6.12/include/net/bluetooth/hci.h).

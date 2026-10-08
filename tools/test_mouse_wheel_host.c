@@ -16,6 +16,7 @@ static void outb(uint16_t port, uint8_t value);
 #include "../kernel/src/driver/system/hid_mouse.c"
 #include "../kernel/src/driver/system/usb/bt_intel.c"
 #include "../kernel/src/driver/system/usb/bt_scan.c"
+#include "../kernel/src/driver/system/usb/bt_le.c"
 #include "../kernel/src/driver/system/usb/xhci.c"
 #include "../kernel/src/tty.c"
 #include "../kernel/src/vt_select.c"
@@ -28,6 +29,7 @@ struct Framebuffer kFrameBuffer = {.width=1024, .height=768};
 static bool test_gui = true;
 bool gui_owns_glass(void) { return test_gui; }
 uint8_t keyboard_current_modifiers(void) { return OS64_GUI_MOD_SHIFT; }
+void hid_keyboard_tick(hid_keyboard_t *k) { (void)k; }
 void hid_keyboard_report(hid_keyboard_t *kbd, const uint8_t report[8])
 { (void)kbd; (void)report; abort(); }
 static unsigned diagnostic_lines;

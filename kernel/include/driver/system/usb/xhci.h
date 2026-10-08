@@ -1,7 +1,7 @@
 #ifndef XHCI_H
 #define XHCI_H
 
-// xHCI (USB 3.x host controller), HID input and AX210 discovery transport.
+// xHCI (USB 3.x host controller), HID input and AX210 Bluetooth transport.
 //
 // WHY THIS EXISTS: the Bosgame P5 has no PS/2 port. Every keystroke it will
 // ever receive arrives over USB, so "os64 runs on real hardware" requires
@@ -22,8 +22,9 @@
 //     descriptors and firmware image type. A matching cold AX210 receives the
 //     embedded Intel firmware and DDC configuration. The first operational
 //     AX210 keeps its USB slot and DMA storage for on-demand Classic/LE scans
-//     through /sys/bluetooth. Failed bring-up attempts Disable Slot before
-//     freeing DMA storage. Discovery does not establish paired connections.
+//     and one LE boot keyboard through /sys/bluetooth. Failed bring-up attempts
+//     Disable Slot before freeing DMA storage. LE input requires encrypted
+//     passkey pairing.
 //     Mouse descriptors can select report protocol for a
 //     relative X/Y/wheel layout; unsupported descriptors retain boot mode.
 //   - Handles BOTH context sizes (HCCPARAMS1.CSZ): QEMU uses 32-byte
@@ -48,13 +49,15 @@ void init_xHCI(void);
 
 // Drain every active controller's event ring: completed keyboard/mouse reports
 // are translated and delivered, transfer TRBs are re-armed, and Bluetooth
-// discovery advances without waiting for commands. Called every
-// scheduler pass from processSignals; internally serialized across cores and
+// discovery and LE keyboard state advance without waiting for commands. Called
+// every scheduler pass from processSignals; internally serialized across cores and
 // cheap when idle. Safe to call before init or with no USB input devices.
 void xhci_poll(void);
 
-// Non-blocking sysfs interface. False means absent, busy, or failed until reboot.
+// Non-blocking sysfs commands refuse absent/busy/failed adapters or invalid input.
 bool xhci_bluetooth_scan(void);
-size_t xhci_bluetooth_read(char *out, size_t capacity, bool devices);
+bool xhci_bluetooth_connection(const char *data, size_t bytes);
+// file: 0 scan status, 1 discovery results, 2 LE connection status.
+size_t xhci_bluetooth_read(char *out, size_t capacity, unsigned file);
 
 #endif
