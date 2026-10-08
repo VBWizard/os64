@@ -6,6 +6,16 @@ static void dom_classic_cases(void)
     DomFixture f=fixture_new(NULL);
     if(!fixture_ready(&f)) return;
     dom_script(&f,CLASSIC_ASSERT
+        "assert(self===window&&frames===window&&parent===window&&top===window&&globalThis===window);"
+        "assert(self.document===document&&top.location===location&&frames.length===0&&window.length===0);"
+        "assert(top===self&&parent===self&&self===window.self);"
+        "self.addEventListener('ping',function(){});"
+        "var d=Object.getOwnPropertyDescriptor(window,'top');assert(!d.writable&&!d.configurable&&d.enumerable);"
+        "top=1;assert(top===window);"
+        "self=7;assert(self===7&&window.self===7);parent='p';assert(parent==='p');"
+        "frames=undefined;assert(frames===undefined&&window.window===window);",
+        "classic-window-self-aliases");
+    dom_script(&f,CLASSIC_ASSERT
         "assert(navigator===window.navigator);assert(navigator.appName==='Netscape');"
         "assert(navigator.userAgent==='yonder/1.0 (os64)');"
         "assert(navigator.appVersion==='1.0 (os64)');"
