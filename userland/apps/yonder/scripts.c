@@ -152,6 +152,14 @@ static int64_t write(void *opaque, const char *utf8, size_t length)
     return s->options.write(s->options.opaque, utf8, length);
 }
 
+// A name the page's window did not have: the census's, with the answer
+// the page gets left as it is (YONDER_DIAGNOSTICS.md).
+static void global_missed(void *opaque, const char *name)
+{
+    yonder_scripts_t *s = opaque;
+    yonder_diag_missing(s->options.diag, "global", name, 1);
+}
+
 static uint64_t now_ms(void *opaque)
 {
     yonder_scripts_t *s = opaque;
@@ -187,6 +195,8 @@ static bool ensure_runtime(yonder_scripts_t *s, os64_js_outcome_t *out)
     s->dom = os64_dom_create(s->runtime, s->doc, s->state, &options, out);
     os64_dom_set_geometry(s->dom, s->options.geometry, s->options.opaque);
     os64_dom_set_user_agent(s->dom, s->user_agent, s->user_agent_opaque);
+    if (s->options.diag != NULL)
+        os64_dom_set_global_miss(s->dom, global_missed, s);
     if (s->dom == NULL || os64_js_install_output(s->runtime, 1, OS64_JS_OUTPUT_CONSOLE_LOG, out) != OS64_JS_OK) {
         // A runtime a binding could not be built in is not evaluated again.
         out->status = OS64_JS_HOST_FAILURE;
@@ -512,6 +522,10 @@ void yonder_scripts_connected(yonder_scripts_t *s, const os64_html_node_t *scrip
 {
     if (s == NULL || s->dead)
         return;
+    // A module is recognised and never run: what the page asked for and
+    // did not get.
+    if (os64_dom_script_kind(script) == OS64_DOM_SCRIPT_MODULE)
+        yonder_diag_missing(s->options.diag, "script", "module", 1);
     bool src = os64_html_attr(script, "src") != NULL;
     Item *it = item_new(s, script, src ? MODE_ASYNC : MODE_INLINE);
     if (it == NULL)
@@ -660,6 +674,11 @@ uint64_t yonder_scripts_tasks(const yonder_scripts_t *s)
 uint64_t yonder_scripts_written(const yonder_scripts_t *s)
 {
     return s != NULL ? s->written : 0;
+}
+
+yonder_diag_t *yonder_scripts_diag(const yonder_scripts_t *s)
+{
+    return s != NULL ? s->options.diag : NULL;
 }
 
 uint64_t yonder_scripts_serial(const yonder_scripts_t *s)

@@ -414,8 +414,23 @@ static void collect_styles(const os64_html_node_t *n, Input *in)
     }
 }
 
-// A page and "WIDTHxHEIGHT": every element's author winners.
-static void cascade(const char *html, size_t hlen, const char *viewport)
+// A page's cascade as the skips mode prints it: what the build passed
+// over (garb_cascade_skips), one `kind name count` a line.
+static void print_skips(const garb_cascade_t *c)
+{
+    static const char *const kinds[] = {"property", "at-rule", "function", "font"};
+    garb_skip_t skips[GARB_SKIPS_MAX];
+    uint32_t lost;
+    int32_t n = garb_cascade_skips(c, skips, GARB_SKIPS_MAX, &lost);
+    for (int32_t i = 0; i < n && i < GARB_SKIPS_MAX; i++)
+        printf("%s %s %u\n", kinds[skips[i].kind], skips[i].name, (unsigned)skips[i].count);
+    if (lost != 0)
+        printf("lost %u\n", (unsigned)lost);
+}
+
+// A page and "WIDTHxHEIGHT": every element's author winners, or with
+// `skips`, what the cascade passed over.
+static void cascade(const char *html, size_t hlen, const char *viewport, bool skips)
 {
     garb_env_t env = {800, 600};
     if (viewport != NULL)
@@ -429,12 +444,17 @@ static void cascade(const char *html, size_t hlen, const char *viewport)
     memset(&in, 0, sizeof(in));
     collect_styles(doc->document, &in);
     garb_cascade_t *c = garb_cascade(in.in, in.n, doc, env);
-    size_t need = garb_cascade_dump(c, doc, NULL, 0) + 1;
-    char *out = malloc(need);
-    garb_cascade_dump(c, doc, out, need);
-    fputs(out, stdout);
-    puts(garb_cascade_incomplete(c) ? "(incomplete)" : "(end)");
-    free(out);
+    if (skips) {
+        print_skips(c);
+        puts(garb_cascade_incomplete(c) ? "(incomplete)" : "(end)");
+    } else {
+        size_t need = garb_cascade_dump(c, doc, NULL, 0) + 1;
+        char *out = malloc(need);
+        garb_cascade_dump(c, doc, out, need);
+        fputs(out, stdout);
+        puts(garb_cascade_incomplete(c) ? "(incomplete)" : "(end)");
+        free(out);
+    }
     garb_cascade_free(c);
     for (int32_t k = 0; k < in.nparsed; k++)
         garb_free(&in.parsed[k]);
@@ -1076,8 +1096,8 @@ int main(int argc, char **argv)
             declaration(text, len);
         else if (strcmp(argv[1], "media") == 0)
             media(text);
-        else if (strcmp(argv[1], "cascade") == 0)
-            cascade(text, len, pabsent ? NULL : protocol);
+        else if (strcmp(argv[1], "cascade") == 0 || strcmp(argv[1], "skips") == 0)
+            cascade(text, len, pabsent ? NULL : protocol, strcmp(argv[1], "skips") == 0);
         else if (strcmp(argv[1], "select") == 0)
             select_page(text, len, protocol);
         else

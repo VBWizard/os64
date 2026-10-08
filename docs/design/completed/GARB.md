@@ -110,7 +110,11 @@ declarations), `garb_free`. A cascade pins its document snapshot until
 `garb_cascade_free`; its document and parsed input sheets must outlive it.
 This protects borrowed attribute bytes when the tree changes underneath
 an older painted snapshot. A text dump of a sheet and of a cascade, for
-the harness and a probe in the guest.
+the harness and a probe in the guest. `garb_cascade_skips` returns what the
+build passed over because this library does not read it: a property with
+no reader, an at-rule it keeps no rule of, a function no reader accepts in
+a declaration it dropped, and the family of an `@font-face`. That list is
+yonder's page file's census of CSS (YONDER_DIAGNOSTICS.md).
 
 ## The cost
 

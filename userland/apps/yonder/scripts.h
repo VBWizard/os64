@@ -14,6 +14,8 @@
 
 #include <dom/dom.h>
 
+#include "diag.h"
+
 typedef struct yonder_scripts yonder_scripts_t;
 
 typedef struct {
@@ -38,6 +40,10 @@ typedef struct {
     // built, at the view's size. NULL: a script's measurement throws.
     os64_dom_geometry_provider_t geometry;
     void *opaque;
+    // The page's record (diag.h), borrowed for the host's life: a global
+    // the page reached for and did not find, and a module script, are
+    // written there as they happen. NULL keeps no record.
+    yonder_diag_t *diag;
 } yonder_scripts_options_t;
 
 // A host for `doc`, whose control state is `state` (which must outlive it).
@@ -118,6 +124,8 @@ void yonder_scripts_set_execution_ms(yonder_scripts_t *scripts, uint64_t ms);
 uint64_t yonder_scripts_execution_ms(const yonder_scripts_t *scripts);
 // False once a sticky outcome retired the runtime: nothing runs again.
 bool yonder_scripts_alive(const yonder_scripts_t *scripts);
+// The record the host was given (options.diag).
+yonder_diag_t *yonder_scripts_diag(const yonder_scripts_t *scripts);
 // The serial a script's fetch job carries back.
 uint64_t yonder_scripts_serial(const yonder_scripts_t *scripts);
 // How many tasks this host has run: the audit's count.

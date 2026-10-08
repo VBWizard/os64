@@ -738,3 +738,19 @@ sources byte-for-byte unchanged; its manifest hash is updated.
 The DOM host profiles pass 3,087 target-core and 17,739 sanitized-core checks,
 with zero failures and leak detection enabled. The manifest/header and target
 symbol/dependency audits pass (187 engine exports, nineteen runtime exports).
+
+## Global-miss handler validation
+
+Yonder's diagnostics slice adds a hash-checked browser global-miss handler
+(patch 0008, after D11's 0007), `JS_SetGlobalMissHandler`. The target audit
+reports 188 engine exports and nineteen runtime exports. libdom's host
+covers eleven lookup forms through `os64_dom_set_global_miss`: a bare name,
+`typeof` at top level and inside a function, a closure's reference that
+still throws, `window.x`, `window['x']`, `globalThis.x` and an optional
+call are each heard once; a symbol, an index, a found name, `in`,
+`hasOwnProperty` and a descriptor query are not; with no handler, nothing
+is. `'fetch' in window` reads false throughout. The DOM host profiles pass
+3,120 target-core and 17,766 sanitized-core checks with zero failures.
+`tools/test_js_prepare.py` pins both hunks and refuses drifted context in
+the inline-field hunk. The consumer is yonder's page file
+([YONDER_DIAGNOSTICS.md](../../../docs/design/pending/YONDER_DIAGNOSTICS.md)).

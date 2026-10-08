@@ -22,6 +22,7 @@
 #define CONF_CACHE_MB "cache_mb"
 
 #define CONF_ZOOM "zoom"
+#define CONF_DIAGNOSTICS "diagnostics"
 #define CONF_SCRIPT_SECONDS "script_seconds"
 
 // The list's height, in rows; the dialog's rows are a line of words, the
@@ -155,6 +156,21 @@ uint32_t yonder_settings_saved_zoom(void)
     if (zoom == 0)
         os64_debug_log("yonder: yonder.conf's zoom is not a percent from 25 to 500; using 100");
     return zoom != 0 ? zoom : 1000;
+}
+
+bool yonder_settings_saved_diagnostics(char *out, size_t cap)
+{
+    int64_t rc = os64_conf_get(CONF_NAME, CONF_DIAGNOSTICS, out, cap);
+    if (rc == OS64_CONF_NO_FILE || rc == OS64_CONF_NO_KEY)
+        return false;
+    size_t n = rc == 0 ? os64_strlen(out) : 0;
+    while (n > 1 && out[n - 1] == '/')
+        out[--n] = '\0';
+    if (n == 0 || out[0] != '/') {
+        os64_debug_log("yonder: yonder.conf's diagnostics is not a directory's full path; no page files");
+        return false;
+    }
+    return true;
 }
 
 way_cache_t *yonder_settings_cache_open(void)

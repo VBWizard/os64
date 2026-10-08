@@ -368,6 +368,17 @@ failed attempts. Callback budget checks bracket native work and preserve the
 turn's sticky limit classification. See [D10](../../../docs/design/pending/DOM_D10.md)
 for provider semantics, stack measurements and the browser integration boundary.
 
+## The global-miss census
+
+`os64_dom_set_global_miss` tells an owner-thread hook each name a lookup on
+`window` did not find: a bare name, `typeof`, `window.x`, `window['x']`,
+`globalThis.x`. It does not hear `in`, `hasOwnProperty` or a descriptor
+ask. The hook hears the name before the lookup answers, and the answer
+(undefined, or the ReferenceError) is unchanged, so feature detection sees
+what it always saw. It must not enter JS. The engine side is libjs patch
+0008. Yonder's page file is the consumer
+([YONDER_DIAGNOSTICS.md](../../../docs/design/pending/YONDER_DIAGNOSTICS.md)).
+
 ## D11 classic consumers
 
 The bounded widget surface is specified in

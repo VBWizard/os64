@@ -729,6 +729,7 @@ builder decides, and the proof in this house's shape.
 | D9 | `document.write`: libhtml's `os64_html_parser_write`, libdom's `write`/`writeln`/`open`/`close`, the blocking script's writes reaching yonder's stream. Designed in [DOM_D9.md](DOM_D9.md); **built** | § D9, as built |
 | D10 | **Merged** (#225). Synchronous geometry, [DOM_D10.md](DOM_D10.md); joined with the loop in § D7c, as built | Native/browser/guest geometry proof in DOM_D10.md |
 | D11 | **Built; in review; P5 acceptance pending.** Classic widget surface, [DOM_D11.md](DOM_D11.md), on `userland` after D7d | § D11, as built |
+| Diagnostics | **Built; in review.** The page file and the badge, [YONDER_DIAGNOSTICS.md](YONDER_DIAGNOSTICS.md): per page, what it asked for that yonder lacks and what failed, the Modern Web census | § As built there |
 | later | the libjs reclaim slice | each with its own |
 
 ### D1, as built

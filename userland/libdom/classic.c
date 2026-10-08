@@ -229,6 +229,16 @@ void os64_dom_set_user_agent(os64_dom_t *dom, const char *(*provider)(void *), v
     dom->user_agent_opaque = opaque;
 }
 
+void os64_dom_set_global_miss(os64_dom_t *dom, void (*heard)(void *opaque, const char *name),
+                              void *opaque)
+{
+    os64_js_outcome_t outcome;
+    JSContext *ctx = dom != NULL && !dom->closed ? os64_js_context(dom->runtime, OS64_JS_ABI_ID, &outcome)
+                                                 : NULL;
+    if (ctx != NULL)
+        JS_SetGlobalMissHandler(ctx, heard, opaque);
+}
+
 int d_classic_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 {
     if (d_style_install(dom, ctx) < 0) return -1;

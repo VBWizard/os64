@@ -416,3 +416,20 @@ The snapshot owns its values and does not expose or alias stack storage. The
 calling binding charges this synchronous work to its active task. D11's
 consumer and regression evidence is in
 [DOM_D11.md](../../../docs/design/pending/DOM_D11.md).
+
+### Explicit browser global-miss handler
+
+The patched binding header exports `JS_SetGlobalMissHandler(ctx, handler,
+opaque)`. While a handler is installed, it hears each string name that a
+lookup on the context's global object runs out of prototype chain for. The
+lookup can end in either of the engine's two places that answer "not
+found": the general property read, or the interpreter's inline field read.
+A symbol or an integer index is not heard, and neither is an `in`,
+`hasOwnProperty` or descriptor query, because none of those is a lookup.
+The handler runs before the lookup answers, and the answer is the engine's
+own (undefined, or the ReferenceError). The name is in the engine's stack
+buffer, truncated to its atom-print size, so hearing it allocates nothing.
+The handler must not enter the engine. A standalone context installs none.
+libdom's `os64_dom_set_global_miss` is the browser's door to it, and
+yonder's page file is the consumer
+([YONDER_DIAGNOSTICS.md](../../../docs/design/pending/YONDER_DIAGNOSTICS.md)).

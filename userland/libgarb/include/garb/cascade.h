@@ -90,6 +90,25 @@ garb_env_t garb_cascade_env(const garb_cascade_t *c);
 garb_style_t garb_style_for(const garb_cascade_t *c, const os64_html_node_t *element);
 void garb_cascade_free(garb_cascade_t *c);
 
+// What the build passed over because this library does not read it — a
+// property it has no reader for, an at-rule it does not keep, a function
+// no reader accepts in a declaration it dropped, the family of an
+// @font-face (no face is fetched) — each name once, lower case, with how
+// often it was met. A prefixed name (`-webkit-…`) is not counted: one
+// engine's dialect is passed over by every other. A value merely written
+// wrong is not either. The names live as long as the cascade. Copies up to
+// `cap` into `out` and answers how many there are; `lost` (may be NULL)
+// is how many met no room. At most GARB_SKIPS_MAX are kept.
+typedef enum { GARB_SKIP_PROPERTY, GARB_SKIP_AT_RULE, GARB_SKIP_FUNCTION, GARB_SKIP_FONT } garb_skip_kind_t;
+typedef struct {
+    garb_skip_kind_t kind;
+    const char *name;
+    size_t len;
+    uint32_t count;
+} garb_skip_t;
+#define GARB_SKIPS_MAX 256
+int32_t garb_cascade_skips(const garb_cascade_t *c, garb_skip_t *out, int32_t cap, uint32_t *lost);
+
 // A media query list (Media Queries 4) against `env`: a `media` attribute,
 // or an @media rule's prelude. An empty list is true; one that will not
 // parse is false (`not all`).
