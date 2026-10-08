@@ -187,8 +187,9 @@ reconnect for the current boot until the user reconnects or enables it again;
 provide a persistent disable setting for users who want manual connection.
 Forget cancels retries and removes the bond. Rejected keys and unrecognized
 identities require user action rather than repeated pairing attempts.
-Controller-reported connection timeout during saved-key encryption setup is
-retryable after successful cleanup. A trailing disconnect preserves the first
+Controller-reported connection timeout (08) or establishment failure (3e)
+during saved-key setup is retryable after successful cleanup, whether reported
+by a connection, encryption or disconnect event. A trailing disconnect preserves the first
 failure's classification, so it neither blocks a transient retry nor turns a
 key rejection into an automatic retry. The P5 timeout evidence and host
 regression coverage are recorded in `BLUETOOTH.md`.
@@ -211,7 +212,10 @@ confirms identity-key receipt and saved-key reuse after reboot; Chris confirmed
 unattended boot connection without manual scan/reconnect. Automatic keyboard
 off/on recovery, privacy-address rotation and persistent disable/forget remain
 required before full hardware acceptance. The USB-poll handoff optimization
-has host coverage; its boot-latency improvement still needs a P5 measurement.
+has host coverage; successive P5 snapshots measured readiness at 21,070 ms
+before it and 17,210 ms afterward. A subsequent 3e disconnect exposed a separate
+retry-classification gap, now covered by host tests; corrected automatic 3e
+recovery still needs hardware validation. See `BLUETOOTH.md` for the evidence.
 
 Peripheral connection-parameter updates remain a separate compatibility task;
 the working keyboard retries requests that Os64 rejects. That policy is unchanged.

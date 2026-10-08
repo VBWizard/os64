@@ -811,10 +811,12 @@ static void power_loss_recovery(void)
     puts("PASS: power-loss recovery preserves bonds, releases keys and gates retry on reset and USB completion");
 }
 
-static void reconnect_encryption_timeout(void)
+static void reconnect_link_failure(void)
 {
-    // The P5 reports Encryption Change 08 followed by Disconnection Complete 08.
-    // Exercise both event orders, timeout alone, and security errors followed by timeout.
+    // Controllers can report link loss in encryption or disconnect events.
+    // Security errors retain their policy when followed by either link-loss code.
+    const uint8_t failures[]={8,0x3e};
+    for(unsigned failure=0;failure<sizeof(failures);failure++)
     for(unsigned kind=0;kind<6;kind++) {
         begin_bond(2); run(); stop_session();
         peer_bonding=false; peer_reconnecting=true;
@@ -829,8 +831,8 @@ static void reconnect_encryption_timeout(void)
         assert(cmd_n && le_u16(cmd)==0x2019 && session.connected);
         cmd_n=0;
         const uint8_t accepted[]={0x0f,4,0,1,0x19,0x20}; event(accepted,sizeof(accepted));
-        uint8_t enc[]={8,4,8,0x0b,0,0};
-        const uint8_t lost[]={5,4,0,0x0b,0,8};
+        uint8_t enc[]={8,4,failures[failure],0x0b,0,0};
+        const uint8_t lost[]={5,4,0,0x0b,0,failures[failure]};
         if(kind>=3) enc[2]=kind==3?6:kind==4?5:0x3d;
         if(kind==1) event(lost,sizeof(lost));
         event(enc,sizeof(enc));
@@ -847,7 +849,7 @@ static void reconnect_encryption_timeout(void)
         bt_manager_step(&manager,&session,&scan,now); run();
         assert(session.phase==BT_LE_READY && session.bond_reused && session.encrypted);
     }
-    puts("PASS: reconnect encryption timeout resumes discovery; key/authentication/MIC errors remain blocked");
+    puts("PASS: reconnect timeout/establishment failure resumes discovery; key/authentication/MIC errors remain blocked");
 }
 
 static void persistent_manager(void)
@@ -1027,7 +1029,7 @@ static void pairing_diagnostics(void)
 
 int main(void)
 {
-    vectors(); success(); failures(); framing(); pairing_diagnostics(); just_works(); report_protocol(); p5_input_subscriptions(); receive_diagnostics(); inspection(); bonding(); identity_bonding(); power_loss_recovery(); reconnect_encryption_timeout(); persistent_manager();
+    vectors(); success(); failures(); framing(); pairing_diagnostics(); just_works(); report_protocol(); p5_input_subscriptions(); receive_diagnostics(); inspection(); bonding(); identity_bonding(); power_loss_recovery(); reconnect_link_failure(); persistent_manager();
     bt_le_t s={0};
     assert(!bt_le_request(&s,"connect random zz:00:00:00:00:00",32,0));
     assert(!bt_le_request(&s,"disconnect junk",15,0));

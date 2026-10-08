@@ -53,6 +53,10 @@ static bool le_random_valid(const uint8_t address[6],uint8_t kind)
 }
 static bool le_identity_valid(uint8_t type,const uint8_t address[6])
 { return type==0 || (type==1 && le_random_valid(address,0xc0)); }
+// Link loss can arrive during initiation, encryption setup, or disconnection.
+// Use the same classification at those event sites; key failures are excluded.
+static bool le_retryable_link_status(uint8_t status)
+{ return status==8 || status==0x3e; }
 bool bt_le_input_active(const bt_le_t *s)
 {
     return s->connected && s->encrypted && (s->phase==BT_LE_READY ||
@@ -191,7 +195,7 @@ void bt_le_event(void *context,const uint8_t *e,size_t n)
         if(n!=21) { le_bad(s); return; }
         s->status=e[3];
         if(s->status) {
-            le_fail(s,"LE connection failed"); s->retryable=s->status==0x3e || s->status==8; return;
+            le_fail(s,"LE connection failed"); s->retryable=le_retryable_link_status(s->status); return;
         }
         if(e[6]!=0 || e[7]!=s->address_type || !le_equal(e+8,s->peer,6) || le_u16(e+4)>0x0eff) {
             le_fail(s,"unexpected LE connection identity/role"); return;
@@ -211,7 +215,7 @@ void bt_le_event(void *context,const uint8_t *e,size_t n)
         if(s->connected && le_u16(e+3)==s->handle) {
             bool first_error=!s->error;
             bool retry=(bt_le_input_active(s) && (e[5]==8 || e[5]==0x13 || e[5]==0x16)) ||
-                (s->bond_reused && e[5]==8);
+                (s->bond_reused && le_retryable_link_status(e[5]));
             s->disconnect_reason=e[5]; s->disconnected_ms=s->now;
             s->status=e[5]; s->connected=false; s->encrypted=false; s->link_may_active=false;
             le_fail(s,"peer disconnected");
@@ -225,11 +229,11 @@ void bt_le_event(void *context,const uint8_t *e,size_t n)
         s->status=e[2];
         if(s->status || e[5]!=1 || (s->phase!=BT_LE_ENCRYPT && s->phase!=BT_LE_ENCRYPT_WAIT)) {
             bool first_error=!s->error;
-            bool retry=s->bond_reused && s->status==8 &&
+            bool retry=s->bond_reused && le_retryable_link_status(s->status) &&
                 (s->phase==BT_LE_ENCRYPT || s->phase==BT_LE_ENCRYPT_WAIT);
             s->encrypted=false; le_fail(s,"link encryption failed or changed unexpectedly");
-            // Supervision timeout during saved-key setup is a lost connection,
-            // not evidence of a bad key. Cleanup still gates the next attempt.
+            // Link loss during saved-key setup permits a retry after cleanup;
+            // authentication and key errors still require user action.
             if(first_error) s->retryable=retry;
             return;
         }

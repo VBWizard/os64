@@ -321,10 +321,11 @@ keys, matching and nonmatching RPAs, air-address pairing confirms, controller
 binding, and encryption rejection after an RPA match. Manager tests restore an
 encoded bond, remain live through repeated empty scans, and automatically
 reconnect after power loss with a new RPA. They cover persistent disable,
-disconnect suppression and forgetting. Encryption-timeout fixtures check both
+disconnect suppression and forgetting. Link-failure fixtures check both
 Encryption Change/Disconnection Complete event orders and recovery through the
-manager; missing-key, authentication and MIC failures remain blocked even when
-followed by a timeout disconnect. `tools/test_bt_bond_store_host.sh` runs
+manager for timeout (08) and establishment failure (3e); missing-key,
+authentication and MIC failures remain blocked even when followed by either
+disconnect reason. `tools/test_bt_bond_store_host.sh` runs
 the production storage code with short I/O, corruption, sync/close/rename errors,
 and filesystem read-only demotion. The xHCI harness verifies disk callbacks run
 outside the poll lock and an in-flight save cannot acknowledge a newer forget.
@@ -503,8 +504,39 @@ rotation and persistent disable/forget still need their separate checks.
 The manager now starts discovery when storage loading finishes and advances
 scan completion and retry deadlines from USB polling. These handoffs no longer
 wait for the maintenance worker's two-second sleeps. The scan duration and
-absent-peer backoff are unchanged. Host tests cover the scheduling change;
-its improvement to P5 boot latency must be measured on the new build.
+absent-peer backoff are unchanged. Host tests cover the scheduling change.
+After Chris installed the new kernel and rebooted, a read-only snapshot recorded
+HID readiness at 17,210 ms, 3,860 ms earlier than the previous boot. Encryption,
+saved-key reuse and all five subscriptions succeeded. There is no matching
+desktop-ready timestamp for either boot, so this compares time since kernel
+startup rather than time after the desktop appeared.
+
+### Establishment failure delivered as disconnect (2026-10-08)
+
+On a later boot with channel #2 selected, untouched status showed a saved-key
+attempt to c8:cb:24:65:d1:95, followed by Disconnection Complete reason 3e at
+112,270 ms. Cleanup succeeded, but the manager reported `user action required`.
+There was no encrypted session or HID discovery. The code already retried 3e
+in LE Connection Complete, but excluded it in Disconnection Complete. That
+classification gap predates the worker-handoff optimization.
+
+[Core Vol 1 Part F section 2.59](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/architecture,-mixing,-and-conventions/controller-error-codes.html)
+defines 3e as failure to establish a connection or synchronize. The retry
+classification for 08/3e is now shared across connection, encryption and
+disconnect events. Saved-key retries still require successful cleanup; key,
+authentication and MIC errors remain blocked, including when a later disconnect
+reports 08 or 3e. The expanded host fixture fails before the fix and passes
+afterward. The LE and production xHCI sanitizer suites and kernel build pass.
+
+After the initial capture, one explicit saved-key reconnect was issued over SSH
+on the running pre-fix kernel. Background discovery resumed but initially found
+no matching identity. Chris confirmed he had switched to dongle channel #0 in
+the meantime. After he switched back to #2, the manager connected on the same
+identity, verified the saved LTK, configured all five input subscriptions and
+received four key reports. No pairing or bond replacement was performed. This
+separates the channel-related absence from the earlier blocked-retry defect;
+the original radio failure's cause remains unproven. The corrected automatic
+3e recovery path still needs P5 validation on the new build.
 
 Wire references: [Bluetooth Core Security Manager](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/host/security-manager-specification.html),
 [ATT](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/host/attribute-protocol--att-.html),
