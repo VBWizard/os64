@@ -671,7 +671,7 @@ named stack/defaults/scheduling measurement gaps. It does not claim full
 ECMAScript conformance, a complete interrupt-coverage audit, arbitrary native
 stack safety, browser scheduling/layout acceptance or a new P5 run.
 
-## D10 callback budget extension
+## Combined D7/D10 callback interfaces
 
 The additive callback-safe budget check preserves existing ABI layouts and the
 standalone profile. The pre-D8 D10 target audit reports twelve runtime exports
@@ -716,3 +716,25 @@ overrun retirement and logged lost-wrapper recovery; the DOM suite passes
 and the strict image build pass. These joined results are host/target-build
 evidence; the guest measurements in the preceding sections retain their
 original scope.
+
+## D11 legacy arguments validation
+
+D11 adds a hash-checked browser legacy arguments helper (patch 0007, after
+D8's 0006) without changing the standalone inherited property. On `userland`
+the target audit reports 187 engine exports and nineteen runtime exports. Browser binding tests cover explicit installation,
+snapshots retained beyond return, recursive innermost-frame selection and
+strict/arrow refusals. Source and header audits pass. Its primary-widget
+consumer proof is recorded in
+[DOM_D11.md](../../../docs/design/pending/DOM_D11.md); it does not claim a new
+P5 run or full legacy-engine conformance.
+
+PR #229's patch-placement regression is covered by `tools/test_js_prepare.py`.
+Its four checks cover the pinned series, a seventeen-line
+shift in both engine files, and refusal of changed C/header context. The
+preparer requires exact context (`-F0`) and identifies a refused patch by name.
+Controls restoring the context-free patch or default fuzz fail the respective
+regressions. Regenerating patch 0007 with context leaves the prepared engine
+sources byte-for-byte unchanged; its manifest hash is updated.
+The DOM host profiles pass 3,087 target-core and 17,739 sanitized-core checks,
+with zero failures and leak detection enabled. The manifest/header and target
+symbol/dependency audits pass (187 engine exports, nineteen runtime exports).

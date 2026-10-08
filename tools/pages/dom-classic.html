@@ -1,0 +1,36 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Classic page widgets</title>
+<style>
+body{font:16px sans-serif;margin:24px}button,input{font:inherit}
+#pane{position:absolute;left:30px;top:300px;width:500px;height:120px;
+background:#d8ecff;border:3px solid #145080;clip:rect(0px,250px,120px,0px)}
+#status{background:#eee;padding:10px}#picture{width:200px;height:100px}
+</style></head><body>
+<h1>Classic page widgets</h1>
+<p>Turn scripts on in Settings. Hover over the image: it swaps and restores.
+Click either half to update the status through its image-map handler.</p>
+<img name="rollover" id="picture" src="banner.png" usemap="#halves"
+ onmouseover="swap('sprite.png')" onmouseout="restore()">
+<map name="halves">
+<area shape="rect" coords="0,0,100,100" href="#status" title="Left half"
+ onmouseover="swap('sprite.png')" onmouseout="restore()"
+ onclick="report(this.title);return false">
+<area shape="rect" coords="100,0,200,100" href="#status" title="Right half"
+ onmouseover="swap('sprite.png')" onmouseout="restore()"
+ onclick="report(this.title);return false">
+</map>
+<form name="demo" onsubmit="report(document.demo.field.value);return false">
+<label>Named field <input name="field" value="Hello"></label><button>Report</button>
+</form>
+<p><button onclick="toggle()">Toggle the clipped pane</button></p>
+<div id="status">Waiting for scripts.</div>
+<div id="pane">This pane is 500 pixels wide. Its clip shows the left 250 pixels.</div>
+<script>
+function report(text){document.getElementById('status').textContent=text;}
+function swap(){var args=swap.arguments;var image=document.rollover;
+ if(!image.savedSource)image.savedSource=image.src;image.src=args[0];}
+function restore(){var image=document.rollover;if(image.savedSource)image.src=image.savedSource;}
+function toggle(){var pane=document.getElementById('pane');
+ pane.style.display=pane.style.display==='none'?'block':'none';}
+report('Scripts ready: '+navigator.userAgent);
+</script></body></html>

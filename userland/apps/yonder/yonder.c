@@ -43,6 +43,7 @@
 #include "scripts.h"
 #include "script_job.h"
 #include "geometry.h"
+#include "events.h"
 #include "ticker.h"
 #include "trip.h"
 
@@ -594,7 +595,7 @@ static bool page_lay_out(Page *p, int32_t width, int32_t height, uint32_t zoom, 
     garb_cascade_t *cascade = p->cascade;
     int32_t entry[SHEETS_MAX] = {0};
     garb_env_t view = css_view(width, height, zoom);
-    if (p->sheets_changed || (cascade != NULL && (garb_cascade_env(cascade).width != view.width ||
+    if (cascade == NULL || p->sheets_changed || (cascade != NULL && (garb_cascade_env(cascade).width != view.width ||
                                                   garb_cascade_env(cascade).height != view.height))) {
         garb_sheet_in_t in[SHEETS_MAX];
         int32_t n = 0;
@@ -3371,6 +3372,9 @@ static bool script_rebuild(void)
     Page *p = &g.page;
     uint64_t version = os64_html_version(page_doc(p));
     if (version != p->model_version) {
+        // P5 testing: task timing excludes this host rebuild. Audit its cost
+        // separately to distinguish a slow update from queued mouse samples.
+        int64_t began = s_script_audit ? os64_micros() : 0;
         // The displayed layout retains the old model, including its
         // control state, past the refresh's free of it.
         if (!page_model_refresh(p)) {
@@ -3379,8 +3383,15 @@ static bool script_rebuild(void)
         }
         g.hover_link = g.pressed_link = -1;
         pictures_start(p);
+        if (s_script_audit) {
+            char line[128];
+            os64_snprintf(line,sizeof(line),"yonder: model refresh in %ld us",
+                (long)(os64_micros()-began));
+            os64_debug_log(line);
+        }
     }
     if (version != p->rendered_version) {
+        int64_t began = s_script_audit ? os64_micros() : 0;
         bool zoom_changed = p->laid_zoom != 0 && p->laid_zoom != g.zoom;
         int32_t offset = 0, sx = g.sx;
         const os64_html_node_t *anchor = zoom_changed ? anchor_of(&offset) : NULL;
@@ -3453,6 +3464,12 @@ static bool script_rebuild(void)
         forms_place();
         pictures_schedule();
         os64_ui_mark_dirty(&g.ui, &g.view);
+        if (s_script_audit) {
+            char line[128];
+            os64_snprintf(line,sizeof(line),"yonder: rendering rebuild in %ld us",
+                (long)(os64_micros()-began));
+            os64_debug_log(line);
+        }
     }
     os64_page_state_t *state = os64_page_shared_state(page_model(p));
     uint64_t revision = os64_page_state_version(state);
@@ -3546,13 +3563,21 @@ static int64_t script_write(void *opaque, const char *utf8, size_t length)
     return os64_html_parser_write(g.stream.parser, utf8, length);
 }
 
+static const char *script_user_agent(void *opaque)
+{
+    (void)opaque;
+    return g.way.agent != NULL ? g.way.agent : YONDER_AGENT;
+}
+
 static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state_t *state,
                                       const char *url, uint64_t serial)
 {
     yonder_scripts_options_t options = {url, g.script_ms, serial, script_alert, script_fetch,
                                         script_cancel, script_activate, script_write, script_now,
                                         script_geometry, doc};
-    return yonder_scripts_new(doc, state, &options);
+    yonder_scripts_t *host = yonder_scripts_new(doc, state, &options);
+    yonder_scripts_set_user_agent(host, script_user_agent, NULL);
+    return host;
 }
 
 // The host a fetch job's serial names: the page arriving, the page waiting
@@ -4018,6 +4043,17 @@ static const os64_html_node_t *element_at(int32_t x, int32_t y, const os64_html_
     const flow_box_t *b = flow_hit(g.page.tree, x - v.x + g.sx, y - v.y + g.sy, scroll_now());
     if (b == NULL)
         return NULL;
+    flow_point_t offset = flow_box_doc_offset(b, scroll_now());
+    int64_t px = (int64_t)x - v.x + g.sx - offset.x - b->content.x;
+    int64_t py = (int64_t)y - v.y + g.sy - offset.y - b->content.y;
+    if (px >= 0 && py >= 0 && px < b->content.w && py < b->content.h) {
+        double scale = 1000.0 / (g.zoom != 0 ? g.zoom : 1000);
+        const os64_html_node_t *area = yonder_image_map_hit(page_doc(&g.page), b->node, px*scale, py*scale);
+        if (area != NULL) {
+            if (link != NULL && os64_html_attr(area, "href") != NULL) *link = area;
+            return area;
+        }
+    }
     if (link != NULL) {
         const os64_page_link_t *l = os64_page_link(flow_model(g.page.tree), b->link);
         *link = l != NULL ? l->node : NULL;
@@ -4029,8 +4065,12 @@ static os64_dom_event_t mouse_event(const char *type, bool cancelable, const Inp
 {
     os64_dom_event_t ev = {.type = type, .bubbles = true, .cancelable = cancelable,
                            .kind = OS64_DOM_EVENT_MOUSE};
-    ev.client_x = in->x - g.view.bounds.x;
-    ev.client_y = in->y - g.view.bounds.y;
+    uint32_t zoom = g.zoom != 0 ? g.zoom : 1000;
+    ev.client_x = clamp32(((int64_t)in->x - g.view.bounds.x)*1000/zoom);
+    ev.client_y = clamp32(((int64_t)in->y - g.view.bounds.y)*1000/zoom);
+    ev.page_coordinates = true;
+    ev.page_x = clamp32(((int64_t)in->x - g.view.bounds.x + g.sx)*1000/zoom);
+    ev.page_y = clamp32(((int64_t)in->y - g.view.bounds.y + g.sy)*1000/zoom);
     ev.screen_x = in->x;
     ev.screen_y = in->y;
     return ev;
@@ -5511,13 +5551,9 @@ static int32_t line_step(void)
 // The link under a point of the view, or -1.
 static int32_t link_at(int32_t x, int32_t y)
 {
-    os64_gui_rect_t v = g.view.bounds;
-    if (g.page.tree == NULL || x < v.x || y < v.y || x >= v.x + v.w || y >= v.y + v.h)
-        return -1;
-    const flow_box_t *b = flow_hit(g.page.tree, x - v.x + g.sx, y - v.y + g.sy, scroll_now());
-    const os64_page_link_t *old = b != NULL
-                                     ? os64_page_link(flow_model(g.page.tree), b->link) : NULL;
-    return old != NULL ? os64_page_link_for(page_model(&g.page), old->node) : -1;
+    const os64_html_node_t *node = NULL;
+    element_at(x, y, &node);
+    return node != NULL ? os64_page_link_for(page_model(&g.page), node) : -1;
 }
 
 // A link followed: libpage says what it is — a place in this page is a
@@ -6005,6 +6041,12 @@ static void fit_title(const char *page, char out[OS64_GUI_TITLE_MAX])
     out[at] = '\0';
 }
 
+static int64_t event_poll(void *opaque, os64_gui_event_t *event)
+{
+    (void)opaque;
+    return os64_gui_event_poll(g.win,event);
+}
+
 int main(int argc, char **argv)
 {
     const char *why = faces_open();
@@ -6112,9 +6154,12 @@ int main(int argc, char **argv)
     os64_ui_set_focus(&g.ui, first != NULL ? &g.view : &g.field.w);
     sync_bars();
 
-    // libui's loop, with two things read first: the pointer, because a
-    // widget is handed moves only while a button is held and the status
-    // line wants every one; and the question bar, which answers only by its
+    // P5 testing: Million Dollar Homepage's popup stalled while motion kept
+    // the queue busy. Bound input and coalesce idle moves before their scripts
+    // run, so each batch reaches painting without waiting for an empty queue.
+    // The pointer is read before libui because a widget is handed moves only
+    // while a button is held and the status
+    // line follows its current position; the question bar answers by its
     // own rules. After painting, a bar not yet armed is armed only if the
     // queue is EMPTY: anything waiting may have been done before the bar
     // could be seen, so it is dispatched to a disarmed bar first.
@@ -6126,7 +6171,8 @@ int main(int argc, char **argv)
         if (!held && os64_gui_event_wait(g.win, &ev) != 1)
             break;
         held = false;
-        do {
+        YonderEventBatch batch = {.held=true,.pending=ev};
+        while (g.running && !g.ui.quit && yonder_event_batch_next(&batch,&ev,event_poll,NULL)) {
             if (ev.type == OS64_GUI_EVENT_MOUSE_MOVE)
                 hover(ev.mouse.x, ev.mouse.y);
             else if (ev.type == OS64_GUI_EVENT_POINTER_STATE)
@@ -6142,7 +6188,11 @@ int main(int argc, char **argv)
                 os64_ui_dispatch(&g.ui, &ev);
             // What the event became, as DOM events, now libui is done with it.
             inputs_run();
-        } while (g.running && os64_gui_event_poll(g.win, &ev) == 1);
+        }
+        if (batch.held) {
+            ev = batch.pending;
+            held = true;
+        }
         if (g.relayout_due) {
             g.relayout_due = false;
             relayout(false);
@@ -6161,7 +6211,9 @@ int main(int argc, char **argv)
         // A task may have set or cleared a timer: the ticker hears of it.
         pictures_schedule();
         if (g.bar.up && !g.bar.armed) {
-            if (os64_gui_event_poll(g.win, &ev) == 1) {
+            // P5 batching may hold a lookahead event. Preserve it and leave
+            // the bar disarmed until that older input has been dispatched.
+            if (held || os64_gui_event_poll(g.win, &ev) == 1) {
                 held = true;
             } else {
                 yonder_bar_settled(&g.bar);

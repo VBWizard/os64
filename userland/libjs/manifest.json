@@ -109,6 +109,11 @@
       "path": "patches/0006-reporting-runtime-teardown.patch",
       "sha256": "a0196e8b73ae1be1c6c50c8cd944c59ae8621a699ca664e09d6e168df0b9ae5a",
       "reason": "Return at the object/weakref teardown leak gate for an audited allocator-ledger host; raw and default destruction retain the assertions."
+    },
+    {
+      "path": "patches/0007-browser-legacy-function-arguments.patch",
+      "sha256": "8a5b21235110dc092c7ce18288a08607816022f18444cee6e0fc9c6c8a5feecc",
+      "reason": "Add an explicitly installed browser helper for snapshots of active ordinary non-strict function arguments; needed by Dreamweaver rollovers."
     }
   ],
   "configuration_scope": "Atomics-disabled, stack-checked target engine and complete standalone embedding interface; slice review/merge and runner integration are tracked in JAVASCRIPT_TASKS.md"

@@ -47,7 +47,13 @@ person moves around them.
 - **Hover needs yonder's own event loop.** libui hands a widget pointer
   moves only while a button is held, so yonder reads MOUSE_MOVE itself
   before `os64_ui_dispatch` — Scribe's shape for its shortcuts — and asks
-  `flow_hit` what is under the pointer.
+  `flow_hit` what is under the pointer. P5 testing of Million Dollar Homepage
+  exposed paint starvation under continuous motion: input batches consume at
+  most 32 samples, merging consecutive idle moves before dispatch. Rendering
+  and page tasks get a turn while input remains queued. Buttons, modifier
+  boundaries and other event types keep their order; question bars arm after
+  their pending input drains. [D11's regression record](../pending/DOM_D11.md#p5-testing-hover-repaint-starvation)
+  records the evidence and the current bounded policy.
 - **The window's title is the page's `<title>`** if the GUI can retitle a
   window; if it cannot, that is a booked ask, not a workaround.
 

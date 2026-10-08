@@ -96,6 +96,19 @@ bool yonder_geometry_snapshot(const os64_html_document_t *document,
         out->client_width = css_integer(width, zoom);
         out->client_height = css_integer(height, zoom);
     }
+    if ((is_root && document->quirks != OS64_HTML_QUIRKS) ||
+        (is_body && document->quirks == OS64_HTML_QUIRKS)) {
+        out->scroll_left = css_integer(scroll.x, zoom);
+        out->scroll_top = css_integer(scroll.y, zoom);
+    } else if (principal != NULL && !is_root && !is_body) {
+        for (int32_t i = 0; i < flow_nscrollers(tree); i++)
+            if (flow_scroller(tree, i) == principal) {
+                flow_point_t at = flow_scroll_at(tree, i);
+                out->scroll_left = css_integer(at.x, zoom);
+                out->scroll_top = css_integer(at.y, zoom);
+                break;
+            }
+    }
     if (first == NULL) return true;
     if (!visual.present) include(&visual, first_visual);
     double scale = 1000.0 / zoom;
@@ -149,4 +162,117 @@ bool yonder_geometry_snapshot(const os64_html_document_t *document,
         out->client_height = css_integer(h > 0 ? h : 0, zoom);
     }
     return true;
+}
+
+/* Image-map coordinates belong to the image's content origin. They are
+ * CSS pixels, independent of its intrinsic raster size and browser zoom. */
+static const os64_html_node_t *next_node(const os64_html_node_t *node,
+                                        const os64_html_node_t *root)
+{
+    if (node->first_child != NULL) return node->first_child;
+    while (node != root && node->next == NULL) node = node->parent;
+    return node != root ? node->next : NULL;
+}
+
+static bool coord_space(char c)
+{
+    return c == ',' || c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\f';
+}
+
+static bool coord(const char **cursor, double *out)
+{
+    const char *s = *cursor;
+    while (coord_space(*s)) s++;
+    bool negative = *s == '-';
+    if (*s == '-' || *s == '+') s++;
+    bool digits = false;
+    double value = 0;
+    while (*s >= '0' && *s <= '9') {
+        digits = true;
+        value = value * 10 + (*s++ - '0');
+        if (value > 1e12) return false;
+    }
+    if (*s == '.') {
+        s++;
+        double fraction = 0.1;
+        while (*s >= '0' && *s <= '9') {
+            digits = true;
+            value += (*s++ - '0') * fraction;
+            fraction *= 0.1;
+        }
+    }
+    if (!digits) return false;
+    if (*s == 'e' || *s == 'E') {
+        s++;
+        bool minus = *s == '-';
+        if (*s == '-' || *s == '+') s++;
+        if (*s < '0' || *s > '9') return false;
+        unsigned exponent = 0;
+        while (*s >= '0' && *s <= '9') {
+            exponent = exponent * 10 + (*s++ - '0');
+            if (exponent > 12) return false;
+        }
+        while (exponent--) value = minus ? value * 0.1 : value * 10;
+    }
+    if (*s != '\0' && !coord_space(*s)) return false;
+    if (value > 1e12) return false;
+    *cursor = s;
+    *out = negative ? -value : value;
+    return true;
+}
+
+static bool edge_hit(double ax, double ay, double bx, double by, double x, double y)
+{
+    return (x-ax)*(by-ay) == (y-ay)*(bx-ax) &&
+        x >= (ax < bx ? ax : bx) && x <= (ax > bx ? ax : bx) &&
+        y >= (ay < by ? ay : by) && y <= (ay > by ? ay : by);
+}
+
+static bool area_hit(const os64_html_node_t *area, double x, double y)
+{
+    const os64_html_attr_t *shape = os64_html_attr(area, "shape");
+    const char *kind = shape != NULL ? shape->value : "rect";
+    if (os64_streq_nocase(kind, "default")) return true;
+    const os64_html_attr_t *coords = os64_html_attr(area, "coords");
+    if (coords == NULL || os64_strlen(coords->value) > 65536) return false;
+    const char *s = coords->value;
+    double a, b, c, d;
+    if (!coord(&s, &a) || !coord(&s, &b)) return false;
+    if (os64_streq_nocase(kind, "circle") || os64_streq_nocase(kind, "circ"))
+        return coord(&s, &c) && c >= 0 && (x-a)*(x-a)+(y-b)*(y-b) <= c*c;
+    if (os64_streq_nocase(kind, "rect") || os64_streq_nocase(kind, "rectangle"))
+        return coord(&s, &c) && coord(&s, &d) &&
+            x >= (a < c ? a : c) && x <= (a > c ? a : c) &&
+            y >= (b < d ? b : d) && y <= (b > d ? b : d);
+    if (!os64_streq_nocase(kind, "poly") && !os64_streq_nocase(kind, "polygon")) return false;
+    double first_x = a, first_y = b;
+    bool inside = false, boundary = false;
+    unsigned points = 1;
+    while (coord(&s, &c) && coord(&s, &d)) {
+        boundary |= edge_hit(a,b,c,d,x,y);
+        if ((b > y) != (d > y) && x < (c-a)*(y-b)/(d-b)+a) inside = !inside;
+        a = c; b = d; points++;
+    }
+    if (points < 3) return false;
+    boundary |= edge_hit(a,b,first_x,first_y,x,y);
+    if ((b > y) != (first_y > y) && x < (first_x-a)*(y-b)/(first_y-b)+a) inside = !inside;
+    return boundary || inside;
+}
+
+const os64_html_node_t *yonder_image_map_hit(const os64_html_document_t *document,
+    const os64_html_node_t *image, double x, double y)
+{
+    if (document == NULL || !named(image,"img") || x < 0 || y < 0) return NULL;
+    const os64_html_attr_t *usemap = os64_html_attr(image,"usemap");
+    if (usemap == NULL || usemap->value[0] != '#' || usemap->value[1] == '\0') return NULL;
+    const os64_html_node_t *map = NULL;
+    for (const os64_html_node_t *at = document->document; at != NULL; at = next_node(at,document->document)) {
+        if (!named(at,"map")) continue;
+        const os64_html_attr_t *name = os64_html_attr(at,"name");
+        if (name != NULL && os64_streq(name->value,usemap->value+1)) { map = at; break; }
+    }
+    if (map == NULL) return NULL;
+    for (const os64_html_node_t *at = map->first_child; at != NULL; at = next_node(at,map))
+        if (named(at,"area") && area_hit(at,x,y)) return at;
+    return NULL;
 }
