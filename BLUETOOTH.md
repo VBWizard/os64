@@ -586,6 +586,32 @@ recovery on the existing bond, not a fix for the intermittent boot failure.
 Logging status showed an active userland sink and no lost kernel log entries.
 The cause of 3d remains unresolved and is part of hardware acceptance work.
 
+### Recovery scenarios and persistent automatic policy (2026-10-08)
+
+Chris reported successful keyboard off/on, switching away from Bluetooth
+channel #2 and back, power-on after the OS had been up for thirty seconds, and
+waking the keyboard with a keypress. Each took approximately nine seconds to
+connect. The wake-up key itself was not printed; input arriving before HID
+readiness is not replayed. Explicit disconnect/reconnect also passed repeated
+testing. Five successive boots after correcting the diagnostic boot flag to
+`DEBUG_USB` each connected in about nine seconds after system readiness.
+
+Chris then confirmed that saved `auto off` survived reboot and prevented
+automatic connection. After issuing `auto on` through his SSH wrapper, he
+reported an apparent continued disconnection. Read-only inspection found
+`keyboard ready`, encrypted saved-bond reuse, verified LTK, all five input
+subscriptions and 98 key reports. No reconnect or scan command was issued
+during this inspection. The enabled USB trace shows the first scan completing
+at 46,930 ms, followed by `bonded peer not found in scan`; its cleanup completed
+at 47,080 ms. The next scan ran from 48,930 to 51,040 ms, found the saved static
+identity and led to HID readiness at 58,230 ms. These times are since kernel
+startup, not since the `auto on` command (whose receipt time is not logged).
+The observed policy resumed discovery and recovered from the missed scan
+without manual intervention. No key rejection or MIC failure was reported in
+this sequence. Persistent `forget` remains to be tested on hardware.
+Chris subsequently confirmed that the husk window was not foreground; missing
+visible text was a focus issue. Persistent disable and re-enable passed.
+
 Wire references: [Bluetooth Core Security Manager](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/host/security-manager-specification.html),
 [ATT](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/host/attribute-protocol--att-.html),
 [L2CAP](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/host/logical-link-control-and-adaptation-protocol-specification.html),
