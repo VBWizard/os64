@@ -67,7 +67,9 @@ returns to `idle`, another scan or connection can be requested. Scanning is
 refused during an active connection or connection attempt. Connection commands
 are bounded to 64 bytes, validated as a whole on close, and never wait for radio
 or USB completion in the syscall. Empty writes do nothing. Invalid/busy requests
-are refused. One peer is supported. No implicit pairing, automatic reconnection,
+are refused. Status preserves the seven public Pairing Response capability bytes
+and identifies the unsupported field when negotiation is refused; these remain
+available after cleanup. One peer is supported. No implicit pairing, automatic reconnection,
 or selection by an advertised name occurs.
 
 This implementation negotiates **LE legacy Passkey Entry**, with a 16-byte key,
@@ -156,8 +158,11 @@ The P5 confirmed cold firmware bring-up at commit `9b21368b` and discovery at
 `76c6eedc`: fifteen LE addresses on the first scan, followed by eighteen results
 including `BT 3.0 Keyboard?` (Classic) and `BT 5.0 Keyboard` (LE). Both scan status
 reads reported complete, no malformed reports, no error and discovery inactive.
-LE pairing and typing still require their own P5 validation; simulated success
-does not establish compatibility with that keyboard.
+The first P5 LE attempt established a connection and received a Pairing Response,
+then refused capabilities outside the initial pairing policy and reset cleanly.
+That build did not retain the rejected capability bytes; the diagnostic view
+preserves them for the next attempt. Pairing, encryption and typing still require
+their own P5 validation; simulated success does not establish keyboard compatibility.
 
 Wire references: [Bluetooth Core Security Manager](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/host/security-manager-specification.html),
 [ATT](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/host/attribute-protocol--att-.html),

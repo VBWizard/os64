@@ -153,12 +153,19 @@ static void le_smp(bt_le_t *s,const uint8_t *p,size_t n)
     if(p[0]==5 && n==2) { s->status=p[1]; le_fail(s,"peer rejected pairing"); return; }
     if(p[0]==2 && s->phase==BT_LE_PAIR_WAIT) {
         if(n!=7) { le_bad(s); return; }
+        // Capability bytes are public negotiation data, not keys. Preserve
+        // rejected responses too, so status identifies the incompatible field.
+        le_copy(s->response,p,7);
         // DisplayOnly + KeyboardOnly/KeyboardDisplay selects Passkey Entry.
         // No unauthenticated Just Works fallback, reduced key size, or bonding.
-        if((p[1]!=2 && p[1]!=4) || p[2] || p[4]!=16 || p[5] || p[6] || (p[3]&3)>1 || (p[3]&0xc0)) {
-            le_fail(s,"peer does not support session-only 16-byte passkey pairing"); return;
-        }
-        le_copy(s->response,p,7); s->phase=BT_LE_CONFIRM_LOW;
+        const char *unsupported=NULL;
+        if(p[1]!=2 && p[1]!=4) unsupported="peer cannot enter a displayed passkey";
+        else if(p[2]) unsupported="peer OOB pairing flag unsupported";
+        else if(p[4]!=16) unsupported="peer encryption key size unsupported";
+        else if(p[5] || p[6]) unsupported="peer requested unsupported key distribution";
+        else if((p[3]&3)>1 || (p[3]&0xc0)) unsupported="peer authentication flags unsupported";
+        if(unsupported) { le_fail(s,unsupported); return; }
+        s->phase=BT_LE_CONFIRM_LOW;
         s->passkey_visible=true; s->deadline=s->now+60000;
     } else if(p[0]==3 && s->phase==BT_LE_CONFIRM_WAIT) {
         if(n!=17) { le_bad(s); return; }
@@ -485,16 +492,23 @@ size_t bt_le_status(const bt_le_t *s,char *out,size_t cap)
         s->phase==BT_LE_FAILED?"failed (reboot required)":s->phase==BT_LE_CLEANUP?"stopping":
         s->phase<=BT_LE_CREATE?"initializing":s->phase==BT_LE_CONNECTING?"connecting":
         s->phase<=BT_LE_ENCRYPT_WAIT?"pairing": "discovering HID service";
-    char code[80]={0};
+    char code[80]={0},capabilities[224]={0};
+    if(s->response[0]==2) {
+        const uint8_t *r=s->response;
+        snprintf(capabilities,sizeof(capabilities),
+            "pairing response: %02x %02x %02x %02x %02x %02x %02x\n"
+            "peer capabilities: IO=%u OOB=%u auth=%02x key_bytes=%u initiator_keys=%02x responder_keys=%02x\n",
+            r[0],r[1],r[2],r[3],r[4],r[5],r[6],r[1],r[2],r[3],r[4],r[5],r[6]);
+    }
     if(s->passkey_visible) snprintf(code,sizeof(code),"type on the Bluetooth keyboard, then Enter: %06u\n",s->passkey);
     int n=snprintf(out,cap,"state: %s\npeer: %02x:%02x:%02x:%02x:%02x:%02x %s\n"
         "link may be active: %s\nencrypted: %s\nmode: legacy passkey; session only (no saved bond)\n%s"
         "key reports: %u\nmalformed packets: %u\nHID service: %04x-%04x boot input: %04x CCC: %04x\n"
-        "error: %s (opcode %04x status %02x)\n"
+        "%serror: %s (opcode %04x status %02x)\n"
         "write connect public|random XX:XX:XX:XX:XX:XX, or disconnect\n",
         state,s->peer[5],s->peer[4],s->peer[3],s->peer[2],s->peer[1],s->peer[0],s->address_type?"random":"public",
         s->link_may_active?"yes":"no",
         s->encrypted?"yes":"no",code,s->reports,s->malformed,s->service_start,s->service_end,s->boot_value,s->ccc,
-        s->error?s->error:"none",s->error_opcode,s->error_status);
+        capabilities,s->error?s->error:"none",s->error_opcode,s->error_status);
     return n<0 || !cap?0:(size_t)n<cap?(size_t)n:cap-1;
 }

@@ -252,9 +252,34 @@ static void framing(void)
     }
     puts("PASS: USB/HCI fragmentation and hostile frame bounds under ASan/UBSan");
 }
+static void pairing_diagnostics(void)
+{
+    const uint8_t changed_field[]={1,2,4,5,6,3};
+    const uint8_t changed_value[]={3,1,12,1,1,0xc0};
+    const char *reasons[]={"peer cannot enter a displayed passkey", "peer OOB pairing flag unsupported",
+        "peer encryption key size unsupported", "peer requested unsupported key distribution",
+        "peer requested unsupported key distribution", "peer authentication flags unsupported"};
+    for(unsigned i=0;i<sizeof(changed_field);i++) {
+        uint8_t response[7]; memcpy(response,pair_response,7);
+        response[changed_field[i]]=changed_value[i];
+        session=(bt_le_t){.phase=BT_LE_PAIR_WAIT,.connected=true,.handle=11,.now=1};
+        memset(session.tk,0x5a,16); cmd_n=tx_n=0; now=1;
+        incoming(6,response,sizeof(response));
+        assert(session.phase==BT_LE_CLEANUP);
+        assert(!memcmp(session.response,response,7));
+        assert(!strcmp(session.error,reasons[i]));
+        tick(true,true); controller(); tick(true,true);
+        assert(session.phase==BT_LE_FAILED && !memcmp(session.response,response,7));
+        char status[1024]; bt_le_status(&session,status,sizeof(status));
+        assert(strstr(status,"pairing response: 02 ") && strstr(status,"peer capabilities: IO=") && strstr(status,reasons[i]));
+        for(unsigned j=0;j<16;j++) assert(session.tk[j]==0);
+    }
+    puts("PASS: rejected SMP capabilities survive cleanup and identify the unsupported field");
+}
+
 int main(void)
 {
-    vectors(); success(); failures(); framing();
+    vectors(); success(); failures(); framing(); pairing_diagnostics();
     bt_le_t s={0};
     assert(!bt_le_request(&s,"connect random zz:00:00:00:00:00",32,0));
     assert(!bt_le_request(&s,"disconnect junk",15,0));
