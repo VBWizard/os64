@@ -221,7 +221,8 @@ that saved `auto off` prevented boot connection; a subsequent `auto on` trace
 reached encrypted readiness automatically after a scan missed the peer and
 the next found it. The forget/reboot test showed no cached bond, saved storage
 and automatic connection disabled; re-pairing restored a saved bond and
-encrypted HID readiness after correcting a helper-script argument typo.
+encrypted HID readiness after correcting a helper-script argument typo. Chris
+then confirmed successful typing on the newly paired keyboard.
 Privacy-address rotation remains unverified on hardware. The USB-poll handoff optimization
 has host coverage; successive P5 snapshots measured readiness at 21,070 ms
 before it and 17,210 ms afterward. A subsequent 3e disconnect exposed a separate

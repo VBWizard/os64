@@ -57,8 +57,9 @@ closed without data does nothing. `devices` is read-only. No operational adapter
 is reported explicitly. A read racing a USB poll may report `USB busy; retry this
 read` rather than waiting under a scheduler-related lock.
 
-Periodic discovery and device-cache policy are recorded in DEBTS.md. No periodic
-radio scanning is enabled by this slice.
+Broader periodic discovery and device-cache policy are recorded in DEBTS.md.
+The saved-keyboard manager runs bounded LE discovery rounds while disconnected
+and automatic connection is enabled; it stops scanning while connected.
 
 ## LE keyboard session
 
@@ -268,6 +269,7 @@ controller address, and configures event masks. Classic inquiry uses GIAC for
 LE uses active legacy scanning on the primary 1M advertising channels, a 60 ms
 interval and 30 ms window, public own address, no accept-list restriction, and
 controller duplicate filtering. It runs for ten seconds before Scan Disable.
+Background rounds omit Classic inquiry and limit LE scanning to two seconds.
 Extended/coded-PHY advertising is not decoded by this slice.
 
 The runtime state machine submits one EP0 command at a time and waits across
@@ -468,7 +470,8 @@ had decoded with no malformed packets or error; all five input subscriptions
 and keyboard CCC/Protocol Mode readback succeeded. This verifies cached-key
 reconnection and input without a fresh pairing exchange in the same boot.
 That test predates disk persistence, identity resolution and automatic connection.
-Those additions have host coverage; their P5 acceptance checks remain pending.
+Later P5 checks for those additions are recorded below; hardware privacy-address
+rotation remains unverified.
 
 At the end of testing, Chris reported that powering the keyboard off without
 first issuing `disconnect` prevented both `reconnect` and a subsequent
@@ -507,8 +510,9 @@ updated kernel were sent through SSH during this investigation. Chris also
 reported automatic reconnection after a manual scan. The post-reboot snapshot
 confirms persisted-key reuse on that identity; it does not establish whether
 the scan was necessary. The cause of the earlier radio timeout remains unknown.
-The fix passes the LE and production xHCI sanitizer suites and kernel build;
-its P5 power-cycle validation remains pending.
+The fix passes the LE and production xHCI sanitizer suites and kernel build.
+Subsequent successful P5 power-cycle tests are recorded under recovery scenarios
+below; they do not establish the cause of this earlier radio timeout.
 
 ### Automatic boot connection and latency (2026-10-08)
 
@@ -627,9 +631,10 @@ corrected helper completed pairing on that address.
 Status showed four received key-distribution parts, a present identity key,
 saved bond storage, automatic connection enabled, encryption active and all
 five Input Report subscriptions configured. HID readiness was reached at
-413,940 ms; the final snapshot awaited keyboard input. This validates the
-forgotten state after reboot and restoration of a new persisted bond without
-a driver change. The new pairing's static identity differs from the previous
+413,940 ms; Chris subsequently confirmed successful typing in the foreground
+husk window. This validates the forgotten state after reboot and restoration
+of a new persisted bond with working input. No driver change was needed.
+The new pairing's static identity differs from the previous
 c8:cb:24:65:d1:95; that is not evidence of an RPA rotation or an ordinary bonded
 power-cycle identity change.
 
