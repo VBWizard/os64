@@ -11,9 +11,10 @@
 //
 // Every keyboard that speaks this report shares this one interpreter, so the
 // "every scancode check needs BOTH dialects" rule stays at two: a USB
-// keyboard, an LE boot keyboard (usb/xhci.c), and a /dev/glass writer
+// keyboard, an LE keyboard (usb/xhci.c), and a /dev/glass writer
 // (gui/glass.c, REMOTE.md section 4) share the HID dialect. Each owns one
 // hid_keyboard_t and calls in with its own serialization; nothing here locks.
+// LE Report Protocol values are converted by hid_keyboard_map before delivery.
 //
 // Each keyboard reports its modifier changes to the machine-wide state a mouse
 // packet reads (keyboard_current_modifiers): a modifier is held while any

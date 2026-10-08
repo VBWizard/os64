@@ -22,9 +22,10 @@
 //     descriptors and firmware image type. A matching cold AX210 receives the
 //     embedded Intel firmware and DDC configuration. The first operational
 //     AX210 keeps its USB slot and DMA storage for on-demand Classic/LE scans
-//     and one LE boot keyboard through /sys/bluetooth. Failed bring-up attempts
+//     and one LE keyboard through /sys/bluetooth. Failed bring-up attempts
 //     Disable Slot before freeing DMA storage. LE input requires encryption
-//     after passkey pairing or an explicit Just Works request.
+//     after passkey pairing or an explicit Just Works request. LE keyboards
+//     use Boot Protocol or a supported keyboard Report Map.
 //     Mouse descriptors can select report protocol for a
 //     relative X/Y/wheel layout; unsupported descriptors retain boot mode.
 //   - Handles BOTH context sizes (HCCPARAMS1.CSZ): QEMU uses 32-byte

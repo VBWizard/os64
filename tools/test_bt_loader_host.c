@@ -10,6 +10,7 @@ static inline void spinlock_release_irqrestore(spinlock_t *p,uint64_t f) { (void
 static void test_controller_step(void);
 #include "../kernel/src/driver/system/usb/bt_intel.c"
 #include "../kernel/src/driver/system/usb/bt_scan.c"
+#include "../kernel/src/driver/system/hid_keyboard_map.c"
 #include "../kernel/src/driver/system/usb/bt_le.c"
 #include "xhci_bt_host.inc"
 #include "strings/strlen.h"
@@ -270,7 +271,7 @@ static void test_controller_step(void)
 static void runtime_transport(void)
 {
     xhci_bt_probe_t *p=s_hc->bt_probe;
-    p->le=(bt_le_t){.phase=BT_LE_READY,.connected=true,.encrypted=true,.handle=11,.boot_value=10,
+    p->le=(bt_le_t){.phase=BT_LE_READY,.connected=true,.encrypted=true,.handle=11,.boot_value=10,.input_value=10,
         .now=kTicksSinceStart*1000/TICKS_PER_SECOND};
     CHECK(!xhci_bluetooth_scan());
     const uint8_t key[]={0x0b,0x20,15,0,11,0,4,0,0x1b,10,0,2,0,4,0,0,0,0,0};

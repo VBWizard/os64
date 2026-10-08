@@ -16,6 +16,7 @@ static void outb(uint16_t port, uint8_t value);
 #include "../kernel/src/driver/system/hid_mouse.c"
 #include "../kernel/src/driver/system/usb/bt_intel.c"
 #include "../kernel/src/driver/system/usb/bt_scan.c"
+#include "../kernel/src/driver/system/hid_keyboard_map.c"
 #include "../kernel/src/driver/system/usb/bt_le.c"
 #include "../kernel/src/driver/system/usb/xhci.c"
 #include "../kernel/src/tty.c"

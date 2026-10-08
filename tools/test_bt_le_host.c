@@ -6,6 +6,7 @@
 #include <string.h>
 #include <openssl/evp.h>
 #include "../kernel/src/driver/system/usb/bt_le.c"
+#include "hid_keyboard_fixtures.h"
 static bt_le_t session;
 static uint8_t cmd[35],tx[31],last_report[8],peer_nonce[16],pair_request[7];
 static size_t cmd_n,tx_n;
@@ -13,7 +14,7 @@ static uint8_t peer_pair_response[7];
 static uint64_t now;
 static unsigned commands,packets,keys,releases,rand_calls;
 static int scenario;
-enum { NORMAL, WRONG_CONFIRM, NO_BOOT, JUST_WORKS, REJECT_COMMAND, SHARED_BUFFER, GATT_ERROR, JUST_WORKS_OPT_IN, JUST_WORKS_BAD_CONFIRM, JUST_WORKS_MITM, JUST_WORKS_INVALID_IO };
+enum { NORMAL, WRONG_CONFIRM, NO_BOOT, JUST_WORKS, REJECT_COMMAND, SHARED_BUFFER, GATT_ERROR, JUST_WORKS_OPT_IN, JUST_WORKS_BAD_CONFIRM, JUST_WORKS_MITM, JUST_WORKS_INVALID_IO, REPORT_PROTOCOL, REPORT_PROTOCOL_NO_MODE, REPORT_BAD_REF, REPORT_BAD_MAP, REPORT_MAP_TOO_LONG, REPORT_MAP_EXACT };
 static const uint8_t peer_addr[]={0x1a,0xf0,0xff,0xfe,0x2c,0xf8};
 static const uint8_t local_addr[]={0x49,0x4e,0x35,0x80,0x2f,0x6c};
 static const uint8_t pair_response[]={2,2,0,4,16,0,0};
@@ -120,6 +121,53 @@ static void controller(void)
     }
     e[1]=n-2; event(e,n);
 }
+static void report_peripheral(const uint8_t *p,size_t n)
+{
+    unsigned handle=n>=3?le_u16(p+1):0;
+    if(p[0]==0x10) {
+        const uint8_t rsp[]={0x11,6,6,0,30,0,0x12,0x18}; incoming(4,rsp,sizeof(rsp));
+    } else if(p[0]==8) {
+        if(handle==6) {
+            const uint8_t rsp[]={9,7,7,0,2,8,0,0x4b,0x2a,9,0,0x12,10,0,0x4d,0x2a};
+            incoming(4,rsp,sizeof(rsp));
+        } else if(handle==11) {
+            const uint8_t rsp[]={9,7,15,0,0x12,16,0,0x4d,0x2a,21,0,4,22,0,0x4e,0x2a};
+            incoming(4,rsp,scenario==REPORT_PROTOCOL_NO_MODE?9:sizeof(rsp));
+        } else {
+            uint8_t rsp[]={1,8,handle,handle>>8,0x0a}; incoming(4,rsp,sizeof(rsp));
+        }
+    } else if(p[0]==4) {
+        assert(handle==11 || handle==13 || handle==17 || handle==19);
+        if(handle==13 || handle==19) {
+            uint8_t err[]={1,4,handle,0,0x0a}; incoming(4,err,sizeof(err));
+        } else {
+            uint8_t rsp[]={5,1,handle,0,2,0x29,handle+1,0,8,0x29}; incoming(4,rsp,sizeof(rsp));
+        }
+    } else if(p[0]==0x0a || p[0]==0x0c) {
+        uint8_t rsp[23]={p[0]==0x0a?0x0b:0x0d};
+        if(handle==8) {
+            unsigned offset=p[0]==0x0c?le_u16(p+3):0;
+            uint8_t map[HID_KEYBOARD_MAP_BYTES+44]; memset(map,0x64,sizeof(map));
+            memcpy(map,keyboard_composite_map,sizeof(keyboard_composite_map));
+            unsigned length=sizeof(keyboard_composite_map);
+            if(scenario==REPORT_BAD_MAP) length--;
+            if(scenario==REPORT_MAP_TOO_LONG) length=sizeof(map);
+            if(scenario==REPORT_MAP_EXACT) length=((length+21)/22)*22;
+            assert(offset<=length);
+            unsigned part=length-offset; if(part>22) part=22;
+            memcpy(rsp+1,map+offset,part); incoming(4,rsp,part+1);
+        } else {
+            assert(handle==12 || handle==18);
+            rsp[1]=handle==12?2:scenario==REPORT_BAD_REF?99:7; rsp[2]=1; incoming(4,rsp,3);
+        }
+    } else if(p[0]==0x52) {
+        assert(scenario!=REPORT_PROTOCOL_NO_MODE && handle==22 && n==4 && p[3]==1);
+    } else if(p[0]==0x12) {
+        assert(handle==17 && n==5 && le_u16(p+3)==1);
+        uint8_t ok=0x13; incoming(4,&ok,1);
+    } else assert(!"unexpected report protocol request");
+}
+
 static void peripheral(void)
 {
     if(!tx_n) return;
@@ -149,6 +197,7 @@ static void peripheral(void)
             uint8_t response[17]={4}; memcpy(response+1,peer_nonce,16); incoming(6,response,17);
         } else assert(!"unexpected SMP request");
     } else if(le_u16(wire+6)==4) {
+        if(scenario>=REPORT_PROTOCOL) { report_peripheral(p,n); return; }
         if(p[0]==0x10) {
             const uint8_t rsp[]={0x11,6,1,0,5,0,0,0x18,6,0,30,0,0x12,0x18};
             incoming(4,rsp,sizeof(rsp));
@@ -246,6 +295,35 @@ static void just_works(void)
     puts("PASS: explicit Just Works uses zero TK, retains confirm/encryption checks, and delivers keys without a passkey");
 }
 
+static void report_protocol(void)
+{
+    for(int which=REPORT_PROTOCOL;which<=REPORT_MAP_EXACT;which++) {
+        begin(which); run();
+        if(which==REPORT_BAD_REF || which==REPORT_BAD_MAP || which==REPORT_MAP_TOO_LONG) {
+            assert(session.phase==BT_LE_FAILED && !keys);
+            char status[8192]; size_t length=bt_le_status(&session,status,sizeof(status));
+            assert(length==strlen(status) && strstr(status,"report map 0000: 05 01"));
+            for(size_t cap=0;cap<sizeof(status);cap+=17) {
+                memset(status,0xa5,sizeof(status));
+                length=bt_le_status(&session,status,cap);
+                assert((unsigned char)status[cap]==0xa5);
+                if(cap) assert(length<cap && status[length]==0); else assert(!length);
+            }
+            continue;
+        }
+        assert(session.phase==BT_LE_READY && session.encrypted && session.report_protocol);
+        assert(session.input_value==16 && session.ccc==17 && session.report_layout.report_id==7);
+        assert(session.report_count==2 && session.report_layout.bytes==8);
+        const uint8_t consumer[]={0x1b,10,0,0xe9,0}; incoming(4,consumer,sizeof(consumer)); assert(!keys);
+        const uint8_t key[]={0x1b,16,0,2,0,4,0,0,0,0,0}; incoming(4,key,sizeof(key));
+        assert(keys==1 && last_report[0]==2 && last_report[2]==4);
+        const uint8_t wrong[]={0x1b,16,0,7,2,0,4,0,0,0,0,0}; incoming(4,wrong,sizeof(wrong));
+        assert(session.phase==BT_LE_CLEANUP && keys==1);
+        tick(true,true); assert(releases==1);
+    }
+    puts("PASS: report-only GATT keyboard, blob map reads, media filtering, optional Protocol Mode and malformed maps/references");
+}
+
 static void failures(void)
 {
     for(int kind=WRONG_CONFIRM;kind<=GATT_ERROR;kind++) {
@@ -274,7 +352,7 @@ static void framing(void)
 {
     const uint8_t wire[]={0x0b,0x20,15,0,11,0,4,0,0x1b,10,0,0,0,4,0,0,0,0,0};
     for(size_t split=1;split<sizeof(wire);split++) {
-        session=(bt_le_t){.phase=BT_LE_READY,.connected=true,.encrypted=true,.handle=11,.boot_value=10};
+        session=(bt_le_t){.phase=BT_LE_READY,.connected=true,.encrypted=true,.handle=11,.boot_value=10,.input_value=10};
         keys=0;
         bt_le_receive(&session,wire,split,report,NULL);
         bt_le_receive(&session,wire+split,sizeof(wire)-split,report,NULL);
@@ -284,14 +362,14 @@ static void framing(void)
     for(unsigned split=4;split<15;split++) {
         uint8_t a[24]={0x0b,0x20},b[24]={0x0b,0x10};
         a[2]=split; memcpy(a+4,wire+4,split); b[2]=15-split; memcpy(b+4,wire+4+split,15-split);
-        session=(bt_le_t){.phase=BT_LE_READY,.connected=true,.encrypted=true,.handle=11,.boot_value=10}; keys=0;
+        session=(bt_le_t){.phase=BT_LE_READY,.connected=true,.encrypted=true,.handle=11,.boot_value=10,.input_value=10}; keys=0;
         bt_le_receive(&session,a,split+4,report,NULL); bt_le_receive(&session,b,19-split,report,NULL);
         assert(keys==1);
     }
     unsigned r=0x1234;
     for(unsigned i=0;i<10000;i++) {
         uint8_t noise[80]; for(unsigned j=0;j<sizeof(noise);j++) { r=r*1664525+1013904223; noise[j]=r>>24; }
-        session=(bt_le_t){.phase=BT_LE_READY,.connected=true,.encrypted=true,.handle=11,.boot_value=10};
+        session=(bt_le_t){.phase=BT_LE_READY,.connected=true,.encrypted=true,.handle=11,.boot_value=10,.input_value=10};
         bt_le_receive(&session,noise,i%sizeof(noise),report,NULL);
         bt_le_event(&session,noise,i%sizeof(noise));
     }
@@ -332,7 +410,7 @@ static void pairing_diagnostics(void)
 
 int main(void)
 {
-    vectors(); success(); failures(); framing(); pairing_diagnostics(); just_works();
+    vectors(); success(); failures(); framing(); pairing_diagnostics(); just_works(); report_protocol();
     bt_le_t s={0};
     assert(!bt_le_request(&s,"connect random zz:00:00:00:00:00",32,0));
     assert(!bt_le_request(&s,"disconnect junk",15,0));

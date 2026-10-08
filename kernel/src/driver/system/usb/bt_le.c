@@ -1,5 +1,5 @@
 // Bluetooth Core Vol 3 Parts A/F/H and Vol 4 Part E: single-peer LE central,
-// legacy SMP Passkey Entry/explicit Just Works, and the HID boot keyboard service.
+// legacy SMP Passkey Entry/explicit Just Works, and HID keyboard services.
 #include "driver/system/usb/bt_le.h"
 #include "strings/sprintf.h"
 
@@ -191,13 +191,39 @@ static void le_att_send(bt_le_t *s,const uint8_t *p,size_t n)
 {
     if(le_queue(s,4,p,n)) { s->att_pending=true; s->att_opcode=p[0]; s->deadline=s->now+5000; }
 }
+static void le_report_next(bt_le_t *s)
+{
+    while(s->report_index<s->report_count) {
+        bt_le_report_char_t *r=&s->report_chars[s->report_index];
+        if(r->value<r->end) {
+            s->cursor=r->value+1; s->phase=BT_LE_REPORT_DESCRIPTORS; return;
+        }
+        s->report_index++;
+    }
+    le_fail(s,"no supported keyboard input Report Reference/map");
+}
+static void le_map_done(bt_le_t *s)
+{
+    if(!s->report_map_bytes) { le_fail(s,"empty HID Report Map"); return; }
+    s->report_index=0; le_report_next(s);
+}
+static void le_report_descriptors_done(bt_le_t *s)
+{
+    bt_le_report_char_t *r=&s->report_chars[s->report_index];
+    if(r->ccc && r->reference) s->phase=BT_LE_REPORT_REFERENCE;
+    else { s->report_index++; le_report_next(s); }
+}
 static void le_chars_done(bt_le_t *s)
 {
-    if(!s->boot_value || !s->protocol || !(s->boot_properties&0x10) || !(s->protocol_properties&4)) {
-        le_fail(s,"HID boot keyboard with Protocol Mode/notifications required"); return;
-    }
-    if(s->boot_value>=s->boot_end) { le_fail(s,"boot keyboard CCC descriptor missing"); return; }
-    s->cursor=s->boot_value+1; s->phase=BT_LE_DESCRIPTORS;
+    if(s->boot_value && s->protocol && (s->boot_properties&0x10) && (s->protocol_properties&4)) {
+        if(s->boot_value>=s->boot_end) { le_fail(s,"boot keyboard CCC descriptor missing"); return; }
+        s->input_value=s->boot_value; s->cursor=s->boot_value+1; s->phase=BT_LE_DESCRIPTORS;
+    } else if(s->report_map_handle && s->report_count) {
+        if(s->protocol && !(s->protocol_properties&4)) {
+            le_fail(s,"Protocol Mode is not writable without response"); return;
+        }
+        s->report_protocol=true; s->phase=BT_LE_REPORT_MAP;
+    } else le_fail(s,"HID keyboard needs boot input or readable Report Map and notifying Report");
 }
 static void le_att(bt_le_t *s,const uint8_t *p,size_t n,bt_le_report_t report,void *ctx)
 {
@@ -208,9 +234,17 @@ static void le_att(bt_le_t *s,const uint8_t *p,size_t n,bt_le_report_t report,vo
     }
     if(p[0]==0x1b) {
         if(n<3) { le_bad(s); return; }
-        if(s->phase==BT_LE_READY && s->encrypted && le_u16(p+1)==s->boot_value) {
-            if(n!=11) { le_bad(s); return; }
-            s->reports++; report(ctx,p+3);
+        if(s->phase==BT_LE_READY && s->encrypted && le_u16(p+1)==s->input_value) {
+            uint8_t keys[8];
+            if(s->report_protocol) {
+                if(!hid_keyboard_decode_map(&s->report_layout,p+3,n-3,keys)) {
+                    le_fail(s,"keyboard report does not match Report Map"); return;
+                }
+            } else {
+                if(n!=11) { le_bad(s); return; }
+                le_copy(keys,p+3,8);
+            }
+            s->reports++; report(ctx,keys);
         }
         return;
     }
@@ -224,6 +258,12 @@ static void le_att(bt_le_t *s,const uint8_t *p,size_t n,bt_le_report_t report,vo
         if(n!=5 || p[1]!=s->att_opcode) { le_bad(s); return; }
         s->status=p[4];
         if(p[4]==0x0a && s->phase==BT_LE_CHARACTERISTICS) { le_chars_done(s); return; }
+        if(p[4]==0x0a && s->phase==BT_LE_REPORT_DESCRIPTORS && le_u16(p+2)==s->cursor) {
+            le_report_descriptors_done(s); return;
+        }
+        if(s->phase==BT_LE_REPORT_MAP && s->att_opcode==0x0c &&
+           le_u16(p+2)==s->report_map_handle && s->report_map_bytes &&
+           (p[4]==7 || (p[4]==0x0b && s->report_map_bytes==22))) { le_map_done(s); return; }
         le_fail(s,p[4]==0x0a ? "required HID service/descriptor not found" : "GATT request rejected"); return;
     }
     if(s->phase==BT_LE_SERVICES && p[0]==0x11) {
@@ -249,6 +289,18 @@ static void le_att(bt_le_t *s,const uint8_t *p,size_t n,bt_le_report_t report,vo
             if(decl<=previous || value<=decl || value>s->service_end) { le_bad(s); return; }
             previous=value;
             if(s->boot_value && decl>s->boot_value && s->boot_end==s->service_end) s->boot_end=decl-1;
+            for(unsigned j=0;j<s->report_count;j++) {
+                bt_le_report_char_t *r=&s->report_chars[j];
+                if(decl>r->value && r->end==s->service_end) r->end=decl-1;
+            }
+            if(p[1]==7 && le_u16(p+i+5)==0x2a4b && (p[i+2]&2)) {
+                if(s->report_map_handle) { le_fail(s,"ambiguous HID Report Map"); return; }
+                s->report_map_handle=value;
+            }
+            if(p[1]==7 && le_u16(p+i+5)==0x2a4d && (p[i+2]&0x10)) {
+                if(s->report_count==BT_LE_REPORTS) { le_fail(s,"too many HID input reports"); return; }
+                s->report_chars[s->report_count++]=(bt_le_report_char_t){.value=value,.end=s->service_end};
+            }
             if(p[1]==7 && le_u16(p+i+5)==0x2a22) {
                 if(s->boot_value) { le_fail(s,"ambiguous boot keyboard characteristic"); return; }
                 s->boot_value=value; s->boot_properties=p[i+2];
@@ -259,16 +311,44 @@ static void le_att(bt_le_t *s,const uint8_t *p,size_t n,bt_le_report_t report,vo
         }
         if(previous>=s->service_end) le_chars_done(s);
         else s->cursor=previous+1;
-    } else if(s->phase==BT_LE_DESCRIPTORS && p[0]==5) {
+    } else if(s->phase==BT_LE_REPORT_MAP && p[0]==(s->att_opcode==0x0a?0x0b:0x0d)) {
+        if(n-1>sizeof(s->report_map)-s->report_map_bytes) { le_fail(s,"HID Report Map exceeds limit"); return; }
+        le_copy(s->report_map+s->report_map_bytes,p+1,n-1); s->report_map_bytes+=n-1;
+        if(n<23) le_map_done(s);
+    } else if(s->phase==BT_LE_REPORT_REFERENCE && p[0]==0x0b) {
+        if(n!=3 || p[2]<1 || p[2]>3) { le_bad(s); return; }
+        bt_le_report_char_t *r=&s->report_chars[s->report_index]; r->id=p[1]; r->type=p[2];
+        if(r->type==1 && hid_keyboard_parse_map(s->report_map,s->report_map_bytes,r->id,&s->report_layout) &&
+           s->report_layout.bytes<=20) {
+            s->input_value=r->value; s->ccc=r->ccc;
+            s->phase=s->protocol?BT_LE_PROTOCOL:BT_LE_SUBSCRIBE;
+        } else { s->report_index++; le_report_next(s); }
+    } else if((s->phase==BT_LE_DESCRIPTORS || s->phase==BT_LE_REPORT_DESCRIPTORS) && p[0]==5) {
         if(n<2 || (p[1]!=1 && p[1]!=2)) { le_bad(s); return; }
         size_t width=p[1]==1 ? 4:18;
         if(n<2+width || (n-2)%width) { le_bad(s); return; }
+        bool reports=s->phase==BT_LE_REPORT_DESCRIPTORS;
+        bt_le_report_char_t *r=reports?&s->report_chars[s->report_index]:NULL;
+        uint16_t end=reports?r->end:s->boot_end;
         uint16_t previous=s->cursor-1;
         for(size_t i=2;i<n;i+=width) {
             uint16_t handle=le_u16(p+i);
-            if(handle<=previous || handle>s->boot_end) { le_bad(s); return; }
+            if(handle<=previous || handle>end) { le_bad(s); return; }
             previous=handle;
-            if(width==4 && le_u16(p+i+2)==0x2902) s->ccc=handle;
+            if(width==4 && le_u16(p+i+2)==0x2902) {
+                uint16_t *ccc=reports?&r->ccc:&s->ccc;
+                if(*ccc) { le_bad(s); return; }
+                *ccc=handle;
+            }
+            if(reports && width==4 && le_u16(p+i+2)==0x2908) {
+                if(r->reference) { le_bad(s); return; }
+                r->reference=handle;
+            }
+        }
+        if(reports) {
+            if(previous>=end) le_report_descriptors_done(s);
+            else s->cursor=previous+1;
+            return;
         }
         if(s->ccc) s->phase=BT_LE_PROTOCOL;
         else if(previous>=s->boot_end) le_fail(s,"boot keyboard CCC descriptor missing");
@@ -456,8 +536,16 @@ void bt_le_tick(bt_le_t *s,uint64_t now,bool control_done,bool bulk_done,bool us
             le_att_send(s,p,7); break;
         case BT_LE_DESCRIPTORS:
             p[0]=4; le_put(p+1,s->cursor); le_put(p+3,s->boot_end); le_att_send(s,p,5); break;
+        case BT_LE_REPORT_MAP:
+            p[0]=s->report_map_bytes?0x0c:0x0a; le_put(p+1,s->report_map_handle);
+            le_put(p+3,s->report_map_bytes); le_att_send(s,p,s->report_map_bytes?5:3); break;
+        case BT_LE_REPORT_DESCRIPTORS:
+            p[0]=4; le_put(p+1,s->cursor); le_put(p+3,s->report_chars[s->report_index].end);
+            le_att_send(s,p,5); break;
+        case BT_LE_REPORT_REFERENCE:
+            p[0]=0x0a; le_put(p+1,s->report_chars[s->report_index].reference); le_att_send(s,p,3); break;
         case BT_LE_PROTOCOL:
-            p[0]=0x52; le_put(p+1,s->protocol); // Write Command selects Boot Protocol (0).
+            p[0]=0x52; le_put(p+1,s->protocol); p[3]=s->report_protocol?1:0;
             if(le_queue(s,4,p,4)) s->phase=BT_LE_SUBSCRIBE;
             break;
         case BT_LE_SUBSCRIBE:
@@ -516,12 +604,38 @@ size_t bt_le_status(const bt_le_t *s,char *out,size_t cap)
     if(s->passkey_visible) snprintf(code,sizeof(code),"type on the Bluetooth keyboard, then Enter: %06u\n",s->passkey);
     int n=snprintf(out,cap,"state: %s\npeer: %02x:%02x:%02x:%02x:%02x:%02x %s\n"
         "link may be active: %s\nencrypted: %s\nmode: %s; session only (no saved bond)\n%s"
-        "key reports: %u\nmalformed packets: %u\nHID service: %04x-%04x boot input: %04x CCC: %04x\n"
+        "key reports: %u\nmalformed packets: %u\nHID service: %04x-%04x input: %04x CCC: %04x\n"
+        "HID mode: %s map handle: %04x bytes: %u input candidates: %u report ID: %u\n"
         "%serror: %s (opcode %04x status %02x)\n"
         "write connect|connect-justworks public|random XX:XX:XX:XX:XX:XX, or disconnect\n",
         state,s->peer[5],s->peer[4],s->peer[3],s->peer[2],s->peer[1],s->peer[0],s->address_type?"random":"public",
         s->link_may_active?"yes":"no",
-        s->encrypted?"yes":"no",s->just_works?"legacy Just Works (unauthenticated)":"legacy passkey",code,s->reports,s->malformed,s->service_start,s->service_end,s->boot_value,s->ccc,
+        s->encrypted?"yes":"no",s->just_works?"legacy Just Works (unauthenticated)":"legacy passkey",code,s->reports,s->malformed,s->service_start,s->service_end,s->input_value,s->ccc,
+        s->report_protocol?"report":"boot",s->report_map_handle,s->report_map_bytes,s->report_count,s->report_layout.report_id,
         capabilities,s->error?s->error:"none",s->error_opcode,s->error_status);
-    return n<0 || !cap?0:(size_t)n<cap?(size_t)n:cap-1;
+    if(n<0 || !cap) return 0;
+    size_t used=(size_t)n<cap?(size_t)n:cap-1;
+    for(unsigned i=0;i<s->report_count && used<cap-1;i++) {
+        const bt_le_report_char_t *r=&s->report_chars[i];
+        n=snprintf(out+used,cap-used,"report candidate: value=%04x CCC=%04x reference=%04x ID=%u type=%u\n",
+                   r->value,r->ccc,r->reference,r->id,r->type);
+        if(n<0) return used;
+        used+=(size_t)n<cap-used?(size_t)n:cap-used-1;
+    }
+    // Keep the public descriptor after cleanup so unsupported hardware can be
+    // diagnosed without another kernel build. Pairing secrets are not printed.
+    if(s->phase==BT_LE_FAILED && s->report_map_bytes) {
+        for(unsigned i=0;i<s->report_map_bytes && used<cap-1;i++) {
+            if(!(i%16)) {
+                n=snprintf(out+used,cap-used,"report map %04x:",i);
+                if(n<0) return used;
+                used+=(size_t)n<cap-used?(size_t)n:cap-used-1;
+            }
+            n=snprintf(out+used,cap-used," %02x%s",s->report_map[i],
+                       i%16==15 || i+1==s->report_map_bytes?"\n":"");
+            if(n<0) return used;
+            used+=(size_t)n<cap-used?(size_t)n:cap-used-1;
+        }
+    }
+    return used;
 }

@@ -1,11 +1,13 @@
 #ifndef OS64_BT_LE_H
 #define OS64_BT_LE_H
 #include "driver/system/usb/bt_scan.h"
+#include "driver/system/hid_keyboard_map.h"
 
 // One explicitly selected LE peer. Fixed storage and asynchronous callbacks
 // keep USB polling usable from the scheduler's serialized input path.
 #define BT_LE_QUEUE 8
 #define BT_LE_ACL_MAX 1024
+#define BT_LE_REPORTS 8
 
 typedef enum {
     BT_LE_IDLE, BT_LE_RESET, BT_LE_MASK, BT_LE_HOST, BT_LE_EVENTS,
@@ -14,9 +16,15 @@ typedef enum {
     BT_LE_PAIR_WAIT, BT_LE_CONFIRM_LOW, BT_LE_CONFIRM_HIGH, BT_LE_CONFIRM_WAIT,
     BT_LE_RANDOM_WAIT, BT_LE_VERIFY_LOW, BT_LE_VERIFY_HIGH, BT_LE_STK,
     BT_LE_ENCRYPT, BT_LE_ENCRYPT_WAIT, BT_LE_SERVICES, BT_LE_CHARACTERISTICS,
-    BT_LE_DESCRIPTORS, BT_LE_PROTOCOL, BT_LE_SUBSCRIBE, BT_LE_READY,
+    BT_LE_DESCRIPTORS, BT_LE_REPORT_MAP, BT_LE_REPORT_DESCRIPTORS, BT_LE_REPORT_REFERENCE,
+    BT_LE_PROTOCOL, BT_LE_SUBSCRIBE, BT_LE_READY,
     BT_LE_CLEANUP, BT_LE_FAILED
 } bt_le_phase_t;
+
+typedef struct {
+    uint16_t value, end, ccc, reference;
+    uint8_t id, type;
+} bt_le_report_char_t;
 
 typedef struct {
     bt_le_phase_t phase;
@@ -39,7 +47,12 @@ typedef struct {
     unsigned queue_head, queue_count;
     uint16_t cursor, service_start, service_end, boot_value, boot_end, protocol, ccc;
     uint8_t boot_properties, protocol_properties, att_opcode;
-    bool att_pending;
+    bool att_pending, report_protocol;
+    uint16_t input_value, report_map_handle, report_map_bytes;
+    uint8_t report_count, report_index;
+    bt_le_report_char_t report_chars[BT_LE_REPORTS];
+    uint8_t report_map[HID_KEYBOARD_MAP_BYTES];
+    hid_keyboard_layout_t report_layout;
 } bt_le_t;
 
 typedef void (*bt_le_acl_send_t)(void *, const uint8_t *, size_t);

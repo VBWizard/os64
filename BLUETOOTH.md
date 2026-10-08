@@ -39,7 +39,7 @@ read` rather than waiting under a scheduler-related lock.
 Periodic discovery and device-cache policy are recorded in DEBTS.md. No periodic
 radio scanning is enabled by this slice.
 
-## LE boot keyboard session
+## LE keyboard session
 
 Put the keyboard's LE ("BT 5.0") slot in pairing mode. Select its current address
 and address type from `devices`, then request a connection:
@@ -54,7 +54,7 @@ connection target. `public` and `random` are distinct address types. Read the
 connection file again while pairing. When it displays a six-digit passkey, type
 that code **on the Bluetooth keyboard**, including leading zeroes, then Enter.
 The passkey window lasts up to sixty seconds. `keyboard ready` means link
-encryption, HID service discovery, Boot Protocol selection and notification
+encryption, HID service discovery, keyboard report selection and notification
 subscription succeeded. `key reports` counts matching notifications; ordinary
 keys then use the existing HID input path, including modifiers and repeat.
 
@@ -98,11 +98,23 @@ pairing also lacks Secure Connections' resistance to passive capture. Pairing is
 session-only: no bond or identity keys are distributed or stored, so a later
 connection requires pairing again.
 
-The keyboard must expose HID service 0x1812, Boot Keyboard Input 0x2a22 with
-notifications and its CCC descriptor, and Protocol Mode 0x2a4e with Write Without
-Response. Generic Report Map interpretation, consumer/media keys, LED output,
-mice, Classic HID and audio are not implemented. An unsupported service reports
-an explicit error instead of treating an arbitrary eight-byte report as keys.
+The keyboard must expose HID service 0x1812. A notifying Boot Keyboard Input
+0x2a22 with a CCC descriptor and writable Protocol Mode 0x2a4e selects Boot
+Protocol. Otherwise the host reads Report Map 0x2a4b, including Read Blob chunks,
+and examines notifying Report 0x2a4d characteristics and their Report Reference
+0x2908 descriptors. It subscribes to the first supported keyboard input report
+and selects Report Protocol when Protocol Mode is present. Consumer reports are
+skipped; Report IDs come from Report Reference, not a prefix in GATT values.
+
+Report Map support covers absolute keyboard usage bitmaps and one contiguous
+key array, including modifiers and padding. The map is bounded to 1024 bytes,
+eight notifying Report candidates, and a selected input value of at most twenty
+bytes (ATT MTU 23). Keys convert to the shared eight-byte input format; more than
+six non-modifier keys produce HID rollover. Multiple keyboard report IDs are not
+combined. Consumer/media keys, LED output, mice, Classic HID and audio are not
+implemented. Unsupported layouts report an error instead of treating arbitrary
+bytes as keys. Connection status retains report candidates and, after failure,
+the public Report Map bytes for hardware diagnosis.
 
 Connection initiation has a twenty-second wait; HCI commands have two seconds,
 ATT requests and ACL completion have five seconds, and setup has an overall
@@ -168,7 +180,13 @@ simulation and Core c1/s1 example values. It exercises authenticated pairing,
 explicit Just Works with the P5 capability bytes, encryption, paginated GATT
 discovery, key notification, disconnect, malformed
 framing, unsupported keyboards, wrong confirmation, command rejection, credits
-and USB ordering. OpenSSL is a host-test dependency, not linked into the kernel.
+and USB ordering. Report-only fixtures cover a separate consumer report,
+optional Protocol Mode, multi-chunk and exact-boundary map reads, malformed maps
+and references, and key release on a mismatched notification.
+`tools/test_hid_keyboard_map_host.sh` checks arrays, bitmaps, unaligned padding,
+Report IDs, rollover and mutated descriptor bounds under ASan/UBSan. These are
+synthetic fixtures, not a captured descriptor from the P5 keyboard.
+OpenSSL is a host-test dependency, not linked into the kernel.
 The production xHCI harness also checks bulk receive delivery/release and
 non-overlapping control/ACL DMA storage.
 
@@ -183,9 +201,12 @@ preserves them for the next attempt. That attempt returned
 `02 03 00 01 10 00 00`: NoInputNoOutput, no OOB data, bonding requested,
 16-byte key, and no distributed keys. The passkey-only request was refused
 without starting encryption; cleanup reported the link inactive.
-The explicit Just Works path is covered by the simulated peer using those
-capability bytes. Pairing, encryption and typing still require their own P5
-validation; simulated success does not establish keyboard compatibility.
+At `ced6b35b`, the P5's explicit Just Works attempt reached HID service discovery
+after successful encryption, finding service 0015–0034 with no Boot Keyboard
+Input. The boot-only guard refused it and reset the link. Report Map discovery
+and typing require the next P5 validation; simulated success does not establish
+compatibility with that keyboard's actual descriptor. Its random LE address
+changed between attempts, so scan again before connecting.
 
 Wire references: [Bluetooth Core Security Manager](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/host/security-manager-specification.html),
 [ATT](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/host/attribute-protocol--att-.html),
