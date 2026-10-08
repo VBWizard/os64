@@ -373,8 +373,16 @@ sequence. It does not isolate which secondary CCC the peripheral requires.
 The keyboard made seven connection-parameter requests (last request: interval
 26/26, latency 32, supervision timeout 300); the existing host policy rejected
 them and input nevertheless arrived. Accepting valid peripheral updates remains
-follow-up work. Cached-key reconnection and persistence across reboot are not
-established by this input test.
+follow-up work.
+
+Chris subsequently confirmed that explicit `reconnect` succeeded after a few
+seconds. A read-only SSH check found `keyboard ready` for random
+f0:5c:3e:03:71:d3, encryption active, and the bond marked cached=yes,
+requested=no, reused=yes, complete=yes, received_parts=0. Six keyboard reports
+had decoded with no malformed packets or error; all five input subscriptions
+and keyboard CCC/Protocol Mode readback succeeded. This verifies cached-key
+reconnection and input without a fresh pairing exchange in the same boot.
+Bond persistence across reboot and automatic reconnection remain unimplemented.
 
 Wire references: [Bluetooth Core Security Manager](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/host/security-manager-specification.html),
 [ATT](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/host/attribute-protocol--att-.html),
