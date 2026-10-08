@@ -12,6 +12,8 @@ static void test_controller_step(void);
 #include "../kernel/src/driver/system/usb/bt_scan.c"
 #include "../kernel/src/driver/system/hid_keyboard_map.c"
 #include "../kernel/src/driver/system/usb/bt_le.c"
+#include "../kernel/src/driver/system/usb/bt_manager.c"
+#include "../kernel/src/driver/system/usb/bt_bond.c"
 #include "xhci_bt_host.inc"
 #include "strings/strlen.h"
 #include "strings/sprintf.h"
@@ -23,6 +25,24 @@ extern int puts(const char *);
 extern int fflush(void *);
 extern _Noreturn void abort(void);
 #define CHECK(x) do { if (!(x)) { puts(#x); fflush(NULL); abort(); } } while (0)
+static uint8_t stored_bond[BT_BOND_RECORD_BYTES];
+static bool store_exists,store_fail,forget_during_save;
+static unsigned bond_saves;
+bool bt_bond_load(bt_le_bond_t *bond,bool *automatic)
+{
+    CHECK(!s_poll_busy);
+    if(!store_exists) { memset(bond,0,sizeof(*bond)); *automatic=false; return true; }
+    return bt_bond_decode(bond,automatic,stored_bond,sizeof(stored_bond));
+}
+bool bt_bond_save(const bt_le_bond_t *bond,bool automatic)
+{
+    CHECK(!s_poll_busy); bond_saves++;
+    if(forget_during_save) {
+        forget_during_save=false; CHECK(xhci_bluetooth_connection("forget",6));
+    }
+    if(store_fail) return false;
+    bt_bond_encode(stored_bond,bond,automatic); store_exists=true; return true;
+}
 uintptr_t kHHDMOffset;
 volatile uint64_t kTicksSinceStart;
 __uint128_t kDebugLevel;
@@ -271,6 +291,7 @@ static void test_controller_step(void)
 static void runtime_transport(void)
 {
     xhci_bt_probe_t *p=s_hc->bt_probe;
+    p->manager.loaded=true;
     p->le=(bt_le_t){.phase=BT_LE_READY,.connected=true,.encrypted=true,.handle=11,.boot_value=10,.input_value=10,
         .now=kTicksSinceStart*1000/TICKS_PER_SECOND};
     CHECK(!xhci_bluetooth_scan());
@@ -325,6 +346,34 @@ static void runtime_transport(void)
     for(unsigned i=0;i<sizeof(p->le.bond.ltk);i++) CHECK(!p->le.bond.ltk[i]);
     CHECK(p->device->ep0.enqueue==enqueued);
     puts("PASS: production xHCI ACL receive, key delivery/release and disjoint control/bulk DMA");
+}
+
+static void bond_maintenance(void)
+{
+    xhci_bt_probe_t *p=s_hc->bt_probe;
+    p->failed=false; p->le=(bt_le_t){0}; p->scan=(bt_scan_t){0}; p->manager=(bt_manager_t){0};
+    store_exists=store_fail=forget_during_save=false; bond_saves=0;
+    CHECK(!xhci_bluetooth_connection("reconnect",9));
+    xhci_bluetooth_maintain(); CHECK(p->manager.loaded && !p->le.bond.valid);
+    p->le.bond=(bt_le_bond_t){.valid=true,.address_type=1,.last_address_type=1};
+    p->le.bond.peer[5]=0xc1; p->le.bond.last_peer[5]=0xc1;
+    memset(p->le.bond.ltk,0x5a,16); p->le.bond_revision++;
+    // Keep this save-only fixture quiescent without starting automatic discovery.
+    bt_manager_observe(&p->manager,&p->le,0); p->manager.suppressed=true;
+    store_fail=true; xhci_bluetooth_maintain();
+    CHECK(p->manager.dirty && p->le.bond.valid && bond_saves==1);
+    CHECK(xhci_bluetooth_connection("save",4)); store_fail=false;
+    xhci_bluetooth_maintain(); CHECK(!p->manager.dirty && store_exists && bond_saves==2);
+    p->manager=(bt_manager_t){0}; p->le=(bt_le_t){0};
+    xhci_bluetooth_maintain(); CHECK(p->manager.loaded && p->manager.automatic && p->le.bond.valid);
+    p->manager.suppressed=true;
+    CHECK(xhci_bluetooth_connection("save",4)); forget_during_save=true;
+    xhci_bluetooth_maintain();
+    CHECK(!p->le.bond.valid && p->manager.dirty && !p->manager.automatic);
+    xhci_bluetooth_maintain(); CHECK(!p->manager.dirty);
+    p->manager=(bt_manager_t){0}; p->le=(bt_le_t){0};
+    xhci_bluetooth_maintain(); CHECK(!p->le.bond.valid && !p->manager.automatic);
+    puts("PASS: worker storage outside poll lock, restore, write failure and forget racing a save");
 }
 
 int main(void)
@@ -382,6 +431,9 @@ int main(void)
             CHECK(!released && allocations-frees==10 && dcbaa[2]);
             // The original stack device can change after enumeration returns.
             device.slot=99;
+            CHECK(!xhci_bluetooth_scan());
+            xhci_bluetooth_start_manager();
+            xhci_bluetooth_maintain(); CHECK(hc.bluetooth.manager.loaded);
             CHECK(xhci_bluetooth_scan());
             CHECK(!xhci_bluetooth_scan());
             for (unsigned poll=0;poll<5000 && hc.bluetooth.scan.phase!=BT_SCAN_DONE;poll++) {
@@ -390,7 +442,7 @@ int main(void)
             }
             CHECK(hc.bluetooth.scan.phase==BT_SCAN_DONE && !hc.bluetooth.scan.radio_active);
             CHECK(!released && allocations-frees==10);
-            if (scenario==WARM) runtime_transport();
+            if (scenario==WARM) { runtime_transport(); bond_maintenance(); }
         } else if (scenario==DISABLE_FAIL) CHECK(!released && allocations-frees==10 && dcbaa[2]);
         else CHECK(released && allocations-frees==1 && !dcbaa[2]);
         // The command ring is controller-owned. Failed Disable Slot deliberately

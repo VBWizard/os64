@@ -43,6 +43,16 @@ static int le_hex(char c)
     if(c>='A' && c<='F') return c-'A'+10;
     return -1;
 }
+static bool le_random_valid(const uint8_t address[6],uint8_t kind)
+{
+    if((address[5]&0xc0)!=kind) return false;
+    unsigned first=kind==0x40?3:0;
+    uint8_t any=address[5]&0x3f,not_all=(~address[5])&0x3f;
+    for(unsigned i=first;i<5;i++) { any|=address[i]; not_all|=(uint8_t)~address[i]; }
+    return any && not_all;
+}
+static bool le_identity_valid(uint8_t type,const uint8_t address[6])
+{ return type==0 || (type==1 && le_random_valid(address,0xc0)); }
 bool bt_le_input_active(const bt_le_t *s)
 {
     return s->connected && s->encrypted && (s->phase==BT_LE_READY ||
@@ -56,7 +66,7 @@ bool bt_le_request(bt_le_t *s,const char *p,size_t n,uint64_t now)
     while(n && le_space(p[n-1])) n--;
     if(n==6 && le_equal((const uint8_t *)p,(const uint8_t *)"forget",6)) {
         if(!bt_le_quiescent(s) && s->phase!=BT_LE_FAILED) return false;
-        le_wipe(&s->bond,sizeof(s->bond)); return true;
+        le_wipe(&s->bond,sizeof(s->bond)); s->bond_revision++; return true;
     }
     if(n==10 && le_equal((const uint8_t *)p,(const uint8_t *)"disconnect",10)) {
         if(s->phase==BT_LE_STOPPED) { le_session_clear(s); return true; }
@@ -98,14 +108,30 @@ bool bt_le_request(bt_le_t *s,const char *p,size_t n,uint64_t now)
         if(hi<0 || lo<0 || (i<5 && p[9+3*i]!=':')) return false;
         addr[5-i]=(hi<<4)|lo;
     }
-    // Without identity-key resolution, cache public and static random peers.
-    if(bond_requested && type && (addr[5]&0xc0)!=0xc0) return false;
+    // A bond made over an RPA must acquire a stable identity during distribution.
+    if(bond_requested && !le_identity_valid(type,addr) && !le_random_valid(addr,0x40)) return false;
     le_session_clear(s);
     s->phase=BT_LE_RESET; s->now=now; s->deadline=now+3000;
     s->total_deadline=now+150000; s->credits=1; s->address_type=type;
     s->just_works=just_works; s->bond_requested=bond_requested;
     le_copy(s->peer,addr,6);
     return true;
+}
+
+void bt_le_reconnect_scan(bt_le_t *s,const bt_scan_t *scan)
+{
+    if(s->phase!=BT_LE_RESET || !s->bond_reused || s->pending || s->stop_requested ||
+       !s->bond.has_irk || scan->phase!=BT_SCAN_DONE) return;
+    s->resolve_required=true; s->resolve_count=s->resolve_index=0;
+    for(unsigned i=0;i<scan->count && i<BT_SCAN_DEVICES;i++) {
+        const bt_scan_device_t *d=&scan->devices[i];
+        if(!d->le) continue;
+        if(d->address_type==s->bond.address_type && le_equal(d->address,s->bond.peer,6)) {
+            s->resolve_required=false; s->resolve_count=0; return;
+        }
+        if(d->address_type==1 && le_random_valid(d->address,0x40))
+            le_copy(s->resolve_addresses[s->resolve_count++],d->address,6);
+    }
 }
 
 static bool le_queue(bt_le_t *s,uint16_t cid,const uint8_t *p,size_t n)
@@ -164,7 +190,9 @@ void bt_le_event(void *context,const uint8_t *e,size_t n)
         if(s->phase!=BT_LE_CREATE && s->phase!=BT_LE_CONNECTING) { le_bad(s); return; }
         if(n!=21) { le_bad(s); return; }
         s->status=e[3];
-        if(s->status) { le_fail(s,"LE connection failed"); return; }
+        if(s->status) {
+            le_fail(s,"LE connection failed"); s->retryable=s->status==0x3e || s->status==8; return;
+        }
         if(e[6]!=0 || e[7]!=s->address_type || !le_equal(e+8,s->peer,6) || le_u16(e+4)>0x0eff) {
             le_fail(s,"unexpected LE connection identity/role"); return;
         }
@@ -181,9 +209,11 @@ void bt_le_event(void *context,const uint8_t *e,size_t n)
     } else if(e[0]==5) {
         if(n!=6) { le_bad(s); return; }
         if(s->connected && le_u16(e+3)==s->handle) {
+            bool retry=bt_le_input_active(s) && (e[5]==8 || e[5]==0x13 || e[5]==0x16);
             s->disconnect_reason=e[5]; s->disconnected_ms=s->now;
             s->status=e[5]; s->connected=false; s->encrypted=false; s->link_may_active=false;
             le_fail(s,"peer disconnected");
+            s->retryable=retry;
         }
     } else if(e[0]==8) {
         if(n!=6) { le_bad(s); return; }
@@ -201,8 +231,8 @@ static void le_smp(bt_le_t *s,const uint8_t *p,size_t n)
     if(!n) { le_bad(s); return; }
     if(p[0]==0x0b && n==2) return; // Security Request: our explicit request owns pairing.
     if(p[0]==5 && n==2) { s->status=p[1]; le_fail(s,"peer rejected pairing"); return; }
-    if(p[0]==6 || p[0]==7) {
-        // The peripheral distributes LTK, then EDIV/Rand, under the STK.
+    if(p[0]>=6 && p[0]<=9) {
+        // Encryption keys precede the optional IRK and identity, under the STK.
         // USB may deliver these after Encryption Change but before the next
         // tick finishes the HCI command, so accept both encrypted wait states.
         if(!s->bond_requested || !s->encrypted ||
@@ -214,6 +244,12 @@ static void le_smp(bt_le_t *s,const uint8_t *p,size_t n)
         } else if(p[0]==7 && n==11 && s->bond_key_stage==1) {
             s->pending_bond.ediv=le_u16(p+1); le_copy(s->pending_bond.rand,p+3,8);
             s->bond_key_stage=2;
+        } else if(p[0]==8 && n==17 && s->bond_key_stage==2 && (s->response[6]&2)) {
+            le_copy(s->pending_bond.irk,p+1,16); s->bond_key_stage=3;
+        } else if(p[0]==9 && n==8 && s->bond_key_stage==3 &&
+                  le_identity_valid(p[1],p+2)) {
+            s->pending_bond.address_type=p[1]; le_copy(s->pending_bond.peer,p+2,6);
+            s->pending_bond.has_irk=true; s->bond_key_stage=4;
         } else le_fail(s,"malformed or out-of-order bond keys");
         return;
     }
@@ -232,8 +268,10 @@ static void le_smp(bt_le_t *s,const uint8_t *p,size_t n)
         else if(p[2]) unsupported="peer OOB pairing flag unsupported";
         else if(p[4]!=16) unsupported="peer encryption key size unsupported";
         else if(s->bond_requested && (p[3]&3)!=1) unsupported="peer refused bonding";
-        else if(p[5] || (s->bond_requested?p[6]!=1:p[6]!=0))
+        else if(p[5] || (s->bond_requested?(p[6]!=1 && p[6]!=3):p[6]!=0))
             unsupported="peer requested unsupported key distribution";
+        else if(s->bond_requested && !le_identity_valid(s->address_type,s->peer) && !(p[6]&2))
+            unsupported="private-address bond requires peer identity key";
         else if((p[3]&3)>1 || (p[3]&0xc0)) unsupported="peer authentication flags unsupported";
         if(unsupported) { le_fail(s,unsupported); return; }
         s->phase=BT_LE_CONFIRM_LOW;
@@ -535,7 +573,19 @@ static void le_command_finished(bt_le_t *s)
         if(s->bond_reused && !le_equal(s->local,s->bond.local,6)) {
             le_fail(s,"bond belongs to a different local controller"); break;
         }
-        s->phase=BT_LE_BUFFER; break;
+        if(s->resolve_required && !s->resolve_count) {
+            le_fail(s,"bonded peer not found in scan"); s->retryable=true;
+        }
+        else s->phase=s->resolve_required?BT_LE_RESOLVE:BT_LE_BUFFER;
+        break;
+    case BT_LE_RESOLVE:
+        if(le_equal(s->reply,s->resolve_addresses[s->resolve_index],3)) {
+            s->address_type=1; le_copy(s->peer,s->resolve_addresses[s->resolve_index],6);
+            s->address_resolved=true; s->phase=BT_LE_BUFFER;
+        } else if(++s->resolve_index==s->resolve_count) {
+            le_fail(s,"bonded peer not found in scan"); s->retryable=true;
+        }
+        break;
     case BT_LE_BUFFER:
         s->acl_size=le_u16(s->reply);
         if(!s->reply[2]) s->phase=BT_LE_SHARED_BUFFER;
@@ -622,14 +672,21 @@ void bt_le_tick(bt_le_t *s,uint64_t now,bool control_done,bool bulk_done,bool us
         le_pairing_secrets_clear(s);
         s->phase=s->bond_requested?BT_LE_BOND_KEYS:BT_LE_SERVICES;
         s->deadline=now+10000; s->cursor=1;
-        if(s->bond_reused) s->bond_complete=true;
+        if(s->bond_reused) {
+            s->bond_complete=true; s->bond.identity_verified=true;
+            s->bond.last_address_type=s->address_type; le_copy(s->bond.last_peer,s->peer,6);
+        }
     }
-    if(s->phase==BT_LE_BOND_KEYS && s->bond_key_stage==2) {
-        s->pending_bond.address_type=s->address_type;
+    if(s->phase==BT_LE_BOND_KEYS && s->bond_key_stage==((s->response[6]&2)?4:2)) {
+        if(!s->pending_bond.has_irk) {
+            s->pending_bond.address_type=s->address_type; le_copy(s->pending_bond.peer,s->peer,6);
+        }
         s->pending_bond.authenticated=!s->just_works;
-        le_copy(s->pending_bond.peer,s->peer,6); le_copy(s->pending_bond.local,s->local,6);
+        s->pending_bond.last_address_type=s->address_type; le_copy(s->pending_bond.last_peer,s->peer,6);
+        le_copy(s->pending_bond.local,s->local,6);
         le_wipe(&s->bond,sizeof(s->bond));
         le_copy(&s->bond,&s->pending_bond,sizeof(s->bond)); s->bond.valid=true;
+        s->bond_revision++;
         le_wipe(&s->pending_bond,sizeof(s->pending_bond));
         s->bond_complete=true; s->phase=BT_LE_SERVICES; s->cursor=1;
     }
@@ -643,15 +700,18 @@ void bt_le_tick(bt_le_t *s,uint64_t now,bool control_done,bool bulk_done,bool us
     if(s->att_pending || s->phase==BT_LE_CONNECTING || s->phase==BT_LE_PAIR_WAIT ||
        s->phase==BT_LE_CONFIRM_WAIT || s->phase==BT_LE_RANDOM_WAIT || s->phase==BT_LE_ENCRYPT_WAIT ||
        s->phase==BT_LE_BOND_KEYS) {
-        if(now>=s->deadline) le_fail(s,"peer response timed out");
+        if(now>=s->deadline) {
+            bool retry=s->phase==BT_LE_CONNECTING;
+            le_fail(s,"peer response timed out"); s->retryable=retry;
+        }
         return;
     }
     if(s->phase==BT_LE_PAIR) {
         // DisplayOnly/MITM for Passkey Entry; NoInputNoOutput/no MITM for
-        // explicit Just Works. Bond commands request the peripheral's LTK;
+        // explicit Just Works. Bond commands request encryption and identity keys;
         // connect commands keep their session-only policy.
         const uint8_t req[]={1,s->just_works?3:0,0,(s->just_works?0:4)|(s->bond_requested?1:0),
-                             16,0,s->bond_requested?1:0};
+                             16,0,s->bond_requested?3:0};
         le_copy(s->request,req,7);
         if(le_queue(s,6,req,7)) { s->phase=BT_LE_PAIR_WAIT; s->deadline=now+30000; }
         return;
@@ -702,6 +762,10 @@ void bt_le_tick(bt_le_t *s,uint64_t now,bool control_done,bool bulk_done,bool us
     case BT_LE_HOST: op=0x0c6d; len=2; p[0]=1; break;
     case BT_LE_EVENTS: op=0x2001; len=8; p[0]=1; break; // Legacy Connection Complete.
     case BT_LE_ADDRESS: op=0x1009; break;
+    case BT_LE_RESOLVE:
+        // ah(IRK, prand): zero-pad prand in AES's least-significant octets.
+        op=0x2017; len=32; le_copy(p,s->bond.irk,16);
+        le_copy(p+16,s->resolve_addresses[s->resolve_index]+3,3); break;
     case BT_LE_BUFFER: op=0x2002; break;
     case BT_LE_SHARED_BUFFER: op=0x1005; break;
     case BT_LE_CREATE:
@@ -734,6 +798,7 @@ size_t bt_le_status(const bt_le_t *s,char *out,size_t cap)
     const char *state=s->phase==BT_LE_IDLE?"idle":s->phase==BT_LE_READY?
         (s->reports?"keyboard ready":"HID configured; awaiting input"):
         s->ready_ms && (s->phase==BT_LE_VERIFY_CCC || s->phase==BT_LE_VERIFY_PROTOCOL)?"inspecting HID settings":
+        s->phase==BT_LE_RESOLVE?"resolving peer identity":
         s->phase==BT_LE_STOPPED?"stopped (retry available)":
         s->phase==BT_LE_FAILED?"failed (reboot required)":s->phase==BT_LE_CLEANUP?"stopping":
         s->phase<=BT_LE_CREATE?"initializing":s->phase==BT_LE_CONNECTING?"connecting":
@@ -757,7 +822,7 @@ size_t bt_le_status(const bt_le_t *s,char *out,size_t cap)
         state,s->peer[5],s->peer[4],s->peer[3],s->peer[2],s->peer[1],s->peer[0],s->address_type?"random":"public",
         s->link_may_active?"yes":"no",
         s->encrypted?"yes":"no",s->just_works?"legacy Just Works (unauthenticated)":"legacy passkey",
-        s->bond_requested || s->bond_reused?"bond for this boot (lost on reboot)":"session only (no saved bond)",code,s->reports,s->malformed,s->service_start,s->service_end,s->input_value,s->ccc,
+        s->bond_requested || s->bond_reused?"bonded session":"session only (no new bond)",code,s->reports,s->malformed,s->service_start,s->service_end,s->input_value,s->ccc,
         s->report_protocol?"report":"boot",s->report_map_handle,s->report_map_bytes,s->report_count,s->report_layout.report_id,
         capabilities,s->error?s->error:"none",s->error_opcode,s->error_status);
     if(n<0 || !cap) return 0;
@@ -765,11 +830,14 @@ size_t bt_le_status(const bt_le_t *s,char *out,size_t cap)
     if(used<cap-1) {
         n=snprintf(out+used,cap-used,
             "bond: cached=%s requested=%s reused=%s complete=%s received_parts=%u\n"
-            "cached peer: %02x:%02x:%02x:%02x:%02x:%02x %s authenticated=%s\n",
+            "cached identity: %02x:%02x:%02x:%02x:%02x:%02x %s authenticated=%s\n"
+            "identity key: %s; LTK verified: %s; connection address resolved: %s\n",
             s->bond.valid?"yes":"no",s->bond_requested?"yes":"no",s->bond_reused?"yes":"no",
             s->bond_complete?"yes":"no",s->bond_key_stage,
             s->bond.peer[5],s->bond.peer[4],s->bond.peer[3],s->bond.peer[2],s->bond.peer[1],s->bond.peer[0],
-            s->bond.address_type?"random":"public",s->bond.authenticated?"yes":"no");
+            s->bond.address_type?"random":"public",s->bond.authenticated?"yes":"no",
+            s->bond.has_irk?"present":"absent",s->bond.identity_verified?"yes":"no",
+            s->address_resolved?"yes":"no");
         if(n<0) return used;
         used+=(size_t)n<cap-used?(size_t)n:cap-used-1;
     }

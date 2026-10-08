@@ -11,7 +11,7 @@
 
 typedef enum {
     BT_LE_IDLE, BT_LE_RESET, BT_LE_MASK, BT_LE_HOST, BT_LE_EVENTS,
-    BT_LE_ADDRESS, BT_LE_BUFFER, BT_LE_SHARED_BUFFER, BT_LE_CREATE, BT_LE_CONNECTING,
+    BT_LE_ADDRESS, BT_LE_RESOLVE, BT_LE_BUFFER, BT_LE_SHARED_BUFFER, BT_LE_CREATE, BT_LE_CONNECTING,
     BT_LE_PASSKEY, BT_LE_RANDOM_LOW, BT_LE_RANDOM_HIGH, BT_LE_PAIR,
     BT_LE_PAIR_WAIT, BT_LE_CONFIRM_LOW, BT_LE_CONFIRM_HIGH, BT_LE_CONFIRM_WAIT,
     BT_LE_RANDOM_WAIT, BT_LE_VERIFY_LOW, BT_LE_VERIFY_HIGH, BT_LE_STK,
@@ -27,17 +27,20 @@ typedef struct {
     bool subscribed;
 } bt_le_report_char_t;
 
-// One boot-lifetime bond, reused only by an explicit reconnect command.
-// The public/static-random peer and public local address bind the secret to this pair.
+// One selected peer's bond; the manager owns persistence and automatic reuse.
+// peer is the public/static-random identity, distinct from the last air address.
+// A distributed identity is confirmed by encrypted reconnection with its LTK.
 typedef struct {
-    bool valid, authenticated;
+    bool valid, authenticated, has_irk, identity_verified;
     uint8_t address_type, peer[6], local[6], ltk[16], rand[8];
+    uint8_t irk[16], last_address_type, last_peer[6];
     uint16_t ediv;
 } bt_le_bond_t;
 
 typedef struct {
     // The committed cache precedes the session fields cleared on disconnect.
     bt_le_bond_t bond;
+    uint64_t bond_revision;
     bt_le_phase_t phase;
     uint64_t now, deadline, total_deadline, command_deadline, acl_deadline;
     uint16_t opcode, handle, acl_size, outstanding;
@@ -62,6 +65,8 @@ typedef struct {
     uint32_t passkey;
     bool passkey_visible, just_works, bond_requested, bond_reused, bond_complete;
     uint8_t bond_key_stage;
+    bool resolve_required, address_resolved, retryable;
+    uint8_t resolve_count, resolve_index, resolve_addresses[BT_SCAN_DEVICES][6];
     bt_le_bond_t pending_bond;
     uint8_t request[7], response[7], random[16], peer_random[16], peer_confirm[16];
     uint8_t tk[16], crypto[16];
@@ -83,6 +88,9 @@ typedef struct {
 typedef void (*bt_le_acl_send_t)(void *, const uint8_t *, size_t);
 typedef void (*bt_le_report_t)(void *, const uint8_t [8]);
 bool bt_le_request(bt_le_t *, const char *, size_t, uint64_t);
+// Copy completed discovery results immediately after an accepted reconnect,
+// before its first tick. The caller serializes this with requests and polling.
+void bt_le_reconnect_scan(bt_le_t *, const bt_scan_t *);
 // IDLE and reset-confirmed STOPPED leave the controller available for discovery.
 bool bt_le_quiescent(const bt_le_t *);
 void bt_le_event(void *, const uint8_t *, size_t);

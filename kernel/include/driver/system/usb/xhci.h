@@ -21,7 +21,7 @@
 //     boot-protocol keyboard and mouse and probing the Intel AX210's USB
 //     descriptors and firmware image type. A matching cold AX210 receives the
 //     embedded Intel firmware and DDC configuration. The first operational
-//     AX210 keeps its USB slot and DMA storage for on-demand Classic/LE scans
+//     AX210 keeps its USB slot and DMA storage for manual and background scans
 //     and one LE keyboard through /sys/bluetooth. Failed bring-up attempts
 //     Disable Slot before freeing DMA storage. LE input requires encryption
 //     after passkey pairing or an explicit Just Works request. LE keyboards
@@ -54,6 +54,10 @@ void init_xHCI(void);
 // every scheduler pass from processSignals; internally serialized across cores and
 // cheap when idle. Safe to call before init or with no USB input devices.
 void xhci_poll(void);
+// Task-context bond storage and automatic connection policy, outside USB polling.
+void xhci_bluetooth_maintain(void);
+// Enable the manager after boot-time mounts and configuration have settled.
+void xhci_bluetooth_start_manager(void);
 
 // Non-blocking sysfs commands refuse absent/busy/failed adapters or invalid input.
 bool xhci_bluetooth_scan(void);

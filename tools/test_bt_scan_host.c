@@ -135,5 +135,16 @@ int main(void)
     before=sends;tick(&s,1);assert(sends==before && !s.pending);
     const uint8_t credit[]={0x0e,3,1,0,0};bt_scan_event(&s,credit,sizeof(credit));
     tick(&s,2);assert(sends==before+1 && sent_op==0x1003);
+    s=(bt_scan_t){0}; assert(bt_scan_start_le(&s,0));
+    for(unsigned t=0;t<20 && s.phase!=BT_SCAN_LE_ENABLE;t++) {
+        if(s.pending) complete(&s,0);
+        tick(&s,t); assert(sent_op!=0x0401 && sent_op!=0x0c45);
+    }
+    assert(s.phase==BT_SCAN_LE_ENABLE && s.le_only);
+    complete(&s,0); tick(&s,30);
+    tick(&s,2029); assert(s.phase==BT_SCAN_LE_WAIT);
+    tick(&s,2030); assert(s.phase==BT_SCAN_LE_DISABLE && !sent_params[0]);
+    complete(&s,0); tick(&s,2031); assert(s.phase==BT_SCAN_DONE && !s.radio_active);
+    assert(bt_scan_start(&s,3000) && !s.le_only);
     puts("test_bt_scan_host: command sequencing, deadlines, cleanup, Classic/LE reports and bounded names passed");
 }

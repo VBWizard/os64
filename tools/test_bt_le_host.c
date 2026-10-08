@@ -6,6 +6,9 @@
 #include <string.h>
 #include <openssl/evp.h>
 #include "../kernel/src/driver/system/usb/bt_le.c"
+#include "../kernel/src/driver/system/usb/bt_scan.c"
+#include "../kernel/src/driver/system/usb/bt_manager.c"
+#include "../kernel/src/driver/system/usb/bt_bond.c"
 #include "hid_keyboard_fixtures.h"
 static bt_le_t session;
 static uint8_t cmd[35],tx[31],last_report[8],peer_nonce[16],pair_request[7];
@@ -14,8 +17,12 @@ static uint8_t peer_pair_response[7];
 static uint64_t now;
 static unsigned commands,packets,keys,releases,rand_calls;
 static int scenario;
-static bool peer_bonding, peer_reconnecting;
+static bool peer_bonding, peer_reconnecting, peer_reject_ltk;
 static unsigned peer_key_delivery;
+static uint8_t peer_air[6],peer_air_type,peer_identity[6],peer_identity_type;
+static unsigned resolution_commands,create_commands;
+static const uint8_t peer_irk[]={0x9b,0x7d,0x39,0x0a,0xa6,0x10,0x10,0x34,0x05,0xad,0xc8,0x57,0xa3,0x34,0x02,0xec};
+static const uint8_t peer_rpa[]={0xaa,0xfb,0x0d,0x94,0x81,0x70};
 static unsigned p5_subscriptions;
 static const uint8_t peer_ltk[16]={0xa8,0x72,0x5c,0xe1,0x43,0x90,0xbb,0x62,0x71,0xc5,0x68,0x09,0x4f,0xd6,0xa1,0x37};
 static const uint8_t peer_rand[8]={0x91,0x23,0x34,0x45,0x56,0x67,0x78,0x89};
@@ -79,6 +86,9 @@ static void vectors(void)
     fromhex(p,"112233445566778899aabbccddeeff00",16);
     fromhex(expected,"9a1fe1f0e8b0f49b5b4216ae796da062",16);
     aes(k,p,out); assert(!memcmp(out,expected,16));
+    // Core Vol 3 Part H, D.7: IRK ec0234...7d9b, prand 708194 -> ah 0dfbaa.
+    memset(p,0,16); memcpy(p,peer_rpa+3,3);
+    aes(peer_irk,p,out); assert(!memcmp(out,peer_rpa,3));
 }
 static void event(const uint8_t *p,size_t n) { bt_le_event(&session,p,n); }
 static void incoming(uint16_t cid,const uint8_t *p,size_t n)
@@ -101,16 +111,19 @@ static void controller(void)
     case 0x2002: e[6]=27; e[8]=scenario==SHARED_BUFFER?0:4; n+=3; break;
     case 0x1005: e[6]=27; e[9]=8; n+=7; break;
     case 0x200d: {
-        assert(cmd[2]==25 && cmd[8]==1 && !memcmp(cmd+9,peer_addr,6));
+        create_commands++;
+        assert(cmd[2]==25 && cmd[8]==peer_air_type && !memcmp(cmd+9,peer_air,6));
         const uint8_t status[]={0x0f,4,0,1,0x0d,0x20}; event(status,sizeof(status));
         uint8_t conn[]={0x3e,19,1,0,0x0b,0,0,1,0,0,0,0,0,0,24,0,0,0,0x90,1,0};
-        memcpy(conn+8,peer_addr,6); event(conn,sizeof(conn)); return;
+        conn[7]=peer_air_type; memcpy(conn+8,peer_air,6); event(conn,sizeof(conn)); return;
     }
     case 0x2018:
         for(unsigned i=0;i<8;i++) e[6+i]=rand_calls*17+i+1;
         rand_calls++; n+=8; break;
     case 0x2017:
-        if(scenario>=JUST_WORKS_OPT_IN) for(unsigned i=0;i<16;i++) assert(cmd[3+i]==0);
+        if(session.phase==BT_LE_RESOLVE) {
+            resolution_commands++; assert(!memcmp(cmd+3,peer_irk,16));
+        } else if(scenario>=JUST_WORKS_OPT_IN) for(unsigned i=0;i<16;i++) assert(cmd[3+i]==0);
         aes(cmd+3,cmd+19,e+6); n+=16; break;
     case 0x2019: {
         if(peer_reconnecting) {
@@ -123,12 +136,21 @@ static void controller(void)
             for(unsigned i=5;i<15;i++) assert(!cmd[i]); // zero Rand and EDIV with the STK.
         }
         const uint8_t status[]={0x0f,4,0,1,0x19,0x20}; event(status,sizeof(status));
-        const uint8_t enc[]={8,4,0,0x0b,0,1}; event(enc,sizeof(enc));
+        uint8_t enc[]={8,4,0,0x0b,0,1};
+        if(peer_reject_ltk) { enc[2]=6; enc[5]=0; }
+        event(enc,sizeof(enc));
         if(peer_bonding && peer_key_delivery) {
             uint8_t key[17]={6},identity[11]={7,0x34,0x12};
             memcpy(key+1,peer_ltk,16); memcpy(identity+3,peer_rand,8);
             incoming(6,key,sizeof(key));
-            if(peer_key_delivery==2) incoming(6,identity,sizeof(identity));
+            if(peer_key_delivery>=2) incoming(6,identity,sizeof(identity));
+            if(peer_key_delivery>=3) {
+                uint8_t irk[17]={8}; memcpy(irk+1,peer_irk,16); incoming(6,irk,sizeof(irk));
+            }
+            if(peer_key_delivery>=4) {
+                uint8_t address[8]={9,peer_identity_type}; memcpy(address+2,peer_identity,6);
+                incoming(6,address,sizeof(address));
+            }
         }
         return;
     }
@@ -266,17 +288,17 @@ static void peripheral(void)
             assert(n==7); memcpy(pair_request,p,7);
             if(scenario>=JUST_WORKS_OPT_IN) {
                 assert(!peer_reconnecting);
-                const uint8_t expected[]={1,3,0,peer_bonding?1:0,16,0,peer_bonding?1:0};
+                const uint8_t expected[]={1,3,0,peer_bonding?1:0,16,0,peer_bonding?3:0};
                 assert(!memcmp(p,expected,7));
                 assert(!session.passkey_visible && !session.passkey);
             }
             incoming(6,peer_pair_response,7);
         } else if(p[0]==3) {
             uint8_t expected[16];
-            confirm(session.tk,session.random,pair_request,peer_pair_response,0,1,local_addr,peer_addr,expected);
+            confirm(session.tk,session.random,pair_request,peer_pair_response,0,peer_air_type,local_addr,peer_air,expected);
             assert(n==17 && !memcmp(p+1,expected,16));
             uint8_t response[17]={3};
-            confirm(session.tk,peer_nonce,pair_request,peer_pair_response,0,1,local_addr,peer_addr,response+1);
+            confirm(session.tk,peer_nonce,pair_request,peer_pair_response,0,peer_air_type,local_addr,peer_air,response+1);
             if(scenario==WRONG_CONFIRM || scenario==JUST_WORKS_BAD_CONFIRM) response[1]^=1;
             incoming(6,response,17);
         } else if(p[0]==4) {
@@ -321,7 +343,10 @@ static void tick(bool usb,bool bulk)
 static void begin(int which)
 {
     session=(bt_le_t){0}; cmd_n=tx_n=0; now=0; commands=packets=keys=releases=rand_calls=0;
-    peer_bonding=false; peer_reconnecting=false; peer_key_delivery=0; p5_subscriptions=0;
+    peer_bonding=false; peer_reconnecting=false; peer_reject_ltk=false; peer_key_delivery=0; p5_subscriptions=0;
+    memcpy(peer_air,peer_addr,6); peer_air_type=1;
+    memcpy(peer_identity,peer_addr,6); peer_identity[0]^=1; peer_identity_type=1;
+    resolution_commands=create_commands=0;
     scenario=which; for(unsigned i=0;i<16;i++) peer_nonce[i]=0xf0-i;
     memcpy(peer_pair_response,pair_response,7);
     if(which==JUST_WORKS) peer_pair_response[1]=3;
@@ -337,7 +362,7 @@ static void begin(int which)
 }
 static void run(void)
 {
-    for(unsigned i=0;i<1000 && session.phase!=BT_LE_READY && session.phase!=BT_LE_FAILED && session.phase!=BT_LE_STOPPED;i++) {
+    for(unsigned i=0;i<1000 && session.phase!=BT_LE_IDLE && session.phase!=BT_LE_READY && session.phase!=BT_LE_FAILED && session.phase!=BT_LE_STOPPED;i++) {
         tick(true,true); controller(); peripheral();
         if(scenario>=JUST_WORKS_OPT_IN) assert(!session.passkey_visible && !session.passkey);
     }
@@ -558,7 +583,7 @@ static void bonding(void)
     assert(session.bond.ediv==0x1234 && !memcmp(session.bond.rand,peer_rand,8));
     assert_zero(&session.pending_bond,sizeof(session.pending_bond)); assert_zero(session.crypto,16);
     char status[8192]; bt_le_status(&session,status,sizeof(status));
-    assert(strstr(status,"bond for this boot (lost on reboot)") && strstr(status,"cached=yes requested=yes reused=no complete=yes"));
+    assert(strstr(status,"bonded session") && strstr(status,"cached=yes requested=yes reused=no complete=yes"));
     assert(!strstr(status,"a8 72 5c e1") && !strstr(status,"a8725ce1"));
     assert(!bt_le_request(&session,"forget",6,now));
     const uint8_t key[]={0x1b,16,0,2,0,4,0,0,0,0,0}; incoming(4,key,sizeof(key));
@@ -586,7 +611,7 @@ static void bonding(void)
     peer_pair_response[3]=5; peer_pair_response[6]=1;
     assert(bt_le_request(&session,"bond random f8:2c:fe:ff:f0:1a",29,now)); run();
     assert(session.phase==BT_LE_READY && session.bond.authenticated && !session.just_works);
-    assert(pair_request[1]==0 && pair_request[3]==5 && pair_request[5]==0 && pair_request[6]==1);
+    assert(pair_request[1]==0 && pair_request[3]==5 && pair_request[5]==0 && pair_request[6]==3);
     stop_session(); peer_bonding=false; peer_reconnecting=true; rand_calls=0;
     assert(bt_le_request(&session,"reconnect",9,now)); run();
     assert(session.phase==BT_LE_READY && !session.just_works && session.bond_complete && !rand_calls);
@@ -620,13 +645,113 @@ static void bonding(void)
     assert(bt_le_request(&session,"bond-justworks random f8:2c:fe:ff:f0:1a",39,now)); run();
     now+=10001; tick(true,true);
     assert(session.phase==BT_LE_CLEANUP && !memcmp(&previous,&session.bond,sizeof(previous)));
-    // Without an identity resolver, do not claim bonds for rotating addresses.
+    // Private bonds require a valid RPA, followed by identity distribution.
     bt_le_t s={0};
-    assert(!bt_le_request(&s,"bond-justworks random 48:2c:fe:ff:f0:1a",39,0));
+    assert(!bt_le_request(&s,"bond-justworks random 08:2c:fe:ff:f0:1a",39,0));
     assert(!bt_le_request(&s,"bond-justworks random f8:2c:fe:ff:f0:zz",39,0));
     assert(!bt_le_request(&s,"reconnect junk",14,0));
     assert(bt_le_request(&s,"bond public 01:02:03:04:05:06",29,0) && !s.just_works && s.bond_requested);
     puts("PASS: encrypted ordered bond distribution, cached-key reconnect, identity binding, forgetting and secret cleanup");
+}
+
+static void identity_bonding(void)
+{
+    begin_bond(4); peer_pair_response[6]=3; run();
+    assert(session.phase==BT_LE_READY && session.bond.has_irk && !session.bond.identity_verified);
+    assert(session.bond_key_stage==4 && !memcmp(session.bond.irk,peer_irk,16));
+    assert(!memcmp(session.bond.peer,peer_identity,6) && !memcmp(session.bond.last_peer,peer_air,6));
+    assert_zero(&session.pending_bond,sizeof(session.pending_bond));
+    char status[4096]; bt_le_status(&session,status,sizeof(status));
+    assert(strstr(status,"identity key: present; LTK verified: no"));
+    assert(!strstr(status,"9b 7d 39 0a") && !strstr(status,"ec0234a3"));
+    bt_le_bond_t saved=session.bond; stop_session();
+    peer_bonding=false; peer_reconnecting=true; peer_key_delivery=0;
+    memcpy(peer_air,peer_rpa,6);
+    bt_scan_t scan={.phase=BT_SCAN_DONE,.count=BT_SCAN_DEVICES};
+    for(unsigned i=0;i<scan.count;i++) {
+        scan.devices[i].le=true; scan.devices[i].address_type=1;
+        memcpy(scan.devices[i].address,peer_rpa,6);
+        if(i+1<scan.count) scan.devices[i].address[0]^=1;
+    }
+    assert(bt_le_request(&session,"reconnect",9,now));
+    bt_le_reconnect_scan(&session,&scan); run();
+    assert(session.phase==BT_LE_READY && session.address_resolved && session.bond.identity_verified);
+    assert(resolution_commands==BT_SCAN_DEVICES && !memcmp(session.peer,peer_rpa,6));
+    assert(!memcmp(session.bond.peer,saved.peer,6) && !memcmp(session.bond.last_peer,peer_rpa,6));
+    assert(!memcmp(session.bond.ltk,saved.ltk,16));
+
+    // An RPA match cannot bypass encryption.
+    stop_session(); scan.count=1; memcpy(scan.devices[0].address,peer_rpa,6);
+    peer_reject_ltk=true; unsigned randoms=rand_calls;
+    assert(bt_le_request(&session,"reconnect",9,now)); bt_le_reconnect_scan(&session,&scan); run();
+    assert(session.phase==BT_LE_STOPPED && !session.encrypted && !bt_le_input_active(&session));
+    assert(session.bond.valid && rand_calls==randoms && !session.request[0]);
+    peer_reject_ltk=false;
+    // Mismatches never start a connection or send the saved encryption key.
+    scan.devices[0].address[0]^=1; unsigned created=create_commands;
+    assert(bt_le_request(&session,"reconnect",9,now)); bt_le_reconnect_scan(&session,&scan); run();
+    assert(session.phase==BT_LE_STOPPED && !session.connected && create_commands==created);
+    assert(strstr(session.error,"not found in scan") && session.bond.valid);
+    // Static address changes and matching names are not identity evidence.
+    memcpy(scan.devices[0].address,peer_addr,6); strcpy(scan.devices[0].name,"BT5.0Keyboard");
+    assert(bt_le_request(&session,"reconnect",9,now)); bt_le_reconnect_scan(&session,&scan); run();
+    assert(session.phase==BT_LE_STOPPED && create_commands==created);
+    // A direct identity match needs no AES resolution and still uses the saved LTK.
+    memcpy(scan.devices[0].address,saved.peer,6); memcpy(peer_air,saved.peer,6);
+    unsigned resolved=resolution_commands;
+    assert(bt_le_request(&session,"reconnect",9,now)); bt_le_reconnect_scan(&session,&scan); run();
+    assert(session.phase==BT_LE_READY && !session.address_resolved && resolution_commands==resolved);
+    stop_session(); session.bond.local[0]^=1;
+    memcpy(scan.devices[0].address,peer_rpa,6);
+    assert(bt_le_request(&session,"reconnect",9,now)); bt_le_reconnect_scan(&session,&scan); run();
+    assert(session.phase==BT_LE_STOPPED && resolution_commands==resolved);
+    assert(strstr(session.error,"different local controller"));
+
+    // Pairing over an RPA uses the air address in c1, not the later identity.
+    begin_bond(4); peer_pair_response[6]=3; session=(bt_le_t){0};
+    memcpy(peer_air,peer_rpa,6);
+    const char *rpa_bond="bond-justworks random 70:81:94:0d:fb:aa";
+    assert(bt_le_request(&session,rpa_bond,strlen(rpa_bond),now)); run();
+    assert(session.phase==BT_LE_READY && !memcmp(session.bond.peer,peer_identity,6));
+    assert(!memcmp(session.bond.last_peer,peer_rpa,6));
+    begin_bond(2); session=(bt_le_t){0}; memcpy(peer_air,peer_rpa,6);
+    assert(bt_le_request(&session,rpa_bond,strlen(rpa_bond),now)); run();
+    assert(session.phase==BT_LE_STOPPED && !session.bond.valid);
+    assert(strstr(session.error,"requires peer identity key"));
+
+    // An incomplete replacement must preserve the previously committed bond.
+    begin_bond(4); peer_pair_response[6]=3; run(); saved=session.bond; stop_session();
+    peer_key_delivery=3;
+    assert(bt_le_request(&session,"bond-justworks random f8:2c:fe:ff:f0:1a",39,now)); run();
+    assert(session.phase==BT_LE_BOND_KEYS && session.bond_key_stage==3);
+    now+=10001; tick(true,true);
+    assert(session.phase==BT_LE_CLEANUP && !memcmp(&session.bond,&saved,sizeof(saved)));
+    assert_zero(&session.pending_bond,sizeof(session.pending_bond));
+
+    for(unsigned kind=0;kind<10;kind++) {
+        begin_bond(2); peer_pair_response[6]=3; run();
+        assert(session.phase==BT_LE_BOND_KEYS && !session.bond.valid);
+        uint8_t irk[17]={8},address[8]={9,1};
+        memcpy(irk+1,peer_irk,16); memcpy(address+2,peer_identity,6);
+        if(kind==0) incoming(6,address,8);
+        else if(kind==1) incoming(6,irk,16);
+        else if(kind==2) { incoming(6,irk,17); incoming(6,irk,17); }
+        else if(kind==3) { session.encrypted=false; incoming(6,irk,17); }
+        else {
+            incoming(6,irk,17);
+            if(kind==4) address[1]=2;
+            if(kind==5) address[7]=0x70;
+            if(kind==6) { memset(address+2,0,6); address[7]=0xc0; }
+            if(kind==7) memset(address+2,0xff,6);
+            incoming(6,address,kind==8?7:8);
+            if(kind==9) incoming(6,address,8);
+        }
+        assert(session.phase==BT_LE_CLEANUP && !session.bond.valid);
+        assert_zero(&session.pending_bond,sizeof(session.pending_bond));
+    }
+    begin_bond(4); run(); // Unnegotiated identity distribution is refused.
+    assert(session.phase==BT_LE_STOPPED && !session.bond.valid);
+    puts("PASS: identity distribution, RPA resolution, air-address confirms, stable identity binding and partial-key refusal");
 }
 
 static void power_loss_recovery(void)
@@ -684,6 +809,97 @@ static void power_loss_recovery(void)
         assert(bt_le_request(&session,"forget",6,now));
     }
     puts("PASS: power-loss recovery preserves bonds, releases keys and gates retry on reset and USB completion");
+}
+
+static void persistent_manager(void)
+{
+    begin_bond(4); peer_pair_response[6]=3; run();
+    bt_manager_t manager={.loaded=true};
+    bt_manager_observe(&manager,&session,now);
+    assert(manager.automatic && manager.dirty && manager.generation==1);
+    uint8_t record[BT_BOND_RECORD_BYTES]; bt_bond_encode(record,&session.bond,true);
+    bt_le_bond_t restored; bool automatic=false;
+    assert(bt_bond_decode(&restored,&automatic,record,sizeof(record)) && automatic);
+    assert(!memcmp(restored.ltk,peer_ltk,16) && !memcmp(restored.irk,peer_irk,16));
+    // Corruption, truncation, unknown flags and reserved bytes cannot load a bond.
+    for(size_t n=0;n<sizeof(record);n++) assert(!bt_bond_decode(&restored,&automatic,record,n));
+    for(size_t i=0;i<sizeof(record);i++) {
+        record[i]^=1; assert(!bt_bond_decode(&restored,&automatic,record,sizeof(record))); record[i]^=1;
+        assert_zero(&restored,sizeof(restored));
+    }
+    for(unsigned kind=0;kind<4;kind++) {
+        uint8_t bad[BT_BOND_RECORD_BYTES]; memcpy(bad,record,sizeof(bad));
+        if(kind==0) bad[8]|=0x80;
+        if(kind==1) bad[72]=1;
+        if(kind==2) bad[9]=2;
+        if(kind==3) bad[23]=0x70;
+        uint32_t crc=bond_crc(bad,76);
+        for(unsigned j=0;j<4;j++) bad[76+j]=crc>>(8*j);
+        assert(!bt_bond_decode(&restored,&automatic,bad,sizeof(bad)));
+    }
+    assert(bt_bond_decode(&restored,&automatic,record,sizeof(record)));
+    session=(bt_le_t){.bond=restored};
+    manager=(bt_manager_t){.loaded=true,.automatic=automatic};
+    bt_scan_t scan={0};
+    bt_manager_step(&manager,&session,&scan,now);
+    assert(scan.phase==BT_SCAN_RESET && scan.le_only && manager.scan_owned);
+    // The keyboard can remain off for many capped-backoff rounds and still connect later.
+    for(unsigned i=0;i<40;i++) {
+        scan.phase=BT_SCAN_DONE; scan.count=0;
+        bt_manager_step(&manager,&session,&scan,now);
+        assert(!manager.scan_owned && !manager.blocked && manager.next_attempt-now<=30000);
+        bt_manager_step(&manager,&session,&scan,manager.next_attempt-1);
+        assert(scan.phase==BT_SCAN_DONE);
+        now=manager.next_attempt; bt_manager_step(&manager,&session,&scan,now);
+        assert(scan.phase==BT_SCAN_RESET && manager.scan_owned);
+    }
+    scan.phase=BT_SCAN_DONE; scan.count=1;
+    scan.devices[0].le=true; scan.devices[0].address_type=1;
+    memcpy(scan.devices[0].address,peer_rpa,6); memcpy(peer_air,peer_rpa,6);
+    peer_bonding=false; peer_reconnecting=true; peer_key_delivery=0;
+    bt_manager_step(&manager,&session,&scan,now); run();
+    assert(session.phase==BT_LE_READY && session.bond_reused && session.address_resolved);
+    bt_manager_step(&manager,&session,&scan,now);
+    const uint8_t powered_off[]={5,4,0,0x0b,0,8}; event(powered_off,sizeof(powered_off)); run();
+    assert(session.phase==BT_LE_STOPPED && session.retryable);
+    now+=60000; bt_manager_step(&manager,&session,&scan,now);
+    assert(manager.scan_owned && scan.phase==BT_SCAN_RESET);
+    // A fresh power-on advertisement uses another RPA for the same IRK.
+    uint8_t prand[16]={0},hash[16]; memcpy(peer_air,peer_rpa,6); peer_air[3]++;
+    memcpy(prand,peer_air+3,3); aes(peer_irk,prand,hash); memcpy(peer_air,hash,3);
+    scan.phase=BT_SCAN_DONE; scan.count=1; scan.devices[0].le=true; scan.devices[0].address_type=1;
+    memcpy(scan.devices[0].address,peer_air,6);
+    bt_manager_step(&manager,&session,&scan,now); run();
+    assert(session.phase==BT_LE_READY && session.address_resolved && session.bond_reused);
+    assert(bt_manager_command(&manager,&session,&scan,"disconnect",10,now)); tick(true,true); run();
+    assert(session.phase==BT_LE_IDLE && manager.suppressed);
+    bt_manager_step(&manager,&session,&scan,now+60000); assert(!manager.scan_owned);
+    assert(bt_manager_command(&manager,&session,&scan,"reconnect",9,now)); run();
+    assert(session.phase==BT_LE_READY && !manager.suppressed);
+    assert(bt_manager_command(&manager,&session,&scan,"auto off",8,now));
+    bt_bond_encode(record,&session.bond,manager.automatic);
+    assert(bt_bond_decode(&restored,&automatic,record,sizeof(record)) && !automatic);
+    assert(bt_manager_command(&manager,&session,&scan,"disconnect",10,now)); tick(true,true); run();
+    assert(bt_manager_command(&manager,&session,&scan,"auto on",7,now));
+    bt_manager_step(&manager,&session,&scan,now); assert(manager.scan_owned);
+    assert(bt_manager_command(&manager,&session,&scan,"forget",6,now));
+    assert(!manager.automatic && !session.bond.valid && manager.dirty);
+    bt_bond_encode(record,&session.bond,manager.automatic);
+    assert(bt_bond_decode(&restored,&automatic,record,sizeof(record)) && !restored.valid && !automatic);
+    for(unsigned i=8;i<76;i++) assert(!record[i]);
+    scan.phase=BT_SCAN_DONE; bt_manager_step(&manager,&session,&scan,now+60000);
+    assert(session.phase==BT_LE_IDLE);
+    manager.automatic=true; session.bond.valid=true;
+    assert(bt_manager_command(&manager,&session,&scan,"disconnect",10,now));
+    assert(manager.suppressed && session.phase==BT_LE_IDLE);
+    scan.phase=BT_SCAN_FAILED;
+    assert(bt_manager_command(&manager,&session,&scan,"forget",6,now));
+    assert(!session.bond.valid && !manager.automatic);
+    // Policy failures require intervention; disappearance remains retryable.
+    manager=(bt_manager_t){.loaded=true,.automatic=true}; session.bond.valid=true;
+    session.phase=BT_LE_STOPPED; session.retryable=false;
+    bt_manager_step(&manager,&session,&scan,now); assert(manager.blocked);
+    puts("PASS: versioned bond records, corruption refusal, automatic restored-key reconnect, capped retries and user controls");
 }
 
 static void failures(void)
@@ -772,7 +988,7 @@ static void pairing_diagnostics(void)
 
 int main(void)
 {
-    vectors(); success(); failures(); framing(); pairing_diagnostics(); just_works(); report_protocol(); p5_input_subscriptions(); receive_diagnostics(); inspection(); bonding(); power_loss_recovery();
+    vectors(); success(); failures(); framing(); pairing_diagnostics(); just_works(); report_protocol(); p5_input_subscriptions(); receive_diagnostics(); inspection(); bonding(); identity_bonding(); power_loss_recovery(); persistent_manager();
     bt_le_t s={0};
     assert(!bt_le_request(&s,"connect random zz:00:00:00:00:00",32,0));
     assert(!bt_le_request(&s,"disconnect junk",15,0));

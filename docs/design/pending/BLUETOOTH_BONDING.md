@@ -2,9 +2,8 @@
 
 Os64 should remember an explicitly paired keyboard and automatically reconnect
 after either device restarts, without another pairing ceremony or a connection
-command. Automatic reconnection is required for completion of this feature;
-the first recovery slice still requires an explicit `reconnect` command.
-This work extends the AX210
+command. Automatic reconnection is required for completion of this feature.
+The implementation includes background connection. This work extends the AX210
 LE keyboard path on `codex/bluetooth-ax210-discovery`. The operational record and
 commands are in [BLUETOOTH.md](../../../BLUETOOTH.md).
 
@@ -16,9 +15,9 @@ simultaneous peers, mice, audio, and LE Secure Connections are separate work.
 ## Existing behavior and evidence
 
 P5 testing established encrypted keyboard input and explicit same-boot
-reconnection using a cached legacy bond. The cache contains the peer address,
-local controller address, LTK, EDIV, Rand, and authentication flag. It is lost
-when Os64 reboots. Pairing requests encryption-key distribution but no identity
+reconnection using a cached legacy bond. At `a58ad4bf`, the cache contained the
+peer address, local controller address, LTK, EDIV, Rand, and authentication flag. It was lost
+on reboot, and pairing requested encryption-key distribution but no identity
 key. The five Input Report subscriptions required by the test keyboard must
 survive this work.
 
@@ -77,7 +76,7 @@ Acceptance: after a simulated connection timeout, held keys release, diagnostics
 and bond survive, and direct reconnect reaches encrypted HID readiness without
 fresh SMP pairing. Discovery must also work from stopped. Delayed USB completion,
 missing or rejected reset replies, and transport errors must block premature
-retry. Repeat normal keyboard off/on testing on the P5 before widening the change.
+retry. Normal keyboard off/on testing on the P5 remains an acceptance check.
 
 ## Stage 2 Bond identity
 
@@ -92,14 +91,13 @@ form. Stage the LTK and EDIV/Rand with any negotiated IRK and Identity Address
 Information. Publish a bond only after the negotiated set is complete. A missing
 identity half must time out without replacing a previous committed bond.
 
-Reconnect first uses the saved identity if directly addressable. For an RPA,
-resolve a bounded discovery result against the saved peer IRK before initiating.
-Use the controller's AES operation or a reviewed existing AES implementation;
-test byte order against published `ah` vectors. If using the controller resolving
-list instead, implement and test list setup, address-resolution enablement, event
-masks, and identity-versus-air-address reporting as one coherent change. Reset
-reinitialization must restore the chosen resolution mechanism before initiation.
-Choose one mechanism during implementation; do not mix their address semantics.
+Reconnect uses a directly advertised saved identity or resolves RPAs from a
+bounded discovery snapshot using HCI LE Encrypt. The implementation checks the
+Core D.7 `ah` vector and both matching and nonmatching addresses. It copies up to
+64 RPA candidates under serialization, validates the local controller address,
+then checks candidates asynchronously. An explicit reconnect without a completed
+scan attempts the identity address directly; the background manager obtains a
+fresh LE scan before reconnecting. No controller resolving list is used.
 
 Retain the actual pairing addresses for legacy `c1`; replacing them with the
 distributed identity would change the confirm calculation. Bind restored keys
@@ -121,36 +119,43 @@ then performs disk I/O. Completion acknowledges that generation so an older
 write cannot mark a replacement or forgotten bond as saved.
 
 Use an explicitly encoded, versioned record with fixed bounds, lengths, flags,
-local and peer identities, key size, authentication mode, LTK, EDIV/Rand, optional
+local and peer identities, authentication mode, LTK, EDIV/Rand, optional
 IRK, and an integrity check for accidental corruption. Do not serialize a native
 C struct or treat a checksum as protection against malicious replacement.
-Load into temporary storage, validate the entire record and controller binding,
-then publish it through the same serialized state boundary. Short, oversized,
+The format fixes the encryption key size at 16 bytes. Load into temporary
+storage, validate the entire record, then publish through the serialized state
+boundary. Verify controller binding before supplying any key to HCI. Short, oversized,
 unknown-version, corrupt, or invalid-flag records must not become active bonds.
 
-Before choosing the file path and transfer API, audit the branch's actual access
-controls and filesystem durability guarantees. Keys must not be exposed through
-the public status files, shell command arguments, logs, or ordinary diagnostic
-exports. A filename, mode field, or hidden directory is not evidence that Os64
-enforces access restrictions. Resolve any missing enforcement in the storage
-slice; do not call an unrestricted key file protected storage.
+The storage audit found no enforced local file-permission model. The selected
+policy follows the SSH host-key model: trusted local programs can read machine keys.
+The store is `/home/bluetooth_bond`, an unencrypted 80-byte record with magic and
+version `OS64BT01`, fixed fields, reserved zero bytes and CRC32. Keys remain out
+of public status, command arguments and logs; this is not protected local storage.
 
-Write a replacement record and use the filesystem's supported commit mechanism
-to preserve the previous valid record on failure. Verify its power-loss behavior;
-a successful rename alone does not prove durability. If the filesystem cannot
-provide the required guarantee, use a validated generation-based record scheme
-or explicitly narrow the supported reboot guarantee. Retain the usable RAM bond
-on write failure and report `unsaved`, allowing an explicit retry.
+The worker writes and syncs `/home/bluetooth_bond.new`, closes it and requests
+`OS64_RENAME_REQUIRE_ATOMIC_REPLACE`. Unsupported replacement is refused instead
+of unlinking the previous bond first. A failed write retains the RAM bond and
+reports `unsaved`; automatic retries occur after ten seconds and `save` requests
+an earlier retry. An unreadable existing record is not treated as absent:
+startup uses exclusive creation to initialize a missing record without replacing
+an existing one. Temporary records are not promoted on startup.
+
+The supported target is a saved bond surviving a normal host reboot. Sync and
+atomic replacement do not establish arbitrary power-cut crash consistency on
+unjournaled filesystems. That stronger guarantee requires filesystem/hardware
+validation; corruption refuses automatic use of the record.
 
 `forget` invalidates queued writes and removes persistent state as well as RAM
-state. A completed old write must not resurrect a forgotten bond. Report deletion
-failure and do not claim durable forgetting until it succeeds. Replacement,
+state by publishing a keyless tombstone. A completed old write must not
+acknowledge a newer forget as saved. While forgetting is reported as unsaved,
+a reboot can still load the prior disk bond. Replacement,
 load, and deletion operate on one serialized generation sequence.
 
 Acceptance includes save/reboot/load/reconnect without SMP pairing, write and
 read errors, truncation/corruption, replacement failure, forgetting across reboot,
 forget racing a save, and proof that status and logs do not disclose keys. Verify
-permissions and crash behavior on the actual filesystem selected for storage.
+normal reboot behavior on the actual filesystem selected for storage.
 
 ## Stage 4 Automatic reconnect
 
@@ -162,15 +167,17 @@ cleanup, then resume looking. Turning the keyboard on normally should be enough:
 recognize its direct identity or resolve its RPA using the saved IRK, connect,
 restore encryption, and configure HID input without a shell command.
 
-A background Bluetooth manager owns this policy and coordinates bond storage,
-discovery, and connection requests. It runs in task context; the USB polling
-path remains responsible for bounded protocol progress and input delivery.
-A separate userland daemon is not a prerequisite for automatic connection.
-Choose a kernel worker or a userland service when the Stage 3 access-control
-and storage audit establishes how that manager can securely own the bonds.
-Manual commands and the manager must use the same serialized controller owner.
+The background manager runs from the existing maintenance worker in task
+context. It coordinates storage, discovery and connection requests under the
+USB serialization lock, then releases that lock before disk I/O. USB polling
+continues protocol progress and input delivery. A separate userland daemon is
+not required. Manual commands and the manager share the controller owner.
+Boot enables the manager after mounts and configuration settle. Disk callbacks
+use the kernel-context trampoline with HHDM-backed arguments because the worker
+has its own page tables and stack. The maintenance worker must be enabled.
 
-Use bounded attempts with backoff and a capped discovery duty cycle. An absent
+Use two-second LE scans with retry delays doubling from two to thirty seconds,
+plus the maintenance worker cadence, to bound the discovery duty cycle. An absent
 keyboard must not permanently exhaust retries: continue occasional discovery so
 a keyboard turned on later can connect. Suspend retries while manual discovery
 or pairing owns the controller. Explicit disconnect suppresses automatic
@@ -192,29 +199,31 @@ available when that cannot succeed.
 
 ## Implementation status
 
-- Stage 1: implemented; LE and production xHCI host suites pass with ASan/UBSan,
-  and the kernel builds. P5 power-cycle validation is pending.
-- Stages 2 and 3: designed; implementation follows the P5 recovery check.
-- Stage 4: required and planned after explicit persisted-bond reconnect is
-  reliable; not included in the Stage 1 recovery slice.
+All four stages are implemented with host regression coverage. Real P5 tests of
+identity distribution, automatic keyboard off/on recovery, saved-bond reboot,
+and persistent disable/forget remain required before hardware acceptance.
 
 Peripheral connection-parameter updates remain a separate compatibility task;
-the working keyboard retries requests that Os64 rejects. Do not combine that
-policy change with recovery when testing the reported power-off regression.
+the working keyboard retries requests that Os64 rejects. That policy is unchanged.
 
-## P5 recovery check
+## P5 acceptance checks
 
-Boot the recovery build and establish a working `bond-justworks` session using
-the keyboard's current scanned LE address. Record `/sys/bluetooth/connection`
-and that address. Power off the keyboard without issuing `disconnect`, then
-wait for connection status to reach `stopped (retry available)`; the supervision
-timeout must elapse before the host knows the peer has gone away.
+1. Boot the new build, wait for bond storage to finish loading, and establish a
+   working `bond-justworks` session using the keyboard's current scanned address.
+   Check encrypted readiness, actual typing, identity-key presence, automatic
+   connection enabled, and `bond storage: saved`.
+2. Power off the keyboard without issuing `disconnect`. Turn it on normally and
+   wait for automatic discovery and encrypted reconnection. Type again without
+   issuing `reconnect`. Record status and scan entries if it cannot reconnect.
+3. Reboot Os64 after storage reports saved. Test both a keyboard already on at
+   boot and one turned on later. Neither should require a new pairing.
+4. Verify `disconnect` suppresses automatic connection for this boot, `reconnect`
+   resumes explicit use, and saved `auto off` survives reboot. `auto on` enables
+   the saved peer again. If a prior protocol failure stopped automatic attempts,
+   use explicit `reconnect` to retry after addressing the reported error.
+5. Disconnect, issue `forget`, wait for storage saved, and reboot. The keyboard
+   must not reconnect with the forgotten bond. Pair explicitly to restore it.
 
-Power the keyboard on normally, without requesting a new pairing, and write
-`reconnect` to `/sys/bluetooth/connection`. Check encrypted readiness and actual
-typing. If initiation times out, wait for stopped and request a scan. Record the
-new scan entry and connection status so an address change can be distinguished
-from a failed cleanup. Discovery should now be possible without reboot.
-
-This check covers session recovery with the RAM bond. Saving across host reboot
-and resolving a changed RPA belong to the following stages.
+If the keyboard changes its static identity rather than using an RPA resolvable
+with its IRK, preserve the scan evidence. This implementation deliberately cannot
+infer continuity from an advertised name.

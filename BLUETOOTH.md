@@ -6,7 +6,8 @@ wiring remains a separate debt.
 
 ## Using discovery
 
-Put devices into discoverable/pairing mode, then run:
+For a new pairing, put devices into discoverable/pairing mode. Turn an already
+bonded keyboard on normally, without requesting a new pairing. To inspect discovery:
 
 ```sh
 echo scan > /sys/bluetooth/scan
@@ -27,7 +28,8 @@ fields. Names are limited to 63 bytes and displayed as printable ASCII, with
 other bytes replaced by `?`. Missing names remain explicitly unnamed; discovery
 does not issue Classic Remote Name requests. LE class bytes are zero because LE
 advertisements do not supply the Classic class-of-device field. Random LE
-addresses may rotate; the listing does not resolve private addresses to identity.
+addresses may rotate; the listing shows air addresses. Bonded reconnect resolves
+RPAs using the saved identity key.
 
 A new scan replaces the previous list. Requests while busy, absent or failed are
 refused. The command is bounded to 32 bytes, accepts surrounding whitespace, and
@@ -89,8 +91,8 @@ are bounded to 64 bytes, validated as a whole on close, and never wait for radio
 or USB completion in the syscall. Empty writes do nothing. Invalid/busy requests
 are refused. Status preserves the seven public Pairing Response capability bytes
 and identifies the unsupported field when negotiation is refused; these remain
-available after cleanup. One peer is supported. No implicit pairing, automatic reconnection,
-or selection by an advertised name occurs.
+available after cleanup. One peer is supported. Automatic connection reuses an
+explicitly created bond; it does not pair implicitly or select by advertised name.
 
 The `connect` command negotiates **LE legacy Passkey Entry**, with a 16-byte key,
 a DisplayOnly host and a KeyboardOnly/KeyboardDisplay peer. It refuses to fall
@@ -121,42 +123,74 @@ connection requires pairing again. This session-only path is experimental:
 require bonding for both the HID Device and Host. The session-only commands
 therefore omit a keyboard compatibility requirement, not merely reconnect.
 
-Use `bond-justworks` (or `bond` for Passkey Entry) to request bonding and the
-peripheral's 16-byte long-term encryption key:
+Use `bond-justworks` (or `bond` for Passkey Entry) to pair once and enable
+saved-bond automatic connection. Substitute the current scanned LE address:
 
 ```sh
 echo bond-justworks random de:73:10:60:93:6a > /sys/bluetooth/connection
 cat /sys/bluetooth/connection
 ```
 
-The host waits for Encryption Information and Central Identification in order,
-after encryption, before HID discovery. Both halves must arrive within ten
-seconds. The completed LTK/EDIV/Rand record is bound to the local controller and
-peer addresses and retained in kernel memory for this boot. It is not printed
-in status. Partial or rejected exchanges wipe pending secrets and do not replace
-a previously committed cache. Status distinguishes requested, complete, cached
-and reused bonds.
+The host requests encryption and identity keys. It accepts encryption-only peers
+at public/static-random addresses, but bonding over an RPA requires identity
+keys. Encrypted distribution must supply LTK, EDIV/Rand, then the negotiated IRK
+and identity address in order within ten seconds. Partial or rejected exchanges
+wipe pending secrets without replacing the committed bond. Identity keys never
+appear in status; `LTK verified` distinguishes a distributed identity from one
+confirmed by encrypted reconnection. Legacy pairing confirms use the air address.
 
-After an explicit `disconnect` has returned to `idle`, or error cleanup has
-reached `stopped (retry available)`, `reconnect` uses that
-cached key without repeating pairing or silently falling back to a weaker mode.
-`forget` erases the local cache while idle, stopped or failed; it does not erase the
-keyboard's own record. A new explicit bond request can replace the one-record
-cache after successful key distribution.
+The maintenance worker saves the bond to `/home/bluetooth_bond` and restores it
+at boot; the worker must be enabled. Wait for **`bond storage: saved`** before rebooting. The 80-byte versioned
+record has explicit fields and a CRC; it is not encrypted. As with Os64's SSH
+host key, local programs are trusted and can read the file. Status and logs do
+not expose keys. Commands are briefly refused while initial storage loading runs.
+
+Saving writes and syncs `/home/bluetooth_bond.new`, closes it, then requests
+atomic replacement. This requires filesystem support for atomic replacement
+(ext2 supports it; FAT replacement is refused). A write failure retains the RAM
+bond and reports `unsaved`; the worker retries after ten seconds, or `save`
+requests an earlier attempt. Corrupt or unreadable records are not silently
+replaced at startup. Successful saves support normal reboot; sudden power-loss
+crash consistency remains subject to the filesystem and hardware, not the CRC.
+
+**Normal operation needs no connection command.** After bonding, or after host
+reboot with an enabled saved bond, the worker runs two-second LE discovery rounds.
+It matches the saved identity or checks RPAs with controller AES, then reconnects,
+restores encryption, and configures HID. An absent peer causes backoff from two
+to thirty seconds between rounds; discovery continues so a keyboard turned on
+later can connect. The worker normally runs every two seconds. This is bounded
+background discovery, not an instantaneous wake guarantee.
+
+Manual controls remain available:
 
 ```sh
 echo disconnect > /sys/bluetooth/connection
-# Wait for idle before reconnecting.
+# Suppresses automatic connection for this boot until reconnect or auto on.
 echo reconnect > /sys/bluetooth/connection
+# Reuses the saved key; after a completed scan it can resolve a new RPA.
+echo auto off > /sys/bluetooth/connection
+# Persists manual mode; does not tear down an established connection.
+echo auto on > /sys/bluetooth/connection
+echo save > /sys/bluetooth/connection
 ```
 
-**The cache is lost on reboot.** After reboot, put the keyboard back into pairing
-mode and bond again. Persistent storage, identity-key resolution and automatic
-reconnect are tracked in DEBTS.md. Bond commands accept public or static random
-addresses; rotating private addresses require identity support. Successful reset
-cleanup permits another connection or scan without reboot. Transport failures
-and unconfirmed reset cleanup still require reboot. The next stages are described
-in [Bluetooth bonding and reconnection](docs/design/pending/BLUETOOTH_BONDING.md).
+`forget` is accepted while idle, stopped or failed, and during the manager's own
+discovery round. It disables automatic connection and wipes the RAM bond. The
+worker atomically replaces the disk record with a keyless tombstone; wait for
+`bond storage: saved` before assuming forgetting will survive reboot. It does not
+erase the keyboard's own bond. A stale in-flight save cannot acknowledge a newer
+forget as saved. A new explicit bond can replace the one-record cache.
+
+The manager yields to manual discovery and pairing. Key rejection, incompatible
+HID, controller mismatch, and terminal transport errors stop automatic attempts
+for user action; peer absence and loss of a working link permit another round.
+A changed static-random identity cannot be recognized by name or by an unrelated
+IRK. Successful reset cleanup permits an explicit retry without reboot; transport
+failures and unconfirmed cleanup still require reboot. See
+[Bluetooth bonding and reconnection](docs/design/pending/BLUETOOTH_BONDING.md).
+
+A manual scan reserves sixty seconds from its start before background discovery
+may resume, allowing time to inspect the results and select a connection.
 
 The keyboard must expose HID service 0x1812. A notifying Boot Keyboard Input
 0x2a22 with a CCC descriptor and writable Protocol Mode 0x2a4e selects Boot
@@ -279,6 +313,18 @@ OpenSSL is a host-test dependency, not linked into the kernel.
 The production xHCI harness also checks bulk receive delivery/release and
 non-overlapping control/ACL DMA storage.
 
+Identity fixtures check the published `ah` vector, negotiated/partial identity
+keys, matching and nonmatching RPAs, air-address pairing confirms, controller
+binding, and encryption rejection after an RPA match. Manager tests restore an
+encoded bond, remain live through repeated empty scans, and automatically
+reconnect after power loss with a new RPA. They cover persistent disable,
+disconnect suppression and forgetting. `tools/test_bt_bond_store_host.sh` runs
+the production storage code with short I/O, corruption, sync/close/rename errors,
+and filesystem read-only demotion. The xHCI harness verifies disk callbacks run
+outside the poll lock and an in-flight save cannot acknowledge a newer forget.
+Storage tests also check kernel-context marshalling, allocation failure, and
+wiping the marshalled key material before freeing it.
+
 The P5 confirmed cold firmware bring-up at commit `9b21368b` and discovery at
 `76c6eedc`: fifteen LE addresses on the first scan, followed by eighteen results
 including `BT 3.0 Keyboard?` (Classic) and `BT 5.0 Keyboard` (LE). Both scan status
@@ -393,7 +439,8 @@ requested=no, reused=yes, complete=yes, received_parts=0. Six keyboard reports
 had decoded with no malformed packets or error; all five input subscriptions
 and keyboard CCC/Protocol Mode readback succeeded. This verifies cached-key
 reconnection and input without a fresh pairing exchange in the same boot.
-Bond persistence across reboot and automatic reconnection remain unimplemented.
+That test predates disk persistence, identity resolution and automatic connection.
+Those additions have host coverage; their P5 acceptance checks remain pending.
 
 At the end of testing, Chris reported that powering the keyboard off without
 first issuing `disconnect` prevented both `reconnect` and a subsequent

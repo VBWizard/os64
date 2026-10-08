@@ -29,6 +29,11 @@ bool bt_scan_start(bt_scan_t *s, uint64_t now)
     *s=(bt_scan_t){.phase=BT_SCAN_RESET,.credits=1,.total_deadline=now+40000};
     return true;
 }
+bool bt_scan_start_le(bt_scan_t *s,uint64_t now)
+{
+    if(!bt_scan_start(s,now)) return false;
+    s->le_only=true; return true;
+}
 
 // Validate the complete AD/EIR chain before changing a cached name. A zero
 // length ends padded EIR data; names are printable ASCII in this text view.
@@ -188,7 +193,7 @@ void bt_scan_tick(bt_scan_t *s, uint64_t now, bool usb_done, bool usb_failed,
             s->radio_active=false; s->phase=BT_SCAN_FAILED; return;
         }
         if (s->phase==BT_SCAN_INQUIRY) s->deadline=now+12000;
-        if (s->phase==BT_SCAN_LE_ENABLE) s->deadline=now+10000;
+        if (s->phase==BT_SCAN_LE_ENABLE) s->deadline=now+(s->le_only?2000:10000);
         if (s->phase==BT_SCAN_RESET || s->phase==BT_SCAN_LE_DISABLE) s->radio_active=false;
         s->phase++;
     }
@@ -204,7 +209,7 @@ void bt_scan_tick(bt_scan_t *s, uint64_t now, bool usb_done, bool usb_failed,
         if (now<s->deadline) return;
         s->phase=BT_SCAN_LE_DISABLE;
     }
-    if (s->phase==BT_SCAN_INQUIRY_MODE && (s->features[4]&0x20)) s->phase=BT_SCAN_LE_HOST;
+    if (s->phase==BT_SCAN_INQUIRY_MODE && (s->le_only || (s->features[4]&0x20))) s->phase=BT_SCAN_LE_HOST;
     if (s->phase==BT_SCAN_LE_HOST && !(s->features[4]&0x40)) s->phase=BT_SCAN_DONE;
     if (s->phase==BT_SCAN_DONE) return;
     // A failed command may still own the USB DMA buffer. Wait for its status
