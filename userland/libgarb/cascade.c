@@ -113,6 +113,13 @@ struct garb_cascade {
     uint32_t slotcap;
     garb_parsed_t *attrs;       // `style` attributes' parses, freed with the cascade
     int32_t nattrs, attrcap;
+    // What the build passed over because this library does not read it
+    // (garb_cascade_skips). Its storage never marks the cascade
+    // incomplete: the tally is an instrument, and running out of room for
+    // it changes nothing the page gets.
+    garb_skip_t *skips;
+    int32_t nskips, skipcap;
+    uint32_t skips_lost;
 };
 
 static void *alloc(garb_cascade_t *c, size_t n)
@@ -241,6 +248,137 @@ static void file_selector(garb_cascade_t *c, int32_t rule, int32_t sel)
     *head = c->nentries++;
 }
 
+// ── What the build passed over ──────────────────────────────────────────
+
+// The functions some reader in values.c or props.c accepts, by name: a
+// declaration this library dropped that names any OTHER function is
+// counted as asking for that function. One it dropped naming only these
+// was a value written wrong, which is the page's, not a gap.
+static const char *const kFunctionsRead[] = {
+    "calc", "min", "max", "clamp", "rgb", "rgba", "hsl", "hsla", "hwb", "url", "var", "env",
+    "linear-gradient", "radial-gradient", "conic-gradient", "repeating-linear-gradient",
+    "repeating-radial-gradient", "repeating-conic-gradient", "image-set", "minmax",
+    "fit-content", "repeat", "rect", NULL,
+};
+
+static void skipped(garb_cascade_t *c, garb_skip_kind_t kind, const char *name, size_t len)
+{
+    // A prefixed name is one engine's dialect, which every other engine
+    // passes over too: what a page asks of a browser is the standard name.
+    if (len == 0 || name[0] == '-')
+        return;
+    // ieq folds its first argument; the kept copy is already lower case.
+    for (int32_t i = 0; i < c->nskips; i++)
+        if (c->skips[i].kind == kind && c->skips[i].len == len && ieq(name, len, c->skips[i].name)) {
+            if (c->skips[i].count != UINT32_MAX)
+                c->skips[i].count++;
+            return;
+        }
+    if (c->nskips == c->skipcap) {
+        int32_t bigger = c->skipcap > 0 ? c->skipcap * 2 : 16;
+        garb_skip_t *next = bigger <= GARB_SKIPS_MAX
+            ? os64_arena_alloc(c->self.arena, (size_t)bigger * sizeof(garb_skip_t)) : NULL;
+        if (next == NULL) {
+            c->skips_lost++;
+            return;
+        }
+        if (c->nskips > 0)
+            os64_memcpy(next, c->skips, (size_t)c->nskips * sizeof(garb_skip_t));
+        c->skips = next;
+        c->skipcap = bigger;
+    }
+    char *copy = os64_arena_alloc(c->self.arena, len + 1);
+    if (copy == NULL) {
+        c->skips_lost++;
+        return;
+    }
+    // Names are compared without case, as CSS compares them, and kept in
+    // lower case so one name is spelled one way wherever it is reported.
+    for (size_t i = 0; i < len; i++)
+        copy[i] = name[i] >= 'A' && name[i] <= 'Z' ? (char)(name[i] + 32) : name[i];
+    copy[len] = '\0';
+    c->skips[c->nskips++] = (garb_skip_t){kind, copy, len, 1};
+}
+
+static bool function_read(const garb_value_t *v)
+{
+    for (int k = 0; kFunctionsRead[k] != NULL; k++)
+        if (ieq(v->text, v->len, kFunctionsRead[k]))
+            return true;
+    return false;
+}
+
+// The functions a dropped declaration names that no reader here accepts,
+// at any depth.
+static void skipped_functions(garb_cascade_t *c, const garb_value_t *v, int32_t n, int depth)
+{
+    for (int32_t i = 0; i < n && depth < GARB_DEPTH_MAX; i++) {
+        if (v[i].kind == GARB_FUNCTION && !function_read(&v[i]))
+            skipped(c, GARB_SKIP_FUNCTION, v[i].text, v[i].len);
+        if (v[i].kind == GARB_FUNCTION || v[i].kind == GARB_BLOCK)
+            skipped_functions(c, v[i].children, v[i].nchildren, depth + 1);
+    }
+}
+
+// A value of a property this library reads, written `<property>: <words>`:
+// what a page asked of the property and did not get.
+static void skipped_value(garb_cascade_t *c, const char *prop, size_t plen, const garb_value_t *v,
+                          int32_t n)
+{
+    char name[128];
+    size_t at = 0;
+    for (size_t i = 0; i < plen && at + 1 < sizeof(name); i++)
+        name[at++] = prop[i];
+    for (const char *s = ": "; *s != '\0' && at + 1 < sizeof(name); s++)
+        name[at++] = *s;
+    for (int32_t i = 0; i < n; i++) {
+        if (v[i].kind == GARB_WHITESPACE)
+            continue;
+        // A prefixed word is one engine's dialect, as a prefixed name is.
+        if (v[i].len != 0 && v[i].text[0] == '-')
+            return;
+        if (name[at - 1] != ' ' && at + 1 < sizeof(name))
+            name[at++] = ' ';
+        for (uint32_t k = 0; k < v[i].len && at + 1 < sizeof(name); k++)
+            name[at++] = v[i].text[k];
+    }
+    skipped(c, GARB_SKIP_VALUE, name, at);
+}
+
+// Whether a value is bare words and nothing else: `inline flex`, a keyword
+// this library does not read. One that holds a number, a string or a
+// function is a value written wrong far more often than a gap.
+static bool only_words(const garb_value_t *v, int32_t n)
+{
+    bool any = false;
+    for (int32_t i = 0; i < n; i++) {
+        if (v[i].kind == GARB_IDENT)
+            any = true;
+        else if (v[i].kind != GARB_WHITESPACE)
+            return false;
+    }
+    return any;
+}
+
+// An @font-face rule's family: the face a page asked for and did not get.
+static void skipped_face(garb_cascade_t *c, garb_parsed_t *owner, const garb_rule_t *r)
+{
+    garb_item_t *items;
+    int32_t n;
+    if (!r->has_block || !garb_items_of(owner, r->block, r->nblock, &items, &n))
+        return;
+    for (int32_t i = 0; i < n; i++) {
+        const garb_decl_t *d = &items[i].decl;
+        if (items[i].kind != GARB_ITEM_DECL || !ieq(d->name, d->len, "font-family"))
+            continue;
+        for (int32_t k = 0; k < d->nvalue; k++)
+            if (d->value[k].kind == GARB_STRING || d->value[k].kind == GARB_IDENT) {
+                skipped(c, GARB_SKIP_FONT, d->value[k].text, d->value[k].len);
+                return;
+            }
+    }
+}
+
 // ── Reading the sheets ──────────────────────────────────────────────────
 
 static bool supports(garb_cascade_t *c, garb_parsed_t *owner, const garb_value_t *v, int32_t n);
@@ -256,17 +394,38 @@ static bool read_decl(garb_cascade_t *c, garb_parsed_t *owner, const garb_decl_t
         out->custom = true;
         return true;
     }
+    garb_prop_t props[GARB_SETS_MAX];
     if (garb_decl_has_var(d)) {
-        garb_prop_t props[GARB_SETS_MAX];
-        if (prop_longhands(d->name, d->len, props) == 0)
+        if (prop_longhands(d->name, d->len, props) == 0) {
+            skipped(c, GARB_SKIP_PROPERTY, d->name, d->len);
             return false;
+        }
         out->pending = true;
         return true;
     }
     garb_set_t sets[GARB_SETS_MAX];
     int32_t n = garb_read_declaration(owner, d, c->quirks == OS64_HTML_QUIRKS, sets);
-    if (n <= 0)
+    if (n <= 0) {
+        // Which it was is asked only of what was dropped: the property
+        // table is a walk.
+        if (prop_longhands(d->name, d->len, props) == 0)
+            skipped(c, GARB_SKIP_PROPERTY, d->name, d->len);
+        else if (only_words(d->value, d->nvalue))
+            skipped_value(c, d->name, d->len, d->value, d->nvalue);
+        else
+            skipped_functions(c, d->value, d->nvalue, 0);
         return false;
+    }
+    // Read, but laid out as something else (props.c's kApproximated): asked
+    // for, and not given, as surely as a value dropped.
+    for (int32_t k = 0; k < n; k++) {
+        const char *word = garb_set_approximation(&sets[k]);
+        if (word != NULL) {
+            const char *prop = garb_prop_name(sets[k].prop);
+            garb_value_t one = {.kind = GARB_IDENT, .text = word, .len = (uint32_t)os64_strlen(word)};
+            skipped_value(c, prop, os64_strlen(prop), &one, 1);
+        }
+    }
     out->sets = alloc(c, (size_t)n * sizeof(garb_set_t));
     if (out->sets == NULL)
         return false;
@@ -335,6 +494,13 @@ static void add_rules(garb_cascade_t *c, garb_parsed_t *owner, const garb_item_t
         bool group = at(r, "media") ? garb_media_matches(r->prelude, r->nprelude, c->env)
                    : at(r, "supports") ? supports(c, owner, r->prelude, r->nprelude)
                    : at(r, "layer") && r->has_block;
+        // What is read elsewhere is not passed over: @import's sheet is the
+        // face's, @charset was the decoder's.
+        if (at(r, "font-face"))
+            skipped_face(c, owner, r);
+        else if (!at(r, "media") && !at(r, "supports") && !at(r, "layer") && !at(r, "import") &&
+                 !at(r, "charset"))
+            skipped(c, GARB_SKIP_AT_RULE, r->name, r->len);
         if (!group || !r->has_block)
             continue;
         garb_item_t *inner;
@@ -1093,6 +1259,17 @@ garb_style_t garb_style_for(const garb_cascade_t *c, const os64_html_node_t *ele
         return none;
     const Slot *s = slot_for(c, element, false);
     return s != NULL ? s->style : none;
+}
+
+int32_t garb_cascade_skips(const garb_cascade_t *c, garb_skip_t *out, int32_t cap, uint32_t *lost)
+{
+    if (lost != NULL)
+        *lost = c != NULL ? c->skips_lost : 0;
+    if (c == NULL)
+        return 0;
+    for (int32_t i = 0; i < c->nskips && i < cap; i++)
+        out[i] = c->skips[i];
+    return c->nskips;
 }
 
 void garb_cascade_free(garb_cascade_t *c)

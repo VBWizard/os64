@@ -41,6 +41,7 @@
 #include "scale.h"
 #include "settings.h"
 #include "scripts.h"
+#include "diag.h"
 #include "script_job.h"
 #include "geometry.h"
 #include "events.h"
@@ -301,6 +302,16 @@ static os64_html_document_t *parse_file(const uint8_t *bytes, size_t len, bool s
 // arriving page cost to parse.
 static bool s_script_audit;
 
+// THE PAGE FILES (YONDER_DIAGNOSTICS.md): the directory yonder.conf's
+// `diagnostics` names, empty when it names none or the directory could not
+// be made (said once, at the start); the sequence the next load is given;
+// and whether a failed write has been said, which is said once a run.
+static struct {
+    char dir[OS64_PATH_MAX];
+    uint32_t next;
+    bool write_said;
+} s_diag = {.next = 1};
+
 // ── Pages ───────────────────────────────────────────────────────────────
 
 // A picture of the page's, one per ADDRESS: forty spacer GIFs are one
@@ -376,6 +387,11 @@ typedef struct Page {
     // that runs, owned by the page from then on, freed after the models.
     yonder_scripts_t *scripts;
     os64_page_state_t *state;
+    // THE PAGE'S RECORD (diag.h): begun with its navigation and moved with
+    // it from the stream, written when the page arrives, and written again,
+    // complete, when page_clear lets the page go. A struct copy of a Page
+    // borrows it; only page_clear ends it.
+    yonder_diag_t *diag;
     uint64_t model_version, rendered_version, state_version;
     os64_html_document_t *plain;
     os64_page_t *plain_model;
@@ -472,11 +488,15 @@ static void sheets_free(Page *p)
     p->nsheets = p->sheets_waiting = p->sheets_ready = 0;
 }
 
+static void diag_leave(Page *p);
 static void page_clear(Page *p)
 {
     measured_forget(page_doc(p));
+    // The host borrows the record (its miss hook), so the record goes after
+    // it, while the tree and the cascade it looks at are still here.
     yonder_scripts_free(p->scripts);
     p->scripts = NULL;
+    diag_leave(p);
     for (int32_t i = 0; i < p->npics; i++) {
         os64_image_free(&p->pics[i].image);
         os64_image_sequence_free(p->pics[i].moving);
@@ -751,6 +771,11 @@ static struct {
     os64_draw_ctx_t ctx;
     os64_ui_t ui;
     os64_ui_widget_t root, status, view, back, forward, reload, stop;
+    // The badge at the right of the status bar: the shown page's MISSING
+    // and FAILED counts, the file's own tokens, present only when nonzero.
+    os64_ui_widget_t badge;
+    char badge_text[64];
+    uint32_t badge_missing, badge_failed;
     os64_ui_textfield_t field;
     os64_ui_scrollbar_t vbar, hbar;
     // The question bar: the question, and Yes and No.
@@ -848,6 +873,10 @@ static struct {
         yonder_scripts_t *scripts;
         os64_page_state_t *state;
         uint64_t serial;
+        // The load's record (diag.h), the page's once it is one; the body's
+        // bytes as they were taken, for it.
+        yonder_diag_t *diag;
+        uint64_t bytes;
         // `ending`: the parser has been told the input ended; `ended`: it
         // said OK to that, and the deferred scripts may run. `ended_ms` is
         // when: the timers due by then run before DOMContentLoaded.
@@ -1147,6 +1176,232 @@ static void say_way(void)
     g.way.status[0] = '\0';
 }
 
+// ── The page's record (diag.h, YONDER_DIAGNOSTICS.md) ───────────────────
+
+static void layout(void);
+
+// yonder.conf's `diagnostics` directory, made if it is missing and its
+// parent is not. The sentence to say once when it names one that cannot be
+// used (it is also logged), NULL otherwise. A run's sequence continues from
+// the highest the directory already holds, so a kept census is never
+// written over by the next run's first page.
+static const char *diag_dir_open(void)
+{
+    static char said[OS64_PATH_MAX + 96];
+    char dir[OS64_PATH_MAX];
+    if (!yonder_settings_saved_diagnostics(dir, sizeof(dir)))
+        return NULL;
+    os64_dirent_t e;
+    const char *why = NULL;
+    if (os64_stat(dir, &e) != 0)
+        why = os64_mkdir(dir) == 0 ? NULL : "cannot be made (does its parent exist?)";
+    else if ((e.flags & OS64_DE_DIR) == 0)
+        why = "is not a directory";
+    if (why != NULL) {
+        os64_snprintf(said, sizeof(said), "Diagnostics: %s %s; no page files this run.", dir, why);
+        os64_debug_log(said);
+        return said;
+    }
+    os64_strcopy(s_diag.dir, sizeof(s_diag.dir), dir);
+    s_diag.next = yonder_diag_next_seq(dir);
+    return NULL;
+}
+
+// A load's record, numbered in browse order. NULL on no memory: the load
+// goes on unrecorded.
+static yonder_diag_t *diag_begin(const char *url)
+{
+    return yonder_diag_new(url, s_diag.next++, os64_micros());
+}
+
+// The record as it stands, written when yonder.conf asks for files. A
+// failure is said once a run, in the log and on the status line.
+static void diag_write(const yonder_diag_t *d)
+{
+    if (d == NULL || s_diag.dir[0] == '\0' || yonder_diag_write(d, s_diag.dir) == 0 ||
+        s_diag.write_said)
+        return;
+    s_diag.write_said = true;
+    char line[OS64_PATH_MAX + 96];
+    os64_snprintf(line, sizeof(line), "A page file could not be written in %s; the rest are tried.",
+                  s_diag.dir);
+    os64_debug_log(line);
+    status_rest(line);
+}
+
+// The badge follows the shown page's counts; its width moves the status
+// line's edge, so a change lays the bar out again.
+static void badge_follow(void)
+{
+    uint32_t missing = yonder_diag_missing_lines(g.page.diag);
+    uint32_t failed = yonder_diag_failed_lines(g.page.diag);
+    if (missing == g.badge_missing && failed == g.badge_failed)
+        return;
+    g.badge_missing = missing;
+    g.badge_failed = failed;
+    size_t at = 0;
+    g.badge_text[0] = '\0';
+    if (missing != 0)
+        at = (size_t)os64_snprintf(g.badge_text, sizeof(g.badge_text), YONDER_DIAG_MISSING " %lu",
+                                   (unsigned long)missing);
+    if (failed != 0)
+        os64_snprintf(g.badge_text + at, sizeof(g.badge_text) - at, "%s" YONDER_DIAG_FAILED " %lu",
+                      at != 0 ? "  " : "", (unsigned long)failed);
+    layout();
+    os64_ui_mark_dirty(&g.ui, &g.root);
+}
+
+// What went wrong, said on the status line and recorded where the page's
+// failures are kept. `d` is the record of the page it happened to.
+static void say_failed(yonder_diag_t *d, const char *what, const char *line)
+{
+    yonder_diag_failed(d, what, line);
+    status_rest(line);
+    badge_follow();
+}
+
+// A load that never became a page: its failure recorded, its record
+// written and let go, and the failure said.
+static void diag_abandon(yonder_diag_t *d, const char *line)
+{
+    yonder_diag_failed(d, "page", line);
+    diag_write(d);
+    yonder_diag_free(d);
+    status_rest(line);
+}
+
+// The elements a page has that are drawn as nothing, and the custom
+// elements nothing defines, counted whole: the tally is taken again at
+// every write and holds the most any look saw.
+#define DIAG_CUSTOM_MAX 64
+static void diag_elements(yonder_diag_t *d, const os64_html_document_t *doc)
+{
+    static const char *const kNothing[] = {"canvas", "video", "audio", "svg"};
+    uint32_t nothing[4] = {0};
+    struct { const char *name; uint32_t n; } custom[DIAG_CUSTOM_MAX];
+    int32_t ncustom = 0;
+    const os64_html_node_t *n = doc != NULL ? doc->document : NULL;
+    while (n != NULL) {
+        if (n->kind == OS64_HTML_ELEMENT && n->name != NULL) {
+            for (int k = 0; k < 4; k++)
+                nothing[k] += os64_streq(n->name, kNothing[k]);
+            if (n->ns == OS64_HTML_NS_HTML && os64_strchr(n->name, '-') != NULL) {
+                int32_t c = 0;
+                while (c < ncustom && !os64_streq(custom[c].name, n->name))
+                    c++;
+                if (c < ncustom) {
+                    custom[c].n++;
+                } else if (ncustom < DIAG_CUSTOM_MAX) {
+                    custom[ncustom].name = n->name;
+                    custom[ncustom++].n = 1;
+                }
+            }
+        }
+        if (n->first_child != NULL) {
+            n = n->first_child;
+            continue;
+        }
+        while (n != NULL && n->next == NULL)
+            n = n->parent;
+        if (n != NULL)
+            n = n->next;
+    }
+    for (int k = 0; k < 4; k++)
+        if (nothing[k] != 0)
+            yonder_diag_missing_seen(d, "element", kNothing[k], nothing[k]);
+    for (int32_t c = 0; c < ncustom; c++)
+        yonder_diag_missing_seen(d, "element", custom[c].name, custom[c].n);
+}
+
+// What the page's cascade passed over (garb_cascade_skips), by its kind.
+static void diag_cascade(yonder_diag_t *d, const garb_cascade_t *c)
+{
+    static const char *const kinds[] = {
+        [GARB_SKIP_PROPERTY] = "css-property", [GARB_SKIP_AT_RULE] = "css-at-rule",
+        [GARB_SKIP_FUNCTION] = "css-function", [GARB_SKIP_FONT] = "font",
+        [GARB_SKIP_VALUE] = "css-value",
+    };
+    garb_skip_t skips[GARB_SKIPS_MAX];
+    int32_t n = garb_cascade_skips(c, skips, GARB_SKIPS_MAX, NULL);
+    for (int32_t i = 0; i < n && i < GARB_SKIPS_MAX; i++)
+        yonder_diag_missing_seen(d, kinds[skips[i].kind], skips[i].name, skips[i].count);
+}
+
+// The page's facts as they stand, and what its tree and cascade show now.
+static void diag_observe(Page *p, const char *when)
+{
+    yonder_diag_t *d = p->diag;
+    diag_elements(d, page_doc(p));
+    if (p->cascade != NULL)
+        diag_cascade(d, p->cascade);
+    char v[128];
+    yonder_diag_fact(d, "written", when);
+    if (p->tree != NULL && flow_incomplete(p->tree))
+        yonder_diag_failed(d, "layout", "the layout stopped partway (INCOMPLETE on the status line)");
+    int32_t shown = 0, failed = 0;
+    for (int32_t i = 0; i < p->npics; i++) {
+        shown += p->pics[i].state == PIC_SHOWN;
+        failed += p->pics[i].state == PIC_FAILED;
+    }
+    os64_snprintf(v, sizeof(v), "%d, %d shown, %d could not be read, %d past the memory kept",
+                  (int)p->npics, (int)shown, (int)failed, (int)p->not_kept);
+    yonder_diag_fact(d, "pictures", v);
+    os64_snprintf(v, sizeof(v), "%d, %d ready", (int)p->nsheets, (int)p->sheets_ready);
+    yonder_diag_fact(d, "sheets", v);
+}
+
+// The page has arrived: what it is now is written, and the badge is its.
+static void diag_arrived(Page *p, uint64_t laid_ms)
+{
+    if (p->diag == NULL)
+        return;
+    char v[96];
+    yonder_diag_fact(p->diag, "final address", p->way.url);
+    os64_snprintf(v, sizeof(v), "%ld ms", (long)((os64_micros() - yonder_diag_began(p->diag)) / 1000));
+    yonder_diag_fact(p->diag, "arrived after", v);
+    os64_snprintf(v, sizeof(v), "%d px in %lu ms", (int)p->laid_width, (unsigned long)laid_ms);
+    yonder_diag_fact(p->diag, "laid out at", v);
+    diag_observe(p, "when the page arrived");
+    diag_write(p->diag);
+}
+
+// The page is let go: the departure write, which is the complete one, and
+// the record with it.
+static void diag_leave(Page *p)
+{
+    if (p->diag == NULL)
+        return;
+    diag_observe(p, "when the page was left");
+    diag_write(p->diag);
+    yonder_diag_free(p->diag);
+    p->diag = NULL;
+}
+
+// The load in flight failed: recorded now, because letting the stream go
+// writes its record.
+static void stream_failed(const char *line)
+{
+    yonder_diag_failed(g.stream.diag, "page", line);
+}
+
+// Whether libpage's answer is a request this browser refused to make, as
+// against a person's own form left invalid, a control the page turned off
+// or a reset: the first is a failure the record keeps.
+static bool reason_refuses(os64_page_reason_t reason)
+{
+    switch (reason) {
+    case OS64_PAGE_REASON_BAD_ACTION:
+    case OS64_PAGE_REASON_TOO_LONG:
+    case OS64_PAGE_REASON_SCHEME:
+    case OS64_PAGE_REASON_BODY_TOO_LONG:
+    case OS64_PAGE_REASON_NO_MEMORY:
+    case OS64_PAGE_REASON_STALE:
+        return true;
+    default:
+        return false;
+    }
+}
+
 static int32_t page_height(void)
 {
     return g.page.tree != NULL ? flow_height(g.page.tree) : 0;
@@ -1393,7 +1648,7 @@ static bool relayout(bool again)
     g.pictures_moved = false;
     g.settle_due = YONDER_NEVER;       // the deadline goes with the moves it was for
     if (!laid) {
-        status_rest("Out of memory laying the page out; this is the last layout that fit.");
+        say_failed(g.page.diag, "layout", "Out of memory laying the page out; this is the last layout that fit.");
         return false;
     }
     g.laid_at = t1;
@@ -1490,6 +1745,8 @@ static void arrive_now(Page *fresh, NavKind kind, const way_position_t *crumb,
     laid = laid && lay_out_page(fresh, width, height);
     os64_ticks(&t1);
     if (!laid) {
+        yonder_diag_failed(fresh->diag, "layout",
+                           "Out of memory laying that page out; this is still the page you were on.");
         sheets_leave(fresh);
         page_clear(fresh);
         status_rest("Out of memory laying that page out; this is still the page you were on.");
@@ -1561,6 +1818,11 @@ static void arrive_now(Page *fresh, NavKind kind, const way_position_t *crumb,
         if (note != NULL && page_doc(&g.page) == doc)
             status_rest(note);
     }
+    // The arrival write: what the page was once it was shown and its `load`
+    // had run. Its departure writes the file again, complete.
+    diag_arrived(&g.page, g.laid_ms);
+    g.badge_missing = g.badge_failed = UINT32_MAX;     // a new page's badge, whatever it shows
+    badge_follow();
     refresh_if_declared();
     buttons_follow();
     os64_ui_mark_dirty(&g.ui, &g.view);
@@ -1581,6 +1843,8 @@ static void arrive(Page *fresh, NavKind kind, const way_position_t *crumb, const
     // DOMContentLoaded's listeners may have changed the tree since the
     // model was built; the sheet table is read from the model.
     if (!page_model_refresh(fresh)) {
+        yonder_diag_failed(fresh->diag, "page",
+                           "Out of memory reading that page; this is still the page you were on.");
         sheets_leave(fresh);
         page_clear(fresh);
         status_rest("Out of memory reading that page; this is still the page you were on.");
@@ -1622,23 +1886,26 @@ static void open_local(const char *path, NavKind kind, const way_position_t *cru
     uint8_t *bytes = NULL;
     size_t len = 0;
     char line[512];
+    os64_snprintf(line, sizeof(line), "file://%s", path);
+    yonder_diag_t *diag = diag_begin(line);
     switch (os64_slurp(path, YONDER_FILE_MAX, &bytes, &len)) {
     case OS64_SLURP_OK:
         break;
     case OS64_SLURP_NO_FILE:
         os64_snprintf(line, sizeof(line), "No such file: %s", path);
-        status_rest(line);
+        diag_abandon(diag, line);
         return;
     case OS64_SLURP_TOO_BIG:
         os64_snprintf(line, sizeof(line), "Too big to open: %s", path);
-        status_rest(line);
+        diag_abandon(diag, line);
         return;
     default:
         os64_snprintf(line, sizeof(line), "Could not read %s", path);
-        status_rest(line);
+        diag_abandon(diag, line);
         return;
     }
     os64_memset(&g.stream, 0, sizeof(g.stream));
+    g.stream.diag = diag;
     g.stream.local = bytes;
     g.stream.local_len = len;
     g.stream.kind = kind;
@@ -1654,6 +1921,7 @@ static void open_local(const char *path, NavKind kind, const way_position_t *cru
     g.stream.verdict.fetch = OS64_FETCH_OK;
     g.stream.active = true;
     if (!stream_parser(NULL, 0)) {
+        stream_failed("Out of memory reading the page.");
         stream_drop();
         status_rest("Out of memory reading the page.");
     }
@@ -1747,6 +2015,11 @@ static void bar_answered(bool yes)
 // as long as the job still holds its own.
 static void stream_drop(void)
 {
+    // A load that never became a page writes its record here, with what it
+    // got as far as; one that did took its record with it (stream_finish).
+    diag_write(g.stream.diag);
+    yonder_diag_free(g.stream.diag);
+    g.stream.diag = NULL;
     if (g.asker == ASK_WORKER)
         bar_forget();
     os64_html_document_t *doc = g.stream.parser != NULL ? os64_html_parser_abandon(g.stream.parser) : NULL;
@@ -1815,9 +2088,12 @@ static void start_trip(const char *url, os64_page_request_t *request, NavKind ki
         return;
     }
     stop_trip();
+    // The record is begun while `url` is the caller's: it may be the
+    // request's own, which the job takes below.
+    yonder_diag_t *diag = diag_begin(url);
     if (g.pool == NULL) {
         os64_page_request_free(request);
-        status_rest("The background workers stopped; restart yonder to fetch pages.");
+        diag_abandon(diag, "The background workers stopped; restart yonder to fetch pages.");
         return;
     }
     yonder_mail_t *mail = yonder_mail_new(++g.generation);
@@ -1825,7 +2101,7 @@ static void start_trip(const char *url, os64_page_request_t *request, NavKind ki
     if (trip == NULL) {
         yonder_mail_drop(mail);
         os64_page_request_free(request);
-        status_rest("Out of memory starting that page.");
+        diag_abandon(diag, "Out of memory starting that page.");
         return;
     }
     yonder_mail_hold(mail);                 // the job's reference
@@ -1852,7 +2128,7 @@ static void start_trip(const char *url, os64_page_request_t *request, NavKind ki
             yonder_trip_release(trip, NULL);    // drops the job's reference
             yonder_mail_drop(mail);
             os64_page_request_free(request);
-            status_rest("Out of memory starting that page.");
+            diag_abandon(diag, "Out of memory starting that page.");
             return;
         }
         g.stream.has_sent = true;
@@ -1869,12 +2145,13 @@ static void start_trip(const char *url, os64_page_request_t *request, NavKind ki
         if (g.stream.has_sent)
             os64_page_request_free(&g.stream.sent);
         os64_memset(&g.stream, 0, sizeof(g.stream));
-        status_rest("Too busy to start another page; try again in a moment.");
+        diag_abandon(diag, "Too busy to start another page; try again in a moment.");
         return;
     }
     g.nav.id = id;
     g.stream.active = true;
     g.stream.serial = ++g.pages_made;
+    g.stream.diag = diag;
     g.stream.mail = mail;
     g.stream.kind = kind;
     g.stream.scripting = g.scripts_on;
@@ -1893,6 +2170,8 @@ static void request_navigate(os64_page_request_t *request, NavKind kind, way_ask
     way_judgement_t j = way_judge(&g.way, request, ask);
     if (j.kind == WAY_REFUSE) {
         os64_page_request_free(request);
+        yonder_diag_failed(g.page.diag, "link refused", g.way.status);
+        badge_follow();
         say_way();
     } else if (j.kind == WAY_QUESTION) {
         bar_ask(ASK_REQUEST, ++g.asked, j.question);
@@ -3081,7 +3360,10 @@ static void form_send(int32_t control, os64_page_activation_t how)
     if (verdict == OS64_PAGE_FRAGMENT) {
         scroll_to_node(request.anchor);
     } else {
-        status_rest(os64_page_reason_name(request.reason));
+        if (reason_refuses(request.reason))
+            say_failed(g.page.diag, "form refused", os64_page_reason_name(request.reason));
+        else
+            status_rest(os64_page_reason_name(request.reason));
         FormWidget *failed = request.reason == OS64_PAGE_REASON_INVALID
                                  ? form_widget(request.control) : NULL;
         if (failed != NULL && !failed->w->hidden)
@@ -3241,7 +3523,7 @@ static void forms_build(void)
     forms_sync_from_model(true);
     return;
 refused:
-    status_rest("Out of memory making this page's controls; existing controls are kept.");
+    say_failed(g.page.diag, "controls", "Out of memory making this page's controls; existing controls are kept.");
     forms_sync_from_model(true);
 }
 
@@ -3378,7 +3660,7 @@ static bool script_rebuild(void)
         // The displayed layout retains the old model, including its
         // control state, past the refresh's free of it.
         if (!page_model_refresh(p)) {
-            status_rest("Out of memory rebuilding the page; actions wait for a current model.");
+            say_failed(g.page.diag, "page", "Out of memory rebuilding the page; actions wait for a current model.");
             return false;
         }
         g.hover_link = g.pressed_link = -1;
@@ -3417,7 +3699,7 @@ static bool script_rebuild(void)
             flow_free(next.tree);
             garb_cascade_free(next.cascade);
             sheets_free(&next);
-            status_rest(p->tree != NULL
+            say_failed(p->diag, "layout", p->tree != NULL
                 ? "Out of memory laying out the changed page; this is the last layout that fit."
                 : "Out of memory laying out the changed page.");
             forms_build();
@@ -3570,11 +3852,11 @@ static const char *script_user_agent(void *opaque)
 }
 
 static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state_t *state,
-                                      const char *url, uint64_t serial)
+                                      const char *url, uint64_t serial, yonder_diag_t *diag)
 {
     yonder_scripts_options_t options = {url, g.script_ms, serial, script_alert, script_fetch,
                                         script_cancel, script_activate, script_write, script_now,
-                                        script_geometry, doc};
+                                        script_geometry, doc, diag};
     yonder_scripts_t *host = yonder_scripts_new(doc, state, &options);
     yonder_scripts_set_user_agent(host, script_user_agent, NULL);
     return host;
@@ -3637,7 +3919,16 @@ static void task_said(yonder_scripts_t *host, bool was_alive, const char *what,
                       (unsigned long)(forced.elapsed_us % 1000));
         at = os64_strlen(line);
     }
+    yonder_diag_t *diag = yonder_scripts_diag(host);
+    const char *name = out->source_name[0] ? out->source_name : what;
+    char key[OS64_JS_SOURCE_NAME_CAP + 16];
+    os64_snprintf(key, sizeof(key), "script %s", name);
+    // A task with a script's name is a script's, and the record lists it;
+    // an event or a timer with none is listed only by a failure.
     if (out->status == OS64_JS_OK) {
+        if (out->source_name[0] != '\0')
+            yonder_diag_fact(diag, key, "ran");
+        badge_follow();     // a global it missed is recorded as it runs
         if (at != 0)
             status_rest(line);
         return;
@@ -3646,19 +3937,26 @@ static void task_said(yonder_scripts_t *host, bool was_alive, const char *what,
         os64_strcopy(line + at, sizeof(line) - at, "; ");
         at += 2;
     }
-    const char *name = out->source_name[0] ? out->source_name : what;
+    // The record keeps what the line says of the script, without the
+    // layouts beside it: the same failure is one line however many times
+    // it happens, and the count says how many.
+    char failure[OS64_JS_MESSAGE_CAP + 64];
     if (was_alive && !yonder_scripts_alive(host)) {
         if (out->status == OS64_JS_LIMIT && out->limit == OS64_JS_LIMIT_EXECUTION)
-            os64_snprintf(line + at, sizeof(line) - at, "Script %s: execution stopped after %lu s "
-                          "(this page runs without script)", name,
+            os64_snprintf(failure, sizeof(failure), "execution stopped after %lu s "
+                          "(this page runs without script)",
                           (unsigned long)(yonder_scripts_execution_ms(host) / 1000));
         else
-            os64_snprintf(line + at, sizeof(line) - at, "Script %s: %s (this page runs without script)",
-                          name, out->message[0] ? out->message : "the runtime failed");
+            os64_snprintf(failure, sizeof(failure), "%s (this page runs without script)",
+                          out->message[0] ? out->message : "the runtime failed");
     } else {
-        os64_snprintf(line + at, sizeof(line) - at, "Script %s: %s", name,
-                      out->message[0] ? out->message : "error");
+        os64_strcopy(failure, sizeof(failure), out->message[0] ? out->message : "error");
     }
+    os64_snprintf(line + at, sizeof(line) - at, "Script %s: %s", name, failure);
+    yonder_diag_failed(diag, key, failure);
+    if (out->source_name[0] != '\0')
+        yonder_diag_fact(diag, key, "failed");
+    badge_follow();
     status_rest(line);
     yonder_scripts_set_note(host, line);
 }
@@ -3760,7 +4058,7 @@ static void navigation_perform(const yonder_scripts_t *host, const os64_dom_navi
         }
         os64_page_request_t request;
         if (!request_for(ask->url, &request)) {
-            status_rest("A script asked for an address this browser cannot go to.");
+            say_failed(g.page.diag, "navigation", "A script asked for an address this browser cannot go to.");
             return;
         }
         request_navigate(&request, ask->kind == OS64_DOM_NAVIGATE_REPLACE ? NAV_REFRESH : NAV_GO,
@@ -4427,6 +4725,7 @@ static void stream_finish(os64_fetch_status_t fetch, const char *reason)
     os64_strcopy(fragment, sizeof(fragment), g.stream.fragment);
     // A body too short to have filled the sniff is judged on what there is.
     if (g.stream.parser == NULL && !stream_open()) {
+        stream_failed("Out of memory reading that page.");
         stream_drop();
         buttons_follow();
         status_rest("Out of memory reading that page.");
@@ -4438,6 +4737,7 @@ static void stream_finish(os64_fetch_status_t fetch, const char *reason)
     os64_html_document_t *doc = os64_html_parser_finish(g.stream.parser);
     g.stream.parser = NULL;
     if (doc == NULL) {
+        stream_failed("Out of memory reading that page.");
         stream_drop();
         buttons_follow();
         status_rest("Out of memory reading that page.");
@@ -4450,7 +4750,7 @@ static void stream_finish(os64_fetch_status_t fetch, const char *reason)
         g.stream.head.body == WAY_BODY_HTML) {
         g.stream.state = os64_page_state_create(doc, 0);
         g.stream.scripts = g.stream.state != NULL
-            ? scripts_host(doc, g.stream.state, g.stream.head.url, g.stream.serial) : NULL;
+            ? scripts_host(doc, g.stream.state, g.stream.head.url, g.stream.serial, g.stream.diag) : NULL;
         if (g.stream.scripts == NULL) {
             os64_page_state_free(g.stream.state);
             g.stream.state = NULL;
@@ -4459,6 +4759,14 @@ static void stream_finish(os64_fetch_status_t fetch, const char *reason)
     fresh.scripts = g.stream.scripts;
     fresh.state = g.stream.state;
     fresh.serial = g.stream.serial;
+    // The record is the page's from here: stream_drop below must not end it.
+    fresh.diag = g.stream.diag;
+    g.stream.diag = NULL;
+    {
+        char bytes[32];
+        os64_snprintf(bytes, sizeof(bytes), "%lu", (unsigned long)g.stream.bytes);
+        yonder_diag_fact(fresh.diag, "bytes", bytes);
+    }
     // The sheets the stream sent for move with it, still out or landed,
     // and keep their jobs, which name this serial: no sheet is fetched
     // twice in one page's life (arrive adds the rest).
@@ -4510,6 +4818,8 @@ static void stream_finish(os64_fetch_status_t fetch, const char *reason)
     if (model == NULL && (text || fresh.state != NULL)) {
         // A page whose scripts share the state needs the model that adopts
         // it; without one it is a text that could not be read.
+        yonder_diag_failed(fresh.diag, "page",
+                           text ? "Out of memory reading that text." : "Out of memory reading that page.");
         sheets_leave(&fresh);
         page_clear(&fresh);
         status_rest(text ? "Out of memory reading that text." : "Out of memory reading that page.");
@@ -4560,13 +4870,17 @@ static bool stream_open(void)
 // file's, one chunk at a time.
 static size_t stream_take(uint8_t *chunk, size_t cap)
 {
-    if (g.stream.local == NULL)
-        return yonder_mail_take(g.stream.mail, chunk, cap);
-    size_t n = g.stream.local_len - g.stream.local_at;
-    if (n > cap)
-        n = cap;
-    os64_memcpy(chunk, g.stream.local + g.stream.local_at, n);
-    g.stream.local_at += n;
+    size_t n;
+    if (g.stream.local == NULL) {
+        n = yonder_mail_take(g.stream.mail, chunk, cap);
+    } else {
+        n = g.stream.local_len - g.stream.local_at;
+        if (n > cap)
+            n = cap;
+        os64_memcpy(chunk, g.stream.local + g.stream.local_at, n);
+        g.stream.local_at += n;
+    }
+    g.stream.bytes += n;
     return n;
 }
 
@@ -4581,6 +4895,10 @@ static bool stream_streaming(void)
 // model will adopt when the parse is over.
 static yonder_stop_t stream_stop(os64_html_node_t *script)
 {
+    // A module is recognised and never run: what a scripted page asked for
+    // and did not get. With scripts off nothing runs, and that is a setting.
+    if (g.stream.scripting && os64_dom_script_kind(script) == OS64_DOM_SCRIPT_MODULE)
+        yonder_diag_missing(g.stream.diag, "script", "module", 1);
     if (!g.stream.scripting || g.stream.scriptless ||
         os64_dom_script_kind(script) != OS64_DOM_SCRIPT_CLASSIC)
         return YONDER_STOP_RESUME;
@@ -4588,11 +4906,12 @@ static yonder_stop_t stream_stop(os64_html_node_t *script)
         os64_html_document_t *doc = os64_html_parser_document(g.stream.parser);
         g.stream.state = os64_page_state_create(doc, 0);
         g.stream.scripts = g.stream.state != NULL
-            ? scripts_host(doc, g.stream.state, g.stream.head.url, g.stream.serial) : NULL;
+            ? scripts_host(doc, g.stream.state, g.stream.head.url, g.stream.serial, g.stream.diag) : NULL;
         if (g.stream.scripts == NULL) {
             os64_page_state_free(g.stream.state);
             g.stream.state = NULL;
             g.stream.scriptless = true;
+            yonder_diag_failed(g.stream.diag, "scripts", "Out of memory for the page's scripts; it is read without them.");
             status_rest("Out of memory for the page's scripts; it is read without them.");
             return YONDER_STOP_RESUME;
         }
@@ -4623,6 +4942,7 @@ static int64_t stream_parsed(int64_t r)
 // parser's sentence. Its deferred scripts do not run: the parse did not end.
 static void stream_cut_short(void)
 {
+    stream_failed("the page could not be read to its end; what was read is shown");
     if (g.nav.id != 0 && g.pool != NULL)
         os64_work_cancel(g.pool, g.nav.id);
     g.nav.id = 0;
@@ -4758,6 +5078,7 @@ static bool stream_turn(void)
     if (mail != NULL && !g.stream.has_head && yonder_mail_take_head(mail, &g.stream.head)) {
         g.stream.has_head = true;
         if (g.stream.head.body == WAY_BODY_HTML && !stream_parser(NULL, 0)) {
+            stream_failed("Out of memory reading that page.");
             stop_trip();
             status_rest("Out of memory reading that page.");
             return false;
@@ -4825,6 +5146,7 @@ static bool stream_turn(void)
                     continue;
             }
             if (!stream_open()) {
+                stream_failed("Out of memory reading that page.");
                 stop_trip();
                 status_rest("Out of memory reading that page.");
                 return false;
@@ -4873,6 +5195,7 @@ static bool stream_turn(void)
         // not a page. libway's sentence says which.
         char line[WAY_SENTENCE_MAX];
         os64_strcopy(line, sizeof(line), g.stream.verdict.reason);
+        stream_failed(trim(line));
         stream_drop();
         buttons_follow();
         status_rest(trim(line));
@@ -4885,6 +5208,7 @@ static bool stream_turn(void)
         // A text body too short to have filled the sniff is judged on what
         // there is.
         if (g.stream.parser == NULL && !stream_open()) {
+            stream_failed("Out of memory reading that page.");
             stop_trip();
             status_rest("Out of memory reading that page.");
             return false;
@@ -5572,7 +5896,10 @@ static void follow_link_asked(int32_t link, way_ask_t ask)
         g.chain = 0;
         request_navigate(&request, NAV_GO, ask);
     } else {
-        status_rest(os64_page_reason_name(request.reason));
+        if (reason_refuses(request.reason))
+            say_failed(g.page.diag, "link refused", os64_page_reason_name(request.reason));
+        else
+            status_rest(os64_page_reason_name(request.reason));
         os64_page_request_free(&request);
     }
 }
@@ -5882,7 +6209,14 @@ static void layout(void)
     g.qno.bounds = (os64_gui_rect_t){area.w - pad - no, qy, no, bh};
     g.qyes.bounds = (os64_gui_rect_t){area.w - pad - no - gap - yes, qy, yes, bh};
     g.qlabel.bounds = (os64_gui_rect_t){2 * pad, qy, g.qyes.bounds.x - 3 * pad, bh};
-    g.status.bounds = (os64_gui_rect_t){pad, bottom, area.w - 2 * pad, bh};
+    // The badge takes the bar's right end when it has anything to say, so
+    // a long hover address never pushes it out of sight.
+    int32_t badge_w = g.badge_text[0] != '\0' ? button_width(g.badge_text) : 0;
+    if (badge_w > (area.w - 2 * pad) / 2)
+        badge_w = (area.w - 2 * pad) / 2;
+    g.badge.bounds = (os64_gui_rect_t){area.w - pad - badge_w, bottom, badge_w, bh};
+    os64_ui_set_hidden(&g.ui, &g.badge, badge_w == 0);
+    g.status.bounds = (os64_gui_rect_t){pad, bottom, area.w - 2 * pad - (badge_w != 0 ? badge_w + gap : 0), bh};
 }
 
 static void on_resize(os64_ui_t *ui)
@@ -6060,6 +6394,7 @@ int main(int argc, char **argv)
     s_script_audit = argc > 1 && os64_streq(argv[1], "--script-audit");
     g.scripts_on = yonder_settings_saved_scripts();
     g.script_ms = (uint64_t)yonder_settings_saved_script_seconds() * 1000;
+    const char *diag_refused = diag_dir_open();
     int address_arg = s_script_audit ? 2 : 1;
     const char *first = argc > address_arg ? argv[address_arg] : NULL;
     char title[OS64_GUI_TITLE_MAX] = "yonder";
@@ -6110,6 +6445,7 @@ int main(int argc, char **argv)
     os64_ui_button(&g.stop, "Stop", click_stop, NULL);
     os64_ui_textfield(&g.field, g.field_buf, sizeof(g.field_buf), field_submit, field_cancel, NULL);
     os64_ui_label(&g.status, g.status_text);
+    os64_ui_label(&g.badge, g.badge_text);
     g.view.cls = &kViewClass;
     g.view.focusable = true;
     os64_ui_scrollbar(&g.vbar, scrolled_v, NULL);
@@ -6121,7 +6457,7 @@ int main(int argc, char **argv)
     os64_ui_button(&g.qno, "No", NULL, NULL);
     os64_ui_widget_t *kids[] = {&g.back, &g.forward, &g.reload, &g.stop, &g.field.w, &g.view,
                                 &g.vbar.w, &g.hbar.w, &g.qpanel, &g.qlabel, &g.qyes, &g.qno,
-                                &g.status};
+                                &g.badge, &g.status};
     for (size_t i = 0; i < sizeof(kids) / sizeof(kids[0]); i++)
         os64_ui_add_child(&g.root, kids[i]);
     layout();
@@ -6151,6 +6487,9 @@ int main(int argc, char **argv)
         (void)os64_gui_event_ring(g.win, BELL_STREAM);
     else
         status_rest("Type an address, or a path to an HTML file, and press Enter.");
+    // Said last, so it is still there to read when the window first shows.
+    if (diag_refused != NULL)
+        status_rest(diag_refused);
     os64_ui_set_focus(&g.ui, first != NULL ? &g.view : &g.field.w);
     sync_bars();
 

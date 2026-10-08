@@ -1,0 +1,99 @@
+# What the cascade passed over (garb_cascade_skips, YONDER_DIAGNOSTICS.md):
+# `kind name count` a line, in the order first met, then (end). Each PAGE is
+# laid before a VIEWPORT, as in cascade.txt.
+
+# A property with no reader, counted per declaration, one spelling whatever
+# the case; a known property and a custom one are not counted.
+VIEWPORT 800x600
+PAGE
+<!doctype html><style>
+p { color: red; aspect-ratio: 1; --mine: 3 }
+div { ASPECT-RATIO: 2 }
+</style>
+<p>x
+WANT
+property aspect-ratio 2
+(end)
+END
+
+# A value merely written wrong is the page's, not a gap; a function no
+# reader accepts is a gap, at any depth, under a property that has a reader.
+VIEWPORT 800x600
+PAGE
+<!doctype html><style>
+p { color: rgb(1) ; width: 10quux }
+p { color: color-mix(in srgb, red, blue) }
+p { width: calc(1px + round(2.5px)) }
+</style>
+<p>x
+WANT
+function color-mix 1
+function round 1
+(end)
+END
+
+# At-rules this library keeps no rule of; @font-face names the family that
+# was not fetched; @media and @supports and @import are read, matching or
+# not. A rule nested in a matching group is reached.
+VIEWPORT 800x600
+PAGE
+<!doctype html><style>
+@import url(x.css);
+@font-face { font-family: "Fancy Sans"; src: url(f.woff2) }
+@keyframes spin { to { color: red } }
+@media (max-width: 10px) { @container (min-width: 1px) { p { color: red } } }
+@media all { @container (min-width: 1px) { p { color: red } } p { will-change: color } }
+@supports (display: grid) { p { color: red } }
+</style>
+<p>x
+WANT
+font fancy sans 1
+at-rule keyframes 1
+at-rule container 1
+property will-change 1
+(end)
+END
+
+# A prefixed name is one engine's dialect, and not counted.
+VIEWPORT 800x600
+PAGE
+<!doctype html><style>
+p { -webkit-appearance: none; color: -webkit-fill-available(1) }
+@-webkit-keyframes spin { to { color: red } }
+</style>
+<p>x
+WANT
+(end)
+END
+
+# The style attribute is read like a sheet; a var() under a property with no
+# reader is counted when it is dropped.
+VIEWPORT 800x600
+PAGE
+<!doctype html><style>p { translate: var(--x) }</style>
+<p style="rotate: 1deg; color: var(--c)">x
+WANT
+property translate 1
+property rotate 1
+(end)
+END
+
+# A value: a property this library reads, dropped though its value is bare
+# words (one or several), or read and laid out as something else. A value
+# holding a number is the page's; a prefixed word is a dialect.
+VIEWPORT 800x600
+PAGE
+<!doctype html><style>
+p { display: bogusword; display: inline frob; width: 10quux; display: -webkit-box }
+p { display: flow-root; background-clip: text }
+div { DISPLAY: Flow-Root; background-image: conic-gradient(red, blue) }
+</style>
+<p>x<div>y</div>
+WANT
+value display: bogusword 1
+value display: inline frob 1
+value display: flow-root 2
+value background-clip: text 1
+value background-image: conic-gradient 1
+(end)
+END

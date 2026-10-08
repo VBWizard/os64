@@ -264,9 +264,17 @@ def main():
         media_failed += 1
     print(f'media queries: {len(cases)} cases, {media_failed} failed')
 
-    # The cascade, worked by hand (tools/garb_corpus/cascade.txt).
+    cascade_failed = cascade_pages(driver, 'cascade')
+    skips_failed = cascade_pages(driver, 'skips')
+    sys.exit(1 if failed or anb_failed or color_failed or decl_failed or media_failed
+             or cascade_failed or skips_failed else 0)
+
+
+def cascade_pages(driver, kind):
+    """The cascade, worked by hand: its winners (tools/garb_corpus/cascade.txt)
+    or what it passed over (skips.txt), through the driver mode of that name."""
     pages, mode, viewport, page, want = [], None, None, [], []
-    for line in (SUITE.parent / 'garb_corpus' / 'cascade.txt').read_text().splitlines():
+    for line in (SUITE.parent / 'garb_corpus' / (kind + '.txt')).read_text().splitlines():
         if mode is None and line.startswith('VIEWPORT '):
             viewport = line.split()[1]
         elif line == 'PAGE':
@@ -280,19 +288,18 @@ def main():
             page.append(line)
         elif mode == 'want':
             want.append(line)
-    cascade_failed = 0
+    failed = 0
     for viewport, html, want in pages:
         feed = record(html.encode('utf-8')) + record(viewport.encode()) + b'-1\n'
-        run = subprocess.run([driver, 'cascade'], input=feed, capture_output=True)
+        run = subprocess.run([driver, kind], input=feed, capture_output=True)
         got = run.stdout.decode().splitlines()
         if run.returncode != 0 or got != want:
-            cascade_failed += 1
-            print(f'FAIL cascade at {viewport}:\n' + html[:300] + '\n  want:\n    '
+            failed += 1
+            print(f'FAIL {kind} at {viewport}:\n' + html[:300] + '\n  want:\n    '
                   + '\n    '.join(want) + '\n  got:\n    ' + '\n    '.join(got)
                   + run.stderr.decode(errors='replace')[:1500])
-    print(f'cascade: {len(pages)} pages, {cascade_failed} failed')
-    sys.exit(1 if failed or anb_failed or color_failed or decl_failed or media_failed
-             or cascade_failed else 0)
+    print(f'{kind}: {len(pages)} pages, {failed} failed')
+    return failed
 
 
 def channels(text):

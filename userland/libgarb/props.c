@@ -162,27 +162,36 @@ static bool image_drawn(const garb_val_t *v)
     return v->kind != GARB_V_IMAGE || v->nitems > 0;
 }
 
-static bool value_approximated(garb_prop_t prop, const garb_val_t *v)
+// What is approximated, by the name the page wrote — the keyword, or the
+// image function — or NULL when the value is laid out as it says.
+static const char *value_approximated(garb_prop_t prop, const garb_val_t *v)
 {
     if (!image_drawn(v))
-        return true;
+        return v->text;
     // A list of layers is approximated when any layer is: the page asked
     // for all of them.
     if (v->kind == GARB_V_LAYERS) {
-        for (int32_t i = 0; i < v->nitems; i++)
-            if (value_approximated(prop, &v->items[i]))
-                return true;
-        return false;
+        for (int32_t i = 0; i < v->nitems; i++) {
+            const char *name = value_approximated(prop, &v->items[i]);
+            if (name != NULL)
+                return name;
+        }
+        return NULL;
     }
     if (v->kind != GARB_V_KEYWORD)
-        return false;
+        return NULL;
     for (size_t k = 0; k < sizeof(kApproximated) / sizeof(kApproximated[0]); k++)
         if (prop == kApproximated[k].prop && os64_streq(v->keyword, kApproximated[k].keyword))
-            return true;
-    return false;
+            return kApproximated[k].keyword;
+    return NULL;
 }
 
 bool garb_set_approximated(const garb_set_t *set)
+{
+    return value_approximated(set->prop, &set->value) != NULL;
+}
+
+const char *garb_set_approximation(const garb_set_t *set)
 {
     return value_approximated(set->prop, &set->value);
 }

@@ -38,6 +38,9 @@ const garb_calc_t *read_calc(Arena *a, const garb_value_t *f, int accept, int *t
 // Whether a longhand's value is read but laid out as something else until
 // its slice (props.c's kApproximated): not what @supports means.
 bool garb_set_approximated(const garb_set_t *set);
+// The same answer by name: the keyword or image function the page wrote
+// that is laid out as something else, or NULL.
+const char *garb_set_approximation(const garb_set_t *set);
 
 // The longhands a property name sets — itself for a longhand, all of them
 // for a shorthand — into `out` (GARB_SETS_MAX long). 0 for a name libgarb

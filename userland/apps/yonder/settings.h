@@ -48,6 +48,11 @@ bool yonder_settings_saved_scripts(void);
 // YONDER_SCRIPT_SECONDS_MIN to _MAX; the default when absent or not one.
 uint32_t yonder_settings_saved_script_seconds(void);
 
+// The directory yonder.conf names for page files (`diagnostics =
+// /home/yonder/pages`, YONDER_DIAGNOSTICS.md), into `out`, without a
+// trailing slash: true when there is one and it is a full path.
+bool yonder_settings_saved_diagnostics(char *out, size_t cap);
+
 // The agent yonder.conf saves, into `out` (YONDER_AGENT_MAX bytes): true
 // when there is one and it is valid.
 bool yonder_settings_saved_agent(char *out, size_t cap);

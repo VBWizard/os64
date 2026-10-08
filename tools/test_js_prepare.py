@@ -42,6 +42,11 @@ class PrepareTests(unittest.TestCase):
         source = (self.root / 'prepared/quickjs.c').read_text()
         self.assertIn('return JS_EXCEPTION;\n}\n\n/* Browser compatibility:', source)
         self.assertIn('return JS_NULL;\n}\n\n#define GLOBAL_VAR_OFFSET', source)
+        # 0008 hears a global miss at both ends of a lookup.
+        self.assertIn('ctx->global_miss(ctx->global_miss_opaque, JS_AtomGetStr(ctx, buf, sizeof(buf), prop));\n}\n\n'
+                      'JSValue JS_GetPropertyInternal(', source)
+        self.assertIn('js_hear_global_miss(ctx, obj, atom);    \\\n                            val = JS_UNDEFINED;',
+                      source)
 
     def test_line_shifts_preserve_output(self):
         result = self.prepare()
@@ -56,15 +61,15 @@ class PrepareTests(unittest.TestCase):
         for name, original in expected.items():
             self.assertEqual((self.root / 'prepared' / name).read_text(), '\n' * 17 + original)
 
-    def refuse_context_drift(self, name, anchor):
+    def refuse_context_drift(self, name, anchor,
+                             patch='patches/0007-browser-legacy-function-arguments.patch'):
         path = self.lib / 'upstream' / name
         original = path.read_text()
         self.assertEqual(original.count(anchor), 1)
         path.write_text(original.replace(anchor, anchor.rstrip('\n') + ' /* drift */\n'))
         result = self.prepare()
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn('QuickJS patch failed: patches/0007-browser-legacy-function-arguments.patch',
-                      result.stderr)
+        self.assertIn('QuickJS patch failed: ' + patch, result.stderr)
 
     def test_c_context_drift_refused(self):
         # This edge line would be discarded by patch's default fuzz of two.
@@ -74,6 +79,13 @@ class PrepareTests(unittest.TestCase):
         self.refuse_context_drift('quickjs.h',
                                  'int JS_DefineProperty(JSContext *ctx, JSValueConst this_obj,\n'
                                  '                      JSAtom prop, JSValueConst val,\n')
+
+    def test_field_fast_path_drift_refused(self):
+        # The inline field read's hunk: its other context lines are
+        # backslash-padded braces that recur throughout the interpreter.
+        self.refuse_context_drift('quickjs.c',
+                                  '                        p = p->shape->proto;                            \\\n',
+                                  'patches/0008-browser-global-miss-handler.patch')
 
 
 if __name__ == '__main__':

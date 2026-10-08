@@ -288,6 +288,58 @@ static void dom_geometry_cases(void)
     fixture_free(&f);
 }
 
+/* Patch 0008: what a lookup on the global object did not find, heard
+ * without changing the answer the page gets (YONDER_DIAGNOSTICS.md). */
+typedef struct { char names[1024]; unsigned heard; } MissFixture;
+static void heard_miss(void *opaque, const char *name)
+{
+    MissFixture *m=opaque;
+    size_t at=strlen(m->names);
+    snprintf(m->names+at,sizeof(m->names)-at,"%s|",name);
+    m->heard++;
+}
+/* One form of lookup, and the names it should be heard to miss. */
+static void miss_form(DomFixture *f, MissFixture *m, const char *source, const char *heard, const char *what)
+{
+    *m=(MissFixture){0};
+    char script[1024];
+    snprintf(script,sizeof(script),GEOMETRY_ASSERT "%s",source);
+    dom_script(f,script,what);
+    if(strcmp(m->names,heard)) fprintf(stderr,"%s: heard '%s', wanted '%s'\n",what,m->names,heard);
+    check(!strcmp(m->names,heard),what);
+}
+static void dom_global_miss_cases(void)
+{
+    DomFixture f=fixture_new(NULL);
+    if(!fixture_ready(&f)) return;
+    os64_js_outcome_t outcome;
+    JSContext *ctx=os64_js_context(f.runtime,OS64_JS_ABI_ID,&outcome);
+    MissFixture m={0};
+    JS_SetGlobalMissHandler(ctx,heard_miss,&m);
+    miss_form(&f,&m,"assert(typeof fetch==='undefined');","fetch|","global miss: typeof a bare name");
+    miss_form(&f,&m,"assert(window.fetch===undefined);","fetch|","global miss: a property of window");
+    miss_form(&f,&m,"assert(window['fetch']===undefined&&globalThis.fetch===undefined);","fetch|fetch|",
+              "global miss: a computed property, and globalThis");
+    miss_form(&f,&m,"assert(window.fetch?.('x')===undefined);","fetch|","global miss: an optional call");
+    miss_form(&f,&m,"throws('ReferenceError',()=>fetch);","fetch|",
+              "global miss: a bare name in a closure, which still throws");
+    miss_form(&f,&m,"var r;try{fetch}catch(e){r=e.name}assert(r==='ReferenceError');","fetch|",
+              "global miss: a bare name at top level, which still throws");
+    miss_form(&f,&m,"(function(){assert(typeof requestAnimationFrame==='undefined')})();",
+              "requestAnimationFrame|","global miss: typeof inside a function");
+    miss_form(&f,&m,"assert(window[Symbol.iterator]===undefined&&window[7]===undefined);","",
+              "global miss: a symbol or an index is no name");
+    miss_form(&f,&m,"assert(typeof document==='object'&&window.document===document);"
+              "var mine=1;assert(window.mine===1);let scoped=2;assert(scoped===2);","",
+              "global miss: what is found is not heard");
+    miss_form(&f,&m,"assert(!('fetch' in window)&&!window.hasOwnProperty('fetch'));"
+              "assert(Object.getOwnPropertyDescriptor(window,'fetch')===undefined);","",
+              "global miss: in, hasOwnProperty and a descriptor are feature tests, not lookups");
+    JS_SetGlobalMissHandler(ctx,NULL,NULL);
+    miss_form(&f,&m,"assert(typeof fetch==='undefined');","","global miss: nobody asked, nothing is heard");
+    fixture_free(&f);
+}
+
 int main(int argc, char **argv)
 {
     if(argc==2&&!strcmp(argv[1],"--reclaim")){dom_reclaim_cases();printf("DOM reclaim probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
@@ -296,6 +348,7 @@ int main(int argc, char **argv)
     bool mutation_mode=argc==2&&!strcmp(argv[1],"--mutants");
     dom_classic_cases();
     dom_geometry_cases();
+    dom_global_miss_cases();
     dom_surface_cases();
     dom_identity_cases();
     dom_collection_cases();

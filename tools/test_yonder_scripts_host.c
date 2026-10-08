@@ -1,7 +1,9 @@
 /* Exercise the actual browser rendering/control/queue code. Only OS services
  * and the font backend are hosted; libui caret/edit code is linked for real. */
 #define main js_port_fixture_main
+#define os64_write port_os64_write
 #include "test_js_port_host.c"
+#undef os64_write
 #undef main
 #define main yonder_fixture_main
 #include "../userland/apps/yonder/yonder.c"
@@ -16,10 +18,107 @@ os64_js_status_t __real_os64_js_create_with_teardown(const os64_js_config_t *,
 #include "../userland/apps/yonder/settings.c"
 #undef s
 
-int64_t os64_open(const char *p, const char *m) { (void)p; (void)m; return -1; }
+/* THE DISK, FAKED, for the page files (YONDER_DIAGNOSTICS.md): directories
+ * and files in memory, reached only under a directory a case made or
+ * seeded. Every other path opens nothing, as the window's fixtures always
+ * had it. Handles from FAKE_HANDLE up are the fake's. */
+#define FAKE_HANDLE 1000
+#define FAKE_FILES 128
+static struct { char path[256]; char *data; size_t len; bool used; } fake_files[FAKE_FILES];
+static char fake_dirs[16][256];
+static int nfake_dirs, fake_writes, fake_dir_at;
+static bool fake_fail_open;
+static const char *fake_parent(const char *path, char *out, size_t cap) {
+    snprintf(out,cap,"%s",path); char *slash=strrchr(out,'/');
+    if(slash==NULL) return NULL;
+    if(slash==out) slash[1]='\0'; else *slash='\0';
+    return out;
+}
+static bool fake_is_dir(const char *path) {
+    for(int i=0;i<nfake_dirs;i++) if(!strcmp(fake_dirs[i],path)) return true;
+    return false;
+}
+static int fake_file(const char *path) {
+    for(int i=0;i<FAKE_FILES;i++) if(fake_files[i].used && !strcmp(fake_files[i].path,path)) return i;
+    return -1;
+}
+static void fake_reset(void) {
+    for(int i=0;i<FAKE_FILES;i++) free(fake_files[i].data);
+    memset(fake_files,0,sizeof(fake_files)); nfake_dirs=0; fake_writes=0; fake_fail_open=false;
+    snprintf(fake_dirs[nfake_dirs++],256,"/tmp");
+}
+static const char *fake_text(const char *path) {
+    int f=fake_file(path); return f>=0 ? fake_files[f].data : NULL;
+}
+int64_t os64_open(const char *p, const char *m) {
+    char parent[256];
+    if(fake_fail_open || fake_parent(p,parent,sizeof(parent))==NULL || !fake_is_dir(parent) ||
+       (strcmp(m,"w") && strcmp(m,"x"))) return -1;
+    int f=fake_file(p);
+    if(f>=0 && !strcmp(m,"x")) return -1;
+    if(f<0) for(f=0;f<FAKE_FILES && fake_files[f].used;f++) {}
+    if(f==FAKE_FILES) return -1;
+    free(fake_files[f].data);
+    fake_files[f].used=true; snprintf(fake_files[f].path,256,"%s",p);
+    fake_files[f].data=calloc(1,1); fake_files[f].len=0;
+    return FAKE_HANDLE+f;
+}
+int64_t os64_write(int32_t h, const void *b, size_t n) {
+    if(h<FAKE_HANDLE) return port_os64_write(h,b,n);
+    int f=h-FAKE_HANDLE;
+    fake_files[f].data=realloc(fake_files[f].data,fake_files[f].len+n+1);
+    memcpy(fake_files[f].data+fake_files[f].len,b,n); fake_files[f].len+=n;
+    fake_files[f].data[fake_files[f].len]='\0';
+    return (int64_t)n;
+}
 int64_t os64_read(int32_t h, void *b, size_t n) { (void)h; (void)b; (void)n; return -1; }
 int64_t os64_close(int32_t h) { (void)h; return 0; }
-int64_t os64_stat(const char *p, os64_dirent_t *entry) { (void)p; (void)entry; return -1; }
+int64_t os64_rename(const char *from, const char *to) {
+    int f=fake_file(from);
+    if(f<0) return -1;
+    int old=fake_file(to);
+    if(old>=0) { free(fake_files[old].data); memset(&fake_files[old],0,sizeof(fake_files[old])); }
+    snprintf(fake_files[f].path,256,"%s",to);
+    fake_writes++;
+    return 0;
+}
+int64_t os64_unlink(const char *p) {
+    int f=fake_file(p);
+    if(f<0) return -1;
+    free(fake_files[f].data); memset(&fake_files[f],0,sizeof(fake_files[f])); return 0;
+}
+int64_t os64_mkdir(const char *p) {
+    char parent[256];
+    if(fake_is_dir(p) || fake_parent(p,parent,sizeof(parent))==NULL || !fake_is_dir(parent) || nfake_dirs==16)
+        return -1;
+    snprintf(fake_dirs[nfake_dirs++],256,"%s",p); return 0;
+}
+int64_t os64_stat(const char *p, os64_dirent_t *entry) {
+    memset(entry,0,sizeof(*entry));
+    if(fake_is_dir(p)) { entry->flags=OS64_DE_DIR; return 0; }
+    return fake_file(p)>=0 ? 0 : -1;
+}
+/* A directory's listing: one directory open at a time, which is all the
+ * window ever asks for. */
+static char fake_listing[256];
+int64_t os64_opendir(const char *p) {
+    if(!fake_is_dir(p)) return -1;
+    snprintf(fake_listing,sizeof(fake_listing),"%s",p); fake_dir_at=0; return FAKE_HANDLE-1;
+}
+int64_t os64_readdir(int32_t h, os64_dirent_t *entry) {
+    (void)h;
+    for(; fake_dir_at<FAKE_FILES; fake_dir_at++) {
+        char parent[256];
+        if(!fake_files[fake_dir_at].used ||
+           strcmp(fake_parent(fake_files[fake_dir_at].path,parent,sizeof(parent)),fake_listing)) continue;
+        memset(entry,0,sizeof(*entry));
+        snprintf(entry->name,sizeof(entry->name),"%s",strrchr(fake_files[fake_dir_at].path,'/')+1);
+        fake_dir_at++;
+        return 1;
+    }
+    return 0;
+}
+uint64_t os64_taskid(void) { return 7; }
 /* The clocks stand still unless a case moves them: micros steps by
  * clock_step at every read (an overrun is a loop that reads it) and by
  * geometry_layout_delay at every forced layout (a slow native layout), and
@@ -272,11 +371,12 @@ os64_slurp_status_t os64_slurp(const char *path, size_t cap, uint8_t **bytes, si
 bool os64_ui_theme_session(os64_ui_theme_t *theme, uint64_t *installed, uint64_t hint) {
     (void)theme; (void)installed; (void)hint; return false;
 }
-static char saved_scripts[8], saved_zoom[8], saved_seconds[8], settings_report[256];
+static char saved_scripts[8], saved_zoom[8], saved_seconds[8], saved_diagnostics[256], settings_report[256];
 int64_t os64_conf_get(const char *file, const char *key, char *out, size_t cap) {
     check(os64_streq(file,"yonder.conf"),"settings read Yonder configuration");
     const char *value=os64_streq(key,"scripts") ? saved_scripts :
-        os64_streq(key,"zoom") ? saved_zoom : os64_streq(key,"script_seconds") ? saved_seconds : "";
+        os64_streq(key,"zoom") ? saved_zoom : os64_streq(key,"script_seconds") ? saved_seconds :
+        os64_streq(key,"diagnostics") ? saved_diagnostics : "";
     if(!value[0]) return OS64_CONF_NO_KEY;
     os64_strcopy(out,cap,value); return 0;
 }
@@ -380,7 +480,7 @@ static void probe_page(const char *html, bool scripts) {
         /* A finished document's inline scripts are queued as CONNECTED
          * scripts, in tree order: the shown page's ready list, one a turn. */
         g.page.scripts=scripts_host(g.page.way.doc,os64_page_shared_state(g.page.way.model),
-            g.page.way.url,++g.pages_made);
+            g.page.way.url,++g.pages_made,g.page.diag);
         for (os64_html_node_t *n=g.page.way.doc->document;n;n=(os64_html_node_t *)next_within(n,g.page.way.doc->document))
             if(os64_dom_script_kind(n)==OS64_DOM_SCRIPT_CLASSIC && os64_html_attr(n,"src")==NULL)
                 yonder_scripts_connected(g.page.scripts,n);
@@ -1041,7 +1141,7 @@ static void bounded_resources(void) {
     probe_page("<script>var held=document.body;</script><script>document.body.id='later';</script>",true);
     yonder_scripts_free(g.page.scripts); g.page.scripts=NULL;
     fail_at=attempts+1;
-    check(scripts_host(g.page.way.doc,os64_page_shared_state(page_model(&g.page)),g.page.way.url,1)==NULL,
+    check(scripts_host(g.page.way.doc,os64_page_shared_state(page_model(&g.page)),g.page.way.url,1,NULL)==NULL,
         "a script host the heap refuses publishes nothing");
     fail_at=0;
     probe_drop();
@@ -1201,12 +1301,13 @@ static void stream_window(void) {
     os64_ui_button(&g.reload,"Reload",NULL,NULL); os64_ui_button(&g.stop,"Stop",NULL,NULL);
     os64_ui_textfield(&g.field,g.field_buf,sizeof(g.field_buf),NULL,NULL,NULL);
     os64_ui_label(&g.status,g.status_text);
+    os64_ui_label(&g.badge,g.badge_text);
     g.view.cls=&kViewClass; g.view.focusable=true;
     os64_ui_scrollbar(&g.vbar,NULL,NULL); os64_ui_scrollbar(&g.hbar,NULL,NULL);
     os64_ui_panel(&g.qpanel); os64_ui_label(&g.qlabel,g.qtext);
     os64_ui_button(&g.qyes,"Yes",NULL,NULL); os64_ui_button(&g.qno,"No",NULL,NULL);
     os64_ui_widget_t *kids[]={&g.back,&g.forward,&g.reload,&g.stop,&g.field.w,&g.view,&g.vbar.w,
-        &g.hbar.w,&g.qpanel,&g.qlabel,&g.qyes,&g.qno,&g.status};
+        &g.hbar.w,&g.qpanel,&g.qlabel,&g.qyes,&g.qno,&g.badge,&g.status};
     for(size_t i=0;i<sizeof(kids)/sizeof(kids[0]);i++) os64_ui_add_child(&g.root,kids[i]);
     g.root.bounds=(os64_gui_rect_t){0,0,860,640};
     os64_ui_set_root(&g.ui,&g.root);
@@ -2908,6 +3009,210 @@ static void classic_hover_profile(void)
     probe_drop();
 }
 
+/* ── THE PAGE FILES (YONDER_DIAGNOSTICS.md) ───────────────────────────── */
+/* The text of the file `name` in `dir`, or NULL. YONDER_DIAG_DUMP=1 prints
+ * each one a case reads, which is how a failing expectation is read. */
+static const char *diag_file(const char *dir, const char *name) {
+    char path[256]; snprintf(path,sizeof(path),"%s/%s",dir,name);
+    if(getenv("YONDER_DIAG_DUMP")) fprintf(stderr,"--- %s\n%s---\n",path,fake_text(path)?fake_text(path):"(none)\n");
+    return fake_text(path);
+}
+static bool has(const char *text, const char *needle) { return text!=NULL && strstr(text,needle)!=NULL; }
+/* The keyword rule: MISSING and FAILED begin record lines, sit on the
+ * verdict line, and appear nowhere else, in every file any case wrote. */
+static void diag_tokens_exclusive(void) {
+    unsigned files=0, bad=0;
+    for(int f=0;f<FAKE_FILES;f++) {
+        if(!fake_files[f].used || strstr(fake_files[f].path,"/diag")==NULL) continue;
+        files++;
+        const char *line=fake_files[f].data; int n=0;
+        while(*line) {
+            const char *end=strchr(line,'\n'); size_t len=end?(size_t)(end-line):strlen(line);
+            char one[2048]; snprintf(one,sizeof(one),"%.*s",(int)(len<sizeof(one)-1?len:sizeof(one)-1),line);
+            n++;
+            /* A token appears once in a record line, at its head; on the
+             * verdict line only when that token has records. */
+            bool verdict=n==2 && !strncmp(one,"verdict: ",9);
+            const char *tokens[]={"MISSING","FAILED"};
+            for(int k=0;k<2;k++) {
+                const char *at=strstr(one,tokens[k]);
+                if(at==NULL) continue;
+                bool head=at==one && strstr(at+1,tokens[k])==NULL;
+                /* The verdict names it after its count, which is not zero. */
+                const char *digits=at-1;
+                unsigned long count=0, scale=1;
+                while(digits>one+9 && digits[-1]>='0' && digits[-1]<='9') { count+=(unsigned long)(digits[-1]-'0')*scale; scale*=10; digits--; }
+                bool named=verdict && strstr(at+1,tokens[k])==NULL && at[-1]==' ' && digits<at-1 && count!=0;
+                if(!head && !named) { bad++; fprintf(stderr,"token outside its place in %s: %s\n",fake_files[f].path,one); }
+            }
+            if(n==2 && !verdict) { bad++; fprintf(stderr,"line two is not the verdict in %s\n",fake_files[f].path); }
+            line+=len+(end?1:0);
+        }
+    }
+    check(files>0 && bad==0,"diag: the tokens begin record lines and appear nowhere else, in every file written");
+}
+static void diag_unit_cases(void) {
+    yonder_diag_t *d=yonder_diag_new("http://Example.COM:8080/FAILED?x=MISSING",3,0);
+    char text[4096];
+    yonder_diag_render(d,text,sizeof(text));
+    check(!strncmp(text,"address: http://Example.COM:8080/F%41ILED?x=M%49SSING\nverdict: clean\n",70),
+        "diag: a clean record's verdict, and a token in a plain line spelled with its second letter encoded");
+    yonder_diag_missing(d,"global","fetch",1); yonder_diag_missing(d,"global","fetch",2);
+    yonder_diag_missing_seen(d,"element","canvas",3); yonder_diag_missing_seen(d,"element","canvas",2);
+    yonder_diag_failed(d,"script a.js","line one\nFAILED x\\y"); yonder_diag_failed(d,"script a.js","line one\nFAILED x\\y");
+    yonder_diag_fact(d,"bytes","1"); yonder_diag_fact(d,"bytes","2");
+    yonder_diag_render(d,text,sizeof(text));
+    check(has(text,"\nverdict: 2 MISSING, 1 FAILED\nMISSING global fetch (3)\nMISSING element canvas (3)\n"
+        "FAILED script a.js: line one\\x0AF%41ILED x\\\\y (2)\nbytes: 2\n"),
+        "diag: asks add, a whole tally holds its most, a failure counts, a line breaker and a token in data are escaped, a fact is replaced");
+    yonder_diag_t *one=yonder_diag_new("http://x.test/",1,0);
+    yonder_diag_failed(one,"script MISSING.js","Error: MISSING config");
+    yonder_diag_render(one,text,sizeof(text));
+    check(has(text,"\nverdict: 1 FAILED\nFAILED script M%49SSING.js: Error: M%49SSING config (1)\n") &&
+        strstr(text,"MISSING")==NULL,
+        "diag: the verdict names only a token with records, and record data spelling the other is encoded");
+    yonder_diag_free(one);
+    check(yonder_diag_missing_lines(d)==2 && yonder_diag_failed_lines(d)==1,"diag: the verdict's numbers are lines");
+    char name[64];
+    check(yonder_diag_file_name(d,name,sizeof(name)) && !strcmp(name,"example.com-0003.txt"),
+        "diag: the file is named by the host, lower case, without its port, and the sequence");
+    yonder_diag_free(d);
+    d=yonder_diag_new("file:///pages/a.html",12345,0);
+    check(yonder_diag_file_name(d,name,sizeof(name)) && !strcmp(name,"file-12345.txt"),"diag: a file's page is `file`");
+    yonder_diag_free(d);
+    d=yonder_diag_new("about:blank",1,0);
+    check(yonder_diag_file_name(d,name,sizeof(name)) && !strcmp(name,"page-0001.txt"),"diag: no host is `page`");
+    for(unsigned i=0;i<YONDER_DIAG_RECORDS_MAX+3;i++) { char n[16]; snprintf(n,sizeof(n),"g%u",i); yonder_diag_missing(d,"global",n,1); }
+    size_t need=yonder_diag_render(d,NULL,0); char *big=malloc(need+1); yonder_diag_render(d,big,need+1);
+    check(yonder_diag_missing_lines(d)==YONDER_DIAG_RECORDS_MAX && has(big,"\nmissing names not kept: 3\n"),
+        "diag: past the table's room, a name is counted on a plain line rather than kept");
+    free(big); yonder_diag_free(d);
+    fake_reset();
+    snprintf(fake_dirs[nfake_dirs++],256,"/tmp/seq");
+    int64_t h=os64_open("/tmp/seq/a.example-0041.txt","w"); os64_close((int32_t)h);
+    h=os64_open("/tmp/seq/notes.txt","w"); os64_close((int32_t)h);
+    h=os64_open("/tmp/seq/b-x-0007.txt","w"); os64_close((int32_t)h);
+    check(yonder_diag_next_seq("/tmp/seq")==42 && yonder_diag_next_seq("/nowhere")==1,
+        "diag: a run continues the directory's sequence, and starts at one where there is none");
+}
+/* yonder.conf names a directory: made under a parent that exists, said
+ * once when it cannot be. */
+static void diag_setting_cases(void) {
+    fake_reset();
+    memset(&s_diag,0,sizeof(s_diag)); s_diag.next=1;
+    snprintf(saved_diagnostics,sizeof(saved_diagnostics),"/nowhere/pages");
+    const char *said=diag_dir_open();
+    check(said!=NULL && has(said,"/nowhere/pages cannot be made") && s_diag.dir[0]=='\0',
+        "diag: a directory whose parent is missing is said, and no files are written");
+    snprintf(saved_diagnostics,sizeof(saved_diagnostics),"/tmp/diag/");
+    said=diag_dir_open();
+    check(said==NULL && !strcmp(s_diag.dir,"/tmp/diag") && fake_is_dir("/tmp/diag") && s_diag.next==1,
+        "diag: a missing directory under a parent that exists is made, its trailing slash dropped");
+    saved_diagnostics[0]='\0';
+}
+static void diag_page_cases(void) {
+    uint32_t seq;
+    /* A clean page: a script that uses only what is there. */
+    loop_page("<p id=out>x</p><script>document.getElementById('out').textContent='ran'</script>");
+    check(loop_settle() && g.page.tree!=NULL && probe_text_is("out","ran"),"diag: a clean scripted page arrives");
+    char name[64]; yonder_diag_file_name(g.page.diag,name,sizeof(name));
+    const char *text=diag_file("/tmp/diag",name);
+    check(has(text,"address: http://fixture.test/p\nverdict: clean\n") && !has(text,"MISSING") && !has(text,"FAILED") &&
+        has(text,"\nwritten: when the page arrived\n") && has(text,"\nfinal address: http://fixture.test/final\n") &&
+        has(text,"\nscript http://fixture.test/final#inline-1: ran\n") && !has(text,"script load"),
+        "diag: a clean page's file says clean, carries no token, and says what ran");
+    check(g.badge_text[0]=='\0' && g.badge.hidden,"diag: a clean page shows no badge");
+    loop_drop();
+    check(has(diag_file("/tmp/diag",name),"\nwritten: when the page was left\n"),"diag: leaving rewrites the file");
+
+    /* typeof fetch: recorded, and the page's path unchanged. */
+    loop_page("<p id=out>x</p><script>document.getElementById('out').textContent="
+        "String('fetch' in window)+' '+typeof fetch+' '+(window.fetch===undefined)</script>");
+    check(loop_settle() && probe_text_is("out","false undefined true"),
+        "diag: the page that asks for fetch sees what it always saw");
+    yonder_diag_file_name(g.page.diag,name,sizeof(name)); text=diag_file("/tmp/diag",name);
+    check(has(text,"\nverdict: 1 MISSING\nMISSING global fetch (2)\n"),
+        "diag: `typeof fetch` and `window.fetch` are one MISSING line counting both asks");
+    check(!strcmp(g.badge_text,"MISSING 1") && !g.badge.hidden,"diag: the badge shows the file's own token and count");
+    loop_drop();
+
+    /* A dying script, and a timer that dies after the page arrived. */
+    loop_page("<p id=out>x</p><script>nothere();</script>"
+        "<script>setTimeout(function(){null.x},50)</script>");
+    check(loop_settle() && g.page.tree!=NULL,"diag: a page whose script dies arrives");
+    yonder_diag_file_name(g.page.diag,name,sizeof(name));
+    char arrival[4096]; snprintf(arrival,sizeof(arrival),"%s",diag_file("/tmp/diag",name));
+    check(has(arrival,"\nverdict: 1 MISSING, 1 FAILED\nMISSING global nothere (1)\nFAILED script http://fixture.test/final#inline-1: ") &&
+        has(arrival,"nothere"),
+        "diag: a dying script writes a FAILED line by its source name, and the verdict counts it");
+    now_ms=200;
+    check(script_turn(),"diag: the timer fires on the shown page");
+    check(!strcmp(g.badge_text,"MISSING 1  FAILED 2"),"diag: the badge follows a failure after arrival");
+    check(!strcmp(diag_file("/tmp/diag",name),arrival),"diag: the arrival write is not touched by what came after");
+    loop_drop();
+    text=diag_file("/tmp/diag",name);
+    check(has(text,"\nverdict: 1 MISSING, 2 FAILED\n") && has(text,"FAILED script http://fixture.test/final#timer-1: TypeError"),
+        "diag: the timer's death is in the departure write");
+
+    /* A module script and a canvas, each by its kind; a skipped property. */
+    loop_page("<style>p{aspect-ratio:1;display:flow-root}h1{display:inline frob}</style><p id=out>x</p><canvas></canvas><canvas></canvas>"
+        "<my-widget></my-widget><script type=module>1</script>");
+    check(loop_settle() && g.page.tree!=NULL,"diag: a page with a module, canvases and a custom element arrives");
+    yonder_diag_file_name(g.page.diag,name,sizeof(name)); text=diag_file("/tmp/diag",name);
+    check(has(text,"MISSING script module (1)\n") && has(text,"MISSING element canvas (2)\n") &&
+        has(text,"MISSING element my-widget (1)\n") && has(text,"MISSING css-property aspect-ratio (1)\n") &&
+        has(text,"MISSING css-value display: flow-root (1)\n") && has(text,"MISSING css-value display: inline frob (1)\n"),
+        "diag: a module script, an element drawn as nothing, a property the cascade skipped and a value it "
+        "dropped or approximated are each recorded");
+    loop_drop();
+    text=diag_file("/tmp/diag",name);
+    check(has(text,"MISSING element canvas (2)\n"),"diag: looking again at departure does not count twice");
+
+    /* An address that spells a token keeps it out of the plain lines. */
+    stream_window(); g.scripts_on=true;
+    start_trip("http://fixture.test/FAILED/MISSING",NULL,NAV_GO,NULL);
+    seq=yonder_diag_seq(g.stream.diag);
+    {
+        way_head_t h=stream_head("text/html","",false);
+        os64_strcopy(h.url,sizeof(h.url),"http://fixture.test/FAILED/MISSING");
+        yonder_mail_post_head(g.stream.mail,&h);
+        const char *body="<p>tokens</p>";
+        stream_post_body((const uint8_t *)body,strlen(body),YONDER_STREAM_CHUNK);
+        stream_post_verdict(true,OS64_FETCH_OK,"");
+    }
+    check(loop_settle() && g.page.tree!=NULL,"diag: a page whose address spells both tokens arrives");
+    snprintf(name,sizeof(name),"fixture.test-%04u.txt",(unsigned)seq);
+    check(has(diag_file("/tmp/diag",name),"\nfinal address: http://fixture.test/F%41ILED/M%49SSING\n") &&
+        has(diag_file("/tmp/diag",name),"\nverdict: clean\n"),
+        "diag: a fact's value that spells a token is encoded, and the page still reads clean");
+    loop_drop();
+
+    /* A fetch that is not a page: its own file, FAILED. */
+    stream_window(); g.scripts_on=true;
+    start_trip("http://fixture.test/gone",NULL,NAV_GO,NULL);
+    seq=yonder_diag_seq(g.stream.diag);
+    stream_post_verdict(false,OS64_FETCH_OK,"No such page: 404 Not Found");
+    loop_settle();
+    snprintf(name,sizeof(name),"fixture.test-%04u.txt",(unsigned)seq);
+    check(has(diag_file("/tmp/diag",name),"\nFAILED page: No such page: 404 Not Found (1)\n"),
+        "diag: a load that never became a page writes its failure");
+    loop_drop();
+}
+static void diag_cases(void) {
+    diag_unit_cases();
+    diag_setting_cases();
+    diag_page_cases();
+    diag_tokens_exclusive();
+    /* Setting absent: no file, while the badge still counts. */
+    int writes=fake_writes;
+    memset(&s_diag,0,sizeof(s_diag)); s_diag.next=1;
+    loop_page("<script>nothere()</script>");
+    check(loop_settle() && fake_writes==writes && !strcmp(g.badge_text,"MISSING 1  FAILED 1"),
+        "diag: with the setting absent nothing is written, and the badge still counts");
+    loop_drop();
+    fake_reset();
+}
+
 int main(void)
 {
     os64_text_options_t options={.memory={.alloc=probe_alloc,.free=probe_free},
@@ -2944,6 +3249,7 @@ int main(void)
     if(getenv("YONDER_NO_STREAM")==NULL) stream_cases();
     reporting_teardown();
     if(getenv("YONDER_NO_STREAM")==NULL) join_cases();
+    if(getenv("YONDER_NO_STREAM")==NULL) diag_cases();
     os64_text_font_release(probe_font);
     check(os64_text_destroy(probe_text)==OS64_FONT_OK,"all layout text released");
     check(live==0,"native and engine heap is empty");

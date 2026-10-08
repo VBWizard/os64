@@ -1,0 +1,31 @@
+<!doctype html>
+<html>
+<head>
+<title>yonder diagnostics</title>
+<!-- The page-file proof in the guest (YONDER_DIAGNOSTICS.md): each line of
+     this page asks for one thing yonder records. With scripts on and
+     yonder.conf's `diagnostics` set, `cat` the file it writes. -->
+<style>
+body { font-family: sans-serif; margin: 1em }
+p { aspect-ratio: 1 / 1 }
+h1 { color: color-mix(in srgb, navy, teal) }
+@keyframes spin { to { color: red } }
+</style>
+</head>
+<body>
+<h1>yonder diagnostics</h1>
+<p id=fetch>fetch: not looked at</p>
+<p id=timer>timer: not fired</p>
+<canvas width=40 height=20>a canvas</canvas>
+<script type=module>document.body.append('a module ran')</script>
+<script>
+document.getElementById('fetch').textContent =
+    'fetch: ' + typeof fetch + ', in window: ' + ('fetch' in window);
+setTimeout(function () {
+    document.getElementById('timer').textContent = 'timer: fired, and now it dies';
+    null.x;
+}, 500);
+nothere();
+</script>
+</body>
+</html>

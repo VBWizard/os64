@@ -178,6 +178,14 @@ os64_dom_t *os64_dom_create(os64_js_runtime_t *runtime,
  * NULL restores the native Yonder identity; install/replace outside callbacks. */
 void os64_dom_set_user_agent(os64_dom_t *dom, const char *(*provider)(void *opaque), void *opaque);
 
+/* Owner-thread census hook (YONDER_DIAGNOSTICS.md): `heard` is told each
+ * name a lookup on window did not find, before the lookup answers as it
+ * always does, so what the page sees is unchanged. The name is borrowed
+ * for the call; `heard` must not enter JS. NULL stops it. Install outside
+ * callbacks. */
+void os64_dom_set_global_miss(os64_dom_t *dom, void (*heard)(void *opaque, const char *name),
+                              void *opaque);
+
 /* Install/replace the native provider outside script callbacks. A provider
  * ensures a current layout, copies a snapshot and records attempted layouts
  * and elapsed work even on refusal. It must not enter JS or pump events.
