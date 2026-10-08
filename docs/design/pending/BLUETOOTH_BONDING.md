@@ -1,7 +1,10 @@
 # Bluetooth bonding and reconnection
 
-Os64 should remember an explicitly paired keyboard and reconnect after either
-device restarts, without another pairing ceremony. This work extends the AX210
+Os64 should remember an explicitly paired keyboard and automatically reconnect
+after either device restarts, without another pairing ceremony or a connection
+command. Automatic reconnection is required for completion of this feature;
+the first recovery slice still requires an explicit `reconnect` command.
+This work extends the AX210
 LE keyboard path on `codex/bluetooth-ax210-discovery`. The operational record and
 commands are in [BLUETOOTH.md](../../../BLUETOOTH.md).
 
@@ -151,11 +154,36 @@ permissions and crash behavior on the actual filesystem selected for storage.
 
 ## Stage 4 Automatic reconnect
 
-After explicit reconnect passes hardware validation, add bounded retries with
-backoff for the selected saved peer. Suspend retries while manual discovery or
-pairing owns the controller. Explicit disconnect suppresses automatic reconnect
-until the user reconnects or enables it again. Forget cancels retries. Rejected
-keys and unrecognized identities require user action rather than an endless loop.
+This stage is required, after explicit reconnect passes hardware validation.
+Successful explicit bonding enables automatic connection for the selected peer.
+On host startup, load the saved bond and begin looking for that peer once the
+controller and storage are ready. After keyboard power loss, complete session
+cleanup, then resume looking. Turning the keyboard on normally should be enough:
+recognize its direct identity or resolve its RPA using the saved IRK, connect,
+restore encryption, and configure HID input without a shell command.
+
+A background Bluetooth manager owns this policy and coordinates bond storage,
+discovery, and connection requests. It runs in task context; the USB polling
+path remains responsible for bounded protocol progress and input delivery.
+A separate userland daemon is not a prerequisite for automatic connection.
+Choose a kernel worker or a userland service when the Stage 3 access-control
+and storage audit establishes how that manager can securely own the bonds.
+Manual commands and the manager must use the same serialized controller owner.
+
+Use bounded attempts with backoff and a capped discovery duty cycle. An absent
+keyboard must not permanently exhaust retries: continue occasional discovery so
+a keyboard turned on later can connect. Suspend retries while manual discovery
+or pairing owns the controller. Explicit disconnect suppresses automatic
+reconnect for the current boot until the user reconnects or enables it again;
+provide a persistent disable setting for users who want manual connection.
+Forget cancels retries and removes the bond. Rejected keys and unrecognized
+identities require user action rather than repeated pairing attempts.
+
+Acceptance requires typing without a `reconnect` command after keyboard off/on,
+after host reboot with the keyboard already on, and when the keyboard is turned
+on long after host startup. Cover recognized RPAs, absence/backoff, explicit
+disconnect and disable behavior, and forget racing discovery. A changed static
+identity that cannot be resolved must retain the Stage 2 refusal behavior.
 
 Expose connection state, saved or unsaved bond state, identity-resolution result,
 and the reason for the next required action through `/sys/bluetooth/`. The normal
@@ -167,7 +195,8 @@ available when that cannot succeed.
 - Stage 1: implemented; LE and production xHCI host suites pass with ASan/UBSan,
   and the kernel builds. P5 power-cycle validation is pending.
 - Stages 2 and 3: designed; implementation follows the P5 recovery check.
-- Stage 4: deferred until explicit persisted-bond reconnect is reliable.
+- Stage 4: required and planned after explicit persisted-bond reconnect is
+  reliable; not included in the Stage 1 recovery slice.
 
 Peripheral connection-parameter updates remain a separate compatibility task;
 the working keyboard retries requests that Os64 rejects. Do not combine that
