@@ -317,6 +317,22 @@ second successful inspection was 96670 ms. Thus the request/reply receive path
 remained live with both settings correct. Bonding/key distribution is the next
 hardware test; simulated bonding does not establish P5 input compatibility.
 
+At `330514cc`, `bond-justworks` with random de:73:10:60:93:6a received
+Pairing Response `02 03 00 01 10 00 01`, completed encryption and both responder
+key-distribution messages, and cached the bond. HID configuration completed at
+209780 ms with CCC=0001 and Protocol Mode=1. Chris reported continued rapid
+blinking and no visible input while typing. Live inspection at 250160 ms read
+both settings successfully again: 582 bytes / 25 ACL packets became 603 / 27,
+with two packets after readiness and no notifications or malformed packets.
+Bonding alone therefore did not resolve the missing input in this attempt.
+
+Explicit disconnect returned the driver to idle with the bond retained. An
+immediate `reconnect` then timed out waiting for connection establishment
+(opcode 200d), before encryption or any ACL traffic. Cleanup confirmed the link
+inactive and left the driver failed, requiring reboot. This did not test whether
+the keyboard accepts the cached key; its advertising state during reconnection
+was not observed. Real key delivery and cached-key reconnection remain unproven.
+
 Wire references: [Bluetooth Core Security Manager](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/host/security-manager-specification.html),
 [ATT](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/host/attribute-protocol--att-.html),
 [L2CAP](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/host/logical-link-control-and-adaptation-protocol-specification.html),
