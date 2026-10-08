@@ -23,9 +23,11 @@ bool bt_scan_request_valid(const char *data, size_t bytes)
     return bytes==4 && data[0]=='s' && data[1]=='c' && data[2]=='a' && data[3]=='n';
 }
 
+bool bt_scan_quiescent(const bt_scan_t *s)
+{ return s->phase==BT_SCAN_IDLE || s->phase==BT_SCAN_DONE || s->phase==BT_SCAN_STOPPED; }
 bool bt_scan_start(bt_scan_t *s, uint64_t now)
 {
-    if (s->phase!=BT_SCAN_IDLE && s->phase!=BT_SCAN_DONE) return false;
+    if (!bt_scan_quiescent(s)) return false;
     *s=(bt_scan_t){.phase=BT_SCAN_RESET,.credits=1,.total_deadline=now+40000};
     return true;
 }
@@ -171,7 +173,7 @@ void bt_scan_tick(bt_scan_t *s, uint64_t now, bool usb_done, bool usb_failed,
         s->phase=BT_SCAN_FAILED;
         return;
     }
-    if (s->phase==BT_SCAN_FAILED) return;
+    if (s->phase==BT_SCAN_FAILED || s->phase==BT_SCAN_STOPPED) return;
     if (s->hardware_error && s->phase!=BT_SCAN_CLEANUP) {
         scan_fail(s,"controller hardware error",now);
         return;
@@ -182,15 +184,18 @@ void bt_scan_tick(bt_scan_t *s, uint64_t now, bool usb_done, bool usb_failed,
         return;
     }
     if (s->pending) {
-        if (now>=s->deadline || (s->command_done && s->status) || s->bad_reply || s->hardware_error) {
+        // The event drain precedes this tick. A late poll can observe a completed
+        // command; its wait deadline applies only while either completion is missing.
+        bool timed_out=now>=s->deadline && !(usb_done && s->command_done);
+        if (timed_out || (s->command_done && s->status) || s->bad_reply || s->hardware_error) {
             if (s->phase==BT_SCAN_CLEANUP) { s->phase=BT_SCAN_FAILED; return; }
-            scan_fail(s,now>=s->deadline ? "HCI command timed out" : "HCI command rejected",now);
+            scan_fail(s,timed_out ? "HCI command timed out" : "HCI command rejected",now);
             return;
         }
         if (!usb_done || !s->command_done) return;
         s->pending=false;
         if (s->phase==BT_SCAN_CLEANUP) {
-            s->radio_active=false; s->phase=BT_SCAN_FAILED; return;
+            s->radio_active=false; s->phase=BT_SCAN_STOPPED; return;
         }
         if (s->phase==BT_SCAN_INQUIRY) s->deadline=now+12000;
         if (s->phase==BT_SCAN_LE_ENABLE) s->deadline=now+(s->le_only?2000:10000);
@@ -212,10 +217,10 @@ void bt_scan_tick(bt_scan_t *s, uint64_t now, bool usb_done, bool usb_failed,
     if (s->phase==BT_SCAN_INQUIRY_MODE && (s->le_only || (s->features[4]&0x20))) s->phase=BT_SCAN_LE_HOST;
     if (s->phase==BT_SCAN_LE_HOST && !(s->features[4]&0x40)) s->phase=BT_SCAN_DONE;
     if (s->phase==BT_SCAN_DONE) return;
+    if (s->phase==BT_SCAN_CLEANUP && now>=s->deadline) { s->phase=BT_SCAN_FAILED; return; }
     // A failed command may still own the USB DMA buffer. Wait for its status
     // stage before a best-effort HCI Reset; never overwrite an in-flight TD.
     if (!usb_done || (!s->credits && s->phase!=BT_SCAN_CLEANUP)) {
-        if (s->phase==BT_SCAN_CLEANUP && now>=s->deadline) s->phase=BT_SCAN_FAILED;
         return;
     }
     uint8_t p[8]={0}, length=0;
@@ -253,7 +258,8 @@ void bt_scan_tick(bt_scan_t *s, uint64_t now, bool usb_done, bool usb_failed,
 size_t bt_scan_status(const bt_scan_t *s, char *out, size_t cap)
 {
     const char *state=s->phase==BT_SCAN_IDLE ? "idle" : s->phase==BT_SCAN_DONE ? "complete" :
-        s->phase==BT_SCAN_FAILED ? "failed" : s->phase==BT_SCAN_CLEANUP ? "stopping after error" :
+        s->phase==BT_SCAN_STOPPED ? "stopped (retry available)" :
+        s->phase==BT_SCAN_FAILED ? "failed (reboot required)" : s->phase==BT_SCAN_CLEANUP ? "stopping after error" :
         s->phase<=BT_SCAN_INQUIRY ? "initializing" : s->phase==BT_SCAN_CLASSIC_WAIT ? "Classic inquiry" : "LE scan";
     int n=snprintf(out,cap,"state: %s\ncontroller: %02x:%02x:%02x:%02x:%02x:%02x\n"
         "devices: %u\nreports beyond capacity: %u\nmalformed reports: %u\n"

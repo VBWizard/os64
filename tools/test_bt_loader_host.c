@@ -434,6 +434,18 @@ static void scan_history(void)
     CHECK(strstr(out,"last scan: manual Classic + LE; complete"));
     CHECK(strstr(out,"last scan finished: 2026-10-08 16:00:02 UTC (uptime ms: 10020)"));
     CHECK(!xhci_bluetooth_read(out,sizeof(out),1)); // Device rows remain machine-readable.
+    // A protocol failure followed by a late successful cleanup is also terminal
+    // for scan history, but the adapter remains available for the next request.
+    CHECK(bt_scan_start_le(&p->scan,kTicksSinceStart*1000/TICKS_PER_SECOND));
+    xhci_bt_runtime_poll();
+    p->scan.phase=BT_SCAN_CLEANUP; p->scan.pending=p->scan.command_done=true;
+    p->scan.opcode=0x0c03; p->scan.status=0; p->scan.error="test scan timeout";
+    p->scan.deadline=kTicksSinceStart*1000/TICKS_PER_SECOND;
+    s_hc->control_slot=0; kTicksSinceStart++; kSystemCurrentTime++;
+    xhci_bt_runtime_poll(); xhci_bluetooth_read(out,sizeof(out),0);
+    CHECK(p->scan.phase==BT_SCAN_STOPPED && p->scan_history.finished && p->scan_history.failed);
+    CHECK(strstr(out,"stopped (retry available)") && strstr(out,"last scan: background LE; failed"));
+    CHECK(strstr(out,"test scan timeout") && strstr(out,"discovery may be active: no"));
     kSystemCurrentTime=1791475210;
     CHECK(bt_scan_start_le(&p->scan,kTicksSinceStart*1000/TICKS_PER_SECOND));
     xhci_bt_runtime_poll(); p->failed=true; kSystemCurrentTime++;

@@ -367,6 +367,37 @@ static void run(void)
         if(scenario>=JUST_WORKS_OPT_IN) assert(!session.passkey_visible && !session.passkey);
     }
 }
+static void late_completion(void)
+{
+    begin(NORMAL); tick(true,true); controller();
+    now=session.command_deadline; tick(true,true);
+    assert(session.phase==BT_LE_MASK && !session.error);
+    run(); assert(session.phase==BT_LE_READY);
+    for(unsigned kind=0;kind<4;kind++) {
+        begin(NORMAL); tick(true,true);
+        if(kind!=1) controller();
+        if(kind==2) session.status=0x0c;
+        now=session.command_deadline;
+        bt_le_tick(&session,++now,kind!=0,true,kind==3,command,acl,report,NULL);
+        assert(session.phase==(kind==3?BT_LE_FAILED:BT_LE_CLEANUP) && session.error);
+        if(kind==2) assert(!strcmp(session.error,"HCI command rejected") && session.error_status==0x0c);
+    }
+    begin(NORMAL); tick(true,true); controller(); now=session.total_deadline;
+    tick(true,true); assert(session.phase==BT_LE_CLEANUP && !strcmp(session.error,"connection/pairing deadline expired"));
+    // A late cleanup reply also wins, but only when both USB transfers finished.
+    for(unsigned kind=0;kind<5;kind++) {
+        begin(NORMAL); tick(true,true); controller(); tick(true,true); controller();
+        le_fail(&session,"test cleanup"); tick(true,true); controller();
+        if(kind==3) session.status=0x0c;
+        if(kind==4) session.command_done=false;
+        now=session.deadline;
+        tick(kind!=1,kind!=2);
+        assert(session.phase==(kind==0?BT_LE_STOPPED:BT_LE_FAILED));
+        assert(!strcmp(session.error,"test cleanup"));
+        if(!kind) assert(!session.link_may_active && bt_le_quiescent(&session));
+    }
+    puts("PASS: late command/cleanup completions succeed; missing USB/HCI completion and real errors still fail");
+}
 static void success(void)
 {
     begin(NORMAL); run(); assert(session.phase==BT_LE_READY && session.encrypted);
@@ -852,6 +883,52 @@ static void reconnect_link_failure(void)
     puts("PASS: reconnect timeout/establishment failure resumes discovery; key/authentication/MIC errors remain blocked");
 }
 
+static void stopped_scan_retry(void)
+{
+    begin_bond(2); run(); bt_le_bond_t saved=session.bond;
+    session=(bt_le_t){.bond=saved};
+    bt_manager_t m={.loaded=true,.automatic=true}; bt_scan_t scan={0};
+    bt_manager_step(&m,&session,&scan,now); assert(m.scan_owned);
+    for(unsigned i=0;i<40;i++) {
+        scan.phase=BT_SCAN_STOPPED; scan.error="HCI command timed out";
+        scan.count=1; scan.devices[0].le=true; scan.devices[0].address_type=saved.address_type;
+        memcpy(scan.devices[0].address,saved.peer,6);
+        bt_manager_step(&m,&session,&scan,now);
+        assert(!m.blocked && !m.scan_owned && session.phase==BT_LE_IDLE);
+        assert(m.next_attempt==now+(i==0?2000:i==1?4000:i==2?8000:i==3?16000:30000));
+        uint64_t next=m.next_attempt;
+        bt_manager_step(&m,&session,&scan,next-1);
+        assert(m.next_attempt==next && scan.phase==BT_SCAN_STOPPED && scan.error);
+        now=next; bt_manager_step(&m,&session,&scan,now);
+        assert(m.scan_owned && scan.phase==BT_SCAN_RESET && !scan.error);
+    }
+    scan.phase=BT_SCAN_DONE; scan.count=1; scan.devices[0].le=true;
+    scan.devices[0].address_type=saved.address_type; memcpy(scan.devices[0].address,saved.peer,6);
+    peer_bonding=false; peer_reconnecting=true; peer_key_delivery=0;
+    memcpy(peer_air,saved.peer,6);
+    bt_manager_step(&m,&session,&scan,now); run();
+    assert(session.phase==BT_LE_READY && session.bond_reused);
+    // A stopped manual scan permits explicit use too; its partial results are not trusted.
+    const char *requests[]={"reconnect","connect random f8:2c:fe:ff:f0:1a",
+        "bond random f8:2c:fe:ff:f0:1a","bond-justworks random f8:2c:fe:ff:f0:1a"};
+    for(unsigned i=0;i<sizeof(requests)/sizeof(requests[0]);i++) {
+        session=(bt_le_t){.bond=saved}; m=(bt_manager_t){.loaded=true};
+        scan.phase=BT_SCAN_STOPPED;
+        assert(bt_manager_command(&m,&session,&scan,requests[i],strlen(requests[i]),now));
+        assert(session.phase==BT_LE_RESET && !session.resolve_required);
+    }
+    session=(bt_le_t){.bond=saved}; m=(bt_manager_t){.loaded=true,.automatic=true,.scan_owned=true};
+    scan.phase=BT_SCAN_STOPPED;
+    assert(bt_manager_command(&m,&session,&scan,"auto off",8,now));
+    bt_manager_step(&m,&session,&scan,now+60000); assert(scan.phase==BT_SCAN_STOPPED);
+    assert(bt_manager_command(&m,&session,&scan,"auto on",7,now));
+    bt_manager_step(&m,&session,&scan,now); assert(!m.blocked && m.next_attempt>now);
+    now=m.next_attempt; bt_manager_step(&m,&session,&scan,now); assert(scan.phase==BT_SCAN_RESET);
+    scan.phase=BT_SCAN_FAILED; bt_manager_step(&m,&session,&scan,now);
+    assert(m.blocked && !bt_manager_command(&m,&session,&scan,"reconnect",9,now));
+    puts("PASS: stopped scans retain evidence, retry indefinitely with capped backoff, and permit manual connection");
+}
+
 static void persistent_manager(void)
 {
     begin_bond(4); peer_pair_response[6]=3; run();
@@ -1029,7 +1106,7 @@ static void pairing_diagnostics(void)
 
 int main(void)
 {
-    vectors(); success(); failures(); framing(); pairing_diagnostics(); just_works(); report_protocol(); p5_input_subscriptions(); receive_diagnostics(); inspection(); bonding(); identity_bonding(); power_loss_recovery(); reconnect_link_failure(); persistent_manager();
+    vectors(); late_completion(); success(); failures(); framing(); pairing_diagnostics(); just_works(); report_protocol(); p5_input_subscriptions(); receive_diagnostics(); inspection(); bonding(); identity_bonding(); power_loss_recovery(); reconnect_link_failure(); stopped_scan_retry(); persistent_manager();
     bt_le_t s={0};
     assert(!bt_le_request(&s,"connect random zz:00:00:00:00:00",32,0));
     assert(!bt_le_request(&s,"disconnect junk",15,0));

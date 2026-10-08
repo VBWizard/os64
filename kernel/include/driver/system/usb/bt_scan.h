@@ -19,7 +19,7 @@ typedef enum {
     BT_SCAN_MASK, BT_SCAN_INQUIRY_MODE, BT_SCAN_INQUIRY, BT_SCAN_CLASSIC_WAIT,
     BT_SCAN_LE_HOST, BT_SCAN_LE_MASK, BT_SCAN_LE_PARAMS, BT_SCAN_LE_ENABLE,
     BT_SCAN_LE_WAIT, BT_SCAN_LE_DISABLE, BT_SCAN_DONE,
-    BT_SCAN_CLEANUP, BT_SCAN_FAILED
+    BT_SCAN_CLEANUP, BT_SCAN_STOPPED, BT_SCAN_FAILED
 } bt_scan_phase_t;
 
 // Owned by the serialized USB poll path. No allocation, waits or logging in
@@ -41,6 +41,8 @@ typedef void (*bt_scan_send_t)(void *context, uint16_t opcode,
                               const uint8_t *params, uint8_t length);
 bool bt_scan_start(bt_scan_t *s, uint64_t now_ms);
 bool bt_scan_start_le(bt_scan_t *s, uint64_t now_ms);
+// STOPPED retains the error after Reset and USB completion make reuse safe.
+bool bt_scan_quiescent(const bt_scan_t *s);
 bool bt_scan_request_valid(const char *data, size_t bytes);
 void bt_scan_event(void *context, const uint8_t *event, size_t bytes);
 void bt_scan_tick(bt_scan_t *s, uint64_t now_ms, bool usb_done, bool usb_failed,

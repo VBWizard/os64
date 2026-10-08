@@ -90,12 +90,50 @@ static void reports(void)
         bt_scan_event(&s,e,n);bt_scan_event(&classic,e,n);
     }
 }
+static void late_completion(void)
+{
+    bt_scan_t s={0}; assert(bt_scan_start(&s,0)); tick(&s,0);
+    complete(&s,0); tick(&s,2001);
+    assert(s.phase==BT_SCAN_FEATURES && !s.error && sent_op==0x1003);
+    // A reply alone does not release DMA, and a USB completion is not an HCI reply.
+    for(unsigned kind=0;kind<5;kind++) {
+        s=(bt_scan_t){0}; assert(bt_scan_start(&s,0)); tick(&s,0);
+        if(kind!=1) complete(&s,kind==2?0x0c:0);
+        if(kind==3) s.bad_reply=true;
+        unsigned before=sends;
+        bt_scan_tick(&s,2001,kind!=0,kind==4,send_command,NULL);
+        assert(s.phase==(kind==4?BT_SCAN_FAILED:BT_SCAN_CLEANUP) && s.error);
+        assert(sends==before);
+        if(kind==2) assert(s.error_status==0x0c && !strcmp(s.error,"HCI command rejected"));
+    }
+    // An unfinished scan still has its overall limit, even with a command reply.
+    s=(bt_scan_t){0}; assert(bt_scan_start(&s,0)); tick(&s,0); complete(&s,0);
+    tick(&s,40000); assert(s.phase==BT_SCAN_CLEANUP && !strcmp(s.error,"scan deadline expired"));
+    // Cleanup accepts a completed Reset seen late, retaining the original error.
+    s=(bt_scan_t){0}; assert(bt_scan_start(&s,0)); tick(&s,0); tick(&s,2000);
+    tick(&s,2001); complete(&s,0); tick(&s,4002);
+    assert(bt_scan_quiescent(&s) && !s.radio_active && !strcmp(s.error,"HCI command timed out"));
+    char out[512]; bt_scan_status(&s,out,sizeof(out)); assert(strstr(out,"stopped (retry available)"));
+    unsigned before=sends; tick(&s,9000); assert(sends==before && s.error);
+    assert(bt_scan_start(&s,9001) && !s.error);
+    for(unsigned kind=0;kind<3;kind++) {
+        s=(bt_scan_t){.phase=BT_SCAN_CLASSIC_WAIT,.deadline=10,.total_deadline=40000,.radio_active=true};
+        tick(&s,10); tick(&s,11);
+        if(kind!=1) complete(&s,kind==2?0x0c:0);
+        bt_scan_tick(&s,2012,kind!=0,false,send_command,NULL);
+        assert(s.phase==BT_SCAN_FAILED && s.radio_active && !bt_scan_start(&s,2013));
+    }
+    // An expired cleanup may not start a new Reset merely because USB finally finished.
+    s=(bt_scan_t){0}; assert(bt_scan_start(&s,0)); tick(&s,0); tick(&s,2000);
+    before=sends; tick(&s,4000); assert(s.phase==BT_SCAN_FAILED && sends==before);
+    assert(!bt_scan_start(&s,4001));
+}
 int main(void)
 {
     assert(bt_scan_request_valid("scan\n",5) && bt_scan_request_valid(" \tscan\r\n",8));
     assert(!bt_scan_request_valid("scan x",6) && !bt_scan_request_valid("scan\0",5));
     assert(!bt_scan_request_valid("",0));
-    reports();
+    reports(); late_completion();
     bt_scan_t s={0};assert(bt_scan_start(&s,0));assert(!bt_scan_start(&s,0));
     tick(&s,0);assert(sent_op==0x0c03);
     complete(&s,0);unsigned before=sends;
@@ -113,8 +151,8 @@ int main(void)
     complete(&s,0);tick(&s,10031);assert(s.phase==BT_SCAN_DONE && !s.radio_active);
     assert(bt_scan_start(&s,20000));assert(s.count==0);tick(&s,20000);complete(&s,0x0c);
     tick(&s,20001);assert(s.phase==BT_SCAN_CLEANUP);tick(&s,20002);assert(sent_op==0x0c03);
-    complete(&s,0);tick(&s,20003);assert(s.phase==BT_SCAN_FAILED && !s.radio_active);
-    assert(!bt_scan_start(&s,20004));
+    complete(&s,0);tick(&s,20003);assert(s.phase==BT_SCAN_STOPPED && !s.radio_active);
+    assert(s.error_status==0x0c && bt_scan_start(&s,20004));
     // No command response: cleanup is bounded, and preserves DMA ownership.
     s=(bt_scan_t){0};bt_scan_start(&s,0);tick(&s,0);tick(&s,2000);
     assert(s.phase==BT_SCAN_CLEANUP);before=sends;
@@ -122,7 +160,7 @@ int main(void)
     bt_scan_tick(&s,4000,false,false,send_command,NULL);assert(s.phase==BT_SCAN_FAILED);
     s=(bt_scan_t){.phase=BT_SCAN_CLASSIC_WAIT,.deadline=10,.total_deadline=40000,.radio_active=true};
     tick(&s,10);assert(s.phase==BT_SCAN_CLEANUP);tick(&s,11);complete(&s,0);tick(&s,12);
-    assert(s.phase==BT_SCAN_FAILED && !s.radio_active);
+    assert(s.phase==BT_SCAN_STOPPED && !s.radio_active);
     s=(bt_scan_t){.phase=BT_SCAN_LE_WAIT,.radio_active=true};
     bt_scan_tick(&s,0,true,true,send_command,NULL);assert(s.phase==BT_SCAN_FAILED && s.radio_active);
     char out[512];bt_scan_status(&s,out,sizeof(out));assert(strstr(out,"USB transport failed"));
@@ -130,7 +168,7 @@ int main(void)
     const uint8_t hardware_error[]={0x10,1,0x42};
     bt_scan_event(&s,hardware_error,sizeof(hardware_error));tick(&s,0);
     assert(s.phase==BT_SCAN_CLEANUP && s.error_status==0x42);
-    tick(&s,1);complete(&s,0);tick(&s,2);assert(s.phase==BT_SCAN_FAILED);
+    tick(&s,1);complete(&s,0);tick(&s,2);assert(s.phase==BT_SCAN_STOPPED);
     s=(bt_scan_t){0};bt_scan_start(&s,0);tick(&s,0);complete(&s,0);s.credits=0;
     before=sends;tick(&s,1);assert(sends==before && !s.pending);
     const uint8_t credit[]={0x0e,3,1,0,0};bt_scan_event(&s,credit,sizeof(credit));

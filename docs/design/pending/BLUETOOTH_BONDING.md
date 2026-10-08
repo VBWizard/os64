@@ -194,6 +194,15 @@ failure's classification, so it neither blocks a transient retry nor turns a
 key rejection into an automatic retry. The P5 timeout evidence and host
 regression coverage are recorded in `BLUETOOTH.md`.
 
+A scan protocol failure is retryable after HCI Reset and USB completion prove
+cleanup. Keep the scan error in `stopped (retry available)` until the next
+request; do not use its partial results to choose a connection. The manager
+backs off indefinitely at the thirty-second cap for these safely stopped scans,
+as Chris selected during PR #235 review. Transport failure or unconfirmed Reset
+remains terminal. Both scan and LE command waits consume completions already
+observed by the poll before applying the command deadline; this includes cleanup
+Reset, while preserving the overall scan/session setup limits.
+
 Acceptance requires typing without a `reconnect` command after keyboard off/on,
 after host reboot with the keyboard already on, and when the keyboard is turned
 on long after host startup. Cover recognized RPAs, absence/backoff, explicit

@@ -43,9 +43,9 @@ void bt_manager_step(bt_manager_t *m,bt_le_t *s,bt_scan_t *scan,uint64_t now)
     if(!bt_le_quiescent(s)) return;
     if(s->phase==BT_LE_STOPPED && !s->retryable) { m->blocked=true; return; }
     if(m->scan_owned) {
-        if(scan->phase!=BT_SCAN_DONE) return;
+        if(scan->phase!=BT_SCAN_DONE && scan->phase!=BT_SCAN_STOPPED) return;
         m->scan_owned=false;
-        if(manager_candidate(s,scan) && bt_le_request(s,"reconnect",9,now))
+        if(scan->phase==BT_SCAN_DONE && manager_candidate(s,scan) && bt_le_request(s,"reconnect",9,now))
             bt_le_reconnect_scan(s,scan);
         manager_retry(m,now); return;
     }
@@ -78,7 +78,7 @@ bool bt_manager_command(bt_manager_t *m,bt_le_t *s,bt_scan_t *scan,
         if(s->phase==BT_LE_STOPPED) (void)bt_le_request(s,p,n,now);
         m->suppressed=true; return true;
     }
-    if(scan->phase!=BT_SCAN_IDLE && scan->phase!=BT_SCAN_DONE) return false;
+    if(!bt_scan_quiescent(scan)) return false;
     if(!bt_le_request(s,p,n,now)) return false;
     bt_manager_observe(m,s,now);
     if(disconnect) m->suppressed=true;

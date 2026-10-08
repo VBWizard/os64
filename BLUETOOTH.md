@@ -50,8 +50,10 @@ advertisements do not supply the Classic class-of-device field. Random LE
 addresses may rotate; the listing shows air addresses. Bonded reconnect resolves
 RPAs using the saved identity key.
 
-A new scan replaces the previous list. Requests while busy, absent or failed are
-refused. The command is bounded to 32 bytes, accepts surrounding whitespace, and
+A new scan replaces the previous list. Requests while busy, absent or in
+`failed (reboot required)` are refused. `stopped (retry available)` retains a
+scan error after successful cleanup and permits another scan or connection.
+The command is bounded to 32 bytes, accepts surrounding whitespace, and
 is submitted on close so separate word/newline writes work. An empty write handle
 closed without data does nothing. `devices` is read-only. No operational adapter
 is reported explicitly. A read racing a USB poll may report `USB busy; retry this
@@ -178,8 +180,10 @@ reboot with an enabled saved bond, the manager runs two-second LE discovery roun
 It matches the saved identity or checks RPAs with controller AES, then reconnects,
 restores encryption, and configures HID. An absent peer causes backoff from two
 to thirty seconds between rounds; discovery continues so a keyboard turned on
-later can connect. The worker normally runs every two seconds to handle storage;
-it starts discovery when it publishes a restored bond. USB polling advances
+later can connect. A failed scan whose HCI Reset and USB completion prove safe
+cleanup uses the same capped backoff, without exhausting retries. Its partial
+results do not trigger a connection. The worker normally runs every two seconds
+to handle storage; it starts discovery when it publishes a restored bond. USB polling advances
 discovery/connection handoffs and retry deadlines without waiting for another
 worker visit. This is bounded background discovery, not an instantaneous wake
 guarantee.
@@ -279,12 +283,17 @@ HCI events; bulk IN carries ACL data after the firmware handoff. Receive
 rearming is deferred until after the event drain to bound radio work per pass.
 The decoder allocates no memory, waits on nothing and sanitizes untrusted names.
 
-Command waits are bounded to two seconds, Classic completion to twelve seconds,
-and the overall procedure to forty seconds before cleanup. A protocol failure
-attempts HCI Reset once when its command DMA is no longer in flight. A transport
-failure or an unsuccessful cleanup cannot prove that radio scanning stopped;
-status preserves `discovery may be active: yes` when appropriate. A failed
-adapter requires reboot before another scan; DMA storage remains owned.
+Command wait deadlines are two seconds, Classic completion twelve seconds,
+and the overall procedure forty seconds before cleanup. Scan and LE commands
+accept a successful HCI reply with completed USB transfers even when a poll
+observes them after the command deadline; the overall setup limits still apply.
+Cleanup also accepts a completed Reset observed late. Missing replies or USB
+completion, rejected replies, and transport failures retain their failure paths.
+A scan protocol failure attempts HCI Reset once when its command DMA is no
+longer in flight. Successful Reset and USB completion leave the scan stopped
+with diagnostics intact and permit retry. A transport failure or unsuccessful
+cleanup leaves `failed (reboot required)`; status preserves
+`discovery may be active: yes` when appropriate, and DMA storage remains owned.
 Timing depends on scheduler polling continuing to run, as recorded by the xHCI
 dispatch-frequency debt.
 
@@ -516,6 +525,18 @@ below; they do not establish the cause of this earlier radio timeout.
 
 ### Automatic boot connection and latency (2026-10-08)
 
+Cold-boot firmware loading also contributes to time before desktop readiness.
+The retained P5 log from the successful 2026-10-07 19:16 bring-up at `9b21368b`
+records upload start at tick 499, payload sent at 610, operational image 03
+confirmed at 615, and DDC configuration applied at 617. At 100 ticks/second,
+that is 1.11 seconds for the payload and about **1.18 seconds** through
+configuration, including endpoint-82 recovery. The log's timestamps are at
+10 ms granularity; the final console announcement immediately follows DDC in
+the loader. This is one measured cold load of 737,744 bytes, not a measurement
+from the final PR kernel. The synchronous load runs before the scheduler and
+delays later boot work. Warm boots that find operational firmware skip it;
+the keyboard reconnect timings below measure a separate stage.
+
 Chris confirmed that boot connection worked without manual scan or reconnect
 after the timeout fix, reporting about twelve seconds from desktop readiness to
 keyboard input. A read-only status snapshot showed encrypted saved-bond reuse,
@@ -637,6 +658,25 @@ of a new persisted bond with working input. No driver change was needed.
 The new pairing's static identity differs from the previous
 c8:cb:24:65:d1:95; that is not evidence of an RPA rotation or an ordinary bonded
 power-cycle identity change.
+
+### PR #235 round-one recovery corrections (2026-10-08)
+
+Fable identified that scan/LE command deadlines were tested before completions
+already drained by a late poll, and that successful scan cleanup still left a
+terminal failure. Host regressions reproduce the old command-timeout and manager
+behavior. Commands and cleanup now accept completed transfers observed late;
+scan cleanup enters the restartable stopped state, and the manager backs off
+without a failure-count ceiling, as Chris selected. Partial failed-scan results
+are not used for automatic connection, and last-scan timestamps record the failed
+round as finished. Actual transport, cleanup and security failures retain their
+existing restrictions.
+
+The scan, LE/manager, production xHCI loader/runtime, and shared mouse/HID host
+scripts pass under ASan/UBSan; the kernel builds, and the retirement grep and
+whitespace check pass. Tests cover missing USB/HCI completions, rejected Reset,
+forty consecutive stopped scans followed by saved-key connection, manual commands,
+policy disable/re-enable, and scan-history completion. These review corrections
+have not yet been boot-tested on the P5 and do not resolve the recorded MIC failure.
 
 Wire references: [Bluetooth Core Security Manager](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/host/security-manager-specification.html),
 [ATT](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/host/attribute-protocol--att-.html),

@@ -652,10 +652,7 @@ void bt_le_tick(bt_le_t *s,uint64_t now,bool control_done,bool bulk_done,bool us
     if(s->phase==BT_LE_CLEANUP) {
         // HCI Reset cancels initiation and disconnects an established link.
         // USB owns the buffers until both TDs finish, regardless of HCI state.
-        if(now>=s->deadline) { s->phase=BT_LE_FAILED; return; }
-        if(!control_done || !bulk_done) return;
-        if(s->pending && s->opcode==0x0c03) {
-            if(!s->command_done) return;
+        if(control_done && bulk_done && s->pending && s->opcode==0x0c03 && s->command_done) {
             s->pending=false;
             if(!s->status) {
                 s->connected=false; s->encrypted=false; s->outstanding=0; s->link_may_active=false;
@@ -666,6 +663,8 @@ void bt_le_tick(bt_le_t *s,uint64_t now,bool control_done,bool bulk_done,bool us
             }
             s->phase=BT_LE_FAILED; return;
         }
+        if(now>=s->deadline) { s->phase=BT_LE_FAILED; return; }
+        if(!control_done || !bulk_done || (s->pending && s->opcode==0x0c03)) return;
         s->pending=true; s->command_done=false; s->status=0; s->opcode=0x0c03;
         s->credits=0; command(ctx,0x0c03,NULL,0); return;
     }
@@ -674,8 +673,10 @@ void bt_le_tick(bt_le_t *s,uint64_t now,bool control_done,bool bulk_done,bool us
     }
     if(s->outstanding && now>=s->acl_deadline) { le_fail(s,"ACL completion timed out"); return; }
     if(s->pending) {
-        if(now>=s->command_deadline || (s->command_done && s->status)) {
-            le_fail(s,now>=s->command_deadline ? "HCI command timed out":"HCI command rejected"); return;
+        // Process replies already drained by this poll before expiring their wait.
+        bool timed_out=now>=s->command_deadline && !(control_done && s->command_done);
+        if(timed_out || (s->command_done && s->status)) {
+            le_fail(s,timed_out ? "HCI command timed out":"HCI command rejected"); return;
         }
         if(!control_done || !s->command_done) return;
         s->pending=false; le_command_finished(s); le_wipe(s->reply,sizeof(s->reply));

@@ -1153,12 +1153,13 @@ static void xhci_bt_runtime_poll(void)
 		}
 		bt_scan_tick(&p->scan, kTicksSinceStart * 1000 / TICKS_PER_SECOND,
 		             usb_done, usb_failed, xhci_bt_runtime_send, p);
-		if (p->scan.phase != phase && (p->scan.phase == BT_SCAN_DONE || p->scan.phase == BT_SCAN_FAILED)) {
+		if (p->scan.phase != phase && (p->scan.phase == BT_SCAN_DONE ||
+		    p->scan.phase == BT_SCAN_STOPPED || p->scan.phase == BT_SCAN_FAILED)) {
 			if (p->scan_history.valid && !p->scan_history.finished) {
 				p->scan_history.finished_at = kSystemCurrentTime;
 				p->scan_history.finished_ms = kTicksSinceStart * 1000 / TICKS_PER_SECOND;
 				p->scan_history.finished = true;
-				p->scan_history.failed = p->scan.phase == BT_SCAN_FAILED;
+				p->scan_history.failed = p->scan.phase != BT_SCAN_DONE;
 			}
 			printd(DEBUG_USB, "xhci: AX210 discovery %s devices=%u error=%s opcode=%04x status=%02x\n",
 			       p->scan.phase == BT_SCAN_DONE ? "complete" : "failed", p->scan.count,
