@@ -25,9 +25,12 @@
 //
 // The namespace (grown consumer-first, like everything else):
 //
-//   /sys/                        the root: "bus", "console", "cpu", "memory", "net",
+//   /sys/                        the root: "bluetooth", "bus", "console", "cpu", "memory", "net",
 //                                "block", "cache", "conf", "gui", "log", "mounts",
 //                                "openfiles", "random", "shlib", "clipboard", "appearance", "decorations"
+//   /sys/bluetooth/scan          discovery status; write "scan" to request.
+//   /sys/bluetooth/connection    LE keyboard status, session commands and persistent bond management.
+//   /sys/bluetooth/devices       snapshot of the latest Classic/LE results.
 //   /sys/console/font            the face the virtual terminals draw with.
 //                                READ: which face, its cell, the grid it
 //                                gives this screen, and the verdict on the
@@ -160,6 +163,9 @@
 #include "conf.h"                       // /sys/conf — the config search path and its takers
 #include "driver/net/net_device.h"      // /sys/net — kNetDevices, the registered NICs
 #include "knet.h"                       // /sys/net/knet — the drainer's counters
+#include "driver/system/usb/xhci.h"
+#include "driver/system/usb/bt_scan.h"
+#include "memcpy.h"
 #include "doorbell.h"                   // /sys/net/knet — every bell in the registry
 #include "driver/net/ipv4.h"            // kNetIPv4Address/Gateway/Netmask
 #include "gui/glass.h"                 // glass_view_count — /sys/gui's viewer count
@@ -351,6 +357,10 @@ typedef enum
 	SYS_NODE_NETTCP,     // /net/tcp — the transport, connection by connection
 	SYS_NODE_NETKNET,    // /net/knet — the drainer thread and its doorbell (DOORBELL.md)
 	SYS_NODE_NETCARD,    // /net/<name> — one registered NIC
+	SYS_NODE_BTDIR,      // /bluetooth — on-demand discovery
+	SYS_NODE_BTSCAN,     // /bluetooth/scan — status, write "scan" to request
+	SYS_NODE_BTCONNECTION, // /bluetooth/connection — LE keyboard session
+	SYS_NODE_BTDEVICES,  // /bluetooth/devices — most recent scan results
 	SYS_NODE_MOUNTSFILE, // /mounts — the mount table, one line per live mount (df's data)
 	SYS_NODE_BLOCKFILE,  // /block — devices and partitions, named and located (lsblk's data)
 	SYS_NODE_OPENFILESFILE, // /openfiles — the open-file registry (lsof's deep half)
@@ -433,6 +443,20 @@ static void sys_parse_path(const char *path, sys_path_t *out)
 		if (synth_next_component(path, &pos, comp, sizeof(comp)))
 			return;
 		out->type = SYS_NODE_CPUFILE;
+		return;
+	}
+
+	if (strcmp(comp, "bluetooth") == 0)
+	{
+		if (!synth_next_component(path, &pos, comp, sizeof(comp))) {
+			out->type = SYS_NODE_BTDIR;
+			return;
+		}
+		sys_node_type_t type = strcmp(comp, "scan") == 0 ? SYS_NODE_BTSCAN :
+		    strcmp(comp, "devices") == 0 ? SYS_NODE_BTDEVICES :
+		    strcmp(comp, "connection") == 0 ? SYS_NODE_BTCONNECTION : SYS_NODE_INVALID;
+		if (synth_next_component(path, &pos, comp, sizeof(comp))) return;
+		out->type = type;
 		return;
 	}
 
@@ -1889,6 +1913,7 @@ typedef enum
 	SYS_HANDLE_CLIPREAD,       // /sys/clipboard opened "r" — holds a ref
 	SYS_HANDLE_CLIPWRITE,      // /sys/clipboard opened "w" — holds a pending
 	SYS_HANDLE_FONTWRITE,      // /sys/console/font opened "w" — holds an image
+	SYS_HANDLE_BTWRITE,        // Bluetooth commands assembled until close
 } sys_handle_kind_t;
 
 typedef struct
@@ -1909,6 +1934,10 @@ typedef struct
 	snarf_pending_t  *pending;   // CLIPWRITE: the copy being accumulated
 	decoration_pending_t *decoration;
 	console_font_pending_t *font; // FONTWRITE: the image being accumulated
+	char bt_command[64];
+	bool bt_connection;
+	uint8_t bt_length;
+	bool bt_refused;
 } sys_file_handle_t;
 
 static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
@@ -1925,10 +1954,26 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 	bool is_decoration = (sp.type == SYS_NODE_DECORATIONS);
 	bool is_appearance = (sp.type == SYS_NODE_APPEARANCE);
 	bool is_font = (sp.type == SYS_NODE_CONSOLEFONT);
+	bool is_bt = (sp.type == SYS_NODE_BTSCAN || sp.type == SYS_NODE_BTCONNECTION);
 	if (mode == NULL || mode[0] == '\0' || mode[1] != '\0' || (mode[0] != 'r' && mode[0] != 'w'))
 		return -1;
-	if (mode[0] == 'w' && !is_probe && !is_clip && !is_appearance && !is_font && !is_decoration)
+	if (mode[0] == 'w' && !is_probe && !is_clip && !is_appearance && !is_font && !is_decoration && !is_bt)
 		return -1;
+
+	if (is_bt || sp.type == SYS_NODE_BTDEVICES) {
+		synth_text_t text = {0};
+		if (mode[0] == 'r') {
+			if (!synth_text_init(&text, BT_SCAN_TEXT_BYTES)) return -1;
+			text.len = xhci_bluetooth_read(text.buf, text.cap,
+			    sp.type == SYS_NODE_BTCONNECTION ? 2 : sp.type == SYS_NODE_BTDEVICES ? 1 : 0);
+		}
+		sys_file_handle_t *h = synth_snapshot_publish(vfs_file, &text, path, vfs_fs,
+		    sizeof(sys_file_handle_t), FILETYPE_SYSFILE);
+		if (!h) return -1;
+		if (mode[0] == 'w') h->kind = SYS_HANDLE_BTWRITE;
+		h->bt_connection = sp.type == SYS_NODE_BTCONNECTION;
+		return 0;
+	}
 
 	// The console's face. A reader gets the status text as an ordinary
 	// snapshot; a writer gets an empty handle that owns the image it is about
@@ -2132,7 +2177,8 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 }
 
 // Probe and appearance writes are complete commands, never partial streams.
-// Clipboard writes accumulate content which becomes visible at close.
+// Clipboard writes accumulate content which becomes visible at close;
+// Bluetooth scan writes assemble one bounded command, submitted at close.
 static int sys_write(vfs_file_t *vfs_file, const void *buffer, size_t size)
 {
 	sys_file_handle_t *h = (sys_file_handle_t *)vfs_file->handle;
@@ -2141,6 +2187,15 @@ static int sys_write(vfs_file_t *vfs_file, const void *buffer, size_t size)
 
 	if (h == NULL || buffer == NULL)
 		return -1;
+	if (h->kind == SYS_HANDLE_BTWRITE) {
+		if (h->bt_refused || size > (h->bt_connection ? sizeof(h->bt_command) : 32u) - h->bt_length) {
+			h->bt_refused = true;
+			return -1;
+		}
+		memcpy(h->bt_command + h->bt_length, buffer, size);
+		h->bt_length += size;
+		return (int)size;
+	}
 
 	if (h->kind == SYS_HANDLE_DECORATIONS_WRITE)
 		return decorations_write(h->decoration, buffer, size);
@@ -2209,14 +2264,9 @@ static int sys_write(vfs_file_t *vfs_file, const void *buffer, size_t size)
 	return (int)size;
 }
 
-// Close is the ONE file op the clipboard has to have its own version of. Read,
-// seek and tell are the generic snapshot ones unchanged, because a ref-held
-// immutable entry IS a snapshot — that is the whole reason the entries are
-// refcounted instead of copied. But the generic close frees snap.data, and
-// those bytes belong to the store, not to this handle.
-//
-// It is also where a copy becomes visible to everyone else: the seal happens
-// HERE, which is what makes "a multi-write copy is one snarf" true.
+// Close releases borrowed clipboard storage and submits accumulated writes.
+// Bluetooth assembles the command here because echo can write its word and
+// newline separately; malformed or oversized writes must not start a procedure.
 static int sys_close(vfs_file_t *vfs_file)
 {
 	sys_file_handle_t *h = (sys_file_handle_t *)vfs_file->handle;
@@ -2224,7 +2274,13 @@ static int sys_close(vfs_file_t *vfs_file)
 
 	if (h != NULL)
 	{
-		if (h->kind == SYS_HANDLE_DECORATIONS_WRITE) {
+		if (h->kind == SYS_HANDLE_BTWRITE) {
+			if (h->bt_refused || (h->bt_length &&
+			    (h->bt_connection ? !xhci_bluetooth_connection(h->bt_command, h->bt_length) :
+			     (!bt_scan_request_valid(h->bt_command, h->bt_length) || !xhci_bluetooth_scan()))))
+				verdict = -1;
+		}
+		else if (h->kind == SYS_HANDLE_DECORATIONS_WRITE) {
 			decorations_discard(h->decoration);
 			h->decoration = NULL;
 		}
@@ -2279,7 +2335,7 @@ static int sys_open_dir(vfs_directory_t **vfs_dir, const char *path,
 	if (sp.type != SYS_NODE_ROOT && sp.type != SYS_NODE_BUSDIR &&
 	    sp.type != SYS_NODE_PCIDIR && sp.type != SYS_NODE_CPUDIR &&
 	    sp.type != SYS_NODE_CPUCORE && sp.type != SYS_NODE_NETDIR &&
-	    sp.type != SYS_NODE_CONSOLEDIR && sp.type != SYS_NODE_MEMDIR)
+	    sp.type != SYS_NODE_CONSOLEDIR && sp.type != SYS_NODE_MEMDIR && sp.type != SYS_NODE_BTDIR)
 		return -1;
 
 	sys_dir_handle_t *h = kmalloc(sizeof(sys_dir_handle_t));
@@ -2322,7 +2378,7 @@ static int sys_read_dir(vfs_directory_t *vfs_dir, os64_dirent_t *entry)
 			// as the "log" entry that went missing from a merge in August —
 			// a listing that drops a name reads exactly like a name that
 			// does not exist.)
-			static const char *kSysRootDirs[] = { "bus", "console", "cpu", "memory", "net" };
+			static const char *kSysRootDirs[] = { "bluetooth", "bus", "console", "cpu", "memory", "net" };
 			static const char *kSysRootFiles[] = { "block", "cache", "conf", "gui", "log", "mounts", "openfiles", "random", "shlib", "clipboard", "appearance", "decorations" };
 			const int kDirCount  = (int)(sizeof(kSysRootDirs) / sizeof(kSysRootDirs[0]));
 			const int kFileCount = (int)(sizeof(kSysRootFiles) / sizeof(kSysRootFiles[0]));
@@ -2410,6 +2466,11 @@ static int sys_read_dir(vfs_directory_t *vfs_dir, os64_dirent_t *entry)
 			return 1;
 		}
 
+		case SYS_NODE_BTDIR:
+			if (h->index >= 3) return 0;
+			strncpy(entry->name, h->index == 0 ? "scan" : h->index == 1 ? "devices" : "connection", OS64_DIRENT_NAME_MAX);
+			h->index++;
+			return 1;
 		case SYS_NODE_NETDIR:
 		{
 			// The machine's own facts first — a reader asking "what are my
@@ -2498,6 +2559,19 @@ static int sys_stat(const char *path, os64_dirent_t *entry, vfs_filesystem_t *vf
 			strncpy(entry->name, "sys", OS64_DIRENT_NAME_MAX);
 			return 0;
 
+		case SYS_NODE_BTDIR:
+			entry->flags = OS64_DE_DIR;
+			strncpy(entry->name, "bluetooth", OS64_DIRENT_NAME_MAX);
+			return 0;
+		case SYS_NODE_BTSCAN:
+			strncpy(entry->name, "scan", OS64_DIRENT_NAME_MAX);
+			return 0;
+		case SYS_NODE_BTCONNECTION:
+			strncpy(entry->name, "connection", OS64_DIRENT_NAME_MAX);
+			return 0;
+		case SYS_NODE_BTDEVICES:
+			strncpy(entry->name, "devices", OS64_DIRENT_NAME_MAX);
+			return 0;
 		case SYS_NODE_BUSDIR:
 			entry->flags = OS64_DE_DIR;
 			strncpy(entry->name, "bus", OS64_DIRENT_NAME_MAX);

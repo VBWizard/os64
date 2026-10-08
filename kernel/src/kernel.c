@@ -626,6 +626,7 @@ void kernel_init()
 	// kernel task's block, so bootenv.conf is applied to it before any of
 	// them exist (bootenv.h has the design).
 	bootenv_apply(kKernelTask);
+	xhci_bluetooth_start_manager();
 
 	// ── The log daemon, as early as a log daemon can possibly start ──────────
 	// HERE, and not down with husk, is the whole point of the LOGD= flag. The

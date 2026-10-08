@@ -13,6 +13,7 @@
 #include "tty.h"     // the midwife half of the job: shells for knocked terminals
 #include "console_font.h"   // and a third trade: hanging a new face on the glass
 #include "logging/log.h"
+#include "driver/system/usb/xhci.h"
 
 #define KWORKER_SLEEP_TICKS (TICKS_PER_SECOND * 2)
 #define KWORKER_REAP_BATCH_SIZE 8
@@ -25,6 +26,8 @@
 static bool kworker_run_maintenance(void)
 {
 	bool did_work = false;
+	// Periodic policy and disk work must not keep the worker from sleeping.
+	xhci_bluetooth_maintain();
 	int reaped = task_reap_eligible_zombies(KWORKER_REAP_BATCH_SIZE);
 
 	paging_sentinel_check("kworker: after zombie reap");

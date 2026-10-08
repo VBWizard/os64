@@ -243,6 +243,8 @@ include/asm-offsets.h: src/asm-offsets.c GNUmakefile
 -include obj/asm-offsets.d
 
 # Compilation rules for *.S files (depend on asm-offsets.h so offsets stay current).
+obj/driver/system/usb/bt_firmware.S.o: ../firmware/intel/ibt-0041-0041.sfi ../firmware/intel/ibt-0041-0041.ddc ../firmware/intel/LICENCE.ibt_firmware
+
 obj/%.S.o: src/%.S include/asm-offsets.h GNUmakefile
 	@mkdir -p "$$(dirname $@)"
 	@$(CC) $(CFLAGS) -c $< -o $@
