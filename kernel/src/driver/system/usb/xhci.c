@@ -1123,7 +1123,7 @@ static void xhci_bt_runtime_poll(void)
 		           xhci_bt_acl_send, xhci_bt_key_report, p);
 		if (usb_done && !p->le.pending) crypto_wipe(p->tx.buffer + 512, 258);
 		if (p->tx_done) crypto_wipe(p->tx.buffer, 512);
-		if (p->le.phase == BT_LE_READY) hid_keyboard_tick(&p->keyboard);
+		if (bt_le_input_active(&p->le)) hid_keyboard_tick(&p->keyboard);
 		if (p->le.phase != before)
 			printd(DEBUG_USB, "xhci: AX210 LE phase=%u error=%s opcode=%04x status=%02x\n",
 			       p->le.phase, p->le.error ? p->le.error : "none", p->le.error_opcode, p->le.error_status);

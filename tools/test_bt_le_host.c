@@ -131,7 +131,7 @@ static void report_peripheral(const uint8_t *p,size_t n)
             const uint8_t rsp[]={9,7,7,0,2,8,0,0x4b,0x2a,9,0,0x12,10,0,0x4d,0x2a};
             incoming(4,rsp,sizeof(rsp));
         } else if(handle==11) {
-            const uint8_t rsp[]={9,7,15,0,0x12,16,0,0x4d,0x2a,21,0,4,22,0,0x4e,0x2a};
+            const uint8_t rsp[]={9,7,15,0,0x12,16,0,0x4d,0x2a,21,0,6,22,0,0x4e,0x2a};
             incoming(4,rsp,scenario==REPORT_PROTOCOL_NO_MODE?9:sizeof(rsp));
         } else {
             uint8_t rsp[]={1,8,handle,handle>>8,0x0a}; incoming(4,rsp,sizeof(rsp));
@@ -156,6 +156,10 @@ static void report_peripheral(const uint8_t *p,size_t n)
             assert(offset<=length);
             unsigned part=length-offset; if(part>22) part=22;
             memcpy(rsp+1,map+offset,part); incoming(4,rsp,part+1);
+        } else if(handle==17) {
+            const uint8_t ccc[]={0x0b,1,0}; incoming(4,ccc,sizeof(ccc));
+        } else if(handle==22) {
+            const uint8_t mode[]={0x0b,1}; incoming(4,mode,sizeof(mode));
         } else {
             assert(handle==12 || handle==18);
             rsp[1]=handle==12?2:scenario==REPORT_BAD_REF?99:7; rsp[2]=1; incoming(4,rsp,3);
@@ -221,6 +225,9 @@ static void peripheral(void)
             if(scenario==GATT_ERROR) {
                 const uint8_t err[]={1,0x12,11,0,5}; incoming(4,err,sizeof(err));
             } else { uint8_t ok=0x13; incoming(4,&ok,1); }
+        } else if(p[0]==0x0a) {
+            assert(n==3 && le_u16(p+1)==11);
+            const uint8_t ccc[]={0x0b,1,0}; incoming(4,ccc,sizeof(ccc));
         } else if(p[0]==3 || p[0]==0x1e) { /* server replies */ }
         else assert(!"unexpected ATT request");
     } else assert(le_u16(wire+6)==5);
@@ -355,6 +362,66 @@ static void receive_diagnostics(void)
     puts("PASS: receive metadata distinguishes ignored reports and connection updates, survives timeout cleanup");
 }
 
+// Stop after the peer receives a verification read, before it answers.
+static void hold_inspection_read(bt_le_phase_t phase)
+{
+    for(unsigned i=0;i<1000;i++) {
+        tick(true,true); controller();
+        if(tx_n && session.phase==phase && tx[8]==0x0a) {
+            assert(session.att_pending); tx_n=0; complete_acl(); return;
+        }
+        peripheral();
+    }
+    assert(!"inspection read never arrived");
+}
+static void inspection(void)
+{
+    bt_le_t idle={0}; assert(!bt_le_request(&idle,"inspect",7,0));
+    begin(REPORT_PROTOCOL); run();
+    assert(session.ccc_read && session.verified_ccc==1 && session.protocol_read && session.verified_protocol==1);
+    assert(session.inspections==1 && session.inspection_ms==session.ready_ms);
+    char status[4096]; bt_le_status(&session,status,sizeof(status));
+    assert(strstr(status,"HID configured; awaiting input") && !strstr(status,"state: keyboard ready"));
+    uint64_t ready=session.ready_ms; now+=200000;
+    assert(!bt_le_request(&session,"inspect extra",13,now));
+    assert(bt_le_request(&session,"inspect\n",8,now));
+    assert(!bt_le_request(&session,"inspect",7,now));
+    assert(bt_le_input_active(&session));
+    hold_inspection_read(BT_LE_VERIFY_CCC);
+    const uint8_t key[]={0x1b,16,0,2,0,4,0,0,0,0,0}; incoming(4,key,sizeof(key));
+    assert(keys==1 && session.att_pending && session.reports==1);
+    const uint8_t ccc[]={0x0b,1,0}; incoming(4,ccc,sizeof(ccc));
+    assert(session.phase==BT_LE_VERIFY_PROTOCOL && bt_le_input_active(&session));
+    run(); assert(session.phase==BT_LE_READY && session.inspections==2 && session.ready_ms==ready);
+    assert(session.inspection_ms>200000 && !releases);
+    bt_le_status(&session,status,sizeof(status));
+    assert(strstr(status,"state: keyboard ready"));
+    assert(strstr(status,"readback: CCC=0001 read=yes Protocol_Mode=1 read=yes completed=2"));
+    // Initial setup must not claim readiness if either setting failed to stick.
+    for(unsigned kind=0;kind<3;kind++) {
+        begin(REPORT_PROTOCOL);
+        hold_inspection_read(kind==1?BT_LE_VERIFY_PROTOCOL:BT_LE_VERIFY_CCC);
+        const uint8_t wrong[]={0x0b,0,0};
+        incoming(4,wrong,kind?2:3); run();
+        assert(session.phase==BT_LE_FAILED && !session.ready_ms && !session.inspections);
+        if(kind==0) assert(strstr(session.error,"notification setting readback mismatch"));
+        if(kind==1) assert(strstr(session.error,"Protocol Mode readback mismatch"));
+        if(kind==2) assert(session.malformed==1);
+    }
+    // An inspect after the original setup deadline gets its own bounded wait.
+    begin(REPORT_PROTOCOL); run(); now+=200000;
+    assert(bt_le_request(&session,"inspect",7,now)); hold_inspection_read(BT_LE_VERIFY_CCC);
+    incoming(4,key,sizeof(key)); now+=5001; tick(true,true);
+    assert(session.phase==BT_LE_CLEANUP && !strcmp(session.error,"peer response timed out"));
+    tick(true,true); assert(releases==1); controller(); tick(true,true);
+    assert(session.phase==BT_LE_FAILED && !bt_le_request(&session,"inspect",7,now));
+    begin(REPORT_PROTOCOL_NO_MODE); run();
+    assert(session.phase==BT_LE_READY && session.ccc_read && !session.protocol_read);
+    begin(NORMAL); run(); // Boot Protocol fixture advertises write-without-response, not read.
+    assert(session.phase==BT_LE_READY && session.ccc_read && !session.protocol_read);
+    puts("PASS: readback gates readiness; live inspect preserves input, checks settings and has bounded failure cleanup");
+}
+
 static void failures(void)
 {
     for(int kind=WRONG_CONFIRM;kind<=GATT_ERROR;kind++) {
@@ -441,7 +508,7 @@ static void pairing_diagnostics(void)
 
 int main(void)
 {
-    vectors(); success(); failures(); framing(); pairing_diagnostics(); just_works(); report_protocol(); receive_diagnostics();
+    vectors(); success(); failures(); framing(); pairing_diagnostics(); just_works(); report_protocol(); receive_diagnostics(); inspection();
     bt_le_t s={0};
     assert(!bt_le_request(&s,"connect random zz:00:00:00:00:00",32,0));
     assert(!bt_le_request(&s,"disconnect junk",15,0));

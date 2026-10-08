@@ -53,14 +53,34 @@ The address above was observed on the P5; it is not a default or an automatic
 connection target. `public` and `random` are distinct address types. Read the
 connection file again while pairing. When it displays a six-digit passkey, type
 that code **on the Bluetooth keyboard**, including leading zeroes, then Enter.
-The passkey window lasts up to sixty seconds. `keyboard ready` means link
-encryption, HID service discovery, keyboard report selection and notification
-subscription succeeded. `key reports` counts matching notifications; ordinary
-keys then use the existing HID input path, including modifiers and repeat.
+The passkey window lasts up to sixty seconds. `HID configured; awaiting input`
+means link encryption, HID discovery, keyboard report selection, subscription
+and settings readback succeeded. Status becomes `keyboard ready` after a matching
+input notification is decoded. `key reports` counts these notifications; keys
+use the existing HID input path, including modifiers and repeat. Host setup
+status does not establish the keyboard's own pairing UI state or a saved bond.
 
 ```sh
 echo disconnect > /sys/bluetooth/connection
 ```
+
+After subscription, CCC must read back as 0001; Protocol Mode is checked against
+the selected mode when the characteristic advertises Read. The readback values
+and successful inspection count are retained in status. A mismatch, rejected
+read or timeout fails setup with the existing bounded cleanup.
+
+To repeat these reads on an established encrypted session:
+
+```sh
+echo inspect > /sys/bluetooth/connection
+cat /sys/bluetooth/connection
+```
+
+`inspect` is asynchronous, refuses overlapping inspections, and leaves input
+and repeat active while it reads. Each inspection has a ten-second overall bound
+and the usual five-second ATT response deadline. It preserves the original ready
+timestamp and records the last successful inspection time. No periodic reads
+are enabled. This checks a live request/reply path without rewriting settings.
 
 Disconnect resets the Bluetooth controller and releases held keys. Once status
 returns to `idle`, another scan or connection can be requested. Scanning is
@@ -96,7 +116,10 @@ mode is LE Secure Connections. Legacy Just Works does not protect the pairing
 exchange against passive listeners or active impersonation; legacy passkey
 pairing also lacks Secure Connections' resistance to passive capture. Pairing is
 session-only: no bond or identity keys are distributed or stored, so a later
-connection requires pairing again.
+connection requires pairing again. This session-only path is experimental:
+[HOGP 1.0 sections 6.1–6.2](https://www.bluetooth.org/docman/handlers/downloaddoc.ashx?doc_id=245141)
+require bonding for both the HID Device and Host. Its omission is a keyboard
+compatibility gap, not merely a missing reconnect feature.
 
 The keyboard must expose HID service 0x1812. A notifying Boot Keyboard Input
 0x2a22 with a CCC descriptor and writable Protocol Mode 0x2a4e selects Boot
@@ -119,7 +142,7 @@ complete ACL packets, packets after readiness, unmatched connections, and
 ignored notifications; notification handles and lengths are retained without
 key contents. Status also retains initial connection parameters, L2CAP parameter
 update requests, and ready/disconnect timestamps (milliseconds since boot).
-The diagnostic build preserves the existing pairing and subscription sequence.
+Inspection reads use the existing encrypted ATT path; pairing policy is unchanged.
 
 Connection initiation has a twenty-second wait; HCI commands have two seconds,
 ATT requests and ACL completion have five seconds, and setup has an overall
@@ -187,7 +210,10 @@ discovery, key notification, disconnect, malformed
 framing, unsupported keyboards, wrong confirmation, command rejection, credits
 and USB ordering. Report-only fixtures cover a separate consumer report,
 optional Protocol Mode, multi-chunk and exact-boundary map reads, malformed maps
-and references, and key release on a mismatched notification.
+and references, and key release on a mismatched notification. Readback tests
+cover incorrect CCC/Protocol Mode values, malformed replies, optional reads,
+input during inspection, and inspection timeout cleanup after the original
+setup deadline.
 `tools/test_hid_keyboard_map_host.sh` checks arrays, bitmaps, unaligned padding,
 Report IDs, rollover and mutated descriptor bounds under ASan/UBSan. These are
 synthetic fixtures; the map suite also includes the P5 keyboard's captured
@@ -236,6 +262,16 @@ latency zero, supervision timeout 400 (4 seconds), and Protocol Mode handle
 it does not distinguish device silence from a stalled receive transport. Confirm
 the generic advertised device's identity and verify subscription/receive liveness
 before attributing this to the keyboard's HID layout.
+
+A controlled power-off scan after reboot omitted both keyboard entries. After
+power-on and BT 5.0 pairing mode, the next scan found Classic 02:11:23:34:59:f9
+and LE random de:73:10:60:93:6a again. Both scans completed without error or
+malformed reports. This supports the physical keyboard's association with the
+LE address used above. Notification-setting readback and live inspection are
+the next hardware checks. Chris also reported that rapid pairing-mode blinking
+continued during the typing attempts. With no delivered notifications, that
+makes incomplete device-side pairing/bonding a candidate cause; the LED's
+meaning and the causal link are not established by the host status.
 
 Wire references: [Bluetooth Core Security Manager](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/host/security-manager-specification.html),
 [ATT](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/host/attribute-protocol--att-.html),

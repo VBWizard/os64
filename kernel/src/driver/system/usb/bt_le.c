@@ -35,6 +35,11 @@ static int le_hex(char c)
     if(c>='A' && c<='F') return c-'A'+10;
     return -1;
 }
+bool bt_le_input_active(const bt_le_t *s)
+{
+    return s->connected && s->encrypted && (s->phase==BT_LE_READY ||
+        (s->ready_ms && (s->phase==BT_LE_VERIFY_CCC || s->phase==BT_LE_VERIFY_PROTOCOL)));
+}
 bool bt_le_request(bt_le_t *s,const char *p,size_t n,uint64_t now)
 {
     while(n && le_space(*p)) { p++; n--; }
@@ -42,6 +47,13 @@ bool bt_le_request(bt_le_t *s,const char *p,size_t n,uint64_t now)
     if(n==10 && le_equal((const uint8_t *)p,(const uint8_t *)"disconnect",10)) {
         if(s->phase==BT_LE_IDLE || s->phase==BT_LE_FAILED || s->phase==BT_LE_CLEANUP) return false;
         s->stop_requested=true; return true;
+    }
+    if(n==7 && le_equal((const uint8_t *)p,(const uint8_t *)"inspect",7)) {
+        if(s->phase!=BT_LE_READY || !bt_le_input_active(s) || s->att_pending) return false;
+        s->ccc_read=false; s->protocol_read=false;
+        s->verified_ccc=0; s->verified_protocol=0;
+        s->phase=BT_LE_VERIFY_CCC; s->now=now; s->total_deadline=now+10000;
+        return true;
     }
     if(s->phase!=BT_LE_IDLE) return false;
     bool just_works=false;
@@ -227,6 +239,12 @@ static void le_chars_done(bt_le_t *s)
         s->report_protocol=true; s->phase=BT_LE_REPORT_MAP;
     } else le_fail(s,"HID keyboard needs boot input or readable Report Map and notifying Report");
 }
+static void le_inspection_done(bt_le_t *s)
+{
+    s->inspection_ms=s->now; s->inspections++;
+    if(!s->ready_ms) s->ready_ms=s->now;
+    s->phase=BT_LE_READY;
+}
 static void le_att(bt_le_t *s,const uint8_t *p,size_t n,bt_le_report_t report,void *ctx)
 {
     if(!n || n>23) { le_bad(s); return; }
@@ -239,7 +257,7 @@ static void le_att(bt_le_t *s,const uint8_t *p,size_t n,bt_le_report_t report,vo
         if(n<3) { le_bad(s); return; }
         s->rx_notifications++; s->last_notification_handle=le_u16(p+1);
         s->last_notification_bytes=n-3;
-        if(s->phase==BT_LE_READY && s->encrypted && s->last_notification_handle==s->input_value) {
+        if(bt_le_input_active(s) && s->last_notification_handle==s->input_value) {
             uint8_t keys[8];
             if(s->report_protocol) {
                 if(!hid_keyboard_decode_map(&s->report_layout,p+3,n-3,keys)) {
@@ -360,7 +378,20 @@ static void le_att(bt_le_t *s,const uint8_t *p,size_t n,bt_le_report_t report,vo
         else if(previous>=s->boot_end) le_fail(s,"boot keyboard CCC descriptor missing");
         else s->cursor=previous+1;
     } else if(s->phase==BT_LE_SUBSCRIBE && p[0]==0x13 && n==1) {
-        s->ready_ms=s->now; s->phase=BT_LE_READY;
+        s->phase=BT_LE_VERIFY_CCC;
+    } else if(s->phase==BT_LE_VERIFY_CCC && p[0]==0x0b) {
+        if(n!=3) { le_bad(s); return; }
+        s->verified_ccc=le_u16(p+1); s->ccc_read=true;
+        if(s->verified_ccc!=1) { le_fail(s,"keyboard notification setting readback mismatch"); return; }
+        if(s->protocol && (s->protocol_properties&2)) s->phase=BT_LE_VERIFY_PROTOCOL;
+        else le_inspection_done(s);
+    } else if(s->phase==BT_LE_VERIFY_PROTOCOL && p[0]==0x0b) {
+        if(n!=2) { le_bad(s); return; }
+        s->verified_protocol=p[1]; s->protocol_read=true;
+        if(s->verified_protocol!=(s->report_protocol?1:0)) {
+            le_fail(s,"keyboard Protocol Mode readback mismatch"); return;
+        }
+        le_inspection_done(s);
     } else le_bad(s);
 }
 
@@ -394,7 +425,7 @@ static void le_acl_packet(bt_le_t *s,bt_le_report_t report,void *ctx)
     uint16_t flags=le_u16(s->wire),handle=flags&0xfff;
     size_t n=s->wire_need-4;
     s->rx_acl++;
-    if(s->phase==BT_LE_READY) s->rx_after_ready++;
+    if(bt_le_input_active(s)) s->rx_after_ready++;
     if(!s->connected || handle!=s->handle) { s->rx_unmatched_acl++; return; }
     if(flags&0xc000) { le_bad(s); return; }
     unsigned pb=(flags>>12)&3;
@@ -562,6 +593,9 @@ void bt_le_tick(bt_le_t *s,uint64_t now,bool control_done,bool bulk_done,bool us
             p[0]=0x52; le_put(p+1,s->protocol); p[3]=s->report_protocol?1:0;
             if(le_queue(s,4,p,4)) s->phase=BT_LE_SUBSCRIBE;
             break;
+        case BT_LE_VERIFY_CCC: case BT_LE_VERIFY_PROTOCOL:
+            p[0]=0x0a; le_put(p+1,s->phase==BT_LE_VERIFY_CCC?s->ccc:s->protocol);
+            le_att_send(s,p,3); break;
         case BT_LE_SUBSCRIBE:
             p[0]=0x12; le_put(p+1,s->ccc); p[3]=1; le_att_send(s,p,5); break;
         default: break;
@@ -603,7 +637,9 @@ void bt_le_tick(bt_le_t *s,uint64_t now,bool control_done,bool bulk_done,bool us
 }
 size_t bt_le_status(const bt_le_t *s,char *out,size_t cap)
 {
-    const char *state=s->phase==BT_LE_IDLE?"idle":s->phase==BT_LE_READY?"keyboard ready":
+    const char *state=s->phase==BT_LE_IDLE?"idle":s->phase==BT_LE_READY?
+        (s->reports?"keyboard ready":"HID configured; awaiting input"):
+        s->ready_ms && (s->phase==BT_LE_VERIFY_CCC || s->phase==BT_LE_VERIFY_PROTOCOL)?"inspecting HID settings":
         s->phase==BT_LE_FAILED?"failed (reboot required)":s->phase==BT_LE_CLEANUP?"stopping":
         s->phase<=BT_LE_CREATE?"initializing":s->phase==BT_LE_CONNECTING?"connecting":
         s->phase<=BT_LE_ENCRYPT_WAIT?"pairing": "discovering HID service";
@@ -621,7 +657,7 @@ size_t bt_le_status(const bt_le_t *s,char *out,size_t cap)
         "key reports: %u\nmalformed packets: %u\nHID service: %04x-%04x input: %04x CCC: %04x\n"
         "HID mode: %s map handle: %04x bytes: %u input candidates: %u report ID: %u\n"
         "%serror: %s (last command %04x status/reason %02x)\n"
-        "write connect|connect-justworks public|random XX:XX:XX:XX:XX:XX, or disconnect\n",
+        "write connect|connect-justworks public|random XX:XX:XX:XX:XX:XX, or inspect|disconnect\n",
         state,s->peer[5],s->peer[4],s->peer[3],s->peer[2],s->peer[1],s->peer[0],s->address_type?"random":"public",
         s->link_may_active?"yes":"no",
         s->encrypted?"yes":"no",s->just_works?"legacy Just Works (unauthenticated)":"legacy passkey",code,s->reports,s->malformed,s->service_start,s->service_end,s->input_value,s->ccc,
@@ -636,12 +672,15 @@ size_t bt_le_status(const bt_le_t *s,char *out,size_t cap)
             "initial connection: interval=%u latency=%u timeout=%u (1.25ms/events/10ms)\n"
             "parameter requests: %u last_signal=%02x min=%u max=%u latency=%u timeout=%u\n"
             "ready at ms: %lu disconnected at ms: %lu disconnect reason: %02x\n"
-            "HID Protocol Mode handle: %04x\n",
+            "HID Protocol Mode handle: %04x\n"
+            "readback: CCC=%04x read=%s Protocol_Mode=%u read=%s completed=%u last_ms=%lu\n",
             s->rx_bytes,s->rx_acl,s->rx_unmatched_acl,s->rx_after_ready,s->last_cid,s->last_att_opcode,
             s->rx_notifications,s->rx_ignored_notifications,s->last_notification_handle,s->last_notification_bytes,s->rx_indications,
             s->interval,s->latency,s->supervision_timeout,s->parameter_requests,s->last_signal_opcode,
             s->requested_parameters[0],s->requested_parameters[1],s->requested_parameters[2],s->requested_parameters[3],
-            s->ready_ms,s->disconnected_ms,s->disconnect_reason,s->protocol);
+            s->ready_ms,s->disconnected_ms,s->disconnect_reason,s->protocol,
+            s->verified_ccc,s->ccc_read?"yes":"no",s->verified_protocol,s->protocol_read?"yes":"no",
+            s->inspections,s->inspection_ms);
         if(n<0) return used;
         used+=(size_t)n<cap-used?(size_t)n:cap-used-1;
     }
