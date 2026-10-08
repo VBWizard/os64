@@ -18,7 +18,7 @@ typedef enum {
     BT_LE_ENCRYPT, BT_LE_ENCRYPT_WAIT, BT_LE_BOND_KEYS, BT_LE_SERVICES, BT_LE_CHARACTERISTICS,
     BT_LE_DESCRIPTORS, BT_LE_REPORT_MAP, BT_LE_REPORT_DESCRIPTORS, BT_LE_REPORT_REFERENCE,
     BT_LE_PROTOCOL, BT_LE_SUBSCRIBE, BT_LE_VERIFY_CCC, BT_LE_VERIFY_PROTOCOL, BT_LE_READY,
-    BT_LE_CLEANUP, BT_LE_FAILED
+    BT_LE_CLEANUP, BT_LE_FAILED, BT_LE_STOPPED
 } bt_le_phase_t;
 
 typedef struct {
@@ -28,7 +28,7 @@ typedef struct {
 } bt_le_report_char_t;
 
 // One boot-lifetime bond, reused only by an explicit reconnect command.
-// The public peer/local addresses bind the secret to this identity pair.
+// The public/static-random peer and public local address bind the secret to this pair.
 typedef struct {
     bool valid, authenticated;
     uint8_t address_type, peer[6], local[6], ltk[16], rand[8];
@@ -83,6 +83,8 @@ typedef struct {
 typedef void (*bt_le_acl_send_t)(void *, const uint8_t *, size_t);
 typedef void (*bt_le_report_t)(void *, const uint8_t [8]);
 bool bt_le_request(bt_le_t *, const char *, size_t, uint64_t);
+// IDLE and reset-confirmed STOPPED leave the controller available for discovery.
+bool bt_le_quiescent(const bt_le_t *);
 void bt_le_event(void *, const uint8_t *, size_t);
 void bt_le_receive(bt_le_t *, const uint8_t *, size_t, bt_le_report_t, void *);
 void bt_le_tick(bt_le_t *, uint64_t, bool, bool, bool,

@@ -295,6 +295,28 @@ static void runtime_transport(void)
     xhci_bt_runtime_poll();
     CHECK(bt_releases==1 && !p->rx[0].rearm_pending && !p->rx[1].rearm_pending);
     CHECK(!memcmp(p->tx.buffer+512,"\x03\x0c\0",3));
+    p->le.bond.valid=true;
+    p->scan.phase=BT_SCAN_DONE; p->scan.count=1;
+    const uint8_t reset_ok[]={0x0e,4,1,3,0x0c,0};
+    xhci_bt_runtime_event(p,reset_ok,sizeof(reset_ok));
+    CHECK(!xhci_bluetooth_scan() && !xhci_bluetooth_connection("reconnect",9));
+    s_hc->xfer_done=true; s_hc->xfer_cc=TRB_CC_SUCCESS; s_hc->xfer_actual=3;
+    xhci_bt_runtime_poll();
+    CHECK(p->le.phase==BT_LE_STOPPED && p->le.bond.valid);
+    CHECK(p->scan.phase==BT_SCAN_IDLE && !p->scan.count);
+    CHECK(xhci_bluetooth_connection("reconnect",9) && p->le.phase==BT_LE_RESET);
+    // Exercise discovery's event owner after completed LE cleanup as well.
+    p->le.phase=BT_LE_STOPPED;
+    CHECK(xhci_bluetooth_scan() && p->scan.phase==BT_SCAN_RESET);
+    CHECK(!xhci_bluetooth_connection("reconnect",9));
+    xhci_bt_runtime_poll();
+    CHECK(p->scan.pending && p->scan.opcode==0x0c03);
+    xhci_bt_runtime_event(p,reset_ok,sizeof(reset_ok));
+    CHECK(p->scan.command_done && p->le.phase==BT_LE_STOPPED);
+    s_hc->xfer_done=true; s_hc->xfer_cc=TRB_CC_SUCCESS; s_hc->xfer_actual=3;
+    xhci_bt_runtime_poll();
+    CHECK(p->scan.phase==BT_SCAN_FEATURES && p->scan.opcode==0x1003);
+    p->scan=(bt_scan_t){0};
     p->failed=true; p->le.phase=BT_LE_FAILED; p->le.bond.valid=true;
     memset(p->le.bond.ltk,0x5a,sizeof(p->le.bond.ltk));
     unsigned enqueued=p->device->ep0.enqueue;

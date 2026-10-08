@@ -137,9 +137,10 @@ in status. Partial or rejected exchanges wipe pending secrets and do not replace
 a previously committed cache. Status distinguishes requested, complete, cached
 and reused bonds.
 
-After an explicit `disconnect` has returned to `idle`, `reconnect` uses that
+After an explicit `disconnect` has returned to `idle`, or error cleanup has
+reached `stopped (retry available)`, `reconnect` uses that
 cached key without repeating pairing or silently falling back to a weaker mode.
-`forget` erases the local cache while idle or failed; it does not erase the
+`forget` erases the local cache while idle, stopped or failed; it does not erase the
 keyboard's own record. A new explicit bond request can replace the one-record
 cache after successful key distribution.
 
@@ -152,8 +153,10 @@ echo reconnect > /sys/bluetooth/connection
 **The cache is lost on reboot.** After reboot, put the keyboard back into pairing
 mode and bond again. Persistent storage, identity-key resolution and automatic
 reconnect are tracked in DEBTS.md. Bond commands accept public or static random
-addresses; rotating private addresses require identity support. A failed session
-still requires reboot before another connection attempt.
+addresses; rotating private addresses require identity support. Successful reset
+cleanup permits another connection or scan without reboot. Transport failures
+and unconfirmed reset cleanup still require reboot. The next stages are described
+in [Bluetooth bonding and reconnection](docs/design/pending/BLUETOOTH_BONDING.md).
 
 The keyboard must expose HID service 0x1812. A notifying Boot Keyboard Input
 0x2a22 with a CCC descriptor and writable Protocol Mode 0x2a4e selects Boot
@@ -187,9 +190,13 @@ Inspection reads use the existing encrypted ATT path; pairing policy is unchange
 Connection initiation has a twenty-second wait; HCI commands have two seconds,
 ATT requests and ACL completion have five seconds, and setup has an overall
 150-second bound. Runtime errors release held keys and attempt a bounded HCI
-Reset after outstanding USB transfers finish. Failure status is retained and
-requires reboot; it never claims the link is inactive unless a disconnect or
-successful reset proves it. USB DMA remains allocated if transport fails.
+Reset after outstanding USB transfers finish. Successful reset and completed USB
+transfers leave `stopped (retry available)`, retaining the error and bond while
+allowing a new explicit connection or scan. `disconnect` from stopped clears
+session diagnostics and returns to idle. A failed or timed-out reset, or USB
+failure, leaves `failed (reboot required)`. Status does not claim the link is
+inactive unless a disconnect or successful reset proves it. USB DMA remains
+allocated if transport fails.
 
 ## Controller and transport
 
@@ -255,7 +262,11 @@ cover incorrect CCC/Protocol Mode values, malformed replies, optional reads,
 input during inspection, and inspection timeout cleanup after the original
 setup deadline. Bond tests cover encrypted key ordering, missing/partial keys,
 cache preservation, cached-key reconnection, identity checks, forgetting and
-secret cleanup. A fixture with the P5's public HID attributes checks subscription
+secret cleanup. Power-loss fixtures verify direct cached-key reconnect after
+confirmed cleanup, held-key release, diagnostic retention, and refusal to retry
+after missing/rejected reset completion or USB failure. The production xHCI
+harness checks that cleanup resets discovery state and routes subsequent scan
+events correctly. A fixture with the P5's public HID attributes checks subscription
 to five input reports, including reports after the selected keyboard and a
 Report ID absent from the map, filtering of unrelated notifications, exclusion
 of Output references, and failure on a rejected secondary CCC write. Its keys
@@ -389,9 +400,10 @@ first issuing `disconnect` prevented both `reconnect` and a subsequent
 `disconnect`/`reconnect` sequence from working. His working address differed
 from the earlier example in the instructions. No before/after address scan or
 connection-status snapshot was captured for this power-off case, so an address
-change is a candidate explanation, not a confirmed cause. The driver also
-retains unexpected-disconnect failures until reboot. Follow-up work should
-distinguish peer address changes from failed-session recovery, alongside saving
+change is a candidate explanation, not a confirmed cause. At `a58ad4bf` the driver
+also retained unexpected-disconnect failures until reboot. Host-tested recovery
+now permits retry after confirmed reset cleanup; P5 power-cycle validation must
+distinguish peer address changes from session recovery, alongside saving
 bonds across host reboot. Explicit same-boot disconnect/reconnect success does
 not establish recovery from unexpected keyboard power loss.
 

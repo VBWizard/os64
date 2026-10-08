@@ -337,7 +337,7 @@ static void begin(int which)
 }
 static void run(void)
 {
-    for(unsigned i=0;i<1000 && session.phase!=BT_LE_READY && session.phase!=BT_LE_FAILED;i++) {
+    for(unsigned i=0;i<1000 && session.phase!=BT_LE_READY && session.phase!=BT_LE_FAILED && session.phase!=BT_LE_STOPPED;i++) {
         tick(true,true); controller(); peripheral();
         if(scenario>=JUST_WORKS_OPT_IN) assert(!session.passkey_visible && !session.passkey);
     }
@@ -373,7 +373,7 @@ static void just_works(void)
     assert(!session.just_works); // The next request chooses its own association mode.
     for(int which=JUST_WORKS_BAD_CONFIRM;which<=JUST_WORKS_INVALID_IO;which++) {
         begin(which); run();
-        assert(session.phase==BT_LE_FAILED && !session.encrypted && !session.connected && !keys);
+        assert(session.phase==BT_LE_STOPPED && !session.encrypted && !session.connected && !keys);
         if(which==JUST_WORKS_BAD_CONFIRM) assert(!strcmp(session.error,"pairing confirm mismatch"));
         if(which==JUST_WORKS_MITM) assert(!strcmp(session.error,"peer requires authenticated pairing"));
         if(which==JUST_WORKS_INVALID_IO) assert(!strcmp(session.error,"peer IO capability unsupported"));
@@ -392,7 +392,7 @@ static void report_protocol(void)
     for(int which=REPORT_PROTOCOL;which<=REPORT_MAP_EXACT;which++) {
         begin(which); run();
         if(which==REPORT_BAD_REF || which==REPORT_BAD_MAP || which==REPORT_MAP_TOO_LONG) {
-            assert(session.phase==BT_LE_FAILED && !keys);
+            assert(session.phase==BT_LE_STOPPED && !keys);
             char status[8192]; size_t length=bt_le_status(&session,status,sizeof(status));
             assert(length==strlen(status) && strstr(status,"report map 0000: 05 01"));
             for(size_t cap=0;cap<sizeof(status);cap+=17) {
@@ -421,7 +421,7 @@ static void p5_input_subscriptions(void)
     for(int which=P5_REPORTS;which<=P5_REPORT_OUTPUT;which++) {
         begin(which); run();
         if(which==P5_REPORT_WRITE_ERROR) {
-            assert(session.phase==BT_LE_FAILED && !keys && p5_subscriptions==15);
+            assert(session.phase==BT_LE_STOPPED && !keys && p5_subscriptions==15);
             assert(!strcmp(session.error,"GATT request rejected")); continue;
         }
         assert(session.phase==BT_LE_READY && session.encrypted);
@@ -466,7 +466,7 @@ static void receive_diagnostics(void)
     now+=64000; session.now=now;
     const uint8_t lost[]={5,4,0,0x0b,0,8}; event(lost,sizeof(lost));
     tick(true,true); controller(); tick(true,true);
-    assert(session.phase==BT_LE_FAILED && session.disconnect_reason==8 && session.disconnected_ms);
+    assert(session.phase==BT_LE_STOPPED && session.disconnect_reason==8 && session.disconnected_ms);
     assert(session.rx_acl==acl_count && session.rx_notifications==1 && session.parameter_requests==1);
     char status[4096]; bt_le_status(&session,status,sizeof(status));
     assert(strstr(status,"disconnect reason: 08") && strstr(status,"notifications: total=1 ignored=1"));
@@ -514,7 +514,7 @@ static void inspection(void)
         hold_inspection_read(kind==1?BT_LE_VERIFY_PROTOCOL:BT_LE_VERIFY_CCC);
         const uint8_t wrong[]={0x0b,0,0};
         incoming(4,wrong,kind?2:3); run();
-        assert(session.phase==BT_LE_FAILED && !session.ready_ms && !session.inspections);
+        assert(session.phase==BT_LE_STOPPED && !session.ready_ms && !session.inspections);
         if(kind==0) assert(strstr(session.error,"notification setting readback mismatch"));
         if(kind==1) assert(strstr(session.error,"Protocol Mode readback mismatch"));
         if(kind==2) assert(session.malformed==1);
@@ -525,7 +525,7 @@ static void inspection(void)
     incoming(4,key,sizeof(key)); now+=5001; tick(true,true);
     assert(session.phase==BT_LE_CLEANUP && !strcmp(session.error,"peer response timed out"));
     tick(true,true); assert(releases==1); controller(); tick(true,true);
-    assert(session.phase==BT_LE_FAILED && !bt_le_request(&session,"inspect",7,now));
+    assert(session.phase==BT_LE_STOPPED && !bt_le_request(&session,"inspect",7,now));
     begin(REPORT_PROTOCOL_NO_MODE); run();
     assert(session.phase==BT_LE_READY && session.ccc_read && !session.protocol_read);
     begin(NORMAL); run(); // Boot Protocol fixture advertises write-without-response, not read.
@@ -578,7 +578,7 @@ static void bonding(void)
     begin_bond(2); run(); stop_session(); session.bond.local[0]^=1;
     peer_bonding=false; peer_reconnecting=true;
     assert(bt_le_request(&session,"reconnect",9,now)); run();
-    assert(session.phase==BT_LE_FAILED && strstr(session.error,"different local controller"));
+    assert(session.phase==BT_LE_STOPPED && strstr(session.error,"different local controller"));
     assert(!session.connected && bt_le_request(&session,"forget",6,now));
     assert_zero(&session.bond,sizeof(session.bond));
     // Passkey bonding retains authentication on cached-key reconnection too.
@@ -593,7 +593,7 @@ static void bonding(void)
     // Missing distribution or bonding consent is refused before any key exchange.
     for(unsigned field=3;field<=6;field++) {
         begin_bond(2); peer_pair_response[field]=field==4?12:field==5?1:0; run();
-        assert(session.phase==BT_LE_FAILED && !session.bond.valid && !session.bond_complete);
+        assert(session.phase==BT_LE_STOPPED && !session.bond.valid && !session.bond_complete);
     }
     // One key half is insufficient; timeout leaves no pending secret or new cache.
     begin_bond(1); run(); assert(session.phase==BT_LE_BOND_KEYS && session.bond_key_stage==1);
@@ -629,12 +629,69 @@ static void bonding(void)
     puts("PASS: encrypted ordered bond distribution, cached-key reconnect, identity binding, forgetting and secret cleanup");
 }
 
+static void power_loss_recovery(void)
+{
+    begin_bond(2); run();
+    bt_le_bond_t saved=session.bond;
+    const uint8_t key[]={0x1b,16,0,2,0,4,0,0,0,0,0}; incoming(4,key,sizeof(key));
+    const uint8_t lost[]={5,4,0,0x0b,0,8}; event(lost,sizeof(lost));
+    assert(session.phase==BT_LE_CLEANUP);
+    assert(!bt_le_request(&session,"reconnect",9,now));
+    unsigned sent=commands;
+    tick(false,true); tick(true,false);
+    assert(commands==sent && releases==1);
+    tick(true,true); controller(); // Reset reply precedes USB completion.
+    tick(false,true);
+    assert(!bt_le_request(&session,"reconnect",9,now));
+    tick(true,true);
+    assert(!session.connected && !session.link_may_active);
+    assert(session.disconnect_reason==8 && !strcmp(session.error,"peer disconnected"));
+    assert(!memcmp(&saved,&session.bond,sizeof(saved)));
+    peer_bonding=false; peer_reconnecting=true; peer_key_delivery=0; rand_calls=0;
+    assert(bt_le_request(&session,"reconnect",9,now)); run();
+    assert(session.phase==BT_LE_READY && session.bond_reused && !rand_calls);
+    incoming(4,key,sizeof(key)); assert(keys==2);
+    event(lost,sizeof(lost)); run();
+    char status[4096]; bt_le_status(&session,status,sizeof(status));
+    assert(strstr(status,"stopped (retry available)"));
+    assert(bt_le_request(&session,"forget",6,now));
+    assert_zero(&session.bond,sizeof(session.bond));
+    assert(!bt_le_request(&session,"reconnect",9,now));
+    sent=commands;
+    assert(bt_le_request(&session,"disconnect",10,now));
+    assert(session.phase==BT_LE_IDLE && !session.error && commands==sent);
+
+    // A refused pairing may be retried with an explicitly selected policy.
+    begin(JUST_WORKS); run();
+    assert(session.phase==BT_LE_STOPPED && !session.bond.valid);
+    scenario=JUST_WORKS_OPT_IN;
+    peer_pair_response[3]=1;
+    const char *retry="connect-justworks random f8:2c:fe:ff:f0:1a";
+    assert(bt_le_request(&session,retry,strlen(retry),now)); run();
+    assert(session.phase==BT_LE_READY && session.just_works && !session.bond_reused);
+
+    // Without a successful reset, another session could race live controller state.
+    for(unsigned kind=0;kind<3;kind++) {
+        begin_bond(2); run(); event(lost,sizeof(lost)); tick(true,true);
+        if(kind==0) {
+            const uint8_t rejected[]={0x0e,4,1,3,0x0c,0x0c};
+            cmd_n=0; event(rejected,sizeof(rejected)); tick(true,true);
+        } else if(kind==1) { now+=3001; tick(true,true); }
+        else bt_le_tick(&session,++now,true,true,true,command,acl,report,NULL);
+        assert(session.phase==BT_LE_FAILED && session.bond.valid);
+        assert(!bt_le_request(&session,"reconnect",9,now));
+        assert(!bt_le_request(&session,"disconnect",10,now));
+        assert(bt_le_request(&session,"forget",6,now));
+    }
+    puts("PASS: power-loss recovery preserves bonds, releases keys and gates retry on reset and USB completion");
+}
+
 static void failures(void)
 {
     for(int kind=WRONG_CONFIRM;kind<=GATT_ERROR;kind++) {
         begin(kind); run();
         if(kind==SHARED_BUFFER) assert(session.phase==BT_LE_READY);
-        else { assert(session.phase==BT_LE_FAILED && !session.connected && !keys); assert(session.error); }
+        else { assert(session.phase==BT_LE_STOPPED && !session.connected && !keys); assert(session.error); }
     }
     begin(NORMAL); tick(true,true); unsigned sent=commands;
     controller(); tick(false,true); assert(commands==sent); // HCI reply cannot reuse DMA before USB completion.
@@ -705,7 +762,7 @@ static void pairing_diagnostics(void)
         assert(!memcmp(session.response,response,7));
         assert(!strcmp(session.error,reasons[i]));
         tick(true,true); controller(); tick(true,true);
-        assert(session.phase==BT_LE_FAILED && !memcmp(session.response,response,7));
+        assert(session.phase==BT_LE_STOPPED && !memcmp(session.response,response,7));
         char status[1024]; bt_le_status(&session,status,sizeof(status));
         assert(strstr(status,"pairing response: 02 ") && strstr(status,"peer capabilities: IO=") && strstr(status,reasons[i]));
         for(unsigned j=0;j<16;j++) assert(session.tk[j]==0);
@@ -715,7 +772,7 @@ static void pairing_diagnostics(void)
 
 int main(void)
 {
-    vectors(); success(); failures(); framing(); pairing_diagnostics(); just_works(); report_protocol(); p5_input_subscriptions(); receive_diagnostics(); inspection(); bonding();
+    vectors(); success(); failures(); framing(); pairing_diagnostics(); just_works(); report_protocol(); p5_input_subscriptions(); receive_diagnostics(); inspection(); bonding(); power_loss_recovery();
     bt_le_t s={0};
     assert(!bt_le_request(&s,"connect random zz:00:00:00:00:00",32,0));
     assert(!bt_le_request(&s,"disconnect junk",15,0));

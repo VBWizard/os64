@@ -48,15 +48,18 @@ bool bt_le_input_active(const bt_le_t *s)
     return s->connected && s->encrypted && (s->phase==BT_LE_READY ||
         (s->ready_ms && (s->phase==BT_LE_VERIFY_CCC || s->phase==BT_LE_VERIFY_PROTOCOL)));
 }
+bool bt_le_quiescent(const bt_le_t *s)
+{ return s->phase==BT_LE_IDLE || s->phase==BT_LE_STOPPED; }
 bool bt_le_request(bt_le_t *s,const char *p,size_t n,uint64_t now)
 {
     while(n && le_space(*p)) { p++; n--; }
     while(n && le_space(p[n-1])) n--;
     if(n==6 && le_equal((const uint8_t *)p,(const uint8_t *)"forget",6)) {
-        if(s->phase!=BT_LE_IDLE && s->phase!=BT_LE_FAILED) return false;
+        if(!bt_le_quiescent(s) && s->phase!=BT_LE_FAILED) return false;
         le_wipe(&s->bond,sizeof(s->bond)); return true;
     }
     if(n==10 && le_equal((const uint8_t *)p,(const uint8_t *)"disconnect",10)) {
+        if(s->phase==BT_LE_STOPPED) { le_session_clear(s); return true; }
         if(s->phase==BT_LE_IDLE || s->phase==BT_LE_FAILED || s->phase==BT_LE_CLEANUP) return false;
         s->stop_requested=true; return true;
     }
@@ -67,7 +70,7 @@ bool bt_le_request(bt_le_t *s,const char *p,size_t n,uint64_t now)
         s->phase=BT_LE_VERIFY_CCC; s->now=now; s->total_deadline=now+10000;
         return true;
     }
-    if(s->phase!=BT_LE_IDLE) return false;
+    if(!bt_le_quiescent(s)) return false;
     bool just_works=false,bond_requested=false;
     if(n==9 && le_equal((const uint8_t *)p,(const uint8_t *)"reconnect",9)) {
         if(!s->bond.valid) return false;
@@ -135,7 +138,7 @@ static void le_c1_second(bt_le_t *s,uint8_t p[32])
 void bt_le_event(void *context,const uint8_t *e,size_t n)
 {
     bt_le_t *s=context;
-    if(s->phase==BT_LE_IDLE || s->phase==BT_LE_FAILED) return;
+    if(bt_le_quiescent(s) || s->phase==BT_LE_FAILED) return;
     if(n<2 || n!=2u+e[1]) { le_bad(s); return; }
     if(e[0]==0x0e || e[0]==0x0f) {
         bool cs=e[0]==0x0f;
@@ -572,7 +575,7 @@ void bt_le_tick(bt_le_t *s,uint64_t now,bool control_done,bool bulk_done,bool us
                 bt_scan_send_t command,bt_le_acl_send_t acl,bt_le_report_t report,void *ctx)
 {
     s->now=now;
-    if(s->phase==BT_LE_IDLE || s->phase==BT_LE_FAILED) return;
+    if(bt_le_quiescent(s) || s->phase==BT_LE_FAILED) return;
     if(usb_failed) {
         le_fail(s,"USB transport failed; reboot required");
         s->phase=BT_LE_FAILED;
@@ -592,6 +595,9 @@ void bt_le_tick(bt_le_t *s,uint64_t now,bool control_done,bool bulk_done,bool us
             if(!s->status) {
                 s->connected=false; s->encrypted=false; s->outstanding=0; s->link_may_active=false;
                 if(s->stop_requested) { le_session_clear(s); return; }
+                // Keep diagnostics until the next session. Reset and completed
+                // USB transfers prove discovery or an explicit retry is safe.
+                s->phase=BT_LE_STOPPED; return;
             }
             s->phase=BT_LE_FAILED; return;
         }
@@ -728,6 +734,7 @@ size_t bt_le_status(const bt_le_t *s,char *out,size_t cap)
     const char *state=s->phase==BT_LE_IDLE?"idle":s->phase==BT_LE_READY?
         (s->reports?"keyboard ready":"HID configured; awaiting input"):
         s->ready_ms && (s->phase==BT_LE_VERIFY_CCC || s->phase==BT_LE_VERIFY_PROTOCOL)?"inspecting HID settings":
+        s->phase==BT_LE_STOPPED?"stopped (retry available)":
         s->phase==BT_LE_FAILED?"failed (reboot required)":s->phase==BT_LE_CLEANUP?"stopping":
         s->phase<=BT_LE_CREATE?"initializing":s->phase==BT_LE_CONNECTING?"connecting":
         s->phase==BT_LE_BOND_KEYS?"receiving bond keys":
@@ -794,7 +801,7 @@ size_t bt_le_status(const bt_le_t *s,char *out,size_t cap)
     }
     // Keep the public descriptor after cleanup so unsupported hardware can be
     // diagnosed without another kernel build. Pairing secrets are not printed.
-    if(s->phase==BT_LE_FAILED && s->report_map_bytes) {
+    if((s->phase==BT_LE_FAILED || s->phase==BT_LE_STOPPED) && s->report_map_bytes) {
         for(unsigned i=0;i<s->report_map_bytes && used<cap-1;i++) {
             if(!(i%16)) {
                 n=snprintf(out+used,cap-used,"report map %04x:",i);

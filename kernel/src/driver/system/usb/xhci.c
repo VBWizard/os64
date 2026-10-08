@@ -565,7 +565,7 @@ static void xhci_bt_key_report(void *context, const uint8_t report[8])
 static void xhci_bt_runtime_event(void *context, const uint8_t *event, size_t bytes)
 {
 	xhci_bt_probe_t *p = context;
-	if (p->le.phase != BT_LE_IDLE)
+	if (!bt_le_quiescent(&p->le))
 		bt_le_event(&p->le, event, bytes);
 	else
 		bt_scan_event(&p->scan, event, bytes);
@@ -1116,7 +1116,7 @@ static void xhci_bt_runtime_poll(void)
 	    s_hc->xfer_done && (s_hc->xfer_cc != TRB_CC_SUCCESS ||
 	    ((p->scan.pending || p->le.pending) && s_hc->xfer_actual != 3u + p->tx.buffer[514])));
 	bool usb_done = s_hc->control_slot != p->device->slot || s_hc->xfer_done;
-	if (p->le.phase != BT_LE_IDLE) {
+	if (!bt_le_quiescent(&p->le)) {
 		bt_le_phase_t before = p->le.phase;
 		bt_le_tick(&p->le, kTicksSinceStart * 1000 / TICKS_PER_SECOND,
 		           usb_done, p->tx_done, usb_failed, xhci_bt_runtime_send,
@@ -1127,9 +1127,9 @@ static void xhci_bt_runtime_poll(void)
 		if (p->le.phase != before)
 			printd(DEBUG_USB, "xhci: AX210 LE phase=%u error=%s opcode=%04x status=%02x\n",
 			       p->le.phase, p->le.error ? p->le.error : "none", p->le.error_opcode, p->le.error_status);
-		// A completed user disconnect resets the controller. Clear the old
+		// Successful LE cleanup resets the controller. Clear the old
 		// discovery state, whose event masks no longer describe the hardware.
-		if (p->le.phase == BT_LE_IDLE) p->scan = (bt_scan_t){0};
+		if (bt_le_quiescent(&p->le)) p->scan = (bt_scan_t){0};
 		return;
 	}
 	bt_scan_phase_t phase = p->scan.phase;
@@ -1145,7 +1145,7 @@ bool xhci_bluetooth_scan(void)
 {
 	if (__sync_lock_test_and_set(&s_poll_busy, 1)) return false;
 	bool ok = s_bluetooth_hc && !s_bluetooth_hc->bluetooth.failed &&
-	    s_bluetooth_hc->bluetooth.le.phase == BT_LE_IDLE &&
+	    bt_le_quiescent(&s_bluetooth_hc->bluetooth.le) &&
 	    bt_scan_start(&s_bluetooth_hc->bluetooth.scan, kTicksSinceStart * 1000 / TICKS_PER_SECOND);
 	__sync_lock_release(&s_poll_busy);
 	return ok;
