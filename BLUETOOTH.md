@@ -384,6 +384,17 @@ and keyboard CCC/Protocol Mode readback succeeded. This verifies cached-key
 reconnection and input without a fresh pairing exchange in the same boot.
 Bond persistence across reboot and automatic reconnection remain unimplemented.
 
+At the end of testing, Chris reported that powering the keyboard off without
+first issuing `disconnect` prevented both `reconnect` and a subsequent
+`disconnect`/`reconnect` sequence from working. His working address differed
+from the earlier example in the instructions. No before/after address scan or
+connection-status snapshot was captured for this power-off case, so an address
+change is a candidate explanation, not a confirmed cause. The driver also
+retains unexpected-disconnect failures until reboot. Follow-up work should
+distinguish peer address changes from failed-session recovery, alongside saving
+bonds across host reboot. Explicit same-boot disconnect/reconnect success does
+not establish recovery from unexpected keyboard power loss.
+
 Wire references: [Bluetooth Core Security Manager](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/host/security-manager-specification.html),
 [ATT](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/host/attribute-protocol--att-.html),
 [L2CAP](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/host/logical-link-control-and-adaptation-protocol-specification.html),
