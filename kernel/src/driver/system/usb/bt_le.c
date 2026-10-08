@@ -209,18 +209,29 @@ void bt_le_event(void *context,const uint8_t *e,size_t n)
     } else if(e[0]==5) {
         if(n!=6) { le_bad(s); return; }
         if(s->connected && le_u16(e+3)==s->handle) {
-            bool retry=bt_le_input_active(s) && (e[5]==8 || e[5]==0x13 || e[5]==0x16);
+            bool first_error=!s->error;
+            bool retry=(bt_le_input_active(s) && (e[5]==8 || e[5]==0x13 || e[5]==0x16)) ||
+                (s->bond_reused && e[5]==8);
             s->disconnect_reason=e[5]; s->disconnected_ms=s->now;
             s->status=e[5]; s->connected=false; s->encrypted=false; s->link_may_active=false;
             le_fail(s,"peer disconnected");
-            s->retryable=retry;
+            // A trailing disconnect must preserve the first failure's policy:
+            // timeout may follow either a transient loss or a rejected key.
+            if(first_error) s->retryable=retry;
         }
     } else if(e[0]==8) {
         if(n!=6) { le_bad(s); return; }
         if(!s->connected || le_u16(e+3)!=s->handle) return;
         s->status=e[2];
         if(s->status || e[5]!=1 || (s->phase!=BT_LE_ENCRYPT && s->phase!=BT_LE_ENCRYPT_WAIT)) {
-            s->encrypted=false; le_fail(s,"link encryption failed or changed unexpectedly"); return;
+            bool first_error=!s->error;
+            bool retry=s->bond_reused && s->status==8 &&
+                (s->phase==BT_LE_ENCRYPT || s->phase==BT_LE_ENCRYPT_WAIT);
+            s->encrypted=false; le_fail(s,"link encryption failed or changed unexpectedly");
+            // Supervision timeout during saved-key setup is a lost connection,
+            // not evidence of a bad key. Cleanup still gates the next attempt.
+            if(first_error) s->retryable=retry;
+            return;
         }
         s->encrypted=true;
     } else if(e[0]==0x10) le_fail(s,"controller hardware error");

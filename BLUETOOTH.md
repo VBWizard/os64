@@ -318,7 +318,10 @@ keys, matching and nonmatching RPAs, air-address pairing confirms, controller
 binding, and encryption rejection after an RPA match. Manager tests restore an
 encoded bond, remain live through repeated empty scans, and automatically
 reconnect after power loss with a new RPA. They cover persistent disable,
-disconnect suppression and forgetting. `tools/test_bt_bond_store_host.sh` runs
+disconnect suppression and forgetting. Encryption-timeout fixtures check both
+Encryption Change/Disconnection Complete event orders and recovery through the
+manager; missing-key, authentication and MIC failures remain blocked even when
+followed by a timeout disconnect. `tools/test_bt_bond_store_host.sh` runs
 the production storage code with short I/O, corruption, sync/close/rename errors,
 and filesystem read-only demotion. The xHCI harness verifies disk callbacks run
 outside the poll lock and an in-flight save cannot acknowledge a newer forget.
@@ -453,6 +456,34 @@ now permits retry after confirmed reset cleanup; P5 power-cycle validation must
 distinguish peer address changes from session recovery, alongside saving
 bonds across host reboot. Explicit same-boot disconnect/reconnect success does
 not establish recovery from unexpected keyboard power loss.
+
+### Saved-bond reconnect timeout investigation (2026-10-08)
+
+After Chris observed `bond storage: saved` and powered the keyboard off/on,
+the captured status showed a saved-key reconnect to random c8:cb:24:65:d1:95.
+The connection reached encryption setup, then reported Encryption Change
+status 08 and Disconnection Complete reason 08. Cleanup completed, but automatic
+connection reported `user action required`. No new key distribution occurred.
+The subsequent manual scan did not contain that saved static identity; this
+snapshot alone does not establish what address the keyboard was advertising.
+
+The retry policy incorrectly blocked a supervision timeout during saved-key
+encryption setup. It now retries after successful reset cleanup, including when
+the timeout is delivered as Disconnection Complete before encryption completes.
+The first failure retains its retry classification when a trailing disconnect
+arrives. Authentication/key/MIC errors still require user action.
+[Core Vol 1 Part F section 2.8](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/architecture,-mixing,-and-conventions/controller-error-codes.html)
+defines status 08 as a connection timeout; it does not establish key rejection.
+
+A later read-only SSH snapshot, after a user-confirmed host reboot, showed
+`keyboard ready`, the same saved identity, `reused=yes`, `LTK verified: yes`,
+all five input subscriptions and 30 key reports. No Bluetooth commands or
+updated kernel were sent through SSH during this investigation. Chris also
+reported automatic reconnection after a manual scan. The post-reboot snapshot
+confirms persisted-key reuse on that identity; it does not establish whether
+the scan was necessary. The cause of the earlier radio timeout remains unknown.
+The fix passes the LE and production xHCI sanitizer suites and kernel build;
+its P5 power-cycle validation remains pending.
 
 Wire references: [Bluetooth Core Security Manager](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/host/security-manager-specification.html),
 [ATT](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/host/attribute-protocol--att-.html),

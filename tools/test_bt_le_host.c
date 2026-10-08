@@ -811,6 +811,45 @@ static void power_loss_recovery(void)
     puts("PASS: power-loss recovery preserves bonds, releases keys and gates retry on reset and USB completion");
 }
 
+static void reconnect_encryption_timeout(void)
+{
+    // The P5 reports Encryption Change 08 followed by Disconnection Complete 08.
+    // Exercise both event orders, timeout alone, and security errors followed by timeout.
+    for(unsigned kind=0;kind<6;kind++) {
+        begin_bond(2); run(); stop_session();
+        peer_bonding=false; peer_reconnecting=true;
+        bt_manager_t manager={.loaded=true,.automatic=true,.revision_seen=session.bond_revision};
+        bt_scan_t scan={0};
+        assert(bt_manager_command(&manager,&session,&scan,"reconnect",9,now));
+        for(unsigned i=0;i<100;i++) {
+            tick(true,true);
+            if(cmd_n && le_u16(cmd)==0x2019) break;
+            controller(); peripheral();
+        }
+        assert(cmd_n && le_u16(cmd)==0x2019 && session.connected);
+        cmd_n=0;
+        const uint8_t accepted[]={0x0f,4,0,1,0x19,0x20}; event(accepted,sizeof(accepted));
+        uint8_t enc[]={8,4,8,0x0b,0,0};
+        const uint8_t lost[]={5,4,0,0x0b,0,8};
+        if(kind>=3) enc[2]=kind==3?6:kind==4?5:0x3d;
+        if(kind==1) event(lost,sizeof(lost));
+        event(enc,sizeof(enc));
+        if(kind!=1 && kind!=2) event(lost,sizeof(lost));
+        run();
+        assert(session.phase==BT_LE_STOPPED && session.bond.valid && !session.encrypted);
+        assert(session.retryable==(kind<3));
+        bt_manager_step(&manager,&session,&scan,now);
+        if(kind>=3) { assert(manager.blocked && !manager.scan_owned); continue; }
+        assert(!manager.blocked && manager.scan_owned);
+        scan.phase=BT_SCAN_DONE; scan.count=1;
+        scan.devices[0].le=true; scan.devices[0].address_type=peer_air_type;
+        memcpy(scan.devices[0].address,peer_air,6);
+        bt_manager_step(&manager,&session,&scan,now); run();
+        assert(session.phase==BT_LE_READY && session.bond_reused && session.encrypted);
+    }
+    puts("PASS: reconnect encryption timeout resumes discovery; key/authentication/MIC errors remain blocked");
+}
+
 static void persistent_manager(void)
 {
     begin_bond(4); peer_pair_response[6]=3; run();
@@ -988,7 +1027,7 @@ static void pairing_diagnostics(void)
 
 int main(void)
 {
-    vectors(); success(); failures(); framing(); pairing_diagnostics(); just_works(); report_protocol(); p5_input_subscriptions(); receive_diagnostics(); inspection(); bonding(); identity_bonding(); power_loss_recovery(); persistent_manager();
+    vectors(); success(); failures(); framing(); pairing_diagnostics(); just_works(); report_protocol(); p5_input_subscriptions(); receive_diagnostics(); inspection(); bonding(); identity_bonding(); power_loss_recovery(); reconnect_encryption_timeout(); persistent_manager();
     bt_le_t s={0};
     assert(!bt_le_request(&s,"connect random zz:00:00:00:00:00",32,0));
     assert(!bt_le_request(&s,"disconnect junk",15,0));

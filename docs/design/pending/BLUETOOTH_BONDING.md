@@ -185,6 +185,11 @@ reconnect for the current boot until the user reconnects or enables it again;
 provide a persistent disable setting for users who want manual connection.
 Forget cancels retries and removes the bond. Rejected keys and unrecognized
 identities require user action rather than repeated pairing attempts.
+Controller-reported connection timeout during saved-key encryption setup is
+retryable after successful cleanup. A trailing disconnect preserves the first
+failure's classification, so it neither blocks a transient retry nor turns a
+key rejection into an automatic retry. The P5 timeout evidence and host
+regression coverage are recorded in `BLUETOOTH.md`.
 
 Acceptance requires typing without a `reconnect` command after keyboard off/on,
 after host reboot with the keyboard already on, and when the keyboard is turned
