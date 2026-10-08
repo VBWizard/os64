@@ -203,10 +203,16 @@ preserves them for the next attempt. That attempt returned
 without starting encryption; cleanup reported the link inactive.
 At `ced6b35b`, the P5's explicit Just Works attempt reached HID service discovery
 after successful encryption, finding service 0015–0034 with no Boot Keyboard
-Input. The boot-only guard refused it and reset the link. Report Map discovery
-and typing require the next P5 validation; simulated success does not establish
-compatibility with that keyboard's actual descriptor. Its random LE address
+Input. The boot-only guard refused it and reset the link. Its random LE address
 changed between attempts, so scan again before connecting.
+
+At `603829b0`, the P5 reached `keyboard ready`, `encrypted: yes`, with no error
+or malformed packets. The unnamed keyboard supplied a 166-byte Report Map at
+0030 and five notifying Report candidates. Report Reference 001b identified
+keyboard input report ID 1 at 0019; subscription to CCC 001a succeeded.
+This confirms real-hardware pairing, encryption, Report Map parsing and keyboard
+subscription. The initial ready status had zero key reports; typing is a
+separate validation step.
 
 Wire references: [Bluetooth Core Security Manager](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/host/security-manager-specification.html),
 [ATT](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/host/attribute-protocol--att-.html),
