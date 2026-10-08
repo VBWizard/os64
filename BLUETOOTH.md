@@ -4,6 +4,15 @@ The first operational Intel AX210 USB adapter (`8087:0032`) stays attached after
 firmware bring-up. Discovery uses the existing polled xHCI transport. USB interrupt
 wiring remains a separate debt.
 
+For connection diagnostics, add `DEBUG_USB` to the boot command line. This
+records discovery outcomes, LE phase transitions and transport failures without
+logging each keyboard report. Add `DEBUG_DETAILED` for runtime HCI command
+opcodes and interpreted key usages; add `DEBUG_EXTRA_DETAILED` for raw HID
+keyboard reports (the boot option also enables detailed logging). The shared
+HID report gate applies to USB and Bluetooth keyboards. Routine typing produces
+no keyboard-report or key-usage lines with `DEBUG_USB` alone. Boot enumeration
+and bounded mouse samples remain at the base USB level.
+
 ## Using discovery
 
 For a new pairing, put devices into discoverable/pairing mode. Turn an already

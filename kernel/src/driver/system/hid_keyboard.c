@@ -201,11 +201,9 @@ static char hid_usage_ascii(const hid_keyboard_t *kbd, uint8_t usage)
 
 void hid_keyboard_report(hid_keyboard_t *kbd, const uint8_t rep[8])
 {
-	// The raw report, before any interpretation — the line that tells you
-	// whether a modifier the guest never acted on was the device's fault or
-	// ours (it earned its keep on day one: see the chord-publish comment
-	// below).
-	printd(kbd->debug, "%s: kbd report m=0x%02x keys %02x %02x %02x %02x %02x %02x\n",
+	// Raw reports help distinguish device state from interpretation errors,
+	// but require extra detail so ordinary typing does not flood subsystem logs.
+	printd(kbd->debug | DEBUG_EXTRA_DETAILED, "%s: kbd report m=0x%02x keys %02x %02x %02x %02x %02x %02x\n",
 	       kbd->name, rep[0], rep[2], rep[3], rep[4], rep[5], rep[6], rep[7]);
 
 	// Phantom state: every slot 0x01 = rollover error, report is garbage.

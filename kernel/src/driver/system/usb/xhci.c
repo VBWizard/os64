@@ -1095,7 +1095,7 @@ static void xhci_bt_runtime_send(void *context, uint16_t opcode,
 	s_hc->control_status_trb = ring_push(&p->device->ep0, 0, 0,
 	    TRB_TYPE(TRB_STATUS) | (1u << 16) | TRB_IOC);
 	mmio_w32((uint8_t *)s_hc->db, 4 * p->device->slot, 1);
-	printd(DEBUG_USB, "xhci: AX210 runtime command %04x\n", opcode);
+	printd(DEBUG_USB | DEBUG_DETAILED, "xhci: AX210 runtime command %04x\n", opcode);
 }
 
 static void xhci_bt_acl_send(void *context, const uint8_t *packet, size_t bytes)
