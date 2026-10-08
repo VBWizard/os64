@@ -23,8 +23,8 @@
 //     embedded Intel firmware and DDC configuration. The first operational
 //     AX210 keeps its USB slot and DMA storage for on-demand Classic/LE scans
 //     and one LE boot keyboard through /sys/bluetooth. Failed bring-up attempts
-//     Disable Slot before freeing DMA storage. LE input requires encrypted
-//     passkey pairing.
+//     Disable Slot before freeing DMA storage. LE input requires encryption
+//     after passkey pairing or an explicit Just Works request.
 //     Mouse descriptors can select report protocol for a
 //     relative X/Y/wheel layout; unsupported descriptors retain boot mode.
 //   - Handles BOTH context sizes (HCCPARAMS1.CSZ): QEMU uses 32-byte

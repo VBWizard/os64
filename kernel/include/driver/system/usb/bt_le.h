@@ -29,7 +29,7 @@ typedef struct {
     uint8_t error_status, address_type, peer[6], local[6];
     unsigned reports, malformed;
     uint32_t passkey;
-    bool passkey_visible;
+    bool passkey_visible, just_works;
     uint8_t request[7], response[7], random[16], peer_random[16], peer_confirm[16];
     uint8_t tk[16], crypto[16];
     // USB fragmentation and HCI ACL fragmentation are separate boundaries.

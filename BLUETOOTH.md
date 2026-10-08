@@ -72,14 +72,31 @@ and identifies the unsupported field when negotiation is refused; these remain
 available after cleanup. One peer is supported. No implicit pairing, automatic reconnection,
 or selection by an advertised name occurs.
 
-This implementation negotiates **LE legacy Passkey Entry**, with a 16-byte key,
-a DisplayOnly host and a KeyboardOnly/KeyboardDisplay peer. It refuses Just Works
-and smaller keys. It uses the controller's LE Rand and LE Encrypt commands for
-random generation and the Core c1/s1 functions, verifies the peer's confirm value,
-and waits for successful Encryption Change before discovering HID. This is not
-LE Secure Connections; legacy six-digit pairing lacks its resistance to passive
-capture of the pairing exchange. Pairing is session-only: no bond or identity
-keys are distributed or stored, so a later connection requires pairing again.
+The `connect` command negotiates **LE legacy Passkey Entry**, with a 16-byte key,
+a DisplayOnly host and a KeyboardOnly/KeyboardDisplay peer. It refuses to fall
+back to Just Works. For a keyboard that requires pairing without a passkey,
+select that association method explicitly:
+
+```sh
+echo connect-justworks random f8:2c:fe:ff:f0:1a > /sys/bluetooth/connection
+cat /sys/bluetooth/connection
+```
+
+`connect-justworks` advertises NoInputNoOutput with no MITM requirement, uses the
+Core's all-zero Temporary Key (TK), and does not generate or display a passkey.
+The link still requires successful encryption before HID discovery/input. Status
+labels the selected mode `legacy Just Works (unauthenticated)`. A peer that
+requires authenticated pairing is refused by this mode. The address above is the
+unnamed P5 keyboard's LE slot, not the ARTECK's Classic address.
+
+Both modes require a 16-byte key, use the controller's LE Rand and LE Encrypt
+commands for fresh nonces and the Core c1/s1 functions, verify the peer's confirm
+value, and wait for successful Encryption Change before discovering HID. Neither
+mode is LE Secure Connections. Legacy Just Works does not protect the pairing
+exchange against passive listeners or active impersonation; legacy passkey
+pairing also lacks Secure Connections' resistance to passive capture. Pairing is
+session-only: no bond or identity keys are distributed or stored, so a later
+connection requires pairing again.
 
 The keyboard must expose HID service 0x1812, Boot Keyboard Input 0x2a22 with
 notifications and its CCC descriptor, and Protocol Mode 0x2a4e with Write Without
@@ -148,7 +165,8 @@ then checks retained state and runtime discovery without additional allocation.
 
 `tools/test_bt_le_host.sh` uses an independent OpenSSL-backed controller/peer
 simulation and Core c1/s1 example values. It exercises authenticated pairing,
-encryption, paginated GATT discovery, key notification, disconnect, malformed
+explicit Just Works with the P5 capability bytes, encryption, paginated GATT
+discovery, key notification, disconnect, malformed
 framing, unsupported keyboards, wrong confirmation, command rejection, credits
 and USB ordering. OpenSSL is a host-test dependency, not linked into the kernel.
 The production xHCI harness also checks bulk receive delivery/release and
@@ -165,8 +183,9 @@ preserves them for the next attempt. That attempt returned
 `02 03 00 01 10 00 00`: NoInputNoOutput, no OOB data, bonding requested,
 16-byte key, and no distributed keys. The passkey-only request was refused
 without starting encryption; cleanup reported the link inactive.
-Pairing, encryption and typing still require
-their own P5 validation; simulated success does not establish keyboard compatibility.
+The explicit Just Works path is covered by the simulated peer using those
+capability bytes. Pairing, encryption and typing still require their own P5
+validation; simulated success does not establish keyboard compatibility.
 
 Wire references: [Bluetooth Core Security Manager](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/host/security-manager-specification.html),
 [ATT](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/host/attribute-protocol--att-.html),

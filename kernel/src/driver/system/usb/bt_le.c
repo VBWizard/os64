@@ -1,5 +1,5 @@
 // Bluetooth Core Vol 3 Parts A/F/H and Vol 4 Part E: single-peer LE central,
-// legacy SMP Passkey Entry, and the HID boot keyboard GATT service.
+// legacy SMP Passkey Entry/explicit Just Works, and the HID boot keyboard service.
 #include "driver/system/usb/bt_le.h"
 #include "strings/sprintf.h"
 
@@ -43,19 +43,24 @@ bool bt_le_request(bt_le_t *s,const char *p,size_t n,uint64_t now)
         if(s->phase==BT_LE_IDLE || s->phase==BT_LE_FAILED || s->phase==BT_LE_CLEANUP) return false;
         s->stop_requested=true; return true;
     }
-    if(s->phase!=BT_LE_IDLE || n!=32 ||
-       !le_equal((const uint8_t *)p,(const uint8_t *)"connect ",8) || p[14]!=' ') return false;
+    if(s->phase!=BT_LE_IDLE) return false;
+    bool just_works=false;
+    if(n==32 && le_equal((const uint8_t *)p,(const uint8_t *)"connect ",8)) p+=8;
+    else if(n==42 && le_equal((const uint8_t *)p,(const uint8_t *)"connect-justworks ",18)) {
+        p+=18; just_works=true;
+    } else return false;
+    if(p[6]!=' ') return false;
     uint8_t type,addr[6];
-    if(le_equal((const uint8_t *)p+8,(const uint8_t *)"public",6)) type=0;
-    else if(le_equal((const uint8_t *)p+8,(const uint8_t *)"random",6)) type=1;
+    if(le_equal((const uint8_t *)p,(const uint8_t *)"public",6)) type=0;
+    else if(le_equal((const uint8_t *)p,(const uint8_t *)"random",6)) type=1;
     else return false;
     for(unsigned i=0;i<6;i++) {
-        int hi=le_hex(p[15+3*i]),lo=le_hex(p[16+3*i]);
-        if(hi<0 || lo<0 || (i<5 && p[17+3*i]!=':')) return false;
+        int hi=le_hex(p[7+3*i]),lo=le_hex(p[8+3*i]);
+        if(hi<0 || lo<0 || (i<5 && p[9+3*i]!=':')) return false;
         addr[5-i]=(hi<<4)|lo;
     }
     *s=(bt_le_t){.phase=BT_LE_RESET,.now=now,.deadline=now+3000,
-        .total_deadline=now+150000,.credits=1,.address_type=type};
+        .total_deadline=now+150000,.credits=1,.address_type=type,.just_works=just_works};
     le_copy(s->peer,addr,6);
     return true;
 }
@@ -156,17 +161,20 @@ static void le_smp(bt_le_t *s,const uint8_t *p,size_t n)
         // Capability bytes are public negotiation data, not keys. Preserve
         // rejected responses too, so status identifies the incompatible field.
         le_copy(s->response,p,7);
-        // DisplayOnly + KeyboardOnly/KeyboardDisplay selects Passkey Entry.
-        // No unauthenticated Just Works fallback, reduced key size, or bonding.
+        // The command selects the association policy. A passkey request does
+        // not fall back to Just Works; explicit Just Works advertises no MITM
+        // capability and refuses a peer requiring authenticated pairing.
         const char *unsupported=NULL;
-        if(p[1]!=2 && p[1]!=4) unsupported="peer cannot enter a displayed passkey";
+        if(s->just_works && p[1]>4) unsupported="peer IO capability unsupported";
+        else if(!s->just_works && p[1]!=2 && p[1]!=4) unsupported="peer cannot enter a displayed passkey";
+        else if(s->just_works && (p[3]&4)) unsupported="peer requires authenticated pairing";
         else if(p[2]) unsupported="peer OOB pairing flag unsupported";
         else if(p[4]!=16) unsupported="peer encryption key size unsupported";
         else if(p[5] || p[6]) unsupported="peer requested unsupported key distribution";
         else if((p[3]&3)>1 || (p[3]&0xc0)) unsupported="peer authentication flags unsupported";
         if(unsupported) { le_fail(s,unsupported); return; }
         s->phase=BT_LE_CONFIRM_LOW;
-        s->passkey_visible=true; s->deadline=s->now+60000;
+        s->passkey_visible=!s->just_works; s->deadline=s->now+60000;
     } else if(p[0]==3 && s->phase==BT_LE_CONFIRM_WAIT) {
         if(n!=17) { le_bad(s); return; }
         le_copy(s->peer_confirm,p+1,16);
@@ -410,7 +418,10 @@ void bt_le_tick(bt_le_t *s,uint64_t now,bool control_done,bool bulk_done,bool us
         s->pending=false; le_command_finished(s); le_wipe(s->reply,sizeof(s->reply));
         if(s->phase>=BT_LE_CLEANUP) return;
     }
-    if(s->phase==BT_LE_CONNECTING && s->connected) s->phase=BT_LE_PASSKEY;
+    if(s->phase==BT_LE_CONNECTING && s->connected)
+        // Just Works uses TK=0; the zeroed session keeps that value while both
+        // modes still draw a fresh nonce and verify the peer's c1 confirmation.
+        s->phase=s->just_works ? BT_LE_RANDOM_LOW : BT_LE_PASSKEY;
     if(s->phase==BT_LE_ENCRYPT_WAIT && s->encrypted) {
         le_secrets_clear(s); s->phase=BT_LE_SERVICES; s->cursor=1;
     }
@@ -427,7 +438,9 @@ void bt_le_tick(bt_le_t *s,uint64_t now,bool control_done,bool bulk_done,bool us
         return;
     }
     if(s->phase==BT_LE_PAIR) {
-        const uint8_t req[]={1,0,0,4,16,0,0}; // DisplayOnly, MITM, no bond/key distribution.
+        // DisplayOnly/MITM for Passkey Entry; NoInputNoOutput/no MITM for
+        // explicit Just Works. Both request a 16-byte session without bonding.
+        const uint8_t req[]={1,s->just_works?3:0,0,s->just_works?0:4,16,0,0};
         le_copy(s->request,req,7);
         if(le_queue(s,6,req,7)) { s->phase=BT_LE_PAIR_WAIT; s->deadline=now+30000; }
         return;
@@ -502,13 +515,13 @@ size_t bt_le_status(const bt_le_t *s,char *out,size_t cap)
     }
     if(s->passkey_visible) snprintf(code,sizeof(code),"type on the Bluetooth keyboard, then Enter: %06u\n",s->passkey);
     int n=snprintf(out,cap,"state: %s\npeer: %02x:%02x:%02x:%02x:%02x:%02x %s\n"
-        "link may be active: %s\nencrypted: %s\nmode: legacy passkey; session only (no saved bond)\n%s"
+        "link may be active: %s\nencrypted: %s\nmode: %s; session only (no saved bond)\n%s"
         "key reports: %u\nmalformed packets: %u\nHID service: %04x-%04x boot input: %04x CCC: %04x\n"
         "%serror: %s (opcode %04x status %02x)\n"
-        "write connect public|random XX:XX:XX:XX:XX:XX, or disconnect\n",
+        "write connect|connect-justworks public|random XX:XX:XX:XX:XX:XX, or disconnect\n",
         state,s->peer[5],s->peer[4],s->peer[3],s->peer[2],s->peer[1],s->peer[0],s->address_type?"random":"public",
         s->link_may_active?"yes":"no",
-        s->encrypted?"yes":"no",code,s->reports,s->malformed,s->service_start,s->service_end,s->boot_value,s->ccc,
+        s->encrypted?"yes":"no",s->just_works?"legacy Just Works (unauthenticated)":"legacy passkey",code,s->reports,s->malformed,s->service_start,s->service_end,s->boot_value,s->ccc,
         capabilities,s->error?s->error:"none",s->error_opcode,s->error_status);
     return n<0 || !cap?0:(size_t)n<cap?(size_t)n:cap-1;
 }

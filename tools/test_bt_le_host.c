@@ -9,10 +9,11 @@
 static bt_le_t session;
 static uint8_t cmd[35],tx[31],last_report[8],peer_nonce[16],pair_request[7];
 static size_t cmd_n,tx_n;
+static uint8_t peer_pair_response[7];
 static uint64_t now;
 static unsigned commands,packets,keys,releases,rand_calls;
 static int scenario;
-enum { NORMAL, WRONG_CONFIRM, NO_BOOT, JUST_WORKS, REJECT_COMMAND, SHARED_BUFFER, GATT_ERROR };
+enum { NORMAL, WRONG_CONFIRM, NO_BOOT, JUST_WORKS, REJECT_COMMAND, SHARED_BUFFER, GATT_ERROR, JUST_WORKS_OPT_IN, JUST_WORKS_BAD_CONFIRM, JUST_WORKS_MITM, JUST_WORKS_INVALID_IO };
 static const uint8_t peer_addr[]={0x1a,0xf0,0xff,0xfe,0x2c,0xf8};
 static const uint8_t local_addr[]={0x49,0x4e,0x35,0x80,0x2f,0x6c};
 static const uint8_t pair_response[]={2,2,0,4,16,0,0};
@@ -102,7 +103,9 @@ static void controller(void)
     case 0x2018:
         for(unsigned i=0;i<8;i++) e[6+i]=rand_calls*17+i+1;
         rand_calls++; n+=8; break;
-    case 0x2017: aes(cmd+3,cmd+19,e+6); n+=16; break;
+    case 0x2017:
+        if(scenario>=JUST_WORKS_OPT_IN) for(unsigned i=0;i<16;i++) assert(cmd[3+i]==0);
+        aes(cmd+3,cmd+19,e+6); n+=16; break;
     case 0x2019: {
         uint8_t block[16],expected[16];
         memcpy(block,session.random,8); memcpy(block+8,peer_nonce,8);
@@ -127,16 +130,19 @@ static void peripheral(void)
     if(le_u16(wire+6)==6) {
         if(p[0]==1) {
             assert(n==7); memcpy(pair_request,p,7);
-            uint8_t rsp[7]; memcpy(rsp,pair_response,7);
-            if(scenario==JUST_WORKS) rsp[1]=3;
-            incoming(6,rsp,7);
+            if(scenario>=JUST_WORKS_OPT_IN) {
+                const uint8_t expected[]={1,3,0,0,16,0,0};
+                assert(!memcmp(p,expected,7));
+                assert(!session.passkey_visible && !session.passkey);
+            }
+            incoming(6,peer_pair_response,7);
         } else if(p[0]==3) {
             uint8_t expected[16];
-            confirm(session.tk,session.random,pair_request,pair_response,0,1,local_addr,peer_addr,expected);
+            confirm(session.tk,session.random,pair_request,peer_pair_response,0,1,local_addr,peer_addr,expected);
             assert(n==17 && !memcmp(p+1,expected,16));
             uint8_t response[17]={3};
-            confirm(session.tk,peer_nonce,pair_request,pair_response,0,1,local_addr,peer_addr,response+1);
-            if(scenario==WRONG_CONFIRM) response[1]^=1;
+            confirm(session.tk,peer_nonce,pair_request,peer_pair_response,0,1,local_addr,peer_addr,response+1);
+            if(scenario==WRONG_CONFIRM || scenario==JUST_WORKS_BAD_CONFIRM) response[1]^=1;
             incoming(6,response,17);
         } else if(p[0]==4) {
             assert(n==17 && !memcmp(p+1,session.random,16));
@@ -176,7 +182,15 @@ static void begin(int which)
 {
     session=(bt_le_t){0}; cmd_n=tx_n=0; now=0; commands=packets=keys=releases=rand_calls=0;
     scenario=which; for(unsigned i=0;i<16;i++) peer_nonce[i]=0xf0-i;
-    const char *request="connect random f8:2c:fe:ff:f0:1a";
+    memcpy(peer_pair_response,pair_response,7);
+    if(which==JUST_WORKS) peer_pair_response[1]=3;
+    if(which>=JUST_WORKS_OPT_IN) {
+        const uint8_t p5[]={2,3,0,1,16,0,0}; memcpy(peer_pair_response,p5,7);
+        if(which==JUST_WORKS_MITM) peer_pair_response[3]|=4;
+        if(which==JUST_WORKS_INVALID_IO) peer_pair_response[1]=5;
+    }
+    const char *request=which>=JUST_WORKS_OPT_IN ?
+        "connect-justworks random f8:2c:fe:ff:f0:1a" : "connect random f8:2c:fe:ff:f0:1a";
     assert(bt_le_request(&session,request,strlen(request),0));
     assert(!bt_le_request(&session,request,strlen(request),0));
 }
@@ -184,6 +198,7 @@ static void run(void)
 {
     for(unsigned i=0;i<1000 && session.phase!=BT_LE_READY && session.phase!=BT_LE_FAILED;i++) {
         tick(true,true); controller(); peripheral();
+        if(scenario>=JUST_WORKS_OPT_IN) assert(!session.passkey_visible && !session.passkey);
     }
 }
 static void success(void)
@@ -201,6 +216,36 @@ static void success(void)
     assert(bt_le_request(&session,"connect public 01:02:03:04:05:06",32,now));
     puts("PASS: encrypted passkey pairing, paginated HID discovery, notification, release and reconnect");
 }
+static void just_works(void)
+{
+    begin(JUST_WORKS_OPT_IN); run();
+    assert(session.phase==BT_LE_READY && session.encrypted && rand_calls==2);
+    assert(!session.passkey_visible && !session.passkey);
+    char status[1024]; bt_le_status(&session,status,sizeof(status));
+    assert(strstr(status,"legacy Just Works (unauthenticated)") && !strstr(status,"type on the Bluetooth keyboard"));
+    const uint8_t key[]={0x1b,10,0,2,0,4,0,0,0,0,0}; incoming(4,key,sizeof(key));
+    assert(keys==1 && session.reports==1);
+    assert(bt_le_request(&session,"disconnect",10,now));
+    for(unsigned i=0;i<10 && session.phase!=BT_LE_IDLE;i++) { tick(true,true); controller(); }
+    assert(session.phase==BT_LE_IDLE && releases==1);
+    assert(bt_le_request(&session,"connect random f8:2c:fe:ff:f0:1a",32,now));
+    assert(!session.just_works); // The next request chooses its own association mode.
+    for(int which=JUST_WORKS_BAD_CONFIRM;which<=JUST_WORKS_INVALID_IO;which++) {
+        begin(which); run();
+        assert(session.phase==BT_LE_FAILED && !session.encrypted && !session.connected && !keys);
+        if(which==JUST_WORKS_BAD_CONFIRM) assert(!strcmp(session.error,"pairing confirm mismatch"));
+        if(which==JUST_WORKS_MITM) assert(!strcmp(session.error,"peer requires authenticated pairing"));
+        if(which==JUST_WORKS_INVALID_IO) assert(!strcmp(session.error,"peer IO capability unsupported"));
+    }
+    bt_le_t s={0};
+    const char *bad[]={"connect-justwork random f8:2c:fe:ff:f0:1a", "connect-justworks random f8:2c:fe:ff:f0:1a x",
+        "connect-justworks random f8:2c:fe:ff:f0:zz", "connect-justworks", "connect-justworks  random f8:2c:fe:ff:f0:1a"};
+    for(unsigned i=0;i<sizeof(bad)/sizeof(bad[0]);i++) assert(!bt_le_request(&s,bad[i],strlen(bad[i]),0));
+    const char *ok="\tconnect-justworks public 01:02:03:04:05:06\n";
+    assert(bt_le_request(&s,ok,strlen(ok),0));
+    puts("PASS: explicit Just Works uses zero TK, retains confirm/encryption checks, and delivers keys without a passkey");
+}
+
 static void failures(void)
 {
     for(int kind=WRONG_CONFIRM;kind<=GATT_ERROR;kind++) {
@@ -287,7 +332,7 @@ static void pairing_diagnostics(void)
 
 int main(void)
 {
-    vectors(); success(); failures(); framing(); pairing_diagnostics();
+    vectors(); success(); failures(); framing(); pairing_diagnostics(); just_works();
     bt_le_t s={0};
     assert(!bt_le_request(&s,"connect random zz:00:00:00:00:00",32,0));
     assert(!bt_le_request(&s,"disconnect junk",15,0));
