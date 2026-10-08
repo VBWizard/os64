@@ -260,7 +260,20 @@ static void le_report_next(bt_le_t *s)
         }
         s->report_index++;
     }
-    le_fail(s,"no supported keyboard input Report Reference/map");
+    if(!s->input_value) { le_fail(s,"no supported keyboard input Report Reference/map"); return; }
+    s->report_index=0;
+    s->phase=s->protocol?BT_LE_PROTOCOL:BT_LE_SUBSCRIBE;
+}
+static void le_subscribe_next(bt_le_t *s)
+{
+    // Subscribe input reports independently of the selected keyboard layout.
+    // Notifications for other value handles remain filtered on receive.
+    while(s->report_index<s->report_count) {
+        const bt_le_report_char_t *r=&s->report_chars[s->report_index];
+        if(r->type==1 && r->ccc) return;
+        s->report_index++;
+    }
+    s->phase=BT_LE_VERIFY_CCC;
 }
 static void le_map_done(bt_le_t *s)
 {
@@ -388,11 +401,11 @@ static void le_att(bt_le_t *s,const uint8_t *p,size_t n,bt_le_report_t report,vo
     } else if(s->phase==BT_LE_REPORT_REFERENCE && p[0]==0x0b) {
         if(n!=3 || p[2]<1 || p[2]>3) { le_bad(s); return; }
         bt_le_report_char_t *r=&s->report_chars[s->report_index]; r->id=p[1]; r->type=p[2];
-        if(r->type==1 && hid_keyboard_parse_map(s->report_map,s->report_map_bytes,r->id,&s->report_layout) &&
+        if(!s->input_value && r->type==1 && hid_keyboard_parse_map(s->report_map,s->report_map_bytes,r->id,&s->report_layout) &&
            s->report_layout.bytes<=20) {
             s->input_value=r->value; s->ccc=r->ccc;
-            s->phase=s->protocol?BT_LE_PROTOCOL:BT_LE_SUBSCRIBE;
-        } else { s->report_index++; le_report_next(s); }
+        }
+        s->report_index++; le_report_next(s);
     } else if((s->phase==BT_LE_DESCRIPTORS || s->phase==BT_LE_REPORT_DESCRIPTORS) && p[0]==5) {
         if(n<2 || (p[1]!=1 && p[1]!=2)) { le_bad(s); return; }
         size_t width=p[1]==1 ? 4:18;
@@ -424,7 +437,10 @@ static void le_att(bt_le_t *s,const uint8_t *p,size_t n,bt_le_report_t report,vo
         else if(previous>=s->boot_end) le_fail(s,"boot keyboard CCC descriptor missing");
         else s->cursor=previous+1;
     } else if(s->phase==BT_LE_SUBSCRIBE && p[0]==0x13 && n==1) {
-        s->phase=BT_LE_VERIFY_CCC;
+        if(s->report_protocol) {
+            s->report_chars[s->report_index++].subscribed=true;
+            le_subscribe_next(s);
+        } else s->phase=BT_LE_VERIFY_CCC;
     } else if(s->phase==BT_LE_VERIFY_CCC && p[0]==0x0b) {
         if(n!=3) { le_bad(s); return; }
         s->verified_ccc=le_u16(p+1); s->ccc_read=true;
@@ -661,7 +677,11 @@ void bt_le_tick(bt_le_t *s,uint64_t now,bool control_done,bool bulk_done,bool us
             p[0]=0x0a; le_put(p+1,s->phase==BT_LE_VERIFY_CCC?s->ccc:s->protocol);
             le_att_send(s,p,3); break;
         case BT_LE_SUBSCRIBE:
-            p[0]=0x12; le_put(p+1,s->ccc); p[3]=1; le_att_send(s,p,5); break;
+            if(s->report_protocol) le_subscribe_next(s);
+            if(s->phase!=BT_LE_SUBSCRIBE) break;
+            p[0]=0x12;
+            le_put(p+1,s->report_protocol?s->report_chars[s->report_index].ccc:s->ccc);
+            p[3]=1; le_att_send(s,p,5); break;
         default: break;
         }
         return;
@@ -767,8 +787,8 @@ size_t bt_le_status(const bt_le_t *s,char *out,size_t cap)
     }
     for(unsigned i=0;i<s->report_count && used<cap-1;i++) {
         const bt_le_report_char_t *r=&s->report_chars[i];
-        n=snprintf(out+used,cap-used,"report candidate: value=%04x CCC=%04x reference=%04x ID=%u type=%u\n",
-                   r->value,r->ccc,r->reference,r->id,r->type);
+        n=snprintf(out+used,cap-used,"report candidate: value=%04x CCC=%04x reference=%04x ID=%u type=%u subscribed=%s\n",
+                   r->value,r->ccc,r->reference,r->id,r->type,r->subscribed?"yes":"no");
         if(n<0) return used;
         used+=(size_t)n<cap-used?(size_t)n:cap-used-1;
     }

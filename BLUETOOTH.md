@@ -159,9 +159,15 @@ The keyboard must expose HID service 0x1812. A notifying Boot Keyboard Input
 0x2a22 with a CCC descriptor and writable Protocol Mode 0x2a4e selects Boot
 Protocol. Otherwise the host reads Report Map 0x2a4b, including Read Blob chunks,
 and examines notifying Report 0x2a4d characteristics and their Report Reference
-0x2908 descriptors. It subscribes to the first supported keyboard input report
-and selects Report Protocol when Protocol Mode is present. Consumer reports are
-skipped; Report IDs come from Report Reference, not a prefix in GATT values.
+0x2908 descriptors. It selects the first supported keyboard input report for
+decoding, finishes descriptor discovery across the notifying Report candidates,
+and enables each candidate's CCC when its Report Reference identifies Input.
+This includes input reports whose layouts are not decoded; their notifications
+are counted and ignored. Output/Feature references are not subscribed. Each
+write must succeed before readiness; status retains per-report subscription
+completion. The selected keyboard CCC is read back. Report Protocol is selected
+when Protocol Mode is present. Report IDs come from Report Reference, not a
+prefix in GATT values.
 
 Report Map support covers absolute keyboard usage bitmaps and one contiguous
 key array, including modifiers and padding. The map is bounded to 1024 bytes,
@@ -249,7 +255,11 @@ cover incorrect CCC/Protocol Mode values, malformed replies, optional reads,
 input during inspection, and inspection timeout cleanup after the original
 setup deadline. Bond tests cover encrypted key ordering, missing/partial keys,
 cache preservation, cached-key reconnection, identity checks, forgetting and
-secret cleanup.
+secret cleanup. A fixture with the P5's public HID attributes checks subscription
+to five input reports, including reports after the selected keyboard and a
+Report ID absent from the map, filtering of unrelated notifications, exclusion
+of Output references, and failure on a rejected secondary CCC write. Its keys
+and pairing secrets are synthetic.
 `tools/test_hid_keyboard_map_host.sh` checks arrays, bitmaps, unaligned padding,
 Report IDs, rollover and mutated descriptor bounds under ASan/UBSan. These are
 synthetic fixtures; the map suite also includes the P5 keyboard's captured
@@ -332,6 +342,22 @@ immediate `reconnect` then timed out waiting for connection establishment
 inactive and left the driver failed, requiring reboot. This did not test whether
 the keyboard accepts the cached key; its advertising state during reconnection
 was not observed. Real key delivery and cached-key reconnection remain unproven.
+
+Chris's subsequent Linux btsnoop capture contains successful encrypted legacy
+pairing and eight-byte keyboard notifications at value 0019. The public HID
+attributes and 166-byte Report Map match the Os64 observations. Linux enables
+the five Input Report CCCs 001a, 0021, 0025, 0029 and 002d (Report IDs 1, 3, 4,
+5 and 18), after also subscribing to Battery Level. The final HID CCC reply is
+at 15.767 seconds; a peripheral connection-parameter request follows at that
+timestamp, then the first keyboard notification at 15.769 seconds. The connection
+update completes later, at 16.141 seconds. Linux also distributes more SMP keys
+than Os64. The trace does not isolate which setup differences affect the device.
+
+The next controlled hardware test completes Input Report subscriptions while
+retaining Os64's pairing and connection-parameter policies. The regression
+fixture fails against `330514cc` because it stops after the keyboard CCC. The
+raw Linux capture contains secrets and is not a repository fixture. Os64 input
+success still requires a hardware test of the expanded subscription sequence.
 
 Wire references: [Bluetooth Core Security Manager](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/host/security-manager-specification.html),
 [ATT](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/host/attribute-protocol--att-.html),

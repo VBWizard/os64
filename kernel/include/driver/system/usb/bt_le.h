@@ -24,6 +24,7 @@ typedef enum {
 typedef struct {
     uint16_t value, end, ccc, reference;
     uint8_t id, type;
+    bool subscribed;
 } bt_le_report_char_t;
 
 // One boot-lifetime bond, reused only by an explicit reconnect command.

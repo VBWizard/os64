@@ -16,9 +16,10 @@ static unsigned commands,packets,keys,releases,rand_calls;
 static int scenario;
 static bool peer_bonding, peer_reconnecting;
 static unsigned peer_key_delivery;
+static unsigned p5_subscriptions;
 static const uint8_t peer_ltk[16]={0xa8,0x72,0x5c,0xe1,0x43,0x90,0xbb,0x62,0x71,0xc5,0x68,0x09,0x4f,0xd6,0xa1,0x37};
 static const uint8_t peer_rand[8]={0x91,0x23,0x34,0x45,0x56,0x67,0x78,0x89};
-enum { NORMAL, WRONG_CONFIRM, NO_BOOT, JUST_WORKS, REJECT_COMMAND, SHARED_BUFFER, GATT_ERROR, JUST_WORKS_OPT_IN, JUST_WORKS_BAD_CONFIRM, JUST_WORKS_MITM, JUST_WORKS_INVALID_IO, REPORT_PROTOCOL, REPORT_PROTOCOL_NO_MODE, REPORT_BAD_REF, REPORT_BAD_MAP, REPORT_MAP_TOO_LONG, REPORT_MAP_EXACT };
+enum { NORMAL, WRONG_CONFIRM, NO_BOOT, JUST_WORKS, REJECT_COMMAND, SHARED_BUFFER, GATT_ERROR, JUST_WORKS_OPT_IN, JUST_WORKS_BAD_CONFIRM, JUST_WORKS_MITM, JUST_WORKS_INVALID_IO, REPORT_PROTOCOL, REPORT_PROTOCOL_NO_MODE, REPORT_BAD_REF, REPORT_BAD_MAP, REPORT_MAP_TOO_LONG, REPORT_MAP_EXACT, P5_REPORTS, P5_REPORT_WRITE_ERROR, P5_REPORT_OUTPUT };
 static const uint8_t peer_addr[]={0x1a,0xf0,0xff,0xfe,0x2c,0xf8};
 static const uint8_t local_addr[]={0x49,0x4e,0x35,0x80,0x2f,0x6c};
 static const uint8_t pair_response[]={2,2,0,4,16,0,0};
@@ -136,6 +137,72 @@ static void controller(void)
     }
     e[1]=n-2; event(e,n);
 }
+// Public HID attributes from the Linux capture; pairing keys and key values
+// are synthetic. The test requires input CCC setup before injecting keys.
+static const uint16_t p5_values[]={0x19,0x20,0x24,0x28,0x2c};
+static const uint8_t p5_ids[]={1,3,4,5,0x12};
+static void p5_peripheral(const uint8_t *p,size_t n)
+{
+    uint16_t h=n>=3?le_u16(p+1):0;
+    uint8_t rsp[23]={0};
+    if(p[0]==0x10) {
+        const uint8_t services[]={0x11,6,0x15,0,0x34,0,0x12,0x18};
+        incoming(4,services,sizeof(services));
+    } else if(p[0]==8) {
+        const uint8_t chars[][7]={
+            {0x16,0,6,0x17,0,0x4e,0x2a}, {0x18,0,0x1a,0x19,0,0x4d,0x2a},
+            {0x1c,0,0x0e,0x1d,0,0x4d,0x2a}, {0x1f,0,0x1a,0x20,0,0x4d,0x2a},
+            {0x23,0,0x1a,0x24,0,0x4d,0x2a}, {0x27,0,0x1a,0x28,0,0x4d,0x2a},
+            {0x2b,0,0x1a,0x2c,0,0x4d,0x2a}, {0x2f,0,2,0x30,0,0x4b,0x2a},
+            {0x31,0,2,0x32,0,0x4a,0x2a}, {0x33,0,4,0x34,0,0x4c,0x2a}
+        };
+        size_t count=0; rsp[0]=9; rsp[1]=7;
+        for(unsigned i=0;i<sizeof(chars)/sizeof(chars[0]) && count<3;i++)
+            if(chars[i][0]>=h) { memcpy(rsp+2+7*count,chars[i],7); count++; }
+        if(count) incoming(4,rsp,2+7*count);
+        else { uint8_t err[]={1,8,h,0,0x0a}; incoming(4,err,sizeof(err)); }
+    } else if(p[0]==0x0a || p[0]==0x0c) {
+        rsp[0]=p[0]==0x0a?0x0b:0x0d;
+        if(h==0x30) {
+            unsigned offset=p[0]==0x0c?le_u16(p+3):0;
+            assert(offset<=sizeof(keyboard_p5_map));
+            size_t part=sizeof(keyboard_p5_map)-offset; if(part>22) part=22;
+            memcpy(rsp+1,keyboard_p5_map+offset,part); incoming(4,rsp,part+1); return;
+        }
+        if(h==0x17) { rsp[1]=1; incoming(4,rsp,2); return; }
+        for(unsigned i=0;i<5;i++) {
+            if(h==p5_values[i]+2) {
+                rsp[1]=p5_ids[i]; rsp[2]=scenario==P5_REPORT_OUTPUT && i==4?2:1;
+                incoming(4,rsp,3); return;
+            }
+            if(h==p5_values[i]+1) {
+                rsp[1]=(p5_subscriptions>>i)&1; incoming(4,rsp,3); return;
+            }
+        }
+        assert(!"unexpected P5 read");
+    } else if(p[0]==4) {
+        for(unsigned i=0;i<5;i++) if(h==p5_values[i]+1 || h==p5_values[i]+2) {
+            rsp[0]=5; rsp[1]=1; rsp[2]=h; rsp[4]=h==p5_values[i]+1?2:8; rsp[5]=0x29;
+            incoming(4,rsp,6); return;
+        }
+        uint8_t err[]={1,4,h,0,0x0a}; incoming(4,err,sizeof(err));
+    } else if(p[0]==0x52) {
+        assert(h==0x17 && n==4 && p[3]==1);
+    } else if(p[0]==0x12) {
+        assert(n==5 && le_u16(p+3)==1);
+        for(unsigned i=0;i<5;i++) if(h==p5_values[i]+1) {
+            assert(!(p5_subscriptions&(1u<<i)));
+            assert(scenario!=P5_REPORT_OUTPUT || i!=4);
+            if(scenario==P5_REPORT_WRITE_ERROR && i==4) {
+                uint8_t err[]={1,0x12,h,0,3}; incoming(4,err,sizeof(err)); return;
+            }
+            p5_subscriptions|=1u<<i;
+            uint8_t ok=0x13; incoming(4,&ok,1); return;
+        }
+        assert(!"unexpected P5 subscription");
+    } else assert(!"unexpected P5 ATT request");
+}
+
 static void report_peripheral(const uint8_t *p,size_t n)
 {
     unsigned handle=n>=3?le_u16(p+1):0;
@@ -182,7 +249,7 @@ static void report_peripheral(const uint8_t *p,size_t n)
     } else if(p[0]==0x52) {
         assert(scenario!=REPORT_PROTOCOL_NO_MODE && handle==22 && n==4 && p[3]==1);
     } else if(p[0]==0x12) {
-        assert(handle==17 && n==5 && le_u16(p+3)==1);
+        assert((handle==11 || handle==17) && n==5 && le_u16(p+3)==1);
         uint8_t ok=0x13; incoming(4,&ok,1);
     } else assert(!"unexpected report protocol request");
 }
@@ -217,6 +284,7 @@ static void peripheral(void)
             uint8_t response[17]={4}; memcpy(response+1,peer_nonce,16); incoming(6,response,17);
         } else assert(!"unexpected SMP request");
     } else if(le_u16(wire+6)==4) {
+        if(scenario>=P5_REPORTS) { p5_peripheral(p,n); return; }
         if(scenario>=REPORT_PROTOCOL) { report_peripheral(p,n); return; }
         if(p[0]==0x10) {
             const uint8_t rsp[]={0x11,6,1,0,5,0,0,0x18,6,0,30,0,0x12,0x18};
@@ -253,7 +321,7 @@ static void tick(bool usb,bool bulk)
 static void begin(int which)
 {
     session=(bt_le_t){0}; cmd_n=tx_n=0; now=0; commands=packets=keys=releases=rand_calls=0;
-    peer_bonding=false; peer_reconnecting=false; peer_key_delivery=0;
+    peer_bonding=false; peer_reconnecting=false; peer_key_delivery=0; p5_subscriptions=0;
     scenario=which; for(unsigned i=0;i<16;i++) peer_nonce[i]=0xf0-i;
     memcpy(peer_pair_response,pair_response,7);
     if(which==JUST_WORKS) peer_pair_response[1]=3;
@@ -346,6 +414,32 @@ static void report_protocol(void)
         tick(true,true); assert(releases==1);
     }
     puts("PASS: report-only GATT keyboard, blob map reads, media filtering, optional Protocol Mode and malformed maps/references");
+}
+
+static void p5_input_subscriptions(void)
+{
+    for(int which=P5_REPORTS;which<=P5_REPORT_OUTPUT;which++) {
+        begin(which); run();
+        if(which==P5_REPORT_WRITE_ERROR) {
+            assert(session.phase==BT_LE_FAILED && !keys && p5_subscriptions==15);
+            assert(!strcmp(session.error,"GATT request rejected")); continue;
+        }
+        assert(session.phase==BT_LE_READY && session.encrypted);
+        assert(p5_subscriptions==(which==P5_REPORT_OUTPUT?15:31));
+        assert(session.input_value==0x19 && session.ccc==0x1a && session.report_layout.report_id==1);
+        assert(session.report_count==5 && session.report_layout.bytes==8);
+        for(unsigned i=0;i<5;i++) {
+            assert(session.report_chars[i].id==p5_ids[i]);
+            assert(session.report_chars[i].subscribed==((p5_subscriptions>>i)&1));
+        }
+        const uint8_t ignored[]={0x1b,0x2c,0,0xff,0xff,0xff,0xff};
+        incoming(4,ignored,sizeof(ignored)); assert(!keys && session.rx_ignored_notifications==1);
+        const uint8_t a[]={0x1b,0x19,0,2,0,4,0,0,0,0,0};
+        incoming(4,a,sizeof(a)); assert(keys==1 && last_report[0]==2 && last_report[2]==4);
+        const uint8_t up[]={0x1b,0x19,0,0,0,0,0,0,0,0,0};
+        incoming(4,up,sizeof(up)); assert(releases==1 && session.reports==2);
+    }
+    puts("PASS: P5 five-report subscriptions, trailing unsupported ID, output exclusion, rejected CCC and selected keyboard decoding");
 }
 
 static void receive_diagnostics(void)
@@ -621,7 +715,7 @@ static void pairing_diagnostics(void)
 
 int main(void)
 {
-    vectors(); success(); failures(); framing(); pairing_diagnostics(); just_works(); report_protocol(); receive_diagnostics(); inspection(); bonding();
+    vectors(); success(); failures(); framing(); pairing_diagnostics(); just_works(); report_protocol(); p5_input_subscriptions(); receive_diagnostics(); inspection(); bonding();
     bt_le_t s={0};
     assert(!bt_le_request(&s,"connect random zz:00:00:00:00:00",32,0));
     assert(!bt_le_request(&s,"disconnect junk",15,0));
