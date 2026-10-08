@@ -225,6 +225,18 @@ radio loss, device behavior or a missing host operation. The captured map select
 an eight-byte keyboard report and correctly decodes synthetic A, Shift+A,
 Backspace and release in the host test; actual input delivery remains unproven.
 
+
+At `c4d835b9`, another prompt typing attempt produced no input. Receive metadata
+stayed at 517 bytes / 21 complete ACL packets, all before readiness: zero packets
+after readiness, unmatched connections, notifications, indications or L2CAP
+parameter-update requests. The initial connection interval was 36 (45 ms),
+latency zero, supervision timeout 400 (4 seconds), and Protocol Mode handle
+0017. Readiness at 109840 ms was followed by disconnect reason 08 at 170640 ms
+(60.8 seconds later). This places the missing input before keyboard decoding;
+it does not distinguish device silence from a stalled receive transport. Confirm
+the generic advertised device's identity and verify subscription/receive liveness
+before attributing this to the keyboard's HID layout.
+
 Wire references: [Bluetooth Core Security Manager](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/host/security-manager-specification.html),
 [ATT](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/host/attribute-protocol--att-.html),
 [L2CAP](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/host/logical-link-control-and-adaptation-protocol-specification.html),
