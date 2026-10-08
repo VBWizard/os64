@@ -54,7 +54,8 @@ void init_xHCI(void);
 // every scheduler pass from processSignals; internally serialized across cores and
 // cheap when idle. Safe to call before init or with no USB input devices.
 void xhci_poll(void);
-// Task-context bond storage and automatic connection policy, outside USB polling.
+// Task-context bond storage; publishes restored bonds to the connection manager.
+// USB polling also advances automatic connection policy without disk I/O.
 void xhci_bluetooth_maintain(void);
 // Enable the manager after boot-time mounts and configuration have settled.
 void xhci_bluetooth_start_manager(void);

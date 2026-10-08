@@ -1135,15 +1135,18 @@ static void xhci_bt_runtime_poll(void)
 		// Successful LE cleanup resets the controller. Clear the old
 		// discovery state, whose event masks no longer describe the hardware.
 		if (bt_le_quiescent(&p->le)) p->scan = (bt_scan_t){0};
-		return;
+	} else {
+		bt_scan_phase_t phase = p->scan.phase;
+		bt_scan_tick(&p->scan, kTicksSinceStart * 1000 / TICKS_PER_SECOND,
+		             usb_done, usb_failed, xhci_bt_runtime_send, p);
+		if (p->scan.phase != phase && (p->scan.phase == BT_SCAN_DONE || p->scan.phase == BT_SCAN_FAILED))
+			printd(DEBUG_USB, "xhci: AX210 discovery %s devices=%u error=%s opcode=%04x status=%02x\n",
+			       p->scan.phase == BT_SCAN_DONE ? "complete" : "failed", p->scan.count,
+			       p->scan.error ? p->scan.error : "none", p->scan.error_opcode, p->scan.error_status);
 	}
-	bt_scan_phase_t phase = p->scan.phase;
-	bt_scan_tick(&p->scan, kTicksSinceStart * 1000 / TICKS_PER_SECOND,
-	             usb_done, usb_failed, xhci_bt_runtime_send, p);
-	if (p->scan.phase != phase && (p->scan.phase == BT_SCAN_DONE || p->scan.phase == BT_SCAN_FAILED))
-		printd(DEBUG_USB, "xhci: AX210 discovery %s devices=%u error=%s opcode=%04x status=%02x\n",
-		       p->scan.phase == BT_SCAN_DONE ? "complete" : "failed", p->scan.count,
-		       p->scan.error ? p->scan.error : "none", p->scan.error_opcode, p->scan.error_status);
+	// Policy performs no I/O. Advance handoffs here under the USB poll lock so
+	// discovery completion and retry deadlines do not wait for the storage worker.
+	bt_manager_step(&p->manager, &p->le, &p->scan, kTicksSinceStart * 1000 / TICKS_PER_SECOND);
 }
 
 bool xhci_bluetooth_scan(void)
@@ -1213,6 +1216,9 @@ void xhci_bluetooth_maintain(void)
 			p->le.bond = snapshot; m->automatic = automatic;
 		}
 		m->storage_error = good ? NULL : "saved bond unavailable or invalid";
+		// Start discovery as soon as the restored bond is published. Commands
+		// are submitted by USB polling; no additional worker sleep is needed.
+		bt_manager_step(m, &p->le, &p->scan, now);
 	} else {
 		if (good && m->generation == generation) m->dirty = false;
 		m->storage_error = good ? NULL : "save failed; RAM bond retained";

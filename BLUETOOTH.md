@@ -154,12 +154,15 @@ replaced at startup. Successful saves support normal reboot; sudden power-loss
 crash consistency remains subject to the filesystem and hardware, not the CRC.
 
 **Normal operation needs no connection command.** After bonding, or after host
-reboot with an enabled saved bond, the worker runs two-second LE discovery rounds.
+reboot with an enabled saved bond, the manager runs two-second LE discovery rounds.
 It matches the saved identity or checks RPAs with controller AES, then reconnects,
 restores encryption, and configures HID. An absent peer causes backoff from two
 to thirty seconds between rounds; discovery continues so a keyboard turned on
-later can connect. The worker normally runs every two seconds. This is bounded
-background discovery, not an instantaneous wake guarantee.
+later can connect. The worker normally runs every two seconds to handle storage;
+it starts discovery when it publishes a restored bond. USB polling advances
+discovery/connection handoffs and retry deadlines without waiting for another
+worker visit. This is bounded background discovery, not an instantaneous wake
+guarantee.
 
 Manual controls remain available:
 
@@ -325,6 +328,8 @@ followed by a timeout disconnect. `tools/test_bt_bond_store_host.sh` runs
 the production storage code with short I/O, corruption, sync/close/rename errors,
 and filesystem read-only demotion. The xHCI harness verifies disk callbacks run
 outside the poll lock and an in-flight save cannot acknowledge a newer forget.
+It also checks immediate discovery after bond restoration, connection handoff
+from USB polling, and absent-peer backoff without a worker visit.
 Storage tests also check kernel-context marshalling, allocation failure, and
 wiping the marshalled key material before freeing it.
 
@@ -484,6 +489,22 @@ confirms persisted-key reuse on that identity; it does not establish whether
 the scan was necessary. The cause of the earlier radio timeout remains unknown.
 The fix passes the LE and production xHCI sanitizer suites and kernel build;
 its P5 power-cycle validation remains pending.
+
+### Automatic boot connection and latency (2026-10-08)
+
+Chris confirmed that boot connection worked without manual scan or reconnect
+after the timeout fix, reporting about twelve seconds from desktop readiness to
+keyboard input. A read-only status snapshot showed encrypted saved-bond reuse,
+verified LTK, all five input subscriptions, ten key reports and HID readiness at
+21,070 ms after kernel startup. This establishes unattended boot connection on
+the tested saved static identity; ordinary off/on recovery, privacy-address
+rotation and persistent disable/forget still need their separate checks.
+
+The manager now starts discovery when storage loading finishes and advances
+scan completion and retry deadlines from USB polling. These handoffs no longer
+wait for the maintenance worker's two-second sleeps. The scan duration and
+absent-peer backoff are unchanged. Host tests cover the scheduling change;
+its improvement to P5 boot latency must be measured on the new build.
 
 Wire references: [Bluetooth Core Security Manager](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/host/security-manager-specification.html),
 [ATT](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/host/attribute-protocol--att-.html),

@@ -366,6 +366,26 @@ static void bond_maintenance(void)
     xhci_bluetooth_maintain(); CHECK(!p->manager.dirty && store_exists && bond_saves==2);
     p->manager=(bt_manager_t){0}; p->le=(bt_le_t){0};
     xhci_bluetooth_maintain(); CHECK(p->manager.loaded && p->manager.automatic && p->le.bond.valid);
+    CHECK(p->manager.scan_owned && p->scan.phase==BT_SCAN_RESET);
+    // A completed scan hands off to connection in USB polling, without a worker visit.
+    p->scan.phase=BT_SCAN_DONE; p->scan.count=1;
+    p->scan.devices[0]=(bt_scan_device_t){.le=true,.address_type=1};
+    memcpy(p->scan.devices[0].address,p->le.bond.peer,6);
+    s_hc->control_slot=0; p->tx_done=true;
+    xhci_bt_runtime_poll();
+    CHECK(p->le.phase==BT_LE_RESET && p->le.bond_reused && !p->manager.scan_owned);
+    // Frequent USB polling must still honor the absent-peer retry deadline.
+    p->le.phase=BT_LE_IDLE; p->scan.phase=BT_SCAN_DONE; p->scan.count=0;
+    p->manager.scan_owned=true;
+    xhci_bt_runtime_poll();
+    CHECK(!p->manager.scan_owned && p->scan.phase==BT_SCAN_DONE);
+    xhci_bt_runtime_poll();
+    CHECK(!p->manager.scan_owned && p->scan.phase==BT_SCAN_DONE);
+    kTicksSinceStart=(p->manager.next_attempt*TICKS_PER_SECOND+999)/1000;
+    xhci_bt_runtime_poll();
+    CHECK(p->manager.scan_owned && p->scan.phase==BT_SCAN_RESET);
+    // Restore a quiescent controller for the storage-only race below.
+    p->le.phase=BT_LE_IDLE; p->scan=(bt_scan_t){0};
     p->manager.suppressed=true;
     CHECK(xhci_bluetooth_connection("save",4)); forget_during_save=true;
     xhci_bluetooth_maintain();

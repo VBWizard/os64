@@ -167,17 +167,19 @@ cleanup, then resume looking. Turning the keyboard on normally should be enough:
 recognize its direct identity or resolve its RPA using the saved IRK, connect,
 restore encryption, and configure HID input without a shell command.
 
-The background manager runs from the existing maintenance worker in task
-context. It coordinates storage, discovery and connection requests under the
-USB serialization lock, then releases that lock before disk I/O. USB polling
-continues protocol progress and input delivery. A separate userland daemon is
-not required. Manual commands and the manager share the controller owner.
+The background manager advances discovery and connection policy from USB
+polling under the USB serialization lock. The maintenance worker loads and
+saves bonds in task context, releasing that lock before disk I/O, and starts
+discovery when a restored bond is published. Scan completion and retry deadlines
+do not wait for a worker visit. USB polling continues protocol progress and
+input delivery. A separate userland daemon is not required. Manual commands
+and the manager share the controller owner.
 Boot enables the manager after mounts and configuration settle. Disk callbacks
 use the kernel-context trampoline with HHDM-backed arguments because the worker
 has its own page tables and stack. The maintenance worker must be enabled.
 
-Use two-second LE scans with retry delays doubling from two to thirty seconds,
-plus the maintenance worker cadence, to bound the discovery duty cycle. An absent
+Use two-second LE scans with retry delays doubling from two to thirty seconds
+to bound the discovery duty cycle. An absent
 keyboard must not permanently exhaust retries: continue occasional discovery so
 a keyboard turned on later can connect. Suspend retries while manual discovery
 or pairing owns the controller. Explicit disconnect suppresses automatic
@@ -204,9 +206,12 @@ available when that cannot succeed.
 
 ## Implementation status
 
-All four stages are implemented with host regression coverage. Real P5 tests of
-identity distribution, automatic keyboard off/on recovery, saved-bond reboot,
-and persistent disable/forget remain required before hardware acceptance.
+All four stages are implemented with host regression coverage. P5 status
+confirms identity-key receipt and saved-key reuse after reboot; Chris confirmed
+unattended boot connection without manual scan/reconnect. Automatic keyboard
+off/on recovery, privacy-address rotation and persistent disable/forget remain
+required before full hardware acceptance. The USB-poll handoff optimization
+has host coverage; its boot-latency improvement still needs a P5 measurement.
 
 Peripheral connection-parameter updates remain a separate compatibility task;
 the working keyboard retries requests that Os64 rejects. That policy is unchanged.
