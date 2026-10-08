@@ -221,6 +221,10 @@ has host coverage; successive P5 snapshots measured readiness at 21,070 ms
 before it and 17,210 ms afterward. A subsequent 3e disconnect exposed a separate
 retry-classification gap, now covered by host tests; corrected automatic 3e
 recovery still needs hardware validation. See `BLUETOOTH.md` for the evidence.
+An additional boot test on that correction reached encrypted HID discovery,
+then disconnected with MIC failure 3d. One explicit retry succeeded using the
+existing bond. Its cause remains unresolved; it must not be counted as fixed
+by the transient 08/3e retry policy. Hardware acceptance remains incomplete.
 
 Peripheral connection-parameter updates remain a separate compatibility task;
 the working keyboard retries requests that Os64 rejects. That policy is unchanged.

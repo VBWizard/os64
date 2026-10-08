@@ -548,6 +548,35 @@ separates the channel-related absence from the earlier blocked-retry defect;
 the original radio failure's cause remains unproven. The corrected automatic
 3e recovery path still needs P5 validation on the new build.
 
+### Packet-integrity failure during saved-key HID setup (2026-10-08)
+
+On the build containing the 3e retry correction but preceding scan timestamps,
+Chris reported another boot failure with channel #2 selected and slow blue
+blinking on keypress. Untouched status showed saved-key reuse and successful
+encryption (`complete=yes`, `LTK verified: yes`), followed by Disconnection
+Complete reason 3d at 21,720 ms. HID service 0015-0034 and its 166-byte Report Map
+had been read, but descriptor/reference discovery was incomplete, no Input CCC
+was marked subscribed, and readiness had not been reached. The host received
+62 ACL packets and 41 notifications, all ignored before readiness; it recorded
+zero malformed or unmatched ACL packets. The last of two parameter requests
+asked for interval 24/24, latency 32 and timeout 300. These observations do not
+identify the cause of the disconnect.
+
+[Core Vol 1 Part F section 2.58](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/architecture,-mixing,-and-conventions/controller-error-codes.html)
+defines 3d as termination due to a Message Integrity Check failure on a received
+packet. The manager intentionally blocks automatic retries for this error.
+The 08/3e retry fixes do not cover it. The timing optimization changes when
+discovery/connection handoffs run, not their wire formats; this observation
+does not rule out a timing-dependent issue, nor justify attributing the MIC
+failure to it. No retry policy or connection parameters were changed.
+
+After preserving the failure, one explicit saved-key reconnect was issued over
+SSH. The same identity reached encrypted readiness at 429,880 ms, verified the
+saved LTK, and delivered four key reports without new pairing. This establishes
+recovery on the existing bond, not a fix for the intermittent boot failure.
+Logging status showed an active userland sink and no lost kernel log entries.
+The cause of 3d remains unresolved and is part of hardware acceptance work.
+
 Wire references: [Bluetooth Core Security Manager](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/host/security-manager-specification.html),
 [ATT](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/host/attribute-protocol--att-.html),
 [L2CAP](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/host/logical-link-control-and-adaptation-protocol-specification.html),
