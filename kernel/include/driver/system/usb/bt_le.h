@@ -15,7 +15,7 @@ typedef enum {
     BT_LE_PASSKEY, BT_LE_RANDOM_LOW, BT_LE_RANDOM_HIGH, BT_LE_PAIR,
     BT_LE_PAIR_WAIT, BT_LE_CONFIRM_LOW, BT_LE_CONFIRM_HIGH, BT_LE_CONFIRM_WAIT,
     BT_LE_RANDOM_WAIT, BT_LE_VERIFY_LOW, BT_LE_VERIFY_HIGH, BT_LE_STK,
-    BT_LE_ENCRYPT, BT_LE_ENCRYPT_WAIT, BT_LE_SERVICES, BT_LE_CHARACTERISTICS,
+    BT_LE_ENCRYPT, BT_LE_ENCRYPT_WAIT, BT_LE_BOND_KEYS, BT_LE_SERVICES, BT_LE_CHARACTERISTICS,
     BT_LE_DESCRIPTORS, BT_LE_REPORT_MAP, BT_LE_REPORT_DESCRIPTORS, BT_LE_REPORT_REFERENCE,
     BT_LE_PROTOCOL, BT_LE_SUBSCRIBE, BT_LE_VERIFY_CCC, BT_LE_VERIFY_PROTOCOL, BT_LE_READY,
     BT_LE_CLEANUP, BT_LE_FAILED
@@ -26,7 +26,17 @@ typedef struct {
     uint8_t id, type;
 } bt_le_report_char_t;
 
+// One boot-lifetime bond, reused only by an explicit reconnect command.
+// The public peer/local addresses bind the secret to this identity pair.
 typedef struct {
+    bool valid, authenticated;
+    uint8_t address_type, peer[6], local[6], ltk[16], rand[8];
+    uint16_t ediv;
+} bt_le_bond_t;
+
+typedef struct {
+    // The committed cache precedes the session fields cleared on disconnect.
+    bt_le_bond_t bond;
     bt_le_phase_t phase;
     uint64_t now, deadline, total_deadline, command_deadline, acl_deadline;
     uint16_t opcode, handle, acl_size, outstanding;
@@ -49,7 +59,9 @@ typedef struct {
     uint8_t verified_protocol;
     bool ccc_read, protocol_read;
     uint32_t passkey;
-    bool passkey_visible, just_works;
+    bool passkey_visible, just_works, bond_requested, bond_reused, bond_complete;
+    uint8_t bond_key_stage;
+    bt_le_bond_t pending_bond;
     uint8_t request[7], response[7], random[16], peer_random[16], peer_confirm[16];
     uint8_t tk[16], crypto[16];
     // USB fragmentation and HCI ACL fragmentation are separate boundaries.

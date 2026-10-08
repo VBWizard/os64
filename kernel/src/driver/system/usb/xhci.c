@@ -1155,7 +1155,10 @@ bool xhci_bluetooth_connection(const char *data, size_t bytes)
 {
 	if (__sync_lock_test_and_set(&s_poll_busy, 1)) return false;
 	xhci_bt_probe_t *p = s_bluetooth_hc ? &s_bluetooth_hc->bluetooth : NULL;
-	bool ok = p && !p->failed && (p->scan.phase == BT_SCAN_IDLE || p->scan.phase == BT_SCAN_DONE) &&
+	// In FAILED, the LE command parser permits forgetting cached keys without
+	// touching USB, including when transport failure prevents another session.
+	bool ok = p && (!p->failed || p->le.phase == BT_LE_FAILED) &&
+	    (p->scan.phase == BT_SCAN_IDLE || p->scan.phase == BT_SCAN_DONE) &&
 	    bt_le_request(&p->le, data, bytes, kTicksSinceStart * 1000 / TICKS_PER_SECOND);
 	__sync_lock_release(&s_poll_busy);
 	return ok;

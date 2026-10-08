@@ -29,7 +29,7 @@
 //                                "block", "cache", "conf", "gui", "log", "mounts",
 //                                "openfiles", "random", "shlib", "clipboard", "appearance", "decorations"
 //   /sys/bluetooth/scan          discovery status; write "scan" to request.
-//   /sys/bluetooth/connection    LE keyboard status; connect/inspect/disconnect commands.
+//   /sys/bluetooth/connection    LE keyboard status, session commands and boot-lifetime bond management.
 //   /sys/bluetooth/devices       snapshot of the latest Classic/LE results.
 //   /sys/console/font            the face the virtual terminals draw with.
 //                                READ: which face, its cell, the grid it

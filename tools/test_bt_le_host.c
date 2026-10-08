@@ -14,6 +14,10 @@ static uint8_t peer_pair_response[7];
 static uint64_t now;
 static unsigned commands,packets,keys,releases,rand_calls;
 static int scenario;
+static bool peer_bonding, peer_reconnecting;
+static unsigned peer_key_delivery;
+static const uint8_t peer_ltk[16]={0xa8,0x72,0x5c,0xe1,0x43,0x90,0xbb,0x62,0x71,0xc5,0x68,0x09,0x4f,0xd6,0xa1,0x37};
+static const uint8_t peer_rand[8]={0x91,0x23,0x34,0x45,0x56,0x67,0x78,0x89};
 enum { NORMAL, WRONG_CONFIRM, NO_BOOT, JUST_WORKS, REJECT_COMMAND, SHARED_BUFFER, GATT_ERROR, JUST_WORKS_OPT_IN, JUST_WORKS_BAD_CONFIRM, JUST_WORKS_MITM, JUST_WORKS_INVALID_IO, REPORT_PROTOCOL, REPORT_PROTOCOL_NO_MODE, REPORT_BAD_REF, REPORT_BAD_MAP, REPORT_MAP_TOO_LONG, REPORT_MAP_EXACT };
 static const uint8_t peer_addr[]={0x1a,0xf0,0xff,0xfe,0x2c,0xf8};
 static const uint8_t local_addr[]={0x49,0x4e,0x35,0x80,0x2f,0x6c};
@@ -108,13 +112,24 @@ static void controller(void)
         if(scenario>=JUST_WORKS_OPT_IN) for(unsigned i=0;i<16;i++) assert(cmd[3+i]==0);
         aes(cmd+3,cmd+19,e+6); n+=16; break;
     case 0x2019: {
-        uint8_t block[16],expected[16];
-        memcpy(block,session.random,8); memcpy(block+8,peer_nonce,8);
-        aes(session.tk,block,expected);
-        assert(!memcmp(cmd+15,expected,16));
-        for(unsigned i=5;i<15;i++) assert(!cmd[i]); // zero Rand and EDIV with the STK.
+        if(peer_reconnecting) {
+            assert(!memcmp(cmd+5,peer_rand,8) && le_u16(cmd+13)==0x1234 && !memcmp(cmd+15,peer_ltk,16));
+        } else {
+            uint8_t block[16],expected[16];
+            memcpy(block,session.random,8); memcpy(block+8,peer_nonce,8);
+            aes(session.tk,block,expected);
+            assert(!memcmp(cmd+15,expected,16));
+            for(unsigned i=5;i<15;i++) assert(!cmd[i]); // zero Rand and EDIV with the STK.
+        }
         const uint8_t status[]={0x0f,4,0,1,0x19,0x20}; event(status,sizeof(status));
-        const uint8_t enc[]={8,4,0,0x0b,0,1}; event(enc,sizeof(enc)); return;
+        const uint8_t enc[]={8,4,0,0x0b,0,1}; event(enc,sizeof(enc));
+        if(peer_bonding && peer_key_delivery) {
+            uint8_t key[17]={6},identity[11]={7,0x34,0x12};
+            memcpy(key+1,peer_ltk,16); memcpy(identity+3,peer_rand,8);
+            incoming(6,key,sizeof(key));
+            if(peer_key_delivery==2) incoming(6,identity,sizeof(identity));
+        }
+        return;
     }
     case 0x0c03: case 0x0c01: case 0x0c6d: case 0x2001: break;
     default: assert(!"unexpected command");
@@ -183,7 +198,8 @@ static void peripheral(void)
         if(p[0]==1) {
             assert(n==7); memcpy(pair_request,p,7);
             if(scenario>=JUST_WORKS_OPT_IN) {
-                const uint8_t expected[]={1,3,0,0,16,0,0};
+                assert(!peer_reconnecting);
+                const uint8_t expected[]={1,3,0,peer_bonding?1:0,16,0,peer_bonding?1:0};
                 assert(!memcmp(p,expected,7));
                 assert(!session.passkey_visible && !session.passkey);
             }
@@ -237,6 +253,7 @@ static void tick(bool usb,bool bulk)
 static void begin(int which)
 {
     session=(bt_le_t){0}; cmd_n=tx_n=0; now=0; commands=packets=keys=releases=rand_calls=0;
+    peer_bonding=false; peer_reconnecting=false; peer_key_delivery=0;
     scenario=which; for(unsigned i=0;i<16;i++) peer_nonce[i]=0xf0-i;
     memcpy(peer_pair_response,pair_response,7);
     if(which==JUST_WORKS) peer_pair_response[1]=3;
@@ -422,6 +439,102 @@ static void inspection(void)
     puts("PASS: readback gates readiness; live inspect preserves input, checks settings and has bounded failure cleanup");
 }
 
+static void begin_bond(unsigned delivery)
+{
+    begin(REPORT_PROTOCOL); session=(bt_le_t){0};
+    peer_bonding=true; peer_key_delivery=delivery; peer_pair_response[6]=1;
+    const char *request="bond-justworks random f8:2c:fe:ff:f0:1a";
+    assert(bt_le_request(&session,request,strlen(request),now));
+}
+static void assert_zero(const void *p,size_t n)
+{ const uint8_t *b=p; for(size_t i=0;i<n;i++) assert(!b[i]); }
+static void stop_session(void)
+{
+    assert(bt_le_request(&session,"disconnect",10,now));
+    for(unsigned i=0;i<10 && session.phase!=BT_LE_IDLE;i++) { tick(true,true); controller(); }
+    assert(session.phase==BT_LE_IDLE);
+}
+static void bonding(void)
+{
+    begin_bond(2); run();
+    assert(session.phase==BT_LE_READY && session.bond_complete && session.bond.valid);
+    assert(session.bond_key_stage==2 && !session.bond.authenticated);
+    assert(session.bond.address_type==1 && !memcmp(session.bond.peer,peer_addr,6));
+    assert(!memcmp(session.bond.local,local_addr,6) && !memcmp(session.bond.ltk,peer_ltk,16));
+    assert(session.bond.ediv==0x1234 && !memcmp(session.bond.rand,peer_rand,8));
+    assert_zero(&session.pending_bond,sizeof(session.pending_bond)); assert_zero(session.crypto,16);
+    char status[8192]; bt_le_status(&session,status,sizeof(status));
+    assert(strstr(status,"bond for this boot (lost on reboot)") && strstr(status,"cached=yes requested=yes reused=no complete=yes"));
+    assert(!strstr(status,"a8 72 5c e1") && !strstr(status,"a8725ce1"));
+    assert(!bt_le_request(&session,"forget",6,now));
+    const uint8_t key[]={0x1b,16,0,2,0,4,0,0,0,0,0}; incoming(4,key,sizeof(key));
+    assert(keys==1); stop_session(); assert(releases==1 && session.bond.valid);
+    // HCI Reset disconnects the controller; the host cache survives it.
+    peer_bonding=false; peer_reconnecting=true; peer_key_delivery=0; rand_calls=0;
+    assert(bt_le_request(&session,"reconnect",9,now)); run();
+    assert(session.phase==BT_LE_READY && session.bond_reused && session.bond_complete && !rand_calls);
+    assert(session.just_works && !session.request[0]); incoming(4,key,sizeof(key)); assert(keys==2);
+    stop_session(); assert(bt_le_request(&session,"forget",6,now));
+    assert_zero(&session.bond,sizeof(session.bond)); assert(!bt_le_request(&session,"reconnect",9,now));
+    // A new explicit session must not inherit or silently reuse bonding policy.
+    begin_bond(2); run(); stop_session(); peer_bonding=false;
+    assert(bt_le_request(&session,"connect random f8:2c:fe:ff:f0:1a",32,now));
+    assert(!session.just_works && !session.bond_requested && !session.bond_reused && session.bond.valid);
+    // A controller identity mismatch must not send a cached key to a new adapter.
+    begin_bond(2); run(); stop_session(); session.bond.local[0]^=1;
+    peer_bonding=false; peer_reconnecting=true;
+    assert(bt_le_request(&session,"reconnect",9,now)); run();
+    assert(session.phase==BT_LE_FAILED && strstr(session.error,"different local controller"));
+    assert(!session.connected && bt_le_request(&session,"forget",6,now));
+    assert_zero(&session.bond,sizeof(session.bond));
+    // Passkey bonding retains authentication on cached-key reconnection too.
+    begin(NORMAL); session=(bt_le_t){0}; peer_bonding=true; peer_key_delivery=2;
+    peer_pair_response[3]=5; peer_pair_response[6]=1;
+    assert(bt_le_request(&session,"bond random f8:2c:fe:ff:f0:1a",29,now)); run();
+    assert(session.phase==BT_LE_READY && session.bond.authenticated && !session.just_works);
+    assert(pair_request[1]==0 && pair_request[3]==5 && pair_request[5]==0 && pair_request[6]==1);
+    stop_session(); peer_bonding=false; peer_reconnecting=true; rand_calls=0;
+    assert(bt_le_request(&session,"reconnect",9,now)); run();
+    assert(session.phase==BT_LE_READY && !session.just_works && session.bond_complete && !rand_calls);
+    // Missing distribution or bonding consent is refused before any key exchange.
+    for(unsigned field=3;field<=6;field++) {
+        begin_bond(2); peer_pair_response[field]=field==4?12:field==5?1:0; run();
+        assert(session.phase==BT_LE_FAILED && !session.bond.valid && !session.bond_complete);
+    }
+    // One key half is insufficient; timeout leaves no pending secret or new cache.
+    begin_bond(1); run(); assert(session.phase==BT_LE_BOND_KEYS && session.bond_key_stage==1);
+    assert(!session.bond.valid && !session.service_start); now+=10001; tick(true,true);
+    assert(session.phase==BT_LE_CLEANUP); assert_zero(&session.pending_bond,sizeof(session.pending_bond));
+    assert_zero(session.wire,sizeof(session.wire)); assert_zero(session.l2cap,sizeof(session.l2cap));
+    // Invalid ordering, duplicates, lengths and pre-encryption distribution fail closed.
+    const uint8_t ident[]={7,0x34,0x12,0x91,0x23,0x34,0x45,0x56,0x67,0x78,0x89};
+    for(unsigned kind=0;kind<4;kind++) {
+        begin_bond(0); run(); assert(session.phase==BT_LE_BOND_KEYS);
+        uint8_t ltk[17]={6}; memcpy(ltk+1,peer_ltk,16);
+        if(kind==0) incoming(6,ident,sizeof(ident));
+        if(kind==1) { incoming(6,ltk,17); incoming(6,ltk,17); }
+        if(kind==2) incoming(6,ltk,16);
+        if(kind==3) { session.encrypted=false; incoming(6,ltk,17); }
+        assert(session.phase==BT_LE_CLEANUP && !session.bond.valid);
+        assert_zero(&session.pending_bond,sizeof(session.pending_bond));
+    }
+    // Completing distribution later than Encryption Change also starts HID.
+    begin_bond(1); run(); incoming(6,ident,sizeof(ident)); run();
+    assert(session.phase==BT_LE_READY && session.bond.valid);
+    bt_le_bond_t previous=session.bond; stop_session();
+    peer_bonding=true; peer_key_delivery=1;
+    assert(bt_le_request(&session,"bond-justworks random f8:2c:fe:ff:f0:1a",39,now)); run();
+    now+=10001; tick(true,true);
+    assert(session.phase==BT_LE_CLEANUP && !memcmp(&previous,&session.bond,sizeof(previous)));
+    // Without an identity resolver, do not claim bonds for rotating addresses.
+    bt_le_t s={0};
+    assert(!bt_le_request(&s,"bond-justworks random 48:2c:fe:ff:f0:1a",39,0));
+    assert(!bt_le_request(&s,"bond-justworks random f8:2c:fe:ff:f0:zz",39,0));
+    assert(!bt_le_request(&s,"reconnect junk",14,0));
+    assert(bt_le_request(&s,"bond public 01:02:03:04:05:06",29,0) && !s.just_works && s.bond_requested);
+    puts("PASS: encrypted ordered bond distribution, cached-key reconnect, identity binding, forgetting and secret cleanup");
+}
+
 static void failures(void)
 {
     for(int kind=WRONG_CONFIRM;kind<=GATT_ERROR;kind++) {
@@ -508,7 +621,7 @@ static void pairing_diagnostics(void)
 
 int main(void)
 {
-    vectors(); success(); failures(); framing(); pairing_diagnostics(); just_works(); report_protocol(); receive_diagnostics(); inspection();
+    vectors(); success(); failures(); framing(); pairing_diagnostics(); just_works(); report_protocol(); receive_diagnostics(); inspection(); bonding();
     bt_le_t s={0};
     assert(!bt_le_request(&s,"connect random zz:00:00:00:00:00",32,0));
     assert(!bt_le_request(&s,"disconnect junk",15,0));

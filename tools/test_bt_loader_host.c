@@ -295,6 +295,13 @@ static void runtime_transport(void)
     xhci_bt_runtime_poll();
     CHECK(bt_releases==1 && !p->rx[0].rearm_pending && !p->rx[1].rearm_pending);
     CHECK(!memcmp(p->tx.buffer+512,"\x03\x0c\0",3));
+    p->failed=true; p->le.phase=BT_LE_FAILED; p->le.bond.valid=true;
+    memset(p->le.bond.ltk,0x5a,sizeof(p->le.bond.ltk));
+    unsigned enqueued=p->device->ep0.enqueue;
+    CHECK(!xhci_bluetooth_connection("reconnect",9));
+    CHECK(xhci_bluetooth_connection("forget",6) && !p->le.bond.valid);
+    for(unsigned i=0;i<sizeof(p->le.bond.ltk);i++) CHECK(!p->le.bond.ltk[i]);
+    CHECK(p->device->ep0.enqueue==enqueued);
     puts("PASS: production xHCI ACL receive, key delivery/release and disjoint control/bulk DMA");
 }
 

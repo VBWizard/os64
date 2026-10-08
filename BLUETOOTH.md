@@ -114,12 +114,46 @@ commands for fresh nonces and the Core c1/s1 functions, verify the peer's confir
 value, and wait for successful Encryption Change before discovering HID. Neither
 mode is LE Secure Connections. Legacy Just Works does not protect the pairing
 exchange against passive listeners or active impersonation; legacy passkey
-pairing also lacks Secure Connections' resistance to passive capture. Pairing is
+pairing also lacks Secure Connections' resistance to passive capture. The `connect` commands are
 session-only: no bond or identity keys are distributed or stored, so a later
 connection requires pairing again. This session-only path is experimental:
 [HOGP 1.0 sections 6.1–6.2](https://www.bluetooth.org/docman/handlers/downloaddoc.ashx?doc_id=245141)
-require bonding for both the HID Device and Host. Its omission is a keyboard
-compatibility gap, not merely a missing reconnect feature.
+require bonding for both the HID Device and Host. The session-only commands
+therefore omit a keyboard compatibility requirement, not merely reconnect.
+
+Use `bond-justworks` (or `bond` for Passkey Entry) to request bonding and the
+peripheral's 16-byte long-term encryption key:
+
+```sh
+echo bond-justworks random de:73:10:60:93:6a > /sys/bluetooth/connection
+cat /sys/bluetooth/connection
+```
+
+The host waits for Encryption Information and Central Identification in order,
+after encryption, before HID discovery. Both halves must arrive within ten
+seconds. The completed LTK/EDIV/Rand record is bound to the local controller and
+peer addresses and retained in kernel memory for this boot. It is not printed
+in status. Partial or rejected exchanges wipe pending secrets and do not replace
+a previously committed cache. Status distinguishes requested, complete, cached
+and reused bonds.
+
+After an explicit `disconnect` has returned to `idle`, `reconnect` uses that
+cached key without repeating pairing or silently falling back to a weaker mode.
+`forget` erases the local cache while idle or failed; it does not erase the
+keyboard's own record. A new explicit bond request can replace the one-record
+cache after successful key distribution.
+
+```sh
+echo disconnect > /sys/bluetooth/connection
+# Wait for idle before reconnecting.
+echo reconnect > /sys/bluetooth/connection
+```
+
+**The cache is lost on reboot.** After reboot, put the keyboard back into pairing
+mode and bond again. Persistent storage, identity-key resolution and automatic
+reconnect are tracked in DEBTS.md. Bond commands accept public or static random
+addresses; rotating private addresses require identity support. A failed session
+still requires reboot before another connection attempt.
 
 The keyboard must expose HID service 0x1812. A notifying Boot Keyboard Input
 0x2a22 with a CCC descriptor and writable Protocol Mode 0x2a4e selects Boot
@@ -213,7 +247,9 @@ optional Protocol Mode, multi-chunk and exact-boundary map reads, malformed maps
 and references, and key release on a mismatched notification. Readback tests
 cover incorrect CCC/Protocol Mode values, malformed replies, optional reads,
 input during inspection, and inspection timeout cleanup after the original
-setup deadline.
+setup deadline. Bond tests cover encrypted key ordering, missing/partial keys,
+cache preservation, cached-key reconnection, identity checks, forgetting and
+secret cleanup.
 `tools/test_hid_keyboard_map_host.sh` checks arrays, bitmaps, unaligned padding,
 Report IDs, rollover and mutated descriptor bounds under ASan/UBSan. These are
 synthetic fixtures; the map suite also includes the P5 keyboard's captured
@@ -272,6 +308,14 @@ the next hardware checks. Chris also reported that rapid pairing-mode blinking
 continued during the typing attempts. With no delivered notifications, that
 makes incomplete device-side pairing/bonding a candidate cause; the LED's
 meaning and the causal link are not established by the host status.
+
+At `5bdf8c98`, the keyboard read back CCC=0001 and Protocol Mode=1. After prompt
+typing produced no visible input, explicit live inspection succeeded again:
+538 bytes / 23 ACL packets became 559 / 25, with two packets after readiness,
+zero notifications, and zero malformed packets. Readiness was 61210 ms and the
+second successful inspection was 96670 ms. Thus the request/reply receive path
+remained live with both settings correct. Bonding/key distribution is the next
+hardware test; simulated bonding does not establish P5 input compatibility.
 
 Wire references: [Bluetooth Core Security Manager](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/host/security-manager-specification.html),
 [ATT](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/host/attribute-protocol--att-.html),
