@@ -14,6 +14,8 @@ static const os64_html_node_t *query_next(const DQuery *query, const os64_html_n
 static bool matches(const DQuery *query, const os64_html_node_t *node)
 {
     if (query->elements && node->kind != OS64_HTML_ELEMENT) return false;
+    if (query->kind != D_QUERY_GENERIC && !d_classic_match(query->dom, query->owner != NULL ? query->owner : query->root, node, query->kind)) return false;
+    if (query->named != NULL && !d_named_match(node, query->named)) return false;
     if (query->name == NULL || os64_strcmp(query->name, "*") == 0) return true;
     return node->kind == OS64_HTML_ELEMENT && node->name != NULL &&
         os64_strcmp(node->name, node->ns == OS64_HTML_NS_HTML ? query->folded : query->name) == 0;
@@ -24,6 +26,17 @@ static bool matches(const DQuery *query, const os64_html_node_t *node)
 static bool refresh(DQuery *query, JSContext *ctx)
 {
     if (!d_context(query->dom, ctx, OS64_JS_ABI_ID)) return false;
+    if (query->kind == D_QUERY_CONTROLS && query->owner != NULL) {
+        const os64_html_node_t *root = query->owner;
+        while (root->parent != NULL) root = root->parent;
+        if (root != query->dom->document->document) root = query->owner;
+        if (root != query->root) {
+            os64_html_hold(query->dom->document, root);
+            os64_html_release(query->dom->document, query->root);
+            query->root = root;
+            query->version = 0;
+        }
+    }
     uint64_t version = os64_html_version(query->dom->document);
     if (query->version == version) return true;
     size_t count = 0;
@@ -60,6 +73,7 @@ void d_query_free(os64_dom_t *dom, DQuery *query)
     d_free(dom, query->nodes);
     d_free(dom, query->folded);
     d_free(dom, query->name);
+    d_free(dom, query->named);
     d_free(dom, query);
 }
 
@@ -122,6 +136,17 @@ static JSValue collection_method(JSContext *ctx, JSValueConst self, int argc,
     if (dom == NULL) return JS_EXCEPTION;
     DQuery *query = JS_GetOpaque(self, dom->collection_class);
     if (query == NULL) return JS_ThrowTypeError(ctx, "Expected a collection");
+    if (magic == 2) {
+        DString name = {0};
+        if (argc < 1) return JS_ThrowTypeError(ctx, "Missing collection name");
+        if (!d_string(dom, ctx, argv[0], &name)) return JS_EXCEPTION;
+        JSValue result = JS_NULL;
+        if (!refresh(query, ctx)) result = JS_EXCEPTION;
+        else if (name.length != 0) for (size_t i = 0; i < query->count; i++)
+            if (d_named_match(query->nodes[i], name.data)) { result = d_wrap(dom, ctx, query->nodes[i]); break; }
+        d_string_free(dom, &name);
+        return result;
+    }
     uint32_t index = 0;
     if (magic != 0 && (argc < 1 || JS_ToUint32(ctx, &index, argv[0]) < 0))
         return argc < 1 ? JS_ThrowTypeError(ctx, "Missing collection index") : JS_EXCEPTION;
@@ -169,13 +194,31 @@ static int own_property(JSContext *ctx, JSPropertyDescriptor *desc, JSValueConst
     if (query == NULL) return -1;
     uint32_t index;
     int numeric = index_key(ctx, atom, &index);
-    if (numeric <= 0) return numeric;
+    if (numeric < 0) return -1;
     if (!refresh(query, ctx)) return -1;
+    if (!numeric) {
+        if (!query->elements) return 0;
+        JSValue prototype = JS_GetPrototype(ctx, object);
+        if (JS_IsException(prototype)) return -1;
+        int reserved = JS_IsNull(prototype) ? 0 : JS_HasProperty(ctx, prototype, atom);
+        JS_FreeValue(ctx, prototype);
+        if (reserved != 0) return reserved < 0 ? -1 : 0;
+        JSValue key = JS_AtomToValue(ctx, atom);
+        if (JS_IsException(key)) return -1;
+        if (!JS_IsString(key)) { JS_FreeValue(ctx, key); return 0; }
+        const char *name = JS_ToCString(ctx, key);
+        JS_FreeValue(ctx, key);
+        if (name == NULL) return -1;
+        index = (uint32_t)query->count;
+        if (*name != '\0' && os64_strcmp(name,"length") && os64_strcmp(name,"item") && os64_strcmp(name,"namedItem"))
+            for (size_t i = 0; i < query->count; i++) if (d_named_match(query->nodes[i], name)) { index = (uint32_t)i; break; }
+        JS_FreeCString(ctx, name);
+    }
     if (index >= query->count) return 0;
     if (desc != NULL) {
         JSValue value = d_wrap(query->dom, ctx, query->nodes[index]);
         if (JS_IsException(value)) return -1;
-        desc->flags = JS_PROP_ENUMERABLE | JS_PROP_CONFIGURABLE;
+        desc->flags = JS_PROP_CONFIGURABLE | (numeric ? JS_PROP_ENUMERABLE : 0);
         desc->value = value;
         desc->getter = JS_UNDEFINED;
         desc->setter = JS_UNDEFINED;
@@ -253,5 +296,24 @@ int d_collection_install(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype
 {
     if (!d_context(dom, ctx, OS64_JS_ABI_ID)) return -1;
     if (d_accessor(dom, ctx, prototype, "length", collection_method, 0, false) < 0) return -1;
-    return d_method(dom, ctx, prototype, "item", collection_method, 1, 1);
+    if (d_method(dom, ctx, prototype, "item", collection_method, 1, 1) < 0) return -1;
+    return d_method(dom, ctx, prototype, "namedItem", collection_method, 1, 2);
+}
+
+JSValue d_special_collection(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *root,
+                             unsigned kind, const char *named)
+{
+    char *copy = NULL;
+    if (named != NULL) {
+        size_t len = os64_strlen(named) + 1;
+        copy = d_alloc(dom, len);
+        if (copy == NULL) return d_error(ctx,"QuotaExceededError","DOM named collection quota exceeded");
+        os64_memcpy(copy, named, len);
+    }
+    JSValue result = d_collection(dom, ctx, root, true, true, NULL);
+    if (JS_IsException(result)) { d_free(dom, copy); return result; }
+    DQuery *query = JS_GetOpaque(result, dom->collection_class);
+    query->kind = kind;
+    query->named = copy;
+    return result;
 }

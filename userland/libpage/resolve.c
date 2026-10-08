@@ -487,6 +487,23 @@ bool os64_page_resolve_in(const os64_html_document_t *doc, const char *document_
     return ok;
 }
 
+bool os64_page_base_in(const os64_html_document_t *doc, const char *document_url, char *out,
+                       size_t cap)
+{
+    if (out == NULL || cap == 0)
+        return false;
+    // A scratch page, as os64_page_resolve_in makes one.
+    os64_page_t *page = os64_calloc(1, sizeof(*page));
+    if (page == NULL)
+        return false;
+    page->doc = doc;
+    bool ok = p_document_url(page, document_url) && p_base(page) && page->base_url != NULL &&
+              (size_t)os64_snprintf(out, cap, "%s", page->base_url) < cap;
+    p_arena_free(&page->arena);
+    os64_free(page);
+    return ok;
+}
+
 void p_resolve_action(os64_page_t *page, const char *ref, os64_page_ref_t *out)
 {
     p_resolve(page, ref, out);

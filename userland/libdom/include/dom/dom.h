@@ -82,6 +82,9 @@ typedef struct {
     const char *key;
     uint32_t key_code, char_code;
     bool shift, ctrl, alt, meta;
+    // Optional CSS-page coordinates captured with the event, before callbacks.
+    bool page_coordinates;
+    int32_t page_x, page_y;
 } os64_dom_event_t;
 
 typedef enum {
@@ -120,6 +123,7 @@ typedef struct {
     int32_t client_left, client_top, client_width, client_height;
     const os64_html_node_t *offset_parent;
     uint64_t layouts, elapsed_us;
+    int32_t scroll_left, scroll_top;
 } os64_dom_geometry_t;
 
 typedef bool (*os64_dom_geometry_provider_t)(void *opaque,
@@ -169,6 +173,10 @@ os64_dom_t *os64_dom_create(os64_js_runtime_t *runtime,
                             os64_page_state_t *state,
                             const os64_dom_options_t *options,
                             os64_js_outcome_t *outcome);
+
+/* Owner-thread browser identity provider, borrowed text for the getter call.
+ * NULL restores the native Yonder identity; install/replace outside callbacks. */
+void os64_dom_set_user_agent(os64_dom_t *dom, const char *(*provider)(void *opaque), void *opaque);
 
 /* Install/replace the native provider outside script callbacks. A provider
  * ensures a current layout, copies a snapshot and records attempted layouts

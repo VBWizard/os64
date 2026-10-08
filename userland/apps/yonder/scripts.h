@@ -125,4 +125,6 @@ uint64_t yonder_scripts_tasks(const yonder_scripts_t *scripts);
 // How many bytes the last task handed to document.write: the audit's too.
 uint64_t yonder_scripts_written(const yonder_scripts_t *scripts);
 
+void yonder_scripts_set_user_agent(yonder_scripts_t *scripts, const char *(*provider)(void *), void *opaque);
+
 #endif

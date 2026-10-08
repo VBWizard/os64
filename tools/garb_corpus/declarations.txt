@@ -756,3 +756,25 @@ IN: image-rendering: -webkit-optimize-contrast
 OUT: image-rendering: -webkit-optimize-contrast
 IN: image-rendering: blurry
 OUT: invalid
+
+# Legacy rectangular clipping (CSS 2.1 § 11.1.2).
+IN: clip: auto
+OUT: clip: auto
+IN: clip: rect(1px, 20px, 30px, -4px)
+OUT: clip: rect(1px, 20px, 30px, -4px)
+IN: clip: rect(auto 20px auto 0)
+OUT: clip: rect(auto, 20px, auto, 0px)
+IN: clip: rect(1px, 20px 30px, 4px)
+OUT: invalid
+IN: clip: rect(1px 20px, 30px 4px)
+OUT: invalid
+IN: clip: rect(1px, 20px, 30px)
+OUT: invalid
+IN: clip: rect(1px, 20px, 30px, 4px, 5px)
+OUT: invalid
+IN: clip: rect(10%, 20px, 30px, 4px)
+OUT: invalid
+IN: quirks clip: rect(1, 20, 30, 4)
+OUT: invalid
+IN: clip: inherit
+OUT: clip: inherit

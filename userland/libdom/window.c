@@ -502,7 +502,8 @@ int d_window_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
         d_method(dom, ctx, form_prototype, "submit", element_method, 0, A_SUBMIT) < 0 ||
         d_method(dom, ctx, form_prototype, "requestSubmit", element_method, 0, A_REQUEST_SUBMIT) < 0)
         return -1;
-    return d_method(dom, ctx, form_prototype, "reset", element_method, 0, A_RESET);
+    if (d_method(dom, ctx, form_prototype, "reset", element_method, 0, A_RESET) < 0) return -1;
+    return d_classic_install(dom, ctx, global);
 }
 
 /* SCRIPT ELEMENTS. */

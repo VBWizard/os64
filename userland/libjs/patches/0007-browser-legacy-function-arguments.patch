@@ -1,0 +1,45 @@
+# The C hunk closes js_build_arguments with an added brace and reuses
+# its existing closing brace for JS_GetLegacyFunctionArguments.
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -16240,6 +16240,29 @@
+  fail:
+     JS_FreeValue(ctx, val);
+     return JS_EXCEPTION;
++}
++
++/* Browser compatibility: a detached, unmapped snapshot of the innermost
++ * active ordinary non-strict function's arguments. No stack storage escapes. */
++JSValue JS_GetLegacyFunctionArguments(JSContext *ctx, JSValueConst function)
++{
++    JSObject *object;
++    JSFunctionBytecode *bytecode;
++    JSStackFrame *frame;
++    if (!JS_IsObject(function))
++        return JS_ThrowTypeError(ctx, "legacy arguments requires an ordinary function");
++    object = JS_VALUE_GET_OBJ(function);
++    if (object->class_id != JS_CLASS_BYTECODE_FUNCTION)
++        return JS_ThrowTypeError(ctx, "legacy arguments requires an ordinary function");
++    bytecode = object->u.func.function_bytecode;
++    if ((bytecode->js_mode & JS_MODE_STRICT) || !bytecode->has_prototype ||
++        bytecode->realm != ctx)
++        return JS_ThrowTypeError(ctx, "legacy arguments is unavailable for this function");
++    for (frame = ctx->rt->current_stack_frame; frame != NULL; frame = frame->prev_frame) {
++        if (JS_IsObject(frame->cur_func) && JS_VALUE_GET_OBJ(frame->cur_func) == object)
++            return js_build_arguments(ctx, frame->arg_count, frame->arg_buf);
++    }
++    return JS_NULL;
+ }
+
+ #define GLOBAL_VAR_OFFSET 0x40000000
+--- a/quickjs.h
++++ b/quickjs.h
+@@ -844,6 +844,8 @@
+                     const char *input, size_t input_len,
+                     const char *filename, int eval_flags);
+ JSValue JS_GetGlobalObject(JSContext *ctx);
++/* Browser-only legacy accessor helper; install explicitly in that context. */
++JSValue JS_GetLegacyFunctionArguments(JSContext *ctx, JSValueConst function);
+ int JS_IsInstanceOf(JSContext *ctx, JSValueConst val, JSValueConst obj);
+ int JS_DefineProperty(JSContext *ctx, JSValueConst this_obj,
+                       JSAtom prop, JSValueConst val,

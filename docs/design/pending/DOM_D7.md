@@ -548,7 +548,7 @@ guest: D8's lost-wrapper page and D10's `dom-geometry.html` through the
 real stream with scripts on, and D7b's walk unchanged.
 
 **D7d — the sheets before a script** (on `userland`, after D7c; Opus builds,
-Fable reviews). This is item 3 of § The stream's turn, which D7b departed
+Fable reviews). **Built:** DOM.md § D7d, as built. This is item 3 of § The stream's turn, which D7b departed
 from ("Sheets are not awaited at a script's stop", DOM.md § D7b, as built)
 because nothing a script could read depended on it. D10 ended that: a
 parser-blocking script can measure, and one that runs before the sheets

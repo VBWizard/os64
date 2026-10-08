@@ -7,7 +7,7 @@ cleanup() {
     if [ "$result" -eq 0 ] && [ "${DOM_HOST_KEEP:-0}" = 0 ]; then rm -rf "$work"; else echo "DOM host artifacts: $work" >&2; fi
 }
 trap cleanup EXIT
-for name in core node collection content event timer window geometry; do
+for name in core node collection content event timer window geometry classic style; do
     test -f "userland/libdom/$name.c" || { echo "libdom implementation pending: $name.c" >&2; exit 1; }
 done
 make -C userland -j8 js-runtime-test > "$work/build.log" 2>&1 || { cat "$work/build.log"; exit 1; }
@@ -15,14 +15,15 @@ flags=(-O2 -g -std=gnu11 -Wall -Wextra -Werror -ffreestanding -fno-builtin
     -fno-tree-loop-distribute-patterns -fno-stack-protector -DOS64_JS_TARGET
     -Iuserland/libmath/include -Iuserland/libjs/port -Iuserland/libjs/include
     -Iuserland/libdom/include -Iuserland/libhtml/include -Iuserland/libpage/include
-    -Iuserland/libpage/upstream/ryu -Iuserland/libos64/include -Iabi/include
+    -Iuserland/libgarb/include -Iuserland/libpage/upstream/ryu -Iuserland/libos64/include -Iabi/include
     -isystem userland/obj/js/upstream -fsanitize=address,undefined -fno-sanitize-recover=all)
 objects=()
 for source in userland/libjs/runtime/runtime.c userland/libos64/str.c userland/libos64/fmt.c \
-    userland/libos64/bidi.c userland/libos64/url.c tools/test_js_port_calendar.c tools/test_dom_host.c \
+    userland/libos64/bidi.c userland/libos64/url.c userland/libos64/arena.c tools/test_js_port_calendar.c tools/test_dom_host.c \
     userland/libhtml/{core,encoding,tokenizer,tree,dom,fragment,serialize}.c \
     userland/libpage/{core,state,resolve,value,submit,encode,refresh,activate,number,range}.c \
-    userland/libpage/upstream/ryu/ryu/d2s.c; do
+    userland/libpage/upstream/ryu/ryu/d2s.c \
+    userland/libgarb/{tokenize,parse,decode,dump,select,values,props,media,cascade}.c; do
     object="$work/${source//\//_}.o"
     cc "${flags[@]}" -c "$source" -o "$object"
     if [ "$source" = userland/libos64/str.c ]; then
@@ -35,7 +36,7 @@ done
 # Source-local interception counts binding allocations without attributing
 # engine or tree allocations to the binding's own failure sweep. The private
 # allocator name is distinct because these DSOs share one host executable.
-for name in core node collection content event timer window geometry; do
+for name in core node collection content event timer window geometry classic style; do
     object="$work/dom-$name.o"
     cc "${flags[@]}" -Dd_alloc=dom_host_private_alloc -Dos64_malloc=dom_host_malloc -Dos64_calloc=dom_host_calloc \
         -Dos64_realloc=dom_host_realloc -Dos64_free=dom_host_free \

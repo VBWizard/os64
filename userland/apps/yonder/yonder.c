@@ -43,6 +43,7 @@
 #include "scripts.h"
 #include "script_job.h"
 #include "geometry.h"
+#include "events.h"
 #include "ticker.h"
 #include "trip.h"
 
@@ -324,7 +325,11 @@ typedef struct {
 // One of a page's style sheets (GARB.md, G3 and G4): a `style` element's,
 // a linked one, or one an @import brought. Entries never move once made —
 // the cascade's input points at their parses — and an @import's entry is
-// made when its importer is ready.
+// made when its importer is ready. A table is filled as its page's tree
+// reveals sheets, so its order is the order they were found in; the
+// cascade takes them in the order the page's model lists their elements
+// (page_lay_out), which is the document's, and leaves out one whose element
+// the model no longer lists.
 #define SHEETS_MAX 64           // a page's sheets, @imports included
 #define SHEET_IMPORTS_MAX 16    // the @imports one sheet may make
 #define SHEETS_WAIT_MS 3000     // how long a page waits for its sheets before it is shown
@@ -338,7 +343,12 @@ typedef struct Sheet {
     // it is an import of a sheet that does. One that does not is fetched
     // all the same, and laid in when it lands.
     bool holds;
+    // A script waited its SHEETS_WAIT_MS for it and it did not come: it
+    // holds nothing from then on, neither a later script nor the first
+    // paint (stream_sheets_hold).
+    bool lapsed;
     os64_work_id_t id;
+    const os64_html_node_t *node;   // a sheet the page names: its element, held; NULL otherwise
     const char *media;              // a sheet the page names: its element's; NULL otherwise
     int32_t importer, import_index; // -1 for a sheet the page names; else its @import
     char *url;                      // where it came from, its @imports' base; NULL for a `style`
@@ -435,12 +445,16 @@ static os64_page_t *page_model(const Page *p)
 }
 
 static void measured_forget(const os64_html_document_t *doc);
-static Sheet *sheet_new(Page *p, const char *media, int32_t importer, int32_t import_index);
+static Sheet *sheet_new(Page *p, const os64_html_node_t *node, const char *media,
+                        int32_t importer, int32_t import_index);
 
-// A sheet table's parses and records, and the table.
-static void sheet_table_free(Sheet *sheets, int32_t n)
+// A sheet table's parses, records and element holds (on `doc`), and the
+// table.
+static void sheet_table_free(const os64_html_document_t *doc, Sheet *sheets, int32_t n)
 {
     for (int32_t i = 0; i < n; i++) {
+        if (sheets[i].node != NULL)
+            os64_html_release(doc, sheets[i].node);
         if (sheets[i].borrowed_from == NULL)
             garb_free(&sheets[i].parsed);
         os64_free(sheets[i].url);
@@ -453,7 +467,7 @@ static void sheet_table_free(Sheet *sheets, int32_t n)
 static void sheets_free(Page *p)
 {
     measured_forget(page_doc(p));
-    sheet_table_free(p->sheets, p->nsheets);
+    sheet_table_free(page_doc(p), p->sheets, p->nsheets);
     p->sheets = NULL;
     p->nsheets = p->sheets_waiting = p->sheets_ready = 0;
 }
@@ -502,6 +516,15 @@ static void page_clear(Page *p)
 // (garb/cascade.h). Its index, or -1 when it is not ready.
 // The cascade writes into each sheet's arena as it reads a rule's block
 // (garb_rules_of), so the page is not const here.
+// The table's entry for the sheet `node` names, -1 when it has none.
+static int32_t sheet_of(const Page *p, const os64_html_node_t *node)
+{
+    for (int32_t e = 0; e < p->nsheets; e++)
+        if (p->sheets[e].node == node && p->sheets[e].importer < 0)
+            return e;
+    return -1;
+}
+
 static int32_t sheet_emit(Page *p, int32_t e, garb_sheet_in_t *in, int32_t *entry, int32_t *n)
 {
     Sheet *sh = &p->sheets[e];
@@ -572,13 +595,16 @@ static bool page_lay_out(Page *p, int32_t width, int32_t height, uint32_t zoom, 
     garb_cascade_t *cascade = p->cascade;
     int32_t entry[SHEETS_MAX] = {0};
     garb_env_t view = css_view(width, height, zoom);
-    if (p->sheets_changed || (cascade != NULL && (garb_cascade_env(cascade).width != view.width ||
+    if (cascade == NULL || p->sheets_changed || (cascade != NULL && (garb_cascade_env(cascade).width != view.width ||
                                                   garb_cascade_env(cascade).height != view.height))) {
         garb_sheet_in_t in[SHEETS_MAX];
         int32_t n = 0;
-        for (int32_t e = 0; e < p->nsheets; e++)
-            if (p->sheets[e].importer < 0)
+        const os64_page_t *model = page_model(p);
+        for (int32_t i = 0; model != NULL && i < os64_page_nsheets(model); i++) {
+            int32_t e = sheet_of(p, os64_page_sheet(model, i)->node);
+            if (e >= 0)
                 (void)sheet_emit(p, e, in, entry, &n);
+        }
         // Inline style attributes also need a cascade when no sheet is linked.
         cascade = garb_cascade(in, n, page_doc(p), view);
         if (cascade == NULL)
@@ -828,6 +854,14 @@ static struct {
         bool stopped, ending, ended;
         uint64_t ended_ms;
         bool scriptless;                // its host could not be made: no script runs
+        // THE STREAM'S PAGE (DOM_D7.md § D7d): the parse so far as a page
+        // with a sheet table, filled as the parse reveals sheets
+        // (stream_sheets) and moved to the page that arrives. Its
+        // document, address and serial are the stream's (stream_page).
+        // `sheets_due`: when the script the parse is stopped at stops
+        // waiting for those still out, 0 while it is not waiting.
+        Page page;
+        uint64_t sheets_due;
         // A file's bytes, fed through the same turn as a fetch's, so a page
         // from disk arrives by the one road a page from the network takes.
         uint8_t *local;
@@ -900,18 +934,14 @@ static struct {
 // the page out for itself), and nothing is clamped, placed or painted. It
 // is kept for the reads after it while nothing it was made from has moved,
 // and let go before its document, its control state or its sheets are.
-// The page waiting for its sheets is measured against its own table; a page
-// with no table yet, against its `style` elements, parsed into `sheets`
-// here — what they @import and the sheets it links are not asked for before
-// it arrives.
+// Each page is measured against its own sheet table, the stream's included
+// (stream_sheets): the sheets found so far, as far as they have come.
 static struct {
     const os64_html_document_t *doc;
     uint64_t version, serial;
     int32_t width, height, sheets_ready;
     uint32_t zoom;
     os64_page_t *model;
-    Sheet *sheets;
-    int32_t nsheets;
     garb_cascade_t *cascade;
     flow_tree_t *tree;
 } s_measured;
@@ -924,31 +954,8 @@ static void measured_forget(const os64_html_document_t *doc)
         return;
     flow_free(s_measured.tree);
     garb_cascade_free(s_measured.cascade);
-    sheet_table_free(s_measured.sheets, s_measured.nsheets);
     os64_page_free(s_measured.model);
     os64_memset(&s_measured, 0, sizeof(s_measured));
-}
-
-// The `style` elements `model` lists, parsed into a table of their own on
-// `p`, which has none. A sheet that will not parse is left out, as
-// sheets_start leaves it out.
-static void measured_style_elements(Page *p, const os64_page_t *model)
-{
-    int32_t n = os64_page_nsheets(model);
-    for (int32_t i = 0; i < n; i++) {
-        const os64_page_sheet_t *one = os64_page_sheet(model, i);
-        if (one->linked)
-            continue;
-        Sheet *sh = sheet_new(p, one->media, -1, -1);
-        if (sh == NULL)
-            break;
-        if (garb_parse_style_element(one->node, &sh->parsed) == GARB_OK) {
-            sh->ready = true;
-            p->sheets_ready++;
-        } else {
-            garb_free(&sh->parsed);
-        }
-    }
 }
 
 // `p`'s measured layout at `width` x `height` and the window's zoom, in
@@ -987,10 +994,6 @@ static bool measured_layout(const Page *p, os64_page_state_t *state, const char 
     s_measuring.tree = NULL;
     s_measuring.cascade = NULL;
     s_measuring.sheets_changed = true;
-    if (p->sheets == NULL) {
-        s_measuring.nsheets = s_measuring.sheets_waiting = s_measuring.sheets_ready = 0;
-        measured_style_elements(&s_measuring, model);
-    }
     s_measuring.box_scrolls = NULL;
     s_measuring.nbox_scrolls = s_measuring.cap_box_scrolls = 0;
     s_measuring.rendered_version = 0;
@@ -1000,10 +1003,7 @@ static bool measured_layout(const Page *p, os64_page_state_t *state, const char 
         garb_cascade_free(s_measuring.cascade);
         laid = false;
     }
-    Sheet *sheets = p->sheets == NULL ? s_measuring.sheets : NULL;
-    int32_t nsheets = sheets != NULL ? s_measuring.nsheets : 0;
     if (!laid) {
-        sheet_table_free(sheets, nsheets);
         os64_page_free(model);
         os64_memset(&s_measuring, 0, sizeof(s_measuring));
         return false;
@@ -1016,8 +1016,6 @@ static bool measured_layout(const Page *p, os64_page_state_t *state, const char 
     s_measured.sheets_ready = p->sheets_ready;
     s_measured.zoom = g.zoom;
     s_measured.model = model;
-    s_measured.sheets = sheets;
-    s_measured.nsheets = nsheets;
     s_measured.cascade = s_measuring.cascade;
     s_measured.tree = s_measuring.tree;
     os64_memset(&s_measuring, 0, sizeof(s_measuring));
@@ -1440,6 +1438,7 @@ static void follow_link_asked(int32_t link, way_ask_t ask);
 static void follow_link(int32_t link);
 static bool script_rebuild(void);
 static void stream_drop(void);
+static void stream_sheets(void);
 static int64_t task_begin(yonder_scripts_t *host);
 static void task_said(yonder_scripts_t *host, bool was_alive, const char *what,
                       const os64_js_outcome_t *out, int64_t began);
@@ -1567,7 +1566,8 @@ static void arrive_now(Page *fresh, NavKind kind, const way_position_t *crumb,
     os64_ui_mark_dirty(&g.ui, &g.view);
 }
 
-// A page arrived. Its linked sheets are sent for first, and the page on
+// A page arrived. Its linked sheets are sent for first — those the stream
+// did not send for already — and the page on
 // screen stays while they come — for up to SHEETS_WAIT_MS — so the new one
 // is not drawn once bare and then again dressed; a sheet still coming after
 // that is laid in when it arrives (GARB.md, G4).
@@ -1581,6 +1581,7 @@ static void arrive(Page *fresh, NavKind kind, const way_position_t *crumb, const
     // DOMContentLoaded's listeners may have changed the tree since the
     // model was built; the sheet table is read from the model.
     if (!page_model_refresh(fresh)) {
+        sheets_leave(fresh);
         page_clear(fresh);
         status_rest("Out of memory reading that page; this is still the page you were on.");
         return;
@@ -1749,6 +1750,10 @@ static void stream_drop(void)
     if (g.asker == ASK_WORKER)
         bar_forget();
     os64_html_document_t *doc = g.stream.parser != NULL ? os64_html_parser_abandon(g.stream.parser) : NULL;
+    // The sheets it sent for are not wanted; their holds are on the
+    // document, which goes last.
+    sheets_leave(&g.stream.page);
+    sheets_free(&g.stream.page);
     measured_forget(doc);
     yonder_scripts_free(g.stream.scripts);
     os64_page_state_free(g.stream.state);
@@ -2134,6 +2139,8 @@ static bool same_origin(const char *a, const char *b)
 // and never wrong about what applies.
 static bool sheet_holds(const Page *p, const Sheet *sh)
 {
+    if (sh->lapsed)
+        return false;
     garb_env_t view = css_view(g.view.bounds.w, g.view.bounds.h, g.zoom);
     if (sh->importer >= 0) {
         const garb_import_t *im = &p->sheets[sh->importer].imports[sh->import_index];
@@ -2143,13 +2150,19 @@ static bool sheet_holds(const Page *p, const Sheet *sh)
 }
 
 // A new entry, NULL when the page has as many as it may.
-static Sheet *sheet_new(Page *p, const char *media, int32_t importer, int32_t import_index)
+static Sheet *sheet_new(Page *p, const os64_html_node_t *node, const char *media,
+                        int32_t importer, int32_t import_index)
 {
     if (p->sheets == NULL)
         p->sheets = os64_calloc(SHEETS_MAX, sizeof(Sheet));
     if (p->sheets == NULL || p->nsheets == SHEETS_MAX)
         return NULL;
     Sheet *sh = &p->sheets[p->nsheets++];
+    // Held, so an element a script removes and frees cannot lend its
+    // address to a new one the table would take for it.
+    if (node != NULL)
+        os64_html_hold(page_doc(p), node);
+    sh->node = node;
     sh->media = media;
     sh->importer = importer;
     sh->import_index = import_index;
@@ -2164,18 +2177,26 @@ static void coming_show(void);
 // will be shown on, so a sheet that applies now is waited for and one that
 // no longer does is not. An import follows its importer, which comes
 // before it in the table. Nothing left to wait for shows the page.
-static void coming_rejudge(void)
+static void sheets_rejudge(Page *p)
 {
-    if (!g.coming.active)
-        return;
-    Page *p = &g.coming.page;
     p->sheets_waiting = 0;
     for (int32_t i = 0; i < p->nsheets; i++) {
         p->sheets[i].holds = sheet_holds(p, &p->sheets[i]);
         if (p->sheets[i].waiting && p->sheets[i].holds)
             p->sheets_waiting++;
     }
-    if (p->sheets_waiting == 0)
+}
+
+// The same judgement for the sheets a stopped script waits for, which the
+// stream's next turn reads.
+static void coming_rejudge(void)
+{
+    if (g.stream.active)
+        sheets_rejudge(&g.stream.page);
+    if (!g.coming.active)
+        return;
+    sheets_rejudge(&g.coming.page);
+    if (g.coming.page.sheets_waiting == 0)
         coming_show();
 }
 
@@ -2250,6 +2271,16 @@ static void sheet_ready(Page *p, int32_t e)
         n = SHEET_IMPORTS_MAX;
     if (n == 0)
         return;
+    // A `style` element's against the page's base: the model's, or for the
+    // stream's page, which has no model, the one a model would have. With
+    // no base to resolve against, the sheet has no @imports.
+    char tree_base[OS64_FETCH_URL_MAX];
+    const char *base = sh->url != NULL ? sh->url
+                     : page_model(p) != NULL ? os64_page_base(page_model(p))
+                     : os64_page_base_in(page_doc(p), p->way.url, tree_base, sizeof(tree_base)) ? tree_base
+                     : NULL;
+    if (base == NULL)
+        return;
     sh->imports = os64_calloc((size_t)n, sizeof(*sh->imports));
     sh->child = os64_calloc((size_t)n, sizeof(*sh->child));
     if (sh->imports == NULL || sh->child == NULL)
@@ -2257,7 +2288,6 @@ static void sheet_ready(Page *p, int32_t e)
     sh->nimports = garb_sheet_imports(&sh->parsed, sh->imports, n);
     if (sh->nimports > n)
         sh->nimports = n;
-    const char *base = sh->url != NULL ? sh->url : os64_page_base(page_model(p));
     for (int32_t k = 0; k < sh->nimports; k++) {
         sh->child[k] = -1;
         char written[OS64_FETCH_URL_MAX], url[OS64_FETCH_URL_MAX];
@@ -2271,7 +2301,7 @@ static void sheet_ready(Page *p, int32_t e)
         bool looping = false;
         for (int32_t up = e; up >= 0 && !looping; up = p->sheets[up].importer)
             looping = p->sheets[up].url != NULL && os64_streq(p->sheets[up].url, url);
-        Sheet *child = looping ? NULL : sheet_new(p, NULL, e, k);
+        Sheet *child = looping ? NULL : sheet_new(p, NULL, NULL, e, k);
         if (child == NULL)
             continue;
         sh->child[k] = (int32_t)(child - p->sheets);
@@ -2279,28 +2309,37 @@ static void sheet_ready(Page *p, int32_t e)
     }
 }
 
-// Every sheet libpage lists, in document order: a `style` element's parsed
-// here, a linked one sent for. A sheet that will not parse — too big, or no
-// memory — is left out, and the page is drawn without it.
+// A sheet the page names, if the table does not have it yet: a `style`
+// element's parsed here, a linked one sent for. A page whose table the
+// stream began has most of them already (stream_sheets); a sheet is
+// fetched once in a page's life. A sheet that will not parse — too big, or
+// no memory — is left out, and the page is drawn without it. False once
+// the table is full.
+static bool sheet_add(void *page, const os64_page_sheet_t *one)
+{
+    Page *p = page;
+    if ((one->linked && one->href.url == NULL) || sheet_of(p, one->node) >= 0)
+        return true;
+    Sheet *sh = sheet_new(p, one->node, one->media, -1, -1);
+    if (sh == NULL)
+        return false;               // the table is full
+    if (one->linked) {
+        sheet_fetch(p, sh, one->href.url);
+    } else if (garb_parse_style_element(one->node, &sh->parsed) == GARB_OK) {
+        sheet_ready(p, (int32_t)(sh - p->sheets));
+    } else {
+        garb_free(&sh->parsed);
+    }
+    return true;
+}
+
+// The rest of the page's sheets, from its own model.
 static void sheets_start(Page *p)
 {
     const os64_page_t *model = page_model(p);
-    int32_t n = model != NULL ? os64_page_nsheets(model) : 0;
-    for (int32_t i = 0; i < n; i++) {
-        const os64_page_sheet_t *one = os64_page_sheet(model, i);
-        if (one->linked && one->href.url == NULL)
-            continue;
-        Sheet *sh = sheet_new(p, one->media, -1, -1);
-        if (sh == NULL)
+    for (int32_t i = 0; model != NULL && i < os64_page_nsheets(model); i++)
+        if (!sheet_add(p, os64_page_sheet(model, i)))
             break;
-        if (one->linked) {
-            sheet_fetch(p, sh, one->href.url);
-        } else if (garb_parse_style_element(one->node, &sh->parsed) == GARB_OK) {
-            sheet_ready(p, (int32_t)(sh - p->sheets));
-        } else {
-            garb_free(&sh->parsed);
-        }
-    }
 }
 
 // The page is going: what it is still waiting for is not wanted.
@@ -2337,12 +2376,14 @@ static void coming_drop(void)
 }
 
 // A sheet's job finished. It belongs to the page waiting for its sheets —
-// which is shown once the last is in — or to the page on screen, which is
-// laid out again with it; any other page's is let go.
+// which is shown once the last is in — to the page on screen, which is
+// laid out again with it, or to the stream's page, whose stopped script
+// the next turn looks at again; any other page's is let go.
 static void sheet_arrived(const yonder_sheet_job_t *job, yonder_sheet_t *got)
 {
     Page *p = g.coming.active && g.coming.page.serial == job->page ? &g.coming.page
-            : g.page.serial == job->page ? &g.page : NULL;
+            : g.page.serial == job->page ? &g.page
+            : g.stream.active && g.stream.serial == job->page ? &g.stream.page : NULL;
     if (p == NULL || job->index < 0 || job->index >= p->nsheets)
         return;
     Sheet *sh = &p->sheets[job->index];
@@ -2365,7 +2406,7 @@ static void sheet_arrived(const yonder_sheet_job_t *job, yonder_sheet_t *got)
     if (p == &g.coming.page) {
         if (p->sheets_waiting == 0)
             coming_show();
-    } else if (p->sheets_changed) {
+    } else if (p == &g.page && p->sheets_changed) {
         relayout(true);
     }
 }
@@ -2687,13 +2728,16 @@ static bool picture_on_screen(int32_t k, bool mark)
 // Hands the ticker the earliest of its deadlines: the next frame among the
 // pictures on screen and the moment a slow page's layout goes stale
 // (pictures_settle) — neither for a covered window — the moment a page
-// waiting for its sheets is shown whatever is still coming, and the next
+// waiting for its sheets is shown whatever is still coming, the moment a
+// script the stream is stopped at stops waiting for its sheets, and the next
 // timer of each page's scripts, covered or not.
 static void pictures_schedule(void)
 {
     uint64_t next = g.covered ? YONDER_NEVER : g.settle_due;
     if (g.coming.active && g.coming.due < next)
         next = g.coming.due;
+    if (g.stream.active && g.stream.sheets_due != 0 && g.stream.sheets_due < next)
+        next = g.stream.sheets_due;
     // A page's timers, covered or not: a page that counts down keeps
     // counting while another window is in front (DOM_D7.md § The clock).
     const yonder_scripts_t *hosts[] = {g.page.scripts, g.stream.scripts,
@@ -3328,6 +3372,9 @@ static bool script_rebuild(void)
     Page *p = &g.page;
     uint64_t version = os64_html_version(page_doc(p));
     if (version != p->model_version) {
+        // P5 testing: task timing excludes this host rebuild. Audit its cost
+        // separately to distinguish a slow update from queued mouse samples.
+        int64_t began = s_script_audit ? os64_micros() : 0;
         // The displayed layout retains the old model, including its
         // control state, past the refresh's free of it.
         if (!page_model_refresh(p)) {
@@ -3336,8 +3383,15 @@ static bool script_rebuild(void)
         }
         g.hover_link = g.pressed_link = -1;
         pictures_start(p);
+        if (s_script_audit) {
+            char line[128];
+            os64_snprintf(line,sizeof(line),"yonder: model refresh in %ld us",
+                (long)(os64_micros()-began));
+            os64_debug_log(line);
+        }
     }
     if (version != p->rendered_version) {
+        int64_t began = s_script_audit ? os64_micros() : 0;
         bool zoom_changed = p->laid_zoom != 0 && p->laid_zoom != g.zoom;
         int32_t offset = 0, sx = g.sx;
         const os64_html_node_t *anchor = zoom_changed ? anchor_of(&offset) : NULL;
@@ -3410,6 +3464,12 @@ static bool script_rebuild(void)
         forms_place();
         pictures_schedule();
         os64_ui_mark_dirty(&g.ui, &g.view);
+        if (s_script_audit) {
+            char line[128];
+            os64_snprintf(line,sizeof(line),"yonder: rendering rebuild in %ld us",
+                (long)(os64_micros()-began));
+            os64_debug_log(line);
+        }
     }
     os64_page_state_t *state = os64_page_shared_state(page_model(p));
     uint64_t revision = os64_page_state_version(state);
@@ -3503,13 +3563,21 @@ static int64_t script_write(void *opaque, const char *utf8, size_t length)
     return os64_html_parser_write(g.stream.parser, utf8, length);
 }
 
+static const char *script_user_agent(void *opaque)
+{
+    (void)opaque;
+    return g.way.agent != NULL ? g.way.agent : YONDER_AGENT;
+}
+
 static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state_t *state,
                                       const char *url, uint64_t serial)
 {
     yonder_scripts_options_t options = {url, g.script_ms, serial, script_alert, script_fetch,
                                         script_cancel, script_activate, script_write, script_now,
                                         script_geometry, doc};
-    return yonder_scripts_new(doc, state, &options);
+    yonder_scripts_t *host = yonder_scripts_new(doc, state, &options);
+    yonder_scripts_set_user_agent(host, script_user_agent, NULL);
+    return host;
 }
 
 // The host a fetch job's serial names: the page arriving, the page waiting
@@ -3807,6 +3875,8 @@ static bool scripts_owed(const yonder_scripts_t *host)
 // The measured layout of the page whose document is `doc`, when that page
 // is not on screen: the one stream_finish holds, the one waiting for its
 // sheets, or the stream's parse so far. False for none of them.
+static Page *stream_page(void);
+
 static bool measured_for(const os64_html_document_t *doc, int32_t width, int32_t height)
 {
     if (g.finishing.page != NULL && page_doc(g.finishing.page) == doc)
@@ -3816,13 +3886,7 @@ static bool measured_for(const os64_html_document_t *doc, int32_t width, int32_t
         return measured_layout(&g.coming.page, g.coming.page.state, g.coming.page.way.url, width, height);
     if (g.stream.parser == NULL || os64_html_parser_document(g.stream.parser) != doc)
         return false;
-    // The parse so far has no page yet: it stands in as one with no
-    // sheets, which are not asked for before it arrives.
-    static Page parsed;
-    os64_memset(&parsed, 0, sizeof(parsed));
-    parsed.way.doc = (os64_html_document_t *)doc;
-    parsed.scripting = true;
-    return measured_layout(&parsed, g.stream.state, g.stream.head.url, width, height);
+    return measured_layout(stream_page(), g.stream.state, g.stream.head.url, width, height);
 }
 
 // A script host's current-layout provider (DOM.md § Geometry), whose opaque
@@ -3979,6 +4043,17 @@ static const os64_html_node_t *element_at(int32_t x, int32_t y, const os64_html_
     const flow_box_t *b = flow_hit(g.page.tree, x - v.x + g.sx, y - v.y + g.sy, scroll_now());
     if (b == NULL)
         return NULL;
+    flow_point_t offset = flow_box_doc_offset(b, scroll_now());
+    int64_t px = (int64_t)x - v.x + g.sx - offset.x - b->content.x;
+    int64_t py = (int64_t)y - v.y + g.sy - offset.y - b->content.y;
+    if (px >= 0 && py >= 0 && px < b->content.w && py < b->content.h) {
+        double scale = 1000.0 / (g.zoom != 0 ? g.zoom : 1000);
+        const os64_html_node_t *area = yonder_image_map_hit(page_doc(&g.page), b->node, px*scale, py*scale);
+        if (area != NULL) {
+            if (link != NULL && os64_html_attr(area, "href") != NULL) *link = area;
+            return area;
+        }
+    }
     if (link != NULL) {
         const os64_page_link_t *l = os64_page_link(flow_model(g.page.tree), b->link);
         *link = l != NULL ? l->node : NULL;
@@ -3990,8 +4065,12 @@ static os64_dom_event_t mouse_event(const char *type, bool cancelable, const Inp
 {
     os64_dom_event_t ev = {.type = type, .bubbles = true, .cancelable = cancelable,
                            .kind = OS64_DOM_EVENT_MOUSE};
-    ev.client_x = in->x - g.view.bounds.x;
-    ev.client_y = in->y - g.view.bounds.y;
+    uint32_t zoom = g.zoom != 0 ? g.zoom : 1000;
+    ev.client_x = clamp32(((int64_t)in->x - g.view.bounds.x)*1000/zoom);
+    ev.client_y = clamp32(((int64_t)in->y - g.view.bounds.y)*1000/zoom);
+    ev.page_coordinates = true;
+    ev.page_x = clamp32(((int64_t)in->x - g.view.bounds.x + g.sx)*1000/zoom);
+    ev.page_y = clamp32(((int64_t)in->y - g.view.bounds.y + g.sy)*1000/zoom);
     ev.screen_x = in->x;
     ev.screen_y = in->y;
     return ev;
@@ -4380,6 +4459,17 @@ static void stream_finish(os64_fetch_status_t fetch, const char *reason)
     fresh.scripts = g.stream.scripts;
     fresh.state = g.stream.state;
     fresh.serial = g.stream.serial;
+    // The sheets the stream sent for move with it, still out or landed,
+    // and keep their jobs, which name this serial: no sheet is fetched
+    // twice in one page's life (arrive adds the rest).
+    Page *found = &g.stream.page;
+    fresh.sheets = found->sheets;
+    fresh.nsheets = found->nsheets;
+    fresh.sheets_waiting = found->sheets_waiting;
+    fresh.sheets_ready = found->sheets_ready;
+    fresh.sheets_changed = found->sheets_changed;
+    found->sheets = NULL;
+    found->nsheets = found->sheets_waiting = found->sheets_ready = 0;
     g.stream.scripts = NULL;
     g.stream.state = NULL;
     // WHAT THE PAGE MEANS, from the tree and the address it came from —
@@ -4420,6 +4510,7 @@ static void stream_finish(os64_fetch_status_t fetch, const char *reason)
     if (model == NULL && (text || fresh.state != NULL)) {
         // A page whose scripts share the state needs the model that adopts
         // it; without one it is a text that could not be read.
+        sheets_leave(&fresh);
         page_clear(&fresh);
         status_rest(text ? "Out of memory reading that text." : "Out of memory reading that page.");
         return;
@@ -4442,6 +4533,7 @@ static void stream_finish(os64_fetch_status_t fetch, const char *reason)
         asks_perform(fresh.scripts, doc, false);
         os64_memset(&g.finishing, 0, sizeof(g.finishing));
         if (g.stream.active) {
+            sheets_leave(&fresh);
             page_clear(&fresh);
             return;
         }
@@ -4516,6 +4608,7 @@ static int64_t stream_parsed(int64_t r)
     while (r == OS64_HTML_SCRIPT) {
         if (stream_stop(os64_html_parser_script(g.stream.parser)) != YONDER_STOP_RESUME) {
             g.stream.stopped = true;
+            stream_sheets();
             return r;
         }
         r = os64_html_parser_resume(g.stream.parser);
@@ -4558,7 +4651,83 @@ static void stream_parse_over(void)
 {
     g.stream.ended = true;
     g.stream.ended_ms = yonder_now_ms();
+    stream_sheets();
     yonder_scripts_parse_ended(g.stream.scripts);
+}
+
+// A sheet the parse has revealed, unless it is the `style` whose text is
+// still arriving: a slice can end inside one, and its text so far would be
+// parsed as the whole sheet. A later look takes it whole; it is never open
+// at a stop or at the end.
+static bool stream_sheet_add(void *page, const os64_page_sheet_t *one)
+{
+    if (one->node == os64_html_parser_open_text(g.stream.parser))
+        return true;
+    return sheet_add(page, one);
+}
+
+// The stream's page, with the stream's document, address and serial.
+static Page *stream_page(void)
+{
+    Page *p = &g.stream.page;
+    p->way.doc = g.stream.parser != NULL ? os64_html_parser_document(g.stream.parser) : NULL;
+    os64_strcopy(p->way.url, sizeof(p->way.url), g.stream.head.url);
+    p->serial = g.stream.serial;
+    p->scripting = g.stream.scripting;
+    return p;
+}
+
+// THE SHEETS THE PARSE HAS REVEALED, sent for as it finds them (DOM_D7.md
+// § D7d): after every slice, at a stop that blocks and at the end, every
+// `link` and `style` element the tree holds that the stream's page has no
+// entry for, by libpage's own rule and order (os64_page_sheets_in, a walk
+// of the tree, which costs a fraction of a model). A `style` element is
+// parsed now; a `link` is fetched under the stream's serial. A walk that
+// had no memory leaves them to the next look.
+static void stream_sheets(void)
+{
+    if (g.stream.parser == NULL || g.stream.head.body != WAY_BODY_HTML)
+        return;
+    Page *p = stream_page();
+    int64_t began = s_script_audit ? os64_micros() : 0;
+    int32_t had = p->nsheets;
+    int32_t listed = os64_page_sheets_in(page_doc(p), g.stream.head.url, stream_sheet_add, p);
+    if (s_script_audit) {
+        char line[128];
+        os64_snprintf(line, sizeof(line), "yonder: stream sheets: %d listed, %d new, %d out, in %ld us",
+                      (int)listed, (int)(p->nsheets - had), (int)p->sheets_waiting,
+                      (long)(os64_micros() - began));
+        os64_debug_log(line);
+    }
+}
+
+// Whether the script the parse is stopped at waits for the sheets still
+// out (DOM_D7.md § D7d): a script may measure, and one that ran before
+// them would read a layout they will change. Only a sheet whose media
+// holds on this glass is waited for, as the first paint waits; one whose
+// fetch failed holds nothing. The wait lasts SHEETS_WAIT_MS at most, on
+// the ticker; the script then runs with what came, and the sheets still
+// out have had their time: they lapse, and hold no later script and not
+// the first paint. A sheet found after that starts a wait of its own.
+static bool stream_sheets_hold(void)
+{
+    Page *p = &g.stream.page;
+    if (p->sheets_waiting == 0)
+        return false;
+    uint64_t now = yonder_now_ms();
+    if (g.stream.sheets_due == 0) {
+        g.stream.sheets_due = now + SHEETS_WAIT_MS;
+        pictures_schedule();
+    }
+    if (now < g.stream.sheets_due)
+        return true;
+    for (int32_t e = 0; e < p->nsheets; e++)
+        if (p->sheets[e].waiting) {
+            p->sheets[e].lapsed = true;
+            p->sheets[e].holds = false;
+        }
+    p->sheets_waiting = 0;
+    return false;
 }
 
 // One task of the arriving page's own: a ready script or a due timer. The
@@ -4609,6 +4778,11 @@ static bool stream_turn(void)
         // loop runs other tasks while a parser-blocking script is fetched.
         if (yonder_scripts_alive(host) && !yonder_scripts_blocking_ready(host))
             return scripts_owed(host) ? stream_task() : false;
+        // Its sheets the same way: their reap or the ticker carries the
+        // turn on, and other tasks run meanwhile.
+        if (yonder_scripts_alive(host) && stream_sheets_hold())
+            return scripts_owed(host) ? stream_task() : false;
+        g.stream.sheets_due = 0;
         os64_js_outcome_t out;
         int64_t began = task_begin(host);
         if (yonder_scripts_run_blocking(host, &out)) {
@@ -4672,6 +4846,10 @@ static bool stream_turn(void)
                       (unsigned long)fed, (long)(os64_micros() - began));
         os64_debug_log(line);
     }
+    // What the slice revealed is sent for now, the body still coming: a
+    // stop looked already (stream_parsed).
+    if (fed != 0 && !g.stream.stopped)
+        stream_sheets();
     if (g.stream.stopped)
         return yonder_scripts_blocking_ready(g.stream.scripts) ||
                yonder_scripts_connected_pending(g.stream.scripts);
@@ -5373,13 +5551,9 @@ static int32_t line_step(void)
 // The link under a point of the view, or -1.
 static int32_t link_at(int32_t x, int32_t y)
 {
-    os64_gui_rect_t v = g.view.bounds;
-    if (g.page.tree == NULL || x < v.x || y < v.y || x >= v.x + v.w || y >= v.y + v.h)
-        return -1;
-    const flow_box_t *b = flow_hit(g.page.tree, x - v.x + g.sx, y - v.y + g.sy, scroll_now());
-    const os64_page_link_t *old = b != NULL
-                                     ? os64_page_link(flow_model(g.page.tree), b->link) : NULL;
-    return old != NULL ? os64_page_link_for(page_model(&g.page), old->node) : -1;
+    const os64_html_node_t *node = NULL;
+    element_at(x, y, &node);
+    return node != NULL ? os64_page_link_for(page_model(&g.page), node) : -1;
 }
 
 // A link followed: libpage says what it is — a place in this page is a
@@ -5867,6 +6041,12 @@ static void fit_title(const char *page, char out[OS64_GUI_TITLE_MAX])
     out[at] = '\0';
 }
 
+static int64_t event_poll(void *opaque, os64_gui_event_t *event)
+{
+    (void)opaque;
+    return os64_gui_event_poll(g.win,event);
+}
+
 int main(int argc, char **argv)
 {
     const char *why = faces_open();
@@ -5974,9 +6154,12 @@ int main(int argc, char **argv)
     os64_ui_set_focus(&g.ui, first != NULL ? &g.view : &g.field.w);
     sync_bars();
 
-    // libui's loop, with two things read first: the pointer, because a
-    // widget is handed moves only while a button is held and the status
-    // line wants every one; and the question bar, which answers only by its
+    // P5 testing: Million Dollar Homepage's popup stalled while motion kept
+    // the queue busy. Bound input and coalesce idle moves before their scripts
+    // run, so each batch reaches painting without waiting for an empty queue.
+    // The pointer is read before libui because a widget is handed moves only
+    // while a button is held and the status
+    // line follows its current position; the question bar answers by its
     // own rules. After painting, a bar not yet armed is armed only if the
     // queue is EMPTY: anything waiting may have been done before the bar
     // could be seen, so it is dispatched to a disarmed bar first.
@@ -5988,7 +6171,8 @@ int main(int argc, char **argv)
         if (!held && os64_gui_event_wait(g.win, &ev) != 1)
             break;
         held = false;
-        do {
+        YonderEventBatch batch = {.held=true,.pending=ev};
+        while (g.running && !g.ui.quit && yonder_event_batch_next(&batch,&ev,event_poll,NULL)) {
             if (ev.type == OS64_GUI_EVENT_MOUSE_MOVE)
                 hover(ev.mouse.x, ev.mouse.y);
             else if (ev.type == OS64_GUI_EVENT_POINTER_STATE)
@@ -6004,7 +6188,11 @@ int main(int argc, char **argv)
                 os64_ui_dispatch(&g.ui, &ev);
             // What the event became, as DOM events, now libui is done with it.
             inputs_run();
-        } while (g.running && os64_gui_event_poll(g.win, &ev) == 1);
+        }
+        if (batch.held) {
+            ev = batch.pending;
+            held = true;
+        }
         if (g.relayout_due) {
             g.relayout_due = false;
             relayout(false);
@@ -6023,7 +6211,9 @@ int main(int argc, char **argv)
         // A task may have set or cleared a timer: the ticker hears of it.
         pictures_schedule();
         if (g.bar.up && !g.bar.armed) {
-            if (os64_gui_event_poll(g.win, &ev) == 1) {
+            // P5 batching may hold a lookahead event. Preserve it and leave
+            // the bar disarmed until that older input has been dispatched.
+            if (held || os64_gui_event_poll(g.win, &ev) == 1) {
                 held = true;
             } else {
                 yonder_bar_settled(&g.bar);

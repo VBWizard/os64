@@ -115,6 +115,7 @@ static const Prop kProps[GARB_NPROPS] = {
     [GARB_BOX_SHADOW] = {"box-shadow", false},
     [GARB_TEXT_SHADOW] = {"text-shadow", true},
     [GARB_IMAGE_RENDERING] = {"image-rendering", true},
+    [GARB_CLIP] = {"clip", false},
 };
 
 const char *garb_prop_name(garb_prop_t prop)
@@ -1659,6 +1660,7 @@ typedef enum {
     G_BG_BOX,               // background-origin, -clip: a box from `words`
     G_SPACING,
     G_Z_INDEX,              // auto | <integer>
+    G_CLIP,                // auto | rect(top, right, bottom, left)
     G_ALPHA,                // <alpha-value>: a number or a percentage, clamped when computed
     G_ALIGN,                // an alignment keyword from `words`, `unsafe` or `first` before it
     G_FACTOR,               // <number [0,∞]>: flex-grow, flex-shrink
@@ -1718,6 +1720,7 @@ static const Longhand kLonghands[] = {
     {GARB_POSITION, G_KEYWORDS, kPosition},
     {GARB_TOP, G_MARGIN, NULL}, {GARB_RIGHT, G_MARGIN, NULL},
     {GARB_BOTTOM, G_MARGIN, NULL}, {GARB_LEFT, G_MARGIN, NULL},
+    {GARB_CLIP, G_CLIP, NULL},
     {GARB_Z_INDEX, G_Z_INDEX, NULL}, {GARB_OPACITY, G_ALPHA, NULL},
     {GARB_POINTER_EVENTS, G_KEYWORDS, kPointerEvents},
     {GARB_FLEX_DIRECTION, G_KEYWORDS, kFlexDirection}, {GARB_FLEX_WRAP, G_KEYWORDS, kFlexWrap},
@@ -2186,6 +2189,26 @@ static bool longhand_one(Sets *s, VCur *c, const Longhand *l, garb_val_t *out)
         while (n < 2 && vc_dim(c, ACCEPT_LENGTH | ACCEPT_PERCENT, false, false, &s->a, &two[n]))
             n++;
         return n > 0 && radius_pair(s, two, n, out);
+    }
+    case G_CLIP: {
+        if (vc_keyword(c,kAuto) != NULL) { *out = kw("auto");return true; }
+        const garb_value_t *f = vc_peek(c);
+        if (!is_fn(f,"rect")) return false;
+        VCur inner = {f->children,f->nchildren,0};
+        garb_val_t sides[4];bool commas = false;
+        for (int i = 0; i < 4; i++) {
+            if (!kw_or_dim(s,&inner,kAuto,ACCEPT_LENGTH,true,false,&sides[i])) return false;
+            const garb_value_t *next = vc_peek(&inner);
+            if (i == 0) commas = next != NULL && next->kind == GARB_COMMA;
+            if (i < 3 && commas) {
+                if (next == NULL || next->kind != GARB_COMMA) return false;
+                inner.i++;
+            }
+        }
+        if (!vc_done(&inner)) return false;
+        *out = fn_val(s,"rect",sides,4);
+        c->i++;
+        return out->nitems == 4;
     }
     case G_Z_INDEX: {
         // CSS 2.1 § 9.9.1. An integer as written: `1.0` and `1e3` are

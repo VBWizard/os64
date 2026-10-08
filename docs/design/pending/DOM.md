@@ -451,8 +451,9 @@ exist: the wrapper table, the listener lists, and the task and timer
 queues. A value stored anywhere else is a finding. This is what makes
 teardown checkable, and what makes ruling 8 possible.
 
-**No finalizer owns a native resource.** A wrapper's opaque pointer is a
-node, which the document owns. Finalizers at most clear a slot.
+**No finalizer owns a native resource.** A wrapper's opaque pointer names a
+binding registry entry; that entry holds the document-owned node. Finalizers
+clear the slot; the ordered binding drain releases native holds.
 
 **Three budgets, and nothing a script causes is outside them:** the
 engine's heap (libjs's limit), the document's arena (nodes and strings),
@@ -539,7 +540,8 @@ its own runtime, both on the window's thread. A third cannot:
 makes it wait for the sheets named before it. Here it waits for them for
 as long as the first paint already does (`SHEETS_WAIT_MS`), and runs
 without the stragglers after that. That needs sheets discovered as the
-parse goes, which the model rebuilt at a script's stop gives.
+parse goes: libpage's walk of the tree (`os64_page_sheets_in`) after every
+slice, at every stop and at the end (§ D7d, as built).
 
 **Generations.** Nothing new is needed. The stream's mailbox carries the
 navigation's generation, as mail does now. Everything else a page asks
@@ -550,8 +552,11 @@ or is checked against it.
 
 ## The event loop
 
-yonder's loop today: wait for an event, dispatch the batch, lay out if
-owed, paint. The standard's loop maps onto it without a second loop.
+yonder's loop today: wait for an event, dispatch a bounded input batch, lay
+out if owed, paint. Coalescing idle motion lets rendering proceed while input
+remains queued. DOM_D11.md § P5 testing records the report that prompted it;
+the new latency still awaits a P5 retry. The standard's loop maps onto it
+without a second loop.
 
 - **A task** is one of: a slice of parsing, a script run to completion, a
   timer's callback, the dispatch of one input event, a result arriving
@@ -720,9 +725,11 @@ builder decides, and the proof in this house's shape.
 | D4 | **Built; in review.** The stream: yonder parses on its own thread. No script | libway's harnesses unchanged in result and grown; the ring's two-thread harness; the window's slices in the harness that hosts yonder.c; the Y3 walk again; the window live through a stalled body: § D4, as built |
 | D5 | **D5a merged (#214, `72b2e710`); D5b merged (#216, `7acce890`).** The binding library and J3's fixture | § D5a, as built records library host/guest proof. § D5b, as built records J3 fixture proof: a script changes text and the page redraws; a held reference and a typed-in field survive an unrelated change; a navigation with a script queued tears down clean; the leak count is zero |
 | D6 | **Implemented; awaiting Fable re-review in PR #217 against userland.** Reclaiming unheld detached subtrees | 216,000 packed-fragment refresh cycles stay flat under 64 MiB; § D6, as built |
-| D7 | The loop: tasks, checkpoints, timers, events and their attributes, script order. Designed in [DOM_D7.md](DOM_D7.md); **D7a (the registry and the turn), D7b (the loop, with the input events) and D7c (the join with D8 and D10) built** | § D7a, as built; § D7b, as built; § D7c, as built |
+| D7 | The loop: tasks, checkpoints, timers, events and their attributes, script order. Designed in [DOM_D7.md](DOM_D7.md); **D7a (the registry and the turn), D7b (the loop, with the input events), D7c (the join with D8 and D10) and D7d (the sheets before a script) built** | § D7a, as built; § D7b, as built; § D7c, as built; § D7d, as built |
 | D9 | `document.write`: libhtml's `os64_html_parser_write`, libdom's `write`/`writeln`/`open`/`close`, the blocking script's writes reaching yonder's stream. Designed in [DOM_D9.md](DOM_D9.md); **built** | § D9, as built |
-| later | geometry; the libjs reclaim slice | each with its own |
+| D10 | **Merged** (#225). Synchronous geometry, [DOM_D10.md](DOM_D10.md); joined with the loop in § D7c, as built | Native/browser/guest geometry proof in DOM_D10.md |
+| D11 | **Built; in review; P5 acceptance pending.** Classic widget surface, [DOM_D11.md](DOM_D11.md), on `userland` after D7d | § D11, as built |
+| later | the libjs reclaim slice | each with its own |
 
 ### D1, as built
 
@@ -2133,7 +2140,7 @@ is one teardown road.
   mailbox), so there is one order scripts run in.
 - **Sheets are not awaited at a script's stop.** No script can read style
   until geometry (D10), so the wait would change nothing a page can see;
-  booked for D10.
+  booked for D10. Paid by D7d (§ D7d, as built).
 - **A page whose only script is a handler attribute** gets a host at arrival,
   whose runtime is made by the first event an attribute in the document names
   (`os64_dom_handler_attributes`, libdom's own walk): a page with one `onclick`
@@ -2247,7 +2254,6 @@ and reported its layouts. D7c did the rest (§ D7c, as built).
 
 | Debt | Why it waits | Trigger |
 |---|---|---|
-| A script waits for the sheets named before it | its own slice, D7d: since D10 a parser-blocking script can measure, and one that runs before the sheets named above it reads a layout they will change; the wait is in the stream's turn and needs its own cases and mutants | D7d (DOM_D7.md) |
 | Arrow keys and other VT100 bursts as key events | libui owns the burst decoder; a key event per byte would lie | a page that steers with arrow keys |
 | `history.go(n)` past one step, and a script's refresh chain cap | one step covers back and forward; a chain of script navigations is not counted as a declared refresh's is | a page that walks history, or a page that navigates itself in a loop |
 | A link or form a page still arriving asks to follow or send | it has no model until it arrives | a page that clicks itself before it has loaded |
@@ -2275,11 +2281,9 @@ built it, published. A page not on screen is measured BESIDE itself
 window's zoom, from the model at the tree's version (its own while current,
 else one built beside it, sharing the control state). The page waiting for
 its sheets is measured against its own sheet table; the stream's parse so
-far and the page stream_finish holds have no table yet, and are measured
-against their `style` elements, parsed for the measurement. The sheets
-those elements @import and the sheets the page links are not asked for
-before it arrives; that is the departure "A script waits for the sheets
-named before it", booked under § D7b, as built, and D7d's to pay. A `style` a script adds to a page waiting for
+far and the page stream_finish holds had no table yet, and were measured
+against their `style` elements alone, until D7d gave the stream's page a
+table of its own (§ D7d, as built). A `style` a script adds to a page waiting for
 its sheets joins its table at arrival, when the table is restaged; measured
 before then, the page answers against the table it has. Nothing of the page's
 own is touched — not its model, whose refresh at arrival is what restages
@@ -2342,6 +2346,128 @@ not apply. The host cases had used `style` attributes only; they read a
 `style` element now, and a mutant holds the rule. D8's lost wrapper has no
 guest page: a wrapper is lost by C code holding a reference, which no page
 can do, so it stays host evidence, as DOM_D8.md says.
+
+### D7d, as built
+
+DOM_D7.md § The cut (D7d), built by Opus on `opus/dom-d7d` from `userland`
+after D7c merged. It pays DEBTS.md's "linked sheets are fetched when the parse
+ends" and the D7b departure "sheets are not awaited at a script's stop".
+
+**The stream's page.** `g.stream.page` is a `Page` with the stream's
+document, address and serial (`stream_page`) and a sheet table of its own.
+`stream_sheets` adds to it every `link` and `style` element the tree holds
+that the table has no entry for: a `style` parsed at once, a `link` fetched
+under the stream's serial, so `sheet_arrived` finds the stream's page as a
+third home beside the coming page and the page on screen. At
+`stream_finish` the table MOVES to the arriving page with its jobs still
+out, and `sheets_start` adds only the rest the arrival model lists: one job
+per sheet in a page's life. `stream_drop` cancels the stream's jobs
+(`sheets_leave`) and frees its table before the document; a sheet landing
+for a stream that is gone finds no page by its serial and is let go.
+
+**How the tree is looked at, measured.** The brief left the builder a model
+on the partial tree or a walk of it, measured on the saved Wikipedia page.
+A model was built first, at each stop and the end. Wikipedia's first two
+scripts sit above its links, so the third stop, deep in the body after
+eleven slices, was the first look that found them, and a model of that tree
+cost 77-104 ms in the guest. libpage now exports the walk instead:
+`os64_page_sheets_in` lists the sheets by the same predicate the model uses
+(`sheet_wanted`, one rule for both) in the model's order, without building
+one, and its host suite holds the walk against the model on the HTML
+corpus. It costs 1-15 ms on the whole page, so it runs after every slice as
+well as at every stop and the end. Wikipedia's links went out after the
+slice that followed its second script, with the body still arriving.
+
+**The wait.** A stopped script whose source is in hand waits while a sheet
+of the stream's page is still out and holds on this glass
+(`stream_sheets_hold`). That is the first paint's judgement: a `media=print`
+sheet holds nothing, nor does one whose fetch failed. Other tasks run
+meanwhile, as they do while a `src` is out; the reap or the ticker carries
+the turn on. Each stop waits at most `SHEETS_WAIT_MS` of its own, on the
+ticker (`pictures_schedule`), and then the script runs with the sheets that
+came. The sheets still out then have had their time: they LAPSE
+(`Sheet.lapsed`), and hold no later script and, once the table moves, not
+the first paint either, so a sheet that never lands costs a page one wait,
+not one per script. A sheet found after the expiry starts a wait of its own.
+The wait is document-wide, as HTML's is: any sheet still out holds the
+script, not only those above it. A resize rejudges the stream's holds with
+the coming page's. D9 falls in by itself: a written `link` before a written
+`script` is in the tree when the parse stops at it.
+
+A slice can end inside a `style`, which libhtml then holds with part of its
+text. The slice's look leaves that element alone
+(`os64_html_parser_open_text`, libhtml's answer to "whose text is still
+arriving"), so a later look takes it whole; one is never open at a stop or
+at the end. Taken early, its text so far would be parsed as the whole sheet
+and never read again, and the arrived page would draw without its tail.
+
+**Departures beyond the brief, each because the table is now filled as the
+tree is revealed:**
+
+- **The cascade takes the sheets in the model's order and only those it
+  lists** (`page_lay_out` with `sheet_of`). A table filled as the parse goes
+  holds the sheets in the order they were FOUND, which is not the
+  document's when a script inserts a `style` above one found earlier. It
+  would also keep a `style` a mid-parse script removed, which a table built
+  whole from the arrival model never had. Each entry for a sheet the page
+  names holds its element, so a removed and freed element cannot lend its
+  address to a new one the table would take for it.
+- **A `style` element's `@import` on the stream's page** resolves against
+  `os64_page_base_in`, the base a model would have. That is the arrived
+  page's rule (`os64_page_url_absolute` against the base), not a link's,
+  which encodes a name past ASCII where an `@import` refuses it.
+- **The measured layout of the stream's page measures against its table**
+  (D7c's stand-in of `style` elements alone is retired), and the page
+  stream_finish holds measures against the table it was handed.
+- **A sheet a script inserted blocks scripts too.** HTML blocks a script
+  only on a sheet whose element the PARSER created; one a script inserts
+  does not. The walk cannot tell the two apart, so here both hold the wait.
+  Booked below.
+
+**Booked:**
+
+| Debt | Why it waits | Trigger |
+|---|---|---|
+| A `link` whose `href` a script changes before the page arrives keeps the sheet it was found with | the table matches sheets by element, and the arrival adds only elements it lacks; the shown page's staged rebuild re-reads every `href` | a page that swaps its theme sheet while it is parsed |
+| A sheet a script inserted holds the next script's wait, which HTML's "created by the parser" rule would not | libhtml's tree does not record which elements the parser made, and the walk lists elements, not their origin | a page whose script inserts a slow sheet mid-parse and then runs a script |
+
+**Proof.** In `tools/test_yonder_scripts_host.c`, with the test landing the
+sheet jobs as the worker would (`sheet_land`):
+- a slow `link` above a measuring script, sent for at the first stop with
+  the body still in the mailbox; the script waits, then measures the styled
+  300;
+- a `style` straddling the 64 KiB slice, taken whole: 300 for the script and
+  on the shown page (Fable's probe);
+- a sheet that never lands, lapsing at its expiry: the second script runs at
+  once and the page is shown without waiting again;
+- one job for that sheet from the stop to the arrival, and the sheet in the
+  arrived page's cascade;
+- a `link` found by a slice with no stop yet;
+- a `style`'s `@import` resolved against `<base href>` and holding the
+  script;
+- the script above the link running at once;
+- a `media=print` link and a failed link holding nothing;
+- the wait expiring, and each stop waiting its own wait;
+- the end of the parse finding the `style` below the last script before
+  `DOMContentLoaded`;
+- a `style` a mid-parse script adds applying once and one it removes not
+  applying;
+- styles found out of document order cascading in it;
+- a written `link` before a written `script`;
+- teardown mid-wait by Stop, by scripts off and by the window's close, with
+  no job left.
+
+Sixteen `sheets-*` mutants in `test_yonder_loop_mutants.py`, one per rule,
+all caught. In libhtml's suite, `os64_html_parser_open_text` for a `style`,
+a `title` and a `textarea` cut mid-text, and none at a stop or the end. In libpage's suite, the walk and `os64_page_base_in` against
+the model on hand-made edges (alternate, disabled, foreign `type`, SVG,
+`template`, `noscript`, a broken base) and the six corpus pages.
+
+In the guest (QEMU, scratch images, `scripts = on`, `--script-audit`):
+`httptestd.py`'s new `/sheet-wait.html`, whose script sits below a sheet
+served 1.5 s late, shows `PASS: the script below the sheet measured 300`,
+with the sheet requested once. The saved Wikipedia page arrives with its
+sheets found as described above.
 
 ### D9, as built
 
@@ -2534,3 +2660,40 @@ how much of a model libflow borrows beyond the indices; the cost of a parse in s
 in the guest; libflow's stack depth under a script frame; and every claim
 in § A leak at teardown beyond the lines cited, which is why that section
 ends in an acceptance list and not a verdict.
+
+### D11, as built
+
+Built by Quinn on `codex/dom-d11` against the combined D7/D9/D10 play branch,
+then rebased onto `userland` after D7d merged: the measured layout a
+lifecycle task reads is D7c's, and the sheets a page arrives with are D7d's.
+[DOM_D11.md](DOM_D11.md) records the consumer evidence, bounded surface,
+ownership, engine helper and acceptance. Chris chose Lileks Minneapolis,
+007museum and Million Dollar Homepage, prioritizing their own visible widgets.
+Modern embedded stacks are outside that scope; J5 remains pending his P5 check.
+
+- libdom adds live images/forms and named control lookup, `Image`, resolved
+  image sources, reflected names/titles, stable inline style objects and native
+  navigator values. It exposes nested-dispatch-safe `window.event`, page/client
+  mouse coordinates and readonly native scroll positions.
+- A hash-checked QuickJS patch adds an explicit browser helper for unmapped
+  legacy `function.arguments` snapshots. Strict/unsupported functions refuse;
+  standalone engines keep the upstream inherited throwing property.
+- Yonder targets image-map areas in content-relative CSS coordinates, using
+  libpage for links and D7 for events. libgarb/libflow implement legacy
+  rectangular clipping of absolute/fixed painting, hit testing and overflow.
+- Initial layouts build the inline-style cascade even without a stylesheet,
+  so a `style` attribute takes effect on a page with no sheet.
+
+Original tests in `tools/test_dom_classic.inc`, browser-host cases and the
+hand-computed CSS/layout clip cases cover these paths. Optional locally
+downloaded-source proof in `tools/test_yonder_scripts_host.c` exercises the
+selected pages' original primary scripts without committing their sources.
+`/tests/pages/dom-classic.html` supplies a small visible P5 check. Allocation
+refusals and leak detection remain enabled in the host suites.
+
+Chris accepted deferring eager detached-image prefetch on 2026-10-06: first
+hover can wait for an image fetch. That work, full inline CSSOM serialization
+and arbitrary clip paths are tracked in DEBTS.md. Image dimensions currently
+reflect attributes. Document metadata, window geometry, scroll setters,
+frames/layers and modern application APIs are outside this widget slice.
+Scripts-on-by-default remains gated by J5 and Chris's ruling.

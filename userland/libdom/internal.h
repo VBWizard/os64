@@ -14,10 +14,11 @@ typedef struct DQuery DQuery;
 typedef struct DListener DListener;
 typedef struct DTimer DTimer;
 typedef struct DScript DScript;
+typedef struct DActiveEvent { struct DActiveEvent *previous; JSValue value; } DActiveEvent;
 enum {
     D_PROTO_NODE, D_PROTO_DOCUMENT, D_PROTO_ELEMENT, D_PROTO_CHARACTER_DATA,
     D_PROTO_FRAGMENT, D_PROTO_INPUT, D_PROTO_TEXTAREA, D_PROTO_SELECT,
-    D_PROTO_BUTTON, D_PROTO_FORM, D_PROTO_COUNT
+    D_PROTO_BUTTON, D_PROTO_FORM, D_PROTO_IMAGE, D_PROTO_COUNT
 };
 /* The event types the host dispatches, which are the ones on<type> names
  * and os64_dom_listens count. A script may listen for any other type. */
@@ -34,16 +35,19 @@ enum {
 struct DValue {
     JSValue value;
     DValue *next, *hash_next;
-    const os64_html_node_t *node;
-    DQuery *child_nodes, *children;
+    const os64_html_node_t *node, *style_target;
+    os64_dom_t *dom;
+    DValue *style;
+    DQuery *child_nodes, *children, *images, *forms, *elements;
     DListener *listeners, *last_listener;
 };
 struct DQuery {
     os64_dom_t *dom;
-    const os64_html_node_t *root;
+    const os64_html_node_t *root, *owner;
     DQuery *next;
     DValue *entry;
-    char *name, *folded;
+    char *name, *folded, *named;
+    unsigned kind;
     const os64_html_node_t **nodes;
     size_t count;
     uint64_t version;
@@ -99,9 +103,11 @@ struct os64_dom {
     os64_dom_geometry_provider_t geometry;
     void *geometry_opaque;
     os64_dom_geometry_stats_t geometry_stats;
-    JSClassID anchor_class, node_class, collection_class, event_class;
+    JSClassID anchor_class, node_class, collection_class, event_class, style_class;
     DValue *values, *anchor, *index_guard, *window, *location, *history, *function_ctor;
-    DValue *invoke;
+    DValue *invoke, *navigator, *style_prototype;
+    const char *(*user_agent)(void *opaque);
+    void *user_agent_opaque;
     DValue *prototypes[D_PROTO_COUNT];
     DValue *buckets[D_BUCKETS];
     DQuery *queries;
@@ -112,6 +118,7 @@ struct os64_dom {
     uint64_t attribute_version;
     bool attribute_scanned;
     unsigned dispatching;
+    DActiveEvent *current_event;
     bool sweep_pending;
     DListener *invoking;
     DValue *invoking_entry;
@@ -215,4 +222,13 @@ enum {
     D_CREATE_ELEMENT, D_CREATE_TEXT, D_CREATE_COMMENT, D_CREATE_FRAGMENT,
     D_GET_ATTR, D_SET_ATTR, D_REMOVE_ATTR, D_HAS_ATTR, D_HAS_CHILDREN
 };
+enum { D_QUERY_GENERIC, D_QUERY_IMAGES, D_QUERY_FORMS, D_QUERY_CONTROLS, D_QUERY_DOCUMENT_NAMES };
+bool d_named_match(const os64_html_node_t *node, const char *name);
+bool d_classic_match(os64_dom_t *dom, const os64_html_node_t *root, const os64_html_node_t *node, unsigned kind);
+JSValue d_special_collection(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *root, unsigned kind, const char *named);
+JSValue d_classic_collection(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node, unsigned kind);
+int d_classic_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+JSValue d_style(os64_dom_t *dom, JSContext *ctx, JSValueConst self);
+int d_style_install(os64_dom_t *dom, JSContext *ctx);
+extern JSClassExoticMethods d_node_exotic;
 #endif

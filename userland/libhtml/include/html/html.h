@@ -201,6 +201,12 @@ void os64_html_document_free(os64_html_document_t *doc);
  * loses its `form_owner`, and `head` and `body` stay the document element's
  * first of each. */
 os64_html_node_t *os64_html_parser_script(const os64_html_parser_t *p);
+/* The element whose text the parser is still adding to — a `style`, a
+ * `script`, a `title`, a `textarea`, whatever its raw or escaped text is
+ * read as — or NULL. Between two feeds such an element is in the tree with
+ * part of its text, so whoever reads its text then reads a fragment: a
+ * stylesheet taken from it now is a truncated sheet. */
+os64_html_node_t *os64_html_parser_open_text(const os64_html_parser_t *p);
 int64_t os64_html_parser_resume(os64_html_parser_t *p);
 int64_t os64_html_parser_write(os64_html_parser_t *p, const char *utf8, size_t len);
 int64_t os64_html_parser_end(os64_html_parser_t *p);

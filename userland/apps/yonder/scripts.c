@@ -43,6 +43,8 @@ struct yonder_scripts {
     os64_dom_t *dom;
     // The layout counts a retired binding had, kept for the report that
     // asks after its task.
+    const char *(*user_agent)(void *);
+    void *user_agent_opaque;
     os64_dom_geometry_stats_t last_geometry_stats;
     bool dead;                      // a sticky outcome retired the runtime
     bool parse_ended;
@@ -184,6 +186,7 @@ static bool ensure_runtime(yonder_scripts_t *s, os64_js_outcome_t *out)
     options.host_opaque = s;
     s->dom = os64_dom_create(s->runtime, s->doc, s->state, &options, out);
     os64_dom_set_geometry(s->dom, s->options.geometry, s->options.opaque);
+    os64_dom_set_user_agent(s->dom, s->user_agent, s->user_agent_opaque);
     if (s->dom == NULL || os64_js_install_output(s->runtime, 1, OS64_JS_OUTPUT_CONSOLE_LOG, out) != OS64_JS_OK) {
         // A runtime a binding could not be built in is not evaluated again.
         out->status = OS64_JS_HOST_FAILURE;
@@ -662,4 +665,12 @@ uint64_t yonder_scripts_written(const yonder_scripts_t *s)
 uint64_t yonder_scripts_serial(const yonder_scripts_t *s)
 {
     return s != NULL ? s->options.serial : 0;
+}
+
+void yonder_scripts_set_user_agent(yonder_scripts_t *s, const char *(*provider)(void *), void *opaque)
+{
+    if (s == NULL) return;
+    s->user_agent = provider;
+    s->user_agent_opaque = opaque;
+    os64_dom_set_user_agent(s->dom, provider, opaque);
 }

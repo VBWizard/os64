@@ -926,8 +926,51 @@ static void position_sticky_cases(void)
     }
 }
 
+static void position_legacy_clip_cases(void)
+{
+    Sheeted p;
+    sheeted_open(&p,
+        "<!doctype html><style>body{margin:0}"
+        "#a{position:absolute;left:10px;top:10px;width:1000px;height:200px;"
+        "clip:rect(5px,80px,60px,20px)}#a div{width:900px;height:100px}"
+        "#r{position:relative;top:100px;width:100px;height:30px;clip:rect(0,0,0,0)}"
+        "#e{position:fixed;left:200px;top:0;width:100px;height:40px;clip:rect(30px,50px,10px,0)}"
+        "#f{position:fixed;left:200px;top:20px;width:100px;height:40px;clip:rect(10px,80px,30px,20px)}"
+        "</style><div id=a><div></div></div><div id=r></div><div id=e></div><div id=f></div>",400,600);
+    flow_tree_t *t=flow_layout(p.doc,p.page,400,&p.env);
+    expect("legacy clip: complete layout",t!=NULL && !flow_incomplete(t),NULL);
+    if(t!=NULL) {
+        const os64_html_node_t *a=p.doc->body->first_child,*relative=a->next,*empty=relative->next;
+        const flow_box_t *box=flow_box_for(t,a);
+        os64_gui_rect_t clip=flow_box_doc_clip(box,kNoScroll);
+        expect("legacy clip: four sides are border-origin offsets",
+            clip.x==30 && clip.y==15 && clip.w==60 && clip.h==55,NULL);
+        const flow_box_t *hit=flow_hit(t,35,20,kNoScroll);
+        expect("legacy clip: descendants hit inside rectangle",hit!=NULL && hit->node==a->first_child,NULL);
+        hit=flow_hit(t,15,20,kNoScroll);
+        expect("legacy clip: descendants clipped outside rectangle",hit==NULL || hit->node!=a->first_child,NULL);
+        expect("legacy clip: far clipped width excluded",flow_width(t)==400,NULL);
+        hit=flow_hit(t,5,105,kNoScroll);
+        expect("legacy clip: relative positioning ignores rectangle",hit!=NULL && hit->node==relative,NULL);
+        hit=flow_hit(t,220,20,(flow_point_t){0,50});
+        expect("legacy clip: empty fixed rectangle cannot hit",hit==NULL || hit->node!=empty,NULL);
+        const os64_html_node_t *fixed=empty->next;
+        const flow_box_t *fb=flow_box_for(t,fixed);
+        clip=flow_box_doc_clip(fb,(flow_point_t){0,50});
+        expect("legacy clip: fixed rectangle follows viewport scroll",
+            clip.x==220 && clip.y==80 && clip.w==60 && clip.h==20,NULL);
+        hit=flow_hit(t,235,85,(flow_point_t){0,50});
+        expect("legacy clip: visible fixed hit after scroll",hit!=NULL && hit->node==fixed,NULL);
+        hit=flow_hit(t,235,75,(flow_point_t){0,50});
+        expect("legacy clip: fixed hit outside rectangle refused",hit==NULL || hit->node!=fixed,NULL);
+        flow_free(t);
+    }
+    sheeted_close(&p);
+}
+
 static void position_cases(void)
 {
+    position_legacy_clip_cases();
     position_style_cases();
     position_layout_cases();
     position_door_cases();

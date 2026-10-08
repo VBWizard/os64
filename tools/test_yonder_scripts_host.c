@@ -79,6 +79,7 @@ static unsigned script_cancels;
  * the window drops it. */
 static struct { os64_work_id_t id; void *job; } sheet_jobs[32];
 static int nsheet_jobs;
+static unsigned sheet_submits;      /* every sheet job the window ever sent */
 void os64_work_cancel(os64_work_pool_t *pool, os64_work_id_t id) {
     (void)pool;
     for(int i=0;i<nscript_jobs;i++) if(script_jobs[i].id==id) {
@@ -102,6 +103,7 @@ os64_work_id_t os64_work_submit(os64_work_pool_t *pool, const os64_work_t *work)
     }
     if(*(const uint32_t *)work->job==YONDER_JOB_SHEET) {
         if(nsheet_jobs==32) return 0;
+        sheet_submits++;
         sheet_jobs[nsheet_jobs].id=++pool_ids; sheet_jobs[nsheet_jobs].job=work->job;
         return sheet_jobs[nsheet_jobs++].id;
     }
@@ -207,7 +209,16 @@ void yonder_##kind##_release(void *job, void *product) { \
     (void)job; (void)product; check(false,"unexpected worker product"); \
 }
 JOB_STUB(picture)
-JOB_STUB(sheet)
+int64_t yonder_sheet_run(void *job, bool (*cancelled)(void *), void *ctx, void **out) {
+    (void)job; (void)cancelled; (void)ctx; (void)out;
+    check(false,"unexpected worker execution"); return -1;
+}
+/* As sheet.c releases a sheet job and what it made. */
+void yonder_sheet_release(void *job, void *product) {
+    yonder_sheet_t *got=product;
+    if(got) { garb_free(&got->parsed); os64_free(got); }
+    os64_free(job);
+}
 int64_t yonder_script_run(void *job, bool (*cancelled)(void *), void *ctx, void **out) {
     (void)job; (void)cancelled; (void)ctx; (void)out;
     check(false,"unexpected worker execution"); return -1;
@@ -382,6 +393,7 @@ static void probe_drop(void) {
 }
 
 static os64_html_node_t *probe_id_in(const os64_html_document_t *doc, const char *id) {
+    if(doc==NULL) return NULL;
     for (os64_html_node_t *n=doc->document;n;n=(os64_html_node_t *)next_within(n,doc->document)) {
         const os64_html_attr_t *a=os64_html_attr(n,"id");
         if(a && os64_streq(a->value,id)) return n;
@@ -1847,6 +1859,14 @@ static void loop_arrival_follows_scripts(void) {
     check(flow_box_for(g.page.tree,probe_id("styled"))==NULL,
         "arrival: lifecycle stylesheet applied before publication");
     loop_drop();
+    loop_page("<div id=measured style='width:123px;height:20px'></div><script>"
+        "document.addEventListener('DOMContentLoaded',function(){var p=document.getElementById('measured');"
+        "p.setAttribute('data-width',p.offsetWidth)});</script>");
+    check(loop_settle(),"arrival: lifecycle measurement settles");
+    const os64_html_attr_t *measured=page_doc(&g.page)!=NULL ? os64_html_attr(probe_id("measured"),"data-width") : NULL;
+    check(measured!=NULL && os64_streq(measured->value,"123"),
+        "arrival: DOMContentLoaded geometry uses its arriving document");
+    loop_drop();
     stream_window();g.scripts_on=true;g.script_ms=5000;
     slurp_path="/pages/local.html";slurp_bytes="<script src='app.js'></script>";
     open_address("/pages/local.html",NAV_GO,NULL,NULL);
@@ -1855,9 +1875,11 @@ static void loop_arrival_follows_scripts(void) {
     slurp_path=NULL;loop_drop();
     /* The sibling: a timer edits the page while it waits for a sheet, and
      * the page shown takes its sheet table from the tree it has by then. */
-    loop_page("<link rel=stylesheet href=wait.css><p id=styled>visible</p><script>"
+    /* The link is below the script, which would otherwise wait for it
+     * (DOM_D7.md § D7d). */
+    loop_page("<p id=styled>visible</p><script>"
         "setTimeout(()=>{var s=document.createElement('style');s.textContent='#styled{display:none}';"
-        "document.head.appendChild(s)},10);</script>");
+        "document.head.appendChild(s)},10);</script><link rel=stylesheet href=wait.css>");
     check(loop_settle() && g.coming.active && g.coming.page.sheets_waiting==1,
         "coming page: waits for its linked sheet");
     uint64_t waited_serial=g.coming.page.serial;
@@ -1939,8 +1961,8 @@ static void loop_hash_unshown(void) {
             "loop: the page arrives at the fragment the script named");
         loop_drop();
     }
-    loop_page("<link rel=stylesheet href=wait.css><h2 id=x>x</h2><script>"
-        "setTimeout(function(){location.hash='x'},10);</script>");
+    loop_page("<h2 id=x>x</h2><script>"
+        "setTimeout(function(){location.hash='x'},10);</script><link rel=stylesheet href=wait.css>");
     check(loop_settle() && g.coming.active,"loop: a page waiting for its sheet");
     now_ms+=50;
     check(loop_settle() && g.coming.active && !g.stream.active && g.coming.has_fragment &&
@@ -2223,6 +2245,198 @@ static void reporting_teardown(void)
     check(teardown_log_count == 1, "clean next-page retirement emits no additional reclaimed-leak log");
 }
 
+/* The worker's answer to the sheet job whose address ends with `tail`: the
+ * sheet `css`, or NULL for a fetch that failed. False when no such job is
+ * out. */
+static bool sheet_land(const char *tail, const char *css) {
+    for(int i=0;i<nsheet_jobs;i++) {
+        yonder_sheet_job_t *job=sheet_jobs[i].job;
+        size_t n=strlen(job->url), t=strlen(tail);
+        if(n<t || strcmp(job->url+n-t,tail)!=0) continue;
+        os64_work_id_t id=sheet_jobs[i].id;
+        sheet_jobs[i]=sheet_jobs[--nsheet_jobs];
+        yonder_sheet_t *got=os64_calloc(1,sizeof(*got));
+        if(css!=NULL) got->ok=garb_parse_sheet_text(css,strlen(css),&got->parsed)==GARB_OK;
+        os64_strcopy(got->url,sizeof(got->url),job->url);
+        reaped(id,job,got);
+        return true;
+    }
+    return false;
+}
+static bool sheet_out(const char *tail) {
+    for(int i=0;i<nsheet_jobs;i++) {
+        const char *url=((yonder_sheet_job_t *)sheet_jobs[i].job)->url;
+        size_t n=strlen(url), t=strlen(tail);
+        if(n>=t && strcmp(url+n-t,tail)==0) return true;
+    }
+    return false;
+}
+
+/* THE SHEETS BEFORE A SCRIPT (DOM_D7.md § The cut, D7d): the parse sends
+ * for the sheets it finds as it finds them, and a script the parse is
+ * stopped at waits for those still out. Each script writes the box's
+ * width into data-w; the sheet makes it 300. */
+#define D7D_MEASURE "<div id=box style='height:10px'></div><script>var b=document.getElementById('box');" \
+    "b.setAttribute('data-w',String(b.offsetWidth))</script>"
+static const char *box_width(void) {
+    const os64_html_node_t *box=probe_id_in(page_doc(&g.page),"box");
+    const os64_html_attr_t *a=box!=NULL ? os64_html_attr(box,"data-w") : NULL;
+    return a!=NULL ? a->value : "";
+}
+/* The box's data-w wherever the page is now: still streaming, waiting for
+ * its sheets, or shown. */
+static const char *stream_box_width(void) {
+    const os64_html_document_t *doc=g.stream.parser!=NULL ? os64_html_parser_document(g.stream.parser)
+        : g.coming.active ? page_doc(&g.coming.page) : page_doc(&g.page);
+    const os64_html_node_t *box=probe_id_in(doc,"box");
+    const os64_html_attr_t *a=box!=NULL ? os64_html_attr(box,"data-w") : NULL;
+    return a!=NULL ? a->value : "";
+}
+static void sheets_wait_cases(void) {
+    /* A slow link above a measuring script: sent for while the body is
+     * still in the mailbox, the script waits, and answers styled. */
+    /* More body than one of the mailbox's chunks holds. */
+    static char page[3*YONDER_STREAM_CHUNK], tail[2*YONDER_STREAM_CHUNK];
+    memset(tail,'x',sizeof(tail)-1); tail[sizeof(tail)-1]='\0';
+    snprintf(page,sizeof(page),"<link rel=stylesheet href=s.css>" D7D_MEASURE "<p>%s</p>",tail);
+    unsigned submits=sheet_submits;
+    loop_page(page);
+    check(loop_settle() && g.stream.stopped && sheet_out("/s.css") && g.stream.mail->first!=NULL,
+        "sheets: a link is sent for at the first stop, while the body is still in the mailbox");
+    check(stream_box_width()[0]=='\0',"sheets: the script below it waits for it");
+    check(sheet_land("/s.css","#box{width:300px}") && loop_settle() && g.page.tree!=NULL &&
+          os64_streq(box_width(),"300"),
+        "sheets: the sheet lands, and the script measures the styled box");
+    check(sheet_submits==submits+1,"sheets: one job for the sheet across the page's life, from the stop to the arrival");
+    check(g.page.nsheets==1 && g.page.sheets[0].ready && flow_box_for(g.page.tree,probe_id("box"))->rect.w==300,
+        "sheets: the arrived page has the sheet the stream sent for, in its cascade");
+    loop_drop();
+    /* A link in the first slice is sent for after that slice, with no
+     * stop to find it: the first script is further down than one slice
+     * reaches (Wikipedia's head has its links after its first scripts). */
+    static char deep[8*YONDER_STREAM_CHUNK], filler[6*YONDER_STREAM_CHUNK];
+    memset(filler,'y',sizeof(filler)-1); filler[sizeof(filler)-1]='\0';
+    snprintf(deep,sizeof(deep),"<link rel=stylesheet href=s.css><p>%s</p>" D7D_MEASURE,filler);
+    loop_page(deep);
+    stream_turn();
+    check(!g.stream.stopped && sheet_out("/s.css") && g.stream.mail->first!=NULL,
+        "sheets: a slice that reveals a link sends for it, with no stop and the body still coming");
+    loop_drop();
+    /* A style element's @import on the stream's page resolves against the
+     * base a model would have, and the script below waits for it too. */
+    loop_page("<base href=http://other.test/css/><style>@import 'i.css';</style>" D7D_MEASURE "<p>tail</p>");
+    check(loop_settle() && g.stream.stopped && sheet_out("http://other.test/css/i.css") &&
+          stream_box_width()[0]=='\0',
+        "sheets: a style's @import is sent for against the page's base, and holds the script below");
+    check(sheet_land("/i.css","#box{width:300px}") && loop_settle() && os64_streq(stream_box_width(),"300"),
+        "sheets: and the script measures what it imported");
+    loop_drop();
+    /* A style that straddles the slice boundary is taken whole: its text
+     * so far is not parsed as the sheet (Fable's probe, PR #233). */
+    static char split[8*YONDER_STREAM_CHUNK], comment[5*YONDER_STREAM_CHUNK];
+    memset(comment,'z',sizeof(comment)-1); comment[sizeof(comment)-1]='\0';
+    snprintf(split,sizeof(split),"<style>/*%s*/ #box{width:300px}</style>" D7D_MEASURE "<p>tail</p>",comment);
+    loop_page(split);
+    check(loop_settle() && g.page.tree!=NULL && os64_streq(box_width(),"300") &&
+          flow_box_for(g.page.tree,probe_id("box"))->rect.w==300,
+        "sheets: a style split by a slice is parsed whole, for the script and on the shown page");
+    loop_drop();
+    /* A sheet that never lands holds one wait, not one per script: at
+     * expiry it lapses, and neither a later script nor the first paint
+     * waits for it again. */
+    loop_page("<link rel=stylesheet href=never.css><script>var one=1</script>" D7D_MEASURE "<p>tail</p>");
+    check(loop_settle() && g.stream.stopped && stream_box_width()[0]=='\0',"sheets: the first script waits");
+    now_ms+=SHEETS_WAIT_MS;
+    check(loop_settle() && strcmp(stream_box_width(),"")!=0 && g.page.tree!=NULL && !g.coming.active,
+        "sheets: at expiry the sheet lapses; the second script runs at once and the page is shown without it");
+    loop_drop();
+    /* The same script above the link runs at once. */
+    loop_page(D7D_MEASURE "<link rel=stylesheet href=s.css><p>tail</p>");
+    check(loop_settle() && !g.stream.active && strcmp(stream_box_width(),"")!=0 &&
+          strcmp(stream_box_width(),"300")!=0,
+        "sheets: a script above the link does not wait for it");
+    loop_drop();
+    /* A print sheet holds nothing; a failed one holds nothing once it fails. */
+    loop_page("<link rel=stylesheet media=print href=p.css>" D7D_MEASURE "<p>tail</p>");
+    check(loop_settle() && !g.stream.active && sheet_out("/p.css") && strcmp(stream_box_width(),"")!=0,
+        "sheets: a link whose media does not hold on this glass is fetched and not waited for");
+    loop_drop();
+    loop_page("<link rel=stylesheet href=gone.css>" D7D_MEASURE "<p>tail</p>");
+    check(loop_settle() && g.stream.stopped && sheet_land("/gone.css",NULL) && loop_settle() &&
+          g.page.tree!=NULL && strcmp(box_width(),"")!=0,
+        "sheets: a link whose fetch fails holds nothing from then on");
+    loop_drop();
+    /* The wait is bounded: past SHEETS_WAIT_MS the script runs with what came. */
+    loop_page("<link rel=stylesheet href=slow.css>" D7D_MEASURE "<p>tail</p>");
+    check(loop_settle() && g.stream.stopped && stream_box_width()[0]=='\0',"sheets: waiting for a slow sheet");
+    now_ms+=SHEETS_WAIT_MS;
+    check(loop_settle() && strcmp(stream_box_width(),"")!=0 && strcmp(stream_box_width(),"300")!=0,
+        "sheets: the wait expires and the script runs with the sheets that came");
+    loop_drop();
+    /* Each stop waits its own SHEETS_WAIT_MS, not what is left of an
+     * earlier one's. */
+    loop_page("<link rel=stylesheet href=a.css><script>var one=1</script>"
+        "<link rel=stylesheet href=b.css>" D7D_MEASURE "<p>tail</p>");
+    check(loop_settle() && g.stream.stopped,"sheets: the first script waits");
+    now_ms+=SHEETS_WAIT_MS-1000;
+    check(sheet_land("/a.css","") && loop_settle() && g.stream.stopped && sheet_out("/b.css"),
+        "sheets: its sheet lands, it runs, and the second stops behind the next link");
+    now_ms+=2000;
+    check(loop_settle() && g.stream.stopped && stream_box_width()[0]=='\0',
+        "sheets: the second script's wait starts at its own stop");
+    loop_drop();
+    /* A style a mid-parse script adds is in the arrived page's table once;
+     * a style a mid-parse script removes is not in its cascade. */
+    loop_page("<style id=gone>#box{width:50px}</style><script>"
+        "var s=document.createElement('style');s.textContent='#box{width:120px}';document.head.appendChild(s);"
+        "document.getElementById('gone').remove();</script><div id=box style='height:10px'></div><script></script><p>tail</p>");
+    check(loop_settle() && g.page.tree!=NULL && flow_box_for(g.page.tree,probe_id("box"))->rect.w==120,
+        "sheets: a style a script adds applies and one it removes does not");
+    int added=0;
+    for(int32_t e=0;e<g.page.nsheets;e++) added+=g.page.sheets[e].node!=NULL;
+    check(added==2,"sheets: each style element has one entry, however many looks found it");
+    loop_drop();
+    /* Found out of document order, applied in it: the style a script puts
+     * above an earlier one loses to it, as it comes first. */
+    loop_page("<style id=a>#box{width:200px}</style><script>var s=document.createElement('style');"
+        "s.textContent='#box{width:100px}';document.head.insertBefore(s,document.getElementById('a'));</script>"
+        "<div id=box style='height:10px'></div><script></script><p>tail</p>");
+    check(loop_settle() && g.page.tree!=NULL && flow_box_for(g.page.tree,probe_id("box"))->rect.w==200,
+        "sheets: the cascade takes the sheets in document order, not the order they were found");
+    loop_drop();
+    /* The end of the parse looks again: a style below the last script is
+     * in the table DOMContentLoaded measures against. */
+    loop_page("<script>document.addEventListener('DOMContentLoaded',function(){var b=document.getElementById('box');"
+        "b.setAttribute('data-w',String(b.offsetWidth))})</script>"
+        "<style>#box{width:300px}</style><div id=box style='height:10px'></div>");
+    check(loop_settle() && g.page.tree!=NULL && os64_streq(box_width(),"300"),
+        "sheets: the end of the parse finds the sheets below the last script, before DOMContentLoaded");
+    loop_drop();
+    /* A written link before a written script holds it (D9). */
+    loop_page("<script>document.write('<link rel=stylesheet href=w.css><div id=box style=\"height:10px\"></div>"
+        "<scr'+'ipt>var b=document.getElementById(\"box\");b.setAttribute(\"data-w\",String(b.offsetWidth))</scr'+'ipt>')"
+        "</script><p>tail</p>");
+    check(loop_settle() && g.stream.stopped && sheet_out("/w.css") && stream_box_width()[0]=='\0',
+        "sheets: a written link before a written script holds it");
+    check(sheet_land("/w.css","#box{width:300px}") && loop_settle() && g.page.tree!=NULL &&
+          os64_streq(box_width(),"300"),"sheets: and the written script measures it styled");
+    loop_drop();
+    /* Teardown mid-wait, three ways: Stop, scripts off, the window's close. */
+    for(int how=0;how<3;how++) {
+        size_t before=live;
+        loop_page("<link rel=stylesheet href=s.css>" D7D_MEASURE "<p>tail</p>");
+        check(loop_settle() && g.stream.stopped && sheet_out("/s.css"),"sheets: waiting for a sheet");
+        if(how==0) click_stop(NULL,NULL);
+        else if(how==1) settings_use(YONDER_AGENT,false,5);
+        if(how<2) check(!g.stream.active && nsheet_jobs==0,
+            how==0 ? "sheets: Stop mid-wait cancels the sheet's job"
+                   : "sheets: turning scripts off mid-wait cancels it too");
+        loop_drop();
+        check(nsheet_jobs==0,"sheets: no sheet job outlives its page");
+        (void)before;
+    }
+}
+
 /* THE JOIN (DOM_D7.md § The cut, D7c): D8's reporting teardown, D10's
  * geometry and D7's loop, proven together through the real stream. */
 
@@ -2317,9 +2531,9 @@ static void join_unshown_geometry(void) {
     loop_drop();
     /* A page waiting for its sheet measures itself beside itself: the
      * sheet it has applies, and nothing of its own is laid out. */
-    loop_page("<link rel=stylesheet href=wait.css><style>#box{width:200px}</style><div id=box></div><script>"
+    loop_page("<style>#box{width:200px}</style><div id=box></div><script>"
         "setTimeout(function(){var b=document.getElementById('box');"
-        "b.setAttribute('data-w',String(b.offsetWidth))},10);</script>");
+        "b.setAttribute('data-w',String(b.offsetWidth))},10);</script><link rel=stylesheet href=wait.css>");
     check(loop_settle() && g.coming.active,"join: a page waits for its sheet");
     now_ms+=50;
     check(loop_settle() && g.coming.active && g.coming.page.tree==NULL && g.coming.page.cascade==NULL &&
@@ -2419,11 +2633,279 @@ static void join_one_measured_layout(void) {
 }
 
 static void join_cases(void) {
+    sheets_wait_cases();
     join_one_measured_layout();
     join_unshown_geometry();
     join_every_kind_counts();
     join_click_overrun();
     join_lost_wrapper();
+}
+
+static void classic_browser_cases(void)
+{
+    probe_page("<!doctype html><style>body{margin:0}img{display:block;width:200px;height:100px;"
+        "padding:10px;border:5px solid}#clip{position:absolute;left:300px;top:0;"
+        "width:1000px;height:200px;clip:rect(10px,100px,80px,20px)}"
+        "#child{width:900px;height:100px}</style><img id=picture usemap='#pixels'>"
+        "<map name=pixels><area id=first coords='0,0,40,40' href='/first' title='first' "
+        "onmouseover=\"this.setAttribute('data-title',this.title);this.setAttribute('data-event',event.type)\">"
+        "<area id=circle shape=circle coords='80,20,10' href='/circle'>"
+        "<area id=triangle shape=poly coords='100,0,140,0,120,40' href='/triangle'>"
+        "<area id=fallback shape=default href='/rest'></map><div id=clip><div id=child></div></div>",true);
+    const os64_html_node_t *link=NULL;
+    check(element_at(20,20,&link)==probe_id("first") && link==probe_id("first"),
+        "image-map: content origin excludes border and padding");
+    check(link_at(20,20)==os64_page_link_for(page_model(&g.page),probe_id("first")),
+        "image-map: area link goes through native libpage activation");
+    check(element_at(95,35,NULL)==probe_id("circle"),"image-map: circle hit");
+    check(element_at(135,25,NULL)==probe_id("triangle"),"image-map: polygon hit");
+    check(element_at(190,80,NULL)==probe_id("fallback"),"image-map: default hit");
+    check(element_at(5,5,NULL)==probe_id("picture"),"image-map: border has no region");
+    os64_dom_event_t mouse={.type="mouseover",.bubbles=true,.kind=OS64_DOM_EVENT_MOUSE,
+        .client_x=20,.client_y=20,.page_coordinates=true,.page_x=20,.page_y=420};
+    os64_js_outcome_t outcome;
+    check(yonder_scripts_dispatch(g.page.scripts,probe_id("first"),&mouse,NULL,&outcome)==OS64_JS_OK,
+        "image-map: inline area handler dispatches");
+    const os64_html_attr_t *mark=os64_html_attr(probe_id("first"),"data-event");
+    check(mark!=NULL && os64_streq(mark->value,"mouseover"),"legacy window.event names active event");
+    mark=os64_html_attr(probe_id("first"),"data-title");
+    check(mark!=NULL && os64_streq(mark->value,"first"),"area title reflects tooltip source");
+    const flow_box_t *box=flow_box_for(g.page.tree,probe_id("clip"));
+    check(box!=NULL && box->clipped,"legacy clip attaches to positioned box");
+    check(element_at(325,20,NULL)==probe_id("child"),"legacy clip: inside descendant hits");
+    check(element_at(305,20,NULL)!=probe_id("child"),"legacy clip: outside descendant excluded");
+    check(flow_width(g.page.tree)<=800,"legacy clip: clipped far edge does not widen page");
+    check(script_rebuild(),"classic widgets: handler edits published before zoom");
+    g.zoom=2000;
+    check(lay_out_page(&g.page,800,600),"classic widgets: zoomed layout builds");
+    check(element_at(40,40,NULL)==probe_id("first") && element_at(190,70,NULL)==probe_id("circle"),
+        "image-map: zoom unscales content coordinates");
+    box=flow_box_for(g.page.tree,probe_id("clip"));
+    os64_gui_rect_t clipped=flow_box_doc_clip(box,scroll_now());
+    check(clipped.x==640 && clipped.y==20 && clipped.w==160 && clipped.h==140,
+        "legacy clip: CSS sides scale with browser zoom");
+    probe_drop();
+    probe_page("<!DOCTYPE HTML PUBLIC '-//W3C//DTD HTML 4.01 Transitional//EN'>"
+        "<div id=pane></div><script>var p=document.getElementById('pane');"
+        "p.style.position='absolute';p.style.left=50;p.style.top=20;p.style.width=100;p.style.height=80;"
+        "p.style.clip='rect(10px,90px,70px,5px)';"
+        "p.setAttribute('data-width',p.offsetWidth);"
+        "document.onmousemove=function(e){p.setAttribute('data-coordinates',e.pageY+':'+event.y+':'+document.body.scrollTop)};"
+        "</script>",true);
+    check(script_turn(),"classic controls: quirks unitless style task runs");
+    mark=os64_html_attr(probe_id("pane"),"data-width");
+    check(mark!=NULL && os64_streq(mark->value,"100"),"classic controls: unitless quirks width is laid out");
+    g.sy=400;
+    mouse=(os64_dom_event_t){.type="mousemove",.bubbles=true,.kind=OS64_DOM_EVENT_MOUSE,
+        .client_y=20,.page_coordinates=true,.page_y=420};
+    check(yonder_scripts_dispatch(g.page.scripts,page_doc(&g.page)->body,&mouse,NULL,&outcome)==OS64_JS_OK,
+        "classic controls: mouse tracking task runs");
+    mark=os64_html_attr(probe_id("pane"),"data-coordinates");
+    check(mark!=NULL && os64_streq(mark->value,"420:20:400"),"classic controls: page, client and body scroll coordinates agree");
+    probe_drop();
+}
+/* Optional consumer proof reads locally downloaded primary scripts. Site
+ * sources stay outside the repository; regular regressions are original. */
+static char *classic_source(const char *directory, const char *name)
+{
+    char path[4096];snprintf(path,sizeof(path),"%s/%s",directory,name);
+    FILE *file=fopen(path,"rb");
+    if(file==NULL) { check(false,"consumer source opens");return NULL; }
+    fseek(file,0,SEEK_END);long length=ftell(file);rewind(file);
+    if(length<0 || length>2*1024*1024) { fclose(file);check(false,"consumer source size");return NULL; }
+    char *source=malloc((size_t)length+1);
+    if(source==NULL) { fclose(file);return NULL; }
+    size_t read=fread(source,1,(size_t)length,file);fclose(file);source[read]='\0';
+    check(read==(size_t)length,"consumer source reads");
+    return source;
+}
+static void classic_downloaded_cases(void)
+{
+    const char *directory=getenv("D11_CLASSIC_SOURCES");
+    if(directory==NULL) return;
+    char *source=classic_source(directory,"lileks.html");
+    if(source==NULL) return;
+    probe_page(source,true);free(source);
+    check(script_turn(),"Lileks: original inline script runs");
+    os64_js_outcome_t out;
+    os64_dom_event_t load={.type="load"};
+    check(yonder_scripts_dispatch(g.page.scripts,NULL,&load,NULL,&out)==OS64_JS_OK,
+        "Lileks: original preload handler constructs images");
+    os64_html_node_t *image=NULL;
+    for(os64_html_node_t *n=page_doc(&g.page)->document;n;n=(os64_html_node_t *)next_within(n,page_doc(&g.page)->document)) {
+        const os64_html_attr_t *name=os64_html_attr(n,"name");
+        if(name && os64_streq(name->value,"Image8")) { image=n;break; }
+    }
+    check(image!=NULL,"Lileks: original named rollover image exists");
+    if(image!=NULL) {
+        os64_dom_event_t over={.type="mouseover",.bubbles=true,.kind=OS64_DOM_EVENT_MOUSE};
+        check(yonder_scripts_dispatch(g.page.scripts,image,&over,NULL,&out)==OS64_JS_OK,
+            "Lileks: original mouseover handler runs");
+        const os64_html_attr_t *src=os64_html_attr(image,"src");
+        check(src!=NULL && strstr(src->value,"dtownb.jpg")!=NULL,"Lileks: original handler swaps src");
+        over.type="mouseout";
+        check(yonder_scripts_dispatch(g.page.scripts,image,&over,NULL,&out)==OS64_JS_OK,
+            "Lileks: original restore handler runs");
+        src=os64_html_attr(image,"src");
+        check(src!=NULL && strstr(src->value,"dtownb.jpg")==NULL,"Lileks: original handler restores src");
+    }
+    probe_drop();
+    source=classic_source(directory,"museum-date.js");
+    if(source==NULL) return;
+    size_t size=strlen(source)+256;char *html=malloc(size);
+    snprintf(html,size,"<div id=date><script>%s</script></div>",source);free(source);
+    loop_page(html);free(html);
+    check(loop_settle() && page_doc(&g.page)!=NULL,"Museum: original date script arrives through document.write");
+    if(page_doc(&g.page)!=NULL) {
+        const flow_box_t *date=flow_box_for(g.page.tree,probe_id("date"));
+        check(date!=NULL && date->rect.h>0,"Museum: original date has visible output");
+    }
+    loop_drop();
+    source=classic_source(directory,"museum-countdown.js");
+    if(source==NULL) return;
+    size=strlen(source)+512;html=malloc(size);
+    snprintf(html,size,"<form name=cform><input id=display name=disp></form><script>%s"
+        "then=new Date(Date.now()+86400000);runMany();</script>",source);free(source);
+    probe_page(html,true);free(html);check(script_turn(),"Museum: original countdown function updates named field");
+    const char *value=NULL;size_t value_length=0;
+    check(os64_page_node_value(os64_page_shared_state(page_model(&g.page)),probe_id("display"),&value,&value_length)==OS64_HTML_OK,
+        "Museum: countdown live input value reads");
+    check(value!=NULL && strstr(value,"To Bond 22 Premiere:")!=NULL,"Museum: countdown future branch reaches live input state");
+    probe_drop();
+    source=classic_source(directory,"million-gsc3.js");
+    if(source==NULL) return;
+    size=strlen(source)+1024;html=malloc(size);
+    snprintf(html,size,"<!DOCTYPE HTML PUBLIC '-//W3C//DTD HTML 4.01 Transitional//EN'>"
+        "<style>#een{position:absolute;width:2000px;height:2000px}</style>"
+        "<div id=f></div><div id=een></div><div id=neg></div><div id=d>"
+        "<span id=xcoord></span><span id=ycoord></span></div>"
+        "<img id=sn><img id=sz><img id=so><button id=zoom onclick='tz()'>zoom</button>"
+        "<script>%s</script>",source);free(source);
+    probe_page(html,true);free(html);check(script_turn(),"Million: original gsc3 script initializes tracking");
+    os64_dom_event_t click={.type="click",.bubbles=true};
+    check(yonder_scripts_dispatch(g.page.scripts,probe_id("zoom"),&click,NULL,&out)==OS64_JS_OK,
+        "Million: original zoom control runs");
+    os64_dom_event_t move={.type="mousemove",.bubbles=true,.kind=OS64_DOM_EVENT_MOUSE,
+        .client_x=100,.client_y=100,.page_coordinates=true,.page_x=100,.page_y=100};
+    check(yonder_scripts_dispatch(g.page.scripts,page_doc(&g.page)->body,&move,NULL,&out)==OS64_JS_OK,
+        "Million: original mouse tracking and zoom task runs");
+    const os64_html_attr_t *style=os64_html_attr(probe_id("een"),"style");
+    check(style!=NULL && strstr(style->value,"clip:rect(")!=NULL,"Million: original zoom sets a clip rectangle");
+    check(script_rebuild(),"Million: original zoom edits render through the browser");
+    probe_drop();
+}
+
+typedef struct {
+    const os64_gui_event_t *events;
+    size_t count, at;
+} HoverQueue;
+static int64_t hover_poll(void *opaque,os64_gui_event_t *event)
+{
+    HoverQueue *queue=opaque;
+    if(queue->at==queue->count) return 0;
+    *event=queue->events[queue->at++];return 1;
+}
+/* P5 regression: the description must become drawable while motion remains
+ * queued. Check that sampling reduction preserves input boundaries, rather
+ * than imposing a host-speed deadline which cannot describe the P5. */
+static void hover_batch_cases(void)
+{
+    os64_gui_event_t samples[1000];
+    for(unsigned i=0;i<1000;i++) samples[i]=(os64_gui_event_t){
+        .type=OS64_GUI_EVENT_MOUSE_MOVE,.mouse={.x=20+(int32_t)(i%100),.y=20}};
+    probe_page("<!DOCTYPE HTML PUBLIC '-//W3C//DTD HTML 4.01 Transitional//EN'>"
+        "<style>body{margin:0}img{display:block;width:200px;height:100px}"
+        "#popup{position:absolute;top:150px}</style><img usemap='#regions'><map name=regions>"
+        "<area coords='0,0,200,100' title='site' onmouseover=\"document.getElementById('popup').title=this.title\">"
+        "</map><div id=popup></div><script>var moves=0;document.onmousemove=function(e){"
+        "var popup=document.getElementById('popup');var width=document.body.offsetWidth;"
+        "popup.style.left=e.pageX+10;popup.textContent=(++moves)+':'+e.clientX;};</script>",true);
+    check(script_turn(),"hover burst: page's tracker installs");
+    HoverQueue queue={samples,1000,0};
+    unsigned turns=0,dispatched=0;
+    while(queue.at<queue.count) {
+        YonderEventBatch batch={0};os64_gui_event_t event;
+        while(yonder_event_batch_next(&batch,&event,hover_poll,&queue)) {
+            dispatched++;
+            hover(event.mouse.x,event.mouse.y);inputs_run();
+        }
+        turns++;
+        check(batch.consumed<=YONDER_EVENT_BATCH_MAX,"hover burst: turn has bounded input work");
+        if(turns==1) {
+            check(queue.at<queue.count && probe_text_is("popup","1:51"),
+                "hover burst: current popup rendered before queued motion drains");
+            check(g.page.rendered_version==os64_html_version(page_doc(&g.page)),
+                "hover burst: popup layout is current at first rendering boundary");
+        }
+    }
+    check(turns==32 && dispatched==32 && probe_text_is("popup","32:119"),
+        "hover burst: thousand samples collapse to current positions and final description");
+    probe_drop();
+    os64_gui_event_t ordered[]={
+        {.type=OS64_GUI_EVENT_MOUSE_MOVE,.mouse={.x=1}},
+        {.type=OS64_GUI_EVENT_MOUSE_MOVE,.mouse={.x=2}},
+        {.type=OS64_GUI_EVENT_MOUSE_BUTTON_DOWN,.mouse={.x=3,.buttons=1}},
+        {.type=OS64_GUI_EVENT_MOUSE_MOVE,.mouse={.x=4,.buttons=1}},
+        {.type=OS64_GUI_EVENT_MOUSE_MOVE,.mouse={.x=5,.buttons=1}},
+        {.type=OS64_GUI_EVENT_MOUSE_BUTTON_UP,.mouse={.x=6}},
+        {.type=OS64_GUI_EVENT_MOUSE_MOVE,.mouse={.x=7}},
+        {.type=OS64_GUI_EVENT_MOUSE_MOVE,.mouse={.x=8,.modifiers=OS64_GUI_MOD_SHIFT}},
+        {.type=OS64_GUI_EVENT_MOUSE_WHEEL,.mouse={.dy=-2}},
+        {.type=OS64_GUI_EVENT_KEY_DOWN,.key={.ascii='a'}},
+        {.type=OS64_GUI_EVENT_DOORBELL,.doorbell={.mask=BELL_TICK}},
+        {.type=OS64_GUI_EVENT_POINTER_STATE,.pointer={.inside=false}},
+        {.type=OS64_GUI_EVENT_MOUSE_MOVE,.mouse={.x=9}},
+    };
+    queue=(HoverQueue){ordered,sizeof(ordered)/sizeof(*ordered),1};
+    YonderEventBatch batch={.held=true,.pending=ordered[0]};os64_gui_event_t event;
+    unsigned index=1;
+    while(yonder_event_batch_next(&batch,&event,hover_poll,&queue)) {
+        const os64_gui_event_t *expected=index<queue.count ? &ordered[index] : NULL;
+        bool same=expected!=NULL && event.type==expected->type;
+        if(same) switch(event.type) {
+            case OS64_GUI_EVENT_MOUSE_WHEEL: same=event.mouse.dx==expected->mouse.dx && event.mouse.dy==expected->mouse.dy;break;
+            case OS64_GUI_EVENT_KEY_DOWN: same=event.key.ascii==expected->key.ascii;break;
+            case OS64_GUI_EVENT_DOORBELL: same=event.doorbell.mask==expected->doorbell.mask;break;
+            case OS64_GUI_EVENT_POINTER_STATE: same=event.pointer.inside==expected->pointer.inside;break;
+            default: same=event.mouse.x==expected->mouse.x && event.mouse.buttons==expected->mouse.buttons &&
+                event.mouse.modifiers==expected->mouse.modifiers;break;
+        }
+        check(same,
+            "hover burst: click, drag, modifier, key, timer and pointer state order preserved");
+        index++;
+    }
+    check(index==queue.count,"hover burst: lookahead delivers every nonmerged event");
+}
+
+#include <time.h>
+static double hover_seconds(void)
+{
+    struct timespec ts;clock_gettime(CLOCK_MONOTONIC,&ts);
+    return ts.tv_sec+ts.tv_nsec/1e9;
+}
+static void classic_hover_profile(void)
+{
+    const char *directory=getenv("D11_HOVER_PROFILE");if(directory==NULL) return;
+    char *source=classic_source(directory,"million-primary.html");if(source==NULL) return;
+    double began=hover_seconds();probe_page(source,true);free(source);
+    fprintf(stderr,"HOVER profile load %.3f s links=%d\n",hover_seconds()-began,os64_page_nlinks(page_model(&g.page)));
+    began=hover_seconds();script_turn();fprintf(stderr,"HOVER script %.3f s\n",hover_seconds()-began);
+    const os64_html_node_t *area=NULL;
+    for(const os64_html_node_t *n=page_doc(&g.page)->document;n;n=next_within(n,page_doc(&g.page)->document))
+        if(n->tag==OS64_HTML_TAG_AREA) {area=n;break;}
+    os64_dom_event_t ev={.type="mouseover",.bubbles=true,.kind=OS64_DOM_EVENT_MOUSE};os64_js_outcome_t out;
+    began=hover_seconds();yonder_scripts_dispatch(g.page.scripts,area,&ev,NULL,&out);
+    fprintf(stderr,"HOVER over %.3f s outcome=%d %s\n",hover_seconds()-began,out.status,out.message);
+    for(int i=0;i<3;i++) {
+        ev.type="mousemove";ev.client_x=100+i;ev.client_y=100;ev.page_coordinates=true;ev.page_x=100+i;ev.page_y=100;
+        began=hover_seconds();yonder_scripts_dispatch(g.page.scripts,area,&ev,NULL,&out);
+        fprintf(stderr,"HOVER move %.3f s outcome=%d %s\n",hover_seconds()-began,out.status,out.message);
+        began=hover_seconds();check(page_model_refresh(&g.page),"profile model refresh");
+        fprintf(stderr,"HOVER model %.3f s\n",hover_seconds()-began);
+        began=hover_seconds();check(script_rebuild(),"profile rendering rebuild");
+        fprintf(stderr,"HOVER render %.3f s\n",hover_seconds()-began);
+    }
+    probe_drop();
 }
 
 int main(void)
@@ -2432,6 +2914,10 @@ int main(void)
         .backend=flow_test_backend(),.memory_cap=8*1024*1024};
     check(os64_text_create(&options,&probe_text)==OS64_FONT_OK,"text context");
     check(os64_text_font_bitmap(probe_text,&probe_font)==OS64_FONT_OK,"bitmap face");
+    classic_browser_cases();
+    classic_downloaded_cases();
+    hover_batch_cases();
+    classic_hover_profile();
     geometry_cases();
     geometry_body_cases();
     geometry_publish_cases();
