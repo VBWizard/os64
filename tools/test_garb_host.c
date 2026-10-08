@@ -418,7 +418,7 @@ static void collect_styles(const os64_html_node_t *n, Input *in)
 // over (garb_cascade_skips), one `kind name count` a line.
 static void print_skips(const garb_cascade_t *c)
 {
-    static const char *const kinds[] = {"property", "at-rule", "function", "font"};
+    static const char *const kinds[] = {"property", "at-rule", "function", "font", "value"};
     garb_skip_t skips[GARB_SKIPS_MAX];
     uint32_t lost;
     int32_t n = garb_cascade_skips(c, skips, GARB_SKIPS_MAX, &lost);

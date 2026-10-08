@@ -491,10 +491,12 @@ static void sheets_free(Page *p)
 static void diag_leave(Page *p);
 static void page_clear(Page *p)
 {
-    diag_leave(p);
     measured_forget(page_doc(p));
+    // The host borrows the record (its miss hook), so the record goes after
+    // it, while the tree and the cascade it looks at are still here.
     yonder_scripts_free(p->scripts);
     p->scripts = NULL;
+    diag_leave(p);
     for (int32_t i = 0; i < p->npics; i++) {
         os64_image_free(&p->pics[i].image);
         os64_image_sequence_free(p->pics[i].moving);
@@ -1317,6 +1319,7 @@ static void diag_cascade(yonder_diag_t *d, const garb_cascade_t *c)
     static const char *const kinds[] = {
         [GARB_SKIP_PROPERTY] = "css-property", [GARB_SKIP_AT_RULE] = "css-at-rule",
         [GARB_SKIP_FUNCTION] = "css-function", [GARB_SKIP_FONT] = "font",
+        [GARB_SKIP_VALUE] = "css-value",
     };
     garb_skip_t skips[GARB_SKIPS_MAX];
     int32_t n = garb_cascade_skips(c, skips, GARB_SKIPS_MAX, NULL);

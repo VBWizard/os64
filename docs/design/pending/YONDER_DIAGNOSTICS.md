@@ -165,14 +165,28 @@ Reload, so this is the departure write):
   status line used to lose.
 - **The count is the last field, in parentheses, on every record line**,
   `(1)` included, so a census tally parses one shape.
-- **A token in a plain line has its second letter percent-encoded**
-  (`M%49SSING`, `F%41ILED`). In an address that spells the same address,
-  and it keeps the rule exact. A byte below 0x20, 0x7F and a backslash are
-  written `\xHH` and `\\` on every line, so no message can begin a record
-  line of its own. The verdict line carries both tokens, as the brief
-  writes it.
+- **The grep is exact, unanchored.** The verdict names only the tokens
+  that have records (`verdict: 2 FAILED`, not `0 MISSING, 2 FAILED`), and
+  DATA that spells a token has its second letter percent-encoded wherever
+  it stands (`M%49SSING`, `F%41ILED`), in plain lines and in a record's
+  kind, name, source and message alike. An address encoded that way spells
+  the same address. So `grep -l MISSING` lists exactly the files with a
+  MISSING record, and `grep -c FAILED` is the FAILED count, plus one for
+  the verdict when there are any. A byte below 0x20, 0x7F and a backslash
+  are written `\xHH` and `\\` on every line, so no message can begin a
+  record line of its own.
 - **The kinds are** `global`, `script` (`module`), `element`,
-  `css-property`, `css-at-rule`, `css-function` and `font`. A worker shows
+  `css-property`, `css-at-rule`, `css-function`, `css-value` and `font`.
+  `css-value` (Fable's round-one P3, ruled in by Chris) is `<property>:
+  <words>` for a property libgarb reads, in two shapes. One is a
+  declaration dropped though its value is bare words (`display: inline
+  frob`). The other, worse because the page draws wrong, is a value read
+  and laid out as something else: props.c's approximations,
+  `display: flow-root`, `background-clip: text`, `conic-gradient`,
+  `image-set`. A value holding a number or a string is the page's fault,
+  and a prefixed word is a dialect. Fable's examples (`position: sticky`,
+  `display: contents`, `overflow: clip`, `white-space: break-spaces`) are
+  read and laid out today, so they correctly record nothing. A worker shows
   up as `MISSING global Worker`. A service worker registration is a
   property of `navigator`, so it falls under the stated gap and is
   `FAILED` when called unguarded.
@@ -220,6 +234,6 @@ Reload, so this is the departure write):
 | `tools/test_js_prepare.py`: the series, line shifts, three context-drift refusals | 5 tests pass |
 | `tools/test_js_engine_host.sh` | pass |
 | libgarb host (`tools/test_garb_host.sh`): `tools/garb_corpus/skips.txt`, the cascade corpus unchanged, every allocation sweep | 5 skips pages and 18 cascade pages, zero failures |
-| Scripted-page host (`tools/test_yonder_scripts_host.sh`): the brief's cases, the token scan across every file the cases wrote, the setting absent and the parent missing | 2,525 checks, zero failures; the heap ends empty |
-| Mutants (`tools/test_yonder_diag_mutants.py`): the brief's three and eleven more | 14 caught, none missed. The first run missed a token leaking into a fact's value; the case of an address that spells both tokens was written for it |
+| Scripted-page host (`tools/test_yonder_scripts_host.sh`): the brief's cases, the token scan across every file the cases wrote (a token only at the head of its own records, or on the verdict after a nonzero count), the setting absent and the parent missing | 2,526 checks, zero failures; the heap ends empty |
+| Mutants (`tools/test_yonder_diag_mutants.py`): the brief's three and fifteen more | 18 caught, none missed. The first run missed a token leaking into a fact's value; the address that spells both tokens was written for it. Round one added the token in record data, the verdict naming an empty token, and the two `css-value` shapes |
 | Guest (QEMU, ext2 root, desktop): `/tests/pages/diag.html`, Reload, files read host-side with `debugfs` | Badge `MISSING 7  FAILED 2`; the page reads `fetch: undefined, in window: false`; the arrival file has seven MISSING lines and one FAILED; the departure write adds the timer's FAILED; a second boot's first page is `-0002`, so the first run's `-0001` is kept. Not a P5 run |

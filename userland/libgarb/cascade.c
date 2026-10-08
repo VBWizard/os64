@@ -320,6 +320,46 @@ static void skipped_functions(garb_cascade_t *c, const garb_value_t *v, int32_t 
     }
 }
 
+// A value of a property this library reads, written `<property>: <words>`:
+// what a page asked of the property and did not get.
+static void skipped_value(garb_cascade_t *c, const char *prop, size_t plen, const garb_value_t *v,
+                          int32_t n)
+{
+    char name[128];
+    size_t at = 0;
+    for (size_t i = 0; i < plen && at + 1 < sizeof(name); i++)
+        name[at++] = prop[i];
+    for (const char *s = ": "; *s != '\0' && at + 1 < sizeof(name); s++)
+        name[at++] = *s;
+    for (int32_t i = 0; i < n; i++) {
+        if (v[i].kind == GARB_WHITESPACE)
+            continue;
+        // A prefixed word is one engine's dialect, as a prefixed name is.
+        if (v[i].len != 0 && v[i].text[0] == '-')
+            return;
+        if (name[at - 1] != ' ' && at + 1 < sizeof(name))
+            name[at++] = ' ';
+        for (uint32_t k = 0; k < v[i].len && at + 1 < sizeof(name); k++)
+            name[at++] = v[i].text[k];
+    }
+    skipped(c, GARB_SKIP_VALUE, name, at);
+}
+
+// Whether a value is bare words and nothing else: `inline flex`, a keyword
+// this library does not read. One that holds a number, a string or a
+// function is a value written wrong far more often than a gap.
+static bool only_words(const garb_value_t *v, int32_t n)
+{
+    bool any = false;
+    for (int32_t i = 0; i < n; i++) {
+        if (v[i].kind == GARB_IDENT)
+            any = true;
+        else if (v[i].kind != GARB_WHITESPACE)
+            return false;
+    }
+    return any;
+}
+
 // An @font-face rule's family: the face a page asked for and did not get.
 static void skipped_face(garb_cascade_t *c, garb_parsed_t *owner, const garb_rule_t *r)
 {
@@ -370,9 +410,21 @@ static bool read_decl(garb_cascade_t *c, garb_parsed_t *owner, const garb_decl_t
         // table is a walk.
         if (prop_longhands(d->name, d->len, props) == 0)
             skipped(c, GARB_SKIP_PROPERTY, d->name, d->len);
+        else if (only_words(d->value, d->nvalue))
+            skipped_value(c, d->name, d->len, d->value, d->nvalue);
         else
             skipped_functions(c, d->value, d->nvalue, 0);
         return false;
+    }
+    // Read, but laid out as something else (props.c's kApproximated): asked
+    // for, and not given, as surely as a value dropped.
+    for (int32_t k = 0; k < n; k++) {
+        const char *word = garb_set_approximation(&sets[k]);
+        if (word != NULL) {
+            const char *prop = garb_prop_name(sets[k].prop);
+            garb_value_t one = {.kind = GARB_IDENT, .text = word, .len = (uint32_t)os64_strlen(word)};
+            skipped_value(c, prop, os64_strlen(prop), &one, 1);
+        }
     }
     out->sets = alloc(c, (size_t)n * sizeof(garb_set_t));
     if (out->sets == NULL)

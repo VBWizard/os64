@@ -187,15 +187,15 @@ static bool starts(const char *s, const char *word)
 }
 
 // `s` as one line holds it: a byte that would end or bend a line, and a
-// backslash, spelled as an escape. In a PLAIN line a token is spelled with
-// its second letter percent-encoded, so the tokens stay where a grep finds
-// only records.
-static void put_text(Out *o, const char *s, bool plain)
+// backslash, spelled as an escape, and a token spelled with its second
+// letter percent-encoded wherever it appears in data, record lines' data
+// included, so a grep for a token finds only the records it begins.
+static void put_text(Out *o, const char *s)
 {
     static const char hex[] = "0123456789ABCDEF";
     for (; *s != '\0'; s++) {
         unsigned char c = (unsigned char)*s;
-        if (plain && (starts(s, YONDER_DIAG_MISSING) || starts(s, YONDER_DIAG_FAILED))) {
+        if (starts(s, YONDER_DIAG_MISSING) || starts(s, YONDER_DIAG_FAILED)) {
             char spelled[4] = {s[0], '%', hex[(unsigned char)s[1] >> 4], hex[(unsigned char)s[1] & 15]};
             put(o, spelled, 4);
             s++;
@@ -230,36 +230,43 @@ size_t yonder_diag_render(const yonder_diag_t *d, char *out, size_t cap)
 {
     Out o = {out, cap, 0};
     puts_(&o, "address: ");
-    put_text(&o, d->url, true);
+    put_text(&o, d->url);
     puts_(&o, "\n");
     if (d->missing.n == 0 && d->failed.n == 0) {
         puts_(&o, "verdict: clean\n");
     } else {
+        // Only a token with records is named, so the verdict never answers
+        // a grep for the other one.
         char line[96];
-        os64_snprintf(line, sizeof(line), "verdict: %lu " YONDER_DIAG_MISSING ", %lu " YONDER_DIAG_FAILED "\n",
-                      (unsigned long)d->missing.n, (unsigned long)d->failed.n);
+        if (d->missing.n != 0 && d->failed.n != 0)
+            os64_snprintf(line, sizeof(line), "verdict: %lu " YONDER_DIAG_MISSING ", %lu " YONDER_DIAG_FAILED "\n",
+                          (unsigned long)d->missing.n, (unsigned long)d->failed.n);
+        else
+            os64_snprintf(line, sizeof(line), "verdict: %lu %s\n",
+                          (unsigned long)(d->missing.n != 0 ? d->missing.n : d->failed.n),
+                          d->missing.n != 0 ? YONDER_DIAG_MISSING : YONDER_DIAG_FAILED);
         puts_(&o, line);
     }
     for (uint32_t i = 0; i < d->missing.n; i++) {
         const Line *l = &d->missing.lines[i];
         puts_(&o, YONDER_DIAG_MISSING " ");
-        put_text(&o, l->a, false);
+        put_text(&o, l->a);
         puts_(&o, " ");
-        put_text(&o, l->b, false);
+        put_text(&o, l->b);
         put_count(&o, l->count);
     }
     for (uint32_t i = 0; i < d->failed.n; i++) {
         const Line *l = &d->failed.lines[i];
         puts_(&o, YONDER_DIAG_FAILED " ");
-        put_text(&o, l->a, false);
+        put_text(&o, l->a);
         puts_(&o, ": ");
-        put_text(&o, l->b, false);
+        put_text(&o, l->b);
         put_count(&o, l->count);
     }
     for (uint32_t i = 0; i < d->facts.n; i++) {
-        put_text(&o, d->facts.lines[i].a, true);
+        put_text(&o, d->facts.lines[i].a);
         puts_(&o, ": ");
-        put_text(&o, d->facts.lines[i].b, true);
+        put_text(&o, d->facts.lines[i].b);
         puts_(&o, "\n");
     }
     // What met no room is said, in words that are neither token: the

@@ -93,13 +93,17 @@ void garb_cascade_free(garb_cascade_t *c);
 // What the build passed over because this library does not read it — a
 // property it has no reader for, an at-rule it does not keep, a function
 // no reader accepts in a declaration it dropped, the family of an
-// @font-face (no face is fetched) — each name once, lower case, with how
-// often it was met. A prefixed name (`-webkit-…`) is not counted: one
-// engine's dialect is passed over by every other. A value merely written
-// wrong is not either. The names live as long as the cascade. Copies up to
+// @font-face (no face is fetched), and a VALUE: `<property>: <words>` for
+// a declaration of a property it reads, dropped though its value is bare
+// words, or read and laid out as something else (an approximation) — each
+// name once, lower case, with how often it was met. A prefixed name
+// (`-webkit-…`) is not counted: one engine's dialect is passed over by
+// every other. A value merely written wrong, one holding a number or a
+// string, is not either. The names live as long as the cascade. Copies up to
 // `cap` into `out` and answers how many there are; `lost` (may be NULL)
 // is how many met no room. At most GARB_SKIPS_MAX are kept.
-typedef enum { GARB_SKIP_PROPERTY, GARB_SKIP_AT_RULE, GARB_SKIP_FUNCTION, GARB_SKIP_FONT } garb_skip_kind_t;
+typedef enum { GARB_SKIP_PROPERTY, GARB_SKIP_AT_RULE, GARB_SKIP_FUNCTION, GARB_SKIP_FONT,
+               GARB_SKIP_VALUE } garb_skip_kind_t;
 typedef struct {
     garb_skip_kind_t kind;
     const char *name;

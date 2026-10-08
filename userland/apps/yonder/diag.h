@@ -7,15 +7,18 @@
 // kept whether or not yonder.conf asks for files, and the badge reads them.
 //
 // THE FILE IT RENDERS answers one grep. Line one is the address, line two
-// the verdict: `verdict: clean`, or `verdict: 7 MISSING, 2 FAILED`. Then
-// the RECORD LINES, each beginning with its token:
+// the verdict: `verdict: clean`, or the tokens that have records, with
+// their counts (`verdict: 7 MISSING, 2 FAILED`, `verdict: 2 FAILED`).
+// Then the RECORD LINES, each beginning with its token:
 //     MISSING <kind> <name> (<count>)
 //     FAILED <what>: <message> (<count>)
-// and the plain lines, `key: value`. The two tokens appear on the verdict
-// line and in record lines (which they begin) and NOWHERE ELSE: a plain
-// line spelling one has its second letter percent-encoded (`M%49SSING`,
-// `F%41ILED`), which an address reads as the same address. A byte that
-// would break a line, and a backslash, are written `\xHH` and `\\`.
+// and the plain lines, `key: value`. A token appears on the verdict line
+// only when it has records, and otherwise only at the start of its own
+// record lines: DATA that spells one, in any line, has its second letter
+// percent-encoded (`M%49SSING`, `F%41ILED`), which an address reads as the
+// same address. So `grep -l MISSING` is exactly the files with a MISSING
+// record. A byte that would break a line, and a backslash, are written
+// `\xHH` and `\\`.
 //
 // Pure apart from yonder_diag_write: no clock, no window.
 

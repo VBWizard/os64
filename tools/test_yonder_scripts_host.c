@@ -3030,10 +3030,21 @@ static void diag_tokens_exclusive(void) {
             const char *end=strchr(line,'\n'); size_t len=end?(size_t)(end-line):strlen(line);
             char one[2048]; snprintf(one,sizeof(one),"%.*s",(int)(len<sizeof(one)-1?len:sizeof(one)-1),line);
             n++;
-            bool token=strstr(one,"MISSING")!=NULL || strstr(one,"FAILED")!=NULL;
-            bool record=!strncmp(one,"MISSING ",8) || !strncmp(one,"FAILED ",7);
+            /* A token appears once in a record line, at its head; on the
+             * verdict line only when that token has records. */
             bool verdict=n==2 && !strncmp(one,"verdict: ",9);
-            if(token && !record && !verdict) { bad++; fprintf(stderr,"token outside a record in %s: %s\n",fake_files[f].path,one); }
+            const char *tokens[]={"MISSING","FAILED"};
+            for(int k=0;k<2;k++) {
+                const char *at=strstr(one,tokens[k]);
+                if(at==NULL) continue;
+                bool head=at==one && strstr(at+1,tokens[k])==NULL;
+                /* The verdict names it after its count, which is not zero. */
+                const char *digits=at-1;
+                unsigned long count=0, scale=1;
+                while(digits>one+9 && digits[-1]>='0' && digits[-1]<='9') { count+=(unsigned long)(digits[-1]-'0')*scale; scale*=10; digits--; }
+                bool named=verdict && strstr(at+1,tokens[k])==NULL && at[-1]==' ' && digits<at-1 && count!=0;
+                if(!head && !named) { bad++; fprintf(stderr,"token outside its place in %s: %s\n",fake_files[f].path,one); }
+            }
             if(n==2 && !verdict) { bad++; fprintf(stderr,"line two is not the verdict in %s\n",fake_files[f].path); }
             line+=len+(end?1:0);
         }
@@ -3052,8 +3063,15 @@ static void diag_unit_cases(void) {
     yonder_diag_fact(d,"bytes","1"); yonder_diag_fact(d,"bytes","2");
     yonder_diag_render(d,text,sizeof(text));
     check(has(text,"\nverdict: 2 MISSING, 1 FAILED\nMISSING global fetch (3)\nMISSING element canvas (3)\n"
-        "FAILED script a.js: line one\\x0AFAILED x\\\\y (2)\nbytes: 2\n"),
-        "diag: asks add, a whole tally holds its most, a failure counts, a line breaker is escaped, a fact is replaced");
+        "FAILED script a.js: line one\\x0AF%41ILED x\\\\y (2)\nbytes: 2\n"),
+        "diag: asks add, a whole tally holds its most, a failure counts, a line breaker and a token in data are escaped, a fact is replaced");
+    yonder_diag_t *one=yonder_diag_new("http://x.test/",1,0);
+    yonder_diag_failed(one,"script MISSING.js","Error: MISSING config");
+    yonder_diag_render(one,text,sizeof(text));
+    check(has(text,"\nverdict: 1 FAILED\nFAILED script M%49SSING.js: Error: M%49SSING config (1)\n") &&
+        strstr(text,"MISSING")==NULL,
+        "diag: the verdict names only a token with records, and record data spelling the other is encoded");
+    yonder_diag_free(one);
     check(yonder_diag_missing_lines(d)==2 && yonder_diag_failed_lines(d)==1,"diag: the verdict's numbers are lines");
     char name[64];
     check(yonder_diag_file_name(d,name,sizeof(name)) && !strcmp(name,"example.com-0003.txt"),
@@ -3113,7 +3131,7 @@ static void diag_page_cases(void) {
     check(loop_settle() && probe_text_is("out","false undefined true"),
         "diag: the page that asks for fetch sees what it always saw");
     yonder_diag_file_name(g.page.diag,name,sizeof(name)); text=diag_file("/tmp/diag",name);
-    check(has(text,"\nverdict: 1 MISSING, 0 FAILED\nMISSING global fetch (2)\n"),
+    check(has(text,"\nverdict: 1 MISSING\nMISSING global fetch (2)\n"),
         "diag: `typeof fetch` and `window.fetch` are one MISSING line counting both asks");
     check(!strcmp(g.badge_text,"MISSING 1") && !g.badge.hidden,"diag: the badge shows the file's own token and count");
     loop_drop();
@@ -3137,13 +3155,15 @@ static void diag_page_cases(void) {
         "diag: the timer's death is in the departure write");
 
     /* A module script and a canvas, each by its kind; a skipped property. */
-    loop_page("<style>p{aspect-ratio:1}</style><p id=out>x</p><canvas></canvas><canvas></canvas>"
+    loop_page("<style>p{aspect-ratio:1;display:flow-root}h1{display:inline frob}</style><p id=out>x</p><canvas></canvas><canvas></canvas>"
         "<my-widget></my-widget><script type=module>1</script>");
     check(loop_settle() && g.page.tree!=NULL,"diag: a page with a module, canvases and a custom element arrives");
     yonder_diag_file_name(g.page.diag,name,sizeof(name)); text=diag_file("/tmp/diag",name);
     check(has(text,"MISSING script module (1)\n") && has(text,"MISSING element canvas (2)\n") &&
-        has(text,"MISSING element my-widget (1)\n") && has(text,"MISSING css-property aspect-ratio (1)\n"),
-        "diag: a module script, an element drawn as nothing and a property the cascade skipped are each recorded");
+        has(text,"MISSING element my-widget (1)\n") && has(text,"MISSING css-property aspect-ratio (1)\n") &&
+        has(text,"MISSING css-value display: flow-root (1)\n") && has(text,"MISSING css-value display: inline frob (1)\n"),
+        "diag: a module script, an element drawn as nothing, a property the cascade skipped and a value it "
+        "dropped or approximated are each recorded");
     loop_drop();
     text=diag_file("/tmp/diag",name);
     check(has(text,"MISSING element canvas (2)\n"),"diag: looking again at departure does not count twice");

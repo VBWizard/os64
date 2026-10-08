@@ -77,3 +77,23 @@ property translate 1
 property rotate 1
 (end)
 END
+
+# A value: a property this library reads, dropped though its value is bare
+# words (one or several), or read and laid out as something else. A value
+# holding a number is the page's; a prefixed word is a dialect.
+VIEWPORT 800x600
+PAGE
+<!doctype html><style>
+p { display: bogusword; display: inline frob; width: 10quux; display: -webkit-box }
+p { display: flow-root; background-clip: text }
+div { DISPLAY: Flow-Root; background-image: conic-gradient(red, blue) }
+</style>
+<p>x<div>y</div>
+WANT
+value display: bogusword 1
+value display: inline frob 1
+value display: flow-root 2
+value background-clip: text 1
+value background-image: conic-gradient 1
+(end)
+END

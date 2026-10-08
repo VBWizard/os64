@@ -26,6 +26,8 @@ DIAG = 'userland/apps/yonder/diag.c'
 SCRIPTS = 'userland/apps/yonder/scripts.c'
 YONDER = 'userland/apps/yonder/yonder.c'
 WINDOW = 'tools/test_yonder_scripts_host.sh'
+CASCADE = 'userland/libgarb/cascade.c'
+GARB = 'tools/test_garb_host.sh'
 
 # (name, file, old, new, harness). Each breaks one rule the design states.
 mutants = [
@@ -37,8 +39,14 @@ mutants = [
      '    yonder_diag_missing(s->options.diag, "global", name, 1);',
      '    yonder_diag_missing(s->options.diag, "global", name, 2);', WINDOW),
     ('tokens-leak-into-a-plain-line', DIAG,
-     '        put_text(&o, d->facts.lines[i].b, true);',
-     '        put_text(&o, d->facts.lines[i].b, false);', WINDOW),
+     '        put_text(&o, d->facts.lines[i].b);',
+     '        puts_(&o, d->facts.lines[i].b);', WINDOW),
+    ('tokens-leak-into-record-data', DIAG,
+     '        puts_(&o, ": ");\n        put_text(&o, l->b);',
+     '        puts_(&o, ": ");\n        puts_(&o, l->b);', WINDOW),
+    ('the-verdict-names-an-empty-token', DIAG,
+     '        if (d->missing.n != 0 && d->failed.n != 0)',
+     '        if (true)', WINDOW),
     # And the rules around them.
     ('a-look-counts-again', YONDER,
      '            yonder_diag_missing_seen(d, "element", kNothing[k], nothing[k]);',
@@ -64,6 +72,12 @@ mutants = [
     ('cascade-not-looked-at', YONDER,
      '    if (p->cascade != NULL)\n        diag_cascade(d, p->cascade);',
      '    (void)diag_cascade;', WINDOW),
+    ('a-dropped-value-is-not-counted', CASCADE,
+     '        else if (only_words(d->value, d->nvalue))',
+     '        else if (only_words(d->value, d->nvalue) && false)', GARB),
+    ('an-approximation-is-not-counted', CASCADE,
+     '            skipped_value(c, prop, os64_strlen(prop), &one, 1);',
+     '            (void)one;\n            (void)prop;', WINDOW),
     ('sequence-restarts', DIAG,
      '    return high < UINT32_MAX ? high + 1 : high;',
      '    return 1;', WINDOW),
