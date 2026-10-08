@@ -42,6 +42,7 @@ extern uint8_t kPCIDeviceCount, kPCIFunctionCount;
 extern uintptr_t kHHDMOffset;
 extern uintptr_t kKernelPML4v;
 extern bool kUSBQuiet;   // USBQUIET — the opt-in 2.4GHz hygiene flashlight
+extern volatile uint64_t kSystemCurrentTime;
 
 // ── Register offsets (xHCI spec ch. 5) ──────────────────────────────────────
 
@@ -184,6 +185,11 @@ typedef struct {
 	unsigned packets;
 	bool runtime;
 	bt_scan_t scan;
+	// Preserve the last round's timing when LE cleanup clears scan results.
+	struct {
+		uint64_t started_at, finished_at, started_ms, finished_ms;
+		bool valid, finished, failed, le_only;
+	} scan_history;
 	bt_le_t le;
 	bt_manager_t manager;
 	hid_keyboard_t keyboard;
@@ -1137,12 +1143,27 @@ static void xhci_bt_runtime_poll(void)
 		if (bt_le_quiescent(&p->le)) p->scan = (bt_scan_t){0};
 	} else {
 		bt_scan_phase_t phase = p->scan.phase;
+		if (phase == BT_SCAN_RESET && !p->scan.pending &&
+		    (!p->scan_history.valid || p->scan_history.finished)) {
+			p->scan_history.started_at = kSystemCurrentTime;
+			p->scan_history.started_ms = kTicksSinceStart * 1000 / TICKS_PER_SECOND;
+			p->scan_history.valid = true;
+			p->scan_history.finished = p->scan_history.failed = false;
+			p->scan_history.le_only = p->scan.le_only;
+		}
 		bt_scan_tick(&p->scan, kTicksSinceStart * 1000 / TICKS_PER_SECOND,
 		             usb_done, usb_failed, xhci_bt_runtime_send, p);
-		if (p->scan.phase != phase && (p->scan.phase == BT_SCAN_DONE || p->scan.phase == BT_SCAN_FAILED))
+		if (p->scan.phase != phase && (p->scan.phase == BT_SCAN_DONE || p->scan.phase == BT_SCAN_FAILED)) {
+			if (p->scan_history.valid && !p->scan_history.finished) {
+				p->scan_history.finished_at = kSystemCurrentTime;
+				p->scan_history.finished_ms = kTicksSinceStart * 1000 / TICKS_PER_SECOND;
+				p->scan_history.finished = true;
+				p->scan_history.failed = p->scan.phase == BT_SCAN_FAILED;
+			}
 			printd(DEBUG_USB, "xhci: AX210 discovery %s devices=%u error=%s opcode=%04x status=%02x\n",
 			       p->scan.phase == BT_SCAN_DONE ? "complete" : "failed", p->scan.count,
 			       p->scan.error ? p->scan.error : "none", p->scan.error_opcode, p->scan.error_status);
+		}
 	}
 	// Policy performs no I/O. Advance handoffs here under the USB poll lock so
 	// discovery completion and retry deadlines do not wait for the storage worker.
@@ -1229,6 +1250,38 @@ void xhci_bluetooth_maintain(void)
 	__sync_lock_release(&s_bond_io_busy);
 }
 
+static void xhci_bt_scan_date(uint64_t epoch, char out[32])
+{
+	if (!epoch) { snprintf(out, 32, "clock unavailable"); return; }
+	time_t stamp = (time_t)epoch;
+	struct tm date = {0};
+	gmtime(&stamp, &date);
+	snprintf(out, 32, "%04d-%02d-%02d %02d:%02d:%02d UTC", date.tm_year + 1900,
+	         date.tm_mon + 1, date.tm_mday, date.tm_hour, date.tm_min, date.tm_sec);
+}
+
+static size_t xhci_bt_scan_history(const xhci_bt_probe_t *p, char *out, size_t cap)
+{
+	int n;
+	if (!p->scan_history.valid) n = snprintf(out, cap, "last scan: none this boot\n");
+	else {
+		char started[32], finished[96];
+		xhci_bt_scan_date(p->scan_history.started_at, started);
+		if (p->scan_history.finished) {
+			char date[32];
+			xhci_bt_scan_date(p->scan_history.finished_at, date);
+			snprintf(finished, sizeof(finished), "%s (uptime ms: %lu)", date, p->scan_history.finished_ms);
+		}
+		else snprintf(finished, sizeof(finished), "in progress");
+		n = snprintf(out, cap, "last scan: %s; %s\nlast scan started: %s (uptime ms: %lu)\n"
+		             "last scan finished: %s\n",
+		             p->scan_history.le_only ? "background LE" : "manual Classic + LE",
+		             !p->scan_history.finished ? "active" : p->scan_history.failed ? "failed" : "complete",
+		             started, p->scan_history.started_ms, finished);
+	}
+	return n < 0 || !cap ? 0 : (size_t)n < cap ? (size_t)n : cap - 1;
+}
+
 size_t xhci_bluetooth_read(char *out, size_t capacity, unsigned file)
 {
 	if (!capacity) return 0;
@@ -1246,6 +1299,8 @@ size_t xhci_bluetooth_read(char *out, size_t capacity, unsigned file)
 		    file == 1 ? bt_scan_devices(scan, out, capacity) : bt_scan_status(scan, out, capacity);
 		if (file == 2 && n < capacity - 1)
 			n += bt_manager_status(&s_bluetooth_hc->bluetooth.manager, out + n, capacity - n);
+		if (file == 0 && n < capacity - 1)
+			n += xhci_bt_scan_history(&s_bluetooth_hc->bluetooth, out + n, capacity - n);
 	}
 	__sync_lock_release(&s_poll_busy);
 	return n;

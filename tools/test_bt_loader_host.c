@@ -45,6 +45,16 @@ bool bt_bond_save(const bt_le_bond_t *bond,bool automatic)
 }
 uintptr_t kHHDMOffset;
 volatile uint64_t kTicksSinceStart;
+volatile uint64_t kSystemCurrentTime;
+// Fixed calendar fixture: exercise captured timestamps and formatting without
+// importing the kernel's scheduler-dependent time module into the transport test.
+struct tm *gmtime(const time_t *stamp,struct tm *date)
+{
+    CHECK(*stamp>=1791475200 && *stamp<1791475260);
+    *date=(struct tm){.tm_year=126,.tm_mon=9,.tm_mday=8,.tm_hour=16,
+                     .tm_sec=(int)(*stamp-1791475200)};
+    return date;
+}
 __uint128_t kDebugLevel;
 static char failure_log[1024];
 void printd(__uint128_t level,const char *fmt,...)
@@ -396,6 +406,48 @@ static void bond_maintenance(void)
     puts("PASS: worker storage outside poll lock, restore, write failure and forget racing a save");
 }
 
+static void scan_history(void)
+{
+    xhci_bt_probe_t *p=s_hc->bt_probe;
+    p->failed=false; p->tx_done=true; p->le=(bt_le_t){0}; p->scan=(bt_scan_t){0};
+    p->manager=(bt_manager_t){.loaded=true};
+    memset(&p->scan_history,0,sizeof(p->scan_history)); s_hc->control_slot=0;
+    char out[4096];
+    xhci_bluetooth_read(out,sizeof(out),0); CHECK(strstr(out,"last scan: none this boot"));
+    kSystemCurrentTime=1791475200; kTicksSinceStart=1000;
+    CHECK(xhci_bluetooth_scan()); xhci_bt_runtime_poll();
+    xhci_bluetooth_read(out,sizeof(out),0);
+    CHECK(strstr(out,"last scan: manual Classic + LE; active"));
+    CHECK(strstr(out,"last scan started: 2026-10-08 16:00:00 UTC (uptime ms: 10000)"));
+    CHECK(strstr(out,"last scan finished: in progress"));
+    kSystemCurrentTime++; kTicksSinceStart++;
+    xhci_bt_runtime_poll(); CHECK(p->scan_history.started_at==1791475200);
+    // Complete the scan, then emulate successful LE cleanup clearing its results.
+    p->scan.phase=BT_SCAN_LE_DISABLE; p->scan.pending=p->scan.command_done=true;
+    p->scan.status=0; p->scan.opcode=0x200c; s_hc->control_slot=0;
+    kSystemCurrentTime++; kTicksSinceStart++;
+    xhci_bt_runtime_poll(); CHECK(p->scan_history.finished && !p->scan_history.failed);
+    p->le=(bt_le_t){.phase=BT_LE_CLEANUP,.pending=true,.command_done=true,.opcode=0x0c03,
+                   .deadline=kTicksSinceStart*1000/TICKS_PER_SECOND+3000};
+    xhci_bt_runtime_poll(); CHECK(p->scan.phase==BT_SCAN_IDLE);
+    xhci_bluetooth_read(out,sizeof(out),0);
+    CHECK(strstr(out,"last scan: manual Classic + LE; complete"));
+    CHECK(strstr(out,"last scan finished: 2026-10-08 16:00:02 UTC (uptime ms: 10020)"));
+    CHECK(!xhci_bluetooth_read(out,sizeof(out),1)); // Device rows remain machine-readable.
+    kSystemCurrentTime=1791475210;
+    CHECK(bt_scan_start_le(&p->scan,kTicksSinceStart*1000/TICKS_PER_SECOND));
+    xhci_bt_runtime_poll(); p->failed=true; kSystemCurrentTime++;
+    xhci_bt_runtime_poll(); xhci_bluetooth_read(out,sizeof(out),0);
+    CHECK(strstr(out,"last scan: background LE; failed"));
+    CHECK(strstr(out,"last scan started: 2026-10-08 16:00:10 UTC"));
+    CHECK(strstr(out,"last scan finished: 2026-10-08 16:00:11 UTC"));
+    kSystemCurrentTime=0; p->failed=false; p->scan=(bt_scan_t){0}; s_hc->control_slot=0;
+    CHECK(xhci_bluetooth_scan()); xhci_bt_runtime_poll();
+    xhci_bluetooth_read(out,sizeof(out),0); CHECK(strstr(out,"last scan started: clock unavailable"));
+    char tiny[2]; CHECK(xhci_bluetooth_read(tiny,sizeof(tiny),0)==1 && !tiny[1]);
+    puts("PASS: scan timestamps cover manual/background rounds, failure, cleanup retention and missing clock");
+}
+
 int main(void)
 {
     const uint8_t config[]={9,2,39,0,1,1,0,0x80,50, 9,4,0,0,3,0xe0,1,1,0,
@@ -462,7 +514,7 @@ int main(void)
             }
             CHECK(hc.bluetooth.scan.phase==BT_SCAN_DONE && !hc.bluetooth.scan.radio_active);
             CHECK(!released && allocations-frees==10);
-            if (scenario==WARM) { runtime_transport(); bond_maintenance(); }
+            if (scenario==WARM) { runtime_transport(); bond_maintenance(); scan_history(); }
         } else if (scenario==DISABLE_FAIL) CHECK(!released && allocations-frees==10 && dcbaa[2]);
         else CHECK(released && allocations-frees==1 && !dcbaa[2]);
         // The command ring is controller-owned. Failed Disable Slot deliberately

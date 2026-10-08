@@ -21,6 +21,16 @@ files again to see progress: each open is a consistent snapshot. Discovery does
 not pair or connect. Classic devices must answer inquiry, and LE devices must
 advertise to appear. This is not a radio spectrum analyzer.
 
+`scan` also reports the latest round's type (background LE or manual Classic +
+LE), start and finish dates in UTC, boot-relative milliseconds, and outcome.
+An unfinished round says `active` / `in progress`; before the first round it
+says `none this boot`. Times come from the system clock when initialization
+starts and when the round completes or fails. If the wall clock is unavailable,
+the boot-relative timing remains available. This is status content, not a
+filesystem modification timestamp. Reading it does not initiate discovery.
+The timing survives LE cleanup clearing discovery results and is replaced when
+the next scan begins. It is not a per-device last-seen timestamp.
+
 `devices` lists up to 64 distinct transport/address-type/address combinations,
 with RSSI when supplied, Classic class-of-device bytes, and advertised names.
 Names can arrive in Extended Inquiry Response or LE advertising/scan-response

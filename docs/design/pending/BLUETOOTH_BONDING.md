@@ -204,6 +204,11 @@ Expose connection state, saved or unsaved bond state, identity-resolution result
 and the reason for the next required action through `/sys/bluetooth/`. The normal
 experience is pair once, then turn the keyboard on and type. Diagnostics remain
 available when that cannot succeed.
+`/sys/bluetooth/scan` includes the latest round's start/finish UTC dates and
+boot-relative milliseconds, scan type, and active/complete/failed outcome.
+That timing survives controller cleanup clearing the scan results, so an idle
+scan state does not erase evidence of the last discovery round. Filesystem
+timestamps and per-device last-seen tracking are outside this status field.
 
 ## Implementation status
 
