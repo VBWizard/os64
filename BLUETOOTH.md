@@ -341,7 +341,8 @@ immediate `reconnect` then timed out waiting for connection establishment
 (opcode 200d), before encryption or any ACL traffic. Cleanup confirmed the link
 inactive and left the driver failed, requiring reboot. This did not test whether
 the keyboard accepts the cached key; its advertising state during reconnection
-was not observed. Real key delivery and cached-key reconnection remain unproven.
+was not observed. That attempt established neither real key delivery nor
+cached-key reconnection.
 
 Chris's subsequent Linux btsnoop capture contains successful encrypted legacy
 pairing and eight-byte keyboard notifications at value 0019. The public HID
@@ -353,11 +354,27 @@ timestamp, then the first keyboard notification at 15.769 seconds. The connectio
 update completes later, at 16.141 seconds. Linux also distributes more SMP keys
 than Os64. The trace does not isolate which setup differences affect the device.
 
-The next controlled hardware test completes Input Report subscriptions while
+The controlled change at `ce322505` completes Input Report subscriptions while
 retaining Os64's pairing and connection-parameter policies. The regression
 fixture fails against `330514cc` because it stops after the keyboard CCC. The
-raw Linux capture contains secrets and is not a repository fixture. Os64 input
-success still requires a hardware test of the expanded subscription sequence.
+raw Linux capture contains secrets and is not a repository fixture.
+
+On the P5 at `ce322505`, Chris confirmed visible keyboard input. A fresh scan
+found random f5:fd:1c:1f:b0:4e; `bond-justworks` completed key distribution and
+encryption, subscribed all five Input Report CCCs, and read back keyboard
+CCC=0001 and Protocol Mode=1. Status reached `keyboard ready` with 15 decoded
+reports, then 59, zero malformed packets and no error. The selected report
+remained ID 1, eight bytes at value 0019. Chris also confirmed correct Shift+A
+and Backspace behavior, and that rapid pairing-mode blinking stopped before
+its normal timeout. This establishes real keyboard input
+through Os64's encrypted LE Report Protocol path with the expanded subscription
+sequence. It does not isolate which secondary CCC the peripheral requires.
+
+The keyboard made seven connection-parameter requests (last request: interval
+26/26, latency 32, supervision timeout 300); the existing host policy rejected
+them and input nevertheless arrived. Accepting valid peripheral updates remains
+follow-up work. Cached-key reconnection and persistence across reboot are not
+established by this input test.
 
 Wire references: [Bluetooth Core Security Manager](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/host/security-manager-specification.html),
 [ATT](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/host/attribute-protocol--att-.html),
