@@ -112,7 +112,7 @@
     },
     {
       "path": "patches/0007-browser-legacy-function-arguments.patch",
-      "sha256": "aaeb29f3160d50b194fc19222d5c08b8dd1e4886f3a6cc095a231523e2cc4719",
+      "sha256": "8a5b21235110dc092c7ce18288a08607816022f18444cee6e0fc9c6c8a5feecc",
       "reason": "Add an explicitly installed browser helper for snapshots of active ordinary non-strict function arguments; needed by Dreamweaver rollovers."
     }
   ],

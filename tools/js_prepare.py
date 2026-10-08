@@ -19,7 +19,11 @@ for entry in manifest['retained_files']:
     shutil.copyfile(root / entry['path'], destination / Path(entry['path']).name)
 for entry in manifest['patches']:
     with (root / entry['path']).open('rb') as patch:
-        subprocess.run(['patch', '-s', '-d', str(destination), '-p1'], stdin=patch, check=True)
+        # Context anchors engine edits across line shifts; discarding it can
+        # silently put a helper in the wrong function after an earlier patch.
+        result = subprocess.run(['patch', '-s', '-F0', '-d', str(destination), '-p1'], stdin=patch)
+        if result.returncode:
+            sys.exit('QuickJS patch failed: ' + entry['path'])
 source = (destination / 'quickjs.c').read_text()
 if '#define CONFIG_ATOMICS' in source or '#define CONFIG_STACK_CHECK' not in source:
     sys.exit('QuickJS profile mismatch: Atomics omission / stack checks')

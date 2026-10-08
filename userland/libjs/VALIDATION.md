@@ -727,3 +727,14 @@ strict/arrow refusals. Source and header audits pass. Its primary-widget
 consumer proof is recorded in
 [DOM_D11.md](../../../docs/design/pending/DOM_D11.md); it does not claim a new
 P5 run or full legacy-engine conformance.
+
+PR #229's patch-placement regression is covered by `tools/test_js_prepare.py`.
+Its four checks cover the pinned series, a seventeen-line
+shift in both engine files, and refusal of changed C/header context. The
+preparer requires exact context (`-F0`) and identifies a refused patch by name.
+Controls restoring the context-free patch or default fuzz fail the respective
+regressions. Regenerating patch 0007 with context leaves the prepared engine
+sources byte-for-byte unchanged; its manifest hash is updated.
+The DOM host profiles pass 3,087 target-core and 17,739 sanitized-core checks,
+with zero failures and leak detection enabled. The manifest/header and target
+symbol/dependency audits pass (187 engine exports, nineteen runtime exports).

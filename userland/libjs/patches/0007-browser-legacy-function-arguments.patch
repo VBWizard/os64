@@ -1,6 +1,11 @@
+# The C hunk closes js_build_arguments with an added brace and reuses
+# its existing closing brace for JS_GetLegacyFunctionArguments.
 --- a/quickjs.c
 +++ b/quickjs.c
-@@ -16242,0 +16243,23 @@
+@@ -16240,6 +16240,29 @@
+  fail:
+     JS_FreeValue(ctx, val);
+     return JS_EXCEPTION;
 +}
 +
 +/* Browser compatibility: a detached, unmapped snapshot of the innermost
@@ -24,8 +29,17 @@
 +            return js_build_arguments(ctx, frame->arg_count, frame->arg_buf);
 +    }
 +    return JS_NULL;
+ }
+
+ #define GLOBAL_VAR_OFFSET 0x40000000
 --- a/quickjs.h
 +++ b/quickjs.h
-@@ -846,0 +847,2 @@
+@@ -844,6 +844,8 @@
+                     const char *input, size_t input_len,
+                     const char *filename, int eval_flags);
+ JSValue JS_GetGlobalObject(JSContext *ctx);
 +/* Browser-only legacy accessor helper; install explicitly in that context. */
 +JSValue JS_GetLegacyFunctionArguments(JSContext *ctx, JSValueConst function);
+ int JS_IsInstanceOf(JSContext *ctx, JSValueConst val, JSValueConst obj);
+ int JS_DefineProperty(JSContext *ctx, JSValueConst this_obj,
+                       JSAtom prop, JSValueConst val,
