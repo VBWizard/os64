@@ -219,8 +219,10 @@ channel switching and return, delayed power-on after thirty seconds of OS
 uptime, sleep/wake, and explicit disconnect/reconnect. Chris also confirmed
 that saved `auto off` prevented boot connection; a subsequent `auto on` trace
 reached encrypted readiness automatically after a scan missed the peer and
-the next found it. Persistent forget and privacy-address rotation remain
-unverified on hardware. The USB-poll handoff optimization
+the next found it. The forget/reboot test showed no cached bond, saved storage
+and automatic connection disabled; re-pairing restored a saved bond and
+encrypted HID readiness after correcting a helper-script argument typo.
+Privacy-address rotation remains unverified on hardware. The USB-poll handoff optimization
 has host coverage; successive P5 snapshots measured readiness at 21,070 ms
 before it and 17,210 ms afterward. A subsequent 3e disconnect exposed a separate
 retry-classification gap, now covered by host tests; corrected automatic 3e

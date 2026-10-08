@@ -608,9 +608,30 @@ identity and led to HID readiness at 58,230 ms. These times are since kernel
 startup, not since the `auto on` command (whose receipt time is not logged).
 The observed policy resumed discovery and recovered from the missed scan
 without manual intervention. No key rejection or MIC failure was reported in
-this sequence. Persistent `forget` remains to be tested on hardware.
+this sequence.
 Chris subsequently confirmed that the husk window was not foreground; missing
 visible text was a focus issue. Persistent disable and re-enable passed.
+
+### Forget/reboot and re-pairing (2026-10-08)
+
+During the final forget/reboot check, status showed `cached=no`, no identity
+key, `bond storage: saved`, automatic connection disabled and an idle session.
+The apparent failure was restoring the pairing afterward: the local helper
+`/home/yogi/btconnect` used DOS-style `%1` instead of husk's `$1`, so the bond
+command contained a literal invalid address and never started a session. The
+helper was corrected to `echo bond-justworks random "$1" > /sys/bluetooth/connection`.
+Its first real attempt timed out because the keyboard did not answer. After
+Chris renewed pairing mode, a fresh scan confirmed ca:dc:f1:6a:af:47 and the
+corrected helper completed pairing on that address.
+
+Status showed four received key-distribution parts, a present identity key,
+saved bond storage, automatic connection enabled, encryption active and all
+five Input Report subscriptions configured. HID readiness was reached at
+413,940 ms; the final snapshot awaited keyboard input. This validates the
+forgotten state after reboot and restoration of a new persisted bond without
+a driver change. The new pairing's static identity differs from the previous
+c8:cb:24:65:d1:95; that is not evidence of an RPA rotation or an ordinary bonded
+power-cycle identity change.
 
 Wire references: [Bluetooth Core Security Manager](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/host/security-manager-specification.html),
 [ATT](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/host/attribute-protocol--att-.html),
