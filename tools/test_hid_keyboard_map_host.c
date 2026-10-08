@@ -41,6 +41,25 @@ static void bitmaps(void)
     const uint8_t packed_report[]={0x10,0,4};
     assert(hid_keyboard_decode_map(&m,packed_report,3,out) && out[0]==2 && out[2]==4);
 }
+static void p5_capture(void)
+{
+    hid_keyboard_layout_t m;
+    assert(sizeof(keyboard_p5_map)==166);
+    assert(hid_keyboard_parse_map(keyboard_p5_map,sizeof(keyboard_p5_map),1,&m));
+    assert(m.bytes==8 && m.array_bit==16 && m.array_count==6 && m.array_size==8);
+    assert(m.logical_min==0 && m.logical_max==255 && m.usage_min==0);
+    // Synthetic key values against the captured descriptor, not observed input.
+    const uint8_t samples[][8]={{0,0,4,0,0,0,0,0},{2,0,4,0,0,0,0,0},
+        {0,0,42,0,0,0,0,0},{0,0,0,0,0,0,0,0}};
+    for(unsigned i=0;i<sizeof(samples)/sizeof(samples[0]);i++) {
+        uint8_t out[8];
+        assert(hid_keyboard_decode_map(&m,samples[i],8,out));
+        assert(!memcmp(out,samples[i],8));
+    }
+    for(unsigned id=2;id<=5;id++)
+        assert(!hid_keyboard_parse_map(keyboard_p5_map,sizeof(keyboard_p5_map),id,&m));
+    puts("PASS: captured P5 map selects keyboard ID 1 and decodes synthetic A, Shift+A, Backspace and release");
+}
 static void hostile(void)
 {
     uint8_t data[HID_KEYBOARD_MAP_BYTES],report[64]={0},out[8];
@@ -60,4 +79,4 @@ static void hostile(void)
     const uint8_t pop[]={0xb4}; assert(!hid_keyboard_parse_map(pop,sizeof(pop),0,&m));
 }
 int main(void)
-{ array_reports(); bitmaps(); hostile(); puts("PASS: keyboard Report Map arrays, bitmaps, padding, IDs, rollover and hostile bounds"); }
+{ array_reports(); bitmaps(); p5_capture(); hostile(); puts("PASS: keyboard Report Map arrays, bitmaps, padding, IDs, rollover and hostile bounds"); }

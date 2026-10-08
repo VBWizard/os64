@@ -114,7 +114,12 @@ six non-modifier keys produce HID rollover. Multiple keyboard report IDs are not
 combined. Consumer/media keys, LED output, mice, Classic HID and audio are not
 implemented. Unsupported layouts report an error instead of treating arbitrary
 bytes as keys. Connection status retains report candidates and, after failure,
-the public Report Map bytes for hardware diagnosis.
+the public Report Map bytes for hardware diagnosis. Receive counters distinguish
+complete ACL packets, packets after readiness, unmatched connections, and
+ignored notifications; notification handles and lengths are retained without
+key contents. Status also retains initial connection parameters, L2CAP parameter
+update requests, and ready/disconnect timestamps (milliseconds since boot).
+The diagnostic build preserves the existing pairing and subscription sequence.
 
 Connection initiation has a twenty-second wait; HCI commands have two seconds,
 ATT requests and ACL completion have five seconds, and setup has an overall
@@ -185,7 +190,8 @@ optional Protocol Mode, multi-chunk and exact-boundary map reads, malformed maps
 and references, and key release on a mismatched notification.
 `tools/test_hid_keyboard_map_host.sh` checks arrays, bitmaps, unaligned padding,
 Report IDs, rollover and mutated descriptor bounds under ASan/UBSan. These are
-synthetic fixtures, not a captured descriptor from the P5 keyboard.
+synthetic fixtures; the map suite also includes the P5 keyboard's captured
+166-byte public descriptor, tested with synthetic key values.
 OpenSSL is a host-test dependency, not linked into the kernel.
 The production xHCI harness also checks bulk receive delivery/release and
 non-overlapping control/ACL DMA storage.
@@ -211,8 +217,13 @@ or malformed packets. The unnamed keyboard supplied a 166-byte Report Map at
 0030 and five notifying Report candidates. Report Reference 001b identified
 keyboard input report ID 1 at 0019; subscription to CCC 001a succeeded.
 This confirms real-hardware pairing, encryption, Report Map parsing and keyboard
-subscription. The initial ready status had zero key reports; typing is a
-separate validation step.
+subscription. Prompt typing of abcdefg, Shift+A and Backspace produced no visible input. The later status
+retained zero key reports and zero malformed packets, with disconnect reason
+0x08 (Connection Timeout). DEBUG_USB logged setup at 20:52:51 and disconnect at
+20:53:55, about 64 seconds later. This does not establish whether the cause was
+radio loss, device behavior or a missing host operation. The captured map selects
+an eight-byte keyboard report and correctly decodes synthetic A, Shift+A,
+Backspace and release in the host test; actual input delivery remains unproven.
 
 Wire references: [Bluetooth Core Security Manager](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/host/security-manager-specification.html),
 [ATT](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/host/attribute-protocol--att-.html),

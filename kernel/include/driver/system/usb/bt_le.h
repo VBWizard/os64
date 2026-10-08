@@ -36,6 +36,14 @@ typedef struct {
     uint16_t error_opcode;
     uint8_t error_status, address_type, peer[6], local[6];
     unsigned reports, malformed;
+    // Metadata from active-session receives; retained through failure cleanup.
+    // No notification contents or pairing secrets are kept here.
+    unsigned rx_bytes, rx_acl, rx_unmatched_acl, rx_after_ready, rx_notifications, rx_ignored_notifications;
+    unsigned rx_indications, parameter_requests;
+    uint16_t last_cid, last_notification_handle, last_notification_bytes;
+    uint16_t interval, latency, supervision_timeout, requested_parameters[4];
+    uint8_t last_att_opcode, last_signal_opcode, disconnect_reason;
+    uint64_t ready_ms, disconnected_ms;
     uint32_t passkey;
     bool passkey_visible, just_works;
     uint8_t request[7], response[7], random[16], peer_random[16], peer_confirm[16];

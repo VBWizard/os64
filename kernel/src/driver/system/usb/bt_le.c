@@ -126,6 +126,7 @@ void bt_le_event(void *context,const uint8_t *e,size_t n)
             le_fail(s,"unexpected LE connection identity/role"); return;
         }
         s->handle=le_u16(e+4); s->connected=true;
+        s->interval=le_u16(e+14); s->latency=le_u16(e+16); s->supervision_timeout=le_u16(e+18);
     } else if(e[0]==0x13) {
         if(n<3 || n!=3u+4u*e[2]) { le_bad(s); return; }
         for(unsigned i=0;i<e[2];i++) {
@@ -137,6 +138,7 @@ void bt_le_event(void *context,const uint8_t *e,size_t n)
     } else if(e[0]==5) {
         if(n!=6) { le_bad(s); return; }
         if(s->connected && le_u16(e+3)==s->handle) {
+            s->disconnect_reason=e[5]; s->disconnected_ms=s->now;
             s->status=e[5]; s->connected=false; s->encrypted=false; s->link_may_active=false;
             le_fail(s,"peer disconnected");
         }
@@ -228,13 +230,16 @@ static void le_chars_done(bt_le_t *s)
 static void le_att(bt_le_t *s,const uint8_t *p,size_t n,bt_le_report_t report,void *ctx)
 {
     if(!n || n>23) { le_bad(s); return; }
+    s->last_att_opcode=p[0];
     if(p[0]==2) {
         if(n!=3 || le_u16(p+1)<23) { le_bad(s); return; }
         uint8_t reply[]={3,23,0}; le_queue(s,4,reply,3); return;
     }
     if(p[0]==0x1b) {
         if(n<3) { le_bad(s); return; }
-        if(s->phase==BT_LE_READY && s->encrypted && le_u16(p+1)==s->input_value) {
+        s->rx_notifications++; s->last_notification_handle=le_u16(p+1);
+        s->last_notification_bytes=n-3;
+        if(s->phase==BT_LE_READY && s->encrypted && s->last_notification_handle==s->input_value) {
             uint8_t keys[8];
             if(s->report_protocol) {
                 if(!hid_keyboard_decode_map(&s->report_layout,p+3,n-3,keys)) {
@@ -245,11 +250,12 @@ static void le_att(bt_le_t *s,const uint8_t *p,size_t n,bt_le_report_t report,vo
                 le_copy(keys,p+3,8);
             }
             s->reports++; report(ctx,keys);
-        }
+        } else s->rx_ignored_notifications++;
         return;
     }
     if(p[0]==0x1d) { // Acknowledge an indication even if its value is not used.
         if(n<3) { le_bad(s); return; }
+        s->rx_indications++;
         uint8_t ack=0x1e; le_queue(s,4,&ack,1); return;
     }
     if(!s->att_pending) { le_fail(s,"unexpected ATT response"); return; }
@@ -354,13 +360,13 @@ static void le_att(bt_le_t *s,const uint8_t *p,size_t n,bt_le_report_t report,vo
         else if(previous>=s->boot_end) le_fail(s,"boot keyboard CCC descriptor missing");
         else s->cursor=previous+1;
     } else if(s->phase==BT_LE_SUBSCRIBE && p[0]==0x13 && n==1) {
-        s->phase=BT_LE_READY;
+        s->ready_ms=s->now; s->phase=BT_LE_READY;
     } else le_bad(s);
 }
 
 static void le_l2cap(bt_le_t *s,bt_le_report_t report,void *ctx)
 {
-    uint16_t cid=le_u16(s->l2cap+2);
+    uint16_t cid=le_u16(s->l2cap+2); s->last_cid=cid;
     const uint8_t *p=s->l2cap+4; size_t n=s->l2cap_need-4;
     if(cid==6) le_smp(s,p,n);
     else if(cid==4) le_att(s,p,n,report,ctx);
@@ -369,10 +375,15 @@ static void le_l2cap(bt_le_t *s,bt_le_report_t report,void *ctx)
         while(off<n) {
             if(n-off<4 || !p[off+1] || le_u16(p+off+2)>n-off-4) { le_bad(s); return; }
             uint16_t len=le_u16(p+off+2);
+            s->last_signal_opcode=p[off];
             // Keep the centrally chosen connection parameters. Reject the
             // peripheral's optional update rather than promising an update.
             uint8_t reply[]={1,p[off+1],2,0,0,0};
-            if(p[off]==0x12 && len==8) { reply[0]=0x13; reply[4]=1; }
+            if(p[off]==0x12 && len==8) {
+                s->parameter_requests++;
+                for(unsigned i=0;i<4;i++) s->requested_parameters[i]=le_u16(p+off+4+2*i);
+                reply[0]=0x13; reply[4]=1;
+            }
             if(p[off]!=1) le_queue(s,5,reply,6);
             off+=4u+len;
         }
@@ -382,7 +393,9 @@ static void le_acl_packet(bt_le_t *s,bt_le_report_t report,void *ctx)
 {
     uint16_t flags=le_u16(s->wire),handle=flags&0xfff;
     size_t n=s->wire_need-4;
-    if(!s->connected || handle!=s->handle) return;
+    s->rx_acl++;
+    if(s->phase==BT_LE_READY) s->rx_after_ready++;
+    if(!s->connected || handle!=s->handle) { s->rx_unmatched_acl++; return; }
     if(flags&0xc000) { le_bad(s); return; }
     unsigned pb=(flags>>12)&3;
     if(pb==0 || pb==2) {
@@ -399,6 +412,7 @@ static void le_acl_packet(bt_le_t *s,bt_le_report_t report,void *ctx)
 void bt_le_receive(bt_le_t *s,const uint8_t *p,size_t n,bt_le_report_t report,void *ctx)
 {
     if(s->phase==BT_LE_IDLE || s->phase>=BT_LE_CLEANUP) return;
+    s->rx_bytes+=n;
     while(n && s->phase<BT_LE_CLEANUP) {
         size_t target=s->wire_used<4 ? 4:s->wire_need;
         size_t take=target-s->wire_used; if(take>n) take=n;
@@ -606,7 +620,7 @@ size_t bt_le_status(const bt_le_t *s,char *out,size_t cap)
         "link may be active: %s\nencrypted: %s\nmode: %s; session only (no saved bond)\n%s"
         "key reports: %u\nmalformed packets: %u\nHID service: %04x-%04x input: %04x CCC: %04x\n"
         "HID mode: %s map handle: %04x bytes: %u input candidates: %u report ID: %u\n"
-        "%serror: %s (opcode %04x status %02x)\n"
+        "%serror: %s (last command %04x status/reason %02x)\n"
         "write connect|connect-justworks public|random XX:XX:XX:XX:XX:XX, or disconnect\n",
         state,s->peer[5],s->peer[4],s->peer[3],s->peer[2],s->peer[1],s->peer[0],s->address_type?"random":"public",
         s->link_may_active?"yes":"no",
@@ -615,6 +629,22 @@ size_t bt_le_status(const bt_le_t *s,char *out,size_t cap)
         capabilities,s->error?s->error:"none",s->error_opcode,s->error_status);
     if(n<0 || !cap) return 0;
     size_t used=(size_t)n<cap?(size_t)n:cap-1;
+    if(used<cap-1) {
+        n=snprintf(out+used,cap-used,
+            "receive: bytes=%u ACL=%u unmatched=%u after_ready=%u last_CID=%04x last_ATT=%02x\n"
+            "notifications: total=%u ignored=%u last_handle=%04x last_bytes=%u indications=%u\n"
+            "initial connection: interval=%u latency=%u timeout=%u (1.25ms/events/10ms)\n"
+            "parameter requests: %u last_signal=%02x min=%u max=%u latency=%u timeout=%u\n"
+            "ready at ms: %lu disconnected at ms: %lu disconnect reason: %02x\n"
+            "HID Protocol Mode handle: %04x\n",
+            s->rx_bytes,s->rx_acl,s->rx_unmatched_acl,s->rx_after_ready,s->last_cid,s->last_att_opcode,
+            s->rx_notifications,s->rx_ignored_notifications,s->last_notification_handle,s->last_notification_bytes,s->rx_indications,
+            s->interval,s->latency,s->supervision_timeout,s->parameter_requests,s->last_signal_opcode,
+            s->requested_parameters[0],s->requested_parameters[1],s->requested_parameters[2],s->requested_parameters[3],
+            s->ready_ms,s->disconnected_ms,s->disconnect_reason,s->protocol);
+        if(n<0) return used;
+        used+=(size_t)n<cap-used?(size_t)n:cap-used-1;
+    }
     for(unsigned i=0;i<s->report_count && used<cap-1;i++) {
         const bt_le_report_char_t *r=&s->report_chars[i];
         n=snprintf(out+used,cap-used,"report candidate: value=%04x CCC=%04x reference=%04x ID=%u type=%u\n",

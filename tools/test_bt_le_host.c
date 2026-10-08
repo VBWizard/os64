@@ -324,6 +324,37 @@ static void report_protocol(void)
     puts("PASS: report-only GATT keyboard, blob map reads, media filtering, optional Protocol Mode and malformed maps/references");
 }
 
+static void receive_diagnostics(void)
+{
+    begin(REPORT_PROTOCOL); run();
+    assert(session.phase==BT_LE_READY && session.ready_ms && !session.rx_after_ready);
+    assert(session.rx_bytes && session.rx_acl && !session.rx_unmatched_acl);
+    assert(session.interval==24 && session.latency==0 && session.supervision_timeout==400);
+    const uint8_t media[]={0x1b,10,0,0xe9,0}; incoming(4,media,sizeof(media));
+    assert(session.rx_notifications==1 && session.rx_ignored_notifications==1 && !keys);
+    assert(session.last_notification_handle==10 && session.last_notification_bytes==2);
+    const uint8_t update[]={0x12,1,8,0,12,0,24,0,4,0,0x90,1};
+    incoming(5,update,sizeof(update));
+    assert(session.parameter_requests==1 && session.last_signal_opcode==0x12);
+    assert(session.requested_parameters[0]==12 && session.requested_parameters[1]==24 &&
+           session.requested_parameters[2]==4 && session.requested_parameters[3]==400);
+    assert(session.queue_count==1 && session.queue[session.queue_head][8]==0x13 &&
+           session.queue[session.queue_head][12]==1); // Existing rejection policy is unchanged.
+    // A complete ACL frame for a different connection must not deliver a key.
+    uint8_t other[]={0x0c,0x20,15,0,11,0,4,0,0x1b,16,0,0,0,4,0,0,0,0,0};
+    bt_le_receive(&session,other,sizeof(other),report,NULL);
+    assert(session.rx_unmatched_acl==1 && session.rx_after_ready==3 && !keys);
+    unsigned acl_count=session.rx_acl;
+    now+=64000; session.now=now;
+    const uint8_t lost[]={5,4,0,0x0b,0,8}; event(lost,sizeof(lost));
+    tick(true,true); controller(); tick(true,true);
+    assert(session.phase==BT_LE_FAILED && session.disconnect_reason==8 && session.disconnected_ms);
+    assert(session.rx_acl==acl_count && session.rx_notifications==1 && session.parameter_requests==1);
+    char status[4096]; bt_le_status(&session,status,sizeof(status));
+    assert(strstr(status,"disconnect reason: 08") && strstr(status,"notifications: total=1 ignored=1"));
+    puts("PASS: receive metadata distinguishes ignored reports and connection updates, survives timeout cleanup");
+}
+
 static void failures(void)
 {
     for(int kind=WRONG_CONFIRM;kind<=GATT_ERROR;kind++) {
@@ -410,7 +441,7 @@ static void pairing_diagnostics(void)
 
 int main(void)
 {
-    vectors(); success(); failures(); framing(); pairing_diagnostics(); just_works(); report_protocol();
+    vectors(); success(); failures(); framing(); pairing_diagnostics(); just_works(); report_protocol(); receive_diagnostics();
     bt_le_t s={0};
     assert(!bt_le_request(&s,"connect random zz:00:00:00:00:00",32,0));
     assert(!bt_le_request(&s,"disconnect junk",15,0));
