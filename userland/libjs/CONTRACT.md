@@ -441,12 +441,15 @@ and found not callable, the call's TypeError reads `'m' is not a function`
 instead of `not a function`. The context keeps one record: the name (a
 duplicated atom), the frame, stack slot and value the method was pushed
 as, and where the fetch's bytecode ends. A method call names it only when
-it can prove it is that fetch's call: same frame, slot and value, and
+it can prove it is that fetch's call: same frame, slot and value;
 straight-line bytecode from the fetch to the call (no jump, call, return,
 throw, handler, iteration, suspension or other method fetch between), so
-the only way to the call is through the fetch. Anything else keeps the
-plain message: a call whose arguments call or branch (`o.m(f())`), a bare
-call (`x()`), and every case Quinn found on #239 (a skipped optional call,
-a failing or abandoned argument, a `with` lookup, a private getter). The
-record is replaced by the next such fetch, dropped at the call that reads
-it, and released at teardown.
+the only way to the call is through the fetch; and the fetched value
+never popped on the way (each op's pops and pushes followed, as
+compute_stack_size does), sitting under exactly the call's arguments.
+Anything else keeps the plain message: a call whose arguments call or
+branch (`o.m(f())`), a bare call (`x()`), and every case Quinn found on
+#239 (a skipped optional call, a failing or abandoned argument, a `with`
+lookup, a private getter, an increment's fetch consumed before a `super`
+or private call). The record is replaced by the next such fetch, dropped
+at the call that reads it, and released at teardown.

@@ -28,7 +28,7 @@
      JS_FreeValue(ctx, ctx->global_obj);
      JS_FreeValue(ctx, ctx->global_var_obj);
  
-@@ -17867,6 +17879,58 @@
+@@ -17867,6 +17879,60 @@
  #endif
  
  /* argv[] is modified if (flags & JS_CALL_FLAG_COPY_ARGV) = 0. */
@@ -51,18 +51,20 @@
 +    ctx->nc_after = after;
 +}
 +
-+static BOOL js_straight_line(const uint8_t *p, const uint8_t *end);
++static BOOL js_fetch_reaches_call(const uint8_t *p, const uint8_t *end, int argc);
 +
-+/* Whether the call at `call`, whose callee is `callee` in `slot` of
-+   `frame`, is the call the record's fetch was for. It must be the same
-+   frame, slot and value, AND the bytecode from the end of the fetch to the
-+   call must be straight-line (js_straight_line): with no jump, call,
-+   return or suspension between them, the only way to this call is through
-+   that fetch. Anything less proves nothing (Quinn, #239: a skipped
-+   optional call's slot is refilled by another callee with the same value),
-+   and the call keeps the plain message. */
++/* Whether the call at `call`, with `argc` arguments, whose callee is
++   `callee` in `slot` of `frame`, is the call the record's fetch was for.
++   It must be the same frame, slot and value, AND the bytecode from the end
++   of the fetch to the call must prove the FETCHED VALUE is this callee
++   (js_fetch_reaches_call): straight-line, so the only way here is through
++   the fetch, and never popping that value, which then sits under exactly
++   the call's arguments. Anything less proves nothing (Quinn, #239: a
++   skipped optional call's slot refilled by another callee; an increment's
++   fetch consumed and its slot refilled), and the call keeps the plain
++   message. */
 +static BOOL js_is_noted_call(JSContext *ctx, void *frame, JSValue *slot, JSValueConst callee,
-+                             const uint8_t *call)
++                             const uint8_t *call, int argc)
 +{
 +    JSValueConst v = ctx->nc_value;
 +    int tag = JS_VALUE_GET_TAG(callee);
@@ -81,13 +83,13 @@
 +    } else if (JS_VALUE_GET_INT(v) != JS_VALUE_GET_INT(callee)) {
 +        return FALSE;
 +    }
-+    return js_straight_line(ctx->nc_after, call);
++    return js_fetch_reaches_call(ctx->nc_after, call, argc);
 +}
 +
  static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                                 JSValueConst this_obj, JSValueConst new_target,
                                 int argc, JSValue *argv, int flags)
-@@ -18348,6 +18412,19 @@
+@@ -18348,6 +18414,20 @@
                  pc += 2;
                  call_argv = sp - call_argc;
                  sf->cur_pc = pc;
@@ -95,7 +97,8 @@
 +                   found not callable is named; any other callee is not. */
 +                if (unlikely(ctx->nc_atom != JS_ATOM_NULL) &&
 +                    !JS_IsFunction(ctx, call_argv[-1])) {
-+                    if (js_is_noted_call(ctx, sf, &call_argv[-1], call_argv[-1], pc - 3)) {
++                    if (js_is_noted_call(ctx, sf, &call_argv[-1], call_argv[-1], pc - 3,
++                                         call_argc)) {
 +                        char buf[ATOM_GET_STR_BUF_SIZE];
 +                        JS_ThrowTypeError(ctx, "'%s' is not a function",
 +                                          JS_AtomGetStr(ctx, buf, sizeof(buf), ctx->nc_atom));
@@ -107,7 +110,7 @@
                  ret_val = JS_CallInternal(ctx, call_argv[-1], call_argv[-2],
                                            JS_UNDEFINED, call_argc, call_argv, 0);
                  if (unlikely(JS_IsException(ret_val)))
-@@ -19278,6 +19355,8 @@
+@@ -19278,6 +19358,8 @@
                          goto exception;                                 \
                  }                                                       \
                  if (keep) {                                             \
@@ -116,19 +119,25 @@
                      *sp++ = val;                                        \
                  } else {                                                \
                      JS_FreeValue(ctx, sp[-1]);                          \
-@@ -22168,6 +22247,50 @@
+@@ -22168,6 +22250,62 @@
  #define short_opcode_info(op) opcode_info[op]
  #endif
  
-+/* os64: whether the bytecode from `p` to `end` runs straight through: no
-+   jump (every label format), and no op that calls, returns, throws, enters
-+   or leaves a handler, iterates or suspends, and no other method fetch. A
-+   call reached at `end` after a fetch ending at `p` is then that fetch's
-+   call (js_is_noted_call). */
-+static BOOL js_straight_line(const uint8_t *p, const uint8_t *end)
++/* os64: whether the value a method fetch pushed, its bytecode ending at
++   `p`, is the callee of the call at `end` with `argc` arguments. The code
++   between must run straight through, with no jump (every label format)
++   and no op that calls, returns, throws, enters or leaves a handler,
++   iterates or suspends, or fetches another method, so the only way to
++   `end` is from `p`. And the fetched value must survive it: the stack is
++   followed from `p` by each op's pops and pushes (compute_stack_size's
++   arithmetic), any op that would pop the value proves nothing (an
++   increment's fetch is consumed; a swap or a dup counts as touching it),
++   and at the call the value must sit under exactly `argc` arguments. */
++static BOOL js_fetch_reaches_call(const uint8_t *p, const uint8_t *end, int argc)
 +{
++    int above = 1;              /* the fetched value and what sits over it */
 +    while (p < end) {
-+        int op = *p;
++        int op = *p, n_pop;
 +        const JSOpCode *oi = &short_opcode_info(op);
 +        switch (oi->fmt) {
 +        case OP_FMT_label8:
@@ -159,9 +168,15 @@
 +        default:
 +            break;
 +        }
++        n_pop = oi->n_pop;
++        if (oi->fmt == OP_FMT_npop || oi->fmt == OP_FMT_npop_u16)
++            n_pop += get_u16(p + 1);
++        if (n_pop >= above)
++            return FALSE;
++        above += oi->n_push - n_pop;
 +        p += oi->size;
 +    }
-+    return p == end;
++    return p == end && above == argc + 1;
 +}
 +
  static __exception int next_token(JSParseState *s);

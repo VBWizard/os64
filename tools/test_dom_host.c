@@ -360,6 +360,13 @@ static void dom_global_miss_cases(void)
         "assert(msg(new Function('o',\"o.optional?.();with({inner:undefined}){inner()}\").bind(null,o))==='not a function','with');"
         "class C{get #inner(){return undefined}run(){o.optional?.();this.#inner()}}"
         "assert(msg(()=>new C().run())==='not a function','a private getter');"
+        /* Quinn's round three (#239): an update's fetch, consumed, its slot
+         * refilled by a straight-line super or private call. */
+        "class Pa{} class Ch extends Pa{run(){o.counter++;super.missing()}}"
+        "assert(msg(()=>new Ch().run())==='not a function','an increment then super');"
+        "class D{#missing;run(){o.other++;this.#missing()}}"
+        "assert(msg(()=>new D().run())==='not a function','an increment then a private field');"
+        "assert(msg(()=>{o.k2+=1;o.named()})===\"'named' is not a function\",'an update then a real fetch');"
         "assert(o.ok()===1);",
         "not-a-function names the method of the call that failed, or nothing");
     fixture_free(&f);

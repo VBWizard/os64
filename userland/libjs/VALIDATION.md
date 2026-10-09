@@ -759,12 +759,13 @@ the inline-field hunk. The consumer is yonder's page file
 
 Patch 0009, after 0008, names the method in a call's "not a function". The
 libdom host covers a missing method on a plain object and on `document`, a
-non-callable property, straight-line arguments (named), a call in the
-arguments (plain), a bare non-function call (plain), and Quinn's six
-(#239), each plain: calls after a skipped optional call (bare, through a
-parenthesized optional chain, a `with` lookup and a private getter), a
-missing method whose argument fails first, and calls after an abandoned
-one, bare and computed. The DOM host
+non-callable property, straight-line arguments (named), an update then a
+real fetch (named), a call in the arguments (plain), a bare non-function
+call (plain), and Quinn's eight (#239, three rounds), each plain: calls
+after a skipped optional call (bare, through a parenthesized optional
+chain, a `with` lookup and a private getter), a missing method whose
+argument fails first, calls after an abandoned one, bare and computed,
+and an increment followed by a `super` call and by a private-field call. The DOM host
 profiles pass 3,121 target-core and 17,767 sanitized-core checks with zero
 failures, the sanitizer watching the held atom. The export count is
 unchanged.

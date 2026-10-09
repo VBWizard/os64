@@ -122,8 +122,8 @@
     },
     {
       "path": "patches/0009-browser-name-not-a-function.patch",
-      "sha256": "4d57ff4219d4e4e9dbccbdb1d1b0b193d8767eae0ae4c2b8e2569ee9f3315012",
-      "reason": "Name the method in \"not a function\" only for a call proved to be the one its fetch was for: same frame, stack slot and value, and straight-line bytecode between the fetch and the call; every other call keeps the plain message."
+      "sha256": "0c9eafda826788c605b389c4ae2f6ae6c1cea3c6df4ec7a2d088f1206db1fd9e",
+      "reason": "Name the method in \"not a function\" only for a call proved to be its fetch's: same frame, slot and value, straight-line bytecode between, and the fetched value never popped on the way, sitting under exactly the call's arguments; every other call keeps the plain message."
     }
   ],
   "configuration_scope": "Atomics-disabled, stack-checked target engine and complete standalone embedding interface; slice review/merge and runner integration are tracked in JAVASCRIPT_TASKS.md"
