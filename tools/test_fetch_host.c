@@ -221,11 +221,12 @@ os64_tls_status_t os64_tls_transport_create(const os64_tls_config_t *c, int32_t 
 {
     (void)limits;
     assert(c && c->trust != NULL);
+    assert(c->protocol==OS64_TLS_PROTOCOL_DEFAULT || c->protocol==OS64_TLS_PROTOCOL_TLS12_FALLBACK);
     tls_creates++;
     struct os64_tls_transport *t = calloc(1, sizeof(*t));
     t->handle = h;
-    t->status = c->protocol == OS64_TLS_PROTOCOL_TLS12 ? conns[h-100].peer->tls12_error : conns[h-100].peer->tls_default_error;
-    t->version = c->protocol == OS64_TLS_PROTOCOL_TLS12 ? 0x0303 : 0x0304;
+    t->status = c->protocol == OS64_TLS_PROTOCOL_TLS12_FALLBACK ? conns[h-100].peer->tls12_error : conns[h-100].peer->tls_default_error;
+    t->version = c->protocol == OS64_TLS_PROTOCOL_TLS12_FALLBACK ? 0x0303 : 0x0304;
     *out = t;
     return OS64_TLS_OK;
 }
@@ -1492,6 +1493,13 @@ static void case_tls_version_fallback(void)
         f=os64_fetch_open("https://version.test/",NULL);
         CHECK(os64_fetch_status(f)==OS64_FETCH_TLS_FAILED && dials==1 && closes==1);
         CHECK(os64_fetch_detail(f)->tls==failures[i] && !os64_fetch_detail(f)->tls_fallback);
+        os64_fetch_close(f);
+        reset(); p=peer_add("version.test",443,"");
+        p->tls_default_error=OS64_TLS_PEER_CHOSE_TLS12; p->tls12_error=failures[i];
+        f=os64_fetch_open("https://version.test/",NULL);
+        CHECK(os64_fetch_status(f)==OS64_FETCH_TLS_FAILED && dials==2 && closes==2);
+        CHECK(os64_fetch_detail(f)->tls==failures[i] && os64_fetch_detail(f)->tls_fallback);
+        CHECK(conns[0].reqlen==0 && conns[1].reqlen==0);
         os64_fetch_close(f);
     }
     reset(); p=peer_add("version.test",443,"");

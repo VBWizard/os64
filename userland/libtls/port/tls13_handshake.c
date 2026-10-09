@@ -214,7 +214,7 @@ static int server_hello(tls13_engine *e)
     if (!ended(&exts)) return BR_ERR_BAD_HANDSHAKE;
     if (!have_version) {
         if (retry || e->retry) return BR_ERR_BAD_VERSION;
-        if (tls13_equal(random+24,"DOWNGRD\x01",8) || tls13_equal(random+24,"DOWNGRD\x00",8))
+        if (tls13_has_downgrade_marker(random))
             return TLS13_ERR_DOWNGRADE;
         bool offered=false;
         for (size_t i=0;i<sizeof old_suites/sizeof *old_suites;i++) if (suite_id==old_suites[i]) offered=true;

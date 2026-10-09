@@ -31,7 +31,12 @@ enum {
     OS64_TLS_RECV_PLAIN = 1u << 2, OS64_TLS_SEND_PLAIN = 1u << 3,
     OS64_TLS_HANDSHAKE_DONE = 1u << 4, OS64_TLS_CLOSING = 1u << 5
 };
-typedef enum { OS64_TLS_PROTOCOL_DEFAULT, OS64_TLS_PROTOCOL_TLS12 } os64_tls_protocol_t;
+typedef enum {
+    OS64_TLS_PROTOCOL_DEFAULT, OS64_TLS_PROTOCOL_TLS12,
+    // Use for a retry after PEER_CHOSE_TLS12. Reject authenticated downgrade
+    // markers before allowing application data; explicit TLS12 is independent.
+    OS64_TLS_PROTOCOL_TLS12_FALLBACK
+} os64_tls_protocol_t;
 typedef struct { os64_tls_status_t status; size_t transferred; } os64_tls_transfer_t;
 typedef struct {
     os64_tls_status_t status;
@@ -71,7 +76,7 @@ typedef struct {
     const os64_tls_name_t *alpn; // Up to 8 names, 255 bytes each, 1024 total.
     size_t alpn_count;
     os64_tls_trust *trust; // Borrowed sealed snapshot; retained by the client.
-    os64_tls_protocol_t protocol; // DEFAULT tries TLS 1.3; TLS12 explicitly selects Bear.
+    os64_tls_protocol_t protocol; // DEFAULT: TLS 1.3; TLS12: explicit; TLS12_FALLBACK: guarded retry.
 } os64_tls_config_t;
 
 // One serialized owner per client. Creation samples OS UTC and fresh entropy;

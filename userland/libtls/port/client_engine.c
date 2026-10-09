@@ -29,22 +29,22 @@ void *os64_tls_engine_test_context(os64_tls_engine *c)
 
 static unsigned engine_state(os64_tls_engine *c)
 {
-    return c->protocol == OS64_TLS_PROTOCOL_TLS12 ? br_ssl_engine_current_state(&c->engine.bear.client.eng) :
+    return c->protocol != OS64_TLS_PROTOCOL_DEFAULT ? br_ssl_engine_current_state(&c->engine.bear.client.eng) :
         tls13_current_state(&c->engine.tls13);
 }
 static int engine_error(os64_tls_engine *c)
 {
-    return c->protocol == OS64_TLS_PROTOCOL_TLS12 ? br_ssl_engine_last_error(&c->engine.bear.client.eng) :
+    return c->protocol != OS64_TLS_PROTOCOL_DEFAULT ? br_ssl_engine_last_error(&c->engine.bear.client.eng) :
         tls13_last_error(&c->engine.tls13);
 }
 static void engine_flush(os64_tls_engine *c)
 {
-    if (c->protocol == OS64_TLS_PROTOCOL_TLS12) br_ssl_engine_flush(&c->engine.bear.client.eng, 0);
+    if (c->protocol != OS64_TLS_PROTOCOL_DEFAULT) br_ssl_engine_flush(&c->engine.bear.client.eng, 0);
     else tls13_flush(&c->engine.tls13);
 }
 static void engine_close(os64_tls_engine *c)
 {
-    if (c->protocol == OS64_TLS_PROTOCOL_TLS12) br_ssl_engine_close(&c->engine.bear.client.eng);
+    if (c->protocol != OS64_TLS_PROTOCOL_DEFAULT) br_ssl_engine_close(&c->engine.bear.client.eng);
     else tls13_close(&c->engine.tls13);
 }
 
@@ -111,7 +111,18 @@ static unsigned advance(os64_tls_engine *c)
         if (!c->upstream_error) c->upstream_error = error;
         fail(c, classify(c, error));
     }
-    if (state & (BR_SSL_SENDAPP | BR_SSL_RECVAPP)) c->handshake = true;
+    if (c->terminal == TLS_OK && !c->handshake && (state & (BR_SSL_SENDAPP | BR_SSL_RECVAPP))) {
+        // A retry still belongs to a TLS 1.3-capable client. Bear authenticates
+        // the random; check its downgrade marker before exposing either
+        // application direction or declaring the wrapper handshake complete.
+        if (c->protocol == OS64_TLS_PROTOCOL_TLS12_FALLBACK &&
+            tls13_has_downgrade_marker(c->engine.bear.client.eng.server_random)) {
+            c->upstream_error = TLS13_ERR_DOWNGRADE;
+            fail(c, TLS_PROTOCOL);
+            return state;
+        }
+        c->handshake = true;
+    }
     if ((state & BR_SSL_CLOSED) && c->terminal == TLS_OK)
         fail(c, c->handshake ? TLS_CLEAN_EOF : TLS_PROTOCOL);
     if (c->terminal != TLS_OK || c->aborted) return state;
@@ -134,7 +145,8 @@ tls_status os64_tls_engine_create(const tls_engine_config *cfg, os64_tls_engine 
     *out = NULL;
     if (!cfg || !cfg->entropy || !cfg->validator.create || !cfg->validator.destroy ||
         (cfg->alpn_count && !cfg->alpn) ||
-        (cfg->protocol != OS64_TLS_PROTOCOL_DEFAULT && cfg->protocol != OS64_TLS_PROTOCOL_TLS12)) return TLS_BAD_ARGUMENT;
+        (cfg->protocol != OS64_TLS_PROTOCOL_DEFAULT && cfg->protocol != OS64_TLS_PROTOCOL_TLS12 &&
+         cfg->protocol != OS64_TLS_PROTOCOL_TLS12_FALLBACK)) return TLS_BAD_ARGUMENT;
     if (cfg->alpn_count > 8) return TLS_LIMIT;
     int64_t days = cfg->epoch / 86400, seconds = cfg->epoch % 86400;
     if (seconds < 0) { days--; seconds += 86400; }
@@ -164,7 +176,7 @@ tls_status os64_tls_engine_create(const tls_engine_config *cfg, os64_tls_engine 
         (uint32_t)days, (uint32_t)seconds, &c->validator);
     if (result != TLS_OK) goto cleanup;
     if (!c->validator || !*c->validator) { result = TLS_BAD_ARGUMENT; goto cleanup; }
-    if (c->protocol == OS64_TLS_PROTOCOL_TLS12) {
+    if (c->protocol != OS64_TLS_PROTOCOL_DEFAULT) {
         os64_bearssl_client_algorithms(&c->engine.bear.client);
         br_ssl_engine_set_x509(&c->engine.bear.client.eng, c->validator);
         br_ssl_engine_set_buffer(&c->engine.bear.client.eng, c->engine.bear.records, sizeof c->engine.bear.records, 1);
@@ -174,7 +186,7 @@ tls_status os64_tls_engine_create(const tls_engine_config *cfg, os64_tls_engine 
     result = cfg->entropy(cfg->entropy_context, seed, sizeof seed);
     int init_error = 0;
     if (result == TLS_OK) {
-        if (c->protocol == OS64_TLS_PROTOCOL_TLS12) {
+        if (c->protocol != OS64_TLS_PROTOCOL_DEFAULT) {
             br_ssl_engine_inject_entropy(&c->engine.bear.client.eng, seed, sizeof seed);
             if (!br_ssl_client_reset(&c->engine.bear.client, c->hostname, 0)) init_error = engine_error(c);
         } else init_error = tls13_init(&c->engine.tls13,c->validator,c->hostname,c->alpn,cfg->alpn_count,seed);
@@ -210,12 +222,12 @@ tls_state os64_tls_engine_state(os64_tls_engine *c)
     unsigned state = advance(c);
     result.status = c->terminal;
     result.upstream_error = c->upstream_error;
-    result.version = c->protocol == OS64_TLS_PROTOCOL_TLS12 ?
+    result.version = c->protocol != OS64_TLS_PROTOCOL_DEFAULT ?
         br_ssl_engine_get_version(&c->engine.bear.client.eng) : c->engine.tls13.version;
     if (c->validator_reason) result.policy_reason = c->validator_reason(c->validator);
     if (c->handshake) {
         result.flags |= TLS_HANDSHAKE_DONE;
-        result.alpn = c->protocol == OS64_TLS_PROTOCOL_TLS12 ?
+        result.alpn = c->protocol != OS64_TLS_PROTOCOL_DEFAULT ?
             br_ssl_engine_get_selected_protocol(&c->engine.bear.client.eng) : tls13_selected_protocol(&c->engine.tls13);
     }
     if (c->closing) result.flags |= TLS_CLOSING;
@@ -243,7 +255,7 @@ static tls_transfer transfer(os64_tls_engine *c, void *buffer, size_t length, tr
     }
     size_t available;
     unsigned char *view;
-    if (c->protocol == OS64_TLS_PROTOCOL_TLS12) switch (kind) {
+    if (c->protocol != OS64_TLS_PROTOCOL_DEFAULT) switch (kind) {
     case FEED: view = br_ssl_engine_recvrec_buf(&c->engine.bear.client.eng, &available); break;
     case TAKE: view = br_ssl_engine_sendrec_buf(&c->engine.bear.client.eng, &available); break;
     case WRITE: view = br_ssl_engine_sendapp_buf(&c->engine.bear.client.eng, &available); break;
@@ -267,7 +279,7 @@ static tls_transfer transfer(os64_tls_engine *c, void *buffer, size_t length, tr
     }
     if (kind == FEED || kind == WRITE) os64_memcpy(view, buffer, count);
     else os64_memcpy(buffer, view, count);
-    if (c->protocol == OS64_TLS_PROTOCOL_TLS12) switch (kind) {
+    if (c->protocol != OS64_TLS_PROTOCOL_DEFAULT) switch (kind) {
     case FEED: br_ssl_engine_recvrec_ack(&c->engine.bear.client.eng, count); break;
     case TAKE: br_ssl_engine_sendrec_ack(&c->engine.bear.client.eng, count); break;
     case WRITE: br_ssl_engine_sendapp_ack(&c->engine.bear.client.eng, count); break;

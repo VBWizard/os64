@@ -308,7 +308,7 @@ static void fallback(void)
         os64_tls_state_t state=os64_tls_state(c->client);
         CHECK(state.status==OS64_TLS_PEER_CHOSE_TLS12 && state.version==0x0303 && !(state.flags&OS64_TLS_HANDSHAKE_DONE));
         unsigned seed=c->seed; destroy(c);
-        c=connect_peer(kind,suite,"P-256",OS64_TLS_PROTOCOL_TLS12,TLS1_2_VERSION,37);
+        c=connect_peer(kind,suite,"P-256",OS64_TLS_PROTOCOL_TLS12_FALLBACK,TLS1_2_VERSION,37);
         if (rsa) CHECK(SSL_set1_sigalgs_list(c->ssl,"rsa_pkcs1_sha256"));
         CHECK(seed!=c->seed); handshake_done(c); exchange(c,8193); close_connection(c,false); destroy(c);
     }
@@ -450,6 +450,46 @@ static size_t scripted_hello(os64_tls_client *c, unsigned char *wire, bool retry
     if (group>=0) { put_u16(wire+at,51); put_u16(wire+at+2,2); put_u16(wire+at+4,(unsigned)group); at+=6; }
     if (cookie) { put_u16(wire+at,44); put_u16(wire+at+2,5); put_u16(wire+at+4,3); memcpy(wire+at+6,"yum",3); at+=9; }
     put_u16(wire+79,at-81); put_u16(wire+3,at-5); put_u16(wire+7,at-9); return at;
+}
+static void fallback_downgrade(void)
+{
+    for (unsigned rsa=0;rsa<2;rsa++) {
+        // An unauthenticated legacy response may trigger a fresh connection,
+        // but that connection must retain the client's TLS 1.3 capability.
+        os64_tls_client *first=new_client(OS64_TLS_PROTOCOL_DEFAULT,"example.test");
+        unsigned seed=entropy_serial;
+        unsigned char wire[32768],random[32],plain[32];
+        CHECK(drain(first,wire,sizeof wire));
+        size_t n=scripted_hello(first,wire,false,-1,false,false);
+        CHECK(feed(first,wire,n)==n);
+        CHECK(os64_tls_state(first).status==OS64_TLS_PEER_CHOSE_TLS12);
+        os64_tls_free(first);
+        const char *kind=rsa?"rsa":"ec", *suite=rsa?"ECDHE-RSA-AES128-GCM-SHA256":"ECDHE-ECDSA-AES128-GCM-SHA256";
+        connection *c=connect_peer(kind,suite,"P-256",OS64_TLS_PROTOCOL_TLS12_FALLBACK,TLS1_2_VERSION,rsa?37:1);
+        CHECK(seed!=c->seed && SSL_set_max_proto_version(c->ssl,TLS1_3_VERSION));
+        os64_tls_state_t state=os64_tls_state(c->client);
+        for (unsigned i=0;i<100000 && state.status==OS64_TLS_OK;i++) {
+            drive(c); state=os64_tls_state(c->client);
+            CHECK(!(state.flags&(OS64_TLS_HANDSHAKE_DONE|OS64_TLS_SEND_PLAIN|OS64_TLS_RECV_PLAIN)));
+        }
+        CHECK(!c->server_error && SSL_is_init_finished(c->ssl));
+        CHECK(SSL_get_server_random(c->ssl,random,sizeof random)==sizeof random);
+        CHECK(!memcmp(random+24,"DOWNGRD\1",8));
+        CHECK(state.status==OS64_TLS_PROTOCOL && state.upstream_error==TLS13_ERR_DOWNGRADE && state.version==0x0303);
+        os64_tls_transfer_t moved=os64_tls_write_plaintext(c->client,"GET /",5);
+        CHECK(moved.status==OS64_TLS_PROTOCOL && !moved.transferred);
+        moved=os64_tls_read_plaintext(c->client,plain,sizeof plain);
+        CHECK(moved.status==OS64_TLS_PROTOCOL && !moved.transferred);
+        CHECK(os64_tls_input_eof(c->client)==OS64_TLS_PROTOCOL);
+        CHECK(os64_tls_abort(c->client,OS64_TLS_CANCELLED)==OS64_TLS_PROTOCOL);
+        CHECK(os64_tls_state(c->client).upstream_error==TLS13_ERR_DOWNGRADE);
+        destroy(c);
+        // Explicit TLS 1.2 selection is a caller policy, not a fallback retry.
+        c=connect_peer(kind,suite,"P-256",OS64_TLS_PROTOCOL_TLS12,TLS1_2_VERSION,37);
+        CHECK(SSL_set_max_proto_version(c->ssl,TLS1_3_VERSION));
+        handshake_done(c); exchange(c,257); close_connection(c,false); destroy(c);
+    }
+    puts("PASS forged legacy trigger followed by authenticated downgrade refusal, no plaintext, sticky status and explicit TLS 1.2 control");
 }
 static void hello_cases(void)
 {
@@ -815,7 +855,7 @@ int main(int argc, char **argv)
         close_connection(c,k!=0); destroy(c);
         printf("PASS %s / %s / %s: handshake, data, KeyUpdate, close\n",suites[s],k?"RSA":"ECDSA",groups[g]); fflush(stdout);
     }
-    pending_output(); pending_close(); fallback(); failures(); client_hello_offer(); adversarial(); record_cases(); framing_cases(); signature_schemes();
+    pending_output(); pending_close(); fallback(); fallback_downgrade(); failures(); client_hello_offer(); adversarial(); record_cases(); framing_cases(); signature_schemes();
     os64_tls_trust_free(trust); CHECK(!live);
     printf("TLS 1.3 public engine PASS; largest owned allocation %zu bytes\n",peak);
     return 0;

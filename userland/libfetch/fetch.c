@@ -617,13 +617,13 @@ static os64_fetch_status_t ask(os64_fetch_t *f)
                 break;
             }
             // The failed adapter has closed its handle. A recognized 1.2
-            // ServerHello permits one fresh authenticated Bear connection;
-            // alerts, certificate failures and timeouts do not permit retry.
+            // ServerHello permits one fresh Bear connection with a downgrade
+            // guard; alerts, certificate failures and timeouts do not permit retry.
             tls_snapshot(f);
             if (cancelled(f)) return OS64_FETCH_INTERRUPTED;
             if (!encrypted || config.protocol != OS64_TLS_PROTOCOL_DEFAULT ||
                 f->detail.tls != OS64_TLS_PEER_CHOSE_TLS12) return OS64_FETCH_TLS_FAILED;
-            config.protocol = OS64_TLS_PROTOCOL_TLS12;
+            config.protocol = OS64_TLS_PROTOCOL_TLS12_FALLBACK;
             f->detail.tls_fallback = true;
         }
         f->connected = true;

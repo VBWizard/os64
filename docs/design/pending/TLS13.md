@@ -84,7 +84,7 @@ client_engine.c  — the private seam: hostname/ALPN copies, epoch, entropy,
       |            validator factory, the flags (handshake/closing/eof/
       |            aborted), sticky terminal, classify(), the 1 MiB cap
       |
-      +-- protocol TLS12:  br_ssl_client_context  (Bear, as today)
+      +-- protocol TLS12 / TLS12_FALLBACK: br_ssl_client_context (Bear)
       +-- protocol TLS13:  tls13_engine           (new, port/tls13_*.c)
 ```
 
@@ -234,8 +234,9 @@ Bear generates its own ClientHello, so one hello cannot serve both engines:
 a 1.2 answer to OUR hello cannot be handed to Bear mid-flight. The design:
 
 1. A connection is created with `protocol = OS64_TLS_PROTOCOL_DEFAULT`
-   (= 0, meaning TLS 1.3) or `OS64_TLS_PROTOCOL_TLS12` (Bear, exactly as
-   today). The field is new in `os64_tls_config_t`; zero keeps every
+   (= 0, meaning TLS 1.3), `OS64_TLS_PROTOCOL_TLS12` (explicit Bear), or
+   `OS64_TLS_PROTOCOL_TLS12_FALLBACK` (Bear with the retry downgrade guard).
+   The field is new in `os64_tls_config_t`; zero keeps every
    existing caller's behaviour minus one thing: they now try 1.3 first.
 2. **The hello offers `supported_versions` = {0x0304, 0x0303}.** The first
    draft offered 0x0304 alone, reasoning that this engine cannot speak
@@ -278,27 +279,29 @@ a 1.2 answer to OUR hello cannot be handed to Bear mid-flight. The design:
 4. **The fallback is libfetch's, because libfetch owns the dial.** In
    `fetch.c`, when `fetch_transport_open` fails and the TLS snapshot's
    status is `PEER_CHOSE_TLS12` and the config was DEFAULT: redial the same
-   peer ONCE with `protocol = TLS12`, a fresh TCP connection and (by
+   peer ONCE with `protocol = TLS12_FALLBACK`, a fresh TCP connection and (by
    construction — new client, new entropy) fresh randomness, and record
    `detail.tls_fallback = true` so yonder's diagnostics can say "TLS 1.2
    (fallback)". No other status triggers a redial — not CERTIFICATE, not an
    alert, not a timeout; a fallback that fired on anything else would be
-   the downgrade attack 1.3 was designed to end. The transport adapter
-   itself does not change: it has no dial to retry with.
+   the downgrade attack 1.3 was designed to end. On the fresh connection,
+   the wrapper checks Bear's authenticated server random for both downgrade
+   markers before reporting handshake completion or exposing application
+   data. A marker gives `TLS13_ERR_DOWNGRADE`, terminal `PROTOCOL`, with no
+   further retry. The transport adapter itself has no dial to retry with.
 5. `os64_tls_state_t` gains `uint16_t version` (0 until the ServerHello,
    then 0x0303 or 0x0304) so a consumer can show what it got. os64get's
    verbose output and yonder's diagnostics print it; nothing else is asked
    of the consumers in this arc.
 
-The residual risk, stated plainly: an on-path attacker who can forge a
-plaintext 1.2 ServerHello can make us reconnect with 1.2. The reconnected
-handshake is still a fully authenticated ECDHE+AEAD TLS 1.2 handshake with
-the same certificate policy, so what is lost is 1.3's properties, not the
-connection's authenticity. This is the trade every browser made during the
-1.3 rollout and dropped only when 1.2-only servers became rare enough not
-to need it. When ours become rare enough, the fallback goes; the knob to
-turn it off is `protocol`, and whether yonder's Settings should expose it
-is Chris's call for a later slice.
+An on-path attacker can forge the unauthenticated legacy ServerHello that
+triggers a redial, costing an extra connection or denying service. Against a
+conforming TLS 1.3-capable server, the fresh connection's downgrade marker
+then causes refusal before application data. The ECDHE signature and Finished
+authenticate that random, so changing its marker does not yield an accepted
+handshake. A server that genuinely supports only TLS 1.2 can still complete
+the fallback with the same certificate policy and ECDHE+AEAD profile. Explicit
+TLS12 selection is a separate caller policy, not the automatic retry mode.
 
 ## The record layer (`port/tls13_record.c`)
 
@@ -557,7 +560,8 @@ after a fatal alert is decrypted.
 ## Public ABI delta (S2)
 
 In `tls.h`: `OS64_TLS_PEER_CHOSE_TLS12` appended to `os64_tls_status_t`;
-`typedef enum { OS64_TLS_PROTOCOL_DEFAULT, OS64_TLS_PROTOCOL_TLS12 }
+`typedef enum { OS64_TLS_PROTOCOL_DEFAULT, OS64_TLS_PROTOCOL_TLS12,
+OS64_TLS_PROTOCOL_TLS12_FALLBACK }
 os64_tls_protocol_t;` and a `protocol` field at the END of
 `os64_tls_config_t`; `uint16_t version` in `os64_tls_state_t`. No new
 exported function, so `exports.map` and `audit_tls.py`'s import set do not
@@ -1008,3 +1012,38 @@ diagnostic run reported thread-attachment `EPERM`; no leak check was disabled.
 The rebuilt public TLS ELF audit also passes. The engine suite log is
 `/tmp/tls13-s2-review-final.log`. This follow-up does not rerun or extend the
 earlier 30-minute fuzz evidence, and guest acceptance remains S3.
+
+### S2 review follow-up — downgrade guard on the retry (2026-10-09)
+
+Opus's [P1 on PR #242](https://github.com/VBWizard/os64/pull/242#discussion_r4233130186)
+identified a missing check on the fresh BearSSL connection. The original
+fallback selected explicit TLS12, which accepted a real TLS 1.3-capable
+OpenSSL peer's authenticated `DOWNGRD01` marker. The pre-fix probe reproduced
+successful TLS 1.2 handshake completion with that marker. The residual-risk
+paragraph above was wrong about the protection provided by the retry and
+has been corrected with this fix.
+
+Libfetch now selects `OS64_TLS_PROTOCOL_TLS12_FALLBACK` for the redial. At
+Bear's application-ready transition, the shared wrapper checks the
+authenticated server random before setting its handshake flag or permitting
+either application direction. Both downgrade markers yield sticky
+`PROTOCOL` with `TLS13_ERR_DOWNGRADE`; the marker predicate is shared with
+the first connection's ServerHello parser. Explicit TLS12 remains a separate
+caller choice. The fix uses the client-side marker check without adding
+the optional fallback SCSV.
+
+The new regression supplies a sentinel-free scripted legacy response, then
+connects a fresh fallback client to a real TLS 1.3-capable OpenSSL peer.
+ECDSA and RSA peers both fail with the expected downgrade detail, no
+handshake/application-ready flags, and zero plaintext accepted or released.
+EOF and abort preserve the refusal. Explicit TLS12 control connections and
+TLS 1.2-only fallback peers, including PKCS#1-only RSA, still pass. Libfetch's
+fixture requires the guarded retry mode and verifies that a failed retry
+writes no request and does not cause a third dial.
+
+Validation: the full TLS 1.3 host engine suite, all six TLS 1.2 engine suites,
+and libfetch's 845 checks with two chunk seeds pass with ASan/UBSan and
+LeakSanitizer enabled outside the sandbox. The rebuilt public TLS ELF audit
+passes with 31 exports, 15 OS imports and 72 selected sources. Logs are
+`/tmp/tls13-s2-downgrade-{fixed,tls12,fetch,audit}.log`. No guest or new fuzz
+campaign is claimed for this follow-up.

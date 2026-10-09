@@ -28,6 +28,12 @@ extension is allowed. The profile does not inherit the full upstream client
 initializer. The minimal-X.509 initializer is a private helper; its minimum
 RSA byte length does not establish the bit-length or anchor policy in TLS.md.
 
+`OS64_TLS_PROTOCOL_TLS12_FALLBACK` selects the same BearSSL profile for a
+retry after `PEER_CHOSE_TLS12`. Before reporting handshake completion or
+exposing either application direction, the wrapper rejects `DOWNGRD01` and
+`DOWNGRD00` in the authenticated server random as `TLS13_ERR_DOWNGRADE`, a
+sticky protocol failure. Explicit TLS12 selection does not apply this guard.
+
 `port/client_engine.c` owns the protocol context, bidirectional record buffer,
 normalized DNS hostname, copied ALPN strings, and an owned validator. Hostnames
 are ASCII DNS names of at most 253 bytes with labels of at most 63 bytes. IP
@@ -158,7 +164,10 @@ both close orders; real TLS 1.2 selection and fresh Bear fallback; and
 valid-tag malformed messages through the public byte API. It also checks early
 responses with untaken or partially taken upload output, incoming KeyUpdate
 and application data while a reply is pending, and simultaneous close alerts.
-These cases retain the queued output and verify its later delivery. Mutated captures
+These cases retain the queued output and verify its later delivery. A scripted
+legacy response followed by a real TLS 1.3-capable OpenSSL peer checks fallback
+downgrade refusal before plaintext access, with explicit TLS12 as a control.
+Mutated captures
 exercise both raw records and authenticated handshake parsing. The fuzz runner
 retains its fixture keys, corpus, executable, log and next-case seed in the
 output directory. `--replay DIRECTORY` reproduces that case with the retained

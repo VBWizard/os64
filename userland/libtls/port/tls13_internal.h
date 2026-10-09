@@ -27,6 +27,12 @@ typedef struct {
 const tls13_suite *tls13_suite_find(uint16_t id);
 void tls13_wipe(void *data, size_t length);
 bool tls13_equal(const void *a, const void *b, size_t length);
+// RFC 8446 section 4.1.3: both downgrade markers are forbidden to a client
+// that offered TLS 1.3, including on its fresh TLS 1.2 fallback connection.
+static inline bool tls13_has_downgrade_marker(const unsigned char random[32])
+{
+    return tls13_equal(random+24,"DOWNGRD",7) && random[31]<=1;
+}
 
 // Outputs need hash_len bytes, except Expand-Label (length bytes) and keys.
 // Extract takes an explicit hash-sized salt; absent PSK/IKM is hash_len zeros.

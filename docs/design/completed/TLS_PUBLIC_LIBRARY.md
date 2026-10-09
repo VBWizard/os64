@@ -24,10 +24,12 @@ state. The caller may release its snapshot after successful creation.
 `OS64_TLS_PROTOCOL_TLS12` selects BearSSL. `state.version` is zero before
 selection, `0x0304` for TLS 1.3, or `0x0303` for TLS 1.2. A validated legacy
 ServerHello ends the default client with `OS64_TLS_PEER_CHOSE_TLS12`; the byte
-engine never retries. Libfetch can then open one fresh connection with explicit
-TLS 1.2 selection, the same hostname and trust snapshot, and fresh entropy.
-Other failures do not authorize fallback. Downgrade sentinels are protocol
-errors. Fetch diagnostics retain the selected version and whether this retry
+engine never retries. Libfetch can then open one fresh connection using
+`OS64_TLS_PROTOCOL_TLS12_FALLBACK`, the same hostname and trust snapshot, and
+fresh entropy. That mode rejects downgrade sentinels in BearSSL's authenticated
+server random before reporting handshake completion or permitting application
+data. Explicit TLS12 selection retains its independent version policy.
+Other failures do not authorize fallback. Fetch diagnostics retain the selected version and whether this retry
 occurred; os64get's `-v` option and yonder display them.
 
 Transfers preserve the engine's accepted-prefix count, including when that
