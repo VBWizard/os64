@@ -127,6 +127,30 @@ static bool sticky(os64_js_status_t status)
            status == OS64_JS_HOST_FAILURE || status == OS64_JS_FAILED_RUNTIME;
 }
 
+// A script that threw leaves the jobs it queued before it threw: `run`
+// drains only after a script that finished (CONTRACT.md § Results: "the
+// host drains them or destroys the runtime"). HTML runs them, after any
+// script, at the checkpoint that follows it, so they run here. Until they
+// do, the runtime refuses every next task as busy: the page's `load`
+// went undelivered on google.com. The script's own failure stays the
+// task's; a job that throws is passed over as the next job runs, and a
+// sticky outcome (the time limit, memory) replaces it, so the runtime is
+// retired.
+static void drain_after_exception(yonder_scripts_t *s, os64_js_outcome_t *out)
+{
+    os64_js_outcome_t jobs = *out;
+    while (jobs.jobs_pending) {
+        os64_js_status_t r = os64_js_drain_jobs(s->runtime, UINT64_MAX, &jobs);
+        if (sticky(r)) {
+            *out = jobs;
+            return;
+        }
+        if (r != OS64_JS_OK && r != OS64_JS_MORE_JOBS && r != OS64_JS_EXCEPTION &&
+            r != OS64_JS_UNHANDLED_REJECTION)
+            return;
+    }
+}
+
 // A task's outcome, judged: a sticky one retires the runtime.
 static void judged(yonder_scripts_t *s, const os64_js_outcome_t *out)
 {
@@ -447,6 +471,8 @@ static bool run_item(yonder_scripts_t *s, uint32_t index, os64_js_outcome_t *out
         it->source = NULL;
         os64_js_run(s->runtime, source, length, name, out);
         os64_free(source);
+        if (out->status == OS64_JS_EXCEPTION && out->jobs_pending)
+            drain_after_exception(s, out);
         os64_js_outcome_t nested;
         if (out->status == OS64_JS_OK && os64_dom_take_report(s->dom, &nested))
             *out = nested;
