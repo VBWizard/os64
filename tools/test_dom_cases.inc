@@ -238,6 +238,28 @@ static void dom_classic_method_cases(void)
         "delete d.fooBar;assert(!one.hasAttribute('data-foo-bar')&&d.fooBar===undefined,'dataset deletes');"
         "throws('SyntaxError',()=>{d['a-b']='x'});d[0]='zero';assert(one.getAttribute('data-0')==='zero','numeric key');",
         "classic-methods.js");
+    /* Quinn #243: arguments are converted before the tree is read, a lone
+     * replacement is judged before it moves, and insertAdjacentText's data
+     * is text whatever it is. */
+    dom_script(&f,DOM_ASSERT
+        "const holder=document.createElement('div');document.body.append(holder);holder.innerHTML='<i></i><b id=victim></b>';"
+        "const victim=document.getElementById('victim');"
+        "victim.before({toString(){holder.textContent='';return 'text'}});"
+        "assert(victim.parentNode===null&&holder.childNodes.length===0,'a conversion that empties the parent leaves nothing to insert beside');"
+        "const kept=document.createElement('em');holder.append(kept);"
+        "try{document.body.append(kept,{toString(){throw Error('coercion')}})}catch(e){assert(e.message==='coercion')}"
+        "assert(kept.parentNode===holder,'a failed conversion moves nothing');"
+        "const outer=document.createElement('div'),inner=document.createElement('p');outer.append(inner);document.body.append(outer);"
+        "throws('HierarchyRequestError',()=>inner.replaceChildren(outer));"
+        "assert(outer.parentNode===document.body&&inner.parentNode===outer,'a refused replacement leaves its node in place');"
+        "const source=document.createElement('div'),moved=document.createElement('span');source.append(moved);"
+        "moved.toString=()=>'literal text';holder.insertAdjacentText('beforeend',moved);"
+        "assert(moved.parentNode===source&&holder.lastChild.nodeType===3&&holder.lastChild.data==='literal text','insertAdjacentText stringifies');"
+        "holder.insertAdjacentHTML({toString(){holder.textContent='';return 'beforeend'}},'<u>late</u>');"
+        "assert(holder.firstChild.tagName==='U','positions are read after the arguments are converted');"
+        "const before=document.childNodes.length;throws('HierarchyRequestError',()=>document.replaceChildren(document.createElement('html')));"
+        "assert(document.childNodes.length===before&&document.documentElement!==null,'a document keeps its children');",
+        "conversion-order.js");
     fixture_free(&f);
 }
 static void dom_unicode_cases(void)

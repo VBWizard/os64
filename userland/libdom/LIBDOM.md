@@ -110,7 +110,10 @@ connect runs and a moved control keeps its form:
   `replaceChildren`. **ChildNode** (element, text, comment): `before`,
   `after`, `replaceWith`, `remove`. Arguments are nodes or strings (a string
   is a Text node), and several are gathered into a fragment first, as the
-  standard does, so a refused insertion leaves them in that fragment.
+  standard does, so a refused insertion leaves them in that fragment. Every
+  argument is converted before the tree is read (a string's conversion
+  runs script), and a lone node replacing an element's children is judged
+  (`os64_html_may_insert`) before it is moved anywhere.
   A document keeps its `<html>` element (libhtml's rule, which every reader
   of the tree relies on), so `document.replaceChildren(...)` is refused as
   `document.removeChild(document.documentElement)` always was; on an

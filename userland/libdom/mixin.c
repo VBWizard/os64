@@ -20,40 +20,59 @@ static bool is_html(const os64_html_node_t *node, os64_html_tag_t tag)
     return node->kind == OS64_HTML_ELEMENT && node->ns == OS64_HTML_NS_HTML && node->tag == tag;
 }
 
-/* Whether a script argument is one of this document's nodes, without the
- * TypeError d_node throws for anything else (a string is a Text-to-be). */
-static const os64_html_node_t *node_argument(os64_dom_t *dom, JSValueConst value)
+/* THE ARGUMENTS ARE CONVERTED BEFORE THE TREE IS READ (Web IDL converts
+ * an operation's arguments, then runs its steps). A string's conversion
+ * runs script, and that script may move or reclaim any node a position was
+ * read from; so every method here converts first, and only then reads a
+ * parent or a sibling, and nothing between that read and the change runs
+ * script. One converted argument: a node of this document, or text. */
+typedef struct { const os64_html_node_t *node; DString text; } Arg;
+
+static void args_free(os64_dom_t *dom, Arg *args, int count)
 {
-    DValue *entry = JS_GetOpaque(value, dom->node_class);
-    return entry != NULL && entry->node != NULL && os64_html_owns_node(dom->document, entry->node)
-        ? entry->node : NULL;
+    for (int i = 0; i < count; i++) d_string_free(dom, &args[i].text);
+    d_free(dom, args);
 }
 
-/* DOM § "convert nodes into a node": a node is itself, anything else is a
- * Text node of its string, and more than one are gathered, in order, into a
- * new fragment. The answer is HELD: the caller releases it. NULL with the
- * exception thrown. A node from another document is a TypeError, as for
- * appendChild. */
-static os64_html_node_t *into_node(os64_dom_t *dom, JSContext *ctx, int argc, JSValueConst *argv)
+/* Node-or-string arguments, converted in order. False with the exception
+ * thrown (a node from another document is appendChild's TypeError);
+ * `*args` is NULL for none. */
+static bool args_of(os64_dom_t *dom, JSContext *ctx, int argc, JSValueConst *argv, Arg **args)
+{
+    *args = NULL;
+    if (argc == 0) return true;
+    *args = d_alloc(dom, (size_t)argc * sizeof(**args));
+    if (*args == NULL) { d_error(ctx, "QuotaExceededError", "DOM argument quota exceeded"); return false; }
+    for (int i = 0; i < argc; i++) {
+        if (JS_GetOpaque(argv[i], dom->node_class) != NULL) {
+            (*args)[i].node = d_node(dom, ctx, argv[i]);
+            if ((*args)[i].node == NULL) { args_free(dom, *args, i); *args = NULL; return false; }
+        } else if (!d_string(dom, ctx, argv[i], &(*args)[i].text)) {
+            args_free(dom, *args, i);
+            *args = NULL;
+            return false;
+        }
+    }
+    return true;
+}
+
+/* DOM § "convert nodes into a node", over converted arguments: a node is
+ * itself, text is a new Text node, and more than one are gathered, in
+ * order, into a new fragment. The answer is HELD: the caller releases it.
+ * NULL with the exception thrown. Runs no script. */
+static os64_html_node_t *into_node(os64_dom_t *dom, JSContext *ctx, const Arg *args, int count)
 {
     int64_t status = OS64_HTML_OK;
     os64_html_node_t *fragment = NULL;
-    if (argc != 1) {
+    if (count != 1) {
         fragment = os64_html_create_fragment(dom->document, &status);
         if (fragment == NULL) { d_html_error(ctx, status); return NULL; }
         os64_html_hold(dom->document, fragment);
     }
-    for (int i = 0; i < argc; i++) {
-        os64_html_node_t *node = (os64_html_node_t *)node_argument(dom, argv[i]);
-        if (node == NULL && JS_GetOpaque(argv[i], dom->node_class) != NULL) {
-            d_node(dom, ctx, argv[i]);              /* its TypeError */
-            break;
-        }
+    for (int i = 0; i < count; i++) {
+        os64_html_node_t *node = (os64_html_node_t *)args[i].node;
         if (node == NULL) {
-            DString text = {0};
-            if (!d_string(dom, ctx, argv[i], &text)) break;
-            node = os64_html_create_text(dom->document, text.data, text.length, &status);
-            d_string_free(dom, &text);
+            node = os64_html_create_text(dom->document, args[i].text.data, args[i].text.length, &status);
             if (node == NULL) { d_html_error(ctx, status); break; }
         }
         if (fragment == NULL) {
@@ -62,65 +81,64 @@ static os64_html_node_t *into_node(os64_dom_t *dom, JSContext *ctx, int argc, JS
         }
         status = d_insert(dom, fragment, node, NULL);
         if (status < 0) { d_html_error(ctx, status); break; }
-        if (i + 1 == argc) return fragment;
+        if (i + 1 == count) return fragment;
     }
-    if (fragment != NULL && argc == 0) return fragment;
+    if (fragment != NULL && count == 0) return fragment;
     if (fragment != NULL) os64_html_release(dom->document, fragment);
     return NULL;
 }
 
 /* Whether `node` is one of the arguments (before/after/replaceWith skip
  * past them to find where the new nodes go). */
-static bool among(os64_dom_t *dom, const os64_html_node_t *node, int argc, JSValueConst *argv)
+static bool among(const os64_html_node_t *node, const Arg *args, int count)
 {
-    for (int i = 0; i < argc; i++)
-        if (node_argument(dom, argv[i]) == node) return true;
+    for (int i = 0; i < count; i++)
+        if (args[i].node == node) return true;
     return false;
 }
 
-static JSValue tree_change(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *self,
-                           int magic, int argc, JSValueConst *argv)
+static int change(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *self, int magic,
+                  const Arg *args, int count)
 {
     const os64_html_node_t *parent = magic == D_APPEND_NODES || magic == D_PREPEND ||
         magic == D_REPLACE_CHILDREN ? self : self->parent;
-    if (magic == D_REMOVE_SELF)
-        return parent == NULL || d_tree_change(dom, ctx, D_REMOVE, parent, self, NULL) == 0 ? JS_UNDEFINED
-                                                                                      : JS_EXCEPTION;
-    if (parent == NULL) return JS_UNDEFINED;
+    if (parent == NULL) return 0;
+    if (magic == D_REPLACE_CHILDREN) {
+        /* A document keeps its <html> element (libhtml's rule; LIBDOM.md
+         * § The classic methods), so replacing its children is refused
+         * before anything moves. */
+        if (parent->kind == OS64_HTML_DOCUMENT) { d_html_error(ctx, OS64_HTML_ROOT_REQUIRED); return -1; }
+        /* The replacement must be nowhere yet, so a lone node still in a
+         * tree is moved into a fragment of its own first; whether it may
+         * go under `parent` at all is asked BEFORE that move, or a refusal
+         * would leave it taken from where it was. */
+        if (count == 1 && args[0].node != NULL && args[0].node->parent != NULL) {
+            int64_t verdict = os64_html_may_insert(dom->document, parent, args[0].node);
+            if (verdict < 0) { d_html_error(ctx, verdict); return -1; }
+        }
+    }
     /* Where the nodes go is found before they are gathered: gathering may
      * move the very siblings it would otherwise be measured from. */
     const os64_html_node_t *previous = self->prev, *next = self->next;
-    while (magic == D_BEFORE && previous != NULL && among(dom, previous, argc, argv)) previous = previous->prev;
-    while ((magic == D_AFTER || magic == D_REPLACE_WITH) && next != NULL && among(dom, next, argc, argv))
+    while (magic == D_BEFORE && previous != NULL && among(previous, args, count)) previous = previous->prev;
+    while ((magic == D_AFTER || magic == D_REPLACE_WITH) && next != NULL && among(next, args, count))
         next = next->next;
-    os64_html_node_t *node = into_node(dom, ctx, argc, argv);
-    if (node == NULL) return JS_EXCEPTION;
-    if (magic == D_REPLACE_CHILDREN && (node->parent != NULL || parent->kind == OS64_HTML_DOCUMENT)) {
-        /* The children's replacement is a node that is nowhere yet: one
-         * still in a tree is moved into a fragment of its own first. A
-         * document has its children taken out and the new ones put in. */
+    os64_html_node_t *node = into_node(dom, ctx, args, count);
+    if (node == NULL) return -1;
+    if (magic == D_REPLACE_CHILDREN && node->parent != NULL) {
         int64_t status = OS64_HTML_OK;
-        if (node->parent != NULL) {
-            os64_html_node_t *fragment = os64_html_create_fragment(dom->document, &status);
-            if (fragment != NULL) {
-                os64_html_hold(dom->document, fragment);
-                status = d_insert(dom, fragment, node, NULL);
-            }
-            os64_html_release(dom->document, node);
-            node = fragment;
-            if (fragment == NULL || status < 0) {
-                if (fragment != NULL) os64_html_release(dom->document, fragment);
-                return d_html_error(ctx, status);
-            }
+        os64_html_node_t *fragment = os64_html_create_fragment(dom->document, &status);
+        if (fragment != NULL) {
+            os64_html_hold(dom->document, fragment);
+            status = d_insert(dom, fragment, node, NULL);
         }
-        if (parent->kind == OS64_HTML_DOCUMENT) {
-            int placed = 0;
-            while (placed == 0 && parent->first_child != NULL)
-                placed = d_tree_change(dom, ctx, D_REMOVE, parent, parent->first_child, NULL);
-            if (placed == 0) placed = d_tree_change(dom, ctx, D_APPEND, parent, node, NULL);
-            os64_html_release(dom->document, node);
-            return placed == 0 ? JS_UNDEFINED : JS_EXCEPTION;
+        os64_html_release(dom->document, node);
+        if (fragment == NULL || status < 0) {
+            if (fragment != NULL) os64_html_release(dom->document, fragment);
+            d_html_error(ctx, status);
+            return -1;
         }
+        node = fragment;
     }
     int placed;
     switch (magic) {
@@ -137,6 +155,19 @@ static JSValue tree_change(os64_dom_t *dom, JSContext *ctx, const os64_html_node
         break;
     }
     os64_html_release(dom->document, node);
+    return placed;
+}
+
+static JSValue tree_change(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *self,
+                           int magic, int argc, JSValueConst *argv)
+{
+    if (magic == D_REMOVE_SELF)
+        return self->parent == NULL || d_tree_change(dom, ctx, D_REMOVE, self->parent, self, NULL) == 0
+            ? JS_UNDEFINED : JS_EXCEPTION;
+    Arg *args;
+    if (!args_of(dom, ctx, argc, argv, &args)) return JS_EXCEPTION;
+    int placed = change(dom, ctx, self, magic, args, argc);
+    args_free(dom, args, argc);
     return placed == 0 ? JS_UNDEFINED : JS_EXCEPTION;
 }
 
@@ -144,35 +175,28 @@ static JSValue tree_change(os64_dom_t *dom, JSContext *ctx, const os64_html_node
  * parent and the node to go before. -1 with a SyntaxError thrown for any
  * other word; 0 when the place has no parent (before or after a node
  * outside a tree). */
-static int adjacent(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *self, JSValueConst where,
+static int adjacent(JSContext *ctx, const os64_html_node_t *self, char *word,
                     const os64_html_node_t **parent, const os64_html_node_t **before)
 {
-    DString word = {0};
-    if (!d_string(dom, ctx, where, &word)) return -1;
-    d_fold(word.data);
-    int found = 1;
-    if (os64_streq(word.data, "beforebegin")) { *parent = self->parent; *before = self; }
-    else if (os64_streq(word.data, "afterbegin")) { *parent = self; *before = self->first_child; }
-    else if (os64_streq(word.data, "beforeend")) { *parent = self; *before = NULL; }
-    else if (os64_streq(word.data, "afterend")) { *parent = self->parent; *before = self->next; }
-    else found = -1;
-    d_string_free(dom, &word);
-    if (found < 0) { d_error(ctx, "SyntaxError", "The position is not beforebegin, afterbegin, beforeend or afterend"); return -1; }
+    d_fold(word);
+    if (os64_streq(word, "beforebegin")) { *parent = self->parent; *before = self; }
+    else if (os64_streq(word, "afterbegin")) { *parent = self; *before = self->first_child; }
+    else if (os64_streq(word, "beforeend")) { *parent = self; *before = NULL; }
+    else if (os64_streq(word, "afterend")) { *parent = self->parent; *before = self->next; }
+    else {
+        d_error(ctx, "SyntaxError", "The position is not beforebegin, afterbegin, beforeend or afterend");
+        return -1;
+    }
     return *parent != NULL ? 1 : 0;
 }
 
-static JSValue insert_adjacent(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *self,
-                               int magic, int argc, JSValueConst *argv)
+/* After the arguments are converted (the position, then the HTML or the
+ * text, both strings; or the element). */
+static JSValue adjacent_steps(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *self, int magic,
+                              DString *word, const os64_html_node_t *element, const DString *text)
 {
-    if (argc < 2) return JS_ThrowTypeError(ctx, "insertAdjacent takes a position and what to insert");
     const os64_html_node_t *parent = NULL, *before = NULL;
-    const os64_html_node_t *element = NULL;
-    if (magic == D_ADJACENT_ELEMENT) {
-        element = d_node(dom, ctx, argv[1]);
-        if (element == NULL) return JS_EXCEPTION;
-        if (!is_element(element)) return JS_ThrowTypeError(ctx, "insertAdjacentElement takes an element");
-    }
-    int place = adjacent(dom, ctx, self, argv[0], &parent, &before);
+    int place = adjacent(ctx, self, word->data, &parent, &before);
     if (place < 0) return JS_EXCEPTION;
     if (magic == D_ADJACENT_HTML) {
         /* The fragment is parsed as if it were the context element's
@@ -180,18 +204,12 @@ static JSValue insert_adjacent(os64_dom_t *dom, JSContext *ctx, const os64_html_
          * that is no element, or is <html>, parses as <body> would. */
         if (place == 0 || parent->kind == OS64_HTML_DOCUMENT)
             return d_error(ctx, "NoModificationAllowedError", "The element has no parent element to insert beside");
-        DString text = {0};
-        if (!d_string(dom, ctx, argv[1], &text)) return JS_EXCEPTION;
         int64_t status = OS64_HTML_OK;
-        os64_html_node_t *body = NULL;
         const os64_html_node_t *context = parent;
-        if (!is_element(context) || is_html(context, OS64_HTML_TAG_HTML)) {
-            body = os64_html_create_element(dom->document, OS64_HTML_NS_HTML, "body", &status);
-            context = body;
-        }
+        if (!is_element(context) || is_html(context, OS64_HTML_TAG_HTML))
+            context = os64_html_create_element(dom->document, OS64_HTML_NS_HTML, "body", &status);
         os64_html_node_t *fragment = context == NULL ? NULL :
-            os64_html_parse_fragment(dom->document, context, text.data, text.length, dom->options.scripting, &status);
-        d_string_free(dom, &text);
+            os64_html_parse_fragment(dom->document, context, text->data, text->length, dom->options.scripting, &status);
         if (fragment == NULL) return d_html_error(ctx, status);
         os64_html_hold(dom->document, fragment);
         /* A script insertAdjacentHTML inserts never runs: it is born started. */
@@ -208,11 +226,38 @@ static JSValue insert_adjacent(os64_dom_t *dom, JSContext *ctx, const os64_html_
         if (d_tree_change(dom, ctx, D_INSERT, parent, element, before) < 0) { JS_FreeValue(ctx, result); return JS_EXCEPTION; }
         return result;
     }
-    os64_html_node_t *text = into_node(dom, ctx, 1, argv + 1);
-    if (text == NULL) return JS_EXCEPTION;
-    int placed = d_tree_change(dom, ctx, D_INSERT, parent, text, before);
-    os64_html_release(dom->document, text);
+    /* insertAdjacentText's data is a string, whatever it was: always a new
+     * Text node, never a node it was handed. */
+    int64_t status = OS64_HTML_OK;
+    os64_html_node_t *node = os64_html_create_text(dom->document, text->data, text->length, &status);
+    if (node == NULL) return d_html_error(ctx, status);
+    os64_html_hold(dom->document, node);
+    int placed = d_tree_change(dom, ctx, D_INSERT, parent, node, before);
+    os64_html_release(dom->document, node);
     return placed == 0 ? JS_UNDEFINED : JS_EXCEPTION;
+}
+
+static JSValue insert_adjacent(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *self,
+                               int magic, int argc, JSValueConst *argv)
+{
+    if (argc < 2) return JS_ThrowTypeError(ctx, "insertAdjacent takes a position and what to insert");
+    DString word = {0}, text = {0};
+    const os64_html_node_t *element = NULL;
+    if (!d_string(dom, ctx, argv[0], &word)) return JS_EXCEPTION;
+    JSValue result = JS_EXCEPTION;
+    if (magic == D_ADJACENT_ELEMENT) {
+        element = d_node(dom, ctx, argv[1]);
+        if (element != NULL && !is_element(element)) {
+            JS_ThrowTypeError(ctx, "insertAdjacentElement takes an element");
+            element = NULL;
+        }
+        if (element != NULL) result = adjacent_steps(dom, ctx, self, magic, &word, element, NULL);
+    } else if (d_string(dom, ctx, argv[1], &text)) {
+        result = adjacent_steps(dom, ctx, self, magic, &word, NULL, &text);
+    }
+    d_string_free(dom, &text);
+    d_string_free(dom, &word);
+    return result;
 }
 
 /* An attribute name as a script names it: HTML folds its elements' names. */
