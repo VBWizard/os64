@@ -3344,6 +3344,22 @@ static void diag_cases(void) {
     fake_reset();
 }
 
+/* A menu's invisible checkbox (MediaWiki Vector: absolute, width and
+ * height 100%, opacity 0) covers its menu and nothing below it, so a link
+ * under the menu is still the link under the pointer. */
+static void covered_link_cases(void) {
+    probe_page("<!doctype html><style>body{margin:0} nav{position:relative;height:40px}"
+        "nav input{position:absolute;top:0;left:0;width:100%;height:100%;opacity:0;margin:0}"
+        "p{margin:0}</style><nav><input type=checkbox id=menu><span>More</span></nav>"
+        "<p><a id=below href=/below>below the menu</a></p>",false);
+    const flow_box_t *menu=flow_box_for(g.page.tree,probe_id("menu"));
+    os64_gui_rect_t r=menu!=NULL?flow_box_doc_rect(menu,(flow_point_t){0,0}):(os64_gui_rect_t){0,0,0,0};
+    check(menu!=NULL&&r.h==40,"covered link: the checkbox is as tall as its menu");
+    check(link_at(20,50)==os64_page_link_for(page_model(&g.page),probe_id("below")),
+        "covered link: the link below the menu is the one under the pointer");
+    probe_drop();
+}
+
 int main(void)
 {
     os64_text_options_t options={.memory={.alloc=probe_alloc,.free=probe_free},
@@ -3351,6 +3367,7 @@ int main(void)
     check(os64_text_create(&options,&probe_text)==OS64_FONT_OK,"text context");
     check(os64_text_font_bitmap(probe_text,&probe_font)==OS64_FONT_OK,"bitmap face");
     classic_browser_cases();
+    covered_link_cases();
     classic_downloaded_cases();
     hover_batch_cases();
     classic_hover_profile();

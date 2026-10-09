@@ -59,7 +59,10 @@ it, and how `width: auto` with one side set SHRINKS TO FIT, as an
 inline-block does (§ 10.3.9 has that code since G3). A percentage HEIGHT
 on an absolute box resolves: its containing block's height is known when
 it is laid out, and `top: 0; left: 0; width: 100%; height: 100%` is the
-overlay idiom. Where both offsets on an axis are `auto`, the box sits at
+overlay idiom. A replaced box's does too (§ 10.6.5), and its own ratio
+decides only a height the page left unset: MediaWiki lays an invisible
+checkbox over each menu heading that way, and taken square it covered the
+page below. Where both offsets on an axis are `auto`, the box sits at
 its STATIC POSITION: where a hypothetical box with `position: static` and
 the element's SPECIFIED display would have started.
 
