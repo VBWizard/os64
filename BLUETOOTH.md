@@ -97,10 +97,20 @@ echo slot 1 auto off > /sys/bluetooth/connection
 
 Host simulations cover concurrent keyboard input during mouse pairing,
 saved-key reconnection, cancellation races, interleaved ACL fragments, shared
-command/ACL credits, and independent bond files. The MX Ergo S has **not been
-validated on hardware**. Its actual Report Map and acceptance of legacy pairing
-remain compatibility checks. LE Secure Connections is not implemented; no
-implicit fallback or fresh pairing occurs during saved-key reconnect.
+command/ACL credits, and independent bond files. The P5's MX Ergo S accepted
+legacy Just Works and completed bond-key distribution on 2026-10-09; its bond
+was saved in slot 1 while slot 0's keyboard remained connected. HID discovery
+then stopped on a peer ATT Read By Group Type request (`0x10`): the handler
+mistook that server-side request for a malformed response to its own discovery.
+The handler now replies to peer requests independently of the pending client
+transaction, with a host regression covering this exchange and keyboard input.
+**Trackball input and saved-key reconnection still need hardware validation**
+with that fix. LE Secure Connections is not implemented; no implicit fallback
+or fresh pairing occurs during saved-key reconnect.
+
+A helper that writes `bond-justworks TYPE ADDRESS` without a slot prefix targets
+slot 0. Use `slot 1 bond-justworks TYPE ADDRESS` for the trackball, or
+`slot 1 reconnect` once its bond is saved.
 
 ## LE keyboard session
 

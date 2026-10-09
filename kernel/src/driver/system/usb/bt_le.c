@@ -409,6 +409,29 @@ static void le_att(bt_le_t *s,const uint8_t *p,size_t n,bt_le_report_t report,vo
         s->rx_indications++;
         uint8_t ack=0x1e; le_queue(s,4,&ack,1); return;
     }
+    // ATT client/server roles coexist on this link. Peer requests do not
+    // complete our pending discovery/read. We expose no local GATT services;
+    // reject unsupported requests per Core Vol 3 Part F 3.3, without closing
+    // the encrypted link. Commands carry no response, including unknown ones.
+    if(p[0]&0x40) return;
+    if(p[0]==0x04 || p[0]==0x0a) {
+        // Mandatory Find Information and Read operate on an empty database.
+        uint8_t error[]={1,p[0],0,0,4}; // Invalid PDU until length is checked.
+        if(n==(p[0]==0x04?5u:3u)) {
+            error[2]=p[1]; error[3]=p[2]; error[4]=1; // Invalid Handle.
+            if(p[0]==0x04 && le_u16(p+1) && le_u16(p+1)<=le_u16(p+3))
+                error[4]=0x0a; // Attribute Not Found in the requested range.
+        }
+        le_queue(s,4,error,sizeof(error)); return;
+    }
+    switch(p[0]) {
+    case 0x06: case 0x08: case 0x0c: case 0x0e:
+    case 0x10: case 0x12: case 0x16: case 0x18: case 0x20: {
+        uint8_t error[]={1,p[0],0,0,6}; // Request Not Supported, no handle.
+        le_queue(s,4,error,sizeof(error)); return;
+    }
+    default: break;
+    }
     if(!s->att_pending) { le_fail(s,"unexpected ATT response"); return; }
     s->att_pending=false;
     if(p[0]==1) {

@@ -29,8 +29,16 @@ bool bt_scan_start(bt_scan_t *s, uint64_t now)
 {
     if (!bt_scan_quiescent(s)) return false;
     bool shared=s->shared_controller;
+    uint8_t address[6],features[8];
+    scan_copy(address,s->address,sizeof(address));
+    scan_copy(features,s->features,sizeof(features));
     *s=(bt_scan_t){.phase=shared?BT_SCAN_LE_PARAMS:BT_SCAN_RESET,
         .shared_controller=shared,.le_only=shared,.credits=1,.total_deadline=now+40000};
+    // Shared scans skip controller discovery, so retain its public metadata.
+    if(shared) {
+        scan_copy(s->address,address,sizeof(address));
+        scan_copy(s->features,features,sizeof(features));
+    }
     return true;
 }
 bool bt_scan_start_le(bt_scan_t *s,uint64_t now)
@@ -273,10 +281,12 @@ size_t bt_scan_status(const bt_scan_t *s, char *out, size_t cap)
     int n=snprintf(out,cap,"state: %s\ncontroller: %02x:%02x:%02x:%02x:%02x:%02x\n"
         "devices: %u\nreports beyond capacity: %u\nmalformed reports: %u\n"
         "error: %s (opcode %04x status %02x)\n"
-        "discovery may be active: %s\nwrite scan to start Classic then LE discovery (about 21 seconds)\n",
+        "discovery may be active: %s\nwrite scan to start %s\n",
         state,s->address[5],s->address[4],s->address[3],s->address[2],s->address[1],s->address[0],
         s->count,s->dropped,s->malformed_reports,s->error ? s->error : "none",
-        s->error_opcode,s->error_status,s->radio_active ? "yes" : "no");
+        s->error_opcode,s->error_status,s->radio_active ? "yes" : "no",
+        s->le_only || s->shared_controller ? "LE discovery (about 2 seconds)" :
+        "Classic then LE discovery (about 21 seconds)");
     return n<0 || !cap ? 0 : (size_t)n<cap ? (size_t)n : cap-1;
 }
 

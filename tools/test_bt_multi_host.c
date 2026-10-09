@@ -204,9 +204,47 @@ static void scan_recovery(void)
     now=host.init_retry_at; step(); assert(cmd_n && le_u16(cmd)==0x0c03);
     puts("PASS: shared scan cleanup disables scanning without Reset; initial reset-confirmed setup failures remain retryable");
 }
+static void peer_att_requests(void)
+{
+    setup(); bt_le_t *s=&host.peers[1].le;
+    *s=(bt_le_t){.shared_controller=true,.phase=BT_LE_SERVICES,.connected=true,.encrypted=true,
+        .handle=11,.cursor=1,.att_pending=true,.att_opcode=0x10,.deadline=1234};
+    const uint8_t request[]={0x10,1,0,0xff,0xff,0,0x28};
+    incoming(4,request,sizeof(request));
+    assert(s->phase==BT_LE_SERVICES && !s->malformed && s->att_pending && s->deadline==1234);
+    assert(s->queue_count==1);
+    const uint8_t error[]={1,0x10,0,0,6};
+    assert(s->queue_bytes[s->queue_head]==13 && !memcmp(s->queue[s->queue_head]+8,error,sizeof(error)));
+    notify_keyboard(); assert(input_count[0]==1 && !release_count[0]);
+    const uint8_t services[]={0x11,6,1,0,30,0,0x12,0x18};
+    incoming(4,services,sizeof(services));
+    assert(s->phase==BT_LE_CHARACTERISTICS && !s->att_pending && s->service_start==1);
+    // Server requests while idle and commands without responses must not consume
+    // a client transaction or manufacture a disconnect.
+    const uint8_t read[]={0x0a,1,0}; incoming(4,read,sizeof(read));
+    assert(s->queue_count==2 && !s->malformed && !s->att_pending);
+    const uint8_t invalid_handle[]={1,0x0a,1,0,1};
+    assert(!memcmp(s->queue[(s->queue_head+1)%BT_LE_QUEUE]+8,invalid_handle,sizeof(invalid_handle)));
+    const uint8_t write_command[]={0x52,1,0,0xaa}; incoming(4,write_command,sizeof(write_command));
+    assert(s->queue_count==2 && !s->malformed);
+    const uint8_t find[]={0x04,1,0,0xff,0xff};
+    const uint8_t absent[]={1,0x04,1,0,0x0a};
+    s->queue_count=0; incoming(4,find,sizeof(find));
+    assert(s->queue_count==1 && !memcmp(s->queue[s->queue_head]+8,absent,sizeof(absent)));
+    const uint8_t bad_range[]={0x04,2,0,1,0};
+    const uint8_t bad_range_error[]={1,0x04,2,0,1};
+    s->queue_count=0; incoming(4,bad_range,sizeof(bad_range));
+    assert(s->queue_count==1 && !memcmp(s->queue[s->queue_head]+8,bad_range_error,sizeof(bad_range_error)));
+    const uint8_t bad_length[]={1,0x0a,0,0,4};
+    s->queue_count=0; incoming(4,read,1);
+    assert(s->queue_count==1 && !memcmp(s->queue[s->queue_head]+8,bad_length,sizeof(bad_length)));
+    assert(s->phase==BT_LE_CHARACTERISTICS && !s->malformed && !s->att_pending);
+    puts("PASS: peer ATT requests receive a server error without consuming host discovery or disturbing keyboard input");
+}
 int main(void)
 {
     (void)basic;
+    peer_att_requests();
     pairing_and_reconnect(); cancel_races(); credits_and_faults();
     rejected_create_and_fragmentation(); scan_recovery();
     puts("Bluetooth multi-peer host tests passed");

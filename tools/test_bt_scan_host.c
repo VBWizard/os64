@@ -183,6 +183,15 @@ int main(void)
     tick(&s,2029); assert(s.phase==BT_SCAN_LE_WAIT);
     tick(&s,2030); assert(s.phase==BT_SCAN_LE_DISABLE && !sent_params[0]);
     complete(&s,0); tick(&s,2031); assert(s.phase==BT_SCAN_DONE && !s.radio_active);
-    assert(bt_scan_start(&s,3000) && !s.le_only);
+    s.shared_controller=true;
+    uint8_t address[6],features[8]; memcpy(address,s.address,6); memcpy(features,s.features,8);
+    assert(bt_scan_start_le(&s,3000) && s.phase==BT_SCAN_LE_PARAMS);
+    assert(!memcmp(s.address,address,6) && !memcmp(s.features,features,8));
+    bt_scan_status(&s,out,sizeof(out));
+    assert(strstr(out,"controller: aa:00:00:00:00:11") && strstr(out,"LE discovery (about 2 seconds)"));
+    assert(!strstr(out,"Classic then"));
+    s.phase=BT_SCAN_DONE; s.shared_controller=false;
+    assert(bt_scan_start(&s,4000) && !s.le_only);
+    bt_scan_status(&s,out,sizeof(out)); assert(strstr(out,"Classic then LE discovery"));
     puts("test_bt_scan_host: command sequencing, deadlines, cleanup, Classic/LE reports and bounded names passed");
 }
