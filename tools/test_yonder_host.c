@@ -576,10 +576,10 @@ static bool pixels_are(const uint32_t *got, const uint32_t *want, int n)
 }
 
 // DARK PAGES (paint.h): the colour each run of `html` is drawn in, by its
-// first word, and what the canvas is filled with first.
-static const yonder_dark_t kDarkPaint = {
-    .paper = 0x202020, .ink = 0x101010, .link = 0x1010ee, .dark_ink = 0xe0e0e0, .dark_link = 0x80a0ff,
-};
+// first word, and what the canvas is filled with first. The expected
+// colours are Python's colorsys run on the rule (HSL lightness: paper over
+// half to 0.08 + (1 - L) / 2, ink under half to 0.92 - L / 2).
+static const yonder_dark_t kDarkPaint = {.paper = 0x202020};
 static bool starts(const char *got, const char *head)
 {
     return got != NULL && strncmp(got, head, strlen(head)) == 0;
@@ -599,35 +599,34 @@ static void dark_cases(void)
 {
     os64_gui_rect_t view = {0, 0, 300, 200};
     s_dark_paint = &kDarkPaint;
-    const char *plain = "<!doctype html><p>plain <a href=x>link</a></p><hr>";
+    const char *plain = "<!doctype html><p>plain <a href=x>link</a></p>";
     char *got = paint_of(plain, strlen(plain), 300, view, NULL, true);
     expect("dark: a page that set no colours is laid on the dark paper",
            starts(got, "fill 0 0 300 200 #202020\n"), got);
-    expect("dark: its default ink and link turn", painted_in(got, "plain", "#e0e0e0") &&
-           painted_in(got, "link", "#80a0ff"), got);
+    expect("dark: its default ink and link go light, the link keeping its blue",
+           painted_in(got, "plain", "#e3e3e3") && painted_in(got, "link", "#6262f4"), got);
     free(got);
     const char *own = "<!doctype html><style>body{margin:0;background:#ffffff} div{background:#000000}"
-                      "</style><p>inside</p><div>night</div><p style=\"color:#ff0000\">red</p>";
+                      " h1{background:#e0e8ff;margin:0;font-size:16px}"
+                      "</style><p>inside</p><div>night</div><h1>pale</h1><p style=\"color:#ff0000\">red</p>";
     got = paint_of(own, strlen(own), 300, view, NULL, true);
-    expect("dark: a page that lays its own white paper keeps it, and its default ink",
-           starts(got, "fill 0 0 300 200 #ffffff\n") &&
-           painted_in(got, "inside", "#101010"), got);
-    expect("dark: default ink on the page's own dark box turns; a colour the page set is its own",
-           painted_in(got, "night", "#e0e0e0") && painted_in(got, "red", "#ff0000"), got);
+    expect("dark: a page's own white paper goes dark, and its dark ink light",
+           starts(got, "fill 0 0 300 200 #141414\n") && painted_in(got, "inside", "#e3e3e3"), got);
+    expect("dark: a dark box stays; a pale one darkens keeping its hue; a mid colour is the page's",
+           got != NULL && strstr(got, " #000000\n") != NULL && strstr(got, " #000f38\n") != NULL &&
+           painted_in(got, "night", "#e3e3e3") && painted_in(got, "red", "#ff0000"), got);
     free(got);
     const char *scheme = "<!doctype html><style>body{margin:0;background:#ffffff;color:#000000}"
                          "@media (prefers-color-scheme: dark){body{background:#0a0a0a;color:#c0c0c0}}"
                          "</style><p>styled</p>";
     got = paint_of(scheme, strlen(scheme), 300, view, NULL, true);
-    expect("dark: a page with dark styles of its own is told to use them",
-           starts(got, "fill 0 0 300 200 #0a0a0a\n") &&
-           painted_in(got, "styled", "#c0c0c0"), got);
+    expect("dark: a page with a dark design of its own is told to use it, and nothing moves",
+           starts(got, "fill 0 0 300 200 #0a0a0a\n") && painted_in(got, "styled", "#c0c0c0"), got);
     free(got);
     s_dark_paint = NULL;
     got = paint_of(scheme, strlen(scheme), 300, view, NULL, true);
     expect("dark: off, the same page is light, and its light styles hold",
-           starts(got, "fill 0 0 300 200 #ffffff\n") &&
-           painted_in(got, "styled", "#000000"), got);
+           starts(got, "fill 0 0 300 200 #ffffff\n") && painted_in(got, "styled", "#000000"), got);
     free(got);
 }
 

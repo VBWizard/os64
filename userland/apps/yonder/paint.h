@@ -62,19 +62,16 @@ typedef struct {
 // `verbs->backdrop` is asked with no area, which only asks.
 const flow_box_t *yonder_canvas_owner(const flow_tree_t *tree, const yonder_verbs_t *verbs);
 
-// DARK PAGES (yonder.conf's `appearance = dark`): the page keeps every
-// colour it set, and yonder's own defaults turn. `paper` replaces the
-// canvas a page that set none is laid on; text, a decoration, a bullet or
-// a border still in the default ink or link colour (flow_env_t's `ink` and
-// `link_ink`, recognised here) is drawn in `dark_ink` or `dark_link` where
-// the paper under it is dark, and as the page had it where the page laid
-// its own light paper down. The paper under a box is the nearest opaque
-// background colour among it and its ancestors, else the canvas; a
-// picture there is the page's, and keeps its ink.
+// DARK PAGES (yonder.conf's `appearance = dark`): every colour the page
+// paints is drawn at its HSL lightness moved, hue and saturation kept. A
+// background or a gradient is PAPER, and goes dark if it is lighter than
+// half; text, a decoration, a bullet or a border is INK, and goes light if
+// it is darker than half. Each other colour, and every picture, is the
+// page's. A page with a dark design of its own (it was told, by
+// `prefers-color-scheme`) has nothing to move. `paper` is the canvas of a
+// page that set none.
 typedef struct {
     uint32_t paper;
-    uint32_t ink, link;
-    uint32_t dark_ink, dark_link;
 } yonder_dark_t;
 
 // Paints every box that meets `viewport`, canvas first, the page scrolled

@@ -107,18 +107,18 @@ remaining gates before recommending scripts for ordinary browsing.
   from 25 to 500. Apply sets it and lays the page out again at once; Save
   as default writes `zoom =` to `yonder.conf`; Ctrl+0 goes back to it.
 - **Dark pages**, at the zoom row's right end, `appearance = dark` (or
-  `light`, the default) in `yonder.conf`. A page with dark styles of its
-  own is told to use them: libgarb answers `prefers-color-scheme: dark`.
-  The colours a page sets are its own; yonder's defaults turn (paint.h's
-  `yonder_dark_t`): the paper a page set none of is dark, and text, a
-  decoration, a bullet or a border still in the default ink or link colour
-  is drawn light where the paper under it is dark, and as the page had it
-  where the page laid light paper of its own. So an unstyled page is dark
-  through, a page that paints its own white keeps it with its black text,
-  and no default ink is drawn light on a page's white. Recolouring a page
-  that hard-codes white (a forced dark) is not done: it guesses, and gets
-  pictures and brand colours wrong. Form controls keep the desktop theme's
-  colours. Apply re-judges the cascade and lays the page out again.
+  `light`, the default) in `yonder.conf`. A page with a dark design of its
+  own is told to use it: libgarb answers `prefers-color-scheme: dark`. What
+  is left the painter darkens (paint.h's `yonder_dark_t`): every colour is
+  drawn at its HSL lightness moved, hue and saturation kept, a background
+  or a gradient going dark when it is lighter than half and text, a
+  decoration, a bullet or a border going light when it is darker than half.
+  So a page that paints its own white (Google, DuckDuckGo's HTML page) is
+  dark, a pale blue box a dark blue one, a navy link a light blue one; a
+  mid colour and every picture are the page's, and a dark design of the
+  page's own has nothing to move. A page that set no colours is laid on
+  white's dark counterpart. Form controls keep the desktop theme's colours.
+  Apply re-judges the cascade and lays the page out again.
 - **yonder's loop waits on its own window**, so a thread waits on the
   dialog's (without taking its events) and rings a doorbell on yonder's;
   the loop pumps the dialog and tells the thread it has. One ring is out

@@ -58,13 +58,11 @@
 #define PAGE_PAPER 0xffffffu
 
 // DARK PAGES (paint.h's yonder_dark_t): yonder.conf's `appearance = dark`.
-// A page that has dark styles of its own is told to use them
-// (`prefers-color-scheme: dark`), and yonder's defaults turn: the paper a
-// page set none of, and the default ink on it. Colours a page set are its.
-static const yonder_dark_t kDark = {
-    .paper = 0x1c1c1eu, .ink = PAGE_INK, .link = PAGE_LINK,
-    .dark_ink = 0xdcdcdcu, .dark_link = 0x8ab4f8u,
-};
+// A page with a dark design of its own is told to use it
+// (`prefers-color-scheme: dark`), and the painter darkens what is left:
+// light backgrounds go dark, dark text goes light. The paper of a page
+// that set none is white's dark counterpart, as the painter turns it.
+static const yonder_dark_t kDark = {.paper = 0x141414u};
 static bool s_dark;
 
 #define YONDER_ACCEPT "text/html, application/xhtml+xml, text/*;q=0.8"
