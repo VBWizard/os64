@@ -105,17 +105,20 @@ From the repository root:
 ```sh
 python3 tools/check_bearssl_import.py
 python3 tools/test_bearssl_host.py
+python3 tools/test_tls13_vectors_host.py
 make -C userland
 python3 tools/audit_bearssl.py
 make
 ```
 
 Pass `--output PATH` to retain host artifacts in a new directory; the default
-uses disposable storage. Leave LeakSanitizer enabled on supported hosts. If
-the runner is traced and LeakSanitizer reports that it cannot run under ptrace,
-rerun with `ASAN_OPTIONS=detect_leaks=0`. This is a host-tool limitation, not
-an os64 requirement. Address and
-undefined-behavior sanitizers remain active, with no recovery after errors.
+uses disposable storage. Leave LeakSanitizer enabled on supported hosts.
+Its generic ptrace hint can mean either an existing tracer or a sandbox
+denying the thread attachment required for the final leak scan. If a sandbox
+blocks attachment, run the tests outside that sandbox with
+`ASAN_OPTIONS=detect_leaks=1`. Where that is unavailable, a run with
+`ASAN_OPTIONS=detect_leaks=0` retains address and undefined-behavior checks
+but supplies no leak-check evidence. Sanitizer errors stop the test run.
 
 The host runner tests 19 explicitly checked upstream crypto groups, including
 SHA-2, HMAC/HKDF, DRBGs, TLS PRF, AES-ct64, GCM, ChaCha20/Poly1305, RSA-i31,
@@ -135,6 +138,17 @@ Compare its `DIGEST` line with the hosted reference output.
 The fixture owns its large contexts/buffers on the heap. Compiler `.su` files
 record individual core stack frames; those sizes are not whole-call-chain
 bounds or a production connection-cap measurement.
+
+The private TLS 1.3 schedule and record helpers are included in the foundation
+archive. `tools/tls13_vectors.py` embeds the public RFC 8448 sections 3 and 5
+traces and generates `test/tls13_vectors.h`; `--check` detects stale output.
+`test_tls13_vectors_host.py` checks those traces and independent Python
+`hashlib`/`cryptography` expectations under ASan/UBSan. It accepts
+`--foundation PATH/adapted/core.a` to reuse a successful foundation run and
+`--output PATH` to retain artifacts. The host needs the Python `cryptography`
+package. These helpers do not select TLS 1.3 through the public library;
+handshake integration and interoperability belong to S2 of
+[TLS13.md](../../docs/design/pending/TLS13.md).
 
 Physical-hardware runs, TLS interoperability, certificate-policy coverage,
 fuzzing, and production entropy integration are not established by this slice.
