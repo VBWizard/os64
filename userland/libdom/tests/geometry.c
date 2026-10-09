@@ -130,7 +130,7 @@ static bool geometry(void *opaque, const os64_html_node_t *node, os64_dom_geomet
             os64_page_build(page->doc, "https://geometry.test/", NULL, page->state);
         garb_sheet_in_t sheet = {.sheet = &page->sheet, .parent = -1};
         garb_cascade_t *cascade = model != NULL ? garb_cascade(&sheet, 1, page->doc,
-                                                        (garb_env_t){800, 600}) : NULL;
+                                                        (garb_env_t){.width = 800, .height = 600}) : NULL;
         flow_env_t env = {.ctx = page, .replaced_size = image_size, .fonts = fonts,
                          .text = page->text, .cascade = cascade,
                          .viewport_height = 600, .viewport_font_px = 16, .zoom = 1000,

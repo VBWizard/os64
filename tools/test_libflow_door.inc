@@ -565,7 +565,7 @@ static void fuzz_one(const char *what, const char *html, size_t len)
         in[nsheets] = (garb_sheet_in_t){.sheet = &sheets[nsheets], .media = sh->media};
         nsheets++;
     }
-    garb_cascade_t *cascade = garb_cascade(in, nsheets, doc, (garb_env_t){800, 600});
+    garb_cascade_t *cascade = garb_cascade(in, nsheets, doc, (garb_env_t){.width = 800, .height = 600});
     flow_env_t env = kEnv;
     env.cascade = cascade;
     env.viewport_height = 600;

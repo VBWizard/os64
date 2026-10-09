@@ -62,11 +62,27 @@ typedef struct {
 // `verbs->backdrop` is asked with no area, which only asks.
 const flow_box_t *yonder_canvas_owner(const flow_tree_t *tree, const yonder_verbs_t *verbs);
 
+// DARK PAGES (yonder.conf's `appearance = dark`): the page keeps every
+// colour it set, and yonder's own defaults turn. `paper` replaces the
+// canvas a page that set none is laid on; text, a decoration, a bullet or
+// a border still in the default ink or link colour (flow_env_t's `ink` and
+// `link_ink`, recognised here) is drawn in `dark_ink` or `dark_link` where
+// the paper under it is dark, and as the page had it where the page laid
+// its own light paper down. The paper under a box is the nearest opaque
+// background colour among it and its ancestors, else the canvas; a
+// picture there is the page's, and keeps its ink.
+typedef struct {
+    uint32_t paper;
+    uint32_t ink, link;
+    uint32_t dark_ink, dark_link;
+} yonder_dark_t;
+
 // Paints every box that meets `viewport`, canvas first, the page scrolled
 // to `scroll` (flow_visit's). `paper` is the canvas when neither the root
-// nor the body has a background, colour or picture.
+// nor the body has a background, colour or picture; `dark`, when not NULL,
+// paints the page dark (above) and its paper is the canvas instead.
 void yonder_paint(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll,
-                  uint32_t paper, const yonder_verbs_t *verbs);
+                  uint32_t paper, const yonder_dark_t *dark, const yonder_verbs_t *verbs);
 
 // One of `box`'s boxes — its border box `rect` (in any coordinates), or
 // the padding or content box inside it. A percentage padding counts as

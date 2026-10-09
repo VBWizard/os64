@@ -1249,7 +1249,7 @@ garb_status_t garb_parse_style_element(const os64_html_node_t *style, garb_parse
 
 garb_env_t garb_cascade_env(const garb_cascade_t *c)
 {
-    return c != NULL ? c->env : (garb_env_t){0, 0};
+    return c != NULL ? c->env : (garb_env_t){.width = 0, .height = 0};
 }
 
 garb_style_t garb_style_for(const garb_cascade_t *c, const os64_html_node_t *element)

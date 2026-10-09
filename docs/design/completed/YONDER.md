@@ -61,7 +61,7 @@ person moves around them.
 
 The title bar's Settings action opens yonder's Settings window — the
 shared modeless dialog (`os64/ui_settings.h`), Apply, Save as default and
-Close — with four settings: default zoom; whether pictures and style sheets are
+Close — with five settings: default zoom (and beside it dark pages, below); whether pictures and style sheets are
 kept on disk and in how much room (CACHE.md is that one's record: a box,
 a size, a button that empties the cache, and what it holds on the status
 line), and **who yonder says it is**, the
@@ -106,6 +106,19 @@ remaining gates before recommending scripts for ordinary browsing.
 - **The zoom every page starts at** (PILE3.md § Zoom): a whole percent
   from 25 to 500. Apply sets it and lays the page out again at once; Save
   as default writes `zoom =` to `yonder.conf`; Ctrl+0 goes back to it.
+- **Dark pages**, at the zoom row's right end, `appearance = dark` (or
+  `light`, the default) in `yonder.conf`. A page with dark styles of its
+  own is told to use them: libgarb answers `prefers-color-scheme: dark`.
+  The colours a page sets are its own; yonder's defaults turn (paint.h's
+  `yonder_dark_t`): the paper a page set none of is dark, and text, a
+  decoration, a bullet or a border still in the default ink or link colour
+  is drawn light where the paper under it is dark, and as the page had it
+  where the page laid light paper of its own. So an unstyled page is dark
+  through, a page that paints its own white keeps it with its black text,
+  and no default ink is drawn light on a page's white. Recolouring a page
+  that hard-codes white (a forced dark) is not done: it guesses, and gets
+  pictures and brand colours wrong. Form controls keep the desktop theme's
+  colours. Apply re-judges the cascade and lays the page out again.
 - **yonder's loop waits on its own window**, so a thread waits on the
   dialog's (without taking its events) and rings a doorbell on yonder's;
   the loop pumps the dialog and tells the thread it has. One ring is out

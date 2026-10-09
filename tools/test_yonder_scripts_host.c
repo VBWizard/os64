@@ -371,12 +371,13 @@ os64_slurp_status_t os64_slurp(const char *path, size_t cap, uint8_t **bytes, si
 bool os64_ui_theme_session(os64_ui_theme_t *theme, uint64_t *installed, uint64_t hint) {
     (void)theme; (void)installed; (void)hint; return false;
 }
-static char saved_scripts[8], saved_zoom[8], saved_seconds[8], saved_diagnostics[256], settings_report[256];
+static char saved_scripts[8], saved_zoom[8], saved_seconds[8], saved_diagnostics[256], saved_appearance[8],
+    settings_report[256];
 int64_t os64_conf_get(const char *file, const char *key, char *out, size_t cap) {
     check(os64_streq(file,"yonder.conf"),"settings read Yonder configuration");
     const char *value=os64_streq(key,"scripts") ? saved_scripts :
         os64_streq(key,"zoom") ? saved_zoom : os64_streq(key,"script_seconds") ? saved_seconds :
-        os64_streq(key,"diagnostics") ? saved_diagnostics : "";
+        os64_streq(key,"diagnostics") ? saved_diagnostics : os64_streq(key,"appearance") ? saved_appearance : "";
     if(!value[0]) return OS64_CONF_NO_KEY;
     os64_strcopy(out,cap,value); return 0;
 }
@@ -385,6 +386,7 @@ int64_t os64_conf_set(const char *file, const char *key, const char *value) {
     if(os64_streq(key,"scripts")) os64_strcopy(saved_scripts,sizeof(saved_scripts),value);
     if(os64_streq(key,"zoom")) os64_strcopy(saved_zoom,sizeof(saved_zoom),value);
     if(os64_streq(key,"script_seconds")) os64_strcopy(saved_seconds,sizeof(saved_seconds),value);
+    if(os64_streq(key,"appearance")) os64_strcopy(saved_appearance,sizeof(saved_appearance),value);
     return 0;
 }
 void os64_ui_settings_report(os64_ui_settings_t *dialog, const char *text) {
@@ -798,6 +800,8 @@ static bool settings_applied;
 static uint32_t settings_zoom;
 static void settings_zoom_capture(uint32_t zoom) { settings_zoom=zoom; }
 static uint32_t settings_seconds;
+static int settings_dark=-1;
+static void settings_dark_capture(bool dark) { settings_dark=dark; }
 static void settings_capture(const char *agent, bool enabled, uint32_t seconds) {
     check(os64_streq(agent,YONDER_AGENT),"settings preserves agent while applying scripts");
     settings_applied=enabled;
@@ -812,7 +816,10 @@ static void switch_cases(void) {
     strcpy(settings_fixture.field_buf,YONDER_AGENT);
     settings_fixture.use=settings_capture;
     settings_fixture.zoom_use=settings_zoom_capture;
+    settings_fixture.dark_use=settings_dark_capture;
     strcpy(settings_fixture.zoom_buf,"125");
+    saved_appearance[0]=0;
+    check(!yonder_settings_saved_dark(),"pages are light unless yonder.conf says dark");
     settings_fixture.scripts.checked=true;
     settings_fixture.limit.value=12;
     check(yonder_settings_saved_script_seconds()==5,"a missing script time limit is the 5 s lean");
@@ -828,6 +835,13 @@ static void switch_cases(void) {
     check(yonder_settings_saved_zoom()==1250,"Save persists zoom alongside script switch");
     check(yonder_settings_saved_script_seconds()==12 && os64_streq(saved_seconds,"12"),
         "Save persists the script time limit as script_seconds");
+    check(settings_dark==0 && os64_streq(saved_appearance,"light"),"Save as default saves the appearance, light");
+    settings_fixture.dark.checked=true;
+    apply(&settings_fixture.d,false);
+    check(settings_dark==1 && os64_streq(saved_appearance,"light"),"Apply turns this window dark without saving it");
+    apply(&settings_fixture.d,true);
+    check(os64_streq(saved_appearance,"dark") && yonder_settings_saved_dark(),"Save as default saves dark pages");
+    settings_fixture.dark.checked=false;
     settings_fixture.scripts.checked=false;
     apply(&settings_fixture.d,true);
     check(!settings_applied && !yonder_settings_saved_scripts() && os64_streq(saved_scripts,"off"),

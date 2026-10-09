@@ -143,7 +143,7 @@ static void sheets_open(Sheets *sh, const os64_html_document_t *doc, const os64_
         sh->in[sh->n] = (garb_sheet_in_t){.sheet = &sh->parsed[sh->n], .media = one->media};
         sh->n++;
     }
-    sh->cascade = garb_cascade(sh->in, sh->n, doc, (garb_env_t){width, DUMP_VIEWPORT_H});
+    sh->cascade = garb_cascade(sh->in, sh->n, doc, (garb_env_t){.width = width, .height = DUMP_VIEWPORT_H});
     require(sh->cascade != NULL, "cascade memory");
 }
 

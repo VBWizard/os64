@@ -23,6 +23,7 @@
 
 #define CONF_ZOOM "zoom"
 #define CONF_DIAGNOSTICS "diagnostics"
+#define CONF_APPEARANCE "appearance"
 #define CONF_SCRIPT_SECONDS "script_seconds"
 
 // The list's height, in rows; the dialog's rows are a line of words, the
@@ -60,6 +61,9 @@ static struct {
     os64_ui_textfield_t zoom;       // the default zoom, in whole percent
     char zoom_buf[8];
     void (*zoom_use)(uint32_t thousandths);
+    // Dark pages, at the zoom row's right end.
+    os64_ui_checkbox_t dark;
+    void (*dark_use)(bool dark);
     // The relay: `thread` waits for events at the dialog's window and
     // rings `bell` on `window`, then waits on `pumped` until the loop has
     // handled them — one ring outstanding at a time, so it never spins on
@@ -102,6 +106,13 @@ void yonder_agents_release(void)
         s_kept = k->next;
         os64_free(k);
     }
+}
+
+bool yonder_settings_saved_dark(void)
+{
+    char value[8];
+    return os64_conf_get(CONF_NAME, CONF_APPEARANCE, value, sizeof(value)) == 0 &&
+           os64_streq_nocase(value, "dark");
 }
 
 bool yonder_settings_saved_scripts(void)
@@ -329,6 +340,14 @@ static bool arrange(os64_ui_settings_t *d, os64_gui_rect_t b, int32_t row, bool 
     place(&s.zoom.w, (os64_gui_rect_t){b.x + words_w, zoom_y, field, row}, staged);
     place(&s.percent, (os64_gui_rect_t){b.x + words_w + field + row / 2, zoom_y,
                                         widths[6] + row / 2, row}, staged);
+    int32_t dark_w = 0;
+    if (os64_ui_text_measure(&d->ui, OS64_FONT_ROLE_UI, s.dark.w.text, os64_strlen(s.dark.w.text),
+                             &dark_w))
+        return false;
+    dark_w += 2 * row;
+    if (words_w + field + widths[6] + row + dark_w > b.w)
+        return false;
+    place(&s.dark.w, (os64_gui_rect_t){b.x + b.w - dark_w, zoom_y, dark_w, row}, staged);
     // The switch, and on the same row its time limit: "Script time limit:",
     // the slider, and the number it is at.
     int32_t switch_w = 0, limit_words = 0, limit_value = 0;
@@ -395,6 +414,7 @@ static void apply(os64_ui_settings_t *d, bool save)
     os64_snprintf(seconds_text, sizeof(seconds_text), "%u", (unsigned)seconds);
     s.use(agent, s.scripts.checked, seconds);
     s.zoom_use(zoom);
+    s.dark_use(s.dark.checked);
     const char *name = yonder_agent_name(agent);
     // A cache that cannot keep anything has no box to tick, and saves no
     // `cache = off` that would outlive whatever stopped it.
@@ -410,6 +430,8 @@ static void apply(os64_ui_settings_t *d, bool save)
                                           s.scripts.checked ? "on" : "off") == 0 &&
                            os64_conf_set(CONF_NAME, CONF_SCRIPT_SECONDS, seconds_text) == 0 &&
                            os64_conf_set(CONF_NAME, CONF_ZOOM, s.zoom_buf) == 0 &&
+                           os64_conf_set(CONF_NAME, CONF_APPEARANCE,
+                                          s.dark.checked ? "dark" : "light") == 0 &&
                            (!s.usable || (os64_conf_set(CONF_NAME, CONF_CACHE,
                                                         keeping ? "on" : "off") == 0 &&
                                           os64_conf_set(CONF_NAME, CONF_CACHE_MB,
@@ -417,8 +439,8 @@ static void apply(os64_ui_settings_t *d, bool save)
     if (!saved)
         os64_strcopy(line, sizeof(line), "Applied here, but yonder.conf could not be written.");
     else
-        os64_snprintf(line, sizeof(line), "%s: zoom %d%%, asking as %s, %s, scripts %s (%u s)%s",
-                      save ? "Saved" : "Applied", (int)(zoom / 10),
+        os64_snprintf(line, sizeof(line), "%s: zoom %d%%%s, asking as %s, %s, scripts %s (%u s)%s",
+                      save ? "Saved" : "Applied", (int)(zoom / 10), s.dark.checked ? ", dark" : "",
                       name != NULL ? name : "the agent typed", keeping ? kept : "keeping nothing",
                       s.scripts.checked ? "on" : "off", (unsigned)seconds,
                       save ? ", here and in new windows." : ", here.");
@@ -428,13 +450,15 @@ static void apply(os64_ui_settings_t *d, bool save)
 void yonder_settings_open(int64_t parent, uint32_t bell, const char *agent,
                           void (*use)(const char *agent, bool scripts, uint32_t script_seconds),
                           way_cache_t *cache, bool scripts, uint32_t script_seconds, uint32_t zoom,
-                          void (*zoom_use)(uint32_t thousandths))
+                          void (*zoom_use)(uint32_t thousandths), bool dark,
+                          void (*dark_use)(bool dark))
 {
     // Open already: the helper brings it forward and keeps what was typed.
     if (!os64_ui_settings_open(&s.d, parent, "yonder Settings", BODY_ROWS, arrange, apply, NULL))
         return;
     s.use = use;
     s.zoom_use = zoom_use;
+    s.dark_use = dark_use;
     s.cache = cache;
     s.usable = false;
     s.window = parent;
@@ -462,9 +486,11 @@ void yonder_settings_open(int64_t parent, uint32_t bell, const char *agent,
     os64_ui_label(&s.zoom_words, "Zoom every page to");
     os64_ui_textfield(&s.zoom, s.zoom_buf, sizeof(s.zoom_buf), NULL, NULL, NULL);
     os64_ui_label(&s.percent, "%");
+    os64_ui_checkbox(&s.dark, "Dark pages", dark, NULL, NULL);
     os64_ui_widget_t *kids[] = {&s.heading, &s.list.w,     &s.field.w, &s.keep.w,  &s.size.w,
                                 &s.mb,      &s.empty,      &s.zoom_words, &s.zoom.w, &s.percent,
-                                &s.scripts.w, &s.limit_words, &s.limit.w, &s.limit_value};
+                                &s.scripts.w, &s.limit_words, &s.limit.w, &s.limit_value,
+                                &s.dark.w};
     for (size_t i = 0; i < sizeof(kids) / sizeof(kids[0]); i++)
         os64_ui_add_child(&s.d.body, kids[i]);
     os64_ui_listbox_set(&s.d.ui, &s.list, yonder_agent_npresets(), selected);

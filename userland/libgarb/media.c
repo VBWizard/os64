@@ -119,7 +119,7 @@ static const Feature kFeatures[] = {
     {"orientation", F_WORDS, NULL, false}, {"hover", F_WORDS, "hover", false},
     {"any-hover", F_WORDS, "hover", false}, {"pointer", F_WORDS, "fine", false},
     {"any-pointer", F_WORDS, "fine", false},
-    {"prefers-color-scheme", F_WORDS, "light", false},
+    {"prefers-color-scheme", F_WORDS, "light", false},     // or `dark`: answered from the env
     {"prefers-reduced-motion", F_WORDS, "reduce", false},
     {"prefers-reduced-transparency", F_WORDS, "no-preference", false},
     {"prefers-contrast", F_WORDS, "no-preference", false},
@@ -319,7 +319,10 @@ static Tri feature(const garb_value_t *block, garb_env_t env)
                     return M_UNKNOWN;
                 return word(w, o) ? M_TRUE : M_FALSE;
             }
-            return word(w, f->answer) ? M_TRUE : M_FALSE;
+            const char *answer = f->answer;
+            if (os64_streq(f->name, "prefers-color-scheme") && env.dark)
+                answer = "dark";
+            return word(w, answer) ? M_TRUE : M_FALSE;
         }
         double want, here = 0;
         if (!written(f, &c, &want) || peek(&c) != NULL)

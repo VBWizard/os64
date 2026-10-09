@@ -20,7 +20,45 @@ typedef struct {
     // The box whose background became the canvas's: it does not paint it
     // a second time over its own border box (CSS 2.1 §14.2).
     const flow_box_t *canvas_owner;
+    // Dark pages (paint.h), NULL for none, and the canvas's colour: the
+    // paper under whatever lays none of its own.
+    const yonder_dark_t *dark;
+    uint32_t canvas;
 } Painter;
+
+static bool is_dark(uint32_t c)
+{
+    uint32_t r = (c >> 16) & 0xff, g = (c >> 8) & 0xff, b = c & 0xff;
+    return r * 299 + g * 587 + b * 114 < 128 * 1000;
+}
+
+// Whether the paper under `b` is dark: the nearest opaque background
+// colour among it and its ancestors, short of the canvas's owner (whose
+// background IS the canvas), else the canvas. A picture under it is the
+// page's choice, and reads as light: the page's own ink stays.
+static bool dark_under(const Painter *p, const flow_box_t *b)
+{
+    for (const flow_box_t *a = b; a != NULL && a != p->canvas_owner; a = a->parent) {
+        if (flow_background_has_image(a->style))
+            return false;
+        if (a->style->has_background && flow_alpha(a->style->background) == 255)
+            return is_dark(a->style->background);
+    }
+    return is_dark(p->canvas);
+}
+
+// `colour` as a dark page draws it on `b` (paint.h): a default ink on dark
+// paper turns; every other colour is the page's.
+static uint32_t ink_on(const Painter *p, const flow_box_t *b, uint32_t colour)
+{
+    const yonder_dark_t *d = p->dark;
+    if (d == NULL)
+        return colour;
+    uint32_t rgb = colour & 0xffffffu;
+    if ((rgb != d->ink && rgb != d->link) || !dark_under(p, b))
+        return colour;
+    return (colour & 0xff000000u) | (rgb == d->ink ? d->dark_ink : d->dark_link);
+}
 
 static int32_t px(flow_unit_t u)
 {
@@ -263,6 +301,9 @@ static void borders(const Painter *p, const flow_box_t *b)
 {
     const flow_style_t *s = b->style;
     os64_gui_rect_t r = b->rect;
+    uint32_t colour[4];
+    for (int k = 0; k < 4; k++)
+        colour[k] = ink_on(p, b, s->border_color[k]);
     int32_t w[4];
     for (int k = 0; k < 4; k++)
         w[k] = s->border_style[k] == FLOW_BORDER_NONE || s->border_style[k] == FLOW_BORDER_HIDDEN
@@ -277,28 +318,28 @@ static void borders(const Painter *p, const flow_box_t *b)
         // ceil(i * l / t): the columns of the left side this row gives up.
         int64_t x0 = rx + (i * l + t - 1) / t, x1 = rx + rw - (i * rt + t - 1) / t;
         stroke(p, s->border_style[FLOW_TOP], x0, ry + i, x1 - x0, true, i, t, rx,
-               tone(s->border_style[FLOW_TOP], s->border_color[FLOW_TOP], FLOW_TOP, (int32_t)i,
+               tone(s->border_style[FLOW_TOP], colour[FLOW_TOP], FLOW_TOP, (int32_t)i,
                     (int32_t)t));
     }
     for (int64_t i = max64(0, ry + rh - vy1), end = min64(min64(bt, rh), ry + rh - vy0); i < end;
          i++) {
         int64_t x0 = rx + (i * l + bt - 1) / bt, x1 = rx + rw - (i * rt + bt - 1) / bt;
         stroke(p, s->border_style[FLOW_BOTTOM], x0, ry + rh - 1 - i, x1 - x0, true, i, bt, rx,
-               tone(s->border_style[FLOW_BOTTOM], s->border_color[FLOW_BOTTOM], FLOW_BOTTOM,
+               tone(s->border_style[FLOW_BOTTOM], colour[FLOW_BOTTOM], FLOW_BOTTOM,
                     (int32_t)i, (int32_t)bt));
     }
     for (int64_t j = max64(0, vx0 - rx), end = min64(min64(l, rw), vx1 - rx); j < end; j++) {
         // How many top rows reach column j: min(t, floor(j * t / l) + 1).
         int64_t y0 = ry + min64(t, j * t / l + 1), y1 = ry + rh - min64(bt, j * bt / l + 1);
         stroke(p, s->border_style[FLOW_LEFT], rx + j, y0, y1 - y0, false, j, l, ry,
-               tone(s->border_style[FLOW_LEFT], s->border_color[FLOW_LEFT], FLOW_LEFT, (int32_t)j,
+               tone(s->border_style[FLOW_LEFT], colour[FLOW_LEFT], FLOW_LEFT, (int32_t)j,
                     (int32_t)l));
     }
     for (int64_t j = max64(0, rx + rw - vx1), end = min64(min64(rt, rw), rx + rw - vx0); j < end;
          j++) {
         int64_t y0 = ry + min64(t, j * t / rt + 1), y1 = ry + rh - min64(bt, j * bt / rt + 1);
         stroke(p, s->border_style[FLOW_RIGHT], rx + rw - 1 - j, y0, y1 - y0, false, j, rt, ry,
-               tone(s->border_style[FLOW_RIGHT], s->border_color[FLOW_RIGHT], FLOW_RIGHT,
+               tone(s->border_style[FLOW_RIGHT], colour[FLOW_RIGHT], FLOW_RIGHT,
                     (int32_t)j, (int32_t)rt));
     }
 }
@@ -488,7 +529,7 @@ static void round_borders(const Painter *p, const flow_box_t *b, const Round *ou
             uint32_t colour = 0;
             if (share > 0) {
                 int side = ring_side(b, w, x, y);
-                colour = at_share(tone(s->border_style[side], s->border_color[side], side, 0,
+                colour = at_share(tone(s->border_style[side], ink_on(p, b, s->border_color[side]), side, 0,
                                        w[side]),
                                   share);
             }
@@ -1081,10 +1122,11 @@ static void decorations(const Painter *p, const flow_box_t *b)
     int64_t size = px(b->style->font_size);
     int64_t thick = max64(1, size / 16);
     if (b->decoration & FLOW_DECORATION_UNDERLINE)
-        fill(p, b->rect.x, (int64_t)b->baseline + thick, b->rect.w, thick, b->underline_color);
+        fill(p, b->rect.x, (int64_t)b->baseline + thick, b->rect.w, thick,
+             ink_on(p, b, b->underline_color));
     if (b->decoration & FLOW_DECORATION_LINE_THROUGH)
         fill(p, b->rect.x, (int64_t)b->baseline - size * 3 / 10, b->rect.w, thick,
-             b->line_through_color);
+             ink_on(p, b, b->line_through_color));
 }
 
 // Disc, circle and square are drawn as shapes, the way browsers draw them,
@@ -1130,7 +1172,7 @@ static void bullet(const Painter *p, const flow_box_t *b, flow_list_style_type_t
     int64_t d = max64(3, size / 3);
     int64_t x = (int64_t)b->rect.x + max64(0, ((int64_t)b->rect.w - size / 4 - d) / 2);
     int64_t y = (int64_t)b->baseline - size * 3 / 10 - d / 2;
-    uint32_t colour = b->style->color;
+    uint32_t colour = ink_on(p, b, b->style->color);
     if (type == FLOW_LIST_SQUARE) {
         fill(p, x, y, d, d, colour);
         return;
@@ -1207,12 +1249,12 @@ static void paint_box(void *ctx, const flow_box_t *b)
             const flow_shadow_t *sh = &b->style->text_shadows[i];
             p->v->text(p->v->ctx, b, (int32_t)((int64_t)b->rect.x + p->off.x + sh->x),
                        (int32_t)((int64_t)b->baseline + p->off.y + sh->y), on_page(p, p->view),
-                       sh->current ? b->style->color : sh->colour);
+                       sh->current ? ink_on(p, b, b->style->color) : sh->colour);
         }
         if (b->run != NULL)
             p->v->text(p->v->ctx, b, (int32_t)((int64_t)b->rect.x + p->off.x),
                        (int32_t)((int64_t)b->baseline + p->off.y), on_page(p, p->view),
-                       b->style->color);
+                       ink_on(p, b, b->style->color));
         decorations(p, b);
         return;
     case FLOW_BOX_ATOMIC:
@@ -1307,9 +1349,11 @@ const flow_box_t *yonder_canvas_owner(const flow_tree_t *tree, const yonder_verb
 }
 
 void yonder_paint(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll,
-                  uint32_t paper, const yonder_verbs_t *verbs)
+                  uint32_t paper, const yonder_dark_t *dark, const yonder_verbs_t *verbs)
 {
-    Painter p = {.v = verbs, .view = viewport, .scroll = scroll};
+    Painter p = {.v = verbs, .view = viewport, .scroll = scroll, .dark = dark};
+    if (dark != NULL)
+        paper = dark->paper;
     const flow_box_t *root = flow_root(tree);
     if (root != NULL)
         p.canvas_owner = canvas_owner(&p, root);
@@ -1321,6 +1365,9 @@ void yonder_paint(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_
     if (flow_alpha(canvas) != 255)
         fill(&p, viewport.x, viewport.y, viewport.w, viewport.h, paper);
     fill(&p, viewport.x, viewport.y, viewport.w, viewport.h, canvas);
+    // A picture on the canvas is the page's, and reads as light paper.
+    p.canvas = owner != NULL && flow_background_has_image(owner->style) ? 0xffffffu
+             : flow_alpha(canvas) == 255 ? canvas : paper;
     // The canvas's layers, from the bottom up, across the whole view, each
     // placed in the ROOT's origin box, whichever element they came from
     // (Backgrounds 3 § 2.11.2: the body's background is drawn as if the

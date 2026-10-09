@@ -390,6 +390,8 @@ static os64_html_document_t *parse(const char *html, size_t len)
 // When set, paint_of writes here whose background the canvas is
 // (yonder_canvas_owner): "html", "body" or "none".
 static const char **s_canvas_owner;
+// When set, the page is cascaded and painted dark (paint.h's yonder_dark_t).
+static const yonder_dark_t *s_dark_paint;
 
 static char *paint_of(const char *html, size_t len, int32_t width, os64_gui_rect_t view,
                       bool *escaped, bool css)
@@ -407,7 +409,9 @@ static char *paint_of(const char *html, size_t len, int32_t width, os64_gui_rect
         in[n] = (garb_sheet_in_t){.sheet = &sheets[n], .media = sh->media};
         n++;
     }
-    garb_cascade_t *c = css ? garb_cascade(in, n, doc, (garb_env_t){width, view.h}) : NULL;
+    garb_cascade_t *c = css ? garb_cascade(in, n, doc, (garb_env_t){.width = width, .height = view.h,
+                                                               .dark = s_dark_paint != NULL})
+                            : NULL;
     flow_env_t env = kEnv;
     env.cascade = c;
     env.viewport_height = view.h;
@@ -418,7 +422,7 @@ static char *paint_of(const char *html, size_t len, int32_t width, os64_gui_rect
                         rec_control,   rec_backdrop, rec_group_open, rec_group_close,
                         rec_mask,      rec_pixels};
     if (t != NULL)
-        yonder_paint(t, view, (flow_point_t){view.x, view.y}, kEnv.paper, &v);
+        yonder_paint(t, view, (flow_point_t){view.x, view.y}, kEnv.paper, s_dark_paint, &v);
     if (s_canvas_owner != NULL) {
         const flow_box_t *o = t != NULL ? yonder_canvas_owner(t, &v) : NULL;
         *s_canvas_owner = o == NULL ? "none"
@@ -569,6 +573,62 @@ static bool pixels_are(const uint32_t *got, const uint32_t *want, int n)
         if (got[i] != want[i])
             return false;
     return true;
+}
+
+// DARK PAGES (paint.h): the colour each run of `html` is drawn in, by its
+// first word, and what the canvas is filled with first.
+static const yonder_dark_t kDarkPaint = {
+    .paper = 0x202020, .ink = 0x101010, .link = 0x1010ee, .dark_ink = 0xe0e0e0, .dark_link = 0x80a0ff,
+};
+static bool starts(const char *got, const char *head)
+{
+    return got != NULL && strncmp(got, head, strlen(head)) == 0;
+}
+static bool painted_in(const char *got, const char *word, const char *colour)
+{
+    char want[64];
+    snprintf(want, sizeof(want), "text \"%s", word);
+    const char *line = got != NULL ? strstr(got, want) : NULL;
+    if (line == NULL)
+        return false;
+    const char *end = strchr(line, '\n');
+    const char *at = strstr(line, colour);
+    return at != NULL && (end == NULL || at < end);
+}
+static void dark_cases(void)
+{
+    os64_gui_rect_t view = {0, 0, 300, 200};
+    s_dark_paint = &kDarkPaint;
+    const char *plain = "<!doctype html><p>plain <a href=x>link</a></p><hr>";
+    char *got = paint_of(plain, strlen(plain), 300, view, NULL, true);
+    expect("dark: a page that set no colours is laid on the dark paper",
+           starts(got, "fill 0 0 300 200 #202020\n"), got);
+    expect("dark: its default ink and link turn", painted_in(got, "plain", "#e0e0e0") &&
+           painted_in(got, "link", "#80a0ff"), got);
+    free(got);
+    const char *own = "<!doctype html><style>body{margin:0;background:#ffffff} div{background:#000000}"
+                      "</style><p>inside</p><div>night</div><p style=\"color:#ff0000\">red</p>";
+    got = paint_of(own, strlen(own), 300, view, NULL, true);
+    expect("dark: a page that lays its own white paper keeps it, and its default ink",
+           starts(got, "fill 0 0 300 200 #ffffff\n") &&
+           painted_in(got, "inside", "#101010"), got);
+    expect("dark: default ink on the page's own dark box turns; a colour the page set is its own",
+           painted_in(got, "night", "#e0e0e0") && painted_in(got, "red", "#ff0000"), got);
+    free(got);
+    const char *scheme = "<!doctype html><style>body{margin:0;background:#ffffff;color:#000000}"
+                         "@media (prefers-color-scheme: dark){body{background:#0a0a0a;color:#c0c0c0}}"
+                         "</style><p>styled</p>";
+    got = paint_of(scheme, strlen(scheme), 300, view, NULL, true);
+    expect("dark: a page with dark styles of its own is told to use them",
+           starts(got, "fill 0 0 300 200 #0a0a0a\n") &&
+           painted_in(got, "styled", "#c0c0c0"), got);
+    free(got);
+    s_dark_paint = NULL;
+    got = paint_of(scheme, strlen(scheme), 300, view, NULL, true);
+    expect("dark: off, the same page is light, and its light styles hold",
+           starts(got, "fill 0 0 300 200 #ffffff\n") &&
+           painted_in(got, "styled", "#000000"), got);
+    free(got);
 }
 
 static void scale_cases(void)
@@ -1131,6 +1191,7 @@ int main(int argc, char **argv)
         huge_corner_case();
         shadow_split_cases();
         canvas_owner_cases();
+        dark_cases();
         scale_cases();
         background_size_cases();
         bar_cases();

@@ -310,11 +310,16 @@ static void select_page(const char *html, size_t hlen, const char *lists)
 // "WIDTHxHEIGHT query…": whether the query holds in that viewport.
 static void media(const char *text)
 {
-    garb_env_t env = {0, 0};
+    garb_env_t env = {.width = 0, .height = 0};
     int used = 0;
     if (sscanf(text, "%lfx%lf %n", &env.width, &env.height, &used) < 2) {
         puts("bad case");
         return;
+    }
+    // `WIDTHxHEIGHT dark ...`: the person's scheme is dark.
+    if (strncmp(text + used, "dark ", 5) == 0) {
+        env.dark = true;
+        used += 5;
     }
     puts(garb_media_text_matches(text + used, env) ? "true" : "false");
 }
@@ -432,7 +437,7 @@ static void print_skips(const garb_cascade_t *c)
 // `skips`, what the cascade passed over.
 static void cascade(const char *html, size_t hlen, const char *viewport, bool skips)
 {
-    garb_env_t env = {800, 600};
+    garb_env_t env = {.width = 800, .height = 600};
     if (viewport != NULL)
         sscanf(viewport, "%lfx%lf", &env.width, &env.height);
     hlen = split_supplied(html, hlen);
@@ -475,7 +480,7 @@ static void parse_all(const char *text, size_t len)
     // The whole sheet cascaded over a small page, custom properties and a
     // style attribute included.
     garb_sheet_in_t in = {.sheet = &r};
-    garb_env_t env = {800, 600};
+    garb_env_t env = {.width = 800, .height = 600};
     garb_cascade_free(garb_cascade(&in, 1, s_sweep_doc, env));
     for (int32_t i = 0; i < r.nitems; i++) {
         const garb_rule_t *rule = r.items[i].rule;
@@ -824,7 +829,7 @@ static char *cascade_answer(const char *text, size_t len, bool *incomplete)
     garb_parsed_t r;
     (void)garb_parse_sheet((const uint8_t *)text, len, NULL, NULL, &r);
     garb_sheet_in_t in = {.sheet = &r};
-    garb_env_t env = {800, 600};
+    garb_env_t env = {.width = 800, .height = 600};
     garb_cascade_t *c = garb_cascade(&in, 1, s_sweep_doc, env);
     size_t need = garb_cascade_dump(c, s_sweep_doc, NULL, 0) + 1;
     char *out = malloc(need);
