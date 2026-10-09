@@ -105,6 +105,7 @@ From the repository root:
 ```sh
 python3 tools/check_bearssl_import.py
 python3 tools/test_bearssl_host.py
+python3 tools/test_tls13_vectors_host.py
 make -C userland
 python3 tools/audit_bearssl.py
 make
@@ -135,6 +136,17 @@ Compare its `DIGEST` line with the hosted reference output.
 The fixture owns its large contexts/buffers on the heap. Compiler `.su` files
 record individual core stack frames; those sizes are not whole-call-chain
 bounds or a production connection-cap measurement.
+
+The private TLS 1.3 schedule and record helpers are included in the foundation
+archive. `tools/tls13_vectors.py` embeds the public RFC 8448 sections 3 and 5
+traces and generates `test/tls13_vectors.h`; `--check` detects stale output.
+`test_tls13_vectors_host.py` checks those traces and independent Python
+`hashlib`/`cryptography` expectations under ASan/UBSan. It accepts
+`--foundation PATH/adapted/core.a` to reuse a successful foundation run and
+`--output PATH` to retain artifacts. The host needs the Python `cryptography`
+package. These helpers do not select TLS 1.3 through the public library;
+handshake integration and interoperability belong to S2 of
+[TLS13.md](../../docs/design/pending/TLS13.md).
 
 Physical-hardware runs, TLS interoperability, certificate-policy coverage,
 fuzzing, and production entropy integration are not established by this slice.
