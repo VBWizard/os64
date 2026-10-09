@@ -212,9 +212,11 @@ failure cleanup waiting indefinitely.
 
 ## TLS and identity policy
 
-The initial profile is a **TLS 1.2 client**. BearSSL's published
+The initial profile below is a **TLS 1.2 client**; the default client now uses
+the TLS 1.3 engine described in [TLS13.md](../pending/TLS13.md), with an
+explicit fresh-connection fallback to this BearSSL profile. BearSSL's published
 [TLS 1.3 status](https://bearssl.org/tls13.html) says that TLS 1.3 is not
-implemented. A TLS-1.3-only origin is outside this profile; a handshake failure
+implemented. A TLS-1.3-only origin uses the new engine; a handshake failure
 must not trigger HTTP downgrade or certificate bypass.
 
 Proposed cipher suites: ECDHE_RSA and ECDHE_ECDSA with AES-128-GCM,

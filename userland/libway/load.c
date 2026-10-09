@@ -399,6 +399,9 @@ bool way_open(way_leg_t *s, const char *url, const os64_page_request_t *request,
     }
     out->fetch = f;
     head_copy(&out->head, head, html ? WAY_BODY_HTML : WAY_BODY_TEXT);
+    const os64_fetch_detail_t *detail = os64_fetch_detail(f);
+    out->head.tls_version = detail->tls_version;
+    out->head.tls_fallback = detail->tls_fallback;
     os64_strcopy(out->asked, sizeof(out->asked), url);
     return true;
 }

@@ -76,7 +76,7 @@ static tls_engine_config config(policy *p)
 {
     static const tls_name alpn[] = {{"http/1.1", 8}};
     return (tls_engine_config){
-        .hostname = {"ExAmPlE.TeSt", 12}, .alpn = alpn, .alpn_count = 1, .epoch = -1,
+        .protocol = OS64_TLS_PROTOCOL_TLS12, .hostname = {"ExAmPlE.TeSt", 12}, .alpn = alpn, .alpn_count = 1, .epoch = -1,
         .entropy = entropy, .entropy_context = p,
         .validator = {.create = create_peer, .destroy = destroy_peer, .context = p}
     };

@@ -502,6 +502,7 @@ static void tls_snapshot(os64_fetch_t *f)
     f->detail.tls = f->io.error.status;
     f->detail.tls_policy = f->io.error.policy_reason;
     f->detail.tls_engine = f->io.error.upstream_error;
+    f->detail.tls_version = f->io.error.version;
 }
 
 static os64_fetch_status_t drop_connection(os64_fetch_t *f, os64_fetch_status_t status)
@@ -593,27 +594,37 @@ static os64_fetch_status_t ask(os64_fetch_t *f)
         f->detail.dial_port = peerPort;
         f->detail.dial_hop = f->head.hops;
 
-        int64_t conn = os64_dial(dialstring);
-        if (cancelled(f)) {
-            if (conn >= 0)
-                os64_close((int32_t)conn);
-            return OS64_FETCH_INTERRUPTED;
-        }
-        if (conn < 0) {
-            f->detail.dial = conn;
-            return OS64_FETCH_DIAL_FAILED;
-        }
-
         const os64_tls_name_t alpn = {"http/1.1", 8};
         os64_tls_config_t config = {
             .hostname = {f->current.host, os64_strlen(f->current.host)},
             .alpn = &alpn, .alpn_count = 1, .trust = f->trust
         };
-        if (!fetch_transport_open(&f->io, (int32_t)conn, encrypted ? &config : NULL,
-                                  f->opt.idle_ms, cancel_predicate, f)) {
-            // fetch_transport_open closed the handle itself on failure.
+        f->detail.tls_version = 0;
+        f->detail.tls_fallback = false;
+        for (;;) {
+            int64_t conn = os64_dial(dialstring);
+            if (cancelled(f)) {
+                if (conn >= 0) os64_close((int32_t)conn);
+                return OS64_FETCH_INTERRUPTED;
+            }
+            if (conn < 0) {
+                f->detail.dial = conn;
+                return OS64_FETCH_DIAL_FAILED;
+            }
+            if (fetch_transport_open(&f->io, (int32_t)conn, encrypted ? &config : NULL,
+                                     f->opt.idle_ms, cancel_predicate, f)) {
+                tls_snapshot(f);
+                break;
+            }
+            // The failed adapter has closed its handle. A recognized 1.2
+            // ServerHello permits one fresh authenticated Bear connection;
+            // alerts, certificate failures and timeouts do not permit retry.
             tls_snapshot(f);
-            return cancelled(f) ? OS64_FETCH_INTERRUPTED : OS64_FETCH_TLS_FAILED;
+            if (cancelled(f)) return OS64_FETCH_INTERRUPTED;
+            if (!encrypted || config.protocol != OS64_TLS_PROTOCOL_DEFAULT ||
+                f->detail.tls != OS64_TLS_PEER_CHOSE_TLS12) return OS64_FETCH_TLS_FAILED;
+            config.protocol = OS64_TLS_PROTOCOL_TLS12;
+            f->detail.tls_fallback = true;
         }
         f->connected = true;
 

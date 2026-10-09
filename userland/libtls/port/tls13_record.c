@@ -6,6 +6,7 @@ _Static_assert(TLS13_SEND_MAX >= 5 + 16384 + 1 + 16, "TLS 1.3 send record capaci
 int tls13_record_init(tls13_record *r, const tls13_suite *s, const void *key, const void *iv)
 {
     if (!r || !s || !key || !iv || tls13_suite_find(s->id) != s) return BR_ERR_BAD_PARAM;
+    if (r->error) return r->error;
     unsigned char k[TLS13_KEY_MAX] = {0}, v[TLS13_IV_SIZE];
     os64_memcpy(k, key, s->key_len); os64_memcpy(v, iv, sizeof v);
     tls13_wipe(r, sizeof *r);

@@ -231,6 +231,7 @@ static void handshake(const policy_case *c)
 {
     os64_tls_trust *s = trust(c->root);
     tls_engine_config cfg = {
+        .protocol = OS64_TLS_PROTOCOL_TLS12,
         .hostname = {c->hostname, strlen(c->hostname)}, .epoch = ((int64_t)c->days - 719528) * 86400,
         .entropy = entropy, .validator = os64_tls_policy_factory(s)
     };

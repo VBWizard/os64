@@ -78,6 +78,7 @@ typedef struct {
     tls_status (*entropy)(void *context, unsigned char *out, size_t length);
     void *entropy_context;
     tls_validator_factory validator;
+    os64_tls_protocol_t protocol;
 } tls_engine_config;
 
 // Each connection has one serialized owner. Inputs are borrowed for this
@@ -89,7 +90,7 @@ tls_state os64_tls_engine_state(os64_tls_engine *engine);
 
 // Copy one accepted prefix. A status and a nonzero count can coexist when
 // processing those bytes reaches a terminal state. Preserve that count.
-// Zero-length calls do not acknowledge a BearSSL buffer. Programming errors
+// Zero-length calls do not acknowledge an engine buffer. Programming errors
 // return BAD_ARGUMENT without poisoning an otherwise live connection.
 tls_transfer os64_tls_engine_feed(os64_tls_engine *engine, const void *data, size_t length);
 tls_transfer os64_tls_engine_take(os64_tls_engine *engine, void *data, size_t length);
@@ -99,7 +100,7 @@ tls_status os64_tls_engine_flush(os64_tls_engine *engine);
 
 // Close stops new plaintext writes. Drain already buffered inbound plaintext
 // and outgoing records before starting the close exchange. Bytes arriving
-// after that point follow BearSSL's close semantics (application data discard).
+// after that point are discarded if they contain application data.
 // Closing during the initial handshake cancels the connection.
 tls_status os64_tls_engine_close(os64_tls_engine *engine);
 // EOF forbids new ciphertext input/writes, but permits draining authenticated
@@ -107,4 +108,8 @@ tls_status os64_tls_engine_close(os64_tls_engine *engine);
 tls_status os64_tls_engine_eof(os64_tls_engine *engine);
 // Abort stops all I/O. The first terminal reason is retained.
 tls_status os64_tls_engine_abort(os64_tls_engine *engine, tls_status reason);
+#ifdef OS64_TLS13_TEST
+// Host-only access to the private TLS 1.3 parser fixture; absent from the ABI.
+void *os64_tls_engine_test_context(os64_tls_engine *engine);
+#endif
 #endif

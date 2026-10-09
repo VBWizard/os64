@@ -648,7 +648,8 @@ def policy(archive, work):
         "-I" + str(BASE / "upstream/inc"), "-I" + str(ROOT / "userland/libos64/include"),
         "-I" + str(ROOT / "abi/include"), "-I" + str(work),
         str(BASE / "port/certificate_der.c"), str(BASE / "port/certificate_policy.c"),
-        str(BASE / "port/client_engine.c"), str(BASE / "port/client_profile.c"),
+        str(BASE / "port/tls13_schedule.c"), str(BASE / "port/tls13_record.c"),
+        str(BASE / "port/tls13_handshake.c"), str(BASE / "port/client_engine.c"), str(BASE / "port/client_profile.c"),
         str(ROOT / "tools/test_tls_policy_host.c"), str(archive), "-o", str(executable)], check=True)
     subprocess.run([executable], check=True)
 

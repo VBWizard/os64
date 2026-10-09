@@ -827,3 +827,159 @@ with leak detection enabled; their differential outputs still match.
 ASan/UBSan remained active throughout. S1's evidence is offline
 foundation/vector evidence; live TLS 1.3 interoperability and guest
 acceptance remain the S2/S3 gates above.
+
+## S2 as built — client engine and host integration (2026-10-09, Quinn)
+
+Built on `codex/tls13-s2`, stacked on S1 at `10944de5` (PR #241).
+
+`port/tls13_handshake.c` implements the buffer/ack engine beside BearSSL.
+The public byte wrapper owns the union and retains the accepted-prefix,
+handshake budget, EOF, close and sticky-terminal rules. Its default selects
+TLS 1.3; explicit `OS64_TLS_PROTOCOL_TLS12` selects the existing profile.
+The certificate validator, trust snapshot, time and entropy adapters are
+shared. No new kernel service or public crypto operation was added.
+
+The engine implements the offered profile, single HRR (including cookie-only
+retry), streamed Certificate and NewSessionTicket framing, ECDSA/RSA-PSS
+CertificateVerify, both Finished messages, directional application secrets,
+KeyUpdate and bidirectional close_notify. A separate 16 KiB accepted-output
+buffer lets a requested KeyUpdate precede buffered application bytes without
+losing them or encrypting them under the old key. The group descriptors drive
+both the offered group list and peer-share validation. Record errors remain
+latched across attempted rekey, incorporating Fable's S1 review note.
+
+Compatibility CCS follows RFC 8446 appendix D.4: immediately before CH2 on
+the HRR path, otherwise before the encrypted client flight. No second CCS is
+sent after CH2. This specifies the HRR placement left implicit by step 8
+above; the compatibility-mode ruling is unchanged. Outer CCS still takes the
+plaintext parser during the permitted encrypted-handshake window.
+
+Libfetch retries once, on a fresh dial to the same peer, only after
+`PEER_CHOSE_TLS12`. It keeps the hostname and trust snapshot and obtains fresh
+entropy for BearSSL. Its detail struct records the negotiated version and
+retry flag. Libway carries those facts to yonder; os64get gains `-v` to show
+them. Certificate/protocol errors, peer alerts, timeouts and truncation do not
+permit retry. The existing os64get ELF audit had stale dependencies from
+before the libfetch migration; it now checks os64get → libfetch → libtls/libgzip.
+The public structs grow and their consumers must be rebuilt. The public
+library still exports 31 operations and imports the same 15 OS functions; its production archive contains 72 selected sources. The audit
+also excludes the parser-fuzz seam from production.
+
+### Memory and build measurements
+
+Measured from the freestanding x86_64 debug information:
+
+| Object | Bytes |
+|---|---:|
+| TLS 1.3 engine | 59,912 |
+| Byte wrapper including the protocol union, hostname and ALPN | 61,320 |
+| Owned policy validator | 36,264 |
+| Connection plus validator, excluding shared trust | 97,584 |
+| Shared trust object, excluding its anchor storage | 18,456 |
+
+The 64 KiB engine target includes the additional accepted-output buffer.
+The validator and shared trust are separate allocations; 64 KiB is not a
+claim about their combined footprint. The host coverage counter adds eight
+bytes to the test-only wrapper (61,328). The engine allocation is checked for
+complete wiping before free; the validator and trust contain public
+certificate data and their allocation lifetime is checked separately.
+
+The compiler's largest new individual handshake frame is 736 bytes in
+`server_hello`; CertificateVerify uses a bounded 608-byte frame. These are
+individual frames, not cumulative call-stack bounds. The resulting
+`libtls.so` has 157,458 text/rodata bytes, 2,008 data bytes and zero BSS by
+`x86_64-elf-size`. The full userland build, including yonder, succeeds.
+
+### Host acceptance
+
+`tools/test_tls13_engine_host.py` generates a fixture RSA root and RSA-2048 /
+ECDSA-P256 leaves with PKCS#1 certificate signatures. Its C harness links
+OpenSSL **3.0.13** and drives memory BIOs through the actual public byte API,
+with the production certificate-policy implementation. Memory BIOs replace
+the proposed socket/subprocess peer orchestration: they expose the same
+OpenSSL server handshake, group, ticket, KeyUpdate and client-certificate
+controls directly, while keeping ciphertext fragmentation deterministic.
+Socket/guest acceptance remains S3. The host needs OpenSSL development files
+and Python `cryptography` (tested with 41.0.7); host C is GCC 13.3.0.
+
+The passing cases cover:
+
+- Exact ClientHello framing, suites, extension order, signature lists,
+  versions, ALPN and X25519/P-256 shares. All **18** suite × leaf × group
+  combinations (X25519, P-256, P-384 HRR), 70,013 bytes each way, ciphertext
+  fragments of 1/37/4096 bytes and one-byte plaintext reads. Additional real
+  handshakes verify ECDSA P-384/P-521 and RSA-PSS SHA-384/SHA-512 with a
+  SHA-256 cipher suite. Requested and
+  unrequested KeyUpdate carry further data across both directional switches.
+- Cookie-only HRR retaining the original hello/shares, duplicate/unchanged/
+  unsupported HRR, session echo, changed final suite and trailing bytes after
+  ServerHello. Both downgrade sentinels are refused; stripping TLS 1.3 from
+  the offer to a real OpenSSL peer produces its own DOWNGRD01 marker and a
+  protocol refusal. Real TLS 1.2 peers, including PKCS#1-only RSA, permit a
+  fresh authenticated Bear connection.
+- Valid-tag tampered CertificateVerify and Finished, forbidden PKCS#1 or
+  mismatched signing key, early application data, malformed/unoffered EE
+  selections, fragmented headers, alert/ticket interleaving, trailing bytes
+  after Finished/KeyUpdate, and KeyUpdate ordering before accepted plaintext.
+- For each suite, independently sealed inner plaintext of 16,385 bytes
+  passes; 16,386 bytes with padding fails as LIMIT/record_overflow without
+  exposing plaintext. Bad tags, encrypted CCS and CCS after Finished fail.
+  OpenSSL without compatibility CCS and without tickets also completes.
+- Wrong hostname, expiry and untrusted chain fail at the shared certificate
+  gate. A scripted valid PSS-signed certificate is refused with the policy
+  signature reason; PSS CertificateVerify over the accepted RSA leaf passes.
+  Certificate streaming across one-byte records, per-entry extension refusal,
+  malformed CertificateRequest and duplicate ticket extensions are covered.
+  Optional client authentication sends an empty Certificate; a peer requiring
+  one returns certificate_required, surfaced as a terminal alert.
+- Both close orders, buffered plaintext and unflushed output at bare EOF,
+  application records discarded after local close, abort during pending
+  handshake output, independent interleaved clients, failed constructor
+  allocations, proactive write-key rollover, and the 8 KiB message / 1 MiB
+  accepted-ciphertext caps through the public interface with sticky status.
+
+The surrounding regressions also pass: S1's 165 vector comparisons and
+independent record tests; all six TLS 1.2 engine suites; public OS inputs;
+367 policy chains, 61 anchor cases and 19 handshake gates; libfetch's 833
+checks with two chunk seeds; libway's 248 checks and 126 fetch integration
+checks; TLS transport and fetch transport suites. The BearSSL import/vector
+checks and both private/public ELF audits pass. Leak detection remains
+**enabled**, alongside ASan/UBSan, for the host acceptance and fuzz runs
+outside the sandbox; the existing adapted archive from S1 was reused at the
+same pin/configuration.
+
+### Fuzz evidence
+
+The raw-flight and authenticated-parser campaigns use twelve captured
+flights: three suites × two leaf types × ordinary/P-384 retry. Captures
+include CertificateRequest, tickets and requested KeyUpdate. The test-only
+parser entry point is absent from the production ELF. Each mutation checks
+bounded accepted prefixes, the pre-Finished plaintext gate, live or sticky
+terminal state, allocation balance and engine wiping; sanitizers check memory
+accesses and leak cleanup. The application-transfer cases independently check
+byte-for-byte delivery across fragmentation and key changes.
+
+The completed run used **1,800 seconds**, initial seed **147731**, and
+**160,087 mutations**: 80,044 raw-record cases and 80,043 authenticated-parser
+cases. It produced 119,516 terminal outcomes and 40,571 live outcomes. The
+coverage mask was **0x110a914**, reaching ServerHello/HRR, EncryptedExtensions,
+CertificateRequest, Certificate, CertificateVerify, Finished,
+NewSessionTicket and KeyUpdate. ASan, UBSan and the final LeakSanitizer scan
+completed without findings (exit 0); there was no crash seed to add as a
+regression. The local run log is `/tmp/tls13-s2-fuzz-30m.log`.
+
+This run used the initial capture runner with ECDSA-signed fixture chains;
+the final acceptance matrix also covers PKCS#1-signed chains and the
+PSS-signed-chain refusal. Production engine sources were unchanged during
+the run. The subsequent harness retention/replay refinement was separately
+smoke-tested; it does not change the production parser or record layer.
+`tools/fuzz_tls13_host.py` retains fixture keys, raw flights, native replay
+records, executable and log. It writes each case's seed and iteration before
+executing it, including for sanitizer failures; `--replay DIRECTORY` reruns
+that exact case using the retained executable/corpus. Replay artifacts are
+trusted local test files. The retention and exact-case replay path also
+passed a separate smoke run.
+
+S2 does not claim guest networking or live-site acceptance. Those checks,
+the DEBTS replacement and the final move of this design remain S3; Fable and
+then Opus review this engine slice.

@@ -17,7 +17,7 @@ typedef enum {
     OS64_TLS_OK, OS64_TLS_NEED_PROGRESS, OS64_TLS_CLEAN_EOF, OS64_TLS_BAD_ARGUMENT, OS64_TLS_NO_MEMORY,
     OS64_TLS_LIMIT, OS64_TLS_ENTROPY_UNAVAILABLE, OS64_TLS_BAD_TIME, OS64_TLS_CERTIFICATE,
     OS64_TLS_UNSUPPORTED, OS64_TLS_PROTOCOL, OS64_TLS_TRUNCATED, OS64_TLS_TRANSPORT, OS64_TLS_TIMEOUT,
-    OS64_TLS_CANCELLED
+    OS64_TLS_CANCELLED, OS64_TLS_PEER_CHOSE_TLS12
 } os64_tls_status_t;
 typedef enum {
     OS64_TLS_POLICY_OK, OS64_TLS_POLICY_DER, OS64_TLS_POLICY_LIMIT, OS64_TLS_POLICY_DUPLICATE,
@@ -31,6 +31,7 @@ enum {
     OS64_TLS_RECV_PLAIN = 1u << 2, OS64_TLS_SEND_PLAIN = 1u << 3,
     OS64_TLS_HANDSHAKE_DONE = 1u << 4, OS64_TLS_CLOSING = 1u << 5
 };
+typedef enum { OS64_TLS_PROTOCOL_DEFAULT, OS64_TLS_PROTOCOL_TLS12 } os64_tls_protocol_t;
 typedef struct { os64_tls_status_t status; size_t transferred; } os64_tls_transfer_t;
 typedef struct {
     os64_tls_status_t status;
@@ -38,6 +39,7 @@ typedef struct {
     int upstream_error; // Opaque diagnostic detail; its values are not a stable ABI.
     os64_tls_policy_reason_t policy_reason;
     const char *alpn; // Client-owned; valid until os64_tls_free, or NULL.
+    uint16_t version; // 0 before selection, 0x0303 (TLS 1.2) or 0x0304 (TLS 1.3).
 } os64_tls_state_t;
 typedef struct { const char *data; size_t length; } os64_tls_name_t;
 
@@ -69,6 +71,7 @@ typedef struct {
     const os64_tls_name_t *alpn; // Up to 8 names, 255 bytes each, 1024 total.
     size_t alpn_count;
     os64_tls_trust *trust; // Borrowed sealed snapshot; retained by the client.
+    os64_tls_protocol_t protocol; // DEFAULT tries TLS 1.3; TLS12 explicitly selects Bear.
 } os64_tls_config_t;
 
 // One serialized owner per client. Creation samples OS UTC and fresh entropy;

@@ -28,7 +28,7 @@ tls_status os64_tls_engine_create_os(const tls_os_config *config, os64_tls_engin
     tls_engine_config engine = {
         .hostname = config->hostname, .alpn = config->alpn,
         .alpn_count = config->alpn_count, .epoch = now.epoch,
-        .entropy = entropy, .validator = os64_tls_policy_factory(config->trust)
+        .entropy = entropy, .validator = os64_tls_policy_factory(config->trust), .protocol = config->protocol
     };
     return os64_tls_engine_create(&engine, out);
 }

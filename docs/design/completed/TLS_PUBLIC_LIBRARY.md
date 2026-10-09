@@ -20,8 +20,19 @@ OS entropy using the production-input constructor. Each client has one
 serialized owner. A failed creation clears the output and releases partial
 state. The caller may release its snapshot after successful creation.
 
+`config.protocol = OS64_TLS_PROTOCOL_DEFAULT` (zero) selects TLS 1.3;
+`OS64_TLS_PROTOCOL_TLS12` selects BearSSL. `state.version` is zero before
+selection, `0x0304` for TLS 1.3, or `0x0303` for TLS 1.2. A validated legacy
+ServerHello ends the default client with `OS64_TLS_PEER_CHOSE_TLS12`; the byte
+engine never retries. Libfetch can then open one fresh connection with explicit
+TLS 1.2 selection, the same hostname and trust snapshot, and fresh entropy.
+Other failures do not authorize fallback. Downgrade sentinels are protocol
+errors. Fetch diagnostics retain the selected version and whether this retry
+occurred; os64get's `-v` option and yonder display them.
+
 Transfers preserve the engine's accepted-prefix count, including when that
-prefix reaches an error. Plaintext is available only after policy acceptance.
+prefix reaches an error. Plaintext is available only after policy acceptance
+and verified handshake authentication.
 The caller owns pending ciphertext after taking it and must retain any suffix
 across short writes. EOF, orderly close, abort and destruction preserve the
 reviewed engine behavior. No byte operation waits for network I/O; a caller
@@ -49,12 +60,11 @@ pre-authentication plaintext refusal and sticky aborts. A controlled host TLS
 peer exercises the public wrappers across authenticated application traffic.
 
 The TCP API provides finite read and write
-[patience](abi/include/os64/syscall_numbers.h). The [transport driver](TLS_TRANSPORT.md)
+[patience](../../../abi/include/os64/syscall_numbers.h). The [transport driver](TLS_TRANSPORT.md)
 combines them with retained handshake/shutdown budgets and preserves pending
-ciphertext across short writes. Public-root distribution and HTTPS
-integration remain separate work. This library makes the byte API usable
-without claiming that an os64 application can yet make a bounded native
-HTTPS request.
+ciphertext across short writes. Libfetch owns HTTPS requests, redirects and
+the bounded TLS 1.2 retry; the byte library owns protocol progress and
+authentication.
 
 Run `python3 tools/audit_tls.py` for the public ELF boundary and
 `python3 tools/audit_bearssl.py` for the private foundation boundary.

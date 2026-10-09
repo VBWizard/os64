@@ -7,6 +7,7 @@ typedef struct {
     const tls_name *alpn;
     size_t alpn_count;
     os64_tls_trust *trust;
+    os64_tls_protocol_t protocol;
 } tls_os_config;
 
 // Private constructor using /dev/random, UTC time and the certificate policy.

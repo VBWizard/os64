@@ -3,7 +3,8 @@
 # extraction leaves unused objects out of bearssltest.
 TLS_CLIENT_SOURCES := libtls/port/client_engine.c libtls/port/client_profile.c \
                       libtls/port/certificate_policy.c libtls/port/certificate_der.c \
-                      libtls/port/tls13_schedule.c libtls/port/tls13_record.c
+                      libtls/port/tls13_schedule.c libtls/port/tls13_record.c \
+                      libtls/port/tls13_handshake.c
 include libtls/sources.mk
 BEARSSL_OBJS := $(patsubst %,$(OBJ)/pic/%.o,$(BEARSSL_SOURCES) $(TLS_CLIENT_SOURCES)) \
                 $(OBJ)/pic/libtls/port/runtime.c.o

@@ -16,6 +16,7 @@ def run(archive, work, public=False):
     executable = work / "tls-inputs"
     sources = [BASE / "port" / name for name in (
         "platform_inputs.c", "client_engine.c", "client_profile.c",
+        "tls13_schedule.c", "tls13_record.c", "tls13_handshake.c",
         "certificate_policy.c", "certificate_der.c", "trust_pem.c")]
     extra = []
     if public:

@@ -6,11 +6,12 @@ static const tls13_suite suites[] = {
     {0x1302, &br_sha384_vtable, 48, 32, false},
     {0x1303, &br_sha256_vtable, 32, 32, true}
 };
-static const tls13_group groups[] = {
+const tls13_group tls13_groups[] = {
     {29, BR_EC_curve25519, 32, 32},
     {23, BR_EC_secp256r1, 65, 32},
     {24, BR_EC_secp384r1, 97, 48}
 };
+const size_t tls13_group_count = sizeof tls13_groups / sizeof *tls13_groups;
 const tls13_suite *tls13_suite_find(uint16_t id)
 {
     for (size_t i = 0; i < sizeof suites / sizeof *suites; i++)
@@ -25,8 +26,8 @@ static bool valid_suite(const tls13_suite *s)
 }
 const tls13_group *tls13_group_find(uint16_t id)
 {
-    for (size_t i = 0; i < sizeof groups / sizeof *groups; i++)
-        if (groups[i].id == id) return &groups[i];
+    for (size_t i = 0; i < tls13_group_count; i++)
+        if (tls13_groups[i].id == id) return &tls13_groups[i];
     return NULL;
 }
 void tls13_wipe(void *data, size_t length)
@@ -155,8 +156,8 @@ int tls13_shared_secret(const tls13_group *g, const void *scalar, size_t scalar_
                          const void *peer, size_t peer_len, void *out)
 {
     bool valid = false;
-    for (size_t i = 0; i < sizeof groups / sizeof *groups; i++)
-        if (g == &groups[i]) valid = true;
+    for (size_t i = 0; i < tls13_group_count; i++)
+        if (g == &tls13_groups[i]) valid = true;
     if (!valid || !scalar || !peer || !out || scalar_len != g->secret_len || peer_len != g->point_len)
         return BR_ERR_BAD_PARAM;
     unsigned char point[97], zero[48] = {0};

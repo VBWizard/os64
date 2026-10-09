@@ -73,6 +73,7 @@ typedef struct {
     size_t      early_after;   // expose response once this many request bytes arrive
     size_t      interim_len;   // stop here until the complete upload arrives
     bool        tls_bad_prefix; // authenticated bytes accompanied by protocol failure
+    os64_tls_status_t tls_default_error, tls12_error;
     bool        tls_truncate;  // (https) the record layer ends without close_notify
 } peer_t;
 
@@ -211,7 +212,7 @@ int64_t os64_write_for(int32_t h, const void *buf, size_t n, uint64_t ms)
 
 // ── TLS: the transport stubbed over the same connections ────────────────
 
-struct os64_tls_transport { int32_t handle; os64_tls_status_t status; bool closing; };
+struct os64_tls_transport { int32_t handle; os64_tls_status_t status; bool closing; uint16_t version; };
 static int tls_creates, tls_frees, trust_loads, trust_frees;
 static os64_tls_trust *fake_trust = (os64_tls_trust *)"trust";
 os64_tls_status_t os64_tls_transport_create(const os64_tls_config_t *c, int32_t h,
@@ -222,7 +223,9 @@ os64_tls_status_t os64_tls_transport_create(const os64_tls_config_t *c, int32_t 
     assert(c && c->trust != NULL);
     tls_creates++;
     struct os64_tls_transport *t = calloc(1, sizeof(*t));
-    t->handle = h; t->status = OS64_TLS_OK;
+    t->handle = h;
+    t->status = c->protocol == OS64_TLS_PROTOCOL_TLS12 ? conns[h-100].peer->tls12_error : conns[h-100].peer->tls_default_error;
+    t->version = c->protocol == OS64_TLS_PROTOCOL_TLS12 ? 0x0303 : 0x0304;
     *out = t;
     return OS64_TLS_OK;
 }
@@ -230,7 +233,7 @@ os64_tls_state_t os64_tls_transport_state(os64_tls_transport *t)
 {
     return (os64_tls_state_t){ .status = t->status, .flags = OS64_TLS_HANDSHAKE_DONE | OS64_TLS_SEND_PLAIN |
                                    (early_ready(&conns[t->handle - 100]) ? OS64_TLS_RECV_PLAIN | OS64_TLS_SEND_CIPHER : 0),
-                               .policy_reason = 0, .upstream_error = 0, .alpn = "http/1.1" };
+                               .policy_reason = 0, .upstream_error = 0, .alpn = "http/1.1", .version = t->version };
 }
 os64_tls_status_t os64_tls_transport_step(os64_tls_transport *t, uint64_t ms)
 {
@@ -1473,6 +1476,31 @@ static void case_keep(void)
     }
 }
 
+static void case_tls_version_fallback(void)
+{
+    reset();
+    peer_t *p=peer_add("version.test",443,"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+    p->tls_default_error=OS64_TLS_PEER_CHOSE_TLS12;
+    os64_fetch_t *f=os64_fetch_open("https://version.test/",NULL);
+    CHECK(os64_fetch_status(f)==OS64_FETCH_OK && dials==2 && closes==1 && tls_creates==2);
+    CHECK(os64_fetch_detail(f)->tls_fallback && os64_fetch_detail(f)->tls_version==0x0303);
+    CHECK(trust_loads==1 && !strcmp(last_dial,"tcp!version.test!443"));
+    os64_fetch_close(f); CHECK(closes==2 && tls_frees==2);
+    const os64_tls_status_t failures[]={OS64_TLS_CERTIFICATE,OS64_TLS_PROTOCOL,OS64_TLS_TIMEOUT,OS64_TLS_TRUNCATED};
+    for (size_t i=0;i<sizeof failures/sizeof *failures;i++) {
+        reset(); p=peer_add("version.test",443,""); p->tls_default_error=failures[i];
+        f=os64_fetch_open("https://version.test/",NULL);
+        CHECK(os64_fetch_status(f)==OS64_FETCH_TLS_FAILED && dials==1 && closes==1);
+        CHECK(os64_fetch_detail(f)->tls==failures[i] && !os64_fetch_detail(f)->tls_fallback);
+        os64_fetch_close(f);
+    }
+    reset(); p=peer_add("version.test",443,"");
+    p->tls_default_error=p->tls12_error=OS64_TLS_PEER_CHOSE_TLS12;
+    f=os64_fetch_open("https://version.test/",NULL);
+    CHECK(os64_fetch_status(f)==OS64_FETCH_TLS_FAILED && dials==2 && closes==2);
+    CHECK(os64_fetch_detail(f)->tls_fallback); os64_fetch_close(f);
+}
+
 int main(int argc, char **argv)
 {
     unsigned seed = argc > 1 ? (unsigned)strtoul(argv[1], NULL, 10) : 12345u;
@@ -1485,6 +1513,7 @@ int main(int argc, char **argv)
     case_cut_and_limits();
     case_redirects();
     case_https_and_downgrade();
+    case_tls_version_fallback();
     case_proxy();
     case_failures();
     case_content_type();

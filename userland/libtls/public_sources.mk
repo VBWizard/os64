@@ -6,6 +6,15 @@ LIBTLS_CORE_SOURCES := \
     libtls/port/client_engine.c \
     libtls/port/client_profile.c \
     libtls/port/runtime.c \
+    libtls/port/tls13_schedule.c \
+    libtls/port/tls13_record.c \
+    libtls/port/tls13_handshake.c \
+    libtls/upstream/src/aead/gcm.c \
+    libtls/upstream/src/ec/ec_keygen.c \
+    libtls/upstream/src/ec/ec_pubkey.c \
+    libtls/upstream/src/rsa/rsa_i31_pss_vrfy.c \
+    libtls/upstream/src/rsa/rsa_pss_sig_unpad.c \
+    libtls/upstream/src/hash/mgf1.c \
     libtls/upstream/src/codec/ccopy.c \
     libtls/upstream/src/codec/dec32be.c \
     libtls/upstream/src/codec/dec32le.c \
