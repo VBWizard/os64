@@ -122,8 +122,8 @@
     },
     {
       "path": "patches/0009-browser-name-not-a-function.patch",
-      "sha256": "af5fe8d13cf8e5afe3c474449acb6b203d9e5c5b1b97b7b95ed73cc46e3bf05c",
-      "reason": "Name the method in \"not a function\" only for the call whose callee is the method just fetched and found not callable, in the same frame and stack slot; every other call keeps the plain message."
+      "sha256": "4d57ff4219d4e4e9dbccbdb1d1b0b193d8767eae0ae4c2b8e2569ee9f3315012",
+      "reason": "Name the method in \"not a function\" only for a call proved to be the one its fetch was for: same frame, stack slot and value, and straight-line bytecode between the fetch and the call; every other call keeps the plain message."
     }
   ],
   "configuration_scope": "Atomics-disabled, stack-checked target engine and complete standalone embedding interface; slice review/merge and runner integration are tracked in JAVASCRIPT_TASKS.md"

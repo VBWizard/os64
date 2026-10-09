@@ -270,12 +270,13 @@ now worth trusting.
 - **An old IE hack is a dialect**, like a prefixed name: a `css-value`
   word holding a control character (`display: none\9`) is not counted.
 - **"not a function" names the method** (libjs patch 0009): a method a
-  call fetched and found not callable is remembered with the frame, stack
-  slot and value it was pushed as, and only the call whose callee is that
-  value there reads `'bogus' is not a function`. Every other callee, and
-  any exception, gets the plain message, so a name is never told of
-  another call (Quinn, #239). A page sees the longer message, and nothing
-  else changes.
+  call fetched and found not callable is remembered, and a call reads
+  `'bogus' is not a function` only when it is proved to be that fetch's
+  call: same frame, slot and value, and nothing but straight-line bytecode
+  between the fetch and the call. `o.bogus()` and `document.foo(1, el)`
+  are named; a call whose arguments call or branch keeps the plain
+  message, so a name is never told of another call (Quinn, #239, two
+  rounds). A page sees the longer message, and nothing else changes.
 - **`bytes:` was checked** after a P5 file matched the previous page's
   size exactly: two navigations in one window count their own bodies, and
   a case now guards it. The P5's match was most likely chance (the page
