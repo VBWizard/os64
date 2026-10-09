@@ -179,6 +179,20 @@ os64_dom_t *os64_dom_create(os64_js_runtime_t *runtime,
  * NULL restores the native Yonder identity; install/replace outside callbacks. */
 void os64_dom_set_user_agent(os64_dom_t *dom, const char *(*provider)(void *opaque), void *opaque);
 
+/* Owner-thread cookie provider for document.cookie (HTML § Cookies): `get`
+ * writes the cookie-string the page's script may read into `out`, at most
+ * `cap` bytes with the NUL, and answers the length written; `set` hears one
+ * string a script assigned, as a Set-Cookie value. With no provider the
+ * document is cookie-averse: it reads "" and an assignment does nothing.
+ * The callbacks must not enter JS. NULL removes it; install outside
+ * callbacks. */
+typedef struct {
+    size_t (*get)(void *opaque, char *out, size_t cap);
+    void (*set)(void *opaque, const char *text, size_t length);
+    void *opaque;
+} os64_dom_cookies_t;
+void os64_dom_set_cookies(os64_dom_t *dom, const os64_dom_cookies_t *cookies);
+
 /* Owner-thread census hook (YONDER_DIAGNOSTICS.md): `heard` is told each
  * name a lookup on window did not find, before the lookup answers as it
  * always does, so what the page sees is unchanged. The name is borrowed

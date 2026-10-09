@@ -111,6 +111,7 @@ struct os64_dom {
     DValue *invoke, *navigator, *style_prototype, *static_list;
     const char *(*user_agent)(void *opaque);
     void *user_agent_opaque;
+    os64_dom_cookies_t cookies;
     DValue *prototypes[D_PROTO_COUNT];
     DValue *buckets[D_BUCKETS];
     DQuery *queries;

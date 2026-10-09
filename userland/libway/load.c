@@ -498,6 +498,37 @@ static char *read_body(way_leg_t *s, way_opening_t *o, size_t cap, size_t *len, 
     return text;
 }
 
+// ── A page's script ─────────────────────────────────────────────────────
+
+// The page's address as the jar keeps cookies for it: an http or https
+// page only (any other has none), encrypted when https.
+static bool script_page(const char *page_url, os64_url_t *url, bool *encrypted)
+{
+    if (page_url == NULL || os64_url_parse(page_url, url) != OS64_URL_OK)
+        return false;
+    *encrypted = os64_streq(url->scheme, "https");
+    return *encrypted || os64_streq(url->scheme, "http");
+}
+
+size_t way_script_cookies(way_jar_t *jar, const char *page_url, char *out, size_t cap)
+{
+    os64_url_t url;
+    bool encrypted;
+    if (cap > 0)
+        out[0] = '\0';
+    if (!script_page(page_url, &url, &encrypted))
+        return 0;
+    return way_jar_script_cookies(jar, &url, encrypted, now_utc(), out, cap);
+}
+
+void way_script_cookie(way_jar_t *jar, const char *page_url, const char *text, size_t len)
+{
+    os64_url_t url;
+    bool encrypted;
+    if (script_page(page_url, &url, &encrypted))
+        way_jar_script_hear(jar, &url, encrypted, text, len, now_utc());
+}
+
 // ── Loading ─────────────────────────────────────────────────────────────
 
 bool way_load(way_leg_t *s, const char *url, const os64_page_request_t *request,

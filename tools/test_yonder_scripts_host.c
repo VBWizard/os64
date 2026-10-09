@@ -392,6 +392,19 @@ int64_t os64_conf_set(const char *file, const char *key, const char *value) {
 void os64_ui_settings_report(os64_ui_settings_t *dialog, const char *text) {
     (void)dialog; os64_strcopy(settings_report,sizeof(settings_report),text);
 }
+/* document.cookie's door, faked: the jar's rules are libway's and are tested
+ * there (test_way_jar.inc); here the window hands the page's address over
+ * and what a script reads and sets crosses intact. */
+static char fake_cookie_url[256], fake_cookie_set[256];
+static const char *fake_cookie_read="session=abc; theme=dark";
+size_t way_script_cookies(way_jar_t *jar, const char *page_url, char *out, size_t cap) {
+    (void)jar; snprintf(fake_cookie_url,sizeof(fake_cookie_url),"%s",page_url?page_url:"");
+    return (size_t)snprintf(out,cap,"%s",fake_cookie_read);
+}
+void way_script_cookie(way_jar_t *jar, const char *page_url, const char *text, size_t len) {
+    (void)jar; snprintf(fake_cookie_url,sizeof(fake_cookie_url),"%s",page_url?page_url:"");
+    snprintf(fake_cookie_set,sizeof(fake_cookie_set),"%.*s",(int)len,text);
+}
 void way_cache_enable(way_cache_t *cache, bool enabled) { (void)enabled; check(cache==NULL,"no test cache"); }
 void way_cache_set_cap(way_cache_t *cache, uint64_t cap) { (void)cap; check(cache==NULL,"no test cache"); }
 
@@ -1982,6 +1995,18 @@ static void loop_downgrade(void) {
 // What a script changed is what the page uses: a src resolves against the
 // document's base, a DOMContentLoaded edit reaches the arriving model, and
 // an image's default action finds the image again after its listener.
+/* document.cookie reads and sets the browser's cookies for the page's own
+ * address (the head's: http://fixture.test/final). */
+static void loop_document_cookie(void) {
+    fake_cookie_url[0]=fake_cookie_set[0]=0;
+    loop_page("<p id=out>x</p><script>document.getElementById('out').textContent=document.cookie;"
+        "document.cookie='seen=1; path=/';</script>");
+    check(loop_settle() && probe_text_is("out","session=abc; theme=dark"),
+        "document.cookie: a script reads the cookies the window hands it");
+    check(os64_streq(fake_cookie_set,"seen=1; path=/") && os64_streq(fake_cookie_url,"http://fixture.test/final"),
+        "document.cookie: a script's cookie goes to the jar for the page's own address");
+    loop_drop();
+}
 static void loop_script_changes_hold(void) {
     loop_page("<base href='http://assets.test/js/'><script src='app.js'></script>");
     check(loop_settle() && nscript_jobs==1,"review base: source fetch submitted");
@@ -2185,6 +2210,7 @@ static void loop_cases(void) {
     loop_handler_runtime_at_click();
     loop_arrival_follows_scripts();
     loop_script_changes_hold();
+    loop_document_cookie();
     loop_state_adopted();
     loop_typed_value();
     loop_downgrade();

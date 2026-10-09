@@ -161,6 +161,14 @@ typedef struct {
 way_leg_t way_leg(const way_session_t *session);
 way_leg_t way_leg_as(const way_session_t *session, const char *agent);
 
+// A PAGE'S SCRIPT's cookies (document.cookie), for the page at `page_url`,
+// at the system's clock: what it may read, at most `cap` bytes with the
+// NUL, answering the length written, and one cookie it sets ("name=value;
+// attributes", as a Set-Cookie value). The jar's script rules apply
+// (jar.h); a page that is not http or https reads "" and sets nothing.
+size_t way_script_cookies(way_jar_t *jar, const char *page_url, char *out, size_t cap);
+void way_script_cookie(way_jar_t *jar, const char *page_url, const char *text, size_t len);
+
 // ── The I/O half ────────────────────────────────────────────────────────
 //
 // A LOAD IN PIECES (docs/design/pending/DOM_D4.md). way_load is the four

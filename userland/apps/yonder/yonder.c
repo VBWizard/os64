@@ -3886,6 +3886,18 @@ static const char *script_user_agent(void *opaque)
     return g.way.agent != NULL ? g.way.agent : YONDER_AGENT;
 }
 
+// document.cookie: the browser's jar, for the page's own address
+// (libway's script door, which keeps HttpOnly cookies from scripts).
+static size_t script_cookies_get(void *opaque, char *out, size_t cap)
+{
+    return way_script_cookies(g.way.jar, yonder_scripts_url(opaque), out, cap);
+}
+
+static void script_cookies_set(void *opaque, const char *text, size_t length)
+{
+    way_script_cookie(g.way.jar, yonder_scripts_url(opaque), text, length);
+}
+
 static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state_t *state,
                                       const char *url, uint64_t serial, yonder_diag_t *diag)
 {
@@ -3894,6 +3906,8 @@ static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state
                                         script_geometry, doc, diag};
     yonder_scripts_t *host = yonder_scripts_new(doc, state, &options);
     yonder_scripts_set_user_agent(host, script_user_agent, NULL);
+    const os64_dom_cookies_t cookies = {script_cookies_get, script_cookies_set, host};
+    yonder_scripts_set_cookies(host, &cookies);
     return host;
 }
 

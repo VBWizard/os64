@@ -49,6 +49,7 @@ struct yonder_scripts {
     // asks after its task.
     const char *(*user_agent)(void *);
     void *user_agent_opaque;
+    os64_dom_cookies_t cookies;
     os64_dom_geometry_stats_t last_geometry_stats;
     bool dead;                      // a sticky outcome retired the runtime
     bool parse_ended;
@@ -226,6 +227,7 @@ static bool ensure_runtime(yonder_scripts_t *s, os64_js_outcome_t *out)
     s->dom = os64_dom_create(s->runtime, s->doc, s->state, &options, out);
     os64_dom_set_geometry(s->dom, s->options.geometry, s->options.opaque);
     os64_dom_set_user_agent(s->dom, s->user_agent, s->user_agent_opaque);
+    os64_dom_set_cookies(s->dom, &s->cookies);
     if (s->options.diag != NULL)
         os64_dom_set_global_miss(s->dom, global_missed, s);
     if (s->dom == NULL || os64_js_install_output(s->runtime, 1, OS64_JS_OUTPUT_CONSOLE, out) != OS64_JS_OK) {
@@ -745,6 +747,19 @@ yonder_diag_t *yonder_scripts_diag(const yonder_scripts_t *s)
 uint64_t yonder_scripts_serial(const yonder_scripts_t *s)
 {
     return s != NULL ? s->options.serial : 0;
+}
+
+void yonder_scripts_set_cookies(yonder_scripts_t *s, const os64_dom_cookies_t *cookies)
+{
+    if (s == NULL) return;
+    if (cookies != NULL) s->cookies = *cookies;
+    else os64_memset(&s->cookies, 0, sizeof(s->cookies));
+    os64_dom_set_cookies(s->dom, &s->cookies);
+}
+
+const char *yonder_scripts_url(const yonder_scripts_t *s)
+{
+    return s != NULL ? s->url : NULL;
 }
 
 void yonder_scripts_set_user_agent(yonder_scripts_t *s, const char *(*provider)(void *), void *opaque)

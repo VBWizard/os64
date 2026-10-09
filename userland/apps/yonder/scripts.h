@@ -138,5 +138,10 @@ uint64_t yonder_scripts_tasks(const yonder_scripts_t *scripts);
 uint64_t yonder_scripts_written(const yonder_scripts_t *scripts);
 
 void yonder_scripts_set_user_agent(yonder_scripts_t *scripts, const char *(*provider)(void *), void *opaque);
+// document.cookie's provider (os64_dom_set_cookies), copied, for the
+// binding made now or later. NULL: the document is cookie-averse.
+void yonder_scripts_set_cookies(yonder_scripts_t *scripts, const os64_dom_cookies_t *cookies);
+// The address the page's scripts run at (the options' url).
+const char *yonder_scripts_url(const yonder_scripts_t *scripts);
 
 #endif
