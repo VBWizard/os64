@@ -76,6 +76,22 @@ int os64_mouse_save(const os64_mouse_setting_t *setting)
     os64_conf_pair_t pair={setting->key,value};
     return (int)os64_conf_write_checked("mouse.conf",&pair,1,mouse_validate,NULL);
 }
+int os64_mouse_forget(const os64_mouse_setting_t *setting,uint64_t expected_generation)
+{
+    if(!setting || !os64_mouse_setting_valid(setting)) return -1;
+    os64_mouse_snapshot_t snapshot;
+    if(os64_mouse_read(&snapshot) || snapshot.generation!=expected_generation) return -1;
+    unsigned i=0;
+    while(i<snapshot.count && os64_strcmp(snapshot.devices[i].setting.key,setting->key)) i++;
+    if(i==snapshot.count || snapshot.devices[i].connected) return -1;
+    os64_conf_pair_t pair={setting->key,NULL};
+    // Keep the live entry available for retry if deleting its saved line fails.
+    if(os64_conf_update_checked("mouse.conf",&pair,1,mouse_validate,NULL)<0) return -1;
+    os64_mouse_command_t command={.version=OS64_MOUSE_VERSION,.count=1,
+        .expected_generation=expected_generation,.operation=OS64_MOUSE_FORGET};
+    command.settings[0]=*setting;
+    return os64_mouse_apply(&command)?OS64_MOUSE_FORGET_SAVED_ONLY:0;
+}
 int os64_mouse_startup(void)
 {
     os64_mouse_snapshot_t snapshot;

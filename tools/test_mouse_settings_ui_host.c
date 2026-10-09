@@ -9,6 +9,7 @@
 static os64_mouse_snapshot_t fixture;
 static os64_mouse_setting_t saved_setting;
 static bool fail_save;
+static int forget_result;
 int os64_mouse_read(os64_mouse_snapshot_t *out) { *out=fixture; return 0; }
 int os64_mouse_apply(const os64_mouse_command_t *command)
 {
@@ -21,6 +22,17 @@ int os64_mouse_apply(const os64_mouse_command_t *command)
 }
 int os64_mouse_save(const os64_mouse_setting_t *setting)
 { if(fail_save) return -1; saved_setting=*setting; return 0; }
+int os64_mouse_forget(const os64_mouse_setting_t *setting,uint64_t expected_generation)
+{
+    if(forget_result) return forget_result;
+    if(expected_generation!=fixture.generation) return -1;
+    for(unsigned i=0;i<fixture.count;i++) if(!strcmp(fixture.devices[i].setting.key,setting->key)) {
+        if(fixture.devices[i].connected) return -1;
+        memmove(&fixture.devices[i],&fixture.devices[i+1],(fixture.count-i-1)*sizeof(fixture.devices[0]));
+        fixture.count--; fixture.generation++; return 0;
+    }
+    return -1;
+}
 static void preview(const char *path)
 {
     os64_gui_rect_t damage; os64_ui_mark_dirty(&ui,&root); assert(os64_ui_render(&ui,&damage));
@@ -40,14 +52,15 @@ void mouse_settings_ui_contracts(void)
     os64_ui_init(&ui,&draw); os64_ui_theme_defaults(&ui.theme);
     os64_ui_theme_palette(&ui.theme,OS64_UI_PALETTE_MIDNIGHT); ui.on_resize=resized;
     widgets_init(); assert(!measure(&ui,&layout_state)); resized(&ui);
-    refresh_devices(NULL,NULL); assert(apply.disabled && speed.w.disabled);
-    fixture.version=1; fixture.count=2;
+    refresh_devices(NULL,NULL); assert(apply.disabled && speed.w.disabled && forget.disabled);
+    fixture.version=OS64_MOUSE_VERSION; fixture.count=2;
     strcpy(fixture.devices[0].setting.key,"bt-1-de5233bdaca6");
     strcpy(fixture.devices[0].name,"Bluetooth mouse (de:52:33:bd:ac:a6)");
     fixture.devices[0].setting.speed=100; fixture.devices[0].connected=1;
     strcpy(fixture.devices[1].setting.key,"usb-01-p2"); strcpy(fixture.devices[1].name,"USB mouse (port 2)");
     fixture.devices[1].setting.speed=100; fixture.devices[1].connected=1;
-    refresh_devices(NULL,NULL); assert(!apply.disabled && !next.disabled);
+    refresh_devices(NULL,NULL); assert(!apply.disabled && !next.disabled && forget.disabled);
+    forget_device(NULL,NULL); assert(fixture.count==2);
     os64_ui_slider_set(&ui,&speed,200); speed_changed(&speed,NULL);
     os64_ui_checkbox_set(&ui,&primary,true); publish(&save,NULL);
     assert(fixture.devices[0].setting.speed==200 && fixture.devices[0].setting.right_primary==1);
@@ -59,6 +72,15 @@ void mouse_settings_ui_contracts(void)
     refresh_devices(NULL,NULL); fail_save=true; publish(&save,NULL);
     assert(strstr(status_text,"saving failed")); fail_save=false;
     reset_defaults(NULL,NULL); assert(speed.value==100 && !primary.checked);
+    fixture.devices[1].connected=0;
+    refresh_devices(NULL,NULL); select_device(&next,NULL); assert(!forget.disabled);
+    forget_result=-1; forget_device(NULL,NULL);
+    assert(fixture.count==2 && strstr(status_text,"Forget failed"));
+    forget_result=OS64_MOUSE_FORGET_SAVED_ONLY; forget_device(NULL,NULL);
+    assert(fixture.count==2 && strstr(status_text,"Saved preferences removed"));
+    forget_result=0; forget_device(NULL,NULL);
+    assert(fixture.count==1 && snapshot.count==1 && selected==0 && forget.disabled);
+    assert(strstr(status_text,"Forgotten") && fixture.devices[0].setting.speed==200);
     assert(!os64_ui_font_planner(&ui,plan_font,commit_font,discard_font,NULL));
     assert(!os64_ui_font_follow(&ui));
     os64_font_config_t config; os64_font_config_defaults(&config);
@@ -82,5 +104,5 @@ void mouse_settings_ui_contracts(void)
     message("Applied and saved for restart.");
     preview("/tmp/os64-mouse-settings.ppm");
     os64_ui_font_release(&ui); free((void *)(uintptr_t)draw.surf.pixels); draw.surf.pixels=0;
-    puts("PASS: Mouse Settings selection, isolated Apply/Save, conflict/error feedback, defaults and 28px font layout");
+    puts("PASS: Mouse Settings selection, Apply/Save/Forget, conflict/error feedback, defaults and 28px font layout");
 }

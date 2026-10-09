@@ -22,9 +22,59 @@ static input_event_t take(unsigned type)
 static void empty(void) { input_event_t e; assert(!input_pop(&e)); }
 static void set(const char *key,unsigned speed,unsigned right)
 {
-    os64_mouse_command_t c={.version=1,.count=1,.expected_generation=s_mouse_generation};
+    os64_mouse_command_t c={.version=OS64_MOUSE_VERSION,.count=1,.expected_generation=s_mouse_generation};
     strcpy(c.settings[0].key,key); c.settings[0].speed=speed; c.settings[0].right_primary=right;
     assert(input_mouse_apply(&c,sizeof(c))==(int)sizeof(c));
+}
+static void capacity_forget(void)
+{
+    for(unsigned i=0;i<OS64_MOUSE_DEVICES;i++) {
+        s_mouse_devices[i]=(os64_mouse_device_t){0}; s_mouse_sources[i]=0;
+    }
+    s_mouse_generation=0; input_init();
+    for(unsigned i=0;i<OS64_MOUSE_DEVICES;i++) {
+        char key[32]; snprintf(key,sizeof(key),"old-%u",i); set(key,200,0);
+    }
+    input_pointer_source_t kept={0},shared={0},shared2={0},waiting={0};
+    input_pointer_register(&kept,"old-3","Still connected");
+    input_pointer_register(&shared,"old-8","Two sources");
+    input_pointer_register(&shared2,"old-8","Two sources");
+    input_pointer_register(&waiting,"new-mouse","New mouse");
+    assert(!waiting.settings_slot);
+    input_inject_mouse(&waiting,1,0,0,0); assert(take(INPUT_EVENT_MOUSE_MOVE).mouse.dx==1);
+    os64_mouse_snapshot_t before,after; input_mouse_snapshot(&before,sizeof(before));
+    assert(before.count==OS64_MOUSE_DEVICES);
+    os64_mouse_command_t c={.version=OS64_MOUSE_VERSION,.count=1,
+        .expected_generation=before.generation,.operation=OS64_MOUSE_FORGET};
+    c.settings[0]=before.devices[3].setting; // Connected identities cannot be forgotten.
+    assert(input_mouse_apply(&c,sizeof(c))<0);
+    c.settings[0]=before.devices[0].setting; c.expected_generation--;
+    assert(input_mouse_apply(&c,sizeof(c))<0); c.expected_generation++;
+    c.operation=OS64_MOUSE_FORGET+1; assert(input_mouse_apply(&c,sizeof(c))<0);
+    c.operation=OS64_MOUSE_FORGET; c.count=2; c.settings[1]=before.devices[1].setting;
+    assert(input_mouse_apply(&c,sizeof(c))<0); c.count=1;
+    c.version=1; assert(input_mouse_apply(&c,sizeof(c))<0); c.version=OS64_MOUSE_VERSION;
+    input_mouse_snapshot(&after,sizeof(after)); assert(!memcmp(&before,&after,sizeof(before)));
+    assert(input_mouse_apply(&c,sizeof(c))==(int)sizeof(c));
+    input_mouse_snapshot(&after,sizeof(after)); assert(after.count==15 && after.generation==before.generation+1);
+    assert(kept.settings_slot==4 && shared.settings_slot==9 && shared2.settings_slot==9);
+    input_inject_mouse(&waiting,1,0,0,0); assert(take(INPUT_EVENT_MOUSE_MOVE).mouse.dx==1);
+    assert(waiting.settings_slot==1);
+    input_mouse_snapshot(&after,sizeof(after)); assert(after.count==16);
+    assert(!strcmp(after.devices[0].setting.key,"new-mouse") && after.devices[0].connected);
+    assert(after.devices[0].setting.speed==100 && !after.devices[0].setting.right_primary);
+    set("new-mouse",300,1);
+    input_inject_mouse(&waiting,1,0,0,0); assert(take(INPUT_EVENT_MOUSE_MOVE).mouse.dx==3);
+    input_inject_mouse(&kept,1,0,0,0); assert(take(INPUT_EVENT_MOUSE_MOVE).mouse.dx==2);
+    // One of two sources disconnecting cannot expose the other's slot to Forget.
+    input_pointer_unregister(&shared);
+    c.expected_generation=s_mouse_generation; c.settings[0]=before.devices[8].setting;
+    assert(input_mouse_apply(&c,sizeof(c))<0);
+    input_pointer_unregister(&shared2);
+    assert(input_mouse_apply(&c,sizeof(c))==(int)sizeof(c));
+    c.expected_generation=s_mouse_generation; c.settings[0]=before.devices[0].setting;
+    assert(input_mouse_apply(&c,sizeof(c))<0); // Missing key cannot delete the replacement.
+    puts("PASS: full registry Forget, protected live slots, packed snapshots and waiting mouse admission without reboot");
 }
 int main(void)
 {
@@ -65,7 +115,7 @@ int main(void)
     // Stale, invalid, duplicated and capacity-exceeding batches are atomic.
     os64_mouse_snapshot_t before,after;
     assert(input_mouse_snapshot(&before,sizeof(before))==(int)sizeof(before));
-    os64_mouse_command_t c={.version=1,.count=1,.expected_generation=before.generation-1};
+    os64_mouse_command_t c={.version=OS64_MOUSE_VERSION,.count=1,.expected_generation=before.generation-1};
     c.settings[0]=before.devices[0].setting; c.settings[0].speed=300;
     assert(input_mouse_apply(&c,sizeof(c))<0);
     c.expected_generation=before.generation; c.settings[0].speed=0;
@@ -83,5 +133,6 @@ int main(void)
     input_inject_mouse(&usb,32767,-32768,0,0); e=take(INPUT_EVENT_MOUSE_MOVE);
     assert(e.mouse.dx==32767 && e.mouse.dy==-32768 && e.mouse.x==4095 && e.mouse.y==0);
     empty();
+    capacity_forget();
     puts("PASS: per-device speed, fractional motion, absolute pointer isolation, held-button remapping, reconnect, CAS and atomic validation");
 }

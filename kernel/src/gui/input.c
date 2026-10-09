@@ -41,7 +41,6 @@ static int32_t s_mouse_x, s_mouse_y;
 static uint32_t s_button_holders[3];
 static os64_mouse_device_t s_mouse_devices[OS64_MOUSE_DEVICES];
 static uint32_t s_mouse_sources[OS64_MOUSE_DEVICES];
-static unsigned s_mouse_device_count;
 static uint64_t s_mouse_generation;
 
 int input_mouse_snapshot(void *out, size_t capacity)
@@ -49,9 +48,10 @@ int input_mouse_snapshot(void *out, size_t capacity)
     if(!out || capacity<sizeof(os64_mouse_snapshot_t)) return -1;
     os64_mouse_snapshot_t *snapshot=out;
     uint64_t flags=spinlock_acquire_irqsave(&s_input_lock);
-    *snapshot=(os64_mouse_snapshot_t){.version=OS64_MOUSE_VERSION,
-        .count=s_mouse_device_count,.generation=s_mouse_generation};
-    for(unsigned i=0;i<s_mouse_device_count;i++) snapshot->devices[i]=s_mouse_devices[i];
+    *snapshot=(os64_mouse_snapshot_t){.version=OS64_MOUSE_VERSION,.generation=s_mouse_generation};
+    // Pack the snapshot, but keep registry slots stable for connected sources.
+    for(unsigned i=0;i<OS64_MOUSE_DEVICES;i++) if(s_mouse_devices[i].setting.key[0])
+        snapshot->devices[snapshot->count++]=s_mouse_devices[i];
     spinlock_release_irqrestore(&s_input_lock,flags);
     return sizeof(*snapshot);
 }
@@ -61,33 +61,61 @@ int input_mouse_apply(const void *bytes, size_t length)
     if(!bytes || length!=sizeof(os64_mouse_command_t)) return -1;
     os64_mouse_command_t command;
     memcpy(&command,bytes,sizeof(command));
-    if(command.version!=OS64_MOUSE_VERSION || !command.count || command.count>OS64_MOUSE_DEVICES) return -1;
+    if(command.version!=OS64_MOUSE_VERSION || !command.count || command.count>OS64_MOUSE_DEVICES ||
+       command.reserved || command.operation>OS64_MOUSE_FORGET ||
+       (command.operation==OS64_MOUSE_FORGET && command.count!=1)) return -1;
     for(unsigned i=0;i<command.count;i++) {
         if(!os64_mouse_setting_valid(&command.settings[i])) return -1;
         for(unsigned j=0;j<i;j++)
             if(!strcmp(command.settings[i].key,command.settings[j].key)) return -1;
     }
     uint64_t flags=spinlock_acquire_irqsave(&s_input_lock);
-    unsigned slots[OS64_MOUSE_DEVICES], count=s_mouse_device_count;
+    unsigned slots[OS64_MOUSE_DEVICES];
+    bool occupied[OS64_MOUSE_DEVICES];
+    for(unsigned i=0;i<OS64_MOUSE_DEVICES;i++) occupied[i]=s_mouse_devices[i].setting.key[0]!=0;
     bool valid=command.expected_generation==s_mouse_generation && s_mouse_generation!=UINT64_MAX;
     for(unsigned i=0;i<command.count && valid;i++) {
         unsigned j=0;
-        while(j<s_mouse_device_count && strcmp(s_mouse_devices[j].setting.key,command.settings[i].key)) j++;
-        slots[i]=j==s_mouse_device_count?count++:j;
-        if(count>OS64_MOUSE_DEVICES) valid=false;
+        while(j<OS64_MOUSE_DEVICES && strcmp(s_mouse_devices[j].setting.key,command.settings[i].key)) j++;
+        if(command.operation==OS64_MOUSE_FORGET) {
+            if(j==OS64_MOUSE_DEVICES || s_mouse_sources[j]) valid=false;
+        } else if(j==OS64_MOUSE_DEVICES) {
+            j=0; while(j<OS64_MOUSE_DEVICES && occupied[j]) j++;
+            if(j==OS64_MOUSE_DEVICES) valid=false;
+        }
+        slots[i]=j;
+        if(valid) occupied[j]=true;
     }
     if(valid) {
         for(unsigned i=0;i<command.count;i++) {
             os64_mouse_device_t *d=&s_mouse_devices[slots[i]];
-            d->setting=command.settings[i];
-            if(!d->name[0]) strncpy(d->name,d->setting.key,sizeof(d->name)-1);
+            if(command.operation==OS64_MOUSE_FORGET) *d=(os64_mouse_device_t){0};
+            else {
+                d->setting=command.settings[i];
+                if(!d->name[0]) strncpy(d->name,d->setting.key,sizeof(d->name)-1);
+            }
         }
-        s_mouse_device_count=count; s_mouse_generation++;
+        s_mouse_generation++;
     }
     spinlock_release_irqrestore(&s_input_lock,flags);
     return valid?(int)length:-1;
 }
 
+static void pointer_register_locked(input_pointer_source_t *src)
+{
+    if(src->settings_slot || !src->settings_key[0]) return;
+    unsigned slot=0;
+    while(slot<OS64_MOUSE_DEVICES && strcmp(s_mouse_devices[slot].setting.key,src->settings_key)) slot++;
+    if(slot==OS64_MOUSE_DEVICES) {
+        slot=0; while(slot<OS64_MOUSE_DEVICES && s_mouse_devices[slot].setting.key[0]) slot++;
+        if(slot==OS64_MOUSE_DEVICES) return;
+        strcpy(s_mouse_devices[slot].setting.key,src->settings_key);
+        s_mouse_devices[slot].setting.speed=100;
+    }
+    strcpy(s_mouse_devices[slot].name,src->settings_name);
+    s_mouse_sources[slot]++; s_mouse_devices[slot].connected=1;
+    src->settings_slot=slot+1;
+}
 void input_pointer_register(input_pointer_source_t *src,const char *key,const char *name)
 {
     char bounded[OS64_MOUSE_KEY]={0};
@@ -98,19 +126,10 @@ void input_pointer_register(input_pointer_source_t *src,const char *key,const ch
     if(src->settings_slot) {
         spinlock_release_irqrestore(&s_input_lock,flags); return;
     }
-    unsigned slot=0;
-    while(slot<s_mouse_device_count && strcmp(s_mouse_devices[slot].setting.key,key)) slot++;
-    if(slot<OS64_MOUSE_DEVICES) {
-        if(slot==s_mouse_device_count) {
-            s_mouse_device_count++;
-            strcpy(s_mouse_devices[slot].setting.key,key);
-            s_mouse_devices[slot].setting.speed=100;
-        }
-        strncpy(s_mouse_devices[slot].name,name,OS64_MOUSE_NAME-1);
-        s_mouse_devices[slot].name[OS64_MOUSE_NAME-1]=0;
-        s_mouse_sources[slot]++; s_mouse_devices[slot].connected=1;
-        src->settings_slot=slot+1;
-    }
+    strcpy(src->settings_key,bounded);
+    strncpy(src->settings_name,name,OS64_MOUSE_NAME-1);
+    src->settings_name[OS64_MOUSE_NAME-1]=0;
+    pointer_register_locked(src);
     spinlock_release_irqrestore(&s_input_lock,flags);
 }
 
@@ -256,7 +275,8 @@ void input_inject_mouse(input_pointer_source_t *src, int16_t dx, int16_t dy,
 
 	uint64_t flags = spinlock_acquire_irqsave(&s_input_lock);
 	uint32_t speed=100; bool right=false;
-	if(src->settings_slot && src->settings_slot<=s_mouse_device_count) {
+	pointer_register_locked(src);
+	if(src->settings_slot && src->settings_slot<=OS64_MOUSE_DEVICES) {
 		const os64_mouse_setting_t *setting=&s_mouse_devices[src->settings_slot-1].setting;
 		speed=setting->speed; right=setting->right_primary!=0;
 	}
@@ -310,7 +330,7 @@ void input_pointer_unregister(input_pointer_source_t *src)
     uint8_t modifiers=keyboard_current_modifiers();
     uint64_t flags=spinlock_acquire_irqsave(&s_input_lock);
     if(s_active) pointer_locked(src,0,0,0,modifiers);
-    if(src->settings_slot && src->settings_slot<=s_mouse_device_count) {
+    if(src->settings_slot && src->settings_slot<=OS64_MOUSE_DEVICES) {
         unsigned slot=src->settings_slot-1;
         if(s_mouse_sources[slot]) s_mouse_sources[slot]--;
         s_mouse_devices[slot].connected=s_mouse_sources[slot]!=0;

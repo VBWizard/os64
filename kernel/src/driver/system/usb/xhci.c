@@ -1173,7 +1173,7 @@ static void xhci_bt_runtime_poll(void)
     for (unsigned i = 0; i < BT_HOST_PEERS; i++) {
         const bt_le_t *s = &p->host.peers[i].le;
         if(s->mouse && bt_le_input_active(s)) xhci_bt_pointer_register(p,i);
-        else if(p->pointers[i].settings_slot) input_pointer_unregister(&p->pointers[i]);
+        else if(p->pointers[i].settings_slot || p->pointers[i].settings_key[0]) input_pointer_unregister(&p->pointers[i]);
         if (s->phase != before[i])
             printd(DEBUG_USB, "xhci: AX210 slot %u LE phase=%u error=%s opcode=%04x status=%02x\n",
                    i, s->phase, s->error ? s->error : "none", s->error_opcode, s->error_status);

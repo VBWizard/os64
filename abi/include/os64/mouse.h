@@ -5,15 +5,17 @@
 #include <stdbool.h>
 
 #define OS64_MOUSE_PATH "/sys/mouse"
-#define OS64_MOUSE_VERSION 1u
+#define OS64_MOUSE_VERSION 2u
 #define OS64_MOUSE_DEVICES 16u
 #define OS64_MOUSE_KEY 64u
 #define OS64_MOUSE_NAME 64u
 #define OS64_MOUSE_MIN_SPEED 25u
 #define OS64_MOUSE_MAX_SPEED 400u
+#define OS64_MOUSE_APPLY 0u
+#define OS64_MOUSE_FORGET 1u
 
 // Fixed-size binary snapshots and atomic compare-and-apply writes. Settings
-// generation changes on publication, not device arrival. Keys identify a bond
+// generation changes on Apply/Forget, not device arrival. Keys identify a bond
 // (Bluetooth), controller/port/product (USB), or the PS/2 auxiliary port.
 typedef struct {
     char key[OS64_MOUSE_KEY];
@@ -33,6 +35,8 @@ typedef struct {
 typedef struct {
     uint32_t version, count;
     uint64_t expected_generation;
+    // FORGET requires one valid setting and refuses a connected identity.
+    uint32_t operation, reserved;
     os64_mouse_setting_t settings[OS64_MOUSE_DEVICES];
 } os64_mouse_command_t;
 

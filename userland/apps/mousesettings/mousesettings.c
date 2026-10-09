@@ -5,7 +5,7 @@
 static os64_ui_t ui;
 static os64_draw_ctx_t draw;
 static os64_ui_widget_t root,title,device,connection,speed_label,hint,status;
-static os64_ui_widget_t previous,next,refresh,defaults,apply,save;
+static os64_ui_widget_t previous,next,refresh,defaults,apply,save,forget;
 static os64_ui_slider_t speed;
 static os64_ui_checkbox_t primary;
 static os64_mouse_snapshot_t snapshot;
@@ -35,9 +35,11 @@ static void arrange(const mouse_layout_t *m,bool staged)
     place(&speed_label,20,y,width,row,staged); y+=row+8;
     place(&speed.w,20,y,width,button,staged); y+=button+16;
     place(&primary.w,20,y,width,button,staged); y+=button+20;
-    place(&defaults,20,y,third,button,staged);
-    place(&apply,28+third,y,third,button,staged);
-    place(&save,36+2*third,y,width-2*third-16,button,staged); y+=button+16;
+    int fourth=(width-24)/4;
+    place(&defaults,20,y,fourth,button,staged);
+    place(&apply,28+fourth,y,fourth,button,staged);
+    place(&save,36+2*fourth,y,fourth,button,staged);
+    place(&forget,44+3*fourth,y,width-3*fourth-24,button,staged); y+=button+16;
     place(&hint,20,y,width,row,staged); y+=row+6;
     place(&status,20,y,width,row,staged);
     if(!staged) os64_ui_mark_dirty(&ui,&root);
@@ -48,7 +50,8 @@ static os64_font_status_t measure(os64_ui_t *u,mouse_layout_t *m)
     m->button=maximum(34,m->row+12);
     m->min_width=520;
     const char *labels[]={hint_text,"Use right button as primary","Applied; saving failed. Preferences remain active.",
-        "Bluetooth mouse (de:52:33:bd:ac:a6)"};
+        "Bluetooth mouse (de:52:33:bd:ac:a6)","Forgotten. Move the new mouse, then choose Refresh.",
+        "Saved preferences removed; refresh to check live settings."};
     for(unsigned i=0;i<sizeof(labels)/sizeof(labels[0]);i++) {
         int32_t width=0;
         os64_font_status_t result=os64_ui_text_measure(u,OS64_FONT_ROLE_UI,labels[i],os64_strlen(labels[i]),&width);
@@ -130,6 +133,7 @@ static void show_device(void)
     os64_snprintf(speed_text,sizeof(speed_text),"Pointer speed: %d.%02dx",speed.value/100,speed.value%100);
     os64_ui_set_enabled(&ui,&speed.w,have); os64_ui_set_enabled(&ui,&primary.w,have);
     os64_ui_set_enabled(&ui,&defaults,have); os64_ui_set_enabled(&ui,&apply,have); os64_ui_set_enabled(&ui,&save,have);
+    os64_ui_set_enabled(&ui,&forget,have && !snapshot.devices[selected].connected);
     os64_ui_set_enabled(&ui,&previous,have && selected>0);
     os64_ui_set_enabled(&ui,&next,have && selected+1<snapshot.count);
     os64_ui_mark_dirty(&ui,&root);
@@ -150,7 +154,8 @@ static void select_device(os64_ui_widget_t *w,void *ctx)
     (void)ctx; remember_draft();
     if(w==&previous && selected) selected--;
     if(w==&next && selected+1<snapshot.count) selected++;
-    show_device(); message("Preferences apply to the selected mouse.");
+    show_device(); message(selected<snapshot.count && !snapshot.devices[selected].connected?
+        "Forget removes this mouse's saved preferences.":"Preferences apply to the selected mouse.");
 }
 static void reset_defaults(os64_ui_widget_t *w,void *ctx)
 {
@@ -172,6 +177,17 @@ static void publish(os64_ui_widget_t *w,void *ctx)
         "Applied; saving failed. Preferences remain active.":"Applied and saved for restart.");
     else message("Applied for this session.");
 }
+static void forget_device(os64_ui_widget_t *w,void *ctx)
+{
+    (void)w; (void)ctx;
+    if(selected>=snapshot.count || snapshot.devices[selected].connected) return;
+    int result=os64_mouse_forget(&snapshot.devices[selected].setting,snapshot.generation);
+    if(result<0) { message("Forget failed. Refresh and try again."); return; }
+    refresh_devices(NULL,NULL);
+    message(result==OS64_MOUSE_FORGET_SAVED_ONLY?
+        "Saved preferences removed; refresh to check live settings.":
+        "Forgotten. Move the new mouse, then choose Refresh.");
+}
 static void widgets_init(void)
 {
     os64_ui_panel(&root); os64_ui_set_root(&ui,&root);
@@ -181,10 +197,11 @@ static void widgets_init(void)
     os64_ui_button(&previous,"Previous",select_device,NULL); os64_ui_button(&next,"Next",select_device,NULL);
     os64_ui_button(&refresh,"Refresh",refresh_devices,NULL); os64_ui_button(&defaults,"Defaults",reset_defaults,NULL);
     os64_ui_button(&apply,"Apply",publish,NULL); os64_ui_button(&save,"Save",publish,NULL);
+    os64_ui_button(&forget,"Forget",forget_device,NULL);
     os64_ui_slider(&speed,OS64_MOUSE_MIN_SPEED,OS64_MOUSE_MAX_SPEED,25,100,speed_changed,NULL);
     os64_ui_checkbox(&primary,"Use right button as primary",false,primary_changed,NULL);
     os64_ui_widget_t *widgets[]={&title,&device,&connection,&previous,&next,&refresh,&speed_label,&speed.w,
-        &primary.w,&defaults,&apply,&save,&hint,&status};
+        &primary.w,&defaults,&apply,&save,&forget,&hint,&status};
     for(unsigned i=0;i<sizeof(widgets)/sizeof(widgets[0]);i++) os64_ui_add_child(&root,widgets[i]);
 }
 int main(int argc,char **argv)

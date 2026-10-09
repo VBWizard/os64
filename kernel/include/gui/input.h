@@ -6,6 +6,7 @@
 #include <stdbool.h>
 
 #include "os64/gui.h"   // the ring-3 names these constants must keep matching
+#include "os64/mouse.h"
 
 // Unified input event queue — layer 2 of the GUI.
 //
@@ -152,10 +153,12 @@ typedef struct input_pointer_source
 	uint16_t settings_slot; // One-based registry slot; zero uses defaults.
 	uint32_t speed;
 	int32_t fraction_x, fraction_y;
+	char settings_key[OS64_MOUSE_KEY], settings_name[OS64_MOUSE_NAME];
 } input_pointer_source_t;
 
 // Drivers register a stable identity once the source is live. Registration is
-// idempotent; unregister releases held buttons and preserves saved preferences.
+// idempotent; a full registry retries on relative input after Forget frees a slot.
+// Unregister releases held buttons and preserves saved preferences.
 void input_pointer_register(input_pointer_source_t *, const char *key, const char *name);
 void input_pointer_unregister(input_pointer_source_t *);
 int input_mouse_snapshot(void *out, size_t capacity);
