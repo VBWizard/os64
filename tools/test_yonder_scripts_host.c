@@ -3308,18 +3308,19 @@ static void diag_bytes_case(void) {
     loop_drop();
 }
 
-/* A src script's whole address names it in the record, however long. */
+/* A src script's whole address names it in the record, however long: as
+ * long as Google's front-end bundle's (3,666 bytes) is fetched, and named. */
 static void diag_long_source_case(void) {
-    char html[600];
-    char path[300]; memset(path,'a',sizeof(path)-1); path[sizeof(path)-1]=0;
+    static char html[4200], path[3700], tail[3720], want[3800];
+    memset(path,'a',sizeof(path)-1); path[sizeof(path)-1]=0;
     snprintf(html,sizeof(html),"<p>x</p><script src=/%s.js></script>",path);
     loop_page(html);
     check(loop_settle() && g.stream.stopped,"diag source: the parse waits for a long src");
-    char tail[320]; snprintf(tail,sizeof(tail),"/%s.js",path);
+    snprintf(tail,sizeof(tail),"/%s.js",path);
     check(script_land(tail,"nothere()"),"diag source: its fetch is out and lands");
     loop_settle();
     char *text=malloc(16384); yonder_diag_render(g.page.diag,text,16384);
-    char want[400]; snprintf(want,sizeof(want),"FAILED script http://fixture.test/%s.js: ReferenceError",path);
+    snprintf(want,sizeof(want),"FAILED script http://fixture.test/%s.js: ReferenceError",path);
     check(has(text,want),"diag source: a long src script is named by its whole address");
     free(text);
     loop_drop();

@@ -83,7 +83,7 @@ os64_js_status_t os64_js_install_output(os64_js_runtime_t *rt, int32_t handle, u
                                         os64_js_outcome_t *outcome)
 {
     record("output");
-    uint32_t known = OS64_JS_OUTPUT_PRINT | OS64_JS_OUTPUT_CONSOLE_LOG;
+    uint32_t known = OS64_JS_OUTPUT_PRINT | OS64_JS_OUTPUT_CONSOLE;
     if (bad_runtime(rt) || names == 0 || (names & ~known) || js_fake.installed_output ||
         js_fake.evaluated)
         return answer(&(js_fake_answer_t){.status = OS64_JS_BAD_ARGUMENT}, outcome);

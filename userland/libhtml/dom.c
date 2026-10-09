@@ -632,6 +632,12 @@ static void place(HDoc *d, HNode *parent, HNode *node, HNode *before)
         landmarks(d, NULL);
 }
 
+int64_t os64_html_may_insert(const os64_html_document_t *doc, const HNode *parent, const HNode *node)
+{
+    HDoc *d = (HDoc *)doc;
+    return d ? may_insert(d, (HNode *)parent, (HNode *)node, NULL, false, NULL) : OS64_HTML_BAD_ARGUMENT;
+}
+
 int64_t os64_html_insert(os64_html_document_t *doc, HNode *parent, HNode *node, HNode *before)
 {
     HDoc *d = (HDoc *)doc;

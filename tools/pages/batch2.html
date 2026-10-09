@@ -1,0 +1,54 @@
+<!doctype html>
+<html>
+<head>
+<title>yonder census batch 2</title>
+<!-- What the second census batch gave scripts (YONDER_DIAGNOSTICS.md §
+     Batch 2). With scripts on, every line below should say "ok", the four
+     list items should be green, and the page's record should be clean. -->
+<style>
+body { font-family: sans-serif; margin: 1em }
+li.hit { color: green }
+</style>
+</head>
+<body>
+<h1>yonder census batch 2</h1>
+<ul id=list><li>one</li><li>two</li><li>three</li></ul>
+<p id=one>querySelector: not run</p>
+<p id=all>querySelectorAll: not run</p>
+<p id=bad>a bad selector: not run</p>
+<p id=console>console: not run</p>
+<p id=classic>the classic methods: not run</p>
+<script>
+var say = function (id, text) { document.getElementById(id).textContent = text; };
+var first = document.querySelector('#list li:last-child');
+say('one', 'querySelector: ' + (first && first.textContent === 'three' ? 'ok' : 'WRONG'));
+var items = document.querySelectorAll('ul > li'), n = 0;
+items.forEach(function (li) { li.className = 'hit'; n++; });
+say('all', 'querySelectorAll: ' + (n === 3 && items.length === 3 ? 'ok, ' + n + ' items' : 'WRONG'));
+try { document.querySelector('li['); say('bad', 'a bad selector: WRONG, nothing thrown'); }
+catch (e) { say('bad', 'a bad selector: ' + (e.name === 'SyntaxError' ? 'ok, ' + e.message : 'WRONG ' + e.name)); }
+console.group('batch 2');
+console.info('info'); console.warn('warn'); console.error('error');
+console.assert(1 === 2, 'an assertion that fails says so');
+console.count(); console.time('t'); console.timeEnd('t');
+console.groupEnd();
+say('console', 'console: ok');
+var list = document.getElementById('list'), wrong = [];
+list.classList.add('menu');
+if (document.getElementsByClassName('menu')[0] !== list) wrong.push('getElementsByClassName');
+if (items[1].closest('ul') !== list || !items[1].matches('ul > li')) wrong.push('closest/matches');
+var extra = document.createElement('li');
+extra.dataset.from = 'append';
+list.append(extra, '');
+extra.textContent = 'four, from ' + extra.dataset.from;
+extra.classList.add('hit');
+if (list.lastChild.previousSibling !== extra || extra.getAttribute('data-from') !== 'append') wrong.push('append/dataset');
+list.insertAdjacentHTML('afterend', '<p id=adjacent>insertAdjacentHTML: ok</p>');
+if (!document.getElementById('adjacent') || !list.contains(extra)) wrong.push('insertAdjacentHTML/contains');
+var s = document.createElement('script');
+s.src = 'nothing.js';
+if (s.getAttribute('src') !== 'nothing.js') wrong.push('script.src');
+say('classic', 'the classic methods: ' + (wrong.length ? 'WRONG: ' + wrong.join(', ') : 'ok'));
+</script>
+</body>
+</html>

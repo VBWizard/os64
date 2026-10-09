@@ -81,7 +81,15 @@ governs the wrapper-owned context.
 
 `os64_js_install_output` borrows an already-open output handle and installs
 only the names selected by its bitmask: OS64_JS_OUTPUT_PRINT grants `print`,
-OS64_JS_OUTPUT_CONSOLE_LOG grants `console.log`. Zero or unknown bits return
+OS64_JS_OUTPUT_CONSOLE grants the WHATWG Console Standard's `console`
+namespace. Its levels (`log`, `info`, `debug`, `warn`, `error`, `trace`,
+`dir`, `dirxml`, `table`) all print as `log` does, to the one handle;
+`assert` prints `Assertion failed` (with its message) when its condition is
+falsy; `group`/`groupCollapsed` print their label and indent later console
+lines two spaces per level, `groupEnd` closes one and `clear` closes all;
+`count`/`countReset` and `time`/`timeLog`/`timeEnd` keep per-label counts and
+start times (microseconds, printed as milliseconds), and print the
+standard's warnings for a missing or repeated label. Zero or unknown bits return
 BAD_ARGUMENT without installing anything. The runner selects both; a browser
 can select only logging and retain ownership of the web's `print` function.
 Unselected names are untouched. Selected properties and functions are staged
@@ -116,8 +124,8 @@ the runtime's memory budget and hold the re-entry guard. A setup operation has
 its own execution budget, including property traps and exception diagnostics;
 it does not mark the first source evaluation as started. If host-supplied traps
 queue jobs, their setup turn must drain before other setup or source execution.
-For console-only setup, an existing own data object is retained and its other
-members are untouched. An accessor or non-object console is a setup exception;
+For console-only setup, an existing own data object is retained and its
+members outside the namespace are untouched. An accessor or non-object console is a setup exception;
 the installer does not invoke a global console getter to discover the object.
 
 Custom bindings use QuickJS values and lifetime rules directly. `examples/binding.c`

@@ -130,14 +130,14 @@ static int do_url(const char *text)
         printf("port=%u\n", (unsigned)url.port);
         printf("path=%s\n", url.path);
 
-        char rendered[4096];
+        char rendered[HTTP_URL_TEXT_MAX];
         if (!http_url_render(&url, rendered, sizeof(rendered))) {
             fprintf(stderr, "render does not fit\n");
             return 3;
         }
         printf("render=%s\n", rendered);
 
-        char request[4096];
+        char request[HTTP_TARGET_MAX + 1024];
         if (!http_request(request, sizeof(request), &url, false, NULL)) {
             fprintf(stderr, "request does not fit\n");
             return 3;

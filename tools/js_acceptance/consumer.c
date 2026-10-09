@@ -175,8 +175,8 @@ static void setup_cases(void)
     check(os64_js_install_args(runtime, 2, arguments, &result) == OS64_JS_OK,
           "host supplies its copied argument capability");
     name[0] = 'X'; argument[0] = 'X';
-    check(os64_js_install_output(runtime, 1, OS64_JS_OUTPUT_CONSOLE_LOG, &result) == OS64_JS_OK,
-          "host selects console.log output");
+    check(os64_js_install_output(runtime, 1, OS64_JS_OUTPUT_CONSOLE, &result) == OS64_JS_OK,
+          "host selects console output");
     check(run(runtime, "if(print(14)!==42||scriptArgs.length!==2||scriptArgs[0]!=='original.js'||"
           "scriptArgs[1]!=='copied argument')throw Error('setup ownership');"
           "console.log('Acceptance output marker');", &result) == OS64_JS_OK,

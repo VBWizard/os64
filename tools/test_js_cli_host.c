@@ -137,7 +137,7 @@ static void grammar(void)
     check(js_fake.abi_matched, "the runner passes its own ABI identifier");
     check(!strcmp(js_fake.path, "tool.js"), "the file goes to run_file as typed");
     check(js_fake.output_handle == 1, "output is handle 1, so redirection applies");
-    check(js_fake.output_names == (OS64_JS_OUTPUT_PRINT | OS64_JS_OUTPUT_CONSOLE_LOG),
+    check(js_fake.output_names == (OS64_JS_OUTPUT_PRINT | OS64_JS_OUTPUT_CONSOLE),
           "print and console.log are both granted");
     check(js_fake.arg_count == 3 && !strcmp(js_fake.args[0], "tool.js") &&
           !strcmp(js_fake.args[1], "a") && !strcmp(js_fake.args[2], "b"),

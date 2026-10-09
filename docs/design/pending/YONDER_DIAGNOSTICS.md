@@ -282,3 +282,33 @@ now worth trusting.
   size exactly: two navigations in one window count their own bodies, and
   a case now guards it. The P5's match was most likely chance (the page
   varies around that size).
+
+## Batch 2: what the census asked for most
+
+The second census pass (danlegt.com, warpbox.dev, google.com again) put
+three things at the top of the FAILED lines. None was new to the record;
+each was a page dying on something that browsers have had since the 2000s.
+
+- **An address is as long as 8 KiB** (url.h's OS64_URL_REF_MAX, the
+  request line Apache and nginx take). The path, a resolved reference,
+  libdom's OS64_DOM_URL_MAX, the request a fetch writes and the response
+  line a `Location:` arrives on all follow it, so Google's 3,666-byte
+  `/xjs/` bundle is fetched, and its record line names it whole.
+- **`console` is the Console Standard's whole namespace** (libjs
+  CONTRACT.md § Capabilities), not `log` alone: danlegt.com's
+  `stamps.js` died on `console.assert`. Its lines go where `log`'s
+  always went, the browser's standard output.
+- **`querySelector` and `querySelectorAll`** (LIBDOM.md § Objects and
+  collections), matched by libgarb's own selectors: they were ten of
+  warpbox.dev's eleven failures and three of danlegt.com's seven. A
+  selector that does not parse throws a SyntaxError naming it, so the
+  record does too.
+- **The rest of the classic DOM pages assume** (LIBDOM.md § The classic
+  methods), which a census would only have found one script death at a
+  time: `getElementsByClassName`/`ByName`, `matches`/`closest`,
+  `append`/`prepend`/`before`/`after`/`replaceWith`/`remove`/
+  `replaceChildren`, `contains`/`isConnected`, `insertAdjacent*`,
+  `classList`, `dataset`, the attribute conveniences, and the reflected
+  `hidden`, `lang`, `dir`, `tabIndex`, a script's `src` (wiki.osdev.org's
+  Cloudflare loader set it and connected an empty script) and an anchor's
+  and a link's `href`.

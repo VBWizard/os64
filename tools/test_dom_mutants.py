@@ -41,7 +41,7 @@ mutants=[
  ('live-query-version','collection','if (query->version == version) return true;','if (query->version != 0) return true;'),
  ('elements-only','collection','if (query->elements && node->kind != OS64_HTML_ELEMENT) return false;','if (false && query->elements && node->kind != OS64_HTML_ELEMENT) return false;'),
  ('html-query-case','collection','node->ns == OS64_HTML_NS_HTML ? query->folded : query->name','node->ns == OS64_HTML_NS_HTML ? query->name : query->name'),
- ('numeric-enumeration','collection','desc->flags = JS_PROP_ENUMERABLE | JS_PROP_CONFIGURABLE;','desc->flags = JS_PROP_CONFIGURABLE;'),
+ ('numeric-enumeration','collection','desc->flags = JS_PROP_CONFIGURABLE | (numeric ? JS_PROP_ENUMERABLE : 0);','desc->flags = JS_PROP_CONFIGURABLE;'),
  ('nul-conversion','content','if (c == 0) {','if (c == 0 && false) {'),
  ('surrogate-conversion','content','} else if (c == 0xed && i + 2 < length &&','} else if (c == 0xee && i + 2 < length &&'),
  ('attribute-state-routing','node','os64_page_node_set_attr(dom->state, node, name.data, value.data,\n                                                value.length, magic == D_REMOVE_ATTR)','(magic == D_REMOVE_ATTR ? os64_html_remove_attr(dom->document, (os64_html_node_t *)node, name.data) : os64_html_set_attr(dom->document, (os64_html_node_t *)node, name.data, value.data, value.length))'),
@@ -52,6 +52,22 @@ mutants=[
  ('undefined-nullable-content','content','(JS_IsUndefined(value) && (property == D_NODE_VALUE || property == D_TEXT_CONTENT))','(false && JS_IsUndefined(value) && (property == D_NODE_VALUE || property == D_TEXT_CONTENT))'),
  ('attribute-name-equals','content'," || *at == '='",''),
  ('error-prototype-setter','core','JS_DefinePropertyValueStr(ctx, error, "name", text, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE)','JS_SetPropertyStr(ctx, error, "name", text)'),
+ ('selector-scope','collection','garb_selector_matches_in(list, i, element, scope)) return true;','garb_selector_matches_in(list, i, element, ((void)scope, NULL))) return true;'),
+ ('selector-pseudo-elements','collection','if (garb_selector_pseudo(list, i) == GARB_PSEUDO_NONE &&','if (true &&'),
+ ('static-list-length','collection','JS_NewUint32(ctx, found), 0) < 0) {','JS_NewUint32(ctx, 0), 0) < 0) {'),
+ ('class-query-every-class','collection','if (attr == NULL || !d_has_token(attr->value, at, (size_t)(end - at), fold)) return false;','if (attr == NULL || ((void)fold, false)) return false;'),
+ ('closest-walks-up','collection','for (const os64_html_node_t *at = element; at != NULL && at->kind == OS64_HTML_ELEMENT; at = at->parent)','for (const os64_html_node_t *at = element; at != NULL && at->kind == OS64_HTML_ELEMENT; at = NULL)'),
+ ('before-skips-its-nodes','mixin','while (magic == D_BEFORE && previous != NULL && among(previous, args, count)) previous = previous->prev;','(void)0;'),
+ ('replacement-judged-before-it-moves','mixin','if (verdict < 0) { d_html_error(ctx, verdict); return -1; }','(void)verdict;'),
+ ('adjacent-text-is-text','mixin','os64_html_node_t *node = os64_html_create_text(dom->document, text->data, text->length, &status);\n    if (node == NULL) return d_html_error(ctx, status);','os64_html_node_t *node = os64_html_create_text(dom->document, text->data, 0, &status);\n    if (node == NULL) return d_html_error(ctx, status);'),
+ ('replace-with-in-place','mixin','placed = self->parent == parent ? d_tree_change','placed = false ? d_tree_change'),
+ ('adjacent-html-born-started','mixin','int placed = d_script_mark_tree(dom, fragment) < 0','int placed = false'),
+ ('contains-walks-up','mixin','while (other != NULL && other != self) other = other->parent;','if (other != NULL && other != self) other = other->parent;'),
+ ('toggle-attribute-force','mixin','} else if (present && force != 1) {','} else if (present) {'),
+ ('tokens-once','mixin','if (!seen) (*out)[(*count)++]','if (true) (*out)[(*count)++]'),
+ ('tokens-no-empty-attribute','mixin','result = changed && !(attr == NULL && n == 0) ?','result = changed ?'),
+ ('dataset-camel-case','mixin',"out[used++] = (char)(at[1] - ('a' - 'A')); at++;","out[used++] = *at;"),
+ ('tabindex-focusable','mixin','return JS_NewInt32(ctx, focusable(self) ? 0 : -1);','return JS_NewInt32(ctx, ((void)focusable, -1));'),
 ]
 if args.reclaim:
     mutants=[
@@ -118,9 +134,10 @@ if args.events:
       ('innerhtml-born-started','content','if (fragment != NULL && d_script_mark_tree(dom, fragment) < 0) status = OS64_HTML_NO_MEMORY;\n        else if','if (false) status = OS64_HTML_NO_MEMORY;\n        else if'),
       ('clone-carries-started','node','if (copy != NULL && d_script_copy_marks(dom, node, copy) >= 0)','if (copy != NULL)'),
       ('script-attribute-slot','node','} else if (d_handler_attribute_set(dom, ctx, node, name.data) < 0) {','} else if (false) {'),
+      ('script-mixins-connect','node',"    if (status >= 0) d_script_connected(dom, scripts, found);","    (void)0;"),
     ]
 flags=['-O2','-g','-std=gnu11','-Wall','-Wextra','-Werror','-ffreestanding','-fno-builtin','-fno-tree-loop-distribute-patterns','-fno-stack-protector','-DOS64_JS_TARGET','-fsanitize=address,undefined','-fno-sanitize-recover=all']
-for directory in ['libmath/include','libjs/port','libjs/include','libdom/include','libdom','libhtml/include','libpage/include','libpage/upstream/ryu','libos64/include']:
+for directory in ['libmath/include','libjs/port','libjs/include','libdom/include','libdom','libgarb/include','libhtml/include','libpage/include','libpage/upstream/ryu','libos64/include']:
     flags+=['-I'+str(root/'userland'/directory)]
 flags+=['-I'+str(root/'abi/include'),'-isystem',str(root/'userland/obj/js/upstream')]
 flags+=['-Dd_alloc=dom_host_private_alloc','-Dos64_malloc=dom_host_malloc','-Dos64_calloc=dom_host_calloc','-Dos64_realloc=dom_host_realloc','-Dos64_free=dom_host_free','-Dos64_malloc_size=dom_host_malloc_size']

@@ -343,6 +343,12 @@ os64_html_node_t *os64_html_clone(os64_html_document_t *doc, const os64_html_nod
  * control and its form that move together stay tied. */
 int64_t os64_html_insert(os64_html_document_t *doc, os64_html_node_t *parent,
                          os64_html_node_t *node, os64_html_node_t *before);
+/* What `insert` would answer for `node` going under `parent` (at the end),
+ * asked without moving anything: OK, or the refusal. A caller that must
+ * first move a node somewhere else (into a fragment) asks before that move,
+ * so a refusal leaves the node where it was. */
+int64_t os64_html_may_insert(const os64_html_document_t *doc, const os64_html_node_t *parent,
+                             const os64_html_node_t *node);
 int64_t os64_html_replace(os64_html_document_t *doc, os64_html_node_t *parent,
                           os64_html_node_t *node, os64_html_node_t *old);
 int64_t os64_html_remove(os64_html_document_t *doc, os64_html_node_t *node);

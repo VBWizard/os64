@@ -18,7 +18,7 @@ static void dom_surface_cases(void)
     DomFixture f = fixture_new(&options);
     if (!fixture_ready(&f)) return;
     os64_js_outcome_t outcome;
-    check(os64_js_install_output(f.runtime, 5, OS64_JS_OUTPUT_CONSOLE_LOG, &outcome) == OS64_JS_OK,
+    check(os64_js_install_output(f.runtime, 5, OS64_JS_OUTPUT_CONSOLE, &outcome) == OS64_JS_OK,
           "console capability installed separately");
     output_len = 0; alerts = 0;
     dom_script(&f, DOM_ASSERT
@@ -135,6 +135,131 @@ static void dom_collection_cases(void)
         "assert(list.length===8&&list[7]===futureNode&&list[7]===list.item(7),'future index grows without shadow');"
         "assert(list[0]===originalIndex,'supported index remains native');",
         "live-index-assignment-modes.js");
+    fixture_free(&f);
+}
+/* Selectors API: first match or a static NodeList, in tree order, from the
+ * receiver's descendants, with :scope the receiver; collections iterate. */
+static void dom_selector_cases(void)
+{
+    DomFixture f=fixture_new(NULL);if(!fixture_ready(&f))return;
+    dom_script(&f,DOM_ASSERT
+        "const box=document.getElementById('box'),one=document.getElementById('one'),two=document.getElementById('two');"
+        "assert(document.querySelector('#box p')===one&&document.querySelector('p:last-child')===two,'first match');"
+        "assert(document.querySelector('nope')===null&&document.querySelector('P')===one,'absent, and HTML names fold');"
+        "const list=document.querySelectorAll('#two, #one');"
+        "assert(list.length===2&&list[0]===one&&list[1]===two&&list.item(1)===two&&list.item(5)===null,'tree order, item');"
+        "assert(Object.keys(list).join(',')==='0,1'&&[...list].length===2&&Array.from(list)[1]===two,'indices, spread');"
+        "let seen=[];list.forEach((n,i)=>seen.push(i+n.id));assert(seen.join()==='0one,1two','forEach');"
+        "assert([...list.keys()].join()==='0,1'&&[...list.values()][0]===one&&[...list.entries()][1][1]===two,'iterators');"
+        "box.appendChild(document.createElement('p'));assert(list.length===2&&document.querySelectorAll('p').length===3,'static');"
+        "assert(box.querySelector('div')===null&&box.querySelector('div p')===one,'descendants, ancestors outside count');"
+        "assert(box.querySelectorAll(':scope > p').length===3&&document.body.querySelectorAll(':scope > p').length===0,':scope');"
+        "assert(document.querySelectorAll(':scope').length===1&&document.querySelector(':scope')===document.documentElement,':scope of a document');"
+        "assert(document.querySelectorAll('p::before').length===0&&document.querySelectorAll('input[type=radio]').length===2,'pseudo-elements, attributes');"
+        "throws('SyntaxError',()=>document.querySelector('p['));throws('SyntaxError',()=>box.querySelector('> p'));throws('SyntaxError',()=>document.querySelectorAll(''));"
+        "try{document.querySelector('p[')}catch(e){assert(e.message.includes(\"'p['\"),'the message names the selector')}"
+        "throws('TypeError',()=>document.querySelector());"
+        "throws('TypeError',()=>document.querySelector.call(document.createTextNode('x'),'p'));"
+        "const fr=document.createDocumentFragment();fr.appendChild(document.createElement('i'));"
+        "assert(fr.querySelector('i')!==null&&fr.querySelectorAll('*').length===1,'fragment');"
+        "assert([...document.getElementsByTagName('p')].length===3,'a collection iterates');"
+        "let n=0;for(const c of box.childNodes)n++;assert(n===3,'childNodes iterates');",
+        "selectors.js");
+    fixture_free(&f);
+}
+/* The classic methods pages assume (LIBDOM.md § The classic methods). */
+static void dom_classic_method_cases(void)
+{
+    DomFixture f=fixture_new(NULL);if(!fixture_ready(&f))return;
+    dom_script(&f,DOM_ASSERT
+        "const box=document.getElementById('box'),one=document.getElementById('one'),two=document.getElementById('two');"
+        /* class and name queries: live */
+        "one.className='a  b';two.className='b';const bs=document.getElementsByClassName('b'),ab=box.getElementsByClassName(' b\\ta ');"
+        "assert(bs.length===2&&ab.length===1&&ab[0]===one,'class query');two.className='a b';assert(ab.length===2,'class query is live');"
+        "assert(document.getElementsByClassName('').length===0&&document.getElementsByClassName('B').length===0,'empty and case');"
+        "const named=document.getElementsByName('g');assert(named.length===2&&named[0].id==='r1','name query');"
+        "throws('TypeError',()=>box.getElementsByName('g'));"
+        /* matches / closest */
+        "assert(one.matches('#box > p.a')&&!one.matches('div')&&one.matches(':scope'),'matches');"
+        "assert(one.closest('div')===box&&one.closest('p')===one&&one.closest('form')===null,'closest');"
+        "throws('SyntaxError',()=>one.matches('p['));"
+        /* contains, isConnected */
+        "assert(box.contains(one)&&box.contains(box)&&document.contains(one)&&document.body.contains(one)&&!one.contains(box)&&!box.contains(null),'contains');"
+        "const loose=document.createElement('i');assert(one.isConnected&&!loose.isConnected,'isConnected');"
+        /* append / prepend / before / after / replaceWith / remove / replaceChildren */
+        "const x=document.createElement('x'),y=document.createElement('y');"
+        "box.append(x,'tail');assert(box.lastChild.nodeType===3&&box.lastChild.data==='tail'&&box.lastChild.previousSibling===x,'append');"
+        "box.prepend('head',y);assert(box.firstChild.data==='head'&&box.firstChild.nextSibling===y,'prepend');"
+        "one.before(x);assert(one.previousSibling===x,'before');one.after('after');assert(one.nextSibling.data==='after','after');"
+        "one.before(one.previousSibling,one);assert(one.previousSibling===x,'before skips the nodes it moves');"
+        "y.replaceWith('was y',loose);assert(box.childNodes[1].data==='was y'&&box.childNodes[2]===loose&&!y.isConnected,'replaceWith');"
+        "loose.remove();assert(!loose.isConnected&&loose.parentNode===null,'remove');loose.remove();"
+        "const kids=document.createElement('div');kids.append('a','b');kids.replaceChildren(x);assert(kids.childNodes.length===1&&kids.firstChild===x,'replaceChildren');"
+        "kids.replaceChildren();assert(!kids.hasChildNodes(),'replaceChildren empties');box.append(x);kids.replaceChildren(x,'t');assert(kids.firstChild===x&&kids.childNodes.length===2,'replaceChildren moves');const doc2=document.createDocumentFragment();doc2.append('q');doc2.replaceChildren(y);assert(doc2.firstChild===y,'fragment replaceChildren');"
+        "throws('HierarchyRequestError',()=>one.append(box));"
+        /* insertAdjacent* */
+        "const host=document.createElement('section');box.append(host);host.innerHTML='<b>in</b>';"
+        "host.insertAdjacentHTML('afterbegin','<i>first</i>');host.insertAdjacentHTML('beforeEnd','<u>last</u>');"
+        "host.insertAdjacentHTML('beforebegin','<s>before</s>');host.insertAdjacentHTML('afterend','<em>after</em>');"
+        "assert(host.innerHTML==='<i>first</i><b>in</b><u>last</u>'&&host.previousSibling.tagName==='S'&&host.nextSibling.tagName==='EM','insertAdjacentHTML');"
+        "assert(host.insertAdjacentElement('afterbegin',x)===x&&host.firstChild===x,'insertAdjacentElement');"
+        "host.insertAdjacentText('beforeend','!');assert(host.lastChild.data==='!','insertAdjacentText');"
+        "assert(loose.insertAdjacentElement('afterend',x)===null,'nowhere beside a loose node');"
+        "throws('NoModificationAllowedError',()=>loose.insertAdjacentHTML('afterend','<p>'));"
+        "throws('SyntaxError',()=>host.insertAdjacentHTML('middle','x'));"
+        "host.insertAdjacentHTML('beforeend','<script>globalThis.ranAdjacent=1</scr'+'ipt>');assert(globalThis.ranAdjacent===undefined,'its scripts never run');"
+        /* attribute conveniences */
+        "assert(one.getAttributeNames().join()==='id,class'&&one.hasAttributes()&&!document.createElement('p').hasAttributes(),'names');"
+        "assert(one.toggleAttribute('data-on')===true&&one.hasAttribute('data-on')&&one.toggleAttribute('data-on')===false&&!one.hasAttribute('data-on'),'toggle');"
+        "assert(one.toggleAttribute('data-on',false)===false&&one.toggleAttribute('data-on',true)===true&&one.toggleAttribute('data-on',true)===true,'toggle force');"
+        "throws('InvalidCharacterError',()=>one.toggleAttribute('a b'));"
+        /* reflections */
+        "assert(one.hidden===false);one.hidden=true;assert(one.getAttribute('hidden')==='');one.hidden=false;assert(!one.hasAttribute('hidden'),'hidden');"
+        "one.lang='fr';assert(one.lang==='fr'&&one.getAttribute('lang')==='fr','lang');"
+        "one.setAttribute('dir','RTL');assert(one.dir==='rtl');one.dir='sideways';assert(one.dir===''&&one.getAttribute('dir')==='sideways','dir');"
+        "assert(one.tabIndex===-1&&document.getElementById('field').tabIndex===0,'tabIndex defaults');one.tabIndex=3;assert(one.tabIndex===3&&one.getAttribute('tabindex')==='3','tabIndex');"
+        "const s=document.createElement('script');s.src='/js/app.js';assert(s.getAttribute('src')==='/js/app.js'&&s.src.indexOf('/js/app.js')>=0,'script.src');"
+        "const a=document.createElement('a');assert(a.href==='');a.href='page.html';assert(/page\\.html$/.test(a.href)&&a.getAttribute('href')==='page.html','a.href');"
+        "assert(!('src' in one)&&!('href' in one)&&!('href' in s),'reflections only where they belong');"
+        /* classList */
+        "const c=one.classList;assert(c===one.classList&&c.length===2&&c[0]==='a'&&c.item(1)==='b'&&c.item(5)===null,'classList reads');"
+        "c.add('c','a');assert(one.className==='a b c','add');c.remove('a','zz');assert(one.className==='b c','remove');"
+        "assert(c.toggle('d')===true&&c.contains('d')&&c.toggle('d')===false&&c.toggle('b',true)===true,'toggle');"
+        "assert(c.replace('b','z')===true&&one.className==='z c'&&c.replace('nope','q')===false,'replace');"
+        "assert([...c].join()==='z,c'&&String(c)==='z c'&&c.value==='z c','iterate, value');"
+        "throws('SyntaxError',()=>c.add(''));throws('InvalidCharacterError',()=>c.add('a b'));"
+        "one.classList='p q';assert(one.className==='p q','PutForwards');"
+        "const twice=document.createElement('p');twice.className='a a b';assert(twice.classList.length===2&&twice.classList[1]==='b','a token counts once');"
+        "const bare=document.createElement('p');bare.classList.remove('x');bare.classList.add();assert(!bare.hasAttribute('class'),'no attribute for an empty set');"
+        /* dataset */
+        "one.setAttribute('data-foo-bar','1');const d=one.dataset;assert(d===one.dataset&&d.fooBar==='1','dataset reads');"
+        "d.someName='v';assert(one.getAttribute('data-some-name')==='v','dataset sets');"
+        "assert(Object.keys(d).join()==='on,fooBar,someName'&&'fooBar' in d,'dataset keys');"
+        "delete d.fooBar;assert(!one.hasAttribute('data-foo-bar')&&d.fooBar===undefined,'dataset deletes');"
+        "throws('SyntaxError',()=>{d['a-b']='x'});d[0]='zero';assert(one.getAttribute('data-0')==='zero','numeric key');",
+        "classic-methods.js");
+    /* Quinn #243: arguments are converted before the tree is read, a lone
+     * replacement is judged before it moves, and insertAdjacentText's data
+     * is text whatever it is. */
+    dom_script(&f,DOM_ASSERT
+        "const holder=document.createElement('div');document.body.append(holder);holder.innerHTML='<i></i><b id=victim></b>';"
+        "const victim=document.getElementById('victim');"
+        "victim.before({toString(){holder.textContent='';return 'text'}});"
+        "assert(victim.parentNode===null&&holder.childNodes.length===0,'a conversion that empties the parent leaves nothing to insert beside');"
+        "const kept=document.createElement('em');holder.append(kept);"
+        "try{document.body.append(kept,{toString(){throw Error('coercion')}})}catch(e){assert(e.message==='coercion')}"
+        "assert(kept.parentNode===holder,'a failed conversion moves nothing');"
+        "const outer=document.createElement('div'),inner=document.createElement('p');outer.append(inner);document.body.append(outer);"
+        "throws('HierarchyRequestError',()=>inner.replaceChildren(outer));"
+        "assert(outer.parentNode===document.body&&inner.parentNode===outer,'a refused replacement leaves its node in place');"
+        "const source=document.createElement('div'),moved=document.createElement('span');source.append(moved);"
+        "moved.toString=()=>'literal text';holder.insertAdjacentText('beforeend',moved);"
+        "assert(moved.parentNode===source&&holder.lastChild.nodeType===3&&holder.lastChild.data==='literal text','insertAdjacentText stringifies');"
+        "holder.insertAdjacentHTML({toString(){holder.textContent='';return 'beforeend'}},'<u>late</u>');"
+        "assert(holder.firstChild.tagName==='U','positions are read after the arguments are converted');"
+        "const before=document.childNodes.length;throws('HierarchyRequestError',()=>document.replaceChildren(document.createElement('html')));"
+        "assert(document.childNodes.length===before&&document.documentElement!==null,'a document keeps its children');",
+        "conversion-order.js");
     fixture_free(&f);
 }
 static void dom_unicode_cases(void)
@@ -372,7 +497,12 @@ static void dom_allocation_cases(void)
         "document.body.addEventListener('click',()=>{},{once:true})","setTimeout(()=>{},5,1,2)",
         "document.body.setAttribute('onclick','1')","document.body.dispatchEvent(new Event('x'))",
         "location.href='http://example.test/x'", "new Image()",
-        "document.body.style.width='20px'", "document.forms.namedItem('missing')"};
+        "document.body.style.width='20px'", "document.forms.namedItem('missing')",
+        "document.querySelectorAll('#box p').item(1)",
+        "try{document.querySelector('p[')}catch(e){if(e.name!=='SyntaxError')throw e}",
+        "document.getElementsByClassName('old').length", "document.getElementById('box').append('a',document.createElement('i'))",
+        "document.getElementById('box').insertAdjacentHTML('beforeend','<b>x</b>')", "document.getElementById('box').classList.add('n')",
+        "document.getElementById('box').dataset.someKey='v'", "document.getElementById('box').closest('body')"};
     for(size_t op=0;op<sizeof(operations)/sizeof(*operations);op++){
         DomFixture f=fixture_new(NULL);if(!fixture_ready(&f))continue;
         start=dom_attempts;dom_script(&f,operations[op],"allocation-baseline.js");count=dom_attempts-start;printf("Native operation %zu allocation points: %zu\n",op,count);fixture_free(&f);

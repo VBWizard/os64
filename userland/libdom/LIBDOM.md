@@ -55,10 +55,10 @@ The supported properties and methods are placed on those chains:
 
 | Kind | Surface beyond Node |
 | --- | --- |
-| Document | documentElement/head/body, child-element access, ID/tag queries, creation |
-| Element | tagName, id/className, innerHTML/outerHTML, attributes, tag queries, child-element access and element siblings |
+| Document | documentElement/head/body, child-element access, ID/tag/class/name/selector queries, creation |
+| Element | tagName, id/className, innerHTML/outerHTML, attributes, tag/class/selector queries, child-element access and element siblings, § The classic methods |
 | Text and Comment (CharacterData) | data and element siblings |
-| DocumentFragment | child-element access and ID queries |
+| DocumentFragment | child-element access, ID and selector queries |
 | HTML input/textarea/select/button | value |
 | HTML input | checked (native control-state operations support checkbox/radio) |
 | HTML select | selectedIndex |
@@ -75,6 +75,18 @@ its node-vector replacement is staged before publication. A held collection
 therefore changes after a mutation. Numeric properties are read-only, including
 definitions of future indices, and the object refuses preventExtensions so
 live growth can continue. Nonnumeric strings and Symbols remain expando keys.
+Every collection iterates as an array does (`[Symbol.iterator]` is
+Array.prototype.values, WebIDL's rule for an indexed list).
+
+`querySelector` and `querySelectorAll` match with libgarb's selectors, the
+style sheets' own, over the receiver's descendants in tree order, with the
+receiver as `:scope` (a document's is its root). A list that does not parse
+throws a SyntaxError naming it. `querySelectorAll` answers with a STATIC
+NodeList: an ordinary engine object, its matches fixed own indices and its
+`length` fixed, with `item`, `forEach`, `entries`, `keys` and `values` (the
+last four Array.prototype's). It is not a registry query, so the engine frees
+it like any other value: a page that asks in a loop holds only what it keeps.
+
 Template contents are a separate fragment:
 ordinary children/textContent follow actual children, while innerHTML uses
 that contents fragment. outerHTML is read-only in this slice.
@@ -87,6 +99,43 @@ Element and attribute names use the DOM Standard's separate name-validation
 rules. Nullable nodeValue/textContent map null and undefined to empty text;
 innerHTML and CharacterData data map null to empty but convert undefined to
 the literal string.
+
+## The classic methods
+
+What pages assume a document has (`mixin.c`), each the DOM or HTML
+standard's steps over the verbs appendChild already uses, so a script these
+connect runs and a moved control keeps its form:
+
+- **ParentNode** (document, element, fragment): `append`, `prepend`,
+  `replaceChildren`. **ChildNode** (element, text, comment): `before`,
+  `after`, `replaceWith`, `remove`. Arguments are nodes or strings (a string
+  is a Text node), and several are gathered into a fragment first, as the
+  standard does, so a refused insertion leaves them in that fragment. Every
+  argument is converted before the tree is read (a string's conversion
+  runs script), and a lone node replacing an element's children is judged
+  (`os64_html_may_insert`) before it is moved anywhere.
+  A document keeps its `<html>` element (libhtml's rule, which every reader
+  of the tree relies on), so `document.replaceChildren(...)` is refused as
+  `document.removeChild(document.documentElement)` always was; on an
+  element or a fragment, where pages call it, it is the standard's.
+- `contains`, `isConnected`; `matches` and `closest` (the selectors
+  `querySelector` uses); `getElementsByClassName` (live; a quirks document
+  compares classes without regard to ASCII case) and `getElementsByName`.
+- `insertAdjacentHTML`, `insertAdjacentElement`, `insertAdjacentText`. The
+  HTML is parsed in the context of the element it lands in, and its scripts
+  never run, as innerHTML's do not.
+- `getAttributeNames`, `toggleAttribute`, `hasAttributes`.
+- Reflected attributes: `hidden`, `lang`, `dir` (its keyword, or ""),
+  `tabIndex` (0 for an element that takes focus without one, else -1), a
+  script's `src` and a link's and an anchor's `href` (resolved against the
+  document's base, and as written when it does not resolve). Script, anchor
+  and link elements have prototypes of their own for these.
+- `classList`, a live DOMTokenList over the class attribute (`add`,
+  `remove`, `toggle`, `replace`, `contains`, `item`, indices, iteration;
+  assigning the list sets the attribute), and `dataset`, a DOMStringMap over
+  the `data-*` attributes (`data-foo-bar` is `fooBar`; setting and deleting
+  a name sets and removes its attribute). Each element has one of each,
+  made when first asked for and held, like its style, until the page goes.
 
 ## Mutation and control state
 

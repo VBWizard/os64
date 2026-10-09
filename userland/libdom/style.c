@@ -158,7 +158,7 @@ static JSValue member(JSContext *ctx, JSValueConst self, int argc,
     if (entry == NULL) return JS_ThrowTypeError(ctx,"Expected an inline style object");
     if (!budget(dom,ctx)) return JS_EXCEPTION;
     bool set = (magic & D_SET) != 0; magic &= ~D_SET;
-    const os64_html_node_t *node = entry->style_target;
+    const os64_html_node_t *node = entry->target;
     if (magic == S_TEXT) {
         if (!set) {
             const os64_html_attr_t *attr = os64_html_attr(node,"style");
@@ -213,7 +213,7 @@ JSValue d_style(os64_dom_t *dom, JSContext *ctx, JSValueConst self)
     JSValue object = JS_NewObjectClass(ctx,dom->style_class);
     DValue *entry = d_retain(dom,ctx,object);
     if (entry == NULL) return JS_EXCEPTION;
-    entry->style_target = node;
+    entry->target = node;
     os64_html_hold(dom->document,node);
     JS_SetOpaque(object,entry);
     owner->style = entry;

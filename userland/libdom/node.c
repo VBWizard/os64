@@ -29,6 +29,9 @@ static int node_prototype_kind(const os64_html_node_t *node)
         if (node->tag == OS64_HTML_TAG_BUTTON) return D_PROTO_BUTTON;
         if (node->tag == OS64_HTML_TAG_FORM) return D_PROTO_FORM;
         if (node->tag == OS64_HTML_TAG_IMG) return D_PROTO_IMAGE;
+        if (node->tag == OS64_HTML_TAG_SCRIPT) return D_PROTO_SCRIPT;
+        if (node->tag == OS64_HTML_TAG_A) return D_PROTO_ANCHOR;
+        if (node->tag == OS64_HTML_TAG_LINK) return D_PROTO_LINK;
     }
     return D_PROTO_ELEMENT;
 }
@@ -95,6 +98,41 @@ int64_t d_replace(os64_dom_t *dom, os64_html_node_t *parent, os64_html_node_t *n
                    os64_html_node_t *old)
 {
     return os64_page_node_replace(dom->state, parent, node, old);
+}
+
+/* A tree change a script asked for: D_APPEND/D_INSERT put `child` under
+ * `parent` before `other` (NULL: last), D_REPLACE puts it where `other` is,
+ * D_REPLACE_CHILDREN puts it in place of all `parent`'s children, D_REMOVE
+ * takes it out. Scripts the move may connect are found before it,
+ * while a fragment still holds its children, and handed to the host after
+ * it. 0, or -1 with the exception thrown. */
+int d_tree_change(os64_dom_t *dom, JSContext *ctx, int op, const os64_html_node_t *parent,
+            const os64_html_node_t *child, const os64_html_node_t *other)
+{
+    const os64_html_node_t *few[8], **scripts = few;
+    size_t found = 0;
+    if (op != D_REMOVE && dom->options.script_connected != NULL) {
+        found = d_script_collect(child, few, 8);
+        if (found > 8) {
+            scripts = d_alloc(dom, found * sizeof(*scripts));
+            if (scripts == NULL) {
+                d_error(ctx, "QuotaExceededError", "DOM script list quota exceeded");
+                return -1;
+            }
+            d_script_collect(child, scripts, found);
+        }
+        for (size_t i = 0; i < found; i++) os64_html_hold(dom->document, scripts[i]);
+    }
+    int64_t status = op == D_REMOVE ? d_remove(dom, (os64_html_node_t *)child) :
+        op == D_REPLACE_CHILDREN ? d_replace_content(dom, (os64_html_node_t *)parent, (os64_html_node_t *)child) :
+        op == D_REPLACE ? d_replace(dom, (os64_html_node_t *)parent, (os64_html_node_t *)child,
+                                    (os64_html_node_t *)other) :
+        d_insert(dom, (os64_html_node_t *)parent, (os64_html_node_t *)child, (os64_html_node_t *)other);
+    if (status >= 0) d_script_connected(dom, scripts, found);
+    for (size_t i = 0; i < found; i++) os64_html_release(dom->document, scripts[i]);
+    if (scripts != few) d_free(dom, scripts);
+    if (status < 0) { d_html_error(ctx, status); return -1; }
+    return 0;
 }
 
 static JSValue node_name(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node)
@@ -336,30 +374,7 @@ static JSValue method(JSContext *ctx, JSValueConst self, int argc,
             return d_error(ctx, "NotFoundError", "Node is not a child of this parent");
         JSValue result = d_wrap(dom, ctx, magic == D_REPLACE ? other : child);
         if (JS_IsException(result)) return result;
-        /* Scripts the move may connect are found before it, while a fragment
-         * still holds its children, and handed to the host after it. */
-        const os64_html_node_t *few[8], **scripts = few;
-        size_t found = 0;
-        if (magic != D_REMOVE && dom->options.script_connected != NULL) {
-            found = d_script_collect(child, few, 8);
-            if (found > 8) {
-                scripts = d_alloc(dom, found * sizeof(*scripts));
-                if (scripts == NULL) {
-                    JS_FreeValue(ctx, result);
-                    return d_error(ctx, "QuotaExceededError", "DOM script list quota exceeded");
-                }
-                d_script_collect(child, scripts, found);
-            }
-            for (size_t i = 0; i < found; i++) os64_html_hold(dom->document, scripts[i]);
-        }
-        int64_t status = magic == D_REMOVE ? d_remove(dom, (os64_html_node_t *)child) :
-            magic == D_REPLACE ? d_replace(dom, (os64_html_node_t *)node, (os64_html_node_t *)child,
-                                           (os64_html_node_t *)other) :
-            d_insert(dom, (os64_html_node_t *)node, (os64_html_node_t *)child, (os64_html_node_t *)other);
-        if (status >= 0) d_script_connected(dom, scripts, found);
-        for (size_t i = 0; i < found; i++) os64_html_release(dom->document, scripts[i]);
-        if (scripts != few) d_free(dom, scripts);
-        if (status < 0) { JS_FreeValue(ctx, result); return d_html_error(ctx, status); }
+        if (d_tree_change(dom, ctx, magic, node, child, other) < 0) { JS_FreeValue(ctx, result); return JS_EXCEPTION; }
         return result;
     }
     if (magic == D_CLONE) {
@@ -378,6 +393,12 @@ static JSValue method(JSContext *ctx, JSValueConst self, int argc,
         JS_FreeValue(ctx, entry->value);
         d_free(dom, entry);
         return d_html_error(ctx, status);
+    }
+    if (magic == D_QUERY_ONE || magic == D_QUERY_ALL) {
+        if (argc < 1 || (node->kind != OS64_HTML_DOCUMENT && node->kind != OS64_HTML_ELEMENT &&
+                         node->kind != OS64_HTML_FRAGMENT))
+            return JS_ThrowTypeError(ctx, "Query requires a supported receiver and argument");
+        return d_select(dom, ctx, node, argv[0], magic == D_QUERY_ALL);
     }
     if (magic == D_GET_TAG || magic == D_GET_ID) {
         if (argc < 1 || (magic == D_GET_TAG ?
@@ -451,6 +472,8 @@ static unsigned method_prototypes(int magic)
     switch (magic) {
     case D_GET_ID: return (1u << D_PROTO_DOCUMENT) | (1u << D_PROTO_FRAGMENT);
     case D_GET_TAG: return (1u << D_PROTO_DOCUMENT) | (1u << D_PROTO_ELEMENT);
+    case D_QUERY_ONE: case D_QUERY_ALL:
+        return (1u << D_PROTO_DOCUMENT) | (1u << D_PROTO_ELEMENT) | (1u << D_PROTO_FRAGMENT);
     case D_CREATE_ELEMENT: case D_CREATE_TEXT: case D_CREATE_COMMENT: case D_CREATE_FRAGMENT:
         return 1u << D_PROTO_DOCUMENT;
     case D_GET_ATTR: case D_SET_ATTR: case D_REMOVE_ATTR: case D_HAS_ATTR:
@@ -491,6 +514,7 @@ int d_node_install(os64_dom_t *dom, JSContext *ctx)
         {"appendChild", D_APPEND, 1}, {"insertBefore", D_INSERT, 2},
         {"removeChild", D_REMOVE, 1}, {"replaceChild", D_REPLACE, 2}, {"cloneNode", D_CLONE, 0},
         {"getElementById", D_GET_ID, 1}, {"getElementsByTagName", D_GET_TAG, 1},
+        {"querySelector", D_QUERY_ONE, 1}, {"querySelectorAll", D_QUERY_ALL, 1},
         {"createElement", D_CREATE_ELEMENT, 1}, {"createTextNode", D_CREATE_TEXT, 1},
         {"createComment", D_CREATE_COMMENT, 1}, {"createDocumentFragment", D_CREATE_FRAGMENT, 0},
         {"getAttribute", D_GET_ATTR, 1}, {"setAttribute", D_SET_ATTR, 2},
