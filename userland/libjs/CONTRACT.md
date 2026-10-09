@@ -438,7 +438,12 @@ yonder's page file is the consumer
 
 Patch 0009 adds no export. When a call's method was fetched (`obj.m(...)`)
 and found not callable, the call's TypeError reads `'m' is not a function`
-instead of `not a function`. The context holds the name as a duplicated
-atom, released at the next callable fetch, at the throw, and at context
-teardown, so a name is never reported for a call that did not fetch it.
-A bare call (`x()`) keeps the plain message.
+instead of `not a function`. The context keeps one record: the name (a
+duplicated atom), the frame and stack slot the method was pushed to, and
+the value. A method call names it only when its callee is that value in
+that slot of that frame. Any other callee producer (`o[k]`, a private
+field, `super`, `with`) and any exception in the interpreter forget the
+record, and teardown releases it, so a name is never reported for a call
+that did not fetch it (Quinn, #239: a skipped optional call, a failing
+argument, an abandoned call). A bare call (`x()`) keeps the plain
+message.

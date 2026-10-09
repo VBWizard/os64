@@ -2,74 +2,151 @@
 # found not callable, so a page's failure says what it reached for (YONDER_BUGS.md).
 --- a/quickjs.c
 +++ b/quickjs.c
-@@ -560,6 +560,10 @@
+@@ -560,6 +560,15 @@
         (JS_SetGlobalMissHandler); NULL when nobody asked. */
      void (*global_miss)(void *opaque, const char *name);
      void *global_miss_opaque;
-+    /* os64: the name of the last method fetched for a call that was not a
-+       function (a duplicated atom), so "not a function" can say which;
-+       JS_ATOM_NULL when the last such fetch found one. */
-+    JSAtom not_callable;
++    /* os64: the last method a call fetched (OP_get_field2) and found not
++       callable: its name (a duplicated atom), the frame and stack slot it
++       was pushed to, and the value itself. A call names it in "not a
++       function" only when ITS callee is that value in that slot of that
++       frame; JS_ATOM_NULL when there is none. */
++    JSAtom nc_atom;
++    void *nc_frame;
++    JSValue *nc_slot;
++    JSValue nc_value;
  };
  
  typedef union JSFloat64Union {
-@@ -2847,6 +2851,8 @@
+@@ -2847,6 +2856,8 @@
  
      js_free_modules(ctx, JS_FREE_MODULE_ALL);
  
-+    JS_FreeAtom(ctx, ctx->not_callable);
-+    ctx->not_callable = JS_ATOM_NULL;
++    JS_FreeAtom(ctx, ctx->nc_atom);
++    ctx->nc_atom = JS_ATOM_NULL;
      JS_FreeValue(ctx, ctx->global_obj);
      JS_FreeValue(ctx, ctx->global_var_obj);
  
-@@ -17867,6 +17873,30 @@
+@@ -17867,6 +17878,47 @@
  #endif
  
  /* argv[] is modified if (flags & JS_CALL_FLAG_COPY_ARGV) = 0. */
-+/* os64: a method fetched for a call (OP_get_field2) was not a function:
-+   remember its name, so the call's "not a function" can say which. Any
-+   later method found callable forgets it, so a name is never told of a
-+   call it did not make; the held atom cannot outlive its bytecode. */
-+static void js_note_not_callable(JSContext *ctx, JSAtom atom)
++/* os64: the record of a method fetched for a call and found not callable
++   (JSContext.nc_atom), set, and forgotten. A callable fetch leaves it be:
++   the call it belongs to is told apart by its frame, slot and value, so
++   `o.missing(el.real())` still names `missing`. Every other way a call's
++   callee is produced, and every exception, forgets it. */
++static void js_forget_not_callable(JSContext *ctx)
 +{
-+    JS_FreeAtom(ctx, ctx->not_callable);
-+    ctx->not_callable = atom != JS_ATOM_NULL ? JS_DupAtom(ctx, atom) : JS_ATOM_NULL;
++    JS_FreeAtom(ctx, ctx->nc_atom);
++    ctx->nc_atom = JS_ATOM_NULL;
 +}
 +
-+/* os64: "not a function", by the method's name when the call was to one
-+   just fetched and found not callable. */
-+static JSValue js_throw_not_a_function(JSContext *ctx)
++static void js_note_not_callable(JSContext *ctx, JSAtom atom, void *frame, JSValue *slot,
++                                 JSValueConst value)
 +{
-+    char buf[ATOM_GET_STR_BUF_SIZE];
-+    JSAtom atom = ctx->not_callable;
-+    if (atom == JS_ATOM_NULL)
-+        return JS_ThrowTypeError(ctx, "not a function");
-+    ctx->not_callable = JS_ATOM_NULL;
-+    JS_ThrowTypeError(ctx, "'%s' is not a function", JS_AtomGetStr(ctx, buf, sizeof(buf), atom));
-+    JS_FreeAtom(ctx, atom);
-+    return JS_EXCEPTION;
++    js_forget_not_callable(ctx);
++    ctx->nc_atom = JS_DupAtom(ctx, atom);
++    ctx->nc_frame = frame;
++    ctx->nc_slot = slot;
++    ctx->nc_value = value;
++}
++
++/* Whether a call whose callee is `callee`, in `slot` of `frame`, is the
++   call the record was made for: same frame, same slot, the same value. */
++static BOOL js_is_noted_call(JSContext *ctx, void *frame, JSValue *slot, JSValueConst callee)
++{
++    JSValueConst v = ctx->nc_value;
++    int tag = JS_VALUE_GET_TAG(callee);
++    if (ctx->nc_atom == JS_ATOM_NULL || ctx->nc_frame != frame || ctx->nc_slot != slot ||
++        JS_VALUE_GET_TAG(v) != tag)
++        return FALSE;
++    /* Compared by kind: a value with a pointer by it, a double by its bits,
++       the rest (undefined, null, a boolean, an integer) by their int. */
++    if (JS_VALUE_HAS_REF_COUNT(callee))
++        return JS_VALUE_GET_PTR(v) == JS_VALUE_GET_PTR(callee);
++    if (tag == JS_TAG_FLOAT64) {
++        double a = JS_VALUE_GET_FLOAT64(v), b = JS_VALUE_GET_FLOAT64(callee);
++        return memcmp(&a, &b, sizeof(a)) == 0;
++    }
++    return JS_VALUE_GET_INT(v) == JS_VALUE_GET_INT(callee);
 +}
 +
  static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                                 JSValueConst this_obj, JSValueConst new_target,
                                 int argc, JSValue *argv, int flags)
-@@ -17942,7 +17972,7 @@
-         call_func = rt->class_array[p->class_id].call;
-         if (!call_func) {
-         not_a_function:
--            return JS_ThrowTypeError(caller_ctx, "not a function");
-+            return js_throw_not_a_function(caller_ctx);
-         }
-         return call_func(caller_ctx, func_obj, this_obj, argc,
-                          (JSValueConst *)argv, flags);
-@@ -19278,6 +19308,10 @@
+@@ -18348,6 +18400,19 @@
+                 pc += 2;
+                 call_argv = sp - call_argc;
+                 sf->cur_pc = pc;
++                /* os64: a method this call fetched and found not callable
++                   is named; any other callee is not. */
++                if (unlikely(ctx->nc_atom != JS_ATOM_NULL) &&
++                    !JS_IsFunction(ctx, call_argv[-1])) {
++                    if (js_is_noted_call(ctx, sf, &call_argv[-1], call_argv[-1])) {
++                        char buf[ATOM_GET_STR_BUF_SIZE];
++                        JS_ThrowTypeError(ctx, "'%s' is not a function",
++                                          JS_AtomGetStr(ctx, buf, sizeof(buf), ctx->nc_atom));
++                        js_forget_not_callable(ctx);
++                        goto exception;
++                    }
++                    js_forget_not_callable(ctx);
++                }
+                 ret_val = JS_CallInternal(ctx, call_argv[-1], call_argv[-2],
+                                           JS_UNDEFINED, call_argc, call_argv, 0);
+                 if (unlikely(JS_IsException(ret_val)))
+@@ -19278,6 +19343,8 @@
                          goto exception;                                 \
                  }                                                       \
                  if (keep) {                                             \
 +                    if (unlikely(!JS_IsFunction(ctx, val)))             \
-+                        js_note_not_callable(ctx, atom);                \
-+                    else if (unlikely(ctx->not_callable != JS_ATOM_NULL)) \
-+                        js_note_not_callable(ctx, JS_ATOM_NULL);        \
++                        js_note_not_callable(ctx, atom, sf, sp, val);   \
                      *sp++ = val;                                        \
                  } else {                                                \
                      JS_FreeValue(ctx, sp[-1]);                          \
+@@ -19357,6 +19424,8 @@
+ 
+         CASE(OP_get_private_field):
+             {
++                if (unlikely(ctx->nc_atom != JS_ATOM_NULL))
++                    js_forget_not_callable(ctx);
+                 JSValue val;
+ 
+                 val = JS_GetPrivateField(ctx, sp[-2], sp[-1]);
+@@ -19562,6 +19631,8 @@
+             BREAK;
+ 
+         CASE(OP_get_array_el2):
++            if (unlikely(ctx->nc_atom != JS_ATOM_NULL))
++                js_forget_not_callable(ctx);
+             GET_ARRAY_EL_INLINE(get_array_el2, 1);
+             BREAK;
+ 
+@@ -19613,6 +19684,8 @@
+             
+         CASE(OP_get_ref_value):
+             {
++                if (unlikely(ctx->nc_atom != JS_ATOM_NULL))
++                    js_forget_not_callable(ctx);
+                 JSValue val;
+                 JSAtom atom;
+                 int ret;
+@@ -19651,6 +19724,8 @@
+ 
+         CASE(OP_get_super_value):
+             {
++                if (unlikely(ctx->nc_atom != JS_ATOM_NULL))
++                    js_forget_not_callable(ctx);
+                 JSValue val;
+                 JSAtom atom;
+                 sf->cur_pc = pc;
+@@ -20643,6 +20718,9 @@
+         }
+     }
+  exception:
++    /* os64: a call abandoned by an exception never consumes its record. */
++    if (unlikely(ctx->nc_atom != JS_ATOM_NULL))
++        js_forget_not_callable(ctx);
+     if (is_backtrace_needed(ctx, rt->current_exception)) {
+         /* add the backtrace information now (it is not done
+            before if the exception happens in a bytecode

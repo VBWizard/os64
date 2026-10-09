@@ -47,8 +47,9 @@ class PrepareTests(unittest.TestCase):
                       'JSValue JS_GetPropertyInternal(', source)
         self.assertIn('js_hear_global_miss(ctx, obj, atom);    \\\n                            val = JS_UNDEFINED;',
                       source)
-        # 0009 names the method a call found not callable, at the call's throw.
-        self.assertIn('        not_a_function:\n            return js_throw_not_a_function(caller_ctx);', source)
+        # 0009 names the method only at the call the record was made for.
+        self.assertIn('                if (unlikely(ctx->nc_atom != JS_ATOM_NULL) &&\n'
+                      '                    !JS_IsFunction(ctx, call_argv[-1])) {', source)
 
     def test_line_shifts_preserve_output(self):
         result = self.prepare()

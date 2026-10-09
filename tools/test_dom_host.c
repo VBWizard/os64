@@ -339,15 +339,22 @@ static void dom_global_miss_cases(void)
     miss_form(&f,&m,"assert(typeof fetch==='undefined');","","global miss: nobody asked, nothing is heard");
     dom_script(&f,GEOMETRY_ASSERT
         "function msg(f){try{f()}catch(e){return e.message}return 'none'}"
-        "var o={ok:function(){return 1},n:5};"
+        "var o={ok:function(){return 1},n:5},plain=5,k='bogus';"
         "assert(msg(()=>o.bogus())===\"'bogus' is not a function\",msg(()=>o.bogus()));"
         "assert(msg(()=>document.bogusMethod(1))===\"'bogusMethod' is not a function\");"
         "assert(msg(()=>o.n())===\"'n' is not a function\");"
-        "var plain=5;assert(msg(()=>plain())==='not a function');"
-        "assert(msg(()=>o.bogus(o.ok()))==='not a function');"
-        "try{o.bogus}catch(e){};assert(msg(()=>plain())==='not a function');"
+        "assert(msg(()=>o.bogus(o.ok()))===\"'bogus' is not a function\",'a callable argument call keeps it');"
+        "assert(msg(()=>plain())==='not a function');"
+        /* Quinn's three (#239): a skipped optional call, a failing argument,
+         * an abandoned call; none may lend its name to another call. */
+        "assert(msg(()=>{o.optional?.();plain()})==='not a function','skipped optional call');"
+        "assert(msg(()=>o.bogus(plain()))==='not a function','the argument failed, not bogus');"
+        "assert(msg(()=>{try{o.abandoned((function(){throw 1})())}catch(_){};plain()})==='not a function');"
+        "assert(msg(()=>{try{o.abandoned((function(){throw 1})())}catch(_){};o[k]()})==='not a function',"
+        "'a computed callee is not a fetched one');"
+        "assert(msg(()=>{o.optional?.();o.second()})===\"'second' is not a function\");"
         "assert(o.ok()===1);",
-        "not-a-function names the method, or nothing");
+        "not-a-function names the method of the call that failed, or nothing");
     fixture_free(&f);
 }
 
