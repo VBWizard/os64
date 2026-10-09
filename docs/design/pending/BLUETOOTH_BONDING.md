@@ -1,5 +1,11 @@
 # Bluetooth bonding and reconnection
 
+This document records the original single-keyboard implementation and its P5
+acceptance evidence. The shared controller, two peer slots, per-slot storage,
+and reset-free peer cleanup are described in [BLUETOOTH.md](../../../BLUETOOTH.md).
+Those changes have host coverage; keyboard-plus-trackball hardware acceptance
+remains outstanding.
+
 Os64 should remember an explicitly paired keyboard and automatically reconnect
 after either device restarts, without another pairing ceremony or a connection
 command. Automatic reconnection is required for completion of this feature.

@@ -22,12 +22,12 @@
 //     descriptors and firmware image type. A matching cold AX210 receives the
 //     embedded Intel firmware and DDC configuration. The first operational
 //     AX210 keeps its USB slot and DMA storage for manual and background scans
-//     and one LE keyboard through /sys/bluetooth. Failed bring-up attempts
+//     and two LE HID peers through /sys/bluetooth. Failed bring-up attempts
 //     Disable Slot before freeing DMA storage. LE input requires encryption
 //     after passkey pairing or an explicit Just Works request. LE keyboards
 //     use Boot Protocol or a supported keyboard Report Map.
-//     Mouse descriptors can select report protocol for a
-//     relative X/Y/wheel layout; unsupported descriptors retain boot mode.
+//     LE mice use a relative X/Y/wheel Report Map. USB mice can fall back
+//     to boot protocol when their report descriptor is unsupported.
 //   - Handles BOTH context sizes (HCCPARAMS1.CSZ): QEMU uses 32-byte
 //     contexts, real hardware frequently uses 64 — the P5 gets to choose.
 //   - Scratchpad buffers allocated when the controller demands them
@@ -35,7 +35,7 @@
 //
 // Delivery: keyboard HID reports flow through keyboard_deliver_event(); mouse
 // reports flow through input_inject_mouse(). The console and GUI therefore do
-// not need to know whether input arrived over PS/2 or USB.
+// not need to know whether input arrived over PS/2, USB or Bluetooth.
 
 #include <stdint.h>
 #include <stddef.h>
@@ -50,7 +50,7 @@ void init_xHCI(void);
 
 // Drain every active controller's event ring: completed keyboard/mouse reports
 // are translated and delivered, transfer TRBs are re-armed, and Bluetooth
-// discovery and LE keyboard state advance without waiting for commands. Called
+// discovery and LE peer states advance without waiting for commands. Called
 // every scheduler pass from processSignals; internally serialized across cores and
 // cheap when idle. Safe to call before init or with no USB input devices.
 void xhci_poll(void);

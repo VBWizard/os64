@@ -1,4 +1,4 @@
-# Bluetooth discovery and LE keyboard input
+# Bluetooth discovery and LE keyboard/mouse input
 
 The first operational Intel AX210 USB adapter (`8087:0032`) stays attached after
 firmware bring-up. Discovery uses the existing polled xHCI transport. USB interrupt
@@ -24,21 +24,17 @@ cat /sys/bluetooth/scan
 cat /sys/bluetooth/devices
 ```
 
-`scan` reports initialization, Classic inquiry, LE scanning, completion or failure.
-A normal dual-mode scan takes about 21 seconds plus command overhead. Read the
-files again to see progress: each open is a consistent snapshot. Discovery does
-not pair or connect. Classic devices must answer inquiry, and LE devices must
-advertise to appear. This is not a radio spectrum analyzer.
+Runtime discovery uses two-second LE scans plus command overhead. Controller
+initialization runs an initial scan before connection commands are accepted.
+Read the files again for progress; each open is a consistent snapshot. Discovery
+does not pair or connect, and a device must advertise to appear. Classic inquiry
+is not exposed by the shared runtime controller.
 
-`scan` also reports the latest round's type (background LE or manual Classic +
-LE), start and finish dates in UTC, boot-relative milliseconds, and outcome.
-An unfinished round says `active` / `in progress`; before the first round it
-says `none this boot`. Times come from the system clock when initialization
-starts and when the round completes or fails. If the wall clock is unavailable,
-the boot-relative timing remains available. This is status content, not a
-filesystem modification timestamp. Reading it does not initiate discovery.
-The timing survives LE cleanup clearing discovery results and is replaced when
-the next scan begins. It is not a per-device last-seen timestamp.
+`scan` also reports the latest round's start and finish dates in UTC,
+boot-relative milliseconds, and outcome. Manual and automatic rounds both use
+the `background LE` scan type. An unfinished round says `active` / `in progress`.
+If the wall clock is unavailable, boot-relative timing remains available.
+Peer disconnects preserve the results and timing; the next scan replaces them.
 
 `devices` lists up to 64 distinct transport/address-type/address combinations,
 with RSSI when supplied, Classic class-of-device bytes, and advertised names.
@@ -60,8 +56,92 @@ is reported explicitly. A read racing a USB poll may report `USB busy; retry thi
 read` rather than waiting under a scheduler-related lock.
 
 Broader periodic discovery and device-cache policy are recorded in DEBTS.md.
-The saved-keyboard manager runs bounded LE discovery rounds while disconnected
-and automatic connection is enabled; it stops scanning while connected.
+Each saved peer has its own automatic connection policy. An absent peer can
+trigger LE discovery while another peer remains connected. Connection setup is
+serialized; established input continues during discovery and pairing.
+
+## Keyboard and trackball together
+
+The runtime supports two LE peers, numbered 0 and 1. Commands without a slot
+prefix address slot 0, preserving existing keyboard scripts and its bond file
+`/home/bluetooth_bond`. Slot 1 uses `/home/bluetooth_bond_1`. Each slot has its own
+saved bond, automatic reconnect policy, and input source. Neither slot is tied
+to a device class. The connection status file shows both slots.
+
+For an MX Ergo S (MR0113), keep the keyboard in slot 0, select Bluetooth pairing
+on the trackball, then scan and use its actual address and address type:
+
+```sh
+echo scan > /sys/bluetooth/scan
+cat /sys/bluetooth/scan
+cat /sys/bluetooth/devices
+# Wait for scan completion. Substitute the trackball's scanned type/address:
+echo slot 1 bond-justworks random XX:XX:XX:XX:XX:XX > /sys/bluetooth/connection
+cat /sys/bluetooth/connection
+```
+
+`mouse ready` means a matching report has decoded. Test motion, left/right/middle
+buttons and vertical scrolling; extra buttons and horizontal scrolling are not
+mapped. Wait for slot 1's `bond storage: saved`, then test trackball off/on and
+host reboot. Keyboard input should continue through trackball pairing and
+reconnection. Test keyboard off/on while moving the trackball as well.
+
+Connection and bonding requests refuse an identity already held by another
+slot's saved bond, including when that device is disconnected. Without an IRK,
+the bond's last air address is also reserved. `/sys/bluetooth/connection` names
+the owning slot after refusal. Use that slot, or explicitly disconnect and
+forget its bond before assigning the device to a different slot.
+
+The same prefix selects policy and lifecycle commands:
+
+```sh
+echo slot 1 inspect > /sys/bluetooth/connection
+echo slot 1 disconnect > /sys/bluetooth/connection
+echo slot 1 reconnect > /sys/bluetooth/connection
+echo slot 1 auto off > /sys/bluetooth/connection
+```
+
+Host simulations cover concurrent keyboard input during mouse pairing,
+saved-key reconnection, cancellation races, interleaved ACL fragments, shared
+command/ACL credits, and independent bond files. The P5's MX Ergo S accepted
+legacy Just Works and completed bond-key distribution on 2026-10-09; its bond
+was saved in slot 1 while slot 0's keyboard remained connected. HID discovery
+then stopped on a peer ATT Read By Group Type request (`0x10`): the handler
+mistook that server-side request for a malformed response to its own discovery.
+The handler now replies to peer requests independently of the pending client
+transaction, with a host regression covering this exchange and keyboard input.
+After booting the fix (`b4116938`), both devices automatically reconnected using
+their saved keys. Slot 1 verified its LTK, read the 111-byte Report Map, selected
+mouse report ID 2, and read back its enabled CCC and Report Protocol Mode. Both
+slots reported zero malformed packets and no errors. Chris confirmed movement,
+clicks, scrolling, and simultaneous operation with the USB-dongle mouse. Movement
+was slow and uneven; the trackball's side button improved speed somewhat, but
+Bluetooth remained less smooth than the dongle mouse. The live connection used
+interval 36 (45 ms), while the peripheral requested 6–9 (7.5–11.25 ms).
+
+After HID setup, a mouse with a longer interval or nonzero peripheral latency
+gets one HCI Connection Update request for 7.5–11.25 ms, zero latency, and a
+four-second supervision timeout. Keyboard timing is unchanged. A refused update
+preserves input; status records completion events and the resulting connection
+parameters. On the P5 at `7742aa92`, the update completed successfully at interval
+6 (7.5 ms), latency zero, timeout 400. Chris confirmed the trackball was working
+well; a status sample showed 657 decoded mouse reports and 17 keyboard reports,
+with both links encrypted and neither reporting errors or malformed packets.
+Pointer scaling is unchanged. LE Secure Connections is not implemented; no
+implicit fallback or fresh pairing occurs during saved-key reconnect.
+
+That boot also exposed delayed discovery: Chris initially reported neither
+device connected. At the first SSH check, the mouse was configured and its
+timing update had succeeded (ready at uptime 118180 ms), while the keyboard's
+last attempt reported `bonded peer not found in scan`. Automatic discovery later
+reconnected the keyboard (ready at 152890 ms) with its saved bond, without a
+manual reconnect command or another reboot. Chris confirmed both working.
+The cause of the earlier absence from scans was not established; delayed boot
+discovery remains an acceptance issue distinct from mouse motion quality.
+
+A helper that writes `bond-justworks TYPE ADDRESS` without a slot prefix targets
+slot 0. Use `slot 1 bond-justworks TYPE ADDRESS` for the trackball, or
+`slot 1 reconnect` once its bond is saved.
 
 ## LE keyboard session
 
@@ -80,7 +160,7 @@ that code **on the Bluetooth keyboard**, including leading zeroes, then Enter.
 The passkey window lasts up to sixty seconds. `HID configured; awaiting input`
 means link encryption, HID discovery, keyboard report selection, subscription
 and settings readback succeeded. Status becomes `keyboard ready` after a matching
-input notification is decoded. `key reports` counts these notifications; keys
+input notification is decoded. `input reports` counts these notifications; keys
 use the existing HID input path, including modifiers and repeat. Host setup
 status does not establish the keyboard's own pairing UI state or a saved bond.
 
@@ -106,15 +186,14 @@ and the usual five-second ATT response deadline. It preserves the original ready
 timestamp and records the last successful inspection time. No periodic reads
 are enabled. This checks a live request/reply path without rewriting settings.
 
-Disconnect resets the Bluetooth controller and releases held keys. Once status
-returns to `idle`, another scan or connection can be requested. Scanning is
-refused during an active connection or connection attempt. Connection commands
-are bounded to 64 bytes, validated as a whole on close, and never wait for radio
-or USB completion in the syscall. Empty writes do nothing. Invalid/busy requests
-are refused. Status preserves the seven public Pairing Response capability bytes
-and identifies the unsupported field when negotiation is refused; these remain
-available after cleanup. One peer is supported. Automatic connection reuses an
-explicitly created bond; it does not pair implicitly or select by advertised name.
+Disconnect releases the selected peer's keys or buttons and terminates its link
+without resetting the controller. Another peer remains usable. Scanning is
+allowed alongside established input, but refused during connection setup.
+Connection commands are bounded to 64 bytes, validated as a whole on close, and
+never wait for radio or USB completion in the syscall. Empty writes do nothing.
+Invalid/busy requests are refused. Status preserves public pairing capabilities
+and identifies unsupported fields after cleanup. Automatic connection reuses
+explicit bonds; it does not pair implicitly or select by advertised name.
 
 The `connect` command negotiates **LE legacy Passkey Entry**, with a 16-byte key,
 a DisplayOnly host and a KeyboardOnly/KeyboardDisplay peer. It refuses to fall
@@ -180,7 +259,7 @@ reboot with an enabled saved bond, the manager runs two-second LE discovery roun
 It matches the saved identity or checks RPAs with controller AES, then reconnects,
 restores encryption, and configures HID. An absent peer causes backoff from two
 to thirty seconds between rounds; discovery continues so a keyboard turned on
-later can connect. A failed scan whose HCI Reset and USB completion prove safe
+later can connect. A failed runtime scan whose Scan Disable and USB completion prove safe
 cleanup uses the same capped backoff, without exhausting retries. Its partial
 results do not trigger a connection. The worker normally runs every two seconds
 to handle storage; it starts discovery when it publishes a restored bond. USB polling advances
@@ -206,13 +285,13 @@ discovery round. It disables automatic connection and wipes the RAM bond. The
 worker atomically replaces the disk record with a keyless tombstone; wait for
 `bond storage: saved` before assuming forgetting will survive reboot. It does not
 erase the keyboard's own bond. A stale in-flight save cannot acknowledge a newer
-forget as saved. A new explicit bond can replace the one-record cache.
+forget as saved. A new explicit bond replaces the selected slot's cache.
 
 The manager yields to manual discovery and pairing. Key rejection, incompatible
 HID, controller mismatch, and terminal transport errors stop automatic attempts
 for user action; peer absence and loss of a working link permit another round.
 A changed static-random identity cannot be recognized by name or by an unrelated
-IRK. Successful reset cleanup permits an explicit retry without reboot; transport
+IRK. Confirmed per-peer cleanup permits an explicit retry without reboot; transport
 failures and unconfirmed cleanup still require reboot. See
 [Bluetooth bonding and reconnection](docs/design/pending/BLUETOOTH_BONDING.md).
 
@@ -223,13 +302,13 @@ The keyboard must expose HID service 0x1812. A notifying Boot Keyboard Input
 0x2a22 with a CCC descriptor and writable Protocol Mode 0x2a4e selects Boot
 Protocol. Otherwise the host reads Report Map 0x2a4b, including Read Blob chunks,
 and examines notifying Report 0x2a4d characteristics and their Report Reference
-0x2908 descriptors. It selects the first supported keyboard input report for
+0x2908 descriptors. It selects a supported keyboard or relative mouse input report for
 decoding, finishes descriptor discovery across the notifying Report candidates,
 and enables each candidate's CCC when its Report Reference identifies Input.
 This includes input reports whose layouts are not decoded; their notifications
 are counted and ignored. Output/Feature references are not subscribed. Each
 write must succeed before readiness; status retains per-report subscription
-completion. The selected keyboard CCC is read back. Report Protocol is selected
+completion. The selected input CCC is read back. Report Protocol is selected
 when Protocol Mode is present. Report IDs come from Report Reference, not a
 prefix in GATT values.
 
@@ -238,26 +317,28 @@ key array, including modifiers and padding. The map is bounded to 1024 bytes,
 eight notifying Report candidates, and a selected input value of at most twenty
 bytes (ATT MTU 23). Keys convert to the shared eight-byte input format; more than
 six non-modifier keys produce HID rollover. Multiple keyboard report IDs are not
-combined. Consumer/media keys, LED output, mice, Classic HID and audio are not
-implemented. Unsupported layouts report an error instead of treating arbitrary
+combined. Mouse maps use the shared relative X/Y/wheel decoder, restoring the Report ID
+octet omitted by GATT before decoding. Consumer/media keys, LED output, Classic
+HID and audio are not implemented. Unsupported layouts report an error instead of treating arbitrary
 bytes as keys. Connection status retains report candidates and, after failure,
 the public Report Map bytes for hardware diagnosis. Receive counters distinguish
 complete ACL packets, packets after readiness, unmatched connections, and
 ignored notifications; notification handles and lengths are retained without
-key contents. Status also retains initial connection parameters, L2CAP parameter
-update requests, and ready/disconnect timestamps (milliseconds since boot).
+key contents. Status also retains current connection parameters, timing-update
+results, L2CAP parameter update requests, and ready/disconnect timestamps
+(milliseconds since boot).
 Inspection reads use the existing encrypted ATT path; pairing policy is unchanged.
 
 Connection initiation has a twenty-second wait; HCI commands have two seconds,
 ATT requests and ACL completion have five seconds, and setup has an overall
-150-second bound. Runtime errors release held keys and attempt a bounded HCI
-Reset after outstanding USB transfers finish. Successful reset and completed USB
-transfers leave `stopped (retry available)`, retaining the error and bond while
-allowing a new explicit connection or scan. `disconnect` from stopped clears
-session diagnostics and returns to idle. A failed or timed-out reset, or USB
-failure, leaves `failed (reboot required)`. Status does not claim the link is
-inactive unless a disconnect or successful reset proves it. USB DMA remains
-allocated if transport fails.
+150-second bound. Runtime errors release the selected source and perform bounded
+peer cleanup after pending commands and USB transfers finish. An established
+link uses HCI Disconnect; pending initiation uses LE Create Connection Cancel
+and waits for its Connection Complete event. If establishment wins the race,
+cleanup disconnects the resulting handle. Confirmed cleanup permits slot reuse
+and retains errors and bonds. A transport failure, missing command reply, or
+unconfirmed cleanup makes the controller terminal and releases both inputs.
+A routine peer disconnect does not reset the controller. DMA stays allocated.
 
 ## Controller and transport
 
@@ -267,14 +348,12 @@ storage; failed bring-up disables the slot before releasing DMA allocations, or
 retains them if disabling fails. The retained adapter owns its DMA storage for
 its remaining boot lifetime, including disconnect and runtime failure.
 
-Each requested scan resets normal HCI state, reads supported features and the
-controller address, and configures event masks. Classic inquiry uses GIAC for
-8 times 1.28 seconds, with extended/RSSI inquiry mode selected from capabilities.
-LE uses active legacy scanning on the primary 1M advertising channels, a 60 ms
-interval and 30 ms window, public own address, no accept-list restriction, and
-controller duplicate filtering. It runs for ten seconds before Scan Disable.
-Background rounds omit Classic inquiry and limit LE scanning to two seconds.
-Extended/coded-PHY advertising is not decoded by this slice.
+Controller initialization resets HCI state, reads features and address, and
+sets event masks covering discovery, connection, encryption and ACL completions.
+Subsequent scans preserve that configuration and established links. LE uses
+active legacy scanning on the primary 1M advertising channels, a 60 ms interval
+and 30 ms window, public own address, and duplicate filtering. Runtime scans
+last two seconds. Extended/coded-PHY advertising is not decoded.
 
 The runtime state machine submits one EP0 command at a time and waits across
 poll passes for both USB completion and the matching HCI reply. Inquiry uses
@@ -283,31 +362,42 @@ HCI events; bulk IN carries ACL data after the firmware handoff. Receive
 rearming is deferred until after the event drain to bound radio work per pass.
 The decoder allocates no memory, waits on nothing and sanitizes untrusted names.
 
-Command wait deadlines are two seconds, Classic completion twelve seconds,
-and the overall procedure forty seconds before cleanup. Scan and LE commands
-accept a successful HCI reply with completed USB transfers even when a poll
-observes them after the command deadline; the overall setup limits still apply.
-Cleanup also accepts a completed Reset observed late. Missing replies or USB
-completion, rejected replies, and transport failures retain their failure paths.
-A scan protocol failure attempts HCI Reset once when its command DMA is no
-longer in flight. Successful Reset and USB completion leave the scan stopped
-with diagnostics intact and permit retry. A transport failure or unsuccessful
-cleanup leaves `failed (reboot required)`; status preserves
-`discovery may be active: yes` when appropriate, and DMA storage remains owned.
-Timing depends on scheduler polling continuing to run, as recorded by the xHCI
-dispatch-frequency debt.
+Command wait deadlines are two seconds and scan setup has a forty-second bound.
+Completed HCI replies and USB transfers are processed before command timeout;
+overall setup limits still apply. Runtime scan cleanup disables scanning. An
+unconfirmed command cannot be replaced with another command using the same USB
+storage. Confirmed initial Reset cleanup retries initialization after two seconds;
+unconfirmed cleanup or transport failure requires reboot. Timing depends on
+scheduler polling, as recorded by the xHCI dispatch-frequency debt.
+
+The host routes commands to one owner, ACL packets by connection handle, and
+completed-packet credits to the relevant peer. Each peer has its own ATT/SMP and
+L2CAP state. It spends at most one controller ACL credit across both peers;
+a confirmed disconnect also returns that handle's unacknowledged credits, as
+specified by [Core Vol 4 Part E, section 4.3](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core-54/out/en/host-controller-interface/host-controller-interface-functional-specification.html).
 
 LE input has separate USB packet, HCI ACL and L2CAP framing. Receive storage is
 bounded (1024-byte HCI ACL payload, 64-byte L2CAP payload); ATT uses the default
-23-byte MTU. The transmit queue is bounded to eight packets and uses one
+23-byte MTU. Each peer's transmit queue is bounded to eight packets and shares one
 controller ACL credit at a time, returned by Number Of Completed Packets. USB
 completion independently gates DMA reuse. EP0 commands and bulk OUT have disjoint
 regions in the retained transmit page. Protocol decoders allocate no memory or
 perform blocking waits. Optional peripheral L2CAP connection-parameter updates
 are rejected, retaining the central's chosen interval. Input stops on encryption
-loss or disconnect, with an empty report releasing held keys.
+loss or disconnect, with an empty report releasing that source's held keys or buttons.
 
 ## Validation
+
+`tools/test_bt_multi_host.sh` drives the production shared controller with an
+independent SMP/GATT peer model. It covers a live keyboard during mouse bonding,
+saved-key reconnect, both directions of peer loss, cancellation success/races,
+rejected initiation, duplicate commands, USB command ownership, shared ACL credits,
+interleaved L2CAP/USB fragmentation, malformed mouse reports and scan cleanup.
+The xHCI harness also checks mouse injection and HID-to-desktop wheel direction.
+The bond-store suite checks that slot 1 writes and failed replacements preserve
+slot 0. These suites pass ASan/UBSan with LeakSanitizer enabled outside the sandbox;
+the sandbox denies LSan thread attachment with EPERM and TracerPid zero.
+
 
 `tools/test_bt_scan_host.sh` exercises HCI sequencing, command credits/replies,
 USB-completion ordering, deadlines and cleanup, report bounds, fragmentation,
@@ -332,7 +422,7 @@ cache preservation, cached-key reconnection, identity checks, forgetting and
 secret cleanup. Power-loss fixtures verify direct cached-key reconnect after
 confirmed cleanup, held-key release, diagnostic retention, and refusal to retry
 after missing/rejected reset completion or USB failure. The production xHCI
-harness checks that cleanup resets discovery state and routes subsequent scan
+harness checks that peer cleanup preserves discovery state and routes subsequent scan
 events correctly. A fixture with the P5's public HID attributes checks subscription
 to five input reports, including reports after the selected keyboard and a
 Report ID absent from the map, filtering of unrelated notifications, exclusion

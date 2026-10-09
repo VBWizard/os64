@@ -2,8 +2,9 @@
 #define OS64_BT_LE_H
 #include "driver/system/usb/bt_scan.h"
 #include "driver/system/hid_keyboard_map.h"
+#include "driver/system/hid_mouse.h"
 
-// One explicitly selected LE peer. Fixed storage and asynchronous callbacks
+// One LE peer session. Fixed storage and asynchronous callbacks
 // keep USB polling usable from the scheduler's serialized input path.
 #define BT_LE_QUEUE 8
 #define BT_LE_ACL_MAX 1024
@@ -38,9 +39,10 @@ typedef struct {
 } bt_le_bond_t;
 
 typedef struct {
-    // The committed cache precedes the session fields cleared on disconnect.
+    // The bond and controller-ownership mode survive session cleanup.
     bt_le_bond_t bond;
     uint64_t bond_revision;
+    bool shared_controller;
     bt_le_phase_t phase;
     uint64_t now, deadline, total_deadline, command_deadline, acl_deadline;
     uint16_t opcode, handle, acl_size, outstanding;
@@ -56,6 +58,9 @@ typedef struct {
     unsigned rx_indications, parameter_requests;
     uint16_t last_cid, last_notification_handle, last_notification_bytes;
     uint16_t interval, latency, supervision_timeout, requested_parameters[4];
+    unsigned connection_updates;
+    uint8_t update_status;
+    bool mouse_update_sent;
     uint8_t last_att_opcode, last_signal_opcode, disconnect_reason;
     uint64_t ready_ms, disconnected_ms, inspection_ms;
     unsigned inspections;
@@ -83,15 +88,22 @@ typedef struct {
     bt_le_report_char_t report_chars[BT_LE_REPORTS];
     uint8_t report_map[HID_KEYBOARD_MAP_BYTES];
     hid_keyboard_layout_t report_layout;
+    hid_mouse_layout_t mouse_layout;
+    bool mouse, cancel_sent, disconnect_sent;
 } bt_le_t;
 
 typedef void (*bt_le_acl_send_t)(void *, const uint8_t *, size_t);
-typedef void (*bt_le_report_t)(void *, const uint8_t [8]);
+typedef struct {
+    bool mouse;
+    uint8_t keys[8];
+    hid_mouse_sample_t pointer;
+} bt_le_input_t;
+typedef void (*bt_le_report_t)(void *, const bt_le_input_t *);
 bool bt_le_request(bt_le_t *, const char *, size_t, uint64_t);
 // Copy completed discovery results immediately after an accepted reconnect,
 // before its first tick. The caller serializes this with requests and polling.
 void bt_le_reconnect_scan(bt_le_t *, const bt_scan_t *);
-// IDLE and reset-confirmed STOPPED leave the controller available for discovery.
+// IDLE and cleanup-confirmed STOPPED permit another session for this peer.
 bool bt_le_quiescent(const bt_le_t *);
 void bt_le_event(void *, const uint8_t *, size_t);
 void bt_le_receive(bt_le_t *, const uint8_t *, size_t, bt_le_report_t, void *);

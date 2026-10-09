@@ -14,6 +14,8 @@ static void test_controller_step(void);
 #include "../kernel/src/driver/system/usb/bt_le.c"
 #include "../kernel/src/driver/system/usb/bt_manager.c"
 #include "../kernel/src/driver/system/usb/bt_bond.c"
+#include "../kernel/src/driver/system/usb/bt_host.c"
+#include "../kernel/src/driver/system/hid_mouse.c"
 #include "xhci_bt_host.inc"
 #include "strings/strlen.h"
 #include "strings/sprintf.h"
@@ -24,19 +26,19 @@ extern char *strstr(const char *,const char *);
 extern int puts(const char *);
 extern int fflush(void *);
 extern _Noreturn void abort(void);
-#define CHECK(x) do { if (!(x)) { puts(#x); fflush(NULL); abort(); } } while (0)
+#define CHECK(x) do { if (!(x)) { printf("line %u: %s\n", (unsigned)__LINE__, #x); fflush(NULL); abort(); } } while (0)
 static uint8_t stored_bond[BT_BOND_RECORD_BYTES];
 static bool store_exists,store_fail,forget_during_save;
 static unsigned bond_saves;
-bool bt_bond_load(bt_le_bond_t *bond,bool *automatic)
+bool bt_bond_load_slot(unsigned slot,bt_le_bond_t *bond,bool *automatic)
 {
-    CHECK(!s_poll_busy);
-    if(!store_exists) { memset(bond,0,sizeof(*bond)); *automatic=false; return true; }
+    CHECK(!s_poll_busy && slot<BT_HOST_PEERS);
+    if(slot || !store_exists) { memset(bond,0,sizeof(*bond)); *automatic=false; return true; }
     return bt_bond_decode(bond,automatic,stored_bond,sizeof(stored_bond));
 }
-bool bt_bond_save(const bt_le_bond_t *bond,bool automatic)
+bool bt_bond_save_slot(unsigned slot,const bt_le_bond_t *bond,bool automatic)
 {
-    CHECK(!s_poll_busy); bond_saves++;
+    CHECK(!s_poll_busy && slot==0); bond_saves++;
     if(forget_during_save) {
         forget_during_save=false; CHECK(xhci_bluetooth_connection("forget",6));
     }
@@ -74,11 +76,12 @@ void hid_keyboard_report(hid_keyboard_t *k,const uint8_t r[8])
     if (r[2]) { CHECK(r[0]==2 && r[2]==4); bt_keys++; }
     else bt_releases++;
 }
-bool hid_mouse_decode(const hid_mouse_layout_t *l,const uint8_t *r,size_t n,hid_mouse_sample_t *s)
-{ (void)l; (void)r; (void)n; (void)s; abort(); }
-void input_release_pointer(input_pointer_source_t *p) { (void)p; abort(); }
+static unsigned mouse_packets;
+static int16_t mouse_x,mouse_y,mouse_wheel;
+static uint8_t mouse_buttons;
+void input_release_pointer(input_pointer_source_t *p) { (void)p; }
 void input_inject_mouse(input_pointer_source_t *p,int16_t x,int16_t y,uint8_t b,int16_t w)
-{ (void)p; (void)x; (void)y; (void)b; (void)w; abort(); }
+{ (void)p; mouse_x=x; mouse_y=y; mouse_buttons=b; mouse_wheel=w; mouse_packets++; }
 void wait(uint64_t ms) { kTicksSinceStart += (ms+9)/10; }
 
 static void *allocated[32];
@@ -301,15 +304,28 @@ static void test_controller_step(void)
 static void runtime_transport(void)
 {
     xhci_bt_probe_t *p=s_hc->bt_probe;
-    p->manager.loaded=true;
-    p->le=(bt_le_t){.phase=BT_LE_READY,.connected=true,.encrypted=true,.handle=11,.boot_value=10,.input_value=10,
-        .now=kTicksSinceStart*1000/TICKS_PER_SECOND};
-    CHECK(!xhci_bluetooth_scan());
+    p->host=(bt_host_t){.initialized=true,.credits=1,.scan={.shared_controller=true}};
+    for(unsigned i=0;i<BT_HOST_PEERS;i++) {
+        p->host.peers[i].manager.loaded=true;
+        p->host.peers[i].le.shared_controller=true;
+    }
+    bt_le_t *s=&p->host.peers[0].le;
+    *s=(bt_le_t){.shared_controller=true,.phase=BT_LE_READY,.connected=true,.encrypted=true,
+        .handle=11,.boot_value=10,.input_value=10,.now=kTicksSinceStart*1000/TICKS_PER_SECOND};
     const uint8_t key[]={0x0b,0x20,15,0,11,0,4,0,0x1b,10,0,2,0,4,0,0,0,0,0};
     memcpy(p->rx[1].buffer,key,sizeof(key));
     xhci_trb_t ev={.param=p->rx[1].pending_trb,.status=p->rx[1].endpoint.packet_bytes-sizeof(key)};
     CHECK(xhci_bt_transfer(&ev,p->device->slot,5,TRB_CC_SHORT_PACKET));
-    CHECK(bt_keys==1 && p->rx[1].rearm_pending && p->le.reports==1);
+    CHECK(bt_keys==1 && p->rx[1].rearm_pending && s->reports==1);
+    bt_le_t *mouse=&p->host.peers[1].le;
+    *mouse=(bt_le_t){.shared_controller=true,.phase=BT_LE_READY,.connected=true,.encrypted=true,
+        .handle=13,.input_value=20,.mouse=true,
+        .mouse_layout={.bytes=4,.buttons={{0,1},{1,1},{2,1}},.x={8,8},.y={16,8},.wheel={24,8}}};
+    const uint8_t motion[]={13,0x20,11,0,7,0,4,0,0x1b,20,0,1,0xfe,3,1};
+    memcpy(p->rx[1].buffer,motion,sizeof(motion));
+    ev=(xhci_trb_t){.param=p->rx[1].pending_trb,.status=p->rx[1].endpoint.packet_bytes-sizeof(motion)};
+    CHECK(xhci_bt_transfer(&ev,p->device->slot,5,TRB_CC_SHORT_PACKET));
+    CHECK(mouse_packets==1 && mouse_x==-2 && mouse_y==3 && mouse_buttons==1 && mouse_wheel==-1);
     uint8_t params[32],saved[35]; memset(params,0xa7,sizeof(params));
     xhci_bt_runtime_send(p,0x2017,params,sizeof(params));
     memcpy(saved,p->tx.buffer+512,sizeof(saved));
@@ -322,138 +338,124 @@ static void runtime_transport(void)
     memcpy(p->rx[0].buffer,disconnect,sizeof(disconnect));
     ev=(xhci_trb_t){.param=p->rx[0].pending_trb,.status=p->rx[0].endpoint.packet_bytes-sizeof(disconnect)};
     CHECK(xhci_bt_transfer(&ev,p->device->slot,3,TRB_CC_SHORT_PACKET));
-    CHECK(p->le.phase==BT_LE_CLEANUP && !p->le.encrypted);
-    xhci_bt_runtime_poll();
-    CHECK(bt_releases==1 && !p->rx[0].rearm_pending && !p->rx[1].rearm_pending);
-    CHECK(!memcmp(p->tx.buffer+512,"\x03\x0c\0",3));
-    p->le.bond.valid=true;
-    p->scan.phase=BT_SCAN_DONE; p->scan.count=1;
-    const uint8_t reset_ok[]={0x0e,4,1,3,0x0c,0};
-    xhci_bt_runtime_event(p,reset_ok,sizeof(reset_ok));
-    CHECK(!xhci_bluetooth_scan() && !xhci_bluetooth_connection("reconnect",9));
-    s_hc->xfer_done=true; s_hc->xfer_cc=TRB_CC_SUCCESS; s_hc->xfer_actual=3;
-    xhci_bt_runtime_poll();
-    CHECK(p->le.phase==BT_LE_STOPPED && p->le.bond.valid);
-    CHECK(p->scan.phase==BT_SCAN_IDLE && !p->scan.count);
-    CHECK(xhci_bluetooth_connection("reconnect",9) && p->le.phase==BT_LE_RESET);
-    // Exercise discovery's event owner after completed LE cleanup as well.
-    p->le.phase=BT_LE_STOPPED;
-    CHECK(xhci_bluetooth_scan() && p->scan.phase==BT_SCAN_RESET);
-    CHECK(!xhci_bluetooth_connection("reconnect",9));
-    xhci_bt_runtime_poll();
-    CHECK(p->scan.pending && p->scan.opcode==0x0c03);
-    xhci_bt_runtime_event(p,reset_ok,sizeof(reset_ok));
-    CHECK(p->scan.command_done && p->le.phase==BT_LE_STOPPED);
-    s_hc->xfer_done=true; s_hc->xfer_cc=TRB_CC_SUCCESS; s_hc->xfer_actual=3;
-    xhci_bt_runtime_poll();
-    CHECK(p->scan.phase==BT_SCAN_FEATURES && p->scan.opcode==0x1003);
-    p->scan=(bt_scan_t){0};
-    p->failed=true; p->le.phase=BT_LE_FAILED; p->le.bond.valid=true;
-    memset(p->le.bond.ltk,0x5a,sizeof(p->le.bond.ltk));
+    CHECK(s->phase==BT_LE_CLEANUP && !s->encrypted);
     unsigned enqueued=p->device->ep0.enqueue;
+    xhci_bt_runtime_poll();
+    CHECK(bt_releases==1 && s->phase==BT_LE_STOPPED && p->device->ep0.enqueue==enqueued);
+    CHECK(mouse->phase==BT_LE_READY && mouse_packets==1 && mouse_buttons==1);
+    CHECK(xhci_bluetooth_scan() && p->host.scan.phase==BT_SCAN_LE_PARAMS);
     CHECK(!xhci_bluetooth_connection("reconnect",9));
-    CHECK(xhci_bluetooth_connection("forget",6) && !p->le.bond.valid);
-    for(unsigned i=0;i<sizeof(p->le.bond.ltk);i++) CHECK(!p->le.bond.ltk[i]);
+    p->host.scan=(bt_scan_t){.shared_controller=true};
+    p->failed=p->host.failed=true; s->phase=BT_LE_FAILED; s->bond.valid=true;
+    memset(s->bond.ltk,0x5a,sizeof(s->bond.ltk));
+    CHECK(!xhci_bluetooth_connection("reconnect",9));
+    CHECK(xhci_bluetooth_connection("forget",6) && !s->bond.valid);
+    for(unsigned i=0;i<sizeof(s->bond.ltk);i++) CHECK(!s->bond.ltk[i]);
     CHECK(p->device->ep0.enqueue==enqueued);
-    puts("PASS: production xHCI ACL receive, key delivery/release and disjoint control/bulk DMA");
+    puts("PASS: production xHCI ACL receive, key release without Reset, and disjoint control/bulk DMA");
 }
 
 static void bond_maintenance(void)
 {
     xhci_bt_probe_t *p=s_hc->bt_probe;
-    p->failed=false; p->le=(bt_le_t){0}; p->scan=(bt_scan_t){0}; p->manager=(bt_manager_t){0};
+    p->failed=false; p->host=(bt_host_t){.initialized=true,.credits=1,.scan={.shared_controller=true}};
+    for(unsigned i=0;i<BT_HOST_PEERS;i++) p->host.peers[i].le.shared_controller=true;
     store_exists=store_fail=forget_during_save=false; bond_saves=0;
     CHECK(!xhci_bluetooth_connection("reconnect",9));
-    xhci_bluetooth_maintain(); CHECK(p->manager.loaded && !p->le.bond.valid);
-    p->le.bond=(bt_le_bond_t){.valid=true,.address_type=1,.last_address_type=1};
-    p->le.bond.peer[5]=0xc1; p->le.bond.last_peer[5]=0xc1;
-    memset(p->le.bond.ltk,0x5a,16); p->le.bond_revision++;
+    xhci_bluetooth_maintain(); CHECK(p->host.peers[0].manager.loaded && !p->host.peers[0].le.bond.valid);
+    xhci_bluetooth_maintain(); CHECK(p->host.peers[1].manager.loaded);
+    p->host.peers[0].le.bond=(bt_le_bond_t){.valid=true,.address_type=1,.last_address_type=1};
+    p->host.peers[0].le.bond.peer[5]=0xc1; p->host.peers[0].le.bond.last_peer[5]=0xc1;
+    memset(p->host.peers[0].le.bond.ltk,0x5a,16); p->host.peers[0].le.bond_revision++;
     // Keep this save-only fixture quiescent without starting automatic discovery.
-    bt_manager_observe(&p->manager,&p->le,0); p->manager.suppressed=true;
+    bt_manager_observe(&p->host.peers[0].manager,&p->host.peers[0].le,0); p->host.peers[0].manager.suppressed=true;
     store_fail=true; xhci_bluetooth_maintain();
-    CHECK(p->manager.dirty && p->le.bond.valid && bond_saves==1);
+    CHECK(p->host.peers[0].manager.dirty && p->host.peers[0].le.bond.valid && bond_saves==1);
     CHECK(xhci_bluetooth_connection("save",4)); store_fail=false;
-    xhci_bluetooth_maintain(); CHECK(!p->manager.dirty && store_exists && bond_saves==2);
-    p->manager=(bt_manager_t){0}; p->le=(bt_le_t){0};
-    xhci_bluetooth_maintain(); CHECK(p->manager.loaded && p->manager.automatic && p->le.bond.valid);
-    CHECK(p->manager.scan_owned && p->scan.phase==BT_SCAN_RESET);
+    xhci_bluetooth_maintain(); CHECK(!p->host.peers[0].manager.dirty && store_exists && bond_saves==2);
+    p->host.peers[0].manager=(bt_manager_t){0}; p->host.peers[0].le=(bt_le_t){.shared_controller=true};
+    xhci_bluetooth_maintain(); CHECK(p->host.peers[0].manager.loaded && p->host.peers[0].manager.automatic && p->host.peers[0].le.bond.valid);
+    CHECK(p->host.peers[0].manager.scan_owned && p->host.scan.phase==BT_SCAN_LE_PARAMS);
     // A completed scan hands off to connection in USB polling, without a worker visit.
-    p->scan.phase=BT_SCAN_DONE; p->scan.count=1;
-    p->scan.devices[0]=(bt_scan_device_t){.le=true,.address_type=1};
-    memcpy(p->scan.devices[0].address,p->le.bond.peer,6);
+    p->host.scan.phase=BT_SCAN_DONE; p->host.scan.count=1;
+    p->host.scan.devices[0]=(bt_scan_device_t){.le=true,.address_type=1};
+    memcpy(p->host.scan.devices[0].address,p->host.peers[0].le.bond.peer,6);
     s_hc->control_slot=0; p->tx_done=true;
     xhci_bt_runtime_poll();
-    CHECK(p->le.phase==BT_LE_RESET && p->le.bond_reused && !p->manager.scan_owned);
+    CHECK(p->host.peers[0].le.phase==BT_LE_ADDRESS && p->host.peers[0].le.bond_reused && !p->host.peers[0].manager.scan_owned);
     // Frequent USB polling must still honor the absent-peer retry deadline.
-    p->le.phase=BT_LE_IDLE; p->scan.phase=BT_SCAN_DONE; p->scan.count=0;
-    p->manager.scan_owned=true;
+    p->host.peers[0].le.phase=BT_LE_IDLE; p->host.scan.phase=BT_SCAN_DONE; p->host.scan.count=0;
+    p->host.peers[0].manager.scan_owned=true;
     xhci_bt_runtime_poll();
-    CHECK(!p->manager.scan_owned && p->scan.phase==BT_SCAN_DONE);
+    CHECK(!p->host.peers[0].manager.scan_owned && p->host.scan.phase==BT_SCAN_DONE);
     xhci_bt_runtime_poll();
-    CHECK(!p->manager.scan_owned && p->scan.phase==BT_SCAN_DONE);
-    kTicksSinceStart=(p->manager.next_attempt*TICKS_PER_SECOND+999)/1000;
+    CHECK(!p->host.peers[0].manager.scan_owned && p->host.scan.phase==BT_SCAN_DONE);
+    kTicksSinceStart=(p->host.peers[0].manager.next_attempt*TICKS_PER_SECOND+999)/1000;
     xhci_bt_runtime_poll();
-    CHECK(p->manager.scan_owned && p->scan.phase==BT_SCAN_RESET);
+    CHECK(p->host.peers[0].manager.scan_owned && p->host.scan.phase==BT_SCAN_LE_PARAMS);
     // Restore a quiescent controller for the storage-only race below.
-    p->le.phase=BT_LE_IDLE; p->scan=(bt_scan_t){0};
-    p->manager.suppressed=true;
+    p->host.peers[0].le.phase=BT_LE_IDLE; p->host.scan=(bt_scan_t){.shared_controller=true};
+    p->host.peers[0].manager.suppressed=true;
     CHECK(xhci_bluetooth_connection("save",4)); forget_during_save=true;
     xhci_bluetooth_maintain();
-    CHECK(!p->le.bond.valid && p->manager.dirty && !p->manager.automatic);
-    xhci_bluetooth_maintain(); CHECK(!p->manager.dirty);
-    p->manager=(bt_manager_t){0}; p->le=(bt_le_t){0};
-    xhci_bluetooth_maintain(); CHECK(!p->le.bond.valid && !p->manager.automatic);
+    CHECK(!p->host.peers[0].le.bond.valid && p->host.peers[0].manager.dirty && !p->host.peers[0].manager.automatic);
+    xhci_bluetooth_maintain(); CHECK(!p->host.peers[0].manager.dirty);
+    p->host.peers[0].manager=(bt_manager_t){0}; p->host.peers[0].le=(bt_le_t){.shared_controller=true};
+    xhci_bluetooth_maintain(); CHECK(!p->host.peers[0].le.bond.valid && !p->host.peers[0].manager.automatic);
     puts("PASS: worker storage outside poll lock, restore, write failure and forget racing a save");
 }
 
 static void scan_history(void)
 {
     xhci_bt_probe_t *p=s_hc->bt_probe;
-    p->failed=false; p->tx_done=true; p->le=(bt_le_t){0}; p->scan=(bt_scan_t){0};
-    p->manager=(bt_manager_t){.loaded=true};
+    p->host.owner=0; p->host.credits=1; p->host.failed=false;
+    p->failed=false; p->tx_done=true; p->host.peers[0].le=(bt_le_t){.shared_controller=true}; p->host.scan=(bt_scan_t){.shared_controller=true};
+    p->host.peers[0].manager=(bt_manager_t){.loaded=true};
     memset(&p->scan_history,0,sizeof(p->scan_history)); s_hc->control_slot=0;
     char out[4096];
     xhci_bluetooth_read(out,sizeof(out),0); CHECK(strstr(out,"last scan: none this boot"));
     kSystemCurrentTime=1791475200; kTicksSinceStart=1000;
     CHECK(xhci_bluetooth_scan()); xhci_bt_runtime_poll();
     xhci_bluetooth_read(out,sizeof(out),0);
-    CHECK(strstr(out,"last scan: manual Classic + LE; active"));
+    CHECK(strstr(out,"last scan: background LE; active"));
     CHECK(strstr(out,"last scan started: 2026-10-08 16:00:00 UTC (uptime ms: 10000)"));
     CHECK(strstr(out,"last scan finished: in progress"));
     kSystemCurrentTime++; kTicksSinceStart++;
     xhci_bt_runtime_poll(); CHECK(p->scan_history.started_at==1791475200);
-    // Complete the scan, then emulate successful LE cleanup clearing its results.
-    p->scan.phase=BT_SCAN_LE_DISABLE; p->scan.pending=p->scan.command_done=true;
-    p->scan.status=0; p->scan.opcode=0x200c; s_hc->control_slot=0;
+    // Completing peer cleanup must preserve scan results and timestamps.
+    p->host.scan.phase=BT_SCAN_LE_DISABLE; p->host.scan.pending=p->host.scan.command_done=true;
+    p->host.scan.status=0; p->host.scan.opcode=0x200c; s_hc->control_slot=0;
+    p->host.owner=1; p->host.command_done=true; p->host.credits=1;
     kSystemCurrentTime++; kTicksSinceStart++;
     xhci_bt_runtime_poll(); CHECK(p->scan_history.finished && !p->scan_history.failed);
-    p->le=(bt_le_t){.phase=BT_LE_CLEANUP,.pending=true,.command_done=true,.opcode=0x0c03,
+    p->host.peers[0].le=(bt_le_t){.shared_controller=true,.phase=BT_LE_CLEANUP,
                    .deadline=kTicksSinceStart*1000/TICKS_PER_SECOND+3000};
-    xhci_bt_runtime_poll(); CHECK(p->scan.phase==BT_SCAN_IDLE);
+    xhci_bt_runtime_poll(); CHECK(p->host.scan.phase==BT_SCAN_DONE);
     xhci_bluetooth_read(out,sizeof(out),0);
-    CHECK(strstr(out,"last scan: manual Classic + LE; complete"));
+    CHECK(strstr(out,"last scan: background LE; complete"));
     CHECK(strstr(out,"last scan finished: 2026-10-08 16:00:02 UTC (uptime ms: 10020)"));
     CHECK(!xhci_bluetooth_read(out,sizeof(out),1)); // Device rows remain machine-readable.
     // A protocol failure followed by a late successful cleanup is also terminal
     // for scan history, but the adapter remains available for the next request.
-    CHECK(bt_scan_start_le(&p->scan,kTicksSinceStart*1000/TICKS_PER_SECOND));
+    CHECK(bt_scan_start_le(&p->host.scan,kTicksSinceStart*1000/TICKS_PER_SECOND));
     xhci_bt_runtime_poll();
-    p->scan.phase=BT_SCAN_CLEANUP; p->scan.pending=p->scan.command_done=true;
-    p->scan.opcode=0x0c03; p->scan.status=0; p->scan.error="test scan timeout";
-    p->scan.deadline=kTicksSinceStart*1000/TICKS_PER_SECOND;
+    p->host.scan.phase=BT_SCAN_CLEANUP; p->host.scan.pending=p->host.scan.command_done=true;
+    p->host.scan.opcode=0x200c; p->host.scan.status=0;
+    p->host.owner=1; p->host.command_done=true; p->host.credits=1; p->host.scan.error="test scan timeout";
+    p->host.scan.deadline=kTicksSinceStart*1000/TICKS_PER_SECOND;
     s_hc->control_slot=0; kTicksSinceStart++; kSystemCurrentTime++;
     xhci_bt_runtime_poll(); xhci_bluetooth_read(out,sizeof(out),0);
-    CHECK(p->scan.phase==BT_SCAN_STOPPED && p->scan_history.finished && p->scan_history.failed);
+    CHECK(p->host.scan.phase==BT_SCAN_STOPPED && p->scan_history.finished && p->scan_history.failed);
     CHECK(strstr(out,"stopped (retry available)") && strstr(out,"last scan: background LE; failed"));
     CHECK(strstr(out,"test scan timeout") && strstr(out,"discovery may be active: no"));
     kSystemCurrentTime=1791475210;
-    CHECK(bt_scan_start_le(&p->scan,kTicksSinceStart*1000/TICKS_PER_SECOND));
+    CHECK(bt_scan_start_le(&p->host.scan,kTicksSinceStart*1000/TICKS_PER_SECOND));
     xhci_bt_runtime_poll(); p->failed=true; kSystemCurrentTime++;
     xhci_bt_runtime_poll(); xhci_bluetooth_read(out,sizeof(out),0);
     CHECK(strstr(out,"last scan: background LE; failed"));
     CHECK(strstr(out,"last scan started: 2026-10-08 16:00:10 UTC"));
     CHECK(strstr(out,"last scan finished: 2026-10-08 16:00:11 UTC"));
-    kSystemCurrentTime=0; p->failed=false; p->scan=(bt_scan_t){0}; s_hc->control_slot=0;
+    kSystemCurrentTime=0; p->host.failed=false; p->host.owner=0; p->host.credits=1; p->failed=false; p->host.scan=(bt_scan_t){.shared_controller=true}; s_hc->control_slot=0;
     CHECK(xhci_bluetooth_scan()); xhci_bt_runtime_poll();
     xhci_bluetooth_read(out,sizeof(out),0); CHECK(strstr(out,"last scan started: clock unavailable"));
     char tiny[2]; CHECK(xhci_bluetooth_read(tiny,sizeof(tiny),0)==1 && !tiny[1]);
@@ -517,14 +519,13 @@ int main(void)
             device.slot=99;
             CHECK(!xhci_bluetooth_scan());
             xhci_bluetooth_start_manager();
-            xhci_bluetooth_maintain(); CHECK(hc.bluetooth.manager.loaded);
-            CHECK(xhci_bluetooth_scan());
-            CHECK(!xhci_bluetooth_scan());
-            for (unsigned poll=0;poll<5000 && hc.bluetooth.scan.phase!=BT_SCAN_DONE;poll++) {
+            xhci_bluetooth_maintain(); CHECK(hc.bluetooth.host.peers[0].manager.loaded);
+            CHECK(!xhci_bluetooth_scan()); // Initial controller setup already owns discovery.
+            for (unsigned poll=0;poll<5000 && hc.bluetooth.host.scan.phase!=BT_SCAN_DONE;poll++) {
                 kTicksSinceStart++;
                 xhci_drain_events(); xhci_bt_runtime_poll();
             }
-            CHECK(hc.bluetooth.scan.phase==BT_SCAN_DONE && !hc.bluetooth.scan.radio_active);
+            CHECK(hc.bluetooth.host.scan.phase==BT_SCAN_DONE && !hc.bluetooth.host.scan.radio_active);
             CHECK(!released && allocations-frees==10);
             if (scenario==WARM) { runtime_transport(); bond_maintenance(); scan_history(); }
         } else if (scenario==DISABLE_FAIL) CHECK(!released && allocations-frees==10 && dcbaa[2]);

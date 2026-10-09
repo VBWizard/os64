@@ -28,7 +28,17 @@ bool bt_scan_quiescent(const bt_scan_t *s)
 bool bt_scan_start(bt_scan_t *s, uint64_t now)
 {
     if (!bt_scan_quiescent(s)) return false;
-    *s=(bt_scan_t){.phase=BT_SCAN_RESET,.credits=1,.total_deadline=now+40000};
+    bool shared=s->shared_controller;
+    uint8_t address[6],features[8];
+    scan_copy(address,s->address,sizeof(address));
+    scan_copy(features,s->features,sizeof(features));
+    *s=(bt_scan_t){.phase=shared?BT_SCAN_LE_PARAMS:BT_SCAN_RESET,
+        .shared_controller=shared,.le_only=shared,.credits=1,.total_deadline=now+40000};
+    // Shared scans skip controller discovery, so retain its public metadata.
+    if(shared) {
+        scan_copy(s->address,address,sizeof(address));
+        scan_copy(s->features,features,sizeof(features));
+    }
     return true;
 }
 bool bt_scan_start_le(bt_scan_t *s,uint64_t now)
@@ -160,6 +170,9 @@ static void scan_fail(bt_scan_t *s, const char *reason, uint64_t now)
     if (!s->error) {
         s->error=reason; s->error_opcode=s->opcode; s->error_status=s->status;
     }
+    if(s->shared_controller && s->pending && !s->command_done) {
+        s->phase=BT_SCAN_FAILED; return;
+    }
     s->phase=BT_SCAN_CLEANUP;
     s->pending=false; s->bad_reply=false; s->hardware_error=false;
     s->deadline=now+2000;
@@ -218,21 +231,25 @@ void bt_scan_tick(bt_scan_t *s, uint64_t now, bool usb_done, bool usb_failed,
     if (s->phase==BT_SCAN_LE_HOST && !(s->features[4]&0x40)) s->phase=BT_SCAN_DONE;
     if (s->phase==BT_SCAN_DONE) return;
     if (s->phase==BT_SCAN_CLEANUP && now>=s->deadline) { s->phase=BT_SCAN_FAILED; return; }
-    // A failed command may still own the USB DMA buffer. Wait for its status
-    // stage before a best-effort HCI Reset; never overwrite an in-flight TD.
+    // Wait for USB to release command storage before cleanup: Scan Disable
+    // on a shared controller, or Reset during exclusive initialization.
     if (!usb_done || (!s->credits && s->phase!=BT_SCAN_CLEANUP)) {
         return;
     }
     uint8_t p[8]={0}, length=0;
     uint16_t op=0;
     switch (s->phase) {
-    case BT_SCAN_RESET: case BT_SCAN_CLEANUP: op=0x0c03; break;
+    case BT_SCAN_RESET: op=0x0c03; break;
+    case BT_SCAN_CLEANUP:
+        op=s->shared_controller?0x200c:0x0c03;
+        length=s->shared_controller?2:0; break;
     case BT_SCAN_FEATURES: op=0x1003; break;
     case BT_SCAN_ADDRESS: op=0x1009; break;
     case BT_SCAN_MASK:
         op=0x0c01; length=8;
-        // Inquiry, command replies, Hardware Error, RSSI/EIR and LE Meta.
-        p[0]=3; p[1]=0xe0; p[4]=2; p[5]=0x40; p[7]=0x20;
+        // Inquiry, disconnect, encryption, command replies, completed ACL,
+        // Hardware Error, RSSI/EIR and LE Meta.
+        p[0]=0x93; p[1]=0xe0; p[2]=4; p[4]=2; p[5]=0x40; p[7]=0x20;
         break;
     case BT_SCAN_INQUIRY_MODE:
         op=0x0c45; length=1;
@@ -242,7 +259,7 @@ void bt_scan_tick(bt_scan_t *s, uint64_t now, bool usb_done, bool usb_failed,
         op=0x0401; length=5; p[0]=0x33; p[1]=0x8b; p[2]=0x9e; p[3]=8;
         s->radio_active=true; break; // GIAC, 8 * 1.28 seconds, unlimited responses.
     case BT_SCAN_LE_HOST: op=0x0c6d; length=2; p[0]=1; break;
-    case BT_SCAN_LE_MASK: op=0x2001; length=8; p[0]=2; break;
+    case BT_SCAN_LE_MASK: op=0x2001; length=8; p[0]=7; break; // Connection, advertising, connection update.
     case BT_SCAN_LE_PARAMS:
         op=0x200b; length=7; p[0]=1; p[1]=0x60; p[3]=0x30;
         break; // Active scan, 60ms interval / 30ms window, public own address, all advertisers.
@@ -264,10 +281,12 @@ size_t bt_scan_status(const bt_scan_t *s, char *out, size_t cap)
     int n=snprintf(out,cap,"state: %s\ncontroller: %02x:%02x:%02x:%02x:%02x:%02x\n"
         "devices: %u\nreports beyond capacity: %u\nmalformed reports: %u\n"
         "error: %s (opcode %04x status %02x)\n"
-        "discovery may be active: %s\nwrite scan to start Classic then LE discovery (about 21 seconds)\n",
+        "discovery may be active: %s\nwrite scan to start %s\n",
         state,s->address[5],s->address[4],s->address[3],s->address[2],s->address[1],s->address[0],
         s->count,s->dropped,s->malformed_reports,s->error ? s->error : "none",
-        s->error_opcode,s->error_status,s->radio_active ? "yes" : "no");
+        s->error_opcode,s->error_status,s->radio_active ? "yes" : "no",
+        s->le_only || s->shared_controller ? "LE discovery (about 2 seconds)" :
+        "Classic then LE discovery (about 21 seconds)");
     return n<0 || !cap ? 0 : (size_t)n<cap ? (size_t)n : cap-1;
 }
 

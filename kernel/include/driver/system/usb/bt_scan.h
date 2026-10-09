@@ -30,7 +30,7 @@ typedef struct {
     uint16_t opcode, error_opcode;
     uint8_t credits, status, error_status, address[6], features[8];
     bool pending, command_done, bad_reply, hardware_error, inquiry_done, radio_active;
-    bool le_only;
+    bool le_only, shared_controller;
     uint8_t inquiry_status;
     const char *error;
     unsigned count, dropped, malformed_reports;
@@ -41,7 +41,7 @@ typedef void (*bt_scan_send_t)(void *context, uint16_t opcode,
                               const uint8_t *params, uint8_t length);
 bool bt_scan_start(bt_scan_t *s, uint64_t now_ms);
 bool bt_scan_start_le(bt_scan_t *s, uint64_t now_ms);
-// STOPPED retains the error after Reset and USB completion make reuse safe.
+// STOPPED retains the error after confirmed scan cleanup and USB completion.
 bool bt_scan_quiescent(const bt_scan_t *s);
 bool bt_scan_request_valid(const char *data, size_t bytes);
 void bt_scan_event(void *context, const uint8_t *event, size_t bytes);

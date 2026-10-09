@@ -6,7 +6,7 @@
 #include "../kernel/src/driver/system/usb/bt_bond_store.c"
 
 typedef struct { bool exists; uint8_t data[160]; size_t length; } test_file_t;
-static test_file_t saved,temporary;
+static test_file_t saved,temporary,saved_second,temporary_second;
 static vfs_file_t handle;
 static test_file_t *opened;
 static size_t position;
@@ -31,7 +31,8 @@ void call_in_kernel_context(void (*fn)(void *),void *arg)
 static int test_open(vfs_file_t **out,const char *path,const char *mode,vfs_filesystem_t *fs)
 {
     (void)fs; assert(gate && !opened);
-    test_file_t *f=strstr(path,".new")?&temporary:&saved;
+    bool second=strstr(path,"_1")!=NULL;
+    test_file_t *f=strstr(path,".new")?(second?&temporary_second:&temporary):(second?&saved_second:&saved);
     if(mode[0]=='r' && (!f->exists || unreadable)) return -1;
     if(mode[0]=='x' && f->exists) return -1;
     if(mode[0]=='w' || mode[0]=='x') { f->exists=true; f->length=0; }
@@ -67,10 +68,13 @@ static int test_rename(const char *old,const char *new,vfs_filesystem_t *fs,uint
     (void)fs; assert(gate && !opened && strstr(old,".new") && !strstr(new,".new"));
     assert(flags==OS64_RENAME_REQUIRE_ATOMIC_REPLACE); renames++;
     if(rename_error) return -1;
-    saved=temporary; temporary=(test_file_t){0}; return 0;
+    assert((strstr(old,"_1")!=NULL)==(strstr(new,"_1")!=NULL));
+    if(strstr(old,"_1")) { saved_second=temporary_second; temporary_second=(test_file_t){0}; }
+    else { saved=temporary; temporary=(test_file_t){0}; }
+    return 0;
 }
 static int test_remove(const char *path,vfs_filesystem_t *fs)
-{ assert(gate && strstr(path,".new")); if(fs->read_only) return -1; temporary=(test_file_t){0}; return 0; }
+{ assert(gate && strstr(path,".new")); if(fs->read_only) return -1; if(strstr(path,"_1")) temporary_second=(test_file_t){0}; else temporary=(test_file_t){0}; return 0; }
 static vfs_file_operations_t operations={.open=test_open,.read=test_read,.write=test_write,
     .sync=test_sync,.close=test_close,.rename=test_rename,.rm=test_remove};
 static vfs_filesystem_t filesystem={.fops=&operations};
@@ -117,6 +121,20 @@ int main(void)
     saved=previous; bond=(bt_le_bond_t){0};
     assert(bt_bond_save(&bond,false) && bt_bond_load(&loaded,&automatic));
     assert(!loaded.valid && !automatic);
+    test_file_t slot_zero=saved;
+    bond.valid=true; bond.address_type=1; bond.peer[5]=0xc2;
+    bond.last_address_type=1; bond.last_peer[5]=0xc2; memset(bond.ltk,0x37,16);
+    assert(bt_bond_load_slot(1,&loaded,&automatic) && !loaded.valid);
+    assert(bt_bond_save_slot(1,&bond,true));
+    assert(bt_bond_load_slot(1,&loaded,&automatic) && loaded.valid && automatic);
+    assert(!memcmp(loaded.ltk,bond.ltk,16) && !memcmp(&slot_zero,&saved,sizeof(saved)));
+    assert(bt_bond_load(&loaded,&automatic) && !loaded.valid && !automatic);
+    test_file_t slot_one=saved_second;
+    rename_error=true; assert(!bt_bond_save_slot(1,&bond,false)); rename_error=false;
+    assert(!memcmp(&slot_one,&saved_second,sizeof(slot_one)) && !temporary_second.exists);
+    assert(!bt_bond_load_slot(BT_BOND_SLOTS,&loaded,&automatic));
+    assert(!bt_bond_save_slot(BT_BOND_SLOTS,&bond,false));
+    puts("PASS: independent slot records, slot-local atomic replacement and invalid slot refusal");
     puts("PASS: production bond store, short I/O, exclusive creation, atomic replacement, corruption and forget tombstone");
     return 0;
 }

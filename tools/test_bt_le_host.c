@@ -11,6 +11,11 @@
 #include "../kernel/src/driver/system/usb/bt_bond.c"
 #include "hid_keyboard_fixtures.h"
 static bt_le_t session;
+// Optional sinks let the multi-peer fixture reuse this independent peer model.
+static void (*event_sink)(const uint8_t *,size_t);
+static void (*wire_sink)(const uint8_t *,size_t);
+static const uint8_t *mouse_map;
+static size_t mouse_map_bytes;
 static uint8_t cmd[35],tx[31],last_report[8],peer_nonce[16],pair_request[7];
 static size_t cmd_n,tx_n;
 static uint8_t peer_pair_response[7];
@@ -30,8 +35,8 @@ enum { NORMAL, WRONG_CONFIRM, NO_BOOT, JUST_WORKS, REJECT_COMMAND, SHARED_BUFFER
 static const uint8_t peer_addr[]={0x1a,0xf0,0xff,0xfe,0x2c,0xf8};
 static const uint8_t local_addr[]={0x49,0x4e,0x35,0x80,0x2f,0x6c};
 static const uint8_t pair_response[]={2,2,0,4,16,0,0};
-static void report(void *ctx,const uint8_t p[8])
-{ (void)ctx; memcpy(last_report,p,8); if(p[2] || p[0]) keys++; else releases++; }
+static void report(void *ctx,const bt_le_input_t *input)
+{ const uint8_t *p=input->keys; assert(!input->mouse); (void)ctx; memcpy(last_report,p,8); if(p[2] || p[0]) keys++; else releases++; }
 static void command(void *ctx,uint16_t op,const uint8_t *p,uint8_t n)
 {
     (void)ctx; assert(!cmd_n && n<=32); cmd[0]=op; cmd[1]=op>>8; cmd[2]=n;
@@ -90,13 +95,15 @@ static void vectors(void)
     memset(p,0,16); memcpy(p,peer_rpa+3,3);
     aes(peer_irk,p,out); assert(!memcmp(out,peer_rpa,3));
 }
-static void event(const uint8_t *p,size_t n) { bt_le_event(&session,p,n); }
+static void event(const uint8_t *p,size_t n) { if(event_sink) event_sink(p,n); else bt_le_event(&session,p,n); }
 static void incoming(uint16_t cid,const uint8_t *p,size_t n)
 {
     uint8_t a[80]={0x0b,0x20}; assert(n<=68);
     a[2]=n+4; a[4]=n; a[6]=cid; memcpy(a+8,p,n);
     // Deliberately split across every header and most payload boundaries.
-    for(size_t i=0;i<n+8;i++) bt_le_receive(&session,a+i,1,report,NULL);
+    for(size_t i=0;i<n+8;i++) {
+        if(wire_sink) wire_sink(a+i,1); else bt_le_receive(&session,a+i,1,report,NULL);
+    }
 }
 static void complete_acl(void)
 { const uint8_t e[]={0x13,5,1,0x0b,0,1,0}; event(e,sizeof(e)); }
@@ -154,7 +161,8 @@ static void controller(void)
         }
         return;
     }
-    case 0x0c03: case 0x0c01: case 0x0c6d: case 0x2001: break;
+    case 0x2001: assert(cmd[2]==8 && cmd[3]==5); break;
+    case 0x0c03: case 0x0c01: case 0x0c6d: break;
     default: assert(!"unexpected command");
     }
     e[1]=n-2; event(e,n);
@@ -254,13 +262,14 @@ static void report_peripheral(const uint8_t *p,size_t n)
             uint8_t map[HID_KEYBOARD_MAP_BYTES+44]; memset(map,0x64,sizeof(map));
             memcpy(map,keyboard_composite_map,sizeof(keyboard_composite_map));
             unsigned length=sizeof(keyboard_composite_map);
+            if(mouse_map) { memcpy(map,mouse_map,mouse_map_bytes); length=mouse_map_bytes; }
             if(scenario==REPORT_BAD_MAP) length--;
             if(scenario==REPORT_MAP_TOO_LONG) length=sizeof(map);
             if(scenario==REPORT_MAP_EXACT) length=((length+21)/22)*22;
             assert(offset<=length);
             unsigned part=length-offset; if(part>22) part=22;
             memcpy(rsp+1,map+offset,part); incoming(4,rsp,part+1);
-        } else if(handle==17) {
+        } else if(handle==17 || (mouse_map && handle==11)) {
             const uint8_t ccc[]={0x0b,1,0}; incoming(4,ccc,sizeof(ccc));
         } else if(handle==22) {
             const uint8_t mode[]={0x0b,1}; incoming(4,mode,sizeof(mode));

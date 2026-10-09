@@ -29,7 +29,7 @@
 //                                "block", "cache", "conf", "gui", "log", "mounts",
 //                                "openfiles", "random", "shlib", "clipboard", "appearance", "decorations"
 //   /sys/bluetooth/scan          discovery status; write "scan" to request.
-//   /sys/bluetooth/connection    LE keyboard status, session commands and persistent bond management.
+//   /sys/bluetooth/connection    LE HID peer status, slot commands and persistent bonds.
 //   /sys/bluetooth/devices       snapshot of the latest Classic/LE results.
 //   /sys/console/font            the face the virtual terminals draw with.
 //                                READ: which face, its cell, the grid it
@@ -359,7 +359,7 @@ typedef enum
 	SYS_NODE_NETCARD,    // /net/<name> — one registered NIC
 	SYS_NODE_BTDIR,      // /bluetooth — on-demand discovery
 	SYS_NODE_BTSCAN,     // /bluetooth/scan — status, write "scan" to request
-	SYS_NODE_BTCONNECTION, // /bluetooth/connection — LE keyboard session
+	SYS_NODE_BTCONNECTION, // /bluetooth/connection — LE HID peer sessions
 	SYS_NODE_BTDEVICES,  // /bluetooth/devices — most recent scan results
 	SYS_NODE_MOUNTSFILE, // /mounts — the mount table, one line per live mount (df's data)
 	SYS_NODE_BLOCKFILE,  // /block — devices and partitions, named and located (lsblk's data)
