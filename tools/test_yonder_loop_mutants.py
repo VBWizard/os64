@@ -34,6 +34,12 @@ PAGE = 'tools/test_libpage_host.sh'
 # none supplies a replacement expectation.
 mutants = [
     # The page's script host
+    ('host-drains-after-an-exception', SCRIPTS,
+     '        if (out->status == OS64_JS_EXCEPTION && out->jobs_pending)\n            drain_after_exception(s, out);',
+     '        (void)drain_after_exception;', WINDOW),
+    ('dom-string-timer-drains', 'userland/libdom/timer.c',
+     '        while (outcome->status == OS64_JS_EXCEPTION && jobs.jobs_pending) {',
+     '        while (false && jobs.jobs_pending) {', WINDOW),
     ('host-blocking-src-blocks', SCRIPTS,
      '    s->blocking = (int32_t)(it - s->items);\n    return YONDER_STOP_BLOCK;\n}',
      '    s->blocking = (int32_t)(it - s->items);\n    return YONDER_STOP_RESUME;\n}', WINDOW),

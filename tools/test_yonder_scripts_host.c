@@ -2103,7 +2103,39 @@ static void loop_handler_runtime_at_click(void) {
         "loop: the runtime is made by the click, the first event an attribute names");
     loop_drop();
 }
+/* A script that queues a job and then throws (google.com's inline-1):
+ * the job still runs after it, as HTML's checkpoint runs it, and the page's
+ * `load` is still delivered; a later script is not refused as busy. */
+static void loop_throw_after_queue(void) {
+    loop_page("<p id=job>no</p><p id=load>no</p><p id=after>no</p>"
+        "<script>Promise.resolve().then(function(){document.getElementById('job').textContent='ran'});"
+        "null.x;</script>"
+        "<script>document.getElementById('after').textContent='ran'</script>"
+        "<script>window.addEventListener('load',function(){document.getElementById('load').textContent='ran'})</script>");
+    check(loop_settle() && g.page.tree!=NULL,"loop: a page whose script throws after queueing a job arrives");
+    check(probe_text_is("job","ran"),"loop: the job a throwing script queued still runs");
+    check(probe_text_is("after","ran"),"loop: the next script is not refused as busy");
+    check(probe_text_is("load","ran"),"loop: the page's load is delivered");
+    check(strstr(g.status_text,"queued jobs")==NULL,"loop: nothing says the previous turn has queued jobs");
+    loop_drop();
+}
+/* The same for a string timer (Quinn, #240): libdom runs its source, and
+ * a throw after a queued job must not stall the timers after it. */
+static void loop_string_timer_throws(void) {
+    loop_page("<p id=job>no</p><p id=next>no</p>"
+        "<script>setTimeout(\"Promise.resolve().then(function(){document.getElementById('job').textContent='ran'});"
+        "null.x\",10);setTimeout(function(){document.getElementById('next').textContent='ran'},20);</script>");
+    check(loop_settle() && g.page.tree!=NULL,"loop: a page with a throwing string timer arrives");
+    now_ms=200;
+    for(int i=0;i<4;i++) script_turn();
+    check(probe_text_is("job","ran"),"loop: the job a throwing string timer queued still runs");
+    check(probe_text_is("next","ran"),"loop: the timer after it is not refused as busy");
+    check(strstr(g.status_text,"queued jobs")==NULL,"loop: nothing says the previous turn has queued jobs");
+    loop_drop();
+}
 static void loop_cases(void) {
+    loop_throw_after_queue();
+    loop_string_timer_throws();
     loop_parse_first();
     loop_waits();
     loop_hash_unshown();

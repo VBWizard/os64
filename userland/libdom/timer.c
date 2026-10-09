@@ -223,6 +223,20 @@ bool os64_dom_timer_fire(os64_dom_t *dom, uint64_t now, os64_js_outcome_t *outco
         }
     } else if (source != NULL) {
         os64_js_run(dom->runtime, source, source_length, name, outcome);
+        /* A string that threw leaves the jobs it queued: `run` drains only
+         * after a source that finishes, and the binding is this run's host
+         * (CONTRACT.md § Results). Until they run every later task is
+         * refused as busy, so they run here, as HTML's checkpoint runs them
+         * after any callback; the string's own failure stays, a sticky one
+         * replaces it (fold). */
+        os64_js_outcome_t jobs = *outcome;
+        while (outcome->status == OS64_JS_EXCEPTION && jobs.jobs_pending) {
+            os64_js_status_t r = os64_js_drain_jobs(dom->runtime, UINT64_MAX, &jobs);
+            fold(outcome, &jobs);
+            if (r != OS64_JS_OK && r != OS64_JS_MORE_JOBS && r != OS64_JS_EXCEPTION &&
+                r != OS64_JS_UNHANDLED_REJECTION)
+                break;
+        }
     }
     dom->timer_nesting = 0;
     if (!JS_IsUndefined(held)) JS_FreeValueRT(dom->engine, held);
