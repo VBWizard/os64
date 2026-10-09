@@ -161,7 +161,8 @@ static void controller(void)
         }
         return;
     }
-    case 0x0c03: case 0x0c01: case 0x0c6d: case 0x2001: break;
+    case 0x2001: assert(cmd[2]==8 && cmd[3]==5); break;
+    case 0x0c03: case 0x0c01: case 0x0c6d: break;
     default: assert(!"unexpected command");
     }
     e[1]=n-2; event(e,n);

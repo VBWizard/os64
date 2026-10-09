@@ -176,7 +176,7 @@ void bt_le_event(void *context,const uint8_t *e,size_t n)
         s->credits=e[cs?3:2];
         if(!s->pending || le_u16(e+(cs?4:3))!=s->opcode) return;
         if(s->command_done || n<6) { le_bad(s); return; }
-        bool async=s->opcode==0x200d || s->opcode==0x2019 || s->opcode==0x0406;
+        bool async=s->opcode==0x200d || s->opcode==0x2013 || s->opcode==0x2019 || s->opcode==0x0406;
         if(cs!=async) { le_bad(s); return; }
         s->status=e[cs?2:5]; s->command_done=true; s->reply_bytes=0;
         if(s->status) {
@@ -209,6 +209,15 @@ void bt_le_event(void *context,const uint8_t *e,size_t n)
         }
         s->handle=le_u16(e+4); s->connected=true;
         s->interval=le_u16(e+14); s->latency=le_u16(e+16); s->supervision_timeout=le_u16(e+18);
+    } else if(e[0]==0x3e && n>=3 && e[2]==3) {
+        if(n!=12) { le_bad(s); return; }
+        if(!s->connected || le_u16(e+4)!=s->handle) return;
+        s->connection_updates++; s->update_status=e[3];
+        // A refused optional timing update leaves the existing link usable.
+        if(!e[3]) {
+            s->interval=le_u16(e+6); s->latency=le_u16(e+8);
+            s->supervision_timeout=le_u16(e+10);
+        }
     } else if(e[0]==0x13) {
         if(n<3 || n!=3u+4u*e[2]) { le_bad(s); return; }
         for(unsigned i=0;i<e[2];i++) {
@@ -572,8 +581,8 @@ static void le_l2cap(bt_le_t *s,bt_le_report_t report,void *ctx)
             if(n-off<4 || !p[off+1] || le_u16(p+off+2)>n-off-4) { le_bad(s); return; }
             uint16_t len=le_u16(p+off+2);
             s->last_signal_opcode=p[off];
-            // Keep the centrally chosen connection parameters. Reject the
-            // peripheral's optional update rather than promising an update.
+            // Retain central timing policy. Mouse timing is requested through
+            // HCI after HID discovery; this reply does not promise peer values.
             uint8_t reply[]={1,p[off+1],2,0,0,0};
             if(p[off]==0x12 && len==8) {
                 s->parameter_requests++;
@@ -625,6 +634,10 @@ void bt_le_receive(bt_le_t *s,const uint8_t *p,size_t n,bt_le_report_t report,vo
 
 static void le_command_finished(bt_le_t *s)
 {
+    if(s->opcode==0x2013) {
+        if(s->status) s->update_status=s->status;
+        return;
+    }
     switch(s->phase) {
     case BT_LE_RESET: s->phase=BT_LE_MASK; break;
     case BT_LE_MASK: s->phase=BT_LE_HOST; break;
@@ -761,7 +774,7 @@ void bt_le_tick(bt_le_t *s,uint64_t now,bool control_done,bool bulk_done,bool us
     if(s->pending) {
         // Process replies already drained by this poll before expiring their wait.
         bool timed_out=now>=s->command_deadline && !(control_done && s->command_done);
-        if(timed_out || (s->command_done && s->status)) {
+        if(timed_out || (s->command_done && s->status && s->opcode!=0x2013)) {
             le_fail(s,timed_out ? "HCI command timed out":"HCI command rejected"); return;
         }
         if(!control_done || !s->command_done) return;
@@ -818,6 +831,17 @@ void bt_le_tick(bt_le_t *s,uint64_t now,bool control_done,bool bulk_done,bool us
         if(le_queue(s,6,req,7)) { s->phase=BT_LE_PAIR_WAIT; s->deadline=now+30000; }
         return;
     }
+    if(s->phase==BT_LE_READY && s->mouse && !s->mouse_update_sent &&
+       (s->interval>9 || s->latency) && control_done && s->credits) {
+        // The keyboard-oriented 30–50ms setup interval makes motion coarse.
+        // Request 7.5–11.25ms once per mouse connection, with zero peripheral latency.
+        // Input remains live while command status and the update event arrive.
+        uint8_t p[14]={0}; le_put(p,s->handle); le_put(p+2,6); le_put(p+4,9);
+        le_put(p+8,400);
+        s->mouse_update_sent=true; s->opcode=0x2013; s->status=0;
+        s->pending=true; s->command_done=false; s->credits=0;
+        s->command_deadline=now+2000; command(ctx,s->opcode,p,sizeof(p)); return;
+    }
     if(s->phase>=BT_LE_SERVICES) {
         uint8_t p[7]={0};
         switch(s->phase) {
@@ -862,7 +886,7 @@ void bt_le_tick(bt_le_t *s,uint64_t now,bool control_done,bool bulk_done,bool us
         op=0x0c01; len=8; p[0]=0x90; p[1]=0xe0; p[2]=4; p[7]=0x20;
         break; // Disconnect, Encryption Change, command replies, Hardware Error, completed ACL, LE.
     case BT_LE_HOST: op=0x0c6d; len=2; p[0]=1; break;
-    case BT_LE_EVENTS: op=0x2001; len=8; p[0]=1; break; // Legacy Connection Complete.
+    case BT_LE_EVENTS: op=0x2001; len=8; p[0]=5; break; // Legacy Connection Complete and Connection Update Complete.
     case BT_LE_ADDRESS: op=0x1009; break;
     case BT_LE_RESOLVE:
         // ah(IRK, prand): zero-pad prand in AES's least-significant octets.
@@ -947,14 +971,17 @@ size_t bt_le_status(const bt_le_t *s,char *out,size_t cap)
         n=snprintf(out+used,cap-used,
             "receive: bytes=%u ACL=%u unmatched=%u after_ready=%u last_CID=%04x last_ATT=%02x\n"
             "notifications: total=%u ignored=%u last_handle=%04x last_bytes=%u indications=%u\n"
-            "initial connection: interval=%u latency=%u timeout=%u (1.25ms/events/10ms)\n"
+            "connection: interval=%u latency=%u timeout=%u (1.25ms/events/10ms)\n"
+            "timing update: mouse requested=%s completion events=%u last status=%02x\n"
             "parameter requests: %u last_signal=%02x min=%u max=%u latency=%u timeout=%u\n"
             "ready at ms: %lu disconnected at ms: %lu disconnect reason: %02x\n"
             "HID Protocol Mode handle: %04x\n"
             "readback: CCC=%04x read=%s Protocol_Mode=%u read=%s completed=%u last_ms=%lu\n",
             s->rx_bytes,s->rx_acl,s->rx_unmatched_acl,s->rx_after_ready,s->last_cid,s->last_att_opcode,
             s->rx_notifications,s->rx_ignored_notifications,s->last_notification_handle,s->last_notification_bytes,s->rx_indications,
-            s->interval,s->latency,s->supervision_timeout,s->parameter_requests,s->last_signal_opcode,
+            s->interval,s->latency,s->supervision_timeout,
+            s->mouse_update_sent?"yes":"no",s->connection_updates,s->update_status,
+            s->parameter_requests,s->last_signal_opcode,
             s->requested_parameters[0],s->requested_parameters[1],s->requested_parameters[2],s->requested_parameters[3],
             s->ready_ms,s->disconnected_ms,s->disconnect_reason,s->protocol,
             s->verified_ccc,s->ccc_read?"yes":"no",s->verified_protocol,s->protocol_read?"yes":"no",

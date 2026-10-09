@@ -11,6 +11,7 @@ static void send_command(void *ctx,uint16_t op,const uint8_t *p,uint8_t n)
 {
     (void)ctx; sent_op=op; sent_length=n; sends++;
     assert(n<=sizeof(sent_params)); memcpy(sent_params,p,n);
+    if(op==0x2001) assert(n==8 && p[0]==7); // Include Connection Update Complete.
 }
 static void complete(bt_scan_t *s,uint8_t status)
 {

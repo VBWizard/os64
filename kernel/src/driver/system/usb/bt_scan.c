@@ -259,7 +259,7 @@ void bt_scan_tick(bt_scan_t *s, uint64_t now, bool usb_done, bool usb_failed,
         op=0x0401; length=5; p[0]=0x33; p[1]=0x8b; p[2]=0x9e; p[3]=8;
         s->radio_active=true; break; // GIAC, 8 * 1.28 seconds, unlimited responses.
     case BT_SCAN_LE_HOST: op=0x0c6d; length=2; p[0]=1; break;
-    case BT_SCAN_LE_MASK: op=0x2001; length=8; p[0]=3; break;
+    case BT_SCAN_LE_MASK: op=0x2001; length=8; p[0]=7; break; // Connection, advertising, connection update.
     case BT_SCAN_LE_PARAMS:
         op=0x200b; length=7; p[0]=1; p[1]=0x60; p[3]=0x30;
         break; // Active scan, 60ms interval / 30ms window, public own address, all advertisers.

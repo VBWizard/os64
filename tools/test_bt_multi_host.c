@@ -241,9 +241,49 @@ static void peer_att_requests(void)
     assert(s->phase==BT_LE_CHARACTERISTICS && !s->malformed && !s->att_pending);
     puts("PASS: peer ATT requests receive a server error without consuming host discovery or disturbing keyboard input");
 }
+static void mouse_interval(void)
+{
+    for(unsigned failure=0;failure<4;failure++) {
+        setup(); bt_le_t *s=&host.peers[1].le;
+        host.peers[0].le.interval=36;
+        *s=(bt_le_t){.shared_controller=true,.phase=BT_LE_READY,.connected=true,.encrypted=true,
+            .mouse=true,.handle=11,.input_value=10,.interval=36,.supervision_timeout=400};
+        assert(hid_mouse_parse(packed,sizeof(packed),&s->mouse_layout));
+        host.credits=0; step(); assert(!cmd_n && !s->mouse_update_sent);
+        host.credits=1; step();
+        assert(cmd_n && le_u16(cmd)==0x2013 && cmd[2]==14);
+        assert(le_u16(cmd+3)==11 && le_u16(cmd+5)==6 && le_u16(cmd+7)==9);
+        assert(le_u16(cmd+9)==0 && le_u16(cmd+11)==400);
+        assert(!le_u16(cmd+13) && !le_u16(cmd+15));
+        notify_keyboard(); mouse_notification();
+        assert(!release_count[0] && !release_count[1] && !reset_count);
+        cmd_n=0;
+        uint8_t status[]={0x0f,4,failure==1?0x0c:0,1,0x13,0x20}; multi_event(status,sizeof(status));
+        uint8_t updated[]={0x3e,10,3,failure==2?0x3b:0,11,0,9,0,0,0,0x90,1};
+        if(failure!=1 && failure!=3) multi_event(updated,sizeof(updated));
+        // Command status can precede USB completion and an inspect request.
+        assert(bt_host_command(&host,"slot 1 inspect",14,now));
+        bt_host_tick(&host,++now,false,true,false,multi_command,acl,multi_report,NULL);
+        assert(s->pending && host.owner==3 && !cmd_n);
+        s->phase=BT_LE_READY; step();
+        assert(!s->pending && !host.owner && !cmd_n && !s->error && !host.failed);
+        assert(s->interval==(failure?36:9) && s->connection_updates==(!failure || failure==2));
+        assert(s->update_status==(failure==1?0x0c:failure==2?0x3b:0));
+        assert(host.peers[0].le.interval==36 && !host.peers[0].le.connection_updates);
+        updated[4]=13; multi_event(updated,sizeof(updated));
+        assert(host.peers[0].le.interval==36 && s->interval==(failure?36:9));
+        now+=30000; step(); assert(!cmd_n && s->phase==BT_LE_READY);
+        notify_keyboard(); mouse_notification();
+        assert(!release_count[0] && !release_count[1]);
+        char output[4096]; bt_le_status(s,output,sizeof(output));
+        assert(strstr(output,"timing update: mouse requested=yes"));
+    }
+    puts("PASS: mouse-only short interval request, per-handle completion, USB ownership and nonfatal timing refusal preserve both inputs");
+}
 int main(void)
 {
     (void)basic;
+    mouse_interval();
     peer_att_requests();
     pairing_and_reconnect(); cancel_races(); credits_and_faults();
     rejected_create_and_fragmentation(); scan_recovery();

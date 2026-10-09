@@ -104,9 +104,22 @@ then stopped on a peer ATT Read By Group Type request (`0x10`): the handler
 mistook that server-side request for a malformed response to its own discovery.
 The handler now replies to peer requests independently of the pending client
 transaction, with a host regression covering this exchange and keyboard input.
-**Trackball input and saved-key reconnection still need hardware validation**
-with that fix. LE Secure Connections is not implemented; no implicit fallback
-or fresh pairing occurs during saved-key reconnect.
+After booting the fix (`b4116938`), both devices automatically reconnected using
+their saved keys. Slot 1 verified its LTK, read the 111-byte Report Map, selected
+mouse report ID 2, and read back its enabled CCC and Report Protocol Mode. Both
+slots reported zero malformed packets and no errors. Chris confirmed movement,
+clicks, scrolling, and simultaneous operation with the USB-dongle mouse. Movement
+was slow and uneven; the trackball's side button improved speed somewhat, but
+Bluetooth remained less smooth than the dongle mouse. The live connection used
+interval 36 (45 ms), while the peripheral requested 6–9 (7.5–11.25 ms).
+
+After HID setup, a mouse with a longer interval or nonzero peripheral latency
+gets one HCI Connection Update request for 7.5–11.25 ms, zero latency, and a
+four-second supervision timeout. Keyboard timing is unchanged. A refused update
+preserves input; status records completion events and the resulting connection
+parameters. **The shorter mouse interval still needs hardware validation.**
+Pointer scaling is unchanged. LE Secure Connections is not implemented; no
+implicit fallback or fresh pairing occurs during saved-key reconnect.
 
 A helper that writes `bond-justworks TYPE ADDRESS` without a slot prefix targets
 slot 0. Use `slot 1 bond-justworks TYPE ADDRESS` for the trackball, or
@@ -293,8 +306,9 @@ bytes as keys. Connection status retains report candidates and, after failure,
 the public Report Map bytes for hardware diagnosis. Receive counters distinguish
 complete ACL packets, packets after readiness, unmatched connections, and
 ignored notifications; notification handles and lengths are retained without
-key contents. Status also retains initial connection parameters, L2CAP parameter
-update requests, and ready/disconnect timestamps (milliseconds since boot).
+key contents. Status also retains current connection parameters, timing-update
+results, L2CAP parameter update requests, and ready/disconnect timestamps
+(milliseconds since boot).
 Inspection reads use the existing encrypted ATT path; pairing policy is unchanged.
 
 Connection initiation has a twenty-second wait; HCI commands have two seconds,

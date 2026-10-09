@@ -58,6 +58,9 @@ typedef struct {
     unsigned rx_indications, parameter_requests;
     uint16_t last_cid, last_notification_handle, last_notification_bytes;
     uint16_t interval, latency, supervision_timeout, requested_parameters[4];
+    unsigned connection_updates;
+    uint8_t update_status;
+    bool mouse_update_sent;
     uint8_t last_att_opcode, last_signal_opcode, disconnect_reason;
     uint64_t ready_ms, disconnected_ms, inspection_ms;
     unsigned inspections;
