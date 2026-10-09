@@ -3127,12 +3127,12 @@ static void diag_page_cases(void) {
 
     /* typeof fetch: recorded, and the page's path unchanged. */
     loop_page("<p id=out>x</p><script>document.getElementById('out').textContent="
-        "String('fetch' in window)+' '+typeof fetch+' '+(window.fetch===undefined)</script>");
-    check(loop_settle() && probe_text_is("out","false undefined true"),
+        "String('fetch' in window)+' '+typeof fetch+' '+(window.fetch===undefined)+' '+(self.fetch===undefined)</script>");
+    check(loop_settle() && probe_text_is("out","false undefined true true"),
         "diag: the page that asks for fetch sees what it always saw");
     yonder_diag_file_name(g.page.diag,name,sizeof(name)); text=diag_file("/tmp/diag",name);
-    check(has(text,"\nverdict: 1 MISSING\nMISSING global fetch (2)\n"),
-        "diag: `typeof fetch` and `window.fetch` are one MISSING line counting both asks");
+    check(has(text,"\nverdict: 1 MISSING\nMISSING global fetch (3)\n") && !has(text,"global self"),
+        "diag: `typeof fetch`, `window.fetch` and `self.fetch` are one MISSING line counting all three asks");
     check(!strcmp(g.badge_text,"MISSING 1") && !g.badge.hidden,"diag: the badge shows the file's own token and count");
     loop_drop();
 

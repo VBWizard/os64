@@ -197,9 +197,10 @@ Reload, so this is the departure write):
   again, the one the brief refuses. A census across pages tells them
   apart, because a platform gap recurs on every site that uses it and a
   page's own name does not.
-- **`self` is a miss today.** libdom does not define it, so `self.fetch`
-  throws "self is not defined" and the census will say `MISSING global
-  self`.
+- **The census's first finding was `self`.** libdom did not define it,
+  so `self.fetch` threw "self is not defined". libdom now defines `self`,
+  `frames`, `parent` and `top` as the window (a window with no frames is
+  all four), so `self.fetch` records `MISSING global fetch`.
 - **A prefixed CSS name (`-webkit-…`) is not counted.** Every engine
   passes over every other engine's dialect, and counting them would bury
   the standard names a page needs under the prefixes it ships for one
