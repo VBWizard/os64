@@ -84,7 +84,7 @@ client_engine.c  — the private seam: hostname/ALPN copies, epoch, entropy,
       |            validator factory, the flags (handshake/closing/eof/
       |            aborted), sticky terminal, classify(), the 1 MiB cap
       |
-      +-- protocol TLS12:  br_ssl_client_context  (Bear, as today)
+      +-- protocol TLS12 / TLS12_FALLBACK: br_ssl_client_context (Bear)
       +-- protocol TLS13:  tls13_engine           (new, port/tls13_*.c)
 ```
 
@@ -234,8 +234,9 @@ Bear generates its own ClientHello, so one hello cannot serve both engines:
 a 1.2 answer to OUR hello cannot be handed to Bear mid-flight. The design:
 
 1. A connection is created with `protocol = OS64_TLS_PROTOCOL_DEFAULT`
-   (= 0, meaning TLS 1.3) or `OS64_TLS_PROTOCOL_TLS12` (Bear, exactly as
-   today). The field is new in `os64_tls_config_t`; zero keeps every
+   (= 0, meaning TLS 1.3), `OS64_TLS_PROTOCOL_TLS12` (explicit Bear), or
+   `OS64_TLS_PROTOCOL_TLS12_FALLBACK` (Bear with the retry downgrade guard).
+   The field is new in `os64_tls_config_t`; zero keeps every
    existing caller's behaviour minus one thing: they now try 1.3 first.
 2. **The hello offers `supported_versions` = {0x0304, 0x0303}.** The first
    draft offered 0x0304 alone, reasoning that this engine cannot speak
@@ -278,27 +279,29 @@ a 1.2 answer to OUR hello cannot be handed to Bear mid-flight. The design:
 4. **The fallback is libfetch's, because libfetch owns the dial.** In
    `fetch.c`, when `fetch_transport_open` fails and the TLS snapshot's
    status is `PEER_CHOSE_TLS12` and the config was DEFAULT: redial the same
-   peer ONCE with `protocol = TLS12`, a fresh TCP connection and (by
+   peer ONCE with `protocol = TLS12_FALLBACK`, a fresh TCP connection and (by
    construction — new client, new entropy) fresh randomness, and record
    `detail.tls_fallback = true` so yonder's diagnostics can say "TLS 1.2
    (fallback)". No other status triggers a redial — not CERTIFICATE, not an
    alert, not a timeout; a fallback that fired on anything else would be
-   the downgrade attack 1.3 was designed to end. The transport adapter
-   itself does not change: it has no dial to retry with.
+   the downgrade attack 1.3 was designed to end. On the fresh connection,
+   the wrapper checks Bear's authenticated server random for both downgrade
+   markers before reporting handshake completion or exposing application
+   data. A marker gives `TLS13_ERR_DOWNGRADE`, terminal `PROTOCOL`, with no
+   further retry. The transport adapter itself has no dial to retry with.
 5. `os64_tls_state_t` gains `uint16_t version` (0 until the ServerHello,
    then 0x0303 or 0x0304) so a consumer can show what it got. os64get's
    verbose output and yonder's diagnostics print it; nothing else is asked
    of the consumers in this arc.
 
-The residual risk, stated plainly: an on-path attacker who can forge a
-plaintext 1.2 ServerHello can make us reconnect with 1.2. The reconnected
-handshake is still a fully authenticated ECDHE+AEAD TLS 1.2 handshake with
-the same certificate policy, so what is lost is 1.3's properties, not the
-connection's authenticity. This is the trade every browser made during the
-1.3 rollout and dropped only when 1.2-only servers became rare enough not
-to need it. When ours become rare enough, the fallback goes; the knob to
-turn it off is `protocol`, and whether yonder's Settings should expose it
-is Chris's call for a later slice.
+An on-path attacker can forge the unauthenticated legacy ServerHello that
+triggers a redial, costing an extra connection or denying service. Against a
+conforming TLS 1.3-capable server, the fresh connection's downgrade marker
+then causes refusal before application data. The ECDHE signature and Finished
+authenticate that random, so changing its marker does not yield an accepted
+handshake. A server that genuinely supports only TLS 1.2 can still complete
+the fallback with the same certificate policy and ECDHE+AEAD profile. Explicit
+TLS12 selection is a separate caller policy, not the automatic retry mode.
 
 ## The record layer (`port/tls13_record.c`)
 
@@ -557,7 +560,8 @@ after a fatal alert is decrypted.
 ## Public ABI delta (S2)
 
 In `tls.h`: `OS64_TLS_PEER_CHOSE_TLS12` appended to `os64_tls_status_t`;
-`typedef enum { OS64_TLS_PROTOCOL_DEFAULT, OS64_TLS_PROTOCOL_TLS12 }
+`typedef enum { OS64_TLS_PROTOCOL_DEFAULT, OS64_TLS_PROTOCOL_TLS12,
+OS64_TLS_PROTOCOL_TLS12_FALLBACK }
 os64_tls_protocol_t;` and a `protocol` field at the END of
 `os64_tls_config_t`; `uint16_t version` in `os64_tls_state_t`. No new
 exported function, so `exports.map` and `audit_tls.py`'s import set do not
@@ -827,3 +831,219 @@ with leak detection enabled; their differential outputs still match.
 ASan/UBSan remained active throughout. S1's evidence is offline
 foundation/vector evidence; live TLS 1.3 interoperability and guest
 acceptance remain the S2/S3 gates above.
+
+## S2 as built — client engine and host integration (2026-10-09, Quinn)
+
+Built on `codex/tls13-s2`, stacked on S1 at `10944de5` (PR #241).
+
+`port/tls13_handshake.c` implements the buffer/ack engine beside BearSSL.
+The public byte wrapper owns the union and retains the accepted-prefix,
+handshake budget, EOF, close and sticky-terminal rules. Its default selects
+TLS 1.3; explicit `OS64_TLS_PROTOCOL_TLS12` selects the existing profile.
+The certificate validator, trust snapshot, time and entropy adapters are
+shared. No new kernel service or public crypto operation was added.
+
+The engine implements the offered profile, single HRR (including cookie-only
+retry), streamed Certificate and NewSessionTicket framing, ECDSA/RSA-PSS
+CertificateVerify, both Finished messages, directional application secrets,
+KeyUpdate and bidirectional close_notify. A separate 16 KiB accepted-output
+buffer lets a requested KeyUpdate precede buffered application bytes without
+losing them or encrypting them under the old key. The group descriptors drive
+both the offered group list and peer-share validation. Record errors remain
+latched across attempted rekey, incorporating Fable's S1 review note.
+
+Compatibility CCS follows RFC 8446 appendix D.4: immediately before CH2 on
+the HRR path, otherwise before the encrypted client flight. No second CCS is
+sent after CH2. This specifies the HRR placement left implicit by step 8
+above; the compatibility-mode ruling is unchanged. Outer CCS still takes the
+plaintext parser during the permitted encrypted-handshake window.
+
+Libfetch retries once, on a fresh dial to the same peer, only after
+`PEER_CHOSE_TLS12`. It keeps the hostname and trust snapshot and obtains fresh
+entropy for BearSSL. Its detail struct records the negotiated version and
+retry flag. Libway carries those facts to yonder; os64get gains `-v` to show
+them. Certificate/protocol errors, peer alerts, timeouts and truncation do not
+permit retry. The existing os64get ELF audit had stale dependencies from
+before the libfetch migration; it now checks os64get → libfetch → libtls/libgzip.
+The public structs grow and their consumers must be rebuilt. The public
+library still exports 31 operations and imports the same 15 OS functions; its production archive contains 72 selected sources. The audit
+also excludes the parser-fuzz seam from production.
+
+### Memory and build measurements
+
+Measured from the freestanding x86_64 debug information:
+
+| Object | Bytes |
+|---|---:|
+| TLS 1.3 engine | 59,912 |
+| Byte wrapper including the protocol union, hostname and ALPN | 61,320 |
+| Owned policy validator | 36,264 |
+| Connection plus validator, excluding shared trust | 97,584 |
+| Shared trust object, excluding its anchor storage | 18,456 |
+
+The 64 KiB engine target includes the additional accepted-output buffer.
+The validator and shared trust are separate allocations; 64 KiB is not a
+claim about their combined footprint. The host coverage counter adds eight
+bytes to the test-only wrapper (61,328). The engine allocation is checked for
+complete wiping before free; the validator and trust contain public
+certificate data and their allocation lifetime is checked separately.
+
+The compiler's largest new individual handshake frame is 736 bytes in
+`server_hello`; CertificateVerify uses a bounded 608-byte frame. These are
+individual frames, not cumulative call-stack bounds. The resulting
+`libtls.so` has 157,458 text/rodata bytes, 2,008 data bytes and zero BSS by
+`x86_64-elf-size`. The full userland build, including yonder, succeeds.
+
+### Host acceptance
+
+`tools/test_tls13_engine_host.py` generates a fixture RSA root and RSA-2048 /
+ECDSA-P256 leaves with PKCS#1 certificate signatures. Its C harness links
+OpenSSL **3.0.13** and drives memory BIOs through the actual public byte API,
+with the production certificate-policy implementation. Memory BIOs replace
+the proposed socket/subprocess peer orchestration: they expose the same
+OpenSSL server handshake, group, ticket, KeyUpdate and client-certificate
+controls directly, while keeping ciphertext fragmentation deterministic.
+Socket/guest acceptance remains S3. The host needs OpenSSL development files
+and Python `cryptography` (tested with 41.0.7); host C is GCC 13.3.0.
+
+The passing cases cover:
+
+- Exact ClientHello framing, suites, extension order, signature lists,
+  versions, ALPN and X25519/P-256 shares. All **18** suite × leaf × group
+  combinations (X25519, P-256, P-384 HRR), 70,013 bytes each way, ciphertext
+  fragments of 1/37/4096 bytes and one-byte plaintext reads. Additional real
+  handshakes verify ECDSA P-384/P-521 and RSA-PSS SHA-384/SHA-512 with a
+  SHA-256 cipher suite. Requested and
+  unrequested KeyUpdate carry further data across both directional switches.
+- Cookie-only HRR retaining the original hello/shares, duplicate/unchanged/
+  unsupported HRR, session echo, changed final suite and trailing bytes after
+  ServerHello. Both downgrade sentinels are refused; stripping TLS 1.3 from
+  the offer to a real OpenSSL peer produces its own DOWNGRD01 marker and a
+  protocol refusal. Real TLS 1.2 peers, including PKCS#1-only RSA, permit a
+  fresh authenticated Bear connection.
+- Valid-tag tampered CertificateVerify and Finished, forbidden PKCS#1 or
+  mismatched signing key, early application data, malformed/unoffered EE
+  selections, fragmented headers, alert/ticket interleaving, trailing bytes
+  after Finished/KeyUpdate, and KeyUpdate ordering before accepted plaintext.
+- For each suite, independently sealed inner plaintext of 16,385 bytes
+  passes; 16,386 bytes with padding fails as LIMIT/record_overflow without
+  exposing plaintext. Bad tags, encrypted CCS and CCS after Finished fail.
+  OpenSSL without compatibility CCS and without tickets also completes.
+- Wrong hostname, expiry and untrusted chain fail at the shared certificate
+  gate. A scripted valid PSS-signed certificate is refused with the policy
+  signature reason; PSS CertificateVerify over the accepted RSA leaf passes.
+  Certificate streaming across one-byte records, per-entry extension refusal,
+  malformed CertificateRequest and duplicate ticket extensions are covered.
+  Optional client authentication sends an empty Certificate; a peer requiring
+  one returns certificate_required, surfaced as a terminal alert.
+- Both close orders, buffered plaintext and unflushed output at bare EOF,
+  application records discarded after local close, abort during pending
+  handshake output, independent interleaved clients, failed constructor
+  allocations, proactive write-key rollover, and the 8 KiB message / 1 MiB
+  accepted-ciphertext caps through the public interface with sticky status.
+
+The surrounding regressions also pass: S1's 165 vector comparisons and
+independent record tests; all six TLS 1.2 engine suites; public OS inputs;
+367 policy chains, 61 anchor cases and 19 handshake gates; libfetch's 833
+checks with two chunk seeds; libway's 248 checks and 126 fetch integration
+checks; TLS transport and fetch transport suites. The BearSSL import/vector
+checks and both private/public ELF audits pass. Leak detection remains
+**enabled**, alongside ASan/UBSan, for the host acceptance and fuzz runs
+outside the sandbox; the existing adapted archive from S1 was reused at the
+same pin/configuration.
+
+### Fuzz evidence
+
+The raw-flight and authenticated-parser campaigns use twelve captured
+flights: three suites × two leaf types × ordinary/P-384 retry. Captures
+include CertificateRequest, tickets and requested KeyUpdate. The test-only
+parser entry point is absent from the production ELF. Each mutation checks
+bounded accepted prefixes, the pre-Finished plaintext gate, live or sticky
+terminal state, allocation balance and engine wiping; sanitizers check memory
+accesses and leak cleanup. The application-transfer cases independently check
+byte-for-byte delivery across fragmentation and key changes.
+
+The completed run used **1,800 seconds**, initial seed **147731**, and
+**160,087 mutations**: 80,044 raw-record cases and 80,043 authenticated-parser
+cases. It produced 119,516 terminal outcomes and 40,571 live outcomes. The
+coverage mask was **0x110a914**, reaching ServerHello/HRR, EncryptedExtensions,
+CertificateRequest, Certificate, CertificateVerify, Finished,
+NewSessionTicket and KeyUpdate. ASan, UBSan and the final LeakSanitizer scan
+completed without findings (exit 0); there was no crash seed to add as a
+regression. The local run log is `/tmp/tls13-s2-fuzz-30m.log`.
+
+This run used the initial capture runner with ECDSA-signed fixture chains;
+the final acceptance matrix also covers PKCS#1-signed chains and the
+PSS-signed-chain refusal. Production engine sources were unchanged during
+the run. The subsequent harness retention/replay refinement was separately
+smoke-tested; it does not change the production parser or record layer.
+`tools/fuzz_tls13_host.py` retains fixture keys, raw flights, native replay
+records, executable and log. It writes each case's seed and iteration before
+executing it, including for sanitizer failures; `--replay DIRECTORY` reruns
+that exact case using the retained executable/corpus. Replay artifacts are
+trusted local test files. The retention and exact-case replay path also
+passed a separate smoke run.
+
+S2 does not claim guest networking or live-site acceptance. Those checks,
+the DEBTS replacement and the final move of this design remain S3; Fable and
+then Opus review this engine slice.
+
+### S2 review follow-up — bidirectional progress (2026-10-09)
+
+Fable's [P2 on PR #242](https://github.com/VBWizard/os64/pull/242#discussion_r4232527731)
+identified that pending ciphertext output suppressed input readiness, hiding
+early server responses while an upload's socket writes were blocked. The
+receive gate now allows independent input after server authentication. Unread
+plaintext still owns the receive buffer; initial ClientHello flights still
+drain before response handlers reuse the send buffer for the next flight.
+
+The new public-byte regression failed on the original head at the simultaneous
+send/receive readiness assertion. It now passes for all three suites with an
+untaken upload, a partially taken upload, and an incoming requested KeyUpdate.
+The early response is readable without taking output; the saved upload record
+remains byte-for-byte intact and OpenSSL later reads the original payload.
+Further data arrives while the KeyUpdate reply is pending, then both directions
+continue under the updated keys. A separate test accepts the peer's close alert
+while preserving the pending local close alert through clean shutdown.
+
+The full TLS 1.3 engine suite, TLS transport and fetch transport regressions
+pass with ASan/UBSan/LeakSanitizer enabled outside the sandbox. The sandbox's
+diagnostic run reported thread-attachment `EPERM`; no leak check was disabled.
+The rebuilt public TLS ELF audit also passes. The engine suite log is
+`/tmp/tls13-s2-review-final.log`. This follow-up does not rerun or extend the
+earlier 30-minute fuzz evidence, and guest acceptance remains S3.
+
+### S2 review follow-up — downgrade guard on the retry (2026-10-09)
+
+Opus's [P1 on PR #242](https://github.com/VBWizard/os64/pull/242#discussion_r4233130186)
+identified a missing check on the fresh BearSSL connection. The original
+fallback selected explicit TLS12, which accepted a real TLS 1.3-capable
+OpenSSL peer's authenticated `DOWNGRD01` marker. The pre-fix probe reproduced
+successful TLS 1.2 handshake completion with that marker. The residual-risk
+paragraph above was wrong about the protection provided by the retry and
+has been corrected with this fix.
+
+Libfetch now selects `OS64_TLS_PROTOCOL_TLS12_FALLBACK` for the redial. At
+Bear's application-ready transition, the shared wrapper checks the
+authenticated server random before setting its handshake flag or permitting
+either application direction. Both downgrade markers yield sticky
+`PROTOCOL` with `TLS13_ERR_DOWNGRADE`; the marker predicate is shared with
+the first connection's ServerHello parser. Explicit TLS12 remains a separate
+caller choice. The fix uses the client-side marker check without adding
+the optional fallback SCSV.
+
+The new regression supplies a sentinel-free scripted legacy response, then
+connects a fresh fallback client to a real TLS 1.3-capable OpenSSL peer.
+ECDSA and RSA peers both fail with the expected downgrade detail, no
+handshake/application-ready flags, and zero plaintext accepted or released.
+EOF and abort preserve the refusal. Explicit TLS12 control connections and
+TLS 1.2-only fallback peers, including PKCS#1-only RSA, still pass. Libfetch's
+fixture requires the guarded retry mode and verifies that a failed retry
+writes no request and does not cause a third dial.
+
+Validation: the full TLS 1.3 host engine suite, all six TLS 1.2 engine suites,
+and libfetch's 845 checks with two chunk seeds pass with ASan/UBSan and
+LeakSanitizer enabled outside the sandbox. The rebuilt public TLS ELF audit
+passes with 31 exports, 15 OS imports and 72 selected sources. Logs are
+`/tmp/tls13-s2-downgrade-{fixed,tls12,fetch,audit}.log`. No guest or new fuzz
+campaign is claimed for this follow-up.

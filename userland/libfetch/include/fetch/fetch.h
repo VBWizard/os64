@@ -169,7 +169,7 @@ typedef struct {
 } os64_fetch_progress_t;
 
 // The numbers behind a status. Only the fields the status names are
-// meaningful; the rest are whatever the fetch left there.
+// meaningful; TLS version/fallback describe the current hop after its dial.
 typedef struct {
     os64_url_result_t url;                    // BAD_URL
     char     scheme[OS64_URL_SCHEME_MAX];     // UNSUPPORTED_SCHEME: which one
@@ -181,6 +181,8 @@ typedef struct {
     os64_tls_status_t tls;                    // TLS_FAILED
     os64_tls_policy_reason_t tls_policy;
     int      tls_engine;
+    uint16_t tls_version;                    // 0 until selected; 0x0303 or 0x0304
+    bool     tls_fallback;                   // this hop redialed explicitly with TLS 1.2
     bool     store_failed;                    // TLS_FAILED: the trust store, not the handshake
     os64_tls_store_status_t store;
     os64_tls_store_report_t store_report;

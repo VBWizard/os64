@@ -77,7 +77,7 @@
 
 static install_file_t stages[GET_MAX_LIST];
 static unsigned stage_count;
-static bool quiet_run, batch_run;
+static bool quiet_run, batch_run, verbose_run;
 
 // One line of the server's catalogue. The length and crc are not decoration:
 // they are what lets -a decide a file is unchanged WITHOUT dialing for it (see
@@ -1432,6 +1432,12 @@ static int fetch_url(const http_url_t *url, const char *urlText,
         return install_cancelled() ? GET_CANCELLED : rc;
     }
     const os64_fetch_head_t *head = os64_fetch_head(f);
+    const os64_fetch_detail_t *tls_detail = os64_fetch_detail(f);
+    if (verbose_run && tls_detail->tls_version) {
+        os64_hprintf(OS64_STDERR, "os64get: TLS %s%s\n",
+            tls_detail->tls_version == 0x0304 ? "1.3" : "1.2",
+            tls_detail->tls_fallback ? " (fallback)" : "");
+    }
     if (head->via_proxy && head->hops == 0)
         proxy_notice(&narr, head->url.scheme, head->proxy_host, head->proxy_port);
 
@@ -1614,13 +1620,14 @@ static int get_main(int argc, char **argv)
     bool force = false;
     bool flgChangesOnly = false;
     const os64_optspec_t specs[] = {
+        {'v', "verbose", false, "show negotiated TLS version", .flag = &verbose_run},
         {'q', "quiet", false, "no progress, just the exit code", .flag = &quiet},
         {'n', "no-archive", false, "replace without backing up the original", .flag = &noArchive},
         {'a', "all", false, "fetch EVERY file the server offers, routing each by the conf", .flag = &all},
         {'f', "force", false, "fetch even files already identical on disk", .flag = &force},
         {'c', "changes-only", false, "display only changed files", .flag = &flgChangesOnly}};
 
-    os64_args_init(&args, argc, argv, specs, 5);
+    os64_args_init(&args, argc, argv, specs, 6);
     args.about = "Fetch a file over the network: the build valet's supply line, or an HTTP/HTTPS address.";
     args.details = "DEST is a directory to install into, or the full path to install as; "
                    "it defaults to the directory /etc/os64get.conf names for NAME (or the cwd). "

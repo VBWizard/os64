@@ -27,6 +27,12 @@ typedef struct {
 const tls13_suite *tls13_suite_find(uint16_t id);
 void tls13_wipe(void *data, size_t length);
 bool tls13_equal(const void *a, const void *b, size_t length);
+// RFC 8446 section 4.1.3: both downgrade markers are forbidden to a client
+// that offered TLS 1.3, including on its fresh TLS 1.2 fallback connection.
+static inline bool tls13_has_downgrade_marker(const unsigned char random[32])
+{
+    return tls13_equal(random+24,"DOWNGRD",7) && random[31]<=1;
+}
 
 // Outputs need hash_len bytes, except Expand-Label (length bytes) and keys.
 // Extract takes an explicit hash-sized salt; absent PSK/IKM is hash_len zeros.
@@ -47,6 +53,8 @@ void tls13_transcript_init(br_multihash_context *transcript);
 int tls13_transcript_retry(br_multihash_context *transcript, const tls13_suite *suite);
 
 typedef struct { uint16_t id; int curve; size_t point_len, secret_len; } tls13_group;
+extern const tls13_group tls13_groups[];
+extern const size_t tls13_group_count;
 const tls13_group *tls13_group_find(uint16_t id);
 // Scalar is a local private key from br_ec_keygen, in BearSSL's big endian
 // encoding (including X25519). Output needs group->secret_len bytes. The
@@ -64,7 +72,8 @@ typedef struct {
 } tls13_record;
 
 // One context per direction and key epoch. Init replaces/wipes the old key and
-// resets the sequence. Zero-initialize before use; destroy via tls13_wipe.
+// resets the sequence; a latched failure refuses rekey. Zero-initialize before
+// use; destroy via tls13_wipe.
 int tls13_record_init(tls13_record *record, const tls13_suite *suite,
                       const void *key, const void *iv);
 bool tls13_record_needs_update(const tls13_record *record);
@@ -81,6 +90,8 @@ int tls13_record_open(tls13_record *record, unsigned char *buffer, size_t wire_l
 // Header validation supports incremental input without peer-sized allocation.
 // encrypted=false covers unprotected handshake/alert/CCS; CCS timing is checked
 // by plaintext_open. The legacy version bytes do not select a protocol version.
+// Route outer CCS to plaintext_open even during an encrypted epoch; its
+// permission comes from the handshake window, not the active read key.
 int tls13_record_length(const unsigned char header[5], bool encrypted, size_t *payload_len);
 int tls13_plaintext_open(const unsigned char *buffer, size_t wire_len,
                          bool ccs_allowed, unsigned *type, size_t *content_len);

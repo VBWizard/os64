@@ -180,6 +180,8 @@ typedef struct {
     char charset[HTTP_CHARSET_MAX];
     char url[OS64_FETCH_URL_MAX];       // where the body came from, after redirects
     bool posted;                        // the FINAL method was POST
+    uint16_t tls_version;
+    bool tls_fallback;
     way_body_t body;
 } way_head_t;
 

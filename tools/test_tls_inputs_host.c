@@ -239,7 +239,7 @@ int main(void)
     assert(strstr(os64_tls_error_description(OS64_TLS_CERTIFICATE, OS64_TLS_POLICY_OK, 54), "not yet valid"));
     assert(strstr(os64_tls_error_description(OS64_TLS_PROTOCOL, OS64_TLS_POLICY_OK, 511), "unrecognized fatal"));
     assert(strstr(os64_tls_error_description(OS64_TLS_PROTOCOL, OS64_TLS_POLICY_OK, 582), "client sent"));
-    assert(!strcmp(os64_tls_error_description(OS64_TLS_PROTOCOL, OS64_TLS_POLICY_OK, 768), "TLS protocol error"));
+    assert(strstr(os64_tls_error_description(OS64_TLS_PROTOCOL, OS64_TLS_POLICY_OK, 768), "downgrade"));
     assert(!strcmp(os64_tls_error_description(OS64_TLS_PROTOCOL, OS64_TLS_POLICY_OK, INT_MAX), "TLS protocol error"));
     assert(!strcmp(os64_tls_error_description(OS64_TLS_PROTOCOL, OS64_TLS_POLICY_OK, -1), "TLS protocol error"));
     assert(!strcmp(os64_tls_error_description(OS64_TLS_TIMEOUT, OS64_TLS_POLICY_OK, 326), "TLS operation timed out"));
@@ -247,7 +247,7 @@ int main(void)
     reset_io();
     os64_tls_trust *s = trust();
     tls_name alpn = {"http/1.1", 8};
-    tls_os_config cfg = {.hostname = {"example.test", 12}, .trust = s, .alpn = &alpn, .alpn_count = 1};
+    tls_os_config cfg = {.protocol = OS64_TLS_PROTOCOL_TLS12, .hostname = {"example.test", 12}, .trust = s, .alpn = &alpn, .alpn_count = 1};
     failure(NULL, TLS_BAD_ARGUMENT);
     assert(create(&cfg, NULL) == TLS_BAD_ARGUMENT && !io.clocks);
     tls_os_config bad = cfg; bad.trust = NULL; failure(&bad, TLS_BAD_ARGUMENT);

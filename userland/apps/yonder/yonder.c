@@ -4786,6 +4786,10 @@ static void stream_finish(os64_fetch_status_t fetch, const char *reason)
         char bytes[32];
         os64_snprintf(bytes, sizeof(bytes), "%lu", (unsigned long)g.stream.bytes);
         yonder_diag_fact(fresh.diag, "bytes", bytes);
+        if (g.stream.head.tls_version) {
+            yonder_diag_fact(fresh.diag, "TLS", g.stream.head.tls_version == 0x0304 ? "1.3" :
+                g.stream.head.tls_fallback ? "1.2 (fallback)" : "1.2");
+        }
         // The server's answer, for every page from the network. One that is
         // an error is shown, as a browser shows it, and is a failed load
         // from the person's chair: a 429's page is not a clean page.

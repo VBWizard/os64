@@ -1,5 +1,6 @@
 #include "port/platform_inputs.h"
 #include "tls_license.h"
+#include "port/tls13_engine.h"
 
 os64_tls_status_t os64_tls_client_create(const os64_tls_config_t *config, os64_tls_client **out)
 {
@@ -7,7 +8,7 @@ os64_tls_status_t os64_tls_client_create(const os64_tls_config_t *config, os64_t
     *out = NULL;
     if (!config) return OS64_TLS_BAD_ARGUMENT;
     tls_os_config inputs = {.hostname = config->hostname, .alpn = config->alpn,
-        .alpn_count = config->alpn_count, .trust = config->trust};
+        .alpn_count = config->alpn_count, .trust = config->trust, .protocol = config->protocol};
     os64_tls_engine *engine = NULL;
     tls_status status = os64_tls_engine_create_os(&inputs, &engine);
     *out = (os64_tls_client *)engine;
@@ -47,6 +48,7 @@ const char *os64_tls_status_name(os64_tls_status_t status)
     case OS64_TLS_TRANSPORT: return "TRANSPORT";
     case OS64_TLS_TIMEOUT: return "TIMEOUT";
     case OS64_TLS_CANCELLED: return "CANCELLED";
+    case OS64_TLS_PEER_CHOSE_TLS12: return "PEER_CHOSE_TLS12";
     }
     return "UNKNOWN";
 }
@@ -92,7 +94,7 @@ const char *os64_tls_error_description(os64_tls_status_t status,
             case BR_ALERT_ACCESS_DENIED: return "server sent a fatal alert: access_denied";
             case BR_ALERT_DECODE_ERROR: return "server sent a fatal alert: decode_error";
             case BR_ALERT_DECRYPT_ERROR: return "server sent a fatal alert: decrypt_error";
-            case BR_ALERT_PROTOCOL_VERSION: return "server rejected the TLS version (fatal alert: protocol_version; this client supports TLS 1.2)";
+            case BR_ALERT_PROTOCOL_VERSION: return "server rejected the TLS version (fatal alert: protocol_version; this client supports TLS 1.3 and TLS 1.2)";
             case BR_ALERT_INSUFFICIENT_SECURITY: return "server sent a fatal alert: insufficient_security";
             case BR_ALERT_INTERNAL_ERROR: return "server sent a fatal alert: internal_error";
             case BR_ALERT_USER_CANCELED: return "server sent a fatal alert: user_canceled";
@@ -117,10 +119,19 @@ const char *os64_tls_error_description(os64_tls_status_t status,
         case BR_ERR_X509_TIME_UNKNOWN: return "certificate validation time is unavailable";
         case BR_ERR_X509_EMPTY_CHAIN: return "server supplied no certificate chain";
         case BR_ERR_UNSUPPORTED_VERSION:
-        case BR_ERR_BAD_VERSION: return "unsupported TLS version; this client supports TLS 1.2";
+        case BR_ERR_BAD_VERSION: return "unsupported TLS version; this client supports TLS 1.3 and TLS 1.2";
         case BR_ERR_BAD_CIPHER_SUITE: return "server selected an unsupported TLS cipher suite";
         case BR_ERR_BAD_MAC: return "TLS record authentication failed";
         case BR_ERR_BAD_SIGNATURE: return "TLS handshake signature verification failed";
+        case BR_ERR_BAD_FINISHED: return "TLS handshake Finished verification failed";
+        case TLS13_ERR_DOWNGRADE: return "TLS downgrade sentinel detected; fallback refused";
+        case TLS13_ERR_SECOND_HRR: return "server sent a second HelloRetryRequest";
+        case TLS13_ERR_SESSION_ID: return "server did not echo the TLS session identifier";
+        case TLS13_ERR_KEY_SHARE: return "server selected an invalid or unoffered key share";
+        case TLS13_ERR_PKCS1: return "PKCS#1 handshake signatures are forbidden in TLS 1.3";
+        case TLS13_ERR_ALPN: return "server selected an unoffered application protocol";
+        case TLS13_ERR_RETRY: return "HelloRetryRequest did not request a permitted change";
+        case TLS13_ERR_SIGNATURE_SCHEME: return "TLS signature scheme does not match the authenticated key";
         }
         if (error >= BR_ERR_SEND_FATAL_ALERT && error < BR_ERR_SEND_FATAL_ALERT + 256)
             return "client sent a fatal TLS alert";
@@ -134,6 +145,7 @@ const char *os64_tls_error_description(os64_tls_status_t status,
     case OS64_TLS_ENTROPY_UNAVAILABLE: return "secure randomness is unavailable";
     case OS64_TLS_BAD_TIME: return "system clock is unavailable or invalid";
     case OS64_TLS_UNSUPPORTED: return "unsupported TLS option or server identity";
+    case OS64_TLS_PEER_CHOSE_TLS12: return "peer selected TLS 1.2; a fresh explicit TLS 1.2 connection is required";
     case OS64_TLS_TRUNCATED: return "connection ended without a complete TLS close";
     case OS64_TLS_TRANSPORT: return "network I/O failed";
     case OS64_TLS_TIMEOUT: return "TLS operation timed out";

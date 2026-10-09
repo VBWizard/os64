@@ -18,6 +18,7 @@ static void remember(fetch_transport_t *io, os64_tls_status_t status)
             os64_tls_state_t state = os64_tls_transport_state(io->tls);
             io->error.policy_reason = state.policy_reason;
             io->error.upstream_error = state.upstream_error;
+            io->error.version = state.version;
         }
         io->error.status = status;
     }
@@ -97,7 +98,7 @@ bool fetch_transport_open(fetch_transport_t *io, int32_t handle,
         os64_tls_state_t state = os64_tls_transport_state(io->tls);
         remember(io, state.status);
         if (!live(state.status)) goto fail;
-        if (state.flags & OS64_TLS_HANDSHAKE_DONE) return true;
+        if (state.flags & OS64_TLS_HANDSHAKE_DONE) { io->error.version = state.version; return true; }
         remember(io, os64_tls_transport_step(io->tls, wait));
         if (!live(io->error.status)) goto fail;
     }

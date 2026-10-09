@@ -266,6 +266,8 @@ static void differential_records(void)
             CHECK(!type && !length && r.error == v->error);
             CHECK(zero(buffer,n) && zero(r.key,sizeof r.key) && zero(r.iv,sizeof r.iv) && zero(&r.aes,sizeof r.aes));
             CHECK(tls13_record_open(&r,buffer,n,true,&type,&length) == v->error);
+            CHECK(tls13_record_init(&r,s,key,iv) == v->error);
+            CHECK(zero(r.key,sizeof r.key));
             refused++; continue;
         }
         size_t at = ilen;
@@ -290,17 +292,17 @@ static void differential_records(void)
         }
         const size_t flips[] = {1,5,n-1};
         for (size_t j = 0; j < sizeof flips / sizeof *flips; j++) {
-            CHECK(!tls13_record_init(&r,s,key,iv)); r.sequence = v->sequence;
+            r = (tls13_record){0}; CHECK(!tls13_record_init(&r,s,key,iv)); r.sequence = v->sequence;
             memcpy(buffer,original,n); buffer[flips[j]] ^= 1;
             CHECK(tls13_record_open(&r,buffer,n,true,&type,&length) == BR_ERR_BAD_MAC);
             CHECK(!length && !type && zero(buffer,n));
         }
-        CHECK(!tls13_record_init(&r,s,key,iv)); r.sequence = v->sequence ^ 1;
+        r = (tls13_record){0}; CHECK(!tls13_record_init(&r,s,key,iv)); r.sequence = v->sequence ^ 1;
         memcpy(buffer,original,n);
         CHECK(tls13_record_open(&r,buffer,n,true,&type,&length) == BR_ERR_BAD_MAC);
         // A successfully received record cannot be replayed in the next slot.
         if (v->sequence != UINT64_MAX) {
-            CHECK(!tls13_record_init(&r,s,key,iv)); r.sequence = v->sequence;
+            r = (tls13_record){0}; CHECK(!tls13_record_init(&r,s,key,iv)); r.sequence = v->sequence;
             memcpy(buffer,original,n); CHECK(!tls13_record_open(&r,buffer,n,true,&type,&length));
             memcpy(buffer,original,n); CHECK(tls13_record_open(&r,buffer,n,true,&type,&length) == BR_ERR_BAD_MAC);
         }
@@ -349,9 +351,9 @@ static void boundaries(void)
     header[3] = 0x40; CHECK(!tls13_record_length(header,false,&n) && n == TLS13_CONTENT_MAX);
     header[3] = 0; CHECK(tls13_plaintext_open(header,5,true,&type,&n) == BR_ERR_UNEXPECTED);
     for (size_t prefix = 0; prefix < 22; prefix++) {
-        CHECK(!tls13_record_init(&r,s,key,iv));
+        r = (tls13_record){0}; CHECK(!tls13_record_init(&r,s,key,iv));
         CHECK(!tls13_record_seal(&r,TLS13_APPLICATION,buffer,0,sizeof buffer,&n));
-        CHECK(!tls13_record_init(&r,s,key,iv));
+        r = (tls13_record){0}; CHECK(!tls13_record_init(&r,s,key,iv));
         CHECK(tls13_record_open(&r,buffer,prefix,true,&type,&n) != 0 && !n && !type);
     }
     tls13_wipe(&r,sizeof r); CHECK(zero(&r,sizeof r));

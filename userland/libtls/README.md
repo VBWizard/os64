@@ -2,11 +2,11 @@
 
 This directory contains the pinned BearSSL core, private os64 adapters,
 `libtls.so`, and host/guest fixtures. The public byte API is `<tls/tls.h>`;
-its boundary and tests are described in [TLS_PUBLIC_LIBRARY.md](../../TLS_PUBLIC_LIBRARY.md).
+its boundary and tests are described in [TLS_PUBLIC_LIBRARY.md](../../docs/design/completed/TLS_PUBLIC_LIBRARY.md).
 The owned TCP adapter is `<tls/transport.h>`, described in
-[TLS_TRANSPORT.md](../../TLS_TRANSPORT.md). The foundation archive and
-`/tests/bearssltest` remain separate reference and vector artifacts. Native
-HTTPS integration remains a separate slice of [TLS.md](../../TLS.md).
+[TLS_TRANSPORT.md](../../docs/design/completed/TLS_TRANSPORT.md). The foundation archive and
+`/tests/bearssltest` remain separate reference and vector artifacts. Libfetch
+drives native HTTPS using these interfaces; see [TLS.md](../../docs/design/completed/TLS.md).
 
 ## Provenance
 
@@ -146,9 +146,11 @@ traces and generates `test/tls13_vectors.h`; `--check` detects stale output.
 `hashlib`/`cryptography` expectations under ASan/UBSan. It accepts
 `--foundation PATH/adapted/core.a` to reuse a successful foundation run and
 `--output PATH` to retain artifacts. The host needs the Python `cryptography`
-package. These helpers do not select TLS 1.3 through the public library;
-handshake integration and interoperability belong to S2 of
+package. The public library defaults to the TLS 1.3 handshake engine built on these
+helpers; explicit TLS 1.2 selection retains BearSSL. See S2 of
 [TLS13.md](../../docs/design/pending/TLS13.md).
 
-Physical-hardware runs, TLS interoperability, certificate-policy coverage,
-fuzzing, and production entropy integration are not established by this slice.
+The foundation harness alone does not establish physical-hardware behavior,
+TLS interoperability, certificate policy, fuzzing or production entropy
+integration. [CLIENT_ENGINE.md](CLIENT_ENGINE.md) records the engine-level
+harnesses and links their acceptance evidence.

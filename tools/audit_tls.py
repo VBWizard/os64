@@ -31,7 +31,8 @@ assert imports == {'os64_malloc', 'os64_free', 'os64_memcpy', 'os64_memmove', 'o
                    'os64_conf_find', 'os64_slurp', 'os64_ticks', 'os64_read_for', 'os64_write_for'}, imports
 for binary, dependencies in ((LIBRARY, ['libos64.so']), (FIXTURE, ['libtls.so', 'libos64.so']),
                              (TRANSPORT_PROBE, ['libtls.so', 'libos64.so']),
-                             (FETCHER, ['libgzip.so', 'libtls.so', 'libos64.so'])):
+                             (USERLAND / 'bin/libfetch.so', ['libtls.so', 'libgzip.so', 'libos64.so']),
+                             (FETCHER, ['libfetch.so', 'libos64.so'])):
     dynamic = command('x86_64-elf-readelf', '-dW', binary)
     assert re.findall(r'\(NEEDED\).*\[(.*?)\]', dynamic) == dependencies, dynamic
     assert '(HASH)' in dynamic
@@ -48,7 +49,7 @@ for binary, dependencies in ((LIBRARY, ['libos64.so']), (FIXTURE, ['libtls.so', 
 assert re.findall(r'\(SONAME\).*\[(.*?)\]', command('x86_64-elf-readelf', '-dW', LIBRARY)) == ['libtls.so']
 assert (BASE / 'upstream/LICENSE.txt').read_bytes() in LIBRARY.read_bytes()
 symbols = command('x86_64-elf-nm', LIBRARY)
-assert not re.search(r'\b(tls_fixture_|bearssl_test_|br_ssl_server_|time_test_certificate)', symbols), 'fixture/server code linked'
+assert not re.search(r'\b(tls_fixture_|bearssl_test_|br_ssl_server_|time_test_certificate|tls13_test_|os64_tls_engine_test_)', symbols), 'fixture/server code linked'
 assembly = command('x86_64-elf-objdump', '-d', LIBRARY)
 assert not re.search(r'\t(?:rdrand|rdseed|syscall|sysenter)\b', assembly), 'unexpected RNG/syscall instruction'
 manifest = re.findall(r'libtls/[^\s\\]+\.c', (BASE / 'public_sources.mk').read_text())
