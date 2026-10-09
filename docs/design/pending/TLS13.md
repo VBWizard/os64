@@ -983,3 +983,28 @@ passed a separate smoke run.
 S2 does not claim guest networking or live-site acceptance. Those checks,
 the DEBTS replacement and the final move of this design remain S3; Fable and
 then Opus review this engine slice.
+
+### S2 review follow-up — bidirectional progress (2026-10-09)
+
+Fable's [P2 on PR #242](https://github.com/VBWizard/os64/pull/242#discussion_r4232527731)
+identified that pending ciphertext output suppressed input readiness, hiding
+early server responses while an upload's socket writes were blocked. The
+receive gate now allows independent input after server authentication. Unread
+plaintext still owns the receive buffer; initial ClientHello flights still
+drain before response handlers reuse the send buffer for the next flight.
+
+The new public-byte regression failed on the original head at the simultaneous
+send/receive readiness assertion. It now passes for all three suites with an
+untaken upload, a partially taken upload, and an incoming requested KeyUpdate.
+The early response is readable without taking output; the saved upload record
+remains byte-for-byte intact and OpenSSL later reads the original payload.
+Further data arrives while the KeyUpdate reply is pending, then both directions
+continue under the updated keys. A separate test accepts the peer's close alert
+while preserving the pending local close alert through clean shutdown.
+
+The full TLS 1.3 engine suite, TLS transport and fetch transport regressions
+pass with ASan/UBSan/LeakSanitizer enabled outside the sandbox. The sandbox's
+diagnostic run reported thread-attachment `EPERM`; no leak check was disabled.
+The rebuilt public TLS ELF audit also passes. The engine suite log is
+`/tmp/tls13-s2-review-final.log`. This follow-up does not rerun or extend the
+earlier 30-minute fuzz evidence, and guest acceptance remains S3.

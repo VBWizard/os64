@@ -61,6 +61,11 @@ both its count and status. Processing the final accepted bytes can return a
 terminal status together with a nonzero count. Zero-length calls do not
 acknowledge upstream buffers; invalid arguments do not poison a live engine.
 State flags tell the caller which operations can make progress.
+After TLS 1.3 server authentication, ciphertext input remains available while
+output is pending, unless unread plaintext occupies the receive buffer or the
+peer has closed. This lets an upload receive an early response even when socket
+writes are blocked. Initial ClientHello flights drain before processing their
+responses, whose handlers reuse the send buffer for the next flight.
 Before the initial handshake completes, accepted ciphertext is capped at
 1 MiB across calls, including warning records. A transfer crossing the cap
 accepts at most the remaining prefix; further input fails with `TLS_LIMIT`
@@ -150,7 +155,10 @@ and excludes test-only parser bypasses.
 The TLS 1.3 fixture covers the three suites, RSA/ECDSA leaves, X25519/P-256
 and P-384 HRR against OpenSSL; transfer fragmentation, tickets, KeyUpdate and
 both close orders; real TLS 1.2 selection and fresh Bear fallback; and
-valid-tag malformed messages through the public byte API. Mutated captures
+valid-tag malformed messages through the public byte API. It also checks early
+responses with untaken or partially taken upload output, incoming KeyUpdate
+and application data while a reply is pending, and simultaneous close alerts.
+These cases retain the queued output and verify its later delivery. Mutated captures
 exercise both raw records and authenticated handshake parsing. The fuzz runner
 retains its fixture keys, corpus, executable, log and next-case seed in the
 output directory. `--replay DIRECTORY` reproduces that case with the retained

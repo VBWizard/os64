@@ -622,7 +622,10 @@ unsigned tls13_current_state(tls13_engine *e)
     unsigned state=e->send_used?BR_SSL_SENDREC:0;
     if (e->error || (e->local_closed && e->peer_closed && !e->send_used)) return state|BR_SSL_CLOSED;
     if (e->plain_at<e->plain_end) state|=BR_SSL_RECVAPP;
-    else if (!e->send_used && !e->peer_closed) state|=BR_SSL_RECVREC;
+    // Authenticated input uses a separate buffer, so blocked output must not
+    // hide an early upload response. Before authentication, hello/Finished
+    // handlers build the next flight in send; drain the prior flight first.
+    else if (!e->peer_closed && (!e->send_used || e->authenticated)) state|=BR_SSL_RECVREC;
     if (e->authenticated && !e->closing && !e->send_used && !e->update_pending && e->app_used<TLS13_CONTENT_MAX)
         state|=BR_SSL_SENDAPP;
     return state;

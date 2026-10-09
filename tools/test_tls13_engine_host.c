@@ -214,6 +214,90 @@ static size_t feed(os64_tls_client *client, const unsigned char *p, size_t n)
     }
     return at;
 }
+// Service incoming records without taking client output, as when socket writes
+// are blocked. Include the suffix already retained by the handshake driver.
+static void receive_only(connection *c)
+{
+    if (c->incoming_at<c->incoming_len) {
+        size_t n=c->incoming_len-c->incoming_at;
+        CHECK(feed(c->client,c->incoming+c->incoming_at,n)==n);
+        c->incoming_at=c->incoming_len;
+    }
+    unsigned char wire[32768]; int n;
+    while ((n=BIO_read(c->out,wire,sizeof wire))>0)
+        CHECK(feed(c->client,wire,(size_t)n)==(size_t)n);
+}
+static void pending_output(void)
+{
+    const char *suites[]={"TLS_AES_128_GCM_SHA256","TLS_AES_256_GCM_SHA384","TLS_CHACHA20_POLY1305_SHA256"};
+    const char response[]="HTTP/1.1 413 Content Too Large\r\nContent-Length: 0\r\n\r\n";
+    for (unsigned suite=0;suite<3;suite++) for (unsigned mode=0;mode<3;mode++) {
+        connection *c=connect_peer("ec",suites[suite],"X25519",OS64_TLS_PROTOCOL_DEFAULT,TLS1_3_VERSION,4096);
+        handshake_done(c); receive_only(c);
+        unsigned char upload[8193], wire[32768], saved[TLS13_SEND_MAX], plain[8193];
+        for (size_t i=0;i<sizeof upload;i++) upload[i]=pattern(i,29);
+        CHECK(os64_tls_write_plaintext(c->client,upload,sizeof upload).transferred==sizeof upload);
+        CHECK(os64_tls_flush(c->client)==OS64_TLS_OK);
+        if (mode==1) {
+            CHECK(os64_tls_take_ciphertext(c->client,wire,7).transferred==7);
+            CHECK(BIO_write(c->in,wire,7)==7);
+        }
+        tls13_engine *e=inner(c->client);
+        size_t send_at=e->send_at, send_used=e->send_used;
+        CHECK(send_used>send_at); memcpy(saved,e->send,sizeof saved);
+        os64_tls_state_t state=os64_tls_state(c->client);
+        CHECK((state.flags&(OS64_TLS_SEND_CIPHER|OS64_TLS_RECV_CIPHER))==
+              (OS64_TLS_SEND_CIPHER|OS64_TLS_RECV_CIPHER));
+        if (mode==2) {
+            CHECK(SSL_key_update(c->ssl,SSL_KEY_UPDATE_REQUESTED));
+            ssl_result(c,SSL_do_handshake(c->ssl));
+        }
+        CHECK(SSL_write(c->ssl,response,sizeof response)==sizeof response);
+        receive_only(c);
+        state=os64_tls_state(c->client);
+        CHECK(state.status==OS64_TLS_OK && (state.flags&OS64_TLS_RECV_PLAIN));
+        CHECK(!(state.flags&OS64_TLS_RECV_CIPHER));
+        CHECK(e->send_at==send_at && e->send_used==send_used && !memcmp(saved,e->send,sizeof saved));
+        CHECK(os64_tls_read_plaintext(c->client,plain,sizeof plain).transferred==sizeof response);
+        CHECK(!memcmp(plain,response,sizeof response));
+        CHECK(os64_tls_state(c->client).flags&OS64_TLS_RECV_CIPHER);
+        // Drain just the upload record; a requested KeyUpdate reply remains
+        // pending and must also permit receiving with the new server read key.
+        size_t n=send_used-send_at;
+        CHECK(os64_tls_take_ciphertext(c->client,wire,n).transferred==n);
+        CHECK(BIO_write(c->in,wire,(int)n)==(int)n);
+        CHECK(SSL_read(c->ssl,plain,sizeof plain)==sizeof upload);
+        CHECK(!memcmp(plain,upload,sizeof upload));
+        if (mode==2) {
+            CHECK(e->send_used && !e->update_pending);
+            CHECK(SSL_write(c->ssl,"next",4)==4); receive_only(c);
+            CHECK(os64_tls_read_plaintext(c->client,plain,sizeof plain).transferred==4);
+            CHECK(!memcmp(plain,"next",4));
+            n=drain(c->client,wire,sizeof wire); CHECK(n);
+            CHECK(BIO_write(c->in,wire,(int)n)==(int)n);
+        }
+        exchange(c,257); close_connection(c,false); destroy(c);
+    }
+    puts("PASS early response with untaken/partial upload and pending KeyUpdate reply, preserved output and bidirectional rekey");
+}
+static void pending_close(void)
+{
+    connection *c=connect_peer("ec","TLS_AES_128_GCM_SHA256","X25519",OS64_TLS_PROTOCOL_DEFAULT,TLS1_3_VERSION,4096);
+    handshake_done(c); receive_only(c);
+    CHECK(os64_tls_begin_close(c->client)==OS64_TLS_OK);
+    tls13_engine *e=inner(c->client);
+    unsigned char saved[TLS13_SEND_MAX], wire[32768];
+    size_t send_used=e->send_used; CHECK(send_used && e->local_closed);
+    memcpy(saved,e->send,sizeof saved);
+    CHECK(SSL_shutdown(c->ssl)==0); receive_only(c);
+    CHECK(e->peer_closed && e->send_used==send_used && !memcmp(saved,e->send,sizeof saved));
+    CHECK(os64_tls_state(c->client).status==OS64_TLS_OK);
+    size_t n=drain(c->client,wire,sizeof wire); CHECK(n==send_used);
+    CHECK(BIO_write(c->in,wire,(int)n)==(int)n && SSL_shutdown(c->ssl)==1);
+    CHECK(os64_tls_state(c->client).status==OS64_TLS_CLEAN_EOF);
+    destroy(c);
+    puts("PASS peer close while local close_notify is pending, with output preserved until drained");
+}
 static void fallback(void)
 {
     for (unsigned rsa=0;rsa<2;rsa++) {
@@ -731,7 +815,7 @@ int main(int argc, char **argv)
         close_connection(c,k!=0); destroy(c);
         printf("PASS %s / %s / %s: handshake, data, KeyUpdate, close\n",suites[s],k?"RSA":"ECDSA",groups[g]); fflush(stdout);
     }
-    fallback(); failures(); client_hello_offer(); adversarial(); record_cases(); framing_cases(); signature_schemes();
+    pending_output(); pending_close(); fallback(); failures(); client_hello_offer(); adversarial(); record_cases(); framing_cases(); signature_schemes();
     os64_tls_trust_free(trust); CHECK(!live);
     printf("TLS 1.3 public engine PASS; largest owned allocation %zu bytes\n",peak);
     return 0;
