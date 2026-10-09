@@ -1,7 +1,8 @@
 # libdom binds the script-visible document to libhtml and persistent libpage
 # control state. Consumers acquire these edges through this shared library.
 LIBDOM_SRCS := libdom/core.c libdom/node.c libdom/collection.c libdom/content.c \
-    libdom/event.c libdom/timer.c libdom/window.c libdom/geometry.c libdom/classic.c libdom/style.c
+    libdom/event.c libdom/timer.c libdom/window.c libdom/geometry.c libdom/classic.c libdom/style.c \
+    libdom/mixin.c
 LIBDOM_OBJS := $(patsubst %,$(OBJ)/pic/%.o,$(LIBDOM_SRCS))
 LIBDOM_SO := $(BIN)/libdom.so
 LIBDOM_BASE = $(patsubst libdom.so=%,%,$(filter libdom.so=%,$(LIB_BASE_PAIRS)))

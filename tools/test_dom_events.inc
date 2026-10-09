@@ -483,6 +483,18 @@ static void dom_script_flag_cases(void)
           connected_scripts[1] == native_id((os64_html_node_t *)root, "made"),
           "connected scripts are reported once each: innerHTML, module and started scripts are not");
     check(os64_dom_script_start(f.binding, connected_scripts[1]) == 0, "a reported script was marked started");
+    /* The classic methods connect scripts as appendChild does, but
+     * insertAdjacentHTML's are born started; and the dynamic loader's
+     * idiom (src set by property, then appended) connects a src script. */
+    dom_script(&f, DOM_ASSERT
+        "host.insertAdjacentHTML('beforeend','<script id=adjacent>1<\\/script>');"
+        "const loader=document.createElement('script');loader.id='loader';loader.src='/cdn/orchestrate.js';"
+        "document.head.append(loader);const after=document.createElement('script');after.id='after';host.after(after);",
+        "script-mixins.js");
+    check(connected_count == 4 && connected_scripts[2] == native_id((os64_html_node_t *)root, "loader") &&
+          os64_html_attr(connected_scripts[2], "src") != NULL &&
+          connected_scripts[3] == native_id((os64_html_node_t *)root, "after"),
+          "append and after connect scripts, a src set by property makes a src script, insertAdjacentHTML's never run");
     fixture_free(&f);
 }
 

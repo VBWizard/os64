@@ -40,7 +40,7 @@ typedef enum {
 /* Select the output names the host grants; zero or unknown bits are invalid. */
 typedef enum {
     OS64_JS_OUTPUT_PRINT = 1u << 0,
-    OS64_JS_OUTPUT_CONSOLE_LOG = 1u << 1
+    OS64_JS_OUTPUT_CONSOLE = 1u << 1
 } os64_js_output_names_t;
 
 /* Inline diagnostic storage: no allocation or borrowed strings to release.

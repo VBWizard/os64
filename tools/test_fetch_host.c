@@ -1289,10 +1289,10 @@ static void case_cookies(void)
         // 1xx and trailers cannot set a cookie; an oversized cookie is
         // ignored whole rather than shortened into a different value.
         reset(); chunk_mode = mode;
-        char wire[7000];
+        char wire[HTTP_LINE_MAX + 3000];
         size_t n = (size_t)snprintf(wire, sizeof(wire), "HTTP/1.1 103 Early Hints\r\nSet-Cookie: interim=1\r\n\r\n"
             "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nSet-Cookie: large=");
-        memset(wire + n, 'a', 4000); n += 4000;
+        memset(wire + n, 'a', HTTP_LINE_MAX); n += HTTP_LINE_MAX;
         snprintf(wire + n, sizeof(wire) - n, "\r\nSet-Cookie: kept=1\r\n\r\n1\r\nx\r\n0\r\nSet-Cookie: trailer=1\r\n\r\n");
         peer_add("a.test", 80, wire); t = (cookie_test_t){0};
         opt = (os64_fetch_options_t){ .on_set_cookie = cookie_received, .ctx = &t };

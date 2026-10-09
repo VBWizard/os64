@@ -228,7 +228,7 @@ static bool ensure_runtime(yonder_scripts_t *s, os64_js_outcome_t *out)
     os64_dom_set_user_agent(s->dom, s->user_agent, s->user_agent_opaque);
     if (s->options.diag != NULL)
         os64_dom_set_global_miss(s->dom, global_missed, s);
-    if (s->dom == NULL || os64_js_install_output(s->runtime, 1, OS64_JS_OUTPUT_CONSOLE_LOG, out) != OS64_JS_OK) {
+    if (s->dom == NULL || os64_js_install_output(s->runtime, 1, OS64_JS_OUTPUT_CONSOLE, out) != OS64_JS_OK) {
         // A runtime a binding could not be built in is not evaluated again.
         out->status = OS64_JS_HOST_FAILURE;
         return false;

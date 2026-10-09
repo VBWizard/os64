@@ -50,7 +50,8 @@
 // Set-Cookie: truncating one could change its meaning. Framing, coding and
 // Location fields must fit; dropping those could change the body's framing
 // or hide a conflicting redirect. See overlong_verdict for that distinction.
-#define HTTP_LINE_MAX      2048
+// So a line holds the longest address with a field name in front of it.
+#define HTTP_LINE_MAX      (OS64_URL_REF_MAX + 64)
 // ...but the DROPPING is bounded, or a peer that talks forever and never
 // sends a newline is read forever. HTTP_HEAD_MAX is the whole head's budget
 // AND, spent down line by line, each line's — because a cap checked only
@@ -70,6 +71,10 @@
 #define HTTP_TOKEN_MAX     32     // a coding name: "chunked", "gzip", "identity"
 #define HTTP_TYPE_MAX      64     // a media type: "text/html", "image/svg+xml"
 #define HTTP_CHARSET_MAX   32     // its charset parameter: "utf-8", "windows-1252"
+
+// The longest request target: the absolute-form a proxy is sent, which is
+// the longer of the two forms (http_request).
+#define HTTP_TARGET_MAX    (HTTP_SCHEME_MAX + HTTP_HOST_MAX + HTTP_PATH_MAX + 16)
 
 // The longest address http_url_absolute can spell: a base's scheme and host,
 // with a whole Location header joined onto its path. Every buffer an

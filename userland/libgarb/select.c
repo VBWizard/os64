@@ -1259,7 +1259,13 @@ static bool has_matches(const garb_selectors_t *sel, const List *l, const os64_h
 bool garb_selector_matches(const garb_selectors_t *list, int32_t i,
                            const os64_html_node_t *element)
 {
+    return garb_selector_matches_in(list, i, element, NULL);
+}
+
+bool garb_selector_matches_in(const garb_selectors_t *list, int32_t i,
+                              const os64_html_node_t *element, const os64_html_node_t *scope)
+{
     if (list == NULL || i < 0 || i >= list->list.n || !is_el(element))
         return false;
-    return match_complex(list, &list->list.v[i], element, NULL);
+    return match_complex(list, &list->list.v[i], element, scope);
 }

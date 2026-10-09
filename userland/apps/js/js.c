@@ -376,7 +376,7 @@ int main(int argc, char **argv)
     os64_js_status_t status = os64_js_create(&config, OS64_JS_ABI_ID, &runtime, &outcome);
     if (status == OS64_JS_OK)
         status = os64_js_install_output(runtime, 1,
-                                        OS64_JS_OUTPUT_PRINT | OS64_JS_OUTPUT_CONSOLE_LOG,
+                                        OS64_JS_OUTPUT_PRINT | OS64_JS_OUTPUT_CONSOLE,
                                         &outcome);
     if (status == OS64_JS_OK)
         status = os64_js_install_args(runtime, (size_t)plan.extra_count + 1, args, &outcome);

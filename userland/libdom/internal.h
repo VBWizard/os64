@@ -18,7 +18,8 @@ typedef struct DActiveEvent { struct DActiveEvent *previous; JSValue value; } DA
 enum {
     D_PROTO_NODE, D_PROTO_DOCUMENT, D_PROTO_ELEMENT, D_PROTO_CHARACTER_DATA,
     D_PROTO_FRAGMENT, D_PROTO_INPUT, D_PROTO_TEXTAREA, D_PROTO_SELECT,
-    D_PROTO_BUTTON, D_PROTO_FORM, D_PROTO_IMAGE, D_PROTO_COUNT
+    D_PROTO_BUTTON, D_PROTO_FORM, D_PROTO_IMAGE, D_PROTO_SCRIPT, D_PROTO_ANCHOR,
+    D_PROTO_LINK, D_PROTO_COUNT
 };
 /* The event types the host dispatches, which are the ones on<type> names
  * and os64_dom_listens count. A script may listen for any other type. */
@@ -31,13 +32,15 @@ enum {
 };
 /* A wrapper, or another engine value the binding holds strongly. A node's
  * wrapper also carries the node's listener list, in the order listeners and
- * handler slots were first added. */
+ * handler slots were first added, and the element's views (its style, its
+ * classList, its dataset), each made once. A view's own entry holds the
+ * element it stands for as `target`. */
 struct DValue {
     JSValue value;
     DValue *next, *hash_next;
-    const os64_html_node_t *node, *style_target;
+    const os64_html_node_t *node, *target;
     os64_dom_t *dom;
-    DValue *style;
+    DValue *style, *class_list, *dataset;
     DQuery *child_nodes, *children, *images, *forms, *elements;
     DListener *listeners, *last_listener;
 };
@@ -103,9 +106,9 @@ struct os64_dom {
     os64_dom_geometry_provider_t geometry;
     void *geometry_opaque;
     os64_dom_geometry_stats_t geometry_stats;
-    JSClassID anchor_class, node_class, collection_class, event_class, style_class;
+    JSClassID anchor_class, node_class, collection_class, event_class, style_class, token_class, map_class;
     DValue *values, *anchor, *index_guard, *window, *location, *history, *function_ctor;
-    DValue *invoke, *navigator, *style_prototype;
+    DValue *invoke, *navigator, *style_prototype, *static_list;
     const char *(*user_agent)(void *opaque);
     void *user_agent_opaque;
     DValue *prototypes[D_PROTO_COUNT];
@@ -188,6 +191,27 @@ void d_navigate(os64_dom_t *dom, os64_dom_navigation_kind_t kind, const os64_htm
                 const os64_html_node_t *submitter, const char *url, int32_t delta);
 int d_collection_install(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype);
 void d_query_free(os64_dom_t *dom, DQuery *query);
+int d_static_list_install(os64_dom_t *dom, JSContext *ctx);
+int d_mixin_install(os64_dom_t *dom, JSContext *ctx);
+extern JSClassExoticMethods d_token_exotic, d_map_exotic;
+/* A live list's index keys: 1 and *index for a canonical array index, 0
+ * for any other key, -1 on an exception. */
+int d_index_key(JSContext *ctx, JSAtom atom, uint32_t *index);
+int d_index_names(JSContext *ctx, size_t count, JSPropertyEnum **table, uint32_t *length);
+/* WebIDL's iteration from Array.prototype (and a NodeList's forEach,
+ * entries, keys and values with `node_list`). */
+int d_iterable(JSContext *ctx, JSValueConst prototype, bool node_list);
+int d_tree_change(os64_dom_t *dom, JSContext *ctx, int op, const os64_html_node_t *parent,
+            const os64_html_node_t *child, const os64_html_node_t *other);
+JSValue d_select(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *root,
+                 JSValueConst text, bool all);
+JSValue d_selector_test(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *element,
+                        JSValueConst text, bool closest);
+JSValue d_attribute_collection(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *root,
+                               JSValueConst text, bool by_name);
+/* Whether a whitespace-separated list holds the token (ASCII case folded
+ * when `fold`). */
+bool d_has_token(const char *list, const char *token, size_t length, bool fold);
 extern JSClassExoticMethods d_collection_exotic;
 JSValue d_collection(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *root,
                      bool descendants, bool elements, const char *name);
@@ -219,10 +243,17 @@ enum {
 };
 enum {
     D_APPEND, D_INSERT, D_REMOVE, D_REPLACE, D_CLONE, D_GET_ID, D_GET_TAG,
+    D_QUERY_ONE, D_QUERY_ALL,
     D_CREATE_ELEMENT, D_CREATE_TEXT, D_CREATE_COMMENT, D_CREATE_FRAGMENT,
-    D_GET_ATTR, D_SET_ATTR, D_REMOVE_ATTR, D_HAS_ATTR, D_HAS_CHILDREN
+    D_GET_ATTR, D_SET_ATTR, D_REMOVE_ATTR, D_HAS_ATTR, D_HAS_CHILDREN,
+    /* The mixins (mixin.c): ParentNode, ChildNode, and the rest of Element. */
+    D_APPEND_NODES, D_PREPEND, D_REPLACE_CHILDREN, D_BEFORE, D_AFTER, D_REPLACE_WITH, D_REMOVE_SELF,
+    D_CONTAINS, D_MATCHES, D_CLOSEST, D_BY_CLASS, D_BY_NAME,
+    D_ADJACENT_HTML, D_ADJACENT_ELEMENT, D_ADJACENT_TEXT,
+    D_ATTRIBUTE_NAMES, D_TOGGLE_ATTR, D_HAS_ATTRS
 };
-enum { D_QUERY_GENERIC, D_QUERY_IMAGES, D_QUERY_FORMS, D_QUERY_CONTROLS, D_QUERY_DOCUMENT_NAMES };
+enum { D_QUERY_GENERIC, D_QUERY_IMAGES, D_QUERY_FORMS, D_QUERY_CONTROLS, D_QUERY_DOCUMENT_NAMES,
+       D_QUERY_CLASSES, D_QUERY_NAME };
 bool d_named_match(const os64_html_node_t *node, const char *name);
 bool d_classic_match(os64_dom_t *dom, const os64_html_node_t *root, const os64_html_node_t *node, unsigned kind);
 JSValue d_special_collection(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *root, unsigned kind, const char *named);

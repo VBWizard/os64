@@ -4,12 +4,13 @@
 #include <html/html.h>
 #include <page/page.h>
 #include <os64/js.h>
+#include <os64/url.h>
 
 typedef struct os64_dom os64_dom_t;
 
 #define OS64_DOM_DEFAULT_MAX_BYTES ((size_t)8 * 1024 * 1024)
 /* The longest address a navigation ask carries: os64_url_absolute's. */
-#define OS64_DOM_URL_MAX 2048
+#define OS64_DOM_URL_MAX OS64_URL_REF_MAX
 /* Live timers per page; one more throws QuotaExceededError. */
 #define OS64_DOM_TIMERS_MAX 4096
 

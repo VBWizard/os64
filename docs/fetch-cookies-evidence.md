@@ -60,7 +60,7 @@ choices and failure handling are covered by scripted host tests. No P5
 validation has been claimed.
 
 Rebuild and deploy libfetch and its callers together: options structs grew.
-The inherited 2048-byte response-line buffer omits oversized cookies whole;
+The response-line buffer (HTTP_LINE_MAX) omits oversized cookies whole;
 request callback output is bounded to 1024 bytes. Those limits are explicit
 in the API contract and tested. Cookie storage/matching/referrer policy
 belong to the navigator, and connection reuse is a separate feature.

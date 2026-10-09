@@ -29,6 +29,13 @@ import sys
 import urllib.parse
 
 work = pathlib.Path(sys.argv[1])
+# The caps the C side is built with, read from the headers that set them:
+# url.h's, and http.h's line, which holds the longest address and a name.
+import re
+URL_PATH_MAX = int(re.search(r"define OS64_URL_REF_MAX\s+(\d+)",
+                             pathlib.Path("userland/libos64/include/os64/url.h").read_text()).group(1))
+LINE_MAX = URL_PATH_MAX + 64
+LONG = LINE_MAX + 1000      # a line past the cap, whatever the cap is
 exe = str(work / "test_http")
 failures = 0
 
@@ -116,6 +123,10 @@ good_urls = [
     "https://example.com:8443/secure/page.html?q=1",
     "https://example.com:443/explicit-default",
     "HTTPS://Example.COM/Case",
+    # As long as pages write them: Google's front-end bundle is a 3,666-byte
+    # src. And the longest path an address carries, its NUL the last byte.
+    "https://www.google.com/xjs/_/js/k=xjs.s.en_US/" + "m=a,b," * 600 + "?xjs=s3",
+    "http://example.com/" + "p" * (URL_PATH_MAX - 2),
 ]
 for text in good_urls:
     verdict, got, out = run(["url", text])
@@ -202,7 +213,7 @@ bad_urls = {
     "http://example.com/a b": "path_chars",
     "http://example.com/a\tb": "path_chars",
     "http://" + "h" * 300 + "/": "too_long",
-    "http://example.com/" + "p" * 2000: "too_long",
+    "http://example.com/" + "p" * (URL_PATH_MAX - 1): "too_long",
 }
 for text, want in bad_urls.items():
     verdict, _, _ = run(["url", text])
@@ -428,7 +439,7 @@ body = b"payload\n" * 64
 cases.append(("odd-case", reply_bytes(
     200, "OK Then",
     [("content-LENGTH", f"   {len(body)}   "), ("X-Empty", ""),
-     ("Set-Cookie", "c=" + "x" * 3000)],
+     ("Set-Cookie", "c=" + "x" * LONG)],
     body), body, True))
 cases.append(("interim", b"HTTP/1.1 100 Continue\r\n\r\n" + reply_bytes(
     200, "OK", [("Content-Length", str(len(body)))], body), body, True))
@@ -624,7 +635,7 @@ for label, (raw, want) in refusals.items():
 # header behind padding and must be REFUSED, not dropped. Found by Codex on
 # PR #52; the rule was right and its premise ("the headers this acts on are
 # all short") was the server's to break.
-pad = b" " * 3000
+pad = b" " * LONG
 # Each entry is (bytes, the refusal it must earn). "framing" means the name
 # was legible and names a header the body's reading depends on; "syntax"
 # means the name was not a legal token at all, which the SHORT form of the
@@ -684,7 +695,7 @@ for label, raw in short_malformed.items():
 # Set-Cookie is real on the web, os64get does not read cookies, and refusing
 # the whole fetch over one would be the wrong trade.
 body = b"payload\n" * 64
-tolerated = (b"HTTP/1.1 200 OK\r\nSet-Cookie: c=" + b"x" * 4000 +
+tolerated = (b"HTTP/1.1 200 OK\r\nSet-Cookie: c=" + b"x" * LONG +
              b"\r\nContent-Length: %d\r\n\r\n" % len(body) + body)
 path = work / "framing-tolerated"
 path.write_bytes(tolerated)
@@ -762,10 +773,10 @@ bodyRefusals = {
     "nothing-at-all": (b"", "cut", 0),
     # The caps: an endless extension, an endless size line, a trailer flood,
     # and the trailer section's byte budget.
-    "ext-flood": (b"5;" + b"e" * 3000 + b"\r\nhello\r\n0\r\n\r\n", "too_much", 0),
+    "ext-flood": (b"5;" + b"e" * LONG + b"\r\nhello\r\n0\r\n\r\n", "too_much", 0),
     "size-flood": (b"1" * (1 << 20), "too_much", 0),
     "trailer-flood": (b"0\r\n" + b"X-A: 1\r\n" * 129 + b"\r\n", "too_much", 0),
-    "trailer-bytes-flood": (b"0\r\n" + (b"X-A: " + b"x" * 4000 + b"\r\n") * 20 + b"\r\n",
+    "trailer-bytes-flood": (b"0\r\n" + (b"X-A: " + b"x" * LONG + b"\r\n") * 20 + b"\r\n",
                             "too_much", 0),
     # A trailer is a field line: a token, a colon. Obs-fold refused as in
     # the head; an over-long trailer line dropped as in the head.
@@ -780,7 +791,7 @@ bodyRefusals = {
     "trailer-space-before-colon": (b"0\r\nX-A : 1\r\n\r\n", "syntax", 0),
     "trailer-tab-in-name": (b"0\r\nX\tA: 1\r\n\r\n", "syntax", 0),
     "trailer-ctl-in-name": (b"0\r\nX\x01A: 1\r\n\r\n", "syntax", 0),
-    "trailer-long-dropped": (b"0\r\nX-Big: " + b"x" * 4000 + b"\r\n\r\n", "done", 0),
+    "trailer-long-dropped": (b"0\r\nX-Big: " + b"x" * LONG + b"\r\n\r\n", "done", 0),
     "trailers-at-cap": (b"0\r\n" + b"X-A: 1\r\n" * 128 + b"\r\n", "done", 0),
     # Bytes after the terminating CRLF are not the body's: the framing said
     # where the body ended, and the connection's close is another matter.

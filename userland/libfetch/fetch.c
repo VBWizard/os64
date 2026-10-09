@@ -530,7 +530,9 @@ static os64_fetch_status_t ask(os64_fetch_t *f)
 
         bool encrypted = os64_streq(f->current.scheme, "https") && !f->proxy.inUse;
         // Compose before dialing so a refused callback costs no connection.
-        char request[HTTP_LINE_MAX + OS64_FETCH_AGENT_MAX + OS64_FETCH_ACCEPT_MAX + 2 * OS64_FETCH_EXTRA_MAX + OS64_FETCH_CONTENT_TYPE_MAX + 64];
+        // Room for each variable part at its longest (the target, the Host
+        // line's host, the caller's fields), and 256 for the fixed text.
+        char request[HTTP_TARGET_MAX + HTTP_HOST_MAX + OS64_FETCH_AGENT_MAX + OS64_FETCH_ACCEPT_MAX + 2 * OS64_FETCH_EXTRA_MAX + OS64_FETCH_CONTENT_TYPE_MAX + 256];
         char extraForHop[2 * OS64_FETCH_EXTRA_MAX];
         if (!request_extras(f, extraForHop, sizeof(extraForHop), encrypted)) {
             os64_strcopy(f->detail.why, sizeof(f->detail.why), "per-hop headers were refused or malformed");

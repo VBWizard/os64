@@ -359,7 +359,7 @@ static void helper_cases(int32_t handle)
     mutable[0] = 'X';
     check(os64_js_install_args(runtime, 0, NULL, &outcome) == OS64_JS_BAD_ARGUMENT,
           "argument installer is installed once");
-    check(os64_js_install_output(runtime, handle, OS64_JS_OUTPUT_PRINT | OS64_JS_OUTPUT_CONSOLE_LOG,
+    check(os64_js_install_output(runtime, handle, OS64_JS_OUTPUT_PRINT | OS64_JS_OUTPUT_CONSOLE,
           &outcome) == OS64_JS_OK, "selected output names installed");
     check(os64_js_install_output(runtime, handle, OS64_JS_OUTPUT_PRINT, &outcome) == OS64_JS_BAD_ARGUMENT,
           "output installer is installed once");
@@ -381,7 +381,7 @@ static void helper_cases(int32_t handle)
           "host console with another member installed");
     JS_FreeValue(context, global);
     check(install_native(runtime, "print", native_twice) >= 0, "host print capability installed");
-    check(os64_js_install_output(runtime, handle, OS64_JS_OUTPUT_CONSOLE_LOG, &outcome) == OS64_JS_OK &&
+    check(os64_js_install_output(runtime, handle, OS64_JS_OUTPUT_CONSOLE, &outcome) == OS64_JS_OK &&
           os64_js_install_args(runtime, 0, NULL, &outcome) == OS64_JS_OK, "console-only and empty argument setup");
     check(execute_fixture(runtime,
           "if(print(21)!==42 || console.keep!==42 || scriptArgs.length!==0)throw Error('unselected name changed')",
@@ -411,7 +411,7 @@ static JSValue transaction_console_getter(JSContext *context, JSValueConst self,
 static void output_transaction_cases(int32_t handle)
 {
     os64_js_config_t config = fixture_config();
-    const uint32_t both = OS64_JS_OUTPUT_PRINT | OS64_JS_OUTPUT_CONSOLE_LOG;
+    const uint32_t both = OS64_JS_OUTPUT_PRINT | OS64_JS_OUTPUT_CONSOLE;
     for (unsigned mode = 0; mode < 5; mode++) {
         os64_js_runtime_t *runtime = create_fixture(&config);
         if (!runtime) return;
@@ -462,7 +462,7 @@ static void output_transaction_cases(int32_t handle)
         check(JS_DeleteProperty(context, global, console_name, JS_PROP_THROW) > 0,
               "transaction fixture clears failed console target");
         JS_FreeAtom(context, console_name);
-        check(os64_js_install_output(runtime, handle, OS64_JS_OUTPUT_CONSOLE_LOG, &outcome) == OS64_JS_OK,
+        check(os64_js_install_output(runtime, handle, OS64_JS_OUTPUT_CONSOLE, &outcome) == OS64_JS_OK,
               "console-only retry succeeds after combined exception");
         check(execute_fixture(runtime, mode == 0 || mode == 4 ? "if(typeof print!=='undefined')throw Error('print leaked')" :
               "if(print(21)!==42)throw Error('host print replaced')", &outcome) == OS64_JS_OK,

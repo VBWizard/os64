@@ -57,6 +57,11 @@ garb_pseudo_t garb_selector_pseudo(const garb_selectors_t *list, int32_t i);
 // Whether the i-th selector matches `element` (its pseudo-element aside).
 bool garb_selector_matches(const garb_selectors_t *list, int32_t i,
                            const os64_html_node_t *element);
+// The same, with `scope` as the scoping root `:scope` names (a script's
+// element.querySelector). NULL scopes to the document, where `:scope` is
+// `:root`, as a style sheet's selectors are.
+bool garb_selector_matches_in(const garb_selectors_t *list, int32_t i,
+                              const os64_html_node_t *element, const os64_html_node_t *scope);
 
 // What the rule hash files a selector under (GARB.md § The cost): the id
 // of its rightmost compound, else a class, else the element name, else

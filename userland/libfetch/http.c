@@ -279,7 +279,7 @@ bool http_request(char *out, size_t cap, const http_url_t *url, bool absoluteFor
     // connection goes to the proxy, so the path alone would name a file on
     // the proxy instead of a page on the web. `Host:` still names the ORIGIN,
     // which is what lets the proxy pass it on unchanged.
-    char target[HTTP_SCHEME_MAX + HTTP_HOST_MAX + HTTP_PATH_MAX + 16];
+    char target[HTTP_TARGET_MAX];
     const char *requestTarget = url->path;
     if (absoluteForm) {
         if (!http_url_render(url, target, sizeof(target)))

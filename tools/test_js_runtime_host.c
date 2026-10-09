@@ -477,6 +477,50 @@ static void file_cases(void)
     reset_io("");
 }
 
+/* The Console Standard's namespace: levels print as log, assert says why,
+ * groups indent, and counts and timers keep their labels. */
+static void console_cases(void)
+{
+    os64_js_config_t config = fixture_config();
+    os64_js_outcome_t outcome;
+    reset_io("");
+    os64_js_runtime_t *runtime = create_fixture(&config);
+    if (!runtime) return;
+    check(os64_js_install_output(runtime, 42, OS64_JS_OUTPUT_CONSOLE, &outcome) == OS64_JS_OK,
+          "console namespace installed");
+    check(execute_fixture(runtime,
+          "console.info('i',1);console.warn('w');console.error('e');console.debug('d');"
+          "console.trace('t');console.dir('o');console.table('r');"
+          "console.assert(true,'quiet');console.assert(1===2,'sum is',3);console.assert(false);"
+          "console.assert(0,{toString(){return 'obj'}});console.assert();"
+          "console.group('g');console.log('in');console.groupCollapsed();console.log('deeper');"
+          "console.groupEnd();console.groupEnd();console.groupEnd();console.log('out');"
+          "console.group('h');console.clear();console.log('flat');"
+          "console.count();console.count();console.count('x');console.countReset('x');console.count('x');"
+          "console.countReset('nope');console.time('t');console.time('t');console.timeLog('nope');"
+          "console.timeEnd('nope');"
+          "for(const n of ['log','assert','groupCollapsed','timeEnd'])"
+          "  if(console[n].name!==n||console[n].length!==0)throw Error('named '+n);"
+          "console.timeLog('t','more');console.timeEnd('t');console.timeEnd('t')",
+          &outcome) == OS64_JS_OK, "console methods run");
+    const char expected[] =
+        "i 1\nw\ne\nd\nt\no\nr\n"
+        "Assertion failed: sum is 3\nAssertion failed\nAssertion failed obj\nAssertion failed\n"
+        "g\n  in\n    deeper\nout\nh\nflat\n"
+        "default: 1\ndefault: 2\nx: 1\nx: 1\nCount for 'nope' does not exist\n"
+        "Timer 't' already exists\nTimer 'nope' does not exist\nTimer 'nope' does not exist\n";
+    size_t n = sizeof(expected) - 1;
+    check(output_len > n && memcmp(output, expected, n) == 0, "console lines as the standard prints them");
+    /* Then `t: <ms>ms more`, `t: <ms>ms`, and the ended timer is gone. */
+    char tail[256] = {0};
+    memcpy(tail, output + n, output_len - n < sizeof(tail) - 1 ? output_len - n : sizeof(tail) - 1);
+    char *second = strchr(tail, '\n');
+    check(strncmp(tail, "t: ", 3) == 0 && second != NULL && strncmp(second - 7, "ms more", 7) == 0 &&
+          strncmp(second + 1, "t: ", 3) == 0 && strstr(second + 1, "ms\nTimer 't' does not exist\n") != NULL,
+          "console timers log, end, and forget");
+    os64_js_destroy(runtime);
+}
+
 static void output_cases(void)
 {
     os64_js_config_t config = fixture_config();
@@ -545,7 +589,7 @@ static void transaction_descriptor_cases(void)
         size_t before = attempts;
         if (refused != 0) fail_at = attempts + refused;
         os64_js_status_t result = os64_js_install_output(runtime, 42,
-            OS64_JS_OUTPUT_PRINT | OS64_JS_OUTPUT_CONSOLE_LOG, &outcome);
+            OS64_JS_OUTPUT_PRINT | OS64_JS_OUTPUT_CONSOLE, &outcome);
         fail_at = 0;
         if (refused == 0) {
             inventory = attempts - before;
@@ -611,7 +655,7 @@ static void transaction_trap_case(void)
     check(JS_SetPropertyStr(context, global, "console", JS_NewObjectClass(context, id)) > 0,
           "transaction host console trap installed");
     size_t before = output_len;
-    check(os64_js_install_output(runtime, 42, OS64_JS_OUTPUT_PRINT | OS64_JS_OUTPUT_CONSOLE_LOG,
+    check(os64_js_install_output(runtime, 42, OS64_JS_OUTPUT_PRINT | OS64_JS_OUTPUT_CONSOLE,
           &outcome) == OS64_JS_HOST_FAILURE && staged_output_blocked && output_len == before,
           "rollback refusal retires runtime and staged callback cannot borrow output");
     check(os64_js_eval(runtime, "print('later')", 14, "after trap", &outcome) == OS64_JS_FAILED_RUNTIME,
@@ -630,7 +674,7 @@ static void setup_allocation_cases(void)
         if (!runtime) return;
         size_t before = attempts;
         os64_js_status_t result = mode == 0 ? os64_js_install_args(runtime, 3, args, &outcome) :
-            os64_js_install_output(runtime, 42, OS64_JS_OUTPUT_PRINT | OS64_JS_OUTPUT_CONSOLE_LOG, &outcome);
+            os64_js_install_output(runtime, 42, OS64_JS_OUTPUT_PRINT | OS64_JS_OUTPUT_CONSOLE, &outcome);
         size_t inventory = attempts - before;
         check(result == OS64_JS_OK, "installer allocation inventory succeeds");
         os64_js_destroy(runtime);
@@ -641,7 +685,7 @@ static void setup_allocation_cases(void)
             JSValue global = inspection ? JS_GetGlobalObject(inspection) : JS_UNDEFINED;
             fail_at = attempts + i;
             result = mode == 0 ? os64_js_install_args(runtime, 3, args, &outcome) :
-                os64_js_install_output(runtime, 42, OS64_JS_OUTPUT_PRINT | OS64_JS_OUTPUT_CONSOLE_LOG, &outcome);
+                os64_js_install_output(runtime, 42, OS64_JS_OUTPUT_PRINT | OS64_JS_OUTPUT_CONSOLE, &outcome);
             fail_at = 0;
             check(result == OS64_JS_HOST_FAILURE, "installer allocation refusal is sticky host failure");
             if (mode == 1) {
@@ -686,7 +730,7 @@ static void setup_allocation_cases(void)
     check(JS_DefinePropertyGetSet(context, global, name, JS_NewCFunction(context, console_getter, "get console", 0),
           JS_UNDEFINED, JS_PROP_CONFIGURABLE) >= 0, "host console accessor created");
     JS_FreeAtom(context, name); JS_FreeValue(context, global);
-    check(os64_js_install_output(runtime, 42, OS64_JS_OUTPUT_CONSOLE_LOG, &outcome) == OS64_JS_EXCEPTION &&
+    check(os64_js_install_output(runtime, 42, OS64_JS_OUTPUT_CONSOLE, &outcome) == OS64_JS_EXCEPTION &&
           console_getters == 0, "console setup rejects accessor without invoking its getter");
     os64_js_destroy(runtime);
     config.limits.memory_bytes = 1024*1024;
@@ -924,7 +968,7 @@ int main(int argc, char **argv)
         return 1;
     }
     tracked_allocator_cases(); tracked_construction_cases(); teardown_cases(); runtime_cases(); clock_cases(); diagnostic_cases(); allocation_cases(); thread_cases();
-    file_cases(); file_boundary_cases(); output_cases(); transaction_descriptor_cases(); transaction_trap_case(); setup_allocation_cases();
+    file_cases(); file_boundary_cases(); output_cases(); console_cases(); transaction_descriptor_cases(); transaction_trap_case(); setup_allocation_cases();
     task_cases();
     check(live == 0, "runtime suite releases every fixture allocation");
     printf("libjs runtime: %u checks, %u failures, %zu live allocations, %u native calls\n",

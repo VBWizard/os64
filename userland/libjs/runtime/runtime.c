@@ -3,6 +3,7 @@
 #include "os64/io.h"
 #include "os64/proc.h"
 #include "os64/str.h"
+#include "os64/fmt.h"
 #include "allocator.h"
 #include "platform.h"
 #include <limits.h>
@@ -31,6 +32,8 @@ struct os64_js_runtime {
     bool active, turn, task, checkpointing, source_truncated;
     bool evaluated, output_installed, args_installed;
     int32_t output_handle;
+    /* console.group's nesting: each console line is indented by it. */
+    uint32_t console_depth;
     char source_name[OS64_JS_SOURCE_NAME_CAP];
 };
 
@@ -756,28 +759,215 @@ static bool write_output(os64_js_runtime_t *runtime, const char *bytes, size_t s
     return !observe(runtime);
 }
 
-static JSValue output_call(JSContext *context, JSValueConst self, int argc,
-                           JSValueConst *args)
+/* Each value by QuickJS string conversion, spaces between them. */
+static bool write_values(os64_js_runtime_t *runtime, JSContext *context, int argc,
+                         JSValueConst *args, bool *thrown)
 {
-    (void)self;
-    os64_js_runtime_t *runtime = JS_GetContextOpaque(context);
+    for (int i = 0; i < argc && !observe(runtime); i++) {
+        size_t length;
+        const char *text = JS_ToCStringLen(context, &length, args[i]);
+        if (text == NULL) {
+            *thrown = true;
+            return false;
+        }
+        bool written = (i == 0 || write_output(runtime, " ", 1)) &&
+                       write_output(runtime, text, length);
+        JS_FreeCString(context, text);
+        if (!written) return false;
+    }
+    return !observe(runtime);
+}
+
+static JSValue output_ready(os64_js_runtime_t *runtime, JSContext *context)
+{
     if (!runtime->active || !runtime->turn)
         jsport_fatal("output outside a runtime turn", __FILE__, __LINE__);
     /* Property traps can see a staged function before setup commits. It must
      * not use a borrowed handle until the entire installation succeeds. */
     if (!runtime->output_installed)
         return JS_ThrowTypeError(context, "output installation is incomplete");
-    for (int i = 0; i < argc && !observe(runtime); i++) {
-        size_t length;
-        const char *text = JS_ToCStringLen(context, &length, args[i]);
-        if (text == NULL) return JS_EXCEPTION;
-        bool written = (i == 0 || write_output(runtime, " ", 1)) &&
-                       write_output(runtime, text, length);
-        JS_FreeCString(context, text);
-        if (!written) break;
+    return JS_UNDEFINED;
+}
+
+static JSValue output_call(JSContext *context, JSValueConst self, int argc,
+                           JSValueConst *args)
+{
+    (void)self;
+    os64_js_runtime_t *runtime = JS_GetContextOpaque(context);
+    JSValue ready = output_ready(runtime, context);
+    if (JS_IsException(ready)) return ready;
+    bool thrown = false;
+    if (write_values(runtime, context, argc, args, &thrown) && write_output(runtime, "\n", 1))
+        return JS_UNDEFINED;
+    return thrown ? JS_EXCEPTION : JS_ThrowInternalError(context, "host output failed");
+}
+
+/* THE CONSOLE NAMESPACE (the WHATWG Console Standard): every method writes
+ * lines as print does, indented two spaces per open group. The levels (info,
+ * warn, error...) are all one stream here, so they print as log does. The
+ * counts and timers are kept in the methods' function data, the group depth
+ * on the runtime. */
+enum {
+    CONSOLE_LOG, CONSOLE_ASSERT, CONSOLE_CLEAR, CONSOLE_GROUP, CONSOLE_GROUP_END,
+    CONSOLE_COUNT, CONSOLE_COUNT_RESET, CONSOLE_TIME, CONSOLE_TIME_LOG, CONSOLE_TIME_END
+};
+
+static const struct { const char *name; int kind; } console_methods[] = {
+    {"log", CONSOLE_LOG}, {"info", CONSOLE_LOG}, {"debug", CONSOLE_LOG},
+    {"warn", CONSOLE_LOG}, {"error", CONSOLE_LOG}, {"trace", CONSOLE_LOG},
+    {"dir", CONSOLE_LOG}, {"dirxml", CONSOLE_LOG}, {"table", CONSOLE_LOG},
+    {"assert", CONSOLE_ASSERT}, {"clear", CONSOLE_CLEAR},
+    {"group", CONSOLE_GROUP}, {"groupCollapsed", CONSOLE_GROUP}, {"groupEnd", CONSOLE_GROUP_END},
+    {"count", CONSOLE_COUNT}, {"countReset", CONSOLE_COUNT_RESET},
+    {"time", CONSOLE_TIME}, {"timeLog", CONSOLE_TIME_LOG}, {"timeEnd", CONSOLE_TIME_END},
+};
+#define CONSOLE_METHODS (sizeof(console_methods) / sizeof(console_methods[0]))
+/* Deeper groups still count; their lines stop moving right. */
+#define CONSOLE_INDENT_MAX 32
+
+/* One console line: the indent, the `head` pieces run together, then the
+ * values (a space between the head and them). */
+static JSValue console_line(os64_js_runtime_t *runtime, JSContext *context,
+                            const char *const *head, size_t pieces, int argc, JSValueConst *args)
+{
+    static const char spaces[2 * CONSOLE_INDENT_MAX] =
+        "                                                                ";
+    uint32_t depth = runtime->console_depth < CONSOLE_INDENT_MAX ? runtime->console_depth
+                                                                 : CONSOLE_INDENT_MAX;
+    bool thrown = false;
+    bool written = write_output(runtime, spaces, 2 * (size_t)depth);
+    for (size_t i = 0; written && i < pieces; i++)
+        written = write_output(runtime, head[i], os64_strlen(head[i]));
+    written = written && (pieces == 0 || argc == 0 || write_output(runtime, " ", 1)) &&
+              write_values(runtime, context, argc, args, &thrown) &&
+              write_output(runtime, "\n", 1);
+    if (written) return JS_UNDEFINED;
+    return thrown ? JS_EXCEPTION : JS_ThrowInternalError(context, "host output failed");
+}
+
+/* A count's or a timer's label: its first argument, or "default". */
+static JSAtom console_label(JSContext *context, int argc, JSValueConst *args)
+{
+    if (argc == 0 || JS_IsUndefined(args[0])) return JS_NewAtom(context, "default");
+    return JS_ValueToAtom(context, args[0]);
+}
+
+/* `<label>: <text>`, or the standard's warning `<before> '<label>' <after>`. */
+static JSValue console_labelled(os64_js_runtime_t *runtime, JSContext *context, JSAtom label,
+                                const char *before, const char *after, int argc, JSValueConst *args)
+{
+    const char *name = JS_AtomToCString(context, label);
+    if (name == NULL) return JS_EXCEPTION;
+    const char *said[] = {name, ": ", after};
+    const char *warned[] = {before, " '", name, "' ", after};
+    JSValue result = before == NULL ? console_line(runtime, context, said, 3, argc, args)
+                                    : console_line(runtime, context, warned, 5, argc, args);
+    JS_FreeCString(context, name);
+    return result;
+}
+
+static JSValue console_call(JSContext *context, JSValueConst self, int argc,
+                            JSValueConst *args, int kind, JSValue *data)
+{
+    (void)self;
+    os64_js_runtime_t *runtime = JS_GetContextOpaque(context);
+    JSValue ready = output_ready(runtime, context);
+    if (JS_IsException(ready)) return ready;
+    switch (kind) {
+    case CONSOLE_LOG:
+        return console_line(runtime, context, NULL, 0, argc, args);
+    case CONSOLE_ASSERT: {
+        if (argc > 0 && JS_ToBool(context, args[0])) return JS_UNDEFINED;
+        /* A message that is a string ends the sentence; any other is a value. */
+        if (argc > 1 && JS_IsString(args[1])) {
+            const char *first = JS_ToCString(context, args[1]);
+            if (first == NULL) return JS_EXCEPTION;
+            const char *head[] = {"Assertion failed: ", first};
+            JSValue result = console_line(runtime, context, head, 2, argc - 2, args + 2);
+            JS_FreeCString(context, first);
+            return result;
+        }
+        const char *head[] = {"Assertion failed"};
+        return console_line(runtime, context, head, 1, argc > 1 ? argc - 1 : 0, args + 1);
     }
-    if (write_output(runtime, "\n", 1)) return JS_UNDEFINED;
-    return JS_ThrowInternalError(context, "host output failed");
+    case CONSOLE_CLEAR:
+        /* A stream cannot be cleared; the groups it was in can. */
+        runtime->console_depth = 0;
+        return JS_UNDEFINED;
+    case CONSOLE_GROUP: {
+        JSValue result = argc > 0 ? console_line(runtime, context, NULL, 0, argc, args) : JS_UNDEFINED;
+        if (!JS_IsException(result) && runtime->console_depth != UINT32_MAX) runtime->console_depth++;
+        return result;
+    }
+    case CONSOLE_GROUP_END:
+        if (runtime->console_depth != 0) runtime->console_depth--;
+        return JS_UNDEFINED;
+    default:
+        break;
+    }
+    /* The counts and timers: data[0] and data[1], each label to a number. */
+    bool counting = kind == CONSOLE_COUNT || kind == CONSOLE_COUNT_RESET;
+    JSValueConst table = data[counting ? 0 : 1];
+    JSAtom label = console_label(context, argc, args);
+    if (label == JS_ATOM_NULL) return JS_EXCEPTION;
+    JSValue result = JS_UNDEFINED;
+    int has = JS_HasProperty(context, table, label);
+    if (has < 0) {
+        result = JS_EXCEPTION;
+    } else if (kind == CONSOLE_COUNT) {
+        int64_t count = 0;
+        JSValue was = has ? JS_GetProperty(context, table, label) : JS_UNDEFINED;
+        if (JS_IsException(was) || (has && JS_ToInt64(context, &count, was) < 0)) result = JS_EXCEPTION;
+        JS_FreeValue(context, was);
+        char text[24];
+        os64_snprintf(text, sizeof(text), "%ld", (long)(count + 1));
+        if (!JS_IsException(result) && JS_SetProperty(context, table, label, JS_NewInt64(context, count + 1)) < 0)
+            result = JS_EXCEPTION;
+        if (!JS_IsException(result))
+            result = console_labelled(runtime, context, label, NULL, text, 0, NULL);
+    } else if (kind == CONSOLE_COUNT_RESET) {
+        if (!has)
+            result = console_labelled(runtime, context, label, "Count for", "does not exist", 0, NULL);
+        else if (JS_SetProperty(context, table, label, JS_NewInt32(context, 0)) < 0)
+            result = JS_EXCEPTION;
+    } else if (kind == CONSOLE_TIME) {
+        if (has)
+            result = console_labelled(runtime, context, label, "Timer", "already exists", 0, NULL);
+        else if (JS_SetProperty(context, table, label, JS_NewInt64(context, os64_micros())) < 0)
+            result = JS_EXCEPTION;
+    } else if (!has) {
+        result = console_labelled(runtime, context, label, "Timer", "does not exist", 0, NULL);
+    } else {
+        int64_t began = 0;
+        JSValue was = JS_GetProperty(context, table, label);
+        if (JS_IsException(was) || JS_ToInt64(context, &began, was) < 0) result = JS_EXCEPTION;
+        JS_FreeValue(context, was);
+        int64_t elapsed = os64_micros() - began;
+        if (elapsed < 0) elapsed = 0;
+        char text[40];
+        os64_snprintf(text, sizeof(text), "%ld.%03ldms", (long)(elapsed / 1000), (long)(elapsed % 1000));
+        if (!JS_IsException(result) && kind == CONSOLE_TIME_END &&
+            JS_DeleteProperty(context, table, label, 0) < 0)
+            result = JS_EXCEPTION;
+        if (!JS_IsException(result))
+            result = console_labelled(runtime, context, label, NULL, text,
+                                      kind == CONSOLE_TIME_LOG && argc > 1 ? argc - 1 : 0, args + 1);
+    }
+    JS_FreeAtom(context, label);
+    return result;
+}
+
+/* A method named as the standard names it (data functions are born nameless). */
+static JSValue console_method(JSContext *context, size_t i, JSValue *tables)
+{
+    JSValue method = JS_NewCFunctionData(context, console_call, 0, console_methods[i].kind, 2, tables);
+    if (JS_IsException(method)) return method;
+    if (JS_DefinePropertyValueStr(context, method, "name", JS_NewString(context, console_methods[i].name),
+                                  JS_PROP_CONFIGURABLE) < 0) {
+        JS_FreeValue(context, method);
+        return JS_EXCEPTION;
+    }
+    return method;
 }
 
 /* Setup may reach a host-supplied console object's property traps. Give it
@@ -880,7 +1070,7 @@ JS_PUBLIC os64_js_status_t os64_js_install_output(os64_js_runtime_t *runtime,
 {
     os64_js_status_t result = enter(runtime, outcome);
     if (result != OS64_JS_OK) return result;
-    const uint32_t valid = OS64_JS_OUTPUT_PRINT | OS64_JS_OUTPUT_CONSOLE_LOG;
+    const uint32_t valid = OS64_JS_OUTPUT_PRINT | OS64_JS_OUTPUT_CONSOLE;
     if (handle < 0 || names == 0 || (names & ~valid) != 0)
         return refuse(runtime, outcome, OS64_JS_BAD_ARGUMENT, "output handle and selected names are required");
     result = setup(runtime, runtime->output_installed, outcome, "<output setup>");
@@ -889,11 +1079,11 @@ JS_PUBLIC os64_js_status_t os64_js_install_output(os64_js_runtime_t *runtime,
     JSContext *context = runtime->context;
     JSValue global = JS_GetGlobalObject(context), console = JS_UNDEFINED;
     JSPropertyDescriptor console_descriptor = {0};
-    OutputProperty properties[3] = {0};
+    OutputProperty properties[CONSOLE_METHODS + 2] = {0};
     size_t count = 0;
     int console_present = 0;
     int installed = 0;
-    if (names & OS64_JS_OUTPUT_CONSOLE_LOG) {
+    if (names & OS64_JS_OUTPUT_CONSOLE) {
         JSAtom name = JS_NewAtom(context, "console");
         console_present = name == JS_ATOM_NULL ? -1 : JS_GetOwnProperty(context, &console_descriptor, global, name);
         JS_FreeAtom(context, name);
@@ -903,13 +1093,24 @@ JS_PUBLIC os64_js_status_t os64_js_install_output(os64_js_runtime_t *runtime,
             else console = JS_ThrowTypeError(context, "console must be an own data object");
         }
         if (console_present < 0 || JS_IsException(console)) installed = -1;
-        else installed = prepare_output_property(context, &properties[count++], console, "log",
-                          JS_NewCFunction(context, output_call, "log", 1));
+        /* The counts and the timers every method shares, as function data. */
+        JSValue tables[2] = {JS_UNDEFINED, JS_UNDEFINED};
+        if (installed >= 0) {
+            tables[0] = JS_NewObjectProto(context, JS_NULL);
+            tables[1] = JS_NewObjectProto(context, JS_NULL);
+            if (JS_IsException(tables[0]) || JS_IsException(tables[1])) installed = -1;
+        }
+        for (size_t i = 0; installed >= 0 && i < CONSOLE_METHODS; i++)
+            installed = prepare_output_property(context, &properties[count++], console,
+                          console_methods[i].name,
+                          console_method(context, i, tables));
+        JS_FreeValue(context, tables[0]);
+        JS_FreeValue(context, tables[1]);
     }
     if (installed >= 0 && (names & OS64_JS_OUTPUT_PRINT))
         installed = prepare_output_property(context, &properties[count++], global, "print",
                       JS_NewCFunction(context, output_call, "print", 1));
-    if (installed >= 0 && (names & OS64_JS_OUTPUT_CONSOLE_LOG) && console_present == 0)
+    if (installed >= 0 && (names & OS64_JS_OUTPUT_CONSOLE) && console_present == 0)
         installed = prepare_output_property(context, &properties[count++], global, "console",
                       JS_DupValue(context, console));
     for (size_t i = 0; installed >= 0 && i < count && !observe(runtime); i++) {

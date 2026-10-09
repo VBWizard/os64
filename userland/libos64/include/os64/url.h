@@ -48,9 +48,14 @@
 
 #include "os64/resolve.h"   // OS64_RESOLVE_NAME_MAX — DNS's own ceiling
 
+// AS LONG AS AN ADDRESS GETS: 8 KiB, the request line servers take (Apache's
+// LimitRequestLine is 8190, nginx's header buffers 8K), so an address past it
+// would be answered 414 by the server it names. Pages do write long ones:
+// Google's front-end bundle is a 3,666-byte `src`. The path may be all of it.
+#define OS64_URL_REF_MAX    8192
 #define OS64_URL_SCHEME_MAX 16
 #define OS64_URL_HOST_MAX   (OS64_RESOLVE_NAME_MAX + 1)
-#define OS64_URL_PATH_MAX   1024
+#define OS64_URL_PATH_MAX   OS64_URL_REF_MAX
 
 typedef struct {
     char     scheme[OS64_URL_SCHEME_MAX];   // lowercased; spelled with scheme bytes
@@ -90,10 +95,6 @@ os64_url_result_t os64_url_parse(const char *text, os64_url_t *out);
 // schemes it serves.
 const char *os64_url_reason(os64_url_result_t rc);
 
-// The longest reference os64_url_absolute will resolve — a whole HTTP header
-// line's worth, since a `Location:` is where the longest ones come from.
-#define OS64_URL_REF_MAX 2048
-
 // Spell a reference as a WHOLE address, given the page it appeared on — RFC
 // 3986 §5.2's reference resolution, which is what a redirect's `Location:`
 // and every `href` on a page are written in. Every form a server actually
@@ -112,8 +113,8 @@ const char *os64_url_reason(os64_url_result_t rc);
 // IS and whether to go there are different questions, and the second belongs
 // to the caller.
 //
-// Returns false only when the answer will not fit in `cap` or the reference
-// is empty. An empty reference names no address at all: RFC 3986 would read
+// Returns false only when the answer will not fit in `cap`, the reference is
+// longer than an address gets (OS64_URL_REF_MAX), or it is empty. An empty reference names no address at all: RFC 3986 would read
 // it as "the page you already have", and a redirect to the page you already
 // have is a server that has lost its place.
 bool os64_url_absolute(const os64_url_t *base, const char *reference,
