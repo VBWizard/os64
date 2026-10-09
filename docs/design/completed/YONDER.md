@@ -404,6 +404,14 @@ row reads exactly as it does and yonder's says what yonder offers.
 standard's own element for "everything after this is text", so libflow
 sees a `pre` and nothing new is needed.
 
+**A picture asked for by itself** (`image/*`, a link straight to a `.png`)
+is shown as a browser shows one, since census batch 3: libway judges it a
+page, `WAY_BODY_IMAGE`, for a leg whose face shows pictures (wend's does
+not, and still refuses it with the os64get line), and never for a POST's
+reply. The trip reads none of its body; yonder writes the page itself
+(`image_page`): the picture alone in the middle of a dark page, titled by
+its file's name, fetched as any page's picture is.
+
 **POST.** Quinn's packet 05 gives libfetch a request body and wend a POST
 submission. Y3's rebase carries that behaviour into libway — `way_judge`
 stops refusing POST, `way_load` takes the method and body — so both faces

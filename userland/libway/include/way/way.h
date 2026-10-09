@@ -143,6 +143,10 @@ typedef struct {
     // Parser noscript policy for this load, captured by the requesting face.
     // The finished-document loader resumes script stops without executing.
     bool scripting;
+    // The face shows pictures: a picture asked for by itself (`image/*`) is
+    // a page, WAY_BODY_IMAGE, whose body the face does not read — it writes
+    // the page that shows the picture. False: such a reply is not a page.
+    bool pictures;
     char status[WAY_SENTENCE_MAX];
     // The page this load was asked for from — a link followed, a form sent,
     // a refresh — which its Referer names (way_referrer). Empty for an
@@ -166,9 +170,10 @@ way_leg_t way_leg_as(const way_session_t *session, const char *agent);
 // ruling 5), and the worker carries only bytes. Each judgement is written
 // once, here, so the two faces cannot drift.
 
-// What a body is, judged from its head. A head that is neither is not a
-// page: way_open says so and refuses.
-typedef enum { WAY_BODY_HTML = 0, WAY_BODY_TEXT } way_body_t;
+// What a body is, judged from its head. A head that is none of these is not
+// a page: way_open says so and refuses. IMAGE only for a leg whose face shows
+// pictures, and never for the reply to a POST.
+typedef enum { WAY_BODY_HTML = 0, WAY_BODY_TEXT, WAY_BODY_IMAGE } way_body_t;
 
 // The head, COPIED out of the fetch: os64_fetch_head_t is storage inside
 // the fetch and dies with it, and the note is written from the head after

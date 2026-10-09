@@ -55,6 +55,7 @@ int64_t yonder_trip_run(void *job, bool (*cancelled)(void *ctx), void *ctx, void
     way_leg_t leg = way_leg_as(trip->session, trip->agent);
     os64_strcopy(leg.referrer, sizeof(leg.referrer), trip->referrer);
     leg.face = (way_face_t){&r, run_confirm, run_cancelled, run_progress};
+    leg.pictures = true;
 
     yonder_verdict_t verdict;
     os64_memset(&verdict, 0, sizeof(verdict));
@@ -68,6 +69,17 @@ int64_t yonder_trip_run(void *job, bool (*cancelled)(void *ctx), void *ctx, void
     }
     yonder_mail_post_head(trip->mail, &o.head);
     ring(trip);
+    // A picture asked for by itself: the window writes the page that shows
+    // it, and fetches the picture as it fetches any, so its bytes are not
+    // read here.
+    if (o.head.body == WAY_BODY_IMAGE) {
+        verdict.page = true;
+        verdict.fetch = OS64_FETCH_OK;
+        os64_fetch_close(o.fetch);
+        yonder_mail_post_verdict(trip->mail, &verdict);
+        ring(trip);
+        return 1;
+    }
     // The body, a chunk at a time. A post that cannot find room waits, and
     // while it waits nothing is read from the socket: a window that parses
     // slower than the wire delivers slows the wire.

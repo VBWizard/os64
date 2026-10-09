@@ -655,6 +655,33 @@ static bool by_hand(const char *url, bool scripting, way_page_t *page, os64_fetc
     return true;
 }
 
+// A picture asked for by itself is a page for a face that shows pictures,
+// its body left unread for the face; for one that does not, it is not a
+// page and the sentence says how to keep it.
+static void pictures_are_pages_for_a_face_that_shows_them(void)
+{
+    static const char kPng[] = "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: 3\r\n\r\nPNG";
+    for (int pictures = 0; pictures < 2; pictures++) {
+        fresh();
+        script("pic.test", kPng);
+        way_session_t session = {.name="fixture", .agent="fixture", .accept="text/html"};
+        way_leg_t leg = way_leg(&session);
+        leg.pictures = pictures != 0;
+        way_opening_t o;
+        os64_fetch_status_t why;
+        bool opened = way_open(&leg, "http://pic.test/dwm.png", NULL, &o, &why);
+        if (pictures) {
+            expect("pictures: a picture is a page for a face that shows them",
+                   opened && o.head.body == WAY_BODY_IMAGE, leg.status);
+            if (opened)
+                os64_fetch_close(o.fetch);
+        } else {
+            expect("pictures: a picture is not a page for a face that shows none",
+                   !opened && strstr(leg.status, "that is image/png, not a page") != NULL, leg.status);
+        }
+    }
+}
+
 static void pieces_make_the_same_page(void)
 {
     static const char *const replies[] = {
@@ -754,6 +781,7 @@ int main(void)
     s_jar = way_jar_new();
     scripted_document_load();
     pieces_make_the_same_page();
+    pictures_are_pages_for_a_face_that_shows_them();
     options_left_alone();
     validator_identity();
     restrictive_304();

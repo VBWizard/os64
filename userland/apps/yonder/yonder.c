@@ -4723,17 +4723,60 @@ static void reaped(os64_work_id_t id, void *job, void *product)
 // the verdict, once the ring is drained, finishes it and hands the page to
 // arrive() exactly as a page from a worker used to be handed over.
 
+// Text into the page yonder writes, escaped as an attribute's value and a
+// title's text both need it.
+static void feed_escaped(os64_html_parser_t *parser, const char *text, size_t length)
+{
+    for (size_t i = 0; i < length; i++) {
+        const char *escaped = text[i] == '&' ? "&amp;" : text[i] == '"' ? "&quot;"
+                            : text[i] == '<' ? "&lt;" : NULL;
+        if (escaped != NULL)
+            os64_html_parser_feed(parser, escaped, os64_strlen(escaped));
+        else
+            os64_html_parser_feed(parser, text + i, 1);
+    }
+}
+
+// A picture asked for by itself is shown as a browser shows one: alone, in
+// the middle of a dark page, the title its file's name (or its address,
+// when the path names none). The page is written here and the picture
+// fetched as any page's is: the reply's own bytes were not read.
+static void image_page(os64_html_parser_t *parser, const char *url)
+{
+    const char *end = url;
+    while (*end != '\0' && *end != '?' && *end != '#')
+        end++;
+    const char *name = end;
+    while (name > url && name[-1] != '/')
+        name--;
+    static const char kHead[] = "<!doctype html><title>";
+    static const char kBody[] = "</title><body style=\"margin:0;min-height:100vh;display:flex;"
+                                "align-items:center;justify-content:center;background:#0e0e0e\">"
+                                "<img src=\"";
+    os64_html_parser_feed(parser, kHead, sizeof(kHead) - 1);
+    if (name < end)
+        feed_escaped(parser, name, (size_t)(end - name));
+    else
+        feed_escaped(parser, url, os64_strlen(url));
+    os64_html_parser_feed(parser, kBody, sizeof(kBody) - 1);
+    feed_escaped(parser, url, os64_strlen(url));
+    os64_html_parser_feed(parser, "\">", 2);
+}
+
 // The parser for the page whose head has arrived. HTML takes the head's
 // charset; text is laid out by handing libhtml `<plaintext>` and then the
 // bytes — the standard's own element for "everything after this is text",
 // so libflow sees preformatted text and needs nothing new — in the
 // encoding libway's rule chooses from the head and the body's first bytes.
+// A picture's page is yonder's own (image_page), in UTF-8.
 static bool stream_parser(const void *first, size_t n)
 {
     os64_html_options_t opt = os64_html_options_default();
     opt.scripting = g.stream.scripting;
     if (g.stream.head.body == WAY_BODY_HTML) {
         opt.charset = g.stream.head.charset[0] ? g.stream.head.charset : NULL;
+    } else if (g.stream.head.body == WAY_BODY_IMAGE) {
+        opt.charset = "utf-8";
     } else {
         g.stream.text_utf8 = way_text_utf8(&g.stream.head, first, n);
         opt.charset = g.stream.text_utf8 ? "utf-8" : "windows-1252";
@@ -4744,6 +4787,8 @@ static bool stream_parser(const void *first, size_t n)
     if (g.stream.head.body == WAY_BODY_TEXT) {
         static const char kOpen[] = "<!doctype html><plaintext>";
         os64_html_parser_feed(g.stream.parser, kOpen, sizeof(kOpen) - 1);
+    } else if (g.stream.head.body == WAY_BODY_IMAGE) {
+        image_page(g.stream.parser, g.stream.head.url);
     }
     return true;
 }
@@ -4843,7 +4888,9 @@ static void stream_finish(os64_fetch_status_t fetch, const char *reason)
     // window's own, beside libway's page, as page_doc() reads it.
     os64_page_t *model = os64_page_build(doc, g.stream.head.url, NULL, fresh.state);
     fresh.model_version = os64_html_version(doc);
-    if (g.stream.head.body == WAY_BODY_HTML) {
+    // A picture's page is a page like an HTML one (image_page): its picture
+    // is fetched and its record kept as any page's are.
+    if (g.stream.head.body == WAY_BODY_HTML || g.stream.head.body == WAY_BODY_IMAGE) {
         fresh.way.doc = doc;
         fresh.way.model = model;
         if (g.stream.local != NULL)
@@ -5133,7 +5180,7 @@ static bool stream_turn(void)
     yonder_mail_t *mail = g.stream.mail;
     if (mail != NULL && !g.stream.has_head && yonder_mail_take_head(mail, &g.stream.head)) {
         g.stream.has_head = true;
-        if (g.stream.head.body == WAY_BODY_HTML && !stream_parser(NULL, 0)) {
+        if (g.stream.head.body != WAY_BODY_TEXT && !stream_parser(NULL, 0)) {
             stream_failed("Out of memory reading that page.");
             stop_trip();
             status_rest("Out of memory reading that page.");

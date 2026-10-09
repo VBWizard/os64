@@ -381,7 +381,12 @@ bool way_open(way_leg_t *s, const char *url, const os64_page_request_t *request,
     bool html = type[0] == '\0' || os64_streq(type, "text/html")
                 || os64_streq(type, "application/xhtml+xml");
     bool plain = !html && type_is_text(type);
-    if (!html && !plain) {
+    // A PICTURE ASKED FOR BY ITSELF is shown as a browser shows one, on a
+    // page of its own, by a face that can; a POST's reply is not, since the
+    // face's own fetch of the picture would be a GET of another thing.
+    bool image = !html && !plain && s->pictures && head->method != OS64_FETCH_METHOD_POST &&
+                 os64_strlen(type) > 6 && os64_memcmp(type, "image/", 6) == 0;
+    if (!html && !plain && !image) {
         // Not a page at all. Say what it is and how to keep it — unless the
         // reply was to a POST, which a new GET of the address cannot fetch
         // again. The FINAL method decides: a redirect may have turned it.
@@ -398,7 +403,7 @@ bool way_open(way_leg_t *s, const char *url, const os64_page_request_t *request,
         return false;
     }
     out->fetch = f;
-    head_copy(&out->head, head, html ? WAY_BODY_HTML : WAY_BODY_TEXT);
+    head_copy(&out->head, head, html ? WAY_BODY_HTML : image ? WAY_BODY_IMAGE : WAY_BODY_TEXT);
     const os64_fetch_detail_t *detail = os64_fetch_detail(f);
     out->head.tls_version = detail->tls_version;
     out->head.tls_fallback = detail->tls_fallback;

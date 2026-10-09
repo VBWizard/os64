@@ -1490,6 +1490,49 @@ static void stream_no_page(void) {
         g.stop.disabled==true,"stream: no page, libway's sentence, and Stop goes out");
     stream_window_drop();
 }
+/* A picture asked for by itself: the window writes its page (image_page),
+ * the picture alone on a dark page, titled by its file; nothing of the
+ * reply's body is read. */
+static void stream_picture_page(void) {
+    stream_window();
+    start_trip("http://fixture.test/shots/dwm&co.png?v=1",NULL,NAV_GO,NULL);
+    way_head_t h=stream_head("image/png","",false);
+    os64_strcopy(h.url,sizeof(h.url),"http://fixture.test/shots/dwm&co.png?v=1");
+    h.body=WAY_BODY_IMAGE;
+    yonder_mail_post_head(g.stream.mail,&h);
+    stream_post_verdict(true,OS64_FETCH_OK,"");
+    /* The fake pool keeps one job: the picture's will take the trip's slot,
+     * so the trip's is held here and released at the end. */
+    void *trip=pool_work.job;
+    check(stream_turn()==false && g.page.tree!=NULL && g.page.plain==NULL,
+        "picture page: a picture asked for by itself arrives as a page");
+    const os64_html_document_t *doc=page_doc(&g.page);
+    const os64_html_node_t *img=NULL;
+    for(const os64_html_node_t *n=doc->document;n;) {
+        if(n->kind==OS64_HTML_ELEMENT&&n->name&&!strcmp(n->name,"img")) { img=n; break; }
+        if(n->first_child){n=n->first_child;continue;}
+        while(n&&!n->next)n=n->parent;
+        if(n)n=n->next;
+    }
+    const os64_html_attr_t *src=img?os64_html_attr(img,"src"):NULL;
+    check(src!=NULL && os64_streq(src->value,"http://fixture.test/shots/dwm&co.png?v=1"),
+        "picture page: its one picture is the address asked for, escaped and read back whole");
+    char title[64]={0};
+    const os64_html_node_t *t=doc->head?doc->head->first_child:NULL;
+    while(t&&!(t->kind==OS64_HTML_ELEMENT&&t->name&&!strcmp(t->name,"title"))) t=t->next;
+    if(t&&t->first_child&&t->first_child->kind==OS64_HTML_TEXT) os64_strcopy(title,sizeof(title),t->first_child->text);
+    check(os64_streq(title,"dwm&co.png"),"picture page: titled by its file's name");
+    /* The picture is fetched as any page's is: the job in the pool is the
+     * picture's, for the address asked for, released as a picture's. */
+    const yonder_picture_job_t *job=pool_work.job;
+    check(job!=NULL && job->kind==YONDER_JOB_PICTURE &&
+          os64_streq(job->url,"http://fixture.test/shots/dwm&co.png?v=1"),
+        "picture page: its picture is fetched like any page's");
+    /* This harness runs no picture job; the job is freed as a sheet job is. */
+    if(pool_work.job!=NULL && pool_work.job!=trip) { os64_free(pool_work.job); memset(&pool_work,0,sizeof(pool_work)); }
+    if(trip!=NULL && pool_work.job!=trip) yonder_trip_release(trip,NULL);
+    stream_window_drop();
+}
 static void stream_refused(void) {
     /* Deeper than twice the parser's stack: the parser refuses, the fetch
      * is cancelled, and the page arrives as far as it got, saying so. */
@@ -2161,6 +2204,7 @@ static void stream_cases(void) {
     stream_reaped_first();
     stream_text();
     stream_no_page();
+    stream_picture_page();
     stream_refused();
     stream_stopped();
     stream_pool_breaks();
