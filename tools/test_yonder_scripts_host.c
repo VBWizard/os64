@@ -2119,8 +2119,23 @@ static void loop_throw_after_queue(void) {
     check(strstr(g.status_text,"queued jobs")==NULL,"loop: nothing says the previous turn has queued jobs");
     loop_drop();
 }
+/* The same for a string timer (Quinn, #240): libdom runs its source, and
+ * a throw after a queued job must not stall the timers after it. */
+static void loop_string_timer_throws(void) {
+    loop_page("<p id=job>no</p><p id=next>no</p>"
+        "<script>setTimeout(\"Promise.resolve().then(function(){document.getElementById('job').textContent='ran'});"
+        "null.x\",10);setTimeout(function(){document.getElementById('next').textContent='ran'},20);</script>");
+    check(loop_settle() && g.page.tree!=NULL,"loop: a page with a throwing string timer arrives");
+    now_ms=200;
+    for(int i=0;i<4;i++) script_turn();
+    check(probe_text_is("job","ran"),"loop: the job a throwing string timer queued still runs");
+    check(probe_text_is("next","ran"),"loop: the timer after it is not refused as busy");
+    check(strstr(g.status_text,"queued jobs")==NULL,"loop: nothing says the previous turn has queued jobs");
+    loop_drop();
+}
 static void loop_cases(void) {
     loop_throw_after_queue();
+    loop_string_timer_throws();
     loop_parse_first();
     loop_waits();
     loop_hash_unshown();
