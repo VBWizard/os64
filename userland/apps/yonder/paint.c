@@ -20,7 +20,122 @@ typedef struct {
     // The box whose background became the canvas's: it does not paint it
     // a second time over its own border box (CSS 2.1 §14.2).
     const flow_box_t *canvas_owner;
+    // Dark pages (paint.h), NULL for none.
+    const yonder_dark_t *dark;
 } Painter;
+
+static double hue_part(double p, double q, double t)
+{
+    if (t < 0)
+        t += 1;
+    if (t > 1)
+        t -= 1;
+    return t < 1.0 / 6 ? p + (q - p) * 6 * t : t < 0.5 ? q : t < 2.0 / 3 ? p + (q - p) * (2.0 / 3 - t) * 6 : p;
+}
+
+// How bright a colour looks, 0 to 1: Rec. 709's weights over each channel
+// squared, a near enough linearisation for the one decision it makes and
+// cheap enough for every pixel of a gradient.
+static double luminance(double r, double g, double b)
+{
+    return 0.2126 * r * r + 0.7152 * g * g + 0.0722 * b * b;
+}
+
+// The colour at HSL lightness `l` with hue `h` and saturation `s`.
+static void from_hsl(double h, double s, double l, double *r, double *g, double *b)
+{
+    if (s == 0) {
+        *r = *g = *b = l;
+        return;
+    }
+    double q = l < 0.5 ? l * (1 + s) : l + s - l * s, p = 2 * l - q;
+    *r = hue_part(p, q, h + 1.0 / 3);
+    *g = hue_part(p, q, h);
+    *b = hue_part(p, q, h - 1.0 / 3);
+}
+
+// Where a dark page splits light from dark: a colour that looks brighter
+// than this is light (mid grey, #6c6c6c, is about here).
+#define DARK_SPLIT 0.18
+
+// `c` as a dark page draws it, hue, saturation and transparency kept, its
+// LUMINANCE moved: PAPER brighter than the split goes dark, to between 0.4%
+// (white) and 7% (the split), and INK darker than the split goes light, to
+// between 80% (black) and 62% (the split); each other colour is as it was.
+// Luminance and not HSL lightness decides, because yellow and green are
+// "half light" by lightness and look nearly white (Quinn, #238). Any moved
+// ink on any moved paper is at least 5.3 to 1 in WCAG's contrast (searched
+// over a 4,096-colour grid), about 14.5 to 1 for black on white. A
+// saturated dark blue keeps only a tint: blue is so dark to the eye that
+// the luminance an ink needs is near white. The order within each side is
+// kept, so a paler box stays paler than a darker one.
+static uint32_t relight(uint32_t c, bool paper)
+{
+    double r = ((c >> 16) & 0xff) / 255.0, g = ((c >> 8) & 0xff) / 255.0, b = (c & 0xff) / 255.0;
+    double y = luminance(r, g, b);
+    if (paper ? y <= DARK_SPLIT : y >= DARK_SPLIT)
+        return c;
+    double want = paper ? 0.004 + (1 - y) / (1 - DARK_SPLIT) * (0.07 - 0.004)
+                        : 0.80 - y / DARK_SPLIT * (0.80 - 0.62);
+    double mx = r > g ? (r > b ? r : b) : (g > b ? g : b);
+    double mn = r < g ? (r < b ? r : b) : (g < b ? g : b), l = (mx + mn) / 2;
+    double d = mx - mn, s = 0, h = 0;
+    if (d > 0) {
+        s = l > 0.5 ? d / (2 - mx - mn) : d / (mx + mn);
+        h = mx == r ? (g - b) / d + (g < b ? 6 : 0) : mx == g ? (b - r) / d + 2 : (r - g) / d + 4;
+        h /= 6;
+    }
+    // Luminance rises with lightness at a fixed hue and saturation, so the
+    // lightness that gives `want` is found by halving.
+    double lo = 0, hi = 1;
+    for (int i = 0; i < 24; i++) {
+        double mid = (lo + hi) / 2;
+        from_hsl(h, s, mid, &r, &g, &b);
+        if (luminance(r, g, b) < want)
+            lo = mid;
+        else
+            hi = mid;
+    }
+    from_hsl(h, s, (lo + hi) / 2, &r, &g, &b);
+    // Each part is from 0 to 1, so adding a half rounds it.
+    return (c & 0xff000000u) | (uint32_t)(r * 255 + 0.5) << 16 | (uint32_t)(g * 255 + 0.5) << 8 |
+           (uint32_t)(b * 255 + 0.5);
+}
+
+// A colour as a dark page draws it (paint.h): a background or a gradient
+// is PAPER, text, a decoration, a bullet or a border is INK.
+// The answers already worked out, by colour: a gradient asks once a pixel,
+// and its neighbours are mostly colours it has asked about. One window
+// paints on one thread.
+#define RELIT_SLOTS 1024
+static struct {
+    uint32_t in, out;
+    bool paper, used;
+} s_relit[RELIT_SLOTS];
+
+static uint32_t relit(uint32_t colour, bool paper)
+{
+    uint32_t k = ((colour * 2654435761u) >> 22) ^ (paper ? 1u : 0u);
+    k %= RELIT_SLOTS;
+    if (s_relit[k].used && s_relit[k].in == colour && s_relit[k].paper == paper)
+        return s_relit[k].out;
+    uint32_t out = relight(colour, paper);
+    s_relit[k].in = colour;
+    s_relit[k].out = out;
+    s_relit[k].paper = paper;
+    s_relit[k].used = true;
+    return out;
+}
+
+static uint32_t paper_of(const Painter *p, uint32_t colour)
+{
+    return p->dark != NULL ? relit(colour, true) : colour;
+}
+
+static uint32_t ink_of(const Painter *p, uint32_t colour)
+{
+    return p->dark != NULL ? relit(colour, false) : colour;
+}
 
 static int32_t px(flow_unit_t u)
 {
@@ -263,6 +378,9 @@ static void borders(const Painter *p, const flow_box_t *b)
 {
     const flow_style_t *s = b->style;
     os64_gui_rect_t r = b->rect;
+    uint32_t colour[4];
+    for (int k = 0; k < 4; k++)
+        colour[k] = ink_of(p, s->border_color[k]);
     int32_t w[4];
     for (int k = 0; k < 4; k++)
         w[k] = s->border_style[k] == FLOW_BORDER_NONE || s->border_style[k] == FLOW_BORDER_HIDDEN
@@ -277,28 +395,28 @@ static void borders(const Painter *p, const flow_box_t *b)
         // ceil(i * l / t): the columns of the left side this row gives up.
         int64_t x0 = rx + (i * l + t - 1) / t, x1 = rx + rw - (i * rt + t - 1) / t;
         stroke(p, s->border_style[FLOW_TOP], x0, ry + i, x1 - x0, true, i, t, rx,
-               tone(s->border_style[FLOW_TOP], s->border_color[FLOW_TOP], FLOW_TOP, (int32_t)i,
+               tone(s->border_style[FLOW_TOP], colour[FLOW_TOP], FLOW_TOP, (int32_t)i,
                     (int32_t)t));
     }
     for (int64_t i = max64(0, ry + rh - vy1), end = min64(min64(bt, rh), ry + rh - vy0); i < end;
          i++) {
         int64_t x0 = rx + (i * l + bt - 1) / bt, x1 = rx + rw - (i * rt + bt - 1) / bt;
         stroke(p, s->border_style[FLOW_BOTTOM], x0, ry + rh - 1 - i, x1 - x0, true, i, bt, rx,
-               tone(s->border_style[FLOW_BOTTOM], s->border_color[FLOW_BOTTOM], FLOW_BOTTOM,
+               tone(s->border_style[FLOW_BOTTOM], colour[FLOW_BOTTOM], FLOW_BOTTOM,
                     (int32_t)i, (int32_t)bt));
     }
     for (int64_t j = max64(0, vx0 - rx), end = min64(min64(l, rw), vx1 - rx); j < end; j++) {
         // How many top rows reach column j: min(t, floor(j * t / l) + 1).
         int64_t y0 = ry + min64(t, j * t / l + 1), y1 = ry + rh - min64(bt, j * bt / l + 1);
         stroke(p, s->border_style[FLOW_LEFT], rx + j, y0, y1 - y0, false, j, l, ry,
-               tone(s->border_style[FLOW_LEFT], s->border_color[FLOW_LEFT], FLOW_LEFT, (int32_t)j,
+               tone(s->border_style[FLOW_LEFT], colour[FLOW_LEFT], FLOW_LEFT, (int32_t)j,
                     (int32_t)l));
     }
     for (int64_t j = max64(0, rx + rw - vx1), end = min64(min64(rt, rw), rx + rw - vx0); j < end;
          j++) {
         int64_t y0 = ry + min64(t, j * t / rt + 1), y1 = ry + rh - min64(bt, j * bt / rt + 1);
         stroke(p, s->border_style[FLOW_RIGHT], rx + rw - 1 - j, y0, y1 - y0, false, j, rt, ry,
-               tone(s->border_style[FLOW_RIGHT], s->border_color[FLOW_RIGHT], FLOW_RIGHT,
+               tone(s->border_style[FLOW_RIGHT], colour[FLOW_RIGHT], FLOW_RIGHT,
                     (int32_t)j, (int32_t)rt));
     }
 }
@@ -488,7 +606,7 @@ static void round_borders(const Painter *p, const flow_box_t *b, const Round *ou
             uint32_t colour = 0;
             if (share > 0) {
                 int side = ring_side(b, w, x, y);
-                colour = at_share(tone(s->border_style[side], s->border_color[side], side, 0,
+                colour = at_share(tone(s->border_style[side], ink_of(p, s->border_color[side]), side, 0,
                                        w[side]),
                                   share);
             }
@@ -962,7 +1080,7 @@ static void gradient(const Painter *p, const flow_gradient_t *g, const yonder_ti
             double t = g->kind == FLOW_GRADIENT_LINEAR
                            ? ((u - cx) * dx + (v - cy) * dy) / len + 0.5
                            : hypot((u - cx) / rx, (v - cy) / ry);
-            uint32_t c = solid ? solid_colour : stops_colour(&stops, t, g->repeating);
+            uint32_t c = paper_of(p, solid ? solid_colour : stops_colour(&stops, t, g->repeating));
             uint32_t alpha = flow_alpha(c);
             if (round)
                 alpha = (uint32_t)(alpha * cover(x, a, e) / SUB);
@@ -998,9 +1116,9 @@ static void layers(const Painter *p, const flow_box_t *b, const Round *outer)
             shape = round_inset(outer, b->rect, cut);
         yonder_tile_t tile;
         if (i == n && outer != NULL) {
-            round_background(p, b, &shape, s->background);
+            round_background(p, b, &shape, paper_of(p, s->background));
         } else if (i == n) {
-            fill(p, cut.x, cut.y, cut.w, cut.h, s->background);
+            fill(p, cut.x, cut.y, cut.w, cut.h, paper_of(p, s->background));
         } else if (l.gradient != NULL) {
             if (yonder_background_tile(&l, yonder_box_edge(b, b->rect, l.origin), 0, 0, &tile))
                 gradient(p, l.gradient, &tile, cut, &shape, outer != NULL, s->color);
@@ -1081,10 +1199,11 @@ static void decorations(const Painter *p, const flow_box_t *b)
     int64_t size = px(b->style->font_size);
     int64_t thick = max64(1, size / 16);
     if (b->decoration & FLOW_DECORATION_UNDERLINE)
-        fill(p, b->rect.x, (int64_t)b->baseline + thick, b->rect.w, thick, b->underline_color);
+        fill(p, b->rect.x, (int64_t)b->baseline + thick, b->rect.w, thick,
+             ink_of(p, b->underline_color));
     if (b->decoration & FLOW_DECORATION_LINE_THROUGH)
         fill(p, b->rect.x, (int64_t)b->baseline - size * 3 / 10, b->rect.w, thick,
-             b->line_through_color);
+             ink_of(p, b->line_through_color));
 }
 
 // Disc, circle and square are drawn as shapes, the way browsers draw them,
@@ -1130,7 +1249,7 @@ static void bullet(const Painter *p, const flow_box_t *b, flow_list_style_type_t
     int64_t d = max64(3, size / 3);
     int64_t x = (int64_t)b->rect.x + max64(0, ((int64_t)b->rect.w - size / 4 - d) / 2);
     int64_t y = (int64_t)b->baseline - size * 3 / 10 - d / 2;
-    uint32_t colour = b->style->color;
+    uint32_t colour = ink_of(p, b->style->color);
     if (type == FLOW_LIST_SQUARE) {
         fill(p, x, y, d, d, colour);
         return;
@@ -1207,12 +1326,12 @@ static void paint_box(void *ctx, const flow_box_t *b)
             const flow_shadow_t *sh = &b->style->text_shadows[i];
             p->v->text(p->v->ctx, b, (int32_t)((int64_t)b->rect.x + p->off.x + sh->x),
                        (int32_t)((int64_t)b->baseline + p->off.y + sh->y), on_page(p, p->view),
-                       sh->current ? b->style->color : sh->colour);
+                       sh->current ? ink_of(p, b->style->color) : sh->colour);
         }
         if (b->run != NULL)
             p->v->text(p->v->ctx, b, (int32_t)((int64_t)b->rect.x + p->off.x),
                        (int32_t)((int64_t)b->baseline + p->off.y), on_page(p, p->view),
-                       b->style->color);
+                       ink_of(p, b->style->color));
         decorations(p, b);
         return;
     case FLOW_BOX_ATOMIC:
@@ -1236,7 +1355,7 @@ static void paint_box(void *ctx, const flow_box_t *b)
         int32_t n = flow_background_layers(b->style);
         if (b->style->has_background &&
             flow_background_layer(b->style, n - 1).clip != FLOW_EDGE_TEXT)
-            fill(p, b->rect.x, b->rect.y, b->rect.w, b->rect.h, b->style->background);
+            fill(p, b->rect.x, b->rect.y, b->rect.w, b->rect.h, paper_of(p, b->style->background));
         for (int32_t i = n - 1; i >= 0; i--) {
             flow_layer_t l = flow_background_layer(b->style, i);
             yonder_tile_t tile;
@@ -1307,16 +1426,18 @@ const flow_box_t *yonder_canvas_owner(const flow_tree_t *tree, const yonder_verb
 }
 
 void yonder_paint(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll,
-                  uint32_t paper, const yonder_verbs_t *verbs)
+                  uint32_t paper, const yonder_dark_t *dark, const yonder_verbs_t *verbs)
 {
-    Painter p = {.v = verbs, .view = viewport, .scroll = scroll};
+    Painter p = {.v = verbs, .view = viewport, .scroll = scroll, .dark = dark};
+    if (dark != NULL)
+        paper = dark->paper;
     const flow_box_t *root = flow_root(tree);
     if (root != NULL)
         p.canvas_owner = canvas_owner(&p, root);
     const flow_box_t *owner = p.canvas_owner;
     // A translucent canvas colour is laid over the paper: under the page
     // there is nothing else.
-    uint32_t canvas = owner != NULL && owner->style->has_background ? owner->style->background
+    uint32_t canvas = owner != NULL && owner->style->has_background ? paper_of(&p, owner->style->background)
                                                                     : paper;
     if (flow_alpha(canvas) != 255)
         fill(&p, viewport.x, viewport.y, viewport.w, viewport.h, paper);

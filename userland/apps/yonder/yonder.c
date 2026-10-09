@@ -57,6 +57,14 @@
 #define PAGE_LINK  0x0000eeu
 #define PAGE_PAPER 0xffffffu
 
+// DARK PAGES (paint.h's yonder_dark_t): yonder.conf's `appearance = dark`.
+// A page with a dark design of its own is told to use it
+// (`prefers-color-scheme: dark`), and the painter darkens what is left:
+// light backgrounds go dark, dark text goes light. The paper of a page
+// that set none is white's dark counterpart, as the painter turns it.
+static const yonder_dark_t kDark = {.paper = 0x101010u};
+static bool s_dark;
+
 #define YONDER_ACCEPT "text/html, application/xhtml+xml, text/*;q=0.8"
 
 // The work pool. A navigation's job is a FETCH (trip.h; the parse is this
@@ -574,7 +582,8 @@ static garb_env_t css_view(int32_t w, int32_t h, uint32_t zoom)
 {
     int64_t cw = ((int64_t)w * 1000 + zoom / 2) / zoom;
     int64_t ch = ((int64_t)h * 1000 + zoom / 2) / zoom;
-    return (garb_env_t){cw > 0 ? (int32_t)cw : 1, ch > 0 ? (int32_t)ch : 1};
+    return (garb_env_t){.width = cw > 0 ? (int32_t)cw : 1, .height = ch > 0 ? (int32_t)ch : 1,
+                        .dark = s_dark};
 }
 
 // `n` CSS pixels as device pixels at `zoom` (thousandths; 0 is 1000),
@@ -616,7 +625,8 @@ static bool page_lay_out(Page *p, int32_t width, int32_t height, uint32_t zoom, 
     int32_t entry[SHEETS_MAX] = {0};
     garb_env_t view = css_view(width, height, zoom);
     if (cascade == NULL || p->sheets_changed || (cascade != NULL && (garb_cascade_env(cascade).width != view.width ||
-                                                  garb_cascade_env(cascade).height != view.height))) {
+                                                  garb_cascade_env(cascade).height != view.height ||
+                                                  garb_cascade_env(cascade).dark != view.dark))) {
         garb_sheet_in_t in[SHEETS_MAX];
         int32_t n = 0;
         const os64_page_t *model = page_model(p);
@@ -5646,14 +5656,14 @@ static void view_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_
     GlassGroups groups = {.depth = 0};
     Glass gl = {&ctx->surf, w->bounds.x - g.sx, w->bounds.y - g.sy, part, &groups};
     if (g.page.tree == NULL) {
-        os64_draw_fill_rect(&ctx->surf, part, 0xff000000u | PAGE_PAPER);
+        os64_draw_fill_rect(&ctx->surf, part, 0xff000000u | (s_dark ? kDark.paper : PAGE_PAPER));
         return;
     }
     yonder_verbs_t v = {&gl,           glass_fill,       glass_text,       glass_image,
                         glass_control, glass_backdrop,   glass_group_open, glass_group_close,
                         glass_mask,    glass_pixels};
     os64_gui_rect_t view = {part.x - gl.dx, part.y - gl.dy, part.w, part.h};
-    yonder_paint(g.page.tree, view, scroll_now(), PAGE_PAPER, &v);
+    yonder_paint(g.page.tree, view, scroll_now(), PAGE_PAPER, s_dark ? &kDark : NULL, &v);
     box_bars(&gl, view);
 }
 
@@ -5838,6 +5848,19 @@ static void zoom_use(uint32_t zoom)
 {
     g.zoom_default = zoom;
     zoom_to(zoom);
+}
+
+// Dark pages turned on or off (Settings): the page's cascade is judged
+// again, since `prefers-color-scheme` has changed its answer, and the page
+// is laid out and painted afresh.
+static void dark_use(bool dark)
+{
+    if (dark == s_dark)
+        return;
+    s_dark = dark;
+    coming_rejudge();
+    (void)relayout(true);
+    os64_ui_mark_dirty(&g.ui, &g.root);
 }
 
 // Ctrl with = or + zooms in, with - out, with 0 back to the settings'
@@ -6393,6 +6416,7 @@ int main(int argc, char **argv)
     // page from the network arrives after it, and the window keeps its name.
     s_script_audit = argc > 1 && os64_streq(argv[1], "--script-audit");
     g.scripts_on = yonder_settings_saved_scripts();
+    s_dark = yonder_settings_saved_dark();
     g.script_ms = (uint64_t)yonder_settings_saved_script_seconds() * 1000;
     const char *diag_refused = diag_dir_open();
     int address_arg = s_script_audit ? 2 : 1;
@@ -6522,7 +6546,7 @@ int main(int argc, char **argv)
             if (ev.type == OS64_GUI_EVENT_SETTINGS)
                 yonder_settings_open(g.win, BELL_SETTINGS, g.way.agent, settings_use, g.cache,
                                      g.scripts_on, (uint32_t)(g.script_ms / 1000), g.zoom_default,
-                                     zoom_use);
+                                     zoom_use, s_dark, dark_use);
             else if (!bar_event(&ev) && !zoom_event(&ev) && !key_event(&ev) && !password_key(&ev))
                 os64_ui_dispatch(&g.ui, &ev);
             // What the event became, as DOM events, now libui is done with it.

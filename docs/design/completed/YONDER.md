@@ -61,7 +61,7 @@ person moves around them.
 
 The title bar's Settings action opens yonder's Settings window — the
 shared modeless dialog (`os64/ui_settings.h`), Apply, Save as default and
-Close — with four settings: default zoom; whether pictures and style sheets are
+Close — with five settings: default zoom (and beside it dark pages, below); whether pictures and style sheets are
 kept on disk and in how much room (CACHE.md is that one's record: a box,
 a size, a button that empties the cache, and what it holds on the status
 line), and **who yonder says it is**, the
@@ -106,6 +106,21 @@ remaining gates before recommending scripts for ordinary browsing.
 - **The zoom every page starts at** (PILE3.md § Zoom): a whole percent
   from 25 to 500. Apply sets it and lays the page out again at once; Save
   as default writes `zoom =` to `yonder.conf`; Ctrl+0 goes back to it.
+- **Dark pages**, at the zoom row's right end, `appearance = dark` (or
+  `light`, the default) in `yonder.conf`. A page with a dark design of its
+  own is told to use it: libgarb answers `prefers-color-scheme: dark`. What
+  is left the painter darkens (paint.h's `yonder_dark_t`): every colour is
+  drawn at its brightness (luminance) moved, hue and saturation kept, a
+  background or a gradient going dark when it looks brighter than mid grey
+  and text, a decoration, a bullet or a border going light when it looks
+  darker, so a moved ink on a moved paper is at least 5.3 to 1 (WCAG) and a
+  bright yellow panel's black text stays readable (Quinn, #238).
+  So a page that paints its own white (Google, DuckDuckGo's HTML page) is
+  dark, a pale blue box a dark blue one, a navy link a pale blue one; a
+  mid colour and every picture are the page's, and a dark design of the
+  page's own has nothing to move. A page that set no colours is laid on
+  white's dark counterpart. Form controls keep the desktop theme's colours.
+  Apply re-judges the cascade and lays the page out again.
 - **yonder's loop waits on its own window**, so a thread waits on the
   dialog's (without taking its events) and rings a doorbell on yonder's;
   the loop pumps the dialog and tells the thread it has. One ring is out

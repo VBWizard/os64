@@ -21,6 +21,9 @@
 // What a media query and a viewport unit are judged against.
 typedef struct {
     double width, height;           // the viewport, in CSS pixels
+    // The person's colour scheme: what `prefers-color-scheme` answers,
+    // `dark` when true and `light` when false.
+    bool dark;
 } garb_env_t;
 
 // An `@import` (Cascade 4 § 2.1): the address as written — resolved

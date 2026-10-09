@@ -1,6 +1,7 @@
 # Media Queries 4 (GARB.md, G2c), worked by hand: IN is a viewport and a
 # query list, OUT whether it holds. The machine is a screen with a mouse, 8
-# bits a channel, 1 dppx, a light scheme, reduced motion and no scripting.
+# bits a channel, 1 dppx, a light scheme (dark when a case says `dark` after its viewport),
+# reduced motion and no scripting.
 IN: 800x600
 OUT: true
 IN: 800x600 all
@@ -64,6 +65,14 @@ OUT: true
 IN: 800x600 (prefers-color-scheme: dark)
 OUT: false
 IN: 800x600 (prefers-color-scheme: light)
+OUT: true
+IN: 800x600 dark (prefers-color-scheme: dark)
+OUT: true
+IN: 800x600 dark (prefers-color-scheme: light)
+OUT: false
+IN: 800x600 dark (prefers-color-scheme)
+OUT: true
+IN: 800x600 dark not all and (prefers-color-scheme: light)
 OUT: true
 IN: 800x600 (prefers-reduced-motion: reduce)
 OUT: true

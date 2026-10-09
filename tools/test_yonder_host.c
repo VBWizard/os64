@@ -390,6 +390,8 @@ static os64_html_document_t *parse(const char *html, size_t len)
 // When set, paint_of writes here whose background the canvas is
 // (yonder_canvas_owner): "html", "body" or "none".
 static const char **s_canvas_owner;
+// When set, the page is cascaded and painted dark (paint.h's yonder_dark_t).
+static const yonder_dark_t *s_dark_paint;
 
 static char *paint_of(const char *html, size_t len, int32_t width, os64_gui_rect_t view,
                       bool *escaped, bool css)
@@ -407,7 +409,9 @@ static char *paint_of(const char *html, size_t len, int32_t width, os64_gui_rect
         in[n] = (garb_sheet_in_t){.sheet = &sheets[n], .media = sh->media};
         n++;
     }
-    garb_cascade_t *c = css ? garb_cascade(in, n, doc, (garb_env_t){width, view.h}) : NULL;
+    garb_cascade_t *c = css ? garb_cascade(in, n, doc, (garb_env_t){.width = width, .height = view.h,
+                                                               .dark = s_dark_paint != NULL})
+                            : NULL;
     flow_env_t env = kEnv;
     env.cascade = c;
     env.viewport_height = view.h;
@@ -418,7 +422,7 @@ static char *paint_of(const char *html, size_t len, int32_t width, os64_gui_rect
                         rec_control,   rec_backdrop, rec_group_open, rec_group_close,
                         rec_mask,      rec_pixels};
     if (t != NULL)
-        yonder_paint(t, view, (flow_point_t){view.x, view.y}, kEnv.paper, &v);
+        yonder_paint(t, view, (flow_point_t){view.x, view.y}, kEnv.paper, s_dark_paint, &v);
     if (s_canvas_owner != NULL) {
         const flow_box_t *o = t != NULL ? yonder_canvas_owner(t, &v) : NULL;
         *s_canvas_owner = o == NULL ? "none"
@@ -569,6 +573,73 @@ static bool pixels_are(const uint32_t *got, const uint32_t *want, int n)
         if (got[i] != want[i])
             return false;
     return true;
+}
+
+// DARK PAGES (paint.h): the colour each run of `html` is drawn in, by its
+// first word, and what the canvas is filled with first. The expected
+// colours are Python's colorsys run on the rule (paint.c's relight: the
+// luminance split at 0.18, paper to 0.4%-7%, ink to 80%-62%, the lightness
+// found by halving).
+static const yonder_dark_t kDarkPaint = {.paper = 0x202020};
+static bool starts(const char *got, const char *head)
+{
+    return got != NULL && strncmp(got, head, strlen(head)) == 0;
+}
+static bool painted_in(const char *got, const char *word, const char *colour)
+{
+    char want[64];
+    snprintf(want, sizeof(want), "text \"%s", word);
+    const char *line = got != NULL ? strstr(got, want) : NULL;
+    if (line == NULL)
+        return false;
+    const char *end = strchr(line, '\n');
+    const char *at = strstr(line, colour);
+    return at != NULL && (end == NULL || at < end);
+}
+static void dark_cases(void)
+{
+    os64_gui_rect_t view = {0, 0, 300, 200};
+    s_dark_paint = &kDarkPaint;
+    const char *plain = "<!doctype html><p>plain <a href=x>link</a></p>";
+    char *got = paint_of(plain, strlen(plain), 300, view, NULL, true);
+    expect("dark: a page that set no colours is laid on the dark paper",
+           starts(got, "fill 0 0 300 200 #202020\n"), got);
+    expect("dark: its default ink and link go light, the link keeping a blue tint",
+           painted_in(got, "plain", "#e4e4e4") && painted_in(got, "link", "#d8d8fc"), got);
+    free(got);
+    const char *own = "<!doctype html><style>body{margin:0;background:#ffffff} div{background:#000000}"
+                      " h1{background:#e0e8ff;margin:0;font-size:16px}"
+                      "</style><p>inside</p><div>night</div><h1>pale</h1><p style=\"color:#ff0000\">red</p>";
+    got = paint_of(own, strlen(own), 300, view, NULL, true);
+    expect("dark: a page's own white paper goes dark, and its dark ink light",
+           starts(got, "fill 0 0 300 200 #101010\n") && painted_in(got, "inside", "#e4e4e4"), got);
+    expect("dark: a dark box stays; a pale one darkens keeping its hue; a mid colour is the page's",
+           got != NULL && strstr(got, " #000000\n") != NULL && strstr(got, " #001962\n") != NULL &&
+           painted_in(got, "night", "#e4e4e4") && painted_in(got, "red", "#ff0000"), got);
+    free(got);
+    // Quinn's panels (#238): yellow and green are half light by HSL and
+    // look nearly white, so black on them must not become pale on bright.
+    const char *panels = "<!doctype html><style>body{margin:0;background:#000000}</style>"
+                         "<p style=\"background:#ffff00;color:#000\">warning</p>"
+                         "<p style=\"background:#00ff00;color:#000\">confirmed</p>";
+    got = paint_of(panels, strlen(panels), 300, view, NULL, true);
+    expect("dark: a bright yellow or green panel goes dark under the text that went light",
+           got != NULL && strstr(got, " #1a1a00\n") != NULL && strstr(got, " #003100\n") != NULL &&
+           strstr(got, " #ffff00\n") == NULL && strstr(got, " #00ff00\n") == NULL &&
+           painted_in(got, "warning", "#e4e4e4") && painted_in(got, "confirmed", "#e4e4e4"), got);
+    free(got);
+    const char *scheme = "<!doctype html><style>body{margin:0;background:#ffffff;color:#000000}"
+                         "@media (prefers-color-scheme: dark){body{background:#0a0a0a;color:#c0c0c0}}"
+                         "</style><p>styled</p>";
+    got = paint_of(scheme, strlen(scheme), 300, view, NULL, true);
+    expect("dark: a page with a dark design of its own is told to use it, and nothing moves",
+           starts(got, "fill 0 0 300 200 #0a0a0a\n") && painted_in(got, "styled", "#c0c0c0"), got);
+    free(got);
+    s_dark_paint = NULL;
+    got = paint_of(scheme, strlen(scheme), 300, view, NULL, true);
+    expect("dark: off, the same page is light, and its light styles hold",
+           starts(got, "fill 0 0 300 200 #ffffff\n") && painted_in(got, "styled", "#000000"), got);
+    free(got);
 }
 
 static void scale_cases(void)
@@ -1131,6 +1202,7 @@ int main(int argc, char **argv)
         huge_corner_case();
         shadow_split_cases();
         canvas_owner_cases();
+        dark_cases();
         scale_cases();
         background_size_cases();
         bar_cases();
