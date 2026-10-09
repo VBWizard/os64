@@ -3357,6 +3357,19 @@ static void covered_link_cases(void) {
     check(menu!=NULL&&r.h==40,"covered link: the checkbox is as tall as its menu");
     check(link_at(20,50)==os64_page_link_for(page_model(&g.page),probe_id("below")),
         "covered link: the link below the menu is the one under the pointer");
+    forms_place();
+    check(probe_field("menu")!=NULL && probe_field("menu")->w->hidden,
+        "invisible gadget: a nameless control in no form is not drawn");
+    probe_drop();
+    /* A custom checkbox's real input is a field: drawn, though invisible,
+     * whether a form or a name makes it one. */
+    probe_page("<!doctype html><style>body{margin:0} input{opacity:0}</style>"
+        "<form><input type=checkbox id=formed></form><input type=checkbox id=named name=agree>"
+        "<input type=checkbox id=plain style='opacity:1'>",false);
+    forms_place();
+    check(!probe_field("formed")->w->hidden && !probe_field("named")->w->hidden &&
+          !probe_field("plain")->w->hidden,
+        "invisible field: in a form or named, an invisible control is drawn; a visible one always is");
     probe_drop();
 }
 

@@ -3552,6 +3552,19 @@ refused:
 // header, a hidden dialog's field, one `visibility: hidden`. Whatever of
 // its frame the page draws, the painter draws. Without a layout there is
 // no box to place a control at, so the widgets stay hidden.
+// A control the page made invisible (`opacity: 0`) is drawn when it is a
+// FIELD — in a form, or named, so something is submitted — because then it
+// is nearly always a custom checkbox's real input, whose styled stand-in
+// cannot show what a click here did (POSITION.md, ruling 6). One in no form
+// and with no name submits nothing: it is the page's own gadget, a click
+// target laid over something drawn (MediaWiki's menu checkbox), and is left
+// undrawn. Either way the pointer still finds it, as a browser's does.
+static bool gadget(const flow_box_t *b, int32_t control)
+{
+    const os64_page_control_t *c = os64_page_control(page_model(&g.page), control);
+    return b->unpainted && c != NULL && c->form < 0 && c->name == NULL;
+}
+
 static void forms_place(void)
 {
     const os64_gui_rect_t v = g.view.bounds;
@@ -3569,7 +3582,7 @@ static void forms_place(void)
         int64_t x = (int64_t)v.x + at.x - g.sx, y = (int64_t)v.y + at.y - g.sy;
         bool shown = x >= v.x && y >= v.y && x + at.w <= (int64_t)v.x + v.w &&
                      y + at.h <= (int64_t)v.y + v.h && at.w > 0 && at.h > 0 &&
-                     !flow_box_covered(g.page.tree, b, scroll_now());
+                     !flow_box_covered(g.page.tree, b, scroll_now()) && !gadget(b, widget_control(fw));
         os64_gui_rect_t r = {clamp32(x), clamp32(y), at.w, at.h};
         if (!shown) {
             if (!fw->w->hidden)
