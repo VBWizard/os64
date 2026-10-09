@@ -146,19 +146,40 @@ static tls_policy_reason san(span s, const char *hostname, bool *matched)
     }
     return TLS_POLICY_OK;
 }
-static tls_policy_reason eku(span s, unsigned role)
+static tls_policy_reason purposes(span s, unsigned role, bool application_policy)
 {
     span list, seen[32]; size_t count = 0; bool server = false;
     if (!field(&s, 0x30, &list) || s.length || !list.length) return TLS_POLICY_DER;
     while (list.length) {
         span value;
         if (count == 32) return TLS_POLICY_LIMIT;
-        if (!field(&list, 6, &value) || !oid_valid(value)) return TLS_POLICY_DER;
+        if (application_policy) {
+            // MS-WCCE PolicyInformation contains one purpose OID and no qualifiers.
+            span info;
+            if (!field(&list, 0x30, &info) || !field(&info, 6, &value) || info.length) return TLS_POLICY_DER;
+        } else if (!field(&list, 6, &value)) return TLS_POLICY_DER;
+        if (!oid_valid(value)) return TLS_POLICY_DER;
         for (size_t i = 0; i < count; i++) if (equal(seen[i], value)) return TLS_POLICY_DUPLICATE;
         seen[count++] = value;
         if (OID(value, "\x2b\x06\x01\x05\x05\x07\x03\x01")) server = true;
     }
     return role == 2 || !server ? TLS_POLICY_EKU : TLS_POLICY_OK;
+}
+static bool name_string_valid(unsigned tag, span s);
+static bool uint32_integer(span *s)
+{
+    span value;
+    return nonnegative(s, &value) && value.length <= 4;
+}
+static bool certificate_template(span s)
+{
+    span sequence, id;
+    if (!field(&s, 0x30, &sequence) || s.length ||
+        !field(&sequence, 6, &id) || !oid_valid(id)) return false;
+    // MS-WCCE permits an OID followed by optional major and minor uint32 versions.
+    for (unsigned i = 0; i < 2 && sequence.length; i++)
+        if (!uint32_integer(&sequence)) return false;
+    return !sequence.length;
 }
 static tls_policy_reason basic(span s, unsigned role, bool critical, bool *ca)
 {
@@ -209,14 +230,30 @@ static tls_policy_reason extensions(span s, unsigned role, const char *hostname,
         else if (OID(id, "\x55\x1d\x11")) {
             // An empty subject delegates its identity to a critical SAN.
             result = empty_subject && !critical ? TLS_POLICY_SAN : san(value, hostname, &matched);
-        } else if (OID(id, "\x55\x1d\x25")) result = eku(value, role);
-        else if (OID(id, "\x2b\x06\x01\x04\x01\xd6\x79\x02\x04\x02")) {
+        } else if (OID(id, "\x55\x1d\x25")) result = purposes(value, role, false);
+        else if (OID(id, "\x2b\x06\x01\x04\x01\x82\x37\x15\x0a")) {
+            // Application Policies restrict purpose independently of EKU. Neither
+            // can widen the other; anchors refuse restrictions lost on conversion.
+            result = purposes(value, role, true);
+            if (result == TLS_POLICY_OK && critical) result = TLS_POLICY_CRITICAL;
+        } else if (OID(id, "\x2b\x06\x01\x04\x01\x82\x37\x15\x01")) {
+            // CA renewal version is informational, not a path constraint.
+            result = !uint32_integer(&value) || value.length ? TLS_POLICY_DER :
+                critical ? TLS_POLICY_CRITICAL : TLS_POLICY_OK;
+        } else if (OID(id, "\x2b\x06\x01\x04\x01\x82\x37\x15\x07")) {
+            result = !certificate_template(value) ? TLS_POLICY_DER :
+                critical ? TLS_POLICY_CRITICAL : TLS_POLICY_OK;
+        } else if (OID(id, "\x2b\x06\x01\x04\x01\x82\x37\x14\x02")) {
+            span name;
+            result = !field(&value, 30, &name) || value.length || !name_string_valid(30, name) ? TLS_POLICY_DER :
+                critical ? TLS_POLICY_CRITICAL : TLS_POLICY_OK;
+        } else if (OID(id, "\x2b\x06\x01\x04\x01\xd6\x79\x02\x04\x02")) {
             // RFC 6962 SCT receipts are opaque metadata; this client makes no CT claim.
             span receipts;
             if (!field(&value, 4, &receipts) || value.length) result = TLS_POLICY_DER;
             else result = critical ? TLS_POLICY_CRITICAL : TLS_POLICY_OK;
         } else if (OID(id, "\x2b\x06\x01\x04\x01\x82\xda\x4b\x2c")) {
-            // RFC 9345 permits delegation; the TLS 1.2 profile never negotiates it.
+            // RFC 9345 permits delegation; this client does not negotiate it.
             span permission;
             if (!field(&value, 5, &permission) || permission.length || value.length) result = TLS_POLICY_DER;
             else result = critical ? TLS_POLICY_CRITICAL : TLS_POLICY_OK;
