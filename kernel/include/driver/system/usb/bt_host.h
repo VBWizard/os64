@@ -14,6 +14,7 @@ typedef struct {
     bt_host_peer_t peers[BT_HOST_PEERS];
     bool initialized, failed, command_done, tx_used;
     uint8_t owner, credits, next_peer, poll_peer;
+    uint8_t duplicate_slot; // Last refused peer's owning slot plus one; zero means none.
     uint64_t init_retry_at;
     uint8_t wire[BT_LE_ACL_MAX+4];
     size_t wire_used, wire_need;

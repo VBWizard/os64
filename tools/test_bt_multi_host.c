@@ -189,6 +189,47 @@ static void rejected_create_and_fragmentation(void)
     assert(release_count[0]==1 && !release_count[1] && !host.failed && !reset_count);
     puts("PASS: rejected initiation and duplicate requests preserve the other peer; interleaved fragments and keyboard loss preserve mouse input");
 }
+static void saved_duplicate_requests(void)
+{
+    const char *verbs[]={"bond","bond-justworks","connect","connect-justworks","reconnect"};
+    for(unsigned owner=0;owner<BT_HOST_PEERS;owner++) for(unsigned type=0;type<2;type++)
+    for(unsigned alias=0;alias<2;alias++) for(unsigned v=0;v<sizeof(verbs)/sizeof(verbs[0]);v++) {
+        setup();
+        for(unsigned i=0;i<BT_HOST_PEERS;i++) {
+            host.peers[i].le=(bt_le_t){.shared_controller=true};
+            host.peers[i].manager.suppressed=true;
+        }
+        unsigned target=1-owner;
+        bt_le_bond_t *bond=&host.peers[owner].le.bond;
+        *bond=(bt_le_bond_t){.valid=true,.has_irk=!alias,.address_type=type,.last_address_type=type};
+        memcpy(bond->peer,peer_air,6); memcpy(bond->last_peer,peer_air,6);
+        if(alias) bond->peer[0]^=1;
+        // Reconnect also checks the other slot before touching its own saved key.
+        host.peers[target].le.bond=(bt_le_bond_t){.valid=true,.address_type=type};
+        memcpy(host.peers[target].le.bond.peer,peer_air,6);
+        bt_host_peer_t before[BT_HOST_PEERS]; memcpy(before,host.peers,sizeof(before));
+        char request[96];
+        if(v==4) snprintf(request,sizeof(request),"slot %u reconnect",target);
+        else snprintf(request,sizeof(request),"slot %u %s %s f8:2c:fe:ff:f0:1a",target,verbs[v],type?"random":"public");
+        assert(!bt_host_command(&host,request,strlen(request),now));
+        assert(host.duplicate_slot==owner+1 && !memcmp(before,host.peers,sizeof(before)) && !cmd_n);
+        char output[4096],diagnostic[80]; bt_host_status(&host,output,sizeof(output));
+        snprintf(diagnostic,sizeof(diagnostic),"last command refused: peer belongs to slot %u",owner);
+        assert(strstr(output,diagnostic));
+        // Equal bytes with a different address type identify a different peer.
+        bond->address_type=1-type; bond->last_address_type=1-type;
+        assert(bt_host_command(&host,request,strlen(request),now) && !host.duplicate_slot);
+    }
+    // Default slot zero must not overwrite an asleep slot-one mouse's bond.
+    setup(); host.peers[0].le=(bt_le_t){.shared_controller=true};
+    host.peers[1].le.bond=(bt_le_bond_t){.valid=true,.address_type=1};
+    memcpy(host.peers[1].le.bond.peer,peer_air,6);
+    const char *request="bond random f8:2c:fe:ff:f0:1a";
+    assert(!bt_host_command(&host,request,strlen(request),now) && host.duplicate_slot==2);
+    assert(bt_host_command(&host,"slot 1 forget",13,now));
+    assert(bt_host_command(&host,request,strlen(request),now) && !host.duplicate_slot);
+    puts("PASS: offline bond identity/air-address duplicates refuse without mutation, identify the owning slot and allow explicit forget");
+}
 static void scan_recovery(void)
 {
     setup(); assert(bt_host_scan(&host,now)); step();
@@ -287,5 +328,6 @@ int main(void)
     peer_att_requests();
     pairing_and_reconnect(); cancel_races(); credits_and_faults();
     rejected_create_and_fragmentation(); scan_recovery();
+    saved_duplicate_requests();
     puts("Bluetooth multi-peer host tests passed");
 }
