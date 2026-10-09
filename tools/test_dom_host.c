@@ -337,6 +337,38 @@ static void dom_global_miss_cases(void)
               "global miss: in, hasOwnProperty and a descriptor are feature tests, not lookups");
     JS_SetGlobalMissHandler(ctx,NULL,NULL);
     miss_form(&f,&m,"assert(typeof fetch==='undefined');","","global miss: nobody asked, nothing is heard");
+    dom_script(&f,GEOMETRY_ASSERT
+        "function msg(f){try{f()}catch(e){return e.message}return 'none'}"
+        "var o={ok:function(){return 1},n:5},plain=5,k='bogus';"
+        "assert(msg(()=>o.bogus())===\"'bogus' is not a function\",msg(()=>o.bogus()));"
+        "assert(msg(()=>document.bogusMethod(1))===\"'bogusMethod' is not a function\");"
+        "assert(msg(()=>o.n())===\"'n' is not a function\");"
+        "assert(msg(()=>o.bogus(o.ok()))==='not a function','a call in the arguments proves nothing');"
+        "assert(msg(()=>o.bogus(o.n,'x',7))===\"'bogus' is not a function\",'straight-line arguments');"
+        "assert(msg(()=>plain())==='not a function');"
+        /* Quinn's three (#239): a skipped optional call, a failing argument,
+         * an abandoned call; none may lend its name to another call. */
+        "assert(msg(()=>{o.optional?.();plain()})==='not a function','skipped optional call');"
+        "assert(msg(()=>o.bogus(plain()))==='not a function','the argument failed, not bogus');"
+        "assert(msg(()=>{try{o.abandoned((function(){throw 1})())}catch(_){};plain()})==='not a function');"
+        "assert(msg(()=>{try{o.abandoned((function(){throw 1})())}catch(_){};o[k]()})==='not a function',"
+        "'a computed callee is not a fetched one');"
+        "assert(msg(()=>{o.optional?.();o.second()})===\"'second' is not a function\");"
+        /* Quinn's round two (#239): a skipped optional call's slot refilled
+         * by another callee holding the same undefined. */
+        "var base=null;assert(msg(()=>{o.optional?.();(base?.inner)()})==='not a function','optional chain');"
+        "assert(msg(new Function('o',\"o.optional?.();with({inner:undefined}){inner()}\").bind(null,o))==='not a function','with');"
+        "class C{get #inner(){return undefined}run(){o.optional?.();this.#inner()}}"
+        "assert(msg(()=>new C().run())==='not a function','a private getter');"
+        /* Quinn's round three (#239): an update's fetch, consumed, its slot
+         * refilled by a straight-line super or private call. */
+        "class Pa{} class Ch extends Pa{run(){o.counter++;super.missing()}}"
+        "assert(msg(()=>new Ch().run())==='not a function','an increment then super');"
+        "class D{#missing;run(){o.other++;this.#missing()}}"
+        "assert(msg(()=>new D().run())==='not a function','an increment then a private field');"
+        "assert(msg(()=>{o.k2+=1;o.named()})===\"'named' is not a function\",'an update then a real fetch');"
+        "assert(o.ok()===1);",
+        "not-a-function names the method of the call that failed, or nothing");
     fixture_free(&f);
 }
 

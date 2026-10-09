@@ -124,6 +124,10 @@ void yonder_scripts_set_execution_ms(yonder_scripts_t *scripts, uint64_t ms);
 uint64_t yonder_scripts_execution_ms(const yonder_scripts_t *scripts);
 // False once a sticky outcome retired the runtime: nothing runs again.
 bool yonder_scripts_alive(const yonder_scripts_t *scripts);
+// The whole address of the `src` script the last task ran, which a task's
+// source name (OS64_JS_SOURCE_NAME_CAP) may cut short; NULL when the task
+// was an inline script, an event or a timer. Good until the host is freed.
+const char *yonder_scripts_task_address(const yonder_scripts_t *scripts);
 // The record the host was given (options.diag).
 yonder_diag_t *yonder_scripts_diag(const yonder_scripts_t *scripts);
 // The serial a script's fetch job carries back.

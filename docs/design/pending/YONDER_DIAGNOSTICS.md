@@ -238,3 +238,47 @@ Reload, so this is the departure write):
 | Scripted-page host (`tools/test_yonder_scripts_host.sh`): the brief's cases, the token scan across every file the cases wrote (a token only at the head of its own records, or on the verdict after a nonzero count), the setting absent and the parent missing | 2,526 checks, zero failures; the heap ends empty |
 | Mutants (`tools/test_yonder_diag_mutants.py`): the brief's three and fifteen more | 18 caught, none missed. The first run missed a token leaking into a fact's value; the address that spells both tokens was written for it. Round one added the token in record data, the verdict naming an empty token, and the two `css-value` shapes |
 | Guest (QEMU, ext2 root, desktop): `/tests/pages/diag.html`, Reload, files read host-side with `debugfs` | Badge `MISSING 7  FAILED 2`; the page reads `fetch: undefined, in window: false`; the arrival file has seven MISSING lines and one FAILED; the departure write adds the timer's FAILED; a second boot's first page is `-0002`, so the first run's `-0001` is kept. Not a P5 run |
+
+## Batch 1: what the first census taught the instrument
+
+Chris's first P5 census (google.com, danlegt.com, theoldnet.com and its
+web.archive.org pages, suckless.org, man.openbsd.org, doc.cat-v.org,
+duckduckgo.com, github.com; tallied in MODERN_WEB_CENSUS.md, bugs in
+YONDER_BUGS.md) found three things a page asked for that the record could
+not see, and three ways it told less than it could. A clean verdict is
+now worth trusting.
+
+- **A value read and laid out as something else is recorded.** `float`
+  and `clear` join props.c's approximations (`MISSING css-value float:
+  left`): libgarb reads them and libflow lays a float out in the flow, so
+  suckless.org's sidebar page read clean while its text sat a page down.
+  They leave the list the day floats are laid out. `@supports
+  (float: left)` answers false meanwhile, which is what the list means. A
+  float an HTML attribute asks for (`<img align=left>`) is not counted:
+  it never reaches the cascade.
+- **An HTTP error page is a failed load.** Every page from the network has
+  a `status:` line, and one at 400 or above is `FAILED page: HTTP 429 Too
+  Many Requests`; web.archive.org's rate-limit page read clean.
+- **A picture in a format yonder does not decode is `MISSING image
+  <format>`**, named by its first bytes (`yonder_diag_image_format`:
+  `svg`, past an XML prolog, `webp`, `avif`, `ico`, `tiff`, or
+  `unknown`). A picture that would not fetch, or was broken, is still
+  only counted on `pictures:`.
+- **A script is recorded by its whole address.** The engine's source name
+  stops at OS64_JS_SOURCE_NAME_CAP (128); the host keeps each `src`
+  script's address and the record names the task's script by it
+  (`yonder_scripts_task_address`).
+- **An old IE hack is a dialect**, like a prefixed name: a `css-value`
+  word holding a control character (`display: none\9`) is not counted.
+- **"not a function" names the method** (libjs patch 0009): a method a
+  call fetched and found not callable is remembered, and a call reads
+  `'bogus' is not a function` only when it is proved to be that fetch's
+  call: same frame, slot and value, nothing but straight-line bytecode
+  between the fetch and the call, and the fetched value never popped on
+  the way. `o.bogus()` and `document.foo(1, el)` are named; a call whose
+  arguments call or branch keeps the plain message, so a name is never
+  told of another call (Quinn, #239, three rounds). A page sees the longer message, and nothing else changes.
+- **`bytes:` was checked** after a P5 file matched the previous page's
+  size exactly: two navigations in one window count their own bodies, and
+  a case now guards it. The P5's match was most likely chance (the page
+  varies around that size).

@@ -279,6 +279,31 @@ size_t yonder_diag_render(const yonder_diag_t *d, char *out, size_t cap)
     return o.at;
 }
 
+static bool begins(const uint8_t *bytes, size_t len, size_t at, const char *magic)
+{
+    size_t n = os64_strlen(magic);
+    return len >= at + n && os64_memcmp(bytes + at, magic, n) == 0;
+}
+
+// An SVG is text, so it is found by its element after any XML
+// declaration, white space, comments or doctype in its first kilobyte.
+const char *yonder_diag_image_format(const uint8_t *bytes, size_t len)
+{
+    if (begins(bytes, len, 0, "RIFF") && begins(bytes, len, 8, "WEBP"))
+        return "webp";
+    if (begins(bytes, len, 4, "ftypavif") || begins(bytes, len, 4, "ftypavis"))
+        return "avif";
+    if (len >= 4 && bytes[0] == 0 && bytes[1] == 0 && bytes[2] == 1 && bytes[3] == 0)
+        return "ico";
+    if (len >= 4 && ((bytes[0] == 'I' && bytes[1] == 'I' && bytes[2] == '*' && bytes[3] == 0) ||
+                     (bytes[0] == 'M' && bytes[1] == 'M' && bytes[2] == 0 && bytes[3] == '*')))
+        return "tiff";
+    for (size_t i = 0; i + 4 <= len && i < 1024; i++)
+        if (os64_memcmp(bytes + i, "<svg", 4) == 0)
+            return "svg";
+    return "unknown";
+}
+
 // ── The file ────────────────────────────────────────────────────────────
 
 bool yonder_diag_file_name(const yonder_diag_t *d, char *out, size_t cap)

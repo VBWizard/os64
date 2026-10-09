@@ -1,0 +1,184 @@
+# Name the method in "not a function" when the call was to one just fetched and
+# found not callable, so a page's failure says what it reached for (YONDER_BUGS.md).
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -560,6 +560,16 @@
+        (JS_SetGlobalMissHandler); NULL when nobody asked. */
+     void (*global_miss)(void *opaque, const char *name);
+     void *global_miss_opaque;
++    /* os64: the last method a call fetched (OP_get_field2) and found not
++       callable: its name (a duplicated atom), the frame, stack slot and
++       value it was pushed as, and where the fetch's bytecode ends. A call
++       names it in "not a function" only when it can PROVE it is that
++       fetch's call (js_is_noted_call); JS_ATOM_NULL when there is none. */
++    JSAtom nc_atom;
++    void *nc_frame;
++    JSValue *nc_slot;
++    JSValue nc_value;
++    const uint8_t *nc_after;
+ };
+ 
+ typedef union JSFloat64Union {
+@@ -2847,6 +2857,8 @@
+ 
+     js_free_modules(ctx, JS_FREE_MODULE_ALL);
+ 
++    JS_FreeAtom(ctx, ctx->nc_atom);
++    ctx->nc_atom = JS_ATOM_NULL;
+     JS_FreeValue(ctx, ctx->global_obj);
+     JS_FreeValue(ctx, ctx->global_var_obj);
+ 
+@@ -17867,6 +17879,60 @@
+ #endif
+ 
+ /* argv[] is modified if (flags & JS_CALL_FLAG_COPY_ARGV) = 0. */
++/* os64: the record of a method fetched for a call and found not callable
++   (JSContext.nc_atom), set and forgotten. */
++static void js_forget_not_callable(JSContext *ctx)
++{
++    JS_FreeAtom(ctx, ctx->nc_atom);
++    ctx->nc_atom = JS_ATOM_NULL;
++}
++
++static void js_note_not_callable(JSContext *ctx, JSAtom atom, void *frame, JSValue *slot,
++                                 JSValueConst value, const uint8_t *after)
++{
++    js_forget_not_callable(ctx);
++    ctx->nc_atom = JS_DupAtom(ctx, atom);
++    ctx->nc_frame = frame;
++    ctx->nc_slot = slot;
++    ctx->nc_value = value;
++    ctx->nc_after = after;
++}
++
++static BOOL js_fetch_reaches_call(const uint8_t *p, const uint8_t *end, int argc);
++
++/* Whether the call at `call`, with `argc` arguments, whose callee is
++   `callee` in `slot` of `frame`, is the call the record's fetch was for.
++   It must be the same frame, slot and value, AND the bytecode from the end
++   of the fetch to the call must prove the FETCHED VALUE is this callee
++   (js_fetch_reaches_call): straight-line, so the only way here is through
++   the fetch, and never popping that value, which then sits under exactly
++   the call's arguments. Anything less proves nothing (Quinn, #239: a
++   skipped optional call's slot refilled by another callee; an increment's
++   fetch consumed and its slot refilled), and the call keeps the plain
++   message. */
++static BOOL js_is_noted_call(JSContext *ctx, void *frame, JSValue *slot, JSValueConst callee,
++                             const uint8_t *call, int argc)
++{
++    JSValueConst v = ctx->nc_value;
++    int tag = JS_VALUE_GET_TAG(callee);
++    if (ctx->nc_atom == JS_ATOM_NULL || ctx->nc_frame != frame || ctx->nc_slot != slot ||
++        JS_VALUE_GET_TAG(v) != tag || ctx->nc_after > call)
++        return FALSE;
++    /* Compared by kind: a value with a pointer by it, a double by its bits,
++       the rest (undefined, null, a boolean, an integer) by their int. */
++    if (JS_VALUE_HAS_REF_COUNT(callee)) {
++        if (JS_VALUE_GET_PTR(v) != JS_VALUE_GET_PTR(callee))
++            return FALSE;
++    } else if (tag == JS_TAG_FLOAT64) {
++        double a = JS_VALUE_GET_FLOAT64(v), b = JS_VALUE_GET_FLOAT64(callee);
++        if (memcmp(&a, &b, sizeof(a)) != 0)
++            return FALSE;
++    } else if (JS_VALUE_GET_INT(v) != JS_VALUE_GET_INT(callee)) {
++        return FALSE;
++    }
++    return js_fetch_reaches_call(ctx->nc_after, call, argc);
++}
++
+ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
+                                JSValueConst this_obj, JSValueConst new_target,
+                                int argc, JSValue *argv, int flags)
+@@ -18348,6 +18414,20 @@
+                 pc += 2;
+                 call_argv = sp - call_argc;
+                 sf->cur_pc = pc;
++                /* os64: a method this call is proved to have fetched and
++                   found not callable is named; any other callee is not. */
++                if (unlikely(ctx->nc_atom != JS_ATOM_NULL) &&
++                    !JS_IsFunction(ctx, call_argv[-1])) {
++                    if (js_is_noted_call(ctx, sf, &call_argv[-1], call_argv[-1], pc - 3,
++                                         call_argc)) {
++                        char buf[ATOM_GET_STR_BUF_SIZE];
++                        JS_ThrowTypeError(ctx, "'%s' is not a function",
++                                          JS_AtomGetStr(ctx, buf, sizeof(buf), ctx->nc_atom));
++                        js_forget_not_callable(ctx);
++                        goto exception;
++                    }
++                    js_forget_not_callable(ctx);
++                }
+                 ret_val = JS_CallInternal(ctx, call_argv[-1], call_argv[-2],
+                                           JS_UNDEFINED, call_argc, call_argv, 0);
+                 if (unlikely(JS_IsException(ret_val)))
+@@ -19278,6 +19358,8 @@
+                         goto exception;                                 \
+                 }                                                       \
+                 if (keep) {                                             \
++                    if (unlikely(!JS_IsFunction(ctx, val)))             \
++                        js_note_not_callable(ctx, atom, sf, sp, val, pc); \
+                     *sp++ = val;                                        \
+                 } else {                                                \
+                     JS_FreeValue(ctx, sp[-1]);                          \
+@@ -22168,6 +22250,62 @@
+ #define short_opcode_info(op) opcode_info[op]
+ #endif
+ 
++/* os64: whether the value a method fetch pushed, its bytecode ending at
++   `p`, is the callee of the call at `end` with `argc` arguments. The code
++   between must run straight through, with no jump (every label format)
++   and no op that calls, returns, throws, enters or leaves a handler,
++   iterates or suspends, or fetches another method, so the only way to
++   `end` is from `p`. And the fetched value must survive it: the stack is
++   followed from `p` by each op's pops and pushes (compute_stack_size's
++   arithmetic), any op that would pop the value proves nothing (an
++   increment's fetch is consumed; a swap or a dup counts as touching it),
++   and at the call the value must sit under exactly `argc` arguments. */
++static BOOL js_fetch_reaches_call(const uint8_t *p, const uint8_t *end, int argc)
++{
++    int above = 1;              /* the fetched value and what sits over it */
++    while (p < end) {
++        int op = *p, n_pop;
++        const JSOpCode *oi = &short_opcode_info(op);
++        switch (oi->fmt) {
++        case OP_FMT_label8:
++        case OP_FMT_label16:
++        case OP_FMT_label:
++        case OP_FMT_atom_label_u8:
++        case OP_FMT_atom_label_u16:
++        case OP_FMT_label_u16:
++            return FALSE;
++        default:
++            break;
++        }
++        switch (op) {
++        case OP_call_constructor: case OP_call: case OP_tail_call: case OP_call_method:
++        case OP_tail_call_method: case OP_apply: case OP_eval: case OP_apply_eval:
++        case OP_return: case OP_return_undef: case OP_return_async: case OP_check_ctor_return:
++        case OP_throw: case OP_throw_error: case OP_ret: case OP_nip_catch:
++        case OP_for_in_start: case OP_for_of_start: case OP_for_await_of_start:
++        case OP_for_in_next: case OP_for_of_next: case OP_for_await_of_next:
++        case OP_iterator_check_object: case OP_iterator_get_value_done: case OP_iterator_close:
++        case OP_iterator_next: case OP_iterator_call: case OP_initial_yield: case OP_yield:
++        case OP_yield_star: case OP_async_yield_star: case OP_await:
++        case OP_get_field2: case OP_get_array_el2:
++#if SHORT_OPCODES
++        case OP_call0: case OP_call1: case OP_call2: case OP_call3:
++#endif
++            return FALSE;
++        default:
++            break;
++        }
++        n_pop = oi->n_pop;
++        if (oi->fmt == OP_FMT_npop || oi->fmt == OP_FMT_npop_u16)
++            n_pop += get_u16(p + 1);
++        if (n_pop >= above)
++            return FALSE;
++        above += oi->n_push - n_pop;
++        p += oi->size;
++    }
++    return p == end && above == argc + 1;
++}
++
+ static __exception int next_token(JSParseState *s);
+ 
+ static void free_token(JSParseState *s, JSToken *token)

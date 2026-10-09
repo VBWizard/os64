@@ -68,6 +68,11 @@ size_t yonder_diag_render(const yonder_diag_t *d, char *out, size_t cap);
 // order. False when it does not fit `cap`.
 bool yonder_diag_file_name(const yonder_diag_t *d, char *out, size_t cap);
 
+// A picture's format libimage does not decode, named by its first bytes
+// for a `MISSING image` line: "svg", "webp", "avif", "ico", "tiff", or
+// "unknown".
+const char *yonder_diag_image_format(const uint8_t *bytes, size_t len);
+
 // Written into `dir` whole: rendered, put in a temporary file beside the
 // real one and renamed over it, so a reader never meets half a file. 0, or
 // negative when any step failed (the temporary is then removed).

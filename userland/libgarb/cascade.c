@@ -334,9 +334,14 @@ static void skipped_value(garb_cascade_t *c, const char *prop, size_t plen, cons
     for (int32_t i = 0; i < n; i++) {
         if (v[i].kind == GARB_WHITESPACE)
             continue;
-        // A prefixed word is one engine's dialect, as a prefixed name is.
+        // A prefixed word is one engine's dialect, as a prefixed name is;
+        // so is a control character, which no keyword holds and old IE's
+        // hacks (`display: none\9`) write on purpose.
         if (v[i].len != 0 && v[i].text[0] == '-')
             return;
+        for (uint32_t k = 0; k < v[i].len; k++)
+            if ((unsigned char)v[i].text[k] < 0x20)
+                return;
         if (name[at - 1] != ' ' && at + 1 < sizeof(name))
             name[at++] = ' ';
         for (uint32_t k = 0; k < v[i].len && at + 1 < sizeof(name); k++)

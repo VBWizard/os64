@@ -2843,6 +2843,13 @@ static void picture_arrived(yonder_picture_job_t *job, yonder_picture_t *product
     g.page.in_flight--;
     if (product == NULL || product->status != OS64_IMAGE_OK) {
         pic->state = PIC_FAILED;
+        // A format yonder does not decode is asked for and not had; a
+        // picture that would not fetch, or was broken, is counted on the
+        // record's `pictures:` line and no more.
+        if (product != NULL && product->format != NULL) {
+            yonder_diag_missing(g.page.diag, "image", product->format, 1);
+            badge_follow();
+        }
         return;
     }
     size_t bytes = product->cost;
@@ -3931,8 +3938,11 @@ static void task_said(yonder_scripts_t *host, bool was_alive, const char *what,
     }
     yonder_diag_t *diag = yonder_scripts_diag(host);
     const char *name = out->source_name[0] ? out->source_name : what;
-    char key[OS64_JS_SOURCE_NAME_CAP + 16];
-    os64_snprintf(key, sizeof(key), "script %s", name);
+    // The record names a `src` script by its whole address, which the
+    // engine's source name may cut short; the status line keeps the name.
+    const char *address = yonder_scripts_task_address(host);
+    char key[OS64_DOM_URL_MAX + 16];
+    os64_snprintf(key, sizeof(key), "script %s", address != NULL ? address : name);
     // A task with a script's name is a script's, and the record lists it;
     // an event or a timer with none is listed only by a failure.
     if (out->status == OS64_JS_OK) {
@@ -4776,6 +4786,20 @@ static void stream_finish(os64_fetch_status_t fetch, const char *reason)
         char bytes[32];
         os64_snprintf(bytes, sizeof(bytes), "%lu", (unsigned long)g.stream.bytes);
         yonder_diag_fact(fresh.diag, "bytes", bytes);
+        // The server's answer, for every page from the network. One that is
+        // an error is shown, as a browser shows it, and is a failed load
+        // from the person's chair: a 429's page is not a clean page.
+        if (g.stream.local == NULL && g.stream.head.status != 0) {
+            char status[16 + HTTP_REASON_MAX];
+            os64_snprintf(status, sizeof(status), "%d %s", (int)g.stream.head.status,
+                          g.stream.head.reason);
+            yonder_diag_fact(fresh.diag, "status", status);
+            if (g.stream.head.status >= 400) {
+                os64_snprintf(status, sizeof(status), "HTTP %d %s", (int)g.stream.head.status,
+                              g.stream.head.reason);
+                yonder_diag_failed(fresh.diag, "page", status);
+            }
+        }
     }
     // The sheets the stream sent for move with it, still out or landed,
     // and keep their jobs, which name this serial: no sheet is fetched
