@@ -117,9 +117,21 @@ After HID setup, a mouse with a longer interval or nonzero peripheral latency
 gets one HCI Connection Update request for 7.5–11.25 ms, zero latency, and a
 four-second supervision timeout. Keyboard timing is unchanged. A refused update
 preserves input; status records completion events and the resulting connection
-parameters. **The shorter mouse interval still needs hardware validation.**
+parameters. On the P5 at `7742aa92`, the update completed successfully at interval
+6 (7.5 ms), latency zero, timeout 400. Chris confirmed the trackball was working
+well; a status sample showed 657 decoded mouse reports and 17 keyboard reports,
+with both links encrypted and neither reporting errors or malformed packets.
 Pointer scaling is unchanged. LE Secure Connections is not implemented; no
 implicit fallback or fresh pairing occurs during saved-key reconnect.
+
+That boot also exposed delayed discovery: Chris initially reported neither
+device connected. At the first SSH check, the mouse was configured and its
+timing update had succeeded (ready at uptime 118180 ms), while the keyboard's
+last attempt reported `bonded peer not found in scan`. Automatic discovery later
+reconnected the keyboard (ready at 152890 ms) with its saved bond, without a
+manual reconnect command or another reboot. Chris confirmed both working.
+The cause of the earlier absence from scans was not established; delayed boot
+discovery remains an acceptance issue distinct from mouse motion quality.
 
 A helper that writes `bond-justworks TYPE ADDRESS` without a slot prefix targets
 slot 0. Use `slot 1 bond-justworks TYPE ADDRESS` for the trackball, or
