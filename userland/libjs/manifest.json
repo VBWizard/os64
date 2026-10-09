@@ -119,6 +119,11 @@
       "path": "patches/0008-browser-global-miss-handler.patch",
       "sha256": "6fef8805f57f983edea79e958b20d1845cd336b2d2faea15285d91154e81eaa9",
       "reason": "Let a browser host hear each string name a global-object lookup misses, before the lookup answers as it always does; yonder's diagnostics census."
+    },
+    {
+      "path": "patches/0009-browser-name-not-a-function.patch",
+      "sha256": "913ec148f48c745ebf5682d773149a5dbaf75893f9c264aae556f634ecbcd387",
+      "reason": "Name the method in a call's \"not a function\" when it was just fetched and found not callable; the name is held as an atom and forgotten at any callable fetch, so it is never told of another call."
     }
   ],
   "configuration_scope": "Atomics-disabled, stack-checked target engine and complete standalone embedding interface; slice review/merge and runner integration are tracked in JAVASCRIPT_TASKS.md"

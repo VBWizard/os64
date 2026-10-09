@@ -754,3 +754,14 @@ is. `'fetch' in window` reads false throughout. The DOM host profiles pass
 `tools/test_js_prepare.py` pins both hunks and refuses drifted context in
 the inline-field hunk. The consumer is yonder's page file
 ([YONDER_DIAGNOSTICS.md](../../../docs/design/pending/YONDER_DIAGNOSTICS.md)).
+
+## Named "not a function" validation
+
+Patch 0009, after 0008, names the method in a call's "not a function". The
+libdom host covers a missing method on a plain object and on `document`, a
+non-callable property, a bare non-function call (plain message), a missing
+method whose argument calls a real one (plain: the name is forgotten, never
+misattributed), and a fetch that threw before any call. The DOM host
+profiles pass 3,121 target-core and 17,767 sanitized-core checks with zero
+failures, the sanitizer watching the held atom. The export count is
+unchanged.

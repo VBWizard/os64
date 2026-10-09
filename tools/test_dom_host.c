@@ -337,6 +337,17 @@ static void dom_global_miss_cases(void)
               "global miss: in, hasOwnProperty and a descriptor are feature tests, not lookups");
     JS_SetGlobalMissHandler(ctx,NULL,NULL);
     miss_form(&f,&m,"assert(typeof fetch==='undefined');","","global miss: nobody asked, nothing is heard");
+    dom_script(&f,GEOMETRY_ASSERT
+        "function msg(f){try{f()}catch(e){return e.message}return 'none'}"
+        "var o={ok:function(){return 1},n:5};"
+        "assert(msg(()=>o.bogus())===\"'bogus' is not a function\",msg(()=>o.bogus()));"
+        "assert(msg(()=>document.bogusMethod(1))===\"'bogusMethod' is not a function\");"
+        "assert(msg(()=>o.n())===\"'n' is not a function\");"
+        "var plain=5;assert(msg(()=>plain())==='not a function');"
+        "assert(msg(()=>o.bogus(o.ok()))==='not a function');"
+        "try{o.bogus}catch(e){};assert(msg(()=>plain())==='not a function');"
+        "assert(o.ok()===1);",
+        "not-a-function names the method, or nothing");
     fixture_free(&f);
 }
 

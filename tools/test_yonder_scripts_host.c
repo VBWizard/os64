@@ -3051,6 +3051,38 @@ static void diag_tokens_exclusive(void) {
     }
     check(files>0 && bad==0,"diag: the tokens begin record lines and appear nowhere else, in every file written");
 }
+/* A picture yonder does not decode is recorded by its format. */
+static void diag_picture_case(void) {
+    static const uint8_t webp[]={'R','I','F','F',0,0,0,0,'W','E','B','P'};
+    static const uint8_t avif[]={0,0,0,0x1c,'f','t','y','p','a','v','i','f'};
+    static const uint8_t tiff[]={'M','M',0,'*'}, ico[]={0,0,1,0};
+    const char *svg="<?xml version=\"1.0\"?>\n<!-- a logo -->\n<svg xmlns=\"http://www.w3.org/2000/svg\">";
+    check(os64_streq(yonder_diag_image_format(webp,sizeof(webp)),"webp") &&
+        os64_streq(yonder_diag_image_format(avif,sizeof(avif)),"avif") &&
+        os64_streq(yonder_diag_image_format(tiff,sizeof(tiff)),"tiff") &&
+        os64_streq(yonder_diag_image_format(ico,sizeof(ico)),"ico") &&
+        os64_streq(yonder_diag_image_format((const uint8_t *)svg,strlen(svg)),"svg") &&
+        os64_streq(yonder_diag_image_format((const uint8_t *)"MM",2),"unknown"),
+        "diag: an undecoded picture is named by its first bytes, an SVG past its prolog");
+    probe_page("<img src=file:///logo.svg><img src=file:///broken.png>",true);
+    pictures_start(&g.page);
+    g.page.diag=yonder_diag_new("http://x.test/",1,0);
+    for(int i=0;i<2;i++) g.page.pics[i].state=PIC_WAITING;
+    g.page.waiting=g.page.in_flight=2;
+    yonder_picture_job_t job={.kind=YONDER_JOB_PICTURE,.index=0,.generation=g.page_serial};
+    yonder_picture_t gone={.status=OS64_IMAGE_UNKNOWN_FORMAT,.format="svg"};
+    picture_arrived(&job,&gone);
+    job.index=1;
+    yonder_picture_t broken={.status=OS64_IMAGE_MALFORMED};
+    picture_arrived(&job,&broken);
+    char text[2048]; yonder_diag_render(g.page.diag,text,sizeof(text));
+    check(has(text,"\nverdict: 1 MISSING\nMISSING image svg (1)\n") && g.page.pics[0].state==PIC_FAILED &&
+        g.page.pics[1].state==PIC_FAILED,
+        "diag: a picture in a format yonder lacks is MISSING image; a broken one is only counted");
+    yonder_diag_free(g.page.diag); g.page.diag=NULL;
+    probe_drop();
+}
+
 static void diag_unit_cases(void) {
     yonder_diag_t *d=yonder_diag_new("http://Example.COM:8080/FAILED?x=MISSING",3,0);
     char text[4096];
@@ -3198,10 +3230,62 @@ static void diag_page_cases(void) {
         "diag: a load that never became a page writes its failure");
     loop_drop();
 }
+/* A page's `bytes:` is its own body's, the second of two in one window. */
+static void diag_bytes_case(void) {
+    loop_page("<p>first page, padded</p>");
+    check(loop_settle() && g.page.tree!=NULL,"diag bytes: the first page arrives");
+    start_trip("http://fixture.test/second",NULL,NAV_GO,NULL);
+    way_head_t h=stream_head("text/html","",false);
+    yonder_mail_post_head(g.stream.mail,&h);
+    const char *body="<!doctype html><p>second</p>";
+    stream_post_body((const uint8_t *)body,strlen(body),YONDER_STREAM_CHUNK);
+    stream_post_verdict(true,OS64_FETCH_OK,"");
+    check(loop_settle() && g.page.tree!=NULL,"diag bytes: the second page arrives");
+    char text[4096]; yonder_diag_render(g.page.diag,text,sizeof(text));
+    char want[32]; snprintf(want,sizeof(want),"\nbytes: %zu\n",strlen(body));
+    if(!has(text,want)) fprintf(stderr,"%s",text);
+    check(has(text,want),"diag bytes: the second page's file counts its own body, not the first's");
+    check(has(text,"\nstatus: 200 OK\n") && strstr(text,"FAILED")==NULL,
+        "diag status: a page's status is a plain line, and a 200 is no failure");
+    start_trip("http://fixture.test/busy",NULL,NAV_GO,NULL);
+    h=stream_head("text/html","",false);
+    h.status=429; os64_strcopy(h.reason,sizeof(h.reason),"Too Many Requests");
+    yonder_mail_post_head(g.stream.mail,&h);
+    body="<!doctype html><p>slow down</p>";
+    stream_post_body((const uint8_t *)body,strlen(body),YONDER_STREAM_CHUNK);
+    stream_post_verdict(true,OS64_FETCH_OK,"");
+    check(loop_settle() && g.page.tree!=NULL,"diag status: an error page arrives, and is shown");
+    yonder_diag_render(g.page.diag,text,sizeof(text));
+    check(has(text,"\nverdict: 1 FAILED\nFAILED page: HTTP 429 Too Many Requests (1)\n") &&
+        has(text,"\nstatus: 429 Too Many Requests\n"),
+        "diag status: an error page is a FAILED page, not a clean one");
+    loop_drop();
+}
+
+/* A src script's whole address names it in the record, however long. */
+static void diag_long_source_case(void) {
+    char html[600];
+    char path[300]; memset(path,'a',sizeof(path)-1); path[sizeof(path)-1]=0;
+    snprintf(html,sizeof(html),"<p>x</p><script src=/%s.js></script>",path);
+    loop_page(html);
+    check(loop_settle() && g.stream.stopped,"diag source: the parse waits for a long src");
+    char tail[320]; snprintf(tail,sizeof(tail),"/%s.js",path);
+    check(script_land(tail,"nothere()"),"diag source: its fetch is out and lands");
+    loop_settle();
+    char *text=malloc(16384); yonder_diag_render(g.page.diag,text,16384);
+    char want[400]; snprintf(want,sizeof(want),"FAILED script http://fixture.test/%s.js: ReferenceError",path);
+    check(has(text,want),"diag source: a long src script is named by its whole address");
+    free(text);
+    loop_drop();
+}
+
 static void diag_cases(void) {
     diag_unit_cases();
     diag_setting_cases();
     diag_page_cases();
+    diag_bytes_case();
+    diag_picture_case();
+    diag_long_source_case();
     diag_tokens_exclusive();
     /* Setting absent: no file, while the badge still counts. */
     int writes=fake_writes;

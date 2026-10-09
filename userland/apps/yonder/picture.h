@@ -40,6 +40,9 @@ typedef struct {
     os64_image_t image;             // when `sequence` is NULL
     os64_image_sequence_t *sequence;
     size_t cost;
+    // UNKNOWN_FORMAT: what the bytes are (yonder_diag_image_format), for
+    // the page's record. NULL otherwise.
+    const char *format;
 } yonder_picture_t;
 
 int64_t yonder_picture_run(void *job, bool (*cancelled)(void *ctx), void *ctx, void **out);

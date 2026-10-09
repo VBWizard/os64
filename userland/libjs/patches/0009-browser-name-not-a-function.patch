@@ -1,0 +1,75 @@
+# Name the method in "not a function" when the call was to one just fetched and
+# found not callable, so a page's failure says what it reached for (YONDER_BUGS.md).
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -560,6 +560,10 @@
+        (JS_SetGlobalMissHandler); NULL when nobody asked. */
+     void (*global_miss)(void *opaque, const char *name);
+     void *global_miss_opaque;
++    /* os64: the name of the last method fetched for a call that was not a
++       function (a duplicated atom), so "not a function" can say which;
++       JS_ATOM_NULL when the last such fetch found one. */
++    JSAtom not_callable;
+ };
+ 
+ typedef union JSFloat64Union {
+@@ -2847,6 +2851,8 @@
+ 
+     js_free_modules(ctx, JS_FREE_MODULE_ALL);
+ 
++    JS_FreeAtom(ctx, ctx->not_callable);
++    ctx->not_callable = JS_ATOM_NULL;
+     JS_FreeValue(ctx, ctx->global_obj);
+     JS_FreeValue(ctx, ctx->global_var_obj);
+ 
+@@ -17867,6 +17873,30 @@
+ #endif
+ 
+ /* argv[] is modified if (flags & JS_CALL_FLAG_COPY_ARGV) = 0. */
++/* os64: a method fetched for a call (OP_get_field2) was not a function:
++   remember its name, so the call's "not a function" can say which. Any
++   later method found callable forgets it, so a name is never told of a
++   call it did not make; the held atom cannot outlive its bytecode. */
++static void js_note_not_callable(JSContext *ctx, JSAtom atom)
++{
++    JS_FreeAtom(ctx, ctx->not_callable);
++    ctx->not_callable = atom != JS_ATOM_NULL ? JS_DupAtom(ctx, atom) : JS_ATOM_NULL;
++}
++
++/* os64: "not a function", by the method's name when the call was to one
++   just fetched and found not callable. */
++static JSValue js_throw_not_a_function(JSContext *ctx)
++{
++    char buf[ATOM_GET_STR_BUF_SIZE];
++    JSAtom atom = ctx->not_callable;
++    if (atom == JS_ATOM_NULL)
++        return JS_ThrowTypeError(ctx, "not a function");
++    ctx->not_callable = JS_ATOM_NULL;
++    JS_ThrowTypeError(ctx, "'%s' is not a function", JS_AtomGetStr(ctx, buf, sizeof(buf), atom));
++    JS_FreeAtom(ctx, atom);
++    return JS_EXCEPTION;
++}
++
+ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
+                                JSValueConst this_obj, JSValueConst new_target,
+                                int argc, JSValue *argv, int flags)
+@@ -17942,7 +17972,7 @@
+         call_func = rt->class_array[p->class_id].call;
+         if (!call_func) {
+         not_a_function:
+-            return JS_ThrowTypeError(caller_ctx, "not a function");
++            return js_throw_not_a_function(caller_ctx);
+         }
+         return call_func(caller_ctx, func_obj, this_obj, argc,
+                          (JSValueConst *)argv, flags);
+@@ -19278,6 +19308,10 @@
+                         goto exception;                                 \
+                 }                                                       \
+                 if (keep) {                                             \
++                    if (unlikely(!JS_IsFunction(ctx, val)))             \
++                        js_note_not_callable(ctx, atom);                \
++                    else if (unlikely(ctx->not_callable != JS_ATOM_NULL)) \
++                        js_note_not_callable(ctx, JS_ATOM_NULL);        \
+                     *sp++ = val;                                        \
+                 } else {                                                \
+                     JS_FreeValue(ctx, sp[-1]);                          \

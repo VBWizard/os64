@@ -32,6 +32,10 @@ typedef struct {
     size_t length;
     const char *why;                // FAILED: what the status line says instead
     char name[OS64_JS_SOURCE_NAME_CAP];
+    // A `src` script's whole address, which `name` (the engine's source
+    // name) may be too short to hold; NULL for an inline script. Freed with
+    // the host.
+    char *address;
 } Item;
 
 struct yonder_scripts {
@@ -69,6 +73,9 @@ struct yonder_scripts {
     bool handlers_scanned;
     uint32_t handlers;
     char note[256];
+    // The whole address of the script the last task ran, NULL when it was
+    // an inline script, an event or a timer (yonder_scripts_task_address).
+    const char *task_address;
 };
 
 static void release_item(yonder_scripts_t *s, Item *it)
@@ -239,8 +246,10 @@ void yonder_scripts_free(yonder_scripts_t *s)
     if (s == NULL)
         return;
     retire(s);
-    for (uint32_t i = 0; i < s->count; i++)
+    for (uint32_t i = 0; i < s->count; i++) {
         release_item(s, &s->items[i]);
+        os64_free(s->items[i].address);
+    }
     os64_free(s->items);
     os64_free(s->ready);
     os64_free(s);
@@ -249,6 +258,19 @@ void yonder_scripts_free(yonder_scripts_t *s)
 // A new item for `script`, holding it. NULL past the page's cap or out of
 // memory: that script does not run, as a script past a browser's limit does
 // not.
+// A copy of `text`, NULL for none or no memory: the address is for the
+// page's record, and a script runs the same without it.
+static char *keep(const char *text)
+{
+    if (text == NULL)
+        return NULL;
+    size_t n = os64_strlen(text) + 1;
+    char *c = os64_malloc(n);
+    if (c != NULL)
+        os64_memcpy(c, text, n);
+    return c;
+}
+
 static Item *item_new(yonder_scripts_t *s, const os64_html_node_t *script, Mode mode)
 {
     if (s->count == SCRIPT_COUNT_MAX)
@@ -336,12 +358,15 @@ static bool src_fetch(yonder_scripts_t *s, Item *it)
     const os64_html_attr_t *src = os64_html_attr(it->node, "src");
     char url[OS64_DOM_URL_MAX];
     os64_strcopy(it->name, sizeof(it->name), src != NULL ? src->value : "script");
+    it->address = keep(src != NULL ? src->value : NULL);
     // The base as the tree stands at preparation: a script before this one
     // may have added or moved it.
     if (src == NULL || src->value[0] == '\0' ||
         !os64_dom_resolve(s->doc, s->url, src->value, url, sizeof(url)))
         return false;
     os64_strcopy(it->name, sizeof(it->name), url);
+    os64_free(it->address);
+    it->address = keep(url);
     const os64_html_attr_t *charset = os64_html_attr(it->node, "charset");
     const char *fallback = charset != NULL ? charset->value : s->doc->charset;
     it->state = STATE_FETCHING;
@@ -407,6 +432,7 @@ static bool run_item(yonder_scripts_t *s, uint32_t index, os64_js_outcome_t *out
                 os64_dom_script_kind(it->node) == OS64_DOM_SCRIPT_CLASSIC;
     char name[OS64_JS_SOURCE_NAME_CAP];
     os64_strcopy(name, sizeof(name), it->name);
+    s->task_address = it->address;
     if (it->state == STATE_FAILED) {
         out->status = OS64_JS_EXCEPTION;
         os64_strcopy(out->message, sizeof(out->message), it->why);
@@ -583,6 +609,8 @@ os64_js_status_t yonder_scripts_dispatch(yonder_scripts_t *s, const os64_html_no
                                          os64_js_outcome_t *out)
 {
     os64_memset(out, 0, sizeof(*out));
+    if (s != NULL)
+        s->task_address = NULL;
     if (prevented != NULL)
         *prevented = false;
     if (s == NULL || s->dead)
@@ -632,8 +660,10 @@ uint64_t yonder_scripts_timer_next(const yonder_scripts_t *s)
 bool yonder_scripts_timer_fire(yonder_scripts_t *s, uint64_t now, os64_js_outcome_t *out)
 {
     os64_memset(out, 0, sizeof(*out));
-    if (s != NULL)
+    if (s != NULL) {
         s->written = 0;
+        s->task_address = NULL;
+    }
     if (s == NULL || s->dead || !os64_dom_timer_fire(s->dom, now, out))
         return false;
     judged(s, out);
@@ -674,6 +704,11 @@ uint64_t yonder_scripts_tasks(const yonder_scripts_t *s)
 uint64_t yonder_scripts_written(const yonder_scripts_t *s)
 {
     return s != NULL ? s->written : 0;
+}
+
+const char *yonder_scripts_task_address(const yonder_scripts_t *s)
+{
+    return s != NULL ? s->task_address : NULL;
 }
 
 yonder_diag_t *yonder_scripts_diag(const yonder_scripts_t *s)

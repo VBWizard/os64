@@ -54,11 +54,12 @@ property will-change 1
 (end)
 END
 
-# A prefixed name is one engine's dialect, and not counted.
+# A prefixed name is one engine's dialect, and not counted; nor is an old IE
+# hack, whose escape writes a control character into the word.
 VIEWPORT 800x600
 PAGE
 <!doctype html><style>
-p { -webkit-appearance: none; color: -webkit-fill-available(1) }
+p { -webkit-appearance: none; color: -webkit-fill-available(1); display: none\9 }
 @-webkit-keyframes spin { to { color: red } }
 </style>
 <p>x
@@ -95,5 +96,19 @@ value display: inline frob 1
 value display: flow-root 2
 value background-clip: text 1
 value background-image: conic-gradient 1
+(end)
+END
+
+# A float is read and laid out in the flow, and `clear` moves nothing:
+# approximations, so counted as values until floats are drawn.
+VIEWPORT 800x600
+PAGE
+<!doctype html><style>
+#nav { float: left; width: 200px } p { clear: both } div { float: none; clear: none }
+</style>
+<div id=nav>a</div><p>b</p><div>c</div>
+WANT
+value float: left 1
+value clear: both 1
 (end)
 END

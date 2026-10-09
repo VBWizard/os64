@@ -433,3 +433,12 @@ The handler must not enter the engine. A standalone context installs none.
 libdom's `os64_dom_set_global_miss` is the browser's door to it, and
 yonder's page file is the consumer
 ([YONDER_DIAGNOSTICS.md](../../../docs/design/pending/YONDER_DIAGNOSTICS.md)).
+
+### Named "not a function"
+
+Patch 0009 adds no export. When a call's method was fetched (`obj.m(...)`)
+and found not callable, the call's TypeError reads `'m' is not a function`
+instead of `not a function`. The context holds the name as a duplicated
+atom, released at the next callable fetch, at the throw, and at context
+teardown, so a name is never reported for a call that did not fetch it.
+A bare call (`x()`) keeps the plain message.

@@ -1,6 +1,7 @@
 // picture.c — a picture fetched and decoded on a worker (picture.h).
 
 #include "picture.h"
+#include "diag.h"
 #include "os64/mem.h"
 #include "os64/slurp.h"
 #include "os64/str.h"
@@ -33,6 +34,8 @@ static os64_image_status_t decode(const uint8_t *bytes, size_t len, yonder_pictu
     }
     os64_image_status_t st = os64_image_decode(bytes, len, &p->image);
     p->cost = (size_t)p->image.width * p->image.height * 4u;
+    if (st == OS64_IMAGE_UNKNOWN_FORMAT)
+        p->format = yonder_diag_image_format(bytes, len);
     return st;
 }
 
