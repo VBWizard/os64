@@ -67,6 +67,7 @@ def serve_connection(raw, context, port):
         raw.settimeout(40)
         if context:
             connection = context.wrap_socket(raw, server_side=True)
+            print(f'HTTPS negotiated {connection.version()} {connection.cipher()[0]}', flush=True)
         request = b''
         while b'\r\n\r\n' not in request:
             chunk = connection.recv(2048)
@@ -121,6 +122,8 @@ def main():
     parser.add_argument('--http-port', type=int, default=18272)
     parser.add_argument('--fixtures', type=Path)
     parser.add_argument('--fixtures-only', action='store_true')
+    parser.add_argument('--protocol', choices=('12', '13'), default='12',
+                        help='pin TLS version; 12 exercises libfetch fallback')
     args = parser.parse_args()
     root, cert, key = fixtures()
     if args.fixtures:
@@ -136,7 +139,8 @@ def main():
         (work / 'cert.pem').write_bytes(cert)
         (work / 'key.pem').write_bytes(key)
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        context.minimum_version = context.maximum_version = ssl.TLSVersion.TLSv1_2
+        version = ssl.TLSVersion.TLSv1_3 if args.protocol == '13' else ssl.TLSVersion.TLSv1_2
+        context.minimum_version = context.maximum_version = version
         context.set_ciphers('ECDHE-ECDSA-AES128-GCM-SHA256')
         context.set_alpn_protocols(['http/1.1'])
         context.load_cert_chain(work / 'cert.pem', work / 'key.pem')

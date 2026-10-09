@@ -114,6 +114,24 @@ Both sides must report PASS for each case. The successful exchange verifies
 65,536 patterned plaintext bytes in each direction followed by clean TLS
 closure. The negative cases require TIMEOUT for a silent handshake,
 TRUNCATED for a bare TCP FIN and CERTIFICATE for the wrong hostname.
+The optional final probe argument selects `12` (the default) or `13`;
+successful and truncated exchanges also require an authenticated handshake
+with that version. The report prints the selected version and authentication
+flag, including on failures.
+
+For TLS 1.3, restart the peer with `--protocol 13` and append `13` to each
+guest command above. To exercise HelloRetryRequest, use:
+
+```sh
+python3 tools/test_tls_transport_peer.py --protocol 13 --group secp384r1 --cases good
+# In the guest:
+/tests/tlstransportprobe HOST_IP 17270 good 13
+```
+
+The transport takes an already connected socket and does not redial.
+To test automatic TLS 1.2 fallback, use `tools/test_os64get_https_peer.py
+--protocol 12` and `os64get -v` with its explicitly selected fixture trust
+store. The same peer's `--protocol 13` pins the HTTP test to TLS 1.3.
 For QEMU user networking, omit `--bind` and use `10.0.2.2` in the guest.
 Restart the peer for each four-case run, or select one with `--cases good`
 (or another case name). These are manual network probes, separate from

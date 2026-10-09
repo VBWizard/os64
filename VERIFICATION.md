@@ -1317,3 +1317,68 @@ until it has seen at least QEMU + one of the other two.
   the *pattern*, but if the same compound command LAUNCHES qemu, the
   literal string in the launch line still matches your own shell — exit
   144 before the launch runs. Kill and launch in SEPARATE commands.
+
+## TLS 1.3 guest acceptance (2026-10-09)
+
+S3 used merged S2 `bba14afe`, a clean full build, QEMU q35/TCG with
+`qemu64,+rdrand,+rdseed`, two CPUs, virtio-net and slirp. Both ext2 disks
+were disposable copies/new images. The first boot ran transport and HTTP
+fixtures; the second enabled GUI for Yonder. Test configuration and fixture
+trust were confined to those disks. No TLS proxy was used.
+
+The [transport procedure](docs/design/completed/TLS_TRANSPORT.md) now
+accepts a final `12` or `13` argument; omission preserves the original
+TLS 1.2 probe. Host peers run with standard Python (`python3 -S`) and
+OpenSSL 3.0.13. Repeat its four cases with `--protocol 13`, then with
+`--protocol 12`. A separate `--protocol 13 --group secp384r1 --cases good`
+run forces HelloRetryRequest because the client initially shares X25519
+and P-256.
+
+| Check | Result |
+|---|---|
+| TLS 1.3 and explicit TLS 1.2 `good` | Each exchanged 65,536 exact bytes in both directions and ended CLEAN_EOF; authenticated version 0304/0303 respectively |
+| Both versions: `stall`, `truncated`, `badname` | TIMEOUT within the checked 200 ms–2 s window; authenticated TRUNCATED; unauthenticated CERTIFICATE |
+| TLS 1.3 P-384 retry | 65,536 exact bytes each way, authenticated 0304, CLEAN_EOF |
+| `os64get -v`, TLS 1.3-only HTTP fixture | Content-Length, gzip/chunked and close-delimited bodies each matched the 65,536-byte fixture |
+| `os64get -v`, TLS 1.2-only HTTP fixture | The same three bodies matched; each reported `TLS 1.2 (fallback)` |
+| `os64get -v https://osdev.wiki/ /home/osdev.html` | Followed two HTTPS redirects to `/wiki/Main_Page`, reported TLS 1.3, HTTP 200 and 59,688 decoded bytes |
+| Curl comparison for osdev.wiki | Byte-identical; SHA-256 `8931d5522254856ff150309c4151c4facfba6f426a3974c52ce9ac13c00c6442` |
+| Yonder, osdev.wiki | Rendered the page; diagnostics recorded TLS 1.3, HTTP 200 and 59,688 bytes; scripts disabled for this transport acceptance |
+| Public `tls13.1d.pw` | Guest fetched 7,581 bytes over TLS 1.3 with a P-384 retry; per-connection diagnostic content differs from curl, so no byte-identity claim |
+
+Chris identified osdev.wiki as one of the October 5 failures. On this run,
+`curl --http1.1 --tlsv1.2 --tls-max 1.2 https://osdev.wiki/` reproduced
+`protocol_version`; TLS 1.3 succeeded. The comparison used curl with
+`--http1.1 --tlsv1.3 --tls-max 1.3 -L` and the normal public roots. The
+fixture HTTP runs used `tools/test_os64get_https_peer.py --fixtures DIR`
+with `--protocol 13` or `12`, `example.test` mapped to `10.0.2.2`, and a
+scratch `tls.conf` selecting that fixture's `roots.pem`. The config was
+removed before public-site acceptance. Yonder's unsupported CSS diagnostics
+remain browser coverage limitations, separate from the successful TLS load.
+
+The clean build, `tools/audit_tls.py` (31 public exports, 15 OS imports,
+72 selected sources), BearSSL import check and generated TLS 1.3 vector
+check passed. Host regressions passed for pristine/adapted BearSSL crypto,
+X.509 and foundation; TLS profile, policy, store, private/public inputs,
+TLS 1.2 engine, TLS 1.3 vectors/engine and transport; fetch, fetch transport,
+way, way-fetch, os64get, Yonder and Yonder streaming. ASan/UBSan and
+LeakSanitizer ran outside the sandbox. The existing os64get
+`cancel-transition` case uses an attached GDB to inject its signal at the
+commit boundary and disables LSan for that case; its ASan/UBSan checks
+passed, but it provides no leak-check evidence. Other os64get scenarios
+retained leak detection.
+
+Text-boot `testrun`: 58 passed, 0 failed, 4 skipped (three GUI fixtures and
+TCG's unsupported SIMD exception). GUI-boot `testrun`: 61 passed, 0 failed,
+1 skipped (that SIMD exception). Kernel pre/post boot: 34/34 passed in
+each phase. The concurrent text boot's task-teardown measurement was
+inconclusive; the GUI boot repeated it successfully with two independent
+zero-loss windows. The GUI boot's three late kernel tests passed. After
+orderly shutdown of both boots, `make fsck-ext2` pointed at their scratch
+disks passed for root and home. The final probe rebuild repeated all nine
+transport cases, including the authentication assertions on negative cases.
+
+Artifacts: `/tmp/tls13-s3-guest/` contains peer logs, serial logs, saved
+bodies, page diagnostics and screenshots; `/tmp/tls13-s3-live/` holds curl
+results. Build/audit/foundation/host logs use `/tmp/tls13-s3-*.log`.
+The P5 run remains Chris's; this record makes no physical-machine claim.

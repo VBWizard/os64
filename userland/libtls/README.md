@@ -148,7 +148,7 @@ traces and generates `test/tls13_vectors.h`; `--check` detects stale output.
 `--output PATH` to retain artifacts. The host needs the Python `cryptography`
 package. The public library defaults to the TLS 1.3 handshake engine built on these
 helpers; explicit TLS 1.2 selection retains BearSSL. See S2 of
-[TLS13.md](../../docs/design/pending/TLS13.md).
+[TLS13.md](../../docs/design/completed/TLS13.md).
 
 The foundation harness alone does not establish physical-hardware behavior,
 TLS interoperability, certificate policy, fuzzing or production entropy
