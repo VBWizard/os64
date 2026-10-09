@@ -18,7 +18,7 @@ It authenticates the existing policy-approved certificate with ECDSA or
 RSA-PSS CertificateVerify and verifies Finished before exposing plaintext.
 Certificate and NewSessionTicket framing stream across record boundaries;
 other handshake messages have an 8 KiB bound. Retry and epoch transitions
-must end their record. The [TLS13 design](../../docs/design/pending/TLS13.md)
+must end their record. The [TLS13 design](../../docs/design/completed/TLS13.md)
 describes the profile and its explicit exclusions.
 
 `OS64_TLS_PROTOCOL_TLS12` selects `port/client_profile.c`: six ECDHE AEAD suites,

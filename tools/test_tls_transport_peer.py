@@ -22,7 +22,12 @@ parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--bind', default='127.0.0.1')
 parser.add_argument('--port', type=int, default=17270)
 parser.add_argument('--cases', default='good,stall,truncated,badname')
+parser.add_argument('--protocol', choices=('12', '13'), default='12')
+parser.add_argument('--group', choices=('X25519', 'prime256v1', 'secp384r1'),
+                    help='pin key exchange; secp384r1 exercises TLS 1.3 HelloRetryRequest')
 args = parser.parse_args()
+if any(mode not in ('good', 'stall', 'truncated', 'badname') for mode in args.cases.split(',')):
+    parser.error('unknown case')
 source = (Path(__file__).resolve().parents[1] / 'userland/libtls/test/trust_vectors.c').read_text(encoding='utf-8')
 body = re.search(r'tls_fixture_a_leaf\[\] = \{(.*?)\};', source, re.S)[1]
 der = bytes(int(h, 16) for h in re.findall(r'0x([0-9a-f]{2})', body))
@@ -31,13 +36,16 @@ with tempfile.TemporaryDirectory(prefix='tls-transport-peer-') as directory:
     (work/'cert.pem').write_bytes(b'-----BEGIN CERTIFICATE-----\n'+base64.encodebytes(der)+b'-----END CERTIFICATE-----\n')
     (work/'key.pem').write_bytes(FIXTURE_KEY_PEM)
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    context.minimum_version = context.maximum_version = ssl.TLSVersion.TLSv1_2
+    version = ssl.TLSVersion.TLSv1_3 if args.protocol == '13' else ssl.TLSVersion.TLSv1_2
+    context.minimum_version = context.maximum_version = version
     context.set_ciphers('ECDHE-ECDSA-AES128-GCM-SHA256')
+    if args.group:
+        context.set_ecdh_curve(args.group)
     context.load_cert_chain(work/'cert.pem', work/'key.pem')
     with socket.socket() as server:
         server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         server.bind((args.bind, args.port)); server.listen(2); server.settimeout(120)
-        print(f'TLSTRANSPORT peer listening {args.bind}:{args.port} ({ssl.OPENSSL_VERSION})', flush=True)
+        print(f'TLSTRANSPORT peer listening {args.bind}:{args.port} TLS{args.protocol} ({ssl.OPENSSL_VERSION})', flush=True)
         for mode in args.cases.split(','):
             raw, _ = server.accept(); raw.settimeout(25)
             with raw:
@@ -52,6 +60,8 @@ with tempfile.TemporaryDirectory(prefix='tls-transport-peer-') as directory:
                     else: raise AssertionError('wrong hostname accepted')
                 else:
                     with context.wrap_socket(raw, server_side=True) as connection:
+                        assert connection.version() == 'TLSv1.' + args.protocol[-1]
+                        print(f'TLSTRANSPORT negotiated {connection.version()} {connection.cipher()[0]}', flush=True)
                         if mode == 'truncated':
                             # Send FIN without close_notify, then drain raw input so
                             # unread application records cannot turn close into RST.

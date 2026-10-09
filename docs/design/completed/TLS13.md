@@ -1,6 +1,8 @@
 # TLS13.md — a TLS 1.3 client engine beside BearSSL
 
-Status: design and builder's brief, written 2026-10-09 by Fable at Chris's
+Status: implemented through S3; guest acceptance recorded below.
+
+Design and builder's brief, written 2026-10-09 by Fable at Chris's
 request ("design it now ... GO!"), revised the same day for Quinn's design
 review ([TLS13_REVIEW.md](TLS13_REVIEW.md): round 1, one P1 and seven P2;
 round 2, one P1 against the round-1 fix of finding 2 — all applied; its
@@ -1047,3 +1049,35 @@ LeakSanitizer enabled outside the sandbox. The rebuilt public TLS ELF audit
 passes with 31 exports, 15 OS imports and 72 selected sources. Logs are
 `/tmp/tls13-s2-downgrade-{fixed,tls12,fetch,audit}.log`. No guest or new fuzz
 campaign is claimed for this follow-up.
+
+
+## S3 as built — guest acceptance (2026-10-09)
+
+Built on merged S2 `bba14afe`, in `codex/tls13-s3`. The guest probe accepts
+an optional final `12` or `13`, explicitly selects the corresponding engine
+and checks the authenticated negotiated version for successful and truncated
+connections. Omission selects TLS 1.2 so the original four-case commands
+continue to work after S2 changed the library default. Reports include the
+selected version and authentication flag.
+
+Both Python peers accept `--protocol 12|13`; the transport peer can pin
+X25519, P-256 or P-384. P-384 forces a retry of the initial key share. Both
+peers remain standard-library tools, exercised under `python3 -S`. The
+HTTP fixture's TLS 1.2 mode tests libfetch's fresh guarded retry, with
+Content-Length, gzip/chunked and close-delimited responses verified byte
+for byte in the guest. No engine or fetch implementation change was needed.
+
+The [S3 acceptance record](../../../VERIFICATION.md#tls-13-guest-acceptance-2026-10-09)
+carries the procedure, versions, counts, sanitizer limits and evidence.
+Nine transport cases passed. Six HTTPS fixture downloads matched their
+65,536-byte payloads. Chris's October 5 failing site, osdev.wiki, rejected
+curl pinned to TLS 1.2 and worked in both os64get and Yonder over TLS 1.3.
+Its 59,688-byte page matched curl exactly. The public TLS 1.3-only diagnostic
+server tls13.1d.pw also completed a P-384 retry and download; its generated
+connection report is not a stable byte-comparison fixture.
+
+The full build, TLS ELF/import/vector audits, crypto/TLS/consumer host
+harnesses and guest checks are recorded there. The old no-TLS-1.3 debt is
+replaced with the agreed engine-boundaries row. This design and its review
+record move together to `docs/design/completed/`; library links follow.
+P5 acceptance remains Chris's run.

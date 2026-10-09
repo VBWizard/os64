@@ -11,9 +11,14 @@ static int64_t pem(void *context, void *out, size_t capacity)
 static unsigned char pattern(size_t n) { return (unsigned char)(n * 13u); }
 int main(int argc, char **argv)
 {
-    if (argc != 4) {
-        os64_printf("usage: tlstransportprobe HOST PORT good|stall|truncated|badname\n"); return 1;
+    if (argc != 4 && argc != 5) {
+        os64_printf("usage: tlstransportprobe HOST PORT good|stall|truncated|badname [12|13]\n"); return 1;
     }
+    const char *protocol = argc == 5 ? argv[4] : "12";
+    bool tls13 = os64_streq(protocol, "13");
+    if (!tls13 && !os64_streq(protocol, "12")) return 1;
+    uint16_t expected_version = tls13 ? 0x0304 : 0x0303, version = 0;
+    bool authenticated = false;
     bool stall = os64_streq(argv[3], "stall"), truncated = os64_streq(argv[3], "truncated");
     bool badname = os64_streq(argv[3], "badname"), pass = false;
     if (!stall && !truncated && !badname && !os64_streq(argv[3], "good")) return 1;
@@ -25,6 +30,7 @@ int main(int argc, char **argv)
     os64_tls_status_t status = OS64_TLS_BAD_ARGUMENT;
     if (os64_tls_trust_load_pem(pem, &at, &trust, &detail) != OS64_TLS_STORE_OK) goto done;
     os64_tls_config_t cfg = {.hostname = badname ? (os64_tls_name_t){"wrong.test",10} : (os64_tls_name_t){"example.test",12}, .trust = trust};
+    cfg.protocol = tls13 ? OS64_TLS_PROTOCOL_DEFAULT : OS64_TLS_PROTOCOL_TLS12;
     os64_tls_transport_limits_t limits = {stall ? 200 : 10000, 2000};
     os64_ticks_t clock;
     if (os64_ticks(&clock) < 0 || !clock.per_second) goto done;
@@ -73,11 +79,19 @@ int main(int argc, char **argv)
     if (stall) pass &= os64_ticks(&clock) == 0 && clock.ticks - started >= clock.per_second / 5 &&
                        clock.ticks - started <= 2u * clock.per_second;
 done:
+    if (transport) {
+        os64_tls_state_t final = os64_tls_transport_state(transport);
+        version = final.version;
+        authenticated = (final.flags & OS64_TLS_HANDSHAKE_DONE) != 0;
+    }
+    pass &= stall || badname ? !authenticated : authenticated && version == expected_version;
     os64_tls_trust_free(trust); os64_tls_transport_free(transport);
     if (handle >= 0) os64_close((int32_t)handle);
-    os64_printf("tlstransportprobe: %s %s (%s)\n", pass ? "PASS" : "FAIL", argv[3], os64_tls_status_name(status));
-    char report[96]; os64_snprintf(report, sizeof report, "TLSTRANSPORT %s %s (%s)",
-        pass ? "PASS" : "FAIL", argv[3], os64_tls_status_name(status));
+    char report[128]; os64_snprintf(report, sizeof report,
+        "TLSTRANSPORT %s %s TLS%s (%s; version=%04x authenticated=%u)",
+        pass ? "PASS" : "FAIL", argv[3], protocol, os64_tls_status_name(status),
+        (unsigned)version, (unsigned)authenticated);
+    os64_printf("%s\n", report);
     os64_serial_log(report);
     return pass ? 0 : 3;
 }
