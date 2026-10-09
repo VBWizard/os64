@@ -376,6 +376,82 @@ def corpus(work):
         anchor(f"anchor-restriction-{tail}", replace_extension(root, root_key, tail, value), "EXTENSION")
     case("critical-metadata", replace_extension(leaf, int_key, 14, tlv(4, b"identifier"), True), reason="CRITICAL", upstream=1)
     case("metadata", replace_extension(leaf, int_key, 14, tlv(4, b"identifier")), success=True)
+    def with_ms(cert, signer, suffix, value, critical=False, duplicate=False):
+        encoded = tlv(0x30, tlv(6, bytes.fromhex("2b060104018237") + bytes(suffix)) +
+                      (b"\x01\x01\xff" if critical else b"") + tlv(4, value))
+        return mutate(cert, signer, lambda t: edit_extensions(t, lambda e: join(e) + encoded * (2 if duplicate else 1)))
+
+    def application_policies(*oids):
+        return tlv(0x30, b"".join(tlv(0x30, oid) for oid in oids))
+
+    app_server = application_policies(server_oid)
+    client_oid = tlv(6, bytes.fromhex("2b06010505070302"))
+    app_client = application_policies(client_oid)
+    app_any = application_policies(tlv(6, bytes.fromhex("2b0601040182370a0c01")))
+    for label, cert, signer in [("leaf", leaf, int_key), ("ca", intermediate, root_key)]:
+        for name, value, reason in [
+                ("server", app_server, "OK"),
+                ("server-client", application_policies(server_oid, client_oid), "OK"),
+                ("client-only", app_client, "EKU"), ("any-only", app_any, "EKU"),
+                ("empty", b"\x30\0", "DER"), ("bare-eku", tlv(0x30, server_oid), "DER"),
+                ("qualifiers", tlv(0x30, tlv(0x30, server_oid + b"\x30\0")), "DER"),
+                ("duplicate", application_policies(server_oid, server_oid), "DUPLICATE"),
+                ("trailing", app_server + b"\x05\0", "DER"),
+                ("bad-oid", application_policies(tlv(6, b"\x80\0")), "DER"),
+                ("limit", application_policies(server_oid, *[tlv(6, b"\x2a\x03" + bytes([i])) for i in range(32)]), "LIMIT"),
+                ("32", application_policies(server_oid, *[tlv(6, b"\x2a\x03" + bytes([i])) for i in range(31)]), "OK")]:
+            changed = with_ms(cert, signer, (21, 10), value)
+            chain = [changed, intermediate] if label == "leaf" else [leaf, changed]
+            case(f"ms-application-{label}-{name}", chain=chain, success=reason == "OK", reason=reason, upstream=1)
+        for name, critical, duplicate, reason in [("critical", True, False, "CRITICAL"),
+                                                 ("duplicate-extension", False, True, "DUPLICATE")]:
+            changed = with_ms(cert, signer, (21, 10), app_server, critical, duplicate)
+            case(f"ms-application-{label}-{name}", chain=[changed, intermediate] if label == "leaf" else [leaf, changed], reason=reason)
+        # Neither restriction can widen the other; also exercise absent EKU.
+        for name, usage, success in [("conflicting-eku", client_oid, False), ("no-eku", None, True)]:
+            changed = replace_extension(cert, signer, 37, tlv(0x30, usage)) if usage else mutate(cert, signer,
+                lambda t: edit_extensions(t, lambda e: join([v for v in e if split(v[1])[0][1] != b"\x55\x1d\x25"])))
+            changed = with_ms(changed, signer, (21, 10), app_server)
+            case(f"ms-application-{label}-{name}", chain=[changed, intermediate] if label == "leaf" else [leaf, changed],
+                 success=success, reason="OK" if success else "EKU")
+    anchor("ms-application-anchor", with_ms(root, root_key, (21, 10), app_server), "EKU")
+    for suffix in ((21, 11), (21, 12), (21, 99)):
+        case(f"ms-unsupported-{suffix[1]}", with_ms(leaf, int_key, suffix, b"\x30\0"), reason="EXTENSION")
+
+    template_id = tlv(6, bytes.fromhex("2b060104018237150801"))
+    u32_max = tlv(2, b"\0\xff\xff\xff\xff")
+    metadata = [
+        ("ca-version", (21, 1), b"\x02\x01\0", [u32_max], [
+            b"\x05\0", b"\x02\x01\xff", b"\x02\x02\0\0", tlv(2, b"\x01" + bytes(4))]),
+        ("template-name", (20, 2), tlv(30, "SubCA".encode("utf-16-be")), [tlv(30, "é".encode("utf-16-be"))], [
+            b"\x1e\0", tlv(12, b"SubCA"), tlv(30, b"x"), tlv(30, b"\0\0"), tlv(30, bytes.fromhex("d800dc00"))]),
+        ("template", (21, 7), tlv(0x30, template_id + b"\x02\x01\x64\x02\x01\x20"), [
+            tlv(0x30, template_id), tlv(0x30, template_id + u32_max), tlv(0x30, template_id + u32_max * 2)], [
+            b"\x30\0", tlv(0x30, template_id + b"\x05\0"), tlv(0x30, template_id + b"\x02\x01\xff"),
+            tlv(0x30, template_id + tlv(2, b"\x01" + bytes(4))), tlv(0x30, template_id + b"\x02\x01\0" * 3)])]
+    for name, suffix, value, good, bad in metadata:
+        for label, cert, signer in [("leaf", leaf, int_key), ("ca", intermediate, root_key)]:
+            changed = with_ms(cert, signer, suffix, value)
+            case(f"ms-{name}-{label}", chain=[changed, intermediate] if label == "leaf" else [leaf, changed], success=True, upstream=1)
+        anchor("ms-" + name + "-anchor", with_ms(root, root_key, suffix, value), "OK")
+        case("ms-" + name + "-critical", with_ms(leaf, int_key, suffix, value, critical=True), reason="CRITICAL")
+        anchor("ms-" + name + "-critical-anchor", with_ms(root, root_key, suffix, value, critical=True), "CRITICAL")
+        case("ms-" + name + "-duplicate", with_ms(leaf, int_key, suffix, value, duplicate=True), reason="DUPLICATE")
+        for i, v in enumerate(good):
+            case(f"ms-{name}-valid-{i}", with_ms(leaf, int_key, suffix, v), success=True, upstream=1)
+        for i, v in enumerate(bad + [value + b"\x05\0"]):
+            case(f"ms-{name}-malformed-{i}", with_ms(leaf, int_key, suffix, v), reason="DER", upstream=1)
+            anchor(f"ms-{name}-malformed-anchor-{i}", with_ms(root, root_key, suffix, v), "DER")
+
+    microsoft = pem_certs(BASE / "test/public-certs/microsoft-chain.pem")
+    ms_root = next(c for c in public_roots if x509.load_der_x509_certificate(c).subject ==
+                   x509.load_der_x509_certificate(microsoft[-1]).subject)
+    ms_day = 719528 + (dt.date(2026, 10, 9) - dt.date(1970, 1, 1)).days
+    for count in (3, 4):
+        case(f"microsoft-chain-{count}", chain=microsoft[:count], trust=ms_root, host="microsoft.com", success=True, upstream=1, days=ms_day)
+    case("microsoft-untrusted", chain=microsoft, host="microsoft.com", reason="OK", upstream=0, days=ms_day)
+    case("microsoft-wrong-host", chain=microsoft, trust=ms_root, host="wrong.test", reason="SAN", days=ms_day)
+
     sct_oid = bytes.fromhex("2b06010401d679020402")
     # This is an opaque SCT-shaped test value, not a verified CT log receipt.
     sct_signature = int_key.sign(b"fixture SCT", ec.ECDSA(hashes.SHA256()))

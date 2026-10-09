@@ -104,12 +104,16 @@ ASN.1 schema validator for every informational extension.
 | Key Usage | Parse canonical named bits; require the role's signing bit when present. Refuse keyCertSign in leaves. |
 | Subject Alternative Name | Validate supported primitive forms; refuse constructed alternatives. Require a matching DNS identity for the leaf. |
 | Extended Key Usage | Nonempty unique OID list; require explicit serverAuth in leaf/intermediates. anyExtendedKeyUsage alone fails. Anchors refuse EKU because the converted anchor would lose it. Critical EKU remains an upstream compatibility refusal. |
+| Microsoft Application Policies (1.3.6.1.4.1.311.21.10) | Noncritical, nonempty list of unique PolicyInformation purpose OIDs without qualifiers, at most 32. Require explicit serverAuth in leaves/intermediates independently of EKU; any-application-policy alone fails. Anchors refuse this restriction because conversion would lose it. |
+| Microsoft CA Version (1.3.6.1.4.1.311.21.1) | Noncritical informational renewal version; require a canonical nonnegative uint32 INTEGER. |
+| Microsoft Certificate Template (1.3.6.1.4.1.311.21.7) | Noncritical issuance metadata; require an OID and up to two optional nonnegative uint32 version INTEGERs inside one SEQUENCE. |
+| Microsoft Certificate Template Name (1.3.6.1.4.1.311.20.2) | Noncritical issuance metadata; require a nonempty BMPString with complete two-byte characters, no NUL and no surrogates. |
 | Subject/Authority Key Identifier | Accept noncritical metadata. |
 | Authority/Subject Information Access | Accept noncritical metadata; no fetching. |
 | CRL Distribution Points, Freshest CRL | Accept noncritical metadata; no revocation claim. |
 | Certificate Policies | Accept noncritical metadata; no policy-tree claim. |
 | SCT List (1.3.6.1.4.1.11129.2.4.2) | Accept a noncritical DER OCTET STRING; contents are opaque metadata, without CT verification. |
-| DelegationUsage (1.3.6.1.4.1.44363.44) | Accept noncritical DER NULL. This TLS 1.2 client does not negotiate delegated credentials. |
+| DelegationUsage (1.3.6.1.4.1.44363.44) | Accept noncritical DER NULL. This client does not negotiate delegated credentials. |
 | TLS Feature / must-staple | Refuse, including noncritical forms; this client cannot enforce an OCSP-stapling requirement. |
 | Name Constraints, Policy Constraints, Policy Mappings, Inhibit Any Policy | Refuse, including noncritical forms. |
 | Other extensions | Refuse, including noncritical forms. Expanding the allowlist needs its own policy justification and fixtures. |
@@ -131,6 +135,18 @@ not a restriction on ordinary certificate authentication. Both have typed
 DER envelope checks; neither enables a protocol feature. The must-staple
 refusal preserves the requirement in
 [RFC 7633](https://www.rfc-editor.org/rfc/rfc7633.html).
+
+Microsoft Application Policies are purpose restrictions, not ordinary
+Certificate Policies metadata. The [MS-WCCE encoding](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-wcce/160b96b1-c431-457a-8eed-27c11873f378)
+wraps each purpose OID in a PolicyInformation without qualifiers.
+This profile requires explicit serverAuth in each present purpose extension;
+neither Microsoft's extension nor standard EKU can override a restriction
+in the other. Application Policy Mappings and Constraints remain refused.
+The [template OID and versions](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-wcce/9da866e5-9ce9-4a83-9064-0d20af8b2ccf),
+[template name](https://learn.microsoft.com/en-us/windows/win32/seccrypto/template)
+and [CA renewal version](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-csra/69c1c13a-e270-49ad-9bc1-a94fe019c8c9)
+describe issuance, not authority to authenticate a server. Their typed
+envelopes are checked; their values do not select trust or override policy.
 
 ## Ownership and bounds
 
@@ -248,3 +264,47 @@ is exercised on the host; guest `tlsinputtest` and `tlslibtest` cover engine
 creation and byte progress without a network peer. A sustained fuzzing
 campaign, public-root compatibility and updates, and independent TLS-peer interoperability remain
 separate validation and integration work.
+
+## Microsoft extension support (2026-10-09)
+
+Chris's P5 visit to microsoft.com failed with policy EXTENSION (4), engine
+34. A captured public chain reproduced that exact result in the unchanged
+validator: both the leaf and its issuing CA carried Microsoft extensions
+outside the allowlist. The follow-up recognizes the four OIDs above with
+separate purpose enforcement and typed metadata parsers. No Microsoft host
+exception, certificate bypass, public root addition, or trust-store change
+is involved.
+
+Application Policies and EKU share the bounded purpose-list checks but keep
+their different wire formats. Each present extension must explicitly permit
+serverAuth. Tests cover conflicting purposes on both leaves and CAs, absent
+EKU, any-only policy, qualifiers, duplicate purposes/extensions, the 32-OID
+bound, critical forms and anchor refusal. Metadata tests cover positive
+leaf/CA/anchor forms, invalid types, trailing values, version overflow,
+negative/padded integers and invalid BMP characters. Application Policy
+Mappings, Application Policy Constraints and other unknown OIDs remain
+refused.
+
+The new positive regression failed before the implementation. After it,
+440 chain cases, 85 anchor cases and 19 TLS handshake gates passed with
+fragmented input, failure atomicity and ownership/concurrency checks under
+ASan/UBSan/LSan outside the sandbox. The captured microsoft.com and
+www.microsoft.com chains also passed with the unchanged 114-root installed
+bundle. Trust-store, public-input, TLS 1.2 engine and TLS 1.3 engine host
+regressions passed. The build and public ELF audit passed (31 exports,
+15 OS imports, 72 selected sources).
+
+In QEMU, os64get followed microsoft.com's HTTPS redirect and downloaded
+201,253 decoded bytes from www.microsoft.com over TLS 1.3; a direct fetch
+of www.microsoft.com returned the same size. Both exited zero. Yonder
+rendered the page and recorded TLS 1.3, HTTP 200 and 201,253 bytes with
+scripts disabled for transport acceptance. Styling is not a browser-parity
+claim. The guest TLS test group passed all three fixtures with no skips.
+After orderly shutdown, `make fsck-ext2` passed for both scratch root and
+home filesystems.
+Host logs, captured chains and guest artifacts are under
+`/tmp/tls13-microsoft/`.
+
+The nearby DelegationUsage comment and rule described only the TLS 1.2
+client; that scope was stale after the shared validator gained TLS 1.3.
+They now describe the client profile without a version qualifier.
