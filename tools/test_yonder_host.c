@@ -577,8 +577,9 @@ static bool pixels_are(const uint32_t *got, const uint32_t *want, int n)
 
 // DARK PAGES (paint.h): the colour each run of `html` is drawn in, by its
 // first word, and what the canvas is filled with first. The expected
-// colours are Python's colorsys run on the rule (HSL lightness: paper over
-// half to 0.08 + (1 - L) / 2, ink under half to 0.92 - L / 2).
+// colours are Python's colorsys run on the rule (paint.c's relight: the
+// luminance split at 0.18, paper to 0.4%-7%, ink to 80%-62%, the lightness
+// found by halving).
 static const yonder_dark_t kDarkPaint = {.paper = 0x202020};
 static bool starts(const char *got, const char *head)
 {
@@ -603,18 +604,29 @@ static void dark_cases(void)
     char *got = paint_of(plain, strlen(plain), 300, view, NULL, true);
     expect("dark: a page that set no colours is laid on the dark paper",
            starts(got, "fill 0 0 300 200 #202020\n"), got);
-    expect("dark: its default ink and link go light, the link keeping its blue",
-           painted_in(got, "plain", "#e3e3e3") && painted_in(got, "link", "#6262f4"), got);
+    expect("dark: its default ink and link go light, the link keeping a blue tint",
+           painted_in(got, "plain", "#e4e4e4") && painted_in(got, "link", "#d8d8fc"), got);
     free(got);
     const char *own = "<!doctype html><style>body{margin:0;background:#ffffff} div{background:#000000}"
                       " h1{background:#e0e8ff;margin:0;font-size:16px}"
                       "</style><p>inside</p><div>night</div><h1>pale</h1><p style=\"color:#ff0000\">red</p>";
     got = paint_of(own, strlen(own), 300, view, NULL, true);
     expect("dark: a page's own white paper goes dark, and its dark ink light",
-           starts(got, "fill 0 0 300 200 #141414\n") && painted_in(got, "inside", "#e3e3e3"), got);
+           starts(got, "fill 0 0 300 200 #101010\n") && painted_in(got, "inside", "#e4e4e4"), got);
     expect("dark: a dark box stays; a pale one darkens keeping its hue; a mid colour is the page's",
-           got != NULL && strstr(got, " #000000\n") != NULL && strstr(got, " #000f38\n") != NULL &&
-           painted_in(got, "night", "#e3e3e3") && painted_in(got, "red", "#ff0000"), got);
+           got != NULL && strstr(got, " #000000\n") != NULL && strstr(got, " #001962\n") != NULL &&
+           painted_in(got, "night", "#e4e4e4") && painted_in(got, "red", "#ff0000"), got);
+    free(got);
+    // Quinn's panels (#238): yellow and green are half light by HSL and
+    // look nearly white, so black on them must not become pale on bright.
+    const char *panels = "<!doctype html><style>body{margin:0;background:#000000}</style>"
+                         "<p style=\"background:#ffff00;color:#000\">warning</p>"
+                         "<p style=\"background:#00ff00;color:#000\">confirmed</p>";
+    got = paint_of(panels, strlen(panels), 300, view, NULL, true);
+    expect("dark: a bright yellow or green panel goes dark under the text that went light",
+           got != NULL && strstr(got, " #1a1a00\n") != NULL && strstr(got, " #003100\n") != NULL &&
+           strstr(got, " #ffff00\n") == NULL && strstr(got, " #00ff00\n") == NULL &&
+           painted_in(got, "warning", "#e4e4e4") && painted_in(got, "confirmed", "#e4e4e4"), got);
     free(got);
     const char *scheme = "<!doctype html><style>body{margin:0;background:#ffffff;color:#000000}"
                          "@media (prefers-color-scheme: dark){body{background:#0a0a0a;color:#c0c0c0}}"

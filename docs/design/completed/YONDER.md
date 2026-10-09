@@ -110,11 +110,13 @@ remaining gates before recommending scripts for ordinary browsing.
   `light`, the default) in `yonder.conf`. A page with a dark design of its
   own is told to use it: libgarb answers `prefers-color-scheme: dark`. What
   is left the painter darkens (paint.h's `yonder_dark_t`): every colour is
-  drawn at its HSL lightness moved, hue and saturation kept, a background
-  or a gradient going dark when it is lighter than half and text, a
-  decoration, a bullet or a border going light when it is darker than half.
+  drawn at its brightness (luminance) moved, hue and saturation kept, a
+  background or a gradient going dark when it looks brighter than mid grey
+  and text, a decoration, a bullet or a border going light when it looks
+  darker, so a moved ink on a moved paper is at least 5.3 to 1 (WCAG) and a
+  bright yellow panel's black text stays readable (Quinn, #238).
   So a page that paints its own white (Google, DuckDuckGo's HTML page) is
-  dark, a pale blue box a dark blue one, a navy link a light blue one; a
+  dark, a pale blue box a dark blue one, a navy link a pale blue one; a
   mid colour and every picture are the page's, and a dark design of the
   page's own has nothing to move. A page that set no colours is laid on
   white's dark counterpart. Form controls keep the desktop theme's colours.

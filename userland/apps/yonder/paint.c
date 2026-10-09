@@ -33,44 +33,108 @@ static double hue_part(double p, double q, double t)
     return t < 1.0 / 6 ? p + (q - p) * 6 * t : t < 0.5 ? q : t < 2.0 / 3 ? p + (q - p) * (2.0 / 3 - t) * 6 : p;
 }
 
-// `c` with its HSL lightness moved, hue, saturation and transparency kept:
-// PAPER lighter than half goes dark (white to 8%), INK darker than half
-// goes light (black to 92%), and each other colour is as it was. The
-// curve keeps order within each half, so a page's paler box stays paler
-// than its darker one.
+// How bright a colour looks, 0 to 1: Rec. 709's weights over each channel
+// squared, a near enough linearisation for the one decision it makes and
+// cheap enough for every pixel of a gradient.
+static double luminance(double r, double g, double b)
+{
+    return 0.2126 * r * r + 0.7152 * g * g + 0.0722 * b * b;
+}
+
+// The colour at HSL lightness `l` with hue `h` and saturation `s`.
+static void from_hsl(double h, double s, double l, double *r, double *g, double *b)
+{
+    if (s == 0) {
+        *r = *g = *b = l;
+        return;
+    }
+    double q = l < 0.5 ? l * (1 + s) : l + s - l * s, p = 2 * l - q;
+    *r = hue_part(p, q, h + 1.0 / 3);
+    *g = hue_part(p, q, h);
+    *b = hue_part(p, q, h - 1.0 / 3);
+}
+
+// Where a dark page splits light from dark: a colour that looks brighter
+// than this is light (mid grey, #6c6c6c, is about here).
+#define DARK_SPLIT 0.18
+
+// `c` as a dark page draws it, hue, saturation and transparency kept, its
+// LUMINANCE moved: PAPER brighter than the split goes dark, to between 0.4%
+// (white) and 7% (the split), and INK darker than the split goes light, to
+// between 80% (black) and 62% (the split); each other colour is as it was.
+// Luminance and not HSL lightness decides, because yellow and green are
+// "half light" by lightness and look nearly white (Quinn, #238). Any moved
+// ink on any moved paper is at least 5.3 to 1 in WCAG's contrast (searched
+// over a 4,096-colour grid), about 14.5 to 1 for black on white. A
+// saturated dark blue keeps only a tint: blue is so dark to the eye that
+// the luminance an ink needs is near white. The order within each side is
+// kept, so a paler box stays paler than a darker one.
 static uint32_t relight(uint32_t c, bool paper)
 {
     double r = ((c >> 16) & 0xff) / 255.0, g = ((c >> 8) & 0xff) / 255.0, b = (c & 0xff) / 255.0;
+    double y = luminance(r, g, b);
+    if (paper ? y <= DARK_SPLIT : y >= DARK_SPLIT)
+        return c;
+    double want = paper ? 0.004 + (1 - y) / (1 - DARK_SPLIT) * (0.07 - 0.004)
+                        : 0.80 - y / DARK_SPLIT * (0.80 - 0.62);
     double mx = r > g ? (r > b ? r : b) : (g > b ? g : b);
     double mn = r < g ? (r < b ? r : b) : (g < b ? g : b), l = (mx + mn) / 2;
-    if (paper ? l <= 0.5 : l >= 0.5)
-        return c;
-    double to = paper ? 0.08 + (1 - l) * 0.5 : 0.92 - l * 0.5;
     double d = mx - mn, s = 0, h = 0;
     if (d > 0) {
         s = l > 0.5 ? d / (2 - mx - mn) : d / (mx + mn);
         h = mx == r ? (g - b) / d + (g < b ? 6 : 0) : mx == g ? (b - r) / d + 2 : (r - g) / d + 4;
         h /= 6;
     }
-    double q = to < 0.5 ? to * (1 + s) : to + s - to * s, p = 2 * to - q;
-    double nr = s == 0 ? to : hue_part(p, q, h + 1.0 / 3);
-    double ng = s == 0 ? to : hue_part(p, q, h);
-    double nb = s == 0 ? to : hue_part(p, q, h - 1.0 / 3);
+    // Luminance rises with lightness at a fixed hue and saturation, so the
+    // lightness that gives `want` is found by halving.
+    double lo = 0, hi = 1;
+    for (int i = 0; i < 24; i++) {
+        double mid = (lo + hi) / 2;
+        from_hsl(h, s, mid, &r, &g, &b);
+        if (luminance(r, g, b) < want)
+            lo = mid;
+        else
+            hi = mid;
+    }
+    from_hsl(h, s, (lo + hi) / 2, &r, &g, &b);
     // Each part is from 0 to 1, so adding a half rounds it.
-    return (c & 0xff000000u) | (uint32_t)(nr * 255 + 0.5) << 16 | (uint32_t)(ng * 255 + 0.5) << 8 |
-           (uint32_t)(nb * 255 + 0.5);
+    return (c & 0xff000000u) | (uint32_t)(r * 255 + 0.5) << 16 | (uint32_t)(g * 255 + 0.5) << 8 |
+           (uint32_t)(b * 255 + 0.5);
 }
 
 // A colour as a dark page draws it (paint.h): a background or a gradient
 // is PAPER, text, a decoration, a bullet or a border is INK.
+// The answers already worked out, by colour: a gradient asks once a pixel,
+// and its neighbours are mostly colours it has asked about. One window
+// paints on one thread.
+#define RELIT_SLOTS 1024
+static struct {
+    uint32_t in, out;
+    bool paper, used;
+} s_relit[RELIT_SLOTS];
+
+static uint32_t relit(uint32_t colour, bool paper)
+{
+    uint32_t k = ((colour * 2654435761u) >> 22) ^ (paper ? 1u : 0u);
+    k %= RELIT_SLOTS;
+    if (s_relit[k].used && s_relit[k].in == colour && s_relit[k].paper == paper)
+        return s_relit[k].out;
+    uint32_t out = relight(colour, paper);
+    s_relit[k].in = colour;
+    s_relit[k].out = out;
+    s_relit[k].paper = paper;
+    s_relit[k].used = true;
+    return out;
+}
+
 static uint32_t paper_of(const Painter *p, uint32_t colour)
 {
-    return p->dark != NULL ? relight(colour, true) : colour;
+    return p->dark != NULL ? relit(colour, true) : colour;
 }
 
 static uint32_t ink_of(const Painter *p, uint32_t colour)
 {
-    return p->dark != NULL ? relight(colour, false) : colour;
+    return p->dark != NULL ? relit(colour, false) : colour;
 }
 
 static int32_t px(flow_unit_t u)

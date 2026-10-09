@@ -63,11 +63,12 @@ typedef struct {
 const flow_box_t *yonder_canvas_owner(const flow_tree_t *tree, const yonder_verbs_t *verbs);
 
 // DARK PAGES (yonder.conf's `appearance = dark`): every colour the page
-// paints is drawn at its HSL lightness moved, hue and saturation kept. A
-// background or a gradient is PAPER, and goes dark if it is lighter than
-// half; text, a decoration, a bullet or a border is INK, and goes light if
-// it is darker than half. Each other colour, and every picture, is the
-// page's. A page with a dark design of its own (it was told, by
+// paints is drawn at its brightness moved, hue and saturation kept
+// (paint.c's relight). A background or a gradient is PAPER, and goes dark
+// if it looks brighter than mid grey; text, a decoration, a bullet or a
+// border is INK, and goes light if it looks darker, so a moved ink on a
+// moved paper is always far apart. Each other colour, and every picture,
+// is the page's. A page with a dark design of its own (it was told, by
 // `prefers-color-scheme`) has nothing to move. `paper` is the canvas of a
 // page that set none.
 typedef struct {

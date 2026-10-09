@@ -62,7 +62,7 @@
 // (`prefers-color-scheme: dark`), and the painter darkens what is left:
 // light backgrounds go dark, dark text goes light. The paper of a page
 // that set none is white's dark counterpart, as the painter turns it.
-static const yonder_dark_t kDark = {.paper = 0x141414u};
+static const yonder_dark_t kDark = {.paper = 0x101010u};
 static bool s_dark;
 
 #define YONDER_ACCEPT "text/html, application/xhtml+xml, text/*;q=0.8"
