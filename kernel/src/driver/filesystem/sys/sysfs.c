@@ -27,7 +27,7 @@
 //
 //   /sys/                        the root: "bluetooth", "bus", "console", "cpu", "memory", "net",
 //                                "block", "cache", "conf", "gui", "log", "mounts",
-//                                "openfiles", "random", "shlib", "clipboard", "appearance", "decorations"
+//                                "openfiles", "random", "shlib", "clipboard", "appearance", "decorations", "mouse"
 //   /sys/bluetooth/scan          discovery status; write "scan" to request.
 //   /sys/bluetooth/connection    LE HID peer status, slot commands and persistent bonds.
 //   /sys/bluetooth/devices       snapshot of the latest Classic/LE results.
@@ -109,7 +109,9 @@
 //                                staged compare-and-publish commands on write.
 //                                Store and contract: decorations.c, FRAME_STUDIO.md
 //
-// Generated reports are text; stored payloads are opaque bytes.
+// /sys/mouse carries fixed-size versioned binary device snapshots and atomic
+// preference commands (os64/mouse.h). Other generated reports are text; stored
+// appearance and decoration payloads have their own versioned contracts.
 // The PCI values are the enumeration's saved headers —
 // kPCIDeviceHeaders / kPCIDeviceFunctions / kPCIBridgeHeaders, written once
 // by init_PCI before the scheduler exists and never touched again, which is
@@ -180,6 +182,8 @@
 #include "logging/log.h"   // /sys/log — ring stats and sink state
 #include "io.h"             // kSerialPresent
 #include "appearance.h"
+#include "gui/input.h"
+#include "os64/mouse.h"
 #include "decorations.h"
 #include "os64/decoration.h"
 #include "clipboard.h"      // /sys/clipboard — the snarf store behind the file
@@ -364,6 +368,7 @@ typedef enum
 	SYS_NODE_MOUNTSFILE, // /mounts — the mount table, one line per live mount (df's data)
 	SYS_NODE_BLOCKFILE,  // /block — devices and partitions, named and located (lsblk's data)
 	SYS_NODE_OPENFILESFILE, // /openfiles — the open-file registry (lsof's deep half)
+	SYS_NODE_MOUSE, // /mouse — per-device pointer preferences and live devices
 	SYS_NODE_DECORATIONS,
 	SYS_NODE_APPEARANCE, // /appearance — session appearance generation and payload
 	SYS_NODE_CLIPFILE,   // /clipboard — the system clipboard (2026-08-21)
@@ -531,6 +536,11 @@ static void sys_parse_path(const char *path, sys_path_t *out)
 			return;
 		out->type = SYS_NODE_BLOCKFILE;
 		return;
+	}
+
+	if (strcmp(comp, "mouse") == 0) {
+		if (synth_next_component(path, &pos, comp, sizeof(comp))) return;
+		out->type = SYS_NODE_MOUSE; return;
 	}
 
 	if (strcmp(comp, "decorations") == 0) {
@@ -1908,6 +1918,7 @@ static void sys_gen_cpu_probe(synth_text_t *t, uint32_t core)
 typedef enum
 {
 	SYS_HANDLE_SNAPSHOT = 0,   // the ordinary case: text generated at open
+	SYS_HANDLE_MOUSE_WRITE,
 	SYS_HANDLE_APPEARANCE_WRITE,
 	SYS_HANDLE_DECORATIONS_WRITE,
 	SYS_HANDLE_CLIPREAD,       // /sys/clipboard opened "r" — holds a ref
@@ -1952,12 +1963,13 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 	bool is_probe = (sp.type == SYS_NODE_CPUFILE && strcmp(sp.name, "probe") == 0);
 	bool is_clip  = (sp.type == SYS_NODE_CLIPFILE);
 	bool is_decoration = (sp.type == SYS_NODE_DECORATIONS);
+	bool is_mouse = (sp.type == SYS_NODE_MOUSE);
 	bool is_appearance = (sp.type == SYS_NODE_APPEARANCE);
 	bool is_font = (sp.type == SYS_NODE_CONSOLEFONT);
 	bool is_bt = (sp.type == SYS_NODE_BTSCAN || sp.type == SYS_NODE_BTCONNECTION);
 	if (mode == NULL || mode[0] == '\0' || mode[1] != '\0' || (mode[0] != 'r' && mode[0] != 'w'))
 		return -1;
-	if (mode[0] == 'w' && !is_probe && !is_clip && !is_appearance && !is_font && !is_decoration && !is_bt)
+	if (mode[0] == 'w' && !is_probe && !is_clip && !is_appearance && !is_font && !is_decoration && !is_bt && !is_mouse)
 		return -1;
 
 	if (is_bt || sp.type == SYS_NODE_BTDEVICES) {
@@ -2025,6 +2037,21 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 		if (pending) { dh->kind = SYS_HANDLE_DECORATIONS_WRITE; dh->decoration = pending; }
 		return 0;
 	}
+
+	if (is_mouse) {
+        synth_text_t text={0};
+        if(mode[0]=='r') {
+            if(!synth_text_init(&text,sizeof(os64_mouse_snapshot_t))) return -1;
+            int n=input_mouse_snapshot(text.buf,text.cap);
+            if(n<0) { kfree(text.buf); return -1; }
+            text.len=(size_t)n;
+        }
+        sys_file_handle_t *h=synth_snapshot_publish(vfs_file,&text,path,vfs_fs,
+            sizeof(sys_file_handle_t),FILETYPE_SYSFILE);
+        if(!h) return -1;
+        if(mode[0]=='w') h->kind=SYS_HANDLE_MOUSE_WRITE;
+        return 0;
+    }
 
 	if (is_appearance)
 	{
@@ -2176,7 +2203,7 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 	return 0;
 }
 
-// Probe and appearance writes are complete commands, never partial streams.
+// Probe, appearance and mouse writes are complete commands, never partial streams.
 // Clipboard writes accumulate content which becomes visible at close;
 // Bluetooth scan writes assemble one bounded command, submitted at close.
 static int sys_write(vfs_file_t *vfs_file, const void *buffer, size_t size)
@@ -2199,6 +2226,9 @@ static int sys_write(vfs_file_t *vfs_file, const void *buffer, size_t size)
 
 	if (h->kind == SYS_HANDLE_DECORATIONS_WRITE)
 		return decorations_write(h->decoration, buffer, size);
+
+	if (h->kind == SYS_HANDLE_MOUSE_WRITE)
+		return input_mouse_apply(buffer, size);
 
 	if (h->kind == SYS_HANDLE_APPEARANCE_WRITE)
 		return appearance_publish(buffer, size);
@@ -2379,7 +2409,7 @@ static int sys_read_dir(vfs_directory_t *vfs_dir, os64_dirent_t *entry)
 			// a listing that drops a name reads exactly like a name that
 			// does not exist.)
 			static const char *kSysRootDirs[] = { "bluetooth", "bus", "console", "cpu", "memory", "net" };
-			static const char *kSysRootFiles[] = { "block", "cache", "conf", "gui", "log", "mounts", "openfiles", "random", "shlib", "clipboard", "appearance", "decorations" };
+			static const char *kSysRootFiles[] = { "block", "cache", "conf", "gui", "log", "mounts", "openfiles", "random", "shlib", "clipboard", "appearance", "decorations", "mouse" };
 			const int kDirCount  = (int)(sizeof(kSysRootDirs) / sizeof(kSysRootDirs[0]));
 			const int kFileCount = (int)(sizeof(kSysRootFiles) / sizeof(kSysRootFiles[0]));
 			if (h->index < kDirCount)
@@ -2627,6 +2657,10 @@ static int sys_stat(const char *path, os64_dirent_t *entry, vfs_filesystem_t *vf
 			strncpy(entry->name, "openfiles", OS64_DIRENT_NAME_MAX);
 			return 0;
 
+		case SYS_NODE_MOUSE:
+			strncpy(entry->name, "mouse", OS64_DIRENT_NAME_MAX);
+			entry->size = sizeof(os64_mouse_snapshot_t);
+			return 0;
 		case SYS_NODE_DECORATIONS:
 			strncpy(entry->name, "decorations", OS64_DIRENT_NAME_MAX);
 			entry->size = 0;

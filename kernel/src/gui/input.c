@@ -18,6 +18,9 @@
 #include "printd.h"
 #include "spinlock.h"
 #include "video.h"
+#include "os64/mouse.h"
+#include "memcpy.h"
+#include "strings/strings.h"
 
 extern struct Framebuffer kFrameBuffer;
 
@@ -36,6 +39,80 @@ static int32_t s_mouse_x, s_mouse_y;
 // How many sources hold each button (input.h, input_pointer_source_t); a
 // button is down while its count is nonzero.
 static uint32_t s_button_holders[3];
+static os64_mouse_device_t s_mouse_devices[OS64_MOUSE_DEVICES];
+static uint32_t s_mouse_sources[OS64_MOUSE_DEVICES];
+static unsigned s_mouse_device_count;
+static uint64_t s_mouse_generation;
+
+int input_mouse_snapshot(void *out, size_t capacity)
+{
+    if(!out || capacity<sizeof(os64_mouse_snapshot_t)) return -1;
+    os64_mouse_snapshot_t *snapshot=out;
+    uint64_t flags=spinlock_acquire_irqsave(&s_input_lock);
+    *snapshot=(os64_mouse_snapshot_t){.version=OS64_MOUSE_VERSION,
+        .count=s_mouse_device_count,.generation=s_mouse_generation};
+    for(unsigned i=0;i<s_mouse_device_count;i++) snapshot->devices[i]=s_mouse_devices[i];
+    spinlock_release_irqrestore(&s_input_lock,flags);
+    return sizeof(*snapshot);
+}
+
+int input_mouse_apply(const void *bytes, size_t length)
+{
+    if(!bytes || length!=sizeof(os64_mouse_command_t)) return -1;
+    os64_mouse_command_t command;
+    memcpy(&command,bytes,sizeof(command));
+    if(command.version!=OS64_MOUSE_VERSION || !command.count || command.count>OS64_MOUSE_DEVICES) return -1;
+    for(unsigned i=0;i<command.count;i++) {
+        if(!os64_mouse_setting_valid(&command.settings[i])) return -1;
+        for(unsigned j=0;j<i;j++)
+            if(!strcmp(command.settings[i].key,command.settings[j].key)) return -1;
+    }
+    uint64_t flags=spinlock_acquire_irqsave(&s_input_lock);
+    unsigned slots[OS64_MOUSE_DEVICES], count=s_mouse_device_count;
+    bool valid=command.expected_generation==s_mouse_generation && s_mouse_generation!=UINT64_MAX;
+    for(unsigned i=0;i<command.count && valid;i++) {
+        unsigned j=0;
+        while(j<s_mouse_device_count && strcmp(s_mouse_devices[j].setting.key,command.settings[i].key)) j++;
+        slots[i]=j==s_mouse_device_count?count++:j;
+        if(count>OS64_MOUSE_DEVICES) valid=false;
+    }
+    if(valid) {
+        for(unsigned i=0;i<command.count;i++) {
+            os64_mouse_device_t *d=&s_mouse_devices[slots[i]];
+            d->setting=command.settings[i];
+            if(!d->name[0]) strncpy(d->name,d->setting.key,sizeof(d->name)-1);
+        }
+        s_mouse_device_count=count; s_mouse_generation++;
+    }
+    spinlock_release_irqrestore(&s_input_lock,flags);
+    return valid?(int)length:-1;
+}
+
+void input_pointer_register(input_pointer_source_t *src,const char *key,const char *name)
+{
+    char bounded[OS64_MOUSE_KEY]={0};
+    if(!src || !key || !name || strlen(key)>=sizeof(bounded)) return;
+    strcpy(bounded,key);
+    if(!os64_mouse_key_valid(bounded)) return;
+    uint64_t flags=spinlock_acquire_irqsave(&s_input_lock);
+    if(src->settings_slot) {
+        spinlock_release_irqrestore(&s_input_lock,flags); return;
+    }
+    unsigned slot=0;
+    while(slot<s_mouse_device_count && strcmp(s_mouse_devices[slot].setting.key,key)) slot++;
+    if(slot<OS64_MOUSE_DEVICES) {
+        if(slot==s_mouse_device_count) {
+            s_mouse_device_count++;
+            strcpy(s_mouse_devices[slot].setting.key,key);
+            s_mouse_devices[slot].setting.speed=100;
+        }
+        strncpy(s_mouse_devices[slot].name,name,OS64_MOUSE_NAME-1);
+        s_mouse_devices[slot].name[OS64_MOUSE_NAME-1]=0;
+        s_mouse_sources[slot]++; s_mouse_devices[slot].connected=1;
+        src->settings_slot=slot+1;
+    }
+    spinlock_release_irqrestore(&s_input_lock,flags);
+}
 
 // Gate for the GUI ring; text wheel input does not depend on it.
 static volatile bool s_active = false;
@@ -148,6 +225,13 @@ static void pointer_locked(input_pointer_source_t *src, int32_t dx, int32_t dy, 
 	}
 }
 
+static int32_t scale_motion(int16_t delta,uint32_t speed,int32_t *fraction)
+{
+    int32_t value=(int32_t)delta*(int32_t)speed+*fraction;
+    *fraction=value%100;
+    return value/100;
+}
+
 void input_inject_mouse(input_pointer_source_t *src, int16_t dx, int16_t dy,
                         uint8_t buttons, int16_t wheel)
 {
@@ -171,7 +255,23 @@ void input_inject_mouse(input_pointer_source_t *src, int16_t dx, int16_t dy,
 	uint8_t modifiers = keyboard_current_modifiers();
 
 	uint64_t flags = spinlock_acquire_irqsave(&s_input_lock);
-	pointer_locked(src, dx, dy, buttons, modifiers);
+	uint32_t speed=100; bool right=false;
+	if(src->settings_slot && src->settings_slot<=s_mouse_device_count) {
+		const os64_mouse_setting_t *setting=&s_mouse_devices[src->settings_slot-1].setting;
+		speed=setting->speed; right=setting->right_primary!=0;
+	}
+	if(src->speed!=speed) { src->fraction_x=src->fraction_y=0; src->speed=speed; }
+	// A preference change cannot turn a held primary press into a secondary
+	// release. Adopt the mapping at the start of the next physical chord.
+	if(!src->raw_buttons) src->right_primary=right;
+	src->raw_buttons=buttons&7;
+	if(src->right_primary) buttons=(buttons&4)|((buttons&1)<<1)|((buttons&2)>>1);
+	int32_t mx=scale_motion(dx,speed,&src->fraction_x);
+	int32_t my=scale_motion(dy,speed,&src->fraction_y);
+	// Event deltas are signed 16-bit even though cursor integration is wider.
+	if(mx>32767) mx=32767; else if(mx<-32768) mx=-32768;
+	if(my>32767) my=32767; else if(my<-32768) my=-32768;
+	pointer_locked(src, mx, my, buttons, modifiers);
 	if (wheel) {
 		input_event_t ev = {
 			.type = INPUT_EVENT_MOUSE_WHEEL,
@@ -201,7 +301,22 @@ void input_release_pointer(input_pointer_source_t *src)
 	uint8_t modifiers = keyboard_current_modifiers();
 	uint64_t flags = spinlock_acquire_irqsave(&s_input_lock);
 	pointer_locked(src, 0, 0, 0, modifiers);
+	src->raw_buttons=0; src->fraction_x=src->fraction_y=0;
 	spinlock_release_irqrestore(&s_input_lock, flags);
+}
+
+void input_pointer_unregister(input_pointer_source_t *src)
+{
+    uint8_t modifiers=keyboard_current_modifiers();
+    uint64_t flags=spinlock_acquire_irqsave(&s_input_lock);
+    if(s_active) pointer_locked(src,0,0,0,modifiers);
+    if(src->settings_slot && src->settings_slot<=s_mouse_device_count) {
+        unsigned slot=src->settings_slot-1;
+        if(s_mouse_sources[slot]) s_mouse_sources[slot]--;
+        s_mouse_devices[slot].connected=s_mouse_sources[slot]!=0;
+    }
+    *src=(input_pointer_source_t){0};
+    spinlock_release_irqrestore(&s_input_lock,flags);
 }
 
 bool input_pending(void)

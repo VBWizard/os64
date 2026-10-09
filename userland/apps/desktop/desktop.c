@@ -40,6 +40,7 @@
 #include "os64/fmt.h"       // os64_snprintf — the click position, as argv for the launcher
 #include "os64/thread.h"
 #include "os64/decoration_startup.h"
+#include "os64/mouse_settings.h"
 
 #define DESKTOP_PATH_MAX   192
 #define DESKTOP_APPS_MAX   16
@@ -379,6 +380,9 @@ int main(int argc, char **argv)
         os64_complain("desktop: no GUI here (screen_info)\n");
         return 1;
     }
+
+    if(os64_mouse_startup()<0)
+        os64_complain("desktop: mouse preferences could not be restored; live settings retained\n");
 
     // Disk policy belongs to the desktop startup path. The generation check
     // preserves a session that was already changed by an explicit Apply.

@@ -90,6 +90,46 @@ three rows per notch, under its tty lock. It marks the glass stale for
 This also works on text-only boots. GUI wheel events use event 13 and the
 existing mouse payload; see [MOUSE_WHEEL.md](MOUSE_WHEEL.md).
 
+Control Center's **Mouse Settings** tool (`/bin/mousesettings`) selects an
+individual Bluetooth, USB, or PS/2 mouse. Pointer speed runs from 0.25× to 4×
+(default 1×); the right-primary checkbox swaps left/right button roles. Apply
+changes the live session, Save also persists the selected device in `mouse.conf`,
+and Defaults stages 1× with the left button primary. Refresh reloads the device
+list and current settings, discarding unapplied edits.
+
+Relative motion is scaled in `input_inject_mouse`, with signed fractional
+remainders per source so low speeds preserve small movements. Wheel notches and
+absolute `/dev/glass` positions are unscaled. A button mapping is latched for the
+whole physical chord: applying a swap during a drag preserves its release, and
+the new mapping starts on the next press. Source removal releases held logical
+buttons while preserving other sources' holds.
+
+`/sys/mouse` reads a versioned binary snapshot and accepts complete atomic
+compare-and-apply commands (`abi/include/os64/mouse.h`). The bounded registry holds
+16 device identities, including saved offline preferences. A settings generation
+prevents stale windows and desktop restarts from overwriting a newer Apply.
+Desktop startup validates the complete config before restoring it; devices that
+arrive afterward inherit their preferences. Each config line is
+`device-key = speed-percent right-primary`, with speed 25–400 and primary 0/1.
+The normal config search path and checked atomic writer handle persistence.
+
+Bluetooth keys use the bonded identity, so reconnection and privacy-address
+changes retain settings. USB keys use PCI controller address, root port and
+VID/PID; moving a receiver to another port selects a different preference.
+Names come from transport/identity information rather than USB product strings.
+Unregistered sources keep default behavior if the registry is full. The GUI
+refresh button discovers devices that arrived after the window opened.
+
+Host validation covers two-source speed isolation, fractional motion, saturation,
+button swaps during held presses, disconnect/reconnect, atomic rejection,
+config parsing and startup/save errors. The UI fixture covers device selection,
+Apply/Save/defaults, conflict feedback and larger fonts. Windowed QEMU also verified the third Control Center entry, Save through the
+live kernel interface, independent USB/PS2 settings, and restoration of 2× speed
+and right-primary after reboot using temporary disk overlays. P5 acceptance
+requires the updated kernel, libos64, desktop, mousesettings app and menu.conf; test a saved
+trackball speed across reboot while retaining the dongle mouse's default speed.
+
+
 Keyboard drivers route keys at arrival, tty by tty.
 
 Two consequences worth knowing:
