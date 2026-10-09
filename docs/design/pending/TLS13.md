@@ -815,9 +815,15 @@ python3 tools/test_tls13_vectors_host.py \
 python3 tools/audit_bearssl.py
 ```
 
-This runner is traced: LeakSanitizer reported that it could not operate
-under ptrace. The successful host runs used `ASAN_OPTIONS=detect_leaks=0`;
-address and undefined-behavior sanitizers remained enabled. Leave leak
-detection enabled on hosts that support it. S1's evidence is offline
+The initial sandboxed runs used `ASAN_OPTIONS=detect_leaks=0` after
+LeakSanitizer failed at its final scan. A follow-up with verbose diagnostics
+showed thread attachment denied with `errno 1` (`EPERM`), while
+`TracerPid` was zero: the generic ptrace hint did not establish that the
+runner was being traced. The same vector binary passed outside the
+sandbox with `ASAN_OPTIONS=detect_leaks=1`, and the diagnostic log confirms
+that LeakSanitizer scanned its thread. The existing pristine/adapted
+crypto, X.509 and foundation binaries also passed outside the sandbox
+with leak detection enabled; their differential outputs still match.
+ASan/UBSan remained active throughout. S1's evidence is offline
 foundation/vector evidence; live TLS 1.3 interoperability and guest
 acceptance remain the S2/S3 gates above.
