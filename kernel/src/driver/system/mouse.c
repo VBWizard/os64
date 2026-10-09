@@ -196,6 +196,7 @@ void mouse_init(void)
 
 	if (ok) {
 		s_packet_index = 0;
+		input_pointer_register(&s_pointer,"ps2","PS/2 mouse");
 		s_mouse_active = true;
 		printd(DEBUG_GUI, "mouse: PS/2 mouse initialized, streaming enabled\n");
 	} else {

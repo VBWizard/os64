@@ -12,6 +12,7 @@ void appearance_session_contracts(void);
 void font_page_install_contracts(void);
 void appearance_customizer_contracts(void);
 void controlcenter_layout_contracts(void);
+void mouse_settings_ui_contracts(void);
 
 // Diagnostics use the kernel log in the guest; this fixture has no log sink.
 void os64_debug_log(const char *line) { assert(line && *line); }
@@ -815,6 +816,7 @@ int main(void)
     appearance_session_contracts();
     appearance_customizer_contracts();
     controlcenter_layout_contracts();
+    mouse_settings_ui_contracts();
     palettes_preserve_composition();
     bevel_stays_inside_button();
     render_composes_independent_trees();

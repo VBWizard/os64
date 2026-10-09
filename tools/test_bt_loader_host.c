@@ -80,6 +80,9 @@ static unsigned mouse_packets;
 static int16_t mouse_x,mouse_y,mouse_wheel;
 static uint8_t mouse_buttons;
 void input_release_pointer(input_pointer_source_t *p) { (void)p; }
+void input_pointer_register(input_pointer_source_t *p,const char *key,const char *name)
+{ CHECK(key[0] && name[0]); p->settings_slot=1; }
+void input_pointer_unregister(input_pointer_source_t *p) { p->settings_slot=0; }
 void input_inject_mouse(input_pointer_source_t *p,int16_t x,int16_t y,uint8_t b,int16_t w)
 { (void)p; mouse_x=x; mouse_y=y; mouse_buttons=b; mouse_wheel=w; mouse_packets++; }
 void wait(uint64_t ms) { kTicksSinceStart += (ms+9)/10; }

@@ -198,6 +198,7 @@ typedef struct {
 // One controller. The P5 may place its keyboard and mouse on different xHCI
 // controllers, so initialized controllers remain live and are all polled.
 typedef struct {
+	uint8_t pci_bus, pci_device, pci_function;
 	bool         present;         // controller found and running
 	uint8_t     *cap;             // MMIO: capability base (HHDM-aliased)
 	uint8_t     *op;              // MMIO: operational base
@@ -541,7 +542,7 @@ static void xhci_hid_lost(xhci_device_t *dev)
 		static const uint8_t none[8];
 		hid_keyboard_report(&dev->kbd, none);
 	} else {
-		input_release_pointer(&dev->pointer);
+		input_pointer_unregister(&dev->pointer);
 	}
 }
 
@@ -566,10 +567,27 @@ static void xhci_bt_arm(xhci_bt_probe_t *probe, xhci_bt_endpoint_t *rx)
 	mmio_w32((uint8_t *)s_hc->db, 4 * probe->device->slot, dci);
 }
 
+static void xhci_bt_pointer_register(xhci_bt_probe_t *p,unsigned peer)
+{
+    if(p->pointers[peer].settings_slot) return;
+    const bt_le_t *s=&p->host.peers[peer].le;
+    const uint8_t *a=s->bond.valid?s->bond.peer:s->peer;
+    unsigned type=s->bond.valid?s->bond.address_type:s->address_type;
+    char key[64],name[64];
+    snprintf(key,sizeof(key),"bt-%u-%02x%02x%02x%02x%02x%02x",type,a[5],a[4],a[3],a[2],a[1],a[0]);
+    snprintf(name,sizeof(name),"Bluetooth mouse (%02x:%02x:%02x:%02x:%02x:%02x)",
+        a[5],a[4],a[3],a[2],a[1],a[0]);
+    input_pointer_register(&p->pointers[peer],key,name);
+}
+
 static void xhci_bt_input_report(void *context, unsigned peer, const bt_le_input_t *report)
 {
     xhci_bt_probe_t *p = context;
     if (report->mouse) {
+        if(!bt_le_input_active(&p->host.peers[peer].le)) {
+            input_pointer_unregister(&p->pointers[peer]); return;
+        }
+        xhci_bt_pointer_register(p,peer);
         int32_t wheel = -(int32_t)report->pointer.wheel;
         if (wheel > 32767) wheel = 32767;
         input_inject_mouse(&p->pointers[peer], report->pointer.x, report->pointer.y,
@@ -1154,6 +1172,8 @@ static void xhci_bt_runtime_poll(void)
     }
     for (unsigned i = 0; i < BT_HOST_PEERS; i++) {
         const bt_le_t *s = &p->host.peers[i].le;
+        if(s->mouse && bt_le_input_active(s)) xhci_bt_pointer_register(p,i);
+        else if(p->pointers[i].settings_slot || p->pointers[i].settings_key[0]) input_pointer_unregister(&p->pointers[i]);
         if (s->phase != before[i])
             printd(DEBUG_USB, "xhci: AX210 slot %u LE phase=%u error=%s opcode=%04x status=%02x\n",
                    i, s->phase, s->error ? s->error : "none", s->error_opcode, s->error_status);
@@ -1631,8 +1651,14 @@ static bool xhci_probe_device(uint32_t port, uint32_t speed)
 		dev->kbd.debug = DEBUG_USB;
 		s_keyboard_claimed = true;
 	}
-	else
-		s_mouse_claimed = true;
+	else {
+        char key[64],name[64];
+        snprintf(key,sizeof(key),"usb-%02x-%02x-%x-p%u-%04x-%04x",
+            s_hc->pci_bus,s_hc->pci_device,s_hc->pci_function,port,vendor,product);
+        snprintf(name,sizeof(name),"USB mouse %04x:%04x (port %u)",vendor,product,port);
+        input_pointer_register(&dev->pointer,key,name);
+        s_mouse_claimed = true;
+    }
 	for (uint32_t i = 0; i < HID_INFLIGHT; i++)
 		xhci_arm_report_trb(dev, i);
 
@@ -1651,6 +1677,7 @@ static bool xhci_probe_device(uint32_t port, uint32_t speed)
 
 static bool xhci_init_controller(pci_device_t *dev)
 {
+    s_hc->pci_bus=dev->busNo; s_hc->pci_device=dev->deviceNo; s_hc->pci_function=dev->funcNo;
 	// BAR0 (possibly 64-bit — bits 2:1 == 10b means the high half lives in
 	// BAR1). Mask the low flag bits off to get the MMIO physical base.
 	uint64_t bar = dev->baseAdd[0] & ~0xFULL;

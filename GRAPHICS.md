@@ -90,6 +90,64 @@ three rows per notch, under its tty lock. It marks the glass stale for
 This also works on text-only boots. GUI wheel events use event 13 and the
 existing mouse payload; see [MOUSE_WHEEL.md](MOUSE_WHEEL.md).
 
+Control Center's **Mouse Settings** tool (`/bin/mousesettings`) selects an
+individual Bluetooth, USB, or PS/2 mouse. Pointer speed runs from 0.25× to 4×
+(default 1×); the right-primary checkbox swaps left/right button roles. Apply
+changes the live session, Save also persists the selected device in `mouse.conf`,
+and Defaults stages 1× with the left button primary. Refresh reloads the device
+list and current settings, discarding unapplied edits. **Forget** removes the
+selected disconnected mouse's saved preferences and its live registry entry.
+Connected mice cannot be forgotten. If the 16-entry table is full, forget an old
+disconnected device, move the new mouse, and choose Refresh; registration retries
+on relative input without requiring a reboot.
+
+Relative motion is scaled in `input_inject_mouse`, with signed fractional
+remainders per source so low speeds preserve small movements. Wheel notches and
+absolute `/dev/glass` positions are unscaled. A button mapping is latched for the
+whole physical chord: applying a swap during a drag preserves its release, and
+the new mapping starts on the next press. Source removal releases held logical
+buttons while preserving other sources' holds.
+
+`/sys/mouse` reads a versioned binary snapshot and accepts complete atomic
+Apply/Forget commands (`abi/include/os64/mouse.h`, version 2). The bounded registry holds
+16 device identities, including saved offline preferences. A settings generation
+prevents stale windows and desktop restarts from overwriting a newer Apply or
+Forget. Registry slots remain stable while snapshots omit forgotten entries, so
+removing an offline identity cannot change another source's settings index.
+Desktop startup validates the complete config before restoring it; devices that
+arrive afterward inherit their preferences. Each config line is
+`device-key = speed-percent right-primary`, with speed 25–400 and primary 0/1.
+The normal config search path and checked atomic writer handle persistence.
+Forget deletes the saved line before removing the live entry. A file failure
+leaves the entry available for retry; a generation change or reconnection racing
+the file commit keeps the live settings and reports that only the saved
+preferences were removed.
+
+Bluetooth keys use the bonded identity, so reconnection and privacy-address
+changes retain settings. USB keys use PCI controller address, root port and
+VID/PID; moving a receiver to another port selects a different preference.
+Names come from transport/identity information rather than USB product strings.
+Sources awaiting registry space keep default behavior. The GUI
+refresh button discovers devices that arrived after the window opened.
+
+Host validation covers two-source speed isolation, fractional motion, saturation,
+button swaps during held presses, disconnect/reconnect, atomic rejection,
+config parsing and startup/save errors. Full-table regression tests cover Forget,
+waiting device admission, checked file deletion, a seventeenth device's Save and
+restoration, protected connected sources, and file/reconnection failures. The UI
+fixture covers device selection, Apply/Save/Forget/defaults, conflict feedback
+and larger fonts. Windowed QEMU also verified the third Control Center entry, Save through the
+live kernel interface, independent USB/PS2 settings, and restoration of 2× speed
+and right-primary after reboot using temporary disk overlays. P5 testing confirmed
+the Control Center entry and comfortable MX Ergo S motion at 2×. Saved trackball
+speed across a P5 reboot and independent dongle-mouse speed remain hardware checks.
+
+Installation requires the updated kernel, libos64, desktop, mousesettings app and
+menu.conf. A customized `/home/menu.conf` replaces `/etc/menu.conf` in full; add
+`item "Mouse Settings" /bin/mousesettings` inside its `menu settings` block and
+reopen Control Center to expose the new tool.
+
+
 Keyboard drivers route keys at arrival, tty by tty.
 
 Two consequences worth knowing:

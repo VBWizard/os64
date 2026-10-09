@@ -2,9 +2,11 @@
 #define GUI_INPUT_H
 
 #include <stdint.h>
+#include <stddef.h>
 #include <stdbool.h>
 
 #include "os64/gui.h"   // the ring-3 names these constants must keep matching
+#include "os64/mouse.h"
 
 // Unified input event queue — layer 2 of the GUI.
 //
@@ -137,16 +139,30 @@ typedef struct input_event
 // wheel scrolling works independently of the compositor.
 void input_init(void);
 
-// One pointing device's buttons: each mouse driver and each /dev/glass view
-// owns one, and passes it with every packet. A button is down while ANY
+// One pointing device's held buttons and relative-motion preferences. Each
+// mouse driver and each /dev/glass view owns one and passes it with each packet. A button is down while ANY
 // source holds it (X's core pointer), so a DOWN edge is the first holder's
 // press and an UP edge the last holder's release: a local mouse moving with
 // no buttons cannot end a remote viewer's drag, nor the reverse. The owner
 // serializes calls for its own source; input.c's lock covers the rest.
 typedef struct input_pointer_source
 {
-	uint8_t buttons;   // what this source holds down, as last reported
+	uint8_t buttons;   // Logical buttons currently held by this source.
+	uint8_t raw_buttons;
+	bool right_primary; // Latched until the physical button chord is released.
+	uint16_t settings_slot; // One-based registry slot; zero uses defaults.
+	uint32_t speed;
+	int32_t fraction_x, fraction_y;
+	char settings_key[OS64_MOUSE_KEY], settings_name[OS64_MOUSE_NAME];
 } input_pointer_source_t;
+
+// Drivers register a stable identity once the source is live. Registration is
+// idempotent; a full registry retries on relative input after Forget frees a slot.
+// Unregister releases held buttons and preserves saved preferences.
+void input_pointer_register(input_pointer_source_t *, const char *key, const char *name);
+void input_pointer_unregister(input_pointer_source_t *);
+int input_mouse_snapshot(void *out, size_t capacity);
+int input_mouse_apply(const void *command, size_t length);
 
 // Producer side (IRQ-safe state updates, no painting or task wakeups).
 void input_inject_key(char ascii, uint8_t scancode, uint8_t modifiers, bool pressed);
