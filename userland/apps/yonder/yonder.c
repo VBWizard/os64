@@ -1286,14 +1286,19 @@ static void diag_abandon(yonder_diag_t *d, const char *line)
 #define DIAG_CUSTOM_MAX 64
 static void diag_elements(yonder_diag_t *d, const os64_html_document_t *doc)
 {
-    static const char *const kNothing[] = {"canvas", "video", "audio", "svg"};
-    uint32_t nothing[4] = {0};
+    // A frame's document is not loaded into its box (it is offered as a
+    // link instead), and an embed makes no box: both are asked for and not
+    // shown. An object shows its fallback, as a browser does for what it
+    // cannot play, and is not counted.
+    static const char *const kNothing[] = {"canvas", "video", "audio", "svg", "iframe", "frame", "embed"};
+    enum { NOTHING = sizeof(kNothing) / sizeof(kNothing[0]) };
+    uint32_t nothing[NOTHING] = {0};
     struct { const char *name; uint32_t n; } custom[DIAG_CUSTOM_MAX];
     int32_t ncustom = 0;
     const os64_html_node_t *n = doc != NULL ? doc->document : NULL;
     while (n != NULL) {
         if (n->kind == OS64_HTML_ELEMENT && n->name != NULL) {
-            for (int k = 0; k < 4; k++)
+            for (int k = 0; k < NOTHING; k++)
                 nothing[k] += os64_streq(n->name, kNothing[k]);
             if (n->ns == OS64_HTML_NS_HTML && os64_strchr(n->name, '-') != NULL) {
                 int32_t c = 0;
@@ -1316,7 +1321,7 @@ static void diag_elements(yonder_diag_t *d, const os64_html_document_t *doc)
         if (n != NULL)
             n = n->next;
     }
-    for (int k = 0; k < 4; k++)
+    for (int k = 0; k < NOTHING; k++)
         if (nothing[k] != 0)
             yonder_diag_missing_seen(d, "element", kNothing[k], nothing[k]);
     for (int32_t c = 0; c < ncustom; c++)
@@ -5588,6 +5593,48 @@ static void glass_control(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os6
     glass_fill(&cut, (os64_gui_rect_t){c.x + c.w - 1, c.y, 1, c.h}, 0xd4d4d4);
 }
 
+// A frame's stand-in: a pale panel, and along its top where the frame's
+// document is ("Frame: https://..."), cut to the panel. The run is made for
+// this paint and let go after it, so no tree's replacement can leave one
+// behind; a page has few frames.
+#define FRAME_LABEL_PX 13
+#define FRAME_LABEL_MAX 512
+static void glass_frame(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_gui_rect_t clip,
+                        uint32_t ink, uint32_t paper)
+{
+    Glass cut = *(const Glass *)ctx;
+    os64_gui_rect_t room;
+    if (!os64_rect_intersect(c, clip, &room))
+        return;
+    cut.clip = on_glass(&cut, room);
+    if (cut.clip.w <= 0 || cut.clip.h <= 0)
+        return;
+    glass_fill(&cut, c, paper);
+    const os64_page_link_t *l = os64_page_link(flow_model(g.page.tree), b->link);
+    char text[FRAME_LABEL_MAX];
+    if (l != NULL && l->href.url != NULL)
+        os64_snprintf(text, sizeof(text), "Frame: %s", l->href.url);
+    else
+        os64_strcopy(text, sizeof(text), "Frame (it names no document)");
+    const flow_family_list_t sans = {NULL, 0, FLOW_GENERIC_SANS};
+    os64_text_font_t *const *fonts;
+    size_t nfonts;
+    os64_font_face_info_t face;
+    uint32_t px = (uint32_t)((int64_t)FRAME_LABEL_PX * (g.zoom != 0 ? g.zoom : 1000) / 1000);
+    if (s_env.text == NULL || page_fonts(NULL, &sans, false, false, px, &fonts, &nfonts, &face) != OS64_FONT_OK)
+        return;
+    os64_text_layout_t opt = {.encoding = OS64_TEXT_UTF8_WESTERN_V1, .fonts = fonts,
+                              .font_count = nfonts, .tab_interval = 64 * 8};
+    os64_text_run_t *run = NULL;
+    if (os64_text_layout(s_env.text, (const uint8_t *)text, os64_strlen(text), &opt, &run) != OS64_FONT_OK)
+        return;
+    int32_t pad = (int32_t)(px / 2);
+    int32_t baseline = c.y + pad + (int32_t)((face.ascent + 63) / 64);
+    os64_text_draw_alpha(run, cut.surf, cut.clip, c.x + pad + cut.dx, baseline + cut.dy,
+                         0xff000000u | ink, flow_alpha(ink));
+    os64_text_run_release(run);
+}
+
 // ── A scrolled box's bars ───────────────────────────────────────────────
 //
 // A box a person can scroll shows where it is with a thin bar over the
@@ -5702,7 +5749,7 @@ static void view_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_
     }
     yonder_verbs_t v = {&gl,           glass_fill,       glass_text,       glass_image,
                         glass_control, glass_backdrop,   glass_group_open, glass_group_close,
-                        glass_mask,    glass_pixels};
+                        glass_mask,    glass_pixels,     glass_frame};
     os64_gui_rect_t view = {part.x - gl.dx, part.y - gl.dy, part.w, part.h};
     yonder_paint(g.page.tree, view, scroll_now(), PAGE_PAPER, s_dark ? &kDark : NULL, &v);
     box_bars(&gl, view);

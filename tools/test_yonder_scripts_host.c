@@ -3246,6 +3246,17 @@ static void diag_page_cases(void) {
     text=diag_file("/tmp/diag",name);
     check(has(text,"MISSING element canvas (2)\n"),"diag: looking again at departure does not count twice");
 
+    /* A frame's document is not loaded into it, and an embed makes no box:
+     * both are recorded. An object shows its fallback and is not. */
+    loop_page("<p>x</p><iframe src=/poll></iframe><iframe></iframe><embed src=a.swf>"
+        "<object data=b.swf>fallback</object>");
+    check(loop_settle() && g.page.tree!=NULL,"diag: a page with frames, an embed and an object arrives");
+    yonder_diag_file_name(g.page.diag,name,sizeof(name)); text=diag_file("/tmp/diag",name);
+    check(has(text,"MISSING element iframe (2)\n") && has(text,"MISSING element embed (1)\n") &&
+        !has(text,"MISSING element object"),
+        "diag: frames and embeds are recorded as drawn as nothing, an object with its fallback is not");
+    loop_drop();
+
     /* An address that spells a token keeps it out of the plain lines. */
     stream_window(); g.scripts_on=true;
     start_trip("http://fixture.test/FAILED/MISSING",NULL,NAV_GO,NULL);
