@@ -239,6 +239,46 @@ void os64_dom_set_global_miss(os64_dom_t *dom, void (*heard)(void *opaque, const
         JS_SetGlobalMissHandler(ctx, heard, opaque);
 }
 
+/* An interface object: there to be named, never to be called. */
+static JSValue illegal_constructor(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv)
+{
+    (void)self; (void)argc; (void)argv;
+    return JS_ThrowTypeError(ctx, "Illegal constructor");
+}
+
+/* The interface objects for the prototypes the binding has (WebIDL § 3.7):
+ * `Element.prototype` is what every element inherits, so `el instanceof
+ * Element` holds and a page may patch the prototype, as the Wayback
+ * Machine's player does. An interface with no prototype of its own here
+ * (HTMLAnchorElement, Text) is not installed: aliasing it to a broader one
+ * would make `instanceof` lie, and the census says what is missing. Each
+ * prototype's `constructor` is its most specific interface, the last
+ * named for it. */
+static int interfaces_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
+{
+    static const struct { const char *name; unsigned proto; } kInterfaces[] = {
+        {"Node", D_PROTO_NODE}, {"CharacterData", D_PROTO_CHARACTER_DATA},
+        {"DocumentFragment", D_PROTO_FRAGMENT}, {"Document", D_PROTO_DOCUMENT},
+        {"Element", D_PROTO_ELEMENT}, {"HTMLElement", D_PROTO_ELEMENT},
+        {"HTMLFormElement", D_PROTO_FORM}, {"HTMLInputElement", D_PROTO_INPUT},
+        {"HTMLTextAreaElement", D_PROTO_TEXTAREA}, {"HTMLSelectElement", D_PROTO_SELECT},
+        {"HTMLButtonElement", D_PROTO_BUTTON}, {"HTMLImageElement", D_PROTO_IMAGE},
+    };
+    for (unsigned i = 0; i < sizeof(kInterfaces) / sizeof(kInterfaces[0]); i++) {
+        JSValue f = JS_NewCFunction2(ctx, illegal_constructor, kInterfaces[i].name, 0,
+                                     JS_CFUNC_constructor_or_func, 0);
+        if (JS_IsException(f)) return -1;
+        if (JS_SetConstructor(ctx, f, dom->prototypes[kInterfaces[i].proto]->value) < 0) {
+            JS_FreeValue(ctx, f);
+            return -1;
+        }
+        if (JS_DefinePropertyValueStr(ctx, global, kInterfaces[i].name, f,
+                                      JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE) < 0)
+            return -1;
+    }
+    return 0;
+}
+
 int d_classic_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 {
     if (d_style_install(dom, ctx) < 0) return -1;
@@ -293,5 +333,5 @@ int d_classic_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     if (JS_IsException(event)) return -1;
     int result = JS_DefinePropertyValueStr(ctx,event,"MOUSEMOVE",JS_NewInt32(ctx,16),JS_PROP_ENUMERABLE);
     JS_FreeValue(ctx,event);
-    return result;
+    return result < 0 ? -1 : interfaces_install(dom,ctx,global);
 }

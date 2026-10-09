@@ -6,6 +6,19 @@ static void dom_classic_cases(void)
     DomFixture f=fixture_new(NULL);
     if(!fixture_ready(&f)) return;
     dom_script(&f,CLASSIC_ASSERT
+        "var b=document.body,i=document.getElementById('field'),frag=document.createDocumentFragment();"
+        "assert(b instanceof Element&&b instanceof HTMLElement&&b instanceof Node&&document instanceof Document);"
+        "assert(i instanceof HTMLInputElement&&i instanceof Element&&!(b instanceof HTMLInputElement));"
+        "assert(frag instanceof DocumentFragment&&document.createTextNode('t') instanceof CharacterData);"
+        "assert(new Image() instanceof HTMLImageElement&&Image.prototype===HTMLImageElement.prototype);"
+        "assert(Object.getPrototypeOf(b)===HTMLElement.prototype||b instanceof HTMLElement);"
+        "var bad=false;try{new Element()}catch(e){bad=e instanceof TypeError&&e.message==='Illegal constructor'}assert(bad);"
+        "bad=false;try{Element()}catch(e){bad=e instanceof TypeError}assert(bad);"
+        "assert(!Object.keys(window).includes('Element')&&typeof HTMLAnchorElement==='undefined');"
+        "Element.prototype.patched=function(){return 'yes'};assert(b.patched()==='yes'&&i.patched()==='yes');"
+        "delete Element.prototype.patched;",
+        "classic-interface-objects");
+    dom_script(&f,CLASSIC_ASSERT
         "assert(navigator===window.navigator);assert(navigator.appName==='Netscape');"
         "assert(navigator.userAgent==='yonder/1.0 (os64)');"
         "assert(navigator.appVersion==='1.0 (os64)');"
