@@ -125,9 +125,14 @@ button swaps during held presses, disconnect/reconnect, atomic rejection,
 config parsing and startup/save errors. The UI fixture covers device selection,
 Apply/Save/defaults, conflict feedback and larger fonts. Windowed QEMU also verified the third Control Center entry, Save through the
 live kernel interface, independent USB/PS2 settings, and restoration of 2× speed
-and right-primary after reboot using temporary disk overlays. P5 acceptance
-requires the updated kernel, libos64, desktop, mousesettings app and menu.conf; test a saved
-trackball speed across reboot while retaining the dongle mouse's default speed.
+and right-primary after reboot using temporary disk overlays. P5 testing confirmed
+the Control Center entry and comfortable MX Ergo S motion at 2×. Saved trackball
+speed across a P5 reboot and independent dongle-mouse speed remain hardware checks.
+
+Installation requires the updated kernel, libos64, desktop, mousesettings app and
+menu.conf. A customized `/home/menu.conf` replaces `/etc/menu.conf` in full; add
+`item "Mouse Settings" /bin/mousesettings` inside its `menu settings` block and
+reopen Control Center to expose the new tool.
 
 
 Keyboard drivers route keys at arrival, tty by tty.
