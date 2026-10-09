@@ -180,8 +180,15 @@ bool bt_host_scan(bt_host_t *h,uint64_t now)
     }
     return true;
 }
+static bool host_address_equal(uint8_t a_type,const uint8_t a[6],uint8_t b_type,const uint8_t b[6])
+{
+    if(a_type!=b_type) return false;
+    for(unsigned i=0;i<6;i++) if(a[i]!=b[i]) return false;
+    return true;
+}
 bool bt_host_command(bt_host_t *h,const char *p,size_t n,uint64_t now)
 {
+    h->duplicate_slot=0;
     while(n && (*p==' ' || *p=='\t' || *p=='\n' || *p=='\r')) { p++; n--; }
     unsigned slot=0;
     if(n>=7 && p[0]=='s' && p[1]=='l' && p[2]=='o' && p[3]=='t' && p[4]==' ') {
@@ -199,9 +206,15 @@ bool bt_host_command(bt_host_t *h,const char *p,size_t n,uint64_t now)
         bool valid=bt_le_request(&candidate,p,n,now);
         for(unsigned i=0;i<BT_HOST_PEERS && valid;i++) if(i!=slot) {
             const bt_le_t *other=&h->peers[i].le;
-            if(!other->connected || other->address_type!=candidate.address_type) continue;
-            unsigned j=0; while(j<6 && other->peer[j]==candidate.peer[j]) j++;
-            if(j==6) valid=false;
+            const bt_le_bond_t *bond=&other->bond;
+            // A sleeping peer still owns its saved identity. Without an IRK,
+            // retain ownership of its last air address as well.
+            bool duplicate=other->connected && host_address_equal(other->address_type,other->peer,
+                candidate.address_type,candidate.peer);
+            if(bond->valid) duplicate|=host_address_equal(bond->address_type,bond->peer,
+                candidate.address_type,candidate.peer) || (!bond->has_irk &&
+                host_address_equal(bond->last_address_type,bond->last_peer,candidate.address_type,candidate.peer));
+            if(duplicate) { valid=false; h->duplicate_slot=i+1; }
         }
         volatile uint8_t *wipe=(volatile uint8_t *)&candidate;
         for(size_t i=0;i<sizeof(candidate);i++) wipe[i]=0;
@@ -216,6 +229,11 @@ size_t bt_host_status(const bt_host_t *h,char *out,size_t cap)
         h->failed?"failed; reboot required":h->initialized?"ready":"initializing");
     if(n<0) return 0;
     size_t used=(size_t)n<cap?(size_t)n:cap-1;
+    if(h->duplicate_slot && used<cap-1) {
+        n=snprintf(out+used,cap-used,"last command refused: peer belongs to slot %u\n",h->duplicate_slot-1);
+        if(n<0) return used;
+        used+=(size_t)n<cap-used?(size_t)n:cap-used-1;
+    }
     for(unsigned i=0;i<BT_HOST_PEERS && used<cap-1;i++) {
         n=snprintf(out+used,cap-used,"\nslot %u:\n",i);
         if(n<0) break;

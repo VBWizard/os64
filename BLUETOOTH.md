@@ -86,6 +86,12 @@ mapped. Wait for slot 1's `bond storage: saved`, then test trackball off/on and
 host reboot. Keyboard input should continue through trackball pairing and
 reconnection. Test keyboard off/on while moving the trackball as well.
 
+Connection and bonding requests refuse an identity already held by another
+slot's saved bond, including when that device is disconnected. Without an IRK,
+the bond's last air address is also reserved. `/sys/bluetooth/connection` names
+the owning slot after refusal. Use that slot, or explicitly disconnect and
+forget its bond before assigning the device to a different slot.
+
 The same prefix selects policy and lifecycle commands:
 
 ```sh
