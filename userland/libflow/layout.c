@@ -391,17 +391,23 @@ bool flow_replaced_fixed(const flow_style_t *style)
     return style != NULL && width_given(style) && height_given(style);
 }
 
+// A replaced box's size, against a containing block `cbw` wide and `cbh`
+// tall. `cbh` is negative where that height is not definite, and then a
+// percentage height is as if unset (§ 10.5) and the box's own ratio decides
+// it; an absolute box's containing block always has one (§ 10.6.5), so its
+// `height: 100%` is that block's height, not its width times the ratio.
 static Replaced replaced_size(L *l, const os64_html_node_t *node, const flow_style_t *s,
-                              int64_t cbw)
+                              int64_t cbw, int64_t cbh)
 {
     Replaced r = {0, 0, false, false};
     bool w_set = width_given(s);
-    bool h_set = height_given(s);
+    bool h_set = height_given(s) || (s->height.kind == FLOW_LENGTH_PERCENT && cbh >= 0);
     int64_t fw = s->border_width[FLOW_LEFT] + s->border_width[FLOW_RIGHT] +
                  len(s->padding[FLOW_LEFT], cbw) + len(s->padding[FLOW_RIGHT], cbw);
     int64_t fh = s->border_width[FLOW_TOP] + s->border_width[FLOW_BOTTOM] +
                  len(s->padding[FLOW_TOP], cbw) + len(s->padding[FLOW_BOTTOM], cbw);
-    int64_t w = content_of(s, s->width, cbw, fw), h = h_set ? content_of(s, s->height, 0, fh) : 0;
+    int64_t w = content_of(s, s->width, cbw, fw);
+    int64_t h = h_set ? content_of(s, s->height, cbh >= 0 ? cbh : 0, fh) : 0;
     int32_t iw = 0, ih = 0;
     bool known = l->env->replaced_size != NULL &&
                  l->env->replaced_size(l->env->ctx, node, &iw, &ih) && iw >= 0 && ih >= 0;
@@ -517,7 +523,7 @@ static int64_t replaced_own(L *l, const FBox *b, int axis, int64_t cbw, int64_t 
         own.width = replaced_given(&own, 0, across, cbw);
         own.min_width = own.max_width = none;
     }
-    Replaced r = replaced_size(l, b->node, &own, cbw);
+    Replaced r = replaced_size(l, b->node, &own, cbw, -1);
     return axis == 0 ? r.w : r.h;
 }
 
@@ -537,7 +543,7 @@ static int64_t replaced_for(L *l, const FBox *b, int axis, int64_t size, int64_t
         own.height = replaced_given(&own, 1, size, cbw);
         own.min_height = own.max_height = none;
     }
-    Replaced r = replaced_size(l, b->node, &own, cbw);
+    Replaced r = replaced_size(l, b->node, &own, cbw, -1);
     return axis == 0 ? r.h : r.w;
 }
 
@@ -870,7 +876,7 @@ static void segments(L *l, FBox *ifc, int64_t cw, Segs *s)
             const flow_style_t *st = it->style;
             Replaced r = {0, 0, false, false};
             if (it->content == NULL)
-                r = replaced_size(l, it->node, st, cw);
+                r = replaced_size(l, it->node, st, cw, -1);
             if (r.alt) {
                 // The alt text stands where the picture would, as text:
                 // under collapsing white-space its spaces collapse too.
@@ -4075,7 +4081,7 @@ static void grid_layout(L *l, const FStyles *styles, FBox *b, int64_t cx, int64_
             if (width_given)
                 cwid = clamp_width(cs, content_of(cs, cs->width, aw, frame), aw, frame);
             else if (c->kind == FB_REPLACED && a != FLOW_PLACE_STRETCH)
-                cwid = replaced_size(l, c->node, cs, aw).w;
+                cwid = replaced_size(l, c->node, cs, aw, -1).w;
             else if (a == FLOW_PLACE_STRETCH && !ml_auto && !mr_auto)
                 cwid = clamp_width(cs, max64(0, aw - ml - mr - frame), aw, frame);
             else
@@ -4189,7 +4195,11 @@ static void block_at(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t 
     Replaced rep = {0, 0, false, false};
     int64_t forced_w = -1;
     if (b->kind == FB_REPLACED) {
-        rep = replaced_size(l, b->node, s, cbw);
+        rep = replaced_size(l, b->node, s, cbw, -1);
+        if (b->abs_sized) {
+            rep.w = b->abs_w;
+            rep.h = b->abs_h;
+        }
         forced_w = rep.w;
     } else if (b->atom_sized) {
         forced_w = b->atom_w;
@@ -4544,7 +4554,7 @@ static void absolute(L *l, const FStyles *styles, FBox *a, Rect cb)
     Replaced rep = {0, 0, false, false};
     int64_t w = -1, hgt = -1;
     if (replaced) {
-        rep = replaced_size(l, a->node, s, cb.w);
+        rep = replaced_size(l, a->node, s, cb.w, cb.h);
         w = rep.w;
         hgt = rep.h;
     } else if (width_given(s)) {
@@ -4570,6 +4580,12 @@ static void absolute(L *l, const FStyles *styles, FBox *a, Rect cb)
             a->abs_h = hgt;
         }
         a->abs_w = used_w;
+    } else {
+        // A replaced box's size is settled here, where its containing
+        // block's height is known: block() takes both as given.
+        a->abs_w = used_w;
+        a->abs_h_set = true;
+        a->abs_h = hgt;
     }
     a->abs_sized = true;
     a->abs_ml = ml;
@@ -4722,7 +4738,7 @@ static Intr intrinsic(L *l, FBox *b)
         b->content_min = r.min;
         b->content_max = r.max;
     } else if (b->kind == FB_REPLACED) {
-        Replaced rep = replaced_size(l, b->node, s, 0);
+        Replaced rep = replaced_size(l, b->node, s, 0, -1);
         r.min = r.max = rep.w + hframe(b, 0);
         b->content_min = b->content_max = replaced_own(l, b, 0, 0, -1) + hframe(b, 0);
     } else {

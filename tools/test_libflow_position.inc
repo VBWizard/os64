@@ -104,6 +104,25 @@ static void position_layout_cases(void)
         free(got);
     }
 
+    // § 10.6.5: an absolute replaced box's percentage height is its
+    // containing block's, which is always definite — not its width run
+    // through its own ratio. MediaWiki's Vector lays an invisible
+    // `width:100%;height:100%` checkbox over each menu heading; taken
+    // square, it covered the page below and every link on it.
+    cascade_layout_case("positioned: an absolute replaced box's percentage height",
+        "<!doctype html><style>body{margin:0}"
+        ".menu{position:relative;height:40px}"
+        ".over{position:absolute;top:0;left:0;width:100%;height:100%}"
+        ".half{position:absolute;top:0;right:0;height:50%}</style>"
+        "<div class=menu><img class=over><img class=half></div>", 400,
+        "page 400 40\n"
+        "block html 0 0 400 40\n"
+        "  block body 0 0 400 40\n"
+        "    block div 0 0 400 40 positioned\n"
+        "      line 0 0 400 0 base 14\n"
+        "      replaced img 0 0 400 40 positioned\n"
+        "      replaced img 380 0 20 20 positioned\n");
+
     // An absolute box in each corner of a relative parent. The parent is
     // 2 + 3 + 200 + 3 + 2 = 210 across and 110 down; its padding box, the
     // containing block, is at (2, 2), 206 x 106. Right: 2 + 206 - 10 = 198;
