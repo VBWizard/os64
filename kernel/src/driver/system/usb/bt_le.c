@@ -1,5 +1,5 @@
 // Bluetooth Core Vol 3 Parts A/F/H and Vol 4 Part E: single-peer LE central,
-// legacy SMP Passkey Entry/explicit Just Works, and HID keyboard services.
+// legacy SMP Passkey Entry/explicit Just Works, and HID keyboard/mouse services.
 #include "driver/system/usb/bt_le.h"
 #include "strings/sprintf.h"
 
@@ -89,7 +89,7 @@ bool bt_le_request(bt_le_t *s,const char *p,size_t n,uint64_t now)
     if(n==9 && le_equal((const uint8_t *)p,(const uint8_t *)"reconnect",9)) {
         if(!s->bond.valid) return false;
         le_session_clear(s);
-        s->phase=BT_LE_RESET; s->now=now; s->deadline=now+3000;
+        s->phase=s->shared_controller?BT_LE_ADDRESS:BT_LE_RESET; s->now=now; s->deadline=now+3000;
         s->total_deadline=now+150000; s->credits=1;
         s->address_type=s->bond.address_type; s->just_works=!s->bond.authenticated;
         s->bond_reused=true; le_copy(s->peer,s->bond.peer,6); return true;
@@ -115,7 +115,7 @@ bool bt_le_request(bt_le_t *s,const char *p,size_t n,uint64_t now)
     // A bond made over an RPA must acquire a stable identity during distribution.
     if(bond_requested && !le_identity_valid(type,addr) && !le_random_valid(addr,0x40)) return false;
     le_session_clear(s);
-    s->phase=BT_LE_RESET; s->now=now; s->deadline=now+3000;
+    s->phase=s->shared_controller?BT_LE_ADDRESS:BT_LE_RESET; s->now=now; s->deadline=now+3000;
     s->total_deadline=now+150000; s->credits=1; s->address_type=type;
     s->just_works=just_works; s->bond_requested=bond_requested;
     le_copy(s->peer,addr,6);
@@ -124,7 +124,7 @@ bool bt_le_request(bt_le_t *s,const char *p,size_t n,uint64_t now)
 
 void bt_le_reconnect_scan(bt_le_t *s,const bt_scan_t *scan)
 {
-    if(s->phase!=BT_LE_RESET || !s->bond_reused || s->pending || s->stop_requested ||
+    if((s->phase!=BT_LE_RESET && s->phase!=BT_LE_ADDRESS) || !s->bond_reused || s->pending || s->stop_requested ||
        !s->bond.has_irk || scan->phase!=BT_SCAN_DONE) return;
     s->resolve_required=true; s->resolve_count=s->resolve_index=0;
     for(unsigned i=0;i<scan->count && i<BT_SCAN_DEVICES;i++) {
@@ -176,10 +176,13 @@ void bt_le_event(void *context,const uint8_t *e,size_t n)
         s->credits=e[cs?3:2];
         if(!s->pending || le_u16(e+(cs?4:3))!=s->opcode) return;
         if(s->command_done || n<6) { le_bad(s); return; }
-        bool async=s->opcode==0x200d || s->opcode==0x2019;
+        bool async=s->opcode==0x200d || s->opcode==0x2019 || s->opcode==0x0406;
         if(cs!=async) { le_bad(s); return; }
         s->status=e[cs?2:5]; s->command_done=true; s->reply_bytes=0;
-        if(s->status) return;
+        if(s->status) {
+            if(s->opcode==0x200d) s->link_may_active=false;
+            return;
+        }
         size_t wanted=0;
         switch(s->opcode) {
         case 0x1009: wanted=6; break;
@@ -191,10 +194,14 @@ void bt_le_event(void *context,const uint8_t *e,size_t n)
         if(n!=6+wanted) { le_bad(s); return; }
         le_copy(s->reply,e+6,wanted); s->reply_bytes=wanted;
     } else if(e[0]==0x3e && n>=3 && e[2]==1) {
-        if(s->phase!=BT_LE_CREATE && s->phase!=BT_LE_CONNECTING) { le_bad(s); return; }
+        if(s->phase!=BT_LE_CREATE && s->phase!=BT_LE_CONNECTING &&
+           !(s->shared_controller && s->phase==BT_LE_CLEANUP)) { le_bad(s); return; }
         if(n!=21) { le_bad(s); return; }
-        s->status=e[3];
-        if(s->status) {
+        uint8_t connection_status=e[3];
+        if(s->phase!=BT_LE_CLEANUP) s->status=connection_status;
+        if(connection_status) {
+            s->link_may_active=false;
+            if(s->phase==BT_LE_CLEANUP) return;
             le_fail(s,"LE connection failed"); s->retryable=le_retryable_link_status(s->status); return;
         }
         if(e[6]!=0 || e[7]!=s->address_type || !le_equal(e+8,s->peer,6) || le_u16(e+4)>0x0eff) {
@@ -213,11 +220,14 @@ void bt_le_event(void *context,const uint8_t *e,size_t n)
     } else if(e[0]==5) {
         if(n!=6) { le_bad(s); return; }
         if(s->connected && le_u16(e+3)==s->handle) {
+            if(e[2]) { le_fail(s,"controller could not disconnect peer"); return; }
             bool first_error=!s->error;
             bool retry=(bt_le_input_active(s) && (e[5]==8 || e[5]==0x13 || e[5]==0x16)) ||
                 (s->bond_reused && le_retryable_link_status(e[5]));
             s->disconnect_reason=e[5]; s->disconnected_ms=s->now;
-            s->status=e[5]; s->connected=false; s->encrypted=false; s->link_may_active=false;
+            if(s->phase!=BT_LE_CLEANUP) s->status=e[5];
+            s->outstanding=0; s->connected=false; s->encrypted=false; s->link_may_active=false;
+            if(s->shared_controller && s->phase==BT_LE_CLEANUP) return;
             le_fail(s,"peer disconnected");
             // A trailing disconnect must preserve the first failure's policy:
             // timeout may follow either a transient loss or a rejected key.
@@ -316,13 +326,13 @@ static void le_report_next(bt_le_t *s)
         }
         s->report_index++;
     }
-    if(!s->input_value) { le_fail(s,"no supported keyboard input Report Reference/map"); return; }
+    if(!s->input_value) { le_fail(s,"no supported HID input Report Reference/map"); return; }
     s->report_index=0;
     s->phase=s->protocol?BT_LE_PROTOCOL:BT_LE_SUBSCRIBE;
 }
 static void le_subscribe_next(bt_le_t *s)
 {
-    // Subscribe input reports independently of the selected keyboard layout.
+    // Subscribe input reports independently of the selected input layout.
     // Notifications for other value handles remain filtered on receive.
     while(s->report_index<s->report_count) {
         const bt_le_report_char_t *r=&s->report_chars[s->report_index];
@@ -352,7 +362,7 @@ static void le_chars_done(bt_le_t *s)
             le_fail(s,"Protocol Mode is not writable without response"); return;
         }
         s->report_protocol=true; s->phase=BT_LE_REPORT_MAP;
-    } else le_fail(s,"HID keyboard needs boot input or readable Report Map and notifying Report");
+    } else le_fail(s,"HID needs keyboard boot input or readable Report Map and notifying Report");
 }
 static void le_inspection_done(bt_le_t *s)
 {
@@ -373,16 +383,24 @@ static void le_att(bt_le_t *s,const uint8_t *p,size_t n,bt_le_report_t report,vo
         s->rx_notifications++; s->last_notification_handle=le_u16(p+1);
         s->last_notification_bytes=n-3;
         if(bt_le_input_active(s) && s->last_notification_handle==s->input_value) {
-            uint8_t keys[8];
-            if(s->report_protocol) {
-                if(!hid_keyboard_decode_map(&s->report_layout,p+3,n-3,keys)) {
+            bt_le_input_t input={.mouse=s->mouse};
+            if(s->mouse) {
+                // GATT omits the ID octet; the Report Reference selects it.
+                uint8_t wire[21]; size_t prefix=s->mouse_layout.report_id?1:0;
+                wire[0]=s->mouse_layout.report_id; le_copy(wire+prefix,p+3,n-3);
+                if(n-3+prefix!=s->mouse_layout.bytes ||
+                   !hid_mouse_decode(&s->mouse_layout,wire,n-3+prefix,&input.pointer)) {
+                    le_fail(s,"mouse report does not match Report Map"); return;
+                }
+            } else if(s->report_protocol) {
+                if(!hid_keyboard_decode_map(&s->report_layout,p+3,n-3,input.keys)) {
                     le_fail(s,"keyboard report does not match Report Map"); return;
                 }
             } else {
                 if(n!=11) { le_bad(s); return; }
-                le_copy(keys,p+3,8);
+                le_copy(input.keys,p+3,8);
             }
-            s->reports++; report(ctx,keys);
+            s->reports++; report(ctx,&input);
         } else s->rx_ignored_notifications++;
         return;
     }
@@ -461,6 +479,12 @@ static void le_att(bt_le_t *s,const uint8_t *p,size_t n,bt_le_report_t report,vo
            s->report_layout.bytes<=20) {
             s->input_value=r->value; s->ccc=r->ccc;
         }
+        if(!s->input_value && r->type==1 &&
+           hid_mouse_parse(s->report_map,s->report_map_bytes,&s->mouse_layout) &&
+           s->mouse_layout.report_id==r->id &&
+           s->mouse_layout.bytes-(r->id?1:0)<=20) {
+            s->mouse=true; s->input_value=r->value; s->ccc=r->ccc;
+        }
         s->report_index++; le_report_next(s);
     } else if((s->phase==BT_LE_DESCRIPTORS || s->phase==BT_LE_REPORT_DESCRIPTORS) && p[0]==5) {
         if(n<2 || (p[1]!=1 && p[1]!=2)) { le_bad(s); return; }
@@ -500,14 +524,14 @@ static void le_att(bt_le_t *s,const uint8_t *p,size_t n,bt_le_report_t report,vo
     } else if(s->phase==BT_LE_VERIFY_CCC && p[0]==0x0b) {
         if(n!=3) { le_bad(s); return; }
         s->verified_ccc=le_u16(p+1); s->ccc_read=true;
-        if(s->verified_ccc!=1) { le_fail(s,"keyboard notification setting readback mismatch"); return; }
+        if(s->verified_ccc!=1) { le_fail(s,"HID notification setting readback mismatch"); return; }
         if(s->protocol && (s->protocol_properties&2)) s->phase=BT_LE_VERIFY_PROTOCOL;
         else le_inspection_done(s);
     } else if(s->phase==BT_LE_VERIFY_PROTOCOL && p[0]==0x0b) {
         if(n!=2) { le_bad(s); return; }
         s->verified_protocol=p[1]; s->protocol_read=true;
         if(s->verified_protocol!=(s->report_protocol?1:0)) {
-            le_fail(s,"keyboard Protocol Mode readback mismatch"); return;
+            le_fail(s,"HID Protocol Mode readback mismatch"); return;
         }
         le_inspection_done(s);
     } else le_bad(s);
@@ -647,9 +671,48 @@ void bt_le_tick(bt_le_t *s,uint64_t now,bool control_done,bool bulk_done,bool us
     }
     if(s->stop_requested && s->phase!=BT_LE_CLEANUP && s->phase!=BT_LE_FAILED)
         le_fail(s,"disconnected by request");
-    if(s->release_pending) { uint8_t empty[8]={0}; report(ctx,empty); s->release_pending=false; }
+    if(s->release_pending) {
+        bt_le_input_t empty={.mouse=s->mouse}; report(ctx,&empty); s->release_pending=false;
+    }
     if(s->phase==BT_LE_FAILED) return;
     if(s->phase==BT_LE_CLEANUP) {
+        if(s->shared_controller) {
+            // Finish the owned command/USB transfers before cancelling this
+            // peer. Reset belongs to controller recovery, not peer cleanup.
+            if(!control_done || !bulk_done || (s->pending && !s->command_done)) {
+                if(now>=s->deadline) s->phase=BT_LE_FAILED;
+                return;
+            }
+            if(s->pending) {
+                bool cleanup=s->opcode==0x0406 || s->opcode==0x200e;
+                s->pending=false;
+                // Cancel can lose to successful establishment. Wait for that
+                // completion, then disconnect its handle. Unknown Connection
+                // on Disconnect is harmless after confirmed link loss.
+                bool raced=(s->opcode==0x200e && s->status==0x0c) ||
+                    (s->opcode==0x0406 && s->status==2 && !s->connected && !s->link_may_active);
+                if(cleanup && s->status && !raced) { s->phase=BT_LE_FAILED; return; }
+            }
+            if(!s->connected && !s->link_may_active) {
+                s->outstanding=0;
+                if(s->stop_requested) le_session_clear(s);
+                else s->phase=BT_LE_STOPPED;
+                return;
+            }
+            if(now>=s->deadline) { s->phase=BT_LE_FAILED; return; }
+            if(!s->credits) return;
+            uint16_t op=0; uint8_t p[3]={0}; uint8_t n=0;
+            if(s->connected) {
+                if(s->disconnect_sent) return;
+                op=0x0406; le_put(p,s->handle); p[2]=0x13; n=3;
+                s->disconnect_sent=true;
+            } else if(s->link_may_active) {
+                if(s->cancel_sent) return;
+                op=0x200e; s->cancel_sent=true;
+            }
+            s->pending=true; s->command_done=false; s->status=0; s->opcode=op;
+            s->credits=0; command(ctx,op,p,n); return;
+        }
         // HCI Reset cancels initiation and disconnects an established link.
         // USB owns the buffers until both TDs finish, regardless of HCI state.
         if(control_done && bulk_done && s->pending && s->opcode==0x0c03 && s->command_done) {
@@ -812,7 +875,7 @@ void bt_le_tick(bt_le_t *s,uint64_t now,bool control_done,bool bulk_done,bool us
 size_t bt_le_status(const bt_le_t *s,char *out,size_t cap)
 {
     const char *state=s->phase==BT_LE_IDLE?"idle":s->phase==BT_LE_READY?
-        (s->reports?"keyboard ready":"HID configured; awaiting input"):
+        (s->reports?(s->mouse?"mouse ready":"keyboard ready"):"HID configured; awaiting input"):
         s->ready_ms && (s->phase==BT_LE_VERIFY_CCC || s->phase==BT_LE_VERIFY_PROTOCOL)?"inspecting HID settings":
         s->phase==BT_LE_RESOLVE?"resolving peer identity":
         s->phase==BT_LE_STOPPED?"stopped (retry available)":
@@ -831,7 +894,7 @@ size_t bt_le_status(const bt_le_t *s,char *out,size_t cap)
     if(s->passkey_visible) snprintf(code,sizeof(code),"type on the Bluetooth keyboard, then Enter: %06u\n",s->passkey);
     int n=snprintf(out,cap,"state: %s\npeer: %02x:%02x:%02x:%02x:%02x:%02x %s\n"
         "link may be active: %s\nencrypted: %s\nmode: %s; %s\n%s"
-        "key reports: %u\nmalformed packets: %u\nHID service: %04x-%04x input: %04x CCC: %04x\n"
+        "input reports: %u\nmalformed packets: %u\nHID service: %04x-%04x input: %04x CCC: %04x\n"
         "HID mode: %s map handle: %04x bytes: %u input candidates: %u report ID: %u\n"
         "%serror: %s (last command %04x status/reason %02x)\n"
         "write connect|connect-justworks public|random XX:XX:XX:XX:XX:XX, or bond[-justworks] public|random ADDRESS, reconnect, forget, inspect, disconnect\n",
@@ -839,7 +902,7 @@ size_t bt_le_status(const bt_le_t *s,char *out,size_t cap)
         s->link_may_active?"yes":"no",
         s->encrypted?"yes":"no",s->just_works?"legacy Just Works (unauthenticated)":"legacy passkey",
         s->bond_requested || s->bond_reused?"bonded session":"session only (no new bond)",code,s->reports,s->malformed,s->service_start,s->service_end,s->input_value,s->ccc,
-        s->report_protocol?"report":"boot",s->report_map_handle,s->report_map_bytes,s->report_count,s->report_layout.report_id,
+        s->report_protocol?"report":"boot",s->report_map_handle,s->report_map_bytes,s->report_count,s->mouse?s->mouse_layout.report_id:s->report_layout.report_id,
         capabilities,s->error?s->error:"none",s->error_opcode,s->error_status);
     if(n<0 || !cap) return 0;
     size_t used=(size_t)n<cap?(size_t)n:cap-1;

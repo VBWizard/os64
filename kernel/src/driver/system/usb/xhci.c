@@ -30,6 +30,7 @@
 #include "driver/system/usb/bt_scan.h"
 #include "driver/system/usb/bt_le.h"
 #include "driver/system/usb/bt_manager.h"
+#include "driver/system/usb/bt_host.h"
 #include "crypto/wipe.h"
 #include "strings/sprintf.h"
 #include "driver/system/hid_mouse.h"
@@ -184,15 +185,14 @@ typedef struct {
 	bool listening, failed;
 	unsigned packets;
 	bool runtime;
-	bt_scan_t scan;
+	bt_host_t host;
 	// Preserve the last round's timing when LE cleanup clears scan results.
 	struct {
 		uint64_t started_at, finished_at, started_ms, finished_ms;
 		bool valid, finished, failed, le_only;
 	} scan_history;
-	bt_le_t le;
-	bt_manager_t manager;
-	hid_keyboard_t keyboard;
+	hid_keyboard_t keyboards[BT_HOST_PEERS];
+	input_pointer_source_t pointers[BT_HOST_PEERS];
 } xhci_bt_probe_t;
 
 // One controller. The P5 may place its keyboard and mouse on different xHCI
@@ -566,19 +566,21 @@ static void xhci_bt_arm(xhci_bt_probe_t *probe, xhci_bt_endpoint_t *rx)
 	mmio_w32((uint8_t *)s_hc->db, 4 * probe->device->slot, dci);
 }
 
-static void xhci_bt_key_report(void *context, const uint8_t report[8])
+static void xhci_bt_input_report(void *context, unsigned peer, const bt_le_input_t *report)
 {
-	xhci_bt_probe_t *p = context;
-	hid_keyboard_report(&p->keyboard, report);
+    xhci_bt_probe_t *p = context;
+    if (report->mouse) {
+        int32_t wheel = -(int32_t)report->pointer.wheel;
+        if (wheel > 32767) wheel = 32767;
+        input_inject_mouse(&p->pointers[peer], report->pointer.x, report->pointer.y,
+                           report->pointer.buttons, (int16_t)wheel);
+    } else hid_keyboard_report(&p->keyboards[peer], report->keys);
 }
 
 static void xhci_bt_runtime_event(void *context, const uint8_t *event, size_t bytes)
 {
 	xhci_bt_probe_t *p = context;
-	if (!bt_le_quiescent(&p->le))
-		bt_le_event(&p->le, event, bytes);
-	else
-		bt_scan_event(&p->scan, event, bytes);
+	bt_host_event(&p->host, event, bytes);
 	crypto_wipe(p->rx[0].stream.bytes, sizeof(p->rx[0].stream.bytes));
 }
 
@@ -632,8 +634,8 @@ static bool xhci_bt_transfer(xhci_trb_t *ev, uint32_t slot, uint32_t dci, uint8_
 				bt_hci_feed(&rx->stream, xhci_bt_runtime_event, probe, rx->buffer,
 				            rx->endpoint.packet_bytes - residual);
 			else
-				bt_le_receive(&probe->le, rx->buffer, rx->endpoint.packet_bytes - residual,
-				              xhci_bt_key_report, probe);
+				bt_host_receive(&probe->host, rx->buffer, rx->endpoint.packet_bytes - residual,
+				              xhci_bt_input_report, probe);
 			crypto_wipe(rx->buffer, rx->endpoint.packet_bytes);
 			rx->rearm_pending = true;
 			return true;
@@ -1037,8 +1039,11 @@ static void xhci_ax210_bringup(xhci_device_t *dev, const uint8_t *cfg, uint16_t 
 			s_hc->bluetooth = probe;
 			s_hc->bluetooth.device = &s_hc->bluetooth_device;
 			s_hc->bluetooth.runtime = true;
-			s_hc->bluetooth.keyboard.name = "bluetooth";
-			s_hc->bluetooth.keyboard.debug = DEBUG_USB;
+			bt_host_init(&s_hc->bluetooth.host, kTicksSinceStart * 1000 / TICKS_PER_SECOND);
+			for (unsigned i = 0; i < BT_HOST_PEERS; i++) {
+				s_hc->bluetooth.keyboards[i].name = "bluetooth";
+				s_hc->bluetooth.keyboards[i].debug = DEBUG_USB;
+			}
 			s_hc->bt_probe = &s_hc->bluetooth;
 			s_bluetooth_hc = s_hc;
 			printd(DEBUG_USB, "xhci: AX210 slot %u retained for runtime discovery\n", dev->slot);
@@ -1121,84 +1126,61 @@ static void xhci_bt_runtime_poll(void)
 			xhci_bt_arm(p, &p->rx[i]);
 		}
 	}
-	bool usb_failed = p->failed || (!p->tx_done && kTicksSinceStart >= p->deadline) ||
-	    (s_hc->control_slot == p->device->slot &&
-	    s_hc->xfer_done && (s_hc->xfer_cc != TRB_CC_SUCCESS ||
-	    ((p->scan.pending || p->le.pending) && s_hc->xfer_actual != 3u + p->tx.buffer[514])));
-	bool usb_done = s_hc->control_slot != p->device->slot || s_hc->xfer_done;
-	if (!bt_le_quiescent(&p->le)) {
-		bt_le_phase_t before = p->le.phase;
-		bt_le_tick(&p->le, kTicksSinceStart * 1000 / TICKS_PER_SECOND,
-		           usb_done, p->tx_done, usb_failed, xhci_bt_runtime_send,
-		           xhci_bt_acl_send, xhci_bt_key_report, p);
-		bt_manager_observe(&p->manager, &p->le, kTicksSinceStart * 1000 / TICKS_PER_SECOND);
-		if (usb_done && !p->le.pending) crypto_wipe(p->tx.buffer + 512, 258);
-		if (p->tx_done) crypto_wipe(p->tx.buffer, 512);
-		if (bt_le_input_active(&p->le)) hid_keyboard_tick(&p->keyboard);
-		if (p->le.phase != before)
-			printd(DEBUG_USB, "xhci: AX210 LE phase=%u error=%s opcode=%04x status=%02x\n",
-			       p->le.phase, p->le.error ? p->le.error : "none", p->le.error_opcode, p->le.error_status);
-		// Successful LE cleanup resets the controller. Clear the old
-		// discovery state, whose event masks no longer describe the hardware.
-		if (bt_le_quiescent(&p->le)) p->scan = (bt_scan_t){0};
-	} else {
-		bt_scan_phase_t phase = p->scan.phase;
-		if (phase == BT_SCAN_RESET && !p->scan.pending &&
-		    (!p->scan_history.valid || p->scan_history.finished)) {
-			p->scan_history.started_at = kSystemCurrentTime;
-			p->scan_history.started_ms = kTicksSinceStart * 1000 / TICKS_PER_SECOND;
-			p->scan_history.valid = true;
-			p->scan_history.finished = p->scan_history.failed = false;
-			p->scan_history.le_only = p->scan.le_only;
-		}
-		bt_scan_tick(&p->scan, kTicksSinceStart * 1000 / TICKS_PER_SECOND,
-		             usb_done, usb_failed, xhci_bt_runtime_send, p);
-		if (p->scan.phase != phase && (p->scan.phase == BT_SCAN_DONE ||
-		    p->scan.phase == BT_SCAN_STOPPED || p->scan.phase == BT_SCAN_FAILED)) {
-			if (p->scan_history.valid && !p->scan_history.finished) {
-				p->scan_history.finished_at = kSystemCurrentTime;
-				p->scan_history.finished_ms = kTicksSinceStart * 1000 / TICKS_PER_SECOND;
-				p->scan_history.finished = true;
-				p->scan_history.failed = p->scan.phase != BT_SCAN_DONE;
-			}
-			printd(DEBUG_USB, "xhci: AX210 discovery %s devices=%u error=%s opcode=%04x status=%02x\n",
-			       p->scan.phase == BT_SCAN_DONE ? "complete" : "failed", p->scan.count,
-			       p->scan.error ? p->scan.error : "none", p->scan.error_opcode, p->scan.error_status);
-		}
-	}
-	// Policy performs no I/O. Advance handoffs here under the USB poll lock so
-	// discovery completion and retry deadlines do not wait for the storage worker.
-	bt_manager_step(&p->manager, &p->le, &p->scan, kTicksSinceStart * 1000 / TICKS_PER_SECOND);
+    bool usb_failed = p->failed || (!p->tx_done && kTicksSinceStart >= p->deadline) ||
+        (s_hc->control_slot == p->device->slot && s_hc->xfer_done &&
+        (s_hc->xfer_cc != TRB_CC_SUCCESS ||
+        (p->host.owner && s_hc->xfer_actual != 3u + p->tx.buffer[514])));
+    bool usb_done = s_hc->control_slot != p->device->slot || s_hc->xfer_done;
+    bt_scan_t *scan = &p->host.scan;
+    bool scanning = !bt_scan_quiescent(scan) && scan->phase != BT_SCAN_FAILED;
+    if (scanning && (!p->scan_history.valid || p->scan_history.finished)) {
+        p->scan_history.started_at = kSystemCurrentTime;
+        p->scan_history.started_ms = kTicksSinceStart * 1000 / TICKS_PER_SECOND;
+        p->scan_history.valid = true;
+        p->scan_history.finished = p->scan_history.failed = false;
+        p->scan_history.le_only = scan->le_only;
+    }
+    bt_le_phase_t before[BT_HOST_PEERS];
+    for (unsigned i = 0; i < BT_HOST_PEERS; i++) before[i] = p->host.peers[i].le.phase;
+    bt_host_tick(&p->host, kTicksSinceStart * 1000 / TICKS_PER_SECOND,
+                 usb_done, p->tx_done, usb_failed, xhci_bt_runtime_send,
+                 xhci_bt_acl_send, xhci_bt_input_report, p);
+    if (p->scan_history.valid && !p->scan_history.finished &&
+        (bt_scan_quiescent(scan) || scan->phase == BT_SCAN_FAILED)) {
+        p->scan_history.finished_at = kSystemCurrentTime;
+        p->scan_history.finished_ms = kTicksSinceStart * 1000 / TICKS_PER_SECOND;
+        p->scan_history.finished = true;
+        p->scan_history.failed = scan->phase != BT_SCAN_DONE;
+    }
+    for (unsigned i = 0; i < BT_HOST_PEERS; i++) {
+        const bt_le_t *s = &p->host.peers[i].le;
+        if (s->phase != before[i])
+            printd(DEBUG_USB, "xhci: AX210 slot %u LE phase=%u error=%s opcode=%04x status=%02x\n",
+                   i, s->phase, s->error ? s->error : "none", s->error_opcode, s->error_status);
+    }
+    if (usb_done && !p->host.owner) crypto_wipe(p->tx.buffer + 512, 258);
+    if (p->tx_done) crypto_wipe(p->tx.buffer, 512);
+    for (unsigned i = 0; i < BT_HOST_PEERS; i++)
+        if (bt_le_input_active(&p->host.peers[i].le)) hid_keyboard_tick(&p->keyboards[i]);
 }
 
 bool xhci_bluetooth_scan(void)
 {
-	if (__sync_lock_test_and_set(&s_poll_busy, 1)) return false;
-	bool ok = s_bluetooth_hc && !s_bluetooth_hc->bluetooth.failed &&
-	    s_bluetooth_hc->bluetooth.manager.loaded &&
-	    bt_le_quiescent(&s_bluetooth_hc->bluetooth.le) &&
-	    bt_scan_start(&s_bluetooth_hc->bluetooth.scan, kTicksSinceStart * 1000 / TICKS_PER_SECOND);
-	if (ok) {
-		// Leave time to inspect a manual scan and select a peer before the
-		// background manager starts another round and occupies the controller.
-		s_bluetooth_hc->bluetooth.manager.scan_owned = false;
-		s_bluetooth_hc->bluetooth.manager.next_attempt = kTicksSinceStart * 1000 / TICKS_PER_SECOND + 60000;
-	}
-	__sync_lock_release(&s_poll_busy);
-	return ok;
+    if (__sync_lock_test_and_set(&s_poll_busy, 1)) return false;
+    bool ok = s_bluetooth_hc && !s_bluetooth_hc->bluetooth.failed &&
+        bt_host_scan(&s_bluetooth_hc->bluetooth.host, kTicksSinceStart * 1000 / TICKS_PER_SECOND);
+    __sync_lock_release(&s_poll_busy);
+    return ok;
 }
 
 bool xhci_bluetooth_connection(const char *data, size_t bytes)
 {
-	if (__sync_lock_test_and_set(&s_poll_busy, 1)) return false;
-	xhci_bt_probe_t *p = s_bluetooth_hc ? &s_bluetooth_hc->bluetooth : NULL;
-	// Forget and storage/policy commands do not touch USB. The LE parser still
-	// refuses another session when transport failure leaves it in FAILED.
-	bool ok = p && (!p->failed || p->le.phase == BT_LE_FAILED) &&
-	    bt_manager_command(&p->manager, &p->le, &p->scan, data, bytes,
-	                       kTicksSinceStart * 1000 / TICKS_PER_SECOND);
-	__sync_lock_release(&s_poll_busy);
-	return ok;
+    if (__sync_lock_test_and_set(&s_poll_busy, 1)) return false;
+    xhci_bt_probe_t *p = s_bluetooth_hc ? &s_bluetooth_hc->bluetooth : NULL;
+    bool ok = p && bt_host_command(&p->host, data, bytes,
+                                   kTicksSinceStart * 1000 / TICKS_PER_SECOND);
+    __sync_lock_release(&s_poll_busy);
+    return ok;
 }
 
 void xhci_bluetooth_start_manager(void)
@@ -1218,29 +1200,38 @@ void xhci_bluetooth_maintain(void)
 	if (!p || !p->runtime) {
 		__sync_lock_release(&s_poll_busy); __sync_lock_release(&s_bond_io_busy); return;
 	}
-	bt_manager_t *m = &p->manager;
-	bt_manager_step(m, &p->le, &p->scan, now);
+    bt_host_policy(&p->host, now);
+    unsigned slot;
+    for (slot = 0; slot < BT_HOST_PEERS; slot++) {
+        bt_manager_t *candidate = &p->host.peers[slot].manager;
+        if (!candidate->loaded || (candidate->dirty && now >= candidate->next_save)) break;
+    }
+    if (slot == BT_HOST_PEERS) {
+        __sync_lock_release(&s_poll_busy); __sync_lock_release(&s_bond_io_busy); return;
+    }
+    bt_host_peer_t *peer = &p->host.peers[slot];
+    bt_manager_t *m = &peer->manager;
 	bool loading = !m->loaded;
 	if (!loading && (!m->dirty || now < m->next_save)) {
 		__sync_lock_release(&s_poll_busy); __sync_lock_release(&s_bond_io_busy); return;
 	}
 	uint64_t generation = m->generation;
-	bt_le_bond_t snapshot = p->le.bond;
+	bt_le_bond_t snapshot = peer->le.bond;
 	bool automatic = m->automatic;
 	__sync_lock_release(&s_poll_busy);
-	bool good = loading ? bt_bond_load(&snapshot, &automatic) : bt_bond_save(&snapshot, automatic);
+	bool good = loading ? bt_bond_load_slot(slot, &snapshot, &automatic) : bt_bond_save_slot(slot, &snapshot, automatic);
 	while (__sync_lock_test_and_set(&s_poll_busy, 1)) __asm__ volatile("pause");
 	now = kTicksSinceStart * 1000 / TICKS_PER_SECOND;
-	bt_manager_observe(m, &p->le, now);
+	bt_manager_observe(m, &peer->le, now);
 	if (loading) {
 		m->loaded = true;
 		if (good && m->generation == generation) {
-			p->le.bond = snapshot; m->automatic = automatic;
+			peer->le.bond = snapshot; m->automatic = automatic;
 		}
 		m->storage_error = good ? NULL : "saved bond unavailable or invalid";
 		// Start discovery as soon as the restored bond is published. Commands
 		// are submitted by USB polling; no additional worker sleep is needed.
-		bt_manager_step(m, &p->le, &p->scan, now);
+		bt_host_policy(&p->host, now);
 	} else {
 		if (good && m->generation == generation) m->dirty = false;
 		m->storage_error = good ? NULL : "save failed; RAM bond retained";
@@ -1295,11 +1286,10 @@ size_t xhci_bluetooth_read(char *out, size_t capacity, unsigned file)
 		int written = snprintf(out, capacity, "No operational AX210 available\n");
 		n = written < 0 ? 0 : (size_t)written < capacity ? (size_t)written : capacity - 1;
 	} else {
-		const bt_scan_t *scan = &s_bluetooth_hc->bluetooth.scan;
-		n = file == 2 ? bt_le_status(&s_bluetooth_hc->bluetooth.le, out, capacity) :
+		const bt_scan_t *scan = &s_bluetooth_hc->bluetooth.host.scan;
+		n = file == 2 ? bt_host_status(&s_bluetooth_hc->bluetooth.host, out, capacity) :
 		    file == 1 ? bt_scan_devices(scan, out, capacity) : bt_scan_status(scan, out, capacity);
-		if (file == 2 && n < capacity - 1)
-			n += bt_manager_status(&s_bluetooth_hc->bluetooth.manager, out + n, capacity - n);
+
 		if (file == 0 && n < capacity - 1)
 			n += xhci_bt_scan_history(&s_bluetooth_hc->bluetooth, out + n, capacity - n);
 	}
