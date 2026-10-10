@@ -442,6 +442,9 @@ typedef struct Page {
     // same one again records nothing more.
     int32_t unasked, unasked_cap;
     uint64_t *unasked_seen;
+    // The last picture came in and moved the page: the record is written
+    // once the page is laid out again (pictures_settle).
+    bool record_owed;
     size_t kept_bytes, picture_url_bytes;
     // The form whose reply this is, when the reply was to a POST: what
     // Reload sends again. Its url is NULL otherwise.
@@ -2862,6 +2865,13 @@ static void pictures_start(Page *p)
         os64_free(p->bg_of);
         p->pic_of = p->bg_of = NULL;
         p->nimage_map = p->nbackground_map = 0;
+        // None of the page's pictures is gathered: one line says so.
+        yonder_diag_failed_seen(p->diag, "picture",
+                                "the page's pictures: no memory to gather them");
+        if (p == &g.page)
+            badge_follow();
+        if (p->waiting == 0)
+            diag_pictures_in(p);
         return;
     }
     os64_free(p->pic_of);
@@ -2948,18 +2958,13 @@ static bool picture_unasked(Page *p, const char *url, const char *written,
     const char *addr = url != NULL ? url : written != NULL ? written : "";
     if (p->diag == NULL || !unasked_first(p, addr))
         return false;
-    // The scheme as written, letters before a colon: a `data:` address is
-    // no URL the parser takes, and is the case most worth counting.
-    char scheme[16];
-    size_t n = 0;
-    while (addr[n] != '\0' && addr[n] != ':' && n + 1 < sizeof(scheme)) {
-        scheme[n] = addr[n];
-        n++;
-    }
-    scheme[n] = '\0';
-    bool named = addr[n] == ':' && n > 1;
-    bool fetched = os64_streq(scheme, "http") || os64_streq(scheme, "https") ||
-                   os64_streq(scheme, "file");
+    // The scheme as written, by the URL grammar (os64_url_scheme_of): a
+    // `data:` address is no URL the parser takes, and is the case most
+    // worth counting.
+    char scheme[OS64_URL_SCHEME_MAX];
+    bool named = os64_url_scheme_of(addr, scheme, sizeof(scheme));
+    bool fetched = named && (os64_streq(scheme, "http") || os64_streq(scheme, "https") ||
+                             os64_streq(scheme, "file"));
     char line[OS64_FETCH_URL_MAX + 96];
     if (named && !fetched) {
         yonder_diag_missing(p->diag, "picture-scheme", scheme, 1);
@@ -3103,6 +3108,10 @@ static void pictures_settle(void)
         }
         if (now_ok)
             relayout(true);
+    }
+    if (g.page.record_owed && !g.pictures_moved && g.page.waiting == 0) {
+        g.page.record_owed = false;
+        diag_pictures_in(&g.page);
     }
     if (due != g.settle_due) {
         g.settle_due = due;
@@ -4946,8 +4955,15 @@ static void reaped(os64_work_id_t id, void *job, void *product)
         picture_arrived(job, product);
         yonder_picture_release(job, product);
         pictures_feed(&g.page);
-        if (waiting > 0 && g.page.waiting == 0)
-            diag_pictures_in(&g.page);
+        // A last picture that moves the page is written for once the page
+        // has been laid out again (pictures_settle), so the record says
+        // what that layout came to.
+        if (waiting > 0 && g.page.waiting == 0) {
+            if (g.pictures_moved)
+                g.page.record_owed = true;
+            else
+                diag_pictures_in(&g.page);
+        }
         return;
     }
     if (*(const uint32_t *)job == YONDER_JOB_SHEET) {

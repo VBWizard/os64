@@ -353,7 +353,10 @@ each was a page dying on something that browsers have had since the 2000s.
   rebuild or a layout meets it (a set of them, `unasked_first`): one in a
   scheme nothing here fetches is `MISSING picture-scheme data`, counted,
   and an address that was refused is `FAILED picture` as written, with
-  the refusal. Met with no picture out, it writes the record then. The
+  the refusal. Met with no picture out, it writes the record then. A
+  last picture that moves the page is written for after the page is laid
+  out again (`record_owed`, `pictures_settle`), so the record says what
+  that layout came to. The
   `pictures:` line counts those (`not asked for`) and the ones a page left
   before they arrived (`still coming`). A layout that stopped partway is a
   condition, so it is one `FAILED layout` however often the file is

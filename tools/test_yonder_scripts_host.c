@@ -3329,6 +3329,7 @@ static void diag_picture_workerless_case(void) {
     yonder_picture_t *whole=os64_calloc(1,sizeof(*whole));
     last->kind=YONDER_JOB_PICTURE; last->index=0; last->generation=g.page_serial;
     whole->status=OS64_IMAGE_OK;
+    g.page.pics[0].moves=false;     /* sized: its arrival moves nothing */
     reaped(0,last,whole);
     check(g.page.pics[0].state==PIC_SHOWN && !strcmp(g.badge_text,"MISSING 1"),
         "diag: the rewrite when the last picture is in tells the badge");
@@ -3361,13 +3362,13 @@ static void diag_picture_workerless_case(void) {
  * stopped partway is one standing failure however often it is written. */
 static void diag_picture_unasked_case(void) {
     probe_page("<img src='data:image/png;base64,iVBORw0KGgo='><img src='http://[bad'>"
-        "<img src=file:///slow.png>",true);
+        "<img src=file:///slow.png><img src='x:asset'>",true);
     g.page.diag=yonder_diag_new("http://u.test/",1,0);
     pictures_start(&g.page);        /* no workers: slow.png is refused too */
     char text[4096]; yonder_diag_render(g.page.diag,text,sizeof(text));
     check(has(text,"MISSING picture-scheme data (1)") && has(text,"FAILED picture: http://[bad: the address was refused (") &&
-          has(text,"not asked for") && g.page.unasked==2,
-        "diag: a picture refused before the table is on the record, by its scheme or its refusal");
+          has(text,"MISSING picture-scheme x (1)") && has(text,"not asked for") && g.page.unasked==3,
+        "diag: a picture refused before the table is on the record, by its scheme (one letter is one) or its refusal");
     /* Met with nothing out, the record is written then; met again (a
      * script's rebuild), it is the same picture and records nothing more. */
     char name[64]; yonder_diag_file_name(g.page.diag,name,sizeof(name));
@@ -3375,14 +3376,14 @@ static void diag_picture_unasked_case(void) {
         "diag: a refusal met with no picture out writes the record");
     pictures_start(&g.page);
     yonder_diag_render(g.page.diag,text,sizeof(text));
-    check(g.page.unasked==2 && has(text,"MISSING picture-scheme data (1)") &&
+    check(g.page.unasked==3 && has(text,"MISSING picture-scheme data (1)") &&
           has(text,"FAILED picture: http://[bad: the address was refused (the address it names is not one that resolves) (1)"),
         "diag: a refused picture met again is the same picture");
     /* Left with one still out: counted, not failed. */
     g.page.pics[0].state=PIC_WAITING;
     diag_observe(&g.page,"when the page was left");
     yonder_diag_render(g.page.diag,text,sizeof(text));
-    check(has(text,"0 past the memory kept, 1 still coming, 2 not asked for\n"),
+    check(has(text,"0 past the memory kept, 1 still coming, 3 not asked for\n"),
         "diag: a picture still coming when the page is left is counted so");
     yonder_diag_failed_seen(g.page.diag,"layout","stopped");
     yonder_diag_failed_seen(g.page.diag,"layout","stopped");
@@ -3412,6 +3413,29 @@ static void diag_css_unasked_case(void) {
     char text[2048]; yonder_diag_render(g.page.diag,text,sizeof(text));
     check(has(text,"MISSING picture-scheme data (1)") && g.page.unasked==1,
         "diag: a sheet's picture refused before the table is on the record, once");
+    yonder_diag_free(g.page.diag); g.page.diag=NULL;
+    probe_drop();
+}
+
+/* A last picture that moves the page is written for after the page is laid
+ * out again, so the record says what that layout came to. */
+static void diag_picture_moves_case(void) {
+    probe_page("<img src=file:///grows.png>",true);
+    pictures_start(&g.page);
+    g.page.diag=yonder_diag_new("http://m.test/",1,0);
+    g.page.pics[0].state=PIC_WAITING; g.page.waiting=g.page.in_flight=1;
+    g.pictures_moved=true;
+    yonder_picture_job_t *job=os64_calloc(1,sizeof(*job));
+    yonder_picture_t *got=os64_calloc(1,sizeof(*got));
+    job->kind=YONDER_JOB_PICTURE; job->index=0; job->generation=g.page_serial;
+    got->status=OS64_IMAGE_OK;
+    reaped(0,job,got);
+    char name[64]; yonder_diag_file_name(g.page.diag,name,sizeof(name));
+    check(g.page.record_owed && !has(diag_file("/tmp/diag",name),"when its pictures were in"),
+        "diag: the last picture that moves the page waits for its layout to be written");
+    pictures_settle();
+    check(!g.page.record_owed && has(diag_file("/tmp/diag",name),"\nwritten: when its pictures were in\n"),
+        "diag: once the page is laid out again, the record is written");
     yonder_diag_free(g.page.diag); g.page.diag=NULL;
     probe_drop();
 }
@@ -3634,6 +3658,7 @@ static void diag_cases(void) {
     diag_picture_workerless_case();
     diag_picture_unasked_case();
     diag_css_unasked_case();
+    diag_picture_moves_case();
     diag_long_source_case();
     diag_tokens_exclusive();
     /* Setting absent: no file, while the badge still counts. */
