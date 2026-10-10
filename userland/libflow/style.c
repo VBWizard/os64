@@ -1550,7 +1550,7 @@ static int32_t pick(const garb_val_t *v, const char *const *words, int32_t n)
     return -1;
 }
 
-static bool author_display(const garb_val_t *v, flow_display_t *out)
+static bool author_display(const garb_val_t *v, flow_display_t *out, bool *flow_root)
 {
     static const char *const words[] = {
         "none", "block", "inline", "inline-block", "list-item", "table", "inline-table",
@@ -1573,6 +1573,7 @@ static bool author_display(const garb_val_t *v, flow_display_t *out)
     if (i < 0)
         return false;
     *out = as[i];
+    *flow_root = os64_streq(words[i], "flow-root");
     return true;
 }
 
@@ -1751,7 +1752,10 @@ static void take(Spec *dst, const Spec *src, garb_prop_t prop)
     flow_style_t *d = &dst->s;
     const flow_style_t *s = &src->s;
     switch (prop) {
-    case GARB_DISPLAY: d->display = s->display; break;
+    case GARB_DISPLAY:
+        d->display = s->display;
+        d->flow_root = s->flow_root;
+        break;
     case GARB_COLOR: d->color = s->color; break;
     case GARB_BACKGROUND_COLOR:
         d->has_background = s->has_background;
@@ -2444,7 +2448,7 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
     garb_prop_t p = set->prop;
     int32_t i;
     switch (p) {
-    case GARB_DISPLAY: author_display(v, &s->display); break;
+    case GARB_DISPLAY: author_display(v, &s->display, &s->flow_root); break;
     case GARB_COLOR:
         if (v->kind == GARB_V_COLOR && v->color.current)
             s->color = a->parent != NULL ? a->parent->color : a->c->env->ink;
@@ -2905,14 +2909,6 @@ static flow_length_t resolve(Len l, flow_unit_t font, flow_length_t unset)
     return unset;
 }
 
-// What positioning does to the rest of a style (CSS 2.1 § 9.7), once every
-// origin has spoken. A face asking for the page as it reads in document
-// order (flow_env_t.static_only) gets every box static, and nothing here
-// fires. A box that leaves the flow (f_out_of_flow) is BLOCKIFIED — laid
-// out as the block it computes to, its float none — and keeps one bit of
-// the display it was given (flow_style_t.specified_inline); a fixed one is
-// in the flow until its slice, and keeps the display the page gave it, or
-// a fixed span in a link would split its paragraph.
 // CSS 2.1 § 9.7's table, and Display 3's blockification: the block-level
 // display an inline-level one becomes, keeping the one bit of the old
 // (flow_style_t.specified_inline). A box that makes none keeps its display.
@@ -2942,22 +2938,34 @@ static bool blockify(flow_style_t *s)
         s->display = FLOW_DISPLAY_BLOCK;
         break;
     }
-    s->float_side = FLOW_FLOAT_NONE;
     return true;
 }
 
+// What positioning does to the rest of a style (CSS 2.1 § 9.7), once every
+// origin has spoken. A face asking for the page as it reads in document
+// order (flow_env_t.static_only) gets every box static and none floated
+// (FLOATS.md, Ruling 1). Position wins over float: a box that leaves the
+// flow positioned (f_out_of_flow) floats nowhere. It, and a float, are
+// BLOCKIFIED — laid out as the block they compute to — keeping one bit of
+// the display they were given (flow_style_t.specified_inline). A float on
+// a box that makes none, or makes no box of its own, is no float.
 static void positioning(const Ctx *c, Spec *sp)
 {
     flow_style_t *s = &sp->s;
-    if (c->env->static_only)
+    if (c->env->static_only) {
         s->position = FLOW_POSITION_STATIC;
+        s->float_side = FLOW_FLOAT_NONE;
+    }
     if (f_out_of_flow(s))
-        (void)blockify(s);
+        s->float_side = FLOW_FLOAT_NONE;
+    if ((f_out_of_flow(s) || s->float_side != FLOW_FLOAT_NONE) && !blockify(s))
+        s->float_side = FLOW_FLOAT_NONE;
 }
 
 // `item`: the element's box is its parent's flex or grid item, and is
 // blockified (Flexbox 1 § 4, Grid 2 § 6) — as an out-of-flow one already
-// was.
+// was — and floats nowhere (CSS 2.1 § 9.7's float row does not apply to an
+// item: the container places it).
 static void finish(const Ctx *c, Spec *sp, const flow_style_t *parent, bool item)
 {
     flow_style_t *s = &sp->s;
@@ -2991,6 +2999,8 @@ static void finish(const Ctx *c, Spec *sp, const flow_style_t *parent, bool item
         s->inset[i] = resolve(sp->inset[i], s->font_size, automatic);
         s->legacy_clip[i] = resolve(sp->clip[i], s->font_size, automatic);
     }
+    if (item)
+        s->float_side = FLOW_FLOAT_NONE;
     positioning(c, sp);
     if (item && !f_out_of_flow(s))
         (void)blockify(s);
@@ -3112,12 +3122,12 @@ static FStyled *style_element(Ctx *c, const os64_html_node_t *n)
 }
 
 // Whether a child makes its parent hold an IN-FLOW block: it is block-level
-// itself, or it is inline (or makes no box) and holds one inside. An
-// out-of-flow box is neither — no formatting context holds it — so an
-// absolute badge inside an `<a>` splits nothing round it.
+// itself, or it is inline (or makes no box) and holds one inside. A box
+// that leaves the flow (f_leaves_flow) is neither, so an absolute badge or
+// a floated picture inside an `<a>` splits nothing round it.
 static bool contributes_block(const FStyled *child)
 {
-    if (f_out_of_flow(&child->style))
+    if (f_leaves_flow(&child->style))
         return false;
     switch (child->style.display) {
     case FLOW_DISPLAY_NONE: case FLOW_DISPLAY_INLINE_BLOCK: case FLOW_DISPLAY_INLINE_FLEX:

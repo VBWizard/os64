@@ -187,10 +187,14 @@ typedef struct {
 // is all or nothing, laid out once its containing block is finished, so a
 // partial tree can hold boxes after where one of those would be; the
 // relations are asserted without them, and a placed one is held only to
-// being where it is.
+// being where it is. So is a float (FLOATS.md § Proof): one met on a line
+// hangs under its context after all of the context's lines, but is laid
+// out as its line is built, so a tree cut in a later line holds it where
+// the whole one holds that line.
 static bool out_of_flow_box(const flow_box_t *b)
 {
-    return b->positioned && b->style->position == FLOW_POSITION_ABSOLUTE;
+    return (b->positioned && b->style->position == FLOW_POSITION_ABSOLUTE) ||
+           b->floated != FLOW_FLOAT_NONE;
 }
 
 static void flatten(Flat *f, const flow_box_t *b, int32_t parent)
@@ -260,10 +264,10 @@ static bool unfinished_within(const flow_box_t *b)
     return false;
 }
 
-// Relation (b) for the out-of-flow boxes the in-flow walk left out: one
-// placed whole, under no unfinished table or line, is where the whole
-// layout puts it — laid out once its containing block was finished, it
-// does not move after.
+// Relation (b) for the out-of-flow boxes and floats the in-flow walk left
+// out: one placed whole, under no unfinished table or line, is where the
+// whole layout puts it — laid out once its containing block was finished,
+// or placed once the margins above it resolved, it does not move after.
 // A box whose children's geometry comes from the children it has: a
 // table's columns from its cells, a line's from its pieces, a flex or grid
 // container's items from each other. Unfinished, what it holds may be
@@ -277,17 +281,24 @@ static bool sized_by_its_children(const flow_box_t *b)
 }
 
 static void placed_out_of_flow_stay(const flow_box_t *b, bool exempt, const flow_tree_t *whole,
-                                    bool *same, size_t *compared)
+                                    bool *same, size_t *compared, char *detail, size_t cap)
 {
     if (out_of_flow_box(b) && !exempt && !unfinished_within(b)) {
         const flow_box_t *twin = flow_box_for(whole, b->node);
-        *same &= twin != NULL && twin->rect.x == b->rect.x && twin->rect.y == b->rect.y &&
-                 twin->rect.w == b->rect.w && twin->rect.h == b->rect.h;
+        bool here = twin != NULL && twin->rect.x == b->rect.x && twin->rect.y == b->rect.y &&
+                    twin->rect.w == b->rect.w && twin->rect.h == b->rect.h;
+        if (!here && *same)
+            snprintf(detail, cap, "%s at %d %d %d %d, whole at %d %d %d %d",
+                     b->node != NULL && b->node->name != NULL ? b->node->name : "-",
+                     b->rect.x, b->rect.y, b->rect.w, b->rect.h,
+                     twin != NULL ? twin->rect.x : -1, twin != NULL ? twin->rect.y : -1,
+                     twin != NULL ? twin->rect.w : -1, twin != NULL ? twin->rect.h : -1);
+        *same &= here;
         (*compared)++;
     }
     exempt |= b->unfinished && sized_by_its_children(b);
     for (const flow_box_t *c = b->first; c != NULL; c = c->next)
-        placed_out_of_flow_stay(c, exempt, whole, same, compared);
+        placed_out_of_flow_stay(c, exempt, whole, same, compared, detail, cap);
 }
 
 // How far the whole tree reaches, out-of-flow boxes and all.
@@ -372,8 +383,10 @@ static void layout_relation_sweep(const char *what, const char *html, int32_t wi
             expect(name, same, NULL);
             snprintf(name, sizeof(name), "sweep %zu: (b) a placed out-of-flow box stays", at);
             bool stays = true;
-            placed_out_of_flow_stay(flow_root(t), false, whole, &stays, &compared);
-            expect(name, stays, NULL);
+            detail[0] = '\0';
+            placed_out_of_flow_stay(flow_root(t), false, whole, &stays, &compared, detail,
+                                    sizeof(detail));
+            expect(name, stays, detail);
             snprintf(name, sizeof(name), "sweep %zu: (c) the unfinished lead to the last", at);
             bool path = true;
             for (size_t i = 0; i < p.n; i++) {
@@ -545,6 +558,99 @@ static void intrinsic_once(const FBox *b, bool *ok)
                 intrinsic_once(fr->item->content, ok);
 }
 
+// FLOATS.md § Proof, the invariants: in each block formatting context, no
+// two floats overlap, no line box overlaps a float's margin box, and the
+// root, its height auto, holds its floats. Asked of what the space works
+// in, so a float or line a relative box moves, which is drawn away from
+// where it flows, is left out, as is a float whose margins are not plain
+// lengths; and of a line with room, height and content within it — a line
+// whose first word overflows its band overlaps a float by design.
+typedef struct {
+    int64_t x0, y0, x1, y1;
+} FRect;
+
+typedef struct {
+    FRect f[256], ln[1024];
+    int nf, nl;
+} FContext;
+
+static bool rects_meet(FRect a, FRect b)
+{
+    return a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1;
+}
+
+static bool plain_margin(flow_length_t m, int64_t *out)
+{
+    if (m.kind == FLOW_LENGTH_AUTO) {
+        *out = 0;
+        return true;
+    }
+    if (m.kind != FLOW_LENGTH_PX)
+        return false;
+    *out = f_len(m, 0);
+    return true;
+}
+
+static void float_check(const FBox *root, bool *ok);
+
+static void float_gather(const FBox *b, FContext *c, bool moved, bool *ok)
+{
+    for (const FLine *ln = b->lines; ln != NULL; ln = ln->next) {
+        int64_t right = ln->x;
+        for (const FFrag *fr = ln->frags; fr != NULL; fr = fr->next) {
+            right = fr->x + fr->w - fr->hang > right ? fr->x + fr->w - fr->hang : right;
+            if (fr->kind == FF_ATOMIC && fr->item->content != NULL)
+                float_check(fr->item->content, ok);
+        }
+        if (!moved && ln->h > 0 && ln->w > 0 && right <= ln->x + ln->w && ln->frags != NULL &&
+            c->nl < 1024)
+            c->ln[c->nl++] = (FRect){ln->x, ln->y, ln->x + ln->w, ln->y + ln->h};
+    }
+    for (const FBox *k = b->first; k != NULL; k = k->next) {
+        if (!k->placed || k->out_of_flow)
+            continue;
+        if (k->floated != FLOW_FLOAT_NONE) {
+            int64_t ml, mr, mt;
+            const flow_style_t *s = k->style;
+            if (!moved && !k->positioned && !k->unfinished &&
+                plain_margin(s->margin[FLOW_LEFT], &ml) && plain_margin(s->margin[FLOW_RIGHT], &mr) &&
+                plain_margin(s->margin[FLOW_TOP], &mt) && ml >= 0 && mr >= 0 && mt >= 0 &&
+                c->nf < 256)
+                c->f[c->nf++] = (FRect){k->x - ml, k->y - mt, k->x + k->w + mr, k->y - mt + k->float_h};
+            float_check(k, ok);
+            continue;
+        }
+        if (f_bfc_root(k)) {
+            float_check(k, ok);
+            continue;
+        }
+        float_gather(k, c, moved || k->positioned, ok);
+    }
+}
+
+static void float_check(const FBox *root, bool *ok)
+{
+    if (!root->placed)
+        return;
+    FContext *c = calloc(1, sizeof(*c));
+    float_gather(root, c, false, ok);
+    for (int i = 0; i < c->nf; i++) {
+        FRect f = c->f[i];
+        if (f.x1 <= f.x0 || f.y1 <= f.y0)
+            continue;
+        for (int j = i + 1; j < c->nf; j++)
+            *ok &= !rects_meet(f, c->f[j]);
+        for (int j = 0; j < c->nl; j++)
+            *ok &= !rects_meet(f, c->ln[j]);
+        const flow_style_t *s = root->style;
+        bool auto_h = s->height.kind == FLOW_LENGTH_AUTO && s->max_height.kind == FLOW_LENGTH_AUTO;
+        if (auto_h && !root->unfinished && root->kind == FB_BLOCK && root->parent != NULL &&
+            !root->flex && !root->grid && !root->flex_sized && !root->abs_h_set)
+            *ok &= f.y1 <= root->y + root->h - root->border[FLOW_BOTTOM] - root->padding[FLOW_BOTTOM];
+    }
+    free(c);
+}
+
 static void fuzz_one(const char *what, const char *html, size_t len)
 {
     char *copy = malloc(len + 1);
@@ -603,10 +709,14 @@ static void fuzz_one(const char *what, const char *html, size_t len)
     FStyles *st = f_style_build(doc, page, &env);
     FBoxes *bx = f_boxes_build(doc, page, st, &env);
     FLayout *lay = f_layout(bx, doc, page, &env, 300);
-    bool once = true;
+    bool once = true, floats = true;
     if (bx != NULL && bx->root != NULL)
         intrinsic_once(bx->root, &once);
     expect("fuzz: every box measured at most once, and laid out at most once", once, what);
+    if (lay != NULL && bx != NULL && bx->root != NULL && !lay->incomplete)
+        float_check(bx->root, &floats);
+    expect("fuzz: no float overlaps a float or a line, and each root holds its floats", floats,
+           what);
     f_layout_free(lay);
     f_boxes_free(bx);
     f_style_free(st);
@@ -649,6 +759,11 @@ static size_t positioned_soup(char *out, size_t cap)
         n += (size_t)snprintf(out + n, cap - n, ";opacity:%s", rng() % 2 ? "0" : "0.5");
     if (rng() % 3 == 0)
         n += (size_t)snprintf(out + n, cap - n, ";margin:%s", rng() % 2 ? "auto" : "-7px 3%");
+    // Floats (FLOATS.md § Proof): a side, and what it clears.
+    static const char *const kFloat[] = {"float:left", "float:right", "clear:left", "clear:both",
+                                         "float:left;clear:left", "display:flow-root"};
+    if (rng() % 3 == 0)
+        n += (size_t)snprintf(out + n, cap - n, ";%s", kFloat[rng() % 6]);
     // Flexible boxes and grids (FLEX.md, GRID.md § Proof): a container's
     // properties, and an item's own.
     static const char *const kItemy[] = {
@@ -680,6 +795,7 @@ static const char *const kSoup[] = {
     "</font>", "<ul><li>", "<br>", "<pre>\t", "<img src=known.png>", "<input>", "<div>",
     "<a href=x>", "</a>", "<td colspan=3 rowspan=0>", "<caption>", "<center>", "<marquee>",
     "<q>", "<ruby>r<rt>t", "<svg><foreignObject>", "<hr>", "<wbr>", "<nobr>", "&nbsp;",
+    "<img src=known.png align=left>", "<br clear=all>", "<table align=right><tr><td>t</table>",
 };
 
 // Every page, or only `only`; share k of n (n = 0: the sampled run). The

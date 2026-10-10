@@ -39,6 +39,15 @@ static inline bool f_out_of_flow(const flow_style_t *s)
     return s->position == FLOW_POSITION_ABSOLUTE || s->position == FLOW_POSITION_FIXED;
 }
 
+// Leaves the flow: out of flow, or floated (FLOATS.md). Neither splits an
+// inline element round it nor makes its container hold a block. A float is
+// still laid out in its formatting context, where it was written, so
+// f_out_of_flow keeps its own meaning: no formatting context holds the box.
+static inline bool f_leaves_flow(const flow_style_t *s)
+{
+    return f_out_of_flow(s) || s->float_side != FLOW_FLOAT_NONE;
+}
+
 // Display's questions, answered in one place for every pass: is the
 // element an atom on its line — laid out as a block of its own inside the
 // line — and does it lay its children out as flex items (FLEX.md) or grid
@@ -290,6 +299,10 @@ typedef enum {
     // the line — no width, no height, no break opportunity — but the point
     // its static position is read from once the line is placed.
     FI_PLACEHOLDER,
+    // Where a float was written among inline content: no width and no
+    // break opportunity of its own, but the point lines() meets it, and
+    // places it, in order (FLOATS.md).
+    FI_FLOAT,
 } f_item_kind_t;
 
 // What an overflow value does, asked in one place (CSS Overflow 3 § 3):
@@ -351,6 +364,7 @@ struct FItem {
     FInline *inl;                   // OPEN, CLOSE
     FBox *content;                  // ATOMIC: an inline-block's own block; NULL when replaced
     FBox *absolute;                 // PLACEHOLDER: the out-of-flow box it holds the place of
+    FBox *floated;                  // FLOAT: the float written here
     int32_t link, control;          // ATOMIC: libpage's indexes, or -1
 };
 
@@ -374,6 +388,19 @@ struct FBox {
     // which are not `positioned`.
     bool positioned, out_of_flow;
     FPos *pos;
+    // A float (FLOATS.md): the side, NONE for every other box. It is a
+    // block child of the container it was written in, or among inline
+    // content a child of the inline formatting context with a FLOAT item
+    // where it stood; either way it is laid out in its formatting context
+    // where the flow meets it, and takes no room in the flow.
+    flow_float_t floated;
+    // A float's margin box's height, as laid out (float_lay): from its top
+    // margin to its bottom one, a table's captions included, which its box
+    // leaves out.
+    int64_t float_h;
+    // § 9.5.2: how far a block in the flow that clears floats was moved
+    // below where it would have stood, 0 when it was not.
+    int64_t clearance;
     // It lays its children out as flex items (FLEX.md), or as grid items
     // (GRID.md): a block container whose element is such a container, or
     // an inline one's atom content.
@@ -600,6 +627,9 @@ typedef struct {
     // How many times an inline formatting context was measured: the cost
     // the harness holds to a linear bound (LAYOUT.md § Bounds).
     uint64_t measures;
+    // How many steps the exclusion spaces walked, read and moved (FLOATS.md
+    // § Bounds): what the harness holds linear in the floats and lines.
+    uint64_t float_walk;
     // The most table working memory held at once, which shares the arena's
     // budget: what the harness holds to it.
     size_t scratch_peak;
@@ -612,6 +642,11 @@ typedef struct {
 // percentage of the base, and `auto` read as 0 — the caller that cares
 // asks first.
 int64_t f_len(flow_length_t l, int64_t base);
+
+// Whether a box is a block formatting context's root (layout.c, where the
+// list is): what holds its floats, and what the fuzz asks to find each
+// float's context.
+bool f_bfc_root(const FBox *b);
 
 // Lays the box tree out at `width` CSS pixels. NULL only when there is not
 // memory for the layout record.

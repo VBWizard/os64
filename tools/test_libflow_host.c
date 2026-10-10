@@ -1386,6 +1386,7 @@ static void layout_sweep(void)
 #include "test_libflow_blend.inc"
 #include "test_libflow_flex.inc"
 #include "test_libflow_grid.inc"
+#include "test_libflow_floats.inc"
 
 int main(int argc, char **argv)
 {
@@ -1439,6 +1440,18 @@ int main(int argc, char **argv)
         free(html);
         return 0;
     }
+    // `--floats`: the float cases and the style dumps alone, for a mutant
+    // run (tools/test_libflow_float_mutants.py), which wants an answer in
+    // seconds rather than the whole suite's minutes.
+    if (argc == 2 && strcmp(argv[1], "--floats") == 0) {
+        text_setup();
+        style_cases();
+        float_cases();
+        text_teardown();
+        printf("libflow: %d checks, %d failed%s\n", checks, failures,
+               live != 0 ? " (AND LEAKED)" : "");
+        return failures != 0 || live != 0 ? 1 : 0;
+    }
     text_setup();
     attrs_cases();
     style_cases();
@@ -1466,6 +1479,7 @@ int main(int argc, char **argv)
     zoom_cases();
     flex_cases();
     grid_cases();
+    float_cases();
     fixed_cases();
     paint_cases();
     decoration_colour_cases();
