@@ -3441,6 +3441,25 @@ static void covered_link_cases(void) {
     forms_place();
     check(probe_field("menu")!=NULL && probe_field("menu")->w->hidden,
         "invisible gadget: a nameless control in no form is not drawn");
+    int32_t menu_control=os64_page_control_for(page_model(&g.page),probe_id("menu"));
+    input_click_at("menu");
+    bool on=os64_page_control(page_model(&g.page),menu_control)->checked;
+    input_click_at("menu");
+    check(on && !os64_page_control(page_model(&g.page),menu_control)->checked,
+        "invisible gadget: a click on it ticks it and a second unticks it, as its widget would");
+    probe_drop();
+    /* With scripts, the tick is the box's click (which sees it ticked, as
+     * a widget's does), then input and change. */
+    probe_page("<!doctype html><style>body{margin:0} input{opacity:0;width:40px;height:40px;margin:0}</style>"
+        "<input type=checkbox id=menu><p id=out>-</p><script>var m=document.getElementById('menu'),"
+        "o=document.getElementById('out'),seen='';['click','input','change'].forEach(function(t){"
+        "m.addEventListener(t,function(){seen+=t+(m.checked?'+':'-')+' ';o.textContent=seen;});});"
+        "</script>",true);
+    script_turn();
+    forms_place();
+    input_click_at("menu");
+    check(probe_text_is("out","click+ input+ change+ "),
+        "invisible gadget: with scripts its click sees it ticked, then input and change");
     probe_drop();
     /* A custom checkbox's real input is a field: drawn, though invisible,
      * whether a form or a name makes it one. */

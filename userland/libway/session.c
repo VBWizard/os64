@@ -288,15 +288,23 @@ bool way_type_is_json(const char *type)
     return os64_streq(type, "application/json") || ends_with(type, "+json");
 }
 
+// Read from WAY_PICTURE_ACCEPT itself, so what a face asks for and what it
+// is shown as a page are one list.
 bool way_type_is_picture(const char *type)
 {
-    static const char *const kinds[] = {
-        "image/png", "image/jpeg", "image/pjpeg", "image/gif", "image/bmp", "image/x-ms-bmp",
-        "image/x-portable-pixmap",
-    };
-    for (size_t i = 0; i < sizeof(kinds) / sizeof(kinds[0]); i++)
-        if (os64_streq(type, kinds[i]))
+    size_t n = os64_strlen(type);
+    for (const char *at = WAY_PICTURE_ACCEPT; *at != '\0';) {
+        while (*at == ' ' || *at == ',')
+            at++;
+        const char *end = at;
+        while (*end != '\0' && *end != ';' && *end != ',')
+            end++;
+        if ((size_t)(end - at) == n && n > 0 && os64_memcmp(at, type, n) == 0)
             return true;
+        while (*end != '\0' && *end != ',')
+            end++;
+        at = end;
+    }
     return false;
 }
 

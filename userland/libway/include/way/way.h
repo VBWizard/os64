@@ -181,6 +181,15 @@ void way_script_cookie(way_jar_t *jar, const char *page_url, const char *text, s
 // ruling 5), and the worker carries only bytes. Each judgement is written
 // once, here, so the two faces cannot drift.
 
+// The picture types libimage decodes (PNG, JPEG, GIF, BMP, PPM), as an
+// Accept list a face that shows pictures adds to its own, and the judgement
+// that a reply of one is a picture to show as a page (WAY_BODY_IMAGE). The
+// judgement reads this list, so the two cannot disagree.
+#define WAY_PICTURE_ACCEPT                                                                   \
+    "image/png;q=0.5, image/jpeg;q=0.5, image/pjpeg;q=0.5, image/gif;q=0.5, image/bmp;q=0.5, " \
+    "image/x-ms-bmp;q=0.5, image/x-portable-pixmap;q=0.5"
+bool way_type_is_picture(const char *type);
+
 // What a body is, judged from its head. A head that is none of these is not
 // a page: way_open says so and refuses. IMAGE only for a leg whose face shows
 // pictures, and never for the reply to a POST.

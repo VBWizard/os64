@@ -17,9 +17,6 @@ bool way_shell_quotable(const char *address);
 // text at all" asks it too. A media type from libfetch is already
 // lowercased, so the compare is verbatim.
 bool way_type_is_json(const char *type);
-// The picture types libimage decodes (PNG, JPEG, GIF, BMP, PPM): what a face
-// that shows pictures can show as a page of its own.
-bool way_type_is_picture(const char *type);
 
 // ── The cache's store (cache.c), for way_fetch_whole ────────────────────
 

@@ -317,7 +317,9 @@ each was a page dying on something that browsers have had since the 2000s.
 
 - **An invisible control that is no field is not drawn** (Chris's ruling,
   POSITION.md ruling 6 amended): MediaWiki's menu checkbox, once #246 gave
-  it its true size, was drawn as a band across every Vector page.
+  it its true size, was drawn as a band across every Vector page. A click
+  on it still ticks it, with its click, input and change (`view_check`),
+  since its widget is not there to take the click.
 - **A frame stands in for its document**: an iframe or a frame is drawn as
   a pale panel naming where its document is, and a click there follows it
   (it always did; libpage makes a frame a link). The record counts

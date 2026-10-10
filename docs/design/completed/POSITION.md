@@ -465,9 +465,10 @@ recommended ("I trust your judgement"):
    use. `unpainted` keeps the rest of the box unpainted. (Ruling 9 makes
    one exception; Chris's 2026-10-09 ruling, after the census found
    MediaWiki's menu checkbox drawn as a band across every Vector page, the
-   other: an invisible control in NO form and with NO name submits nothing,
-   so it is the page's own click target, not a field, and is left undrawn,
-   though the pointer still finds it.)
+   other: an invisible control in NO form and with NO name (or an empty
+   one) submits nothing, so it is the page's own click target, not a field,
+   and is left undrawn, though the pointer still finds it and a click still
+   ticks it.)
 7. **`pointer-events: none` is read**, and `flow_hit` passes through such
    a box — the property that says a click goes to what is under it. An
    invisible overlay otherwise eats every click over the links a person

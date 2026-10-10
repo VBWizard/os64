@@ -68,7 +68,7 @@ static bool s_dark;
 // What a navigation asks for: a page first, then a picture of a kind yonder
 // shows by itself (YONDER.md § A picture asked for by itself), so a server
 // that chooses by Accept may send one.
-#define YONDER_ACCEPT "text/html, application/xhtml+xml, text/*;q=0.8, image/png;q=0.5, image/jpeg;q=0.5, image/gif;q=0.5, image/bmp;q=0.5"
+#define YONDER_ACCEPT "text/html, application/xhtml+xml, text/*;q=0.8, " WAY_PICTURE_ACCEPT
 
 // The work pool. A navigation's job is a FETCH (trip.h; the parse is this
 // thread's, DOM_D4.md), so what it declares is one connection's worth of
@@ -3567,7 +3567,7 @@ refused:
 // and with no name, or an empty one (which submits nothing either), is the
 // page's own gadget, a click target laid over something drawn (MediaWiki's
 // menu checkbox), and is left undrawn. Either way the pointer still finds
-// it, as a browser's does.
+// it, as a browser's does, and a click on it ticks it (view_check).
 static bool gadget(const flow_box_t *b, int32_t control)
 {
     const os64_page_control_t *c = os64_page_control(page_model(&g.page), control);
@@ -6085,6 +6085,28 @@ static void follow_link(int32_t link)
     follow_link_asked(link, WAY_ASK_NEVER);
 }
 
+// A checkbox or radio clicked on the page itself — one left undrawn as a
+// gadget (forms_place), whose widget is not there to take the click — is
+// ticked as its widget ticks it (check_changed): the box changes, then with
+// scripts its click, which may put it back, and its input and change. A
+// radio is only ever ticked. False when `at` is no such control.
+static bool view_check(const os64_html_node_t *at, int32_t x, int32_t y)
+{
+    int32_t control = at != NULL ? os64_page_control_for(page_model(&g.page), at) : -1;
+    const os64_page_control_t *c = os64_page_control(page_model(&g.page), control);
+    if (c == NULL || c->disabled ||
+        (c->input != OS64_PAGE_INPUT_CHECKBOX && c->input != OS64_PAGE_INPUT_RADIO))
+        return false;
+    bool was = c->checked;
+    if (os64_page_set_checked(page_model(&g.page), control,
+                              c->input == OS64_PAGE_INPUT_RADIO ? true : !was) < 0)
+        status_rest("the page keeps that one as it is");
+    forms_sync_from_model(false);
+    if (scripts_live())
+        input_queue(IN_CHECK, at, NULL, x, y, was);
+    return true;
+}
+
 // An `input type=image` is a picture that sends its form: libflow gave it
 // an atom, and a click on it presses it.
 static void picture_button_at(int32_t x, int32_t y)
@@ -6167,7 +6189,7 @@ static bool view_event(os64_ui_widget_t *w, os64_ui_t *ui, const os64_gui_event_
             const os64_html_node_t *link_node = NULL;
             const os64_html_node_t *at = element_at(ev->mouse.x, ev->mouse.y, &link_node);
             input_queue(IN_MOUSEUP, at, NULL, ev->mouse.x, ev->mouse.y, false);
-            if (at != NULL && at == g.pressed_node)
+            if (at != NULL && at == g.pressed_node && !view_check(at, ev->mouse.x, ev->mouse.y))
                 input_queue(IN_CLICK, at, link_node, ev->mouse.x, ev->mouse.y, false);
             if (g.pressed_node != NULL)
                 os64_html_release(g.pointer_doc, g.pressed_node);
@@ -6179,7 +6201,8 @@ static bool view_event(os64_ui_widget_t *w, os64_ui_t *ui, const os64_gui_event_
         int32_t link = link_at(ev->mouse.x, ev->mouse.y);
         if (link >= 0 && link == g.pressed_link && ev->mouse.button == OS64_GUI_MOUSE_LEFT)
             follow_link(link);
-        else if (ev->mouse.button == OS64_GUI_MOUSE_LEFT)
+        else if (ev->mouse.button == OS64_GUI_MOUSE_LEFT &&
+                 !view_check(element_at(ev->mouse.x, ev->mouse.y, NULL), ev->mouse.x, ev->mouse.y))
             picture_button_at(ev->mouse.x, ev->mouse.y);
         g.pressed_link = -1;
         return true;

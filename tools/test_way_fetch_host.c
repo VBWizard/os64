@@ -690,6 +690,12 @@ static void pictures_are_pages_for_a_face_that_shows_them(void)
     way_opening_t o;
     os64_fetch_status_t why;
     bool opened = way_open(&leg, "http://pic.test/a.webp", NULL, &o, &why);
+    expect("pictures: the judgement is the Accept list's, every type and only whole ones",
+           way_type_is_picture("image/png") && way_type_is_picture("image/pjpeg") &&
+               way_type_is_picture("image/x-portable-pixmap") && !way_type_is_picture("image/webp") &&
+               !way_type_is_picture("image/pn") && !way_type_is_picture("q=0.5") &&
+               !way_type_is_picture(""),
+           NULL);
     expect("pictures: one yonder cannot decode is still a file to save",
            !opened && strstr(leg.status, "that is image/webp, not a page") != NULL, leg.status);
     if (opened)
