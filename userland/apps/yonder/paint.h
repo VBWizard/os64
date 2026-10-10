@@ -53,6 +53,12 @@ typedef struct {
     // coordinates, already cut to the viewport) of 0xAARRGGBB, straight
     // alpha, `rect.w` a row, each laid over what is there.
     void (*pixels)(void *ctx, os64_gui_rect_t rect, const uint32_t *argb);
+    // A FRAME's stand-in (an `iframe` or a `frame`): the face loads no
+    // document inside a document, so the box says where its document is,
+    // in `ink` on `paper`, across `content`; a click there follows it
+    // (libpage makes the frame a link). NULL: the box is drawn empty.
+    void (*frame)(void *ctx, const flow_box_t *box, os64_gui_rect_t content, os64_gui_rect_t clip,
+                  uint32_t ink, uint32_t paper);
 } yonder_verbs_t;
 
 // Whose background is the CANVAS's (CSS 2.1 § 14.2): the root's when it has

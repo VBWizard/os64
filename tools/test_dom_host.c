@@ -386,6 +386,7 @@ int main(int argc, char **argv)
     dom_collection_cases();
     dom_selector_cases();
     dom_classic_method_cases();
+    dom_cookie_cases();
     dom_reclaim_cases();
     dom_unicode_cases();
     dom_control_cases();

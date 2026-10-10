@@ -154,6 +154,19 @@ static void paint_cases(void)
     // overflow: hidden (GARB.md, G5): the p is 100 wide in a 50-by-10 div
     // that hides, so its red is cut to the div's padding box, and its
     // text — drawn whole by its verb — is handed that box as its clip.
+    // A frame's document is not loaded into its box: the box stands in for
+    // it with where it is, as a link (YONDER_DIAGNOSTICS.md § Batch 3).
+    paint_case("a frame is drawn as a stand-in naming its document",
+               "<!doctype html><iframe src=/poll></iframe>",
+               400, (os64_gui_rect_t){0, 0, 400, 100},
+               "fill 0 0 400 100 #fefefe\n"
+               "fill 8 8 304 1 #080808\n"
+               "fill 9 9 302 1 #080808\n"
+               "fill 8 9 1 91 #080808\n"
+               "fill 9 10 1 90 #080808\n"
+               "fill 311 9 1 91 #878787\n"
+               "fill 310 10 1 90 #878787\n"
+               "frame link 0 10 10 300 150 ink 0000ee paper f0f0f0\n");
     paint_page_case("overflow: hidden cuts what is inside it",
                     "<!doctype html><style>body { margin: 0 } div { width: 50px; height: 10px;"
                     " overflow: hidden; background: #00ff00 } p { margin: 0; width: 100px;"

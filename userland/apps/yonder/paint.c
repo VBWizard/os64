@@ -1281,6 +1281,17 @@ static bool is_picture(const flow_box_t *b)
            b->node->tag == OS64_HTML_TAG_IMG;
 }
 
+static bool is_frame(const flow_box_t *b)
+{
+    return b->node != NULL && b->node->kind == OS64_HTML_ELEMENT && b->node->ns == OS64_HTML_NS_HTML &&
+           (b->node->tag == OS64_HTML_TAG_IFRAME || b->node->tag == OS64_HTML_TAG_FRAME);
+}
+
+// A frame's stand-in reads as a link on a pale panel, the default link
+// colour on light grey, both moved for dark pages like the page's own.
+#define FRAME_INK 0x0000eeu
+#define FRAME_PAPER 0xf0f0f0u
+
 static void paint_box(void *ctx, const flow_box_t *b)
 {
     const Painter *outer = ctx;
@@ -1341,6 +1352,9 @@ static void paint_box(void *ctx, const flow_box_t *b)
             p->v->control(p->v->ctx, b, on_page(p, content_of(b)), on_page(p, p->view));
         else if (is_picture(b))
             p->v->image(p->v->ctx, b, on_page(p, content_of(b)), on_page(p, p->view));
+        else if (is_frame(b) && p->v->frame != NULL)
+            p->v->frame(p->v->ctx, b, on_page(p, content_of(b)), on_page(p, p->view),
+                        ink_of(p, FRAME_INK), paper_of(p, FRAME_PAPER));
         return;
     case FLOW_BOX_SPAN:
         // An inline box's borders open on its first piece and close on its

@@ -392,6 +392,22 @@ int64_t os64_conf_set(const char *file, const char *key, const char *value) {
 void os64_ui_settings_report(os64_ui_settings_t *dialog, const char *text) {
     (void)dialog; os64_strcopy(settings_report,sizeof(settings_report),text);
 }
+/* document.cookie's door, faked: the jar's rules are libway's and are tested
+ * there (test_way_jar.inc); here the window hands the page's address over
+ * and what a script reads and sets crosses intact. */
+static char fake_cookie_url[256], fake_cookie_set[256];
+static int fake_cookie_encrypted=-1;    /* what the window said of the page's transport */
+static const char *fake_cookie_read="session=abc; theme=dark";
+size_t way_script_cookies(way_jar_t *jar, const char *page_url, bool encrypted, char *out, size_t cap, bool *whole) {
+    (void)jar; *whole=true; snprintf(fake_cookie_url,sizeof(fake_cookie_url),"%s",page_url?page_url:"");
+    fake_cookie_encrypted=encrypted;
+    return (size_t)snprintf(out,cap,"%s",fake_cookie_read);
+}
+void way_script_cookie(way_jar_t *jar, const char *page_url, bool encrypted, const char *text, size_t len) {
+    (void)jar; snprintf(fake_cookie_url,sizeof(fake_cookie_url),"%s",page_url?page_url:"");
+    fake_cookie_encrypted=encrypted;
+    snprintf(fake_cookie_set,sizeof(fake_cookie_set),"%.*s",(int)len,text);
+}
 void way_cache_enable(way_cache_t *cache, bool enabled) { (void)enabled; check(cache==NULL,"no test cache"); }
 void way_cache_set_cap(way_cache_t *cache, uint64_t cap) { (void)cap; check(cache==NULL,"no test cache"); }
 
@@ -482,7 +498,7 @@ static void probe_page(const char *html, bool scripts) {
         /* A finished document's inline scripts are queued as CONNECTED
          * scripts, in tree order: the shown page's ready list, one a turn. */
         g.page.scripts=scripts_host(g.page.way.doc,os64_page_shared_state(g.page.way.model),
-            g.page.way.url,++g.pages_made,g.page.diag);
+            g.page.way.url,false,++g.pages_made,g.page.diag);
         for (os64_html_node_t *n=g.page.way.doc->document;n;n=(os64_html_node_t *)next_within(n,g.page.way.doc->document))
             if(os64_dom_script_kind(n)==OS64_DOM_SCRIPT_CLASSIC && os64_html_attr(n,"src")==NULL)
                 yonder_scripts_connected(g.page.scripts,n);
@@ -1155,7 +1171,7 @@ static void bounded_resources(void) {
     probe_page("<script>var held=document.body;</script><script>document.body.id='later';</script>",true);
     yonder_scripts_free(g.page.scripts); g.page.scripts=NULL;
     fail_at=attempts+1;
-    check(scripts_host(g.page.way.doc,os64_page_shared_state(page_model(&g.page)),g.page.way.url,1,NULL)==NULL,
+    check(scripts_host(g.page.way.doc,os64_page_shared_state(page_model(&g.page)),g.page.way.url,false,1,NULL)==NULL,
         "a script host the heap refuses publishes nothing");
     fail_at=0;
     probe_drop();
@@ -1196,6 +1212,23 @@ static void input_click_at(const char *id) {
     view_event(&g.view,&g.ui,&ev); inputs_run();
     ev.type=OS64_GUI_EVENT_MOUSE_BUTTON_UP;
     view_event(&g.view,&g.ui,&ev); inputs_run();
+}
+/* A press and a release on a control's own widget, through libui, as a
+ * person's click on it arrives. */
+static void ui_click_on(const char *id) {
+    FormWidget *fw=probe_field(id);
+    g.root.bounds=g.view.bounds;        /* the fixture's root has no size of its own */
+    os64_gui_event_t ev={.type=OS64_GUI_EVENT_MOUSE_BUTTON_DOWN};
+    ev.mouse.x=fw->w->bounds.x+2; ev.mouse.y=fw->w->bounds.y+2; ev.mouse.button=OS64_GUI_MOUSE_LEFT;
+    os64_ui_dispatch(&g.ui,&ev); inputs_run();
+    ev.type=OS64_GUI_EVENT_MOUSE_BUTTON_UP;
+    os64_ui_dispatch(&g.ui,&ev); inputs_run();
+}
+static void ui_key_space(void) {
+    os64_gui_event_t ev={.type=OS64_GUI_EVENT_KEY_DOWN,.key={.ascii=' '}};
+    os64_ui_dispatch(&g.ui,&ev); inputs_run();
+    ev.type=OS64_GUI_EVENT_KEY_UP;
+    os64_ui_dispatch(&g.ui,&ev); inputs_run();
 }
 static void input_key(char ascii) {
     os64_gui_event_t ev={.type=OS64_GUI_EVENT_KEY_DOWN,.key={.ascii=ascii}};
@@ -1490,6 +1523,49 @@ static void stream_no_page(void) {
         g.stop.disabled==true,"stream: no page, libway's sentence, and Stop goes out");
     stream_window_drop();
 }
+/* A picture asked for by itself: the window writes its page (image_page),
+ * the picture alone on a dark page, titled by its file; nothing of the
+ * reply's body is read. */
+static void stream_picture_page(void) {
+    stream_window();
+    start_trip("http://fixture.test/shots/dwm&co.png?v=1",NULL,NAV_GO,NULL);
+    way_head_t h=stream_head("image/png","",false);
+    os64_strcopy(h.url,sizeof(h.url),"http://fixture.test/shots/dwm&co.png?v=1");
+    h.body=WAY_BODY_IMAGE;
+    yonder_mail_post_head(g.stream.mail,&h);
+    stream_post_verdict(true,OS64_FETCH_OK,"");
+    /* The fake pool keeps one job: the picture's will take the trip's slot,
+     * so the trip's is held here and released at the end. */
+    void *trip=pool_work.job;
+    check(stream_turn()==false && g.page.tree!=NULL && g.page.plain==NULL,
+        "picture page: a picture asked for by itself arrives as a page");
+    const os64_html_document_t *doc=page_doc(&g.page);
+    const os64_html_node_t *img=NULL;
+    for(const os64_html_node_t *n=doc->document;n;) {
+        if(n->kind==OS64_HTML_ELEMENT&&n->name&&!strcmp(n->name,"img")) { img=n; break; }
+        if(n->first_child){n=n->first_child;continue;}
+        while(n&&!n->next)n=n->parent;
+        if(n)n=n->next;
+    }
+    const os64_html_attr_t *src=img?os64_html_attr(img,"src"):NULL;
+    check(src!=NULL && os64_streq(src->value,"http://fixture.test/shots/dwm&co.png?v=1"),
+        "picture page: its one picture is the address asked for, escaped and read back whole");
+    char title[64]={0};
+    const os64_html_node_t *t=doc->head?doc->head->first_child:NULL;
+    while(t&&!(t->kind==OS64_HTML_ELEMENT&&t->name&&!strcmp(t->name,"title"))) t=t->next;
+    if(t&&t->first_child&&t->first_child->kind==OS64_HTML_TEXT) os64_strcopy(title,sizeof(title),t->first_child->text);
+    check(os64_streq(title,"dwm&co.png"),"picture page: titled by its file's name");
+    /* The picture is fetched as any page's is: the job in the pool is the
+     * picture's, for the address asked for, released as a picture's. */
+    const yonder_picture_job_t *job=pool_work.job;
+    check(job!=NULL && job->kind==YONDER_JOB_PICTURE &&
+          os64_streq(job->url,"http://fixture.test/shots/dwm&co.png?v=1"),
+        "picture page: its picture is fetched like any page's");
+    /* This harness runs no picture job; the job is freed as a sheet job is. */
+    if(pool_work.job!=NULL && pool_work.job!=trip) { os64_free(pool_work.job); memset(&pool_work,0,sizeof(pool_work)); }
+    if(trip!=NULL && pool_work.job!=trip) yonder_trip_release(trip,NULL);
+    stream_window_drop();
+}
 static void stream_refused(void) {
     /* Deeper than twice the parser's stack: the parser refuses, the fetch
      * is cancelled, and the page arrives as far as it got, saying so. */
@@ -1640,12 +1716,14 @@ static char *pad_page(const char *rest) {
     snprintf(html,n,"<!doctype html><!-- %01200d -->%s",0,rest);
     return html;
 }
+static bool loop_encrypted;     /* the next loop_page's head: arrived encrypted */
 static void loop_page(const char *rest) {
     stream_window();
     g.scripts_on=true; g.script_ms=5000; now_ms=100;
     start_trip("http://fixture.test/p",NULL,NAV_GO,NULL);
     char *html=pad_page(rest);
     way_head_t h=stream_head("text/html","",false);
+    h.encrypted=loop_encrypted;
     yonder_mail_post_head(g.stream.mail,&h);
     stream_post_body((const uint8_t *)html,strlen(html),YONDER_STREAM_CHUNK);
     stream_post_verdict(true,OS64_FETCH_OK,"");
@@ -1939,6 +2017,25 @@ static void loop_downgrade(void) {
 // What a script changed is what the page uses: a src resolves against the
 // document's base, a DOMContentLoaded edit reaches the arriving model, and
 // an image's default action finds the image again after its listener.
+/* document.cookie reads and sets the browser's cookies for the page's own
+ * address (the head's: http://fixture.test/final). */
+static void loop_document_cookie(void) {
+    fake_cookie_url[0]=fake_cookie_set[0]=0;
+    loop_page("<p id=out>x</p><script>document.getElementById('out').textContent=document.cookie;"
+        "document.cookie='seen=1; path=/';</script>");
+    check(loop_settle() && probe_text_is("out","session=abc; theme=dark"),
+        "document.cookie: a script reads the cookies the window hands it");
+    check(os64_streq(fake_cookie_set,"seen=1; path=/") && os64_streq(fake_cookie_url,"http://fixture.test/final"),
+        "document.cookie: a script's cookie goes to the jar for the page's own address");
+    check(fake_cookie_encrypted==0,"document.cookie: a page that arrived in the clear says so to the jar");
+    loop_drop();
+    /* The transport's own answer travels with the page, never the scheme's. */
+    loop_encrypted=true; fake_cookie_encrypted=-1;
+    loop_page("<script>document.cookie='x=1';</script>");
+    check(loop_settle() && fake_cookie_encrypted==1,"document.cookie: a page that arrived encrypted says so");
+    loop_drop();
+    loop_encrypted=false;
+}
 static void loop_script_changes_hold(void) {
     loop_page("<base href='http://assets.test/js/'><script src='app.js'></script>");
     check(loop_settle() && nscript_jobs==1,"review base: source fetch submitted");
@@ -2142,6 +2239,7 @@ static void loop_cases(void) {
     loop_handler_runtime_at_click();
     loop_arrival_follows_scripts();
     loop_script_changes_hold();
+    loop_document_cookie();
     loop_state_adopted();
     loop_typed_value();
     loop_downgrade();
@@ -2161,6 +2259,7 @@ static void stream_cases(void) {
     stream_reaped_first();
     stream_text();
     stream_no_page();
+    stream_picture_page();
     stream_refused();
     stream_stopped();
     stream_pool_breaks();
@@ -3246,6 +3345,17 @@ static void diag_page_cases(void) {
     text=diag_file("/tmp/diag",name);
     check(has(text,"MISSING element canvas (2)\n"),"diag: looking again at departure does not count twice");
 
+    /* A frame's document is not loaded into it, and an embed makes no box:
+     * both are recorded. An object shows its fallback and is not. */
+    loop_page("<p>x</p><iframe src=/poll></iframe><iframe></iframe><embed src=a.swf>"
+        "<object data=b.swf>fallback</object>");
+    check(loop_settle() && g.page.tree!=NULL,"diag: a page with frames, an embed and an object arrives");
+    yonder_diag_file_name(g.page.diag,name,sizeof(name)); text=diag_file("/tmp/diag",name);
+    check(has(text,"MISSING element iframe (2)\n") && has(text,"MISSING element embed (1)\n") &&
+        !has(text,"MISSING element object"),
+        "diag: frames and embeds are recorded as drawn as nothing, an object with its fallback is not");
+    loop_drop();
+
     /* An address that spells a token keeps it out of the plain lines. */
     stream_window(); g.scripts_on=true;
     start_trip("http://fixture.test/FAILED/MISSING",NULL,NAV_GO,NULL);
@@ -3357,6 +3467,50 @@ static void covered_link_cases(void) {
     check(menu!=NULL&&r.h==40,"covered link: the checkbox is as tall as its menu");
     check(link_at(20,50)==os64_page_link_for(page_model(&g.page),probe_id("below")),
         "covered link: the link below the menu is the one under the pointer");
+    forms_place();
+    check(probe_field("menu")!=NULL && !probe_field("menu")->w->hidden &&
+          probe_field("menu")->w->cls->paint==NULL && probe_field("menu")->w->cls->event!=NULL,
+        "invisible gadget: a nameless control in no form paints nothing, and its widget stays");
+    int32_t menu_control=os64_page_control_for(page_model(&g.page),probe_id("menu"));
+    ui_click_on("menu");
+    bool on=os64_page_control(page_model(&g.page),menu_control)->checked;
+    ui_key_space();
+    check(on && !os64_page_control(page_model(&g.page),menu_control)->checked &&
+          probe_field("menu")->w->focused,
+        "invisible gadget: a click ticks it and takes the focus, and Space unticks it, as any checkbox");
+    probe_drop();
+    /* With scripts, the tick is the box's click (which sees it ticked, as
+     * a widget's does), then input and change. */
+    probe_page("<!doctype html><style>body{margin:0} input{opacity:0;width:40px;height:40px;margin:0}</style>"
+        "<input type=checkbox id=menu><p id=out>-</p><script>var m=document.getElementById('menu'),"
+        "o=document.getElementById('out'),seen='';['click','input','change'].forEach(function(t){"
+        "m.addEventListener(t,function(){seen+=t+(m.checked?'+':'-')+' ';o.textContent=seen;});});"
+        "</script>",true);
+    script_turn();
+    forms_place();
+    ui_click_on("menu");
+    check(probe_text_is("out","click+ input+ change+ "),
+        "invisible gadget: with scripts its click sees it ticked, then input and change");
+    probe_drop();
+    /* A custom checkbox's real input is a field: drawn, though invisible,
+     * whether a form or a name makes it one. */
+    probe_page("<!doctype html><style>body{margin:0} input{opacity:0}</style>"
+        "<form><input type=checkbox id=formed></form><input type=checkbox id=named name=agree>"
+        "<input type=checkbox id=plain style='opacity:1'><input type=checkbox id=blank name=''>",false);
+    forms_place();
+    check(!probe_field("formed")->w->hidden && !probe_field("named")->w->hidden &&
+          !probe_field("plain")->w->hidden,
+        "invisible field: in a form or named, an invisible control is drawn; a visible one always is");
+    /* What a navigation sends (way_open composes it): every picture type
+     * libimage decodes, whole, inside what libfetch will send — a longer
+     * Accept is every navigation refused. */
+    char accept[OS64_FETCH_ACCEPT_MAX];
+    way_accept_compose(YONDER_ACCEPT,OS64_IMAGE_ACCEPT,accept,sizeof(accept));
+    check(!strncmp(accept,"text/html, application/xhtml+xml, text/*;q=0.8, image/png;q=0.5, ",64) &&
+          strstr(accept,"image/x-portable-pixmap;q=0.5")!=NULL && strlen(accept)<OS64_FETCH_ACCEPT_MAX,
+        "navigation accept: pages first, then every picture type libimage decodes at half the weight");
+    check(probe_field("blank")!=NULL && probe_field("blank")->w->cls->paint==NULL,
+        "invisible gadget: an empty name submits nothing, so it names nothing");
     probe_drop();
 }
 

@@ -167,6 +167,50 @@ static void dom_selector_cases(void)
         "selectors.js");
     fixture_free(&f);
 }
+/* document.cookie: with no provider the document is cookie-averse; with
+ * one, a read is what it writes and an assignment is handed to it whole. */
+static char cookie_heard[128];
+static size_t cookie_long;      /* nonzero: the provider's answer is this many bytes of 'c' */
+static size_t cookie_get(void *opaque, char *out, size_t cap, bool *whole)
+{
+    (void)opaque;
+    *whole = true;
+    if (cookie_long == 0)
+        return (size_t)snprintf(out, cap, "a=1; b=2");
+    /* As the jar does: what does not fit is left out and said. */
+    if (cookie_long + 1 > cap) {
+        *whole = false;
+        out[0] = '\0';
+        return 0;
+    }
+    memset(out, 'c', cookie_long);
+    out[cookie_long] = '\0';
+    return cookie_long;
+}
+static void cookie_set(void *opaque, const char *text, size_t length)
+{
+    (void)opaque;
+    snprintf(cookie_heard, sizeof(cookie_heard), "%.*s", (int)length, text);
+}
+static void dom_cookie_cases(void)
+{
+    DomFixture f=fixture_new(NULL);if(!fixture_ready(&f))return;
+    dom_script(&f,DOM_ASSERT "assert(document.cookie===''&&'cookie' in document);document.cookie='x=1';"
+        "assert(document.cookie==='','a cookie-averse document');"
+        "throws('TypeError',()=>Object.getOwnPropertyDescriptor(Object.getPrototypeOf(document),'cookie').get.call(document.body))",
+        "cookie-averse.js");
+    os64_dom_cookies_t cookies={cookie_get,cookie_set,NULL};
+    os64_dom_set_cookies(f.binding,&cookies);
+    cookie_heard[0]=0;
+    dom_script(&f,DOM_ASSERT "assert(document.cookie==='a=1; b=2','read');document.cookie='c=3; path=/';",
+        "cookie-provider.js");
+    check(strcmp(cookie_heard,"c=3; path=/")==0,"document.cookie: an assignment reaches the provider whole");
+    cookie_long=100000;
+    dom_script(&f,DOM_ASSERT "assert(document.cookie.length===100000,'a long read is whole');",
+        "cookie-long.js");
+    cookie_long=0;
+    fixture_free(&f);
+}
 /* The classic methods pages assume (LIBDOM.md § The classic methods). */
 static void dom_classic_method_cases(void)
 {

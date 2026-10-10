@@ -339,8 +339,56 @@ static void referrers(void)
     expect("referer: no page names nothing", !way_referrer(NULL, &to, out, sizeof(out)), NULL);
 }
 
+// A page's script (document.cookie): it reads what a request would carry
+// less the HttpOnly cookies, may not set an HttpOnly one, and may not
+// replace one (RFC 6265 § 5.3 step 11.2, § 5.4 step 1).
+static const char *script_read(way_jar_t *jar, const char *page, bool encrypted, int64_t now)
+{
+    static char out[4096];
+    os64_url_t u = url_of(page);
+    way_jar_script_cookies(jar, &u, encrypted, now, out, sizeof(out), NULL);
+    return out;
+}
+
+static void script_hear(way_jar_t *jar, const char *page, bool encrypted, const char *line, int64_t now)
+{
+    os64_url_t u = url_of(page);
+    way_jar_script_hear(jar, &u, encrypted, line, strlen(line), now);
+}
+
+static void cookie_scripts(void)
+{
+    way_jar_t *jar = way_jar_new();
+    hear(jar, "http://s.test/", false, "session=secret; HttpOnly", 100);
+    hear(jar, "http://s.test/", false, "theme=dark", 100);
+    expect("script: an HttpOnly cookie is not read", strcmp(script_read(jar, "http://s.test/", false, 101), "theme=dark") == 0,
+           script_read(jar, "http://s.test/", false, 101));
+    jar_expect("script: a request still carries it", jar, "http://s.test/", false, 101, "session=secret; theme=dark");
+    script_hear(jar, "http://s.test/", false, "late=1; HttpOnly", 102);
+    script_hear(jar, "http://s.test/", false, "session=forged", 102);
+    script_hear(jar, "http://s.test/", false, "lang=en", 102);
+    jar_expect("script: may not set an HttpOnly cookie nor replace one", jar, "http://s.test/", false, 103,
+               "session=secret; theme=dark; lang=en");
+    script_hear(jar, "http://s.test/", false, "session=forged; Domain=s.test", 103);
+    hear(jar, "http://s.test/", false, "sid=secret; Domain=s.test; HttpOnly", 103);
+    script_hear(jar, "http://s.test/", false, "sid=forged", 103);
+    jar_expect("script: nor set one beside it that differs only in being host-only", jar,
+               "http://s.test/", false, 103, "session=secret; theme=dark; lang=en; sid=secret");
+    {
+        os64_url_t u = url_of("http://s.test/");
+        int32_t left = 0;
+        expect("script: a read with no room says what did not fit",
+               way_jar_script_cookies(jar, &u, false, 103, NULL, 0, &left) == 0 && left == 2, NULL);
+    }
+    script_hear(jar, "http://s.test/", false, "theme=light", 104);
+    expect("script: replaces a cookie it may see", strcmp(script_read(jar, "http://s.test/", false, 105), "theme=light; lang=en") == 0,
+           script_read(jar, "http://s.test/", false, 105));
+    way_jar_free(jar);
+}
+
 static void jar_cases(void)
 {
+    cookie_scripts();
     cookie_dates();
     cookie_scope();
     cookie_security();

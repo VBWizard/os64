@@ -288,6 +288,15 @@ static void rec_image(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_gu
     out(&rec->out, "\n");
 }
 
+static void rec_frame(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_gui_rect_t clip,
+                      uint32_t ink, uint32_t paper)
+{
+    (void)clip;
+    Rec *rec = ctx;
+    out(&rec->out, "frame link %d %d %d %d %d ink %06x paper %06x\n", b->link, c.x, c.y, c.w, c.h,
+        ink & 0xffffffu, paper & 0xffffffu);
+}
+
 static void rec_control(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_gui_rect_t clip)
 {
     (void)clip;
@@ -420,7 +429,7 @@ static char *paint_of(const char *html, size_t len, int32_t width, os64_gui_rect
     out(&rec.out, "%s", "");
     yonder_verbs_t v = {&rec,          rec_fill,     rec_text,       rec_image,
                         rec_control,   rec_backdrop, rec_group_open, rec_group_close,
-                        rec_mask,      rec_pixels};
+                        rec_mask,      rec_pixels,   rec_frame};
     if (t != NULL)
         yonder_paint(t, view, (flow_point_t){view.x, view.y}, kEnv.paper, s_dark_paint, &v);
     if (s_canvas_owner != NULL) {

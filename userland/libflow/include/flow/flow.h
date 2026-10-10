@@ -767,7 +767,7 @@ struct flow_box {
     // cannot follow a click here, and hiding the widget too would leave a
     // form nobody can use — unless the pointer cannot reach it
     // (flow_box_covered), as it cannot a hidden dialog's or search
-    // overlay's (POSITION.md, rulings 6 and 9).
+    // overlay's, or it is no field at all (POSITION.md, rulings 6 and 9).
     bool unpainted;
     const flow_box_t *parent, *first, *next;
 };

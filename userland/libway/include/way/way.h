@@ -106,7 +106,9 @@ typedef struct {
 typedef struct {
     const char *name;                   // how a sentence names this browser: "wend"
     const char *agent;                  // the User-Agent it sends
-    const char *accept;                 // the Accept list, what it can render
+    // The Accept list of the pages it renders. A leg that shows pictures
+    // (way_leg_t.pictures) adds them on a GET (way_accept_compose).
+    const char *accept;
     // What the face offers for a page that asks to send the reader on after
     // a delay, appended to the sentence saying so: wend's " - press g to
     // go". NULL or "" offers nothing.
@@ -143,6 +145,14 @@ typedef struct {
     // Parser noscript policy for this load, captured by the requesting face.
     // The finished-document loader resumes script stops without executing.
     bool scripting;
+    // The pictures the face shows, as an Accept list of their types (yonder's
+    // is libimage's OS64_IMAGE_ACCEPT), or NULL for none. A GET asks for
+    // them after the session's pages (way_accept_compose), and a picture
+    // asked for by itself, of a type it names, is a page, WAY_BODY_IMAGE, whose
+    // body the face does not read — it writes the page that shows the
+    // picture. Any other picture is not a page. way_open's alone: way_load
+    // reads every body it opens, so to it no picture is a page.
+    const char *pictures;
     char status[WAY_SENTENCE_MAX];
     // The page this load was asked for from — a link followed, a form sent,
     // a refresh — which its Referer names (way_referrer). Empty for an
@@ -157,6 +167,19 @@ typedef struct {
 way_leg_t way_leg(const way_session_t *session);
 way_leg_t way_leg_as(const way_session_t *session, const char *agent);
 
+// A PAGE'S SCRIPT's cookies (document.cookie), for the page at `page_url`,
+// which arrived `encrypted` or not (its head's, way_head_t.encrypted: an
+// https page through a plain proxy did not, and its script may neither read
+// nor set a Secure cookie), at the system's clock: what it may read, at most `cap` bytes with the
+// NUL, answering the length written and whether that is all of it (false:
+// ask again with more room), and one cookie it sets ("name=value;
+// attributes", as a Set-Cookie value). The jar's script rules apply
+// (jar.h); a page that is not http or https reads "" and sets nothing.
+size_t way_script_cookies(way_jar_t *jar, const char *page_url, bool encrypted, char *out,
+                          size_t cap, bool *whole);
+void way_script_cookie(way_jar_t *jar, const char *page_url, bool encrypted, const char *text,
+                       size_t len);
+
 // ── The I/O half ────────────────────────────────────────────────────────
 //
 // A LOAD IN PIECES (docs/design/pending/DOM_D4.md). way_load is the four
@@ -166,9 +189,23 @@ way_leg_t way_leg_as(const way_session_t *session, const char *agent);
 // ruling 5), and the worker carries only bytes. Each judgement is written
 // once, here, so the two faces cannot drift.
 
-// What a body is, judged from its head. A head that is neither is not a
-// page: way_open says so and refuses.
-typedef enum { WAY_BODY_HTML = 0, WAY_BODY_TEXT } way_body_t;
+// Whether an Accept-style list ("a/b, c/d;q=0.5") names `type` exactly,
+// parameters aside.
+bool way_accept_names(const char *list, const char *type);
+
+// The Accept a navigation sends: the page types `pages`, then each type of
+// `pictures` (NULL for none) at half the weight, so a server with both
+// sends the page and one with only a picture sends that. Never longer than
+// `cap` (libfetch refuses a longer one, OS64_FETCH_ACCEPT_MAX): a picture
+// type that would not fit is left off, never cut. Answers `out`, or NULL
+// when `pages` itself does not fit, which is never cut either: the caller
+// sends `pages` as it is, for libfetch to refuse.
+const char *way_accept_compose(const char *pages, const char *pictures, char *out, size_t cap);
+
+// What a body is, judged from its head. A head that is none of these is not
+// a page: way_open says so and refuses. IMAGE only for a leg whose face shows
+// pictures, and never for the reply to a POST.
+typedef enum { WAY_BODY_HTML = 0, WAY_BODY_TEXT, WAY_BODY_IMAGE } way_body_t;
 
 // The head, COPIED out of the fetch: os64_fetch_head_t is storage inside
 // the fetch and dies with it, and the note is written from the head after
@@ -180,6 +217,10 @@ typedef struct {
     char charset[HTTP_CHARSET_MAX];
     char url[OS64_FETCH_URL_MAX];       // where the body came from, after redirects
     bool posted;                        // the FINAL method was POST
+    // The final hop's transport was encrypted: https, and not through a
+    // plain proxy (libfetch's own answer, never the scheme's). What a page's
+    // script may do with Secure cookies follows it (way_script_cookies).
+    bool encrypted;
     uint16_t tls_version;
     bool tls_fallback;
     way_body_t body;

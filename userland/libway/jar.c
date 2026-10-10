@@ -473,13 +473,16 @@ static bool heard(Heard *h, const os64_url_t *from, bool encrypted, const char *
     return true;
 }
 
-void way_jar_hear(way_jar_t *jar, const os64_url_t *from, bool encrypted, const char *value,
-                  size_t len, int64_t now)
+// `script`: heard from a page's script (document.cookie), RFC 6265's
+// "non-HTTP API", which may neither set an HttpOnly cookie nor set one where
+// an HttpOnly cookie of the same name, domain and path is.
+static void hear(way_jar_t *jar, const os64_url_t *from, bool encrypted, const char *value,
+                 size_t len, int64_t now, bool script)
 {
     if (jar == NULL || from == NULL || value == NULL)
         return;
     Heard h;
-    if (!heard(&h, from, encrypted, value, len, now))
+    if (!heard(&h, from, encrypted, value, len, now) || (script && h.http_only))
         return;
     const char *domain = h.have_domain ? h.domain : from->host;
     int64_t expiry = h.have_max_age ? h.max_age_expiry : h.have_expires ? h.expires : INT64_MAX;
@@ -502,8 +505,15 @@ void way_jar_hear(way_jar_t *jar, const os64_url_t *from, bool encrypted, const 
             os64_lock_release(&jar->lock);
             return;
         }
-        if (os64_streq(c->domain, domain) && os64_streq(c->path, h.path) &&
-            c->host_only == !h.have_domain)
+        bool identity = os64_streq(c->domain, domain) && os64_streq(c->path, h.path);
+        // RFC 6265 § 5.3 step 11.2: a script may not touch an HttpOnly
+        // cookie of its name, domain and path, whichever host-only flag
+        // either has: one set beside it would ride the same requests.
+        if (identity && script && c->http_only) {
+            os64_lock_release(&jar->lock);
+            return;
+        }
+        if (identity && c->host_only == !h.have_domain)
             same = i;
     }
     // §5.3 step 11: a cookie replaces its namesake, keeping its age; one
@@ -559,6 +569,12 @@ void way_jar_hear(way_jar_t *jar, const os64_url_t *from, bool encrypted, const 
     os64_lock_release(&jar->lock);
 }
 
+void way_jar_hear(way_jar_t *jar, const os64_url_t *from, bool encrypted, const char *value,
+                  size_t len, int64_t now)
+{
+    hear(jar, from, encrypted, value, len, now, false);
+}
+
 // ── Sending ─────────────────────────────────────────────────────────────
 
 // §5.4 step 2: the longer path first, then the older.
@@ -568,14 +584,18 @@ static bool before(const Cookie *a, const Cookie *b)
     return la != lb ? la > lb : older(a, b);
 }
 
-size_t way_jar_cookies(way_jar_t *jar, const os64_url_t *to, bool encrypted, int64_t now,
-                       char *out, size_t cap, int32_t *left_out)
+// `script`: the cookies a page's script reads (document.cookie), which
+// leaves out the HttpOnly ones (RFC 6265 § 5.4 step 1).
+static size_t cookies(way_jar_t *jar, const os64_url_t *to, bool encrypted, int64_t now,
+                      char *out, size_t cap, int32_t *left_out, bool script)
 {
     if (left_out != NULL)
         *left_out = 0;
     if (cap > 0)
         out[0] = '\0';
-    if (jar == NULL || to == NULL || cap == 0)
+    // No room is still asked: every cookie that matches is counted in
+    // `left_out`, which is how a caller learns it needs room at all.
+    if (jar == NULL || to == NULL)
         return 0;
     size_t rn = path_length(to->path);
     size_t used = 0;
@@ -591,7 +611,8 @@ size_t way_jar_cookies(way_jar_t *jar, const os64_url_t *to, bool encrypted, int
             Cookie *c = &jar->cookies[i];
             bool host = c->host_only ? os64_streq(to->host, c->domain)
                                      : domain_match(to->host, c->domain);
-            if (!host || !path_match(to->path, rn, c->path) || (c->secure && !encrypted))
+            if (!host || !path_match(to->path, rn, c->path) || (c->secure && !encrypted) ||
+                (script && c->http_only))
                 continue;
             if (last != NULL && !before(last, c))
                 continue;
@@ -623,6 +644,24 @@ size_t way_jar_cookies(way_jar_t *jar, const os64_url_t *to, bool encrypted, int
     }
     os64_lock_release(&jar->lock);
     return used;
+}
+
+size_t way_jar_cookies(way_jar_t *jar, const os64_url_t *to, bool encrypted, int64_t now,
+                       char *out, size_t cap, int32_t *left_out)
+{
+    return cookies(jar, to, encrypted, now, out, cap, left_out, false);
+}
+
+void way_jar_script_hear(way_jar_t *jar, const os64_url_t *from, bool encrypted, const char *value,
+                         size_t len, int64_t now)
+{
+    hear(jar, from, encrypted, value, len, now, true);
+}
+
+size_t way_jar_script_cookies(way_jar_t *jar, const os64_url_t *to, bool encrypted, int64_t now,
+                              char *out, size_t cap, int32_t *left_out)
+{
+    return cookies(jar, to, encrypted, now, out, cap, left_out, true);
 }
 
 int32_t way_jar_count(way_jar_t *jar)

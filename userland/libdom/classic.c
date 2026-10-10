@@ -118,7 +118,14 @@ static int named_property(JSContext *ctx, JSPropertyDescriptor *desc, JSValueCon
 JSClassExoticMethods d_node_exotic = {.get_own_property = named_property};
 
 enum { C_IMAGES, C_FORMS, C_ELEMENTS, C_STYLE, C_TITLE, C_NAME, C_SRC, C_WIDTH, C_HEIGHT,
-       C_CAPTURE, C_IMAGE, C_NAVIGATOR, C_USER_AGENT, C_APP_NAME, C_APP_VERSION, C_PLATFORM, C_CURRENT_EVENT, C_LEGACY_ARGUMENTS };
+       C_CAPTURE, C_IMAGE, C_NAVIGATOR, C_USER_AGENT, C_APP_NAME, C_APP_VERSION, C_PLATFORM, C_CURRENT_EVENT, C_LEGACY_ARGUMENTS,
+       C_COOKIE };
+
+/* The room a document.cookie read starts with, doubled until the whole
+ * answer fits: a page's cookies are rarely more, and a jar may hold far more
+ * (thousands of 4096-byte cookies, RFC 6265 § 6.1), which only the DOM's
+ * own allocation budget bounds. */
+#define COOKIE_READ_FIRST (16 * 1024)
 
 static JSValue classic(JSContext *ctx, JSValueConst self, int argc,
                         JSValueConst *argv, int magic, JSValue *data)
@@ -128,6 +135,33 @@ static JSValue classic(JSContext *ctx, JSValueConst self, int argc,
     bool set = (magic & D_SET) != 0;
     magic &= ~D_SET;
     if (magic == C_CAPTURE) return JS_UNDEFINED; // event propagation is already enabled
+    if (magic == C_COOKIE) {
+        const os64_html_node_t *node = d_node(dom, ctx, self);
+        if (node == NULL) return JS_EXCEPTION;
+        if (node->kind != OS64_HTML_DOCUMENT) return JS_ThrowTypeError(ctx, "cookie requires a document");
+        if (set) {
+            DString text = {0};
+            if (!d_string(dom, ctx, argc > 0 ? argv[0] : JS_UNDEFINED, &text)) return JS_EXCEPTION;
+            if (dom->cookies.set != NULL) dom->cookies.set(dom->cookies.opaque, text.data, text.length);
+            d_string_free(dom, &text);
+            return JS_UNDEFINED;
+        }
+        if (dom->cookies.get == NULL) return JS_NewString(ctx, "");
+        for (size_t cap = COOKIE_READ_FIRST; cap != 0 && cap <= SIZE_MAX / 2; cap *= 2) {
+            char *buffer = d_alloc(dom, cap);
+            if (buffer == NULL) return d_error(ctx, "QuotaExceededError", "DOM cookie quota exceeded");
+            bool whole = true;
+            size_t n = dom->cookies.get(dom->cookies.opaque, buffer, cap, &whole);
+            if (!whole) {
+                d_free(dom, buffer);
+                continue;
+            }
+            JSValue result = JS_NewStringLen(ctx, buffer, n < cap ? n : cap - 1);
+            d_free(dom, buffer);
+            return result;
+        }
+        return d_error(ctx, "QuotaExceededError", "DOM cookie quota exceeded");
+    }
     if (magic == C_NAVIGATOR) return JS_DupValue(ctx, dom->navigator->value);
     if (magic == C_LEGACY_ARGUMENTS) {
         os64_js_outcome_t out;
@@ -229,6 +263,13 @@ void os64_dom_set_user_agent(os64_dom_t *dom, const char *(*provider)(void *), v
     dom->user_agent_opaque = opaque;
 }
 
+void os64_dom_set_cookies(os64_dom_t *dom, const os64_dom_cookies_t *cookies)
+{
+    if (dom == NULL || dom->closed) return;
+    if (cookies != NULL) dom->cookies = *cookies;
+    else os64_memset(&dom->cookies, 0, sizeof(dom->cookies));
+}
+
 void os64_dom_set_global_miss(os64_dom_t *dom, void (*heard)(void *opaque, const char *name),
                               void *opaque)
 {
@@ -259,6 +300,7 @@ int d_classic_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
         d_accessor(dom,ctx,form,"elements",classic,C_ELEMENTS,false) < 0 ||
         d_accessor(dom,ctx,el,"style",classic,C_STYLE,false) < 0 ||
         d_accessor(dom,ctx,el,"title",classic,C_TITLE,true) < 0 ||
+        d_accessor(dom,ctx,doc,"cookie",classic,C_COOKIE,true) < 0 ||
         d_accessor(dom,ctx,image,"src",classic,C_SRC,true) < 0 ||
         d_accessor(dom,ctx,image,"width",classic,C_WIDTH,true) < 0 ||
         d_accessor(dom,ctx,image,"height",classic,C_HEIGHT,true) < 0 ||

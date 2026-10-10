@@ -41,6 +41,16 @@ void way_jar_hear(way_jar_t *jar, const os64_url_t *from, bool encrypted, const 
 size_t way_jar_cookies(way_jar_t *jar, const os64_url_t *to, bool encrypted, int64_t now,
                        char *out, size_t cap, int32_t *left_out);
 
+// The same two for a PAGE'S SCRIPT (document.cookie), RFC 6265's "non-HTTP
+// API": it reads the cookies a request to `to` would carry less the
+// HttpOnly ones (`left_out` as above), and a cookie it sets may not be
+// HttpOnly nor have the name, domain and path of an HttpOnly one, host-only
+// or not. way.h's way_script_cookie(s) is the page-level door.
+void way_jar_script_hear(way_jar_t *jar, const os64_url_t *from, bool encrypted, const char *value,
+                         size_t len, int64_t now);
+size_t way_jar_script_cookies(way_jar_t *jar, const os64_url_t *to, bool encrypted, int64_t now,
+                              char *out, size_t cap, int32_t *left_out);
+
 // How many cookies the jar holds, expired ones included until the jar is
 // next asked or told.
 int32_t way_jar_count(way_jar_t *jar);

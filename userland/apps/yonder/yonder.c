@@ -17,6 +17,7 @@
 #include "flow/flow.h"
 #include "garb/cascade.h"
 #include "way/way.h"
+#include "image/image.h"
 #include "os64/os64.h"
 #include "os64/draw.h"
 #include "os64/fmt.h"
@@ -65,6 +66,9 @@
 static const yonder_dark_t kDark = {.paper = 0x101010u};
 static bool s_dark;
 
+// The pages a navigation asks for. libway adds, on a GET, the pictures
+// yonder shows by themselves (YONDER.md § A picture asked for by itself),
+// libimage's list, at half the weight.
 #define YONDER_ACCEPT "text/html, application/xhtml+xml, text/*;q=0.8"
 
 // The work pool. A navigation's job is a FETCH (trip.h; the parse is this
@@ -754,6 +758,9 @@ typedef struct {
         os64_ui_listbox_t list;
     } u;
     os64_ui_widget_t *w;
+    // The widget's own class, kept while a gadget's draws nothing
+    // (forms_place); NULL until the widget is first placed.
+    const os64_ui_class_t *own_class;
     char text[512];                 // a field's buffer, a button's caption
     char secret[512];               // a password's value: the field shows bullets
     size_t secret_len;
@@ -1286,14 +1293,19 @@ static void diag_abandon(yonder_diag_t *d, const char *line)
 #define DIAG_CUSTOM_MAX 64
 static void diag_elements(yonder_diag_t *d, const os64_html_document_t *doc)
 {
-    static const char *const kNothing[] = {"canvas", "video", "audio", "svg"};
-    uint32_t nothing[4] = {0};
+    // A frame's document is not loaded into its box (it is offered as a
+    // link instead), and an embed makes no box: both are asked for and not
+    // shown. An object shows its fallback, as a browser does for what it
+    // cannot play, and is not counted.
+    static const char *const kNothing[] = {"canvas", "video", "audio", "svg", "iframe", "frame", "embed"};
+    enum { NOTHING = sizeof(kNothing) / sizeof(kNothing[0]) };
+    uint32_t nothing[NOTHING] = {0};
     struct { const char *name; uint32_t n; } custom[DIAG_CUSTOM_MAX];
     int32_t ncustom = 0;
     const os64_html_node_t *n = doc != NULL ? doc->document : NULL;
     while (n != NULL) {
         if (n->kind == OS64_HTML_ELEMENT && n->name != NULL) {
-            for (int k = 0; k < 4; k++)
+            for (int k = 0; k < NOTHING; k++)
                 nothing[k] += os64_streq(n->name, kNothing[k]);
             if (n->ns == OS64_HTML_NS_HTML && os64_strchr(n->name, '-') != NULL) {
                 int32_t c = 0;
@@ -1316,7 +1328,7 @@ static void diag_elements(yonder_diag_t *d, const os64_html_document_t *doc)
         if (n != NULL)
             n = n->next;
     }
-    for (int k = 0; k < 4; k++)
+    for (int k = 0; k < NOTHING; k++)
         if (nothing[k] != 0)
             yonder_diag_missing_seen(d, "element", kNothing[k], nothing[k]);
     for (int32_t c = 0; c < ncustom; c++)
@@ -3552,6 +3564,42 @@ refused:
 // header, a hidden dialog's field, one `visibility: hidden`. Whatever of
 // its frame the page draws, the painter draws. Without a layout there is
 // no box to place a control at, so the widgets stay hidden.
+// A control the page made invisible (`opacity: 0`) is drawn when it is a
+// FIELD — in a form, or named, so something is submitted — because then it
+// is nearly always a custom checkbox's real input, whose styled stand-in
+// cannot show what a click here did (POSITION.md, ruling 6). One in no form
+// and with no name, or an empty one (which submits nothing either), is the
+// page's own gadget, a click target laid over something drawn (MediaWiki's
+// menu checkbox), and is left undrawn. Undrawn, not gone: its widget stays
+// where the control is and takes its clicks, its focus and its keys as any
+// control's does, painting nothing (unpainted_class), so a click ticks it
+// and Space ticks it again, with every event a script listens for.
+static bool gadget(const flow_box_t *b, int32_t control)
+{
+    const os64_page_control_t *c = os64_page_control(page_model(&g.page), control);
+    return b->unpainted && c != NULL && c->form < 0 && (c->name == NULL || c->name[0] == '\0');
+}
+
+// A widget class that is `cls` in all but painting: libui skips a class
+// with no paint and still hit-tests, focuses and dispatches to it. One copy
+// per class, made once; NULL when the few slots are spent, and the gadget
+// is then hidden instead.
+static const os64_ui_class_t *unpainted_class(const os64_ui_class_t *cls)
+{
+    static os64_ui_class_t copies[8];
+    static const os64_ui_class_t *of[8];
+    static int32_t n;
+    for (int32_t i = 0; i < n; i++)
+        if (of[i] == cls || &copies[i] == cls)
+            return &copies[i];
+    if (n == (int32_t)(sizeof(copies) / sizeof(copies[0])))
+        return NULL;
+    copies[n] = *cls;
+    copies[n].paint = NULL;
+    of[n] = cls;
+    return &copies[n++];
+}
+
 static void forms_place(void)
 {
     const os64_gui_rect_t v = g.view.bounds;
@@ -3567,9 +3615,18 @@ static void forms_place(void)
         // back inside the view), and whatever is kept is clamped to int32.
         os64_gui_rect_t at = flow_box_doc_rect(b, scroll_now());
         int64_t x = (int64_t)v.x + at.x - g.sx, y = (int64_t)v.y + at.y - g.sy;
+        if (fw->own_class == NULL)
+            fw->own_class = fw->w->cls;
+        const os64_ui_class_t *cls = fw->own_class;
+        if (gadget(b, widget_control(fw)))
+            cls = unpainted_class(fw->own_class);
         bool shown = x >= v.x && y >= v.y && x + at.w <= (int64_t)v.x + v.w &&
                      y + at.h <= (int64_t)v.y + v.h && at.w > 0 && at.h > 0 &&
-                     !flow_box_covered(g.page.tree, b, scroll_now());
+                     !flow_box_covered(g.page.tree, b, scroll_now()) && cls != NULL;
+        if (cls != NULL && cls != fw->w->cls) {
+            fw->w->cls = cls;
+            os64_ui_mark_dirty(&g.ui, fw->w);
+        }
         os64_gui_rect_t r = {clamp32(x), clamp32(y), at.w, at.h};
         if (!shown) {
             if (!fw->w->hidden)
@@ -3868,14 +3925,31 @@ static const char *script_user_agent(void *opaque)
     return g.way.agent != NULL ? g.way.agent : YONDER_AGENT;
 }
 
+// document.cookie: the browser's jar, for the page's own address
+// (libway's script door, which keeps HttpOnly cookies from scripts).
+static size_t script_cookies_get(void *opaque, char *out, size_t cap, bool *whole)
+{
+    return way_script_cookies(g.way.jar, yonder_scripts_url(opaque), yonder_scripts_encrypted(opaque),
+                              out, cap, whole);
+}
+
+static void script_cookies_set(void *opaque, const char *text, size_t length)
+{
+    way_script_cookie(g.way.jar, yonder_scripts_url(opaque), yonder_scripts_encrypted(opaque), text,
+                      length);
+}
+
 static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state_t *state,
-                                      const char *url, uint64_t serial, yonder_diag_t *diag)
+                                      const char *url, bool encrypted, uint64_t serial,
+                                      yonder_diag_t *diag)
 {
     yonder_scripts_options_t options = {url, g.script_ms, serial, script_alert, script_fetch,
                                         script_cancel, script_activate, script_write, script_now,
-                                        script_geometry, doc, diag};
+                                        script_geometry, doc, diag, encrypted};
     yonder_scripts_t *host = yonder_scripts_new(doc, state, &options);
     yonder_scripts_set_user_agent(host, script_user_agent, NULL);
+    const os64_dom_cookies_t cookies = {script_cookies_get, script_cookies_set, host};
+    yonder_scripts_set_cookies(host, &cookies);
     return host;
 }
 
@@ -4705,17 +4779,60 @@ static void reaped(os64_work_id_t id, void *job, void *product)
 // the verdict, once the ring is drained, finishes it and hands the page to
 // arrive() exactly as a page from a worker used to be handed over.
 
+// Text into the page yonder writes, escaped as an attribute's value and a
+// title's text both need it.
+static void feed_escaped(os64_html_parser_t *parser, const char *text, size_t length)
+{
+    for (size_t i = 0; i < length; i++) {
+        const char *escaped = text[i] == '&' ? "&amp;" : text[i] == '"' ? "&quot;"
+                            : text[i] == '<' ? "&lt;" : NULL;
+        if (escaped != NULL)
+            os64_html_parser_feed(parser, escaped, os64_strlen(escaped));
+        else
+            os64_html_parser_feed(parser, text + i, 1);
+    }
+}
+
+// A picture asked for by itself is shown as a browser shows one: alone, in
+// the middle of a dark page, the title its file's name (or its address,
+// when the path names none). The page is written here and the picture
+// fetched as any page's is: the reply's own bytes were not read.
+static void image_page(os64_html_parser_t *parser, const char *url)
+{
+    const char *end = url;
+    while (*end != '\0' && *end != '?' && *end != '#')
+        end++;
+    const char *name = end;
+    while (name > url && name[-1] != '/')
+        name--;
+    static const char kHead[] = "<!doctype html><title>";
+    static const char kBody[] = "</title><body style=\"margin:0;min-height:100vh;display:flex;"
+                                "align-items:center;justify-content:center;background:#0e0e0e\">"
+                                "<img src=\"";
+    os64_html_parser_feed(parser, kHead, sizeof(kHead) - 1);
+    if (name < end)
+        feed_escaped(parser, name, (size_t)(end - name));
+    else
+        feed_escaped(parser, url, os64_strlen(url));
+    os64_html_parser_feed(parser, kBody, sizeof(kBody) - 1);
+    feed_escaped(parser, url, os64_strlen(url));
+    os64_html_parser_feed(parser, "\">", 2);
+}
+
 // The parser for the page whose head has arrived. HTML takes the head's
 // charset; text is laid out by handing libhtml `<plaintext>` and then the
 // bytes — the standard's own element for "everything after this is text",
 // so libflow sees preformatted text and needs nothing new — in the
 // encoding libway's rule chooses from the head and the body's first bytes.
+// A picture's page is yonder's own (image_page), in UTF-8.
 static bool stream_parser(const void *first, size_t n)
 {
     os64_html_options_t opt = os64_html_options_default();
     opt.scripting = g.stream.scripting;
     if (g.stream.head.body == WAY_BODY_HTML) {
         opt.charset = g.stream.head.charset[0] ? g.stream.head.charset : NULL;
+    } else if (g.stream.head.body == WAY_BODY_IMAGE) {
+        opt.charset = "utf-8";
     } else {
         g.stream.text_utf8 = way_text_utf8(&g.stream.head, first, n);
         opt.charset = g.stream.text_utf8 ? "utf-8" : "windows-1252";
@@ -4726,6 +4843,8 @@ static bool stream_parser(const void *first, size_t n)
     if (g.stream.head.body == WAY_BODY_TEXT) {
         static const char kOpen[] = "<!doctype html><plaintext>";
         os64_html_parser_feed(g.stream.parser, kOpen, sizeof(kOpen) - 1);
+    } else if (g.stream.head.body == WAY_BODY_IMAGE) {
+        image_page(g.stream.parser, g.stream.head.url);
     }
     return true;
 }
@@ -4770,7 +4889,8 @@ static void stream_finish(os64_fetch_status_t fetch, const char *reason)
         g.stream.head.body == WAY_BODY_HTML) {
         g.stream.state = os64_page_state_create(doc, 0);
         g.stream.scripts = g.stream.state != NULL
-            ? scripts_host(doc, g.stream.state, g.stream.head.url, g.stream.serial, g.stream.diag) : NULL;
+            ? scripts_host(doc, g.stream.state, g.stream.head.url, g.stream.head.encrypted, g.stream.serial,
+                           g.stream.diag) : NULL;
         if (g.stream.scripts == NULL) {
             os64_page_state_free(g.stream.state);
             g.stream.state = NULL;
@@ -4825,7 +4945,9 @@ static void stream_finish(os64_fetch_status_t fetch, const char *reason)
     // window's own, beside libway's page, as page_doc() reads it.
     os64_page_t *model = os64_page_build(doc, g.stream.head.url, NULL, fresh.state);
     fresh.model_version = os64_html_version(doc);
-    if (g.stream.head.body == WAY_BODY_HTML) {
+    // A picture's page is a page like an HTML one (image_page): its picture
+    // is fetched and its record kept as any page's are.
+    if (g.stream.head.body == WAY_BODY_HTML || g.stream.head.body == WAY_BODY_IMAGE) {
         fresh.way.doc = doc;
         fresh.way.model = model;
         if (g.stream.local != NULL)
@@ -4944,7 +5066,8 @@ static yonder_stop_t stream_stop(os64_html_node_t *script)
         os64_html_document_t *doc = os64_html_parser_document(g.stream.parser);
         g.stream.state = os64_page_state_create(doc, 0);
         g.stream.scripts = g.stream.state != NULL
-            ? scripts_host(doc, g.stream.state, g.stream.head.url, g.stream.serial, g.stream.diag) : NULL;
+            ? scripts_host(doc, g.stream.state, g.stream.head.url, g.stream.head.encrypted, g.stream.serial,
+                           g.stream.diag) : NULL;
         if (g.stream.scripts == NULL) {
             os64_page_state_free(g.stream.state);
             g.stream.state = NULL;
@@ -5115,7 +5238,7 @@ static bool stream_turn(void)
     yonder_mail_t *mail = g.stream.mail;
     if (mail != NULL && !g.stream.has_head && yonder_mail_take_head(mail, &g.stream.head)) {
         g.stream.has_head = true;
-        if (g.stream.head.body == WAY_BODY_HTML && !stream_parser(NULL, 0)) {
+        if (g.stream.head.body != WAY_BODY_TEXT && !stream_parser(NULL, 0)) {
             stream_failed("Out of memory reading that page.");
             stop_trip();
             status_rest("Out of memory reading that page.");
@@ -5575,6 +5698,48 @@ static void glass_control(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os6
     glass_fill(&cut, (os64_gui_rect_t){c.x + c.w - 1, c.y, 1, c.h}, 0xd4d4d4);
 }
 
+// A frame's stand-in: a pale panel, and along its top where the frame's
+// document is ("Frame: https://..."), cut to the panel. The run is made for
+// this paint and let go after it, so no tree's replacement can leave one
+// behind; a page has few frames.
+#define FRAME_LABEL_PX 13
+#define FRAME_LABEL_MAX 512
+static void glass_frame(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_gui_rect_t clip,
+                        uint32_t ink, uint32_t paper)
+{
+    Glass cut = *(const Glass *)ctx;
+    os64_gui_rect_t room;
+    if (!os64_rect_intersect(c, clip, &room))
+        return;
+    cut.clip = on_glass(&cut, room);
+    if (cut.clip.w <= 0 || cut.clip.h <= 0)
+        return;
+    glass_fill(&cut, c, paper);
+    const os64_page_link_t *l = os64_page_link(flow_model(g.page.tree), b->link);
+    char text[FRAME_LABEL_MAX];
+    if (l != NULL && l->href.url != NULL)
+        os64_snprintf(text, sizeof(text), "Frame: %s", l->href.url);
+    else
+        os64_strcopy(text, sizeof(text), "Frame (it names no document)");
+    const flow_family_list_t sans = {NULL, 0, FLOW_GENERIC_SANS};
+    os64_text_font_t *const *fonts;
+    size_t nfonts;
+    os64_font_face_info_t face;
+    uint32_t px = (uint32_t)((int64_t)FRAME_LABEL_PX * (g.zoom != 0 ? g.zoom : 1000) / 1000);
+    if (s_env.text == NULL || page_fonts(NULL, &sans, false, false, px, &fonts, &nfonts, &face) != OS64_FONT_OK)
+        return;
+    os64_text_layout_t opt = {.encoding = OS64_TEXT_UTF8_WESTERN_V1, .fonts = fonts,
+                              .font_count = nfonts, .tab_interval = 64 * 8};
+    os64_text_run_t *run = NULL;
+    if (os64_text_layout(s_env.text, (const uint8_t *)text, os64_strlen(text), &opt, &run) != OS64_FONT_OK)
+        return;
+    int32_t pad = (int32_t)(px / 2);
+    int32_t baseline = c.y + pad + (int32_t)((face.ascent + 63) / 64);
+    os64_text_draw_alpha(run, cut.surf, cut.clip, c.x + pad + cut.dx, baseline + cut.dy,
+                         0xff000000u | ink, flow_alpha(ink));
+    os64_text_run_release(run);
+}
+
 // ── A scrolled box's bars ───────────────────────────────────────────────
 //
 // A box a person can scroll shows where it is with a thin bar over the
@@ -5689,7 +5854,7 @@ static void view_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_
     }
     yonder_verbs_t v = {&gl,           glass_fill,       glass_text,       glass_image,
                         glass_control, glass_backdrop,   glass_group_open, glass_group_close,
-                        glass_mask,    glass_pixels};
+                        glass_mask,    glass_pixels,     glass_frame};
     os64_gui_rect_t view = {part.x - gl.dx, part.y - gl.dy, part.w, part.h};
     yonder_paint(g.page.tree, view, scroll_now(), PAGE_PAPER, s_dark ? &kDark : NULL, &v);
     box_bars(&gl, view);

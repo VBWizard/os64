@@ -331,6 +331,7 @@ static void head_copy(way_head_t *out, const os64_fetch_head_t *head, way_body_t
     os64_strcopy(out->charset, sizeof(out->charset), head->charset);
     os64_strcopy(out->url, sizeof(out->url), head->url_text);
     out->posted = head->method == OS64_FETCH_METHOD_POST;
+    out->encrypted = head->encrypted;
     out->body = body;
 }
 
@@ -346,14 +347,27 @@ bool way_open(way_leg_t *s, const char *url, const os64_page_request_t *request,
     os64_html_options_t limits = os64_html_options_default();
     os64_fetch_options_t opt = {0};
     opt.user_agent = s->agent;
-    opt.accept = s->session->accept;
+    // Pictures are asked for only on a GET: a POST's reply is never shown as
+    // a picture (below), so advertising one would invite a reply refused. A
+    // POST a redirect turns into a GET asks for them from there on.
+    bool posting = request != NULL && request->method == OS64_PAGE_METHOD_POST;
+    // A page list too long to compose is sent as it is, and libfetch refuses
+    // it: an Accept is never cut short.
+    char accept[OS64_FETCH_ACCEPT_MAX], accept_get[OS64_FETCH_ACCEPT_MAX];
+    const char *with_pictures = way_accept_compose(s->session->accept, s->pictures, accept_get,
+                                                   sizeof(accept_get));
+    const char *pages = way_accept_compose(s->session->accept, NULL, accept, sizeof(accept));
+    if (with_pictures == NULL || pages == NULL)
+        with_pictures = pages = s->session->accept;
+    opt.accept = posting ? pages : with_pictures;
+    opt.accept_get = with_pictures;
     opt.max_body = limits.max_bytes;     // the same page, the same cap
     opt.cancelled = fetch_cancelled;
     opt.on_hop = hop_ask;
     opt.headers_for = leg_headers;
     opt.on_set_cookie = leg_cookie;
     opt.ctx = s;
-    if (request != NULL && request->method == OS64_PAGE_METHOD_POST) {
+    if (posting) {
         opt.method = OS64_FETCH_METHOD_POST;
         opt.body = request->body;
         opt.body_len = request->body_len;
@@ -381,7 +395,14 @@ bool way_open(way_leg_t *s, const char *url, const os64_page_request_t *request,
     bool html = type[0] == '\0' || os64_streq(type, "text/html")
                 || os64_streq(type, "application/xhtml+xml");
     bool plain = !html && type_is_text(type);
-    if (!html && !plain) {
+    // A PICTURE ASKED FOR BY ITSELF is shown as a browser shows one, on a
+    // page of its own, by a face that can; a POST's reply is not, since the
+    // face's own fetch of the picture would be a GET of another thing. Only
+    // a kind the face says it shows: any other picture is a file to save, as
+    // it always was, not a page showing a broken picture.
+    bool image = !html && !plain && head->method != OS64_FETCH_METHOD_POST &&
+                 way_accept_names(s->pictures, type);
+    if (!html && !plain && !image) {
         // Not a page at all. Say what it is and how to keep it — unless the
         // reply was to a POST, which a new GET of the address cannot fetch
         // again. The FINAL method decides: a redirect may have turned it.
@@ -398,7 +419,7 @@ bool way_open(way_leg_t *s, const char *url, const os64_page_request_t *request,
         return false;
     }
     out->fetch = f;
-    head_copy(&out->head, head, html ? WAY_BODY_HTML : WAY_BODY_TEXT);
+    head_copy(&out->head, head, html ? WAY_BODY_HTML : image ? WAY_BODY_IMAGE : WAY_BODY_TEXT);
     const os64_fetch_detail_t *detail = os64_fetch_detail(f);
     out->head.tls_version = detail->tls_version;
     out->head.tls_fallback = detail->tls_fallback;
@@ -493,13 +514,60 @@ static char *read_body(way_leg_t *s, way_opening_t *o, size_t cap, size_t *len, 
     return text;
 }
 
+// ── A page's script ─────────────────────────────────────────────────────
+
+// The page's address as the jar keeps cookies for it: an http or https
+// page only (any other has none). Encrypted only when it is https AND it
+// arrived so (`arrived`): the scheme alone would hand Secure cookies to a
+// script a plain proxy could have written.
+static bool script_page(const char *page_url, bool arrived, os64_url_t *url, bool *encrypted)
+{
+    if (page_url == NULL || os64_url_parse(page_url, url) != OS64_URL_OK)
+        return false;
+    bool https = os64_streq(url->scheme, "https");
+    *encrypted = https && arrived;
+    return https || os64_streq(url->scheme, "http");
+}
+
+size_t way_script_cookies(way_jar_t *jar, const char *page_url, bool arrived, char *out,
+                          size_t cap, bool *whole)
+{
+    os64_url_t url;
+    bool encrypted;
+    *whole = true;
+    if (cap > 0)
+        out[0] = '\0';
+    if (!script_page(page_url, arrived, &url, &encrypted))
+        return 0;
+    int32_t left = 0;
+    size_t n = way_jar_script_cookies(jar, &url, encrypted, now_utc(), out, cap, &left);
+    *whole = left == 0;
+    return n;
+}
+
+void way_script_cookie(way_jar_t *jar, const char *page_url, bool arrived, const char *text,
+                       size_t len)
+{
+    os64_url_t url;
+    bool encrypted;
+    if (script_page(page_url, arrived, &url, &encrypted))
+        way_jar_script_hear(jar, &url, encrypted, text, len, now_utc());
+}
+
 // ── Loading ─────────────────────────────────────────────────────────────
 
 bool way_load(way_leg_t *s, const char *url, const os64_page_request_t *request,
               way_page_t *out, os64_fetch_status_t *why)
 {
+    // The whole-page load reads every body it opens, and a picture's is the
+    // face's to fetch itself (WAY_BODY_IMAGE): this path has nowhere to hand
+    // one over, so a picture is not a page here, whatever the leg shows.
     way_opening_t o;
-    if (!way_open(s, url, request, &o, why))
+    const char *pictures = s->pictures;
+    s->pictures = NULL;
+    bool opened = way_open(s, url, request, &o, why);
+    s->pictures = pictures;
+    if (!opened)
         return false;
     bool short_of_memory = false;        // a truncation of OURS, not the wire's
     os64_html_options_t limits = os64_html_options_default();

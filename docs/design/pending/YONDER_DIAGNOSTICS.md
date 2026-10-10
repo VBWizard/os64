@@ -312,3 +312,20 @@ each was a page dying on something that browsers have had since the 2000s.
   `hidden`, `lang`, `dir`, `tabIndex`, a script's `src` (wiki.osdev.org's
   Cloudflare loader set it and connected an empty script) and an anchor's
   and a link's `href`.
+
+## Batch 3: what the census showed, and what a page needs to be read
+
+- **An invisible control that is no field is not drawn** (Chris's ruling,
+  POSITION.md ruling 6 amended): MediaWiki's menu checkbox, once #246 gave
+  it its true size, was drawn as a band across every Vector page. Its
+  widget stays and paints nothing (`unpainted_class`), so a click, its
+  focus and Space still tick it, with the events a script listens for.
+- **A frame stands in for its document**: an iframe or a frame is drawn as
+  a pale panel naming where its document is, and a click there follows it
+  (it always did; libpage makes a frame a link). The record counts
+  `MISSING element iframe`, `frame` and `embed`; an object shows its
+  fallback and is not counted.
+- **A picture asked for by itself is shown** on a page of its own
+  (YONDER.md § A picture asked for by itself), where it said "not a page".
+- **`document.cookie`** (LIBDOM.md § The classic methods): MediaWiki's first
+  inline script died reading it, and took the wiki's module loader with it.

@@ -655,6 +655,161 @@ static bool by_hand(const char *url, bool scripting, way_page_t *page, os64_fetc
     return true;
 }
 
+// A picture asked for by itself is a page for a face that shows pictures,
+// its body left unread for the face; for one that does not, it is not a
+// page and the sentence says how to keep it.
+static void pictures_are_pages_for_a_face_that_shows_them(void)
+{
+    static const char kPng[] = "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: 3\r\n\r\nPNG";
+    for (int pictures = 0; pictures < 2; pictures++) {
+        fresh();
+        script("pic.test", kPng);
+        way_session_t session = {.name="fixture", .agent="fixture", .accept="text/html"};
+        way_leg_t leg = way_leg(&session);
+        leg.pictures = pictures != 0 ? "image/png, image/gif" : NULL;
+        way_opening_t o;
+        os64_fetch_status_t why;
+        bool opened = way_open(&leg, "http://pic.test/dwm.png", NULL, &o, &why);
+        if (pictures) {
+            expect("pictures: a picture is a page for a face that shows them",
+                   opened && o.head.body == WAY_BODY_IMAGE, leg.status);
+            if (opened)
+                os64_fetch_close(o.fetch);
+        } else {
+            expect("pictures: a picture is not a page for a face that shows none",
+                   !opened && strstr(leg.status, "that is image/png, not a page") != NULL, leg.status);
+        }
+    }
+    // A kind the face does not name is a file to save even for a face that
+    // shows pictures: a page of it would be a broken picture.
+    fresh();
+    script("pic.test", "HTTP/1.1 200 OK\r\nContent-Type: image/webp\r\nContent-Length: 3\r\n\r\nWEB");
+    static way_session_t session = {.name="fixture", .agent="fixture", .accept="text/html"};
+    way_leg_t leg = way_leg(&session);
+    leg.pictures = "image/png, image/gif";
+    way_opening_t o;
+    os64_fetch_status_t why;
+    bool opened = way_open(&leg, "http://pic.test/a.webp", NULL, &o, &why);
+    static const char kList[] = "image/png, image/x-portable-pixmap;q=0.5,image/gif";
+    expect("pictures: a type is the face's when its list names it whole, parameters aside",
+           way_accept_names(kList, "image/png") && way_accept_names(kList, "image/x-portable-pixmap") &&
+               way_accept_names(kList, "image/gif") && !way_accept_names(kList, "image/webp") &&
+               !way_accept_names(kList, "image/pn") && !way_accept_names(kList, "q=0.5") &&
+               !way_accept_names(kList, "") && !way_accept_names(NULL, "image/png"),
+           NULL);
+    // A GET asks for the leg's pictures after its pages, at half the weight;
+    // a POST does not, since its reply is never shown as a picture.
+    for (int post = 0; post < 2; post++) {
+        fresh();
+        script("pic.test", "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 2\r\n\r\nok");
+        static way_session_t ask_session = {.name="fixture", .agent="fixture", .accept="text/html"};
+        way_leg_t ask_leg = way_leg(&ask_session);
+        ask_leg.pictures = "image/png, image/gif";
+        os64_page_request_t request = {.method = OS64_PAGE_METHOD_POST, .body = "a=1", .body_len = 3,
+                                       .content_type = "application/x-www-form-urlencoded"};
+        way_opening_t ao;
+        os64_fetch_status_t awhy;
+        bool aopened = way_open(&ask_leg, "http://pic.test/form", post ? &request : NULL, &ao, &awhy);
+        if (aopened) {
+            expect("head: a page over plain http did not arrive encrypted", !ao.head.encrypted, NULL);
+            os64_fetch_close(ao.fetch);
+        }
+        bool asked = false, pages_only = false;
+        for (int k = 0; k < 8; k++) {
+            asked |= strstr(s_last_request[k], "Accept: text/html, image/png;q=0.5, image/gif;q=0.5\r\n") != NULL;
+            pages_only |= strstr(s_last_request[k], "Accept: text/html\r\n") != NULL;
+        }
+        expect(post ? "pictures: a POST asks for pages only" : "pictures: a GET asks for the pictures after the pages",
+               aopened && (post ? pages_only && !asked : asked && !pages_only), ask_leg.status);
+    }
+    {
+        // A page's script reads and sets Secure cookies only when its page
+        // ARRIVED encrypted: an https address through a plain proxy did not.
+        fresh();
+        way_jar_t *jar = way_jar_new();
+        os64_url_t site;
+        os64_url_parse("https://s.test/", &site);
+        way_jar_hear(jar, &site, true, "token=secret; Secure", 20, 100);
+        char got[64];
+        bool whole;
+        way_script_cookies(jar, "https://s.test/", false, got, sizeof(got), &whole);
+        bool hidden = strcmp(got, "") == 0;
+        way_script_cookies(jar, "https://s.test/", true, got, sizeof(got), &whole);
+        bool seen = strcmp(got, "token=secret") == 0;
+        way_script_cookie(jar, "https://s.test/", false, "forged=1; Secure", 16);
+        way_script_cookies(jar, "https://s.test/", true, got, sizeof(got), &whole);
+        expect("cookies: a page's script sees and sets Secure cookies only over its own encrypted arrival",
+               hidden && seen && strcmp(got, "token=secret") == 0, got);
+        way_jar_free(jar);
+    }
+    {
+        // A POST a 303 turns into a GET asks for the pictures from there on.
+        fresh();
+        script("pic.test", "HTTP/1.1 303 See Other\r\nLocation: /done\r\nContent-Length: 0\r\n\r\n");
+        script("pic.test", "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 2\r\n\r\nok");
+        static way_session_t hop_session = {.name="fixture", .agent="fixture", .accept="text/html"};
+        way_leg_t hop_leg = way_leg(&hop_session);
+        hop_leg.pictures = "image/png, image/gif";
+        os64_page_request_t request = {.method = OS64_PAGE_METHOD_POST, .body = "a=1", .body_len = 3,
+                                       .content_type = "application/x-www-form-urlencoded"};
+        way_opening_t ho;
+        os64_fetch_status_t hwhy;
+        bool hopened = way_open(&hop_leg, "http://pic.test/form", &request, &ho, &hwhy);
+        if (hopened)
+            os64_fetch_close(ho.fetch);
+        bool asked = false;
+        for (int k = 0; k < 8; k++)
+            asked |= strstr(s_last_request[k], "GET /done") != NULL &&
+                     strstr(s_last_request[k], "Accept: text/html, image/png;q=0.5, image/gif;q=0.5\r\n") != NULL;
+        expect("pictures: a POST redirected to a GET asks for them on the GET", hopened && asked, hop_leg.status);
+    }
+    {
+        char out[40];
+        expect("accept: a picture type that would not fit is left off whole",
+               strcmp(way_accept_compose("text/html", "image/png, image/x-portable-pixmap", out, sizeof(out)),
+                      "text/html, image/png;q=0.5") == 0, out);
+        static char long_pages[600];
+        memset(long_pages, 'a', sizeof(long_pages) - 1);
+        expect("accept: a page list that does not fit is never cut",
+               way_accept_compose(long_pages, "image/png", out, sizeof(out)) == NULL, NULL);
+        fresh();
+        script("pic.test", "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 2\r\n\r\nok");
+        static way_session_t long_session = {.name="fixture", .agent="fixture"};
+        long_session.accept = long_pages;
+        way_leg_t long_leg = way_leg(&long_session);
+        long_leg.pictures = "image/png";
+        way_opening_t lo;
+        os64_fetch_status_t lwhy;
+        bool lopened = way_open(&long_leg, "http://pic.test/", NULL, &lo, &lwhy);
+        if (lopened)
+            os64_fetch_close(lo.fetch);
+        expect("accept: a page list longer than libfetch sends is refused, not cut",
+               !lopened && strstr(long_leg.status, "longer than this will send") != NULL, long_leg.status);
+        expect("accept: a picture's own parameters give way to the half weight",
+               strcmp(way_accept_compose(NULL, "image/png;q=0.9", out, sizeof(out)), "image/png;q=0.5") == 0, out);
+    }
+    {
+        fresh();
+        script("pic.test", "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: 3\r\n\r\nPNG");
+        static way_session_t whole_session = {.name="fixture", .agent="fixture", .accept="text/html"};
+        way_leg_t whole_leg = way_leg(&whole_session);
+        whole_leg.pictures = "image/png";
+        way_page_t page = {0};
+        os64_fetch_status_t whole_why;
+        bool loaded = way_load(&whole_leg, "http://pic.test/dwm.png", NULL, &page, &whole_why);
+        expect("pictures: the whole-page load never reads a picture as a page",
+               !loaded && page.text == NULL && strstr(whole_leg.status, "that is image/png, not a page") != NULL &&
+                   whole_leg.pictures != NULL,
+               whole_leg.status);
+        if (loaded)
+            way_page_clear(&page);
+    }
+    expect("pictures: one the face does not name is still a file to save",
+           !opened && strstr(leg.status, "that is image/webp, not a page") != NULL, leg.status);
+    if (opened)
+        os64_fetch_close(o.fetch);
+}
+
 static void pieces_make_the_same_page(void)
 {
     static const char *const replies[] = {
@@ -754,6 +909,7 @@ int main(void)
     s_jar = way_jar_new();
     scripted_document_load();
     pieces_make_the_same_page();
+    pictures_are_pages_for_a_face_that_shows_them();
     options_left_alone();
     validator_identity();
     restrictive_304();
