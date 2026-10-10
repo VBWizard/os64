@@ -348,10 +348,12 @@ each was a page dying on something that browsers have had since the 2000s.
   it`, `the workers would not take it`), and one past the memory a page's
   pictures may keep is named on a plain line, since that is a limit kept
   and not a failure. A body yonder had no memory to hold reads `did not
-  fetch (no-memory)`, never `(ok)`. A picture the page names that never
-  reaches the table is on the record too: an address libpage refused is
-  `FAILED picture` as written, with the refusal, and one in a scheme
-  nothing here fetches is `MISSING picture-scheme data`, counted. The
+  fetch (no-memory)`, never `(ok)`. A picture the page or its sheets name
+  that never reaches the table is on the record too, ONCE however often a
+  rebuild or a layout meets it (a set of them, `unasked_first`): one in a
+  scheme nothing here fetches is `MISSING picture-scheme data`, counted,
+  and an address that was refused is `FAILED picture` as written, with
+  the refusal. Met with no picture out, it writes the record then. The
   `pictures:` line counts those (`not asked for`) and the ones a page left
   before they arrived (`still coming`). A layout that stopped partway is a
   condition, so it is one `FAILED layout` however often the file is

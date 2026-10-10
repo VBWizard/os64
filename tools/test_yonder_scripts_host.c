@@ -3368,6 +3368,16 @@ static void diag_picture_unasked_case(void) {
     check(has(text,"MISSING picture-scheme data (1)") && has(text,"FAILED picture: http://[bad: the address was refused (") &&
           has(text,"not asked for") && g.page.unasked==2,
         "diag: a picture refused before the table is on the record, by its scheme or its refusal");
+    /* Met with nothing out, the record is written then; met again (a
+     * script's rebuild), it is the same picture and records nothing more. */
+    char name[64]; yonder_diag_file_name(g.page.diag,name,sizeof(name));
+    check(has(diag_file("/tmp/diag",name),"MISSING picture-scheme data (1)"),
+        "diag: a refusal met with no picture out writes the record");
+    pictures_start(&g.page);
+    yonder_diag_render(g.page.diag,text,sizeof(text));
+    check(g.page.unasked==2 && has(text,"MISSING picture-scheme data (1)") &&
+          has(text,"FAILED picture: http://[bad: the address was refused (the address it names is not one that resolves) (1)"),
+        "diag: a refused picture met again is the same picture");
     /* Left with one still out: counted, not failed. */
     g.page.pics[0].state=PIC_WAITING;
     diag_observe(&g.page,"when the page was left");
@@ -3378,6 +3388,30 @@ static void diag_picture_unasked_case(void) {
     yonder_diag_failed_seen(g.page.diag,"layout","stopped");
     yonder_diag_render(g.page.diag,text,sizeof(text));
     check(has(text,"FAILED layout: stopped (1)\n"),"diag: a standing failure is counted once however often it is seen");
+    yonder_diag_free(g.page.diag); g.page.diag=NULL;
+    probe_drop();
+}
+
+/* A sheet's background in a scheme nothing fetches is refused before the
+ * table too, and on the record. */
+static void diag_css_unasked_case(void) {
+    /* A page whose only picture is refused before the table: nothing will
+     * ever come in to write the record, so meeting it writes it. */
+    probe_page("<img src='data:image/png;base64,iVBORw0KGgo='>",true);
+    g.page.diag=yonder_diag_new("http://only.test/",1,0);
+    pictures_start(&g.page);
+    char only[64]; yonder_diag_file_name(g.page.diag,only,sizeof(only));
+    check(g.page.npics==0 && has(diag_file("/tmp/diag",only),"MISSING picture-scheme data (1)"),
+        "diag: a page whose only picture is refused writes the record when it meets it");
+    yonder_diag_free(g.page.diag); g.page.diag=NULL;
+    probe_drop();
+    probe_page("<style>p{background-image:url('data:image/png;base64,AAAA')}</style><p>x</p>",true);
+    g.page.diag=yonder_diag_new("http://c.test/",1,0);
+    css_pictures(&g.page);
+    css_pictures(&g.page);          /* every layout meets it again */
+    char text[2048]; yonder_diag_render(g.page.diag,text,sizeof(text));
+    check(has(text,"MISSING picture-scheme data (1)") && g.page.unasked==1,
+        "diag: a sheet's picture refused before the table is on the record, once");
     yonder_diag_free(g.page.diag); g.page.diag=NULL;
     probe_drop();
 }
@@ -3599,6 +3633,7 @@ static void diag_cases(void) {
     diag_picture_unshown_case();
     diag_picture_workerless_case();
     diag_picture_unasked_case();
+    diag_css_unasked_case();
     diag_long_source_case();
     diag_tokens_exclusive();
     /* Setting absent: no file, while the badge still counts. */

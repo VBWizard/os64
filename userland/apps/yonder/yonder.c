@@ -437,7 +437,11 @@ typedef struct Page {
     // next picture to hand it.
     int32_t waiting, in_flight, next_pic;
     int32_t not_kept;
-    int32_t unasked;                // pictures refused before the table (picture_unasked)
+    // Pictures refused before the table (picture_unasked): how many, and
+    // each one's identity, so a rebuild or a new layout that meets the
+    // same one again records nothing more.
+    int32_t unasked, unasked_cap;
+    uint64_t *unasked_seen;
     size_t kept_bytes, picture_url_bytes;
     // The form whose reply this is, when the reply was to a POST: what
     // Reload sends again. Its url is NULL otherwise.
@@ -517,6 +521,7 @@ static void page_clear(Page *p)
     }
     os64_free(p->pics);
     os64_free(p->pic_slot);
+    os64_free(p->unasked_seen);
     os64_free(p->pic_of);
     os64_free(p->bg_of);
     for (int32_t i = 0; i < p->nbox_scrolls; i++)
@@ -2796,33 +2801,47 @@ static bool css_shows(const Page *p, const flow_style_t *s, int32_t k)
     return false;
 }
 
+static bool picture_unasked(Page *p, const char *url, const char *written,
+                            os64_page_reason_t refused);
+static const char *written_attr(const os64_html_node_t *node, const char *attr);
+
 // After a layout: every picture the laid-out boxes' sheets put behind them
 // is sent for, once — a resize whose media query brings a new one fetches
 // it then.
-static void css_pictures_under(Page *p, const flow_box_t *b)
+static bool css_pictures_under(Page *p, const flow_box_t *b)
 {
+    bool fresh = false;             // a refusal the record had not met
     for (; b != NULL; b = b->next) {
         for (int32_t i = 0; b->node != NULL && i < flow_background_layers(b->style); i++) {
             flow_layer_t l = flow_background_layer(b->style, i);
             char url[OS64_FETCH_URL_MAX];
-            if (l.image != NULL && css_url(p, &l, url, sizeof(url)))
-                (void)picture_for(p, url);
+            if (l.image == NULL)
+                continue;
+            if (!css_url(p, &l, url, sizeof(url))) {
+                // Unresolved: the address as the sheet wrote it.
+                size_t len = l.image_len < sizeof(url) - 1 ? l.image_len : sizeof(url) - 1;
+                os64_memcpy(url, l.image, len);
+                url[len] = '\0';
+                fresh |= picture_unasked(p, NULL, url, OS64_PAGE_REASON_OK);
+            } else if (picture_for(p, url) < 0) {
+                fresh |= picture_unasked(p, url, NULL, OS64_PAGE_REASON_OK);
+            }
         }
-        css_pictures_under(p, b->first);
+        fresh |= css_pictures_under(p, b->first);
     }
+    return fresh;
 }
 
 // Without workers too: pictures_feed names each one it cannot hand over.
 static void css_pictures(Page *p)
 {
     if (p->tree != NULL && p->sheets_ready > 0) {
-        css_pictures_under(p, flow_root(p->tree));
+        bool fresh = css_pictures_under(p, flow_root(p->tree));
         pictures_feed(p);
+        if (fresh && p->waiting == 0)
+            diag_pictures_in(p);
     }
 }
-
-static void picture_unasked(Page *p, const os64_page_ref_t *src, const os64_html_node_t *node,
-                            const char *attr);
 
 // Gathers the page's pictures and the pictures behind its boxes, one per
 // address, in tree order — libpage's lists are the record — and starts
@@ -2853,12 +2872,13 @@ static void pictures_start(Page *p)
     p->nbackground_map = nb;
     // A picture moves the page when any element naming it leaves its box
     // to the picture; a background never does, being painted, not laid out.
+    bool fresh = false;             // a refusal the record had not met
     for (int32_t i = 0; i < n; i++) {
         const os64_page_image_t *img = os64_page_image(model, i);
         int32_t k = picture_for(p, img->src.url);
         p->pic_of[i] = k;
         if (k < 0)
-            picture_unasked(p, &img->src, img->node, "src");
+            fresh |= picture_unasked(p, img->src.url, written_attr(img->node, "src"), img->src.refused);
         if (k >= 0 && !picture_sized(p, img->node))
             p->pics[k].moves = true;
     }
@@ -2866,9 +2886,14 @@ static void pictures_start(Page *p)
         const os64_page_background_t *bg = os64_page_background(model, i);
         p->bg_of[i] = picture_for(p, bg->src.url);
         if (p->bg_of[i] < 0)
-            picture_unasked(p, &bg->src, bg->node, "background");
+            fresh |= picture_unasked(p, bg->src.url, written_attr(bg->node, "background"),
+                                     bg->src.refused);
     }
     pictures_feed(p);
+    // A refusal met with nothing out to write the record when it comes in
+    // is written now, as one met with the pictures in would be.
+    if (fresh && p->waiting == 0)
+        diag_pictures_in(p);
 }
 
 // The page is being left: its pictures in the pool are cancelled, and the
@@ -2883,48 +2908,82 @@ static void pictures_leave(Page *p)
     p->next_pic = p->npics;
 }
 
-// A picture the page names that never reaches the table, on the record:
-// an address libpage refused is FAILED picture, as written, with the
-// refusal; one in a scheme nothing here fetches (a `data:` picture) is
-// MISSING picture-scheme, counted, since its address is the picture
-// itself; one past what a page may name, or with no memory to hold it, is
-// FAILED picture by its address.
-static void picture_unasked(Page *p, const os64_page_ref_t *src, const os64_html_node_t *node,
-                            const char *attr)
+// Whether `key` names a picture refused before the table for the first
+// time on this page: a set of their hashes, kept so the record is a set
+// of pictures and not of the times they were met. At YONDER_UNASKED_MAX
+// identities the rest are taken as seen: the count stops there.
+#define YONDER_UNASKED_MAX 4096
+static bool unasked_first(Page *p, const char *key)
 {
-    if (p->diag == NULL)
-        return;
-    p->unasked++;
+    uint64_t h = 1469598103934665603ull;       // FNV-1a, as url_hash
+    for (const char *c = key; *c != '\0'; c++)
+        h = (h ^ (uint8_t)*c) * 1099511628211ull;
+    for (int32_t i = 0; i < p->unasked; i++)
+        if (p->unasked_seen[i] == h)
+            return false;
+    if (p->unasked == p->unasked_cap) {
+        int32_t cap = p->unasked_cap > 0 ? p->unasked_cap * 2 : 16;
+        uint64_t *grown = cap <= YONDER_UNASKED_MAX
+                              ? os64_realloc(p->unasked_seen, (size_t)cap * sizeof(*grown)) : NULL;
+        if (grown == NULL)
+            return false;
+        p->unasked_seen = grown;
+        p->unasked_cap = cap;
+    }
+    p->unasked_seen[p->unasked++] = h;
+    return true;
+}
+
+// A picture the page names that never reaches the table, on the record
+// once (unasked_first): one in a scheme nothing here fetches (a `data:`
+// picture, which the resolver does not even take) is MISSING
+// picture-scheme, counted, since its address is the picture itself; an
+// address that was refused (`url` NULL) is FAILED picture, `written` as
+// the page wrote it, with the refusal when there is one; one past what a
+// page may name, or with no memory to hold it, is FAILED picture by its
+// address. True when it was new, and the record changed.
+static bool picture_unasked(Page *p, const char *url, const char *written,
+                            os64_page_reason_t refused)
+{
+    const char *addr = url != NULL ? url : written != NULL ? written : "";
+    if (p->diag == NULL || !unasked_first(p, addr))
+        return false;
+    // The scheme as written, letters before a colon: a `data:` address is
+    // no URL the parser takes, and is the case most worth counting.
+    char scheme[16];
+    size_t n = 0;
+    while (addr[n] != '\0' && addr[n] != ':' && n + 1 < sizeof(scheme)) {
+        scheme[n] = addr[n];
+        n++;
+    }
+    scheme[n] = '\0';
+    bool named = addr[n] == ':' && n > 1;
+    bool fetched = os64_streq(scheme, "http") || os64_streq(scheme, "https") ||
+                   os64_streq(scheme, "file");
     char line[OS64_FETCH_URL_MAX + 96];
-    if (src->url == NULL) {
-        const os64_html_attr_t *a = node != NULL ? os64_html_attr(node, attr) : NULL;
-        os64_snprintf(line, sizeof(line), "%.256s: the address was refused (%s)",
-                      a != NULL && a->value != NULL ? a->value : "(no address)",
-                      os64_page_reason_name(src->refused));
+    if (named && !fetched) {
+        yonder_diag_missing(p->diag, "picture-scheme", scheme, 1);
+    } else if (url == NULL) {
+        if (refused != OS64_PAGE_REASON_OK)
+            os64_snprintf(line, sizeof(line), "%.256s: the address was refused (%s)", addr,
+                          os64_page_reason_name(refused));
+        else
+            os64_snprintf(line, sizeof(line), "%.256s: the address was refused", addr);
         yonder_diag_failed(p->diag, "picture", line);
     } else {
-        // The scheme as written: a `data:` address is no URL the parser
-        // takes, and is the case most worth counting.
-        char scheme[16];
-        size_t n = 0;
-        while (src->url[n] != '\0' && src->url[n] != ':' && n + 1 < sizeof(scheme)) {
-            scheme[n] = src->url[n];
-            n++;
-        }
-        scheme[n] = '\0';
-        bool fetched = src->url[n] == ':' &&
-                       (os64_streq(scheme, "http") || os64_streq(scheme, "https") ||
-                        os64_streq(scheme, "file"));
-        if (!fetched) {
-            yonder_diag_missing(p->diag, "picture-scheme", src->url[n] == ':' ? scheme : "unnamed", 1);
-        } else {
-            os64_snprintf(line, sizeof(line), "%s: past the pictures a page may name, or no memory",
-                          src->url);
-            yonder_diag_failed(p->diag, "picture", line);
-        }
+        os64_snprintf(line, sizeof(line), "%s: past the pictures a page may name, or no memory", url);
+        yonder_diag_failed(p->diag, "picture", line);
     }
     if (p == &g.page)
         badge_follow();
+    return true;
+}
+
+// A refused attribute's text as the page wrote it, for the record.
+static const char *written_attr(const os64_html_node_t *node, const char *attr)
+{
+    const os64_html_attr_t *a = node != NULL ? os64_html_attr(node, attr) : NULL;
+    return a != NULL ? a->value : NULL;
 }
 
 // The workers stopped (g.pool is gone) with pictures still out: each one
