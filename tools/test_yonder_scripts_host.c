@@ -3299,6 +3299,49 @@ static void diag_picture_unshown_case(void) {
     probe_drop();
 }
 
+/* With no workers, every picture is named as it is gathered, and that
+ * settles the page's pictures: the record is written then, badge with it.
+ * Workers that stop with pictures out leave each of those named. */
+static void diag_picture_workerless_case(void) {
+    probe_page("<img src=file:///one.png><img src=file:///two.png>",true);
+    g.page.diag=yonder_diag_new("http://w.test/",1,0);
+    g.badge_missing=g.badge_failed=UINT32_MAX;
+    pictures_start(&g.page);        /* this harness has no worker pool */
+    char name[64]; yonder_diag_file_name(g.page.diag,name,sizeof(name));
+    const char *file=diag_file("/tmp/diag",name);
+    check(g.page.pics[0].state==PIC_FAILED && g.page.pics[1].state==PIC_FAILED && g.page.waiting==0 &&
+          has(file,"\nwritten: when its pictures were in\n") &&
+          has(file,"FAILED picture: file:///one.png: no worker to fetch it (1)") &&
+          has(file,"FAILED picture: file:///two.png: no worker to fetch it (1)") &&
+          !strcmp(g.badge_text,"FAILED 2"),
+        "diag: with no workers each picture is named, the record written and the badge told");
+    yonder_diag_free(g.page.diag); g.page.diag=NULL;
+    probe_drop();
+    probe_page("<img src=file:///out.png>",true);
+    pictures_start(&g.page);        /* the table, before the record exists */
+    g.page.diag=yonder_diag_new("http://w.test/",2,0);
+    g.page.pics[0].state=PIC_WAITING; g.page.waiting=g.page.in_flight=1;
+    /* What the record learned silently since arrival reaches the badge when
+     * the last picture is in, even one that arrives whole. */
+    g.badge_missing=g.badge_failed=0; g.badge_text[0]=0;
+    yonder_diag_missing(g.page.diag,"element","canvas",1);
+    yonder_picture_job_t *last=os64_calloc(1,sizeof(*last));
+    yonder_picture_t *whole=os64_calloc(1,sizeof(*whole));
+    last->kind=YONDER_JOB_PICTURE; last->index=0; last->generation=g.page_serial;
+    whole->status=OS64_IMAGE_OK;
+    reaped(0,last,whole);
+    check(g.page.pics[0].state==PIC_SHOWN && !strcmp(g.badge_text,"MISSING 1"),
+        "diag: the rewrite when the last picture is in tells the badge");
+    g.page.pics[0].state=PIC_WAITING; g.page.waiting=g.page.in_flight=1;
+    pictures_orphaned(&g.page);
+    char text[1024]; yonder_diag_render(g.page.diag,text,sizeof(text));
+    check(g.page.pics[0].state==PIC_FAILED && g.page.waiting==0 &&
+          has(text,"FAILED picture: file:///out.png: the workers stopped (1)"),
+        "diag: a picture out when the workers stopped is named");
+    yonder_diag_free(g.page.diag); g.page.diag=NULL;
+    probe_drop();
+}
+
 static void diag_unit_cases(void) {
     yonder_diag_t *d=yonder_diag_new("http://Example.COM:8080/FAILED?x=MISSING",3,0);
     char text[4096];
@@ -3514,6 +3557,7 @@ static void diag_cases(void) {
     diag_bytes_case();
     diag_picture_case();
     diag_picture_unshown_case();
+    diag_picture_workerless_case();
     diag_long_source_case();
     diag_tokens_exclusive();
     /* Setting absent: no file, while the badge still counts. */

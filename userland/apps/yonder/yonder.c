@@ -1396,6 +1396,9 @@ static void diag_pictures_in(Page *p)
         return;
     diag_observe(p, "when its pictures were in");
     diag_write(p->diag);
+    // What the observation found since arrival is the badge's too.
+    if (p == &g.page)
+        badge_follow();
 }
 
 // The page is let go: the departure write, which is the complete one, and
@@ -2313,12 +2316,15 @@ static bool picture_sized(const Page *p, const os64_html_node_t *node)
 }
 
 // Hands the pool the page's next pictures, in table order, while fewer than
-// PICTURES_AT_ONCE are in it. One it cannot take keeps its frame.
+// PICTURES_AT_ONCE are in it. One it cannot take keeps its frame, and is
+// named on the record; when that settles the page's last picture, the
+// record is written then, as a worker's last arrival writes it (reaped).
 static void picture_failed(Page *p, const char *url, const yonder_picture_t *product,
                            const char *asked);
 
 static void pictures_feed(Page *p)
 {
+    bool refused = false;
     while (p->in_flight < PICTURES_AT_ONCE && p->next_pic < p->npics) {
         int32_t index = p->next_pic++;
         Picture *pic = &p->pics[index];
@@ -2330,6 +2336,7 @@ static void pictures_feed(Page *p)
         if (job == NULL) {
             picture_failed(p, pic->url, NULL,
                            g.pool == NULL ? "no worker to fetch it" : "no memory to ask for it");
+            refused = true;
             continue;
         }
         job->kind = YONDER_JOB_PICTURE;
@@ -2345,12 +2352,15 @@ static void pictures_feed(Page *p)
         if (pic->id == 0) {
             os64_free(job);
             picture_failed(p, pic->url, NULL, "the workers would not take it");
+            refused = true;
             continue;
         }
         pic->state = PIC_WAITING;
         p->waiting++;
         p->in_flight++;
     }
+    if (refused && p->waiting == 0)
+        diag_pictures_in(p);
 }
 
 static size_t url_hash(const char *url)
@@ -2794,9 +2804,10 @@ static void css_pictures_under(Page *p, const flow_box_t *b)
     }
 }
 
+// Without workers too: pictures_feed names each one it cannot hand over.
 static void css_pictures(Page *p)
 {
-    if (p->tree != NULL && p->sheets_ready > 0 && g.pool != NULL) {
+    if (p->tree != NULL && p->sheets_ready > 0) {
         css_pictures_under(p, flow_root(p->tree));
         pictures_feed(p);
     }
@@ -2840,8 +2851,7 @@ static void pictures_start(Page *p)
     }
     for (int32_t i = 0; i < nb; i++)
         p->bg_of[i] = picture_for(p, os64_page_background(model, i)->src.url);
-    if (g.pool != NULL)
-        pictures_feed(p);
+    pictures_feed(p);
 }
 
 // The page is being left: its pictures in the pool are cancelled, and the
@@ -2854,6 +2864,23 @@ static void pictures_leave(Page *p)
             os64_work_cancel(g.pool, p->pics[i].id);
     p->waiting = p->in_flight = 0;
     p->next_pic = p->npics;
+}
+
+// The workers stopped with pictures still out: each is named as failed,
+// and the record written, since none of them will arrive now.
+static void pictures_orphaned(Page *p)
+{
+    bool any = false;
+    for (int32_t i = 0; i < p->npics; i++) {
+        if (p->pics[i].state != PIC_WAITING)
+            continue;
+        p->pics[i].state = PIC_FAILED;
+        picture_failed(p, p->pics[i].url, NULL, "the workers stopped");
+        any = true;
+    }
+    p->waiting = p->in_flight = 0;
+    if (any)
+        diag_pictures_in(p);
 }
 
 // Whether a picture's arrival can move the page (Picture.moves).
@@ -5490,6 +5517,7 @@ static void on_doorbell(os64_ui_t *ui, const os64_gui_event_t *ev)
             g.nav.id = 0;
             os64_work_pool_destroy(g.pool);
             g.pool = NULL;
+            pictures_orphaned(&g.page);
             buttons_follow();
             status_rest("The background workers stopped; restart yonder to fetch pages.");
         }

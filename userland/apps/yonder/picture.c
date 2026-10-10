@@ -81,6 +81,14 @@ int64_t yonder_picture_run(void *job, bool (*cancelled)(void *ctx), void *ctx, v
     } else if (body.status != 0 && (body.status < 200 || body.status >= 300)) {
         p->status = OS64_IMAGE_NO_FILE;
         os64_snprintf(p->why, sizeof(p->why), "HTTP %d", (int)body.status);
+    } else if (body.len == 0) {
+        // Nothing came to decode — a 204, or a reply that was empty — which
+        // is the server's answer, not a format nobody decodes.
+        p->status = OS64_IMAGE_NO_FILE;
+        if (body.status == 204 || body.status == 205)
+            os64_snprintf(p->why, sizeof(p->why), "HTTP %d, no picture", (int)body.status);
+        else
+            os64_strcopy(p->why, sizeof(p->why), "an empty reply");
     } else {
         p->status = decode(body.bytes, body.len, p);
     }

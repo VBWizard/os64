@@ -45,8 +45,9 @@ typedef struct {
     const char *format;
     // Otherwise, why there is no picture, for the page's record: "HTTP
     // 404" (an error's body is not read as a picture), "did not fetch
-    // (tls-failed)", "could not be read", "would not decode (malformed
-    // image)". Empty when there is a picture, and when `format` says why.
+    // (tls-failed)", "an empty reply", "could not be read", "would not
+    // decode (malformed image)". Empty when there is a picture, and when
+    // `format` says why.
     char why[64];
 } yonder_picture_t;
 
