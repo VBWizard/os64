@@ -131,8 +131,8 @@ connect runs and a moved control keeps its form:
   document's base, and as written when it does not resolve). Script, anchor
   and link elements have prototypes of their own for these.
 - `document.cookie`, through a provider the host installs
-  (`os64_dom_set_cookies`): a read is the cookie-string it writes, an
-  assignment is handed to it whole as a Set-Cookie value. Which cookies a
+  (`os64_dom_set_cookies`): a read is the whole cookie-string it writes,
+  asked again with more room while more did not fit, an assignment is handed to it whole as a Set-Cookie value. Which cookies a
   script may see or set (never an HttpOnly one) is the provider's: yonder's
   is libway's jar (`way_script_cookies`). With none the document is
   cookie-averse: it reads "" and an assignment does nothing.

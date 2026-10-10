@@ -397,8 +397,8 @@ void os64_ui_settings_report(os64_ui_settings_t *dialog, const char *text) {
  * and what a script reads and sets crosses intact. */
 static char fake_cookie_url[256], fake_cookie_set[256];
 static const char *fake_cookie_read="session=abc; theme=dark";
-size_t way_script_cookies(way_jar_t *jar, const char *page_url, char *out, size_t cap) {
-    (void)jar; snprintf(fake_cookie_url,sizeof(fake_cookie_url),"%s",page_url?page_url:"");
+size_t way_script_cookies(way_jar_t *jar, const char *page_url, char *out, size_t cap, bool *whole) {
+    (void)jar; *whole=true; snprintf(fake_cookie_url,sizeof(fake_cookie_url),"%s",page_url?page_url:"");
     return (size_t)snprintf(out,cap,"%s",fake_cookie_read);
 }
 void way_script_cookie(way_jar_t *jar, const char *page_url, const char *text, size_t len) {
@@ -3446,11 +3446,13 @@ static void covered_link_cases(void) {
      * whether a form or a name makes it one. */
     probe_page("<!doctype html><style>body{margin:0} input{opacity:0}</style>"
         "<form><input type=checkbox id=formed></form><input type=checkbox id=named name=agree>"
-        "<input type=checkbox id=plain style='opacity:1'>",false);
+        "<input type=checkbox id=plain style='opacity:1'><input type=checkbox id=blank name=''>",false);
     forms_place();
     check(!probe_field("formed")->w->hidden && !probe_field("named")->w->hidden &&
           !probe_field("plain")->w->hidden,
         "invisible field: in a form or named, an invisible control is drawn; a visible one always is");
+    check(probe_field("blank")!=NULL && probe_field("blank")->w->hidden,
+        "invisible gadget: an empty name submits nothing, so it names nothing");
     probe_drop();
 }
 

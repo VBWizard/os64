@@ -680,6 +680,20 @@ static void pictures_are_pages_for_a_face_that_shows_them(void)
                    !opened && strstr(leg.status, "that is image/png, not a page") != NULL, leg.status);
         }
     }
+    // A kind libimage does not decode is a file to save even for a face that
+    // shows pictures: a page of it would be a broken picture.
+    fresh();
+    script("pic.test", "HTTP/1.1 200 OK\r\nContent-Type: image/webp\r\nContent-Length: 3\r\n\r\nWEB");
+    way_session_t session = {.name="fixture", .agent="fixture", .accept="text/html"};
+    way_leg_t leg = way_leg(&session);
+    leg.pictures = true;
+    way_opening_t o;
+    os64_fetch_status_t why;
+    bool opened = way_open(&leg, "http://pic.test/a.webp", NULL, &o, &why);
+    expect("pictures: one yonder cannot decode is still a file to save",
+           !opened && strstr(leg.status, "that is image/webp, not a page") != NULL, leg.status);
+    if (opened)
+        os64_fetch_close(o.fetch);
 }
 
 static void pieces_make_the_same_page(void)

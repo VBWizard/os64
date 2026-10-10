@@ -121,9 +121,11 @@ enum { C_IMAGES, C_FORMS, C_ELEMENTS, C_STYLE, C_TITLE, C_NAME, C_SRC, C_WIDTH, 
        C_CAPTURE, C_IMAGE, C_NAVIGATOR, C_USER_AGENT, C_APP_NAME, C_APP_VERSION, C_PLATFORM, C_CURRENT_EVENT, C_LEGACY_ARGUMENTS,
        C_COOKIE };
 
-/* The most a document.cookie read answers: a whole cookie is at most 4096
- * bytes (RFC 6265 § 6.1) and a page's are rarely many. */
-#define COOKIE_READ_MAX (16 * 1024)
+/* The room a document.cookie read starts with, doubled until the whole
+ * answer fits: a page's cookies are rarely more, and a jar may hold far more
+ * (thousands of 4096-byte cookies, RFC 6265 § 6.1), which only the DOM's
+ * own allocation budget bounds. */
+#define COOKIE_READ_FIRST (16 * 1024)
 
 static JSValue classic(JSContext *ctx, JSValueConst self, int argc,
                         JSValueConst *argv, int magic, JSValue *data)
@@ -145,12 +147,20 @@ static JSValue classic(JSContext *ctx, JSValueConst self, int argc,
             return JS_UNDEFINED;
         }
         if (dom->cookies.get == NULL) return JS_NewString(ctx, "");
-        char *buffer = d_alloc(dom, COOKIE_READ_MAX);
-        if (buffer == NULL) return d_error(ctx, "QuotaExceededError", "DOM cookie quota exceeded");
-        size_t n = dom->cookies.get(dom->cookies.opaque, buffer, COOKIE_READ_MAX);
-        JSValue result = JS_NewStringLen(ctx, buffer, n < COOKIE_READ_MAX ? n : COOKIE_READ_MAX - 1);
-        d_free(dom, buffer);
-        return result;
+        for (size_t cap = COOKIE_READ_FIRST; cap != 0 && cap <= SIZE_MAX / 2; cap *= 2) {
+            char *buffer = d_alloc(dom, cap);
+            if (buffer == NULL) return d_error(ctx, "QuotaExceededError", "DOM cookie quota exceeded");
+            bool whole = true;
+            size_t n = dom->cookies.get(dom->cookies.opaque, buffer, cap, &whole);
+            if (!whole) {
+                d_free(dom, buffer);
+                continue;
+            }
+            JSValue result = JS_NewStringLen(ctx, buffer, n < cap ? n : cap - 1);
+            d_free(dom, buffer);
+            return result;
+        }
+        return d_error(ctx, "QuotaExceededError", "DOM cookie quota exceeded");
     }
     if (magic == C_NAVIGATOR) return JS_DupValue(ctx, dom->navigator->value);
     if (magic == C_LEGACY_ARGUMENTS) {

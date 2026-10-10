@@ -474,7 +474,8 @@ static bool heard(Heard *h, const os64_url_t *from, bool encrypted, const char *
 }
 
 // `script`: heard from a page's script (document.cookie), RFC 6265's
-// "non-HTTP API", which may neither set an HttpOnly cookie nor replace one.
+// "non-HTTP API", which may neither set an HttpOnly cookie nor set one where
+// an HttpOnly cookie of the same name, domain and path is.
 static void hear(way_jar_t *jar, const os64_url_t *from, bool encrypted, const char *value,
                  size_t len, int64_t now, bool script)
 {
@@ -504,17 +505,19 @@ static void hear(way_jar_t *jar, const os64_url_t *from, bool encrypted, const c
             os64_lock_release(&jar->lock);
             return;
         }
-        if (os64_streq(c->domain, domain) && os64_streq(c->path, h.path) &&
-            c->host_only == !h.have_domain)
+        bool identity = os64_streq(c->domain, domain) && os64_streq(c->path, h.path);
+        // RFC 6265 § 5.3 step 11.2: a script may not touch an HttpOnly
+        // cookie of its name, domain and path, whichever host-only flag
+        // either has: one set beside it would ride the same requests.
+        if (identity && script && c->http_only) {
+            os64_lock_release(&jar->lock);
+            return;
+        }
+        if (identity && c->host_only == !h.have_domain)
             same = i;
     }
     // §5.3 step 11: a cookie replaces its namesake, keeping its age; one
-    // already expired deletes it and is not kept. A script's never replaces
-    // an HttpOnly one (step 11.2).
-    if (same >= 0 && script && jar->cookies[same].http_only) {
-        os64_lock_release(&jar->lock);
-        return;
-    }
+    // already expired deletes it and is not kept.
     int64_t created = now;
     uint64_t order = jar->next_order++;
     if (same >= 0) {
@@ -654,9 +657,9 @@ void way_jar_script_hear(way_jar_t *jar, const os64_url_t *from, bool encrypted,
 }
 
 size_t way_jar_script_cookies(way_jar_t *jar, const os64_url_t *to, bool encrypted, int64_t now,
-                              char *out, size_t cap)
+                              char *out, size_t cap, int32_t *left_out)
 {
-    return cookies(jar, to, encrypted, now, out, cap, NULL, true);
+    return cookies(jar, to, encrypted, now, out, cap, left_out, true);
 }
 
 int32_t way_jar_count(way_jar_t *jar)

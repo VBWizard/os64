@@ -143,9 +143,10 @@ typedef struct {
     // Parser noscript policy for this load, captured by the requesting face.
     // The finished-document loader resumes script stops without executing.
     bool scripting;
-    // The face shows pictures: a picture asked for by itself (`image/*`) is
-    // a page, WAY_BODY_IMAGE, whose body the face does not read — it writes
-    // the page that shows the picture. False: such a reply is not a page.
+    // The face shows pictures: a picture asked for by itself, of a type
+    // libimage decodes, is a page, WAY_BODY_IMAGE, whose body the face does
+    // not read — it writes the page that shows the picture. Any other
+    // picture, and every one when this is false, is not a page.
     bool pictures;
     char status[WAY_SENTENCE_MAX];
     // The page this load was asked for from — a link followed, a form sent,
@@ -163,10 +164,12 @@ way_leg_t way_leg_as(const way_session_t *session, const char *agent);
 
 // A PAGE'S SCRIPT's cookies (document.cookie), for the page at `page_url`,
 // at the system's clock: what it may read, at most `cap` bytes with the
-// NUL, answering the length written, and one cookie it sets ("name=value;
+// NUL, answering the length written and whether that is all of it (false:
+// ask again with more room), and one cookie it sets ("name=value;
 // attributes", as a Set-Cookie value). The jar's script rules apply
 // (jar.h); a page that is not http or https reads "" and sets nothing.
-size_t way_script_cookies(way_jar_t *jar, const char *page_url, char *out, size_t cap);
+size_t way_script_cookies(way_jar_t *jar, const char *page_url, char *out, size_t cap,
+                          bool *whole);
 void way_script_cookie(way_jar_t *jar, const char *page_url, const char *text, size_t len);
 
 // ── The I/O half ────────────────────────────────────────────────────────

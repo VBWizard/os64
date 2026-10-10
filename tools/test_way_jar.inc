@@ -346,7 +346,7 @@ static const char *script_read(way_jar_t *jar, const char *page, bool encrypted,
 {
     static char out[4096];
     os64_url_t u = url_of(page);
-    way_jar_script_cookies(jar, &u, encrypted, now, out, sizeof(out));
+    way_jar_script_cookies(jar, &u, encrypted, now, out, sizeof(out), NULL);
     return out;
 }
 
@@ -369,6 +369,11 @@ static void cookie_scripts(void)
     script_hear(jar, "http://s.test/", false, "lang=en", 102);
     jar_expect("script: may not set an HttpOnly cookie nor replace one", jar, "http://s.test/", false, 103,
                "session=secret; theme=dark; lang=en");
+    script_hear(jar, "http://s.test/", false, "session=forged; Domain=s.test", 103);
+    hear(jar, "http://s.test/", false, "sid=secret; Domain=s.test; HttpOnly", 103);
+    script_hear(jar, "http://s.test/", false, "sid=forged", 103);
+    jar_expect("script: nor set one beside it that differs only in being host-only", jar,
+               "http://s.test/", false, 103, "session=secret; theme=dark; lang=en; sid=secret");
     script_hear(jar, "http://s.test/", false, "theme=light", 104);
     expect("script: replaces a cookie it may see", strcmp(script_read(jar, "http://s.test/", false, 105), "theme=light; lang=en") == 0,
            script_read(jar, "http://s.test/", false, 105));

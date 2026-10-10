@@ -65,7 +65,10 @@
 static const yonder_dark_t kDark = {.paper = 0x101010u};
 static bool s_dark;
 
-#define YONDER_ACCEPT "text/html, application/xhtml+xml, text/*;q=0.8"
+// What a navigation asks for: a page first, then a picture of a kind yonder
+// shows by itself (YONDER.md § A picture asked for by itself), so a server
+// that chooses by Accept may send one.
+#define YONDER_ACCEPT "text/html, application/xhtml+xml, text/*;q=0.8, image/png;q=0.5, image/jpeg;q=0.5, image/gif;q=0.5, image/bmp;q=0.5"
 
 // The work pool. A navigation's job is a FETCH (trip.h; the parse is this
 // thread's, DOM_D4.md), so what it declares is one connection's worth of
@@ -3561,13 +3564,14 @@ refused:
 // FIELD — in a form, or named, so something is submitted — because then it
 // is nearly always a custom checkbox's real input, whose styled stand-in
 // cannot show what a click here did (POSITION.md, ruling 6). One in no form
-// and with no name submits nothing: it is the page's own gadget, a click
-// target laid over something drawn (MediaWiki's menu checkbox), and is left
-// undrawn. Either way the pointer still finds it, as a browser's does.
+// and with no name, or an empty one (which submits nothing either), is the
+// page's own gadget, a click target laid over something drawn (MediaWiki's
+// menu checkbox), and is left undrawn. Either way the pointer still finds
+// it, as a browser's does.
 static bool gadget(const flow_box_t *b, int32_t control)
 {
     const os64_page_control_t *c = os64_page_control(page_model(&g.page), control);
-    return b->unpainted && c != NULL && c->form < 0 && c->name == NULL;
+    return b->unpainted && c != NULL && c->form < 0 && (c->name == NULL || c->name[0] == '\0');
 }
 
 static void forms_place(void)
@@ -3888,9 +3892,9 @@ static const char *script_user_agent(void *opaque)
 
 // document.cookie: the browser's jar, for the page's own address
 // (libway's script door, which keeps HttpOnly cookies from scripts).
-static size_t script_cookies_get(void *opaque, char *out, size_t cap)
+static size_t script_cookies_get(void *opaque, char *out, size_t cap, bool *whole)
 {
-    return way_script_cookies(g.way.jar, yonder_scripts_url(opaque), out, cap);
+    return way_script_cookies(g.way.jar, yonder_scripts_url(opaque), out, cap, whole);
 }
 
 static void script_cookies_set(void *opaque, const char *text, size_t length)

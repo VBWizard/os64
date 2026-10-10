@@ -181,13 +181,14 @@ void os64_dom_set_user_agent(os64_dom_t *dom, const char *(*provider)(void *opaq
 
 /* Owner-thread cookie provider for document.cookie (HTML § Cookies): `get`
  * writes the cookie-string the page's script may read into `out`, at most
- * `cap` bytes with the NUL, and answers the length written; `set` hears one
- * string a script assigned, as a Set-Cookie value. With no provider the
- * document is cookie-averse: it reads "" and an assignment does nothing.
- * The callbacks must not enter JS. NULL removes it; install outside
- * callbacks. */
+ * `cap` bytes with the NUL, answers the length written, and sets `*whole`
+ * false when more did not fit — the read then asks again with more room;
+ * `set` hears one string a script assigned, as a Set-Cookie value. With no
+ * provider the document is cookie-averse: it reads "" and an assignment
+ * does nothing. The callbacks must not enter JS. NULL removes it; install
+ * outside callbacks. */
 typedef struct {
-    size_t (*get)(void *opaque, char *out, size_t cap);
+    size_t (*get)(void *opaque, char *out, size_t cap, bool *whole);
     void (*set)(void *opaque, const char *text, size_t length);
     void *opaque;
 } os64_dom_cookies_t;

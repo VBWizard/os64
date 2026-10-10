@@ -288,6 +288,18 @@ bool way_type_is_json(const char *type)
     return os64_streq(type, "application/json") || ends_with(type, "+json");
 }
 
+bool way_type_is_picture(const char *type)
+{
+    static const char *const kinds[] = {
+        "image/png", "image/jpeg", "image/pjpeg", "image/gif", "image/bmp", "image/x-ms-bmp",
+        "image/x-portable-pixmap",
+    };
+    for (size_t i = 0; i < sizeof(kinds) / sizeof(kinds[0]); i++)
+        if (os64_streq(type, kinds[i]))
+            return true;
+    return false;
+}
+
 // What the reply's own charset label says about a text/plain body. UTF-8 is
 // the modern answer, and everything else is read as windows-1252 — which is
 // what libhtml does with the markup half of the same web, so a smart quote
