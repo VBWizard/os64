@@ -240,9 +240,13 @@ sits at the div's content top, which is 30px down once the margin
 resolves. ONE rule covers every place a float can be met:
 
 - **A float met while its container's top is unresolved waits**, whether
-  it is met in `children()` or in `lines()`: the cursor's `first` is still
-  `-1`, so the container's top margin can still collapse with what comes
-  next. Once something in the container has resolved its top, a float met
+  it is met in `children()` or leading a line in `lines()`: the cursor's
+  `first` is still `-1`, so the container's top margin can still collapse
+  with what comes next. A float met on a line AFTER something with width
+  does not wait: that line has height, so the margins resolve at its top,
+  which is already known, and the float takes the mid-line rule below
+  (Chrome lays the line out again once its block offset is known, with
+  the same result). Once something in the container has resolved its top, a float met
   after it does not wait: it goes below the previous sibling's own bottom
   margin, `y + margins_sum(pm)`, and not the margin that sibling will
   collapse to with the next, which has not been met (an absolute box's

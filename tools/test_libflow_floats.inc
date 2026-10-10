@@ -213,7 +213,7 @@ static void float_wait_cases(void)
 
     // So does a line with height: the float written before the text, in
     // the div's own line, goes to the line's top at 30 (the probe's case
-    // 1a).
+    // 1a), and the line, broken again beside it, starts at 50.
     cascade_layout_case("floats: a line resolves the margins a float waits for",
         FLOAT_STYLE ".d{margin-top:30px} .l{float:left;width:50px;height:10px}</style>"
         "<div class=d><div class=l></div>x</div>", 400,
@@ -221,8 +221,8 @@ static void float_wait_cases(void)
         "block html 0 0 400 50\n"
         "  block body 0 30 400 20\n"
         "    block div 0 30 400 20\n"
-        "      line 0 30 400 20 base 14\n"
-        "        text \"x\" 0 32 8 16 serif 16\n"
+        "      line 50 30 350 20 base 14\n"
+        "        text \"x\" 50 32 8 16 serif 16\n"
         "      block div 0 30 50 10 float-left\n");
 
     // A float between two blocks goes below the first one's own bottom
@@ -277,8 +277,9 @@ static void float_wait_end_cases(void)
         "      block div 0 10 50 20 float-left\n");
 
     // A float's lines are not its list item's first line. In quirks mode a
-    // line has no strut, so the item's first line, 400 - 8 - 8 - 40 = 344
-    // across, is as tall as the 32px marker it holds open — a 40px font
+    // line has no strut, so the item's first line — beside the 5px float,
+    // 400 - 8 - 8 - 40 - 5 = 339 across — is as tall as the 32px marker it
+    // holds open — a 40px font
     // box, its baseline 28 down — while the float's line is its own 10px
     // text's, 12.5 rounding to 13 with the baseline 8.75 down. Taken by
     // the float's line, the marker would hold that open 40 tall too.
@@ -287,7 +288,7 @@ static void float_wait_end_cases(void)
             "<style>li{font-size:32px} .f{float:left;font-size:10px} .t{font-size:10px}"
             "</style><ul><li><div class=f>a</div><span class=t>x</span></ul>", 400);
         expect("floats: a float's lines leave its item's marker alone",
-               got != NULL && strstr(got, " 344 40 base 28\n") != NULL &&
+               got != NULL && strstr(got, " 339 40 base 28\n") != NULL &&
                    strstr(got, "line 48 8 5 13 base 9\n") != NULL, got);
         free(got);
     }
@@ -391,6 +392,131 @@ static void float_sweep_cases(void)
         "<p class=m>after <span class=r>right</span> the floats</p>", 300);
 }
 
+// Ten letters, 80px in the harness face; a space is 4.
+#define W10 "aaaaaaaaaa"
+
+static void float_line_cases(void)
+{
+    // Lines beside a 100 x 30 float are 300 wide from 100: three words fit
+    // (80 + 4 + 80 + 4 + 80 = 248; a fourth would be 332). The first two
+    // lines, 0 and 20, are beside it; the third, at 40, is below it and
+    // has the whole 400, where four fit.
+    cascade_layout_case("floats: lines beside a float are shortened",
+        FLOAT_STYLE ".l{float:left;width:100px;height:30px}</style>"
+        "<div class=l></div><p>" W10 " " W10 " " W10 " " W10 " " W10 " " W10 " " W10 " "
+        W10 " " W10 " " W10 "</p>", 400,
+        "page 400 60\n"
+        "block html 0 0 400 60\n"
+        "  block body 0 0 400 60\n"
+        "    block div 0 0 100 30 float-left\n"
+        "    block p 0 0 400 60\n"
+        "      line 100 0 300 20 base 14\n"
+        "        text \"" W10 " " W10 " " W10 "\" 100 2 248 16 serif 16\n"
+        "      line 100 20 300 20 base 14\n"
+        "        text \"" W10 " " W10 " " W10 "\" 100 22 248 16 serif 16\n"
+        "      line 0 40 400 20 base 14\n"
+        "        text \"" W10 " " W10 " " W10 " " W10 "\" 0 42 332 16 serif 16\n");
+
+    // A line with no room beside the floats for its first word moves down
+    // to where they end: 50 left beside the 350px float, the word is 80,
+    // so the line goes to 30. The paragraph's top stays at 0, where its
+    // margins resolved.
+    cascade_layout_case("floats: a line with no room for its first word moves down",
+        FLOAT_STYLE ".l{float:left;width:350px;height:30px}</style>"
+        "<div class=l></div><p>" W10 "</p>", 400,
+        "page 400 50\n"
+        "block html 0 0 400 50\n"
+        "  block body 0 0 400 50\n"
+        "    block div 0 0 350 30 float-left\n"
+        "    block p 0 0 400 50\n"
+        "      line 0 30 400 20 base 14\n"
+        "        text \"" W10 "\" 0 32 80 16 serif 16\n");
+
+    // A centred line centres in the room beside the float: 100 + (300 -
+    // 80) / 2 = 210.
+    {
+        char *got = cascade_layout_of(
+            FLOAT_STYLE ".l{float:left;width:100px;height:30px} p{text-align:center}</style>"
+            "<div class=l></div><p>" W10 "</p>", 400);
+        expect("floats: a centred line centres beside the float",
+               got != NULL && strstr(got, "text \"" W10 "\" 210 2 80 16 serif 16\n") != NULL,
+               got);
+        free(got);
+    }
+
+    // A float in the middle of a line goes on it when its margin box fits
+    // beside what is already there (FLOATS.md, Decision 2): after three
+    // words the pen is at 252, and 252 + 100 fits in 400, so the float
+    // stands at the line's top at 300, and the line, broken again in the
+    // 300 left, ends before the fourth word.
+    {
+        char *got = cascade_layout_of(
+            FLOAT_STYLE ".r{float:right;width:100px;height:10px}</style>"
+            "<p>" W10 " " W10 " " W10 " <span class=r></span>" W10 " " W10 "</p>", 400);
+        expect("floats: a float that fits goes on its line",
+               got != NULL && strstr(got, "      line 0 0 300 20 base 14\n") != NULL &&
+                   strstr(got, "block span 300 0 100 10 float-right\n") != NULL &&
+                   strstr(got, "      line 0 20 400 20 base 14\n") != NULL, got);
+        free(got);
+    }
+
+    // A line broken again starts as the first breaking did: its text-indent
+    // (the first word at 20) and the inline open across it (one piece of
+    // the b on each of the two lines, not a second one opened again). 20 +
+    // 252 + 100 fits in 400, so the float goes on the line, and 20 + 248
+    // fits in the 300 left, the line's last space collapsing.
+    {
+        char *got = cascade_layout_of(
+            FLOAT_STYLE ".r{float:right;width:100px;height:10px} p{text-indent:20px}</style>"
+            "<p><b>" W10 " " W10 " " W10 " <span class=r></span>" W10 " " W10 "</b></p>", 400);
+        int pieces = 0;
+        for (const char *at = got; at != NULL && (at = strstr(at, " span b ")) != NULL; at++)
+            pieces++;
+        expect("floats: a line broken again starts as it did",
+               got != NULL && strstr(got, "      line 0 0 300 20 base 14\n") != NULL &&
+                   strstr(got, "text \"" W10 " " W10 " " W10 "\" 20 2 248 16 ") != NULL &&
+                   pieces == 2,
+               got);
+        free(got);
+    }
+
+    // One that does not fit goes to the top of the next line: 252 + 200 is
+    // past 400, so the first line keeps four words across the whole 400,
+    // the float stands at 20, at 200, and the second line is beside it.
+    {
+        char *got = cascade_layout_of(
+            FLOAT_STYLE ".r{float:right;width:200px;height:10px}</style>"
+            "<p>" W10 " " W10 " " W10 " <span class=r></span>" W10 " " W10 "</p>", 400);
+        expect("floats: a float that does not fit goes below its line",
+               got != NULL && strstr(got, "      line 0 0 400 20 base 14\n") != NULL &&
+                   strstr(got, "block span 200 20 200 10 float-right\n") != NULL &&
+                   strstr(got, "      line 0 20 200 20 base 14\n") != NULL, got);
+        free(got);
+    }
+
+    // A line taller than its strut asks for its band again over its own
+    // height (FLOATS.md, Decision 3). The right float stands at 20, below
+    // a 20px block; the paragraph's -20px margin puts its first line back
+    // at 0, ABOVE that float's top, where the space's bookmark walks back
+    // to. Its strut's band, 0 to 20, is the whole 400, but a 30px picture
+    // standing on the baseline makes the line 30 + 6 = 36 tall, and over 0
+    // to 36 the float is beside it: the line is broken again in 300 —
+    // the picture and three words, 20 + 84 + 84 + 80 = 268 — and the
+    // fourth word goes to the next line, at 36, below the float.
+    {
+        char *got = cascade_layout_of(
+            FLOAT_STYLE ".a{height:20px} .r{float:right;width:100px;height:10px}"
+            "p.n{margin-top:-20px} .t{display:inline-block;width:20px;height:30px}</style>"
+            "<div class=a></div><div class=r></div><p class=n><span class=t></span>"
+            W10 " " W10 " " W10 " " W10 "</p>", 400);
+        expect("floats: a tall line is broken again in the band its height reaches",
+               got != NULL && strstr(got, "block div 300 20 100 10 float-right\n") != NULL &&
+                   strstr(got, "      line 0 0 300 36 base 30\n") != NULL &&
+                   strstr(got, "      line 0 36 400 20 base 14\n") != NULL, got);
+        free(got);
+    }
+}
+
 static void float_cases(void)
 {
     float_style_cases();
@@ -399,5 +525,6 @@ static void float_cases(void)
     float_wait_end_cases();
     float_relative_cases();
     float_inline_relative_cases();
+    float_line_cases();
     float_sweep_cases();
 }
