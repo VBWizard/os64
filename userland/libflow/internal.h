@@ -394,6 +394,13 @@ struct FBox {
     // where it stood; either way it is laid out in its formatting context
     // where the flow meets it, and takes no room in the flow.
     flow_float_t floated;
+    // A float's margin box's height, as laid out (float_lay): from its top
+    // margin to its bottom one, a table's captions included, which its box
+    // leaves out.
+    int64_t float_h;
+    // § 9.5.2: how far a block in the flow that clears floats was moved
+    // below where it would have stood, 0 when it was not.
+    int64_t clearance;
     // It lays its children out as flex items (FLEX.md), or as grid items
     // (GRID.md): a block container whose element is such a container, or
     // an inline one's atom content.

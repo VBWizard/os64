@@ -1550,7 +1550,7 @@ static int32_t pick(const garb_val_t *v, const char *const *words, int32_t n)
     return -1;
 }
 
-static bool author_display(const garb_val_t *v, flow_display_t *out)
+static bool author_display(const garb_val_t *v, flow_display_t *out, bool *flow_root)
 {
     static const char *const words[] = {
         "none", "block", "inline", "inline-block", "list-item", "table", "inline-table",
@@ -1573,6 +1573,7 @@ static bool author_display(const garb_val_t *v, flow_display_t *out)
     if (i < 0)
         return false;
     *out = as[i];
+    *flow_root = os64_streq(words[i], "flow-root");
     return true;
 }
 
@@ -1751,7 +1752,10 @@ static void take(Spec *dst, const Spec *src, garb_prop_t prop)
     flow_style_t *d = &dst->s;
     const flow_style_t *s = &src->s;
     switch (prop) {
-    case GARB_DISPLAY: d->display = s->display; break;
+    case GARB_DISPLAY:
+        d->display = s->display;
+        d->flow_root = s->flow_root;
+        break;
     case GARB_COLOR: d->color = s->color; break;
     case GARB_BACKGROUND_COLOR:
         d->has_background = s->has_background;
@@ -2444,7 +2448,7 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
     garb_prop_t p = set->prop;
     int32_t i;
     switch (p) {
-    case GARB_DISPLAY: author_display(v, &s->display); break;
+    case GARB_DISPLAY: author_display(v, &s->display, &s->flow_root); break;
     case GARB_COLOR:
         if (v->kind == GARB_V_COLOR && v->color.current)
             s->color = a->parent != NULL ? a->parent->color : a->c->env->ink;

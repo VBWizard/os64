@@ -2,7 +2,9 @@
 // test_libflow_host.c. Every expected geometry is worked by hand from CSS
 // 2.1 § 9.5.1 and the Decisions, never captured from the engine
 // (LAYOUT.md § Proof). Sized boxes, body margin 0, a 400px page, so the
-// arithmetic is the spec's and not the font's.
+// arithmetic is the spec's and not the font's. The root is a formatting
+// context's root, so it grows to hold its floats' margin boxes (§ 10.6.7)
+// while the body, which is not one, does not.
 
 #define FLOAT_STYLE "<!doctype html><style>body{margin:0} p{margin:0}"
 
@@ -24,7 +26,7 @@ static void float_place_cases(void)
         ".r{float:right;width:80px;height:30px} .p{height:20px}</style>"
         "<div class=l></div><div class=r></div><p class=p></p>", 400,
         "page 400 50\n"
-        "block html 0 0 400 20\n"
+        "block html 0 0 400 50\n"
         "  block body 0 0 400 20\n"
         "    block div 0 0 100 50 float-left\n"
         "    block div 320 0 80 30 float-right\n"
@@ -40,7 +42,7 @@ static void float_place_cases(void)
         ".b{float:left;width:150px;height:30px} .c{float:left;width:150px;height:10px}</style>"
         "<div class=a></div><div class=b></div><div class=c></div>", 400,
         "page 400 40\n"
-        "block html 0 0 400 0\n"
+        "block html 0 0 400 40\n"
         "  block body 0 0 400 0\n"
         "    line 0 0 400 0 base 14\n"
         "    block div 0 0 150 20 float-left\n"
@@ -58,7 +60,7 @@ static void float_place_cases(void)
         ".r{float:right;width:150px;height:20px} .m{float:left;width:120px;height:10px}</style>"
         "<div class=l></div><div class=r></div><div class=m></div>", 400,
         "page 400 50\n"
-        "block html 0 0 400 0\n"
+        "block html 0 0 400 50\n"
         "  block body 0 0 400 0\n"
         "    line 0 0 400 0 base 14\n"
         "    block div 0 0 150 50 float-left\n"
@@ -74,7 +76,7 @@ static void float_place_cases(void)
         ".b{float:right;width:200px;height:10px} .c{float:left;width:50px;height:10px}</style>"
         "<div class=a></div><div class=b></div><div class=c></div>", 400,
         "page 400 110\n"
-        "block html 0 0 400 0\n"
+        "block html 0 0 400 110\n"
         "  block body 0 0 400 0\n"
         "    line 0 0 400 0 base 14\n"
         "    block div 0 0 300 100 float-left\n"
@@ -88,7 +90,7 @@ static void float_place_cases(void)
         ".w{float:left;width:500px;height:10px}</style>"
         "<div class=a></div><div class=w></div>", 400,
         "page 500 20\n"
-        "block html 0 0 400 0\n"
+        "block html 0 0 400 20\n"
         "  block body 0 0 400 0\n"
         "    line 0 0 400 0 base 14\n"
         "    block div 0 0 100 10 float-left\n"
@@ -103,7 +105,7 @@ static void float_place_cases(void)
         ".w{float:left;width:400px;height:10px}</style>"
         "<div class=o></div><div class=in><div class=w></div></div>", 400,
         "page 500 100\n"
-        "block html 0 0 400 0\n"
+        "block html 0 0 400 100\n"
         "  block body 0 0 400 0\n"
         "    block div 0 0 80 100 float-left\n"
         "    block div 100 0 300 0\n"
@@ -117,7 +119,7 @@ static void float_place_cases(void)
         ".a{float:left;width:100px;height:10px}</style>"
         "<div class=z></div><div class=a></div>", 400,
         "page 400 50\n"
-        "block html 0 0 400 0\n"
+        "block html 0 0 400 50\n"
         "  block body 0 0 400 0\n"
         "    line 0 0 400 0 base 14\n"
         "    block div 0 0 0 50 float-left\n"
@@ -126,14 +128,13 @@ static void float_place_cases(void)
     // Margins and the frame: the margin box is what is placed and what the
     // next float stands beside. 10 + 2 + 5 + 50 + 5 + 2 + 20 = 94 across:
     // the border box at 10, 4 (the top margin), 64 x 64; the next float's
-    // margin box starts at 94. The page reaches the border box, 68, as it
-    // does any box's.
+    // margin box starts at 94. The root holds the margin box, 74.
     cascade_layout_case("floats: the margin box is what is placed",
         FLOAT_STYLE ".m{float:left;width:50px;height:50px;padding:5px;border:2px solid;"
         "margin:4px 20px 6px 10px} .a{float:left;width:10px;height:10px}</style>"
         "<div class=m></div><div class=a></div>", 400,
-        "page 400 68\n"
-        "block html 0 0 400 0\n"
+        "page 400 74\n"
+        "block html 0 0 400 74\n"
         "  block body 0 0 400 0\n"
         "    line 0 0 400 0 base 14\n"
         "    block div 10 4 64 64 float-left\n"
@@ -146,7 +147,7 @@ static void float_place_cases(void)
         FLOAT_STYLE ".f{float:left;width:50px} .f p{margin-top:10px;height:10px}</style>"
         "<div class=f><p></p></div>", 400,
         "page 400 20\n"
-        "block html 0 0 400 0\n"
+        "block html 0 0 400 20\n"
         "  block body 0 0 400 0\n"
         "    line 0 0 400 0 base 14\n"
         "    block div 0 0 50 20 float-left\n"
@@ -159,7 +160,7 @@ static void float_place_cases(void)
         ".in{width:60px;height:10px}</style>"
         "<div class=f><div class=in></div></div>", 400,
         "page 400 10\n"
-        "block html 0 0 400 0\n"
+        "block html 0 0 400 10\n"
         "  block body 0 0 400 0\n"
         "    line 0 0 400 0 base 14\n"
         "    block div 330 0 70 10 float-right\n"
@@ -270,7 +271,7 @@ static void float_wait_end_cases(void)
         FLOAT_STYLE ".d{margin-top:10px} .l{float:left;width:50px;height:20px}</style>"
         "<div class=d><div class=l></div></div>", 400,
         "page 400 30\n"
-        "block html 0 0 400 10\n"
+        "block html 0 0 400 30\n"
         "  block body 0 0 400 0\n"
         "    block div 0 10 400 0\n"
         "      line 0 10 400 0 base 14\n"
@@ -306,7 +307,7 @@ static void float_relative_cases(void)
         ".l{float:left;width:50px;height:20px} .p{height:10px}</style>"
         "<div class=r><div class=l></div><p class=p></p></div><div class=l></div>", 400,
         "page 410 30\n"
-        "block html 0 0 400 10\n"
+        "block html 0 0 400 30\n"
         "  block body 0 0 400 10\n"
         "    block div 10 5 400 10 positioned\n"
         "      block div 10 5 50 20 float-left\n"
@@ -320,7 +321,7 @@ static void float_relative_cases(void)
         ".m{position:relative;left:7px;top:3px}</style>"
         "<div class='l m'></div><div class=l></div>", 400,
         "page 400 23\n"
-        "block html 0 0 400 0\n"
+        "block html 0 0 400 20\n"
         "  block body 0 0 400 0\n"
         "    line 0 0 400 0 base 14\n"
         "    block div 7 3 50 20 float-left positioned\n"
@@ -517,6 +518,180 @@ static void float_line_cases(void)
     }
 }
 
+static void float_clear_cases(void)
+{
+    // § 9.5.2: the paragraph clears the left float. The float waits for
+    // the body's margins, which resolve at 0 — the paragraph's own 20px
+    // margin is not among them — and stands there; where the paragraph
+    // would stand, 20, is above its bottom at 50, so its border edge goes
+    // to 50, and its clearance is 30. The root holds both, 60.
+    cascade_layout_case("floats: a block clears a float",
+        FLOAT_STYLE ".l{float:left;width:100px;height:50px} p.c{clear:left;margin-top:20px;"
+        "height:10px}</style><div class=l></div><p class=c></p>", 400,
+        "page 400 60\n"
+        "block html 0 0 400 60\n"
+        "  block body 0 0 400 60\n"
+        "    block div 0 0 100 50 float-left\n"
+        "    block p 0 50 400 10 clearance=30\n");
+
+    // A block that clears nothing on its side is where it would stand.
+    cascade_layout_case("floats: a block that clears the other side",
+        FLOAT_STYLE ".l{float:left;width:100px;height:50px} p.c{clear:right;height:10px}"
+        "</style><div class=l></div><p class=c></p>", 400,
+        "page 400 50\n"
+        "block html 0 0 400 50\n"
+        "  block body 0 0 400 10\n"
+        "    block div 0 0 100 50 float-left\n"
+        "    block p 0 0 400 10\n");
+
+    // A FLOAT that clears goes below what it clears: three that would fit
+    // side by side stack down a column.
+    cascade_layout_case("floats: floats that clear stack down a column",
+        FLOAT_STYLE ".s{float:left;clear:left;width:100px;height:20px}</style>"
+        "<div class=s></div><div class=s></div><div class=s></div>", 400,
+        "page 400 60\n"
+        "block html 0 0 400 60\n"
+        "  block body 0 0 400 0\n"
+        "    line 0 0 400 0 base 14\n"
+        "    block div 0 0 100 20 float-left\n"
+        "    block div 0 20 100 20 float-left\n"
+        "    block div 0 40 100 20 float-left\n");
+
+    // `<br clear=all>`: the line after it starts below the float, at 50;
+    // the line before it is beside it, at 100.
+    {
+        char *got = cascade_layout_of(
+            FLOAT_STYLE ".l{float:left;width:100px;height:50px}</style>"
+            "<div class=l></div><p>a<br clear=all>b</p>", 400);
+        expect("floats: <br clear> starts the next line below the floats",
+               got != NULL && strstr(got, "      line 100 0 300 20 base 14\n") != NULL &&
+                   strstr(got, "      line 0 50 400 20 base 14\n") != NULL, got);
+        free(got);
+    }
+
+    // A table clears as a block does.
+    {
+        char *got = cascade_layout_of(
+            FLOAT_STYLE ".l{float:left;width:100px;height:50px} table{clear:both}</style>"
+            "<div class=l></div><table cellspacing=0 cellpadding=0><tr><td>x</table>", 400);
+        expect("floats: a table clears a float",
+               got != NULL && strstr(got, "    table table 0 50 ") != NULL &&
+                   strstr(got, " clearance=50\n") != NULL, got);
+        free(got);
+    }
+}
+
+static void float_root_cases(void)
+{
+    // A formatting context's root grows to hold its floats (§ 10.6.7): the
+    // overflow:hidden div is 50 tall, and the paragraph after it starts at
+    // 50. An ordinary div does not: it holds one empty line, 0 tall, and
+    // the float hangs out of it over the paragraph after it, 60 to 70. (In
+    // the root the float is placed as its line is met, so that empty line
+    // is broken again beside it; in the div it waits for margins no empty
+    // line resolves.)
+    cascade_layout_case("floats: a formatting context's root holds its floats",
+        FLOAT_STYLE ".o{overflow:hidden} .l{float:left;width:100px;height:50px}"
+        ".p{height:10px}</style>"
+        "<div class=o><div class=l></div></div><p class=p></p>"
+        "<div><div class=l></div></div><p class=p></p>", 400,
+        "page 400 110\n"
+        "block html 0 0 400 110\n"
+        "  block body 0 0 400 70\n"
+        "    block div 0 0 400 50 scroller 0 range 0 0\n"
+        "      line 100 0 300 0 base 14 clip 0 0 400 50\n"
+        "      block div 0 0 100 50 float-left clip 0 0 400 50\n"
+        "    block p 0 50 400 10\n"
+        "    block div 0 60 400 0\n"
+        "      line 0 60 400 0 base 14\n"
+        "      block div 0 60 100 50 float-left\n"
+        "    block p 0 60 400 10\n");
+
+    // `display: flow-root` is a block that is a formatting context's root,
+    // so it holds its float too.
+    {
+        char *got = cascade_layout_of(
+            FLOAT_STYLE ".r{display:flow-root} .l{float:left;width:100px;height:50px}</style>"
+            "<div class=r><div class=l></div></div>", 400);
+        expect("floats: a flow-root holds its floats",
+               got != NULL && strstr(got, "    block div 0 0 400 50\n") != NULL, got);
+        free(got);
+        got = cascade_dump_of("<!doctype html><div style=display:flow-root></div>", 800, 600);
+        expect("floats: flow-root is a block, and a root",
+               got != NULL && strstr(got, "div block flow-root\n") != NULL, got);
+        free(got);
+    }
+}
+
+static void float_table_cases(void)
+{
+    // A floated table's margin box holds its captions, which its own box
+    // leaves out: the 20px grid and the 30px bottom caption under it are
+    // 50 tall, so the line at 40, beside the caption alone, is beside the
+    // float too (MediaWiki's thumbnails are such tables).
+    char *got = cascade_layout_of(
+        FLOAT_STYLE ".t{float:right;width:100px} caption{caption-side:bottom}"
+        ".c{height:30px} .g{height:20px}</style>"
+        "<table class=t cellspacing=0 cellpadding=0><caption><div class=c></div></caption>"
+        "<tr><td><div class=g></div></table><p>" W10 " " W10 " " W10 " " W10 " " W10 " "
+        W10 " " W10 " " W10 " " W10 " " W10 "</p>", 400);
+    expect("floats: a floated table's captions are part of the float",
+           got != NULL && strstr(got, "      line 0 40 300 20 base 14\n") != NULL, got);
+    free(got);
+}
+
+static void float_cell_cases(void)
+{
+    // A table cell is a formatting context's root: its float is placed in
+    // its own space, its line stands beside it (from 30, 70 wide), and it
+    // grows to hold it, 40 tall.
+    char *got = cascade_layout_of(
+        FLOAT_STYLE ".l{float:left;width:30px;height:40px}</style>"
+        "<table cellspacing=0 cellpadding=0><tr><td width=100><div class=l></div>x</table>", 400);
+    expect("floats: a cell holds its floats",
+           got != NULL && strstr(got, "cell td 0 0 100 40\n") != NULL &&
+               strstr(got, "line 30 0 70 20 base 14\n") != NULL, got);
+    free(got);
+}
+
+static void float_avoid_cases(void)
+{
+    // A box that may not overlap a float stands beside it (FLOATS.md,
+    // Decision 4). Beside a 100 x 50 left float: the overflow:hidden
+    // block's auto width fills the 300 left, from 100; the flow-root set
+    // 350 wide does not fit there and goes below the float, to 50; a
+    // block picture 40 wide stands at 100; and a table, shrinking to its
+    // content, at 100 too.
+    {
+        char *got = cascade_layout_of(
+            FLOAT_STYLE ".l{float:left;width:100px;height:50px} .o{overflow:hidden;height:20px}"
+            "</style><div class=l></div><div class=o></div>", 400);
+        expect("floats: a scroller stands beside a float, filling the room",
+               got != NULL && strstr(got, "    block div 100 0 300 20 scroller") != NULL, got);
+        free(got);
+        got = cascade_layout_of(
+            FLOAT_STYLE ".l{float:left;width:100px;height:50px}"
+            ".r{display:flow-root;width:350px;height:20px}</style>"
+            "<div class=l></div><div class=r></div>", 400);
+        expect("floats: a box too wide for the room goes below the float",
+               got != NULL && strstr(got, "    block div 0 50 350 20\n") != NULL, got);
+        free(got);
+        got = cascade_layout_of(
+            FLOAT_STYLE ".l{float:left;width:100px;height:50px}"
+            "img{display:block;width:40px;height:20px}</style>"
+            "<div class=l></div><img>", 400);
+        expect("floats: a replaced block stands beside a float",
+               got != NULL && strstr(got, "    replaced img 100 0 40 20\n") != NULL, got);
+        free(got);
+        got = cascade_layout_of(
+            FLOAT_STYLE ".l{float:left;width:100px;height:50px}</style>"
+            "<div class=l></div><table cellspacing=0 cellpadding=0><tr><td>x</table>", 400);
+        expect("floats: a table stands beside a float",
+               got != NULL && strstr(got, "    table table 100 0 ") != NULL, got);
+        free(got);
+    }
+}
+
 static void float_cases(void)
 {
     float_style_cases();
@@ -526,5 +701,10 @@ static void float_cases(void)
     float_relative_cases();
     float_inline_relative_cases();
     float_line_cases();
+    float_clear_cases();
+    float_root_cases();
+    float_avoid_cases();
+    float_cell_cases();
+    float_table_cases();
     float_sweep_cases();
 }
