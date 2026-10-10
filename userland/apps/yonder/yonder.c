@@ -2866,8 +2866,10 @@ static void pictures_leave(Page *p)
     p->next_pic = p->npics;
 }
 
-// The workers stopped with pictures still out: each is named as failed,
-// and the record written, since none of them will arrive now.
+// The workers stopped (g.pool is gone) with pictures still out: each one
+// that was with them is named as failed, and each still queued behind
+// them goes through pictures_feed, which names it too, since none of them
+// will arrive now; then the record is written.
 static void pictures_orphaned(Page *p)
 {
     bool any = false;
@@ -2875,10 +2877,12 @@ static void pictures_orphaned(Page *p)
         if (p->pics[i].state != PIC_WAITING)
             continue;
         p->pics[i].state = PIC_FAILED;
+        p->waiting--;
         picture_failed(p, p->pics[i].url, NULL, "the workers stopped");
         any = true;
     }
-    p->waiting = p->in_flight = 0;
+    p->in_flight = 0;
+    pictures_feed(p);
     if (any)
         diag_pictures_in(p);
 }

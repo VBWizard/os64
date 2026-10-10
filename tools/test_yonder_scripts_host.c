@@ -3340,6 +3340,20 @@ static void diag_picture_workerless_case(void) {
         "diag: a picture out when the workers stopped is named");
     yonder_diag_free(g.page.diag); g.page.diag=NULL;
     probe_drop();
+    /* One with the workers and one still queued behind them: both named. */
+    probe_page("<img src=file:///with.png><img src=file:///behind.png>",true);
+    pictures_start(&g.page);
+    g.page.diag=yonder_diag_new("http://w.test/",3,0);
+    g.page.pics[0].state=PIC_WAITING; g.page.pics[1].state=PIC_QUEUED;
+    g.page.next_pic=1; g.page.waiting=2; g.page.in_flight=1;
+    pictures_orphaned(&g.page);
+    yonder_diag_render(g.page.diag,text,sizeof(text));
+    check(g.page.pics[0].state==PIC_FAILED && g.page.pics[1].state==PIC_FAILED && g.page.waiting==0 &&
+          has(text,"FAILED picture: file:///with.png: the workers stopped (1)") &&
+          has(text,"FAILED picture: file:///behind.png: no worker to fetch it (1)"),
+        "diag: a picture still queued when the workers stopped is named too");
+    yonder_diag_free(g.page.diag); g.page.diag=NULL;
+    probe_drop();
 }
 
 static void diag_unit_cases(void) {
