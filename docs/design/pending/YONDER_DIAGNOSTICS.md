@@ -23,8 +23,8 @@ them ranks what to build first.
 - One file per page load: `<host>-<seq>.txt`, the sequence per run,
   zero-padded to four digits so `ls` sorts in browse order. The first
   line carries the full address; the name only has to be findable.
-- Written when the page arrives and rewritten when it is left (navigation,
-  reload, close), because the asks keep coming after load: timers,
+- Written when the page arrives, again when its last picture is in, and
+  when it is left (navigation, reload, close), because the asks keep coming after load: timers,
   clicks, a script that dies on hover. The departure write is complete.
   Write a temp beside it and rename over, the `os64_conf_write` shape.
 - **The keyword rule.** Two uppercase tokens, `MISSING` and `FAILED`,
@@ -107,7 +107,9 @@ owns a `yonder_diag_t` from the start of its navigation. `start_trip` and
 the page, and `page_clear` writes it and frees it, which makes that the
 departure write. A struct copy of a Page borrows the record and never ends
 it. A load that never became a page writes its record from `stream_drop`.
-The arrival write is in `arrive_now`, after `load` has run.
+The arrival write is in `arrive_now`, after `load` has run. When the page's
+last picture is in, shown or not, `reaped` writes it again
+(`diag_pictures_in`), because pictures arrive after the page does.
 
 **The engine hook is patch 0008**, `JS_SetGlobalMissHandler`. It is
 reached through libdom's `os64_dom_set_global_miss`, which yonder's script
@@ -146,7 +148,7 @@ Reload, so this is the departure write):
     arrived after: 271 ms
     laid out at: 828 px in 70 ms
     written: when the page was left
-    pictures: 0, 0 shown, 0 could not be read, 0 past the memory kept
+    pictures: 0, 0 shown, 0 could not be read, 0 past the memory kept, 0 still coming, 0 not asked for
     sheets: 1, 1 ready
     script file:///tests/pages/diag.html#timer-1: failed
 
@@ -262,8 +264,8 @@ now worth trusting.
 - **A picture in a format yonder does not decode is `MISSING image
   <format>`**, named by its first bytes (`yonder_diag_image_format`:
   `svg`, past an XML prolog, `webp`, `avif`, `ico`, `tiff`, or
-  `unknown`). A picture that would not fetch, or was broken, is still
-  only counted on `pictures:`.
+  `unknown`), with its address on a plain line. A picture that failed
+  any other way is `FAILED picture` (Batch 3).
 - **A script is recorded by its whole address.** The engine's source name
   stops at OS64_JS_SOURCE_NAME_CAP (128); the host keeps each `src`
   script's address and the record names the task's script by it
@@ -329,3 +331,35 @@ each was a page dying on something that browsers have had since the 2000s.
   (YONDER.md § A picture asked for by itself), where it said "not a page".
 - **`document.cookie`** (LIBDOM.md § The classic methods): MediaWiki's first
   inline script died reading it, and took the wiki's module loader with it.
+- **Every picture that was not shown is named by its address**, and the
+  file is written again when the page's last picture is in. Chris found
+  that danlegt's status line said 81 of 82 while its record said
+  `pictures: 82, 0 shown`: that was the arrival write, from before any
+  picture had come, and the failed picture had no line naming it. Now a
+  picture that would not fetch, came with an error, or would not decode
+  is `FAILED picture: <address>: <why>`. The worker writes the why
+  (`yonder_picture_t.why`): `HTTP 404`, `did not fetch (tls-failed)`,
+  `could not be read`, `would not decode (malformed image)`. An error's
+  body is no longer decoded as the picture: an HTML 404 page used to be
+  counted as `MISSING image unknown`. A format yonder does not decode
+  stays `MISSING image <format>`, with a plain line `picture <address>:
+  svg, which yonder does not decode`. One never handed to a worker is
+  `FAILED picture` too (`no worker to fetch it`, `no memory to ask for
+  it`, `the workers would not take it`), and one past the memory a page's
+  pictures may keep is named on a plain line, since that is a limit kept
+  and not a failure. A body yonder had no memory to hold reads `did not
+  fetch (no-memory)`, never `(ok)`. A picture the page or its sheets name
+  that never reaches the table is on the record too, ONCE however often a
+  rebuild or a layout meets it (a set of them, `unasked_first`): one in a
+  scheme nothing here fetches is `MISSING picture-scheme data`, counted,
+  and an address that was refused is `FAILED picture` as written, with
+  the refusal. Met with no picture out, it writes the record then.
+  However the pictures settle, if one moved the page the record waits
+  until the page is laid out again (`diag_pictures_in` leaves it
+  `record_owed`, `pictures_settle` writes it), so it says what that
+  layout came to. The
+  `pictures:` line counts those (`not asked for`) and the ones a page left
+  before they arrived (`still coming`). A layout that stopped partway is a
+  condition, so it is one `FAILED layout` however often the file is
+  written (`yonder_diag_failed_seen`). suckless.org's logo is an SVG; that
+  is its "1 of 2".

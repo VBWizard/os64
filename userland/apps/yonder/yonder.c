@@ -437,6 +437,15 @@ typedef struct Page {
     // next picture to hand it.
     int32_t waiting, in_flight, next_pic;
     int32_t not_kept;
+    // Pictures refused before the table (picture_unasked): how many, and
+    // each one's identity, so a rebuild or a new layout that meets the
+    // same one again records nothing more.
+    int32_t unasked, unasked_cap;
+    uint64_t *unasked_seen;
+    // The pictures settled while one had moved the page: the record is
+    // written once the page is laid out again (diag_pictures_in,
+    // pictures_settle).
+    bool record_owed;
     size_t kept_bytes, picture_url_bytes;
     // The form whose reply this is, when the reply was to a POST: what
     // Reload sends again. Its url is NULL otherwise.
@@ -516,6 +525,7 @@ static void page_clear(Page *p)
     }
     os64_free(p->pics);
     os64_free(p->pic_slot);
+    os64_free(p->unasked_seen);
     os64_free(p->pic_of);
     os64_free(p->bg_of);
     for (int32_t i = 0; i < p->nbox_scrolls; i++)
@@ -1359,14 +1369,21 @@ static void diag_observe(Page *p, const char *when)
     char v[128];
     yonder_diag_fact(d, "written", when);
     if (p->tree != NULL && flow_incomplete(p->tree))
-        yonder_diag_failed(d, "layout", "the layout stopped partway (INCOMPLETE on the status line)");
-    int32_t shown = 0, failed = 0;
+        yonder_diag_failed_seen(d, "layout", "the layout stopped partway (INCOMPLETE on the status line)");
+    // `still coming`: asked for and not yet in, which is what a page left
+    // before its pictures arrived leaves; `not asked for`: refused before
+    // the table (picture_unasked).
+    int32_t shown = 0, failed = 0, coming = 0;
     for (int32_t i = 0; i < p->npics; i++) {
         shown += p->pics[i].state == PIC_SHOWN;
         failed += p->pics[i].state == PIC_FAILED;
+        coming += p->pics[i].state == PIC_WAITING || p->pics[i].state == PIC_QUEUED;
     }
-    os64_snprintf(v, sizeof(v), "%d, %d shown, %d could not be read, %d past the memory kept",
-                  (int)p->npics, (int)shown, (int)failed, (int)p->not_kept);
+    os64_snprintf(v, sizeof(v),
+                  "%d, %d shown, %d could not be read, %d past the memory kept, %d still coming, "
+                  "%d not asked for",
+                  (int)p->npics, (int)shown, (int)failed, (int)p->not_kept, (int)coming,
+                  (int)p->unasked);
     yonder_diag_fact(d, "pictures", v);
     os64_snprintf(v, sizeof(v), "%d, %d ready", (int)p->nsheets, (int)p->sheets_ready);
     yonder_diag_fact(d, "sheets", v);
@@ -1385,6 +1402,28 @@ static void diag_arrived(Page *p, uint64_t laid_ms)
     yonder_diag_fact(p->diag, "laid out at", v);
     diag_observe(p, "when the page arrived");
     diag_write(p->diag);
+}
+
+// The page's last picture is in, shown or not: the file is written again,
+// so what is read while the page is still up names every picture that
+// failed, and not only the ones that had failed when it arrived.
+static void diag_pictures_in(Page *p)
+{
+    if (p->diag == NULL)
+        return;
+    // A picture that moved the shown page is laid out first: the record is
+    // owed until then (pictures_settle), so it says what that layout came
+    // to. Every way the pictures settle comes through here.
+    if (p == &g.page && g.pictures_moved) {
+        p->record_owed = true;
+        return;
+    }
+    p->record_owed = false;
+    diag_observe(p, "when its pictures were in");
+    diag_write(p->diag);
+    // What the observation found since arrival is the badge's too.
+    if (p == &g.page)
+        badge_follow();
 }
 
 // The page is let go: the departure write, which is the complete one, and
@@ -2302,9 +2341,15 @@ static bool picture_sized(const Page *p, const os64_html_node_t *node)
 }
 
 // Hands the pool the page's next pictures, in table order, while fewer than
-// PICTURES_AT_ONCE are in it. One it cannot take keeps its frame.
+// PICTURES_AT_ONCE are in it. One it cannot take keeps its frame, and is
+// named on the record; when that settles the page's last picture, the
+// record is written then, as a worker's last arrival writes it (reaped).
+static void picture_failed(Page *p, const char *url, const yonder_picture_t *product,
+                           const char *asked);
+
 static void pictures_feed(Page *p)
 {
+    bool refused = false;
     while (p->in_flight < PICTURES_AT_ONCE && p->next_pic < p->npics) {
         int32_t index = p->next_pic++;
         Picture *pic = &p->pics[index];
@@ -2313,8 +2358,12 @@ static void pictures_feed(Page *p)
         pic->state = PIC_FAILED;
         p->waiting--;
         yonder_picture_job_t *job = g.pool != NULL ? os64_calloc(1, sizeof(*job)) : NULL;
-        if (job == NULL)
+        if (job == NULL) {
+            picture_failed(p, pic->url, NULL,
+                           g.pool == NULL ? "no worker to fetch it" : "no memory to ask for it");
+            refused = true;
             continue;
+        }
         job->kind = YONDER_JOB_PICTURE;
         job->index = index;
         job->generation = g.page_serial;
@@ -2327,12 +2376,16 @@ static void pictures_feed(Page *p)
         pic->id = os64_work_submit(g.pool, &work);
         if (pic->id == 0) {
             os64_free(job);
+            picture_failed(p, pic->url, NULL, "the workers would not take it");
+            refused = true;
             continue;
         }
         pic->state = PIC_WAITING;
         p->waiting++;
         p->in_flight++;
     }
+    if (refused && p->waiting == 0)
+        diag_pictures_in(p);
 }
 
 static size_t url_hash(const char *url)
@@ -2760,27 +2813,45 @@ static bool css_shows(const Page *p, const flow_style_t *s, int32_t k)
     return false;
 }
 
+static bool picture_unasked(Page *p, const char *url, const char *written,
+                            os64_page_reason_t refused);
+static const char *written_attr(const os64_html_node_t *node, const char *attr);
+
 // After a layout: every picture the laid-out boxes' sheets put behind them
 // is sent for, once — a resize whose media query brings a new one fetches
 // it then.
-static void css_pictures_under(Page *p, const flow_box_t *b)
+static bool css_pictures_under(Page *p, const flow_box_t *b)
 {
+    bool fresh = false;             // a refusal the record had not met
     for (; b != NULL; b = b->next) {
         for (int32_t i = 0; b->node != NULL && i < flow_background_layers(b->style); i++) {
             flow_layer_t l = flow_background_layer(b->style, i);
             char url[OS64_FETCH_URL_MAX];
-            if (l.image != NULL && css_url(p, &l, url, sizeof(url)))
-                (void)picture_for(p, url);
+            if (l.image == NULL)
+                continue;
+            if (!css_url(p, &l, url, sizeof(url))) {
+                // Unresolved: the address as the sheet wrote it.
+                size_t len = l.image_len < sizeof(url) - 1 ? l.image_len : sizeof(url) - 1;
+                os64_memcpy(url, l.image, len);
+                url[len] = '\0';
+                fresh |= picture_unasked(p, NULL, url, OS64_PAGE_REASON_OK);
+            } else if (picture_for(p, url) < 0) {
+                fresh |= picture_unasked(p, url, NULL, OS64_PAGE_REASON_OK);
+            }
         }
-        css_pictures_under(p, b->first);
+        fresh |= css_pictures_under(p, b->first);
     }
+    return fresh;
 }
 
+// Without workers too: pictures_feed names each one it cannot hand over.
 static void css_pictures(Page *p)
 {
-    if (p->tree != NULL && p->sheets_ready > 0 && g.pool != NULL) {
-        css_pictures_under(p, flow_root(p->tree));
+    if (p->tree != NULL && p->sheets_ready > 0) {
+        bool fresh = css_pictures_under(p, flow_root(p->tree));
         pictures_feed(p);
+        if (fresh && p->waiting == 0)
+            diag_pictures_in(p);
     }
 }
 
@@ -2803,6 +2874,13 @@ static void pictures_start(Page *p)
         os64_free(p->bg_of);
         p->pic_of = p->bg_of = NULL;
         p->nimage_map = p->nbackground_map = 0;
+        // None of the page's pictures is gathered: one line says so.
+        yonder_diag_failed_seen(p->diag, "picture",
+                                "the page's pictures: no memory to gather them");
+        if (p == &g.page)
+            badge_follow();
+        if (p->waiting == 0)
+            diag_pictures_in(p);
         return;
     }
     os64_free(p->pic_of);
@@ -2813,17 +2891,28 @@ static void pictures_start(Page *p)
     p->nbackground_map = nb;
     // A picture moves the page when any element naming it leaves its box
     // to the picture; a background never does, being painted, not laid out.
+    bool fresh = false;             // a refusal the record had not met
     for (int32_t i = 0; i < n; i++) {
         const os64_page_image_t *img = os64_page_image(model, i);
         int32_t k = picture_for(p, img->src.url);
         p->pic_of[i] = k;
+        if (k < 0)
+            fresh |= picture_unasked(p, img->src.url, written_attr(img->node, "src"), img->src.refused);
         if (k >= 0 && !picture_sized(p, img->node))
             p->pics[k].moves = true;
     }
-    for (int32_t i = 0; i < nb; i++)
-        p->bg_of[i] = picture_for(p, os64_page_background(model, i)->src.url);
-    if (g.pool != NULL)
-        pictures_feed(p);
+    for (int32_t i = 0; i < nb; i++) {
+        const os64_page_background_t *bg = os64_page_background(model, i);
+        p->bg_of[i] = picture_for(p, bg->src.url);
+        if (p->bg_of[i] < 0)
+            fresh |= picture_unasked(p, bg->src.url, written_attr(bg->node, "background"),
+                                     bg->src.refused);
+    }
+    pictures_feed(p);
+    // A refusal met with nothing out to write the record when it comes in
+    // is written now, as one met with the pictures in would be.
+    if (fresh && p->waiting == 0)
+        diag_pictures_in(p);
 }
 
 // The page is being left: its pictures in the pool are cancelled, and the
@@ -2838,10 +2927,129 @@ static void pictures_leave(Page *p)
     p->next_pic = p->npics;
 }
 
+// Whether `key` names a picture refused before the table for the first
+// time on this page: a set of their hashes, kept so the record is a set
+// of pictures and not of the times they were met. At YONDER_UNASKED_MAX
+// identities the rest are taken as seen: the count stops there.
+#define YONDER_UNASKED_MAX 4096
+static bool unasked_first(Page *p, const char *key)
+{
+    uint64_t h = 1469598103934665603ull;       // FNV-1a, as url_hash
+    for (const char *c = key; *c != '\0'; c++)
+        h = (h ^ (uint8_t)*c) * 1099511628211ull;
+    for (int32_t i = 0; i < p->unasked; i++)
+        if (p->unasked_seen[i] == h)
+            return false;
+    if (p->unasked == p->unasked_cap) {
+        int32_t cap = p->unasked_cap > 0 ? p->unasked_cap * 2 : 16;
+        uint64_t *grown = cap <= YONDER_UNASKED_MAX
+                              ? os64_realloc(p->unasked_seen, (size_t)cap * sizeof(*grown)) : NULL;
+        if (grown == NULL)
+            return false;
+        p->unasked_seen = grown;
+        p->unasked_cap = cap;
+    }
+    p->unasked_seen[p->unasked++] = h;
+    return true;
+}
+
+// A picture the page names that never reaches the table, on the record
+// once (unasked_first): one in a scheme nothing here fetches (a `data:`
+// picture, which the resolver does not even take) is MISSING
+// picture-scheme, counted, since its address is the picture itself; an
+// address that was refused (`url` NULL) is FAILED picture, `written` as
+// the page wrote it, with the refusal when there is one; one past what a
+// page may name, or with no memory to hold it, is FAILED picture by its
+// address. True when it was new, and the record changed.
+static bool picture_unasked(Page *p, const char *url, const char *written,
+                            os64_page_reason_t refused)
+{
+    const char *addr = url != NULL ? url : written != NULL ? written : "";
+    if (p->diag == NULL || !unasked_first(p, addr))
+        return false;
+    // The scheme as written, by the URL grammar (os64_url_scheme_of): a
+    // `data:` address is no URL the parser takes, and is the case most
+    // worth counting.
+    char scheme[OS64_URL_SCHEME_MAX];
+    bool named = os64_url_scheme_of(addr, scheme, sizeof(scheme));
+    bool fetched = named && (os64_streq(scheme, "http") || os64_streq(scheme, "https") ||
+                             os64_streq(scheme, "file"));
+    char line[OS64_FETCH_URL_MAX + 96];
+    if (named && !fetched) {
+        yonder_diag_missing(p->diag, "picture-scheme", scheme, 1);
+    } else if (url == NULL) {
+        if (refused != OS64_PAGE_REASON_OK)
+            os64_snprintf(line, sizeof(line), "%.256s: the address was refused (%s)", addr,
+                          os64_page_reason_name(refused));
+        else
+            os64_snprintf(line, sizeof(line), "%.256s: the address was refused", addr);
+        yonder_diag_failed(p->diag, "picture", line);
+    } else {
+        os64_snprintf(line, sizeof(line), "%s: past the pictures a page may name, or no memory", url);
+        yonder_diag_failed(p->diag, "picture", line);
+    }
+    if (p == &g.page)
+        badge_follow();
+    return true;
+}
+
+// A refused attribute's text as the page wrote it, for the record.
+static const char *written_attr(const os64_html_node_t *node, const char *attr)
+{
+    const os64_html_attr_t *a = node != NULL ? os64_html_attr(node, attr) : NULL;
+    return a != NULL ? a->value : NULL;
+}
+
+// The workers stopped (g.pool is gone) with pictures still out: each one
+// that was with them is named as failed, and each still queued behind
+// them goes through pictures_feed, which names it too, since none of them
+// will arrive now; then the record is written.
+static void pictures_orphaned(Page *p)
+{
+    bool any = false;
+    for (int32_t i = 0; i < p->npics; i++) {
+        if (p->pics[i].state != PIC_WAITING)
+            continue;
+        p->pics[i].state = PIC_FAILED;
+        p->waiting--;
+        picture_failed(p, p->pics[i].url, NULL, "the workers stopped");
+        any = true;
+    }
+    p->in_flight = 0;
+    pictures_feed(p);
+    if (any)
+        diag_pictures_in(p);
+}
+
 // Whether a picture's arrival can move the page (Picture.moves).
 static bool picture_moves_page(const Page *p, int32_t pic)
 {
     return p->pics[pic].moves;
+}
+
+// A picture that will not be shown, on the page's record by its address:
+// a format yonder does not decode is asked for and not had, MISSING image
+// <format>, with the address on a plain line; one that could not be asked
+// for (`asked`, the reason), would not fetch, came with an error the
+// server answered, or would not decode is FAILED picture.
+static void picture_failed(Page *p, const char *url, const yonder_picture_t *product,
+                           const char *asked)
+{
+    char why[64];
+    if (product != NULL && product->format != NULL) {
+        yonder_diag_missing(p->diag, "image", product->format, 1);
+        char key[OS64_FETCH_URL_MAX + 16];
+        os64_snprintf(key, sizeof(key), "picture %s", url);
+        os64_snprintf(why, sizeof(why), "%s, which yonder does not decode", product->format);
+        yonder_diag_fact(p->diag, key, why);
+    } else {
+        os64_strcopy(why, sizeof(why), asked != NULL ? asked : product == NULL ? "no memory to fetch it" :
+                                       product->why[0] != '\0' ? product->why : "no picture came");
+        char line[OS64_FETCH_URL_MAX + 80];
+        os64_snprintf(line, sizeof(line), "%s: %s", url, why);
+        yonder_diag_failed(p->diag, "picture", line);
+    }
+    badge_follow();
 }
 
 static void picture_arrived(yonder_picture_job_t *job, yonder_picture_t *product)
@@ -2855,19 +3063,18 @@ static void picture_arrived(yonder_picture_job_t *job, yonder_picture_t *product
     g.page.in_flight--;
     if (product == NULL || product->status != OS64_IMAGE_OK) {
         pic->state = PIC_FAILED;
-        // A format yonder does not decode is asked for and not had; a
-        // picture that would not fetch, or was broken, is counted on the
-        // record's `pictures:` line and no more.
-        if (product != NULL && product->format != NULL) {
-            yonder_diag_missing(g.page.diag, "image", product->format, 1);
-            badge_follow();
-        }
+        picture_failed(&g.page, pic->url, product, NULL);
         return;
     }
     size_t bytes = product->cost;
     if (g.page.kept_bytes + bytes > PICTURES_KEPT_MAX) {
+        // Not a failure: what the page's pictures may cost is spent. Named
+        // all the same, so every picture not shown is on the record.
         pic->state = PIC_NOT_KEPT;
         g.page.not_kept++;
+        char key[OS64_FETCH_URL_MAX + 16];
+        os64_snprintf(key, sizeof(key), "picture %s", pic->url);
+        yonder_diag_fact(g.page.diag, key, "past the memory kept for the page's pictures");
         return;
     }
     pic->image = product->image;
@@ -2911,6 +3118,8 @@ static void pictures_settle(void)
         if (now_ok)
             relayout(true);
     }
+    if (g.page.record_owed && !g.pictures_moved)
+        diag_pictures_in(&g.page);
     if (due != g.settle_due) {
         g.settle_due = due;
         pictures_schedule();
@@ -4749,9 +4958,12 @@ static bool coming_turn(void)
 static void reaped(os64_work_id_t id, void *job, void *product)
 {
     if (*(const uint32_t *)job == YONDER_JOB_PICTURE) {
+        int32_t waiting = g.page.waiting;
         picture_arrived(job, product);
         yonder_picture_release(job, product);
         pictures_feed(&g.page);
+        if (waiting > 0 && g.page.waiting == 0)
+            diag_pictures_in(&g.page);
         return;
     }
     if (*(const uint32_t *)job == YONDER_JOB_SHEET) {
@@ -5445,6 +5657,7 @@ static void on_doorbell(os64_ui_t *ui, const os64_gui_event_t *ev)
             g.nav.id = 0;
             os64_work_pool_destroy(g.pool);
             g.pool = NULL;
+            pictures_orphaned(&g.page);
             buttons_follow();
             status_rest("The background workers stopped; restart yonder to fetch pages.");
         }

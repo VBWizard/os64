@@ -52,6 +52,9 @@ void yonder_diag_missing(yonder_diag_t *d, const char *kind, const char *name, u
 void yonder_diag_missing_seen(yonder_diag_t *d, const char *kind, const char *name, uint32_t count);
 // A FAILED line per `what` and `message`, counted.
 void yonder_diag_failed(yonder_diag_t *d, const char *what, const char *message);
+// The same line for a condition that holds rather than an event that
+// happened: once, however often it is looked at.
+void yonder_diag_failed_seen(yonder_diag_t *d, const char *what, const char *message);
 // A plain line, `key: value`, kept where its key was first set and
 // replaced by a later setting of the same key.
 void yonder_diag_fact(yonder_diag_t *d, const char *key, const char *value);

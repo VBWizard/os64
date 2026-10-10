@@ -39,7 +39,8 @@ void os64_exit(int32_t code)
     (void)code;
     exit(3);
 }
-void *os64_malloc(size_t size) { return malloc(size != 0 ? size : 1); }
+static size_t s_fail_malloc_of;        // an allocation of exactly this size fails; 0 for none
+void *os64_malloc(size_t size) { return size != 0 && size == s_fail_malloc_of ? NULL : malloc(size != 0 ? size : 1); }
 void *os64_calloc(size_t n, size_t size) { return calloc(n != 0 ? n : 1, size != 0 ? size : 1); }
 void *os64_realloc(void *p, size_t size) { return realloc(p, size != 0 ? size : 1); }
 void os64_free(void *p) { free(p); }
@@ -340,6 +341,21 @@ static bool body_is(const way_whole_t *w, const char *text)
 
 static const char *kOld = "HTTP/1.1 200 OK\r\nContent-Length: 3\r\nCache-Control: max-age=0\r\n"
                           "ETag: \"v1\"\r\n\r\nOLD";
+
+// A body whose buffer cannot be had did not arrive for want of memory,
+// whatever the fetch, which went fine, says of itself.
+static void whole_without_memory(void)
+{
+    fresh();
+    script("mem.test", "HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nabc");
+    way_whole_t w;
+    memset(&w, 0, sizeof(w));
+    s_fail_malloc_of = 16u * 1024u;     // read_whole's first buffer
+    bool got = whole("http://mem.test/", &w, NULL);
+    s_fail_malloc_of = 0;
+    expect("whole: no buffer is no memory, never OK", !got && w.fetch == OS64_FETCH_NO_MEMORY, NULL);
+    free(w.bytes);
+}
 
 static void options_left_alone(void)
 {
@@ -910,6 +926,7 @@ int main(void)
     scripted_document_load();
     pieces_make_the_same_page();
     pictures_are_pages_for_a_face_that_shows_them();
+    whole_without_memory();
     options_left_alone();
     validator_identity();
     restrictive_304();
