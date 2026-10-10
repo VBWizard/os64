@@ -1387,6 +1387,17 @@ static void diag_arrived(Page *p, uint64_t laid_ms)
     diag_write(p->diag);
 }
 
+// The page's last picture is in, shown or not: the file is written again,
+// so what is read while the page is still up names every picture that
+// failed, and not only the ones that had failed when it arrived.
+static void diag_pictures_in(Page *p)
+{
+    if (p->diag == NULL)
+        return;
+    diag_observe(p, "when its pictures were in");
+    diag_write(p->diag);
+}
+
 // The page is let go: the departure write, which is the complete one, and
 // the record with it.
 static void diag_leave(Page *p)
@@ -2844,6 +2855,30 @@ static bool picture_moves_page(const Page *p, int32_t pic)
     return p->pics[pic].moves;
 }
 
+// A picture that will not be shown, on the page's record by its address:
+// a format yonder does not decode is asked for and not had, MISSING image
+// <format>, with the address on a plain line; one that would not fetch, an
+// error the server answered with, or bytes that would not decode is
+// FAILED picture.
+static void picture_failed(const char *url, const yonder_picture_t *product)
+{
+    char why[64];
+    if (product != NULL && product->format != NULL) {
+        yonder_diag_missing(g.page.diag, "image", product->format, 1);
+        char key[OS64_FETCH_URL_MAX + 16];
+        os64_snprintf(key, sizeof(key), "picture %s", url);
+        os64_snprintf(why, sizeof(why), "%s, which yonder does not decode", product->format);
+        yonder_diag_fact(g.page.diag, key, why);
+    } else {
+        os64_strcopy(why, sizeof(why), product == NULL ? "no memory to fetch it" :
+                                       product->why[0] != '\0' ? product->why : "no picture came");
+        char line[OS64_FETCH_URL_MAX + 80];
+        os64_snprintf(line, sizeof(line), "%s: %s", url, why);
+        yonder_diag_failed(g.page.diag, "picture", line);
+    }
+    badge_follow();
+}
+
 static void picture_arrived(yonder_picture_job_t *job, yonder_picture_t *product)
 {
     if (job->generation != g.page_serial || job->index < 0 || job->index >= g.page.npics)
@@ -2855,13 +2890,7 @@ static void picture_arrived(yonder_picture_job_t *job, yonder_picture_t *product
     g.page.in_flight--;
     if (product == NULL || product->status != OS64_IMAGE_OK) {
         pic->state = PIC_FAILED;
-        // A format yonder does not decode is asked for and not had; a
-        // picture that would not fetch, or was broken, is counted on the
-        // record's `pictures:` line and no more.
-        if (product != NULL && product->format != NULL) {
-            yonder_diag_missing(g.page.diag, "image", product->format, 1);
-            badge_follow();
-        }
+        picture_failed(pic->url, product);
         return;
     }
     size_t bytes = product->cost;
@@ -4749,9 +4778,12 @@ static bool coming_turn(void)
 static void reaped(os64_work_id_t id, void *job, void *product)
 {
     if (*(const uint32_t *)job == YONDER_JOB_PICTURE) {
+        int32_t waiting = g.page.waiting;
         picture_arrived(job, product);
         yonder_picture_release(job, product);
         pictures_feed(&g.page);
+        if (waiting > 0 && g.page.waiting == 0)
+            diag_pictures_in(&g.page);
         return;
     }
     if (*(const uint32_t *)job == YONDER_JOB_SHEET) {

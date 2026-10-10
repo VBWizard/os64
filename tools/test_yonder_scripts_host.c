@@ -307,7 +307,18 @@ int64_t yonder_##kind##_run(void *job, bool (*cancelled)(void *), void *ctx, voi
 void yonder_##kind##_release(void *job, void *product) { \
     (void)job; (void)product; check(false,"unexpected worker product"); \
 }
-JOB_STUB(picture)
+int64_t yonder_picture_run(void *job, bool (*cancelled)(void *), void *ctx, void **out) {
+    (void)job; (void)cancelled; (void)ctx; (void)out;
+    check(false,"unexpected worker execution"); return -1;
+}
+/* As picture.c releases a picture job and a product with no pixels: a case
+ * that hands reaped() a picture makes both with os64_calloc. */
+void yonder_picture_release(void *job, void *product) {
+    yonder_picture_t *got=product;
+    check(got==NULL || (got->image.pixels==NULL && got->sequence==NULL),"a released picture holds no pixels here");
+    os64_free(got);
+    os64_free(job);
+}
 int64_t yonder_sheet_run(void *job, bool (*cancelled)(void *), void *ctx, void **out) {
     (void)job; (void)cancelled; (void)ctx; (void)out;
     check(false,"unexpected worker execution"); return -1;
@@ -3209,21 +3220,56 @@ static void diag_picture_case(void) {
         os64_streq(yonder_diag_image_format((const uint8_t *)svg,strlen(svg)),"svg") &&
         os64_streq(yonder_diag_image_format((const uint8_t *)"MM",2),"unknown"),
         "diag: an undecoded picture is named by its first bytes, an SVG past its prolog");
-    probe_page("<img src=file:///logo.svg><img src=file:///broken.png>",true);
+    probe_page("<img src=file:///logo.svg><img src=file:///broken.png><img src=http://x.test/gone.png>"
+        "<img src=http://x.test/far.png><img src=file:///absent.png>",true);
     pictures_start(&g.page);
     g.page.diag=yonder_diag_new("http://x.test/",1,0);
-    for(int i=0;i<2;i++) g.page.pics[i].state=PIC_WAITING;
-    g.page.waiting=g.page.in_flight=2;
+    for(int i=0;i<5;i++) g.page.pics[i].state=PIC_WAITING;
+    g.page.waiting=g.page.in_flight=5;
     yonder_picture_job_t job={.kind=YONDER_JOB_PICTURE,.index=0,.generation=g.page_serial};
     yonder_picture_t gone={.status=OS64_IMAGE_UNKNOWN_FORMAT,.format="svg"};
     picture_arrived(&job,&gone);
     job.index=1;
-    yonder_picture_t broken={.status=OS64_IMAGE_MALFORMED};
+    yonder_picture_t broken={.status=OS64_IMAGE_MALFORMED,.why="would not decode (malformed image)"};
     picture_arrived(&job,&broken);
-    char text[2048]; yonder_diag_render(g.page.diag,text,sizeof(text));
-    check(has(text,"\nverdict: 1 MISSING\nMISSING image svg (1)\n") && g.page.pics[0].state==PIC_FAILED &&
-        g.page.pics[1].state==PIC_FAILED,
-        "diag: a picture in a format yonder lacks is MISSING image; a broken one is only counted");
+    job.index=2;
+    yonder_picture_t missing={.status=OS64_IMAGE_NO_FILE,.why="HTTP 404"};
+    picture_arrived(&job,&missing);
+    job.index=3;
+    yonder_picture_t unreached={.status=OS64_IMAGE_IO_ERROR,.why="did not fetch (tls-failed)"};
+    picture_arrived(&job,&unreached);
+    /* The last one in rewrites the file, so it names every picture that
+     * failed while the page is still up; it comes through the doorbell. */
+    char name[64]; yonder_diag_file_name(g.page.diag,name,sizeof(name));
+    check(!has(diag_file("/tmp/diag",name),"FAILED picture"),"diag: the file is not written while pictures are out");
+    yonder_picture_job_t *last=os64_calloc(1,sizeof(*last));
+    yonder_picture_t *unread=os64_calloc(1,sizeof(*unread));
+    *last=job; last->index=4;
+    unread->status=OS64_IMAGE_IO_ERROR;
+    os64_strcopy(unread->why,sizeof(unread->why),"could not be read");
+    reaped(0,last,unread);
+    char text[4096]; yonder_diag_render(g.page.diag,text,sizeof(text));
+    const char *file=diag_file("/tmp/diag",name);
+    check(g.page.waiting==0 && has(file,"\nwritten: when its pictures were in\n") &&
+        has(file,"\npictures: 5, 0 shown, 5 could not be read, 0 past the memory kept\n") &&
+        has(file,"FAILED picture: file:///absent.png"),
+        "diag: the last picture in rewrites the file, every failure named");
+    /* A picture of a page already gone takes nothing to zero: no write. */
+    int writes=fake_writes;
+    yonder_picture_job_t *stale=os64_calloc(1,sizeof(*stale));
+    *stale=job; stale->generation=g.page_serial-1;
+    reaped(0,stale,NULL);
+    check(fake_writes==writes,"diag: a picture that settles nothing writes nothing");
+    bool all_failed=true;
+    for(int i=0;i<5;i++) all_failed=all_failed && g.page.pics[i].state==PIC_FAILED;
+    check(has(text,"\nverdict: 1 MISSING, 4 FAILED\nMISSING image svg (1)\n") && all_failed,
+        "diag: a picture in a format yonder lacks is MISSING image; one that failed otherwise is FAILED picture");
+    check(has(text,"\npicture file:///logo.svg: svg, which yonder does not decode\n") &&
+        has(text,"\nFAILED picture: file:///broken.png: would not decode (malformed image) (1)\n") &&
+        has(text,"\nFAILED picture: http://x.test/gone.png: HTTP 404 (1)\n") &&
+        has(text,"\nFAILED picture: http://x.test/far.png: did not fetch (tls-failed) (1)\n") &&
+        has(text,"\nFAILED picture: file:///absent.png: could not be read (1)\n"),
+        "diag: every picture not shown is named by its address, with the worker's why");
     yonder_diag_free(g.page.diag); g.page.diag=NULL;
     probe_drop();
 }

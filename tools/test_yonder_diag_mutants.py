@@ -83,8 +83,8 @@ mutants = [
      '            if (g.stream.head.status >= 400) {',
      '            if (g.stream.head.status >= 4000) {', WINDOW),
     ('an-undecoded-format-is-not-missing', YONDER,
-     '            yonder_diag_missing(g.page.diag, "image", product->format, 1);',
-     '            (void)product;', WINDOW),
+     '        yonder_diag_missing(g.page.diag, "image", product->format, 1);',
+     '        (void)product;', WINDOW),
     ('svg-is-not-sniffed', DIAG,
      '        if (os64_memcmp(bytes + i, "<svg", 4) == 0)',
      '        if (os64_memcmp(bytes + i, "<svG", 4) == 0)', WINDOW),
@@ -106,6 +106,19 @@ mutants = [
     ('the-missing-parent-is-not-said', YONDER,
      '        why = os64_mkdir(dir) == 0 ? NULL : "cannot be made (does its parent exist?)";',
      '        why = ((void)os64_mkdir(dir), NULL);', WINDOW),
+    # The pictures that were not shown.
+    ('a-failed-picture-is-only-counted', YONDER,
+     '        yonder_diag_failed(g.page.diag, "picture", line);',
+     '        (void)line;', WINDOW),
+    ('an-undecoded-picture-is-not-named', YONDER,
+     '        yonder_diag_fact(g.page.diag, key, why);',
+     '        (void)key;', WINDOW),
+    ('the-last-picture-writes-nothing', YONDER,
+     '            diag_pictures_in(&g.page);',
+     '            (void)diag_pictures_in;', WINDOW),
+    ('every-picture-writes', YONDER,
+     '        if (waiting > 0 && g.page.waiting == 0)',
+     '        if ((void)waiting, g.page.waiting == 0)', WINDOW),
 ]
 
 caught, missed, unbuilt = [], [], []

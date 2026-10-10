@@ -2,6 +2,7 @@
 
 #include "picture.h"
 #include "diag.h"
+#include "os64/fmt.h"
 #include "os64/mem.h"
 #include "os64/slurp.h"
 #include "os64/str.h"
@@ -38,6 +39,8 @@ static os64_image_status_t decode(const uint8_t *bytes, size_t len, yonder_pictu
     p->cost = (size_t)p->image.width * p->image.height * 4u;
     if (st == OS64_IMAGE_UNKNOWN_FORMAT)
         p->format = yonder_diag_image_format(bytes, len);
+    else if (st != OS64_IMAGE_OK)
+        os64_snprintf(p->why, sizeof(p->why), "would not decode (%s)", os64_image_status_name(st));
     return st;
 }
 
@@ -56,6 +59,8 @@ int64_t yonder_picture_run(void *job, bool (*cancelled)(void *ctx), void *ctx, v
         if (os64_slurp(j->url + 7, OS64_IMAGE_CAP_DEFAULT, &bytes, &len) == OS64_SLURP_OK) {
             p->status = decode(bytes, len, p);
             os64_free(bytes);
+        } else {
+            os64_strcopy(p->why, sizeof(p->why), "could not be read");
         }
         return p->status == OS64_IMAGE_OK ? 1 : 0;
     }
@@ -66,9 +71,19 @@ int64_t yonder_picture_run(void *job, bool (*cancelled)(void *ctx), void *ctx, v
     j->hooks.cancel_ctx = ctx;
     way_whole_t body;
     p->status = OS64_IMAGE_IO_ERROR;
-    if (!way_fetch_whole(&j->hooks, j->url, &opt, OS64_IMAGE_CAP_DEFAULT, &body))
+    if (!way_fetch_whole(&j->hooks, j->url, &opt, OS64_IMAGE_CAP_DEFAULT, &body)) {
+        os64_snprintf(p->why, sizeof(p->why), "did not fetch (%s)", os64_fetch_status_name(body.fetch));
         return 0;
-    p->status = cancelled(ctx) ? OS64_IMAGE_IO_ERROR : decode(body.bytes, body.len, p);
+    }
+    // An error's body is the server's page about the error, not the picture.
+    if (cancelled(ctx)) {
+        os64_strcopy(p->why, sizeof(p->why), "cancelled");
+    } else if (body.status != 0 && (body.status < 200 || body.status >= 300)) {
+        p->status = OS64_IMAGE_NO_FILE;
+        os64_snprintf(p->why, sizeof(p->why), "HTTP %d", (int)body.status);
+    } else {
+        p->status = decode(body.bytes, body.len, p);
+    }
     os64_free(body.bytes);
     return p->status == OS64_IMAGE_OK ? 1 : 0;
 }
