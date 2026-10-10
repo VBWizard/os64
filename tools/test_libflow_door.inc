@@ -187,10 +187,14 @@ typedef struct {
 // is all or nothing, laid out once its containing block is finished, so a
 // partial tree can hold boxes after where one of those would be; the
 // relations are asserted without them, and a placed one is held only to
-// being where it is.
+// being where it is. So is a float (FLOATS.md § Proof): one met on a line
+// hangs under its context after all of the context's lines, but is laid
+// out as its line is built, so a tree cut in a later line holds it where
+// the whole one holds that line.
 static bool out_of_flow_box(const flow_box_t *b)
 {
-    return b->positioned && b->style->position == FLOW_POSITION_ABSOLUTE;
+    return (b->positioned && b->style->position == FLOW_POSITION_ABSOLUTE) ||
+           b->floated != FLOW_FLOAT_NONE;
 }
 
 static void flatten(Flat *f, const flow_box_t *b, int32_t parent)
@@ -260,10 +264,10 @@ static bool unfinished_within(const flow_box_t *b)
     return false;
 }
 
-// Relation (b) for the out-of-flow boxes the in-flow walk left out: one
-// placed whole, under no unfinished table or line, is where the whole
-// layout puts it — laid out once its containing block was finished, it
-// does not move after.
+// Relation (b) for the out-of-flow boxes and floats the in-flow walk left
+// out: one placed whole, under no unfinished table or line, is where the
+// whole layout puts it — laid out once its containing block was finished,
+// or placed once the margins above it resolved, it does not move after.
 // A box whose children's geometry comes from the children it has: a
 // table's columns from its cells, a line's from its pieces, a flex or grid
 // container's items from each other. Unfinished, what it holds may be
@@ -277,17 +281,24 @@ static bool sized_by_its_children(const flow_box_t *b)
 }
 
 static void placed_out_of_flow_stay(const flow_box_t *b, bool exempt, const flow_tree_t *whole,
-                                    bool *same, size_t *compared)
+                                    bool *same, size_t *compared, char *detail, size_t cap)
 {
     if (out_of_flow_box(b) && !exempt && !unfinished_within(b)) {
         const flow_box_t *twin = flow_box_for(whole, b->node);
-        *same &= twin != NULL && twin->rect.x == b->rect.x && twin->rect.y == b->rect.y &&
-                 twin->rect.w == b->rect.w && twin->rect.h == b->rect.h;
+        bool here = twin != NULL && twin->rect.x == b->rect.x && twin->rect.y == b->rect.y &&
+                    twin->rect.w == b->rect.w && twin->rect.h == b->rect.h;
+        if (!here && *same)
+            snprintf(detail, cap, "%s at %d %d %d %d, whole at %d %d %d %d",
+                     b->node != NULL && b->node->name != NULL ? b->node->name : "-",
+                     b->rect.x, b->rect.y, b->rect.w, b->rect.h,
+                     twin != NULL ? twin->rect.x : -1, twin != NULL ? twin->rect.y : -1,
+                     twin != NULL ? twin->rect.w : -1, twin != NULL ? twin->rect.h : -1);
+        *same &= here;
         (*compared)++;
     }
     exempt |= b->unfinished && sized_by_its_children(b);
     for (const flow_box_t *c = b->first; c != NULL; c = c->next)
-        placed_out_of_flow_stay(c, exempt, whole, same, compared);
+        placed_out_of_flow_stay(c, exempt, whole, same, compared, detail, cap);
 }
 
 // How far the whole tree reaches, out-of-flow boxes and all.
@@ -372,8 +383,10 @@ static void layout_relation_sweep(const char *what, const char *html, int32_t wi
             expect(name, same, NULL);
             snprintf(name, sizeof(name), "sweep %zu: (b) a placed out-of-flow box stays", at);
             bool stays = true;
-            placed_out_of_flow_stay(flow_root(t), false, whole, &stays, &compared);
-            expect(name, stays, NULL);
+            detail[0] = '\0';
+            placed_out_of_flow_stay(flow_root(t), false, whole, &stays, &compared, detail,
+                                    sizeof(detail));
+            expect(name, stays, detail);
             snprintf(name, sizeof(name), "sweep %zu: (c) the unfinished lead to the last", at);
             bool path = true;
             for (size_t i = 0; i < p.n; i++) {

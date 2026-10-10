@@ -625,6 +625,7 @@ static flow_box_t *public_box(Build *bd, const FBox *src, flow_box_t *parent, fl
         !push_list(bd, &bd->t->controls, &bd->t->ncontrols, &bd->t->cap_controls, b))
         return b;
     b->positioned = src->positioned;
+    b->floated = src->floated;
     b->fixed |= src->out_of_flow && src->style->position == FLOW_POSITION_FIXED;
     if (src->positioned &&
         !push_list(bd, &bd->t->positioned, &bd->t->npositioned, &bd->t->cap_positioned, b))

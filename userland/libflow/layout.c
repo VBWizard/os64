@@ -27,7 +27,13 @@ typedef struct {
     // than the build does.
     const FBox *markers[F_DEPTH_MAX];
     int32_t nmarkers;
+    // The markers below this one belong to a formatting context outside the
+    // float being laid out: its lines are not its item's first line.
+    int32_t marker_floor;
     size_t scratch;     // the working memory live now (Scratch, below)
+    // The floats of the block formatting context being laid out (Space,
+    // below): NULL until the root's layout opens one.
+    struct Space *space;
 } L;
 
 // Vertical margins that adjoin collapse to the largest positive one plus
@@ -629,14 +635,14 @@ static Paint paint_for(const L *l, const FStyles *styles, const os64_html_node_t
 // is a segment, two edges and a segment with no opportunity between them.
 
 typedef enum { SG_WORD, SG_ATOM, SG_OPEN, SG_CLOSE, SG_BREAK, SG_WBR, SG_MARKER,
-               SG_PLACEHOLDER } SegKind;
+               SG_PLACEHOLDER, SG_FLOAT } SegKind;
 
 // What a line holds nothing of — no width, no opportunity, nothing that
 // ends a run of white space: an inline box's edges, and where an absolute
-// box was written.
+// box or a float was written.
 static bool seg_is_edge(SegKind k)
 {
-    return k == SG_OPEN || k == SG_CLOSE || k == SG_PLACEHOLDER;
+    return k == SG_OPEN || k == SG_CLOSE || k == SG_PLACEHOLDER || k == SG_FLOAT;
 }
 
 typedef struct {
@@ -894,7 +900,8 @@ static void segments(L *l, FBox *ifc, int64_t cw, Segs *s)
                     uint32_t m = f_collapse_white(alt, n, copy, &space);
                     const FItem *next = it->next;
                     while (next != NULL && (next->kind == FI_OPEN || next->kind == FI_CLOSE ||
-                                            next->kind == FI_PLACEHOLDER))
+                                            next->kind == FI_PLACEHOLDER ||
+                                            next->kind == FI_FLOAT))
                         next = next->next;
                     if (m > 0 && copy[m - 1] == ' ' && next != NULL && next->kind == FI_TEXT &&
                         next->len > 0 && next->text[0] == ' ' &&
@@ -995,6 +1002,16 @@ static void segments(L *l, FBox *ifc, int64_t cw, Segs *s)
             if (it->absolute == NULL)
                 break;
             Seg *g = seg_add(l, s, SG_PLACEHOLDER);
+            if (g != NULL) {
+                g->item = it;
+                g->style = it->style;
+            }
+            break;
+        }
+        case FI_FLOAT: {
+            if (it->floated == NULL)
+                break;
+            Seg *g = seg_add(l, s, SG_FLOAT);
             if (g != NULL) {
                 g->item = it;
                 g->style = it->style;
@@ -1265,6 +1282,10 @@ static int64_t gaps_before(const int64_t *gap_at, size_t gaps, int64_t x)
     return n;
 }
 
+static void float_at(L *l, const FStyles *styles, FBox *f, int64_t cx, int64_t cw,
+                     const Cursor *at, int64_t rel_x, int64_t rel_y);
+static void settle(L *l, int64_t y);
+
 static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw, Cursor *cur)
 {
     // Pass 2 stopped inside this context: its last line was broken without
@@ -1291,6 +1312,8 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
     // in, and has that much less room.
     int64_t indent = first_line_indent(ifc, cw);
 
+    // The segments of the line being built, and of the last line joined.
+    size_t line_start = 0, line_end = 0, last_start = 0, last_end = 0;
     for (size_t start = 0; start < s.n && !l->failed;) {
         bool forced;
         size_t end = break_line(&s, start, indent, cw, &forced);
@@ -1298,6 +1321,8 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
         // line, not as an empty piece on the next.
         while (end < s.n && s.v[end].kind == SG_CLOSE)
             end++;
+        line_start = start;
+        line_end = end;
         bool last = end >= s.n;
 
         // A line joins its context only once it is whole — every fragment
@@ -1604,6 +1629,11 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
                 g->item->absolute->place = fr;
                 break;
             }
+            case SG_FLOAT:
+                // Laid out and placed in the context where the line stands,
+                // moved with the relative inlines open round it.
+                float_at(l, styles, g->item->floated, cx, cw, cur, rel_x, rel_y);
+                break;
             case SG_BREAK: {
                 // A forced break holds its line open with its own font's box
                 // — that is `a<br><br>b`'s blank line — but in quirks mode
@@ -1661,15 +1691,15 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
         // so that line is as tall as the marker's font as well — in quirks
         // mode a line of nothing but a small picture has no strut of its
         // own to hold it.
-        if (l->nmarkers > 0 && !empty) {
-            for (int32_t k = 0; k < l->nmarkers; k++) {
+        if (l->nmarkers > l->marker_floor && !empty) {
+            for (int32_t k = l->marker_floor; k < l->nmarkers; k++) {
                 Fonts mf;
                 if (fonts_for(l, l->markers[k]->style, &mf)) {
                     Extent mb = font_box(l->markers[k]->style, mf.info.ascent, mf.info.descent, mf.info.line_height);
                     extend(&ext, &any, mb.top, mb.bottom);
                 }
             }
-            l->nmarkers = 0;
+            l->nmarkers = l->marker_floor;
         }
         int64_t height = any ? ext.bottom - ext.top : 0;
         int64_t baseline_off = any ? -ext.top : 0;
@@ -1700,12 +1730,14 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
         if (empty)
             height = 0;
 
-        // Resolve the margins waiting above the first line with height.
+        // Resolve the margins waiting above the first line with height,
+        // and place the floats that waited for them.
         if (height > 0) {
             cur->y += margins_sum(cur->pm);
             cur->pm = kNoMargins;
             if (cur->first < 0)
                 cur->first = cur->y;
+            settle(l, cur->y);
         }
         // An empty line resolves no margins, but it sits where a line would.
         line->y = height > 0 ? cur->y : cur->y + margins_sum(cur->pm);
@@ -1782,11 +1814,24 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
         else
             ifc->lines = line;
         ifc->last_line = line;
+        last_start = start;
+        last_end = end;
         cur->y += height;
         if (height > 0 && cur->first < 0)
             cur->first = line->y;
         start = end;
     }
+    // A float met on a line that did not join whole — the one a layout
+    // that stopped was building, or the last one pass 2 cut short — is not
+    // where the whole layout puts it: it is not placed.
+    if (l->failed) {
+        last_start = line_start;
+        last_end = line_end;
+    }
+    if (l->failed || (cut && ifc->last_line != NULL))
+        for (size_t j = last_start; j < last_end; j++)
+            if (s.v[j].kind == SG_FLOAT)
+                unplace(s.v[j].item->floated);
     if (cut && ifc->last_line != NULL) {
         FLine *last = ifc->last_line;
         // An out-of-flow box whose place is on the line dropped has none.
@@ -1842,9 +1887,9 @@ static void translate(FBox *b, int64_t dx, int64_t dy)
 
 // A box whose margins never collapse with its content's: the root, a
 // table and its cells and captions, a replaced block, an atom's content,
-// an out-of-flow box, a block whose overflow scrolls or hides (CSS
-// Overflow 3 § 3; `clip` does not), and a flex or grid container and each
-// of its items (Flexbox 1 § 3, § 4; Grid 2 § 5, § 6) — each starts a
+// an out-of-flow box, a float, a block whose overflow scrolls or hides
+// (CSS Overflow 3 § 3; `clip` does not), and a flex or grid container and
+// each of its items (Flexbox 1 § 3, § 4; Grid 2 § 5, § 6) — each starts a
 // formatting context of its own (§9.4.1, §8.3.1).
 static bool bfc_root(const FBox *b)
 {
@@ -1853,6 +1898,7 @@ static bool bfc_root(const FBox *b)
                     (f_overflow_scrolls(s->overflow_x) || f_overflow_scrolls(s->overflow_y));
     return b->parent == NULL || b->kind == FB_TABLE || b->kind == FB_CELL ||
            b->kind == FB_CAPTION || b->kind == FB_REPLACED || scroller || b->out_of_flow ||
+           b->floated != FLOW_FLOAT_NONE ||
            (b->kind == FB_BLOCK && b->node != NULL && f_display_atomic(s->display)) || b->flex ||
            b->grid || (b->parent != NULL && (b->parent->flex || b->parent->grid));
 }
@@ -2070,12 +2116,319 @@ static void place_marker(L *l, const FStyles *styles, FBox *b, int64_t content_x
     b->marker_frag = fr;
 }
 
+// ── Floats (FLOATS.md) ──────────────────────────────────────────────────
+//
+// THE EXCLUSION SPACE: the floats placed in one block formatting context,
+// owned by its root for the length of the root's layout. Each side is a
+// STEP FUNCTION of y: how far that side's floats reach in, held as the
+// steps where the reach changes. Coordinates are UNMOVED — a relative box
+// lays its subtree out at its offset, but what flows round a float inside
+// it sees the float where it would be unmoved (CSS 2.1 § 9.4.3) — so the
+// offsets of the relative boxes open in the context (Space.rel_x, rel_y)
+// come off what is asked and recorded, and go back on what is answered.
+//
+// The flow mostly descends, so each side keeps a BOOKMARK, the step its
+// last ask landed in, and walks from it: forward for an ask below, back
+// for one above, which a negative top margin makes. Nothing is dropped.
+
+enum { SIDE_LEFT = 0, SIDE_RIGHT = 1 };
+
+// A side's reach over a band: a left float's right margin edge, and the
+// NEGATED left margin edge of a right float, so the reach of either side
+// is the largest of its floats', and NO_REACH is where none reaches.
+#define NO_REACH INT64_MIN
+
+typedef struct {
+    int64_t y;          // where the band starts; it runs to the next step's y
+    int64_t reach;
+} Step;
+
+typedef struct {
+    Step *v;            // scratch; NULL until a float is placed on the side
+    int32_t n, cap;
+    int32_t mark;       // the bookmark
+} Side;
+
+// A float met while the margins above it are not resolved (in a container
+// whose top margin can still collapse with what comes next): laid out, and
+// waiting for the y where they resolve to be placed (FLOATS.md, Decision 1).
+typedef struct {
+    FBox *box;
+    int64_t cx, cw;         // its containing block's content edges, unmoved
+    int64_t rel_x, rel_y;   // what moves it once placed: the relative boxes
+                            // and inlines open where it was written
+} Wait;
+
+typedef struct Space {
+    Side side[2];
+    bool any;               // a float has been placed
+    int64_t top;            // the last float's top: none goes higher (§ 9.5.1 rules 5, 6)
+    int64_t bottom[2];      // each side's lowest bottom margin edge, or NO_REACH
+    int64_t rel_x, rel_y;   // the relative boxes open in this context
+    Wait *wait;             // scratch
+    int32_t nwait, cap_wait;
+} Space;
+
+static void block_at(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t cbw, Cursor *cur);
+
+static void space_open(Space *sp)
+{
+    os64_memset(sp, 0, sizeof(*sp));
+    sp->top = NO_REACH;
+    sp->bottom[SIDE_LEFT] = sp->bottom[SIDE_RIGHT] = NO_REACH;
+}
+
+static void space_close(L *l, Space *sp)
+{
+    scratch_free(l, sp->side[SIDE_LEFT].v);
+    scratch_free(l, sp->side[SIDE_RIGHT].v);
+    scratch_free(l, sp->wait);
+    os64_memset(sp, 0, sizeof(*sp));
+}
+
+// The step holding `y`, found from the bookmark, which is left there.
+static int32_t side_find(Side *d, int64_t y)
+{
+    int32_t k = d->mark;
+    while (k + 1 < d->n && d->v[k + 1].y <= y)
+        k++;
+    while (k > 0 && d->v[k].y > y)
+        k--;
+    d->mark = k;
+    return k;
+}
+
+// The side's reach across [y, y + h), or at y alone when h is not positive.
+static int64_t side_reach(Side *d, int64_t y, int64_t h)
+{
+    if (d->n == 0)
+        return NO_REACH;
+    int32_t k = side_find(d, y);
+    int64_t r = d->v[k].reach;
+    for (int32_t j = k + 1; j < d->n && h > 0 && d->v[j].y < y + h; j++)
+        r = max64(r, d->v[j].reach);
+    return r;
+}
+
+// The first y below `y` where the side's reach changes, or INT64_MAX.
+static int64_t side_next(Side *d, int64_t y)
+{
+    if (d->n == 0)
+        return INT64_MAX;
+    int32_t k = side_find(d, y);
+    return k + 1 < d->n ? d->v[k + 1].y : INT64_MAX;
+}
+
+// The room free beside the floats across all of [y, y + h), inside the
+// content edges [cx, cx + cw): what a line box is given, and what a box
+// that may not overlap a float is. Unmoved coordinates.
+static void band(Space *sp, int64_t y, int64_t h, int64_t cx, int64_t cw, int64_t *x0,
+                 int64_t *x1)
+{
+    *x0 = cx;
+    *x1 = cx + cw;
+    if (sp == NULL || !sp->any)
+        return;
+    int64_t left = side_reach(&sp->side[SIDE_LEFT], y, h);
+    int64_t right = side_reach(&sp->side[SIDE_RIGHT], y, h);
+    if (left != NO_REACH)
+        *x0 = max64(*x0, left);
+    if (right != NO_REACH)
+        *x1 = min64(*x1, -right);
+}
+
+// Where a float's margin box `w` by `h` goes (§ 9.5.1): the highest y at
+// or below `y_min`, and never above the last float's top, where it fits
+// between BOTH sides' floats, or where no float stands beside it at all;
+// then as far to its side as it can. Each step down crosses one place
+// where a reach changes. Unmoved coordinates.
+static void place(Space *sp, int side, int64_t y_min, int64_t w, int64_t h, int64_t cx,
+                  int64_t cw, int64_t *x, int64_t *y)
+{
+    int64_t at = max64(y_min, sp->top);
+    for (;;) {
+        int64_t x0, x1;
+        band(sp, at, h, cx, cw, &x0, &x1);
+        bool alone = x0 == cx && x1 == cx + cw;
+        int64_t next = INT64_MAX;
+        if (!alone && x1 - x0 < w)
+            next = min64(side_next(&sp->side[SIDE_LEFT], at),
+                         side_next(&sp->side[SIDE_RIGHT], at));
+        if (next == INT64_MAX) {
+            *x = side == SIDE_LEFT ? x0 : x1 - w;
+            *y = at;
+            return;
+        }
+        at = next;
+    }
+}
+
+// A step starting at `y`, splitting the one that holds it; its index, or
+// -1 when there was no memory for it.
+static int32_t side_split(L *l, Side *d, int64_t y)
+{
+    int32_t k = side_find(d, y);
+    if (d->v[k].y == y)
+        return k;
+    if (d->n == d->cap) {
+        int32_t cap = d->cap * 2;
+        Step *grown = scratch_realloc(l, d->v, (size_t)cap * sizeof(*grown));
+        if (grown == NULL)
+            return -1;
+        d->v = grown;
+        d->cap = cap;
+    }
+    os64_memmove(&d->v[k + 2], &d->v[k + 1], (size_t)(d->n - k - 1) * sizeof(*d->v));
+    d->v[k + 1] = (Step){y, d->v[k].reach};
+    d->n++;
+    return k + 1;
+}
+
+// The side's reach raised to at least `reach` over [y0, y1), and the steps
+// that come out the same joined again.
+static void side_raise(L *l, Side *d, int64_t y0, int64_t y1, int64_t reach)
+{
+    if (d->n == 0) {
+        d->v = scratch_realloc(l, NULL, 8 * sizeof(*d->v));
+        if (d->v == NULL)
+            return;
+        d->cap = 8;
+        d->n = 1;
+        d->mark = 0;
+        d->v[0] = (Step){NO_REACH, NO_REACH};
+    }
+    if (side_split(l, d, y0) < 0 || side_split(l, d, y1) < 0)
+        return;
+    int32_t k0 = side_find(d, y0), k1 = side_find(d, y1);
+    for (int32_t k = k0; k < k1; k++)
+        d->v[k].reach = max64(d->v[k].reach, reach);
+    // Joined from the step before the band to the one that ends it.
+    int32_t from = k0 > 0 ? k0 - 1 : 0, w = from;
+    for (int32_t k = from + 1; k <= k1; k++)
+        if (d->v[k].reach != d->v[w].reach)
+            d->v[++w] = d->v[k];
+    int32_t gone = k1 - w;
+    if (gone > 0) {
+        os64_memmove(&d->v[w + 1], &d->v[k1 + 1], (size_t)(d->n - k1 - 1) * sizeof(*d->v));
+        d->n -= gone;
+    }
+    d->mark = from;
+}
+
+// A float's margin box recorded on its side: the reach it adds over the
+// band it spans, and its top and bottom. One as wide as nothing, or as
+// tall, changes no reach. Unmoved coordinates.
+static void space_record(L *l, Space *sp, int side, int64_t x, int64_t y, int64_t w, int64_t h)
+{
+    sp->any = true;
+    sp->top = max64(sp->top, y);
+    sp->bottom[side] = max64(sp->bottom[side], y + h);
+    if (w <= 0 || h <= 0)
+        return;
+    side_raise(l, &sp->side[side], y, y + h, side == SIDE_LEFT ? x + w : -x);
+}
+
+// A float's margins, which collapse with nothing (§ 8.3.1): `auto` is 0.
+static int64_t float_margin(const FBox *f, int side, int64_t cw)
+{
+    flow_length_t m = f->style->margin[side];
+    return m.kind == FLOW_LENGTH_AUTO ? 0 : len(m, cw);
+}
+
+// A float laid out where it was provisionally put, placed: its margin box
+// at the highest place the space allows at or below `y_min`, then moved
+// there, and on by the relative offsets open where it was written and by
+// its own when it is relative, which move what is drawn and not what
+// flows round it (§ 9.4.3). `y_min` and `cx` are unmoved.
+static void float_place(L *l, Space *sp, FBox *f, int64_t y_min, int64_t cx, int64_t cw,
+                        int64_t rel_x, int64_t rel_y)
+{
+    int side = f->floated == FLOW_FLOAT_LEFT ? SIDE_LEFT : SIDE_RIGHT;
+    int64_t ml = float_margin(f, FLOW_LEFT, cw), mr = float_margin(f, FLOW_RIGHT, cw);
+    int64_t mt = float_margin(f, FLOW_TOP, cw), mb = float_margin(f, FLOW_BOTTOM, cw);
+    int64_t w = ml + f->w + mr, h = mt + f->h + mb;
+    int64_t x, y;
+    place(sp, side, y_min, w, h, cx, cw, &x, &y);
+    space_record(l, sp, side, x, y, w, h);
+    int64_t dx = 0, dy = 0;
+    if (f->positioned && !f->out_of_flow)
+        rel_offset(f->style, cw, definite_height(f->parent), &dx, &dy);
+    translate(f, x + ml + rel_x + dx - f->x, y + mt + rel_y + dy - f->y);
+}
+
+// The floats waiting for the margins above them, placed now that the
+// margins have resolved at `y` (the context's moved coordinates), in the
+// order they were met, BEFORE what resolved them asks the space for room.
+static void settle(L *l, int64_t y)
+{
+    Space *sp = l->space;
+    if (sp == NULL || sp->nwait == 0)
+        return;
+    int64_t at = y - sp->rel_y;
+    for (int32_t k = 0; k < sp->nwait && !l->failed; k++) {
+        Wait *w = &sp->wait[k];
+        float_place(l, sp, w->box, at, w->cx, w->cw, w->rel_x, w->rel_y);
+    }
+    sp->nwait = 0;
+}
+
+// Whether a block-level box is in the flow of the context being laid out,
+// so that its border edge resolves the margins above it: not a float, not
+// out of flow, not an inline-block's content, not a flex or grid item or
+// a table's part, which their containers place.
+static bool in_flow(const FBox *b)
+{
+    const FBox *p = b->parent;
+    return b->floated == FLOW_FLOAT_NONE && !b->out_of_flow && p != NULL && !p->ifc &&
+           p->kind == FB_BLOCK && !p->flex && !p->grid;
+}
+
+// A float the flow has met (FLOATS.md § Pass 3): laid out once, as a block
+// formatting context of its own at the width that shrinks to fit
+// (block_at), where it collides with nothing; then placed where `at` has
+// reached — or, while the margins above it are unresolved, set waiting for
+// them. `cx` and `cw` are its containing block's content edges; `rel_x` and
+// `rel_y` the relative inlines open where it was written.
+static void float_at(L *l, const FStyles *styles, FBox *f, int64_t cx, int64_t cw,
+                     const Cursor *at, int64_t rel_x, int64_t rel_y)
+{
+    // Its lines are not its list item's first line.
+    int32_t floor = l->marker_floor, open = l->nmarkers;
+    l->marker_floor = l->nmarkers;
+    Cursor c = {0, kNoMargins, 0};
+    block_at(l, styles, f, cx, cw, &c);
+    l->marker_floor = floor;
+    l->nmarkers = open;
+    Space *sp = l->space;
+    if (l->failed || sp == NULL)
+        return;
+    if (at->first < 0) {
+        if (sp->nwait == sp->cap_wait) {
+            int32_t cap = sp->cap_wait != 0 ? sp->cap_wait * 2 : 4;
+            Wait *grown = scratch_realloc(l, sp->wait, (size_t)cap * sizeof(*grown));
+            if (grown == NULL) {
+                // It cannot wait, so it has no place.
+                unplace(f);
+                return;
+            }
+            sp->wait = grown;
+            sp->cap_wait = cap;
+        }
+        sp->wait[sp->nwait++] = (Wait){f, cx - sp->rel_x, cw, sp->rel_x + rel_x,
+                                       sp->rel_y + rel_y};
+        return;
+    }
+    float_place(l, sp, f, at->y + margins_sum(at->pm) - sp->rel_y, cx - sp->rel_x, cw,
+                sp->rel_x + rel_x, sp->rel_y + rel_y);
+}
+
 // A block container's block-level children, in order. An out-of-flow one
 // takes no part: it records its static position — where the flow has
 // reached, below the previous sibling's own margin and not the margin that
 // sibling will collapse to with the next, which has not been met yet
 // (POSITION.md, ruling 5) — and is laid out once its containing block is
-// finished.
+// finished. A float takes no part either: it is laid out and placed in its
+// formatting context where the flow has reached (float_at).
 static void children(L *l, const FStyles *styles, FBox *b, int64_t cx, int64_t cw, Cursor *in)
 {
     for (FBox *c = b->first; c != NULL && !l->failed; c = c->next) {
@@ -2083,6 +2436,10 @@ static void children(L *l, const FStyles *styles, FBox *b, int64_t cx, int64_t c
             c->x = cx;
             c->y = in->y + margins_sum(in->pm);
             c->static_known = true;
+            continue;
+        }
+        if (c->floated != FLOW_FLOAT_NONE) {
+            float_at(l, styles, c, cx, cw, in, 0, 0);
             continue;
         }
         block(l, styles, c, cx, cw, in);
@@ -4178,7 +4535,16 @@ static void block(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t cbw
     moved.y += dy;
     if (moved.first >= 0)
         moved.first += dy;
+    // What flows round a float inside it sees the float unmoved (Space).
+    if (l->space != NULL) {
+        l->space->rel_x += dx;
+        l->space->rel_y += dy;
+    }
     block_at(l, styles, b, cbx + dx, cbw, &moved);
+    if (l->space != NULL) {
+        l->space->rel_x -= dx;
+        l->space->rel_y -= dy;
+    }
     *cur = moved;
     cur->y -= dy;
     if (cur->first >= 0)
@@ -4205,7 +4571,9 @@ static void block_at(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t 
         forced_w = b->atom_w;
     } else if (b->abs_sized) {
         forced_w = b->abs_w;
-    } else if (s->width.kind == FLOW_LENGTH_FIT_CONTENT) {
+    } else if (s->width.kind == FLOW_LENGTH_FIT_CONTENT ||
+               (b->floated != FLOW_FLOAT_NONE && s->width.kind == FLOW_LENGTH_AUTO)) {
+        // A float's auto width shrinks to fit, as fit-content does (§ 10.3.5).
         forced_w = fit_content(l, b, cbw);
     }
     // A flex item's container sized it, a replaced one included — whose
@@ -4252,8 +4620,18 @@ static void block_at(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t 
         y_border = cur->y + margins_sum(pm);
         in = (Cursor){y_border + b->border[FLOW_TOP] + b->padding[FLOW_TOP], kNoMargins, -1};
         in.first = in.y;
+        // The margins above resolve at its border edge, where the floats
+        // waiting for them go.
+        if (in_flow(b))
+            settle(l, y_border);
     }
     int64_t content_top = in.y;
+    // A formatting context's root holds the floats placed in it.
+    Space own, *outer = l->space;
+    if (root) {
+        space_open(&own);
+        l->space = &own;
+    }
     int64_t asked = -1;                 // a flex or grid container's items' own height
 
     // An outside marker waits for its item's first line with content.
@@ -4271,6 +4649,19 @@ static void block_at(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t 
     } else {
         children(l, styles, b, cx, cw, &in);
     }
+    if (root) {
+        // What still waits for the margins above it has them resolved at
+        // the root's end, which they cannot pass — unless the root's
+        // content was cut short (pass 2) or stopped (pass 3), when that is
+        // not the whole layout's end and a float still waiting has no
+        // place: it is not placed (LAYOUT.md § Proof, relation b).
+        if (!l->failed && !b->unfinished)
+            settle(l, in.y + margins_sum(in.pm));
+        for (int32_t k = 0; k < own.nwait; k++)
+            unplace(own.wait[k].box);
+        space_close(l, &own);
+    }
+    l->space = outer;
     // A marker still waiting when its item ends had no line with content
     // (an empty item holds a line of its own below); it stops waiting.
     // Inner items have taken theirs off already, so it is on top.
@@ -4302,6 +4693,7 @@ static void block_at(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t 
             in.pm = kNoMargins;
             if (in.first < 0)
                 in.first = in.y;
+            settle(l, in.y);
             in.y += fb.bottom - fb.top;
         }
     }
@@ -4324,7 +4716,16 @@ static void block_at(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t 
     if (top_open) {
         y_border = in.first >= 0 ? in.first : cur->y + margins_sum(pm);
         content_top = y_border;
+        // Nothing inside resolved the margins above it, but its border edge
+        // does, there being no collapsing through it — where its content
+        // is whole, which could have resolved them first.
+        if (in.first < 0 && in_flow(b) && !b->unfinished)
+            settle(l, y_border);
     }
+    // Margins that do not pass its bottom resolve there, at the end of
+    // its content, whole: floats still waiting inside it go there.
+    if (!root && (!bottom_open || !height_auto) && !b->unfinished)
+        settle(l, in.y + margins_sum(in.pm));
     int64_t flowed = bottom_open ? in.y - content_top : in.y + margins_sum(in.pm) - content_top;
     // A flex or grid container's content height is what its items ask,
     // whatever height it was given and gave them.
@@ -5516,6 +5917,9 @@ static void table(L *l, const FStyles *styles, FBox *t, int64_t cbx, int64_t cbw
     }
     int64_t y = cur->y + margins_sum(margins_join(cur->pm,
                                                   margin_of(len(t->style->margin[FLOW_TOP], cbw))));
+    // A table's border edge resolves the margins above it.
+    if (in_flow(t))
+        settle(l, y);
     if (t->unfinished) {
         if (cur->first < 0)
             cur->first = y;

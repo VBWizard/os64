@@ -737,6 +737,11 @@ struct flow_box {
     // and its clip is what its containing blocks allow, not its parent
     // (POSITION.md).
     bool positioned;
+    // A float (FLOATS.md): the side, FLOW_FLOAT_NONE for every other box.
+    // It stays under the box it was written in, and is laid out and
+    // painted in its own step of its stacking context's (CSS 2.1 Appendix
+    // E, step 5).
+    flow_float_t floated;
     // Painted as a layer of its own, in paint order, and never through its
     // tree ancestors: their walks skip it. A positioned box is; so is a
     // block-level box in the flow below full opacity, a stacking context

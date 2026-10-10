@@ -1,0 +1,124 @@
+<!doctype html>
+<title>Float probe</title>
+<!-- FLOATS.md § Decisions: each case the spec leaves to the reader, put to
+     Chrome. Words are 50x10 inline-blocks (.w), so no answer depends on a
+     font. Open it, and paste the block at the bottom back. -->
+<style>
+  body { font: 16px sans-serif; margin: 20px }
+  .box { width: 400px; border: 1px solid #888; padding: 0; margin-bottom: 30px; line-height: 0 }
+  .box * { line-height: 0 }
+  .w { display: inline-block; width: 50px; height: 10px; background: #9ab; vertical-align: top }
+  .f { background: #e66 }
+  .fl { float: left }
+  .fr { float: right }
+  h3 { margin: 16px 0 4px }
+  pre { background: #eee; padding: 8px; line-height: normal }
+</style>
+
+<h3>1. A float waits for the margins above it</h3>
+<div class="box" id="c1a">
+  <div style="margin-top:30px"><div class="f fl" id="f1a" style="width:60px;height:20px"></div><span class="w" id="w1a"></span></div>
+</div>
+<div class="box" id="c1b">
+  <p style="margin:20px 0 0"><span class="f fl" id="f1b" style="width:60px;height:20px"></span><span class="w" id="w1b"></span></p>
+</div>
+<div class="box" id="c1c">
+  <div style="margin-top:10px"><div class="f fl" id="f1c" style="width:60px;height:20px"></div></div>
+  <div style="margin-top:25px"><span class="w" id="w1c"></span></div>
+</div>
+<div class="box" id="c1d">
+  <div style="height:10px;margin-bottom:10px;background:#cde"></div>
+  <div class="f fl" id="f1d" style="width:60px;height:20px"></div>
+  <div style="margin-top:40px"><span class="w" id="w1d"></span></div>
+</div>
+
+<div class="box" id="c1e">
+  <div style="margin-top:30px"><div class="f fl" id="f1e" style="width:60px;height:20px"></div><div style="margin-top:50px;height:10px;background:#cde" id="b1e"></div></div>
+</div>
+
+<h3>2. A float in the middle of a line, fitting and not</h3>
+<div class="box" id="c2a">
+  <span class="w"></span><span class="w" id="w2a"></span><span class="f fr" id="f2a" style="width:100px;height:20px"></span><span class="w" id="w2b"></span>
+</div>
+<div class="box" id="c2b">
+  <span class="w"></span><span class="w"></span><span class="w"></span><span class="w"></span><span class="w"></span><span class="w"></span><span class="f fr" id="f2b" style="width:150px;height:20px"></span><span class="w" id="w2c"></span>
+</div>
+
+<h3>3. A tall line beside a staircase of floats</h3>
+<div class="box" id="c3">
+  <div class="f fl" style="width:50px;height:10px"></div>
+  <div class="f fl" style="clear:left;width:150px;height:10px"></div>
+  <div class="f fl" style="clear:left;width:250px;height:10px"></div>
+  <span class="w" id="w3a"></span><span class="w" style="height:30px" id="w3b"></span><span class="w" id="w3c"></span><span class="w" id="w3d"></span><span class="w" id="w3e"></span><span class="w" id="w3f"></span>
+</div>
+
+<h3>4. A table beside an align=left picture</h3>
+<div class="box" id="c4a">
+  <div class="f fl" style="width:100px;height:40px"></div>
+  <table id="t4a" width="100%" cellspacing="0" cellpadding="0" style="border:0"><tr><td><span class="w"></span></td></tr></table>
+</div>
+<div class="box" id="c4b">
+  <div class="f fl" style="width:100px;height:40px"></div>
+  <table id="t4b" cellspacing="0" cellpadding="0" style="border:0"><tr><td><span class="w"></span> <span class="w"></span> <span class="w"></span> <span class="w"></span> <span class="w"></span> <span class="w"></span> <span class="w"></span></td></tr></table>
+</div>
+<div class="box" id="c4c">
+  <div class="f fl" style="width:100px;height:40px"></div>
+  <table id="t4c" cellspacing="0" cellpadding="0" style="border:0"><tr><td><span class="w" style="width:350px"></span></td></tr></table>
+</div>
+<div class="box" id="c4d">
+  <div class="f fl" style="width:100px;height:40px"></div>
+  <table id="t4d" width="350" cellspacing="0" cellpadding="0" style="border:0"><tr><td><span class="w"></span></td></tr></table>
+</div>
+
+<h3>5. Intrinsic widths: what ends a run of floats among blocks</h3>
+<div style="line-height:0">
+  <div id="m5a" style="width:max-content;border:1px solid"><div class="f fl" style="width:100px;height:10px"></div><p style="margin:0"><span class="w"></span><span class="w"></span></p></div>
+  <div id="m5b" style="width:max-content;border:1px solid"><div class="f fl" style="width:100px;height:10px"></div><table cellspacing="0" cellpadding="0"><tr><td><span class="w"></span><span class="w"></span></td></tr></table></div>
+  <div id="m5c" style="width:max-content;border:1px solid"><div class="f fl" style="width:100px;height:10px"></div><p style="margin:0"><span class="w"></span><span class="w"></span></p><div class="f fl" style="width:70px;height:10px"></div></div>
+  <div id="m5d" style="width:max-content;border:1px solid"><div class="f fl" style="width:100px;height:10px"></div><p style="margin:0;clear:left"><span class="w"></span><span class="w"></span></p></div>
+  <div id="m5e" style="width:min-content;border:1px solid"><span class="w"></span><span class="w"></span><span class="f fl" style="width:30px;height:10px"></span><span class="w"></span><span class="w"></span></div>
+  <div id="m5f" style="width:max-content;border:1px solid"><div class="f fl" style="width:100px;height:10px"></div><div class="f fl" style="width:40px;height:10px"></div><div style="clear:left"></div><div class="f fl" style="width:30px;height:10px"></div></div>
+</div>
+
+<h3>7. A right float wider than its container</h3>
+<div class="box" id="c7" style="margin-left:150px;width:200px">
+  <div class="f fr" id="f7" style="width:300px;height:10px"></div>
+</div>
+
+<h3>6. A float on the root element</h3>
+<iframe id="i6" style="width:400px;height:120px;border:1px solid"
+  srcdoc="<!doctype html><html style='float:left;background:#cde'><body style='margin:5px'><div style='width:50px;height:10px;background:#9ab'></div></body></html>"></iframe>
+
+<pre id="out">(needs script)</pre>
+<script>
+  function r(id) { return document.getElementById(id).getBoundingClientRect(); }
+  function rel(id, box) { const a = r(id), b = r(box); return '(' + (a.left - b.left - 1) + ',' + (a.top - b.top - 1) + ' ' + a.width + 'x' + a.height + ')'; }
+  function w(id) { return r(id).width; }
+  function run() {
+    const L = [];
+    L.push('1a float ' + rel('f1a','c1a') + ' word ' + rel('w1a','c1a'));
+    L.push('1b float ' + rel('f1b','c1b') + ' word ' + rel('w1b','c1b'));
+    L.push('1c float ' + rel('f1c','c1c') + ' next word ' + rel('w1c','c1c') + ' box h ' + r('c1c').height);
+    L.push('1d float ' + rel('f1d','c1d') + ' next word ' + rel('w1d','c1d'));
+    L.push('1e float ' + rel('f1e','c1e') + ' block ' + rel('b1e','c1e'));
+    L.push('2a float ' + rel('f2a','c2a') + ' before ' + rel('w2a','c2a') + ' after ' + rel('w2b','c2a'));
+    L.push('2b float ' + rel('f2b','c2b') + ' after ' + rel('w2c','c2b'));
+    L.push('3  ' + ['w3a','w3b','w3c','w3d','w3e','w3f'].map(i => rel(i,'c3')).join(' '));
+    L.push('4a table ' + rel('t4a','c4a'));
+    L.push('4b table ' + rel('t4b','c4b'));
+    L.push('4c table ' + rel('t4c','c4c'));
+    L.push('4d table ' + rel('t4d','c4d'));
+    L.push('5  float+p ' + (w('m5a') - 2) + '  float+table ' + (w('m5b') - 2) +
+           '  float+p+float ' + (w('m5c') - 2) + '  float+clear+p ' + (w('m5d') - 2) +
+           '  min(ww<f>ww) ' + (w('m5e') - 2) + '  f,f,clear,f ' + (w('m5f') - 2));
+    const d = document.getElementById('i6').contentDocument;
+    const h = d.documentElement.getBoundingClientRect(), bd = d.body.getBoundingClientRect();
+    L.push('6  html ' + h.left + ',' + h.top + ' ' + h.width + 'x' + h.height +
+           '  body ' + bd.width + 'x' + bd.height + '  float=' + getComputedStyle(d.documentElement).cssFloat +
+           ' display=' + getComputedStyle(d.documentElement).display);
+    L.push('7  float ' + rel('f7','c7'));
+    L.push(navigator.userAgent);
+    document.getElementById('out').textContent = L.join('\n');
+  }
+  window.addEventListener('load', run);
+</script>
