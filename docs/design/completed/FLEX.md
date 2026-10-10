@@ -142,7 +142,7 @@ it is everywhere in libflow.
 
 `block_at` hands a flex container's content to `flex()` where it would
 have called `children()` or `lines()`. A flex container starts a block
-formatting context of its own (`bfc_root`): nothing collapses through it,
+formatting context of its own (`f_bfc_root`): nothing collapses through it,
 and its items' margins never collapse with each other or with it.
 
 1. **The items**, in `order` order, and each one's **outer

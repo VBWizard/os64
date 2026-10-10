@@ -869,6 +869,7 @@ typedef struct {
 
 static Intr intrinsic(L *l, FBox *b);
 static int64_t hframe(const FBox *b, int64_t base);
+static int64_t float_margin(const FBox *f, int side, int64_t cw);
 static int64_t vframe(const FBox *b, int64_t base);
 
 static void segments(L *l, FBox *ifc, int64_t cw, Segs *s)
@@ -2071,7 +2072,7 @@ static void translate(FBox *b, int64_t dx, int64_t dy)
 // a flex or grid container and each of its items (Flexbox 1 § 3, § 4;
 // Grid 2 § 5, § 6) — each starts a formatting context of its own (§9.4.1,
 // §8.3.1).
-static bool bfc_root(const FBox *b)
+bool f_bfc_root(const FBox *b)
 {
     const flow_style_t *s = b->style;
     bool scroller = b->node != NULL &&
@@ -2327,6 +2328,7 @@ typedef struct {
     Step *v;            // scratch; NULL until a float is placed on the side
     int32_t n, cap;
     int32_t mark;       // the bookmark
+    uint64_t *walk;     // FLayout.float_walk
 } Side;
 
 // A float met while the margins above it are not resolved (in a container
@@ -2351,11 +2353,12 @@ typedef struct Space {
 
 static void block_at(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t cbw, Cursor *cur);
 
-static void space_open(Space *sp)
+static void space_open(L *l, Space *sp)
 {
     os64_memset(sp, 0, sizeof(*sp));
     sp->top = NO_REACH;
     sp->bottom[SIDE_LEFT] = sp->bottom[SIDE_RIGHT] = NO_REACH;
+    sp->side[SIDE_LEFT].walk = sp->side[SIDE_RIGHT].walk = &l->out->float_walk;
 }
 
 static void space_close(L *l, Space *sp)
@@ -2370,10 +2373,14 @@ static void space_close(L *l, Space *sp)
 static int32_t side_find(Side *d, int64_t y)
 {
     int32_t k = d->mark;
-    while (k + 1 < d->n && d->v[k + 1].y <= y)
+    while (k + 1 < d->n && d->v[k + 1].y <= y) {
         k++;
-    while (k > 0 && d->v[k].y > y)
+        (*d->walk)++;
+    }
+    while (k > 0 && d->v[k].y > y) {
         k--;
+        (*d->walk)++;
+    }
     d->mark = k;
     return k;
 }
@@ -2385,8 +2392,10 @@ static int64_t side_reach(Side *d, int64_t y, int64_t h)
         return NO_REACH;
     int32_t k = side_find(d, y);
     int64_t r = d->v[k].reach;
-    for (int32_t j = k + 1; j < d->n && h > 0 && d->v[j].y < y + h; j++)
+    for (int32_t j = k + 1; j < d->n && h > 0 && d->v[j].y < y + h; j++) {
         r = max64(r, d->v[j].reach);
+        (*d->walk)++;
+    }
     return r;
 }
 
@@ -2459,6 +2468,7 @@ static int32_t side_split(L *l, Side *d, int64_t y)
         d->cap = cap;
     }
     os64_memmove(&d->v[k + 2], &d->v[k + 1], (size_t)(d->n - k - 1) * sizeof(*d->v));
+    *d->walk += (uint64_t)(d->n - k - 1);
     d->v[k + 1] = (Step){y, d->v[k].reach};
     d->n++;
     return k + 1;
@@ -2482,6 +2492,7 @@ static void side_raise(L *l, Side *d, int64_t y0, int64_t y1, int64_t reach)
     int32_t k0 = side_find(d, y0), k1 = side_find(d, y1);
     for (int32_t k = k0; k < k1; k++)
         d->v[k].reach = max64(d->v[k].reach, reach);
+    *d->walk += (uint64_t)(k1 - k0);
     // Joined from the step before the band to the one that ends it.
     int32_t from = k0 > 0 ? k0 - 1 : 0, w = from;
     for (int32_t k = from + 1; k <= k1; k++)
@@ -2490,6 +2501,7 @@ static void side_raise(L *l, Side *d, int64_t y0, int64_t y1, int64_t reach)
     int32_t gone = k1 - w;
     if (gone > 0) {
         os64_memmove(&d->v[w + 1], &d->v[k1 + 1], (size_t)(d->n - k1 - 1) * sizeof(*d->v));
+        *d->walk += (uint64_t)(d->n - k1 - 1);
         d->n -= gone;
     }
     d->mark = from;
@@ -2601,10 +2613,12 @@ static void float_put(L *l, FBox *f, int64_t y, int64_t cx, int64_t cw, int64_t 
 
 // A formatting context's root at the end of its content, `end`. What
 // still waits for the margins above it has them resolved there, which
-// they cannot pass — unless the root's content was cut short (pass 2) or
-// stopped (pass 3), when that is not the whole layout's end and a float
-// still waiting has no place: it is not placed (LAYOUT.md § Proof,
-// relation b). Closes the root's space and answers how far down its
+// they cannot pass: a backstop, since every box that ends with floats
+// waiting inside it — an empty one that met a float, one whose margins do
+// not pass its bottom — has resolved them first. Unless the root's content
+// was cut short (pass 2) or stopped (pass 3), when that is not the whole
+// layout's end and a float still waiting has no place: it is not placed
+// (LAYOUT.md § Proof, relation b). Closes the root's space and answers how far down its
 // floats reach, which the root grows to hold (§ 10.6.7), or INT64_MIN.
 // The caller puts the outer space back.
 static int64_t space_end(L *l, const FBox *b, Space *own, int64_t end)
@@ -2746,7 +2760,7 @@ static void avoid_floats(L *l, Cursor *cur, int64_t mt, int64_t need, int64_t h,
 // context's root, which a replaced block and a table are.
 static bool avoids_floats(const FBox *b)
 {
-    return in_flow(b) && bfc_root(b);
+    return in_flow(b) && f_bfc_root(b);
 }
 
 // A float the flow has met (FLOATS.md § Pass 3): laid out once, as a block
@@ -4931,8 +4945,13 @@ static void block_at(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t 
     } else if (b->abs_sized) {
         forced_w = b->abs_w;
     } else if (s->width.kind == FLOW_LENGTH_FIT_CONTENT ||
-               (b->floated != FLOW_FLOAT_NONE && s->width.kind == FLOW_LENGTH_AUTO)) {
-        // A float's auto width shrinks to fit, as fit-content does (§ 10.3.5).
+               ((b->floated != FLOW_FLOAT_NONE ||
+                 (b->parent == NULL && s->float_side != FLOW_FLOAT_NONE)) &&
+                s->width.kind == FLOW_LENGTH_AUTO)) {
+        // A float's auto width shrinks to fit, as fit-content does (§ 10.3.5);
+        // so does a floated root's, which has no context round it to float
+        // in but is laid out as a float's (Chrome 155: the float probe's
+        // case 6).
         forced_w = fit_content(l, b, cbw);
     }
     // A flex item's container sized it, a replaced one included — whose
@@ -4965,7 +4984,7 @@ static void block_at(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t 
     if (b->flex_sized)
         ml = b->flex_ml;
     b->laid++;
-    bool root = bfc_root(b);
+    bool root = f_bfc_root(b);
     bool top_open = !root && b->border[FLOW_TOP] == 0 && b->padding[FLOW_TOP] == 0;
     bool height_auto = s->height.kind != FLOW_LENGTH_PX && !b->abs_h_set;
     // §8.3.1: a bottom margin meets the last child's, and a box's two
@@ -4997,12 +5016,15 @@ static void block_at(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t 
             settle(l, y_border);
     }
     int64_t content_top = in.y;
+    // How many floats were waiting when it was met: more at its end means
+    // a float was met inside it.
+    int32_t waited = l->space != NULL ? l->space->nwait : 0;
     // A formatting context's root holds the floats placed in it, and
     // grows to hold them: `floats_end` is how far down they reach.
     Space own, *outer = l->space;
     int64_t floats_end = INT64_MIN;
     if (root) {
-        space_open(&own);
+        space_open(l, &own);
         l->space = &own;
     }
     int64_t asked = -1;                 // a flex or grid container's items' own height
@@ -5067,6 +5089,14 @@ static void block_at(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t 
         b->placed = true;
         b->y = cur->y + margins_sum(pm);
         b->h = b->content_h = 0;
+        // A float met inside it stands where it stands, its own margins
+        // collapsed above, not where the margins after it land (Chrome 155:
+        // the probe's case 1c): placing it resolves where the context is,
+        // so the floats waiting since before it, which go no lower than it
+        // in order, are placed there too. An empty box with no float in it
+        // resolves nothing (case 1e).
+        if (in_flow(b) && !b->unfinished && l->space != NULL && l->space->nwait > waited)
+            settle(l, b->y);
         cur->pm = margins_join(pm, margins_join(in.pm, margin_of(mb)));
         if (b->marker != NULL)
             place_marker(l, styles, b, cx, b->y);
@@ -5433,7 +5463,11 @@ static int64_t vframe(const FBox *b, int64_t base)
 // segments with no opportunity between them, across nodes, spaces inside
 // the run included — and its widest line when only forced breaks break it.
 // A trailing space counts in neither, and a tab is as wide as the way to
-// the line's next stop.
+// the line's next stop. A float on a line is its own unbreakable piece,
+// its min-content margin box, which ends the word before it and is part of
+// none (`foo<img align=left>bar` is the widest of the three, not their
+// sum); its max-content margin box goes on the line, beside the rest,
+// or on a line of its own when it clears (FLOATS.md, Decision 5).
 static Intr ifc_intrinsic(L *l, FBox *ifc)
 {
     Segs s = {0};
@@ -5480,6 +5514,20 @@ static Intr ifc_intrinsic(L *l, FBox *ifc)
             r.max = max64(r.max, line);
             line = space = 0;
             break;
+        case SG_FLOAT: {
+            const FBox *f = g->item->floated;
+            Intr fi = intrinsic(l, g->item->floated);
+            int64_t m = float_margin(f, FLOW_LEFT, 0) + float_margin(f, FLOW_RIGHT, 0);
+            r.min = max64(r.min, max64(word, fi.min + m));
+            word = 0;
+            // One that clears starts a line of its own (§ 9.5.2).
+            if (f->style->clear != FLOW_CLEAR_NONE) {
+                r.max = max64(r.max, line);
+                line = space = 0;
+            }
+            line += fi.max + m;
+            break;
+        }
         default:
             break;
         }
@@ -5554,13 +5602,32 @@ static Intr intrinsic(L *l, FBox *b)
         } else if (b->ifc) {
             r = ifc_intrinsic(l, b);
         } else {
+            // Floats among blocks (Chrome 155, the float probe's case 5):
+            // the floats of a run are side by side, each side summed; a
+            // box that may not overlap them stands beside the run, so its
+            // max-content adds to it; any block in the flow ends the run,
+            // and an ordinary one counts alone, its lines being able to
+            // go below the floats. A float that clears a side ends that
+            // side's run first.
+            int64_t run[2] = {0, 0};
             for (FBox *c = b->first; c != NULL && !l->failed; c = c->next) {
                 if (c->out_of_flow)
                     continue;
                 Intr ci = intrinsic(l, c);
                 int64_t m = len(c->style->margin[FLOW_LEFT], 0) + len(c->style->margin[FLOW_RIGHT], 0);
                 r.min = max64(r.min, ci.min + m);
-                r.max = max64(r.max, ci.max + m);
+                if (c->floated != FLOW_FLOAT_NONE) {
+                    flow_clear_t clr = c->style->clear;
+                    if (clr == FLOW_CLEAR_LEFT || clr == FLOW_CLEAR_BOTH)
+                        run[0] = 0;
+                    if (clr == FLOW_CLEAR_RIGHT || clr == FLOW_CLEAR_BOTH)
+                        run[1] = 0;
+                    run[c->floated == FLOW_FLOAT_LEFT ? 0 : 1] += ci.max + m;
+                    r.max = max64(r.max, run[0] + run[1]);
+                    continue;
+                }
+                r.max = max64(r.max, ci.max + m + (f_bfc_root(c) ? run[0] + run[1] : 0));
+                run[0] = run[1] = 0;
             }
         }
         // A width the page set is both, for anything but a cell, whose
@@ -6215,7 +6282,7 @@ static int64_t cell_layout(L *l, const FStyles *styles, FBox *cell, int64_t x, i
     // A cell is a formatting context's root: its floats are its own, and
     // it grows to hold them.
     Space own, *outer = l->space;
-    space_open(&own);
+    space_open(l, &own);
     l->space = &own;
     if (cell->ifc)
         lines(l, styles, cell, cx, cw, &in);
@@ -6844,6 +6911,11 @@ FLayout *f_layout(FBoxes *boxes, const os64_html_document_t *doc, const os64_pag
     if (boxes->root != NULL) {
         Cursor cur = {0, kNoMargins, -1};
         block(&l, boxes->styles, boxes->root, 0, w, &cur);
+        // A root floated right stands at the right of the initial
+        // containing block.
+        FBox *root = boxes->root;
+        if (!l.failed && root->style->float_side == FLOW_FLOAT_RIGHT)
+            translate(root, w - float_margin(root, FLOW_RIGHT, w) - (root->x + root->w), 0);
         // A layout that stopped has no cursor worth reading: the page is as
         // tall as what it placed.
         out->height = l.failed ? bottom_edge(boxes->root)

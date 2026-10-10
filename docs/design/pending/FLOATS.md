@@ -108,12 +108,15 @@ same slice (below).
   forces `position: static` forces `float_side = NONE` too. `clear` is left
   alone. With no floats, `clear_y` is the top and clearance is zero.
 - **A float on the root element** has no formatting context round it to
-  be placed in. What Chrome does with `html { float: left }` is the probe's
-  case 6. Until then libflow lays the root out as it does now.
-- **`display: flow-root` gets its own value** (`FLOW_DISPLAY_FLOW_ROOT`).
-  It is a block on the outside and a formatting context root on the
-  inside. Today it is mapped to `block`, which is why it is in
-  `kApproximated`.
+  be placed in, and pass 2 never marks the root `floated`. But Chrome lays
+  it out as a float's (the probe's case 6: `html { float: left }` is as
+  wide as its content): its auto width shrinks to fit, and one floated
+  right stands at the initial containing block's right.
+- **`display: flow-root` is `block` with a bit beside it**
+  (`flow_style_t.flow_root`): a block on the outside, a formatting
+  context root on the inside, which `f_bfc_root` reads. A bit rather than
+  a value of its own, so every rule that asks for a block — and there are
+  many `switch`es on `display` — reads it as one with nothing to audit.
 - **`contributes_block` treats a float as leaving the flow**, as it does an
   absolute box. A float inside a `<span>` does not split the span, and a
   paragraph holding a floated picture is still one inline formatting
@@ -208,8 +211,8 @@ box (§ 9.4.3). A float written inside a RELATIVE INLINE moves with it the
 same way: the inline's offset goes on with the float's, after placement.
 
 **The space's lifetime** is the root's layout. `block_at` pushes a space
-when `bfc_root(b)` is true, lays the content out, takes the height
-(below), and pops the space. `bfc_root` gains the float itself and
+when `f_bfc_root(b)` is true, lays the content out, takes the height
+(below), and pops the space. `f_bfc_root` gains the float itself and
 `flow-root`; everything it already lists stays. The spaces nest as the
 roots do, and each is scratch memory, charged where a table's working
 memory is charged (LAYOUT.md § Bounds).
@@ -263,11 +266,14 @@ resolves. ONE rule covers every place a float can be met:
   asked again. If it is narrower, the line is broken again. That is the
   same re-break a tall line already takes (below), so the two are one
   mechanism.
-- **A line with no height resolves nothing.** A container holding ONLY a
-  float (`<div style="margin-top:10px"><div style="float:left">…</div>
-  </div>`) is an inline formatting context whose one line is empty; it
-  takes `block_at`'s collapses-through path, and the float keeps waiting
-  until the parent's collapsed margins land, which is where Chrome puts it.
+- **A line with no height resolves nothing, but an empty box holding a
+  float does, where it stands.** A container holding ONLY a float
+  (`<div style="margin-top:10px"><div style="float:left">…</div></div>`)
+  is an inline formatting context whose one line is empty; it takes
+  `block_at`'s collapses-through path. There, having met a float, it
+  places every float waiting at its own position — its margins above
+  collapsed, not those after it (Chrome 155, the probe's case 1c: 10, not
+  the next block's 25).
 - **The waiting list belongs to the SPACE**, pushed and popped with it.
   A float waiting in the outer context is not resolved by the first line
   inside a nested root's own cursor. A root's end resolves what is still
@@ -307,30 +313,39 @@ over the line's height, which is not known until the line is broken, so:
   it by design, and the fuzz exempts it (§ Proof).
 
 **A box that may not overlap floats** (a table, a block-level replaced
-box, a formatting context root that is in the flow) asks
-`band(y_border, h, cx, cw)` where its border box would go:
+box, a formatting context root that is in the flow: `avoid_floats`) is
+given the first band, from where it would stand down, that holds its
+margin box at its NEEDED width — the width the page set, resolved against
+its containing block, or else its min-content width:
 
-- An auto width is worked by `widths()` against the band's width instead of
-  the containing block's.
-- A width that does not fit in the band moves the box down to the next band
-  boundary, as a float moves (Decision 4).
-- Its own top margin still collapses as it would have. Only the x and the
-  width change.
+- The floats waiting for the margins above it are placed first.
+- The band is asked over its height when that is known before it is laid
+  out (a replaced box's), else at its top edge alone (booked).
+- An auto width then fills the band (`widths()` against the band); a set
+  width keeps its containing block's answer and stands at the band's
+  start. A table is handed the band as its containing block.
+- Moved down, the margins above it resolve where it would have stood, as
+  clearance resolves them (Decision 4).
 
-**`clear`** on a block: after `children()` has worked out the block's
-hypothetical top border edge (pending margins summed), and before it lays
-the block out:
+**`clear`** on a block in the flow, and on a table (`clearance`), before
+it is laid out:
 
-- if the edge is above `clear_y(side)`, the box's border edge goes to
-  `clear_y(side)`;
-- its pending margins are resolved there and nothing above collapses
-  through it. That is the clearance, kept on the box for the dump.
+- the floats waiting for the margins above it are placed first, where
+  those margins resolve WITHOUT its own top margin — its parent's content
+  top, which a block with clearance does not move (Chrome resolves its
+  block offset there) — since they may be what it clears;
+- if its hypothetical border edge, the margins above collapsed into its
+  own, is above `clear_y(side)`, the margins above resolve where it would
+  have stood and its border edge goes to `clear_y(side)`. The distance is
+  its clearance, kept on the box for the dump; nothing above collapses
+  through it.
 - **`<br clear>`** is the BREAK segment carrying the `br`'s `clear`. The
   line after it starts at `max(its own top, clear_y(side))`.
 
-**The root's height**: when `block_at` finishes a formatting context root
-whose height is auto, its content height is held to at least the bottom
-margin edge of every float in its space (§ 10.6.7). An ordinary block's is
+**The root's height**: when `block_at` (or `cell_layout`, a cell's)
+finishes a formatting context root whose height is auto, its content
+height is held to at least the bottom margin edge of every float in its
+space (§ 10.6.7). An ordinary block's is
 not, so a float hangs out of a paragraph shorter than it, and the page's
 extent and its parent's overflow rect still reach it.
 
@@ -342,12 +357,17 @@ table cell decides the cell's width (Decision 5):
   `foo<img align=left>bar` is `max(foo, img, bar)`, not `foo + img + bar`:
   in `ifc_intrinsic`'s terms, the FLOAT segment ends the word before it and
   is part of none.
-- **max-content**: floats are summed onto the line where they stand, inline
-  or among blocks. A cell holding `<img align=left width=200>` and a
-  paragraph is as wide as both side by side when it can be. What ENDS a run
-  of floats among blocks (does a `<p>` after a float end the run, or sit
-  beside it in the sum?) is the one rule here taken from Chrome rather than
-  derived: the probe's case 5 asks it, and the code follows the answer.
+- **max-content**, on a line: a float's max-content margin box is summed
+  onto the line where it stands, beside the words, so a cell whose
+  paragraph holds `<img align=left width=200>` is as wide as both. One
+  that clears starts a line of its own.
+- **max-content, among blocks** (the probe's case 5, Chrome 155): the
+  floats of a RUN stand side by side, each side summed. A box that may not
+  overlap them stands beside the run, so its max-content adds to it
+  (float + table: 200). Any block in the flow ends the run, and an
+  ordinary one counts alone (float + paragraph: 100, not 200; float +
+  paragraph + float: 100): its lines can go below the floats. A float that
+  clears ends its side's run first.
 
 **A positioned box's static position** (POSITION.md's row):
 
@@ -403,35 +423,48 @@ content, then the floats, then the block backgrounds.
    floats"; LayoutNG places a float once its formatting context's block
    offset is known). Placing it before the margins below it have collapsed
    would put it above its box's text wherever a float is the first thing
-   inside a box with a top margin. The probe's case 1 puts it to Chrome.
+   inside a box with a top margin. Chrome 155 agrees (the probe's cases
+   1a, 1b, 1d and 1e: a float waits for a top margin met after it, and one
+   between two blocks goes below the first one's own margin). Case 1c
+   added a rule: a float inside an EMPTY box the margins collapse through
+   is placed where that box stands when it ends, not where the margins
+   after it land; placing it resolves where the context is, so every float
+   waiting is placed there too.
 2. **A float in the middle of a line goes on that line if it fits beside
    what is already there, else at the top of the next one**, as Chrome
    does. CSS 2.1 permits either, and the old web's `text <img align=right>
-   more text` reads as its author saw it only this way.
+   more text` reads as its author saw it only this way. Chrome 155: the
+   probe's cases 2a and 2b.
 3. **A line's HEIGHT is retried once**: it is broken in the strut's band,
    and again if its height reaches a narrower band. Chrome finds a line's
    room over the height the line ends up with. A second height retry would
    only matter for a line whose tallest thing grows when broken narrower,
    and that is booked. The re-breaks floats cause are separate and counted
-   in § Pass 3: one per float placed on the line. The probe's case 3 puts
-   a tall picture beside a staircase of floats to Chrome.
+   in § Pass 3: one per float placed on the line. Chrome 155 (the probe's
+   case 3): the tall line beside a staircase of floats starts at the
+   staircase's widest step over its own height.
 4. **A box that may not overlap floats, and has a set width wider than the
    room beside them, goes below them** rather than overlapping or
    squeezing. An auto-width one is squeezed down to its min-content width
-   first, and goes below only when that does not fit (Chrome; the probe's
-   case 4: `<img align=left>` beside a `<table width=100%>`).
+   first, and goes below only when that does not fit. Chrome 155 (the
+   probe's case 4): a `width=100%` table beside a float is 100% of its
+   containing block and goes below it; an auto-width one squeezes into the
+   room; one whose content is wider than the room, or whose set width is,
+   goes below.
 5. **Intrinsic widths sum floats on their line** (Chrome's
    `max-content` contribution). CSS 2.1 leaves max-content to the reader.
    This is what makes a table cell holding a floated picture as wide as
-   the picture beside its text. What ends a run of floats among blocks is
-   probed, not remembered: the probe's case 5 is four cells, float +
-   paragraph, float + table, float + paragraph + float, and float + `clear`
-   + paragraph.
+   the picture beside its text. Among blocks, Chrome 155 answered the
+   probe's case 5: only a box that may not overlap floats adds to the run
+   before it, and any block ends the run (§ Pass 3, Intrinsic widths).
 6. **`<br clear>` clears the next line**, as HTML maps it and every engine
    honours it, although CSS 2.1 says `clear` applies to block-level
    elements only.
 7. **`float: inline-start` / `inline-end` are `left` / `right`.** libflow
    lays out left to right only, and style.c already maps them so.
+8. **A right float wider than its container keeps its right edge at the
+   container's and overflows to the left** (Chrome 155: the probe's case
+   7), as § 9.5.1 rule 2's mirror puts it.
 
 ## Bounds
 
@@ -461,9 +494,12 @@ floats.
   - 10,000 one-pixel floats beside a 10,000-line paragraph;
   - 10,000 floats in blocks with negative top margins, each block's lines
     asking above the float before it: what the bookmark's walk back costs.
-    If it is not linear, the space becomes a tree keyed by y (log per ask,
-    the shape the table code's min-tree already has), and this paragraph
-    says so.
+
+  Measured (FLayout.float_walk, every step the spaces walk, read or move,
+  array shifts included): 3 to 7 steps a float on every page, the walk
+  back included, so the space stays a pair of arrays. The suite holds each
+  page to 16 a float, and a space without its bookmark breaks that bound
+  (tools/test_libflow_float_mutants.py).
 - **Memory**: each side is an array of steps, a step being a y and a
   reach, and a float writes at most two steps into its side (its margin
   box's top and bottom; steps that come out the same are joined again).
@@ -598,4 +634,5 @@ Chris ruled both on 2026-10-09.
 | `shape-outside`, `shape-margin` | the exclusion is the margin box only | a page whose text should wrap round a circle |
 | Floats in a right-to-left context, and `inline-start`/`inline-end` by direction | libflow lays out left to right | the bidi line layout |
 | Floats beside a multi-column or a ruby | neither is laid out | either's slice |
+| A box that may not overlap floats, its height not known before it is laid out, whose height reaches a band narrower than the one at its top edge | it is asked over its top edge alone: knowing its height means laying it out, and it is laid out once | a page where such a box (a scroller, a flow-root) overlaps a float lower down |
 | A float inside a table row, row group or column (not inside a cell) | the table's anonymous objects wrap it in a cell first (§ 17.2.1), which is what Chrome does; nothing to do unless a page shows otherwise | a page that shows otherwise |

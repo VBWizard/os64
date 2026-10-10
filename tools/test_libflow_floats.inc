@@ -263,11 +263,11 @@ static void float_wait_end_cases(void)
         "      block p 0 30 400 20\n");
 
     // A container holding ONLY a float, with a top margin (Fable's case):
-    // an inline formatting context whose one line is empty, so nothing
-    // resolves the 10px, which collapses through it and the body to the
-    // root's end. The float waits until then and goes where the margins
-    // land, at 10.
-    cascade_layout_case("floats: a float alone in a container waits to the root's end",
+    // an inline formatting context whose one line is empty, so nothing in
+    // it resolves the 10px, which collapses through it. The empty box,
+    // having met a float, places it where it stands, at 10 (the probe's
+    // case 1c).
+    cascade_layout_case("floats: a float alone in a container stands where it does",
         FLOAT_STYLE ".d{margin-top:10px} .l{float:left;width:50px;height:20px}</style>"
         "<div class=d><div class=l></div></div>", 400,
         "page 400 30\n"
@@ -692,6 +692,220 @@ static void float_avoid_cases(void)
     }
 }
 
+static void float_intrinsic_cases(void)
+{
+    // FLOATS.md, Decision 5. min-content: the float on the line is a piece
+    // of its own and ends the word before it, so `aaaa<float>bbbb` is as
+    // narrow as its widest piece, 32 (four letters), not 64; a 1px cell
+    // shrinks to that.
+    char *got = cascade_layout_of(
+        FLOAT_STYLE ".f{float:left;width:30px;height:10px}</style>"
+        "<table cellspacing=0 cellpadding=0><tr><td width=1>aaaa<span class=f></span>bbbb</table>",
+        400);
+    expect("floats: a float ends the word before it in a min-content width",
+           got != NULL && strstr(got, "cell td 0 0 32 ") != NULL, got);
+    free(got);
+    // max-content: the float goes on the line beside the words, 80 + 30 +
+    // 4 + 80 = 194, the space between the words counting once.
+    got = cascade_layout_of(
+        FLOAT_STYLE ".f{float:left;width:30px;height:10px}</style>"
+        "<table cellspacing=0 cellpadding=0><tr><td>" W10 " <span class=f></span>" W10 "</table>",
+        400);
+    expect("floats: a float on a line is summed into its max-content width",
+           got != NULL && strstr(got, "cell td 0 0 194 ") != NULL, got);
+    free(got);
+}
+
+// One page of the bound suite (FLOATS.md § Bounds), holding `n` floats:
+// laid out at 800 through its sheets with a budget it cannot reach, under
+// an alarm a quadratic walk could not beat; the exclusion spaces' work
+// held to `per` steps a float.
+static void float_bound(const char *what, const char *html, size_t n, uint64_t per)
+{
+    signal(SIGALRM, cost_hung);
+    s_cost_case = what;
+    alarm(60);
+    Sheeted p;
+    sheeted_open(&p, html, 800, 600);
+    p.env.max_arena_bytes = (size_t)1 << 30;
+    FStyles *st = f_style_build(p.doc, p.page, &p.env);
+    FBoxes *bx = st != NULL ? f_boxes_build(p.doc, p.page, st, &p.env) : NULL;
+    FLayout *lay = bx != NULL ? f_layout(bx, p.doc, p.page, &p.env, 800) : NULL;
+    alarm(0);
+    char detail[160];
+    snprintf(detail, sizeof(detail), "%llu steps for %zu floats",
+             lay != NULL ? (unsigned long long)lay->float_walk : 0ULL, n);
+    expect(what, lay != NULL && !lay->incomplete && lay->float_walk <= per * n, detail);
+    printf("libflow float bound, %s: %s\n", what, detail);
+    f_layout_free(lay);
+    f_boxes_free(bx);
+    f_style_free(st);
+    sheeted_close(&p);
+}
+
+// `head`, then each of `n` units `make` writes, then `tail`.
+static char *float_page(const char *head, size_t n, size_t (*make)(char *, size_t),
+                        const char *tail)
+{
+    size_t cap = strlen(head) + n * 128 + strlen(tail) + 1;
+    char *html = malloc(cap);
+    size_t at = (size_t)sprintf(html, "%s", head);
+    for (size_t i = 0; i < n; i++)
+        at += make(html + at, i);
+    strcpy(html + at, tail);
+    return html;
+}
+
+static size_t unit_beside(char *out, size_t i)
+{
+    (void)i;
+    return (size_t)sprintf(out, "<div class=f style=width:1px;height:10px></div>");
+}
+
+static size_t unit_stair(char *out, size_t i)
+{
+    // Each a pixel narrower than the last, from 800 down, again and again.
+    return (size_t)sprintf(out, "<div class=f style=width:%zupx;height:1px></div>", 800 - i % 800);
+}
+
+static size_t unit_cleared(char *out, size_t i)
+{
+    return (size_t)sprintf(out, "<div class=%s></div>", i % 2 ? "c r" : "c");
+}
+
+static size_t unit_pixel(char *out, size_t i)
+{
+    (void)i;
+    return (size_t)sprintf(out, "<div class=f style=width:1px;height:1px></div>");
+}
+
+static size_t unit_line(char *out, size_t i)
+{
+    (void)i;
+    return (size_t)sprintf(out, "x<br>");
+}
+
+static size_t unit_negative(char *out, size_t i)
+{
+    (void)i;
+    return (size_t)sprintf(out, "<div class=f style=width:10px;height:10px></div><p class=n>x</p>");
+}
+
+static void float_bound_cases(void)
+{
+    const size_t n = 10000;
+    static const char head[] = FLOAT_STYLE ".f{float:left} .c{float:left;clear:both;width:10px;"
+                               "height:1px} .r{float:right} .n{margin-top:-15px;height:10px}</style>";
+    char *html = float_page(head, n, unit_beside, "");
+    float_bound("bounds: 10000 floats side by side", html, n, 16);
+    free(html);
+    html = float_page(head, n, unit_stair, "");
+    float_bound("bounds: a staircase of 10000 left floats", html, n, 16);
+    free(html);
+    html = float_page(head, n, unit_cleared, "");
+    float_bound("bounds: 10000 alternating floats, each cleared", html, n, 16);
+    free(html);
+    char *lines = float_page("<p>", n, unit_line, "</p>");
+    html = float_page(head, n, unit_pixel, lines);
+    float_bound("bounds: 10000 one-pixel floats beside a 10000-line paragraph", html, n, 16);
+    free(html);
+    free(lines);
+    html = float_page(head, n, unit_negative, "");
+    float_bound("bounds: 10000 floats in blocks with negative top margins", html, n, 16);
+    free(html);
+}
+
+// What Chrome 155 answered on tools/float_probe/float-probe.html (the
+// cases the spec leaves to the reader; FLOATS.md § Decisions).
+static bool has(const char *got, const char *want)
+{
+    return got != NULL && strstr(got, want) != NULL;
+}
+
+static void float_probe_cases(void)
+{
+    // Case 1c: a float alone in an empty div with a 10px top margin stands
+    // at 10, where the div does, not at 25, where the next block's margin
+    // takes the margins that collapse through the div.
+    char *got = cascade_layout_of(
+        FLOAT_STYLE ".d{margin-top:10px} .l{float:left;width:60px;height:20px}"
+        ".m{margin-top:25px;height:10px}</style>"
+        "<div class=d><div class=l></div></div><div class=m></div>", 400);
+    expect("floats: probe 1c, a float in an empty box stands where the box does",
+           has(got, "block div 0 10 60 20 float-left\n") && has(got, "    block div 0 25 400 10\n"),
+           got);
+    free(got);
+
+    // Case 4a: a width=100% table beside a float is 100% of its containing
+    // block, which does not fit beside the float: it goes below, 400 wide.
+    got = cascade_layout_of(
+        FLOAT_STYLE ".l{float:left;width:100px;height:40px} .h{height:10px}</style>"
+        "<div class=l></div><table width=100% cellspacing=0 cellpadding=0><tr><td>"
+        "<div class=h></div></table>", 400);
+    expect("floats: probe 4a, a full-width table goes below the float",
+           has(got, "    table table 0 40 400 10\n"), got);
+    free(got);
+
+    // Case 5: max-content among blocks. A float (100) and a paragraph
+    // (100) are 100, not 200; a float and a table (100) are 200; float,
+    // paragraph, float are 100; float, clearing paragraph, 100; and floats
+    // of 100 and 40, a clearing block and a float of 30 are 140.
+    static const struct {
+        const char *what, *cell, *want;
+    } kRuns[] = {
+        {"a paragraph", "<div class=f></div><p><span class=w></span><span class=w></span></p>",
+         "cell td 0 0 100 "},
+        {"a table", "<div class=f></div><table cellspacing=0 cellpadding=0><tr><td>"
+                    "<span class=w></span><span class=w></span></table>", "cell td 0 0 200 "},
+        {"a paragraph and a float", "<div class=f></div><p><span class=w></span>"
+                                    "<span class=w></span></p><div class=f></div>",
+         "cell td 0 0 100 "},
+        {"a clearing paragraph", "<div class=f></div><p style=clear:left><span class=w></span>"
+                                 "<span class=w></span></p>", "cell td 0 0 100 "},
+        {"a run, a clear and a float", "<div class=f></div><div class=f style=width:40px></div>"
+                                       "<div style=clear:left></div>"
+                                       "<div class=f style=width:30px></div>",
+         "cell td 0 0 140 "},
+        // A float that clears starts a line of its own on its side (§
+        // 9.5.2), as the clearing block does: 140, not 100 + 40 + 30.
+        {"a run and a float that clears", "<div class=f></div><div class=f style=width:40px></div>"
+                                          "<div class=f style=width:30px;clear:left></div>",
+         "cell td 0 0 140 "},
+        // The same among blocks (the empty div makes the cell hold one).
+        {"a run among blocks and a float that clears",
+         "<div class=f></div><div class=f style=width:40px></div>"
+         "<div class=f style=width:30px;clear:left></div><div></div>", "cell td 0 0 140 "},
+    };
+    for (size_t k = 0; k < sizeof(kRuns) / sizeof(kRuns[0]); k++) {
+        char html[1024], name[128];
+        snprintf(html, sizeof(html),
+                 FLOAT_STYLE ".f{float:left;width:100px;height:10px}"
+                 ".w{display:inline-block;width:50px;height:10px}</style>"
+                 "<table cellspacing=0 cellpadding=0><tr><td>%s</table>", kRuns[k].cell);
+        snprintf(name, sizeof(name), "floats: probe 5, the max-content of a float and %s",
+                 kRuns[k].what);
+        got = cascade_layout_of(html, 800);
+        expect(name, has(got, kRuns[k].want), got);
+        free(got);
+    }
+
+    // Case 6: a floated root shrinks to fit its content, 5 + 50 + 5.
+    got = cascade_layout_of("<!doctype html><html style=float:left><body style=margin:5px>"
+                            "<div style=width:50px;height:10px></div>", 400);
+    expect("floats: probe 6, a floated root shrinks to fit",
+           has(got, "block html 0 0 60 20\n") && has(got, "  block body 5 5 50 10\n"), got);
+    free(got);
+
+    // Case 7: a right float wider than its container keeps its right edge
+    // at the container's and overflows to the left: 150 + 200 - 300 = 50.
+    got = cascade_layout_of(
+        FLOAT_STYLE ".c{margin-left:150px;width:200px} .r{float:right;width:300px;height:10px}"
+        "</style><div class=c><div class=r></div></div>", 400);
+    expect("floats: probe 7, a wide right float overflows to the left",
+           has(got, "block div 50 0 300 10 float-right\n"), got);
+    free(got);
+}
+
 static int seen_at(const Seen *s, const flow_box_t *b)
 {
     for (int i = 0; i < s->n; i++)
@@ -760,5 +974,8 @@ static void float_cases(void)
     float_cell_cases();
     float_table_cases();
     float_paint_cases();
+    float_intrinsic_cases();
+    float_bound_cases();
+    float_probe_cases();
     float_sweep_cases();
 }

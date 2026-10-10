@@ -627,6 +627,9 @@ typedef struct {
     // How many times an inline formatting context was measured: the cost
     // the harness holds to a linear bound (LAYOUT.md § Bounds).
     uint64_t measures;
+    // How many steps the exclusion spaces walked, read and moved (FLOATS.md
+    // § Bounds): what the harness holds linear in the floats and lines.
+    uint64_t float_walk;
     // The most table working memory held at once, which shares the arena's
     // budget: what the harness holds to it.
     size_t scratch_peak;
@@ -639,6 +642,11 @@ typedef struct {
 // percentage of the base, and `auto` read as 0 — the caller that cares
 // asks first.
 int64_t f_len(flow_length_t l, int64_t base);
+
+// Whether a box is a block formatting context's root (layout.c, where the
+// list is): what holds its floats, and what the fuzz asks to find each
+// float's context.
+bool f_bfc_root(const FBox *b);
 
 // Lays the box tree out at `width` CSS pixels. NULL only when there is not
 // memory for the layout record.

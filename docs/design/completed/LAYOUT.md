@@ -206,7 +206,7 @@ so a cascade slots in above this struct with no field renamed:
 | `text_decoration` | underline, line-through — this element's own; what an ancestor's reaches its descendants is derived beside the style, parent before child, each kind in the colour of the element that drew it | no |
 | `visibility` | visible, hidden, collapse | yes |
 | `border_spacing[2]`, `border_collapse`, `caption_side` | tables | yes |
-| `float_side`, `clear` | recorded from `align=left/right` and `<br clear>` so the struct is complete — NOT ACTED ON in the first cut (booked below) | no |
+| `float_side`, `clear` | from the cascade, `align=left/right` and `<br clear>`; laid out as [FLOATS.md](../pending/FLOATS.md) says | no |
 
 Lengths are 26.6 fixed point — the text engine's unit — so a margin of
 `0.67em` on a 32px heading is 1372/64 px and nothing rounds until a box
@@ -621,9 +621,8 @@ gives lists, right-aligned to the content edge with a space, on the
 first line's baseline; `list-style: none` (a `menu` in a nav) draws none.
 
 **What is not laid out in the first cut, by name, and how the tree
-degrades honestly:** `float` and `clear` are recorded and ignored, so an
-`<img align=left>` sits inline at its baseline and the text runs after it
-rather than beside it — the page still reads, in order; `position` is
+degrades honestly:** floats and `clear` are laid out as FLOATS.md's slice
+lands them; `position` is
 laid out as POSITION.md's slices land it (relative, absolute, fixed and
 sticky, with what is still booked there), flexible boxes as FLEX.md's do,
 grids as GRID.md's does, `inline-table` is not laid out, and
@@ -1002,7 +1001,6 @@ dump (F2's rule: fixed expected geometry, never a self-consistency test):
 
 | Debt | Why it waits | Trigger |
 |---|---|---|
-| Floats and `clear` (`align=left/right` on `img`/`table`, `<br clear>`) | the float rules (§9.5) are a second placement pass with their own line-box shortening; the struct records them so the cascade and the first cut agree on the field | the first page whose layout is unreadable without a float — image-beside-text pages of the old web will vote early |
 | `inline-table`; scrolling | relative, absolute, fixed and sticky are laid out, and `z-index` stacks them (POSITION.md P1–P4); from the cascade, `inline-table` is laid out as a table; a box scrolls (PILE3.md) | pile 2 (GARB.md) |
 | Collapsing borders (§17.6.2) | a table with `rules` or `frame` records `border-collapse: collapse`; it is laid out with no spacing and its borders drawn separately | the first ruled table that reads wrong for it |
 | A range-draw on a measuring run (F2 ask) | halves layout work and run memory; works without it | a page whose layout time is visible, measured, or a page that hits the memory cap through runs |

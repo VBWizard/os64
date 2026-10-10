@@ -6124,8 +6124,9 @@ static void toggle_positioning(void)
 {
     s_env.static_only = !s_env.static_only;
     relayout(true);
-    status_rest(s_env.static_only ? "Positioning off: the page in document order. p turns it on."
-                                  : "Positioning on.");
+    status_rest(s_env.static_only
+                    ? "Positioning off: the page in document order, floats too. p turns it on."
+                    : "Positioning on.");
 }
 
 // The zooms Ctrl+= and Ctrl+- step through, in thousandths: Chrome's, so a
