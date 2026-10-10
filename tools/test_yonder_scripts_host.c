@@ -3489,10 +3489,13 @@ static void covered_link_cases(void) {
     check(!probe_field("formed")->w->hidden && !probe_field("named")->w->hidden &&
           !probe_field("plain")->w->hidden,
         "invisible field: in a form or named, an invisible control is drawn; a visible one always is");
-    const char *accept=navigation_accept();
+    /* What a navigation sends (way_open composes it): every picture type
+     * libimage decodes, whole, inside what libfetch will send — a longer
+     * Accept is every navigation refused. */
+    char accept[OS64_FETCH_ACCEPT_MAX];
+    way_accept_compose(YONDER_ACCEPT,OS64_IMAGE_ACCEPT,accept,sizeof(accept));
     check(!strncmp(accept,"text/html, application/xhtml+xml, text/*;q=0.8, image/png;q=0.5, ",64) &&
-          strstr(accept,"image/x-portable-pixmap;q=0.5")!=NULL && strstr(accept,"image/gif, ")==NULL &&
-          accept==navigation_accept(),
+          strstr(accept,"image/x-portable-pixmap;q=0.5")!=NULL && strlen(accept)<OS64_FETCH_ACCEPT_MAX,
         "navigation accept: pages first, then every picture type libimage decodes at half the weight");
     check(probe_field("blank")!=NULL && probe_field("blank")->w->cls->paint==NULL,
         "invisible gadget: an empty name submits nothing, so it names nothing");

@@ -66,33 +66,10 @@
 static const yonder_dark_t kDark = {.paper = 0x101010u};
 static bool s_dark;
 
-// What a navigation asks for: a page first, then, at half the weight, a
-// picture of a kind yonder shows by itself (YONDER.md § A picture asked for
-// by itself), so a server that chooses by Accept sends the page where it has
-// both and the picture where that is all it has. libimage's list, each type
-// given its q; built once (navigation_accept).
-#define YONDER_ACCEPT_PAGES "text/html, application/xhtml+xml, text/*;q=0.8"
-
-static const char *navigation_accept(void)
-{
-    static char accept[512];
-    if (accept[0] != '\0')
-        return accept;
-    os64_strcopy(accept, sizeof(accept), YONDER_ACCEPT_PAGES);
-    size_t n = os64_strlen(accept);
-    for (const char *at = OS64_IMAGE_ACCEPT; *at != '\0' && n < sizeof(accept);) {
-        while (*at == ' ' || *at == ',')
-            at++;
-        const char *end = at;
-        while (*end != '\0' && *end != ',')
-            end++;
-        if (end > at)
-            n += (size_t)os64_snprintf(accept + n, sizeof(accept) - n, ", %.*s;q=0.5",
-                                       (int)(end - at), at);
-        at = end;
-    }
-    return accept;
-}
+// The pages a navigation asks for. libway adds, on a GET, the pictures
+// yonder shows by themselves (YONDER.md § A picture asked for by itself),
+// libimage's list, at half the weight.
+#define YONDER_ACCEPT "text/html, application/xhtml+xml, text/*;q=0.8"
 
 // The work pool. A navigation's job is a FETCH (trip.h; the parse is this
 // thread's, DOM_D4.md), so what it declares is one connection's worth of
@@ -6663,7 +6640,7 @@ int main(int argc, char **argv)
     const char *agent = yonder_settings_saved_agent(saved, sizeof(saved)) ? yonder_agent_keep(saved)
                                                                            : NULL;
     g.way.agent = agent != NULL ? agent : YONDER_AGENT;
-    g.way.accept = navigation_accept();
+    g.way.accept = YONDER_ACCEPT;
     g.way.delayed_hint = " - it is in the address field; press Enter to go";
     g.way.jar = way_jar_new();          // NULL keeps no cookies: the pages still load
     g.cache = yonder_settings_cache_open(); // NULL keeps nothing: pictures come from the network

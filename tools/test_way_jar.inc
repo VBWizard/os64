@@ -374,6 +374,12 @@ static void cookie_scripts(void)
     script_hear(jar, "http://s.test/", false, "sid=forged", 103);
     jar_expect("script: nor set one beside it that differs only in being host-only", jar,
                "http://s.test/", false, 103, "session=secret; theme=dark; lang=en; sid=secret");
+    {
+        os64_url_t u = url_of("http://s.test/");
+        int32_t left = 0;
+        expect("script: a read with no room says what did not fit",
+               way_jar_script_cookies(jar, &u, false, 103, NULL, 0, &left) == 0 && left == 2, NULL);
+    }
     script_hear(jar, "http://s.test/", false, "theme=light", 104);
     expect("script: replaces a cookie it may see", strcmp(script_read(jar, "http://s.test/", false, 105), "theme=light; lang=en") == 0,
            script_read(jar, "http://s.test/", false, 105));

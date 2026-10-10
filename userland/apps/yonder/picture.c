@@ -10,6 +10,8 @@
 // as text/plain still sent a GIF, and the decoder reads the bytes, not the
 // label.
 #define PICTURE_ACCEPT OS64_IMAGE_ACCEPT ", */*;q=0.5"
+_Static_assert(sizeof(PICTURE_ACCEPT) <= OS64_FETCH_ACCEPT_MAX,
+               "libfetch refuses an Accept longer than OS64_FETCH_ACCEPT_MAX");
 
 // A GIF is opened as a sequence first, and kept as one when it moves; a
 // still one, and every other kind, is decoded whole. The sequence copies

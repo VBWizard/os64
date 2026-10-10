@@ -106,7 +106,9 @@ typedef struct {
 typedef struct {
     const char *name;                   // how a sentence names this browser: "wend"
     const char *agent;                  // the User-Agent it sends
-    const char *accept;                 // the Accept list, what it can render
+    // The Accept list of the pages it renders. A leg that shows pictures
+    // (way_leg_t.pictures) adds them on a GET (way_accept_compose).
+    const char *accept;
     // What the face offers for a page that asks to send the reader on after
     // a delay, appended to the sentence saying so: wend's " - press g to
     // go". NULL or "" offers nothing.
@@ -144,8 +146,9 @@ typedef struct {
     // The finished-document loader resumes script stops without executing.
     bool scripting;
     // The pictures the face shows, as an Accept list of their types (yonder's
-    // is libimage's OS64_IMAGE_ACCEPT), or NULL for none: a picture asked
-    // for by itself, of a type it names, is a page, WAY_BODY_IMAGE, whose
+    // is libimage's OS64_IMAGE_ACCEPT), or NULL for none. A GET asks for
+    // them after the session's pages (way_accept_compose), and a picture
+    // asked for by itself, of a type it names, is a page, WAY_BODY_IMAGE, whose
     // body the face does not read — it writes the page that shows the
     // picture. Any other picture is not a page. way_open's alone: way_load
     // reads every body it opens, so to it no picture is a page.
@@ -186,6 +189,13 @@ void way_script_cookie(way_jar_t *jar, const char *page_url, const char *text, s
 // Whether an Accept-style list ("a/b, c/d;q=0.5") names `type` exactly,
 // parameters aside.
 bool way_accept_names(const char *list, const char *type);
+
+// The Accept a navigation sends: the page types `pages`, then each type of
+// `pictures` (NULL for none) at half the weight, so a server with both
+// sends the page and one with only a picture sends that. Never longer than
+// `cap` (libfetch refuses a longer one, OS64_FETCH_ACCEPT_MAX): a picture
+// type that would not fit is left off, never cut. Answers `out`.
+const char *way_accept_compose(const char *pages, const char *pictures, char *out, size_t cap);
 
 // What a body is, judged from its head. A head that is none of these is not
 // a page: way_open says so and refuses. IMAGE only for a leg whose face shows

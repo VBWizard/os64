@@ -346,14 +346,19 @@ bool way_open(way_leg_t *s, const char *url, const os64_page_request_t *request,
     os64_html_options_t limits = os64_html_options_default();
     os64_fetch_options_t opt = {0};
     opt.user_agent = s->agent;
-    opt.accept = s->session->accept;
+    // Pictures are asked for only on a GET: a POST's reply is never shown as
+    // a picture (below), so advertising one would invite a reply refused.
+    bool posting = request != NULL && request->method == OS64_PAGE_METHOD_POST;
+    char accept[OS64_FETCH_ACCEPT_MAX];
+    opt.accept = way_accept_compose(s->session->accept, posting ? NULL : s->pictures, accept,
+                                    sizeof(accept));
     opt.max_body = limits.max_bytes;     // the same page, the same cap
     opt.cancelled = fetch_cancelled;
     opt.on_hop = hop_ask;
     opt.headers_for = leg_headers;
     opt.on_set_cookie = leg_cookie;
     opt.ctx = s;
-    if (request != NULL && request->method == OS64_PAGE_METHOD_POST) {
+    if (posting) {
         opt.method = OS64_FETCH_METHOD_POST;
         opt.body = request->body;
         opt.body_len = request->body_len;

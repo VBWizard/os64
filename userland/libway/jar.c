@@ -593,7 +593,9 @@ static size_t cookies(way_jar_t *jar, const os64_url_t *to, bool encrypted, int6
         *left_out = 0;
     if (cap > 0)
         out[0] = '\0';
-    if (jar == NULL || to == NULL || cap == 0)
+    // No room is still asked: every cookie that matches is counted in
+    // `left_out`, which is how a caller learns it needs room at all.
+    if (jar == NULL || to == NULL)
         return 0;
     size_t rn = path_length(to->path);
     size_t used = 0;

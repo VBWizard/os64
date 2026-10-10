@@ -208,7 +208,10 @@ typedef struct {
 
 #define OS64_FETCH_HOPS_DEFAULT 5
 #define OS64_FETCH_AGENT_MAX    256
-#define OS64_FETCH_ACCEPT_MAX   128
+// An Accept list is a browser's whole vocabulary of types, weighted:
+// Chrome's navigation one is about 135 bytes, and yonder's names every
+// picture type libimage decodes besides its page types.
+#define OS64_FETCH_ACCEPT_MAX   512
 #define OS64_FETCH_EXTRA_MAX    1024
 #define OS64_FETCH_CONTENT_TYPE_MAX 256
 

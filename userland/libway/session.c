@@ -288,6 +288,31 @@ bool way_type_is_json(const char *type)
     return os64_streq(type, "application/json") || ends_with(type, "+json");
 }
 
+const char *way_accept_compose(const char *pages, const char *pictures, char *out, size_t cap)
+{
+    if (cap == 0)
+        return out;
+    os64_strcopy(out, cap, pages != NULL ? pages : "");
+    size_t n = os64_strlen(out);
+    for (const char *at = pictures != NULL ? pictures : ""; *at != '\0';) {
+        while (*at == ' ' || *at == ',')
+            at++;
+        const char *end = at;
+        while (*end != '\0' && *end != ',')
+            end++;
+        const char *type_end = at;
+        while (type_end < end && *type_end != ';' && *type_end != ' ')
+            type_end++;
+        size_t len = (size_t)(type_end - at);
+        // ", " (when anything is before it) + the type + ";q=0.5" + the NUL
+        size_t sep = n > 0 ? 2 : 0;
+        if (len > 0 && n + sep + len + 6 + 1 <= cap)
+            n += (size_t)os64_snprintf(out + n, cap - n, "%s%.*s;q=0.5", sep ? ", " : "", (int)len, at);
+        at = end;
+    }
+    return out;
+}
+
 bool way_accept_names(const char *list, const char *type)
 {
     size_t n = type != NULL ? os64_strlen(type) : 0;
