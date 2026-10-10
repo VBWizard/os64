@@ -194,7 +194,9 @@ bool way_accept_names(const char *list, const char *type);
 // `pictures` (NULL for none) at half the weight, so a server with both
 // sends the page and one with only a picture sends that. Never longer than
 // `cap` (libfetch refuses a longer one, OS64_FETCH_ACCEPT_MAX): a picture
-// type that would not fit is left off, never cut. Answers `out`.
+// type that would not fit is left off, never cut. Answers `out`, or NULL
+// when `pages` itself does not fit, which is never cut either: the caller
+// sends `pages` as it is, for libfetch to refuse.
 const char *way_accept_compose(const char *pages, const char *pictures, char *out, size_t cap);
 
 // What a body is, judged from its head. A head that is none of these is not

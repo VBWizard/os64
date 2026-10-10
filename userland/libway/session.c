@@ -290,9 +290,8 @@ bool way_type_is_json(const char *type)
 
 const char *way_accept_compose(const char *pages, const char *pictures, char *out, size_t cap)
 {
-    if (cap == 0)
-        return out;
-    os64_strcopy(out, cap, pages != NULL ? pages : "");
+    if (cap == 0 || os64_strcopy(out, cap, pages != NULL ? pages : "") >= cap)
+        return NULL;
     size_t n = os64_strlen(out);
     for (const char *at = pictures != NULL ? pictures : ""; *at != '\0';) {
         while (*at == ' ' || *at == ',')

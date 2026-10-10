@@ -746,6 +746,23 @@ static void pictures_are_pages_for_a_face_that_shows_them(void)
         expect("accept: a picture type that would not fit is left off whole",
                strcmp(way_accept_compose("text/html", "image/png, image/x-portable-pixmap", out, sizeof(out)),
                       "text/html, image/png;q=0.5") == 0, out);
+        static char long_pages[600];
+        memset(long_pages, 'a', sizeof(long_pages) - 1);
+        expect("accept: a page list that does not fit is never cut",
+               way_accept_compose(long_pages, "image/png", out, sizeof(out)) == NULL, NULL);
+        fresh();
+        script("pic.test", "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 2\r\n\r\nok");
+        static way_session_t long_session = {.name="fixture", .agent="fixture"};
+        long_session.accept = long_pages;
+        way_leg_t long_leg = way_leg(&long_session);
+        long_leg.pictures = "image/png";
+        way_opening_t lo;
+        os64_fetch_status_t lwhy;
+        bool lopened = way_open(&long_leg, "http://pic.test/", NULL, &lo, &lwhy);
+        if (lopened)
+            os64_fetch_close(lo.fetch);
+        expect("accept: a page list longer than libfetch sends is refused, not cut",
+               !lopened && strstr(long_leg.status, "longer than this will send") != NULL, long_leg.status);
         expect("accept: a picture's own parameters give way to the half weight",
                strcmp(way_accept_compose(NULL, "image/png;q=0.9", out, sizeof(out)), "image/png;q=0.5") == 0, out);
     }

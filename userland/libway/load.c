@@ -350,11 +350,16 @@ bool way_open(way_leg_t *s, const char *url, const os64_page_request_t *request,
     // a picture (below), so advertising one would invite a reply refused. A
     // POST a redirect turns into a GET asks for them from there on.
     bool posting = request != NULL && request->method == OS64_PAGE_METHOD_POST;
+    // A page list too long to compose is sent as it is, and libfetch refuses
+    // it: an Accept is never cut short.
     char accept[OS64_FETCH_ACCEPT_MAX], accept_get[OS64_FETCH_ACCEPT_MAX];
-    way_accept_compose(s->session->accept, s->pictures, accept_get, sizeof(accept_get));
-    opt.accept = posting ? way_accept_compose(s->session->accept, NULL, accept, sizeof(accept))
-                         : accept_get;
-    opt.accept_get = accept_get;
+    const char *with_pictures = way_accept_compose(s->session->accept, s->pictures, accept_get,
+                                                   sizeof(accept_get));
+    const char *pages = way_accept_compose(s->session->accept, NULL, accept, sizeof(accept));
+    if (with_pictures == NULL || pages == NULL)
+        with_pictures = pages = s->session->accept;
+    opt.accept = posting ? pages : with_pictures;
+    opt.accept_get = with_pictures;
     opt.max_body = limits.max_bytes;     // the same page, the same cap
     opt.cancelled = fetch_cancelled;
     opt.on_hop = hop_ask;
