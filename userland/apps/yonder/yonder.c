@@ -3929,20 +3929,23 @@ static const char *script_user_agent(void *opaque)
 // (libway's script door, which keeps HttpOnly cookies from scripts).
 static size_t script_cookies_get(void *opaque, char *out, size_t cap, bool *whole)
 {
-    return way_script_cookies(g.way.jar, yonder_scripts_url(opaque), out, cap, whole);
+    return way_script_cookies(g.way.jar, yonder_scripts_url(opaque), yonder_scripts_encrypted(opaque),
+                              out, cap, whole);
 }
 
 static void script_cookies_set(void *opaque, const char *text, size_t length)
 {
-    way_script_cookie(g.way.jar, yonder_scripts_url(opaque), text, length);
+    way_script_cookie(g.way.jar, yonder_scripts_url(opaque), yonder_scripts_encrypted(opaque), text,
+                      length);
 }
 
 static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state_t *state,
-                                      const char *url, uint64_t serial, yonder_diag_t *diag)
+                                      const char *url, bool encrypted, uint64_t serial,
+                                      yonder_diag_t *diag)
 {
     yonder_scripts_options_t options = {url, g.script_ms, serial, script_alert, script_fetch,
                                         script_cancel, script_activate, script_write, script_now,
-                                        script_geometry, doc, diag};
+                                        script_geometry, doc, diag, encrypted};
     yonder_scripts_t *host = yonder_scripts_new(doc, state, &options);
     yonder_scripts_set_user_agent(host, script_user_agent, NULL);
     const os64_dom_cookies_t cookies = {script_cookies_get, script_cookies_set, host};
@@ -4886,7 +4889,8 @@ static void stream_finish(os64_fetch_status_t fetch, const char *reason)
         g.stream.head.body == WAY_BODY_HTML) {
         g.stream.state = os64_page_state_create(doc, 0);
         g.stream.scripts = g.stream.state != NULL
-            ? scripts_host(doc, g.stream.state, g.stream.head.url, g.stream.serial, g.stream.diag) : NULL;
+            ? scripts_host(doc, g.stream.state, g.stream.head.url, g.stream.head.encrypted, g.stream.serial,
+                           g.stream.diag) : NULL;
         if (g.stream.scripts == NULL) {
             os64_page_state_free(g.stream.state);
             g.stream.state = NULL;
@@ -5062,7 +5066,8 @@ static yonder_stop_t stream_stop(os64_html_node_t *script)
         os64_html_document_t *doc = os64_html_parser_document(g.stream.parser);
         g.stream.state = os64_page_state_create(doc, 0);
         g.stream.scripts = g.stream.state != NULL
-            ? scripts_host(doc, g.stream.state, g.stream.head.url, g.stream.serial, g.stream.diag) : NULL;
+            ? scripts_host(doc, g.stream.state, g.stream.head.url, g.stream.head.encrypted, g.stream.serial,
+                           g.stream.diag) : NULL;
         if (g.stream.scripts == NULL) {
             os64_page_state_free(g.stream.state);
             g.stream.state = NULL;

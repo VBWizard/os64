@@ -762,6 +762,11 @@ const char *yonder_scripts_url(const yonder_scripts_t *s)
     return s != NULL ? s->url : NULL;
 }
 
+bool yonder_scripts_encrypted(const yonder_scripts_t *s)
+{
+    return s != NULL && s->options.encrypted;
+}
+
 void yonder_scripts_set_user_agent(yonder_scripts_t *s, const char *(*provider)(void *), void *opaque)
 {
     if (s == NULL) return;

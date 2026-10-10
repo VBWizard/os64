@@ -710,8 +710,10 @@ static void pictures_are_pages_for_a_face_that_shows_them(void)
         way_opening_t ao;
         os64_fetch_status_t awhy;
         bool aopened = way_open(&ask_leg, "http://pic.test/form", post ? &request : NULL, &ao, &awhy);
-        if (aopened)
+        if (aopened) {
+            expect("head: a page over plain http did not arrive encrypted", !ao.head.encrypted, NULL);
             os64_fetch_close(ao.fetch);
+        }
         bool asked = false, pages_only = false;
         for (int k = 0; k < 8; k++) {
             asked |= strstr(s_last_request[k], "Accept: text/html, image/png;q=0.5, image/gif;q=0.5\r\n") != NULL;
@@ -719,6 +721,26 @@ static void pictures_are_pages_for_a_face_that_shows_them(void)
         }
         expect(post ? "pictures: a POST asks for pages only" : "pictures: a GET asks for the pictures after the pages",
                aopened && (post ? pages_only && !asked : asked && !pages_only), ask_leg.status);
+    }
+    {
+        // A page's script reads and sets Secure cookies only when its page
+        // ARRIVED encrypted: an https address through a plain proxy did not.
+        fresh();
+        way_jar_t *jar = way_jar_new();
+        os64_url_t site;
+        os64_url_parse("https://s.test/", &site);
+        way_jar_hear(jar, &site, true, "token=secret; Secure", 20, 100);
+        char got[64];
+        bool whole;
+        way_script_cookies(jar, "https://s.test/", false, got, sizeof(got), &whole);
+        bool hidden = strcmp(got, "") == 0;
+        way_script_cookies(jar, "https://s.test/", true, got, sizeof(got), &whole);
+        bool seen = strcmp(got, "token=secret") == 0;
+        way_script_cookie(jar, "https://s.test/", false, "forged=1; Secure", 16);
+        way_script_cookies(jar, "https://s.test/", true, got, sizeof(got), &whole);
+        expect("cookies: a page's script sees and sets Secure cookies only over its own encrypted arrival",
+               hidden && seen && strcmp(got, "token=secret") == 0, got);
+        way_jar_free(jar);
     }
     {
         // A POST a 303 turns into a GET asks for the pictures from there on.

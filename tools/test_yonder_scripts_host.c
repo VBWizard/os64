@@ -396,13 +396,16 @@ void os64_ui_settings_report(os64_ui_settings_t *dialog, const char *text) {
  * there (test_way_jar.inc); here the window hands the page's address over
  * and what a script reads and sets crosses intact. */
 static char fake_cookie_url[256], fake_cookie_set[256];
+static int fake_cookie_encrypted=-1;    /* what the window said of the page's transport */
 static const char *fake_cookie_read="session=abc; theme=dark";
-size_t way_script_cookies(way_jar_t *jar, const char *page_url, char *out, size_t cap, bool *whole) {
+size_t way_script_cookies(way_jar_t *jar, const char *page_url, bool encrypted, char *out, size_t cap, bool *whole) {
     (void)jar; *whole=true; snprintf(fake_cookie_url,sizeof(fake_cookie_url),"%s",page_url?page_url:"");
+    fake_cookie_encrypted=encrypted;
     return (size_t)snprintf(out,cap,"%s",fake_cookie_read);
 }
-void way_script_cookie(way_jar_t *jar, const char *page_url, const char *text, size_t len) {
+void way_script_cookie(way_jar_t *jar, const char *page_url, bool encrypted, const char *text, size_t len) {
     (void)jar; snprintf(fake_cookie_url,sizeof(fake_cookie_url),"%s",page_url?page_url:"");
+    fake_cookie_encrypted=encrypted;
     snprintf(fake_cookie_set,sizeof(fake_cookie_set),"%.*s",(int)len,text);
 }
 void way_cache_enable(way_cache_t *cache, bool enabled) { (void)enabled; check(cache==NULL,"no test cache"); }
@@ -495,7 +498,7 @@ static void probe_page(const char *html, bool scripts) {
         /* A finished document's inline scripts are queued as CONNECTED
          * scripts, in tree order: the shown page's ready list, one a turn. */
         g.page.scripts=scripts_host(g.page.way.doc,os64_page_shared_state(g.page.way.model),
-            g.page.way.url,++g.pages_made,g.page.diag);
+            g.page.way.url,false,++g.pages_made,g.page.diag);
         for (os64_html_node_t *n=g.page.way.doc->document;n;n=(os64_html_node_t *)next_within(n,g.page.way.doc->document))
             if(os64_dom_script_kind(n)==OS64_DOM_SCRIPT_CLASSIC && os64_html_attr(n,"src")==NULL)
                 yonder_scripts_connected(g.page.scripts,n);
@@ -1168,7 +1171,7 @@ static void bounded_resources(void) {
     probe_page("<script>var held=document.body;</script><script>document.body.id='later';</script>",true);
     yonder_scripts_free(g.page.scripts); g.page.scripts=NULL;
     fail_at=attempts+1;
-    check(scripts_host(g.page.way.doc,os64_page_shared_state(page_model(&g.page)),g.page.way.url,1,NULL)==NULL,
+    check(scripts_host(g.page.way.doc,os64_page_shared_state(page_model(&g.page)),g.page.way.url,false,1,NULL)==NULL,
         "a script host the heap refuses publishes nothing");
     fail_at=0;
     probe_drop();
@@ -1713,12 +1716,14 @@ static char *pad_page(const char *rest) {
     snprintf(html,n,"<!doctype html><!-- %01200d -->%s",0,rest);
     return html;
 }
+static bool loop_encrypted;     /* the next loop_page's head: arrived encrypted */
 static void loop_page(const char *rest) {
     stream_window();
     g.scripts_on=true; g.script_ms=5000; now_ms=100;
     start_trip("http://fixture.test/p",NULL,NAV_GO,NULL);
     char *html=pad_page(rest);
     way_head_t h=stream_head("text/html","",false);
+    h.encrypted=loop_encrypted;
     yonder_mail_post_head(g.stream.mail,&h);
     stream_post_body((const uint8_t *)html,strlen(html),YONDER_STREAM_CHUNK);
     stream_post_verdict(true,OS64_FETCH_OK,"");
@@ -2022,7 +2027,14 @@ static void loop_document_cookie(void) {
         "document.cookie: a script reads the cookies the window hands it");
     check(os64_streq(fake_cookie_set,"seen=1; path=/") && os64_streq(fake_cookie_url,"http://fixture.test/final"),
         "document.cookie: a script's cookie goes to the jar for the page's own address");
+    check(fake_cookie_encrypted==0,"document.cookie: a page that arrived in the clear says so to the jar");
     loop_drop();
+    /* The transport's own answer travels with the page, never the scheme's. */
+    loop_encrypted=true; fake_cookie_encrypted=-1;
+    loop_page("<script>document.cookie='x=1';</script>");
+    check(loop_settle() && fake_cookie_encrypted==1,"document.cookie: a page that arrived encrypted says so");
+    loop_drop();
+    loop_encrypted=false;
 }
 static void loop_script_changes_hold(void) {
     loop_page("<base href='http://assets.test/js/'><script src='app.js'></script>");

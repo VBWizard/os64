@@ -168,14 +168,17 @@ way_leg_t way_leg(const way_session_t *session);
 way_leg_t way_leg_as(const way_session_t *session, const char *agent);
 
 // A PAGE'S SCRIPT's cookies (document.cookie), for the page at `page_url`,
-// at the system's clock: what it may read, at most `cap` bytes with the
+// which arrived `encrypted` or not (its head's, way_head_t.encrypted: an
+// https page through a plain proxy did not, and its script may neither read
+// nor set a Secure cookie), at the system's clock: what it may read, at most `cap` bytes with the
 // NUL, answering the length written and whether that is all of it (false:
 // ask again with more room), and one cookie it sets ("name=value;
 // attributes", as a Set-Cookie value). The jar's script rules apply
 // (jar.h); a page that is not http or https reads "" and sets nothing.
-size_t way_script_cookies(way_jar_t *jar, const char *page_url, char *out, size_t cap,
-                          bool *whole);
-void way_script_cookie(way_jar_t *jar, const char *page_url, const char *text, size_t len);
+size_t way_script_cookies(way_jar_t *jar, const char *page_url, bool encrypted, char *out,
+                          size_t cap, bool *whole);
+void way_script_cookie(way_jar_t *jar, const char *page_url, bool encrypted, const char *text,
+                       size_t len);
 
 // ── The I/O half ────────────────────────────────────────────────────────
 //
@@ -214,6 +217,10 @@ typedef struct {
     char charset[HTTP_CHARSET_MAX];
     char url[OS64_FETCH_URL_MAX];       // where the body came from, after redirects
     bool posted;                        // the FINAL method was POST
+    // The final hop's transport was encrypted: https, and not through a
+    // plain proxy (libfetch's own answer, never the scheme's). What a page's
+    // script may do with Secure cookies follows it (way_script_cookies).
+    bool encrypted;
     uint16_t tls_version;
     bool tls_fallback;
     way_body_t body;

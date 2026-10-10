@@ -44,6 +44,9 @@ typedef struct {
     // the page reached for and did not find, and a module script, are
     // written there as they happen. NULL keeps no record.
     yonder_diag_t *diag;
+    // The page arrived encrypted (way_head_t.encrypted): what its scripts
+    // may do with Secure cookies.
+    bool encrypted;
 } yonder_scripts_options_t;
 
 // A host for `doc`, whose control state is `state` (which must outlive it).
@@ -141,7 +144,9 @@ void yonder_scripts_set_user_agent(yonder_scripts_t *scripts, const char *(*prov
 // document.cookie's provider (os64_dom_set_cookies), copied, for the
 // binding made now or later. NULL: the document is cookie-averse.
 void yonder_scripts_set_cookies(yonder_scripts_t *scripts, const os64_dom_cookies_t *cookies);
-// The address the page's scripts run at (the options' url).
+// The address the page's scripts run at (the options' url), and whether
+// the page arrived encrypted (the options' encrypted).
 const char *yonder_scripts_url(const yonder_scripts_t *scripts);
+bool yonder_scripts_encrypted(const yonder_scripts_t *scripts);
 
 #endif

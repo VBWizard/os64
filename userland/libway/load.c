@@ -331,6 +331,7 @@ static void head_copy(way_head_t *out, const os64_fetch_head_t *head, way_body_t
     os64_strcopy(out->charset, sizeof(out->charset), head->charset);
     os64_strcopy(out->url, sizeof(out->url), head->url_text);
     out->posted = head->method == OS64_FETCH_METHOD_POST;
+    out->encrypted = head->encrypted;
     out->body = body;
 }
 
@@ -516,24 +517,27 @@ static char *read_body(way_leg_t *s, way_opening_t *o, size_t cap, size_t *len, 
 // ── A page's script ─────────────────────────────────────────────────────
 
 // The page's address as the jar keeps cookies for it: an http or https
-// page only (any other has none), encrypted when https.
-static bool script_page(const char *page_url, os64_url_t *url, bool *encrypted)
+// page only (any other has none). Encrypted only when it is https AND it
+// arrived so (`arrived`): the scheme alone would hand Secure cookies to a
+// script a plain proxy could have written.
+static bool script_page(const char *page_url, bool arrived, os64_url_t *url, bool *encrypted)
 {
     if (page_url == NULL || os64_url_parse(page_url, url) != OS64_URL_OK)
         return false;
-    *encrypted = os64_streq(url->scheme, "https");
-    return *encrypted || os64_streq(url->scheme, "http");
+    bool https = os64_streq(url->scheme, "https");
+    *encrypted = https && arrived;
+    return https || os64_streq(url->scheme, "http");
 }
 
-size_t way_script_cookies(way_jar_t *jar, const char *page_url, char *out, size_t cap,
-                          bool *whole)
+size_t way_script_cookies(way_jar_t *jar, const char *page_url, bool arrived, char *out,
+                          size_t cap, bool *whole)
 {
     os64_url_t url;
     bool encrypted;
     *whole = true;
     if (cap > 0)
         out[0] = '\0';
-    if (!script_page(page_url, &url, &encrypted))
+    if (!script_page(page_url, arrived, &url, &encrypted))
         return 0;
     int32_t left = 0;
     size_t n = way_jar_script_cookies(jar, &url, encrypted, now_utc(), out, cap, &left);
@@ -541,11 +545,12 @@ size_t way_script_cookies(way_jar_t *jar, const char *page_url, char *out, size_
     return n;
 }
 
-void way_script_cookie(way_jar_t *jar, const char *page_url, const char *text, size_t len)
+void way_script_cookie(way_jar_t *jar, const char *page_url, bool arrived, const char *text,
+                       size_t len)
 {
     os64_url_t url;
     bool encrypted;
-    if (script_page(page_url, &url, &encrypted))
+    if (script_page(page_url, arrived, &url, &encrypted))
         way_jar_script_hear(jar, &url, encrypted, text, len, now_utc());
 }
 
