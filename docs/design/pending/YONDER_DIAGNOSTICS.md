@@ -343,5 +343,10 @@ each was a page dying on something that browsers have had since the 2000s.
   body is no longer decoded as the picture: an HTML 404 page used to be
   counted as `MISSING image unknown`. A format yonder does not decode
   stays `MISSING image <format>`, with a plain line `picture <address>:
-  svg, which yonder does not decode`. suckless.org's logo is an SVG; that
+  svg, which yonder does not decode`. One never handed to a worker is
+  `FAILED picture` too (`no worker to fetch it`, `no memory to ask for
+  it`, `the workers would not take it`), and one past the memory a page's
+  pictures may keep is named on a plain line, since that is a limit kept
+  and not a failure. A body yonder had no memory to hold reads `did not
+  fetch (no-memory)`, never `(ok)`. suckless.org's logo is an SVG; that
   is its "1 of 2".

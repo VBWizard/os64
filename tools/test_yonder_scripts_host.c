@@ -3274,6 +3274,31 @@ static void diag_picture_case(void) {
     probe_drop();
 }
 
+/* The pictures never handed to a worker, and the one past what a page's
+ * pictures may cost, are named too: every picture not shown is. */
+static void diag_picture_unshown_case(void) {
+    probe_page("<img src=file:///kept.png><img src=file:///asked.png>",true);
+    pictures_start(&g.page);
+    g.page.diag=yonder_diag_new("http://x.test/",1,0);
+    g.page.pics[0].state=PIC_WAITING;
+    g.page.waiting=g.page.in_flight=1;
+    g.page.kept_bytes=PICTURES_KEPT_MAX;
+    yonder_picture_job_t job={.kind=YONDER_JOB_PICTURE,.index=0,.generation=g.page_serial};
+    yonder_picture_t big={.status=OS64_IMAGE_OK,.cost=1};
+    picture_arrived(&job,&big);
+    g.page.pics[1].state=PIC_QUEUED; g.page.next_pic=1; g.page.waiting=1;
+    pictures_feed(&g.page);         /* this harness has no worker pool */
+    char text[2048]; yonder_diag_render(g.page.diag,text,sizeof(text));
+    check(g.page.pics[0].state==PIC_NOT_KEPT &&
+          has(text,"\npicture file:///kept.png: past the memory kept for the page's pictures\n") &&
+          !has(text,"FAILED picture: file:///kept.png"),
+        "diag: a picture past the memory kept is named, and is no failure");
+    check(g.page.pics[1].state==PIC_FAILED && has(text,"\nFAILED picture: file:///asked.png: no worker to fetch it (1)\n"),
+        "diag: a picture no worker was asked for is FAILED picture, by its address");
+    yonder_diag_free(g.page.diag); g.page.diag=NULL;
+    probe_drop();
+}
+
 static void diag_unit_cases(void) {
     yonder_diag_t *d=yonder_diag_new("http://Example.COM:8080/FAILED?x=MISSING",3,0);
     char text[4096];
@@ -3488,6 +3513,7 @@ static void diag_cases(void) {
     diag_page_cases();
     diag_bytes_case();
     diag_picture_case();
+    diag_picture_unshown_case();
     diag_long_source_case();
     diag_tokens_exclusive();
     /* Setting absent: no file, while the badge still counts. */

@@ -234,6 +234,10 @@ bool way_fetch_whole(way_hooks_t *hooks, const char *url, os64_fetch_options_t *
         size_t len = 0;
         uint8_t *bytes = read_whole(f, cap, &len);
         out->fetch = os64_fetch_status(f);
+        // The fetch was fine and the buffer could not be had: its own
+        // status says OK, which is no reason for a body that is not here.
+        if (bytes == NULL && out->fetch == OS64_FETCH_OK)
+            out->fetch = OS64_FETCH_NO_MEMORY;
         if (bytes != NULL) {
             out->bytes = bytes;
             out->len = len;

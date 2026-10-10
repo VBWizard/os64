@@ -2314,6 +2314,9 @@ static bool picture_sized(const Page *p, const os64_html_node_t *node)
 
 // Hands the pool the page's next pictures, in table order, while fewer than
 // PICTURES_AT_ONCE are in it. One it cannot take keeps its frame.
+static void picture_failed(Page *p, const char *url, const yonder_picture_t *product,
+                           const char *asked);
+
 static void pictures_feed(Page *p)
 {
     while (p->in_flight < PICTURES_AT_ONCE && p->next_pic < p->npics) {
@@ -2324,8 +2327,11 @@ static void pictures_feed(Page *p)
         pic->state = PIC_FAILED;
         p->waiting--;
         yonder_picture_job_t *job = g.pool != NULL ? os64_calloc(1, sizeof(*job)) : NULL;
-        if (job == NULL)
+        if (job == NULL) {
+            picture_failed(p, pic->url, NULL,
+                           g.pool == NULL ? "no worker to fetch it" : "no memory to ask for it");
             continue;
+        }
         job->kind = YONDER_JOB_PICTURE;
         job->index = index;
         job->generation = g.page_serial;
@@ -2338,6 +2344,7 @@ static void pictures_feed(Page *p)
         pic->id = os64_work_submit(g.pool, &work);
         if (pic->id == 0) {
             os64_free(job);
+            picture_failed(p, pic->url, NULL, "the workers would not take it");
             continue;
         }
         pic->state = PIC_WAITING;
@@ -2857,24 +2864,25 @@ static bool picture_moves_page(const Page *p, int32_t pic)
 
 // A picture that will not be shown, on the page's record by its address:
 // a format yonder does not decode is asked for and not had, MISSING image
-// <format>, with the address on a plain line; one that would not fetch, an
-// error the server answered with, or bytes that would not decode is
-// FAILED picture.
-static void picture_failed(const char *url, const yonder_picture_t *product)
+// <format>, with the address on a plain line; one that could not be asked
+// for (`asked`, the reason), would not fetch, came with an error the
+// server answered, or would not decode is FAILED picture.
+static void picture_failed(Page *p, const char *url, const yonder_picture_t *product,
+                           const char *asked)
 {
     char why[64];
     if (product != NULL && product->format != NULL) {
-        yonder_diag_missing(g.page.diag, "image", product->format, 1);
+        yonder_diag_missing(p->diag, "image", product->format, 1);
         char key[OS64_FETCH_URL_MAX + 16];
         os64_snprintf(key, sizeof(key), "picture %s", url);
         os64_snprintf(why, sizeof(why), "%s, which yonder does not decode", product->format);
-        yonder_diag_fact(g.page.diag, key, why);
+        yonder_diag_fact(p->diag, key, why);
     } else {
-        os64_strcopy(why, sizeof(why), product == NULL ? "no memory to fetch it" :
+        os64_strcopy(why, sizeof(why), asked != NULL ? asked : product == NULL ? "no memory to fetch it" :
                                        product->why[0] != '\0' ? product->why : "no picture came");
         char line[OS64_FETCH_URL_MAX + 80];
         os64_snprintf(line, sizeof(line), "%s: %s", url, why);
-        yonder_diag_failed(g.page.diag, "picture", line);
+        yonder_diag_failed(p->diag, "picture", line);
     }
     badge_follow();
 }
@@ -2890,13 +2898,18 @@ static void picture_arrived(yonder_picture_job_t *job, yonder_picture_t *product
     g.page.in_flight--;
     if (product == NULL || product->status != OS64_IMAGE_OK) {
         pic->state = PIC_FAILED;
-        picture_failed(pic->url, product);
+        picture_failed(&g.page, pic->url, product, NULL);
         return;
     }
     size_t bytes = product->cost;
     if (g.page.kept_bytes + bytes > PICTURES_KEPT_MAX) {
+        // Not a failure: what the page's pictures may cost is spent. Named
+        // all the same, so every picture not shown is on the record.
         pic->state = PIC_NOT_KEPT;
         g.page.not_kept++;
+        char key[OS64_FETCH_URL_MAX + 16];
+        os64_snprintf(key, sizeof(key), "picture %s", pic->url);
+        yonder_diag_fact(g.page.diag, key, "past the memory kept for the page's pictures");
         return;
     }
     pic->image = product->image;
