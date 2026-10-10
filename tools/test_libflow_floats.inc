@@ -692,6 +692,59 @@ static void float_avoid_cases(void)
     }
 }
 
+static int seen_at(const Seen *s, const flow_box_t *b)
+{
+    for (int i = 0; i < s->n; i++)
+        if (s->v[i] == b)
+            return i;
+    return -1;
+}
+
+static void float_paint_cases(void)
+{
+    // Appendix E: a float is painted after the block backgrounds (step 4)
+    // and before the inline content (step 7), whole: the paragraph written
+    // after it paints its background first, then the float and the float's
+    // own text, then its text. The float inside the second paragraph's line
+    // is painted once, in the same step.
+    Sheeted p;
+    sheeted_open(&p, FLOAT_STYLE ".l{float:left;width:100px;height:50px;background:#00f}"
+                     " p{background:#f00}</style><div class=l>in</div><p>" W10 "</p>"
+                     "<p>x<span class=l>f</span></p>", 400, 600);
+    flow_tree_t *t = flow_layout(p.doc, p.page, 400, &p.env);
+    const os64_html_node_t *div = p.doc->body->first_child, *para = div->next;
+    const os64_html_node_t *span = para->next->first_child->next;
+    const flow_box_t *fb = t != NULL ? flow_box_for(t, div) : NULL;
+    const flow_box_t *pb = t != NULL ? flow_box_for(t, para) : NULL;
+    const flow_box_t *sb = t != NULL ? flow_box_for(t, span) : NULL;
+    Seen out = {0};
+    flow_visit(t, (os64_gui_rect_t){0, 0, 400, 600}, kNoScroll, seen_add, &out);
+    const flow_box_t *in_text = fb != NULL && fb->first != NULL ? fb->first->first : NULL;
+    const flow_box_t *p_text = pb != NULL && pb->first != NULL ? pb->first->first : NULL;
+    int at_p = seen_at(&out, pb), at_f = seen_at(&out, fb), at_in = seen_at(&out, in_text);
+    int at_text = seen_at(&out, p_text), at_s = seen_at(&out, sb), twice = 0;
+    const flow_box_t *s_text = sb != NULL && sb->first != NULL ? sb->first->first : NULL;
+    for (int i = 0; i < out.n; i++)
+        twice += out.v[i] == s_text;
+    expect("floats: a float paints after the blocks and before the inline content",
+           fb != NULL && fb->floated == FLOW_FLOAT_LEFT && at_p >= 0 && at_p < at_f &&
+               at_f < at_in && at_in < at_text, NULL);
+    expect("floats: a float on a line is painted once, with the floats",
+           sb != NULL && sb->floated == FLOW_FLOAT_LEFT && at_s > at_p && s_text != NULL &&
+               twice == 1, NULL);
+
+    // A click on the float where the paragraph's border box runs under it
+    // finds the float — its line there — though the paragraph comes later
+    // in the tree.
+    const flow_box_t *h = flow_hit(t, 50, 10, kNoScroll);
+    while (h != NULL && h != fb)
+        h = h->parent;
+    expect("floats: the float, not the block under it, takes the click", h == fb && fb != NULL,
+           NULL);
+    flow_free(t);
+    sheeted_close(&p);
+}
+
 static void float_cases(void)
 {
     float_style_cases();
@@ -706,5 +759,6 @@ static void float_cases(void)
     float_avoid_cases();
     float_cell_cases();
     float_table_cases();
+    float_paint_cases();
     float_sweep_cases();
 }

@@ -137,9 +137,8 @@ written in, as an absolute box is** (boxes.c's `absolute_box`).
   split, and no anonymous block is made for it.
 
 `FBox` gains `floated` (FLOW_FLOAT_LEFT or RIGHT, NONE for every other box)
-and `clearance`, and every box gains `holds_float`: some float lies in its
-subtree. Paint and hit testing use it to skip subtrees with no float in
-them (§ The door).
+and, in pass 3, `clearance` and `float_h` (the margin box's height as laid
+out, a table's captions included, which the box itself leaves out).
 
 **Depth.** Among blocks, a float costs one block level, since it is laid
 out inside its parent's frame like any block. Among inline content it costs
@@ -359,8 +358,11 @@ table cell decides the cell's width (Decision 5):
 
 ### The door, the face
 
-`flow_box_t` gains `floated`, the side. The dump prints `float-left`,
-`float-right` and `clearance=N`. Two walks in flow.c change.
+`flow_box_t` gains `floated`, the side; `clearance`, in whole pixels; and
+`holds_float`, set as the public tree is built: a float lies below the box
+and not inside a stacked box, which paints as a layer of its own. The dump
+prints `float-left`, `float-right` and `clearance=N`. Two walks in flow.c
+change.
 
 **Paint** (`flow_visit`):
 
@@ -390,8 +392,9 @@ content, then the floats, then the block backgrounds.
   box running UNDER the float, and today it would win because it comes
   later in tree order.
 - `hit_kids` keeps the best rank it has met along with the box, and a
-  higher rank beats a lower one whatever the tree order. The float rank's
-  walk skips subtrees whose `holds_float` is clear, as paint's does.
+  higher rank beats a lower one whatever the tree order. It stays one
+  walk: each child's hit comes back with its rank (`hit_ranked`), so there
+  is no second walk for `holds_float` to prune.
 - `flow_box_covered` asks `flow_hit`, so it agrees with this for free.
 
 ## Decisions (web semantics: Chrome is the yardstick)

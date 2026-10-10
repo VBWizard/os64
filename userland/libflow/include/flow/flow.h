@@ -750,6 +750,11 @@ struct flow_box {
     // A block moved down to clear floats (CSS 2.1 § 9.5.2): by how much,
     // in whole pixels; 0 when it was not.
     int32_t clearance;
+    // A float is in its subtree, below it in the tree and not in a
+    // stacked box: flow_visit's float step and flow_hit's walk skip the
+    // subtrees that hold none, so a page without floats pays nothing for
+    // them.
+    bool holds_float;
     // Painted as a layer of its own, in paint order, and never through its
     // tree ancestors: their walks skip it. A positioned box is; so is a
     // block-level box in the flow below full opacity, a stacking context

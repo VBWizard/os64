@@ -25,6 +25,7 @@ args.logs.mkdir(parents=True, exist_ok=True)
 STYLE = 'userland/libflow/style.c'
 BOXES = 'userland/libflow/boxes.c'
 LAYOUT = 'userland/libflow/layout.c'
+FLOW = 'userland/libflow/flow.c'
 CASES = 'bash tools/test_libflow_host.sh --floats'
 
 # (name, file, old, new). Each breaks one rule the design states.
@@ -215,6 +216,22 @@ mutants = [
     ('a-float-is-its-box-alone', LAYOUT,
      '    f->float_h = c.y + margins_sum(c.pm);',
      '    f->float_h = float_margin(f, FLOW_TOP, cw) + f->h + float_margin(f, FLOW_BOTTOM, cw);'),
+    # Paint and hit order (commit 4).
+    ('blocks-paint-floats-in-step-4', FLOW,
+     '        if (in_tree(c) && c->floated == FLOW_FLOAT_NONE)\n            visit_blocks(cv, c);\n}',
+     '        if (in_tree(c))\n            visit_blocks(cv, c);\n}'),
+    ('a-float-on-a-line-paints-twice', FLOW,
+     '        } else if (in_tree(c) && c->floated == FLOW_FLOAT_NONE) {\n            visit_inline(v, c);',
+     '        } else if (in_tree(c)) {\n            visit_inline(v, c);'),
+    ('the-float-step-is-skipped', FLOW,
+     '            visit_whole(cv, c);\n        else\n            visit_floats(cv, c);',
+     '            (void)0;\n        else\n            visit_floats(cv, c);'),
+    ('holds-float-is-never-set', FLOW,
+     '            b->holds_float |= child->floated != FLOW_FLOAT_NONE || child->holds_float;',
+     '            (void)0;'),
+    ('a-later-block-takes-the-click', FLOW,
+     '        if (h != NULL && r >= *rank) {',
+     '        if (h != NULL) {'),
 ]
 
 caught, missed, unbuilt = [], [], []
