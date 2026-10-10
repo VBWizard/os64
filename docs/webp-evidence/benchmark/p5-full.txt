@@ -1,0 +1,59 @@
+webpbench version=1 scope=full instrumented=yes
+build mode=sse2 libwebp=1.6.0 compiler=14.2.0 built=Oct 10 2026_16:33:23 cpu=AMD Ryzen 5 6600H with Radeon Graphics          cores=12
+sample mode=sse2 phase=warmup fixture=lossy_512 index=0 call_us=7219 gate_us=399 allocate_us=25 scratch_free_us=84 other_decode_us=6711 verify_us=1849 output_free_us=1011 crc=0ba6c4d3 valid=1 status=ok
+fixture mode=sse2 name=lossy_512 width=512 height=512 input_bytes=2222 input_crc=95e70621 expected_input_crc=95e70621 expected_pixel_crc=0ba6c4d3
+sample mode=sse2 phase=serial fixture=lossy_512 index=0 call_us=7574 gate_us=0 allocate_us=10 scratch_free_us=121 other_decode_us=7443 verify_us=2555 output_free_us=1015 crc=0ba6c4d3 valid=1 status=ok
+sample mode=sse2 phase=serial fixture=lossy_512 index=1 call_us=9958 gate_us=1 allocate_us=20 scratch_free_us=120 other_decode_us=9817 verify_us=2558 output_free_us=1002 crc=0ba6c4d3 valid=1 status=ok
+sample mode=sse2 phase=serial fixture=lossy_512 index=2 call_us=8964 gate_us=0 allocate_us=18 scratch_free_us=80 other_decode_us=8866 verify_us=1850 output_free_us=1020 crc=0ba6c4d3 valid=1 status=ok
+fixture mode=sse2 name=lossless_512 width=512 height=512 input_bytes=180 input_crc=bf8bf0f8 expected_input_crc=bf8bf0f8 expected_pixel_crc=4c7da02a
+sample mode=sse2 phase=serial fixture=lossless_512 index=0 call_us=3906 gate_us=0 allocate_us=21 scratch_free_us=1108 other_decode_us=2777 verify_us=2551 output_free_us=1018 crc=4c7da02a valid=1 status=ok
+sample mode=sse2 phase=serial fixture=lossless_512 index=1 call_us=5486 gate_us=0 allocate_us=50 scratch_free_us=1150 other_decode_us=4286 verify_us=2484 output_free_us=1003 crc=4c7da02a valid=1 status=ok
+sample mode=sse2 phase=serial fixture=lossless_512 index=2 call_us=5495 gate_us=0 allocate_us=84 scratch_free_us=1134 other_decode_us=4277 verify_us=2552 output_free_us=1005 crc=4c7da02a valid=1 status=ok
+fixture mode=sse2 name=alpha_512 width=512 height=512 input_bytes=2388 input_crc=ed5c72aa expected_input_crc=ed5c72aa expected_pixel_crc=73f780f5
+sample mode=sse2 phase=serial fixture=alpha_512 index=0 call_us=9953 gate_us=0 allocate_us=73 scratch_free_us=1425 other_decode_us=8455 verify_us=1849 output_free_us=1013 crc=73f780f5 valid=1 status=ok
+sample mode=sse2 phase=serial fixture=alpha_512 index=1 call_us=7900 gate_us=0 allocate_us=42 scratch_free_us=1412 other_decode_us=6446 verify_us=1849 output_free_us=1011 crc=73f780f5 valid=1 status=ok
+sample mode=sse2 phase=serial fixture=alpha_512 index=2 call_us=9161 gate_us=0 allocate_us=37 scratch_free_us=1471 other_decode_us=7653 verify_us=2540 output_free_us=1012 crc=73f780f5 valid=1 status=ok
+fixture mode=sse2 name=lossy_4096 width=4096 height=4096 input_bytes=55280 input_crc=65f3aafe expected_input_crc=65f3aafe expected_pixel_crc=eb639d27
+sample mode=sse2 phase=serial fixture=lossy_4096 index=0 call_us=317360 gate_us=1 allocate_us=37 scratch_free_us=396 other_decode_us=316926 verify_us=118418 output_free_us=67317 crc=eb639d27 valid=1 status=ok
+fixture mode=sse2 name=lossless_4096 width=4096 height=4096 input_bytes=6224 input_crc=0949b2ef expected_input_crc=0949b2ef expected_pixel_crc=dc164346
+sample mode=sse2 phase=serial fixture=lossless_4096 index=0 call_us=249384 gate_us=0 allocate_us=33 scratch_free_us=66387 other_decode_us=182964 verify_us=118413 output_free_us=66544 crc=dc164346 valid=1 status=ok
+fixture mode=sse2 name=alpha_4096 width=4096 height=4096 input_bytes=61358 input_crc=f4c99eaf expected_input_crc=f4c99eaf expected_pixel_crc=4d072be9
+sample mode=sse2 phase=serial fixture=alpha_4096 index=0 call_us=525462 gate_us=0 allocate_us=40 scratch_free_us=83479 other_decode_us=441943 verify_us=118419 output_free_us=67704 crc=4d072be9 valid=1 status=ok
+sample mode=sse2 phase=contended fixture=alpha_4096 index=0 call_us=4241171 gate_us=3280648 allocate_us=51 scratch_free_us=92550 other_decode_us=867922 verify_us=118409 output_free_us=74535 crc=4d072be9 valid=1 status=ok
+sample mode=sse2 phase=contended fixture=alpha_4096 index=1 call_us=526652 gate_us=1 allocate_us=94 scratch_free_us=84760 other_decode_us=441797 verify_us=118444 output_free_us=68741 crc=4d072be9 valid=1 status=ok
+sample mode=sse2 phase=contended fixture=alpha_4096 index=2 call_us=1617023 gate_us=535382 allocate_us=123 scratch_free_us=88634 other_decode_us=992884 verify_us=118565 output_free_us=72067 crc=4d072be9 valid=1 status=ok
+sample mode=sse2 phase=contended fixture=alpha_4096 index=3 call_us=2177198 gate_us=1621635 allocate_us=69 scratch_free_us=84633 other_decode_us=470861 verify_us=118434 output_free_us=68968 crc=4d072be9 valid=1 status=ok
+sample mode=sse2 phase=contended fixture=alpha_4096 index=4 call_us=3265993 gate_us=2185487 allocate_us=156 scratch_free_us=88733 other_decode_us=991617 verify_us=141657 output_free_us=71798 crc=4d072be9 valid=1 status=ok
+sample mode=sse2 phase=contended fixture=alpha_4096 index=5 call_us=5328077 gate_us=4246881 allocate_us=107 scratch_free_us=88877 other_decode_us=992212 verify_us=118430 output_free_us=71120 crc=4d072be9 valid=1 status=ok
+contention mode=sse2 fixture=alpha_4096 workers=6 elapsed_us=5530724 process_cpu_us=7194258 cpu_valid=1 result=0
+mode_result mode=sse2 heap_problems=0 result=0
+build mode=scalar libwebp=1.6.0 compiler=14.2.0 built=Oct 10 2026_16:33:23 cpu=AMD Ryzen 5 6600H with Radeon Graphics          cores=12
+sample mode=scalar phase=warmup fixture=lossy_512 index=0 call_us=5717 gate_us=231 allocate_us=24 scratch_free_us=84 other_decode_us=5378 verify_us=1849 output_free_us=1010 crc=0ba6c4d3 valid=1 status=ok
+fixture mode=scalar name=lossy_512 width=512 height=512 input_bytes=2222 input_crc=95e70621 expected_input_crc=95e70621 expected_pixel_crc=0ba6c4d3
+sample mode=scalar phase=serial fixture=lossy_512 index=0 call_us=4816 gate_us=1 allocate_us=10 scratch_free_us=77 other_decode_us=4728 verify_us=1849 output_free_us=1013 crc=0ba6c4d3 valid=1 status=ok
+sample mode=scalar phase=serial fixture=lossy_512 index=1 call_us=4794 gate_us=0 allocate_us=10 scratch_free_us=80 other_decode_us=4704 verify_us=1854 output_free_us=1011 crc=0ba6c4d3 valid=1 status=ok
+sample mode=scalar phase=serial fixture=lossy_512 index=2 call_us=4760 gate_us=1 allocate_us=9 scratch_free_us=80 other_decode_us=4670 verify_us=1849 output_free_us=1011 crc=0ba6c4d3 valid=1 status=ok
+fixture mode=scalar name=lossless_512 width=512 height=512 input_bytes=180 input_crc=bf8bf0f8 expected_input_crc=bf8bf0f8 expected_pixel_crc=4c7da02a
+sample mode=scalar phase=serial fixture=lossless_512 index=0 call_us=4814 gate_us=0 allocate_us=27 scratch_free_us=1066 other_decode_us=3721 verify_us=2546 output_free_us=1023 crc=4c7da02a valid=1 status=ok
+sample mode=scalar phase=serial fixture=lossless_512 index=1 call_us=9000 gate_us=1 allocate_us=48 scratch_free_us=1145 other_decode_us=7806 verify_us=2561 output_free_us=1006 crc=4c7da02a valid=1 status=ok
+sample mode=scalar phase=serial fixture=lossless_512 index=2 call_us=8812 gate_us=1 allocate_us=92 scratch_free_us=1138 other_decode_us=7581 verify_us=2414 output_free_us=1000 crc=4c7da02a valid=1 status=ok
+fixture mode=scalar name=alpha_512 width=512 height=512 input_bytes=2388 input_crc=ed5c72aa expected_input_crc=ed5c72aa expected_pixel_crc=73f780f5
+sample mode=scalar phase=serial fixture=alpha_512 index=0 call_us=6989 gate_us=1 allocate_us=39 scratch_free_us=1422 other_decode_us=5527 verify_us=1849 output_free_us=1013 crc=73f780f5 valid=1 status=ok
+sample mode=scalar phase=serial fixture=alpha_512 index=1 call_us=6936 gate_us=0 allocate_us=42 scratch_free_us=1410 other_decode_us=5484 verify_us=1850 output_free_us=907 crc=73f780f5 valid=1 status=ok
+sample mode=scalar phase=serial fixture=alpha_512 index=2 call_us=11943 gate_us=0 allocate_us=44 scratch_free_us=1488 other_decode_us=10411 verify_us=2471 output_free_us=1009 crc=73f780f5 valid=1 status=ok
+fixture mode=scalar name=lossy_4096 width=4096 height=4096 input_bytes=55280 input_crc=65f3aafe expected_input_crc=65f3aafe expected_pixel_crc=eb639d27
+sample mode=scalar phase=serial fixture=lossy_4096 index=0 call_us=315488 gate_us=1 allocate_us=38 scratch_free_us=385 other_decode_us=315064 verify_us=118451 output_free_us=67687 crc=eb639d27 valid=1 status=ok
+fixture mode=scalar name=lossless_4096 width=4096 height=4096 input_bytes=6224 input_crc=0949b2ef expected_input_crc=0949b2ef expected_pixel_crc=dc164346
+sample mode=scalar phase=serial fixture=lossless_4096 index=0 call_us=321314 gate_us=1 allocate_us=37 scratch_free_us=66323 other_decode_us=254953 verify_us=118444 output_free_us=66635 crc=dc164346 valid=1 status=ok
+fixture mode=scalar name=alpha_4096 width=4096 height=4096 input_bytes=61358 input_crc=f4c99eaf expected_input_crc=f4c99eaf expected_pixel_crc=4d072be9
+sample mode=scalar phase=serial fixture=alpha_4096 index=0 call_us=509804 gate_us=0 allocate_us=42 scratch_free_us=83585 other_decode_us=426177 verify_us=118407 output_free_us=67788 crc=4d072be9 valid=1 status=ok
+sample mode=scalar phase=contended fixture=alpha_4096 index=0 call_us=1029477 gate_us=2 allocate_us=214 scratch_free_us=89068 other_decode_us=940193 verify_us=118501 output_free_us=71989 crc=4d072be9 valid=1 status=ok
+sample mode=scalar phase=contended fixture=alpha_4096 index=1 call_us=1577388 gate_us=1036570 allocate_us=73 scratch_free_us=84951 other_decode_us=455794 verify_us=118449 output_free_us=69033 crc=4d072be9 valid=1 status=ok
+sample mode=scalar phase=contended fixture=alpha_4096 index=2 call_us=5272798 gate_us=4226917 allocate_us=106 scratch_free_us=89397 other_decode_us=956378 verify_us=118431 output_free_us=71524 crc=4d072be9 valid=1 status=ok
+sample mode=scalar phase=contended fixture=alpha_4096 index=3 call_us=4223624 gate_us=3684017 allocate_us=72 scratch_free_us=84949 other_decode_us=454586 verify_us=118432 output_free_us=68949 crc=4d072be9 valid=1 status=ok
+sample mode=scalar phase=contended fixture=alpha_4096 index=4 call_us=3676154 gate_us=2629319 allocate_us=115 scratch_free_us=89372 other_decode_us=957348 verify_us=118463 output_free_us=72372 crc=4d072be9 valid=1 status=ok
+sample mode=scalar phase=contended fixture=alpha_4096 index=5 call_us=2629024 gate_us=1580412 allocate_us=103 scratch_free_us=92616 other_decode_us=955893 verify_us=118389 output_free_us=74572 crc=4d072be9 valid=1 status=ok
+contention mode=scalar fixture=alpha_4096 workers=6 elapsed_us=5481041 process_cpu_us=7162478 cpu_valid=1 result=0
+mode_result mode=scalar heap_problems=0 result=0
+scalar_child pid=282 wait=282 code=0
+complete scope=full result=0

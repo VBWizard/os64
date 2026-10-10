@@ -5,6 +5,7 @@
 #include "os64/mem.h"
 #include "png/png.h"
 #include "jpeg/jpeg.h"
+#include "webp/webp.h"
 #include "gif.h"
 
 const char *os64_image_status_name(os64_image_status_t status)
@@ -391,6 +392,19 @@ os64_image_status_t os64_image_decode(const uint8_t *data, size_t len,
         if (status == OS64_JPEG_UNSUPPORTED) return OS64_IMAGE_UNSUPPORTED;
         if (status == OS64_JPEG_LIMIT) return OS64_IMAGE_LIMIT;
         if (status == OS64_JPEG_NO_MEMORY) return OS64_IMAGE_NO_MEMORY;
+        return OS64_IMAGE_MALFORMED;
+    }
+
+    if (len >= 12 && os64_memcmp(data, "RIFF", 4) == 0 && os64_memcmp(data + 8, "WEBP", 4) == 0) {
+        os64_webp_image_t image;
+        os64_webp_status_t status = os64_webp_decode(data, len, 0, 0, &image);
+        if (status == OS64_WEBP_OK) {
+            *out = (os64_image_t){image.width, image.height, image.pixels};
+            return OS64_IMAGE_OK;
+        }
+        if (status == OS64_WEBP_UNSUPPORTED) return OS64_IMAGE_UNSUPPORTED;
+        if (status == OS64_WEBP_LIMIT) return OS64_IMAGE_LIMIT;
+        if (status == OS64_WEBP_NO_MEMORY) return OS64_IMAGE_NO_MEMORY;
         return OS64_IMAGE_MALFORMED;
     }
 

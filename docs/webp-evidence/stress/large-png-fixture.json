@@ -1,0 +1,13 @@
+{
+  "rounds": 2,
+  "active_ms": 1000,
+  "idle_ms": 15000,
+  "dimensions": [
+    4096,
+    4096
+  ],
+  "images_per_round": 6,
+  "input_bytes": 76944,
+  "fixture_sha256": "fe4881b0f2b57672d7c0a99f8894701f847323a12313240ce0e11ba4c2c24d4b",
+  "format": "PNG (signature detected despite .webp suffix)"
+}

@@ -1,0 +1,12 @@
+{
+  "rounds": 12,
+  "active_ms": 1000,
+  "idle_ms": 15000,
+  "dimensions": [
+    4096,
+    4096
+  ],
+  "images_per_round": 6,
+  "input_bytes": 61358,
+  "fixture_sha256": "f64cc33da4836ea7ff04399a1c5adf6e248c7c57e686d446c115f5ac25133666"
+}
