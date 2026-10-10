@@ -1,6 +1,7 @@
 // trip.c — a navigation's fetch, run on a worker (trip.h).
 
 #include "trip.h"
+#include "image/image.h"
 #include "os64/gui.h"
 #include "os64/mem.h"
 #include "os64/str.h"
@@ -55,7 +56,7 @@ int64_t yonder_trip_run(void *job, bool (*cancelled)(void *ctx), void *ctx, void
     way_leg_t leg = way_leg_as(trip->session, trip->agent);
     os64_strcopy(leg.referrer, sizeof(leg.referrer), trip->referrer);
     leg.face = (way_face_t){&r, run_confirm, run_cancelled, run_progress};
-    leg.pictures = true;
+    leg.pictures = OS64_IMAGE_ACCEPT;
 
     yonder_verdict_t verdict;
     os64_memset(&verdict, 0, sizeof(verdict));

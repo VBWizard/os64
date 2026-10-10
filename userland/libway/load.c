@@ -384,10 +384,10 @@ bool way_open(way_leg_t *s, const char *url, const os64_page_request_t *request,
     // A PICTURE ASKED FOR BY ITSELF is shown as a browser shows one, on a
     // page of its own, by a face that can; a POST's reply is not, since the
     // face's own fetch of the picture would be a GET of another thing. Only
-    // a kind the face decodes: any other picture is a file to save, as it
-    // always was, not a page showing a broken picture.
-    bool image = !html && !plain && s->pictures && head->method != OS64_FETCH_METHOD_POST &&
-                 way_type_is_picture(type);
+    // a kind the face says it shows: any other picture is a file to save, as
+    // it always was, not a page showing a broken picture.
+    bool image = !html && !plain && head->method != OS64_FETCH_METHOD_POST &&
+                 way_accept_names(s->pictures, type);
     if (!html && !plain && !image) {
         // Not a page at all. Say what it is and how to keep it — unless the
         // reply was to a POST, which a new GET of the address cannot fetch

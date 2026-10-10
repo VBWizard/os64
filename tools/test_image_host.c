@@ -742,6 +742,54 @@ static void test_gif(void)
     ok(img.pixels == NULL, "GIF LZW failure publishes nothing");
 }
 
+// OS64_IMAGE_ACCEPT names what the front door decodes: every type on it has
+// a signature here, and the front door takes that signature for its own
+// (a truncated file of it is MALFORMED, never UNKNOWN_FORMAT). A type added
+// to the list with no decoder behind it, or with no row here, fails.
+static void test_accept(void)
+{
+    static const struct {
+        const char *type;
+        uint8_t magic[8];
+        size_t len;
+    } kinds[] = {
+        {"image/png", {137, 80, 78, 71, 13, 10, 26, 10}, 8},
+        {"image/jpeg", {255, 216}, 2},
+        {"image/pjpeg", {255, 216}, 2},
+        {"image/gif", {'G', 'I', 'F', '8', '9', 'a'}, 6},
+        {"image/bmp", {'B', 'M'}, 2},
+        {"image/x-ms-bmp", {'B', 'M'}, 2},
+        {"image/x-portable-pixmap", {'P', '6'}, 2},
+    };
+    printf("accept (the list is what the front door decodes)\n");
+    const char *at = OS64_IMAGE_ACCEPT;
+    int listed = 0;
+    while (*at != '\0') {
+        while (*at == ' ' || *at == ',')
+            at++;
+        const char *end = at;
+        while (*end != '\0' && *end != ',')
+            end++;
+        size_t n = (size_t)(end - at);
+        int found = 0;
+        for (size_t k = 0; k < sizeof kinds / sizeof kinds[0]; k++) {
+            if (strlen(kinds[k].type) != n || memcmp(kinds[k].type, at, n) != 0)
+                continue;
+            found = 1;
+            os64_image_t img;
+            os64_image_status_t st = os64_image_decode(kinds[k].magic, kinds[k].len, &img);
+            ok(st != OS64_IMAGE_UNKNOWN_FORMAT, kinds[k].type);
+            os64_image_free(&img);
+        }
+        if (n > 0) {
+            listed++;
+            ok(found, "every listed type has a signature row");
+        }
+        at = end;
+    }
+    ok(listed == (int)(sizeof kinds / sizeof kinds[0]), "every signature row is listed");
+}
+
 int main(void)
 {
     printf("libimage + libdraw copy/blend — host tests\n\n");
@@ -750,6 +798,7 @@ int main(void)
     test_blit();
     test_blend();
     test_gif();
+    test_accept();
     printf("\n%d checks, %d failures\n", checks, failures);
     if (failures == 0)
         printf("PASS\n");

@@ -29,6 +29,14 @@ typedef struct os64_image {
                         // os64_malloc'd — release with os64_image_free.
 } os64_image_t;
 
+// The media types os64_image_decode decodes, as an HTTP Accept list: what a
+// face that shows pictures asks for and shows. A format joins it in the same
+// change as its decoder (test_image_host.c, run by tools/test_jpeg_host.py,
+// checks each type's signature is one the front door recognises).
+#define OS64_IMAGE_ACCEPT                                                        \
+    "image/png, image/jpeg, image/pjpeg, image/gif, image/bmp, image/x-ms-bmp, " \
+    "image/x-portable-pixmap"
+
 // Default bound on encoded file bytes for os64_image_load.
 #define OS64_IMAGE_CAP_DEFAULT (20u * 1024u * 1024u)
 

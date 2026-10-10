@@ -666,7 +666,7 @@ static void pictures_are_pages_for_a_face_that_shows_them(void)
         script("pic.test", kPng);
         way_session_t session = {.name="fixture", .agent="fixture", .accept="text/html"};
         way_leg_t leg = way_leg(&session);
-        leg.pictures = pictures != 0;
+        leg.pictures = pictures != 0 ? "image/png, image/gif" : NULL;
         way_opening_t o;
         os64_fetch_status_t why;
         bool opened = way_open(&leg, "http://pic.test/dwm.png", NULL, &o, &why);
@@ -686,17 +686,18 @@ static void pictures_are_pages_for_a_face_that_shows_them(void)
     script("pic.test", "HTTP/1.1 200 OK\r\nContent-Type: image/webp\r\nContent-Length: 3\r\n\r\nWEB");
     way_session_t session = {.name="fixture", .agent="fixture", .accept="text/html"};
     way_leg_t leg = way_leg(&session);
-    leg.pictures = true;
+    leg.pictures = "image/png, image/gif";
     way_opening_t o;
     os64_fetch_status_t why;
     bool opened = way_open(&leg, "http://pic.test/a.webp", NULL, &o, &why);
-    expect("pictures: the judgement is the Accept list's, every type and only whole ones",
-           way_type_is_picture("image/png") && way_type_is_picture("image/pjpeg") &&
-               way_type_is_picture("image/x-portable-pixmap") && !way_type_is_picture("image/webp") &&
-               !way_type_is_picture("image/pn") && !way_type_is_picture("q=0.5") &&
-               !way_type_is_picture(""),
+    static const char kList[] = "image/png, image/x-portable-pixmap;q=0.5,image/gif";
+    expect("pictures: a type is the face's when its list names it whole, parameters aside",
+           way_accept_names(kList, "image/png") && way_accept_names(kList, "image/x-portable-pixmap") &&
+               way_accept_names(kList, "image/gif") && !way_accept_names(kList, "image/webp") &&
+               !way_accept_names(kList, "image/pn") && !way_accept_names(kList, "q=0.5") &&
+               !way_accept_names(kList, "") && !way_accept_names(NULL, "image/png"),
            NULL);
-    expect("pictures: one yonder cannot decode is still a file to save",
+    expect("pictures: one the face does not name is still a file to save",
            !opened && strstr(leg.status, "that is image/webp, not a page") != NULL, leg.status);
     if (opened)
         os64_fetch_close(o.fetch);

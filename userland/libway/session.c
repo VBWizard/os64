@@ -288,12 +288,10 @@ bool way_type_is_json(const char *type)
     return os64_streq(type, "application/json") || ends_with(type, "+json");
 }
 
-// Read from WAY_PICTURE_ACCEPT itself, so what a face asks for and what it
-// is shown as a page are one list.
-bool way_type_is_picture(const char *type)
+bool way_accept_names(const char *list, const char *type)
 {
-    size_t n = os64_strlen(type);
-    for (const char *at = WAY_PICTURE_ACCEPT; *at != '\0';) {
+    size_t n = type != NULL ? os64_strlen(type) : 0;
+    for (const char *at = list != NULL ? list : ""; *at != '\0';) {
         while (*at == ' ' || *at == ',')
             at++;
         const char *end = at;

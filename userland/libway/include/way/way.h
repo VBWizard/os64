@@ -143,11 +143,12 @@ typedef struct {
     // Parser noscript policy for this load, captured by the requesting face.
     // The finished-document loader resumes script stops without executing.
     bool scripting;
-    // The face shows pictures: a picture asked for by itself, of a type
-    // libimage decodes, is a page, WAY_BODY_IMAGE, whose body the face does
-    // not read — it writes the page that shows the picture. Any other
-    // picture, and every one when this is false, is not a page.
-    bool pictures;
+    // The pictures the face shows, as an Accept list of their types (yonder's
+    // is libimage's OS64_IMAGE_ACCEPT), or NULL for none: a picture asked
+    // for by itself, of a type it names, is a page, WAY_BODY_IMAGE, whose
+    // body the face does not read — it writes the page that shows the
+    // picture. Any other picture is not a page.
+    const char *pictures;
     char status[WAY_SENTENCE_MAX];
     // The page this load was asked for from — a link followed, a form sent,
     // a refresh — which its Referer names (way_referrer). Empty for an
@@ -181,14 +182,9 @@ void way_script_cookie(way_jar_t *jar, const char *page_url, const char *text, s
 // ruling 5), and the worker carries only bytes. Each judgement is written
 // once, here, so the two faces cannot drift.
 
-// The picture types libimage decodes (PNG, JPEG, GIF, BMP, PPM), as an
-// Accept list a face that shows pictures adds to its own, and the judgement
-// that a reply of one is a picture to show as a page (WAY_BODY_IMAGE). The
-// judgement reads this list, so the two cannot disagree.
-#define WAY_PICTURE_ACCEPT                                                                   \
-    "image/png;q=0.5, image/jpeg;q=0.5, image/pjpeg;q=0.5, image/gif;q=0.5, image/bmp;q=0.5, " \
-    "image/x-ms-bmp;q=0.5, image/x-portable-pixmap;q=0.5"
-bool way_type_is_picture(const char *type);
+// Whether an Accept-style list ("a/b, c/d;q=0.5") names `type` exactly,
+// parameters aside.
+bool way_accept_names(const char *list, const char *type);
 
 // What a body is, judged from its head. A head that is none of these is not
 // a page: way_open says so and refuses. IMAGE only for a leg whose face shows

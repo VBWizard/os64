@@ -17,6 +17,7 @@
 #include "flow/flow.h"
 #include "garb/cascade.h"
 #include "way/way.h"
+#include "image/image.h"
 #include "os64/os64.h"
 #include "os64/draw.h"
 #include "os64/fmt.h"
@@ -68,7 +69,7 @@ static bool s_dark;
 // What a navigation asks for: a page first, then a picture of a kind yonder
 // shows by itself (YONDER.md § A picture asked for by itself), so a server
 // that chooses by Accept may send one.
-#define YONDER_ACCEPT "text/html, application/xhtml+xml, text/*;q=0.8, " WAY_PICTURE_ACCEPT
+#define YONDER_ACCEPT "text/html, application/xhtml+xml, text/*;q=0.8, " OS64_IMAGE_ACCEPT
 
 // The work pool. A navigation's job is a FETCH (trip.h; the parse is this
 // thread's, DOM_D4.md), so what it declares is one connection's worth of

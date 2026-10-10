@@ -9,7 +9,7 @@
 // Every type libimage decodes, then anything: a server that labels a GIF
 // as text/plain still sent a GIF, and the decoder reads the bytes, not the
 // label.
-#define PICTURE_ACCEPT "image/png, image/jpeg, image/gif, image/bmp, */*;q=0.5"
+#define PICTURE_ACCEPT OS64_IMAGE_ACCEPT ", */*;q=0.5"
 
 // A GIF is opened as a sequence first, and kept as one when it moves; a
 // still one, and every other kind, is decoded whole. The sequence copies
