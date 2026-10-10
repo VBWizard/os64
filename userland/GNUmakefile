@@ -75,7 +75,7 @@ CFLAGS  ?= -g -m64 -ffreestanding -fno-pic -fno-pie -mno-red-zone -msse2 \
            -nostdlib -nostartfiles -nodefaultlibs -masm=intel -Wall -Wextra \
            $(WERROR_FLAG) -MMD -MP \
            -I$(CURDIR)/../abi/include -I$(CURDIR)/libos64/include \
-           -I$(CURDIR)/libhtml/include -I$(CURDIR)/libpage/include -I$(CURDIR)/libflow/include -I$(CURDIR)/libway/include -I$(CURDIR)/libgarb/include -I$(CURDIR)/libgzip/include -I$(CURDIR)/libpng/include -I$(CURDIR)/libimage/include -I$(CURDIR)/libjpeg/include -I$(CURDIR)/libtls/include -I$(CURDIR)/libfetch/include \
+           -I$(CURDIR)/libhtml/include -I$(CURDIR)/libpage/include -I$(CURDIR)/libflow/include -I$(CURDIR)/libway/include -I$(CURDIR)/libgarb/include -I$(CURDIR)/libgzip/include -I$(CURDIR)/libpng/include -I$(CURDIR)/libimage/include -I$(CURDIR)/libjpeg/include -I$(CURDIR)/libwebp/include -I$(CURDIR)/libtls/include -I$(CURDIR)/libfetch/include \
            -I$(CURDIR)/libmath/include -I$(CURDIR)/libjs/include -I$(CURDIR)/libdom/include
 # -z noexecstack: bare-metal objects carry no .note.GNU-stack section (that
 # annotation is a Linux userspace convention), and without the flag ld warns
@@ -224,7 +224,7 @@ LIBFETCH_LDFLAGS := $(SHARED_LIB_LDFLAGS) -soname libfetch.so
 # isolation would miss a hash collision and prelink two objects into the same
 # slot. app_bases.py sorts before probing, so adding a library gives the build
 # one deterministic map independent of link order.
-LIB_BASE_PAIRS := $(shell $(CURDIR)/tools/app_bases.py --libs libos64.so libgzip.so libpng.so libtls.so libjpeg.so libimage.so libfetch.so libhtml.so libpage.so libflow.so libway.so libgarb.so libfreetype.so libmath.so libjs.so libdom.so)
+LIB_BASE_PAIRS := $(shell $(CURDIR)/tools/app_bases.py --libs libos64.so libgzip.so libpng.so libtls.so libjpeg.so libwebp.so libimage.so libfetch.so libhtml.so libpage.so libflow.so libway.so libgarb.so libfreetype.so libmath.so libjs.so libdom.so)
 LIB_SLOT_SIZE  := $(shell $(CURDIR)/tools/app_bases.py --lib-slot-size)
 LIBOS64_BASE   := $(patsubst libos64.so=%,%,$(filter libos64.so=%,$(LIB_BASE_PAIRS)))
 LIBGZIP_BASE   := $(patsubst libgzip.so=%,%,$(filter libgzip.so=%,$(LIB_BASE_PAIRS)))
@@ -357,6 +357,7 @@ $(foreach p,$(APP_BASE_PAIRS),\
 include libtls/foundation.mk
 include libtls/shared.mk
 include libjpeg/shared.mk
+include libwebp/shared.mk
 include libfreetype/shared.mk
 include libmath/shared.mk
 include libimage/shared.mk
@@ -370,10 +371,10 @@ include libdom/library.mk
 include apps/js/runner.mk
 
 # Source membership and the population used for prelink placement live here.
-$(LIBOS64_SO) $(LIBGZIP_SO) $(LIBPNG_SO) $(LIBTLS_SO) $(LIBJPEG_SO) $(LIBIMAGE_SO) $(LIBFETCH_SO) $(LIBHTML_SO) $(LIBPAGE_SO) $(LIBFLOW_SO) $(LIBWAY_SO) $(LIBGARB_SO) $(LIBFREETYPE_SO) $(LIBMATH_SO): GNUmakefile
+$(LIBOS64_SO) $(LIBGZIP_SO) $(LIBPNG_SO) $(LIBTLS_SO) $(LIBJPEG_SO) $(LIBWEBP_SO) $(LIBIMAGE_SO) $(LIBFETCH_SO) $(LIBHTML_SO) $(LIBPAGE_SO) $(LIBFLOW_SO) $(LIBWAY_SO) $(LIBGARB_SO) $(LIBFREETYPE_SO) $(LIBMATH_SO): GNUmakefile
 
 .PHONY: all
-all: $(LIBHTML_SO) $(LIBPAGE_SO) $(LIBFLOW_SO) $(LIBWAY_SO) $(LIBGARB_SO) $(LIBJPEG_SO) $(LIBFREETYPE_SO) $(LIBMATH_SO) $(LIBIMAGE_SO) $(LIBOS64_SO) $(LIBGZIP_SO) $(LIBPNG_SO) $(LIBTLS_SO) $(LIBFETCH_SO) $(addprefix $(BIN)/,$(APPS)) $(addprefix $(TESTBIN)/,$(TESTS)) \
+all: $(LIBHTML_SO) $(LIBPAGE_SO) $(LIBFLOW_SO) $(LIBWAY_SO) $(LIBGARB_SO) $(LIBJPEG_SO) $(LIBWEBP_SO) $(LIBFREETYPE_SO) $(LIBMATH_SO) $(LIBIMAGE_SO) $(LIBOS64_SO) $(LIBGZIP_SO) $(LIBPNG_SO) $(LIBTLS_SO) $(LIBFETCH_SO) $(addprefix $(BIN)/,$(APPS)) $(addprefix $(TESTBIN)/,$(TESTS)) \
      $(addprefix $(BIN)/,$(APP_ALIASES)) $(BIN)/app_bases.gdb
 
 $(BIN)/[: $(BIN)/test
@@ -466,6 +467,8 @@ $(LIBFETCH_SO): $(LIBFETCH_OBJS) $(LIBTLS_SO) $(LIBGZIP_SO) $(LIBOS64_SO) $(CURD
 define APP_RULE
 APP_OBJS_$(1) := $(patsubst %.c,$(OBJ)/%.c.o,$(wildcard $(2)/$(1)/*.c))
 APP_EXTRA_OBJS_$(1) := $(if $(filter $(1),$(PAGER_APPS)),$(PAGER_OBJ)) \
+                       $(if $(filter $(1),webpbench),$(OBJ)/webp-bench-sse2/decoder.o) \
+                       $(if $(filter $(1),webpbenchscalar),$(OBJ)/webp-bench-scalar/decoder.o) \
                        $(if $(filter $(1),fonttest),$(OBJ)/freetype/libfreetype/port/runtime.c.o $(OBJ)/freetype/libfreetype/port/nonlocal.S.o) \
                        $(if $(filter $(1),$(HEX_BUFFER_APPS)),$(HEX_BUFFER_OBJ)) \
                        $(if $(filter $(1),$(TAR_FORMAT_PROGRAMS)),$(TAR_FORMAT_OBJ)) \
@@ -482,8 +485,9 @@ APP_EXTRA_LIBS_$(1) := $(if $(filter $(1),htmltest wend pagetest flowdump yonder
                        $(if $(filter $(1),$(LIBWAY_PROGRAMS)),$(LIBWAY_SO)) \
                        $(if $(filter $(1),$(LIBGARB_PROGRAMS)),$(LIBGARB_SO)) \
                        $(if $(filter $(1),$(LIBPAGE_PROGRAMS)),$(LIBPAGE_SO)) \
-                       $(if $(filter $(1),gview desktop jpegtest giftest yonder),$(LIBIMAGE_SO)) \
+                       $(if $(filter $(1),gview desktop jpegtest webptest giftest yonder),$(LIBIMAGE_SO)) \
                        $(if $(filter $(1),jpegtest),$(LIBJPEG_SO)) \
+                       $(if $(filter $(1),webptest),$(LIBWEBP_SO)) \
                        $(if $(filter $(1),fonttest texttest flowdump yonder),$(LIBFREETYPE_SO)) \
                        $(if $(filter $(1),js),$(LIBJS_SO)) \
                        $(if $(filter $(1),mathtest yonder),$(LIBMATH_SO)) \
@@ -511,7 +515,7 @@ $(foreach t,$(TESTS),$(eval $(call APP_RULE,$(t),tests,$(TESTBIN))))
 # FIXTURES ARE IN HERE TOO, and that is the point of the line rather than an
 # afterthought: a fixture is the program you are most likely to be single-
 # stepping, because it is what you reach for when something is already broken.
-$(BIN)/app_bases.gdb: $(LIBHTML_SO) $(LIBPAGE_SO) $(LIBFLOW_SO) $(LIBWAY_SO) $(LIBGARB_SO) $(LIBJPEG_SO) $(LIBFREETYPE_SO) $(LIBMATH_SO) $(LIBJS_SO) $(LIBIMAGE_SO) $(addprefix $(BIN)/,$(APPS)) $(addprefix $(TESTBIN)/,$(TESTS)) $(LIBOS64_SO) $(LIBGZIP_SO) $(LIBPNG_SO) $(LIBTLS_SO) $(LIBFETCH_SO)
+$(BIN)/app_bases.gdb: $(LIBHTML_SO) $(LIBPAGE_SO) $(LIBFLOW_SO) $(LIBWAY_SO) $(LIBGARB_SO) $(LIBJPEG_SO) $(LIBWEBP_SO) $(LIBFREETYPE_SO) $(LIBMATH_SO) $(LIBJS_SO) $(LIBIMAGE_SO) $(addprefix $(BIN)/,$(APPS)) $(addprefix $(TESTBIN)/,$(TESTS)) $(LIBOS64_SO) $(LIBGZIP_SO) $(LIBPNG_SO) $(LIBTLS_SO) $(LIBFETCH_SO)
 	@mkdir -p "$(BIN)"
 	@printf '# GENERATED by userland/GNUmakefile — do not edit.\n' > $@
 	@printf '# Every program at its own base, so GDB can hold all their symbols at once.\n' >> $@
@@ -534,6 +538,7 @@ $(BIN)/app_bases.gdb: $(LIBHTML_SO) $(LIBPAGE_SO) $(LIBFLOW_SO) $(LIBWAY_SO) $(L
 	@printf 'add-symbol-file %s\n' "$(LIBPNG_SO)" >> $@
 	@printf 'add-symbol-file %s\n' "$(LIBTLS_SO)" >> $@
 	@printf 'add-symbol-file %s\n' "$(LIBJPEG_SO)" >> $@
+	@printf 'add-symbol-file %s\n' "$(LIBWEBP_SO)" >> $@
 	@printf 'add-symbol-file %s\n' "$(LIBFREETYPE_SO)" >> $@
 	@printf 'add-symbol-file %s\n' "$(LIBMATH_SO)" >> $@
 	@printf 'add-symbol-file %s\n' "$(LIBJS_SO)" >> $@

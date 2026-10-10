@@ -1,0 +1,1 @@
+{ global: os64_webp_decode; os64_webp_free; os64_webp_status_name; os64_webp_license; local: *; };

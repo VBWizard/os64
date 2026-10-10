@@ -1,9 +1,9 @@
 # WebP import and characterization
 
-Recorded 2026-10-10. This completes the import/characterization milestone of
-[the WebP design](../design/pending/WEBP.md). No browser or image-decoder
-dispatch has changed. The bounded public wrapper and guest integration remain
-to be implemented.
+Recorded 2026-10-10. This report covers the import/characterization milestone of
+[the WebP design](../design/pending/WEBP.md). The subsequent bounded wrapper,
+consumer integration and guest results are recorded in
+[integration.md](integration.md).
 
 ## Pin and source audit
 
@@ -34,16 +34,17 @@ permitted in scalar x86-64 code.
 Relocatable linking leaves orphan undefined symbol-table entries from discarded
 functions, including an encoder palette helper. The audit strips unreferenced
 entries before checking imports; relocation-required symbols remain. This
-is an audit of the decoder core, not the future shared-library ABI or image
-packaging.
+is an audit of the decoder core; the shared-library ABI and image packaging
+are checked separately in [integration.md](integration.md).
 
 The core uses synchronous worker callbacks with threading disabled. DSP
 function pointers and initialization guards remain writable shared state.
 Examples include `VP8DspInit`, `VP8LDspInit`, `VP8FiltersInit`, sampler,
 upsampler, alpha and rescaler initialization, and private `InitGetCoeffs`.
 The fixed CPU callback avoids CPU probing; it does not make these writes safe
-under concurrent calls. The wrapper must implement the design's serialized
-decode context before exposing the decoder to workers.
+under concurrent calls. The bounded wrapper described in
+[integration.md](integration.md) serializes the decoder context and cleanup
+before exposing the decoder to workers.
 
 ## Host measurements
 
@@ -159,7 +160,8 @@ disabled.
 
 This milestone does not establish malformed-container rejection, allocation
 failure cleanup, concurrent wrapper behavior, public ABI/notice installation,
-QEMU rendering or real-hardware speed. Those acceptance checks remain in the
-design. In particular, host scalar/SSE2 agreement is not an independent
-decoder oracle for lossy pixel correctness. The P5 comparison and waiting-
-worker CPU/latency measurements still require guest execution.
+QEMU rendering or real-hardware speed. The subsequent
+[integration](integration.md), [P5 benchmark](p5-benchmark.md), and
+[browser stress](stress.md) reports supply evidence beyond this import
+milestone and identify the remaining measurements. Host scalar/SSE2 agreement
+alone is not an independent decoder oracle for lossy pixel correctness.

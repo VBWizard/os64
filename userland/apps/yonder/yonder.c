@@ -3028,7 +3028,7 @@ static bool picture_moves_page(const Page *p, int32_t pic)
 }
 
 // A picture that will not be shown, on the page's record by its address:
-// a format yonder does not decode is asked for and not had, MISSING image
+// an unsupported format or variant is asked for and not had, MISSING image
 // <format>, with the address on a plain line; one that could not be asked
 // for (`asked`, the reason), would not fetch, came with an error the
 // server answered, or would not decode is FAILED picture.
@@ -3040,7 +3040,10 @@ static void picture_failed(Page *p, const char *url, const yonder_picture_t *pro
         yonder_diag_missing(p->diag, "image", product->format, 1);
         char key[OS64_FETCH_URL_MAX + 16];
         os64_snprintf(key, sizeof(key), "picture %s", url);
-        os64_snprintf(why, sizeof(why), "%s, which yonder does not decode", product->format);
+        if (product->why[0])
+            os64_snprintf(why, sizeof(why), "%s, %s", product->format, product->why);
+        else
+            os64_snprintf(why, sizeof(why), "%s, which yonder does not decode", product->format);
         yonder_diag_fact(p->diag, key, why);
     } else {
         os64_strcopy(why, sizeof(why), asked != NULL ? asked : product == NULL ? "no memory to fetch it" :

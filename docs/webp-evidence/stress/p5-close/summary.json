@@ -1,0 +1,18 @@
+{
+  "stable_samples": 30,
+  "torn_samples_skipped": 5,
+  "peak_live": 310680416,
+  "peak_mapped": 311767040,
+  "final_live": 0,
+  "final_mapped": 1048576,
+  "exit_us": 7274072,
+  "bursts": [
+    {
+      "start_us": 1430963,
+      "peak_live": 310680416,
+      "drained_us": 7071945,
+      "idle_live": 0
+    }
+  ],
+  "navigation": []
+}

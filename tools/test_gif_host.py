@@ -210,7 +210,7 @@ def guest_vectors(work, destination):
 def run(work, vectors=None, optimization='2'):
     sources = ['userland/libimage/image.c', 'userland/libimage/gif.c', 'tools/test_gif_host.c']
     includes = ['userland/libimage/include', 'userland/libos64/include', 'userland/libpng/include',
-                'userland/libjpeg/include', 'abi/include']
+                'userland/libjpeg/include', 'userland/libwebp/include', 'abi/include']
     subprocess.run(['cc', '-std=c11', '-O'+optimization, '-g', '-Wall', '-Wextra', '-Werror',
                     '-fsanitize=address,undefined', '-fno-sanitize-recover=all', '-fno-pie', '-no-pie',
                     *['-I'+str(ROOT/p) for p in includes], *[str(ROOT/p) for p in sources],

@@ -1,0 +1,12 @@
+address: http://fixture.test:8093/idle-04.html
+verdict: clean
+script http://fixture.test:8093/idle-04.html#inline-1: ran
+bytes: 278
+status: 200 OK
+final address: http://fixture.test:8093/idle-04.html
+arrived after: 28 ms
+laid out at: 826 px in 0 ms
+written: when the page was left
+pictures: 0, 0 shown, 0 could not be read, 0 past the memory kept, 0 still coming, 0 not asked for
+sheets: 1, 1 ready
+script http://fixture.test:8093/idle-04.html#timer-1: ran

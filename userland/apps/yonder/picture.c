@@ -7,7 +7,7 @@
 #include "os64/slurp.h"
 #include "os64/str.h"
 
-// Every type libimage decodes, then anything: a server that labels a GIF
+// Negotiated image types, then anything: a server that labels a GIF
 // as text/plain still sent a GIF, and the decoder reads the bytes, not the
 // label.
 #define PICTURE_ACCEPT OS64_IMAGE_ACCEPT ", */*;q=0.5"
@@ -39,7 +39,13 @@ static os64_image_status_t decode(const uint8_t *bytes, size_t len, yonder_pictu
     p->cost = (size_t)p->image.width * p->image.height * 4u;
     if (st == OS64_IMAGE_UNKNOWN_FORMAT)
         p->format = yonder_diag_image_format(bytes, len);
-    else if (st != OS64_IMAGE_OK)
+    else if (st == OS64_IMAGE_UNSUPPORTED && len >= 12 &&
+             os64_memcmp(bytes, "RIFF", 4) == 0 && os64_memcmp(bytes + 8, "WEBP", 4) == 0)
+        p->format = "webp";
+    if (st == OS64_IMAGE_UNSUPPORTED && p->format && os64_strcmp(p->format, "webp") == 0 &&
+        len >= 30 && os64_memcmp(bytes + 12, "VP8X", 4) == 0 && (bytes[20] & 2))
+        os64_strcopy(p->why, sizeof(p->why), "animated");
+    else if (st != OS64_IMAGE_OK && st != OS64_IMAGE_UNKNOWN_FORMAT)
         os64_snprintf(p->why, sizeof(p->why), "would not decode (%s)", os64_image_status_name(st));
     return st;
 }

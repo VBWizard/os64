@@ -8,6 +8,7 @@
 #include "image/image.h"
 #include "png/png.h"
 #include "jpeg/jpeg.h"
+#include "webp/webp.h"
 #include "os64/slurp.h"
 
 static size_t live, attempts, fail_at, largest;
@@ -27,6 +28,8 @@ void *os64_memset(void *d, int c, size_t n) { return memset(d,c,n); }
 os64_png_status_t os64_png_decode(const uint8_t *p, size_t n, uint64_t c, os64_png_image_t *o)
 { (void)p; (void)n; (void)c; (void)o; abort(); }
 os64_jpeg_status_t os64_jpeg_decode(const uint8_t *p, size_t n, uint64_t c, size_t m, os64_jpeg_image_t *o)
+{ (void)p; (void)n; (void)c; (void)m; (void)o; abort(); }
+os64_webp_status_t os64_webp_decode(const uint8_t *p, size_t n, uint64_t c, size_t m, os64_webp_image_t *o)
 { (void)p; (void)n; (void)c; (void)m; (void)o; abort(); }
 os64_slurp_status_t os64_slurp(const char *p, size_t c, uint8_t **o, size_t *n)
 { (void)p; (void)c; (void)o; (void)n; abort(); }

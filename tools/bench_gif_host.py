@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def run(args, work):
     includes = ['tools', 'userland/libimage', 'userland/libimage/include',
                 'userland/libos64/include', 'userland/libpng/include',
-                'userland/libjpeg/include', 'abi/include']
+                'userland/libjpeg/include', 'userland/libwebp/include', 'abi/include']
     flags = ['cc', '-std=c11', '-g', '-Wall', '-Wextra', '-Werror', '-fno-builtin',
              '-fPIC', *['-I'+str(ROOT/p) for p in includes]]
     objects = []

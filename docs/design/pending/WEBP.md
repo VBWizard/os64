@@ -1,7 +1,8 @@
 # WebP decoding for os64
 
-Status: decoder import and host characterization complete, 2026-10-10.
-The bounded wrapper and consumer integration remain to be implemented.
+Status: still-image wrapper and consumer integration implemented, 2026-10-10.
+See [integration evidence](../../webp-evidence/integration.md) for validation
+and remaining real-hardware measurements. Animation remains a separate slice.
 
 Port the decoder portion of WebM's libwebp behind an Os64-owned interface
 in `libwebp.so`. Add format dispatch to `libimage.so`, so Yonder, gview,
@@ -89,9 +90,11 @@ The wrapper first validates the declared RIFF extent and walks its chunks
 with checked size and padding arithmetic. It requires complete chunk headers,
 payloads, and odd-length padding within that extent, including chunks after
 the raster. Bytes following a complete declared RIFF extent are ignored;
-they remain counted against the encoded-input cap. Pass only the declared
-extent to upstream. Bare VP8/VP8L payloads, which some upstream APIs accept,
-are outside our file API.
+they remain counted against the encoded-input cap. After validation, borrow
+the reconstruction span within that extent for upstream's internal ALPH+VP8
+or VP8(L) reader. This avoids a copy and prevents ignored metadata or future
+VP8X extension fields from becoming decoder restrictions. Bare VP8/VP8L
+payloads remain outside our public file API.
 
 Validate the still-image structure against the
 [WebP container specification](https://developers.google.com/speed/webp/docs/riff_container):
@@ -104,7 +107,9 @@ second pixel decoder.
 
 Recognized animation is refused after checking outer chunk framing; its
 compressed frames are not validated by the still decoder. Structurally
-inconsistent animation flags/chunks are malformed. Do not claim that an
+inconsistent required animation structure is malformed. An `ANIM` chunk with
+the animation flag clear is ignored, as the container specification requires.
+Do not claim that an
 `UNSUPPORTED` result proves the file would play correctly elsewhere.
 
 Use `WebPGetFeatures` and the advanced decoder interface to retain explicit

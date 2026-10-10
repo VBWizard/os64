@@ -1,0 +1,20 @@
+memphase mode=heap pages=touch workers=6 bytes=67108864 rounds=3
+worker=0 round=0 allocate_us=222 touch_us=790485 release_us=18216095
+worker=0 round=1 allocate_us=4788966 touch_us=10199829 release_us=18491466
+worker=0 round=2 allocate_us=19164008 touch_us=10954507 release_us=5869317
+worker=1 round=0 allocate_us=1279 touch_us=738775 release_us=23055630
+worker=1 round=1 allocate_us=235 touch_us=10282361 release_us=9154099
+worker=1 round=2 allocate_us=166 touch_us=10404538 release_us=13148183
+worker=2 round=0 allocate_us=542 touch_us=842613 release_us=13550179
+worker=2 round=1 allocate_us=529 touch_us=10829265 release_us=8295504
+worker=2 round=2 allocate_us=338 touch_us=10878109 release_us=27253484
+worker=3 round=0 allocate_us=274 touch_us=919496 release_us=27775629
+worker=3 round=1 allocate_us=4813288 touch_us=11904090 release_us=11783100
+worker=3 round=2 allocate_us=126 touch_us=13889798 release_us=11467688
+worker=4 round=0 allocate_us=215 touch_us=708578 release_us=4645338
+worker=4 round=1 allocate_us=9039535 touch_us=11494696 release_us=12594304
+worker=4 round=2 allocate_us=162 touch_us=11055954 release_us=12393848
+worker=5 round=0 allocate_us=741 touch_us=876526 release_us=8924203
+worker=5 round=1 allocate_us=13994405 touch_us=10502772 release_us=13572626
+worker=5 round=2 allocate_us=130 touch_us=10983657 release_us=17963857
+elapsed_us=88475967 heap_problems=0 result=0
