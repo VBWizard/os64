@@ -30,6 +30,7 @@ struct os64_fetch {
     os64_fetch_options_t opt;
     char user_agent[OS64_FETCH_AGENT_MAX];
     char accept[OS64_FETCH_ACCEPT_MAX];
+    char accept_get[OS64_FETCH_ACCEPT_MAX];     // empty: `accept` on a GET too
     char extra[OS64_FETCH_EXTRA_MAX];
     char content_type[OS64_FETCH_CONTENT_TYPE_MAX];
     os64_fetch_method_t method; // current request; opt.method is the initial method
@@ -541,9 +542,11 @@ static os64_fetch_status_t ask(os64_fetch_t *f)
         }
         if (f->opt.headers_for && cancelled(f))
             return OS64_FETCH_INTERRUPTED;
+        const char *accept = f->method == OS64_FETCH_METHOD_GET && f->accept_get[0] ? f->accept_get
+                                                                                     : f->accept;
         http_request_extras_t extras = {
             .user_agent    = f->user_agent[0] ? f->user_agent : NULL,
-            .accept        = f->accept[0] ? f->accept : NULL,
+            .accept        = accept[0] ? accept : NULL,
             .extra_headers = extraForHop[0] ? extraForHop : NULL,
             .method = f->method == OS64_FETCH_METHOD_POST ? HTTP_METHOD_POST : HTTP_METHOD_GET,
             .body_len = f->method == OS64_FETCH_METHOD_POST ? f->opt.body_len : 0,
@@ -1016,6 +1019,8 @@ os64_fetch_t *os64_fetch_open(const char *url, const os64_fetch_options_t *opt)
          os64_strcopy(f->user_agent, sizeof(f->user_agent), opt->user_agent) >= sizeof(f->user_agent)) ||
         (opt && opt->accept &&
          os64_strcopy(f->accept, sizeof(f->accept), opt->accept) >= sizeof(f->accept)) ||
+        (opt && opt->accept_get &&
+         os64_strcopy(f->accept_get, sizeof(f->accept_get), opt->accept_get) >= sizeof(f->accept_get)) ||
         (opt && opt->content_type &&
          os64_strcopy(f->content_type, sizeof(f->content_type), opt->content_type) >= sizeof(f->content_type)) ||
         (opt && opt->extra_headers &&
@@ -1035,7 +1040,9 @@ os64_fetch_t *os64_fetch_open(const char *url, const os64_fetch_options_t *opt)
         .body_len = f->opt.body_len,
         .content_type = f->content_type[0] ? f->content_type : NULL,
     };
-    if (!http_request_extras_ok(&extras)) {
+    http_request_extras_t get_extras = extras;
+    get_extras.accept = f->accept_get[0] ? f->accept_get : NULL;
+    if (!http_request_extras_ok(&extras) || !http_request_extras_ok(&get_extras)) {
         os64_strcopy(f->detail.why, sizeof(f->detail.why),
                      "a request header is malformed or reserved by libfetch");
         f->status = OS64_FETCH_REQUEST_FAILED;

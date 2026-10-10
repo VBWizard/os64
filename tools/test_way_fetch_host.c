@@ -721,6 +721,27 @@ static void pictures_are_pages_for_a_face_that_shows_them(void)
                aopened && (post ? pages_only && !asked : asked && !pages_only), ask_leg.status);
     }
     {
+        // A POST a 303 turns into a GET asks for the pictures from there on.
+        fresh();
+        script("pic.test", "HTTP/1.1 303 See Other\r\nLocation: /done\r\nContent-Length: 0\r\n\r\n");
+        script("pic.test", "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 2\r\n\r\nok");
+        static way_session_t hop_session = {.name="fixture", .agent="fixture", .accept="text/html"};
+        way_leg_t hop_leg = way_leg(&hop_session);
+        hop_leg.pictures = "image/png, image/gif";
+        os64_page_request_t request = {.method = OS64_PAGE_METHOD_POST, .body = "a=1", .body_len = 3,
+                                       .content_type = "application/x-www-form-urlencoded"};
+        way_opening_t ho;
+        os64_fetch_status_t hwhy;
+        bool hopened = way_open(&hop_leg, "http://pic.test/form", &request, &ho, &hwhy);
+        if (hopened)
+            os64_fetch_close(ho.fetch);
+        bool asked = false;
+        for (int k = 0; k < 8; k++)
+            asked |= strstr(s_last_request[k], "GET /done") != NULL &&
+                     strstr(s_last_request[k], "Accept: text/html, image/png;q=0.5, image/gif;q=0.5\r\n") != NULL;
+        expect("pictures: a POST redirected to a GET asks for them on the GET", hopened && asked, hop_leg.status);
+    }
+    {
         char out[40];
         expect("accept: a picture type that would not fit is left off whole",
                strcmp(way_accept_compose("text/html", "image/png, image/x-portable-pixmap", out, sizeof(out)),

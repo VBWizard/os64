@@ -347,11 +347,14 @@ bool way_open(way_leg_t *s, const char *url, const os64_page_request_t *request,
     os64_fetch_options_t opt = {0};
     opt.user_agent = s->agent;
     // Pictures are asked for only on a GET: a POST's reply is never shown as
-    // a picture (below), so advertising one would invite a reply refused.
+    // a picture (below), so advertising one would invite a reply refused. A
+    // POST a redirect turns into a GET asks for them from there on.
     bool posting = request != NULL && request->method == OS64_PAGE_METHOD_POST;
-    char accept[OS64_FETCH_ACCEPT_MAX];
-    opt.accept = way_accept_compose(s->session->accept, posting ? NULL : s->pictures, accept,
-                                    sizeof(accept));
+    char accept[OS64_FETCH_ACCEPT_MAX], accept_get[OS64_FETCH_ACCEPT_MAX];
+    way_accept_compose(s->session->accept, s->pictures, accept_get, sizeof(accept_get));
+    opt.accept = posting ? way_accept_compose(s->session->accept, NULL, accept, sizeof(accept))
+                         : accept_get;
+    opt.accept_get = accept_get;
     opt.max_body = limits.max_bytes;     // the same page, the same cap
     opt.cancelled = fetch_cancelled;
     opt.on_hop = hop_ask;
