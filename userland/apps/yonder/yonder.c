@@ -437,6 +437,7 @@ typedef struct Page {
     // next picture to hand it.
     int32_t waiting, in_flight, next_pic;
     int32_t not_kept;
+    int32_t unasked;                // pictures refused before the table (picture_unasked)
     size_t kept_bytes, picture_url_bytes;
     // The form whose reply this is, when the reply was to a POST: what
     // Reload sends again. Its url is NULL otherwise.
@@ -1359,14 +1360,21 @@ static void diag_observe(Page *p, const char *when)
     char v[128];
     yonder_diag_fact(d, "written", when);
     if (p->tree != NULL && flow_incomplete(p->tree))
-        yonder_diag_failed(d, "layout", "the layout stopped partway (INCOMPLETE on the status line)");
-    int32_t shown = 0, failed = 0;
+        yonder_diag_failed_seen(d, "layout", "the layout stopped partway (INCOMPLETE on the status line)");
+    // `still coming`: asked for and not yet in, which is what a page left
+    // before its pictures arrived leaves; `not asked for`: refused before
+    // the table (picture_unasked).
+    int32_t shown = 0, failed = 0, coming = 0;
     for (int32_t i = 0; i < p->npics; i++) {
         shown += p->pics[i].state == PIC_SHOWN;
         failed += p->pics[i].state == PIC_FAILED;
+        coming += p->pics[i].state == PIC_WAITING || p->pics[i].state == PIC_QUEUED;
     }
-    os64_snprintf(v, sizeof(v), "%d, %d shown, %d could not be read, %d past the memory kept",
-                  (int)p->npics, (int)shown, (int)failed, (int)p->not_kept);
+    os64_snprintf(v, sizeof(v),
+                  "%d, %d shown, %d could not be read, %d past the memory kept, %d still coming, "
+                  "%d not asked for",
+                  (int)p->npics, (int)shown, (int)failed, (int)p->not_kept, (int)coming,
+                  (int)p->unasked);
     yonder_diag_fact(d, "pictures", v);
     os64_snprintf(v, sizeof(v), "%d, %d ready", (int)p->nsheets, (int)p->sheets_ready);
     yonder_diag_fact(d, "sheets", v);
@@ -2813,6 +2821,9 @@ static void css_pictures(Page *p)
     }
 }
 
+static void picture_unasked(Page *p, const os64_page_ref_t *src, const os64_html_node_t *node,
+                            const char *attr);
+
 // Gathers the page's pictures and the pictures behind its boxes, one per
 // address, in tree order — libpage's lists are the record — and starts
 // feeding them to the pool. A picture whose address was refused, or names
@@ -2846,11 +2857,17 @@ static void pictures_start(Page *p)
         const os64_page_image_t *img = os64_page_image(model, i);
         int32_t k = picture_for(p, img->src.url);
         p->pic_of[i] = k;
+        if (k < 0)
+            picture_unasked(p, &img->src, img->node, "src");
         if (k >= 0 && !picture_sized(p, img->node))
             p->pics[k].moves = true;
     }
-    for (int32_t i = 0; i < nb; i++)
-        p->bg_of[i] = picture_for(p, os64_page_background(model, i)->src.url);
+    for (int32_t i = 0; i < nb; i++) {
+        const os64_page_background_t *bg = os64_page_background(model, i);
+        p->bg_of[i] = picture_for(p, bg->src.url);
+        if (p->bg_of[i] < 0)
+            picture_unasked(p, &bg->src, bg->node, "background");
+    }
     pictures_feed(p);
 }
 
@@ -2864,6 +2881,50 @@ static void pictures_leave(Page *p)
             os64_work_cancel(g.pool, p->pics[i].id);
     p->waiting = p->in_flight = 0;
     p->next_pic = p->npics;
+}
+
+// A picture the page names that never reaches the table, on the record:
+// an address libpage refused is FAILED picture, as written, with the
+// refusal; one in a scheme nothing here fetches (a `data:` picture) is
+// MISSING picture-scheme, counted, since its address is the picture
+// itself; one past what a page may name, or with no memory to hold it, is
+// FAILED picture by its address.
+static void picture_unasked(Page *p, const os64_page_ref_t *src, const os64_html_node_t *node,
+                            const char *attr)
+{
+    if (p->diag == NULL)
+        return;
+    p->unasked++;
+    char line[OS64_FETCH_URL_MAX + 96];
+    if (src->url == NULL) {
+        const os64_html_attr_t *a = node != NULL ? os64_html_attr(node, attr) : NULL;
+        os64_snprintf(line, sizeof(line), "%.256s: the address was refused (%s)",
+                      a != NULL && a->value != NULL ? a->value : "(no address)",
+                      os64_page_reason_name(src->refused));
+        yonder_diag_failed(p->diag, "picture", line);
+    } else {
+        // The scheme as written: a `data:` address is no URL the parser
+        // takes, and is the case most worth counting.
+        char scheme[16];
+        size_t n = 0;
+        while (src->url[n] != '\0' && src->url[n] != ':' && n + 1 < sizeof(scheme)) {
+            scheme[n] = src->url[n];
+            n++;
+        }
+        scheme[n] = '\0';
+        bool fetched = src->url[n] == ':' &&
+                       (os64_streq(scheme, "http") || os64_streq(scheme, "https") ||
+                        os64_streq(scheme, "file"));
+        if (!fetched) {
+            yonder_diag_missing(p->diag, "picture-scheme", src->url[n] == ':' ? scheme : "unnamed", 1);
+        } else {
+            os64_snprintf(line, sizeof(line), "%s: past the pictures a page may name, or no memory",
+                          src->url);
+            yonder_diag_failed(p->diag, "picture", line);
+        }
+    }
+    if (p == &g.page)
+        badge_follow();
 }
 
 // The workers stopped (g.pool is gone) with pictures still out: each one

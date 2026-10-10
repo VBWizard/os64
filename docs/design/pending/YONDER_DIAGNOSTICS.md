@@ -148,7 +148,7 @@ Reload, so this is the departure write):
     arrived after: 271 ms
     laid out at: 828 px in 70 ms
     written: when the page was left
-    pictures: 0, 0 shown, 0 could not be read, 0 past the memory kept
+    pictures: 0, 0 shown, 0 could not be read, 0 past the memory kept, 0 still coming, 0 not asked for
     sheets: 1, 1 ready
     script file:///tests/pages/diag.html#timer-1: failed
 
@@ -348,5 +348,12 @@ each was a page dying on something that browsers have had since the 2000s.
   it`, `the workers would not take it`), and one past the memory a page's
   pictures may keep is named on a plain line, since that is a limit kept
   and not a failure. A body yonder had no memory to hold reads `did not
-  fetch (no-memory)`, never `(ok)`. suckless.org's logo is an SVG; that
+  fetch (no-memory)`, never `(ok)`. A picture the page names that never
+  reaches the table is on the record too: an address libpage refused is
+  `FAILED picture` as written, with the refusal, and one in a scheme
+  nothing here fetches is `MISSING picture-scheme data`, counted. The
+  `pictures:` line counts those (`not asked for`) and the ones a page left
+  before they arrived (`still coming`). A layout that stopped partway is a
+  condition, so it is one `FAILED layout` however often the file is
+  written (`yonder_diag_failed_seen`). suckless.org's logo is an SVG; that
   is its "1 of 2".

@@ -3251,7 +3251,7 @@ static void diag_picture_case(void) {
     char text[4096]; yonder_diag_render(g.page.diag,text,sizeof(text));
     const char *file=diag_file("/tmp/diag",name);
     check(g.page.waiting==0 && has(file,"\nwritten: when its pictures were in\n") &&
-        has(file,"\npictures: 5, 0 shown, 5 could not be read, 0 past the memory kept\n") &&
+        has(file,"\npictures: 5, 0 shown, 5 could not be read, 0 past the memory kept, 0 still coming, 0 not asked for\n") &&
         has(file,"FAILED picture: file:///absent.png"),
         "diag: the last picture in rewrites the file, every failure named");
     /* A picture of a page already gone takes nothing to zero: no write. */
@@ -3352,6 +3352,32 @@ static void diag_picture_workerless_case(void) {
           has(text,"FAILED picture: file:///with.png: the workers stopped (1)") &&
           has(text,"FAILED picture: file:///behind.png: no worker to fetch it (1)"),
         "diag: a picture still queued when the workers stopped is named too");
+    yonder_diag_free(g.page.diag); g.page.diag=NULL;
+    probe_drop();
+}
+
+/* Pictures the page names that never reach the table are on the record;
+ * those still coming when the page is left are counted; a layout that
+ * stopped partway is one standing failure however often it is written. */
+static void diag_picture_unasked_case(void) {
+    probe_page("<img src='data:image/png;base64,iVBORw0KGgo='><img src='http://[bad'>"
+        "<img src=file:///slow.png>",true);
+    g.page.diag=yonder_diag_new("http://u.test/",1,0);
+    pictures_start(&g.page);        /* no workers: slow.png is refused too */
+    char text[4096]; yonder_diag_render(g.page.diag,text,sizeof(text));
+    check(has(text,"MISSING picture-scheme data (1)") && has(text,"FAILED picture: http://[bad: the address was refused (") &&
+          has(text,"not asked for") && g.page.unasked==2,
+        "diag: a picture refused before the table is on the record, by its scheme or its refusal");
+    /* Left with one still out: counted, not failed. */
+    g.page.pics[0].state=PIC_WAITING;
+    diag_observe(&g.page,"when the page was left");
+    yonder_diag_render(g.page.diag,text,sizeof(text));
+    check(has(text,"0 past the memory kept, 1 still coming, 2 not asked for\n"),
+        "diag: a picture still coming when the page is left is counted so");
+    yonder_diag_failed_seen(g.page.diag,"layout","stopped");
+    yonder_diag_failed_seen(g.page.diag,"layout","stopped");
+    yonder_diag_render(g.page.diag,text,sizeof(text));
+    check(has(text,"FAILED layout: stopped (1)\n"),"diag: a standing failure is counted once however often it is seen");
     yonder_diag_free(g.page.diag); g.page.diag=NULL;
     probe_drop();
 }
@@ -3572,6 +3598,7 @@ static void diag_cases(void) {
     diag_picture_case();
     diag_picture_unshown_case();
     diag_picture_workerless_case();
+    diag_picture_unasked_case();
     diag_long_source_case();
     diag_tokens_exclusive();
     /* Setting absent: no file, while the badge still counts. */
