@@ -3436,6 +3436,17 @@ static void diag_picture_moves_case(void) {
     pictures_settle();
     check(!g.page.record_owed && has(diag_file("/tmp/diag",name),"\nwritten: when its pictures were in\n"),
         "diag: once the page is laid out again, the record is written");
+    /* The workers stopping after such a picture waits for the layout too. */
+    g.page.pics[0].state=PIC_WAITING; g.page.waiting=g.page.in_flight=1;
+    yonder_diag_fact(g.page.diag,"written","before");
+    diag_write(g.page.diag);
+    g.pictures_moved=true;
+    pictures_orphaned(&g.page);
+    check(g.page.record_owed && has(diag_file("/tmp/diag",name),"\nwritten: before\n"),
+        "diag: a stopped pool after a moving picture waits for its layout to be written");
+    pictures_settle();
+    check(!g.page.record_owed && has(diag_file("/tmp/diag",name),"the workers stopped"),
+        "diag: and is written once the page is laid out again");
     yonder_diag_free(g.page.diag); g.page.diag=NULL;
     probe_drop();
 }

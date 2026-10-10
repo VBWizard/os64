@@ -442,8 +442,9 @@ typedef struct Page {
     // same one again records nothing more.
     int32_t unasked, unasked_cap;
     uint64_t *unasked_seen;
-    // The last picture came in and moved the page: the record is written
-    // once the page is laid out again (pictures_settle).
+    // The pictures settled while one had moved the page: the record is
+    // written once the page is laid out again (diag_pictures_in,
+    // pictures_settle).
     bool record_owed;
     size_t kept_bytes, picture_url_bytes;
     // The form whose reply this is, when the reply was to a POST: what
@@ -1410,6 +1411,14 @@ static void diag_pictures_in(Page *p)
 {
     if (p->diag == NULL)
         return;
+    // A picture that moved the shown page is laid out first: the record is
+    // owed until then (pictures_settle), so it says what that layout came
+    // to. Every way the pictures settle comes through here.
+    if (p == &g.page && g.pictures_moved) {
+        p->record_owed = true;
+        return;
+    }
+    p->record_owed = false;
     diag_observe(p, "when its pictures were in");
     diag_write(p->diag);
     // What the observation found since arrival is the badge's too.
@@ -3109,10 +3118,8 @@ static void pictures_settle(void)
         if (now_ok)
             relayout(true);
     }
-    if (g.page.record_owed && !g.pictures_moved && g.page.waiting == 0) {
-        g.page.record_owed = false;
+    if (g.page.record_owed && !g.pictures_moved)
         diag_pictures_in(&g.page);
-    }
     if (due != g.settle_due) {
         g.settle_due = due;
         pictures_schedule();
@@ -4955,15 +4962,8 @@ static void reaped(os64_work_id_t id, void *job, void *product)
         picture_arrived(job, product);
         yonder_picture_release(job, product);
         pictures_feed(&g.page);
-        // A last picture that moves the page is written for once the page
-        // has been laid out again (pictures_settle), so the record says
-        // what that layout came to.
-        if (waiting > 0 && g.page.waiting == 0) {
-            if (g.pictures_moved)
-                g.page.record_owed = true;
-            else
-                diag_pictures_in(&g.page);
-        }
+        if (waiting > 0 && g.page.waiting == 0)
+            diag_pictures_in(&g.page);
         return;
     }
     if (*(const uint32_t *)job == YONDER_JOB_SHEET) {
