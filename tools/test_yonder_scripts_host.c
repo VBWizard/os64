@@ -1210,6 +1210,23 @@ static void input_click_at(const char *id) {
     ev.type=OS64_GUI_EVENT_MOUSE_BUTTON_UP;
     view_event(&g.view,&g.ui,&ev); inputs_run();
 }
+/* A press and a release on a control's own widget, through libui, as a
+ * person's click on it arrives. */
+static void ui_click_on(const char *id) {
+    FormWidget *fw=probe_field(id);
+    g.root.bounds=g.view.bounds;        /* the fixture's root has no size of its own */
+    os64_gui_event_t ev={.type=OS64_GUI_EVENT_MOUSE_BUTTON_DOWN};
+    ev.mouse.x=fw->w->bounds.x+2; ev.mouse.y=fw->w->bounds.y+2; ev.mouse.button=OS64_GUI_MOUSE_LEFT;
+    os64_ui_dispatch(&g.ui,&ev); inputs_run();
+    ev.type=OS64_GUI_EVENT_MOUSE_BUTTON_UP;
+    os64_ui_dispatch(&g.ui,&ev); inputs_run();
+}
+static void ui_key_space(void) {
+    os64_gui_event_t ev={.type=OS64_GUI_EVENT_KEY_DOWN,.key={.ascii=' '}};
+    os64_ui_dispatch(&g.ui,&ev); inputs_run();
+    ev.type=OS64_GUI_EVENT_KEY_UP;
+    os64_ui_dispatch(&g.ui,&ev); inputs_run();
+}
 static void input_key(char ascii) {
     os64_gui_event_t ev={.type=OS64_GUI_EVENT_KEY_DOWN,.key={.ascii=ascii}};
     if(!key_event(&ev) && !password_key(&ev)) os64_ui_dispatch(&g.ui,&ev);
@@ -3439,14 +3456,16 @@ static void covered_link_cases(void) {
     check(link_at(20,50)==os64_page_link_for(page_model(&g.page),probe_id("below")),
         "covered link: the link below the menu is the one under the pointer");
     forms_place();
-    check(probe_field("menu")!=NULL && probe_field("menu")->w->hidden,
-        "invisible gadget: a nameless control in no form is not drawn");
+    check(probe_field("menu")!=NULL && !probe_field("menu")->w->hidden &&
+          probe_field("menu")->w->cls->paint==NULL && probe_field("menu")->w->cls->event!=NULL,
+        "invisible gadget: a nameless control in no form paints nothing, and its widget stays");
     int32_t menu_control=os64_page_control_for(page_model(&g.page),probe_id("menu"));
-    input_click_at("menu");
+    ui_click_on("menu");
     bool on=os64_page_control(page_model(&g.page),menu_control)->checked;
-    input_click_at("menu");
-    check(on && !os64_page_control(page_model(&g.page),menu_control)->checked,
-        "invisible gadget: a click on it ticks it and a second unticks it, as its widget would");
+    ui_key_space();
+    check(on && !os64_page_control(page_model(&g.page),menu_control)->checked &&
+          probe_field("menu")->w->focused,
+        "invisible gadget: a click ticks it and takes the focus, and Space unticks it, as any checkbox");
     probe_drop();
     /* With scripts, the tick is the box's click (which sees it ticked, as
      * a widget's does), then input and change. */
@@ -3457,7 +3476,7 @@ static void covered_link_cases(void) {
         "</script>",true);
     script_turn();
     forms_place();
-    input_click_at("menu");
+    ui_click_on("menu");
     check(probe_text_is("out","click+ input+ change+ "),
         "invisible gadget: with scripts its click sees it ticked, then input and change");
     probe_drop();
@@ -3470,7 +3489,12 @@ static void covered_link_cases(void) {
     check(!probe_field("formed")->w->hidden && !probe_field("named")->w->hidden &&
           !probe_field("plain")->w->hidden,
         "invisible field: in a form or named, an invisible control is drawn; a visible one always is");
-    check(probe_field("blank")!=NULL && probe_field("blank")->w->hidden,
+    const char *accept=navigation_accept();
+    check(!strncmp(accept,"text/html, application/xhtml+xml, text/*;q=0.8, image/png;q=0.5, ",64) &&
+          strstr(accept,"image/x-portable-pixmap;q=0.5")!=NULL && strstr(accept,"image/gif, ")==NULL &&
+          accept==navigation_accept(),
+        "navigation accept: pages first, then every picture type libimage decodes at half the weight");
+    check(probe_field("blank")!=NULL && probe_field("blank")->w->cls->paint==NULL,
         "invisible gadget: an empty name submits nothing, so it names nothing");
     probe_drop();
 }

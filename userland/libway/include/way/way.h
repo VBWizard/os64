@@ -147,7 +147,8 @@ typedef struct {
     // is libimage's OS64_IMAGE_ACCEPT), or NULL for none: a picture asked
     // for by itself, of a type it names, is a page, WAY_BODY_IMAGE, whose
     // body the face does not read — it writes the page that shows the
-    // picture. Any other picture is not a page.
+    // picture. Any other picture is not a page. way_open's alone: way_load
+    // reads every body it opens, so to it no picture is a page.
     const char *pictures;
     char status[WAY_SENTENCE_MAX];
     // The page this load was asked for from — a link followed, a form sent,

@@ -541,8 +541,15 @@ void way_script_cookie(way_jar_t *jar, const char *page_url, const char *text, s
 bool way_load(way_leg_t *s, const char *url, const os64_page_request_t *request,
               way_page_t *out, os64_fetch_status_t *why)
 {
+    // The whole-page load reads every body it opens, and a picture's is the
+    // face's to fetch itself (WAY_BODY_IMAGE): this path has nowhere to hand
+    // one over, so a picture is not a page here, whatever the leg shows.
     way_opening_t o;
-    if (!way_open(s, url, request, &o, why))
+    const char *pictures = s->pictures;
+    s->pictures = NULL;
+    bool opened = way_open(s, url, request, &o, why);
+    s->pictures = pictures;
+    if (!opened)
         return false;
     bool short_of_memory = false;        // a truncation of OURS, not the wire's
     os64_html_options_t limits = os64_html_options_default();

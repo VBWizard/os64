@@ -66,10 +66,33 @@
 static const yonder_dark_t kDark = {.paper = 0x101010u};
 static bool s_dark;
 
-// What a navigation asks for: a page first, then a picture of a kind yonder
-// shows by itself (YONDER.md § A picture asked for by itself), so a server
-// that chooses by Accept may send one.
-#define YONDER_ACCEPT "text/html, application/xhtml+xml, text/*;q=0.8, " OS64_IMAGE_ACCEPT
+// What a navigation asks for: a page first, then, at half the weight, a
+// picture of a kind yonder shows by itself (YONDER.md § A picture asked for
+// by itself), so a server that chooses by Accept sends the page where it has
+// both and the picture where that is all it has. libimage's list, each type
+// given its q; built once (navigation_accept).
+#define YONDER_ACCEPT_PAGES "text/html, application/xhtml+xml, text/*;q=0.8"
+
+static const char *navigation_accept(void)
+{
+    static char accept[512];
+    if (accept[0] != '\0')
+        return accept;
+    os64_strcopy(accept, sizeof(accept), YONDER_ACCEPT_PAGES);
+    size_t n = os64_strlen(accept);
+    for (const char *at = OS64_IMAGE_ACCEPT; *at != '\0' && n < sizeof(accept);) {
+        while (*at == ' ' || *at == ',')
+            at++;
+        const char *end = at;
+        while (*end != '\0' && *end != ',')
+            end++;
+        if (end > at)
+            n += (size_t)os64_snprintf(accept + n, sizeof(accept) - n, ", %.*s;q=0.5",
+                                       (int)(end - at), at);
+        at = end;
+    }
+    return accept;
+}
 
 // The work pool. A navigation's job is a FETCH (trip.h; the parse is this
 // thread's, DOM_D4.md), so what it declares is one connection's worth of
@@ -758,6 +781,9 @@ typedef struct {
         os64_ui_listbox_t list;
     } u;
     os64_ui_widget_t *w;
+    // The widget's own class, kept while a gadget's draws nothing
+    // (forms_place); NULL until the widget is first placed.
+    const os64_ui_class_t *own_class;
     char text[512];                 // a field's buffer, a button's caption
     char secret[512];               // a password's value: the field shows bullets
     size_t secret_len;
@@ -3567,12 +3593,34 @@ refused:
 // cannot show what a click here did (POSITION.md, ruling 6). One in no form
 // and with no name, or an empty one (which submits nothing either), is the
 // page's own gadget, a click target laid over something drawn (MediaWiki's
-// menu checkbox), and is left undrawn. Either way the pointer still finds
-// it, as a browser's does, and a click on it ticks it (view_check).
+// menu checkbox), and is left undrawn. Undrawn, not gone: its widget stays
+// where the control is and takes its clicks, its focus and its keys as any
+// control's does, painting nothing (unpainted_class), so a click ticks it
+// and Space ticks it again, with every event a script listens for.
 static bool gadget(const flow_box_t *b, int32_t control)
 {
     const os64_page_control_t *c = os64_page_control(page_model(&g.page), control);
     return b->unpainted && c != NULL && c->form < 0 && (c->name == NULL || c->name[0] == '\0');
+}
+
+// A widget class that is `cls` in all but painting: libui skips a class
+// with no paint and still hit-tests, focuses and dispatches to it. One copy
+// per class, made once; NULL when the few slots are spent, and the gadget
+// is then hidden instead.
+static const os64_ui_class_t *unpainted_class(const os64_ui_class_t *cls)
+{
+    static os64_ui_class_t copies[8];
+    static const os64_ui_class_t *of[8];
+    static int32_t n;
+    for (int32_t i = 0; i < n; i++)
+        if (of[i] == cls || &copies[i] == cls)
+            return &copies[i];
+    if (n == (int32_t)(sizeof(copies) / sizeof(copies[0])))
+        return NULL;
+    copies[n] = *cls;
+    copies[n].paint = NULL;
+    of[n] = cls;
+    return &copies[n++];
 }
 
 static void forms_place(void)
@@ -3590,9 +3638,18 @@ static void forms_place(void)
         // back inside the view), and whatever is kept is clamped to int32.
         os64_gui_rect_t at = flow_box_doc_rect(b, scroll_now());
         int64_t x = (int64_t)v.x + at.x - g.sx, y = (int64_t)v.y + at.y - g.sy;
+        if (fw->own_class == NULL)
+            fw->own_class = fw->w->cls;
+        const os64_ui_class_t *cls = fw->own_class;
+        if (gadget(b, widget_control(fw)))
+            cls = unpainted_class(fw->own_class);
         bool shown = x >= v.x && y >= v.y && x + at.w <= (int64_t)v.x + v.w &&
                      y + at.h <= (int64_t)v.y + v.h && at.w > 0 && at.h > 0 &&
-                     !flow_box_covered(g.page.tree, b, scroll_now()) && !gadget(b, widget_control(fw));
+                     !flow_box_covered(g.page.tree, b, scroll_now()) && cls != NULL;
+        if (cls != NULL && cls != fw->w->cls) {
+            fw->w->cls = cls;
+            os64_ui_mark_dirty(&g.ui, fw->w);
+        }
         os64_gui_rect_t r = {clamp32(x), clamp32(y), at.w, at.h};
         if (!shown) {
             if (!fw->w->hidden)
@@ -6086,28 +6143,6 @@ static void follow_link(int32_t link)
     follow_link_asked(link, WAY_ASK_NEVER);
 }
 
-// A checkbox or radio clicked on the page itself — one left undrawn as a
-// gadget (forms_place), whose widget is not there to take the click — is
-// ticked as its widget ticks it (check_changed): the box changes, then with
-// scripts its click, which may put it back, and its input and change. A
-// radio is only ever ticked. False when `at` is no such control.
-static bool view_check(const os64_html_node_t *at, int32_t x, int32_t y)
-{
-    int32_t control = at != NULL ? os64_page_control_for(page_model(&g.page), at) : -1;
-    const os64_page_control_t *c = os64_page_control(page_model(&g.page), control);
-    if (c == NULL || c->disabled ||
-        (c->input != OS64_PAGE_INPUT_CHECKBOX && c->input != OS64_PAGE_INPUT_RADIO))
-        return false;
-    bool was = c->checked;
-    if (os64_page_set_checked(page_model(&g.page), control,
-                              c->input == OS64_PAGE_INPUT_RADIO ? true : !was) < 0)
-        status_rest("the page keeps that one as it is");
-    forms_sync_from_model(false);
-    if (scripts_live())
-        input_queue(IN_CHECK, at, NULL, x, y, was);
-    return true;
-}
-
 // An `input type=image` is a picture that sends its form: libflow gave it
 // an atom, and a click on it presses it.
 static void picture_button_at(int32_t x, int32_t y)
@@ -6190,7 +6225,7 @@ static bool view_event(os64_ui_widget_t *w, os64_ui_t *ui, const os64_gui_event_
             const os64_html_node_t *link_node = NULL;
             const os64_html_node_t *at = element_at(ev->mouse.x, ev->mouse.y, &link_node);
             input_queue(IN_MOUSEUP, at, NULL, ev->mouse.x, ev->mouse.y, false);
-            if (at != NULL && at == g.pressed_node && !view_check(at, ev->mouse.x, ev->mouse.y))
+            if (at != NULL && at == g.pressed_node)
                 input_queue(IN_CLICK, at, link_node, ev->mouse.x, ev->mouse.y, false);
             if (g.pressed_node != NULL)
                 os64_html_release(g.pointer_doc, g.pressed_node);
@@ -6202,8 +6237,7 @@ static bool view_event(os64_ui_widget_t *w, os64_ui_t *ui, const os64_gui_event_
         int32_t link = link_at(ev->mouse.x, ev->mouse.y);
         if (link >= 0 && link == g.pressed_link && ev->mouse.button == OS64_GUI_MOUSE_LEFT)
             follow_link(link);
-        else if (ev->mouse.button == OS64_GUI_MOUSE_LEFT &&
-                 !view_check(element_at(ev->mouse.x, ev->mouse.y, NULL), ev->mouse.x, ev->mouse.y))
+        else if (ev->mouse.button == OS64_GUI_MOUSE_LEFT)
             picture_button_at(ev->mouse.x, ev->mouse.y);
         g.pressed_link = -1;
         return true;
@@ -6629,7 +6663,7 @@ int main(int argc, char **argv)
     const char *agent = yonder_settings_saved_agent(saved, sizeof(saved)) ? yonder_agent_keep(saved)
                                                                            : NULL;
     g.way.agent = agent != NULL ? agent : YONDER_AGENT;
-    g.way.accept = YONDER_ACCEPT;
+    g.way.accept = navigation_accept();
     g.way.delayed_hint = " - it is in the address field; press Enter to go";
     g.way.jar = way_jar_new();          // NULL keeps no cookies: the pages still load
     g.cache = yonder_settings_cache_open(); // NULL keeps nothing: pictures come from the network

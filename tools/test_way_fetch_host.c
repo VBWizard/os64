@@ -697,6 +697,22 @@ static void pictures_are_pages_for_a_face_that_shows_them(void)
                !way_accept_names(kList, "image/pn") && !way_accept_names(kList, "q=0.5") &&
                !way_accept_names(kList, "") && !way_accept_names(NULL, "image/png"),
            NULL);
+    {
+        fresh();
+        script("pic.test", "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: 3\r\n\r\nPNG");
+        way_session_t whole_session = {.name="fixture", .agent="fixture", .accept="text/html"};
+        way_leg_t whole_leg = way_leg(&whole_session);
+        whole_leg.pictures = "image/png";
+        way_page_t page = {0};
+        os64_fetch_status_t whole_why;
+        bool loaded = way_load(&whole_leg, "http://pic.test/dwm.png", NULL, &page, &whole_why);
+        expect("pictures: the whole-page load never reads a picture as a page",
+               !loaded && page.text == NULL && strstr(whole_leg.status, "that is image/png, not a page") != NULL &&
+                   whole_leg.pictures != NULL,
+               whole_leg.status);
+        if (loaded)
+            way_page_clear(&page);
+    }
     expect("pictures: one the face does not name is still a file to save",
            !opened && strstr(leg.status, "that is image/webp, not a page") != NULL, leg.status);
     if (opened)

@@ -467,8 +467,8 @@ recommended ("I trust your judgement"):
    MediaWiki's menu checkbox drawn as a band across every Vector page, the
    other: an invisible control in NO form and with NO name (or an empty
    one) submits nothing, so it is the page's own click target, not a field,
-   and is left undrawn, though the pointer still finds it and a click still
-   ticks it.)
+   and is left undrawn: its widget still takes the click, the focus and the
+   keys, and paints nothing.)
 7. **`pointer-events: none` is read**, and `flow_hit` passes through such
    a box — the property that says a click goes to what is under it. An
    invisible overlay otherwise eats every click over the links a person
