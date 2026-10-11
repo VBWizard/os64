@@ -232,3 +232,27 @@ Publication completed: implementation commit `bd86ce4f` was pushed to
 `origin/codex/explorer-e01a`; [PR #254](https://github.com/VBWizard/os64/pull/254)
 is open against `userland`. The worktree is awaiting ordinary review; no merge
 or review approval is claimed. A documentation follow-up records this publication.
+
+
+## 2026-10-11 — E1A first review fixes
+
+Chris requested the two findings on PR #254 be addressed. Against reviewed
+commit `e0800cb8`, new host regressions reproduced both: Ctrl punctuation
+bytes 27–31 were accepted as registrations but did not route; positive remaining
+status width could show a clipped help fragment beside a persistent notice.
+The before-fix harness exited 1 with 54 failures across 313 checks.
+
+The matcher now unfolds character bytes 1–31, preserving physical Escape/editing
+identities and rejecting bursts first. Status paint measures the secondary run
+and suppresses it unless the complete message fits, retaining text/tokens.
+The former paint comment described leftover clipping and missed the required
+complete-fit rule; it was corrected with the code and public API documentation.
+Both help and base-information sites use the shared fit gate. No decoder, kernel
+or production consumer policy changed.
+
+Focused suites passed with 387 fake-font and 436 real-font checks; ASan, UBSan
+and supported leak detection remained enabled outside the sandbox. Strict cross
+build passed. QEMU at the live 32px Interface face showed the notice alone, then
+restored full retained help when the notice was cleared; gallery exit was zero.
+[The R1 packet](evidence/e01a/review-r1/README.md) retains logs, screenshots and
+source/binary hashes. Next action: push the review revision and ordinary re-review.

@@ -73,7 +73,7 @@ are harmless.
 ## Keyboard and visibility scope
 
 Add a shared shortcut matcher/router, not a rewrite of the terminal decoder.
-Normalize Ctrl-letter control bytes and ignore Caps/Num/HID tag for modifier
+Normalize Ctrl letter/punctuation control bytes and ignore Caps/Num/HID tag for modifier
 comparison. Use physical dialect only for nonprinting keys. Recognize F10 but
 do not implement menu reveal until E1B. Arrow escape bursts must not match
 ordinary printable shortcut letters; feed their full gesture through the
@@ -192,3 +192,17 @@ supersedes the QEMU guide's earlier no-commit instruction. The implementation
 commit is `bd86ce4f`, introducing `ui_action.c`, `ui_status.c` and this record;
 source/binary hashes retain the exact tested state. E1 remains open for E1K/E1B/E1C. The design snapshot was reconciled at `d33e651e`; the active
 design branch owns subsequent native review changes.
+
+## First review findings
+
+Both P2 findings against `e0800cb8` are addressed by the review revision:
+Ctrl punctuation controls 27–31 match their registered ASCII keys while keeping
+physical Escape/editing and burst guards; status secondary text appears only
+when its complete measured run fits beside the persistent notice. Messages and
+tokens remain retained while suppressed.
+
+[Review evidence](evidence/e01a/review-r1/README.md) records before-fix failures,
+387 fake-font and 436 real-font passing checks with ASan/UBSan/leak detection,
+strict cross build and QEMU notice priority/help restoration at 32px. Original
+acceptance results remain historical evidence for `bd86ce4f`; review source and
+binary hashes are separate. Next action: ordinary re-review on PR #254.

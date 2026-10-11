@@ -92,3 +92,8 @@ No native transport, kernel change, production Scribe migration, review approval
 or review approval is included. The OS checkout did not identify hardware or an
 installed revision. Ordinary code review is the next E1A action.
 The active design branch owns native review follow-up beyond snapshot `d33e651e`.
+
+E1A first-review update: the two P2 findings on `e0800cb8` are addressed;
+[the R1 evidence](evidence/e01a/review-r1/README.md) records punctuation routing
+and complete-message status fit regressions, 387/436 focused passing checks,
+strict cross build and QEMU rendering verification. Re-review is pending.

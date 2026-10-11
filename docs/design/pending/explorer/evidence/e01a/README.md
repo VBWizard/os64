@@ -6,8 +6,8 @@ its older runtime tree. Chris requested commit and push for review after his
 successful OS checkout. Implementation commit `bd86ce4f` is pushed; [PR #254](https://github.com/VBWizard/os64/pull/254) targets `userland`.
 Ordinary review and merge remain pending.
 [tested-files.json](tested-files.json) identifies source and guest binary SHA-256
-values from validation before publication. These source files are unchanged
-since validation. Implementation commit `bd86ce4f` introduces this evidence and the
+values from validation before publication. These hashes identify the baseline source files;
+[the first review follow-up](review-r1/README.md) records the corrected revision. Implementation commit `bd86ce4f` introduces this evidence and the
 action/status source files.
 
 ## Host and cross build
@@ -140,3 +140,14 @@ were not reported; this confirmation is separate from the automated QEMU runs.
 His publication request supersedes the QEMU guide's earlier no-commit instruction.
 The branch is pushed and [PR #254](https://github.com/VBWizard/os64/pull/254) is open for ordinary review; no review approval
 or merge is claimed.
+
+## First review follow-up
+
+The two P2 findings against `e0800cb8` are addressed in the
+[review-r1 packet](review-r1/README.md): Ctrl punctuation bytes normalize to their
+registered keys, and a secondary status message is suppressed when its complete
+run cannot fit beside a notice. New regressions fail before the fixes and pass
+after them (387 fake-font and 436 real-font checks with leak detection enabled).
+Cross build and a QEMU 32px notice/help checkout passed. The original screenshots
+and hashes above describe baseline `bd86ce4f`; in particular, its 32px screenshot
+shows the clipped help fragment that R1 corrects. Re-review remains pending.

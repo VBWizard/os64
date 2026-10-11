@@ -17,8 +17,9 @@ typedef enum {
     OS64_UI_KEY_F5, OS64_UI_KEY_F6, OS64_UI_KEY_F7, OS64_UI_KEY_F8,
     OS64_UI_KEY_F9, OS64_UI_KEY_F10, OS64_UI_KEY_F11, OS64_UI_KEY_F12
 } os64_ui_key_t;
-/* Printable keys are ASCII; letters are normalized to lowercase. Modifier
- * bits are OS64_GUI_MOD_SHIFT/CTRL/ALT, matched exactly. */
+/* Printable keys are ASCII; Ctrl character bytes 1..31 unfold to those keys
+ * and letters normalize to lowercase. Physical editing/Escape gestures keep
+ * their named identity. Shift/Ctrl/Alt modifiers match exactly. */
 typedef struct { uint16_t key; uint8_t modifiers; } os64_ui_shortcut_t;
 typedef enum { OS64_UI_ACTION_COMMAND, OS64_UI_ACTION_TOGGLE,
                OS64_UI_ACTION_RADIO } os64_ui_action_kind_t;

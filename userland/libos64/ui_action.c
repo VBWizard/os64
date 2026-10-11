@@ -357,12 +357,14 @@ bool os64_ui_shortcut_match(os64_ui_shortcut_t s, const os64_gui_event_t *ev)
      * PS/2 keypad digits share make codes with navigation, so ordinary
      * printable keypad input still matches by ASCII. */
     if (burst_byte(p, a)) return false;
+    /* Physical editing/Escape gestures keep their named identity. Other Ctrl
+     * character bytes 1..31 unfold to letters, brackets, backslash, ^ or _. */
     if ((p == OS64_UI_KEY_TAB && a == '\t') ||
         (p == OS64_UI_KEY_ENTER && (a == '\n' || a == '\r')) ||
         (p == OS64_UI_KEY_BACKSPACE && a == '\b') ||
         (p == OS64_UI_KEY_ESCAPE && a == 0x1b)) k = p;
-    else if ((ev->key.modifiers & OS64_GUI_MOD_CTRL) && a >= 1 && a <= 26)
-        k = 'a' + a - 1;
+    else if ((ev->key.modifiers & OS64_GUI_MOD_CTRL) && a >= 1 && a <= 31)
+        k = lower('@' + a);
     else if (a >= 32 && a < 127) k = lower(a);
     else k = p;
     return s.key == k;

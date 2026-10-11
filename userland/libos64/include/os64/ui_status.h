@@ -17,6 +17,8 @@ typedef struct {
     uint64_t generation;
 } os64_ui_status_t;
 extern const os64_ui_class_t os64_ui_status_class;
+/* Painting reserves notice width first and suppresses secondary text when
+ * its complete run cannot fit. The stored messages and tokens are retained. */
 void os64_ui_status_init(os64_ui_status_t *);
 os64_ui_status_code_t os64_ui_status_base(os64_ui_status_t *, const char *);
 os64_ui_status_code_t os64_ui_status_help(os64_ui_status_t *, const char *, uint64_t *token);

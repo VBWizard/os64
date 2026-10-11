@@ -186,6 +186,104 @@ static void shortcuts(void)
     CHECK(!os64_ui_shortcut_route(&router,v,&e,NULL));
     CHECK(os64_ui_action_view_destroy(v)==OS64_UI_OK);CHECK(os64_ui_actions_destroy(a)==OS64_UI_OK);
 }
+static void ctrl_punctuation(void)
+{
+    current="Ctrl punctuation";
+    const char keys[]={'[','\\',']','^','_'};
+    const uint8_t codes[2][5]={{0x1a,0x2b,0x1b,0x07,0x0c},
+                              {0x2f,0x31,0x30,0x23,0x2d}};
+    os64_ui_action_spec_t specs[5];
+    for(size_t i=0;i<5;++i) {
+        uint8_t mods=OS64_GUI_MOD_CTRL | (i>=3?OS64_GUI_MOD_SHIFT:0);
+        specs[i]=(os64_ui_action_spec_t){.id=10+(uint32_t)i,
+            .kind=OS64_UI_ACTION_COMMAND,.label="Punctuation",
+            .shortcut={keys[i],mods}};
+    }
+    os64_ui_actions_t *a=NULL;
+    CHECK(os64_ui_actions_create(specs,5,&at_cb,NULL,&a)==OS64_UI_OK);
+    at_live_actions=a;
+    action_test_target t={.gen=1,.enabled=true};
+    os64_ui_action_context_t c={&t,1,at_retain,at_release,at_valid};
+    os64_ui_action_view_t *v=NULL;
+    CHECK(os64_ui_action_view_create(a,&c,&v)==OS64_UI_OK);at_live_view=v;
+    os64_ui_shortcut_router_t router;os64_ui_shortcut_reset(&router);
+    for(size_t dialect=0;dialect<2;++dialect) {
+        uint8_t tag=dialect?OS64_GUI_MOD_HID:0;
+        for(size_t i=0;i<5;++i) {
+            os64_gui_event_t e=edge(OS64_GUI_EVENT_KEY_DOWN,(char)(27+i),
+                codes[dialect][i],specs[i].shortcut.modifiers|tag|OS64_GUI_MOD_CAPS|OS64_GUI_MOD_NUM);
+            CHECK(os64_ui_shortcut_match(specs[i].shortcut,&e));
+            os64_gui_event_t printable=e;printable.key.ascii=keys[i];
+            CHECK(os64_ui_shortcut_match(specs[i].shortcut,&printable));
+            unsigned before=t.calls;os64_ui_action_result_t result;
+            CHECK(os64_ui_shortcut_route(&router,v,&e,&result)&&result.status==OS64_UI_OK);
+            CHECK(t.calls==before+1);
+            CHECK(os64_ui_shortcut_route(&router,v,&e,NULL)&&t.calls==before+1);
+            e.type=OS64_GUI_EVENT_KEY_UP;e.key.modifiers=tag;
+            CHECK(os64_ui_shortcut_route(&router,v,&e,NULL));
+        }
+        os64_gui_event_t esc=edge(OS64_GUI_EVENT_KEY_DOWN,27,dialect?0x29:0x01,
+                                  OS64_GUI_MOD_CTRL|tag);
+        CHECK(os64_ui_shortcut_match((os64_ui_shortcut_t){OS64_UI_KEY_ESCAPE,OS64_GUI_MOD_CTRL},&esc));
+        CHECK(!os64_ui_shortcut_match(specs[0].shortcut,&esc));
+        const char burst[]={27,'[','A'};
+        for(size_t i=0;i<sizeof(burst);++i) {
+            os64_gui_event_t e=edge(OS64_GUI_EVENT_KEY_DOWN,burst[i],dialect?0x52:0x48,
+                                   OS64_GUI_MOD_CTRL|tag);
+            CHECK(!os64_ui_shortcut_match(specs[0].shortcut,&e));
+            CHECK(!os64_ui_shortcut_route(&router,v,&e,NULL));
+        }
+    }
+    CHECK(os64_ui_action_view_destroy(v)==OS64_UI_OK&&!t.refs);
+    CHECK(os64_ui_actions_destroy(a)==OS64_UI_OK);
+}
+
+static void status_fit_tests(const char *dir)
+{
+    (void)dir;current="status complete secondary fit";
+    os64_ui_t ui={0};ui.theme=(os64_ui_theme_t){.pad=4,.gap=4,.button_h=28,
+        .panel_bg=0xff202020,.label_fg=0xffeeeeee};
+    os64_ui_status_t s;os64_ui_status_init(&s);
+    s.w.bounds=(os64_gui_rect_t){0,0,300,48};os64_ui_set_root(&ui,&s.w);
+#ifdef UI_TEXT_REAL
+    os64_font_set_t *set=outline_set(os64_ui_font_context(&ui),dir,"DejaVuSans.ttf",16);
+    CHECK(set!=NULL);
+    if(set) {
+        CHECK(os64_ui_font_bind(&ui,set)==OS64_FONT_OK);
+        os64_font_set_release(set);
+    }
+#endif
+    const char *notice="Notice",*secondary="WWWWW";
+    int32_t notice_width=0,secondary_width=0;
+    CHECK(os64_ui_text_measure(&ui,OS64_FONT_ROLE_UI,notice,strlen(notice),&notice_width)==OS64_FONT_OK);
+    CHECK(os64_ui_text_measure(&ui,OS64_FONT_ROLE_UI,secondary,strlen(secondary),&secondary_width)==OS64_FONT_OK);
+    CHECK(notice_width>0&&secondary_width>2);
+    uint64_t notice_token=0;
+    CHECK(os64_ui_status_notice(&s,notice,&notice_token)==OS64_UI_OK);
+    const int32_t remaining[]={1,secondary_width/2,secondary_width-1,
+                               secondary_width,secondary_width+1};
+    for(unsigned source=0;source<2;++source) {
+        for(size_t i=0;i<sizeof(remaining)/sizeof(*remaining);++i) {
+            s.w.bounds.w=2*ui.theme.pad+notice_width+ui.theme.gap+remaining[i];
+            CHECK(s.w.bounds.w<=SURF_W);
+            canvas_t reference,actual;canvas_init(&reference,0);canvas_init(&actual,0);
+            os64_draw_ctx_t dc={.surf=reference.s};
+            s.w.cls->paint(&s.w,&dc,&ui.theme);
+            uint64_t token=0;
+            CHECK((source?os64_ui_status_base(&s,secondary):
+                os64_ui_status_help(&s,secondary,&token))==OS64_UI_OK);
+            dc.surf=actual.s;s.w.cls->paint(&s.w,&dc,&ui.theme);
+            bool equal=memcmp(reference.px,actual.px,sizeof(actual.px))==0;
+            CHECK(equal==(remaining[i]<secondary_width));
+            CHECK(rows_touched_outside(&actual,0,0,48)==0);
+            CHECK((source?os64_ui_status_base(&s,""):
+                os64_ui_status_clear_help(&s,token))==OS64_UI_OK);
+        }
+    }
+    CHECK(os64_ui_status_clear_notice(&s,notice_token)==OS64_UI_OK);
+    CHECK(os64_ui_font_release(&ui)==OS64_FONT_OK);
+}
+
 static void status_tests(const char *dir)
 {
     (void)dir;current="status";
@@ -293,7 +391,8 @@ static void gallery_tests(const char *dir)
 int main(int argc,char **argv)
 {
     const char *dir=argc>1?argv[1]:"userland/libfreetype/fixtures";
-    registration();views_and_bindings();shortcuts();status_tests(dir);gallery_tests(dir);
+    registration();views_and_bindings();shortcuts();ctrl_punctuation();
+    status_tests(dir);status_fit_tests(dir);gallery_tests(dir);
     printf("action/status: %lu checks, %d failures\n",checks,failures);
     return failures?1:0;
 }

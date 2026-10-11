@@ -137,10 +137,14 @@ static void paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_theme
     os64_gui_rect_t notice = inner;
     if (width < notice.w) notice.w = width;
     draw_slot(s, &s->notice, ctx, t, notice, y);
-    /* Persistent information owns the left edge and its measured width. Help
-     * uses the remaining clip; a narrow layout cannot displace the notice. */
+    /* Persistent information owns the left edge and its measured width.
+     * Secondary text appears when its complete retained run fits beside it. */
     if (width >= inner.w || t->gap >= inner.w - width) return;
     inner.x += width + t->gap; inner.w -= width + t->gap;
+    int32_t secondary_width;
+    if (os64_ui_run_width(w->ui, &secondary->run, OS64_FONT_ROLE_UI,
+        secondary->text, length(secondary->text), &secondary_width) != OS64_FONT_OK ||
+        secondary_width > inner.w) return;
     draw_slot(s, secondary, ctx, t, inner, y);
 }
 const os64_ui_class_t os64_ui_status_class = {
