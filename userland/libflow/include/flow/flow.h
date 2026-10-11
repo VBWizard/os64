@@ -524,10 +524,15 @@ typedef struct {
     flow_border_collapse_t border_collapse;
     flow_caption_side_t caption_side;
 
-    // Recorded so the struct agrees with the cascade about them; the first
-    // cut lays a float out where it stands (LAYOUT.md § Booked).
+    // FLOATS.md: the side a box floats to, and the floats it clears.
     flow_float_t float_side;
     flow_clear_t clear;
+    // `display: flow-root`: laid out as the block it is, and a block
+    // formatting context's root (CSS Display 3 § 2.3), which holds its
+    // floats and stands beside other floats rather than under them. A bit
+    // beside `display` rather than a value of its own, so every rule that
+    // reads a block reads it as one.
+    bool flow_root;
 
     // Positioning (POSITION.md). The insets in CSS's side order: AUTO, PX,
     // or PERCENT of the containing block.
@@ -737,6 +742,19 @@ struct flow_box {
     // and its clip is what its containing blocks allow, not its parent
     // (POSITION.md).
     bool positioned;
+    // A float (FLOATS.md): the side, FLOW_FLOAT_NONE for every other box.
+    // It stays under the box it was written in, and is laid out and
+    // painted in its own step of its stacking context's (CSS 2.1 Appendix
+    // E, step 5).
+    flow_float_t floated;
+    // A block moved down to clear floats (CSS 2.1 § 9.5.2): by how much,
+    // in whole pixels; 0 when it was not.
+    int32_t clearance;
+    // A float is in its subtree, below it in the tree and not in a
+    // stacked box: flow_visit's float step and flow_hit's walk skip the
+    // subtrees that hold none, so a page without floats pays nothing for
+    // them.
+    bool holds_float;
     // Painted as a layer of its own, in paint order, and never through its
     // tree ancestors: their walks skip it. A positioned box is; so is a
     // block-level box in the flow below full opacity, a stacking context

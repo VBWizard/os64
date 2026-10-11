@@ -625,6 +625,8 @@ static flow_box_t *public_box(Build *bd, const FBox *src, flow_box_t *parent, fl
         !push_list(bd, &bd->t->controls, &bd->t->ncontrols, &bd->t->cap_controls, b))
         return b;
     b->positioned = src->positioned;
+    b->floated = src->floated;
+    b->clearance = (int32_t)round_px(src->clearance);
     b->fixed |= src->out_of_flow && src->style->position == FLOW_POSITION_FIXED;
     if (src->positioned &&
         !push_list(bd, &bd->t->positioned, &bd->t->npositioned, &bd->t->cap_positioned, b))
@@ -705,6 +707,8 @@ static flow_box_t *public_box(Build *bd, const FBox *src, flow_box_t *parent, fl
             b->overflow = join(b->overflow, child->overflow);
             content_reach(scroll, src, child->overflow);
         }
+        if (child != NULL && !child->stacked)
+            b->holds_float |= child->floated != FLOW_FLOAT_NONE || child->holds_float;
     }
     // A marker comes after the box's content, so an unfinished box, whose
     // content stopped short, has not reached it.
@@ -1249,8 +1253,9 @@ static const Visit *content_view(const Visit *v, const flow_box_t *b, Visit *in)
     return in;
 }
 
-// Appendix E's step 4: the block-level boxes, in tree order. Nothing of an
-// unpainted box is painted, and nothing inside it either.
+// Appendix E's step 4: the block-level boxes, in tree order, floats left
+// for step 5. Nothing of an unpainted box is painted, and nothing inside
+// it either.
 static void visit_blocks(const Visit *v, const flow_box_t *b)
 {
     if (b->unpainted || !meets(b->overflow, v->view))
@@ -1259,8 +1264,41 @@ static void visit_blocks(const Visit *v, const flow_box_t *b)
     Visit scrolled;
     const Visit *cv = content_view(v, b, &scrolled);
     for (const flow_box_t *c = b->first; c != NULL; c = c->next)
-        if (in_tree(c))
+        if (in_tree(c) && c->floated == FLOW_FLOAT_NONE)
             visit_blocks(cv, c);
+}
+
+static void visit_floats(const Visit *v, const flow_box_t *b);
+
+// A box painted whole, as if it were a stacking context of its own (Appendix
+// E, steps 4, 5 and 7): its blocks, its floats, its inline content. A
+// float is painted so, and an inline-block's content is.
+static void visit_whole(const Visit *v, const flow_box_t *b)
+{
+    visit_blocks(v, b);
+    visit_floats(v, b);
+    visit_inline(v, b);
+}
+
+// Step 5: the floats below a box, in tree order, each painted whole; the
+// walk does not go into a float it has painted, nor into a subtree that
+// holds none (flow_box_t.holds_float). A float inside an overflow-hidden
+// box is painted here with the rest: the step is the stacking context's,
+// not the formatting context's.
+static void visit_floats(const Visit *v, const flow_box_t *b)
+{
+    if (!b->holds_float || b->unpainted || !meets(b->overflow, v->view))
+        return;
+    Visit scrolled;
+    const Visit *cv = content_view(v, b, &scrolled);
+    for (const flow_box_t *c = b->first; c != NULL; c = c->next) {
+        if (!in_tree(c))
+            continue;
+        if (c->floated != FLOW_FLOAT_NONE)
+            visit_whole(cv, c);
+        else
+            visit_floats(cv, c);
+    }
 }
 
 // Step 7: the inline content — each line's spans and fragments, an atom's
@@ -1279,15 +1317,13 @@ static void visit_inline(const Visit *outer, const flow_box_t *b)
                 if (f->unpainted || !meets(f->overflow, v->view))
                     continue;
                 v->visit(v->ctx, f);
-                for (const flow_box_t *inner = f->first; inner != NULL; inner = inner->next) {
-                    visit_blocks(v, inner);
-                    visit_inline(v, inner);
-                }
+                for (const flow_box_t *inner = f->first; inner != NULL; inner = inner->next)
+                    visit_whole(v, inner);
             }
         } else if (c->kind == FLOW_BOX_MARKER) {
             if (!c->unpainted && meets(c->overflow, v->view))
                 v->visit(v->ctx, c);
-        } else if (in_tree(c)) {
+        } else if (in_tree(c) && c->floated == FLOW_FLOAT_NONE) {
             visit_inline(v, c);
         }
     }
@@ -1349,8 +1385,7 @@ void flow_visit_groups(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_p
         Visit v = {tree, moved(viewport, -(int64_t)o.x, -(int64_t)o.y), visit, ctx};
         switch (tree->layers[i].part) {
         case PART_WHOLE:
-            visit_blocks(&v, b);
-            visit_inline(&v, b);
+            visit_whole(&v, b);
             break;
         case PART_SELF:
             if (!b->unpainted && meets(b->overflow, v.view))
@@ -1362,8 +1397,13 @@ void flow_visit_groups(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_p
             Visit scrolled;
             const Visit *cv = content_view(&v, b, &scrolled);
             for (const flow_box_t *c = b->first; c != NULL; c = c->next)
-                if (in_tree(c))
+                if (in_tree(c) && c->floated == FLOW_FLOAT_NONE)
                     visit_blocks(cv, c);
+            for (const flow_box_t *c = b->first; c != NULL; c = c->next)
+                if (in_tree(c) && c->floated != FLOW_FLOAT_NONE)
+                    visit_whole(cv, c);
+                else if (in_tree(c))
+                    visit_floats(cv, c);
             visit_inline(&v, b);
             break;
         }
@@ -1384,16 +1424,49 @@ static const flow_box_t *hit_self(const flow_box_t *b, int32_t x, int32_t y)
 
 static const flow_box_t *hit(const flow_tree_t *t, const flow_box_t *b, int32_t x, int32_t y);
 
+// What a hit is painted with (Appendix E): a block's background (step 4),
+// under a float (step 5), under inline content (step 7). A higher rank is
+// on top whatever the tree order, so the paragraph written after a float,
+// whose border box runs under it, does not take a click on the float.
+enum { RANK_BLOCK = 1, RANK_FLOAT, RANK_INLINE };
+
+static const flow_box_t *hit_kids_ranked(const flow_tree_t *t, const flow_box_t *b, int32_t x,
+                                         int32_t y, int *rank);
+
+// A child's hit, and its rank: anything on a line is inline content; a
+// float, and whatever in it is hit, is the float's; a block is whatever
+// was hit inside it, or its own background.
+static const flow_box_t *hit_ranked(const flow_tree_t *t, const flow_box_t *c, int32_t x,
+                                    int32_t y, int *rank)
+{
+    if (!block_level(c->kind)) {
+        *rank = RANK_INLINE;
+        return hit(t, c, x, y);
+    }
+    if (c->floated != FLOW_FLOAT_NONE) {
+        *rank = RANK_FLOAT;
+        return hit(t, c, x, y);
+    }
+    const flow_box_t *h = hit_kids_ranked(t, c, x, y, rank);
+    if (h != NULL)
+        return h;
+    *rank = RANK_BLOCK;
+    return hit_self(c, x, y);
+}
+
 // The deepest of a box's descendants the tree reaches (its stacked ones
-// are layers of their own) holding the point, the last painted winning.
+// are layers of their own) holding the point, the last painted winning:
+// the highest rank, and among those the last in tree order.
 // Pruned on the overflow rect alone, and each box's clip asked of its own
 // rect: a clip is a box's own, so no box is pruned by its parent's — a
 // positioned one may have a wider clip than its tree parent. A scroll
 // container's content is a frame inside the one being walked: what clips
 // it from outside is asked here, where the container stands, and the point
 // is then taken to where the content stands.
-static const flow_box_t *hit_kids(const flow_tree_t *t, const flow_box_t *b, int32_t x, int32_t y)
+static const flow_box_t *hit_kids_ranked(const flow_tree_t *t, const flow_box_t *b, int32_t x,
+                                         int32_t y, int *rank)
 {
+    *rank = 0;
     if (!holds(b->overflow, x, y))
         return NULL;
     if (b->scroller >= 0) {
@@ -1408,11 +1481,20 @@ static const flow_box_t *hit_kids(const flow_tree_t *t, const flow_box_t *b, int
     for (const flow_box_t *c = b->first; c != NULL; c = c->next) {
         if (c->stacked)
             continue;
-        const flow_box_t *h = hit(t, c, x, y);
-        if (h != NULL)
+        int r = 0;
+        const flow_box_t *h = hit_ranked(t, c, x, y, &r);
+        if (h != NULL && r >= *rank) {
             found = h;
+            *rank = r;
+        }
     }
     return found;
+}
+
+static const flow_box_t *hit_kids(const flow_tree_t *t, const flow_box_t *b, int32_t x, int32_t y)
+{
+    int rank;
+    return hit_kids_ranked(t, b, x, y, &rank);
 }
 
 static const flow_box_t *hit(const flow_tree_t *t, const flow_box_t *b, int32_t x, int32_t y)

@@ -120,6 +120,23 @@ p: margin-top: 1px; margin-right: 2px; margin-bottom: 3px; padding-bottom: 7px; 
 (end)
 END
 
+# Floats in @supports: a float, `clear` and `flow-root` are laid out as they
+# say (FLOATS.md), so a page that asks is not handed its fallback.
+VIEWPORT 800x600
+PAGE
+<!doctype html><style>
+@supports (float: left) { p { margin-top: 1px } }
+@supports (float: inline-end) { p { margin-right: 2px } }
+@supports (clear: both) { p { margin-bottom: 3px } }
+@supports (display: flow-root) { p { margin-left: 4px } }
+@supports not (float: right) { p { padding-top: 5px } }
+</style>
+<p>x
+WANT
+p: margin-top: 1px; margin-right: 2px; margin-bottom: 3px; margin-left: 4px
+(end)
+END
+
 # Positioning in @supports: absolute, relative, fixed and sticky are laid
 # out as they say, and so is `z-index`, and any opacity, which the painter
 # blends (PILE3.md § The blend).
@@ -244,7 +261,7 @@ END
 # a.css's blue loses to the page's own red, and a1.css (imported by a.css)
 # comes before a.css, so a.css's margin-top wins over a1's. b.css's media
 # does not hold at 800; c.css's supports() does; d.css's does not, and nor
-# does f.css's, a flow-root laid out as a block rather than as written;
+# does f.css's, a background clipped to its text, read and not drawn;
 # e.css is imported after a rule, which makes the @import nothing.
 VIEWPORT 800x600
 PAGE
@@ -254,7 +271,7 @@ PAGE
 @import url(b.css) screen and (max-width: 500px);
 @import "c.css" supports(display: block);
 @import "d.css" supports(foo: bar);
-@import "f.css" supports(display: flow-root);
+@import "f.css" supports(background-clip: text);
 p { color: red }
 @import "e.css";
 </style><p>x

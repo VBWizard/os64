@@ -509,6 +509,8 @@ static void element(Buf *b, const FStyles *styles, const os64_html_node_t *n,
         putf(b, " justify-self=%s", s_place[s->justify_self]);
     if (s->specified_inline)
         puts_(b, " specified-inline");
+    if (s->flow_root)
+        puts_(b, " flow-root");
     if (self->holds_block)
         puts_(b, " holds-block");
     puts_(b, "\n");
@@ -647,6 +649,9 @@ static void item_line(Buf *b, const FItem *it, int32_t depth)
     case FI_PLACEHOLDER:
         putf(b, "placeholder %s", node_name(it->node));
         break;
+    case FI_FLOAT:
+        putf(b, "float %s", node_name(it->node));
+        break;
     }
     puts_(b, "\n");
     if (it->kind == FI_ATOMIC && it->content != NULL)
@@ -667,6 +672,8 @@ static void box_lines(Buf *b, const FBox *box, int32_t depth)
         puts_(b, " out-of-flow");
     else if (box->positioned)
         puts_(b, " positioned");
+    if (box->floated != FLOW_FLOAT_NONE)
+        puts_(b, box->floated == FLOW_FLOAT_LEFT ? " float-left" : " float-right");
     if (box->flex)
         puts_(b, " flex");
     if (box->grid)
@@ -761,6 +768,10 @@ static void tree_lines(Buf *b, const flow_box_t *box, int32_t depth)
         putf(b, " link %d", (int)box->link);
     if (box->unfinished)
         puts_(b, " unfinished");
+    if (box->floated != FLOW_FLOAT_NONE)
+        puts_(b, box->floated == FLOW_FLOAT_LEFT ? " float-left" : " float-right");
+    if (box->clearance != 0)
+        putf(b, " clearance=%d", (int)box->clearance);
     if (box->positioned)
         puts_(b, " positioned");
     else if (box->stacked)

@@ -274,6 +274,11 @@ static FBox *new_box(B *b, FBox *parent, f_box_kind_t kind, const os64_html_node
     box->link = st != NULL ? st->link : parent != NULL ? parent->link : -1;
     box->control = -1;
     box->parent = parent;
+    // Floated from birth, so a build that stops inside a float leaves a
+    // float, never a block in the flow a whole build takes it out of. The
+    // root has no formatting context round it to float in (FLOATS.md §
+    // Pass 1), and an anonymous box's style floats nowhere.
+    box->floated = parent != NULL && style != NULL ? style->float_side : FLOW_FLOAT_NONE;
     box->flex = kind == FB_BLOCK && node != NULL && f_display_flex(style->display);
     box->grid = kind == FB_BLOCK && node != NULL && f_display_grid(style->display);
     // Attached at once, so a build that stops here leaves a tree that is
@@ -736,8 +741,9 @@ static void scan(B *b, const os64_html_node_t *first, const os64_html_node_t *st
         if (c->kind != OS64_HTML_ELEMENT || boxless(c))
             continue;
         const FStyled *s = styled(b, c);
-        // An out-of-flow box is neither: no formatting context holds it.
-        if (s == NULL || s->style.display == FLOW_DISPLAY_NONE || f_out_of_flow(&s->style))
+        // A box that leaves the flow is neither: a float takes no room in
+        // it, and no formatting context holds an out-of-flow one.
+        if (s == NULL || s->style.display == FLOW_DISPLAY_NONE || f_leaves_flow(&s->style))
             continue;
         if (s->style.display == FLOW_DISPLAY_CONTENTS) {
             // A box-less element's children are its parent's, so the scan
@@ -894,6 +900,27 @@ static void absolute_box(Flow *f, const os64_html_node_t *el, const FStyled *s, 
     ascend(f->b);
 }
 
+// A float: under the context it was written in, which it does not
+// interrupt — among blocks, a block child where the flow had reached;
+// among inline content, a child of the inline formatting context, with a
+// FLOAT item where it stood. There its level costs two descents, as an
+// inline-block's content does: it is laid out from inside a line's frame,
+// a block's frame on top of a line's (LAYOUT.md § Bounds).
+static void float_box(Flow *f, const os64_html_node_t *el, const FStyled *s, Scope *scope)
+{
+    f->anon_table = NULL;
+    if (f->target == NULL) {
+        element_box(f->b, f->container, el, s, scope);
+        return;
+    }
+    if (!descend(f->b))
+        return;
+    FItem *at = new_item(f->b, f->target, FI_FLOAT, el, &s->style);
+    if (at != NULL)
+        at->floated = element_box(f->b, f->target, el, s, scope);
+    ascend(f->b);
+}
+
 static void inline_element(Flow *f, const os64_html_node_t *el, const FStyled *s, Scope *scope)
 {
     B *b = f->b;
@@ -1029,6 +1056,8 @@ static void flow_range(Flow *f, const os64_html_node_t *first, const os64_html_n
             flow_range(f, c->first_child, NULL, scope);
         } else if (f_out_of_flow(&s->style)) {
             absolute_box(f, c, s, scope);
+        } else if (s->style.float_side != FLOW_FLOAT_NONE) {
+            float_box(f, c, s, scope);
         } else if (table_internal(d)) {
             // An internal table box with no table round it gets an
             // anonymous one, shared with the internal boxes beside it.

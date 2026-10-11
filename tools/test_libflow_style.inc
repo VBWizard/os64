@@ -187,12 +187,16 @@ static void style_cases(void)
         "0:inset:#808080/1:inset:#808080 width=50%\n"
         "    hr block color=#ff0000 margin=8/auto/8/auto border=2:solid:#ff0000\n");
 
+    // The floated picture is blockified (CSS 2.1 § 9.7), keeping the bit
+    // that it was written inline, and leaves the flow: the body holds no
+    // block for it.
     style_case("pictures: align, hspace, border, size",
         "<!doctype html><img align=left hspace=5 border=2 width=100 height=50%>"
         "<img align=middle vspace=1><img align=absmiddle><input type=image align=texttop>",
         PAGE_OPEN
         "  body block margin=8/8/8/8\n"
-        "    img inline margin=0/5/0/5 border=2:solid:ink width=100 height=50% float=left\n"
+        "    img block margin=0/5/0/5 border=2:solid:ink width=100 height=50% float=left "
+        "specified-inline\n"
         "    img inline margin=1/0/1/0 valign=html-middle\n"
         "    img inline valign=middle\n"
         "    input inline-block valign=text-top\n");
@@ -348,8 +352,8 @@ static void style_cases(void)
         "<img align=left><img align=right hspace=0>",
         PAGE_OPEN
         "  body block margin=8/8/8/8\n"
-        "    img inline margin=0/3/0/0 float=left\n"
-        "    img inline float=right\n");
+        "    img block margin=0/3/0/0 float=left specified-inline\n"
+        "    img block float=right specified-inline\n");
 
     style_case("quirks: nowrap with a pixel width wraps",
         "<table><tr><td nowrap width=100>a<td nowrap width=50%>b</table>",
