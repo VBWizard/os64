@@ -17,6 +17,8 @@
 // The walk is iterative, over the tree's own parent pointers, so a page as
 // deep as libhtml allows is styled without a stack as deep as the page.
 
+#include <math.h>
+
 #include "internal.h"
 #include "garb/cascade.h"
 
@@ -344,13 +346,14 @@ static flow_style_t initial(const Ctx *c)
         s.margin[i] = (flow_length_t){FLOW_LENGTH_PX, 0, 0};
         s.padding[i] = (flow_length_t){FLOW_LENGTH_PX, 0, 0};
     }
+    s.transform_origin[0] = s.transform_origin[1] = (flow_length_t){FLOW_LENGTH_PERCENT, 50 * 64, 0};
     // Everything else starts at zero bytes, which is each property's
     // initial value: auto width and height, no borders, left, baseline,
     // normal, disc outside, separate, top, no float, static with auto
     // insets, z-index auto, and a row that does not wrap, its alignments
     // normal, its items growing by nothing from an auto basis, order 0,
     // and gaps of normal; no grid tracks or areas, auto-placement by rows,
-    // and auto lines.
+    // and auto lines; and no transform.
     return s;
 }
 
@@ -1922,6 +1925,18 @@ static void take(Spec *dst, const Spec *src, garb_prop_t prop)
         d->ntext_shadows = s->ntext_shadows;
         break;
     case GARB_IMAGE_RENDERING: d->pixelated = s->pixelated; break;
+    case GARB_TRANSFORM:
+        d->transform = s->transform;
+        d->ntransform = s->ntransform;
+        break;
+    case GARB_TRANSFORM_ORIGIN:
+        d->transform_origin[0] = s->transform_origin[0];
+        d->transform_origin[1] = s->transform_origin[1];
+        d->transform_origin_z = s->transform_origin_z;
+        break;
+    case GARB_TRANSLATE: d->translate = s->translate; break;
+    case GARB_ROTATE: d->rotate = s->rotate; break;
+    case GARB_SCALE: d->scale = s->scale; break;
     default: break;
     }
 }
@@ -2337,6 +2352,242 @@ static bool author_shadows(const Author *a, flow_style_t *s, const garb_val_t *v
     }
     *list = out;
     *count = v->nitems;
+    return true;
+}
+
+// ── Transforms (CSS Transforms 1 § 9, 2 § 12) ──────────────────────────
+//
+// Each function is made its matrix here, at the element's font, once; only
+// a translation's percentages wait for the box (flow_transform_t). A
+// function libflow cannot work out — a calc() it cannot settle — leaves the
+// property as it was, as a value it cannot read does.
+
+static const flow_length_t kNoLength = {FLOW_LENGTH_AUTO, 0, 0};
+
+static void identity(double m[16])
+{
+    os64_memset(m, 0, 16 * sizeof(double));
+    m[0] = m[5] = m[10] = m[15] = 1;
+}
+
+static double radians(const garb_val_t *v)
+{
+    static const double kPi = 3.14159265358979323846;
+    switch (v->unit) {
+    case GARB_U_GRAD: return v->number * kPi / 200;
+    case GARB_U_RAD: return v->number;
+    case GARB_U_TURN: return v->number * 2 * kPi;
+    default: return v->number * kPi / 180;
+    }
+}
+
+// A number, a percentage as its hundredth, or a calc() of numbers.
+static bool author_number(const Author *a, const garb_val_t *v, double *out)
+{
+    Lp r;
+    if (v->kind == GARB_V_NUMBER)
+        *out = v->number;
+    else if (v->kind == GARB_V_PERCENTAGE)
+        *out = v->number / 100;
+    else if (v->kind == GARB_V_CALC && v->calc != NULL && calc(a, v->calc, a->font, &r) && r.number)
+        *out = r.px;
+    else
+        return false;
+    return true;
+}
+
+// A length, in 26.6.
+static bool author_px(const Author *a, const garb_val_t *v, double *out)
+{
+    Len l;
+    if (!author_len(a, v, false, &l) || l.kind != L_PX)
+        return false;
+    *out = l.v;
+    return true;
+}
+
+// A turn of `angle` radians about the axis (x, y, z), into `m`: Rodrigues'
+// rotation, which is Transforms 2 § 12.2's rotate3d() — clockwise on the
+// glass about z, since y points down — with the axis made a unit vector.
+// An axis of no length turns nothing.
+static void rotation(double m[16], double x, double y, double z, double angle)
+{
+    double len = sqrt(x * x + y * y + z * z);
+    if (!(len > 0))
+        return;
+    x /= len;
+    y /= len;
+    z /= len;
+    double c = cos(angle), s = sin(angle), t = 1 - c;
+    m[0] = c + x * x * t;
+    m[1] = y * x * t + z * s;
+    m[2] = z * x * t - y * s;
+    m[4] = x * y * t - z * s;
+    m[5] = c + y * y * t;
+    m[6] = z * y * t + x * s;
+    m[8] = x * z * t + y * s;
+    m[9] = y * z * t - x * s;
+    m[10] = c + z * z * t;
+}
+
+static bool is_fn(const char *n, const char *a, const char *b)
+{
+    return os64_streq(n, a) || (b != NULL && os64_streq(n, b));
+}
+
+// One function of a transform list, by libgarb's name for it (values.h).
+static bool author_fn(const Author *a, const garb_val_t *f, flow_transform_t *out)
+{
+    const char *n = f->keyword;
+    const garb_val_t *v = f->items;
+    int32_t k = f->nitems;
+    double *m = out->m, unit = FLOW_UNITS_PER_PX * a->c->zoom, d[16];
+    out->x = out->y = (flow_length_t){FLOW_LENGTH_PX, 0, 0};
+    identity(m);
+    if (k < 1)
+        return false;
+    if (is_fn(n, "translate", "translatex") || is_fn(n, "translatey", "translate3d")) {
+        bool y_only = os64_streq(n, "translatey");
+        if (!y_only)
+            out->x = author_lp(a, &v[0], kNoLength);
+        if (y_only || (k > 1 && !os64_streq(n, "translatex")))
+            out->y = author_lp(a, &v[y_only ? 0 : 1], kNoLength);
+        return out->x.kind != FLOW_LENGTH_AUTO && out->y.kind != FLOW_LENGTH_AUTO &&
+               (!os64_streq(n, "translate3d") || (k == 3 && author_px(a, &v[2], &m[14])));
+    }
+    if (os64_streq(n, "translatez"))
+        return author_px(a, &v[0], &m[14]);
+    if (os64_streq(n, "perspective")) {
+        // `none` is no perspective; a distance below 1px is 1px
+        // (Transforms 2 § 12.2).
+        double dist;
+        if (v[0].kind == GARB_V_KEYWORD)
+            return true;
+        if (!author_px(a, &v[0], &dist))
+            return false;
+        m[11] = -1 / (dist > unit ? dist : unit);
+        return true;
+    }
+    for (int32_t i = 0; i < k && i < 16; i++)
+        if (v[i].kind != GARB_V_ANGLE && !author_number(a, &v[i], &d[i]))
+            return false;
+    if (is_fn(n, "scale", "scale3d")) {
+        m[0] = d[0];
+        m[5] = k > 1 ? d[1] : d[0];
+        m[10] = k > 2 ? d[2] : 1;
+    } else if (is_fn(n, "scalex", NULL)) {
+        m[0] = d[0];
+    } else if (is_fn(n, "scaley", NULL)) {
+        m[5] = d[0];
+    } else if (is_fn(n, "scalez", NULL)) {
+        m[10] = d[0];
+    } else if (is_fn(n, "rotate", "rotatez")) {
+        rotation(m, 0, 0, 1, radians(&v[0]));
+    } else if (is_fn(n, "rotatex", NULL)) {
+        rotation(m, 1, 0, 0, radians(&v[0]));
+    } else if (is_fn(n, "rotatey", NULL)) {
+        rotation(m, 0, 1, 0, radians(&v[0]));
+    } else if (is_fn(n, "rotate3d", NULL) && k == 4) {
+        rotation(m, d[0], d[1], d[2], radians(&v[3]));
+    } else if (is_fn(n, "skew", "skewx")) {
+        m[4] = tan(radians(&v[0]));
+        if (k > 1)
+            m[1] = tan(radians(&v[1]));
+    } else if (is_fn(n, "skewy", NULL)) {
+        m[1] = tan(radians(&v[0]));
+    } else if (is_fn(n, "matrix", NULL) && k == 6) {
+        m[0] = d[0], m[1] = d[1], m[4] = d[2], m[5] = d[3];
+        m[12] = d[4] * unit, m[13] = d[5] * unit;
+    } else if (is_fn(n, "matrix3d", NULL) && k == 16) {
+        // Its lengths are CSS pixels: the translation is scaled into 26.6,
+        // and the perspective row, which divides by a length, out of it.
+        for (int i = 0; i < 16; i++)
+            m[i] = d[i];
+        m[12] *= unit, m[13] *= unit, m[14] *= unit;
+        m[3] /= unit, m[7] /= unit, m[11] /= unit;
+    } else {
+        return false;
+    }
+    return true;
+}
+
+// `none`, or a FUNCTIONS list (values.h). Past the lists' budget, or with a
+// function libflow cannot work out, the property is as it was; false only
+// when memory runs out.
+static bool author_transform(const Author *a, flow_style_t *s, const garb_val_t *v)
+{
+    if (word(v, "none")) {
+        s->transform = NULL;
+        s->ntransform = 0;
+        return true;
+    }
+    if (v->kind != GARB_V_FUNCTIONS || v->nitems <= 0)
+        return true;
+    bool spent;
+    flow_transform_t *out = list_alloc(a->c, (size_t)v->nitems * sizeof(*out), &spent);
+    if (out == NULL)
+        return spent;
+    for (int32_t i = 0; i < v->nitems; i++)
+        if (!author_fn(a, &v->items[i], &out[i]))
+            return true;
+    s->transform = out;
+    s->ntransform = v->nitems;
+    return true;
+}
+
+// `translate`, `rotate` or `scale` (libgarb's G_TRANSLATE, G_ROTATE and
+// G_SCALE): `none`, or the one function it is, what it leaves out its
+// initial value.
+static bool author_individual(const Author *a, flow_style_t *s, garb_prop_t p,
+                              const garb_val_t *v)
+{
+    const flow_transform_t **slot = p == GARB_TRANSLATE ? &s->translate
+                                  : p == GARB_ROTATE ? &s->rotate : &s->scale;
+    if (word(v, "none")) {
+        *slot = NULL;
+        return true;
+    }
+    flow_transform_t t;
+    t.x = t.y = (flow_length_t){FLOW_LENGTH_PX, 0, 0};
+    identity(t.m);
+    const garb_val_t *it = v->items;
+    int32_t n = v->nitems;
+    bool ok = true;
+    if (p == GARB_TRANSLATE) {
+        ok = n >= 1;
+        if (n >= 1)
+            t.x = author_lp(a, &it[0], kNoLength);
+        if (n >= 2)
+            t.y = author_lp(a, &it[1], kNoLength);
+        if (n >= 3)
+            ok = author_px(a, &it[2], &t.m[14]);
+        ok = ok && t.x.kind != FLOW_LENGTH_AUTO && t.y.kind != FLOW_LENGTH_AUTO;
+    } else if (p == GARB_SCALE) {
+        double sc[3] = {1, 1, 1};
+        ok = n >= 1;
+        for (int32_t i = 0; i < n && i < 3 && ok; i++)
+            ok = author_number(a, &it[i], &sc[i]);
+        t.m[0] = sc[0];
+        t.m[5] = n == 1 ? sc[0] : sc[1];
+        t.m[10] = sc[2];
+    } else if (v->kind == GARB_V_ANGLE) {
+        rotation(t.m, 0, 0, 1, radians(v));
+    } else {
+        double axis[3];
+        ok = n == 4 && it[3].kind == GARB_V_ANGLE;
+        for (int i = 0; i < 3 && ok; i++)
+            ok = author_number(a, &it[i], &axis[i]);
+        if (ok)
+            rotation(t.m, axis[0], axis[1], axis[2], radians(&it[3]));
+    }
+    if (!ok)
+        return true;
+    bool spent;
+    flow_transform_t *out = list_alloc(a->c, sizeof(*out), &spent);
+    if (out == NULL)
+        return spent;
+    *out = t;
+    *slot = out;
     return true;
 }
 
@@ -2772,6 +3023,27 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
         if (!author_shadows(a, s, v, p == GARB_BOX_SHADOW))
             return false;
         break;
+    case GARB_TRANSFORM:
+        if (!author_transform(a, s, v))
+            return false;
+        break;
+    case GARB_TRANSLATE: case GARB_ROTATE: case GARB_SCALE:
+        if (!author_individual(a, s, p, v))
+            return false;
+        break;
+    case GARB_TRANSFORM_ORIGIN: {
+        // x, y and z (values.h).
+        flow_length_t x = v->nitems == 3 ? author_lp(a, &v->items[0], kNoLength) : kNoLength;
+        flow_length_t y = v->nitems == 3 ? author_lp(a, &v->items[1], kNoLength) : kNoLength;
+        double z;
+        if (x.kind != FLOW_LENGTH_AUTO && y.kind != FLOW_LENGTH_AUTO &&
+            author_px(a, &v->items[2], &z)) {
+            s->transform_origin[0] = x;
+            s->transform_origin[1] = y;
+            s->transform_origin_z = round_i32(z);
+        }
+        break;
+    }
     case GARB_BORDER_TOP_LEFT_RADIUS: case GARB_BORDER_TOP_RIGHT_RADIUS:
     case GARB_BORDER_BOTTOM_RIGHT_RADIUS: case GARB_BORDER_BOTTOM_LEFT_RADIUS:
         // A corner is two items, horizontal and vertical (libgarb's G_RADIUS).
@@ -3107,6 +3379,8 @@ static FStyled *style_element(Ctx *c, const os64_html_node_t *n)
     out->in_nobr = (up != NULL && up->in_nobr) || is(n, OS64_HTML_TAG_NOBR);
     out->quotes = (up != NULL ? up->quotes : 0) + is(n, OS64_HTML_TAG_Q);
     out->anchor = f_contains_absolute(&sp.s) ? n : up != NULL ? up->anchor : NULL;
+    out->fixed_anchor = f_contains_absolute(&sp.s) && f_transforms(&sp.s) ? n
+                      : up != NULL ? up->fixed_anchor : NULL;
     out->transparent = sp.s.opacity == 0 || (up != NULL && up->transparent);
     FStyled *holder = f_map_get(&c->out->map, n->parent);
     if (holder != NULL && is(n, OS64_HTML_TAG_RP))

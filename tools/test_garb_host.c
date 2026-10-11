@@ -878,7 +878,9 @@ static int sweep_cascade(const char *what, const char *text, size_t len)
 // (props.c's shadow_list and Layers), so their failure is said by hand:
 // each allocation of reading such a declaration failed alone, the read must
 // be the whole one or say it is incomplete — never an invalid declaration
-// with the sheet calling itself whole (Quinn, #203).
+// with the sheet calling itself whole (Quinn, #203). A transform's lists
+// are kept in the arena, and are swept beside them as the other lists a
+// declaration builds of its own.
 static int sweep_grown_lists(void)
 {
     static const char *const decls[] = {"box-shadow: 1px 1px red",
@@ -889,7 +891,11 @@ static int sweep_grown_lists(void)
                                         "background: url(a) 0 0 / 2px, url(b), url(c) content-box, "
                                         "url(d), linear-gradient(red, blue) red",
                                         "background-position: 0 0, 1px 2px, center, right, top, "
-                                        "left 3px bottom"};
+                                        "left 3px bottom",
+                                        "transform: translate(1px, 2px) rotate(3deg) scale(2) "
+                                        "matrix(1, 0, 0, 1, 0, 0)",
+                                        "transform-origin: left 10px 2px", "rotate: 1 1 0 10deg",
+                                        "translate: 1px 2%"};
     int failures = 0;
     for (size_t d = 0; d < sizeof(decls) / sizeof(decls[0]); d++) {
         garb_set_t sets[GARB_SETS_MAX];
@@ -925,7 +931,7 @@ static int sweep_grown_lists(void)
             garb_free(&r);
         }
     }
-    printf("libgarb sweep, shadow and layer lists: every allocation of the read failed alone, %s\n",
+    printf("libgarb sweep, shadow, layer and transform lists: every allocation of the read failed alone, %s\n",
            failures == 0 ? "each the whole read or marked incomplete" : "FAILED");
     return failures;
 }

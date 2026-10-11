@@ -30,6 +30,9 @@ typedef struct {
 enum { ACCEPT_LENGTH = 1, ACCEPT_PERCENT = 2, ACCEPT_NUMBER = 4 };
 
 bool vc_dim(VCur *c, int accept, bool negative, bool quirky, Arena *a, garb_val_t *out);
+// An angle (Values 4 § 7.1), and a unitless 0 as 0deg where `zero` lets
+// it be one. Not inside calc(), which has no angle type here.
+bool vc_angle(VCur *c, bool zero, garb_val_t *out);
 bool vc_color(VCur *c, garb_val_t *out);
 bool vc_url(VCur *c, garb_val_t *out);
 bool vc_image(VCur *c, garb_val_t *out);

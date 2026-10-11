@@ -74,6 +74,15 @@ typedef enum {
     // pixels kept as they were written.
     GARB_IMAGE_RENDERING,
     GARB_CLIP,
+    // Transforms 1 § 4-5 and 2 § 5-6. `transform`: the KEYWORD none, or a
+    // FUNCTIONS list. `transform-origin`: a LENGTH whose three items are x,
+    // y (a length-percentage, its keywords as the percentages they are)
+    // and z (a length). `translate`: none, or a LENGTH whose one to three
+    // items are x, y (length-percentages) and z (a length). `scale`: none,
+    // or a NUMBER whose one to three items are each a NUMBER or a
+    // PERCENTAGE. `rotate`: none, an ANGLE about z, or a NUMBER whose four
+    // items are an axis's x, y and z and the ANGLE.
+    GARB_TRANSFORM, GARB_TRANSFORM_ORIGIN, GARB_TRANSLATE, GARB_ROTATE, GARB_SCALE,
     GARB_NPROPS
 } garb_prop_t;
 
@@ -119,6 +128,14 @@ typedef enum {
     // § 3.1): one value per layer in `items`, the top layer first. A list
     // of one is that one value, never this.
     GARB_V_LAYERS,
+    // `number` in `unit`, one of the angle units (Values 4 § 7.1). Where a
+    // grammar takes a unitless 0 for an angle it is read as 0deg.
+    GARB_V_ANGLE,
+    // Functions applied in order, left to right, in `items`: a transform
+    // list (Transforms 1 § 4), each a FUNCTION whose `keyword` is its name
+    // in lowercase and whose items are its arguments — LENGTH, PERCENTAGE,
+    // NUMBER, CALC, ANGLE, or perspective()'s KEYWORD none.
+    GARB_V_FUNCTIONS,
 } garb_vkind_t;
 
 typedef enum {
@@ -127,6 +144,8 @@ typedef enum {
     // A grid track's share of the free space (Grid 2 § 7.2.4), which only
     // a track list reads: no other length accepts it.
     GARB_U_FR,
+    // An ANGLE's: no length accepts them.
+    GARB_U_DEG, GARB_U_GRAD, GARB_U_RAD, GARB_U_TURN,
 } garb_unit_t;
 
 // sRGB, channels 0..255 kept as written (Color 4 serializes 209.525 as
@@ -142,8 +161,8 @@ typedef struct garb_calc garb_calc_t;
 typedef struct garb_val {
     garb_vkind_t kind;
     const char *keyword;    // KEYWORD, WIDE
-    double number;          // LENGTH, PERCENTAGE, NUMBER
-    garb_unit_t unit;       // LENGTH
+    double number;          // LENGTH, PERCENTAGE, NUMBER, ANGLE
+    garb_unit_t unit;       // LENGTH, ANGLE
     garb_color_t color;     // COLOR
     const char *text;       // URL, STRING (a grid area's or line's name too), IMAGE
     size_t len;
@@ -179,6 +198,9 @@ typedef struct {
 // The most tracks one grid track list, or rows one grid-template-areas,
 // is read with; a value with more is invalid.
 #define GARB_TRACKS_MAX 256
+// The most functions one transform list is read with; a value with more is
+// invalid.
+#define GARB_TRANSFORMS_MAX 64
 
 // A declaration read against its property's grammar: the longhands it sets
 // into `out` (a shorthand sets them all, the ones it leaves out to their

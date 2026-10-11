@@ -116,6 +116,11 @@ static const Prop kProps[GARB_NPROPS] = {
     [GARB_TEXT_SHADOW] = {"text-shadow", true},
     [GARB_IMAGE_RENDERING] = {"image-rendering", true},
     [GARB_CLIP] = {"clip", false},
+    [GARB_TRANSFORM] = {"transform", false},
+    [GARB_TRANSFORM_ORIGIN] = {"transform-origin", false},
+    [GARB_TRANSLATE] = {"translate", false},
+    [GARB_ROTATE] = {"rotate", false},
+    [GARB_SCALE] = {"scale", false},
 };
 
 const char *garb_prop_name(garb_prop_t prop)
@@ -145,7 +150,8 @@ static const char *const kDisplay[] = {
 // says. The list is for what a page writes a
 // fallback for — asks for one thing and is handed another, or nothing — and
 // each joins it the day its mapping is written and leaves the day the slice
-// that draws it lands.
+// that draws it lands. A transform is judged by what it does, not by a
+// keyword (transform_approximated, below).
 static const struct {
     garb_prop_t prop;
     const char *keyword;
@@ -161,10 +167,87 @@ static bool image_drawn(const garb_val_t *v)
     return v->kind != GARB_V_IMAGE || v->nitems > 0;
 }
 
+// Whether a transform's argument is `want` as written — a percentage as
+// its hundredth, an angle in any unit — so that what it does is known
+// before anything is laid out; a calc() is not.
+static bool exactly(const garb_val_t *v, double want)
+{
+    return (v->kind == GARB_V_NUMBER && v->number == want) ||
+           (v->kind == GARB_V_PERCENTAGE && v->number == want * 100) ||
+           (v->kind == GARB_V_ANGLE && want == 0 && v->number == 0);
+}
+
+// Whether a transform function only moves what it is applied to, as a
+// flat drawing shows it (PILE3.md § Transforms): a translation, and a
+// function that does nothing at all as written. One that reaches only z
+// — translateZ, scaleZ — changes nothing a flat drawing shows.
+static bool starts(const char *s, const char *prefix)
+{
+    for (; *prefix != '\0'; s++, prefix++)
+        if (*s != *prefix)
+            return false;
+    return true;
+}
+
+static bool moves_only(const garb_val_t *f)
+{
+    const char *n = f->keyword;
+    const garb_val_t *a = f->items;
+    int32_t k = f->nitems;
+    if (starts(n, "translate") || os64_streq(n, "scalez"))
+        return true;
+    if (os64_streq(n, "scale") || os64_streq(n, "scale3d"))
+        return exactly(&a[0], 1) && (k < 2 || exactly(&a[1], 1));
+    if (os64_streq(n, "scalex") || os64_streq(n, "scaley"))
+        return exactly(&a[0], 1);
+    if (os64_streq(n, "skew"))
+        return exactly(&a[0], 0) && (k < 2 || exactly(&a[1], 0));
+    if (starts(n, "rotate") || starts(n, "skew"))
+        return exactly(&a[k - 1], 0);
+    if (os64_streq(n, "perspective"))
+        return a[0].kind == GARB_V_KEYWORD;
+    // A matrix's linear part is the identity, and a 3D one's flat drawing
+    // divides by nothing: x' = m0 x + m4 y + m12, y' = m1 x + m5 y + m13,
+    // over m3 x + m7 y + m15.
+    static const int8_t k3d[] = {0, 1, 3, 4, 5, 7, 15};
+    static const double want3d[] = {1, 0, 0, 0, 1, 0, 1};
+    bool three = os64_streq(n, "matrix3d");
+    for (int i = 0; i < (three ? 7 : 4); i++)
+        if (!exactly(&a[three ? k3d[i] : i], three ? want3d[i] : i == 0 || i == 3))
+            return false;
+    return true;
+}
+
+// What of a transform value is drawn as something other than it says
+// until slice S7b, by the name of the function or property: anything that
+// does more than move the box. Judged a function at a time, so a list
+// whose functions undo one another is taken to do more than it does.
+static const char *transform_approximated(garb_prop_t prop, const garb_val_t *v)
+{
+    if (v->kind == GARB_V_KEYWORD)
+        return NULL;
+    if (prop == GARB_ROTATE) {
+        const garb_val_t *a = v->kind == GARB_V_ANGLE ? v : &v->items[v->nitems - 1];
+        return exactly(a, 0) ? NULL : "rotate";
+    }
+    if (prop == GARB_SCALE) {
+        for (int32_t i = 0; i < v->nitems && i < 2; i++)
+            if (!exactly(&v->items[i], 1))
+                return "scale";
+        return NULL;
+    }
+    for (int32_t i = 0; i < v->nitems; i++)
+        if (!moves_only(&v->items[i]))
+            return v->items[i].keyword;
+    return NULL;
+}
+
 // What is approximated, by the name the page wrote — the keyword, or the
 // image function — or NULL when the value is laid out as it says.
 static const char *value_approximated(garb_prop_t prop, const garb_val_t *v)
 {
+    if (prop == GARB_TRANSFORM || prop == GARB_ROTATE || prop == GARB_SCALE)
+        return transform_approximated(prop, v);
     if (!image_drawn(v))
         return v->text;
     // A list of layers is approximated when any layer is: the page asked
@@ -975,16 +1058,8 @@ static bool only_ws(const Group *g)
 
 static bool angle(VCur *c)
 {
-    const garb_value_t *t = vc_peek(c);
-    if (t == NULL)
-        return false;
-    bool ok = (t->kind == GARB_DIMENSION &&
-               (ieq(t->unit, t->unit_len, "deg") || ieq(t->unit, t->unit_len, "grad") ||
-                ieq(t->unit, t->unit_len, "rad") || ieq(t->unit, t->unit_len, "turn"))) ||
-              (t->kind == GARB_NUMBER && t->number == 0);   // Images 3: a unitless zero
-    if (ok)
-        c->i++;
-    return ok;
+    garb_val_t v;
+    return vc_angle(c, true, &v);   // Images 3: a unitless zero
 }
 
 static bool length_percentage(Sets *s, VCur *c)
@@ -1682,6 +1757,11 @@ typedef enum {
     G_GRID_LINE,            // auto | <integer> | span <integer> | <custom-ident>
     G_RADIUS,               // a corner: <lp [0,∞]>{1,2}, horizontal then vertical
     G_SHADOW,               // none | <shadow>#, a box's (`inset`, spread) or text's
+    G_TRANSFORM,            // none | <transform-function>+
+    G_ORIGIN,               // transform-origin: a position and a z
+    G_TRANSLATE,            // none | <lp> [<lp> <length>?]?
+    G_ROTATE,               // none | <angle> && [x | y | z | <number>{3}]?
+    G_SCALE,                // none | [<number> | <percentage>]{1,3}
 } Grammar;
 
 typedef struct {
@@ -1749,6 +1829,9 @@ static const Longhand kLonghands[] = {
     {GARB_BORDER_BOTTOM_LEFT_RADIUS, G_RADIUS, NULL},
     {GARB_BOX_SHADOW, G_SHADOW, NULL}, {GARB_TEXT_SHADOW, G_SHADOW, NULL},
     {GARB_IMAGE_RENDERING, G_KEYWORDS, kImageRendering},
+    {GARB_TRANSFORM, G_TRANSFORM, NULL}, {GARB_TRANSFORM_ORIGIN, G_ORIGIN, NULL},
+    {GARB_TRANSLATE, G_TRANSLATE, NULL}, {GARB_ROTATE, G_ROTATE, NULL},
+    {GARB_SCALE, G_SCALE, NULL},
 };
 
 static bool longhand_one(Sets *s, VCur *c, const Longhand *l, garb_val_t *out);
@@ -2075,6 +2158,227 @@ static bool grid_line(Sets *s, VCur *c, garb_val_t *out)
     return false;
 }
 
+// ── Transforms (Transforms 1 § 4-5, § 9; Transforms 2 § 5-6, § 12) ─────
+
+// Each transform function by its lowercase name, and its arguments, comma
+// separated, one letter each: `p` a length-percentage, `l` a length, `n` a
+// number, `s` a number or a percentage, `a` an angle or a unitless 0 — the
+// first `min` of them written, the rest optional.
+static const struct {
+    const char *name;
+    const char *args;
+    int32_t min;
+} kTransformFns[] = {
+    {"matrix", "nnnnnn", 6}, {"matrix3d", "nnnnnnnnnnnnnnnn", 16},
+    {"translate", "pp", 1}, {"translatex", "p", 1}, {"translatey", "p", 1},
+    {"translatez", "l", 1}, {"translate3d", "ppl", 3},
+    {"scale", "ss", 1}, {"scalex", "s", 1}, {"scaley", "s", 1}, {"scalez", "s", 1},
+    {"scale3d", "sss", 3},
+    {"rotate", "a", 1}, {"rotatex", "a", 1}, {"rotatey", "a", 1}, {"rotatez", "a", 1},
+    {"rotate3d", "nnna", 4},
+    {"skew", "aa", 1}, {"skewx", "a", 1}, {"skewy", "a", 1},
+    // `none`, or a length that is not negative.
+    {"perspective", "l", 1},
+};
+
+static bool transform_fn(Sets *s, VCur *c, garb_val_t *out)
+{
+    const garb_value_t *f = vc_peek(c);
+    if (f == NULL || f->kind != GARB_FUNCTION)
+        return false;
+    for (size_t k = 0; k < sizeof(kTransformFns) / sizeof(kTransformFns[0]); k++) {
+        if (!ieq(f->text, f->len, kTransformFns[k].name))
+            continue;
+        const char *kinds = kTransformFns[k].args;
+        bool perspective = os64_streq(kTransformFns[k].name, "perspective");
+        VCur args[16];
+        garb_val_t vals[16];
+        int32_t n = fn_args(f, args, (int32_t)os64_strlen(kinds));
+        if (n < kTransformFns[k].min)
+            return false;
+        for (int32_t i = 0; i < n; i++) {
+            VCur *a = &args[i];
+            bool ok;
+            switch (kinds[i]) {
+            case 'p': ok = vc_dim(a, ACCEPT_LENGTH | ACCEPT_PERCENT, true, false, &s->a, &vals[i]); break;
+            case 'l':
+                if (perspective && vc_keyword(a, kNone) != NULL) {
+                    vals[i] = kw("none");
+                    ok = true;
+                } else {
+                    ok = vc_dim(a, ACCEPT_LENGTH, !perspective, false, &s->a, &vals[i]);
+                }
+                break;
+            case 'n': ok = vc_dim(a, ACCEPT_NUMBER, true, false, &s->a, &vals[i]); break;
+            case 's': ok = vc_dim(a, ACCEPT_NUMBER | ACCEPT_PERCENT, true, false, &s->a, &vals[i]); break;
+            default: ok = vc_angle(a, true, &vals[i]); break;
+            }
+            if (!ok || !vc_done(a))
+                return false;
+        }
+        *out = fn_val(s, kTransformFns[k].name, vals, n);
+        c->i++;
+        return out->nitems == n;
+    }
+    return false;
+}
+
+static bool transform_list(Sets *s, VCur *c, garb_val_t *out)
+{
+    if (vc_keyword(c, kNone) != NULL) {
+        *out = kw("none");
+        return true;
+    }
+    garb_val_t fns[GARB_TRANSFORMS_MAX];
+    int32_t n = 0;
+    while (!vc_done(c)) {
+        if (n == GARB_TRANSFORMS_MAX || !transform_fn(s, c, &fns[n]))
+            return false;
+        n++;
+    }
+    if (n == 0)
+        return false;
+    os64_memset(out, 0, sizeof(*out));
+    out->kind = GARB_V_FUNCTIONS;
+    out->items = keep(s, fns, n);
+    out->nitems = out->items != NULL ? n : 0;
+    return out->nitems == n;
+}
+
+// One of transform-origin's first two values: a keyword, as its
+// percentage, with `*axis` 0 for x, 1 for y and -1 for `center`, which is
+// either; or a length-percentage, `*axis` 2.
+static bool origin_part(Sets *s, VCur *c, garb_val_t *out, int *axis)
+{
+    static const char *const kWords[] = {"left", "center", "right", "top", "bottom", NULL};
+    const char *k = vc_keyword(c, kWords);
+    if (k == NULL) {
+        *axis = 2;
+        return vc_dim(c, ACCEPT_LENGTH | ACCEPT_PERCENT, true, false, &s->a, out);
+    }
+    bool start = os64_streq(k, "left") || os64_streq(k, "top");
+    bool centre = os64_streq(k, "center");
+    *out = percent(start ? 0 : centre ? 50 : 100);
+    *axis = centre ? -1 : os64_streq(k, "left") || os64_streq(k, "right") ? 0 : 1;
+    return true;
+}
+
+// Transforms 1 § 5: one value names its own axis (a length is x) and the
+// other is the centre; two are x then y, or two keywords in either order;
+// a z may follow two. Kept as x, y and z.
+static bool origin(Sets *s, VCur *c, garb_val_t *out)
+{
+    garb_val_t v[3];
+    int ax[2];
+    if (!origin_part(s, c, &v[0], &ax[0]))
+        return false;
+    if (vc_done(c)) {
+        if (ax[0] == 1) {
+            v[1] = v[0];
+            v[0] = percent(50);
+        } else {
+            v[1] = percent(50);
+        }
+    } else {
+        if (!origin_part(s, c, &v[1], &ax[1]))
+            return false;
+        bool in_order = ax[0] != 1 && ax[1] != 0;
+        bool swapped = (ax[0] == 1 || ax[0] == -1) && (ax[1] == 0 || ax[1] == -1);
+        if (!in_order && !swapped)
+            return false;
+        if (!in_order) {
+            garb_val_t x = v[1];
+            v[1] = v[0];
+            v[0] = x;
+        }
+    }
+    os64_memset(&v[2], 0, sizeof(v[2]));
+    v[2].kind = GARB_V_LENGTH;
+    v[2].unit = GARB_U_PX;
+    if (!vc_done(c) && !vc_dim(c, ACCEPT_LENGTH, true, false, &s->a, &v[2]))
+        return false;
+    os64_memset(out, 0, sizeof(*out));
+    out->kind = GARB_V_LENGTH;
+    out->items = keep(s, v, 3);
+    out->nitems = out->items != NULL ? 3 : 0;
+    return out->nitems == 3;
+}
+
+// `translate` and `scale` (Transforms 2 § 5): `none`, or one to three
+// values — for translate a length-percentage, another, then a length; for
+// scale each a number or a percentage — kept as a `kind` list.
+static bool individual(Sets *s, VCur *c, bool translate, garb_val_t *out)
+{
+    if (vc_keyword(c, kNone) != NULL) {
+        *out = kw("none");
+        return true;
+    }
+    garb_val_t v[3];
+    int32_t n = 0;
+    while (n < 3 && !vc_done(c)) {
+        int accept = translate ? (n < 2 ? ACCEPT_LENGTH | ACCEPT_PERCENT : ACCEPT_LENGTH)
+                               : ACCEPT_NUMBER | ACCEPT_PERCENT;
+        if (!vc_dim(c, accept, true, false, &s->a, &v[n]))
+            return false;
+        n++;
+    }
+    if (n == 0)
+        return false;
+    os64_memset(out, 0, sizeof(*out));
+    out->kind = translate ? GARB_V_LENGTH : GARB_V_NUMBER;
+    out->items = keep(s, v, n);
+    out->nitems = out->items != NULL ? n : 0;
+    return out->nitems == n;
+}
+
+// `rotate` (Transforms 2 § 5): `none`, or an angle with an axis before or
+// after it — `x`, `y`, `z` or three numbers. About z it is the angle
+// alone; about any other axis, the axis's three numbers and the angle.
+static bool rotate(Sets *s, VCur *c, garb_val_t *out)
+{
+    static const char *const kAxes[] = {"x", "y", "z", NULL};
+    if (vc_keyword(c, kNone) != NULL) {
+        *out = kw("none");
+        return true;
+    }
+    garb_val_t v[4];
+    bool angle = false, axis = false;
+    for (int k = 0; k < 2 && !vc_done(c); k++) {
+        const char *name;
+        if (!angle && vc_angle(c, false, &v[3])) {
+            angle = true;
+        } else if (!axis && (name = vc_keyword(c, kAxes)) != NULL) {
+            axis = true;
+            for (int i = 0; i < 3; i++) {
+                os64_memset(&v[i], 0, sizeof(v[i]));
+                v[i].kind = GARB_V_NUMBER;
+                v[i].number = name[0] == (char)('x' + i);
+            }
+        } else if (!axis) {
+            for (int i = 0; i < 3; i++)
+                if (!vc_dim(c, ACCEPT_NUMBER, true, false, &s->a, &v[i]))
+                    return false;
+            axis = true;
+        } else {
+            return false;
+        }
+    }
+    if (!angle)
+        return false;
+    bool about_z = !axis || (v[0].kind == GARB_V_NUMBER && v[0].number == 0 &&
+                             v[1].kind == GARB_V_NUMBER && v[1].number == 0 &&
+                             v[2].kind == GARB_V_NUMBER && v[2].number > 0);
+    if (about_z) {
+        *out = v[3];
+        return true;
+    }
+    os64_memset(out, 0, sizeof(*out));
+    out->kind = GARB_V_NUMBER;
+    out->items = keep(s, v, 4);
+    out->nitems = out->items != NULL ? 4 : 0;
+    return out->nitems == 4;
+}
+
 // The background longhands take a comma-separated list, one per layer
 // (Backgrounds 3 § 3.1), the top layer first.
 static bool layered(const Longhand *l)
@@ -2326,6 +2630,11 @@ static bool longhand_one(Sets *s, VCur *c, const Longhand *l, garb_val_t *out)
         return true;
     }
     case G_GRID_LINE: return grid_line(s, c, out);
+    case G_TRANSFORM: return transform_list(s, c, out);
+    case G_ORIGIN: return origin(s, c, out);
+    case G_TRANSLATE: return individual(s, c, true, out);
+    case G_SCALE: return individual(s, c, false, out);
+    case G_ROTATE: return rotate(s, c, out);
     }
     return false;
 }
@@ -2776,7 +3085,8 @@ static void num(Out *o, double v)
 }
 
 static const char *const kUnitNames[] = {"px", "em", "rem", "ex", "ch", "vw", "vh", "vmin",
-                                         "vmax", "pt", "pc", "cm", "mm", "in", "q", "fr"};
+                                         "vmax", "pt", "pc", "cm", "mm", "in", "q", "fr",
+                                         "deg", "grad", "rad", "turn"};
 
 static void val(Out *o, const garb_val_t *v);
 
@@ -2850,7 +3160,8 @@ static void val(Out *o, const garb_val_t *v)
     switch (v->kind) {
     case GARB_V_KEYWORD:
     case GARB_V_WIDE: put(o, v->keyword); break;
-    case GARB_V_LENGTH: num(o, v->number); put(o, kUnitNames[v->unit]); break;
+    case GARB_V_LENGTH:
+    case GARB_V_ANGLE: num(o, v->number); put(o, kUnitNames[v->unit]); break;
     case GARB_V_PERCENTAGE: num(o, v->number); put(o, "%"); break;
     case GARB_V_NUMBER: num(o, v->number); break;
     case GARB_V_COLOR:
@@ -2874,7 +3185,8 @@ static void val(Out *o, const garb_val_t *v)
     case GARB_V_STRING: put(o, "\""); put_n(o, v->text, v->len); put(o, "\""); break;
     case GARB_V_CALC: calc(o, v->calc, AT_TOP); break;
     case GARB_V_IMAGE: put_n(o, v->text, v->len); put(o, "(...)"); break;
-    case GARB_V_TRACKS: case GARB_V_FUNCTION: case GARB_V_LAYERS: break;  // always with items, above
+    case GARB_V_TRACKS: case GARB_V_FUNCTION: case GARB_V_LAYERS: case GARB_V_FUNCTIONS:
+        break;                      // always with items, above
     }
 }
 

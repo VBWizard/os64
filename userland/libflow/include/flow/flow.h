@@ -391,6 +391,15 @@ typedef struct {
     bool current;
 } flow_shadow_t;
 
+// One function of a transform (CSS Transforms 1 § 9, 2 § 12): a
+// translation by `x` and `y` — PX, or PERCENT of the border box, which
+// waits for the box — then `m`, a 4x4 matrix in column-major order (CSS's
+// matrix3d() order) whose lengths are in 26.6, as a box's are.
+typedef struct {
+    flow_length_t x, y;
+    double m[16];
+} flow_transform_t;
+
 // CSS Position 3 § 2 (POSITION.md).
 typedef enum {
     FLOW_POSITION_STATIC = 0,
@@ -550,6 +559,16 @@ typedef struct {
     // not each thing in it (flow_visit_groups) — but for an inline box
     // and an inline-block, which are painted opaque (PILE3.md § Booked).
     uint16_t opacity;
+    // Transforms (PILE3.md § Transforms): the `transform` list, NULL and 0
+    // for none, and the individual `translate`, `rotate` and `scale`, each
+    // one function or NULL for none — all the style's, and living as long
+    // as it does. They are multiplied in that order, the individual three
+    // before the list, about `transform_origin`: x and y PX or PERCENT of
+    // the border box, then z.
+    const flow_transform_t *transform, *translate, *rotate, *scale;
+    int32_t ntransform;
+    flow_length_t transform_origin[2];
+    flow_unit_t transform_origin_z;
     // `pointer-events: none` (CSS UI 4 § 5.1), inherited: flow_hit passes
     // through the box to whatever is under it, though a descendant that
     // sets `auto` is still hit. Zero is `auto`, the initial value.

@@ -13,13 +13,18 @@
 // and never through its tree ancestors, whose walks skip it — and their
 // overflow rects leave it out, and its clip is what its containing blocks
 // allow. A block-level box in the flow below full opacity is stacked too
-// (PILE3.md § The blend), and keeps its parent's overflow, clip and frame.
+// (PILE3.md § The blend), and keeps its parent's overflow, clip and frame;
+// so is a transformed one, block-level or an atom on a line, in a frame of
+// its own.
 // A STICKY box is where the flow put it, and the door works out, at each
 // scroll, how far to draw it moved (flow_box_doc_offset). So is a SCROLL
 // CONTAINER's content, drawn moved back by the container's scroll position,
-// which is the one thing a face may change here (flow_scroll_set). Both
-// are FRAMES (flow_frame_t): every box carries the innermost one that
-// moves it.
+// which is the one thing a face may change here (flow_scroll_set). So is
+// a TRANSFORMED box, with everything in it, drawn through its matrix
+// (PILE3.md § Transforms). All three are FRAMES (flow_frame_t): every box
+// carries the innermost one that moves it.
+
+#include <math.h>
 
 #include "internal.h"
 #include "garb/cascade.h"
@@ -251,14 +256,9 @@ static bool is_sticky(const FBox *b)
 // its tree parent hands its content, or, out of flow, what its containing
 // block hands its — an inline's being its home's, since an inline clips
 // nothing. Only an out-of-flow box asks: every other box is handed its
-// parent's by the build, which is the same answer. What clips a frame from
-// outside does not move with it, so it is the frame's (flow_frame_t.clip):
-// a sticky box's own is nothing, and what it hands its content is only
-// what clips inside it; a scroll container hands its content nothing.
+// parent's by the build, which is the same answer.
 static Clip outer_clip(const FBox *b)
 {
-    if (is_sticky(b))
-        return kNoClip;
     if (b->out_of_flow) {
         const FPos *cb = b->pos != NULL ? b->pos->cb : NULL;
         if (cb == NULL)
@@ -268,9 +268,15 @@ static Clip outer_clip(const FBox *b)
     return b->parent != NULL ? content_clip(b->parent) : kNoClip;
 }
 
+// What clips a frame from outside does not move with it, so it is the
+// frame's (flow_frame_t.clip): what a sticky or transformed box hands its
+// content is only what clips inside it, and a scroll container hands its
+// content nothing.
 static Clip content_clip(const FBox *b)
 {
-    return f_box_scrolls(b) ? kNoClip : inner_clip(b, outer_clip(b));
+    if (f_box_scrolls(b))
+        return kNoClip;
+    return inner_clip(b, is_sticky(b) || b->transformed ? kNoClip : outer_clip(b));
 }
 
 // An absolute/fixed rectangle clips its own painting and descendants,
@@ -448,10 +454,120 @@ static void sticky_reach_scrolled(flow_tree_t *t)
     }
 }
 
+// ── Transforms (CSS Transforms 1 § 3, 2 § 6) ─────────────────────────────
+
+// a · b, column-major.
+static void mat_mul(double out[16], const double a[16], const double b[16])
+{
+    double r[16];
+    for (int c = 0; c < 4; c++)
+        for (int k = 0; k < 4; k++) {
+            double s = 0;
+            for (int i = 0; i < 4; i++)
+                s += a[i * 4 + k] * b[c * 4 + i];
+            r[c * 4 + k] = s;
+        }
+    os64_memcpy(out, r, sizeof(r));
+}
+
+// m · T(x, y, z): a translation applied before m.
+static void mat_translate(double m[16], double x, double y, double z)
+{
+    for (int k = 0; k < 4; k++)
+        m[12 + k] += m[k] * x + m[4 + k] * y + m[8 + k] * z;
+}
+
+// m · T(the function's x, y) · its matrix, a percentage of the border box
+// `w` by `h`.
+static void mat_fn(double m[16], const flow_transform_t *f, int64_t w, int64_t h)
+{
+    mat_translate(m, (double)f_len(f->x, w), (double)f_len(f->y, h), 0);
+    mat_mul(m, m, f->m);
+}
+
+void f_transform_matrix(const flow_style_t *s, int64_t x, int64_t y, int64_t w, int64_t h,
+                        double m[16])
+{
+    os64_memset(m, 0, 16 * sizeof(double));
+    m[0] = m[5] = m[10] = m[15] = 1;
+    double ox = (double)(x + f_len(s->transform_origin[0], w));
+    double oy = (double)(y + f_len(s->transform_origin[1], h));
+    double oz = s->transform_origin_z;
+    mat_translate(m, ox, oy, oz);
+    if (s->translate != NULL)
+        mat_fn(m, s->translate, w, h);
+    if (s->rotate != NULL)
+        mat_fn(m, s->rotate, w, h);
+    if (s->scale != NULL)
+        mat_fn(m, s->scale, w, h);
+    for (int32_t i = 0; i < s->ntransform; i++)
+        mat_fn(m, &s->transform[i], w, h);
+    mat_translate(m, -ox, -oy, -oz);
+}
+
+// A move in 26.6 as whole pixels, held to what a point says; one that is
+// not a number — a matrix the page wrote with an infinity in it — moves
+// nothing.
+static int32_t move_px(double d)
+{
+    if (!(d == d))
+        return 0;
+    return edge32(round_px((int64_t)fmax(fmin(d, 4e18), -4e18)));
+}
+
+// A transformed box's frame, its border box at (x, y), `w` by `h` in 26.6:
+// it and everything in it are drawn through its matrix, and `clip`, what
+// clips it from outside, stays where it is. Drawn flat, the point (x, y)
+// goes where the matrix sends (x, y, 0), over w (Transforms 2 § 4); `by`
+// is how far that moves the transform-origin.
+static const flow_frame_t *transform_new(Build *bd, const flow_style_t *s, int64_t x, int64_t y,
+                                         int64_t w, int64_t h, const flow_box_t *b, Clip clip)
+{
+    flow_frame_t *f = f_arena_alloc(&bd->t->arena, sizeof(*f));
+    if (f == NULL) {
+        bd->failed = true;
+        return NULL;
+    }
+    f->kind = F_FRAME_TRANSFORM;
+    f->box = b;
+    f->moves = true;
+    f->mover = f;
+    f->outer = b->frame;
+    f->clips = clip.x || clip.y;
+    f->clip = clip_rect(clip);
+    f->clipped = f->clips || (f->outer != NULL && f->outer->clipped);
+    double *m = f->matrix;
+    f_transform_matrix(s, x, y, w, h, m);
+    double ox = (double)(x + f_len(s->transform_origin[0], w));
+    double oy = (double)(y + f_len(s->transform_origin[1], h));
+    double tx = m[0] * ox + m[4] * oy + m[12], ty = m[1] * ox + m[5] * oy + m[13];
+    double tw = m[3] * ox + m[7] * oy + m[15];
+    // Behind the eye a point is not drawn at all, nor moved.
+    double dx = tw > 0 ? tx / tw - ox : 0, dy = tw > 0 ? ty / tw - oy : 0;
+    f->by = (flow_point_t){move_px(dx), move_px(dy)};
+    // A translation, as a flat drawing shows it: x' = (m0 x + m4 y + m12) /
+    // (m3 x + m7 y + m15) is x moved when m0 = m15, m4 = m3 = m7 = 0, and
+    // y' likewise.
+    const double e = 1e-9;
+    f->upright = !(fabs(m[3]) < e && fabs(m[7]) < e && m[15] > 0 && fabs(m[0] - m[15]) < e &&
+                   fabs(m[5] - m[15]) < e && fabs(m[1]) < e && fabs(m[4]) < e);
+    return f;
+}
+
+// Whether a box moves in a transform frame of its own: its element is
+// transformed (FBox.transformed), and it is not an inline-block's content,
+// which its atom's moves.
+static bool own_transform(const FBox *src, const flow_box_t *b)
+{
+    return src->transformed && (b->parent == NULL || b->parent->kind != FLOW_BOX_ATOMIC);
+}
+
 // What a box's own frame is: an out-of-flow box moves with its containing
-// block, every other with its parent (add), and a sticky box with itself,
-// `clip` being what clips it from outside; a scroll container is
-// remembered for the sticky boxes inside it. False on no memory.
+// block, every other with its parent (add), and a sticky or transformed
+// box with itself, `clip` being what clips it from outside — a box both
+// sticky and transformed, its transform frame inside its sticky one; a
+// scroll container is remembered for the sticky boxes inside it. False on
+// no memory.
 static bool frame_box(Build *bd, const FBox *src, flow_box_t *b, Clip clip)
 {
     if (src->out_of_flow) {
@@ -460,6 +576,12 @@ static bool frame_box(Build *bd, const FBox *src, flow_box_t *b, Clip clip)
     }
     if (is_sticky(src)) {
         b->frame = sticky_new(bd, src, b, clip);
+        if (b->frame == NULL)
+            return false;
+        clip = kNoClip;
+    }
+    if (own_transform(src, b)) {
+        b->frame = transform_new(bd, src->style, src->x, src->y, src->w, src->h, b, clip);
         if (b->frame == NULL)
             return false;
     }
@@ -525,25 +647,46 @@ static os64_gui_rect_t cut_to(os64_gui_rect_t r, os64_gui_rect_t c)
     return r;
 }
 
+static os64_gui_rect_t moved(os64_gui_rect_t r, int64_t dx, int64_t dy);
+
 // The positioned boxes a scroll container's content holds, which its own
 // walk leaves out — a relative box in its flow, a box its content is the
-// containing block of, and either inside a sticky box in it — reach as far
-// as what of them can be SEEN: their overflow rects, cut by every clip
-// between them and the container — their own, and each sticky frame's on
-// the way out — but not the container's, which is what scrolling reaches
-// past. Sticky boxes are counted where the flow put them, as the content
-// is.
-static void scroll_reach_positioned(flow_tree_t *t)
+// containing block of, and either inside a sticky or transformed box in it
+// — reach as far as what of them can be SEEN: their overflow rects, cut by
+// every clip between them and the container — their own, and each sticky
+// or transform frame's on the way out — but not the container's, which is
+// what scrolling reaches past. Sticky boxes are counted where the flow put
+// them, as the content is; a transformed box where its frame draws it,
+// moved (Transforms 1 § 3). So a stacked box a transform moves reaches
+// too, and outside every scroll container it reaches the page's extent
+// (flow_width, flow_height) — unless it is fixed to the viewport, which the
+// page is never scrolled to reach.
+static void reach_stacked(flow_tree_t *t)
 {
-    for (int32_t i = 0; i < t->npositioned; i++) {
-        const flow_box_t *p = t->positioned[i];
+    for (int32_t i = 0; i < t->nstacked; i++) {
+        const flow_box_t *p = t->stacked[i];
         os64_gui_rect_t r = p->clipped ? cut_to(p->overflow, p->clip) : p->overflow;
+        bool transformed = false;
         const flow_frame_t *f = p->frame;
-        for (; f != NULL && f->kind == F_FRAME_STICKY; f = f->outer)
+        for (; f != NULL && f->kind != F_FRAME_SCROLL; f = f->outer) {
+            if (f->kind == F_FRAME_TRANSFORM) {
+                r = moved(r, f->by.x, f->by.y);
+                transformed = true;
+            }
             if (f->clips)
                 r = cut_to(r, f->clip);
-        if (f != NULL && r.w > 0 && r.h > 0)
-            scroll_reach(t->scrollers[f->index], (int64_t)r.x + r.w, (int64_t)r.y + r.h);
+        }
+        if ((!p->positioned && !transformed) || r.w <= 0 || r.h <= 0)
+            continue;
+        int64_t right = (int64_t)r.x + r.w, bottom = (int64_t)r.y + r.h;
+        if (f != NULL) {
+            scroll_reach(t->scrollers[f->index], right, bottom);
+        } else if (transformed && !p->fixed) {
+            if (right * 64 > t->layout->width)
+                t->layout->width = right * 64;
+            if (bottom * 64 > t->layout->height)
+                t->layout->height = bottom * 64;
+        }
     }
 }
 
@@ -582,6 +725,18 @@ static void public_frag(Build *bd, const FFrag *fr, flow_box_t *parent, flow_box
     flow_box_t *b = add(bd, parent, last, kind, fr->node, fr->style);
     if (b == NULL)
         return;
+    // A transformed atom — a replaced box or an inline-block — is a
+    // stacking context, painted whole with its content, in a frame of its
+    // own.
+    if (fr->kind == FF_ATOMIC && f_transforms(fr->style)) {
+        b->stacked = true;
+        if (!push_list(bd, &bd->t->stacked, &bd->t->nstacked, &bd->t->cap_stacked, b))
+            return;
+        b->frame = transform_new(bd, fr->style, fr->x, fr->y, fr->w, fr->h, b, clip);
+        if (b->frame == NULL)
+            return;
+        clip = kNoClip;         // its frame's, where it stays as the atom moves
+    }
     set_clip(b, clip);
     b->rect = rect_of(fr->x, fr->y, fr->w, fr->h);
     b->overflow = b->rect;
@@ -627,15 +782,18 @@ static flow_box_t *public_box(Build *bd, const FBox *src, flow_box_t *parent, fl
     b->positioned = src->positioned;
     b->floated = src->floated;
     b->clearance = (int32_t)round_px(src->clearance);
-    b->fixed |= src->out_of_flow && src->style->position == FLOW_POSITION_FIXED;
+    // Fixed to the viewport, unless a transformed box round it is its
+    // containing block, which it scrolls with.
+    b->fixed |= src->out_of_flow && src->style->position == FLOW_POSITION_FIXED &&
+                src->pos != NULL && src->pos->cb == NULL;
     if (src->positioned &&
         !push_list(bd, &bd->t->positioned, &bd->t->npositioned, &bd->t->cap_positioned, b))
         return b;
     // Below full opacity, a box its block-level parent's walks would reach
-    // is a stacking context of its own, painted whole. The root is the
-    // first context already, and an inline-block's content is painted where
-    // its atom is, on the line.
-    b->stacked = src->positioned ||
+    // is a stacking context of its own, painted whole; and so is one
+    // transformed. The root is the first context already, and an
+    // inline-block's content is painted where its atom is.
+    b->stacked = src->positioned || (parent != NULL && own_transform(src, b)) ||
                  (src->style->opacity < 1000 && parent != NULL && parent->kind <= FLOW_BOX_CELL);
     if (b->stacked &&
         !push_list(bd, &bd->t->stacked, &bd->t->nstacked, &bd->t->cap_stacked, b))
@@ -646,7 +804,7 @@ static flow_box_t *public_box(Build *bd, const FBox *src, flow_box_t *parent, fl
     b->unfinished = src->unfinished;
     if (!frame_box(bd, src, b, clip))
         return b;
-    if (is_sticky(src))
+    if (is_sticky(src) || own_transform(src, b))
         clip = kNoClip;         // its frame's, where it stays as the box moves
     b->content = rect_of(src->x + src->border[FLOW_LEFT] + src->padding[FLOW_LEFT],
         src->y + src->border[FLOW_TOP] + src->padding[FLOW_TOP],
@@ -693,7 +851,8 @@ static flow_box_t *public_box(Build *bd, const FBox *src, flow_box_t *parent, fl
             if (fr->kind == FF_PLACEHOLDER)
                 continue;
             public_frag(bd, fr, line, &pieces, in);
-            if (pieces != NULL)
+            // A transformed atom reaches where it is drawn (reach_stacked).
+            if (pieces != NULL && !pieces->stacked)
                 line->overflow = join(line->overflow, pieces->overflow);
         }
         b->overflow = join(b->overflow, line->overflow);
@@ -703,7 +862,8 @@ static flow_box_t *public_box(Build *bd, const FBox *src, flow_box_t *parent, fl
         if (!c->placed)
             continue;
         flow_box_t *child = public_box(bd, c, b, &kids, c->out_of_flow ? outer_clip(c) : in);
-        if (child != NULL && !c->positioned) {
+        // A positioned or transformed child reaches by itself (reach_stacked).
+        if (child != NULL && !c->positioned && !c->transformed) {
             b->overflow = join(b->overflow, child->overflow);
             content_reach(scroll, src, child->overflow);
         }
@@ -762,9 +922,10 @@ const os64_page_t *flow_model(const flow_tree_t *tree)
 // ── Stacking (CSS 2.1 Appendix E, § 9.9.1) ───────────────────────────────
 //
 // A STACKING CONTEXT is the root, a positioned box with a z-index, a fixed
-// or sticky one, or any box painted at less than full opacity (CSS
-// Position 3, Color 4) — which is why such a box is stacked even in the
-// flow, where it paints as a positioned box of z-index 0 would. Each
+// or sticky one, or any box painted at less than full opacity or
+// transformed (CSS Position 3, Color 4, Transforms 1 § 3) — which is why
+// such a box is stacked even in the flow, where it paints as a positioned
+// box of z-index 0 would. Each
 // stacked box belongs to the nearest one that is its ancestor; within a
 // context its members paint after the context's own background — those of
 // negative z-index first, then the context's own content, then the rest by
@@ -778,7 +939,8 @@ static bool makes_context(const flow_box_t *b)
 {
     const flow_style_t *s = b->style;
     return s->has_z_index || s->position == FLOW_POSITION_FIXED ||
-           s->position == FLOW_POSITION_STICKY || s->opacity < 1000;
+           s->position == FLOW_POSITION_STICKY || s->opacity < 1000 ||
+           (b->frame != NULL && b->frame->box == b && b->frame->kind == F_FRAME_TRANSFORM);
 }
 
 // z-index applies to a positioned box; a box stacked in the flow is 0.
@@ -970,7 +1132,7 @@ flow_tree_t *flow_layout(const os64_html_document_t *doc, const os64_page_t *mod
             flow_free(tree);
             return NULL;
         }
-        scroll_reach_positioned(tree);
+        reach_stacked(tree);
         sticky_reach_scrolled(tree);
     }
     return tree;
@@ -1098,8 +1260,9 @@ static flow_point_t shift(Frames *m, const flow_frame_t *s, flow_point_t at, flo
 
 // A frame's offset: the scroll under a fixed box, then each frame's move,
 // outermost first, each worked in the frame the one outside it moved — a
-// sticky box's push, a scroll container's scroll position taken back. A
-// sticky box that does not move is where the frame it is in puts it.
+// sticky box's push, a scroll container's scroll position taken back, a
+// transformed box's `by`. A sticky box that does not move is where the
+// frame it is in puts it.
 static flow_point_t frame_of(Frames *m, const flow_frame_t *s, bool fixed, flow_point_t scroll)
 {
     s = s != NULL ? s->mover : NULL;
@@ -1109,8 +1272,9 @@ static flow_point_t frame_of(Frames *m, const flow_frame_t *s, bool fixed, flow_
         if (m->s[i] == s)
             return m->at[i];
     flow_point_t at = frame_of(m, s->outer, fixed, scroll);
-    flow_point_t d = s->kind == F_FRAME_SCROLL ? (flow_point_t){-s->at.x, -s->at.y}
-                                               : shift(m, s, at, scroll);
+    flow_point_t d = s->kind == F_FRAME_SCROLL      ? (flow_point_t){-s->at.x, -s->at.y}
+                   : s->kind == F_FRAME_TRANSFORM ? s->by
+                                                  : shift(m, s, at, scroll);
     flow_point_t here = {edge32((int64_t)at.x + d.x), edge32((int64_t)at.y + d.y)};
     if (m->n < F_FRAME_DEPS) {
         m->s[m->n] = s;
@@ -1301,8 +1465,17 @@ static void visit_floats(const Visit *v, const flow_box_t *b)
     }
 }
 
-// Step 7: the inline content — each line's spans and fragments, an atom's
-// own content painted where the atom is — and the markers.
+// A piece of a line, and an atom's own content painted where the atom is,
+// whole.
+static void visit_piece(const Visit *v, const flow_box_t *f)
+{
+    v->visit(v->ctx, f);
+    for (const flow_box_t *inner = f->first; inner != NULL; inner = inner->next)
+        visit_whole(v, inner);
+}
+
+// Step 7: the inline content — each line's spans and fragments, but for a
+// stacked atom, which is a layer of its own — and the markers.
 static void visit_inline(const Visit *outer, const flow_box_t *b)
 {
     if (b->unpainted || !meets(b->overflow, outer->view))
@@ -1313,13 +1486,9 @@ static void visit_inline(const Visit *outer, const flow_box_t *b)
         if (c->kind == FLOW_BOX_LINE) {
             if (!meets(c->overflow, v->view))
                 continue;
-            for (const flow_box_t *f = c->first; f != NULL; f = f->next) {
-                if (f->unpainted || !meets(f->overflow, v->view))
-                    continue;
-                v->visit(v->ctx, f);
-                for (const flow_box_t *inner = f->first; inner != NULL; inner = inner->next)
-                    visit_whole(v, inner);
-            }
+            for (const flow_box_t *f = c->first; f != NULL; f = f->next)
+                if (!f->stacked && !f->unpainted && meets(f->overflow, v->view))
+                    visit_piece(v, f);
         } else if (c->kind == FLOW_BOX_MARKER) {
             if (!c->unpainted && meets(c->overflow, v->view))
                 v->visit(v->ctx, c);
@@ -1385,7 +1554,10 @@ void flow_visit_groups(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_p
         Visit v = {tree, moved(viewport, -(int64_t)o.x, -(int64_t)o.y), visit, ctx};
         switch (tree->layers[i].part) {
         case PART_WHOLE:
-            visit_whole(&v, b);
+            if (b->kind != FLOW_BOX_ATOMIC)
+                visit_whole(&v, b);
+            else if (!b->unpainted && meets(b->overflow, v.view))
+                visit_piece(&v, b);
             break;
         case PART_SELF:
             if (!b->unpainted && meets(b->overflow, v.view))

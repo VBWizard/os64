@@ -120,6 +120,31 @@ p: margin-top: 1px; margin-right: 2px; margin-bottom: 3px; padding-bottom: 7px; 
 (end)
 END
 
+# Transforms in @supports (PILE3.md § Transforms): what only moves a box is
+# drawn as it says, and so is a function that does nothing as written —
+# Tailwind's `rotate(0)` and `scaleX(1)` — or reaches only z; a rotation,
+# a scale, a skew or a perspective is drawn moved and upright until slice
+# S7b, so a page takes the fallback it wrote.
+VIEWPORT 800x600
+PAGE
+<!doctype html><style>
+@supports (transform: translate(-50%, -50%)) { p { margin-top: 1px } }
+@supports (transform: translateX(10px) rotate(0) skew(0, 0) scaleX(1) translateZ(0)) { p { margin-right: 2px } }
+@supports (transform: rotate(45deg)) { p { margin-bottom: 3px } }
+@supports (transform: matrix(1, 0, 0, 1, 5, 5)) { p { margin-left: 4px } }
+@supports (transform: matrix(2, 0, 0, 1, 5, 5)) { p { padding-top: 5px } }
+@supports (transform: perspective(100px)) { p { padding-right: 6px } }
+@supports (rotate: 0deg) { p { padding-bottom: 7px } }
+@supports (scale: 1.1) { p { padding-left: 8px } }
+@supports (translate: 10px 10px) { p { width: 9px } }
+@supports (transform-origin: left top) { p { height: 10px } }
+</style>
+<p>x
+WANT
+p: margin-top: 1px; margin-right: 2px; margin-left: 4px; padding-bottom: 7px; width: 9px; height: 10px
+(end)
+END
+
 # Floats in @supports: a float, `clear` and `flow-root` are laid out as they
 # say (FLOATS.md), so a page that asks is not handed its fallback.
 VIEWPORT 800x600

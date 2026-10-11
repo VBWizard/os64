@@ -1,9 +1,10 @@
 # libflow is the geometry of a page (LAYOUT.md): what libhtml parsed and
 # libpage understood, laid out as boxes. It records DT_NEEDED edges on
 # libgarb (the author's winners it computes), libpage (whether a node is a
-# link or a control), libhtml (the tree it walks) and libos64 (strings, the
-# formatter, the text engine); none of those knows a box exists. libgarb is
-# included first so LIBGARB_SO is defined when this file's rules are read.
+# link or a control), libhtml (the tree it walks), libmath (a transform's
+# turns) and libos64 (strings, the formatter, the text engine); none of
+# those knows a box exists. libgarb and libmath are included first so
+# LIBGARB_SO and LIBMATH_SO are defined when this file's rules are read.
 LIBFLOW_SRCS := libflow/store.c libflow/attrs.c libflow/style.c libflow/boxes.c libflow/layout.c \
                 libflow/flow.c libflow/dump.c
 LIBFLOW_OBJS := $(patsubst %,$(OBJ)/pic/%.o,$(LIBFLOW_SRCS))
@@ -17,12 +18,12 @@ LIBFLOW_LDFLAGS = $(SHARED_LIB_LDFLAGS) -soname libflow.so
 
 # library.mk holds the object list and the link flags: removing a source
 # creates no newer object, so without it the old library would look current.
-$(LIBFLOW_SO): $(LIBFLOW_OBJS) $(LIBGARB_SO) $(LIBPAGE_SO) $(LIBHTML_SO) $(LIBOS64_SO) $(CURDIR)/link/lib.ld \
+$(LIBFLOW_SO): $(LIBFLOW_OBJS) $(LIBGARB_SO) $(LIBPAGE_SO) $(LIBHTML_SO) $(LIBMATH_SO) $(LIBOS64_SO) $(CURDIR)/link/lib.ld \
                $(CURDIR)/tools/app_bases.py libflow/library.mk
 	@mkdir -p "$(BIN)"
 	$(LD) --defsym LIB_BASE=$(LIBFLOW_BASE) \
 	      --defsym LIB_SLOT_SIZE=$(LIB_SLOT_SIZE) $(LIBFLOW_LDFLAGS) --no-as-needed \
-	      -o $@ $(LIBFLOW_OBJS) $(LIBGARB_SO) $(LIBPAGE_SO) $(LIBHTML_SO) $(LIBOS64_SO)
+	      -o $@ $(LIBFLOW_OBJS) $(LIBGARB_SO) $(LIBPAGE_SO) $(LIBHTML_SO) $(LIBMATH_SO) $(LIBOS64_SO)
 	@printf '  %-10s prelinked at %s\n' "libflow.so" "$(LIBFLOW_BASE)"
 
 $(OBJ)/pic/libflow/%.c.o: libflow/%.c libflow/library.mk GNUmakefile

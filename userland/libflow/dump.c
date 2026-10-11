@@ -778,9 +778,17 @@ static void tree_lines(Buf *b, const flow_box_t *box, int32_t depth)
         puts_(b, " stacked");
     if (box->fixed && (box->parent == NULL || !box->parent->fixed))
         puts_(b, " fixed");
-    if (box->frame != NULL && box->frame->box == box && box->frame->kind == F_FRAME_STICKY)
-        putf(b, " sticky x %d..%d y %d..%d", (int)box->frame->lo[0], (int)box->frame->hi[0],
-             (int)box->frame->lo[1], (int)box->frame->hi[1]);
+    // A transformed box's own frame may sit inside its sticky one.
+    const flow_frame_t *own = box->frame != NULL && box->frame->box == box ? box->frame : NULL;
+    if (own != NULL && own->kind == F_FRAME_TRANSFORM) {
+        putf(b, " transform %d %d", (int)own->by.x, (int)own->by.y);
+        if (own->upright)
+            puts_(b, " upright");
+        own = own->outer != NULL && own->outer->box == box ? own->outer : NULL;
+    }
+    if (own != NULL && own->kind == F_FRAME_STICKY)
+        putf(b, " sticky x %d..%d y %d..%d", (int)own->lo[0], (int)own->hi[0], (int)own->lo[1],
+             (int)own->hi[1]);
     if (box->scroller >= 0 && b->scrollers != NULL) {
         const flow_frame_t *f = b->scrollers[box->scroller];
         putf(b, " scroller %d range %d %d", (int)box->scroller, (int)f->range.x, (int)f->range.y);
@@ -789,12 +797,13 @@ static void tree_lines(Buf *b, const flow_box_t *box, int32_t depth)
     }
     if (box->unpainted)
         puts_(b, " unpainted");
-    // What clips it with every scroll container unscrolled: its own clip,
-    // met with each scroll container's whose content it is in, out to the
-    // first frame of another kind, which would move it.
+    // What clips it with every scroll container unscrolled and every
+    // transform undone, as its rect is printed: its own clip, met with each
+    // scroll container's whose content it is in and each transform frame's,
+    // out to the first sticky frame, which would move it.
     if (box->clipped) {
         os64_gui_rect_t c = box->clip;
-        for (const flow_frame_t *f = box->frame; f != NULL && f->kind == F_FRAME_SCROLL;
+        for (const flow_frame_t *f = box->frame; f != NULL && f->kind != F_FRAME_STICKY;
              f = f->outer)
             if (f->clips)
                 c = met(c, f->clip);

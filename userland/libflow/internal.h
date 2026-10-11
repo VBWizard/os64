@@ -73,13 +73,25 @@ static inline bool f_display_grid(flow_display_t d)
 #define F_GRID_MAX 1000
 #define F_GRID_AREA_CELLS 1024
 
+// Whether a style transforms its box (PILE3.md § Transforms): any of the
+// four properties is not `none`. A box that cannot be transformed — a
+// plain inline's — ignores it.
+static inline bool f_transforms(const flow_style_t *s)
+{
+    return s->transform != NULL || s->translate != NULL || s->rotate != NULL ||
+           s->scale != NULL;
+}
+
 // A containing block for the absolute boxes inside it: an element whose
-// position is not static and that makes a box of its own. A table's rows,
-// row groups and columns are not (`position: relative` on them is booked),
-// and neither is anything `display: contents` or `none` makes no box for.
+// position is not static, or that is transformed, and that makes a box of
+// its own — a transformed plain inline is not, since its transform does
+// nothing. A table's rows, row groups and columns are not (`position:
+// relative` and a transform on them are booked), and neither is anything
+// `display: contents` or `none` makes no box for.
 static inline bool f_contains_absolute(const flow_style_t *s)
 {
-    if (s->position == FLOW_POSITION_STATIC)
+    if (s->position == FLOW_POSITION_STATIC &&
+        (!f_transforms(s) || s->display == FLOW_DISPLAY_INLINE))
         return false;
     switch (s->display) {
     case FLOW_DISPLAY_CONTENTS: case FLOW_DISPLAY_NONE:
@@ -209,8 +221,10 @@ typedef struct {
     // inside this one: this element when it can be one
     // (f_contains_absolute), else its parent's answer; NULL for the initial
     // containing block. An absolute element's own containing block is its
-    // PARENT's anchor.
-    const os64_html_node_t *anchor;
+    // PARENT's anchor. `fixed_anchor` is the same for a FIXED box: the
+    // nearest transformed one, whose box is its containing block in place
+    // of the viewport (Transforms 1 § 3).
+    const os64_html_node_t *anchor, *fixed_anchor;
     // `opacity: 0` on this element or an ancestor: nothing of it is painted
     // (flow_box_t.unpainted).
     bool transparent;
@@ -384,10 +398,15 @@ struct FBox {
     // formatting context holds — laid out once its containing block is
     // finished.
     // `pos`: its entry, which every box that is a containing block has: the
-    // positioned ones, and a positioned inline-block's content or root,
-    // which are not `positioned`.
+    // positioned and transformed ones, and a positioned or transformed
+    // inline-block's content or root, which are not `positioned`.
     bool positioned, out_of_flow;
     FPos *pos;
+    // Its element is transformed and the box can be (PILE3.md §
+    // Transforms): drawn moved, with everything in it, by a frame of its own
+    // — an inline-block's content by its atom's — and the containing block
+    // of the out-of-flow boxes inside it, fixed ones included.
+    bool transformed;
     // A float (FLOATS.md): the side, NONE for every other box. It is a
     // block child of the container it was written in, or among inline
     // content a child of the inline formatting context with a FLOAT item
@@ -660,7 +679,7 @@ void f_layout_free(FLayout *layout);
 // bounded however a page nests them.
 #define F_FRAME_DEPS 32
 
-typedef enum { F_FRAME_STICKY = 0, F_FRAME_SCROLL } f_frame_kind_t;
+typedef enum { F_FRAME_STICKY = 0, F_FRAME_SCROLL, F_FRAME_TRANSFORM } f_frame_kind_t;
 
 // A FRAME, as the door built it: what moves a box and everything inside it
 // away from where the flow put them. A STICKY box (CSS Position 3 § 3.4)
@@ -668,7 +687,9 @@ typedef enum { F_FRAME_STICKY = 0, F_FRAME_SCROLL } f_frame_kind_t;
 // below. A SCROLL CONTAINER moves its CONTENT, not itself, back by its own
 // scroll position `at` (CSS Overflow 3 § 2.2): the container is in the
 // frame outside, its content in this one, and its padding box clips that
-// content from outside.
+// content from outside. A TRANSFORMED box (PILE3.md § Transforms) moves
+// itself and its content through its matrix; a box both sticky and
+// transformed has its transform frame inside its sticky one.
 struct flow_frame {
     f_frame_kind_t kind;
     const flow_box_t *box;
@@ -701,6 +722,16 @@ struct flow_frame {
     // How far it may move on each axis, x then y, and stay inside its
     // containing block, margins and all: lo <= 0 <= hi.
     int32_t lo[2], hi[2];
+    // TRANSFORM: its matrix, column-major, in 26.6 document coordinates as
+    // the box was laid out (f_transform_matrix); whether it does more than
+    // translate, as a flat drawing shows it; and `by`, how far it is drawn
+    // moved: how far the matrix moves the transform-origin, in pixels — the
+    // whole of a translation, and for any other matrix the box moved
+    // upright to where its origin goes, until the painter draws through
+    // the matrix (PILE3.md, slice S7b).
+    double matrix[16];
+    bool upright;
+    flow_point_t by;
     // When its containing block is a scroll container (`outer`'s box), the
     // block's content reaches as far down as the container scrolls, so
     // `hi[1]` is `room_down` — the room to the padding box's foot, which
@@ -718,6 +749,14 @@ struct flow_frame {
     os64_gui_rect_t clip;
     bool clips, clipped;
 };
+
+// A transformed box's matrix (flow_frame_t.matrix) from its style and its
+// border box at (x, y), `w` by `h`, all in 26.6: T(origin) · translate ·
+// rotate · scale · the transform list · T(-origin) (Transforms 2 § 6).
+// Made in one place from those alone, so a box's matrix can be made again
+// without laying it out again.
+void f_transform_matrix(const flow_style_t *s, int64_t x, int64_t y, int64_t w, int64_t h,
+                        double m[16]);
 
 // The public tree (flow.c) as text, one line per box (dump.c); `scrollers`
 // are its scroll containers' frames, by flow_box_t.scroller.
