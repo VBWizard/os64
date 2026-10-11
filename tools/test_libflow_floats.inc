@@ -433,6 +433,25 @@ static void float_line_cases(void)
         "      line 0 30 400 20 base 14\n"
         "        text \"" W10 "\" 0 32 80 16 serif 16\n");
 
+    // A float leading a line is placed before its first word is measured
+    // against the band. The second line, at 20, has 50 beside the 350px
+    // float: the 30px float fits there and stands at the line's top; the
+    // word, 80, fits beside neither, and moves down alone to where both
+    // have ended, 50.
+    cascade_layout_case("floats: a float leading a line stays at its top as its word moves down",
+        FLOAT_STYLE ".l{float:left;width:350px;height:50px} .s{float:left;width:30px;height:20px}"
+        "</style><p><span class=l></span>a<br><span class=s></span>" W10 "</p>", 400,
+        "page 400 70\n"
+        "block html 0 0 400 70\n"
+        "  block body 0 0 400 70\n"
+        "    block p 0 0 400 70\n"
+        "      line 350 0 50 20 base 14\n"
+        "        text \"a\" 350 2 8 16 serif 16\n"
+        "      line 0 50 400 20 base 14\n"
+        "        text \"" W10 "\" 0 52 80 16 serif 16\n"
+        "      block span 0 0 350 50 float-left\n"
+        "      block span 350 20 30 20 float-left\n");
+
     // A centred line centres in the room beside the float: 100 + (300 -
     // 80) / 2 = 210.
     {

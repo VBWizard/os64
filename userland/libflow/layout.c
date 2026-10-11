@@ -1312,6 +1312,23 @@ static int64_t first_unit(const Segs *s, size_t start, int64_t indent)
     return w;
 }
 
+// Whether a float not yet placed comes before the line's first content. It
+// is placed first, as high from the line's top as it fits, and the line is
+// measured against the band it leaves: a word that does not fit beside it
+// moves down alone.
+static bool float_leads(const Segs *s, size_t start)
+{
+    for (size_t j = start; j < s->n; j++) {
+        const Seg *g = &s->v[j];
+        if (g->kind == SG_FLOAT && !g->done)
+            return true;
+        if (g->kind == SG_BREAK || g->kind == SG_ATOM || g->kind == SG_MARKER ||
+            (g->kind == SG_WORD && g->b1 > g->b0))
+            return false;
+    }
+    return false;
+}
+
 // Later: a float met in the middle of a line that did not fit beside what
 // was already on it, placed at the top of the next line (FLOATS.md,
 // Decision 2), with the relative inlines open where it was written.
@@ -1388,8 +1405,10 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
         line_room(l, y_at, ask_h, cx, cw, &lx, &lw);
         // A line whose band holds none of its first piece moves down to
         // where a float beside it ends, and tries again; the margins above
-        // it resolve where it would have stood, at its container's top.
-        if ((lx > cx || lw < cw) && first_unit(&s, start, indent) > lw) {
+        // it resolve where it would have stood, at its container's top. A
+        // float leading the line is placed first, and the line asks again.
+        if ((lx > cx || lw < cw) && !float_leads(&s, start) &&
+            first_unit(&s, start, indent) > lw) {
             int64_t next = room_next(l, y_at);
             if (next != INT64_MAX && next > y_at) {
                 if (cur->first < 0) {

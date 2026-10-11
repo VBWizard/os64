@@ -310,7 +310,9 @@ over the line's height, which is not known until the line is broken, so:
   next band boundary below and tries again. This repeats until the
   segment fits or no float remains beside it. Then it overflows, as a word
   wider than the line always has: such a line overlaps the floats beside
-  it by design, and the fuzz exempts it (§ Proof).
+  it by design, and the fuzz exempts it (§ Proof). A float that leads the
+  line is placed first, at the line's top, before the segment is measured
+  against the band, so the segment moves down alone.
 
 **A box that may not overlap floats** (a table, a block-level replaced
 box, a formatting context root that is in the flow: `avoid_floats`) is
