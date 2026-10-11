@@ -272,9 +272,19 @@ def main():
             return 2
 
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    # So a Ctrl-C and an immediate restart does not hit TIME_WAIT and refuse
-    # to bind - which during a debugging session is every single restart.
-    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    # A second os64serve on the same port must refuse to start: two of them
+    # each answer some of the requests, and a machine that installs from
+    # both gets a program from one tree and its libraries from the other.
+    # On Linux SO_REUSEADDR lets a Ctrl-C and an immediate restart bind past
+    # TIME_WAIT, which during a debugging session is every single restart,
+    # and still refuses a port another socket is listening on. Windows gives
+    # the same flag another meaning, binding a port another socket IS
+    # listening on, so there SO_EXCLUSIVEADDRUSE does the refusing (Windows
+    # binds past TIME_WAIT without help). Only Windows Python defines it.
+    if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+    else:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     s.bind((args.bind, args.port))
     s.listen(4)
 
