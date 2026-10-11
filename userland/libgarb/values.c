@@ -144,6 +144,33 @@ bool vc_dim(VCur *c, int accept, bool negative, bool quirky, Arena *a, garb_val_
     return true;
 }
 
+bool vc_angle(VCur *c, bool zero, garb_val_t *out)
+{
+    static const struct { const char *name; garb_unit_t unit; } kAngles[] = {
+        {"deg", GARB_U_DEG}, {"grad", GARB_U_GRAD}, {"rad", GARB_U_RAD}, {"turn", GARB_U_TURN},
+    };
+    const garb_value_t *t = vc_peek(c);
+    if (t == NULL)
+        return false;
+    os64_memset(out, 0, sizeof(*out));
+    out->kind = GARB_V_ANGLE;
+    out->unit = GARB_U_DEG;
+    if (t->kind == GARB_NUMBER && zero && t->number == 0) {
+        c->i++;
+        return true;
+    }
+    if (t->kind != GARB_DIMENSION)
+        return false;
+    for (size_t k = 0; k < sizeof(kAngles) / sizeof(kAngles[0]); k++)
+        if (ieq(t->unit, t->unit_len, kAngles[k].name)) {
+            out->unit = kAngles[k].unit;
+            out->number = t->number;
+            c->i++;
+            return true;
+        }
+    return false;
+}
+
 // ── calc() (Values 3 § 8, Values 4 § 10) ────────────────────────────────
 
 typedef struct {

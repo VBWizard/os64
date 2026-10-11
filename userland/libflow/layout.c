@@ -6816,7 +6816,19 @@ static int64_t legacy_far_edge(const FBox *b, bool horizontal, int64_t edge)
 
 // What is not placed is not on the page — a failed table's unplaced cells
 // keep their lines, and those reach no edge. A positioned child is not
-// reached through its parent: its edges are the list's (page_extent).
+// reached through its parent: its edges are the list's (page_extent). Nor
+// is a transformed one, box or atom, which reaches where it is drawn, not
+// where it was laid out — flow.c's to say, once its frame is built.
+static bool reaches_alone(const FBox *c)
+{
+    return c->positioned || c->transformed;
+}
+
+static bool atom_reaches_alone(const FFrag *fr)
+{
+    return fr->kind == FF_ATOMIC && f_transforms(fr->style);
+}
+
 static int64_t right_edge(const FBox *b)
 {
     if (!b->placed)
@@ -6829,12 +6841,14 @@ static int64_t right_edge(const FBox *b)
         return legacy_far_edge(b,true,r);
     for (const FLine *ln = b->lines; ln != NULL; ln = ln->next)
         for (const FFrag *fr = ln->frags; fr != NULL; fr = fr->next) {
+            if (atom_reaches_alone(fr))
+                continue;
             r = max64(r, fr->x + fr->w - fr->hang);
             if (fr->kind == FF_ATOMIC && fr->item->content != NULL)
                 r = max64(r, right_edge(fr->item->content));
         }
     for (const FBox *c = b->first; c != NULL; c = c->next)
-        if (!c->positioned)
+        if (!reaches_alone(c))
             r = max64(r, right_edge(c));
     return legacy_far_edge(b,true,r);
 }
@@ -6850,12 +6864,14 @@ static int64_t bottom_edge(const FBox *b)
         return legacy_far_edge(b,false,r);
     for (const FLine *ln = b->lines; ln != NULL; ln = ln->next)
         for (const FFrag *fr = ln->frags; fr != NULL; fr = fr->next) {
+            if (atom_reaches_alone(fr))
+                continue;
             r = max64(r, fr->y + fr->h);
             if (fr->kind == FF_ATOMIC && fr->item->content != NULL)
                 r = max64(r, bottom_edge(fr->item->content));
         }
     for (const FBox *c = b->first; c != NULL; c = c->next)
-        if (!c->positioned)
+        if (!reaches_alone(c))
             r = max64(r, bottom_edge(c));
     return legacy_far_edge(b,false,r);
 }
@@ -6880,10 +6896,15 @@ static const FBox *clip_parent(const FBox *b)
 // content included, and not the entries: a build that stopped can leave a
 // positioned box without one. A fixed box and everything in it are left
 // out: it is where it is on the glass, not on the page, and the page is
-// never scrolled to reach it.
+// never scrolled to reach it (one a transformed box contains is inside
+// that box, which this walk does not enter). So is a transformed box and
+// everything in it, fixed boxes it contains included: they reach where
+// they are drawn, which flow.c works out from their frames — all but the
+// root's, which moves the whole page.
 static void page_extent(const FBox *b, int64_t *width, int64_t *height)
 {
-    if (!b->placed || (b->out_of_flow && b->style->position == FLOW_POSITION_FIXED))
+    if (!b->placed || (b->out_of_flow && b->style->position == FLOW_POSITION_FIXED) ||
+        (b->transformed && b->parent != NULL))
         return;
     if (b->positioned) {
         int64_t r = right_edge(b), bottom = bottom_edge(b);

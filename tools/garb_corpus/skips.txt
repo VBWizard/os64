@@ -71,11 +71,11 @@ END
 # reader is counted when it is dropped.
 VIEWPORT 800x600
 PAGE
-<!doctype html><style>p { translate: var(--x) }</style>
-<p style="rotate: 1deg; color: var(--c)">x
+<!doctype html><style>p { filter: var(--x) }</style>
+<p style="cursor: pointer; color: var(--c)">x
 WANT
-property translate 1
-property rotate 1
+property filter 1
+property cursor 1
 (end)
 END
 
@@ -96,6 +96,22 @@ value display: bogusword 1
 value display: inline frob 1
 value background-clip: text 1
 value background-image: conic-gradient 1
+(end)
+END
+
+# A transform that does more than move the box is drawn moved and upright
+# until slice S7b (PILE3.md § Transforms), and counted by the function or
+# property that does more; one that only moves it is not counted.
+VIEWPORT 800x600
+PAGE
+<!doctype html><style>
+p { transform: translateX(10px) rotate(45deg); rotate: 30deg; scale: 1 }
+div { transform: translate(-50%, -50%) rotate(0) scaleY(1); translate: 5px }
+</style>
+<p>x<div>y</div>
+WANT
+value transform: rotate 1
+value rotate: rotate 1
 (end)
 END
 

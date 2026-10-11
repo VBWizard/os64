@@ -340,8 +340,9 @@ static void position_box(B *b, FBox *box, const os64_html_node_t *el, bool block
     // stops here leaves an out-of-flow box filed nowhere, which is never
     // laid out, rather than one laid out in a flow the whole build takes it
     // out of (LAYOUT.md § Proof, the prefix rule).
-    box->positioned = block_level;
+    box->positioned = block_level && box->style->position != FLOW_POSITION_STATIC;
     box->out_of_flow = block_level && f_out_of_flow(box->style);
+    box->transformed = f_transforms(box->style);
     FPos *p = pos_add(b, FP_BOX, el, box->style);
     if (p == NULL)
         return;
@@ -349,12 +350,13 @@ static void position_box(B *b, FBox *box, const os64_html_node_t *el, bool block
     box->pos = p;
     if (!box->out_of_flow)
         return;
-    // A fixed box's containing block is the viewport, whatever is round it
-    // (a transform would change that, and is booked): it is filed with the
+    // A fixed box's containing block is the viewport unless a transformed
+    // element is round it (FStyled.fixed_anchor): it is filed with the
     // initial containing block's, whose rect is the viewport's too.
     const FStyled *up = styled(b, el->parent);
     bool fixed = box->style->position == FLOW_POSITION_FIXED;
-    p->cb = !fixed && up != NULL && up->anchor != NULL ? f_map_get(&b->pos_of, up->anchor) : NULL;
+    const os64_html_node_t *anchor = up == NULL ? NULL : fixed ? up->fixed_anchor : up->anchor;
+    p->cb = anchor != NULL ? f_map_get(&b->pos_of, anchor) : NULL;
     FPos **first = p->cb != NULL ? &p->cb->abs_first : &b->out->icb_first;
     FPos **last = p->cb != NULL ? &p->cb->abs_last : &b->out->icb_last;
     if (*last != NULL)

@@ -497,7 +497,7 @@ he said, not a CSS one — and Fable ruled as he had recommended:
 
 | Debt | Why it waits | Trigger |
 |---|---|---|
-| `transform` (and `translate()` centring) | a transform is a new kind of geometry: a box's rect is no longer where it is drawn | the first centred modal that matters after P1, which will be the first one |
+| `transform` (and `translate()` centring) | a transform is a new kind of geometry: a box's rect is no longer where it is drawn | the first centred modal that matters after P1, which will be the first one — paid by PILE3.md § Transforms (slice S7a) |
 | `clip-path` | arbitrary shapes need path clipping | a page that needs one to be readable |
 | Floats beside positioned boxes | libflow has no floats; a static position among floats is not computed | floats |
 | `position: relative` or `sticky` on table rows, row groups and columns | undefined in CSS 2.1, defined in Position 3; a sticky heading CELL sticks (P4), and that is the common spelling | a page whose sticky `thead` or `tr` matters |

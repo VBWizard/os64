@@ -1,0 +1,48 @@
+<!doctype html>
+<!-- pile 3, S7a: transforms, the model and the translations. Compare with Chrome at 800 wide: every translation lands where Chrome puts it — the drawer slid three quarters off the left, the dialog centred on the panel, the badge nudged up and right, the bar at the foot of its transformed panel (not of the window), Tailwind's six-function slide. The two boxes in the last row turn and grow in Chrome; until S7b yonder draws them upright and unscaled, where their centres are, and its @supports line says so. -->
+<html><head><title>transforms</title>
+<style>
+body { margin: 0; font-family: sans-serif; font-size: 16px }
+.row { position: relative; height: 140px; border-bottom: 1px solid #888; overflow: hidden }
+.label { position: absolute; right: 8px; top: 4px; color: #555 }
+.drawer { position: absolute; top: 10px; left: 0; width: 240px; height: 110px; background: #2050c0; color: #fff; transform: translateX(-75%); text-align: right; padding: 4px; box-sizing: border-box }
+.panel { position: absolute; top: 10px; left: 260px; width: 300px; height: 110px; background: #eee }
+.dialog { position: absolute; left: 50%; top: 50%; width: 160px; height: 50px; background: #f0c020; transform: translate(-50%, -50%) }
+.badge { display: inline-block; background: #c00; color: #fff; padding: 0 4px; transform: translate(4px, -6px) }
+.slid { position: absolute; top: 10px; left: 20px; width: 300px; height: 100px; background: #dde; transform: translateX(240px) }
+.slid .bar { position: fixed; left: 0; bottom: 0; width: 100%; height: 20px; background: #080 }
+.tw { --tw-translate-x: 50%; --tw-translate-y: 0; --tw-rotate: 0; --tw-skew-x: 0; --tw-skew-y: 0; --tw-scale-x: 1; --tw-scale-y: 1;
+      transform: translate(var(--tw-translate-x), var(--tw-translate-y)) rotate(var(--tw-rotate)) skewX(var(--tw-skew-x)) skewY(var(--tw-skew-y)) scaleX(var(--tw-scale-x)) scaleY(var(--tw-scale-y));
+      position: absolute; top: 30px; left: 20px; width: 200px; height: 60px; background: #c0c }
+.turn { position: absolute; top: 30px; left: 40px; width: 80px; height: 80px; background: #08c; transform: rotate(45deg) }
+.grow { position: absolute; top: 40px; left: 200px; width: 60px; height: 60px; background: #c80; transform: scale(1.5) }
+.yes, .no { position: absolute; top: 60px; left: 320px }
+.yes { display: none }
+@supports (transform: rotate(45deg)) { .yes { display: block } .no { display: none } }
+</style></head>
+<body>
+<div class=row>
+  <div class=drawer>drawer</div>
+  <div class=panel><div class=dialog>centred dialog</div></div>
+  <span class=label>slid drawer; centred dialog</span>
+</div>
+<div class=row style="padding: 40px 20px; box-sizing: border-box">
+  Inbox <span class=badge>12</span> messages, the badge nudged up and right.
+  <span class=label>inline-block nudged</span>
+</div>
+<div class=row>
+  <div class=slid>panel slid 240 right<div class=bar></div></div>
+  <span class=label>fixed bar in a transformed panel</span>
+</div>
+<div class=row>
+  <div class=tw>Tailwind: six functions, one slide</div>
+  <span class=label>Tailwind's translation</span>
+</div>
+<div class=row>
+  <div class=turn></div>
+  <div class=grow></div>
+  <div class=yes>@supports says rotate(45deg) is drawn</div>
+  <div class=no>@supports says rotate(45deg) is not drawn yet</div>
+  <span class=label>turned and grown</span>
+</div>
+</body></html>

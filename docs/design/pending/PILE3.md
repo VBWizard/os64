@@ -25,7 +25,7 @@ slices booked against it:
 | **Shadows** | `box-shadow`, `text-shadow` |
 | **Transforms** | 2D `transform`, with hit-testing taken back through it |
 | **Web fonts** | `@font-face`, `unicode-range`, `font-variant: small-caps` |
-| **Animations** | `@keyframes`, `animation`, `transition`, on the Y5b ticker |
+| **Animations** | `@keyframes`, `animation`, `transition`, on the Y5b ticker; and `prefers-reduced-motion` stops answering `reduce` (libgarb's media.c answers it because nothing moves) |
 | **Zoom** | not CSS: the face scales its viewport. Chris asked for it before pile 3 ends (9/27, Hacker News's tiny type) |
 
 **Scrolling boxes** joins it: GARB.md booked `overflow: auto` and `scroll`
@@ -754,3 +754,194 @@ in it; `web.size = 20` giving a 20 px paragraph and 16 px controls.
 | A page's own `font` on a control | controls wear the Web face at the small-control size, whatever the page's CSS says | a page whose styled inputs look wrong |
 | A checkbox at the zoom | its box grows, but the tick is the theme's size | a page of checkboxes at 150% or more |
 | Textviews in the application's face | no browser control is one (a `<textarea>` is a field) | a `<textarea>` drawn as a textview |
+
+## Transforms (slices S7a and S7b)
+
+### What CSS asks (CSS Transforms 1 and 2)
+
+`transform` moves what an element paints without moving it in the flow:
+its layout box stays where it was laid out, and everything the element
+paints — its own background, its children, its text — is drawn through a
+matrix. The matrix is the element's functions (`translate`, `scale`,
+`rotate`, `skew`, `matrix`, and their 3D forms) multiplied left to right,
+about `transform-origin` (the box's centre unless it says otherwise), and
+before them the individual properties `translate`, then `rotate`, then
+`scale` (Transforms 2 § 6). Percentages in a translation are of the
+element's own border box. A transform that is not `none` also:
+
+- makes the element a STACKING CONTEXT, painted where a positioned box of
+  `z-index: 0` would be;
+- makes it the CONTAINING BLOCK of every absolutely positioned AND every
+  FIXED descendant — a fixed box inside a transformed one scrolls with it;
+- adds where its overflow is drawn to its ancestors' scrollable overflow;
+- moves where it is HIT with where it is drawn.
+
+It applies to a TRANSFORMABLE box: block-level or atomic inline-level. A
+plain inline box's transform does nothing.
+
+Without `perspective` a 3D transform is drawn FLAT: the point (x, y) goes
+where the 3D matrix sends (x, y, 0), and z is thrown away. So any 3D
+matrix with no perspective in it is a 2D matrix as far as the page shows,
+and `translateZ(0)` — the "make it a layer" incantation on most of these
+pages — is the identity.
+
+### What the pages ask (measured 10/11)
+
+The census records on the P5 (93 pages) report `transform` on **63** of
+them and `transform-origin` on 51. Their records name properties, not
+values, so the values were counted in the sheets of the census's
+mainstream sites and the pages this pile already knows (Bing, Google,
+Instagram, Radar Online, Wikipedia, GitHub, grokipedia, Hacker News,
+YouTube, osgallery, danlegt): of about 945 STATIC transforms — outside
+`@keyframes` and outside rules for `:hover` and its kind, which wait for
+the animations slice to matter — 482 are translations (`translate(-50%, -50%)` centring,
+drawers slid off-screen), 188 quarter turns and mirrors (`rotate(180deg)`
+chevrons, `scaleX(-1)`), 223 scales (hover lifts, `scale(1.05)`), and
+197 free rotations, skews and matrices. About 4% are 3D, nearly all
+`translateZ(0)` or `translate3d(x, y, 0)`. The individual properties
+appear on osgallery, YouTube, GitHub and Google.
+
+**Exact is a property of the matrix, not of its spelling.** grokipedia's
+drawer, Tailwind 3's `-translate-x-full`, is
+`translate(var(--tw-translate-x), var(--tw-translate-y)) rotate(var(--tw-rotate))
+skew(…) skewY(…) scaleX(…) scaleY(…)` with every variable but the first
+at 0 or 1: a pure translation written as six functions. Counted by
+matrix, the exact share is larger than the 71% above.
+
+### The split
+
+A matrix that only translates moves pixels: everything the painter does
+today, drawn somewhere else. Anything else — even a quarter turn, since
+text is rasterised upright — needs what yonder has never had: a box's
+painting drawn into a surface of its own and then laid onto the page
+through the matrix. So:
+
+- **S7a, the model and the translations.** The properties are read, the
+  matrix is built, and every consequence above is made: stacking, the
+  containing block, overflow, hit-testing. A translation is drawn
+  exactly. Any other matrix is drawn moved to where it puts the
+  transform-origin — upright and unscaled, but where it belongs, so a
+  scaled or rotated thing about its centre stays where it was, and
+  `translate(-50%, -50%) scale(1.1)` is centred. `@supports` says no to
+  such a value while S7a is all there is.
+- **S7b, the painter.** A transformed stacking context is painted into a
+  surface and laid onto the page through its matrix: exactly (an index
+  map) for a quarter turn or a mirror at whole pixels, bilinear
+  otherwise; clips become the matrix's quadrilaterals; hit-testing goes
+  back through the inverse. `background-clip: text` rides in S7b, since a
+  background drawn only where the text is IS a surface of its own laid
+  through a mask (Chris, 10/10: done for real with the transforms work).
+  S7b gets its own section when it starts.
+
+## Transforms, the model and the translations (slice S7a)
+
+### How it is built
+
+**libgarb reads five properties.** `transform`, `transform-origin`,
+`translate`, `rotate` and `scale` (values.h says each one's shape). A
+transform list is a `GARB_V_FUNCTIONS` of `GARB_V_FUNCTION`s, each named
+in lowercase; transform-origin's keywords are kept as the percentages
+they are. Angles are a value kind of their own (`deg`, `grad`, `rad`,
+`turn`, and in a function a unitless `0`, which `rotate(var(--tw-rotate))`
+relies on); an angle inside `calc()` drops the declaration, as a length
+of the wrong kind does. Every 2D and 3D function is read. A value that
+does more than move the box is APPROXIMATED until S7b, judged a function
+at a time: a translation is not, nor a function that does nothing as
+written (Tailwind's `rotate(0)` and `scaleX(1)`) or reaches only z
+(`translateZ`, `scaleZ`); a rotation, a scale, a skew, a matrix that is
+not a translation, and `perspective()` are — `@supports` answers what is
+drawn.
+
+**libflow keeps the list, each function its matrix.** `flow_style_t`
+gains the transform (a list in the style-lists budget,
+`F_STYLE_LISTS_BUDGET`, so a page of thousands cannot multiply it past
+bounds), the three individual properties beside it, one function each,
+and the origin. Every function is made its 4x4 matrix when the style is
+computed, at the element's font; only a translation's percentages wait
+for the box. libflow links libmath for the turns.
+
+**A transform is a FRAME.** Frames already say "this box, and everything
+inside it, is drawn somewhere other than where the flow put it" — a
+sticky push, a scroll — and every door that asks where a box is goes
+through them (`flow_box_doc_offset` and what is built on it: the doc rect,
+the clip, hits, group bounds, the face's verbs). A transformed box gets a
+frame of a third kind, `F_FRAME_TRANSFORM`, that holds its matrix, built
+once its border box is known: `T(origin) · translate · rotate · scale ·
+the list · T(-origin)`, in doubles. Like a sticky frame it moves its own box as well as what is
+inside. A box both sticky and transformed has the transform frame inside
+the sticky one: the matrix is about the box where it sticks. The matrix
+is made in one function from the style and the border box, so the
+animations slice can make it again on a tick without laying out again.
+
+In S7a a transform frame's offset is what the matrix does to the
+transform-origin, rounded by the painter's rule — the whole of the
+matrix for a translation, the approximation above for the rest — so
+every door that already follows frames follows transforms, and S7b turns
+the offset into the matrix itself. That offset is the product of the
+functions' own translation, whatever the origin is: in S7a the origin
+moves nothing, and is the matrix's alone.
+
+**A transformed box is stacked.** `makes_context` adds a transform, and
+`stacked` takes in every transformed transformable box: block-level, and
+— new — an ATOMIC inline box, whose layer is the atom WHOLE, the inline-
+block's block box inside it included. The inline walks (paint and hit)
+skip a stacked atom as the block walks skip a stacked block, and the
+stack paints it in its context at z 0. The transform belongs to an
+element's OUTERMOST box: the atom, and never again the block box inside it.
+
+**A transformed box contains its positioned descendants.** Its element is
+an anchor for absolute boxes, as a positioned one is, and a FIXED box
+takes the nearest transformed ancestor's padding box as its containing
+block instead of the viewport (`position_box`); it is then not `fixed` in
+the public tree — no longer drawn in viewport coordinates, it scrolls
+with the box that holds it.
+
+**Where it is drawn reaches, and where it was laid out does not.** A
+transformed box's overflow, moved by its frame and cut by the clips on
+the way out, is what its scroll container's range or the page's extent
+sees, and so is a positioned box's inside one. Layout's own edges, and a
+parent's overflow, leave a transformed box out, as they leave a
+positioned one: a dialog centred by `translate(-50%, -50%)` does not
+lengthen the page by the half it was moved back.
+
+**yonder** needs nothing new to draw a translation: the verbs are in page
+coordinates already, and a moved box's offset already moves them. A form
+control in a transformed box is placed at its moved rect, so a slid
+drawer's search field slides with it; the image-map point and the DOM's
+`getBoundingClientRect` follow the offset as they already do.
+
+### Proof
+
+`tools/test_garb_*`: the five properties read and printed back, every
+function and both angle spellings, a unitless 0 angle accepted and a
+unitless 5 refused, a 3D list, `perspective()` and an S7b value
+approximated in `@supports` and a translation not, a calc angle dropped.
+`tools/test_libflow_transform.inc`, by hand from the standard: a
+translation's percentages of the border box; the layout unmoved and the
+drawn rect moved; the order of the individual properties against the
+list; `translate(-50%, -50%)` centring an absolute box; a scale and a
+rotation drawn where they were, and a translation after them scaled and
+turned; `matrix()`'s translation in CSS pixels; a transformed block
+stacked and painted after the flow it overlaps, and hit there; a
+transformed box a stacking context; a transformed inline-block stacked as
+one layer, painted once and hit moved; an absolute child placed against
+the transformed box and a fixed one scrolling with it; what clips it from
+outside staying put; the page's extent and a scroller's range reaching a
+translated box, and not where it was laid out; a sticky box transformed;
+grokipedia's Tailwind drawer off the page; a plain inline box's transform
+doing nothing. `tools/test_libflow_transform_mutants.py` breaks each rule
+in turn and the cases catch every one. In the guest, a fixture beside
+headless Chrome: a slid drawer, a centred dialog, an inline-block nudged,
+a fixed bar inside a transformed panel — and grokipedia read from the P5.
+
+### Booked
+
+| Debt | Why it waits | Trigger |
+|---|---|---|
+| Every matrix but a translation drawn upright | the painter draws into the page, never into a surface of its own | S7b |
+| `background-clip: text` | a background drawn through a mask of the text is a surface of its own | S7b |
+| `perspective`, `perspective()`, `transform-style: preserve-3d`, `backface-visibility` | a flat drawing is the answer without them; with them it is a 3D renderer | a page whose 3D card flip matters |
+| `transform-box` | the border box is the default for HTML, and SVG is not drawn | SVG |
+| A transform on a table's rows, row groups and columns | they are no containing blocks here, as `position: relative` on them is not (POSITION.md § Booked) | a page whose transformed row matters |
+| A table's transform moving its captions | the transform sits on the table's own box, and its captions are beside it | a transformed table with a caption |
+| Calc angles | libgarb's calc has no angle type | a page that writes one |

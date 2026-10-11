@@ -738,8 +738,108 @@ OUT: align-self: auto; justify-self: stretch
 IN: justify-items: legacy
 OUT: justify-items: legacy
 
-# ── What libgarb does not read here ──
+# ── Transforms (Transforms 1 § 4-5, § 9; Transforms 2 § 5-6, § 12) ──
+# A function's name is kept in lowercase. An angle takes a unitless 0 in a
+# function and nowhere a unitless anything else; it is never a calc().
 IN: transform: none
+OUT: transform: none
+IN: transform: translate(-50%, -50%)
+OUT: transform: translate(-50%, -50%)
+IN: transform: translateX(10px) rotate(45deg) scale(1.5)
+OUT: transform: translatex(10px) rotate(45deg) scale(1.5)
+IN: transform: ROTATE(1DEG)
+OUT: transform: rotate(1deg)
+IN: transform: rotate(0)
+OUT: transform: rotate(0deg)
+IN: transform: rotate(5)
+OUT: invalid
+IN: transform: rotate(0.25turn) skew(10grad, 1rad)
+OUT: transform: rotate(0.25turn) skew(10grad, 1rad)
+IN: transform: rotate(calc(10deg))
+OUT: invalid
+IN: transform: translateX(calc(100% - 10px))
+OUT: transform: translatex(calc(100% - 10px))
+IN: transform: matrix(1, 0, 0, 1, 10, 20)
+OUT: transform: matrix(1, 0, 0, 1, 10, 20)
+IN: transform: matrix(1, 0, 0, 1, 10)
+OUT: invalid
+IN: transform: translate3d(1px, 2px, 3px) translateZ(0)
+OUT: transform: translate3d(1px, 2px, 3px) translatez(0px)
+IN: transform: translate3d(1px, 2px, 3%)
+OUT: invalid
+IN: transform: scale(50%, -2) scaleZ(3)
+OUT: transform: scale(50%, -2) scalez(3)
+IN: transform: rotate3d(1, 0, 0, 45deg)
+OUT: transform: rotate3d(1, 0, 0, 45deg)
+IN: transform: perspective(none) perspective(100px)
+OUT: transform: perspective(none) perspective(100px)
+IN: transform: perspective(-1px)
+OUT: invalid
+IN: transform: translate(1px,)
+OUT: invalid
+IN: transform: translate(1px, 2px, 3px)
+OUT: invalid
+IN: transform: none rotate(1deg)
+OUT: invalid
+IN: transform: translate(1px), rotate(1deg)
+OUT: invalid
+IN: transform: frobnicate(1px)
+OUT: invalid
+IN: transform: inherit
+OUT: transform: inherit
+# transform-origin: x, y and z, the keywords as their percentages.
+IN: transform-origin: left
+OUT: transform-origin: 0% 50% 0px
+IN: transform-origin: top
+OUT: transform-origin: 50% 0% 0px
+IN: transform-origin: 10px
+OUT: transform-origin: 10px 50% 0px
+IN: transform-origin: bottom right
+OUT: transform-origin: 100% 100% 0px
+IN: transform-origin: center left
+OUT: transform-origin: 0% 50% 0px
+IN: transform-origin: right 20%
+OUT: transform-origin: 100% 20% 0px
+IN: transform-origin: 20% top 5px
+OUT: transform-origin: 20% 0% 5px
+IN: transform-origin: top 20%
+OUT: invalid
+IN: transform-origin: left right
+OUT: invalid
+IN: transform-origin: 1px 2px 3%
+OUT: invalid
+IN: transform-origin: left 1px
+OUT: transform-origin: 0% 1px 0px
+# The individual properties.
+IN: translate: none
+OUT: translate: none
+IN: translate: 10px
+OUT: translate: 10px
+IN: translate: 10% -20px 3px
+OUT: translate: 10% -20px 3px
+IN: translate: 1px 2px 3%
+OUT: invalid
+IN: rotate: 45deg
+OUT: rotate: 45deg
+IN: rotate: x 45deg
+OUT: rotate: 1 0 0 45deg
+IN: rotate: 45deg 0 1 0
+OUT: rotate: 0 1 0 45deg
+IN: rotate: z 1turn
+OUT: rotate: 1turn
+IN: rotate: 0
+OUT: invalid
+IN: rotate: x y 1deg
+OUT: invalid
+IN: scale: 2
+OUT: scale: 2
+IN: scale: 50% 2
+OUT: scale: 50% 2
+IN: scale: 1 2 3 4
+OUT: invalid
+
+# ── What libgarb does not read here ──
+IN: filter: none
 OUT: unknown
 IN: --panel: 10px
 OUT: unknown
