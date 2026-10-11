@@ -1,10 +1,10 @@
 # E1A — Implementation handoff: actions and status
 
-**State:** Ready for ordinary code review, 2026-10-11. Implementation owner: Sol.
+**State:** Reviewing, 2026-10-11. Implementation owner: Sol.
 Branch: `codex/explorer-e01a`; worktree: `.worktrees/explorer-e01a`; runtime base:
-`6d988565`. Chris authorized committing and pushing this branch for review after
-a successful OS checkout. Ordinary review and merge remain pending. Quinn owns
-the design.
+`6d988565`. Implementation commit: `bd86ce4f`; branch pushed to origin.
+[PR #254](https://github.com/VBWizard/os64/pull/254) targets `userland`. Chris confirmed a successful OS checkout.
+Ordinary review and merge remain pending. Quinn owns the design.
 Host and scoped QEMU acceptance are recorded in [the evidence packet](evidence/e01a/README.md).
 Fable's E1K review changes no E1A action/status contract. See the
 [review disposition](GUI_POPUPS_DISPOSITION.md#effect-on-sols-active-e1a).
@@ -189,6 +189,6 @@ reported, so this is recorded separately from the automated QEMU results.
 Next action: ordinary code review of `codex/explorer-e01a`, then address findings
 and integrate after review. Chris explicitly requested commit and push, which
 supersedes the QEMU guide's earlier no-commit instruction. The implementation
-commit is the commit introducing `ui_action.c`, `ui_status.c` and this record;
+commit is `bd86ce4f`, introducing `ui_action.c`, `ui_status.c` and this record;
 source/binary hashes retain the exact tested state. E1 remains open for E1K/E1B/E1C. The design snapshot was reconciled at `d33e651e`; the active
 design branch owns subsequent native review changes.

@@ -1,6 +1,6 @@
 # Roam — latest handoff
 
-Updated: 2026-10-11. Design owner: Quinn. **Sol has E1A ready for ordinary review** on
+Updated: 2026-10-11. Design owner: Quinn. **Sol has E1A under review in [PR #254](https://github.com/VBWizard/os64/pull/254)** on
 `codex/explorer-e01a`; the popup review changes none of its action/status API
 requirements. Native implementation remains unassigned.
 
@@ -24,7 +24,7 @@ working files to deliver a documentation update.
 | Work | State | Next action |
 | --- | --- | --- |
 | [E1 actions, menus and status](E01_MENUS.md) | Updated for focus-taking popup windows | E1B uses shared multi-window dispatch and closes menus before font adoption. E1C uses an unattached launcher root. |
-| [E1A actions/status](E01A_HANDOFF.md) | Implementation ready for ordinary review | Review the action/status APIs, bindings/router and real gallery. [Host/QEMU evidence](evidence/e01a/README.md) and Chris's successful OS checkout are recorded; review and merge pending. |
+| [E1A actions/status](E01A_HANDOFF.md) | Reviewing in [PR #254](https://github.com/VBWizard/os64/pull/254) | Review the action/status APIs, bindings/router and real gallery. [Host/QEMU evidence](evidence/e01a/README.md) and Chris's successful OS checkout are recorded; review and merge pending. |
 | [E1K native popups](GUI_POPUPS.md) | First review dispositioned; whole packet not Ready | Resolve R1 safe focus acquisition/identity and R2 queue loss/reset with Fable. Draft is ready for that focused follow-up, not implementation approval. |
 | E1K-W / E1K-C | Reviewed wait/capacity directions | Can prepare focused handoffs independently: ABI layouts, waiter races, consumer/capacity tests. No implementation assigned. |
 | [E2 icons](E02_ICONS.md) | Provider/asset plan unchanged; visual choice open | Finalize provider, verify decoder accounting and choose a visual contact sheet with Chris before producing the family. |
@@ -73,17 +73,17 @@ before destructive transfers.
 
 ## Evidence and working state
 
-This review revision changes documentation only. Source inspection supports the
+The imported E1K review revision changed documentation only. Source inspection supports the
 dispositions; documentation verification belongs in [SESSION_LOG.md](SESSION_LOG.md).
-No runtime/QEMU/P5 acceptance or review of Sol's code is claimed. Main checkout,
-Sol's implementation worktree, installed files and icon artwork are untouched.
-Record actual implementation commits, tests, review and merge state as they arrive.
+That design revision made no runtime, QEMU or P5 acceptance claim and did not
+edit the E1A implementation. E1A validation and publication are recorded below.
 
 ## E1A implementation checkpoint
 
 Local worktree `.worktrees/explorer-e01a`, branch `codex/explorer-e01a`, runtime
 base `6d988565`; source/binary hashes identify the tested files. Chris requested commit and push
-for review following his successful OS checkout.
+for review following his successful OS checkout. Implementation commit
+`bd86ce4f` is pushed to origin; [PR #254](https://github.com/VBWizard/os64/pull/254) targets `userland`.
 Focused fake/real action-status, existing fake/real UI, Scribe and font-contract
 checks passed with supported leak detection. PS/2 and USB-at-boot QEMU checks,
 32px live Interface reflow, token ownership, stale targets, stable warmed heap

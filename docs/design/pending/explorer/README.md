@@ -27,7 +27,7 @@ Updated: 2026-10-11.
 - [E1](E01_MENUS.md) and [E2](E02_ICONS.md) detailed drafts now exist. E1A's
   [action/status handoff](E01A_HANDOFF.md) is ready for ordinary code review from Sol on
   `codex/explorer-e01a`; this review changes none of its API requirements.
-- Umbrella design and 15-slice roadmap written; E1A awaits ordinary code review.
+- Umbrella design and 15-slice roadmap written; E1A is under ordinary review in [PR #254](https://github.com/VBWizard/os64/pull/254).
 - Design branch: `codex/explorer-design`, based on `userland` at `f3f5f50e`.
 - Initial design commit: `337f4744`. Organization records follow on that branch.
 - Local worktree: `.worktrees/explorer-design` under the repository root.
@@ -58,7 +58,7 @@ Create slice records when work begins, rather than maintaining 15 empty designs.
 
 | ID | Slice | State | Owner | Record / PR / implementation commit | Acceptance evidence |
 | --- | --- | --- | --- | --- | --- |
-| E1 | Actions, menus and status | E1A awaiting ordinary review; native R1/R2 follow-up | Quinn (design), Sol (E1A) | [E1A](E01A_HANDOFF.md), [E1K](GUI_POPUPS.md); `codex/explorer-e01a` prepared for publication at Chris's request | [E1A host/QEMU evidence](evidence/e01a/README.md); Chris's successful OS checkout; no complete E1 acceptance |
+| E1 | Actions, menus and status | E1A awaiting ordinary review; native R1/R2 follow-up | Quinn (design), Sol (E1A) | [E1A](E01A_HANDOFF.md), [E1K](GUI_POPUPS.md); `bd86ce4f`, [PR #254](https://github.com/VBWizard/os64/pull/254); branch pushed | [E1A host/QEMU evidence](evidence/e01a/README.md); Chris's successful OS checkout; no complete E1 acceptance |
 | E2 | Icon vocabulary | Designing — visual choice open | Quinn (design) | [E2 contract](E02_ICONS.md) | Dependency/allocation inspection; no runtime evidence |
 | E3 | Data view and selection | Planned | Unassigned | — | None |
 | E4 | Directory browser | Planned | Unassigned | — | None |

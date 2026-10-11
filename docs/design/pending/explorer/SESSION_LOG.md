@@ -227,3 +227,8 @@ This request supersedes the QEMU testing guide's earlier no-commit instruction.
 The implementation is prepared for publication on `codex/explorer-e01a` against
 `userland`, with ordinary review and merge pending. No production code changed
 after the recorded host/QEMU checks; source/binary hashes were revalidated.
+
+Publication completed: implementation commit `bd86ce4f` was pushed to
+`origin/codex/explorer-e01a`; [PR #254](https://github.com/VBWizard/os64/pull/254)
+is open against `userland`. The worktree is awaiting ordinary review; no merge
+or review approval is claimed. A documentation follow-up records this publication.

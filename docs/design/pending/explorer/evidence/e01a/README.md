@@ -3,10 +3,11 @@
 Implementation branch: `codex/explorer-e01a`, worktree `.worktrees/explorer-e01a`.
 Runtime base: `6d988565`. Design documents were imported from `d33e651e` without
 its older runtime tree. Chris requested commit and push for review after his
-successful OS checkout. Ordinary review and merge remain pending.
+successful OS checkout. Implementation commit `bd86ce4f` is pushed; [PR #254](https://github.com/VBWizard/os64/pull/254) targets `userland`.
+Ordinary review and merge remain pending.
 [tested-files.json](tested-files.json) identifies source and guest binary SHA-256
 values from validation before publication. These source files are unchanged
-since validation. The implementation commit introduces this evidence and the
+since validation. Implementation commit `bd86ce4f` introduces this evidence and the
 action/status source files.
 
 ## Host and cross build
@@ -137,4 +138,5 @@ Chris confirmed that the gallery worked perfectly in his OS checkout, then
 explicitly requested commit and push for review. Hardware and installed revision
 were not reported; this confirmation is separate from the automated QEMU runs.
 His publication request supersedes the QEMU guide's earlier no-commit instruction.
-The branch is prepared for ordinary review; no review approval or merge is claimed.
+The branch is pushed and [PR #254](https://github.com/VBWizard/os64/pull/254) is open for ordinary review; no review approval
+or merge is claimed.

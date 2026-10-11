@@ -3,13 +3,13 @@
 ## Status and ownership
 
 - **State:** Designing; detailed contract drafted 2026-10-11. Not Ready.
-- **Design owner:** Quinn. E1A implementation owner: Sol (ready for ordinary review).
+- **Design owner:** Quinn. E1A implementation owner: Sol ([PR #254](https://github.com/VBWizard/os64/pull/254) under review).
   Native implementation and ordinary code reviewer: unassigned.
 - **Branch:** `codex/explorer-design`, isolated worktree `.worktrees/explorer-design`.
   Parent is `f3f5f50e`; inspected current `userland` is `6d988565`. The inspected
   GUI, libui, grootmenu and Scribe files do not differ between these baselines.
 - **Publication:** local design work. E1A implementation is in the separate
-  `codex/explorer-e01a` worktree; its acceptance/PR state is not asserted here.
+  `codex/explorer-e01a` worktree; implementation commit `bd86ce4f` and [PR #254](https://github.com/VBWizard/os64/pull/254) carry its scoped evidence.
 - **Prerequisite:** E1K native popup contract in [GUI_POPUPS.md](GUI_POPUPS.md).
   Chris selected native popups extending beyond their owner window. E1K needs
   closure of the focused R1/R2 follow-up and implementation before native

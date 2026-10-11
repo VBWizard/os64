@@ -21,5 +21,7 @@
     "userland/bin/libfreetype.so": "c6a580f99f229f405a05d12b4e235a9fd5a1d3f5e18c44549a1dade792e11246",
     "userland/bin/tests/fontsettingstest": "409380917cdb3a9aa0e5a86ab4200380bf025434964e930bac1b777fe4939fb4",
     "guest_kernel": "6d69f3e8101b9705857132886cd6edc13998c231918b6364e9cff206462f16f2"
-  }
+  },
+  "implementation_commit": "bd86ce4f",
+  "review_pr": "https://github.com/VBWizard/os64/pull/254"
 }
