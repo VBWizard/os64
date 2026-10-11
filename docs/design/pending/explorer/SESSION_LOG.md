@@ -256,3 +256,17 @@ build passed. QEMU at the live 32px Interface face showed the notice alone, then
 restored full retained help when the notice was cleared; gallery exit was zero.
 [The R1 packet](evidence/e01a/review-r1/README.md) retains logs, screenshots and
 source/binary hashes. Next action: push the review revision and ordinary re-review.
+
+## 2026-10-11 — E1A hidden status row review fix
+
+Chris reported another PR #254 finding. The gallery font planner counted the
+status row even while hidden, refusing candidate fonts whose visible controls
+fit. New regressions against `63f1211c` reproduced the refusal with the target
+panel shown and hidden. The planner now budgets the status row according to
+its actual visibility; retained hidden messages still participate in font
+preparation. Tests derive boundaries from staged production geometry and check
+refusal rollback, exact-fit adoption, message/token retention and showing the
+status again. Fake/real focused suites passed 428/475 checks with ASan, UBSan
+and LeakSanitizer enabled outside the sandbox. The gallery cross build passed.
+[Second-review packet](evidence/e01a/review-r2/README.md) records commands,
+logs and source/binary hashes; PR re-review is pending.

@@ -206,3 +206,14 @@ tokens remain retained while suppressed.
 strict cross build and QEMU notice priority/help restoration at 32px. Original
 acceptance results remain historical evidence for `bd86ce4f`; review source and
 binary hashes are separate. Next action: ordinary re-review on PR #254.
+
+## Hidden status row review finding
+
+The gallery font planner now excludes the status row when `status.w.hidden`
+is true, while preserving hidden message preparation and ownership tokens.
+[Second-review evidence](evidence/e01a/review-r2/README.md) records two
+before-fix failures and 428 fake-font / 475 real-font passing checks with
+ASan/UBSan/LeakSanitizer enabled. Tests exercise exact-fit adoption, one-pixel
+short refusal, visibility restoration and both panel states through the
+production font consumer, including real 32px Interface reflow. The strict
+cross build passed; ordinary re-review remains pending on PR #254.

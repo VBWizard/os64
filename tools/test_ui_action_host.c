@@ -388,11 +388,69 @@ static void gallery_tests(const char *dir)
     gallery_dispose(&g);CHECK(!g.targets[0].refs&&!g.targets[1].refs&&g.ui.font==NULL);
     free(pixels);
 }
+static void gallery_font_visibility_tests(const char *dir)
+{
+    (void)dir;current="gallery font visibility";
+    for(unsigned hidden_panel=0;hidden_panel<2;++hidden_panel) {
+        uint32_t *pixels=calloc(878u*718u,sizeof(*pixels));CHECK(pixels!=NULL);
+        g=(gallery){0};g.draw.surf=(os64_gui_surface_t){.pixels=pixels,.width=878,.height=718,.pitch_px=878};
+        CHECK(gallery_build(&g));
+        if(hidden_panel) CHECK(os64_ui_action_invoke(g.views[2],PANEL).status==OS64_UI_OK);
+        CHECK(os64_ui_action_invoke(g.views[2],HELP).status==OS64_UI_OK);
+        os64_font_set_t *set=NULL;
+#ifdef UI_TEXT_REAL
+        set=outline_set(os64_ui_font_context(&g.ui),dir,"DejaVuSans.ttf",32);
+#else
+        CHECK(os64_font_set_prepare(os64_ui_font_context(&g.ui),NULL,&set)==OS64_FONT_OK);
+#endif
+        CHECK(set!=NULL);
+        if(set) {
+            os64_font_consumer_t consumer;os64_ui_font_consumer(&g.ui,&consumer);void *adopt=NULL;
+            /* Derive fit boundaries from the production candidate layout's
+             * visible bottom edges, independently of the planner's row count. */
+            CHECK(consumer.prepare(consumer.user,set,&adopt)==OS64_FONT_OK);
+            if(adopt) {
+                os64_gui_rect_t last=os64_ui_widget_planned_bounds(&g.controls[5]);
+                os64_gui_rect_t status=os64_ui_widget_planned_bounds(&g.status.w);
+                int32_t controls_fit=last.y+last.h+g.ui.theme.pad;
+                int32_t status_fit=status.y+status.h+g.ui.theme.pad;
+                consumer.abort(consumer.user,adopt);adopt=NULL;
+                g.root.bounds.h=controls_fit;
+                CHECK(consumer.prepare(consumer.user,set,&adopt)==OS64_FONT_LIMIT&&!adopt);
+                CHECK(os64_ui_action_invoke(g.views[2],STATUS).status==OS64_UI_OK&&g.status.w.hidden);
+                os64_gui_rect_t prior=g.controls[5].bounds;
+                g.root.bounds.h=controls_fit-1;
+                CHECK(consumer.prepare(consumer.user,set,&adopt)==OS64_FONT_LIMIT&&!adopt);
+                CHECK(!memcmp(&prior,&g.controls[5].bounds,sizeof(prior))&&!g.controls[5].bounds_staged_valid);
+                g.root.bounds.h=controls_fit;
+                CHECK(consumer.prepare(consumer.user,set,&adopt)==OS64_FONT_OK);
+                CHECK(!memcmp(&prior,&g.controls[5].bounds,sizeof(prior)));
+                if(adopt) {
+                    ui_test_deny_all=true;consumer.commit(consumer.user,adopt);ui_test_deny_all=false;adopt=NULL;
+                    CHECK(g.controls[5].bounds.y+g.controls[5].bounds.h+g.ui.theme.pad==g.root.bounds.h);
+                    CHECK(g.status.w.hidden&&g.status.help.token==g.help_token&&g.status.notice.token==g.notice_token);
+                    CHECK(g.status.help.run&&g.status.notice.run);
+                }
+                CHECK(os64_ui_action_invoke(g.views[2],STATUS).status==OS64_UI_OK&&!g.status.w.hidden);
+                CHECK(consumer.prepare(consumer.user,set,&adopt)==OS64_FONT_LIMIT&&!adopt);
+                g.root.bounds.h=status_fit;
+                CHECK(consumer.prepare(consumer.user,set,&adopt)==OS64_FONT_OK);
+                if(adopt) {
+                    consumer.commit(consumer.user,adopt);adopt=NULL;
+                    CHECK(g.status.w.bounds.y+g.status.w.bounds.h+g.ui.theme.pad==g.root.bounds.h);
+                }
+            }
+            os64_font_set_release(set);
+        }
+        gallery_dispose(&g);CHECK(!g.targets[0].refs&&!g.targets[1].refs&&g.ui.font==NULL);
+        free(pixels);
+    }
+}
 int main(int argc,char **argv)
 {
     const char *dir=argc>1?argv[1]:"userland/libfreetype/fixtures";
     registration();views_and_bindings();shortcuts();ctrl_punctuation();
-    status_tests(dir);status_fit_tests(dir);gallery_tests(dir);
+    status_tests(dir);status_fit_tests(dir);gallery_tests(dir);gallery_font_visibility_tests(dir);
     printf("action/status: %lu checks, %d failures\n",checks,failures);
     return failures?1:0;
 }

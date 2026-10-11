@@ -58,7 +58,7 @@ Create slice records when work begins, rather than maintaining 15 empty designs.
 
 | ID | Slice | State | Owner | Record / PR / implementation commit | Acceptance evidence |
 | --- | --- | --- | --- | --- | --- |
-| E1 | Actions, menus and status | E1A awaiting ordinary review; native R1/R2 follow-up | Quinn (design), Sol (E1A) | [E1A](E01A_HANDOFF.md), [E1K](GUI_POPUPS.md); `bd86ce4f`, [PR #254](https://github.com/VBWizard/os64/pull/254); branch pushed | [E1A host/QEMU evidence](evidence/e01a/README.md), [R1 fixes](evidence/e01a/review-r1/README.md); Chris's OS checkout; re-review pending |
+| E1 | Actions, menus and status | E1A awaiting ordinary review; native R1/R2 follow-up | Quinn (design), Sol (E1A) | [E1A](E01A_HANDOFF.md), [E1K](GUI_POPUPS.md); `bd86ce4f`, [PR #254](https://github.com/VBWizard/os64/pull/254); branch pushed | [E1A host/QEMU evidence](evidence/e01a/README.md), [R1 fixes](evidence/e01a/review-r1/README.md), [R2 fix](evidence/e01a/review-r2/README.md); Chris's OS checkout; re-review pending |
 | E2 | Icon vocabulary | Designing — visual choice open | Quinn (design) | [E2 contract](E02_ICONS.md) | Dependency/allocation inspection; no runtime evidence |
 | E3 | Data view and selection | Planned | Unassigned | — | None |
 | E4 | Directory browser | Planned | Unassigned | — | None |

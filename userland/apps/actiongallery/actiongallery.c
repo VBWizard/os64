@@ -91,7 +91,8 @@ static void gallery_resize(os64_ui_t *ui) { (void)ui; gallery_layout(&g, false);
 static os64_font_status_t gallery_plan(os64_ui_t *ui, void *user, void **out)
 {
     gallery *a=user;
-    int32_t rows=a->panel.hidden?7:11;
+    /* Hidden widgets still stage their runs, but consume no visible rows. */
+    int32_t rows=6+(a->panel.hidden?0:4)+(a->status.w.hidden?0:1);
     int64_t need=(int64_t)rows*os64_ui_control_min_height(ui) +
         (int64_t)(rows-1)*ui->theme.gap + 2*ui->theme.pad;
     *out=NULL;
