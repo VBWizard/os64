@@ -21,6 +21,12 @@ int main(int argc, char **argv)
             config.roles[1].size = 24; config.roles[2].size = 28;
         }
     }
+    /* Exercise live Interface reflow without replacing the other role choices. */
+    if (command == '9') {
+        config = current;
+        os64_strcopy(config.roles[0].face[0], OS64_FONT_PATH_CAP, "/etc/fonts/DejaVuSans.ttf");
+        config.roles[0].size = 32;
+    }
     os64_text_options_t options = {.memory = {NULL, allocate, release}};
     os64_text_context_t *context = NULL;
     if (os64_font_context_create(&options, &context)) return 1;

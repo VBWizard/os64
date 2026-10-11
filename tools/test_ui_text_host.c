@@ -3099,7 +3099,9 @@ static void ui_test_wheel_dispatch(void)
 }
 
 /* Exercise the production helper's layout without a guest window syscall. */
+#define place ui_test_settings_place
 #include "../userland/libos64/ui_settings.c"
+#undef place
 static void ui_test_settings_envelope(void)
 {
     current="settings root bounds";
