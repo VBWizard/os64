@@ -1,0 +1,12 @@
+address: http://10.0.2.2:8093/control/load-00.html
+verdict: clean
+script http://10.0.2.2:8093/control/load-00.html#inline-1: ran
+bytes: 442
+status: 200 OK
+final address: http://10.0.2.2:8093/control/load-00.html
+arrived after: 83 ms
+laid out at: 828 px in 10 ms
+written: when the page was left
+pictures: 6, 6 shown, 0 could not be read, 0 past the memory kept, 0 still coming, 0 not asked for
+sheets: 1, 1 ready
+script http://10.0.2.2:8093/control/load-00.html#timer-1: ran

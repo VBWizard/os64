@@ -3,6 +3,7 @@
 import argparse, io, json, os, struct, subprocess, tempfile
 from pathlib import Path
 from PIL import Image, ImageOps
+from test_webp_host import build_wrapper
 ROOT=Path(__file__).resolve().parents[1]
 def fixtures(work):
     base=Image.new('RGB',(17,9)); base.putdata([((x*17+y*7)%256,(y*31+x*3)%256,(x*11+y*19)%256) for y in range(9) for x in range(17)])
@@ -62,8 +63,9 @@ def run(work):
     print('PASS JPEG reference pixels, every truncated prefix, allocation failures and cleanup',flush=True)
     adjacent = ['userland/libimage/image.c', 'userland/libimage/gif.c', 'userland/libpng/png.c', 'userland/libgzip/inflate.c',
                 'userland/libos64/crc32.c', 'userland/libos64/draw.c', 'tools/test_image_host.c']
-    extra = ['-I'+str(ROOT/p) for p in ('userland/libimage/include','userland/libpng/include','userland/libgzip/include')]
-    subprocess.run(common+includes+extra+['-no-pie','-masm=intel', *[str(ROOT/p) for p in adjacent], *map(str,objects),'-o',str(work/'image-test')],check=True)
+    extra = ['-I'+str(ROOT/p) for p in ('userland/libimage/include','userland/libpng/include','userland/libgzip/include','userland/libwebp/include')]
+    webp_objects, _, _ = build_wrapper(work/'webp')
+    subprocess.run(common+includes+extra+['-no-pie','-masm=intel', *[str(ROOT/p) for p in adjacent], *map(str,objects+webp_objects),'-Wl,--gc-sections','-o',str(work/'image-test')],check=True)
     subprocess.run([str(work/'image-test')],env=env,check=True)
 
     return fixture,expected

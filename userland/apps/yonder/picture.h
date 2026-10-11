@@ -10,15 +10,14 @@
 #include "fetch/fetch.h"
 #include "image/image.h"
 #include "image/sequence.h"
+#include "webp/webp.h"
 #include "jobs.h"
 #include "way/way.h"
 
 // What one picture job may cost, declared to the pool: libimage's file cap,
-// and libjpeg's decoder memory cap. That cap covers PNG too, by arithmetic
-// rather than by any cap PNG's decoder enforces: its largest raster is 16
-// megapixels, 64 MiB, and it inflates through a 32 KiB window into that
-// raster, so its peak is the raster and two rows.
-#define PICTURE_RESERVE ((size_t)OS64_IMAGE_CAP_DEFAULT + (128u << 20))
+// plus the largest codec working budget (WebP). This also covers JPEG's
+// 128 MiB budget, PNG's raster/row/window storage and GIF's sequence charge.
+#define PICTURE_RESERVE ((size_t)OS64_IMAGE_CAP_DEFAULT + OS64_WEBP_MEMORY_DEFAULT)
 
 typedef struct {
     uint32_t kind;                  // YONDER_JOB_PICTURE

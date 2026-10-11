@@ -1,0 +1,15 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>WebP still images</title>
+<style>body { font-family: sans-serif; background: #eef2f7; color: #172b46; }
+img { width: 256px; height: 128px; border: 2px solid #526780; }
+.dark { background: #172b46; padding: 8px; } </style></head><body>
+<h1>WebP still images</h1>
+<p>Lossy and lossless color gradients, left to right:</p>
+<img src="webp-lossy.webp" alt="Lossy WebP"> <img src="webp-lossless.webp" alt="Lossless WebP">
+<p>WebP transparency and a PNG reference on the same dark background:</p>
+<div class="dark"><img src="webp-alpha.webp" alt="WebP alpha"> <img src="webp-alpha.png" alt="PNG alpha reference"></div>
+<p>This WebP has a .jpg filename; it should still display:</p>
+<img src="webp-mislabeled.jpg" alt="WebP detected by signature">
+<p>The animated WebP below is intentionally unsupported. Its diagnostic should say “webp, animated”.</p>
+<img src="webp-animated.webp" alt="Animated WebP: unsupported">
+</body></html>

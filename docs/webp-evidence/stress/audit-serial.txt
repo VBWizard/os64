@@ -1,0 +1,710 @@
+0 (0x0000) AP0: Interrupts enabled
+0 (0x0000) AP0: charset: CP437 map checked against zap-ext-light16.psf - 0 drifted, 39 not in the face
+2 (0x0000) AP0: ***** OS64 (built 2026-10-10 17:34:18) - system booting at 10/10/2026 18:34:41 *****
+2 (0x0000) AP0: FPU: x87 MMX SSE SSE2 SSE3 enabled, FXSAVE per thread (MXCSR mask 0xFFFF); no XSAVE
+2 (0x0000) AP0: Commandline: ROOT=2f4fd02e-68b4-4c82-98bc-72467529b3fc BACKSTOP=10 KWORKER HUSK CRON GUI DEBUG_GUI
+2 (0x0000) AP0: DEBUG_OPTIONS 0x00000000000000000000000002680103
+10 (0x0000) AP0: allocator: frame table 2620806 frames (20476 KiB) at 0x0000000000100000; 2092389 usable, 0 held
+0 (0x0000) AP0: Interrupts enabled
+0 (0x0000) AP0: charset: CP437 map checked against zap-ext-light16.psf - 0 drifted, 39 not in the face
+2 (0x0000) AP0: ***** OS64 (built 2026-10-10 17:34:18) - system booting at 10/10/2026 18:34:41 *****
+2 (0x0000) AP0: FPU: x87 MMX SSE SSE2 SSE3 enabled, FXSAVE per thread (MXCSR mask 0xFFFF); no XSAVE
+2 (0x0000) AP0: Commandline: ROOT=2f4fd02e-68b4-4c82-98bc-72467529b3fc BACKSTOP=10 KWORKER HUSK CRON GUI DEBUG_GUI
+2 (0x0000) AP0: DEBUG_OPTIONS 0x00000000000000000000000002680103
+10 (0x0000) AP0: allocator: frame table 2620806 frames (20476 KiB) at 0x0000000000100000; 2092389 usable, 0 held
+37 (0x0000) AP0: log: 8 ring(s) x 16 MB, 100 ticks/sec
+38 (0x0000) AP0: symbols: 2445 names loaded, 49376 bytes of strings
+39 (0x0000) AP0: ACPI: Limine passed PCI base address of 0x00000000000f5290, we'll use that
+39 (0x0000) AP0: ACPI: RSDP found at 0x00000000000f5290
+39 (0x0000) AP0: ACPI: RSDP revision = 0x00, OEMID = BOCHS 
+39 (0x0000) AP0: ACPI: Using RSDT at 0x7ffe25c0
+39 (0x0000) AP0: ACPI: Root SDT signature: RSDT
+39 (0x0000) AP0: ACPI: Parsing RSDT with 5 entries
+39 (0x0000) AP0: ACPI: FACP table found at 0x7ffe2380
+39 (0x0000) AP0: ACPI: DSDT table found at 0x7ffe0040
+39 (0x0000) AP0: ACPI: Root SDT signature: RSDT
+39 (0x0000) AP0: ACPI: Parsing RSDT with 5 entries
+39 (0x0000) AP0: ACPI: MCFG table found at 0x7ffe255c
+39 (0x0000) AP0: ACPI: Entry 0: BaseAddress=0x00000000b0000000, SegmentGroup=0, StartBus=0, EndBus=255
+39 (0x0000) AP0: ACPI: *Found PCI Segment 0 Base Address: 0xb0000000, mapping 0x7800 pages so that we can scan 120 busses
+40 (0x0000) AP0: ACPI: Root SDT signature: RSDT
+40 (0x0000) AP0: ACPI: Parsing RSDT with 5 entries
+40 (0x0000) AP0: ACPI: MADT (APIC) table found at 000000007FFE2474
+40 (0x0000) AP0: ACPI: S5 ready — PM1a 0x0604 SLP_TYPa 0, PM1b 0x0000 SLP_TYPb 0
+40 (0x0000) AP0: tss: allocated 24 double-fault (IST1) stacks, CPU0's at 0xffff80007f097ff0
+40 (0x0000) AP0: tss: allocated 24 NMI (IST2) stacks, CPU0's at 0xffff80007f098ff0
+149 (0x0000) AP0: blockcache: attached QEMU DVD-ROM (512-byte sectors, 128/line)
+149 (0x0000) AP0: blockcache: attached QEMU NVMe Ctrl (512-byte sectors, 128/line)
+149 (0x0000) AP0: blockcache: attached QEMU NVMe Ctrl (512-byte sectors, 128/line)
+149 (0x0000) AP0: blockcache: 3 device(s) attached
+449 (0x0000) AP0: random: rdrand ok, rdseed ok — pool seeded by rdseed (hw words 4, retries 0, jitter samples 0)
+449 (0x0000) AP0: net: loopback lo, 127.0.0.0/8, 1024-frame queue
+450 (0x0000) AP0: net: registered virtio0, MAC 52:54:00:12:34:56, mtu 1500
+488 (0x0000) AP0: mouse: PS/2 device ID 3, 4-byte packets
+488 (0x0000) AP0: mouse: PS/2 mouse initialized, streaming enabled
+488 (0x0000) AP0: BUILT-IN TESTS: Running pre-boot tests:
+488 (0x0000) AP0: 	[Test] window_minimum_clamp... OK
+488 (0x0000) AP0: 	[Test] kmalloc_not_null... OK
+724 (0x0000) AP0: 	frame_table_scale: 120000 frames held live and released; free 8380684432 -> 8380684432
+724 (0x0000) AP0: 	[Test] frame_table_scale... OK
+725 (0x0000) AP0: 	[Test] allocator_try_refuses... OK
+725 (0x0000) AP0: 	allocator_zero_after_free: run reused, ledger object reused
+725 (0x0000) AP0: 	[Test] allocator_zero_after_free... OK
+725 (0x0000) AP0: 	[Test] fpu_state_round_trip... OK
+725 (0x0000) AP0: 	Page fault occurred during test mode, returning without halt.
+725 (0x0000) AP0: 	[Test] page_fault_test_mode_returns... OK
+725 (0x0000) AP0: 	[Test] page_zero_unmapped... OK
+725 (0x0000) AP0: 	[Test] dlist_basic_operations... OK
+725 (0x0000) AP0: 	[Test] arena_create_and_destroy... OK
+725 (0x0000) AP0: 	[Test] arena_basic_alloc... OK
+725 (0x0000) AP0: 	[Test] arena_aligned_alloc... OK
+725 (0x0000) AP0: 	[Test] arena_reset... OK
+725 (0x0000) AP0: 	[Test] arena_growth... OK
+725 (0x0000) AP0: 	[Test] vma_insert_and_lookup... OK
+725 (0x0000) AP0: 	[Test] vma_page_fault_resolved... OK
+725 (0x0000) AP0: 	[Test] vma_cow_write... OK
+725 (0x0000) AP0: 	[Test] env_create_empty... OK
+725 (0x0000) AP0: 	[Test] env_set_and_get... OK
+725 (0x0000) AP0: 	[Test] env_update_shorter_val... OK
+725 (0x0000) AP0: 	[Test] env_update_longer_val... OK
+725 (0x0000) AP0: 	[Test] env_multi_key... OK
+725 (0x0000) AP0: 	[Test] env_inherit_copies... OK
+725 (0x0000) AP0: 	[Test] env_inherit_independence... OK
+725 (0x0000) AP0: 	[Test] gmtime_negative_epoch... OK
+725 (0x0000) AP0: 	[Test] time_zone_minute_offsets... OK
+725 (0x0000) AP0: 	[Test] env_inherit_grown... OK
+725 (0x0000) AP0: 	[Test] env_count_accurate... OK
+726 (0x0000) AP0: 	[Test] env_capacity_full... OK
+726 (0x0000) AP0: 	[Test] task_arena_create_and_destroy... OK
+726 (0x0000) AP0: 	[Test] task_arena_alloc_and_convert... OK
+727 (0x0000) AP0: 	[Test] task_arena_aligned_alloc... OK
+727 (0x0000) AP0: 	[Test] task_arena_exhaustion... OK
+727 (0x0000) AP0: 	test_random_pool: seeded yes by rdseed (rdseed ok, rdrand ok, hw words 4, retries 0, exhausted 0, jitter 0)
+727 (0x0000) AP0: 	[Test] random_pool... OK
+727 (0x0000) AP0: BUILT-IN TESTS: 34 passed, 0 failed
+841 (0x0020) AP0: BOOT: If a ROOTPARTUUID (2f4fd02e-68b4-4c82-98bc-72467529b3fc) was passed in the commandline, we'll load it.
+841 (0x0020) AP0: BOOT: ROOTPARTUUID passed in commandline.  Will mount '2f4fd02e-68b4-4c82-98bc-72467529b3fc' as the root partition
+843 (0x0020) AP2: BOOT: Root filesystem found, mounting
+843 (0x0020) AP2: BOOT: Root filesystem successfully mounted
+PAGE1 PAGE2
+dyn_consumer: first=0xd000yn_consu00030 smeconer: fd=0xi00000031rst =packed=0x003000310
+x00000030 second=0x00000031 packed=0x00300031
+843 (0x0020) AP2: BOOT: skipping fat partition 0 on device 1 — GUID already mounted (twin)
+843 (0x0020) AP2: BOOT: mounted ext2 (device 1 partition 1, GPT name "ext2") at /ext2
+843 (0x0020) AP2: BOOT: mounted ext2 (device 2 partition 0, GPT name "home") at /home
+844 (0x0020) AP2: BOOT: mounted /proc (synthetic — processes as files)
+844 (0x0020) AP2: BOOT: mounted /sys (synthetic — the machine as files)
+844 (0x0020) AP2: BOOT: mounted /dev (synthetic — the kernel's objects as files)
+844 (0x0020) AP2: conf: search path /home:/etc (built-in default (/etc/os64.conf sets no conf))
+844 (0x0020) AP2: bootenv: /etc/bootenv.conf: 0 set, 0 unset
+844 (0x0020) AP2: BUILT-IN TESTS: Running post-boot tests:
+845 (0x0020) AP2: 	[Test] vma_file_backed_page_fault_resolved... OK
+845 (0x0020) AP2: 	[Test] vma_partial_page_bss_zero_filled... OK
+847 (0x0020) AP2: 	PASS: test_elf_loader (demand-paged, retVal correct, exited cleanly)
+847 (0x0020) AP2: 	[Test] elf_loader... OK
+848 (0x0020) AP2: 	PASS: test_dynamic_linking (symbol resolution, relocation, CoW isolation, and physical sharing all correct)
+848 (0x0020) AP2: 	[Test] dynamic_linking... OK
+848 (0x0020) AP2: 	[Test] pty_publication_hold... OK
+895 (0x0020) AP2: 	[Test] pty_history... OK
+895 (0x0020) AP2: 	[Test] pty_resize_modes... OK
+895 (0x0020) AP2: 	[Test] pty_stream_seats... OK
+897 (0x0020) AP2: 	PASS: test_task_args (argc/argv/env delivered at the ABI addresses, strings copied, BSS zero-filled)
+897 (0x0020) AP2: 	[Test] task_args... OK
+921 (0x0020) AP2: 	PASS: test_env_growth (block grew under the fixed window, pairs survived the copies, 64KB refusals were atomic)
+921 (0x0020) AP2: 	[Test] env_growth... OK
+930 (0x0020) AP2: 	PASS: test_ext2_real_partition (self-provision=written+verified [bs=1024], mkfs-fixtures=3/3, root listing, bogus path)
+930 (0x0020) AP2: 	[Test] ext2_real_partition... OK
+931 (0x0020) AP2: 	PASS: test_mount_table (6 mounts, 1 routed content checks)
+931 (0x0020) AP2: 	[Test] mount_table... OK
+931 (0x0020) AP2: 	[Test] devfs... OK
+931 (0x0020) AP2: 	PASS: test_net_arp_pending_order (synchronous ARP reply released parked IPv4 packet; parked=1 dropped=0)
+931 (0x0020) AP2: 	[Test] net_arp_pending_order... OK
+931 (0x0020) AP2: 	[Test] net_martian_dropped... OK
+932 (0x0020) AP2: 	PASS: test_net_wire (ARP request out, gateway reply counted at the seam)
+932 (0x0020) AP2: 	[Test] net_wire... OK
+932 (0x0020) AP2: 	PASS: test_net_arp (gateway 10.0.2.2 is at 52:55:0a:00:02:02)
+932 (0x0020) AP2: 	[Test] net_arp... OK
+936 (0x0020) AP2: 	PASS: test_net_ping (3 echoes to 10.0.2.2, 3 replies, id/seq verified)
+936 (0x0020) AP2: 	[Test] net_ping... OK
+936 (0x0020) AP2: 	PASS: test_net_echo_responder (ARP reply + echo reply sent to an injected neighbor)
+936 (0x0020) AP2: 	[Test] net_echo_responder... OK
+936 (0x0020) AP2: 	PASS: test_net_dhcp (leased 10.0.2.15/255.255.255.0 gw 10.0.2.2 from 10.0.2.2, 86400 s)
+936 (0x0020) AP2: 	[Test] net_dhcp... OK
+946 (0x0020) AP2: 	PASS: test_net_udp_conn (dial, write, filtered+truncated reads, deadline, hangup)
+946 (0x0020) AP2: 	[Test] net_udp_conn... OK
+958 (0x0020) AP1: 	PASS: test_net_icmp_conn (32 bytes echoed by 10.0.2.2 in 1 ticks; arrival wake 83-246 us over 8 echoes, 0 lost, measured on APIC 0; cold-cache echo survived the ARP re-ask)
+958 (0x0020) AP1: 	[Test] net_icmp_conn... OK
+958 (0x0020) AP1: 	PASS: test_vfs_write_mkdir (create/write/read-back, mkdir, nested file — under /etc/testdata)
+958 (0x0020) AP1: 	[Test] vfs_write_mkdir... OK
+959 (0x0020) AP1: 	PASS: test_vfs_rename (FAT: legacy plus safe policies, move, directory move, open-source survives, 5 refusals)
+959 (0x0020) AP1: 	[Test] vfs_rename... OK
+959 (0x0020) AP1: 	SKIP: test_ext2_published_insert_failure (root is not writable ext2)
+959 (0x0020) AP1: 	[Test] ext2_published_insert_failure... OK
+959 (0x0020) AP1: 	SKIP: test_ext2_orphan (root is not ext2)
+959 (0x0020) AP1: 	[Test] ext2_orphan... OK
+959 (0x0020) AP1: 	SKIP: test_ext2_readonly_demotion (root is not writable ext2)
+959 (0x0020) AP1: 	[Test] ext2_readonly_demotion... OK
+993 (0x0020) AP1: 	PASS: test_ext2_secondary_write (exclusive-create/create/append/truncate/indirect/hole/mkdir/rm/orphan/busy-refusal)
+993 (0x0020) AP1: 	[Test] ext2_secondary_write... OK
+997 (0x0020) AP1: 	PASS: test_shared_object_reload (unloaded at zero; reload and closure claims need a root that can replace an open file, and this one cannot)
+997 (0x0020) AP1: 	[Test] shared_object_reload... OK
+998 (0x0020) AP1: 	PASS: test_mount_unmount (/ext2: busy while held, unmounted idle, remounted ro by GUID at /mu_mount with its open refusing a pen, exact identifiers, a nested mount pinning its parent, restored rw)
+998 (0x0020) AP1: 	[Test] mount_unmount... OK
+[user][user ] hhuusk:s rc: /khome/h: urc: s/hok.rc
+me/husk.rc
+1001 (0x0020) AP1: 	PASS: test_console_read_deadline (poll + 3-tick patience; anything caught was put back)
+1001 (0x0020) AP1: 	[Test] console_read_deadline... OK
+1002 (0x0020) AP1: 	PASS: test_block_cache (warm hits 98, warm misses 0 vs cold 4; write invalidation honest)
+1002 (0x0020) AP1: 	[Test] block_cache... OK
+1002 (0x0020) AP1: 	PASS: test_dirent_mtime (/bin/top stamped 1791642620 — the plausible present)
+1002 (0x0020) AP1: 	[Test] dirent_mtime... OK
+1014 (0x0020) AP2: 	PASS: test_backstop_preemption (10 lease expiries on APIC 1, SIGKILL landed)
+1014 (0x0020) AP2: 	[Test] backstop_preemption... OK
+1014 (0x0020) AP2: BUILT-IN TESTS: 34 passed, 0 failed
+1016 (0x0033) AP3: [user] husk: started
+1016 (0x0035) AP5: BUILT-IN TESTS: Running late tests:
+1016 (0x0032) AP1: [user] husk: started
+1016 (0x0020) AP2: input: unified event queue active (256 slots)
+1016 (0x0020) AP2: gui_start: compositor task 0x00000036 submitted (affinity THREAD_NO_AFFINITY/0xffffffffffffffff)
+1016 (0x0036) AP5: guicomp: compositor starting on APIC 5 (thread=0x00000036, daemon=1)
+1016 (0x0034) AP4: [user] cron: started, 0 job(s), times are UTC
+1017 (0x0032) AP1: [user] husk: rc: /home/husk.rc
+1017 (0x0033) AP3: [user] husk: rc: /home/husk.rc
+1018 (0x0036) AP5: guicomp: backbuffer 1024x768 ready (3072 KB x2)
+1024 (0x0037) AP4: wm: created window 1 'desktop' at (0,0) 1024x768
+1118 (0x0036) AP5: guicomp: heartbeat, 93 frames, 4 flushes (tick 1118)
+1218 (0x0036) AP5: guicomp: heartbeat, 201 frames, 4 flushes (tick 1218)
+1318 (0x0036) AP5: guicomp: heartbeat, 301 frames, 4 flushes (tick 1318)
+1418 (0x0036) AP5: guicomp: heartbeat, 401 frames, 4 flushes (tick 1418)
+1518 (0x0036) AP5: guicomp: heartbeat, 501 frames, 4 flushes (tick 1518)
+1518 (0x0020) AP1: os64: up 1518 ticks, GUI running (status #1)
+1618 (0x0036) AP5: guicomp: heartbeat, 601 frames, 4 flushes (tick 1618)
+1718 (0x0036) AP5: guicomp: heartbeat, 702 frames, 4 flushes (tick 1718)
+1818 (0x0036) AP5: guicomp: heartbeat, 817 frames, 4 flushes (tick 1818)
+1918 (0x0036) AP5: guicomp: heartbeat, 918 frames, 4 flushes (tick 1918)
+2018 (0x0020) AP1: os64: up 2018 ticks, GUI running (status #2)
+2018 (0x0036) AP5: guicomp: heartbeat, 1036 frames, 4 flushes (tick 2018)
+2118 (0x0036) AP5: guicomp: heartbeat, 1136 frames, 4 flushes (tick 2118)
+2173 (0x0035) AP1: 	task_teardown_leak: 2 cycles — free 8349800880 -> 8349800880 (lost 0 bytes), VMA backing reclaimed 106496 bytes
+2173 (0x0035) AP1: 	task_teardown_leak: window clean — 0 bytes lost, 106496 bytes of VMA backing reclaimed over 2 cycles
+2173 (0x0035) AP1: 	task_teardown_leak: attempt 1 of 4 was clean — measuring again on a fresh window
+2218 (0x0036) AP5: guicomp: heartbeat, 1253 frames, 4 flushes (tick 2218)
+2318 (0x0036) AP5: guicomp: heartbeat, 1352 frames, 4 flushes (tick 2318)
+2418 (0x0036) AP5: guicomp: heartbeat, 1452 frames, 4 flushes (tick 2418)
+2518 (0x0036) AP5: guicomp: heartbeat, 1552 frames, 4 flushes (tick 2518)
+2518 (0x0020) AP1: os64: up 2518 ticks, GUI running (status #3)
+2618 (0x0036) AP5: guicomp: heartbeat, 1652 frames, 4 flushes (tick 2618)
+2665 (0x0032) AP2: [user] husk: task 60 (webpwatch) started
+2718 (0x0036) AP5: guicomp: heartbeat, 2392 frames, 4 flushes (tick 2718)
+2799 (0x003d) AP2: wm: created window 2 'yonder' at (60,40) 860x640
+2818 (0x0036) AP5: guicomp: heartbeat, 4228 frames, 6 flushes (tick 2818)
+2824 (0x003d) AP2: [user] yonder: stream slice 282 bytes in 359 us
+2825 (0x003d) AP2: [user] yonder: stream sheets: 0 listed, 0 new, 0 out, in 7911 us
+2827 (0x003d) AP2: [user] yonder: stream sheets: 1 listed, 1 new, 0 out, in 9687 us
+2837 (0x003d) AP2: [user] yonder: task script http://10.0.2.2:8093/start.html#inline-1: status 0 in 98092 us, wrote 0 bytes, forced 0 layouts in 0 us
+2837 (0x003d) AP2: [user] yonder: stream sheets: 1 listed, 0 new, 0 out, in 732 us
+2838 (0x003d) AP2: [user] yonder: task DOMContentLoaded : status 0 in 514 us, wrote 0 bytes, forced 0 layouts in 0 us
+2845 (0x003d) AP2: [user] yonder: task load : status 0 in 240 us, wrote 0 bytes, forced 0 layouts in 0 us
+2918 (0x0036) AP5: guicomp: heartbeat, 4351 frames, 9 flushes (tick 2918)
+3018 (0x0036) AP5: guicomp: heartbeat, 4470 frames, 9 flushes (tick 3018)
+3018 (0x0020) AP1: os64: up 3018 ticks, GUI running (status #4)
+3118 (0x0036) AP5: guicomp: heartbeat, 4574 frames, 9 flushes (tick 3118)
+3218 (0x0036) AP5: guicomp: heartbeat, 4696 frames, 9 flushes (tick 3218)
+3318 (0x0036) AP5: guicomp: heartbeat, 4801 frames, 9 flushes (tick 3318)
+3376 (0x0035) AP1: 	task_teardown_leak: 2 cycles — free 8290493304 -> 8290493304 (lost 0 bytes), VMA backing reclaimed 106496 bytes
+3376 (0x0035) AP1: 	task_teardown_leak: window clean — 0 bytes lost, 106496 bytes of VMA backing reclaimed over 2 cycles
+3376 (0x0035) AP1: 	PASS: test_task_teardown_leak (a task costs nothing — 2 independently measured windows agreed, with 0 unmeasurable)
+3376 (0x0035) AP1: 	[Test] task_teardown_leak... OK
+3378 (0x0035) AP1: 	PASS: test_doorbell_wakes_sleeper (3 rings, worst 1 tick(s), 3 wake(s) answered by a pass)
+3378 (0x0035) AP1: 	[Test] doorbell_wakes_sleeper... OK
+3380 (0x0035) AP1: 	PASS: test_net_tcp_refused (closed port answered with RST in 2 ticks)
+3380 (0x0035) AP1: 	[Test] net_tcp_refused... OK
+3380 (0x0035) AP1: BUILT-IN TESTS: 3 passed, 0 failed
+3418 (0x0036) AP5: guicomp: heartbeat, 4926 frames, 9 flushes (tick 3418)
+3518 (0x0036) AP5: guicomp: heartbeat, 5031 frames, 9 flushes (tick 3518)
+3518 (0x0020) AP1: os64: up 3518 ticks, GUI running (status #5)
+3618 (0x0036) AP5: guicomp: heartbeat, 5144 frames, 9 flushes (tick 3618)
+3718 (0x0036) AP5: guicomp: heartbeat, 5249 frames, 9 flushes (tick 3718)
+3818 (0x0036) AP5: guicomp: heartbeat, 5354 frames, 9 flushes (tick 3818)
+3918 (0x0036) AP5: guicomp: heartbeat, 5459 frames, 9 flushes (tick 3918)
+4018 (0x0020) AP2: os64: up 4018 ticks, GUI running (status #6)
+4018 (0x0036) AP5: guicomp: heartbeat, 5563 frames, 9 flushes (tick 4018)
+4118 (0x0036) AP5: guicomp: heartbeat, 5668 frames, 9 flushes (tick 4118)
+4218 (0x0036) AP5: guicomp: heartbeat, 5773 frames, 9 flushes (tick 4218)
+4318 (0x0036) AP5: guicomp: heartbeat, 5877 frames, 9 flushes (tick 4318)
+4338 (0x003d) AP2: [user] yonder: task timer http://10.0.2.2:8093/start.html#timer-1: status 0 in 5283 us, wrote 0 bytes, forced 0 layouts in 0 us
+4342 (0x003d) AP2: [user] yonder: stream slice 442 bytes in 22 us
+4344 (0x003d) AP2: [user] yonder: stream sheets: 0 listed, 0 new, 0 out, in 16829 us
+4345 (0x003d) AP2: [user] yonder: stream sheets: 1 listed, 1 new, 0 out, in 862 us
+4347 (0x003d) AP2: [user] yonder: task script http://10.0.2.2:8093/load-00.html#inline-1: status 0 in 13905 us, wrote 0 bytes, forced 0 layouts in 0 us
+4347 (0x003d) AP2: [user] yonder: stream sheets: 1 listed, 0 new, 0 out, in 534 us
+4348 (0x003d) AP2: [user] yonder: task DOMContentLoaded : status 0 in 165 us, wrote 0 bytes, forced 0 layouts in 0 us
+4351 (0x003d) AP2: [user] yonder: scripted page retired; heap problems=0
+4351 (0x003d) AP2: [user] yonder: task load : status 0 in 29 us, wrote 0 bytes, forced 0 layouts in 0 us
+4418 (0x0036) AP5: guicomp: heartbeat, 6002 frames, 12 flushes (tick 4418)
+4447 (0x003d) AP6: [user] yonder: task timer http://10.0.2.2:8093/load-00.html#timer-1: status 0 in 2030 us, wrote 0 bytes, forced 0 layouts in 0 us
+4452 (0x003d) AP6: [user] yonder: stream slice 278 bytes in 20 us
+4452 (0x003d) AP6: [user] yonder: stream sheets: 0 listed, 0 new, 0 out, in 572 us
+4453 (0x003d) AP6: [user] yonder: stream sheets: 1 listed, 1 new, 0 out, in 3200 us
+4455 (0x003d) AP6: [user] yonder: task script http://10.0.2.2:8093/idle-00.html#inline-1: status 0 in 20285 us, wrote 0 bytes, forced 0 layouts in 0 us
+4455 (0x003d) AP6: [user] yonder: stream sheets: 1 listed, 0 new, 0 out, in 849 us
+4456 (0x003d) AP6: [user] yonder: task DOMContentLoaded : status 0 in 43 us, wrote 0 bytes, forced 0 layouts in 0 us
+4459 (0x003d) AP6: [user] yonder: scripted page retired; heap problems=0
+4459 (0x003d) AP6: [user] yonder: task load : status 0 in 32 us, wrote 0 bytes, forced 0 layouts in 0 us
+4518 (0x0036) AP5: guicomp: heartbeat, 6120 frames, 15 flushes (tick 4518)
+4519 (0x0020) AP2: os64: up 4519 ticks, GUI running (status #7)
+4618 (0x0036) AP5: guicomp: heartbeat, 6224 frames, 15 flushes (tick 4618)
+4718 (0x0036) AP5: guicomp: heartbeat, 6328 frames, 15 flushes (tick 4718)
+4818 (0x0036) AP5: guicomp: heartbeat, 6433 frames, 15 flushes (tick 4818)
+4918 (0x0036) AP5: guicomp: heartbeat, 7562 frames, 15 flushes (tick 4918)
+5018 (0x0036) AP5: guicomp: heartbeat, 10040 frames, 15 flushes (tick 5018)
+5019 (0x0020) AP2: os64: up 5019 ticks, GUI running (status #8)
+5118 (0x0036) AP5: guicomp: heartbeat, 12618 frames, 15 flushes (tick 5118)
+5218 (0x0036) AP5: guicomp: heartbeat, 15229 frames, 15 flushes (tick 5218)
+5318 (0x0036) AP5: guicomp: heartbeat, 17707 frames, 15 flushes (tick 5318)
+5418 (0x0036) AP5: guicomp: heartbeat, 20252 frames, 15 flushes (tick 5418)
+5518 (0x0036) AP5: guicomp: heartbeat, 22742 frames, 15 flushes (tick 5518)
+5519 (0x0020) AP0: os64: up 5519 ticks, GUI running (status #9)
+5618 (0x0036) AP5: guicomp: heartbeat, 25299 frames, 15 flushes (tick 5618)
+5718 (0x0036) AP5: guicomp: heartbeat, 27880 frames, 15 flushes (tick 5718)
+5818 (0x0036) AP5: guicomp: heartbeat, 30376 frames, 15 flushes (tick 5818)
+5918 (0x0036) AP5: guicomp: heartbeat, 32911 frames, 15 flushes (tick 5918)
+6018 (0x0036) AP5: guicomp: heartbeat, 35597 frames, 15 flushes (tick 6018)
+6019 (0x0020) AP0: os64: up 6019 ticks, GUI running (status #10)
+6118 (0x0036) AP5: guicomp: heartbeat, 38291 frames, 15 flushes (tick 6118)
+6118 (0x003d) AP3: [user] yonder: task timer http://10.0.2.2:8093/idle-00.html#timer-1: status 0 in 1643094 us, wrote 0 bytes, forced 0 layouts in 0 us
+6122 (0x003d) AP3: [user] yonder: stream slice 442 bytes in 22 us
+6122 (0x003d) AP3: [user] yonder: stream sheets: 0 listed, 0 new, 0 out, in 562 us
+6122 (0x003d) AP3: [user] yonder: stream sheets: 1 listed, 1 new, 0 out, in 709 us
+6124 (0x003d) AP3: [user] yonder: task script http://10.0.2.2:8093/load-01.html#inline-1: status 0 in 10133 us, wrote 0 bytes, forced 0 layouts in 0 us
+6124 (0x003d) AP3: [user] yonder: stream sheets: 1 listed, 0 new, 0 out, in 551 us
+6124 (0x003d) AP3: [user] yonder: task DOMContentLoaded : status 0 in 29 us, wrote 0 bytes, forced 0 layouts in 0 us
+6127 (0x003d) AP3: [user] yonder: scripted page retired; heap problems=0
+6127 (0x003d) AP3: [user] yonder: task load : status 0 in 24 us, wrote 0 bytes, forced 0 layouts in 0 us
+6218 (0x0036) AP5: guicomp: heartbeat, 38408 frames, 18 flushes (tick 6218)
+6224 (0x003d) AP4: [user] yonder: task timer http://10.0.2.2:8093/load-01.html#timer-1: status 0 in 1027 us, wrote 0 bytes, forced 0 layouts in 0 us
+6318 (0x0036) AP5: guicomp: heartbeat, 38511 frames, 19 flushes (tick 6318)
+6418 (0x0036) AP5: guicomp: heartbeat, 38616 frames, 19 flushes (tick 6418)
+6518 (0x0036) AP5: guicomp: heartbeat, 38720 frames, 19 flushes (tick 6518)
+6519 (0x0020) AP6: os64: up 6519 ticks, GUI running (status #11)
+6618 (0x0036) AP5: guicomp: heartbeat, 39320 frames, 19 flushes (tick 6618)
+6718 (0x0036) AP5: guicomp: heartbeat, 41945 frames, 19 flushes (tick 6718)
+6818 (0x0036) AP5: guicomp: heartbeat, 44562 frames, 19 flushes (tick 6818)
+6918 (0x0036) AP5: guicomp: heartbeat, 47113 frames, 19 flushes (tick 6918)
+7018 (0x0036) AP5: guicomp: heartbeat, 49684 frames, 19 flushes (tick 7018)
+7019 (0x0020) AP7: os64: up 7019 ticks, GUI running (status #12)
+7118 (0x0036) AP5: guicomp: heartbeat, 52277 frames, 19 flushes (tick 7118)
+7218 (0x0036) AP5: guicomp: heartbeat, 54801 frames, 19 flushes (tick 7218)
+7318 (0x0036) AP5: guicomp: heartbeat, 57296 frames, 19 flushes (tick 7318)
+7418 (0x0036) AP5: guicomp: heartbeat, 59826 frames, 19 flushes (tick 7418)
+7518 (0x0036) AP5: guicomp: heartbeat, 62428 frames, 19 flushes (tick 7518)
+7519 (0x0020) AP1: os64: up 7519 ticks, GUI running (status #13)
+7618 (0x0036) AP5: guicomp: heartbeat, 64968 frames, 19 flushes (tick 7618)
+7718 (0x0036) AP5: guicomp: heartbeat, 67504 frames, 19 flushes (tick 7718)
+7818 (0x0036) AP5: guicomp: heartbeat, 70112 frames, 19 flushes (tick 7818)
+7918 (0x0036) AP5: guicomp: heartbeat, 70653 frames, 19 flushes (tick 7918)
+8018 (0x0036) AP5: guicomp: heartbeat, 70758 frames, 19 flushes (tick 8018)
+8019 (0x0020) AP1: os64: up 8019 ticks, GUI running (status #14)
+8118 (0x0036) AP5: guicomp: heartbeat, 70862 frames, 19 flushes (tick 8118)
+8218 (0x0036) AP5: guicomp: heartbeat, 70967 frames, 19 flushes (tick 8218)
+8318 (0x0036) AP5: guicomp: heartbeat, 71071 frames, 19 flushes (tick 8318)
+8418 (0x0036) AP5: guicomp: heartbeat, 73584 frames, 19 flushes (tick 8418)
+8518 (0x0036) AP5: guicomp: heartbeat, 76171 frames, 19 flushes (tick 8518)
+8519 (0x0020) AP3: os64: up 8519 ticks, GUI running (status #15)
+8618 (0x0036) AP5: guicomp: heartbeat, 78719 frames, 19 flushes (tick 8618)
+8718 (0x0036) AP5: guicomp: heartbeat, 81265 frames, 19 flushes (tick 8718)
+8818 (0x0036) AP5: guicomp: heartbeat, 83906 frames, 19 flushes (tick 8818)
+8918 (0x0036) AP5: guicomp: heartbeat, 86345 frames, 19 flushes (tick 8918)
+9018 (0x0036) AP5: guicomp: heartbeat, 88944 frames, 19 flushes (tick 9018)
+9020 (0x0020) AP0: os64: up 9020 ticks, GUI running (status #16)
+9118 (0x0036) AP5: guicomp: heartbeat, 91525 frames, 19 flushes (tick 9118)
+9218 (0x0036) AP5: guicomp: heartbeat, 94174 frames, 19 flushes (tick 9218)
+9318 (0x0036) AP5: guicomp: heartbeat, 96825 frames, 19 flushes (tick 9318)
+9418 (0x0036) AP5: guicomp: heartbeat, 99460 frames, 19 flushes (tick 9418)
+9518 (0x0036) AP5: guicomp: heartbeat, 102157 frames, 19 flushes (tick 9518)
+9520 (0x0020) AP2: os64: up 9520 ticks, GUI running (status #17)
+9618 (0x0036) AP5: guicomp: heartbeat, 103059 frames, 19 flushes (tick 9618)
+9718 (0x0036) AP5: guicomp: heartbeat, 103163 frames, 19 flushes (tick 9718)
+9818 (0x0036) AP5: guicomp: heartbeat, 103267 frames, 19 flushes (tick 9818)
+9918 (0x0036) AP5: guicomp: heartbeat, 103371 frames, 19 flushes (tick 9918)
+10018 (0x0036) AP5: guicomp: heartbeat, 103475 frames, 19 flushes (tick 10018)
+10021 (0x0020) AP4: os64: up 10021 ticks, GUI running (status #18)
+10118 (0x0036) AP5: guicomp: heartbeat, 105707 frames, 19 flushes (tick 10118)
+10218 (0x0036) AP5: guicomp: heartbeat, 108177 frames, 19 flushes (tick 10218)
+10318 (0x0036) AP5: guicomp: heartbeat, 110746 frames, 19 flushes (tick 10318)
+10418 (0x0036) AP5: guicomp: heartbeat, 113319 frames, 19 flushes (tick 10418)
+10518 (0x0036) AP5: guicomp: heartbeat, 115861 frames, 19 flushes (tick 10518)
+10521 (0x0020) AP4: os64: up 10521 ticks, GUI running (status #19)
+10618 (0x0036) AP5: guicomp: heartbeat, 118396 frames, 19 flushes (tick 10618)
+10718 (0x0036) AP5: guicomp: heartbeat, 120915 frames, 19 flushes (tick 10718)
+10818 (0x0036) AP5: guicomp: heartbeat, 121371 frames, 20 flushes (tick 10818)
+10918 (0x0036) AP5: guicomp: heartbeat, 121475 frames, 20 flushes (tick 10918)
+11018 (0x0036) AP5: guicomp: heartbeat, 121579 frames, 20 flushes (tick 11018)
+11021 (0x0020) AP6: os64: up 11021 ticks, GUI running (status #20)
+11118 (0x0036) AP5: guicomp: heartbeat, 121684 frames, 20 flushes (tick 11118)
+11218 (0x0036) AP5: guicomp: heartbeat, 121852 frames, 20 flushes (tick 11218)
+11318 (0x0036) AP5: guicomp: heartbeat, 124387 frames, 20 flushes (tick 11318)
+11418 (0x0036) AP5: guicomp: heartbeat, 126910 frames, 20 flushes (tick 11418)
+11518 (0x0036) AP5: guicomp: heartbeat, 129505 frames, 20 flushes (tick 11518)
+11521 (0x0020) AP6: os64: up 11521 ticks, GUI running (status #21)
+11618 (0x0036) AP5: guicomp: heartbeat, 132028 frames, 20 flushes (tick 11618)
+11718 (0x0036) AP5: guicomp: heartbeat, 134579 frames, 20 flushes (tick 11718)
+11818 (0x0036) AP5: guicomp: heartbeat, 137101 frames, 20 flushes (tick 11818)
+11918 (0x0036) AP5: guicomp: heartbeat, 139682 frames, 20 flushes (tick 11918)
+12018 (0x0036) AP5: guicomp: heartbeat, 142315 frames, 20 flushes (tick 12018)
+12021 (0x0020) AP4: os64: up 12021 ticks, GUI running (status #22)
+12118 (0x0036) AP5: guicomp: heartbeat, 144912 frames, 20 flushes (tick 12118)
+12218 (0x0036) AP5: guicomp: heartbeat, 147494 frames, 20 flushes (tick 12218)
+12318 (0x0036) AP5: guicomp: heartbeat, 150130 frames, 20 flushes (tick 12318)
+12418 (0x0036) AP5: guicomp: heartbeat, 152727 frames, 20 flushes (tick 12418)
+12453 (0x003d) AP3: [user] yonder: stream slice 278 bytes in 30 us
+12453 (0x003d) AP3: [user] yonder: stream sheets: 0 listed, 0 new, 0 out, in 531 us
+12454 (0x003d) AP3: [user] yonder: stream sheets: 1 listed, 1 new, 0 out, in 750 us
+12455 (0x003d) AP3: [user] yonder: task script http://10.0.2.2:8093/idle-01.html#inline-1: status 0 in 9998 us, wrote 0 bytes, forced 0 layouts in 0 us
+12455 (0x003d) AP3: [user] yonder: stream sheets: 1 listed, 0 new, 0 out, in 562 us
+12455 (0x003d) AP3: [user] yonder: task DOMContentLoaded : status 0 in 24 us, wrote 0 bytes, forced 0 layouts in 0 us
+12518 (0x0036) AP5: guicomp: heartbeat, 155159 frames, 21 flushes (tick 12518)
+12521 (0x0020) AP0: os64: up 12521 ticks, GUI running (status #23)
+12618 (0x0036) AP5: guicomp: heartbeat, 157860 frames, 21 flushes (tick 12618)
+12718 (0x0036) AP5: guicomp: heartbeat, 160564 frames, 21 flushes (tick 12718)
+12818 (0x0036) AP5: guicomp: heartbeat, 163257 frames, 21 flushes (tick 12818)
+12918 (0x0036) AP5: guicomp: heartbeat, 166029 frames, 21 flushes (tick 12918)
+12986 (0x003d) AP3: [user] yonder: scripted page retired; heap problems=0
+12986 (0x003d) AP3: [user] yonder: task load : status 0 in 23 us, wrote 0 bytes, forced 0 layouts in 0 us
+13018 (0x0036) AP5: guicomp: heartbeat, 167844 frames, 22 flushes (tick 13018)
+13021 (0x0020) AP0: os64: up 13021 ticks, GUI running (status #24)
+13118 (0x0036) AP5: guicomp: heartbeat, 167949 frames, 22 flushes (tick 13118)
+13218 (0x0036) AP5: guicomp: heartbeat, 168053 frames, 22 flushes (tick 13218)
+13318 (0x0036) AP5: guicomp: heartbeat, 168158 frames, 22 flushes (tick 13318)
+13418 (0x0036) AP5: guicomp: heartbeat, 168537 frames, 22 flushes (tick 13418)
+13518 (0x0036) AP5: guicomp: heartbeat, 171105 frames, 22 flushes (tick 13518)
+13521 (0x0020) AP0: os64: up 13521 ticks, GUI running (status #25)
+13618 (0x0036) AP5: guicomp: heartbeat, 173645 frames, 22 flushes (tick 13618)
+13718 (0x0036) AP5: guicomp: heartbeat, 176207 frames, 22 flushes (tick 13718)
+13818 (0x0036) AP5: guicomp: heartbeat, 178700 frames, 22 flushes (tick 13818)
+13918 (0x0036) AP5: guicomp: heartbeat, 181323 frames, 22 flushes (tick 13918)
+13963 (0x003d) AP1: [user] yonder: task timer http://10.0.2.2:8093/idle-01.html#timer-1: status 0 in 67617 us, wrote 0 bytes, forced 0 layouts in 0 us
+14018 (0x0036) AP5: guicomp: heartbeat, 183890 frames, 22 flushes (tick 14018)
+14022 (0x0020) AP6: os64: up 14022 ticks, GUI running (status #26)
+14118 (0x0036) AP5: guicomp: heartbeat, 186515 frames, 22 flushes (tick 14118)
+14218 (0x0036) AP5: guicomp: heartbeat, 189205 frames, 22 flushes (tick 14218)
+14318 (0x0036) AP5: guicomp: heartbeat, 191889 frames, 22 flushes (tick 14318)
+14418 (0x0036) AP5: guicomp: heartbeat, 194532 frames, 22 flushes (tick 14418)
+14518 (0x0036) AP5: guicomp: heartbeat, 197223 frames, 22 flushes (tick 14518)
+14522 (0x0020) AP6: os64: up 14522 ticks, GUI running (status #27)
+14619 (0x0036) AP5: guicomp: heartbeat, 199981 frames, 22 flushes (tick 14619)
+14620 (0x003d) AP1: [user] yonder: stream slice 442 bytes in 21 us
+14621 (0x003d) AP1: [user] yonder: stream sheets: 0 listed, 0 new, 0 out, in 520 us
+14621 (0x003d) AP1: [user] yonder: stream sheets: 1 listed, 1 new, 0 out, in 903 us
+14622 (0x003d) AP1: [user] yonder: task script http://10.0.2.2:8093/load-02.html#inline-1: status 0 in 9937 us, wrote 0 bytes, forced 0 layouts in 0 us
+14622 (0x003d) AP1: [user] yonder: stream sheets: 1 listed, 0 new, 0 out, in 899 us
+14623 (0x003d) AP1: [user] yonder: task DOMContentLoaded : status 0 in 26 us, wrote 0 bytes, forced 0 layouts in 0 us
+14625 (0x003d) AP1: [user] yonder: scripted page retired; heap problems=0
+14625 (0x003d) AP1: [user] yonder: task load : status 0 in 25 us, wrote 0 bytes, forced 0 layouts in 0 us
+14719 (0x0036) AP5: guicomp: heartbeat, 200087 frames, 25 flushes (tick 14719)
+14723 (0x003d) AP3: [user] yonder: task timer http://10.0.2.2:8093/load-02.html#timer-1: status 0 in 1115 us, wrote 0 bytes, forced 0 layouts in 0 us
+14819 (0x0036) AP5: guicomp: heartbeat, 200189 frames, 26 flushes (tick 14819)
+14919 (0x0036) AP5: guicomp: heartbeat, 200294 frames, 26 flushes (tick 14919)
+15019 (0x0036) AP5: guicomp: heartbeat, 200398 frames, 26 flushes (tick 15019)
+15022 (0x0020) AP0: os64: up 15022 ticks, GUI running (status #28)
+15119 (0x0036) AP5: guicomp: heartbeat, 200759 frames, 26 flushes (tick 15119)
+15219 (0x0036) AP5: guicomp: heartbeat, 203206 frames, 26 flushes (tick 15219)
+15319 (0x0036) AP5: guicomp: heartbeat, 205726 frames, 26 flushes (tick 15319)
+15419 (0x0036) AP5: guicomp: heartbeat, 208263 frames, 26 flushes (tick 15419)
+15519 (0x0036) AP5: guicomp: heartbeat, 210834 frames, 26 flushes (tick 15519)
+15522 (0x0020) AP3: os64: up 15522 ticks, GUI running (status #29)
+15619 (0x0036) AP5: guicomp: heartbeat, 213265 frames, 26 flushes (tick 15619)
+15719 (0x0036) AP5: guicomp: heartbeat, 215740 frames, 26 flushes (tick 15719)
+15819 (0x0036) AP5: guicomp: heartbeat, 218260 frames, 26 flushes (tick 15819)
+15919 (0x0036) AP5: guicomp: heartbeat, 220781 frames, 26 flushes (tick 15919)
+16019 (0x0036) AP5: guicomp: heartbeat, 223311 frames, 26 flushes (tick 16019)
+16022 (0x0020) AP3: os64: up 16022 ticks, GUI running (status #30)
+16119 (0x0036) AP5: guicomp: heartbeat, 225891 frames, 26 flushes (tick 16119)
+16219 (0x0036) AP5: guicomp: heartbeat, 228424 frames, 26 flushes (tick 16219)
+16319 (0x0036) AP5: guicomp: heartbeat, 231000 frames, 26 flushes (tick 16319)
+16419 (0x0036) AP5: guicomp: heartbeat, 232556 frames, 26 flushes (tick 16419)
+16519 (0x0036) AP5: guicomp: heartbeat, 232661 frames, 26 flushes (tick 16519)
+16522 (0x0020) AP0: os64: up 16522 ticks, GUI running (status #31)
+16619 (0x0036) AP5: guicomp: heartbeat, 232765 frames, 26 flushes (tick 16619)
+16719 (0x0036) AP5: guicomp: heartbeat, 232870 frames, 26 flushes (tick 16719)
+16819 (0x0036) AP5: guicomp: heartbeat, 232973 frames, 26 flushes (tick 16819)
+16919 (0x0036) AP5: guicomp: heartbeat, 234447 frames, 26 flushes (tick 16919)
+17019 (0x0036) AP5: guicomp: heartbeat, 236967 frames, 26 flushes (tick 17019)
+17022 (0x0020) AP0: os64: up 17022 ticks, GUI running (status #32)
+17119 (0x0036) AP5: guicomp: heartbeat, 239479 frames, 26 flushes (tick 17119)
+17219 (0x0036) AP5: guicomp: heartbeat, 242013 frames, 26 flushes (tick 17219)
+17319 (0x0036) AP5: guicomp: heartbeat, 244677 frames, 26 flushes (tick 17319)
+17419 (0x0036) AP5: guicomp: heartbeat, 247208 frames, 26 flushes (tick 17419)
+17519 (0x0036) AP5: guicomp: heartbeat, 249722 frames, 26 flushes (tick 17519)
+17522 (0x0020) AP0: os64: up 17522 ticks, GUI running (status #33)
+17619 (0x0036) AP5: guicomp: heartbeat, 252303 frames, 26 flushes (tick 17619)
+17719 (0x0036) AP5: guicomp: heartbeat, 254942 frames, 26 flushes (tick 17719)
+17819 (0x0036) AP5: guicomp: heartbeat, 257491 frames, 26 flushes (tick 17819)
+17919 (0x0036) AP5: guicomp: heartbeat, 260036 frames, 26 flushes (tick 17919)
+18019 (0x0036) AP5: guicomp: heartbeat, 262699 frames, 26 flushes (tick 18019)
+18022 (0x0020) AP0: os64: up 18022 ticks, GUI running (status #34)
+18119 (0x0036) AP5: guicomp: heartbeat, 264754 frames, 26 flushes (tick 18119)
+18219 (0x0036) AP5: guicomp: heartbeat, 264856 frames, 26 flushes (tick 18219)
+18319 (0x0036) AP5: guicomp: heartbeat, 264961 frames, 26 flushes (tick 18319)
+18419 (0x0036) AP5: guicomp: heartbeat, 265066 frames, 26 flushes (tick 18419)
+18519 (0x0036) AP5: guicomp: heartbeat, 265171 frames, 26 flushes (tick 18519)
+18522 (0x0020) AP0: os64: up 18522 ticks, GUI running (status #35)
+18619 (0x0036) AP5: guicomp: heartbeat, 266003 frames, 26 flushes (tick 18619)
+18719 (0x0036) AP5: guicomp: heartbeat, 268512 frames, 26 flushes (tick 18719)
+18819 (0x0036) AP5: guicomp: heartbeat, 271068 frames, 26 flushes (tick 18819)
+18919 (0x0036) AP5: guicomp: heartbeat, 273557 frames, 26 flushes (tick 18919)
+19019 (0x0036) AP5: guicomp: heartbeat, 276129 frames, 26 flushes (tick 19019)
+19023 (0x0020) AP3: os64: up 19023 ticks, GUI running (status #36)
+19119 (0x0036) AP5: guicomp: heartbeat, 278650 frames, 26 flushes (tick 19119)
+19219 (0x0036) AP5: guicomp: heartbeat, 281119 frames, 26 flushes (tick 19219)
+19319 (0x0036) AP5: guicomp: heartbeat, 283100 frames, 27 flushes (tick 19319)
+19419 (0x0036) AP5: guicomp: heartbeat, 283204 frames, 27 flushes (tick 19419)
+19519 (0x0036) AP5: guicomp: heartbeat, 283308 frames, 27 flushes (tick 19519)
+19523 (0x0020) AP3: os64: up 19523 ticks, GUI running (status #37)
+19619 (0x0036) AP5: guicomp: heartbeat, 283413 frames, 27 flushes (tick 19619)
+19719 (0x0036) AP5: guicomp: heartbeat, 283516 frames, 27 flushes (tick 19719)
+19819 (0x0036) AP5: guicomp: heartbeat, 284358 frames, 27 flushes (tick 19819)
+19919 (0x0036) AP5: guicomp: heartbeat, 286884 frames, 27 flushes (tick 19919)
+20019 (0x0036) AP5: guicomp: heartbeat, 289424 frames, 27 flushes (tick 20019)
+20023 (0x0020) AP3: os64: up 20023 ticks, GUI running (status #38)
+20119 (0x0036) AP5: guicomp: heartbeat, 291983 frames, 27 flushes (tick 20119)
+20219 (0x0036) AP5: guicomp: heartbeat, 294489 frames, 27 flushes (tick 20219)
+20319 (0x0036) AP5: guicomp: heartbeat, 296994 frames, 27 flushes (tick 20319)
+20419 (0x0036) AP5: guicomp: heartbeat, 299503 frames, 27 flushes (tick 20419)
+20519 (0x0036) AP5: guicomp: heartbeat, 301587 frames, 28 flushes (tick 20519)
+20523 (0x0020) AP0: os64: up 20523 ticks, GUI running (status #39)
+20619 (0x0036) AP5: guicomp: heartbeat, 301692 frames, 28 flushes (tick 20619)
+20719 (0x0036) AP5: guicomp: heartbeat, 301796 frames, 28 flushes (tick 20719)
+20819 (0x0036) AP5: guicomp: heartbeat, 301901 frames, 28 flushes (tick 20819)
+20919 (0x0036) AP5: guicomp: heartbeat, 302005 frames, 28 flushes (tick 20919)
+21019 (0x0036) AP5: guicomp: heartbeat, 302927 frames, 28 flushes (tick 21019)
+21023 (0x0020) AP6: os64: up 21023 ticks, GUI running (status #40)
+21119 (0x0036) AP5: guicomp: heartbeat, 305434 frames, 28 flushes (tick 21119)
+21219 (0x0036) AP5: guicomp: heartbeat, 307925 frames, 28 flushes (tick 21219)
+21270 (0x0036) AP5: guicomp: window 2 asked to close
+21319 (0x0036) AP5: guicomp: heartbeat, 310399 frames, 28 flushes (tick 21319)
+21419 (0x0036) AP5: guicomp: heartbeat, 312951 frames, 28 flushes (tick 21419)
+21519 (0x0036) AP5: guicomp: heartbeat, 315575 frames, 28 flushes (tick 21519)
+21523 (0x0020) AP6: os64: up 21523 ticks, GUI running (status #41)
+21619 (0x0036) AP5: guicomp: heartbeat, 318208 frames, 28 flushes (tick 21619)
+21719 (0x0036) AP5: guicomp: heartbeat, 321006 frames, 28 flushes (tick 21719)
+21819 (0x0036) AP5: guicomp: heartbeat, 323724 frames, 28 flushes (tick 21819)
+21919 (0x0036) AP5: guicomp: heartbeat, 326561 frames, 28 flushes (tick 21919)
+22019 (0x0036) AP5: guicomp: heartbeat, 329332 frames, 28 flushes (tick 22019)
+22023 (0x0020) AP6: os64: up 22023 ticks, GUI running (status #42)
+22119 (0x0036) AP5: guicomp: heartbeat, 332068 frames, 28 flushes (tick 22119)
+22219 (0x0036) AP5: guicomp: heartbeat, 333913 frames, 28 flushes (tick 22219)
+22319 (0x0036) AP5: guicomp: heartbeat, 334018 frames, 28 flushes (tick 22319)
+22419 (0x0036) AP5: guicomp: heartbeat, 334122 frames, 28 flushes (tick 22419)
+22519 (0x0036) AP5: guicomp: heartbeat, 334227 frames, 28 flushes (tick 22519)
+22523 (0x0020) AP0: os64: up 22523 ticks, GUI running (status #43)
+22619 (0x0036) AP5: guicomp: heartbeat, 334332 frames, 28 flushes (tick 22619)
+22719 (0x0036) AP5: guicomp: heartbeat, 335579 frames, 28 flushes (tick 22719)
+22819 (0x0036) AP5: guicomp: heartbeat, 338197 frames, 28 flushes (tick 22819)
+22919 (0x0036) AP5: guicomp: heartbeat, 340698 frames, 28 flushes (tick 22919)
+23019 (0x0036) AP5: guicomp: heartbeat, 343154 frames, 28 flushes (tick 23019)
+23023 (0x0020) AP0: os64: up 23023 ticks, GUI running (status #44)
+23119 (0x0036) AP5: guicomp: heartbeat, 345629 frames, 28 flushes (tick 23119)
+23219 (0x0036) AP5: guicomp: heartbeat, 348114 frames, 28 flushes (tick 23219)
+23319 (0x0036) AP5: guicomp: heartbeat, 350662 frames, 28 flushes (tick 23319)
+23419 (0x0036) AP5: guicomp: heartbeat, 353238 frames, 28 flushes (tick 23419)
+23519 (0x0036) AP5: guicomp: heartbeat, 355764 frames, 28 flushes (tick 23519)
+23523 (0x0020) AP0: os64: up 23523 ticks, GUI running (status #45)
+23619 (0x0036) AP5: guicomp: heartbeat, 358352 frames, 28 flushes (tick 23619)
+23719 (0x0036) AP5: guicomp: heartbeat, 360834 frames, 28 flushes (tick 23719)
+23819 (0x0036) AP5: guicomp: heartbeat, 363348 frames, 28 flushes (tick 23819)
+23919 (0x0036) AP5: guicomp: heartbeat, 365958 frames, 28 flushes (tick 23919)
+24019 (0x0036) AP5: guicomp: heartbeat, 366163 frames, 28 flushes (tick 24019)
+24023 (0x0020) AP0: os64: up 24023 ticks, GUI running (status #46)
+24119 (0x0036) AP5: guicomp: heartbeat, 366268 frames, 28 flushes (tick 24119)
+24219 (0x0036) AP5: guicomp: heartbeat, 366373 frames, 28 flushes (tick 24219)
+24319 (0x0036) AP5: guicomp: heartbeat, 366478 frames, 28 flushes (tick 24319)
+24419 (0x0036) AP5: guicomp: heartbeat, 366799 frames, 28 flushes (tick 24419)
+24519 (0x0036) AP5: guicomp: heartbeat, 369288 frames, 28 flushes (tick 24519)
+24523 (0x0020) AP0: os64: up 24523 ticks, GUI running (status #47)
+24619 (0x0036) AP5: guicomp: heartbeat, 371797 frames, 28 flushes (tick 24619)
+24719 (0x0036) AP5: guicomp: heartbeat, 374377 frames, 28 flushes (tick 24719)
+24819 (0x0036) AP5: guicomp: heartbeat, 376846 frames, 28 flushes (tick 24819)
+24919 (0x0036) AP5: guicomp: heartbeat, 379404 frames, 28 flushes (tick 24919)
+25019 (0x0036) AP5: guicomp: heartbeat, 381892 frames, 28 flushes (tick 25019)
+25023 (0x0020) AP0: os64: up 25023 ticks, GUI running (status #48)
+25119 (0x0036) AP5: guicomp: heartbeat, 384396 frames, 28 flushes (tick 25119)
+25219 (0x0036) AP5: guicomp: heartbeat, 386907 frames, 28 flushes (tick 25219)
+25319 (0x0036) AP5: guicomp: heartbeat, 389422 frames, 28 flushes (tick 25319)
+25419 (0x0036) AP5: guicomp: heartbeat, 392009 frames, 28 flushes (tick 25419)
+25519 (0x0036) AP5: guicomp: heartbeat, 394607 frames, 28 flushes (tick 25519)
+25524 (0x0020) AP0: os64: up 25524 ticks, GUI running (status #49)
+25619 (0x0036) AP5: guicomp: heartbeat, 397186 frames, 28 flushes (tick 25619)
+25719 (0x0036) AP5: guicomp: heartbeat, 398290 frames, 28 flushes (tick 25719)
+25819 (0x0036) AP5: guicomp: heartbeat, 398395 frames, 28 flushes (tick 25819)
+25919 (0x0036) AP5: guicomp: heartbeat, 398498 frames, 28 flushes (tick 25919)
+26019 (0x0036) AP5: guicomp: heartbeat, 398602 frames, 28 flushes (tick 26019)
+26024 (0x0020) AP0: os64: up 26024 ticks, GUI running (status #50)
+26119 (0x0036) AP5: guicomp: heartbeat, 398707 frames, 28 flushes (tick 26119)
+26219 (0x0036) AP5: guicomp: heartbeat, 400136 frames, 28 flushes (tick 26219)
+26319 (0x0036) AP5: guicomp: heartbeat, 402639 frames, 28 flushes (tick 26319)
+26419 (0x0036) AP5: guicomp: heartbeat, 405149 frames, 28 flushes (tick 26419)
+26519 (0x0036) AP5: guicomp: heartbeat, 407698 frames, 28 flushes (tick 26519)
+26524 (0x0020) AP2: os64: up 26524 ticks, GUI running (status #51)
+26619 (0x0036) AP5: guicomp: heartbeat, 410190 frames, 28 flushes (tick 26619)
+26719 (0x0036) AP5: guicomp: heartbeat, 412666 frames, 28 flushes (tick 26719)
+26819 (0x0036) AP5: guicomp: heartbeat, 415051 frames, 28 flushes (tick 26819)
+26919 (0x0036) AP5: guicomp: heartbeat, 417279 frames, 28 flushes (tick 26919)
+26945 (0x0033) AP2: [user] husk: task 78 (ps) started
+27019 (0x0036) AP5: guicomp: heartbeat, 419702 frames, 28 flushes (tick 27019)
+27024 (0x0020) AP0: os64: up 27024 ticks, GUI running (status #52)
+27094 (0x0033) AP2: [user] husk: task 78 (ps) exited code 0
+27104 (0x0033) AP2: [user] husk: task 79 (sync) started
+27106 (0x0033) AP2: [user] husk: task 79 (sync) exited code 0
+27119 (0x0036) AP5: guicomp: heartbeat, 422005 frames, 28 flushes (tick 27119)
+27219 (0x0036) AP5: guicomp: heartbeat, 424237 frames, 28 flushes (tick 27219)
+27319 (0x0036) AP5: guicomp: heartbeat, 426431 frames, 28 flushes (tick 27319)
+27419 (0x0036) AP5: guicomp: heartbeat, 428668 frames, 28 flushes (tick 27419)
+27519 (0x0036) AP5: guicomp: heartbeat, 430795 frames, 28 flushes (tick 27519)
+27524 (0x0020) AP1: os64: up 27524 ticks, GUI running (status #53)
+27619 (0x0036) AP5: guicomp: heartbeat, 430900 frames, 28 flushes (tick 27619)
+27719 (0x0036) AP5: guicomp: heartbeat, 431005 frames, 28 flushes (tick 27719)
+27819 (0x0036) AP5: guicomp: heartbeat, 431108 frames, 28 flushes (tick 27819)
+27919 (0x0036) AP5: guicomp: heartbeat, 431212 frames, 28 flushes (tick 27919)
+28019 (0x0036) AP5: guicomp: heartbeat, 431317 frames, 28 flushes (tick 28019)
+28024 (0x0020) AP2: os64: up 28024 ticks, GUI running (status #54)
+28119 (0x0036) AP5: guicomp: heartbeat, 433697 frames, 28 flushes (tick 28119)
+28219 (0x0036) AP5: guicomp: heartbeat, 436013 frames, 28 flushes (tick 28219)
+28319 (0x0036) AP5: guicomp: heartbeat, 438357 frames, 28 flushes (tick 28319)
+28419 (0x0036) AP5: guicomp: heartbeat, 440803 frames, 28 flushes (tick 28419)
+28519 (0x0036) AP5: guicomp: heartbeat, 443226 frames, 28 flushes (tick 28519)
+28524 (0x0020) AP2: os64: up 28524 ticks, GUI running (status #55)
+28619 (0x0036) AP5: guicomp: heartbeat, 445725 frames, 28 flushes (tick 28619)
+28719 (0x0036) AP5: guicomp: heartbeat, 448269 frames, 28 flushes (tick 28719)
+28819 (0x0036) AP5: guicomp: heartbeat, 450831 frames, 28 flushes (tick 28819)
+28919 (0x0036) AP5: guicomp: heartbeat, 453337 frames, 28 flushes (tick 28919)
+29019 (0x0036) AP5: guicomp: heartbeat, 455824 frames, 28 flushes (tick 29019)
+29024 (0x0020) AP2: os64: up 29024 ticks, GUI running (status #56)
+29119 (0x0036) AP5: guicomp: heartbeat, 458330 frames, 28 flushes (tick 29119)
+29219 (0x0036) AP5: guicomp: heartbeat, 460818 frames, 28 flushes (tick 29219)
+29319 (0x0036) AP5: guicomp: heartbeat, 463301 frames, 28 flushes (tick 29319)
+29419 (0x0036) AP5: guicomp: heartbeat, 463439 frames, 28 flushes (tick 29419)
+29519 (0x0036) AP5: guicomp: heartbeat, 463544 frames, 28 flushes (tick 29519)
+29524 (0x0020) AP2: os64: up 29524 ticks, GUI running (status #57)
+29619 (0x0036) AP5: guicomp: heartbeat, 463649 frames, 28 flushes (tick 29619)
+29719 (0x0036) AP5: guicomp: heartbeat, 463753 frames, 28 flushes (tick 29719)
+29819 (0x0036) AP5: guicomp: heartbeat, 464308 frames, 28 flushes (tick 29819)
+29919 (0x0036) AP5: guicomp: heartbeat, 466770 frames, 28 flushes (tick 29919)
+30019 (0x0036) AP5: guicomp: heartbeat, 469281 frames, 28 flushes (tick 30019)
+30024 (0x0020) AP0: os64: up 30024 ticks, GUI running (status #58)
+30119 (0x0036) AP5: guicomp: heartbeat, 471807 frames, 28 flushes (tick 30119)
+30219 (0x0036) AP5: guicomp: heartbeat, 474275 frames, 28 flushes (tick 30219)
+30319 (0x0036) AP5: guicomp: heartbeat, 476731 frames, 28 flushes (tick 30319)
+30419 (0x0036) AP5: guicomp: heartbeat, 479182 frames, 28 flushes (tick 30419)
+30519 (0x0036) AP5: guicomp: heartbeat, 481615 frames, 28 flushes (tick 30519)
+30524 (0x0020) AP3: os64: up 30524 ticks, GUI running (status #59)
+30619 (0x0036) AP5: guicomp: heartbeat, 484078 frames, 28 flushes (tick 30619)
+30719 (0x0036) AP5: guicomp: heartbeat, 486549 frames, 28 flushes (tick 30719)
+30819 (0x0036) AP5: guicomp: heartbeat, 489024 frames, 28 flushes (tick 30819)
+30919 (0x0036) AP5: guicomp: heartbeat, 491524 frames, 28 flushes (tick 30919)
+31019 (0x0036) AP5: guicomp: heartbeat, 493981 frames, 28 flushes (tick 31019)
+31024 (0x0020) AP2: os64: up 31024 ticks, GUI running (status #60)
+31119 (0x0036) AP5: guicomp: heartbeat, 495861 frames, 28 flushes (tick 31119)
+31219 (0x0036) AP5: guicomp: heartbeat, 495966 frames, 28 flushes (tick 31219)
+31319 (0x0036) AP5: guicomp: heartbeat, 496071 frames, 28 flushes (tick 31319)
+31419 (0x0036) AP5: guicomp: heartbeat, 496176 frames, 28 flushes (tick 31419)
+31519 (0x0036) AP5: guicomp: heartbeat, 496281 frames, 28 flushes (tick 31519)
+31524 (0x0020) AP1: os64: up 31524 ticks, GUI running (status #61)
+31619 (0x0036) AP5: guicomp: heartbeat, 497030 frames, 28 flushes (tick 31619)
+31719 (0x0036) AP5: guicomp: heartbeat, 499438 frames, 28 flushes (tick 31719)
+31819 (0x0036) AP5: guicomp: heartbeat, 501796 frames, 28 flushes (tick 31819)
+31919 (0x0036) AP5: guicomp: heartbeat, 504183 frames, 28 flushes (tick 31919)
+32019 (0x0036) AP5: guicomp: heartbeat, 506574 frames, 28 flushes (tick 32019)
+32024 (0x0020) AP1: os64: up 32024 ticks, GUI running (status #62)
+32119 (0x0036) AP5: guicomp: heartbeat, 508850 frames, 28 flushes (tick 32119)
+32219 (0x0036) AP5: guicomp: heartbeat, 511062 frames, 28 flushes (tick 32219)
+32319 (0x0036) AP5: guicomp: heartbeat, 513340 frames, 28 flushes (tick 32319)
+32419 (0x0036) AP5: guicomp: heartbeat, 515710 frames, 28 flushes (tick 32419)
+32519 (0x0036) AP5: guicomp: heartbeat, 518098 frames, 28 flushes (tick 32519)
+32524 (0x0020) AP1: os64: up 32524 ticks, GUI running (status #63)
+32619 (0x0036) AP5: guicomp: heartbeat, 520466 frames, 28 flushes (tick 32619)
+32719 (0x0036) AP5: guicomp: heartbeat, 522901 frames, 28 flushes (tick 32719)
+32819 (0x0036) AP5: guicomp: heartbeat, 525316 frames, 28 flushes (tick 32819)
+32919 (0x0036) AP5: guicomp: heartbeat, 527753 frames, 28 flushes (tick 32919)
+33019 (0x0036) AP5: guicomp: heartbeat, 530088 frames, 28 flushes (tick 33019)
+33024 (0x0020) AP0: os64: up 33024 ticks, GUI running (status #64)
+33119 (0x0036) AP5: guicomp: heartbeat, 532517 frames, 28 flushes (tick 33119)
+33219 (0x0036) AP5: guicomp: heartbeat, 534907 frames, 28 flushes (tick 33219)
+33319 (0x0036) AP5: guicomp: heartbeat, 537332 frames, 28 flushes (tick 33319)
+33419 (0x0036) AP5: guicomp: heartbeat, 539778 frames, 28 flushes (tick 33419)
+33519 (0x0036) AP5: guicomp: heartbeat, 542193 frames, 28 flushes (tick 33519)
+33524 (0x0020) AP0: os64: up 33524 ticks, GUI running (status #65)
+33619 (0x0036) AP5: guicomp: heartbeat, 544572 frames, 28 flushes (tick 33619)
+33719 (0x0036) AP5: guicomp: heartbeat, 546962 frames, 28 flushes (tick 33719)
+33819 (0x0036) AP5: guicomp: heartbeat, 549385 frames, 28 flushes (tick 33819)
+33919 (0x0036) AP5: guicomp: heartbeat, 551802 frames, 28 flushes (tick 33919)
+34019 (0x0036) AP5: guicomp: heartbeat, 554206 frames, 28 flushes (tick 34019)
+34024 (0x0020) AP3: os64: up 34024 ticks, GUI running (status #66)
+34119 (0x0036) AP5: guicomp: heartbeat, 556603 frames, 28 flushes (tick 34119)
+34144 (0x003d) AP1: [user] yonder: scripted page retired; heap problems=0
+34219 (0x0036) AP5: guicomp: heartbeat, 558934 frames, 28 flushes (tick 34219)
+34319 (0x0036) AP5: guicomp: heartbeat, 559055 frames, 28 flushes (tick 34319)
+34325 (0x0032) AP1: [user] husk: task 60 (webpwatch) exited code 0
+34419 (0x0036) AP5: guicomp: heartbeat, 559468 frames, 28 flushes (tick 34419)
+34519 (0x0036) AP5: guicomp: heartbeat, 559952 frames, 28 flushes (tick 34519)
+34524 (0x0020) AP1: os64: up 34524 ticks, GUI running (status #67)
+34619 (0x0036) AP5: guicomp: heartbeat, 560051 frames, 28 flushes (tick 34619)
+34719 (0x0036) AP5: guicomp: heartbeat, 560151 frames, 28 flushes (tick 34719)
+34819 (0x0036) AP5: guicomp: heartbeat, 560251 frames, 28 flushes (tick 34819)
+34919 (0x0036) AP5: guicomp: heartbeat, 560351 frames, 28 flushes (tick 34919)
+35019 (0x0036) AP5: guicomp: heartbeat, 560451 frames, 28 flushes (tick 35019)
+35024 (0x0020) AP1: os64: up 35024 ticks, GUI running (status #68)
+35119 (0x0036) AP5: guicomp: heartbeat, 560551 frames, 28 flushes (tick 35119)
+35219 (0x0036) AP5: guicomp: heartbeat, 560651 frames, 28 flushes (tick 35219)
+35319 (0x0036) AP5: guicomp: heartbeat, 560751 frames, 28 flushes (tick 35319)
+35419 (0x0036) AP5: guicomp: heartbeat, 560851 frames, 28 flushes (tick 35419)
+35519 (0x0036) AP5: guicomp: heartbeat, 560951 frames, 28 flushes (tick 35519)
+35524 (0x0020) AP1: os64: up 35524 ticks, GUI running (status #69)
+35619 (0x0036) AP5: guicomp: heartbeat, 561051 frames, 28 flushes (tick 35619)
+35719 (0x0036) AP5: guicomp: heartbeat, 561151 frames, 28 flushes (tick 35719)
+35819 (0x0036) AP5: guicomp: heartbeat, 561251 frames, 28 flushes (tick 35819)
+35919 (0x0036) AP5: guicomp: heartbeat, 561351 frames, 28 flushes (tick 35919)
+36019 (0x0036) AP5: guicomp: heartbeat, 561451 frames, 28 flushes (tick 36019)
+36024 (0x0020) AP1: os64: up 36024 ticks, GUI running (status #70)
+36119 (0x0036) AP5: guicomp: heartbeat, 561551 frames, 28 flushes (tick 36119)
+36219 (0x0036) AP5: guicomp: heartbeat, 561651 frames, 28 flushes (tick 36219)
+36319 (0x0036) AP5: guicomp: heartbeat, 561751 frames, 28 flushes (tick 36319)
+36419 (0x0036) AP5: guicomp: heartbeat, 561851 frames, 28 flushes (tick 36419)
+36519 (0x0036) AP5: guicomp: heartbeat, 561951 frames, 28 flushes (tick 36519)
+36524 (0x0020) AP1: os64: up 36524 ticks, GUI running (status #71)
+36619 (0x0036) AP5: guicomp: heartbeat, 562051 frames, 28 flushes (tick 36619)
+36719 (0x0036) AP5: guicomp: heartbeat, 562151 frames, 28 flushes (tick 36719)
+36819 (0x0036) AP5: guicomp: heartbeat, 562251 frames, 28 flushes (tick 36819)
+36919 (0x0036) AP5: guicomp: heartbeat, 562351 frames, 28 flushes (tick 36919)
+37019 (0x0036) AP5: guicomp: heartbeat, 562451 frames, 28 flushes (tick 37019)
+37024 (0x0020) AP1: os64: up 37024 ticks, GUI running (status #72)
+37119 (0x0036) AP5: guicomp: heartbeat, 562551 frames, 28 flushes (tick 37119)
+37219 (0x0036) AP5: guicomp: heartbeat, 562651 frames, 28 flushes (tick 37219)
+37319 (0x0036) AP5: guicomp: heartbeat, 562751 frames, 28 flushes (tick 37319)
+37419 (0x0036) AP5: guicomp: heartbeat, 562851 frames, 28 flushes (tick 37419)
+37519 (0x0036) AP5: guicomp: heartbeat, 562951 frames, 28 flushes (tick 37519)
+37524 (0x0020) AP1: os64: up 37524 ticks, GUI running (status #73)
+37619 (0x0036) AP5: guicomp: heartbeat, 563051 frames, 28 flushes (tick 37619)
+37719 (0x0036) AP5: guicomp: heartbeat, 563151 frames, 28 flushes (tick 37719)
+37819 (0x0036) AP5: guicomp: heartbeat, 563251 frames, 28 flushes (tick 37819)
+37919 (0x0036) AP5: guicomp: heartbeat, 563351 frames, 28 flushes (tick 37919)
+38019 (0x0036) AP5: guicomp: heartbeat, 563451 frames, 28 flushes (tick 38019)
+38024 (0x0020) AP1: os64: up 38024 ticks, GUI running (status #74)
+38119 (0x0036) AP5: guicomp: heartbeat, 563551 frames, 28 flushes (tick 38119)
+38219 (0x0036) AP5: guicomp: heartbeat, 563651 frames, 28 flushes (tick 38219)
+38319 (0x0036) AP5: guicomp: heartbeat, 563751 frames, 28 flushes (tick 38319)
+38419 (0x0036) AP5: guicomp: heartbeat, 563851 frames, 28 flushes (tick 38419)
+38519 (0x0036) AP5: guicomp: heartbeat, 563951 frames, 28 flushes (tick 38519)
+38524 (0x0020) AP1: os64: up 38524 ticks, GUI running (status #75)
+38619 (0x0036) AP5: guicomp: heartbeat, 564051 frames, 28 flushes (tick 38619)
+38719 (0x0036) AP5: guicomp: heartbeat, 564151 frames, 28 flushes (tick 38719)
+38819 (0x0036) AP5: guicomp: heartbeat, 564251 frames, 28 flushes (tick 38819)
+38919 (0x0036) AP5: guicomp: heartbeat, 564351 frames, 28 flushes (tick 38919)
+39019 (0x0036) AP5: guicomp: heartbeat, 564451 frames, 28 flushes (tick 39019)
+39024 (0x0020) AP1: os64: up 39024 ticks, GUI running (status #76)
+39119 (0x0036) AP5: guicomp: heartbeat, 564551 frames, 28 flushes (tick 39119)
+39219 (0x0036) AP5: guicomp: heartbeat, 564651 frames, 28 flushes (tick 39219)
+39319 (0x0036) AP5: guicomp: heartbeat, 564751 frames, 28 flushes (tick 39319)
+39419 (0x0036) AP5: guicomp: heartbeat, 564851 frames, 28 flushes (tick 39419)
+39519 (0x0036) AP5: guicomp: heartbeat, 564951 frames, 28 flushes (tick 39519)
+39524 (0x0020) AP1: os64: up 39524 ticks, GUI running (status #77)

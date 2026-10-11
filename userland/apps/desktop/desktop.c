@@ -361,11 +361,12 @@ static void paint(os64_draw_ctx_t *ctx, const desktop_config_t *cfg,
 
     if (img->pixels != NULL) {
         // Centered, never scaled — and an image larger than the screen is
-        // cropped around its middle rather than shifted, which is the blit's
-        // contract. (tools/mkwall.py sizes an image for the screen.)
+        // cropped around its middle rather than shifted. Composite straight
+        // alpha over the configured fill. (tools/mkwall.py sizes an image
+        // for the screen.)
         int32_t x = ((int32_t)ctx->surf.width  - (int32_t)img->width)  / 2;
         int32_t y = ((int32_t)ctx->surf.height - (int32_t)img->height) / 2;
-        os64_draw_blit(&ctx->surf, x, y, img->pixels,
+        os64_draw_blend(&ctx->surf, x, y, img->pixels,
                        img->width, img->height, img->width);
     }
     os64_draw_publish(ctx, NULL);

@@ -18,7 +18,7 @@ flags=(-O1 -g -std=gnu11 -Wall -Wextra -Werror -ffreestanding -fno-builtin
     -Iuserland/libmath/include -Iuserland/libjs/port -Iuserland/libjs/include
     -Iuserland/libdom/include -Iuserland/libhtml/include -Iuserland/libpage/include
     -Iuserland/libflow/include -Iuserland/libgarb/include -Iuserland/libway/include
-    -Iuserland/libfetch/include -Iuserland/libimage/include -Iuserland/libgzip/include
+    -Iuserland/libfetch/include -Iuserland/libimage/include -Iuserland/libwebp/include -Iuserland/libgzip/include
     -Iuserland/libtls/include -Iuserland/libflow -Iuserland/apps/yonder
     -Iuserland/libpage/upstream/ryu -Iuserland/libos64/include -Iuserland/libos64
     -Iabi/include -Itools -Itools/fonts

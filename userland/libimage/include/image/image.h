@@ -1,9 +1,10 @@
 #ifndef OS64_IMAGE_H
 #define OS64_IMAGE_H
 // libimage: file bytes to owned top-first 0xAARRGGBB pixels. Format detection
-// uses signatures. BMP/PPM/GIF live here; libpng/libjpeg own their codecs. JPEG
+// uses signatures. BMP/PPM/GIF live here; libpng/libjpeg/libwebp own their codecs. JPEG
 // applies EXIF orientation. GIF returns its first raster on a transparent
-// logical-screen-sized canvas. Drawing and surfaces belong to libdraw.
+// logical-screen-sized canvas. WebP supports stills with straight alpha;
+// animated WebP is unsupported. Drawing and surfaces belong to libdraw.
 #include <stddef.h>
 #include <stdint.h>
 
@@ -29,10 +30,10 @@ typedef struct os64_image {
                         // os64_malloc'd — release with os64_image_free.
 } os64_image_t;
 
-// The media types os64_image_decode decodes, as an HTTP Accept list: what a
-// face that shows pictures asks for and shows. A format joins it in the same
-// change as its decoder (test_image_host.c, run by tools/test_jpeg_host.py,
-// checks each type's signature is one the front door recognises).
+// Media types suitable for HTTP negotiation. A format with animation joins
+// this list when its animated profile is supported too, so WebP stills decode
+// by signature without inviting animated variants. test_image_host.c checks
+// that advertised signatures enter a decoder.
 #define OS64_IMAGE_ACCEPT                                                        \
     "image/png, image/jpeg, image/pjpeg, image/gif, image/bmp, image/x-ms-bmp, " \
     "image/x-portable-pixmap"

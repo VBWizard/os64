@@ -11,7 +11,7 @@ for n,p in files.items():assert hashlib.sha256(p.read_bytes()).hexdigest()==m['f
 bin=ROOT/'userland/bin'
 def command(*args):return subprocess.check_output(list(map(str,args)),text=True)
 for name,needed,prefix in [('libjpeg.so',['libos64.so'],'os64_jpeg_'),
-                           ('libimage.so',['libpng.so','libjpeg.so','libos64.so'],'os64_image_')]:
+                           ('libimage.so',['libpng.so','libjpeg.so','libwebp.so','libos64.so'],'os64_image_')]:
     p=bin/name
     exports={l.split()[-1] for l in command('x86_64-elf-nm','-D','--defined-only',p).splitlines()}
     expect=set(re.findall(r'\b('+prefix+r'\w+);',(ROOT/'userland'/name[:-3]/'exports.map').read_text()))

@@ -11,3 +11,9 @@ userland/libhtml/include/html/tags.h linguist-generated
 userland/libpage/upstream/musl/** -text -whitespace linguist-vendored
 userland/libpage/upstream/ryu/ryu/** -text -whitespace linguist-vendored
 tools/test_libpage_range.inc linguist-generated
+
+# Preserve the pinned decoder and exact adaptation diff, including context spaces.
+userland/libwebp/upstream/** -text -whitespace linguist-vendored
+userland/libwebp/port/alpha_dec.patch -text -whitespace
+userland/tests/webptest/vectors.h linguist-generated
+userland/tests/webpbench/fixtures.h linguist-generated

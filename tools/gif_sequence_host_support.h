@@ -9,6 +9,7 @@
 #include "image/sequence.h"
 #include "png/png.h"
 #include "jpeg/jpeg.h"
+#include "webp/webp.h"
 #include "os64/slurp.h"
 
 typedef union { size_t n; max_align_t align; } allocation;
@@ -34,6 +35,8 @@ int os64_memcmp(const void *a, const void *b, size_t n) { return memcmp(a,b,n); 
 os64_png_status_t os64_png_decode(const uint8_t *p, size_t n, uint64_t c, os64_png_image_t *o)
 { (void)p; (void)n; (void)c; (void)o; abort(); }
 os64_jpeg_status_t os64_jpeg_decode(const uint8_t *p, size_t n, uint64_t c, size_t m, os64_jpeg_image_t *o)
+{ (void)p; (void)n; (void)c; (void)m; (void)o; abort(); }
+os64_webp_status_t os64_webp_decode(const uint8_t *p, size_t n, uint64_t c, size_t m, os64_webp_image_t *o)
 { (void)p; (void)n; (void)c; (void)m; (void)o; abort(); }
 os64_slurp_status_t os64_slurp(const char *p, size_t c, uint8_t **o, size_t *n)
 { (void)p; (void)c; (void)o; (void)n; abort(); }

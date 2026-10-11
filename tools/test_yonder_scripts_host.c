@@ -3250,6 +3250,12 @@ static void diag_picture_case(void) {
     reaped(0,last,unread);
     char text[4096]; yonder_diag_render(g.page.diag,text,sizeof(text));
     const char *file=diag_file("/tmp/diag",name);
+    yonder_picture_t animated={.status=OS64_IMAGE_UNSUPPORTED,.format="webp",.why="animated"};
+    picture_failed(&g.page,"file:///animation.webp",&animated,NULL);
+    char webp_record[4096]; yonder_diag_render(g.page.diag,webp_record,sizeof(webp_record));
+    check(has(webp_record,"MISSING image webp (1)") &&
+          has(webp_record,"picture file:///animation.webp: webp, animated"),
+          "diag: unsupported WebP keeps both the format census and animation reason");
     check(g.page.waiting==0 && has(file,"\nwritten: when its pictures were in\n") &&
         has(file,"\npictures: 5, 0 shown, 5 could not be read, 0 past the memory kept, 0 still coming, 0 not asked for\n") &&
         has(file,"FAILED picture: file:///absent.png"),

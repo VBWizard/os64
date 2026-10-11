@@ -1,0 +1,422 @@
+{
+  "mem-map-none": {
+    "cores": 8,
+    "workers": 1,
+    "elapsed_us": 20818,
+    "heap_problems": 0,
+    "result": 0,
+    "samples": [
+      {
+        "worker": 0,
+        "round": 0,
+        "allocate_us": 83,
+        "touch_us": 17,
+        "release_us": 2715
+      },
+      {
+        "worker": 0,
+        "round": 1,
+        "allocate_us": 28,
+        "touch_us": 3,
+        "release_us": 2446
+      },
+      {
+        "worker": 0,
+        "round": 2,
+        "allocate_us": 26,
+        "touch_us": 3,
+        "release_us": 2383
+      }
+    ],
+    "median_us": {
+      "allocate_us": 28,
+      "touch_us": 3,
+      "release_us": 2446
+    }
+  },
+  "mem-heap-none": {
+    "cores": 8,
+    "workers": 1,
+    "elapsed_us": 20819,
+    "heap_problems": 0,
+    "result": 0,
+    "samples": [
+      {
+        "worker": 0,
+        "round": 0,
+        "allocate_us": 337,
+        "touch_us": 8,
+        "release_us": 3212
+      },
+      {
+        "worker": 0,
+        "round": 1,
+        "allocate_us": 152,
+        "touch_us": 4,
+        "release_us": 3435
+      },
+      {
+        "worker": 0,
+        "round": 2,
+        "allocate_us": 132,
+        "touch_us": 4,
+        "release_us": 3527
+      }
+    ],
+    "median_us": {
+      "allocate_us": 152,
+      "touch_us": 4,
+      "release_us": 3435
+    }
+  },
+  "mem-map-touch": {
+    "cores": 8,
+    "workers": 1,
+    "elapsed_us": 18145374,
+    "heap_problems": 0,
+    "result": 0,
+    "samples": [
+      {
+        "worker": 0,
+        "round": 0,
+        "allocate_us": 85,
+        "touch_us": 184173,
+        "release_us": 5896237
+      },
+      {
+        "worker": 0,
+        "round": 1,
+        "allocate_us": 58,
+        "touch_us": 175243,
+        "release_us": 5839056
+      },
+      {
+        "worker": 0,
+        "round": 2,
+        "allocate_us": 47,
+        "touch_us": 170017,
+        "release_us": 5861448
+      }
+    ],
+    "median_us": {
+      "allocate_us": 58,
+      "touch_us": 175243,
+      "release_us": 5861448
+    }
+  },
+  "mem-heap-six": {
+    "cores": 8,
+    "workers": 6,
+    "elapsed_us": 88475967,
+    "heap_problems": 0,
+    "result": 0,
+    "samples": [
+      {
+        "worker": 0,
+        "round": 0,
+        "allocate_us": 222,
+        "touch_us": 790485,
+        "release_us": 18216095
+      },
+      {
+        "worker": 0,
+        "round": 1,
+        "allocate_us": 4788966,
+        "touch_us": 10199829,
+        "release_us": 18491466
+      },
+      {
+        "worker": 0,
+        "round": 2,
+        "allocate_us": 19164008,
+        "touch_us": 10954507,
+        "release_us": 5869317
+      },
+      {
+        "worker": 1,
+        "round": 0,
+        "allocate_us": 1279,
+        "touch_us": 738775,
+        "release_us": 23055630
+      },
+      {
+        "worker": 1,
+        "round": 1,
+        "allocate_us": 235,
+        "touch_us": 10282361,
+        "release_us": 9154099
+      },
+      {
+        "worker": 1,
+        "round": 2,
+        "allocate_us": 166,
+        "touch_us": 10404538,
+        "release_us": 13148183
+      },
+      {
+        "worker": 2,
+        "round": 0,
+        "allocate_us": 542,
+        "touch_us": 842613,
+        "release_us": 13550179
+      },
+      {
+        "worker": 2,
+        "round": 1,
+        "allocate_us": 529,
+        "touch_us": 10829265,
+        "release_us": 8295504
+      },
+      {
+        "worker": 2,
+        "round": 2,
+        "allocate_us": 338,
+        "touch_us": 10878109,
+        "release_us": 27253484
+      },
+      {
+        "worker": 3,
+        "round": 0,
+        "allocate_us": 274,
+        "touch_us": 919496,
+        "release_us": 27775629
+      },
+      {
+        "worker": 3,
+        "round": 1,
+        "allocate_us": 4813288,
+        "touch_us": 11904090,
+        "release_us": 11783100
+      },
+      {
+        "worker": 3,
+        "round": 2,
+        "allocate_us": 126,
+        "touch_us": 13889798,
+        "release_us": 11467688
+      },
+      {
+        "worker": 4,
+        "round": 0,
+        "allocate_us": 215,
+        "touch_us": 708578,
+        "release_us": 4645338
+      },
+      {
+        "worker": 4,
+        "round": 1,
+        "allocate_us": 9039535,
+        "touch_us": 11494696,
+        "release_us": 12594304
+      },
+      {
+        "worker": 4,
+        "round": 2,
+        "allocate_us": 162,
+        "touch_us": 11055954,
+        "release_us": 12393848
+      },
+      {
+        "worker": 5,
+        "round": 0,
+        "allocate_us": 741,
+        "touch_us": 876526,
+        "release_us": 8924203
+      },
+      {
+        "worker": 5,
+        "round": 1,
+        "allocate_us": 13994405,
+        "touch_us": 10502772,
+        "release_us": 13572626
+      },
+      {
+        "worker": 5,
+        "round": 2,
+        "allocate_us": 130,
+        "touch_us": 10983657,
+        "release_us": 17963857
+      }
+    ],
+    "median_us": {
+      "allocate_us": 433.5,
+      "touch_us": 10453655.0,
+      "release_us": 12871243.5
+    }
+  },
+  "mem-one-map-touch": {
+    "cores": 1,
+    "workers": 1,
+    "elapsed_us": 1483016,
+    "heap_problems": 0,
+    "result": 0,
+    "samples": [
+      {
+        "worker": 0,
+        "round": 0,
+        "allocate_us": 84,
+        "touch_us": 330509,
+        "release_us": 159679
+      },
+      {
+        "worker": 0,
+        "round": 1,
+        "allocate_us": 74,
+        "touch_us": 328874,
+        "release_us": 153779
+      },
+      {
+        "worker": 0,
+        "round": 2,
+        "allocate_us": 61,
+        "touch_us": 330828,
+        "release_us": 157176
+      }
+    ],
+    "median_us": {
+      "allocate_us": 74,
+      "touch_us": 330509,
+      "release_us": 157176
+    }
+  },
+  "mem-one-heap-six": {
+    "cores": 1,
+    "workers": 6,
+    "elapsed_us": 6426836,
+    "heap_problems": 0,
+    "result": 0,
+    "samples": [
+      {
+        "worker": 0,
+        "round": 0,
+        "allocate_us": 189,
+        "touch_us": 1300097,
+        "release_us": 1021326
+      },
+      {
+        "worker": 0,
+        "round": 1,
+        "allocate_us": 125,
+        "touch_us": 1912574,
+        "release_us": 212180
+      },
+      {
+        "worker": 0,
+        "round": 2,
+        "allocate_us": 111,
+        "touch_us": 1728666,
+        "release_us": 169238
+      },
+      {
+        "worker": 1,
+        "round": 0,
+        "allocate_us": 160,
+        "touch_us": 1482144,
+        "release_us": 630015
+      },
+      {
+        "worker": 1,
+        "round": 1,
+        "allocate_us": 118,
+        "touch_us": 1909693,
+        "release_us": 206609
+      },
+      {
+        "worker": 1,
+        "round": 2,
+        "allocate_us": 182,
+        "touch_us": 1800286,
+        "release_us": 167030
+      },
+      {
+        "worker": 2,
+        "round": 0,
+        "allocate_us": 114,
+        "touch_us": 1300976,
+        "release_us": 607424
+      },
+      {
+        "worker": 2,
+        "round": 1,
+        "allocate_us": 119,
+        "touch_us": 1839846,
+        "release_us": 271085
+      },
+      {
+        "worker": 2,
+        "round": 2,
+        "allocate_us": 301,
+        "touch_us": 1844327,
+        "release_us": 173038
+      },
+      {
+        "worker": 3,
+        "round": 0,
+        "allocate_us": 106,
+        "touch_us": 1302901,
+        "release_us": 412488
+      },
+      {
+        "worker": 3,
+        "round": 1,
+        "allocate_us": 106,
+        "touch_us": 1882338,
+        "release_us": 211694
+      },
+      {
+        "worker": 3,
+        "round": 2,
+        "allocate_us": 104,
+        "touch_us": 1835303,
+        "release_us": 182532
+      },
+      {
+        "worker": 4,
+        "round": 0,
+        "allocate_us": 319,
+        "touch_us": 1304779,
+        "release_us": 228315
+      },
+      {
+        "worker": 4,
+        "round": 1,
+        "allocate_us": 166,
+        "touch_us": 1855129,
+        "release_us": 207038
+      },
+      {
+        "worker": 4,
+        "round": 2,
+        "allocate_us": 127,
+        "touch_us": 1853170,
+        "release_us": 199394
+      },
+      {
+        "worker": 5,
+        "round": 0,
+        "allocate_us": 310,
+        "touch_us": 1153678,
+        "release_us": 208084
+      },
+      {
+        "worker": 5,
+        "round": 1,
+        "allocate_us": 118,
+        "touch_us": 1815746,
+        "release_us": 208631
+      },
+      {
+        "worker": 5,
+        "round": 2,
+        "allocate_us": 116,
+        "touch_us": 1855245,
+        "release_us": 211147
+      }
+    ],
+    "median_us": {
+      "allocate_us": 122.0,
+      "touch_us": 1825524.5,
+      "release_us": 209889.0
+    }
+  }
+}

@@ -1,0 +1,10 @@
+address: http://fixture.test:8093/close.html
+verdict: clean
+bytes: 383
+status: 200 OK
+final address: http://fixture.test:8093/close.html
+arrived after: 538 ms
+laid out at: 826 px in 10 ms
+written: when the page was left
+pictures: 6, 2 shown, 0 could not be read, 0 past the memory kept, 4 still coming, 0 not asked for
+sheets: 1, 1 ready

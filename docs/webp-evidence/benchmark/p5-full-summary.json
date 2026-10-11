@@ -1,0 +1,141 @@
+{
+  "scope": "full",
+  "modes": {
+    "sse2": {
+      "serial_median_us": {
+        "alpha_4096": {
+          "call_us": 525462,
+          "gate_us": 0,
+          "allocate_us": 40,
+          "scratch_free_us": 83479,
+          "other_decode_us": 441943,
+          "verify_us": 118419,
+          "output_free_us": 67704
+        },
+        "alpha_512": {
+          "call_us": 9161,
+          "gate_us": 0,
+          "allocate_us": 42,
+          "scratch_free_us": 1425,
+          "other_decode_us": 7653,
+          "verify_us": 1849,
+          "output_free_us": 1012
+        },
+        "lossless_4096": {
+          "call_us": 249384,
+          "gate_us": 0,
+          "allocate_us": 33,
+          "scratch_free_us": 66387,
+          "other_decode_us": 182964,
+          "verify_us": 118413,
+          "output_free_us": 66544
+        },
+        "lossless_512": {
+          "call_us": 5486,
+          "gate_us": 0,
+          "allocate_us": 50,
+          "scratch_free_us": 1134,
+          "other_decode_us": 4277,
+          "verify_us": 2551,
+          "output_free_us": 1005
+        },
+        "lossy_4096": {
+          "call_us": 317360,
+          "gate_us": 1,
+          "allocate_us": 37,
+          "scratch_free_us": 396,
+          "other_decode_us": 316926,
+          "verify_us": 118418,
+          "output_free_us": 67317
+        },
+        "lossy_512": {
+          "call_us": 8964,
+          "gate_us": 0,
+          "allocate_us": 18,
+          "scratch_free_us": 120,
+          "other_decode_us": 8866,
+          "verify_us": 2555,
+          "output_free_us": 1015
+        }
+      },
+      "contention": {
+        "mode": "sse2",
+        "fixture": "alpha_4096",
+        "workers": "6",
+        "elapsed_us": "5530724",
+        "process_cpu_us": "7194258",
+        "cpu_valid": "1",
+        "result": "0"
+      },
+      "maximum_gate_us": 4246881
+    },
+    "scalar": {
+      "serial_median_us": {
+        "alpha_4096": {
+          "call_us": 509804,
+          "gate_us": 0,
+          "allocate_us": 42,
+          "scratch_free_us": 83585,
+          "other_decode_us": 426177,
+          "verify_us": 118407,
+          "output_free_us": 67788
+        },
+        "alpha_512": {
+          "call_us": 6989,
+          "gate_us": 0,
+          "allocate_us": 42,
+          "scratch_free_us": 1422,
+          "other_decode_us": 5527,
+          "verify_us": 1850,
+          "output_free_us": 1009
+        },
+        "lossless_4096": {
+          "call_us": 321314,
+          "gate_us": 1,
+          "allocate_us": 37,
+          "scratch_free_us": 66323,
+          "other_decode_us": 254953,
+          "verify_us": 118444,
+          "output_free_us": 66635
+        },
+        "lossless_512": {
+          "call_us": 8812,
+          "gate_us": 1,
+          "allocate_us": 48,
+          "scratch_free_us": 1138,
+          "other_decode_us": 7581,
+          "verify_us": 2546,
+          "output_free_us": 1006
+        },
+        "lossy_4096": {
+          "call_us": 315488,
+          "gate_us": 1,
+          "allocate_us": 38,
+          "scratch_free_us": 385,
+          "other_decode_us": 315064,
+          "verify_us": 118451,
+          "output_free_us": 67687
+        },
+        "lossy_512": {
+          "call_us": 4794,
+          "gate_us": 1,
+          "allocate_us": 10,
+          "scratch_free_us": 80,
+          "other_decode_us": 4704,
+          "verify_us": 1849,
+          "output_free_us": 1011
+        }
+      },
+      "contention": {
+        "mode": "scalar",
+        "fixture": "alpha_4096",
+        "workers": "6",
+        "elapsed_us": "5481041",
+        "process_cpu_us": "7162478",
+        "cpu_valid": "1",
+        "result": "0"
+      },
+      "maximum_gate_us": 4226917
+    }
+  }
+}

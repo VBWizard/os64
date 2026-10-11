@@ -1,0 +1,5 @@
+memphase mode=map pages=touch workers=1 bytes=67108864 rounds=3
+worker=0 round=0 allocate_us=84 touch_us=330509 release_us=159679
+worker=0 round=1 allocate_us=74 touch_us=328874 release_us=153779
+worker=0 round=2 allocate_us=61 touch_us=330828 release_us=157176
+elapsed_us=1483016 heap_problems=0 result=0
