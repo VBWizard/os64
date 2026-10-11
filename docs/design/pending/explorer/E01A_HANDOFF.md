@@ -64,11 +64,12 @@ the caller restores/replaces any desired legacy caption/callback explicitly.
 Do not modify global widget class objects or borrow a caption from freed registry
 storage. Invocation revalidates current state, including after a held press.
 
-Callbacks may request deferred application teardown. The binding holds a view
-reference across invocation and releases it before returning; it performs no
-button access after the callback. The app destroys its UI tree after dispatch
-returns, following E01's rule. Test this lifetime rather than assuming callbacks
-are harmless.
+Callbacks may request deferred application teardown. Bindings retain views
+until unbound; invocation additionally retains its view across the callback and
+semantic refresh. The bound click handler performs no button access after the
+callback. After dispatch returns, unbind buttons while their storage and UI are
+alive, destroy views and registry, release widget/font resources, then free the
+tree storage. Test this lifetime rather than assuming callbacks are harmless.
 
 ## Keyboard and visibility scope
 
@@ -217,3 +218,12 @@ ASan/UBSan/LeakSanitizer enabled. Tests exercise exact-fit adoption, one-pixel
 short refusal, visibility restoration and both panel states through the
 production font consumer, including real 32px Interface reflow. The strict
 cross build passed; ordinary re-review remains pending on PR #254.
+
+## Binding teardown contract review finding
+
+The public header's teardown order was wrong: binding detachment requires live
+button and UI storage. The header and this handoff now specify unbind before
+view/registry destruction and widget storage disposal, after dispatch returns.
+[Third-review evidence](evidence/e01a/review-r3/README.md) records the lifetime
+inspection and rerun of the existing 428/475 fake/real sanitizer checks with
+leak detection enabled. Runtime behavior is unchanged; re-review is pending.

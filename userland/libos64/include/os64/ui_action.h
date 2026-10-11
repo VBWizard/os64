@@ -3,8 +3,10 @@
 #include "os64/ui.h"
 
 /* UI-thread APIs. Query/validate/release cannot allocate, mutate toolkit
- * ownership or pump events. Invocation may request teardown; the application
- * disposes its tree after dispatch returns, then detaches bindings. */
+ * ownership or pump events. Invocation may request teardown. After dispatch
+ * returns, unbind buttons before destroying views, the registry or widget
+ * storage. Keep buttons and their UI alive through unbind and widget/font
+ * cleanup; free tree storage afterward. */
 #include "os64/ui_result.h"
 
 typedef enum {
@@ -76,7 +78,8 @@ os64_ui_status_code_t os64_ui_action_snapshot(const os64_ui_action_view_t *,
     uint32_t id, os64_ui_action_state_t *out);
 os64_ui_action_result_t os64_ui_action_invoke(os64_ui_action_view_t *, uint32_t);
 /* Ordinary buttons only. Bind/unbind outside dispatch of this button. Unbind
- * clears caption/callback and cancels presses; restore legacy behavior explicitly. */
+ * requires live button/UI storage, clears caption/callback and cancels presses;
+ * restore legacy behavior explicitly. */
 os64_ui_status_code_t os64_ui_action_bind(os64_ui_widget_t *, os64_ui_action_view_t *, uint32_t);
 os64_ui_status_code_t os64_ui_action_unbind(os64_ui_widget_t *);
 

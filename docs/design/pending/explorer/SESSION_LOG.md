@@ -270,3 +270,16 @@ status again. Fake/real focused suites passed 428/475 checks with ASan, UBSan
 and LeakSanitizer enabled outside the sandbox. The gallery cross build passed.
 [Second-review packet](evidence/e01a/review-r2/README.md) records commands,
 logs and source/binary hashes; PR re-review is pending.
+
+## 2026-10-11 — E1A binding teardown contract correction
+
+Chris reported the public header's reversed teardown order on PR #254. That
+comment was wrong: unbind dereferences live button, binding and UI storage.
+The header now requires deferred teardown after dispatch, unbinding before
+view/registry destruction and widget storage disposal. The handoff's related
+paragraph uses the same sequence and distinguishes binding references from
+the temporary invocation reference. No runtime code changed. Existing lifetime
+and cleanup checks passed again: 428 fake-font and 475 real-font checks, with
+ASan, UBSan and LeakSanitizer enabled outside the sandbox. Runtime hashes match
+the R2 packet; [R3 evidence](evidence/e01a/review-r3/README.md) records the reused
+host binaries and logs. Ordinary re-review is pending.
