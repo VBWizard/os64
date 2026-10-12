@@ -6072,8 +6072,9 @@ static void box_bars(Glass *gl, os64_gui_rect_t view)
 // group's two SHEETS, the same verb on black and on white, which warp.c
 // lays onto the targets outside at the close (PILE3.md § Transforms, the
 // painter). Each target keeps its own opacity groups. A group laid so is
-// at most SHEET_SIDE a side and SHEET_PIXELS in all, and at most
-// GLASS_THROUGHS nest; one past those, or that finds no memory, is
+// at most SHEET_SIDE a side and SHEET_PIXELS in all, at most
+// GLASS_THROUGHS nest, and it lies within half of what a 32-bit
+// coordinate can say; one past those, or that finds no memory, is
 // refused, and the painter draws it upright.
 #define GLASS_THROUGHS 16
 #define SHEET_SIDE 4096
@@ -6212,8 +6213,14 @@ static bool pane_through_open(void *ctx, os64_gui_rect_t bounds, const double m[
                               os64_gui_rect_t clip)
 {
     GlassPane *gp = ctx;
+    // A sheet's offset is its origin negated, and every verb adds it to a
+    // coordinate in 32 bits: a sheet lying past half of what a coordinate
+    // can say is refused, so neither can overflow, and drawn upright.
+    const int64_t half = INT32_MAX / 2;
     if (gp->depth >= GLASS_THROUGHS || bounds.w <= 0 || bounds.h <= 0 || bounds.w > SHEET_SIDE ||
-        bounds.h > SHEET_SIDE || (int64_t)bounds.w * bounds.h > SHEET_PIXELS)
+        bounds.h > SHEET_SIDE || (int64_t)bounds.w * bounds.h > SHEET_PIXELS ||
+        bounds.x < -half || bounds.y < -half || (int64_t)bounds.x + bounds.w > half ||
+        (int64_t)bounds.y + bounds.h > half)
         return false;
     GlassThrough *t = os64_malloc(sizeof(*t));
     if (t == NULL)

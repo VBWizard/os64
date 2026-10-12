@@ -839,6 +839,24 @@ static void transform_through_cases(void)
     // inverse exactly (2^52, -(2^52 - 1); -(2^52 + 1), 2^52).
     const double cancel[6] = {4503599627370496.0, 4503599627370495.0, 4503599627370497.0,
                               4503599627370496.0, 0, 0};
+    // Lopsided and huge at once — matrix(1e300, 1e-300, 1, 1e300), its a d
+    // 1e600, past a double — is worked in long double: undone, its first
+    // entry 1e300 / 1e600, a finite 1e-300.
+    const double lop_huge[6] = {1e300, 1e-300, 1, 1e300, 0, 0};
+    double linv[6];
+    expect("transform: a lopsided, huge matrix is undone in long double",
+           flow_affine_invert(lop_huge, linv) && linv[0] > 0 && fabs(linv[0] / 1e-300 - 1) < 1e-12,
+           NULL);
+    // The same cancellation scaled by 2^500: determinant 2^1000, inverse
+    // 2^-448 on the diagonal — exact, scaled by a power of two first.
+    const double scaled[6] = {0x1p552, 4503599627370495.0 * 0x1p500,
+                              4503599627370497.0 * 0x1p500, 0x1p552, 0, 0};
+    double sinv[6];
+    expect("transform: a scaled cancellation is not lost",
+           flow_affine_invert(scaled, sinv) && sinv[0] == 0x1p-448 && sinv[3] == 0x1p-448 &&
+               sinv[1] == -4503599627370495.0 * 0x1p-500 &&
+               sinv[2] == -4503599627370497.0 * 0x1p-500,
+           NULL);
     expect("transform: a determinant that is a cancellation is not lost",
            flow_affine_invert(cancel, inv) && inv[0] == 4503599627370496.0 &&
                inv[1] == -4503599627370495.0 && inv[2] == -4503599627370497.0 &&

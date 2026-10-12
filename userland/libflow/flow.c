@@ -1578,22 +1578,36 @@ static void two_product(double x, double y, double *p, double *e)
     *e = ((xh * yh - *p) + xh * yl + xl * yh) + xl * yl;
 }
 
-// The 2x2 determinant a d - b c, worked so cancellation does not lose it:
-// each product exact as a pair (two_product), and the difference of the
-// heads exact where they are close (Sterbenz), the tails added after. In
-// a double's middle range; elsewhere in long double, whose exponent
-// reaches past a double's, so no product over- or underflows there.
+// The 2x2 determinant a d - b c, worked so cancellation does not lose it,
+// whatever the exponents: the four scaled first by one power of two —
+// exact — so the largest is near 1, then each product exact as a pair
+// (two_product), the heads' difference exact where they are close
+// (Sterbenz), the tails added after, and the scale taken back out in long
+// double. Only a matrix whose entries span more than a double's middle
+// range from one another (matrix(1e300, 1e-300, ...)) is worked in long
+// double instead, where range, not cancellation, is what is at stake.
 static long double determinant(double a, double b, double c, double d)
 {
     const double small = 0x1p-480, large = 0x1p+480;
     double most = fmax(fmax(fabs(a), fabs(b)), fmax(fabs(c), fabs(d)));
-    double least = fmin(fmin(a != 0 ? fabs(a) : most, b != 0 ? fabs(b) : most),
-                        fmin(c != 0 ? fabs(c) : most, d != 0 ? fabs(d) : most));
-    if (most < large && least > small) {
+    if (!(most > 0) || !isfinite(most))
+        return (long double)a * d - (long double)b * c;
+    double k = 1;                       // a power of two: scaling by it is exact
+    while (most * k > 0x1p+64)
+        k *= 0x1p-64;
+    while (most * k < 0x1p-64)
+        k *= 0x1p+64;
+    double sa = a * k, sb = b * k, sc = c * k, sd = d * k;
+    double least = fmin(fmin(sa != 0 ? fabs(sa) : 1, sb != 0 ? fabs(sb) : 1),
+                        fmin(sc != 0 ? fabs(sc) : 1, sd != 0 ? fabs(sd) : 1));
+    bool lost = (a != 0 && sa == 0) || (b != 0 && sb == 0) || (c != 0 && sc == 0) ||
+                (d != 0 && sd == 0);
+    if (!lost && least > small && most * k < large) {
         double p1, e1, p2, e2;
-        two_product(a, d, &p1, &e1);
-        two_product(b, c, &p2, &e2);
-        return (long double)(p1 - p2) + ((long double)e1 - e2);
+        two_product(sa, sd, &p1, &e1);
+        two_product(sb, sc, &p2, &e2);
+        long double scaled = (long double)(p1 - p2) + ((long double)e1 - e2);
+        return scaled / ((long double)k * k);
     }
     return (long double)a * d - (long double)b * c;
 }

@@ -1053,7 +1053,8 @@ overflow) and cut to the clips inside the group — cut to the view taken
 back through the matrices, one pixel
 more all round for the bilinear sample at the edge: what can show. At
 most 4096 pixels a side and 2,097,152 in all (8 MiB each), at most 16
-deep; a group past that, or whose surfaces find no memory, is painted
+deep, and within half of what a 32-bit coordinate can say (its offset is
+added to every coordinate the glass draws); a group past that, or whose surfaces find no memory, is painted
 straight onto the backdrop at its S7a offset — upright, inside what
 clips it from outside, never missing. A group none of which can show is
 not painted at all. An opacity group inside opens on both sheets or on
