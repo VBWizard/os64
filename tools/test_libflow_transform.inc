@@ -650,6 +650,71 @@ static void transform_through_cases(void)
     flow_free(t);
     sheeted_close(&q);
 
+    // A text shadow is drawn sharp, so its blur grows nothing: 0 0 3000px
+    // on a turned box's text leaves the group within a pixel of its box.
+    sheeted_open(&q, XFORM_STYLE ".t{width:100px;height:20px;text-shadow:0 0 3000px #000;"
+                     "transform:rotate(90deg)}</style><div class=t>x</div>",
+                 400, 600);
+    t = flow_layout(q.doc, q.page, 400, &q.env);
+    XformGroups sharp = {0};
+    vis.ctx = &sharp;
+    flow_visit_groups(t, (os64_gui_rect_t){0, 0, 400, 600}, top, &vis);
+    expect("transform: a text shadow's blur grows no group",
+           sharp.opens == 1 && sharp.first.w <= 102 && sharp.first.h <= 22, NULL);
+    vis.ctx = &gr;
+    flow_free(t);
+    sheeted_close(&q);
+
+    // A text shadow is the text's: a turned box with no text casts none,
+    // whatever its inherited text-shadow says.
+    sheeted_open(&q, XFORM_STYLE ".t{width:100px;height:20px;text-shadow:500px 0 #000;"
+                     "transform:rotate(90deg)}</style><div class=t></div>",
+                 400, 600);
+    t = flow_layout(q.doc, q.page, 400, &q.env);
+    XformGroups textless = {0};
+    vis.ctx = &textless;
+    flow_visit_groups(t, (os64_gui_rect_t){0, 0, 400, 600}, top, &vis);
+    expect("transform: a box with no text casts no text shadow",
+           textless.opens == 1 && rect_is(textless.first, 0, 0, 100, 20), NULL);
+    vis.ctx = &gr;
+    flow_free(t);
+    sheeted_close(&q);
+
+    // A child's shadow is handed up as where it reaches: 100px right of a
+    // 100px child is 201 across, inside its 400px turned parent, which
+    // grows only the pixel the shadow casts above and below.
+    sheeted_open(&q, XFORM_STYLE ".t{width:400px;transform:rotate(90deg)}"
+                     ".c{width:100px;height:20px;box-shadow:100px 0 #000}</style>"
+                     "<div class=t><div class=c></div></div>",
+                 400, 600);
+    t = flow_layout(q.doc, q.page, 400, &q.env);
+    XformGroups inside = {0};
+    vis.ctx = &inside;
+    flow_visit_groups(t, (os64_gui_rect_t){0, 0, 400, 600}, top, &vis);
+    expect("transform: a child's shadow inside its turned parent grows it no further",
+           inside.opens == 1 && rect_is(inside.first, 0, -1, 400, 22), NULL);
+    vis.ctx = &gr;
+    flow_free(t);
+    sheeted_close(&q);
+
+    // Reciprocal scales, nested: scale(1e308) inside scale(1e-308), both
+    // about the corner, is where it was laid out; between them its corner
+    // is at 1e310, which a long double holds and a double would not.
+    sheeted_open(&q, XFORM_STYLE ".o{position:absolute;left:0;top:0;width:100px;height:100px;"
+                     "transform-origin:0 0;transform:scale(1e-308)} .i{position:absolute;left:0;"
+                     "top:0;width:100px;height:20px;transform-origin:0 0;transform:scale(1e308)}"
+                     "</style><div class=o><div class=i id=i></div></div>",
+                 400, 600);
+    t = flow_layout(q.doc, q.page, 400, &q.env);
+    const flow_box_t *rb = box_with_id(t, q.doc->document, "i");
+    point = flow_box_point(rb, top, 50, 10, &back);
+    expect("transform: reciprocal nested scales leave a box where it was laid out",
+           rb != NULL && rect_is(flow_box_doc_rect(rb, top), 0, 0, 100, 20) && point &&
+               back.x == 50 && back.y == 10,
+           NULL);
+    flow_free(t);
+    sheeted_close(&q);
+
     // A shadow counts only for the groups that can paint it: a 500px
     // spread on a box beside a turned group leaves the group its own size.
     sheeted_open(&q, XFORM_STYLE ".t{width:100px;height:20px;transform:rotate(90deg)}"
