@@ -75,6 +75,7 @@ static void release_pending(os64_ui_menu_session_t *s)
 static os64_ui_status_code_t close_to(os64_ui_menu_session_t *s,size_t depth)
 {
     os64_ui_status_code_t rc=OS64_UI_OK;
+    if(s->pending&&s->pending_depth>=depth) release_pending(s);
     if(s->pressed_panel>=depth) cancel_press(s);
     while(s->depth>depth) {
         menu_panel *p=&s->panels[s->depth-1];
@@ -135,8 +136,9 @@ os64_ui_status_code_t os64_ui_menu_place(os64_gui_rect_t a,int32_t w,int32_t h,
 static os64_ui_status_code_t open_panel(os64_ui_menu_session_t *s,os64_ui_menu_model_t *model,size_t level)
 {
     os64_ui_dispatcher_t *d=s->dispatcher;
-    if(!os64_ui_dispatcher_can_create(d)) return OS64_UI_BUSY;
     if(level>=OS64_UI_MENU_DEPTH) return OS64_UI_LIMIT;
+    if(level>s->depth||(level&&(!s->panels[level-1].widget||!s->panels[level-1].handle))) return OS64_UI_INVALID;
+    if(!os64_ui_dispatcher_can_create(d)) return OS64_UI_BUSY;
     uint32_t sw=0,sh=0;
     os64_gui_rect_t parent={0},a=s->anchor;
     int64_t owner=level?s->panels[level-1].handle:s->owner;
@@ -345,6 +347,23 @@ static void select_step(os64_ui_menu_session_t *s,size_t level,int delta,bool ed
         if(menu_selectable(p,i)) { (void)panel_select(s,level,i); return; }
     }
 }
+static void select_page(os64_ui_menu_session_t *s,size_t level,int delta)
+{
+    os64_ui_popup_t *p=s->panels[level].widget;
+    size_t span=p->bottom-p->top;
+    if(!span) return;
+    int64_t base=p->selected==MENU_NONE?(int64_t)(delta>0?p->top:p->bottom-1):(int64_t)p->selected;
+    int64_t target=base+delta*(int64_t)span,n=(int64_t)p->model->count;
+    if(target<0) target=0;
+    if(target>=n) target=n-1;
+    /* Count model rows once, then adjust for an enabled landing entry. Sparse
+     * commands must not multiply a page into several enabled-entry steps. */
+    for(int pass=0;pass<2;++pass) {
+        int step=pass?-delta:delta;
+        for(int64_t at=target;at>=0&&at<n;at+=step)
+            if(menu_selectable(p,(size_t)at)) { (void)panel_select(s,level,(size_t)at); return; }
+    }
+}
 static int bar_hit(os64_ui_menubar_t *b,int32_t x,int32_t y)
 {
     if(!b||!b->model||b->w.hidden||y<b->w.bounds.y||y>=b->w.bounds.y+b->w.bounds.h||
@@ -411,9 +430,12 @@ static void bar_open_target(os64_ui_menu_session_t *s,size_t index,bool direct)
     rc=os64_ui_menu_close(s,OS64_UI_MENU_EXPLICIT);
     if(rc) { report(s,rc); os64_ui_menu_model_release(m); return; }
     if(temporary) reveal(s);
-    s->view=s->bar_view; rc=os64_ui_action_view_retain(s->view);
-    if(!rc) rc=os64_ui_actions_refresh(s->view);
-    if(rc) { os64_ui_action_view_release(s->view); s->view=NULL; report(s,rc); os64_ui_menu_model_release(m); return; }
+    rc=os64_ui_action_view_retain(s->bar_view);
+    if(!rc) { s->view=s->bar_view; rc=os64_ui_actions_refresh(s->view); }
+    if(rc) {
+        os64_ui_status_code_t closed=os64_ui_menu_close(s,OS64_UI_MENU_EXPLICIT);
+        report(s,closed?closed:rc); os64_ui_menu_model_release(m); return;
+    }
     s->saved_focus=s->ui->focus; os64_ui_cancel_gestures(s->ui);
     s->active=true; s->kind=OS64_UI_MENU_BAR;
     /* Hidden mnemonic targets share the visible overflow affordance; model
@@ -481,9 +503,11 @@ static bool key_event(os64_ui_menu_session_t *s,const os64_gui_event_t *e)
             }
     }
     if(!s->active) return false;
-    uint32_t shortcut=os64_ui_action_shortcut_id(s->view,e);
-    if(shortcut) { s->held[id/8]|=(uint8_t)mask; invoke(s,shortcut); return true; }
-    if(mods&(OS64_GUI_MOD_CTRL|OS64_GUI_MOD_ALT)) return true;
+    if(mods&(OS64_GUI_MOD_CTRL|OS64_GUI_MOD_ALT)) {
+        uint32_t shortcut=os64_ui_action_shortcut_id(s->view,e);
+        if(shortcut) { s->held[id/8]|=(uint8_t)mask; invoke(s,shortcut); }
+        return true;
+    }
     char ch=0; ui_key_t k=os64_ui_decode_key(&s->decoder,e,&ch);
     if(!e->key.ascii) {
         const uint16_t named[]={OS64_UI_KEY_UP,OS64_UI_KEY_DOWN,OS64_UI_KEY_LEFT,OS64_UI_KEY_RIGHT,
@@ -494,6 +518,23 @@ static bool key_event(os64_ui_menu_session_t *s,const os64_gui_event_t *e)
             if(is_key(e,named[i],mods)) { k=decoded[i]; break; }
     }
     if(k==K_NONE) return true;
+    size_t count=0,match=MENU_NONE,next=MENU_NONE;
+    if(k==K_CHAR&&!mods&&s->depth) {
+        os64_ui_popup_t *p=s->panels[s->depth-1].widget;
+        for(size_t i=0;i<p->model->count;++i) {
+            char mnemonic=p->model->entries[i].child?p->model->entries[i].mnemonic:p->rows[i].spec.mnemonic;
+            if(mnemonic&&lower(mnemonic)==lower(ch)&&menu_selectable(p,i)) {
+                ++count; if(match==MENU_NONE) match=i;
+                if(next==MENU_NONE&&(p->selected==MENU_NONE||i>p->selected)) next=i;
+            }
+        }
+    }
+    bool menu_key=k==K_ESC||k==K_TAB||k==K_ENTER||k==K_UP||k==K_DOWN||k==K_LEFT||k==K_RIGHT||
+        k==K_HOME||k==K_END||k==K_PGUP||k==K_PGDN||(k==K_CHAR&&ch==' ')||count;
+    if(!menu_key) {
+        uint32_t shortcut=os64_ui_action_shortcut_id(s->view,e);
+        if(shortcut) { s->held[id/8]|=(uint8_t)mask; invoke(s,shortcut); return true; }
+    }
     /* PS/2 extended navigation is a press-only escape burst. Let decoded
      * navigation repeat; activation/mode keys have release edges and retain
      * their guard. An ESC prefix cannot hold the identity before its suffix. */
@@ -518,19 +559,7 @@ static bool key_event(os64_ui_menu_session_t *s,const os64_gui_event_t *e)
     else if(k==K_HOME||k==K_END) {
         select_step(s,level,k==K_HOME?1:-1,true);
     } else if(k==K_PGUP||k==K_PGDN) {
-        size_t rows=p->bottom-p->top;
-        for(size_t i=0;i<rows;++i) {
-            int step=k==K_PGDN?1:-1;
-            int64_t at=p->selected==MENU_NONE?(step>0?(int64_t)p->top-1:(int64_t)p->bottom):(int64_t)p->selected;
-            bool moved=false;
-            for(at+=step;at>=0&&at<(int64_t)p->model->count;at+=step)
-                if(menu_selectable(p,(size_t)at)) {
-                    if(!panel_select(s,level,(size_t)at)) return true;
-                    moved=true; break;
-                }
-            if(!moved) break;
-        }
-        help(s,p);
+        select_page(s,level,k==K_PGDN?1:-1);
     } else if(k==K_RIGHT) {
         if(p->selected!=MENU_NONE&&p->model->entries[p->selected].child) child(s,level,true);
         else if(s->kind==OS64_UI_MENU_BAR&&level==0) bar_step(s,1,true);
@@ -541,14 +570,6 @@ static bool key_event(os64_ui_menu_session_t *s,const os64_gui_event_t *e)
             s->pressed_key=(uint16_t)(id+1); s->pressed_panel=level; s->pressed_row=p->selected;
         }
     } else if(k==K_CHAR&&!mods) {
-        size_t count=0,match=MENU_NONE,next=MENU_NONE;
-        for(size_t i=0;i<p->model->count;++i) {
-            char mnemonic=p->model->entries[i].child?p->model->entries[i].mnemonic:p->rows[i].spec.mnemonic;
-            if(mnemonic&&lower(mnemonic)==lower(ch)&&menu_selectable(p,i)) {
-                ++count; if(match==MENU_NONE) match=i;
-                if(next==MENU_NONE&&(p->selected==MENU_NONE||i>p->selected)) next=i;
-            }
-        }
         if(count==1) activate(s,level,match);
         else if(count) (void)panel_select(s,level,next==MENU_NONE?match:next);
     }

@@ -507,3 +507,31 @@ baseline after 24 more cycles; gallery traces exit with zero font bytes/referenc
 The focused controller's first pointer path crossed Actions and correctly
 switched headings; that trial was discarded and the retained direct-entry path
 was verified. No code change was made for that controller path.
+
+## 2026-10-12 — E1B third PR review fixes
+
+Reproduced all four new findings: registered shortcuts precede menu keys,
+failed hidden-bar refresh leaves a temporary row, pending child intent survives
+Escape/Left parent collapse, and Page counts enabled moves instead of model rows.
+The isolated pending-collapse test reproduces UBSan's null-parent dereference.
+
+Centralized pending cancellation in close_to and guarded panel creation against
+missing parents. Menu gestures/mnemonics now precede unmodified shortcuts;
+failed retained-view refresh closes/collapses temporary reveal. Page computes
+one viewport's model-row target before adjusting for an enabled landing entry.
+Fixed an adjacent ownership detail by assigning the session view after retain
+succeeds, so failed retention cannot release a borrowed reference.
+
+Complete fake/real suites pass 3,673/3,721 checks with ASan, UBSan and
+LeakSanitizer enabled outside the sandbox; the isolated fixed collapse passes
+1,258 checks. Six mutation gates and strict full userland build pass.
+[Third review evidence](evidence/e01b/review-r3/README.md) records reproduction,
+source/binary hashes and limits. P5 evidence remains Chris's earlier report;
+ordinary re-review remains pending. No kernel, E1C or gclock debt changes.
+
+Four-core native HID, PS/2/fonts, external-focus/cleanup and quit controllers pass.
+Tall-menu End/Page Up, dismissal/next-click, real Interface adoption, overflow
+child creation and close routing remain correct. Every gallery trace exits with
+zero font bytes/references; live heap returns to the warm baseline after 24 more
+cycles. Shortcut conflicts, stale reveal and pending-collapse races are hosted
+in deterministic sanitizer tests, not claimed as induced native races.

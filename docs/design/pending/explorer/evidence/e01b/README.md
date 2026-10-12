@@ -29,6 +29,12 @@ highlighting and standalone zero-handle focus classification. Host suites pass
 2,526 fake-font / 2,574 real-font checks with all three sanitizers and leak
 detection enabled. This follow-up does not change the earlier P5 report's scope.
 
+[Third review evidence](review-r3/README.md) covers menu-key precedence, failed
+temporary reveal cleanup, pending-descendant collapse and page distance through
+disabled entries/separators. Host suites pass 3,673 fake-font / 3,721 real-font
+checks with ASan, UBSan and LeakSanitizer enabled. The isolated before-fix
+collapse reproduces a null dereference; its after-fix run passes 1,258 checks.
+
 Before publication, the branch fast-forwarded to `f7f2f508`; those upstream
 CSS-transform fixes touch no menu, font or action files.
 

@@ -472,6 +472,99 @@ static void review_round_two(void)
     os64_ui_menu_close(g.menus,OS64_UI_MENU_EXPLICIT);drain();gallery_layout(&g,false);
 }
 
+static unsigned r3_last_action,r3_calls;
+static os64_ui_action_result_t r3_invoke(void *app,const os64_ui_action_context_t *ctx,uint32_t id)
+{
+    (void)app;(void)ctx;
+    CHECK(!os64_ui_menu_active(g.menus)&&!popup_handle());
+    r3_last_action=id;++r3_calls;return (os64_ui_action_result_t){OS64_UI_OK,0};
+}
+static void r3_query(void *app,const os64_ui_action_context_t *ctx,uint32_t id,os64_ui_action_state_t *state)
+{ (void)ctx;state->enabled=app?id%10==1:true; }
+static void review_round_three(void)
+{
+    current="round three: menu gestures precede registered shortcuts";
+    const uint16_t keys[]={OS64_UI_KEY_ESCAPE,OS64_UI_KEY_ENTER,OS64_UI_KEY_TAB,
+        OS64_UI_KEY_UP,OS64_UI_KEY_DOWN,OS64_UI_KEY_LEFT,OS64_UI_KEY_RIGHT,
+        OS64_UI_KEY_HOME,OS64_UI_KEY_END,OS64_UI_KEY_PAGE_UP,OS64_UI_KEY_PAGE_DOWN,' ','x','z'};
+    const uint8_t scans[]={0x29,0x28,0x2b,0x52,0x51,0x50,0x4f,0x4a,0x4d,0x4b,0x4e,0x2c,0x1b,0x1d};
+    os64_ui_action_spec_t specs[15]={{.id=1,.label="Selected command",.mnemonic='x'}};
+    for(size_t i=0;i<14;++i) specs[i+1]=(os64_ui_action_spec_t){.id=(uint32_t)i+2,.label="Shortcut",.shortcut={keys[i],0}};
+    os64_ui_action_callbacks_t callbacks={r3_query,r3_invoke};
+    os64_ui_actions_t *actions=NULL;os64_ui_action_view_t *view=NULL;
+    action_test_target target={.gen=1,.enabled=true};
+    os64_ui_action_context_t context={&target,1,at_retain,at_release,at_valid};
+    CHECK(os64_ui_actions_create(specs,15,&callbacks,NULL,&actions)==OS64_UI_OK);
+    CHECK(os64_ui_action_view_create(actions,&context,&view)==OS64_UI_OK);
+    os64_ui_menu_model_t *leaf=NULL,*model=NULL;
+    os64_ui_menu_entry_t command={.action=1};
+    CHECK(os64_ui_menu_model_create(actions,&command,1,&leaf)==OS64_UI_OK);
+    os64_ui_menu_entry_t rows[]={{.action=1},{.kind=OS64_UI_MENU_SUBMENU,.label="Nested",.child=leaf}};
+    CHECK(os64_ui_menu_model_create(actions,rows,2,&model)==OS64_UI_OK);
+    for(size_t i=0;i<14;++i) {
+        open_context(model,view);int64_t root=popup_handle();unsigned before=r3_calls;
+        char ascii=i==0?0x1b:i==1?'\n':i==2?'\t':i==11?' ':i==12?'x':i==13?'z':0;
+        key(root,ascii,scans[i],OS64_GUI_MOD_HID);
+        bool activate=i==1||i==11||i==12||i==13;
+        CHECK(r3_calls==before+(activate?1:0));
+        if(activate) CHECK(r3_last_action==(i==13?15u:1u));
+        else if(i!=0&&i!=2) CHECK(popup_handle()==root);
+        os64_ui_menu_close(g.menus,OS64_UI_MENU_EXPLICIT);drain();
+    }
+    os64_ui_menu_model_release(model);os64_ui_menu_model_release(leaf);
+    CHECK(os64_ui_action_view_destroy(view)==OS64_UI_OK);
+    CHECK(os64_ui_actions_destroy(actions)==OS64_UI_OK&&!target.refs);
+
+    current="round three: failed stale hidden-bar reveal collapses";
+    os64_ui_set_hidden(&g.ui,&g.bar.w,true);gallery_layout(&g,false);
+    ++g.targets[0].generation;key(1,'a',0x1e,OS64_GUI_MOD_ALT);
+    CHECK(g.bar.w.hidden&&!g.bar.temporary&&!os64_ui_menu_active(g.menus)&&!popup_handle());
+    os64_ui_menu_close(g.menus,OS64_UI_MENU_EXPLICIT);drain();
+    --g.targets[0].generation;CHECK(os64_ui_actions_refresh(g.views[0])==OS64_UI_OK);
+    os64_ui_set_hidden(&g.ui,&g.bar.w,false);gallery_layout(&g,false);
+
+    current="round three: page movement counts model rows";
+    os64_ui_action_spec_t sparse[61];
+    for(unsigned i=0;i<61;++i) sparse[i]=(os64_ui_action_spec_t){.id=i+1,.label="Sparse command"};
+    CHECK(os64_ui_actions_create(sparse,61,&callbacks,&target,&actions)==OS64_UI_OK);
+    CHECK(os64_ui_action_view_create(actions,&context,&view)==OS64_UI_OK);
+    os64_ui_menu_entry_t entries[61];
+    for(unsigned i=0;i<61;++i) entries[i]=i%10==5?
+        (os64_ui_menu_entry_t){.kind=OS64_UI_MENU_SEPARATOR}:(os64_ui_menu_entry_t){.action=i+1};
+    CHECK(os64_ui_menu_model_create(actions,entries,61,&model)==OS64_UI_OK);
+    transport.sh=220;open_context(model,view);int64_t root=popup_handle();
+    key(root,0,0x4e,OS64_GUI_MOD_HID);key(root,'\n',0x28,OS64_GUI_MOD_HID);
+    CHECK(r3_last_action==11);
+    open_context(model,view);root=popup_handle();key(root,0,0x4d,OS64_GUI_MOD_HID);
+    key(root,0,0x4b,OS64_GUI_MOD_HID);key(root,'\n',0x28,OS64_GUI_MOD_HID);
+    CHECK(r3_last_action==51);
+    os64_ui_menu_model_release(model);CHECK(os64_ui_action_view_destroy(view)==OS64_UI_OK);
+    CHECK(os64_ui_actions_destroy(actions)==OS64_UI_OK&&!target.refs);transport.sh=768;
+}
+static void collapse_pending_child(void)
+{
+    current="round three: collapse cancels orphaned pending descendants";
+    os64_ui_menu_entry_t submenu={.kind=OS64_UI_MENU_SUBMENU,.label="Parent",.child=g.models[4]};
+    os64_ui_menu_model_t *model=NULL;
+    CHECK(os64_ui_menu_model_create(g.actions,&submenu,1,&model)==OS64_UI_OK);
+    for(unsigned left=0;left<2;++left) {
+        open_context(model,g.views[0]);int64_t root=popup_handle();
+        key(root,0,0x4d,0);int64_t parent=popup_handle();CHECK(parent!=root);
+        key(parent,0,0x4d,0);CHECK(popup_handle()!=parent);
+        os64_ui_popup_t *p=NULL;
+        CHECK(os64_ui_popup_create(&g.ui,g.models[4],g.views[0],NULL,1000,700,&p)==OS64_UI_OK);
+        os64_gui_rect_t row=os64_ui_popup_row(p,1);os64_ui_popup_destroy(p);
+        unsigned before=transport.creates;
+        for(unsigned i=0;i<150;++i) queue(1,(os64_gui_event_t){.type=OS64_GUI_EVENT_DOORBELL});
+        queue(parent,mouse(OS64_GUI_EVENT_MOUSE_MOVE,10,row.y+2,0));
+        queue(parent,edge(OS64_GUI_EVENT_KEY_DOWN,left?0:0x1b,left?0x4b:0x01,0));drain();
+        CHECK(transport.creates==before&&popup_handle()==root&&!transport.windows[parent].live);
+        queue(root,edge(OS64_GUI_EVENT_KEY_UP,left?0:0x1b,left?0x4b:0x01,0));drain();
+        os64_ui_menu_close(g.menus,OS64_UI_MENU_EXPLICIT);drain();
+    }
+    os64_ui_menu_model_release(model);
+}
+
 static void navigation(void)
 {
     current="bar and cascades";
@@ -716,6 +809,10 @@ int main(int argc,char **argv)
     setvbuf(stdout,NULL,_IONBF,0);
     const char *dir=argc>1?argv[1]:"userland/libfreetype/fixtures";
     (void)action_suite(argc,argv);
-    build(dir,true);models();disabled_bar_and_overflow_failure();dismissal_orders();activation_and_loss();quarantine();pending_context_keys();review_navigation();destruction_failure(dir);review_round_two();navigation();burst_and_pointer_navigation();standalone();callback_and_icon_contract();placement_and_fonts(dir);dispose();
+    if(getenv("E1B_R3_COLLAPSE_ONLY")) {
+        build(dir,true);collapse_pending_child();dispose();
+        printf("collapse: %lu checks, %d failures\n",checks,failures);return failures?1:0;
+    }
+    build(dir,true);models();disabled_bar_and_overflow_failure();dismissal_orders();activation_and_loss();quarantine();pending_context_keys();review_navigation();destruction_failure(dir);review_round_two();review_round_three();navigation();burst_and_pointer_navigation();standalone();callback_and_icon_contract();placement_and_fonts(dir);collapse_pending_child();dispose();
     printf("menu/action/status: %lu checks, %d failures\n",checks,failures);return failures?1:0;
 }

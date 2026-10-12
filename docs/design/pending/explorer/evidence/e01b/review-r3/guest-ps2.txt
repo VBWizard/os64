@@ -1,0 +1,106 @@
+gallery focus handle=2 gained=1 other=0
+gallery windows=1 font-bytes=101002 target-hits=0,0
+gallery surface handle=2 width=878 height=719 pitch=1024
+gallery key handle=2 edge=1 ascii=0 scan=68 mods=0
+gallery key handle=2 edge=2 ascii=0 scan=68 mods=0
+gallery key handle=2 edge=1 ascii=10 scan=28 mods=0
+gallery focus handle=3 gained=1 other=2
+gallery focus handle=2 gained=0 other=3
+gallery key handle=3 edge=2 ascii=10 scan=28 mods=0
+gallery windows=2 font-bytes=112808 target-hits=0,0
+gallery surface handle=2 width=878 height=719 pitch=1024
+gallery surface handle=3 width=248 height=101 pitch=248
+gallery key handle=3 edge=1 ascii=10 scan=28 mods=0
+gallery key handle=3 edge=2 ascii=10 scan=28 mods=0
+gallery invoke=1 menus=0 target=0
+gallery focus handle=2 gained=1 other=3
+gallery windows=1 font-bytes=102314 target-hits=1,0
+gallery surface handle=2 width=878 height=719 pitch=1024
+gallery key handle=2 edge=1 ascii=0 scan=56 mods=4
+gallery key handle=2 edge=1 ascii=102 scan=33 mods=4
+gallery focus handle=3 gained=1 other=2
+gallery focus handle=2 gained=0 other=3
+gallery key handle=3 edge=2 ascii=102 scan=33 mods=4
+gallery windows=2 font-bytes=106768 target-hits=1,0
+gallery surface handle=2 width=878 height=719 pitch=1024
+gallery surface handle=3 width=202 height=50 pitch=202
+gallery key handle=3 edge=2 ascii=0 scan=56 mods=0
+gallery key handle=3 edge=1 ascii=27 scan=80 mods=0
+gallery key handle=3 edge=1 ascii=91 scan=80 mods=0
+gallery key handle=3 edge=1 ascii=66 scan=80 mods=0
+gallery key handle=3 edge=1 ascii=27 scan=77 mods=0
+gallery key handle=3 edge=1 ascii=91 scan=77 mods=0
+gallery key handle=3 edge=1 ascii=67 scan=77 mods=0
+gallery focus handle=4 gained=1 other=3
+gallery focus handle=3 gained=0 other=4
+gallery windows=3 font-bytes=338568 target-hits=1,0
+gallery surface handle=2 width=878 height=719 pitch=1024
+gallery surface handle=3 width=202 height=50 pitch=202
+gallery surface handle=4 width=458 height=766 pitch=458
+gallery key handle=4 edge=1 ascii=27 scan=79 mods=0
+gallery key handle=4 edge=1 ascii=91 scan=79 mods=0
+gallery key handle=4 edge=1 ascii=70 scan=79 mods=0
+gallery key handle=4 edge=1 ascii=27 scan=1 mods=0
+gallery focus handle=3 gained=1 other=4
+gallery windows=2 font-bytes=109720 target-hits=1,0
+gallery surface handle=2 width=878 height=719 pitch=1024
+gallery surface handle=3 width=202 height=50 pitch=202
+gallery key handle=3 edge=2 ascii=27 scan=1 mods=0
+gallery key handle=3 edge=1 ascii=27 scan=1 mods=0
+gallery focus handle=2 gained=1 other=3
+gallery windows=1 font-bytes=105922 target-hits=1,0
+gallery surface handle=2 width=878 height=719 pitch=1024
+gallery key handle=2 edge=2 ascii=27 scan=1 mods=0
+gallery key handle=2 edge=1 ascii=0 scan=56 mods=4
+gallery key handle=2 edge=1 ascii=97 scan=30 mods=4
+gallery focus handle=3 gained=1 other=2
+gallery focus handle=2 gained=0 other=3
+gallery key handle=3 edge=2 ascii=97 scan=30 mods=4
+gallery windows=2 font-bytes=116416 target-hits=1,0
+gallery surface handle=2 width=878 height=719 pitch=1024
+gallery surface handle=3 width=248 height=101 pitch=248
+gallery key handle=3 edge=2 ascii=0 scan=56 mods=0
+gallery key handle=3 edge=1 ascii=0 scan=29 mods=2
+gallery key handle=3 edge=1 ascii=0 scan=56 mods=6
+gallery key handle=3 edge=2 ascii=0 scan=56 mods=2
+gallery key handle=3 edge=2 ascii=0 scan=29 mods=0
+gallery focus handle=2 gained=1 other=3
+gallery windows=1 font-bytes=923848 target-hits=1,0
+gallery surface handle=2 width=878 height=719 pitch=1024
+gallery key handle=2 edge=1 ascii=0 scan=56 mods=4
+gallery key handle=2 edge=1 ascii=118 scan=47 mods=4
+gallery focus handle=3 gained=1 other=2
+gallery key handle=2 edge=2 ascii=118 scan=47 mods=4
+gallery key handle=2 edge=2 ascii=0 scan=56 mods=0
+gallery focus handle=2 gained=0 other=3
+gallery windows=2 font-bytes=938639 target-hits=1,0
+gallery surface handle=2 width=878 height=719 pitch=1024
+gallery surface handle=3 width=522 height=270 pitch=522
+gallery key handle=3 edge=1 ascii=27 scan=1 mods=0
+gallery focus handle=2 gained=1 other=3
+gallery windows=1 font-bytes=924626 target-hits=1,0
+gallery surface handle=2 width=878 height=719 pitch=1024
+gallery key handle=2 edge=2 ascii=27 scan=1 mods=0
+gallery key handle=2 edge=1 ascii=0 scan=56 mods=4
+gallery key handle=2 edge=1 ascii=97 scan=30 mods=4
+gallery focus handle=3 gained=1 other=2
+gallery key handle=2 edge=2 ascii=97 scan=30 mods=4
+gallery key handle=2 edge=2 ascii=0 scan=56 mods=0
+gallery focus handle=2 gained=0 other=3
+gallery windows=2 font-bytes=936488 target-hits=1,0
+gallery surface handle=2 width=878 height=719 pitch=1024
+gallery surface handle=3 width=452 height=189 pitch=452
+gallery key handle=3 edge=1 ascii=0 scan=29 mods=2
+gallery key handle=3 edge=1 ascii=0 scan=56 mods=6
+gallery key handle=3 edge=2 ascii=0 scan=56 mods=2
+gallery key handle=3 edge=2 ascii=0 scan=29 mods=0
+gallery key handle=3 edge=1 ascii=27 scan=1 mods=0
+gallery focus handle=2 gained=1 other=3
+gallery windows=1 font-bytes=925994 target-hits=1,0
+gallery surface handle=2 width=878 height=719 pitch=1024
+gallery key handle=2 edge=2 ascii=27 scan=1 mods=0
+gallery key handle=2 edge=1 ascii=0 scan=29 mods=2
+gallery key handle=2 edge=1 ascii=17 scan=16 mods=2
+gallery invoke=7 menus=0 target=2
+gallery key handle=2 edge=2 ascii=17 scan=16 mods=2
+gallery exit font-bytes=0 refs=0,0 hits=1,0

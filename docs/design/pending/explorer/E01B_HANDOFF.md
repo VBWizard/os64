@@ -83,13 +83,22 @@ child capture, which showed only the parent despite its original description.
 The second review fixes refresh error precedence: a failed close returns ERROR
 before a stale/failed action-refresh result, keeping teardown obligations visible.
 Scrolling clears a selected row that leaves the viewport and clears its help;
-arrow/page navigation from no selection starts within the visible rows. Parent
+arrow navigation from no selection starts within the visible rows. Parent
 selection changes cancel queued children and close descendants before changing
 the anchor, including keyboard, pointer and duplicate-mnemonic paths. Hidden
 top-level mnemonics open their requested model while selecting the visible
 overflow affordance for hover and Left/Right interaction. A standalone session's
 zero owner is not a family handle or an owner-content dismissal destination.
 See [second review evidence](evidence/e01b/review-r2/README.md).
+
+The third review centralizes pending-descendant cancellation in `close_to`,
+including Escape/Left collapse, and refuses panel creation without a live parent.
+Menu navigation, matched Enter/Space and enabled popup mnemonics take precedence
+over action shortcuts; unmatched registered shortcuts still close/invoke against
+the saved target. Failed retained-view refresh closes/collapses a temporary bar.
+Page Up/Down computes a target one viewport's model-row count away, then adjusts
+once for an enabled landing entry, rather than taking a viewport's number of
+enabled-entry steps. See [third review evidence](evidence/e01b/review-r3/README.md).
 
 Retired focus records are ignored by a pending replacement, including old birth
 focus-lost records. Unknown live focus peers dismiss conservatively. A sibling
