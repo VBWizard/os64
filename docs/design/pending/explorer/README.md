@@ -6,7 +6,7 @@ The repository records are the handoff; conversation memory is not required.
 
 ## Current position
 
-Updated: 2026-10-11.
+Updated: 2026-10-12.
 
 - Application name: **Roam**, confirmed by Chris (D007).
 - Surrounding panes and bars, including the menu, must be independently
@@ -27,11 +27,13 @@ Updated: 2026-10-11.
 - E1A is accepted: PR #254 merged as `c6cc6e3c`; gallery relocation
   `2bc9f2f4` is on `userland`. Chris confirmed the P5 test complete.
   Launch the diagnostic as `/tests/actiongallery`.
-- Current work: Quinn has implemented E1K in `codex/explorer-e1k`, based on
-  `2bc9f2f4`, at `.worktrees/explorer-e1k`. Its [host/guest evidence](evidence/e01k/README.md) is recorded; ordinary
-  [PR #257](https://github.com/VBWizard/os64/pull/257), implementation `3fee1034`,
-  targets `userland`; review must finish before Sol starts E1B. Chris confirmed E1K validation in
-  QEMU and on the P5 after the readiness-test fix. E1C follows E1B.
+- E1K is complete: [PR #257](https://github.com/VBWizard/os64/pull/257)
+  is approved and merged as `b36e9ddc`. Chris confirmed this status at E1B
+  authorization; old pending-review banners preceded approval.
+- Current work: Quinn's [E1B toolkit](E01B_HANDOFF.md), on
+  `codex/explorer-e1b` from `b36e9ddc`, extends `/tests/actiongallery`.
+  [Evidence and P5 walkthrough](evidence/e01b/README.md) accompany ordinary
+  review. E1C's production migrations follow E1B.
 - The initial design branch is historical; its documentation snapshot
   `d33e651e` arrived through E1A. This branch carries the second-review follow-up.
 - E2's visual family remains a separate choice with Chris; E6 still needs its
@@ -45,7 +47,7 @@ Updated: 2026-10-11.
 3. [Decision log](DECISIONS.md): accepted requirements, proposed engineering
    choices and unresolved decisions. A proposal is not customer approval.
 4. The active slice's record: [E1](E01_MENUS.md), its active
-   [E1K packet](E01K_HANDOFF.md), or [E2](E02_ICONS.md). New slices use the
+   [E1K packet](E01K_HANDOFF.md), [E1B handoff](E01B_HANDOFF.md), or [E2](E02_ICONS.md). New slices use the
    [slice template](SLICE_TEMPLATE.md).
 5. [Session log](SESSION_LOG.md) when the reasoning or evidence behind a change
    is needed. It is history, not the source of current status.
@@ -57,7 +59,7 @@ Create slice records when work begins, rather than maintaining 15 empty designs.
 
 | ID | Slice | State | Owner | Record / PR / implementation commit | Acceptance evidence |
 | --- | --- | --- | --- | --- | --- |
-| E1 | Actions, menus and status | E1A accepted; E1K reviewing; E1B waits | Quinn (E1K), Sol (E1A) | [E1A](E01A_HANDOFF.md), [E1K](E01K_HANDOFF.md); PR #254 merged `c6cc6e3c`, relocation `2bc9f2f4` | [E1A evidence](evidence/e01a/README.md) and review follow-ups; Chris reports P5 test complete |
+| E1 | Actions, menus and status | E1A/E1K complete; E1B reviewing/P5 pending | Quinn (E1B), Sol (E1A) | [E1A](E01A_HANDOFF.md), [E1K](E01K_HANDOFF.md), [E1B](E01B_HANDOFF.md); PR #254 `c6cc6e3c`, PR #257 `b36e9ddc` | [E1B evidence/walkthrough](evidence/e01b/README.md); E1A/E1K acceptance recorded separately |
 | E2 | Icon vocabulary | Designing — visual choice open | Quinn (design) | [E2 contract](E02_ICONS.md) | Dependency/allocation inspection; no runtime evidence |
 | E3 | Data view and selection | Planned | Unassigned | — | None |
 | E4 | Directory browser | Planned | Unassigned | — | None |

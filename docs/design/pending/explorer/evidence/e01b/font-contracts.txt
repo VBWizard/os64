@@ -1,0 +1,4 @@
+cc -std=c11 -O2 -g -Wall -Wextra -Werror -fno-builtin -I/home/yogi/src/os64/.worktrees/explorer-e1b/userland/libos64/include -I/home/yogi/src/os64/.worktrees/explorer-e1b/abi/include -I/home/yogi/src/os64/.worktrees/explorer-e1b/tools/fonts /home/yogi/src/os64/.worktrees/explorer-e1b/tools/fonts/fake_backend.c /home/yogi/src/os64/.worktrees/explorer-e1b/tools/fonts/contract_test.c -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer -fno-pie -no-pie -o /tmp/os64-font-contracts-sxas5869/contracts
+PASS: backend table v1 lifetimes, geometry, errors and allocation sweep
+PASS: 17 hand-authored layout acceptance vectors (arithmetic consistency)
+PASS: strict freestanding target compilation (headers and fake backend; no guest claim)

@@ -3,7 +3,8 @@
 ## Status and ownership
 
 - **State:** Designing, 2026-10-11. Engineering direction drafted; visual family
-  awaits Chris's choice. No icon artwork or implementation has been produced.
+  awaits Chris's choice. E1B implements the provider boundary and drawing
+  helper; no file-backed catalog or artwork has been produced.
 - **Design owner:** Quinn. Implementation/asset production owners: unassigned.
 - **Branch:** `codex/explorer-design`, local worktree `.worktrees/explorer-design`.
   Inspected `userland`: `6d988565`. Refresh dependencies before implementation.
@@ -206,7 +207,9 @@ a desktop implementation or an excuse to modify the wallpaper application.
 
 ## Acceptance and evidence
 
-No implementation or runtime tests have run. Required evidence:
+E1B tests the in-memory provider boundary and drawing helper with synthetic
+pixels. File-backed catalog and asset acceptance remain E2 work. Required E2
+evidence:
 
 | Environment | Check |
 | --- | --- |
@@ -223,7 +226,9 @@ caps are separate acceptance assertions.
 
 ## Handoff
 
-Next: finalize the small provider C interface alongside E1A, verify the measured
+E1B supplies the small provider/lease/draw interface in `os64/ui_icon.h`; its
+gallery uses synthetic fixtures without image decoding. Next: implement the
+file-backed catalog and verify the measured
 temporary allocation budget in its harness, and present a small visual contact sheet for
 Chris's style choice before producing the full family. Native menu adoption
 waits for E1B; larger gallery examples need no kernel work. Record design and

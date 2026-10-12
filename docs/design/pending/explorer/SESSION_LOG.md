@@ -413,3 +413,27 @@ full-queue probe used a refused direct-focus operation; it was corrected and
 both sides rerun before recording the comparison. [Evidence](evidence/e01k/README.md#pr-257-review-round-2--owned-popup-close-escalation)
 includes reports, controller, serial logs and hashes. P5 revalidation and
 re-review remain pending; gclock font adoption remains deferred in DEBTS.
+
+## 2026-10-11–12 — E1B shared menus and action gallery
+
+Implemented immutable menu models, bar/overflow, retained popup widgets, cascade
+controller, optional synthetic icon provider and E1K-backed multi-window
+dispatch. The gallery demonstrates keyboard/pointer/context navigation, tall
+UTF-8 panels, independent action targets, visibility and hidden-bar recovery.
+Dismissal covers both queue orders; replacements drain surviving queues before
+handle reuse. INPUT_LOST cancels interaction; font adoption closes menus before
+old text bindings are released. Application callbacks run after family teardown.
+
+Host checks pass with ASan, UBSan and LeakSanitizer: 1,807 fake-font and 1,854
+real-font menu/action/status checks, plus existing UI/editor, Scribe and font
+contracts. Allocation sweeps and six behavioral mutations are covered. The
+whole userland cross build passes. Isolated four-core QEMU exercises PS/2 and
+USB HID, pointer dismissal/wheel/edges, font/color changes, VT and external
+focus, close routing, overflow and repeated-open resource stability.
+[Evidence and the P5 walkthrough](evidence/e01b/README.md) retain reports,
+controllers, screenshots and hashes. P5 acceptance awaits Chris.
+
+The branch began at PR #257 merge b36e9ddc and fast-forwarded to current
+userland f7f2f508 before publication. Corrected stale E1K pending banners;
+E1A/E1K are complete. Scribe/grootmenu migrations remain E1C and real icons
+remain E2. No kernel work or deferred gclock investigation is included.

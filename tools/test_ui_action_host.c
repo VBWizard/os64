@@ -8,7 +8,8 @@
 
 void os64_ui_theme_current(os64_ui_theme_t *t, uint64_t *installed)
 { *t=(os64_ui_theme_t){.pad=6,.gap=6,.button_h=28,.font_w=8,.font_h=16,
-    .panel_bg=0xff202020,.panel_border=0xff888888,.label_fg=0xffeeeeee}; *installed=0; }
+    .panel_bg=0xff202020,.panel_border=0xff888888,.label_fg=0xffeeeeee,
+    .menu_bg=0xff202020,.menu_fg=0xffeeeeee,.menu_hi_bg=0xff3264c8,.menu_hi_fg=0xffffffff,.menu_sep=0xff888888,.disabled_fg=0xff888888}; *installed=0; }
 bool os64_ui_theme_session(os64_ui_theme_t *t,uint64_t *generation,uint64_t hint)
 { (void)t; (void)generation; (void)hint; return false; }
 int64_t os64_open(const char *p,const char *m) { (void)p;(void)m;return -1; }
@@ -373,7 +374,9 @@ static void gallery_tests(const char *dir)
     CHECK(set!=NULL);if(set) {
         os64_font_consumer_t consumer;os64_ui_font_consumer(&g.ui,&consumer);void *adopt=NULL;
         int32_t old_height=g.record[0].bounds.h;
-        CHECK(consumer.prepare(consumer.user,set,&adopt)==OS64_FONT_OK);
+        os64_font_status_t prep=consumer.prepare(consumer.user,set,&adopt);
+        CHECK(prep==OS64_FONT_OK);
+        if(!adopt) { os64_font_set_release(set); gallery_dispose(&g);free(pixels);return; }
         ui_test_deny_all=true;consumer.commit(consumer.user,adopt);ui_test_deny_all=false;
         CHECK(g.record[0].bounds.h>old_height&&g.status.help.token==g.help_token&&g.targets[0].hits==2);
         CHECK(g.status.w.bounds.y+g.status.w.bounds.h<=g.root.bounds.h);
@@ -461,7 +464,11 @@ static void lost_input(void)
     CHECK(!os64_ui_shortcut_route(&router,NULL,&e,NULL));
     for(size_t i=0;i<sizeof(router.held);++i)CHECK(router.held[i]==0);
 }
+#ifdef UI_MENU_TEST
+static int action_suite(int argc,char **argv)
+#else
 int main(int argc,char **argv)
+#endif
 {
     const char *dir=argc>1?argv[1]:"userland/libfreetype/fixtures";
     registration();views_and_bindings();shortcuts();ctrl_punctuation();lost_input();

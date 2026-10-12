@@ -94,4 +94,7 @@ void os64_ui_shortcut_reset(os64_ui_shortcut_router_t *);
  * actions consume their chord. Unclaimed text/clipboard input passes through. */
 bool os64_ui_shortcut_route(os64_ui_shortcut_router_t *, os64_ui_action_view_t *,
     const os64_gui_event_t *, os64_ui_action_result_t *out);
+/* Lookup only: lets menus close before invoking the saved target. */
+uint32_t os64_ui_action_shortcut_id(const os64_ui_action_view_t *, const os64_gui_event_t *);
+bool os64_ui_action_view_registry(const os64_ui_action_view_t *, const os64_ui_actions_t *);
 #endif

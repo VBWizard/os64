@@ -1,6 +1,6 @@
 # Roam — latest handoff
 
-Updated: 2026-10-11. Design owner: Quinn.
+Updated: 2026-10-12. Design owner: Quinn.
 
 E1A is accepted. PR #254 merged into `userland` as `c6cc6e3c`; gallery relocation
 `2bc9f2f4` followed. Chris confirmed the P5 test complete. The diagnostic launches
@@ -10,27 +10,23 @@ user-reported, without a captured installed-binary hash.
 
 ## Resume point
 
-[PR #257](https://github.com/VBWizard/os64/pull/257) is open against `userland`;
-implementation commit `3fee1034` is pushed. Ordinary code review is pending.
+E1K is complete: PR #257 is approved and merged as `b36e9ddc`. Chris explicitly
+confirmed this when assigning E1B; old pending banners predated its approval.
 
-Quinn owns E1K in branch `codex/explorer-e1k`, checkout
-`.worktrees/explorer-e1k`, based on `2bc9f2f4`. The working implementation and
-[concrete handoff](E01K_HANDOFF.md) follow Fable's second review of native popups.
-The original design branch is historical; do not merge its older runtime base
-over this work. The first review snapshot arrived through E1A at `d33e651e`.
-
-Sol's E1B starts after E1K's API, guest evidence and ordinary code review are
-settled. Chris explicitly asked about the ordering; E1B is the dependent next
-packet, followed by E1C. No E1B implementation is included here.
+Quinn owns E1B in `codex/explorer-e1b`, worktree `.worktrees/explorer-e1b`,
+from current `origin/userland` at that merge. The [concrete E1B handoff](E01B_HANDOFF.md)
+describes the shared models/widgets/controller, native dispatcher, ownership,
+font and context hooks. [Evidence and P5 walkthrough](evidence/e01b/README.md)
+record what passed and what awaits Chris's hardware confirmation.
 
 | Work | State | Next action |
 | --- | --- | --- |
-| [E1A actions/status](E01A_HANDOFF.md) | Accepted | Reuse the public action/status APIs. |
-| [E1K native popups](E01K_HANDOFF.md) | Reviewing | Review the diff and [evidence](evidence/e01k/README.md); Chris confirmed QEMU and P5 validation after the readiness-test fix. |
-| [E1B menus](E01_MENUS.md) | Waiting on E1K | Sol consumes the final APIs; exercise cross-queue dismissal, handle quarantine and unpaired-suppression expiry. |
+| [E1A actions/status](E01A_HANDOFF.md) | Complete | Reuse the existing APIs. |
+| [E1K native popups](E01K_HANDOFF.md) | Approved and merged, PR #257 | Consume the merged E1K wrappers. |
+| [E1B menus](E01B_HANDOFF.md) | Implemented; ordinary review/P5 pending | Review the toolkit and complete the linked P5 walkthrough. |
 | E1C consumers | Waiting on E1B | Migrate grootmenu and Scribe with their existing policies. |
-| [E2 icons](E02_ICONS.md) | Provider/asset plan unchanged | Choose the visual family with Chris before producing assets. |
-| E6 channels | Umbrella proposal only | Separate platform design and Fable review before implementation. |
+| [E2 icons](E02_ICONS.md) | Provider boundary available; visual choice open | Choose the family before producing assets/catalog. |
+| E6 channels | Umbrella proposal only | Separate platform design and Fable review. |
 
 ## Accepted decisions and boundaries
 

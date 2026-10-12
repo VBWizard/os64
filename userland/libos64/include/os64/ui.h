@@ -287,6 +287,10 @@ struct os64_ui_widget
 
     void (*on_click)(os64_ui_widget_t *w, void *user);
     void *user;
+    // Explicit context invocation; false preserves the application's existing
+    // right-click policy. Bubbles without moving caret, selection or focus.
+    bool (*on_context)(os64_ui_widget_t *, const os64_gui_event_t *, void *user);
+    void *context_user;
 
     // WHAT THIS WIDGET WANTS, AND WHAT IT WAS GIVEN, are different things.
     // `natural_h` is the height this kind of widget needs under the current
@@ -396,6 +400,12 @@ struct os64_ui
     // applications with their own dispatch loop; no widget receives it.
     // Set after os64_ui_init. Usage and worker lifetime: GUI_DOORBELL.md.
     void (*on_doorbell)(os64_ui_t *ui, const os64_gui_event_t *event);
+    // Optional menu participant. Predispatch precedes application commands;
+    // before_font releases popups while the current text context is alive.
+    void *menu;
+    bool (*menu_event)(os64_ui_t *, const os64_gui_event_t *);
+    void (*menu_before_font)(os64_ui_t *);
+    int64_t (*menu_turn)(os64_ui_t *);
 };
 
 // ── the window's fonts (F4; FONT_PROVIDER.md is the contract) ───────────────
@@ -737,6 +747,8 @@ bool os64_ui_render(os64_ui_t *ui, os64_gui_rect_t *damage);
 // window dies (event_wait error) or `*running` (may be NULL) goes false —
 // a widget callback clearing its app's flag is how a Quit button works.
 void os64_ui_run(os64_ui_t *ui, int64_t win, volatile bool *running);
+// Shared context bubbling for right-down or a synthesized keyboard request.
+bool os64_ui_context(os64_ui_t *, const os64_gui_event_t *, bool keyboard);
 
 // ── Layout (v1: the trivial one) ────────────────────────────────────────────
 // Assign bounds to parent's children top-to-bottom inside parent's bounds,

@@ -46,6 +46,7 @@ static void refresh_fonts(os64_ui_t *ui)
     int result = os64_font_settings_current(&config, &generation);
     if (result) { ui->font_settings_result = result; return; }
     if (ui->font_settings_ready && ui->font_generation == generation) return;
+    if (ui->menu_before_font) ui->menu_before_font(ui);
     os64_text_context_t *context = os64_ui_font_context(ui);
     os64_font_set_t *set = NULL;
     os64_font_config_error_t error;

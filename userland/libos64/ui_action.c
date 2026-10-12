@@ -398,3 +398,12 @@ bool os64_ui_shortcut_route(os64_ui_shortcut_router_t *r, os64_ui_action_view_t 
     }
     return false;
 }
+
+uint32_t os64_ui_action_shortcut_id(const os64_ui_action_view_t *v,const os64_gui_event_t *e)
+{
+    if(v) for(size_t i=0;i<v->actions->count;++i)
+        if(os64_ui_shortcut_match(v->actions->specs[i].shortcut,e)) return v->actions->specs[i].id;
+    return 0;
+}
+bool os64_ui_action_view_registry(const os64_ui_action_view_t *v,const os64_ui_actions_t *a)
+{ return v&&v->actions==a; }

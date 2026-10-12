@@ -1158,6 +1158,7 @@ static os64_font_status_t consumer_prepare(void *user, os64_font_set_t *candidat
                                            void **plan_out)
 {
 	os64_ui_t *ui = user;
+	if (ui->menu_before_font) ui->menu_before_font(ui);
 	*plan_out = (void *)0;
 	ui_font_binding_t *b = binding_ensure(ui);
 	if (!b || !b->text)
@@ -1297,6 +1298,7 @@ static void release_tree_runs(os64_ui_widget_t *w)
 
 os64_font_status_t os64_ui_font_release(os64_ui_t *ui)
 {
+	if (ui && ui->menu_before_font) ui->menu_before_font(ui);
 	if (!ui)
 		return OS64_FONT_BAD_ARGUMENT;
 	// The tree goes first and whether or not a binding exists: a view that
