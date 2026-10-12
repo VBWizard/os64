@@ -879,6 +879,10 @@ bool flow_box_point(const flow_box_t *box, flow_point_t scroll, int32_t x, int32
 // any other box.
 bool flow_box_through(const flow_box_t *box, flow_point_t scroll, double m[6],
                       os64_gui_rect_t *clip, flow_point_t *upright);
+// How far a shadow's blur reaches past its shape, in pixels: the painter
+// blurs a shadow with three box blurs of radius blur / 2, and a pixel — so
+// a group's bounds and the painter agree on what a shadow covers.
+int32_t flow_shadow_blur_reach(int32_t blur);
 // Whether a list marker of this style is drawn as a shape — a disc, a
 // circle, a square — rather than as its text: the painter's choice, and
 // what a marker's ink and text shadows follow.

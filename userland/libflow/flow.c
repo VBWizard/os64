@@ -498,12 +498,12 @@ static void sticky_reach_scrolled(flow_tree_t *t)
 // ── Transforms (CSS Transforms 1 § 3, 2 § 6) ─────────────────────────────
 
 // a · b, column-major.
-static void mat_mul(double out[16], const double a[16], const double b[16])
+static void mat_mul(long double out[16], const long double a[16], const double b[16])
 {
-    double r[16];
+    long double r[16];
     for (int c = 0; c < 4; c++)
         for (int k = 0; k < 4; k++) {
-            double s = 0;
+            long double s = 0;
             for (int i = 0; i < 4; i++)
                 s += a[i * 4 + k] * b[c * 4 + i];
             r[c * 4 + k] = s;
@@ -512,7 +512,7 @@ static void mat_mul(double out[16], const double a[16], const double b[16])
 }
 
 // m · T(x, y, z): a translation applied before m.
-static void mat_translate(double m[16], double x, double y, double z)
+static void mat_translate(long double m[16], double x, double y, double z)
 {
     for (int k = 0; k < 4; k++)
         m[12 + k] += m[k] * x + m[4 + k] * y + m[8 + k] * z;
@@ -520,16 +520,20 @@ static void mat_translate(double m[16], double x, double y, double z)
 
 // m · T(the function's x, y) · its matrix, a percentage of the border box
 // `w` by `h`.
-static void mat_fn(double m[16], const flow_transform_t *f, int64_t w, int64_t h)
+static void mat_fn(long double m[16], const flow_transform_t *f, int64_t w, int64_t h)
 {
     mat_translate(m, (double)f_len(f->x, w), (double)f_len(f->y, h), 0);
     mat_mul(m, m, f->m);
 }
 
 void f_transform_matrix(const flow_style_t *s, int64_t x, int64_t y, int64_t w, int64_t h,
-                        double m[16])
+                        double out[16])
 {
-    os64_memset(m, 0, 16 * sizeof(double));
+    // Composed in long double, narrowed once: two finite functions whose
+    // product is ordinary — matrix(1e308, 1e308, 1e308, 1e308, 0, 0)
+    // matrix(1e308, -1e308, -1e308, 1e308, 0, 0) is the zero matrix — do
+    // not pass a double on the way.
+    long double m[16] = {0};
     m[0] = m[5] = m[10] = m[15] = 1;
     double ox = (double)(x + f_len(s->transform_origin[0], w));
     double oy = (double)(y + f_len(s->transform_origin[1], h));
@@ -544,6 +548,8 @@ void f_transform_matrix(const flow_style_t *s, int64_t x, int64_t y, int64_t w, 
     for (int32_t i = 0; i < s->ntransform; i++)
         mat_fn(m, &s->transform[i], w, h);
     mat_translate(m, -ox, -oy, -oz);
+    for (int i = 0; i < 16; i++)
+        out[i] = (double)m[i];
 }
 
 // A move in 26.6 as whole pixels, held to what a point says; one that is
@@ -768,16 +774,21 @@ static void reach_stacked(flow_tree_t *t)
     }
 }
 
+int32_t flow_shadow_blur_reach(int32_t blur)
+{
+    int64_t r = 3 * (int64_t)(blur > 0 ? blur / 2 : 0) + 1;
+    return (int32_t)(r < INT32_MAX ? r : INT32_MAX);
+}
+
 // How far past its shape one shadow may be drawn on each side, in CSS's
-// side order: its spread, less its offset toward that side's opposite,
-// and its blur's reach — twice the blur radius, a Gaussian of standard
-// deviation half the radius being nothing past three of them — never less
-// than 0. A shadow cast right reaches right, not left. A text shadow is
-// drawn sharp (yonder's painter draws its run offset, unblurred), so its
-// blur reaches nothing.
+// side order: its spread (which may shrink it), less its offset toward
+// that side's opposite, and its blur's reach as the painter blurs it
+// (flow_shadow_blur_reach) — never less than 0. A shadow cast right
+// reaches right, not left. A text shadow is drawn sharp (the painter draws
+// its run offset, unblurred): its blur reaches no further than none.
 static void shadow_reach(const flow_shadow_t *sh, bool blurred, int64_t out[4])
 {
-    int64_t grow = (sh->spread > 0 ? sh->spread : 0) + (blurred ? 2 * (int64_t)sh->blur : 0) + 1;
+    int64_t grow = (blurred ? sh->spread : 0) + flow_shadow_blur_reach(blurred ? sh->blur : 0);
     int64_t side[4] = {grow - sh->y, grow + sh->x, grow + sh->y, grow - sh->x};
     for (int k = 0; k < 4; k++)
         out[k] = side[k] > 0 ? side[k] : 0;

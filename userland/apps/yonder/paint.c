@@ -772,9 +772,11 @@ static void shadow(const Painter *p, const flow_box_t *b, const Round *outer, co
                    const flow_shadow_t *sh, bool square)
 {
     // How far a pixel's shade reads: three box blurs of radius blur/2 each
-    // (mask_blur), and a pixel. A mask cut any closer to the view would
-    // shade a pixel by where the dirty part happened to end (Quinn, #203).
-    int64_t blur = sh->blur, reach = 3 * (blur / 2) + 1;
+    // (mask_blur), and a pixel — libflow's rule (flow_shadow_blur_reach),
+    // which a group's bounds hold too. A mask cut any closer to the view
+    // would shade a pixel by where the dirty part happened to end (Quinn,
+    // #203).
+    int64_t blur = sh->blur, reach = flow_shadow_blur_reach(sh->blur);
     uint32_t colour = sh->current ? b->style->color : sh->colour;
     Round shape = sh->inset ? round_moved(inner, (int64_t)sh->x * SUB, (int64_t)sh->y * SUB,
                                           -(int64_t)sh->spread * SUB)
