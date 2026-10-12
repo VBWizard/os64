@@ -10,7 +10,8 @@
 
 // Everything is in PAGE coordinates — a box in a fixed subtree moved there
 // by the scroll, which the painter does for every verb — and the executor
-// moves it onto the glass. `clip` is the viewport, handed to every verb
+// moves it onto the glass; between a through_open and its close, in that
+// group's own coordinates instead. `clip` is the viewport, handed to every verb
 // because a text run and a picture are drawn whole and must be cut by
 // whoever draws them.
 // A colour is flow's (flow.h): its top byte how transparent it is, which a
@@ -38,11 +39,12 @@ typedef struct {
     // (Backgrounds 3 § 2.11.2).
     bool (*backdrop)(void *ctx, const flow_box_t *box, int32_t layer, const os64_gui_rect_t *area,
                      os64_gui_rect_t origin, int32_t ox, int32_t oy, os64_gui_rect_t clip);
-    // A GROUP (flow_visit_groups): everything painted between an open and
-    // its close is laid over what was under it at `alpha` of 255 (CSS
-    // Color 4 § 3.2). `bounds` holds all of it, cut to the viewport — empty
-    // when none of it shows — in page coordinates. Groups nest. Either NULL:
-    // groups are painted opaque.
+    // A GROUP below full opacity (flow_visit_groups) and not laid through
+    // its matrix (through_open, below): everything painted between an open
+    // and its close is laid over what was under it at `alpha` of 255 (CSS
+    // Color 4 § 3.2). `bounds` holds all of it, cut to the view — empty
+    // when none of it shows — in the coordinates being painted. Groups
+    // nest. Either NULL: groups are painted opaque.
     void (*group_open)(void *ctx, os64_gui_rect_t bounds);
     void (*group_close)(void *ctx, uint8_t alpha);
     // A SHADOW's pixels: `colour`'s RGB laid over each pixel of `rect`
@@ -59,6 +61,18 @@ typedef struct {
     // (libpage makes the frame a link). NULL: the box is drawn empty.
     void (*frame)(void *ctx, const flow_box_t *box, os64_gui_rect_t content, os64_gui_rect_t clip,
                   uint32_t ink, uint32_t paper);
+    // A group DRAWN THROUGH its matrix (flow_box_through; PILE3.md §
+    // Transforms, the painter): everything painted until its close is in
+    // the group's own coordinates, inside `bounds` there, and is then laid
+    // through `m` — x' = m[0] x + m[2] y + m[4], y' = m[1] x + m[3] y +
+    // m[5] — onto the coordinates painted before the open, inside `clip`
+    // there, at `alpha` of 255. False when it cannot be laid (no memory,
+    // too large): the painter then draws the group upright, and every verb
+    // it calls is in the coordinates painted before. Either NULL: no group
+    // is laid through.
+    bool (*through_open)(void *ctx, os64_gui_rect_t bounds, const double m[6],
+                         os64_gui_rect_t clip);
+    void (*through_close)(void *ctx, uint8_t alpha);
 } yonder_verbs_t;
 
 // Whose background is the CANVAS's (CSS 2.1 § 14.2): the root's when it has

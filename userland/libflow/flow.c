@@ -548,12 +548,25 @@ static const flow_frame_t *transform_new(Build *bd, const flow_style_t *s, int64
     // Behind the eye a point is not drawn at all, nor moved.
     double dx = tw > 0 ? tx / tw - ox : 0, dy = tw > 0 ? ty / tw - oy : 0;
     f->by = (flow_point_t){move_px(dx), move_px(dy)};
-    // A translation, as a flat drawing shows it: x' = (m0 x + m4 y + m12) /
-    // (m3 x + m7 y + m15) is x moved when m0 = m15, m4 = m3 = m7 = 0, and
-    // y' likewise.
+    // FLAT, as a flat drawing shows it: x' = (m0 x + m4 y + m12) / w, w =
+    // m3 x + m7 y + m15, divides everywhere by the same w > 0 when m3 = m7
+    // = 0 — an affine map, in pixels with the 26.6 translation taken down.
+    // A translation besides when m0 = m5 = m15 and m1 = m4 = 0.
     const double e = 1e-9;
-    f->upright = !(fabs(m[3]) < e && fabs(m[7]) < e && m[15] > 0 && fabs(m[0] - m[15]) < e &&
-                   fabs(m[5] - m[15]) < e && fabs(m[1]) < e && fabs(m[4]) < e);
+    bool flat = fabs(m[3]) < e && fabs(m[7]) < e && m[15] > e;
+    bool moves = flat && fabs(m[0] - m[15]) < e && fabs(m[5] - m[15]) < e && fabs(m[1]) < e &&
+                 fabs(m[4]) < e;
+    f->upright = !flat;
+    f->through = flat && !moves;
+    if (f->through) {
+        double w = m[15];
+        double a[6] = {m[0] / w, m[1] / w, m[4] / w, m[5] / w, m[12] / w / 64, m[13] / w / 64};
+        for (int i = 0; i < 6; i++)
+            f->through = f->through && isfinite(a[i]);
+        os64_memcpy(f->affine, a, sizeof(a));
+        if (!f->through)
+            f->upright = true;          // what cannot be worked out is drawn upright
+    }
     return f;
 }
 
@@ -651,6 +664,7 @@ static os64_gui_rect_t cut_to(os64_gui_rect_t r, os64_gui_rect_t c)
 }
 
 static os64_gui_rect_t moved(os64_gui_rect_t r, int64_t dx, int64_t dy);
+static os64_gui_rect_t affine_bounds(const double m[6], os64_gui_rect_t r);
 
 // The page's extent grown to reach (right, bottom), in pixels.
 static void page_reach(flow_tree_t *t, int64_t right, int64_t bottom)
@@ -669,7 +683,8 @@ static void page_reach(flow_tree_t *t, int64_t right, int64_t bottom)
 // or transform frame's on the way out — but not the container's, which is
 // what scrolling reaches past. Sticky boxes are counted where the flow put
 // them, as the content is; a transformed box where its frame draws it,
-// moved (Transforms 1 § 3). So a stacked box a transform moves reaches
+// moved or through its matrix — the bounds of its corners there (Transforms
+// 1 § 3). So a stacked box a transform moves reaches
 // too, and outside every scroll container it reaches the page's extent
 // (flow_width, flow_height) — unless it is fixed to the viewport, which the
 // page is never scrolled to reach.
@@ -682,7 +697,7 @@ static void reach_stacked(flow_tree_t *t)
         const flow_frame_t *f = p->frame;
         for (; f != NULL && f->kind != F_FRAME_SCROLL; f = f->outer) {
             if (f->kind == F_FRAME_TRANSFORM) {
-                r = moved(r, f->by.x, f->by.y);
+                r = f->through ? affine_bounds(f->affine, r) : moved(r, f->by.x, f->by.y);
                 transformed = true;
             }
             if (f->clips)
@@ -704,7 +719,9 @@ static void reach_stacked(flow_tree_t *t)
     const flow_box_t *root = t->root;
     if (root != NULL && root->frame != NULL && root->frame->box == root &&
         root->frame->kind == F_FRAME_TRANSFORM) {
-        os64_gui_rect_t r = moved(root->overflow, root->frame->by.x, root->frame->by.y);
+        const flow_frame_t *f = root->frame;
+        os64_gui_rect_t r = f->through ? affine_bounds(f->affine, root->overflow)
+                                       : moved(root->overflow, f->by.x, f->by.y);
         if (r.w > 0 && r.h > 0)
             page_reach(t, (int64_t)r.x + r.w, (int64_t)r.y + r.h);
     }
@@ -969,10 +986,18 @@ static int32_t z_of(const flow_box_t *b)
     return b->positioned && b->style->has_z_index ? b->style->z_index : 0;
 }
 
-// Composited whole: below full opacity, and painted at all.
+// Drawn through its own matrix (flow_box_through).
+static bool own_through(const flow_box_t *b)
+{
+    return b->frame != NULL && b->frame->box == b && b->frame->kind == F_FRAME_TRANSFORM &&
+           b->frame->through;
+}
+
+// Composited whole: below full opacity, or drawn through its matrix, and
+// painted at all.
 static bool is_group(const flow_box_t *b)
 {
-    return b->style->opacity < 1000 && !b->unpainted;
+    return (b->style->opacity < 1000 || own_through(b)) && !b->unpainted;
 }
 
 typedef struct {
@@ -1278,14 +1303,19 @@ static flow_point_t shift(Frames *m, const flow_frame_t *s, flow_point_t at, flo
     return (flow_point_t){edge32(dx), edge32(dy)};
 }
 
-// A frame's offset: the scroll under a fixed box, then each frame's move,
-// outermost first, each worked in the frame the one outside it moved — a
-// sticky box's push, a scroll container's scroll position taken back, a
-// transformed box's `by`. A sticky box that does not move is where the
-// frame it is in puts it.
+// A frame's offset in the coordinates it is PAINTED in: the scroll under a
+// fixed box, then each frame's move, outermost first, each worked in the
+// frame the one outside it moved — a sticky box's push, a scroll
+// container's scroll position taken back, a translation's `by`. A sticky
+// box that does not move is where the frame it is in puts it. A frame
+// drawn THROUGH its matrix is where those coordinates begin: inside it,
+// everything is painted in its own, and nothing outside moves it
+// (to_space and from_space cross it).
 static flow_point_t frame_of(Frames *m, const flow_frame_t *s, bool fixed, flow_point_t scroll)
 {
     s = s != NULL ? s->mover : NULL;
+    if (s != NULL && s->kind == F_FRAME_TRANSFORM && s->through)
+        return (flow_point_t){0, 0};
     if (s == NULL)
         return fixed ? scroll : (flow_point_t){0, 0};
     for (int32_t i = 0; i < m->n; i++)
@@ -1307,6 +1337,96 @@ flow_point_t flow_box_doc_offset(const flow_box_t *box, flow_point_t scroll)
 {
     Frames m = {.n = 0};
     return box != NULL ? frame_of(&m, box->frame, box->fixed, scroll) : (flow_point_t){0, 0};
+}
+
+// The innermost frame drawn through its matrix along `f` and those outside
+// it, or NULL: whose coordinates a box in `f` is painted in.
+static const flow_frame_t *inner_through(const flow_frame_t *f)
+{
+    for (; f != NULL; f = f->outer)
+        if (f->kind == F_FRAME_TRANSFORM && f->through)
+            return f;
+    return NULL;
+}
+
+// A point painted in the coordinates of frame `f`'s drawn-through frame
+// taken out to the page's: through each drawn-through frame's matrix and
+// then the offset of the frame outside it, innermost first.
+static void from_space(const flow_frame_t *f, flow_point_t scroll, double *x, double *y)
+{
+    Frames m = {.n = 0};
+    for (const flow_frame_t *t = inner_through(f); t != NULL; t = inner_through(t->outer)) {
+        const double *a = t->affine;
+        double px = *x, py = *y;
+        flow_point_t o = frame_of(&m, t->outer, t->box->fixed, scroll);
+        *x = a[0] * px + a[2] * py + a[4] + o.x;
+        *y = a[1] * px + a[3] * py + a[5] + o.y;
+    }
+}
+
+// The page's point (x, y) taken in to the coordinates frame `f`'s
+// drawn-through frame paints in: outermost first, each frame's outside
+// offset taken off and its matrix undone. False where a matrix cannot be
+// undone — a scale of 0, which draws nothing to point at.
+static bool to_space(const flow_frame_t *f, flow_point_t scroll, double *x, double *y)
+{
+    const flow_frame_t *t = inner_through(f);
+    if (t == NULL)
+        return true;
+    if (!to_space(t->outer, scroll, x, y))
+        return false;
+    Frames m = {.n = 0};
+    flow_point_t o = frame_of(&m, t->outer, t->box->fixed, scroll);
+    const double *a = t->affine;
+    double det = a[0] * a[3] - a[1] * a[2];
+    if (!(fabs(det) > 1e-12))
+        return false;
+    double px = *x - o.x - a[4], py = *y - o.y - a[5];
+    *x = (a[3] * px - a[2] * py) / det;
+    *y = (a[0] * py - a[1] * px) / det;
+    return isfinite(*x) && isfinite(*y);
+}
+
+// The pixel a point taken through a matrix falls in, a whole pixel within
+// a millionth being that pixel (affine_bounds' rule).
+static double pixel_of(double v)
+{
+    return floor(v + 1e-6);
+}
+
+bool flow_box_point(const flow_box_t *box, flow_point_t scroll, int32_t x, int32_t y,
+                    flow_point_t *out)
+{
+    if (box == NULL)
+        return false;
+    double px = x, py = y;
+    if (!to_space(box->frame, scroll, &px, &py))
+        return false;
+    flow_point_t o = flow_box_doc_offset(box, scroll);
+    px = pixel_of(px) - o.x;
+    py = pixel_of(py) - o.y;
+    if (!(px >= INT32_MIN && px <= INT32_MAX && py >= INT32_MIN && py <= INT32_MAX))
+        return false;
+    *out = (flow_point_t){(int32_t)px, (int32_t)py};
+    return true;
+}
+
+bool flow_box_through(const flow_box_t *box, flow_point_t scroll, double m[6],
+                      os64_gui_rect_t *clip, flow_point_t *upright)
+{
+    const flow_frame_t *t = box != NULL ? box->frame : NULL;
+    if (t == NULL || t->box != box || t->kind != F_FRAME_TRANSFORM || !t->through)
+        return false;
+    Frames fm = {.n = 0};
+    flow_point_t o = frame_of(&fm, t->outer, box->fixed, scroll);
+    os64_memcpy(m, t->affine, 6 * sizeof(double));
+    m[4] += o.x;
+    m[5] += o.y;
+    if (clip != NULL)
+        *clip = t->clips ? moved(t->clip, o.x, o.y) : clip_rect(kNoClip);
+    if (upright != NULL)
+        *upright = (flow_point_t){edge32((int64_t)o.x + t->by.x), edge32((int64_t)o.y + t->by.y)};
+    return true;
 }
 
 int32_t flow_background_layers(const flow_style_t *s)
@@ -1376,10 +1496,36 @@ void flow_box_radii(const flow_box_t *box, int32_t radii[4][2])
             radii[c][k] = (int32_t)(r[c][k] * num / den);
 }
 
+// Where it is: in a drawn-through frame, the bounds of its four corners
+// taken out through every matrix (CSSOM View's rect of a transformed box),
+// whole pixels holding all of them.
 os64_gui_rect_t flow_box_doc_rect(const flow_box_t *box, flow_point_t scroll)
 {
+    if (box == NULL)
+        return (os64_gui_rect_t){0, 0, 0, 0};
     flow_point_t o = flow_box_doc_offset(box, scroll);
-    return box != NULL ? moved(box->rect, o.x, o.y) : (os64_gui_rect_t){0, 0, 0, 0};
+    os64_gui_rect_t r = moved(box->rect, o.x, o.y);
+    if (inner_through(box->frame) == NULL)
+        return r;
+    double x0 = INFINITY, y0 = INFINITY, x1 = -INFINITY, y1 = -INFINITY;
+    for (int k = 0; k < 4; k++) {
+        double x = (double)r.x + (k & 1 ? r.w : 0), y = (double)r.y + (k & 2 ? r.h : 0);
+        from_space(box->frame, scroll, &x, &y);
+        x0 = fmin(x0, x);
+        y0 = fmin(y0, y);
+        x1 = fmax(x1, x);
+        y1 = fmax(y1, y);
+    }
+    // Held to what the rect's 32 bits can say, as edge32 holds an edge.
+    const double lo = INT32_MIN / 2, hi = INT32_MAX / 2;
+    // A whole pixel within a millionth is that pixel: a quarter turn's
+    // cosine is 6e-17, not 0, and must not grow a rect by one.
+    const double snap = 1e-6;
+    x0 = floor(fmax(lo, fmin(hi, x0)) + snap);
+    y0 = floor(fmax(lo, fmin(hi, y0)) + snap);
+    x1 = ceil(fmax(lo, fmin(hi, x1)) - snap);
+    y1 = ceil(fmax(lo, fmin(hi, y1)) - snap);
+    return (os64_gui_rect_t){(int32_t)x0, (int32_t)y0, (int32_t)(x1 - x0), (int32_t)(y1 - y0)};
 }
 
 static os64_gui_rect_t meet(os64_gui_rect_t a, os64_gui_rect_t b)
@@ -1390,7 +1536,9 @@ static os64_gui_rect_t meet(os64_gui_rect_t a, os64_gui_rect_t b)
 }
 
 // Its own clip where its frame puts it, met with what clips each frame it
-// is inside from outside that frame, where the frame outside puts it.
+// is inside from outside that frame, where the frame outside puts it — in
+// the coordinates it is painted in, so out to its drawn-through frame,
+// whose own clip the face lays the frame through (flow_box_through).
 os64_gui_rect_t flow_box_doc_clip(const flow_box_t *box, flow_point_t scroll)
 {
     if (box == NULL)
@@ -1398,7 +1546,8 @@ os64_gui_rect_t flow_box_doc_clip(const flow_box_t *box, flow_point_t scroll)
     Frames m = {.n = 0};
     flow_point_t o = frame_of(&m, box->frame, box->fixed, scroll);
     os64_gui_rect_t r = moved(box->clip, o.x, o.y);
-    for (const flow_frame_t *s = box->frame; s != NULL; s = s->outer)
+    const flow_frame_t *end = inner_through(box->frame);
+    for (const flow_frame_t *s = box->frame; s != NULL && s != end; s = s->outer)
         if (s->clips) {
             flow_point_t at = frame_of(&m, s->outer, s->box->fixed, scroll);
             r = meet(r, moved(s->clip, at.x, at.y));
@@ -1408,15 +1557,21 @@ os64_gui_rect_t flow_box_doc_clip(const flow_box_t *box, flow_point_t scroll)
 
 // Whether what clips the frames `b` is inside, from outside each, holds
 // the document point (x, y) at this scroll: a box in one is drawn, and
-// hit, only there.
+// hit, only there. Each clip is asked in the coordinates it is painted in,
+// the point taken in through the drawn-through frames outside it.
 static bool outside_clips_hold(const flow_box_t *b, int64_t x, int64_t y, flow_point_t scroll)
 {
     Frames m = {.n = 0};
     for (const flow_frame_t *s = b->frame; s != NULL && s->clipped; s = s->outer)
         if (s->clips) {
+            double px = (double)x, py = (double)y;
+            if (!to_space(s->outer, scroll, &px, &py))
+                return false;
+            px = pixel_of(px);
+            py = pixel_of(py);
             flow_point_t at = frame_of(&m, s->outer, s->box->fixed, scroll);
-            if (x < INT32_MIN || x > INT32_MAX || y < INT32_MIN || y > INT32_MAX ||
-                !holds(moved(s->clip, at.x, at.y), (int32_t)x, (int32_t)y))
+            if (!(px >= INT32_MIN && px <= INT32_MAX && py >= INT32_MIN && py <= INT32_MAX) ||
+                !holds(moved(s->clip, at.x, at.y), (int32_t)px, (int32_t)py))
                 return false;
         }
     return true;
@@ -1518,21 +1673,93 @@ static void visit_inline(const Visit *outer, const flow_box_t *b)
     }
 }
 
-// What a group paints, from its OPEN at layer `i`: every box of every layer
-// up to its CLOSE, each overflow rect where its frame puts it at `scroll`.
-static os64_gui_rect_t group_bounds(const flow_tree_t *tree, int32_t i, flow_point_t scroll)
+// How deep the walk keeps the view of nested drawn-through groups, and
+// the view past that: all of the plane a rect can say.
+#define F_VIEWS 64
+static const os64_gui_rect_t kWholePlane = {INT32_MIN / 4, INT32_MIN / 4, INT32_MAX / 2,
+                                            INT32_MAX / 2};
+
+// The bounds of `r` sent through the affine map `m` (flow_box_through),
+// whole pixels holding the four corners.
+static os64_gui_rect_t affine_bounds(const double m[6], os64_gui_rect_t r)
+{
+    double x0 = INFINITY, y0 = INFINITY, x1 = -INFINITY, y1 = -INFINITY;
+    for (int k = 0; k < 4; k++) {
+        double x = (double)r.x + (k & 1 ? r.w : 0), y = (double)r.y + (k & 2 ? r.h : 0);
+        double tx = m[0] * x + m[2] * y + m[4], ty = m[1] * x + m[3] * y + m[5];
+        x0 = fmin(x0, tx);
+        y0 = fmin(y0, ty);
+        x1 = fmax(x1, tx);
+        y1 = fmax(y1, ty);
+    }
+    const double lo = INT32_MIN / 2, hi = INT32_MAX / 2;
+    if (!(x0 <= x1 && y0 <= y1))
+        return (os64_gui_rect_t){0, 0, 0, 0};
+    // A whole pixel within a millionth is that pixel: a quarter turn's
+    // cosine is 6e-17, not 0, and must not grow a rect by one.
+    const double snap = 1e-6;
+    x0 = floor(fmax(lo, fmin(hi, x0)) + snap);
+    y0 = floor(fmax(lo, fmin(hi, y0)) + snap);
+    x1 = ceil(fmax(lo, fmin(hi, x1)) - snap);
+    y1 = ceil(fmax(lo, fmin(hi, y1)) - snap);
+    return (os64_gui_rect_t){(int32_t)x0, (int32_t)y0, (int32_t)(x1 - x0), (int32_t)(y1 - y0)};
+}
+
+// The bounds of `r` taken back through `m`: what of a group's own
+// coordinates lands in `r` outside it. Empty when `m` cannot be undone.
+static os64_gui_rect_t affine_back(const double m[6], os64_gui_rect_t r)
+{
+    double det = m[0] * m[3] - m[1] * m[2];
+    if (!(fabs(det) > 1e-12))
+        return (os64_gui_rect_t){0, 0, 0, 0};
+    double inv[6] = {m[3] / det, -m[1] / det, -m[2] / det, m[0] / det, 0, 0};
+    inv[4] = -(inv[0] * m[4] + inv[2] * m[5]);
+    inv[5] = -(inv[1] * m[4] + inv[3] * m[5]);
+    return affine_bounds(inv, r);
+}
+
+os64_gui_rect_t flow_affine_rect(const double m[6], os64_gui_rect_t r)
+{
+    return affine_bounds(m, r);
+}
+
+os64_gui_rect_t flow_affine_rect_back(const double m[6], os64_gui_rect_t r)
+{
+    return affine_back(m, r);
+}
+
+// What a group paints, from its OPEN at layer `i` to its CLOSE, whose
+// layer `*close` is set to: every box's overflow rect where its frame puts
+// it at `scroll`, in the coordinates the group is painted in — a group
+// drawn through its matrix inside it counted as its own bounds sent
+// through that matrix, cut to what clips it from outside.
+static os64_gui_rect_t group_bounds(const flow_tree_t *tree, int32_t i, flow_point_t scroll,
+                                    int32_t *close)
 {
     os64_gui_rect_t r = {0, 0, 0, 0};
     bool any = false;
-    for (int32_t k = i + 1, depth = 1; k < tree->nlayers; k++) {
+    *close = tree->nlayers;
+    for (int32_t k = i + 1; k < tree->nlayers; k++) {
         const Layer *l = &tree->layers[k];
-        depth += l->part == PART_OPEN ? 1 : l->part == PART_CLOSE ? -1 : 0;
-        if (depth == 0)
+        if (l->part == PART_CLOSE) {
+            *close = k;
             break;
-        if (l->part == PART_OPEN || l->part == PART_CLOSE)
-            continue;
-        flow_point_t o = flow_box_doc_offset(l->box, scroll);
-        os64_gui_rect_t at = moved(l->box->overflow, o.x, o.y);
+        }
+        os64_gui_rect_t at;
+        if (l->part == PART_OPEN) {
+            int32_t end;
+            at = group_bounds(tree, k, scroll, &end);
+            double m[6];
+            os64_gui_rect_t clip;
+            if (flow_box_through(l->box, scroll, m, &clip, NULL))
+                at = meet(affine_bounds(m, at), clip);
+            k = end;
+            if (at.w <= 0 || at.h <= 0)
+                continue;
+        } else {
+            flow_point_t o = flow_box_doc_offset(l->box, scroll);
+            at = moved(l->box->overflow, o.x, o.y);
+        }
         r = any ? join(r, at) : at;
         any = true;
     }
@@ -1558,20 +1785,38 @@ void flow_visit_groups(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_p
         return;
     void (*visit)(void *, const flow_box_t *) = visitor->visit;
     void *ctx = visitor->ctx;
+    // The view in the coordinates each open group drawn through its matrix
+    // is painted in: the one outside taken back through the matrix. Past
+    // the deepest kept, the whole plane, which culls nothing and so loses
+    // nothing.
+    os64_gui_rect_t views[F_VIEWS];
+    int32_t depth = 0;
     for (int32_t i = 0; i < tree->nlayers; i++) {
         const flow_box_t *b = tree->layers[i].box;
+        os64_gui_rect_t view = depth == 0 ? viewport : depth <= F_VIEWS ? views[depth - 1]
+                                                                        : kWholePlane;
         if (tree->layers[i].part == PART_OPEN) {
+            int32_t end;
+            os64_gui_rect_t bounds = group_bounds(tree, i, scroll, &end);
+            double m[6];
+            if (flow_box_through(b, scroll, m, NULL, NULL)) {
+                if (depth < F_VIEWS)
+                    views[depth] = view.w == kWholePlane.w ? kWholePlane : affine_back(m, view);
+                depth++;
+            }
             if (visitor->open != NULL)
-                visitor->open(ctx, b, group_bounds(tree, i, scroll));
+                visitor->open(ctx, b, bounds);
             continue;
         }
         if (tree->layers[i].part == PART_CLOSE) {
+            if (own_through(b) && depth > 0)
+                depth--;
             if (visitor->close != NULL)
                 visitor->close(ctx, b);
             continue;
         }
         flow_point_t o = flow_box_doc_offset(b, scroll);
-        Visit v = {tree, moved(viewport, -(int64_t)o.x, -(int64_t)o.y), visit, ctx};
+        Visit v = {tree, moved(view, -(int64_t)o.x, -(int64_t)o.y), visit, ctx};
         switch (tree->layers[i].part) {
         case PART_WHOLE:
             if (b->kind != FLOW_BOX_ATOMIC)
@@ -1707,10 +1952,10 @@ const flow_box_t *flow_hit(const flow_tree_t *tree, int32_t x, int32_t y, flow_p
         const flow_box_t *b = tree->layers[i - 1].box;
         if (!outside_clips_hold(b, x, y, scroll))
             continue;
-        flow_point_t o = flow_box_doc_offset(b, scroll);
-        int64_t px = (int64_t)x - o.x, py = (int64_t)y - o.y;
-        if (px < INT32_MIN || px > INT32_MAX || py < INT32_MIN || py > INT32_MAX)
+        flow_point_t at;
+        if (!flow_box_point(b, scroll, x, y, &at))
             continue;
+        int64_t px = at.x, py = at.y;
         const flow_box_t *h = NULL;
         switch (tree->layers[i - 1].part) {
         case PART_WHOLE: h = hit(tree, b, (int32_t)px, (int32_t)py); break;

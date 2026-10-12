@@ -340,6 +340,32 @@ static void rec_group_close(void *ctx, uint8_t alpha)
     out(&rec->out, "end group %d\n", (int)alpha);
 }
 
+// A group laid through its matrix: its own bounds, the matrix in
+// thousandths, and the clip it is laid in. Laid unless the case says the
+// face has no memory for it (s_through_refused).
+static bool s_through_refused;
+
+static bool rec_through_open(void *ctx, os64_gui_rect_t bounds, const double m[6],
+                             os64_gui_rect_t clip)
+{
+    Rec *rec = ctx;
+    if (s_through_refused)
+        return false;
+    out(&rec->out, "through %d %d %d %d", bounds.x, bounds.y, bounds.w, bounds.h);
+    for (int i = 0; i < 6; i++) {
+        double v = m[i] * 1000;
+        out(&rec->out, " %lld", (long long)(v < 0 ? v - 0.5 : v + 0.5));
+    }
+    out(&rec->out, " clip %d %d %d %d\n", clip.x, clip.y, clip.w, clip.h);
+    return true;
+}
+
+static void rec_through_close(void *ctx, uint8_t alpha)
+{
+    Rec *rec = ctx;
+    out(&rec->out, "end through %d\n", (int)alpha);
+}
+
 // A shadow's mask: where, its colour, and the sum and the largest of its
 // alphas, which a hand-worked case can check without listing every pixel.
 // When set, every mask's alphas are also written here, a 200 x 100 page: a
@@ -429,7 +455,8 @@ static char *paint_of(const char *html, size_t len, int32_t width, os64_gui_rect
     out(&rec.out, "%s", "");
     yonder_verbs_t v = {&rec,          rec_fill,     rec_text,       rec_image,
                         rec_control,   rec_backdrop, rec_group_open, rec_group_close,
-                        rec_mask,      rec_pixels,   rec_frame};
+                        rec_mask,      rec_pixels,   rec_frame,      rec_through_open,
+                        rec_through_close};
     if (t != NULL)
         yonder_paint(t, view, (flow_point_t){view.x, view.y}, kEnv.paper, s_dark_paint, &v);
     if (s_canvas_owner != NULL) {

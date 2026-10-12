@@ -1,13 +1,15 @@
 // tools/test_libflow_transform.inc — transforms, the model and the
-// translations (PILE3.md § Transforms, slice S7a), included by
-// test_libflow_host.c. Every expected geometry is worked by hand from CSS
-// Transforms 1 and 2 and the design, never captured from the engine
-// (LAYOUT.md § Proof). Sized boxes, body margin 0, a 400 by 600 viewport.
+// translations and the painter (PILE3.md § Transforms, slices S7a and
+// S7b), included by test_libflow_host.c. Every expected geometry is worked
+// by hand from CSS Transforms 1 and 2 and the design, never captured from
+// the engine (LAYOUT.md § Proof). Sized boxes, body margin 0, a 400 by 600
+// viewport.
 //
-// A box is drawn moved by `by`, where its matrix sends its transform-origin
-// — the whole of a translation; for any other matrix the box upright, where
-// the product of its functions sends the point it is turned about, which is
-// that product's own translation whatever the origin is.
+// A translation is drawn moved by `by`, where its matrix sends its
+// transform-origin ("transform dx dy" in a dump). A flat matrix that does
+// more is drawn THROUGH it ("through a b c d e f", thousandths). One that
+// is not flat is drawn upright, moved by `by`: where the product of its
+// functions sends the point it is turned about, whatever the origin is.
 
 #define XFORM_STYLE "<!doctype html><style>body{margin:0} p{margin:0}"
 
@@ -28,16 +30,17 @@ static void transform_layout_cases(void)
         "    block div 0 40 400 10\n");
 
     // Transforms 2 § 6: translate, then rotate, then scale, then the list.
-    // T(10, 0) R(90deg) T(20, 0) sends the origin 10 across and, the 20
-    // turned a quarter clockwise, 20 down. Taken the list first, it would
-    // be 30 across. The box is drawn to 60, and the page reaches it.
+    // T(10, 0) R(90deg) T(20, 0) sends (x, y) to (10 - y, x + 20): the 20
+    // turned a quarter clockwise is 20 down. Taken the list first, it would
+    // be (30 - y, x). Drawn through, its corners land from -30 to 10 across
+    // and 20 to 120 down, and the page reaches 120.
     cascade_layout_case("transform: the individual properties before the list",
         XFORM_STYLE ".t{width:100px;height:40px;transform-origin:0 0;translate:10px;"
         "rotate:90deg;transform:translateX(20px)}</style><div class=t></div>", 400,
-        "page 400 60\n"
+        "page 400 120\n"
         "block html 0 0 400 40\n"
         "  block body 0 0 400 40\n"
-        "    block div 0 0 100 40 stacked transform 10 20 upright\n");
+        "    block div 0 0 100 40 stacked through 0 1000 -1000 0 10000 20000\n");
 
     // The centring every dialog does: left and top 50% of the 400 by 600
     // viewport put the corner at 200, 300; translate(-50%, -50%) of its own
@@ -52,27 +55,28 @@ static void transform_layout_cases(void)
         "    line 0 0 400 0 base 14\n"
         "    block div 200 300 100 60 positioned transform -50 -30\n");
 
-    // What does more than translate is drawn upright until slice S7b, moved
-    // by the product's translation: a scale or a turn alone, none; a
-    // translation after a scale of 2, twice its 10, down as well as across;
-    // after a quarter turn, turned from across to down. matrix()'s
-    // translation is in CSS pixels, and with nothing else it is exact.
-    // The last two are drawn to 70 and 80.
-    cascade_layout_case("transform: a scale and a turn upright, a translation after them moved",
+    // What does more than translate is drawn through its matrix, about each
+    // box's centre (50, 5 + its top): a scale of 2 is 2x - 50 across; a
+    // translation after it is scaled too, 10 becoming 20; a quarter turn
+    // sends (x, y) to (75 - y, x - 15) at the third box, its corners from
+    // -15 to 85 down; an eighth turn's thousandths are 707, its corners to
+    // 73.9 down. matrix()'s translation is in CSS pixels, and with nothing
+    // else it is an offset. The page reaches the quarter turn's 85.
+    cascade_layout_case("transform: a scale and a turn drawn through, a translation an offset",
         XFORM_STYLE "div{width:100px;height:10px} .a{transform:scale(2)}"
         ".b{transform:scale(2) translate(10px)} .c{transform:rotate(90deg) translateX(10px)}"
         ".d{transform:rotate(45deg)} .e{transform:scale(2) translateY(10px)}"
         ".m{transform:matrix(1,0,0,1,10,20)}</style>"
         "<div class=a></div><div class=b></div><div class=c></div><div class=d></div>"
         "<div class=e></div><div class=m></div>", 400,
-        "page 400 80\n"
+        "page 400 85\n"
         "block html 0 0 400 60\n"
         "  block body 0 0 400 60\n"
-        "    block div 0 0 100 10 stacked transform 0 0 upright\n"
-        "    block div 0 10 100 10 stacked transform 20 0 upright\n"
-        "    block div 0 20 100 10 stacked transform 0 10 upright\n"
-        "    block div 0 30 100 10 stacked transform 0 0 upright\n"
-        "    block div 0 40 100 10 stacked transform 0 20 upright\n"
+        "    block div 0 0 100 10 stacked through 2000 0 0 2000 -50000 -5000\n"
+        "    block div 0 10 100 10 stacked through 2000 0 0 2000 -30000 -15000\n"
+        "    block div 0 20 100 10 stacked through 0 1000 -1000 0 75000 -15000\n"
+        "    block div 0 30 100 10 stacked through 707 707 -707 707 39393 -25104\n"
+        "    block div 0 40 100 10 stacked through 2000 0 0 2000 -50000 -25000\n"
         "    block div 0 50 100 10 stacked transform 10 20\n");
 
     // A transformed root moves the whole page: 100 tall, drawn from 600
@@ -104,18 +108,35 @@ static void transform_layout_cases(void)
         "  block body 0 0 400 100\n"
         "    block div 0 0 400 100\n");
 
+    // A skew and a 3D rotation are flat, drawn through: skewX(45deg) about
+    // (50, 5) sends (x, y) to (x + y - 5, y); rotateX(60deg) about (50, 15)
+    // halves the height, y to 0.5 y + 7.5. A turn about y in perspective
+    // is not flat — its w reads x — and is drawn upright, its centre where
+    // it was.
+    cascade_layout_case("transform: a skew and a 3D turn drawn through, a perspective upright",
+        XFORM_STYLE "div{width:100px;height:10px} .s{transform:skewX(45deg)}"
+        ".x{transform:rotateX(60deg)} .p{transform:perspective(100px) rotateY(45deg)}</style>"
+        "<div class=s></div><div class=x></div><div class=p></div>", 400,
+        "page 400 30\n"
+        "block html 0 0 400 30\n"
+        "  block body 0 0 400 30\n"
+        "    block div 0 0 100 10 stacked through 1000 0 1000 1000 -5000 0\n"
+        "    block div 0 10 100 10 stacked through 1000 0 0 500 0 7500\n"
+        "    block div 0 20 100 10 stacked transform 0 0 upright\n");
+
     // A scale written as a calc() of a percentage is that hundredth, in a
-    // list and as the property: half of 20 across, then twice 10.
+    // list and as the property: half about the centre (50, 5), 0.5x + 35
+    // with the 20 halved; twice about (50, 15), the 10 doubled, reaching 25.
     cascade_layout_case("transform: a scale of calc(%), in the list and alone",
         XFORM_STYLE "div{width:100px;height:10px}"
         ".a{transform:scale(calc(50%)) translateX(20px)}"
         ".b{scale:calc(200%);transform:translateX(10px)}</style>"
         "<div class=a></div><div class=b></div>", 400,
-        "page 400 20\n"
+        "page 400 25\n"
         "block html 0 0 400 20\n"
         "  block body 0 0 400 20\n"
-        "    block div 0 0 100 10 stacked transform 10 0 upright\n"
-        "    block div 0 10 100 10 stacked transform 20 0 upright\n");
+        "    block div 0 0 100 10 stacked through 500 0 0 500 35000 2500\n"
+        "    block div 0 10 100 10 stacked through 2000 0 0 2000 -30000 -15000\n");
 
     // A transformed box is the containing block of an absolute box in it
     // and of a FIXED one (Transforms 1 § 3): both placed against its
@@ -380,8 +401,171 @@ static void transform_door_cases(void)
     sheeted_close(&q);
 }
 
+// The groups a walk opens: how many, the last one's box and bounds, and
+// whether box `watch` was visited.
+typedef struct {
+    int32_t opens, closes;
+    const flow_box_t *box, *watch;
+    os64_gui_rect_t bounds, first;
+    bool seen;
+} XformGroups;
+
+static void xform_group_visit(void *ctx, const flow_box_t *b)
+{
+    XformGroups *g = ctx;
+    g->seen = g->seen || b == g->watch;
+}
+
+static void xform_group_open(void *ctx, const flow_box_t *b, os64_gui_rect_t bounds)
+{
+    XformGroups *g = ctx;
+    if (g->opens++ == 0)
+        g->first = bounds;
+    g->box = b;
+    g->bounds = bounds;
+}
+
+static void xform_group_close(void *ctx, const flow_box_t *b)
+{
+    (void)b;
+    ((XformGroups *)ctx)->closes++;
+}
+
+static bool rect_is(os64_gui_rect_t r, int32_t x, int32_t y, int32_t w, int32_t h)
+{
+    return r.x == x && r.y == y && r.w == w && r.h == h;
+}
+
+// Slice S7b (PILE3.md § Transforms, the painter): a flat matrix that does
+// more than translate is drawn THROUGH — painted in the box's own
+// coordinates and laid through the matrix — so where a box is painted and
+// where it is part. Every answer is worked by hand from the matrix.
+static void transform_through_cases(void)
+{
+    flow_point_t top = {0, 0};
+    Sheeted q;
+
+    // A quarter turn about the centre (150, 110) of a box at 100, 100,
+    // 100 by 20: (x, y) goes to (260 - y, x - 40). The box stands 140 to
+    // 160 across and 60 to 160 down; its first 20 pixels, the child, 60
+    // to 80 down. A point drawn there is the child's, taken back to (110,
+    // 110); one further down is the box's; where it was laid out is no
+    // longer it.
+    sheeted_open(&q, XFORM_STYLE ".t{position:absolute;left:100px;top:100px;width:100px;"
+                     "height:20px;transform:rotate(90deg)} .c{width:20px;height:20px}"
+                     "</style><div class=t id=t><div class=c id=c></div></div>",
+                 400, 600);
+    flow_tree_t *t = flow_layout(q.doc, q.page, 400, &q.env);
+    const flow_box_t *tb = box_with_id(t, q.doc->document, "t");
+    const flow_box_t *cb = box_with_id(t, q.doc->document, "c");
+    double m[6] = {0};
+    os64_gui_rect_t clip = {0};
+    flow_point_t upright = {1, 1}, back = {0, 0};
+    bool through = flow_box_through(tb, top, m, &clip, &upright);
+    bool point = flow_box_point(cb, top, 150, 70, &back);
+    expect("transform: a turned box is where its corners go, its child too",
+           tb != NULL && cb != NULL && rect_is(flow_box_doc_rect(tb, top), 140, 60, 20, 100) &&
+               rect_is(flow_box_doc_rect(cb, top), 140, 60, 20, 20) &&
+               flow_box_doc_offset(cb, top).x == 0 && flow_box_doc_offset(cb, top).y == 0,
+           NULL);
+    expect("transform: a turned box hands the face its matrix",
+           through && fabs(m[0]) < 1e-9 && fabs(m[1] - 1) < 1e-9 && fabs(m[2] + 1) < 1e-9 &&
+               fabs(m[3]) < 1e-9 && fabs(m[4] - 260) < 1e-9 && fabs(m[5] + 40) < 1e-9 &&
+               upright.x == 0 && upright.y == 0 && clip.w >= 1000000 &&
+               !flow_box_through(cb, top, m, NULL, NULL),
+           NULL);
+    expect("transform: a turned box is hit through its matrix, and not where it was laid out",
+           t != NULL && point && back.x == 110 && back.y == 110 && flow_hit(t, 150, 70, top) == cb &&
+               flow_hit(t, 150, 150, top) == tb && !inside_of(flow_hit(t, 110, 110, top), tb),
+           NULL);
+    XformGroups gr = {0};
+    gr.watch = cb;
+    flow_visitor_t vis = {xform_group_visit, xform_group_open, xform_group_close, &gr};
+    flow_visit_groups(t, (os64_gui_rect_t){0, 0, 400, 600}, top, &vis);
+    expect("transform: a turned box is a group, its bounds its own",
+           gr.opens == 1 && gr.closes == 1 && gr.box == tb && rect_is(gr.bounds, 100, 100, 100, 20) &&
+               gr.seen,
+           NULL);
+    flow_free(t);
+    sheeted_close(&q);
+
+    // Turns nest: a quarter turn about (25, 25) inside one about (50, 50)
+    // is a half turn, (x, y) to (100 - x, 50 - y). The inner box stands 50
+    // to 100 across and 0 to 50 down; (90, 10) is its (10, 40).
+    sheeted_open(&q, XFORM_STYLE ".o{position:absolute;left:0;top:0;width:100px;height:100px;"
+                     "transform:rotate(90deg)} .i{position:absolute;left:0;top:0;width:50px;"
+                     "height:50px;transform:rotate(90deg)}</style>"
+                     "<div class=o id=o><div class=i id=i></div></div>",
+                 400, 600);
+    t = flow_layout(q.doc, q.page, 400, &q.env);
+    const flow_box_t *ib = box_with_id(t, q.doc->document, "i");
+    point = flow_box_point(ib, top, 90, 10, &back);
+    expect("transform: turns nest, drawn and hit through both",
+           ib != NULL && rect_is(flow_box_doc_rect(ib, top), 50, 0, 50, 50) && point &&
+               back.x == 10 && back.y == 40 && flow_hit(t, 90, 10, top) == ib,
+           NULL);
+    flow_free(t);
+    sheeted_close(&q);
+
+    // A turned group inside a turned group is counted through its matrix:
+    // the inner bar, 100 by 10 about (50, 5), goes to (55 - y, x - 45) in
+    // the outer box's own coordinates, 45 to 55 across and -45 to 55 down,
+    // so the outer group's bounds reach 45 above its 100 by 100.
+    sheeted_open(&q, XFORM_STYLE ".o{position:absolute;left:0;top:0;width:100px;height:100px;"
+                     "transform:rotate(90deg)} .i{position:absolute;left:0;top:0;width:100px;"
+                     "height:10px;transform:rotate(90deg)}</style>"
+                     "<div class=o><div class=i></div></div>",
+                 400, 600);
+    t = flow_layout(q.doc, q.page, 400, &q.env);
+    XformGroups nest = {0};
+    vis.ctx = &nest;
+    flow_visit_groups(t, (os64_gui_rect_t){0, 0, 400, 600}, top, &vis);
+    expect("transform: a turned group counts a turned group inside it turned",
+           nest.opens == 2 && rect_is(nest.first, 0, -45, 100, 145), NULL);
+    vis.ctx = &gr;
+    flow_free(t);
+    sheeted_close(&q);
+
+    // What clips a turned box from outside stays where it is: about (50,
+    // 10), (x, y) goes to (60 - y, x - 40), drawn from -40 to 60 down, and
+    // the 50 tall wrapper cuts it there. (50, 45) is its (85, 10); (50, 55)
+    // would be its (95, 10), but is clipped away.
+    sheeted_open(&q, XFORM_STYLE ".w{overflow:clip;height:50px} .t{width:100px;height:20px;"
+                     "transform:rotate(90deg)}</style><div class=w><div class=t id=t></div></div>",
+                 400, 600);
+    t = flow_layout(q.doc, q.page, 400, &q.env);
+    tb = box_with_id(t, q.doc->document, "t");
+    through = flow_box_through(tb, top, m, &clip, NULL);
+    expect("transform: what clips a turned box from outside stays put",
+           through && clip.y == 0 && clip.h == 50 && flow_hit(t, 50, 45, top) == tb &&
+               !inside_of(flow_hit(t, 50, 55, top), tb),
+           NULL);
+    flow_free(t);
+    sheeted_close(&q);
+
+    // The walk culls against the view taken back through the matrix: a
+    // box laid out 500 down, turned back a quarter about its corner (0,
+    // 500) — (x, y) to (y - 500, 500 - x) — is drawn from 100 to 500 down,
+    // in a 300 tall view, and is walked; translucent too, it is one group.
+    sheeted_open(&q, XFORM_STYLE ".t{position:absolute;left:0;top:500px;width:400px;height:10px;"
+                     "transform-origin:0 0;transform:rotate(-90deg);opacity:.5}"
+                     ".c{height:10px}</style><div class=t id=t><div class=c id=c></div></div>",
+                 400, 600);
+    t = flow_layout(q.doc, q.page, 400, &q.env);
+    cb = box_with_id(t, q.doc->document, "c");
+    XformGroups cull = {0};
+    cull.watch = cb;
+    vis.ctx = &cull;
+    flow_visit_groups(t, (os64_gui_rect_t){0, 0, 400, 300}, top, &vis);
+    expect("transform: a box laid out off the view but drawn in it is walked, one group",
+           cb != NULL && cull.seen && cull.opens == 1 && cull.closes == 1, NULL);
+    flow_free(t);
+    sheeted_close(&q);
+}
+
 static void transform_cases(void)
 {
     transform_layout_cases();
     transform_door_cases();
+    transform_through_cases();
 }

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""One deliberate break at a time to transforms, the model and the
-translations (docs/design/pending/PILE3.md § Transforms, slice S7a),
-against the transform cases (test_libflow_host.sh --transforms): a mutant
-is CAUGHT when they fail, MISSED when they pass, which means a test is
-missing and gets written. A build failure is neither.
+"""One deliberate break at a time to transforms — the model and the
+translations, and the painter (docs/design/pending/PILE3.md § Transforms,
+slices S7a and S7b) — against the transform cases (test_libflow_host.sh
+--transforms) and yonder's painter cases (test_yonder_host.sh): a mutant is
+CAUGHT when they fail, MISSED when they pass, which means a test is missing
+and gets written. A build failure is neither.
 
 The shape is test_libflow_float_mutants.py's: each mutant is applied to the
 worktree's copy of its file, the cases are run, and the file is put back
@@ -27,9 +28,10 @@ args.logs.mkdir(parents=True, exist_ok=True)
 INTERNAL = 'userland/libflow/internal.h'
 STYLE = 'userland/libflow/style.c'
 BOXES = 'userland/libflow/boxes.c'
+PAINT = 'userland/apps/yonder/paint.c'
 LAYOUT = 'userland/libflow/layout.c'
 FLOW = 'userland/libflow/flow.c'
-CASES = 'bash tools/test_libflow_host.sh --transforms'
+CASES = 'bash tools/test_libflow_host.sh --transforms && bash tools/test_yonder_host.sh'
 
 # (name, file, old, new). Each breaks one rule the design states.
 mutants = [
@@ -77,8 +79,8 @@ mutants = [
      '    for (int32_t i = 0; i < s->ntransform; i++)\n        mat_fn(m, &s->transform[i], w, h);\n'
      '    if (s->translate != NULL)\n        mat_fn(m, s->translate, w, h);\n    if (false)'),
     ('nothing-is-upright', FLOW,
-     '    f->upright = !(',
-     '    f->upright = false && !('),
+     '    f->upright = !flat;',
+     '    f->upright = false;'),
     # Stacking.
     ('a-transformed-block-is-not-stacked', FLOW,
      '    b->stacked = src->positioned || (parent != NULL && own_transform(src, b)) ||',
@@ -121,6 +123,40 @@ mutants = [
     ('layout-reaches-where-it-was-laid-out', LAYOUT,
      '    return c->positioned || c->transformed;',
      '    return c->positioned;'),
+    # Drawn through (S7b): where it is painted, and where it is.
+    ('a-turn-is-an-offset', FLOW,
+     '    f->through = flat && !moves;',
+     '    f->through = flat && !moves && false;'),
+    ('paint-coordinates-run-past-a-turn', FLOW,
+     '    if (s != NULL && s->kind == F_FRAME_TRANSFORM && s->through)\n        return (flow_point_t){0, 0};',
+     '    if (false)\n        return (flow_point_t){0, 0};'),
+    ('a-turned-box-is-where-it-was-laid-out', FLOW,
+     '    if (inner_through(box->frame) == NULL)\n        return r;',
+     '    if (true)\n        return r;'),
+    ('nothing-is-taken-back-through-a-matrix', FLOW,
+     '    const flow_frame_t *t = inner_through(f);\n    if (t == NULL)\n        return true;',
+     '    const flow_frame_t *t = inner_through(f);\n    if (true)\n        return true;'),
+    ('an-outside-clip-is-met-inside-the-turn', FLOW,
+     '    const flow_frame_t *end = inner_through(box->frame);',
+     '    const flow_frame_t *end = NULL;'),
+    ('a-turn-is-no-group', FLOW,
+     '    return (b->style->opacity < 1000 || own_through(b)) && !b->unpainted;',
+     '    return (b->style->opacity < 1000) && !b->unpainted;'),
+    ('a-nested-turn-counts-its-boxes-unturned', FLOW,
+     '                at = meet(affine_bounds(m, at), clip);',
+     '                (void)clip;'),
+    ('the-walk-culls-in-page-coordinates', FLOW,
+     '                    views[depth] = view.w == kWholePlane.w ? kWholePlane : affine_back(m, view);',
+     '                    views[depth] = view;'),
+    ('reach-moves-a-turn-by-its-origin', FLOW,
+     '                r = f->through ? affine_bounds(f->affine, r) : moved(r, f->by.x, f->by.y);',
+     '                r = moved(r, f->by.x, f->by.y);'),
+    ('a-refused-turn-is-drawn-unmoved', PAINT,
+     '        p->shift.x += upright.x;\n        p->shift.y += upright.y;',
+     '        (void)upright;'),
+    ('inside-a-laid-turn-the-view-is-the-page', PAINT,
+     '            p->view = own;',
+     '            (void)own;'),
     ('the-page-extent-counts-it-unmoved', LAYOUT,
      '        (b->transformed && b->parent != NULL))',
      '        false)'),

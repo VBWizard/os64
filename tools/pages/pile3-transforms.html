@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- pile 3, S7a: transforms, the model and the translations. Compare with Chrome at 800 wide: every translation lands where Chrome puts it — the drawer slid three quarters off the left, the dialog centred on the panel, the badge nudged up and right, the bar at the foot of its transformed panel (not of the window), Tailwind's six-function slide. The two boxes in the last row turn and grow in Chrome; until S7b yonder draws them upright and unscaled, where their centres are, and its @supports line says so. -->
+<!-- pile 3, S7a and S7b: transforms, the model, the translations and the painter. Compare with Chrome at 800 wide: every translation lands where Chrome puts it — the drawer slid three quarters off the left, the dialog centred on the panel, the badge nudged up and right, the bar at the foot of its transformed panel (not of the window), Tailwind's six-function slide. The two boxes in the fifth row turn and grow, drawn through their matrices (S7b), and the @supports line says a turn is drawn. The last row is what pages turn most: a chevron turned a half (copied pixel for pixel), a mirrored arrow, a skewed tag. -->
 <html><head><title>transforms</title>
 <style>
 body { margin: 0; font-family: sans-serif; font-size: 16px }
@@ -17,6 +17,9 @@ body { margin: 0; font-family: sans-serif; font-size: 16px }
 .turn { position: absolute; top: 30px; left: 40px; width: 80px; height: 80px; background: #08c; transform: rotate(45deg) }
 .grow { position: absolute; top: 40px; left: 200px; width: 60px; height: 60px; background: #c80; transform: scale(1.5) }
 .yes, .no { position: absolute; top: 60px; left: 320px }
+.chev { position: absolute; top: 40px; left: 40px; width: 0; height: 0; border-left: 30px solid transparent; border-right: 30px solid transparent; border-top: 40px solid #08c; transform: rotate(180deg) }
+.mirror { position: absolute; top: 40px; left: 160px; font-size: 32px; transform: scaleX(-1) }
+.skew { position: absolute; top: 45px; left: 260px; padding: 6px 12px; background: #c80; color: #fff; transform: skewX(-15deg) }
 .yes { display: none }
 @supports (transform: rotate(45deg)) { .yes { display: block } .no { display: none } }
 </style></head>
@@ -44,5 +47,11 @@ body { margin: 0; font-family: sans-serif; font-size: 16px }
   <div class=yes>@supports says rotate(45deg) is drawn</div>
   <div class=no>@supports says rotate(45deg) is not drawn yet</div>
   <span class=label>turned and grown</span>
+</div>
+<div class=row>
+  <div class=chev></div>
+  <div class=mirror>&#x2192; go</div>
+  <div class=skew>skewed tag</div>
+  <span class=label>half turn, mirror, skew</span>
 </div>
 </body></html>
