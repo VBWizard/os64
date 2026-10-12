@@ -3,6 +3,9 @@
 2026-10-11–12. Branch `codex/explorer-e1b`, fresh base `origin/userland` at
 `b36e9ddc` (PR #257). [Concrete handoff](../../E01B_HANDOFF.md).
 
+Tested implementation commit: `7c6de5cf` ([PR #259](https://github.com/VBWizard/os64/pull/259)).
+Publication metadata after that commit changes documentation only.
+
 Before publication, the branch fast-forwarded to `f7f2f508`; those upstream
 CSS-transform fixes touch no menu, font or action files.
 

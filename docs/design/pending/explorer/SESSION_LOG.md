@@ -437,3 +437,7 @@ The branch began at PR #257 merge b36e9ddc and fast-forwarded to current
 userland f7f2f508 before publication. Corrected stale E1K pending banners;
 E1A/E1K are complete. Scribe/grootmenu migrations remain E1C and real icons
 remain E2. No kernel work or deferred gclock investigation is included.
+
+E1B is published as [PR #259](https://github.com/VBWizard/os64/pull/259),
+against userland. Tested implementation commit: `7c6de5cf`; publication metadata
+changes documentation only. Ordinary review and P5 acceptance remain pending.

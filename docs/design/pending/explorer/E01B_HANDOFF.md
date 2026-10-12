@@ -6,6 +6,10 @@
 review fixes only; menu APIs and tested gallery/library code are unchanged). Chris confirms E1A and E1K are complete; the old pending-review
 banners preceded E1K's approval and merge.
 
+[PR #259](https://github.com/VBWizard/os64/pull/259) targets `userland`.
+Tested implementation revision: `7c6de5cf`; subsequent publication metadata
+changes documentation only.
+
 E1B implements the [menu contract](E01_MENUS.md) using the
 [E1K APIs](E01K_HANDOFF.md). Host and QEMU evidence is recorded in
 [evidence/e01b](evidence/e01b/README.md). Ordinary review and Chris's P5
