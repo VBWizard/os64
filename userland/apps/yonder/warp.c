@@ -111,3 +111,15 @@ bool yonder_warp(uint32_t *dst, uint32_t pitch, os64_gui_rect_t clip, const yond
     }
     return true;
 }
+
+void yonder_warp_rebase(const double m[6], int32_t bx, int32_t by, int32_t dx, int32_t dy,
+                        double out[6])
+{
+    long double x = bx, y = by;
+    out[0] = m[0];
+    out[1] = m[1];
+    out[2] = m[2];
+    out[3] = m[3];
+    out[4] = (double)(m[0] * x + m[2] * y + m[4] + dx);
+    out[5] = (double)(m[1] * x + m[3] * y + m[5] + dy);
+}

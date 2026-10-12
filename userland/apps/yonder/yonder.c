@@ -6263,10 +6263,8 @@ static void pane_through_close(void *ctx, uint8_t alpha)
     yonder_sheets_t s = {t->surf[0].pixels, t->surf[1].pixels, t->bounds.w, t->bounds.h};
     for (int32_t k = 0; k < gp->n; k++) {
         const Glass *on = gp->now[k];
-        const double *m = t->m;
-        double bx = t->bounds.x, by = t->bounds.y;
-        double lay[6] = {m[0], m[1], m[2], m[3], m[0] * bx + m[2] * by + m[4] + on->dx,
-                         m[1] * bx + m[3] * by + m[5] + on->dy};
+        double lay[6];
+        yonder_warp_rebase(t->m, t->bounds.x, t->bounds.y, on->dx, on->dy, lay);
         os64_gui_rect_t cut = on_glass(on, t->clip);
         double back[6];
         if (cut.w > 0 && cut.h > 0 && flow_affine_invert(lay, back))

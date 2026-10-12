@@ -111,6 +111,44 @@ static os64_gui_rect_t rect_from(int64_t x0, int64_t y0, int64_t x1, int64_t y1)
                              (int32_t)(h > INT32_MAX ? INT32_MAX : h)};
 }
 
+// A rect from edges, as a bounds' rect is held: each edge to what a
+// 32-bit coordinate can say, so a rect that fits — a group 1.5e9 down —
+// is where it is; and one too wide for a 32-bit width (a scale that
+// reaches past both ends) held to the middle of the range, where any
+// view is, rather than cut down to its first edge.
+static os64_gui_rect_t held_rect(int64_t x0, int64_t y0, int64_t x1, int64_t y1)
+{
+    if (x1 - x0 > INT32_MAX) {
+        x0 = x0 > INT32_MIN / 2 ? x0 : INT32_MIN / 2;
+        x1 = x1 < INT32_MAX / 2 ? x1 : INT32_MAX / 2;
+    }
+    if (y1 - y0 > INT32_MAX) {
+        y0 = y0 > INT32_MIN / 2 ? y0 : INT32_MIN / 2;
+        y1 = y1 < INT32_MAX / 2 ? y1 : INT32_MAX / 2;
+    }
+    return rect_from(x0, y0, x1, y1);
+}
+
+// A rect from edges worked in doubles (a matrix's), as rect_from holds
+// int64 ones: a whole pixel within a millionth is that pixel, so a sine's
+// last bit never grows a rect by one; an extent the caller says is there
+// (`wide`, `tall`) is at least the pixel it is in, however thin; and the
+// rect is held as held_rect holds one.
+static os64_gui_rect_t snapped_rect(double x0, double y0, double x1, double y1, bool wide,
+                                    bool tall)
+{
+    const double snap = 1e-6, lo = INT32_MIN, hi = INT32_MAX;
+    x0 = fmax(lo, fmin(hi, floor(x0 + snap)));
+    y0 = fmax(lo, fmin(hi, floor(y0 + snap)));
+    x1 = fmax(lo, fmin(hi, ceil(x1 - snap)));
+    y1 = fmax(lo, fmin(hi, ceil(y1 - snap)));
+    if (wide && x1 <= x0)
+        x1 = x0 + 1;
+    if (tall && y1 <= y0)
+        y1 = y0 + 1;
+    return held_rect((int64_t)x0, (int64_t)y0, (int64_t)x1, (int64_t)y1);
+}
+
 static os64_gui_rect_t rect_of(int64_t x, int64_t y, int64_t w, int64_t h)
 {
     return rect_from(round_px(x), round_px(y), round_px(x + w), round_px(y + h));
@@ -750,23 +788,60 @@ static void shadow_reach(const flow_shadow_t *sh, bool blurred, int64_t out[4])
 // reaches past its overflow rect — its own worked as the walk goes down,
 // from its border box, each child's handed up as the walk climbs past it
 // (ink_up). Without recursion, the tree being as deep as the page.
+// Whether the painter draws `b`'s frame — background, borders and box
+// shadows (yonder's paint_box): not a text, a marker, a line or an inline
+// box's piece, and not an inline-block's content box, whose atom paints
+// the element's frame where the line is.
+static bool paints_frame(const flow_box_t *b)
+{
+    switch (b->kind) {
+    case FLOW_BOX_TEXT: case FLOW_BOX_MARKER: case FLOW_BOX_LINE: case FLOW_BOX_SPAN:
+        return false;
+    default:
+        return !(b->parent != NULL && b->parent->kind == FLOW_BOX_ATOMIC &&
+                 b->parent->node == b->node);
+    }
+}
+
 static void own_ink(flow_box_t *b)
 {
     const flow_style_t *s = b->style;
     int64_t most[4] = {0, 0, 0, 0}, one[4];
-    // Text shadows are inherited by every box, but painted by the boxes
-    // that draw text.
+    // Every box's style holds the element's shadows, but each is painted
+    // by the boxes that draw it: box shadows by a frame, text shadows by
+    // the boxes that draw text.
     bool draws_text = b->kind == FLOW_BOX_TEXT || b->kind == FLOW_BOX_MARKER;
+    int32_t nbox = paints_frame(b) ? s->nbox_shadows : 0;
     int32_t ntext = draws_text ? s->ntext_shadows : 0;
-    for (int32_t i = 0; i < s->nbox_shadows + ntext; i++) {
-        bool text = i >= s->nbox_shadows;
-        const flow_shadow_t *sh = text ? &s->text_shadows[i - s->nbox_shadows] : &s->box_shadows[i];
+    // A glyph's ink may overhang the run's advance and its line — an
+    // italic's bearing: what the run records it paints past the content
+    // area, from its origin at (x, baseline).
+    os64_text_run_view_t view;
+    int64_t glyph[4] = {0, 0, 0, 0};
+    if (draws_text && b->run != NULL && os64_text_run_view(b->run, &view) == OS64_FONT_OK &&
+        view.ink.x1 > view.ink.x0 && view.ink.y1 > view.ink.y0) {
+        int64_t ix0 = (int64_t)b->rect.x + (view.ink.x0 >> 6);
+        int64_t ix1 = (int64_t)b->rect.x + ((view.ink.x1 + 63) >> 6);
+        int64_t iy0 = (int64_t)b->baseline + (view.ink.y0 >> 6);
+        int64_t iy1 = (int64_t)b->baseline + ((view.ink.y1 + 63) >> 6);
+        int64_t over[4] = {(int64_t)b->rect.y - iy0, ix1 - ((int64_t)b->rect.x + b->rect.w),
+                           iy1 - ((int64_t)b->rect.y + b->rect.h), (int64_t)b->rect.x - ix0};
+        for (int k = 0; k < 4; k++) {
+            glyph[k] = over[k] > 0 ? over[k] : 0;
+            if (glyph[k] > most[k])
+                most[k] = glyph[k];
+        }
+    }
+    for (int32_t i = 0; i < nbox + ntext; i++) {
+        bool text = i >= nbox;
+        const flow_shadow_t *sh = text ? &s->text_shadows[i - nbox] : &s->box_shadows[i];
         if (sh->inset)
             continue;
         shadow_reach(sh, !text, one);
+        // A text shadow is the glyphs drawn moved: their overhang, and more.
         for (int k = 0; k < 4; k++)
-            if (one[k] > most[k])
-                most[k] = one[k];
+            if (one[k] + (text ? glyph[k] : 0) > most[k])
+                most[k] = one[k] + (text ? glyph[k] : 0);
     }
     // From the border box out, measured past the overflow rect around it.
     os64_gui_rect_t r = b->rect, o = b->overflow;
@@ -781,21 +856,33 @@ static void own_ink(flow_box_t *b)
 }
 
 // A child's ink handed to its parent as where it reaches, not how far:
-// the child's overflow edge pushed out by its ink, measured past the
-// parent's overflow edge on the same side — a shadow well inside the
-// parent reaches nothing past it. A stacked child is a layer of its own,
-// holding its own ink, and hands none up.
+// the child's overflow edge pushed out by its ink and cut to its clip,
+// measured past the parent's overflow edge on the same side — a shadow
+// well inside the parent, or clipped inside it, reaches nothing past it.
+// A stacked child is a layer of its own, holding its own ink, and hands
+// none up.
 static void ink_up(const flow_box_t *b)
 {
     flow_box_t *up = (flow_box_t *)b->parent;
     if (b->stacked)
         return;
     os64_gui_rect_t c = b->overflow, p = up->overflow;
+    // Its edges pushed out by its ink, then cut where the painter cuts it:
+    // to its clip (an overflow: hidden or clip box between them).
+    int64_t e[4] = {(int64_t)c.y - b->ink[FLOW_TOP], (int64_t)c.x + c.w + b->ink[FLOW_RIGHT],
+                    (int64_t)c.y + c.h + b->ink[FLOW_BOTTOM], (int64_t)c.x - b->ink[FLOW_LEFT]};
+    if (b->clipped) {
+        os64_gui_rect_t k = b->clip;
+        e[FLOW_TOP] = e[FLOW_TOP] > k.y ? e[FLOW_TOP] : k.y;
+        e[FLOW_RIGHT] = e[FLOW_RIGHT] < (int64_t)k.x + k.w ? e[FLOW_RIGHT] : (int64_t)k.x + k.w;
+        e[FLOW_BOTTOM] = e[FLOW_BOTTOM] < (int64_t)k.y + k.h ? e[FLOW_BOTTOM] : (int64_t)k.y + k.h;
+        e[FLOW_LEFT] = e[FLOW_LEFT] > k.x ? e[FLOW_LEFT] : k.x;
+    }
     int64_t past[4] = {
-        (int64_t)p.y - ((int64_t)c.y - b->ink[FLOW_TOP]),
-        ((int64_t)c.x + c.w + b->ink[FLOW_RIGHT]) - ((int64_t)p.x + p.w),
-        ((int64_t)c.y + c.h + b->ink[FLOW_BOTTOM]) - ((int64_t)p.y + p.h),
-        (int64_t)p.x - ((int64_t)c.x - b->ink[FLOW_LEFT]),
+        (int64_t)p.y - e[FLOW_TOP],
+        e[FLOW_RIGHT] - ((int64_t)p.x + p.w),
+        e[FLOW_BOTTOM] - ((int64_t)p.y + p.h),
+        (int64_t)p.x - e[FLOW_LEFT],
     };
     for (int k = 0; k < 4; k++)
         if (past[k] > up->ink[k])
@@ -1688,23 +1775,9 @@ os64_gui_rect_t flow_box_doc_rect(const flow_box_t *box, flow_point_t scroll)
         x1 = fmax(x1, x);
         y1 = fmax(y1, y);
     }
-    // Held to what the rect's 32 bits can say, as edge32 holds an edge. A
-    // whole pixel within a millionth is that pixel, so a sine's last bit
-    // never grows a rect by one; and an extent that is there, however thin
-    // (scaleX(1e-12)), is at least the pixel it is in, as affine_bounds
-    // keeps it.
-    const double lo = INT32_MIN / 2, hi = INT32_MAX / 2;
-    const double snap = 1e-6;
-    bool wide = x1 > x0, tall = y1 > y0;
-    x0 = floor(fmax(lo, fmin(hi, x0)) + snap);
-    y0 = floor(fmax(lo, fmin(hi, y0)) + snap);
-    x1 = ceil(fmax(lo, fmin(hi, x1)) - snap);
-    y1 = ceil(fmax(lo, fmin(hi, y1)) - snap);
-    if (wide && x1 <= x0)
-        x1 = x0 + 1;
-    if (tall && y1 <= y0)
-        y1 = y0 + 1;
-    return (os64_gui_rect_t){(int32_t)x0, (int32_t)y0, (int32_t)(x1 - x0), (int32_t)(y1 - y0)};
+    // An extent that is there, however thin (scaleX(1e-12)), is at least
+    // the pixel it is in.
+    return snapped_rect(x0, y0, x1, y1, x1 > x0, y1 > y0);
 }
 
 static os64_gui_rect_t meet(os64_gui_rect_t a, os64_gui_rect_t b)
@@ -1874,27 +1947,14 @@ static os64_gui_rect_t affine_bounds(const double m[6], os64_gui_rect_t r)
         x1 = fmax(x1, tx);
         y1 = fmax(y1, ty);
     }
-    const double lo = INT32_MIN / 2, hi = INT32_MAX / 2;
     if (!(x0 <= x1 && y0 <= y1))
         return (os64_gui_rect_t){0, 0, 0, 0};
-    // A whole pixel within a millionth is that pixel, so a sine's last bit
-    // never grows a rect by one. Nor may the snap, or a double's precision,
-    // empty what is not empty: the view taken
-    // back through scale(1e200) is far less than a pixel — 50 plus 4e-198
-    // is 50 — and still the pixel it is in. Whether an extent is empty is
-    // the matrix's to say, not the rounded corners'.
-    const double snap = 1e-6;
+    // Whether an extent is empty is the matrix's to say, not the rounded
+    // corners': the view taken back through scale(1e200) is far less than
+    // a pixel — 50 plus 4e-198 is 50 — and still the pixel it is in.
     bool wide = r.w > 0 && fabs(m[0]) * r.w + fabs(m[2]) * r.h > 0;
     bool tall = r.h > 0 && fabs(m[1]) * r.w + fabs(m[3]) * r.h > 0;
-    x0 = floor(fmax(lo, fmin(hi, x0)) + snap);
-    y0 = floor(fmax(lo, fmin(hi, y0)) + snap);
-    x1 = ceil(fmax(lo, fmin(hi, x1)) - snap);
-    y1 = ceil(fmax(lo, fmin(hi, y1)) - snap);
-    if (wide && x1 <= x0)
-        x1 = x0 + 1;
-    if (tall && y1 <= y0)
-        y1 = y0 + 1;
-    return (os64_gui_rect_t){(int32_t)x0, (int32_t)y0, (int32_t)(x1 - x0), (int32_t)(y1 - y0)};
+    return snapped_rect(x0, y0, x1, y1, wide, tall);
 }
 
 // The bounds of `r` taken back through `m`: what of a group's own
@@ -1917,18 +1977,12 @@ os64_gui_rect_t flow_affine_rect_back(const double m[6], os64_gui_rect_t r)
     return affine_back(m, r);
 }
 
-// `r` grown by `d` on each side, in CSS's side order, held to what a rect
-// can say.
+// `r` grown by `d` on each side, in CSS's side order, held as held_rect
+// holds one.
 static os64_gui_rect_t grown(os64_gui_rect_t r, const int32_t d[4])
 {
-    const int64_t lo = INT32_MIN / 2, hi = INT32_MAX / 2;
-    int64_t x0 = (int64_t)r.x - d[FLOW_LEFT], y0 = (int64_t)r.y - d[FLOW_TOP];
-    int64_t x1 = (int64_t)r.x + r.w + d[FLOW_RIGHT], y1 = (int64_t)r.y + r.h + d[FLOW_BOTTOM];
-    x0 = x0 < lo ? lo : x0;
-    y0 = y0 < lo ? lo : y0;
-    x1 = x1 > hi ? hi : x1;
-    y1 = y1 > hi ? hi : y1;
-    return (os64_gui_rect_t){(int32_t)x0, (int32_t)y0, (int32_t)(x1 - x0), (int32_t)(y1 - y0)};
+    return held_rect((int64_t)r.x - d[FLOW_LEFT], (int64_t)r.y - d[FLOW_TOP],
+                     (int64_t)r.x + r.w + d[FLOW_RIGHT], (int64_t)r.y + r.h + d[FLOW_BOTTOM]);
 }
 
 // What a group paints, from its OPEN at layer `i` to its CLOSE, whose

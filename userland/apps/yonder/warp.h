@@ -42,4 +42,12 @@ bool yonder_warp(uint32_t *dst, uint32_t pitch, os64_gui_rect_t clip, const yond
 // Whether `m` is one the warp copies by index.
 bool yonder_warp_exact(const double m[6]);
 
+// The matrix that lays a sheet whose pixel (0, 0) is the group's (bx, by)
+// onto a target whose page origin is at (dx, dy) of its pixels: `m` after
+// the move to (bx, by), then (dx, dy). Worked in long double and narrowed
+// once, so cancelling terms — matrix(1e308, 0, -1e308, 1, 0, 0) at bx = by
+// — come to what they are, not inf - inf.
+void yonder_warp_rebase(const double m[6], int32_t bx, int32_t by, int32_t dx, int32_t dy,
+                        double out[6]);
+
 #endif

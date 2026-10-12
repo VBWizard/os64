@@ -277,6 +277,20 @@ int main(void)
         group_free(&g);
     }
 
+    // Re-basing a sheet's matrix: cancelling huge terms come to what they
+    // are — 1e308 x 5 - 1e308 x 5 is 0, not inf - inf — and an ordinary
+    // turn moves by its own arithmetic.
+    {
+        const double cancel[6] = {1e308, 0, -1e308, 1, 0, 0};
+        double out[6];
+        yonder_warp_rebase(cancel, 5, 5, 3, 4, out);
+        const double turn[6] = {0, 1, -1, 0, 60, -40};
+        double t2[6];
+        yonder_warp_rebase(turn, 10, 20, 1, 2, t2);
+        expect("warp: a sheet's matrix re-based without inf - inf",
+               out[4] == 3 && isfinite(out[5]) && out[5] == 9 && t2[4] == 41 && t2[5] == -28);
+    }
+
     printf("yonder warp: %d checks, %d failed\n", s_checks, s_failed);
     return s_failed != 0;
 }

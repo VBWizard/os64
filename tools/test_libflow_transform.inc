@@ -680,6 +680,71 @@ static void transform_through_cases(void)
     flow_free(t);
     sheeted_close(&q);
 
+    // A glyph's ink past its advance is painted, and held: the test face's
+    // inverted question mark inks 8 pixels left of its origin, so a turned
+    // box that starts with one holds 8 more on the left.
+    sheeted_open(&q, XFORM_STYLE ".t{width:100px;height:20px;transform:rotate(90deg)}</style>"
+                     "<div class=t>\xc2\xbf</div>",
+                 400, 600);
+    t = flow_layout(q.doc, q.page, 400, &q.env);
+    XformGroups overhang = {0};
+    vis.ctx = &overhang;
+    flow_visit_groups(t, (os64_gui_rect_t){0, 0, 400, 600}, top, &vis);
+    expect("transform: a glyph's ink past its advance is held by its group",
+           overhang.opens == 1 && rect_is(overhang.first, -8, 0, 108, 20), NULL);
+    vis.ctx = &gr;
+    flow_free(t);
+    sheeted_close(&q);
+
+    // A child's shadow is cut where the painter cuts it: 300px right of a
+    // box inside a 100 by 20 overflow: clip wrapper is all clipped away,
+    // and the turned group stays its own size.
+    sheeted_open(&q, XFORM_STYLE ".t{width:100px;transform:rotate(90deg)}"
+                     ".w{overflow:clip;width:100px;height:20px}"
+                     ".c{width:100px;height:20px;box-shadow:300px 0 #000}</style>"
+                     "<div class=t><div class=w><div class=c></div></div></div>",
+                 400, 600);
+    t = flow_layout(q.doc, q.page, 400, &q.env);
+    XformGroups cut_ink = {0};
+    vis.ctx = &cut_ink;
+    flow_visit_groups(t, (os64_gui_rect_t){0, 0, 400, 600}, top, &vis);
+    expect("transform: a clipped child's shadow grows no group",
+           cut_ink.opens == 1 && rect_is(cut_ink.first, 0, 0, 100, 20), NULL);
+    vis.ctx = &gr;
+    flow_free(t);
+    sheeted_close(&q);
+
+    // A box shadow is the frame's: a 5px spread round a 100 by 20 turned
+    // box reaches 6 past it, and its text — 18 m's, 216 wide, overflowing
+    // — casts no box shadow of its own: the group is the box grown 6 and
+    // the text's 216.
+    sheeted_open(&q, XFORM_STYLE ".t{width:100px;height:20px;white-space:nowrap;"
+                     "box-shadow:0 0 0 5px #000;transform:rotate(90deg)}</style>"
+                     "<div class=t>mmmmmmmmmmmmmmmmmm</div>",
+                 400, 600);
+    t = flow_layout(q.doc, q.page, 400, &q.env);
+    XformGroups framed = {0};
+    vis.ctx = &framed;
+    flow_visit_groups(t, (os64_gui_rect_t){0, 0, 400, 600}, top, &vis);
+    expect("transform: a box shadow is cast by the frame, not by its text",
+           framed.opens == 1 && rect_is(framed.first, -6, -6, 222, 32), NULL);
+    vis.ctx = &gr;
+    flow_free(t);
+    sheeted_close(&q);
+
+    // A rect that fits is held where it is: layout caps lengths far short
+    // of it, but a matrix can carry a rect 1.5e9 down, and it keeps its
+    // place there, not cut at half the range; one too wide for a rect is
+    // held to the middle of the range, where any view is.
+    const double far_m[6] = {1, 0, 0, 1, 0, 1.5e9};
+    const double wide_m[6] = {1e20, 0, 0, 1, 0, 0};
+    os64_gui_rect_t far_r = flow_affine_rect(far_m, (os64_gui_rect_t){0, 0, 100, 20});
+    os64_gui_rect_t wide_r = flow_affine_rect(wide_m, (os64_gui_rect_t){-10, 0, 20, 20});
+    expect("transform: a rect past half the range keeps its place; one too wide is centred",
+           rect_is(far_r, 0, 1500000000, 100, 20) && wide_r.x == INT32_MIN / 2 &&
+               wide_r.w == INT32_MAX / 2 - INT32_MIN / 2,
+           NULL);
+
     // A child's shadow is handed up as where it reaches: 100px right of a
     // 100px child is 201 across, inside its 400px turned parent, which
     // grows only the pixel the shadow casts above and below.

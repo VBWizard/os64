@@ -45,12 +45,12 @@ typedef struct {
     const yonder_dark_t *dark;
 } Painter;
 
-// A coordinate and a move added, held to half of what a 32-bit coordinate
-// can say, so a far shift never wraps.
+// A coordinate and a move added, held to what a 32-bit coordinate can say,
+// so a far shift never wraps — and one that fits is left where it is.
 static int32_t sum32(int64_t a, int64_t b)
 {
     int64_t v = a + b;
-    return (int32_t)(v < INT32_MIN / 2 ? INT32_MIN / 2 : v > INT32_MAX / 2 ? INT32_MAX / 2 : v);
+    return (int32_t)(v < INT32_MIN ? INT32_MIN : v > INT32_MAX ? INT32_MAX : v);
 }
 
 static double hue_part(double p, double q, double t)
@@ -1435,15 +1435,21 @@ static os64_gui_rect_t cut(os64_gui_rect_t r, os64_gui_rect_t c)
                              (int32_t)max64(0, y1 - y0)};
 }
 
-// `r` one pixel wider all round, held to what a rect can say.
+// `r` one pixel wider all round, held as libflow holds a bounds' rect:
+// each edge to a 32-bit coordinate, and one too wide for a 32-bit width
+// held to the middle of the range, where any view is.
 static os64_gui_rect_t widened(os64_gui_rect_t r)
 {
-    int64_t x0 = (int64_t)r.x - 1, y0 = (int64_t)r.y - 1;
-    int64_t x1 = (int64_t)r.x + r.w + 1, y1 = (int64_t)r.y + r.h + 1;
-    x0 = max64(x0, INT32_MIN / 2);
-    y0 = max64(y0, INT32_MIN / 2);
-    x1 = min64(x1, INT32_MAX / 2);
-    y1 = min64(y1, INT32_MAX / 2);
+    int64_t x0 = max64((int64_t)r.x - 1, INT32_MIN), y0 = max64((int64_t)r.y - 1, INT32_MIN);
+    int64_t x1 = min64((int64_t)r.x + r.w + 1, INT32_MAX), y1 = min64((int64_t)r.y + r.h + 1, INT32_MAX);
+    if (x1 - x0 > INT32_MAX) {
+        x0 = max64(x0, INT32_MIN / 2);
+        x1 = min64(x1, INT32_MAX / 2);
+    }
+    if (y1 - y0 > INT32_MAX) {
+        y0 = max64(y0, INT32_MIN / 2);
+        y1 = min64(y1, INT32_MAX / 2);
+    }
     return (os64_gui_rect_t){(int32_t)x0, (int32_t)y0, (int32_t)max64(0, x1 - x0),
                              (int32_t)max64(0, y1 - y0)};
 }
