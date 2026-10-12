@@ -818,6 +818,8 @@ static void path_invariants(void)
     CHECK(s->depth<=OS64_UI_MENU_DEPTH);
     CHECK(s->active? s->view!=NULL : (!s->view&&!s->depth&&!s->pending));
     CHECK(g.bar.view==s->bar_view);
+    if(s->active&&s->kind==OS64_UI_MENU_BAR&&!s->depth&&!s->pending)
+        CHECK(s->bar&&menu_bar_enabled(s->bar,s->bar->selected));
     for(size_t i=0;i<s->depth;++i) {
         menu_panel *p=&s->panels[i];
         CHECK(p->widget&&p->handle>0&&p->index==i&&p->session==s);
@@ -826,6 +828,7 @@ static void path_invariants(void)
         CHECK(transport.windows[p->handle].owner==(i?s->panels[i-1].handle:s->owner));
         CHECK(p->widget->view==s->view);
         CHECK(p->widget->selected==MENU_NONE||p->widget->selected<p->widget->model->count);
+        CHECK(p->widget->selected==MENU_NONE||os64_ui_popup_row(p->widget,p->widget->selected).h>0);
         if(i) {
             os64_ui_popup_t *parent=s->panels[i-1].widget;
             CHECK(parent->selected<parent->model->count);
@@ -1079,6 +1082,199 @@ static void review_round_four(void)
     printf("r4 transitions: %u sequences, %u invariant boundaries\n",audit_sequences,audit_boundaries);
 }
 
+static bool error_active;
+static size_t error_depth;
+static void lifecycle_error(void *u,os64_ui_status_code_t rc)
+{
+    audit_error(u,rc);
+    error_active=os64_ui_menu_active(g.menus);error_depth=g.menus->depth;
+    path_invariants();
+}
+static void deferred_error_precedence(void)
+{
+    current="r5 I2/I6 report deferred failure after close, prioritizing teardown";
+    for(unsigned allocation=0;allocation<2;++allocation) for(unsigned refused=0;refused<2;++refused) {
+        open_context(g.models[4],g.views[0]);int64_t root=popup_handle();
+        key(root,0,0x4d,0);
+        os64_ui_popup_t *p=g.menus->panels[0].widget;
+        os64_gui_rect_t row=os64_ui_popup_row(p,1);
+        for(unsigned i=0;i<150;++i) queue(1,(os64_gui_event_t){.type=OS64_GUI_EVENT_DOORBELL});
+        queue(root,mouse(OS64_GUI_EVENT_MOUSE_MOVE,10,row.y+2,0));
+        CHECK(os64_ui_dispatcher_turn(&g.dispatcher,false)==64);
+        CHECK(g.menus->pending&&g.menus->depth==1);path_invariants();
+        unsigned errors=error_count;
+        transport.fail_destroy=refused?root:0;
+        if(allocation) deny_countdown=0; else transport.fail_create=true;
+        drain();deny_countdown=-1;transport.fail_create=false;
+        CHECK(error_count==errors+1);
+        CHECK(last_error==(refused?OS64_UI_ERROR:allocation?OS64_UI_NO_MEMORY:OS64_UI_LIMIT));
+        CHECK(error_active==(refused!=0)&&error_depth==refused);
+        CHECK(g.menus->depth==refused&&!g.menus->pending);
+        transport.fail_destroy=0;
+        CHECK(os64_ui_menu_close(g.menus,OS64_UI_MENU_EXPLICIT)==OS64_UI_OK);drain();
+    }
+    current="r5 I2/I6 overflow preparation failure also reports teardown first";
+    key(1,0,0x44,0);key(1,0,0x50,0);
+    int64_t root=popup_handle();CHECK(root>0);
+    transport.fail_destroy=root;g.bar.w.bounds.w=1;
+    unsigned errors=error_count;deny_countdown=0;
+    queue(1,mouse(OS64_GUI_EVENT_MOUSE_BUTTON_DOWN,g.bar.w.bounds.x,g.bar.w.bounds.y+2,OS64_GUI_MOUSE_LEFT));drain();deny_countdown=-1;
+    CHECK(error_count==errors+1&&last_error==OS64_UI_ERROR&&error_active);
+    transport.fail_destroy=0;CHECK(os64_ui_menu_close(g.menus,OS64_UI_MENU_EXPLICIT)==OS64_UI_OK);drain();gallery_layout(&g,false);
+}
+static void refreshed_bar_selection(void)
+{
+    current="r5 I5/I9 refresh keeps bar-only selection usable";
+    os64_ui_menu_model_t *leaf=NULL,*headings=NULL;
+    os64_ui_menu_entry_t action={.action=RECORD};
+    CHECK(os64_ui_menu_model_create(g.actions,&action,1,&leaf)==OS64_UI_OK);
+    os64_ui_menu_entry_t entries[]={
+        {.kind=OS64_UI_MENU_SUBMENU,.label="Target",.child=leaf},
+        {.kind=OS64_UI_MENU_SUBMENU,.label="Other",.child=g.models[1]}};
+    CHECK(os64_ui_menu_model_create(g.actions,entries,2,&headings)==OS64_UI_OK);
+    CHECK(os64_ui_menubar_bind(&g.bar,headings)==OS64_UI_OK);
+    for(unsigned hidden=0;hidden<2;++hidden) for(unsigned alt=0;alt<2;++alt) {
+        g.targets[0].enabled=true;CHECK(os64_ui_actions_refresh(g.views[0])==OS64_UI_OK);
+        g.bar.selected=0;os64_ui_set_hidden(&g.ui,&g.bar.w,hidden!=0);gallery_layout(&g,false);
+        key(1,0,alt?0x38:0x44,alt?OS64_GUI_MOD_ALT:0);
+        CHECK(g.menus->active&&!g.menus->depth&&!g.menus->pending);
+        g.targets[0].enabled=false;
+        CHECK(os64_ui_menu_refresh(g.menus)==OS64_UI_OK);
+        CHECK(g.menus->active&&g.bar.selected==1&&menu_bar_enabled(&g.bar,g.bar.selected));
+        key(1,0,0x50,0);CHECK(g.menus->depth&&g.menus->panels[0].widget->model==g.models[1]);
+        CHECK(os64_ui_menu_close(g.menus,OS64_UI_MENU_EXPLICIT)==OS64_UI_OK);drain();
+    }
+    /* Same-view publication in an application's paint callback is another
+     * state publication route; it must normalize without pumping events. */
+    os64_ui_set_hidden(&g.ui,&g.bar.w,false);gallery_layout(&g,false);
+    g.targets[0].enabled=true;CHECK(os64_ui_actions_refresh(g.views[0])==OS64_UI_OK);
+    g.bar.selected=0;key(1,0,0x44,0);
+    g.targets[0].enabled=false;CHECK(os64_ui_actions_refresh(g.views[0])==OS64_UI_OK);
+    CHECK(os64_ui_menu_bar_view(g.menus,g.views[0])==OS64_UI_OK);
+    CHECK(g.bar.selected==1&&menu_bar_enabled(&g.bar,g.bar.selected));
+    CHECK(os64_ui_menu_close(g.menus,OS64_UI_MENU_EXPLICIT)==OS64_UI_OK);drain();
+
+    current="r5 I3/I5 refresh cancels an invalid pending bar root before normalization";
+    g.targets[0].enabled=true;CHECK(os64_ui_actions_refresh(g.views[0])==OS64_UI_OK);
+    open_context(leaf,g.views[0]);g.bar.selected=0;
+    for(unsigned i=0;i<150;++i) queue(1,(os64_gui_event_t){.type=OS64_GUI_EVENT_DOORBELL});
+    unsigned births=transport.creates;
+    CHECK(os64_ui_menu_open(g.menus,leaf,g.views[0],(os64_gui_rect_t){100,100,0,0},OS64_UI_MENU_BAR)==OS64_UI_BUSY);
+    g.targets[0].enabled=false;CHECK(os64_ui_menu_refresh(g.menus)==OS64_UI_OK);
+    CHECK(g.menus->active&&!g.menus->pending&&!g.menus->depth&&g.bar.selected==1);
+    drain();CHECK(transport.creates==births);key(1,0,0x50,0);
+    CHECK(g.menus->depth&&g.menus->panels[0].widget->model==g.models[1]);
+    CHECK(os64_ui_menu_close(g.menus,OS64_UI_MENU_EXPLICIT)==OS64_UI_OK);drain();
+
+    os64_ui_menu_model_release(headings);
+    CHECK(os64_ui_menu_model_create(g.actions,entries,1,&headings)==OS64_UI_OK);
+    CHECK(os64_ui_menubar_bind(&g.bar,headings)==OS64_UI_OK);
+    g.targets[0].enabled=true;CHECK(os64_ui_actions_refresh(g.views[0])==OS64_UI_OK);
+    os64_ui_set_hidden(&g.ui,&g.bar.w,true);gallery_layout(&g,false);
+    g.bar.selected=0;key(1,0,0x44,0);g.targets[0].enabled=false;
+    CHECK(os64_ui_menu_refresh(g.menus)==OS64_UI_OK);
+    CHECK(!g.menus->active&&!g.menus->view&&!g.bar.temporary&&g.bar.w.hidden);
+    CHECK(os64_ui_menu_close(g.menus,OS64_UI_MENU_EXPLICIT)==OS64_UI_OK);drain();
+    /* Popup refresh also needs owner damage when bar selection is unchanged. */
+    g.targets[0].enabled=true;CHECK(os64_ui_actions_refresh(g.views[0])==OS64_UI_OK);
+    os64_ui_set_hidden(&g.ui,&g.bar.w,false);gallery_layout(&g,false);
+    CHECK(os64_ui_menu_bar_view(g.menus,g.views[0])==OS64_UI_OK);owner_render(&g);
+    open_context(leaf,g.views[0]);owner_render(&g);uint64_t pixels=bar_pixels();
+    g.targets[0].enabled=false;CHECK(os64_ui_menu_refresh(g.menus)==OS64_UI_OK);
+    os64_gui_rect_t damage={0},intersection;CHECK(os64_ui_render(&g.ui,&damage));
+    CHECK(os64_rect_intersect(damage,g.bar.w.bounds,&intersection));CHECK(bar_pixels()!=pixels);
+    CHECK(os64_ui_menu_close(g.menus,OS64_UI_MENU_EXPLICIT)==OS64_UI_OK);drain();
+    CHECK(os64_ui_menubar_bind(&g.bar,g.models[5])==OS64_UI_OK);
+    os64_ui_menu_model_release(headings);os64_ui_menu_model_release(leaf);
+    g.targets[0].enabled=true;CHECK(os64_ui_actions_refresh(g.views[0])==OS64_UI_OK);
+}
+static void scroll_noop_and_tail(void)
+{
+    current="r5 I1/I3 no-op wheel preserves a short parent's child path";
+    open_context(g.models[4],g.views[0]);int64_t root=popup_handle();key(root,0,0x4d,0);
+    int64_t child_handle=popup_handle();unsigned deaths=transport.destroys;uint64_t token=g.menus->help_token;
+    for(int rows=-1;rows<=1;++rows) {
+        os64_gui_event_t wheel={.type=OS64_GUI_EVENT_MOUSE_WHEEL};wheel.mouse.dy=rows;
+        queue(root,wheel);drain();CHECK(popup_handle()==child_handle&&transport.destroys==deaths);
+        CHECK(g.menus->help_token==token);
+    }
+    CHECK(os64_ui_menu_close(g.menus,OS64_UI_MENU_EXPLICIT)==OS64_UI_OK);drain();
+    current="r5 I3 no-op wheel preserves pending child intent";
+    open_context(g.models[4],g.views[0]);root=popup_handle();key(root,0,0x4d,0);
+    os64_ui_popup_t *parent=g.menus->panels[0].widget;
+    os64_gui_rect_t row=os64_ui_popup_row(parent,1);
+    for(unsigned i=0;i<150;++i) queue(1,(os64_gui_event_t){.type=OS64_GUI_EVENT_DOORBELL});
+    queue(root,mouse(OS64_GUI_EVENT_MOUSE_MOVE,10,row.y+2,0));
+    CHECK(os64_ui_dispatcher_turn(&g.dispatcher,false)==64);
+    CHECK(g.menus->pending&&g.menus->pending==g.models[3]);unsigned births=transport.creates;
+    os64_gui_event_t wheel={.type=OS64_GUI_EVENT_MOUSE_WHEEL};wheel.mouse.dy=1;
+    queue(root,wheel);drain();
+    CHECK(transport.creates==births+1&&g.menus->depth==2&&g.menus->panels[1].widget->model==g.models[3]);
+    CHECK(os64_ui_menu_close(g.menus,OS64_UI_MENU_EXPLICIT)==OS64_UI_OK);drain();
+
+    os64_ui_menu_model_t *tall=NULL;
+    os64_ui_menu_entry_t entries[50];
+    for(unsigned i=0;i<50;++i) entries[i]=(os64_ui_menu_entry_t){.kind=OS64_UI_MENU_SUBMENU,.label="Child",.child=g.models[2]};
+    CHECK(os64_ui_menu_model_create(g.actions,entries,50,&tall)==OS64_UI_OK);
+    transport.sh=220;
+    for(unsigned end=0;end<2;++end) for(unsigned affordance=0;affordance<2;++affordance) {
+        current="r5 I1/I3 clamped viewport preserves child and help";
+        open_context(tall,g.views[0]);root=popup_handle();
+        if(end) key(root,0,0x4f,0);
+        key(root,0,0x4d,0);child_handle=popup_handle();deaths=transport.destroys;token=g.menus->help_token;
+        if(affordance) {
+            os64_ui_popup_t *p=g.menus->panels[0].widget;
+            queue(root,mouse(OS64_GUI_EVENT_MOUSE_BUTTON_DOWN,10,end?p->w.bounds.h-1:1,OS64_GUI_MOUSE_LEFT));
+        } else {
+            os64_gui_event_t wheel={.type=OS64_GUI_EVENT_MOUSE_WHEEL};wheel.mouse.dy=end?1:-1;queue(root,wheel);
+        }
+        drain();CHECK(popup_handle()==child_handle&&transport.destroys==deaths&&g.menus->help_token==token);
+        /* An actual viewport change must close children; failed destruction
+         * leaves the old anchor and top intact until retry. */
+        transport.fail_destroy=child_handle;
+        size_t old_top=g.menus->panels[0].widget->top;
+        os64_gui_event_t move={.type=OS64_GUI_EVENT_MOUSE_WHEEL};move.mouse.dy=end?-1:1;
+        queue(root,move);drain();CHECK(g.menus->depth==2&&g.menus->panels[0].widget->top==old_top);
+        transport.fail_destroy=0;queue(root,move);drain();CHECK(g.menus->depth==1&&g.menus->panels[0].widget->top!=old_top);
+        CHECK(os64_ui_menu_close(g.menus,OS64_UI_MENU_EXPLICIT)==OS64_UI_OK);drain();
+    }
+    transport.sh=768;os64_ui_menu_model_release(tall);
+
+    current="r5 I9 final viewport packs mixed-height rows";
+    for(unsigned i=0;i<50;++i) entries[i]=i%3==1?(os64_ui_menu_entry_t){.kind=OS64_UI_MENU_SEPARATOR}:(os64_ui_menu_entry_t){.action=100+i};
+    CHECK(os64_ui_menu_model_create(g.actions,entries,50,&tall)==OS64_UI_OK);
+    const int heights[]={150,183,220};
+    for(size_t size=0;size<sizeof(heights)/sizeof(*heights);++size) {
+        os64_ui_popup_t *p=NULL;
+        CHECK(os64_ui_popup_create(&g.ui,tall,g.views[0],NULL,400,heights[size],&p)==OS64_UI_OK);
+        os64_ui_popup_scroll(p,INT32_MAX);
+        CHECK(p->bottom==p->model->count&&p->bottom-p->top>1);
+        int used=0;
+        for(size_t i=p->top;i<p->bottom;++i) used+=os64_ui_popup_row(p,i).h;
+        int room=p->w.bounds.h-2*p->row_h;
+        CHECK(used<=room);
+        if(p->top) {
+            int preceding=p->model->entries[p->top-1].kind==OS64_UI_MENU_SEPARATOR?MENU_SEP:p->row_h;
+            CHECK(used+preceding>room); /* No earlier row fits in the tail. */
+        }
+        size_t tail=p->top;os64_ui_popup_scroll(p,INT32_MAX);CHECK(p->top==tail);
+        os64_ui_popup_scroll(p,INT32_MIN);CHECK(!p->top);
+        for(unsigned i=0;i<100;++i) os64_ui_popup_scroll(p,1);
+        CHECK(p->top==tail&&p->bottom==p->model->count);
+        os64_ui_popup_select(p,p->model->count-1);CHECK(p->top==tail);
+        os64_ui_popup_destroy(p);
+    }
+    os64_ui_menu_model_release(tall);
+}
+static void review_round_five(void)
+{
+    audit_enabled=true;
+    os64_ui_menu_hooks(g.menus,gallery_menu_layout,lifecycle_error,&g);
+    deferred_error_precedence();refreshed_bar_selection();scroll_noop_and_tail();
+    audit_enabled=false;
+    os64_ui_menu_hooks(g.menus,gallery_menu_layout,gallery_menu_error,&g);
+}
+
 int main(int argc,char **argv)
 {
     setvbuf(stdout,NULL,_IONBF,0);
@@ -1092,6 +1288,10 @@ int main(int argc,char **argv)
         build(dir,true);review_round_four();dispose();
         printf("r4: %lu checks, %d failures\n",checks,failures);return failures?1:0;
     }
-    build(dir,true);models();disabled_bar_and_overflow_failure();dismissal_orders();activation_and_loss();quarantine();pending_context_keys();review_navigation();destruction_failure(dir);review_round_two();review_round_three();review_round_four();navigation();burst_and_pointer_navigation();standalone();callback_and_icon_contract();placement_and_fonts(dir);collapse_pending_child();dispose();
+    if(getenv("E1B_R5_ONLY")) {
+        build(dir,true);review_round_five();dispose();
+        printf("r5: %lu checks, %d failures\n",checks,failures);return failures?1:0;
+    }
+    build(dir,true);models();disabled_bar_and_overflow_failure();dismissal_orders();activation_and_loss();quarantine();pending_context_keys();review_navigation();destruction_failure(dir);review_round_two();review_round_three();review_round_four();review_round_five();navigation();burst_and_pointer_navigation();standalone();callback_and_icon_contract();placement_and_fonts(dir);collapse_pending_child();dispose();
     printf("menu/action/status: %lu checks, %d failures\n",checks,failures);return failures?1:0;
 }

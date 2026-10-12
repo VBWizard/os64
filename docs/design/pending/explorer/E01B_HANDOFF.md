@@ -112,6 +112,15 @@ opening share retained-view preparation, and event-only failures report through
 the configured hook. [Fourth review evidence](evidence/e01b/review-r4/README.md)
 records interrupted sequences and production owner pixel/damage checks.
 
+The fifth review makes bar-only selection eligibility part of snapshot
+publication, including same-view updates and invalid pending-root cancellation.
+Failure cleanup precedes notification and gives refused teardown precedence for
+deferred/root opening and preparation. A shared viewport calculation preserves
+children, pending intent and help on clamped scrolling; actual movement closes
+descendants before changing top. The final viewport packs command/separator
+heights instead of allowing a one-row tail. [Fifth review evidence](evidence/e01b/review-r5/README.md)
+records the combined-failure and scroll transition regressions.
+
 Retired focus records are ignored by a pending replacement, including old birth
 focus-lost records. Unknown live focus peers dismiss conservatively. A sibling
 application window is outside the family. Native conditional focus return is

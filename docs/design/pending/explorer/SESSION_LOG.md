@@ -566,3 +566,36 @@ live heap returns to the warm baseline after 24 more openings. Real-font
 UI/editor (1,626), Scribe (2,470) and font contract/ABI checks pass with leak
 detection. The evidence includes a focused P5 repeat for the updated build;
 no new P5 deployment or result is claimed.
+
+## 2026-10-12 — E1B fifth review: publication and viewport effects
+
+Confirmed all four findings against `36e93f67`: deferred failure notification
+preceded cleanup and hid failed teardown, bar-only refresh skipped selection
+normalization, a no-op wheel closed descendants, and downward scroll allowed a
+one-row final viewport. The audit extends selection eligibility after state
+publication and viewport effects. Failure cleanup gives teardown precedence
+before notification across deferred/root opening and preparation paths. Entry,
+refresh and bar-target publication share selection normalization; an invalid
+pending root is cancelled before its heading changes. A nonmutating viewport
+calculation gates descendant closure, preserving live/pending paths on no-op
+scrolling. Final viewport bounds use actual command/separator heights, including
+selection reveal.
+
+A scratch baseline compiles current regressions against the reviewed menu
+sources and records 78 failing assertions without fixture faults. Complete
+fake/real suites pass 125,601/125,649 assertions with ASan, UBSan and LeakSanitizer
+enabled outside the sandbox. Fourteen deliberate hazards are detected. Tests
+cover allocation/native opening failure combined with successful/refused parent
+teardown, error hook observation, bar-only refresh/same-view publication,
+invalid pending root, no-op/actual scroll and three mixed-height viewport sizes.
+The strict userland build passes. [Fifth review evidence](evidence/e01b/review-r5/README.md)
+records reproduction and manifests. Review remains pending; earlier P5 evidence
+remains separate from these changes.
+
+Final native HID and PS/2 scroll controllers preserve an open child on no-op
+wheel and show a packed final viewport (rows 18–49 at the bitmap Interface size),
+then invoke visible command 118 with menus closed. The standard keyboard,
+pointer, font/overflow and external-close controllers also pass. Archived trace,
+image and heap checks confirm zero font/target ownership at exit and stable
+live heap across warm/repeated openings. A focused P5 repeat is documented;
+no new hardware result or deployment is claimed.

@@ -16,6 +16,13 @@ modules = ['ui_menu', 'ui_menu_widget', 'ui_dispatcher', 'ui_icon', 'ui_action',
            'ui_font', 'ui', 'ui_controls', 'ui_list', 'ui_text', 'font_provider', 'font_adopt',
            'text', 'fmt', 'ui_theme', 'text_cache', 'text_decode', 'text_bitmap', 'text_draw', 'draw', 'str']
 mutations = {
+    'deferred-teardown-error-lost': {'ui_menu': ('if(rc) report(s,close_after_failure(s,rc));',
+        'if(rc) { report(s,rc); (void)os64_ui_menu_close(s,OS64_UI_MENU_EXPLICIT); }')},
+    'refresh-keeps-disabled-bar-selection': {'ui_menu': ('if(!s->active||s->kind!=OS64_UI_MENU_BAR||s->depth) return OS64_UI_OK;',
+        'if(true) return OS64_UI_OK;')},
+    'clamped-scroll-collapses-children': {'ui_menu': ('if(menu_popup_scroll_top(p,rows)==p->top) return;', '(void)rows;')},
+    'scroll-packs-one-row-tail': {'ui_menu_widget': ('return top;\n}\nsize_t menu_popup_scroll_top',
+        'return p->model->count-1;\n}\nsize_t menu_popup_scroll_top')},
     'refresh-detaches-surviving-child': {'ui_menu': ('return panel_select(s,i,MENU_NONE)?OS64_UI_OK:OS64_UI_ERROR;',
         'rc=close_to(s,i+1); os64_ui_popup_select(p,MENU_NONE); return rc;')},
     'refresh-skips-bar-damage': {'ui_menu': ('os64_ui_status_code_t rc=os64_ui_actions_refresh(s->view);\n    publish_bar(s,false);',

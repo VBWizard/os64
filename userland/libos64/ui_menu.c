@@ -179,18 +179,25 @@ static os64_ui_status_code_t close_report(os64_ui_menu_session_t *s,os64_ui_menu
     os64_ui_status_code_t rc=os64_ui_menu_close(s,reason);
     report(s,rc); return rc;
 }
+static os64_ui_status_code_t close_after_failure(os64_ui_menu_session_t *s,os64_ui_status_code_t failure)
+{
+    /* Report after cleanup: a surviving registration makes teardown failure
+     * the result the application must handle before releasing borrowed state. */
+    os64_ui_status_code_t closed=os64_ui_menu_close(s,OS64_UI_MENU_EXPLICIT);
+    return closed?closed:failure;
+}
 static os64_ui_status_code_t request_panel(os64_ui_menu_session_t *s,os64_ui_menu_model_t *m,size_t level)
 {
     release_pending(s);
     os64_ui_status_code_t rc=close_to(s,level);
-    if(rc) { report(s,rc); return rc; }
+    if(rc) return rc;
     rc=open_panel(s,m,level);
     if(rc==OS64_UI_BUSY) {
         rc=os64_ui_menu_model_retain(m);
         if(!rc) { s->pending=m; s->pending_depth=level; rc=OS64_UI_BUSY; }
     }
     if(level&&rc!=OS64_UI_OK&&rc!=OS64_UI_BUSY) { s->failed_panel=level-1; s->failed_row=s->panels[level-1].widget->selected; }
-    report(s,rc); return rc;
+    return rc;
 }
 os64_ui_status_code_t os64_ui_menu_open(os64_ui_menu_session_t *s,os64_ui_menu_model_t *m,
     os64_ui_action_view_t *v,os64_gui_rect_t anchor,os64_ui_menu_invocation_t kind)
@@ -208,7 +215,7 @@ os64_ui_status_code_t os64_ui_menu_open(os64_ui_menu_session_t *s,os64_ui_menu_m
     if(s->bar) os64_ui_mark_dirty(s->ui,&s->bar->w);
     s->saved_focus=s->ui->focus; os64_ui_cancel_gestures(s->ui);
     rc=request_panel(s,m,0);
-    if(rc!=OS64_UI_OK&&rc!=OS64_UI_BUSY) os64_ui_menu_close(s,OS64_UI_MENU_EXPLICIT);
+    if(rc!=OS64_UI_OK&&rc!=OS64_UI_BUSY) { rc=close_after_failure(s,rc); report(s,rc); }
     return rc;
 }
 static void boundary(void *user,bool empty)
@@ -221,7 +228,7 @@ static void boundary(void *user,bool empty)
         os64_ui_menu_model_t *m=s->pending; s->pending=NULL;
         os64_ui_status_code_t rc=open_panel(s,m,s->pending_depth);
         os64_ui_menu_model_release(m);
-        if(rc) { report(s,rc); os64_ui_menu_close(s,OS64_UI_MENU_EXPLICIT); }
+        if(rc) report(s,close_after_failure(s,rc));
     }
 }
 os64_ui_status_code_t os64_ui_menu_session_create(os64_ui_dispatcher_t *d,os64_ui_t *ui,int64_t owner,
@@ -263,13 +270,38 @@ os64_ui_status_code_t os64_ui_menu_session_dispose(os64_ui_menu_session_t *s)
     os64_ui_action_view_release(s->bar_view); os64_free(s);
     return OS64_UI_OK;
 }
+static bool normalize_bar_selection(os64_ui_menu_session_t *s)
+{
+    os64_ui_menubar_t *b=s->bar;
+    size_t visible=menu_bar_visible(b),count=b&&b->model?
+        visible+(visible<b->model->count?1:0):0;
+    size_t selected=b?b->selected:MENU_NONE;
+    if(!b||b->w.disabled) return false;
+    if(selected>=count||!menu_bar_enabled(b,selected)) {
+        selected=MENU_NONE;
+        for(size_t i=0;i<count;++i) if(menu_bar_enabled(b,i)) { selected=i; break; }
+    }
+    if(b->selected!=selected) { b->selected=selected; os64_ui_mark_dirty(s->ui,&b->w); }
+    return selected!=MENU_NONE;
+}
+static os64_ui_status_code_t sync_bar_mode(os64_ui_menu_session_t *s)
+{
+    /* Live panels retain their anchor until path teardown. An invalidated
+     * pending root is cancelled before normalizing its displayed heading. */
+    if(!s->active||s->kind!=OS64_UI_MENU_BAR||s->depth) return OS64_UI_OK;
+    if(s->pending) {
+        if(menu_model_enabled(s->pending,s->view)) return OS64_UI_OK;
+        release_pending(s); cancel_press(s);
+    }
+    return normalize_bar_selection(s)?OS64_UI_OK:os64_ui_menu_close(s,OS64_UI_MENU_EXPLICIT);
+}
 os64_ui_status_code_t os64_ui_menu_bar_view(os64_ui_menu_session_t *s,os64_ui_action_view_t *v)
 {
     if(!s||!v||(s->bar&&s->bar->model&&!os64_ui_action_view_registry(v,s->bar->model->actions))) return OS64_UI_INVALID;
-    if(s->bar_view==v) { publish_bar(s,false); return OS64_UI_OK; }
+    if(s->bar_view==v) { publish_bar(s,false); return sync_bar_mode(s); }
     os64_ui_status_code_t rc=os64_ui_action_view_retain(v);
     if(!rc) { os64_ui_action_view_release(s->bar_view); s->bar_view=v; if(s->bar) s->bar->view=v; publish_bar(s,true); }
-    return rc;
+    return rc?rc:sync_bar_mode(s);
 }
 os64_ui_status_code_t os64_ui_menu_refresh(os64_ui_menu_session_t *s)
 {
@@ -277,9 +309,10 @@ os64_ui_status_code_t os64_ui_menu_refresh(os64_ui_menu_session_t *s)
     os64_ui_status_code_t rc=os64_ui_actions_refresh(s->view);
     publish_bar(s,false);
     if(rc) {
-        os64_ui_status_code_t closed=os64_ui_menu_close(s,OS64_UI_MENU_EXPLICIT);
-        return closed?closed:rc;
+        return close_after_failure(s,rc);
     }
+    rc=sync_bar_mode(s);
+    if(rc) return rc;
     for(size_t i=0;i<s->depth;++i) {
         os64_ui_popup_t *p=s->panels[i].widget;
         if(!menu_selectable(p,p->selected)) {
@@ -312,7 +345,7 @@ static void child(os64_ui_menu_session_t *s,size_t level,bool explicit)
     os64_ui_menu_entry_t *e=&p->model->entries[p->selected];
     if(e->child) {
         if(s->depth>level+1&&s->panels[level+1].widget->model==e->child) return;
-        (void)request_panel(s,e->child,level+1);
+        report(s,request_panel(s,e->child,level+1));
     }
 }
 static bool panel_select(os64_ui_menu_session_t *s,size_t level,size_t row)
@@ -403,12 +436,7 @@ static void bar_mode(os64_ui_menu_session_t *s)
     os64_ui_status_code_t rc=prepare_bar_view(s);
     if(rc) { report(s,rc); return; }
     reveal(s);
-    size_t visible=menu_bar_visible(s->bar),count=visible+(visible<s->bar->model->count?1:0);
-    if(s->bar->selected>=count||!menu_bar_enabled(s->bar,s->bar->selected)) {
-        s->bar->selected=MENU_NONE;
-        for(size_t i=0;i<count;++i) if(menu_bar_enabled(s->bar,i)) { s->bar->selected=i; break; }
-    }
-    if(s->bar->selected==MENU_NONE) {
+    if(!normalize_bar_selection(s)) {
         (void)os64_ui_menu_close(s,OS64_UI_MENU_EXPLICIT); return;
     }
     s->saved_focus=s->ui->focus; os64_ui_cancel_gestures(s->ui);
@@ -431,7 +459,7 @@ static void bar_open_target(os64_ui_menu_session_t *s,size_t index,bool direct)
         index=visible;
         rc=os64_ui_menu_model_create(b->model->actions,b->model->entries+visible,b->model->count-visible,&m);
     } else { m=b->model->entries[index].child; rc=os64_ui_menu_model_retain(m); }
-    if(rc) { report(s,rc); os64_ui_menu_close(s,OS64_UI_MENU_EXPLICIT); return; }
+    if(rc) { report(s,close_after_failure(s,rc)); return; }
     for(size_t i=0;i<index&&i<visible;++i) x+=b->widths[i]+2*MENU_GAP;
     /* Preserve temporary reveal across replacement; open normally collapses
      * an older context session, so reveal after its close and reflow first. */
@@ -441,8 +469,7 @@ static void bar_open_target(os64_ui_menu_session_t *s,size_t index,bool direct)
     if(temporary) reveal(s);
     rc=prepare_bar_view(s);
     if(rc) {
-        os64_ui_status_code_t closed=os64_ui_menu_close(s,OS64_UI_MENU_EXPLICIT);
-        report(s,closed?closed:rc); os64_ui_menu_model_release(m); return;
+        os64_ui_menu_model_release(m); report(s,close_after_failure(s,rc)); return;
     }
     s->saved_focus=s->ui->focus; os64_ui_cancel_gestures(s->ui);
     s->active=true; s->kind=OS64_UI_MENU_BAR;
@@ -452,7 +479,7 @@ static void bar_open_target(os64_ui_menu_session_t *s,size_t index,bool direct)
     s->anchor=(os64_gui_rect_t){x,b->w.bounds.y,index>=visible?b->overflow_width:b->widths[index]+2*MENU_GAP,b->w.bounds.h};
     os64_ui_cancel_gestures(s->ui);
     rc=request_panel(s,m,0); os64_ui_menu_model_release(m);
-    if(rc!=OS64_UI_OK&&rc!=OS64_UI_BUSY) os64_ui_menu_close(s,OS64_UI_MENU_EXPLICIT);
+    if(rc!=OS64_UI_OK&&rc!=OS64_UI_BUSY) { report(s,close_after_failure(s,rc)); return; }
     os64_ui_mark_dirty(s->ui,&b->w);
 }
 static void bar_open(os64_ui_menu_session_t *s,size_t index) { bar_open_target(s,index,false); }
@@ -657,11 +684,12 @@ static void panel_paint(void *user)
 }
 static void panel_scroll(os64_ui_menu_session_t *s,size_t level,int32_t rows)
 {
+    os64_ui_popup_t *p=s->panels[level].widget;
+    if(menu_popup_scroll_top(p,rows)==p->top) return;
     cancel_press(s);
     if(s->pending&&s->pending_depth>level) release_pending(s);
     os64_ui_status_code_t rc=close_to(s,level+1);
     if(rc) { report(s,rc); return; }
-    os64_ui_popup_t *p=s->panels[level].widget;
     os64_ui_popup_scroll(p,rows); help(s,p);
 }
 static void panel_event(void *user,const os64_gui_event_t *e)

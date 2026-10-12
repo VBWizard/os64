@@ -42,6 +42,11 @@ rendering. The pre-fix run reproduces all four findings. Final suites pass
 and 5,622 observation points are reported separately from assertion counts.
 The [invariant table](../../E01B_INVARIANTS.md) records scope and commitments.
 
+[Fifth review evidence](review-r5/README.md) covers deferred cleanup error
+precedence, bar-only eligibility after publication, no-op scroll preservation
+and packing the final viewport by actual row heights. Its scratch baseline
+compiles current regressions against the reviewed `36e93f67` menu sources.
+
 Before publication, the branch fast-forwarded to `f7f2f508`; those upstream
 CSS-transform fixes touch no menu, font or action files.
 

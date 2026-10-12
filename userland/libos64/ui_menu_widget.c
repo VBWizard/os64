@@ -123,10 +123,26 @@ bool menu_selectable(os64_ui_popup_t *p,size_t i)
     os64_ui_action_state_t s={0};
     return os64_ui_action_snapshot(p->view,e->action,&s)==OS64_UI_OK&&s.enabled;
 }
-static int32_t height(os64_ui_popup_t *p,size_t i)
+static int32_t height(const os64_ui_popup_t *p,size_t i)
 { return p->model->entries[i].kind==OS64_UI_MENU_SEPARATOR?MENU_SEP:p->row_h; }
+static size_t final_top(const os64_ui_popup_t *p)
+{
+    int32_t room=p->w.bounds.h-2*p->row_h,used=0;
+    size_t top=p->model->count;
+    /* Pack the tail using actual row heights; separators are shorter than
+     * commands. The preceding row cannot fit in this final viewport. */
+    while(top&&used+height(p,top-1)<=room) used+=height(p,--top);
+    return top;
+}
+size_t menu_popup_scroll_top(const os64_ui_popup_t *p,int32_t rows)
+{
+    if(!p||!p->scroll) return p?p->top:0;
+    size_t top=ui_scroll_rows(p->top,rows),last=final_top(p);
+    return top>last?last:top;
+}
 static void viewport(os64_ui_popup_t *p)
 {
+    if(p->scroll) { size_t last=final_top(p); if(p->top>last) p->top=last; }
     int32_t y=p->scroll?p->row_h:MENU_PAD;
     int32_t end=p->w.bounds.h-(p->scroll?p->row_h:MENU_PAD);
     p->bottom=p->top;
@@ -135,8 +151,8 @@ static void viewport(os64_ui_popup_t *p)
 void os64_ui_popup_scroll(os64_ui_popup_t *p,int32_t rows)
 {
     if(!p||!p->scroll) return;
-    size_t top=ui_scroll_rows(p->top,rows);
-    if(top>=p->model->count) top=p->model->count-1;
+    size_t top=menu_popup_scroll_top(p,rows);
+    if(top==p->top) return;
     p->top=top; viewport(p);
     if(p->selected<p->top||p->selected>=p->bottom) p->selected=MENU_NONE;
 }
@@ -154,8 +170,8 @@ os64_gui_rect_t os64_ui_popup_row(const os64_ui_popup_t *p,size_t i)
 {
     if(!p||i<p->top||i>=p->bottom) return (os64_gui_rect_t){0};
     int32_t y=p->scroll?p->row_h:MENU_PAD;
-    for(size_t k=p->top;k<i;++k) y+=height((os64_ui_popup_t *)p,k);
-    return (os64_gui_rect_t){MENU_PAD,y,p->w.bounds.w-2*MENU_PAD,height((os64_ui_popup_t *)p,i)};
+    for(size_t k=p->top;k<i;++k) y+=height(p,k);
+    return (os64_gui_rect_t){MENU_PAD,y,p->w.bounds.w-2*MENU_PAD,height(p,i)};
 }
 int os64_ui_popup_hit(const os64_ui_popup_t *p,int32_t x,int32_t y)
 {

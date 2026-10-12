@@ -1,0 +1,4 @@
+shot r5-ps2-short-parent-before-wheel
+shot r5-ps2-short-parent-after-wheel
+shot r5-ps2-packed-tail
+shot r5-ps2-tail-selection

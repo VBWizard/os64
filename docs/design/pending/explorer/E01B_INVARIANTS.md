@@ -7,7 +7,7 @@ commitments; host tests check them between events and dispatcher turns.
 | State | Owned/live state | Exit obligation |
 | --- | --- | --- |
 | Closed | No session view, panels or pending model; bar view remains independently retained | New request prepares its saved target before activation |
-| Bar mode | Active saved view and displayed bar selection; no panel/pending model | Open selected panel, or close/recover original focus |
+| Bar mode | Active saved view and eligible displayed bar selection; no panel/pending model | Open selected panel, or close/recover original focus |
 | Live cascade | Active saved view, contiguous registered panels with parent/model/selection links | Destroy children before changing their parent anchor or releasing owner state |
 | Pending opening | Active saved view and retained model at the next path slot; creation awaits surviving queue drains | Revalidate parent/model link, cancel on path change, or publish after quarantine |
 | Refused teardown | Surviving panels, view, hooks and font context remain owned; pending intent and pressed activation are cancelled | Retry destruction; commit selection/focus/visibility release after successful closure |
@@ -18,11 +18,12 @@ commitments; host tests check them between events and dispatcher turns.
 | I2: failed native removal does not release or detach surviving borrowed state | Close, refresh, selection, scroll, replacement, font adoption, disposal | Inject failure at each depth; selection/anchor stays intact until removal succeeds |
 | I3: pending intent belongs to the current surviving parent and saved target | Replacement, collapse, selection, scrolling, loss, boundary creation | Vary queue budget/order and interrupt before the drain boundary; no orphan birth |
 | I4: input pairing belongs to the current family delivery route | Matched release, owner dismissal, external focus, coverage, INPUT_LOST | Family transitions retain necessary guards; interrupted delivery clears them; unrelated later input passes |
-| I5: visible bar state tracks its model/view/selection and invocation kind | View switch, state refresh, bar navigation, context opening, close, font/theme adoption | Use production owner rendering, dirty damage and pixels, including partial repaint |
+| I5: visible bar state tracks its model/view/selection and invocation kind; bar-only selection stays eligible after publication | View switch, state refresh, bar navigation, context opening, close, font/theme adoption | Use production owner rendering, dirty damage and pixels, including partial repaint |
 | I6: an explicit menu opening/closing request has an observable outcome | Alt/F10, mnemonic, pointer open, deferred opening, native/resource failure | Return a result or notify the error hook; repeat suppression does not suppress a fresh gesture |
 | I7: invocation owns its saved target independently and validates it after close | Keyboard/pointer activation, shortcuts, stale/disabled target, callback teardown | No callback with live menus; no mutation against a stale target; no widget access after callback |
 | I8: font and handle lifetimes follow native ownership and the attached owner UI | Font change/release, child-first close, disposal, tombstone draining | Close before font adoption; failed close refuses release; no handle reuse before surviving queues drain |
 | I9: menu gestures act on visible selectable state with the governing input precedence | Wheel, navigation, page distance, activation, menu mnemonics versus action shortcuts | Active owner wheel is consumed; hidden rows cannot invoke; page distance counts model rows; menu gestures precede unmodified shortcuts |
+| I10: viewport effects follow actual movement and tail geometry | Wheel, affordances, selection reveal, extreme counts, child/pending path | No-op preserves path/help/intent; actual movement closes descendants before changing top; final viewport packs a fitting suffix using row heights |
 
 The review findings map to obligations rather than individual source lines:
 
@@ -46,6 +47,10 @@ The review findings map to obligations rather than individual source lines:
 | R4 bar state changes without damage | I5 | Successful/invalidated snapshots, view swap, same-view update and context painting |
 | R4 external loss strands input guards | I4 | Open/closed session loss, family release, mouse suppression, INPUT_LOST and coverage |
 | R4 bare Alt/F10 refresh failure is silent | I6/I8 | Shared retained-view preparation, visible/hidden mode and repeat versus fresh gesture |
+| R5 deferred opening hides failed teardown | I2/I6/I8 | Deferred/immediate failure cleanup, model/view preparation and error hook observation |
+| R5 refreshed bar-only selection is disabled | I5/I9 | Entry, explicit refresh, same-view/target publication, all-disabled collapse and invalid pending roots |
+| R5 no-op wheel collapses children | I3/I10 | Non-scroll parent, zero delta, edge clamps, affordances, pending intent and failed actual movement |
+| R5 final viewport contains one row | I9/I10 | Actual separator/command heights, extreme counts, repeated movement and selection reveal |
 
 Earlier-round tests remain in the complete suite; the fourth-round observer
 adds path checks between events and owner damage/pixels. The matrix is a bounded
@@ -64,6 +69,18 @@ target swap schedules damage even if its enabled mask happens to match. Reusing
 the same view detects changed enabled state without scheduling an idle repaint
 on each gallery paint. Context menus do not represent a selected top-level bar
 heading. Changed panel selection commits after descendant destruction succeeds.
+
+Failure reporting follows cleanup: when cleanup cannot remove a registration,
+the result preserves that teardown obligation before the application sees the
+error hook. Bar-only selection normalization accompanies snapshot publication;
+if none is enabled, mode closes. A pending root whose saved model loses its
+enabled commands is cancelled before normalization, preserving anchor identity.
+
+Scrolling computes its requested viewport before changing the path. A clamped
+or zero movement preserves descendants, pending intent and help. Actual movement
+cancels activation and closes children before publishing the new viewport.
+The final viewport packs the fitting suffix by command/separator heights;
+selection reveal uses the same viewport bound.
 
 The test harness's private session layout is shared through the internal header
 to observe these properties without duplicating opaque layouts or adding public
