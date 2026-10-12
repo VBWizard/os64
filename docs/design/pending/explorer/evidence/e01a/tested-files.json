@@ -1,0 +1,27 @@
+{
+  "runtime_base": "6d988565",
+  "design_snapshot": "d33e651e",
+  "branch": "codex/explorer-e01a",
+  "implementation": "Source/binary hashes identify the implementation validated before review publication.",
+  "sha256": {
+    "userland/libos64/ui_action.c": "6798df1745fbb1de9f09a9085b267fdef910f991b982e2ae47a8b9bb68ca368b",
+    "userland/libos64/ui_status.c": "f8f4e241f9c36bb5a33de55d09d87c736f694f15ffba7550dd62d9d4db0816d5",
+    "userland/libos64/ui_message.h": "2dd042ddf4777fbe2112b2eb677b5e83f85db11b60f01fc368389d34ba0e4289",
+    "userland/libos64/include/os64/ui_action.h": "51745853b59709ffd9b1267cad613fc2097a20e4d4cf99233b214d6a505df4ea",
+    "userland/libos64/include/os64/ui_status.h": "2417484db457f8083c4805afe8c1443dfadea60c1c25fdec6bd6b0385b4fd243",
+    "userland/libos64/include/os64/ui_result.h": "97ec7a25558e413d0301f8037eefd165810aaf7af1d4064ab11e01331027226b",
+    "userland/apps/actiongallery/actiongallery.c": "208138249206e9d9b76ea18d648a6e299e84144e6cdc82b8dfe383c90f39969e",
+    "tools/test_ui_action_host.c": "e02936763e5d850e20a0a4393657f480009ed4891bcbf0b98b6286870f2adbf1",
+    "tools/test_ui_action_host.py": "852bd5d6a209ac35dac23062c4cbcbd98e2786bebfa03eae9105db325c847074",
+    "tools/test_ui_text_host.c": "e87d7aec6e447ef8c28e7291568545d17b1e643e80dcb40fc1651cf2662775da",
+    "userland/tests/fontsettingstest/fontsettingstest.c": "b0713ea05afcb5fa8a888f73342d0d6a51bcd884f0ff5b348b024b1fd750989b",
+    "userland/GNUmakefile": "3bc6cfb8df1c0ed8de331f76894c8c6ae539977b6d226e44e29600025b61a916",
+    "userland/bin/actiongallery": "86716aca9b11520ef80c43999369317469ca488a67b0b709d0df25fdf10f472b",
+    "userland/bin/libos64.so": "d71c69fcf089a440ff9448056347091cf11a2ad820e72f7d2befa1a922d8dcd6",
+    "userland/bin/libfreetype.so": "c6a580f99f229f405a05d12b4e235a9fd5a1d3f5e18c44549a1dade792e11246",
+    "userland/bin/tests/fontsettingstest": "409380917cdb3a9aa0e5a86ab4200380bf025434964e930bac1b777fe4939fb4",
+    "guest_kernel": "6d69f3e8101b9705857132886cd6edc13998c231918b6364e9cff206462f16f2"
+  },
+  "implementation_commit": "bd86ce4f",
+  "review_pr": "https://github.com/VBWizard/os64/pull/254"
+}
