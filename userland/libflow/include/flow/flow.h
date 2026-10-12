@@ -879,6 +879,10 @@ bool flow_box_point(const flow_box_t *box, flow_point_t scroll, int32_t x, int32
 // any other box.
 bool flow_box_through(const flow_box_t *box, flow_point_t scroll, double m[6],
                       os64_gui_rect_t *clip, flow_point_t *upright);
+// Whether a list marker of this style is drawn as a shape — a disc, a
+// circle, a square — rather than as its text: the painter's choice, and
+// what a marker's ink and text shadows follow.
+bool flow_marker_is_shape(const flow_style_t *s);
 // Such a matrix undone: false when it cannot be — its 2x2 part has no
 // inverse, or that inverse is not a finite double. Its determinant is
 // worked so neither a double's range nor cancellation loses it, so a matrix

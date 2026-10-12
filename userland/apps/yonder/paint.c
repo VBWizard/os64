@@ -1355,9 +1355,7 @@ static void paint_box(void *ctx, const flow_box_t *b)
     case FLOW_BOX_LINE:
         return;
     case FLOW_BOX_MARKER:
-        if (b->style->list_style_type == FLOW_LIST_DISC ||
-            b->style->list_style_type == FLOW_LIST_CIRCLE ||
-            b->style->list_style_type == FLOW_LIST_SQUARE) {
+        if (flow_marker_is_shape(b->style)) {
             bullet(p, b, b->style->list_style_type);
             return;
         }

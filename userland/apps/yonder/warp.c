@@ -43,8 +43,11 @@ bool yonder_warp(uint32_t *dst, uint32_t pitch, os64_gui_rect_t clip, const yond
     // Where the sheets land, its corners' bounds, met with the clip.
     double x0 = INFINITY, y0 = INFINITY, x1 = -INFINITY, y1 = -INFINITY;
     for (int k = 0; k < 4; k++) {
-        double x = k & 1 ? s->w : 0, y = k & 2 ? s->h : 0;
-        double tx = m[0] * x + m[2] * y + m[4], ty = m[1] * x + m[3] * y + m[5];
+        // In long double, as every sum of a matrix's products here: a
+        // finite matrix's terms may each pass a double and cancel.
+        long double x = k & 1 ? s->w : 0, y = k & 2 ? s->h : 0;
+        double tx = (double)(m[0] * x + m[2] * y + m[4]);
+        double ty = (double)(m[1] * x + m[3] * y + m[5]);
         x0 = fmin(x0, tx);
         y0 = fmin(y0, ty);
         x1 = fmax(x1, tx);
@@ -61,9 +64,9 @@ bool yonder_warp(uint32_t *dst, uint32_t pitch, os64_gui_rect_t clip, const yond
     for (int32_t y = (int32_t)y0; y < (int32_t)y1; y++) {
         uint32_t *row = dst + (size_t)y * pitch;
         for (int32_t x = (int32_t)x0; x < (int32_t)x1; x++) {
-            double cx = x + 0.5, cy = y + 0.5;
-            double u = inv[0] * cx + inv[2] * cy + inv[4];
-            double v = inv[1] * cx + inv[3] * cy + inv[5];
+            long double cx = x + 0.5L, cy = y + 0.5L;
+            double u = (double)(inv[0] * cx + inv[2] * cy + inv[4]);
+            double v = (double)(inv[1] * cx + inv[3] * cy + inv[5]);
             // Inside the sheets' landing a centre goes back inside the
             // sheets; this holds the index casts below to what they can say
             // should an inverse that does not undo `m` ever be handed in.

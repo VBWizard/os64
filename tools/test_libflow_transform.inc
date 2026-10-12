@@ -745,6 +745,29 @@ static void transform_through_cases(void)
                wide_r.w == INT32_MAX / 2 - INT32_MIN / 2,
            NULL);
 
+    // A disc marker is drawn as a shape, not as text: an inherited 500px
+    // text-shadow on an empty turned list item grows nothing — its group
+    // the same with the shadow as without.
+    XformGroups marks[2] = {{0}, {0}};
+    for (int k = 0; k < 2; k++) {
+        sheeted_open(&q, k ? XFORM_STYLE "li{text-shadow:500px 0 #000} ul{width:100px;"
+                                         "transform:rotate(90deg)}</style><ul><li></li></ul>"
+                           : XFORM_STYLE "ul{width:100px;transform:rotate(90deg)}</style>"
+                                         "<ul><li></li></ul>",
+                     400, 600);
+        t = flow_layout(q.doc, q.page, 400, &q.env);
+        vis.ctx = &marks[k];
+        flow_visit_groups(t, (os64_gui_rect_t){0, 0, 400, 600}, top, &vis);
+        flow_free(t);
+        sheeted_close(&q);
+    }
+    vis.ctx = &gr;
+    expect("transform: a disc marker casts no text shadow",
+           marks[0].opens == 1 && marks[1].opens == 1 &&
+               rect_is(marks[1].first, marks[0].first.x, marks[0].first.y, marks[0].first.w,
+                       marks[0].first.h),
+           NULL);
+
     // A child's shadow is handed up as where it reaches: 100px right of a
     // 100px child is 201 across, inside its 400px turned parent, which
     // grows only the pixel the shadow casts above and below.
@@ -852,6 +875,17 @@ static void transform_through_cases(void)
     const double scaled[6] = {0x1p552, 4503599627370495.0 * 0x1p500,
                               4503599627370497.0 * 0x1p500, 0x1p552, 0, 0};
     double sinv[6];
+    // Cancellation across a wide spread: a = d = 2^52, b = (2^52 - 1) 2^-600,
+    // c = (2^52 + 1) 2^600 — determinant 1, each product exact in its own
+    // scale.
+    const double spread[6] = {0x1p52, 4503599627370495.0 * 0x1p-600,
+                              4503599627370497.0 * 0x1p600, 0x1p52, 0, 0};
+    double pinv[6];
+    expect("transform: a cancellation across a wide spread is not lost",
+           flow_affine_invert(spread, pinv) && pinv[0] == 0x1p52 && pinv[3] == 0x1p52 &&
+               pinv[1] == -4503599627370495.0 * 0x1p-600 &&
+               pinv[2] == -4503599627370497.0 * 0x1p600,
+           NULL);
     expect("transform: a scaled cancellation is not lost",
            flow_affine_invert(scaled, sinv) && sinv[0] == 0x1p-448 && sinv[3] == 0x1p-448 &&
                sinv[1] == -4503599627370495.0 * 0x1p-500 &&

@@ -788,6 +788,12 @@ static void shadow_reach(const flow_shadow_t *sh, bool blurred, int64_t out[4])
 // reaches past its overflow rect — its own worked as the walk goes down,
 // from its border box, each child's handed up as the walk climbs past it
 // (ink_up). Without recursion, the tree being as deep as the page.
+bool flow_marker_is_shape(const flow_style_t *s)
+{
+    return s->list_style_type == FLOW_LIST_DISC || s->list_style_type == FLOW_LIST_CIRCLE ||
+           s->list_style_type == FLOW_LIST_SQUARE;
+}
+
 // Whether the painter draws `b`'s frame — background, borders and box
 // shadows (yonder's paint_box): not a text, a marker, a line or an inline
 // box's piece, and not an inline-block's content box, whose atom paints
@@ -810,7 +816,8 @@ static void own_ink(flow_box_t *b)
     // Every box's style holds the element's shadows, but each is painted
     // by the boxes that draw it: box shadows by a frame, text shadows by
     // the boxes that draw text.
-    bool draws_text = b->kind == FLOW_BOX_TEXT || b->kind == FLOW_BOX_MARKER;
+    bool draws_text = b->kind == FLOW_BOX_TEXT ||
+                      (b->kind == FLOW_BOX_MARKER && !flow_marker_is_shape(s));
     int32_t nbox = paints_frame(b) ? s->nbox_shadows : 0;
     int32_t ntext = draws_text ? s->ntext_shadows : 0;
     // A glyph's ink may overhang the run's advance and its line — an
@@ -1578,48 +1585,67 @@ static void two_product(double x, double y, double *p, double *e)
     *e = ((xh * yh - *p) + xh * yl + xl * yh) + xl * yl;
 }
 
-// The 2x2 determinant a d - b c, worked so cancellation does not lose it,
-// whatever the exponents: the four scaled first by one power of two —
-// exact — so the largest is near 1, then each product exact as a pair
-// (two_product), the heads' difference exact where they are close
-// (Sterbenz), the tails added after, and the scale taken back out in long
-// double. Only a matrix whose entries span more than a double's middle
-// range from one another (matrix(1e300, 1e-300, ...)) is worked in long
-// double instead, where range, not cancellation, is what is at stake.
+// `x` as m 2^e, m in [1, 2) or 0, by powers of two — exact for any finite
+// double, a subnormal's included.
+static double unit_part(double x, int *e)
+{
+    *e = 0;
+    if (x == 0 || !isfinite(x))
+        return x;
+    double m = fabs(x);
+    while (m >= 0x1p+64) { m *= 0x1p-64; *e += 64; }
+    while (m < 0x1p-64) { m *= 0x1p+64; *e -= 64; }
+    while (m >= 2) { m *= 0.5; *e += 1; }
+    while (m < 1) { m *= 2; *e -= 1; }
+    return x < 0 ? -m : m;
+}
+
+// 2^e in long double, whose exponent holds any product of two doubles.
+static long double power_of_two(int e)
+{
+    long double r = 1, step = e < 0 ? 0x1p-64L : 0x1p+64L;
+    int n = e < 0 ? -e : e;
+    for (; n >= 64; n -= 64)
+        r *= step;
+    for (; n > 0; n--)
+        r *= e < 0 ? 0.5L : 2.0L;
+    return r;
+}
+
+// x y exactly, as hi + lo in long double: each factor's unit part
+// multiplied as an exact pair (two_product, which they cannot over- or
+// underflow), its powers of two put back in long double — exactly, since
+// each half is a double's 53 bits and the scale a power of two.
+static void exact_product(double x, double y, long double *hi, long double *lo)
+{
+    int ex, ey;
+    double mx = unit_part(x, &ex), my = unit_part(y, &ey);
+    double p, e;
+    two_product(mx, my, &p, &e);
+    long double s = power_of_two(ex + ey);
+    *hi = (long double)p * s;
+    *lo = (long double)e * s;
+}
+
+// The 2x2 determinant a d - b c, for any finite doubles, without losing it
+// to range or to cancellation: each product exact as a pair
+// (exact_product), the heads' difference exact where they are close
+// (Sterbenz, each head a double's 53 bits), the tails added after.
 static long double determinant(double a, double b, double c, double d)
 {
-    const double small = 0x1p-480, large = 0x1p+480;
-    double most = fmax(fmax(fabs(a), fabs(b)), fmax(fabs(c), fabs(d)));
-    if (!(most > 0) || !isfinite(most))
-        return (long double)a * d - (long double)b * c;
-    double k = 1;                       // a power of two: scaling by it is exact
-    while (most * k > 0x1p+64)
-        k *= 0x1p-64;
-    while (most * k < 0x1p-64)
-        k *= 0x1p+64;
-    double sa = a * k, sb = b * k, sc = c * k, sd = d * k;
-    double least = fmin(fmin(sa != 0 ? fabs(sa) : 1, sb != 0 ? fabs(sb) : 1),
-                        fmin(sc != 0 ? fabs(sc) : 1, sd != 0 ? fabs(sd) : 1));
-    bool lost = (a != 0 && sa == 0) || (b != 0 && sb == 0) || (c != 0 && sc == 0) ||
-                (d != 0 && sd == 0);
-    if (!lost && least > small && most * k < large) {
-        double p1, e1, p2, e2;
-        two_product(sa, sd, &p1, &e1);
-        two_product(sb, sc, &p2, &e2);
-        long double scaled = (long double)(p1 - p2) + ((long double)e1 - e2);
-        return scaled / ((long double)k * k);
-    }
-    return (long double)a * d - (long double)b * c;
+    long double h1, l1, h2, l2;
+    exact_product(a, d, &h1, &l1);
+    exact_product(b, c, &h2, &l2);
+    return (h1 - h2) + (l1 - l2);
 }
 
 bool flow_affine_invert(const double m[6], double inv[6])
 {
-    // The determinant worked without loss (determinant()), the rest in long
-    // double: a huge matrix (scale(1e200)), a tiny one, one whose entries
-    // span a double's range (matrix(1e300, 1e-300, 1e300, 2e-300, 0, 0)),
-    // and one whose determinant is a cancellation (matrix(2^52, 2^52 - 1,
-    // 2^52 + 1, 2^52, 0, 0), determinant 1) all come back with a finite
-    // inverse.
+    // The determinant exact for any finite entries (determinant()), the
+    // rest in long double: a matrix however huge, tiny, lopsided or nearly
+    // singular — matrix(2^52, 2^52 - 1, 2^52 + 1, 2^52, 0, 0), determinant
+    // 1, at any scale and with its entries spread across a double's range —
+    // comes back whenever its inverse is finite.
     long double a = m[0], b = m[1], c = m[2], d = m[3], e = m[4], f = m[5];
     long double det = determinant(m[0], m[1], m[2], m[3]);
     if (det == 0)

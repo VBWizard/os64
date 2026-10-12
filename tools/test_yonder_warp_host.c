@@ -277,6 +277,26 @@ int main(void)
         group_free(&g);
     }
 
+    // A finite matrix whose inverse's terms each pass a double and cancel:
+    // matrix(1e-308, 0, 1, 1, -1e-307, 0) takes every destination centre
+    // on the diagonal back to u = 10, inside a solid 20 by 20 sheet — so
+    // the diagonal is laid, in the sheet's one colour.
+    {
+        uint32_t black[400], white[400];
+        for (int k = 0; k < 400; k++)
+            black[k] = white[k] = 0x336699u;
+        yonder_sheets_t s = {black, white, 20, 20};
+        uint32_t *d = backdrop(24, 24);
+        const double m[6] = {1e-308, 0, 1, 1, -1e-307, 0};
+        const double inv[6] = {1e308, 0, -1e308, 1, 10, 0};
+        yonder_warp(d, 24, (os64_gui_rect_t){0, 0, 24, 24}, &s, m, inv, 255);
+        int ok = 1;
+        for (int y = 3; y < 17; y++)
+            ok = ok && (d[y * 24 + y] & 0xffffffu) == 0x336699u;
+        expect("warp: a diagonal whose inverse terms cancel past a double is laid", ok);
+        free(d);
+    }
+
     // Re-basing a sheet's matrix: cancelling huge terms come to what they
     // are — 1e308 x 5 - 1e308 x 5 is 0, not inf - inf — and an ordinary
     // turn moves by its own arithmetic.
