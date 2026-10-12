@@ -156,9 +156,14 @@ state. A successful E1A does not mark E1 complete or claim native menus exist.
 The public API is in `os64/ui_action.h`, `ui_result.h` and `ui_status.h`;
 `ui_action.c` and `ui_status.c` implement it. Shared text validation uses the
 existing bounded Western UI profile through private `ui_message.h`. The
-`actiongallery` application selects explicit target views; its application
-controls use a separately retained static context. No global context or native
+`actiongallery` interactive test fixture selects explicit target views; its
+application controls use a separately retained static context. No global context or native
 menu transport was added. Existing button classes and constructors are unchanged.
+
+The gallery lives in `userland/tests/actiongallery/` and builds to
+`userland/bin/tests/actiongallery`, installed as `/tests/actiongallery`.
+Launch it by that full installed path. Earlier evidence packets retain their
+original `/bin/actiongallery` commands to describe the revisions actually tested.
 
 Action descriptor input strings are copied. Spec lookups borrow immutable
 strings for the registry lifetime; state snapshots copy values. Registry/view

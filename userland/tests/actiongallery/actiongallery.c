@@ -1,4 +1,4 @@
-/* Shared-action/status gallery: app-owned targets and visibility policy,
+/* Shared-action/status test gallery: app-owned targets and visibility policy,
  * ordinary libui controls and the configured Interface font. */
 #include "os64/ui.h"
 #include "os64/ui_action.h"
@@ -168,7 +168,7 @@ static bool gallery_build(gallery *a)
     os64_ui_init(&a->ui, &a->draw);
     os64_ui_panel(&a->root); a->root.bounds=(os64_gui_rect_t){0,0,(int32_t)a->draw.surf.width,(int32_t)a->draw.surf.height};
     os64_ui_set_root(&a->ui, &a->root);
-    os64_ui_label(&a->heading, "Actions & status - shared toolkit gallery");
+    os64_ui_label(&a->heading, "Actions & status - toolkit test gallery");
     os64_ui_label(&a->instructions, "Ctrl+D record   Ctrl+P panel   Ctrl+B status");
     os64_ui_button(&a->content,"Shortcut target: A (Ctrl+D records)",NULL,NULL);
     gallery_add(a,&a->root,&a->heading); gallery_add(a,&a->root,&a->instructions);
@@ -238,7 +238,7 @@ static bool gallery_route(gallery *a, const os64_gui_event_t *ev, os64_ui_action
 int main(int argc,char **argv)
 {
     (void)argc; (void)argv;
-    int64_t win=os64_gui_window_create("Actions and status",40,10,880,740,0);
+    int64_t win=os64_gui_window_create("Actions and status test",40,10,880,740,0);
     if(win<=0) { os64_printf("actiongallery: GUI unavailable (%ld)\n",(long)win); return 1; }
     if(os64_draw_ctx_init(&g.draw,win)!=0) { os64_gui_window_destroy(win); return 1; }
     if(!gallery_build(&g)) { os64_printf("actiongallery: initialization refused\n"); gallery_dispose(&g); os64_gui_window_destroy(win); return 1; }

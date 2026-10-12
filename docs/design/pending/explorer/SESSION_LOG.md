@@ -283,3 +283,19 @@ and cleanup checks passed again: 428 fake-font and 475 real-font checks, with
 ASan, UBSan and LeakSanitizer enabled outside the sandbox. Runtime hashes match
 the R2 packet; [R3 evidence](evidence/e01a/review-r3/README.md) records the reused
 host binaries and logs. Ordinary re-review is pending.
+
+## 2026-10-11 — Gallery classified as an interactive test
+
+Chris requested moving actiongallery into tests and pushing directly to userland.
+The source now lives under `userland/tests/actiongallery`; automatic Makefile
+discovery produces `userland/bin/tests/actiongallery` for installation to
+`/tests/actiongallery`. The host harness includes the new source path, and the
+window title and heading identify it as a test. The obsolete local
+`userland/bin/actiongallery` output was removed. Historical evidence retains the
+commands used for those revisions; the current handoff gives the new launch path.
+
+The strict cross build passed at the new output path. The focused host suites
+passed 428 fake-font and 475 real-font checks with ASan, UBSan and leak detection
+enabled. Both sandbox runs encountered LeakSanitizer thread-attachment EPERM;
+the same compiled binaries passed outside the sandbox with leak checking enabled.
+No P5 deployment or additional guest test was performed for this relocation.

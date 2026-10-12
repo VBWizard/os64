@@ -4,7 +4,7 @@
 #include "test_ui_text_host.c"
 #undef main
 #define UI_ACTION_HOST
-#include "../userland/apps/actiongallery/actiongallery.c"
+#include "../userland/tests/actiongallery/actiongallery.c"
 
 void os64_ui_theme_current(os64_ui_theme_t *t, uint64_t *installed)
 { *t=(os64_ui_theme_t){.pad=6,.gap=6,.button_h=28,.font_w=8,.font_h=16,

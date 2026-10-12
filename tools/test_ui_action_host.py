@@ -17,7 +17,7 @@ if a.real:
         objects.append(str(obj))
     flags+=['-DUI_TEXT_REAL']
 # The harness reuses the existing allocator/font fixtures and drives the
-# production gallery. Linking the toolkit preserves its dispatch and font
+# gallery fixture. Linking the toolkit preserves its dispatch and font
 # adoption behavior; only window, session and disk seams are stubbed.
 sources=['tools/test_ui_action_host.c']
 if not a.real: sources.append('tools/fonts/fake_backend.c')
