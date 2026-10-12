@@ -264,10 +264,29 @@ static bool drawn_flat(const garb_val_t *f)
 
 // Whether every number `v` is written with is finite: one past a double
 // (1e400) is read as infinite, and no matrix is made from it.
+// Whether every leaf of a calc() is finite.
+static bool finite_calc(const garb_calc_t *k)
+{
+    if (k->op == GARB_CALC_LEAF)
+        return __builtin_isfinite(k->leaf.number);
+    for (int32_t i = 0; i < k->nargs; i++)
+        if (!finite_calc(k->args[i]))
+            return false;
+    return true;
+}
+
 // An individual property keeps its numbers as items under a value of
-// their kind, so the items are walked whatever the kind.
+// their kind, so the items are walked whatever the kind; a calc()'s are
+// its leaves, and what it comes to when it settles here — calc(1e300 *
+// 1e300) has finite leaves and no finite value.
 static bool finite_numbers(const garb_val_t *v)
 {
+    double settled_to;
+    bool number;
+    if (v->kind == GARB_V_CALC && v->calc != NULL &&
+        (!finite_calc(v->calc) ||
+         (calc_settled(v->calc, &settled_to, &number) && !__builtin_isfinite(settled_to))))
+        return false;
     switch (v->kind) {
     case GARB_V_NUMBER: case GARB_V_LENGTH: case GARB_V_PERCENTAGE: case GARB_V_ANGLE:
         if (!__builtin_isfinite(v->number))

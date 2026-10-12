@@ -73,10 +73,6 @@ struct flow_tree {
     // changes, and where a box's `scroller` points.
     flow_frame_t **scrollers;
     int32_t nscrollers, cap_scrollers;
-    // How far past its box any shadow on the page may be drawn, in pixels
-    // (ink_reach): what a group's bounds are widened by, since a shadow is
-    // in no box's overflow.
-    int64_t ink;
     bool incomplete;
 };
 
@@ -558,13 +554,11 @@ static const flow_frame_t *transform_new(Build *bd, const flow_style_t *s, int64
     // Exactly 0: every function but perspective() and matrix3d() keeps the
     // w row (0, 0, 0, 1), and so does their product, to the bit. A
     // TRANSLATION besides when what it does to x and y, w divided out, is
-    // the identity to within the rounding of a turn's sine and cosine — so
-    // rotate(360deg) moves, as drawn; that tolerance chooses only how it
-    // is drawn, never what.
+    // exactly the identity — every turn by whole quarters, rotate(0),
+    // scale(1) and skew(0) are exact (style.c's quarters), so nothing is
+    // taken for one that is not: a deliberate 9e-10 shear is drawn.
     bool flat = m[3] == 0 && m[7] == 0 && m[15] > 0 && isfinite(m[15]);
-    const double e = 1e-9;
-    bool moves = flat && fabs(m[0] / m[15] - 1) < e && fabs(m[5] / m[15] - 1) < e &&
-                 fabs(m[1] / m[15]) < e && fabs(m[4] / m[15]) < e;
+    bool moves = flat && m[0] / m[15] == 1 && m[5] / m[15] == 1 && m[1] == 0 && m[4] == 0;
     f->upright = !flat;
     f->through = flat && !moves;
     if (f->through) {
@@ -745,29 +739,50 @@ static int64_t shadow_reach(const flow_shadow_t *sh)
     return (dx > dy ? dx : dy) + (sh->spread > 0 ? sh->spread : 0) + 2 * (int64_t)sh->blur + 1;
 }
 
-// The furthest any shadow in the tree under `root` reaches past its box: a
-// box's own shadows (an inset one falls inside) and its text's. Walked
-// without recursion, the tree being as deep as the page.
-static int64_t ink_reach(const flow_box_t *root)
+// Every box's `ink`: how far a shadow it casts (an inset one falls
+// inside) or its text casts, or any shadow of a box inside it, reaches
+// past its shape — its own worked as the walk goes down, each child's
+// passed up as the walk climbs past it. Without recursion, the tree being
+// as deep as the page.
+static int32_t own_ink(const flow_style_t *s)
 {
     int64_t most = 0;
-    for (const flow_box_t *b = root; b != NULL;) {
-        const flow_style_t *s = b->style;
-        for (int32_t i = 0; i < s->nbox_shadows; i++)
-            if (!s->box_shadows[i].inset && shadow_reach(&s->box_shadows[i]) > most)
-                most = shadow_reach(&s->box_shadows[i]);
-        for (int32_t i = 0; i < s->ntext_shadows; i++)
-            if (shadow_reach(&s->text_shadows[i]) > most)
-                most = shadow_reach(&s->text_shadows[i]);
+    for (int32_t i = 0; i < s->nbox_shadows; i++)
+        if (!s->box_shadows[i].inset && shadow_reach(&s->box_shadows[i]) > most)
+            most = shadow_reach(&s->box_shadows[i]);
+    for (int32_t i = 0; i < s->ntext_shadows; i++)
+        if (shadow_reach(&s->text_shadows[i]) > most)
+            most = shadow_reach(&s->text_shadows[i]);
+    return (int32_t)(most < INT32_MAX / 4 ? most : INT32_MAX / 4);
+}
+
+static void ink_reach(flow_box_t *root)
+{
+    if (root == NULL)
+        return;
+    flow_box_t *b = root;
+    b->ink = own_ink(b->style);
+    for (;;) {
         if (b->first != NULL) {
-            b = b->first;
+            b = (flow_box_t *)b->first;
+            b->ink = own_ink(b->style);
             continue;
         }
-        while (b != NULL && b != root && b->next == NULL)
-            b = b->parent;
-        b = b != NULL && b != root ? b->next : NULL;
+        // Climb past every box with no next sibling, handing its ink up.
+        while (b != root && b->next == NULL) {
+            flow_box_t *up = (flow_box_t *)b->parent;
+            if (b->ink > up->ink)
+                up->ink = b->ink;
+            b = up;
+        }
+        if (b == root)
+            return;
+        flow_box_t *up = (flow_box_t *)b->parent;
+        if (b->ink > up->ink)
+            up->ink = b->ink;
+        b = (flow_box_t *)b->next;
+        b->ink = own_ink(b->style);
     }
-    return most < INT32_MAX / 4 ? most : INT32_MAX / 4;
 }
 
 // A piece of a scroll container's own content, `r`, reached, and the
@@ -1222,7 +1237,7 @@ flow_tree_t *flow_layout(const os64_html_document_t *doc, const os64_page_t *mod
         }
         reach_stacked(tree);
         sticky_reach_scrolled(tree);
-        tree->ink = ink_reach(tree->root);
+        ink_reach(tree->root);
     }
     return tree;
 }
@@ -1411,10 +1426,10 @@ static void from_space(const flow_frame_t *f, flow_point_t scroll, double *x, do
     Frames m = {.n = 0};
     for (const flow_frame_t *t = inner_through(f); t != NULL; t = inner_through(t->outer)) {
         const double *a = t->affine;
-        double px = *x, py = *y;
+        long double px = *x, py = *y;   // a number, never inf - inf (affine_bounds)
         flow_point_t o = frame_of(&m, t->outer, t->box->fixed, scroll);
-        *x = a[0] * px + a[2] * py + a[4] + o.x;
-        *y = a[1] * px + a[3] * py + a[5] + o.y;
+        *x = (double)(a[0] * px + a[2] * py + a[4] + o.x);
+        *y = (double)(a[1] * px + a[3] * py + a[5] + o.y);
     }
 }
 
@@ -1801,8 +1816,12 @@ static os64_gui_rect_t affine_bounds(const double m[6], os64_gui_rect_t r)
 {
     double x0 = INFINITY, y0 = INFINITY, x1 = -INFINITY, y1 = -INFINITY;
     for (int k = 0; k < 4; k++) {
-        double x = (double)r.x + (k & 1 ? r.w : 0), y = (double)r.y + (k & 2 ? r.h : 0);
-        double tx = m[0] * x + m[2] * y + m[4], ty = m[1] * x + m[3] * y + m[5];
+        // In long double, where a finite matrix times a coordinate cannot
+        // overflow: a corner is a number, never inf - inf.
+        long double x = (long double)r.x + (k & 1 ? r.w : 0);
+        long double y = (long double)r.y + (k & 2 ? r.h : 0);
+        double tx = (double)(m[0] * x + m[2] * y + m[4]);
+        double ty = (double)(m[1] * x + m[3] * y + m[5]);
         x0 = fmin(x0, tx);
         y0 = fmin(y0, ty);
         x1 = fmax(x1, tx);
@@ -1866,7 +1885,7 @@ static os64_gui_rect_t grown(os64_gui_rect_t r, int64_t d)
 
 // What a group paints, from its OPEN at layer `i` to its CLOSE, whose
 // layer `*close` is set to: every box's overflow rect where its frame puts
-// it at `scroll`, grown by how far the page's shadows reach (tree->ink) and
+// it at `scroll`, grown by how far its shadows reach (flow_box_t.ink) and
 // cut to its clip, in the coordinates the group is painted in — a group
 // drawn through its matrix inside it counted as its own bounds sent
 // through that matrix, cut to what clips it from outside.
@@ -1896,7 +1915,7 @@ static os64_gui_rect_t group_bounds(const flow_tree_t *tree, int32_t i, flow_poi
         } else {
             flow_point_t o = flow_box_doc_offset(l->box, scroll);
             at = moved(l->box->overflow, o.x, o.y);
-            at = grown(at, tree->ink);      // what shadows paint past it
+            at = grown(at, l->box->ink);    // what shadows paint past it
             if (l->box->clipped)
                 at = meet(at, flow_box_doc_clip(l->box, scroll));
             if (at.w <= 0 || at.h <= 0)

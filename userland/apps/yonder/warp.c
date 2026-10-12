@@ -4,29 +4,19 @@
 
 #include <math.h>
 
-// A number the matrix holds that is a whole one within a millionth: what
-// `translate(10px)` is, and what a turn's sine is with its last bit off.
-static bool whole(double v, double *out)
-{
-    double r = floor(v + 0.5);
-    if (!(fabs(v - r) < 1e-6))
-        return false;
-    *out = r;
-    return true;
-}
-
+// Whether `m` is copied by index: each of x' and y' reads exactly one of
+// x and y, by exactly +1 or -1, moved by a whole pixel. Exact, not within
+// a tolerance: a tolerance chooses what is drawn, and libflow makes every
+// whole quarter turn exact at its source.
 bool yonder_warp_exact(const double m[6])
 {
-    double k[6];
-    for (int i = 0; i < 6; i++)
-        if (!whole(m[i], &k[i]))
-            return false;
-    // Each of x' and y' reads exactly one of x and y, by +1 or -1.
     for (int i = 0; i < 4; i++)
-        if (k[i] != 0 && k[i] != 1 && k[i] != -1)
+        if (m[i] != 0 && m[i] != 1 && m[i] != -1)
             return false;
-    return (k[0] != 0 && k[3] != 0 && k[1] == 0 && k[2] == 0) ||
-           (k[1] != 0 && k[2] != 0 && k[0] == 0 && k[3] == 0);
+    if (m[4] != floor(m[4]) || m[5] != floor(m[5]))
+        return false;
+    return (m[0] != 0 && m[3] != 0 && m[1] == 0 && m[2] == 0) ||
+           (m[1] != 0 && m[2] != 0 && m[0] == 0 && m[3] == 0);
 }
 
 // One channel of a sheet pixel.
@@ -74,6 +64,11 @@ bool yonder_warp(uint32_t *dst, uint32_t pitch, os64_gui_rect_t clip, const yond
             double cx = x + 0.5, cy = y + 0.5;
             double u = inv[0] * cx + inv[2] * cy + inv[4];
             double v = inv[1] * cx + inv[3] * cy + inv[5];
+            // Inside the sheets' landing a centre goes back inside the
+            // sheets; this holds the index casts below to what they can say
+            // should an inverse that does not undo `m` ever be handed in.
+            if (!isfinite(u) || !isfinite(v) || fabs(u) > 1e15 || fabs(v) > 1e15)
+                continue;
             double b[3], w[3];
             if (exact) {
                 int64_t i = (int64_t)floor(u), j = (int64_t)floor(v);

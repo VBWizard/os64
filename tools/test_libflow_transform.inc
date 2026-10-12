@@ -165,6 +165,19 @@ static void transform_layout_cases(void)
         "    block div 0 10 100 10 stacked through 0 -1000 1000 0 -10000 10000\n"
         "    block div 0 20 100 10 stacked through 1000 0 0 0 0 20000\n");
 
+    // A translation is exactly the identity moved: a deliberate 9e-10
+    // shear is drawn through. rotate3d(1e308, 0, 0, 45deg) turns about x,
+    // its axis made a unit vector without overflowing.
+    cascade_layout_case("transform: a hair of shear is drawn; a huge axis is still an axis",
+        XFORM_STYLE "div{width:100px;height:10px}"
+        ".a{transform:matrix(1,9e-10,0,1,0,0)} .b{transform:rotate3d(1e308,0,0,45deg)}</style>"
+        "<div class=a></div><div class=b></div>", 400,
+        "page 400 20\n"
+        "block html 0 0 400 20\n"
+        "  block body 0 0 400 20\n"
+        "    block div 0 0 100 10 stacked through 1000 0 0 1000 0 0\n"
+        "    block div 0 10 100 10 stacked through 1000 0 0 707 0 4393\n");
+
     // A scale written as a calc() of a percentage is that hundredth, in a
     // list and as the property: half about the centre (50, 5), 0.5x + 35
     // with the 20 halved; twice about (50, 15), the 10 doubled, reaching 25.
@@ -594,6 +607,22 @@ static void transform_through_cases(void)
     flow_visit_groups(t, (os64_gui_rect_t){0, 0, 400, 600}, top, &vis);
     expect("transform: a turned group holds the shadows it paints",
            shadowed.opens == 1 && rect_is(shadowed.first, -26, -26, 152, 72), NULL);
+    vis.ctx = &gr;
+    flow_free(t);
+    sheeted_close(&q);
+
+    // A shadow counts only for the groups that can paint it: a 500px
+    // spread on a box beside a turned group leaves the group its own size.
+    sheeted_open(&q, XFORM_STYLE ".t{width:100px;height:20px;transform:rotate(90deg)}"
+                     ".s{width:10px;height:10px;box-shadow:0 0 0 500px #000}</style>"
+                     "<div class=t></div><div class=s></div>",
+                 400, 600);
+    t = flow_layout(q.doc, q.page, 400, &q.env);
+    XformGroups apart = {0};
+    vis.ctx = &apart;
+    flow_visit_groups(t, (os64_gui_rect_t){0, 0, 400, 600}, top, &vis);
+    expect("transform: a shadow outside a turned group does not grow it",
+           apart.opens == 1 && rect_is(apart.first, 0, 0, 100, 20), NULL);
     vis.ctx = &gr;
     flow_free(t);
     sheeted_close(&q);

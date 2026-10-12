@@ -2430,9 +2430,15 @@ static int quarters(const garb_val_t *v)
 // exact, so rotateX(90deg) is edge-on: collapsed, drawn and hit nowhere.
 static void rotation(double m[16], double x, double y, double z, const garb_val_t *v)
 {
-    double len = sqrt(x * x + y * y + z * z);
-    if (!(len > 0))
+    // Made a unit vector scaled by its largest part first, so that neither
+    // rotate3d(1e308, 0, 0, a) overflows nor a tiny axis underflows to none.
+    double k = fmax(fabs(x), fmax(fabs(y), fabs(z)));
+    if (!(k > 0) || !isfinite(k))
         return;
+    x /= k;
+    y /= k;
+    z /= k;
+    double len = sqrt(x * x + y * y + z * z);
     x /= len;
     y /= len;
     z /= len;

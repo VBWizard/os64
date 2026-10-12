@@ -173,8 +173,9 @@ int main(void)
         expect("warp: a mirror copied by index", ok);
         const double half[6] = {0, 1, -1, 0, 26.5, 3};
         const double scale[6] = {2, 0, 0, 2, 0, 0};
-        expect("warp: a turn moved half a pixel, or a scale, is no copy",
-               !yonder_warp_exact(half) && !yonder_warp_exact(scale));
+        const double hair[6] = {0, 1, -1, 1e-9, 26, 3};
+        expect("warp: a turn moved half a pixel, a scale, or a hair from a turn is no copy",
+               !yonder_warp_exact(half) && !yonder_warp_exact(scale) && !yonder_warp_exact(hair));
         free(d);
         free(was);
         group_free(&g);

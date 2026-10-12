@@ -112,13 +112,16 @@ div { transform: rotateY(60deg) matrix3d(1,0,0,0, 0,1,0,0, 0,0,1,0, 7,8,9,1) per
 span { transform: matrix3d(1,0,0,0, 0,1,0,0, 0,0,1,.01, 0,0,0,1) translateZ(10px) }
 i { transform: scale(2) perspective(500px) }
 b { transform: matrix(1e400, 0, 0, 1, 0, 0); scale: 1e400 }
+u { transform: scale(calc(1e400)) }
+em { transform: scale(calc(1e300 * 1e300)) }
 </style>
-<p>x<div>y</div><span>z</span><i>w</i><b>v</b>
+<p>x<div>y</div><span>z</span><i>w</i><b>v</b><u>t</u><em>s</em>
 WANT
 value transform: matrix3d 1
 value transform: perspective 1
 value transform: matrix 1
 value scale: scale 1
+value transform: scale 2
 (end)
 END
 
