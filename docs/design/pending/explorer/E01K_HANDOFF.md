@@ -41,6 +41,10 @@ handle before focus events. Destroy refuses BUSY before mutation when a direct
 child exists. Sweep marks the task's windows retiring before deleting any, so
 focus cannot return to another doomed window. Preserve canvas cleanup locking.
 
+Alt+F4 on an owned popup repeats WINDOW_CLOSE without arming task-wide
+termination; an undrained/dropped menu dismissal must not kill the document.
+Windows without a popup owner retain the existing escalation policy.
+
 Focused child destruction conditionally returns to an eligible parent; external
 focus is left alone. Skip popups in Alt+Tab and resolve a focused popup to its
 ordinary ancestor for the first-step comparison. Damage ancestor chrome when

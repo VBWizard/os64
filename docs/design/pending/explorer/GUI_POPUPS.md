@@ -208,7 +208,10 @@ from deliberate menu teardown must not swallow the next unrelated click.
 The handoff specifies input-loss reset and queue quarantine; tests must cover
 both drain orders and destruction-generated focus return.
 
-Alt+F4 on the focused popup dismisses it; it does not close the document.
+Alt+F4 requests dismissal of the focused owned popup. Repeated presses keep
+requesting dismissal without escalating to task-wide SIGTERM, even if the
+client has not drained the first request or its full queue dropped it. Windows
+without a popup owner retain the existing close-escalation policy.
 Minimize/maximize remain declined for popups. Owner destruction requests close
 children first. A VT switch alone **preserves** the menu, following the ruling
 in `DEBTS.md` under “A popup survives a VT switch”. Covered/uncovered is not

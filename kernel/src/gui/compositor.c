@@ -1392,10 +1392,12 @@ static void route_event_locked(const input_event_t *ev)
 		// Ctrl under the GUI). The first press is a REQUEST to the owner —
 		// INPUT_EVENT_WINDOW_CLOSE on its queue, because the window is the
 		// app's and an editor with unsaved work gets to answer. The second
-		// press within GUI_CLOSE_ESCALATE_TICKS, on a window that is still
-		// here, is "I mean it": SIGTERM to the owning task, carried out by
+		// press within GUI_CLOSE_ESCALATE_TICKS, on a window without a popup
+		// owner, is "I mean it": SIGTERM to its task, carried out by
 		// the frame loop after the lock drops. Explicit rather than timed —
 		// a stuck program is killed by the user's hand, never by a clock.
+		// Owned popups repeat the close request instead: killing their task
+		// would also kill the document whose menu is being dismissed.
 		// F-keys have no ASCII, so this is the one chord that reads the
 		// scancode — through keyboard_fkey_number, which knows both
 		// dialects. Both edges swallowed.
@@ -1413,7 +1415,7 @@ static void route_event_locked(const input_event_t *ev)
 				break;
 			}
 			if (focus && ev->type == INPUT_EVENT_KEY_DOWN) {
-				if (focus->closeAskedTick != 0 &&
+				if (!focus->popup_owner_id && focus->closeAskedTick != 0 &&
 				    ev->tick - focus->closeAskedTick <= GUI_CLOSE_ESCALATE_TICKS) {
 					printd(DEBUG_GUI, "guicomp: window %u asked to close twice — terminating owner %lu\n",
 						focus->id, focus->owner);
@@ -1421,7 +1423,7 @@ static void route_event_locked(const input_event_t *ev)
 					s_terminate_owner = focus->owner;
 				} else {
 					printd(DEBUG_GUI, "guicomp: window %u asked to close\n", focus->id);
-					focus->closeAskedTick = ev->tick;
+					focus->closeAskedTick = focus->popup_owner_id ? 0 : ev->tick;
 					wm_decoration_action(focus,OS64_DECOR_CLOSE,ev->tick);
 				}
 			}

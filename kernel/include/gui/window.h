@@ -159,8 +159,8 @@ _Static_assert((GUI_WINDOW_NO_DECORATIONS ^ GUI_WINDOW_START_UNFOCUSED ^ GUI_WIN
                 GUI_WINDOW_COVERED | GUI_WINDOW_POPUP | GUI_WINDOW_TITLE_UTF8 | GUI_WINDOW_HAS_SETTINGS),
                "two window flags share a bit");
 
-// Alt+F4 twice within this long (5s) on a window that did not go away is
-// "I mean it": the owner task gets SIGTERM.
+// Alt+F4 twice within this long (5s) on a window without a popup owner
+// escalates to task-wide SIGTERM. Owned popups repeat the close request.
 #define GUI_CLOSE_ESCALATE_TICKS   (5 * TICKS_PER_SECOND)
 
 // Compiled fallback palette. Consumers of the active palette use
@@ -192,8 +192,8 @@ typedef struct window
     rect_t    restoreFrame;
 
     // When Alt+F4 last asked this window to close (kTicksSinceStart), 0 if
-    // never. A second ask within GUI_CLOSE_ESCALATE_TICKS while the window
-    // is still here escalates to SIGTERM on the owner — see
+    // not armed. Owned popups leave this unarmed. For other windows a second
+    // ask within GUI_CLOSE_ESCALATE_TICKS escalates to task-wide SIGTERM — see
     // INPUT_EVENT_WINDOW_CLOSE in input.h for why the first one is only a
     // request.
     uint64_t  closeAskedTick;

@@ -257,10 +257,11 @@ typedef struct os64_gui_surface
 // window's background color, not your pixels.
 #define OS64_GUI_EVENT_WINDOW_RESIZE     6
 // The user asked this window to close (Alt+F4). A REQUEST: the window is
-// yours, so you decide — save, ask, or just exit. Ignore it and the user's
-// next Alt+F4 within five seconds is SIGTERM to your whole task, which is the
-// answer you would have given anyway minus the chance to say goodbye. libui
-// handles it (os64_ui_t.on_close, else it sets `quit`).
+// yours, so you decide — save, ask, or just exit. For windows without a popup
+// owner, the next Alt+F4 within five seconds escalates to task-wide SIGTERM.
+// Owned popups receive another close request without escalation, protecting
+// the document in the same task. libui handles the request (os64_ui_t.on_close,
+// else it sets `quit`); a menu controller dismisses the targeted popup.
 #define OS64_GUI_EVENT_WINDOW_CLOSE      7
 // Keyboard focus arrived at (`focus.gained` = 1) or left (0) this window.
 // Focus is what a click, Alt+Tab, or a new window's birth moves — you get

@@ -396,3 +396,20 @@ text unchanged in his setup, as it did before E1K. At his request, record the
 unresolved behavior in DEBTS and qualify the controlled QEMU result rather than
 start another implementation task. Effective configuration, requested size and
 cause remain unverified. This follow-up changes documentation only.
+
+## 2026-10-11 — PR #257 owned-popup close escalation fix
+
+Accepted the new P1: repeated Alt+F4 on an undrained owned popup could terminate
+its task and document. The compositor now repeats close requests without
+arming or taking escalation for owned popups. Windows without a popup owner
+retain their existing escalation policy. Updated the ABI/design comments and
+moved a misplaced task-exit comment to its actual function.
+
+The corrected native probes reproduce SIGTERM for stalled and full-queue
+owned popups before the fix, then pass without SIGTERM afterward. An ordinary
+window still escalates, and the default popup suite passes 159 checks. Both
+kernels were exercised in four-core QEMU with the same fixture. The initial
+full-queue probe used a refused direct-focus operation; it was corrected and
+both sides rerun before recording the comparison. [Evidence](evidence/e01k/README.md#pr-257-review-round-2--owned-popup-close-escalation)
+includes reports, controller, serial logs and hashes. P5 revalidation and
+re-review remain pending; gclock font adoption remains deferred in DEBTS.

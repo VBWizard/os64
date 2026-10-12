@@ -786,12 +786,7 @@ int64_t gui_window_get_content_rect(int64_t handle, rect_t *out)
     return win ? 0 : err;
 }
 
-// The task-exit sweep — contract in compositor.h. NOT a client call and
-// never dispatched as a syscall: task.c invokes it on the way out, so a
-// task cannot decline its own cleanup any more than it can decline
-// handle_close_all. This is the enforcement half of the ownership rule;
-// the checks above are merely the courtesy half.
-// Alt+F4's second press (2026-08-23): the close REQUEST went unanswered, so
+// For a window without a popup owner, Alt+F4 can escalate an unanswered close:
 // the owner is told to stop the way `kill` would tell it — SIGTERM, which a
 // program may still catch to say goodbye. The window itself is never
 // destroyed from here: it dies in the task's own exit path with everything
@@ -820,6 +815,11 @@ void gui_window_terminate_owner(uint64_t owner)
 	printd(DEBUG_GUI, "gui: close escalation — no task %lu (already gone)\n", owner);
 }
 
+// The task-exit sweep — contract in compositor.h. NOT a client call and
+// never dispatched as a syscall: task.c invokes it on the way out, so a
+// task cannot decline its own cleanup any more than it can decline
+// handle_close_all. This is the enforcement half of the ownership rule;
+// the checks above are merely the courtesy half.
 void gui_task_destroy_windows(struct task *t)
 {
 	// taskID 0 is the not-a-task sentinel gui_current_task_id() returns

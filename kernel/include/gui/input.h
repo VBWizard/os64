@@ -40,8 +40,9 @@ typedef enum input_event_type
     // to go away (Alt+F4). It is a REQUEST, delivered to the owner, because
     // the window is the app's — an editor with unsaved work gets to say so.
     // The window system never closes a window itself; what it does if the
-    // request is ignored is escalate (Alt+F4 again = SIGTERM to the owner),
-    // which is the app's business to avoid by answering the first one.
+    // request is ignored is escalate (Alt+F4 again = SIGTERM to the task)
+    // for windows without a popup owner. Owned popups repeat the request
+    // without risking the document in their task.
     INPUT_EVENT_WINDOW_CLOSE,
     // Synthesized (2026-08-25, the root-menu slice): keyboard focus arrived
     // at, or left, this window. GRAPHICS.md § Event delivery had already

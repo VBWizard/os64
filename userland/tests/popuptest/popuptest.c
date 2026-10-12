@@ -263,8 +263,52 @@ static int show(void)
     if(p>0)os64_gui_window_destroy(p);
     os64_gui_window_destroy(b);os64_gui_window_destroy(a);return 0;
 }
+static volatile unsigned close_signals;
+static void close_signal(int signo) { close_signals=(unsigned)signo; }
+static int close_probe(bool owned,bool full)
+{
+    // The controller sends two Alt+F4 presses after READY. Catch SIGTERM so
+    // the pre-fix failure is reported instead of killing the diagnostic.
+    CHECK(os64_signal_set_handler(OS64_SIGTERM,close_signal)>=0);
+    int64_t owner=create_owner(),target=owner;
+    CHECK(owner>0);if(owner<=0)return 1;
+    if(owned)target=os64_gui_popup_create("Close probe",owner,200,100,120,60);
+    CHECK(target>0);if(target<=0)return 1;
+    drain(owner);if(owned)drain(target);
+    if(full){
+        // Retained focus records fill the popup ring before either close
+        // request. Do not drain it until both keyboard requests arrive.
+        // Direct focus of a popup is refused; nested birth/close returns
+        // focus through the ownership contract instead.
+        for(unsigned i=0;i<40;++i){
+            int64_t child=os64_gui_popup_create("Queue pressure",target,240,140,40,20);
+            CHECK(child>0);if(child<=0)return 1;
+            CHECK(os64_gui_window_destroy(child)==0);
+        }
+    }
+    os64_serial_log("popuptest: close probe READY; send Alt+F4 twice within five seconds");
+    for(unsigned i=0;i<160;++i)os64_sleep(50);
+    unsigned closes=0,losses=0;os64_gui_event_t event;
+    while(os64_gui_event_poll(target,&event)==1){
+        if(event.type==OS64_GUI_EVENT_WINDOW_CLOSE)++closes;
+        if(event.type==OS64_GUI_EVENT_INPUT_LOST)++losses;
+    }
+    CHECK(owned?close_signals==0:close_signals==OS64_SIGTERM);
+    if(full)CHECK(losses>0 && closes==0);
+    else CHECK(closes>=(owned?2u:1u));
+    os64_gui_window_state_t state;
+    CHECK(os64_gui_window_get_state(owner,&state)==0);
+    if(owned)CHECK(os64_gui_window_destroy(target)==0);
+    CHECK(os64_gui_window_destroy(owner)==0);
+    os64_printf("close probe: owned=%u full=%u signal=%u closes=%u losses=%u; %u checks, %u failures\n",
+        owned,full,close_signals,closes,losses,checks,failures);
+    return failures?1:0;
+}
 int main(int argc,char **argv)
 {
+    if(argc==2 && os64_streq(argv[1],"--close-owned"))return close_probe(true,false);
+    if(argc==2 && os64_streq(argv[1],"--close-full"))return close_probe(true,true);
+    if(argc==2 && os64_streq(argv[1],"--close-ordinary"))return close_probe(false,false);
     if(argc==2 && os64_streq(argv[1],"--show"))return show();
     if(argc==3 && os64_streq(argv[1],"--interrupt"))return interrupt_task(number(argv[2]));
     if(argc==3 && os64_streq(argv[1],"--foreign")){

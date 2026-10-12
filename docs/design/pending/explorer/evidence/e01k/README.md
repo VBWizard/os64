@@ -196,3 +196,48 @@ cause have not been established. The controlled QEMU 16-to-32px test above
 remains valid evidence for that tested configuration; it is not confirmation
 that live font adoption works through Workshop in Chris's setup. No runtime
 change was made for this follow-up.
+
+## PR #257 review round 2 — owned-popup close escalation
+
+Accepted the finding that a second Alt+F4 on an undrained owned popup could
+terminate its task, including the document. The compositor now excludes
+windows with `popup_owner_id` from escalation and leaves their escalation
+timestamp unarmed. Repeated presses request close again. Windows without a
+popup owner retain their existing escalation behavior. The API and design
+comments describe this exception; the task-exit sweep's misplaced description
+was moved back to the sweep.
+
+The native close probes catch SIGTERM so a failure can be reported rather than
+killing the diagnostic. They pause event draining for eight seconds after a
+serial READY marker while the QMP controller sends two Alt+F4 presses 400ms
+apart. The full-queue probe fills retained focus records by creating and
+closing 40 nested children, returning focus to the tested popup each time.
+The controller changes to VT8 before injecting the chord.
+
+| Probe | Before fix | After fix |
+| --- | --- | --- |
+| Stalled owned popup | [SIGTERM; one close; fails](review-2/close-before-owned.txt) | [No signal; two closes; passes](review-2/close-after-owned.txt) |
+| Full owned-popup queue | [SIGTERM; closes dropped; fails](review-2/close-before-full.txt) | [No signal; loss reported; passes](review-2/close-after-full.txt) |
+| Ordinary window control | [SIGTERM; passes](review-2/close-before-ordinary.txt) | [SIGTERM; passes](review-2/close-after-ordinary.txt) |
+
+The fixed kernel also passes the default [159-check native suite](review-2/native.txt)
+with exit 0. Kernel and fixture cross-builds pass. Both comparison boots used
+four-core QEMU and scratch disks; the VM is stopped. This round has not been
+retested on P5. It exercises kernel close delivery/escalation, not the E1B menu
+controller's dismissal behavior.
+
+[Before serial](review-2/before-serial.txt), [after serial](review-2/after-serial.txt),
+[before controller results](review-2/before-runs.txt),
+[after controller results](review-2/after-runs.txt), and
+[fixed source/binary hashes](review-2/hashes.sha256) retain the comparison.
+The pre-fix kernel is the review-1 kernel in [its hash manifest](review-1/binaries.sha256).
+To repeat, use the scratch VM setup above, copy the retained
+[controller](review-2/close-probes.py) and [QMP helper](review-2/qmp.py) into
+`/tmp/e1k-vm`, name serial logs `serial-close-before.log` or
+`serial-close-after.log`, and run `python3 /tmp/e1k-vm/close-probes.py before`
+or `after`. Its modes are `popuptest --close-owned`, `--close-full`, and
+`--close-ordinary`.
+
+An initial full-queue fixture incorrectly attempted direct popup focus, which
+the public API refuses. That attempt was discarded; the retained comparison
+uses the corrected nested-child fixture on both kernels.
