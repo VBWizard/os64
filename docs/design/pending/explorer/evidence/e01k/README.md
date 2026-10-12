@@ -185,3 +185,14 @@ latest gterm handler was exercised on the host and cross-built after the guest
 was staged. The guest used scratch disks and was stopped after testing. These
 review fixes have not been revalidated on P5; the earlier acceptance applies to
 the preceding implementation. Re-review is pending.
+
+### Follow-up: Interface Apply remains unresolved in Chris's setup
+
+Chris confirmed that window resizing works again, but substantially increasing
+Interface font size and clicking Apply did not change gclock's text. He reports
+that this behavior predates E1K and asked to defer investigation to
+[DEBTS.md](../../../../../../DEBTS.md). Exact font/configuration values and the
+cause have not been established. The controlled QEMU 16-to-32px test above
+remains valid evidence for that tested configuration; it is not confirmation
+that live font adoption works through Workshop in Chris's setup. No runtime
+change was made for this follow-up.

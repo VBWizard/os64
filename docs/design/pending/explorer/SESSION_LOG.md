@@ -388,3 +388,11 @@ runs pass 159 checks each. The same pinned/borderless gclock process follows a
 [Round-1 evidence](evidence/e01k/README.md#pr-257-review-round-1--2026-10-11)
 records results, screenshots, limits and build hashes. P5 revalidation and
 ordinary re-review remain pending.
+
+## 2026-10-11 — Defer gclock Interface Apply investigation
+
+Chris confirms resizing works again, but Interface font Apply leaves gclock's
+text unchanged in his setup, as it did before E1K. At his request, record the
+unresolved behavior in DEBTS and qualify the controlled QEMU result rather than
+start another implementation task. Effective configuration, requested size and
+cause remain unverified. This follow-up changes documentation only.
