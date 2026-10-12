@@ -551,11 +551,16 @@ static const flow_frame_t *transform_new(Build *bd, const flow_style_t *s, int64
     // FLAT, as a flat drawing shows it: x' = (m0 x + m4 y + m12) / w, w =
     // m3 x + m7 y + m15, divides everywhere by the same w > 0 when m3 = m7
     // = 0 — an affine map, in pixels with the 26.6 translation taken down.
-    // A translation besides when m0 = m5 = m15 and m1 = m4 = 0.
+    // Exactly 0: every function but perspective() and matrix3d() keeps the
+    // w row (0, 0, 0, 1), and so does their product, to the bit. A
+    // TRANSLATION besides when what it does to x and y, w divided out, is
+    // the identity to within the rounding of a turn's sine and cosine — so
+    // rotate(360deg) moves, as drawn; that tolerance chooses only how it
+    // is drawn, never what.
+    bool flat = m[3] == 0 && m[7] == 0 && m[15] > 0 && isfinite(m[15]);
     const double e = 1e-9;
-    bool flat = fabs(m[3]) < e && fabs(m[7]) < e && m[15] > e;
-    bool moves = flat && fabs(m[0] - m[15]) < e && fabs(m[5] - m[15]) < e && fabs(m[1]) < e &&
-                 fabs(m[4]) < e;
+    bool moves = flat && fabs(m[0] / m[15] - 1) < e && fabs(m[5] / m[15] - 1) < e &&
+                 fabs(m[1] / m[15]) < e && fabs(m[4] / m[15]) < e;
     f->upright = !flat;
     f->through = flat && !moves;
     if (f->through) {
@@ -1374,6 +1379,13 @@ static void from_space(const flow_frame_t *f, flow_point_t scroll, double *x, do
     }
 }
 
+// Whether a matrix of determinant `det` can be undone: any that is not 0
+// and whose inverse is finite, however small — scaleX(1e-12) still draws.
+static bool invertible(double det)
+{
+    return det != 0 && isfinite(1 / det);
+}
+
 // The page's point (x, y) taken in to the coordinates frame `f`'s
 // drawn-through frame paints in: outermost first, each frame's outside
 // offset taken off and its matrix undone. False where a matrix cannot be
@@ -1389,7 +1401,7 @@ static bool to_space(const flow_frame_t *f, flow_point_t scroll, double *x, doub
     flow_point_t o = frame_of(&m, t->outer, t->box->fixed, scroll);
     const double *a = t->affine;
     double det = a[0] * a[3] - a[1] * a[2];
-    if (!(fabs(det) > 1e-12))
+    if (!invertible(det))
         return false;
     double px = *x - o.x - a[4], py = *y - o.y - a[5];
     *x = (a[3] * px - a[2] * py) / det;
@@ -1720,7 +1732,7 @@ static os64_gui_rect_t affine_bounds(const double m[6], os64_gui_rect_t r)
 static os64_gui_rect_t affine_back(const double m[6], os64_gui_rect_t r)
 {
     double det = m[0] * m[3] - m[1] * m[2];
-    if (!(fabs(det) > 1e-12))
+    if (!invertible(det))
         return (os64_gui_rect_t){0, 0, 0, 0};
     double inv[6] = {m[3] / det, -m[1] / det, -m[2] / det, m[0] / det, 0, 0};
     inv[4] = -(inv[0] * m[4] + inv[2] * m[5]);
@@ -1772,6 +1784,8 @@ static os64_gui_rect_t group_bounds(const flow_tree_t *tree, int32_t i, flow_poi
             at = moved(l->box->overflow, o.x, o.y);
             if (l->box->clipped)
                 at = meet(at, flow_box_doc_clip(l->box, scroll));
+            if (at.w <= 0 || at.h <= 0)
+                continue;       // clipped away: nothing of it to hold
         }
         r = any ? join(r, at) : at;
         any = true;

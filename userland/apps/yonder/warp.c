@@ -48,8 +48,11 @@ static uint32_t lay(double b, double w, double d, double a)
 bool yonder_warp(uint32_t *dst, uint32_t pitch, os64_gui_rect_t clip, const yonder_sheets_t *s,
                  const double m[6], uint8_t alpha)
 {
+    // Undone whenever its determinant is not 0 and the inverse is finite,
+    // as libflow undoes the same matrix (flow_affine_rect_back), so what is
+    // painted and what is laid agree.
     double det = m[0] * m[3] - m[1] * m[2];
-    if (!(fabs(det) > 1e-12) || s->w <= 0 || s->h <= 0)
+    if (det == 0 || !isfinite(1 / det) || s->w <= 0 || s->h <= 0)
         return false;
     double inv[6] = {m[3] / det, -m[1] / det, -m[2] / det, m[0] / det, 0, 0};
     inv[4] = -(inv[0] * m[4] + inv[2] * m[5]);

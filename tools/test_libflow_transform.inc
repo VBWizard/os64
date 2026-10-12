@@ -124,6 +124,21 @@ static void transform_layout_cases(void)
         "    block div 0 10 100 10 stacked through 1000 0 0 500 0 7500\n"
         "    block div 0 20 100 10 stacked transform 0 0 upright\n");
 
+    // Flat means w reads nothing but itself, exactly: an m3 of 5e-10 makes
+    // w read x, and the box is drawn upright; a matrix whose every entry is
+    // 1e-10 of the identity's divides back to the identity, a translation
+    // of nothing.
+    cascade_layout_case("transform: flatness is exact, and judged with w divided out",
+        XFORM_STYLE "div{width:100px;height:10px}"
+        ".a{transform-origin:0 0;transform:matrix3d(1,0,0,5e-10, 0,1,0,0, 0,0,1,0, 0,0,0,1)}"
+        ".b{transform:matrix3d(1e-10,0,0,0, 0,1e-10,0,0, 0,0,1e-10,0, 0,0,0,1e-10)}</style>"
+        "<div class=a></div><div class=b></div>", 400,
+        "page 400 20\n"
+        "block html 0 0 400 20\n"
+        "  block body 0 0 400 20\n"
+        "    block div 0 0 100 10 stacked transform 0 0 upright\n"
+        "    block div 0 10 100 10 stacked transform 0 0\n");
+
     // A matrix may hold any finite number: scale(1e20) is dumped held to
     // what the dump's integers can say, and reaches as far as a rect can.
     cascade_layout_case("transform: a huge scale is dumped held",
@@ -534,6 +549,34 @@ static void transform_through_cases(void)
                flow_box_doc_offset(mb, top).x == 7 && flow_box_doc_offset(mb, top).y == 9 &&
                flow_box_doc_rect(pb, top).x != pb->rect.x,
            NULL);
+    flow_free(t);
+    sheeted_close(&q);
+
+    // A matrix however small but not 0 is undone: scaleX(1e-12) takes a
+    // point at its centre back in.
+    sheeted_open(&q, XFORM_STYLE ".t{width:100px;height:20px;transform:scaleX(1e-12)}"
+                     "</style><div class=t id=t></div>",
+                 400, 600);
+    t = flow_layout(q.doc, q.page, 400, &q.env);
+    tb = box_with_id(t, q.doc->document, "t");
+    expect("transform: a matrix however small but not 0 is undone",
+           tb != NULL && flow_box_point(tb, top, 50, 10, &back) && back.y == 10, NULL);
+    flow_free(t);
+    sheeted_close(&q);
+
+    // A layer clipped away entirely adds nothing, not even its corner: a
+    // relative box pushed 1000 below its 20 tall clipping wrapper.
+    sheeted_open(&q, XFORM_STYLE ".t{width:100px;height:20px;transform:rotate(90deg)}"
+                     ".w{overflow:clip;height:20px} .r{position:relative;top:1000px;height:10px}"
+                     "</style><div class=t><div class=w><div class=r></div></div></div>",
+                 400, 600);
+    t = flow_layout(q.doc, q.page, 400, &q.env);
+    XformGroups away = {0};
+    vis.ctx = &away;
+    flow_visit_groups(t, (os64_gui_rect_t){0, 0, 400, 600}, top, &vis);
+    expect("transform: a layer clipped away adds nothing to a turned group's bounds",
+           away.opens == 1 && rect_is(away.first, 0, 0, 100, 20), NULL);
+    vis.ctx = &gr;
     flow_free(t);
     sheeted_close(&q);
 

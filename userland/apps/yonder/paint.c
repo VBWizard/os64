@@ -45,6 +45,14 @@ typedef struct {
     const yonder_dark_t *dark;
 } Painter;
 
+// A coordinate and a move added, held to half of what a 32-bit coordinate
+// can say, so a far shift never wraps.
+static int32_t sum32(int64_t a, int64_t b)
+{
+    int64_t v = a + b;
+    return (int32_t)(v < INT32_MIN / 2 ? INT32_MIN / 2 : v > INT32_MAX / 2 ? INT32_MAX / 2 : v);
+}
+
 static double hue_part(double p, double q, double t)
 {
     if (t < 0)
@@ -1326,13 +1334,13 @@ static void paint_box(void *ctx, const flow_box_t *b)
     // every verb is handed the view, so the view is narrowed.
     Painter clipped = *outer;
     clipped.off = flow_box_doc_offset(b, outer->scroll);
-    clipped.off.x += outer->shift.x;
-    clipped.off.y += outer->shift.y;
+    clipped.off.x = sum32(clipped.off.x, outer->shift.x);
+    clipped.off.y = sum32(clipped.off.y, outer->shift.y);
     os64_gui_rect_t v = outer->view;
     if (b->clipped) {
         os64_gui_rect_t c = flow_box_doc_clip(b, outer->scroll);
-        c.x += outer->shift.x;
-        c.y += outer->shift.y;
+        c.x = sum32(c.x, outer->shift.x);
+        c.y = sum32(c.y, outer->shift.y);
         int64_t x0 = max64(v.x, c.x), y0 = max64(v.y, c.y);
         int64_t x1 = min64((int64_t)v.x + v.w, (int64_t)c.x + c.w);
         int64_t y1 = min64((int64_t)v.y + v.h, (int64_t)c.y + c.h);
@@ -1442,8 +1450,7 @@ static os64_gui_rect_t widened(os64_gui_rect_t r)
 
 static os64_gui_rect_t shifted(os64_gui_rect_t r, flow_point_t by)
 {
-    return (os64_gui_rect_t){(int32_t)((int64_t)r.x + by.x), (int32_t)((int64_t)r.y + by.y), r.w,
-                             r.h};
+    return (os64_gui_rect_t){sum32(r.x, by.x), sum32(r.y, by.y), r.w, r.h};
 }
 
 // Whether the verbs composite a group at its opacity: both, or neither.
@@ -1513,8 +1520,8 @@ static void group_open(void *ctx, const flow_box_t *box, os64_gui_rect_t bounds)
         // Drawn upright instead, still inside what clips it from outside,
         // which no box inside will meet (flow_box_doc_clip stops here).
         p->view = clip;
-        p->shift.x += upright.x;
-        p->shift.y += upright.y;
+        p->shift.x = sum32(p->shift.x, upright.x);
+        p->shift.y = sum32(p->shift.y, upright.y);
         if (box->style->opacity >= 1000)
             return;
     }
