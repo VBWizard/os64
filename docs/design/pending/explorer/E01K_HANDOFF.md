@@ -104,8 +104,8 @@ deterministic unrelated-event coverage; ten full QEMU runs passed 153 checks eac
 Chris subsequently confirmed validation in both QEMU and on the P5. This is
 user-reported acceptance of the corrected diagnostic; no additional run counts,
 logs or installed-binary hashes were supplied. Ordinary code review remains
-pending. Chris authorized committing, pushing and opening the E1K PR against
-`userland`; see HANDOFF.md for the publication checkpoint.
+pending. Implementation commit `3fee1034` is pushed;
+[PR #257](https://github.com/VBWizard/os64/pull/257) targets `userland`.
 
 E1B starts after the public contract, guest evidence and ordinary review are settled.
 Keep any uncovered existing VA allocator race separate from this packet.

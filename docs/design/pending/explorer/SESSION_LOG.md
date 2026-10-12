@@ -355,3 +355,19 @@ installed-binary hashes were supplied. The earlier five-run failure report
 remains QEMU-only history. Current handoff and evidence summaries now reflect
 the subsequent P5 validation. Ordinary code review remains the next E1K step
 before Sol starts E1B; this update changes documentation only.
+
+## 2026-10-11 — E1K pushed for ordinary review
+
+Chris requested commit, push and a PR. Implementation commit `3fee1034` is
+published on `codex/explorer-e1k`; [PR #257](https://github.com/VBWizard/os64/pull/257)
+targets `userland`. The base still matched current `userland` at `2bc9f2f4`, and
+the latest tested source/binary hashes matched before publication. Evidence logs
+were included explicitly despite the repository's general log ignore rule;
+trailing whitespace in retained logs was stripped for repository checks.
+Local documentation links and the staged whitespace check passed. The retirement
+scan was inspected: remaining references were live document/ABI names or deliberate
+historical discussion; no new superlative comment claims were found.
+
+No runtime changes or additional test runs were needed for publication. Chris's
+QEMU/P5 acceptance and the ten 153-check QEMU runs remain the current evidence.
+Ordinary code review is pending; E1B remains the dependent next packet.

@@ -10,6 +10,9 @@ user-reported, without a captured installed-binary hash.
 
 ## Resume point
 
+[PR #257](https://github.com/VBWizard/os64/pull/257) is open against `userland`;
+implementation commit `3fee1034` is pushed. Ordinary code review is pending.
+
 Quinn owns E1K in branch `codex/explorer-e1k`, checkout
 `.worktrees/explorer-e1k`, based on `2bc9f2f4`. The working implementation and
 [concrete handoff](E01K_HANDOFF.md) follow Fable's second review of native popups.

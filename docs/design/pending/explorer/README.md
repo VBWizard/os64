@@ -29,7 +29,8 @@ Updated: 2026-10-11.
   Launch the diagnostic as `/tests/actiongallery`.
 - Current work: Quinn has implemented E1K in `codex/explorer-e1k`, based on
   `2bc9f2f4`, at `.worktrees/explorer-e1k`. Its [host/guest evidence](evidence/e01k/README.md) is recorded; ordinary
-  review must finish before Sol starts E1B. Chris confirmed E1K validation in
+  [PR #257](https://github.com/VBWizard/os64/pull/257), implementation `3fee1034`,
+  targets `userland`; review must finish before Sol starts E1B. Chris confirmed E1K validation in
   QEMU and on the P5 after the readiness-test fix. E1C follows E1B.
 - The initial design branch is historical; its documentation snapshot
   `d33e651e` arrived through E1A. This branch carries the second-review follow-up.
