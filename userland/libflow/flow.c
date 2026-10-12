@@ -1420,17 +1420,19 @@ static void from_space(const flow_frame_t *f, flow_point_t scroll, double *x, do
 
 bool flow_affine_invert(const double m[6], double inv[6])
 {
-    // Its 2x2 part scaled by its largest entry first, so neither a huge
-    // matrix (scale(1e200): a determinant past a double) nor a tiny one
-    // overflows on the way; scaled back after.
-    double k = fmax(fmax(fabs(m[0]), fabs(m[1])), fmax(fabs(m[2]), fabs(m[3])));
-    if (!(k > 0) || !isfinite(k))
+    // Each column of its 2x2 part scaled by its own largest entry first,
+    // so neither a huge matrix (scale(1e200): a determinant past a double),
+    // a tiny one, nor one huge on one axis and tiny on the other
+    // (matrix(1e300, 0, 0, 1e-300, 0, 0)) overflows or underflows on the
+    // way; M = M' diag(kx, ky), so M's inverse is diag(1/kx, 1/ky) M''s.
+    double kx = fmax(fabs(m[0]), fabs(m[1])), ky = fmax(fabs(m[2]), fabs(m[3]));
+    if (!(kx > 0) || !(ky > 0) || !isfinite(kx) || !isfinite(ky))
         return false;
-    double a = m[0] / k, b = m[1] / k, c = m[2] / k, d = m[3] / k;
+    double a = m[0] / kx, b = m[1] / kx, c = m[2] / ky, d = m[3] / ky;
     double det = a * d - b * c;
     if (det == 0 || !isfinite(det))
         return false;
-    double r[6] = {d / det / k, -b / det / k, -c / det / k, a / det / k, 0, 0};
+    double r[6] = {d / det / kx, -b / det / ky, -c / det / kx, a / det / ky, 0, 0};
     r[4] = -(r[0] * m[4] + r[2] * m[5]);
     r[5] = -(r[1] * m[4] + r[3] * m[5]);
     for (int i = 0; i < 6; i++)
@@ -1899,8 +1901,6 @@ void flow_visit_groups(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_p
         os64_gui_rect_t view = depth == 0 ? viewport : depth <= F_VIEWS ? views[depth - 1]
                                                                         : kWholePlane;
         if (tree->layers[i].part == PART_OPEN) {
-            int32_t end;
-            os64_gui_rect_t bounds = group_bounds(tree, i, scroll, &end);
             double m[6];
             flow_point_t up;
             if (flow_box_through(b, scroll, m, NULL, &up)) {
@@ -1913,8 +1913,11 @@ void flow_visit_groups(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_p
                 }
                 depth++;
             }
-            if (visitor->open != NULL)
-                visitor->open(ctx, b, bounds);
+            // Bounds scan the group's layers: only for a visitor that asks.
+            if (visitor->open != NULL) {
+                int32_t end;
+                visitor->open(ctx, b, group_bounds(tree, i, scroll, &end));
+            }
             continue;
         }
         if (tree->layers[i].part == PART_CLOSE) {

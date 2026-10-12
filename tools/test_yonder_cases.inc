@@ -595,15 +595,17 @@ static void paint_cases(void)
                     "through 0 40 11 20 0 1000 -1000 0 60000 40000 clip 0 0 200 50\n"
                     "fill 0 40 11 20 #00ff00\n"
                     "end through 255\n");
-    // A matrix that collapses an axis draws nothing; nor does a turn that
-    // sends the box out of the view, though upright it would be in it:
-    // turned back a quarter about its corner (0, 0), (x, y) goes to (y,
-    // -x), all of it above the view.
+    // A matrix that collapses an axis draws nothing — scaleX(0), and a turn
+    // edge-on, rotateX(90deg) — nor does a turn that sends the box out of
+    // the view, though upright it would be in it: turned back a quarter
+    // about its corner (0, 0), (x, y) goes to (y, -x), all of it above the
+    // view.
     paint_page_case("a collapsed or turned-away block paints nothing",
                     "<!doctype html><style>body { margin: 0 } div { width: 100px; height: 20px;"
                     " background: #00ff00 } .z { transform: scaleX(0) }"
-                    " .away { transform-origin: 0 0; transform: rotate(-90deg) }</style>"
-                    "<div class=away></div><div class=z></div>",
+                    " .away { transform-origin: 0 0; transform: rotate(-90deg) }"
+                    " .edge { transform: rotateX(90deg) }</style>"
+                    "<div class=away></div><div class=z></div><div class=edge></div>",
                     200, (os64_gui_rect_t){0, 0, 200, 100}, true,
                     "fill 0 0 200 100 #fefefe\n");
     // Refused, it is drawn upright still inside what clips it from outside:

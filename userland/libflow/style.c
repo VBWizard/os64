@@ -2419,7 +2419,13 @@ static void rotation(double m[16], double x, double y, double z, double angle)
     x /= len;
     y /= len;
     z /= len;
-    double c = cos(angle), s = sin(angle), t = 1 - c;
+    // A quarter turn's cosine is 6e-17, not 0: within 1e-15 of 0 is 0, so a
+    // turn by a multiple of 90deg is exact, and rotateX(90deg) is edge-on —
+    // collapsed, drawn nowhere and hit nowhere — not a sliver.
+    double c = cos(angle), s = sin(angle);
+    c = fabs(c) < 1e-15 ? 0 : c;
+    s = fabs(s) < 1e-15 ? 0 : s;
+    double t = 1 - c;
     m[0] = c + x * x * t;
     m[1] = y * x * t + z * s;
     m[2] = z * x * t - y * s;

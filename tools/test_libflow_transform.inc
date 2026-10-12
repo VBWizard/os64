@@ -597,6 +597,28 @@ static void transform_through_cases(void)
     flow_free(t);
     sheeted_close(&q);
 
+    // One huge on one axis and tiny on the other is undone too, each
+    // column scaled apart: matrix(1e300, 0, 0, 1e-300, 0, .5) has
+    // determinant 1. An edge-on turn, rotateX(90deg), is collapsed: it is
+    // hit nowhere.
+    sheeted_open(&q, XFORM_STYLE ".t{width:100px;height:20px;transform-origin:0 0;"
+                     "transform:matrix(1e300,0,0,1e-300,0,.5)} .x{width:100px;height:20px;"
+                     "transform:rotateX(90deg)}</style><div class=t id=t></div><div class=x id=x></div>",
+                 400, 600);
+    t = flow_layout(q.doc, q.page, 400, &q.env);
+    tb = box_with_id(t, q.doc->document, "t");
+    const flow_box_t *xb = box_with_id(t, q.doc->document, "x");
+    through = flow_box_through(tb, top, m, NULL, NULL);
+    os64_gui_rect_t thin = flow_affine_rect_back(m, (os64_gui_rect_t){0, 0, 400, 600});
+    expect("transform: a matrix huge on one axis and tiny on the other is undone",
+           through && flow_affine_invert(m, inv) && thin.w > 0 && thin.h > 0, NULL);
+    expect("transform: an edge-on turn is hit nowhere",
+           xb != NULL && !flow_box_point(xb, top, 50, 30, &back) &&
+               !inside_of(flow_hit(t, 50, 30, top), xb),
+           NULL);
+    flow_free(t);
+    sheeted_close(&q);
+
     // A layer clipped away entirely adds nothing, not even its corner: a
     // relative box pushed 1000 below its 20 tall clipping wrapper.
     sheeted_open(&q, XFORM_STYLE ".t{width:100px;height:20px;transform:rotate(90deg)}"
