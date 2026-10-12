@@ -167,11 +167,78 @@ static bool image_drawn(const garb_val_t *v)
     return v->kind != GARB_V_IMAGE || v->nitems > 0;
 }
 
+// What a calc() of numbers and percentages comes to — a percentage in its
+// own unit, `*number` false — worked in the order libflow works it
+// (style.c's calc), so the two agree to the bit; false when it holds a
+// length, which only layout settles.
+static bool calc_settled(const garb_calc_t *k, double *v, bool *number)
+{
+    static const int32_t clamp_order[3] = {1, 2, 0};
+    switch (k->op) {
+    case GARB_CALC_LEAF:
+        if (k->leaf.kind != GARB_V_NUMBER && k->leaf.kind != GARB_V_PERCENTAGE)
+            return false;
+        *v = k->leaf.number;
+        *number = k->leaf.kind == GARB_V_NUMBER;
+        return true;
+    case GARB_CALC_SUM:
+        *v = 0;
+        for (int32_t i = 0; i < k->nargs; i++) {
+            double t;
+            if (!calc_settled(k->args[i], &t, number))
+                return false;
+            *v += k->invert != NULL && k->invert[i] ? -t : t;
+        }
+        return true;
+    case GARB_CALC_PRODUCT:
+        *v = 1;
+        *number = true;
+        for (int32_t i = 0; i < k->nargs; i++) {
+            double t;
+            bool n;
+            if (!calc_settled(k->args[i], &t, &n))
+                return false;
+            bool divide = k->invert != NULL && k->invert[i];
+            if (n) {
+                if (divide && t == 0)
+                    return false;
+                *v *= divide ? 1 / t : t;
+            } else if (*number && !divide) {
+                *v = t * *v;
+                *number = false;
+            } else {
+                return false;
+            }
+        }
+        return true;
+    case GARB_CALC_MIN: case GARB_CALC_MAX: case GARB_CALC_CLAMP:
+        if (k->nargs == 0 || (k->op == GARB_CALC_CLAMP && k->nargs != 3))
+            return false;
+        for (int32_t i = 0; i < k->nargs; i++) {
+            double t;
+            int32_t at = k->op == GARB_CALC_CLAMP ? clamp_order[i] : i;
+            if (!calc_settled(k->args[at], &t, number))
+                return false;
+            bool smaller = k->op == GARB_CALC_MIN || (k->op == GARB_CALC_CLAMP && i == 1);
+            if (i == 0 || (smaller ? t < *v : t > *v))
+                *v = t;
+        }
+        return true;
+    }
+    return false;
+}
+
 // Whether a transform's argument is `want` as written — a percentage as
-// its hundredth, an angle in any unit — so that what it does is known
-// before anything is laid out; a calc() is not.
+// its hundredth, an angle in any unit, a calc() of numbers or percentages
+// as it comes to — so that what it does is known before anything is laid
+// out.
 static bool exactly(const garb_val_t *v, double want)
 {
+    double c;
+    bool number;
+    if (v->kind == GARB_V_CALC)
+        return v->calc != NULL && calc_settled(v->calc, &c, &number) &&
+               c == (number ? want : want * 100);
     return (v->kind == GARB_V_NUMBER && v->number == want) ||
            (v->kind == GARB_V_PERCENTAGE && v->number == want * 100) ||
            (v->kind == GARB_V_ANGLE && want == 0 && v->number == 0);
@@ -208,11 +275,13 @@ static bool moves_only(const garb_val_t *f)
         return a[0].kind == GARB_V_KEYWORD;
     // A matrix's linear part is the identity, and a 3D one's flat drawing
     // divides by nothing: x' = m0 x + m4 y + m12, y' = m1 x + m5 y + m13,
-    // over m3 x + m7 y + m15.
-    static const int8_t k3d[] = {0, 1, 3, 4, 5, 7, 15};
-    static const double want3d[] = {1, 0, 0, 0, 1, 0, 1};
+    // over m3 x + m7 y + m15. Nor may a 3D one read z into any of the three
+    // (m8, m9, m11): a translateZ written after it would move the box, or
+    // scale it through w, though each of the two alone does neither.
+    static const int8_t k3d[] = {0, 1, 3, 4, 5, 7, 15, 8, 9, 11};
+    static const double want3d[] = {1, 0, 0, 0, 1, 0, 1, 0, 0, 0};
     bool three = os64_streq(n, "matrix3d");
-    for (int i = 0; i < (three ? 7 : 4); i++)
+    for (int i = 0; i < (three ? 10 : 4); i++)
         if (!exactly(&a[three ? k3d[i] : i], three ? want3d[i] : i == 0 || i == 3))
             return false;
     return true;
@@ -221,7 +290,9 @@ static bool moves_only(const garb_val_t *f)
 // What of a transform value is drawn as something other than it says
 // until slice S7b, by the name of the function or property: anything that
 // does more than move the box. Judged a function at a time, so a list
-// whose functions undo one another is taken to do more than it does.
+// whose functions undo one another is taken to do more than it does; and
+// since no function moves_only() passes reads z into what a flat drawing
+// shows, the z one of them writes cannot reach it through another.
 static const char *transform_approximated(garb_prop_t prop, const garb_val_t *v)
 {
     if (v->kind == GARB_V_KEYWORD)

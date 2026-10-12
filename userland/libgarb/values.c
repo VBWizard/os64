@@ -401,6 +401,21 @@ static garb_calc_t *calc_list_fn(CalcCur *outer, const garb_value_t *f, garb_cal
     return n;
 }
 
+// Whether any leaf of `n` is of `kind`.
+static bool calc_holds(const garb_calc_t *n, garb_vkind_t kind)
+{
+    if (n->op == GARB_CALC_LEAF)
+        return n->leaf.kind == kind;
+    for (int32_t i = 0; i < n->nargs; i++)
+        if (calc_holds(n->args[i], kind))
+            return true;
+    return false;
+}
+
+// A calc() whose type the value accepts: a number where a number is, and a
+// length-percentage where a length or a percentage is — holding only what
+// is accepted, so calc(0px) is no percentage and calc(50%) no length, even
+// where the type, a length-percentage either way, would pass.
 const garb_calc_t *read_calc(Arena *a, const garb_value_t *f, int accept, int *type)
 {
     CalcCur c = {f, 1, 0, a, 0};
@@ -408,6 +423,9 @@ const garb_calc_t *read_calc(Arena *a, const garb_value_t *f, int accept, int *t
     if (n == NULL)
         return NULL;
     if (*type == T_NUMBER ? !(accept & ACCEPT_NUMBER) : !(accept & (ACCEPT_LENGTH | ACCEPT_PERCENT)))
+        return NULL;
+    if (*type != T_NUMBER && ((!(accept & ACCEPT_LENGTH) && calc_holds(n, GARB_V_LENGTH)) ||
+                              (!(accept & ACCEPT_PERCENT) && calc_holds(n, GARB_V_PERCENTAGE))))
         return NULL;
     return n;
 }

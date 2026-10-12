@@ -2381,7 +2381,8 @@ static double radians(const garb_val_t *v)
     }
 }
 
-// A number, a percentage as its hundredth, or a calc() of numbers.
+// A number, a percentage as its hundredth, or a calc() of either, which
+// libgarb lets hold no length where a number or a percentage is.
 static bool author_number(const Author *a, const garb_val_t *v, double *out)
 {
     Lp r;
@@ -2389,10 +2390,10 @@ static bool author_number(const Author *a, const garb_val_t *v, double *out)
         *out = v->number;
     else if (v->kind == GARB_V_PERCENTAGE)
         *out = v->number / 100;
-    else if (v->kind == GARB_V_CALC && v->calc != NULL && calc(a, v->calc, a->font, &r) && r.number)
-        *out = r.px;
-    else
+    else if (v->kind != GARB_V_CALC || v->calc == NULL || !calc(a, v->calc, a->font, &r))
         return false;
+    else
+        *out = r.number ? r.px : r.pct / 100;
     return true;
 }
 
@@ -3237,8 +3238,10 @@ static void positioning(const Ctx *c, Spec *sp)
 // `item`: the element's box is its parent's flex or grid item, and is
 // blockified (Flexbox 1 § 4, Grid 2 § 6) — as an out-of-flow one already
 // was — and floats nowhere (CSS 2.1 § 9.7's float row does not apply to an
-// item: the container places it).
-static void finish(const Ctx *c, Spec *sp, const flow_style_t *parent, bool item)
+// item: the container places it). `root`: the element is the root, which
+// is blockified too (Display 3 § 2.7), so that what reads its display —
+// whether its transform applies (f_transformed) — reads the block it is.
+static void finish(const Ctx *c, Spec *sp, const flow_style_t *parent, bool item, bool root)
 {
     flow_style_t *s = &sp->s;
     if (sp->fs_kind != FS_INHERIT)
@@ -3274,7 +3277,7 @@ static void finish(const Ctx *c, Spec *sp, const flow_style_t *parent, bool item
     if (item)
         s->float_side = FLOW_FLOAT_NONE;
     positioning(c, sp);
-    if (item && !f_out_of_flow(s))
+    if ((item || root) && !f_out_of_flow(s))
         (void)blockify(s);
     // CSS Overflow 3 § 3: visible and clip do not stand beside an axis
     // that scrolls or hides.
@@ -3363,7 +3366,7 @@ static FStyled *style_element(Ctx *c, const os64_html_node_t *n)
         if (is(n, OS64_HTML_TAG_NOSCRIPT) && c->env->scripting)
             sp.s.display = FLOW_DISPLAY_NONE;
     }
-    finish(c, &sp, parent, up != NULL && up->lays_out_items);
+    finish(c, &sp, parent, up != NULL && up->lays_out_items, n == c->doc->html);
     out->style = sp.s;
     out->lays_out_items = f_display_flex(sp.s.display) || f_display_grid(sp.s.display) ||
                           (sp.s.display == FLOW_DISPLAY_CONTENTS && up != NULL &&
@@ -3379,7 +3382,7 @@ static FStyled *style_element(Ctx *c, const os64_html_node_t *n)
     out->in_nobr = (up != NULL && up->in_nobr) || is(n, OS64_HTML_TAG_NOBR);
     out->quotes = (up != NULL ? up->quotes : 0) + is(n, OS64_HTML_TAG_Q);
     out->anchor = f_contains_absolute(&sp.s) ? n : up != NULL ? up->anchor : NULL;
-    out->fixed_anchor = f_contains_absolute(&sp.s) && f_transforms(&sp.s) ? n
+    out->fixed_anchor = f_contains_absolute(&sp.s) && f_transformed(&sp.s) ? n
                       : up != NULL ? up->fixed_anchor : NULL;
     out->transparent = sp.s.opacity == 0 || (up != NULL && up->transparent);
     FStyled *holder = f_map_get(&c->out->map, n->parent);

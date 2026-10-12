@@ -342,7 +342,7 @@ static void position_box(B *b, FBox *box, const os64_html_node_t *el, bool block
     // out of (LAYOUT.md § Proof, the prefix rule).
     box->positioned = block_level && box->style->position != FLOW_POSITION_STATIC;
     box->out_of_flow = block_level && f_out_of_flow(box->style);
-    box->transformed = f_transforms(box->style);
+    box->transformed = f_transformed(box->style);
     FPos *p = pos_add(b, FP_BOX, el, box->style);
     if (p == NULL)
         return;

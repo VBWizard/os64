@@ -440,12 +440,15 @@ static const flow_frame_t *sticky_new(Build *bd, const FBox *src, const flow_box
 
 // A sticky box whose containing block is a scroll container may move as
 // far down as that container's content reaches, which is its foot plus
-// how far it scrolls: known once every box is built.
+// how far it scrolls: known once every box is built. A box also
+// transformed has its sticky frame outside its transform one.
 static void sticky_reach_scrolled(flow_tree_t *t)
 {
     for (int32_t i = 0; i < t->npositioned; i++) {
         const flow_box_t *p = t->positioned[i];
         flow_frame_t *st = (flow_frame_t *)p->frame;
+        if (st != NULL && st->kind == F_FRAME_TRANSFORM && st->box == p)
+            st = (flow_frame_t *)st->outer;
         if (st == NULL || st->kind != F_FRAME_STICKY || st->box != p || !st->cb_scrolls ||
             st->outer == NULL || st->outer->kind != F_FRAME_SCROLL)
             continue;
@@ -649,6 +652,15 @@ static os64_gui_rect_t cut_to(os64_gui_rect_t r, os64_gui_rect_t c)
 
 static os64_gui_rect_t moved(os64_gui_rect_t r, int64_t dx, int64_t dy);
 
+// The page's extent grown to reach (right, bottom), in pixels.
+static void page_reach(flow_tree_t *t, int64_t right, int64_t bottom)
+{
+    if (right * 64 > t->layout->width)
+        t->layout->width = right * 64;
+    if (bottom * 64 > t->layout->height)
+        t->layout->height = bottom * 64;
+}
+
 // The positioned boxes a scroll container's content holds, which its own
 // walk leaves out — a relative box in its flow, a box its content is the
 // containing block of, and either inside a sticky or transformed box in it
@@ -682,11 +694,19 @@ static void reach_stacked(flow_tree_t *t)
         if (f != NULL) {
             scroll_reach(t->scrollers[f->index], right, bottom);
         } else if (transformed && !p->fixed) {
-            if (right * 64 > t->layout->width)
-                t->layout->width = right * 64;
-            if (bottom * 64 > t->layout->height)
-                t->layout->height = bottom * 64;
+            page_reach(t, right, bottom);
         }
+    }
+    // The root is no stacked box, being the first context already, but
+    // its transform moves the whole page: what it holds reaches the page's
+    // extent moved as well as where layout counted it. (It is never fixed:
+    // `position` on the root is laid out in the flow, POSITION.md § Booked.)
+    const flow_box_t *root = t->root;
+    if (root != NULL && root->frame != NULL && root->frame->box == root &&
+        root->frame->kind == F_FRAME_TRANSFORM) {
+        os64_gui_rect_t r = moved(root->overflow, root->frame->by.x, root->frame->by.y);
+        if (r.w > 0 && r.h > 0)
+            page_reach(t, (int64_t)r.x + r.w, (int64_t)r.y + r.h);
     }
 }
 
