@@ -1786,9 +1786,11 @@ void flow_visit_groups(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_p
     void (*visit)(void *, const flow_box_t *) = visitor->visit;
     void *ctx = visitor->ctx;
     // The view in the coordinates each open group drawn through its matrix
-    // is painted in: the one outside taken back through the matrix. Past
-    // the deepest kept, the whole plane, which culls nothing and so loses
-    // nothing.
+    // is painted in: the one outside taken back through the matrix, joined
+    // with it moved back to where an upright drawing puts the group — the
+    // face may refuse to lay it through (flow_box_through's `upright`), and
+    // the walk is over before it is asked. Past the deepest kept, the whole
+    // plane, which culls nothing and so loses nothing.
     os64_gui_rect_t views[F_VIEWS];
     int32_t depth = 0;
     for (int32_t i = 0; i < tree->nlayers; i++) {
@@ -1799,9 +1801,15 @@ void flow_visit_groups(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_p
             int32_t end;
             os64_gui_rect_t bounds = group_bounds(tree, i, scroll, &end);
             double m[6];
-            if (flow_box_through(b, scroll, m, NULL, NULL)) {
-                if (depth < F_VIEWS)
-                    views[depth] = view.w == kWholePlane.w ? kWholePlane : affine_back(m, view);
+            flow_point_t up;
+            if (flow_box_through(b, scroll, m, NULL, &up)) {
+                if (depth < F_VIEWS) {
+                    os64_gui_rect_t back = affine_back(m, view);
+                    os64_gui_rect_t upright = moved(view, -(int64_t)up.x, -(int64_t)up.y);
+                    views[depth] = view.w == kWholePlane.w ? kWholePlane
+                                 : back.w > 0 && back.h > 0 ? join(back, upright)
+                                                            : upright;
+                }
                 depth++;
             }
             if (visitor->open != NULL)

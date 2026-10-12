@@ -975,7 +975,9 @@ void flow_visit(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t 
 // can composite it whole: everything inside painted as usual, then the
 // group laid over what was under it at its opacity (CSS Color 4 § 3.2),
 // through its matrix. Inside a drawn-through group the walk culls against
-// the viewport taken back through the matrices. A face that blends nothing
+// the viewport taken back through the matrices, and where the face would
+// draw it upright instead, so a face that refuses to lay it loses nothing.
+// A face that blends nothing
 // may leave `open` and `close` NULL, which is flow_visit.
 typedef struct {
     void (*visit)(void *ctx, const flow_box_t *box);

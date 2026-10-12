@@ -1442,10 +1442,11 @@ static bool opacity_verbs(const Painter *p)
 // verbs whole: its bounds — in its own coordinates, cut to the view taken
 // back through the matrix, which is all of it that can show — the matrix
 // to the coordinates being painted, and the clip it is laid inside. Laid
-// so, what is inside is painted in its own coordinates. A face that cannot
-// lay it (no verb, no memory, nothing that shows) has it drawn upright,
-// where its origin goes, the shift taking every box there, and under its
-// opacity as an ordinary group. Past the deepest kept, a group asks
+// so, what is inside is painted in its own coordinates. One none of which
+// can show — out of view, or a matrix that collapses an axis — is not
+// painted at all. A face that cannot lay it (no verb, no memory) has it
+// drawn upright, where its origin goes, the shift taking every box there,
+// and under its opacity as an ordinary group. Past the deepest kept, a group asks
 // nothing of the verbs and moves nothing: drawn where it was laid out.
 static void group_open(void *ctx, const flow_box_t *box, os64_gui_rect_t bounds)
 {
@@ -1468,7 +1469,14 @@ static void group_open(void *ctx, const flow_box_t *box, os64_gui_rect_t bounds)
         m[5] += p->shift.y;
         clip = cut(shifted(clip, p->shift), p->view);
         os64_gui_rect_t own = cut(bounds, flow_affine_rect_back(m, clip));
-        if (p->v->through_open != NULL && p->v->through_close != NULL && own.w > 0 && own.h > 0 &&
+        // Nothing of it shows — a matrix that collapses an axis (scaleX(0),
+        // rotateX(90deg)) draws nothing, and the rest may be out of view —
+        // so nothing is painted: the view is empty until its close.
+        if (own.w <= 0 || own.h <= 0) {
+            p->view = (os64_gui_rect_t){0, 0, 0, 0};
+            return;
+        }
+        if (p->v->through_open != NULL && p->v->through_close != NULL &&
             p->v->through_open(p->v->ctx, own, m, clip)) {
             gs->open[d].kind = G_THROUGH;
             p->view = own;

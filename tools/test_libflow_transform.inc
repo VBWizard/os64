@@ -561,6 +561,26 @@ static void transform_through_cases(void)
            cb != NULL && cull.seen && cull.opens == 1 && cull.closes == 1, NULL);
     flow_free(t);
     sheeted_close(&q);
+
+    // And the other way about: turned a quarter back about its corner (0,
+    // 0) — (x, y) to (y, -x) — a bar laid in the view is drawn above it,
+    // but a face that refuses to lay it draws it upright, its corner where
+    // it was, in the view: the walk keeps it for that face.
+    sheeted_open(&q, XFORM_STYLE ".t{position:absolute;left:0;top:0;width:400px;height:10px;"
+                     "transform-origin:0 0;transform:rotate(-90deg)}"
+                     ".c{height:10px}</style><div class=t><div class=c id=c></div></div>",
+                 400, 600);
+    t = flow_layout(q.doc, q.page, 400, &q.env);
+    cb = box_with_id(t, q.doc->document, "c");
+    XformGroups refuse = {0};
+    refuse.watch = cb;
+    vis.ctx = &refuse;
+    flow_visit_groups(t, (os64_gui_rect_t){0, 0, 400, 300}, top, &vis);
+    expect("transform: a box drawn off the view is walked where an upright drawing shows it",
+           cb != NULL && refuse.seen, NULL);
+    vis.ctx = &gr;
+    flow_free(t);
+    sheeted_close(&q);
 }
 
 static void transform_cases(void)

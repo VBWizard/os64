@@ -1013,7 +1013,10 @@ face asks `flow_box_through(box, scroll, m, &clip, &upright)` for the 2D
 affine matrix `m` (a b c d e f) from them to the coordinates of the group
 it sits in, what clips it from outside in those outer coordinates, and
 where to draw it upright instead. The walk culls inside a group against
-the viewport taken back through the matrices: the bounds of its corners.
+the viewport taken back through the matrices — the bounds of its corners
+— joined with where an upright drawing would put it, since the face may
+refuse the group after the walk has passed. A matrix that collapses an
+axis (`scaleX(0)`, `rotateX(90deg)`) draws nothing and is hit nowhere.
 `flow_box_point` takes a page point into a box's own coordinates (a hit,
 an image map's area), and `flow_affine_rect` / `flow_affine_rect_back`
 send a rect through a matrix and back, for the painter's view.
