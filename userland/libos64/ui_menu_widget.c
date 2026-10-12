@@ -138,6 +138,7 @@ void os64_ui_popup_scroll(os64_ui_popup_t *p,int32_t rows)
     size_t top=ui_scroll_rows(p->top,rows);
     if(top>=p->model->count) top=p->model->count-1;
     p->top=top; viewport(p);
+    if(p->selected<p->top||p->selected>=p->bottom) p->selected=MENU_NONE;
 }
 void os64_ui_popup_select(os64_ui_popup_t *p,size_t i)
 {

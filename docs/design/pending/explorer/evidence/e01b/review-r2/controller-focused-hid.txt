@@ -1,0 +1,7 @@
+shot r2-hid-hidden-mnemonic
+shot r2-hid-overflow-hover
+shot r2-hid-left-actions
+shot r2-hid-wheel-no-selection
+shot r2-hid-enter-no-invocation
+shot r2-hid-visible-selection
+shot r2-hid-visible-invocation

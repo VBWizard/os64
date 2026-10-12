@@ -66,7 +66,7 @@ static void help(os64_ui_menu_session_t *s,os64_ui_popup_t *p)
 }
 static bool family(os64_ui_menu_session_t *s,int64_t h)
 {
-    if(h==s->owner) return true;
+    if(s->owner&&h==s->owner) return true;
     for(size_t i=0;i<s->depth;++i) if(h==s->panels[i].handle) return true;
     return false;
 }
@@ -274,7 +274,10 @@ os64_ui_status_code_t os64_ui_menu_refresh(os64_ui_menu_session_t *s)
 {
     if(!s||!s->view) return OS64_UI_INVALID;
     os64_ui_status_code_t rc=os64_ui_actions_refresh(s->view);
-    if(rc) { os64_ui_menu_close(s,OS64_UI_MENU_EXPLICIT); return rc; }
+    if(rc) {
+        os64_ui_status_code_t closed=os64_ui_menu_close(s,OS64_UI_MENU_EXPLICIT);
+        return closed?closed:rc;
+    }
     for(size_t i=0;i<s->depth;++i) {
         os64_ui_popup_t *p=s->panels[i].widget;
         if(!menu_selectable(p,p->selected)) {
@@ -309,22 +312,37 @@ static void child(os64_ui_menu_session_t *s,size_t level,bool explicit)
         (void)request_panel(s,e->child,level+1);
     }
 }
+static bool panel_select(os64_ui_menu_session_t *s,size_t level,size_t row)
+{
+    os64_ui_popup_t *p=s->panels[level].widget;
+    if(!menu_selectable(p,row)) row=MENU_NONE;
+    if(row!=p->selected) {
+        if(s->pending&&s->pending_depth>level) release_pending(s);
+        cancel_press(s);
+        os64_ui_status_code_t rc=close_to(s,level+1);
+        if(rc) { report(s,rc); return false; }
+        s->failed_panel=MENU_NONE; s->failed_row=MENU_NONE;
+        os64_ui_popup_select(p,row);
+    }
+    help(s,p); return true;
+}
 static void activate(os64_ui_menu_session_t *s,size_t level,size_t row)
 {
     os64_ui_popup_t *p=s->panels[level].widget;
     if(!menu_selectable(p,row)) return;
-    os64_ui_popup_select(p,row);
+    if(!panel_select(s,level,row)) return;
     os64_ui_menu_entry_t e=p->model->entries[row];
     if(e.child) child(s,level,true); else invoke(s,e.action);
 }
-static void select_step(os64_ui_menu_session_t *s,size_t level,int delta)
+static void select_step(os64_ui_menu_session_t *s,size_t level,int delta,bool edge)
 {
     os64_ui_popup_t *p=s->panels[level].widget;
     size_t n=p->model->count,i=p->selected;
-    if(i==MENU_NONE) i=delta>0?n-1:0;
+    if(edge) i=delta>0?n-1:0;
+    else if(i==MENU_NONE) i=delta>0?(p->top?p->top-1:n-1):(p->bottom<n?p->bottom:0);
     for(size_t k=0;k<n;++k) {
         i=delta>0?(i+1)%n:(i+n-1)%n;
-        if(menu_selectable(p,i)) { os64_ui_popup_select(p,i); help(s,p); return; }
+        if(menu_selectable(p,i)) { (void)panel_select(s,level,i); return; }
     }
 }
 static int bar_hit(os64_ui_menubar_t *b,int32_t x,int32_t y)
@@ -398,7 +416,9 @@ static void bar_open_target(os64_ui_menu_session_t *s,size_t index,bool direct)
     if(rc) { os64_ui_action_view_release(s->view); s->view=NULL; report(s,rc); os64_ui_menu_model_release(m); return; }
     s->saved_focus=s->ui->focus; os64_ui_cancel_gestures(s->ui);
     s->active=true; s->kind=OS64_UI_MENU_BAR;
-    b->selected=index;
+    /* Hidden mnemonic targets share the visible overflow affordance; model
+     * choice stays in the retained panel rather than the bar's hit-test index. */
+    b->selected=index>=visible?visible:index;
     s->anchor=(os64_gui_rect_t){x,b->w.bounds.y,index>=visible?b->overflow_width:b->widths[index]+2*MENU_GAP,b->w.bounds.h};
     os64_ui_cancel_gestures(s->ui);
     rc=request_panel(s,m,0); os64_ui_menu_model_release(m);
@@ -494,18 +514,20 @@ static bool key_event(os64_ui_menu_session_t *s,const os64_gui_event_t *e)
     }
     size_t level=s->depth-1;
     os64_ui_popup_t *p=s->panels[level].widget;
-    if(k==K_UP||k==K_DOWN) select_step(s,level,k==K_DOWN?1:-1);
+    if(k==K_UP||k==K_DOWN) select_step(s,level,k==K_DOWN?1:-1,false);
     else if(k==K_HOME||k==K_END) {
-        os64_ui_popup_select(p,MENU_NONE);
-        select_step(s,level,k==K_HOME?1:-1);
+        select_step(s,level,k==K_HOME?1:-1,true);
     } else if(k==K_PGUP||k==K_PGDN) {
         size_t rows=p->bottom-p->top;
         for(size_t i=0;i<rows;++i) {
             int step=k==K_PGDN?1:-1;
-            int64_t at=p->selected==MENU_NONE?(step>0?-1:(int64_t)p->model->count):(int64_t)p->selected;
+            int64_t at=p->selected==MENU_NONE?(step>0?(int64_t)p->top-1:(int64_t)p->bottom):(int64_t)p->selected;
             bool moved=false;
             for(at+=step;at>=0&&at<(int64_t)p->model->count;at+=step)
-                if(menu_selectable(p,(size_t)at)) { os64_ui_popup_select(p,(size_t)at); moved=true; break; }
+                if(menu_selectable(p,(size_t)at)) {
+                    if(!panel_select(s,level,(size_t)at)) return true;
+                    moved=true; break;
+                }
             if(!moved) break;
         }
         help(s,p);
@@ -528,7 +550,7 @@ static bool key_event(os64_ui_menu_session_t *s,const os64_gui_event_t *e)
             }
         }
         if(count==1) activate(s,level,match);
-        else if(count) { os64_ui_popup_select(p,next==MENU_NONE?match:next); help(s,p); }
+        else if(count) (void)panel_select(s,level,next==MENU_NONE?match:next);
     }
     return true;
 }
@@ -542,8 +564,8 @@ static bool focus_event(os64_ui_menu_session_t *s,int64_t handle,const os64_gui_
         if(s->dispatcher->tombstones[i]==other) retired=true;
     if(retired) return false;
     if(s->active) {
-        if((handle==s->owner&&e->focus.gained&&other&&other!=s->owner&&!retired)||
-            (handle!=s->owner&&!e->focus.gained&&other==s->owner)) {
+        if(s->owner&&((handle==s->owner&&e->focus.gained&&other&&other!=s->owner&&!retired)||
+            (handle!=s->owner&&!e->focus.gained&&other==s->owner))) {
             s->suppress_pending=true;
             os64_ui_menu_close(s,OS64_UI_MENU_DISMISSED);
         } else if(!e->focus.gained&&!family(s,other)) {
@@ -601,6 +623,15 @@ static void panel_paint(void *user)
     p->widget->w.cls->paint(&p->widget->w,&p->draw,&p->session->ui->theme);
     p->session->dispatcher->native.publish(p->session->dispatcher->native.user,p->handle,p->widget->w.bounds);
 }
+static void panel_scroll(os64_ui_menu_session_t *s,size_t level,int32_t rows)
+{
+    cancel_press(s);
+    if(s->pending&&s->pending_depth>level) release_pending(s);
+    os64_ui_status_code_t rc=close_to(s,level+1);
+    if(rc) { report(s,rc); return; }
+    os64_ui_popup_t *p=s->panels[level].widget;
+    os64_ui_popup_scroll(p,rows); help(s,p);
+}
 static void panel_event(void *user,const os64_gui_event_t *e)
 {
     menu_panel *panel=user;
@@ -625,7 +656,7 @@ static void panel_event(void *user,const os64_gui_event_t *e)
     if(e->type==OS64_GUI_EVENT_KEY_DOWN||e->type==OS64_GUI_EVENT_KEY_UP) { (void)key_event(s,e); return; }
     os64_ui_popup_t *p=panel->widget;
     if(e->type==OS64_GUI_EVENT_MOUSE_WHEEL) {
-        cancel_press(s); close_to(s,level+1); os64_ui_popup_scroll(p,e->mouse.dy>64?192:e->mouse.dy< -64?-192:e->mouse.dy*3); return;
+        panel_scroll(s,level,e->mouse.dy>64?192:e->mouse.dy< -64?-192:e->mouse.dy*3); return;
     }
     if(e->type==OS64_GUI_EVENT_MOUSE_MOVE||e->type==OS64_GUI_EVENT_MOUSE_BUTTON_DOWN||e->type==OS64_GUI_EVENT_MOUSE_BUTTON_UP) {
         s->alt_armed=false;
@@ -633,15 +664,15 @@ static void panel_event(void *user,const os64_gui_event_t *e)
         if(e->type==OS64_GUI_EVENT_MOUSE_MOVE) {
             if(s->pressed_panel==level&&s->pressed_row!=(size_t)row) cancel_press(s);
             if(row>=0) {
-                if(p->selected!=(size_t)row) { s->failed_panel=MENU_NONE; s->failed_row=MENU_NONE; }
-                os64_ui_popup_select(p,(size_t)row); help(s,p);
+                if(!panel_select(s,level,(size_t)row)) return;
                 if(p->selected!=MENU_NONE&&p->model->entries[p->selected].child) child(s,level,false);
                 else { release_pending(s); close_to(s,level+1); }
             }
         } else if(e->type==OS64_GUI_EVENT_MOUSE_BUTTON_DOWN&&e->mouse.button==OS64_GUI_MOUSE_LEFT) {
-            if(row==-2||row==-3) { cancel_press(s); close_to(s,level+1); os64_ui_popup_scroll(p,row==-2?-1:1); }
+            if(row==-2||row==-3) panel_scroll(s,level,row==-2?-1:1);
             else if(row>=0&&menu_selectable(p,(size_t)row)) {
-                os64_ui_popup_select(p,(size_t)row); s->pressed_panel=level; s->pressed_row=(size_t)row; s->pressed_key=0;
+                if(!panel_select(s,level,(size_t)row)) return;
+                s->pressed_panel=level; s->pressed_row=(size_t)row; s->pressed_key=0;
             }
         } else if(e->type==OS64_GUI_EVENT_MOUSE_BUTTON_UP&&e->mouse.button==OS64_GUI_MOUSE_LEFT) {
             bool match=s->pressed_panel==level&&s->pressed_row==(size_t)row&&!s->pressed_key;

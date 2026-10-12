@@ -23,6 +23,12 @@ The final host suites pass 2,079 fake-font / 2,127 real-font checks with ASan,
 UBSan and LeakSanitizer enabled outside the sandbox. The real-font editor suite,
 font contracts, six mutation gates and strict full-userland build also pass.
 
+[Second review evidence](review-r2/README.md) records refresh/teardown error
+precedence, viewport selection, queued-child cancellation, hidden mnemonic
+highlighting and standalone zero-handle focus classification. Host suites pass
+2,526 fake-font / 2,574 real-font checks with all three sanitizers and leak
+detection enabled. This follow-up does not change the earlier P5 report's scope.
+
 Before publication, the branch fast-forwarded to `f7f2f508`; those upstream
 CSS-transform fixes touch no menu, font or action files.
 

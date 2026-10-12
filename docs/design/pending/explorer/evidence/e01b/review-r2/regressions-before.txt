@@ -1,0 +1,13 @@
+action/status: 495 checks, 0 failures
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:405 [round two: stale refresh preserves destruction error] os64_ui_menu_refresh(g.menus)==OS64_UI_ERROR
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:415 [round two: scroll clears hidden selection and activation] os64_ui_popup_selected(p)==MENU_NONE
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:418 [round two: scroll clears hidden selection and activation] p->selected==MENU_NONE
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:427 [round two: scroll clears hidden selection and activation] !g.status.help.text
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:428 [round two: scroll clears hidden selection and activation] g.targets[0].hits==hits&&popup_handle()==root
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:26 [round two: scroll clears hidden selection and activation] h>0&&h<33&&transport.windows[h].live
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:430 [round two: scroll clears hidden selection and activation] g.status.help.text&&strstr(g.status.help.text,"Record")==NULL
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:444 [round two: keyboard cancels pending child at tombstone boundary] transport.creates==births&&popup_handle()==root
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:452 [round two: hidden mnemonic highlights overflow and preserves hover] g.bar.selected==visible
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:457 [round two: hidden mnemonic highlights overflow and preserves hover] transport.creates==births&&popup_handle()==root
+menu/action/status: 2263 checks, 10 failures
+Artifacts: /tmp/e1b-r2-before

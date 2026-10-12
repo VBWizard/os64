@@ -80,6 +80,17 @@ press-only escape bursts. Command activation, mnemonics and mode keys retain
 their repeat guards. The review evidence corrects the initial native overflow
 child capture, which showed only the parent despite its original description.
 
+The second review fixes refresh error precedence: a failed close returns ERROR
+before a stale/failed action-refresh result, keeping teardown obligations visible.
+Scrolling clears a selected row that leaves the viewport and clears its help;
+arrow/page navigation from no selection starts within the visible rows. Parent
+selection changes cancel queued children and close descendants before changing
+the anchor, including keyboard, pointer and duplicate-mnemonic paths. Hidden
+top-level mnemonics open their requested model while selecting the visible
+overflow affordance for hover and Left/Right interaction. A standalone session's
+zero owner is not a family handle or an owner-content dismissal destination.
+See [second review evidence](evidence/e01b/review-r2/README.md).
+
 Retired focus records are ignored by a pending replacement, including old birth
 focus-lost records. Unknown live focus peers dismiss conservatively. A sibling
 application window is outside the family. Native conditional focus return is

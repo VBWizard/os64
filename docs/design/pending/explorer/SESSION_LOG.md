@@ -479,3 +479,31 @@ but the menu held-key guard waited for a release. A targeted regression fails
 before the fix. Decoded navigation now repeats while command/mode keys retain
 their guard. Corrected the controller's redundant Right press and added a
 child-image assertion; corrected the earlier evidence claim in the same change.
+
+## 2026-10-12 — E1B second PR review fixes
+
+Addressed the five round-two findings on PR #259: refresh preserves failed
+teardown's ERROR over stale-action status; wheel/affordance scrolling clears
+hidden selection/help; selection movement cancels pending children before the
+queue drain can open them; direct hidden mnemonics highlight the overflow
+affordance; standalone focus treats zero as an external destination, not owner.
+The last report's nondismissal was not reproduced: the previous owner-content
+branch already closed standalone menus, but incorrectly armed suppression.
+
+Before-fix regressions reproduce the first four findings. Keyboard queue-race
+coverage includes arrows, Home/End, pages and duplicate mnemonics. Final host
+suites pass 2,526 fake-font / 2,574 real-font checks with ASan, UBSan and
+LeakSanitizer enabled outside the sandbox; six mutation gates and full userland
+cross build pass. [Second review evidence](evidence/e01b/review-r2/README.md)
+records reproduction and source/binary hashes. The P5 report predates this
+follow-up; ordinary re-review remains pending. Kernel/E1C/gclock scope is unchanged.
+
+Reran four-core native HID and PS/2 checks, plus focused probes on both inputs.
+Hidden Fixtures highlights overflow, entering overflow directly preserves it,
+and Left opens Actions. Wheel clears selection; the first Enter invokes nothing,
+then Down/Enter invokes visible Row 03 with menus closed. Broader font/overflow,
+external-focus and close routing checks pass. Live heap returns to the warm
+baseline after 24 more cycles; gallery traces exit with zero font bytes/references.
+The focused controller's first pointer path crossed Actions and correctly
+switched headings; that trial was discarded and the retained direct-entry path
+was verified. No code change was made for that controller path.
