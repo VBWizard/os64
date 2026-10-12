@@ -100,6 +100,18 @@ Page Up/Down computes a target one viewport's model-row count away, then adjusts
 once for an enabled landing entry, rather than taking a viewport's number of
 enabled-entry steps. See [third review evidence](evidence/e01b/review-r3/README.md).
 
+The fourth review uses a [state/invariant audit](E01B_INVARIANTS.md). Refresh
+shares selection's descendant-close transaction: failed removal preserves the
+surviving parent's anchor, including partial teardown and top-level replacement.
+Bar state publication schedules owner damage for target swaps and changed enabled
+state, including failed refresh; unchanged same-view paint remains idle. Context
+menus do not highlight a remembered bar heading. External loss resets delivery
+pairing even after shortcut closure; family dismissal preserves the matching
+release. Covered cancels input pairing and preserves menus. Alt/F10 and popup
+opening share retained-view preparation, and event-only failures report through
+the configured hook. [Fourth review evidence](evidence/e01b/review-r4/README.md)
+records interrupted sequences and production owner pixel/damage checks.
+
 Retired focus records are ignored by a pending replacement, including old birth
 focus-lost records. Unknown live focus peers dismiss conservatively. A sibling
 application window is outside the family. Native conditional focus return is

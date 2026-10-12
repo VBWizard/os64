@@ -535,3 +535,34 @@ child creation and close routing remain correct. Every gallery trace exits with
 zero font bytes/references; live heap returns to the warm baseline after 24 more
 cycles. Shortcut conflicts, stale reveal and pending-collapse races are hosted
 in deterministic sanitizer tests, not claimed as induced native races.
+
+## 2026-10-12 — E1B fourth review and invariant audit
+
+Mapped the four findings to parent-path commitment, published bar state, input
+delivery pairing and observable request outcomes. Audited sibling transitions
+rather than stopping at the reported lines. Refresh uses the shared selection
+transaction, top-level replacement commits after successful teardown, and
+bar publication schedules damage for successful or invalidated snapshots.
+A context menu no longer highlights a remembered top-level heading. External
+loss and INPUT_LOST share input reset; coverage resets pairing and preserves
+menus. Bar-mode/opening share target preparation and event-only close errors
+reach the configured error hook.
+
+The first regression matrix reproduces all four findings with 45 failures.
+Expanded deterministic sequences observe native path/model/registration state
+between events and render the owner through production dirty rectangles.
+Complete fake/real suites pass 84,040/84,088 assertions with ASan, UBSan and
+LeakSanitizer enabled outside the sandbox. Forty-four parameterized sequences
+and 5,622 observation points are separate from those repeated assertions.
+The strict userland build passes. [Audit](E01B_INVARIANTS.md) and
+[fourth-review evidence](evidence/e01b/review-r4/README.md) record reproducibility
+and limits. Review remains pending; the earlier P5 report is separate evidence.
+
+Final native HID/pointer, PS/2/font/overflow, external-close and focused held-input
+controllers pass. Separate down/up routing confirms the first F10 and shortcut
+work after release outside the family, for both keyboards. Archived traces and
+pixel checks pass; all gallery exits release font bytes/target references, and
+live heap returns to the warm baseline after 24 more openings. Real-font
+UI/editor (1,626), Scribe (2,470) and font contract/ABI checks pass with leak
+detection. The evidence includes a focused P5 repeat for the updated build;
+no new P5 deployment or result is claimed.

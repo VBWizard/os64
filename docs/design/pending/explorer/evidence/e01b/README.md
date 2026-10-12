@@ -35,12 +35,19 @@ disabled entries/separators. Host suites pass 3,673 fake-font / 3,721 real-font
 checks with ASan, UBSan and LeakSanitizer enabled. The isolated before-fix
 collapse reproduces a null dereference; its after-fix run passes 1,258 checks.
 
+[Fourth review evidence](review-r4/README.md) maps findings to shared controller
+invariants, interrupted delivery/queued-opening tests and production owner
+rendering. The pre-fix run reproduces all four findings. Final suites pass
+84,040 / 84,088 assertions with leak detection enabled; 44 parameterized sequences
+and 5,622 observation points are reported separately from assertion counts.
+The [invariant table](../../E01B_INVARIANTS.md) records scope and commitments.
+
 Before publication, the branch fast-forwarded to `f7f2f508`; those upstream
 CSS-transform fixes touch no menu, font or action files.
 
 ## Host results
 
-The final menu suite passes **1,807 fake-font / 1,854 real-font checks**, including
+The initial menu suite passes **1,807 fake-font / 1,854 real-font checks**, including
 its existing 495/542 action/status checks, with ASan, UBSan and LeakSanitizer.
 The real run uses shipped DejaVu faces and production 24px/32px font adoption.
 

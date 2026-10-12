@@ -349,7 +349,8 @@ static void bar_paint(os64_ui_widget_t *w,os64_draw_ctx_t *ctx,const os64_ui_the
     size_t visible=menu_bar_visible(b);
     int32_t x=w->bounds.x;
     for(size_t i=0;b->model&&i<=visible&&i<b->model->count;++i) {
-        bool over=i==visible,sel=b->session&&os64_ui_menu_active(b->session)&&b->selected==i;
+        bool over=i==visible,sel=b->session&&os64_ui_menu_active(b->session)&&
+            b->session->kind==OS64_UI_MENU_BAR&&b->selected==i;
         int32_t width=over?b->overflow_width:b->widths[i]+2*MENU_GAP;
         if(width>w->bounds.x+w->bounds.w-x) width=w->bounds.x+w->bounds.w-x;
         os64_gui_rect_t r={x,w->bounds.y,width,w->bounds.h};

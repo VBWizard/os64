@@ -36,7 +36,7 @@ Updated: 2026-10-12.
   review. Chris reports the P5 walkthrough passed; its trace is retained.
   E1C's production migrations follow E1B.
 - The initial design branch is historical; its documentation snapshot
-  `d33e651e` arrived through E1A. This branch carries the second-review follow-up.
+  `d33e651e` arrived through E1A. This branch carries the E1B invariant-audit follow-up.
 - E2's visual family remains a separate choice with Chris; E6 still needs its
   standalone channel design and Fable review.
 
@@ -60,7 +60,7 @@ Create slice records when work begins, rather than maintaining 15 empty designs.
 
 | ID | Slice | State | Owner | Record / PR / implementation commit | Acceptance evidence |
 | --- | --- | --- | --- | --- | --- |
-| E1 | Actions, menus and status | E1A/E1K complete; E1B review fixes, P5 report passed | Quinn (E1B), Sol (E1A) | [E1A](E01A_HANDOFF.md), [E1K](E01K_HANDOFF.md), [E1B](E01B_HANDOFF.md); PR #254 `c6cc6e3c`, PR #257 `b36e9ddc` | [E1B evidence/walkthrough](evidence/e01b/README.md); P5 report precedes review fixes |
+| E1 | Actions, menus and status | E1A/E1K complete; E1B invariant audit, re-review pending; earlier P5 passed | Quinn (E1B), Sol (E1A) | [E1A](E01A_HANDOFF.md), [E1K](E01K_HANDOFF.md), [E1B](E01B_HANDOFF.md); PR #254 `c6cc6e3c`, PR #257 `b36e9ddc` | [E1B evidence/walkthrough](evidence/e01b/README.md); P5 report precedes review fixes |
 | E2 | Icon vocabulary | Designing — visual choice open | Quinn (design) | [E2 contract](E02_ICONS.md) | Dependency/allocation inspection; no runtime evidence |
 | E3 | Data view and selection | Planned | Unassigned | — | None |
 | E4 | Directory browser | Planned | Unassigned | — | None |
