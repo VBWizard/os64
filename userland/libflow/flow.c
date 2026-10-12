@@ -73,6 +73,10 @@ struct flow_tree {
     // changes, and where a box's `scroller` points.
     flow_frame_t **scrollers;
     int32_t nscrollers, cap_scrollers;
+    // How far past its box any shadow on the page may be drawn, in pixels
+    // (ink_reach): what a group's bounds are widened by, since a shadow is
+    // in no box's overflow.
+    int64_t ink;
     bool incomplete;
 };
 
@@ -732,6 +736,40 @@ static void reach_stacked(flow_tree_t *t)
     }
 }
 
+// How far past its shape one shadow may be drawn: its offset and spread,
+// and its blur's reach — twice the blur radius, a Gaussian of standard
+// deviation half the radius being nothing past three of them.
+static int64_t shadow_reach(const flow_shadow_t *sh)
+{
+    int64_t dx = sh->x < 0 ? -(int64_t)sh->x : sh->x, dy = sh->y < 0 ? -(int64_t)sh->y : sh->y;
+    return (dx > dy ? dx : dy) + (sh->spread > 0 ? sh->spread : 0) + 2 * (int64_t)sh->blur + 1;
+}
+
+// The furthest any shadow in the tree under `root` reaches past its box: a
+// box's own shadows (an inset one falls inside) and its text's. Walked
+// without recursion, the tree being as deep as the page.
+static int64_t ink_reach(const flow_box_t *root)
+{
+    int64_t most = 0;
+    for (const flow_box_t *b = root; b != NULL;) {
+        const flow_style_t *s = b->style;
+        for (int32_t i = 0; i < s->nbox_shadows; i++)
+            if (!s->box_shadows[i].inset && shadow_reach(&s->box_shadows[i]) > most)
+                most = shadow_reach(&s->box_shadows[i]);
+        for (int32_t i = 0; i < s->ntext_shadows; i++)
+            if (shadow_reach(&s->text_shadows[i]) > most)
+                most = shadow_reach(&s->text_shadows[i]);
+        if (b->first != NULL) {
+            b = b->first;
+            continue;
+        }
+        while (b != NULL && b != root && b->next == NULL)
+            b = b->parent;
+        b = b != NULL && b != root ? b->next : NULL;
+    }
+    return most < INT32_MAX / 4 ? most : INT32_MAX / 4;
+}
+
 // A piece of a scroll container's own content, `r`, reached, and the
 // container's end padding past it; nothing when `f` is NULL.
 static void content_reach(flow_frame_t *f, const FBox *src, os64_gui_rect_t r)
@@ -1184,6 +1222,7 @@ flow_tree_t *flow_layout(const os64_html_document_t *doc, const os64_page_t *mod
         }
         reach_stacked(tree);
         sticky_reach_scrolled(tree);
+        tree->ink = ink_reach(tree->root);
     }
     return tree;
 }
@@ -1379,11 +1418,26 @@ static void from_space(const flow_frame_t *f, flow_point_t scroll, double *x, do
     }
 }
 
-// Whether a matrix of determinant `det` can be undone: any that is not 0
-// and whose inverse is finite, however small — scaleX(1e-12) still draws.
-static bool invertible(double det)
+bool flow_affine_invert(const double m[6], double inv[6])
 {
-    return det != 0 && isfinite(1 / det);
+    // Its 2x2 part scaled by its largest entry first, so neither a huge
+    // matrix (scale(1e200): a determinant past a double) nor a tiny one
+    // overflows on the way; scaled back after.
+    double k = fmax(fmax(fabs(m[0]), fabs(m[1])), fmax(fabs(m[2]), fabs(m[3])));
+    if (!(k > 0) || !isfinite(k))
+        return false;
+    double a = m[0] / k, b = m[1] / k, c = m[2] / k, d = m[3] / k;
+    double det = a * d - b * c;
+    if (det == 0 || !isfinite(det))
+        return false;
+    double r[6] = {d / det / k, -b / det / k, -c / det / k, a / det / k, 0, 0};
+    r[4] = -(r[0] * m[4] + r[2] * m[5]);
+    r[5] = -(r[1] * m[4] + r[3] * m[5]);
+    for (int i = 0; i < 6; i++)
+        if (!isfinite(r[i]))
+            return false;
+    os64_memcpy(inv, r, sizeof(r));
+    return true;
 }
 
 // The page's point (x, y) taken in to the coordinates frame `f`'s
@@ -1399,13 +1453,12 @@ static bool to_space(const flow_frame_t *f, flow_point_t scroll, double *x, doub
         return false;
     Frames m = {.n = 0};
     flow_point_t o = frame_of(&m, t->outer, t->box->fixed, scroll);
-    const double *a = t->affine;
-    double det = a[0] * a[3] - a[1] * a[2];
-    if (!invertible(det))
+    double inv[6];
+    if (!flow_affine_invert(t->affine, inv))
         return false;
-    double px = *x - o.x - a[4], py = *y - o.y - a[5];
-    *x = (a[3] * px - a[2] * py) / det;
-    *y = (a[0] * py - a[1] * px) / det;
+    double px = *x - o.x, py = *y - o.y;
+    *x = inv[0] * px + inv[2] * py + inv[4];
+    *y = inv[1] * px + inv[3] * py + inv[5];
     return isfinite(*x) && isfinite(*y);
 }
 
@@ -1718,12 +1771,22 @@ static os64_gui_rect_t affine_bounds(const double m[6], os64_gui_rect_t r)
     if (!(x0 <= x1 && y0 <= y1))
         return (os64_gui_rect_t){0, 0, 0, 0};
     // A whole pixel within a millionth is that pixel: a quarter turn's
-    // cosine is 6e-17, not 0, and must not grow a rect by one.
+    // cosine is 6e-17, not 0, and must not grow a rect by one. Nor may the
+    // snap, or a double's precision, empty what is not empty: the view taken
+    // back through scale(1e200) is far less than a pixel — 50 plus 4e-198
+    // is 50 — and still the pixel it is in. Whether an extent is empty is
+    // the matrix's to say, not the rounded corners'.
     const double snap = 1e-6;
+    bool wide = r.w > 0 && fabs(m[0]) * r.w + fabs(m[2]) * r.h > 0;
+    bool tall = r.h > 0 && fabs(m[1]) * r.w + fabs(m[3]) * r.h > 0;
     x0 = floor(fmax(lo, fmin(hi, x0)) + snap);
     y0 = floor(fmax(lo, fmin(hi, y0)) + snap);
     x1 = ceil(fmax(lo, fmin(hi, x1)) - snap);
     y1 = ceil(fmax(lo, fmin(hi, y1)) - snap);
+    if (wide && x1 <= x0)
+        x1 = x0 + 1;
+    if (tall && y1 <= y0)
+        y1 = y0 + 1;
     return (os64_gui_rect_t){(int32_t)x0, (int32_t)y0, (int32_t)(x1 - x0), (int32_t)(y1 - y0)};
 }
 
@@ -1731,12 +1794,9 @@ static os64_gui_rect_t affine_bounds(const double m[6], os64_gui_rect_t r)
 // coordinates lands in `r` outside it. Empty when `m` cannot be undone.
 static os64_gui_rect_t affine_back(const double m[6], os64_gui_rect_t r)
 {
-    double det = m[0] * m[3] - m[1] * m[2];
-    if (!invertible(det))
+    double inv[6];
+    if (!flow_affine_invert(m, inv))
         return (os64_gui_rect_t){0, 0, 0, 0};
-    double inv[6] = {m[3] / det, -m[1] / det, -m[2] / det, m[0] / det, 0, 0};
-    inv[4] = -(inv[0] * m[4] + inv[2] * m[5]);
-    inv[5] = -(inv[1] * m[4] + inv[3] * m[5]);
     return affine_bounds(inv, r);
 }
 
@@ -1750,10 +1810,23 @@ os64_gui_rect_t flow_affine_rect_back(const double m[6], os64_gui_rect_t r)
     return affine_back(m, r);
 }
 
+// `r` grown by `d` on every side, held to what a rect can say.
+static os64_gui_rect_t grown(os64_gui_rect_t r, int64_t d)
+{
+    const int64_t lo = INT32_MIN / 2, hi = INT32_MAX / 2;
+    int64_t x0 = (int64_t)r.x - d, y0 = (int64_t)r.y - d;
+    int64_t x1 = (int64_t)r.x + r.w + d, y1 = (int64_t)r.y + r.h + d;
+    x0 = x0 < lo ? lo : x0;
+    y0 = y0 < lo ? lo : y0;
+    x1 = x1 > hi ? hi : x1;
+    y1 = y1 > hi ? hi : y1;
+    return (os64_gui_rect_t){(int32_t)x0, (int32_t)y0, (int32_t)(x1 - x0), (int32_t)(y1 - y0)};
+}
+
 // What a group paints, from its OPEN at layer `i` to its CLOSE, whose
 // layer `*close` is set to: every box's overflow rect where its frame puts
-// it at `scroll`, cut to its clip, in the coordinates the group is painted
-// in — a group
+// it at `scroll`, grown by how far the page's shadows reach (tree->ink) and
+// cut to its clip, in the coordinates the group is painted in — a group
 // drawn through its matrix inside it counted as its own bounds sent
 // through that matrix, cut to what clips it from outside.
 static os64_gui_rect_t group_bounds(const flow_tree_t *tree, int32_t i, flow_point_t scroll,
@@ -1782,6 +1855,7 @@ static os64_gui_rect_t group_bounds(const flow_tree_t *tree, int32_t i, flow_poi
         } else {
             flow_point_t o = flow_box_doc_offset(l->box, scroll);
             at = moved(l->box->overflow, o.x, o.y);
+            at = grown(at, tree->ink);      // what shadows paint past it
             if (l->box->clipped)
                 at = meet(at, flow_box_doc_clip(l->box, scroll));
             if (at.w <= 0 || at.h <= 0)

@@ -28,14 +28,16 @@ typedef struct {
 // + m[3] y + m[5], a sheet pixel (i, j) being the square from (i, j) to (i
 // + 1, j + 1) — only inside `clip` (dst's coordinates), and under the
 // group's own opacity `alpha` of 255: each channel a B + (1 - a + a T) D.
-// Each dst pixel's centre is taken back through `m` and sampled from the
-// sheets: BY INDEX when `m` is a quarter turn or a mirror and its
-// translation whole, an exact copy; else BILINEAR, B and T mixed apart
-// from the four pixels round it, outside the sheets nothing painted. A
-// pixel nothing reaches is left as it is. False when `m` cannot be undone,
-// and nothing is laid.
+// Each dst pixel's centre is taken back through `inv`, `m` undone — the
+// caller's, by the one rule the page's matrices are undone by
+// (flow_affine_invert), so what is laid and what is hit agree — and
+// sampled from the sheets: BY INDEX when `m` is a quarter turn or a mirror
+// and its translation whole, an exact copy; else BILINEAR, B and T mixed
+// apart from the four pixels round it, outside the sheets nothing painted.
+// A pixel nothing reaches is left as it is. False, and nothing laid, when
+// there is no `inv` or nothing to lay.
 bool yonder_warp(uint32_t *dst, uint32_t pitch, os64_gui_rect_t clip, const yonder_sheets_t *s,
-                 const double m[6], uint8_t alpha);
+                 const double m[6], const double inv[6], uint8_t alpha);
 
 // Whether `m` is one the warp copies by index.
 bool yonder_warp_exact(const double m[6]);

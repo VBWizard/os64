@@ -564,6 +564,39 @@ static void transform_through_cases(void)
     flow_free(t);
     sheeted_close(&q);
 
+    // A shadow is in no box's overflow, but a group holds what it paints:
+    // 0 0 10px 5px reaches 0 + 5 + 2 x 10 + 1 = 26 past the box, so the
+    // turned box's 100 by 20 is held from -26, 152 by 72.
+    sheeted_open(&q, XFORM_STYLE ".t{width:100px;height:20px;box-shadow:0 0 10px 5px #000;"
+                     "transform:rotate(90deg)}</style><div class=t></div>",
+                 400, 600);
+    t = flow_layout(q.doc, q.page, 400, &q.env);
+    XformGroups shadowed = {0};
+    vis.ctx = &shadowed;
+    flow_visit_groups(t, (os64_gui_rect_t){0, 0, 400, 600}, top, &vis);
+    expect("transform: a turned group holds the shadows it paints",
+           shadowed.opens == 1 && rect_is(shadowed.first, -26, -26, 152, 72), NULL);
+    vis.ctx = &gr;
+    flow_free(t);
+    sheeted_close(&q);
+
+    // A matrix however large is undone, scaled first: scale(1e200)'s
+    // determinant is past a double, its inverse is not.
+    sheeted_open(&q, XFORM_STYLE ".t{width:100px;height:20px;transform:scale(1e200)}"
+                     "</style><div class=t id=t></div>",
+                 400, 600);
+    t = flow_layout(q.doc, q.page, 400, &q.env);
+    tb = box_with_id(t, q.doc->document, "t");
+    through = flow_box_through(tb, top, m, NULL, NULL);
+    double inv[6];
+    os64_gui_rect_t big_back = flow_affine_rect_back(m, (os64_gui_rect_t){0, 0, 400, 600});
+    expect("transform: a matrix however large is undone",
+           through && flow_affine_invert(m, inv) && big_back.w > 0 && big_back.h > 0 &&
+               flow_box_point(tb, top, 200, 300, &back),
+           NULL);
+    flow_free(t);
+    sheeted_close(&q);
+
     // A layer clipped away entirely adds nothing, not even its corner: a
     // relative box pushed 1000 below its 20 tall clipping wrapper.
     sheeted_open(&q, XFORM_STYLE ".t{width:100px;height:20px;transform:rotate(90deg)}"

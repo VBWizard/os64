@@ -5722,15 +5722,13 @@ static void glass_fill(void *ctx, os64_gui_rect_t r, uint32_t colour)
 }
 
 // A shadow's pixels, each row made ARGB from the colour and its alphas and
-// blended where it meets what is being painted.
-static void glass_mask(void *ctx, os64_gui_rect_t r, const uint8_t *alpha, uint32_t colour)
+// blended where it meets what is being painted. `row` holds `r.w` pixels,
+// the caller's (pane_mask), so every target draws or none does.
+static void glass_mask(const Glass *gl, os64_gui_rect_t r, const uint8_t *alpha, uint32_t colour,
+                       uint32_t *row)
 {
-    const Glass *gl = ctx;
     os64_gui_rect_t at = on_glass(gl, r);
     if (at.w <= 0 || at.h <= 0)
-        return;
-    uint32_t *row = os64_malloc((size_t)at.w * sizeof(*row));
-    if (row == NULL)
         return;
     int32_t sx = at.x - (r.x + gl->dx), sy = at.y - (r.y + gl->dy);
     for (int32_t y = 0; y < at.h; y++) {
@@ -5739,7 +5737,6 @@ static void glass_mask(void *ctx, os64_gui_rect_t r, const uint8_t *alpha, uint3
             row[x] = (uint32_t)a[x] << 24 | (colour & 0xffffffu);
         os64_draw_blend(gl->surf, at.x, at.y + y, row, (uint32_t)at.w, 1, (uint32_t)at.w);
     }
-    os64_free(row);
 }
 
 // A gradient's pixels, blended where they meet what is being painted.
@@ -5918,22 +5915,20 @@ static void glass_control(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os6
 }
 
 // A frame's stand-in: a pale panel, and along its top where the frame's
-// document is ("Frame: https://..."), cut to the panel. The run is made for
-// this paint and let go after it, so no tree's replacement can leave one
-// behind; a page has few frames.
+// document is ("Frame: https://..."), cut to the panel. The label's run is
+// made for this paint and let go after it, so no tree's replacement can
+// leave one behind; a page has few frames. It is made once for every
+// target (pane_frame), so all draw it or none does; NULL, the panel alone.
 #define FRAME_LABEL_PX 13
 #define FRAME_LABEL_MAX 512
-static void glass_frame(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_gui_rect_t clip,
-                        uint32_t ink, uint32_t paper)
+typedef struct {
+    os64_text_run_t *run;
+    int32_t pad, ascent;        // pixels
+} FrameLabel;
+
+static FrameLabel frame_label(const flow_box_t *b)
 {
-    Glass cut = *(const Glass *)ctx;
-    os64_gui_rect_t room;
-    if (!os64_rect_intersect(c, clip, &room))
-        return;
-    cut.clip = on_glass(&cut, room);
-    if (cut.clip.w <= 0 || cut.clip.h <= 0)
-        return;
-    glass_fill(&cut, c, paper);
+    FrameLabel fl = {NULL, 0, 0};
     const os64_page_link_t *l = os64_page_link(flow_model(g.page.tree), b->link);
     char text[FRAME_LABEL_MAX];
     if (l != NULL && l->href.url != NULL)
@@ -5946,17 +5941,33 @@ static void glass_frame(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_
     os64_font_face_info_t face;
     uint32_t px = (uint32_t)((int64_t)FRAME_LABEL_PX * (g.zoom != 0 ? g.zoom : 1000) / 1000);
     if (s_env.text == NULL || page_fonts(NULL, &sans, false, false, px, &fonts, &nfonts, &face) != OS64_FONT_OK)
-        return;
+        return fl;
     os64_text_layout_t opt = {.encoding = OS64_TEXT_UTF8_WESTERN_V1, .fonts = fonts,
                               .font_count = nfonts, .tab_interval = 64 * 8};
-    os64_text_run_t *run = NULL;
-    if (os64_text_layout(s_env.text, (const uint8_t *)text, os64_strlen(text), &opt, &run) != OS64_FONT_OK)
+    if (os64_text_layout(s_env.text, (const uint8_t *)text, os64_strlen(text), &opt, &fl.run) !=
+        OS64_FONT_OK)
+        fl.run = NULL;
+    fl.pad = (int32_t)(px / 2);
+    fl.ascent = (int32_t)((face.ascent + 63) / 64);
+    return fl;
+}
+
+static void glass_frame(const Glass *gl, os64_gui_rect_t c, os64_gui_rect_t clip, uint32_t ink,
+                        uint32_t paper, const FrameLabel *fl)
+{
+    Glass cut = *gl;
+    os64_gui_rect_t room;
+    if (!os64_rect_intersect(c, clip, &room))
         return;
-    int32_t pad = (int32_t)(px / 2);
-    int32_t baseline = c.y + pad + (int32_t)((face.ascent + 63) / 64);
-    os64_text_draw_alpha(run, cut.surf, cut.clip, c.x + pad + cut.dx, baseline + cut.dy,
+    cut.clip = on_glass(&cut, room);
+    if (cut.clip.w <= 0 || cut.clip.h <= 0)
+        return;
+    glass_fill(&cut, c, paper);
+    if (fl->run == NULL)
+        return;
+    int32_t baseline = c.y + fl->pad + fl->ascent;
+    os64_text_draw_alpha(fl->run, cut.surf, cut.clip, c.x + fl->pad + cut.dx, baseline + cut.dy,
                          0xff000000u | ink, flow_alpha(ink));
-    os64_text_run_release(run);
 }
 
 // ── A scrolled box's bars ───────────────────────────────────────────────
@@ -6154,11 +6165,20 @@ static void pane_group_close(void *ctx, uint8_t alpha)
         glass_group_close(gp->now[k], alpha);
 }
 
+// What a verb allocates is allocated once, here, for every target: two
+// sheets that disagreed — one drawn, one not, for want of memory — would
+// give the warp the wrong B and T.
 static void pane_mask(void *ctx, os64_gui_rect_t r, const uint8_t *alpha, uint32_t colour)
 {
     GlassPane *gp = ctx;
+    if (r.w <= 0 || r.h <= 0)
+        return;
+    uint32_t *row = os64_malloc((size_t)r.w * sizeof(*row));
+    if (row == NULL)
+        return;
     for (int32_t k = 0; k < gp->n; k++)
-        glass_mask(gp->now[k], r, alpha, colour);
+        glass_mask(gp->now[k], r, alpha, colour, row);
+    os64_free(row);
 }
 
 static void pane_pixels(void *ctx, os64_gui_rect_t r, const uint32_t *argb)
@@ -6172,8 +6192,11 @@ static void pane_frame(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_g
                        uint32_t ink, uint32_t paper)
 {
     GlassPane *gp = ctx;
+    FrameLabel fl = frame_label(b);
     for (int32_t k = 0; k < gp->n; k++)
-        glass_frame(gp->now[k], b, c, clip, ink, paper);
+        glass_frame(gp->now[k], c, clip, ink, paper, &fl);
+    if (fl.run != NULL)
+        os64_text_run_release(fl.run);
 }
 
 static void through_free(GlassThrough *t)
@@ -6245,8 +6268,9 @@ static void pane_through_close(void *ctx, uint8_t alpha)
         double lay[6] = {m[0], m[1], m[2], m[3], m[0] * bx + m[2] * by + m[4] + on->dx,
                          m[1] * bx + m[3] * by + m[5] + on->dy};
         os64_gui_rect_t cut = on_glass(on, t->clip);
-        if (cut.w > 0 && cut.h > 0)
-            (void)yonder_warp(on->surf->pixels, on->surf->pitch_px, cut, &s, lay, alpha);
+        double back[6];
+        if (cut.w > 0 && cut.h > 0 && flow_affine_invert(lay, back))
+            (void)yonder_warp(on->surf->pixels, on->surf->pitch_px, cut, &s, lay, back, alpha);
     }
     through_free(t);
 }

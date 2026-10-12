@@ -875,6 +875,12 @@ bool flow_box_point(const flow_box_t *box, flow_point_t scroll, int32_t x, int32
 // any other box.
 bool flow_box_through(const flow_box_t *box, flow_point_t scroll, double m[6],
                       os64_gui_rect_t *clip, flow_point_t *upright);
+// Such a matrix undone: false when it cannot be — its 2x2 part has no
+// inverse, or the inverse is not finite. One matrix, scaled before it is
+// inverted, so a huge one and a tiny one alike come back: whatever the
+// face lays through a matrix it undoes here, so painting, laying and hits
+// agree on what can be undone.
+bool flow_affine_invert(const double m[6], double inv[6]);
 // A rect sent through such a matrix: the whole pixels holding its four
 // corners, a whole pixel within a millionth being that pixel. And taken
 // back through it: what of the coordinates inside lands in `r` outside —
@@ -975,8 +981,9 @@ void flow_visit(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t 
 // `open` comes before the group's first box and `close` after its last,
 // groups nesting; `bounds` holds everything the group paints, in the
 // coordinates it is painted in at this scroll — its own boxes' overflow
-// rects and its members', each where its frame puts it and cut to its
-// clip, a drawn-through
+// rects and its members', each where its frame puts it, grown by as far as
+// any shadow on the page is drawn past its box, and cut to its clip, a
+// drawn-through
 // group inside counted through its matrix and cut to its clip — so a face
 // can composite it whole: everything inside painted as usual, then the
 // group laid over what was under it at its opacity (CSS Color 4 § 3.2),

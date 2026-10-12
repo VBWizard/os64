@@ -1017,7 +1017,10 @@ where to draw it upright instead. The walk culls inside a group against
 the viewport taken back through the matrices — the bounds of its corners
 — joined with where an upright drawing would put it, since the face may
 refuse the group after the walk has passed. A matrix that collapses an
-axis (`scaleX(0)`, `rotateX(90deg)`) draws nothing and is hit nowhere.
+axis (`scaleX(0)`, `rotateX(90deg)`) draws nothing and is hit nowhere;
+any other, however small or large, is undone — by one function,
+`flow_affine_invert`, which scales before it inverts, and which the face
+lays sheets with too, so painting, laying and hits never disagree.
 `flow_box_point` takes a page point into a box's own coordinates (a hit,
 an image map's area), and `flow_affine_rect` / `flow_affine_rect_back`
 send a rect through a matrix and back, for the painter's view.
@@ -1044,8 +1047,10 @@ BILINEAR, B and T interpolated apart (B is premultiplied by its own
 making, so they interpolate as they should). The destination is cut by
 the group's outer clip and the view.
 
-A surface is the group's bounds — each layer cut to the clips inside
-the group — cut to the view taken back through the matrices, one pixel
+A surface is the group's bounds — each layer grown by as far as any
+shadow on the page is drawn past its box (a shadow is in no box's
+overflow) and cut to the clips inside the group — cut to the view taken
+back through the matrices, one pixel
 more all round for the bilinear sample at the edge: what can show. At
 most 4096 pixels a side and 2,097,152 in all (8 MiB each), at most 16
 deep; a group past that, or whose surfaces find no memory, is painted
@@ -1063,6 +1068,7 @@ its matrix not at all.
 | A box scaled up softens | its surface is painted at its own size and stretched; Chrome paints at the scale | a page whose scaled-up text matters |
 | A control in a drawn-through box is drawn turned but edited upright | a live widget is drawn on the glass, not through a matrix | a page with a turned form |
 | A group the face refuses (past its sheet limits, out of memory) is drawn upright but hit through its matrix; inside a group that was laid, it is cut by that group's sheet, sized for it turned | libflow answers hits and bounds for the page as written; which groups a face refuses is decided at paint time, and only it knows | a page whose turned group passes the sheet limits and is clicked, or is cut |
+| A large `visibility: hidden` box inside a turned group still sizes its sheets | the bounds come from layout overflow, which keeps what is hidden; a page whose hidden content pushes a turned group past the sheet limits gets it upright | a page that does |
 | A sticky box, a scroll container's bars, or a fragment revealed inside a drawn-through box | each is worked against the page's viewport, which the box's own coordinates are not | a page that scrolls inside a turned box |
 | `perspective` and non-flat matrices | carried over from S7a | a page whose 3D card flip matters |
 | `background-clip: text` | its own slice, S7c, on these surfaces | S7c |

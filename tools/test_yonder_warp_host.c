@@ -87,6 +87,20 @@ static uint32_t *backdrop(int32_t w, int32_t h)
     return d;
 }
 
+// The warp takes its matrix undone from its caller (flow_affine_invert in
+// yonder); here the plain formula, or none where the matrix has none.
+static bool lay(uint32_t *d, uint32_t pitch, os64_gui_rect_t clip, const yonder_sheets_t *s,
+                const double m[6], uint8_t alpha)
+{
+    double det = m[0] * m[3] - m[1] * m[2];
+    if (det == 0)
+        return yonder_warp(d, pitch, clip, s, m, NULL, alpha);
+    double inv[6] = {m[3] / det, -m[1] / det, -m[2] / det, m[0] / det, 0, 0};
+    inv[4] = -(inv[0] * m[4] + inv[2] * m[5]);
+    inv[5] = -(inv[1] * m[4] + inv[3] * m[5]);
+    return yonder_warp(d, pitch, clip, s, m, inv, alpha);
+}
+
 int main(void)
 {
     // Laid where it is, the content over any backdrop, opaque, empty or
@@ -98,7 +112,7 @@ int main(void)
         memcpy(was, d, 16 * 12 * 4);
         yonder_sheets_t s = {g.black, g.white, 16, 12};
         const double id[6] = {1, 0, 0, 1, 0, 0};
-        int ok = yonder_warp(d, 16, (os64_gui_rect_t){0, 0, 16, 12}, &s, id, 255);
+        int ok = lay(d, 16, (os64_gui_rect_t){0, 0, 16, 12}, &s, id, 255);
         for (int32_t k = 0; k < 16 * 12; k++)
             ok = ok && near(d[k], over(g.content[k], was[k]), 1) && (d[k] >> 24) == 0xab;
         expect("warp: in place, the content over the backdrop, its top byte kept", ok);
@@ -116,7 +130,7 @@ int main(void)
         memcpy(was, d, 9 * 7 * 4);
         yonder_sheets_t s = {g.black, g.white, 9, 7};
         const double id[6] = {1, 0, 0, 1, 0, 0};
-        yonder_warp(d, 9, (os64_gui_rect_t){0, 0, 9, 7}, &s, id, 255);
+        lay(d, 9, (os64_gui_rect_t){0, 0, 9, 7}, &s, id, 255);
         int ok = 1;
         for (int32_t k = 0; k < 9 * 7; k++)
             ok = ok && (d[k] & 0xffffffu) == (over(g.content[k], was[k]) & 0xffffffu);
@@ -136,7 +150,7 @@ int main(void)
         const double turn[6] = {0, 1, -1, 0, 26, 3};
         uint32_t *d = backdrop(40, 20), *was = malloc(40 * 20 * 4);
         memcpy(was, d, 40 * 20 * 4);
-        int ok = yonder_warp_exact(turn) && yonder_warp(d, 40, (os64_gui_rect_t){0, 0, 40, 20}, &s,
+        int ok = yonder_warp_exact(turn) && lay(d, 40, (os64_gui_rect_t){0, 0, 40, 20}, &s,
                                                         turn, 255);
         for (int32_t y = 0; y < 20; y++)
             for (int32_t x = 0; x < 40; x++) {
@@ -151,7 +165,7 @@ int main(void)
         const double mirror[6] = {-1, 0, 0, 1, 10, 0};
         memcpy(d, was, 40 * 20 * 4);
         ok = yonder_warp_exact(mirror) &&
-             yonder_warp(d, 40, (os64_gui_rect_t){0, 0, 40, 20}, &s, mirror, 255);
+             lay(d, 40, (os64_gui_rect_t){0, 0, 40, 20}, &s, mirror, 255);
         for (int32_t y = 0; y < 6; y++)
             for (int32_t x = 0; x < 10; x++)
                 ok = ok && (d[y * 40 + x] & 0xffffffu) ==
@@ -179,7 +193,7 @@ int main(void)
             uint32_t *d = backdrop(48, 32), *was = malloc(48 * 32 * 4);
             memcpy(was, d, 48 * 32 * 4);
             const double *m = ms[t];
-            yonder_warp(d, 48, (os64_gui_rect_t){0, 0, 48, 32}, &s, m, 255);
+            lay(d, 48, (os64_gui_rect_t){0, 0, 48, 32}, &s, m, 255);
             double det = m[0] * m[3] - m[1] * m[2];
             int ok = 1;
             for (int32_t y = 0; y < 32; y++)
@@ -225,7 +239,7 @@ int main(void)
         memcpy(was, d, 8 * 8 * 4);
         yonder_sheets_t s = {g.black, g.white, 8, 8};
         const double id[6] = {1, 0, 0, 1, 0, 0};
-        yonder_warp(d, 8, (os64_gui_rect_t){0, 0, 8, 8}, &s, id, 128);
+        lay(d, 8, (os64_gui_rect_t){0, 0, 8, 8}, &s, id, 128);
         int ok = 1;
         for (int32_t k = 0; k < 64; k++) {
             uint32_t g1 = over(g.content[k], was[k]);
@@ -245,7 +259,7 @@ int main(void)
         uint32_t *d = backdrop(10, 10), *was = malloc(400);
         memcpy(was, d, 400);
         const double id[6] = {1, 0, 0, 1, 0, 0};
-        yonder_warp(d, 10, (os64_gui_rect_t){2, 3, 4, 5}, &s, id, 255);
+        lay(d, 10, (os64_gui_rect_t){2, 3, 4, 5}, &s, id, 255);
         int ok = 1;
         for (int32_t y = 0; y < 10; y++)
             for (int32_t x = 0; x < 10; x++)
@@ -254,9 +268,9 @@ int main(void)
         expect("warp: nothing laid outside the clip", ok);
         memcpy(d, was, 400);
         const double flat[6] = {1, 2, 2, 4, 0, 0};
-        ok = !yonder_warp(d, 10, (os64_gui_rect_t){0, 0, 10, 10}, &s, flat, 255) &&
+        ok = !lay(d, 10, (os64_gui_rect_t){0, 0, 10, 10}, &s, flat, 255) &&
              memcmp(d, was, 400) == 0;
-        expect("warp: a matrix that cannot be undone lays nothing", ok);
+        expect("warp: with no matrix undone, nothing is laid", ok);
         free(d);
         free(was);
         group_free(&g);
