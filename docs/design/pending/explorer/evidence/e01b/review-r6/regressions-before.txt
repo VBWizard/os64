@@ -1,0 +1,31 @@
+ui_menu 5f8779e6421b07c0d1592a5f95b08085445ab5b9000228f32b30f598fea2bb3a
+ui_menu_widget 86d8dd82f46d618e327458b77e436f90f6c3c6547903f376e7d515edb66bdacd
+action/status: 495 checks, 0 failures
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1295 [r6 I11 bar model and retained view share registry identity] os64_ui_menubar_bind(&g.bar,headings)==OS64_UI_INVALID
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1296 [r6 I11 bar model and retained view share registry identity] g.bar.model==old&&g.bar.labels[0]==caption&&g.bar.view==view
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1297 [r6 I11 bar model and retained view share registry identity] old->refs==old_refs&&headings->refs==foreign_refs
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1301 [r6 I11 bar model and retained view share registry identity] os64_ui_menubar_bind(&g.bar,headings)==OS64_UI_INVALID
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1302 [r6 I11 bar model and retained view share registry identity] allocations==before&&g.bar.model==old
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1337 [r6 I5/I9 opening decisions use the freshly queried snapshot] (g.menus->depth!=0)==(enabled!=0)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1343 [r6 I5/I9 opening decisions use the freshly queried snapshot] g.targets[0].hits==hits&&!g.menus->active&&!g.bar.temporary
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1337 [r6 I5/I9 opening decisions use the freshly queried snapshot] (g.menus->depth!=0)==(enabled!=0)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1343 [r6 I5/I9 opening decisions use the freshly queried snapshot] g.targets[0].hits==hits&&!g.menus->active&&!g.bar.temporary
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1344 [r6 I5/I9 opening decisions use the freshly queried snapshot] g.bar.w.hidden==(hidden!=0)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1337 [r6 I5/I9 opening decisions use the freshly queried snapshot] (g.menus->depth!=0)==(enabled!=0)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1337 [r6 I5/I9 opening decisions use the freshly queried snapshot] (g.menus->depth!=0)==(enabled!=0)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1337 [r6 I5/I9 opening decisions use the freshly queried snapshot] (g.menus->depth!=0)==(enabled!=0)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1343 [r6 I5/I9 opening decisions use the freshly queried snapshot] g.targets[0].hits==hits&&!g.menus->active&&!g.bar.temporary
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1337 [r6 I5/I9 opening decisions use the freshly queried snapshot] (g.menus->depth!=0)==(enabled!=0)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1337 [r6 I5/I9 opening decisions use the freshly queried snapshot] (g.menus->depth!=0)==(enabled!=0)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1343 [r6 I5/I9 opening decisions use the freshly queried snapshot] g.targets[0].hits==hits&&!g.menus->active&&!g.bar.temporary
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1337 [r6 I5/I9 opening decisions use the freshly queried snapshot] (g.menus->depth!=0)==(enabled!=0)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1363 [r6 I5/I9 Down and horizontal navigation refresh eligibility too] !g.menus->depth&&g.bar.selected==1
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1364 [r6 I5/I9 Down and horizontal navigation refresh eligibility too] g.menus->depth&&g.menus->panels[0].widget->model==leaf
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1362 [r6 I5/I9 Down and horizontal navigation refresh eligibility too] g.menus->depth&&g.menus->panels[0].widget->model==(enabled?leaf:g.models[1])
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1362 [r6 I5/I9 Down and horizontal navigation refresh eligibility too] g.menus->depth&&g.menus->panels[0].widget->model==(enabled?leaf:g.models[1])
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1376 [r6 I7 fresh candidate never overwrites an existing saved target] g.menus->view==g.views[0]&&popup_handle()==root
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1379 [r6 I7 fresh candidate never overwrites an existing saved target] g.targets[0].hits==hits+1&&!g.menus->active
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:137 [r6 I7 fresh candidate never overwrites an existing saved target] os64_ui_menu_open(g.menus,m,v,(os64_gui_rect_t){100,100,0,0},OS64_UI_MENU_CONTEXT)==OS64_UI_OK
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1390 [r6 I1/I2 declined same-view request reconciles invalid descendants] g.menus->panels[0].widget->model==headings
+r6: 6871 checks, 26 failures
+Expected behavioral failures reproduced; no fixture fault.

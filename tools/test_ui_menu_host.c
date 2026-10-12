@@ -818,6 +818,7 @@ static void path_invariants(void)
     CHECK(s->depth<=OS64_UI_MENU_DEPTH);
     CHECK(s->active? s->view!=NULL : (!s->view&&!s->depth&&!s->pending));
     CHECK(g.bar.view==s->bar_view);
+    if(g.bar.model&&g.bar.view) CHECK(os64_ui_action_view_registry(g.bar.view,g.bar.model->actions));
     if(s->active&&s->kind==OS64_UI_MENU_BAR&&!s->depth&&!s->pending)
         CHECK(s->bar&&menu_bar_enabled(s->bar,s->bar->selected));
     for(size_t i=0;i<s->depth;++i) {
@@ -827,6 +828,7 @@ static void path_invariants(void)
         CHECK(transport.windows[p->handle].live);
         CHECK(transport.windows[p->handle].owner==(i?s->panels[i-1].handle:s->owner));
         CHECK(p->widget->view==s->view);
+        CHECK(os64_ui_action_view_registry(p->widget->view,p->widget->model->actions));
         CHECK(p->widget->selected==MENU_NONE||p->widget->selected<p->widget->model->count);
         CHECK(p->widget->selected==MENU_NONE||os64_ui_popup_row(p->widget,p->widget->selected).h>0);
         if(i) {
@@ -1275,6 +1277,145 @@ static void review_round_five(void)
     os64_ui_menu_hooks(g.menus,gallery_menu_layout,gallery_menu_error,&g);
 }
 
+static void registry_rebind(void)
+{
+    current="r6 I11 bar model and retained view share registry identity";
+    os64_ui_actions_t *foreign=NULL;os64_ui_action_view_t *foreign_view=NULL;
+    CHECK(os64_ui_actions_create(at_specs,1,&at_cb,NULL,&foreign)==OS64_UI_OK);
+    action_test_target target={.gen=1,.enabled=false};
+    os64_ui_action_context_t context={&target,1,at_retain,at_release,at_valid};
+    CHECK(os64_ui_action_view_create(foreign,&context,&foreign_view)==OS64_UI_OK);
+    os64_ui_menu_model_t *leaf=NULL,*headings=NULL;
+    os64_ui_menu_entry_t command={.action=RECORD};
+    CHECK(os64_ui_menu_model_create(foreign,&command,1,&leaf)==OS64_UI_OK);
+    os64_ui_menu_entry_t heading={.kind=OS64_UI_MENU_SUBMENU,.label="Colliding ID",.child=leaf};
+    CHECK(os64_ui_menu_model_create(foreign,&heading,1,&headings)==OS64_UI_OK);
+    void *caption=g.bar.labels[0];os64_ui_menu_model_t *old=g.bar.model;
+    os64_ui_action_view_t *view=g.bar.view;size_t old_refs=old->refs,foreign_refs=headings->refs;
+    CHECK(os64_ui_menubar_bind(&g.bar,headings)==OS64_UI_INVALID);
+    CHECK(g.bar.model==old&&g.bar.labels[0]==caption&&g.bar.view==view);
+    CHECK(old->refs==old_refs&&headings->refs==foreign_refs);
+    /* Restore the fixture if the reviewed implementation accepted the pair. */
+    if(g.bar.model!=old) CHECK(os64_ui_menubar_bind(&g.bar,old)==OS64_UI_OK);
+    unsigned long before=allocations;deny_countdown=0;
+    CHECK(os64_ui_menubar_bind(&g.bar,headings)==OS64_UI_INVALID);
+    deny_countdown=-1;CHECK(allocations==before&&g.bar.model==old);
+    CHECK(os64_ui_menu_bar_view(g.menus,foreign_view)==OS64_UI_INVALID&&g.bar.view==view);
+    open_context(g.models[0],g.views[0]);int64_t root=popup_handle();
+    os64_ui_status_code_t rc=os64_ui_menubar_bind(&g.bar,headings);
+    CHECK(rc==OS64_UI_INVALID||rc==OS64_UI_BUSY);
+    CHECK(g.bar.model==old&&g.menus->view==g.views[0]&&popup_handle()==root);
+    CHECK(os64_ui_menu_close(g.menus,OS64_UI_MENU_EXPLICIT)==OS64_UI_OK);drain();
+    os64_ui_menu_model_release(headings);os64_ui_menu_model_release(leaf);
+    CHECK(os64_ui_action_view_destroy(foreign_view)==OS64_UI_OK);
+    CHECK(os64_ui_actions_destroy(foreign)==OS64_UI_OK&&!target.refs);
+}
+static void request_freshness(void)
+{
+    os64_ui_menu_model_t *leaf=NULL,*headings=NULL,*single=NULL;
+    os64_ui_menu_entry_t action={.action=RECORD};
+    CHECK(os64_ui_menu_model_create(g.actions,&action,1,&leaf)==OS64_UI_OK);
+    os64_ui_menu_entry_t entries[]={
+        {.kind=OS64_UI_MENU_SUBMENU,.label="Target",.mnemonic='r',.child=leaf},
+        {.kind=OS64_UI_MENU_SUBMENU,.label="Other",.mnemonic='o',.child=g.models[1]}};
+    CHECK(os64_ui_menu_model_create(g.actions,entries,2,&headings)==OS64_UI_OK);
+    CHECK(os64_ui_menu_model_create(g.actions,entries,1,&single)==OS64_UI_OK);
+    current="r6 I5/I9 opening decisions use the freshly queried snapshot";
+    for(unsigned route=0;route<3;++route) for(unsigned enabled=0;enabled<2;++enabled) for(unsigned hidden=0;hidden<2;++hidden) {
+        if(route&&hidden) continue;
+        CHECK(os64_ui_menubar_bind(&g.bar,route==2?single:headings)==OS64_UI_OK);
+        g.targets[0].enabled=!enabled;CHECK(os64_ui_actions_refresh(g.views[0])==OS64_UI_OK);
+        os64_ui_set_hidden(&g.ui,&g.bar.w,hidden!=0);gallery_layout(&g,false);
+        if(route==2) g.bar.w.bounds.w=1;
+        g.targets[0].enabled=enabled!=0;
+        unsigned hits=g.targets[0].hits;
+        if(!route) key(1,'r',0x13,OS64_GUI_MOD_ALT);
+        else {
+            queue(1,mouse(OS64_GUI_EVENT_MOUSE_BUTTON_DOWN,g.bar.w.bounds.x,g.bar.w.bounds.y+2,OS64_GUI_MOUSE_LEFT));drain();
+            queue(1,mouse(OS64_GUI_EVENT_MOUSE_BUTTON_UP,g.bar.w.bounds.x,g.bar.w.bounds.y+2,OS64_GUI_MOUSE_LEFT));drain();
+        }
+        CHECK((g.menus->depth!=0)==(enabled!=0));
+        if(enabled&&g.menus->depth) {
+            CHECK(g.menus->view==g.views[0]);
+            if(route==2) key(popup_handle(),0,0x4d,0);
+            key(popup_handle(),'\n',0x1c,0);CHECK(g.targets[0].hits==hits+1&&!g.menus->active);
+        } else {
+            CHECK(g.targets[0].hits==hits&&!g.menus->active&&!g.bar.temporary);
+            CHECK(g.bar.w.hidden==(hidden!=0));
+        }
+        CHECK(os64_ui_menu_close(g.menus,OS64_UI_MENU_EXPLICIT)==OS64_UI_OK);drain();
+        os64_ui_set_hidden(&g.ui,&g.bar.w,false);gallery_layout(&g,false);
+    }
+    current="r6 I5/I9 Down and horizontal navigation refresh eligibility too";
+    CHECK(os64_ui_menubar_bind(&g.bar,headings)==OS64_UI_OK);
+    for(unsigned right=0;right<2;++right) for(unsigned enabled=0;enabled<2;++enabled) {
+        g.targets[0].enabled=!enabled;CHECK(os64_ui_actions_refresh(g.views[0])==OS64_UI_OK);
+        g.bar.selected=right||enabled?1:0;key(1,0,0x44,0);
+        if(right) key(1,0,0x50,0); /* Open the always-enabled Other root. */
+        g.targets[0].enabled=enabled!=0;
+        if(right) key(popup_handle(),0,0x4d,0);
+        else {
+            /* Left reaches the newly enabled Target before Down opens it. */
+            if(enabled) { key(1,0,0x4b,0); }
+            key(1,0,0x50,0);
+        }
+        if(right) CHECK(g.menus->depth&&g.menus->panels[0].widget->model==(enabled?leaf:g.models[1]));
+        else if(!enabled) CHECK(!g.menus->depth&&g.bar.selected==1);
+        else CHECK(g.menus->depth&&g.menus->panels[0].widget->model==leaf);
+        CHECK(os64_ui_menu_close(g.menus,OS64_UI_MENU_EXPLICIT)==OS64_UI_OK);drain();
+    }
+    current="r6 I7 fresh candidate never overwrites an existing saved target";
+    g.targets[0].enabled=true;CHECK(os64_ui_actions_refresh(g.views[0])==OS64_UI_OK);
+    for(unsigned refuse=0;refuse<2;++refuse) {
+        open_context(leaf,g.views[0]);int64_t root=popup_handle();
+        g.targets[1].enabled=true;CHECK(os64_ui_actions_refresh(g.views[1])==OS64_UI_OK);
+        CHECK(os64_ui_menu_bar_view(g.menus,g.views[1])==OS64_UI_OK);
+        g.targets[1].enabled=refuse!=0;transport.fail_destroy=refuse?root:0;
+        unsigned errors=error_count,hits=g.targets[0].hits;
+        key(root,'r',0x13,OS64_GUI_MOD_ALT);
+        CHECK(g.menus->view==g.views[0]&&popup_handle()==root);
+        CHECK(error_count==errors+(refuse?1:0));
+        if(refuse) CHECK(last_error==OS64_UI_ERROR);
+        transport.fail_destroy=0;key(root,'\n',0x1c,0);CHECK(g.targets[0].hits==hits+1&&!g.menus->active);
+        CHECK(os64_ui_menu_bar_view(g.menus,g.views[0])==OS64_UI_OK);drain();
+    }
+    current="r6 I1/I2 declined same-view request reconciles invalid descendants";
+    for(unsigned refuse=0;refuse<2;++refuse) {
+        g.targets[0].enabled=true;CHECK(os64_ui_actions_refresh(g.views[0])==OS64_UI_OK);
+        open_context(headings,g.views[0]);int64_t root=popup_handle();key(root,0,0x4d,0);
+        int64_t child=popup_handle();CHECK(child!=root);
+        g.targets[0].enabled=false;transport.fail_destroy=refuse?child:0;
+        unsigned errors=error_count;key(child,'r',0x13,OS64_GUI_MOD_ALT);
+        CHECK(g.menus->depth==(refuse?2u:1u));
+        CHECK(g.menus->panels[0].widget->model==headings);
+        CHECK(g.menus->panels[0].widget->selected==(refuse?0:MENU_NONE));
+        CHECK(error_count==errors+refuse);
+        if(refuse) CHECK(last_error==OS64_UI_ERROR);
+        transport.fail_destroy=0;CHECK(os64_ui_menu_refresh(g.menus)==OS64_UI_OK);
+        CHECK(os64_ui_menu_close(g.menus,OS64_UI_MENU_EXPLICIT)==OS64_UI_OK);drain();
+    }
+    g.targets[0].enabled=true;CHECK(os64_ui_actions_refresh(g.views[0])==OS64_UI_OK);
+    current="r6 I2/I7 stale candidate and refused teardown preserve the saved target";
+    open_context(leaf,g.views[0]);int64_t root=popup_handle();
+    CHECK(os64_ui_menu_bar_view(g.menus,g.views[1])==OS64_UI_OK);
+    ++g.targets[1].generation;transport.fail_destroy=root;
+    unsigned errors=error_count;key(root,'r',0x13,OS64_GUI_MOD_ALT);
+    CHECK(error_count==errors+1&&last_error==OS64_UI_ERROR);
+    CHECK(g.menus->view==g.views[0]&&popup_handle()==root);
+    --g.targets[1].generation;transport.fail_destroy=0;
+    CHECK(os64_ui_menu_close(g.menus,OS64_UI_MENU_EXPLICIT)==OS64_UI_OK);drain();
+    CHECK(os64_ui_menu_bar_view(g.menus,g.views[0])==OS64_UI_OK);
+    g.targets[1].enabled=false;CHECK(os64_ui_actions_refresh(g.views[1])==OS64_UI_OK);
+    CHECK(os64_ui_menubar_bind(&g.bar,g.models[5])==OS64_UI_OK);
+    os64_ui_menu_model_release(single);os64_ui_menu_model_release(headings);os64_ui_menu_model_release(leaf);
+}
+static void review_round_six(void)
+{
+    os64_ui_menu_hooks(g.menus,gallery_menu_layout,lifecycle_error,&g);
+    registry_rebind();audit_enabled=true;request_freshness();audit_enabled=false;
+    os64_ui_menu_hooks(g.menus,gallery_menu_layout,gallery_menu_error,&g);
+}
+
 int main(int argc,char **argv)
 {
     setvbuf(stdout,NULL,_IONBF,0);
@@ -1292,6 +1433,10 @@ int main(int argc,char **argv)
         build(dir,true);review_round_five();dispose();
         printf("r5: %lu checks, %d failures\n",checks,failures);return failures?1:0;
     }
-    build(dir,true);models();disabled_bar_and_overflow_failure();dismissal_orders();activation_and_loss();quarantine();pending_context_keys();review_navigation();destruction_failure(dir);review_round_two();review_round_three();review_round_four();review_round_five();navigation();burst_and_pointer_navigation();standalone();callback_and_icon_contract();placement_and_fonts(dir);collapse_pending_child();dispose();
+    if(getenv("E1B_R6_ONLY")) {
+        build(dir,true);review_round_six();dispose();
+        printf("r6: %lu checks, %d failures\n",checks,failures);return failures?1:0;
+    }
+    build(dir,true);models();disabled_bar_and_overflow_failure();dismissal_orders();activation_and_loss();quarantine();pending_context_keys();review_navigation();destruction_failure(dir);review_round_two();review_round_three();review_round_four();review_round_five();review_round_six();navigation();burst_and_pointer_navigation();standalone();callback_and_icon_contract();placement_and_fonts(dir);collapse_pending_child();dispose();
     printf("menu/action/status: %lu checks, %d failures\n",checks,failures);return failures?1:0;
 }

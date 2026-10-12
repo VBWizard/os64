@@ -348,16 +348,18 @@ size_t menu_bar_visible(os64_ui_menubar_t *b)
     }
     b->visible=i; return i;
 }
-bool menu_bar_enabled(os64_ui_menubar_t *b,size_t i)
+bool menu_bar_enabled_view(os64_ui_menubar_t *b,size_t i,os64_ui_action_view_t *view)
 {
     if(!b||!b->model||i>=b->model->count) return false;
-    if(!b->view) return true;
+    if(!view) return true;
     size_t visible=menu_bar_visible(b);
-    if(i<visible) return menu_model_enabled(b->model->entries[i].child,b->view);
+    if(i<visible) return menu_model_enabled(b->model->entries[i].child,view);
     for(size_t k=visible;k<b->model->count;++k)
-        if(menu_model_enabled(b->model->entries[k].child,b->view)) return true;
+        if(menu_model_enabled(b->model->entries[k].child,view)) return true;
     return false;
 }
+bool menu_bar_enabled(os64_ui_menubar_t *b,size_t i)
+{ return menu_bar_enabled_view(b,i,b?b->view:NULL); }
 static void bar_paint(os64_ui_widget_t *w,os64_draw_ctx_t *ctx,const os64_ui_theme_t *t)
 {
     os64_ui_menubar_t *b=(void *)w;
@@ -396,6 +398,7 @@ void os64_ui_menubar_destroy(os64_ui_menubar_t *b)
 os64_ui_status_code_t os64_ui_menubar_bind(os64_ui_menubar_t *b,os64_ui_menu_model_t *m)
 {
     if(!b||!m||!b->w.ui) return OS64_UI_INVALID;
+    if(b->view&&!os64_ui_action_view_registry(b->view,m->actions)) return OS64_UI_INVALID;
     for(size_t i=0;i<m->count;++i) if(!m->entries[i].child) return OS64_UI_INVALID;
     if(b->session&&os64_ui_menu_active(b->session)) return OS64_UI_BUSY;
     os64_ui_status_code_t rc=os64_ui_menu_model_retain(m);

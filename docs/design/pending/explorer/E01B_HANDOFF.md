@@ -121,6 +121,14 @@ descendants before changing top. The final viewport packs command/separator
 heights instead of allowing a one-row tail. [Fifth review evidence](evidence/e01b/review-r5/README.md)
 records the combined-failure and scroll transition regressions.
 
+The sixth review preserves registry identity when rebinding an inactive bar,
+matching the existing bar-view binding check. Opening prepares a retained fresh
+candidate before eligibility decisions, including overflow and keyboard stepping;
+its ownership replaces the saved session view after successful teardown. Disabled
+or failed requests do not retarget the old session. Declined same-view requests
+share explicit refresh's invalid-descendant reconciliation. [Sixth review evidence](evidence/e01b/review-r6/README.md)
+records both snapshot transitions, registry collisions and candidate lifetimes.
+
 Retired focus records are ignored by a pending replacement, including old birth
 focus-lost records. Unknown live focus peers dismiss conservatively. A sibling
 application window is outside the family. Native conditional focus return is

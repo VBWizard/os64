@@ -295,6 +295,22 @@ static os64_ui_status_code_t sync_bar_mode(os64_ui_menu_session_t *s)
     }
     return normalize_bar_selection(s)?OS64_UI_OK:os64_ui_menu_close(s,OS64_UI_MENU_EXPLICIT);
 }
+static os64_ui_status_code_t reconcile_selection(os64_ui_menu_session_t *s)
+{
+    os64_ui_status_code_t rc=sync_bar_mode(s);
+    if(rc) return rc;
+    for(size_t i=0;i<s->depth;++i) {
+        os64_ui_popup_t *p=s->panels[i].widget;
+        if(!menu_selectable(p,p->selected)) {
+            release_pending(s); cancel_press(s);
+            /* Selection owns the native child's anchor. Use the same commit
+             * point as pointer/keyboard changes when destruction is refused. */
+            return panel_select(s,i,MENU_NONE)?OS64_UI_OK:OS64_UI_ERROR;
+        }
+    }
+    if(s->depth) help(s,s->panels[s->depth-1].widget);
+    return rc;
+}
 os64_ui_status_code_t os64_ui_menu_bar_view(os64_ui_menu_session_t *s,os64_ui_action_view_t *v)
 {
     if(!s||!v||(s->bar&&s->bar->model&&!os64_ui_action_view_registry(v,s->bar->model->actions))) return OS64_UI_INVALID;
@@ -311,19 +327,7 @@ os64_ui_status_code_t os64_ui_menu_refresh(os64_ui_menu_session_t *s)
     if(rc) {
         return close_after_failure(s,rc);
     }
-    rc=sync_bar_mode(s);
-    if(rc) return rc;
-    for(size_t i=0;i<s->depth;++i) {
-        os64_ui_popup_t *p=s->panels[i].widget;
-        if(!menu_selectable(p,p->selected)) {
-            release_pending(s); cancel_press(s);
-            /* Selection owns the native child's anchor. Use the same commit
-             * point as pointer/keyboard changes when destruction is refused. */
-            return panel_select(s,i,MENU_NONE)?OS64_UI_OK:OS64_UI_ERROR;
-        }
-    }
-    if(s->depth) help(s,s->panels[s->depth-1].widget);
-    return rc;
+    return reconcile_selection(s);
 }
 static void invoke(os64_ui_menu_session_t *s,uint32_t id)
 {
@@ -419,22 +423,26 @@ static void reveal(os64_ui_menu_session_t *s)
         if(s->layout) s->layout(s->user);
     }
 }
-static os64_ui_status_code_t prepare_bar_view(os64_ui_menu_session_t *s)
+static os64_ui_status_code_t prepare_bar_view(os64_ui_menu_session_t *s,os64_ui_action_view_t **out)
 {
-    os64_ui_status_code_t rc=os64_ui_action_view_retain(s->bar_view);
+    *out=NULL;
+    os64_ui_action_view_t *view=s->bar_view;
+    os64_ui_status_code_t rc=os64_ui_action_view_retain(view);
     if(rc) return rc;
-    rc=os64_ui_actions_refresh(s->bar_view);
+    rc=os64_ui_actions_refresh(view);
     publish_bar(s,false);
-    if(rc) { os64_ui_action_view_release(s->bar_view); return rc; }
-    s->view=s->bar_view;
+    if(rc) { os64_ui_action_view_release(view); return rc; }
+    *out=view;
     return OS64_UI_OK;
 }
 static void bar_mode(os64_ui_menu_session_t *s)
 {
     if(s->active) { (void)close_report(s,OS64_UI_MENU_EXPLICIT); return; }
     if(!s->bar||s->bar->w.disabled||!s->bar->model||!s->bar->model->count||!s->bar_view) return;
-    os64_ui_status_code_t rc=prepare_bar_view(s);
+    os64_ui_action_view_t *view=NULL;
+    os64_ui_status_code_t rc=prepare_bar_view(s,&view);
     if(rc) { report(s,rc); return; }
+    s->view=view;
     reveal(s);
     if(!normalize_bar_selection(s)) {
         (void)os64_ui_menu_close(s,OS64_UI_MENU_EXPLICIT); return;
@@ -443,15 +451,28 @@ static void bar_mode(os64_ui_menu_session_t *s)
     s->active=true; s->kind=OS64_UI_MENU_BAR;
     os64_ui_mark_dirty(s->ui,&s->bar->w);
 }
-static void bar_open_target(os64_ui_menu_session_t *s,size_t index,bool direct)
+/* Consume a retained, refreshed candidate. The existing session keeps its
+ * saved target until native teardown succeeds. */
+static void bar_open_prepared(os64_ui_menu_session_t *s,size_t index,bool direct,os64_ui_action_view_t *view)
 {
     os64_ui_menubar_t *b=s->bar;
-    if(!b||!b->model||!b->model->count||!s->bar_view) return;
+    if(!b||b->w.disabled||!b->model||!b->model->count) { os64_ui_action_view_release(view); return; }
     if(index>b->model->count-1) index=0;
-    if(direct&&!menu_model_enabled(b->model->entries[index].child,s->bar_view)) return;
+    bool enabled=direct?menu_model_enabled(b->model->entries[index].child,view):menu_bar_enabled_view(b,index,view);
+    if(!enabled) {
+        bool current=s->view==view;
+        os64_ui_action_view_release(view);
+        if(current) (void)reconcile_selection(s);
+        else report(s,sync_bar_mode(s));
+        return;
+    }
     reveal(s);
     size_t visible=menu_bar_visible(b);
-    if(!direct&&!menu_bar_enabled(b,index)) return;
+    /* Reveal reflows the bar; decide against the resulting affordance using
+     * the same retained snapshot, rather than the app's future bar target. */
+    if(!direct&&!menu_bar_enabled_view(b,index,view)) {
+        os64_ui_action_view_release(view); (void)close_report(s,OS64_UI_MENU_EXPLICIT); return;
+    }
     os64_ui_menu_model_t *m=NULL;
     os64_ui_status_code_t rc=OS64_UI_OK;
     int32_t x=b->w.bounds.x;
@@ -459,18 +480,15 @@ static void bar_open_target(os64_ui_menu_session_t *s,size_t index,bool direct)
         index=visible;
         rc=os64_ui_menu_model_create(b->model->actions,b->model->entries+visible,b->model->count-visible,&m);
     } else { m=b->model->entries[index].child; rc=os64_ui_menu_model_retain(m); }
-    if(rc) { report(s,close_after_failure(s,rc)); return; }
+    if(rc) { os64_ui_action_view_release(view); report(s,close_after_failure(s,rc)); return; }
     for(size_t i=0;i<index&&i<visible;++i) x+=b->widths[i]+2*MENU_GAP;
     /* Preserve temporary reveal across replacement; open normally collapses
      * an older context session, so reveal after its close and reflow first. */
     bool temporary=b->temporary;
     rc=os64_ui_menu_close(s,OS64_UI_MENU_EXPLICIT);
-    if(rc) { report(s,rc); os64_ui_menu_model_release(m); return; }
+    if(rc) { os64_ui_menu_model_release(m); os64_ui_action_view_release(view); report(s,rc); return; }
     if(temporary) reveal(s);
-    rc=prepare_bar_view(s);
-    if(rc) {
-        os64_ui_menu_model_release(m); report(s,close_after_failure(s,rc)); return;
-    }
+    s->view=view;
     s->saved_focus=s->ui->focus; os64_ui_cancel_gestures(s->ui);
     s->active=true; s->kind=OS64_UI_MENU_BAR;
     /* Hidden mnemonic targets share the visible overflow affordance; model
@@ -482,20 +500,32 @@ static void bar_open_target(os64_ui_menu_session_t *s,size_t index,bool direct)
     if(rc!=OS64_UI_OK&&rc!=OS64_UI_BUSY) { report(s,close_after_failure(s,rc)); return; }
     os64_ui_mark_dirty(s->ui,&b->w);
 }
+static void bar_open_target(os64_ui_menu_session_t *s,size_t index,bool direct)
+{
+    if(!s->bar||s->bar->w.disabled||!s->bar->model||!s->bar->model->count||!s->bar_view) return;
+    os64_ui_action_view_t *view=NULL;
+    os64_ui_status_code_t rc=prepare_bar_view(s,&view);
+    if(rc) { report(s,close_after_failure(s,rc)); return; }
+    bar_open_prepared(s,index,direct,view);
+}
 static void bar_open(os64_ui_menu_session_t *s,size_t index) { bar_open_target(s,index,false); }
 static void bar_step(os64_ui_menu_session_t *s,int delta,bool open)
 {
     if(!s->bar||!s->bar->model) return;
+    os64_ui_action_view_t *view=NULL;
+    os64_ui_status_code_t rc=prepare_bar_view(s,&view);
+    if(rc) { report(s,close_after_failure(s,rc)); return; }
     size_t v=menu_bar_visible(s->bar),n=v+(v<s->bar->model->count?1:0);
-    if(!n) return;
     size_t i=s->bar->selected;
     if(i==MENU_NONE||i>=n) i=delta>0?n-1:0;
+    bool enabled=false;
     for(size_t k=0;k<n;++k) {
         i=delta>0?(i+1)%n:(i+n-1)%n;
-        if(menu_bar_enabled(s->bar,i)) break;
+        if(menu_bar_enabled_view(s->bar,i,view)) { enabled=true; break; }
     }
-    if(open) bar_open(s,i);
-    else { s->bar->selected=i; os64_ui_mark_dirty(s->ui,&s->bar->w); }
+    if(!enabled) { os64_ui_action_view_release(view); (void)close_report(s,OS64_UI_MENU_EXPLICIT); return; }
+    if(open) bar_open_prepared(s,i,false,view);
+    else { s->bar->selected=i; os64_ui_mark_dirty(s->ui,&s->bar->w); os64_ui_action_view_release(view); }
 }
 static bool key_event(os64_ui_menu_session_t *s,const os64_gui_event_t *e)
 {

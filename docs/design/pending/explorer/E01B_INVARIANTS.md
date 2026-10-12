@@ -18,12 +18,13 @@ commitments; host tests check them between events and dispatcher turns.
 | I2: failed native removal does not release or detach surviving borrowed state | Close, refresh, selection, scroll, replacement, font adoption, disposal | Inject failure at each depth; selection/anchor stays intact until removal succeeds |
 | I3: pending intent belongs to the current surviving parent and saved target | Replacement, collapse, selection, scrolling, loss, boundary creation | Vary queue budget/order and interrupt before the drain boundary; no orphan birth |
 | I4: input pairing belongs to the current family delivery route | Matched release, owner dismissal, external focus, coverage, INPUT_LOST | Family transitions retain necessary guards; interrupted delivery clears them; unrelated later input passes |
-| I5: visible bar state tracks its model/view/selection and invocation kind; bar-only selection stays eligible after publication | View switch, state refresh, bar navigation, context opening, close, font/theme adoption | Use production owner rendering, dirty damage and pixels, including partial repaint |
+| I5: visible bar state tracks its model/view/selection and invocation kind; bar-only selection stays eligible after publication, and requests use fresh snapshots | View switch, state refresh, bar navigation, context opening, close, font/theme adoption | Use production owner rendering, dirty damage and pixels, including partial repaint |
 | I6: an explicit menu opening/closing request has an observable outcome | Alt/F10, mnemonic, pointer open, deferred opening, native/resource failure | Return a result or notify the error hook; repeat suppression does not suppress a fresh gesture |
 | I7: invocation owns its saved target independently and validates it after close | Keyboard/pointer activation, shortcuts, stale/disabled target, callback teardown | No callback with live menus; no mutation against a stale target; no widget access after callback |
 | I8: font and handle lifetimes follow native ownership and the attached owner UI | Font change/release, child-first close, disposal, tombstone draining | Close before font adoption; failed close refuses release; no handle reuse before surviving queues drain |
 | I9: menu gestures act on visible selectable state with the governing input precedence | Wheel, navigation, page distance, activation, menu mnemonics versus action shortcuts | Active owner wheel is consumed; hidden rows cannot invoke; page distance counts model rows; menu gestures precede unmodified shortcuts |
 | I10: viewport effects follow actual movement and tail geometry | Wheel, affordances, selection reveal, extreme counts, child/pending path | No-op preserves path/help/intent; actual movement closes descendants before changing top; final viewport packs a fitting suffix using row heights |
+| I11: published model/view pairs share their action registry | Model graph creation, popup creation, bar model bind, bar view bind, target preparation | Reject mismatched registries before retention/preparation/publication; colliding IDs cannot cross registry identity |
 
 The review findings map to obligations rather than individual source lines:
 
@@ -51,6 +52,8 @@ The review findings map to obligations rather than individual source lines:
 | R5 refreshed bar-only selection is disabled | I5/I9 | Entry, explicit refresh, same-view/target publication, all-disabled collapse and invalid pending roots |
 | R5 no-op wheel collapses children | I3/I10 | Non-scroll parent, zero delta, edge clamps, affordances, pending intent and failed actual movement |
 | R5 final viewport contains one row | I9/I10 | Actual separator/command heights, extreme counts, repeated movement and selection reveal |
+| R6 foreign-registry bar model rebind | I11 | Both binding directions; inactive refusal before allocation and active path preservation |
+| R6 opening uses cached eligibility | I1/I2/I5/I7/I9 | Fresh candidate for mnemonic/pointer/overflow/navigation; old target remains until close; declined same-view request reconciles invalid descendants |
 
 Earlier-round tests remain in the complete suite; the fourth-round observer
 adds path checks between events and owner damage/pixels. The matrix is a bounded
@@ -81,6 +84,13 @@ or zero movement preserves descendants, pending intent and help. Actual movement
 cancels activation and closes children before publishing the new viewport.
 The final viewport packs the fitting suffix by command/separator heights;
 selection reveal uses the same viewport bound.
+
+Model and view binding preserve registry identity in both directions before
+publishing a pair. Opening prepares a retained fresh candidate, uses that
+snapshot for eligibility and navigation, and transfers its ownership into the
+session after native teardown succeeds. A declined request leaves the saved
+target intact. When candidate and saved view are the same, updated state follows
+explicit refresh's selection reconciliation, including refused teardown.
 
 The test harness's private session layout is shared through the internal header
 to observe these properties without duplicating opaque layouts or adding public

@@ -63,6 +63,7 @@ struct os64_ui_menu_session {
 bool menu_model_enabled(os64_ui_menu_model_t *,os64_ui_action_view_t *);
 bool menu_selectable(os64_ui_popup_t *,size_t);
 bool menu_bar_enabled(os64_ui_menubar_t *,size_t);
+bool menu_bar_enabled_view(os64_ui_menubar_t *,size_t,os64_ui_action_view_t *);
 size_t menu_bar_visible(os64_ui_menubar_t *);
 size_t menu_popup_scroll_top(const os64_ui_popup_t *,int32_t);
 #endif

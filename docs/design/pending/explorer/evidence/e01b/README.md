@@ -47,6 +47,12 @@ precedence, bar-only eligibility after publication, no-op scroll preservation
 and packing the final viewport by actual row heights. Its scratch baseline
 compiles current regressions against the reviewed `36e93f67` menu sources.
 
+[Sixth review evidence](review-r6/README.md) covers registry-safe bar model/view
+binding and refreshed candidates for mnemonic, pointer, overflow and navigation
+requests. It checks retained targets through declined requests, failed teardown
+and same-view descendant reconciliation, with a reproducible reviewed-source
+baseline.
+
 Before publication, the branch fast-forwarded to `f7f2f508`; those upstream
 CSS-transform fixes touch no menu, font or action files.
 

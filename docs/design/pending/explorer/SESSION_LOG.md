@@ -599,3 +599,37 @@ pointer, font/overflow and external-close controllers also pass. Archived trace,
 image and heap checks confirm zero font/target ownership at exit and stable
 live heap across warm/repeated openings. A focused P5 repeat is documented;
 no new hardware result or deployment is claimed.
+
+## 2026-10-12 — E1B sixth review: binding identity and fresh candidates
+
+Confirmed both findings against `e37cca21`: an inactive bar could bind a foreign
+registry model while retaining its old view, and opening eligibility read a
+preceding snapshot. Bar model binding now validates the retained view's registry
+before retention/preparation/publication, matching the existing view setter.
+Opening prepares a retained fresh candidate and evaluates its requested heading
+or overflow group against that snapshot. Horizontal navigation passes the same
+candidate into opening. The saved target is replaced after successful teardown;
+declined/failed requests preserve it. Shared enabled-state lookup also keeps
+reveal/reflow checks against the prepared candidate.
+
+A regression-first check caught that refreshing a candidate sharing the live
+view could invalidate its parent row during a declined request. That route now
+shares explicit menu refresh's selection reconciliation, including partial
+teardown failure, without querying twice. Tests check the old root model,
+selection/child path and independently retained target.
+
+The reviewed-source scratch baseline reproduces 26 failing assertions without
+fixture faults. Complete fake/real suites pass 150,351/150,399 assertions with
+ASan, UBSan and LeakSanitizer enabled outside the sandbox; sixteen injected
+hazards are detected and the strict full userland build passes. Between-event
+observation checks registry pairs as well as ownership and selections.
+[Sixth review evidence](evidence/e01b/review-r6/README.md) records both snapshot
+transitions through mnemonic/pointer/overflow and keyboard navigation, stale
+candidates, failed teardown and the intermediate reconciliation regression.
+Review remains pending. Earlier P5/editor/Scribe/font evidence is retained
+separately; no additional hardware result or kernel/E1C/gclock work is claimed.
+
+Final native HID/pointer, PS/2/font/overflow and external/close controllers pass.
+Archived traces show callbacks after menu closure and zero font/target ownership
+at exit; repeated openings return live heap to the warm baseline. Both new
+findings and same-view snapshot interruption are deterministic host fixtures.
