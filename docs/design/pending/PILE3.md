@@ -852,7 +852,9 @@ written (Tailwind's `rotate(0)` and `scaleX(1)`) or reaches only z
 not a translation, and `perspective()` are — `@supports` answers what is
 drawn. A `matrix3d()` that reads z into x, y or w is approximated too,
 whatever else it is: no function passed then reads z, so a `translateZ`
-cannot combine with another into more than a move.
+cannot combine with another into more than a move. A `calc()` of numbers
+or percentages is judged by what it comes to, worked as libflow works it,
+so `scale(calc(100%))` is as exact as `scale(1)`.
 
 **libflow keeps the list, each function its matrix.** `flow_style_t`
 gains the transform (a list in the style-lists budget,
@@ -939,8 +941,9 @@ grokipedia's Tailwind drawer off the page; a plain inline box's transform
 doing nothing. `tools/test_libflow_transform_mutants.py` breaks each rule
 in turn and the cases catch every one. They also hold a scale written
 `calc(50%)`, a sticky transformed box sticking through its
-scroll container, a transformed root reaching the page, and a positioned
-plain inline anchoring no fixed box. In the guest, a fixture beside
+scroll container, a transformed root reaching the page (written fixed or
+inline, it is still the root: in the flow, and blockified), and a
+positioned plain inline anchoring no fixed box. In the guest, a fixture beside
 headless Chrome: a slid drawer, a centred dialog, an inline-block nudged,
 a fixed bar inside a transformed panel — and grokipedia read from the P5.
 

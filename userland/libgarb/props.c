@@ -167,11 +167,78 @@ static bool image_drawn(const garb_val_t *v)
     return v->kind != GARB_V_IMAGE || v->nitems > 0;
 }
 
+// What a calc() of numbers and percentages comes to — a percentage in its
+// own unit, `*number` false — worked in the order libflow works it
+// (style.c's calc), so the two agree to the bit; false when it holds a
+// length, which only layout settles.
+static bool calc_settled(const garb_calc_t *k, double *v, bool *number)
+{
+    static const int32_t clamp_order[3] = {1, 2, 0};
+    switch (k->op) {
+    case GARB_CALC_LEAF:
+        if (k->leaf.kind != GARB_V_NUMBER && k->leaf.kind != GARB_V_PERCENTAGE)
+            return false;
+        *v = k->leaf.number;
+        *number = k->leaf.kind == GARB_V_NUMBER;
+        return true;
+    case GARB_CALC_SUM:
+        *v = 0;
+        for (int32_t i = 0; i < k->nargs; i++) {
+            double t;
+            if (!calc_settled(k->args[i], &t, number))
+                return false;
+            *v += k->invert != NULL && k->invert[i] ? -t : t;
+        }
+        return true;
+    case GARB_CALC_PRODUCT:
+        *v = 1;
+        *number = true;
+        for (int32_t i = 0; i < k->nargs; i++) {
+            double t;
+            bool n;
+            if (!calc_settled(k->args[i], &t, &n))
+                return false;
+            bool divide = k->invert != NULL && k->invert[i];
+            if (n) {
+                if (divide && t == 0)
+                    return false;
+                *v *= divide ? 1 / t : t;
+            } else if (*number && !divide) {
+                *v = t * *v;
+                *number = false;
+            } else {
+                return false;
+            }
+        }
+        return true;
+    case GARB_CALC_MIN: case GARB_CALC_MAX: case GARB_CALC_CLAMP:
+        if (k->nargs == 0 || (k->op == GARB_CALC_CLAMP && k->nargs != 3))
+            return false;
+        for (int32_t i = 0; i < k->nargs; i++) {
+            double t;
+            int32_t at = k->op == GARB_CALC_CLAMP ? clamp_order[i] : i;
+            if (!calc_settled(k->args[at], &t, number))
+                return false;
+            bool smaller = k->op == GARB_CALC_MIN || (k->op == GARB_CALC_CLAMP && i == 1);
+            if (i == 0 || (smaller ? t < *v : t > *v))
+                *v = t;
+        }
+        return true;
+    }
+    return false;
+}
+
 // Whether a transform's argument is `want` as written — a percentage as
-// its hundredth, an angle in any unit — so that what it does is known
-// before anything is laid out; a calc() is not.
+// its hundredth, an angle in any unit, a calc() of numbers or percentages
+// as it comes to — so that what it does is known before anything is laid
+// out.
 static bool exactly(const garb_val_t *v, double want)
 {
+    double c;
+    bool number;
+    if (v->kind == GARB_V_CALC)
+        return v->calc != NULL && calc_settled(v->calc, &c, &number) &&
+               c == (number ? want : want * 100);
     return (v->kind == GARB_V_NUMBER && v->number == want) ||
            (v->kind == GARB_V_PERCENTAGE && v->number == want * 100) ||
            (v->kind == GARB_V_ANGLE && want == 0 && v->number == 0);
