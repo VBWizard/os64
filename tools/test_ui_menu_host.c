@@ -16,7 +16,8 @@ static struct {
     struct window_fixture windows[33];
     uint32_t sw,sh;
     int64_t focused;
-    unsigned creates,destroys,owner_down,owner_up,peer_down,invocations;
+    unsigned creates,destroys,owner_down,owner_up,owner_wheel,peer_down,invocations;
+    int64_t fail_destroy;
     bool fail_create;
     os64_ui_dispatcher_t *dispatcher;
 } transport;
@@ -46,6 +47,7 @@ static int64_t backend_wait(void *u,int64_t *h)
 static int64_t backend_destroy(void *u,int64_t h)
 {
     (void)u;
+    if(h==transport.fail_destroy) return OS64_GUI_ERR_BUSY;
     for(int i=1;i<33;++i) if(transport.windows[i].live&&transport.windows[i].owner==h) return OS64_GUI_ERR_BUSY;
     struct window_fixture *w=&transport.windows[h];
     CHECK(w->live);
@@ -87,6 +89,7 @@ static void commands(void *u,const os64_gui_event_t *e)
     gallery *a=u;
     if(e->type==OS64_GUI_EVENT_MOUSE_BUTTON_DOWN) ++transport.owner_down;
     if(e->type==OS64_GUI_EVENT_MOUSE_BUTTON_UP) ++transport.owner_up;
+    if(e->type==OS64_GUI_EVENT_MOUSE_WHEEL) ++transport.owner_wheel;
     if(!gallery_route(a,e,NULL)) (void)os64_ui_dispatch(&a->ui,e);
 }
 static void no_paint(void *u) { (void)u; }
@@ -178,6 +181,10 @@ static void disabled_bar_and_overflow_failure(void)
     os64_ui_set_hidden(&g.ui,&g.bar.w,true);gallery_layout(&g,false);
     key(1,'z',0x2c,OS64_GUI_MOD_ALT);
     CHECK(!popup_handle()&&!os64_ui_menu_active(g.menus)&&g.bar.w.hidden&&!g.bar.temporary);
+    key(1,0,0x44,0);
+    CHECK(!os64_ui_menu_active(g.menus)&&g.bar.w.hidden&&!g.bar.temporary);
+    key(1,0,0x38,OS64_GUI_MOD_ALT);
+    CHECK(!os64_ui_menu_active(g.menus)&&g.bar.w.hidden&&!g.bar.temporary);
     g.targets[0].enabled=true;CHECK(os64_ui_actions_refresh(g.views[0])==OS64_UI_OK);
     key(1,0,0x44,0);g.bar.w.bounds.w=1;
     deny_countdown=0;key(1,'\n',0x1c,0);deny_countdown=-1;
@@ -288,6 +295,108 @@ static void pending_context_keys(void)
     os64_ui_menu_hooks(g.menus,gallery_menu_layout,gallery_menu_error,&g);
 }
 
+static void review_navigation(void)
+{
+    current="review: refresh closes invalid descendants and clears help";
+    os64_ui_menu_model_t *leaf=NULL,*top=NULL;
+    os64_ui_menu_entry_t action={.action=RECORD};
+    CHECK(os64_ui_menu_model_create(g.actions,&action,1,&leaf)==OS64_UI_OK);
+    os64_ui_menu_entry_t headings[]={
+        {.kind=OS64_UI_MENU_SUBMENU,.label="Record only",.child=leaf},
+        {.kind=OS64_UI_MENU_SUBMENU,.label="Other",.child=g.models[1]}};
+    CHECK(os64_ui_menu_model_create(g.actions,headings,2,&top)==OS64_UI_OK);
+    open_context(top,g.views[0]);int64_t root=popup_handle();
+    key(root,0,0x4d,0);CHECK(popup_handle()!=root&&g.status.help.text);
+    g.targets[0].enabled=false;
+    CHECK(os64_ui_menu_refresh(g.menus)==OS64_UI_OK);
+    CHECK(popup_handle()==root&&!g.status.help.text);
+    os64_ui_menu_close(g.menus,OS64_UI_MENU_EXPLICIT);drain();
+
+    current="review: bar mode skips disabled remembered heading";
+    CHECK(os64_ui_menubar_bind(&g.bar,top)==OS64_UI_OK);
+    g.bar.selected=0;key(1,0,0x44,0);
+    CHECK(os64_ui_menu_active(g.menus)&&g.bar.selected==1);
+    key(1,0,0x50,0);CHECK(popup_handle());
+    os64_ui_menu_close(g.menus,OS64_UI_MENU_EXPLICIT);drain();
+    g.bar.selected=0;key(1,0,0x38,OS64_GUI_MOD_ALT);
+    CHECK(os64_ui_menu_active(g.menus)&&g.bar.selected==1);
+    os64_ui_menu_close(g.menus,OS64_UI_MENU_EXPLICIT);drain();
+    CHECK(os64_ui_menubar_bind(&g.bar,g.models[5])==OS64_UI_OK);
+    g.targets[0].enabled=true;CHECK(os64_ui_actions_refresh(g.views[0])==OS64_UI_OK);
+    os64_ui_menu_model_release(top);os64_ui_menu_model_release(leaf);
+
+    current="review: reject unattached and sibling menu bars";
+    os64_ui_menu_session_dispose(g.menus);g.menus=NULL;
+    os64_ui_menubar_t foreign;os64_ui_menubar_init(&foreign);
+    os64_ui_menu_session_t *session=NULL;
+    CHECK(os64_ui_menu_session_create(&g.dispatcher,&g.ui,1,&foreign,NULL,NULL,&session)==OS64_UI_INVALID&&!session);
+    if(session) os64_ui_menu_session_dispose(session);
+    os64_ui_t sibling={0};foreign.w.ui=&sibling;
+    CHECK(os64_ui_menu_session_create(&g.dispatcher,&g.ui,1,&foreign,NULL,NULL,&session)==OS64_UI_INVALID&&!session);
+    if(session) os64_ui_menu_session_dispose(session);
+    CHECK(os64_ui_menu_session_create(&g.dispatcher,&g.ui,1,&g.bar,&g.status,&gallery_icons,&g.menus)==OS64_UI_OK);
+    CHECK(os64_ui_menu_bar_view(g.menus,g.views[0])==OS64_UI_OK);
+    os64_ui_menu_hooks(g.menus,gallery_menu_layout,gallery_menu_error,&g);
+
+    current="review: active menus consume owner wheel";
+    open_context(g.models[0],g.views[0]);unsigned wheels=transport.owner_wheel;
+    os64_gui_event_t wheel={.type=OS64_GUI_EVENT_MOUSE_WHEEL};wheel.mouse.dy=1;
+    queue(1,wheel);drain();CHECK(transport.owner_wheel==wheels&&popup_handle());
+    os64_ui_menu_close(g.menus,OS64_UI_MENU_EXPLICIT);drain();
+    queue(1,wheel);drain();CHECK(transport.owner_wheel==wheels+1);
+}
+
+static void destruction_failure(const char *dir)
+{
+    current="review: failed root destruction preserves registrations and callbacks";
+    open_context(g.models[0],g.views[0]);int64_t root=popup_handle();
+    unsigned births=transport.creates,hits=g.targets[0].hits;
+    transport.fail_destroy=root;
+    CHECK(os64_ui_menu_close(g.menus,OS64_UI_MENU_EXPLICIT)==OS64_UI_ERROR);
+    CHECK(os64_ui_dispatcher_live(&g.dispatcher,root)&&os64_ui_menu_active(g.menus));
+    CHECK(os64_ui_menu_open(g.menus,g.models[1],g.views[0],(os64_gui_rect_t){0},OS64_UI_MENU_CONTEXT)==OS64_UI_ERROR);
+    CHECK(transport.creates==births&&popup_handle()==root);
+    key(root,'\n',0x1c,0);CHECK(g.targets[0].hits==hits&&popup_handle()==root);
+    CHECK(os64_ui_menu_session_dispose(g.menus)==OS64_UI_ERROR);
+    CHECK(g.ui.menu==g.menus&&g.bar.session==g.menus&&g.ui.menu_event&&g.ui.menu_before_font);
+    CHECK(!g.ui.menu_before_font(&g.ui));
+    void *font=g.ui.font;
+    CHECK(os64_ui_font_release(&g.ui)==OS64_FONT_BUSY&&g.ui.font==font);
+#ifdef UI_TEXT_REAL
+    os64_font_set_t *set=outline_set(os64_ui_font_context(&g.ui),dir,"DejaVuSans.ttf",32);
+    os64_font_consumer_t consumer;os64_ui_font_consumer(&g.ui,&consumer);
+    CHECK(os64_font_adopt(set,&consumer,1,NULL)==OS64_FONT_BUSY&&g.ui.font==font);
+    os64_font_set_release(set);
+#else
+    (void)dir;
+#endif
+    /* Dispatch and paint the retained registration after rejected disposal. */
+    queue(root,mouse(OS64_GUI_EVENT_MOUSE_MOVE,3,3,0));drain();
+    transport.fail_destroy=0;
+    CHECK(os64_ui_menu_close(g.menus,OS64_UI_MENU_EXPLICIT)==OS64_UI_OK);drain();
+
+    current="review: failed child replacement and partial close remain retryable";
+    open_context(g.models[4],g.views[0]);root=popup_handle();
+    key(root,0,0x4d,0);int64_t child=popup_handle();CHECK(child!=root);
+    transport.fail_destroy=child;births=transport.creates;
+    os64_ui_popup_t *p=NULL;
+    CHECK(os64_ui_popup_create(&g.ui,g.models[4],g.views[0],NULL,1000,700,&p)==OS64_UI_OK);
+    os64_gui_rect_t row=os64_ui_popup_row(p,1);os64_ui_popup_destroy(p);
+    queue(root,mouse(OS64_GUI_EVENT_MOUSE_MOVE,10,row.y+2,0));drain();
+    CHECK(transport.creates==births&&popup_handle()==child&&os64_ui_dispatcher_live(&g.dispatcher,child));
+    transport.fail_destroy=root;
+    CHECK(os64_ui_menu_close(g.menus,OS64_UI_MENU_EXPLICIT)==OS64_UI_ERROR);
+    CHECK(!transport.windows[child].live&&transport.windows[root].live&&os64_ui_menu_active(g.menus));
+    CHECK(os64_ui_menu_session_dispose(g.menus)==OS64_UI_ERROR&&g.ui.menu==g.menus);
+    queue(root,(os64_gui_event_t){.type=OS64_GUI_EVENT_DOORBELL});drain();
+    transport.fail_destroy=0;
+    CHECK(os64_ui_menu_session_dispose(g.menus)==OS64_UI_OK);g.menus=NULL;drain();
+    CHECK(!g.ui.menu&&!g.bar.session&&!popup_handle());
+    CHECK(os64_ui_menu_session_create(&g.dispatcher,&g.ui,1,&g.bar,&g.status,&gallery_icons,&g.menus)==OS64_UI_OK);
+    CHECK(os64_ui_menu_bar_view(g.menus,g.views[0])==OS64_UI_OK);
+    os64_ui_menu_hooks(g.menus,gallery_menu_layout,gallery_menu_error,&g);
+}
+
 static void navigation(void)
 {
     current="bar and cascades";
@@ -387,6 +496,18 @@ static void placement_and_fonts(const char *dir)
 static void burst_and_pointer_navigation(void)
 {
     current="PS/2/HID bursts and pointer cancellation";
+    /* PS/2 extended navigation emits complete bursts without release events.
+     * A Right used in bar mode must not suppress Right in its new popup. */
+    key(1,0,0x44,0);
+    const char right[]={0x1b,'[','C'};
+    for(size_t i=0;i<3;++i) queue(1,edge(OS64_GUI_EVENT_KEY_DOWN,right[i],0x4d,0));
+    drain();key(1,'\n',0x1c,0);
+    int64_t first=popup_handle();CHECK(first);
+    os64_ui_menu_close(g.menus,OS64_UI_MENU_EXPLICIT);drain();
+    open_context(g.models[4],g.views[0]);first=popup_handle();
+    for(size_t i=0;i<3;++i) queue(first,edge(OS64_GUI_EVENT_KEY_DOWN,right[i],0x4d,0));
+    drain();CHECK(popup_handle()!=first&&transport.windows[popup_handle()].owner==first);
+    os64_ui_menu_close(g.menus,OS64_UI_MENU_EXPLICIT);drain();
     for(unsigned hid=0;hid<2;++hid) {
         open_context(g.models[0],g.views[0]);int64_t h=popup_handle();
         uint8_t scan=hid?0x51:0x50,mods=hid?OS64_GUI_MOD_HID:0;
@@ -510,6 +631,6 @@ int main(int argc,char **argv)
     setvbuf(stdout,NULL,_IONBF,0);
     const char *dir=argc>1?argv[1]:"userland/libfreetype/fixtures";
     (void)action_suite(argc,argv);
-    build(dir,true);models();disabled_bar_and_overflow_failure();dismissal_orders();activation_and_loss();quarantine();pending_context_keys();navigation();burst_and_pointer_navigation();standalone();callback_and_icon_contract();placement_and_fonts(dir);dispose();
+    build(dir,true);models();disabled_bar_and_overflow_failure();dismissal_orders();activation_and_loss();quarantine();pending_context_keys();review_navigation();destruction_failure(dir);navigation();burst_and_pointer_navigation();standalone();callback_and_icon_contract();placement_and_fonts(dir);dispose();
     printf("menu/action/status: %lu checks, %d failures\n",checks,failures);return failures?1:0;
 }

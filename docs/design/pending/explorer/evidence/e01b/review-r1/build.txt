@@ -1,0 +1,3 @@
+make -C userland -j8
+Exit status: 0
+Strict cross build succeeded with matching header dependencies after the PS/2 navigation fix.

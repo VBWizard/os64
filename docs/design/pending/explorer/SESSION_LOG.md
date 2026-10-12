@@ -441,3 +441,41 @@ remain E2. No kernel work or deferred gclock investigation is included.
 E1B is published as [PR #259](https://github.com/VBWizard/os64/pull/259),
 against userland. Tested implementation commit: `7c6de5cf`; publication metadata
 changes documentation only. Ordinary review and P5 acceptance remain pending.
+
+## 2026-10-12 — E1B P5 report and first PR review fixes
+
+Chris reports that the P5 walkthrough passed with no breakage. Long overflow
+heading intentionally shares the tall UTF-8 fixture; active bar hover switches
+top-level headings. Retrieved the supplied gallery log and retained it in
+[P5 evidence](evidence/e01b/p5-validation.txt): 32 callbacks see `menus=0`, popup
+pitch matches width, and exit reports zero font bytes/references. The installed
+commit/hash was not supplied; this hardware report precedes the review fixes.
+
+Addressed the five PR #259 findings: refresh closes invalid descendants and
+updates help; Alt/F10 chooses an enabled heading; native destruction failures
+propagate without freeing registered popup/session state; supplied bars must
+belong to the owner UI; owner wheel is consumed during active menus. Close and
+disposal now return a toolkit result, allowing retries before owner teardown.
+Font adoption/release refuse while surviving popups cannot be destroyed.
+
+The new navigation/ownership/wheel regressions fail before fixes and pass after.
+Destruction injection tests cover rejected disposal, callback prevention,
+root/child replacement, partial child-first closure, font refusal and recovery.
+Final fake/real host suites pass 2,079/2,127 checks with ASan, UBSan and
+LeakSanitizer enabled outside the sandbox. Real editor checks, font contracts,
+six mutation gates and full userland cross build pass. Reproduction and source
+hashes are retained in [review evidence](evidence/e01b/review-r1/README.md).
+Reran the retained four-core QEMU controller on the review binaries: HID,
+PS/2/fonts, external focus and quit modes pass. Dismissal/next-click behavior,
+real-font adoption, overflow, popup-local wheel and close cleanup remain correct.
+Live heap bytes/blocks return to the warm baseline after 24 more cycles; every
+gallery exit reports zero font bytes/references. The E1K kernel is unchanged.
+Ordinary re-review remains pending; E1C migrations and the gclock debt are untouched.
+
+Checking the native overflow screenshots revealed that the initial evidence's
+child capture did not open a child. The original trace and kernel implementation
+confirm this predates review changes: extended PS/2 navigation is press-only,
+but the menu held-key guard waited for a release. A targeted regression fails
+before the fix. Decoded navigation now repeats while command/mode keys retain
+their guard. Corrected the controller's redundant Right press and added a
+child-image assertion; corrected the earlier evidence claim in the same change.

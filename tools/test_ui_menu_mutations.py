@@ -19,10 +19,10 @@ mutations = {
     'disabled': {'ui_action': ('if (!v->states[find(v->actions, id)].enabled)', 'if (v->states[find(v->actions, id)].enabled)')},
     'stale-target': {'ui_action': ('if (!v->context.validate(v->context.cookie, v->context.generation))',
                                  'if (false)')},
-    'callback-before-close': {'ui_menu': ('os64_ui_menu_close(s,OS64_UI_MENU_EXPLICIT);\n    if(!s->depth) (void)os64_ui_action_invoke(v,id);',
+    'callback-before-close': {'ui_menu': ('if(os64_ui_menu_close(s,OS64_UI_MENU_EXPLICIT)==OS64_UI_OK) (void)os64_ui_action_invoke(v,id);',
                                         '(void)os64_ui_action_invoke(v,id);\n    os64_ui_menu_close(s,OS64_UI_MENU_EXPLICIT);')},
     'stale-status-token': {'ui_status': ('if (!token || token != slot->token)', 'if (!token)')},
-    'skip-font-close': {'ui_font': ('if (ui->menu_before_font) ui->menu_before_font(ui);', '(void)ui;')},
+    'skip-font-close': {'ui_font': ('if (ui->menu_before_font && !ui->menu_before_font(ui)) return OS64_FONT_BUSY;', '(void)ui;')},
     'arrow-as-escape': {'ui_text': ('*seq = SEQ_ESC;\n\t\treturn K_NONE;', '*seq = SEQ_IDLE;\n\t\treturn K_ESC;')},
 }
 failed = False

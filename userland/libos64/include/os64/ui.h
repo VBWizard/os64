@@ -401,10 +401,11 @@ struct os64_ui
     // Set after os64_ui_init. Usage and worker lifetime: GUI_DOORBELL.md.
     void (*on_doorbell)(os64_ui_t *ui, const os64_gui_event_t *event);
     // Optional menu participant. Predispatch precedes application commands;
-    // before_font releases popups while the current text context is alive.
+    // before_font releases popups while the current text context is alive;
+    // false refuses font adoption/release while native destruction is blocked.
     void *menu;
     bool (*menu_event)(os64_ui_t *, const os64_gui_event_t *);
-    void (*menu_before_font)(os64_ui_t *);
+    bool (*menu_before_font)(os64_ui_t *);
     int64_t (*menu_turn)(os64_ui_t *);
 };
 

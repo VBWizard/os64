@@ -59,18 +59,22 @@ void os64_ui_popup_scroll(os64_ui_popup_t *,int32_t rows);
  * must not be registered as another native window); its anchor
  * is screen-local. The dispatcher reserves a maintenance slot until disposal.
  * Positive-owner anchor is content-local; cascades re-read parent screen geometry.
- * BUSY means queued until post-destruction drains complete; ERROR/LIMIT retain
- * no popup. An empty root returns EMPTY. New requests replace the old session. */
+ * BUSY means queued until post-destruction drains complete. A failed native
+ * destroy returns ERROR with surviving panels retained, preventing replacement.
+ * An empty root returns EMPTY. New requests replace the old session on success. */
 typedef enum { OS64_UI_MENU_CONTEXT,OS64_UI_MENU_BAR } os64_ui_menu_invocation_t;
 typedef enum { OS64_UI_MENU_EXPLICIT,OS64_UI_MENU_DISMISSED,OS64_UI_MENU_LOST,
     OS64_UI_MENU_GEOMETRY,OS64_UI_MENU_FONT } os64_ui_menu_close_t;
 os64_ui_status_code_t os64_ui_menu_session_create(os64_ui_dispatcher_t *,os64_ui_t *,int64_t owner,
     os64_ui_menubar_t *,os64_ui_status_t *,const os64_ui_icon_provider_t *,
     os64_ui_menu_session_t **);
-void os64_ui_menu_session_dispose(os64_ui_menu_session_t *);
+/* Close/dispose return ERROR on native destruction failure. Keep the session,
+ * owner tree, dispatcher and font context alive and retry before releasing them.
+ * Disposal frees the session and detaches hooks only on OK. */
+os64_ui_status_code_t os64_ui_menu_session_dispose(os64_ui_menu_session_t *);
 os64_ui_status_code_t os64_ui_menu_open(os64_ui_menu_session_t *,os64_ui_menu_model_t *,
     os64_ui_action_view_t *,os64_gui_rect_t anchor,os64_ui_menu_invocation_t);
-void os64_ui_menu_close(os64_ui_menu_session_t *,os64_ui_menu_close_t);
+os64_ui_status_code_t os64_ui_menu_close(os64_ui_menu_session_t *,os64_ui_menu_close_t);
 /* Fallback widget storage must outlive the session. Close before removing or
  * freeing widgets; hidden/detached restoration targets use this fallback. */
 void os64_ui_menu_focus_fallback(os64_ui_menu_session_t *,os64_ui_widget_t *);

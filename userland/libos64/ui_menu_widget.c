@@ -369,7 +369,7 @@ void os64_ui_menubar_init(os64_ui_menubar_t *b)
 void os64_ui_menubar_destroy(os64_ui_menubar_t *b)
 {
     if(!b) return;
-    if(b->session&&os64_ui_menu_active(b->session)) os64_ui_menu_close(b->session,OS64_UI_MENU_EXPLICIT);
+    if(b->session&&os64_ui_menu_close(b->session,OS64_UI_MENU_EXPLICIT)!=OS64_UI_OK) return;
     bar_discard(&b->w);
     os64_ui_run_release(b->w.run); b->w.run=NULL;
     for(size_t i=0;i<OS64_UI_MENU_ENTRIES;++i) { os64_ui_run_release(b->labels[i]); b->labels[i]=NULL; }

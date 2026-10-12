@@ -291,9 +291,10 @@ static bool gallery_build(gallery *a)
     gallery_layout(a,false); os64_ui_set_focus(&a->ui,&a->content);
     return true;
 }
-static void gallery_dispose(gallery *a)
+static bool gallery_dispose(gallery *a)
 {
-    os64_ui_menu_session_dispose(a->menus); a->menus=NULL;
+    if(os64_ui_menu_session_dispose(a->menus)!=OS64_UI_OK) return false;
+    a->menus=NULL;
     os64_ui_cancel_interaction(&a->ui);
     for(unsigned i=0;i<2;++i) (void)os64_ui_action_unbind(&a->record[i]);
     for(unsigned i=0;i<6;++i) (void)os64_ui_action_unbind(&a->controls[i]);
@@ -302,6 +303,7 @@ static void gallery_dispose(gallery *a)
     for(unsigned i=0;i<3;++i) if(a->views[i]) (void)os64_ui_action_view_destroy(a->views[i]);
     if(a->actions) (void)os64_ui_actions_destroy(a->actions);
     (void)os64_ui_font_release(&a->ui);
+    return true;
 }
 static bool gallery_route(gallery *a, const os64_gui_event_t *ev, os64_ui_action_result_t *out)
 {
@@ -401,7 +403,12 @@ int main(int argc,char **argv)
     (void)os64_ui_font_follow(&g.ui);
     os64_ui_paint(&g.ui);
     while(!g.ui.quit) if(os64_ui_dispatcher_turn(&g.dispatcher,true)<0) break;
-    gallery_dispose(&g);
+    if(!gallery_dispose(&g)) {
+        os64_printf("actiongallery: native popup destruction refused; exiting\n");
+        /* Process exit releases native windows. Keep borrowed toolkit state
+         * intact rather than freeing it underneath a surviving registration. */
+        return 1;
+    }
     if(g.trace) os64_printf("gallery exit font-bytes=%lu refs=%u,%u hits=%u,%u\n",(unsigned long)os64_ui_font_live_bytes(&g.ui),g.targets[0].refs,g.targets[1].refs,g.targets[0].hits,g.targets[1].hits);
     (void)os64_ui_dispatcher_destroy(&g.dispatcher,win);
     return 0;

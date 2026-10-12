@@ -3,8 +3,25 @@
 2026-10-11–12. Branch `codex/explorer-e1b`, fresh base `origin/userland` at
 `b36e9ddc` (PR #257). [Concrete handoff](../../E01B_HANDOFF.md).
 
-Tested implementation commit: `7c6de5cf` ([PR #259](https://github.com/VBWizard/os64/pull/259)).
-Publication metadata after that commit changes documentation only.
+Initial tested implementation commit: `7c6de5cf` ([PR #259](https://github.com/VBWizard/os64/pull/259)).
+The review follow-up below records subsequent lifecycle/navigation fixes separately.
+
+## P5 report and first review follow-up
+
+Chris reports the P5 walkthrough passed with no breakage. The only observation
+was intentional: Long overflow heading opens the same tall UTF-8 model as
+Fixtures → Tall UTF-8 commands, and active menu-bar hover switches headings.
+The supplied [P5 trace](p5-validation.txt) records 32 callbacks with `menus=0`,
+19 popup surface observations with pitch equal to width, and exit
+`font-bytes=0 refs=0,0 hits=6,4`. The installed commit/hash was not supplied;
+this report precedes the review fixes and is not evidence for injected failures.
+
+[Review follow-up evidence](review-r1/README.md) covers all five findings:
+invalidated descendant closure/help, enabled bar entry, destruction failure
+propagation, rejecting unattached/foreign bars, and consuming owner wheel events.
+The final host suites pass 2,079 fake-font / 2,127 real-font checks with ASan,
+UBSan and LeakSanitizer enabled outside the sandbox. The real-font editor suite,
+font contracts, six mutation gates and strict full-userland build also pass.
 
 Before publication, the branch fast-forwarded to `f7f2f508`; those upstream
 CSS-transform fixes touch no menu, font or action files.
@@ -74,7 +91,7 @@ commit contains those sources and these reports.
 | Dismissing click consumed, subsequent click invokes; callback sees zero menu windows | [Dismiss](dismiss-click-final.png), [later click](later-click-final.png), HID invocation trace. |
 | Checkmark and icon occupy separate columns; NULL provider remains usable | [Checked icon](checked-icon-final.png), [PS/2 without icons](ps2-actions-final.png). |
 | Tall UTF-8 menu reaches its end, pages and routes wheel locally | [End](tall-end-final.png), [page](tall-page-final.png), [wheel before](wheel-before-final.png), [after](wheel-after-final.png). |
-| Same-process real Interface change closes panels before adoption; 32px layout and complete overflow work | [Font report](guest-font32.txt), [closed](font-closed-final.png), [View](font32-view-final.png), [overflow](overflow-menu-final.png), [child](overflow-child-final.png). |
+| Same-process real Interface change closes panels before adoption; 32px layout and complete overflow work | [Font report](guest-font32.txt), [closed](font-closed-final.png), [View](font32-view-final.png), [overflow](overflow-menu-final.png). The original child capture shows only its parent; corrected child-opening evidence is in the review follow-up. |
 | Color-only change preserves live menus; VT preserves family; external focus dismisses | [Palette report](guest-palette.txt), [live color](font32-palette-final.png), [VT](vt-preserved-final.png), [Scribe focus](external-focus-final.png). |
 | Popup close leaves owner alive; owner close releases family/font references | [Popup close](popup-close-final.png), [owner close](owner-close-final.png), [external trace](guest-external.txt). |
 | Twelve warm cycles followed by 24 more return live heap to the same baseline | [Warm heap](heap-warm.txt), [after heap](heap-after.txt); mapped bytes, live bytes and block count match, heap audit is OK. All gallery exits report font bytes/references zero. |
@@ -90,8 +107,8 @@ not a separate tiny QEMU display. Owner INPUT_LOST and allocation/native-create
 failure paths are injected in the host harness. Existing Scribe host checks
 cover save/edit/unsaved-exit regressions; the native integration run checks its
 help and external-focus behavior. Production menu migration and complete
-Scribe/grootmenu acceptance belong to E1C. Hardware behavior is unclaimed until
-Chris performs the P5 walkthrough below.
+Scribe/grootmenu acceptance belong to E1C. Chris's subsequent P5 report is
+recorded below; it precedes the review fixes.
 
 ## QEMU reproduction
 
@@ -175,5 +192,5 @@ if convenient, gallery/libos64 hashes. E1K is already merged.
    trace ends with zero font bytes/references. Run `--no-icons` once: labels
    and reserved empty icon slots remain usable.
 
-P5 acceptance awaits Chris's report. The gclock debt is untouched. Real icon
+Chris reports the P5 walkthrough passed. The gclock debt is untouched. Real icon
 assets/catalog, production menu migrations, Roam browsing and IPC remain later work.

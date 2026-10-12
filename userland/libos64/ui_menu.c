@@ -39,7 +39,7 @@ static void boundary(void *,bool);
 static bool owner_event(os64_ui_t *,const os64_gui_event_t *);
 static int64_t menu_turn(os64_ui_t *ui)
 { os64_ui_menu_session_t *s=ui->menu; return os64_ui_dispatcher_turn(s->dispatcher,true); }
-static void before_font(os64_ui_t *ui) { os64_ui_menu_close(ui->menu,OS64_UI_MENU_FONT); }
+static bool before_font(os64_ui_t *ui) { return os64_ui_menu_close(ui->menu,OS64_UI_MENU_FONT)==OS64_UI_OK; }
 static char lower(char c) { return c>='A'&&c<='Z'?(char)(c+32):c; }
 static bool is_key(const os64_gui_event_t *e,uint16_t key,uint8_t mods)
 {
@@ -72,29 +72,35 @@ static bool family(os64_ui_menu_session_t *s,int64_t h)
 }
 static void release_pending(os64_ui_menu_session_t *s)
 { os64_ui_menu_model_release(s->pending); s->pending=NULL; }
-static void close_to(os64_ui_menu_session_t *s,size_t depth)
+static os64_ui_status_code_t close_to(os64_ui_menu_session_t *s,size_t depth)
 {
+    os64_ui_status_code_t rc=OS64_UI_OK;
     if(s->pressed_panel>=depth) cancel_press(s);
     while(s->depth>depth) {
         menu_panel *p=&s->panels[s->depth-1];
         /* Native children must disappear while their parent registration and
          * font runs are alive. Successful removal quarantines the handle. */
-        if(os64_ui_dispatcher_destroy(s->dispatcher,p->handle)<0) break;
+        if(os64_ui_dispatcher_destroy(s->dispatcher,p->handle)<0) { rc=OS64_UI_ERROR; break; }
         --s->depth; os64_ui_popup_destroy(p->widget); *p=(menu_panel){0};
     }
     clear_help(s);
     if(s->depth) help(s,s->panels[s->depth-1].widget);
+    return rc;
 }
-void os64_ui_menu_close(os64_ui_menu_session_t *s,os64_ui_menu_close_t reason)
+os64_ui_status_code_t os64_ui_menu_close(os64_ui_menu_session_t *s,os64_ui_menu_close_t reason)
 {
-    if(!s) return;
+    if(!s) return OS64_UI_OK;
     bool restore_focus=s->active;
     cancel_press(s);
-    s->active=false; s->dismissed=reason==OS64_UI_MENU_DISMISSED;
+    release_pending(s);
     if(reason!=OS64_UI_MENU_DISMISSED) { s->suppress_pending=false; s->suppress_button=0; }
     s->decoder=0; s->alt_armed=false;
     s->failed_panel=MENU_NONE; s->failed_row=MENU_NONE;
-    release_pending(s); close_to(s,0);
+    /* A failed native destroy leaves its registration borrowing this session,
+     * popup and font context. Keep them alive so the caller can retry. */
+    os64_ui_status_code_t rc=close_to(s,0);
+    if(rc) return rc;
+    s->active=false; s->dismissed=reason==OS64_UI_MENU_DISMISSED;
     if(s->view) { os64_ui_action_view_release(s->view); s->view=NULL; }
     if(s->bar&&s->bar->temporary) {
         s->bar->temporary=false; os64_ui_set_hidden(s->ui,&s->bar->w,true);
@@ -108,6 +114,7 @@ void os64_ui_menu_close(os64_ui_menu_session_t *s,os64_ui_menu_close_t reason)
     if(!restore||root!=s->ui->root||!restore->focusable||!os64_ui_widget_enabled(restore)) restore=s->fallback;
     if(restore_focus&&restore) os64_ui_set_focus(s->ui,restore);
     s->saved_focus=NULL;
+    return OS64_UI_OK;
 }
 void os64_ui_menu_focus_fallback(os64_ui_menu_session_t *s,os64_ui_widget_t *w) { if(s) s->fallback=w; }
 bool os64_ui_menu_active(const os64_ui_menu_session_t *s) { return s&&s->active; }
@@ -175,8 +182,10 @@ static void report(os64_ui_menu_session_t *s,os64_ui_status_code_t rc)
 { if(s->error&&rc!=OS64_UI_OK&&rc!=OS64_UI_BUSY&&rc!=OS64_UI_EMPTY) s->error(s->user,rc); }
 static os64_ui_status_code_t request_panel(os64_ui_menu_session_t *s,os64_ui_menu_model_t *m,size_t level)
 {
-    release_pending(s); close_to(s,level);
-    os64_ui_status_code_t rc=open_panel(s,m,level);
+    release_pending(s);
+    os64_ui_status_code_t rc=close_to(s,level);
+    if(rc) { report(s,rc); return rc; }
+    rc=open_panel(s,m,level);
     if(rc==OS64_UI_BUSY) {
         rc=os64_ui_menu_model_retain(m);
         if(!rc) { s->pending=m; s->pending_depth=level; rc=OS64_UI_BUSY; }
@@ -188,9 +197,10 @@ os64_ui_status_code_t os64_ui_menu_open(os64_ui_menu_session_t *s,os64_ui_menu_m
     os64_ui_action_view_t *v,os64_gui_rect_t anchor,os64_ui_menu_invocation_t kind)
 {
     if(!s||!m||!v||!os64_ui_action_view_registry(v,m->actions)||anchor.w<0||anchor.h<0) return OS64_UI_INVALID;
-    os64_ui_menu_close(s,OS64_UI_MENU_EXPLICIT);
+    os64_ui_status_code_t rc=os64_ui_menu_close(s,OS64_UI_MENU_EXPLICIT);
+    if(rc) return rc;
     if(!m->count) return OS64_UI_EMPTY;
-    os64_ui_status_code_t rc=os64_ui_action_view_retain(v);
+    rc=os64_ui_action_view_retain(v);
     if(rc) return rc;
     rc=os64_ui_actions_refresh(v);
     if(rc) { os64_ui_action_view_release(v); return rc; }
@@ -218,7 +228,8 @@ os64_ui_status_code_t os64_ui_menu_session_create(os64_ui_dispatcher_t *d,os64_u
 {
     if(!out) return OS64_UI_INVALID;
     *out=NULL;
-    if(!d||!ui||ui->menu||owner<0||(owner&&!os64_ui_dispatcher_live(d,owner))||(b&&b->session)||(!owner&&b)) return OS64_UI_INVALID;
+    if(!d||!ui||ui->menu||owner<0||(owner&&!os64_ui_dispatcher_live(d,owner))||
+       (b&&(b->session||b->w.ui!=ui))||(!owner&&b)) return OS64_UI_INVALID;
     if(!owner) for(size_t i=0;i<OS64_UI_DISPATCH_WINDOWS;++i)
         if(d->entries[i].handle&&d->entries[i].ui==ui) return OS64_UI_INVALID;
     size_t participant=OS64_UI_DISPATCH_WINDOWS;
@@ -238,16 +249,18 @@ os64_ui_status_code_t os64_ui_menu_session_create(os64_ui_dispatcher_t *d,os64_u
 void os64_ui_menu_hooks(os64_ui_menu_session_t *s,void (*layout)(void *),
     void (*error)(void *,os64_ui_status_code_t),void *user)
 { if(s) { s->layout=layout; s->error=error; s->user=user; } }
-void os64_ui_menu_session_dispose(os64_ui_menu_session_t *s)
+os64_ui_status_code_t os64_ui_menu_session_dispose(os64_ui_menu_session_t *s)
 {
-    if(!s) return;
-    os64_ui_menu_close(s,OS64_UI_MENU_EXPLICIT);
+    if(!s) return OS64_UI_OK;
+    os64_ui_status_code_t rc=os64_ui_menu_close(s,OS64_UI_MENU_EXPLICIT);
+    if(rc) return rc;
     for(size_t i=0;i<OS64_UI_DISPATCH_WINDOWS;++i) if(s->dispatcher->entries[i].boundary_user==s) {
         s->dispatcher->entries[i].boundary=NULL; s->dispatcher->entries[i].boundary_user=NULL;
     }
     s->ui->menu=NULL; s->ui->menu_event=NULL; s->ui->menu_before_font=NULL; s->ui->menu_turn=NULL;
     if(s->bar) { s->bar->session=NULL; s->bar->view=NULL; }
     os64_ui_action_view_release(s->bar_view); os64_free(s);
+    return OS64_UI_OK;
 }
 os64_ui_status_code_t os64_ui_menu_bar_view(os64_ui_menu_session_t *s,os64_ui_action_view_t *v)
 {
@@ -264,16 +277,22 @@ os64_ui_status_code_t os64_ui_menu_refresh(os64_ui_menu_session_t *s)
     if(rc) { os64_ui_menu_close(s,OS64_UI_MENU_EXPLICIT); return rc; }
     for(size_t i=0;i<s->depth;++i) {
         os64_ui_popup_t *p=s->panels[i].widget;
-        if(!menu_selectable(p,p->selected)) os64_ui_popup_select(p,MENU_NONE);
+        if(!menu_selectable(p,p->selected)) {
+            release_pending(s); cancel_press(s);
+            rc=close_to(s,i+1);
+            os64_ui_popup_select(p,MENU_NONE);
+            if(!rc) help(s,p);
+            return rc;
+        }
     }
+    if(s->depth) help(s,s->panels[s->depth-1].widget);
     return rc;
 }
 static void invoke(os64_ui_menu_session_t *s,uint32_t id)
 {
     os64_ui_action_view_t *v=s->view;
     if(!v||os64_ui_action_view_retain(v)) return;
-    os64_ui_menu_close(s,OS64_UI_MENU_EXPLICIT);
-    if(!s->depth) (void)os64_ui_action_invoke(v,id);
+    if(os64_ui_menu_close(s,OS64_UI_MENU_EXPLICIT)==OS64_UI_OK) (void)os64_ui_action_invoke(v,id);
     /* The callback may invalidate the tree; only the independently retained
      * view is touched here. Application destruction waits until dispatch ends. */
     os64_ui_action_view_release(v);
@@ -333,10 +352,22 @@ static void bar_mode(os64_ui_menu_session_t *s)
 {
     if(s->active) { os64_ui_menu_close(s,OS64_UI_MENU_EXPLICIT); return; }
     if(!s->bar||s->bar->w.disabled||!s->bar->model||!s->bar->model->count||!s->bar_view) return;
+    if(os64_ui_actions_refresh(s->bar_view)) return;
+    if(os64_ui_action_view_retain(s->bar_view)) return;
+    reveal(s);
+    size_t visible=menu_bar_visible(s->bar),count=visible+(visible<s->bar->model->count?1:0);
+    if(s->bar->selected>=count||!menu_bar_enabled(s->bar,s->bar->selected)) {
+        s->bar->selected=MENU_NONE;
+        for(size_t i=0;i<count;++i) if(menu_bar_enabled(s->bar,i)) { s->bar->selected=i; break; }
+    }
+    if(s->bar->selected==MENU_NONE) {
+        os64_ui_action_view_release(s->bar_view);
+        (void)os64_ui_menu_close(s,OS64_UI_MENU_EXPLICIT); return;
+    }
     s->saved_focus=s->ui->focus; os64_ui_cancel_gestures(s->ui);
     s->active=true; s->kind=OS64_UI_MENU_BAR;
-    s->view=s->bar_view; (void)os64_ui_action_view_retain(s->view);
-    reveal(s); os64_ui_mark_dirty(s->ui,&s->bar->w);
+    s->view=s->bar_view;
+    os64_ui_mark_dirty(s->ui,&s->bar->w);
 }
 static void bar_open_target(os64_ui_menu_session_t *s,size_t index,bool direct)
 {
@@ -359,7 +390,8 @@ static void bar_open_target(os64_ui_menu_session_t *s,size_t index,bool direct)
     /* Preserve temporary reveal across replacement; open normally collapses
      * an older context session, so reveal after its close and reflow first. */
     bool temporary=b->temporary;
-    os64_ui_menu_close(s,OS64_UI_MENU_EXPLICIT);
+    rc=os64_ui_menu_close(s,OS64_UI_MENU_EXPLICIT);
+    if(rc) { report(s,rc); os64_ui_menu_model_release(m); return; }
     if(temporary) reveal(s);
     s->view=s->bar_view; rc=os64_ui_action_view_retain(s->view);
     if(!rc) rc=os64_ui_actions_refresh(s->view);
@@ -403,7 +435,7 @@ static bool key_event(os64_ui_menu_session_t *s,const os64_gui_event_t *e)
         if(!down) { bool held=s->f10_held; s->f10_held=false; return held||s->active; }
         if(s->f10_held) return true;
         if(mods&OS64_GUI_MOD_SHIFT) {
-            os64_ui_menu_close(s,OS64_UI_MENU_EXPLICIT);
+            if(os64_ui_menu_close(s,OS64_UI_MENU_EXPLICIT)!=OS64_UI_OK) return true;
             bool handled=os64_ui_context(s->ui,e,true);
             s->f10_held=handled;
             return handled;
@@ -442,15 +474,16 @@ static bool key_event(os64_ui_menu_session_t *s,const os64_gui_event_t *e)
             if(is_key(e,named[i],mods)) { k=decoded[i]; break; }
     }
     if(k==K_NONE) return true;
-    /* Escape bursts repeat the physical identity on each byte. Hold only
-     * complete decoded gestures, so an ESC prefix cannot block its suffix. */
-    s->held[id/8]|=(uint8_t)mask;
+    /* PS/2 extended navigation is a press-only escape burst. Let decoded
+     * navigation repeat; activation/mode keys have release edges and retain
+     * their guard. An ESC prefix cannot hold the identity before its suffix. */
+    if(k==K_ENTER||k==K_CHAR||k==K_ESC||k==K_TAB) s->held[id/8]|=(uint8_t)mask;
     if(k==K_ESC) {
         if(s->depth>1) close_to(s,s->depth-1); else os64_ui_menu_close(s,OS64_UI_MENU_EXPLICIT);
         return true;
     }
     if(k==K_TAB) {
-        os64_ui_menu_close(s,OS64_UI_MENU_EXPLICIT);
+        if(os64_ui_menu_close(s,OS64_UI_MENU_EXPLICIT)!=OS64_UI_OK) return true;
         (void)os64_ui_focus_next(s->ui,mods&OS64_GUI_MOD_SHIFT,true); return true;
     }
     if(!s->depth) {
@@ -529,7 +562,7 @@ static bool owner_event(os64_ui_t *ui,const os64_gui_event_t *e)
         os64_ui_menu_close(s,OS64_UI_MENU_LOST); os64_ui_cancel_gestures(ui); return false;
     }
     if(e->type==OS64_GUI_EVENT_WINDOW_RESIZE||e->type==OS64_GUI_EVENT_WINDOW_CLOSE) {
-        os64_ui_menu_close(s,OS64_UI_MENU_GEOMETRY); return false;
+        return os64_ui_menu_close(s,OS64_UI_MENU_GEOMETRY)!=OS64_UI_OK;
     }
     if(e->type==OS64_GUI_EVENT_APPEARANCE) {
         /* Font session preparation has its own hook; color-only adoption can
@@ -537,6 +570,7 @@ static bool owner_event(os64_ui_t *ui,const os64_gui_event_t *e)
         return false;
     }
     (void)focus_event(s,s->owner,e);
+    if(e->type==OS64_GUI_EVENT_MOUSE_WHEEL&&s->active) return true;
     if(e->type==OS64_GUI_EVENT_KEY_DOWN||e->type==OS64_GUI_EVENT_KEY_UP) return key_event(s,e);
     if(e->type==OS64_GUI_EVENT_MOUSE_BUTTON_UP&&s->suppress_button==(uint8_t)(e->mouse.button+1)) {
         s->suppress_button=0; return true;

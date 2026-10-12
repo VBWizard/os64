@@ -7,13 +7,14 @@ review fixes only; menu APIs and tested gallery/library code are unchanged). Chr
 banners preceded E1K's approval and merge.
 
 [PR #259](https://github.com/VBWizard/os64/pull/259) targets `userland`.
-Tested implementation revision: `7c6de5cf`; subsequent publication metadata
-changes documentation only.
+Initial tested implementation revision: `7c6de5cf`. PR review fixes add failure
+propagation for native destruction and the navigation/dispatch regressions below.
 
 E1B implements the [menu contract](E01_MENUS.md) using the
 [E1K APIs](E01K_HANDOFF.md). Host and QEMU evidence is recorded in
-[evidence/e01b](evidence/e01b/README.md). Ordinary review and Chris's P5
-walkthrough remain the acceptance steps. E1C retains the grootmenu and Scribe
+[evidence/e01b](evidence/e01b/README.md). Chris reports the P5 walkthrough passed;
+the retained trace ends with zero font bytes/references. Ordinary review remains
+the acceptance step. E1C retains the grootmenu and Scribe
 migrations; E2 retains the asset catalog and artwork. No kernel, browsing,
 IPC, libimage dependency or deferred gclock investigation is included.
 
@@ -62,7 +63,22 @@ empty observations. Creation is blocked until each surviving queue has been
 polled empty after the last destruction, even across budget boundaries.
 Replacement/child opens return `OS64_UI_BUSY` while their retained intent waits
 for this drain. This is pending work, not an allocation failure; an actual
-opening failure leaves no new windows or retained session target.
+opening failure leaves no new windows or retained session target, unless native
+destruction itself fails. Close and session disposal return `OS64_UI_ERROR` in
+that case: surviving panels, dispatcher registrations, views and UI hooks stay
+alive. Replacement and application invocation stop; retry close/disposal before
+releasing owner widgets or font storage. Font adoption/release refuses with BUSY
+while popup destruction is blocked. Successful disposal detaches hooks and frees
+the session. A supplied menu bar must already belong to the session's UI.
+
+Refresh closes descendants below the first invalidated selection and recomputes
+transient help. Alt/F10 normalizes the remembered bar selection to an enabled
+visible heading (including overflow); an all-disabled bar remains inactive.
+Active menus consume owner wheel events so obscured content cannot scroll.
+Decoded navigation repeats without a release guard: extended PS/2 keys emit
+press-only escape bursts. Command activation, mnemonics and mode keys retain
+their repeat guards. The review evidence corrects the initial native overflow
+child capture, which showed only the parent despite its original description.
 
 Retired focus records are ignored by a pending replacement, including old birth
 focus-lost records. Unknown live focus peers dismiss conservatively. A sibling
@@ -82,7 +98,7 @@ widgets. Restoration checks tree membership, visibility, enabled state and
 focusability; applications supply a surviving fallback widget. The gallery
 uses its content control. Public UI structs grew optional hook fields; rebuild
 userland consumers with this libos64 rather than mixing old binaries and new
-struct layouts. Before owner destruction, dispose the session,
+struct layouts. Before owner destruction, successfully dispose the session,
 unbind actions, release menu models/views, then release owner fonts and storage.
 
 ## Fonts, appearance and consumers
@@ -115,8 +131,8 @@ ordering. Run the installed path `/tests/actiongallery`.
 
 ## Next action
 
-Review this userland PR, then follow the linked P5 walkthrough at the installed
-revision. Record Chris's hardware result separately; no E1B P5 acceptance is
-claimed by the automated evidence. E1C starts with the shared interfaces after
+Review the fixes on this userland PR. Chris's P5 report and log are recorded
+separately from automated evidence; the installed commit/hash was not supplied,
+and the report precedes these review fixes. E1C starts with the shared interfaces after
 E1B review. The global native window ceiling and existing monotonic task VA
 policy remain unchanged.

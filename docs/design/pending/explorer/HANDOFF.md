@@ -17,13 +17,14 @@ Quinn owns E1B in `codex/explorer-e1b`, worktree `.worktrees/explorer-e1b`,
 from current `origin/userland` at that merge. The [concrete E1B handoff](E01B_HANDOFF.md)
 describes the shared models/widgets/controller, native dispatcher, ownership,
 font and context hooks. [Evidence and P5 walkthrough](evidence/e01b/README.md)
-record what passed and what awaits Chris's hardware confirmation.
+record the automated results and Chris's successful P5 report, which precedes
+the review fixes.
 
 | Work | State | Next action |
 | --- | --- | --- |
 | [E1A actions/status](E01A_HANDOFF.md) | Complete | Reuse the existing APIs. |
 | [E1K native popups](E01K_HANDOFF.md) | Approved and merged, PR #257 | Consume the merged E1K wrappers. |
-| [E1B menus](E01B_HANDOFF.md) | Implemented; ordinary review/P5 pending | Review the toolkit and complete the linked P5 walkthrough. |
+| [E1B menus](E01B_HANDOFF.md) | Implemented; review fixes, P5 report passed | Review the toolkit fixes; P5 log is retained separately. |
 | E1C consumers | Waiting on E1B | Migrate grootmenu and Scribe with their existing policies. |
 | [E2 icons](E02_ICONS.md) | Provider boundary available; visual choice open | Choose the family before producing assets/catalog. |
 | E6 channels | Umbrella proposal only | Separate platform design and Fable review. |
