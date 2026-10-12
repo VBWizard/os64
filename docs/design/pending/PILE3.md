@@ -996,7 +996,8 @@ turn they part:
   are unchanged inside a group: nested groups each paint in their own
   coordinates, and each is laid onto the one outside.
 - **Is**: what a door that meets the world asks — a hit, a box's rect
-  for `getBoundingClientRect`, a control's place, `flow_box_covered`,
+  for `getBoundingClientRect` (but not `offsetTop` and its kin, which
+  leave every transform out: `flow_box_layout_offset`), a control's place, `flow_box_covered`,
   revealing a fragment — goes through every drawn-through frame,
   innermost first. `flow_box_doc_rect` is the bounds of the box's four
   corners so mapped (CSSOM View's answer for a transformed box), and
@@ -1043,11 +1044,15 @@ BILINEAR, B and T interpolated apart (B is premultiplied by its own
 making, so they interpolate as they should). The destination is cut by
 the group's outer clip and the view.
 
-A surface is the group's bounds cut to the view taken back through
-the matrices — what can show — at most 4096 pixels a side and 2,097,152
-in all (8 MiB each), at most 16 deep; a group past that, or whose
-surfaces find no memory, is painted straight onto the backdrop at its
-S7a offset — upright, never missing. The painter keeps 64 groups open;
+A surface is the group's bounds — each layer cut to the clips inside
+the group — cut to the view taken back through the matrices, one pixel
+more all round for the bilinear sample at the edge: what can show. At
+most 4096 pixels a side and 2,097,152 in all (8 MiB each), at most 16
+deep; a group past that, or whose surfaces find no memory, is painted
+straight onto the backdrop at its S7a offset — upright, inside what
+clips it from outside, never missing. A group none of which can show is
+not painted at all. An opacity group inside opens on both sheets or on
+neither, so the two never disagree. The painter keeps 64 groups open;
 one deeper is painted where it was laid out.
 
 ### Booked
@@ -1056,6 +1061,7 @@ one deeper is painted where it was laid out.
 |---|---|---|
 | A box scaled up softens | its surface is painted at its own size and stretched; Chrome paints at the scale | a page whose scaled-up text matters |
 | A control in a drawn-through box is drawn turned but edited upright | a live widget is drawn on the glass, not through a matrix | a page with a turned form |
+| A group the face refuses (past its sheet limits, out of memory) is drawn upright but hit through its matrix | libflow answers hits for the page as written; which groups a face refuses is decided at paint time, and only it knows | a page whose turned group passes the sheet limits and is clicked |
 | A sticky box, a scroll container's bars, or a fragment revealed inside a drawn-through box | each is worked against the page's viewport, which the box's own coordinates are not | a page that scrolls inside a turned box |
 | `perspective` and non-flat matrices | carried over from S7a | a page whose 3D card flip matters |
 | `background-clip: text` | its own slice, S7c, on these surfaces | S7c |

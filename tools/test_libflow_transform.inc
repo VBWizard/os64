@@ -489,6 +489,61 @@ static void transform_through_cases(void)
     flow_free(t);
     sheeted_close(&q);
 
+    // A turned box inside a translated one: what is inside the turn is
+    // painted in the turn's own coordinates, the translation outside it
+    // nothing there — it goes into the turn's matrix instead. About (50,
+    // 10), (x, y) goes to (60 - y, x - 40), and 30 across more.
+    sheeted_open(&q, XFORM_STYLE ".m{transform:translateX(30px)}"
+                     ".t{width:100px;height:20px;transform:rotate(90deg)}</style>"
+                     "<div class=m><div class=t id=t><p id=p>x</p></div></div>",
+                 400, 600);
+    t = flow_layout(q.doc, q.page, 400, &q.env);
+    tb = box_with_id(t, q.doc->document, "t");
+    const flow_box_t *inner = box_with_id(t, q.doc->document, "p");
+    through = flow_box_through(tb, top, m, NULL, NULL);
+    expect("transform: a turn inside a translation paints in its own coordinates",
+           through && inner != NULL && flow_box_doc_offset(inner, top).x == 0 &&
+               flow_box_doc_offset(inner, top).y == 0 && fabs(m[4] - 90) < 1e-9 &&
+               fabs(m[5] + 40) < 1e-9,
+           NULL);
+    flow_free(t);
+    sheeted_close(&q);
+
+    // Layout geometry leaves every transform out: offsetTop and its kin
+    // see the box where it was laid out, moved by a translation or turned.
+    sheeted_open(&q, XFORM_STYLE ".m{height:10px;transform:translate(7px,9px)}"
+                     ".t{width:100px;height:20px;transform:rotate(90deg)}</style>"
+                     "<div class=m id=m></div><div class=t><p id=p>x</p></div>",
+                 400, 600);
+    t = flow_layout(q.doc, q.page, 400, &q.env);
+    const flow_box_t *mb = box_with_id(t, q.doc->document, "m");
+    const flow_box_t *pb = box_with_id(t, q.doc->document, "p");
+    flow_point_t lm = flow_box_layout_offset(mb, top), lp = flow_box_layout_offset(pb, top);
+    expect("transform: layout geometry leaves transforms out",
+           mb != NULL && pb != NULL && lm.x == 0 && lm.y == 0 && lp.x == 0 && lp.y == 0 &&
+               flow_box_doc_offset(mb, top).x == 7 && flow_box_doc_offset(mb, top).y == 9 &&
+               flow_box_doc_rect(pb, top).x != pb->rect.x,
+           NULL);
+    flow_free(t);
+    sheeted_close(&q);
+
+    // A layer inside a turned group is counted only as far as what clips it
+    // inside the group lets it show: a 5000 tall relative box in a 20 tall
+    // clipping wrapper adds 20, not 5000, to the surface.
+    sheeted_open(&q, XFORM_STYLE ".t{width:100px;height:20px;transform:rotate(90deg)}"
+                     ".w{overflow:clip;height:20px} .r{position:relative;height:5000px}</style>"
+                     "<div class=t><div class=w><div class=r></div></div></div>",
+                 400, 600);
+    t = flow_layout(q.doc, q.page, 400, &q.env);
+    XformGroups clipped = {0};
+    vis.ctx = &clipped;
+    flow_visit_groups(t, (os64_gui_rect_t){0, 0, 400, 600}, top, &vis);
+    expect("transform: a turned group's bounds are cut by the clips inside it",
+           clipped.opens == 1 && rect_is(clipped.first, 0, 0, 100, 20), NULL);
+    vis.ctx = &gr;
+    flow_free(t);
+    sheeted_close(&q);
+
     // Turns nest: a quarter turn about (25, 25) inside one about (50, 50)
     // is a half turn, (x, y) to (100 - x, 50 - y). The inner box stands 50
     // to 100 across and 0 to 50 down; (90, 10) is its (10, 40).

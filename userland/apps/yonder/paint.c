@@ -1468,7 +1468,8 @@ static void group_open(void *ctx, const flow_box_t *box, os64_gui_rect_t bounds)
         m[4] += p->shift.x;
         m[5] += p->shift.y;
         clip = cut(shifted(clip, p->shift), p->view);
-        os64_gui_rect_t own = cut(bounds, flow_affine_rect_back(m, clip));
+        os64_gui_rect_t back = flow_affine_rect_back(m, clip);
+        os64_gui_rect_t own = cut(bounds, back);
         // Nothing of it shows — a matrix that collapses an axis (scaleX(0),
         // rotateX(90deg)) draws nothing, and the rest may be out of view —
         // so nothing is painted: the view is empty until its close.
@@ -1476,6 +1477,9 @@ static void group_open(void *ctx, const flow_box_t *box, os64_gui_rect_t bounds)
             p->view = (os64_gui_rect_t){0, 0, 0, 0};
             return;
         }
+        // What shows, one pixel wider all round: a bilinear sample at the
+        // edge of the clip mixes the source pixel beyond it.
+        own = cut(bounds, (os64_gui_rect_t){back.x - 1, back.y - 1, back.w + 2, back.h + 2});
         if (p->v->through_open != NULL && p->v->through_close != NULL &&
             p->v->through_open(p->v->ctx, own, m, clip)) {
             gs->open[d].kind = G_THROUGH;
@@ -1483,6 +1487,9 @@ static void group_open(void *ctx, const flow_box_t *box, os64_gui_rect_t bounds)
             p->shift = (flow_point_t){0, 0};
             return;
         }
+        // Drawn upright instead, still inside what clips it from outside,
+        // which no box inside will meet (flow_box_doc_clip stops here).
+        p->view = clip;
         p->shift.x += upright.x;
         p->shift.y += upright.y;
         if (box->style->opacity >= 1000)

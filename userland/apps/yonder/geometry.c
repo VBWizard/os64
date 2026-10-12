@@ -42,10 +42,11 @@ static int32_t border(const flow_box_t *box, unsigned side)
 static void offset_position(const flow_tree_t *tree, const flow_box_t *box,
                             flow_point_t scroll, int64_t *x, int64_t *y)
 {
-    os64_gui_rect_t rect = flow_box_doc_rect(box, scroll);
-    *x = (int64_t)rect.x - (box->fixed ? scroll.x : 0);
-    *y = (int64_t)rect.y - (box->fixed ? scroll.y : 0);
-    // Offset positions ignore container scrolling but keep sticky placement.
+    flow_point_t o = flow_box_layout_offset(box, scroll);
+    *x = (int64_t)box->rect.x + o.x - (box->fixed ? scroll.x : 0);
+    *y = (int64_t)box->rect.y + o.y - (box->fixed ? scroll.y : 0);
+    // Offset positions ignore transforms and container scrolling but keep
+    // sticky placement.
     // Follow containing-block frames, which can differ from DOM ancestors.
     for (int32_t i = flow_box_scroller(box); i >= 0;) {
         flow_point_t at = flow_scroll_at(tree, i);

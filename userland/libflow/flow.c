@@ -1253,10 +1253,13 @@ static os64_gui_rect_t moved(os64_gui_rect_t r, int64_t dx, int64_t dy)
 // level. The build bounds how many a sticky box's lookup meets
 // (F_FRAME_DEPS); past that a lookup is remembered no further, which costs
 // a chain of scroll containers nothing, since each is worked from one.
+// `untransformed`: every transform left out, as layout geometry sees a box
+// (flow_box_layout_offset).
 typedef struct {
     const flow_frame_t *s[F_FRAME_DEPS];
     flow_point_t at[F_FRAME_DEPS];
     int32_t n;
+    bool untransformed;
 } Frames;
 
 static flow_point_t frame_of(Frames *m, const flow_frame_t *s, bool fixed, flow_point_t scroll);
@@ -1314,7 +1317,7 @@ static flow_point_t shift(Frames *m, const flow_frame_t *s, flow_point_t at, flo
 static flow_point_t frame_of(Frames *m, const flow_frame_t *s, bool fixed, flow_point_t scroll)
 {
     s = s != NULL ? s->mover : NULL;
-    if (s != NULL && s->kind == F_FRAME_TRANSFORM && s->through)
+    if (s != NULL && s->kind == F_FRAME_TRANSFORM && s->through && !m->untransformed)
         return (flow_point_t){0, 0};
     if (s == NULL)
         return fixed ? scroll : (flow_point_t){0, 0};
@@ -1323,8 +1326,9 @@ static flow_point_t frame_of(Frames *m, const flow_frame_t *s, bool fixed, flow_
             return m->at[i];
     flow_point_t at = frame_of(m, s->outer, fixed, scroll);
     flow_point_t d = s->kind == F_FRAME_SCROLL      ? (flow_point_t){-s->at.x, -s->at.y}
-                   : s->kind == F_FRAME_TRANSFORM ? s->by
-                                                  : shift(m, s, at, scroll);
+                   : s->kind != F_FRAME_TRANSFORM ? shift(m, s, at, scroll)
+                   : m->untransformed || s->through ? (flow_point_t){0, 0}
+                                                  : s->by;
     flow_point_t here = {edge32((int64_t)at.x + d.x), edge32((int64_t)at.y + d.y)};
     if (m->n < F_FRAME_DEPS) {
         m->s[m->n] = s;
@@ -1336,6 +1340,12 @@ static flow_point_t frame_of(Frames *m, const flow_frame_t *s, bool fixed, flow_
 flow_point_t flow_box_doc_offset(const flow_box_t *box, flow_point_t scroll)
 {
     Frames m = {.n = 0};
+    return box != NULL ? frame_of(&m, box->frame, box->fixed, scroll) : (flow_point_t){0, 0};
+}
+
+flow_point_t flow_box_layout_offset(const flow_box_t *box, flow_point_t scroll)
+{
+    Frames m = {.n = 0, .untransformed = true};
     return box != NULL ? frame_of(&m, box->frame, box->fixed, scroll) : (flow_point_t){0, 0};
 }
 
@@ -1730,7 +1740,8 @@ os64_gui_rect_t flow_affine_rect_back(const double m[6], os64_gui_rect_t r)
 
 // What a group paints, from its OPEN at layer `i` to its CLOSE, whose
 // layer `*close` is set to: every box's overflow rect where its frame puts
-// it at `scroll`, in the coordinates the group is painted in — a group
+// it at `scroll`, cut to its clip, in the coordinates the group is painted
+// in — a group
 // drawn through its matrix inside it counted as its own bounds sent
 // through that matrix, cut to what clips it from outside.
 static os64_gui_rect_t group_bounds(const flow_tree_t *tree, int32_t i, flow_point_t scroll,
@@ -1759,6 +1770,8 @@ static os64_gui_rect_t group_bounds(const flow_tree_t *tree, int32_t i, flow_poi
         } else {
             flow_point_t o = flow_box_doc_offset(l->box, scroll);
             at = moved(l->box->overflow, o.x, o.y);
+            if (l->box->clipped)
+                at = meet(at, flow_box_doc_clip(l->box, scroll));
         }
         r = any ? join(r, at) : at;
         any = true;

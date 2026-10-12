@@ -850,6 +850,11 @@ const flow_box_t *flow_root(const flow_tree_t *tree);
 // its matrix (flow_box_through), whose own coordinates everything in it is
 // painted in. Outside every such box they are document coordinates.
 flow_point_t flow_box_doc_offset(const flow_box_t *box, flow_point_t scroll);
+// Its offset with every transform left out — the scroll under a fixed
+// box, sticky pushes, scroll positions taken back — as LAYOUT geometry sees
+// a box: offsetLeft and offsetTop do not move with a transform (CSSOM
+// View), only getBoundingClientRect does.
+flow_point_t flow_box_layout_offset(const flow_box_t *box, flow_point_t scroll);
 // Where a box IS, in document coordinates: its border box moved by its
 // offset, and inside a drawn-through box the bounds of its four corners
 // taken out through every matrix (CSSOM View's rect of a transformed box).
@@ -970,7 +975,8 @@ void flow_visit(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t 
 // `open` comes before the group's first box and `close` after its last,
 // groups nesting; `bounds` holds everything the group paints, in the
 // coordinates it is painted in at this scroll — its own boxes' overflow
-// rects and its members', each where its frame puts it, a drawn-through
+// rects and its members', each where its frame puts it and cut to its
+// clip, a drawn-through
 // group inside counted through its matrix and cut to its clip — so a face
 // can composite it whole: everything inside painted as usual, then the
 // group laid over what was under it at its opacity (CSS Color 4 § 3.2),

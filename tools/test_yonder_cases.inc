@@ -558,15 +558,16 @@ static void paint_cases(void)
     // (PILE3.md § Transforms, the painter): (x, y) goes to (60 - y, x -
     // 40). The face is asked to lay its own coordinates through that, and
     // only what can show: the view taken back is 40 to 140 across and -140
-    // to 60 down, so of its 100 by 20, the part from 40 across. Inside, it
-    // paints where it was laid out.
+    // to 60 down, so of its 100 by 20, the part from 40 across — from 39,
+    // a pixel more for the bilinear sample at the edge. Inside, it paints
+    // where it was laid out.
     paint_page_case("a turned block is laid through its matrix, painted in its own place",
                     "<!doctype html><style>body { margin: 0 } .t { width: 100px; height: 20px;"
                     " background: #00ff00; transform: rotate(90deg) }</style><div class=t></div>",
                     200, (os64_gui_rect_t){0, 0, 200, 100}, true,
                     "fill 0 0 200 100 #fefefe\n"
-                    "through 40 0 60 20 0 1000 -1000 0 60000 -40000 clip 0 0 200 100\n"
-                    "fill 40 0 60 20 #00ff00\n"
+                    "through 39 0 61 20 0 1000 -1000 0 60000 -40000 clip 0 0 200 100\n"
+                    "fill 39 0 61 20 #00ff00\n"
                     "end through 255\n");
     // A face with no room for it has it drawn upright where its origin
     // goes: moved 30 across first, the centre goes 30 across.
@@ -582,16 +583,17 @@ static void paint_cases(void)
     // What clips it from outside is the face's to lay it inside, not the
     // painter's to cut its own coordinates by. Laid 40 down in a 50 tall
     // wrapper and turned about (10, 50) — (x, y) to (60 - y, x + 40) — what
-    // lands above 50 is its own left 10, all 20 of its height: so much is
-    // painted, and the clip goes to the face.
+    // lands above 50 is its own left 10 (and a pixel more for the bilinear
+    // sample at the edge), all 20 of its height: so much is painted, and the
+    // clip goes to the face.
     paint_page_case("what clips a turned block from outside is laid by, not painted by",
                     "<!doctype html><style>body { margin: 0 } .w { display: flow-root; overflow: clip; height: 50px }"
                     " .t { margin-top: 40px; width: 20px; height: 20px; background: #00ff00;"
                     " transform: rotate(90deg) }</style><div class=w><div class=t></div></div>",
                     200, (os64_gui_rect_t){0, 0, 200, 100}, true,
                     "fill 0 0 200 100 #fefefe\n"
-                    "through 0 40 10 20 0 1000 -1000 0 60000 40000 clip 0 0 200 50\n"
-                    "fill 0 40 10 20 #00ff00\n"
+                    "through 0 40 11 20 0 1000 -1000 0 60000 40000 clip 0 0 200 50\n"
+                    "fill 0 40 11 20 #00ff00\n"
                     "end through 255\n");
     // A matrix that collapses an axis draws nothing; nor does a turn that
     // sends the box out of the view, though upright it would be in it:
@@ -604,6 +606,19 @@ static void paint_cases(void)
                     "<div class=away></div><div class=z></div>",
                     200, (os64_gui_rect_t){0, 0, 200, 100}, true,
                     "fill 0 0 200 100 #fefefe\n");
+    // Refused, it is drawn upright still inside what clips it from outside:
+    // turned about its centre, upright it is where it was laid out, and the
+    // 50 tall wrapper cuts its foot.
+    s_through_refused = true;
+    paint_page_case("a turned block drawn upright keeps the clip outside it",
+                    "<!doctype html><style>body { margin: 0 } .w { display: flow-root; overflow: clip;"
+                    " height: 50px } .t { margin-top: 40px; width: 20px; height: 20px;"
+                    " background: #00ff00; transform: rotate(90deg) }</style>"
+                    "<div class=w><div class=t></div></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "fill 0 40 20 10 #00ff00\n");
+    s_through_refused = false;
     // Turned and translucent, it is one group, laid through at its alpha.
     paint_page_case("a turned translucent block is one group, laid through at its alpha",
                     "<!doctype html><style>body { margin: 0 } .t { width: 100px; height: 20px;"
@@ -611,7 +626,7 @@ static void paint_cases(void)
                     "<div class=t></div>",
                     200, (os64_gui_rect_t){0, 0, 200, 100}, true,
                     "fill 0 0 200 100 #fefefe\n"
-                    "through 40 0 60 20 0 1000 -1000 0 60000 -40000 clip 0 0 200 100\n"
-                    "fill 40 0 60 20 #00ff00\n"
+                    "through 39 0 61 20 0 1000 -1000 0 60000 -40000 clip 0 0 200 100\n"
+                    "fill 39 0 61 20 #00ff00\n"
                     "end through 128\n");
 }

@@ -6127,11 +6127,24 @@ static bool pane_backdrop(void *ctx, const flow_box_t *b, int32_t layer,
     return any;
 }
 
+// On a laid group's two sheets an opacity group opens on both or on
+// neither: one kept and one painted opaque would leave the sheets saying
+// different things, and the warp's B and T would be wrong.
 static void pane_group_open(void *ctx, os64_gui_rect_t bounds)
 {
     GlassPane *gp = ctx;
     for (int32_t k = 0; k < gp->n; k++)
         glass_group_open(gp->now[k], bounds);
+    if (gp->n != 2)
+        return;
+    GlassGroups *a = gp->now[0]->groups, *b = gp->now[1]->groups;
+    int32_t d = a->depth - 1;
+    if (d < 0 || d >= GLASS_GROUPS || (a->open[d].under == NULL) == (b->open[d].under == NULL))
+        return;
+    for (GlassGroups *g = a; g != NULL; g = g == a ? b : NULL) {
+        os64_free(g->open[d].under);
+        g->open[d].under = NULL;
+    }
 }
 
 static void pane_group_close(void *ctx, uint8_t alpha)
