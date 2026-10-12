@@ -101,8 +101,9 @@ END
 
 # A transform that is not drawn flat is drawn upright where it moves the
 # box (PILE3.md § Transforms, the painter), and counted by the function
-# whose w reads more than itself; a flat one is drawn as it says, and the
-# individual properties always are.
+# whose w reads more than itself, or written with a number past a double
+# (1e400, read as infinite); a flat one is drawn as it says, and the
+# individual properties are when their numbers are finite.
 VIEWPORT 800x600
 PAGE
 <!doctype html><style>
@@ -110,11 +111,14 @@ p { transform: translateX(10px) rotate(45deg) skewY(3deg) scale(2); rotate: 30de
 div { transform: rotateY(60deg) matrix3d(1,0,0,0, 0,1,0,0, 0,0,1,0, 7,8,9,1) perspective(none) }
 span { transform: matrix3d(1,0,0,0, 0,1,0,0, 0,0,1,.01, 0,0,0,1) translateZ(10px) }
 i { transform: scale(2) perspective(500px) }
+b { transform: matrix(1e400, 0, 0, 1, 0, 0); scale: 1e400 }
 </style>
-<p>x<div>y</div><span>z</span><i>w</i>
+<p>x<div>y</div><span>z</span><i>w</i><b>v</b>
 WANT
 value transform: matrix3d 1
 value transform: perspective 1
+value transform: matrix 1
+value scale: scale 1
 (end)
 END
 

@@ -4,8 +4,8 @@
 
 #include <math.h>
 
-// A number the matrix holds that is a whole one within a millionth: what a
-// quarter turn's 6e-17 cosine is, and what `translate(10px)` is.
+// A number the matrix holds that is a whole one within a millionth: what
+// `translate(10px)` is, and what a turn's sine is with its last bit off.
 static bool whole(double v, double *out)
 {
     double r = floor(v + 0.5);

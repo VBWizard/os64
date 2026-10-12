@@ -149,6 +149,22 @@ static void transform_layout_cases(void)
         "    block div 0 0 100 10 stacked through 9000000000000000000 0 0 9000000000000000000"
         " -9000000000000000000 -9000000000000000000\n");
 
+    // A whole number of quarter turns is exact in any unit — 450deg is a
+    // quarter, -100grad three — and a turn a hair short of a quarter is
+    // worked as written: rotateX(89.99999999999994deg) keeps its height,
+    // its cosine about 1e-15.
+    cascade_layout_case("transform: quarter turns exact in their unit, a hair short not",
+        XFORM_STYLE "div{width:100px;height:10px;transform-origin:0 0}"
+        ".a{transform:rotate(450deg)} .b{transform:rotate(-100grad)}"
+        ".c{transform:rotateX(89.99999999999994deg)}</style>"
+        "<div class=a></div><div class=b></div><div class=c></div>", 400,
+        "page 400 100\n"
+        "block html 0 0 400 30\n"
+        "  block body 0 0 400 30\n"
+        "    block div 0 0 100 10 stacked through 0 1000 -1000 0 0 0\n"
+        "    block div 0 10 100 10 stacked through 0 -1000 1000 0 -10000 10000\n"
+        "    block div 0 20 100 10 stacked through 1000 0 0 0 0 20000\n");
+
     // A scale written as a calc() of a percentage is that hundredth, in a
     // list and as the property: half about the centre (50, 5), 0.5x + 35
     // with the 20 halved; twice about (50, 15), the 10 doubled, reaching 25.
@@ -559,8 +575,10 @@ static void transform_through_cases(void)
                  400, 600);
     t = flow_layout(q.doc, q.page, 400, &q.env);
     tb = box_with_id(t, q.doc->document, "t");
-    expect("transform: a matrix however small but not 0 is undone",
-           tb != NULL && flow_box_point(tb, top, 50, 10, &back) && back.y == 10, NULL);
+    expect("transform: a matrix however small but not 0 is undone, and a pixel wide",
+           tb != NULL && flow_box_point(tb, top, 50, 10, &back) && back.y == 10 &&
+               flow_box_doc_rect(tb, top).w == 1,
+           NULL);
     flow_free(t);
     sheeted_close(&q);
 
@@ -603,7 +621,9 @@ static void transform_through_cases(void)
     // hit nowhere.
     sheeted_open(&q, XFORM_STYLE ".t{width:100px;height:20px;transform-origin:0 0;"
                      "transform:matrix(1e300,0,0,1e-300,0,.5)} .x{width:100px;height:20px;"
-                     "transform:rotateX(90deg)}</style><div class=t id=t></div><div class=x id=x></div>",
+                     "transform:rotateX(90deg)} .h{width:100px;height:20px;"
+                     "transform:rotateX(89.99999999999994deg)}</style><div class=t id=t></div>"
+                     "<div class=x id=x></div><div class=h id=h></div>",
                  400, 600);
     t = flow_layout(q.doc, q.page, 400, &q.env);
     tb = box_with_id(t, q.doc->document, "t");
@@ -612,6 +632,16 @@ static void transform_through_cases(void)
     os64_gui_rect_t thin = flow_affine_rect_back(m, (os64_gui_rect_t){0, 0, 400, 600});
     expect("transform: a matrix huge on one axis and tiny on the other is undone",
            through && flow_affine_invert(m, inv) && thin.w > 0 && thin.h > 0, NULL);
+    // Entries spanning a double's whole range, determinant 1: undone.
+    const double span[6] = {1e300, 1e-300, 1e300, 2e-300, 0, 0};
+    expect("transform: a matrix spanning a double's range is undone",
+           flow_affine_invert(span, inv) && isfinite(inv[0]) && isfinite(inv[3]), NULL);
+    const flow_box_t *hb = box_with_id(t, q.doc->document, "h");
+    double hm[6];
+    expect("transform: a turn a hair short of edge-on is still undone",
+           hb != NULL && flow_box_through(hb, top, hm, NULL, NULL) && hm[3] != 0 &&
+               flow_affine_invert(hm, inv),
+           NULL);
     expect("transform: an edge-on turn is hit nowhere",
            xb != NULL && !flow_box_point(xb, top, 50, 30, &back) &&
                !inside_of(flow_hit(t, 50, 30, top), xb),

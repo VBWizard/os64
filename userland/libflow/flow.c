@@ -1420,25 +1420,24 @@ static void from_space(const flow_frame_t *f, flow_point_t scroll, double *x, do
 
 bool flow_affine_invert(const double m[6], double inv[6])
 {
-    // Each column of its 2x2 part scaled by its own largest entry first,
-    // so neither a huge matrix (scale(1e200): a determinant past a double),
-    // a tiny one, nor one huge on one axis and tiny on the other
-    // (matrix(1e300, 0, 0, 1e-300, 0, 0)) overflows or underflows on the
-    // way; M = M' diag(kx, ky), so M's inverse is diag(1/kx, 1/ky) M''s.
-    double kx = fmax(fabs(m[0]), fabs(m[1])), ky = fmax(fabs(m[2]), fabs(m[3]));
-    if (!(kx > 0) || !(ky > 0) || !isfinite(kx) || !isfinite(ky))
+    // Worked in long double, whose exponent reaches far past a double's:
+    // no product of two doubles overflows or underflows there, so a huge
+    // matrix (scale(1e200)), a tiny one, and one whose entries span the
+    // whole of a double's range (matrix(1e300, 1e-300, 1e300, 2e-300, 0,
+    // 0), determinant 1) are each undone exactly when their inverse is a
+    // finite double.
+    long double a = m[0], b = m[1], c = m[2], d = m[3], e = m[4], f = m[5];
+    long double det = a * d - b * c;
+    if (det == 0)
         return false;
-    double a = m[0] / kx, b = m[1] / kx, c = m[2] / ky, d = m[3] / ky;
-    double det = a * d - b * c;
-    if (det == 0 || !isfinite(det))
-        return false;
-    double r[6] = {d / det / kx, -b / det / ky, -c / det / kx, a / det / ky, 0, 0};
-    r[4] = -(r[0] * m[4] + r[2] * m[5]);
-    r[5] = -(r[1] * m[4] + r[3] * m[5]);
-    for (int i = 0; i < 6; i++)
-        if (!isfinite(r[i]))
+    long double r[6] = {d / det, -b / det, -c / det, a / det, 0, 0};
+    r[4] = -(r[0] * e + r[2] * f);
+    r[5] = -(r[1] * e + r[3] * f);
+    for (int i = 0; i < 6; i++) {
+        inv[i] = (double)r[i];
+        if (!isfinite(inv[i]))
             return false;
-    os64_memcpy(inv, r, sizeof(r));
+    }
     return true;
 }
 
@@ -1593,15 +1592,22 @@ os64_gui_rect_t flow_box_doc_rect(const flow_box_t *box, flow_point_t scroll)
         x1 = fmax(x1, x);
         y1 = fmax(y1, y);
     }
-    // Held to what the rect's 32 bits can say, as edge32 holds an edge.
+    // Held to what the rect's 32 bits can say, as edge32 holds an edge. A
+    // whole pixel within a millionth is that pixel, so a sine's last bit
+    // never grows a rect by one; and an extent that is there, however thin
+    // (scaleX(1e-12)), is at least the pixel it is in, as affine_bounds
+    // keeps it.
     const double lo = INT32_MIN / 2, hi = INT32_MAX / 2;
-    // A whole pixel within a millionth is that pixel: a quarter turn's
-    // cosine is 6e-17, not 0, and must not grow a rect by one.
     const double snap = 1e-6;
+    bool wide = x1 > x0, tall = y1 > y0;
     x0 = floor(fmax(lo, fmin(hi, x0)) + snap);
     y0 = floor(fmax(lo, fmin(hi, y0)) + snap);
     x1 = ceil(fmax(lo, fmin(hi, x1)) - snap);
     y1 = ceil(fmax(lo, fmin(hi, y1)) - snap);
+    if (wide && x1 <= x0)
+        x1 = x0 + 1;
+    if (tall && y1 <= y0)
+        y1 = y0 + 1;
     return (os64_gui_rect_t){(int32_t)x0, (int32_t)y0, (int32_t)(x1 - x0), (int32_t)(y1 - y0)};
 }
 
@@ -1772,9 +1778,9 @@ static os64_gui_rect_t affine_bounds(const double m[6], os64_gui_rect_t r)
     const double lo = INT32_MIN / 2, hi = INT32_MAX / 2;
     if (!(x0 <= x1 && y0 <= y1))
         return (os64_gui_rect_t){0, 0, 0, 0};
-    // A whole pixel within a millionth is that pixel: a quarter turn's
-    // cosine is 6e-17, not 0, and must not grow a rect by one. Nor may the
-    // snap, or a double's precision, empty what is not empty: the view taken
+    // A whole pixel within a millionth is that pixel, so a sine's last bit
+    // never grows a rect by one. Nor may the snap, or a double's precision,
+    // empty what is not empty: the view taken
     // back through scale(1e200) is far less than a pixel — 50 plus 4e-198
     // is 50 — and still the pixel it is in. Whether an extent is empty is
     // the matrix's to say, not the rounded corners'.

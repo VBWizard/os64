@@ -876,11 +876,10 @@ bool flow_box_point(const flow_box_t *box, flow_point_t scroll, int32_t x, int32
 bool flow_box_through(const flow_box_t *box, flow_point_t scroll, double m[6],
                       os64_gui_rect_t *clip, flow_point_t *upright);
 // Such a matrix undone: false when it cannot be — its 2x2 part has no
-// inverse, or the inverse is not finite. Each column is scaled before it
-// is inverted, so a huge matrix, a tiny one, and one huge on one axis and
-// tiny on the other alike come back: whatever the face lays through a
-// matrix it undoes here, so painting, laying and hits agree on what can be
-// undone.
+// inverse, or that inverse is not a finite double. Worked past a double's
+// range, so a matrix however huge, tiny or lopsided comes back whenever its
+// inverse is finite: whatever the face lays through a matrix it undoes
+// here, so painting, laying and hits agree on what can be undone.
 bool flow_affine_invert(const double m[6], double inv[6]);
 // A rect sent through such a matrix: the whole pixels holding its four
 // corners, a whole pixel within a millionth being that pixel. And taken

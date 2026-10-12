@@ -262,16 +262,40 @@ static bool drawn_flat(const garb_val_t *f)
            settled(&a[15], &m15) && m3 == 0 && m7 == 0 && m11 == 0 && m15 > 0;
 }
 
+// Whether every number `v` is written with is finite: one past a double
+// (1e400) is read as infinite, and no matrix is made from it.
+// An individual property keeps its numbers as items under a value of
+// their kind, so the items are walked whatever the kind.
+static bool finite_numbers(const garb_val_t *v)
+{
+    switch (v->kind) {
+    case GARB_V_NUMBER: case GARB_V_LENGTH: case GARB_V_PERCENTAGE: case GARB_V_ANGLE:
+        if (!__builtin_isfinite(v->number))
+            return false;
+        break;
+    default:
+        break;
+    }
+    for (int32_t i = 0; i < v->nitems; i++)
+        if (!finite_numbers(&v->items[i]))
+            return false;
+    return true;
+}
+
 // What of a transform value is drawn as something other than it says, by
-// the name of the function: one that is not drawn flat, which is drawn
-// upright where it moves the box's origin. The individual properties are
-// always flat.
+// the name of the function or property: one that is not drawn flat, or is
+// written with a number past a double, which is drawn upright where it
+// moves the box's origin. The individual properties are always flat.
 static const char *transform_approximated(garb_prop_t prop, const garb_val_t *v)
 {
-    if (v->kind == GARB_V_KEYWORD || prop != GARB_TRANSFORM)
+    if (v->kind == GARB_V_KEYWORD)
         return NULL;
+    if (prop != GARB_TRANSFORM)
+        return finite_numbers(v) ? NULL : prop == GARB_ROTATE ? "rotate"
+                                       : prop == GARB_SCALE  ? "scale"
+                                                             : "translate";
     for (int32_t i = 0; i < v->nitems; i++)
-        if (!drawn_flat(&v->items[i]))
+        if (!drawn_flat(&v->items[i]) || !finite_numbers(&v->items[i]))
             return v->items[i].keyword;
     return NULL;
 }
@@ -280,7 +304,8 @@ static const char *transform_approximated(garb_prop_t prop, const garb_val_t *v)
 // image function — or NULL when the value is laid out as it says.
 static const char *value_approximated(garb_prop_t prop, const garb_val_t *v)
 {
-    if (prop == GARB_TRANSFORM || prop == GARB_ROTATE || prop == GARB_SCALE)
+    if (prop == GARB_TRANSFORM || prop == GARB_ROTATE || prop == GARB_SCALE ||
+        prop == GARB_TRANSLATE)
         return transform_approximated(prop, v);
     if (!image_drawn(v))
         return v->text;
