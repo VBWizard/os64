@@ -2381,7 +2381,8 @@ static double radians(const garb_val_t *v)
     }
 }
 
-// A number, a percentage as its hundredth, or a calc() of either.
+// A number, a percentage as its hundredth, or a calc() of either, which
+// libgarb lets hold no length where a number or a percentage is.
 static bool author_number(const Author *a, const garb_val_t *v, double *out)
 {
     Lp r;
@@ -2391,12 +2392,8 @@ static bool author_number(const Author *a, const garb_val_t *v, double *out)
         *out = v->number / 100;
     else if (v->kind != GARB_V_CALC || v->calc == NULL || !calc(a, v->calc, a->font, &r))
         return false;
-    else if (r.number)
-        *out = r.px;
-    else if (r.px == 0)
-        *out = r.pct / 100;
     else
-        return false;                       // a length is no number
+        *out = r.number ? r.px : r.pct / 100;
     return true;
 }
 

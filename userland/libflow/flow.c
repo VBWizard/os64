@@ -699,7 +699,8 @@ static void reach_stacked(flow_tree_t *t)
     }
     // The root is no stacked box, being the first context already, but
     // its transform moves the whole page: what it holds reaches the page's
-    // extent moved as well as where layout counted it.
+    // extent moved as well as where layout counted it. (It is never fixed:
+    // `position` on the root is laid out in the flow, POSITION.md § Booked.)
     const flow_box_t *root = t->root;
     if (root != NULL && root->frame != NULL && root->frame->box == root &&
         root->frame->kind == F_FRAME_TRANSFORM) {

@@ -921,7 +921,8 @@ drawer's search field slides with it; the image-map point and the DOM's
 function and both angle spellings, a unitless 0 angle accepted and a
 unitless 5 refused, a 3D list, `perspective()` and an S7b value
 approximated in `@supports` and a translation not, a `matrix3d()` that
-reads z approximated, a calc angle dropped.
+reads z approximated, a calc angle dropped, and a calc() holding a length
+where only a number or percentage goes dropped (`scale(calc(0px))`).
 `tools/test_libflow_transform.inc`, by hand from the standard: a
 translation's percentages of the border box; the layout unmoved and the
 drawn rect moved; the order of the individual properties against the

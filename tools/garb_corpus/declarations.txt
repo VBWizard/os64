@@ -767,6 +767,16 @@ IN: transform: translate3d(1px, 2px, 3px) translateZ(0)
 OUT: transform: translate3d(1px, 2px, 3px) translatez(0px)
 IN: transform: translate3d(1px, 2px, 3%)
 OUT: invalid
+IN: transform: scale(calc(50%))
+OUT: transform: scale(50%)
+IN: transform: scale(calc(0px))
+OUT: invalid
+IN: transform: scale(calc(10% + 1px - 1px))
+OUT: invalid
+IN: transform: perspective(calc(50%))
+OUT: invalid
+IN: scale: calc(5px)
+OUT: invalid
 IN: transform: scale(50%, -2) scaleZ(3)
 OUT: transform: scale(50%, -2) scalez(3)
 IN: transform: rotate3d(1, 0, 0, 45deg)

@@ -84,6 +84,16 @@ static void transform_layout_cases(void)
         "  block body 0 0 400 100\n"
         "    block div 0 0 400 100\n");
 
+    // `position: fixed` on the root changes none of that: the root is laid
+    // out in the flow whatever its position (POSITION.md § Booked).
+    cascade_layout_case("transform: a root written fixed is laid out in the flow, moved",
+        XFORM_STYLE "html{position:fixed;transform:translateY(600px)} div{height:100px}</style>"
+        "<div></div>", 400,
+        "page 400 700\n"
+        "block html 0 0 400 100 transform 0 600\n"
+        "  block body 0 0 400 100\n"
+        "    block div 0 0 400 100\n");
+
     // A scale written as a calc() of a percentage is that hundredth, in a
     // list and as the property: half of 20 across, then twice 10.
     cascade_layout_case("transform: a scale of calc(%), in the list and alone",
