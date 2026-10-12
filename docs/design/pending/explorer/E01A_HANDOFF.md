@@ -1,18 +1,18 @@
 # E1A — Implementation handoff: actions and status
 
-**State:** Reviewing, 2026-10-11. Implementation owner: Sol.
-Branch: `codex/explorer-e01a`; worktree: `.worktrees/explorer-e01a`; runtime base:
-`6d988565`. Implementation commit: `bd86ce4f`; branch pushed to origin.
-[PR #254](https://github.com/VBWizard/os64/pull/254) targets `userland`. Chris confirmed a successful OS checkout.
-Ordinary review and merge remain pending. Quinn owns the design.
+**State:** Accepted, 2026-10-11. Implementation owner: Sol; design owner: Quinn.
+[PR #254](https://github.com/VBWizard/os64/pull/254) merged into `userland` as
+`c6cc6e3c`. Gallery relocation `2bc9f2f4` puts the diagnostic in
+`userland/tests/actiongallery`, installed as `/tests/actiongallery`.
+Chris confirmed the P5 walkthrough complete after relocation; the installed
+binary hash was not captured. Review checkpoints below are historical.
 Host and scoped QEMU acceptance are recorded in [the evidence packet](evidence/e01a/README.md).
 Fable's E1K review changes no E1A action/status contract. See the
 [review disposition](GUI_POPUPS_DISPOSITION.md#effect-on-sols-active-e1a).
 This packet uses normal review; it does not need Fable architectural review.
 
 Read [E01_MENUS.md](E01_MENUS.md) for the governing interaction/ownership contract.
-E1A is independently buildable while [E1K](GUI_POPUPS.md) resolves its focused
-review follow-up. Native popup integration is explicitly not part of this packet.
+E1A is independently buildable while [E1K](GUI_POPUPS.md) is implemented. Native popup integration is explicitly not part of this packet.
 
 ## Outcome
 

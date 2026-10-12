@@ -299,3 +299,117 @@ passed 428 fake-font and 475 real-font checks with ASan, UBSan and leak detectio
 enabled. Both sandbox runs encountered LeakSanitizer thread-attachment EPERM;
 the same compiled binaries passed outside the sandbox with leak checking enabled.
 No P5 deployment or additional guest test was performed for this relocation.
+
+## 2026-10-11 — E1A accepted; E1K implementation and evidence (Quinn)
+
+Chris confirmed the P5 test complete after gallery relocation. E1A is accepted:
+PR #254 merged as `c6cc6e3c`, followed by `2bc9f2f4`. Hardware acceptance is
+user-reported; no installed-binary hash was captured.
+
+Chris authorized the next E1K work. Fable's second review is preserved beside
+the design; D015 and E01K_HANDOFF.md record the selected contract. Quinn added
+owned popup creation with locked identity/focus revalidation, conditional return,
+child-destroy BUSY, task-family retirement, focus peer handles, any-window wait
+with shared waiter-conflict rules, content readback, birth-size popup buffers,
+ancestor chrome and popup exclusion from Alt+Tab. INPUT_LOST discards unsafe
+queued gestures, and libui/action routing reset interaction state.
+
+The [E1K evidence packet](evidence/e01k/README.md) records cross builds, queue
+wrap/drop/eviction tests, 495/542 fake/real action checks, appearance regressions,
+146 guest checks on four cores, existing focus/doorbell regressions and native
+panel/Alt+Tab/outside-click screenshots. ASan/UBSan/LeakSanitizer remained enabled
+on supported runs outside the sandbox. The fixture's initial signal-sender
+stall was corrected using a separate sending process; no speculative kernel
+change was made. Known coverage limits are explicit in the evidence packet.
+
+Working branch: `codex/explorer-e1k`, base `2bc9f2f4`, isolated checkout
+`.worktrees/explorer-e1k`. Changes are uncommitted for ordinary review, consistent
+with the QEMU testing guide's reporting instruction. No P5 deployment occurred.
+Chris asked whether to assign E1B to Sol; the ordering remains E1K validation and
+review, then E1B menus, then E1C consumer migration. E2 visuals and E6's separately
+reviewed channel design remain independent future work.
+
+## 2026-10-11 — QEMU checkout exposes popuptest readiness assumption
+
+Chris reported one line-55 failure in five QEMU runs, followed by four passing
+runs; this was explicitly not P5 testing. The fixture incorrectly required B
+on the next any-window readiness return. A deliberately queued A notification
+reproduced the same assertion failure on the existing kernel.
+
+The diagnostic now consumes unrelated events and verifies the target doorbell;
+notification waits have a watchdog. Sibling readiness assertions and the
+competing-waiter startup race were corrected without changing the kernel.
+Ten consecutive four-core QEMU runs passed 153 checks apiece, zero failures and
+exit 0, with deterministic unrelated readiness in each run. The
+[regression packet](evidence/e01k/wake-regression/README.md) preserves the failing
+reproducer, results and hashes. The exact unsolicited event in Chris's original
+run was not logged and cannot be identified retrospectively. P5 acceptance and
+ordinary code review remain pending.
+
+## 2026-10-11 — Corrected E1K diagnostic validated in QEMU and on P5
+
+Chris confirmed validation in both QEMU and on the P5 after the readiness-test
+fix, and confirmed the startup explanation makes the diagnostic's purpose clear.
+Record this as user-reported acceptance; no additional run counts, logs or
+installed-binary hashes were supplied. The earlier five-run failure report
+remains QEMU-only history. Current handoff and evidence summaries now reflect
+the subsequent P5 validation. Ordinary code review remains the next E1K step
+before Sol starts E1B; this update changes documentation only.
+
+## 2026-10-11 — E1K pushed for ordinary review
+
+Chris requested commit, push and a PR. Implementation commit `3fee1034` is
+published on `codex/explorer-e1k`; [PR #257](https://github.com/VBWizard/os64/pull/257)
+targets `userland`. The base still matched current `userland` at `2bc9f2f4`, and
+the latest tested source/binary hashes matched before publication. Evidence logs
+were included explicitly despite the repository's general log ignore rule;
+trailing whitespace in retained logs was stripped for repository checks.
+Local documentation links and the staged whitespace check passed. The retirement
+scan was inspected: remaining references were live document/ABI names or deliberate
+historical discussion; no new superlative comment claims were found.
+
+No runtime changes or additional test runs were needed for publication. Chris's
+QEMU/P5 acceptance and the ten 153-check QEMU runs remain the current evidence.
+Ordinary code review is pending; E1B remains the dependent next packet.
+
+## 2026-10-11 — PR #257 first review fixes
+
+Accepted all three findings: preserve resizable borderless/pinned consumers by
+making birth-size capacity an explicit create hint; give retained controls a
+turn between repeated loss notifications; reset custom interaction state in
+gterm and sibling consumers. The earlier claim that borderless + pinned alone
+was a sufficient capacity classification was wrong: gclock can grow on an
+Interface font change and via the WM resize chord.
+
+Updated the ABI/design handoff and added regressions. Host queue/appearance/
+consumer and Yonder tests pass with ASan, UBSan and leak detection; two QEMU
+runs pass 159 checks each. The same pinned/borderless gclock process follows a
+16-to-32px Interface change and then resizes through Ctrl+Alt+right-drag.
+[Round-1 evidence](evidence/e01k/README.md#pr-257-review-round-1--2026-10-11)
+records results, screenshots, limits and build hashes. P5 revalidation and
+ordinary re-review remain pending.
+
+## 2026-10-11 — Defer gclock Interface Apply investigation
+
+Chris confirms resizing works again, but Interface font Apply leaves gclock's
+text unchanged in his setup, as it did before E1K. At his request, record the
+unresolved behavior in DEBTS and qualify the controlled QEMU result rather than
+start another implementation task. Effective configuration, requested size and
+cause remain unverified. This follow-up changes documentation only.
+
+## 2026-10-11 — PR #257 owned-popup close escalation fix
+
+Accepted the new P1: repeated Alt+F4 on an undrained owned popup could terminate
+its task and document. The compositor now repeats close requests without
+arming or taking escalation for owned popups. Windows without a popup owner
+retain their existing escalation policy. Updated the ABI/design comments and
+moved a misplaced task-exit comment to its actual function.
+
+The corrected native probes reproduce SIGTERM for stalled and full-queue
+owned popups before the fix, then pass without SIGTERM afterward. An ordinary
+window still escalates, and the default popup suite passes 159 checks. Both
+kernels were exercised in four-core QEMU with the same fixture. The initial
+full-queue probe used a refused direct-focus operation; it was corrected and
+both sides rerun before recording the comparison. [Evidence](evidence/e01k/README.md#pr-257-review-round-2--owned-popup-close-escalation)
+includes reports, controller, serial logs and hashes. P5 revalidation and
+re-review remain pending; gclock font adoption remains deferred in DEBTS.

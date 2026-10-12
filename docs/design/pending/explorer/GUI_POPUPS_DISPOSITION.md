@@ -1,6 +1,8 @@
 # E1K review disposition
 
 Quinn, 2026-10-11, under Chris's delegation to decide the design feedback.
+Historical first-pass disposition; D015 and E01K_HANDOFF.md record second-pass closure.
+
 Source: [Fable's review](GUI_POPUPS_REVIEW.md), retained unchanged. Current
 contract: [native owned popups](GUI_POPUPS.md). The reviewed draft is in commit
 `40077889`; this response does not imply Fable reviewed the revisions below.
@@ -62,7 +64,7 @@ The standalone E6 message-channel design/review remains future work.
 
 ## Focused follow-up for Fable
 
-[GUI_POPUPS.md](GUI_POPUPS.md#remaining-focused-review-questions) contains the
+[GUI_POPUPS.md](GUI_POPUPS.md) contains the
 complete follow-up. Review R1's conditional activation and delayed-event identity,
 and R2's shared input-loss/reset contract. These are concrete refinements to
 Fable's preferred architecture, not a request to resurrect the session manager.

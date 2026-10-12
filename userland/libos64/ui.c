@@ -291,6 +291,9 @@ bool os64_ui_dispatch(os64_ui_t *ui, const os64_gui_event_t *ev)
 		if (ev->pointer.inside) update_hover(ui, ev->pointer.x, ev->pointer.y);
 		else os64_ui_clear_hover(ui);
 		return true;
+    case OS64_GUI_EVENT_INPUT_LOST:
+        os64_ui_cancel_gestures(ui);
+        return true;
 	case OS64_GUI_EVENT_WINDOW_COVERED:
 		cancel_widget(ui, ui->grab);
 		ui->grab = NULL;

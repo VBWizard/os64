@@ -1,0 +1,3 @@
+popuptest: FAIL 296: owned?close_signals==0:close_signals==OS64_SIGTERM
+popuptest: FAIL 298: closes>=(owned?2u:1u)
+close probe: owned=1 full=0 signal=15 closes=1 losses=0; 8 checks, 2 failures

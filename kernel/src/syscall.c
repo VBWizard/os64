@@ -212,6 +212,8 @@ static uint64_t syscall_gui_screen_info(uint64_t arg0, uint64_t arg1, uint64_t a
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_gui_event_wait(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_gui_event_wait_any(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+static uint64_t syscall_gui_window_get_content_rect(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 static uint64_t syscall_gui_event_ring(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 
@@ -304,6 +306,8 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	SYSCALL_DEFINE(SYSCALL_GUI_SCREEN_INFO,        "gui_screen_info",        syscall_gui_screen_info,        false, 0x00),  // arg0/arg1 = uint32_t outs, EITHER may be NULL (handler validates)
 	SYSCALL_DEFINE(SYSCALL_GUI_EVENT_WAIT,         "gui_event_wait",         syscall_gui_event_wait,         false, 0x00),  // arg1 = input_event_t out OR NULL (nullable: NULL = wait, don't take — handler validates); BLOCKS (like read)
     SYSCALL_DEFINE(SYSCALL_GUI_WINDOW_FOCUS,"gui_window_focus",syscall_gui_window_focus,false,0),
+    SYSCALL_DEFINE(SYSCALL_GUI_EVENT_WAIT_ANY,"gui_event_wait_any",syscall_gui_event_wait_any,false,0),
+    SYSCALL_DEFINE(SYSCALL_GUI_WINDOW_GET_CONTENT_RECT,"gui_window_get_content_rect",syscall_gui_window_get_content_rect,false,0),
 	SYSCALL_DEFINE(SYSCALL_GUI_WINDOW_SET_MIN_SIZE, "gui_window_set_min_size", syscall_gui_window_set_min_size, false, 0x00),
 	SYSCALL_DEFINE(SYSCALL_GUI_WINDOW_GET_STATE,   "gui_window_get_state",   syscall_gui_window_get_state,   false, 0x02),  // arg1 = os64_gui_window_state_t out
 	SYSCALL_DEFINE(SYSCALL_GUI_EVENT_RING,         "gui_event_ring",         syscall_gui_event_ring,         false, 0x00),  // scalar window handle and mask
@@ -5838,4 +5842,31 @@ static uint64_t syscall_gui_event_wait(uint64_t arg0, uint64_t arg1, uint64_t ar
 	if (rc == 1 && !copy_to_user_buffer((void *)arg1, &ev, sizeof(ev)))
 		return (uint64_t)GUI_ERR_BAD_ARGS;
 	return (uint64_t)rc;
+}
+
+static uint64_t syscall_gui_event_wait_any(uint64_t out, uint64_t a1, uint64_t a2,
+    uint64_t a3, uint64_t a4, uint64_t a5)
+{
+    (void)a1; (void)a2; (void)a3; (void)a4; (void)a5;
+    // Validate writable output before parking. The final copy revalidates it;
+    // a concurrent unmap can still fail without retaining a waiter or event.
+    int64_t handle = 0;
+    if (!out || !copy_to_user_buffer((void *)out, &handle, sizeof(handle)))
+        return (uint64_t)GUI_ERR_BAD_ARGS;
+    int64_t rc = gui_event_wait_any(&handle);
+    if (rc == 1 && !copy_to_user_buffer((void *)out, &handle, sizeof(handle)))
+        return (uint64_t)GUI_ERR_BAD_ARGS;
+    return (uint64_t)rc;
+}
+
+static uint64_t syscall_gui_window_get_content_rect(uint64_t handle, uint64_t out,
+    uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5)
+{
+    (void)a2; (void)a3; (void)a4; (void)a5;
+    if (!out) return (uint64_t)GUI_ERR_BAD_ARGS;
+    rect_t rect;
+    int64_t rc = gui_window_get_content_rect((int64_t)handle, &rect);
+    if (!rc && !copy_to_user_buffer((void *)out, &rect, sizeof(rect)))
+        return (uint64_t)GUI_ERR_BAD_ARGS;
+    return (uint64_t)rc;
 }

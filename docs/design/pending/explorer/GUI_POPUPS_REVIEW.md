@@ -246,3 +246,168 @@ it, and the table above is what it costs. Either way E1K should be rewritten
 as a choice between these two, not as the only way to close the four gaps.
 
 Disposition is Chris's.
+
+## 7. Second pass: R1 and R2 (Fable, 2026-10-11, against the revised GUI_POPUPS.md)
+
+Read the revision and `GUI_POPUPS_DISPOSITION.md`. The dispositions match
+what I argued, the two refinements are the right two to ask, and the
+declines (routine-by-default, "focus is never dropped" as a proof, 32 windows
+stays 32) are correct. Answers below; both are accepted with a shape chosen.
+
+### R1 — safe focus acquisition and identity: ACCEPT, as an owned create
+
+The hazard is real: a legacy create takes focus at birth, so a slow open
+that lands after the user clicked another application steals focus back,
+and an attach that runs afterwards cannot undo it. The linearization point
+has to be where the birth focus grab already is, inside `wm_create`'s
+critical section, which is why I prefer the **atomic owned create** over
+create-unfocused-then-attach:
+
+- `create` learns an **owner handle**, carried in the high bits of the
+  64-bit flags word the way `CREATE_CONTENT_SIZE` (bit 32) already is. A
+  non-zero owner requires the POPUP flags (no-chrome plus pinned), an owner
+  that is live, owned by the caller and **currently focused**; anything else
+  is refused and **nothing is created** (the pivot's `undo_pivot` path
+  already exists for a refusal after allocation). The refusal value is
+  `NOT_FOCUSED`, a new error, because "the owner lost focus while you were
+  laying out" is a different next move from `BAD_ARGS`.
+- On success the newborn takes focus from its owner inside `wm_create`, so
+  the owner's focus-lost event names the popup's handle (the slot is chosen
+  before `wm_create` is called, so the handle is known at birth as the
+  revision requires) and `sibling` stays 1.
+- The link is immutable for the window's life, so there is no reattach
+  state, no cycle check beyond "the owner is not yourself" (a newborn has
+  no children) and no half-attached window to clean up after a refusal.
+  Cascades name their parent level; a menubar dropdown names the document.
+- Eligibility is exactly `s_focused == owner`. A minimized owner is never
+  focused (minimize moves focus), a covered one may be, and that is correct:
+  a menu may open over a window you can see only part of.
+- The `START_UNFOCUSED` no-focused-window exception never applies to an
+  owned popup, because the owner must be focused for the create to succeed
+  at all. An **unowned** popup (grootmenu's root) keeps today's birth
+  behavior unchanged, including the exception.
+- Birth visibility is the same question as before (measure the flash in
+  the diagnostic); refusal has no visibility question because nothing is
+  born.
+
+If the flags-bit packing is judged too ugly, `popup_attach(popup, owner)`
+with the popup created `START_UNFOCUSED` is the same contract with the
+activation moved into attach (attach refuses `NOT_FOCUSED` and leaves the
+window unfocused for the caller to destroy). It costs one more syscall per
+level and a visible-but-unpainted window during a refusal. I would take the
+owned create.
+
+**Identity of `other_handle`.** A handle names one window from create to
+destroy, and an event names the handle as it stood at delivery; nothing
+more is promised, and I would not add a stable id to the event, because the
+toolkit could not correlate it without a readback call that does not exist.
+The bounded protocol that makes the handle sufficient:
+
+1. **Drain before you mutate.** A turn of the dispatcher drains every owned
+   queue (round-robin, the 64-event budget) before it destroys or creates a
+   window. Then no event naming a handle can be older than the window
+   currently holding that handle, because any reuse happened after the
+   drain that would have consumed the stale event.
+2. **Unknown is a stranger.** A focus event naming a handle the toolkit does
+   not currently hold as a live popup of the session is treated as "focus
+   went elsewhere". The safe direction is dismissal; a menu dismissed one
+   time too many is a nuisance, a menu kept open over a window it no
+   longer owns is the bug.
+3. The one scenario that can still cross wires, destroying a popup and
+   creating a non-popup window in the same turn without draining between,
+   is forbidden by rule 1 and cheap to assert in the toolkit.
+
+The fault-injection row "handle reuse before old focus records drain" stays
+in the evidence table as the test of rule 1.
+
+### R2 — lost input and dismissal order: ACCEPT, as a loss nudge on the existing queue
+
+The example is correct and I withdraw "sufficient" as a proof: a delivered
+down, a dropped up, a dropped down and a delivered up activates the old
+armed row, and a focus eviction can take an earlier focus record with it.
+The ring is 64 deep and a hand on the mouse fills it in under a second, so
+a toolkit stalled on font preparation can meet this. The fix is the house
+answer for every ring that loses things: count it and say so.
+
+- `gui_event_queue_push` sets a per-queue `lost_pending` flag on **every**
+  drop and every eviction, whatever the type of the lost event. The
+  consumer does not need to know what was lost, only that history has a
+  hole in it.
+- `gui_event_queue_pop` delivers one `OS64_GUI_EVENT_INPUT_LOST` (16, no
+  payload) **before the next ring event**, after the appearance and
+  doorbell slots as they are ordered today. Coalesced: one nudge per hole,
+  however many events fell in. `gui_event_queue_pending` includes the flag,
+  so a waiter sees it.
+- The drop path in `wm_deliver_event` returns before aiming a wake today
+  (`if (!stored) return;`). That stays correct for the drop itself, since a
+  full ring means the owner has plenty to wake for, but the loss flag must
+  be set before that return.
+- Consumer contract, written at the event: **discard all gesture state**.
+  Pressed rows, armed buttons, the owner-dismissal swallow, libui's `grab`
+  and pressed widget. A press that preceded the hole can never be matched
+  by a release that followed it. Existing consumers that switch on type
+  and `default: break` (grootmenu, gterm, libui's dispatch) ignore it until
+  taught; libui should be taught in the same change, since its pressed
+  widget has the same hazard today.
+- This changes the existing input contract (a new event type every client
+  may now receive), so it is D012 review material, and this is that
+  review: accepted in this shape. ABI: the type number and both static
+  asserts, nothing else moves.
+
+**The owner-dismissal state machine**, with the loss nudge in hand, in
+both drain orders. The compositor's routing fixes the order within one
+queue: on an outside press that lands on the owner, `wm_raise` runs before
+`deliver_mouse_to_window`, so the owner's queue holds focus-gained(other =
+popup) **before** the button-down. The popup's queue holds focus-lost(other
+= owner). Which queue the dispatcher drains first is the only freedom.
+
+- Session states: `OPEN`, `CLOSED_BY_ME`, `DISMISSED` (plus a swallow
+  record: owner handle, button).
+- Toolkit closes the menu itself (Escape, selection, hover to another
+  heading): set `CLOSED_BY_ME` **before** destroying any window. The
+  focus-gained the owner then receives (from the kernel's focus return)
+  finds the session not `OPEN` and is ignored. No swallow is armed; the
+  next click is the user's.
+- Owner queue drained first: focus-gained(other = a live popup of the
+  session) while `OPEN` is the outside-click signature: close the family,
+  set `DISMISSED`, arm the swallow for that owner. The button-down that
+  follows on the same queue is swallowed and the swallow waits for its
+  matching up. The popup's focus-lost, drained later, finds the session
+  not `OPEN` and is ignored.
+- Popup queue drained first: focus-lost(other = owner) while `OPEN`: same
+  transition, same swallow. The owner's focus-gained and button-down then
+  arrive against `DISMISSED` with the swallow armed; gained is ignored,
+  down is swallowed.
+- focus-lost(other = 0) or naming a handle not in the session: stranger.
+  Close, `DISMISSED`, **no swallow**; the click belongs to the other
+  application and the kernel already routed it there once.
+- `INPUT_LOST` on the owner: clear the swallow. The pair the swallow was
+  waiting for may be in the hole, and a swallow left armed would eat the
+  next unrelated click, which is the failure the disposition names.
+- A swallow is for exactly one down-up pair on the named owner; a release
+  without a matching down (the opening press's release, delivered to the
+  owner by the implicit grab) is not a pair and is not swallowed.
+
+That is the whole machine; the three fault-injection rows in the revised
+evidence table (drop an up then a later down, evict focus under pressure,
+close while parent events are queued) are its tests.
+
+### Small confirmations on the revision
+
+- Alt+Tab from a popup: the first-step rule in `alttab_step_locked` reads
+  `wm_focused()`; resolve it through the owner chain to the first
+  non-popup window before the `ring[0] != focus->id` test, and the first
+  Tab from a cascade offers the next application, not the owner. Agreed.
+- Chrome damage on focus changes through the chain: agreed; `focus_window`
+  already damages both ends, the chain root is a third frame to add.
+- `wait_any`'s all-or-none registration, legacy wait honoring the same
+  BUSY rule, the no-owned-window exit and the rotating cursor: agreed as
+  written.
+- Popup capacity: set `min_content_w/h` at birth to the smaller of the
+  default floor and the birth size, or `wm_set_min_size`'s "minimum must
+  fit the reservation" check refuses the default on a 50x20 popup. The
+  revision's audit row covers it; naming the site here.
+- Owned create makes E1K-O's third call `window_get_content_rect` the only
+  new syscall in that packet; `popup_attach` is withdrawn in favour of the
+  owner bits on create, if Chris takes this shape. E1K-W and E1K-C are
+  unchanged.

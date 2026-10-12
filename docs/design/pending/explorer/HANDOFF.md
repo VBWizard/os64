@@ -1,99 +1,65 @@
 # Roam — latest handoff
 
-Updated: 2026-10-11. Design owner: Quinn. **Sol has E1A under review in [PR #254](https://github.com/VBWizard/os64/pull/254)** on
-`codex/explorer-e01a`; the popup review changes none of its action/status API
-requirements. Native implementation remains unassigned.
+Updated: 2026-10-11. Design owner: Quinn.
+
+E1A is accepted. PR #254 merged into `userland` as `c6cc6e3c`; gallery relocation
+`2bc9f2f4` followed. Chris confirmed the P5 test complete. The diagnostic launches
+as `/tests/actiongallery`. Original host/QEMU results and three review follow-ups
+remain under [E1A evidence](evidence/e01a/README.md); hardware acceptance is
+user-reported, without a captured installed-binary hash.
 
 ## Resume point
 
-Design branch: `codex/explorer-design`; checkout: `.worktrees/explorer-design`.
-The foundation draft reviewed by Fable is commit `40077889`. His
-[review](GUI_POPUPS_REVIEW.md) is retained unchanged; Quinn's
-[disposition](GUI_POPUPS_DISPOSITION.md) and revised [E1K](GUI_POPUPS.md) select
-the smaller owned-window architecture. Inspect git log for this revision's
-checkpoint. The branch is local, with no design PR or merge into `userland`.
+[PR #257](https://github.com/VBWizard/os64/pull/257) is open against `userland`;
+implementation commit `3fee1034` is pushed. Ordinary code review is pending.
 
-Runtime source audit: `userland` at `6d988565`; relevant sources match the design
-branch's older runtime parent `f3f5f50e`. Sol's separate worktree is
-`.worktrees/explorer-e01a`, based on `6d988565` at inspection. Do not merge this
-design branch's old runtime base over active implementation or modify Sol's
-working files to deliver a documentation update.
+Quinn owns E1K in branch `codex/explorer-e1k`, checkout
+`.worktrees/explorer-e1k`, based on `2bc9f2f4`. The working implementation and
+[concrete handoff](E01K_HANDOFF.md) follow Fable's second review of native popups.
+The original design branch is historical; do not merge its older runtime base
+over this work. The first review snapshot arrived through E1A at `d33e651e`.
 
-## Deliverables and next actions
+Sol's E1B starts after E1K's API, guest evidence and ordinary code review are
+settled. Chris explicitly asked about the ordering; E1B is the dependent next
+packet, followed by E1C. No E1B implementation is included here.
 
 | Work | State | Next action |
 | --- | --- | --- |
-| [E1 actions, menus and status](E01_MENUS.md) | Updated for focus-taking popup windows | E1B uses shared multi-window dispatch and closes menus before font adoption. E1C uses an unattached launcher root. |
-| [E1A actions/status](E01A_HANDOFF.md) | Reviewing in [PR #254](https://github.com/VBWizard/os64/pull/254) | Review the action/status APIs, bindings/router and real gallery. [Host/QEMU evidence](evidence/e01a/README.md) and Chris's successful OS checkout are recorded; review and merge pending. |
-| [E1K native popups](GUI_POPUPS.md) | First review dispositioned; whole packet not Ready | Resolve R1 safe focus acquisition/identity and R2 queue loss/reset with Fable. Draft is ready for that focused follow-up, not implementation approval. |
-| E1K-W / E1K-C | Reviewed wait/capacity directions | Can prepare focused handoffs independently: ABI layouts, waiter races, consumer/capacity tests. No implementation assigned. |
-| [E2 icons](E02_ICONS.md) | Provider/asset plan unchanged; visual choice open | Finalize provider, verify decoder accounting and choose a visual contact sheet with Chris before producing the family. |
-| E6 message channels | Umbrella proposal only | Prepare its separate platform design and Fable review before implementation. |
-
-E1B/E1C wait for the final E1K contract and implementation evidence. E1A does
-not wait for R1/R2. No follow-up message to Fable has been sent by this update.
-The [disposition](GUI_POPUPS_DISPOSITION.md#focused-follow-up-for-fable) is the
-review handoff. No further product decision is needed for Sol to continue.
+| [E1A actions/status](E01A_HANDOFF.md) | Accepted | Reuse the public action/status APIs. |
+| [E1K native popups](E01K_HANDOFF.md) | Reviewing | Review the diff and [evidence](evidence/e01k/README.md); Chris confirmed QEMU and P5 validation after the readiness-test fix. |
+| [E1B menus](E01_MENUS.md) | Waiting on E1K | Sol consumes the final APIs; exercise cross-queue dismissal, handle quarantine and unpaired-suppression expiry. |
+| E1C consumers | Waiting on E1B | Migrate grootmenu and Scribe with their existing policies. |
+| [E2 icons](E02_ICONS.md) | Provider/asset plan unchanged | Choose the visual family with Chris before producing assets. |
+| E6 channels | Umbrella proposal only | Separate platform design and Fable review before implementation. |
 
 ## Accepted decisions and boundaries
 
-- **Roam** has independently hideable panes/bars, including the menu. Alt/F10
-  temporarily reveal it, Escape dismisses it, and right-click offers Show Menu
-  Bar. Hidden pane/tab/job models survive hiding.
-- Shared popup widgets give grootmenu Interface font support. Menus extend
-  beyond the owner window. Kernel-owned menu session transactions are removed;
-  ordinary popup windows take focus and return it conditionally on destruction.
-- Popup menus survive VT switches, matching the existing project ruling.
-  Font changes close menus before owner adoption; they do not automatically
-  reopen from Appearance or restore external focus.
-- Icons remain a shared foundation for menus, files and future desktop use.
-  Desktop placement/activation remains outside E2.
-- Logical slices keep kernel work focused. Fable reviews message channels and
-  serious kernel behavior changes; ordinary userland keeps normal review.
+- Roam's panes and bars independently hide down to a bare directory view.
+  Alt/F10 temporarily reveal the hidden menu; right-click offers Show Menu Bar.
+- Shared menu widgets follow the Interface font. Native popups extend beyond
+  their owner; immutable owner links support conditional focus return.
+- VT switching preserves menus. Appearance changes close them before font
+  adoption, without reopening or stealing external focus.
+- Icons are a reusable foundation for menus, files and future desktop use;
+  desktop placement and activation stay outside E2.
+- Kernel work stays focused. E1K has Fable's architectural review; ordinary
+  code review and testing still apply. Message channels retain a separate review.
 
-See [DECISIONS.md](DECISIONS.md), D007–D014. E1/E2 engineering defaults are
-Quinn's design decisions, not additional customer rulings. File Open and Save
-still share E4's browser through E5.
+[D015](DECISIONS.md) records second-review choices. E1K uses owned create,
+nonconsuming any-window wait, same-task focus peer handles, content readback,
+INPUT_LOST, child/waiter BUSY guards and birth-size popup capacity. There are no
+kernel menu sessions, command semantics or IPC additions.
 
 ## Existing platform findings
 
 The unsynchronized `task->heapEnd` reservation in `gui_window_create` and
-`syscall_map` needs a separate focused fix with concurrency evidence. It is
-outside this design revision and does not block E1A. The documented sibling-TLB
-limitation remains; this design neither solves it nor enlarges the canvas-sharing
-contract. Preserve existing GUI-lock → signal-lock cleanup.
+`syscall_map` needs a separate focused fix with concurrency evidence. The
+existing sibling-TLB limitation also remains outside this packet. E1B owns
+window lifecycle on one UI thread and must not expand canvas sharing.
 
-The 32-slot global window table stays. Popup birth-size capacity reduces buffer
-cost without changing ordinary-window stable resizing. Depth limits do not
-promise available handles. E1K's diagnostic must test full-table refusal.
+The global 32-window table remains. Depth limits do not promise free handles;
+allocation refusal must leave the owner usable. Popup growth needs replacement,
+so E1B must follow the post-destruction drain/tombstone protocol in the handoff.
 
-The icon provider keeps libos64 independent of libimage's decoders. Future E7
-still needs explicit FAT/ext2 publication, identity and source-change contracts
-before destructive transfers.
-
-## Evidence and working state
-
-The imported E1K review revision changed documentation only. Source inspection supports the
-dispositions; documentation verification belongs in [SESSION_LOG.md](SESSION_LOG.md).
-That design revision made no runtime, QEMU or P5 acceptance claim and did not
-edit the E1A implementation. E1A validation and publication are recorded below.
-
-## E1A implementation checkpoint
-
-Local worktree `.worktrees/explorer-e01a`, branch `codex/explorer-e01a`, runtime
-base `6d988565`; source/binary hashes identify the tested files. Chris requested commit and push
-for review following his successful OS checkout. Implementation commit
-`bd86ce4f` is pushed to origin; [PR #254](https://github.com/VBWizard/os64/pull/254) targets `userland`.
-Focused fake/real action-status, existing fake/real UI, Scribe and font-contract
-checks passed with supported leak detection. PS/2 and USB-at-boot QEMU checks,
-32px live Interface reflow, token ownership, stale targets, stable warmed heap
-reports and exit code zero are in [the evidence packet](evidence/e01a/README.md).
-No native transport, kernel change, production Scribe migration, review approval
-or review approval is included. The OS checkout did not identify hardware or an
-installed revision. Ordinary code review is the next E1A action.
-The active design branch owns native review follow-up beyond snapshot `d33e651e`.
-
-E1A first-review update: the two P2 findings on `e0800cb8` are addressed;
-[the R1 evidence](evidence/e01a/review-r1/README.md) records punctuation routing
-and complete-message status fit regressions, 387/436 focused passing checks,
-strict cross build and QEMU rendering verification. Re-review is pending.
+E7 still needs explicit FAT/ext2 publication, identity and source-change
+contracts before destructive transfers.

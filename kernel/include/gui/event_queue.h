@@ -20,6 +20,12 @@ typedef struct gui_event_queue {
     uint64_t doorbell_tick;
     bool doorbell_pending;
     bool doorbell_yield_input;
+    // Pending loss purges queued gestures whose transitions may straddle
+    // the gap. Window/control records survive and get turns between notices.
+    bool lost_pending;
+    // After reporting loss, yield to a retained ring record before reporting
+    // another loss; repeated overflow must not starve close/focus/resize.
+    bool lost_yield_control;
 } gui_event_queue_t;
 
 // 0 = dropped, 1 = stored, 2 = stored after evicting the oldest input.
@@ -28,6 +34,6 @@ bool gui_event_queue_pop(gui_event_queue_t *q, input_event_t *out);
 static inline bool gui_event_queue_pending(const gui_event_queue_t *q)
 {
     return q->head != q->tail || q->pointer_pending || q->appearance_pending ||
-           q->doorbell_pending;
+           q->doorbell_pending || q->lost_pending;
 }
 #endif

@@ -1339,6 +1339,16 @@ static void input_forms(void) {
     probe_drop();
 }
 static void input_cases(void) {
+    g.seq=2;g.key_seq=2;g.pressed_link=9;
+    yonder_bar_raise(&g.bar,1);yonder_bar_settled(&g.bar);
+    check(yonder_bar_press(&g.bar,BAR_ON_YES)==BAR_NOTHING,"loss: question press arms");
+    input_lost();
+    check(g.seq==0 && g.key_seq==0 && g.pressed_link==-1 && g.pressed_node==NULL,
+          "loss: page press and key decoders reset");
+    check(yonder_bar_release(&g.bar,BAR_ON_YES)==BAR_NOTHING,
+          "loss: later release cannot answer an old question press");
+    yonder_bar_lower(&g.bar);
+
     input_links();
     input_hover();
     input_forms();

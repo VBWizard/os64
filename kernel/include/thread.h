@@ -162,6 +162,8 @@ typedef struct s_thread
 	// never leave the kernel. Idle threads accumulate here like everyone
 	// else — that is what makes "idle %" a measurement, not an assumption.
 	uint64_t runCycles;
+	// Next handle index for task-window wait fairness; used by this thread.
+	uint32_t gui_wait_cursor;
 } thread_t;
 
 _Static_assert(offsetof(thread_t, fpuState) % 16 == 0,

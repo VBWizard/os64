@@ -207,6 +207,26 @@ bool wm_set_decoration(const os64_decor_view_t *view, void **retired)
 // goes through here so the serial can never be forgotten at one site —
 // which is the whole reason it is a function and not a field write.
 static uint64_t s_focus_serial = 0;
+window_t *wm_focus_root(window_t *w)
+{
+    while (w && w->popup_owner_id) {
+        window_t *parent = wm_window_by_id(w->popup_owner_id);
+        if (!parent || parent->owner != w->owner || parent->retiring) break;
+        w = parent;
+    }
+    return w;
+}
+
+static void damage_focus_chain(window_t *w)
+{
+    while (w) {
+        gui_damage_add_locked(w->frame);
+        window_t *parent = wm_window_by_id(w->popup_owner_id);
+        if (!parent || parent->owner != w->owner || parent->retiring) break;
+        w = parent;
+    }
+}
+
 static void focus_window(window_t *w)
 {
 	window_t *old = s_focused;
@@ -216,7 +236,7 @@ static void focus_window(window_t *w)
 
 	// Tell both ends (INPUT_EVENT_WINDOW_FOCUS, input.h). Every focus change
 	// passes through here — birth, death, raise — which is why the event is
-	// raised here and not at the three callers: a popup menu must learn that
+	// raised here so each caller shares the rule: a popup menu must learn that
 	// a NEW window stole its focus just as surely as that a click did. The
 	// sibling bit is the same-owner test; `w` may be NULL when the last
 	// window dies. wm_deliver_event's wake is legal from a client syscall
@@ -224,6 +244,8 @@ static void focus_window(window_t *w)
 	// variant, the one pipe_read uses from thread context.
 	if (old == w)
 		return;
+    damage_focus_chain(old);
+    damage_focus_chain(w);
 	// 0 is the not-a-task sentinel, never a real owner, so two windows
 	// carrying it are strangers rather than siblings — otherwise a popup
 	// would decline to dismiss for a window that belongs to nobody.
@@ -232,7 +254,8 @@ static void focus_window(window_t *w)
 	if (old != NULL) {
 		input_event_t ev = {
 			.type  = INPUT_EVENT_WINDOW_FOCUS,
-			.focus = { .gained = 0, .sibling = sibling ? 1 : 0 },
+			.focus = { .gained = 0, .sibling = sibling ? 1 : 0,
+                       .other_handle = sibling ? w->client_handle : 0 },
 			.tick  = kTicksSinceStart,
 		};
 		wm_deliver_event(old, &ev);
@@ -240,7 +263,8 @@ static void focus_window(window_t *w)
 	if (w != NULL) {
 		input_event_t ev = {
 			.type  = INPUT_EVENT_WINDOW_FOCUS,
-			.focus = { .gained = 1, .sibling = sibling ? 1 : 0 },
+			.focus = { .gained = 1, .sibling = sibling ? 1 : 0,
+                       .other_handle = sibling ? old->client_handle : 0 },
 			.tick  = kTicksSinceStart,
 		};
 		wm_deliver_event(w, &ev);
@@ -312,7 +336,8 @@ static bool at_band_top(const window_t *w)
 	return w->above == NULL || band_of(w->above) > band_of(w);
 }
 
-window_t *wm_create(const char *title, rect_t frame, uint32_t flags, uint64_t owner)
+window_t *wm_create(const char *title, rect_t frame, uint32_t flags, uint64_t owner,
+                    uint16_t client_handle, uint32_t popup_owner_id, bool popup_capacity)
 {
 	// Content = frame minus chrome; refuse degenerate sizes rather than
 	// letting a 0-wide surface ripple NULLs through the compositor.
@@ -322,22 +347,27 @@ window_t *wm_create(const char *title, rect_t frame, uint32_t flags, uint64_t ow
 		frame.w<(int32_t)wm_decoration_min_width(flags))
 		return NULL;
 
+	if (s_next_id == 0) return NULL; // IDs held by owner links must not wrap.
 	window_t *w = kmalloc(sizeof(window_t));
 	if (!w)
 		return NULL;
 	memset(w, 0, sizeof(window_t));
 	w->min_content_w = GUI_WINDOW_MIN_CONTENT_W;
 	w->min_content_h = GUI_WINDOW_MIN_CONTENT_H;
-	w->owner = owner;   // before the focus grab below, which reports siblings by it
+	w->owner = owner;
+    w->client_handle = client_handle;
+    w->popup_owner_id = popup_owner_id;
 
 	// Both stores are reserved at CAPACITY and report the content size — the
 	// reservation that makes resize free of allocation, of pixel motion, and
 	// (for the task-backed canvas gui_window_create swaps in below) of any
 	// need to unmap a live user page. See canvas_cap_w's comment in window.h.
 	uint32_t cap_w, cap_h;
-	wm_canvas_capacity_for(content_w, content_h, &cap_w, &cap_h);
+	wm_canvas_capacity_for(content_w, content_h, popup_capacity, &cap_w, &cap_h);
 	w->canvas_cap_w = cap_w;
 	w->canvas_cap_h = cap_h;
+    if (w->min_content_w > cap_w) w->min_content_w = cap_w;
+    if (w->min_content_h > cap_h) w->min_content_h = cap_h;
 
 	if (surface_init_capacity(&w->content, (uint32_t)content_w, (uint32_t)content_h,
 	                          cap_w, cap_h) != 0) {
@@ -374,20 +404,11 @@ window_t *wm_create(const char *title, rect_t frame, uint32_t flags, uint64_t ow
 	// declining boot would leave keys routing to NULL). See the flag's
 	// comment in window.h for the no-mouse race that earned it.
 	//
-	// TITLEBARS REPAINT ON FOCUS CHANGE — the rule with three doors, and
-	// this was the last to learn it (2026-08-19, Chris's find). wm_raise
-	// always damaged the dethroned window; wm_destroy learned it 8/17 when
-	// the first window to DIE holding focus left a half-gray, half-blue
-	// titlebar; and this door — focus stolen AT BIRTH — hid until the first
-	// focus-taking window was ever born onto a live desktop with a focused
-	// window standing visible: `gclock &` typed inside gterm, whose titlebar
-	// then kept wearing the focused blue in front of an eyewitness.
-	window_t *old_focus = s_focused;
+	// focus_window damages the old and new owner chains; birth also damages
+	// the new surface when START_UNFOCUSED leaves focus elsewhere.
 	if (!(flags & GUI_WINDOW_START_UNFOCUSED) || s_focused == NULL)
 		focus_window(w);
 	gui_damage_add_locked(w->frame);
-	if (s_focused == w && old_focus != NULL && old_focus != w)
-		gui_damage_add_locked(old_focus->frame);
 
 	printd(DEBUG_GUI, "wm: created window %u '%s' at (%d,%d) %dx%d\n",
 		w->id, w->title, frame.x, frame.y, frame.w, frame.h);
@@ -403,21 +424,23 @@ void wm_destroy(window_t *w)
 	gui_grab_release(w);
 
 	gui_damage_add_locked(w->frame);   // repaint what the window covered
-	if (s_focused == w)
-		focus_window(w->below ? w->below : s_top);
-	unlink_window(w);
-	if (s_focused == w)
-		focus_window(s_top);
-	// If focus just moved, the inheriting window's titlebar changes color —
-	// damage it, or only the slice under the dead window's frame repaints.
-	// wm_raise always knew this; this path never did, and nobody noticed
-	// until 2026-08-17 because no window had ever DIED holding focus: the
-	// first ring-3 client exiting mid-focus left the console wearing half a
-	// gray titlebar and half a blue one, split exactly at the dead window's
-	// old edge — a screenshot's worth of exactly where damage tracking
-	// stopped.
-	if (s_focused != NULL && s_focused != w)
-		gui_damage_add_locked(s_focused->frame);
+    w->retiring = true;
+    if (s_focused == w) {
+        window_t *next = wm_window_by_id(w->popup_owner_id);
+        if (next && (next->owner != w->owner || next->retiring || wm_is_hidden(next)))
+            next = NULL;
+        if (next) wm_raise(next);
+        else {
+            next = w->below;
+            while (next && (next->retiring || wm_is_hidden(next))) next = next->below;
+            if (!next) {
+                next = s_top;
+                while (next && (next->retiring || wm_is_hidden(next))) next = next->below;
+            }
+            focus_window(next);
+        }
+    }
+    unlink_window(w);
 	surface_free(&w->canvas);
 	surface_free(&w->content);
 	kfree(w);
@@ -630,11 +653,11 @@ uint32_t wm_dim_max(void)
 	return m;
 }
 
-void wm_canvas_capacity_for(int32_t content_w, int32_t content_h,
+void wm_canvas_capacity_for(int32_t content_w, int32_t content_h, bool popup_capacity,
                             uint32_t *cap_w, uint32_t *cap_h)
 {
-	uint32_t cw = kFrameBuffer.width;
-	uint32_t ch = kFrameBuffer.height;
+    uint32_t cw = popup_capacity ? (uint32_t)content_w : kFrameBuffer.width;
+    uint32_t ch = popup_capacity ? (uint32_t)content_h : kFrameBuffer.height;
 
 	// Never smaller than what the window already is, or the surface it is
 	// asked to hold would not fit its own reservation.
@@ -682,8 +705,13 @@ rect_t wm_clamp_frame(const window_t *w, rect_t frame)
 
 bool wm_set_min_size(window_t *w, uint32_t width, uint32_t height)
 {
-	if (width < GUI_WINDOW_MIN_CONTENT_W) width = GUI_WINDOW_MIN_CONTENT_W;
-	if (height < GUI_WINDOW_MIN_CONTENT_H) height = GUI_WINDOW_MIN_CONTENT_H;
+    uint32_t floor_w = GUI_WINDOW_MIN_CONTENT_W, floor_h = GUI_WINDOW_MIN_CONTENT_H;
+    if (w->flags & GUI_WINDOW_POPUP) {
+        if (floor_w > w->canvas_cap_w) floor_w = w->canvas_cap_w;
+        if (floor_h > w->canvas_cap_h) floor_h = w->canvas_cap_h;
+    }
+    if (width < floor_w) width = floor_w;
+    if (height < floor_h) height = floor_h;
 	if (width > w->canvas_cap_w || height > w->canvas_cap_h)
 		return false;
 	if (width != w->min_content_w || height != w->min_content_h) {
@@ -816,11 +844,9 @@ size_t wm_recency_ids(uint32_t *ids, size_t max)
 	if (max > ALTTAB_RING_MAX)
 		max = ALTTAB_RING_MAX;
 	for (window_t *w = s_top; w; w = w->below) {
-		// The desktop is not something you tab TO — it is what is left when
-		// you tab away from everything. Listing it would put a permanent
-		// last entry in every switcher strip and make Alt+Tab between two
-		// windows a three-stop walk.
-		if (w->flags & GUI_WINDOW_DESKTOP)
+		// Alt+Tab selects ordinary applications; their transient popups and
+		// the desktop are not independent switcher destinations.
+		if (w->flags & (GUI_WINDOW_DESKTOP | GUI_WINDOW_POPUP))
 			continue;
 		size_t i = n;
 		while (i > 0 && serials[i - 1] < w->focusSerial) {
@@ -894,7 +920,7 @@ bool wm_pop_event(window_t *w, input_event_t *out)
 static void composite_one(surface_t *backbuffer, const window_t *w, rect_t damage)
 {
 	surface_t view = surface_view(backbuffer, damage);
-	bool focused = (w == s_focused);
+	bool focused = (w == s_focused || w == wm_focus_root(s_focused));
 	// Frame in VIEW coordinates; everything below is drawn in that space.
 	rect_t f = {w->frame.x - damage.x, w->frame.y - damage.y,
 	            w->frame.w, w->frame.h};

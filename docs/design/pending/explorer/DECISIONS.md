@@ -189,7 +189,7 @@ from a chain of historical entries.
 ## D014 — Owned popup windows after Fable review
 
 - **Status:** Selected engineering direction, 2026-10-11. R1/R2 follow-up remains
-  open; native implementation is not approved merely by this design selection.
+  open at that checkpoint; D015 records its closure and implementation authority.
 - **Source/owner:** Fable's review of the `40077889` draft; Quinn's disposition
   under Chris's explicit delegation to decide what to take and leave.
 - **Decision:** Popups take focus as ordinary native windows. Add owner links,
@@ -208,12 +208,29 @@ from a chain of historical entries.
 - **Records:** [Original review](GUI_POPUPS_REVIEW.md),
   [disposition](GUI_POPUPS_DISPOSITION.md), [current design](GUI_POPUPS.md).
 
+## D015 — E1K review closure and implementation
+
+- **Status:** Selected, 2026-10-11. Chris authorized Quinn's E1K work after E1A.
+- **Review:** Fable's second pass accepts R1 atomic owned creation and R2 loss
+  signalling. Retain his review unchanged in [GUI_POPUPS_REVIEW.md](GUI_POPUPS_REVIEW.md).
+- **Taken:** Parent handle encoded at birth, final focus/identity revalidation,
+  uint16 same-task focus peer, BUSY child destruction and waiter conflicts,
+  retiring-family task cleanup, popup exclusion from Alt+Tab, ancestor chrome
+  damage, content readback and birth-size popup capacity.
+- **Refined:** On INPUT_LOST discard queued gestures before client reset can
+  be followed by an old down. Preserve control records/coalesced state. In E1B,
+  tombstone handles and drain surviving queues after destruction before new
+  creation; bounded dispatch may defer that creation into later turns.
+- **Boundary:** No kernel menu sessions or IPC. Sol starts E1B after the tested
+  E1K API is reviewable; its controller still needs the dismissal-expiry cases.
+- **Record:** [E01K_HANDOFF.md](E01K_HANDOFF.md).
+
 ## Open choices
 
 | ID | Choice | Resolve in | Current position |
 | --- | --- | --- | --- |
 | O001 (resolved) | Application name | D007, 2026-10-11 | Chris confirmed Roam. |
-| O002 | Menu interaction, shortcuts and status help | E1 design | Detailed contract drafted in E01_MENUS.md; E1K first review received; R1/R2 need closure before native integration. |
+| O002 | Menu interaction, shortcuts and status help | E1 design | Detailed contract drafted in E01_MENUS.md; E1K second review closes R1/R2; native implementation/evidence precede E1B. |
 | O003 | Icon family, sizes and rendering states | E1/E2 design | E02_ICONS.md proposes provider/ownership, sizes and inventory; Chris's visual choice remains open. |
 | O004 | Detailed directory fields, sorting and view behavior | E3/E4 design | Details-first with Name, Size, Type and Modified; only expose real metadata. |
 | O005 | Channel and service contracts | E6/E8 design | D004 is a proposal; snapshot/subscription, authority and lifecycle need concrete contracts. |

@@ -1,0 +1,2 @@
+popuptest: automated window/focus/wait checks; windows will open and close
+popuptest: 153 checks, 0 failures

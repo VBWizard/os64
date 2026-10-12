@@ -199,6 +199,8 @@ off: no waiting on interrupt-delivered events, keep bodies short.
 | 60 | `pty_history(master, lines)` | GRID-only retention of 0..10000 additional rows. 0 on success; -1 invalid arguments/handle/mode, -3 history quota full, -5 allocation refused, -6 repeated concurrent reconfiguration. Preserves live cells and newest retained rows; no SIGWINCH. See [TERMINAL_CONTRACTS.md](TERMINAL_CONTRACTS.md) |
 | 61 | `pty_viewport(master, header, cells, max_cells, first_line, epoch)` | Coherent 72-byte metadata plus a bounded viewport prefix; returns cells copied. Stable line IDs clamp evicted anchors; stale epochs select live view. GRID only; -1 invalid arguments/handle/mode, -2 bad user memory, -5 scratch allocation refused. Zero capacity polls metadata |
 | 62 | `gui_window_focus(handle)` | Owner-only raise/focus; restores a minimized ordinary window within its stacking band. Desktop and popup windows refuse. Returns 0 or the existing `OS64_GUI_ERR_*` vocabulary; see [TERMINAL_CONTRACTS.md](TERMINAL_CONTRACTS.md) |
+| 63 | `gui_event_wait_any(out_handle)` | Nonconsuming readiness for task-owned windows; 1 plus handle, or GUI error. One waiter per window, BUSY on conflict, round-robin selection; see `os64/gui.h` |
+| 64 | `gui_window_get_content_rect(handle, out_rect)` | Owner-only screen-space content snapshot using current decoration insets; 0 or GUI error |
 | 16-22 | GUI (reserved) | See GRAPHICS.md "The userland boundary" — create/destroy/get_surface/publish/event_poll/screen_info/event_wait |
 
 **The environment block** (`abi/include/os64/env.h`): every task's env rides into

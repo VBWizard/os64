@@ -21,8 +21,9 @@ int gui_event_queue_push(gui_event_queue_t *q, const input_event_t *ev)
     uint32_t next = (q->head + 1) % GUI_WINDOW_EVENTS_MAX;
     int result = 1;
     if (next == q->tail) {
-        // Focus changes must reach popup clients even under pressure. The
-        // oldest queued event is sacrificed; other input keeps drop-newest.
+        // Admit new focus even when full, but report the lost history: the
+        // evicted record can itself be focus. Other records drop newest.
+        q->lost_pending = true;
         if (ev->type != INPUT_EVENT_WINDOW_FOCUS) return 0;
         q->tail = (q->tail + 1) % GUI_WINDOW_EVENTS_MAX;
         result = 2;
@@ -48,10 +49,33 @@ bool gui_event_queue_pop(gui_event_queue_t *q, input_event_t *out)
         q->doorbell_yield_input = true;
         return true;
     }
+    if (q->lost_pending) {
+        // Compact in ring order. Removing queued downs as well as ups keeps
+        // a pre-loss gesture from re-arming a client after INPUT_LOST.
+        uint32_t read = q->tail, write = q->tail;
+        while (read != q->head) {
+            input_event_t ev = q->events[read];
+            read = (read + 1) % GUI_WINDOW_EVENTS_MAX;
+            if ((ev.type >= INPUT_EVENT_KEY_DOWN && ev.type <= INPUT_EVENT_MOUSE_BUTTON_UP) ||
+                ev.type == INPUT_EVENT_MOUSE_WHEEL) continue;
+            q->events[write] = ev;
+            write = (write + 1) % GUI_WINDOW_EVENTS_MAX;
+        }
+        q->head = write;
+        // A retained control must get a turn between loss notifications.
+        // Still purge gestures above on every new loss, before that turn.
+        if (!q->lost_yield_control || q->head == q->tail) {
+            q->lost_pending = false;
+            q->lost_yield_control = q->head != q->tail;
+            *out = (input_event_t){.type = INPUT_EVENT_INPUT_LOST};
+            return true;
+        }
+    }
     if (q->head != q->tail) {
         *out = q->events[q->tail];
         q->tail = (q->tail + 1) % GUI_WINDOW_EVENTS_MAX;
         q->doorbell_yield_input = false;
+        q->lost_yield_control = false;
         return true;
     }
     if (!q->pointer_pending) return false;

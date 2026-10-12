@@ -1,0 +1,112 @@
+stale_refs: working tree vs HEAD
+
+== Names this change RETIRED that survive only in prose (read every line):
+-- E01A_HANDOFF
+   docs/design/pending/explorer/GUI_POPUPS_REVIEW.md:7: read: `E01_MENUS.md`, `E01A_HANDOFF.md`, `E02_ICONS.md`, the umbrella, the
+   docs/design/pending/explorer/HANDOFF.md:25: | [E1A actions/status](E01A_HANDOFF.md) | Accepted | Reuse the public action/status APIs. |
+   docs/design/pending/explorer/README.md:58: | E1 | Actions, menus and status | E1A accepted; E1K implementing; E1B waits | Quinn (E1K), Sol (E1A) | [E1A](E01A_HANDOFF.md), [E1K](E01K_H
+   docs/design/pending/explorer/SESSION_LOG.md:112: menus/status, icon integration and grootmenu/Scribe migration. E01A_HANDOFF.md
+-- E01_MENUS
+   docs/design/pending/EXPLORER.md:116: [E1's userland contract](explorer/E01_MENUS.md) consumes it; menu controllers,
+   docs/design/pending/EXPLORER.md:370: | E1 — Actions, menus and status | [Detailed design](explorer/E01_MENUS.md): E1A actions/status, E1K native GUI prerequisite, E1B menu widge
+   docs/design/pending/EXPLORER.md:447: Detailed [E1](explorer/E01_MENUS.md) and [E2](explorer/E02_ICONS.md) drafts now
+   docs/design/pending/explorer/DECISIONS.md:184: [E01_MENUS.md](E01_MENUS.md) separates E1A, E1K,
+   docs/design/pending/explorer/DECISIONS.md:233: | O002 | Menu interaction, shortcuts and status help | E1 design | Detailed contract drafted in E01_MENUS.md; E1K second review closes R1/R2
+   docs/design/pending/explorer/E01A_HANDOFF.md:14: Read [E01_MENUS.md](E01_MENUS.md) for the governing interaction/ownership contract.
+   docs/design/pending/explorer/GUI_POPUPS_DISPOSITION.md:56: are reflected in [E01_MENUS.md](E01_MENUS.md).
+   docs/design/pending/explorer/GUI_POPUPS_REVIEW.md:7: read: `E01_MENUS.md`, `E01A_HANDOFF.md`, `E02_ICONS.md`, the umbrella, the
+   docs/design/pending/explorer/GUI_POPUPS_REVIEW.md:199: - `E01_MENUS.md` § Event routing: "E1K wakes the owner's existing event wait"
+   docs/design/pending/explorer/HANDOFF.md:27: | [E1B menus](E01_MENUS.md) | Waiting on E1K | Sol consumes the final APIs; exercise cross-queue dismissal, handle quarantine and unpaired-s
+   docs/design/pending/explorer/README.md:45: 4. The active slice's record: [E1](E01_MENUS.md), its active
+   docs/design/pending/explorer/SESSION_LOG.md:111: - **Documents:** E01_MENUS.md defines shared actions, per-target state views,
+   docs/design/pending/explorer/SESSION_LOG.md:137: `E01_MENUS`, `SESSION_LOG` and `SLICE_TEMPLATE`; every reported reference was
+-- E02_ICONS
+   docs/design/pending/EXPLORER.md:447: Detailed [E1](explorer/E01_MENUS.md) and [E2](explorer/E02_ICONS.md) drafts now
+   docs/design/pending/explorer/DECISIONS.md:234: | O003 | Icon family, sizes and rendering states | E1/E2 design | E02_ICONS.md proposes provider/ownership, sizes and inventory; Chris's vis
+   docs/design/pending/explorer/E01_MENUS.md:37: the provider described in [E02_ICONS.md](E02_ICONS.md); E1B's layout and ownership
+   docs/design/pending/explorer/GUI_POPUPS_REVIEW.md:7: read: `E01_MENUS.md`, `E01A_HANDOFF.md`, `E02_ICONS.md`, the umbrella, the
+   docs/design/pending/explorer/HANDOFF.md:29: | [E2 icons](E02_ICONS.md) | Provider/asset plan unchanged | Choose the visual family with Chris before producing assets. |
+   docs/design/pending/explorer/README.md:46: [E1K packet](E01K_HANDOFF.md), or [E2](E02_ICONS.md). New slices use the
+   docs/design/pending/explorer/README.md:59: | E2 | Icon vocabulary | Designing — visual choice open | Quinn (design) | [E2 contract](E02_ICONS.md) | Dependency/allocation inspection; n
+   docs/design/pending/explorer/SESSION_LOG.md:114: architecture proposal awaiting Fable. E02_ICONS.md defines provider/asset
+-- GUI_POPUPS
+   docs/design/pending/EXPLORER.md:113: focused [E1K GUI prerequisite](explorer/GUI_POPUPS.md) adopts Fable's smaller
+   docs/design/pending/EXPLORER.md:449: gate is closure of the R1/R2 follow-up in [E1K](explorer/GUI_POPUPS.md). Sol's
+   docs/design/pending/explorer/DECISIONS.md:182: - **Design:** [GUI_POPUPS.md](GUI_POPUPS.md) is the revised contract after Fable's
+   docs/design/pending/explorer/DECISIONS.md:209: [disposition](GUI_POPUPS_DISPOSITION.md), [current design](GUI_POPUPS.md).
+   docs/design/pending/explorer/E01A_HANDOFF.md:15: E1A is independently buildable while [E1K](GUI_POPUPS.md) is implemented. Native popup integration is explicitly not part of this packet.
+   docs/design/pending/explorer/E01_MENUS.md:9: - **Prerequisite:** E1K in [GUI_POPUPS.md](GUI_POPUPS.md) and the concrete
+   docs/design/pending/explorer/GUI_POPUPS_DISPOSITION.md:5: contract: [native owned popups](GUI_POPUPS.md). The reviewed draft is in commit
+   docs/design/pending/explorer/GUI_POPUPS_DISPOSITION.md:65: [GUI_POPUPS.md](GUI_POPUPS.md#remaining-focused-review-questions) contains the
+   docs/design/pending/explorer/GUI_POPUPS_REVIEW.md:3: Reviewed: `GUI_POPUPS.md` as drafted 2026-10-11, against the kernel at
+   docs/design/pending/explorer/GUI_POPUPS_REVIEW.md:191: - `GUI_POPUPS.md` is superseded in shape, not in intent: keep its gap
+   docs/design/pending/explorer/GUI_POPUPS_REVIEW.md:250: ## 7. Second pass: R1 and R2 (Fable, 2026-10-11, against the revised GUI_POPUPS.md)
+   docs/design/pending/explorer/README.md:24: [E1K's revised GUI design](GUI_POPUPS.md) adopts Fable's smaller owned-window
+   docs/design/pending/explorer/SESSION_LOG.md:113: is Ready for userland implementation. GUI_POPUPS.md is the separate E1K
+   docs/design/pending/explorer/SESSION_LOG.md:157: Rewrite GUI_POPUPS.md and synchronize E1, umbrella, board and current handoff.
+-- GUI_POPUPS_DISPOSITION
+   docs/design/pending/EXPLORER.md:114: owned-window architecture after [review disposition](explorer/GUI_POPUPS_DISPOSITION.md).
+   docs/design/pending/explorer/DECISIONS.md:209: [disposition](GUI_POPUPS_DISPOSITION.md), [current design](GUI_POPUPS.md).
+   docs/design/pending/explorer/E01A_HANDOFF.md:11: [review disposition](GUI_POPUPS_DISPOSITION.md#effect-on-sols-active-e1a).
+   docs/design/pending/explorer/GUI_POPUPS.md:6: [E1K handoff](E01K_HANDOFF.md). Implementation and guest acceptance remain separate. [Disposition](GUI_POPUPS_DISPOSITION.md) records what
+   docs/design/pending/explorer/GUI_POPUPS_REVIEW.md:252: Read the revision and `GUI_POPUPS_DISPOSITION.md`. The dispositions match
+   docs/design/pending/explorer/SESSION_LOG.md:156: GUI_POPUPS_DISPOSITION.md with point-by-point decisions and the Sol handoff.
+-- GUI_POPUPS_REVIEW
+   docs/design/pending/explorer/DECISIONS.md:208: - **Records:** [Original review](GUI_POPUPS_REVIEW.md),
+   docs/design/pending/explorer/DECISIONS.md:215: signalling. Retain his review unchanged in [GUI_POPUPS_REVIEW.md](GUI_POPUPS_REVIEW.md).
+   docs/design/pending/explorer/E01_MENUS.md:409: [second review](GUI_POPUPS_REVIEW.md) closes the design questions; the
+   docs/design/pending/explorer/GUI_POPUPS.md:3: **Status:** architecture revised after [Fable's review](GUI_POPUPS_REVIEW.md),
+   docs/design/pending/explorer/GUI_POPUPS.md:262: Fable's [second pass](GUI_POPUPS_REVIEW.md#7-second-pass-r1-and-r2-fable-2026-10-11-against-the-revised-gui_popupsmd)
+   docs/design/pending/explorer/GUI_POPUPS_DISPOSITION.md:4: Source: [Fable's review](GUI_POPUPS_REVIEW.md), retained unchanged. Current
+   docs/design/pending/explorer/SESSION_LOG.md:150: Fable's adjacent GUI_POPUPS_REVIEW.md feedback to Quinn.
+-- INVALID_HANDLE
+   abi/include/os64/gui.h:489: // (INVALID_HANDLE), a signal interrupts it (INTERRUPTED), or another thread
+   abi/include/os64/gui.h:507: // 1 and a handle, INVALID_HANDLE if none remain, INTERRUPTED on signal, or
+   docs/design/pending/explorer/GUI_POPUPS.md:102: consuming the event. It returns INVALID_HANDLE if no owned windows remain,
+   docs/design/pending/explorer/GUI_POPUPS_REVIEW.md:91: the returned handle and treats `INVALID_HANDLE` as "it died while I slept".
+   kernel/include/gui/gui_client.h:31: // Handle exists but belongs to another task. Distinct from INVALID_HANDLE
+-- SESSION_LOG
+   docs/design/pending/explorer/README.md:48: 5. [Session log](SESSION_LOG.md) when the reasoning or evidence behind a change
+   docs/design/pending/explorer/SESSION_LOG.md:137: `E01_MENUS`, `SESSION_LOG` and `SLICE_TEMPLATE`; every reported reference was
+-- START_UNFOCUSED
+   abi/include/os64/gui.h:56: // are create-only; readback flags do not contain them. START_UNFOCUSED with
+   docs/design/pending/explorer/GUI_POPUPS.md:56: START_UNFOCUSED. Its parent must belong to the caller and be focused at birth.
+   docs/design/pending/explorer/GUI_POPUPS_REVIEW.md:285: - The `START_UNFOCUSED` no-focused-window exception never applies to an
+   docs/design/pending/explorer/GUI_POPUPS_REVIEW.md:294: with the popup created `START_UNFOCUSED` is the same contract with the
+   kernel/src/gui/window.c:402: // START_UNFOCUSED declines the focus grab a new window normally gets —
+   kernel/src/gui/window.c:408: // the new surface when START_UNFOCUSED leaves focus elsewhere.
+   kernel/src/gui/window.c:564: // stacked under its siblings, which START_UNFOCUSED makes possible)
+   userland/apps/desktop/desktop.c:399: // The window IS the screen. START_UNFOCUSED asks that the programs this
+   userland/apps/desktop/desktop.c:406: // it again — START_UNFOCUSED is about birth only.
+   userland/libos64/draw.c:402: // START_UNFOCUSED over it leaves it so), and its keys must reach its
+-- event_wait_any
+   docs/design/pending/explorer/E01_MENUS.md:165: `event_wait_any` and a live handle-to-owner/popup registry in the shared dispatcher.
+   docs/design/pending/explorer/GUI_POPUPS.md:47: The boundary adds `event_wait_any(out_handle)` (63) and
+   docs/design/pending/explorer/GUI_POPUPS.md:101: `event_wait_any` returns 1 plus an owned handle with pending events, without
+   docs/design/pending/explorer/GUI_POPUPS_REVIEW.md:81: - `event_wait_any(out_handle)`: under `kGuiLock`, scan the handle table for
+   docs/design/pending/explorer/GUI_POPUPS_REVIEW.md:150: nothing, and replaces its poll with `event_wait_any`.
+   docs/design/pending/explorer/GUI_POPUPS_REVIEW.md:200: becomes `event_wait_any`; § Visibility and focus: "native keyboard focus
+-- evidence/e01a/README.md
+   docs/design/pending/explorer/E01A_HANDOFF.md:9: Host and scoped QEMU acceptance are recorded in [the evidence packet](evidence/e01a/README.md).
+   docs/design/pending/explorer/HANDOFF.md:8: remain under [E1A evidence](evidence/e01a/README.md); hardware acceptance is
+   docs/design/pending/explorer/README.md:58: | E1 | Actions, menus and status | E1A accepted; E1K implementing; E1B waits | Quinn (E1K), Sol (E1A) | [E1A](E01A_HANDOFF.md), [E1K](E01K_H
+   docs/design/pending/explorer/SESSION_LOG.md:214: [Durable evidence](evidence/e01a/README.md) contains commands, logs, screenshots,
+-- evidence/e01a/review-r1/README.md
+   docs/design/pending/explorer/E01A_HANDOFF.md:210: [Review evidence](evidence/e01a/review-r1/README.md) records before-fix failures,
+   docs/design/pending/explorer/SESSION_LOG.md:257: [The R1 packet](evidence/e01a/review-r1/README.md) retains logs, screenshots and
+-- evidence/e01a/review-r2/README.md
+   docs/design/pending/explorer/E01A_HANDOFF.md:220: [Second-review evidence](evidence/e01a/review-r2/README.md) records two
+   docs/design/pending/explorer/SESSION_LOG.md:271: [Second-review packet](evidence/e01a/review-r2/README.md) records commands,
+-- out_rect
+   ABI.md:203: | 64 | `gui_window_get_content_rect(handle, out_rect)` | Owner-only screen-space content snapshot using current decoration insets; 0 or GUI
+   docs/design/pending/explorer/GUI_POPUPS.md:48: `window_get_content_rect(handle, out_rect)` (64). Owned popup creation uses
+-- popup_attach
+   docs/design/pending/explorer/GUI_POPUPS_REVIEW.md:293: If the flags-bit packing is judged too ugly, `popup_attach(popup, owner)`
+   docs/design/pending/explorer/GUI_POPUPS_REVIEW.md:411: new syscall in that packet; `popup_attach` is withdrawn in favour of the
+-- window_get_content_rect
+   docs/design/pending/explorer/GUI_POPUPS.md:48: `window_get_content_rect(handle, out_rect)` (64). Owned popup creation uses
+   docs/design/pending/explorer/GUI_POPUPS.md:140: `window_get_content_rect` reads an owned window's current screen-space content
+   docs/design/pending/explorer/GUI_POPUPS_REVIEW.md:97: - `window_get_content_rect(handle, rect_t *)`: the content area's screen
+   docs/design/pending/explorer/GUI_POPUPS_REVIEW.md:410: - Owned create makes E1K-O's third call `window_get_content_rect` the only
+
+== No new superlative claims.

@@ -711,6 +711,9 @@ typedef enum os64_shutdown_mode
 // Owner-set minimum content dimensions; see os64/gui.h.
 #define SYSCALL_GUI_WINDOW_SET_MIN_SIZE 57
 #define SYSCALL_GUI_WINDOW_FOCUS 62
+// Any-window readiness and content-origin snapshot; see os64/gui.h.
+#define SYSCALL_GUI_EVENT_WAIT_ANY 63
+#define SYSCALL_GUI_WINDOW_GET_CONTENT_RECT 64
 
 // Owner-task notification: arg0 = window handle, arg1 = nonzero uint32 mask.
 // Bits coalesce outside the input ring; see os64/gui.h.

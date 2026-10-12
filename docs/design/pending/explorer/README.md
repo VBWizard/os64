@@ -22,21 +22,20 @@ Updated: 2026-10-11.
   following established contracts or ordinary userland work (D012).
 - Native popups extending beyond their owner window are selected (D013).
   [E1K's revised GUI design](GUI_POPUPS.md) adopts Fable's smaller owned-window
-  architecture; [disposition](GUI_POPUPS_DISPOSITION.md) records two focused
-  follow-up questions (D014).
-- [E1](E01_MENUS.md) and [E2](E02_ICONS.md) detailed drafts now exist. E1A's
-  [action/status handoff](E01A_HANDOFF.md) is ready for ordinary code review from Sol on
-  `codex/explorer-e01a`; this review changes none of its API requirements.
-- Umbrella design and 15-slice roadmap written; E1A is under ordinary review in [PR #254](https://github.com/VBWizard/os64/pull/254).
-- Design branch: `codex/explorer-design`, based on `userland` at `f3f5f50e`.
-- Initial design commit: `337f4744`. Organization records follow on that branch.
-- Local worktree: `.worktrees/explorer-design` under the repository root.
-- No design PR has been opened. This local design checkpoint includes the
-  2026-10-11 decisions and detailed packets; inspect git status/log for its
-  commit state. Publication and integration are still pending, so it is not
-  yet available on `userland`.
-- Next work: close E1K R1/R2 with Fable, review Sol's E1A,
-  and choose E2's visual family with Chris. Native implementation is unassigned.
+  architecture. His second review closes R1/R2; D015 records the implementation
+  refinements and [E1K handoff](E01K_HANDOFF.md) fixes the public API.
+- E1A is accepted: PR #254 merged as `c6cc6e3c`; gallery relocation
+  `2bc9f2f4` is on `userland`. Chris confirmed the P5 test complete.
+  Launch the diagnostic as `/tests/actiongallery`.
+- Current work: Quinn has implemented E1K in `codex/explorer-e1k`, based on
+  `2bc9f2f4`, at `.worktrees/explorer-e1k`. Its [host/guest evidence](evidence/e01k/README.md) is recorded; ordinary
+  [PR #257](https://github.com/VBWizard/os64/pull/257), implementation `3fee1034`,
+  targets `userland`; review must finish before Sol starts E1B. Chris confirmed E1K validation in
+  QEMU and on the P5 after the readiness-test fix. E1C follows E1B.
+- The initial design branch is historical; its documentation snapshot
+  `d33e651e` arrived through E1A. This branch carries the second-review follow-up.
+- E2's visual family remains a separate choice with Chris; E6 still needs its
+  standalone channel design and Fable review.
 
 ## Read in this order
 
@@ -46,7 +45,7 @@ Updated: 2026-10-11.
 3. [Decision log](DECISIONS.md): accepted requirements, proposed engineering
    choices and unresolved decisions. A proposal is not customer approval.
 4. The active slice's record: [E1](E01_MENUS.md), its active
-   [E1A packet](E01A_HANDOFF.md), or [E2](E02_ICONS.md). New slices use the
+   [E1K packet](E01K_HANDOFF.md), or [E2](E02_ICONS.md). New slices use the
    [slice template](SLICE_TEMPLATE.md).
 5. [Session log](SESSION_LOG.md) when the reasoning or evidence behind a change
    is needed. It is history, not the source of current status.
@@ -58,7 +57,7 @@ Create slice records when work begins, rather than maintaining 15 empty designs.
 
 | ID | Slice | State | Owner | Record / PR / implementation commit | Acceptance evidence |
 | --- | --- | --- | --- | --- | --- |
-| E1 | Actions, menus and status | E1A awaiting ordinary review; native R1/R2 follow-up | Quinn (design), Sol (E1A) | [E1A](E01A_HANDOFF.md), [E1K](GUI_POPUPS.md); `bd86ce4f`, [PR #254](https://github.com/VBWizard/os64/pull/254); branch pushed | [E1A host/QEMU evidence](evidence/e01a/README.md), [R1 fixes](evidence/e01a/review-r1/README.md), [R2 fix](evidence/e01a/review-r2/README.md); Chris's OS checkout; re-review pending |
+| E1 | Actions, menus and status | E1A accepted; E1K reviewing; E1B waits | Quinn (E1K), Sol (E1A) | [E1A](E01A_HANDOFF.md), [E1K](E01K_HANDOFF.md); PR #254 merged `c6cc6e3c`, relocation `2bc9f2f4` | [E1A evidence](evidence/e01a/README.md) and review follow-ups; Chris reports P5 test complete |
 | E2 | Icon vocabulary | Designing — visual choice open | Quinn (design) | [E2 contract](E02_ICONS.md) | Dependency/allocation inspection; no runtime evidence |
 | E3 | Data view and selection | Planned | Unassigned | — | None |
 | E4 | Directory browser | Planned | Unassigned | — | None |

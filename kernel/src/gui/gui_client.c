@@ -44,6 +44,7 @@ _Static_assert(GUI_WINDOW_TITLE_UTF8 == OS64_GUI_WINDOW_TITLE_UTF8, "title encod
 _Static_assert(sizeof(rect_t) == 16, "rect_t drifted from the GUI ABI (os64/gui.h)");
 _Static_assert(sizeof(surface_t) == 24, "surface_t drifted from the GUI ABI (os64/gui.h)");
 _Static_assert(sizeof(input_event_t) == 32, "input_event_t drifted from the GUI ABI (os64/gui.h)");
+_Static_assert(__builtin_offsetof(input_event_t, focus.other_handle) == 6, "focus handle ABI");
 _Static_assert(__builtin_offsetof(input_event_t, doorbell.mask) == 4,
                "input_event_t doorbell moved — GUI ABI break");
 _Static_assert(__builtin_offsetof(input_event_t, key) == 4,
@@ -64,6 +65,9 @@ _Static_assert(OS64_GUI_MIN_CONTENT == GUI_MIN_CONTENT,
 // is plenty until real userland apps exist. Guarded by kGuiLock.
 #define GUI_MAX_WINDOWS 32
 static window_t *s_handles[GUI_MAX_WINDOWS];
+_Static_assert(GUI_MAX_WINDOWS <= UINT16_MAX, "focus handle field capacity");
+_Static_assert(GUI_ERR_BUSY == OS64_GUI_ERR_BUSY, "GUI busy ABI");
+_Static_assert(GUI_ERR_NOT_FOCUSED == OS64_GUI_ERR_NOT_FOCUSED, "GUI focus refusal ABI");
 
 // The calling task's identity, for ownership. Client calls only ever arrive
 // from scheduled thread context — never from ISRs (invariant 4) — so CLS
@@ -203,11 +207,40 @@ int64_t gui_window_create(const char *title, int32_t x, int32_t y,
 		printd(DEBUG_GUI, "gui: window_create refused — DESKTOP and PINNED are contradictory\n");
 		return GUI_ERR_BAD_ARGS;
 	}
+    bool popup_capacity = (flags & OS64_GUI_CREATE_POPUP_CAPACITY) != 0;
+    if (popup_capacity &&
+        (create_flags & (GUI_WINDOW_NO_DECORATIONS | GUI_WINDOW_PINNED)) !=
+        (GUI_WINDOW_NO_DECORATIONS | GUI_WINDOW_PINNED)) return GUI_ERR_BAD_ARGS;
+    uint16_t parent_handle = (uint16_t)((flags & OS64_GUI_CREATE_OWNER_MASK) >> OS64_GUI_CREATE_OWNER_SHIFT);
+    uint32_t parent_id = 0;
+    int64_t failure = GUI_ERR_NO_RESOURCES;
+    if (parent_handle) {
+        if ((create_flags & (GUI_WINDOW_NO_DECORATIONS | GUI_WINDOW_PINNED)) !=
+            (GUI_WINDOW_NO_DECORATIONS | GUI_WINDOW_PINNED) ||
+            (create_flags & GUI_WINDOW_START_UNFOCUSED)) return GUI_ERR_BAD_ARGS;
+        uint64_t lock = spinlock_acquire_irqsave(&kGuiLock);
+        int64_t err;
+        window_t *parent = handle_lookup_owned(parent_handle, &err);
+        if (parent) {
+            parent_id = parent->id;
+            err = (wm_focused() == parent && !parent->retiring) ? 0 : GUI_ERR_NOT_FOCUSED;
+        }
+        spinlock_release_irqrestore(&kGuiLock, lock);
+        if (err) return err;
+    }
 	bool content_size=(flags & OS64_GUI_CREATE_CONTENT_SIZE)!=0;
 	uint64_t sizing_flags=spinlock_acquire_irqsave(&kGuiLock);
 	os64_decor_insets_t insets=wm_decoration_insets(create_flags);
 	int32_t content_w=(int32_t)w-(content_size?0:insets.left+insets.right);
 	int32_t content_h=(int32_t)h-(content_size?0:insets.top+insets.bottom);
+    // Match fitted popup capacity in the off-lock task allocation to birth.
+    if (content_size && (flags & OS64_GUI_CREATE_FIT_SCREEN)) {
+        int32_t max_w = (int32_t)kFrameBuffer.width-insets.left-insets.right;
+        int32_t max_h = (int32_t)kFrameBuffer.height-insets.top-insets.bottom;
+        if (content_w > max_w) content_w = max_w;
+        if (content_h > max_h) content_h = max_h;
+        w = (uint32_t)content_w; h = (uint32_t)content_h;
+    }
 	spinlock_release_irqrestore(&kGuiLock,sizing_flags);
 	if (content_w < GUI_MIN_CONTENT || content_h < GUI_MIN_CONTENT)
 		return GUI_ERR_BAD_ARGS;
@@ -245,7 +278,7 @@ int64_t gui_window_create(const char *title, int32_t x, int32_t y,
 	// drift apart, which matters because a canvas smaller than the content it
 	// is snapshotted into would be a buffer overrun with a view of the screen.
 	uint32_t cap_w = 0, cap_h = 0;
-	wm_canvas_capacity_for(content_w, content_h, &cap_w, &cap_h);
+	wm_canvas_capacity_for(content_w, content_h, popup_capacity, &cap_w, &cap_h);
 
 	uint64_t canvas_phys = 0;
 	uintptr_t canvas_va = 0;
@@ -311,14 +344,18 @@ int64_t gui_window_create(const char *title, int32_t x, int32_t y,
 		goto undo_pivot;
 	}
 
-	// The owner rides into wm_create rather than being stamped after it:
-	// the birth focus grab inside reports "is the newcomer a sibling?" to
-	// the window losing focus, so ownership must be known before it — the
-	// grab is where the wm_ layer compares owners. What ownership MEANS
-	// beyond that bit is still a client-API concept. Whoever asked, owns —
-	// and their exit path (gui_task_destroy_windows) will collect.
-	window_t *win = wm_create(title, (rect_t){x, y, (int32_t)w, (int32_t)h},
-	                          create_flags, gui_current_task_id());
+    if (parent_handle) {
+        int64_t err;
+        window_t *parent = handle_lookup_owned(parent_handle, &err);
+        if (!parent || parent->id != parent_id || parent->retiring || wm_focused() != parent) {
+            failure = !parent ? err : GUI_ERR_NOT_FOCUSED;
+            spinlock_release_irqrestore(&kGuiLock, irqflags);
+            goto undo_pivot;
+        }
+    }
+    // Identity and association precede birth focus delivery in this lock hold.
+    window_t *win = wm_create(title, (rect_t){x, y, (int32_t)w, (int32_t)h},
+                              create_flags, gui_current_task_id(), (uint16_t)handle, parent_id, popup_capacity);
 	if (!win) {
 		spinlock_release_irqrestore(&kGuiLock, irqflags);
 		goto undo_pivot;
@@ -372,7 +409,7 @@ undo_pivot:
 	// narrow too, and it was a kernel panic. Routed here rather than fixed in
 	// place so the next person to free a canvas cannot get it wrong.
 	canvas_pages_release(task, canvas_va, canvas_bytes, canvas_phys);
-	return GUI_ERR_NO_RESOURCES;
+	return failure;
 }
 
 // Future syscall: SYSCALL_GUI_WINDOW_DESTROY (17), user_ptr_mask 0.
@@ -385,6 +422,12 @@ int64_t gui_window_destroy(int64_t handle)
 		spinlock_release_irqrestore(&kGuiLock, irqflags);
 		return err;
 	}
+    for (unsigned i = 0; i < GUI_MAX_WINDOWS; ++i) {
+        if (s_handles[i] && s_handles[i]->popup_owner_id == win->id) {
+            spinlock_release_irqrestore(&kGuiLock, irqflags);
+            return GUI_ERR_BUSY;
+        }
+    }
 	s_handles[handle - 1] = NULL;
 	// The owner check above means the CALLER's address space is where a
 	// task-backed canvas lives — release it through the caller's own pml4v
@@ -665,6 +708,11 @@ int64_t gui_event_wait(int64_t handle, input_event_t *out)
 			return GUI_ERR_INTERRUPTED;
 		}
 
+        if (win->waiter && win->waiter != self) {
+            spinlock_release_irqrestore(&kGuiLock, irqflags);
+            return GUI_ERR_BUSY;
+        }
+
 		if (out ? wm_pop_event(win, out) : wm_has_event(win)) {
 			if (win->waiter == self)
 				win->waiter = NULL;
@@ -683,12 +731,62 @@ int64_t gui_event_wait(int64_t handle, input_event_t *out)
 	}
 }
 
-// The task-exit sweep — contract in compositor.h. NOT a client call and
-// never dispatched as a syscall: task.c invokes it on the way out, so a
-// task cannot decline its own cleanup any more than it can decline
-// handle_close_all. This is the enforcement half of the ownership rule;
-// the checks above are merely the courtesy half.
-// Alt+F4's second press (2026-08-23): the close REQUEST went unanswered, so
+int64_t gui_event_wait_any(int64_t *out_handle)
+{
+    if (!kEnableGUI) return GUI_ERR_NOT_RUNNING;
+    core_local_storage_t *cls = get_core_local_storage();
+    thread_t *self = cls ? cls->currentThread : NULL;
+    if (!self || !out_handle) return GUI_ERR_BAD_ARGS;
+    const uint64_t owner = gui_current_task_id();
+    for (;;) {
+        uint64_t irqflags = spinlock_acquire_irqsave(&kGuiLock);
+        unsigned count = 0;
+        bool busy = false;
+        // Cleanup covers the whole table even if a former selected slot died.
+        for (unsigned i = 0; i < GUI_MAX_WINDOWS; ++i) {
+            window_t *w = s_handles[i];
+            if (!w) continue;
+            if (w->waiter == self) w->waiter = NULL;
+            if (w->owner != owner) continue;
+            ++count;
+            if (w->waiter) busy = true;
+        }
+        int64_t rc = signal_park_must_end(self) ? GUI_ERR_INTERRUPTED :
+                     !count ? GUI_ERR_INVALID_HANDLE : busy ? GUI_ERR_BUSY : 0;
+        if (rc) {
+            spinlock_release_irqrestore(&kGuiLock, irqflags);
+            return rc;
+        }
+        for (unsigned n = 0; n < GUI_MAX_WINDOWS; ++n) {
+            unsigned i = (self->gui_wait_cursor + n) % GUI_MAX_WINDOWS;
+            window_t *w = s_handles[i];
+            if (w && w->owner == owner && wm_has_event(w)) {
+                *out_handle = (int64_t)i + 1;
+                self->gui_wait_cursor = (i + 1) % GUI_MAX_WINDOWS;
+                spinlock_release_irqrestore(&kGuiLock, irqflags);
+                return 1;
+            }
+        }
+        for (unsigned i = 0; i < GUI_MAX_WINDOWS; ++i)
+            if (s_handles[i] && s_handles[i]->owner == owner)
+                s_handles[i]->waiter = self;
+        spinlock_release_irqrestore(&kGuiLock, irqflags);
+        signal_raise(SIGSLEEP, kTicksSinceStart + GUI_EVENT_WAIT_BACKSTOP_TICKS, self);
+    }
+}
+
+int64_t gui_window_get_content_rect(int64_t handle, rect_t *out)
+{
+    if (!out) return GUI_ERR_BAD_ARGS;
+    int64_t err;
+    uint64_t irqflags = spinlock_acquire_irqsave(&kGuiLock);
+    window_t *win = handle_lookup_owned(handle, &err);
+    if (win) *out = wm_content_rect_on_screen(win);
+    spinlock_release_irqrestore(&kGuiLock, irqflags);
+    return win ? 0 : err;
+}
+
+// For a window without a popup owner, Alt+F4 can escalate an unanswered close:
 // the owner is told to stop the way `kill` would tell it — SIGTERM, which a
 // program may still catch to say goodbye. The window itself is never
 // destroyed from here: it dies in the task's own exit path with everything
@@ -717,6 +815,11 @@ void gui_window_terminate_owner(uint64_t owner)
 	printd(DEBUG_GUI, "gui: close escalation — no task %lu (already gone)\n", owner);
 }
 
+// The task-exit sweep — contract in compositor.h. NOT a client call and
+// never dispatched as a syscall: task.c invokes it on the way out, so a
+// task cannot decline its own cleanup any more than it can decline
+// handle_close_all. This is the enforcement half of the ownership rule;
+// the checks above are merely the courtesy half.
 void gui_task_destroy_windows(struct task *t)
 {
 	// taskID 0 is the not-a-task sentinel gui_current_task_id() returns
@@ -726,6 +829,11 @@ void gui_task_destroy_windows(struct task *t)
 		return;
 
 	uint64_t irqflags = spinlock_acquire_irqsave(&kGuiLock);
+    // Exclude the whole exiting family before any focus succession runs.
+    for (unsigned i = 0; i < GUI_MAX_WINDOWS; ++i) {
+        if (s_handles[i] && s_handles[i]->owner == t->taskID)
+            s_handles[i]->retiring = true;
+    }
 	for (int i = 0; i < GUI_MAX_WINDOWS; i++) {
 		window_t *win = s_handles[i];
 		if (win == NULL || win->owner != t->taskID)

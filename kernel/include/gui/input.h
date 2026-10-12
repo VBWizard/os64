@@ -40,8 +40,9 @@ typedef enum input_event_type
     // to go away (Alt+F4). It is a REQUEST, delivered to the owner, because
     // the window is the app's — an editor with unsaved work gets to say so.
     // The window system never closes a window itself; what it does if the
-    // request is ignored is escalate (Alt+F4 again = SIGTERM to the owner),
-    // which is the app's business to avoid by answering the first one.
+    // request is ignored is escalate (Alt+F4 again = SIGTERM to the task)
+    // for windows without a popup owner. Owned popups repeat the request
+    // without risking the document in their task.
     INPUT_EVENT_WINDOW_CLOSE,
     // Synthesized (2026-08-25, the root-menu slice): keyboard focus arrived
     // at, or left, this window. GRAPHICS.md § Event delivery had already
@@ -62,6 +63,7 @@ typedef enum input_event_type
     INPUT_EVENT_MOUSE_WHEEL,
     INPUT_EVENT_DOORBELL,
     INPUT_EVENT_SETTINGS,
+    INPUT_EVENT_INPUT_LOST,
 } input_event_type_t;
 
 _Static_assert(INPUT_EVENT_WINDOW_RESIZE    == OS64_GUI_EVENT_WINDOW_RESIZE,    "event ABI: resize");
@@ -74,6 +76,7 @@ _Static_assert(INPUT_EVENT_POINTER_STATE == OS64_GUI_EVENT_POINTER_STATE, "event
 _Static_assert(INPUT_EVENT_APPEARANCE == OS64_GUI_EVENT_APPEARANCE, "event ABI: appearance");
 _Static_assert(INPUT_EVENT_MOUSE_WHEEL == OS64_GUI_EVENT_MOUSE_WHEEL, "event ABI: wheel");
 _Static_assert(INPUT_EVENT_SETTINGS == OS64_GUI_EVENT_SETTINGS, "event ABI: settings");
+_Static_assert(INPUT_EVENT_INPUT_LOST == OS64_GUI_EVENT_INPUT_LOST, "event ABI: input loss");
 _Static_assert(INPUT_EVENT_DOORBELL == OS64_GUI_EVENT_DOORBELL, "event ABI: doorbell");
 
 // Mouse button bit positions (in `buttons`, and named in `button` for the
@@ -119,6 +122,7 @@ typedef struct input_event
         struct {
             uint8_t gained;     // 1 = focus arrived here, 0 = it left
             uint8_t sibling;    // 1 = the other window is owned by the same task
+            uint16_t other_handle; // same-task party at delivery; 0 otherwise
         } focus;
         struct {
             int32_t x, y;
@@ -132,7 +136,7 @@ typedef struct input_event
             uint32_t mask;
         } doorbell;
     };
-    uint64_t tick;  // kTicksSinceStart at enqueue, for input latency debugging
+    uint64_t tick;  // enqueue ticks; zero for synthesized INPUT_LOST
 } input_event_t;
 
 // Called by gui_start(). Before this, GUI events are discarded; text-VT

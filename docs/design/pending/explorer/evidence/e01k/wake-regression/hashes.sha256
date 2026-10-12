@@ -1,0 +1,4 @@
+6b138dbdc50e560eaeceb2b9bc6df1da9e87c934e053b93fac18b735d210a95b  userland/tests/popuptest/popuptest.c
+ad60a5367e450d14266c96dc2256ab19c823720bca43ddd53cb13d1cf743efb3  userland/bin/tests/popuptest
+a44b1e740c451498b6e393fb459f5f396cd44fa0d8906c5e5bfe4fdb22b80a7b  kernel/bin/os64_kernel
+1486f189ea7ee8f3ac7a31172571bc3cc8e17dc45d86a8f3dc49645fe48a0ce9  userland/bin/libos64.so

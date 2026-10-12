@@ -11,6 +11,7 @@ extern bool fail_alloc;
 void appearance_session_contracts(void);
 void font_page_install_contracts(void);
 void appearance_customizer_contracts(void);
+void gterm_input_loss_contracts(void);
 void controlcenter_layout_contracts(void);
 void mouse_settings_ui_contracts(void);
 
@@ -354,10 +355,7 @@ static void queue_preserves_final_pointer(void)
     ev.pointer.inside = 0;
     assert(gui_event_queue_push(&q, &ev) == 1);
     input_event_t out;
-    for (uint32_t i = 0; i < GUI_WINDOW_EVENTS_MAX - 1; ++i) {
-        assert(gui_event_queue_pop(&q, &out));
-        assert(out.type == INPUT_EVENT_MOUSE_MOVE && out.mouse.x == (int)i);
-    }
+    assert(gui_event_queue_pop(&q, &out) && out.type == INPUT_EVENT_INPUT_LOST);
     assert(gui_event_queue_pending(&q));
     assert(gui_event_queue_pop(&q, &out));
     assert(out.type == INPUT_EVENT_POINTER_STATE && !out.pointer.inside);
@@ -368,14 +366,14 @@ static void queue_preserves_final_pointer(void)
     gui_event_queue_push(&q, &ev);
     assert(gui_event_queue_pop(&q, &out) && out.pointer.inside);
     assert(out.pointer.x == 27 && out.pointer.y == 83);
-    // Preserve focus's existing overflow policy through ring wrap-around.
+    // Focus survives an eviction; queued gestures are discarded on loss.
     ev.type = INPUT_EVENT_KEY_DOWN;
     for (uint32_t i = 0; i < GUI_WINDOW_EVENTS_MAX - 1; ++i)
         assert(gui_event_queue_push(&q, &ev) == 1);
     ev.type = INPUT_EVENT_WINDOW_FOCUS;
     assert(gui_event_queue_push(&q, &ev) == 2);
-    for (uint32_t i = 0; i < GUI_WINDOW_EVENTS_MAX - 1; ++i)
-        assert(gui_event_queue_pop(&q, &out));
+    assert(gui_event_queue_pop(&q, &out) && out.type == INPUT_EVENT_INPUT_LOST);
+    assert(gui_event_queue_pop(&q, &out));
     assert(out.type == INPUT_EVENT_WINDOW_FOCUS && !gui_event_queue_pending(&q));
 }
 
@@ -389,9 +387,9 @@ static void record_doorbell(os64_ui_t *ui, const os64_gui_event_t *event)
 static void doorbell_contracts(void)
 {
     gui_event_queue_t q = {0};
-    input_event_t ev = {.type = INPUT_EVENT_KEY_DOWN}, out;
+    input_event_t ev = {.type = INPUT_EVENT_WINDOW_RESIZE}, out;
     for (unsigned i = 0; i < GUI_WINDOW_EVENTS_MAX - 1; ++i) {
-        ev.key.scancode = (uint8_t)i;
+        ev.resize.w = (int32_t)i;
         assert(gui_event_queue_push(&q, &ev) == 1);
     }
     assert(gui_event_queue_push(&q, &ev) == 0);
@@ -402,12 +400,13 @@ static void doorbell_contracts(void)
     }
     assert(gui_event_queue_pop(&q, &out));
     assert(out.type == INPUT_EVENT_DOORBELL && out.doorbell.mask == 7 && out.tick == 999);
+    assert(gui_event_queue_pop(&q, &out) && out.type == INPUT_EVENT_INPUT_LOST);
     // Keep ringing while input drains: neither channel may starve the other.
     for (unsigned i = 0; i < GUI_WINDOW_EVENTS_MAX - 1; ++i) {
         ev.doorbell.mask = 0x80000000u;
         assert(gui_event_queue_push(&q, &ev) == 1);
         assert(gui_event_queue_pop(&q, &out));
-        assert(out.type == INPUT_EVENT_KEY_DOWN && out.key.scancode == i);
+        assert(out.type == INPUT_EVENT_WINDOW_RESIZE && out.resize.w == (int32_t)i);
         assert(gui_event_queue_pending(&q));
         assert(gui_event_queue_pop(&q, &out));
         assert(out.type == INPUT_EVENT_DOORBELL && out.doorbell.mask == 0x80000000u);
@@ -815,6 +814,7 @@ int main(void)
     font_page_install_contracts();
     appearance_session_contracts();
     appearance_customizer_contracts();
+    gterm_input_loss_contracts();
     controlcenter_layout_contracts();
     mouse_settings_ui_contracts();
     palettes_preserve_composition();
