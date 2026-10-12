@@ -354,6 +354,7 @@ static bool rec_through_open(void *ctx, os64_gui_rect_t bounds, const double m[6
     out(&rec->out, "through %d %d %d %d", bounds.x, bounds.y, bounds.w, bounds.h);
     for (int i = 0; i < 6; i++) {
         double v = m[i] * 1000;
+        v = v < -9e18 ? -9e18 : v > 9e18 ? 9e18 : v;
         out(&rec->out, " %lld", (long long)(v < 0 ? v - 0.5 : v + 0.5));
     }
     out(&rec->out, " clip %d %d %d %d\n", clip.x, clip.y, clip.w, clip.h);

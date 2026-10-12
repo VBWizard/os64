@@ -1053,7 +1053,8 @@ straight onto the backdrop at its S7a offset — upright, inside what
 clips it from outside, never missing. A group none of which can show is
 not painted at all. An opacity group inside opens on both sheets or on
 neither, so the two never disagree. The painter keeps 64 groups open;
-one deeper is painted where it was laid out.
+past that an opacity group is painted opaque, and a group drawn through
+its matrix not at all.
 
 ### Booked
 
@@ -1061,7 +1062,7 @@ one deeper is painted where it was laid out.
 |---|---|---|
 | A box scaled up softens | its surface is painted at its own size and stretched; Chrome paints at the scale | a page whose scaled-up text matters |
 | A control in a drawn-through box is drawn turned but edited upright | a live widget is drawn on the glass, not through a matrix | a page with a turned form |
-| A group the face refuses (past its sheet limits, out of memory) is drawn upright but hit through its matrix | libflow answers hits for the page as written; which groups a face refuses is decided at paint time, and only it knows | a page whose turned group passes the sheet limits and is clicked |
+| A group the face refuses (past its sheet limits, out of memory) is drawn upright but hit through its matrix; inside a group that was laid, it is cut by that group's sheet, sized for it turned | libflow answers hits and bounds for the page as written; which groups a face refuses is decided at paint time, and only it knows | a page whose turned group passes the sheet limits and is clicked, or is cut |
 | A sticky box, a scroll container's bars, or a fragment revealed inside a drawn-through box | each is worked against the page's viewport, which the box's own coordinates are not | a page that scrolls inside a turned box |
 | `perspective` and non-flat matrices | carried over from S7a | a page whose 3D card flip matters |
 | `background-clip: text` | its own slice, S7c, on these surfaces | S7c |

@@ -24,6 +24,9 @@ typedef struct {
         PaintGroupKind kind;
     } open[PAINT_GROUPS];
     int32_t depth;                  // may pass PAINT_GROUPS; those are not kept
+    // Past the deepest kept, a group drawn through its matrix is not painted
+    // at all: the depth it opened at, plus one, or 0.
+    int32_t hidden;
 } PaintGroups;
 
 typedef struct {
@@ -1313,7 +1316,7 @@ static bool is_frame(const flow_box_t *b)
 static void paint_box(void *ctx, const flow_box_t *b)
 {
     const Painter *outer = ctx;
-    if (b->style->visibility != FLOW_VISIBLE)
+    if (b->style->visibility != FLOW_VISIBLE || outer->groups->hidden != 0)
         return;
     // The box's own coordinates: a fixed one's view is the page's less the
     // scroll, a sticky one's less its push, and the painter's shift (a
@@ -1424,6 +1427,19 @@ static os64_gui_rect_t cut(os64_gui_rect_t r, os64_gui_rect_t c)
                              (int32_t)max64(0, y1 - y0)};
 }
 
+// `r` one pixel wider all round, held to what a rect can say.
+static os64_gui_rect_t widened(os64_gui_rect_t r)
+{
+    int64_t x0 = (int64_t)r.x - 1, y0 = (int64_t)r.y - 1;
+    int64_t x1 = (int64_t)r.x + r.w + 1, y1 = (int64_t)r.y + r.h + 1;
+    x0 = max64(x0, INT32_MIN / 2);
+    y0 = max64(y0, INT32_MIN / 2);
+    x1 = min64(x1, INT32_MAX / 2);
+    y1 = min64(y1, INT32_MAX / 2);
+    return (os64_gui_rect_t){(int32_t)x0, (int32_t)y0, (int32_t)max64(0, x1 - x0),
+                             (int32_t)max64(0, y1 - y0)};
+}
+
 static os64_gui_rect_t shifted(os64_gui_rect_t r, flow_point_t by)
 {
     return (os64_gui_rect_t){(int32_t)((int64_t)r.x + by.x), (int32_t)((int64_t)r.y + by.y), r.w,
@@ -1446,15 +1462,22 @@ static bool opacity_verbs(const Painter *p)
 // can show — out of view, or a matrix that collapses an axis — is not
 // painted at all. A face that cannot lay it (no verb, no memory) has it
 // drawn upright, where its origin goes, the shift taking every box there,
-// and under its opacity as an ordinary group. Past the deepest kept, a group asks
-// nothing of the verbs and moves nothing: drawn where it was laid out.
+// and under its opacity as an ordinary group. Past the deepest kept, an
+// opacity group asks nothing of the verbs and is drawn opaque where it is,
+// and a group drawn through its matrix is not painted at all: nothing
+// remembers where to put it back, and the walk culled it for the turned
+// and the upright drawings, not this one.
 static void group_open(void *ctx, const flow_box_t *box, os64_gui_rect_t bounds)
 {
     Painter *p = ctx;
     PaintGroups *gs = p->groups;
     int32_t d = gs->depth++;
     if (d >= PAINT_GROUPS) {
-        if (!flow_box_through(box, p->scroll, (double[6]){0}, NULL, NULL) && opacity_verbs(p))
+        if (gs->hidden != 0)
+            return;
+        if (flow_box_through(box, p->scroll, (double[6]){0}, NULL, NULL))
+            gs->hidden = d + 1;
+        else if (opacity_verbs(p))
             p->v->group_open(p->v->ctx, cut(shifted(bounds, p->shift), p->view));
         return;
     }
@@ -1479,7 +1502,7 @@ static void group_open(void *ctx, const flow_box_t *box, os64_gui_rect_t bounds)
         }
         // What shows, one pixel wider all round: a bilinear sample at the
         // edge of the clip mixes the source pixel beyond it.
-        own = cut(bounds, (os64_gui_rect_t){back.x - 1, back.y - 1, back.w + 2, back.h + 2});
+        own = cut(bounds, widened(back));
         if (p->v->through_open != NULL && p->v->through_close != NULL &&
             p->v->through_open(p->v->ctx, own, m, clip)) {
             gs->open[d].kind = G_THROUGH;
@@ -1511,6 +1534,11 @@ static void group_close(void *ctx, const flow_box_t *box)
     int32_t d = --gs->depth;
     uint8_t alpha = (uint8_t)(((uint32_t)box->style->opacity * 255 + 500) / 1000);
     if (d >= PAINT_GROUPS) {
+        if (gs->hidden != 0) {
+            if (gs->hidden == d + 1)
+                gs->hidden = 0;
+            return;
+        }
         if (!flow_box_through(box, p->scroll, (double[6]){0}, NULL, NULL) && opacity_verbs(p))
             p->v->group_close(p->v->ctx, alpha);
         return;

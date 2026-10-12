@@ -785,8 +785,10 @@ static void tree_lines(Buf *b, const flow_box_t *box, int32_t depth)
     if (own != NULL && own->kind == F_FRAME_TRANSFORM) {
         if (own->through) {
             puts_(b, " through");
+            // Held to what a long long can say: scale(1e20) is finite.
             for (int i = 0; i < 6; i++) {
                 double v = own->affine[i] * 1000;
+                v = v < -9e18 ? -9e18 : v > 9e18 ? 9e18 : v;
                 putf(b, " %lld", (long long)(v < 0 ? v - 0.5 : v + 0.5));
             }
         } else {

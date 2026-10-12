@@ -29,6 +29,7 @@ INTERNAL = 'userland/libflow/internal.h'
 STYLE = 'userland/libflow/style.c'
 BOXES = 'userland/libflow/boxes.c'
 PAINT = 'userland/apps/yonder/paint.c'
+DUMP = 'userland/libflow/dump.c'
 LAYOUT = 'userland/libflow/layout.c'
 FLOW = 'userland/libflow/flow.c'
 CASES = 'bash tools/test_libflow_host.sh --transforms && bash tools/test_yonder_host.sh'
@@ -164,13 +165,22 @@ mutants = [
      '        p->view = clip;\n        p->shift.x += upright.x;',
      '        p->shift.x += upright.x;'),
     ('a-sheet-is-cut-at-the-clip', PAINT,
-     '        own = cut(bounds, (os64_gui_rect_t){back.x - 1, back.y - 1, back.w + 2, back.h + 2});',
-     '        own = cut(bounds, back);'),
+     '        own = cut(bounds, widened(back));',
+     '        own = cut(bounds, back.w > 0 ? back : widened(back));'),
     ('offsets-move-with-a-transform', FLOW,
      '                   : m->untransformed || s->through ? (flow_point_t){0, 0}',
      '                   : s->through ? (flow_point_t){0, 0}'),
     ('group-bounds-count-clipped-overflow', FLOW,
      '            if (l->box->clipped)\n                at = meet(at, flow_box_doc_clip(l->box, scroll));\n',
+     ''),
+    ('a-turn-past-the-cap-is-painted-unmoved', PAINT,
+     '        if (flow_box_through(box, p->scroll, (double[6]){0}, NULL, NULL))\n            gs->hidden = d + 1;\n        else if (opacity_verbs(p))',
+     '        if (false)\n            gs->hidden = d + 1;\n        else if (!flow_box_through(box, p->scroll, (double[6]){0}, NULL, NULL) && opacity_verbs(p))'),
+    ('the-sheet-edge-overflows', PAINT,
+     '        own = cut(bounds, widened(back));',
+     '        own = cut(bounds, (os64_gui_rect_t){back.x - 1, back.y - 1, back.w + 2, back.h + 2 + 0 * widened(back).w});'),
+    ('a-huge-matrix-is-dumped-unheld', DUMP,
+     '                v = v < -9e18 ? -9e18 : v > 9e18 ? 9e18 : v;\n',
      ''),
     ('inside-a-laid-turn-the-view-is-the-page', PAINT,
      '            p->view = own;',

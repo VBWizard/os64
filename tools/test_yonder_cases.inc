@@ -619,6 +619,40 @@ static void paint_cases(void)
                     "fill 0 0 200 100 #fefefe\n"
                     "fill 0 40 20 10 #00ff00\n");
     s_through_refused = false;
+    // A scale near zero (1e-11, still above what cannot be undone) takes
+    // the view back past both of a rect's limits, as wide as one can say;
+    // its edge pixel is added without overflowing, and the box is laid
+    // through, not dropped upright.
+    paint_page_case("a block scaled near zero is laid through",
+                    "<!doctype html><style>body { margin: 0 } .t { width: 100px; height: 20px;"
+                    " background: #00ff00; transform: scaleX(1e-11) }</style><div class=t></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "through 0 0 100 20 0 0 0 1000 50000 0 clip 0 0 200 100\n"
+                    "fill 0 0 100 20 #00ff00\n"
+                    "end through 255\n");
+    // Past the painter's 64 open groups, a turned box is not painted.
+    {
+        static char deep[8192];
+        size_t at = 0;
+        at += (size_t)snprintf(deep + at, sizeof(deep) - at,
+                               "<!doctype html><style>body { margin: 0 } i { display: block;"
+                               " opacity: 0.99 } .t { width: 100px; height: 20px;"
+                               " background: #00ff00; transform: rotate(90deg) }</style>");
+        for (int k = 0; k < 64; k++)
+            at += (size_t)snprintf(deep + at, sizeof(deep) - at, "<i>");
+        snprintf(deep + at, sizeof(deep) - at, "<div class=t></div>");
+        // 64 groups, each holding the turned box's bounds taken out: 40 to
+        // 60 across and -40 to 60 down, cut to the view.
+        static char want[8192];
+        size_t w = (size_t)snprintf(want, sizeof(want), "fill 0 0 200 100 #fefefe\n");
+        for (int k = 0; k < 64; k++)
+            w += (size_t)snprintf(want + w, sizeof(want) - w, "group 0 0 200 60\n");
+        for (int k = 0; k < 64; k++)
+            w += (size_t)snprintf(want + w, sizeof(want) - w, "end group 252\n");
+        paint_page_case("a turned block past the deepest kept group is not painted", deep, 200,
+                        (os64_gui_rect_t){0, 0, 200, 100}, true, want);
+    }
     // Turned and translucent, it is one group, laid through at its alpha.
     paint_page_case("a turned translucent block is one group, laid through at its alpha",
                     "<!doctype html><style>body { margin: 0 } .t { width: 100px; height: 20px;"

@@ -124,6 +124,16 @@ static void transform_layout_cases(void)
         "    block div 0 10 100 10 stacked through 1000 0 0 500 0 7500\n"
         "    block div 0 20 100 10 stacked transform 0 0 upright\n");
 
+    // A matrix may hold any finite number: scale(1e20) is dumped held to
+    // what the dump's integers can say, and reaches as far as a rect can.
+    cascade_layout_case("transform: a huge scale is dumped held",
+        XFORM_STYLE "div{width:100px;height:10px;transform:scale(1e20)}</style><div></div>", 400,
+        "page 1073741823 1073741823\n"
+        "block html 0 0 400 10\n"
+        "  block body 0 0 400 10\n"
+        "    block div 0 0 100 10 stacked through 9000000000000000000 0 0 9000000000000000000"
+        " -9000000000000000000 -9000000000000000000\n");
+
     // A scale written as a calc() of a percentage is that hundredth, in a
     // list and as the property: half about the centre (50, 5), 0.5x + 35
     // with the 20 halved; twice about (50, 15), the 10 doubled, reaching 25.
