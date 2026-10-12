@@ -207,6 +207,10 @@ int64_t gui_window_create(const char *title, int32_t x, int32_t y,
 		printd(DEBUG_GUI, "gui: window_create refused — DESKTOP and PINNED are contradictory\n");
 		return GUI_ERR_BAD_ARGS;
 	}
+    bool popup_capacity = (flags & OS64_GUI_CREATE_POPUP_CAPACITY) != 0;
+    if (popup_capacity &&
+        (create_flags & (GUI_WINDOW_NO_DECORATIONS | GUI_WINDOW_PINNED)) !=
+        (GUI_WINDOW_NO_DECORATIONS | GUI_WINDOW_PINNED)) return GUI_ERR_BAD_ARGS;
     uint16_t parent_handle = (uint16_t)((flags & OS64_GUI_CREATE_OWNER_MASK) >> OS64_GUI_CREATE_OWNER_SHIFT);
     uint32_t parent_id = 0;
     int64_t failure = GUI_ERR_NO_RESOURCES;
@@ -274,7 +278,7 @@ int64_t gui_window_create(const char *title, int32_t x, int32_t y,
 	// drift apart, which matters because a canvas smaller than the content it
 	// is snapshotted into would be a buffer overrun with a view of the screen.
 	uint32_t cap_w = 0, cap_h = 0;
-	wm_canvas_capacity_for(content_w, content_h, create_flags, &cap_w, &cap_h);
+	wm_canvas_capacity_for(content_w, content_h, popup_capacity, &cap_w, &cap_h);
 
 	uint64_t canvas_phys = 0;
 	uintptr_t canvas_va = 0;
@@ -351,7 +355,7 @@ int64_t gui_window_create(const char *title, int32_t x, int32_t y,
     }
     // Identity and association precede birth focus delivery in this lock hold.
     window_t *win = wm_create(title, (rect_t){x, y, (int32_t)w, (int32_t)h},
-                              create_flags, gui_current_task_id(), (uint16_t)handle, parent_id);
+                              create_flags, gui_current_task_id(), (uint16_t)handle, parent_id, popup_capacity);
 	if (!win) {
 		spinlock_release_irqrestore(&kGuiLock, irqflags);
 		goto undo_pivot;

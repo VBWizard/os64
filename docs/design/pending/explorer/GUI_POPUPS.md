@@ -153,11 +153,13 @@ before opening a child. A snapshot/create race can briefly show an old anchor;
 E1 does not promise atomic geometry across windows. Such stale placement must
 not authorize a command against a changed application target.
 
-For windows born POPUP, capacity is their initial content size. Ordinary windows
-keep `min(max(screen, content), wm_dim_max())`. Preserve stable canvas addresses
+The popup wrapper sets CREATE_POPUP_CAPACITY (bit 34), explicitly reserving
+initial content size. The hint requires NO_DECORATIONS | PINNED. Legacy windows
+with that flag combination, including gclock, omit the hint and retain
+ordinary capacity. Ordinary windows keep `min(max(screen, content), wm_dim_max())`. Preserve stable canvas addresses
 and pitch for a window's lifetime; shrinking then growing a popup within its
 birth capacity is legal. A larger menu uses a replacement window. Pass the
-same derived popup property/capacity policy to both `wm_create` and the task
+same explicit capacity policy to both `wm_create` and the task
 canvas allocation in `gui_window_create`; do not size only one buffer.
 
 Audit/create-time clamps, decoration races, default minimums exceeding a small

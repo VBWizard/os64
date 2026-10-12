@@ -16,7 +16,9 @@ foundation for E1B, not menu widgets or application IPC. Governing design:
 - Errors: BUSY = -7; NOT_FOCUSED = -8. Existing numbers remain unchanged.
 - Existing create: bits 48–63 carry a uint16_t owner handle, zero means unowned.
   Named inline owned-popup wrapper validates the full handle before packing;
-  requests NO_DECORATIONS | PINNED and content sizing. START_UNFOCUSED with
+  requests NO_DECORATIONS | PINNED, content sizing and CREATE_POPUP_CAPACITY
+  (bit 34). The capacity hint requires borderless + pinned; omit it for
+  resizable applications, including gclock. START_UNFOCUSED with
   an owner is BAD_ARGS. Other invalid flags retain the existing legacy policy.
 - Focus payload: uint8_t gained, uint8_t sibling, uint16_t other_handle; same
   32-byte event and existing offsets. Other handle is zero across tasks.
@@ -48,13 +50,15 @@ focus changes. Root launcher remains unowned and uses existing birth policy.
 
 A reset before replaying an old queued down is insufficient. On any ring drop
 or eviction, latch loss. Deliver INPUT_LOST after the existing appearance and
-eligible doorbell slots, before ring events. At that point remove pending
+eligible doorbell slots. The first loss precedes ring events; repeated loss
+yields to a retained control between notifications. On each pending loss remove
 key/mouse gesture records under the same lock; retain window/control records
 and coalesced state. Future input follows the reset. Window wait readiness
 includes the loss latch. libui cancels pressed/focused interaction and its key
 decoder; the action shortcut router resets held keys. Menu controllers dismiss
-on loss. Unconverted clients may ignore the new event but receive the same
-post-loss gesture-history truncation; they cannot rely on a full input stream.
+on loss. Direct consumers must reset their custom gestures too: gterm selection,
+Workshop's overlapping trees, Frame Studio preview capture, and Yonder's page
+presses, question bar and key decoders. grootmenu dismisses on loss.
 
 Reusable focus handles are delivery-time facts. E1B owns window lifecycle and
 dispatch on one UI thread. Mark destroyed handles as tombstones; forbid window
@@ -79,8 +83,9 @@ unrelated gesture. Cover this in the controller acceptance before E1B is Ready.
 
 ## Capacity and evidence
 
-POPUP capacity equals birth content dimensions in both surface stores and the
-task allocation; ordinary capacity is unchanged. Normalize popup minimums to
+CREATE_POPUP_CAPACITY explicitly selects birth content dimensions in both
+surface stores and the task allocation. The popup wrapper sets it for owned
+and unowned menus; legacy borderless/pinned windows retain ordinary capacity. Normalize popup minimums to
 fit that capacity. Resizes never remap the canvas; growth beyond birth capacity
 requires a replacement. Test narrow/small popup floors and clamped creation.
 
@@ -103,8 +108,11 @@ The [readiness regression fix](evidence/e01k/wake-regression/README.md) adds
 deterministic unrelated-event coverage; ten full QEMU runs passed 153 checks each.
 Chris subsequently confirmed validation in both QEMU and on the P5. This is
 user-reported acceptance of the corrected diagnostic; no additional run counts,
-logs or installed-binary hashes were supplied. Ordinary code review remains
-pending. Implementation commit `3fee1034` is pushed;
+logs or installed-binary hashes were supplied. First-review fixes add explicit
+popup capacity, overflow fairness and custom-consumer resets. Their host tests
+and two 159-check QEMU runs pass; same-process gclock font growth and manual
+resize were checked visually. Re-review and fresh P5 validation are pending.
+Implementation commit `3fee1034` is pushed;
 [PR #257](https://github.com/VBWizard/os64/pull/257) targets `userland`.
 
 E1B starts after the public contract, guest evidence and ordinary review are settled.

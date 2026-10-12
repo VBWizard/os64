@@ -211,6 +211,22 @@ static void full_table(void)
         while(n)CHECK(os64_gui_window_destroy(windows[--n])==0);
     }
 }
+static void resizable_borderless(void)
+{
+    CHECK(os64_gui_window_create_content("Invalid capacity",100,100,120,50,
+        OS64_GUI_CREATE_POPUP_CAPACITY)==OS64_GUI_ERR_BAD_ARGS);
+    // gclock can be born pinned and borderless, then grow for a larger
+    // Interface font. That combination alone must not cap its canvas.
+    int64_t w=os64_gui_window_create_content("Clock capacity",100,100,120,50,
+        OS64_GUI_WINDOW_NO_DECORATIONS | OS64_GUI_WINDOW_PINNED);
+    CHECK(w>0);if(w<=0)return;
+    os64_gui_surface_t before,after;
+    CHECK(os64_gui_window_get_surface(w,&before)==0);
+    CHECK(os64_gui_window_set_min_size(w,240,100)==0);
+    CHECK(os64_gui_window_get_surface(w,&after)==0 && after.width==240 && after.height==100 &&
+          after.pixels==before.pixels && after.pitch_px==before.pitch_px);
+    CHECK(os64_gui_window_destroy(w)==0);
+}
 static void paint(int64_t w,uint32_t color,const char *text)
 {
     os64_gui_surface_t s;if(os64_gui_window_get_surface(w,&s)<0)return;
@@ -309,7 +325,7 @@ int main(int argc,char **argv)
     waits(a,b);
     CHECK(os64_gui_window_destroy(b)==0 && os64_gui_window_destroy(a)==0);
     CHECK(os64_gui_event_wait_any(&ready)==OS64_GUI_ERR_INVALID_HANDLE);
-    teardown_wait();full_table();
+    teardown_wait();full_table();resizable_borderless();
     os64_printf("popuptest: %u checks, %u failures\n",checks,failures);
     return failures?1:0;
 }

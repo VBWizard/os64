@@ -51,6 +51,10 @@
 // With CONTENT_SIZE, clamp the requested content and position so its frame
 // fits the screen, using the same locked decoration snapshot as creation.
 #define OS64_GUI_CREATE_FIT_SCREEN (1ull << 33)
+// Opt in to a canvas reserved at birth content size, for borderless pinned
+// menus. Larger menus require a replacement window. Omit this for resizable
+// applications such as a pinned, borderless clock. Create-only, not readback.
+#define OS64_GUI_CREATE_POPUP_CAPACITY (1ull << 34)
 // An owned popup is born and focused atomically only while this same-task
 // parent remains focused. Zero retains unowned creation behavior. Owner bits
 // are create-only; readback flags do not contain them. START_UNFOCUSED with
@@ -124,7 +128,7 @@
 // corrected an earlier wording that had it wrong both ways):
 //
 //     ordinary capacity = min(max(screen, content), wm_dim_max())
-//     popup capacity = birth content dimensions
+//     CREATE_POPUP_CAPACITY = birth content dimensions
 //     wm_dim_max() = max(OS64_GUI_WINDOW_DIM_MAX, screen width, screen height)
 //
 // For ordinary windows: the screen, raised to the content if born larger, and
@@ -140,7 +144,7 @@
 // constant it may also ask up to the screen. This constant is what an app
 // may rely on WITHOUT asking the screen size. window.c asserts the WM's own
 // constant equals this one.
-// Popups reserve their birth content size; resizing preserves address/pitch
+// Popups created with the wrapper reserve birth size; resizing preserves address/pitch
 // but cannot grow past that capacity. Create a replacement for a larger menu.
 #define OS64_GUI_WINDOW_DIM_MAX   4096
 
@@ -297,8 +301,9 @@ typedef struct os64_gui_surface
 // Ordered input was dropped/evicted. Cancel pressed keys/buttons, drag state
 // and partial key decoding. Pending key/mouse records are discarded at this
 // notification, so pre-loss presses cannot re-arm clients after their reset.
-// Window/control records and coalesced state remain. Delivered before the next
-// ring event, after appearance and eligible doorbells; no payload.
+// Window/control records and coalesced state remain. The first loss precedes
+// ring events; repeated loss yields to a retained control between notices.
+// Appearance and eligible doorbells have priority; no payload.
 #define OS64_GUI_EVENT_INPUT_LOST       16
 _Static_assert(OS64_GUI_EVENT_INPUT_LOST == 16, "input-loss event ABI");
 _Static_assert(OS64_GUI_EVENT_MOUSE_WHEEL == 13, "wheel event ABI");
@@ -533,6 +538,7 @@ static inline int64_t os64_gui_popup_create(const char *title, int64_t owner,
 {
     if (owner < 0 || owner > UINT16_MAX) return OS64_GUI_ERR_INVALID_HANDLE;
     uint64_t flags = OS64_GUI_WINDOW_NO_DECORATIONS | OS64_GUI_WINDOW_PINNED |
+                     OS64_GUI_CREATE_POPUP_CAPACITY |
                      OS64_GUI_CREATE_CONTENT_SIZE | OS64_GUI_CREATE_FIT_SCREEN |
                      ((uint64_t)owner << OS64_GUI_CREATE_OWNER_SHIFT);
     return (int64_t)os64_syscall6(SYSCALL_GUI_WINDOW_CREATE, (uint64_t)title,

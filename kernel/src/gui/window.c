@@ -337,7 +337,7 @@ static bool at_band_top(const window_t *w)
 }
 
 window_t *wm_create(const char *title, rect_t frame, uint32_t flags, uint64_t owner,
-                    uint16_t client_handle, uint32_t popup_owner_id)
+                    uint16_t client_handle, uint32_t popup_owner_id, bool popup_capacity)
 {
 	// Content = frame minus chrome; refuse degenerate sizes rather than
 	// letting a 0-wide surface ripple NULLs through the compositor.
@@ -363,7 +363,7 @@ window_t *wm_create(const char *title, rect_t frame, uint32_t flags, uint64_t ow
 	// (for the task-backed canvas gui_window_create swaps in below) of any
 	// need to unmap a live user page. See canvas_cap_w's comment in window.h.
 	uint32_t cap_w, cap_h;
-	wm_canvas_capacity_for(content_w, content_h, flags, &cap_w, &cap_h);
+	wm_canvas_capacity_for(content_w, content_h, popup_capacity, &cap_w, &cap_h);
 	w->canvas_cap_w = cap_w;
 	w->canvas_cap_h = cap_h;
     if (w->min_content_w > cap_w) w->min_content_w = cap_w;
@@ -653,13 +653,11 @@ uint32_t wm_dim_max(void)
 	return m;
 }
 
-void wm_canvas_capacity_for(int32_t content_w, int32_t content_h, uint32_t flags,
+void wm_canvas_capacity_for(int32_t content_w, int32_t content_h, bool popup_capacity,
                             uint32_t *cap_w, uint32_t *cap_h)
 {
-    bool popup = (flags & (GUI_WINDOW_NO_DECORATIONS | GUI_WINDOW_PINNED)) ==
-                 (GUI_WINDOW_NO_DECORATIONS | GUI_WINDOW_PINNED);
-    uint32_t cw = popup ? (uint32_t)content_w : kFrameBuffer.width;
-    uint32_t ch = popup ? (uint32_t)content_h : kFrameBuffer.height;
+    uint32_t cw = popup_capacity ? (uint32_t)content_w : kFrameBuffer.width;
+    uint32_t ch = popup_capacity ? (uint32_t)content_h : kFrameBuffer.height;
 
 	// Never smaller than what the window already is, or the surface it is
 	// asked to hold would not fit its own reservation.

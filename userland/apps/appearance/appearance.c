@@ -1097,6 +1097,13 @@ static void paint(void)
 
 static void dispatch(const os64_gui_event_t *ev)
 {
+    if (ev->type == OS64_GUI_EVENT_INPUT_LOST) {
+        gPickerEditing = false;
+        os64_ui_dispatch(&gEditor, ev);
+        os64_ui_dispatch(&gPreview, ev);
+        os64_ui_dispatch(&gDialog, ev);
+        return;
+    }
     if (ev->type == OS64_GUI_EVENT_MOUSE_BUTTON_DOWN ||
         ev->type == OS64_GUI_EVENT_WINDOW_FOCUS ||
         ev->type == OS64_GUI_EVENT_WINDOW_RESIZE) gPickerEditing = false;

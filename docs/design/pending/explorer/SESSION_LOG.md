@@ -371,3 +371,20 @@ historical discussion; no new superlative comment claims were found.
 No runtime changes or additional test runs were needed for publication. Chris's
 QEMU/P5 acceptance and the ten 153-check QEMU runs remain the current evidence.
 Ordinary code review is pending; E1B remains the dependent next packet.
+
+## 2026-10-11 — PR #257 first review fixes
+
+Accepted all three findings: preserve resizable borderless/pinned consumers by
+making birth-size capacity an explicit create hint; give retained controls a
+turn between repeated loss notifications; reset custom interaction state in
+gterm and sibling consumers. The earlier claim that borderless + pinned alone
+was a sufficient capacity classification was wrong: gclock can grow on an
+Interface font change and via the WM resize chord.
+
+Updated the ABI/design handoff and added regressions. Host queue/appearance/
+consumer and Yonder tests pass with ASan, UBSan and leak detection; two QEMU
+runs pass 159 checks each. The same pinned/borderless gclock process follows a
+16-to-32px Interface change and then resizes through Ctrl+Alt+right-drag.
+[Round-1 evidence](evidence/e01k/README.md#pr-257-review-round-1--2026-10-11)
+records results, screenshots, limits and build hashes. P5 revalidation and
+ordinary re-review remain pending.

@@ -816,10 +816,12 @@ int main(int argc,char **argv)
     os64_ui_paint(&ui);
     while(!ui.quit){os64_gui_event_t event;if(os64_gui_event_wait(win,&event)!=1)break;
         do{
-            if(event.type==OS64_GUI_EVENT_MOUSE_BUTTON_DOWN || event.type==OS64_GUI_EVENT_KEY_UP)edit_group=NULL;
+            if(event.type==OS64_GUI_EVENT_INPUT_LOST || event.type==OS64_GUI_EVENT_MOUSE_BUTTON_DOWN ||
+               event.type==OS64_GUI_EVENT_KEY_UP)edit_group=NULL;
             if(event.type==OS64_GUI_EVENT_MOUSE_MOVE && ui.grab!=&stage && !close_pending)
                 (void)sample_event(&stage,&ui,&event);
             if((event.type==OS64_GUI_EVENT_WINDOW_FOCUS && !event.focus.gained) ||
+                event.type==OS64_GUI_EVENT_INPUT_LOST ||
                 event.type==OS64_GUI_EVENT_WINDOW_COVERED ||
                 (event.type==OS64_GUI_EVENT_POINTER_STATE && !event.pointer.inside)){
                 sample_cancel(&stage);os64_ui_mark_dirty(&ui,&stage);

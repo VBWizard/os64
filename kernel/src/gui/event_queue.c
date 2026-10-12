@@ -62,14 +62,20 @@ bool gui_event_queue_pop(gui_event_queue_t *q, input_event_t *out)
             write = (write + 1) % GUI_WINDOW_EVENTS_MAX;
         }
         q->head = write;
-        q->lost_pending = false;
-        *out = (input_event_t){.type = INPUT_EVENT_INPUT_LOST};
-        return true;
+        // A retained control must get a turn between loss notifications.
+        // Still purge gestures above on every new loss, before that turn.
+        if (!q->lost_yield_control || q->head == q->tail) {
+            q->lost_pending = false;
+            q->lost_yield_control = q->head != q->tail;
+            *out = (input_event_t){.type = INPUT_EVENT_INPUT_LOST};
+            return true;
+        }
     }
     if (q->head != q->tail) {
         *out = q->events[q->tail];
         q->tail = (q->tail + 1) % GUI_WINDOW_EVENTS_MAX;
         q->doorbell_yield_input = false;
+        q->lost_yield_control = false;
         return true;
     }
     if (!q->pointer_pending) return false;

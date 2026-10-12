@@ -43,6 +43,14 @@ void appearance_customizer_contracts(void)
     assert(pixels);
     gCtx.surf = (os64_gui_surface_t){.pixels = pixels, .width = 958, .height = 706, .pitch_px = 958};
     setup();
+    // Loss reaches every tree even while a modal confirmation owns input.
+    gEditor.grab=&gRoot;gPreview.grab=&gCanvas;gDialog.grab=&gDialogRoot;
+    gPickerEditing=true;gConfirmation=CONFIRM_CLOSE;
+    os64_gui_event_t lost={.type=OS64_GUI_EVENT_INPUT_LOST};
+    dispatch(&lost);
+    assert(!gEditor.grab && !gPreview.grab && !gDialog.grab && !gPickerEditing);
+    gConfirmation=0;
+
     for (unsigned i = 0; i < 4; ++i) {
         tab_click(NULL, (void *)(uintptr_t)i);
         assert(!gCompact && !gCanvas.hidden);

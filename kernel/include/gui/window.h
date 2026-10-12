@@ -252,8 +252,9 @@ typedef struct window
     //     last one is the whole reason this shape was chosen over
     //     realloc-and-remap; the hazard it avoids is silent, not a fault.
     // Ordinary windows reserve at least the screen (up to wm_dim_max());
-    // popups reserve birth content size. Both stores share this capacity
-    // through wm_canvas_capacity_for. Committing lazily is possible but needs a task reference or
+    // callers opting into popup capacity reserve birth content size. Both
+    // stores share this capacity through wm_canvas_capacity_for. Committing
+    // lazily is possible but needs a task reference or
     // a deferred-work channel to map pages into a foreign address space
     // safely — booked in DEBTS rather than built.
     uint32_t  canvas_cap_w, canvas_cap_h;
@@ -287,7 +288,7 @@ typedef struct window
 // — who may look a handle up, whose exit collects the window — is
 // gui_client's.
 window_t *wm_create(const char *title, rect_t frame, uint32_t flags, uint64_t owner,
-                    uint16_t client_handle, uint32_t popup_owner_id);
+                    uint16_t client_handle, uint32_t popup_owner_id, bool popup_capacity);
 
 // Follow immutable popup links to the owning ordinary/root window.
 window_t *wm_focus_root(window_t *w);
@@ -316,9 +317,9 @@ void wm_set_pinned(window_t *w, bool pinned);
 // the task-backed canvas extent with it. A window may be created larger than
 // the screen (the client API allows up to wm_dim_max() — 4096, or the screen
 // if it is larger), so ordinary capacity is the larger of the two.
-// NO_DECORATIONS | PINNED at birth selects content-sized popup capacity.
+// The explicit create-time popup_capacity option selects birth-sized capacity.
 uint32_t wm_dim_max(void);   // the largest side a window may have
-void wm_canvas_capacity_for(int32_t content_w, int32_t content_h, uint32_t flags,
+void wm_canvas_capacity_for(int32_t content_w, int32_t content_h, bool popup_capacity,
                             uint32_t *cap_w, uint32_t *cap_h);
 
 // The frame this window would actually ADOPT for a requested one: content

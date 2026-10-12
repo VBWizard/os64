@@ -330,6 +330,7 @@ static void handle(int d, const os64_gui_event_t *ev)
         if (!ev->focus.gained && !ev->focus.sibling)
             gQuit = true;
         break;
+    case OS64_GUI_EVENT_INPUT_LOST:
     case OS64_GUI_EVENT_WINDOW_CLOSE:
         gQuit = true;
         break;

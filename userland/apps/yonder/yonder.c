@@ -4881,6 +4881,16 @@ static void inputs_run(void)
     g.ninputs = 0;
 }
 
+static void input_lost(void)
+{
+    g.seq = g.key_seq = 0;
+    g.pressed_link = -1;
+    if (g.pressed_node != NULL)
+        os64_html_release(g.pointer_doc, g.pressed_node);
+    g.pressed_node = NULL;
+    g.bar.pressed = BAR_ELSEWHERE;
+}
+
 // A key, before libui sees it: keydown, and keypress for a character, at
 // the control holding focus (the page's body when the view has it). A
 // cancelled one is not typed. Keys in a VT100 burst (the arrows, ESC [ A)
@@ -6946,6 +6956,8 @@ int main(int argc, char **argv)
         held = false;
         YonderEventBatch batch = {.held=true,.pending=ev};
         while (g.running && !g.ui.quit && yonder_event_batch_next(&batch,&ev,event_poll,NULL)) {
+            if (ev.type == OS64_GUI_EVENT_INPUT_LOST)
+                input_lost();
             if (ev.type == OS64_GUI_EVENT_MOUSE_MOVE)
                 hover(ev.mouse.x, ev.mouse.y);
             else if (ev.type == OS64_GUI_EVENT_POINTER_STATE)

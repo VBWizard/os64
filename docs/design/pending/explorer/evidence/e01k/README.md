@@ -6,7 +6,9 @@ original review snapshot. The [readiness regression fix](wake-regression/README.
 records the updated diagnostic and ten passing 153-check QEMU runs. Chris
 subsequently confirmed validation in both QEMU and on the P5. That acceptance
 is user-reported; additional run counts, logs and installed-binary hashes were
-not supplied. Ordinary code review remains pending.
+not supplied. The first ordinary review produced three findings; the fixes
+and their new validation are recorded below. Those fixes await re-review and
+fresh P5 acceptance.
 
 Retained logs have trailing whitespace stripped for repository checks.
 
@@ -136,3 +138,50 @@ run. Full-table repetition verifies reusable slots, not a measured allocator
 leak budget. Existing task VA-reservation and sibling-TLB limitations remain
 outside E1K. E1B must test post-destruction handle quarantine, input-loss
 dismissal and expiry of suppression after focus without a content click.
+
+## PR #257 review round 1 — 2026-10-11
+
+All three findings were accepted. Popup capacity is now an explicit create-time
+hint (bit 34), set by `os64_gui_popup_create` for owned and unowned menus.
+Borderless/pinned applications retain ordinary capacity unless they opt in.
+Repeated input loss yields to retained control records; direct consumers cancel
+custom gestures, including gterm's selection, Workshop's overlapping UI trees,
+Frame Studio's preview, Yonder's page presses/key decoders/question bar, and
+standalone grootmenu dismissal.
+
+Validation of the fixes:
+
+- The new queue regression failed against the reviewed implementation at the
+  expected retained-close assertion. After the fix, all 64 wrap positions pass
+  drop/eviction, retained-order and sustained-overflow fairness checks, including
+  competition with doorbells. The existing appearance queue test also checks
+  that an emptied ring does not carry fairness state into a later loss episode.
+- [Appearance and consumer suite](review-1/appearance.txt) passes, including a
+  gterm release queued before overflow and reset of all Workshop trees while a
+  confirmation owns input. [Yonder](review-1/yonder.txt): 2,654 checks, zero
+  failures, including loss between question-bar press/release and key decoding.
+  Host tests ran with ASan, UBSan and `ASAN_OPTIONS=detect_leaks=1` outside the
+  sandbox. Frame Studio and grootmenu were audited and cross-built; their new
+  loss branches were not injected interactively in this run.
+- The kernel and affected applications cross-build. Four-core QEMU passes
+  [run 1](review-1/native-1.txt) and [run 2](review-1/native-2.txt), 159 checks and
+  zero failures apiece; both exit 0 in the [serial log](review-1/serial.txt).
+  New assertions cover invalid capacity-hint flags and borderless/pinned
+  growth with stable canvas pointer/pitch. Existing popup-capacity checks stay.
+- gclock task 111 starts pinned and borderless with the inherited 16px font
+  ([before](review-1/gclock-before.png)). While that same process remains alive,
+  `/tests/fontsettingstest 9` successfully applies Interface 32px
+  ([report](review-1/clock-font.txt)); the clock grows and adopts the larger text
+  ([after](review-1/gclock-font32.png)). Ctrl+Alt+right-drag then enlarges the
+  window while keeping the text at 32px and centered
+  ([resized](review-1/gclock-resized.png)). Reproduce with `Titlebar=false`,
+  `Pinned=true`, `FontSize=inherit`; command 6 resets the shared font defaults.
+  The early serial history includes a test-controller retry: its missing
+  ampersand mapping initially launched gclock in the foreground. The recorded
+  before/after pair is the final same-process check after correcting that.
+
+[Binary hashes](review-1/binaries.sha256) identify this validation build. The
+latest gterm handler was exercised on the host and cross-built after the guest
+was staged. The guest used scratch disks and was stopped after testing. These
+review fixes have not been revalidated on P5; the earlier acceptance applies to
+the preceding implementation. Re-review is pending.

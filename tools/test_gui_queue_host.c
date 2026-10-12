@@ -33,7 +33,31 @@ int main(void)
             assert(gui_event_queue_pop(&q,&out) && out.type==INPUT_EVENT_WINDOW_FOCUS && out.focus.other_handle==i);
         assert(gui_event_queue_pop(&q,&out) && out.focus.other_handle==100);
         assert(!gui_event_queue_pending(&q));
+        // A full control ring must make progress even when each poll is
+        // preceded by another dropped motion. Exercise both wrapped indices
+        // and doorbells competing with the loss notification.
+        input_event_t close={.type=INPUT_EVENT_WINDOW_CLOSE};
+        input_event_t bell={.type=INPUT_EVENT_DOORBELL,.doorbell={.mask=1}};
+        for(unsigned i=0;i<GUI_WINDOW_EVENTS_MAX-1;++i)
+            assert(gui_event_queue_push(&q,&close)==1);
+        assert(gui_event_queue_push(&q,&move)==0);
+        assert(gui_event_queue_pop(&q,&out) && out.type==INPUT_EVENT_INPUT_LOST);
+        assert(gui_event_queue_push(&q,&move)==0);
+        assert(gui_event_queue_push(&q,&bell)==1);
+        assert(gui_event_queue_pop(&q,&out) && out.type==INPUT_EVENT_DOORBELL);
+        assert(gui_event_queue_push(&q,&move)==0);
+        assert(gui_event_queue_push(&q,&bell)==1);
+        assert(gui_event_queue_pop(&q,&out) && out.type==INPUT_EVENT_WINDOW_CLOSE);
+        unsigned controls=1, polls=0;
+        while(controls<GUI_WINDOW_EVENTS_MAX-1 && polls++<4*GUI_WINDOW_EVENTS_MAX){
+            (void)gui_event_queue_push(&q,&move);
+            (void)gui_event_queue_push(&q,&move);
+            assert(gui_event_queue_pop(&q,&out));
+            if(out.type==INPUT_EVENT_WINDOW_CLOSE)++controls;
+            else assert(out.type==INPUT_EVENT_INPUT_LOST || out.type==INPUT_EVENT_DOORBELL);
+        }
+        assert(controls==GUI_WINDOW_EVENTS_MAX-1);
     }
-    puts("gui queue: 64 wrap positions; drop/eviction reset and retained control order passed");
+    puts("gui queue: 64 wrap positions; drop/eviction reset, control order and overflow fairness passed");
     return 0;
 }

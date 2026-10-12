@@ -69,6 +69,16 @@ static bool     gDragging;                   // button 1 is down inside us
 static uint32_t gAnchorRow, gAnchorCol;      // where the drag began
 static uint32_t gEndRow, gEndCol;            // the cell under the pointer now
 
+static void interrupt_gestures(const os64_gui_event_t *ev)
+{
+    if (ev->type == OS64_GUI_EVENT_INPUT_LOST || ev->type == OS64_GUI_EVENT_WINDOW_FOCUS ||
+        ev->type == OS64_GUI_EVENT_WINDOW_COVERED) {
+        os64_ui_dispatch(&gUi, ev);
+        if (ev->type != OS64_GUI_EVENT_WINDOW_FOCUS || !ev->focus.gained)
+            gDragging = false;
+    }
+}
+
 // Normalized selection bounds, INCLUSIVE at both ends (the cell you are over
 // is part of the selection — xterm's feel, and the one that matches what the
 // highlight shows).
@@ -557,10 +567,7 @@ int main(int argc, char **argv)
 		while ((erc = os64_gui_event_poll(win, &ev)) == 1)
 		{
             if(ev.type==OS64_GUI_EVENT_WINDOW_CLOSE){window_alive=false;break;}
-            if(ev.type==OS64_GUI_EVENT_WINDOW_FOCUS || ev.type==OS64_GUI_EVENT_WINDOW_COVERED){
-                os64_ui_dispatch(&gUi,&ev);
-                if(ev.type==OS64_GUI_EVENT_WINDOW_COVERED || !ev.focus.gained)gDragging=false;
-            }
+            interrupt_gestures(&ev);
             if(ev.type==OS64_GUI_EVENT_SETTINGS){settings_open(win);continue;}
             if(ev.type==OS64_GUI_EVENT_MOUSE_WHEEL){scroll_by((int64_t)ev.mouse.dy*3);continue;}
             bool pointer=ev.type==OS64_GUI_EVENT_MOUSE_BUTTON_DOWN || ev.type==OS64_GUI_EVENT_MOUSE_BUTTON_UP ||
