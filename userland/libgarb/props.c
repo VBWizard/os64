@@ -208,11 +208,13 @@ static bool moves_only(const garb_val_t *f)
         return a[0].kind == GARB_V_KEYWORD;
     // A matrix's linear part is the identity, and a 3D one's flat drawing
     // divides by nothing: x' = m0 x + m4 y + m12, y' = m1 x + m5 y + m13,
-    // over m3 x + m7 y + m15.
-    static const int8_t k3d[] = {0, 1, 3, 4, 5, 7, 15};
-    static const double want3d[] = {1, 0, 0, 0, 1, 0, 1};
+    // over m3 x + m7 y + m15. Nor may a 3D one read z into any of the three
+    // (m8, m9, m11): a translateZ written after it would move the box, or
+    // scale it through w, though each of the two alone does neither.
+    static const int8_t k3d[] = {0, 1, 3, 4, 5, 7, 15, 8, 9, 11};
+    static const double want3d[] = {1, 0, 0, 0, 1, 0, 1, 0, 0, 0};
     bool three = os64_streq(n, "matrix3d");
-    for (int i = 0; i < (three ? 7 : 4); i++)
+    for (int i = 0; i < (three ? 10 : 4); i++)
         if (!exactly(&a[three ? k3d[i] : i], three ? want3d[i] : i == 0 || i == 3))
             return false;
     return true;
@@ -221,7 +223,9 @@ static bool moves_only(const garb_val_t *f)
 // What of a transform value is drawn as something other than it says
 // until slice S7b, by the name of the function or property: anything that
 // does more than move the box. Judged a function at a time, so a list
-// whose functions undo one another is taken to do more than it does.
+// whose functions undo one another is taken to do more than it does; and
+// since no function moves_only() passes reads z into what a flat drawing
+// shows, the z one of them writes cannot reach it through another.
 static const char *transform_approximated(garb_prop_t prop, const garb_val_t *v)
 {
     if (v->kind == GARB_V_KEYWORD)

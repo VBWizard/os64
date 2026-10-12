@@ -101,17 +101,20 @@ END
 
 # A transform that does more than move the box is drawn moved and upright
 # until slice S7b (PILE3.md § Transforms), and counted by the function or
-# property that does more; one that only moves it is not counted.
+# property that does more; one that only moves it is not counted. A
+# matrix3d() that reads z does more, or a translateZ after it could.
 VIEWPORT 800x600
 PAGE
 <!doctype html><style>
 p { transform: translateX(10px) rotate(45deg); rotate: 30deg; scale: 1 }
-div { transform: translate(-50%, -50%) rotate(0) scaleY(1); translate: 5px }
+div { transform: translate(-50%, -50%) rotate(0) scaleY(1) matrix3d(1,0,0,0, 0,1,0,0, 0,0,1,0, 7,8,9,1); translate: 5px }
+span { transform: matrix3d(1,0,0,0, 0,1,0,0, 0,0,1,.01, 0,0,0,1) translateZ(10px) }
 </style>
-<p>x<div>y</div>
+<p>x<div>y</div><span>z</span>
 WANT
 value transform: rotate 1
 value rotate: rotate 1
+value transform: matrix3d 1
 (end)
 END
 

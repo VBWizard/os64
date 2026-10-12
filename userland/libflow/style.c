@@ -2381,7 +2381,7 @@ static double radians(const garb_val_t *v)
     }
 }
 
-// A number, a percentage as its hundredth, or a calc() of numbers.
+// A number, a percentage as its hundredth, or a calc() of either.
 static bool author_number(const Author *a, const garb_val_t *v, double *out)
 {
     Lp r;
@@ -2389,10 +2389,14 @@ static bool author_number(const Author *a, const garb_val_t *v, double *out)
         *out = v->number;
     else if (v->kind == GARB_V_PERCENTAGE)
         *out = v->number / 100;
-    else if (v->kind == GARB_V_CALC && v->calc != NULL && calc(a, v->calc, a->font, &r) && r.number)
-        *out = r.px;
-    else
+    else if (v->kind != GARB_V_CALC || v->calc == NULL || !calc(a, v->calc, a->font, &r))
         return false;
+    else if (r.number)
+        *out = r.px;
+    else if (r.px == 0)
+        *out = r.pct / 100;
+    else
+        return false;                       // a length is no number
     return true;
 }
 
@@ -3379,7 +3383,7 @@ static FStyled *style_element(Ctx *c, const os64_html_node_t *n)
     out->in_nobr = (up != NULL && up->in_nobr) || is(n, OS64_HTML_TAG_NOBR);
     out->quotes = (up != NULL ? up->quotes : 0) + is(n, OS64_HTML_TAG_Q);
     out->anchor = f_contains_absolute(&sp.s) ? n : up != NULL ? up->anchor : NULL;
-    out->fixed_anchor = f_contains_absolute(&sp.s) && f_transforms(&sp.s) ? n
+    out->fixed_anchor = f_contains_absolute(&sp.s) && f_transformed(&sp.s) ? n
                       : up != NULL ? up->fixed_anchor : NULL;
     out->transparent = sp.s.opacity == 0 || (up != NULL && up->transparent);
     FStyled *holder = f_map_get(&c->out->map, n->parent);

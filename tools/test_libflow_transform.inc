@@ -75,6 +75,28 @@ static void transform_layout_cases(void)
         "    block div 0 40 100 10 stacked transform 0 20 upright\n"
         "    block div 0 50 100 10 stacked transform 10 20\n");
 
+    // A transformed root moves the whole page: 100 tall, drawn from 600
+    // down, the page reaches 700.
+    cascade_layout_case("transform: a transformed root reaches the page moved",
+        XFORM_STYLE "html{transform:translateY(600px)} div{height:100px}</style><div></div>", 400,
+        "page 400 700\n"
+        "block html 0 0 400 100 transform 0 600\n"
+        "  block body 0 0 400 100\n"
+        "    block div 0 0 400 100\n");
+
+    // A scale written as a calc() of a percentage is that hundredth, in a
+    // list and as the property: half of 20 across, then twice 10.
+    cascade_layout_case("transform: a scale of calc(%), in the list and alone",
+        XFORM_STYLE "div{width:100px;height:10px}"
+        ".a{transform:scale(calc(50%)) translateX(20px)}"
+        ".b{scale:calc(200%);transform:translateX(10px)}</style>"
+        "<div class=a></div><div class=b></div>", 400,
+        "page 400 20\n"
+        "block html 0 0 400 20\n"
+        "  block body 0 0 400 20\n"
+        "    block div 0 0 100 10 stacked transform 10 0 upright\n"
+        "    block div 0 10 100 10 stacked transform 20 0 upright\n");
+
     // A transformed box is the containing block of an absolute box in it
     // and of a FIXED one (Transforms 1 § 3): both placed against its
     // padding box at 0, 50, and neither fixed to the viewport. The box is
@@ -145,6 +167,23 @@ static void transform_layout_cases(void)
         "block html 0 0 400 10\n"
         "  block body 0 0 400 10\n"
         "    block div 0 0 100 10 positioned transform 5 0 sticky x 0..0 y 0..0\n");
+
+    // In a scroll container that is its containing block, it sticks for
+    // all the container scrolls through: the 90 below it in the 100 tall
+    // padding box, and the 410 more the content reaches. The dump meets
+    // a sticky box's clip only out to its sticky frame, which moves it, so
+    // here it is none.
+    cascade_layout_case("transform: a sticky box transformed sticks the whole scroll",
+        XFORM_STYLE "#s{height:100px;overflow:auto} .st{position:sticky;top:0;width:100px;"
+        "height:10px;transform:translateX(5px)}</style>"
+        "<div id=s><div class=st></div><p style='height:500px'></p></div>", 400,
+        "page 400 100\n"
+        "block html 0 0 400 100\n"
+        "  block body 0 0 400 100\n"
+        "    block div 0 0 400 100 scroller 0 range 0 410\n"
+        "      block div 0 0 100 10 positioned transform 5 0 sticky x 0..0 y 0..500"
+        " clip -1073741824 -1073741824 2147483647 2147483647\n"
+        "      block p 0 10 400 500 clip 0 0 400 100\n");
 
     // grokipedia's drawer, Tailwind 3's -translate-x-full: six functions,
     // all but the first doing nothing, so a translation, drawn exactly —
@@ -303,6 +342,20 @@ static void transform_door_cases(void)
                ab != NULL && ab->rect.x == 0 && ab->rect.y == 0,
            text);
     free(text);
+    flow_free(t);
+    sheeted_close(&q);
+
+    // Positioned, it is the absolute boxes' containing block, but its
+    // transform is still nothing: a fixed box in it is fixed to the
+    // viewport, at its corner, not to the inline.
+    sheeted_open(&q, XFORM_STYLE "span{position:relative;transform:translate(10px)}"
+                     ".f{position:fixed;top:0;left:0;width:5px;height:5px}</style>"
+                     "<p>yy<span>x<b class=f id=f></b></span></p>",
+                 400, 600);
+    t = flow_layout(q.doc, q.page, 400, &q.env);
+    ab = box_with_id(t, q.doc->document, "f");
+    expect("transform: a positioned plain inline is no fixed box's containing block",
+           ab != NULL && ab->fixed && ab->rect.x == 0 && ab->rect.y == 0, NULL);
     flow_free(t);
     sheeted_close(&q);
 }

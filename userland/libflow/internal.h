@@ -73,25 +73,29 @@ static inline bool f_display_grid(flow_display_t d)
 #define F_GRID_MAX 1000
 #define F_GRID_AREA_CELLS 1024
 
-// Whether a style transforms its box (PILE3.md § Transforms): any of the
-// four properties is not `none`. A box that cannot be transformed — a
-// plain inline's — ignores it.
+// Whether a style asks for a transform (PILE3.md § Transforms): any of
+// the four properties is not `none`.
 static inline bool f_transforms(const flow_style_t *s)
 {
     return s->transform != NULL || s->translate != NULL || s->rotate != NULL ||
            s->scale != NULL;
 }
 
+// Whether it is granted: a plain inline's box cannot be transformed
+// (Transforms 1 § 2), so its transform does nothing at all.
+static inline bool f_transformed(const flow_style_t *s)
+{
+    return f_transforms(s) && s->display != FLOW_DISPLAY_INLINE;
+}
+
 // A containing block for the absolute boxes inside it: an element whose
-// position is not static, or that is transformed, and that makes a box of
-// its own — a transformed plain inline is not, since its transform does
-// nothing. A table's rows, row groups and columns are not (`position:
-// relative` and a transform on them are booked), and neither is anything
-// `display: contents` or `none` makes no box for.
+// position is not static, or that is transformed (f_transformed), and
+// that makes a box of its own. A table's rows, row groups and columns are
+// not (`position: relative` and a transform on them are booked), and
+// neither is anything `display: contents` or `none` makes no box for.
 static inline bool f_contains_absolute(const flow_style_t *s)
 {
-    if (s->position == FLOW_POSITION_STATIC &&
-        (!f_transforms(s) || s->display == FLOW_DISPLAY_INLINE))
+    if (s->position == FLOW_POSITION_STATIC && !f_transformed(s))
         return false;
     switch (s->display) {
     case FLOW_DISPLAY_CONTENTS: case FLOW_DISPLAY_NONE:

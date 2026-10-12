@@ -850,7 +850,9 @@ at a time: a translation is not, nor a function that does nothing as
 written (Tailwind's `rotate(0)` and `scaleX(1)`) or reaches only z
 (`translateZ`, `scaleZ`); a rotation, a scale, a skew, a matrix that is
 not a translation, and `perspective()` are — `@supports` answers what is
-drawn.
+drawn. A `matrix3d()` that reads z into x, y or w is approximated too,
+whatever else it is: no function passed then reads z, so a `translateZ`
+cannot combine with another into more than a move.
 
 **libflow keeps the list, each function its matrix.** `flow_style_t`
 gains the transform (a list in the style-lists budget,
@@ -894,7 +896,8 @@ an anchor for absolute boxes, as a positioned one is, and a FIXED box
 takes the nearest transformed ancestor's padding box as its containing
 block instead of the viewport (`position_box`); it is then not `fixed` in
 the public tree — no longer drawn in viewport coordinates, it scrolls
-with the box that holds it.
+with the box that holds it. A plain inline's transform does nothing, so a
+positioned one anchors absolute boxes and never a fixed one.
 
 **Where it is drawn reaches, and where it was laid out does not.** A
 transformed box's overflow, moved by its frame and cut by the clips on
@@ -902,7 +905,9 @@ the way out, is what its scroll container's range or the page's extent
 sees, and so is a positioned box's inside one. Layout's own edges, and a
 parent's overflow, leave a transformed box out, as they leave a
 positioned one: a dialog centred by `translate(-50%, -50%)` does not
-lengthen the page by the half it was moved back.
+lengthen the page by the half it was moved back. A transformed root
+is no stacked box, being the first context already, so its moved
+overflow is reached apart; layout's unmoved count of it stays.
 
 **yonder** needs nothing new to draw a translation: the verbs are in page
 coordinates already, and a moved box's offset already moves them. A form
@@ -915,7 +920,8 @@ drawer's search field slides with it; the image-map point and the DOM's
 `tools/test_garb_*`: the five properties read and printed back, every
 function and both angle spellings, a unitless 0 angle accepted and a
 unitless 5 refused, a 3D list, `perspective()` and an S7b value
-approximated in `@supports` and a translation not, a calc angle dropped.
+approximated in `@supports` and a translation not, a `matrix3d()` that
+reads z approximated, a calc angle dropped.
 `tools/test_libflow_transform.inc`, by hand from the standard: a
 translation's percentages of the border box; the layout unmoved and the
 drawn rect moved; the order of the individual properties against the
@@ -930,7 +936,10 @@ outside staying put; the page's extent and a scroller's range reaching a
 translated box, and not where it was laid out; a sticky box transformed;
 grokipedia's Tailwind drawer off the page; a plain inline box's transform
 doing nothing. `tools/test_libflow_transform_mutants.py` breaks each rule
-in turn and the cases catch every one. In the guest, a fixture beside
+in turn and the cases catch every one. They also hold a scale written
+`calc(50%)`, a sticky transformed box sticking through its
+scroll container, a transformed root reaching the page, and a positioned
+plain inline anchoring no fixed box. In the guest, a fixture beside
 headless Chrome: a slid drawer, a centred dialog, an inline-block nudged,
 a fixed bar inside a transformed panel — and grokipedia read from the P5.
 
