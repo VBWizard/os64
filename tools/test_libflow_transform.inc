@@ -636,6 +636,16 @@ static void transform_through_cases(void)
     const double span[6] = {1e300, 1e-300, 1e300, 2e-300, 0, 0};
     expect("transform: a matrix spanning a double's range is undone",
            flow_affine_invert(span, inv) && isfinite(inv[0]) && isfinite(inv[3]), NULL);
+    // A determinant that is a cancellation: 2^52 x 2^52 - (2^52 - 1)(2^52 +
+    // 1) is exactly 1, which a 64-bit significand rounds to 0. Undone, its
+    // inverse exactly (2^52, -(2^52 - 1); -(2^52 + 1), 2^52).
+    const double cancel[6] = {4503599627370496.0, 4503599627370495.0, 4503599627370497.0,
+                              4503599627370496.0, 0, 0};
+    expect("transform: a determinant that is a cancellation is not lost",
+           flow_affine_invert(cancel, inv) && inv[0] == 4503599627370496.0 &&
+               inv[1] == -4503599627370495.0 && inv[2] == -4503599627370497.0 &&
+               inv[3] == 4503599627370496.0,
+           NULL);
     const flow_box_t *hb = box_with_id(t, q.doc->document, "h");
     double hm[6];
     expect("transform: a turn a hair short of edge-on is still undone",

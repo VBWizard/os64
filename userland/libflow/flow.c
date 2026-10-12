@@ -1418,16 +1418,49 @@ static void from_space(const flow_frame_t *f, flow_point_t scroll, double *x, do
     }
 }
 
+// x * y as p + e exactly, Dekker's two-product: each split into halves of
+// 26 and 27 bits (Veltkamp), whose products a double holds exactly. Valid
+// while the split's 2^27 cannot overflow and no partial underflows.
+static void two_product(double x, double y, double *p, double *e)
+{
+    const double split = 134217729.0;   // 2^27 + 1
+    double t = split * x, xh = t - (t - x), xl = x - xh;
+    t = split * y;
+    double yh = t - (t - y), yl = y - yh;
+    *p = x * y;
+    *e = ((xh * yh - *p) + xh * yl + xl * yh) + xl * yl;
+}
+
+// The 2x2 determinant a d - b c, worked so cancellation does not lose it:
+// each product exact as a pair (two_product), and the difference of the
+// heads exact where they are close (Sterbenz), the tails added after. In
+// a double's middle range; elsewhere in long double, whose exponent
+// reaches past a double's, so no product over- or underflows there.
+static long double determinant(double a, double b, double c, double d)
+{
+    const double small = 0x1p-480, large = 0x1p+480;
+    double most = fmax(fmax(fabs(a), fabs(b)), fmax(fabs(c), fabs(d)));
+    double least = fmin(fmin(a != 0 ? fabs(a) : most, b != 0 ? fabs(b) : most),
+                        fmin(c != 0 ? fabs(c) : most, d != 0 ? fabs(d) : most));
+    if (most < large && least > small) {
+        double p1, e1, p2, e2;
+        two_product(a, d, &p1, &e1);
+        two_product(b, c, &p2, &e2);
+        return (long double)(p1 - p2) + ((long double)e1 - e2);
+    }
+    return (long double)a * d - (long double)b * c;
+}
+
 bool flow_affine_invert(const double m[6], double inv[6])
 {
-    // Worked in long double, whose exponent reaches far past a double's:
-    // no product of two doubles overflows or underflows there, so a huge
-    // matrix (scale(1e200)), a tiny one, and one whose entries span the
-    // whole of a double's range (matrix(1e300, 1e-300, 1e300, 2e-300, 0,
-    // 0), determinant 1) are each undone exactly when their inverse is a
-    // finite double.
+    // The determinant worked without loss (determinant()), the rest in long
+    // double: a huge matrix (scale(1e200)), a tiny one, one whose entries
+    // span a double's range (matrix(1e300, 1e-300, 1e300, 2e-300, 0, 0)),
+    // and one whose determinant is a cancellation (matrix(2^52, 2^52 - 1,
+    // 2^52 + 1, 2^52, 0, 0), determinant 1) all come back with a finite
+    // inverse.
     long double a = m[0], b = m[1], c = m[2], d = m[3], e = m[4], f = m[5];
-    long double det = a * d - b * c;
+    long double det = determinant(m[0], m[1], m[2], m[3]);
     if (det == 0)
         return false;
     long double r[6] = {d / det, -b / det, -c / det, a / det, 0, 0};
