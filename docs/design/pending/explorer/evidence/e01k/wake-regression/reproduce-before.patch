@@ -1,0 +1,198 @@
+--- a/userland/tests/popuptest/popuptest.c
++++ b/userland/tests/popuptest/popuptest.c
+@@ -16,61 +16,14 @@
+ { return os64_gui_window_create("Popup contract",30,30,250,180,0); }
+ static int64_t number(const char *s)
+ { int64_t n=0;while(*s)n=n*10+(*s++-'0');return n; }
+-typedef struct {
+-    int64_t first, second, target;
+-    uint32_t mask;
+-    bool any, entered, done, saw_noise, require_noise;
+-    int64_t rc, ready;
+-} wait_job;
+-
+-// Readiness names a queue, not a particular notification. Consume unrelated
+-// GUI events and check the target handle and doorbell mask together.
+-static int64_t wait_for_bell(wait_job *j)
+-{
+-    bool received=false;
+-    for (;;) {
+-        int64_t ready=j->first;
+-        int64_t rc=j->any?os64_gui_event_wait_any(&ready):os64_gui_event_wait(ready,NULL);
+-        if(rc!=1)return rc;
+-        if(ready!=j->first && ready!=j->second){
+-            os64_printf("popuptest: wait returned unexpected handle %ld\n",ready);
+-            return -100;
+-        }
+-        os64_gui_event_t e;
+-        rc=os64_gui_event_poll(ready,&e);
+-        if(rc!=1)return rc;
+-        if(e.type!=OS64_GUI_EVENT_DOORBELL)continue;
+-        if(ready==j->first && (e.doorbell.mask&0x40))j->saw_noise=true;
+-        if(ready==j->target && (e.doorbell.mask&j->mask)){
+-            j->ready=ready;
+-            received=true;
+-        }
+-        if(received && (!j->require_noise || j->saw_noise))return 1;
+-    }
+-}
++typedef struct { int64_t first, second; bool any, entered, done; int64_t rc, ready; } wait_job;
+ static int64_t wait_worker(void *arg)
+ {
+     wait_job *j=arg;
+     __atomic_store_n(&j->entered,true,__ATOMIC_RELEASE);
+-    j->rc=wait_for_bell(j);
++    j->rc=j->any?os64_gui_event_wait_any(&j->ready):os64_gui_event_wait(j->first,NULL);
+     __atomic_store_n(&j->done,true,__ATOMIC_RELEASE);
+     return 0;
+-}
+-
+-// Bound these blocking regressions even if a notification never arrives.
+-// This guard is scoped to waits(); it must not compete for the signal-handler
+-// delivery exercised later by teardown_wait().
+-static int64_t wait_watchdog(void *arg)
+-{
+-    wait_job *j=arg;
+-    for(unsigned i=0;i<500;++i){
+-        if(__atomic_load_n(&j->done,__ATOMIC_ACQUIRE))return 0;
+-        os64_sleep(10);
+-    }
+-    os64_printf("popuptest: event-wait watchdog expired\n");
+-    os64_gui_window_destroy(j->second);
+-    os64_gui_window_destroy(j->first);
+-    return -1;
+ }
+ static int64_t wake_worker(void *arg)
+ {
+@@ -89,30 +42,24 @@
+     int64_t ready=0;
+     CHECK(os64_gui_event_wait_any(NULL)==OS64_GUI_ERR_BAD_ARGS);
+     CHECK(os64_gui_event_wait_any((int64_t *)1)==OS64_GUI_ERR_BAD_ARGS);
+-    wait_job guard={.first=a,.second=b};
+-    int64_t watchdog=os64_thread(wait_watchdog,&guard);
+-    CHECK(watchdog>=0);if(watchdog<0)return;
+     CHECK(os64_gui_event_ring(a,1)==0 && os64_gui_event_ring(b,2)==0);
+     CHECK(os64_gui_event_wait_any(&ready)==1);int64_t first=ready;
+     CHECK(first==a || first==b);
+     CHECK(os64_gui_event_wait_any(&ready)==1 && ready!=first);
+-    wait_job first_bell={.first=a,.second=b,.target=a,.mask=1};
+-    wait_job second_bell={.first=b,.second=a,.target=b,.mask=2};
+-    CHECK(wait_for_bell(&first_bell)==1);
+-    CHECK(wait_for_bell(&second_bell)==1);
+-    wait_job wake={.first=a,.second=b,.target=b,.mask=0x80,.any=true,.require_noise=true};
++    os64_gui_event_t ev;
++    CHECK(os64_gui_event_poll(a,&ev)==1 && ev.type==OS64_GUI_EVENT_DOORBELL && ev.doorbell.mask==1);
++    CHECK(os64_gui_event_poll(b,&ev)==1 && ev.type==OS64_GUI_EVENT_DOORBELL && ev.doorbell.mask==2);
++    wait_job wake={.first=a,.second=b};
+     int64_t t=os64_thread(wake_worker,&wake);
+-    if(t<0){CHECK(false);goto finish;}
+-    // A deterministic unrelated notification reproduces the same condition as
+-    // delayed pointer/visibility events, without depending on compositor timing.
+-    CHECK(os64_gui_event_ring(a,0x40)==0);
+-    CHECK(wait_for_bell(&wake)==1 && wake.ready==b && wake.saw_noise);
++    if(t<0){CHECK(false);return;}
++    os64_gui_event_ring(a,0x40); /* Force legitimate unrelated readiness. */
++    CHECK(os64_gui_event_wait_any(&ready)==1 && ready==b);
+     join(t);drain(a);drain(b);
+     // A single-window waiter and an any-window waiter must not replace one
+     // another. A ready second window keeps the probe bounded if startup races.
+-    wait_job j={.first=a,.second=b,.target=a,.mask=8};
++    wait_job j={.first=a,.second=b};
+     t=os64_thread(wait_worker,&j);
+-    if(t<0){CHECK(false);goto finish;}
++    if(t<0){CHECK(false);return;}
+     while(!__atomic_load_n(&j.entered,__ATOMIC_ACQUIRE))os64_sleep(1);
+     int64_t rc=0;
+     for(unsigned i=0;i<100 && rc!=OS64_GUI_ERR_BUSY;++i){
+@@ -122,47 +69,16 @@
+     CHECK(rc==OS64_GUI_ERR_BUSY);
+     CHECK(os64_gui_event_ring(a,8)==0);join(t);CHECK(j.rc==1);
+     drain(a);drain(b);
+-    rc=0;
+-    for(unsigned attempt=0;attempt<5 && rc!=OS64_GUI_ERR_BUSY;++attempt){
+-        j=(wait_job){.first=a,.second=b,.target=a,.mask=0x80,.any=true};
+-        t=os64_thread(wait_worker,&j);
+-        if(t<0){CHECK(false);goto finish;}
+-        while(!__atomic_load_n(&j.entered,__ATOMIC_ACQUIRE))os64_sleep(1);
+-        os64_sleep(10);
+-        // Entered is not proof of registration. A delayed bell releases the
+-        // winner even if our probe wins the waiter slot between worker calls.
+-        // Retry that scheduling outcome; still require an observed BUSY.
+-        wait_job release={.second=a};
+-        int64_t waker=os64_thread(wake_worker,&release);
+-        CHECK(waker>=0);
+-        if(waker<0){
+-            os64_gui_event_ring(a,0x80);join(t);goto finish;
+-        }
+-        rc=os64_gui_event_wait(a,NULL);
+-        CHECK(rc==1 || rc==OS64_GUI_ERR_BUSY);
+-        join(waker);join(t);
+-        CHECK((j.rc==1 && j.ready==a) ||
+-              (rc==1 && j.rc==OS64_GUI_ERR_BUSY));
+-        drain(a);drain(b);
+-    }
+-    CHECK(rc==OS64_GUI_ERR_BUSY);
+-finish:
+-    __atomic_store_n(&guard.done,true,__ATOMIC_RELEASE);
+-    join(watchdog);
+-}
+-
+-// Signal/teardown tests likewise allow ordinary readiness before their terminal
+-// result. Draining one queued event per pass keeps waiting on the actual syscall.
+-static int64_t wait_until_terminal(void)
+-{
+-    for (;;) {
+-        int64_t ready=0;
+-        int64_t rc=os64_gui_event_wait_any(&ready);
+-        if(rc!=1)return rc;
+-        os64_gui_event_t e;
+-        rc=os64_gui_event_poll(ready,&e);
+-        if(rc<0 && rc!=OS64_GUI_ERR_INVALID_HANDLE)return rc;
+-    }
++    j=(wait_job){.first=a,.second=b,.any=true};
++    t=os64_thread(wait_worker,&j);
++    if(t<0){CHECK(false);return;}
++    while(!__atomic_load_n(&j.entered,__ATOMIC_ACQUIRE))os64_sleep(1);
++    os64_sleep(100);
++    // No event is needed for BUSY. The delayed wake bounds a failed guard.
++    wait_job release={.second=a};int64_t waker=os64_thread(wake_worker,&release);
++    CHECK(os64_gui_event_wait(a,NULL)==OS64_GUI_ERR_BUSY);
++    join(waker);join(t);CHECK(j.rc==1 && j.ready==a);
++    drain(a);drain(b);
+ }
+ static volatile unsigned caught;
+ static void interrupt_handler(int signo) { caught=(unsigned)signo; }
+@@ -178,7 +94,7 @@
+ { os64_sleep(150);return os64_gui_window_destroy(*(int64_t *)arg); }
+ static void teardown_wait(void)
+ {
+-    int64_t w=create_owner();CHECK(w>0);if(w<=0)return;
++    int64_t w=create_owner(),ready=0;CHECK(w>0);if(w<=0)return;
+     drain(w);
+     CHECK(os64_signal_set_handler(OS64_SIGINT,interrupt_handler)>=0);
+     // Signal delivery is task-wide: a sibling sender can claim the handler
+@@ -187,14 +103,14 @@
+     char *args[]={"/tests/popuptest","--interrupt",id,NULL};
+     int64_t sender=os64_spawn(args[0],args);CHECK(sender>0);
+     if(sender>0){
+-        CHECK(wait_until_terminal()==OS64_GUI_ERR_INTERRUPTED);
++        CHECK(os64_gui_event_wait_any(&ready)==OS64_GUI_ERR_INTERRUPTED);
+         int32_t code=-1;CHECK(os64_wait(sender,&code)==sender && code==0);
+         CHECK(caught==OS64_SIGINT);
+     }
+     CHECK(os64_signal_set_handler(OS64_SIGINT,OS64_SIG_DEFAULT)>=0);
+     drain(w);
+     int64_t worker=os64_thread(destroy_worker,&w);CHECK(worker>=0);
+-    if(worker>=0){CHECK(wait_until_terminal()==OS64_GUI_ERR_INVALID_HANDLE);join(worker);}
++    if(worker>=0){CHECK(os64_gui_event_wait_any(&ready)==OS64_GUI_ERR_INVALID_HANDLE);join(worker);}
+     else os64_gui_window_destroy(w);
+ }
+ static void full_table(void)
+@@ -264,7 +180,6 @@
+     }
+     uint32_t sw,sh;
+     if(os64_gui_screen_info(&sw,&sh)<0){os64_printf("popuptest: SKIP GUI required\n");return 0;}
+-    os64_printf("popuptest: automated window/focus/wait checks; windows will open and close\n");
+     int64_t ready=-1;
+     CHECK(os64_gui_event_wait_any(&ready)==OS64_GUI_ERR_INVALID_HANDLE);
+     int64_t a=create_owner(),b=os64_gui_window_create("Other",350,30,200,140,0);

@@ -676,7 +676,7 @@ static void alttab_step_locked(bool backwards)
 	// and offered the second one. When the focus is not in the ring, the
 	// first step stays on 0.
 	if (first) {
-		window_t *focus = wm_focused();
+		window_t *focus = wm_focus_root(wm_focused());
 		if (focus == NULL || s_alttab_ring[0] != focus->id)
 			goto chosen;
 	}

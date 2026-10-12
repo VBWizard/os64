@@ -446,10 +446,25 @@ static void gallery_font_visibility_tests(const char *dir)
         free(pixels);
     }
 }
+static void lost_input(void)
+{
+    os64_ui_t ui;os64_ui_widget_t root,b;
+    os64_ui_init(&ui,NULL);os64_ui_panel(&root);root.bounds=(os64_gui_rect_t){0,0,100,100};
+    os64_ui_set_root(&ui,&root);os64_ui_button(&b,"Test",NULL,NULL);
+    b.bounds=(os64_gui_rect_t){0,0,80,30};os64_ui_add_child(&root,&b);
+    os64_gui_event_t e={.type=OS64_GUI_EVENT_MOUSE_BUTTON_DOWN};
+    e.mouse.button=OS64_GUI_MOUSE_LEFT;e.mouse.x=4;e.mouse.y=4;
+    CHECK(os64_ui_dispatch(&ui,&e) && b.pressed && ui.grab==&b);
+    e.type=OS64_GUI_EVENT_INPUT_LOST;
+    CHECK(os64_ui_dispatch(&ui,&e) && !b.pressed && !ui.grab);
+    os64_ui_shortcut_router_t router;memset(&router,0xff,sizeof(router));
+    CHECK(!os64_ui_shortcut_route(&router,NULL,&e,NULL));
+    for(size_t i=0;i<sizeof(router.held);++i)CHECK(router.held[i]==0);
+}
 int main(int argc,char **argv)
 {
     const char *dir=argc>1?argv[1]:"userland/libfreetype/fixtures";
-    registration();views_and_bindings();shortcuts();ctrl_punctuation();
+    registration();views_and_bindings();shortcuts();ctrl_punctuation();lost_input();
     status_tests(dir);status_fit_tests(dir);gallery_tests(dir);gallery_font_visibility_tests(dir);
     printf("action/status: %lu checks, %d failures\n",checks,failures);
     return failures?1:0;

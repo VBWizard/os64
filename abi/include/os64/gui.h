@@ -30,6 +30,8 @@
 #define OS64_GUI_ERR_INVALID_HANDLE  (-1)
 #define OS64_GUI_ERR_NO_RESOURCES    (-2)
 #define OS64_GUI_ERR_BAD_ARGS        (-3)
+#define OS64_GUI_ERR_BUSY            (-7) // child windows or another event waiter
+#define OS64_GUI_ERR_NOT_FOCUSED     (-8) // owned popup parent lost focus
 // A blocking wait (os64_gui_event_wait) cut short by a signal. NOT a GUI
 // error of its own: it is THE system-wide sentinel, OS64_INTERRUPTED, because
 // the signal contract promises every interrupted blocking call answers the
@@ -49,6 +51,12 @@
 // With CONTENT_SIZE, clamp the requested content and position so its frame
 // fits the screen, using the same locked decoration snapshot as creation.
 #define OS64_GUI_CREATE_FIT_SCREEN (1ull << 33)
+// An owned popup is born and focused atomically only while this same-task
+// parent remains focused. Zero retains unowned creation behavior. Owner bits
+// are create-only; readback flags do not contain them. START_UNFOCUSED with
+// a nonzero owner is refused. Destroy an owner's children before the owner.
+#define OS64_GUI_CREATE_OWNER_SHIFT 48
+#define OS64_GUI_CREATE_OWNER_MASK (0xffffull << OS64_GUI_CREATE_OWNER_SHIFT)
 #define OS64_GUI_WINDOW_TITLE_UTF8 (1u << 8) // W1 title text; legacy titles remain Latin-1
 #define OS64_GUI_WINDOW_HAS_SETTINGS (1u << 9) // opt in to the Settings titlebar action
 #define OS64_GUI_WINDOW_START_UNFOCUSED (1u << 1)   // born on top, declines focus
@@ -115,10 +123,11 @@
 // a window's canvas is reserved at CAPACITY, and the rule is (Codex #30 rd11
 // corrected an earlier wording that had it wrong both ways):
 //
-//     capacity = min(max(screen, content), wm_dim_max())
+//     ordinary capacity = min(max(screen, content), wm_dim_max())
+//     popup capacity = birth content dimensions
 //     wm_dim_max() = max(OS64_GUI_WINDOW_DIM_MAX, screen width, screen height)
 //
-// — the screen, raised to the content if the window was born larger, and
+// For ordinary windows: the screen, raised to the content if born larger, and
 // never past the ceiling; and since the desktop shell moved to ring 3 the
 // ceiling is this constant OR the screen, whichever is larger, so the screen
 // is ALWAYS reservable in full (a fullscreen shell on a 5K panel is not
@@ -131,6 +140,8 @@
 // constant it may also ask up to the screen. This constant is what an app
 // may rely on WITHOUT asking the screen size. window.c asserts the WM's own
 // constant equals this one.
+// Popups reserve their birth content size; resizing preserves address/pitch
+// but cannot grow past that capacity. Create a replacement for a larger menu.
 #define OS64_GUI_WINDOW_DIM_MAX   4096
 
 // Legacy fallback-only arithmetic. Kept for source compatibility and fixed
@@ -255,7 +266,10 @@ typedef struct os64_gui_surface
 // it can see "anywhere else". `focus.sibling` = 1 means the window on the
 // other end of the change belongs to YOUR task — a cascade's submenu taking
 // focus from its parent — so a menu can tell "the user moved into my own
-// submenu" from "the user went elsewhere" without knowing which handle.
+// submenu" from "the user went elsewhere". `other_handle` identifies the
+// same-task other party at delivery, or is zero. Handles can be reused after
+// destroy: drain surviving queues after destruction before reusing identities
+// in a single-threaded toolkit. This field is not a persistent window ID.
 #define OS64_GUI_EVENT_WINDOW_FOCUS      8
 // Your window just became invisible / visible again (OS64_GUI_WINDOW_COVERED
 // flipped). A NUDGE, not the state: re-read the flag with
@@ -280,6 +294,13 @@ typedef struct os64_gui_surface
 // application-defined; drain the shared work record when this arrives.
 #define OS64_GUI_EVENT_DOORBELL         14
 #define OS64_GUI_EVENT_SETTINGS         15 // app opens/focuses its settings window
+// Ordered input was dropped/evicted. Cancel pressed keys/buttons, drag state
+// and partial key decoding. Pending key/mouse records are discarded at this
+// notification, so pre-loss presses cannot re-arm clients after their reset.
+// Window/control records and coalesced state remain. Delivered before the next
+// ring event, after appearance and eligible doorbells; no payload.
+#define OS64_GUI_EVENT_INPUT_LOST       16
+_Static_assert(OS64_GUI_EVENT_INPUT_LOST == 16, "input-loss event ABI");
 _Static_assert(OS64_GUI_EVENT_MOUSE_WHEEL == 13, "wheel event ABI");
 
 // Modifier bits (the kernel's keyboard_modifiers_t, verbatim). Carried by
@@ -329,6 +350,7 @@ typedef struct os64_gui_event
         struct {
             uint8_t gained;     // 1 = focus arrived here, 0 = it left
             uint8_t sibling;    // 1 = the other window is one of your own
+            uint16_t other_handle; // same-task party at delivery; 0 otherwise
         } focus;
         struct {
             int32_t x, y;       // content-local; meaningful when inside = 1
@@ -342,7 +364,7 @@ typedef struct os64_gui_event
             uint32_t mask;
         } doorbell;
     };
-    uint64_t tick;              // kTicksSinceStart at enqueue
+    uint64_t tick;              // enqueue ticks; zero for synthesized INPUT_LOST
 } os64_gui_event_t;
 
 static inline uint64_t os64_gui_appearance_generation(const os64_gui_event_t *ev)
@@ -372,6 +394,7 @@ static inline int64_t os64_gui_window_create_content(const char *title,
         flags | OS64_GUI_CREATE_CONTENT_SIZE | OS64_GUI_WINDOW_TITLE_UTF8);
 }
 
+// BUSY leaves the window intact while it has owned popup children.
 static inline int64_t os64_gui_window_destroy(int64_t handle)
 {
     return (int64_t)os64_syscall2(SYSCALL_GUI_WINDOW_DESTROY,
@@ -439,7 +462,8 @@ static inline int64_t os64_gui_window_focus(int64_t handle)
 { return (int64_t)os64_syscall1(SYSCALL_GUI_WINDOW_FOCUS, (uint64_t)handle); }
 
 // Set minimum drawable dimensions, excluding borders/titlebar. Zero or a
-// value below the WM floor uses that floor (64x32). The minimum must fit the
+// value below the WM floor uses that floor (64x32, capped per dimension by a
+// popup's birth capacity). The minimum must fit the
 // window's existing canvas reservation; otherwise BAD_ARGS leaves it unchanged.
 // A successful call grows an undersized window and emits WINDOW_RESIZE if its
 // size changes; lowering a limit does not shrink it. Re-fetch the surface after
@@ -462,7 +486,8 @@ static inline int64_t os64_gui_screen_info(uint32_t *width, uint32_t *height)
 }
 
 // Block until an event arrives (1 = copied out), the window dies
-// (INVALID_HANDLE), or the caller is being killed (INTERRUPTED). The idle
+// (INVALID_HANDLE), a signal interrupts it (INTERRUPTED), or another thread
+// already waits on this window (BUSY). The idle
 // answer to a poll loop: an app that waits costs NOTHING until somebody
 // types at it — no cadence, no polling, just sleep until the compositor
 // says otherwise.
@@ -478,12 +503,49 @@ static inline int64_t os64_gui_event_wait(int64_t handle,
                                   (uint64_t)handle, (uint64_t)out);
 }
 
+// Wait for any window owned by this task, without consuming its event. Returns
+// 1 and a handle, INVALID_HANDLE if none remain, INTERRUPTED on signal, or
+// BUSY if another thread waits on any owned window. Single-window wait uses
+// the same one-waiter rule. Readiness is a hint: poll may find no event or a
+// destroyed/reused handle; serialize window lifecycle with dispatch in clients.
+// New windows join a parked wait on its next wake/backstop pass.
+// Output must be writable; it is reset to zero before waiting, including on
+// failure. A successful return replaces it with the ready handle.
+static inline int64_t os64_gui_event_wait_any(int64_t *out_handle)
+{
+    return (int64_t)os64_syscall1(SYSCALL_GUI_EVENT_WAIT_ANY, (uint64_t)out_handle);
+}
+
+// Current screen-space content rectangle, read atomically with decoration
+// insets. Owner-only snapshot, not a reservation on the window's position.
+static inline int64_t os64_gui_window_get_content_rect(int64_t handle,
+                                                       os64_gui_rect_t *out)
+{
+    return (int64_t)os64_syscall2(SYSCALL_GUI_WINDOW_GET_CONTENT_RECT,
+                                  (uint64_t)handle, (uint64_t)out);
+}
+
+// Native popup with content dimensions. Owner 0 is the standalone launcher
+// form; a positive owner must be a live focused window of this task. Failure
+// creates no window. The wrapper refuses truncation of a supplied handle.
+static inline int64_t os64_gui_popup_create(const char *title, int64_t owner,
+    int32_t x, int32_t y, uint32_t width, uint32_t height)
+{
+    if (owner < 0 || owner > UINT16_MAX) return OS64_GUI_ERR_INVALID_HANDLE;
+    uint64_t flags = OS64_GUI_WINDOW_NO_DECORATIONS | OS64_GUI_WINDOW_PINNED |
+                     OS64_GUI_CREATE_CONTENT_SIZE | OS64_GUI_CREATE_FIT_SCREEN |
+                     ((uint64_t)owner << OS64_GUI_CREATE_OWNER_SHIFT);
+    return (int64_t)os64_syscall6(SYSCALL_GUI_WINDOW_CREATE, (uint64_t)title,
+                                  (uint64_t)x, (uint64_t)y, width, height, flags);
+}
+
 // ── The layout lock, this side ──────────────────────────────────────────────
 // The same numbers are asserted against the KERNEL structs in gui_client.c;
 // a divergence on either side refuses to build.
 _Static_assert(sizeof(os64_gui_rect_t) == 16, "gui rect ABI: 16 bytes");
 _Static_assert(sizeof(os64_gui_surface_t) == 24, "gui surface ABI: 24 bytes");
 _Static_assert(sizeof(os64_gui_event_t) == 32, "gui event ABI: 32 bytes");
+_Static_assert(__builtin_offsetof(os64_gui_event_t, focus.other_handle) == 6, "focus handle ABI");
 _Static_assert(__builtin_offsetof(os64_gui_event_t, doorbell.mask) == 4,
                "gui event ABI: doorbell at offset 4");
 _Static_assert(__builtin_offsetof(os64_gui_event_t, key) == 4,

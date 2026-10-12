@@ -317,10 +317,8 @@ static void concurrency_and_queue_contracts(void)
         input_event_t out;
         assert(gui_event_queue_pending(&queues[k]) && gui_event_queue_pop(&queues[k], &out));
         assert(out.type == INPUT_EVENT_APPEARANCE && out.appearance.generation_lo == latest);
-        for (int i=0; i<GUI_WINDOW_EVENTS_MAX-1; ++i) {
-            assert(gui_event_queue_pop(&queues[k], &out));
-            assert(out.type == INPUT_EVENT_MOUSE_MOVE);
-        }
+        assert(gui_event_queue_pop(&queues[k], &out));
+        assert(out.type == INPUT_EVENT_INPUT_LOST);
         assert(gui_event_queue_pop(&queues[k], &out) && out.type == INPUT_EVENT_POINTER_STATE);
         assert(!gui_event_queue_pending(&queues[k]));
     }

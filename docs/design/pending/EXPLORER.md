@@ -112,7 +112,8 @@ replaced rather than becoming a second menu implementation.
 Chris selected native popups that extend beyond their owner window. The
 focused [E1K GUI prerequisite](explorer/GUI_POPUPS.md) adopts Fable's smaller
 owned-window architecture after [review disposition](explorer/GUI_POPUPS_DISPOSITION.md).
-Two focused focus/input questions remain before native integration.
+Fable's second review closes the focus/input questions; the concrete
+[E1K handoff](explorer/E01K_HANDOFF.md) now governs implementation and validation.
 [E1's userland contract](explorer/E01_MENUS.md) consumes it; menu controllers,
 placement and rendering stay in userland.
 
@@ -446,7 +447,7 @@ the first browser to simulate it.
 
 Detailed [E1](explorer/E01_MENUS.md) and [E2](explorer/E02_ICONS.md) drafts now
 define the interaction, ownership and implementation boundaries. The next native
-gate is closure of the R1/R2 follow-up in [E1K](explorer/GUI_POPUPS.md). Sol's
-E1A action/status foundation is ready for ordinary review; its contract is
-unchanged. Agree the E2 visual family before producing its asset set. The first explorer window still follows E3/E4,
+gate is tested implementation and ordinary review of [E1K](explorer/E01K_HANDOFF.md).
+Sol's E1A action/status foundation is accepted (PR #254, `c6cc6e3c`);
+E1B waits for the native APIs. Agree the E2 visual family before producing its asset set. The first explorer window still follows E3/E4,
 without waiting for the separate E6 message-channel architecture.

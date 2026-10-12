@@ -29,7 +29,8 @@
 #define GUI_TITLEBAR_HEIGHT    20
 #define GUI_BORDER_WIDTH       1
 
-// The smallest content area a RESIZE may leave behind. Deliberately larger
+// Default minimum content for RESIZE; popup floors are capped by birth
+// capacity. Ordinary defaults are deliberately larger
 // than wm_create's 8x8 degenerate-surface guard, and for a different reason:
 // creation's floor exists so a 0-wide surface can't ripple NULLs through the
 // compositor, while this one exists so a drag can't produce a window with
@@ -205,15 +206,18 @@ typedef struct window
     //
     // What ownership MEANS is a client-API concept: gui_client.c enforces it
     // on every handle lookup, and gui_task_destroy_windows sweeps by it on
-    // task exit. The wm_ layer reads it too, for the sibling bit —
+    // task exit. The wm_ layer also validates popup associations and the sibling bit —
     // focus_window asks whether the window that just took the focus belongs
     // to the same task as the one losing it. A kernel thread can own a
     // window the same way, and simply never exits to trigger the sweep.
     uint64_t  owner;
+    uint32_t  popup_owner_id; // immutable same-task parent, zero for unowned
+    uint16_t  client_handle;  // assigned before birth focus notifications
+    bool      retiring;      // task sweep excludes doomed focus successors
 
     char      title[GUI_WINDOW_TITLE_MAX];
 
-    // Effective content floors, initialized to the default resize limits.
+    // Effective content floors; popup defaults are capped by birth capacity.
     uint32_t min_content_w, min_content_h;
 
     rect_t    frame;      // screen rect INCLUDING decorations
@@ -247,9 +251,9 @@ typedef struct window
     //     owner could write through a stale entry into recycled memory. That
     //     last one is the whole reason this shape was chosen over
     //     realloc-and-remap; the hazard it avoids is silent, not a fault.
-    // The price is standing memory: capacity is the SCREEN (see
-    // wm_canvas_capacity_for), so a small window still reserves a screenful
-    // twice over. Committing lazily is possible but needs a task reference or
+    // Ordinary windows reserve at least the screen (up to wm_dim_max());
+    // popups reserve birth content size. Both stores share this capacity
+    // through wm_canvas_capacity_for. Committing lazily is possible but needs a task reference or
     // a deferred-work channel to map pages into a foreign address space
     // safely — booked in DEBTS rather than built.
     uint32_t  canvas_cap_w, canvas_cap_h;
@@ -282,10 +286,14 @@ typedef struct window
 // layer records the value and compares it for that bit; what ownership MEANS
 // — who may look a handle up, whose exit collects the window — is
 // gui_client's.
-window_t *wm_create(const char *title, rect_t frame, uint32_t flags, uint64_t owner);
+window_t *wm_create(const char *title, rect_t frame, uint32_t flags, uint64_t owner,
+                    uint16_t client_handle, uint32_t popup_owner_id);
 
-// Unlink + free. (No owner-notification semantics yet — the caller is the
-// owner.) Damages the vacated area.
+// Follow immutable popup links to the owning ordinary/root window.
+window_t *wm_focus_root(window_t *w);
+
+// Unlink/free and conditionally return focus to the popup parent. The client
+// API enforces child-first destruction. Damages the vacated area.
 void wm_destroy(window_t *w);
 
 // Topmost unhidden window whose frame contains the point, or NULL if none
@@ -307,10 +315,10 @@ void wm_set_pinned(window_t *w, bool pinned);
 // wm_create sizes the kernel-side stores with it, and gui_window_create sizes
 // the task-backed canvas extent with it. A window may be created larger than
 // the screen (the client API allows up to wm_dim_max() — 4096, or the screen
-// if it is larger), so capacity is the larger of
-// the two — never smaller than what the window already is.
+// if it is larger), so ordinary capacity is the larger of the two.
+// NO_DECORATIONS | PINNED at birth selects content-sized popup capacity.
 uint32_t wm_dim_max(void);   // the largest side a window may have
-void wm_canvas_capacity_for(int32_t content_w, int32_t content_h,
+void wm_canvas_capacity_for(int32_t content_w, int32_t content_h, uint32_t flags,
                             uint32_t *cap_w, uint32_t *cap_h);
 
 // The frame this window would actually ADOPT for a requested one: content

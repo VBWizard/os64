@@ -2,10 +2,10 @@
 
 **Status:** architecture revised after [Fable's review](GUI_POPUPS_REVIEW.md),
 2026-10-11. Quinn selects focus-taking owned windows. The whole E1K packet is
-**not Ready**: the two focused review questions below need closure before the
-ownership/input implementation handoff. No ABI numbers or runtime results are
-assigned by this design. [Disposition](GUI_POPUPS_DISPOSITION.md) records what
-was accepted, changed and declined. E1A is independent and underway with Sol.
+**Implemented; awaiting ordinary code review** following Fable's second pass and the concrete
+[E1K handoff](E01K_HANDOFF.md). See the [evidence](evidence/e01k/README.md); Chris confirmed QEMU and P5 validation after the diagnostic fix. [Disposition](GUI_POPUPS_DISPOSITION.md) records what
+was accepted, changed and declined. E1A is merged and Chris has completed its
+P5 walkthrough. E1K implementation owner: Quinn.
 
 Chris selected native menus that can extend beyond their application window
 (D013), and delegated feedback disposition to Quinn. This is the GUI prerequisite,
@@ -44,22 +44,25 @@ menu-session object, private input queue, panel publication transaction,
 
 ## Ownership and focus
 
-The draft boundary has three calls: `popup_attach(popup, owner)`,
-`event_wait_any(out_handle)` and `window_get_content_rect(handle, out_rect)`.
-These are semantic names, not reserved ABI. Existing errors apply, plus a
-separate `BUSY` value, allocated with the implementation's ABI ledger. Preserve
+The boundary adds `event_wait_any(out_handle)` (63) and
+`window_get_content_rect(handle, out_rect)` (64). Owned popup creation uses
+the existing create call with owner handle in flags bits 48–63. There is no
+attach operation. Existing errors apply, plus BUSY (-7) and NOT_FOCUSED (-8). Preserve
 `INTERRUPTED` as the existing system-wide sentinel. New output pointers require
 the existing user-memory validation/copy discipline; do not dereference them
 while holding the GUI lock.
 
-An attached window must have the latched POPUP property. The owner must be a
-live window of the same task; self-links, cycles and reattachment are refused.
-The kernel stores a window identity, not a raw pointer or reusable slot. A
-cascade attaches each level to its parent; bound walks by the handle table.
-The toolkit additionally limits menu depth to 16. An unattached grootmenu root
-keeps its existing independent-process lifecycle; its children attach normally.
+An owned create must request the latched POPUP property and cannot request
+START_UNFOCUSED. Its parent must belong to the caller and be focused at birth.
+Validate its identity before allocation and again under `kGuiLock` before
+`wm_create`; a reused handle cannot substitute a different parent. A failed
+focus check creates nothing and returns NOT_FOCUSED. The immutable owner link
+stores a window ID, not a pointer or slot. A newborn cannot introduce a cycle.
+Cascades name the parent level; a dropdown names the document. An unowned
+grootmenu root keeps the existing independent-process and birth-focus behavior.
+The toolkit limits menu depth to 16.
 
-On destroying a **focused** attached popup, return focus to its live, visible,
+On destroying a **focused** owned popup, return focus to its live, visible,
 same-task owner, raising within existing bands. If that owner is ineligible,
 use the existing eligible-window fallback, excluding the dying window. If the
 popup no longer has focus, destruction must not change focus. No later userland
@@ -73,19 +76,19 @@ an explicit change to destroy behavior, not merely a new wrapper. Ordinary
 unattached windows retain their destruction contract. Owner close requests go
 through the app; the toolkit closes children before accepting destruction.
 
-Add the other same-task handle to focus events, retaining `gained` and `sibling`
-for existing consumers and the 32-byte event size. Fable proposed `uint16_t`;
-if chosen, assert the table bound rather than promising it can never grow.
-The handle must be known at birth before `focus_window` emits its event.
-**A reusable handle alone is not a durable identity:** question R1 below must
-settle reuse before this event is used as authority to preserve a menu.
+Add a uint16_t `other_handle` to focus events, retaining `gained`, `sibling`
+and the 32-byte event size; assert the table bound. Stamp the handle before
+birth focus delivery. It identifies the other party at delivery, not a durable
+identity. E1B uses the handoff's single-thread lifecycle/quarantine protocol:
+after destruction, drain surviving queues before allowing handle reuse through
+another create. A 64-event budget defers creation across turns if necessary.
 
 Skip POPUP windows in the Alt+Tab recency list. When focus starts in a popup,
 the switcher must treat its eligible ordinary owner as the current application,
 so the first Tab selects the next application rather than merely dismissing
 the menu onto its owner. Test the standalone launcher separately. Active chrome
 follows the focused popup's owner chain. Invalidate the affected ancestor chrome
-on create, attach, focus change and destroy; changing `composite_one`'s predicate
+on create, focus change and destroy; changing `composite_one`'s predicate
 alone cannot repaint undamaged pixels.
 
 libui's menu hook recognizes its own popup transitions before generic focus-loss
@@ -200,7 +203,8 @@ that ordering in the shared dispatcher. Do not close on a popup's focus-lost-to-
 owner and immediately forget the dismissal: keep the controller's transition
 state through the owner's corresponding focus event and gesture. Focus return
 from deliberate menu teardown must not swallow the next unrelated click.
-Question R2 requires explicit loss/order tests before claiming this reliable.
+The handoff specifies input-loss reset and queue quarantine; tests must cover
+both drain orders and destruction-generated focus return.
 
 Alt+F4 on the focused popup dismisses it; it does not close the document.
 Minimize/maximize remain declined for popups. Owner destruction requests close
@@ -213,7 +217,9 @@ Ordinary queued input defines command order; no atomic kernel activation fence
 is promised. A later external focus change does not undo an already processed
 command. A controller that has observed dismissal must not act on a subsequently
 drained stale selection from another panel. Queue loss must not fabricate a
-matched gesture; the existing queue does not yet supply that guarantee (R2).
+matched gesture. INPUT_LOST resets client interaction and discards pending
+key/mouse records before ordinary ring delivery resumes; retained pre-loss
+presses must not re-arm a control after reset.
 
 Serialize association/focus/handle mutations under `kGuiLock`. Follow existing
 `canvas_release_locked` / `canvas_pages_release` cleanup with lock order
@@ -234,52 +240,31 @@ cross-thread canvas-sharing promise and no general shootdown subsystem.
 
 | Packet | Scope | Readiness |
 | --- | --- | --- |
-| E1K-W | Any-window wait, shared waiter conflict rule, wrappers and diagnostic | Reviewed direction; implementation handoff must pin ABI/error layout and race fixtures. Can precede menu work. |
-| E1K-O | Owner links, focus identity/activation/return, content readback, chrome/switcher and input-loss contract | R1/R2 need focused review closure. Include diagnostic before E1B. |
-| E1K-C | Popup birth-size capacity in both stores, comments and resource tests | Reviewed direction; independently implementable after consumer audit and ABI documentation. |
+| E1K-W | Any-window wait, shared waiter conflict rule, wrappers and diagnostic | Implemented; see E01K_HANDOFF.md and the evidence packet. |
+| E1K-O | Owner links, focus identity/activation/return, content readback, chrome/switcher and input-loss contract | Implemented and exercised by popuptest; ordinary review pending. |
+| E1K-C | Popup birth-size capacity in both stores, comments and resource tests | Implemented; small popup pitch/minimum checks pass in the guest. |
 
 These are scope boundaries, not three mandatory PRs. Keep E1K-O coherent with
-its lifetime/input evidence. No implementation is launched by this revision.
+its lifetime/input evidence. Chris authorized implementation on 2026-10-11.
 
 | Evidence | Required cases |
 | --- | --- |
-| Host state/placement | Cycle/self/cross-task/reattach rejection, checked edge placement, clipped tall menus, small birth capacity, allocation failure and rollback. |
+| Host state/placement | Invalid-owner/cross-task/unfocused-owner rejection, checked edge placement, clipped tall menus, small birth capacity, allocation failure and rollback. |
 | Wait/SMP guest | Empty set, busy waiter in any slot, single/any-wait collisions, interruption, destroy/create/reuse while parked, no stale waiter, fair progress under noisy owner traffic. |
 | Diagnostic GUI | Panels beyond owner, submenu Escape returns parent, complete dismissal returns owner, outside click reaches other app once, owner dismissing click consumed in both queue-drain orders, same-task settings dismissal, owner chrome damage, Alt+Tab from deep popup. |
 | Input fault injection | Drop an up then a later down before an up; evict focus under repeated focus pressure; hold Enter/Alt across popup creation; close while parent events are queued; no false action or stale-handle family match. |
-| Focus/lifetime | External focus during slow opening, failed attach/activation, BUSY owner destroy with no partial cleanup, task exit in any handle order, input arriving during teardown, handle reuse before old focus records drain. |
+| Focus/lifetime | External focus during slow opening, failed owned create, BUSY owner destroy with no partial cleanup, task exit in any handle order, input arriving during teardown, handle reuse before old focus records drain. |
 | Font/appearance | Close on font adoption, failed owner preparation, no automatic reopen/focus theft, next opening uses new metrics, all four screen edges, VT return preserves menu absent another cancellation reason. |
 | Resources/regressions | Repeated open/close restores window count and live allocations; VA high-water may grow by existing policy. Ordinary focus/resize, legacy launcher, doorbells, settings windows and supported ASan/UBSan/LSan tests. |
 
-## Remaining focused review questions
+## Review closure
 
-**R1 — Safe focus acquisition and identity.** A legacy create takes focus before
-`popup_attach` runs. Attach alone cannot undo a slow open stealing focus after
-an outside click. Preferred refinement: create unfocused, draw, then attach and
-conditionally activate under `kGuiLock` only if the intended parent is still
-focused/eligible; otherwise refuse without changing focus. Settle the existing
-START_UNFOCUSED no-focused-window exception, birth visibility and refusal cleanup
-explicitly. An atomic owned-create is an alternative if smaller. Also settle
-queued `other_handle` reuse: add a stable other-window identity or demonstrate
-a bounded lifecycle protocol that cannot mistake an old event for a new family.
-The implementation handoff must state the chosen fields, return statuses and
-focus linearization point. This is an addition to Fable's attachment proposal.
+Fable's [second pass](GUI_POPUPS_REVIEW.md#7-second-pass-r1-and-r2-fable-2026-10-11-against-the-revised-gui_popupsmd)
+accepts atomic owned create and INPUT_LOST on the existing event queue. Quinn
+selects owned create rather than attach. The handoff makes the bounded drain
+protocol explicit after destruction, and discards queued gesture records at
+loss delivery so stale presses cannot re-arm state. These are implementation
+requirements of the reviewed identity/loss guarantees, not a kernel menu object.
 
-**R2 — Lost input and dismissal order.** `gui_event_queue_push` drops ordinary
-input when full; inserting a focus event evicts the oldest record, which can
-itself be focus. “Focus is never dropped” is not a retained-history guarantee.
-Example: delivered down, lost up, lost next down, delivered next up can activate
-the old armed entry. Preferred refinement: a coalesced per-window input-loss
-indication outside the ring, delivered before further ordinary input, with an
-explicit discard/reset policy so pre-loss presses cannot rearm the controller.
-Use the existing queue, not a menu queue. Pair this with the owner-dismissal
-state machine in E1B and loss at each boundary. Settle event layout, wake and
-old-consumer behavior before implementation. This changes the existing input
-contract and needs Fable review under D012; no review of this refinement is
-claimed yet.
-
-Fable's received review establishes the smaller architectural direction. It
-is not approval of R1/R2, and the word “additive” does not exempt changes to
-existing syscall behavior from Chris's review rule. No blanket re-review of
-Roam, E1A or icons is requested. E1B/E1C wait for the final E1K contract and
-its implementation evidence.
+E1B/E1C wait for the implementation evidence and stable public wrappers. E6
+still needs its own standalone channel design and architectural review.

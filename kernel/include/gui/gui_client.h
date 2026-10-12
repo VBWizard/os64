@@ -35,6 +35,8 @@
 // Booted without the GUI. Moved from -4 to make room for the common
 // INTERRUPTED sentinel above — every consumer names it symbolically.
 #define GUI_ERR_NOT_RUNNING     (-6)
+#define GUI_ERR_BUSY            (-7)
+#define GUI_ERR_NOT_FOCUSED     (-8)
 
 // Create a window (frame includes decorations). Returns a handle > 0.
 int64_t gui_window_create(const char *title, int32_t x, int32_t y,
@@ -80,6 +82,10 @@ int64_t gui_event_ring(int64_t handle, uint32_t mask);
 // again. The idle answer to a
 // poll loop: an app that waits costs NOTHING until somebody types at it.
 int64_t gui_event_wait(int64_t handle, input_event_t *out);
+
+// Nonconsuming task-wide readiness; see os64/gui.h for conflicts and lifetime.
+int64_t gui_event_wait_any(int64_t *out_handle);
+int64_t gui_window_get_content_rect(int64_t handle, rect_t *out);
 
 int64_t gui_screen_info(uint32_t *width, uint32_t *height);
 

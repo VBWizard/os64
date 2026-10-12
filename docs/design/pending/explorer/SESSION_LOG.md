@@ -299,3 +299,59 @@ passed 428 fake-font and 475 real-font checks with ASan, UBSan and leak detectio
 enabled. Both sandbox runs encountered LeakSanitizer thread-attachment EPERM;
 the same compiled binaries passed outside the sandbox with leak checking enabled.
 No P5 deployment or additional guest test was performed for this relocation.
+
+## 2026-10-11 — E1A accepted; E1K implementation and evidence (Quinn)
+
+Chris confirmed the P5 test complete after gallery relocation. E1A is accepted:
+PR #254 merged as `c6cc6e3c`, followed by `2bc9f2f4`. Hardware acceptance is
+user-reported; no installed-binary hash was captured.
+
+Chris authorized the next E1K work. Fable's second review is preserved beside
+the design; D015 and E01K_HANDOFF.md record the selected contract. Quinn added
+owned popup creation with locked identity/focus revalidation, conditional return,
+child-destroy BUSY, task-family retirement, focus peer handles, any-window wait
+with shared waiter-conflict rules, content readback, birth-size popup buffers,
+ancestor chrome and popup exclusion from Alt+Tab. INPUT_LOST discards unsafe
+queued gestures, and libui/action routing reset interaction state.
+
+The [E1K evidence packet](evidence/e01k/README.md) records cross builds, queue
+wrap/drop/eviction tests, 495/542 fake/real action checks, appearance regressions,
+146 guest checks on four cores, existing focus/doorbell regressions and native
+panel/Alt+Tab/outside-click screenshots. ASan/UBSan/LeakSanitizer remained enabled
+on supported runs outside the sandbox. The fixture's initial signal-sender
+stall was corrected using a separate sending process; no speculative kernel
+change was made. Known coverage limits are explicit in the evidence packet.
+
+Working branch: `codex/explorer-e1k`, base `2bc9f2f4`, isolated checkout
+`.worktrees/explorer-e1k`. Changes are uncommitted for ordinary review, consistent
+with the QEMU testing guide's reporting instruction. No P5 deployment occurred.
+Chris asked whether to assign E1B to Sol; the ordering remains E1K validation and
+review, then E1B menus, then E1C consumer migration. E2 visuals and E6's separately
+reviewed channel design remain independent future work.
+
+## 2026-10-11 — QEMU checkout exposes popuptest readiness assumption
+
+Chris reported one line-55 failure in five QEMU runs, followed by four passing
+runs; this was explicitly not P5 testing. The fixture incorrectly required B
+on the next any-window readiness return. A deliberately queued A notification
+reproduced the same assertion failure on the existing kernel.
+
+The diagnostic now consumes unrelated events and verifies the target doorbell;
+notification waits have a watchdog. Sibling readiness assertions and the
+competing-waiter startup race were corrected without changing the kernel.
+Ten consecutive four-core QEMU runs passed 153 checks apiece, zero failures and
+exit 0, with deterministic unrelated readiness in each run. The
+[regression packet](evidence/e01k/wake-regression/README.md) preserves the failing
+reproducer, results and hashes. The exact unsolicited event in Chris's original
+run was not logged and cannot be identified retrospectively. P5 acceptance and
+ordinary code review remain pending.
+
+## 2026-10-11 — Corrected E1K diagnostic validated in QEMU and on P5
+
+Chris confirmed validation in both QEMU and on the P5 after the readiness-test
+fix, and confirmed the startup explanation makes the diagnostic's purpose clear.
+Record this as user-reported acceptance; no additional run counts, logs or
+installed-binary hashes were supplied. The earlier five-run failure report
+remains QEMU-only history. Current handoff and evidence summaries now reflect
+the subsequent P5 validation. Ordinary code review remains the next E1K step
+before Sol starts E1B; this update changes documentation only.

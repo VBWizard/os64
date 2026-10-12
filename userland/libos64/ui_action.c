@@ -379,7 +379,8 @@ bool os64_ui_shortcut_route(os64_ui_shortcut_router_t *r, os64_ui_action_view_t 
     if (out) *out = (os64_ui_action_result_t){OS64_UI_OK, 0};
     if (!r || !ev) return false;
     if ((ev->type == OS64_GUI_EVENT_WINDOW_FOCUS && !ev->focus.gained) ||
-        ev->type == OS64_GUI_EVENT_WINDOW_COVERED) { os64_ui_shortcut_reset(r); return false; }
+        ev->type == OS64_GUI_EVENT_WINDOW_COVERED ||
+        ev->type == OS64_GUI_EVENT_INPUT_LOST) { os64_ui_shortcut_reset(r); return false; }
     if (ev->type != OS64_GUI_EVENT_KEY_DOWN && ev->type != OS64_GUI_EVENT_KEY_UP) return false;
     unsigned identity = ev->key.scancode + ((ev->key.modifiers & OS64_GUI_MOD_HID) ? 256u : 0);
     unsigned byte = identity / 8, mask = 1u << (identity % 8);

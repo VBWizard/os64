@@ -3,21 +3,16 @@
 ## Status and ownership
 
 - **State:** Designing; detailed contract drafted 2026-10-11. Not Ready.
-- **Design owner:** Quinn. E1A implementation owner: Sol ([PR #254](https://github.com/VBWizard/os64/pull/254) under review).
-  Native implementation and ordinary code reviewer: unassigned.
-- **Branch:** `codex/explorer-design`, isolated worktree `.worktrees/explorer-design`.
-  Parent is `f3f5f50e`; inspected current `userland` is `6d988565`. The inspected
-  GUI, libui, grootmenu and Scribe files do not differ between these baselines.
-- **Publication:** local design work. E1A implementation is in the separate
-  `codex/explorer-e01a` worktree; implementation commit `bd86ce4f` and [PR #254](https://github.com/VBWizard/os64/pull/254) carry its scoped evidence.
-- **Prerequisite:** E1K native popup contract in [GUI_POPUPS.md](GUI_POPUPS.md).
-  Chris selected native popups extending beyond their owner window. E1K needs
-  closure of the focused R1/R2 follow-up and implementation before native
-  integration is Ready. Fable's first review is received and dispositioned.
+- **Design owner:** Quinn. E1A owner: Sol (PR #254 merged `c6cc6e3c`, accepted).
+  E1K owner: Quinn. E1B implementation waits for the tested native API.
+- **Branch:** `codex/explorer-e1k`, based on `userland` at `2bc9f2f4`.
+- **Prerequisite:** E1K in [GUI_POPUPS.md](GUI_POPUPS.md) and the concrete
+  [handoff](E01K_HANDOFF.md). Fable's second review closes R1/R2; implementation,
+  guest evidence and ordinary review remain the native integration gate.
 - **Fable scope:** E1K changes compositor ownership/input behavior and requires
   architectural review (D012/D013). E1's actions/widgets/adapters follow ordinary
   code review; new kernel work must not be folded into their PRs.
-- **Governing decisions:** D002, D008–D014 in [DECISIONS.md](DECISIONS.md).
+- **Governing decisions:** D002, D008–D015 in [DECISIONS.md](DECISIONS.md).
 
 This is an implementation contract, not evidence that an API exists. Proposed
 public names below may change together during implementation; semantics and
@@ -38,7 +33,7 @@ Menus and status bars remain independently usable.
 | E1C | grootmenu migration and Scribe action/menu/status adoption | E1B | Two production consumers; retain their existing policies |
 
 These are logical implementation packets, not size targets or promises of one
-PR each. E1A can proceed while E1K is under review. E2 adds real icon assets and
+PR each. E1A is complete independently of E1K. E2 adds real icon assets and
 the provider described in [E02_ICONS.md](E02_ICONS.md); E1B's layout and ownership
 must already accommodate that provider. E1 is accepted after E1C's evidence.
 Do not rename the other roadmap slices to accommodate these suffixes.
@@ -172,7 +167,10 @@ It dispatches the focused popup's keys to the controller and owner events to the
 owner; apps must not each invent a polling loop. Drain round-robin with a total
 64-event budget per turn, then service paints/work. Remaining events keep the
 next wait ready. One UI thread owns window creation/destruction and dispatch.
-Another same-task window's focus is not a menu-family transition.
+Another same-task window's focus is not a menu-family transition. Destruction
+marks handle tombstones and forbids creation until each surviving queue has been
+drained after the last destruction. Retain tombstones across budget boundaries;
+see E1K's lifecycle protocol. Draining only before destruction is insufficient.
 
 | Input / condition | Behavior |
 | --- | --- |
@@ -407,11 +405,11 @@ commands, screenshots and exact tested commits, not only `/tmp`.
 ## Handoff and readiness
 
 - Current output: concrete userland contract and logical packet boundaries.
-- Unresolved prerequisite: E1K's R1 focus acquisition/identity and R2 input-loss
-  follow-up, followed by native implementation. See the received
-  [review](GUI_POPUPS_REVIEW.md) and [disposition](GUI_POPUPS_DISPOSITION.md).
+- Prerequisite: E1K implementation, test evidence and ordinary review. Fable's
+  [second review](GUI_POPUPS_REVIEW.md) closes the design questions; the
+  [concrete handoff](E01K_HANDOFF.md) includes queue-loss and lifecycle details.
 - Icon appearance: E2 visual choice remains open; NULL-provider behavior lets
   E1 progress without placeholder artwork becoming the shipped icon family.
-- Active independent unit: [E1A's handoff](E01A_HANDOFF.md), with Sol ready for ordinary review
-  on `codex/explorer-e01a`. Its action/status contract is unchanged by this review.
-  Native E1B/E1C must wait for the final E1K API and evidence.
+- E1A is accepted. Native E1B/E1C wait for E1K. E1B must explicitly test
+  dismissal suppression expiry when a focus transition has no content click
+  (titlebar, programmatic focus), as well as both cross-queue delivery orders.
