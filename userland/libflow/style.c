@@ -2370,14 +2370,18 @@ static void identity(double m[16])
     m[0] = m[5] = m[10] = m[15] = 1;
 }
 
+// An angle in radians, reduced by whole turns in its own unit first
+// (fmod is exact): rotate(1e308deg) times pi would be past a double, and
+// a turn more or less is the same turn. Radians stay as written; cos and
+// sin reduce them themselves.
 static double radians(const garb_val_t *v)
 {
     static const double kPi = 3.14159265358979323846;
     switch (v->unit) {
-    case GARB_U_GRAD: return v->number * kPi / 200;
+    case GARB_U_GRAD: return fmod(v->number, 400) * kPi / 200;
     case GARB_U_RAD: return v->number;
-    case GARB_U_TURN: return v->number * 2 * kPi;
-    default: return v->number * kPi / 180;
+    case GARB_U_TURN: return fmod(v->number, 1) * 2 * kPi;
+    default: return fmod(v->number, 360) * kPi / 180;
     }
 }
 
@@ -2419,7 +2423,9 @@ static int quarters(const garb_val_t *v)
         return -1;
     if (per == 0)
         return 0;
-    double q = fmod(n / per, 4);
+    // Reduced by a whole turn before it is divided, so a huge angle
+    // (1e308turn) never overflows on the way to its quarter.
+    double q = fmod(n, 4 * per) / per;
     return (int)(q < 0 ? q + 4 : q);
 }
 

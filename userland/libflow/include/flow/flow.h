@@ -726,9 +726,9 @@ struct flow_box {
     // miss what is drawn.
     os64_gui_rect_t overflow;
     // How far past `overflow` a shadow it or anything in it casts may be
-    // drawn, in pixels: a shadow is in no box's overflow, and a group that
-    // composites the box must hold it.
-    int32_t ink;
+    // drawn, in pixels, on each side in CSS's side order: a shadow is in no
+    // box's overflow, and a group that composites the box must hold it.
+    int32_t ink[4];
     // Content box in the same frame coordinates as rect; set for box nodes.
     os64_gui_rect_t content;
     int32_t baseline;               // LINE, TEXT, ATOMIC, MARKER: the line's

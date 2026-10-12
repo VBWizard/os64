@@ -730,30 +730,48 @@ static void reach_stacked(flow_tree_t *t)
     }
 }
 
-// How far past its shape one shadow may be drawn: its offset and spread,
+// How far past its shape one shadow may be drawn on each side, in CSS's
+// side order: its spread, less its offset toward that side's opposite,
 // and its blur's reach — twice the blur radius, a Gaussian of standard
-// deviation half the radius being nothing past three of them.
-static int64_t shadow_reach(const flow_shadow_t *sh)
+// deviation half the radius being nothing past three of them — never less
+// than 0. A shadow cast right reaches right, not left.
+static void shadow_reach(const flow_shadow_t *sh, int64_t out[4])
 {
-    int64_t dx = sh->x < 0 ? -(int64_t)sh->x : sh->x, dy = sh->y < 0 ? -(int64_t)sh->y : sh->y;
-    return (dx > dy ? dx : dy) + (sh->spread > 0 ? sh->spread : 0) + 2 * (int64_t)sh->blur + 1;
+    int64_t grow = (sh->spread > 0 ? sh->spread : 0) + 2 * (int64_t)sh->blur + 1;
+    int64_t side[4] = {grow - sh->y, grow + sh->x, grow + sh->y, grow - sh->x};
+    for (int k = 0; k < 4; k++)
+        out[k] = side[k] > 0 ? side[k] : 0;
 }
 
-// Every box's `ink`: how far a shadow it casts (an inset one falls
-// inside) or its text casts, or any shadow of a box inside it, reaches
-// past its shape — its own worked as the walk goes down, each child's
-// passed up as the walk climbs past it. Without recursion, the tree being
-// as deep as the page.
-static int32_t own_ink(const flow_style_t *s)
+// Every box's `ink`: how far, on each side, a shadow it casts (an inset
+// one falls inside) or its text casts, or any shadow of a box inside it,
+// reaches past its shape — its own worked as the walk goes down, each
+// child's passed up side by side as the walk climbs past it. Without
+// recursion, the tree being as deep as the page.
+static void own_ink(flow_box_t *b)
 {
-    int64_t most = 0;
-    for (int32_t i = 0; i < s->nbox_shadows; i++)
-        if (!s->box_shadows[i].inset && shadow_reach(&s->box_shadows[i]) > most)
-            most = shadow_reach(&s->box_shadows[i]);
-    for (int32_t i = 0; i < s->ntext_shadows; i++)
-        if (shadow_reach(&s->text_shadows[i]) > most)
-            most = shadow_reach(&s->text_shadows[i]);
-    return (int32_t)(most < INT32_MAX / 4 ? most : INT32_MAX / 4);
+    const flow_style_t *s = b->style;
+    int64_t most[4] = {0, 0, 0, 0}, one[4];
+    for (int32_t i = 0; i < s->nbox_shadows + s->ntext_shadows; i++) {
+        bool text = i >= s->nbox_shadows;
+        const flow_shadow_t *sh = text ? &s->text_shadows[i - s->nbox_shadows] : &s->box_shadows[i];
+        if (sh->inset)
+            continue;
+        shadow_reach(sh, one);
+        for (int k = 0; k < 4; k++)
+            if (one[k] > most[k])
+                most[k] = one[k];
+    }
+    for (int k = 0; k < 4; k++)
+        b->ink[k] = (int32_t)(most[k] < INT32_MAX / 4 ? most[k] : INT32_MAX / 4);
+}
+
+static void ink_up(const flow_box_t *b)
+{
+    flow_box_t *up = (flow_box_t *)b->parent;
+    for (int k = 0; k < 4; k++)
+        if (b->ink[k] > up->ink[k])
+            up->ink[k] = b->ink[k];
 }
 
 static void ink_reach(flow_box_t *root)
@@ -761,27 +779,23 @@ static void ink_reach(flow_box_t *root)
     if (root == NULL)
         return;
     flow_box_t *b = root;
-    b->ink = own_ink(b->style);
+    own_ink(b);
     for (;;) {
         if (b->first != NULL) {
             b = (flow_box_t *)b->first;
-            b->ink = own_ink(b->style);
+            own_ink(b);
             continue;
         }
         // Climb past every box with no next sibling, handing its ink up.
         while (b != root && b->next == NULL) {
-            flow_box_t *up = (flow_box_t *)b->parent;
-            if (b->ink > up->ink)
-                up->ink = b->ink;
-            b = up;
+            ink_up(b);
+            b = (flow_box_t *)b->parent;
         }
         if (b == root)
             return;
-        flow_box_t *up = (flow_box_t *)b->parent;
-        if (b->ink > up->ink)
-            up->ink = b->ink;
+        ink_up(b);
         b = (flow_box_t *)b->next;
-        b->ink = own_ink(b->style);
+        own_ink(b);
     }
 }
 
@@ -1870,12 +1884,13 @@ os64_gui_rect_t flow_affine_rect_back(const double m[6], os64_gui_rect_t r)
     return affine_back(m, r);
 }
 
-// `r` grown by `d` on every side, held to what a rect can say.
-static os64_gui_rect_t grown(os64_gui_rect_t r, int64_t d)
+// `r` grown by `d` on each side, in CSS's side order, held to what a rect
+// can say.
+static os64_gui_rect_t grown(os64_gui_rect_t r, const int32_t d[4])
 {
     const int64_t lo = INT32_MIN / 2, hi = INT32_MAX / 2;
-    int64_t x0 = (int64_t)r.x - d, y0 = (int64_t)r.y - d;
-    int64_t x1 = (int64_t)r.x + r.w + d, y1 = (int64_t)r.y + r.h + d;
+    int64_t x0 = (int64_t)r.x - d[FLOW_LEFT], y0 = (int64_t)r.y - d[FLOW_TOP];
+    int64_t x1 = (int64_t)r.x + r.w + d[FLOW_RIGHT], y1 = (int64_t)r.y + r.h + d[FLOW_BOTTOM];
     x0 = x0 < lo ? lo : x0;
     y0 = y0 < lo ? lo : y0;
     x1 = x1 > hi ? hi : x1;

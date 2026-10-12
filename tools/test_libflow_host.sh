@@ -20,7 +20,7 @@ trap cleanup EXIT
 # -fno-builtin and -fno-tree-loop-distribute-patterns for test_garb_host.sh's
 # reason: libos64's str.c defines memset, and an optimizer may turn
 # os64_memset's loop into a call to it that recurses forever.
-cc -std=c11 -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined \
+cc -std=c11 -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined,float-cast-overflow \
    -fno-builtin -fno-tree-loop-distribute-patterns \
    -DF_BLOCK_BYTES=1 \
    -fno-sanitize-recover=all \

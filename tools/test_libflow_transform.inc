@@ -178,6 +178,16 @@ static void transform_layout_cases(void)
         "    block div 0 0 100 10 stacked through 1000 0 0 1000 0 0\n"
         "    block div 0 10 100 10 stacked through 1000 0 0 707 0 4393\n");
 
+    // A huge angle is a whole number of turns, or reduced by them first:
+    // rotate(1e308turn) is no turn at all.
+    cascade_layout_case("transform: a huge whole number of turns is none",
+        XFORM_STYLE "div{width:100px;height:10px}"
+        ".a{transform:rotate(1e308turn)}</style><div class=a></div>", 400,
+        "page 400 10\n"
+        "block html 0 0 400 10\n"
+        "  block body 0 0 400 10\n"
+        "    block div 0 0 100 10 stacked transform 0 0\n");
+
     // A scale written as a calc() of a percentage is that hundredth, in a
     // list and as the property: half about the centre (50, 5), 0.5x + 35
     // with the 20 halved; twice about (50, 15), the 10 doubled, reaching 25.
@@ -608,6 +618,35 @@ static void transform_through_cases(void)
     expect("transform: a turned group holds the shadows it paints",
            shadowed.opens == 1 && rect_is(shadowed.first, -26, -26, 152, 72), NULL);
     vis.ctx = &gr;
+    flow_free(t);
+    sheeted_close(&q);
+
+    // A shadow reaches only the sides it is cast toward: 200px 0, no
+    // blur, reaches 201 right, 1 up and down, and 1 - 200 — nothing — left.
+    sheeted_open(&q, XFORM_STYLE ".t{width:100px;height:20px;box-shadow:200px 0 #000;"
+                     "transform:rotate(90deg)}</style><div class=t></div>",
+                 400, 600);
+    t = flow_layout(q.doc, q.page, 400, &q.env);
+    XformGroups oneside = {0};
+    vis.ctx = &oneside;
+    flow_visit_groups(t, (os64_gui_rect_t){0, 0, 400, 600}, top, &vis);
+    expect("transform: a shadow cast one way grows its group that way",
+           oneside.opens == 1 && rect_is(oneside.first, 0, -1, 301, 22), NULL);
+    vis.ctx = &gr;
+    flow_free(t);
+    sheeted_close(&q);
+
+    // rotate(1e308deg), reduced by whole turns before it meets pi, is drawn
+    // through a finite matrix — not upright for want of a finite cosine.
+    sheeted_open(&q, XFORM_STYLE ".t{width:100px;height:20px;transform:rotate(1e308deg)}"
+                     "</style><div class=t id=t></div>",
+                 400, 600);
+    t = flow_layout(q.doc, q.page, 400, &q.env);
+    tb = box_with_id(t, q.doc->document, "t");
+    through = flow_box_through(tb, top, m, NULL, NULL);
+    expect("transform: a huge angle in degrees is turned, not drawn upright",
+           through && isfinite(m[0]) && isfinite(m[1]) && fabs(m[0] * m[0] + m[1] * m[1] - 1) < 1e-9,
+           NULL);
     flow_free(t);
     sheeted_close(&q);
 
