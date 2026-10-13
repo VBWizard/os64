@@ -883,6 +883,13 @@ bool flow_box_through(const flow_box_t *box, flow_point_t scroll, double m[6],
 // blurs a shadow with three box blurs of radius blur / 2, and a pixel — so
 // a group's bounds and the painter agree on what a shadow covers.
 int32_t flow_shadow_blur_reach(int32_t blur);
+// Whether corner radii (flow_box_radii) round any corner: one needs both
+// its radii.
+bool flow_radii_rounded(const int32_t radii[4][2]);
+// Whether a box shadow is drawn SHARP, as rectangles with no blur and no
+// blur's pixel: an outer one with no blur on a `square` box, one with no
+// rounded corner. The painter's choice, and what a group's bounds hold.
+bool flow_shadow_sharp(const flow_shadow_t *sh, bool square);
 // Whether a list marker of this style is drawn as a shape — a disc, a
 // circle, a square — rather than as its text: the painter's choice, and
 // what a marker's ink and text shadows follow.

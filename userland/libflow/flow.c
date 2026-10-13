@@ -502,11 +502,14 @@ static long double power_of_two(int e);
 // A number as `u` 2^`e`, 1 <= |u| < 2 or u = 0 (one that is no finite
 // number is kept as it is, e = 0): a long double's 64-bit significand with
 // an exponent no product of a transform list's 64 functions can pass. A
-// matrix entry's magnitude is the PRODUCT of its
-// factors', so 17 scaleX(1e308) before 17 scaleX(1e-308) — a finite
-// composite, near the identity — would leave even a long double's range on
-// the way, and dividing the whole matrix down cannot save it: what one
-// column grows by, the next does not, and the spread underflows instead.
+// matrix entry's magnitude is the PRODUCT of its factors', so 17
+// scaleX(1e308) before 17 scaleX(1e-308) — a finite composite, near the
+// identity — would leave even a long double's range on the way, and
+// dividing the whole matrix down cannot save it: what one column grows by,
+// the next does not, and the spread underflows instead. Its RANGE is all
+// it widens: each product and sum still rounds to 64 bits, which is past
+// a browser's doubles and is the numeric contract (PILE3.md § Transforms,
+// the painter, Booked).
 typedef struct {
     long double u;
     int64_t e;
@@ -582,10 +585,9 @@ static void mat_fn(Wide m[16], const flow_transform_t *f, int64_t w, int64_t h)
 void f_transform_matrix(const flow_style_t *s, int64_t x, int64_t y, int64_t w, int64_t h,
                         double out[16])
 {
-    // Composed in Wide, narrowed once: a product the page's numbers make
-    // ordinary — matrix(1e308, 1e308, 1e308, 1e308, 0, 0) matrix(1e308,
-    // -1e308, -1e308, 1e308, 0, 0) is the zero matrix — comes out, however
-    // far outside a double the way there went.
+    // Composed in Wide, narrowed once, so how far outside a double the way
+    // goes does not matter: matrix(1e308, 1e308, 1e308, 1e308, 0, 0)
+    // matrix(1e308, -1e308, -1e308, 1e308, 0, 0) is the zero matrix.
     Wide m[16] = {{0, 0}};
     m[0] = m[5] = m[10] = m[15] = (Wide){1, 0};
     double ox = (double)(x + f_len(s->transform_origin[0], w));
@@ -603,9 +605,10 @@ void f_transform_matrix(const flow_style_t *s, int64_t x, int64_t y, int64_t w, 
     mat_translate(m, -ox, -oy, -oz);
     // Narrowed as it is where a double holds it, so an ordinary matrix
     // keeps w = 1 to the bit; otherwise divided by its largest entry's
-    // power of two first. The matrix is homogeneous — every reader divides
-    // by w — so that draws the same, and only an entry too small for a
-    // double beside the largest is lost, to 0.
+    // power of two first, which every reader allows — the matrix is
+    // homogeneous, and each divides by w. An entry too small for a double
+    // beside the largest is lost, to 0: a w lost so is no longer flat, and
+    // the box is drawn upright (the numeric contract, above).
     int64_t most = INT64_MIN;
     for (int i = 0; i < 16; i++)
         if (m[i].u != 0 && m[i].e > most)
@@ -662,7 +665,7 @@ static const flow_frame_t *transform_new(Build *bd, const flow_style_t *s, int64
     // m3 x + m7 y + m15, divides everywhere by the same w > 0 when m3 = m7
     // = 0 — an affine map, in pixels with the 26.6 translation taken down.
     // Exactly 0: every function but perspective() and matrix3d() keeps the
-    // w row (0, 0, 0, 1), and so does their product, to the bit. A
+    // w row (0, 0, 0, 1), and so does their product, its 0s to the bit. A
     // TRANSLATION besides when what it does to x and y, w divided out, is
     // exactly the identity — every turn by whole quarters, rotate(0),
     // scale(1) and skew(0) are exact (style.c's quarters), so nothing is
@@ -846,16 +849,31 @@ int32_t flow_shadow_blur_reach(int32_t blur)
     return (int32_t)(r < INT32_MAX ? r : INT32_MAX);
 }
 
-// How far past its shape one shadow may be drawn on each side, in CSS's
-// side order: its spread (which may shrink it), less its offset toward
-// that side's opposite, and its blur's reach as the painter blurs it
-// (flow_shadow_blur_reach) — never less than 0. A shadow cast right
-// reaches right, not left. A text shadow is drawn sharp (the painter draws
-// its run offset, unblurred): it has no spread and no blur, not even the
-// blur's pixel, and reaches only by its offset.
-static void shadow_reach(const flow_shadow_t *sh, bool blurred, int64_t out[4])
+bool flow_radii_rounded(const int32_t radii[4][2])
 {
-    int64_t grow = blurred ? sh->spread + flow_shadow_blur_reach(sh->blur) : 0;
+    for (int c = 0; c < 4; c++)
+        if (radii[c][0] > 0 && radii[c][1] > 0)
+            return true;
+    return false;
+}
+
+bool flow_shadow_sharp(const flow_shadow_t *sh, bool square)
+{
+    return !sh->inset && sh->blur == 0 && square;
+}
+
+// How far past its shape one outer shadow may be drawn on each side, in
+// CSS's side order: its spread (which may shrink it), less its offset
+// toward that side's opposite, and its blur's reach as the painter blurs
+// it (flow_shadow_blur_reach) — never less than 0. A shadow cast right
+// reaches right, not left. One drawn SHARP has no blur's reach, not even
+// its pixel: a text shadow (the painter draws its run offset, unblurred,
+// and it has no spread), and a box shadow the painter draws as rectangles
+// (flow_shadow_sharp; `square`: the box has no rounded corner).
+static void shadow_reach(const flow_shadow_t *sh, bool text, bool square, int64_t out[4])
+{
+    bool sharp = text || flow_shadow_sharp(sh, square);
+    int64_t grow = (text ? 0 : sh->spread) + (sharp ? 0 : flow_shadow_blur_reach(sh->blur));
     int64_t side[4] = {grow - sh->y, grow + sh->x, grow + sh->y, grow - sh->x};
     for (int k = 0; k < 4; k++)
         out[k] = side[k] > 0 ? side[k] : 0;
@@ -917,12 +935,18 @@ static void own_ink(flow_box_t *b)
                 most[k] = glyph[k];
         }
     }
+    bool square = true;
+    if (nbox > 0) {
+        int32_t radii[4][2];
+        flow_box_radii(b, radii);
+        square = !flow_radii_rounded(radii);
+    }
     for (int32_t i = 0; i < nbox + ntext; i++) {
         bool text = i >= nbox;
         const flow_shadow_t *sh = text ? &s->text_shadows[i - nbox] : &s->box_shadows[i];
         if (sh->inset)
             continue;
-        shadow_reach(sh, !text, one);
+        shadow_reach(sh, text, square, one);
         // A text shadow is the glyphs drawn moved: their overhang, and more.
         for (int k = 0; k < 4; k++)
             if (one[k] + (text ? glyph[k] : 0) > most[k])
@@ -1727,7 +1751,7 @@ bool flow_affine_invert(const double m[6], double inv[6])
     // huge, tiny, lopsided or nearly singular — matrix(2^52, 2^52 - 1,
     // 2^52 + 1, 2^52, 0, 0), determinant 1, at any scale and with its
     // entries spread across a double's range — comes back whenever its
-    // inverse is finite.
+    // inverse is finite, each entry within a few long-double roundings.
     long double a = m[0], b = m[1], c = m[2], d = m[3];
     long double det = determinant(m[0], m[1], m[2], m[3]);
     if (det == 0)

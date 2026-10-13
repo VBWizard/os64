@@ -304,7 +304,10 @@ static bool finite_numbers(const garb_val_t *v)
 // What of a transform value is drawn as something other than it says, by
 // the name of the function or property: one that is not drawn flat, or is
 // written with a number past a double, which is drawn upright where it
-// moves the box's origin. The individual properties are always flat.
+// moves the box's origin. The individual properties are always flat. Each
+// function is judged by its own numbers: finite ones that compose, or
+// scale to device units, past what the face draws are not named here (the
+// numeric contract, PILE3.md § Transforms, the painter, Booked).
 static const char *transform_approximated(garb_prop_t prop, const garb_val_t *v)
 {
     if (v->kind == GARB_V_KEYWORD)
