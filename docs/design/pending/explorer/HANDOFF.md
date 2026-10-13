@@ -1,6 +1,6 @@
 # Roam — latest handoff
 
-Updated: 2026-10-12. Design owner: Quinn.
+Updated: 2026-10-13. Design owner: Quinn.
 
 E1A is accepted. PR #254 merged into `userland` as `c6cc6e3c`; gallery relocation
 `2bc9f2f4` followed. Chris confirmed the P5 test complete. The diagnostic launches
@@ -13,20 +13,27 @@ user-reported, without a captured installed-binary hash.
 E1K is complete: PR #257 is approved and merged as `b36e9ddc`. Chris explicitly
 confirmed this when assigning E1B; old pending banners predated its approval.
 
-E1B is merged as `88f8b672` (PR #259), confirmed by Chris. Its shared toolkit
-and gallery are the base for E1C in `codex/explorer-e1c`, worktree
-`.worktrees/explorer-e1c`. E1C migrates grootmenu and Scribe; it adds no kernel
-changes, icon artwork, file picker, or Roam browser shell. See the
-[E1C evidence and P5 walkthrough](evidence/e01c/README.md).
+E1B is merged as `88f8b672` (PR #259). E1C is approved and merged as
+`faa321a5` (PR #260), including Scribe's menu and grootmenu migration.
+Chris tested the production menus on P5; the last review reported no major issues.
+
+Current work is E2 in `codex/explorer-e2`, worktree `.worktrees/explorer-e2`.
+It supplies the shared PNG catalog, folder-based icon sets and Roam Classic
+artwork in Scribe, grootmenu and the gallery. No kernel code changes.
 
 | Work | State | Next action |
 | --- | --- | --- |
 | [E1A actions/status](E01A_HANDOFF.md) | Complete | Reuse the existing APIs. |
 | [E1K native popups](E01K_HANDOFF.md) | Approved and merged, PR #257 | Consume the merged E1K wrappers. |
 | [E1B menus](E01B_HANDOFF.md) | Approved and merged, PR #259 | Reuse the shared controller and dispatcher. |
-| E1C consumers | Host/QEMU passed; Chris confirms P5 acceptance; publication authorized | Ordinary PR review. |
-| [E2 icons](E02_ICONS.md) | Provider boundary available; visual choice open | Choose the family before producing assets/catalog. |
+| E1C consumers | Approved and merged, PR #260; P5 tested | Reuse production menus. |
+| [E2 icons](E02_ICONS.md) | Ready for review; host, packaging and QEMU checks pass | Ordinary review and [P5 walkthrough](evidence/e02/README.md). |
+| E3 data view and selection | Planned | Design the reusable view/selection contract after E2. |
 | E6 channels | Umbrella proposal only | Separate platform design and Fable review. |
+
+Install another icon set by extracting its folder, selecting its absolute path
+with `set = ...` in `icons.conf`, then starting a new app instance. Missing
+icons use the shipped family. [Installation and format](../../../../assets/icons/README.md).
 
 ## Accepted decisions and boundaries
 

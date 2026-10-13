@@ -485,7 +485,7 @@ APP_EXTRA_LIBS_$(1) := $(if $(filter $(1),htmltest wend pagetest flowdump yonder
                        $(if $(filter $(1),$(LIBWAY_PROGRAMS)),$(LIBWAY_SO)) \
                        $(if $(filter $(1),$(LIBGARB_PROGRAMS)),$(LIBGARB_SO)) \
                        $(if $(filter $(1),$(LIBPAGE_PROGRAMS)),$(LIBPAGE_SO)) \
-                       $(if $(filter $(1),gview desktop jpegtest webptest giftest yonder),$(LIBIMAGE_SO)) \
+                       $(if $(filter $(1),gview desktop jpegtest webptest giftest yonder scribe scribefonttest grootmenu actiongallery),$(LIBIMAGE_SO)) \
                        $(if $(filter $(1),jpegtest),$(LIBJPEG_SO)) \
                        $(if $(filter $(1),webptest),$(LIBWEBP_SO)) \
                        $(if $(filter $(1),fonttest texttest flowdump yonder),$(LIBFREETYPE_SO)) \

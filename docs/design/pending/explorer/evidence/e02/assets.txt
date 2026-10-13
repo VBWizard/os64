@@ -1,0 +1,6 @@
+26 masters; 130 RGBA PNG exports at 16/24/32/48/64 px.
+All exported SHA-256 hashes match provenance.json; source master hashes match generation.json.
+Exporter asserts exact dimensions, alpha range 0..255 and encoded file cap 64 KiB.
+Repeated export and deterministic USTAR/gzip archive are byte-identical.
+Archive size: 346918 bytes.
+Final QEMU FAT libimage extracted after shutdown matches final built library.

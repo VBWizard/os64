@@ -1,0 +1,190 @@
+{
+  "origin": "OpenAI built-in image generation",
+  "date": "2026-10-13",
+  "reference": "Approved Roam icon study 01; generated for this project without third-party reference images",
+  "master_transform": "ImageMagick Lanczos export to 256x256 RGBA; metadata stripped. Generated original SHA-256 retained per icon.",
+  "icons": [
+    {
+      "key": "app",
+      "source": "app.png",
+      "generated_sha256": "612f55002dac8bc876d6324bb59994e768acdd6ad544ad2cf7845629d43d69d6",
+      "master_sha256": "c938f9634437359f96179fc2a27e252854dfaab59f64aba7a323c15ef9fd96d6",
+      "prompt": "Production Os64 desktop icon, ONE object: a generic application window: small ivory rectangle, blue title bar, simple three colored squares, no letter or logo. Supplied Roam board is a STYLE REFERENCE ONLY, not an edit target. Create one icon centered on a genuinely TRANSPARENT square canvas with 8% clear margins. No background, contact sheet, words, captions, letters (except the requested question mark for Help), extra ornaments, or shadows outside the silhouette. Classic colorful desktop style matching the reference: clean dark navy outlines, bold recognizable shapes, warm solid colors, two or three broad shaded planes, restrained highlights. It must remain readable when exported to 16,24,32,48,64 pixels, so favor simple broad forms and avoid tiny texture/detail. Every interior surface is opaque. Consistent visual weight and family identity with the reference."
+    },
+    {
+      "key": "document-open",
+      "source": "document-open.png",
+      "generated_sha256": "a56d4fe8122612ac285de815f3b3fda72e7421e43ac943db578f0c1ffcc20b69",
+      "master_sha256": "a4ce60af725b2c53f5b7fca67c65c841101763ebd80a8adca9fe5db10d621793",
+      "prompt": "Production Os64 desktop icon, ONE object: an amber open folder with a single ivory page emerging from it. Supplied Roam board is a STYLE REFERENCE ONLY, not an edit target. Create one icon centered on a genuinely TRANSPARENT square canvas with 8% clear margins. No background, contact sheet, words, captions, letters (except the requested question mark for Help), extra ornaments, or shadows outside the silhouette. Classic colorful desktop style matching the reference: clean dark navy outlines, bold recognizable shapes, warm solid colors, two or three broad shaded planes, restrained highlights. It must remain readable when exported to 16,24,32,48,64 pixels, so favor simple broad forms and avoid tiny texture/detail. Every interior surface is opaque. Consistent visual weight and family identity with the reference."
+    },
+    {
+      "key": "document-save",
+      "source": "document-save.png",
+      "generated_sha256": "2af531156c615780e07a38f32e789a77915f97228ed67829cbce17d76776878d",
+      "master_sha256": "d6e6bdf1306894b5fcde1d6726f18478ec25c6b8a53db0f5639b91e872e2c8d8",
+      "prompt": "Production Os64 desktop icon, ONE object: the blue floppy disk SAVE icon shown in the reference. Supplied Roam board is a STYLE REFERENCE ONLY, not an edit target. Create one icon centered on a genuinely TRANSPARENT square canvas with 8% clear margins. No background, contact sheet, words, captions, letters (except the requested question mark for Help), extra ornaments, or shadows outside the silhouette. Classic colorful desktop style matching the reference: clean dark navy outlines, bold recognizable shapes, warm solid colors, two or three broad shaded planes, restrained highlights. It must remain readable when exported to 16,24,32,48,64 pixels, so favor simple broad forms and avoid tiny texture/detail. Every interior surface is opaque. Consistent visual weight and family identity with the reference."
+    },
+    {
+      "key": "document-save-as",
+      "source": "document-save-as.png",
+      "generated_sha256": "92ddb6ccd64737bf366f0424481ec49a712a2baa5d281063c01f8e6d6e650aa6",
+      "master_sha256": "1296c69c1e74cf5e4a5e8fa4f6ed7ab14208e8178fa01e42ceeeac804247c584",
+      "prompt": "Production Os64 desktop icon, ONE object: the blue floppy disk SAVE icon with a small diagonal amber pencil overlapping its bottom right corner. Supplied Roam board is a STYLE REFERENCE ONLY, not an edit target. Create one icon centered on a genuinely TRANSPARENT square canvas with 8% clear margins. No background, contact sheet, words, captions, letters (except the requested question mark for Help), extra ornaments, or shadows outside the silhouette. Classic colorful desktop style matching the reference: clean dark navy outlines, bold recognizable shapes, warm solid colors, two or three broad shaded planes, restrained highlights. It must remain readable when exported to 16,24,32,48,64 pixels, so favor simple broad forms and avoid tiny texture/detail. Every interior surface is opaque. Consistent visual weight and family identity with the reference."
+    },
+    {
+      "key": "drive",
+      "source": "drive.png",
+      "generated_sha256": "4146ded651e4942070d2c6ead6bf259e70fd7693ea551171505cb80ef460770b",
+      "master_sha256": "2521dbba1defb12fd6f87ae027fe4afb9624a0c9fc6922ffc86ab9d74f9d860e",
+      "prompt": "Create one production desktop icon: the slate disk DRIVE with light gray top and cyan indicator shown in the reference. The supplied board is a STYLE REFERENCE ONLY. Output ONE icon centered in a square, on genuinely transparent background. NO contact sheet, no words, labels or letters, no backdrop, no shadow outside the icon. Preserve the approved warm classic colorful style, clean dark navy outlines, simple broad highlights and coherent silhouette. This will ship at 16 through 64 pixels, so simplify tiny details and keep a bold pixel-readable shape. Fill about 85% of the canvas with the object, leave transparent margins. All artwork inside the icon is opaque; only outside is transparent. Match the corresponding approved icon's shape/color closely."
+    },
+    {
+      "key": "edit-copy",
+      "source": "edit-copy.png",
+      "generated_sha256": "fbae4e660704981e785112270a506366809b78e0e2ebafc632897c779adf143a",
+      "master_sha256": "27359e9deb2989e715a7fe87829dbd65f60b6cde6f55bec671b9d4be7932a241",
+      "prompt": "Production Os64 desktop icon, ONE object: two overlapping ivory pages with folded corners, rear page offset toward top left, front page offset toward bottom right. Supplied Roam board is a STYLE REFERENCE ONLY, not an edit target. Create one icon centered on a genuinely TRANSPARENT square canvas with 8% clear margins. No background, contact sheet, words, captions, letters (except the requested question mark for Help), extra ornaments, or shadows outside the silhouette. Classic colorful desktop style matching the reference: clean dark navy outlines, bold recognizable shapes, warm solid colors, two or three broad shaded planes, restrained highlights. It must remain readable when exported to 16,24,32,48,64 pixels, so favor simple broad forms and avoid tiny texture/detail. Every interior surface is opaque. Consistent visual weight and family identity with the reference."
+    },
+    {
+      "key": "edit-cut",
+      "source": "edit-cut.png",
+      "generated_sha256": "1c74f655a2ac68eb8338e53f88eec8a73bd0916bd5be6f43d52bdf9b9b81982f",
+      "master_sha256": "54cabdadf9be863455cee62e8a972fd422864b74df8abf631c8b55e48f67e38d",
+      "prompt": "Production Os64 desktop icon, ONE object: simple classic scissors: two teal finger rings at the bottom, crossed silver blades pointing upward. Supplied Roam board is a STYLE REFERENCE ONLY, not an edit target. Create one icon centered on a genuinely TRANSPARENT square canvas with 8% clear margins. No background, contact sheet, words, captions, letters (except the requested question mark for Help), extra ornaments, or shadows outside the silhouette. Classic colorful desktop style matching the reference: clean dark navy outlines, bold recognizable shapes, warm solid colors, two or three broad shaded planes, restrained highlights. It must remain readable when exported to 16,24,32,48,64 pixels, so favor simple broad forms and avoid tiny texture/detail. Every interior surface is opaque. Consistent visual weight and family identity with the reference."
+    },
+    {
+      "key": "edit-delete",
+      "source": "edit-delete.png",
+      "generated_sha256": "ae599f444b0410474a23a87fdc2a69a4f2c84ffd095da611af54cd4afeb76bc4",
+      "master_sha256": "cb3ae14b081f93d63ed9674e1e008363564c992609a44d20683666d48373339a",
+      "prompt": "Production Os64 desktop icon, ONE object: a simple silver-gray trash can with lid and three broad vertical ribs. Supplied Roam board is a STYLE REFERENCE ONLY, not an edit target. Create one icon centered on a genuinely TRANSPARENT square canvas with 8% clear margins. No background, contact sheet, words, captions, letters (except the requested question mark for Help), extra ornaments, or shadows outside the silhouette. Classic colorful desktop style matching the reference: clean dark navy outlines, bold recognizable shapes, warm solid colors, two or three broad shaded planes, restrained highlights. It must remain readable when exported to 16,24,32,48,64 pixels, so favor simple broad forms and avoid tiny texture/detail. Every interior surface is opaque. Consistent visual weight and family identity with the reference."
+    },
+    {
+      "key": "edit-paste",
+      "source": "edit-paste.png",
+      "generated_sha256": "74888119b1388eead0e27e3f33cd77c6028e9b788881650ab7dac75922914951",
+      "master_sha256": "e70b62d741cb1ca086ab57b9ce1012c11448f0a57a2db3b3150838db73d540b3",
+      "prompt": "Production Os64 desktop icon, ONE object: a warm amber clipboard with a slate clip at top and ivory paper with two blue-gray lines. Supplied Roam board is a STYLE REFERENCE ONLY, not an edit target. Create one icon centered on a genuinely TRANSPARENT square canvas with 8% clear margins. No background, contact sheet, words, captions, letters (except the requested question mark for Help), extra ornaments, or shadows outside the silhouette. Classic colorful desktop style matching the reference: clean dark navy outlines, bold recognizable shapes, warm solid colors, two or three broad shaded planes, restrained highlights. It must remain readable when exported to 16,24,32,48,64 pixels, so favor simple broad forms and avoid tiny texture/detail. Every interior surface is opaque. Consistent visual weight and family identity with the reference."
+    },
+    {
+      "key": "file",
+      "source": "file.png",
+      "generated_sha256": "176d3cc1e9405e79930a5012ad7a70e70d744bce1e0b6df4e491c89b02c60ba2",
+      "master_sha256": "6f50c9a5ea9e25f57fa40390d178604a55fddb232bc44b0ad459200c4fe92663",
+      "prompt": "Create one production desktop icon: the ivory FILE sheet with folded top right corner and three blue-gray lines shown in the reference. The supplied board is a STYLE REFERENCE ONLY. Output ONE icon centered in a square, on genuinely transparent background. NO contact sheet, no words, labels or letters, no backdrop, no shadow outside the icon. Preserve the approved warm classic colorful style, clean dark navy outlines, simple broad highlights and coherent silhouette. This will ship at 16 through 64 pixels, so simplify tiny details and keep a bold pixel-readable shape. Fill about 85% of the canvas with the object, leave transparent margins. All artwork inside the icon is opaque; only outside is transparent. Match the corresponding approved icon's shape/color closely."
+    },
+    {
+      "key": "folder",
+      "source": "folder.png",
+      "generated_sha256": "c3c99e68c5bda1b5e031d55a08717a3834f5d2a6674a4d48d5e14681a7065566",
+      "master_sha256": "2a042e50e7b714f96d455bbaf2c3acd818d47c74089263ca2b3625f3a896c4a1",
+      "prompt": "Create one production desktop icon: the amber open manila FOLDER shown in the reference. The supplied board is a STYLE REFERENCE ONLY. Output ONE icon centered in a square, on genuinely transparent background. NO contact sheet, no words, labels or letters, no backdrop, no shadow outside the icon. Preserve the approved warm classic colorful style, clean dark navy outlines, simple broad highlights and coherent silhouette. This will ship at 16 through 64 pixels, so simplify tiny details and keep a bold pixel-readable shape. Fill about 85% of the canvas with the object, leave transparent margins. All artwork inside the icon is opaque; only outside is transparent. Match the corresponding approved icon's shape/color closely."
+    },
+    {
+      "key": "folder-new",
+      "source": "folder-new.png",
+      "generated_sha256": "ca4be94e662c5cd38690dcc6bad6da29df72f54b8ec64b6c6af6c1b758f63e1f",
+      "master_sha256": "8cdf3466aa7bc52e6a73a4aa0f1e3005fb634ded4a29007911f56d158f418438",
+      "prompt": "Production Os64 desktop icon, ONE object: an amber folder matching the reference with a bold green plus badge at its bottom right corner. Supplied Roam board is a STYLE REFERENCE ONLY, not an edit target. Create one icon centered on a genuinely TRANSPARENT square canvas with 8% clear margins. No background, contact sheet, words, captions, letters (except the requested question mark for Help), extra ornaments, or shadows outside the silhouette. Classic colorful desktop style matching the reference: clean dark navy outlines, bold recognizable shapes, warm solid colors, two or three broad shaded planes, restrained highlights. It must remain readable when exported to 16,24,32,48,64 pixels, so favor simple broad forms and avoid tiny texture/detail. Every interior surface is opaque. Consistent visual weight and family identity with the reference."
+    },
+    {
+      "key": "go-back",
+      "source": "go-back.png",
+      "generated_sha256": "f0b3fc6cd785bf334c74cc4166a8c140aaa97d9bd1a86a9c48556d958f759e3e",
+      "master_sha256": "9e53a0625a245ce0cc62acf0adb3e6967e60009adb2b85b7ab2b874ceafc7d2e",
+      "prompt": "Production Os64 desktop icon, ONE object: the bold green left-pointing BACK arrow in the reference. Supplied Roam board is a STYLE REFERENCE ONLY, not an edit target. Create one icon centered on a genuinely TRANSPARENT square canvas with 8% clear margins. No background, contact sheet, words, captions, letters (except the requested question mark for Help), extra ornaments, or shadows outside the silhouette. Classic colorful desktop style matching the reference: clean dark navy outlines, bold recognizable shapes, warm solid colors, two or three broad shaded planes, restrained highlights. It must remain readable when exported to 16,24,32,48,64 pixels, so favor simple broad forms and avoid tiny texture/detail. Every interior surface is opaque. Consistent visual weight and family identity with the reference."
+    },
+    {
+      "key": "go-forward",
+      "source": "go-forward.png",
+      "generated_sha256": "2d803d393fc96443d8c9fd80d4cd37a5706d092b3a1bd5f21e834aad122863b0",
+      "master_sha256": "32f9163e75a30b5938ffb346b6de9780a12011e2ebec7b3c6b555aeadb2a2a66",
+      "prompt": "Production Os64 desktop icon, ONE object: a bold green right-pointing arrow, matching the reference's BACK arrow. Supplied Roam board is a STYLE REFERENCE ONLY, not an edit target. Create one icon centered on a genuinely TRANSPARENT square canvas with 8% clear margins. No background, contact sheet, words, captions, letters (except the requested question mark for Help), extra ornaments, or shadows outside the silhouette. Classic colorful desktop style matching the reference: clean dark navy outlines, bold recognizable shapes, warm solid colors, two or three broad shaded planes, restrained highlights. It must remain readable when exported to 16,24,32,48,64 pixels, so favor simple broad forms and avoid tiny texture/detail. Every interior surface is opaque. Consistent visual weight and family identity with the reference."
+    },
+    {
+      "key": "go-up",
+      "source": "go-up.png",
+      "generated_sha256": "0ef569cefcf996a9fbb56e58be36e89b1c57600c824b20e109fc0c1e3b6c9e86",
+      "master_sha256": "94874ec2296697c7c9e904276527270ee333505ab527b4f160773a7ae77c4b2a",
+      "prompt": "Production Os64 desktop icon, ONE object: a bold green upward-pointing arrow, matching the reference's BACK arrow. Supplied Roam board is a STYLE REFERENCE ONLY, not an edit target. Create one icon centered on a genuinely TRANSPARENT square canvas with 8% clear margins. No background, contact sheet, words, captions, letters (except the requested question mark for Help), extra ornaments, or shadows outside the silhouette. Classic colorful desktop style matching the reference: clean dark navy outlines, bold recognizable shapes, warm solid colors, two or three broad shaded planes, restrained highlights. It must remain readable when exported to 16,24,32,48,64 pixels, so favor simple broad forms and avoid tiny texture/detail. Every interior surface is opaque. Consistent visual weight and family identity with the reference."
+    },
+    {
+      "key": "help",
+      "source": "help.png",
+      "generated_sha256": "95f0c9522676330a925413996330197ea93cfde904fab0fb307b9cff5f95366a",
+      "master_sha256": "de461ba595585b4131e3c8b1de504cc1dbe449c3d991821f01aba6110d736496",
+      "prompt": "Production Os64 desktop icon, ONE object: a rich blue round disk with one bold ivory question mark centered inside. Supplied Roam board is a STYLE REFERENCE ONLY, not an edit target. Create one icon centered on a genuinely TRANSPARENT square canvas with 8% clear margins. No background, contact sheet, words, captions, letters (except the requested question mark for Help), extra ornaments, or shadows outside the silhouette. Classic colorful desktop style matching the reference: clean dark navy outlines, bold recognizable shapes, warm solid colors, two or three broad shaded planes, restrained highlights. It must remain readable when exported to 16,24,32,48,64 pixels, so favor simple broad forms and avoid tiny texture/detail. Every interior surface is opaque. Consistent visual weight and family identity with the reference."
+    },
+    {
+      "key": "home",
+      "source": "home.png",
+      "generated_sha256": "6f428cf3f9ff6836c216711909a07fc51dd5b095e60bdd4a13f6a1e36bb30c1c",
+      "master_sha256": "24b2c2b6f0dc4a77a21b138878536d65dca5c39374c4a9e7d898601593415461",
+      "prompt": "Create one production desktop icon: the cream HOME house with terracotta roof and teal door shown in the reference. The supplied board is a STYLE REFERENCE ONLY. Output ONE icon centered in a square, on genuinely transparent background. NO contact sheet, no words, labels or letters, no backdrop, no shadow outside the icon. Preserve the approved warm classic colorful style, clean dark navy outlines, simple broad highlights and coherent silhouette. This will ship at 16 through 64 pixels, so simplify tiny details and keep a bold pixel-readable shape. Fill about 85% of the canvas with the object, leave transparent margins. All artwork inside the icon is opaque; only outside is transparent. Match the corresponding approved icon's shape/color closely."
+    },
+    {
+      "key": "search",
+      "source": "search.png",
+      "generated_sha256": "7aacb0859d1ccecbf8208cca75711d0440b6e834bbcb1a583e835e4cd98c33e2",
+      "master_sha256": "b70f8d62ee5d1b9041c7d5f2834968d94203a4b589f8d569397e1e7c3977bae5",
+      "prompt": "Production Os64 desktop icon, ONE object: the cyan magnifying glass with navy rim and amber handle shown in the reference. Supplied Roam board is a STYLE REFERENCE ONLY, not an edit target. Create one icon centered on a genuinely TRANSPARENT square canvas with 8% clear margins. No background, contact sheet, words, captions, letters (except the requested question mark for Help), extra ornaments, or shadows outside the silhouette. Classic colorful desktop style matching the reference: clean dark navy outlines, bold recognizable shapes, warm solid colors, two or three broad shaded planes, restrained highlights. It must remain readable when exported to 16,24,32,48,64 pixels, so favor simple broad forms and avoid tiny texture/detail. Every interior surface is opaque. Consistent visual weight and family identity with the reference."
+    },
+    {
+      "key": "settings",
+      "source": "settings.png",
+      "generated_sha256": "15f6d779bfbfb4e9299bad9421ea14c4d874cba0c99374b4103382b4e78a2f14",
+      "master_sha256": "53d54e81eff4e0681d95916298165565380e5fb345ae1eb6b3e0a8ed90afd956",
+      "prompt": "Production Os64 desktop icon, ONE object: the slate gear with a gold hub shown in the reference, simplify to eight large teeth. Supplied Roam board is a STYLE REFERENCE ONLY, not an edit target. Create one icon centered on a genuinely TRANSPARENT square canvas with 8% clear margins. No background, contact sheet, words, captions, letters (except the requested question mark for Help), extra ornaments, or shadows outside the silhouette. Classic colorful desktop style matching the reference: clean dark navy outlines, bold recognizable shapes, warm solid colors, two or three broad shaded planes, restrained highlights. It must remain readable when exported to 16,24,32,48,64 pixels, so favor simple broad forms and avoid tiny texture/detail. Every interior surface is opaque. Consistent visual weight and family identity with the reference."
+    },
+    {
+      "key": "tab-new",
+      "source": "tab-new.png",
+      "generated_sha256": "9eb9b4fc52890ceca1de770baa975f43bba395d0f1c5d34ed253956230fda9d4",
+      "master_sha256": "d6aa97569d8596f250bf52466d0ce81e10737456ade8201e09efb4611002e7ec",
+      "prompt": "Production Os64 desktop icon, ONE object: one ivory browser tab with blue edge and a bold green plus badge in bottom right. Supplied Roam board is a STYLE REFERENCE ONLY, not an edit target. Create one icon centered on a genuinely TRANSPARENT square canvas with 8% clear margins. No background, contact sheet, words, captions, letters (except the requested question mark for Help), extra ornaments, or shadows outside the silhouette. Classic colorful desktop style matching the reference: clean dark navy outlines, bold recognizable shapes, warm solid colors, two or three broad shaded planes, restrained highlights. It must remain readable when exported to 16,24,32,48,64 pixels, so favor simple broad forms and avoid tiny texture/detail. Every interior surface is opaque. Consistent visual weight and family identity with the reference."
+    },
+    {
+      "key": "view-details",
+      "source": "view-details.png",
+      "generated_sha256": "8f81417f91b1c7ce4c6488305fefe465d2dde2d1db8902cd0732f88afa6dffa6",
+      "master_sha256": "f0b5ccf377e1012dbfdbaacdd41e4be43a18c67f020f60c18575418579e34cc3",
+      "prompt": "Production Os64 desktop icon, ONE object: an ivory list-view panel with three blue-gray horizontal rows, tiny amber squares down the left. Supplied Roam board is a STYLE REFERENCE ONLY, not an edit target. Create one icon centered on a genuinely TRANSPARENT square canvas with 8% clear margins. No background, contact sheet, words, captions, letters (except the requested question mark for Help), extra ornaments, or shadows outside the silhouette. Classic colorful desktop style matching the reference: clean dark navy outlines, bold recognizable shapes, warm solid colors, two or three broad shaded planes, restrained highlights. It must remain readable when exported to 16,24,32,48,64 pixels, so favor simple broad forms and avoid tiny texture/detail. Every interior surface is opaque. Consistent visual weight and family identity with the reference."
+    },
+    {
+      "key": "view-icons",
+      "source": "view-icons.png",
+      "generated_sha256": "b7d689c08bb6e19032df1103e7809c443029046c2e33699358ac18cb913eaac7",
+      "master_sha256": "7b18b4e33a37bf7c089d5fd2d550081ee3f95993dd5d43c9c560af0e3340f19c",
+      "prompt": "Production Os64 desktop icon, ONE object: a tidy grid of four rounded squares: amber, blue, green and terracotta, each with clean navy outline. Supplied Roam board is a STYLE REFERENCE ONLY, not an edit target. Create one icon centered on a genuinely TRANSPARENT square canvas with 8% clear margins. No background, contact sheet, words, captions, letters (except the requested question mark for Help), extra ornaments, or shadows outside the silhouette. Classic colorful desktop style matching the reference: clean dark navy outlines, bold recognizable shapes, warm solid colors, two or three broad shaded planes, restrained highlights. It must remain readable when exported to 16,24,32,48,64 pixels, so favor simple broad forms and avoid tiny texture/detail. Every interior surface is opaque. Consistent visual weight and family identity with the reference."
+    },
+    {
+      "key": "view-preview",
+      "source": "view-preview.png",
+      "generated_sha256": "eac057c29c3bb0ee92cec0fcb700b6259608ee8283e788686a67daeecee37eed",
+      "master_sha256": "8ba84e9a3ebc7b76f66075b03b6d5c60b5fc2aed88fd7a398334f869bd9665db",
+      "prompt": "Production Os64 desktop icon, ONE object: an ivory window with blue title bar, two short gray lines on left and a larger blue picture preview rectangle on right. Supplied Roam board is a STYLE REFERENCE ONLY, not an edit target. Create one icon centered on a genuinely TRANSPARENT square canvas with 8% clear margins. No background, contact sheet, words, captions, letters (except the requested question mark for Help), extra ornaments, or shadows outside the silhouette. Classic colorful desktop style matching the reference: clean dark navy outlines, bold recognizable shapes, warm solid colors, two or three broad shaded planes, restrained highlights. It must remain readable when exported to 16,24,32,48,64 pixels, so favor simple broad forms and avoid tiny texture/detail. Every interior surface is opaque. Consistent visual weight and family identity with the reference."
+    },
+    {
+      "key": "view-refresh",
+      "source": "view-refresh.png",
+      "generated_sha256": "9822ea2d05fe823065decfde10511c42f1906c3cea8fbb2b4886a83653d0d229",
+      "master_sha256": "9790f3f46c1ee30c8d80ea6bd2bcebdcac764785d2346b07f5ecc8888aac6b00",
+      "prompt": "Production Os64 desktop icon, ONE object: two bold green curved arrows forming a circular refresh loop. Supplied Roam board is a STYLE REFERENCE ONLY, not an edit target. Create one icon centered on a genuinely TRANSPARENT square canvas with 8% clear margins. No background, contact sheet, words, captions, letters (except the requested question mark for Help), extra ornaments, or shadows outside the silhouette. Classic colorful desktop style matching the reference: clean dark navy outlines, bold recognizable shapes, warm solid colors, two or three broad shaded planes, restrained highlights. It must remain readable when exported to 16,24,32,48,64 pixels, so favor simple broad forms and avoid tiny texture/detail. Every interior surface is opaque. Consistent visual weight and family identity with the reference."
+    },
+    {
+      "key": "view-split",
+      "source": "view-split.png",
+      "generated_sha256": "6148737cdf266bb874068ea2321ab66566b47000da4eee1b56b46fc136cd9464",
+      "master_sha256": "f56b2303c8f93bcf7f41de0f86e4c411c83d874dea80e9687bc6ba56571a8e37",
+      "prompt": "Production Os64 desktop icon, ONE object: an ivory window with blue title bar and one strong vertical slate divider separating two equally wide empty panes. Supplied Roam board is a STYLE REFERENCE ONLY, not an edit target. Create one icon centered on a genuinely TRANSPARENT square canvas with 8% clear margins. No background, contact sheet, words, captions, letters (except the requested question mark for Help), extra ornaments, or shadows outside the silhouette. Classic colorful desktop style matching the reference: clean dark navy outlines, bold recognizable shapes, warm solid colors, two or three broad shaded planes, restrained highlights. It must remain readable when exported to 16,24,32,48,64 pixels, so favor simple broad forms and avoid tiny texture/detail. Every interior surface is opaque. Consistent visual weight and family identity with the reference."
+    },
+    {
+      "key": "window-close",
+      "source": "window-close.png",
+      "generated_sha256": "1a4d40afee3b381037980830269ddec1542b47d0a3e41f0b11c0480c00fdc96f",
+      "master_sha256": "da155871115f94700e5bb5a790d67d6e055dd156bb18d0f5624eddae3fef474a",
+      "prompt": "Production Os64 desktop icon, ONE object: a bold terracotta-red X with thick navy outline, strong simple diagonals. Supplied Roam board is a STYLE REFERENCE ONLY, not an edit target. Create one icon centered on a genuinely TRANSPARENT square canvas with 8% clear margins. No background, contact sheet, words, captions, letters (except the requested question mark for Help), extra ornaments, or shadows outside the silhouette. Classic colorful desktop style matching the reference: clean dark navy outlines, bold recognizable shapes, warm solid colors, two or three broad shaded planes, restrained highlights. It must remain readable when exported to 16,24,32,48,64 pixels, so favor simple broad forms and avoid tiny texture/detail. Every interior surface is opaque. Consistent visual weight and family identity with the reference."
+    }
+  ]
+}

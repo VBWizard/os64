@@ -7,6 +7,7 @@
 #include "os64/fmt.h"
 #include "os64/mem.h"
 #include "os64/str.h"
+#include "image/icon_theme.h"
 
 enum { RECORD=1, PANEL, STATUS, HELP, CLEAR_HELP, CLEAR_NOTICE, QUIT, BAR, HEADING, PANE_A, PANE_B, RADIO_A, RADIO_B };
 typedef struct { uint64_t generation; unsigned refs, hits; bool enabled; } gallery_target;
@@ -19,6 +20,7 @@ typedef struct {
     os64_ui_menubar_t bar;
     os64_ui_menu_model_t *models[8];
     os64_ui_menu_session_t *menus;
+    os64_icon_theme_t *icon_theme;
     os64_ui_dispatcher_t dispatcher;
     os64_ui_textfield_t editor;
     char editor_text[256];
@@ -228,8 +230,8 @@ static bool gallery_build(gallery *a)
     }
     os64_ui_status_init(&a->status); gallery_add(a,&a->root,&a->status.w);
     os64_ui_action_spec_t specs[63]={
-        {RECORD,OS64_UI_ACTION_COMMAND,0,"Record target", "Invoke the selected target","synthetic-command",'r',{'d',OS64_GUI_MOD_CTRL}},
-        {PANEL,OS64_UI_ACTION_TOGGLE,0,"Target panel", "Keep target state while hidden","synthetic-toggle",'t',{'p',OS64_GUI_MOD_CTRL}},
+        {RECORD,OS64_UI_ACTION_COMMAND,0,"Record target", "Invoke the selected target","app",'r',{'d',OS64_GUI_MOD_CTRL}},
+        {PANEL,OS64_UI_ACTION_TOGGLE,0,"Target panel", "Keep target state while hidden","view-split",'t',{'p',OS64_GUI_MOD_CTRL}},
         {STATUS,OS64_UI_ACTION_TOGGLE,0,"Status bar", "Keep messages while hidden",NULL,'s',{'b',OS64_GUI_MOD_CTRL}},
         {HELP,OS64_UI_ACTION_COMMAND,0,"New help", "Replace help with a new token",NULL,0,{'h',OS64_GUI_MOD_CTRL}},
         {CLEAR_HELP,OS64_UI_ACTION_COMMAND,0,"Clear older help", "Stale clear keeps newer help",NULL,0,{0,0}},
@@ -302,6 +304,10 @@ static bool gallery_dispose(gallery *a)
     for(unsigned i=0;i<8;++i) { os64_ui_menu_model_release(a->models[i]); a->models[i]=NULL; }
     for(unsigned i=0;i<3;++i) if(a->views[i]) (void)os64_ui_action_view_destroy(a->views[i]);
     if(a->actions) (void)os64_ui_actions_destroy(a->actions);
+    if (a->icon_theme) {
+        if (os64_icon_theme_destroy(a->icon_theme) != OS64_UI_OK) return false;
+        a->icon_theme = NULL;
+    }
     (void)os64_ui_font_release(&a->ui);
     return true;
 }
@@ -374,12 +380,15 @@ static void gallery_paint(void *u)
     }
     os64_ui_paint(&a->ui);
 }
-static bool __attribute__((unused)) gallery_attach_menus(gallery *a,int64_t win,const os64_ui_window_backend_t *backend,bool icons)
+static bool __attribute__((unused)) gallery_attach_menus(gallery *a,int64_t win,const os64_ui_window_backend_t *backend,bool icons,bool synthetic)
 {
     os64_ui_dispatcher_init(&a->dispatcher,backend);
     a->dispatcher.observe=gallery_observe; a->dispatcher.observe_user=a;
     if(os64_ui_dispatcher_add(&a->dispatcher,win,&a->ui,gallery_commands,gallery_paint,a) ||
-       os64_ui_menu_session_create(&a->dispatcher,&a->ui,win,&a->bar,&a->status,icons?&gallery_icons:NULL,&a->menus)) return false;
+       os64_ui_menu_session_create(&a->dispatcher,&a->ui,win,&a->bar,&a->status,
+           icons ? (synthetic ? &gallery_icons :
+               (a->icon_theme ? os64_icon_theme_provider(a->icon_theme) : NULL)) : NULL,
+           &a->menus)) return false;
     os64_ui_menu_hooks(a->menus,gallery_menu_layout,gallery_menu_error,a);
     os64_ui_menu_focus_fallback(a->menus,&a->content);
     if(os64_ui_menu_bar_view(a->menus,a->views[a->selected])) return false;
@@ -391,15 +400,170 @@ static bool __attribute__((unused)) gallery_attach_menus(gallery *a,int64_t win,
 }
 
 #ifndef UI_ACTION_HOST
+typedef struct {
+    os64_icon_theme_t *theme;
+    const os64_ui_icon_provider_t *provider;
+    os64_ui_icon_lease_t leases[8];
+    os64_ui_t ui;
+    os64_ui_widget_t root, canvas, captions[9];
+    char caption_text[8][80];
+    unsigned selected;
+    bool dark;
+} icon_page;
+
+static os64_gui_rect_t icon_card(unsigned i)
+{
+    return (os64_gui_rect_t){20+(int32_t)(i%2)*440,
+        70+(int32_t)(i/2)*145,420,130};
+}
+
+static void icon_canvas_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
+                              const os64_ui_theme_t *theme)
+{
+    (void)theme;
+    const icon_page *page=w->user;
+    const uint32_t bg=page->dark?0xff18212b:0xfff2f4f7;
+    const uint32_t face=page->dark?0xff293440:0xffffffff;
+    os64_draw_fill_rect(&ctx->surf,(os64_gui_rect_t){0,0,
+        (int32_t)ctx->surf.width,(int32_t)ctx->surf.height},bg);
+    for(unsigned i=0;i<8;++i) {
+        os64_gui_rect_t card=icon_card(i);
+        bool selected=page->selected==i, disabled=i==7;
+        uint32_t card_bg=selected?0xff386cab:face;
+        uint32_t card_ink=selected?0xffffffff:
+            (disabled?0xff8996a4:(page->dark?0xffe7edf3:0xff213044));
+        os64_draw_fill_rect(&ctx->surf,card,card_bg);
+        os64_draw_rect(&ctx->surf,card,selected?0xff9dc7fa:0xff708092);
+        os64_gui_rect_t slot={card.x+18,card.y+18,64,64};
+        if(page->leases[i].pixels)
+            os64_ui_icon_draw(&ctx->surf,slot,&page->leases[i],disabled);
+        else {
+            os64_gui_rect_t placeholder={slot.x+8,slot.y+8,48,48};
+            os64_draw_fill_rect(&ctx->surf,placeholder,
+                disabled?0xff8b929b:0xff758da5);
+            os64_draw_rect(&ctx->surf,placeholder,card_ink);
+        }
+    }
+}
+static const os64_ui_class_t icon_canvas_class={.name="icon cards",
+    .paint=icon_canvas_paint};
+
+static void icon_caption_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
+                               const os64_ui_theme_t *theme)
+{
+    (void)theme;
+    icon_page *page=w->user;
+    unsigned i=(unsigned)(w-page->captions);
+    bool heading=i==8, selected=page->selected==i, disabled=i==7;
+    uint32_t bg=heading?(page->dark?0xff18212b:0xfff2f4f7):
+        selected?0xff386cab:(page->dark?0xff293440:0xffffffff);
+    uint32_t ink=selected?0xffffffff:
+        disabled?0xff8996a4:(page->dark?0xffe7edf3:0xff213044);
+    os64_draw_fill_rect(&ctx->surf,w->bounds,bg);
+    os64_ui_t *ui=os64_ui_of(w);
+    int32_t row=os64_ui_font_row_height(ui,OS64_FONT_ROLE_UI);
+    int32_t y=w->bounds.y+(w->bounds.h-row)/2;
+    (void)os64_ui_draw_text(ui,&w->run,OS64_FONT_ROLE_UI,&ctx->surf,
+        w->bounds,w->bounds.x,y,w->text,os64_strlen(w->text),ink,bg);
+}
+static const os64_ui_class_t icon_caption_class={.name="icon caption",
+    .paint=icon_caption_paint,.prepare=os64_ui_stage_caption,
+    .commit=os64_ui_commit_caption,.discard=os64_ui_discard_caption};
+
+static void icon_page_paint(icon_page *page)
+{
+    os64_ui_mark_dirty(&page->ui,&page->root);
+    os64_ui_paint(&page->ui);
+}
+
+static int gallery_icon_page(bool dark, bool icons)
+{
+    static const char *const keys[] = {"folder","file","drive","app"};
+    icon_page page={.dark=dark};
+    int64_t win=os64_gui_window_create("Icon family gallery",40,10,900,670,0);
+    if(win<=0) return 1;
+    os64_draw_ctx_t draw;
+    if(os64_draw_ctx_init(&draw,win)!=0) { os64_gui_window_destroy(win); return 1; }
+    if(icons && os64_icon_theme_create(&page.theme)==OS64_UI_OK) {
+        page.provider=os64_icon_theme_provider(page.theme);
+        for(unsigned i=0;i<8;++i)
+            (void)os64_ui_icon_acquire(page.provider,keys[i/2],i%2?64:48,
+                &page.leases[i]);
+    }
+    os64_ui_init(&page.ui,&draw);
+    os64_ui_panel(&page.root);
+    page.root.bounds=(os64_gui_rect_t){0,0,(int32_t)draw.surf.width,
+        (int32_t)draw.surf.height};
+    page.canvas=(os64_ui_widget_t){.cls=&icon_canvas_class,
+        .bounds=page.root.bounds,.user=&page};
+    os64_ui_add_child(&page.root,&page.canvas);
+    for(unsigned i=0;i<8;++i) {
+        os64_gui_rect_t card=icon_card(i);
+        os64_snprintf(page.caption_text[i],sizeof(page.caption_text[i]),
+            "%s  %u px%s%s",keys[i/2],i%2?64u:48u,
+            i==7?"  disabled":"",page.leases[i].pixels?"":"  missing");
+        os64_ui_label(&page.captions[i],page.caption_text[i]);
+        page.captions[i].cls=&icon_caption_class;
+        page.captions[i].user=&page;
+        page.captions[i].bounds=(os64_gui_rect_t){card.x+94,card.y+15,
+            card.w-104,90};
+        os64_ui_add_child(&page.root,&page.captions[i]);
+    }
+    os64_ui_label(&page.captions[8],
+        "Icons: 48 and 64 px  |  click a card  |  D toggles light/dark");
+    page.captions[8].cls=&icon_caption_class;
+    page.captions[8].user=&page;
+    page.captions[8].bounds=(os64_gui_rect_t){20,16,860,34};
+    os64_ui_add_child(&page.root,&page.captions[8]);
+    os64_ui_set_root(&page.ui,&page.root);
+    (void)os64_ui_font_follow(&page.ui);
+    icon_page_paint(&page);
+    bool running=true;
+    while(running) {
+        os64_gui_event_t ev;
+        if(os64_gui_event_wait(win,&ev)!=1) break;
+        if(ev.type==OS64_GUI_EVENT_WINDOW_CLOSE) running=false;
+        else if(ev.type==OS64_GUI_EVENT_WINDOW_RESIZE) {
+            (void)os64_draw_ctx_refresh(&draw);
+            page.root.bounds=(os64_gui_rect_t){0,0,(int32_t)draw.surf.width,
+                (int32_t)draw.surf.height};
+            page.canvas.bounds=page.root.bounds;
+            icon_page_paint(&page);
+        } else if(ev.type==OS64_GUI_EVENT_KEY_DOWN) {
+            if(ev.key.ascii=='q'||ev.key.ascii=='Q') running=false;
+            else if(ev.key.ascii=='d'||ev.key.ascii=='D') {
+                page.dark=!page.dark; icon_page_paint(&page);
+            } else { (void)os64_ui_dispatch(&page.ui,&ev); os64_ui_paint(&page.ui); }
+        } else if(ev.type==OS64_GUI_EVENT_MOUSE_BUTTON_DOWN &&
+                  ev.mouse.button==OS64_GUI_MOUSE_LEFT) {
+            for(unsigned i=0;i<8;++i) {
+                os64_gui_rect_t r=icon_card(i);
+                if(ev.mouse.x>=r.x&&ev.mouse.x<r.x+r.w&&
+                   ev.mouse.y>=r.y&&ev.mouse.y<r.y+r.h) {
+                    page.selected=i; icon_page_paint(&page); break;
+                }
+            }
+        } else { (void)os64_ui_dispatch(&page.ui,&ev); os64_ui_paint(&page.ui); }
+    }
+    if(os64_ui_font_release(&page.ui)!=OS64_FONT_OK) return 1;
+    for(unsigned i=0;i<8;++i) os64_ui_icon_release(page.provider,&page.leases[i]);
+    if(page.theme && os64_icon_theme_destroy(page.theme)!=OS64_UI_OK) return 1;
+    os64_gui_window_destroy(win);
+    return 0;
+}
+
 int main(int argc,char **argv)
 {
-    bool icons=true; int32_t window_width=880;
-    for(int i=1;i<argc;++i) { if(os64_streq(argv[i],"--no-icons")) icons=false; if(os64_streq(argv[i],"--trace")) g.trace=true; if(os64_streq(argv[i],"--narrow")) window_width=240; }
+    bool icons=true, synthetic=false; int32_t window_width=880;
+    bool icons_page=false, dark=false;
+    for(int i=1;i<argc;++i) { if(os64_streq(argv[i],"--no-icons")) icons=false; if(os64_streq(argv[i],"--synthetic-icons")) synthetic=true; if(os64_streq(argv[i],"--trace")) g.trace=true; if(os64_streq(argv[i],"--narrow")) window_width=240; if(os64_streq(argv[i],"--icons-page")) icons_page=true; if(os64_streq(argv[i],"--dark")) dark=true; }
+    if(icons_page) return gallery_icon_page(dark,icons);
     int64_t win=os64_gui_window_create("Shared menu toolkit gallery",40,10,window_width,740,0);
     if(win<=0) { os64_printf("actiongallery: GUI unavailable (%ld)\n",(long)win); return 1; }
     if(os64_draw_ctx_init(&g.draw,win)!=0) { os64_gui_window_destroy(win); return 1; }
     if(!gallery_build(&g)) { os64_printf("actiongallery: initialization refused\n"); gallery_dispose(&g); os64_gui_window_destroy(win); return 1; }
-    if(!gallery_attach_menus(&g,win,NULL,icons)) { gallery_dispose(&g); os64_gui_window_destroy(win); return 1; }
+    if (icons && !synthetic) (void)os64_icon_theme_create(&g.icon_theme);
+    if(!gallery_attach_menus(&g,win,NULL,icons,synthetic)) { gallery_dispose(&g); os64_gui_window_destroy(win); return 1; }
     (void)os64_ui_font_follow(&g.ui);
     os64_ui_paint(&g.ui);
     while(!g.ui.quit) if(os64_ui_dispatcher_turn(&g.dispatcher,true)<0) break;

@@ -1,0 +1,106 @@
+# E2 evidence — 2026-10-13
+
+Branch `codex/explorer-e2`, based on E1C merge `faa321a5`. This packet changes
+userland, assets and image packaging; no kernel source or ABI changes.
+
+## Host and build results
+
+| Check | Result | Receipt |
+| --- | --- | --- |
+| Real PNG catalog, cache, leases, limits and fault injection | PASS | [Catalog](catalog-host.txt) |
+| Real config parser + theme resolver + catalog + shipped PNGs | PASS | [End to end](theme-e2e-host.txt) |
+| Resolver ownership, metadata cap, fallbacks and failures | PASS | [Resolver](theme-stub-host.txt) |
+| Scribe/grootmenu consumer harness | 1,550 checks, 0 failures | [Consumers](consumers-host.txt) |
+| Menu/action/status/gallery host suite | 150,351 checks, 0 failures | [Toolkit/gallery](menu-gallery-host.txt) |
+| Source/export dimensions, alpha, byte cap, provenance and deterministic archive | PASS | [Assets](assets.txt) |
+| Actual FAT and ext2 assembly recipes | 130 PNGs, metadata, config and final libimage byte-identical | [Packaging](packaging.txt) |
+| Native archive extraction | Exit 0; 133 extracted files byte-identical | [Extraction](native-extraction.txt) |
+
+Host C suites use ASan/UBSan with leak detection enabled. Sandbox LSan thread
+attachment returned EPERM despite TracerPid 0; successful runs were outside
+that sandbox. Reproduce from the checkout:
+
+```sh
+tools/test_icons_host.sh
+tools/test_icons_theme_e2e_host.sh
+tools/test_icons_theme_stub_host.sh
+python3 tools/test_scribe_host.py --menus
+python3 tools/test_ui_action_host.py --real --menu
+python3 tools/build_icon_assets.py --archive output/icons/roam-classic.tar.gz
+```
+
+Cross-builds succeeded for libimage, Scribe, grootmenu, actiongallery and
+scribefonttest. The packaging checks ran the root GNUmakefile recipes into
+scratch images. They reused existing kernel/Limine artifacts and skipped the
+unrelated kernel dependency fetch. Added, changed and deleted PNG dependency
+probes each scheduled both images for rebuild; installed membership matched.
+No repository disk image was changed.
+
+`git diff --check` passed. `tools/stale_refs.sh` was run before both logical
+commits; its reported names are existing E1 handoff/evidence paths and historical
+audit receipts. Each hit was reviewed; no interface was retired and no added
+superlative comment was reported.
+
+The catalog harness measures 103,083 bytes of cold-load allocation and 117,995
+bytes for its 16-bit RGBA 64 px case, including the host allocation header.
+These are tested transient allocations, not whole-process RSS or proof of a
+universal heap-arena bound. Retained caches charge actual Os64 allocation
+capacity plus headers. Selected and default catalogs have separate budgets.
+The toolkit suite uses synthetic providers; the end-to-end suite separately
+runs the real config parser/catalog/PNG decoder, including selected pixels,
+missing-key fallback, corrupt PNG refusal, BUSY teardown, allocation failures
+and retry after an existing file cannot be opened.
+
+## QEMU walkthrough
+
+Scratch q35 VM, 4 vCPUs, 4 GiB, PS/2 input, E1K-compatible existing ISO.
+The VM was stopped after testing. Final built-library hashes are in
+[final-sha256.txt](final-sha256.txt); the staged final libimage was extracted
+and compared after shutdown. The gallery, Scribe and desktop smoke checks
+were repeated after the last provider open-failure fix:
+
+- [Final gallery](gallery-final.png): selected folder, file, drive and app at
+  48/64 px; the last app card demonstrates disabled rendering.
+- [Final Scribe](scribe-final.png): File menu with 16 px icons and readable labels.
+- [Final desktop menu](desktop-final.png): launcher icons through the shared menu.
+
+The following screenshots precede that narrowly scoped open-failure fix;
+artwork and consumer code match the final revision:
+
+- [Light gallery](gallery-light.png) and [dark gallery](gallery-dark.png).
+- [Extracted set](gallery-installed-set.png): Os64's own `gunzip -c archive |
+  tar -x -f -` extracted a USTAR archive in `/home/icons`; `icons.conf` selected
+  the resulting folder. The files were read back and compared after shutdown.
+- [Partial set](gallery-partial-set.png): replacement 64 px folder artwork
+  intentionally uses the drive; the missing 48 px folder and other keys use
+  the shipped family.
+- [Scribe at Interface 32](scribe-icons32.png): larger rows and 32 px icons.
+- [Missing assets](scribe-missing-assets.png): renaming the default directory
+  succeeds and Scribe retains a usable text menu; the folder was restored.
+
+Repeated lifetime, eviction, cache-hit and teardown assertions are host
+coverage. The native walkthrough demonstrates visuals and interaction, not
+an instrumented long-running memory soak. Native missing-directory fallback
+was exercised in Scribe; the toolkit host suite covers absent providers.
+
+## Limits and next acceptance
+
+P5 acceptance of these installed assets is pending. Chris approved the earlier
+preview in light/dark, which is distinct from testing the installed revision.
+To walk this build on P5:
+
+1. Install the branch's userland, libraries, `/etc/icons/default` and
+   `/etc/icons.conf` through normal image assembly.
+2. Open Scribe's menus and right-click the desktop; check small icons and text.
+3. Run `/tests/actiongallery --icons-page`; press D for dark/light and click
+   cards. Check 48/64 px readability and the disabled card.
+4. Follow [set installation](../../../../../../assets/icons/README.md), select
+   another or partial folder in `/home/icons.conf`, and start a new instance.
+
+The setting takes effect in new instances; there is no GUI chooser or live
+switch. Assets are resampled exports of generated raster masters, not separately
+hinted artwork for each size. The open/stat ABI cannot prove absence when both
+lookups fail, so that ambiguous case maps to MISSING; a successful stat after
+an open failure produces retryable IO. Decode failures retain their typed
+status and do not silently substitute default artwork. Desktop icon placement
+and activation remain outside E2.

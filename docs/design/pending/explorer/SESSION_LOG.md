@@ -684,3 +684,28 @@ launcher, stale Scribe scrollbar ranges after chrome changes, and duplicate
 startup popup error diagnostics. The consumer harness now covers each case.
 Host suites pass 4,072 checks with ASan/UBSan/LSan; cross-builds and focused
 QEMU checks pass. Evidence and limits: `evidence/e01c/README.md`, Review 1.
+
+
+## 2026-10-13 — E1C merged; E2 icons and installable sets
+
+E1C PR #260 passed its final review and merged as `faa321a5`. Chris approved
+the generated classic colorful icon preview and authorized E2 shipment. He
+added installable icon sets: an extracted folder plus configuration selects
+another family without changing apps. D016 records the product choice and
+engineering details.
+
+E2 in `codex/explorer-e2` supplies a bounded PNG catalog, manifest/config
+resolver, selected-to-default fallback, 26 generated source masters and 130
+production exports, provenance, deterministic archive builder, menu consumers
+and a larger-icon gallery. Sol handled provider, resolver and consumer work;
+Quinn coordinated contracts, artwork, integration and validation. Files were
+partitioned in the shared E2 worktree for this delegated packet.
+
+Host tests pass with ASan/UBSan and leak detection enabled outside the sandbox.
+FAT/ext2 recipes install byte-identical assets and final libimage. Os64's own
+`gunzip | tar` successfully extracts the archive; native files match source.
+QEMU verifies installed/partial sets, light/dark and selection/disabled states,
+Scribe at Interface 16/32, desktop menu icons and missing-art text fallback.
+[E2 evidence](evidence/e02/README.md) records exact scope and final binary hashes.
+The open/stat ABI's ambiguous failed lookup is documented; no kernel change is
+part of E2. Next: ordinary PR review and Chris's installed P5 acceptance.

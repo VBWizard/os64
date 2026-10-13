@@ -1,0 +1,3 @@
+action/status: 495 checks, 0 failures
+r4 transitions: 44 sequences, 5622 invariant boundaries
+menu/action/status: 150351 checks, 0 failures
