@@ -694,8 +694,8 @@ typedef enum {
 
 typedef struct flow_box flow_box_t;
 // A FRAME: what moves a box away from where the flow put it — a sticky
-// box's push, or a scroll container's scroll — and what is needed to find
-// where it is (flow_box_doc_offset): opaque, the door's own.
+// box's push, a scroll container's scroll, a transform — and what is needed
+// to find where it is (flow_box_doc_offset): opaque, the door's own.
 typedef struct flow_frame flow_frame_t;
 
 // A point, or an offset: how far the page is scrolled, x and y.
@@ -708,11 +708,11 @@ typedef struct {
 // DOCUMENT coordinates, x from the page's left and y from its top, but for
 // a box in a fixed box's subtree (`fixed`), whose coordinates are the
 // VIEWPORT's, since it does not move with the page. A box in a FRAME — a
-// sticky box's subtree, or a scroll container's content — is where the
-// flow put it, and is drawn moved by however far the page's scroll pushes
-// the sticky box, or back by however far the container is scrolled.
-// flow_box_doc_rect and its siblings answer any box in document
-// coordinates, given the scroll: the one place that rule is written.
+// sticky box's subtree, a scroll container's content, a transformed box's
+// subtree — is where the flow put it, and is drawn moved by however far the
+// page's scroll pushes the sticky box, back by however far the container
+// is scrolled, or through the transform. flow_box_doc_offset and its
+// siblings answer, given the scroll: the one place that rule is written.
 struct flow_box {
     flow_box_kind_t kind;
     const os64_html_node_t *node;   // NULL for an anonymous box
@@ -725,6 +725,14 @@ struct flow_box {
     // word wider than its line), so a walk that prunes on `rect` would
     // miss what is drawn.
     os64_gui_rect_t overflow;
+    // How far past `overflow` what it or anything in it paints may reach,
+    // in pixels, on each side in CSS's side order: its shadows, which are
+    // in no box's overflow, and the glyph ink, decorations and marker
+    // shapes the painter draws past it. A group that composites the box
+    // must hold it, so this is AT LEAST that far: never less, and more
+    // where a shadow paints nothing it is counted for (the bounds
+    // contract, PILE3.md § Transforms, the painter, Booked).
+    int32_t ink[4];
     // Content box in the same frame coordinates as rect; set for box nodes.
     os64_gui_rect_t content;
     int32_t baseline;               // LINE, TEXT, ATOMIC, MARKER: the line's
@@ -842,13 +850,79 @@ bool flow_incomplete(const flow_tree_t *tree);
 // The root box: the html element's. NULL for a page with nothing to lay out.
 const flow_box_t *flow_root(const flow_tree_t *tree);
 
-// What to add to a box's coordinates to have document ones: the scroll,
-// for a box in a fixed subtree, the push of each sticky box it moves with
-// at that scroll (CSS Position 3 § 3.4), and less the scroll position of
-// each scroll container whose content it is in, else nothing. The one
-// rule; the rect and clip functions below apply it.
+// What to add to a box's coordinates to have those it is PAINTED in: the
+// scroll, for a box in a fixed subtree, the push of each sticky box it
+// moves with at that scroll (CSS Position 3 § 3.4), less the scroll
+// position of each scroll container whose content it is in, and each
+// translation's move, else nothing — out to the nearest box DRAWN THROUGH
+// its matrix (flow_box_through), whose own coordinates everything in it is
+// painted in. Outside every such box they are document coordinates.
 flow_point_t flow_box_doc_offset(const flow_box_t *box, flow_point_t scroll);
+// Its offset with every transform left out — the scroll under a fixed
+// box, sticky pushes, scroll positions taken back — as LAYOUT geometry sees
+// a box: offsetLeft and offsetTop do not move with a transform (CSSOM
+// View), only getBoundingClientRect does.
+flow_point_t flow_box_layout_offset(const flow_box_t *box, flow_point_t scroll);
+// Where a box IS, in document coordinates: its border box moved by its
+// offset, and inside a drawn-through box the bounds of its four corners
+// taken out through every matrix (CSSOM View's rect of a transformed box).
 os64_gui_rect_t flow_box_doc_rect(const flow_box_t *box, flow_point_t scroll);
+// The document point (x, y) in `box`'s own coordinates — its rect's — taken
+// in through every drawn-through box it is in: false where a matrix cannot
+// be undone (a scale of 0).
+bool flow_box_point(const flow_box_t *box, flow_point_t scroll, int32_t x, int32_t y,
+                    flow_point_t *out);
+// A box DRAWN THROUGH its matrix (PILE3.md § Transforms, the painter): a
+// flat transform that does more than translate. Everything it paints is
+// painted in its own coordinates and laid onto the coordinates the group
+// it sits in is painted in through `m`, x' = m[0] x + m[2] y + m[4], y' =
+// m[1] x + m[3] y + m[5]; `clip`, when not NULL, is what clips it from
+// outside, in those outer coordinates (when nothing does, the plane as far
+// as half a 32-bit coordinate reaches: the numeric contract, PILE3.md §
+// Transforms, the painter, Booked),
+// and `upright`, when not NULL, where its own coordinates go to draw it
+// upright instead, moved — a face that cannot lay it through. False for
+// any other box.
+bool flow_box_through(const flow_box_t *box, flow_point_t scroll, double m[6],
+                      os64_gui_rect_t *clip, flow_point_t *upright);
+// How far a shadow's blur reaches past its shape, in pixels: the painter
+// blurs a shadow with three box blurs of radius blur / 2, which reach
+// 3 (blur / 2) and no further — nothing at all when blur / 2 is 0 — so a
+// group's bounds and the painter agree on what a shadow covers.
+int32_t flow_shadow_blur_reach(int32_t blur);
+// Whether an outer box shadow of `box` casts anything: its shape, the
+// border box grown by its spread, is not empty. One a negative spread
+// collapses is drawn nowhere, however far its blur or offset would reach.
+bool flow_shadow_casts(const flow_box_t *box, const flow_shadow_t *sh);
+// Whether a list marker of this style is drawn as a shape — a disc, a
+// circle, a square — rather than as its text: the painter's choice, and
+// what a marker's ink and text shadows follow.
+bool flow_marker_is_shape(const flow_style_t *s);
+// Where the painter draws a text box's decoration `line`
+// (FLOW_DECORATION_UNDERLINE or _LINE_THROUGH): across the box, a
+// sixteenth of its font size thick and at least a pixel, the underline
+// that far below the baseline, the line-through three tenths of the size
+// above it. A small font puts it past the line box, which is why a group's
+// bounds ask too.
+os64_gui_rect_t flow_decoration_rect(const flow_box_t *box, uint32_t line);
+// The square a shape marker (flow_marker_is_shape) is drawn in: a third of
+// its font size across and at least 3 pixels, centred in the box less a
+// quarter of the size at its end, on the height a line-through takes.
+os64_gui_rect_t flow_marker_shape_rect(const flow_box_t *box);
+// Such a matrix undone: false when it cannot be — its 2x2 part has no
+// inverse, or that inverse is not a finite double. Its determinant, and
+// the determinants its translation is worked from, are worked so neither a
+// double's range nor cancellation loses them, so a matrix
+// huge, tiny, lopsided or nearly singular comes back when its inverse is
+// finite: whatever the face lays through a matrix it undoes here, so
+// painting, laying and hits agree on what can be undone.
+bool flow_affine_invert(const double m[6], double inv[6]);
+// A rect sent through such a matrix: the whole pixels holding its four
+// corners, a whole pixel within a millionth being that pixel. And taken
+// back through it: what of the coordinates inside lands in `r` outside —
+// empty when `m` cannot be undone.
+os64_gui_rect_t flow_affine_rect(const double m[6], os64_gui_rect_t r);
+os64_gui_rect_t flow_affine_rect_back(const double m[6], os64_gui_rect_t r);
 // What its corners' radii come to, in whole pixels, in flow_style_t's
 // corner order, horizontal then vertical: a percentage of its border box,
 // and every one scaled down by one factor when the radii along any side
@@ -862,7 +936,9 @@ flow_layer_t flow_background_layer(const flow_style_t *s, int32_t i);
 // Whether any layer has a picture or a gradient from the page's sheets.
 bool flow_background_has_image(const flow_style_t *s);
 // Its clip, meaningful when `clipped`: its own, met with what clips each
-// frame it is in from outside that frame, each where its own frame is.
+// frame it is in from outside that frame, each where its own frame is — in
+// the coordinates it is painted in, out to its drawn-through box, whose own
+// clip flow_box_through hands the face.
 os64_gui_rect_t flow_box_doc_clip(const flow_box_t *box, flow_point_t scroll);
 
 // ── Scroll containers (CSS Overflow 3 § 2.2; PILE3.md § Scrolling boxes) ─
@@ -936,14 +1012,22 @@ void flow_visit(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t 
                 void (*visit)(void *ctx, const flow_box_t *box), void *ctx);
 
 // The same walk, told where each GROUP is: a stacking context painted below
-// full opacity (flow_style_t.opacity), the root's included. `open` comes
-// before the group's first box and `close` after its last, groups nesting;
-// `bounds` holds everything the group paints, in document coordinates at
-// this scroll — its own boxes' overflow rects and its members', each where
-// its frame puts it — so a face can composite it whole: everything inside
-// painted as usual, then the group laid over what was under it at its
-// opacity (CSS Color 4 § 3.2). A face that blends nothing may leave `open`
-// and `close` NULL, which is flow_visit.
+// full opacity (flow_style_t.opacity), or drawn through its matrix
+// (flow_box_through), the root's included — one group when it is both.
+// `open` comes before the group's first box and `close` after its last,
+// groups nesting; `bounds` holds at least everything the group paints
+// (the bounds contract, PILE3.md § Transforms, the painter, Booked), in the coordinates it is painted in at
+// this scroll — its own boxes' overflow rects and its members', each
+// where its frame puts it, grown by its `ink` and cut to its clip, a
+// drawn-through group inside counted through its matrix and cut to its
+// clip — so a face
+// can composite it whole: everything inside painted as usual, then the
+// group laid over what was under it at its opacity (CSS Color 4 § 3.2),
+// through its matrix. Inside a drawn-through group the walk culls against
+// the viewport taken back through the matrices, and where the face would
+// draw it upright instead, so a face that refuses to lay it loses nothing.
+// A face that blends nothing
+// may leave `open` and `close` NULL, which is flow_visit.
 typedef struct {
     void (*visit)(void *ctx, const flow_box_t *box);
     void (*open)(void *ctx, const flow_box_t *box, os64_gui_rect_t bounds);

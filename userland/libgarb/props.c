@@ -228,87 +228,96 @@ static bool calc_settled(const garb_calc_t *k, double *v, bool *number)
     return false;
 }
 
-// Whether a transform's argument is `want` as written — a percentage as
-// its hundredth, an angle in any unit, a calc() of numbers or percentages
-// as it comes to — so that what it does is known before anything is laid
-// out.
-static bool exactly(const garb_val_t *v, double want)
+// A matrix3d() argument as written: a number, or a calc() of numbers as
+// it comes to, so that what the matrix does is known before anything is
+// laid out.
+static bool settled(const garb_val_t *v, double *out)
 {
-    double c;
     bool number;
-    if (v->kind == GARB_V_CALC)
-        return v->calc != NULL && calc_settled(v->calc, &c, &number) &&
-               c == (number ? want : want * 100);
-    return (v->kind == GARB_V_NUMBER && v->number == want) ||
-           (v->kind == GARB_V_PERCENTAGE && v->number == want * 100) ||
-           (v->kind == GARB_V_ANGLE && want == 0 && v->number == 0);
+    if (v->kind == GARB_V_NUMBER) {
+        *out = v->number;
+        return true;
+    }
+    return v->kind == GARB_V_CALC && v->calc != NULL && calc_settled(v->calc, out, &number) &&
+           number;
 }
 
-// Whether a transform function only moves what it is applied to, as a
-// flat drawing shows it (PILE3.md § Transforms): a translation, and a
-// function that does nothing at all as written. One that reaches only z
-// — translateZ, scaleZ — changes nothing a flat drawing shows.
-static bool starts(const char *s, const char *prefix)
-{
-    for (; *prefix != '\0'; s++, prefix++)
-        if (*s != *prefix)
-            return false;
-    return true;
-}
-
-static bool moves_only(const garb_val_t *f)
+// Whether a transform function is drawn FLAT (PILE3.md § Transforms, the
+// painter): its w, in the flat drawing's x' = (m0 x + m4 y + m12) / w,
+// w = m3 x + m7 y + m11 z + m15, reads nothing but itself — every 2D
+// function and every 3D rotation, scale and translation. perspective()
+// with a length is not, and a matrix3d() is not unless m3, m7 and m11
+// are 0 and m15 is above 0 as written. Judged a function at a time: a w
+// that reads z is no flat drawing once another function writes z from y.
+static bool drawn_flat(const garb_val_t *f)
 {
     const char *n = f->keyword;
     const garb_val_t *a = f->items;
-    int32_t k = f->nitems;
-    if (starts(n, "translate") || os64_streq(n, "scalez"))
-        return true;
-    if (os64_streq(n, "scale") || os64_streq(n, "scale3d"))
-        return exactly(&a[0], 1) && (k < 2 || exactly(&a[1], 1));
-    if (os64_streq(n, "scalex") || os64_streq(n, "scaley"))
-        return exactly(&a[0], 1);
-    if (os64_streq(n, "skew"))
-        return exactly(&a[0], 0) && (k < 2 || exactly(&a[1], 0));
-    if (starts(n, "rotate") || starts(n, "skew"))
-        return exactly(&a[k - 1], 0);
     if (os64_streq(n, "perspective"))
         return a[0].kind == GARB_V_KEYWORD;
-    // A matrix's linear part is the identity, and a 3D one's flat drawing
-    // divides by nothing: x' = m0 x + m4 y + m12, y' = m1 x + m5 y + m13,
-    // over m3 x + m7 y + m15. Nor may a 3D one read z into any of the three
-    // (m8, m9, m11): a translateZ written after it would move the box, or
-    // scale it through w, though each of the two alone does neither.
-    static const int8_t k3d[] = {0, 1, 3, 4, 5, 7, 15, 8, 9, 11};
-    static const double want3d[] = {1, 0, 0, 0, 1, 0, 1, 0, 0, 0};
-    bool three = os64_streq(n, "matrix3d");
-    for (int i = 0; i < (three ? 10 : 4); i++)
-        if (!exactly(&a[three ? k3d[i] : i], three ? want3d[i] : i == 0 || i == 3))
+    if (!os64_streq(n, "matrix3d"))
+        return true;
+    double m3, m7, m11, m15;
+    return settled(&a[3], &m3) && settled(&a[7], &m7) && settled(&a[11], &m11) &&
+           settled(&a[15], &m15) && m3 == 0 && m7 == 0 && m11 == 0 && m15 > 0;
+}
+
+// Whether every number `v` is written with is finite: one past a double
+// (1e400) is read as infinite, and no matrix is made from it.
+// Whether every leaf of a calc() is finite.
+static bool finite_calc(const garb_calc_t *k)
+{
+    if (k->op == GARB_CALC_LEAF)
+        return __builtin_isfinite(k->leaf.number);
+    for (int32_t i = 0; i < k->nargs; i++)
+        if (!finite_calc(k->args[i]))
             return false;
     return true;
 }
 
-// What of a transform value is drawn as something other than it says
-// until slice S7b, by the name of the function or property: anything that
-// does more than move the box. Judged a function at a time, so a list
-// whose functions undo one another is taken to do more than it does; and
-// since no function moves_only() passes reads z into what a flat drawing
-// shows, the z one of them writes cannot reach it through another.
+// An individual property keeps its numbers as items under a value of
+// their kind, so the items are walked whatever the kind; a calc()'s are
+// its leaves, and what it comes to when it settles here — calc(1e300 *
+// 1e300) has finite leaves and no finite value.
+static bool finite_numbers(const garb_val_t *v)
+{
+    double settled_to;
+    bool number;
+    if (v->kind == GARB_V_CALC && v->calc != NULL &&
+        (!finite_calc(v->calc) ||
+         (calc_settled(v->calc, &settled_to, &number) && !__builtin_isfinite(settled_to))))
+        return false;
+    switch (v->kind) {
+    case GARB_V_NUMBER: case GARB_V_LENGTH: case GARB_V_PERCENTAGE: case GARB_V_ANGLE:
+        if (!__builtin_isfinite(v->number))
+            return false;
+        break;
+    default:
+        break;
+    }
+    for (int32_t i = 0; i < v->nitems; i++)
+        if (!finite_numbers(&v->items[i]))
+            return false;
+    return true;
+}
+
+// What of a transform value is drawn as something other than it says, by
+// the name of the function or property: one that is not drawn flat, or is
+// written with a number past a double, which is drawn upright where it
+// moves the box's origin. The individual properties are always flat. Each
+// function is judged by its own numbers: finite ones that compose, or
+// scale to device units, past what the face draws are not named here (the
+// numeric contract, PILE3.md § Transforms, the painter, Booked).
 static const char *transform_approximated(garb_prop_t prop, const garb_val_t *v)
 {
     if (v->kind == GARB_V_KEYWORD)
         return NULL;
-    if (prop == GARB_ROTATE) {
-        const garb_val_t *a = v->kind == GARB_V_ANGLE ? v : &v->items[v->nitems - 1];
-        return exactly(a, 0) ? NULL : "rotate";
-    }
-    if (prop == GARB_SCALE) {
-        for (int32_t i = 0; i < v->nitems && i < 2; i++)
-            if (!exactly(&v->items[i], 1))
-                return "scale";
-        return NULL;
-    }
+    if (prop != GARB_TRANSFORM)
+        return finite_numbers(v) ? NULL : prop == GARB_ROTATE ? "rotate"
+                                       : prop == GARB_SCALE  ? "scale"
+                                                             : "translate";
     for (int32_t i = 0; i < v->nitems; i++)
-        if (!moves_only(&v->items[i]))
+        if (!drawn_flat(&v->items[i]) || !finite_numbers(&v->items[i]))
             return v->items[i].keyword;
     return NULL;
 }
@@ -317,7 +326,8 @@ static const char *transform_approximated(garb_prop_t prop, const garb_val_t *v)
 // image function — or NULL when the value is laid out as it says.
 static const char *value_approximated(garb_prop_t prop, const garb_val_t *v)
 {
-    if (prop == GARB_TRANSFORM || prop == GARB_ROTATE || prop == GARB_SCALE)
+    if (prop == GARB_TRANSFORM || prop == GARB_ROTATE || prop == GARB_SCALE ||
+        prop == GARB_TRANSLATE)
         return transform_approximated(prop, v);
     if (!image_drawn(v))
         return v->text;

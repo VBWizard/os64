@@ -727,14 +727,17 @@ struct flow_frame {
     // containing block, margins and all: lo <= 0 <= hi.
     int32_t lo[2], hi[2];
     // TRANSFORM: its matrix, column-major, in 26.6 document coordinates as
-    // the box was laid out (f_transform_matrix); whether it does more than
-    // translate, as a flat drawing shows it; and `by`, how far it is drawn
-    // moved: how far the matrix moves the transform-origin, in pixels — the
-    // whole of a translation, and for any other matrix the box moved
-    // upright to where its origin goes, until the painter draws through
-    // the matrix (PILE3.md, slice S7b).
+    // the box was laid out (f_transform_matrix), and what it is drawn as
+    // (PILE3.md § Transforms, the painter). A translation is an OFFSET,
+    // `by` pixels. A FLAT matrix that does more is drawn THROUGH: what is
+    // inside is painted in the frame's own coordinates and laid onto the
+    // frame outside's through `affine` — x' = a x + c y + e, y' = b x + d y
+    // + f, {a, b, c, d, e, f}, in pixels — so `by` moves nothing. A matrix
+    // that is not flat is drawn UPRIGHT, moved by `by`: how far it moves
+    // the transform-origin.
     double matrix[16];
-    bool upright;
+    double affine[6];
+    bool through, upright;
     flow_point_t by;
     // When its containing block is a scroll container (`outer`'s box), the
     // block's content reaches as far down as the container scrolls, so
@@ -756,9 +759,13 @@ struct flow_frame {
 
 // A transformed box's matrix (flow_frame_t.matrix) from its style and its
 // border box at (x, y), `w` by `h`, all in 26.6: T(origin) · translate ·
-// rotate · scale · the transform list · T(-origin) (Transforms 2 § 6).
-// Made in one place from those alone, so a box's matrix can be made again
-// without laying it out again.
+// rotate · scale · the transform list · T(-origin) (Transforms 2 § 6), up
+// to a positive power of two: one whose entries a double cannot hold comes
+// back divided down, which every reader allows — the matrix is
+// homogeneous, and each divides by its w — though an entry too small
+// beside the rest is lost to 0 (the numeric contract, PILE3.md §
+// Transforms, the painter, Booked). Made in one place from those alone, so
+// a box's matrix can be made again without laying it out again.
 void f_transform_matrix(const flow_style_t *s, int64_t x, int64_t y, int64_t w, int64_t h,
                         double m[16]);
 

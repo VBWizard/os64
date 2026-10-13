@@ -297,6 +297,13 @@ static void paint_cases(void)
                     "fill 0 0 200 100 #fefefe\n"
                     "fill 5 10 20 5 #ff0000\n"
                     "fill 20 5 5 5 #ff0000\n");
+    // A shadow its negative spread collapses — -10px off a 10px-tall box —
+    // has no shape, so nothing of it is drawn, blur and offset and all.
+    paint_page_case("a shadow its spread collapses paints nothing",
+                    "<!doctype html><style>body { margin: 0 } div { width: 20px; height: 10px;"
+                    " box-shadow: 30px 0 20px -10px #ff0000 }</style><div></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n");
     // A text's shadow is the run again in the shadow's colour, moved by its
     // offset, painted under it.
     paint_page_case("a text shadow is the run again, under it",
@@ -554,4 +561,115 @@ static void paint_cases(void)
                     "end group 128\n"
                     "group 0 520 200 0\n"
                     "end group 128\n");
+    // A box turned a quarter about its centre (50, 10) is DRAWN THROUGH
+    // (PILE3.md § Transforms, the painter): (x, y) goes to (60 - y, x -
+    // 40). The face is asked to lay its own coordinates through that, and
+    // only what can show: the view taken back is 40 to 140 across and -140
+    // to 60 down, so of its 100 by 20, the part from 40 across — from 39,
+    // a pixel more for the bilinear sample at the edge. Inside, it paints
+    // where it was laid out.
+    paint_page_case("a turned block is laid through its matrix, painted in its own place",
+                    "<!doctype html><style>body { margin: 0 } .t { width: 100px; height: 20px;"
+                    " background: #00ff00; transform: rotate(90deg) }</style><div class=t></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "through 39 0 61 20 0 1000 -1000 0 60000 -40000 clip 0 0 200 100\n"
+                    "fill 39 0 61 20 #00ff00\n"
+                    "end through 255\n");
+    // A face with no room for it has it drawn upright where its origin
+    // goes: moved 30 across first, the centre goes 30 across.
+    s_through_refused = true;
+    paint_page_case("a turned block the face cannot lay is drawn upright, moved",
+                    "<!doctype html><style>body { margin: 0 } .t { width: 100px; height: 20px;"
+                    " background: #00ff00; transform: translateX(30px) rotate(90deg) }</style>"
+                    "<div class=t></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "fill 30 0 100 20 #00ff00\n");
+    s_through_refused = false;
+    // What clips it from outside is the face's to lay it inside, not the
+    // painter's to cut its own coordinates by. Laid 40 down in a 50 tall
+    // wrapper and turned about (10, 50) — (x, y) to (60 - y, x + 40) — what
+    // lands above 50 is its own left 10 (and a pixel more for the bilinear
+    // sample at the edge), all 20 of its height: so much is painted, and the
+    // clip goes to the face.
+    paint_page_case("what clips a turned block from outside is laid by, not painted by",
+                    "<!doctype html><style>body { margin: 0 } .w { display: flow-root; overflow: clip; height: 50px }"
+                    " .t { margin-top: 40px; width: 20px; height: 20px; background: #00ff00;"
+                    " transform: rotate(90deg) }</style><div class=w><div class=t></div></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "through 0 40 11 20 0 1000 -1000 0 60000 40000 clip 0 0 200 50\n"
+                    "fill 0 40 11 20 #00ff00\n"
+                    "end through 255\n");
+    // A matrix that collapses an axis draws nothing — scaleX(0), and a turn
+    // edge-on, rotateX(90deg) — nor does a turn that sends the box out of
+    // the view, though upright it would be in it: turned back a quarter
+    // about its corner (0, 0), (x, y) goes to (y, -x), all of it above the
+    // view.
+    paint_page_case("a collapsed or turned-away block paints nothing",
+                    "<!doctype html><style>body { margin: 0 } div { width: 100px; height: 20px;"
+                    " background: #00ff00 } .z { transform: scaleX(0) }"
+                    " .away { transform-origin: 0 0; transform: rotate(-90deg) }"
+                    " .edge { transform: rotateX(90deg) }</style>"
+                    "<div class=away></div><div class=z></div><div class=edge></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n");
+    // Refused, it is drawn upright still inside what clips it from outside:
+    // turned about its centre, upright it is where it was laid out, and the
+    // 50 tall wrapper cuts its foot.
+    s_through_refused = true;
+    paint_page_case("a turned block drawn upright keeps the clip outside it",
+                    "<!doctype html><style>body { margin: 0 } .w { display: flow-root; overflow: clip;"
+                    " height: 50px } .t { margin-top: 40px; width: 20px; height: 20px;"
+                    " background: #00ff00; transform: rotate(90deg) }</style>"
+                    "<div class=w><div class=t></div></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "fill 0 40 20 10 #00ff00\n");
+    s_through_refused = false;
+    // A scale near zero (1e-11, still above what cannot be undone) takes
+    // the view back past both of a rect's limits, as wide as one can say;
+    // its edge pixel is added without overflowing, and the box is laid
+    // through, not dropped upright.
+    paint_page_case("a block scaled near zero is laid through",
+                    "<!doctype html><style>body { margin: 0 } .t { width: 100px; height: 20px;"
+                    " background: #00ff00; transform: scaleX(1e-11) }</style><div class=t></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "through 0 0 100 20 0 0 0 1000 50000 0 clip 0 0 200 100\n"
+                    "fill 0 0 100 20 #00ff00\n"
+                    "end through 255\n");
+    // Past the painter's 64 open groups, a turned box is not painted.
+    {
+        static char deep[8192];
+        size_t at = 0;
+        at += (size_t)snprintf(deep + at, sizeof(deep) - at,
+                               "<!doctype html><style>body { margin: 0 } i { display: block;"
+                               " opacity: 0.99 } .t { width: 100px; height: 20px;"
+                               " background: #00ff00; transform: rotate(90deg) }</style>");
+        for (int k = 0; k < 64; k++)
+            at += (size_t)snprintf(deep + at, sizeof(deep) - at, "<i>");
+        snprintf(deep + at, sizeof(deep) - at, "<div class=t></div>");
+        // 64 groups, each holding the turned box's bounds taken out: 40 to
+        // 60 across and -40 to 60 down, cut to the view.
+        static char want[8192];
+        size_t w = (size_t)snprintf(want, sizeof(want), "fill 0 0 200 100 #fefefe\n");
+        for (int k = 0; k < 64; k++)
+            w += (size_t)snprintf(want + w, sizeof(want) - w, "group 0 0 200 60\n");
+        for (int k = 0; k < 64; k++)
+            w += (size_t)snprintf(want + w, sizeof(want) - w, "end group 252\n");
+        paint_page_case("a turned block past the deepest kept group is not painted", deep, 200,
+                        (os64_gui_rect_t){0, 0, 200, 100}, true, want);
+    }
+    // Turned and translucent, it is one group, laid through at its alpha.
+    paint_page_case("a turned translucent block is one group, laid through at its alpha",
+                    "<!doctype html><style>body { margin: 0 } .t { width: 100px; height: 20px;"
+                    " background: #00ff00; opacity: 0.5; transform: rotate(90deg) }</style>"
+                    "<div class=t></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "through 39 0 61 20 0 1000 -1000 0 60000 -40000 clip 0 0 200 100\n"
+                    "fill 39 0 61 20 #00ff00\n"
+                    "end through 128\n");
 }

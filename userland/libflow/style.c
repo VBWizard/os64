@@ -2370,14 +2370,18 @@ static void identity(double m[16])
     m[0] = m[5] = m[10] = m[15] = 1;
 }
 
+// An angle in radians, reduced by whole turns in its own unit first
+// (fmod is exact): rotate(1e308deg) times pi would be past a double, and
+// a turn more or less is the same turn. Radians stay as written; cos and
+// sin reduce them themselves.
 static double radians(const garb_val_t *v)
 {
     static const double kPi = 3.14159265358979323846;
     switch (v->unit) {
-    case GARB_U_GRAD: return v->number * kPi / 200;
+    case GARB_U_GRAD: return fmod(v->number, 400) * kPi / 200;
     case GARB_U_RAD: return v->number;
-    case GARB_U_TURN: return v->number * 2 * kPi;
-    default: return v->number * kPi / 180;
+    case GARB_U_TURN: return fmod(v->number, 1) * 2 * kPi;
+    default: return fmod(v->number, 360) * kPi / 180;
     }
 }
 
@@ -2407,19 +2411,48 @@ static bool author_px(const Author *a, const garb_val_t *v, double *out)
     return true;
 }
 
-// A turn of `angle` radians about the axis (x, y, z), into `m`: Rodrigues'
+// The quarter turns `v` is, when it is written as a whole number of them —
+// 90deg, 100grad, 0.25turn, each tested exactly — so that its sine and
+// cosine are exact, as a double's cos(pi / 2), 6e-17, is not: 0 to 3, or
+// -1 for any other angle, which is worked out as written.
+static int quarters(const garb_val_t *v)
+{
+    double n = v->number, per = v->unit == GARB_U_GRAD ? 100 : v->unit == GARB_U_TURN ? 0.25
+                                : v->unit == GARB_U_RAD ? 0 : 90;
+    if (!isfinite(n) || (per == 0 ? n != 0 : fmod(n, per) != 0))
+        return -1;
+    if (per == 0)
+        return 0;
+    // Reduced by a whole turn before it is divided, so a huge angle
+    // (1e308turn) never overflows on the way to its quarter.
+    double q = fmod(n, 4 * per) / per;
+    return (int)(q < 0 ? q + 4 : q);
+}
+
+// A turn by the angle `v` about the axis (x, y, z), into `m`: Rodrigues'
 // rotation, which is Transforms 2 § 12.2's rotate3d() — clockwise on the
 // glass about z, since y points down — with the axis made a unit vector.
-// An axis of no length turns nothing.
-static void rotation(double m[16], double x, double y, double z, double angle)
+// An axis of no length turns nothing. A whole number of quarter turns is
+// exact, so rotateX(90deg) is edge-on: collapsed, drawn and hit nowhere.
+static void rotation(double m[16], double x, double y, double z, const garb_val_t *v)
 {
-    double len = sqrt(x * x + y * y + z * z);
-    if (!(len > 0))
+    // Made a unit vector scaled by its largest part first, so that neither
+    // rotate3d(1e308, 0, 0, a) overflows nor a tiny axis underflows to none.
+    double k = fmax(fabs(x), fmax(fabs(y), fabs(z)));
+    if (!(k > 0) || !isfinite(k))
         return;
+    x /= k;
+    y /= k;
+    z /= k;
+    double len = sqrt(x * x + y * y + z * z);
     x /= len;
     y /= len;
     z /= len;
-    double c = cos(angle), s = sin(angle), t = 1 - c;
+    static const double kCos[4] = {1, 0, -1, 0}, kSin[4] = {0, 1, 0, -1};
+    int q = quarters(v);
+    double angle = radians(v);
+    double c = q >= 0 ? kCos[q] : cos(angle), s = q >= 0 ? kSin[q] : sin(angle);
+    double t = 1 - c;
     m[0] = c + x * x * t;
     m[1] = y * x * t + z * s;
     m[2] = z * x * t - y * s;
@@ -2483,13 +2516,13 @@ static bool author_fn(const Author *a, const garb_val_t *f, flow_transform_t *ou
     } else if (is_fn(n, "scalez", NULL)) {
         m[10] = d[0];
     } else if (is_fn(n, "rotate", "rotatez")) {
-        rotation(m, 0, 0, 1, radians(&v[0]));
+        rotation(m, 0, 0, 1, &v[0]);
     } else if (is_fn(n, "rotatex", NULL)) {
-        rotation(m, 1, 0, 0, radians(&v[0]));
+        rotation(m, 1, 0, 0, &v[0]);
     } else if (is_fn(n, "rotatey", NULL)) {
-        rotation(m, 0, 1, 0, radians(&v[0]));
+        rotation(m, 0, 1, 0, &v[0]);
     } else if (is_fn(n, "rotate3d", NULL) && k == 4) {
-        rotation(m, d[0], d[1], d[2], radians(&v[3]));
+        rotation(m, d[0], d[1], d[2], &v[3]);
     } else if (is_fn(n, "skew", "skewx")) {
         m[4] = tan(radians(&v[0]));
         if (k > 1)
@@ -2572,14 +2605,14 @@ static bool author_individual(const Author *a, flow_style_t *s, garb_prop_t p,
         t.m[5] = n == 1 ? sc[0] : sc[1];
         t.m[10] = sc[2];
     } else if (v->kind == GARB_V_ANGLE) {
-        rotation(t.m, 0, 0, 1, radians(v));
+        rotation(t.m, 0, 0, 1, v);
     } else {
         double axis[3];
         ok = n == 4 && it[3].kind == GARB_V_ANGLE;
         for (int i = 0; i < 3 && ok; i++)
             ok = author_number(a, &it[i], &axis[i]);
         if (ok)
-            rotation(t.m, axis[0], axis[1], axis[2], radians(&it[3]));
+            rotation(t.m, axis[0], axis[1], axis[2], &it[3]);
     }
     if (!ok)
         return true;

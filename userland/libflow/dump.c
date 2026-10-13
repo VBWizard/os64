@@ -780,8 +780,20 @@ static void tree_lines(Buf *b, const flow_box_t *box, int32_t depth)
         puts_(b, " fixed");
     // A transformed box's own frame may sit inside its sticky one.
     const flow_frame_t *own = box->frame != NULL && box->frame->box == box ? box->frame : NULL;
+    // A translation is its move; a box drawn through its matrix, the
+    // matrix's a b c d e f in thousandths, e and f of a pixel.
     if (own != NULL && own->kind == F_FRAME_TRANSFORM) {
-        putf(b, " transform %d %d", (int)own->by.x, (int)own->by.y);
+        if (own->through) {
+            puts_(b, " through");
+            // Held to what a long long can say: scale(1e20) is finite.
+            for (int i = 0; i < 6; i++) {
+                double v = own->affine[i] * 1000;
+                v = v < -9e18 ? -9e18 : v > 9e18 ? 9e18 : v;
+                putf(b, " %lld", (long long)(v < 0 ? v - 0.5 : v + 0.5));
+            }
+        } else {
+            putf(b, " transform %d %d", (int)own->by.x, (int)own->by.y);
+        }
         if (own->upright)
             puts_(b, " upright");
         own = own->outer != NULL && own->outer->box == box ? own->outer : NULL;

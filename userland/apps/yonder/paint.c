@@ -13,16 +13,45 @@
 // A painter works in the coordinates of the box it paints — a fixed box's
 // are the viewport's — and `off` is what takes them to the page's, added
 // wherever a rectangle is handed to a verb. `view` is in the box's.
+// The groups open while a page is painted (group_open): what to put back
+// at the close, and what the open asked of the verbs.
+#define PAINT_GROUPS 64
+typedef enum { G_ASKED, G_OPACITY, G_THROUGH } PaintGroupKind;
+typedef struct {
+    struct {
+        os64_gui_rect_t view;
+        flow_point_t shift;
+        PaintGroupKind kind;
+    } open[PAINT_GROUPS];
+    int32_t depth;                  // may pass PAINT_GROUPS; those are not kept
+    // Past the deepest kept, a group drawn through its matrix is not painted
+    // at all: the depth it opened at, plus one, or 0.
+    int32_t hidden;
+} PaintGroups;
+
 typedef struct {
     const yonder_verbs_t *v;
+    // `view` is what is painted, and `shift` what to add to a box's
+    // flow_box_doc_offset, both in the coordinates being painted: inside a
+    // group laid through its matrix, the group's own; inside one drawn
+    // upright instead, the outside's, `shift` taking the box there.
     os64_gui_rect_t view;
-    flow_point_t scroll, off;
+    flow_point_t scroll, off, shift;
+    PaintGroups *groups;
     // The box whose background became the canvas's: it does not paint it
     // a second time over its own border box (CSS 2.1 §14.2).
     const flow_box_t *canvas_owner;
     // Dark pages (paint.h), NULL for none.
     const yonder_dark_t *dark;
 } Painter;
+
+// A coordinate and a move added, held to what a 32-bit coordinate can say,
+// so a far shift never wraps — and one that fits is left where it is.
+static int32_t sum32(int64_t a, int64_t b)
+{
+    int64_t v = a + b;
+    return (int32_t)(v < INT32_MIN ? INT32_MIN : v > INT32_MAX ? INT32_MAX : v);
+}
 
 static double hue_part(double p, double q, double t)
 {
@@ -742,10 +771,18 @@ static Round round_moved(const Round *s, int64_t dx, int64_t dy, int64_t by)
 static void shadow(const Painter *p, const flow_box_t *b, const Round *outer, const Round *inner,
                    const flow_shadow_t *sh, bool square)
 {
+    // An outer shadow a negative spread collapses casts nothing — libflow's
+    // rule (flow_shadow_casts), which a group's bounds follow.
+    if (!sh->inset && !flow_shadow_casts(b, sh))
+        return;
     // How far a pixel's shade reads: three box blurs of radius blur/2 each
-    // (mask_blur), and a pixel. A mask cut any closer to the view would
-    // shade a pixel by where the dirty part happened to end (Quinn, #203).
-    int64_t blur = sh->blur, reach = 3 * (blur / 2) + 1;
+    // (mask_blur), 3 (blur/2) — libflow's rule (flow_shadow_blur_reach),
+    // which a group's bounds hold too. A pass wrongs only the r pixels
+    // nearest the mask's edge, where it reads past it, so after three every
+    // pixel 3 (blur/2) inside the edge is right; a mask cut any closer to
+    // the view would shade a pixel by where the dirty part happened to end
+    // (Quinn, #203).
+    int64_t blur = sh->blur, reach = flow_shadow_blur_reach(sh->blur);
     uint32_t colour = sh->current ? b->style->color : sh->colour;
     Round shape = sh->inset ? round_moved(inner, (int64_t)sh->x * SUB, (int64_t)sh->y * SUB,
                                           -(int64_t)sh->spread * SUB)
@@ -1194,16 +1231,16 @@ static os64_gui_rect_t content_of(const flow_box_t *b)
 
 static void decorations(const Painter *p, const flow_box_t *b)
 {
-    if (b->decoration == 0)
-        return;
-    int64_t size = px(b->style->font_size);
-    int64_t thick = max64(1, size / 16);
-    if (b->decoration & FLOW_DECORATION_UNDERLINE)
-        fill(p, b->rect.x, (int64_t)b->baseline + thick, b->rect.w, thick,
-             ink_of(p, b->underline_color));
-    if (b->decoration & FLOW_DECORATION_LINE_THROUGH)
-        fill(p, b->rect.x, (int64_t)b->baseline - size * 3 / 10, b->rect.w, thick,
-             ink_of(p, b->line_through_color));
+    // Where each falls is libflow's (flow_decoration_rect), which a
+    // group's bounds hold too.
+    if (b->decoration & FLOW_DECORATION_UNDERLINE) {
+        os64_gui_rect_t r = flow_decoration_rect(b, FLOW_DECORATION_UNDERLINE);
+        fill(p, r.x, r.y, r.w, r.h, ink_of(p, b->underline_color));
+    }
+    if (b->decoration & FLOW_DECORATION_LINE_THROUGH) {
+        os64_gui_rect_t r = flow_decoration_rect(b, FLOW_DECORATION_LINE_THROUGH);
+        fill(p, r.x, r.y, r.w, r.h, ink_of(p, b->line_through_color));
+    }
 }
 
 // Disc, circle and square are drawn as shapes, the way browsers draw them,
@@ -1245,10 +1282,10 @@ static bool span_within(int64_t d, int64_t limit, int64_t *lo, int64_t *hi)
 
 static void bullet(const Painter *p, const flow_box_t *b, flow_list_style_type_t type)
 {
-    int64_t size = px(b->style->font_size);
-    int64_t d = max64(3, size / 3);
-    int64_t x = (int64_t)b->rect.x + max64(0, ((int64_t)b->rect.w - size / 4 - d) / 2);
-    int64_t y = (int64_t)b->baseline - size * 3 / 10 - d / 2;
+    // Where it falls is libflow's (flow_marker_shape_rect), which a
+    // group's bounds hold too.
+    os64_gui_rect_t at = flow_marker_shape_rect(b);
+    int64_t x = at.x, y = at.y, d = at.w;
     uint32_t colour = ink_of(p, b->style->color);
     if (type == FLOW_LIST_SQUARE) {
         fill(p, x, y, d, d, colour);
@@ -1295,18 +1332,23 @@ static bool is_frame(const flow_box_t *b)
 static void paint_box(void *ctx, const flow_box_t *b)
 {
     const Painter *outer = ctx;
-    if (b->style->visibility != FLOW_VISIBLE)
+    if (b->style->visibility != FLOW_VISIBLE || outer->groups->hidden != 0)
         return;
     // The box's own coordinates: a fixed one's view is the page's less the
-    // scroll, a sticky one's less its push. A box an ancestor's `overflow`
-    // clips is drawn only inside the clip, asked in document coordinates —
+    // scroll, a sticky one's less its push, and the painter's shift (a
+    // group drawn upright) applied. A box an ancestor's `overflow` clips is
+    // drawn only inside the clip, asked in the coordinates being painted —
     // what clips a sticky box from outside stays put as the box moves — and
     // every verb is handed the view, so the view is narrowed.
     Painter clipped = *outer;
     clipped.off = flow_box_doc_offset(b, outer->scroll);
+    clipped.off.x = sum32(clipped.off.x, outer->shift.x);
+    clipped.off.y = sum32(clipped.off.y, outer->shift.y);
     os64_gui_rect_t v = outer->view;
     if (b->clipped) {
         os64_gui_rect_t c = flow_box_doc_clip(b, outer->scroll);
+        c.x = sum32(c.x, outer->shift.x);
+        c.y = sum32(c.y, outer->shift.y);
         int64_t x0 = max64(v.x, c.x), y0 = max64(v.y, c.y);
         int64_t x1 = min64((int64_t)v.x + v.w, (int64_t)c.x + c.w);
         int64_t y1 = min64((int64_t)v.y + v.h, (int64_t)c.y + c.h);
@@ -1321,9 +1363,7 @@ static void paint_box(void *ctx, const flow_box_t *b)
     case FLOW_BOX_LINE:
         return;
     case FLOW_BOX_MARKER:
-        if (b->style->list_style_type == FLOW_LIST_DISC ||
-            b->style->list_style_type == FLOW_LIST_CIRCLE ||
-            b->style->list_style_type == FLOW_LIST_SQUARE) {
+        if (flow_marker_is_shape(b->style)) {
             bullet(p, b, b->style->list_style_type);
             return;
         }
@@ -1391,25 +1431,143 @@ static void paint_box(void *ctx, const flow_box_t *b)
     }
 }
 
-// A group (flow_visit_groups) opens: its bounds, cut to what is painted,
-// are the verb's to remember what was under them; closes: everything it
-// painted is laid over that at the group's opacity, in 255ths.
-static void group_open(void *ctx, const flow_box_t *box, os64_gui_rect_t bounds)
+// `r` met with `c`; empty, at `r`'s corner, where they do not meet.
+static os64_gui_rect_t cut(os64_gui_rect_t r, os64_gui_rect_t c)
 {
-    (void)box;
-    const Painter *p = ctx;
-    int64_t x0 = max64(bounds.x, p->view.x), y0 = max64(bounds.y, p->view.y);
-    int64_t x1 = min64((int64_t)bounds.x + bounds.w, (int64_t)p->view.x + p->view.w);
-    int64_t y1 = min64((int64_t)bounds.y + bounds.h, (int64_t)p->view.y + p->view.h);
-    p->v->group_open(p->v->ctx, (os64_gui_rect_t){(int32_t)x0, (int32_t)y0,
-                                                  (int32_t)max64(0, x1 - x0),
-                                                  (int32_t)max64(0, y1 - y0)});
+    int64_t x0 = max64(r.x, c.x), y0 = max64(r.y, c.y);
+    int64_t x1 = min64((int64_t)r.x + r.w, (int64_t)c.x + c.w);
+    int64_t y1 = min64((int64_t)r.y + r.h, (int64_t)c.y + c.h);
+    return (os64_gui_rect_t){(int32_t)x0, (int32_t)y0, (int32_t)max64(0, x1 - x0),
+                             (int32_t)max64(0, y1 - y0)};
 }
 
+// `r` one pixel wider all round, held as libflow holds a bounds' rect:
+// each edge to a 32-bit coordinate, and one too wide for a 32-bit width
+// held to the middle of the range, where any view is.
+static os64_gui_rect_t widened(os64_gui_rect_t r)
+{
+    int64_t x0 = max64((int64_t)r.x - 1, INT32_MIN), y0 = max64((int64_t)r.y - 1, INT32_MIN);
+    int64_t x1 = min64((int64_t)r.x + r.w + 1, INT32_MAX), y1 = min64((int64_t)r.y + r.h + 1, INT32_MAX);
+    if (x1 - x0 > INT32_MAX) {
+        x0 = max64(x0, INT32_MIN / 2);
+        x1 = min64(x1, INT32_MAX / 2);
+    }
+    if (y1 - y0 > INT32_MAX) {
+        y0 = max64(y0, INT32_MIN / 2);
+        y1 = min64(y1, INT32_MAX / 2);
+    }
+    return (os64_gui_rect_t){(int32_t)x0, (int32_t)y0, (int32_t)max64(0, x1 - x0),
+                             (int32_t)max64(0, y1 - y0)};
+}
+
+static os64_gui_rect_t shifted(os64_gui_rect_t r, flow_point_t by)
+{
+    return (os64_gui_rect_t){sum32(r.x, by.x), sum32(r.y, by.y), r.w, r.h};
+}
+
+// Whether the verbs composite a group at its opacity: both, or neither.
+static bool opacity_verbs(const Painter *p)
+{
+    return p->v->group_open != NULL && p->v->group_close != NULL;
+}
+
+// A group (flow_visit_groups) opens. One below full opacity hands the
+// verbs its bounds, cut to what is painted, to remember what was under
+// them. One DRAWN THROUGH its matrix (flow_box_through) is asked of the
+// verbs whole: its bounds — in its own coordinates, cut to the view taken
+// back through the matrix, which is all of it that can show — the matrix
+// to the coordinates being painted, and the clip it is laid inside. Laid
+// so, what is inside is painted in its own coordinates. One none of which
+// can show — out of view, or a matrix that collapses an axis — is not
+// painted at all. A face that cannot lay it (no verb, no memory) has it
+// drawn upright, where its origin goes, the shift taking every box there,
+// and under its opacity as an ordinary group. Past the deepest kept, an
+// opacity group asks nothing of the verbs and is drawn opaque where it is,
+// and a group drawn through its matrix is not painted at all: nothing
+// remembers where to put it back, and the walk culled it for the turned
+// and the upright drawings, not this one.
+static void group_open(void *ctx, const flow_box_t *box, os64_gui_rect_t bounds)
+{
+    Painter *p = ctx;
+    PaintGroups *gs = p->groups;
+    int32_t d = gs->depth++;
+    if (d >= PAINT_GROUPS) {
+        if (gs->hidden != 0)
+            return;
+        if (flow_box_through(box, p->scroll, (double[6]){0}, NULL, NULL))
+            gs->hidden = d + 1;
+        else if (opacity_verbs(p))
+            p->v->group_open(p->v->ctx, cut(shifted(bounds, p->shift), p->view));
+        return;
+    }
+    gs->open[d].view = p->view;
+    gs->open[d].shift = p->shift;
+    gs->open[d].kind = G_ASKED;
+    double m[6];
+    os64_gui_rect_t clip;
+    flow_point_t upright;
+    if (flow_box_through(box, p->scroll, m, &clip, &upright)) {
+        m[4] += p->shift.x;
+        m[5] += p->shift.y;
+        clip = cut(shifted(clip, p->shift), p->view);
+        os64_gui_rect_t back = flow_affine_rect_back(m, clip);
+        os64_gui_rect_t own = cut(bounds, back);
+        // Nothing of it shows — a matrix that collapses an axis (scaleX(0),
+        // rotateX(90deg)) draws nothing, and the rest may be out of view —
+        // so nothing is painted: the view is empty until its close.
+        if (own.w <= 0 || own.h <= 0) {
+            p->view = (os64_gui_rect_t){0, 0, 0, 0};
+            return;
+        }
+        // What shows, one pixel wider all round: a bilinear sample at the
+        // edge of the clip mixes the source pixel beyond it.
+        own = cut(bounds, widened(back));
+        if (p->v->through_open != NULL && p->v->through_close != NULL &&
+            p->v->through_open(p->v->ctx, own, m, clip)) {
+            gs->open[d].kind = G_THROUGH;
+            p->view = own;
+            p->shift = (flow_point_t){0, 0};
+            return;
+        }
+        // Drawn upright instead, still inside what clips it from outside,
+        // which no box inside will meet (flow_box_doc_clip stops here).
+        p->view = clip;
+        p->shift.x = sum32(p->shift.x, upright.x);
+        p->shift.y = sum32(p->shift.y, upright.y);
+        if (box->style->opacity >= 1000)
+            return;
+    }
+    if (opacity_verbs(p)) {
+        gs->open[d].kind = G_OPACITY;
+        p->v->group_open(p->v->ctx, cut(shifted(bounds, p->shift), p->view));
+    }
+}
+
+// Closes: what it painted is laid over what was under it at the group's
+// opacity, in 255ths — through its matrix, when it was laid so — and the
+// view and the shift are what they were.
 static void group_close(void *ctx, const flow_box_t *box)
 {
-    const Painter *p = ctx;
-    p->v->group_close(p->v->ctx, (uint8_t)(((uint32_t)box->style->opacity * 255 + 500) / 1000));
+    Painter *p = ctx;
+    PaintGroups *gs = p->groups;
+    int32_t d = --gs->depth;
+    uint8_t alpha = (uint8_t)(((uint32_t)box->style->opacity * 255 + 500) / 1000);
+    if (d >= PAINT_GROUPS) {
+        if (gs->hidden != 0) {
+            if (gs->hidden == d + 1)
+                gs->hidden = 0;
+            return;
+        }
+        if (!flow_box_through(box, p->scroll, (double[6]){0}, NULL, NULL) && opacity_verbs(p))
+            p->v->group_close(p->v->ctx, alpha);
+        return;
+    }
+    if (gs->open[d].kind == G_THROUGH)
+        p->v->through_close(p->v->ctx, alpha);
+    else if (gs->open[d].kind == G_OPACITY)
+        p->v->group_close(p->v->ctx, alpha);
+    p->view = gs->open[d].view;
+    p->shift = gs->open[d].shift;
 }
 
 // Whether a box has any background: a colour, a gradient, or a picture
@@ -1439,10 +1597,12 @@ const flow_box_t *yonder_canvas_owner(const flow_tree_t *tree, const yonder_verb
     return root != NULL ? canvas_owner(&p, root) : NULL;
 }
 
+
 void yonder_paint(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll,
                   uint32_t paper, const yonder_dark_t *dark, const yonder_verbs_t *verbs)
 {
-    Painter p = {.v = verbs, .view = viewport, .scroll = scroll, .dark = dark};
+    PaintGroups groups = {.depth = 0};
+    Painter p = {.v = verbs, .view = viewport, .scroll = scroll, .groups = &groups, .dark = dark};
     if (dark != NULL)
         paper = dark->paper;
     const flow_box_t *root = flow_root(tree);
@@ -1478,9 +1638,7 @@ void yonder_paint(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_
         }
     }
     if (root != NULL) {
-        bool groups = verbs->group_open != NULL && verbs->group_close != NULL;
-        flow_visitor_t v = {paint_box, groups ? group_open : NULL, groups ? group_close : NULL,
-                            &p};
+        flow_visitor_t v = {paint_box, group_open, group_close, &p};
         flow_visit_groups(tree, viewport, scroll, &v);
     }
 }

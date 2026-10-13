@@ -13,10 +13,14 @@
 //                                H/2 for everything else (16px: 8)
 //   advance, the monospace face: H/2 for every glyph (16px: 8)
 //
-// No kerning, no ink (every glyph is zero-area), every scalar from U+0020
-// up is present. A face is named by its one byte of "font file": S serif,
+// No kerning, and no ink — every glyph is zero-area — but one: the
+// inverted question mark (U+00BF) inks 8 pixels left of its origin, an
+// italic's bearing, so a case can see ink past an advance; its coverage
+// is all 0, since nothing here rasterises. Every scalar from U+0020 up is
+// present. A face is named by its one byte of "font file": S serif,
 // A sans, M mono; bold and italic change nothing but the label.
 
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -38,7 +42,12 @@ struct os64_font_face {
 struct os64_font_glyph {
     os64_font_engine_t *engine;
     os64_font_pos_t advance;
+    uint32_t px;
+    bool overhangs;
 };
+
+#define OVERHANG_PX 8
+static const uint8_t kNoCoverage[256 * 64];
 
 static void *mem_alloc(os64_font_engine_t *e, size_t n)
 {
@@ -163,6 +172,8 @@ static os64_font_status_t render(os64_font_face_t *f, uint32_t index, os64_font_
         return OS64_FONT_NO_MEMORY;
     g->engine = f->engine;
     g->advance = advance(f, index);
+    g->px = f->px;
+    g->overhangs = index == 0xBF;
     f->engine->glyphs++;
     *out = g;
     return OS64_FONT_OK;
@@ -172,6 +183,17 @@ static os64_font_status_t glyph_view(os64_font_glyph_t *g, os64_font_glyph_view_
 {
     memset(out, 0, sizeof(*out));
     out->advance_x = g->advance;
+    uint32_t width = OVERHANG_PX + (uint32_t)(g->advance / OS64_FONT_UNIT);
+    uint32_t height = g->px * 3 / 4;
+    if (g->overhangs && width * height <= sizeof(kNoCoverage)) {
+        out->width = out->stride = width;
+        out->height = height;
+        out->left = -OVERHANG_PX;
+        out->top = -(int32_t)height;
+        out->ink = (os64_font_rect_t){-OVERHANG_PX * OS64_FONT_UNIT, -(int32_t)height * OS64_FONT_UNIT,
+                                      g->advance, 0};
+        out->coverage = kNoCoverage;
+    }
     return OS64_FONT_OK;
 }
 

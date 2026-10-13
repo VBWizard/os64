@@ -828,10 +828,10 @@ through the matrix. So:
   surface and laid onto the page through its matrix: exactly (an index
   map) for a quarter turn or a mirror at whole pixels, bilinear
   otherwise; clips become the matrix's quadrilaterals; hit-testing goes
-  back through the inverse. `background-clip: text` rides in S7b, since a
-  background drawn only where the text is IS a surface of its own laid
-  through a mask (Chris, 10/10: done for real with the transforms work).
-  S7b gets its own section when it starts.
+  back through the inverse (§ Transforms, the painter).
+- **S7c, `background-clip: text`**, on S7b's surfaces: a background
+  drawn only where the text is IS a surface of its own laid through a
+  mask (Chris, 10/10: done for real with the transforms work).
 
 ## Transforms, the model and the translations (slice S7a)
 
@@ -952,9 +952,156 @@ a fixed bar inside a transformed panel — and grokipedia read from the P5.
 | Debt | Why it waits | Trigger |
 |---|---|---|
 | Every matrix but a translation drawn upright | the painter draws into the page, never into a surface of its own | S7b |
-| `background-clip: text` | a background drawn through a mask of the text is a surface of its own | S7b |
+| `background-clip: text` | a background drawn through a mask of the text is a surface of its own | S7c |
 | `perspective`, `perspective()`, `transform-style: preserve-3d`, `backface-visibility` | a flat drawing is the answer without them; with them it is a 3D renderer | a page whose 3D card flip matters |
 | `transform-box` | the border box is the default for HTML, and SVG is not drawn | SVG |
 | A transform on a table's rows, row groups and columns | they are no containing blocks here, as `position: relative` on them is not (POSITION.md § Booked) | a page whose transformed row matters |
 | A table's transform moving its captions | the transform sits on the table's own box, and its captions are beside it | a transformed table with a caption |
 | Calc angles | libgarb's calc has no angle type | a page that writes one |
+
+## Transforms, the painter (slice S7b)
+
+S7a built the model and drew a translation exactly; every other matrix
+was drawn upright at its offset. S7b draws a FLAT matrix through itself:
+its box's painting is made in a surface of its own, in the box's own
+coordinates, and laid onto the page through the matrix.
+
+### What is drawn through
+
+A matrix is FLAT when its flat drawing (Transforms 2 § 4: x' = (m0 x +
+m4 y + m12) / w, w = m3 x + m7 y + m15) has a w that does not depend on
+x or y — m3 = m7 = 0 — which every 2D function, every 3D rotation,
+scale and translation, and `translateZ(0)` give. A flat matrix is an
+affine map of the plane, and that is what the surface is laid through.
+What is NOT flat — `perspective()`, a `matrix3d()` whose w reads x, y
+or z — stays upright at its offset, as in S7a, and `@supports` says no
+to it; a function is judged so whatever comes after it, since w read
+from z by one function and z written from y by another is a
+perspective too. Everything else `@supports` now says yes to.
+
+A translation stays an OFFSET, as in S7a: no surface, no cost. A frame
+whose matrix is flat and more than a translation is DRAWN THROUGH
+(`flow_frame_t.through`), and S7a's `upright` is left meaning "not
+flat".
+
+### Where a box is painted, and where it is
+
+Until now one rule (`flow_box_doc_offset`) said both, and through a
+turn they part:
+
+- **Painted**: a box inside a drawn-through frame is painted in that
+  frame's own coordinates — where the flow put it, every frame inside
+  the drawn-through one applied, none outside. `flow_box_doc_offset`
+  keeps this meaning, so the painter's walk, its verbs and its clips
+  are unchanged inside a group: nested groups each paint in their own
+  coordinates, and each is laid onto the one outside.
+- **Is**: what a door that meets the world asks — a hit, a box's rect
+  for `getBoundingClientRect` (but not `offsetTop` and its kin, which
+  leave every transform out: `flow_box_layout_offset`), a control's place, `flow_box_covered`,
+  revealing a fragment — goes through every drawn-through frame,
+  innermost first. `flow_box_doc_rect` is the bounds of the box's four
+  corners so mapped (CSSOM View's answer for a transformed box), and
+  `flow_hit` takes the point back through each inverse as its walk
+  enters a drawn-through frame; a point a frame cannot invert (a scale
+  of 0) hits nothing inside it.
+
+### The groups
+
+A drawn-through box is a GROUP (`flow_visit_groups`), opened before its
+first box and closed after its last, as an opacity group is — the same
+group when it is both. Its bounds are in its OWN coordinates, and the
+face asks `flow_box_through(box, scroll, m, &clip, &upright)` for the 2D
+affine matrix `m` (a b c d e f) from them to the coordinates of the group
+it sits in, what clips it from outside in those outer coordinates, and
+where to draw it upright instead. The walk culls inside a group against
+the viewport taken back through the matrices — the bounds of its corners,
+one pixel more all round as the surface is (below) — joined with where an
+upright drawing would put it, since the face may refuse the group after
+the walk has passed. A matrix that collapses an
+axis (`scaleX(0)`, `rotateX(90deg)`) draws nothing and is hit nowhere;
+any other, however small or large, is undone — by one function,
+`flow_affine_invert`, whose determinant and translation are worked
+exactly, and which the face
+lays sheets with too, so painting, laying and hits never disagree.
+`flow_box_point` takes a page point into a box's own coordinates (a hit,
+an image map's area), and `flow_affine_rect` / `flow_affine_rect_back`
+send a rect through a matrix and back, for the painter's view.
+
+### The face: two backdrops
+
+yonder's surfaces have no alpha channel, and its text and pictures
+blend as if what is under them were opaque. A group painted onto
+nothing would need every primitive taught otherwise. It does not need
+to be: SOURCE-OVER IS AFFINE IN THE BACKDROP. Whatever a group paints,
+each channel of each pixel comes out B + T·D for the backdrop D, and
+painting it twice — once on black (D = 0, giving B) and once on white
+(D = 255, giving B + 255·T) — gives B and T for every channel exactly,
+nested opacity groups, text edges and pictures included. So a
+drawn-through group is painted into two surfaces, each verb drawn into
+both, and laid onto the backdrop as B + T·D through the matrix — and
+under its own opacity a, as a·B + (1 − a + a·T)·D.
+
+Laid through the matrix, each pixel of the destination is taken back
+through the inverse and sampled from the two surfaces: by INDEX when
+the matrix is a quarter turn or a mirror and its translation whole
+(an exact copy, so a `rotate(180deg)` chevron is the chevron), else
+BILINEAR, B and T interpolated apart (B is premultiplied by its own
+making, so they interpolate as they should). The destination is cut by
+the group's outer clip and the view.
+
+A surface is the group's bounds — each layer grown by its INK, at least
+as far as the painter draws past it: its own shadows (a box shadow by
+its spread, its offset and 3 (blur / 2) — its three box blurs — and not
+at all when its spread collapses it; a text shadow, drawn sharp, by its
+offset alone), its glyphs' overhang, its decorations and marker shape,
+and what the boxes inside it hand up, each cut to its clip (a shadow is
+in no box's overflow) — cut to the view taken back through the matrices,
+one pixel more all round for the bilinear sample at the edge: what can
+show.
+At most 4096 pixels a side and 2,097,152 in all (8 MiB each), at most 16
+deep, and within half of what a 32-bit coordinate can say (its offset is
+added to every coordinate the glass draws); a group past that, or whose surfaces find no memory, is painted
+straight onto the backdrop at its S7a offset — upright, inside what
+clips it from outside, never missing. A group none of which can show is
+not painted at all. An opacity group inside opens on both sheets or on
+neither, so the two never disagree. The painter keeps 64 groups open;
+past that an opacity group is painted opaque, and a group drawn through
+its matrix not at all.
+
+### Booked
+
+| Debt | Why it waits | Trigger |
+|---|---|---|
+| A box scaled up softens | its surface is painted at its own size and stretched; Chrome paints at the scale | a page whose scaled-up text matters |
+| A control in a drawn-through box is drawn turned but edited upright | a live widget is drawn on the glass, not through a matrix | a page with a turned form |
+| A group the face refuses (past its sheet limits, out of memory) is drawn upright but hit through its matrix; inside a group that was laid, it is cut by that group's sheet, sized for it turned, and an enclosing opacity group saves no backdrop where the upright drawing falls, so it is opaque there | libflow answers hits and bounds for the page as written; which groups a face refuses is decided at paint time, and only it knows | a page whose turned group passes the sheet limits and is clicked, or is cut |
+| Nested turned groups whose matrices only compose to something ordinary (`scale(1e308)` inside `scale(1e-308)`) are hit and measured where they are, but painted nowhere | each group's sheet is laid onto the one outside in whole pixels, and the inner one lands past what a pixel can say; drawing it would mean composing the matrices across groups, not a sheet per group | a page that nests reciprocal extremes |
+| THE NUMERIC CONTRACT: transforms are as accurate as a browser's and strictly safe. Numbers a page actually writes are composed, undone and drawn right; past that — a composite that, w divided out, is past a double (`scale(1e200) scale(1e200)`), a cancellation finer than a long double's 64 bits (`matrix(1+2^-52, 2^104, …)` lists), a translation past what 26.6 holds (`matrix(1,0,0,1,1e307,0)`), a z entry so large that dividing the matrix down leaves its w 0 (`scaleZ(1e308)` twice) — a box may be drawn upright, or not at all where its matrix comes out singular, though `@supports` said yes; and a page scrolled past half a 32-bit coordinate (about 1.07 billion px; Chrome's layout saturates near 33.5 million) may lose a turned group nothing clips, its absent clip being the plane only that far. Any input, however hostile, is never a crash, a hang or undefined behaviour | exactness past a browser's has no end: each widening of the arithmetic (#258 rounds 13 to 17) met an input just past it, and Chrome composes in doubles; libgarb judges each function's numbers, not their product | a look at the whole contract, booked by Chris (2026-10-12); a page that needs more |
+| THE BOUNDS CONTRACT: a group's bounds hold AT LEAST its ink, never less. Less is a bug, fixed (#258 rounds 15 to 19: shadow reach, glyph overhang, decorations). More is the stated behaviour: a fully transparent shadow (a `transparent` colour or `currentColor`), a positioned box under `opacity: 0` that is never painted, and the like are still counted, and a group they push past the sheet limits is drawn upright | counting only what is drawn means following every way a thing can paint nothing — each narrowing met the next (round 19) — and the cost of counting more is the degraded drawing, never a wrong one | a look with the numeric contract, booked by Chris (2026-10-12); a page whose invisible content refuses a turned group |
+| A large `visibility: hidden` box inside a turned group still sizes its sheets | the bounds come from layout overflow, which keeps what is hidden; a page whose hidden content pushes a turned group past the sheet limits gets it upright | a page that does |
+| A sticky box, a scroll container's bars, or a fragment revealed inside a drawn-through box | each is worked against the page's viewport, which the box's own coordinates are not | a page that scrolls inside a turned box |
+| `perspective` and non-flat matrices | carried over from S7a | a page whose 3D card flip matters |
+| `background-clip: text` | its own slice, S7c, on these surfaces | S7c |
+
+### Proof
+
+libflow, by hand: the matrices (turns about the centre, scales, a
+skew, a 3D rotation flattened, a perspective drawn upright) and the
+page reaching their corners; a turned box's doc rect the bounds of its
+corners, its child's too; a hit inside a turned box taken back through
+it, and where it was laid out no longer it; nested turns; what clips it
+from outside staying put; the culling; a turned translucent box one
+group. libgarb: `@supports` yes to a turn, a scale, a skew and a 3D
+rotation, no to perspective and a w-reading matrix3d. yonder's painter:
+a turned box asks to be laid through, its own bounds cut to what shows;
+refused, it is drawn upright where its origin goes. The compositor is a
+pure function (`warp.c`, `tools/test_yonder_warp_host.sh`) under ASan
+beside references written apart from it: content of every alpha
+painted over black and white and laid in place lands as the content
+over any backdrop (opaque and empty paint exactly); a quarter turn and
+a mirror copied by index, pixel for pixel; a scale and a turn bilinear
+against the reference to within one level; the opacity rule; the clip;
+a matrix that cannot be undone laying nothing.
+`tools/test_libflow_transform_mutants.py` breaks each rule, painter's
+included. In the guest, the fixture's last two rows beside headless
+Chrome: turned, grown, a half-turned chevron, a mirror, a skew.
