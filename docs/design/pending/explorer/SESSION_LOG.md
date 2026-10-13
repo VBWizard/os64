@@ -850,3 +850,31 @@ the full filename after another `0`. ASan/UBSan/LeakSanitizer passes 14,975
 checks and the gallery cross-build passes. The `/tmp/e3-wire` gallery is
 refreshed; [follow-up evidence](evidence/e03/README.md#underscore-fixture-follow-up--2026-10-13)
 records hashes and scope. Space handling is unchanged; P5 acceptance is pending.
+
+
+## 2026-10-13 — E4 creates Roam
+
+Chris authorized the first real browser after E3 merged and explicitly reserved
+file associations for discussion before E5. Quinn integrated the E4 contract,
+Sol's directory/controller and reusable UI/application packets, and focused
+E3 selection-clone/view-restore additions. Source `243663dc` is on
+`codex/roam-e4` in `.worktrees/roam-e4`, based on `5a521b63`.
+
+Roam provides asynchronous read-only directory browsing, Details/icons,
+navigation/history, address/breadcrumbs, filtering, favorites/volumes and
+independent pane visibility including menu recovery. No kernel changes or
+file-launch policy were introduced. Ctrl+[ / Ctrl+] avoid Os64's reserved
+Alt+Left/Right VT bindings. Native integration caught reserved shortcut
+registration, a menu-owned dispatcher hook collision, and a missed shortcut
+release across address focus; fixes have host regressions. Font layout and
+failed-navigation address publication were checked against actual rendering.
+
+The full userland build and directory/controller suites pass. The real-font
+Details suite passes 20,713 checks; Roam composition passes 60. ASan/UBSan and
+LeakSanitizer remain enabled; attachment-denied sandbox runs were repeated
+outside it. The final QEMU walkthrough uses real FAT/ext2 directories, a
+10,001-file fixture, history/selection/scroll/error/filter tests, hide-all/menu
+recovery, and live font/palette changes. [Evidence](evidence/e04/README.md)
+preserves screenshots, source/package identification and delivery results.
+Independent review and P5 acceptance remain pending; [the handoff](E04_HANDOFF.md)
+is the next action. Discuss file associations before beginning E5.

@@ -1,0 +1,10 @@
+6040 (0x002e) AP1: [user] husk: task 60 (roam) started
+22682 (0x002e) AP2: [user] husk: task 60 (roam) exited code 0
+29375 (0x002e) AP1: [user] husk: task 65 (roam) started
+37129 (0x002f) AP1: [user] husk: task 68 (fontsettingstest) started
+37141 (0x002f) AP2: [user] husk: task 68 (fontsettingstest) exited code 0
+42924 (0x002f) AP1: [user] husk: task 69 (fontsettingstest) started
+42926 (0x002f) AP2: [user] husk: task 69 (fontsettingstest) exited code 0
+44134 (0x002f) AP1: [user] husk: task 70 (appearance) started
+44518 (0x002f) AP2: [user] husk: task 70 (appearance) exited code 0
+50955 (0x002e) AP2: [user] husk: task 65 (roam) exited code 0

@@ -10,11 +10,11 @@ user-reported, without a captured installed-binary hash.
 
 ## Resume point
 
-**Active: [E4 — Roam](E04_ROAM.md)** in `codex/roam-e4`, worktree
-`.worktrees/roam-e4`, based on E3 merge `5a521b63`. Chris authorized implementation.
-Quinn owns integration; Sol handles the directory/controller and reusable UI/app
-packets against shared headers. Host/native acceptance is in progress; P5 has
-not been claimed. File associations must be discussed with Chris before E5.
+**E4 is implemented** in `codex/roam-e4`, worktree `.worktrees/roam-e4`,
+source `243663dc`, based on E3 merge `5a521b63`. [Design](E04_ROAM.md),
+[host/native evidence](evidence/e04/README.md) and [P5 walkthrough](E04_HANDOFF.md)
+are ready. Independent review and Chris's P5 acceptance remain pending.
+File associations must be discussed with Chris before E5.
 
 E3 PR #264 is merged and its first review reported no major issues at
 `75662a5c`. Quinn's architectural check independently reran the core and real-font
@@ -48,7 +48,7 @@ checkpoints; active E4 work belongs in `.worktrees/roam-e4`.
 | E1C consumers | Approved and merged, PR #260; P5 tested | Reuse production menus. |
 | [E2 icons](E02_ICONS.md) | Merged, PR #261 | Reuse provider and shipped assets; [evidence](evidence/e02/README.md). |
 | [E3 data view and selection](E03_DATA_VIEW.md) | Merged PR #264 | Reuse the shared model and Details view; [P5 packet](E03_HANDOFF.md). |
-| [E4 directory browser](E04_ROAM.md) | Implementing | Complete host/native validation and publish the browser. |
+| [E4 directory browser](E04_ROAM.md) | Implemented; review/P5 pending | Review the branch and run [the P5 walkthrough](E04_HANDOFF.md). |
 | E6 channels | Umbrella proposal only | Separate platform design and Fable review. |
 
 Install another icon set by extracting its folder, selecting its absolute path
