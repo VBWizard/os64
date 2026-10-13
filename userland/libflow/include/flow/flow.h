@@ -888,8 +888,9 @@ int32_t flow_shadow_blur_reach(int32_t blur);
 // what a marker's ink and text shadows follow.
 bool flow_marker_is_shape(const flow_style_t *s);
 // Such a matrix undone: false when it cannot be — its 2x2 part has no
-// inverse, or that inverse is not a finite double. Its determinant is
-// worked so neither a double's range nor cancellation loses it, so a matrix
+// inverse, or that inverse is not a finite double. Its determinant, and
+// the determinants its translation is worked from, are worked so neither a
+// double's range nor cancellation loses them, so a matrix
 // huge, tiny, lopsided or nearly singular comes back when its inverse is
 // finite: whatever the face lays through a matrix it undoes here, so
 // painting, laying and hits agree on what can be undone.

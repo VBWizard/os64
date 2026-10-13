@@ -190,6 +190,37 @@ static void transform_layout_cases(void)
         "  block body 0 0 400 10\n"
         "    block div 0 0 100 10 stacked through 0 0 0 0 0 0\n");
 
+    // However far outside even a long double the way goes: 17 scaleX(1e308)
+    // before 17 scaleX(1e-308) is 1e5236 on the way and near 1 at the end,
+    // and the end is what is drawn — through, about the identity.
+    {
+        char css[1024];
+        int32_t n = snprintf(css, sizeof(css), "%s", XFORM_STYLE
+                                  "div{width:100px;height:10px;transform-origin:0 0;transform:");
+        for (int32_t i = 0; i < 34; i++)
+            n += snprintf(css + n, sizeof(css) - (size_t)n, i < 17 ? " scaleX(1e308)"
+                                                                       : " scaleX(1e-308)");
+        snprintf(css + n, sizeof(css) - (size_t)n, "}</style><div></div>");
+        cascade_layout_case("transform: a list whose way passes any range ends where it ends", css,
+            400,
+            "page 400 10\n"
+            "block html 0 0 400 10\n"
+            "  block body 0 0 400 10\n"
+            "    block div 0 0 100 10 stacked through 1000 0 0 1000 0 0\n");
+    }
+
+    // A composite no double holds, drawn as what it is: these two multiply
+    // to x and y by 1e616 over a w of 5e615, which is scale(2) — divided
+    // down by a power of two, the matrix being homogeneous, not upright.
+    cascade_layout_case("transform: a composite past a double's range is divided down",
+        XFORM_STYLE "div{width:100px;height:10px;transform-origin:0 0;transform:"
+        "matrix3d(1e308,0,0,0,0,1e308,0,0,0,0,1,0,0,0,0,1e308) "
+        "matrix3d(1e308,0,0,0,0,1e308,0,0,0,0,1,0,0,0,0,5e307)}</style><div></div>", 400,
+        "page 400 20\n"
+        "block html 0 0 400 10\n"
+        "  block body 0 0 400 10\n"
+        "    block div 0 0 100 10 stacked through 2000 0 0 2000 0 0\n");
+
     // A huge angle is a whole number of turns, or reduced by them first:
     // rotate(1e308turn) is no turn at all.
     cascade_layout_case("transform: a huge whole number of turns is none",
@@ -678,8 +709,9 @@ static void transform_through_cases(void)
     flow_free(t);
     sheeted_close(&q);
 
-    // A text shadow is drawn sharp, so its blur grows nothing: 0 0 3000px
-    // on a turned box's text leaves the group within a pixel of its box.
+    // A text shadow is drawn sharp, so its blur grows nothing, not even
+    // the blur's pixel: 0 0 3000px on a turned box's text leaves the group
+    // its box.
     sheeted_open(&q, XFORM_STYLE ".t{width:100px;height:20px;text-shadow:0 0 3000px #000;"
                      "transform:rotate(90deg)}</style><div class=t>x</div>",
                  400, 600);
@@ -688,7 +720,32 @@ static void transform_through_cases(void)
     vis.ctx = &sharp;
     flow_visit_groups(t, (os64_gui_rect_t){0, 0, 400, 600}, top, &vis);
     expect("transform: a text shadow's blur grows no group",
-           sharp.opens == 1 && sharp.first.w <= 102 && sharp.first.h <= 22, NULL);
+           sharp.opens == 1 && rect_is(sharp.first, 0, 0, 100, 20), NULL);
+    vis.ctx = &gr;
+    flow_free(t);
+    sheeted_close(&q);
+
+    // The walk culls with the view the painter fills: under scale(2) the
+    // pixel [20, 21) is [10, 10.5) taken back, held as [10, 11), and a
+    // bilinear sample there mixes the source pixel at 9 — so the view is
+    // a pixel wider all round, [9, 12): a box at [9, 10) is painted, one at
+    // [7, 8) is not.
+    sheeted_open(&q, XFORM_STYLE ".t{position:absolute;left:0;top:0;width:100px;height:20px;"
+                     "transform-origin:0 0;transform:scale(2)}"
+                     ".e{position:absolute;top:0;width:1px;height:20px}</style>"
+                     "<div class=t><div class=e id=near style=left:9px></div>"
+                     "<div class=e id=far style=left:7px></div></div>",
+                 400, 600);
+    t = flow_layout(q.doc, q.page, 400, &q.env);
+    XformGroups fringe = {0}, beyond = {0};
+    fringe.watch = box_with_id(t, q.doc->document, "near");
+    beyond.watch = box_with_id(t, q.doc->document, "far");
+    vis.ctx = &fringe;
+    flow_visit_groups(t, (os64_gui_rect_t){20, 0, 1, 600}, top, &vis);
+    vis.ctx = &beyond;
+    flow_visit_groups(t, (os64_gui_rect_t){20, 0, 1, 600}, top, &vis);
+    expect("transform: the walk paints the pixel a sample at the view's edge reads",
+           fringe.watch != NULL && beyond.watch != NULL && fringe.seen && !beyond.seen, NULL);
     vis.ctx = &gr;
     flow_free(t);
     sheeted_close(&q);
@@ -924,6 +981,16 @@ static void transform_through_cases(void)
                inv[1] == -4503599627370495.0 && inv[2] == -4503599627370497.0 &&
                inv[3] == 4503599627370496.0,
            NULL);
+    // The translation's own cancellation: {2^-52, 0, 1 - 2^-52, 1, 1,
+    // 1 + 2^-52} takes (0, 0) to (1, 1 + 2^-52), so its inverse takes that
+    // back — 2^52 - (2^52 - 1)(1 + 2^-52) + e' = 0, e' = -2^-52 exactly,
+    // and 1 + 2^-52 + f' = 0.
+    const double tcancel[6] = {0x1p-52, 0, 1 - 0x1p-52, 1, 1, 1 + 0x1p-52};
+    expect("transform: a translation that is a cancellation is not lost",
+           flow_affine_invert(tcancel, inv) && inv[0] == 0x1p52 && inv[1] == 0 &&
+               inv[2] == -(0x1p52 - 1) && inv[3] == 1 && inv[4] == -0x1p-52 &&
+               inv[5] == -1 - 0x1p-52,
+           NULL);
     const flow_box_t *hb = box_with_id(t, q.doc->document, "h");
     double hm[6];
     expect("transform: a turn a hair short of edge-on is still undone",
@@ -1046,7 +1113,9 @@ static void transform_through_cases(void)
     // And the other way about: turned a quarter back about its corner (0,
     // 0) — (x, y) to (y, -x) — a bar laid in the view is drawn above it,
     // but a face that refuses to lay it draws it upright, its corner where
-    // it was, in the view: the walk keeps it for that face.
+    // it was, in the view: the walk keeps it for that face. The view starts
+    // 2 pixels down, so the view taken back — x up to -2, -1 with its
+    // sampling pixel — does not reach the bar at 0 by itself.
     sheeted_open(&q, XFORM_STYLE ".t{position:absolute;left:0;top:0;width:400px;height:10px;"
                      "transform-origin:0 0;transform:rotate(-90deg)}"
                      ".c{height:10px}</style><div class=t><div class=c id=c></div></div>",
@@ -1056,7 +1125,7 @@ static void transform_through_cases(void)
     XformGroups refuse = {0};
     refuse.watch = cb;
     vis.ctx = &refuse;
-    flow_visit_groups(t, (os64_gui_rect_t){0, 0, 400, 300}, top, &vis);
+    flow_visit_groups(t, (os64_gui_rect_t){0, 2, 400, 300}, top, &vis);
     expect("transform: a box drawn off the view is walked where an upright drawing shows it",
            cb != NULL && refuse.seen, NULL);
     vis.ctx = &gr;

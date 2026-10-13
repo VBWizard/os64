@@ -497,30 +497,83 @@ static void sticky_reach_scrolled(flow_tree_t *t)
 
 // ── Transforms (CSS Transforms 1 § 3, 2 § 6) ─────────────────────────────
 
-// a · b, column-major.
-static void mat_mul(long double out[16], const long double a[16], const double b[16])
+static long double power_of_two(int e);
+
+// A number as `u` 2^`e`, 1 <= |u| < 2 or u = 0 (one that is no finite
+// number is kept as it is, e = 0): a long double's 64-bit significand with
+// an exponent no product of a transform list's 64 functions can pass. A
+// matrix entry's magnitude is the PRODUCT of its
+// factors', so 17 scaleX(1e308) before 17 scaleX(1e-308) — a finite
+// composite, near the identity — would leave even a long double's range on
+// the way, and dividing the whole matrix down cannot save it: what one
+// column grows by, the next does not, and the spread underflows instead.
+typedef struct {
+    long double u;
+    int64_t e;
+} Wide;
+
+static Wide wide_norm(long double u, int64_t e)
 {
-    long double r[16];
+    if (u == 0 || !(u - u == 0))
+        return (Wide){u, 0};            // 0, or not a number to scale
+    long double a = u < 0 ? -u : u;
+    while (a >= 0x1p+64L) { a *= 0x1p-64L; e += 64; }
+    while (a < 0x1p-64L) { a *= 0x1p+64L; e -= 64; }
+    while (a >= 2) { a *= 0.5L; e += 1; }
+    while (a < 1) { a *= 2; e -= 1; }
+    return (Wide){u < 0 ? -a : a, e};
+}
+
+static Wide wide_mul(Wide a, Wide b)
+{
+    return wide_norm(a.u * b.u, a.e + b.e);
+}
+
+// a + b, rounded once: the smaller brought to the larger's exponent
+// exactly (a power of two), or left off where it is below half its last
+// place.
+static Wide wide_add(Wide a, Wide b)
+{
+    if (a.u == 0)
+        return b;
+    if (b.u == 0)
+        return a;
+    if (a.e < b.e) {
+        Wide t = a;
+        a = b;
+        b = t;
+    }
+    if (a.e - b.e > 66)
+        return a;
+    return wide_norm(a.u + b.u * power_of_two((int)(b.e - a.e)), a.e);
+}
+
+// a · b, column-major.
+static void mat_mul(Wide out[16], const Wide a[16], const double b[16])
+{
+    Wide r[16];
     for (int c = 0; c < 4; c++)
         for (int k = 0; k < 4; k++) {
-            long double s = 0;
+            Wide s = {0, 0};
             for (int i = 0; i < 4; i++)
-                s += a[i * 4 + k] * b[c * 4 + i];
+                s = wide_add(s, wide_mul(a[i * 4 + k], wide_norm(b[c * 4 + i], 0)));
             r[c * 4 + k] = s;
         }
     os64_memcpy(out, r, sizeof(r));
 }
 
 // m · T(x, y, z): a translation applied before m.
-static void mat_translate(long double m[16], double x, double y, double z)
+static void mat_translate(Wide m[16], double x, double y, double z)
 {
+    Wide v[3] = {wide_norm(x, 0), wide_norm(y, 0), wide_norm(z, 0)};
     for (int k = 0; k < 4; k++)
-        m[12 + k] += m[k] * x + m[4 + k] * y + m[8 + k] * z;
+        for (int i = 0; i < 3; i++)
+            m[12 + k] = wide_add(m[12 + k], wide_mul(m[i * 4 + k], v[i]));
 }
 
 // m · T(the function's x, y) · its matrix, a percentage of the border box
 // `w` by `h`.
-static void mat_fn(long double m[16], const flow_transform_t *f, int64_t w, int64_t h)
+static void mat_fn(Wide m[16], const flow_transform_t *f, int64_t w, int64_t h)
 {
     mat_translate(m, (double)f_len(f->x, w), (double)f_len(f->y, h), 0);
     mat_mul(m, m, f->m);
@@ -529,12 +582,12 @@ static void mat_fn(long double m[16], const flow_transform_t *f, int64_t w, int6
 void f_transform_matrix(const flow_style_t *s, int64_t x, int64_t y, int64_t w, int64_t h,
                         double out[16])
 {
-    // Composed in long double, narrowed once: two finite functions whose
-    // product is ordinary — matrix(1e308, 1e308, 1e308, 1e308, 0, 0)
-    // matrix(1e308, -1e308, -1e308, 1e308, 0, 0) is the zero matrix — do
-    // not pass a double on the way.
-    long double m[16] = {0};
-    m[0] = m[5] = m[10] = m[15] = 1;
+    // Composed in Wide, narrowed once: a product the page's numbers make
+    // ordinary — matrix(1e308, 1e308, 1e308, 1e308, 0, 0) matrix(1e308,
+    // -1e308, -1e308, 1e308, 0, 0) is the zero matrix — comes out, however
+    // far outside a double the way there went.
+    Wide m[16] = {{0, 0}};
+    m[0] = m[5] = m[10] = m[15] = (Wide){1, 0};
     double ox = (double)(x + f_len(s->transform_origin[0], w));
     double oy = (double)(y + f_len(s->transform_origin[1], h));
     double oz = s->transform_origin_z;
@@ -548,8 +601,21 @@ void f_transform_matrix(const flow_style_t *s, int64_t x, int64_t y, int64_t w, 
     for (int32_t i = 0; i < s->ntransform; i++)
         mat_fn(m, &s->transform[i], w, h);
     mat_translate(m, -ox, -oy, -oz);
+    // Narrowed as it is where a double holds it, so an ordinary matrix
+    // keeps w = 1 to the bit; otherwise divided by its largest entry's
+    // power of two first. The matrix is homogeneous — every reader divides
+    // by w — so that draws the same, and only an entry too small for a
+    // double beside the largest is lost, to 0.
+    int64_t most = INT64_MIN;
     for (int i = 0; i < 16; i++)
-        out[i] = (double)m[i];
+        if (m[i].u != 0 && m[i].e > most)
+            most = m[i].e;
+    int64_t shift = most > 1000 || (most != INT64_MIN && most < -1000) ? most : 0;
+    for (int i = 0; i < 16; i++) {
+        int64_t e = m[i].e - shift;
+        out[i] = m[i].u == 0 || e < -1100 ? 0.0 * (double)m[i].u
+                                          : (double)(m[i].u * power_of_two((int)e));
+    }
 }
 
 // A move in 26.6 as whole pixels, held to what a point says; one that is
@@ -785,10 +851,11 @@ int32_t flow_shadow_blur_reach(int32_t blur)
 // that side's opposite, and its blur's reach as the painter blurs it
 // (flow_shadow_blur_reach) — never less than 0. A shadow cast right
 // reaches right, not left. A text shadow is drawn sharp (the painter draws
-// its run offset, unblurred): its blur reaches no further than none.
+// its run offset, unblurred): it has no spread and no blur, not even the
+// blur's pixel, and reaches only by its offset.
 static void shadow_reach(const flow_shadow_t *sh, bool blurred, int64_t out[4])
 {
-    int64_t grow = (blurred ? sh->spread : 0) + flow_shadow_blur_reach(blurred ? sh->blur : 0);
+    int64_t grow = blurred ? sh->spread + flow_shadow_blur_reach(sh->blur) : 0;
     int64_t side[4] = {grow - sh->y, grow + sh->x, grow + sh->y, grow - sh->x};
     for (int k = 0; k < 4; k++)
         out[k] = side[k] > 0 ? side[k] : 0;
@@ -1652,18 +1719,22 @@ static long double determinant(double a, double b, double c, double d)
 
 bool flow_affine_invert(const double m[6], double inv[6])
 {
-    // The determinant exact for any finite entries (determinant()), the
-    // rest in long double: a matrix however huge, tiny, lopsided or nearly
-    // singular — matrix(2^52, 2^52 - 1, 2^52 + 1, 2^52, 0, 0), determinant
-    // 1, at any scale and with its entries spread across a double's range —
-    // comes back whenever its inverse is finite.
-    long double a = m[0], b = m[1], c = m[2], d = m[3], e = m[4], f = m[5];
+    // The determinant exact for any finite entries (determinant()), and so
+    // are the translation's numerators, c f - d e and b e - a f, which are
+    // 2x2 determinants too (from the inverse's rounded rows a cancellation
+    // would leave nothing: {2^-52, 0, 1 - 2^-52, 1, 1, 1 + 2^-52} gave -0
+    // for -2^-52); each divided once, in long double. A matrix however
+    // huge, tiny, lopsided or nearly singular — matrix(2^52, 2^52 - 1,
+    // 2^52 + 1, 2^52, 0, 0), determinant 1, at any scale and with its
+    // entries spread across a double's range — comes back whenever its
+    // inverse is finite.
+    long double a = m[0], b = m[1], c = m[2], d = m[3];
     long double det = determinant(m[0], m[1], m[2], m[3]);
     if (det == 0)
         return false;
-    long double r[6] = {d / det, -b / det, -c / det, a / det, 0, 0};
-    r[4] = -(r[0] * e + r[2] * f);
-    r[5] = -(r[1] * e + r[3] * f);
+    long double r[6] = {d / det, -b / det, -c / det, a / det,
+                        determinant(m[2], m[3], m[4], m[5]) / det,
+                        determinant(m[1], m[0], m[5], m[4]) / det};
     for (int i = 0; i < 6; i++) {
         inv[i] = (double)r[i];
         if (!isfinite(inv[i]))
@@ -2167,11 +2238,13 @@ void flow_visit_groups(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_p
     void *ctx = visitor->ctx;
     os64_gui_rect_t *bounds = visitor->open != NULL ? all_group_bounds(tree, scroll) : NULL;
     // The view in the coordinates each open group drawn through its matrix
-    // is painted in: the one outside taken back through the matrix, joined
-    // with it moved back to where an upright drawing puts the group — the
-    // face may refuse to lay it through (flow_box_through's `upright`), and
-    // the walk is over before it is asked. Past the deepest kept, the whole
-    // plane, which culls nothing and so loses nothing.
+    // is painted in: the one outside taken back through the matrix and
+    // grown a pixel all round, as the painter grows the sheet it fills (a
+    // bilinear sample at the view's edge mixes the source pixel beyond),
+    // joined with it moved back to where an upright drawing puts the group
+    // — the face may refuse to lay it through (flow_box_through's
+    // `upright`), and the walk is over before it is asked. Past the deepest
+    // kept, the whole plane, which culls nothing and so loses nothing.
     os64_gui_rect_t views[F_VIEWS];
     int32_t depth = 0;
     for (int32_t i = 0; i < tree->nlayers; i++) {
@@ -2184,6 +2257,8 @@ void flow_visit_groups(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_p
             if (flow_box_through(b, scroll, m, NULL, &up)) {
                 if (depth < F_VIEWS) {
                     os64_gui_rect_t back = affine_back(m, view);
+                    if (back.w > 0 && back.h > 0)
+                        back = grown(back, (const int32_t[4]){1, 1, 1, 1});
                     os64_gui_rect_t upright = moved(view, -(int64_t)up.x, -(int64_t)up.y);
                     views[depth] = view.w == kWholePlane.w ? kWholePlane
                                  : back.w > 0 && back.h > 0 ? join(back, upright)

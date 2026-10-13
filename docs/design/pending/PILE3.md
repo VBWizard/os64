@@ -1014,12 +1014,14 @@ face asks `flow_box_through(box, scroll, m, &clip, &upright)` for the 2D
 affine matrix `m` (a b c d e f) from them to the coordinates of the group
 it sits in, what clips it from outside in those outer coordinates, and
 where to draw it upright instead. The walk culls inside a group against
-the viewport taken back through the matrices — the bounds of its corners
-— joined with where an upright drawing would put it, since the face may
-refuse the group after the walk has passed. A matrix that collapses an
+the viewport taken back through the matrices — the bounds of its corners,
+one pixel more all round as the surface is (below) — joined with where an
+upright drawing would put it, since the face may refuse the group after
+the walk has passed. A matrix that collapses an
 axis (`scaleX(0)`, `rotateX(90deg)`) draws nothing and is hit nowhere;
 any other, however small or large, is undone — by one function,
-`flow_affine_invert`, which scales before it inverts, and which the face
+`flow_affine_invert`, whose determinant and translation are worked
+exactly, and which the face
 lays sheets with too, so painting, laying and hits never disagree.
 `flow_box_point` takes a page point into a box's own coordinates (a hit,
 an image map's area), and `flow_affine_rect` / `flow_affine_rect_back`
@@ -1047,11 +1049,13 @@ BILINEAR, B and T interpolated apart (B is premultiplied by its own
 making, so they interpolate as they should). The destination is cut by
 the group's outer clip and the view.
 
-A surface is the group's bounds — each layer grown by as far as any
-shadow on the page is drawn past its box (a shadow is in no box's
-overflow) and cut to the clips inside the group — cut to the view taken
-back through the matrices, one pixel
-more all round for the bilinear sample at the edge: what can show. At
+A surface is the group's bounds — each layer grown by its INK, as far
+as the painter draws past it: its own shadows (a box shadow by its
+spread and blur, a text shadow, drawn sharp, by its offset alone), its
+glyphs' overhang, and what the boxes inside it hand up, each cut to its
+clip (a shadow is in no box's overflow) — cut to the view taken back
+through the matrices, one pixel more all round for the bilinear sample
+at the edge: what can show. At
 most 4096 pixels a side and 2,097,152 in all (8 MiB each), at most 16
 deep, and within half of what a 32-bit coordinate can say (its offset is
 added to every coordinate the glass draws); a group past that, or whose surfaces find no memory, is painted
@@ -1070,7 +1074,7 @@ its matrix not at all.
 | A control in a drawn-through box is drawn turned but edited upright | a live widget is drawn on the glass, not through a matrix | a page with a turned form |
 | A group the face refuses (past its sheet limits, out of memory) is drawn upright but hit through its matrix; inside a group that was laid, it is cut by that group's sheet, sized for it turned, and an enclosing opacity group saves no backdrop where the upright drawing falls, so it is opaque there | libflow answers hits and bounds for the page as written; which groups a face refuses is decided at paint time, and only it knows | a page whose turned group passes the sheet limits and is clicked, or is cut |
 | Nested turned groups whose matrices only compose to something ordinary (`scale(1e308)` inside `scale(1e-308)`) are hit and measured where they are, but painted nowhere | each group's sheet is laid onto the one outside in whole pixels, and the inner one lands past what a pixel can say; drawing it would mean composing the matrices across groups, not a sheet per group | a page that nests reciprocal extremes |
-| A transform list whose composed matrix overflows a double (`scale(1e200) scale(1e200)`) is drawn upright, though `@supports` said yes | libgarb judges each function's numbers, not their product, which only multiplying the matrices would show | a page that writes one |
+| A transform list whose composed matrix, w divided out, is past a double (`scale(1e200) scale(1e200)`) is drawn upright, though `@supports` said yes | libgarb judges each function's numbers, not their product, which only multiplying the matrices would show | a page that writes one |
 | A large `visibility: hidden` box inside a turned group still sizes its sheets | the bounds come from layout overflow, which keeps what is hidden; a page whose hidden content pushes a turned group past the sheet limits gets it upright | a page that does |
 | A sticky box, a scroll container's bars, or a fragment revealed inside a drawn-through box | each is worked against the page's viewport, which the box's own coordinates are not | a page that scrolls inside a turned box |
 | `perspective` and non-flat matrices | carried over from S7a | a page whose 3D card flip matters |

@@ -759,9 +759,11 @@ struct flow_frame {
 
 // A transformed box's matrix (flow_frame_t.matrix) from its style and its
 // border box at (x, y), `w` by `h`, all in 26.6: T(origin) · translate ·
-// rotate · scale · the transform list · T(-origin) (Transforms 2 § 6).
-// Made in one place from those alone, so a box's matrix can be made again
-// without laying it out again.
+// rotate · scale · the transform list · T(-origin) (Transforms 2 § 6), up
+// to a positive power of two: one whose entries a double cannot hold comes
+// back divided down, which draws the same — the matrix is homogeneous, and
+// every reader divides by its w. Made in one place from those alone, so a
+// box's matrix can be made again without laying it out again.
 void f_transform_matrix(const flow_style_t *s, int64_t x, int64_t y, int64_t w, int64_t h,
                         double m[16]);
 
