@@ -225,13 +225,31 @@ from a chain of historical entries.
   includes dismissal expiry and post-destruction quarantine tests.
 - **Record:** [E01K_HANDOFF.md](E01K_HANDOFF.md).
 
+## D016 — Roam Classic and installable icon sets
+
+- **Status:** Accepted customer choices, 2026-10-13; implementation details
+  selected by Quinn under the existing design delegation.
+- **Source:** Chris selected classic colorful icons with crisp outlines,
+  approved the generated preview, authorized shipment and requested sets that
+  can be unpacked into a folder for later personal artwork.
+- **Decision:** Ship Roam Classic: 26 semantic keys at 16/24/32/48/64 px, with
+  transparent source masters, generation prompts and export provenance.
+  Reuse the E1 icon boundary through a bounded libimage provider.
+- **Installation:** A set is a folder of named PNGs and a versioned `theme.conf`.
+  `icons.conf` selects the absolute folder on the usual config ladder. Missing
+  variants can use smaller artwork; missing keys use the shipped default.
+  New app instances read the selection; a GUI picker/live switching is deferred.
+- **Reason:** Menus, Roam and future desktop icons share one vocabulary and
+  lifetime contract, while artwork can change independently of application code.
+- **Affected:** E2 and its later consumers; [E2 contract](E02_ICONS.md).
+
 ## Open choices
 
 | ID | Choice | Resolve in | Current position |
 | --- | --- | --- | --- |
 | O001 (resolved) | Application name | D007, 2026-10-11 | Chris confirmed Roam. |
 | O002 | Menu interaction, shortcuts and status help | E1 design | Detailed contract drafted in E01_MENUS.md; E1K second review closes R1/R2; E1K is merged; E1B implementation/evidence is in E01B_HANDOFF.md. |
-| O003 | Icon family, sizes and rendering states | E1/E2 design | E02_ICONS.md proposes provider/ownership, sizes and inventory; Chris's visual choice remains open. |
+| O003 (resolved) | Icon family, sizes and rendering states | D016, E2 | Roam Classic approved; provider, sizes and states are specified in E02_ICONS.md. |
 | O004 | Detailed directory fields, sorting and view behavior | E3/E4 design | Details-first with Name, Size, Type and Modified; only expose real metadata. |
 | O005 | Channel and service contracts | E6/E8 design | D004 is a proposal; snapshot/subscription, authority and lifecycle need concrete contracts. |
 | O006 | Visibility persistence and scope | E1 and component designs | D008 recovery gestures accepted; key routing and saved-state rules remain open. |

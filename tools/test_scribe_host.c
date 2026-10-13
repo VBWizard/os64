@@ -8,7 +8,7 @@
  * consumer and the real adoption coordinator, files through sbuf_load and
  * sbuf_save over a small in-memory filesystem. None of the editor is
  * reimplemented here; what is stubbed is the window system, the session
- * theme and the disk.
+ * theme, icon theme and the disk.
  *
  * The libui suite is #included too, for its allocator (the allocation
  * counter and the switches that refuse), its face loader and its CHECK.
@@ -22,6 +22,13 @@
 
 #include "scribe.c"
 #include "os64/clip.h"
+
+os64_ui_status_code_t os64_icon_theme_create(os64_icon_theme_t **out)
+{ *out=NULL; return OS64_UI_NO_MEMORY; }
+const os64_ui_icon_provider_t *os64_icon_theme_provider(os64_icon_theme_t *theme)
+{ (void)theme; return NULL; }
+os64_ui_status_code_t os64_icon_theme_destroy(os64_icon_theme_t *theme)
+{ (void)theme; return OS64_UI_OK; }
 
 /* ── what the editor asks of the system ────────────────────────────────── */
 

@@ -1,0 +1,674 @@
+os64get: 133 files, 364380 bytes, from 10.0.2.2
+[1/133] LICENSE
+
+LICENSE: 1065/1065 bytes
+/etc/icons/wire/LICENSE: 1065 bytes, crc f4cb8a9d, transfer verified
+[2/133] app-16.png
+
+app-16.png: 502/502 bytes
+/etc/icons/wire/app-16.png: 502 bytes, crc cdaf1b61, transfer verified
+[3/133] app-24.png
+
+app-24.png: 809/809 bytes
+/etc/icons/wire/app-24.png: 809 bytes, crc ccd60281, transfer verified
+[4/133] app-32.png
+
+app-32.png: 1181/1181 bytes
+/etc/icons/wire/app-32.png: 1181 bytes, crc df63063f, transfer verified
+[5/133] app-48.png
+
+app-48.png: 2088/2088 bytes
+/etc/icons/wire/app-48.png: 2088 bytes, crc 9c18144a, transfer verified
+[6/133] app-64.png
+
+app-64.png: 3470/3470 bytes
+/etc/icons/wire/app-64.png: 3470 bytes, crc 616bdbee, transfer verified
+[7/133] document-open-16.png
+
+document-open-16.png: 675/675 bytes
+/etc/icons/wire/document-open-16.png: 675 bytes, crc 731e11ce, transfer verified
+[8/133] document-open-24.png
+
+document-open-24.png: 1192/1192 bytes
+/etc/icons/wire/document-open-24.png: 1192 bytes, crc 027d4027, transfer verified
+[9/133] document-open-32.png
+
+document-open-32.png: 1761/1761 bytes
+/etc/icons/wire/document-open-32.png: 1761 bytes, crc 09a1df4f, transfer verified
+[10/133] document-open-48.png
+
+document-open-48.png: 3156/3156 bytes
+/etc/icons/wire/document-open-48.png: 3156 bytes, crc b66bdb13, transfer verified
+[11/133] document-open-64.png
+
+document-open-64.png: 4806/4806 bytes
+/etc/icons/wire/document-open-64.png: 4806 bytes, crc e51e2548, transfer verified
+[12/133] document-save-16.png
+
+document-save-16.png: 638/638 bytes
+/etc/icons/wire/document-save-16.png: 638 bytes, crc 73531b2c, transfer verified
+[13/133] document-save-24.png
+
+document-save-24.png: 1139/1139 bytes
+/etc/icons/wire/document-save-24.png: 1139 bytes, crc 51cf7e5d, transfer verified
+[14/133] document-save-32.png
+
+document-save-32.png: 1736/1736 bytes
+/etc/icons/wire/document-save-32.png: 1736 bytes, crc 9c2c31b6, transfer verified
+[15/133] document-save-48.png
+
+document-save-48.png: 3280/3280 bytes
+/etc/icons/wire/document-save-48.png: 3280 bytes, crc 6932a5d8, transfer verified
+[16/133] document-save-64.png
+
+document-save-64.png: 5094/5094 bytes
+/etc/icons/wire/document-save-64.png: 5094 bytes, crc 0db8fc71, transfer verified
+[17/133] document-save-as-16.png
+
+document-save-as-16.png: 748/748 bytes
+/etc/icons/wire/document-save-as-16.png: 748 bytes, crc 54fa16b9, transfer verified
+[18/133] document-save-as-24.png
+
+document-save-as-24.png: 1413/1413 bytes
+/etc/icons/wire/document-save-as-24.png: 1413 bytes, crc 359041de, transfer verified
+[19/133] document-save-as-32.png
+
+document-save-as-32.png: 2220/2220 bytes
+/etc/icons/wire/document-save-as-32.png: 2220 bytes, crc a69019fc, transfer verified
+[20/133] document-save-as-48.png
+
+document-save-as-48.png: 4189/4189 bytes
+/etc/icons/wire/document-save-as-48.png: 4189 bytes, crc 1a6e0177, transfer verified
+[21/133] document-save-as-64.png
+
+document-save-as-64.png: 6696/6696 bytes
+/etc/icons/wire/document-save-as-64.png: 6696 bytes, crc 4490e55a, transfer verified
+[22/133] drive-16.png
+
+drive-16.png: 486/486 bytes
+/etc/icons/wire/drive-16.png: 486 bytes, crc 3bccdc7a, transfer verified
+[23/133] drive-24.png
+
+drive-24.png: 878/878 bytes
+/etc/icons/wire/drive-24.png: 878 bytes, crc 39598534, transfer verified
+[24/133] drive-32.png
+
+drive-32.png: 1323/1323 bytes
+/etc/icons/wire/drive-32.png: 1323 bytes, crc 89b8ea77, transfer verified
+[25/133] drive-48.png
+
+drive-48.png: 2497/2497 bytes
+/etc/icons/wire/drive-48.png: 2497 bytes, crc 7246d265, transfer verified
+[26/133] drive-64.png
+
+drive-64.png: 3833/3833 bytes
+/etc/icons/wire/drive-64.png: 3833 bytes, crc 4b8e9a76, transfer verified
+[27/133] edit-copy-16.png
+
+edit-copy-16.png: 628/628 bytes
+/etc/icons/wire/edit-copy-16.png: 628 bytes, crc c589d2fc, transfer verified
+[28/133] edit-copy-24.png
+
+edit-copy-24.png: 1093/1093 bytes
+/etc/icons/wire/edit-copy-24.png: 1093 bytes, crc 5a1dd39b, transfer verified
+[29/133] edit-copy-32.png
+
+edit-copy-32.png: 1438/1438 bytes
+/etc/icons/wire/edit-copy-32.png: 1438 bytes, crc 5dd716b7, transfer verified
+[30/133] edit-copy-48.png
+
+edit-copy-48.png: 2327/2327 bytes
+/etc/icons/wire/edit-copy-48.png: 2327 bytes, crc 1a12edcb, transfer verified
+[31/133] edit-copy-64.png
+
+edit-copy-64.png: 3521/3521 bytes
+/etc/icons/wire/edit-copy-64.png: 3521 bytes, crc f454ae36, transfer verified
+[32/133] edit-cut-16.png
+
+edit-cut-16.png: 815/815 bytes
+/etc/icons/wire/edit-cut-16.png: 815 bytes, crc e14fb7ec, transfer verified
+[33/133] edit-cut-24.png
+
+edit-cut-24.png: 1696/1696 bytes
+/etc/icons/wire/edit-cut-24.png: 1696 bytes, crc 559127ad, transfer verified
+[34/133] edit-cut-32.png
+
+edit-cut-32.png: 2663/2663 bytes
+/etc/icons/wire/edit-cut-32.png: 2663 bytes, crc 4bca073a, transfer verified
+[35/133] edit-cut-48.png
+
+edit-cut-48.png: 5284/5284 bytes
+/etc/icons/wire/edit-cut-48.png: 5284 bytes, crc bb882957, transfer verified
+[36/133] edit-cut-64.png
+
+edit-cut-64.png: 8386/8386 bytes
+/etc/icons/wire/edit-cut-64.png: 8386 bytes, crc 4db9a72c, transfer verified
+[37/133] edit-delete-16.png
+
+edit-delete-16.png: 683/683 bytes
+/etc/icons/wire/edit-delete-16.png: 683 bytes, crc 5a206345, transfer verified
+[38/133] edit-delete-24.png
+
+edit-delete-24.png: 1434/1434 bytes
+/etc/icons/wire/edit-delete-24.png: 1434 bytes, crc 7616d965, transfer verified
+[39/133] edit-delete-32.png
+
+edit-delete-32.png: 2280/2280 bytes
+/etc/icons/wire/edit-delete-32.png: 2280 bytes, crc 82ada79d, transfer verified
+[40/133] edit-delete-48.png
+
+edit-delete-48.png: 4396/4396 bytes
+/etc/icons/wire/edit-delete-48.png: 4396 bytes, crc d33b94bd, transfer verified
+[41/133] edit-delete-64.png
+
+edit-delete-64.png: 6782/6782 bytes
+/etc/icons/wire/edit-delete-64.png: 6782 bytes, crc 5bd653c8, transfer verified
+[42/133] edit-paste-16.png
+
+edit-paste-16.png: 632/632 bytes
+/etc/icons/wire/edit-paste-16.png: 632 bytes, crc f7ee9b32, transfer verified
+[43/133] edit-paste-24.png
+
+edit-paste-24.png: 1089/1089 bytes
+/etc/icons/wire/edit-paste-24.png: 1089 bytes, crc 9956b48c, transfer verified
+[44/133] edit-paste-32.png
+
+edit-paste-32.png: 1649/1649 bytes
+/etc/icons/wire/edit-paste-32.png: 1649 bytes, crc 97f4a69f, transfer verified
+[45/133] edit-paste-48.png
+
+edit-paste-48.png: 3060/3060 bytes
+/etc/icons/wire/edit-paste-48.png: 3060 bytes, crc edd66316, transfer verified
+[46/133] edit-paste-64.png
+
+edit-paste-64.png: 4814/4814 bytes
+/etc/icons/wire/edit-paste-64.png: 4814 bytes, crc 2f98fddd, transfer verified
+[47/133] file-16.png
+
+file-16.png: 603/603 bytes
+/etc/icons/wire/file-16.png: 603 bytes, crc 153ca014, transfer verified
+[48/133] file-24.png
+
+file-24.png: 944/944 bytes
+/etc/icons/wire/file-24.png: 944 bytes, crc aadfbab5, transfer verified
+[49/133] file-32.png
+
+file-32.png: 1435/1435 bytes
+/etc/icons/wire/file-32.png: 1435 bytes, crc 602ce2bc, transfer verified
+[50/133] file-48.png
+
+file-48.png: 2547/2547 bytes
+/etc/icons/wire/file-48.png: 2547 bytes, crc 30300370, transfer verified
+[51/133] file-64.png
+
+file-64.png: 4053/4053 bytes
+/etc/icons/wire/file-64.png: 4053 bytes, crc 1a81f2b9, transfer verified
+[52/133] folder-16.png
+
+folder-16.png: 552/552 bytes
+/etc/icons/wire/folder-16.png: 552 bytes, crc 14bf852d, transfer verified
+[53/133] folder-24.png
+
+folder-24.png: 938/938 bytes
+/etc/icons/wire/folder-24.png: 938 bytes, crc 8982816d, transfer verified
+[54/133] folder-32.png
+
+folder-32.png: 1358/1358 bytes
+/etc/icons/wire/folder-32.png: 1358 bytes, crc ca539668, transfer verified
+[55/133] folder-48.png
+
+folder-48.png: 2597/2597 bytes
+/etc/icons/wire/folder-48.png: 2597 bytes, crc a1e28860, transfer verified
+[56/133] folder-64.png
+
+folder-64.png: 4211/4211 bytes
+/etc/icons/wire/folder-64.png: 4211 bytes, crc ead3dd6c, transfer verified
+[57/133] folder-new-16.png
+
+folder-new-16.png: 564/564 bytes
+/etc/icons/wire/folder-new-16.png: 564 bytes, crc 5e616603, transfer verified
+[58/133] folder-new-24.png
+
+folder-new-24.png: 1062/1062 bytes
+/etc/icons/wire/folder-new-24.png: 1062 bytes, crc 7d63b807, transfer verified
+[59/133] folder-new-32.png
+
+folder-new-32.png: 1595/1595 bytes
+/etc/icons/wire/folder-new-32.png: 1595 bytes, crc dc259288, transfer verified
+[60/133] folder-new-48.png
+
+folder-new-48.png: 2983/2983 bytes
+/etc/icons/wire/folder-new-48.png: 2983 bytes, crc b5e79bff, transfer verified
+[61/133] folder-new-64.png
+
+folder-new-64.png: 4788/4788 bytes
+/etc/icons/wire/folder-new-64.png: 4788 bytes, crc b84f188f, transfer verified
+[62/133] go-back-16.png
+
+go-back-16.png: 662/662 bytes
+/etc/icons/wire/go-back-16.png: 662 bytes, crc 9cc56563, transfer verified
+[63/133] go-back-24.png
+
+go-back-24.png: 1238/1238 bytes
+/etc/icons/wire/go-back-24.png: 1238 bytes, crc a595ee60, transfer verified
+[64/133] go-back-32.png
+
+go-back-32.png: 1807/1807 bytes
+/etc/icons/wire/go-back-32.png: 1807 bytes, crc 3089cca4, transfer verified
+[65/133] go-back-48.png
+
+go-back-48.png: 3220/3220 bytes
+/etc/icons/wire/go-back-48.png: 3220 bytes, crc eb2cedad, transfer verified
+[66/133] go-back-64.png
+
+go-back-64.png: 4814/4814 bytes
+/etc/icons/wire/go-back-64.png: 4814 bytes, crc 2001b483, transfer verified
+[67/133] go-forward-16.png
+
+go-forward-16.png: 630/630 bytes
+/etc/icons/wire/go-forward-16.png: 630 bytes, crc 7be4e6b3, transfer verified
+[68/133] go-forward-24.png
+
+go-forward-24.png: 1090/1090 bytes
+/etc/icons/wire/go-forward-24.png: 1090 bytes, crc 2d8a7e70, transfer verified
+[69/133] go-forward-32.png
+
+go-forward-32.png: 1640/1640 bytes
+/etc/icons/wire/go-forward-32.png: 1640 bytes, crc 0a2f6377, transfer verified
+[70/133] go-forward-48.png
+
+go-forward-48.png: 2769/2769 bytes
+/etc/icons/wire/go-forward-48.png: 2769 bytes, crc eda1f416, transfer verified
+[71/133] go-forward-64.png
+
+go-forward-64.png: 4189/4189 bytes
+/etc/icons/wire/go-forward-64.png: 4189 bytes, crc ae21eef4, transfer verified
+[72/133] go-up-16.png
+
+go-up-16.png: 692/692 bytes
+/etc/icons/wire/go-up-16.png: 692 bytes, crc 008c8de2, transfer verified
+[73/133] go-up-24.png
+
+go-up-24.png: 1212/1212 bytes
+/etc/icons/wire/go-up-24.png: 1212 bytes, crc fef2750f, transfer verified
+[74/133] go-up-32.png
+
+go-up-32.png: 1866/1866 bytes
+/etc/icons/wire/go-up-32.png: 1866 bytes, crc 230b2cef, transfer verified
+[75/133] go-up-48.png
+
+go-up-48.png: 3068/3068 bytes
+/etc/icons/wire/go-up-48.png: 3068 bytes, crc 9424cb7e, transfer verified
+[76/133] go-up-64.png
+
+go-up-64.png: 4560/4560 bytes
+/etc/icons/wire/go-up-64.png: 4560 bytes, crc 66c64d26, transfer verified
+[77/133] help-16.png
+
+help-16.png: 849/849 bytes
+/etc/icons/wire/help-16.png: 849 bytes, crc 10e8ff99, transfer verified
+[78/133] help-24.png
+
+help-24.png: 1746/1746 bytes
+/etc/icons/wire/help-24.png: 1746 bytes, crc 8e55fd5a, transfer verified
+[79/133] help-32.png
+
+help-32.png: 2753/2753 bytes
+/etc/icons/wire/help-32.png: 2753 bytes, crc e1acad68, transfer verified
+[80/133] help-48.png
+
+help-48.png: 5465/5465 bytes
+/etc/icons/wire/help-48.png: 5465 bytes, crc bf7605c6, transfer verified
+[81/133] help-64.png
+
+help-64.png: 8547/8547 bytes
+/etc/icons/wire/help-64.png: 8547 bytes, crc dfb4afeb, transfer verified
+[82/133] home-16.png
+
+home-16.png: 738/738 bytes
+/etc/icons/wire/home-16.png: 738 bytes, crc aa552616, transfer verified
+[83/133] home-24.png
+
+home-24.png: 1519/1519 bytes
+/etc/icons/wire/home-24.png: 1519 bytes, crc cf5cb6d6, transfer verified
+[84/133] home-32.png
+
+home-32.png: 2328/2328 bytes
+/etc/icons/wire/home-32.png: 2328 bytes, crc 0488e908, transfer verified
+[85/133] home-48.png
+
+home-48.png: 4334/4334 bytes
+/etc/icons/wire/home-48.png: 4334 bytes, crc 04f27f19, transfer verified
+[86/133] home-64.png
+
+home-64.png: 6891/6891 bytes
+/etc/icons/wire/home-64.png: 6891 bytes, crc ddc5d35d, transfer verified
+[87/133] provenance.json
+
+provenance.json: 10062/24036 bytes
+provenance.json: 15822/24036 bytes
+provenance.json: 18702/24036 bytes
+provenance.json: 21582/24036 bytes
+provenance.json: 24036/24036 bytes
+/etc/icons/wire/provenance.json: 24036 bytes, crc ac7a97ef, transfer verified
+[88/133] search-16.png
+
+search-16.png: 708/708 bytes
+/etc/icons/wire/search-16.png: 708 bytes, crc c82828f9, transfer verified
+[89/133] search-24.png
+
+search-24.png: 1310/1310 bytes
+/etc/icons/wire/search-24.png: 1310 bytes, crc 23509767, transfer verified
+[90/133] search-32.png
+
+search-32.png: 1977/1977 bytes
+/etc/icons/wire/search-32.png: 1977 bytes, crc e95f86ba, transfer verified
+[91/133] search-48.png
+
+search-48.png: 3723/3723 bytes
+/etc/icons/wire/search-48.png: 3723 bytes, crc 7c37dfb8, transfer verified
+[92/133] search-64.png
+
+search-64.png: 5865/5865 bytes
+/etc/icons/wire/search-64.png: 5865 bytes, crc 9e0efcef, transfer verified
+[93/133] settings-16.png
+
+settings-16.png: 886/886 bytes
+/etc/icons/wire/settings-16.png: 886 bytes, crc f2021121, transfer verified
+[94/133] settings-24.png
+
+settings-24.png: 1757/1757 bytes
+/etc/icons/wire/settings-24.png: 1757 bytes, crc 37a97799, transfer verified
+[95/133] settings-32.png
+
+settings-32.png: 2826/2826 bytes
+/etc/icons/wire/settings-32.png: 2826 bytes, crc 1efe46a0, transfer verified
+[96/133] settings-48.png
+
+settings-48.png: 5364/5364 bytes
+/etc/icons/wire/settings-48.png: 5364 bytes, crc 78776ee2, transfer verified
+[97/133] settings-64.png
+
+settings-64.png: 8065/8065 bytes
+/etc/icons/wire/settings-64.png: 8065 bytes, crc 4c092dec, transfer verified
+[98/133] tab-new-16.png
+
+tab-new-16.png: 699/699 bytes
+/etc/icons/wire/tab-new-16.png: 699 bytes, crc 1223c741, transfer verified
+[99/133] tab-new-24.png
+
+tab-new-24.png: 1306/1306 bytes
+/etc/icons/wire/tab-new-24.png: 1306 bytes, crc 4c6adb30, transfer verified
+[100/133] tab-new-32.png
+
+tab-new-32.png: 1994/1994 bytes
+/etc/icons/wire/tab-new-32.png: 1994 bytes, crc 554c6c4a, transfer verified
+[101/133] tab-new-48.png
+
+tab-new-48.png: 3743/3743 bytes
+/etc/icons/wire/tab-new-48.png: 3743 bytes, crc cb0fc3a0, transfer verified
+[102/133] tab-new-64.png
+
+tab-new-64.png: 5937/5937 bytes
+/etc/icons/wire/tab-new-64.png: 5937 bytes, crc fab0afce, transfer verified
+[103/133] theme.conf
+
+theme.conf: 76/76 bytes
+/etc/icons/wire/theme.conf: 76 bytes, crc 3f7e8130, transfer verified
+[104/133] view-details-16.png
+
+view-details-16.png: 719/719 bytes
+/etc/icons/wire/view-details-16.png: 719 bytes, crc 0d32b3fe, transfer verified
+[105/133] view-details-24.png
+
+view-details-24.png: 1241/1241 bytes
+/etc/icons/wire/view-details-24.png: 1241 bytes, crc 24de80e0, transfer verified
+[106/133] view-details-32.png
+
+view-details-32.png: 1991/1991 bytes
+/etc/icons/wire/view-details-32.png: 1991 bytes, crc 8e771c08, transfer verified
+[107/133] view-details-48.png
+
+view-details-48.png: 3741/3741 bytes
+/etc/icons/wire/view-details-48.png: 3741 bytes, crc 94d4e8c7, transfer verified
+[108/133] view-details-64.png
+
+view-details-64.png: 5997/5997 bytes
+/etc/icons/wire/view-details-64.png: 5997 bytes, crc 90abeece, transfer verified
+[109/133] view-icons-16.png
+
+view-icons-16.png: 715/715 bytes
+/etc/icons/wire/view-icons-16.png: 715 bytes, crc 35d90562, transfer verified
+[110/133] view-icons-24.png
+
+view-icons-24.png: 1361/1361 bytes
+/etc/icons/wire/view-icons-24.png: 1361 bytes, crc 9f9d5517, transfer verified
+[111/133] view-icons-32.png
+
+view-icons-32.png: 2055/2055 bytes
+/etc/icons/wire/view-icons-32.png: 2055 bytes, crc 59d054ce, transfer verified
+[112/133] view-icons-48.png
+
+view-icons-48.png: 3953/3953 bytes
+/etc/icons/wire/view-icons-48.png: 3953 bytes, crc 1ffcb0a9, transfer verified
+[113/133] view-icons-64.png
+
+view-icons-64.png: 6432/6432 bytes
+/etc/icons/wire/view-icons-64.png: 6432 bytes, crc 0308e689, transfer verified
+[114/133] view-preview-16.png
+
+view-preview-16.png: 561/561 bytes
+/etc/icons/wire/view-preview-16.png: 561 bytes, crc 75e07f9b, transfer verified
+[115/133] view-preview-24.png
+
+view-preview-24.png: 1032/1032 bytes
+/etc/icons/wire/view-preview-24.png: 1032 bytes, crc b00540cc, transfer verified
+[116/133] view-preview-32.png
+
+view-preview-32.png: 1521/1521 bytes
+/etc/icons/wire/view-preview-32.png: 1521 bytes, crc 9b914448, transfer verified
+[117/133] view-preview-48.png
+
+view-preview-48.png: 2863/2863 bytes
+/etc/icons/wire/view-preview-48.png: 2863 bytes, crc 17b97e63, transfer verified
+[118/133] view-preview-64.png
+
+view-preview-64.png: 4530/4530 bytes
+/etc/icons/wire/view-preview-64.png: 4530 bytes, crc b36749e2, transfer verified
+[119/133] view-refresh-16.png
+
+view-refresh-16.png: 811/811 bytes
+/etc/icons/wire/view-refresh-16.png: 811 bytes, crc e43d4ed6, transfer verified
+[120/133] view-refresh-24.png
+
+view-refresh-24.png: 1683/1683 bytes
+/etc/icons/wire/view-refresh-24.png: 1683 bytes, crc 42055a43, transfer verified
+[121/133] view-refresh-32.png
+
+view-refresh-32.png: 2700/2700 bytes
+/etc/icons/wire/view-refresh-32.png: 2700 bytes, crc b612ba20, transfer verified
+[122/133] view-refresh-48.png
+
+view-refresh-48.png: 5489/5489 bytes
+/etc/icons/wire/view-refresh-48.png: 5489 bytes, crc 68182ca3, transfer verified
+[123/133] view-refresh-64.png
+
+view-refresh-64.png: 8256/8256 bytes
+/etc/icons/wire/view-refresh-64.png: 8256 bytes, crc 4e15d743, transfer verified
+[124/133] view-split-16.png
+
+view-split-16.png: 534/534 bytes
+/etc/icons/wire/view-split-16.png: 534 bytes, crc f3977a18, transfer verified
+[125/133] view-split-24.png
+
+view-split-24.png: 838/838 bytes
+/etc/icons/wire/view-split-24.png: 838 bytes, crc 96322ef8, transfer verified
+[126/133] view-split-32.png
+
+view-split-32.png: 1251/1251 bytes
+/etc/icons/wire/view-split-32.png: 1251 bytes, crc ee8164b0, transfer verified
+[127/133] view-split-48.png
+
+view-split-48.png: 2311/2311 bytes
+/etc/icons/wire/view-split-48.png: 2311 bytes, crc e79bab77, transfer verified
+[128/133] view-split-64.png
+
+view-split-64.png: 3713/3713 bytes
+/etc/icons/wire/view-split-64.png: 3713 bytes, crc cc4826ab, transfer verified
+[129/133] window-close-16.png
+
+window-close-16.png: 835/835 bytes
+/etc/icons/wire/window-close-16.png: 835 bytes, crc 50aebfa6, transfer verified
+[130/133] window-close-24.png
+
+window-close-24.png: 1638/1638 bytes
+/etc/icons/wire/window-close-24.png: 1638 bytes, crc 27ed900a, transfer verified
+[131/133] window-close-32.png
+
+window-close-32.png: 2603/2603 bytes
+/etc/icons/wire/window-close-32.png: 2603 bytes, crc 70c9a114, transfer verified
+[132/133] window-close-48.png
+
+window-close-48.png: 4847/4847 bytes
+/etc/icons/wire/window-close-48.png: 4847 bytes, crc 7a53881c, transfer verified
+[133/133] window-close-64.png
+
+window-close-64.png: 7485/7485 bytes
+/etc/icons/wire/window-close-64.png: 7485 bytes, crc c08891d5, transfer verified
+/etc/icons/wire/LICENSE: preparing replacement
+/etc/icons/wire/app-16.png: preparing replacement
+/etc/icons/wire/app-24.png: preparing replacement
+/etc/icons/wire/app-32.png: preparing replacement
+/etc/icons/wire/app-48.png: preparing replacement
+/etc/icons/wire/app-64.png: preparing replacement
+/etc/icons/wire/document-open-16.png: preparing replacement
+/etc/icons/wire/document-open-24.png: preparing replacement
+/etc/icons/wire/document-open-32.png: preparing replacement
+/etc/icons/wire/document-open-48.png: preparing replacement
+/etc/icons/wire/document-open-64.png: preparing replacement
+/etc/icons/wire/document-save-16.png: preparing replacement
+/etc/icons/wire/document-save-24.png: preparing replacement
+/etc/icons/wire/document-save-32.png: preparing replacement
+/etc/icons/wire/document-save-48.png: preparing replacement
+/etc/icons/wire/document-save-64.png: preparing replacement
+/etc/icons/wire/document-save-as-16.png: preparing replacement
+/etc/icons/wire/document-save-as-24.png: preparing replacement
+/etc/icons/wire/document-save-as-32.png: preparing replacement
+/etc/icons/wire/document-save-as-48.png: preparing replacement
+/etc/icons/wire/document-save-as-64.png: preparing replacement
+/etc/icons/wire/drive-16.png: preparing replacement
+/etc/icons/wire/drive-24.png: preparing replacement
+/etc/icons/wire/drive-32.png: preparing replacement
+/etc/icons/wire/drive-48.png: preparing replacement
+/etc/icons/wire/drive-64.png: preparing replacement
+/etc/icons/wire/edit-copy-16.png: preparing replacement
+/etc/icons/wire/edit-copy-24.png: preparing replacement
+/etc/icons/wire/edit-copy-32.png: preparing replacement
+/etc/icons/wire/edit-copy-48.png: preparing replacement
+/etc/icons/wire/edit-copy-64.png: preparing replacement
+/etc/icons/wire/edit-cut-16.png: preparing replacement
+/etc/icons/wire/edit-cut-24.png: preparing replacement
+/etc/icons/wire/edit-cut-32.png: preparing replacement
+/etc/icons/wire/edit-cut-48.png: preparing replacement
+/etc/icons/wire/edit-cut-64.png: preparing replacement
+/etc/icons/wire/edit-delete-16.png: preparing replacement
+/etc/icons/wire/edit-delete-24.png: preparing replacement
+/etc/icons/wire/edit-delete-32.png: preparing replacement
+/etc/icons/wire/edit-delete-48.png: preparing replacement
+/etc/icons/wire/edit-delete-64.png: preparing replacement
+/etc/icons/wire/edit-paste-16.png: preparing replacement
+/etc/icons/wire/edit-paste-24.png: preparing replacement
+/etc/icons/wire/edit-paste-32.png: preparing replacement
+/etc/icons/wire/edit-paste-48.png: preparing replacement
+/etc/icons/wire/edit-paste-64.png: preparing replacement
+/etc/icons/wire/file-16.png: preparing replacement
+/etc/icons/wire/file-24.png: preparing replacement
+/etc/icons/wire/file-32.png: preparing replacement
+/etc/icons/wire/file-48.png: preparing replacement
+/etc/icons/wire/file-64.png: preparing replacement
+/etc/icons/wire/folder-16.png: preparing replacement
+/etc/icons/wire/folder-24.png: preparing replacement
+/etc/icons/wire/folder-32.png: preparing replacement
+/etc/icons/wire/folder-48.png: preparing replacement
+/etc/icons/wire/folder-64.png: preparing replacement
+/etc/icons/wire/folder-new-16.png: preparing replacement
+/etc/icons/wire/folder-new-24.png: preparing replacement
+/etc/icons/wire/folder-new-32.png: preparing replacement
+/etc/icons/wire/folder-new-48.png: preparing replacement
+/etc/icons/wire/folder-new-64.png: preparing replacement
+/etc/icons/wire/go-back-16.png: preparing replacement
+/etc/icons/wire/go-back-24.png: preparing replacement
+/etc/icons/wire/go-back-32.png: preparing replacement
+/etc/icons/wire/go-back-48.png: preparing replacement
+/etc/icons/wire/go-back-64.png: preparing replacement
+/etc/icons/wire/go-forward-16.png: preparing replacement
+/etc/icons/wire/go-forward-24.png: preparing replacement
+/etc/icons/wire/go-forward-32.png: preparing replacement
+/etc/icons/wire/go-forward-48.png: preparing replacement
+/etc/icons/wire/go-forward-64.png: preparing replacement
+/etc/icons/wire/go-up-16.png: preparing replacement
+/etc/icons/wire/go-up-24.png: preparing replacement
+/etc/icons/wire/go-up-32.png: preparing replacement
+/etc/icons/wire/go-up-48.png: preparing replacement
+/etc/icons/wire/go-up-64.png: preparing replacement
+/etc/icons/wire/help-16.png: preparing replacement
+/etc/icons/wire/help-24.png: preparing replacement
+/etc/icons/wire/help-32.png: preparing replacement
+/etc/icons/wire/help-48.png: preparing replacement
+/etc/icons/wire/help-64.png: preparing replacement
+/etc/icons/wire/home-16.png: preparing replacement
+/etc/icons/wire/home-24.png: preparing replacement
+/etc/icons/wire/home-32.png: preparing replacement
+/etc/icons/wire/home-48.png: preparing replacement
+/etc/icons/wire/home-64.png: preparing replacement
+/etc/icons/wire/provenance.json: preparing replacement
+/etc/icons/wire/search-16.png: preparing replacement
+/etc/icons/wire/search-24.png: preparing replacement
+/etc/icons/wire/search-32.png: preparing replacement
+/etc/icons/wire/search-48.png: preparing replacement
+/etc/icons/wire/search-64.png: preparing replacement
+/etc/icons/wire/settings-16.png: preparing replacement
+/etc/icons/wire/settings-24.png: preparing replacement
+/etc/icons/wire/settings-32.png: preparing replacement
+/etc/icons/wire/settings-48.png: preparing replacement
+/etc/icons/wire/settings-64.png: preparing replacement
+/etc/icons/wire/tab-new-16.png: preparing replacement
+/etc/icons/wire/tab-new-24.png: preparing replacement
+/etc/icons/wire/tab-new-32.png: preparing replacement
+/etc/icons/wire/tab-new-48.png: preparing replacement
+/etc/icons/wire/tab-new-64.png: preparing replacement
+/etc/icons/wire/theme.conf: preparing replacement
+/etc/icons/wire/view-details-16.png: preparing replacement
+/etc/icons/wire/view-details-24.png: preparing replacement
+/etc/icons/wire/view-details-32.png: preparing replacement
+/etc/icons/wire/view-details-48.png: preparing replacement
+/etc/icons/wire/view-details-64.png: preparing replacement
+/etc/icons/wire/view-icons-16.png: preparing replacement
+/etc/icons/wire/view-icons-24.png: preparing replacement
+/etc/icons/wire/view-icons-32.png: preparing replacement
+/etc/icons/wire/view-icons-48.png: preparing replacement
+/etc/icons/wire/view-icons-64.png: preparing replacement
+/etc/icons/wire/view-preview-16.png: preparing replacement
+/etc/icons/wire/view-preview-24.png: preparing replacement
+/etc/icons/wire/view-preview-32.png: preparing replacement
+/etc/icons/wire/view-preview-48.png: preparing replacement
+/etc/icons/wire/view-preview-64.png: preparing replacement
+/etc/icons/wire/view-refresh-16.png: preparing replacement
+/etc/icons/wire/view-refresh-24.png: preparing replacement
+/etc/icons/wire/view-refresh-32.png: preparing replacement
+/etc/icons/wire/view-refresh-48.png: preparing replacement
+/etc/icons/wire/view-refresh-64.png: preparing replacement
+/etc/icons/wire/view-split-16.png: preparing replacement
+/etc/icons/wire/view-split-24.png: preparing replacement
+/etc/icons/wire/view-split-32.png: preparing replacement
+/etc/icons/wire/view-split-48.png: preparing replacement
+/etc/icons/wire/view-split-64.png: preparing replacement
+/etc/icons/wire/window-close-16.png: preparing replacement
+/etc/icons/wire/window-close-24.png: preparing replacement
+/etc/icons/wire/window-close-32.png: preparing replacement
+/etc/icons/wire/window-close-48.png: preparing replacement
+/etc/icons/wire/window-close-64.png: preparing replacement
+os64get: 133 installed, 0 unchanged, 0 failed
+rc=0
+
+All 133 installed files extracted from the stopped VM and compared byte for byte with assets/icons/default: PASS.

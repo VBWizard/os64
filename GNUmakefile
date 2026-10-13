@@ -496,8 +496,12 @@ userland:
 # same programs a FAT boot does. Rebuilds when the generator OR any binary
 # that rides it changes.
 TLS_PUBLIC_ROOTS := trust/mozilla/2026-08-13/install/roots.pem
+ICON_ASSET_DIR := assets/icons/default
+ICON_ASSETS := $(sort $(wildcard $(ICON_ASSET_DIR)/*.png))
+ICON_MANIFEST := $(ICON_ASSET_DIR)/theme.conf
+ICON_METADATA := $(ICON_MANIFEST) $(ICON_ASSET_DIR)/provenance.json $(ICON_ASSET_DIR)/LICENSE
 
-$(EXT2_TEST_IMAGE): $(BT_FIRMWARE_LICENSE) license/libpage-numeric-LICENSE license/libjpeg-turbo-LICENSE license/libwebp-LICENSE license/freetype-LICENSE license/unicode-LICENSE license/libmath-LICENSE $(QUICKJS_LICENSE) $(FONT_FIXTURES) $(FONT_PRODUCT) $(PAGE_FIXTURES) tools/html_corpus/SOURCES.json $(FRAME_COMPOSITIONS) $(TLS_PUBLIC_ROOTS) tools/gen_ext2_testdata.py $(USERLAND_BINS) $(USERLAND_TESTBINS) $(USERLAND_LIBS) $(KERNEL_FIXTURES) kernel/test/partition_info.txt etc/husk.rc etc/logd.conf etc/os64get.conf etc/hosts etc/crontab etc/net.conf etc/desktop.conf etc/gclock.conf etc/gterm.conf etc/os64.conf etc/gui.conf etc/menu.conf etc/mouse.conf etc/bootenv.conf etc/sshd.conf etc/vncd.conf etc/fonts.conf GNUmakefile
+$(EXT2_TEST_IMAGE): $(BT_FIRMWARE_LICENSE) license/libpage-numeric-LICENSE license/libjpeg-turbo-LICENSE license/libwebp-LICENSE license/freetype-LICENSE license/unicode-LICENSE license/libmath-LICENSE $(QUICKJS_LICENSE) $(FONT_FIXTURES) $(FONT_PRODUCT) $(ICON_ASSET_DIR) $(ICON_ASSETS) $(ICON_METADATA) $(PAGE_FIXTURES) tools/html_corpus/SOURCES.json $(FRAME_COMPOSITIONS) $(TLS_PUBLIC_ROOTS) tools/gen_ext2_testdata.py $(USERLAND_BINS) $(USERLAND_TESTBINS) $(USERLAND_LIBS) $(KERNEL_FIXTURES) kernel/test/partition_info.txt etc/husk.rc etc/logd.conf etc/os64get.conf etc/hosts etc/crontab etc/net.conf etc/desktop.conf etc/gclock.conf etc/gterm.conf etc/os64.conf etc/gui.conf etc/menu.conf etc/mouse.conf etc/bootenv.conf etc/sshd.conf etc/vncd.conf etc/fonts.conf etc/icons.conf GNUmakefile
 	@mkdir -p "$$(dirname $(EXT2_TEST_IMAGE))"
 	python3 tools/gen_ext2_testdata.py $(EXT2_STAGING)
 	rm -f $(EXT2_TEST_IMAGE)
@@ -515,7 +519,7 @@ $(EXT2_TEST_IMAGE): $(BT_FIRMWARE_LICENSE) license/libpage-numeric-LICENSE licen
 	# is writable (ratified 2026-08-07). /etc/husk.rc is the SYSTEM's rc —
 	# /home/husk.rc (the user's, on its own partition) still wins the
 	# search; /fat/husk.rc remains the lifeboat's copy.
-	printf 'mkdir /bin\nmkdir /tests\nmkdir /lib\nmkdir /etc\nmkdir /tmp\ncd /etc\nwrite etc/husk.rc husk.rc\nwrite etc/logd.conf logd.conf\nwrite etc/os64get.conf os64get.conf\nwrite etc/hosts hosts\nwrite etc/crontab crontab\nwrite etc/net.conf net.conf\nwrite etc/desktop.conf desktop.conf\nwrite etc/gclock.conf gclock.conf\nwrite etc/gterm.conf gterm.conf\nwrite etc/os64.conf os64.conf\nwrite etc/gui.conf gui.conf\nwrite etc/menu.conf menu.conf\nwrite etc/mouse.conf mouse.conf\nwrite etc/bootenv.conf bootenv.conf\nwrite etc/sshd.conf sshd.conf\nwrite etc/vncd.conf vncd.conf\ncd /bin\n' > $(EXT2_STAGING)/debugfs_bins.cmds
+	printf 'mkdir /bin\nmkdir /tests\nmkdir /lib\nmkdir /etc\nmkdir /tmp\ncd /etc\nwrite etc/husk.rc husk.rc\nwrite etc/logd.conf logd.conf\nwrite etc/os64get.conf os64get.conf\nwrite etc/hosts hosts\nwrite etc/crontab crontab\nwrite etc/net.conf net.conf\nwrite etc/desktop.conf desktop.conf\nwrite etc/gclock.conf gclock.conf\nwrite etc/gterm.conf gterm.conf\nwrite etc/os64.conf os64.conf\nwrite etc/gui.conf gui.conf\nwrite etc/menu.conf menu.conf\nwrite etc/mouse.conf mouse.conf\nwrite etc/icons.conf icons.conf\nwrite etc/bootenv.conf bootenv.conf\nwrite etc/sshd.conf sshd.conf\nwrite etc/vncd.conf vncd.conf\ncd /bin\n' > $(EXT2_STAGING)/debugfs_bins.cmds
 	# The pinned public roots are system configuration; /home/tls.conf can
 	# select another store through the configuration ladder.
 	printf 'mkdir /etc/certs\nwrite %s /etc/certs/roots.pem\n' "$(TLS_PUBLIC_ROOTS)" >> $(EXT2_STAGING)/debugfs_bins.cmds
@@ -534,6 +538,9 @@ $(EXT2_TEST_IMAGE): $(BT_FIRMWARE_LICENSE) license/libpage-numeric-LICENSE licen
 	printf 'write %s /etc/licenses/quickjs.txt\n' "$(QUICKJS_LICENSE)" >> $(EXT2_STAGING)/debugfs_bins.cmds
 	printf 'mkdir /etc/fonts\nwrite etc/fonts.conf /etc/fonts.conf\nwrite $(FONT_FIXTURE_DIR)/LICENSE-DejaVu.txt /etc/licenses/DejaVu.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
 	$(foreach f,$(FONT_PRODUCT),printf 'write %s /etc/fonts/%s\n' "$(f)" "$(notdir $(f))" >> $(EXT2_STAGING)/debugfs_bins.cmds;)
+	printf 'mkdir /etc/icons\nmkdir /etc/icons/default\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
+	$(foreach f,$(ICON_METADATA),printf 'write %s /etc/icons/default/%s\n' "$(f)" "$(notdir $(f))" >> $(EXT2_STAGING)/debugfs_bins.cmds;)
+	$(foreach f,$(ICON_ASSETS),printf 'write %s /etc/icons/default/%s\n' "$(f)" "$(notdir $(f))" >> $(EXT2_STAGING)/debugfs_bins.cmds;)
 	printf 'mkdir /etc/frames\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
 	$(foreach f,$(FRAME_COMPOSITIONS),printf 'write %s /etc/frames/%s\n' "$(f)" "$(notdir $(f))" >> $(EXT2_STAGING)/debugfs_bins.cmds;)
 	$(foreach b,$(USERLAND_BINS),printf 'write %s %s\n' "$(b)" "$(notdir $(b))" >> $(EXT2_STAGING)/debugfs_bins.cmds;)
@@ -570,7 +577,7 @@ $(EXT2_TEST_IMAGE): $(BT_FIRMWARE_LICENSE) license/libpage-numeric-LICENSE licen
 # arrived (2026-08-23) — editing it left the image stale, which presents as "I
 # changed my wallpaper and nothing happened". Any file the recipe copies belongs
 # here; that is the whole contract of a prerequisite list.
-$(DISK_IMAGE): $(BT_FIRMWARE_LICENSE) license/libpage-numeric-LICENSE license/libjpeg-turbo-LICENSE license/libwebp-LICENSE license/freetype-LICENSE license/unicode-LICENSE license/libmath-LICENSE $(QUICKJS_LICENSE) $(KERNEL_BIN) $(KERNEL_FIXTURES) $(USERLAND_BINS) $(USERLAND_TESTBINS) $(USERLAND_LIBS) $(FONT_FIXTURES) $(FONT_PRODUCT) $(PAGE_FIXTURES) tools/html_corpus/SOURCES.json $(FRAME_COMPOSITIONS) kernel/test/partition_info.txt etc/husk.rc etc/desktop.conf etc/gclock.conf etc/gterm.conf etc/os64.conf etc/gui.conf etc/bootenv.conf etc/fonts.conf limine-hd.conf $(wildcard external/*) $(EXT2_TEST_IMAGE) GNUmakefile
+$(DISK_IMAGE): $(BT_FIRMWARE_LICENSE) license/libpage-numeric-LICENSE license/libjpeg-turbo-LICENSE license/libwebp-LICENSE license/freetype-LICENSE license/unicode-LICENSE license/libmath-LICENSE $(QUICKJS_LICENSE) $(KERNEL_BIN) $(KERNEL_FIXTURES) $(USERLAND_BINS) $(USERLAND_TESTBINS) $(USERLAND_LIBS) $(FONT_FIXTURES) $(FONT_PRODUCT) $(ICON_ASSET_DIR) $(ICON_ASSETS) $(ICON_METADATA) $(PAGE_FIXTURES) tools/html_corpus/SOURCES.json $(FRAME_COMPOSITIONS) kernel/test/partition_info.txt etc/husk.rc etc/desktop.conf etc/gclock.conf etc/gterm.conf etc/os64.conf etc/gui.conf etc/bootenv.conf etc/icons.conf etc/fonts.conf limine-hd.conf $(wildcard external/*) $(EXT2_TEST_IMAGE) GNUmakefile
 	@mkdir -p "$$(dirname $(DISK_IMAGE))"
 	# rm + truncate instead of dd-from-/dev/zero: creates a sparse file, so
 	# rebuilding the image doesn't write $(DISK_SIZE_MB)MB of zeros each time.
@@ -648,6 +655,10 @@ $(DISK_IMAGE): $(BT_FIRMWARE_LICENSE) license/libpage-numeric-LICENSE license/li
 	mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/etc/fonts
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) etc/fonts.conf ::/etc/fonts.conf
 	$(foreach f,$(FONT_PRODUCT),mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(f) ::/etc/fonts/$(notdir $(f));)
+	mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/etc/icons
+	mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/etc/icons/default
+	$(foreach f,$(ICON_METADATA),mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(f) ::/etc/icons/default/$(notdir $(f));)
+	$(foreach f,$(ICON_ASSETS),mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(f) ::/etc/icons/default/$(notdir $(f));)
 	mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/etc/frames
 	$(foreach f,$(FRAME_COMPOSITIONS),mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(f) ::/etc/frames/$(notdir $(f));)
 	mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/etc/licenses
@@ -664,6 +675,7 @@ $(DISK_IMAGE): $(BT_FIRMWARE_LICENSE) license/libpage-numeric-LICENSE license/li
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) etc/gclock.conf ::/etc/gclock.conf
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) etc/gterm.conf ::/etc/gterm.conf
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) etc/os64.conf ::/etc/os64.conf
+	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) etc/icons.conf ::/etc/icons.conf
 	# bootenv.conf for the same reason as os64.conf: the boot environment is
 	# decided by a file now, and the lifeboat boots with the same defaults the
 	# ext2 root does rather than with whatever the kernel's floor happens to be.

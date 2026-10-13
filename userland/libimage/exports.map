@@ -10,5 +10,16 @@
         os64_image_sequence_next;
         os64_image_sequence_rewind;
         os64_image_sequence_free;
+        os64_icon_catalog_create;
+        os64_icon_catalog_provider;
+        os64_icon_catalog_destroy;
+        os64_icon_catalog_refresh;
+        os64_icon_catalog_stats;
+        os64_icon_theme_create;
+        os64_icon_theme_provider;
+        os64_icon_theme_destroy;
+        os64_icon_theme_path;
+        os64_icon_theme_name;
+        os64_icon_theme_author;
     local: *;
 };

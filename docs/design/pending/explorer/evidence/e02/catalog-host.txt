@@ -1,0 +1,1 @@
+icon catalog host: PASS (cold peak 103083, 16-bit 64px peak 117995 bytes incl. host allocator header; pinned 127)

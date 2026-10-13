@@ -118,7 +118,7 @@ static void build(const char *dir,bool real)
         CHECK(os64_font_adopt(set,&c,1,NULL)==OS64_FONT_OK);os64_font_set_release(set);
     }
 #endif
-    CHECK(gallery_attach_menus(&g,1,&backend,true)); transport.dispatcher=&g.dispatcher;
+    CHECK(gallery_attach_menus(&g,1,&backend,true,true)); transport.dispatcher=&g.dispatcher;
     g.dispatcher.entries[0].event=commands;g.dispatcher.entries[0].paint=no_paint;
 }
 static void dispose(void)

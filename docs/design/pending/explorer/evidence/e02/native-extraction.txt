@@ -1,0 +1,3 @@
+Os64 gunzip | tar extraction: rc=0
+130 PNGs + theme.conf + provenance.json + LICENSE extracted from the native home filesystem; all byte-identical to production assets.
+Missing-assets directory rename: rc=0; Scribe text menu remained usable; default folder restored.

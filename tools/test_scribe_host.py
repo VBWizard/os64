@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Drive the real Scribe on the host: scribe.c and its buffer, libui, the
 provider and the real engine against the shipped faces. The window system,
-the session theme and the disk are stubbed in tools/test_scribe_host.c.
+the session theme, icon theme and the disk are stubbed in tools/test_scribe_host.c.
 --menus adds Scribe/grootmenu integration with deterministic native queues."""
 import argparse,os,runpy,subprocess,tempfile
 from pathlib import Path
@@ -9,7 +9,7 @@ ROOT=Path(__file__).resolve().parent.parent
 p=argparse.ArgumentParser();p.add_argument('-O',default='2');p.add_argument('--menus',action='store_true');p.add_argument('--output',type=Path);a=p.parse_args()
 out=a.output or Path(tempfile.mkdtemp(prefix='os64-scribe-'));out.mkdir(parents=True,exist_ok=True)
 flags=['-std=c11','-O'+a.O,'-g','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-fno-sanitize-recover=all','-fno-omit-frame-pointer','-ffunction-sections','-fdata-sections','-Wl,--gc-sections']
-flags+=['-I'+str(ROOT/path) for path in ['userland/libos64/include','userland/libos64','abi/include','tools/fonts','userland/apps/scribe']]
+flags+=['-I'+str(ROOT/path) for path in ['userland/libos64/include','userland/libimage/include','userland/libos64','abi/include','tools/fonts','userland/apps/scribe']]
 objects=[]
 upstream,port=runpy.run_path(str(ROOT/'tools/test_freetype_host.py'))['sources']()
 for n,source in enumerate(upstream+port):

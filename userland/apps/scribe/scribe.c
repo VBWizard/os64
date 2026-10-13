@@ -26,6 +26,7 @@
 #include "os64/mem.h"
 #include "scribe_buf.h"
 #include "scribe.h"
+#include "image/icon_theme.h"
 
 #define SCRIBE_PATH_MAX  256
 #define SCRIBE_STATUS_MAX 96
@@ -51,6 +52,7 @@ typedef struct
     os64_ui_actions_t *actions;
     os64_ui_action_view_t *action_views[2]; // document and entry field
     os64_ui_menu_session_t *menus;
+    os64_icon_theme_t *icon_theme;
     os64_ui_dispatcher_t dispatcher;
     os64_ui_shortcut_router_t shortcuts;
     unsigned editing_target;
@@ -886,17 +888,17 @@ static bool context_menu(os64_ui_widget_t *w, const os64_gui_event_t *ev, void *
 static bool build_actions(void)
 {
     static const os64_ui_action_spec_t specs[] = {
-        {ACT_OPEN,OS64_UI_ACTION_COMMAND,0,"Open","Open a file",NULL,'o',{'o',OS64_GUI_MOD_CTRL}},
-        {ACT_SAVE,OS64_UI_ACTION_COMMAND,0,"Save","Save the document",NULL,'s',{'s',OS64_GUI_MOD_CTRL}},
-        {ACT_SAVEAS,OS64_UI_ACTION_COMMAND,0,"Save As","Save under a file name",NULL,'a',{0,0}},
-        {ACT_QUIT,OS64_UI_ACTION_COMMAND,0,"Quit","Ask before discarding unsaved changes",NULL,'q',{'q',OS64_GUI_MOD_CTRL}},
-        {ACT_CUT,OS64_UI_ACTION_COMMAND,0,"Cut","Copy selection, then remove it",NULL,'t',{'x',OS64_GUI_MOD_CTRL}},
-        {ACT_COPY,OS64_UI_ACTION_COMMAND,0,"Copy","Copy selection to the clipboard",NULL,'c',{'c',OS64_GUI_MOD_CTRL}},
-        {ACT_PASTE,OS64_UI_ACTION_COMMAND,0,"Paste","Paste into the selected editing target",NULL,'p',{'v',OS64_GUI_MOD_CTRL}},
-        {ACT_FIND,OS64_UI_ACTION_COMMAND,0,"Find","Find text in the document",NULL,'f',{'f',OS64_GUI_MOD_CTRL}},
+        {ACT_OPEN,OS64_UI_ACTION_COMMAND,0,"Open","Open a file","document-open",'o',{'o',OS64_GUI_MOD_CTRL}},
+        {ACT_SAVE,OS64_UI_ACTION_COMMAND,0,"Save","Save the document","document-save",'s',{'s',OS64_GUI_MOD_CTRL}},
+        {ACT_SAVEAS,OS64_UI_ACTION_COMMAND,0,"Save As","Save under a file name","document-save-as",'a',{0,0}},
+        {ACT_QUIT,OS64_UI_ACTION_COMMAND,0,"Quit","Ask before discarding unsaved changes","window-close",'q',{'q',OS64_GUI_MOD_CTRL}},
+        {ACT_CUT,OS64_UI_ACTION_COMMAND,0,"Cut","Copy selection, then remove it","edit-cut",'t',{'x',OS64_GUI_MOD_CTRL}},
+        {ACT_COPY,OS64_UI_ACTION_COMMAND,0,"Copy","Copy selection to the clipboard","edit-copy",'c',{'c',OS64_GUI_MOD_CTRL}},
+        {ACT_PASTE,OS64_UI_ACTION_COMMAND,0,"Paste","Paste into the selected editing target","edit-paste",'p',{'v',OS64_GUI_MOD_CTRL}},
+        {ACT_FIND,OS64_UI_ACTION_COMMAND,0,"Find","Find text in the document","search",'f',{'f',OS64_GUI_MOD_CTRL}},
         {ACT_BAR,OS64_UI_ACTION_TOGGLE,0,"Show Menu Bar","Recover with Alt, F10 or right-click",NULL,'m',{0,0}},
         {ACT_STATUS,OS64_UI_ACTION_TOGGLE,0,"Show Status Bar","Show file information and notices",NULL,'s',{0,0}},
-        {ACT_HELP,OS64_UI_ACTION_COMMAND,0,"Scribe Guide","Read the editor's guide",NULL,'g',{'g',OS64_GUI_MOD_CTRL}}
+        {ACT_HELP,OS64_UI_ACTION_COMMAND,0,"Scribe Guide","Read the editor's guide","help",'g',{'g',OS64_GUI_MOD_CTRL}}
     };
     const os64_ui_action_callbacks_t callbacks = {action_query,action_invoke};
     if (os64_ui_actions_create(specs,sizeof(specs)/sizeof(*specs),&callbacks,NULL,&g.actions)) return false;
@@ -933,6 +935,10 @@ static bool scribe_dispose(void)
         (void)os64_ui_action_view_destroy(g.action_views[i]); g.action_views[i]=NULL;
     }
     if (g.actions) { (void)os64_ui_actions_destroy(g.actions); g.actions=NULL; }
+    if (g.icon_theme) {
+        if (os64_icon_theme_destroy(g.icon_theme) != OS64_UI_OK) return false;
+        g.icon_theme = NULL;
+    }
     if (os64_ui_font_release(&g.ui) != OS64_FONT_OK) return false;
     sbuf_free(&g.buf);
     return true;
@@ -967,7 +973,8 @@ static bool attach_menus(const os64_ui_window_backend_t *backend)
     os64_ui_dispatcher_init(&g.dispatcher,backend);
     g.dispatcher.observe=observe;
     if (os64_ui_dispatcher_add(&g.dispatcher,g.win,&g.ui,commands,paint,NULL) ||
-        os64_ui_menu_session_create(&g.dispatcher,&g.ui,g.win,&g.bar,&g.status,NULL,&g.menus)) return false;
+        os64_ui_menu_session_create(&g.dispatcher,&g.ui,g.win,&g.bar,&g.status,
+            g.icon_theme ? os64_icon_theme_provider(g.icon_theme) : NULL,&g.menus)) return false;
     os64_ui_menu_hooks(g.menus,menu_layout,menu_error,NULL);
     os64_ui_menu_focus_fallback(g.menus,&g.view.w);
     return os64_ui_menu_bar_view(g.menus,g.action_views[0]) == OS64_UI_OK;
@@ -1053,6 +1060,7 @@ int scribe_main(int argc, char **argv, const scribe_hooks_t *hooks)
         hooks->ready(&g.ui, hooks->user);
 
     g.hooks = hooks;
+    (void)os64_icon_theme_create(&g.icon_theme);
     if (!attach_menus(NULL)) {
         os64_hprintf(OS64_STDERR,"scribe: menu initialization refused\n");
         (void)scribe_dispose();

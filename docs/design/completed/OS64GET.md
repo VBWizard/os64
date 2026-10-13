@@ -24,14 +24,18 @@ Finish the build on the host, then start the server from the repository root:
 
 ```sh
 make
-python3 tools/os64serve.py userland/bin userland/bin/tests=tests userland/bin/pages=pages kernel/bin=kernelbin etc frames=frames
+python3 tools/os64serve.py userland/bin userland/bin/tests=tests userland/bin/pages=pages kernel/bin=kernelbin etc frames=frames assets/icons/default=icons
 ```
 
 This offers applications, shared libraries, test programs, the kernel and
-its build outputs, system configuration, and Frame Studio compositions. The `tests` and `kernelbin`
+its build outputs, system configuration, Frame Studio compositions and default icon artwork. The `tests` and `kernelbin`
 labels matter: they let the shipped client configuration send fixtures to
 `/tests` while more specific rules send the kernel and libraries elsewhere.
 Serving `userland/bin` alone does not include its `tests` subdirectory.
+For the icon collection, use `@icons/* = /etc/icons/default`; an ordinary
+`@icons` loses to the PNG/config suffix rules. Existing installations need the
+new client and destination directory before a bulk refresh; follow the
+[icon update bootstrap](../../../assets/icons/README.md#p5-updates-through-os64get).
 The `frames` lot routes to `/etc/frames`. On an existing installation, add
 `@frames = /etc/frames` to the effective `os64get.conf` before the first bulk
 refresh; see [the collection update instructions](../../../../FRAME_COLLECTION.md#p5-update).
@@ -124,9 +128,10 @@ Routing values name directories; the filename is appended unchanged.
 | Precedence | Example | Meaning |
 | --- | --- | --- |
 | 1: exact name | `os64_kernel = /fat/boot` | Match that filename. |
-| 2: suffix | `*.so = /lib` | Match that ending; this is not a general shell glob. |
-| 3: source lot | `@tests = /tests` | Match the server's label for the source directory. |
-| 4: default | `* = /bin` | Match files not claimed above. |
+| 2: whole source lot | `@icons/* = /etc/icons/default` | Keep the named collection together despite suffix rules. |
+| 3: suffix | `*.so = /lib` | Match that ending; this is not a general shell glob. |
+| 4: source lot | `@tests = /tests` | Match the server's label for the source directory. |
+| 5: default | `* = /bin` | Match files not claimed above. |
 
 Within a class the last matching rule wins. Thus `os64_kernel` from
 `kernel/bin=kernelbin` goes to `/fat/boot`, a `.so` from the same directory
@@ -321,7 +326,8 @@ python3.exe '\\wsl$\<distro>\home\<you>\src\os64\tools\os64serve.py' \
   '\\wsl$\<distro>\home\<you>\src\os64\userland\bin\pages=pages' \
   '\\wsl$\<distro>\home\<you>\src\os64\kernel\bin=kernelbin' \
   '\\wsl$\<distro>\home\<you>\src\os64\etc' \
-  '\\wsl$\<distro>\home\<you>\src\os64\frames=frames'
+  '\\wsl$\<distro>\home\<you>\src\os64\frames=frames' \
+  '\\wsl$\<distro>\home\<you>\src\os64\assets\icons\default=icons'
 ```
 
 Use an existing Windows-visible working directory; `/mnt/c/temp` is an
@@ -353,10 +359,10 @@ directory. The client also accepts older LIST entries without lot metadata.
 
 For batch service, use ASCII filenames without whitespace, at most 63 bytes,
 and lot labels without whitespace, at most 31 bytes. A catalogue can contain
-at most 256 files. Client pathname buffers allow 255 bytes, including expanded
+at most 1024 files. Client pathname buffers allow 255 bytes, including expanded
 scratch and backup paths, so the usable destination length can be shorter.
-Configuration has 16 slots per exact-name, suffix, and lot rule class, with
-directory values of at most 127 bytes. These are implementation limits, not
+Configuration has 16 slots per exact-name, suffix, and lot table (both lot
+forms share the lot table), with directory values of at most 127 bytes. These are implementation limits, not
 filesystem limits.
 
 ## HTTP and HTTPS downloads

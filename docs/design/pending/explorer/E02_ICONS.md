@@ -2,17 +2,19 @@
 
 ## Status and ownership
 
-- **State:** Designing, 2026-10-11. Engineering direction drafted; visual family
-  awaits Chris's choice. E1B implements the provider boundary and drawing
-  helper; no file-backed catalog or artwork has been produced.
-- **Design owner:** Quinn. Implementation/asset production owners: unassigned.
-- **Branch:** `codex/explorer-design`, local worktree `.worktrees/explorer-design`.
-  Inspected `userland`: `6d988565`. Refresh dependencies before implementation.
-- **Prerequisite:** E1's optional icon-provider contract. Provider/core work can
-  proceed independently of E1K; native-menu integration waits for E1B.
+- **State:** Reviewing in `codex/explorer-e2`, 2026-10-13, based on
+  E1C merge `faa321a5`. [PR #261](https://github.com/VBWizard/os64/pull/261)
+  is open against `userland`; the branch is pushed.
+  Host, asset, FAT/ext2 packaging and QEMU checks pass;
+  [E2 evidence](evidence/e02/README.md) records their scope. Installed P5
+  gallery visual acceptance is confirmed by Chris; review fixes follow that
+  hardware report.
+- **Design owner:** Quinn. Chris approved the Roam Classic visual direction and
+  original image generation.
+- **Prerequisite:** E1's optional icon-provider contract is available.
 - **Fable review:** not required for this userland asset/provider design. A
   kernel change discovered during implementation must be scoped separately.
-- **Requirements:** D002/D010/D011 in [DECISIONS.md](DECISIONS.md).
+- **Requirements:** D002/D010/D011/D016 in [DECISIONS.md](DECISIONS.md).
 
 ## Outcome and scope
 
@@ -84,8 +86,7 @@ letters/digits/hyphen with an initial letter. Slashes, dots, whitespace and
 control characters are invalid. Do not concatenate an unvalidated filename or
 extension into an asset path.
 
-Initial authored sizes: **16, 24, 32, 48 and 64 pixels square**. These are
-engineering defaults, subject to the visual review before asset production.
+Export sizes: **16, 24, 32, 48 and 64 pixels square**.
 Menu slot size uses the smallest bucket at least as large as the Interface
 line height, capped at 32 px; font heights beyond that enlarge the row without
 forcing a giant menu icon. Toolbars use an explicitly chosen bucket; the
@@ -96,23 +97,40 @@ variants in descending order and center the returned raster in the requested
 slot without upscaling. Do not stretch a 16 px image into a blurry desktop
 icon. If no usable variant exists, return MISSING; generic fallback is handled
 as described below. The initial shipped family supplies every listed size.
-Raster scaling/resampling is not required to ship E2.
+Runtime raster scaling is not used; the build tool resamples the source masters.
 
-Default shipped asset root: `/etc/icons/default/`, supplied explicitly when
-creating the catalog. Read `<key>-<size>.png`; the validated root is an absolute
-bounded path and checked composition must fit `OS64_CONF_PATH_MAX`. Shipped
-icons are assets, not a second interpretation of the config ladder. User theme
-packs/overrides and icon-theme configuration are deferred; accepting an explicit
-root in the provider keeps those future policies outside widget code.
+The shipped set is installed at `/etc/icons/default/`. Each set is an extracted
+folder containing `theme.conf` (`format = 1`, `name = ...`, `author = ...`) and
+fixed `<key>-<size>.png` filenames. The resolver finds `icons.conf` on the
+standard config ladder; `set = /home/icons/roam-classic` selects an absolute
+folder path. Creation returns `OS64_UI_NO_MEMORY` on allocation failure and
+`OS64_UI_ERROR` on detected I/O failure reading either manifest or `icons.conf`;
+no theme is returned, permitting retry. Selected catalog construction failures
+also propagate. It rejects a selected folder with a missing or invalid manifest
+and uses the shipped default. A selected set that lacks a requested icon uses
+the default set for that icon. Other selected-set errors retain their typed
+status, including malformed PNG and I/O failure. No manifest path mapping,
+GUI chooser or live switch is provided. A new application instance reads the
+current selection; an existing instance keeps its catalog and leases until
+teardown. Archives are extracted before selection.
+
+The existing open/stat ABI cannot distinguish every failed lookup from absence.
+After an open failure, successful stat produces retryable IO; failed stat maps
+to MISSING and may use default artwork. This limitation is confined to lookup
+failures; decode errors and failures after a successful open retain typed status.
 
 ## Resource limits and fallback behavior
 
-Per provider defaults: 2 MiB retained pixel budget and at most 256 positive or
-negative lookup records. Both leased and unleased decoded pixels count toward
-the budget. A fully leased cache returns LIMIT rather than invalidating a
-visible icon. Bound LRU bookkeeping/string storage separately (64 KiB). Checked
-dimensions, strides, byte counts and allocator overhead must be included in
-the implementation's accounting; the limits are ceilings, not preallocations.
+Each catalog has a 2 MiB retained pixel budget, 256 positive or negative lookup
+records, and a 64 KiB catalog metadata bound. The selected/default resolver may
+hold two catalogs: at most 4 MiB retained pixels and 128 KiB catalog metadata.
+The resolver's object and live lease-routing records have a separate 64 KiB
+bound, charged using actual heap block capacity and allocator headers. Live
+route count is limited by that byte budget and a compile-time maximum below
+1024. Both leased and unleased decoded pixels count toward the pixel budget.
+A fully leased cache returns LIMIT rather than invalidating a visible icon.
+Checked dimensions, strides, byte counts and allocator overhead are included
+in accounting; these limits are ceilings, not preallocations.
 
 For each file: encoded size at most 64 KiB; PNG only; dimensions must match the
 selected source-size bucket; decoded pixel cap at most 64 × 64. Verify the
@@ -133,7 +151,7 @@ storage before installing it; it is not double-counted as a second pixel copy.
 Evict unleased least-recently-used entries to fit a load. If load fails, keep
 existing leased entries and return a typed error. Negative-cache missing/bad
 assets within the same bounded record budget to avoid rereading them on every
-menu open. Transient NO_MEMORY/LIMIT failures are not permanent negative cache
+menu open. Transient IO/NO_MEMORY/LIMIT failures are not permanent negative cache
 entries. A new provider generation or explicit cache refresh permits retry
 after asset installation. Rate-limit diagnostics by key/generation.
 
@@ -157,12 +175,11 @@ in adjacent controls. Bad or missing artwork must not erase the command label.
 
 ## Initial asset inventory and visual review
 
-Choose a small recognizable family together with Chris before generating or
-importing the production files. A contact sheet should show actual 16/24/32 px
-rendering alongside 48/64 px examples on light, dark and selected backgrounds.
-Readable silhouettes at small sizes matter more than detail visible only in
-a large mockup. Keep shape/color identity consistent across sizes while allowing
-hand-tuned simpler artwork at small sizes.
+Chris selected Roam Classic, an original generated raster family. The 26-key
+inventory below is being exported at five sizes, targeting 130 transparent PNG
+files. The 16/24/32/48/64 px files are derived from generated 256 px raster masters;
+they are not independently hand-drawn small variants. The contact sheet must
+show the shipped pixels at native size on light, dark and selected backgrounds.
 
 | Family | Initial semantic keys |
 | --- | --- |
@@ -173,19 +190,18 @@ hand-tuned simpler artwork at small sizes.
 | Information | `search`, `help`, `settings` |
 | Views | `view-details`, `view-icons`, `view-preview`, `view-split`, `tab-new`, `window-close` |
 
-This is the initial proposed inventory; record additions/removals during visual
-review. Specialized application branding and richer file-type families can be
+Specialized application branding and richer file-type families can be
 added with real consumers. A generic app icon is preferable to inventing a
 misleading logo for each existing program. No icon means that an unavailable
 operation has suddenly become supported.
 
-Store source/master material, final PNGs and a provenance manifest under a
-dedicated repository asset directory, proposed `assets/icons/default/`. The
-manifest lists key, sizes, source/license or generated origin and transformations.
-Use transparent backgrounds. Generated raster artwork uses the available image
-generation workflow when production is authorized; existing vector assets, if
-chosen instead, retain reproducible source. No artwork is generated by this
-design document. Confirm visual choice before spending time on the whole set.
+Store installed PNGs and `theme.conf` in `assets/icons/default/`, 256 px masters
+and `generation.json` in `assets/icons/sources/default/`, and export records in
+`assets/icons/default/provenance.json`. The masters were made with OpenAI's
+built-in image generation, without external artwork. The shipped files carry
+the repository's MIT license to the extent rights allow; this is no promise of
+exclusive rights to generated material. Export transformations and validation
+are recorded in provenance. See [icon set installation](../../../../assets/icons/README.md).
 
 ## Consumer and packaging integration
 
@@ -207,9 +223,12 @@ a desktop implementation or an excuse to modify the wallpaper application.
 
 ## Acceptance and evidence
 
-E1B tests the in-memory provider boundary and drawing helper with synthetic
-pixels. File-backed catalog and asset acceptance remain E2 work. Required E2
-evidence:
+E1B tested the in-memory provider boundary and drawing helper with synthetic
+pixels. E2 host tests, asset checks, FAT/ext2 packaging and QEMU checks pass;
+Chris confirms the installed P5 gallery visually accepted, including disabled
+rendering. The report predates the manifest error-handling review fix. Results
+and limitations are in
+[evidence/e02/README.md](evidence/e02/README.md). Required E2 evidence:
 
 | Environment | Check |
 | --- | --- |
@@ -226,10 +245,10 @@ caps are separate acceptance assertions.
 
 ## Handoff
 
-E1B supplies the small provider/lease/draw interface in `os64/ui_icon.h`; its
-gallery uses synthetic fixtures without image decoding. Next: implement the
-file-backed catalog and verify the measured
-temporary allocation budget in its harness, and present a small visual contact sheet for
-Chris's style choice before producing the full family. Native menu adoption
-waits for E1B; larger gallery examples need no kernel work. Record design and
-visual approval separately from implementation/test/installation status.
+The provider and resolver are implemented in libimage over the E1 interface in
+libos64. E2A and E2B share this PR, with separate host/provider and artwork/native
+evidence. Next: review of the manifest error-handling correction. Chris has
+confirmed the P5 gallery visually accepted. The installable-set
+archive can be rebuilt with `tools/build_icon_assets.py --archive PATH`; see
+[installation instructions](../../../../assets/icons/README.md). Native archive
+extraction, folder selection and partial-set fallback are verified.

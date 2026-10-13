@@ -286,6 +286,10 @@ static void grootmenu_models_and_launch(void)
 {
     current="grootmenu adapter";
     (void)grootmenu_main;
+    CHECK(os64_streq(command_icon("/bin/scribe /home/notes"),"file"));
+    CHECK(os64_streq(command_icon("/bin/appearance"),"settings"));
+    CHECK(os64_streq(command_icon("/bin/gterm /bin/appearance"),"app"));
+    CHECK(os64_streq(command_icon("/bin/scribe-helper"),"app"));
     CHECK(load_config(NULL)==OS64_MENU_NO_FILE);
     CHECK(load_config("menu root {\n menu Missing nope\n}\n")==OS64_MENU_UNRESOLVED);
     CHECK(load_config("menu root {\n}\n")==OS64_MENU_OK);

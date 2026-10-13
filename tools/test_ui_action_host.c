@@ -1,10 +1,18 @@
 /* Production action/status widgets and gallery driven with the existing font
- * fixtures and allocation injector. Window/file I/O is stubbed, not libui. */
+ * fixtures and allocation injector. Window/file I/O and the icon theme are
+ * stubbed, not libui. */
 #define main ui_action_unused_text_suite
 #include "test_ui_text_host.c"
 #undef main
 #define UI_ACTION_HOST
 #include "../userland/tests/actiongallery/actiongallery.c"
+
+os64_ui_status_code_t os64_icon_theme_create(os64_icon_theme_t **out)
+{ *out=NULL; return OS64_UI_NO_MEMORY; }
+const os64_ui_icon_provider_t *os64_icon_theme_provider(os64_icon_theme_t *theme)
+{ (void)theme; return NULL; }
+os64_ui_status_code_t os64_icon_theme_destroy(os64_icon_theme_t *theme)
+{ (void)theme; return OS64_UI_OK; }
 
 void os64_ui_theme_current(os64_ui_theme_t *t, uint64_t *installed)
 { *t=(os64_ui_theme_t){.pad=6,.gap=6,.button_h=28,.font_w=8,.font_h=16,

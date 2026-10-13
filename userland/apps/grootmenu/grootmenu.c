@@ -9,6 +9,7 @@
 #include "os64/io.h"
 #include "os64/fmt.h"
 #include "os64/str.h"
+#include "image/icon_theme.h"
 
 #define ARGV_MAX 16
 static os64_menu_t gMenu;
@@ -17,10 +18,24 @@ static os64_ui_actions_t *actions;
 static os64_ui_action_view_t *view;
 static os64_ui_menu_session_t *session;
 static os64_ui_dispatcher_t dispatcher;
+static os64_icon_theme_t *icon_theme;
 /* Cache by first node, so references share models instead of expanding a DAG. */
 static os64_ui_menu_model_t *models[OS64_MENU_NODES_MAX];
 static bool building[OS64_MENU_NODES_MAX];
 static bool failed, error_reported;
+
+static const char *command_icon(const char *command)
+{
+    char buf[OS64_MENU_COMMAND_MAX];
+    char *argv[ARGV_MAX];
+    int64_t argc = os64_menu_argv(command, buf, sizeof(buf), argv, ARGV_MAX);
+    if (argc <= 0) return "app";
+    if (os64_streq(argv[0], "/bin/scribe")) return "file";
+    if (os64_streq(argv[0], "/bin/controlcenter") ||
+        os64_streq(argv[0], "/bin/appearance") ||
+        os64_streq(argv[0], "/bin/mousesettings")) return "settings";
+    return "app";
+}
 
 static void launch(const os64_menu_node_t *node)
 {
@@ -100,7 +115,8 @@ static os64_ui_status_code_t build(int16_t first)
     size_t count = 0;
     for (unsigned i = 0; i < gMenu.count; ++i)
         if (gMenu.nodes[i].kind == OS64_MENU_ITEM)
-            specs[count++] = (os64_ui_action_spec_t){.id=i+1, .label=gMenu.nodes[i].label};
+            specs[count++] = (os64_ui_action_spec_t){.id=i+1, .label=gMenu.nodes[i].label,
+                .icon=command_icon(gMenu.nodes[i].command)};
     if (!count) return OS64_UI_EMPTY;
     const os64_ui_action_callbacks_t callbacks = {query, invoke};
     os64_ui_status_code_t rc = os64_ui_actions_create(specs,count,&callbacks,NULL,&actions);
@@ -137,6 +153,10 @@ static bool dispose(void)
     }
     if (view) { (void)os64_ui_action_view_destroy(view); view = NULL; }
     if (actions) { (void)os64_ui_actions_destroy(actions); actions = NULL; }
+    if (icon_theme) {
+        if (os64_icon_theme_destroy(icon_theme) != OS64_UI_OK) return false;
+        icon_theme = NULL;
+    }
     return os64_ui_font_release(&ui) == OS64_FONT_OK;
 }
 
@@ -188,8 +208,10 @@ static int grootmenu_main(int argc, char **argv)
     }
     os64_ui_init(&ui, NULL);
     os64_ui_dispatcher_init(&dispatcher, NULL);
+    (void)os64_icon_theme_create(&icon_theme);
     os64_ui_status_code_t rc = build(first);
-    if (!rc) rc = os64_ui_menu_session_create(&dispatcher,&ui,0,NULL,NULL,NULL,&session);
+    if (!rc) rc = os64_ui_menu_session_create(&dispatcher,&ui,0,NULL,NULL,
+        icon_theme ? os64_icon_theme_provider(icon_theme) : NULL,&session);
     if (!rc) {
         os64_ui_menu_hooks(session,NULL,launcher_error,NULL);
         /* Popups borrow this host's configured Interface font context. */

@@ -684,3 +684,74 @@ launcher, stale Scribe scrollbar ranges after chrome changes, and duplicate
 startup popup error diagnostics. The consumer harness now covers each case.
 Host suites pass 4,072 checks with ASan/UBSan/LSan; cross-builds and focused
 QEMU checks pass. Evidence and limits: `evidence/e01c/README.md`, Review 1.
+
+
+## 2026-10-13 — E1C merged; E2 icons and installable sets
+
+E1C PR #260 passed its final review and merged as `faa321a5`. Chris approved
+the generated classic colorful icon preview and authorized E2 shipment. He
+added installable icon sets: an extracted folder plus configuration selects
+another family without changing apps. D016 records the product choice and
+engineering details.
+
+E2 in `codex/explorer-e2` supplies a bounded PNG catalog, manifest/config
+resolver, selected-to-default fallback, 26 generated source masters and 130
+production exports, provenance, deterministic archive builder, menu consumers
+and a larger-icon gallery. Sol handled provider, resolver and consumer work;
+Quinn coordinated contracts, artwork, integration and validation. Files were
+partitioned in the shared E2 worktree for this delegated packet.
+
+Host tests pass with ASan/UBSan and leak detection enabled outside the sandbox.
+FAT/ext2 recipes install byte-identical assets and final libimage. Os64's own
+`gunzip | tar` successfully extracts the archive; native files match source.
+QEMU verifies installed/partial sets, light/dark and selection/disabled states,
+Scribe at Interface 16/32, desktop menu icons and missing-art text fallback.
+[E2 evidence](evidence/e02/README.md) records exact scope and final binary hashes.
+The open/stat ABI's ambiguous failed lookup is documented; no kernel change is
+part of E2. Next: ordinary PR review and Chris's installed P5 acceptance.
+
+Publication: E2A `8d01acc3` and E2B `d63809c9` are pushed;
+[PR #261](https://github.com/VBWizard/os64/pull/261) is open against `userland`.
+No merge has been performed. The scratch QEMU instance is stopped.
+
+
+## 2026-10-13 — P5 icon delivery correction
+
+Chris ran the larger-icon gallery on P5 and found no artwork. E2 omitted the
+os64get serving/routing path despite passing disk-image packaging checks.
+Added `assets/icons/default=icons` to serving examples and `@icons/*` to the
+shipped routing map; this explicit whole-lot rule outranks suffix rules while
+exact names retain priority. Ordinary `@lot` semantics are unchanged.
+Documented first-update client bootstrap and destination creation. Corrected
+the server comment that incorrectly claimed collections cannot share names,
+and the guide's stale 256-file limit (the installer allows 1024).
+
+The regression fails before the fix, passes with ASan/UBSan/LSan afterward,
+and checks all 133 shipped filenames against the config. Single/batch smoke
+tests and cross-build pass. Native QEMU os64get downloads 133 files with exit 0;
+readback matches source bytes and the gallery renders that downloaded set.
+Evidence: `evidence/e02/wire/`. Follow-up goes into PR #261; P5 retest pending.
+
+
+## 2026-10-13 — P5 gallery acceptance and E2 review 1
+
+Chris confirms the installed P5 icon gallery is visually accepted, with an
+explicit thumbs-up for the disabled app icon. This user-reported acceptance
+follows the os64get delivery fix `a3602b30`; no installed binary hash was
+captured. It precedes this review correction.
+
+PR #261 has one P2: transient manifest read/parse failures were collapsed into
+invalid-manifest fallback, silently replacing the selected set for the app's
+lifetime. Reproduced before editing production code. The manifest helper now
+returns a typed result; creation preserves NO_MEMORY and detected I/O failures
+for both default and selected manifests, and for icons.conf. The output stays
+NULL with temporary state cleaned up; retry can recover the selected family.
+Selected catalog construction failures propagate too. Missing/invalid
+manifest fallback remains; failed open plus failed stat retains the existing
+ABI ambiguity documented by E2. The host allocation sweep covers real config
+and manifest parser buffers, and selected/default read faults exercise retry.
+
+Review validation: both host suites pass ASan/UBSan/LSan; affected library and
+consumers cross-build. Native QEMU gallery smoke check passes with the revised
+library and downloaded set; the staged library matches its recorded hash.
+The scratch VM is stopped. Receipts: `evidence/e02/review-r1/`.
