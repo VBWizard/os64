@@ -118,18 +118,26 @@ possible the day it matters — ext2 replacement rename is atomic, and the
 policy-bearing syscall can require that guarantee — booked, not built: v1's
 honest failure mode is the same as quill's.
 
-## Chrome (RULED: button row, not menu bar)
+## Chrome
 
-One row of libui buttons: **Open**, **Save**, **Save As**. Open and Save As
-reveal a ui_textfield for the path (type it; a file PICKER is a directory
-browser and its own control — booked). "If we hate it we'll change it to a
-menu bar" — his ruling, so the row is built as a widget strip that a menu
-bar could replace without touching the textview.
+The shared File/Edit/View/Help menu bar and Open/Save/Save As toolbar invoke
+one action registry. Open and Save As reveal the existing path textfield;
+a file picker remains separate work. Edit commands retain the editing target
+that opened the menu, so path/search-field clipboard commands cannot drift
+into the document when a native popup takes focus.
 
-Dirty state: the title shows `scribe — <file> *` when unsaved changes exist
-(the window title is the one place the window system already owns). No
-"are you sure" dialog in v1 — there is no dialog machinery and building it
-for a guard rail inverts the priority; quill's user knows what Save is.
+The bottom status widget holds file/dirty/line information, menu help, and
+operation notices. View independently hides the menu and status bars and
+reclaims their space. Alt/F10 temporarily reveal a hidden menu; right-click
+or Shift+F10 opens editing commands and Show Menu Bar without moving the
+caret or replacing the selection. A new operation notice re-shows hidden
+status so an error or save/discard prompt remains visible.
+
+Quit and Alt+F4 retain the existing unsaved-changes flow: Enter saves through
+the filename field; a second Ctrl+Q while the prompt is active discards.
+Save failures leave the prompt and document intact. Escape is offered to the
+menu controller before help/field/document behavior. The Interface and
+Document font roles remain independent.
 
 ## Input it needs (all already delivered)
 

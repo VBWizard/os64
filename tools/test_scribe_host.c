@@ -196,8 +196,7 @@ static void sh_scribe(uint32_t size, const char *doc, size_t len)
 
 static void sh_close(void)
 {
-    CHECK(os64_ui_font_release(&g.ui) == OS64_FONT_OK);
-    sbuf_free(&g.buf);
+    CHECK(scribe_dispose());
 }
 
 /* The document as a file: what sbuf_save would write, byte for byte. */
@@ -1180,7 +1179,7 @@ static void field_paste_cuts_at_letters(void)
     current = "";
 }
 
-int main(int argc, char **argv)
+int scribe_host_tests(int argc, char **argv)
 {
     sh_dir = argc > 1 ? argv[1] : "userland/libfreetype/fixtures";
     (void)ui_test_suite_main;
@@ -1202,3 +1201,7 @@ int main(int argc, char **argv)
     printf("test_scribe_host: %lu checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }
+
+#ifndef SCRIBE_MENU_HOST
+int main(int argc, char **argv) { return scribe_host_tests(argc,argv); }
+#endif

@@ -51,7 +51,7 @@ Paths are relative to the repository root, at the inspected revision above.
 
 | Existing code | Consequence |
 | --- | --- |
-| `userland/apps/grootmenu/grootmenu.c`, `paint_row`, `open_level`, `handle` | Private native windows and direct bitmap text; app-level cascade logic. Theme colors are shared, Interface font is not. |
+| Pre-E1C `userland/apps/grootmenu/grootmenu.c` private painter/cascade controller | Private native windows and direct bitmap text; app-level cascade logic. Theme colors are shared, Interface font is not. |
 | `userland/libos64/include/os64/menu.h`, `userland/libos64/menu.c` | Launcher grammar and argv conversion, not a widget. Preserve parser behavior and bounds. |
 | `userland/libos64/ui.c`, `os64_ui_dispatch` | One UI tree; mouse-down dispatch currently accepts left button only. Add explicit context invocation, not a broad change making existing buttons accept right clicks. |
 | `userland/libos64/ui_text.c`, `os64_ui_decode_key` | Arrow/edit keys arrive in escape bursts; real Escape has a distinct physical code. Reuse the decoder and test both PS/2 and HID. |

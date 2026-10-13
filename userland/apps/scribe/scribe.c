@@ -19,6 +19,7 @@
 #include "os64/gui.h"
 #include "os64/draw.h"
 #include "os64/ui.h"
+#include "os64/ui_menu.h"
 #include "os64/str.h"
 #include "os64/fmt.h"
 #include "os64/io.h"
@@ -29,14 +30,8 @@
 #define SCRIBE_PATH_MAX  256
 #define SCRIBE_STATUS_MAX 96
 
-// What the one entry field currently means. One field, one label naming its
-// mode — a menu bar's worth of dialogs in two widgets (his ruling: button
-// row; "if we hate it we'll change it").
-// MODE_QUITSAVE is MODE_SAVEAS with somewhere to be afterwards (2026-08-23):
-// the same one field, prefilled with the same current path, but a successful
-// write ends the program instead of returning to it. A separate mode rather
-// than a "quitting" flag beside MODE_SAVEAS, because the field's Enter has to
-// mean something different and the label has to SAY so.
+// One field serves file names and searches. MODE_QUITSAVE saves before
+// exiting; its label and Enter behavior distinguish it from Save As.
 typedef enum { MODE_NONE, MODE_OPEN, MODE_SAVEAS, MODE_FIND, MODE_QUITSAVE } field_mode_t;
 
 typedef struct
@@ -49,7 +44,17 @@ typedef struct
     os64_ui_textbuf_t textbuf;      // template copy, user -> &buf
 
     os64_ui_widget_t root;
-    os64_ui_widget_t status;        // left: file, lines, dirty star, verdicts
+    os64_ui_status_t status;
+    uint64_t notice;
+    os64_ui_menubar_t bar;
+    os64_ui_menu_model_t *models[6];
+    os64_ui_actions_t *actions;
+    os64_ui_action_view_t *action_views[2]; // document and entry field
+    os64_ui_menu_session_t *menus;
+    os64_ui_dispatcher_t dispatcher;
+    os64_ui_shortcut_router_t shortcuts;
+    unsigned editing_target;
+    const scribe_hooks_t *hooks;
     os64_ui_widget_t btn_open, btn_save, btn_saveas;
     os64_ui_widget_t mode_label;    // names what the field means right now
     os64_ui_textfield_t field;
@@ -116,6 +121,8 @@ static const char *kHelpLines[] = {
     "  Backspace, Delete               erase (a selection, if one is lit)",
     "  Enter                           split the line",
     "  Ctrl+C, Ctrl+X, Ctrl+V          copy, cut, paste",
+    "  Alt or F10                     menus (even when hidden)",
+    "  Shift+F10 or right-click        editing context menu",
     "  Ctrl+S                          save",
     "  Ctrl+F                          find (Enter = next hit, wraps)",
     "  Ctrl+O                          open another file",
@@ -202,27 +209,29 @@ static const os64_ui_textbuf_t kHelpBuf = {
 static void status_show(const char *msg)
 {
     os64_strcopy(g.status_text, sizeof(g.status_text), msg);
-    os64_ui_mark_dirty(&g.ui, &g.status);
+    if (g.status.w.hidden) {
+        os64_ui_set_hidden(&g.ui,&g.status.w,false);
+        if (g.ui.on_resize) g.ui.on_resize(&g.ui);
+        os64_ui_mark_dirty(&g.ui,&g.root);
+    }
+    (void)os64_ui_status_notice(&g.status, g.status_text, &g.notice);
 }
 
 static void status_refresh(void)
 {
-    // ASCII dash on purpose: these strings render through the 8x16 PSF face,
-    // where a UTF-8 em-dash is three glyphs of mojibake (the FILE's bytes may
-    // be anything — that's honest; scribe's own chrome must not be).
-    // The ^G hint lives here permanently — the startup hint vanished with
-    // the first file load and took discoverability with it (his find).
     os64_snprintf(g.status_text, sizeof(g.status_text),
                   "%s%s - %lu lines  (^G help)",
                   g.path[0] ? g.path : "(unnamed)",
                   g.buf.dirty ? " *" : "",
                   (unsigned long)g.buf.count);
-    os64_ui_mark_dirty(&g.ui, &g.status);
+    (void)os64_ui_status_clear_notice(&g.status, g.notice);
+    (void)os64_ui_status_base(&g.status, g.status_text);
 }
 
 // ── layout ──────────────────────────────────────────────────────────────────
 // Manual bounds, recomputed on resize — layout is a call the app makes.
-// Row 1: status | Open | Save | Save As.  Row 2 (only in a field mode):
+// Menu bar, toolbar, optional entry field, document and bottom status bar.
+// The entry row (only in a field mode):
 // mode label | entry field.  Body: textview + scrollbar.
 
 // Every rectangle scribe's window is made of. Computed by one function and
@@ -232,7 +241,7 @@ static void status_refresh(void)
 // would have drawn.
 typedef struct
 {
-    os64_gui_rect_t status, btn_open, btn_save, btn_saveas;
+    os64_gui_rect_t bar, status, btn_open, btn_save, btn_saveas;
     os64_gui_rect_t mode_label, field, view, scroll, hscroll;
     bool bar2;
 } scribe_layout_t;
@@ -256,11 +265,8 @@ static os64_font_status_t button_width(os64_ui_t *ui, const char *caption,
 // window is wearing. It never touches a live widget, so the planner can ask
 // it a question it might not like the answer to.
 //
-// What gives when a face gets bigger: the STATUS LINE, which is the one
-// thing on the top row whose text can be cut short without losing a
-// control. The buttons keep their measured widths and the body keeps at
-// least one row. When even that will not fit, the answer is LIMIT — a
-// window that hides its own Save button to make a font fit has not fit it.
+// Buttons keep their measured widths and the document keeps at least one
+// row. A candidate that cannot fit those controls is refused atomically.
 static os64_font_status_t compute_layout(os64_ui_t *ui, scribe_layout_t *out)
 {
     const os64_ui_theme_t *t = &ui->theme;
@@ -279,13 +285,15 @@ static os64_font_status_t compute_layout(os64_ui_t *ui, scribe_layout_t *out)
     int32_t bx = W - pad - bw_saveas - bw_save - bw_open - 2 * gap;
     if (bx - 2 * pad < 0)
         return OS64_FONT_LIMIT;         // the buttons alone overrun the window
-    out->status     = (os64_gui_rect_t){ pad, pad, bx - 2 * pad, bh };
-    out->btn_open   = (os64_gui_rect_t){ bx, pad, bw_open, bh };
-    out->btn_save   = (os64_gui_rect_t){ bx + bw_open + gap, pad, bw_save, bh };
-    out->btn_saveas = (os64_gui_rect_t){ bx + bw_open + bw_save + 2 * gap,
-                                         pad, bw_saveas, bh };
-
-    int32_t y = pad + bh + gap;
+    int32_t mh = os64_ui_font_row_height(ui, OS64_FONT_ROLE_UI) + 6;
+    out->bar = (os64_gui_rect_t){pad,pad,W-2*pad,mh};
+    int32_t y = pad + (g.bar.w.hidden ? 0 : mh + gap);
+    out->btn_open   = (os64_gui_rect_t){ pad, y, bw_open, bh };
+    out->btn_save   = (os64_gui_rect_t){ pad + bw_open + gap, y, bw_save, bh };
+    out->btn_saveas = (os64_gui_rect_t){ pad + bw_open + bw_save + 2 * gap,
+                                         y, bw_saveas, bh };
+    out->status = (os64_gui_rect_t){pad,H-pad-bh,W-2*pad,bh};
+    y += bh + gap;
     out->bar2 = (g.mode != MODE_NONE);
     if (out->bar2) {
         // MEASURE the label instead of assuming it (2026-08-23): a flat
@@ -310,7 +318,8 @@ static os64_font_status_t compute_layout(os64_ui_t *ui, scribe_layout_t *out)
 
     // The body has to show at least one line of the DOCUMENT face.
     int32_t row = os64_ui_font_row_height(ui, OS64_FONT_ROLE_DOCUMENT);
-    int32_t body_h = H - y - pad - t->scroll_w - 2;
+    int32_t body_h = H - y - pad - t->scroll_w - 2 -
+        (g.status.w.hidden ? 0 : bh + gap);
     if (body_h < row + 4)
         return OS64_FONT_LIMIT;
     int32_t body_w = W - 2 * pad - t->scroll_w - 2;
@@ -332,7 +341,8 @@ static void place(os64_ui_widget_t *w, os64_gui_rect_t r, bool staged)
 
 static void apply_layout(const scribe_layout_t *l, bool staged)
 {
-    place(&g.status, l->status, staged);
+    place(&g.bar.w, l->bar, staged);
+    place(&g.status.w, l->status, staged);
     place(&g.btn_open, l->btn_open, staged);
     place(&g.btn_save, l->btn_save, staged);
     place(&g.btn_saveas, l->btn_saveas, staged);
@@ -682,10 +692,9 @@ static void request_quit(void)
     // enter_mode leaves the help page for us — being asked about a document
     // you cannot see would be a poor question.
     enter_mode(MODE_QUITSAVE, "save before quit:", g.path);
-    // Short enough to fit beside the buttons — the status widget's width ends
-    // where Open begins, so a longer line simply gets cut off there. The full
-    // rule (including Esc) lives on the help page, which is where a sentence
-    // that long belongs.
+    // Keep the save/discard prompt visible even when status was hidden.
+    os64_ui_set_hidden(&g.ui, &g.status.w, false);
+    relayout_all();
     status_show("unsaved changes - Enter saves, ^Q discards");
 }
 
@@ -802,95 +811,203 @@ static void click_saveas(os64_ui_widget_t *w, void *user)
     enter_mode(MODE_SAVEAS, "save as:", g.path);
 }
 
-// ── app-level shortcuts, intercepted BEFORE dispatch ────────────────────────
-// The driver already turned Ctrl+letter into its control code (1963's
-// design, working). Scribe owns document shortcuts; textfields handle their
-// own selection and clipboard chords. Returns true for an app command.
-
-static bool app_shortcut(const os64_gui_event_t *ev)
+// Actions retain the editing target that opened a menu. Native popup focus
+// and toolbar focus must not redirect a field's clipboard command to the file.
+enum { ACT_OPEN=1, ACT_SAVE, ACT_SAVEAS, ACT_QUIT, ACT_CUT, ACT_COPY,
+       ACT_PASTE, ACT_FIND, ACT_BAR, ACT_STATUS, ACT_HELP };
+static bool action_valid(void *cookie, uint64_t generation)
 {
-    if (ev->type != OS64_GUI_EVENT_KEY_DOWN)
-        return false;
-    // Esc leaves the help page from anywhere — before the widgets see it,
-    // because the textview would spend it on clearing a selection instead.
-    // os64_ui_key_is_esc, never a raw scancode compare: the Esc key speaks
-    // two dialects (PS/2 0x01, HID 0x29) and a burst's ESC byte speaks
-    // neither — the library predicate knows all of that so apps don't.
-    if (g.help_active && os64_ui_key_is_esc(ev)) {
-        help_leave();
-        return true;
+    return generation == 1 && (cookie == &g.view.w || cookie == &g.field.w);
+}
+static void action_release(void *cookie, uint64_t generation)
+{ (void)cookie; (void)generation; }
+static void action_query(void *app, const os64_ui_action_context_t *context,
+                         uint32_t id, os64_ui_action_state_t *state)
+{
+    (void)app;
+    bool field = context->cookie == &g.field.w;
+    state->enabled = true;
+    if (id == ACT_CUT || id == ACT_COPY || id == ACT_PASTE) {
+        state->enabled = field ? g.mode != MODE_NONE : true;
+        if (!field && g.help_active && id != ACT_COPY) state->enabled = false;
     }
-    if (!(ev->key.modifiers & OS64_GUI_MOD_CTRL))
-        return false;
-    switch (ev->key.ascii) {
-    // The clipboard trio. libui owns the mechanism (it knows the selection
-    // and the buffer); scribe owns the textview's keys. Field modes leave
-    // copy and cut to the focused field. The clipboard is /sys/clipboard, the
-    // system's one snarf buffer, which is why what leaves here also arrives
-    // in `cat /sys/clipboard` (CLIPBOARD.md).
-    case 0x03: {  // Ctrl+C — copy
-        if (g.mode != MODE_NONE)
-            return false;           // the field owns the keyboard right now
+    if (id == ACT_BAR) state->checked = !g.bar.w.hidden && !g.bar.temporary;
+    if (id == ACT_STATUS) state->checked = !g.status.w.hidden;
+}
+static void clipboard(unsigned id, bool field)
+{
+    if (field) {
+        // Reuse the field's editing path, including copy-before-cut and its
+        // change notification, without changing the logical focus or selection.
+        os64_gui_event_t e = {.type=OS64_GUI_EVENT_KEY_DOWN};
+        e.key.modifiers = OS64_GUI_MOD_CTRL;
+        e.key.ascii = id == ACT_CUT ? 24 : id == ACT_COPY ? 3 : 22;
+        (void)g.field.w.cls->event(&g.field.w,&g.ui,&e);
+    } else if (id == ACT_COPY) {
         int64_t n = os64_ui_textview_copy(&g.view);
         char msg[SCRIBE_STATUS_MAX];
         if (n > 0) {
-            os64_snprintf(msg, sizeof(msg), "copied %ld bytes  (^G help)",
-                          (long)n);
+            os64_snprintf(msg,sizeof(msg),"copied %ld bytes  (^G help)",(long)n);
             status_show(msg);
-        } else if (n < 0) {
-            // The kernel already said WHY on the console (a copy over the
-            // clipboard's ceiling announces itself there); this line is so
-            // the person watching the window knows nothing was copied.
-            status_show("copy refused - clipboard unchanged");
-        } else {
-            status_show("nothing selected");
-        }
-        return true;
+        } else status_show(n < 0 ? "copy refused - clipboard unchanged" : "nothing selected");
+    } else if (id == ACT_CUT) {
+        status_show(os64_ui_textview_cut(&g.ui,&g.view) ? "cut  (^G help)" : "nothing cut");
+    } else if (os64_ui_textview_paste(&g.ui,&g.view))
+        os64_ui_mark_dirty(&g.ui,&g.view.w);
+}
+static os64_ui_action_result_t action_invoke(void *app,
+    const os64_ui_action_context_t *context, uint32_t id)
+{
+    (void)app;
+    switch (id) {
+    case ACT_OPEN: click_open(NULL,NULL); break;
+    case ACT_SAVE: click_save(NULL,NULL); break;
+    case ACT_SAVEAS: click_saveas(NULL,NULL); break;
+    case ACT_QUIT: request_quit(); break;
+    case ACT_CUT: case ACT_COPY: case ACT_PASTE:
+        clipboard(id,context->cookie == &g.field.w); break;
+    case ACT_FIND: enter_mode(MODE_FIND,"find:",g.find_text); break;
+    case ACT_HELP: help_toggle(); break;
+    case ACT_BAR:
+        if (g.bar.temporary) { g.bar.temporary=false; g.bar.w.hidden=true; }
+        os64_ui_set_hidden(&g.ui,&g.bar.w,!g.bar.w.hidden);
+        relayout_all(); break;
+    case ACT_STATUS:
+        os64_ui_set_hidden(&g.ui,&g.status.w,!g.status.w.hidden);
+        relayout_all(); break;
+    default: return (os64_ui_action_result_t){OS64_UI_REFUSED,0};
     }
-    case 0x18: {  // Ctrl+X — cut (copy first; a failed copy cuts nothing)
-        if (g.mode != MODE_NONE)
-            return false;
-        if (os64_ui_textview_cut(&g.ui, &g.view))
-            status_show("cut  (^G help)");
-        else
-            status_show("nothing cut");
-        return true;
+    return (os64_ui_action_result_t){OS64_UI_OK,0};
+}
+static void action_target(void)
+{
+    if (os64_ui_menu_active(g.menus)) return;
+    if (g.ui.focus == &g.field.w) g.editing_target = 1;
+    else if (g.ui.focus == &g.view.w || g.mode == MODE_NONE) g.editing_target = 0;
+    if (g.menus) (void)os64_ui_menu_bar_view(g.menus,g.action_views[g.editing_target]);
+}
+static bool app_shortcut(const os64_gui_event_t *ev)
+{
+    if (ev->type == OS64_GUI_EVENT_KEY_DOWN && g.help_active && os64_ui_key_is_esc(ev)) {
+        help_leave(); return true;
     }
-    case 0x16:  // Ctrl+V — paste
-        if (g.mode != MODE_NONE) {
-            // A path or a search term, pasted into the field it belongs in.
-            os64_ui_textfield_paste(&g.ui, &g.field);
-            return true;
-        }
-        // A multi-line paste widens rows the way typing does: on_change
-        // measures those on screen, and the rest join the bar as they show.
-        if (os64_ui_textview_paste(&g.ui, &g.view))
-            os64_ui_mark_dirty(&g.ui, &g.view.w);
-        return true;
-
-    case 0x07:  // Ctrl+G — the guide (his commissioning order: a help
-                // screen "with all the normal stuff, including credits")
-        help_toggle();
-        return true;
-    case 0x13:  // Ctrl+S
-        click_save(NULL, NULL);
-        return true;
-    case 0x06:  // Ctrl+F
-        enter_mode(MODE_FIND, "find:", g.find_text);
-        return true;
-    case 0x0f:  // Ctrl+O
-        enter_mode(MODE_OPEN, "open:", "");
-        return true;
-    case 0x11:  // Ctrl+Q — asks first when there is something to lose, and a
-                // second press while it is asking discards (see request_quit).
-                // Deliberately NOT guarded by `g.mode != MODE_NONE` like the
-                // clipboard trio above: the whole point is that ^Q reaches
-                // through its own prompt.
-        request_quit();
-        return true;
-    default:
-        return false;
+    action_target();
+    return os64_ui_shortcut_route(&g.shortcuts,g.action_views[g.editing_target],ev,NULL);
+}
+static void menu_layout(void *user) { (void)user; relayout_all(); }
+static void menu_error(void *user, os64_ui_status_code_t rc)
+{
+    (void)user;
+    char msg[SCRIBE_STATUS_MAX];
+    os64_snprintf(msg,sizeof(msg),"menu refused (%u)",(unsigned)rc);
+    os64_ui_set_hidden(&g.ui,&g.status.w,false);
+    status_show(msg); relayout_all();
+}
+static bool context_menu(os64_ui_widget_t *w, const os64_gui_event_t *ev, void *user)
+{
+    (void)user;
+    if (!g.menus) return false;
+    unsigned target = w == &g.field.w ? 1 : 0;
+    os64_gui_rect_t anchor = ev->type == OS64_GUI_EVENT_KEY_DOWN ? w->bounds :
+        (os64_gui_rect_t){ev->mouse.x,ev->mouse.y,0,0};
+    os64_ui_status_code_t rc = os64_ui_menu_open(g.menus,g.models[5],g.action_views[target],anchor,OS64_UI_MENU_CONTEXT);
+    if (rc == OS64_UI_STALE || rc == OS64_UI_INVALID) menu_error(NULL,rc);
+    return true;
+}
+static bool build_actions(void)
+{
+    static const os64_ui_action_spec_t specs[] = {
+        {ACT_OPEN,OS64_UI_ACTION_COMMAND,0,"Open","Open a file",NULL,'o',{'o',OS64_GUI_MOD_CTRL}},
+        {ACT_SAVE,OS64_UI_ACTION_COMMAND,0,"Save","Save the document",NULL,'s',{'s',OS64_GUI_MOD_CTRL}},
+        {ACT_SAVEAS,OS64_UI_ACTION_COMMAND,0,"Save As","Save under a file name",NULL,'a',{0,0}},
+        {ACT_QUIT,OS64_UI_ACTION_COMMAND,0,"Quit","Ask before discarding unsaved changes",NULL,'q',{'q',OS64_GUI_MOD_CTRL}},
+        {ACT_CUT,OS64_UI_ACTION_COMMAND,0,"Cut","Copy selection, then remove it",NULL,'t',{'x',OS64_GUI_MOD_CTRL}},
+        {ACT_COPY,OS64_UI_ACTION_COMMAND,0,"Copy","Copy selection to the clipboard",NULL,'c',{'c',OS64_GUI_MOD_CTRL}},
+        {ACT_PASTE,OS64_UI_ACTION_COMMAND,0,"Paste","Paste into the selected editing target",NULL,'p',{'v',OS64_GUI_MOD_CTRL}},
+        {ACT_FIND,OS64_UI_ACTION_COMMAND,0,"Find","Find text in the document",NULL,'f',{'f',OS64_GUI_MOD_CTRL}},
+        {ACT_BAR,OS64_UI_ACTION_TOGGLE,0,"Show Menu Bar","Recover with Alt, F10 or right-click",NULL,'m',{0,0}},
+        {ACT_STATUS,OS64_UI_ACTION_TOGGLE,0,"Show Status Bar","Show file information and notices",NULL,'s',{0,0}},
+        {ACT_HELP,OS64_UI_ACTION_COMMAND,0,"Scribe Guide","Read the editor's guide",NULL,'g',{'g',OS64_GUI_MOD_CTRL}}
+    };
+    const os64_ui_action_callbacks_t callbacks = {action_query,action_invoke};
+    if (os64_ui_actions_create(specs,sizeof(specs)/sizeof(*specs),&callbacks,NULL,&g.actions)) return false;
+    for (unsigned i=0;i<2;++i) {
+        os64_ui_action_context_t c = {i ? &g.field.w : &g.view.w,1,action_valid,action_release,action_valid};
+        if (os64_ui_action_view_create(g.actions,&c,&g.action_views[i])) return false;
     }
+    if (os64_ui_action_bind(&g.btn_open,g.action_views[0],ACT_OPEN) ||
+        os64_ui_action_bind(&g.btn_save,g.action_views[0],ACT_SAVE) ||
+        os64_ui_action_bind(&g.btn_saveas,g.action_views[0],ACT_SAVEAS)) return false;
+    const os64_ui_menu_entry_t file[] = {{.action=ACT_OPEN},{.action=ACT_SAVE},{.action=ACT_SAVEAS},{.kind=OS64_UI_MENU_SEPARATOR},{.action=ACT_QUIT}};
+    const os64_ui_menu_entry_t edit[] = {{.action=ACT_CUT},{.action=ACT_COPY},{.action=ACT_PASTE},{.kind=OS64_UI_MENU_SEPARATOR},{.action=ACT_FIND}};
+    const os64_ui_menu_entry_t view[] = {{.action=ACT_BAR},{.action=ACT_STATUS}};
+    const os64_ui_menu_entry_t help[] = {{.action=ACT_HELP}};
+    if (os64_ui_menu_model_create(g.actions,file,5,&g.models[0]) ||
+        os64_ui_menu_model_create(g.actions,edit,5,&g.models[1]) ||
+        os64_ui_menu_model_create(g.actions,view,2,&g.models[2]) ||
+        os64_ui_menu_model_create(g.actions,help,1,&g.models[3])) return false;
+    const os64_ui_menu_entry_t bar[] = {
+        {.kind=OS64_UI_MENU_SUBMENU,.label="File",.mnemonic='f',.child=g.models[0]},
+        {.kind=OS64_UI_MENU_SUBMENU,.label="Edit",.mnemonic='e',.child=g.models[1]},
+        {.kind=OS64_UI_MENU_SUBMENU,.label="View",.mnemonic='v',.child=g.models[2]},
+        {.kind=OS64_UI_MENU_SUBMENU,.label="Help",.mnemonic='h',.child=g.models[3]}};
+    const os64_ui_menu_entry_t context[] = {{.action=ACT_CUT},{.action=ACT_COPY},{.action=ACT_PASTE},{.kind=OS64_UI_MENU_SEPARATOR},{.action=ACT_BAR}};
+    return !os64_ui_menu_model_create(g.actions,bar,4,&g.models[4]) &&
+        !os64_ui_menu_model_create(g.actions,context,5,&g.models[5]) &&
+        !os64_ui_menubar_bind(&g.bar,g.models[4]);
+}
+static bool scribe_dispose(void)
+{
+    if (os64_ui_menu_session_dispose(g.menus)) return false;
+    g.menus = NULL;
+    os64_ui_cancel_interaction(&g.ui);
+    (void)os64_ui_action_unbind(&g.btn_open);
+    (void)os64_ui_action_unbind(&g.btn_save);
+    (void)os64_ui_action_unbind(&g.btn_saveas);
+    os64_ui_menubar_destroy(&g.bar);
+    for (unsigned i=0;i<6;++i) { os64_ui_menu_model_release(g.models[i]); g.models[i]=NULL; }
+    for (unsigned i=0;i<2;++i) if (g.action_views[i]) {
+        (void)os64_ui_action_view_destroy(g.action_views[i]); g.action_views[i]=NULL;
+    }
+    if (g.actions) { (void)os64_ui_actions_destroy(g.actions); g.actions=NULL; }
+    if (os64_ui_font_release(&g.ui) != OS64_FONT_OK) return false;
+    sbuf_free(&g.buf);
+    return true;
+}
+static void commands(void *user, const os64_gui_event_t *ev)
+{
+    (void)user;
+    if (!g.running || g.ui.quit) return;
+    if (g.hooks && g.hooks->key && ev->type == OS64_GUI_EVENT_KEY_DOWN &&
+        g.hooks->key(&g.ui,ev,g.hooks->user)) return;
+    if (!app_shortcut(ev)) os64_ui_dispatch(&g.ui,ev);
+    action_target();
+}
+static void observe(void *user, int64_t handle, const os64_gui_event_t *ev)
+{
+    (void)user; (void)handle;
+    // Popup queues can receive the release of an owner shortcut. Reset the
+    // owner router at family focus changes so a later press is not stranded.
+    if (ev->type == OS64_GUI_EVENT_WINDOW_FOCUS || ev->type == OS64_GUI_EVENT_INPUT_LOST ||
+        ev->type == OS64_GUI_EVENT_WINDOW_COVERED) os64_ui_shortcut_reset(&g.shortcuts);
+    action_target();
+}
+static void paint(void *user)
+{
+    (void)user;
+    if (!g.running || g.ui.quit) return;
+    for (unsigned i=0;i<2;++i) (void)os64_ui_actions_refresh(g.action_views[i]);
+    action_target(); os64_ui_paint(&g.ui);
+}
+static bool attach_menus(const os64_ui_window_backend_t *backend)
+{
+    os64_ui_dispatcher_init(&g.dispatcher,backend);
+    g.dispatcher.observe=observe;
+    if (os64_ui_dispatcher_add(&g.dispatcher,g.win,&g.ui,commands,paint,NULL) ||
+        os64_ui_menu_session_create(&g.dispatcher,&g.ui,g.win,&g.bar,&g.status,NULL,&g.menus)) return false;
+    os64_ui_menu_hooks(g.menus,menu_layout,menu_error,NULL);
+    os64_ui_menu_focus_fallback(g.menus,&g.view.w);
+    return os64_ui_menu_bar_view(g.menus,g.action_views[0]) == OS64_UI_OK;
 }
 
 // ── main ────────────────────────────────────────────────────────────────────
@@ -950,12 +1067,15 @@ int scribe_main(int argc, char **argv, const scribe_hooks_t *hooks)
     }
     if (os64_draw_ctx_init(&g.ctx, g.win) != 0) {
         os64_hprintf(OS64_STDERR, "scribe: no surface\n");
+        os64_gui_window_destroy(g.win);
         return 1;
     }
 
     const char *refused = scribe_build();
     if (refused) {
         os64_hprintf(OS64_STDERR, "scribe: %s\n", refused);
+        (void)scribe_dispose();
+        os64_gui_window_destroy(g.win);
         return 1;
     }
 
@@ -969,32 +1089,26 @@ int scribe_main(int argc, char **argv, const scribe_hooks_t *hooks)
     if (hooks && hooks->ready)
         hooks->ready(&g.ui, hooks->user);
 
-    // The canonical loop, with the app's shortcut check ahead of dispatch —
-    // scribe owns its loop instead of using os64_ui_run for exactly this.
+    g.hooks = hooks;
+    if (!attach_menus(NULL)) {
+        os64_hprintf(OS64_STDERR,"scribe: menu initialization refused\n");
+        (void)scribe_dispose();
+        if (os64_ui_dispatcher_live(&g.dispatcher,g.win))
+            (void)os64_ui_dispatcher_destroy(&g.dispatcher,g.win);
+        else os64_gui_window_destroy(g.win);
+        return 1;
+    }
     g.running = true;
     os64_ui_paint(&g.ui);
-    // `!g.ui.quit` as well as `g.running`: ui.h's contract says an app with
-    // its own loop must check it, because libui sets it for any close request
-    // an app has not claimed. scribe HAS claimed it (scribe_build sets
-    // on_close), so the flag should never fire — which is exactly why it is
-    // cheap to honor and expensive to omit. Not honoring it is the bug this
-    // slice came from.
-    while (g.running && !g.ui.quit) {
-        os64_gui_event_t ev;
-        int64_t rc = os64_gui_event_wait(g.win, &ev);
-        if (rc != 1)
-            break;
-        do {
-            if (hooks && hooks->key && ev.type == OS64_GUI_EVENT_KEY_DOWN &&
-                hooks->key(&g.ui, &ev, hooks->user))
-                continue;
-            if (!app_shortcut(&ev))
-                os64_ui_dispatch(&g.ui, &ev);
-        } while (g.running && os64_gui_event_poll(g.win, &ev) == 1);
-        os64_ui_paint(&g.ui);
+    while (g.running && !g.ui.quit)
+        if (os64_ui_dispatcher_turn(&g.dispatcher,true) < 0) break;
+    if (!scribe_dispose()) {
+        // Native windows still borrow toolkit state if destruction refuses.
+        // Leave it alive until process exit releases the windows.
+        os64_hprintf(OS64_STDERR,"scribe: popup cleanup refused\n");
+        return 1;
     }
-
-    os64_gui_window_destroy(g.win);
+    (void)os64_ui_dispatcher_destroy(&g.dispatcher,g.win);
     return 0;
 }
 
@@ -1016,7 +1130,8 @@ static const char *scribe_build(void)
     os64_ui_panel(&g.root);
     g.root.bounds = (os64_gui_rect_t){ 0, 0, (int32_t)g.ctx.surf.width,
                                        (int32_t)g.ctx.surf.height };
-    os64_ui_label(&g.status, g.status_text);
+    os64_ui_status_init(&g.status);
+    os64_ui_menubar_init(&g.bar);
     os64_ui_button(&g.btn_open,   "Open",    click_open,   NULL);
     os64_ui_button(&g.btn_save,   "Save",    click_save,   NULL);
     os64_ui_button(&g.btn_saveas, "Save As", click_saveas, NULL);
@@ -1028,7 +1143,8 @@ static const char *scribe_build(void)
     os64_ui_scrollbar(&g.hscroll, hscrolled, NULL);
     g.hscroll.horizontal = true;
 
-    os64_ui_add_child(&g.root, &g.status);
+    os64_ui_add_child(&g.root, &g.bar.w);
+    os64_ui_add_child(&g.root, &g.status.w);
     os64_ui_add_child(&g.root, &g.btn_open);
     os64_ui_add_child(&g.root, &g.btn_save);
     os64_ui_add_child(&g.root, &g.btn_saveas);
@@ -1038,8 +1154,11 @@ static const char *scribe_build(void)
     os64_ui_add_child(&g.root, &g.scroll.w);
     os64_ui_add_child(&g.root, &g.hscroll.w);
 
-    layout(&g.ui);
     os64_ui_set_root(&g.ui, &g.root);
+    if (!build_actions()) return "actions or menus refused";
+    g.view.w.on_context = context_menu;
+    g.field.w.on_context = context_menu;
+    layout(&g.ui);
     os64_ui_set_focus(&g.ui, &g.view.w);
 
     // Scribe's half of any font change: its window's layout, planned against

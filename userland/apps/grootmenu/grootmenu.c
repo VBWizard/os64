@@ -1,263 +1,26 @@
-// grootmenu(1) — the root menu. Click the wallpaper and the system offers
-// itself to you: twm's "defops" menu, 1987, and the piece of GNOME 2 Chris
-// missed the most, rebuilt as the smallest possible program.
-//
-// IT IS NOT PART OF THE DESKTOP. /bin/desktop owns the wallpaper window and
-// gui.conf names this program as its `launcher`; a click on bare desktop
-// spawns it with the click's position, it draws a tree it did not parse
-// (os64/menu.h — the grammar every launcher shares), and it exits the
-// moment you choose something or look away. The chosen program is spawned
-// from here and orphaned on purpose: the kernel re-parents it to ktask with
-// autoReap, so nothing waits on it and nothing leaks. Tomorrow's dock is
-// another program reading the same menu.conf, added by another gui.conf
-// line — that, not this file, is the design.
-//
-//   grootmenu [x y] [name]     open `name` (default "root") with its top-left
-//                              corner at screen (x, y); default 0,0
-//
-// HOW IT GOES AWAY: a menu must vanish when you click anywhere else, and
-// "anywhere else" is a focus change — OS64_GUI_EVENT_WINDOW_FOCUS, added for
-// exactly this program. Focus leaving for a window that is NOT ours ends
-// the menu; focus moving between our own windows (a cascade) does not.
-// Escape ends it too. There is no "click outside" event and never will be:
-// the click landed on someone else's window and is theirs.
-//
-// CASCADES are windows: hovering a submenu row opens a second, PINNED,
-// undecorated window beside the row, and so on down. Every level is a
-// small struct here; the tree stays in the library's arena.
-
+/* grootmenu [x y] [name]: menu.conf adapter for the shared native menus.
+ * The desktop launches this independent process. A selected child is
+ * deliberately orphaned at exit; the kernel re-parents and reaps it.
+ * Grammar, config lookup and argv quoting belong to os64/menu.h. */
 #include "os64/os64.h"
-#include "os64/gui.h"
-#include "os64/draw.h"
-#include "os64/ui.h"
+#include "os64/ui_menu.h"
 #include "os64/menu.h"
 #include "os64/proc.h"
 #include "os64/io.h"
 #include "os64/fmt.h"
 #include "os64/str.h"
 
-#define MENU_DEPTH_MAX  OS64_MENU_DEPTH_MAX   // the grammar's ceiling, not one of our own
-#define MENU_ROWS_MAX   64       // rows per level
-#define ROW_PAD         3        // pixels above and below a row's text
-#define SEP_H           7        // a separator row
-#define MIN_WIDTH       96
-#define CASCADE_OVERLAP 3        // a child sits this many pixels into its parent
-#define ARGV_MAX        16
-
-typedef struct
-{
-    int64_t         win;
-    os64_draw_ctx_t ctx;
-    int32_t         x, y;            // frame origin on screen
-    uint32_t        fw, fh;          // frame size
-    int32_t         cw, ch;          // content size
-    int16_t         rows[MENU_ROWS_MAX];   // node per row
-    int32_t         row_y[MENU_ROWS_MAX + 1];   // content-local top of each row; [n] = bottom
-    int             n;
-    int             hi;              // highlighted row, -1 = none
-    int             open_row;        // the row whose cascade is open, -1 = none
-    // The row whose cascade was last ATTEMPTED, -1 = none. Distinct from
-    // open_row because an attempt can fail: a refused cascade would
-    // otherwise be re-tried — and re-complained — on every mouse move over
-    // its row, which is report rate for a hand resting on the mouse.
-    int             tried_row;
-    bool            has_sub;         // any cascade rows (width reserves the arrow)
-} level_t;
-
-static os64_menu_t     gMenu;
-static os64_ui_theme_t gTheme;
-static uint64_t gAppearanceGeneration;
-static level_t         gLevels[MENU_DEPTH_MAX];
-static int             gDepth;
-static uint32_t        gScreenW, gScreenH;
-static bool            gQuit;
-
-// ── painting ────────────────────────────────────────────────────────────────
-
-static void paint_row(level_t *lv, int r)
-{
-    const os64_menu_node_t *node = &gMenu.nodes[lv->rows[r]];
-    os64_gui_surface_t *s = &lv->ctx.surf;
-    os64_gui_rect_t rect = { 0, lv->row_y[r], lv->cw, lv->row_y[r + 1] - lv->row_y[r] };
-
-    if (node->kind == OS64_MENU_SEPARATOR) {
-        os64_draw_fill_rect(s, rect, gTheme.menu_bg);
-        os64_draw_hline(s, gTheme.pad / 2, rect.y + SEP_H / 2,
-                        lv->cw - gTheme.pad, gTheme.menu_sep);
-        return;
-    }
-    bool hi = (r == lv->hi);
-    uint32_t bg = hi ? gTheme.menu_hi_bg : gTheme.menu_bg;
-    uint32_t fg = hi ? gTheme.menu_hi_fg : gTheme.menu_fg;
-    os64_draw_fill_rect(s, rect, bg);
-    os64_draw_text(s, gTheme.pad, rect.y + ROW_PAD, node->label,
-                   os64_strlen(node->label), fg, bg);
-    if (node->kind == OS64_MENU_SUBMENU)
-        os64_draw_text(s, lv->cw - gTheme.pad - gTheme.font_w, rect.y + ROW_PAD,
-                       ">", 1, fg, bg);
-}
-
-static void paint(level_t *lv)
-{
-    os64_gui_rect_t all = { 0, 0, lv->cw, lv->ch };
-    os64_draw_fill_rect(&lv->ctx.surf, all, gTheme.menu_bg);
-    for (int r = 0; r < lv->n; r++)
-        paint_row(lv, r);
-    os64_draw_publish(&lv->ctx, NULL);
-}
-
-static void repaint_row(level_t *lv, int r)
-{
-    if (r < 0 || r >= lv->n)
-        return;
-    paint_row(lv, r);
-    os64_gui_rect_t rect = { 0, lv->row_y[r], lv->cw, lv->row_y[r + 1] - lv->row_y[r] };
-    os64_draw_publish(&lv->ctx, &rect);
-}
-
-static int row_at(const level_t *lv, int32_t y)
-{
-    for (int r = 0; r < lv->n; r++)
-        if (y >= lv->row_y[r] && y < lv->row_y[r + 1])
-            return r;
-    return -1;
-}
-
-// ── levels ──────────────────────────────────────────────────────────────────
-
-static void close_deeper_than(int d)
-{
-    while (gDepth > d + 1) {
-        level_t *lv = &gLevels[--gDepth];
-        os64_gui_window_destroy(lv->win);
-        lv->win = 0;
-    }
-    if (d >= 0 && d < gDepth) {
-        gLevels[d].open_row = -1;
-        // Re-armed HERE and not on every move. After a refused attempt
-        // open_row stays -1, so handle()'s walk over ordinary rows never
-        // reaches this and tried_row survives it; only arriving at another
-        // cascade row clears it. That asymmetry is deliberate — re-arming on
-        // any move would let a wiggle between two rows become the flood
-        // again. A click asks directly and is answered regardless.
-        gLevels[d].tried_row = -1;
-    }
-}
-
-// Open the menu whose first child is `first`, top-left at screen (sx, sy),
-// clamped so the whole thing is on the glass. Returns false if it could not
-// be opened — having COMPLAINED first whenever the reason is one the reader
-// could act on, and silently when it is not (an empty tree, nesting past the
-// grammar's own depth). Callers must not add a second guess about why.
-static bool open_level(int16_t first, int32_t sx, int32_t sy)
-{
-    if (gDepth >= MENU_DEPTH_MAX || first < 0)
-        return false;
-    level_t *lv = &gLevels[gDepth];
-    os64_memset(lv, 0, sizeof(*lv));
-    lv->hi = -1;
-    lv->tried_row = -1;
-    lv->open_row = -1;
-
-    // Lay the rows out and measure the widest label.
-    size_t widest = 0;
-    int32_t y = 1;   // one pixel of the panel colour above the first row
-    int16_t i = first;
-    for (; i >= 0 && lv->n < MENU_ROWS_MAX; i = gMenu.nodes[i].next) {
-        const os64_menu_node_t *node = &gMenu.nodes[i];
-        lv->rows[lv->n] = i;
-        lv->row_y[lv->n] = y;
-        if (node->kind == OS64_MENU_SEPARATOR) {
-            y += SEP_H;
-        } else {
-            y += gTheme.font_h + 2 * ROW_PAD;
-            size_t len = os64_strlen(node->label);
-            if (len > widest)
-                widest = len;
-            if (node->kind == OS64_MENU_SUBMENU)
-                lv->has_sub = true;
-        }
-        lv->n++;
-    }
-    // A level past its capacity is REFUSED, not shown in part: half a menu is
-    // a different menu, and the rows that vanished cannot be launched or even
-    // seen to be missing. Same ruling as os64_menu_argv's.
-    if (i >= 0) {
-        os64_complain("grootmenu: a menu has more than %d rows — refused rather than shown in part\n",
-                     MENU_ROWS_MAX);
-        return false;
-    }
-    if (lv->n == 0)
-        return false;
-    lv->row_y[lv->n] = y;
-    lv->ch = y + 1;
-    lv->cw = 2 * gTheme.pad + (int32_t)widest * gTheme.font_w +
-             (lv->has_sub ? 2 * gTheme.font_w : 0);
-    if (lv->cw < MIN_WIDTH)
-        lv->cw = MIN_WIDTH;
-
-    const uint64_t flags = OS64_GUI_WINDOW_NO_DECORATIONS | OS64_GUI_WINDOW_PINNED;
-    os64_gui_frame_for_content((uint32_t)lv->cw, (uint32_t)lv->ch, flags, &lv->fw, &lv->fh);
-
-    // A level bigger than the glass cannot be slid into view — the clamp
-    // below would leave its far edge permanently off-screen, where rows can
-    // be neither seen nor chosen. Refused, like a level past the row ceiling.
-    if (lv->fw > gScreenW || lv->fh > gScreenH) {
-        os64_complain("grootmenu: a menu is %ux%u, larger than the %ux%u screen — refused\n",
-                     lv->fw, lv->fh, gScreenW, gScreenH);
-        return false;
-    }
-
-    // Keep it on the glass: slide left/up rather than clip, the way every
-    // menu since the Lisa has.
-    if (sx + (int32_t)lv->fw > (int32_t)gScreenW) sx = (int32_t)gScreenW - (int32_t)lv->fw;
-    if (sy + (int32_t)lv->fh > (int32_t)gScreenH) sy = (int32_t)gScreenH - (int32_t)lv->fh;
-    if (sx < 0) sx = 0;
-    if (sy < 0) sy = 0;
-    lv->x = sx;
-    lv->y = sy;
-
-    lv->win = os64_gui_window_create("grootmenu", sx, sy, lv->fw, lv->fh, flags);
-    if (lv->win <= 0) {
-        os64_complain("grootmenu: window_create failed (%ld)\n", (long)lv->win);
-        return false;
-    }
-    int ctxrc = os64_draw_ctx_init(&lv->ctx, lv->win);
-    if (ctxrc != 0) {
-        os64_complain("grootmenu: no drawing surface for the menu window (%d)\n", ctxrc);
-        os64_gui_window_destroy(lv->win);
-        lv->win = 0;
-        return false;
-    }
-    gDepth++;
-    paint(lv);
-    return true;
-}
-
-// Open row r's cascade beside it (closing any other cascade of this level).
-// `asked` separates a CLICK from a hover. A hover is involuntary — the
-// pointer crossing a row is not a request — so a refused cascade stays quiet
-// under it. A click is a request, and a request gets an answer every time,
-// even a repeated refusal.
-static void open_cascade(int d, int r, bool asked)
-{
-    level_t *lv = &gLevels[d];
-    if (lv->open_row == r || (!asked && lv->tried_row == r))
-        return;
-    close_deeper_than(d);
-    const os64_menu_node_t *node = &gMenu.nodes[lv->rows[r]];
-    if (node->first_child < 0)
-        return;   // an empty cascade opens nothing, and says nothing
-    // Recorded BEFORE the attempt, because a refusal is what has to be
-    // remembered: open_row alone only remembers successes.
-    lv->tried_row = r;
-    int32_t sx = lv->x + (int32_t)lv->fw - CASCADE_OVERLAP;
-    int32_t sy = lv->y + lv->row_y[r];
-    if (open_level(node->first_child, sx, sy))
-        lv->open_row = r;
-}
-
-// ── choosing ────────────────────────────────────────────────────────────────
+#define ARGV_MAX 16
+static os64_menu_t gMenu;
+static os64_ui_t ui;
+static os64_ui_actions_t *actions;
+static os64_ui_action_view_t *view;
+static os64_ui_menu_session_t *session;
+static os64_ui_dispatcher_t dispatcher;
+/* Cache by first node, so references share models instead of expanding a DAG. */
+static os64_ui_menu_model_t *models[OS64_MENU_NODES_MAX];
+static bool building[OS64_MENU_NODES_MAX];
+static bool failed;
 
 static void launch(const os64_menu_node_t *node)
 {
@@ -279,67 +42,93 @@ static void launch(const os64_menu_node_t *node)
                      node->label, argv[0], (long)pid);
 }
 
-static void handle(int d, const os64_gui_event_t *ev)
+static bool target_valid(void *cookie, uint64_t generation)
+{ (void)cookie; return generation == 1; }
+static void target_release(void *cookie, uint64_t generation)
+{ (void)cookie; (void)generation; }
+static void query(void *app, const os64_ui_action_context_t *context,
+                  uint32_t id, os64_ui_action_state_t *out)
 {
-    level_t *lv = &gLevels[d];
-    switch (ev->type) {
-    case OS64_GUI_EVENT_APPEARANCE:
-        if (os64_ui_theme_session(&gTheme, &gAppearanceGeneration,
-                                  os64_gui_appearance_generation(ev)))
-            for (int i = 0; i < gDepth; ++i) paint(&gLevels[i]);
-        break;
-    case OS64_GUI_EVENT_MOUSE_MOVE: {
-        int r = row_at(lv, ev->mouse.y);
-        if (r >= 0 && gMenu.nodes[lv->rows[r]].kind == OS64_MENU_SEPARATOR)
-            r = -1;
-        if (r != lv->hi) {
-            int old = lv->hi;
-            lv->hi = r;
-            repaint_row(lv, old);
-            repaint_row(lv, r);
-        }
-        if (r >= 0) {
-            if (gMenu.nodes[lv->rows[r]].kind == OS64_MENU_SUBMENU)
-                open_cascade(d, r, false);   // the pointer wandered here
-            else if (lv->open_row >= 0)
-                close_deeper_than(d);
-        }
-        break;
+    (void)app; (void)context;
+    out->enabled = id && id <= gMenu.count && gMenu.nodes[id-1].kind == OS64_MENU_ITEM;
+}
+static os64_ui_action_result_t invoke(void *app,
+    const os64_ui_action_context_t *context, uint32_t id)
+{
+    (void)app; (void)context;
+    /* The controller closes the native family before invoking this callback. */
+    if (!id || id > gMenu.count || gMenu.nodes[id-1].kind != OS64_MENU_ITEM)
+        return (os64_ui_action_result_t){OS64_UI_REFUSED, 0};
+    launch(&gMenu.nodes[id-1]);
+    return (os64_ui_action_result_t){OS64_UI_OK, 0};
+}
+static os64_ui_status_code_t convert(int16_t first, unsigned depth)
+{
+    if (first < 0) return OS64_UI_EMPTY;
+    if (first >= gMenu.count) return OS64_UI_INVALID;
+    if (depth >= OS64_UI_MENU_DEPTH) return OS64_UI_LIMIT;
+    if (building[first]) return OS64_UI_INVALID;
+    if (models[first]) return OS64_UI_OK;
+    building[first] = true;
+    os64_ui_menu_entry_t entries[OS64_UI_MENU_ENTRIES] = {0};
+    size_t count = 0;
+    os64_ui_status_code_t rc = OS64_UI_OK;
+    for (int16_t i = first; i >= 0; i = gMenu.nodes[i].next) {
+        if (i >= gMenu.count) { rc = OS64_UI_INVALID; break; }
+        if (count == OS64_UI_MENU_ENTRIES) { rc = OS64_UI_LIMIT; break; }
+        const os64_menu_node_t *node = &gMenu.nodes[i];
+        os64_ui_menu_entry_t *entry = &entries[count++];
+        if (node->kind == OS64_MENU_ITEM) entry->action = (uint32_t)i + 1;
+        else if (node->kind == OS64_MENU_SEPARATOR) entry->kind = OS64_UI_MENU_SEPARATOR;
+        else if (node->kind == OS64_MENU_SUBMENU) {
+            rc = convert(node->first_child, depth + 1);
+            if (rc) break;
+            *entry = (os64_ui_menu_entry_t){.kind=OS64_UI_MENU_SUBMENU,
+                .label=node->label, .child=models[node->first_child]};
+        } else { rc = OS64_UI_INVALID; break; }
     }
-    case OS64_GUI_EVENT_MOUSE_BUTTON_DOWN: {
-        int r = row_at(lv, ev->mouse.y);
-        if (r < 0)
-            break;
-        const os64_menu_node_t *node = &gMenu.nodes[lv->rows[r]];
-        if (node->kind == OS64_MENU_ITEM) {
-            launch(node);
-            gQuit = true;
-        } else if (node->kind == OS64_MENU_SUBMENU) {
-            open_cascade(d, r, true);       // asked for, out loud
-        }
-        break;
+    if (!rc) rc = os64_ui_menu_model_create(actions, entries, count, &models[first]);
+    building[first] = false;
+    return rc;
+}
+static os64_ui_status_code_t build(int16_t first)
+{
+    os64_ui_action_spec_t specs[OS64_MENU_NODES_MAX] = {0};
+    size_t count = 0;
+    for (unsigned i = 0; i < gMenu.count; ++i)
+        if (gMenu.nodes[i].kind == OS64_MENU_ITEM)
+            specs[count++] = (os64_ui_action_spec_t){.id=i+1, .label=gMenu.nodes[i].label};
+    if (!count) return OS64_UI_EMPTY;
+    const os64_ui_action_callbacks_t callbacks = {query, invoke};
+    os64_ui_status_code_t rc = os64_ui_actions_create(specs,count,&callbacks,NULL,&actions);
+    if (rc) return rc;
+    const os64_ui_action_context_t context = {NULL,1,target_valid,target_release,target_valid};
+    rc = os64_ui_action_view_create(actions,&context,&view);
+    return rc ? rc : convert(first,0);
+}
+static void launcher_error(void *user, os64_ui_status_code_t rc)
+{
+    (void)user;
+    const char *why = rc == OS64_UI_EMPTY ? "empty menu or cascade" :
+        rc == OS64_UI_LIMIT ? "menu exceeds toolkit row, graph, depth or screen limits" :
+        rc == OS64_UI_NO_MEMORY ? "out of memory" :
+        rc == OS64_UI_INVALID ? "unsupported label or invalid menu graph" :
+        "native menu or font operation failed";
+    os64_complain("grootmenu: %s: %s (%u)\n", gMenu.path, why, (unsigned)rc);
+}
+static bool dispose(void)
+{
+    if (os64_ui_menu_session_dispose(session) != OS64_UI_OK) return false;
+    session = NULL;
+    for (unsigned i = 0; i < OS64_MENU_NODES_MAX; ++i) {
+        os64_ui_menu_model_release(models[i]); models[i] = NULL;
     }
-    case OS64_GUI_EVENT_KEY_DOWN:
-        if (os64_ui_key_is_esc(ev))
-            gQuit = true;
-        break;
-    case OS64_GUI_EVENT_WINDOW_FOCUS:
-        // Focus left one of our windows for somebody else's: the user
-        // looked away, and a menu that stays is a menu in the way. Focus
-        // moving between our own levels is the cascade working.
-        if (!ev->focus.gained && !ev->focus.sibling)
-            gQuit = true;
-        break;
-    case OS64_GUI_EVENT_INPUT_LOST:
-    case OS64_GUI_EVENT_WINDOW_CLOSE:
-        gQuit = true;
-        break;
-    default:
-        break;
-    }
+    if (view) { (void)os64_ui_action_view_destroy(view); view = NULL; }
+    if (actions) { (void)os64_ui_actions_destroy(actions); actions = NULL; }
+    return os64_ui_font_release(&ui) == OS64_FONT_OK;
 }
 
-int main(int argc, char **argv)
+static int grootmenu_main(int argc, char **argv)
 {
     // `grootmenu [x y] [name]`, decided by ARITY, not by what an argument
     // looks like. Sniffing the first character made a menu named "123"
@@ -356,7 +145,8 @@ int main(int argc, char **argv)
             name = argv[3];
     }
 
-    if (os64_gui_screen_info(&gScreenW, &gScreenH) != 0 || gScreenW == 0) {
+    uint32_t gScreenW = 0, gScreenH = 0;
+    if (os64_gui_screen_info(&gScreenW, &gScreenH) != 0 || (gScreenW == 0 || gScreenH == 0)) {
         os64_complain("grootmenu: no GUI here\n");
         return 1;
     }
@@ -378,38 +168,34 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    os64_ui_theme_init(&gTheme);
     int16_t first = os64_menu_find(&gMenu, name);
-    if (!open_level(first, x, y)) {
-        // Empty is the only refusal this end can name. The others said what
-        // was wrong on their way out, and a guess appended here would be
-        // both the last word and the wrong one.
-        if (first < 0)
-            os64_complain("grootmenu: menu \"%s\" is empty\n", name);
+    if (first < 0) {
+        os64_complain("grootmenu: menu \"%s\" is empty\n", name);
         return 1;
     }
-
-    if (os64_ui_theme_session(&gTheme, &gAppearanceGeneration, 0))
-        paint(&gLevels[0]);
-
-    // Several windows, one program: poll every level's queue at frame
-    // cadence. event_wait blocks on ONE window, and the pointer wanders
-    // between levels; a short-lived menu can afford the ~30Hz poll.
-    os64_frame_clock_t clock;
-    os64_frame_clock_init(&clock);
-    while (!gQuit) {
-        for (int d = 0; d < gDepth && !gQuit; d++) {
-            os64_gui_event_t ev;
-            while (os64_gui_event_poll(gLevels[d].win, &ev) == 1) {
-                handle(d, &ev);
-                if (gQuit || d >= gDepth)
-                    break;   // this level may have been closed by the handler
-            }
-        }
-        if (!gQuit)
-            os64_frame_wait(&clock, 33);
+    os64_ui_init(&ui, NULL);
+    os64_ui_dispatcher_init(&dispatcher, NULL);
+    os64_ui_status_code_t rc = build(first);
+    if (!rc) rc = os64_ui_menu_session_create(&dispatcher,&ui,0,NULL,NULL,NULL,&session);
+    if (!rc) {
+        os64_ui_menu_hooks(session,NULL,launcher_error,NULL);
+        /* Popups borrow this host's configured Interface font context. */
+        if (os64_ui_font_follow(&ui) != OS64_FONT_OK) rc = OS64_UI_ERROR;
     }
-
-    close_deeper_than(-1);
-    return 0;
+    if (!rc) rc = os64_ui_menu_open(session,models[first],view,
+        (os64_gui_rect_t){x,y,0,0},OS64_UI_MENU_CONTEXT);
+    if (rc && rc != OS64_UI_BUSY) { failed = true; launcher_error(NULL,rc); }
+    while (!failed && os64_ui_menu_active(session)) {
+        if (os64_ui_dispatcher_turn(&dispatcher,true) < 0) { failed = true; break; }
+    }
+    if (!dispose()) {
+        /* Process exit releases native windows. Keep their borrowed state
+         * alive if native destruction refused rather than freeing underneath it. */
+        os64_complain("grootmenu: popup cleanup refused\n");
+        return 1;
+    }
+    return failed ? 1 : 0;
 }
+#ifndef GROOTMENU_HOST
+int main(int argc, char **argv) { return grootmenu_main(argc,argv); }
+#endif

@@ -1102,20 +1102,22 @@ the menu. Found on the second screendump, fixed at the source.
 
 ### Cascades, and what a menu is made of
 
-Every open level is a window: `PINNED` (a menu is never under anything),
-`NO_DECORATIONS`, one pixel of border from the WM. Hovering a cascade row
-opens the child beside it (overlapping the parent by 3px, slid on-screen
-if it would run off — every menu since the Lisa); hovering a different row
-closes it; up to 8 levels open at once (a cascade below that does not
-open — `MENU_DEPTH_MAX`, a fence nobody's menu should reach).
-The program polls every level's queue at frame cadence rather than blocking
-on one window, because the pointer wanders between them and `event_wait`
-watches one handle.
+grootmenu adapts the parsed `menu.conf` tree to libui's immutable menu models
+and action registry. The shared native popup controller owns painting, Interface
+font measurement, keyboard and pointer navigation, scrolling, focus dismissal,
+and child-first teardown. Commands retain their node index and launch through
+`os64_menu_argv` after the popup family closes.
 
-Deliberately NOT in v1, each with its trigger: keyboard navigation
-(arrows/Enter — wants the arrow-key dialect handling gterm has); a menu
-ITEM that opens a named menu in a new root (twm's `f.menu` at top level —
-wait for the dock, which is that); icons; a "tear-off" (Motif, 1989).
+The root popup is standalone; cascade windows are owned by their immediate
+parent. The common dispatcher waits for any registered window and quarantines
+destroyed handles until surviving queues drain. The toolkit accepts up to
+`OS64_UI_MENU_DEPTH` levels and `OS64_UI_MENU_ENTRIES` rows per model; unsupported
+models are refused with a diagnostic rather than truncated. Arrow keys and
+Enter navigate, Escape backs out, and a VT switch preserves the open family.
+Font adoption closes menus before replacing their borrowed font runs.
+
+Icons, tear-offs, and desktop icon placement remain separate work. The shared
+icon-provider boundary is present; grootmenu supplies no artwork provider.
 
 ### What the first morning's drive changed (Chris on the P5, 2026-08-26)
 
