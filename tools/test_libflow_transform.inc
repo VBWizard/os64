@@ -573,6 +573,58 @@ static void transform_through_cases(void)
     flow_point_t top = {0, 0};
     Sheeted q;
 
+    // What clips a box drawn through from outside is every frame's clip
+    // out to the group it is laid in: a scroll container hands its content
+    // none — its clip is its own frame's — so a scaled box straight in
+    // one, or in a moved box in one (danlegt's stamp strip), is clipped
+    // to the scroller's padding box, 30 to 130 across and 0 to 50 down.
+    for (int moved_in = 0; moved_in < 2; moved_in++) {
+        sheeted_open(&q, moved_in ? XFORM_STYLE ".v{overflow:hidden;width:100px;height:50px;margin-left:30px}"
+                                    ".k{transform:translateX(-200px);width:max-content}"
+                                    ".i{width:40px;height:40px;transform:scale(0.9)}</style>"
+                                    "<div class=v><div class=k><div class=i id=i></div></div></div>"
+                                  : XFORM_STYLE ".v{overflow:hidden;width:100px;height:50px;margin-left:30px}"
+                                    ".i{width:40px;height:40px;transform:scale(0.9)}</style>"
+                                    "<div class=v><div class=i id=i></div></div>",
+                     400, 600);
+        flow_tree_t *pt = flow_layout(q.doc, q.page, 400, &q.env);
+        const flow_box_t *ib = box_with_id(pt, q.doc->document, "i");
+        double pm[6];
+        os64_gui_rect_t ic = {0};
+        bool through = ib != NULL && flow_box_through(ib, top, pm, &ic, NULL);
+        char why[128];
+        snprintf(why, sizeof(why), "through %d clip %d %d %d %d", through, ic.x, ic.y, ic.w, ic.h);
+        expect(moved_in ? "transform: a scroll container clips a box drawn through, in a moved box"
+                        : "transform: a scroll container clips a box drawn through in it",
+               through && ic.x == 30 && ic.y == 0 && ic.w == 100 && ic.h == 50, why);
+        flow_free(pt);
+        sheeted_close(&q);
+    }
+    // The walk stops at the group it is laid in: a scroller inside a box
+    // turned a quarter clips the scaled box inside it in the coordinates
+    // the turned box's content was laid out in, 10 to 60 across and 40 to
+    // 70 down, and what clips the turned box from outside, 40 to 60 down
+    // in the page's, is its sheet's and is not met there.
+    {
+        sheeted_open(&q, XFORM_STYLE ".o{overflow:clip;height:20px;margin-top:40px}"
+                         ".r{width:80px;height:80px;transform:rotate(90deg)}"
+                         ".v{overflow:hidden;width:50px;height:30px;margin-left:10px}"
+                         ".i{width:40px;height:40px;transform:scale(0.9)}</style>"
+                         "<div class=o><div class=r><div class=v><div class=i id=i></div></div></div></div>",
+                     400, 600);
+        flow_tree_t *pt = flow_layout(q.doc, q.page, 400, &q.env);
+        const flow_box_t *ib = box_with_id(pt, q.doc->document, "i");
+        double pm[6];
+        os64_gui_rect_t ic = {0};
+        bool through = ib != NULL && flow_box_through(ib, top, pm, &ic, NULL);
+        char why[128];
+        snprintf(why, sizeof(why), "through %d clip %d %d %d %d", through, ic.x, ic.y, ic.w, ic.h);
+        expect("transform: a box drawn through is clipped out to the group it is laid in, no further",
+               through && ic.x == 10 && ic.y == 40 && ic.w == 50 && ic.h == 30, why);
+        flow_free(pt);
+        sheeted_close(&q);
+    }
+
     // A quarter turn about the centre (150, 110) of a box at 100, 100,
     // 100 by 20: (x, y) goes to (260 - y, x - 40). The box stands 140 to
     // 160 across and 60 to 160 down; its first 20 pixels, the child, 60

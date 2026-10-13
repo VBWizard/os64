@@ -780,6 +780,7 @@ static os64_gui_rect_t cut_to(os64_gui_rect_t r, os64_gui_rect_t c)
 }
 
 static os64_gui_rect_t moved(os64_gui_rect_t r, int64_t dx, int64_t dy);
+static os64_gui_rect_t meet(os64_gui_rect_t a, os64_gui_rect_t b);
 static os64_gui_rect_t affine_bounds(const double m[6], os64_gui_rect_t r);
 
 // The page's extent grown to reach (right, bottom), in pixels.
@@ -1927,8 +1928,18 @@ bool flow_box_through(const flow_box_t *box, flow_point_t scroll, double m[6],
     os64_memcpy(m, t->affine, 6 * sizeof(double));
     m[4] += o.x;
     m[5] += o.y;
-    if (clip != NULL)
+    // What clips it from outside is every frame's clip out to the group it
+    // is laid in, as flow_box_doc_clip meets them: a scroll container's
+    // is its own frame's, which hands its content none.
+    if (clip != NULL) {
         *clip = t->clips ? moved(t->clip, o.x, o.y) : clip_rect(kNoClip);
+        const flow_frame_t *end = inner_through(t->outer);
+        for (const flow_frame_t *s = t->outer; s != NULL && s != end; s = s->outer)
+            if (s->clips) {
+                flow_point_t at = frame_of(&fm, s->outer, s->box->fixed, scroll);
+                *clip = meet(*clip, moved(s->clip, at.x, at.y));
+            }
+    }
     if (upright != NULL)
         *upright = (flow_point_t){edge32((int64_t)o.x + t->by.x), edge32((int64_t)o.y + t->by.y)};
     return true;
