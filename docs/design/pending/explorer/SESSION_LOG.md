@@ -878,3 +878,7 @@ recovery, and live font/palette changes. [Evidence](evidence/e04/README.md)
 preserves screenshots, source/package identification and delivery results.
 Independent review and P5 acceptance remain pending; [the handoff](E04_HANDOFF.md)
 is the next action. Discuss file associations before beginning E5.
+
+Published as [draft PR #267](https://github.com/VBWizard/os64/pull/267) against `userland`,
+with source `243663dc` and native evidence `f930fda3`. The publication follow-up
+adds links only; the implementation is not merged.

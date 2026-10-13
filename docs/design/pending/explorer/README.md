@@ -72,7 +72,7 @@ Create slice records when work begins, rather than maintaining 15 empty designs.
 | E1 | Actions, menus and status | E1A/E1K/E1B/E1C merged; production menus P5 tested | Quinn (E1C), Sol (E1A/E1B) | [E1A](E01A_HANDOFF.md), [E1K](E01K_HANDOFF.md), [E1B](E01B_HANDOFF.md); PR #254 `c6cc6e3c`, PR #257 `b36e9ddc` | [E1B evidence/walkthrough](evidence/e01b/README.md); P5 report precedes review fixes |
 | E2 | Icon vocabulary | Merged; P5 gallery visually accepted before final review fix | Quinn | [E2 contract](E02_ICONS.md), PR #261 `f39b0ae0` | [Host, packaging and QEMU evidence](evidence/e02/README.md) |
 | E3 | Data view and selection | Merged PR #264 `5a521b63`; P5 evidence separate | Quinn | [Contract](E03_DATA_VIEW.md), [implementation packet](E03_HANDOFF.md); [PR #264](https://github.com/VBWizard/os64/pull/264), original native source `8b5d13a7`; clock diagnostic follow-up recorded | [Evidence and transition map](evidence/e03/README.md) |
-| E4 | Directory browser | Implemented; review/P5 pending | Quinn (design/integration), Sol (model/UI) | [Contract](E04_ROAM.md), [handoff](E04_HANDOFF.md), `243663dc` | [Host and native evidence](evidence/e04/README.md); no P5 claim |
+| E4 | Directory browser | Draft PR #267; review/P5 pending | Quinn (design/integration), Sol (model/UI) | [Contract](E04_ROAM.md), [handoff](E04_HANDOFF.md), [PR #267](https://github.com/VBWizard/os64/pull/267), `243663dc` | [Host and native evidence](evidence/e04/README.md); no P5 claim |
 | E5 | Open/Save picker and launch reuse | Planned | Unassigned | — | None |
 | E6 | Local channel foundation | Planned | Unassigned | — | None |
 | E7 | Safe operation engine | Planned | Unassigned | — | None |

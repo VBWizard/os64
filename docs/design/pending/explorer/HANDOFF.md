@@ -13,7 +13,8 @@ user-reported, without a captured installed-binary hash.
 **E4 is implemented** in `codex/roam-e4`, worktree `.worktrees/roam-e4`,
 source `243663dc`, based on E3 merge `5a521b63`. [Design](E04_ROAM.md),
 [host/native evidence](evidence/e04/README.md) and [P5 walkthrough](E04_HANDOFF.md)
-are ready. Independent review and Chris's P5 acceptance remain pending.
+are ready. Published as [draft PR #267](https://github.com/VBWizard/os64/pull/267) against `userland`.
+Independent review and Chris's P5 acceptance remain pending.
 File associations must be discussed with Chris before E5.
 
 E3 PR #264 is merged and its first review reported no major issues at

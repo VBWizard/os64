@@ -1,5 +1,7 @@
 # E4 — try Roam
 
+Published as [draft PR #267](https://github.com/VBWizard/os64/pull/267) against `userland`.
+
 Implementation: `243663dc` on `codex/roam-e4`, based on `userland` merge
 `5a521b63`. Worktree: `.worktrees/roam-e4`. [Design](E04_ROAM.md) and
 [evidence](evidence/e04/README.md) describe scope and validation. P5 acceptance
