@@ -181,6 +181,7 @@ int main(int argc,char **argv)
     assert(os64_icon_theme_create(&theme)==OS64_UI_OK);
     assert(!strcmp(os64_icon_theme_name(theme),"Selected fixture"));
     const os64_ui_icon_provider_t *p=os64_icon_theme_provider(theme);
+    assert(os64_icon_theme_cache_bytes(NULL)==0 && os64_icon_theme_cache_bytes(theme)==0);
     os64_ui_icon_lease_t chosen={0},generic={0};
     size_t before=live;
     fail_after=allocation_calls;
@@ -195,10 +196,14 @@ int main(int argc,char **argv)
     assert(lease_matches_png(&chosen,selected));
     assert(acquire(p,"file",&generic)==OS64_UI_ICON_OK);
     assert(lease_matches_png(&generic,fallback));
+    /* Both distinct catalogs contribute retained pixels, shared across leases. */
+    size_t cache_bytes=os64_icon_theme_cache_bytes(theme);
+    assert(cache_bytes>=2u*24u*24u*sizeof(uint32_t));
     os64_ui_icon_lease_t invalid={0};
     assert(acquire(p,"file/../folder",&invalid)==OS64_UI_ICON_INVALID);
     assert(os64_icon_theme_destroy(theme)==OS64_UI_BUSY);
     release(p,&chosen); release(p,&generic);
+    assert(os64_icon_theme_cache_bytes(theme)==cache_bytes);
     assert(os64_icon_theme_destroy(theme)==OS64_UI_OK);
 
     assert(rename(manifest,staged)==0);

@@ -2,13 +2,13 @@
 
 ## Status and ownership
 
-- **State:** Reviewing in `codex/explorer-e2`, 2026-10-13, based on
-  E1C merge `faa321a5`. [PR #261](https://github.com/VBWizard/os64/pull/261)
-  is open against `userland`; the branch is pushed.
+- **State:** Merged, 2026-10-13. [PR #261](https://github.com/VBWizard/os64/pull/261)
+  merged into `userland` as `f39b0ae0`, including final review fix `4ccaf82f`.
+  The implementation branch is `codex/explorer-e2`, based on E1C merge `faa321a5`.
   Host, asset, FAT/ext2 packaging and QEMU checks pass;
   [E2 evidence](evidence/e02/README.md) records their scope. Installed P5
-  gallery visual acceptance is confirmed by Chris; review fixes follow that
-  hardware report.
+  gallery visual acceptance is confirmed by Chris and precedes the final review
+  fix; no later P5 fault-test result is claimed.
 - **Design owner:** Quinn. Chris approved the Roam Classic visual direction and
   original image generation.
 - **Prerequisite:** E1's optional icon-provider contract is available.

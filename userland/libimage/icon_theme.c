@@ -270,3 +270,12 @@ const char *os64_icon_theme_name(const os64_icon_theme_t *theme)
 { return theme ? theme->name : NULL; }
 const char *os64_icon_theme_author(const os64_icon_theme_t *theme)
 { return theme ? theme->author : NULL; }
+
+size_t os64_icon_theme_cache_bytes(const os64_icon_theme_t *theme)
+{
+    if (!theme) return 0;
+    os64_icon_catalog_stats_t selected={0}, fallback={0};
+    os64_icon_catalog_stats(theme->selected,&selected);
+    os64_icon_catalog_stats(theme->fallback,&fallback);
+    return (size_t)selected.retained_bytes+fallback.retained_bytes;
+}

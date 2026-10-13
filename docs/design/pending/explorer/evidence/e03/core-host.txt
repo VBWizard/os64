@@ -1,0 +1,2 @@
+core maximum: rows=100000 snapshot=12848717 projection=800072
+data core: 276 checks, 0 failures

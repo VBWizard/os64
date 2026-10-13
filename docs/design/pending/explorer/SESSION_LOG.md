@@ -755,3 +755,98 @@ Review validation: both host suites pass ASan/UBSan/LSan; affected library and
 consumers cross-build. Native QEMU gallery smoke check passes with the revised
 library and downloaded set; the staged library matches its recorded hash.
 The scratch VM is stopped. Receipts: `evidence/e02/review-r1/`.
+
+
+## 2026-10-13 — E1B retrospective and E3 design packet
+
+Chris requested an audit of Sol's E1B PR #259 after six finding-bearing rounds.
+The review record contains 24 findings: 20 inline and four in a conversation
+comment, distributed 5/5/4/4/4/2, followed by a clean round. Several later
+findings revisited the same invariant through a different path or exposed an
+interaction introduced by a fix. Existing extensive tests were real evidence,
+but final-state assertions and simplified painting missed intermediate-state
+and production-rendering obligations. The standalone-focus report also needed
+reproduction analysis; not every reported trigger was confirmed as written.
+
+Chris authorized applying the lessons to the next design and Sol handoff.
+E3 now specifies immutable ID-based data/projections, separate focus/selection/
+anchor, exact range/filter/sort behavior, transactional publication, bounded
+visible-row resources, explicit resize failure/retry and callback obligations.
+The handoff supplies state examples, an invariant-to-entry-point map, interrupted
+input and paired-failure cases, production rendering tests, performance measures
+and separate host/QEMU/P5 acceptance. No E3 implementation started.
+
+E2 PR #261 is verified merged as `f39b0ae0`; the E3 design worktree/branch is
+`.worktrees/explorer-e3` / `codex/explorer-e3-design`, based on that commit.
+Updated E2 and central status without extending Chris's earlier P5 report to the
+later manifest fix. Reconciled the umbrella's generic selection ownership and
+stale next-step text. D017 records engineering choices and their authority.
+The next action is assignment of the E3 packet to Sol, not a kernel or IPC task.
+
+Design validation: local Markdown file targets and whitespace checks pass.
+The stale-reference scan reports live E1B/E1K/icon documentation paths and their
+historical audit receipts; inspected hits remain valid. No code identifiers or
+files were retired. Reviewed selection examples and failure transitions against
+the current input/font APIs. Runtime tests are not applicable to this docs-only
+packet and remain unrun for E3. The packet is published on its design branch;
+no separate PR or merge, allowing the implementation PR to carry the design.
+
+
+## 2026-10-13 — E3A/E3B implementation
+
+Chris assigned E3 from `origin/codex/explorer-e3-design` in a fresh worktree.
+Quinn implemented copied domain-scoped data, indexed projections, typed stable
+sorting and detached selection in `ee24fb64`, then the transactional Details
+widget/gallery in `8b5d13a7`. The branch is `codex/explorer-e3-implementation`;
+the worktree is `.worktrees/explorer-e3-implementation`. No kernel or ABI source
+was changed, and existing worktrees were retained.
+
+The real-font/renderer suite passes 14,875 checks, including 251 replacement
+and 204 font preparation failure points, complete tuple/pixel checks, paired
+failures, interrupted input, callback guards and lifecycle/resource bounds.
+The detached core passes 276 checks; existing menu and font/listbox suites and
+real PNG/theme checks pass. ASan/UBSan/LeakSanitizer remain enabled; sandbox
+thread attachment EPERM with TracerPid 0 was diagnosed and runs passed outside
+it. Font-error notices are deferred until a dispatch boundary; model/layout
+publication preserves held-key guards while input loss resets them.
+
+Normal FAT/ext2 image recipes and guest-read library/gallery hashes agree.
+Final QEMU source `8b5d13a7` exercises 0/1/10000/100000 rows, sort/filter/refresh/
+reset, selection/typeahead/activation, columns, an independent second view,
+Interface 32, light/dark appearance, resize and existing gallery modes. Its
+100 ordinary events after 10 warmups measure median/p95/max 46.194/48.486/49.554
+ms under TCG. Host p95 is 1.947 ms. Neither is claimed as P5 latency.
+
+[E3 evidence](evidence/e03/README.md) records commands, source/installed hashes,
+logs, screenshots and the invariant map. Independent review and Chris's P5
+HID/performance walkthrough remain pending. E3 is implemented, not accepted;
+E4 follows accepted E3.
+
+Published as [draft PR #264](https://github.com/VBWizard/os64/pull/264) against `userland`. The source remains `8b5d13a7`;
+the publication follow-up changes documentation links only.
+
+
+## 2026-10-13 — E3 clock diagnostic clarification
+
+Chris requested that “clock unavailable/unqueried” distinguish an unqueried
+clock from a failed query, and asked whether typing extends the search string.
+Added last-query state and gallery status refresh for no-match queries. The
+host regression verifies growing-prefix narrowing from Alpine to Alpha plus
+initial/failure/recovery diagnostics through the production dispatcher.
+ASan/UBSan/LeakSanitizer passes 14,948 checks; the library/gallery cross-build
+passes. The four-file `/tmp/e3-wire` acceptance bundle is refreshed; hashes and
+[the follow-up receipt](evidence/e03/README.md#clock-diagnostic-follow-up--2026-10-13)
+record its scope. Earlier QEMU/image/guest receipts remain for `8b5d13a7`; no
+P5 follow-up install or hardware acceptance is claimed.
+
+
+## 2026-10-13 — E3 synthetic filenames use underscores
+
+Chris requested underscore examples after a search containing a space ended
+its prefix. Updated synthetic filenames, including long-name suffixes, and the
+P5 acceptance example. The production typeahead regression verifies
+`Beta_000002` moves to `Beta_000010` on the final `1` in `beta_00001` and matches
+the full filename after another `0`. ASan/UBSan/LeakSanitizer passes 14,975
+checks and the gallery cross-build passes. The `/tmp/e3-wire` gallery is
+refreshed; [follow-up evidence](evidence/e03/README.md#underscore-fixture-follow-up--2026-10-13)
+records hashes and scope. Space handling is unchanged; P5 acceptance is pending.

@@ -58,7 +58,7 @@ typedef struct ui_font_binding
 	bool                 owns_text;
 	os64_font_set_t     *set;
 	ui_font_faces_t      faces;
-	size_t               live_bytes;
+	size_t               live_bytes, peak_bytes;
 	os64_font_status_t   status;   // why there is no set, or what last failed
 	bool                 tried;    // the lazy builtin attempt has happened
 
@@ -77,14 +77,16 @@ typedef struct ui_font_binding
 } ui_font_binding_t;
 
 // The engine allocates through libos64's heap, wrapped only to keep a
-// live-byte count: F2 hands the original size back on free, so the count is
-// exact and a fixture can assert a released binding owes nothing.
+// live and high-water requested-byte counts. F2 returns the original size
+// on free, so these include cached resources until their release.
 static void *binding_alloc(void *user, size_t bytes)
 {
 	ui_font_binding_t *b = user;
 	void *p = os64_malloc(bytes);
-	if (p)
+	if (p) {
 		b->live_bytes += bytes;
+		if (b->live_bytes > b->peak_bytes) b->peak_bytes = b->live_bytes;
+	}
 	return p;
 }
 
@@ -576,6 +578,12 @@ size_t os64_ui_font_live_bytes(const os64_ui_t *ui)
 	const ui_font_binding_t *b = ui ? (const ui_font_binding_t *)ui->font
 	                               : (const ui_font_binding_t *)0;
 	return b ? b->live_bytes : 0;
+}
+
+size_t os64_ui_font_peak_bytes(const os64_ui_t *ui)
+{
+    const ui_font_binding_t *b = ui ? (const ui_font_binding_t *)ui->font : NULL;
+    return b ? b->peak_bytes : 0;
 }
 
 os64_font_status_t os64_ui_font_bind(os64_ui_t *ui, os64_font_set_t *set)

@@ -17,18 +17,21 @@ E1B is merged as `88f8b672` (PR #259). E1C is approved and merged as
 `faa321a5` (PR #260), including Scribe's menu and grootmenu migration.
 Chris tested the production menus on P5; the last review reported no major issues.
 
-E2 is pushed in `codex/explorer-e2`, worktree `.worktrees/explorer-e2`, with
-[PR #261](https://github.com/VBWizard/os64/pull/261) open against `userland`.
-Implementation commits: E2A `8d01acc3`, E2B `d63809c9`.
-The P5 icon-free report exposed missing os64get deployment; the PR follow-up
-adds `@icons/*` and [bootstrap steps](../../../../assets/icons/README.md#p5-updates-through-os64get).
-Native QEMU transfer of the full collection passes. Chris confirms the P5
-gallery visually accepted, specifically praising the disabled app icon.
-The report follows `a3602b30` and predates the manifest review fix; no installed
-binary hash was captured. The review fix preserves transient manifest/config
-failures instead of silently selecting the default set.
-It supplies the shared PNG catalog, folder-based icon sets and Roam Classic
-artwork in Scribe, grootmenu and the gallery. No kernel code changes.
+E2 is merged as `f39b0ae0` through [PR #261](https://github.com/VBWizard/os64/pull/261).
+It supplies the PNG provider, installable icon sets, Roam Classic artwork and
+os64get delivery. Chris's P5 gallery visual acceptance follows `a3602b30` and
+predates the manifest error-handling fix `4ccaf82f`; no installed binary hash
+was captured. [E2 evidence](evidence/e02/README.md) preserves that distinction.
+
+**E3A/E3B are implemented on `codex/explorer-e3-implementation`, in the fresh
+`.worktrees/explorer-e3-implementation` worktree, starting from the published
+`origin/codex/explorer-e3-design` packet.** [Evidence](evidence/e03/README.md)
+records host, native, packaging and delivery scope. Independent review and
+Chris's P5 HID/performance walkthrough remain pending; E3 is not called accepted.
+E4's real directory browser follows accepted E3.
+
+The design branch `codex/explorer-e3-design` / `.worktrees/explorer-e3` remains
+separate. The implementation [draft PR #264](https://github.com/VBWizard/os64/pull/264) against `userland` carries its design packet.
 
 | Work | State | Next action |
 | --- | --- | --- |
@@ -36,8 +39,8 @@ artwork in Scribe, grootmenu and the gallery. No kernel code changes.
 | [E1K native popups](E01K_HANDOFF.md) | Approved and merged, PR #257 | Consume the merged E1K wrappers. |
 | [E1B menus](E01B_HANDOFF.md) | Approved and merged, PR #259 | Reuse the shared controller and dispatcher. |
 | E1C consumers | Approved and merged, PR #260; P5 tested | Reuse production menus. |
-| [E2 icons](E02_ICONS.md) | Reviewing; P5 gallery visually accepted | Review the manifest error-handling fix; [evidence](evidence/e02/README.md). |
-| E3 data view and selection | Planned | Design the reusable view/selection contract after E2. |
+| [E2 icons](E02_ICONS.md) | Merged, PR #261 | Reuse provider and shipped assets; [evidence](evidence/e02/README.md). |
+| [E3 data view and selection](E03_DATA_VIEW.md) | Implemented; review/P5 pending | Review the implementation and run [the P5 acceptance packet](E03_HANDOFF.md). |
 | E6 channels | Umbrella proposal only | Separate platform design and Fable review. |
 
 Install another icon set by extracting its folder, selecting its absolute path

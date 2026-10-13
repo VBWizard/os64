@@ -8,6 +8,7 @@
 #include "os64/mem.h"
 #include "os64/str.h"
 #include "image/icon_theme.h"
+#include "details_page.h"
 
 enum { RECORD=1, PANEL, STATUS, HELP, CLEAR_HELP, CLEAR_NOTICE, QUIT, BAR, HEADING, PANE_A, PANE_B, RADIO_A, RADIO_B };
 typedef struct { uint64_t generation; unsigned refs, hits; bool enabled; } gallery_target;
@@ -555,8 +556,9 @@ static int gallery_icon_page(bool dark, bool icons)
 int main(int argc,char **argv)
 {
     bool icons=true, synthetic=false; int32_t window_width=880;
-    bool icons_page=false, dark=false;
-    for(int i=1;i<argc;++i) { if(os64_streq(argv[i],"--no-icons")) icons=false; if(os64_streq(argv[i],"--synthetic-icons")) synthetic=true; if(os64_streq(argv[i],"--trace")) g.trace=true; if(os64_streq(argv[i],"--narrow")) window_width=240; if(os64_streq(argv[i],"--icons-page")) icons_page=true; if(os64_streq(argv[i],"--dark")) dark=true; }
+    bool icons_page=false, details_page=false, dark=false;
+    for(int i=1;i<argc;++i) { if(os64_streq(argv[i],"--no-icons")) icons=false; if(os64_streq(argv[i],"--synthetic-icons")) synthetic=true; if(os64_streq(argv[i],"--trace")) g.trace=true; if(os64_streq(argv[i],"--narrow")) window_width=240; if(os64_streq(argv[i],"--icons-page")) icons_page=true; if(os64_streq(argv[i],"--dark")) dark=true; if(os64_streq(argv[i],"--details-page")) details_page=true; }
+    if(details_page) return gallery_details_page(dark,icons);
     if(icons_page) return gallery_icon_page(dark,icons);
     int64_t win=os64_gui_window_create("Shared menu toolkit gallery",40,10,window_width,740,0);
     if(win<=0) { os64_printf("actiongallery: GUI unavailable (%ld)\n",(long)win); return 1; }

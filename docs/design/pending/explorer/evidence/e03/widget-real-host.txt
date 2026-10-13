@@ -1,0 +1,7 @@
+Artifacts: /tmp/e3-widget-real
+core maximum: rows=100000 snapshot=12848717 projection=800072
+replacement allocation sweep: 251 preparation failure points
+font adoption allocation sweep: 204 failure points
+host 10000 rows: snapshot=3721810 metadata=92632 peak=192880 font-engine=1377231 font-peak=1448324 runs=52 leases=12 visible=12 construction-us=30087 sort-us=4869 no-match-us=714
+host 100 scroll-to-paint events after 10 warmups: median-us=1727 p95-us=1947 max-us=2793
+Details host: 14875 checks, 0 failures
