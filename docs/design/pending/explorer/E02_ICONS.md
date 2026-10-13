@@ -2,8 +2,10 @@
 
 ## Status and ownership
 
-- **State:** Ready for review in `codex/explorer-e2`, 2026-10-13, based on
-  E1C merge `faa321a5`. Host, asset, FAT/ext2 packaging and QEMU checks pass;
+- **State:** Reviewing in `codex/explorer-e2`, 2026-10-13, based on
+  E1C merge `faa321a5`. [PR #261](https://github.com/VBWizard/os64/pull/261)
+  is open against `userland`; the branch is pushed.
+  Host, asset, FAT/ext2 packaging and QEMU checks pass;
   [E2 evidence](evidence/e02/README.md) records their scope. Installed P5
   acceptance remains pending.
 - **Design owner:** Quinn. Chris approved the Roam Classic visual direction and

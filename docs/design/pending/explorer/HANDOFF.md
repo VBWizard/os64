@@ -17,7 +17,9 @@ E1B is merged as `88f8b672` (PR #259). E1C is approved and merged as
 `faa321a5` (PR #260), including Scribe's menu and grootmenu migration.
 Chris tested the production menus on P5; the last review reported no major issues.
 
-Current work is E2 in `codex/explorer-e2`, worktree `.worktrees/explorer-e2`.
+E2 is pushed in `codex/explorer-e2`, worktree `.worktrees/explorer-e2`, with
+[PR #261](https://github.com/VBWizard/os64/pull/261) open against `userland`.
+Implementation commits: E2A `8d01acc3`, E2B `d63809c9`.
 It supplies the shared PNG catalog, folder-based icon sets and Roam Classic
 artwork in Scribe, grootmenu and the gallery. No kernel code changes.
 
@@ -27,7 +29,7 @@ artwork in Scribe, grootmenu and the gallery. No kernel code changes.
 | [E1K native popups](E01K_HANDOFF.md) | Approved and merged, PR #257 | Consume the merged E1K wrappers. |
 | [E1B menus](E01B_HANDOFF.md) | Approved and merged, PR #259 | Reuse the shared controller and dispatcher. |
 | E1C consumers | Approved and merged, PR #260; P5 tested | Reuse production menus. |
-| [E2 icons](E02_ICONS.md) | Ready for review; host, packaging and QEMU checks pass | Ordinary review and [P5 walkthrough](evidence/e02/README.md). |
+| [E2 icons](E02_ICONS.md) | Reviewing; host, packaging and QEMU checks pass | Ordinary review and [P5 walkthrough](evidence/e02/README.md). |
 | E3 data view and selection | Planned | Design the reusable view/selection contract after E2. |
 | E6 channels | Umbrella proposal only | Separate platform design and Fable review. |
 

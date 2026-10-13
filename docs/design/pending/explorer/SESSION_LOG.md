@@ -709,3 +709,7 @@ Scribe at Interface 16/32, desktop menu icons and missing-art text fallback.
 [E2 evidence](evidence/e02/README.md) records exact scope and final binary hashes.
 The open/stat ABI's ambiguous failed lookup is documented; no kernel change is
 part of E2. Next: ordinary PR review and Chris's installed P5 acceptance.
+
+Publication: E2A `8d01acc3` and E2B `d63809c9` are pushed;
+[PR #261](https://github.com/VBWizard/os64/pull/261) is open against `userland`.
+No merge has been performed. The scratch QEMU instance is stopped.

@@ -33,7 +33,9 @@ Updated: 2026-10-13.
 - E1B is approved and merged as `88f8b672` (PR #259), confirmed by Chris.
 - E1C is approved and merged as `faa321a5` (PR #260); Chris tested Scribe
   and the desktop menu on P5.
-- Current work: E2 in `codex/explorer-e2`. The file-backed provider, installable
+- Current work: E2 is pushed in `codex/explorer-e2`, with
+  [PR #261](https://github.com/VBWizard/os64/pull/261) open against `userland`.
+  The file-backed provider, installable
   sets and Roam Classic artwork pass host, FAT/ext2 packaging and QEMU checks.
   [E2 evidence and P5 walkthrough](evidence/e02/README.md) record the result;
   ordinary review and installed P5 acceptance remain.
@@ -62,7 +64,7 @@ Create slice records when work begins, rather than maintaining 15 empty designs.
 | ID | Slice | State | Owner | Record / PR / implementation commit | Acceptance evidence |
 | --- | --- | --- | --- | --- | --- |
 | E1 | Actions, menus and status | E1A/E1K/E1B/E1C merged; production menus P5 tested | Quinn (E1C), Sol (E1A/E1B) | [E1A](E01A_HANDOFF.md), [E1K](E01K_HANDOFF.md), [E1B](E01B_HANDOFF.md); PR #254 `c6cc6e3c`, PR #257 `b36e9ddc` | [E1B evidence/walkthrough](evidence/e01b/README.md); P5 report precedes review fixes |
-| E2 | Icon vocabulary | Ready for review; P5 pending | Quinn | [E2 contract](E02_ICONS.md), `codex/explorer-e2` | [Host, packaging and QEMU evidence](evidence/e02/README.md) |
+| E2 | Icon vocabulary | Reviewing; P5 pending | Quinn | [E2 contract](E02_ICONS.md), `codex/explorer-e2` | [Host, packaging and QEMU evidence](evidence/e02/README.md) |
 | E3 | Data view and selection | Planned | Unassigned | — | None |
 | E4 | Directory browser | Planned | Unassigned | — | None |
 | E5 | Open/Save picker and launch reuse | Planned | Unassigned | — | None |
