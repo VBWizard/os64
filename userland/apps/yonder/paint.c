@@ -1231,16 +1231,16 @@ static os64_gui_rect_t content_of(const flow_box_t *b)
 
 static void decorations(const Painter *p, const flow_box_t *b)
 {
-    if (b->decoration == 0)
-        return;
-    int64_t size = px(b->style->font_size);
-    int64_t thick = max64(1, size / 16);
-    if (b->decoration & FLOW_DECORATION_UNDERLINE)
-        fill(p, b->rect.x, (int64_t)b->baseline + thick, b->rect.w, thick,
-             ink_of(p, b->underline_color));
-    if (b->decoration & FLOW_DECORATION_LINE_THROUGH)
-        fill(p, b->rect.x, (int64_t)b->baseline - size * 3 / 10, b->rect.w, thick,
-             ink_of(p, b->line_through_color));
+    // Where each falls is libflow's (flow_decoration_rect), which a
+    // group's bounds hold too.
+    if (b->decoration & FLOW_DECORATION_UNDERLINE) {
+        os64_gui_rect_t r = flow_decoration_rect(b, FLOW_DECORATION_UNDERLINE);
+        fill(p, r.x, r.y, r.w, r.h, ink_of(p, b->underline_color));
+    }
+    if (b->decoration & FLOW_DECORATION_LINE_THROUGH) {
+        os64_gui_rect_t r = flow_decoration_rect(b, FLOW_DECORATION_LINE_THROUGH);
+        fill(p, r.x, r.y, r.w, r.h, ink_of(p, b->line_through_color));
+    }
 }
 
 // Disc, circle and square are drawn as shapes, the way browsers draw them,
@@ -1282,10 +1282,10 @@ static bool span_within(int64_t d, int64_t limit, int64_t *lo, int64_t *hi)
 
 static void bullet(const Painter *p, const flow_box_t *b, flow_list_style_type_t type)
 {
-    int64_t size = px(b->style->font_size);
-    int64_t d = max64(3, size / 3);
-    int64_t x = (int64_t)b->rect.x + max64(0, ((int64_t)b->rect.w - size / 4 - d) / 2);
-    int64_t y = (int64_t)b->baseline - size * 3 / 10 - d / 2;
+    // Where it falls is libflow's (flow_marker_shape_rect), which a
+    // group's bounds hold too.
+    os64_gui_rect_t at = flow_marker_shape_rect(b);
+    int64_t x = at.x, y = at.y, d = at.w;
     uint32_t colour = ink_of(p, b->style->color);
     if (type == FLOW_LIST_SQUARE) {
         fill(p, x, y, d, d, colour);

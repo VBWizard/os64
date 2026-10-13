@@ -1049,16 +1049,16 @@ BILINEAR, B and T interpolated apart (B is premultiplied by its own
 making, so they interpolate as they should). The destination is cut by
 the group's outer clip and the view.
 
-A surface is the group's bounds — each layer grown by its INK, as far
-as the painter draws past it: its own shadows (a box shadow by its
-spread, its offset and 3 (blur / 2) — its three box blurs — and not at
-all when its spread collapses it; a text shadow, drawn sharp, by its
-offset alone), its
-glyphs' overhang, and what the boxes inside it hand up, each cut to its
-clip (a shadow is in no box's overflow) — cut to the view taken back
-through the matrices, one pixel more all round for the bilinear sample
-at the edge: what can show. At
-most 4096 pixels a side and 2,097,152 in all (8 MiB each), at most 16
+A surface is the group's bounds — each layer grown by its INK, at least
+as far as the painter draws past it: its own shadows (a box shadow by
+its spread, its offset and 3 (blur / 2) — its three box blurs — and not
+at all when its spread collapses it; a text shadow, drawn sharp, by its
+offset alone), its glyphs' overhang, its decorations and marker shape,
+and what the boxes inside it hand up, each cut to its clip (a shadow is
+in no box's overflow) — cut to the view taken back through the matrices,
+one pixel more all round for the bilinear sample at the edge: what can
+show.
+At most 4096 pixels a side and 2,097,152 in all (8 MiB each), at most 16
 deep, and within half of what a 32-bit coordinate can say (its offset is
 added to every coordinate the glass draws); a group past that, or whose surfaces find no memory, is painted
 straight onto the backdrop at its S7a offset — upright, inside what
@@ -1076,7 +1076,8 @@ its matrix not at all.
 | A control in a drawn-through box is drawn turned but edited upright | a live widget is drawn on the glass, not through a matrix | a page with a turned form |
 | A group the face refuses (past its sheet limits, out of memory) is drawn upright but hit through its matrix; inside a group that was laid, it is cut by that group's sheet, sized for it turned, and an enclosing opacity group saves no backdrop where the upright drawing falls, so it is opaque there | libflow answers hits and bounds for the page as written; which groups a face refuses is decided at paint time, and only it knows | a page whose turned group passes the sheet limits and is clicked, or is cut |
 | Nested turned groups whose matrices only compose to something ordinary (`scale(1e308)` inside `scale(1e-308)`) are hit and measured where they are, but painted nowhere | each group's sheet is laid onto the one outside in whole pixels, and the inner one lands past what a pixel can say; drawing it would mean composing the matrices across groups, not a sheet per group | a page that nests reciprocal extremes |
-| THE NUMERIC CONTRACT: transforms are as accurate as a browser's and strictly safe. Numbers a page actually writes are composed, undone and drawn right; past that — a composite that, w divided out, is past a double (`scale(1e200) scale(1e200)`), a cancellation finer than a long double's 64 bits (`matrix(1+2^-52, 2^104, …)` lists), a translation past what 26.6 holds (`matrix(1,0,0,1,1e307,0)`), a z entry so large that dividing the matrix down leaves its w 0 (`scaleZ(1e308)` twice) — a box may be drawn upright, or not at all where its matrix comes out singular, though `@supports` said yes. Any input, however hostile, is never a crash, a hang or undefined behaviour | exactness past a browser's has no end: each widening of the arithmetic (#258 rounds 13 to 17) met an input just past it, and Chrome composes in doubles; libgarb judges each function's numbers, not their product | a look at the whole contract, booked by Chris (2026-10-12); a page that needs more |
+| THE NUMERIC CONTRACT: transforms are as accurate as a browser's and strictly safe. Numbers a page actually writes are composed, undone and drawn right; past that — a composite that, w divided out, is past a double (`scale(1e200) scale(1e200)`), a cancellation finer than a long double's 64 bits (`matrix(1+2^-52, 2^104, …)` lists), a translation past what 26.6 holds (`matrix(1,0,0,1,1e307,0)`), a z entry so large that dividing the matrix down leaves its w 0 (`scaleZ(1e308)` twice) — a box may be drawn upright, or not at all where its matrix comes out singular, though `@supports` said yes; and a page scrolled past half a 32-bit coordinate (about 1.07 billion px; Chrome's layout saturates near 33.5 million) may lose a turned group nothing clips, its absent clip being the plane only that far. Any input, however hostile, is never a crash, a hang or undefined behaviour | exactness past a browser's has no end: each widening of the arithmetic (#258 rounds 13 to 17) met an input just past it, and Chrome composes in doubles; libgarb judges each function's numbers, not their product | a look at the whole contract, booked by Chris (2026-10-12); a page that needs more |
+| THE BOUNDS CONTRACT: a group's bounds hold AT LEAST its ink, never less. Less is a bug, fixed (#258 rounds 15 to 19: shadow reach, glyph overhang, decorations). More is the stated behaviour: a fully transparent shadow (a `transparent` colour or `currentColor`), a positioned box under `opacity: 0` that is never painted, and the like are still counted, and a group they push past the sheet limits is drawn upright | counting only what is drawn means following every way a thing can paint nothing — each narrowing met the next (round 19) — and the cost of counting more is the degraded drawing, never a wrong one | a look with the numeric contract, booked by Chris (2026-10-12); a page whose invisible content refuses a turned group |
 | A large `visibility: hidden` box inside a turned group still sizes its sheets | the bounds come from layout overflow, which keeps what is hidden; a page whose hidden content pushes a turned group past the sheet limits gets it upright | a page that does |
 | A sticky box, a scroll container's bars, or a fragment revealed inside a drawn-through box | each is worked against the page's viewport, which the box's own coordinates are not | a page that scrolls inside a turned box |
 | `perspective` and non-flat matrices | carried over from S7a | a page whose 3D card flip matters |

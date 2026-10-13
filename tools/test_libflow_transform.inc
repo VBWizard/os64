@@ -543,6 +543,27 @@ static bool rect_is(os64_gui_rect_t r, int32_t x, int32_t y, int32_t w, int32_t 
     return r.x == x && r.y == y && r.w == w && r.h == h;
 }
 
+// Whether `outer` holds all of `in`, which is not empty.
+static bool rect_holds(os64_gui_rect_t outer, os64_gui_rect_t in)
+{
+    return in.w > 0 && in.h > 0 && in.x >= outer.x && in.y >= outer.y &&
+           (int64_t)in.x + in.w <= (int64_t)outer.x + outer.w &&
+           (int64_t)in.y + in.h <= (int64_t)outer.y + outer.h;
+}
+
+// The first box of `kind` at or under `b`, or NULL.
+static const flow_box_t *first_of_kind(const flow_box_t *b, flow_box_kind_t kind)
+{
+    if (b == NULL || b->kind == kind)
+        return b;
+    for (const flow_box_t *c = b->first; c != NULL; c = c->next) {
+        const flow_box_t *found = first_of_kind(c, kind);
+        if (found != NULL)
+            return found;
+    }
+    return NULL;
+}
+
 // Slice S7b (PILE3.md § Transforms, the painter): a flat matrix that does
 // more than translate is drawn THROUGH — painted in the box's own
 // coordinates and laid through the matrix — so where a box is painted and
@@ -785,6 +806,38 @@ static void transform_through_cases(void)
     flow_visit_groups(t, (os64_gui_rect_t){20, 0, 1, 600}, top, &vis);
     expect("transform: the walk paints the pixel a sample at the view's edge reads",
            fringe.watch != NULL && beyond.watch != NULL && fringe.seen && !beyond.seen, NULL);
+    vis.ctx = &gr;
+    flow_free(t);
+    sheeted_close(&q);
+
+    // A decoration is drawn where the painter puts it, past the line box at
+    // a 1px font — a pixel thick, a pixel below the baseline — and a tiny
+    // marker's square is at least 3 across, 3 by 3 on a 1px line: a group
+    // holds both, as it holds a shadow.
+    sheeted_open(&q, XFORM_STYLE ".t{width:100px;font-size:1px;line-height:1px;"
+                     "text-decoration:underline;transform:rotate(90deg)}"
+                     "ul{width:100px;margin:0;padding:0 0 0 20px;font-size:1px;line-height:1px;"
+                     "transform:rotate(90deg)}</style>"
+                     "<div class=t id=t>xyz</div><ul id=u><li>w</ul>",
+                 400, 600);
+    t = flow_layout(q.doc, q.page, 400, &q.env);
+    const flow_box_t *db = box_with_id(t, q.doc->document, "t");
+    const flow_box_t *ub = box_with_id(t, q.doc->document, "u");
+    const flow_box_t *line = public_text(flow_root(t), "xyz"), *mark = first_of_kind(ub, FLOW_BOX_MARKER);
+    XformGroups marks_held = {0};
+    vis.ctx = &marks_held;
+    flow_visit_groups(t, (os64_gui_rect_t){0, 0, 400, 600}, top, &vis);
+    os64_gui_rect_t under = line != NULL ? flow_decoration_rect(line, FLOW_DECORATION_UNDERLINE)
+                                         : (os64_gui_rect_t){0, 0, 0, 0};
+    os64_gui_rect_t square = mark != NULL ? flow_marker_shape_rect(mark)
+                                          : (os64_gui_rect_t){0, 0, 0, 0};
+    expect("transform: a decoration and a marker past their boxes are held by their groups",
+           db != NULL && ub != NULL && line != NULL && mark != NULL && marks_held.opens == 2 &&
+               !rect_holds(db->overflow, under) && rect_holds(marks_held.first, under) &&
+               under.h == 1 && under.y == line->baseline + 1 && square.w == 3 &&
+               square.h == 3 && !rect_holds(ub->overflow, square) &&
+               rect_holds(marks_held.bounds, square),
+           NULL);
     vis.ctx = &gr;
     flow_free(t);
     sheeted_close(&q);

@@ -725,9 +725,13 @@ struct flow_box {
     // word wider than its line), so a walk that prunes on `rect` would
     // miss what is drawn.
     os64_gui_rect_t overflow;
-    // How far past `overflow` a shadow it or anything in it casts may be
-    // drawn, in pixels, on each side in CSS's side order: a shadow is in no
-    // box's overflow, and a group that composites the box must hold it.
+    // How far past `overflow` what it or anything in it paints may reach,
+    // in pixels, on each side in CSS's side order: its shadows, which are
+    // in no box's overflow, and the glyph ink, decorations and marker
+    // shapes the painter draws past it. A group that composites the box
+    // must hold it, so this is AT LEAST that far: never less, and more
+    // where a shadow paints nothing it is counted for (the bounds
+    // contract, PILE3.md § Transforms, the painter, Booked).
     int32_t ink[4];
     // Content box in the same frame coordinates as rect; set for box nodes.
     os64_gui_rect_t content;
@@ -873,7 +877,9 @@ bool flow_box_point(const flow_box_t *box, flow_point_t scroll, int32_t x, int32
 // painted in its own coordinates and laid onto the coordinates the group
 // it sits in is painted in through `m`, x' = m[0] x + m[2] y + m[4], y' =
 // m[1] x + m[3] y + m[5]; `clip`, when not NULL, is what clips it from
-// outside, in those outer coordinates (the whole plane when nothing does),
+// outside, in those outer coordinates (when nothing does, the plane as far
+// as half a 32-bit coordinate reaches: the numeric contract, PILE3.md §
+// Transforms, the painter, Booked),
 // and `upright`, when not NULL, where its own coordinates go to draw it
 // upright instead, moved — a face that cannot lay it through. False for
 // any other box.
@@ -892,6 +898,17 @@ bool flow_shadow_casts(const flow_box_t *box, const flow_shadow_t *sh);
 // circle, a square — rather than as its text: the painter's choice, and
 // what a marker's ink and text shadows follow.
 bool flow_marker_is_shape(const flow_style_t *s);
+// Where the painter draws a text box's decoration `line`
+// (FLOW_DECORATION_UNDERLINE or _LINE_THROUGH): across the box, a
+// sixteenth of its font size thick and at least a pixel, the underline
+// that far below the baseline, the line-through three tenths of the size
+// above it. A small font puts it past the line box, which is why a group's
+// bounds ask too.
+os64_gui_rect_t flow_decoration_rect(const flow_box_t *box, uint32_t line);
+// The square a shape marker (flow_marker_is_shape) is drawn in: a third of
+// its font size across and at least 3 pixels, centred in the box less a
+// quarter of the size at its end, on the height a line-through takes.
+os64_gui_rect_t flow_marker_shape_rect(const flow_box_t *box);
 // Such a matrix undone: false when it cannot be — its 2x2 part has no
 // inverse, or that inverse is not a finite double. Its determinant, and
 // the determinants its translation is worked from, are worked so neither a
@@ -998,12 +1015,12 @@ void flow_visit(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t 
 // full opacity (flow_style_t.opacity), or drawn through its matrix
 // (flow_box_through), the root's included — one group when it is both.
 // `open` comes before the group's first box and `close` after its last,
-// groups nesting; `bounds` holds everything the group paints, in the
-// coordinates it is painted in at this scroll — its own boxes' overflow
-// rects and its members', each where its frame puts it, grown by as far as
-// any shadow on the page is drawn past its box, and cut to its clip, a
-// drawn-through
-// group inside counted through its matrix and cut to its clip — so a face
+// groups nesting; `bounds` holds at least everything the group paints
+// (the bounds contract, PILE3.md § Transforms, the painter, Booked), in the coordinates it is painted in at
+// this scroll — its own boxes' overflow rects and its members', each
+// where its frame puts it, grown by its `ink` and cut to its clip, a
+// drawn-through group inside counted through its matrix and cut to its
+// clip — so a face
 // can composite it whole: everything inside painted as usual, then the
 // group laid over what was under it at its opacity (CSS Color 4 § 3.2),
 // through its matrix. Inside a drawn-through group the walk culls against

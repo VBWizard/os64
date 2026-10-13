@@ -870,11 +870,12 @@ static void shadow_reach(const flow_shadow_t *sh, bool text, int64_t out[4])
         out[k] = side[k] > 0 ? side[k] : 0;
 }
 
-// Every box's `ink`: how far, on each side, a shadow it casts (an inset
-// one falls inside) or its text casts, or any shadow of a box inside it,
-// reaches past its overflow rect — its own worked as the walk goes down,
-// from its border box, each child's handed up as the walk climbs past it
-// (ink_up). Without recursion, the tree being as deep as the page.
+// Every box's `ink` (flow_box_t): at least how far, on each side, what it
+// paints — a shadow it or its text casts (an inset one falls inside), its
+// glyphs, decorations and marker shape — or anything a box inside it
+// paints, reaches past its overflow rect — its own worked as the walk goes
+// down, from its border box, each child's handed up as the walk climbs
+// past it (ink_up). Without recursion, the tree being as deep as the page.
 bool flow_marker_is_shape(const flow_style_t *s)
 {
     return s->list_style_type == FLOW_LIST_DISC || s->list_style_type == FLOW_LIST_CIRCLE ||
@@ -893,6 +894,48 @@ static bool paints_frame(const flow_box_t *b)
     default:
         return !(b->parent != NULL && b->parent->kind == FLOW_BOX_ATOMIC &&
                  b->parent->node == b->node);
+    }
+}
+
+// A font size in whole pixels, rounded as the painter rounds a length.
+static int64_t size_px(flow_unit_t u)
+{
+    return ((int64_t)u + FLOW_UNITS_PER_PX / 2) / FLOW_UNITS_PER_PX;
+}
+
+os64_gui_rect_t flow_decoration_rect(const flow_box_t *box, uint32_t line)
+{
+    int64_t size = size_px(box->style->font_size);
+    int64_t thick = size / 16 > 1 ? size / 16 : 1;
+    int64_t y = line == FLOW_DECORATION_UNDERLINE ? (int64_t)box->baseline + thick
+                                                  : (int64_t)box->baseline - size * 3 / 10;
+    return held_rect(box->rect.x, y, (int64_t)box->rect.x + box->rect.w, y + thick);
+}
+
+os64_gui_rect_t flow_marker_shape_rect(const flow_box_t *box)
+{
+    int64_t size = size_px(box->style->font_size);
+    int64_t d = size / 3 > 3 ? size / 3 : 3;
+    int64_t room = ((int64_t)box->rect.w - size / 4 - d) / 2;
+    int64_t x = (int64_t)box->rect.x + (room > 0 ? room : 0);
+    int64_t y = (int64_t)box->baseline - size * 3 / 10 - d / 2;
+    return held_rect(x, y, x + d, y + d);
+}
+
+// How far the rect [x0, x1) by [y0, y1) reaches past `b`'s border box on
+// each side, in CSS's side order, raised into `most`; that much is also
+// left in `out` when it is not NULL.
+static void past_box(const flow_box_t *b, int64_t x0, int64_t y0, int64_t x1, int64_t y1,
+                     int64_t most[4], int64_t out[4])
+{
+    int64_t over[4] = {(int64_t)b->rect.y - y0, x1 - ((int64_t)b->rect.x + b->rect.w),
+                       y1 - ((int64_t)b->rect.y + b->rect.h), (int64_t)b->rect.x - x0};
+    for (int k = 0; k < 4; k++) {
+        int64_t v = over[k] > 0 ? over[k] : 0;
+        if (out != NULL)
+            out[k] = v;
+        if (v > most[k])
+            most[k] = v;
     }
 }
 
@@ -918,13 +961,19 @@ static void own_ink(flow_box_t *b)
         int64_t ix1 = (int64_t)b->rect.x + ((view.ink.x1 + 63) >> 6);
         int64_t iy0 = (int64_t)b->baseline + (view.ink.y0 >> 6);
         int64_t iy1 = (int64_t)b->baseline + ((view.ink.y1 + 63) >> 6);
-        int64_t over[4] = {(int64_t)b->rect.y - iy0, ix1 - ((int64_t)b->rect.x + b->rect.w),
-                           iy1 - ((int64_t)b->rect.y + b->rect.h), (int64_t)b->rect.x - ix0};
-        for (int k = 0; k < 4; k++) {
-            glyph[k] = over[k] > 0 ? over[k] : 0;
-            if (glyph[k] > most[k])
-                most[k] = glyph[k];
+        past_box(b, ix0, iy0, ix1, iy1, most, glyph);
+    }
+    // A decoration is drawn where the painter puts it, which a small font
+    // puts past the line box; a shape marker's square may pass its box.
+    static const uint32_t kLines[] = {FLOW_DECORATION_UNDERLINE, FLOW_DECORATION_LINE_THROUGH};
+    for (int k = 0; draws_text && k < 2; k++)
+        if (b->decoration & kLines[k]) {
+            os64_gui_rect_t r = flow_decoration_rect(b, kLines[k]);
+            past_box(b, r.x, r.y, (int64_t)r.x + r.w, (int64_t)r.y + r.h, most, NULL);
         }
+    if (b->kind == FLOW_BOX_MARKER && flow_marker_is_shape(s)) {
+        os64_gui_rect_t r = flow_marker_shape_rect(b);
+        past_box(b, r.x, r.y, (int64_t)r.x + r.w, (int64_t)r.y + r.h, most, NULL);
     }
     for (int32_t i = 0; i < nbox + ntext; i++) {
         bool text = i >= nbox;
@@ -2123,13 +2172,12 @@ static os64_gui_rect_t grown(os64_gui_rect_t r, const int32_t d[4])
 // drawn through its matrix inside it counted as its own bounds sent
 // through that matrix, cut to what clips it from outside.
 // What one box's layer adds to its group: its overflow rect where its
-// frame puts it, grown by its shadows' reach and cut to its clip; false
-// for nothing.
+// frame puts it, grown by its ink and cut to its clip; false for nothing.
 static bool layer_reach(const Layer *l, flow_point_t scroll, os64_gui_rect_t *at)
 {
     flow_point_t o = flow_box_doc_offset(l->box, scroll);
     *at = moved(l->box->overflow, o.x, o.y);
-    *at = grown(*at, l->box->ink);      // what shadows paint past it
+    *at = grown(*at, l->box->ink);      // what it paints past it
     if (l->box->clipped)
         *at = meet(*at, flow_box_doc_clip(l->box, scroll));
     return at->w > 0 && at->h > 0;      // clipped away: nothing of it to hold
