@@ -1197,9 +1197,10 @@ colour, when the bottom layer is one of them) is drawn as one TEXT CLIP:
 
 Then the text is painted where it always is, in its fill colour: a
 transparent fill draws nothing, and a solid one paints over the gradient,
-as Chrome's row 7 does. A run that draws nothing — no colour, no picture,
-no gradient — makes no clip and rescues nothing: Chrome shows nothing
-there either.
+as Chrome's row 7 does. A run the page wrote nothing for — no colour, no
+picture, no gradient — makes no clip and rescues nothing: Chrome shows
+nothing there either. An inline box's piece draws its pictures as well as
+its colour and gradients (#262, Codex), each placed on the piece.
 
 **The face.** A text clip is an opacity group whose opacity is PER PIXEL.
 S7b already lays a group painted on two backdrops — B on black, W on white
@@ -1252,6 +1253,7 @@ Written before the code (the lesson of S7b's nineteen rounds):
 | `-webkit-text-stroke` | an outline of a glyph is a rasteriser's verb the text engine does not have | a page whose outlined headline matters |
 | Emphasis marks | yonder does not draw `text-emphasis` at all | the slice that draws them |
 | `background-clip: border-area` (Backgrounds 4) | a newer value no page in the census writes; `@supports` says no | a page that writes it |
+| A refused clip over a background that places nothing (a zero `background-size`) rescues the words, where the clip itself would show none | whether a run draws is asked of what the page wrote, not of where its tiles land — a picture's tile only the face can work out; the rescue is the degraded drawing, and drawing more there errs the way THE BOUNDS CONTRACT allows (#262, Codex) | a page that clips a zero-sized background to its text and is refused |
 
 ### Proof
 

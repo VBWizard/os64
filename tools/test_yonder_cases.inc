@@ -534,6 +534,29 @@ static void paint_cases(void)
                     "pixels 0 2 12 16 ffff0000 ffff0000\n"
                     "end clip\n"
                     "text \"Hi\" 0 14 #101010\n");
+    // An inline box's picture is placed on its piece as its gradient is —
+    // the piece its origin and clip box — and clipped to its text the same
+    // way, so a span whose url() background shows through its text has
+    // one (#262, Codex).
+    paint_page_case("an inline picture is drawn on its piece",
+                    "<!doctype html><style>body { margin: 0 } span {"
+                    " background: url(a.png) }</style><span>Hi</span>",
+                    100, (os64_gui_rect_t){0, 0, 100, 50}, true,
+                    "fill 0 0 100 50 #fefefe\n"
+                    "backdrop 0 2 12 16 layer 0 origin 0 2 12 16\n"
+                    "text \"Hi\" 0 14 #101010\n");
+    paint_page_case("an inline picture clipped to the text is drawn through its text",
+                    "<!doctype html><style>body { margin: 0 } span {"
+                    " background: url(a.png); background-clip: text; color: transparent }"
+                    "</style><span>Hi</span>",
+                    100, (os64_gui_rect_t){0, 0, 100, 50}, true,
+                    "fill 0 0 100 50 #fefefe\n"
+                    "clip 0 2 12 16\n"
+                    "text \"Hi\" 0 14 #ffffff clip 0 2 12 16\n"
+                    "fill clip\n"
+                    "backdrop 0 2 12 16 layer 0 origin 0 2 12 16\n"
+                    "end clip\n"
+                    "text \"Hi\" 0 14 #000000/0\n");
     // A block's clip is its border box, 0 0 100 20; its text's ink is "Hi"
     // (0 2 12 16) and its 1px shadow, so the clip's bounds are 0 2 13 17.
     // Into the mask go the text and its underline — a pixel thick, a pixel

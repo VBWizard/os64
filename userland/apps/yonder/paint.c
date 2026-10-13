@@ -1195,10 +1195,10 @@ static bool frame_layer(const Painter *p, const flow_box_t *b, const Round *oute
 
 // One layer of an inline box's piece. A piece is its content area, with no
 // padding or border laid out round it, so its origin and clip boxes are
-// all the piece; its colour is right on every piece, and its gradient
-// layers are placed on each — the browsers lay the pieces end to end and
-// draw one gradient along them, which needs knowledge the public tree does
-// not have (PILE3.md § Booked). False as frame_layer's is.
+// all the piece; its colour is right on every piece, and its pictures and
+// gradients are placed on each — the browsers lay the pieces end to end
+// and draw one along them, which needs knowledge the public tree does not
+// have (PILE3.md § Booked). False as frame_layer's is.
 static bool piece_layer(const Painter *p, const flow_box_t *b, int32_t i, int32_t n)
 {
     if (i == n) {
@@ -1210,6 +1210,10 @@ static bool piece_layer(const Painter *p, const flow_box_t *b, int32_t i, int32_
     yonder_tile_t tile;
     if (l.gradient != NULL && yonder_background_tile(&l, b->rect, 0, 0, &tile))
         return gradient(p, l.gradient, &tile, b->rect, NULL, false, b->style->color);
+    if (l.image != NULL) {
+        os64_gui_rect_t area = on_page(p, b->rect);
+        (void)p->v->backdrop(p->v->ctx, b, i, &area, area, area.x, area.y, on_page(p, p->view));
+    }
     return true;
 }
 
@@ -1545,10 +1549,14 @@ static os64_gui_rect_t widened(os64_gui_rect_t r)
 
 // ── The text clip (PILE3.md § The text clip) ─────────────────────────────
 
-// Whether a run of layers draws anything: its colour, a gradient, or a
-// picture a sheet or the `background` attribute puts there. One that draws
-// nothing draws nothing through a clip either, and is not a headline to
-// rescue (text_clip).
+// Whether the page wrote anything for a run of layers to draw: its colour,
+// a gradient, or a picture a sheet or (on a block's frame) the
+// `background` attribute puts there. One with nothing draws nothing through
+// a clip either, and is not a headline to rescue (text_clip). It asks what
+// was written, not whether a tile, once placed, covers a pixel — a
+// picture's only the face could say — so a refused clip over a background
+// that places nothing (a zero `background-size`) still rescues the words:
+// the degraded drawing's over-count (PILE3.md § The text clip, Booked).
 static bool run_paints(const Painter *p, const LayerRun *run)
 {
     const flow_style_t *s = run->b->style;
@@ -1562,7 +1570,7 @@ static bool run_paints(const Painter *p, const LayerRun *run)
         flow_layer_t l = flow_background_layer(s, i);
         if (l.gradient != NULL)
             return true;
-        if (!run->piece && (l.image != NULL || (!sheet && i == 0)) &&
+        if ((l.image != NULL || (!run->piece && !sheet && i == 0)) &&
             p->v->backdrop(p->v->ctx, run->b, sheet ? i : -1, NULL, (os64_gui_rect_t){0, 0, 0, 0},
                            0, 0, (os64_gui_rect_t){0, 0, 0, 0}))
             return true;
