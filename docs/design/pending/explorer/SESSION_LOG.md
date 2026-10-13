@@ -824,3 +824,17 @@ E4 follows accepted E3.
 
 Published as [draft PR #264](https://github.com/VBWizard/os64/pull/264) against `userland`. The source remains `8b5d13a7`;
 the publication follow-up changes documentation links only.
+
+
+## 2026-10-13 — E3 clock diagnostic clarification
+
+Chris requested that “clock unavailable/unqueried” distinguish an unqueried
+clock from a failed query, and asked whether typing extends the search string.
+Added last-query state and gallery status refresh for no-match queries. The
+host regression verifies growing-prefix narrowing from Alpine to Alpha plus
+initial/failure/recovery diagnostics through the production dispatcher.
+ASan/UBSan/LeakSanitizer passes 14,948 checks; the library/gallery cross-build
+passes. The four-file `/tmp/e3-wire` acceptance bundle is refreshed; hashes and
+[the follow-up receipt](evidence/e03/README.md#clock-diagnostic-follow-up--2026-10-13)
+record its scope. Earlier QEMU/image/guest receipts remain for `8b5d13a7`; no
+P5 follow-up install or hardware acceptance is claimed.

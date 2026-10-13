@@ -506,11 +506,13 @@ os64_ui_status_code_t os64_ui_dataview_clock(os64_ui_dataview_t *v,int64_t (*clo
     os64_ui_status_code_t rc=ready(v);
     if (rc) return rc;
     vs(v)->clock=clock; vs(v)->clock_user=user; clear_prefix(vs(v)); clear_click(vs(v));
+    vs(v)->diagnostics.clock_queried=false; vs(v)->diagnostics.clock_available=false;
     return OS64_UI_OK;
 }
 static int64_t now(view_state *s)
 {
     int64_t t=s->clock?s->clock(s->clock_user):os64_micros();
+    s->diagnostics.clock_queried=true;
     s->diagnostics.clock_available=t>=0;
     return t;
 }

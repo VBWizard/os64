@@ -92,7 +92,8 @@ static void details_report(details_page *a)
     os64_snprintf(text,sizeof(text),"Rows %lu View %u Top %lu Left %ld Metadata %lu/%lu Runs %lu Icons %lu (%lu missing)%s",
         (unsigned long)os64_ui_data_projection_count(os64_ui_selection_projection(sel)),a->active+1,(unsigned long)os64_ui_dataview_top(v),(long)os64_ui_dataview_left(v),
         (unsigned long)d.metadata_bytes,(unsigned long)d.peak_metadata_bytes,(unsigned long)d.runs,
-        (unsigned long)d.icon_leases,(unsigned long)d.icon_failures,d.clock_available?"":"   clock unavailable/unqueried");
+        (unsigned long)d.icon_leases,(unsigned long)d.icon_failures,
+        !d.clock_queried?"   clock not checked yet":d.clock_available?"":"   clock unavailable");
     (void)os64_ui_status_base(&a->diagnostics,text);
 }
 static void details_error(void *user,os64_ui_status_code_t rc)
@@ -449,8 +450,13 @@ static void details_commands(void *user,const os64_gui_event_t *event)
     }
     a->dispatch_start=os64_micros();
     a->event_start=ordinary && !os64_ui_menu_active(a->menus)?os64_micros():-1;
+    os64_ui_dataview_diagnostics_t before=os64_ui_dataview_diagnostics(&a->views[a->active]);
     /* The dispatcher has already routed this delivery through the menu. */
     if (!os64_ui_shortcut_route(&a->shortcuts,a->action_view,event,NULL)) (void)os64_ui_dispatch(&a->ui,event);
+    os64_ui_dataview_diagnostics_t after=os64_ui_dataview_diagnostics(&a->views[a->active]);
+    /* A no-match search can query the clock without changing selection. */
+    if (before.clock_queried!=after.clock_queried || before.clock_available!=after.clock_available)
+        a->report_pending=true;
     if (!ordinary && event->type==OS64_GUI_EVENT_KEY_DOWN && event->key.ascii>' ' && event->key.ascii<127 &&
         !(event->key.modifiers&(OS64_GUI_MOD_CTRL|OS64_GUI_MOD_ALT)) && !os64_ui_menu_active(a->menus))
         os64_printf("Details native prefix input: ascii=%u elapsed-us=%ld focus=%lu status=%u\n",

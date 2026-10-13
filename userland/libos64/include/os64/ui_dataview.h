@@ -25,7 +25,9 @@ typedef struct {
 typedef struct {
     size_t metadata_bytes, peak_metadata_bytes, runs, run_slots, icon_leases, icon_failures;
     size_t painted_rows, prepared_rows;
-    bool clock_available;
+    /* Availability describes the last query; queried is false until timed
+     * input uses the clock, and resets when the clock provider changes. */
+    bool clock_queried, clock_available;
 } os64_ui_dataview_diagnostics_t;
 typedef struct os64_ui_dataview os64_ui_dataview_t;
 struct os64_ui_dataview {

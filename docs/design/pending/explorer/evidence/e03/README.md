@@ -2,8 +2,8 @@
 
 Implementation branch `codex/explorer-e3-implementation`, fresh from
 `origin/codex/explorer-e3-design` (`75227ada`), based on `userland` E2 merge
-`f39b0ae0`. E3A is `ee24fb64`; E3B and the final tested source are `8b5d13a7`.
-The subsequent evidence commit changes documentation and receipts. No kernel or ABI source changed. Review and P5 acceptance are
+`f39b0ae0`. E3A is `ee24fb64`; E3B's original host/native/package receipts use `8b5d13a7`.
+The clock diagnostic follow-up below has separate host and build evidence. No kernel or ABI source changed. Review and P5 acceptance are
 pending in [draft PR #264](https://github.com/VBWizard/os64/pull/264) against `userland`; this record does not call the slice accepted.
 
 ## Acceptance matrix
@@ -188,3 +188,28 @@ Screenshots show:
 The [core stale-reference scan](stale-core.txt) is clean. The implementation
 scan reports the live E03 contract/handoff Markdown link names, inspected as
 valid references; no API was retired and no added superlative claim was found.
+
+## Clock diagnostic follow-up — 2026-10-13
+
+Chris requested separate not-yet-queried and unavailable clock states. Details
+now exposes `clock_queried` alongside last-query availability, resets both when
+its clock provider changes, and refreshes the gallery diagnostic at the dispatch
+boundary even when a clock query accompanies a no-match search. The initial
+label is “clock not checked yet”; a failed query says “clock unavailable”; a
+successful query removes the label.
+
+Typeahead behavior remains the contract's growing prefix, single-letter cycling,
+one-second idle expiry, and fresh-letter fallback if the clock is unavailable.
+The regression now extends `a` through `al`, `alp`, and `alph`, verifying that
+`alph` moves from an Alpine match to an Alpha match. The gallery regression
+uses the production dispatcher to verify initial, failed and recovered clock
+states without a selection change.
+
+[The production-font ASan/UBSan/LeakSanitizer run](clock-followup-host.txt)
+passes 14,948 checks. FreeType objects from the preceding full real-font run
+were reused for the final harness build; leak detection stayed enabled outside
+the sandbox. Cross-building `libos64.so` and `actiongallery` passes. The refreshed
+[acceptance bundle hashes](clock-followup-bundle-sha256.txt) identify the four
+files served from `/tmp/e3-wire`. These are build hashes; the original native
+receipts above remain tied to `8b5d13a7`. This follow-up has not been installed
+or walked through on P5.

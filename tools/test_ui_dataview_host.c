@@ -100,6 +100,7 @@ static view_fixture *view_new(size_t count,const char *dir)
     CHECK(os64_ui_dataview_attach(&f->view,&f->selection,&f->provider)==OS64_UI_OK);
     f->view.on_change=fixture_changed; f->view.on_error=fixture_error; f->view.callback_user=f;
     CHECK(os64_ui_dataview_clock(&f->view,fixture_clock,NULL)==OS64_UI_OK);
+    CHECK(!os64_ui_dataview_diagnostics(&f->view).clock_queried && !os64_ui_dataview_diagnostics(&f->view).clock_available);
     os64_ui_set_focus(&f->ui,&f->view.w);
     return f;
 }
@@ -176,18 +177,24 @@ static void widget_input(const char *dir)
     os64_ui_data_projection_release(source_order);
     CHECK(os64_ui_dataview_command(&f->view,OS64_UI_SELECTION_CHOOSE,b,true)==OS64_UI_OK);
     key_event(f,OS64_GUI_EVENT_KEY_DOWN,'a',0x1e,0); uint64_t first=os64_ui_selection_focus(&f->selection);
+    CHECK(os64_ui_dataview_diagnostics(&f->view).clock_queried && os64_ui_dataview_diagnostics(&f->view).clock_available);
     key_event(f,OS64_GUI_EVENT_KEY_DOWN,'a',0x1e,0); uint64_t second=os64_ui_selection_focus(&f->selection); CHECK(first!=second);
     key_event(f,OS64_GUI_EVENT_KEY_DOWN,'l',0x26,0); CHECK(os64_ui_selection_focus(&f->selection)==second);
-    key_event(f,OS64_GUI_EVENT_KEY_DOWN,'z',0x2c,0); CHECK(os64_ui_selection_focus(&f->selection)==second);
-    key_event(f,OS64_GUI_EVENT_KEY_DOWN,'\b',0x0e,0); CHECK(os64_ui_selection_focus(&f->selection)==second);
+    key_event(f,OS64_GUI_EVENT_KEY_DOWN,'p',0x19,0); CHECK(os64_ui_selection_focus(&f->selection)==second);
+    key_event(f,OS64_GUI_EVENT_KEY_DOWN,'h',0x23,0); uint64_t narrowed=os64_ui_selection_focus(&f->selection);
+    CHECK(narrowed!=second && !strncmp(os64_ui_data_row(f->data,narrowed)->search.bytes,"Alpha",5));
+    key_event(f,OS64_GUI_EVENT_KEY_DOWN,'z',0x2c,0); CHECK(os64_ui_selection_focus(&f->selection)==narrowed);
+    key_event(f,OS64_GUI_EVENT_KEY_DOWN,'\b',0x0e,0); CHECK(os64_ui_selection_focus(&f->selection)==narrowed);
     test_time+=1000001; key_event(f,OS64_GUI_EVENT_KEY_DOWN,'b',0x30,0);
     CHECK(os64_ui_data_row(f->data,os64_ui_selection_focus(&f->selection))->search.bytes[0]=='B');
     test_time=-1;
     key_event(f,OS64_GUI_EVENT_KEY_DOWN,'a',0x1e,0);
     uint64_t unavailable_focus=os64_ui_selection_focus(&f->selection);
     key_event(f,OS64_GUI_EVENT_KEY_DOWN,'l',0x26,0);
-    CHECK(os64_ui_selection_focus(&f->selection)==unavailable_focus && !os64_ui_dataview_diagnostics(&f->view).clock_available);
+    CHECK(os64_ui_selection_focus(&f->selection)==unavailable_focus && os64_ui_dataview_diagnostics(&f->view).clock_queried && !os64_ui_dataview_diagnostics(&f->view).clock_available);
     test_time=4000000;
+    key_event(f,OS64_GUI_EVENT_KEY_DOWN,'a',0x1e,0);
+    CHECK(os64_ui_dataview_diagnostics(&f->view).clock_queried && os64_ui_dataview_diagnostics(&f->view).clock_available);
     CHECK(os64_ui_dataview_scroll(&f->view,0,0)==OS64_UI_OK);
     CHECK(os64_ui_dataview_command(&f->view,OS64_UI_SELECTION_CHOOSE,b,false)==OS64_UI_OK);
     CHECK(os64_ui_dataview_command(&f->view,OS64_UI_SELECTION_TOGGLE,d,false)==OS64_UI_OK);
@@ -451,6 +458,23 @@ static void gallery_behavior(const char *dir)
     os64_ui_window_backend_t transport={.poll=delivery_poll};
     os64_ui_dispatcher_init(&a->dispatcher,&transport);
     CHECK(os64_ui_dispatcher_add(&a->dispatcher,1,&a->ui,details_commands,gallery_local_paint,a)==OS64_UI_OK);
+    a->dispatcher.entries[0].boundary=details_boundary; a->dispatcher.entries[0].boundary_user=a;
+    CHECK(strstr(a->diagnostics.base.text,"clock not checked yet")!=NULL);
+    CHECK(os64_ui_dataview_clock(&a->views[0],fixture_clock,NULL)==OS64_UI_OK);
+    test_time=-1;
+    delivery.event=(os64_gui_event_t){.type=OS64_GUI_EVENT_KEY_DOWN};
+    delivery.event.key.ascii='z'; delivery.event.key.scancode=0x2c;
+    CHECK(os64_ui_dispatcher_turn(&a->dispatcher,false)==1);
+    CHECK(os64_ui_selection_count(&a->selections[0])==0);
+    CHECK(strstr(a->diagnostics.base.text,"clock unavailable")!=NULL && !a->report_pending);
+    test_time=1000000; delivery.delivered=false;
+    CHECK(os64_ui_dispatcher_turn(&a->dispatcher,false)==1);
+    CHECK(os64_ui_selection_count(&a->selections[0])==0);
+    CHECK(strstr(a->diagnostics.base.text,"clock")==NULL && !a->report_pending);
+    CHECK(os64_ui_dataview_clock(&a->views[0],NULL,NULL)==OS64_UI_OK);
+    details_report(a);
+    CHECK(strstr(a->diagnostics.base.text,"clock not checked yet")!=NULL);
+    delivery.delivered=false; delivery.calls=0;
     a->ui.menu_event=delivery_menu;
     delivery.event=(os64_gui_event_t){.type=OS64_GUI_EVENT_KEY_DOWN};
     delivery.event.key.ascii='b'; delivery.event.key.scancode=0x30;
@@ -461,7 +485,6 @@ static void gallery_behavior(const char *dir)
     CHECK(os64_ui_dispatcher_turn(&a->dispatcher,false)==1 && delivery.calls==1);
     CHECK(os64_ui_selection_focus(&a->selections[0])==focus && os64_ui_selection_count(&a->selections[0])==1);
     a->ui.menu_event=NULL;
-    a->dispatcher.entries[0].boundary=details_boundary; a->dispatcher.entries[0].boundary_user=a;
 #ifdef UI_TEXT_REAL
     /* An E3 font refusal must not install notice runs from the candidate. */
     os64_font_set_t *candidate=outline_set(os64_ui_font_context(&a->ui),dir,"DejaVuSans.ttf",24);
