@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Drive the real Scribe on the host: scribe.c and its buffer, libui, the
 provider and the real engine against the shipped faces. The window system,
-the session theme and the disk are stubbed in tools/test_scribe_host.c."""
+the session theme and the disk are stubbed in tools/test_scribe_host.c.
+--menus adds Scribe/grootmenu integration with deterministic native queues."""
 import argparse,os,runpy,subprocess,tempfile
 from pathlib import Path
 ROOT=Path(__file__).resolve().parent.parent
-p=argparse.ArgumentParser();p.add_argument('-O',default='2');p.add_argument('--output',type=Path);a=p.parse_args()
+p=argparse.ArgumentParser();p.add_argument('-O',default='2');p.add_argument('--menus',action='store_true');p.add_argument('--output',type=Path);a=p.parse_args()
 out=a.output or Path(tempfile.mkdtemp(prefix='os64-scribe-'));out.mkdir(parents=True,exist_ok=True)
 flags=['-std=c11','-O'+a.O,'-g','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-fno-sanitize-recover=all','-fno-omit-frame-pointer','-ffunction-sections','-fdata-sections','-Wl,--gc-sections']
 flags+=['-I'+str(ROOT/path) for path in ['userland/libos64/include','userland/libos64','abi/include','tools/fonts','userland/apps/scribe']]
@@ -19,10 +20,12 @@ for n,source in enumerate(upstream+port):
 # The harness #includes the libui suite (for its allocator, face loader and
 # CHECK) and scribe.c (whose statics are under test); scribe_buf.c is linked
 # as the program links it. The libui sources are the suite's own list.
-sources=['tools/test_scribe_host.c','userland/apps/scribe/scribe_buf.c']
+sources=['tools/test_menu_apps_host.c' if a.menus else 'tools/test_scribe_host.c','userland/apps/scribe/scribe_buf.c']
+if a.menus: sources.append('userland/libos64/menu.c')
 sources+=['userland/libos64/'+name+'.c' for name in
-          ['ui_font','ui','ui_controls','ui_list','ui_text','font_provider','font_adopt','text',
+          ['ui_menu','ui_menu_widget','ui_dispatcher','ui_icon','ui_action','ui_status','ui_font','ui','ui_controls','ui_list','ui_text','font_provider','font_adopt','text',
            'text_cache','text_decode','text_bitmap','text_draw','draw','str']]
-subprocess.run(['cc',*flags,'-DUI_TEXT_REAL',*[str(ROOT/s) for s in sources],*objects,'-o',str(out/'test_scribe')],check=True)
-result=subprocess.run([str(out/'test_scribe'),str(ROOT/'userland/libfreetype/fixtures')],env=os.environ)
+binary=out/('test_menu_apps' if a.menus else 'test_scribe')
+subprocess.run(['cc',*flags,'-DUI_TEXT_REAL',*[str(ROOT/s) for s in sources],*objects,'-o',str(binary)],check=True)
+result=subprocess.run([str(binary),str(ROOT/'userland/libfreetype/fixtures')],env=os.environ)
 print('Artifacts:',out);raise SystemExit(result.returncode)

@@ -1,0 +1,2 @@
+7002 (0x002f) AP1: [user] husk: task 60 (scribe) started
+12299 (0x002f) AP1: [user] husk: task 60 (scribe) exited code 0

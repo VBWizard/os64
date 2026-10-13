@@ -51,7 +51,7 @@ Paths are relative to the repository root, at the inspected revision above.
 
 | Existing code | Consequence |
 | --- | --- |
-| `userland/apps/grootmenu/grootmenu.c`, `paint_row`, `open_level`, `handle` | Private native windows and direct bitmap text; app-level cascade logic. Theme colors are shared, Interface font is not. |
+| Pre-E1C `userland/apps/grootmenu/grootmenu.c` private painter/cascade controller | Private native windows and direct bitmap text; app-level cascade logic. Theme colors are shared, Interface font is not. |
 | `userland/libos64/include/os64/menu.h`, `userland/libos64/menu.c` | Launcher grammar and argv conversion, not a widget. Preserve parser behavior and bounds. |
 | `userland/libos64/ui.c`, `os64_ui_dispatch` | One UI tree; mouse-down dispatch currently accepts left button only. Add explicit context invocation, not a broad change making existing buttons accept right clicks. |
 | `userland/libos64/ui_text.c`, `os64_ui_decode_key` | Arrow/edit keys arrive in escape bursts; real Escape has a distinct physical code. Reuse the decoder and test both PS/2 and HID. |
@@ -334,7 +334,8 @@ Keep invocation syntax, config ladder, named menus, grammar limits, command
 parsing, error reporting and spawn policy. Convert parsed nodes into the shared
 model; use registry IDs derived from stable node indices for that load. The
 adapter owns command strings and invokes `os64_menu_argv`/spawn only after the
-menu closes. An empty named menu or unsupported model limit still reports why.
+menu closes. Empty child cascades are omitted without suppressing usable
+siblings. An empty named menu or unsupported model limit still reports why.
 Do not add inline icon syntax to menu.conf in E1; E2 can map known applications
 to semantic icons with a generic fallback without changing the grammar.
 
@@ -349,8 +350,8 @@ missing config, empty menu, invalid reference, max depth and quoted arguments.
 ### Scribe
 
 Use the existing Open, Save, Save As, Find, Help, Quit and clipboard callbacks
-behind actions. Add a File/Edit/View/Help menu bar, bind existing toolbar buttons
-to those same actions, and adopt the status widget. Keep the filename field,
+behind actions. Add a File/Edit/View/Help menu bar, remove the duplicate
+Open/Save/Save As buttons, and adopt the status widget. Keep the filename field,
 find field, help view, save failures and unsaved-exit flow intact. Do not add a
 second document model or silently change the meaning of repeated Ctrl+Q.
 

@@ -13,19 +13,18 @@ user-reported, without a captured installed-binary hash.
 E1K is complete: PR #257 is approved and merged as `b36e9ddc`. Chris explicitly
 confirmed this when assigning E1B; old pending banners predated its approval.
 
-Quinn owns E1B in `codex/explorer-e1b`, worktree `.worktrees/explorer-e1b`,
-from current `origin/userland` at that merge. The [concrete E1B handoff](E01B_HANDOFF.md)
-describes the shared models/widgets/controller, native dispatcher, ownership,
-font and context hooks. [Evidence and P5 walkthrough](evidence/e01b/README.md)
-record the automated results and Chris's successful P5 report, which precedes
-the review fixes.
+E1B is merged as `88f8b672` (PR #259), confirmed by Chris. Its shared toolkit
+and gallery are the base for E1C in `codex/explorer-e1c`, worktree
+`.worktrees/explorer-e1c`. E1C migrates grootmenu and Scribe; it adds no kernel
+changes, icon artwork, file picker, or Roam browser shell. See the
+[E1C evidence and P5 walkthrough](evidence/e01c/README.md).
 
 | Work | State | Next action |
 | --- | --- | --- |
 | [E1A actions/status](E01A_HANDOFF.md) | Complete | Reuse the existing APIs. |
 | [E1K native popups](E01K_HANDOFF.md) | Approved and merged, PR #257 | Consume the merged E1K wrappers. |
-| [E1B menus](E01B_HANDOFF.md) | Implemented; invariant audit, re-review pending; earlier P5 passed | Review shared transitions and evidence; P5 log is retained separately. |
-| E1C consumers | Waiting on E1B | Migrate grootmenu and Scribe with their existing policies. |
+| [E1B menus](E01B_HANDOFF.md) | Approved and merged, PR #259 | Reuse the shared controller and dispatcher. |
+| E1C consumers | Host/QEMU passed; Chris confirms P5 acceptance; publication authorized | Ordinary PR review. |
 | [E2 icons](E02_ICONS.md) | Provider boundary available; visual choice open | Choose the family before producing assets/catalog. |
 | E6 channels | Umbrella proposal only | Separate platform design and Fable review. |
 

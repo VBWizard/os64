@@ -6,15 +6,16 @@
 review fixes only; menu APIs and tested gallery/library code are unchanged). Chris confirms E1A and E1K are complete; the old pending-review
 banners preceded E1K's approval and merge.
 
-[PR #259](https://github.com/VBWizard/os64/pull/259) targets `userland`.
+[PR #259](https://github.com/VBWizard/os64/pull/259) merged into `userland`
+as `88f8b672`, confirmed by Chris on 2026-10-12.
 Initial tested implementation revision: `7c6de5cf`. PR review fixes add failure
 propagation for native destruction and the navigation/dispatch regressions below.
 
 E1B implements the [menu contract](E01_MENUS.md) using the
 [E1K APIs](E01K_HANDOFF.md). Host and QEMU evidence is recorded in
 [evidence/e01b](evidence/e01b/README.md). Chris reports the P5 walkthrough passed;
-the retained trace ends with zero font bytes/references. Ordinary review remains
-the acceptance step. E1C retains the grootmenu and Scribe
+the retained trace ends with zero font bytes/references. Review is complete;
+E1C retains the grootmenu and Scribe
 migrations; E2 retains the asset catalog and artwork. No kernel, browsing,
 IPC, libimage dependency or deferred gclock investigation is included.
 

@@ -18,8 +18,8 @@ typedef struct
     // Called once the window, the widgets and the document exist and before
     // the first paint: the place a fixture binds the fonts it is testing.
     void (*ready)(os64_ui_t *ui, void *user);
-    // Offered every key event ahead of scribe's own shortcuts and widgets.
-    // Return true to consume it. A fixture's controls live here.
+    // Offered owner key events left unclaimed by menus, before Scribe's
+    // shortcuts and widgets. Return true to consume a fixture control.
     bool (*key)(os64_ui_t *ui, const os64_gui_event_t *ev, void *user);
     void *user;
 } scribe_hooks_t;

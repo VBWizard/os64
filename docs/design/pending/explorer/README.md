@@ -30,13 +30,12 @@ Updated: 2026-10-12.
 - E1K is complete: [PR #257](https://github.com/VBWizard/os64/pull/257)
   is approved and merged as `b36e9ddc`. Chris confirmed this status at E1B
   authorization; old pending-review banners preceded approval.
-- Current work: Quinn's [E1B toolkit](E01B_HANDOFF.md), on
-  `codex/explorer-e1b` from `b36e9ddc`, extends `/tests/actiongallery`.
-  [Evidence and P5 walkthrough](evidence/e01b/README.md) accompany ordinary
-  review. Chris reports the P5 walkthrough passed; its trace is retained.
-  E1C's production migrations follow E1B.
-- The initial design branch is historical; its documentation snapshot
-  `d33e651e` arrived through E1A. This branch carries the E1B invariant-audit follow-up.
+- E1B is approved and merged as `88f8b672` (PR #259), confirmed by Chris.
+- Current work: E1C production migrations in `codex/explorer-e1c` from that
+  merge. grootmenu and Scribe use the shared menus; [E1C evidence and P5
+  walkthrough](evidence/e01c/README.md) distinguish automated/native results
+  from Chris's reported P5 acceptance. Ordinary review is pending.
+- The initial design snapshot `d33e651e` arrived through E1A.
 - E2's visual family remains a separate choice with Chris; E6 still needs its
   standalone channel design and Fable review.
 
@@ -60,7 +59,7 @@ Create slice records when work begins, rather than maintaining 15 empty designs.
 
 | ID | Slice | State | Owner | Record / PR / implementation commit | Acceptance evidence |
 | --- | --- | --- | --- | --- | --- |
-| E1 | Actions, menus and status | E1A/E1K complete; E1B invariant audit, re-review pending; earlier P5 passed | Quinn (E1B), Sol (E1A) | [E1A](E01A_HANDOFF.md), [E1K](E01K_HANDOFF.md), [E1B](E01B_HANDOFF.md); PR #254 `c6cc6e3c`, PR #257 `b36e9ddc` | [E1B evidence/walkthrough](evidence/e01b/README.md); P5 report precedes review fixes |
+| E1 | Actions, menus and status | E1A/E1K/E1B merged; E1C P5 accepted, review pending | Quinn (E1C), Sol (E1A/E1B) | [E1A](E01A_HANDOFF.md), [E1K](E01K_HANDOFF.md), [E1B](E01B_HANDOFF.md); PR #254 `c6cc6e3c`, PR #257 `b36e9ddc` | [E1B evidence/walkthrough](evidence/e01b/README.md); P5 report precedes review fixes |
 | E2 | Icon vocabulary | Designing — visual choice open | Quinn (design) | [E2 contract](E02_ICONS.md) | Dependency/allocation inspection; no runtime evidence |
 | E3 | Data view and selection | Planned | Unassigned | — | None |
 | E4 | Directory browser | Planned | Unassigned | — | None |

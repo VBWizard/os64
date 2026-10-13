@@ -633,3 +633,54 @@ Final native HID/pointer, PS/2/font/overflow and external/close controllers pass
 Archived traces show callbacks after menu closure and zero font/target ownership
 at exit; repeated openings return live heap to the warm baseline. Both new
 findings and same-view snapshot interruption are deterministic host fixtures.
+
+
+## 2026-10-12 — E1C production consumers
+
+Chris confirmed E1B PR #259 merged and asked to bring the real applications
+closer. E1C lives in `codex/explorer-e1c` from `88f8b672`, worktree
+`.worktrees/explorer-e1c`, with uncommitted changes at this checkpoint.
+grootmenu now adapts config nodes to shared menus; Scribe has shared actions,
+File/Edit/View/Help, context menus and hideable menu/status bars. Existing
+field editing and save/quit policies are retained. Kernel and icon artwork
+remain outside this slice.
+
+[Evidence and the P5 walkthrough](evidence/e01c/README.md) record 5,999 passing
+host checks across four suites, ASan/UBSan/LSan, cross-builds and native QEMU
+walkthroughs with USB HID support and PS/2 input. LSan required running the
+same binaries outside the sandbox after attachment EPERM. A final host-tested
+fix preserves grootmenu's parent after refused child creation; native hashes
+and final hashes are recorded separately. P5 acceptance and review are pending.
+The scratch VM was stopped; repository disk images were not modified.
+
+
+## 2026-10-12 — E1C P5 acceptance and publication authorization
+
+Chris verified both Scribe's menu and the desktop menu, including Alt-alone
+recovery of the hidden bar and readable desktop menu text. He authorized
+pushing E1C and moving to the next slice. This is user-reported hardware
+acceptance without an installed-binary hash; ordinary PR review remains.
+E2 icons follow: the provider/cache packet is distinct from the visual family,
+and artwork should begin with a small style preview before the full catalog.
+
+
+## 2026-10-12 — E1C button-row cleanup
+
+Chris requested removing Scribe's duplicate Open/Save/Save As buttons before
+review, while preserving the path textbox. The document reclaims the row;
+menu actions and shortcuts retain Open, Save As and save-before-quit fields.
+Scribe and menu consumer suites pass with ASan/UBSan/LSan (2,526 and 1,335
+checks); cross-builds and QEMU layout/save/quit checks pass. Follow-up evidence
+is in `evidence/e01c/toolbar-removal/`. Earlier P5 acceptance predates this
+cleanup. E2's selected preview direction is classic colorful icons with crisp
+outlines; icon work has not begun.
+
+
+## 2026-10-13 — E1C first review
+
+Chris confirmed testing the button-removal follow-up and submitted PR #260
+for review. Addressed three findings: empty child cascades suppressing the
+launcher, stale Scribe scrollbar ranges after chrome changes, and duplicate
+startup popup error diagnostics. The consumer harness now covers each case.
+Host suites pass 4,072 checks with ASan/UBSan/LSan; cross-builds and focused
+QEMU checks pass. Evidence and limits: `evidence/e01c/README.md`, Review 1.
