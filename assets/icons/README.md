@@ -27,6 +27,49 @@ family contains these 26 keys:
 | Information | `search`, `help`, `settings` |
 | Views | `view-details`, `view-icons`, `view-preview`, `view-split`, `tab-new`, `window-close` |
 
+## P5 updates through os64get
+
+The shipped artwork is PNG, not Windows `.ico`. Add this source directory to
+an existing `os64serve.py` command, using the E2 worktree's path:
+
+```sh
+assets/icons/default=icons
+```
+
+Create the destination on Os64 and add the following rule to the effective
+`os64get.conf` (usually the customized `/home/os64get.conf`):
+
+```sh
+mkdir -p /etc/icons/default
+```
+
+```ini
+@icons/* = /etc/icons/default
+```
+
+The `/*` is significant: this whole-lot rule keeps the PNGs, `theme.conf`,
+provenance and license together despite the general `*.png` and `*.conf`
+rules. An ordinary `@icons` loses to those suffix rules. Exact filename
+rules still outrank whole-lot rules.
+
+Bootstrap an older P5 client **before** the bulk refresh:
+
+```sh
+os64get HOST os64get /bin/os64get
+os64get -a HOST
+```
+
+The second invocation uses the new client's whole-lot support. Without that
+first invocation, the old client interprets `icons/*` as a literal lot label
+and ignores the rule. Its running process does not adopt its own replacement.
+The server needs to offer the E2 `os64get` binary as well as this asset folder.
+A customized `/home/os64get.conf` wins over `/etc`; downloading a new system
+configuration does not update the user's copy. Restart actiongallery after
+installation. Serve one icon set per catalogue: the valet uses flat filenames,
+so multiple sets would collide. Use the archive workflow for additional sets.
+
+## Additional sets from archives
+
 To install an archive that contains a top-level `roam-classic/` folder, place
 the archive at `/home/roam-classic.tar.gz` in os64 and extract it:
 

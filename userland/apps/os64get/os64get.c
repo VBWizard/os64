@@ -106,18 +106,19 @@ static get_entry_t entries[GET_MAX_LIST];
 // ── The config: the valet's routing map ───────────────────────────────
 // A small fixed table, because the whole install map is a handful of lines
 // and a utility that mallocs to read its own config has its priorities wrong.
-// Precedence is by SPECIFICITY (exact beats suffix beats `@lot` beats `*`),
-// and within a class the LAST match in the file wins, so a /home copy can
+// Precedence: exact name, whole-lot `@lot/*`, suffix, ordinary `@lot`, then `*`.
+// Within a class the last match in the file wins, so a /home copy can
 // override by repeating a line.
 //
-// WHY A LOT SITS BELOW SUFFIX AND ABOVE `*`: a lot names where a file came
+// An ordinary @lot sits below suffix and above `*`: it names where a file came
 // FROM, so it is the weakest claim any rule can make about a particular file
 // — weaker than one that spells the name and weaker than one that recognises
 // the kind. That ordering is exactly what lets one served directory hold
 // files bound for several places: kernel/bin carries fifteen fixtures for
 // /tests, but also os64_kernel (an exact rule sends it to /fat/boot) and
 // libtest.so (a `*.so` rule sends it to /lib). And it is still stronger than
-// `*`, which is the rule that knows nothing at all.
+// `*`, which is the rule that knows nothing at all. `@lot/*` explicitly keeps
+// a collection together despite suffix rules; exact filename overrides still win.
 #define CONF_RULES_MAX 16
 #define CONF_DIR_MAX   128
 
@@ -129,7 +130,7 @@ typedef struct {
 typedef struct {
     conf_rule_t exact[CONF_RULES_MAX];  size_t nexact;
     conf_rule_t suffix[CONF_RULES_MAX]; size_t nsuffix;
-    conf_rule_t lot[CONF_RULES_MAX];    size_t nlot;   // `@tests = /tests`
+    conf_rule_t lot[CONF_RULES_MAX];    size_t nlot;   // ordinary @lot or whole-lot @lot/*
     char star[CONF_DIR_MAX];            // the `*` rule; empty = none
     char archive[CONF_DIR_MAX];         // the `archive` key; empty = don't
     const char *path;                   // which file answered (for complaints)
@@ -210,8 +211,8 @@ static bool conf_line(const char *key, const char *value, void *user)
     }
     if (key[0] == '@' && key[1] != '\0') {
         // A LOT rule: `@tests = /tests` routes everything the server labelled
-        // "tests" and no name rule claimed. Stored without the '@' so it can
-        // be compared straight against the LIST field.
+        // "tests" and no name rule claimed. The @icons/* form overrides suffix
+        // rules for that collection. Store without @, retaining the /* marker.
         if (c->nlot < CONF_RULES_MAX) {
             if (!conf_take_dir(c->lot[c->nlot].dir, value)) {
                 conf_bad_dir(c, key, value);
@@ -299,13 +300,24 @@ static void conf_load(conf_t *c)
 
 // The directory a file installs into, or NULL for "no rule" (= cwd).
 // `lot` is the server's source label for this file, or NULL/"" when it
-// offered none — in which case the walk simply skips the lot class and
+// offered none — in which case the walk skips both lot rule forms and
 // behaves exactly as it did before lots existed.
 static const char *conf_route(const conf_t *c, const char *name, const char *lot)
 {
     for (size_t i = c->nexact; i > 0; i--)
         if (os64_streq(c->exact[i - 1].name, name))
             return c->exact[i - 1].dir;
+
+    if (lot != NULL && lot[0] != '\0') {
+        size_t llen = os64_strlen(lot);
+        for (size_t i = c->nlot; i > 0; i--) {
+            const char *rule = c->lot[i - 1].name;
+            size_t rlen = os64_strlen(rule);
+            if (rlen > 2 && rule[rlen - 2] == '/' && rule[rlen - 1] == '*' &&
+                llen == rlen - 2 && os64_memcmp(rule, lot, llen) == 0)
+                return c->lot[i - 1].dir;
+        }
+    }
 
     size_t nlen = os64_strlen(name);
     for (size_t i = c->nsuffix; i > 0; i--) {

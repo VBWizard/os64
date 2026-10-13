@@ -503,9 +503,58 @@ static void review_scenario(void)
     printf("PASS %s\n", scenario);
 }
 
+static void whole_lot_routing(void)
+{
+    conf_t c = {.path = "routing fixture"};
+    conf_line("*", "/bin", &c);
+    conf_line("@icons", "/ordinary-lot", &c);
+    conf_line("@icons/*", "/etc/icons/default", &c);
+    conf_line("*.png", "/home/images", &c);
+    conf_line("*.conf", "/etc", &c);
+    conf_line("*.so", "/lib", &c);
+    conf_line("@kernelbin", "/tests", &c);
+    conf_line("os64_kernel", "/fat/boot", &c);
+    const char *assets[] = {"folder-16.png", "folder-64.png", "theme.conf",
+                            "provenance.json", "LICENSE"};
+    for (size_t i = 0; i < sizeof(assets) / sizeof(*assets); ++i)
+        assert(!strcmp(conf_route(&c, assets[i], "icons"), "/etc/icons/default"));
+    assert(!strcmp(conf_route(&c, "picture.png", "pictures"), "/home/images"));
+    assert(!strcmp(conf_route(&c, "picture.png", NULL), "/home/images"));
+    assert(!strcmp(conf_route(&c, "picture.png", ""), "/home/images"));
+    assert(!strcmp(conf_route(&c, "folder-16.png", "icons-extra"), "/home/images"));
+    assert(!strcmp(conf_route(&c, "folder-16.png", "icon"), "/home/images"));
+    assert(!strcmp(conf_route(&c, "os64_kernel", "kernelbin"), "/fat/boot"));
+    assert(!strcmp(conf_route(&c, "libtest.so", "kernelbin"), "/lib"));
+    assert(!strcmp(conf_route(&c, "fixture", "kernelbin"), "/tests"));
+    conf_line("@icons/*", "/replacement", &c);
+    assert(!strcmp(conf_route(&c, "theme.conf", "icons"), "/replacement"));
+    conf_line("theme.conf", "/exact", &c);
+    assert(!strcmp(conf_route(&c, "theme.conf", "icons"), "/exact"));
+    conf_t shipped = {.path = "etc/os64get.conf"};
+    FILE *config = fopen(shipped.path, "r"); assert(config);
+    char line[1024], key[257], dir[128];
+    while (fgets(line, sizeof(line), config)) {
+        char *comment = strchr(line, '#'); if (comment) *comment = 0;
+        if (sscanf(line, " %256s = %127s", key, dir) == 2)
+            conf_line(key, dir, &shipped);
+    }
+    fclose(config);
+    DIR *assets_dir = opendir("assets/icons/default"); assert(assets_dir);
+    struct dirent *entry; unsigned routed = 0;
+    while ((entry = readdir(assets_dir))) {
+        if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, "..")) continue;
+        assert(!strcmp(conf_route(&shipped, entry->d_name, "icons"), "/etc/icons/default"));
+        ++routed;
+    }
+    closedir(assets_dir);
+    assert(routed == 133);
+    puts("PASS routing-whole-lot (133 shipped icon files routed)");
+}
+
 int main(int argc, char **argv)
 {
     assert(argc == 3); scenario = argv[1]; snprintf(sandbox, sizeof(sandbox), "%s", argv[2]);
+    if (is("routing-whole-lot")) { whole_lot_routing(); return 0; }
     assert(os64_mkdir("/bin") == 0); assert(os64_mkdir("/home") == 0);
     assert(os64_mkdir("/fat") == 0); assert(os64_mkdir("/tmp") == 0);
     if (!strncmp(scenario, "integrity-", 10)) { integrity_scenario(); return 0; }

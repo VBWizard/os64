@@ -20,6 +20,9 @@ Chris tested the production menus on P5; the last review reported no major issue
 E2 is pushed in `codex/explorer-e2`, worktree `.worktrees/explorer-e2`, with
 [PR #261](https://github.com/VBWizard/os64/pull/261) open against `userland`.
 Implementation commits: E2A `8d01acc3`, E2B `d63809c9`.
+The P5 icon-free report exposed missing os64get deployment; the PR follow-up
+adds `@icons/*` and [bootstrap steps](../../../../assets/icons/README.md#p5-updates-through-os64get).
+Native QEMU transfer of the full collection passes; P5 retest is pending.
 It supplies the shared PNG catalog, folder-based icon sets and Roam Classic
 artwork in Scribe, grootmenu and the gallery. No kernel code changes.
 

@@ -2,7 +2,7 @@
 r"""Serve build files to os64get. Run on the build PC; stop with Ctrl+C.
 
 Usage, from the repository root:
-    python3 tools/os64serve.py userland/bin userland/bin/tests=tests userland/bin/pages=pages userland/bin/fonts=fonts kernel/bin=kernelbin etc frames=frames
+    python3 tools/os64serve.py userland/bin userland/bin/tests=tests userland/bin/pages=pages userland/bin/fonts=fonts kernel/bin=kernelbin etc frames=frames assets/icons/default=icons
 
 Options:
     [PATH|PATH=LOT ...] [--port 6464] [--bind 0.0.0.0]
@@ -88,11 +88,9 @@ def read_served_file(directory, name):
 
 def read_served_file_multi(directories, name):
     """The name is looked up in each directory in command-line order; the
-    first that has it wins. Order-as-priority instead of a collision error,
-    because the served lots share no names — the BUILD refuses a name claimed
-    by two source trees (GNUmakefile TESTS_NAME_CLASH, userland/GNUmakefile
-    APP_TEST_NAME_CLASH) — and if one ever slips through anyway, the
-    operator's ordering IS the decision."""
+    first that has it wins. The build checks program/test name collisions;
+    asset collections can share metadata filenames. Server ordering decides
+    which such file is offered, so serve one icon set per catalogue."""
     for directory, _lot in directories:
         data = read_served_file(directory, name)
         if data is not None:

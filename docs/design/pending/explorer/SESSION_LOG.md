@@ -713,3 +713,21 @@ part of E2. Next: ordinary PR review and Chris's installed P5 acceptance.
 Publication: E2A `8d01acc3` and E2B `d63809c9` are pushed;
 [PR #261](https://github.com/VBWizard/os64/pull/261) is open against `userland`.
 No merge has been performed. The scratch QEMU instance is stopped.
+
+
+## 2026-10-13 — P5 icon delivery correction
+
+Chris ran the larger-icon gallery on P5 and found no artwork. E2 omitted the
+os64get serving/routing path despite passing disk-image packaging checks.
+Added `assets/icons/default=icons` to serving examples and `@icons/*` to the
+shipped routing map; this explicit whole-lot rule outranks suffix rules while
+exact names retain priority. Ordinary `@lot` semantics are unchanged.
+Documented first-update client bootstrap and destination creation. Corrected
+the server comment that incorrectly claimed collections cannot share names,
+and the guide's stale 256-file limit (the installer allows 1024).
+
+The regression fails before the fix, passes with ASan/UBSan/LSan afterward,
+and checks all 133 shipped filenames against the config. Single/batch smoke
+tests and cross-build pass. Native QEMU os64get downloads 133 files with exit 0;
+readback matches source bytes and the gallery renders that downloaded set.
+Evidence: `evidence/e02/wire/`. Follow-up goes into PR #261; P5 retest pending.

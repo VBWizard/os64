@@ -104,3 +104,29 @@ lookups fail, so that ambiguous case maps to MISSING; a successful stat after
 an open failure produces retryable IO. Decode failures retain their typed
 status and do not silently substitute default artwork. Desktop icon placement
 and activation remain outside E2.
+
+
+## P5 delivery follow-up — os64get icon collection
+
+Chris reported an icon-free gallery on P5 after the initial publication. E2
+packaged disk images but omitted the valet delivery path. The artwork lives in
+`assets/icons/default` as PNG files. Merely adding `@icons` is insufficient:
+existing suffix rules route PNGs to `/home/images` and `theme.conf` to `/etc`.
+
+The follow-up adds `@icons/*` routing between exact filenames and suffix rules,
+while retaining ordinary lot behavior. The shipped config and server examples
+include the collection; [P5 bootstrap instructions](../../../../../../assets/icons/README.md#p5-updates-through-os64get)
+cover fetching the new client first, creating the destination and updating the
+effective user config. No automatic directory creation or installer behavior
+was changed.
+
+The routing regression failed before the fix. It now passes precedence,
+last-match, nonmatching-lot, absent-lot and all 133 shipped-file assertions.
+Existing single/batch installation smoke tests also pass with ASan/UBSan/LSan:
+[host results](wire/host.txt). The cross-built client downloaded the collection
+from the real os64serve into an empty `/etc/icons/wire` on scratch QEMU:
+[133 installed, exit 0](wire/native.txt). Downloaded PNGs and metadata were
+extracted after shutdown and compared byte for byte with the sources. A new
+gallery instance selected that directory and [rendered the downloaded set](wire/gallery.png).
+The [tested client hash](wire/os64get-sha256.txt) records the native binary.
+The temporary VM and loopback server were stopped. P5 retest remains pending.
