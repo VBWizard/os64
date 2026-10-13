@@ -10,12 +10,14 @@ static unsigned long checks, allocations;
 static int failures;
 static const char *current;
 static long deny_countdown=-1;
+static size_t reserve_next;
 #define CHECK(x) do { ++checks; if (!(x)) { ++failures; printf("FAIL %s:%d [%s] %s\n",__FILE__,__LINE__,current,#x); } } while (0)
 void *os64_malloc(size_t n) {
     ++allocations;
     if (deny_countdown==0) { deny_countdown=-1; return NULL; }
     if (deny_countdown>0) --deny_countdown;
-    return malloc(n?n:1);
+    size_t reserve=reserve_next; reserve_next=0;
+    return malloc((n?n:1)+reserve);
 }
 void os64_free(void *p) { free(p); }
 size_t os64_malloc_size(const void *p) { return p?malloc_usable_size((void *)p):0; }
@@ -190,7 +192,25 @@ static void core_limits(void)
     CHECK(os64_ui_data_create(10,core_columns,1,rows,n,&d)==OS64_UI_LIMIT && !d);
     free(longtext); free(rows);
 }
-static void core_suite(void) { core_refusals(); core_sorts(); core_selection(); core_limits(); }
 #ifndef E3_CORE_EMBED
-int main(void) { core_suite(); printf("data core: %lu checks, %d failures\n",checks,failures); return failures?1:0; }
+static void reused_capacity(void)
+{
+    current="large recycled projection capacity is charged once";
+    os64_ui_data_t *d=core_fixture(1); os64_ui_data_projection_t *p=NULL,*q=NULL;
+    reserve_next=12u*1024u*1024u;
+    CHECK(os64_ui_data_projection_identity(d,&p)==OS64_UI_OK);
+    CHECK(os64_ui_data_projection_bytes(p)>12u*1024u*1024u);
+    CHECK(os64_ui_data_projection_sort(p,(os64_ui_data_sort_t){2,false},&q)==OS64_UI_OK);
+    os64_ui_selection_t s={0}; CHECK(os64_ui_selection_bind(&s,p,OS64_UI_DATA_RESET)==OS64_UI_OK);
+    CHECK(os64_ui_selection_bind(&s,p,OS64_UI_DATA_PRESERVE)==OS64_UI_OK);
+    os64_ui_selection_dispose(&s); os64_ui_data_projection_release(p); os64_ui_data_projection_release(q);
+    reserve_next=OS64_UI_DATA_VIEW_BYTES;
+    CHECK(os64_ui_data_projection_identity(d,&p)==OS64_UI_LIMIT && !p);
+    os64_ui_data_release(d);
+}
+#endif
+static void core_suite(void) { core_refusals(); core_sorts(); core_selection(); core_limits(); }
+
+#ifndef E3_CORE_EMBED
+int main(void) { core_suite(); reused_capacity(); printf("data core: %lu checks, %d failures\n",checks,failures); return failures?1:0; }
 #endif

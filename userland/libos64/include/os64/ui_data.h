@@ -69,6 +69,7 @@ typedef enum { OS64_UI_SELECTION_CHOOSE, OS64_UI_SELECTION_FOCUS,
     OS64_UI_SELECTION_TOGGLE, OS64_UI_SELECTION_RANGE,
     OS64_UI_SELECTION_UNION, OS64_UI_SELECTION_ALL, OS64_UI_SELECTION_CLEAR,
     OS64_UI_SELECTION_CONTEXT } os64_ui_selection_command_t;
+/* Initialize fresh storage; dispose before reinitializing. */
 void os64_ui_selection_init(os64_ui_selection_t *);
 os64_ui_status_code_t os64_ui_selection_dispose(os64_ui_selection_t *);
 os64_ui_status_code_t os64_ui_selection_bind(os64_ui_selection_t *, os64_ui_data_projection_t *, os64_ui_data_bind_t);

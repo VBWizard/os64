@@ -242,7 +242,8 @@ os64_ui_status_code_t os64_ui_data_projection_sort(const os64_ui_data_projection
     size_t c = 0;
     while (c < p->data->columns && p->data->schema[c].id != order.column) ++c;
     if (c == p->data->columns || !p->data->schema[c].sortable) return OS64_UI_INVALID;
-    if (p->bytes * 2 + p->count * sizeof(uint32_t) > OS64_UI_DATA_VIEW_BYTES) return OS64_UI_LIMIT;
+    size_t requested=sizeof(os64_ui_data_projection_t)+(p->count+p->data->count)*sizeof(uint32_t);
+    if (p->bytes+requested+p->count*sizeof(uint32_t)+32>OS64_UI_DATA_VIEW_BYTES) return OS64_UI_LIMIT;
     os64_ui_data_projection_t *q;
     os64_ui_status_code_t rc = projection_new(p->data,p->count,&q);
     if (rc) return rc;

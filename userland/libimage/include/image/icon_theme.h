@@ -22,6 +22,10 @@ os64_ui_status_code_t os64_icon_theme_create(os64_icon_theme_t **out);
 const os64_ui_icon_provider_t *os64_icon_theme_provider(os64_icon_theme_t *theme);
 os64_ui_status_code_t os64_icon_theme_destroy(os64_icon_theme_t *theme);
 
+/* Retained catalog pixel-cache bytes, shared across views; excludes theme
+ * routing metadata and decoder scratch. This query allocates nothing. */
+size_t os64_icon_theme_cache_bytes(const os64_icon_theme_t *theme);
+
 /* Metadata describes the selected set, or the shipped default when no valid
  * selected set was found. Strings live until theme destruction. */
 const char *os64_icon_theme_path(const os64_icon_theme_t *theme);

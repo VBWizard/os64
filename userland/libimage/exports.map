@@ -21,5 +21,6 @@
         os64_icon_theme_path;
         os64_icon_theme_name;
         os64_icon_theme_author;
+        os64_icon_theme_cache_bytes;
     local: *;
 };

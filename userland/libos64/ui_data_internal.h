@@ -11,6 +11,8 @@ typedef struct {
 } ui_selection_state;
 /* Private candidate operations use detached copies. The app-owned handle is
  * stable while publication exchanges its state. */
+__attribute__((visibility("hidden")))
 os64_ui_status_code_t ui_selection_copy(const os64_ui_selection_t *, os64_ui_selection_t *);
+__attribute__((visibility("hidden")))
 void ui_selection_publish(os64_ui_selection_t *, os64_ui_selection_t *, void *owner);
 #endif

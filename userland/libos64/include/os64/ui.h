@@ -560,6 +560,10 @@ int32_t os64_ui_draw_run(os64_ui_t *ui, void *run, os64_font_role_t role,
 os64_font_set_t *os64_ui_font_set(os64_ui_t *ui);
 os64_font_status_t os64_ui_font_status(const os64_ui_t *ui);
 size_t os64_ui_font_live_bytes(const os64_ui_t *ui);
+// High-water requested engine bytes routed through this binding, including
+// staging and cache retention. A borrowed context is accounted by its owner.
+// Queries allocate nothing; releasing the binding resets these counters.
+size_t os64_ui_font_peak_bytes(const os64_ui_t *ui);
 
 // ── the application's face ──────────────────────────────────────────────────
 // A face the APPLICATION lends the window, beside the role set the settings
