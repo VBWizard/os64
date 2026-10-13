@@ -1,6 +1,6 @@
 #include "os64/os64.h"
 
-#define MAX_DIR_ENTRIES 512
+#define MAX_DIR_ENTRIES 4096 //CLR Updated to 4096 on 10/13/2026
 #define LS_PATH_MAX 512
 #define LS_MAX_PATHS 512
 // The width to lay out for when the terminal cannot be asked.
