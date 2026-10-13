@@ -501,7 +501,7 @@ static os64_font_status_t sh_adopt(uint32_t size,
 typedef struct {
     int32_t row_h;
     int64_t extent, bar_total, saved_extent;
-    os64_gui_rect_t view, saveas;
+    os64_gui_rect_t view, menubar;
     size_t line, col, sel_line, sel_col, top;
     bool sel;
     unsigned char bytes[256];
@@ -517,7 +517,7 @@ static sh_state_t sh_state(void)
     s.bar_total = g.hscroll.total;
     s.saved_extent = g.saved_max_width;
     s.view = g.view.w.bounds;
-    s.saveas = g.btn_saveas.bounds;
+    s.menubar = g.bar.w.bounds;
     s.line = g.view.cur_line; s.col = g.view.cur_col;
     s.sel = g.view.sel; s.sel_line = g.view.sel_line; s.sel_col = g.view.sel_col;
     s.top = g.view.top;
@@ -534,7 +534,7 @@ static bool sh_same_state(const sh_state_t *a, const sh_state_t *b)
 {
     return a->row_h == b->row_h && a->extent == b->extent &&
            a->bar_total == b->bar_total && a->saved_extent == b->saved_extent &&
-           sh_rect_eq(a->view, b->view) && sh_rect_eq(a->saveas, b->saveas) &&
+           sh_rect_eq(a->view, b->view) && sh_rect_eq(a->menubar, b->menubar) &&
            a->line == b->line && a->col == b->col && a->sel == b->sel &&
            a->sel_line == b->sel_line && a->sel_col == b->sel_col &&
            a->top == b->top && a->len == b->len && memcmp(a->bytes, b->bytes, a->len) == 0;

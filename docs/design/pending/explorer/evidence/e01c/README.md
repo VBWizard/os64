@@ -11,7 +11,7 @@ user-reported; no installed-binary hash was captured.
   models/actions. Standalone native hosting supplies Interface-font rendering,
   keyboard/pointer cascades, scrolling and dismissal. Commands launch after
   popup teardown; quoting, named-menu invocation and config lookup remain.
-- Scribe has File/Edit/View/Help, shared toolbar actions, context menus and a
+- Scribe has File/Edit/View/Help, file actions, context menus and a
   bottom status widget. Menu and status visibility reclaim layout space.
   Alt/F10 and Show Menu Bar recover a hidden menu. Clipboard commands retain
   their document or entry-field target across popup focus changes. Right-click
@@ -19,7 +19,7 @@ user-reported; no installed-binary hash was captured.
   quit policies remain; new notices re-show hidden status.
 - No kernel changes, artwork, picker, browser shell or IPC are included.
 
-## Automated results
+## Original E1C automated results
 
 | Suite | Result |
 | --- | --- |
@@ -44,7 +44,7 @@ creation, quoted argv,
 missing/empty/unresolved menus, cycles, oversized rows and parser maximum depth.
 
 Cross-build passed for `scribe`, `grootmenu`, `tests/scribefonttest` and their
-library dependencies. `binaries.sha256` identifies the final outputs;
+library dependencies. `binaries.sha256` identifies the original E1C publication outputs;
 `qemu-binaries.sha256` identifies the native walkthrough outputs.
 Source whitespace checks passed. The two captured document files intentionally
 retain their extra final newline; publication checks exempt that byte-preserving
@@ -102,7 +102,8 @@ These consumers need the merged E1K/E1B platform already in `userland`.
 
 1. Right-click the desktop. Check the current Interface font, mouse and
    keyboard cascades, screen-edge placement and dismissal by clicking outside.
-2. Open Scribe. Try File/Edit/View/Help and the Open/Save/Save As buttons.
+2. Open Scribe. Try File/Edit/View/Help, including Open/Save/Save As.
+   The duplicate button row is removed; commands still reveal the path field.
    Select document text, right-click elsewhere in the text and copy it.
 3. Open a filename or Find field. Select some field text, use its context
    menu and the Edit menu for Cut/Copy/Paste; the document must stay untouched.
@@ -114,3 +115,25 @@ These consumers need the merged E1K/E1B platform already in `userland`.
    leaving Help; a second Ctrl+Q at the save-before-quit prompt discards.
 7. Switch VTs while a menu is open, return, then close the application. Check
    for stranded popups. Record the installed revision or binary hashes.
+
+## Follow-up: remove duplicate Scribe buttons
+
+At Chris's request, remove Open/Save/Save As buttons below the menu and
+reclaim their row for the document. File actions and shortcuts retain the
+path textfield for Open, Save As and save-before-quit. Update the font
+transaction snapshot to track the menubar in place of the removed button.
+The current design and chrome documentation now describe this layout.
+
+`toolbar-removal/` records the follow-up outputs: Scribe passes 2,526 checks
+and menu consumers pass 1,335, with ASan/UBSan and leak detection enabled
+outside the sandbox. The Scribe suite's allocation-failure sweep has fewer
+allocation sites after deleting the buttons; its cases remain enabled.
+Both Scribe and scribefonttest cross-build successfully. The retirement
+audit and whitespace check pass.
+
+QEMU used the same scratch disks and E1B ISO with the rebuilt Scribe staged
+before boot. Screenshots show the reclaimed document space, Open and Save As
+fields, successful save, and dirty-quit path prompt. Enter at that prompt
+saved the added line and exited. `saved-document.txt` records the exact saved
+bytes after guest sync. The VM was stopped. The original P5 acceptance above
+predates this follow-up; this layout change has host/QEMU validation.

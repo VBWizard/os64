@@ -662,3 +662,15 @@ pushing E1C and moving to the next slice. This is user-reported hardware
 acceptance without an installed-binary hash; ordinary PR review remains.
 E2 icons follow: the provider/cache packet is distinct from the visual family,
 and artwork should begin with a small style preview before the full catalog.
+
+
+## 2026-10-12 — E1C button-row cleanup
+
+Chris requested removing Scribe's duplicate Open/Save/Save As buttons before
+review, while preserving the path textbox. The document reclaims the row;
+menu actions and shortcuts retain Open, Save As and save-before-quit fields.
+Scribe and menu consumer suites pass with ASan/UBSan/LSan (2,526 and 1,335
+checks); cross-builds and QEMU layout/save/quit checks pass. Follow-up evidence
+is in `evidence/e01c/toolbar-removal/`. Earlier P5 acceptance predates this
+cleanup. E2's selected preview direction is classic colorful icons with crisp
+outlines; icon work has not begun.

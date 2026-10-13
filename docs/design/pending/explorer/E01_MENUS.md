@@ -349,8 +349,8 @@ missing config, empty menu, invalid reference, max depth and quoted arguments.
 ### Scribe
 
 Use the existing Open, Save, Save As, Find, Help, Quit and clipboard callbacks
-behind actions. Add a File/Edit/View/Help menu bar, bind existing toolbar buttons
-to those same actions, and adopt the status widget. Keep the filename field,
+behind actions. Add a File/Edit/View/Help menu bar, remove the duplicate
+Open/Save/Save As buttons, and adopt the status widget. Keep the filename field,
 find field, help view, save failures and unsaved-exit flow intact. Do not add a
 second document model or silently change the meaning of repeated Ctrl+Q.
 

@@ -1,6 +1,6 @@
 // scribe.c — the GUI text editor. SCRIBE.md is the design authority; this
 // file is the app half of the bargain it describes: buffer, file plumbing,
-// button row, and layout live HERE; everything reusable (textview,
+// menus, and layout live HERE; everything reusable (textview,
 // scrollbar, textfield) went into libui, which is the entire reason this
 // program exists (the toolkit grows app-driven, and scribe is the app).
 //
@@ -55,7 +55,6 @@ typedef struct
     os64_ui_shortcut_router_t shortcuts;
     unsigned editing_target;
     const scribe_hooks_t *hooks;
-    os64_ui_widget_t btn_open, btn_save, btn_saveas;
     os64_ui_widget_t mode_label;    // names what the field means right now
     os64_ui_textfield_t field;
     os64_ui_textview_t view;
@@ -230,7 +229,7 @@ static void status_refresh(void)
 
 // ── layout ──────────────────────────────────────────────────────────────────
 // Manual bounds, recomputed on resize — layout is a call the app makes.
-// Menu bar, toolbar, optional entry field, document and bottom status bar.
+// Menu bar, optional entry field, document and bottom status bar.
 // The entry row (only in a field mode):
 // mode label | entry field.  Body: textview + scrollbar.
 
@@ -241,31 +240,17 @@ static void status_refresh(void)
 // would have drawn.
 typedef struct
 {
-    os64_gui_rect_t bar, status, btn_open, btn_save, btn_saveas;
+    os64_gui_rect_t bar, status;
     os64_gui_rect_t mode_label, field, view, scroll, hscroll;
     bool bar2;
 } scribe_layout_t;
-
-// A button is as wide as its caption says, plus the padding a button
-// carries on each side. The old widths were 60/60/84 pixels, written for an
-// 8x16 cell; "Save As" at a 24-pixel face is wider than that on its own.
-static os64_font_status_t button_width(os64_ui_t *ui, const char *caption,
-                                       int32_t *out)
-{
-    int32_t tw = 0;
-    os64_font_status_t status =
-        os64_ui_text_measure(ui, OS64_FONT_ROLE_UI, caption, os64_strlen(caption), &tw);
-    if (status == OS64_FONT_OK)
-        *out = tw + 4 * ui->theme.pad;
-    return status;
-}
 
 // THE WINDOW, UNDER WHATEVER FACE THE CALLS BELOW ARE REPORTING. Inside a
 // font transaction that is the candidate; everywhere else it is the face the
 // window is wearing. It never touches a live widget, so the planner can ask
 // it a question it might not like the answer to.
 //
-// Buttons keep their measured widths and the document keeps at least one
+// The entry field keeps positive width and the document keeps at least one
 // row. A candidate that cannot fit those controls is refused atomically.
 static os64_font_status_t compute_layout(os64_ui_t *ui, scribe_layout_t *out)
 {
@@ -275,25 +260,10 @@ static os64_font_status_t compute_layout(os64_ui_t *ui, scribe_layout_t *out)
     int32_t pad = t->pad, gap = t->gap;
     int32_t bh = os64_ui_control_min_height(ui);
 
-    int32_t bw_open = 0, bw_save = 0, bw_saveas = 0;
-    os64_font_status_t status;
-    if ((status = button_width(ui, "Open", &bw_open)) != OS64_FONT_OK ||
-        (status = button_width(ui, "Save", &bw_save)) != OS64_FONT_OK ||
-        (status = button_width(ui, "Save As", &bw_saveas)) != OS64_FONT_OK)
-        return status;
-
-    int32_t bx = W - pad - bw_saveas - bw_save - bw_open - 2 * gap;
-    if (bx - 2 * pad < 0)
-        return OS64_FONT_LIMIT;         // the buttons alone overrun the window
     int32_t mh = os64_ui_font_row_height(ui, OS64_FONT_ROLE_UI) + 6;
     out->bar = (os64_gui_rect_t){pad,pad,W-2*pad,mh};
     int32_t y = pad + (g.bar.w.hidden ? 0 : mh + gap);
-    out->btn_open   = (os64_gui_rect_t){ pad, y, bw_open, bh };
-    out->btn_save   = (os64_gui_rect_t){ pad + bw_open + gap, y, bw_save, bh };
-    out->btn_saveas = (os64_gui_rect_t){ pad + bw_open + bw_save + 2 * gap,
-                                         y, bw_saveas, bh };
     out->status = (os64_gui_rect_t){pad,H-pad-bh,W-2*pad,bh};
-    y += bh + gap;
     out->bar2 = (g.mode != MODE_NONE);
     if (out->bar2) {
         // MEASURE the label instead of assuming it (2026-08-23): a flat
@@ -303,7 +273,7 @@ static os64_font_status_t compute_layout(os64_ui_t *ui, scribe_layout_t *out)
         // starve the field it is labelling.
         const char *label = g.mode_label.text ? g.mode_label.text : "";
         int32_t lw = 0;
-        status = os64_ui_text_measure(ui, OS64_FONT_ROLE_UI, label,
+        os64_font_status_t status = os64_ui_text_measure(ui, OS64_FONT_ROLE_UI, label,
                                       os64_strlen(label), &lw);
         if (status != OS64_FONT_OK)
             return status;
@@ -313,6 +283,8 @@ static os64_font_status_t compute_layout(os64_ui_t *ui, scribe_layout_t *out)
         out->mode_label = (os64_gui_rect_t){ pad, y, lw, bh };
         out->field      = (os64_gui_rect_t){ pad + lw + gap, y,
                                              W - 2 * pad - lw - gap, bh };
+        if (out->field.w <= 0)
+            return OS64_FONT_LIMIT;
         y += bh + gap;
     }
 
@@ -323,6 +295,8 @@ static os64_font_status_t compute_layout(os64_ui_t *ui, scribe_layout_t *out)
     if (body_h < row + 4)
         return OS64_FONT_LIMIT;
     int32_t body_w = W - 2 * pad - t->scroll_w - 2;
+    if (body_w <= 0)
+        return OS64_FONT_LIMIT;
     out->view   = (os64_gui_rect_t){ pad, y, body_w, body_h };
     out->scroll = (os64_gui_rect_t){ W - pad - t->scroll_w, y, t->scroll_w, body_h };
     // The horizontal bar under the text, stopping short of the vertical
@@ -343,9 +317,6 @@ static void apply_layout(const scribe_layout_t *l, bool staged)
 {
     place(&g.bar.w, l->bar, staged);
     place(&g.status.w, l->status, staged);
-    place(&g.btn_open, l->btn_open, staged);
-    place(&g.btn_save, l->btn_save, staged);
-    place(&g.btn_saveas, l->btn_saveas, staged);
     if (l->bar2) {
         place(&g.mode_label, l->mode_label, staged);
         place(&g.field.w, l->field, staged);
@@ -789,15 +760,13 @@ static void on_close_request(os64_ui_t *ui)
     request_quit();
 }
 
-static void click_open(os64_ui_widget_t *w, void *user)
+static void command_open(void)
 {
-    (void)w; (void)user;
     enter_mode(MODE_OPEN, "open:", "");
 }
 
-static void click_save(os64_ui_widget_t *w, void *user)
+static void command_save(void)
 {
-    (void)w; (void)user;
     help_leave();   // Save means the document, wherever the eyes were
     if (g.path[0])
         do_save(g.path);
@@ -805,14 +774,13 @@ static void click_save(os64_ui_widget_t *w, void *user)
         enter_mode(MODE_SAVEAS, "save as:", "");
 }
 
-static void click_saveas(os64_ui_widget_t *w, void *user)
+static void command_saveas(void)
 {
-    (void)w; (void)user;
     enter_mode(MODE_SAVEAS, "save as:", g.path);
 }
 
 // Actions retain the editing target that opened a menu. Native popup focus
-// and toolbar focus must not redirect a field's clipboard command to the file.
+// must not redirect a field's clipboard command to the file.
 enum { ACT_OPEN=1, ACT_SAVE, ACT_SAVEAS, ACT_QUIT, ACT_CUT, ACT_COPY,
        ACT_PASTE, ACT_FIND, ACT_BAR, ACT_STATUS, ACT_HELP };
 static bool action_valid(void *cookie, uint64_t generation)
@@ -860,9 +828,9 @@ static os64_ui_action_result_t action_invoke(void *app,
 {
     (void)app;
     switch (id) {
-    case ACT_OPEN: click_open(NULL,NULL); break;
-    case ACT_SAVE: click_save(NULL,NULL); break;
-    case ACT_SAVEAS: click_saveas(NULL,NULL); break;
+    case ACT_OPEN: command_open(); break;
+    case ACT_SAVE: command_save(); break;
+    case ACT_SAVEAS: command_saveas(); break;
     case ACT_QUIT: request_quit(); break;
     case ACT_CUT: case ACT_COPY: case ACT_PASTE:
         clipboard(id,context->cookie == &g.field.w); break;
@@ -935,9 +903,6 @@ static bool build_actions(void)
         os64_ui_action_context_t c = {i ? &g.field.w : &g.view.w,1,action_valid,action_release,action_valid};
         if (os64_ui_action_view_create(g.actions,&c,&g.action_views[i])) return false;
     }
-    if (os64_ui_action_bind(&g.btn_open,g.action_views[0],ACT_OPEN) ||
-        os64_ui_action_bind(&g.btn_save,g.action_views[0],ACT_SAVE) ||
-        os64_ui_action_bind(&g.btn_saveas,g.action_views[0],ACT_SAVEAS)) return false;
     const os64_ui_menu_entry_t file[] = {{.action=ACT_OPEN},{.action=ACT_SAVE},{.action=ACT_SAVEAS},{.kind=OS64_UI_MENU_SEPARATOR},{.action=ACT_QUIT}};
     const os64_ui_menu_entry_t edit[] = {{.action=ACT_CUT},{.action=ACT_COPY},{.action=ACT_PASTE},{.kind=OS64_UI_MENU_SEPARATOR},{.action=ACT_FIND}};
     const os64_ui_menu_entry_t view[] = {{.action=ACT_BAR},{.action=ACT_STATUS}};
@@ -961,9 +926,6 @@ static bool scribe_dispose(void)
     if (os64_ui_menu_session_dispose(g.menus)) return false;
     g.menus = NULL;
     os64_ui_cancel_interaction(&g.ui);
-    (void)os64_ui_action_unbind(&g.btn_open);
-    (void)os64_ui_action_unbind(&g.btn_save);
-    (void)os64_ui_action_unbind(&g.btn_saveas);
     os64_ui_menubar_destroy(&g.bar);
     for (unsigned i=0;i<6;++i) { os64_ui_menu_model_release(g.models[i]); g.models[i]=NULL; }
     for (unsigned i=0;i<2;++i) if (g.action_views[i]) {
@@ -1132,9 +1094,6 @@ static const char *scribe_build(void)
                                        (int32_t)g.ctx.surf.height };
     os64_ui_status_init(&g.status);
     os64_ui_menubar_init(&g.bar);
-    os64_ui_button(&g.btn_open,   "Open",    click_open,   NULL);
-    os64_ui_button(&g.btn_save,   "Save",    click_save,   NULL);
-    os64_ui_button(&g.btn_saveas, "Save As", click_saveas, NULL);
     os64_ui_label(&g.mode_label, "");
     os64_ui_textfield(&g.field, g.field_buf, sizeof(g.field_buf),
                       field_submit, field_cancel, NULL);
@@ -1145,9 +1104,6 @@ static const char *scribe_build(void)
 
     os64_ui_add_child(&g.root, &g.bar.w);
     os64_ui_add_child(&g.root, &g.status.w);
-    os64_ui_add_child(&g.root, &g.btn_open);
-    os64_ui_add_child(&g.root, &g.btn_save);
-    os64_ui_add_child(&g.root, &g.btn_saveas);
     os64_ui_add_child(&g.root, &g.mode_label);
     os64_ui_add_child(&g.root, &g.field.w);
     os64_ui_add_child(&g.root, &g.view.w);

@@ -70,7 +70,7 @@ controls, each shaped for its NEXT consumer, not just for scribe:
    is really the FORM control every future dialog needs, which is why it is
    a separate widget and not a scribe special.
 
-scribe itself keeps: the buffer implementation, file I/O, the button row,
+scribe itself keeps: the buffer implementation, file I/O, the menus,
 and layout. Target: the app stays small enough to be an exemplar, like
 uiprobe before it — the start-here table's next row.
 
@@ -120,7 +120,7 @@ honest failure mode is the same as quill's.
 
 ## Chrome
 
-The shared File/Edit/View/Help menu bar and Open/Save/Save As toolbar invoke
+The shared File/Edit/View/Help menu bar and keyboard shortcuts invoke
 one action registry. Open and Save As reveal the existing path textfield;
 a file picker remains separate work. Edit commands retain the editing target
 that opened the menu, so path/search-field clipboard commands cannot drift
