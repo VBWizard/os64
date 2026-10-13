@@ -146,6 +146,21 @@ static void paint_cases(void)
                "fill 37 27 5 1 #101010\n"
                "fill 38 28 3 1 #101010\n");
 
+    // A marker's symbol is FILLED as its text is (-webkit-text-fill-color,
+    // as Chrome draws it): the outer disc above, rows of 3, 5, 5, 5 and 3,
+    // in the fill's blue, not the colour's red — and so is the item's text.
+    paint_page_case("a shape marker takes the fill colour",
+                    "<!doctype html><style>ul { color: #ff0000; -webkit-text-fill-color: #0000ff }"
+                    "</style><ul><li>a</ul>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "text \"a\" 48 30 #0000ff\n"
+                    "fill 38 24 3 1 #0000ff\n"
+                    "fill 37 25 5 1 #0000ff\n"
+                    "fill 37 26 5 1 #0000ff\n"
+                    "fill 37 27 5 1 #0000ff\n"
+                    "fill 38 28 3 1 #0000ff\n");
+
     expect("bevel: lighter and darker halve the distance",
            yonder_lighter(0x000000) == 0x7f7f7f && yonder_darker(0xffffff) == 0x7f7f7f &&
                yonder_lighter(0x808080) == 0xbfbfbf && yonder_darker(0x808080) == 0x404040,

@@ -1129,8 +1129,9 @@ web does that with a prefixed property. The Compatibility Standard defines
 both names pages write: **`-webkit-background-clip`** is a legacy name
 alias of `background-clip` (§ 3.4.1), and **`-webkit-text-fill-color`**
 (§ 3.4.6.1, `<color>`, initially `currentcolor`, inherited) is the colour a
-glyph is FILLED with — `color` still decides decorations, shadows'
-`currentcolor`, and everything else. The idiom is
+glyph is FILLED with — a list marker's symbol too, a disc as much as a
+number, as Chrome draws it (#262, Codex) — and `color` still decides
+decorations, shadows' `currentcolor`, and everything else. The idiom is
 `-webkit-background-clip: text; -webkit-text-fill-color: transparent`, and
 a page that writes only the standard names writes `color: transparent`.
 

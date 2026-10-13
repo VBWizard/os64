@@ -1360,7 +1360,9 @@ static void bullet(const Painter *p, const flow_box_t *b, flow_list_style_type_t
     // group's bounds hold too.
     os64_gui_rect_t at = flow_marker_shape_rect(b);
     int64_t x = at.x, y = at.y, d = at.w;
-    uint32_t colour = ink_of(p, b->style->color);
+    // A marker's symbol is the marker's text, so it is FILLED as text is
+    // (-webkit-text-fill-color), as Chrome draws it.
+    uint32_t colour = ink_of(p, b->style->fill);
     if (type == FLOW_LIST_SQUARE) {
         fill(p, x, y, d, d, colour);
         return;

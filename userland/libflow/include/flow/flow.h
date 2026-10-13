@@ -471,10 +471,10 @@ typedef struct {
 
     uint32_t color;                 // a colour (above)
     // The colour a glyph is FILLED with (Compatibility § 3.4.6.1,
-    // `-webkit-text-fill-color`): `color` unless the page says otherwise,
-    // which a gradient headline does to let its background show through.
-    // Decorations, shadows' currentColor and everything else still take
-    // `color`.
+    // `-webkit-text-fill-color`), a list marker's symbol as much as its
+    // text's: `color` unless the page says otherwise, which a gradient
+    // headline does to let its background show through. Decorations,
+    // shadows' currentColor and everything else still take `color`.
     uint32_t fill;
     bool has_background;            // false = transparent
     uint32_t background;            // a colour
