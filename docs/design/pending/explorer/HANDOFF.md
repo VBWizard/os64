@@ -10,6 +10,18 @@ user-reported, without a captured installed-binary hash.
 
 ## Resume point
 
+**Active: [E4 — Roam](E04_ROAM.md)** in `codex/roam-e4`, worktree
+`.worktrees/roam-e4`, based on E3 merge `5a521b63`. Chris authorized implementation.
+Quinn owns integration; Sol handles the directory/controller and reusable UI/app
+packets against shared headers. Host/native acceptance is in progress; P5 has
+not been claimed. File associations must be discussed with Chris before E5.
+
+E3 PR #264 is merged and its first review reported no major issues at
+`75662a5c`. Quinn's architectural check independently reran the core and real-font
+suites with ASan/UBSan/LSan. Hardware evidence remains recorded separately
+from merge and review status.
+
+
 E1K is complete: PR #257 is approved and merged as `b36e9ddc`. Chris explicitly
 confirmed this when assigning E1B; old pending banners predated its approval.
 
@@ -23,15 +35,10 @@ os64get delivery. Chris's P5 gallery visual acceptance follows `a3602b30` and
 predates the manifest error-handling fix `4ccaf82f`; no installed binary hash
 was captured. [E2 evidence](evidence/e02/README.md) preserves that distinction.
 
-**E3A/E3B are implemented on `codex/explorer-e3-implementation`, in the fresh
-`.worktrees/explorer-e3-implementation` worktree, starting from the published
-`origin/codex/explorer-e3-design` packet.** [Evidence](evidence/e03/README.md)
-records host, native, packaging and delivery scope. Independent review and
-Chris's P5 HID/performance walkthrough remain pending; E3 is not called accepted.
-E4's real directory browser follows accepted E3.
-
-The design branch `codex/explorer-e3-design` / `.worktrees/explorer-e3` remains
-separate. The implementation [draft PR #264](https://github.com/VBWizard/os64/pull/264) against `userland` carries its design packet.
+E3A/E3B are merged through [PR #264](https://github.com/VBWizard/os64/pull/264).
+[Evidence](evidence/e03/README.md) records host, native, packaging and delivery
+scope. The E3 design and implementation worktrees remain separate historical
+checkpoints; active E4 work belongs in `.worktrees/roam-e4`.
 
 | Work | State | Next action |
 | --- | --- | --- |
@@ -40,7 +47,8 @@ separate. The implementation [draft PR #264](https://github.com/VBWizard/os64/pu
 | [E1B menus](E01B_HANDOFF.md) | Approved and merged, PR #259 | Reuse the shared controller and dispatcher. |
 | E1C consumers | Approved and merged, PR #260; P5 tested | Reuse production menus. |
 | [E2 icons](E02_ICONS.md) | Merged, PR #261 | Reuse provider and shipped assets; [evidence](evidence/e02/README.md). |
-| [E3 data view and selection](E03_DATA_VIEW.md) | Implemented; review/P5 pending | Review the implementation and run [the P5 acceptance packet](E03_HANDOFF.md). |
+| [E3 data view and selection](E03_DATA_VIEW.md) | Merged PR #264 | Reuse the shared model and Details view; [P5 packet](E03_HANDOFF.md). |
+| [E4 directory browser](E04_ROAM.md) | Implementing | Complete host/native validation and publish the browser. |
 | E6 channels | Umbrella proposal only | Separate platform design and Fable review. |
 
 Install another icon set by extracting its folder, selecting its absolute path

@@ -8,6 +8,10 @@ The repository records are the handoff; conversation memory is not required.
 
 Updated: 2026-10-13.
 
+Active implementation: [E4 — Roam](E04_ROAM.md). E3 PR #264 is merged;
+Chris authorized E4 after Quinn’s architectural check. File associations await
+the requested conversation before E5 (D018).
+
 - Application name: **Roam**, confirmed by Chris (D007).
 - Surrounding panes and bars, including the menu, must be independently
   toggleable down to a bare directory view (D008).
@@ -36,10 +40,9 @@ Updated: 2026-10-13.
 - E2 is merged as `f39b0ae0` through [PR #261](https://github.com/VBWizard/os64/pull/261).
   [E2 evidence](evidence/e02/README.md) separates host/QEMU checks, Chris's P5
   visual acceptance and the subsequent manifest error-handling review fix.
-- Current work: E3's [data-view contract](E03_DATA_VIEW.md) and
-  [implementation packet](E03_HANDOFF.md) have E3A/E3B code and
-  [validation evidence](evidence/e03/README.md). Independent review and P5
-  acceptance remain pending.
+- E3 is merged through PR #264 as `5a521b63`. Its [data-view contract](E03_DATA_VIEW.md),
+  [implementation packet](E03_HANDOFF.md) and [evidence](evidence/e03/README.md)
+  remain the foundation for E4. Hardware evidence is tracked separately.
 - The initial design snapshot `d33e651e` arrived through E1A.
 - D016 settles E2's visual family and installable sets. E6 still needs its
   standalone channel design and Fable review.
@@ -53,7 +56,7 @@ Updated: 2026-10-13.
    choices and unresolved decisions. A proposal is not customer approval.
 4. The active slice's record: [E1](E01_MENUS.md), its active
    [E1K packet](E01K_HANDOFF.md), [E1B handoff](E01B_HANDOFF.md), [E2](E02_ICONS.md),
-   or [E3](E03_DATA_VIEW.md). New slices use the
+   [E3](E03_DATA_VIEW.md), or [E4](E04_ROAM.md). New slices use the
    [slice template](SLICE_TEMPLATE.md).
 5. [Session log](SESSION_LOG.md) when the reasoning or evidence behind a change
    is needed. It is history, not the source of current status.
@@ -67,8 +70,8 @@ Create slice records when work begins, rather than maintaining 15 empty designs.
 | --- | --- | --- | --- | --- | --- |
 | E1 | Actions, menus and status | E1A/E1K/E1B/E1C merged; production menus P5 tested | Quinn (E1C), Sol (E1A/E1B) | [E1A](E01A_HANDOFF.md), [E1K](E01K_HANDOFF.md), [E1B](E01B_HANDOFF.md); PR #254 `c6cc6e3c`, PR #257 `b36e9ddc` | [E1B evidence/walkthrough](evidence/e01b/README.md); P5 report precedes review fixes |
 | E2 | Icon vocabulary | Merged; P5 gallery visually accepted before final review fix | Quinn | [E2 contract](E02_ICONS.md), PR #261 `f39b0ae0` | [Host, packaging and QEMU evidence](evidence/e02/README.md) |
-| E3 | Data view and selection | Implemented; review/P5 pending | Quinn | [Contract](E03_DATA_VIEW.md), [implementation packet](E03_HANDOFF.md); [draft PR #264](https://github.com/VBWizard/os64/pull/264), original native source `8b5d13a7`; clock diagnostic follow-up recorded | [Evidence and transition map](evidence/e03/README.md) |
-| E4 | Directory browser | Planned | Unassigned | — | None |
+| E3 | Data view and selection | Merged PR #264 `5a521b63`; P5 evidence separate | Quinn | [Contract](E03_DATA_VIEW.md), [implementation packet](E03_HANDOFF.md); [PR #264](https://github.com/VBWizard/os64/pull/264), original native source `8b5d13a7`; clock diagnostic follow-up recorded | [Evidence and transition map](evidence/e03/README.md) |
+| E4 | Directory browser | Implementing | Quinn (design/integration), Sol (model/UI) | [E4 contract](E04_ROAM.md), `codex/roam-e4` | In progress; no P5 claim |
 | E5 | Open/Save picker and launch reuse | Planned | Unassigned | — | None |
 | E6 | Local channel foundation | Planned | Unassigned | — | None |
 | E7 | Safe operation engine | Planned | Unassigned | — | None |

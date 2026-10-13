@@ -426,6 +426,64 @@ static void repeated_lifetime(const char *dir)
         os64_ui_data_projection_release(p); view_delete(f);
     }
 }
+static void saved_view_restore(const char *dir)
+{
+    current="saved selection restore is atomic and keeps live columns/revisions";
+    view_fixture *f=view_new(100,dir);
+    uint64_t b=id_at(f,1), d=id_at(f,3);
+    CHECK(os64_ui_dataview_command(&f->view,OS64_UI_SELECTION_CHOOSE,b,false)==OS64_UI_OK);
+    CHECK(os64_ui_dataview_command(&f->view,OS64_UI_SELECTION_TOGGLE,d,false)==OS64_UI_OK);
+    os64_ui_selection_t saved={0};
+    CHECK(os64_ui_selection_clone(&f->selection,&saved)==OS64_UI_OK);
+    CHECK(os64_ui_selection_clone(&f->selection,&f->selection)==OS64_UI_INVALID);
+    CHECK(os64_ui_selection_clone(&f->selection,&saved)==OS64_UI_BUSY);
+    os64_ui_selection_t denied={0};
+    deny_countdown=0;
+    CHECK(os64_ui_selection_clone(&f->selection,&denied)==OS64_UI_NO_MEMORY && !denied.state);
+    deny_countdown=-1;
+    os64_ui_data_t *other=NULL;
+    os64_ui_data_projection_t *p=NULL;
+    CHECK(details_fixture(80,2,0,0,0,&other)==OS64_UI_OK);
+    CHECK(os64_ui_data_projection_identity(other,&p)==OS64_UI_OK);
+    CHECK(os64_ui_dataview_bind(&f->view,p,OS64_UI_DATA_RESET)==OS64_UI_OK);
+    os64_ui_data_projection_release(p); os64_ui_data_release(other);
+    CHECK(os64_ui_dataview_column_set(&f->view,2,180,true,0)==OS64_UI_OK);
+    CHECK(os64_ui_dataview_command(&f->view,OS64_UI_SELECTION_CHOOSE,id_at(f,5),false)==OS64_UI_OK);
+    render(f);
+    uint32_t *pixels=malloc(sizeof(f->pixels)); CHECK(pixels!=NULL);
+    memcpy(pixels,f->pixels,sizeof(f->pixels));
+    uint64_t view_revision=os64_ui_dataview_revision(&f->view);
+    uint64_t selection_revision=os64_ui_selection_revision(&f->selection);
+    uint64_t old_focus=os64_ui_selection_focus(&f->selection);
+    size_t callbacks=f->changes;
+    bool restored=false;
+    for (long fail=0;fail<1000 && !restored;++fail) {
+        deny_countdown=fail;
+        os64_ui_status_code_t rc=os64_ui_dataview_restore(&f->view,&saved,30,24);
+        deny_countdown=-1;
+        if (!rc) restored=true;
+        else {
+            CHECK(rc==OS64_UI_NO_MEMORY || rc==OS64_UI_LIMIT);
+            CHECK(os64_ui_dataview_revision(&f->view)==view_revision);
+            CHECK(os64_ui_selection_revision(&f->selection)==selection_revision);
+            CHECK(os64_ui_data_domain(os64_ui_data_projection_snapshot(os64_ui_selection_projection(&f->selection)))==2);
+            tuple(&f->selection,&old_focus,1,old_focus,old_focus);
+            render(f); CHECK(!memcmp(pixels,f->pixels,sizeof(f->pixels)));
+            CHECK(f->acquires-f->releases==os64_ui_dataview_diagnostics(&f->view).icon_leases);
+        }
+    }
+    CHECK(restored && f->changes==callbacks);
+    CHECK(os64_ui_dataview_revision(&f->view)==view_revision+1);
+    CHECK(os64_ui_selection_revision(&f->selection)==selection_revision+1);
+    tuple(&f->selection,(uint64_t[]){b,d},2,d,d);
+    tuple(&saved,(uint64_t[]){b,d},2,d,d);
+    CHECK(os64_ui_dataview_top(&f->view)==30 && os64_ui_dataview_left(&f->view)==24);
+    os64_ui_dataview_column_t col;
+    CHECK(os64_ui_dataview_column(&f->view,0,&col) && col.id==2 && col.width==180);
+    size_t cursor=0; uint64_t id=0;
+    CHECK(os64_ui_selection_next(&f->selection,selection_revision,&cursor,&id)==OS64_UI_STALE);
+    os64_ui_selection_dispose(&saved); free(pixels); view_delete(f);
+}
 static void performance(const char *dir)
 {
     current="10000-row host resource/timing measurements";
@@ -542,6 +600,6 @@ static void gallery_behavior(const char *dir)
 int main(int argc,char **argv)
 {
     const char *dir=argc>1?argv[1]:"userland/libfreetype/fixtures";
-    core_suite(); widget_input(dir); interruptions(dir); allocation_sweep(dir); bounds_and_independence(dir); allocation_capacity(dir); repeated_lifetime(dir); performance(dir); gallery_behavior(dir);
+    core_suite(); widget_input(dir); interruptions(dir); allocation_sweep(dir); bounds_and_independence(dir); allocation_capacity(dir); repeated_lifetime(dir); saved_view_restore(dir); performance(dir); gallery_behavior(dir);
     printf("Details host: %lu checks, %d failures\n",checks,failures); return failures?1:0;
 }

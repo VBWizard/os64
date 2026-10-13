@@ -327,6 +327,12 @@ os64_ui_status_code_t ui_selection_copy(const os64_ui_selection_t *s, os64_ui_se
     os64_ui_data_projection_retain(q->projection); out->state=q;
     return OS64_UI_OK;
 }
+os64_ui_status_code_t os64_ui_selection_clone(const os64_ui_selection_t *s, os64_ui_selection_t *out)
+{
+    if (!s || !out || s == out) return OS64_UI_INVALID;
+    if (out->state) return OS64_UI_BUSY;
+    return ui_selection_copy(s, out);
+}
 void ui_selection_publish(os64_ui_selection_t *s, os64_ui_selection_t *candidate, void *owner)
 {
     if (state(s)) state(s)->owner=NULL;

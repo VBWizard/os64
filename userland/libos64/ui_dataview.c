@@ -367,6 +367,32 @@ os64_ui_status_code_t os64_ui_dataview_bind(os64_ui_dataview_t *v,os64_ui_data_p
     if (!rc) { vs(v)->busy=true; rc=bind_impl(v,p,mode); vs(v)->busy=false; }
     return result(v,OS64_UI_DATAVIEW_BIND,rc);
 }
+os64_ui_status_code_t os64_ui_dataview_restore(os64_ui_dataview_t *v,
+    const os64_ui_selection_t *saved,size_t top,int64_t left)
+{
+    os64_ui_status_code_t rc=ready(v);
+    if (rc) return result(v,OS64_UI_DATAVIEW_BIND,rc);
+    if (!saved || !saved->state) return result(v,OS64_UI_DATAVIEW_BIND,OS64_UI_INVALID);
+    view_state *s=vs(v);
+    if (os64_ui_selection_revision(s->selection)==UINT64_MAX)
+        return result(v,OS64_UI_DATAVIEW_BIND,OS64_UI_LIMIT);
+    os64_ui_selection_t candidate={0};
+    view_frame *f=NULL;
+    s->busy=true;
+    rc=os64_ui_selection_clone(saved,&candidate);
+    if (!rc) {
+        /* Imported bookmarks can have older revisions. Enumeration tokens
+         * belong to this live selection, not to the source of its contents. */
+        ((ui_selection_state *)candidate.state)->revision=os64_ui_selection_revision(s->selection)+1;
+        os64_ui_data_t *data=os64_ui_data_projection_snapshot(os64_ui_selection_projection(&candidate));
+        const view_frame *columns=os64_ui_data_schema_equal(snapshot(s),data)?s->live:NULL;
+        rc=prepare(v,&candidate,columns,v->w.bounds,top,left,&f);
+    }
+    if (!rc) publish(v,f,&candidate,true);
+    os64_ui_selection_dispose(&candidate);
+    s->busy=false;
+    return result(v,OS64_UI_DATAVIEW_BIND,rc);
+}
 os64_ui_status_code_t os64_ui_dataview_layout(os64_ui_dataview_t *v)
 {
     os64_ui_status_code_t rc=ready(v);

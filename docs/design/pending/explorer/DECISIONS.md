@@ -264,6 +264,22 @@ from a chain of historical entries.
 - **Affected:** E3/E4/E5/E14. [Contract](E03_DATA_VIEW.md),
   [implementation and acceptance packet](E03_HANDOFF.md).
 
+## D018 — E4 implementation and the file-association conversation
+
+- **Status:** Accepted customer instruction, 2026-10-13, with engineering
+  details selected by Quinn.
+- **Source:** Chris authorized making Roam after the E3 architectural check,
+  and explicitly wants to discuss file associations together when that slice
+  arrives. E3 PR #264 has merged as `5a521b63`.
+- **Decision:** Implement the read-only E4 browser now. Reserve association and
+  Open With policy for a conversation before E5; E4 activates directories and
+  does not launch files based on their names or types.
+- **Architecture:** Shared raw directory model, async browser controller and
+  reusable browser UI, consumed by Roam. Preserve committed location until a
+  prepared listing can publish; stale results cannot overwrite newer requests.
+  History state is bounded. Kernel/IPC changes are outside E4.
+- **Affected:** E4/E5; [E4 contract](E04_ROAM.md).
+
 ## Open choices
 
 | ID | Choice | Resolve in | Current position |
