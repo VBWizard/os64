@@ -755,3 +755,38 @@ Review validation: both host suites pass ASan/UBSan/LSan; affected library and
 consumers cross-build. Native QEMU gallery smoke check passes with the revised
 library and downloaded set; the staged library matches its recorded hash.
 The scratch VM is stopped. Receipts: `evidence/e02/review-r1/`.
+
+
+## 2026-10-13 — E1B retrospective and E3 design packet
+
+Chris requested an audit of Sol's E1B PR #259 after six finding-bearing rounds.
+The review record contains 24 findings: 20 inline and four in a conversation
+comment, distributed 5/5/4/4/4/2, followed by a clean round. Several later
+findings revisited the same invariant through a different path or exposed an
+interaction introduced by a fix. Existing extensive tests were real evidence,
+but final-state assertions and simplified painting missed intermediate-state
+and production-rendering obligations. The standalone-focus report also needed
+reproduction analysis; not every reported trigger was confirmed as written.
+
+Chris authorized applying the lessons to the next design and Sol handoff.
+E3 now specifies immutable ID-based data/projections, separate focus/selection/
+anchor, exact range/filter/sort behavior, transactional publication, bounded
+visible-row resources, explicit resize failure/retry and callback obligations.
+The handoff supplies state examples, an invariant-to-entry-point map, interrupted
+input and paired-failure cases, production rendering tests, performance measures
+and separate host/QEMU/P5 acceptance. No E3 implementation started.
+
+E2 PR #261 is verified merged as `f39b0ae0`; the E3 design worktree/branch is
+`.worktrees/explorer-e3` / `codex/explorer-e3-design`, based on that commit.
+Updated E2 and central status without extending Chris's earlier P5 report to the
+later manifest fix. Reconciled the umbrella's generic selection ownership and
+stale next-step text. D017 records engineering choices and their authority.
+The next action is assignment of the E3 packet to Sol, not a kernel or IPC task.
+
+Design validation: local Markdown file targets and whitespace checks pass.
+The stale-reference scan reports live E1B/E1K/icon documentation paths and their
+historical audit receipts; inspected hits remain valid. No code identifiers or
+files were retired. Reviewed selection examples and failure transitions against
+the current input/font APIs. Runtime tests are not applicable to this docs-only
+packet and remain unrun for E3. The packet is published on its design branch;
+no separate PR or merge, allowing the implementation PR to carry the design.

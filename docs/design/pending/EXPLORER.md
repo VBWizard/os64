@@ -1,7 +1,7 @@
 # File Explorer — design and delivery plan
 
-Status: umbrella design, updated 2026-10-11. Sol has E1A ready for ordinary review; native
-menus remain in design follow-up.
+Status: umbrella design, updated 2026-10-13. E1 and E2 are merged; E3 has a
+ready implementation design. The tracker below owns detailed acceptance status.
 Original inspected baseline: `userland` at `f3f5f50e`; E1/E2 inspection refreshed
 against `6d988565` in their linked slice designs.
 **Roam** is the application name, confirmed by Chris on 2026-10-11.
@@ -198,8 +198,8 @@ GUI-service dependency.
 
 | Layer | Owns | Does not own |
 | --- | --- | --- |
-| Basic toolkit | Action binding, menus/popups, status bar, icon drawing, data view, tree, tabs, splitters, focus and hit testing | File paths, copy policy, explorer preferences |
-| Directory model and browser | Directory snapshots, sorting/filtering/selection, history, breadcrumb/path entry and sidebar composition | Top-level app lifetime, executing file operations |
+| Basic toolkit | Action binding, menus/popups, status bar, icon drawing, generic data/projection/selection and data view, tree, tabs, splitters, focus and hit testing | File paths, copy policy, explorer preferences |
+| Directory model and browser | Filesystem snapshots and identity matching, metadata sort keys/filter predicates, per-pane shared selection state, history, breadcrumb/path entry and sidebar composition | Top-level app lifetime, executing file operations |
 | File picker | Browser plus Open/Save mode, filters, validation and completion callback | A second private directory-list implementation |
 | Transfer client/model/view | Protocol decoding, job state, reusable progress presentation and explicit commands | Copying bytes or deciding whether a filesystem mutation succeeded |
 | File operation engine | Traversal, copy/publish rules, cancellation points, conflicts and structured outcomes | Widgets, windows or protocol transport |
@@ -368,9 +368,9 @@ widget slice provides evidence about the missing toolkit work.
 
 | Slice | Deliverable and prerequisite | Acceptance / design checkpoint |
 | --- | --- | --- |
-| E1 — Actions, menus and status | [Detailed design](explorer/E01_MENUS.md): E1A actions/status, E1K native GUI prerequisite, E1B menu widgets, E1C grootmenu/Scribe integration. No explorer dependency. | E1K first review received; focused R1/R2 follow-up remains. Userland work has normal review. Keyboard/context menus, hiding/recovery, font transactions, cleanup and two production consumers. **First customer walkthrough.** |
+| E1 — Actions, menus and status | [Detailed design](explorer/E01_MENUS.md): E1A actions/status, E1K native GUI prerequisite, E1B menu widgets, E1C grootmenu/Scribe integration. No explorer dependency. | E1K architectural review is complete; implementation and userland follow-ups are merged. Userland work has normal review. Keyboard/context menus, hiding/recovery, font transactions, cleanup and two production consumers. **First customer walkthrough.** |
 | E2 — Icon vocabulary | Shared named icon lookup and drawing plus the initial PNG family; reusable by menus, Roam and future desktop icons. E1 reserves optional icon references without changing action IDs. | Settle sizes, ownership/cache bounds, fallbacks, selected/disabled states and asset provenance. Gallery at small/large fonts with menu-sized and desktop-sized icon examples; missing assets remain usable. Agree visual style before producing assets. No SVG dependency. |
-| E3 — Data view and selection | Shared virtualized Details table, columns, keyboard/type-ahead, multi-selection and range anchor. Uses E1/E2 where appropriate. | Dedicated selection/sort design. Exercise 10,000 synthetic rows, redraw bounds, sorting while selected, repeated letters and Ctrl/Shift combinations; record memory and input latency. |
+| E3 — Data view and selection | Shared virtualized Details table, columns, keyboard/type-ahead, multi-selection and range anchor. Uses E1/E2 where appropriate. | [E3 selection/sort contract](explorer/E03_DATA_VIEW.md) and [implementation packet](explorer/E03_HANDOFF.md). Exercise 10,000 synthetic rows, redraw bounds, sorting while selected, repeated letters and Ctrl/Shift combinations; record memory and input latency. |
 | E4 — Directory browser | Directory model, breadcrumb/path entry, history, quick filter and initial favorites/volumes sidebar, composed into a read-only explorer. Depends on E3. | Dedicated browser design: fields, sorting rules, incomplete/error states and async lifetime. Navigate real ext2/FAT; stale completions, missing folders, long names, empty/large directories. **First usable browsing milestone.** |
 | E5 — Picker and launch reuse | Adapt browser into Open/Save picker in Scribe; shared association/Open With launch helper used by Explorer. Depends on E4. | Discuss filters, overwrite intent and caller ownership. Cancel/accept without leaks; filenames with spaces/quotes; unknown type; picker supplies a path while caller owns saving. |
 | E6 — Local channel foundation | Kernel/local endpoint contract, libos64 wrapper, bounded GUI adapter and two-process diagnostic demo. Independent of E2–E5. | Detailed design required before ABI. Host contract tests plus SMP guest tests: full queues, timeouts, close races, owner death, registration races, allocation failure and malformed input. Demo reconnects without a global desktop dependency. |
@@ -445,9 +445,8 @@ Filesystem watching can replace explicit refresh/operation-triggered refresh
 after its own contract exists. Do not bolt a busy directory polling loop onto
 the first browser to simulate it.
 
-Detailed [E1](explorer/E01_MENUS.md) and [E2](explorer/E02_ICONS.md) drafts now
-define the interaction, ownership and implementation boundaries. The next native
-gate is tested implementation and ordinary review of [E1K](explorer/E01K_HANDOFF.md).
-Sol's E1A action/status foundation is accepted (PR #254, `c6cc6e3c`);
-E1B waits for the native APIs. Agree the E2 visual family before producing its asset set. The first explorer window still follows E3/E4,
-without waiting for the separate E6 message-channel architecture.
+[E1](explorer/E01_MENUS.md) and [E2](explorer/E02_ICONS.md) are merged.
+[E3's detailed contract](explorer/E03_DATA_VIEW.md) and
+[implementation packet](explorer/E03_HANDOFF.md) define the next reusable
+Details view and selection work. The first real directory browser follows in
+E4, without waiting for the separate E6 message-channel architecture.

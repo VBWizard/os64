@@ -243,6 +243,27 @@ from a chain of historical entries.
   lifetime contract, while artwork can change independently of application code.
 - **Affected:** E2 and its later consumers; [E2 contract](E02_ICONS.md).
 
+## D017 — E3 identity, selection and transactional Details view
+
+- **Status:** Selected engineering direction, 2026-10-13. Chris authorized the
+  E3 design/handoff after the E1B retrospective; individual interaction details
+  below are Quinn's design choices, not separately claimed customer approvals.
+- **Owner:** Quinn. Intended implementation handoff: Sol when assigned.
+- **Decision:** Reusable immutable data snapshots and ordered projections use
+  domain-scoped row IDs. Each view owns independent selection/focus/anchor and
+  presentation. Sort preserves IDs; filtering drops hidden selection; scrolling
+  preserves offscreen selection. The directory producer owns filesystem identity
+  matching and sort/filter meaning, not a second selection implementation.
+- **Failure contract:** Prepare before publication. Replacement failure preserves
+  the old complete view. An externally resized window whose layout cannot be
+  prepared enters an explicit blocked state with retry, without stale hit targets.
+- **Delivery:** E3A data/projection/selection, then E3B Details widget/gallery;
+  one coherent PR is permitted. No kernel prerequisite or Fable gate. The handoff
+  maps invariants to all mutation paths, interrupted sequences, paired failures
+  and actual rendering evidence, applying the E1B review lessons upfront.
+- **Affected:** E3/E4/E5/E14. [Contract](E03_DATA_VIEW.md),
+  [implementation and acceptance packet](E03_HANDOFF.md).
+
 ## Open choices
 
 | ID | Choice | Resolve in | Current position |
@@ -250,7 +271,7 @@ from a chain of historical entries.
 | O001 (resolved) | Application name | D007, 2026-10-11 | Chris confirmed Roam. |
 | O002 | Menu interaction, shortcuts and status help | E1 design | Detailed contract drafted in E01_MENUS.md; E1K second review closes R1/R2; E1K is merged; E1B implementation/evidence is in E01B_HANDOFF.md. |
 | O003 (resolved) | Icon family, sizes and rendering states | D016, E2 | Roam Classic approved; provider, sizes and states are specified in E02_ICONS.md. |
-| O004 | Detailed directory fields, sorting and view behavior | E3/E4 design | Details-first with Name, Size, Type and Modified; only expose real metadata. |
+| O004 (partly resolved) | Detailed directory fields, sorting and view behavior | D017 / E4 design | E3 fixes generic selection, ordering and column behavior. E4 still owns real metadata formatting, identity matching and directory-loading policy. |
 | O005 | Channel and service contracts | E6/E8 design | D004 is a proposal; snapshot/subscription, authority and lifecycle need concrete contracts. |
 | O006 | Visibility persistence and scope | E1 and component designs | D008 recovery gestures accepted; key routing and saved-state rules remain open. |
 

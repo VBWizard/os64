@@ -33,13 +33,13 @@ Updated: 2026-10-13.
 - E1B is approved and merged as `88f8b672` (PR #259), confirmed by Chris.
 - E1C is approved and merged as `faa321a5` (PR #260); Chris tested Scribe
   and the desktop menu on P5.
-- Current work: E2 is pushed in `codex/explorer-e2`, with
-  [PR #261](https://github.com/VBWizard/os64/pull/261) open against `userland`.
-  The file-backed provider, installable
-  sets and Roam Classic artwork pass host, FAT/ext2 packaging and QEMU checks.
-  [E2 evidence and P5 walkthrough](evidence/e02/README.md) record the result;
-  Chris confirms P5 gallery visual acceptance. The manifest error-handling
-  review fix follows that hardware report and awaits review.
+- E2 is merged as `f39b0ae0` through [PR #261](https://github.com/VBWizard/os64/pull/261).
+  [E2 evidence](evidence/e02/README.md) separates host/QEMU checks, Chris's P5
+  visual acceptance and the subsequent manifest error-handling review fix.
+- Current work: E3's [data-view contract](E03_DATA_VIEW.md) and
+  [Sol implementation packet](E03_HANDOFF.md) are ready. Implementation has
+  not started; the packet specifies identity, selection, failure transitions,
+  rendering and acceptance before coding.
 - The initial design snapshot `d33e651e` arrived through E1A.
 - D016 settles E2's visual family and installable sets. E6 still needs its
   standalone channel design and Fable review.
@@ -52,7 +52,8 @@ Updated: 2026-10-13.
 3. [Decision log](DECISIONS.md): accepted requirements, proposed engineering
    choices and unresolved decisions. A proposal is not customer approval.
 4. The active slice's record: [E1](E01_MENUS.md), its active
-   [E1K packet](E01K_HANDOFF.md), [E1B handoff](E01B_HANDOFF.md), or [E2](E02_ICONS.md). New slices use the
+   [E1K packet](E01K_HANDOFF.md), [E1B handoff](E01B_HANDOFF.md), [E2](E02_ICONS.md),
+   or [E3](E03_DATA_VIEW.md). New slices use the
    [slice template](SLICE_TEMPLATE.md).
 5. [Session log](SESSION_LOG.md) when the reasoning or evidence behind a change
    is needed. It is history, not the source of current status.
@@ -65,8 +66,8 @@ Create slice records when work begins, rather than maintaining 15 empty designs.
 | ID | Slice | State | Owner | Record / PR / implementation commit | Acceptance evidence |
 | --- | --- | --- | --- | --- | --- |
 | E1 | Actions, menus and status | E1A/E1K/E1B/E1C merged; production menus P5 tested | Quinn (E1C), Sol (E1A/E1B) | [E1A](E01A_HANDOFF.md), [E1K](E01K_HANDOFF.md), [E1B](E01B_HANDOFF.md); PR #254 `c6cc6e3c`, PR #257 `b36e9ddc` | [E1B evidence/walkthrough](evidence/e01b/README.md); P5 report precedes review fixes |
-| E2 | Icon vocabulary | Reviewing; P5 gallery visually accepted | Quinn | [E2 contract](E02_ICONS.md), `codex/explorer-e2` | [Host, packaging and QEMU evidence](evidence/e02/README.md) |
-| E3 | Data view and selection | Planned | Unassigned | — | None |
+| E2 | Icon vocabulary | Merged; P5 gallery visually accepted before final review fix | Quinn | [E2 contract](E02_ICONS.md), PR #261 `f39b0ae0` | [Host, packaging and QEMU evidence](evidence/e02/README.md) |
+| E3 | Data view and selection | Ready; implementation unstarted | Quinn (design); implementer unassigned | [Contract](E03_DATA_VIEW.md), [Sol packet](E03_HANDOFF.md) | Not run |
 | E4 | Directory browser | Planned | Unassigned | — | None |
 | E5 | Open/Save picker and launch reuse | Planned | Unassigned | — | None |
 | E6 | Local channel foundation | Planned | Unassigned | — | None |
