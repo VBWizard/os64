@@ -43,6 +43,11 @@ typedef struct {
     const flow_box_t *canvas_owner;
     // Dark pages (paint.h), NULL for none.
     const yonder_dark_t *dark;
+    // A TEXT CLIP's text (PILE3.md § The text clip): when `penned`, a text
+    // box draws its run and its decorations in `pen` — no shadows, no
+    // relighting — and every other box draws nothing.
+    bool penned;
+    uint32_t pen;
 } Painter;
 
 // A coordinate and a move added, held to what a 32-bit coordinate can say,
@@ -1009,18 +1014,20 @@ static double wrap(double x, double size)
 
 // Gradient `g` in `tile`, drawn over `area` (and the view), cut to `shape`
 // when `round`; a currentColor stop is `current`, the colour of the box it
-// is drawn on.
-static void gradient(const Painter *p, const flow_gradient_t *g, const yonder_tile_t *tile,
+// is drawn on. False only when its pixels found no memory and nothing was
+// drawn — a text clip must know (text_clip); true when it is drawn, or
+// there is nothing of it to draw.
+static bool gradient(const Painter *p, const flow_gradient_t *g, const yonder_tile_t *tile,
                      os64_gui_rect_t area, const Round *shape, bool round, uint32_t current)
 {
     double tx = tile->at.x, ty = tile->at.y, w = tile->at.w, h = tile->at.h;
     if (w <= 0 || h <= 0)
-        return;
+        return true;
     int64_t x0 = max64(area.x, p->view.x), y0 = max64(area.y, p->view.y);
     int64_t x1 = min64((int64_t)area.x + area.w, (int64_t)p->view.x + p->view.w);
     int64_t y1 = min64((int64_t)area.y + area.h, (int64_t)p->view.y + p->view.h);
     if (x1 <= x0 || y1 <= y0 || p->v->pixels == NULL)
-        return;
+        return true;
     // The line (linear) or the ray (radial) and its length in px.
     double dx = 0, dy = 0, len, cx = w / 2, cy = h / 2, rx = 1, ry = 1;
     bool flat = false;
@@ -1089,7 +1096,7 @@ static void gradient(const Painter *p, const flow_gradient_t *g, const yonder_ti
     }
     Stops stops;
     if (!(len > 0) || !stops_resolve(g, len, current, &stops))
-        return;
+        return true;
     // One colour everywhere: the flat ellipse, and a repeating gradient
     // whose repeat is shorter than a pixel along the way it runs — none
     // at all, or one no pixel can show (§ 3.6) — which is its average. A
@@ -1101,7 +1108,7 @@ static void gradient(const Painter *p, const flow_gradient_t *g, const yonder_ti
     bool rep_x = tile->repeat_x, rep_y = tile->repeat_y;
     uint32_t *out = os64_malloc((size_t)((x1 - x0) * (y1 - y0)) * sizeof(*out));
     if (out == NULL)
-        return;
+        return false;
     for (int64_t y = y0; y < y1; y++) {
         int64_t a = 0, e = 0;
         bool row = !round || round_row(shape, y * SUB + SUB / 2, &a, &e);
@@ -1129,43 +1136,124 @@ static void gradient(const Painter *p, const flow_gradient_t *g, const yonder_ti
                                    (int32_t)(x1 - x0), (int32_t)(y1 - y0)},
                  out);
     os64_free(out);
+    return true;
 }
 
-// A box's background over its outer shadows: its colour, cut by the bottom
-// layer's clip box, then its layers from the bottom up, each placed in its
-// origin box and cut to its clip box — rounded as the box is when `outer`
-// is its shape. A clip to the text is not drawn (PILE3.md § Booked). With
-// no picture or gradient from a sheet, a `background` attribute's picture
-// is drawn as the top layer.
-static void layers(const Painter *p, const flow_box_t *b, const Round *outer)
+// Layers `from` down to `to` of a box's background (`n` of them; at `n`,
+// its colour, under the bottom layer and cut by its clip), the bottom
+// first: a block-level box's frame (`outer` its shape when rounded), or an
+// inline box's piece (`piece`).
+typedef struct {
+    const flow_box_t *b;
+    const Round *outer;
+    int32_t from, to, n;
+    bool piece;
+} LayerRun;
+
+static void text_clip(const Painter *p, const LayerRun *run);
+
+// Whether layer `i` of `s`, or at `i == n` its colour, is cut to the text.
+static bool clipped_to_text(const flow_style_t *s, int32_t i, int32_t n)
+{
+    return flow_background_layer(s, i < n ? i : n - 1).clip == FLOW_EDGE_TEXT;
+}
+
+// One layer of a block-level box's frame, placed in its origin box and cut
+// to its clip box — rounded as the box is when `outer` is its shape (a
+// clip to the text is the border box: yonder_box_edge). With no picture or
+// gradient from a sheet, a `background` attribute's picture is drawn as
+// the top layer. False only when a gradient's pixels found no memory
+// (gradient).
+static bool frame_layer(const Painter *p, const flow_box_t *b, const Round *outer, int32_t i,
+                        int32_t n)
+{
+    const flow_style_t *s = b->style;
+    bool sheet = flow_background_has_image(s);
+    flow_layer_t l = flow_background_layer(s, i < n ? i : n - 1);
+    if (i == n && !s->has_background)
+        return true;
+    os64_gui_rect_t cut = yonder_box_edge(b, b->rect, l.clip);
+    Round shape = {0};
+    if (outer != NULL)
+        shape = round_inset(outer, b->rect, cut);
+    yonder_tile_t tile;
+    if (i == n && outer != NULL) {
+        round_background(p, b, &shape, paper_of(p, s->background));
+    } else if (i == n) {
+        fill(p, cut.x, cut.y, cut.w, cut.h, paper_of(p, s->background));
+    } else if (l.gradient != NULL) {
+        if (yonder_background_tile(&l, yonder_box_edge(b, b->rect, l.origin), 0, 0, &tile))
+            return gradient(p, l.gradient, &tile, cut, &shape, outer != NULL, s->color);
+    } else if (l.image != NULL || (!sheet && i == 0)) {
+        os64_gui_rect_t area = on_page(p, cut);
+        os64_gui_rect_t origin = on_page(p, yonder_box_edge(b, b->rect, l.origin));
+        (void)p->v->backdrop(p->v->ctx, b, sheet ? i : -1, &area, origin, area.x, area.y,
+                             on_page(p, p->view));
+    }
+    return true;
+}
+
+// One layer of an inline box's piece. A piece is its content area, with no
+// padding or border laid out round it, so its origin and clip boxes are
+// all the piece; its colour is right on every piece, and its pictures and
+// gradients are placed on each — the browsers lay the pieces end to end
+// and draw one along them, which needs knowledge the public tree does not
+// have (PILE3.md § Booked). False as frame_layer's is.
+static bool piece_layer(const Painter *p, const flow_box_t *b, int32_t i, int32_t n)
+{
+    if (i == n) {
+        if (b->style->has_background)
+            fill(p, b->rect.x, b->rect.y, b->rect.w, b->rect.h, paper_of(p, b->style->background));
+        return true;
+    }
+    flow_layer_t l = flow_background_layer(b->style, i);
+    yonder_tile_t tile;
+    if (l.gradient != NULL && yonder_background_tile(&l, b->rect, 0, 0, &tile))
+        return gradient(p, l.gradient, &tile, b->rect, NULL, false, b->style->color);
+    if (l.image != NULL) {
+        os64_gui_rect_t area = on_page(p, b->rect);
+        (void)p->v->backdrop(p->v->ctx, b, i, &area, area, area.x, area.y, on_page(p, p->view));
+    }
+    return true;
+}
+
+// Every layer of the run, each drawn whatever came of the last; false when
+// one of them found no memory.
+static bool run_layers(const Painter *p, const LayerRun *run)
+{
+    bool drawn = true;
+    for (int32_t i = run->from; i >= run->to; i--) {
+        if (run->piece)
+            drawn = piece_layer(p, run->b, i, run->n) && drawn;
+        else
+            drawn = frame_layer(p, run->b, run->outer, i, run->n) && drawn;
+    }
+    return drawn;
+}
+
+// A box's background over its outer shadows, its colour then its layers
+// from the bottom up, each layer as frame_layer or piece_layer draws it —
+// but a run of them cut to the text is drawn through a text clip
+// (text_clip, PILE3.md § The text clip).
+static void background_of(const Painter *p, const flow_box_t *b, const Round *outer, bool piece)
 {
     const flow_style_t *s = b->style;
     int32_t n = flow_background_layers(s);
-    bool sheet = flow_background_has_image(s);
     for (int32_t i = n; i >= 0; i--) {
-        // i == n is the colour, under the bottom layer and cut by its clip.
-        flow_layer_t l = flow_background_layer(s, i < n ? i : n - 1);
-        if (l.clip == FLOW_EDGE_TEXT || (i == n && !s->has_background))
-            continue;
-        os64_gui_rect_t cut = yonder_box_edge(b, b->rect, l.clip);
-        Round shape = {0};
-        if (outer != NULL)
-            shape = round_inset(outer, b->rect, cut);
-        yonder_tile_t tile;
-        if (i == n && outer != NULL) {
-            round_background(p, b, &shape, paper_of(p, s->background));
-        } else if (i == n) {
-            fill(p, cut.x, cut.y, cut.w, cut.h, paper_of(p, s->background));
-        } else if (l.gradient != NULL) {
-            if (yonder_background_tile(&l, yonder_box_edge(b, b->rect, l.origin), 0, 0, &tile))
-                gradient(p, l.gradient, &tile, cut, &shape, outer != NULL, s->color);
-        } else if (l.image != NULL || (!sheet && i == 0)) {
-            os64_gui_rect_t area = on_page(p, cut);
-            os64_gui_rect_t origin = on_page(p, yonder_box_edge(b, b->rect, l.origin));
-            (void)p->v->backdrop(p->v->ctx, b, sheet ? i : -1, &area, origin, area.x, area.y,
-                                 on_page(p, p->view));
-        }
+        LayerRun run = {b, outer, i, i, n, piece};
+        while (clipped_to_text(s, run.from, n) && run.to > 0 && clipped_to_text(s, run.to - 1, n))
+            run.to--;
+        if (clipped_to_text(s, i, n))
+            text_clip(p, &run);
+        else
+            (void)run_layers(p, &run);
+        i = run.to;
     }
+}
+
+static void layers(const Painter *p, const flow_box_t *b, const Round *outer)
+{
+    background_of(p, b, outer, false);
 }
 
 static bool rounded(const int32_t radii[4][2])
@@ -1232,14 +1320,14 @@ static os64_gui_rect_t content_of(const flow_box_t *b)
 static void decorations(const Painter *p, const flow_box_t *b)
 {
     // Where each falls is libflow's (flow_decoration_rect), which a
-    // group's bounds hold too.
+    // group's bounds hold too. A text clip's pen draws them as the text's.
     if (b->decoration & FLOW_DECORATION_UNDERLINE) {
         os64_gui_rect_t r = flow_decoration_rect(b, FLOW_DECORATION_UNDERLINE);
-        fill(p, r.x, r.y, r.w, r.h, ink_of(p, b->underline_color));
+        fill(p, r.x, r.y, r.w, r.h, p->penned ? p->pen : ink_of(p, b->underline_color));
     }
     if (b->decoration & FLOW_DECORATION_LINE_THROUGH) {
         os64_gui_rect_t r = flow_decoration_rect(b, FLOW_DECORATION_LINE_THROUGH);
-        fill(p, r.x, r.y, r.w, r.h, ink_of(p, b->line_through_color));
+        fill(p, r.x, r.y, r.w, r.h, p->penned ? p->pen : ink_of(p, b->line_through_color));
     }
 }
 
@@ -1286,7 +1374,9 @@ static void bullet(const Painter *p, const flow_box_t *b, flow_list_style_type_t
     // group's bounds hold too.
     os64_gui_rect_t at = flow_marker_shape_rect(b);
     int64_t x = at.x, y = at.y, d = at.w;
-    uint32_t colour = ink_of(p, b->style->color);
+    // A marker's symbol is the marker's text, so it is FILLED as text is
+    // (-webkit-text-fill-color), as Chrome draws it.
+    uint32_t colour = ink_of(p, b->style->fill);
     if (type == FLOW_LIST_SQUARE) {
         fill(p, x, y, d, d, colour);
         return;
@@ -1359,6 +1449,8 @@ static void paint_box(void *ctx, const flow_box_t *b)
     clipped.view = (os64_gui_rect_t){(int32_t)((int64_t)v.x - clipped.off.x),
                                      (int32_t)((int64_t)v.y - clipped.off.y), v.w, v.h};
     const Painter *p = &clipped;
+    if (p->penned && b->kind != FLOW_BOX_TEXT)
+        return;
     switch (b->kind) {
     case FLOW_BOX_LINE:
         return;
@@ -1372,8 +1464,9 @@ static void paint_box(void *ctx, const flow_box_t *b)
     case FLOW_BOX_TEXT:
         // Its shadows under it, the last first: the run again in each
         // shadow's colour at its offset — sharp, whatever its blur
-        // (PILE3.md § Booked).
-        for (int32_t i = b->style->ntext_shadows - 1; b->run != NULL && i >= 0; i--) {
+        // (PILE3.md § Booked) — and then the run in its FILL colour. A text
+        // clip's pen draws the run alone.
+        for (int32_t i = b->style->ntext_shadows - 1; b->run != NULL && !p->penned && i >= 0; i--) {
             const flow_shadow_t *sh = &b->style->text_shadows[i];
             p->v->text(p->v->ctx, b, (int32_t)((int64_t)b->rect.x + p->off.x + sh->x),
                        (int32_t)((int64_t)b->baseline + p->off.y + sh->y), on_page(p, p->view),
@@ -1382,7 +1475,7 @@ static void paint_box(void *ctx, const flow_box_t *b)
         if (b->run != NULL)
             p->v->text(p->v->ctx, b, (int32_t)((int64_t)b->rect.x + p->off.x),
                        (int32_t)((int64_t)b->baseline + p->off.y), on_page(p, p->view),
-                       ink_of(p, b->style->color));
+                       p->penned ? p->pen : ink_of(p, b->style->fill));
         decorations(p, b);
         return;
     case FLOW_BOX_ATOMIC:
@@ -1398,25 +1491,10 @@ static void paint_box(void *ctx, const flow_box_t *b)
         return;
     case FLOW_BOX_SPAN:
         // An inline box's borders open on its first piece and close on its
-        // last, which the public tree does not say; its background colour is
-        // right on every piece. Its gradient layers are placed on each piece
-        // — the browsers lay the pieces end to end and draw one gradient
-        // along them, which needs the same knowledge (PILE3.md § Booked). A
-        // piece is its content area, with no padding or border laid out
-        // round it, so its origin and clip boxes are all the piece; a layer
-        // clipped to the text draws nothing here either, as on a block's
-        // frame, and the colour is cut by the bottom layer's clip.
-        int32_t n = flow_background_layers(b->style);
-        if (b->style->has_background &&
-            flow_background_layer(b->style, n - 1).clip != FLOW_EDGE_TEXT)
-            fill(p, b->rect.x, b->rect.y, b->rect.w, b->rect.h, paper_of(p, b->style->background));
-        for (int32_t i = n - 1; i >= 0; i--) {
-            flow_layer_t l = flow_background_layer(b->style, i);
-            yonder_tile_t tile;
-            if (l.gradient != NULL && l.clip != FLOW_EDGE_TEXT &&
-                yonder_background_tile(&l, b->rect, 0, 0, &tile))
-                gradient(p, l.gradient, &tile, b->rect, NULL, false, b->style->color);
-        }
+        // last, which the public tree does not say; its background is drawn
+        // on each piece (piece_layer), a run cut to the text through a text
+        // clip of the piece's own text.
+        background_of(p, b, NULL, true);
         return;
     default:
         // An inline-block (or inline-flex, inline-grid) is two boxes of one
@@ -1441,13 +1519,15 @@ static os64_gui_rect_t cut(os64_gui_rect_t r, os64_gui_rect_t c)
                              (int32_t)max64(0, y1 - y0)};
 }
 
-// `r` one pixel wider all round, held as libflow holds a bounds' rect:
-// each edge to a 32-bit coordinate, and one too wide for a 32-bit width
-// held to the middle of the range, where any view is.
-static os64_gui_rect_t widened(os64_gui_rect_t r)
+// [x0, x1) by [y0, y1) held as libflow holds a bounds' rect: each edge to a
+// 32-bit coordinate, and one too wide for a 32-bit width held to the middle
+// of the range, where any view is.
+static os64_gui_rect_t held(int64_t x0, int64_t y0, int64_t x1, int64_t y1)
 {
-    int64_t x0 = max64((int64_t)r.x - 1, INT32_MIN), y0 = max64((int64_t)r.y - 1, INT32_MIN);
-    int64_t x1 = min64((int64_t)r.x + r.w + 1, INT32_MAX), y1 = min64((int64_t)r.y + r.h + 1, INT32_MAX);
+    x0 = max64(x0, INT32_MIN);
+    y0 = max64(y0, INT32_MIN);
+    x1 = min64(x1, INT32_MAX);
+    y1 = min64(y1, INT32_MAX);
     if (x1 - x0 > INT32_MAX) {
         x0 = max64(x0, INT32_MIN / 2);
         x1 = min64(x1, INT32_MAX / 2);
@@ -1458,6 +1538,139 @@ static os64_gui_rect_t widened(os64_gui_rect_t r)
     }
     return (os64_gui_rect_t){(int32_t)x0, (int32_t)y0, (int32_t)max64(0, x1 - x0),
                              (int32_t)max64(0, y1 - y0)};
+}
+
+// `r` one pixel wider all round, held (above).
+static os64_gui_rect_t widened(os64_gui_rect_t r)
+{
+    return held((int64_t)r.x - 1, (int64_t)r.y - 1, (int64_t)r.x + r.w + 1,
+                (int64_t)r.y + r.h + 1);
+}
+
+// ── The text clip (PILE3.md § The text clip) ─────────────────────────────
+
+// Whether the page wrote anything for a run of layers to draw: its colour,
+// a gradient, or a picture a sheet or (on a block's frame) the
+// `background` attribute puts there. One with nothing draws nothing through
+// a clip either, and is not a headline to rescue (text_clip). It asks what
+// was written, not whether a tile, once placed, covers a pixel — a
+// picture's only the face could say — so a refused clip over a background
+// that places nothing (a zero `background-size`) still rescues the words:
+// the degraded drawing's over-count (PILE3.md § The text clip, Booked).
+static bool run_paints(const Painter *p, const LayerRun *run)
+{
+    const flow_style_t *s = run->b->style;
+    bool sheet = flow_background_has_image(s);
+    for (int32_t i = run->from; i >= run->to; i--) {
+        if (i == run->n) {
+            if (s->has_background)
+                return true;
+            continue;
+        }
+        flow_layer_t l = flow_background_layer(s, i);
+        if (l.gradient != NULL)
+            return true;
+        if ((l.image != NULL || (!run->piece && !sheet && i == 0)) &&
+            p->v->backdrop(p->v->ctx, run->b, sheet ? i : -1, NULL, (os64_gui_rect_t){0, 0, 0, 0},
+                           0, 0, (os64_gui_rect_t){0, 0, 0, 0}))
+            return true;
+    }
+    return false;
+}
+
+// Where a text clip's text is painted, in the coordinates being painted
+// (`p`'s, taken back off its box): each TEXT box's overflow rect grown by
+// its ink (the bounds contract, PILE3.md § Transforms, the painter).
+typedef struct {
+    const Painter *p;
+    int64_t x0, y0, x1, y1;
+} ClipInk;
+
+static void clip_ink(void *ctx, const flow_box_t *t)
+{
+    ClipInk *k = ctx;
+    flow_point_t o = flow_box_doc_offset(t, k->p->scroll);
+    int64_t ox = (int64_t)o.x + k->p->shift.x, oy = (int64_t)o.y + k->p->shift.y;
+    os64_gui_rect_t r = t->overflow;
+    int64_t x0 = ox + r.x - t->ink[FLOW_LEFT], y0 = oy + r.y - t->ink[FLOW_TOP];
+    int64_t x1 = ox + r.x + r.w + t->ink[FLOW_RIGHT];
+    int64_t y1 = oy + r.y + r.h + t->ink[FLOW_BOTTOM];
+    if (x1 <= x0 || y1 <= y0)
+        return;
+    k->x0 = min64(k->x0, x0);
+    k->y0 = min64(k->y0, y0);
+    k->x1 = max64(k->x1, x1);
+    k->y1 = max64(k->y1, y1);
+}
+
+static void pen_text(void *ctx, const flow_box_t *t)
+{
+    paint_box(ctx, t);
+}
+
+// The one colour a refused clip's text is drawn in: the background's colour
+// if it has one, else the middle of the run's top gradient, else the text's
+// colour — each at full opacity, since a transparent one is the case being
+// rescued — moved as ink for dark pages.
+static uint32_t clip_solid(const Painter *p, const LayerRun *run)
+{
+    const flow_style_t *s = run->b->style;
+    uint32_t c = s->color;
+    if (s->has_background) {
+        c = s->background;
+    } else {
+        for (int32_t i = run->to; i <= run->from && i < run->n; i++) {
+            const flow_gradient_t *g = flow_background_layer(s, i).gradient;
+            Stops stops;
+            if (g != NULL && stops_resolve(g, 100, s->color, &stops)) {
+                c = stops_colour(&stops, 0.5, false);
+                break;
+            }
+        }
+    }
+    return ink_of(p, c & 0xffffffu);
+}
+
+// A run of a box's layers cut to its text (Backgrounds 4 § 2.8): the text
+// libflow says the clip holds (flow_visit_text_clip) is painted in white
+// into the face's mask — by paint_box itself, with a pen, so the mask is
+// the text's own coverage — then the layers into the clip's group, which
+// the face lays over what is under it at each pixel's coverage. A face that
+// cannot (no such verbs, past its limits, no memory) gets the text in one
+// solid colour instead (clip_solid), and so does a clip whose layers found
+// no memory once it was open, over what it laid: never the layers as a box
+// over transparent text, nor a headline whose words are gone. A run that
+// draws nothing (run_paints) makes no clip and rescues nothing.
+static void text_clip(const Painter *p, const LayerRun *run)
+{
+    if (!run_paints(p, run))
+        return;
+    ClipInk ink = {p, INT64_MAX, INT64_MAX, INT64_MIN, INT64_MIN};
+    flow_visit_text_clip(run->b, clip_ink, &ink);
+    if (ink.x1 <= ink.x0 || ink.y1 <= ink.y0)
+        return;
+    os64_gui_rect_t bounds = cut(cut(held(ink.x0, ink.y0, ink.x1, ink.y1), on_page(p, run->b->rect)),
+                                 on_page(p, p->view));
+    if (bounds.w <= 0 || bounds.h <= 0)
+        return;
+    // The pen paints in the coordinates being painted, as the walk does:
+    // its view is this box's taken back off it, cut to the border box the
+    // clip is cut to.
+    Painter pen = *p;
+    pen.view = cut(on_page(p, p->view), on_page(p, run->b->rect));
+    pen.penned = true;
+    if (p->v->clip_open != NULL && p->v->clip_fill != NULL && p->v->clip_close != NULL &&
+        p->v->clip_open(p->v->ctx, bounds)) {
+        pen.pen = 0x00ffffffu;
+        flow_visit_text_clip(run->b, pen_text, &pen);
+        p->v->clip_fill(p->v->ctx);
+        bool drawn = run_layers(p, run);
+        p->v->clip_close(p->v->ctx);
+        if (drawn)
+            return;
+    }
+    pen.pen = clip_solid(p, run);
+    flow_visit_text_clip(run->b, pen_text, &pen);
 }
 
 static os64_gui_rect_t shifted(os64_gui_rect_t r, flow_point_t by)
@@ -1631,7 +1844,7 @@ void yonder_paint(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_
         yonder_tile_t tile;
         if (l.gradient != NULL) {
             if (yonder_background_tile(&l, origin, 0, 0, &tile))
-                gradient(&p, l.gradient, &tile, viewport, NULL, false, owner->style->color);
+                (void)gradient(&p, l.gradient, &tile, viewport, NULL, false, owner->style->color);
         } else if (l.image != NULL || (!sheet && i == 0)) {
             (void)verbs->backdrop(verbs->ctx, owner, sheet ? i : -1, &viewport, origin, 0, 0,
                                   viewport);

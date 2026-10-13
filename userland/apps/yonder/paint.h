@@ -73,6 +73,18 @@ typedef struct {
     bool (*through_open)(void *ctx, os64_gui_rect_t bounds, const double m[6],
                          os64_gui_rect_t clip);
     void (*through_close)(void *ctx, uint8_t alpha);
+    // A TEXT CLIP (PILE3.md § The text clip): a group whose opacity is per
+    // pixel. After clip_open, what is painted is the MASK — the clip's text
+    // in white, nothing else, and its coverage is the white; after
+    // clip_fill, what is painted is the group; at clip_close the group is
+    // laid over what was under it at each pixel's coverage. `bounds` holds
+    // all of both, in the coordinates being painted. False when it cannot
+    // be made (no memory, too large, one already open): the painter draws
+    // the text in one colour instead, and paints nothing between. Any
+    // NULL: no clip is made.
+    bool (*clip_open)(void *ctx, os64_gui_rect_t bounds);
+    void (*clip_fill)(void *ctx);
+    void (*clip_close)(void *ctx);
 } yonder_verbs_t;
 
 // Whose background is the CANVAS's (CSS 2.1 § 14.2): the root's when it has

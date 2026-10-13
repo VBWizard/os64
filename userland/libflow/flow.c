@@ -882,6 +882,74 @@ bool flow_marker_is_shape(const flow_style_t *s)
            s->list_style_type == FLOW_LIST_SQUARE;
 }
 
+// ── The text clip (PILE3.md § The text clip) ───────────────────────────
+
+// Whether `d` takes itself and everything in it out of the text an
+// enclosing background clipped to its text is cut to: a box out of the
+// flow, and a transformed box — Chrome's table in PILE3.md. A marker is
+// out of it too, by being no TEXT box: only those are handed over.
+static bool leaves_text_clip(const flow_box_t *d)
+{
+    if (d->positioned && (d->style->position == FLOW_POSITION_ABSOLUTE ||
+                          d->style->position == FLOW_POSITION_FIXED))
+        return true;
+    return d->frame != NULL && d->frame->kind == F_FRAME_TRANSFORM && d->frame->box == d;
+}
+
+// Each TEXT box under `top` that a text clip holds, in tree order, without
+// recursion — the tree is as deep as the page.
+static void visit_clip_subtree(const flow_box_t *top, void (*visit)(void *, const flow_box_t *),
+                               void *ctx)
+{
+    const flow_box_t *b = top->first;
+    while (b != NULL) {
+        bool enter = !leaves_text_clip(b);
+        if (enter && b->kind == FLOW_BOX_TEXT)
+            visit(ctx, b);
+        if (enter && b->first != NULL) {
+            b = b->first;
+            continue;
+        }
+        while (b != top && b->next == NULL)
+            b = b->parent;
+        if (b == top)
+            return;
+        b = b->next;
+    }
+}
+
+// Whether `n` is `element` or inside it.
+static bool node_within(const os64_html_node_t *n, const os64_html_node_t *element)
+{
+    for (; n != NULL; n = n->parent)
+        if (n == element)
+            return true;
+    return false;
+}
+
+void flow_visit_text_clip(const flow_box_t *box, void (*visit)(void *ctx, const flow_box_t *text),
+                          void *ctx)
+{
+    if (box == NULL || visit == NULL)
+        return;
+    if (box->kind != FLOW_BOX_SPAN) {
+        visit_clip_subtree(box, visit, ctx);
+        return;
+    }
+    // A piece is its text's sibling on the line: what is the span's on
+    // this line is what its element holds.
+    if (box->parent == NULL || box->node == NULL)
+        return;
+    for (const flow_box_t *c = box->parent->first; c != NULL; c = c->next) {
+        if (!node_within(c->node, box->node) || leaves_text_clip(c))
+            continue;
+        if (c->kind == FLOW_BOX_TEXT)
+            visit(ctx, c);
+        else if (c->kind == FLOW_BOX_ATOMIC)
+            visit_clip_subtree(c, visit, ctx);
+    }
+}
+
 // Whether the painter draws `b`'s frame — background, borders and box
 // shadows (yonder's paint_box): not a text, a marker, a line or an inline
 // box's piece, and not an inline-block's content box, whose atom paints

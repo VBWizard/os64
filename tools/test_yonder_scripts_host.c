@@ -3571,15 +3571,17 @@ static void diag_page_cases(void) {
         "diag: the timer's death is in the departure write");
 
     /* A module script and a canvas, each by its kind; a skipped property. */
-    loop_page("<style>p{aspect-ratio:1;background-clip:text}h1{display:inline frob}</style><p id=out>x</p><canvas></canvas><canvas></canvas>"
+    loop_page("<style>p{aspect-ratio:1;background-image:conic-gradient(red,blue);background-clip:text}"
+        "h1{display:inline frob}</style><p id=out>x</p><canvas></canvas><canvas></canvas>"
         "<my-widget></my-widget><script type=module>1</script>");
     check(loop_settle() && g.page.tree!=NULL,"diag: a page with a module, canvases and a custom element arrives");
     yonder_diag_file_name(g.page.diag,name,sizeof(name)); text=diag_file("/tmp/diag",name);
     check(has(text,"MISSING script module (1)\n") && has(text,"MISSING element canvas (2)\n") &&
         has(text,"MISSING element my-widget (1)\n") && has(text,"MISSING css-property aspect-ratio (1)\n") &&
-        has(text,"MISSING css-value background-clip: text (1)\n") && has(text,"MISSING css-value display: inline frob (1)\n"),
+        has(text,"MISSING css-value background-image: conic-gradient (1)\n") &&
+        has(text,"MISSING css-value display: inline frob (1)\n") && !has(text,"background-clip"),
         "diag: a module script, an element drawn as nothing, a property the cascade skipped and a value it "
-        "dropped or approximated are each recorded");
+        "dropped or approximated are each recorded; a clip to the text, drawn, is not");
     loop_drop();
     text=diag_file("/tmp/diag",name);
     check(has(text,"MISSING element canvas (2)\n"),"diag: looking again at departure does not count twice");

@@ -121,6 +121,7 @@ static const Prop kProps[GARB_NPROPS] = {
     [GARB_TRANSLATE] = {"translate", false},
     [GARB_ROTATE] = {"rotate", false},
     [GARB_SCALE] = {"scale", false},
+    [GARB_TEXT_FILL_COLOR] = {"-webkit-text-fill-color", true},
 };
 
 const char *garb_prop_name(garb_prop_t prop)
@@ -144,19 +145,18 @@ static const char *const kDisplay[] = {
 // Values this grammar reads but nothing lays out or draws as written yet
 // (GARB.md's pile 2, POSITION.md's slices, PILE3.md's booked rows). Read, so
 // the cascade keeps them; not SUPPORTED, so @supports tells a page to use
-// the fallback it wrote for exactly this. A background clipped to the text
-// is not drawn on a box. `contents` is not here: libflow gives such an
-// element no box and flows its children into its parent, which is what it
-// says. The list is for what a page writes a
-// fallback for — asks for one thing and is handed another, or nothing — and
-// each joins it the day its mapping is written and leaves the day the slice
-// that draws it lands. A transform is judged by what it does, not by a
-// keyword (transform_approximated, below).
+// the fallback it wrote for exactly this. `contents` is not here: libflow
+// gives such an element no box and flows its children into its parent,
+// which is what it says. The list is for what a page writes a fallback for
+// — asks for one thing and is handed another, or nothing — and each joins
+// it the day its mapping is written and leaves the day the slice that draws
+// it lands; it ends at the row with no keyword. A transform is judged by
+// what it does, not by a keyword (transform_approximated, below).
 static const struct {
     garb_prop_t prop;
     const char *keyword;
 } kApproximated[] = {
-    {GARB_BACKGROUND_CLIP, "text"},
+    {GARB_NPROPS, NULL},
 };
 
 // An image kept by name and drawn as nothing — a conic gradient, an
@@ -343,7 +343,7 @@ static const char *value_approximated(garb_prop_t prop, const garb_val_t *v)
     }
     if (v->kind != GARB_V_KEYWORD)
         return NULL;
-    for (size_t k = 0; k < sizeof(kApproximated) / sizeof(kApproximated[0]); k++)
+    for (size_t k = 0; kApproximated[k].keyword != NULL; k++)
         if (prop == kApproximated[k].prop && os64_streq(v->keyword, kApproximated[k].keyword))
             return kApproximated[k].keyword;
     return NULL;
@@ -1853,6 +1853,7 @@ typedef struct {
 
 static const Longhand kLonghands[] = {
     {GARB_DISPLAY, G_KEYWORDS, kDisplay}, {GARB_COLOR, G_COLOR, NULL},
+    {GARB_TEXT_FILL_COLOR, G_COLOR, NULL},
     {GARB_BACKGROUND_COLOR, G_COLOR, NULL}, {GARB_BACKGROUND_IMAGE, G_BG_IMAGE, NULL},
     {GARB_BACKGROUND_REPEAT, G_BG_REPEAT, NULL}, {GARB_BACKGROUND_POSITION_X, G_BG_POS_X, NULL},
     {GARB_BACKGROUND_POSITION_Y, G_BG_POS_Y, NULL}, {GARB_BACKGROUND_SIZE, G_BG_SIZE, NULL},
@@ -3015,13 +3016,37 @@ static bool shorthand(Sets *s, VCur *c, Shorthand sh)
     return false;
 }
 
+// The Compatibility Standard's legacy name aliases (§ 3.4.1) that are read:
+// a prefixed name every engine reads as its standard twin is no one
+// engine's dialect, so it is the twin.
+static const struct {
+    const char *name;
+    garb_prop_t prop;
+} kAliases[] = {
+    {"-webkit-background-clip", GARB_BACKGROUND_CLIP},
+};
+
+// The longhand a declaration's name names, by its own name or an alias;
+// NULL for none.
+static const Longhand *longhand_named(const char *name, size_t len)
+{
+    garb_prop_t prop = GARB_NPROPS;
+    for (size_t k = 0; k < sizeof(kAliases) / sizeof(kAliases[0]); k++)
+        if (ieq(name, len, kAliases[k].name))
+            prop = kAliases[k].prop;
+    for (size_t k = 0; k < sizeof(kLonghands) / sizeof(kLonghands[0]); k++)
+        if (kLonghands[k].prop == prop || ieq(name, len, kProps[kLonghands[k].prop].name))
+            return &kLonghands[k];
+    return NULL;
+}
+
 int32_t prop_longhands(const char *name, size_t len, garb_prop_t *out)
 {
-    for (size_t k = 0; k < sizeof(kLonghands) / sizeof(kLonghands[0]); k++)
-        if (ieq(name, len, kProps[kLonghands[k].prop].name)) {
-            out[0] = kLonghands[k].prop;
-            return 1;
-        }
+    const Longhand *l = longhand_named(name, len);
+    if (l != NULL) {
+        out[0] = l->prop;
+        return 1;
+    }
     for (size_t k = 0; k < sizeof(kShorthands) / sizeof(kShorthands[0]); k++)
         if (ieq(name, len, kShorthands[k].name))
             return shorthand_longhands(kShorthands[k].sh, out);
@@ -3060,11 +3085,8 @@ int32_t garb_read_declaration(garb_parsed_t *owner, const garb_decl_t *decl, boo
 {
     Sets s = {out, 0, {owner->arena, false}, quirks};
     VCur c = {decl->value, decl->nvalue, 0};
-    const Longhand *l = NULL;
+    const Longhand *l = longhand_named(decl->name, decl->len);
     int sh = -1;
-    for (size_t k = 0; k < sizeof(kLonghands) / sizeof(kLonghands[0]) && l == NULL; k++)
-        if (ieq(decl->name, decl->len, kProps[kLonghands[k].prop].name))
-            l = &kLonghands[k];
     for (size_t k = 0; k < sizeof(kShorthands) / sizeof(kShorthands[0]) && l == NULL && sh < 0; k++)
         if (ieq(decl->name, decl->len, kShorthands[k].name))
             sh = (int)kShorthands[k].sh;

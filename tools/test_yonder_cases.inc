@@ -146,6 +146,21 @@ static void paint_cases(void)
                "fill 37 27 5 1 #101010\n"
                "fill 38 28 3 1 #101010\n");
 
+    // A marker's symbol is FILLED as its text is (-webkit-text-fill-color,
+    // as Chrome draws it): the outer disc above, rows of 3, 5, 5, 5 and 3,
+    // in the fill's blue, not the colour's red — and so is the item's text.
+    paint_page_case("a shape marker takes the fill colour",
+                    "<!doctype html><style>ul { color: #ff0000; -webkit-text-fill-color: #0000ff }"
+                    "</style><ul><li>a</ul>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "text \"a\" 48 30 #0000ff\n"
+                    "fill 38 24 3 1 #0000ff\n"
+                    "fill 37 25 5 1 #0000ff\n"
+                    "fill 37 26 5 1 #0000ff\n"
+                    "fill 37 27 5 1 #0000ff\n"
+                    "fill 38 28 3 1 #0000ff\n");
+
     expect("bevel: lighter and darker halve the distance",
            yonder_lighter(0x000000) == 0x7f7f7f && yonder_darker(0xffffff) == 0x7f7f7f &&
                yonder_lighter(0x808080) == 0xbfbfbf && yonder_darker(0x808080) == 0x404040,
@@ -500,15 +515,137 @@ static void paint_cases(void)
                     "text \"Hi\" 9 32 #0000ff\n"
                     "text \"Hi\" 8 30 #0000ff\n");
 
-    // A background clipped to the text is not drawn, on an inline box as on
-    // a block (PILE3.md § Booked): neither its colour nor its gradient.
-    paint_page_case("an inline background clipped to the text is not drawn",
+    // A background clipped to the text (PILE3.md § The text clip) is drawn
+    // through a TEXT CLIP: its bounds, the text in white into the mask,
+    // then its colour and gradient into the group, and its close. On an
+    // inline box, the piece's own text — "Hi" on its piece 0 2 12 16, as
+    // the next case finds it — and the piece is its clip box. The text
+    // then paints in its fill, here its colour, over the clip.
+    paint_page_case("an inline background clipped to the text is drawn through its text",
                     "<!doctype html><style>body { margin: 0 } span {"
                     " background: #00ff00 linear-gradient(#ff0000, #ff0000);"
                     " background-clip: text }</style><span>Hi</span>",
                     100, (os64_gui_rect_t){0, 0, 100, 50}, true,
                     "fill 0 0 100 50 #fefefe\n"
+                    "clip 0 2 12 16\n"
+                    "text \"Hi\" 0 14 #ffffff clip 0 2 12 16\n"
+                    "fill clip\n"
+                    "fill 0 2 12 16 #00ff00\n"
+                    "pixels 0 2 12 16 ffff0000 ffff0000\n"
+                    "end clip\n"
                     "text \"Hi\" 0 14 #101010\n");
+    // An inline box's picture is placed on its piece as its gradient is —
+    // the piece its origin and clip box — and clipped to its text the same
+    // way, so a span whose url() background shows through its text has
+    // one (#262, Codex).
+    paint_page_case("an inline picture is drawn on its piece",
+                    "<!doctype html><style>body { margin: 0 } span {"
+                    " background: url(a.png) }</style><span>Hi</span>",
+                    100, (os64_gui_rect_t){0, 0, 100, 50}, true,
+                    "fill 0 0 100 50 #fefefe\n"
+                    "backdrop 0 2 12 16 layer 0 origin 0 2 12 16\n"
+                    "text \"Hi\" 0 14 #101010\n");
+    paint_page_case("an inline picture clipped to the text is drawn through its text",
+                    "<!doctype html><style>body { margin: 0 } span {"
+                    " background: url(a.png); background-clip: text; color: transparent }"
+                    "</style><span>Hi</span>",
+                    100, (os64_gui_rect_t){0, 0, 100, 50}, true,
+                    "fill 0 0 100 50 #fefefe\n"
+                    "clip 0 2 12 16\n"
+                    "text \"Hi\" 0 14 #ffffff clip 0 2 12 16\n"
+                    "fill clip\n"
+                    "backdrop 0 2 12 16 layer 0 origin 0 2 12 16\n"
+                    "end clip\n"
+                    "text \"Hi\" 0 14 #000000/0\n");
+    // A block's clip is its border box, 0 0 100 20; its text's ink is "Hi"
+    // (0 2 12 16) and its 1px shadow, so the clip's bounds are 0 2 13 17.
+    // Into the mask go the text and its underline — a pixel thick, a pixel
+    // under the baseline at 14 — in white, but not the shadow, which is
+    // drawn with the text: over the clip, then the text in its transparent
+    // fill, then the underline in the colour.
+    paint_page_case("a block's text clip: text and underline in the mask, the shadow over it",
+                    "<!doctype html><style>body { margin: 0 } div {"
+                    " background: linear-gradient(#ff0000, #ff0000); -webkit-background-clip: text;"
+                    " -webkit-text-fill-color: transparent; text-decoration: underline;"
+                    " text-shadow: 1px 1px #0000ff }</style><div>Hi</div>",
+                    100, (os64_gui_rect_t){0, 0, 100, 50}, true,
+                    "fill 0 0 100 50 #fefefe\n"
+                    "clip 0 2 13 17\n"
+                    "text \"Hi\" 0 14 #ffffff clip 0 0 100 20\n"
+                    "fill 0 15 12 1 #ffffff\n"
+                    "fill clip\n"
+                    "pixels 0 0 100 20 ffff0000 ffff0000\n"
+                    "end clip\n"
+                    "text \"Hi\" 1 15 #0000ff\n"
+                    "text \"Hi\" 0 14 #000000/0\n"
+                    "fill 0 15 12 1 #101010\n");
+    // The clip is the border box too: "Hi" is 12 across in a 6px div, so
+    // the clip's bounds stop at 6 (0 2 6 16), and so does the pen's view —
+    // the text past the border box is neither in the mask nor drawn into.
+    paint_page_case("a text clip is cut to its border box",
+                    "<!doctype html><style>body { margin: 0 } div { width: 6px;"
+                    " background: linear-gradient(#ff0000, #ff0000); background-clip: text;"
+                    " color: transparent }</style><div>Hi</div>",
+                    100, (os64_gui_rect_t){0, 0, 100, 50}, true,
+                    "fill 0 0 100 50 #fefefe\n"
+                    "clip 0 2 6 16\n"
+                    "text \"Hi\" 0 14 #ffffff clip 0 0 6 20\n"
+                    "fill clip\n"
+                    "pixels 0 0 6 20 ffff0000 ffff0000\n"
+                    "end clip\n"
+                    "text \"Hi\" 0 14 #000000/0\n");
+    // A clip with nothing to draw — no colour, no picture, no gradient —
+    // draws nothing, and the transparent text is not rescued: Chrome shows
+    // nothing there either.
+    paint_page_case("a text clip with no background draws nothing",
+                    "<!doctype html><style>body { margin: 0 } div {"
+                    " background-clip: text; color: transparent }</style><div>Hi</div>",
+                    100, (os64_gui_rect_t){0, 0, 100, 50}, true,
+                    "fill 0 0 100 50 #fefefe\n"
+                    "text \"Hi\" 0 14 #000000/0\n");
+    // A clip the face refuses is never the gradient as a box over the
+    // transparent text, nor nothing: the text, in the clip, in one colour —
+    // the middle of #000000 to #c80000, #640000 — and then its own
+    // transparent fill.
+    s_clip_refused = true;
+    paint_page_case("a refused text clip draws its text in the gradient's middle",
+                    "<!doctype html><style>body { margin: 0 } div {"
+                    " background: linear-gradient(#000000, #c80000); background-clip: text;"
+                    " color: transparent }</style><div>Hi</div>",
+                    100, (os64_gui_rect_t){0, 0, 100, 50}, true,
+                    "fill 0 0 100 50 #fefefe\n"
+                    "text \"Hi\" 0 14 #640000 clip 0 0 100 20\n"
+                    "text \"Hi\" 0 14 #000000/0\n");
+    s_clip_refused = false;
+    // A clip the face made whose layers then find no memory — the
+    // gradient's pixels — is rescued as a refused one is, over what it
+    // laid: the text in the gradient's middle, not a headline gone.
+    s_paint_starved = true;
+    paint_page_case("a text clip whose gradient finds no memory still draws its words",
+                    "<!doctype html><style>body { margin: 0 } div {"
+                    " background: linear-gradient(#000000, #c80000); background-clip: text;"
+                    " color: transparent }</style><div>Hi</div>",
+                    100, (os64_gui_rect_t){0, 0, 100, 50}, true,
+                    "fill 0 0 100 50 #fefefe\n"
+                    "clip 0 2 12 16\n"
+                    "text \"Hi\" 0 14 #ffffff clip 0 0 100 20\n"
+                    "fill clip\n"
+                    "end clip\n"
+                    "text \"Hi\" 0 14 #640000 clip 0 0 100 20\n"
+                    "text \"Hi\" 0 14 #000000/0\n");
+    s_paint_starved = false;
+    s_clip_refused = true;
+    // Its colour, when it has one, at full opacity: a half-transparent
+    // #c80000 rescues the text in #c80000.
+    paint_page_case("a refused text clip draws its text in its colour, opaque",
+                    "<!doctype html><style>body { margin: 0 } div {"
+                    " background-color: rgba(200, 0, 0, 0.5); background-clip: text;"
+                    " color: transparent }</style><div>Hi</div>",
+                    100, (os64_gui_rect_t){0, 0, 100, 50}, true,
+                    "fill 0 0 100 50 #fefefe\n"
+                    "text \"Hi\" 0 14 #c80000 clip 0 0 100 20\n"
+                    "text \"Hi\" 0 14 #000000/0\n");
+    s_clip_refused = false;
     // An inline element's gradient is painted on its piece of the line,
     // the piece its tile: one solid-colour gradient covers the piece
     // exactly, under the text.

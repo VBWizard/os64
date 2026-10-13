@@ -69,10 +69,11 @@ typedef struct {
 // Box sides, in CSS's own order.
 enum { FLOW_TOP = 0, FLOW_RIGHT = 1, FLOW_BOTTOM = 2, FLOW_LEFT = 3 };
 
-// flow_style_t.current_colours: a side's border colour (1 << side), and
-// the background colour.
+// flow_style_t.current_colours: a side's border colour (1 << side), the
+// background colour, and the text's fill colour.
 #define FLOW_CURRENT_BORDER(side) ((uint8_t)(1u << (side)))
 #define FLOW_CURRENT_BACKGROUND ((uint8_t)0x10)
+#define FLOW_CURRENT_FILL ((uint8_t)0x20)
 
 // ── Colours ─────────────────────────────────────────────────────────────
 //
@@ -469,12 +470,19 @@ typedef struct {
     flow_unit_t font_size;
 
     uint32_t color;                 // a colour (above)
+    // The colour a glyph is FILLED with (Compatibility § 3.4.6.1,
+    // `-webkit-text-fill-color`), a list marker's symbol as much as its
+    // text's: `color` unless the page says otherwise, which a gradient
+    // headline does to let its background show through. Decorations,
+    // shadows' currentColor and everything else still take `color`.
+    uint32_t fill;
     bool has_background;            // false = transparent
     uint32_t background;            // a colour
-    // Which of `background` and `border_color` the page wrote as
+    // Which of `background`, `border_color` and `fill` the page wrote as
     // currentColor (FLOW_CURRENT_*): resolved against this element's colour
-    // above, and kept so that a child taking them by `inherit` resolves
-    // them against its own (CSS Color 4 § 4.4).
+    // above, and kept so that a child taking them by `inherit` — or, for
+    // the inherited fill, by inheriting — resolves them against its own
+    // (CSS Color 4 § 4.4).
     uint8_t current_colours;
     // The layers over the colour, as CSS computes them: a list per
     // property, each at least one long. flow_background_layer puts a layer
@@ -909,6 +917,17 @@ os64_gui_rect_t flow_decoration_rect(const flow_box_t *box, uint32_t line);
 // its font size across and at least 3 pixels, centred in the box less a
 // quarter of the size at its end, on the height a line-through takes.
 os64_gui_rect_t flow_marker_shape_rect(const flow_box_t *box);
+// The text a background of `box` clipped to its text (`background-clip:
+// text`, Backgrounds 4 § 2.8) is cut to: hands `visit` each TEXT box it
+// holds, in tree order. A box's own text and its in-flow and floated
+// descendants' — a relatively positioned one's too — but not a marker's,
+// nor an absolutely positioned or fixed descendant's, nor a transformed
+// one's, nor anything in those (Chrome's answers, PILE3.md § The text
+// clip). For a SPAN piece, the text on its own line that its element
+// holds. The decorations drawn with each are the text's too; where each
+// is drawn is the painter's.
+void flow_visit_text_clip(const flow_box_t *box, void (*visit)(void *ctx, const flow_box_t *text),
+                          void *ctx);
 // Such a matrix undone: false when it cannot be — its 2x2 part has no
 // inverse, or that inverse is not a finite double. Its determinant, and
 // the determinants its translation is worked from, are worked so neither a

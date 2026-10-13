@@ -329,6 +329,10 @@ static void element(Buf *b, const FStyles *styles, const os64_html_node_t *n,
         puts_(b, " color=");
         color(b, env, s->color);
     }
+    if (s->fill != s->color) {
+        puts_(b, " fill=");
+        color(b, env, s->fill);
+    }
     if (s->has_background) {
         puts_(b, " bg=");
         color(b, env, s->background);

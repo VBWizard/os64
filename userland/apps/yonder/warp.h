@@ -42,6 +42,17 @@ bool yonder_warp(uint32_t *dst, uint32_t pitch, os64_gui_rect_t clip, const yond
 // Whether `m` is one the warp copies by index.
 bool yonder_warp_exact(const double m[6]);
 
+// A TEXT CLIP's group (PILE3.md § The text clip) laid onto `dst` (`pitch`
+// pixels a row): sheet pixel (i, j) onto dst's (i + dx, j + dy), only
+// inside `clip` (dst's coordinates), at its OWN opacity — `mask`'s pixel
+// (i, j), the clip's text drawn white on black, whose green is how much of
+// the pixel the text covers. Each channel is the warp's own B + (1 - a +
+// a T) D with that coverage as a, so a mask of 255 everywhere lays the
+// group as an opaque warp would, and 0 leaves the pixel as it is. False,
+// and nothing laid, when there are no sheets or no mask.
+bool yonder_warp_masked(uint32_t *dst, uint32_t pitch, os64_gui_rect_t clip,
+                        const yonder_sheets_t *s, const uint32_t *mask, int32_t dx, int32_t dy);
+
 // The matrix that lays a sheet whose pixel (0, 0) is the group's (bx, by)
 // onto a target whose page origin is at (dx, dy) of its pixels: `m` after
 // the move to (bx, by), then (dx, dy). Worked in long double and narrowed

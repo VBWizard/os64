@@ -82,7 +82,8 @@ END
 # A value: a property this library reads, dropped though its value is bare
 # words (one or several), or read and laid out as something else. A value
 # holding a number is the page's; a prefixed word is a dialect. flow-root,
-# in either case, is laid out as what it says (FLOATS.md) and not counted.
+# in either case, is laid out as what it says (FLOATS.md) and not counted,
+# and nor is a background clipped to its text (PILE3.md § The text clip).
 VIEWPORT 800x600
 PAGE
 <!doctype html><style>
@@ -94,7 +95,6 @@ div { DISPLAY: Flow-Root; background-image: conic-gradient(red, blue) }
 WANT
 value display: bogusword 1
 value display: inline frob 1
-value background-clip: text 1
 value background-image: conic-gradient 1
 (end)
 END
