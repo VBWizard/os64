@@ -392,14 +392,118 @@ typedef struct {
     bool current;
 } flow_shadow_t;
 
-// One function of a transform (CSS Transforms 1 § 9, 2 § 12): a
-// translation by `x` and `y` — PX, or PERCENT of the border box, which
-// waits for the box — then `m`, a 4x4 matrix in column-major order (CSS's
-// matrix3d() order) whose lengths are in 26.6, as a box's are.
+// One function of a transform (CSS Transforms 1 § 9, 2 § 12). What drawing
+// reads: a translation by `x` and `y` — PX, or PERCENT of the border box,
+// which waits for the box — then `m`, a 4x4 matrix in column-major order
+// (CSS's matrix3d() order) whose lengths are in 26.6, as a box's are. And
+// what interpolation reads (PILE3.md § Animations): its PRIMITIVE — the
+// function the spellings that pair with each other share (Transforms 1
+// § 7.2, 2 § 12.3) — and its arguments as computed, `m` made from them; a
+// rotation's angle keeps its whole turns, which its matrix cannot.
+typedef enum {
+    FLOW_FN_TRANSLATE,      // x, y; a[2] the z in 26.6
+    FLOW_FN_SCALE,          // a[0], a[1], a[2]
+    FLOW_FN_ROTATE,         // about the axis a[0..2], by the angle a[3]
+    FLOW_FN_SKEW,           // skew(): the angles a[0] and a[1]
+    FLOW_FN_SKEW_X,         // the angle a[0]
+    FLOW_FN_SKEW_Y,         // the angle a[0]
+    FLOW_FN_PERSPECTIVE,    // a[0] in 26.6, 0 for none
+    FLOW_FN_MATRIX,         // `m` alone: matrix() and matrix3d()
+    // Two lists' tails mixed as matrices (Transforms 1 § 9): `blend`. Its
+    // lengths wait for the box as a translation's do, so the mix is made
+    // where the matrix is (f_transform_matrix).
+    FLOW_FN_BLEND,
+} flow_fn_t;
+
+// An angle's unit, kept as written: its matrix is worked in it, so a whole
+// number of quarter turns in any unit is exact (motion.c's quarters).
+typedef enum { FLOW_ANGLE_DEG = 0, FLOW_ANGLE_GRAD, FLOW_ANGLE_RAD, FLOW_ANGLE_TURN } flow_angle_unit_t;
+
+typedef struct flow_transform flow_transform_t;
+
+// FLOW_FN_BLEND's: each list's tail, and how far from one to the other.
 typedef struct {
+    const flow_transform_t *from, *to;
+    int32_t nfrom, nto;
+    double t;
+} flow_transform_blend_t;
+
+struct flow_transform {
+    flow_fn_t fn;
+    // Spelled in 3D (translate3d, translateZ, scale3d, scaleZ, rotateX,
+    // rotateY, rotate3d): a pair with one of these mixes as the 3D
+    // primitive, and stays 3D.
+    bool three_d;
+    double a[4];
+    flow_angle_unit_t unit;         // ROTATE's and the skews' angles
+    const flow_transform_blend_t *blend;
     flow_length_t x, y;
     double m[16];
-} flow_transform_t;
+};
+
+// ── Animations (CSS Animations 1, Easing 1; PILE3.md § Animations) ──────
+
+// An easing (Easing 1 § 2): linear; a cubic Bézier through (0, 0),
+// (p[0], p[1]), (p[2], p[3]) and (1, 1), which the keywords ease, ease-in,
+// ease-out and ease-in-out are; or `steps` steps jumping as `jump` says,
+// which step-start and step-end are.
+typedef enum { FLOW_EASE_LINEAR = 0, FLOW_EASE_CUBIC, FLOW_EASE_STEPS } flow_ease_kind_t;
+typedef enum { FLOW_JUMP_END = 0, FLOW_JUMP_START, FLOW_JUMP_NONE, FLOW_JUMP_BOTH } flow_jump_t;
+typedef struct {
+    flow_ease_kind_t kind;
+    double p[4];
+    int32_t steps;
+    flow_jump_t jump;
+} flow_easing_t;
+
+typedef enum {
+    FLOW_DIRECTION_NORMAL = 0,
+    FLOW_DIRECTION_REVERSE,
+    FLOW_DIRECTION_ALTERNATE,
+    FLOW_DIRECTION_ALTERNATE_REVERSE,
+} flow_direction_t;
+typedef enum { FLOW_FILL_NONE = 0, FLOW_FILL_FORWARDS, FLOW_FILL_BACKWARDS, FLOW_FILL_BOTH } flow_fill_t;
+
+// A name as the page wrote it, its bytes not terminated; `text` NULL for
+// `none`.
+typedef struct {
+    const char *text;
+    uint32_t len;
+} flow_name_t;
+
+// Each `animation-*` longhand's list as computed: names, durations and
+// delays in milliseconds (a duration of `auto` is 0), easings, iteration
+// counts (INFINITY for `infinite`), and the directions, fill modes and
+// play states (true for paused). A list of none is the property's initial
+// value, one item long.
+typedef struct {
+    const flow_name_t *name;
+    const double *duration, *delay;
+    const flow_easing_t *easing;
+    const double *iterations;
+    const flow_direction_t *direction;
+    const flow_fill_t *fill;
+    const bool *paused;
+    int32_t nname, nduration, ndelay, neasing, niterations, ndirection, nfill, npaused;
+} flow_animations_t;
+
+// One animation, the `i`th `animation-name` names: each list repeated to
+// that list's length or cut to it (Values 4's coordinated lists).
+typedef struct {
+    flow_name_t name;
+    double duration_ms, delay_ms;
+    flow_easing_t easing;
+    double iterations;
+    flow_direction_t direction;
+    flow_fill_t fill;
+    bool paused;
+} flow_animation_t;
+
+// What `will-change` names that yonder gives an effect (Will Change 1 § 2):
+// a value other than the initial one of these makes a stacking context —
+// and a transform's, the containing block of absolute and fixed boxes.
+#define FLOW_WILL_TRANSFORM ((uint8_t)0x01)
+#define FLOW_WILL_OPACITY ((uint8_t)0x02)
 
 // CSS Position 3 § 2 (POSITION.md).
 typedef enum {
@@ -577,6 +681,15 @@ typedef struct {
     int32_t ntransform;
     flow_length_t transform_origin[2];
     flow_unit_t transform_origin_z;
+    // Animations (PILE3.md § Animations): the `animation-*` lists, the
+    // style's and living as long as it does, and `will-change`'s
+    // FLOW_WILL_* bits.
+    flow_animations_t animations;
+    uint8_t will_change;
+    // Not a property: of FLOW_WILL_*, what an animation that is current or
+    // in effect animates (Web Animations 1 § 5.6) — which acts as if
+    // `will-change` named it, and makes the box a group for as long.
+    uint8_t animating;
     // `pointer-events: none` (CSS UI 4 § 5.1), inherited: flow_hit passes
     // through the box to whatever is under it, though a descendant that
     // sets `auto` is still hit. Zero is `auto`, the initial value.
@@ -677,6 +790,12 @@ typedef struct {
     // The document's parsing mode: enabled scripting hides noscript's raw
     // fallback text. Zero keeps the fallback visible for script-free faces.
     bool scripting;
+    // The page's animations across its layouts (flow_timeline_new), or
+    // NULL: then no animation runs, and every element has the style its
+    // rules give it. `now_ms` is the time the layout is the page at, on the
+    // face's clock in milliseconds.
+    struct flow_timeline *timeline;
+    uint64_t now_ms;
 } flow_env_t;
 
 #define FLOW_ARENA_DEFAULT ((size_t)64 << 20)
@@ -812,8 +931,10 @@ struct flow_box {
     // `visible` and `clip` that is not the viewport's, so `hidden` too,
     // which a script and a fragment link may scroll and a person may not.
     int32_t scroller;
-    // `opacity: 0` on it or on an element it is inside: flow_visit does not
-    // hand it over. flow_hit still finds it, as a browser's pointer does,
+    // `opacity: 0` on it or on an element it is inside, unless that
+    // element's opacity is animated (a group then, laid over at its
+    // opacity, which may be none): flow_visit does not hand it over.
+    // flow_hit still finds it, as a browser's pointer does,
     // unless it is `pointer-events: none`. A face drawing live widgets
     // draws a control's whatever its opacity — a control made invisible is
     // nearly always a custom checkbox's real input, whose styled stand-in
@@ -854,6 +975,29 @@ const os64_page_t *flow_model(const flow_tree_t *tree);
 int32_t flow_height(const flow_tree_t *tree);
 int32_t flow_width(const flow_tree_t *tree);
 bool flow_incomplete(const flow_tree_t *tree);
+
+// ── Animations (PILE3.md § Animations) ──────────────────────────────────
+//
+// An animation outlives the layouts that compute it, so the face keeps a
+// TIMELINE per document — made with it, freed before it — and hands it to
+// every layout with the time (flow_env_t). A layout starts what its styles
+// newly name, keeps what they still name with its start time, and, when it
+// is complete, drops the rest; each element a timeline keeps an animation
+// for it holds (os64_html_hold), so no node a script removes is reused for
+// another while it does. NULL on no memory.
+typedef struct flow_timeline flow_timeline_t;
+flow_timeline_t *flow_timeline_new(const os64_html_document_t *doc);
+void flow_timeline_free(flow_timeline_t *t);
+
+#define FLOW_NEVER UINT64_MAX
+// When the page next shows another value than the layout at its time
+// (flow_env_t.now_ms) drew, as far as the animations whose element's box
+// can be seen in `view` (page coordinates, at `scroll`) say: that time
+// itself for one moving continuously, which leaves when the next frame is
+// to the face; the next step's edge, the next discrete change, the start
+// of an active phase or an end; FLOW_NEVER for none. A time already gone
+// is due at once.
+uint64_t flow_motion_due(const flow_tree_t *tree, os64_gui_rect_t view, flow_point_t scroll);
 
 // The root box: the html element's. NULL for a page with nothing to lay out.
 const flow_box_t *flow_root(const flow_tree_t *tree);

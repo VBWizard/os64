@@ -67,6 +67,13 @@
 static const yonder_dark_t kDark = {.paper = 0x101010u};
 static bool s_dark;
 
+// THE PERSON'S MOTION SETTINGS (yonder.conf): `motion = reduce` has pages
+// told `prefers-reduced-motion: reduce`, and `animations = off` hands no
+// timeline to a layout, so no animation runs and the page's elements have
+// the styles their rules give them.
+static bool s_reduce_motion;
+static bool s_animations = true;
+
 // The pages a navigation asks for. libway adds, on a GET, the pictures
 // yonder shows by themselves (YONDER.md § A picture asked for by itself),
 // libimage's list, at half the weight.
@@ -109,6 +116,16 @@ static bool s_dark;
 // most a third of the time spent laying out while pictures trickle in.
 #define PICTURES_CHEAP_LAYOUT_MS 100
 #define PICTURES_STALE_MS 2000
+
+// THE ANIMATIONS' FRAMES (PILE3.md § The animation model): a frame is a
+// layout for an animation and the paint after it. A page whose last frame
+// — before it has had one, its last layout — took more than MOTION_COST_MS
+// lays out for no animation. Otherwise the next frame waits until twice
+// the last one's cost has passed since it ended — at most a third of the
+// window's time spent on motion — and comes no sooner than MOTION_FRAME_MS
+// after the last began. Leans, to be moved by what the P5 measures.
+#define MOTION_COST_MS 200
+#define MOTION_FRAME_MS 16
 
 // The window's doorbell bits: the pool's completions, and a navigation's
 // mailbox (progress and questions).
@@ -409,6 +426,11 @@ typedef struct Page {
     os64_html_document_t *plain;
     os64_page_t *plain_model;
     flow_tree_t *tree;
+    // The page's animations across its layouts (flow/flow.h), made when it
+    // is laid out to be shown (page_timeline). The tree points into it, so
+    // it goes after the tree and before the document whose elements it
+    // holds. A struct copy of a Page borrows it; only page_clear frees it.
+    flow_timeline_t *timeline;
     int32_t laid_width, laid_height;    // device pixels
     uint32_t laid_zoom;                 // thousandths (flow_env_t.zoom)
     // The page's sheets, and their cascade at the size the tree was laid
@@ -532,6 +554,7 @@ static void page_clear(Page *p)
     for (int32_t i = 0; i < p->nbox_scrolls; i++)
         os64_html_release(page_doc(p), p->box_scrolls[i].node);
     flow_free(p->tree);
+    flow_timeline_free(p->timeline);
     garb_cascade_free(p->cascade);
     sheets_free(p);
     os64_page_free(p->plain_model);
@@ -598,7 +621,7 @@ static garb_env_t css_view(int32_t w, int32_t h, uint32_t zoom)
     int64_t cw = ((int64_t)w * 1000 + zoom / 2) / zoom;
     int64_t ch = ((int64_t)h * 1000 + zoom / 2) / zoom;
     return (garb_env_t){.width = cw > 0 ? (int32_t)cw : 1, .height = ch > 0 ? (int32_t)ch : 1,
-                        .dark = s_dark};
+                        .dark = s_dark, .reduced_motion = s_reduce_motion};
 }
 
 // `n` CSS pixels as device pixels at `zoom` (thousandths; 0 is 1000),
@@ -623,6 +646,7 @@ static void sheets_restage(Page *p);
 static bool script_geometry(void *opaque, const os64_html_node_t *node,
                             os64_dom_geometry_t *out);
 static bool lay_out_page(Page *p, int32_t width, int32_t height);
+static void page_timeline(Page *p);
 static bool lay_out_page_reclaim(Page *p, int32_t width, int32_t height, Page *reclaim);
 
 // Window-owner count: a provider takes its delta to include layout retries.
@@ -641,7 +665,9 @@ static bool page_lay_out(Page *p, int32_t width, int32_t height, uint32_t zoom, 
     garb_env_t view = css_view(width, height, zoom);
     if (cascade == NULL || p->sheets_changed || (cascade != NULL && (garb_cascade_env(cascade).width != view.width ||
                                                   garb_cascade_env(cascade).height != view.height ||
-                                                  garb_cascade_env(cascade).dark != view.dark))) {
+                                                  garb_cascade_env(cascade).dark != view.dark ||
+                                                  garb_cascade_env(cascade).reduced_motion !=
+                                                      view.reduced_motion))) {
         garb_sheet_in_t in[SHEETS_MAX];
         int32_t n = 0;
         const os64_page_t *model = page_model(p);
@@ -664,6 +690,8 @@ static bool page_lay_out(Page *p, int32_t width, int32_t height, uint32_t zoom, 
     // in CSS pixels at `zoom`.
     s_env.viewport_height = view.height;
     s_env.zoom = zoom;
+    s_env.timeline = s_animations ? p->timeline : NULL;
+    s_env.now_ms = yonder_now_ms();
     geometry_layout_total++;
     flow_tree_t *fresh = flow_layout(page_doc(p), page_model(p), width, &s_env);
     // The tree on screen holds the faces its runs were shaped in until it
@@ -684,6 +712,7 @@ static bool page_lay_out(Page *p, int32_t width, int32_t height, uint32_t zoom, 
         fresh = flow_layout(page_doc(p), page_model(p), width, &s_env);
     }
     s_env.cascade = NULL;
+    s_env.timeline = NULL;
     if (fresh == NULL) {
         if (cascade != p->cascade)
             garb_cascade_free(cascade);
@@ -955,6 +984,14 @@ static struct {
     // pictures_settle, and when it finished.
     uint64_t laid_ms;
     os64_ticks_t laid_at;
+    // The shown page's last frame for an animation (motion_tick, then
+    // motion_painted): when its layout began and when it ended, in
+    // yonder_now_ms's milliseconds, and what it cost in microseconds,
+    // `motion_began_us` on os64_micros' clock. `motion_laid` is false until
+    // the page has had one; `motion_painting` while its paint is to come.
+    bool motion_laid, motion_painting;
+    uint64_t motion_began, motion_ended, motion_us;
+    int64_t motion_began_us;
     // Widgets have stable addresses and node keys; rebuilding replaces the
     // pointer list while preserving surviving widgets and their caret.
     FormWidget **fw;
@@ -1054,6 +1091,9 @@ static bool measured_layout(const Page *p, os64_page_state_t *state, const char 
     s_measuring.box_scrolls = NULL;
     s_measuring.nbox_scrolls = s_measuring.cap_box_scrolls = 0;
     s_measuring.rendered_version = 0;
+    // No animation runs in it: a page's animations start when it is laid
+    // out to be shown (page_timeline).
+    s_measuring.timeline = NULL;
     bool laid = page_lay_out(&s_measuring, width, height, g.zoom, NULL);
     if (laid && flow_incomplete(s_measuring.tree)) {
         flow_free(s_measuring.tree);
@@ -1681,7 +1721,9 @@ static void css_pictures(Page *p);
 // or positioned boxes only the width moves anything; with sheets the
 // height does too, which is what their media queries and vh units read,
 // and with a positioned box, whose initial containing block is the view.
-static bool relayout(bool again)
+// A layout `for_motion` (motion_tick) is quiet: the standing line goes on
+// saying what the page's own layout cost, and its cost is kept apart.
+static bool lay_out_shown(bool again, bool for_motion)
 {
     int32_t width = g.view.bounds.w, height = g.view.bounds.h;
     bool height_matters = g.page.sheets_ready != 0 || flow_npositioned(g.page.tree) > 0;
@@ -1702,9 +1744,23 @@ static bool relayout(bool again)
         sx = scale_zoom(g.sx, g.zoom, g.page.laid_zoom);
     }
     os64_ticks_t t0, t1;
+    uint64_t began_ms = yonder_now_ms();
+    int64_t began_us = os64_micros();
     os64_ticks(&t0);
+    page_timeline(&g.page);
     bool laid = lay_out_page(&g.page, width, height);
     os64_ticks(&t1);
+    // A frame's layout; its paint is added when it is done (motion_painted).
+    // One that fails is the page's last for an animation: its cost reads
+    // as past every limit (motion_next).
+    if (for_motion) {
+        g.motion_laid = true;
+        g.motion_painting = laid;
+        g.motion_began = began_ms;
+        g.motion_began_us = began_us;
+        g.motion_ended = yonder_now_ms();
+        g.motion_us = laid ? (uint64_t)(os64_micros() - began_us) : UINT64_MAX;
+    }
     // The attempt consumes the moves whether or not it fits: kept, they
     // would retry a layout that just failed at every event batch.
     g.pictures_moved = false;
@@ -1725,9 +1781,15 @@ static bool relayout(bool again)
     sync_bars();
     forms_place();
     pictures_schedule();
-    say_laid_out(ms_between(&t0, &t1));
+    if (!for_motion)
+        say_laid_out(ms_between(&t0, &t1));
     os64_ui_mark_dirty(&g.ui, &g.view);
     return !flow_incomplete(g.page.tree);
+}
+
+static bool relayout(bool again)
+{
+    return lay_out_shown(again, false);
 }
 
 static void request_navigate(os64_page_request_t *request, NavKind kind, way_ask_t ask);
@@ -1804,6 +1866,7 @@ static void arrive_now(Page *fresh, NavKind kind, const way_position_t *crumb,
     bool laid = page_model_refresh(fresh);
     if (laid && fresh->model_version != built)
         sheets_restage(fresh);
+    page_timeline(fresh);
     laid = laid && lay_out_page(fresh, width, height);
     os64_ticks(&t1);
     if (!laid) {
@@ -1845,6 +1908,7 @@ static void arrive_now(Page *fresh, NavKind kind, const way_position_t *crumb,
     g.pictures_moved = false;
     g.settle_due = YONDER_NEVER;       // the deadline goes with the moves it was for
     g.laid_at = t1;
+    g.motion_laid = false;             // a new page's own layout stands for its cost
     pictures_start(&g.page);
     css_pictures(&g.page);
     forms_build();
@@ -3246,15 +3310,45 @@ static bool picture_on_screen(int32_t k, bool mark)
     return seen || look.seen;
 }
 
+// When the shown page is next laid out for an animation: when libflow says
+// what the view shows next changes, held to the cost rules
+// (MOTION_COST_MS); never while animations are off or the window is
+// covered.
+static uint64_t motion_next(void)
+{
+    if (!s_animations || g.covered || g.page.tree == NULL)
+        return YONDER_NEVER;
+    uint64_t cost_us = g.motion_laid ? g.motion_us : g.laid_ms * 1000;
+    if (cost_us > (uint64_t)MOTION_COST_MS * 1000)
+        return YONDER_NEVER;
+    os64_gui_rect_t view = {g.sx, g.sy, g.view.bounds.w, g.view.bounds.h};
+    uint64_t due = flow_motion_due(g.page.tree, view, scroll_now());
+    if (due == FLOW_NEVER)
+        return YONDER_NEVER;
+    if (g.motion_laid) {
+        uint64_t rested = g.motion_ended + 2 * ((cost_us + 999) / 1000);
+        uint64_t frame = g.motion_began + MOTION_FRAME_MS;
+        if (due < rested)
+            due = rested;
+        if (due < frame)
+            due = frame;
+    }
+    return due;
+}
+
 // Hands the ticker the earliest of its deadlines: the next frame among the
-// pictures on screen and the moment a slow page's layout goes stale
-// (pictures_settle) — neither for a covered window — the moment a page
-// waiting for its sheets is shown whatever is still coming, the moment a
-// script the stream is stopped at stops waiting for its sheets, and the next
-// timer of each page's scripts, covered or not.
+// pictures on screen, the moment a slow page's layout goes stale
+// (pictures_settle) and the next layout for an animation (motion_next) —
+// none of them for a covered window — the moment a page waiting for its
+// sheets is shown whatever is still coming, the moment a script the stream
+// is stopped at stops waiting for its sheets, and the next timer of each
+// page's scripts, covered or not.
 static void pictures_schedule(void)
 {
     uint64_t next = g.covered ? YONDER_NEVER : g.settle_due;
+    uint64_t motion = motion_next();
+    if (motion < next)
+        next = motion;
     if (g.coming.active && g.coming.due < next)
         next = g.coming.due;
     if (g.stream.active && g.stream.sheets_due != 0 && g.stream.sheets_due < next)
@@ -3295,6 +3389,26 @@ static void pictures_tick(void)
         (void)picture_on_screen(k, true);
     }
     pictures_schedule();
+}
+
+// The ticker rang: when an animation's layout is due, the page is laid out
+// again at this moment, quietly (lay_out_shown). A ring for another
+// deadline lays nothing out.
+static void motion_tick(void)
+{
+    if (motion_next() <= yonder_now_ms())
+        (void)lay_out_shown(true, true);
+}
+
+// The window painted: a frame for an animation costs its layout and the
+// paint that shows it, so the frame ends now and costs all of it.
+static void motion_painted(void)
+{
+    if (!g.motion_painting)
+        return;
+    g.motion_painting = false;
+    g.motion_ended = yonder_now_ms();
+    g.motion_us = (uint64_t)(os64_micros() - g.motion_began_us);
 }
 
 // The window was covered or uncovered. The flag is the truth and the event
@@ -3968,6 +4082,8 @@ static bool script_rebuild(void)
             offset = scale_zoom(offset, g.zoom, p->laid_zoom);
             sx = scale_zoom(sx, g.zoom, p->laid_zoom);
         }
+        // The staged copy shares the page's timeline: its animations go on.
+        page_timeline(p);
         Page next = *p;
         next.rendered_version = version; // the staged layout's target DOM version
         next.reuse_sheets = p;
@@ -5654,6 +5770,7 @@ static void on_doorbell(os64_ui_t *ui, const os64_gui_event_t *ev)
         if (g.coming.active && yonder_now_ms() >= g.coming.due)
             coming_show();
         pictures_tick();
+        motion_tick();
     }
     if ((mask & BELL_WORK) && g.pool != NULL) {
         os64_work_id_t id;
@@ -6564,6 +6681,16 @@ static bool lay_out_page(Page *p, int32_t width, int32_t height)
     return lay_out_page_reclaim(p, width, height, p);
 }
 
+// A page about to be laid out to be shown gets its timeline, if it has
+// none; its animations start at that layout. With no memory for one the
+// page is laid out without it, and they start at a later layout that has
+// one.
+static void page_timeline(Page *p)
+{
+    if (p->timeline == NULL && page_doc(p) != NULL)
+        p->timeline = flow_timeline_new(page_doc(p));
+}
+
 // The zoom in force from now on; the page follows once the events queued
 // with this one are drained, so presses in a row lay it out once, and the
 // controls' face with it (lay_out_page).
@@ -6606,6 +6733,23 @@ static void dark_use(bool dark)
     if (dark == s_dark)
         return;
     s_dark = dark;
+    coming_rejudge();
+    (void)relayout(true);
+    os64_ui_mark_dirty(&g.ui, &g.root);
+}
+
+// The animations' switches (Settings). Reduce motion changes what
+// `prefers-reduced-motion` answers, so the cascade is judged again, as for
+// dark pages. Run animations off lays the page out with no timeline: its
+// elements take the styles their rules give them, and nothing is due. The
+// page keeps its timeline, so turned on again its animations are as far
+// along as their start times say.
+static void motion_use(bool run, bool reduce)
+{
+    if (run == s_animations && reduce == s_reduce_motion)
+        return;
+    s_animations = run;
+    s_reduce_motion = reduce;
     coming_rejudge();
     (void)relayout(true);
     os64_ui_mark_dirty(&g.ui, &g.root);
@@ -7165,6 +7309,8 @@ int main(int argc, char **argv)
     s_script_audit = argc > 1 && os64_streq(argv[1], "--script-audit");
     g.scripts_on = yonder_settings_saved_scripts();
     s_dark = yonder_settings_saved_dark();
+    s_animations = yonder_settings_saved_animations();
+    s_reduce_motion = yonder_settings_saved_reduce_motion();
     g.script_ms = (uint64_t)yonder_settings_saved_script_seconds() * 1000;
     const char *diag_refused = diag_dir_open();
     int address_arg = s_script_audit ? 2 : 1;
@@ -7296,7 +7442,8 @@ int main(int argc, char **argv)
             if (ev.type == OS64_GUI_EVENT_SETTINGS)
                 yonder_settings_open(g.win, BELL_SETTINGS, g.way.agent, settings_use, g.cache,
                                      g.scripts_on, (uint32_t)(g.script_ms / 1000), g.zoom_default,
-                                     zoom_use, s_dark, dark_use);
+                                     zoom_use, s_dark, dark_use, s_animations, s_reduce_motion,
+                                     motion_use);
             else if (!bar_event(&ev) && !zoom_event(&ev) && !key_event(&ev) && !password_key(&ev))
                 os64_ui_dispatch(&g.ui, &ev);
             // What the event became, as DOM events, now libui is done with it.
@@ -7317,11 +7464,13 @@ int main(int argc, char **argv)
         bool scripts_ready = script_turn();
         pictures_settle();
         os64_ui_paint(&g.ui);
+        motion_painted();
         if (stream_more)
             (void)os64_gui_event_ring(g.win, BELL_STREAM);
         if (coming_more || (scripts_ready && scripts_owed(g.page.scripts)))
             (void)os64_gui_event_ring(g.win, BELL_SCRIPTS);
-        // A task may have set or cleared a timer: the ticker hears of it.
+        // A task may have set or cleared a timer, and a frame for an
+        // animation has its whole cost now: the ticker hears of both.
         pictures_schedule();
         if (g.bar.up && !g.bar.armed) {
             // P5 batching may hold a lookahead event. Preserve it and leave

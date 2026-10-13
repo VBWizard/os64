@@ -6,12 +6,10 @@
 // maybe)` does not turn into true. A whole query that ends UNKNOWN is
 // false.
 //
-// What the machine answers, and why: a screen, a mouse (fine pointer, can
-// hover), 8 bits a colour channel, 1 dppx, a light scheme, no scripting,
-// and reduced motion — yonder runs no CSS animations or transitions, and a
-// page that knows so spends nothing on them. So every
-// `@media (prefers-reduced-motion: reduce)` block applies, and some pages
-// hide more than motion in one (a carousel, a video's autoplay).
+// What the machine answers: a screen, a mouse (fine pointer, can hover), 8
+// bits a colour channel, 1 dppx, and no scripting; and what the person
+// asked for — a light or dark scheme, and full or reduced motion — from the
+// env (garb_env_t), each the first unless they asked otherwise.
 
 #include "values_internal.h"
 #include "garb/cascade.h"
@@ -120,7 +118,7 @@ static const Feature kFeatures[] = {
     {"any-hover", F_WORDS, "hover", false}, {"pointer", F_WORDS, "fine", false},
     {"any-pointer", F_WORDS, "fine", false},
     {"prefers-color-scheme", F_WORDS, "light", false},     // or `dark`: answered from the env
-    {"prefers-reduced-motion", F_WORDS, "reduce", false},
+    {"prefers-reduced-motion", F_WORDS, "no-preference", false},   // or `reduce`: the env's
     {"prefers-reduced-transparency", F_WORDS, "no-preference", false},
     {"prefers-contrast", F_WORDS, "no-preference", false},
     {"forced-colors", F_WORDS, "none", false}, {"inverted-colors", F_WORDS, "none", false},
@@ -233,6 +231,17 @@ static const Feature *feature_named(const char *s, size_t n)
     return NULL;
 }
 
+// What a word feature answers here: the machine's, or for the two the
+// person chooses, what they chose.
+static const char *answer_of(const Feature *f, garb_env_t env)
+{
+    if (os64_streq(f->name, "prefers-color-scheme") && env.dark)
+        return "dark";
+    if (os64_streq(f->name, "prefers-reduced-motion") && env.reduced_motion)
+        return "reduce";
+    return f->answer;
+}
+
 // `( … )`: a feature in plain, boolean or range form. UNKNOWN for anything
 // else — Level 4's <general-enclosed>.
 static Tri feature(const garb_value_t *block, garb_env_t env)
@@ -296,9 +305,9 @@ static Tri feature(const garb_value_t *block, garb_env_t env)
             return M_UNKNOWN;
         double here;
         if (f->kind == F_WORDS) {
-            // Orientation always has one; the rest are true unless this
-            // machine's answer is `none` or `no-preference`.
-            const char *a = f->answer;
+            // Orientation always has one; the rest are true unless the
+            // answer here is `none` or `no-preference`.
+            const char *a = answer_of(f, env);
             bool off = a != NULL && (os64_streq(a, "none") || os64_streq(a, "no-preference"));
             return off ? M_FALSE : M_TRUE;
         }
@@ -319,10 +328,7 @@ static Tri feature(const garb_value_t *block, garb_env_t env)
                     return M_UNKNOWN;
                 return word(w, o) ? M_TRUE : M_FALSE;
             }
-            const char *answer = f->answer;
-            if (os64_streq(f->name, "prefers-color-scheme") && env.dark)
-                answer = "dark";
-            return word(w, answer) ? M_TRUE : M_FALSE;
+            return word(w, answer_of(f, env)) ? M_TRUE : M_FALSE;
         }
         double want, here = 0;
         if (!written(f, &c, &want) || peek(&c) != NULL)

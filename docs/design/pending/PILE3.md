@@ -1270,3 +1270,615 @@ after), the refused clip's solid text, a clip whose gradient finds no
 memory once it is open, and a clip with nothing to draw, each by hand. A mutant harness breaks each rule. In the guest,
 `tools/pages/pile3-cliptext.html` — the two probe pages — beside headless
 Chrome.
+
+## Animations (slices S8a and S8b)
+
+A page asks for motion in two ways: an ANIMATION runs a named list of
+keyframes on its own clock once a style applies it, and a TRANSITION
+eases a property from its old value to its new one when the style
+changes. This section designs the first, and the machinery the two
+share; § Transitions, below, says what the second needs and why it
+waits.
+
+### What CSS asks (CSS Animations 1 and 2, Web Animations 1, CSS Easing 1)
+
+**Keyframes.** `@keyframes <name> { <selector># { <declarations> } … }`
+names a list of KEYFRAMES, each an offset — `from` is 0%, `to` is 100%,
+a percentage anything between, and a block with an offset outside them
+is dropped — and the values some properties take there. The name is a
+`<custom-ident>` other than `none`, or a `<string>`; two names are equal
+only codepoint for codepoint, and of two rules with one name the last in
+document order wins whole (Animations 1 § 3). Animations 2 § 3.2 builds
+an element's keyframes from it: blocks with the same offset and the same
+`animation-timing-function` are cascaded together, the last declaration
+of a property winning; an `!important` declaration is invalid and
+dropped; the `animation-*` properties are dropped, but for
+`animation-timing-function`, which is that keyframe's own easing; and a
+property that is not animatable is ignored. A property some keyframe
+sets but none at 0% (or at 100%) gets a keyframe there holding its
+computed value on the element — the IMPLICIT keyframes, which are how
+`@keyframes in { from { opacity: 0 } }` fades to whatever opacity the
+element has.
+
+**The properties.** `animation-name` lists the animations; `-duration`,
+`-timing-function`, `-iteration-count`, `-direction`, `-play-state`,
+`-delay` and `-fill-mode` are lists coordinated with it — a short one is
+repeated and a long one cut — and `animation` sets all eight, one comma
+group per animation. In the shorthand the first time is the duration and
+the second the delay, and a keyword another longhand can take is that
+longhand's until it has one (Animations 1 § 4.9): `animation: ease ease
+1s` is named `ease`. None of them is inherited.
+
+**The clock (Web Animations 1 § 4).** An animation STARTS when the style
+that applies it and its `@keyframes` are both resolved, and runs while
+its name stays in the element's list: a change to the list keeps each
+running animation by matching names from the last to the first
+(Animations 1 § 2), and a change to its other properties applies as if
+they had held from the start. `display: none` on it or an ancestor ends
+it. The start time, the delay (a negative one starts it partway), the
+duration and the iteration count (fractional, or `infinite`) give a
+PHASE — before, active, after (§ 4.6.6) — and the fill mode says whether
+the before and after phases show the value where the active interval
+starts and where it ends, or nothing. In the active phase the ITERATION
+PROGRESS is how far through the current iteration it is, read backwards
+on an iteration its direction reverses (§ 4.7). A paused animation holds
+its time.
+
+**The value (Web Animations 1 § 5.3.4).** For each property: the two
+keyframes around the iteration progress, among those that set it with
+the implicit ones; the fraction of the way between them, passed through
+the FIRST keyframe's easing — the element's `animation-timing-function`
+unless that keyframe gave its own, so an easing applies per keyframe
+interval, not per iteration (Animations 1 § 4.3); and the two values
+interpolated at that fraction by the property's ANIMATION TYPE (§ 5.2
+and Appendix A): by computed value, component by component; a repeatable
+list; discrete, which flips at one half; or a rule of its own —
+visibility, the shadows, transforms. An easing that overshoots gives a
+fraction outside [0, 1], and the value goes past its keyframe. Of
+several animations of one property, the last in `animation-name` wins.
+
+**The easings (Easing 1 § 2).** `linear`; the cubic Béziers `ease`,
+`ease-in`, `ease-out`, `ease-in-out` and `cubic-bezier(x1, y1, x2, y2)`,
+x in [0, 1], extended outside [0, 1] along their end tangents; and
+`steps(n, <position>)` with `step-start` and `step-end`, whose BEFORE
+FLAG holds the bottom of a step at its own edge while the animation is
+still before its active interval.
+
+**The cascade.** An animated value is a declaration of the animation
+origin, which beats every normal author declaration and loses to every
+`!important` one (Cascade 5's order of origins).
+
+**The side effects (Web Animations 1 § 5.6, Will Change 1).** While an
+animation of a property is CURRENT (it has not ended) or IN EFFECT (it
+shows a value, its forwards fill included), the element acts as if
+`will-change` named the property: whatever a value other than the
+initial one would make it — a stacking context, the containing block of
+absolute boxes and of fixed ones — it is, even at a frame whose value is
+the initial one. `will-change` itself does the same for what a page
+names in it.
+
+**The person.** `prefers-reduced-motion` says whether they asked for
+less.
+
+**Scripts.** The animation events (`animationstart`, `animationend` and
+their kin) and the Web Animations API (`element.animate`,
+`getAnimations`) are scripts' surface.
+
+### What the pages ask (measured 10/13)
+
+The census on the P5 — 381 records, 72 hosts — reports `@keyframes` on
+41 hosts, `animation` on 38, `transition` on 39 and `will-change` on 15.
+The values were counted in the sheets of 32 of them fetched again (the
+census's mainstream pages, danlegt.com, and the transition demos Chris
+visited): 1,104 `@keyframes` rules.
+
+| Animated in `@keyframes` | Rules | Hosts |
+|---|---|---|
+| `transform` (263 of them as `-webkit-transform`), `translate`, `rotate`, `scale` | 779 | 24 |
+| `opacity` | 571 | 20 |
+| `background-position` | 40 | 10 |
+| colours: `background-color`, `border-color`, `color`, `outline-color`, `fill` | 36 | 10 |
+| `transform-origin` | 32 | 3 |
+| `box-shadow` | 26 | 5 |
+| `text-shadow` | 3 | 2 |
+| lengths, nearly all of which move the layout: `width`, `height`, the insets, margins, paddings, `font-size`, borders and their radii | 56 | 11 |
+| `visibility`, `pointer-events`, `display` | 26 | 9 |
+| what yonder draws nothing of: `filter`, `clip-path`, masks, `stroke-dashoffset` | 77 | 11 |
+
+Of the 1,074 rules that animate something yonder draws, 963 animate
+nothing but what S8b moves in place (§ Animations in place): the
+transform's properties, `opacity`, the background's colour and
+position, the border colours, `box-shadow`. Of the 710 rules that give
+`transform` two values or more, 598 pair their functions one for one at
+every step, 27 pad a shorter list (13 of them from `none`), 50 pair a
+`perspective()` or a `matrix()`, which mix only as matrices, and 35, on
+seven hosts, interpolate a tail as matrices — danlegt's idle character
+and its losing ticket among them, and protoweb.org's doors, a
+perspective against a turn about y. `var()` inside keyframes is
+common (Font Awesome's `fa-bounce`, danlegt's chips). Of 1,037 rules
+that apply an animation, 90 apply it to `::before` or `::after`, which
+yonder does not generate, and 29 under `:hover`, `:focus` or `:active`.
+The easings written: `cubic-bezier()` 259, `linear` 182, `ease-out` 79,
+`ease-in-out` 76, `ease` 56, `ease-in` 51, `steps()` 36, `step-end` 6;
+and 104 keyframes give their own. 58 of the 971 cubic Béziers the sheets
+write overshoot, a y outside [0, 1] — the bounce danlegt's overlays
+enter with. 270 animations are `infinite`; of the fill modes, 202 are
+`forwards` and 105 `both`. Of the 1,939 rules that declare a transition,
+a third are on an element a `:hover`, `:focus` or `:active` rule
+restyles — a floor, since an ancestor's hover and a script's class are
+not counted — and those rules set what transitions name: `color`,
+`background-color`, `box-shadow`, `border-color`, `opacity`,
+`transform`.
+
+danlegt.com runs 46: the visit counter's `rainbow-wave` slides a
+`background-position`; the marquee is a linear `transform`; the scratch
+ad flickers its `text-shadow` in `steps(2, end)`; and its overlays
+enter on `cubic-bezier`s that overshoot.
+
+What a layout costs is in the same records (`laid out at … in N ms`,
+356 layouts on the P5): median 30 ms, 90th percentile 210 ms; danlegt 70
+to 150 ms, GitHub 1.2 to 1.6 s, docs.ovh 6.7 to 7.5 s.
+
+### What Chrome draws
+
+Headless Chrome 155 was asked with animations PAUSED at a negative delay,
+which holds each at a chosen time — the same trick the fixture uses — and
+read back through `getComputedStyle` (10/13):
+
+| The case, at the time asked | Chrome |
+|---|---|
+| `rotate(0deg)` to `rotate(720deg)`, 25% | `rotate(180deg)`: the angle is interpolated, not the matrix |
+| `rotate(0)` to `rotateZ(400deg)`, 50% | 200°: `rotate` and `rotateZ` pair |
+| `translateX(10px) rotate(30deg)` to `rotate(60deg) translateX(100px)`, 50% | a 45° turn moved (30, 43.30): the lists do not pair, so they are matrices |
+| `scaleX(-1)` to `rotate(90deg)`, 50% | `matrix(0, 0, -0.707107, 0.707107, 0, 0)` — a 2D decomposition (Transforms 2 § 13's on the 3D form would give no matrix at all) |
+| `skewX(0deg)` to `skewY(40deg)`, 50% | `matrix(1.08319, 0.394248, 0.0461182, 0.956478, 0, 0)` — not Transforms 1 § 11.2's answer (0.956, 0.348, -0.040, 1.050): Chrome's 2D decomposition is a shear and a turn, slerped |
+| `matrix(2, 0.5, 0.3, 1, 10, 20)` to `matrix(1, 0, 0, -1, 0, 0)`, 50% | translation (5, 10): the translations mixed alone, where § 11.2 would carry them through the 2x2 left over |
+| `skewX(20deg)` to `skew(40deg, 20deg)`, 50% | matrices: a skew pairs only with its own name |
+| `none` to `rotate(400deg) scale(2)`, 50% | `rotate(200deg) scale(1.5)`: `none` padded with identities |
+| `translate(50%)` to `translate(20px)` on a 100px box, 50% | 35px: a percentage and a length mix as `calc()` |
+| `translateX(0)` to `translateX(100px)` under `cubic-bezier(0.2, 0.86, 0.32, 1.22)`, 50% | 103.628px: past the keyframe |
+| `rgba(255, 0, 0, 0.2)` to `#0000ff`, 50% | `rgba(43, 0, 213, 0.6)`: premultiplied |
+| `background-position: 0% 0%` to `100px 50%`, 50% | `calc(0% + 50px) 25%` |
+| `box-shadow: 0 0 0 red` to `10px 10px 4px blue, inset 0 0 2px green`, 50% | the second shadow padded with a transparent inset one |
+| `z-index` 1 to 4, 50% | 3: 2.5 rounds up |
+| `width: auto` to `200px`, 49% | `auto`: discrete |
+| `font-weight` 100 to 900, 30% | 340: a number |
+| a gradient to another, 60% | the second: discrete |
+| an opacity keyframe at 50% with its own `steps(2, start)`, 75% | the keyframe's easing, not the element's |
+| `steps(4, start)` with a 1s delay and `backwards`, in the delay | the bottom step: the before flag |
+| 2.5 iterations, `forwards`, long after | the value at 50% |
+| `alternate`, three iterations, at 1.25s | the second iteration, backwards: 75% |
+| `0s`, `both` | the last keyframe |
+| `animation: ease ease 1s` | named `ease`, eased `ease` |
+| a transform animation from `none`: paused at its start, in its delay, ended `forwards`; and `will-change: transform` | each the containing block of a fixed child |
+| the same animation ended with no fill | no longer one |
+
+### The split
+
+- **S8a, the model.** Everything above is applied where the page is
+  styled: the style pass gives each animated element its value at the
+  time of the layout, so inheritance, `currentColor` and layout take it
+  as they take any computed value; and the face lays the page out again
+  when a frame is due, as often as a layout's cost allows. Every
+  property moves correctly; a frame costs a layout.
+- **S8b, in place.** The properties that change only what is painted —
+  the transform's, `opacity`, the background's colour and position, the
+  border colours, `box-shadow`: nine animations in ten — move between
+  layouts: libflow rewrites the element's style, its frame and its ink,
+  and the face repaints what moved.
+
+Each is whole without the next: after S8a every animation runs, slow
+where layout is slow; S8b makes the common ones cheap.
+
+## The animation model (slice S8a)
+
+### How it is built
+
+**libgarb reads the properties and the rules.** The eight
+`animation-*` longhands and `animation`, and `will-change`, join the
+property table, and the Compatibility Standard's aliases join the alias
+table: `-webkit-animation` and its seven (§ 3.4.1), and
+`-webkit-transform` and `-webkit-transform-origin` (§ 3.4.1), which 263
+keyframes write and which S7 owed. A TIME is a new value kind, in `s` or
+`ms`. An easing is a KEYWORD or a FUNCTION — `cubic-bezier` with its
+four numbers, x checked in [0, 1]; `steps` with its count, positive, and
+its position, `jump-none` asking two steps at least — and an
+`animation-name` keeps its names as written, since names are compared
+exactly. `@supports` says yes to all of it.
+
+`@keyframes` and `@-webkit-keyframes` (Compat § 3.1) are kept by the
+cascade where `add_rules` meets them, inside the `@media` and `@supports`
+that hold, the last of a name in cascade order replacing the rest; the
+cascade no longer counts them as passed over. `garb_keyframes(cascade,
+element, name, …)` answers an element's keyframes for a name, built by
+Animations 2 § 3.2: grouped by offset and easing, the declarations of
+each group read as winners are — into the longhands they set, `var()`
+replaced against the element's own custom properties — and dropped where
+Animations 2 drops them. The implicit keyframes are libflow's, which
+alone knows the computed values. An element's winners now say which were
+`!important` (`garb_style_t.important`), which an animated value may not
+override. And `garb_env_t` gains `reduced_motion`, which
+`prefers-reduced-motion` answers from, as `prefers-color-scheme` answers
+from `dark`.
+
+**libflow keeps the lists in the style.** Each `animation-*` longhand is
+a list in `flow_style_t`, coordinated by `animation-name` where it is
+used; an easing is a `flow_easing_t` — linear, a cubic's four numbers,
+or a step count and position. `will-change` is two bits, TRANSFORM and
+OPACITY — any of `transform`, `translate`, `rotate` and `scale` sets
+the first — the two whose effects this slice gives; the rest of what it
+names is read and does nothing (§ Booked).
+
+**A transform keeps its functions.** `flow_transform_t` held each
+function as its matrix and a translation's two lengths, which is all
+drawing wants. Interpolation wants more: `rotate(0)` to
+`rotate(720deg)` turns twice, and a matrix of either is the identity. So
+each function keeps its PRIMITIVE and its arguments as computed — a
+translation's lengths, a scale's factors, an angle in degrees and NOT
+reduced by whole turns, a 3D rotation's axis, a skew's two angles, a
+matrix's sixteen numbers — beside the matrix it makes, which style.c
+builds from them as it builds it today. The primitives pair as
+Transforms 1 § 7.2 and 2 § 12.3 say and Chrome agrees: the translations
+with each other, the scales, the rotations (`rotate`, `rotateZ`,
+`rotateX`, `rotateY` and `rotate3d`, about axes Transforms 2 § 14
+compares); a skew with nothing but its own name; and `matrix()`,
+`matrix3d()` and `perspective()` only as matrices (§ 14).
+
+**The timeline.** Animations outlive the layouts that compute them: a
+start time must survive every layout after the one that started it — a
+picture arriving, a zoom, a script's change. So the face owns a
+`flow_timeline_t` per page, made empty when the page is first laid out
+to be shown and freed after its tree, which points into it, and before
+its document, whose elements it holds; and hands it to each layout in
+the environment with the time (`flow_env_t.timeline`, `.now_ms`). A
+layout that measures a page not yet shown, for its scripts, has none. It keeps one record per
+running animation: its element, its name and place in the element's
+list, its start time, and while it is paused the time it holds. A layout
+is a style change event, and updates it as Animations 1 § 2 says: an
+element's new list is matched from the last name to the first against
+its records, each match kept with its start time and given the new
+properties of its place; an unmatched name with keyframes starts at
+`now`; a name whose `@keyframes` do not exist yet starts nothing, and
+starts when they arrive. A paused animation stores the time it has run
+and a resumed one is restarted that much before `now`. A record no
+COMPLETE layout styled is dropped — its element gone, its name gone, its
+subtree `display: none`; an incomplete layout drops nothing it did not
+reach. A record HOLDS its element (`os64_html_hold`), so a node a script
+removes is not reused for another while a record names it, and the hold
+goes with the record.
+
+**The style pass gives each animated element its value at `now`.** Where
+`style_element` has applied the author's winners and before `finish`
+resolves them, an element with animations keeps that specified state as
+its BASE and makes, for each keyframe, the state its declarations make
+laid over the base — every property but those an `!important` winner
+holds — each resolved by `finish` as the element's own style is: at its
+font, its parent, its `currentColor`, its zoom. Each keyframe is then a
+computed style, and the implicit keyframes are the base's. The value of
+each animated property at `now` is worked from those (§ What CSS asks:
+the clock, the value) and written into the element's style, and the derived
+facts — a border or background or fill in `currentColor` follows the
+animated `color` — are resolved from it. The element's children inherit
+from that style. So an animated `color`, `visibility` or `text-shadow`
+reaches the descendants that inherit it, an animated `width` is laid
+out, and a layout at a time is the page at that time.
+
+**Interpolation, by the field.**
+
+| The field | How it is interpolated |
+|---|---|
+| a length (`flow_length_t`): PX, PERCENT, and PERCENT with an offset, which is how a `calc()` mix computes | each part separately — a length with a percentage mixes into the PERCENT-with-offset form (Values 4 § 5.6.1); AUTO and the other keywords discrete; each part rounded to its own unit, 1/64 px or 1/64 of a percent |
+| a size in 26.6 (`font_size`, border widths, `border-spacing`, transform-origin's z) | a number in 26.6, rounded to 1/64 px |
+| a colour (`0xTTRRGGBB`) | premultiplied by its alpha, each channel in doubles, then divided back and rounded half up to 8 bits (Color 4 § 13.4) |
+| `opacity`, the flex factors (thousandths), `font-weight` | a real number, rounded to the field's grid |
+| `z-index`, `order` | a real number, rounded half up (Values 4 § 5.2.1, as Chrome rounds 2.5) |
+| `line-height` | a number with a number, a length with a length; else discrete |
+| `visibility` | `visible` for every fraction strictly between 0 and 1 if either end is `visible`; else discrete (Web Animations Appendix A) |
+| a shadow list | shadow by shadow, the shorter padded with transparent ones of no size that match the other's `inset`; a pair differing in `inset` makes the whole list discrete; colours as above (Appendix A) |
+| `background-position`, `background-size` | repeatable lists: repeated to their least common multiple, then item by item as lengths (`cover` and `contain` discrete) |
+| a transform | below |
+| everything else — keywords, families, pictures and gradients, grid tracks | discrete |
+
+`display` is not animated here (§ Booked). An interpolated value is
+computed from the two keyframes every time, never from the last frame,
+so nothing accumulates.
+
+**Transforms interpolate as Transforms 1 § 9 says.** `none` is an empty
+list. The shorter list is padded at its end with the identity of the
+function in the longer one at each place (`translate(0)`, `scale(1)`,
+`rotate(0)`). Then, from the start, each pair of the same primitive is
+interpolated argument by argument — a 3D pair as well as a 2D one,
+`rotateY` with `rotateY` — and at the first pair that does not pair (or
+a pair that pairs only as matrices, § 14: two `rotate3d`s about
+different axes both turned, two `matrix()`es), the rest of each list is
+multiplied into a matrix and the two are interpolated as matrices — as
+Chrome interpolates them, not as Transforms 1 § 11.2 writes it, since the
+two part where a matrix holds a shear (§ Animations, What Chrome draws)
+and a page is written against what browsers draw. Each matrix is decomposed on its
+own: a 2D one into a translation, a scale (a flip on the axis whose
+diagonal is the smaller), a shear and a turn about z; any other by
+Transforms 2 § 13.1.1, into perspective, translation, scale, skew and a
+quaternion. The parts are mixed, the turns slerped the shorter way, and
+composed as perspective · translation · rotation · skew · scale —
+Chromium's DecomposeTransform and ComposeTransform, whose answers the
+proof checks to Chrome's six digits: `scaleX(-1)` against
+`rotate(90deg)`, a skewed turn, `matrix()` against `matrix()`, and
+protoweb.org's doors. A matrix that cannot be decomposed makes the pair
+discrete (Transforms 1 § 11). The tail's lengths need the border box, so the tail is kept as
+its two lists and the fraction, and multiplied out where the frame's
+matrix is made (`f_transform_matrix`), with the box known.
+
+**The side effects are fixed for an animation's life.** At each layout,
+an element with an animation of a property that is current or in effect
+at `now` takes `will-change`'s bit for it — and so the structure a
+frame's value could change is decided once, not by the frame:
+
+- TRANSFORM: a box a transform applies to has a transform frame even at
+  a frame whose value is `none` (its matrix the identity, a move of
+  nothing), is a stacking context, and is the containing block of
+  absolute and fixed boxes — what S7a's transform does, from
+  `f_transformed` and `f_contains_absolute`.
+- OPACITY: a stacking context, as a box below full opacity is.
+- An element whose `opacity` or transform is ANIMATED, not only named in
+  `will-change`, is a GROUP (`flow_visit_groups`) for the life of the
+  animation, whatever its value, so a frame that turns it or fades it is
+  painted the way its neighbours are; and its own `opacity: 0` does not
+  make it `unpainted` — the painter lays the group over at no opacity,
+  which shows nothing, rather than the layout leaving it out.
+
+When the animation ends without a fill, its side effects end with it,
+and that is a change of structure: the face is due a layout at its end.
+
+**The face lays out at the frames.** yonder hands each layout
+`yonder_now_ms()`, and asks libflow when the page next changes:
+`flow_motion_due(tree, view, scroll)` answers the earliest time an
+animation whose box can be seen in `view` shows another value — the
+layout's own time
+for a value that moves continuously, which leaves when the next frame is
+to the face; the next step's edge for one in `steps()` or a discrete
+one; the start of an active phase; an end — and never for one that is
+paused, finished and filling, or out of view. It joins the deadlines the
+ticker keeps already (`pictures_schedule`). When it rings for an
+animation the page is laid out again, quietly: the scroll kept as any
+relayout keeps it, the controls placed, the cascade reused — the
+viewport and the sheets have not changed — and the standing line left
+saying what the page's own layout cost.
+
+The cost is ruled by what a FRAME costs — the layout for an animation
+and the paint that shows it, measured as they run (the paint is the
+window's whole view, libui's one rectangle, and counting the layout
+alone let a page whose paint costs twice its layout keep the window's
+thread busy all the time):
+
+- a page whose last frame — or, before there was one, its last layout —
+  took more than MOTION_COST_MS (200) lays out for no animation: its
+  animations show what they were at the last layout made for another
+  reason, until S8b moves the ones it can. One whose layout fails is its
+  last, as though it had cost too much;
+- otherwise the next frame waits until twice the last one's cost has
+  passed since its paint ended — at most a third of the window's time
+  spent on motion — and never comes sooner than MOTION_FRAME_MS (16)
+  after the last began, which the window's clock, in 10 ms ticks, makes
+  20: fifty a second at most;
+- a covered window lays out for no animation, as it shows no picture's
+  frames (`g.covered`).
+
+The constants are leans, to be moved by what the P5 measures.
+
+**The person's settings.** yonder answers `prefers-reduced-motion` with
+`no-preference`, as every browser on a machine nobody set answers, and
+the Settings window gains Reduce motion — saved as `motion = reduce` in
+yonder.conf — which makes it answer `reduce`. Pages decide what that
+means: many turn their animations off under it, and every page that
+does has been doing so here, since yonder said `reduce` to all of them.
+media.c's comment, which says why, is rewritten to say what it answers
+now.
+
+Beside it, Run animations — on unless yonder.conf says `animations =
+off` — is the switch for the day animations cause more trouble than
+they are worth (Chris, 10/14: "at least temporarily"). Off, the face
+hands no timeline to its layouts, and libflow runs no animation: every
+element has the style its rules give it, as before S8, and nothing is
+due. The page keeps its timeline, so turned on again an animation is as
+far along as its start says. `will-change` is no animation and still
+applies; what pages are told is Reduce motion's business, not this
+switch's.
+
+## Animations in place (slice S8b)
+
+### How it is built
+
+**What moves in place.** A property moves between layouts when nothing
+but painting reads it, its effect on structure is fixed for the
+animation's life (S8a's side effects), and nothing inherits it: the
+transform's four properties and `transform-origin`, `opacity`,
+`background-color`, `background-position`, the four border colours and
+`box-shadow`. Every other animated property still moves by layouts, as
+in S8a. A descendant that takes one of these by `inherit` makes it move
+by layouts on that element, since a tick rewrites the animated element's
+style and no other.
+
+**A tick is the style pass's arithmetic, again.**
+`flow_motion_tick(tree, now, view, damage, ctx)` works each in-place
+animated value at `now` with the function the style pass works it with,
+from the keyframe styles the layout made — the tree keeps them — and
+writes it into the element's style. What the layout derived from those
+fields is made again:
+
+- the transform frame from its matrix: `f_transform_matrix` with the
+  border box in 26.6, which the frame now keeps, and the frame's move,
+  `through`, `upright` and affine as `transform_new` makes them;
+- the box's ink for its shadows (`own_ink`'s shadow part), MERGED into
+  `flow_box_t.ink` and handed up as `ink_up` hands it — so a box's ink
+  only grows while its tree lives, which THE BOUNDS CONTRACT allows;
+- nothing else: group bounds, hits, a box's place and its clip read the
+  frames when they are asked.
+
+**What it repaints.** For each element a tick changed, `damage` is handed
+what the element painted before it and what it paints after, in the
+page's coordinates: a group's bounds as `flow_visit_groups` works them
+(everything in its stacking context, through every matrix); for any
+other element, each of its boxes' overflow rect grown by its ink and cut
+to its clip, through its frames; the whole view for the canvas's owner,
+whose background is the canvas's. The face marks each, cut to the view
+first — marks are joined into one rectangle (§ The one dirty rectangle,
+below), and one outside the view would stretch it across the view. A
+tick that moved a frame places the page's live controls again
+(`forms_place`), so a field inside a sliding panel slides with it.
+
+**When the next frame is.** `flow_motion_due` answers for the in-place
+animations as it does for the rest, apart: the face ticks at the
+in-place deadline and lays out at the other. A tick waits MOTION_FRAME_MS
+after the last, and as long again as the last tick and its painting
+took, so motion spends at most half the time; a value that only moves at
+its steps ticks only at their edges, and a stretch where the keyframes
+hold one value does not tick inside it. The face also ticks before
+it paints the page for any other reason — a scroll brings an animation
+into view — so what is painted is the value at the time it is painted.
+
+## Animations, both slices
+
+### Contracts
+
+Written before the code (the lesson of S7b's nineteen rounds):
+
+- **A value is a function of the time.** An animation's value at a time
+  depends on that time, its start time and the page's styles, and on
+  nothing else: no frame is built from the frame before. A layout at a
+  time and a tick at that time give the same style fields and the same
+  frame, to the bit — the tick calls the function the style pass calls.
+  A frame the face skips is not drawn, and the next is right.
+- **The timing is Web Animations' arithmetic**, in doubles of
+  milliseconds from the start time. No promise past it.
+- **An easing is a point on its curve.** On [0, 1] a cubic's output is
+  the curve's y at a point whose x is within 1e-7 of the input — a
+  promise about x, since near a vertical tangent a small step in x is a
+  large one in y, and no solver can promise y there; outside [0, 1] the
+  end tangents are exact; steps are exact, their before flag with them.
+- **A value lands on its field's own grid once**: a length on 1/64 px
+  (the layout's unit and Chrome's), a colour on 8 bits a channel from
+  premultiplied doubles, `opacity` on a thousandth, an integer half up.
+- **Structure is the layout's.** Whether a box is a stacking context, a
+  containing block, a group, a frame, or painted at all is decided by
+  the side effects at a layout and holds until the next; a tick changes
+  what is drawn and where, never what is drawn as what.
+- **What repaints holds what moved.** The damage a tick hands is at
+  least what the element painted before it and after it — never less;
+  more where a grown ink overcounts, which THE BOUNDS CONTRACT allows.
+  Group bounds read the live frames, as they do now.
+- **libflow owns what moves; the face owns when.** Which animations run,
+  which keyframes, which value, which property in place — CSS, libflow's.
+  The clock, the view, and what a frame may cost — the face's.
+- **Cost is a policy, not a promise.** The frame interval, the shares of
+  the time, and the frame's cost limit are constants to move by
+  measurement.
+
+### The one dirty rectangle
+
+libui keeps ONE rectangle of what needs painting, the join of every mark
+(`os64_ui_mark_dirty`). Two small things changing far apart repaint
+everything between them. It is why danlegt's cockroaches slowed:
+`img.roach` is turned (`rotate(-12deg)`, and `rotate(12deg) scaleX(-1)`
+for the second), so each frame of each roach is drawn through its
+matrix since S7b — and the two hang off opposite sides of `#main`
+(`left: -64px`, `right: -64px`), so every frame of their GIF repaints
+the band between them the width of the page, and a taller window joins
+the other GIFs' frames to it, the penguin's among them. Animations
+spread over a page meet the same wall. It is the perf slice's first
+lever — a list of rectangles for the page view — and not S8's: S8 marks
+honestly, and the cost is counted where it is spent.
+
+### Transitions (designed here, built later)
+
+A transition needs what S8a builds — the timeline, the easings,
+interpolation by field — and three things more: the timeline keeps each
+element's BEFORE-CHANGE values of the properties its `transition-property`
+names, which every layout compares with the new ones (Transitions 1 § 3:
+start, cancel, and the reversing of an interrupted one); a transitioned
+value is of the TRANSITION origin, which beats even `!important`; and a
+layout must say whether it is a style change a transition may start
+from. That last is yonder's: a layout made as the page's own sheets
+arrive is not one — Chrome renders nothing until a page's head sheets
+are in, and yonder shows a page before them when they are slow (G4), so
+a transition there would animate a page into its own style.
+
+What starts transitions in yonder today is almost nothing. `:hover`
+never matches (libgarb's `P_USER_ACTION`); scripts are off unless the
+person turns them on; a resize or a zoom remains. The census's
+transitions are on elements a hover restyles — a third of them at the
+least — and name the properties a hover changes (§ What the pages ask);
+and a hover is a new cascade and a new layout at the pointer's pace,
+which the census's layout times put at 30 ms on half the pages and over
+a second on GitHub. So transitions wait for `:hover`, and `:hover` for
+the perf slice.
+
+### Booked
+
+| Debt | Why it waits | Trigger |
+|---|---|---|
+| Transitions, and `:hover` with them | § Transitions: their trigger is hover, and hover is a restyle and a layout per move | the perf slice: they are the slice after it (Chris, 10/14: "as long as we don't forget") |
+| The animation events and the Web Animations API | scripts' surface, which the Modern Web arc gives (Platform waits for its arc) | a page with scripts on that waits on `animationend` |
+| `animation-composition`, `animation-timeline` (scroll-driven), `animation-range`, view transitions | newer levels. GitHub writes `animation-timeline: scroll(self)` 15 times, outside `@supports`, on animations of no duration that set custom properties: run on the clock they end as they start and show nothing, as in a browser without scroll timelines | a page that runs on scroll |
+| `display` in a keyframe | ignored: an animated display builds and unbuilds boxes, and browsers began animating it only lately | a page that animates it |
+| Grid track lists interpolated | discrete here | a page that animates its grid |
+| Custom properties in a keyframe, and registered ones (`@property`) | ignored: a keyframe's `--x` would have to reach the `var()`s that read it, which libgarb replaces at the cascade | a page whose animated variable matters |
+| `will-change` beyond the transforms and `opacity` — `position`, `z-index`, and what yonder draws nothing of | read, and given no effect | a page whose stacking depends on one |
+| The properties yonder draws nothing of — `filter`, `clip-path`, masks, `stroke-dashoffset` | animating them animates nothing | the slices that draw them |
+| Animations on `::before` and `::after` | yonder generates no content for them at all | the slice that does |
+| Inherited properties in place — `color`, `visibility`, `text-shadow`, the fill | they move by layouts, whose cost is ruled (S8a, the face); in place they would need every inheriting descendant's style rewritten | a page whose inherited animation costs too much in layouts |
+| A page's scrollable extent following a transform's frames | the extent is the layout's | a page scrolled to where an animation carried something |
+| A keyframe's `em` while `font-size` animates | its keyframes are computed at the layout's font | a page that animates both |
+| The rest of Compat § 3.4.1's drawn rows (`-webkit-box-shadow`, `-webkit-border-radius` and the others) | not animation's | a page that writes only the prefixed name |
+| `linear()` easing (Easing 2) | no page in the census writes it | a page that does |
+
+### Proof
+
+libgarb's corpus: `@keyframes` and its alias kept, named by ident or
+string and compared exactly, `none` refused, offsets past 100% dropped,
+the last of a name winning across sheets and inside `@media` that holds,
+not inside one that does not; `!important` and the `animation-*` in a
+keyframe dropped but its own easing; the shorthand's two times and its
+keyword rule (`ease ease`); every longhand's list, the easings' checks;
+`will-change`; `@supports`; `prefers-reduced-motion` both ways; the
+winners' importance; `var()` in a keyframe replaced per element.
+
+libflow's harness (`--motion`): the clock over a table of phases, fills,
+iterations — fractional and infinite — directions, negative delays, a
+zero duration, pause and resume; the easings against a reference worked
+in long double, the steps against Easing 1's own examples with the
+before flag; keyframes built — implicit frames, one offset twice, a
+keyframe's own easing, groups by offset and easing; interpolation for
+every row of the table above against Chrome 155's answers to the probe
+pages, recorded with the page that asked; transforms' padding, pairing,
+3D pairs, and tails by both decompositions against Chrome's (2D:
+`scaleX(-1)`, a skew against a skew, a skewed turn, `matrix()` against
+`matrix()`; 3D: a perspective door, two axes);
+the side effects against Chrome's
+containing-block answers; the timeline across layouts — a start kept,
+`a` to `a, a`, a name gone, an element gone and its hold let go, a
+pause and a resume, an incomplete layout dropping nothing; each due
+time; an animated page's layout with each of its allocations failed in
+turn, alone and with every one after it, leaking nothing, whole only
+when it is the page, and its timeline coming through each failure with
+its start times; and S8b's tick against a layout at the same time,
+field by field and frame by frame to the bit, at many times; its damage
+holding what was painted before and after; ink that only grows.
+
+yonder's host harness, which hosts yonder.c with clocks it sets: S8a's
+deadlines — the cost limit, a frame's paint counted in its cost, the
+page's own cost before its first frame, the shares, the interval, a
+covered window, an
+animation out of view, a step's edge — the quiet layout, a failed one
+being the last, an arriving page starting its animations and its costs
+afresh, a script's change starting one, an element removed; the two
+settings saved and applied, what the media answers, and with animations
+off the rules' styles and nothing due. S8b's marks cut to the view, and
+controls placed after a frame moved.
+
+`tools/test_motion_mutants.py` breaks each rule. In the guest,
+`tools/pages/pile3-motion.html`: FROZEN rows, paused at chosen times or
+long finished, each box on a blue line where headless Chrome put it or
+beside a neighbour drawn as Chrome computes it; and LIVE rows (a
+spinner, a pulse, a hue cycle, a steps march, a delayed start, one
+Reduce motion stops, one far below the fold) watched; then danlegt on
+the P5.

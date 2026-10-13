@@ -121,6 +121,13 @@ remaining gates before recommending scripts for ordinary browsing.
   page's own has nothing to move. A page that set no colours is laid on
   white's dark counterpart. Form controls keep the desktop theme's colours.
   Apply re-judges the cascade and lays the page out again.
+- **Run animations** and **Reduce motion**, on a row of their own
+  (PILE3.md § The animation model). Run animations is on unless
+  `yonder.conf` says `animations = off`; off, no layout is handed the
+  page's timeline, so no CSS animation runs. Reduce motion,
+  `motion = reduce`, has pages told `prefers-reduced-motion: reduce`;
+  otherwise they are told `no-preference`. Apply re-judges the cascade
+  and lays the page out again.
 - **yonder's loop waits on its own window**, so a thread waits on the
   dialog's (without taking its events) and rings a doorbell on yonder's;
   the loop pumps the dialog and tells the thread it has. One ring is out

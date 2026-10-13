@@ -122,6 +122,15 @@ static const Prop kProps[GARB_NPROPS] = {
     [GARB_ROTATE] = {"rotate", false},
     [GARB_SCALE] = {"scale", false},
     [GARB_TEXT_FILL_COLOR] = {"-webkit-text-fill-color", true},
+    [GARB_ANIMATION_NAME] = {"animation-name", false},
+    [GARB_ANIMATION_DURATION] = {"animation-duration", false},
+    [GARB_ANIMATION_TIMING_FUNCTION] = {"animation-timing-function", false},
+    [GARB_ANIMATION_ITERATION_COUNT] = {"animation-iteration-count", false},
+    [GARB_ANIMATION_DIRECTION] = {"animation-direction", false},
+    [GARB_ANIMATION_PLAY_STATE] = {"animation-play-state", false},
+    [GARB_ANIMATION_DELAY] = {"animation-delay", false},
+    [GARB_ANIMATION_FILL_MODE] = {"animation-fill-mode", false},
+    [GARB_WILL_CHANGE] = {"will-change", false},
 };
 
 const char *garb_prop_name(garb_prop_t prop)
@@ -456,6 +465,21 @@ static const char *const kBgSize[] = {"cover", "contain", NULL};
 static const char *const kPosX[] = {"left", "right", "center", NULL};
 static const char *const kPosY[] = {"top", "bottom", "center", NULL};
 static const char *const kPosAll[] = {"left", "right", "top", "bottom", "center", NULL};
+// Easing 1 § 2: the easings a keyword names, and a step's positions.
+static const char *const kEasings[] = {"linear", "ease", "ease-in", "ease-out", "ease-in-out",
+                                       "step-start", "step-end", NULL};
+static const char *const kStepPositions[] = {"jump-start", "jump-end", "jump-none", "jump-both",
+                                             "start", "end", NULL};
+// Animations 1 § 4.4 to § 4.8, and Animations 2's `auto` duration.
+static const char *const kInfinite[] = {"infinite", NULL};
+static const char *const kDirection[] = {"normal", "reverse", "alternate", "alternate-reverse",
+                                         NULL};
+static const char *const kPlayState[] = {"running", "paused", NULL};
+static const char *const kFillMode[] = {"none", "forwards", "backwards", "both", NULL};
+// The identifiers a <custom-ident> may not be (Values 4 § 4.2): the
+// CSS-wide keywords and `default`.
+static const char *const kNotCustom[] = {"inherit", "initial", "unset", "revert",
+                                         "revert-layer", "default", NULL};
 
 // ── Building the answer ─────────────────────────────────────────────────
 
@@ -1843,6 +1867,16 @@ typedef enum {
     G_TRANSLATE,            // none | <lp> [<lp> <length>?]?
     G_ROTATE,               // none | <angle> && [x | y | z | <number>{3}]?
     G_SCALE,                // none | [<number> | <percentage>]{1,3}
+    // One animation's (Animations 1 § 4), each read as a list, one item an
+    // animation: a name, a duration, a delay, an easing, an iteration
+    // count, or a keyword from `words`.
+    G_ANIM_NAME,            // none | <keyframes-name>
+    G_DURATION,             // <time [0s,∞]> | auto
+    G_DELAY,                // <time>
+    G_EASING,               // <easing-function>
+    G_ITERATIONS,           // infinite | <number [0,∞]>
+    G_ANIM_KEYWORD,
+    G_WILL_CHANGE,          // auto | <animateable-feature>#
 } Grammar;
 
 typedef struct {
@@ -1914,6 +1948,13 @@ static const Longhand kLonghands[] = {
     {GARB_TRANSFORM, G_TRANSFORM, NULL}, {GARB_TRANSFORM_ORIGIN, G_ORIGIN, NULL},
     {GARB_TRANSLATE, G_TRANSLATE, NULL}, {GARB_ROTATE, G_ROTATE, NULL},
     {GARB_SCALE, G_SCALE, NULL},
+    {GARB_ANIMATION_NAME, G_ANIM_NAME, NULL}, {GARB_ANIMATION_DURATION, G_DURATION, NULL},
+    {GARB_ANIMATION_TIMING_FUNCTION, G_EASING, NULL},
+    {GARB_ANIMATION_ITERATION_COUNT, G_ITERATIONS, NULL},
+    {GARB_ANIMATION_DIRECTION, G_ANIM_KEYWORD, kDirection},
+    {GARB_ANIMATION_PLAY_STATE, G_ANIM_KEYWORD, kPlayState},
+    {GARB_ANIMATION_DELAY, G_DELAY, NULL}, {GARB_ANIMATION_FILL_MODE, G_ANIM_KEYWORD, kFillMode},
+    {GARB_WILL_CHANGE, G_WILL_CHANGE, NULL},
 };
 
 static bool longhand_one(Sets *s, VCur *c, const Longhand *l, garb_val_t *out);
@@ -2463,10 +2504,153 @@ static bool rotate(Sets *s, VCur *c, garb_val_t *out)
 
 // The background longhands take a comma-separated list, one per layer
 // (Backgrounds 3 § 3.1), the top layer first.
+// ── Animations (Animations 1 § 4, Easing 1 § 2) ─────────────────────────
+
+// A <keyframes-name>, or `none`: an identifier but none and the CSS-wide
+// ones, or a string but the empty one — kept as written either way, since
+// a name is compared codepoint for codepoint and `"none"` is a name.
+static bool anim_name(VCur *c, garb_val_t *out)
+{
+    const garb_value_t *t = vc_peek(c);
+    if (t == NULL)
+        return false;
+    if (t->kind == GARB_IDENT && ieq(t->text, t->len, "none")) {
+        c->i++;
+        *out = kw("none");
+        return true;
+    }
+    if (t->kind == GARB_IDENT) {
+        for (int k = 0; kNotCustom[k] != NULL; k++)
+            if (ieq(t->text, t->len, kNotCustom[k]))
+                return false;
+    } else if (t->kind != GARB_STRING || t->len == 0) {
+        return false;
+    }
+    os64_memset(out, 0, sizeof(*out));
+    out->kind = GARB_V_STRING;
+    out->text = t->text;
+    out->len = t->len;
+    c->i++;
+    return true;
+}
+
+// One plain number of a function's arguments, alone in it: an easing's
+// numbers are written so (a calc() there is booked with calc angles).
+static bool lone_number(VCur *c, garb_val_t *out)
+{
+    const garb_value_t *t = vc_peek(c);
+    if (t == NULL || t->kind != GARB_NUMBER)
+        return false;
+    *out = number_val(t->number);
+    c->i++;
+    return vc_done(c);
+}
+
+// <easing-function> (Easing 1 § 2): a keyword; cubic-bezier(x1, y1, x2,
+// y2) with each x in [0, 1]; or steps(<integer>, <position>?), whose count
+// is at least 1, and at least 2 with jump-none, which takes no step at
+// either end. Easing 2's linear() is not read (PILE3.md § Animations,
+// Booked).
+static bool easing(Sets *s, VCur *c, garb_val_t *out)
+{
+    const char *k = vc_keyword(c, kEasings);
+    if (k != NULL) {
+        *out = kw(k);
+        return true;
+    }
+    const garb_value_t *t = vc_peek(c);
+    VCur args[4];
+    garb_val_t a[4];
+    if (is_fn(t, "cubic-bezier")) {
+        if (fn_args(t, args, 4) != 4)
+            return false;
+        for (int i = 0; i < 4; i++)
+            if (!lone_number(&args[i], &a[i]))
+                return false;
+        if (!(a[0].number >= 0 && a[0].number <= 1 && a[2].number >= 0 && a[2].number <= 1))
+            return false;
+        *out = fn_val(s, "cubic-bezier", a, 4);
+    } else if (is_fn(t, "steps")) {
+        int32_t n = fn_args(t, args, 2);
+        const garb_value_t *count = n >= 1 ? vc_peek(&args[0]) : NULL;
+        if (count == NULL || count->kind != GARB_NUMBER || !count->integer || count->number < 1)
+            return false;
+        args[0].i++;
+        if (!vc_done(&args[0]))
+            return false;
+        a[0] = number_val(count->number);
+        if (n == 2) {
+            if ((k = vc_keyword(&args[1], kStepPositions)) == NULL || !vc_done(&args[1]) ||
+                (os64_streq(k, "jump-none") && count->number < 2))
+                return false;
+            a[1] = kw(k);
+        }
+        *out = fn_val(s, "steps", a, n);
+    } else {
+        return false;
+    }
+    if (out->items == NULL)
+        return false;
+    c->i++;
+    return true;
+}
+
+static bool iterations(Sets *s, VCur *c, garb_val_t *out)
+{
+    const char *k = vc_keyword(c, kInfinite);
+    if (k != NULL) {
+        *out = kw(k);
+        return true;
+    }
+    VCur look = *c;
+    if (!vc_dim(&look, ACCEPT_NUMBER, false, false, &s->a, out) || out->kind != GARB_V_NUMBER)
+        return false;
+    *c = look;
+    return true;
+}
+
+// `will-change` (Will Change 1 § 2): auto, or a list of what will change —
+// scroll-position, contents, or a property's name, an identifier that is
+// none of the words the grammar excludes, kept as written.
+static bool will_change(Sets *s, VCur *c, garb_val_t *out)
+{
+    static const char *const kExcluded[] = {"will-change", "none", "all", "auto", NULL};
+    if (vc_keyword(c, kAuto) != NULL) {
+        *out = kw("auto");
+        return vc_done(c);
+    }
+    Layers list = {0};
+    for (;;) {
+        const garb_value_t *t = vc_peek(c);
+        bool bad = t == NULL || t->kind != GARB_IDENT;
+        for (int k = 0; !bad && kExcluded[k] != NULL; k++)
+            bad = ieq(t->text, t->len, kExcluded[k]);
+        for (int k = 0; !bad && kNotCustom[k] != NULL; k++)
+            bad = ieq(t->text, t->len, kNotCustom[k]);
+        garb_val_t one = {0};
+        if (!bad) {
+            one.kind = GARB_V_STRING;
+            one.text = t->text;
+            one.len = t->len;
+            c->i++;
+        }
+        if (bad || !layers_add(s, &list, &one)) {
+            os64_free(list.v);
+            return false;
+        }
+        if (vc_peek(c) == NULL || vc_peek(c)->kind != GARB_COMMA)
+            break;
+        c->i++;
+    }
+    return layers_done(s, &list, out);
+}
+
 static bool layered(const Longhand *l)
 {
     return l->g == G_BG_IMAGE || l->g == G_BG_REPEAT || l->g == G_BG_POS_X ||
-           l->g == G_BG_POS_Y || l->g == G_BG_SIZE || l->g == G_BG_BOX;
+           l->g == G_BG_POS_Y || l->g == G_BG_SIZE || l->g == G_BG_BOX ||
+           l->g == G_ANIM_NAME || l->g == G_DURATION || l->g == G_DELAY ||
+           l->g == G_EASING || l->g == G_ITERATIONS || l->g == G_ANIM_KEYWORD;
 }
 
 static bool longhand(Sets *s, VCur *c, const Longhand *l, garb_val_t *out)
@@ -2493,6 +2677,7 @@ static bool longhand_one(Sets *s, VCur *c, const Longhand *l, garb_val_t *out)
     switch (l->g) {
     case G_KEYWORDS:
     case G_BG_BOX:
+    case G_ANIM_KEYWORD:
         if ((k = vc_keyword(c, l->words)) == NULL)
             return false;
         *out = kw(k);
@@ -2717,6 +2902,17 @@ static bool longhand_one(Sets *s, VCur *c, const Longhand *l, garb_val_t *out)
     case G_TRANSLATE: return individual(s, c, true, out);
     case G_SCALE: return individual(s, c, false, out);
     case G_ROTATE: return rotate(s, c, out);
+    case G_ANIM_NAME: return anim_name(c, out);
+    case G_DURATION:
+        if (vc_keyword(c, kAuto) != NULL) {
+            *out = kw("auto");
+            return true;
+        }
+        return vc_time(c, false, out);
+    case G_DELAY: return vc_time(c, true, out);
+    case G_EASING: return easing(s, c, out);
+    case G_ITERATIONS: return iterations(s, c, out);
+    case G_WILL_CHANGE: return will_change(s, c, out);
     }
     return false;
 }
@@ -2729,7 +2925,7 @@ typedef enum {
     SH_BACKGROUND_POSITION, SH_FONT, SH_LIST_STYLE, SH_TEXT_DECORATION, SH_OVERFLOW, SH_INSET,
     SH_FLEX, SH_FLEX_FLOW, SH_GAP,
     SH_GRID_COLUMN, SH_GRID_ROW, SH_GRID_AREA, SH_PLACE_ITEMS, SH_PLACE_SELF, SH_PLACE_CONTENT,
-    SH_BORDER_RADIUS,
+    SH_BORDER_RADIUS, SH_ANIMATION,
 } Shorthand;
 
 static const struct { const char *name; Shorthand sh; } kShorthands[] = {
@@ -2748,7 +2944,16 @@ static const struct { const char *name; Shorthand sh; } kShorthands[] = {
     {"grid-column", SH_GRID_COLUMN}, {"grid-row", SH_GRID_ROW}, {"grid-area", SH_GRID_AREA},
     {"place-items", SH_PLACE_ITEMS}, {"place-self", SH_PLACE_SELF},
     {"place-content", SH_PLACE_CONTENT}, {"border-radius", SH_BORDER_RADIUS},
+    {"animation", SH_ANIMATION},
 };
+
+// What `animation` sets, in the order libgarb lists the longhands.
+static const garb_prop_t kAnimationProps[] = {
+    GARB_ANIMATION_NAME, GARB_ANIMATION_DURATION, GARB_ANIMATION_TIMING_FUNCTION,
+    GARB_ANIMATION_ITERATION_COUNT, GARB_ANIMATION_DIRECTION, GARB_ANIMATION_PLAY_STATE,
+    GARB_ANIMATION_DELAY, GARB_ANIMATION_FILL_MODE,
+};
+enum { A_NAME, A_DURATION, A_EASING, A_COUNT, A_DIRECTION, A_PLAY, A_DELAY, A_FILL, A_N };
 
 // The longhands a shorthand sets, for a CSS-wide keyword to reach them all.
 static int shorthand_longhands(Shorthand sh, garb_prop_t *out)
@@ -2798,8 +3003,92 @@ static int shorthand_longhands(Shorthand sh, garb_prop_t *out)
     case SH_PLACE_SELF: out[n++] = GARB_ALIGN_SELF; out[n++] = GARB_JUSTIFY_SELF; break;
     case SH_PLACE_CONTENT: out[n++] = GARB_ALIGN_CONTENT; out[n++] = GARB_JUSTIFY_CONTENT; break;
     case SH_BORDER_RADIUS: for (int k = 0; k < 4; k++) out[n++] = (garb_prop_t)(GARB_BORDER_TOP_LEFT_RADIUS + k); break;
+    case SH_ANIMATION: for (int k = 0; k < A_N; k++) out[n++] = kAnimationProps[k]; break;
     }
     return n;
+}
+
+// One animation of `animation` (Animations 1 § 4.9), its parts in any
+// order: the first time is the duration and the second the delay, and a
+// keyword some other longhand takes is that longhand's until it has one —
+// so `ease ease` is eased `ease` and named `ease`, and the name is what no
+// other longhand would take. What it leaves out is the longhand's initial
+// value.
+static bool animation_one(Sets *s, VCur *c, garb_val_t v[A_N])
+{
+    bool have[A_N] = {false};
+    garb_val_t zero = {0};
+    zero.kind = GARB_V_TIME;
+    zero.unit = GARB_U_S;
+    v[A_NAME] = kw("none");
+    v[A_DURATION] = zero;
+    v[A_EASING] = kw("ease");
+    v[A_COUNT] = number_val(1);
+    v[A_DIRECTION] = kw("normal");
+    v[A_PLAY] = kw("running");
+    v[A_DELAY] = zero;
+    v[A_FILL] = kw("none");
+    while (vc_peek(c) != NULL && vc_peek(c)->kind != GARB_COMMA) {
+        garb_val_t one;
+        const char *k;
+        int got = -1;
+        if (vc_time(c, true, &one)) {
+            got = !have[A_DURATION] ? A_DURATION : !have[A_DELAY] ? A_DELAY : -1;
+            if (got == A_DURATION && one.number < 0)
+                return false;
+        } else if (!have[A_EASING] && easing(s, c, &one)) {
+            got = A_EASING;
+        } else if (!have[A_COUNT] && iterations(s, c, &one)) {
+            got = A_COUNT;
+        } else if (!have[A_DIRECTION] && (k = vc_keyword(c, kDirection)) != NULL) {
+            got = A_DIRECTION;
+            one = kw(k);
+        } else if (!have[A_FILL] && (k = vc_keyword(c, kFillMode)) != NULL) {
+            got = A_FILL;
+            one = kw(k);
+        } else if (!have[A_PLAY] && (k = vc_keyword(c, kPlayState)) != NULL) {
+            got = A_PLAY;
+            one = kw(k);
+        } else if (!have[A_NAME] && anim_name(c, &one)) {
+            got = A_NAME;
+        }
+        if (got < 0 || have[got])
+            return false;
+        have[got] = true;
+        v[got] = one;
+    }
+    for (int k = 0; k < A_N; k++)
+        if (have[k])
+            return true;
+    return false;                       // an animation is at least one part
+}
+
+static bool animation(Sets *s, VCur *c)
+{
+    Layers lists[A_N];
+    os64_memset(lists, 0, sizeof(lists));
+    bool ok = true;
+    for (;;) {
+        garb_val_t v[A_N];
+        ok = animation_one(s, c, v);
+        for (int k = 0; ok && k < A_N; k++)
+            ok = layers_add(s, &lists[k], &v[k]);
+        if (!ok || vc_peek(c) == NULL)
+            break;
+        c->i++;                         // the comma
+        if (vc_peek(c) == NULL)
+            ok = false;                 // a list may not end in one
+    }
+    for (int k = 0; k < A_N; k++) {
+        garb_val_t list;
+        if (ok && layers_done(s, &lists[k], &list))
+            set(s, kAnimationProps[k], &list);
+        else
+            ok = false;
+        os64_free(lists[k].v);
+        lists[k] = (Layers){0};
+    }
+    return ok;
 }
 
 // Up to `max` grid lines split by slashes (Grid 2 § 8.4): what each one
@@ -2893,6 +3182,7 @@ static bool shorthand(Sets *s, VCur *c, Shorthand sh)
     case SH_BORDER_STYLE: return box4(s, c, GARB_BORDER_TOP_STYLE, bstyle_one);
     case SH_BORDER_COLOR: return box4(s, c, GARB_BORDER_TOP_COLOR, bcolor_one);
     case SH_BACKGROUND: return background(s, c);
+    case SH_ANIMATION: return animation(s, c);
     case SH_BACKGROUND_POSITION: {
         // A position per layer, each split into its two longhands' lists.
         Layers xs = {0}, ys = {0};
@@ -3018,26 +3308,56 @@ static bool shorthand(Sets *s, VCur *c, Shorthand sh)
 
 // The Compatibility Standard's legacy name aliases (§ 3.4.1) that are read:
 // a prefixed name every engine reads as its standard twin is no one
-// engine's dialect, so it is the twin.
+// engine's dialect, so it is the twin — a longhand's or a shorthand's.
 static const struct {
-    const char *name;
-    garb_prop_t prop;
+    const char *name, *twin;
 } kAliases[] = {
-    {"-webkit-background-clip", GARB_BACKGROUND_CLIP},
+    {"-webkit-background-clip", "background-clip"},
+    {"-webkit-transform", "transform"},
+    {"-webkit-transform-origin", "transform-origin"},
+    {"-webkit-animation", "animation"},
+    {"-webkit-animation-name", "animation-name"},
+    {"-webkit-animation-duration", "animation-duration"},
+    {"-webkit-animation-timing-function", "animation-timing-function"},
+    {"-webkit-animation-iteration-count", "animation-iteration-count"},
+    {"-webkit-animation-direction", "animation-direction"},
+    {"-webkit-animation-play-state", "animation-play-state"},
+    {"-webkit-animation-delay", "animation-delay"},
+    {"-webkit-animation-fill-mode", "animation-fill-mode"},
 };
+
+// The name a declaration's name stands for: its twin's when it is an
+// alias, else itself.
+static void unalias(const char **name, size_t *len)
+{
+    for (size_t k = 0; k < sizeof(kAliases) / sizeof(kAliases[0]); k++)
+        if (ieq(*name, *len, kAliases[k].name)) {
+            *name = kAliases[k].twin;
+            *len = os64_strlen(kAliases[k].twin);
+            return;
+        }
+}
 
 // The longhand a declaration's name names, by its own name or an alias;
 // NULL for none.
 static const Longhand *longhand_named(const char *name, size_t len)
 {
-    garb_prop_t prop = GARB_NPROPS;
-    for (size_t k = 0; k < sizeof(kAliases) / sizeof(kAliases[0]); k++)
-        if (ieq(name, len, kAliases[k].name))
-            prop = kAliases[k].prop;
+    unalias(&name, &len);
     for (size_t k = 0; k < sizeof(kLonghands) / sizeof(kLonghands[0]); k++)
-        if (kLonghands[k].prop == prop || ieq(name, len, kProps[kLonghands[k].prop].name))
+        if (ieq(name, len, kProps[kLonghands[k].prop].name))
             return &kLonghands[k];
     return NULL;
+}
+
+// The shorthand a declaration's name names, by its own name or an alias;
+// -1 for none.
+static int shorthand_named(const char *name, size_t len)
+{
+    unalias(&name, &len);
+    for (size_t k = 0; k < sizeof(kShorthands) / sizeof(kShorthands[0]); k++)
+        if (ieq(name, len, kShorthands[k].name))
+            return (int)kShorthands[k].sh;
+    return -1;
 }
 
 int32_t prop_longhands(const char *name, size_t len, garb_prop_t *out)
@@ -3047,10 +3367,8 @@ int32_t prop_longhands(const char *name, size_t len, garb_prop_t *out)
         out[0] = l->prop;
         return 1;
     }
-    for (size_t k = 0; k < sizeof(kShorthands) / sizeof(kShorthands[0]); k++)
-        if (ieq(name, len, kShorthands[k].name))
-            return shorthand_longhands(kShorthands[k].sh, out);
-    return 0;
+    int sh = shorthand_named(name, len);
+    return sh >= 0 ? shorthand_longhands((Shorthand)sh, out) : 0;
 }
 
 // ── Declarations ────────────────────────────────────────────────────────
@@ -3086,10 +3404,7 @@ int32_t garb_read_declaration(garb_parsed_t *owner, const garb_decl_t *decl, boo
     Sets s = {out, 0, {owner->arena, false}, quirks};
     VCur c = {decl->value, decl->nvalue, 0};
     const Longhand *l = longhand_named(decl->name, decl->len);
-    int sh = -1;
-    for (size_t k = 0; k < sizeof(kShorthands) / sizeof(kShorthands[0]) && l == NULL && sh < 0; k++)
-        if (ieq(decl->name, decl->len, kShorthands[k].name))
-            sh = (int)kShorthands[k].sh;
+    int sh = l == NULL ? shorthand_named(decl->name, decl->len) : -1;
     if (l == NULL && sh < 0)
         return 0;
     if (garb_decl_has_var(decl))
@@ -3189,7 +3504,7 @@ static void num(Out *o, double v)
 
 static const char *const kUnitNames[] = {"px", "em", "rem", "ex", "ch", "vw", "vh", "vmin",
                                          "vmax", "pt", "pc", "cm", "mm", "in", "q", "fr",
-                                         "deg", "grad", "rad", "turn"};
+                                         "deg", "grad", "rad", "turn", "s", "ms"};
 
 static void val(Out *o, const garb_val_t *v);
 
@@ -3264,7 +3579,8 @@ static void val(Out *o, const garb_val_t *v)
     case GARB_V_KEYWORD:
     case GARB_V_WIDE: put(o, v->keyword); break;
     case GARB_V_LENGTH:
-    case GARB_V_ANGLE: num(o, v->number); put(o, kUnitNames[v->unit]); break;
+    case GARB_V_ANGLE:
+    case GARB_V_TIME: num(o, v->number); put(o, kUnitNames[v->unit]); break;
     case GARB_V_PERCENTAGE: num(o, v->number); put(o, "%"); break;
     case GARB_V_NUMBER: num(o, v->number); break;
     case GARB_V_COLOR:

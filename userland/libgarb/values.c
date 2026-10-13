@@ -171,6 +171,24 @@ bool vc_angle(VCur *c, bool zero, garb_val_t *out)
     return false;
 }
 
+bool vc_time(VCur *c, bool negative, garb_val_t *out)
+{
+    const garb_value_t *t = vc_peek(c);
+    if (t == NULL || t->kind != GARB_DIMENSION || (!negative && t->number < 0))
+        return false;
+    os64_memset(out, 0, sizeof(*out));
+    out->kind = GARB_V_TIME;
+    if (ieq(t->unit, t->unit_len, "s"))
+        out->unit = GARB_U_S;
+    else if (ieq(t->unit, t->unit_len, "ms"))
+        out->unit = GARB_U_MS;
+    else
+        return false;
+    out->number = t->number;
+    c->i++;
+    return true;
+}
+
 // ── calc() (Values 3 § 8, Values 4 § 10) ────────────────────────────────
 
 typedef struct {

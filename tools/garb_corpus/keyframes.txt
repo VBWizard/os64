@@ -1,0 +1,154 @@
+# @keyframes (Animations 1 § 3, Animations 2 § 3.2, Compat § 3.1), worked
+# by hand: each PAGE laid before a VIEWPORT; WANT is, for every element
+# whose winners name animations, in document order, each name and the
+# keyframes garb_keyframes answers for it — `  OFFSET% [EASING]: prop:
+# value; ...` — or `(no rule)`, ending (end).
+
+# Offsets sorted; from and to are 0% and 100%; one block's two offsets are
+# two keyframes; the implicit keyframes are not libgarb's.
+VIEWPORT 800x600
+PAGE
+<!doctype html><style>
+@keyframes fade { to { opacity: 1 } 50%, 75% { opacity: 0.5 } from { opacity: 0 } }
+p { animation: fade 1s }
+</style>
+<p>x
+WANT
+p: fade
+  0%: opacity: 0
+  50%: opacity: 0.5
+  75%: opacity: 0.5
+  100%: opacity: 1
+(end)
+END
+
+# The last rule of a name wins whole, whatever sheet or @media that holds
+# it is in; one in an @media that does not hold is not kept. An identifier
+# and a string are one name; case is not folded. A name no rule has.
+VIEWPORT 800x600
+PAGE
+<!doctype html><style>
+@keyframes a { from { color: red } to { color: blue } }
+@keyframes "a" { to { opacity: 0 } }
+@media (max-width: 10px) { @keyframes a { to { opacity: 1 } } }
+@keyframes A { to { color: green } }
+p { animation-name: a, A, missing }
+</style>
+<p>x
+WANT
+p: a
+  100%: opacity: 0
+p: A
+  100%: color: rgb(0, 128, 0)
+p: missing
+  (no rule)
+(end)
+END
+
+# The last of a name wins with other names between, and from a later
+# sheet.
+VIEWPORT 800x600
+PAGE
+<!doctype html><style>
+@keyframes a { to { opacity: 0.1 } }
+@keyframes b { to { opacity: 0.2 } }
+@keyframes a { to { opacity: 0.3 } }
+@keyframes b { to { opacity: 0.4 } }
+</style><style>
+@keyframes c { to { opacity: 0.5 } }
+@keyframes a { to { opacity: 0.6 } }
+p { animation-name: a, b, c }
+</style>
+<p>x
+WANT
+p: a
+  100%: opacity: 0.6
+p: b
+  100%: opacity: 0.4
+p: c
+  100%: opacity: 0.5
+(end)
+END
+
+# The prefixed rule is the rule; the prefixed property is the property,
+# inside a keyframe too.
+VIEWPORT 800x600
+PAGE
+<!doctype html><style>
+@-webkit-keyframes spin { from { -webkit-transform: rotate(0deg) } to { -webkit-transform: rotate(360deg) } }
+p { -webkit-animation: spin 1s linear infinite }
+</style>
+<p>x
+WANT
+p: spin
+  0%: transform: rotate(0deg)
+  100%: transform: rotate(360deg)
+(end)
+END
+
+# Blocks at one offset with one easing are one keyframe, the last
+# declaration of a property winning; a block that gives its own easing is
+# another keyframe at that offset. `!important`, the animation properties
+# and the custom properties are not kept; the timing function is the
+# keyframe's easing, its first item, and the last one of a block counts.
+VIEWPORT 800x600
+PAGE
+<!doctype html><style>
+@keyframes k {
+  50% { opacity: 0.2; color: red }
+  50% { opacity: 0.4; margin-top: 1px !important }
+  50% { animation-timing-function: steps(2, start), linear; animation-timing-function: ease-in; opacity: 0.9; animation-duration: 5s; --x: 1 }
+  to { opacity: 1; animation: other 1s }
+}
+p { animation-name: k }
+</style>
+<p>x
+WANT
+p: k
+  50%: color: rgb(255, 0, 0); opacity: 0.4
+  50% ease-in: opacity: 0.9
+  100%: opacity: 1
+(end)
+END
+
+# A selector that is not from, to or a percentage in [0%, 100%] drops its
+# block; the rest stand.
+VIEWPORT 800x600
+PAGE
+<!doctype html><style>
+@keyframes s { 0% { opacity: 0 } 101% { opacity: 0.1 } 0 { opacity: 0.2 } 50%, x { opacity: 0.3 } 20%, { opacity: 0.4 } 100% { opacity: 1 } }
+@keyframes none { to { opacity: 0 } }
+@keyframes initial { to { opacity: 0 } }
+@keyframes "none" { to { opacity: 0.5 } }
+p { animation-name: s, "none" }
+</style>
+<p>x
+WANT
+p: s
+  0%: opacity: 0
+  100%: opacity: 1
+p: none
+  100%: opacity: 0.5
+(end)
+END
+
+# var() in a keyframe is read against the element whose winners name the
+# animation, with its own custom properties; one with none takes the
+# fallback, and one whose var() has neither drops the declaration.
+VIEWPORT 800x600
+PAGE
+<!doctype html><style>
+@keyframes chip { from { margin-left: var(--x, 3px) } to { margin-left: var(--x, 3px); margin-top: var(--y) } }
+.a { --x: 10px; --y: 2px; animation: chip 1s }
+.b { animation: chip 1s }
+</style>
+<p class=a>a<p class=b>b
+WANT
+p: chip
+  0%: margin-left: 10px
+  100%: margin-top: 2px; margin-left: 10px
+p: chip
+  0%: margin-left: 3px
+  100%: margin-left: 3px
+(end)
+END

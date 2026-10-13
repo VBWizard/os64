@@ -5,8 +5,10 @@
 // bar's Settings action: who yonder says it is, picked from the presets or
 // typed; whether page scripts run, and how long one script task may run;
 // whether pictures and sheets stay on disk (CACHE.md), with usage and an
-// Empty button; the default zoom; and dark pages (`appearance = dark`).
-// Apply changes this window; Save as default writes to yonder.conf.
+// Empty button; the default zoom; dark pages (`appearance = dark`); and
+// whether animations run (`animations = off`) and whether pages are told
+// to reduce motion (`motion = reduce`). Apply changes this window; Save as
+// default writes to yonder.conf.
 //
 // The dialog is a window of its own, and yonder's loop waits on its own
 // window alone, so a thread waits on the dialog's and rings `bell` on
@@ -27,13 +29,14 @@
 
 // Opens with the current choices, or focuses the existing dialog.
 // Callbacks receive a validated agent/script policy (the switch and the
-// time limit in seconds) and zoom (thousandths, whole percentages from 25
-// to 500) and dark pages on the window thread.
+// time limit in seconds), zoom (thousandths, whole percentages from 25
+// to 500), dark pages and the animations' switches on the window thread.
 void yonder_settings_open(int64_t parent, uint32_t bell, const char *agent,
                           void (*use)(const char *agent, bool scripts, uint32_t script_seconds),
                           way_cache_t *cache, bool scripts, uint32_t script_seconds, uint32_t zoom,
                           void (*zoom_use)(uint32_t thousandths), bool dark,
-                          void (*dark_use)(bool dark));
+                          void (*dark_use)(bool dark), bool run, bool reduce,
+                          void (*motion_use)(bool run, bool reduce));
 // The bell rang: what arrived at the dialog is handled and painted.
 void yonder_settings_rung(void);
 // Closes the dialog if it is open.
@@ -45,6 +48,11 @@ way_cache_t *yonder_settings_cache_open(void);
 
 // Pages are light unless yonder.conf says `appearance = dark`.
 bool yonder_settings_saved_dark(void);
+// Animations run unless yonder.conf says `animations = off`.
+bool yonder_settings_saved_animations(void);
+// Pages are told to reduce motion only when yonder.conf says
+// `motion = reduce`.
+bool yonder_settings_saved_reduce_motion(void);
 // Scripts default off; only the saved literal on enables them.
 bool yonder_settings_saved_scripts(void);
 // The saved script time limit (`script_seconds = 10`), whole seconds from

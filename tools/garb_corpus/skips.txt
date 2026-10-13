@@ -40,17 +40,32 @@ PAGE
 <!doctype html><style>
 @import url(x.css);
 @font-face { font-family: "Fancy Sans"; src: url(f.woff2) }
-@keyframes spin { to { color: red } }
+@property --spin { syntax: "<angle>"; inherits: false; initial-value: 0deg }
 @media (max-width: 10px) { @container (min-width: 1px) { p { color: red } } }
-@media all { @container (min-width: 1px) { p { color: red } } p { will-change: color } }
+@media all { @container (min-width: 1px) { p { color: red } } p { contain: layout } }
 @supports (display: grid) { p { color: red } }
 </style>
 <p>x
 WANT
 font fancy sans 1
-at-rule keyframes 1
+at-rule property 1
 at-rule container 1
-property will-change 1
+property contain 1
+(end)
+END
+
+# @keyframes and its prefixed alias are kept, not passed over; a keyframe's
+# own declaration of a property this library does not read is counted.
+VIEWPORT 800x600
+PAGE
+<!doctype html><style>
+@keyframes spin { to { color: red; filter: blur(2px) } }
+@-webkit-keyframes spin2 { to { color: red } }
+p { animation: spin 1s; will-change: transform }
+</style>
+<p>x
+WANT
+property filter 1
 (end)
 END
 
@@ -60,7 +75,7 @@ VIEWPORT 800x600
 PAGE
 <!doctype html><style>
 p { -webkit-appearance: none; color: -webkit-fill-available(1); display: none\9 }
-@-webkit-keyframes spin { to { color: red } }
+@-moz-document url-prefix() { p { color: red } }
 </style>
 <p>x
 WANT

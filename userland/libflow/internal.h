@@ -2,6 +2,7 @@
 #define FLOW_INTERNAL_H
 
 #include "flow/flow.h"
+#include "garb/values.h"
 #include "os64/mem.h"
 #include "os64/str.h"
 
@@ -74,11 +75,22 @@ static inline bool f_display_grid(flow_display_t d)
 #define F_GRID_AREA_CELLS 1024
 
 // Whether a style asks for a transform (PILE3.md § Transforms): any of
-// the four properties is not `none`.
+// the four properties is not `none` — or `will-change` names one, or an
+// animation of one is current or in effect, which act as if it were
+// (PILE3.md § Animations): a frame, its matrix the identity at a value of
+// `none`, a stacking context and a containing block, all the same.
 static inline bool f_transforms(const flow_style_t *s)
 {
     return s->transform != NULL || s->translate != NULL || s->rotate != NULL ||
-           s->scale != NULL;
+           s->scale != NULL || ((s->will_change | s->animating) & FLOW_WILL_TRANSFORM);
+}
+
+// Whether its opacity makes a box a stacking context: it is below full
+// opacity, or `will-change` names opacity, or an animation of it is
+// current or in effect (PILE3.md § Animations).
+static inline bool f_opacity_context(const flow_style_t *s)
+{
+    return s->opacity < 1000 || ((s->will_change | s->animating) & FLOW_WILL_OPACITY);
 }
 
 // Whether it is granted: a plain inline's box cannot be transformed
@@ -192,8 +204,98 @@ static inline void f_decoration_inherit(uint8_t *bits, FDecorationColors *colors
     *bits |= up_bits;
 }
 
+// ── Animations (motion.c; PILE3.md § Animations) ────────────────────────
+
+// A set of libgarb's longhands.
+#define F_PROP_WORDS ((GARB_NPROPS + 63) / 64)
+typedef struct {
+    uint64_t w[F_PROP_WORDS];
+} FProps;
+
+static inline bool f_props_has(const FProps *p, garb_prop_t prop)
+{
+    return (p->w[prop / 64] >> (prop % 64)) & 1u;
+}
+
+static inline void f_props_add(FProps *p, garb_prop_t prop)
+{
+    p->w[prop / 64] |= (uint64_t)1 << (prop % 64);
+}
+
+// The timeline's record of one running animation: when it started, and
+// while it is paused, the time it holds (motion.c).
+typedef struct FRecord FRecord;
+
+// One keyframe, computed: its offset; its own easing, or none and the
+// animation's; the element's style with the keyframe's declarations laid
+// over it, every property but those an `!important` winner holds; and the
+// longhands it sets.
+typedef struct {
+    double offset;
+    bool has_easing;
+    flow_easing_t easing;
+    flow_style_t style;
+    FProps sets;
+} FKeyframe;
+
+// One animation whose @keyframes exist: its timing, its record, its
+// keyframes in their used order, and every longhand any of them sets.
+typedef struct {
+    flow_animation_t timing;
+    FRecord *record;
+    FKeyframe *frames;
+    int32_t nframes;
+    FProps props;
+} FAnimation;
+
+// An element's animations: its style with none of them (each property's
+// underlying value, the implicit keyframes'), and those that run, in
+// `animation-name` order — a later one's value replacing an earlier's.
+typedef struct {
+    flow_style_t base;
+    FAnimation *anims;
+    int32_t nanims;
+} FMotion;
+
+// What the lists an animated value makes come from — a transform's, the
+// shadows', a background's positions: NULL when none is left.
+typedef void *(*FAlloc)(void *ctx, size_t bytes);
+
+// The `i`th animation `s` names, its lists coordinated (flow_animation_t).
+int32_t f_animations(const flow_style_t *s);
+flow_animation_t f_animation_at(const flow_style_t *s, int32_t i);
+// Easing 1 § 2's output for the input `x`, the before flag `before`.
+double f_ease(const flow_easing_t *e, double x, bool before);
+// The element's style at time `now` (ms): `out`, which holds the base,
+// with each animated property's value — false when a list found no room,
+// and that property is left as it was.
+bool f_motion_style(const FMotion *m, double now, flow_style_t *out, FAlloc alloc, void *ctx);
+// Of FLOW_WILL_*, what an animation that is current or in effect at `now`
+// animates (Web Animations 1 § 5.6).
+uint8_t f_motion_effects(const FMotion *m, double now);
+// When an animated value next changes after `now` — `now` itself for one
+// moving continuously, INFINITY for none.
+double f_motion_next(const FMotion *m, double now);
+// A layout's dealings with the timeline: it begins, each animated element
+// is matched to its records (Animations 1 § 2) — false on no memory — and
+// it ends, a complete one dropping every record it did not meet.
+void f_timeline_begin(flow_timeline_t *t);
+bool f_timeline_element(flow_timeline_t *t, const os64_html_node_t *n, FMotion *m, double now);
+void f_timeline_end(flow_timeline_t *t, bool complete);
+// How many records the timeline keeps, each holding its element.
+int32_t f_timeline_records(const flow_timeline_t *t);
+// A transform function's matrix, made from its primitive and arguments
+// (flow_transform_t): not for FLOW_FN_BLEND, which waits for the box.
+void f_transform_fn_matrix(flow_transform_t *f);
+// Two matrices interpolated as Transforms 1 § 11 (both 2D) or 2 § 13
+// (else) say: false when either cannot be decomposed, and the pair is
+// discrete.
+bool f_matrix_mix(const double a[16], const double b[16], double t, double out[16]);
+
 typedef struct {
     flow_style_t style;
+    // The element's animations, or NULL for none (motion.c).
+    FMotion *motion;
     // Pass 2's question, answered bottom-up here: does this element make,
     // somewhere inside its inline formatting, an in-flow block-level box?
     // True for an inline with a block child (or an inline child that holds
@@ -229,8 +331,8 @@ typedef struct {
     // nearest transformed one, whose box is its containing block in place
     // of the viewport (Transforms 1 § 3).
     const os64_html_node_t *anchor, *fixed_anchor;
-    // `opacity: 0` on this element or an ancestor: nothing of it is painted
-    // (flow_box_t.unpainted).
+    // `opacity: 0` on this element or an ancestor whose opacity is not
+    // animated: nothing of it is painted (flow_box_t.unpainted).
     bool transparent;
     // Its in-flow children are flex or grid items: it is a flex or grid
     // container, or it makes no box (`display: contents`) inside one. Pass
@@ -249,6 +351,9 @@ typedef struct {
     FArena arena;
     FMap map;               // element node -> FStyled
     size_t lists_left;      // of F_STYLE_LISTS_BUDGET
+    // The elements an animation runs on, in document order (FStyled.motion).
+    const os64_html_node_t **animated;
+    int32_t nanimated, cap_animated;
 } FStyles;
 
 // ALL OR NOTHING: NULL when memory runs out anywhere. A style is a few

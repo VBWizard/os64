@@ -3120,6 +3120,17 @@ static void ui_test_settings_envelope(void)
     CHECK(d.root.bounds.w==760 && d.root.bounds_staged.w==800);
     d.ctx.surf.height=80;CHECK(!arrange(&d,false));
     CHECK(d.root.bounds.w==760 && d.root.bounds.h==420);
+    /* What ready() grows the window to is what arrange needs: a body one
+     * row too tall for the window is refused, a pixel short of the height
+     * still is, and the height itself is not. */
+    d.ctx.surf.height=420;
+    int64_t need=height_needed(&d);
+    CHECK(need>0 && need<=420);
+    d.body_rows+=(unsigned)((420-need)/os64_ui_control_min_height(&d.ui))+1;
+    need=height_needed(&d);
+    CHECK(need>420 && !arrange(&d,false));
+    d.ctx.surf.height=(uint32_t)need-1;CHECK(!arrange(&d,false));
+    d.ctx.surf.height=(uint32_t)need;CHECK(arrange(&d,false));
     CHECK(os64_ui_font_release(&d.ui)==OS64_FONT_OK);
     current="";
 }

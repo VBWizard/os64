@@ -87,6 +87,23 @@ typedef enum {
     // or the KEYWORD currentcolor. Its name is the prefixed one; there is
     // no other.
     GARB_TEXT_FILL_COLOR,
+    // Animations 1 § 4 (PILE3.md § Animations): each a list, one item per
+    // animation. `animation-name`: the KEYWORD none, or a STRING — the name
+    // as written, whether an identifier or a string, since names are
+    // compared codepoint for codepoint. `-duration`: a TIME, or the KEYWORD
+    // auto (Animations 2), which a clock reads as 0s. `-delay`: a TIME.
+    // `-timing-function`: an easing — the KEYWORD linear, ease, ease-in,
+    // ease-out, ease-in-out, step-start or step-end, or a FUNCTION
+    // cubic-bezier (four NUMBERs) or steps (a NUMBER, then its position
+    // KEYWORD when one is written). `-iteration-count`: the KEYWORD
+    // infinite or a NUMBER. The direction, play state and fill mode: a
+    // KEYWORD.
+    GARB_ANIMATION_NAME, GARB_ANIMATION_DURATION, GARB_ANIMATION_TIMING_FUNCTION,
+    GARB_ANIMATION_ITERATION_COUNT, GARB_ANIMATION_DIRECTION, GARB_ANIMATION_PLAY_STATE,
+    GARB_ANIMATION_DELAY, GARB_ANIMATION_FILL_MODE,
+    // Will Change 1 § 2: the KEYWORD auto, or what it names, each a STRING
+    // in lowercase (a list, as the animations' are).
+    GARB_WILL_CHANGE,
     GARB_NPROPS
 } garb_prop_t;
 
@@ -104,7 +121,7 @@ typedef enum {
     GARB_V_NUMBER,
     GARB_V_COLOR,
     GARB_V_URL,             // `text`, as written: resolved against the SHEET by whoever fetches
-    GARB_V_STRING,          // `text`: a family name, a list marker
+    GARB_V_STRING,          // `text`: a family name, a list marker, an animation's name
     GARB_V_CALC,            // `calc`: a length-percentage (or number) to work out at compute time
     // An image named by its function (`text`). A linear or radial gradient
     // carries itself in `items` (comma): items[0] its geometry, then its
@@ -128,9 +145,11 @@ typedef enum {
     // first is its count (a NUMBER, or the KEYWORD auto-fill or auto-fit)
     // and its second the TRACKS repeated.
     GARB_V_FUNCTION,
-    // A background longhand written for more than one layer (Backgrounds 3
-    // § 3.1): one value per layer in `items`, the top layer first. A list
-    // of one is that one value, never this.
+    // A comma-separated list of two or more: a background longhand's
+    // layers (Backgrounds 3 § 3.1), the top layer first, or an animation
+    // longhand's animations in the order `animation-name` lists them —
+    // one value per item in `items`. A list of one is that one value,
+    // never this.
     GARB_V_LAYERS,
     // `number` in `unit`, one of the angle units (Values 4 § 7.1). Where a
     // grammar takes a unitless 0 for an angle it is read as 0deg.
@@ -140,6 +159,8 @@ typedef enum {
     // in lowercase and whose items are its arguments — LENGTH, PERCENTAGE,
     // NUMBER, CALC, ANGLE, or perspective()'s KEYWORD none.
     GARB_V_FUNCTIONS,
+    // `number` in `unit`, GARB_U_S or GARB_U_MS (Values 4 § 7.3).
+    GARB_V_TIME,
 } garb_vkind_t;
 
 typedef enum {
@@ -150,6 +171,8 @@ typedef enum {
     GARB_U_FR,
     // An ANGLE's: no length accepts them.
     GARB_U_DEG, GARB_U_GRAD, GARB_U_RAD, GARB_U_TURN,
+    // A TIME's.
+    GARB_U_S, GARB_U_MS,
 } garb_unit_t;
 
 // sRGB, channels 0..255 kept as written (Color 4 serializes 209.525 as
@@ -165,8 +188,8 @@ typedef struct garb_calc garb_calc_t;
 typedef struct garb_val {
     garb_vkind_t kind;
     const char *keyword;    // KEYWORD, WIDE
-    double number;          // LENGTH, PERCENTAGE, NUMBER, ANGLE
-    garb_unit_t unit;       // LENGTH, ANGLE
+    double number;          // LENGTH, PERCENTAGE, NUMBER, ANGLE, TIME
+    garb_unit_t unit;       // LENGTH, ANGLE, TIME
     garb_color_t color;     // COLOR
     const char *text;       // URL, STRING (a grid area's or line's name too), IMAGE
     size_t len;

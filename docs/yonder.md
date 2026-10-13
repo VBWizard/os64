@@ -105,6 +105,16 @@ Click the Settings icon in the title bar.
 - **Keep pictures and style sheets, up to [256] MB**: the cache, and how
   big it may grow.
 - **Empty the cache**: removes everything the cache holds, at once.
+- **Zoom every page to [100] %**: the zoom a page starts at, and where
+  Ctrl+0 goes back to.
+- **Dark pages**: pages with a dark design of their own use it, and the
+  rest are darkened.
+- **Run page scripts**, and the **Script time limit** beside it: whether
+  a page's JavaScript runs, and how long one piece of it may run.
+- **Run animations**: whether a page's CSS animations move. Turn it off if
+  one makes a page too slow.
+- **Reduce motion**: tells pages you would rather see less movement; many
+  turn their animations off when told.
 - **Apply** changes this window from the next page on. **Save as default**
   also writes the settings to `yonder.conf`, where every new yonder reads
   them.
@@ -149,9 +159,17 @@ cache_dir = /var/cache/yonder
 | `cache` | `on` or `off` | `on` |
 | `cache_mb` | how many megabytes the cache may hold, 1 to 65536 | 256 |
 | `cache_dir` | where the cache lives, an absolute path | `/var/cache/yonder` |
+| `zoom` | the zoom every page starts at, a whole percent from 25 to 500 | 100 |
+| `appearance` | `dark` or `light` pages | `light` |
+| `scripts` | `on` or `off`: whether a page's JavaScript runs | `off` |
+| `script_seconds` | how long one piece of a page's JavaScript may run, 1 to 60 seconds | 5 |
+| `animations` | `on` or `off`: whether a page's CSS animations move | `on` |
+| `motion` | `reduce` or `no-preference`: what pages are told about movement | `no-preference` |
+| `diagnostics` | a directory to write a file about each page into, an absolute path | none |
 
-A value yonder cannot use is ignored and the default used; a bad `agent` or
-`cache_mb` also says so in the log.
+A value yonder cannot use is ignored and the default used; a bad `agent`,
+`cache_mb`, `zoom`, `script_seconds` or `diagnostics` also says so in the
+log.
 
 ## Fonts
 

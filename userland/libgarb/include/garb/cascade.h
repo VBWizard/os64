@@ -24,6 +24,10 @@ typedef struct {
     // The person's colour scheme: what `prefers-color-scheme` answers,
     // `dark` when true and `light` when false.
     bool dark;
+    // Whether the person asked for less motion: what
+    // `prefers-reduced-motion` answers, `reduce` when true and
+    // `no-preference` when false.
+    bool reduced_motion;
 } garb_env_t;
 
 // An `@import` (Cascade 4 § 2.1): the address as written — resolved
@@ -77,6 +81,10 @@ typedef struct {
     // it was written in, or -1 for the element's `style` attribute: what a
     // relative url() in it is resolved against (CSS Values 4 § 4.5.1).
     const int32_t *sheet;
+    // For each winner, whether it was `!important`: an animated value
+    // overrides a normal declaration and never an important one (Cascade
+    // 5's order of origins).
+    const bool *important;
     int32_t n;
 } garb_style_t;
 
@@ -91,6 +99,32 @@ bool garb_cascade_incomplete(const garb_cascade_t *c);
 garb_env_t garb_cascade_env(const garb_cascade_t *c);
 // `element`'s winners; an element no author rule reached has none.
 garb_style_t garb_style_for(const garb_cascade_t *c, const os64_html_node_t *element);
+
+// One keyframe of an animation (Animations 2 § 3.2): its offset in [0, 1];
+// its easing — the keyframe's own `animation-timing-function`, or NULL for
+// the element's; and the longhands it sets, read as winners are read. Of
+// several declarations of one longhand in a keyframe, the last is the one
+// kept; `!important` ones and the `animation-*` longhands are not kept.
+typedef struct {
+    double offset;
+    const garb_val_t *easing;
+    const garb_set_t *sets;
+    int32_t nsets;
+} garb_keyframe_t;
+
+// The keyframes `name` names (`len` bytes, compared codepoint for
+// codepoint) for `element`, in their used order — by offset, and blocks at
+// one offset with one easing grouped, in the order each group was first
+// written; the implicit 0% and 100% keyframes are the caller's to add.
+// They come from the last `@keyframes` (or `@-webkit-keyframes`, Compat
+// § 3.1) of that name in cascade order inside the `@media` and `@supports`
+// that hold. A keyframe's var() is replaced against the element's custom
+// properties when its own winners name the animation, and the declaration
+// dropped otherwise. Answers how many and points `out` at them, which live
+// as long as the cascade; -1 when no rule has that name, and the animation
+// starts nothing.
+int32_t garb_keyframes(const garb_cascade_t *c, const os64_html_node_t *element,
+                       const char *name, size_t len, const garb_keyframe_t **out);
 void garb_cascade_free(garb_cascade_t *c);
 
 // What the build passed over because this library does not read it — a

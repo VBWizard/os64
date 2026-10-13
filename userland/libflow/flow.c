@@ -74,6 +74,9 @@ struct flow_tree {
     flow_frame_t **scrollers;
     int32_t nscrollers, cap_scrollers;
     bool incomplete;
+    // The time the page was laid out at (flow_env_t.now_ms): what its
+    // animated values are, and what flow_motion_due counts from.
+    uint64_t now_ms;
 };
 
 typedef struct {
@@ -574,10 +577,47 @@ static void mat_translate(Wide m[16], double x, double y, double z)
             m[12 + k] = wide_add(m[12 + k], wide_mul(m[i * 4 + k], v[i]));
 }
 
+// A tail of an animation's mix (FLOW_FN_BLEND) multiplied out, each
+// function T(x, y) · its matrix, the translations' percentages of the box
+// `w` by `h`: in doubles, the arithmetic of the mix it goes into
+// (f_matrix_mix).
+static void tail_matrix(const flow_transform_t *f, int32_t n, int64_t w, int64_t h,
+                        double out[16])
+{
+    os64_memset(out, 0, 16 * sizeof(double));
+    out[0] = out[5] = out[10] = out[15] = 1;
+    for (int32_t i = 0; i < n; i++) {
+        double one[16], r[16];
+        os64_memcpy(one, f[i].m, sizeof(one));
+        double tx = (double)f_len(f[i].x, w), ty = (double)f_len(f[i].y, h);
+        for (int k = 0; k < 4; k++)
+            one[12 + k] += tx * one[k] + ty * one[4 + k];
+        for (int c = 0; c < 4; c++)
+            for (int k = 0; k < 4; k++) {
+                double s = 0;
+                for (int j = 0; j < 4; j++)
+                    s += out[j * 4 + k] * one[c * 4 + j];
+                r[c * 4 + k] = s;
+            }
+        os64_memcpy(out, r, sizeof(r));
+    }
+}
+
 // m · T(the function's x, y) · its matrix, a percentage of the border box
-// `w` by `h`.
+// `w` by `h` — or, for an animation's mix of two tails, the two multiplied
+// out and mixed, the first or the second where they cannot be (Transforms
+// 1 § 11).
 static void mat_fn(Wide m[16], const flow_transform_t *f, int64_t w, int64_t h)
 {
+    if (f->fn == FLOW_FN_BLEND && f->blend != NULL) {
+        double a[16], b[16], mix[16];
+        tail_matrix(f->blend->from, f->blend->nfrom, w, h, a);
+        tail_matrix(f->blend->to, f->blend->nto, w, h, b);
+        if (!f_matrix_mix(a, b, f->blend->t, mix))
+            os64_memcpy(mix, f->blend->t < 0.5 ? a : b, sizeof(mix));
+        mat_mul(m, m, mix);
+        return;
+    }
     mat_translate(m, (double)f_len(f->x, w), (double)f_len(f->y, h), 0);
     mat_mul(m, m, f->m);
 }
@@ -668,7 +708,7 @@ static const flow_frame_t *transform_new(Build *bd, const flow_style_t *s, int64
     // w row (0, 0, 0, 1), and so does their product, its 0s to the bit. A
     // TRANSLATION besides when what it does to x and y, w divided out, is
     // exactly the identity — every turn by whole quarters, rotate(0),
-    // scale(1) and skew(0) are exact (style.c's quarters), so nothing is
+    // scale(1) and skew(0) are exact (motion.c's quarters), so nothing is
     // taken for one that is not: a deliberate 9e-10 shear is drawn.
     bool flat = m[3] == 0 && m[7] == 0 && m[15] > 0 && isfinite(m[15]);
     bool moves = flat && m[0] / m[15] == 1 && m[5] / m[15] == 1 && m[1] == 0 && m[4] == 0;
@@ -1224,12 +1264,13 @@ static flow_box_t *public_box(Build *bd, const FBox *src, flow_box_t *parent, fl
     if (src->positioned &&
         !push_list(bd, &bd->t->positioned, &bd->t->npositioned, &bd->t->cap_positioned, b))
         return b;
-    // Below full opacity, a box its block-level parent's walks would reach
-    // is a stacking context of its own, painted whole; and so is one
-    // transformed. The root is the first context already, and an
-    // inline-block's content is painted where its atom is.
+    // Below full opacity (f_opacity_context), a box its block-level
+    // parent's walks would reach is a stacking context of its own, painted
+    // whole; and so is one transformed. The root is the first context
+    // already, and an inline-block's content is painted where its atom is.
     b->stacked = src->positioned || (parent != NULL && own_transform(src, b)) ||
-                 (src->style->opacity < 1000 && parent != NULL && parent->kind <= FLOW_BOX_CELL);
+                 (f_opacity_context(src->style) && parent != NULL &&
+                  parent->kind <= FLOW_BOX_CELL);
     if (b->stacked &&
         !push_list(bd, &bd->t->stacked, &bd->t->nstacked, &bd->t->cap_stacked, b))
         return b;
@@ -1374,7 +1415,7 @@ static bool makes_context(const flow_box_t *b)
 {
     const flow_style_t *s = b->style;
     return s->has_z_index || s->position == FLOW_POSITION_FIXED ||
-           s->position == FLOW_POSITION_STICKY || s->opacity < 1000 ||
+           s->position == FLOW_POSITION_STICKY || f_opacity_context(s) ||
            (b->frame != NULL && b->frame->box == b && b->frame->kind == F_FRAME_TRANSFORM);
 }
 
@@ -1392,10 +1433,13 @@ static bool own_through(const flow_box_t *b)
 }
 
 // Composited whole: below full opacity, or drawn through its matrix, and
-// painted at all.
+// painted at all — and for the life of an animation of its opacity or its
+// transform, whatever their values, so a frame that fades or turns it is
+// painted as one (PILE3.md § Animations).
 static bool is_group(const flow_box_t *b)
 {
-    return (b->style->opacity < 1000 || own_through(b)) && !b->unpainted;
+    return (b->style->opacity < 1000 || own_through(b) || b->style->animating != 0) &&
+           !b->unpainted;
 }
 
 typedef struct {
@@ -1551,6 +1595,10 @@ flow_tree_t *flow_layout(const os64_html_document_t *doc, const os64_page_t *mod
     // fragment, so the budgeted arenas already bound them: no cap of their
     // own, which would turn a page the budget cut short into no page.
     tree->arena.cap = SIZE_MAX;
+    tree->now_ms = env->now_ms;
+    // A layout is a style change event for the page's animations: it meets
+    // the ones it styles, and a complete one drops the rest (motion.c).
+    f_timeline_begin(env->timeline);
     tree->styles = f_style_build(doc, model, env);
     tree->boxes = tree->styles != NULL ? f_boxes_build(doc, model, tree->styles, env) : NULL;
     tree->layout = tree->boxes != NULL ? f_layout(tree->boxes, doc, model, env, width) : NULL;
@@ -1579,7 +1627,37 @@ flow_tree_t *flow_layout(const os64_html_document_t *doc, const os64_page_t *mod
         sticky_reach_scrolled(tree);
         ink_reach(tree->root);
     }
+    f_timeline_end(env->timeline, !tree->incomplete);
     return tree;
+}
+
+static bool meets(os64_gui_rect_t a, os64_gui_rect_t b);
+
+uint64_t flow_motion_due(const flow_tree_t *tree, os64_gui_rect_t view, flow_point_t scroll)
+{
+    if (tree == NULL || tree->styles == NULL)
+        return FLOW_NEVER;
+    double now = (double)tree->now_ms, next = INFINITY;
+    for (int32_t i = 0; i < tree->styles->nanimated && next > now; i++) {
+        const os64_html_node_t *n = tree->styles->animated[i];
+        const FStyled *st = f_style_of(tree->styles, n);
+        const flow_box_t *b = f_map_get(&tree->first, n);
+        if (st == NULL || st->motion == NULL || b == NULL)
+            continue;
+        // Seen: its box where it is drawn, or its overflow where its own
+        // frame leaves it — whichever reaches the view.
+        flow_point_t o = flow_box_doc_offset(b, scroll);
+        if (!meets(flow_box_doc_rect(b, scroll), view) &&
+            !meets(moved(b->overflow, o.x, o.y), view))
+            continue;
+        next = fmin(next, f_motion_next(st->motion, now));
+    }
+    if (!(next < INFINITY))
+        return FLOW_NEVER;
+    if (next <= now)
+        return tree->now_ms;
+    double up = ceil(next);
+    return up >= (double)UINT64_MAX ? FLOW_NEVER : (uint64_t)up;
 }
 
 bool flow_incomplete(const flow_tree_t *tree)

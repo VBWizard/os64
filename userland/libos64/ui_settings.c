@@ -8,13 +8,20 @@ static void place(os64_ui_widget_t *w,os64_gui_rect_t r,bool staged)
 {
     if(staged)os64_ui_widget_stage_bounds(w,r);else w->bounds=r;
 }
+// The height the body's rows, the status and the actions take at the row
+// the theme and the font make, with the margins around them.
+static int64_t height_needed(os64_ui_settings_t *d)
+{
+    int32_t row=os64_ui_control_min_height(&d->ui),pad=d->ui.theme.pad+8;
+    return (int64_t)row*(d->body_rows+2)+4*pad;
+}
 static bool arrange(os64_ui_settings_t *d,bool staged)
 {
     os64_ui_t *ui=&d->ui;
     int32_t row=os64_ui_control_min_height(ui),pad=ui->theme.pad+8;
     int32_t w=(int32_t)d->ctx.surf.width,h=(int32_t)d->ctx.surf.height;
     int32_t bw=(w-4*pad)/3;
-    if(row*(int32_t)(d->body_rows+2)+4*pad>h || bw<1)return false;
+    if(height_needed(d)>h || bw<1)return false;
     for(unsigned i=0;i<3;++i){
         int32_t width;
         const char *text=d->actions[i].text;
@@ -54,8 +61,9 @@ bool os64_ui_settings_open(os64_ui_settings_t *d,int64_t parent,const char *titl
     os64_gui_window_state_t state;
     int32_t x=180,y=160;
     if(!os64_gui_window_get_state(parent,&state)){x=state.x+40;y=state.y+50;}
-    // Tall enough for the body's rows, the status and the actions at a row
-    // of 30 px, room left for a larger font; never shorter than 420.
+    // A first guess at the body's rows, the status and the actions, at a
+    // row of 30 px and never shorter than 420; ready() grows it to the row
+    // the theme and the font make.
     int32_t height=(int32_t)(rows+2)*30+90;
     if(height<420)height=420;
     d->window=os64_gui_window_create_content(title,x,y,760,height,OS64_GUI_CREATE_FIT_SCREEN);
@@ -78,6 +86,12 @@ bool os64_ui_settings_open(os64_ui_settings_t *d,int64_t parent,const char *titl
 void os64_ui_settings_ready(os64_ui_settings_t *d)
 {
     if(d->window<=0)return;
+    // Taller than the guess (a theme's padding, a larger face), the window
+    // grows to hold every row: a resizable window's canvas is the screen's.
+    int64_t need=height_needed(d);
+    if(need>(int64_t)d->ctx.surf.height && need<=UINT32_MAX &&
+        os64_gui_window_set_min_size(d->window,d->ctx.surf.width,(uint32_t)need)==0)
+        (void)os64_draw_ctx_refresh(&d->ctx);
     (void)arrange(d,false);
     (void)os64_ui_font_follow(&d->ui);
     // Pin the initial usable content envelope; fonts that cannot fit a live
