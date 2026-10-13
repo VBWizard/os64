@@ -297,6 +297,13 @@ static void paint_cases(void)
                     "fill 0 0 200 100 #fefefe\n"
                     "fill 5 10 20 5 #ff0000\n"
                     "fill 20 5 5 5 #ff0000\n");
+    // A shadow its negative spread collapses — -10px off a 10px-tall box —
+    // has no shape, so nothing of it is drawn, blur and offset and all.
+    paint_page_case("a shadow its spread collapses paints nothing",
+                    "<!doctype html><style>body { margin: 0 } div { width: 20px; height: 10px;"
+                    " box-shadow: 30px 0 20px -10px #ff0000 }</style><div></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n");
     // A text's shadow is the run again in the shadow's colour, moved by its
     // offset, painted under it.
     paint_page_case("a text shadow is the run again, under it",

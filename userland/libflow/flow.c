@@ -845,35 +845,26 @@ static void reach_stacked(flow_tree_t *t)
 
 int32_t flow_shadow_blur_reach(int32_t blur)
 {
-    int64_t r = 3 * (int64_t)(blur > 0 ? blur / 2 : 0) + 1;
+    int64_t r = 3 * (int64_t)(blur > 0 ? blur / 2 : 0);
     return (int32_t)(r < INT32_MAX ? r : INT32_MAX);
 }
 
-bool flow_radii_rounded(const int32_t radii[4][2])
+bool flow_shadow_casts(const flow_box_t *box, const flow_shadow_t *sh)
 {
-    for (int c = 0; c < 4; c++)
-        if (radii[c][0] > 0 && radii[c][1] > 0)
-            return true;
-    return false;
+    return (int64_t)box->rect.w + 2 * (int64_t)sh->spread > 0 &&
+           (int64_t)box->rect.h + 2 * (int64_t)sh->spread > 0;
 }
 
-bool flow_shadow_sharp(const flow_shadow_t *sh, bool square)
+// How far past its shape one outer shadow that casts (flow_shadow_casts)
+// is drawn on each side, in CSS's side order: its spread (which may shrink
+// it), less its offset toward that side's opposite, and its blur's reach
+// as the painter blurs it (flow_shadow_blur_reach) — never less than 0. A
+// shadow cast right reaches right, not left. A `text` shadow is drawn
+// sharp (the painter draws its run offset, unblurred) and has no spread:
+// it reaches by its offset alone.
+static void shadow_reach(const flow_shadow_t *sh, bool text, int64_t out[4])
 {
-    return !sh->inset && sh->blur == 0 && square;
-}
-
-// How far past its shape one outer shadow may be drawn on each side, in
-// CSS's side order: its spread (which may shrink it), less its offset
-// toward that side's opposite, and its blur's reach as the painter blurs
-// it (flow_shadow_blur_reach) — never less than 0. A shadow cast right
-// reaches right, not left. One drawn SHARP has no blur's reach, not even
-// its pixel: a text shadow (the painter draws its run offset, unblurred,
-// and it has no spread), and a box shadow the painter draws as rectangles
-// (flow_shadow_sharp; `square`: the box has no rounded corner).
-static void shadow_reach(const flow_shadow_t *sh, bool text, bool square, int64_t out[4])
-{
-    bool sharp = text || flow_shadow_sharp(sh, square);
-    int64_t grow = (text ? 0 : sh->spread) + (sharp ? 0 : flow_shadow_blur_reach(sh->blur));
+    int64_t grow = text ? 0 : sh->spread + flow_shadow_blur_reach(sh->blur);
     int64_t side[4] = {grow - sh->y, grow + sh->x, grow + sh->y, grow - sh->x};
     for (int k = 0; k < 4; k++)
         out[k] = side[k] > 0 ? side[k] : 0;
@@ -935,18 +926,12 @@ static void own_ink(flow_box_t *b)
                 most[k] = glyph[k];
         }
     }
-    bool square = true;
-    if (nbox > 0) {
-        int32_t radii[4][2];
-        flow_box_radii(b, radii);
-        square = !flow_radii_rounded(radii);
-    }
     for (int32_t i = 0; i < nbox + ntext; i++) {
         bool text = i >= nbox;
         const flow_shadow_t *sh = text ? &s->text_shadows[i - nbox] : &s->box_shadows[i];
-        if (sh->inset)
+        if (sh->inset || (!text && !flow_shadow_casts(b, sh)))
             continue;
-        shadow_reach(sh, text, square, one);
+        shadow_reach(sh, text, one);
         // A text shadow is the glyphs drawn moved: their overhang, and more.
         for (int k = 0; k < 4; k++)
             if (one[k] + (text ? glyph[k] : 0) > most[k])

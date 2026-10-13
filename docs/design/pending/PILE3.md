@@ -1051,7 +1051,9 @@ the group's outer clip and the view.
 
 A surface is the group's bounds — each layer grown by its INK, as far
 as the painter draws past it: its own shadows (a box shadow by its
-spread and blur, a text shadow, drawn sharp, by its offset alone), its
+spread, its offset and 3 (blur / 2) — its three box blurs — and not at
+all when its spread collapses it; a text shadow, drawn sharp, by its
+offset alone), its
 glyphs' overhang, and what the boxes inside it hand up, each cut to its
 clip (a shadow is in no box's overflow) — cut to the view taken back
 through the matrices, one pixel more all round for the bilinear sample

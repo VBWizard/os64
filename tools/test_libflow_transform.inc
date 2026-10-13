@@ -650,8 +650,8 @@ static void transform_through_cases(void)
 
     // A shadow is in no box's overflow, but a group holds what it paints:
     // 0 0 10px 5px reaches its spread 5 and the painter's blur, three box
-    // blurs of radius 5 and a pixel, 16 — 21 past the box — so the turned
-    // box's 100 by 20 is held from -21, 142 by 62.
+    // blurs of radius 5, 15 — 20 past the box — so the turned box's 100 by
+    // 20 is held from -20, 140 by 60.
     sheeted_open(&q, XFORM_STYLE ".t{width:100px;height:20px;box-shadow:0 0 10px 5px #000;"
                      "transform:rotate(90deg)}</style><div class=t></div>",
                  400, 600);
@@ -660,13 +660,13 @@ static void transform_through_cases(void)
     vis.ctx = &shadowed;
     flow_visit_groups(t, (os64_gui_rect_t){0, 0, 400, 600}, top, &vis);
     expect("transform: a turned group holds the shadows it paints",
-           shadowed.opens == 1 && rect_is(shadowed.first, -21, -21, 142, 62), NULL);
+           shadowed.opens == 1 && rect_is(shadowed.first, -20, -20, 140, 60), NULL);
     vis.ctx = &gr;
     flow_free(t);
     sheeted_close(&q);
 
     // A negative spread shrinks a shadow, and its reach with it: 0 0 0
-    // -5px reaches nothing past the box; 0 0 10px -5px reaches 16 - 5 = 11.
+    // -5px reaches nothing past the box; 0 0 10px -5px reaches 15 - 5 = 10.
     sheeted_open(&q, XFORM_STYLE ".t{width:100px;height:20px;box-shadow:0 0 10px -5px #000;"
                      "transform:rotate(90deg)}</style><div class=t></div>",
                  400, 600);
@@ -675,15 +675,31 @@ static void transform_through_cases(void)
     vis.ctx = &shrunk;
     flow_visit_groups(t, (os64_gui_rect_t){0, 0, 400, 600}, top, &vis);
     expect("transform: a negative spread shrinks a shadow's reach",
-           shrunk.opens == 1 && rect_is(shrunk.first, -11, -11, 122, 42), NULL);
+           shrunk.opens == 1 && rect_is(shrunk.first, -10, -10, 120, 40), NULL);
+    vis.ctx = &gr;
+    flow_free(t);
+    sheeted_close(&q);
+
+    // One a negative spread collapses casts nothing: -20px off a 20px-tall
+    // box leaves no shape, so its 400px blur and 300px offset reach
+    // nowhere and the group is the box.
+    sheeted_open(&q, XFORM_STYLE ".t{width:100px;height:20px;box-shadow:300px 0 400px -20px #000;"
+                     "transform:rotate(90deg)}</style><div class=t></div>",
+                 400, 600);
+    t = flow_layout(q.doc, q.page, 400, &q.env);
+    XformGroups collapsed = {0};
+    vis.ctx = &collapsed;
+    flow_visit_groups(t, (os64_gui_rect_t){0, 0, 400, 600}, top, &vis);
+    expect("transform: a shadow its spread collapses grows no group",
+           collapsed.opens == 1 && rect_is(collapsed.first, 0, 0, 100, 20), NULL);
     vis.ctx = &gr;
     flow_free(t);
     sheeted_close(&q);
 
     // A shadow reaches only the sides it is cast toward: 200px 0, no blur,
-    // on a square box is drawn as rectangles, sharp, and reaches 200 right
-    // and nothing up, down or left. Round a corner and the painter blurs
-    // it: the blur's pixel joins, 201 right and 1 up and down.
+    // reaches 200 right and nothing up, down or left. A blur of 1px on a
+    // rounded box is a box blur of radius 0, which blurs nothing: the same.
+    // One of 2px is radius 1, three passes: 203 right, 3 up and down.
     sheeted_open(&q, XFORM_STYLE ".t{width:100px;height:20px;box-shadow:200px 0 #000;"
                      "transform:rotate(90deg)}</style><div class=t></div>",
                  400, 600);
@@ -696,18 +712,27 @@ static void transform_through_cases(void)
     vis.ctx = &gr;
     flow_free(t);
     sheeted_close(&q);
-    sheeted_open(&q, XFORM_STYLE ".t{width:100px;height:20px;box-shadow:200px 0 #000;"
-                     "border-radius:4px;transform:rotate(90deg)}</style><div class=t></div>",
-                 400, 600);
-    t = flow_layout(q.doc, q.page, 400, &q.env);
-    XformGroups rounded_side = {0};
-    vis.ctx = &rounded_side;
-    flow_visit_groups(t, (os64_gui_rect_t){0, 0, 400, 600}, top, &vis);
-    expect("transform: a rounded box's sharp shadow keeps the blur's pixel",
-           rounded_side.opens == 1 && rect_is(rounded_side.first, 0, -1, 301, 22), NULL);
-    vis.ctx = &gr;
-    flow_free(t);
-    sheeted_close(&q);
+    for (int k = 0; k < 2; k++) {
+        sheeted_open(&q, k == 0 ? XFORM_STYLE ".t{width:100px;height:20px;border-radius:4px;"
+                                  "box-shadow:200px 0 1px #000;transform:rotate(90deg)}</style>"
+                                  "<div class=t></div>"
+                                : XFORM_STYLE ".t{width:100px;height:20px;border-radius:4px;"
+                                  "box-shadow:200px 0 2px #000;transform:rotate(90deg)}</style>"
+                                  "<div class=t></div>",
+                     400, 600);
+        t = flow_layout(q.doc, q.page, 400, &q.env);
+        XformGroups soft = {0};
+        vis.ctx = &soft;
+        flow_visit_groups(t, (os64_gui_rect_t){0, 0, 400, 600}, top, &vis);
+        expect(k == 0 ? "transform: a blur of radius 0 blurs nothing past the shadow"
+                      : "transform: a blur of radius 1 reaches three passes past it",
+               soft.opens == 1 && (k == 0 ? rect_is(soft.first, 0, 0, 300, 20)
+                                          : rect_is(soft.first, 0, -3, 303, 26)),
+               NULL);
+        vis.ctx = &gr;
+        flow_free(t);
+        sheeted_close(&q);
+    }
 
     // rotate(1e308deg), reduced by whole turns before it meets pi, is drawn
     // through a finite matrix — not upright for want of a finite cosine.
@@ -868,11 +893,11 @@ static void transform_through_cases(void)
            NULL);
 
     // A child's shadow is handed up as where it reaches: 100px right of a
-    // 100px child with a rounded corner, blurred and so with the blur's
-    // pixel, is 201 across, inside its 400px turned parent, which grows
-    // only the pixel the shadow casts above and below.
+    // 100px child, blurred 2px (three passes of radius 1), is 203 across,
+    // inside its 400px turned parent, which grows only the 3 pixels the
+    // shadow casts above and below.
     sheeted_open(&q, XFORM_STYLE ".t{width:400px;transform:rotate(90deg)}"
-                     ".c{width:100px;height:20px;border-radius:2px;box-shadow:100px 0 #000}</style>"
+                     ".c{width:100px;height:20px;box-shadow:100px 0 2px #000}</style>"
                      "<div class=t><div class=c></div></div>",
                  400, 600);
     t = flow_layout(q.doc, q.page, 400, &q.env);
@@ -880,7 +905,7 @@ static void transform_through_cases(void)
     vis.ctx = &inside;
     flow_visit_groups(t, (os64_gui_rect_t){0, 0, 400, 600}, top, &vis);
     expect("transform: a child's shadow inside its turned parent grows it no further",
-           inside.opens == 1 && rect_is(inside.first, 0, -1, 400, 22), NULL);
+           inside.opens == 1 && rect_is(inside.first, 0, -3, 400, 26), NULL);
     vis.ctx = &gr;
     flow_free(t);
     sheeted_close(&q);

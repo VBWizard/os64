@@ -495,8 +495,8 @@ static void paint_case(const char *name, const char *html, int32_t width, os64_g
 #include "test_yonder_cases.inc"
 
 // A blurred shadow cannot be worked pixel by pixel by hand, so what a blur
-// must do is checked: the mask reaches three box blurs (and a pixel) past
-// the shape on every side; just outside the box the shadow is about half on,
+// must do is checked: the mask reaches three box blurs past the shape on
+// every side, 3 (blur / 2); just outside the box the shadow is about half on,
 // as a Gaussian is at its step; nothing falls on the box itself, and an
 // inset shadow falls only inside it.
 // A rounded box as big as libflow takes, painted through a small view
@@ -573,8 +573,8 @@ static void canvas_owner_cases(void)
 static void shadow_blur_cases(void)
 {
     struct { const char *css; int x, y, w, h, lo, hi; bool inset; } k[] = {
-        {"box-shadow: 0 0 8px #000000", 27, 27, 46, 46, 100, 160, false},
-        {"box-shadow: inset 0 0 8px #000000", 27, 27, 46, 46, 100, 255, true},
+        {"box-shadow: 0 0 8px #000000", 28, 28, 44, 44, 100, 160, false},
+        {"box-shadow: inset 0 0 8px #000000", 28, 28, 44, 44, 100, 255, true},
     };
     for (size_t i = 0; i < sizeof(k) / sizeof(k[0]); i++) {
         char html[256];

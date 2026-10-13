@@ -771,11 +771,17 @@ static Round round_moved(const Round *s, int64_t dx, int64_t dy, int64_t by)
 static void shadow(const Painter *p, const flow_box_t *b, const Round *outer, const Round *inner,
                    const flow_shadow_t *sh, bool square)
 {
+    // An outer shadow a negative spread collapses casts nothing — libflow's
+    // rule (flow_shadow_casts), which a group's bounds follow.
+    if (!sh->inset && !flow_shadow_casts(b, sh))
+        return;
     // How far a pixel's shade reads: three box blurs of radius blur/2 each
-    // (mask_blur), and a pixel — libflow's rule (flow_shadow_blur_reach),
-    // which a group's bounds hold too. A mask cut any closer to the view
-    // would shade a pixel by where the dirty part happened to end (Quinn,
-    // #203).
+    // (mask_blur), 3 (blur/2) — libflow's rule (flow_shadow_blur_reach),
+    // which a group's bounds hold too. A pass wrongs only the r pixels
+    // nearest the mask's edge, where it reads past it, so after three every
+    // pixel 3 (blur/2) inside the edge is right; a mask cut any closer to
+    // the view would shade a pixel by where the dirty part happened to end
+    // (Quinn, #203).
     int64_t blur = sh->blur, reach = flow_shadow_blur_reach(sh->blur);
     uint32_t colour = sh->current ? b->style->color : sh->colour;
     Round shape = sh->inset ? round_moved(inner, (int64_t)sh->x * SUB, (int64_t)sh->y * SUB,
@@ -783,9 +789,8 @@ static void shadow(const Painter *p, const flow_box_t *b, const Round *outer, co
                             : round_moved(outer, (int64_t)sh->x * SUB, (int64_t)sh->y * SUB,
                                           (int64_t)sh->spread * SUB);
     // An outer square shadow with no blur is rectangles: the shape less the
-    // border box, which is how pixel art draws hundreds of them cheaply —
-    // and with no blur's pixel, as libflow's bounds hold it.
-    if (flow_shadow_sharp(sh, square)) {
+    // border box, which is how pixel art draws hundreds of them cheaply.
+    if (!sh->inset && blur == 0 && square) {
         int64_t l = shape.l / SUB, t = shape.t / SUB, r = shape.r / SUB, e = shape.b / SUB;
         os64_gui_rect_t bx = b->rect;
         int64_t bl = bx.x, bt = bx.y, br = (int64_t)bx.x + bx.w, bb = (int64_t)bx.y + bx.h;
@@ -1163,6 +1168,14 @@ static void layers(const Painter *p, const flow_box_t *b, const Round *outer)
     }
 }
 
+static bool rounded(const int32_t radii[4][2])
+{
+    for (int c = 0; c < 4; c++)
+        if (radii[c][0] > 0 && radii[c][1] > 0)
+            return true;
+    return false;
+}
+
 // A box's background and borders: every block-level box, and an atom. Its
 // outer shadows go under its colour, the last first so the first is on
 // top; its background's layers over its colour (layers, above); its inset
@@ -1173,7 +1186,7 @@ static void frame(const Painter *p, const flow_box_t *b)
     const flow_style_t *s = b->style;
     int32_t radii[4][2];
     flow_box_radii(b, radii);
-    bool round = flow_radii_rounded(radii);
+    bool round = rounded(radii);
     int32_t w[4];
     Round outer, inner;
     if (round || s->nbox_shadows > 0) {
