@@ -1,0 +1,5 @@
+shot r4-ps2-f10-held
+shot r4-ps2-outside
+shot r4-ps2-f10-recovered
+shot r4-ps2-shortcut-closed
+shot r4-ps2-shortcut-recovered

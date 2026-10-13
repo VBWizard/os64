@@ -1,0 +1,6 @@
+shot wheel-before-final
+shot wheel-after-final
+shot external-focus-final
+shot scribe-help-final
+shot popup-close-final
+shot owner-close-final

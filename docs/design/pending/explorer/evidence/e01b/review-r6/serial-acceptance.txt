@@ -1,0 +1,214 @@
+0 (0x0000) AP0: Interrupts enabled
+0 (0x0000) AP0: charset: CP437 map checked against zap-ext-light16.psf - 0 drifted, 39 not in the face
+2 (0x0000) AP0: ***** OS64 (built 2026-10-12 02:31:19) - system booting at 10/12/2026 18:53:51 *****
+2 (0x0000) AP0: FPU: x87 MMX SSE SSE2 SSE3 enabled, FXSAVE per thread (MXCSR mask 0xFFFF); no XSAVE
+2 (0x0000) AP0: Commandline: ROOT=2f4fd02e-68b4-4c82-98bc-72467529b3fc BACKSTOP=10 KWORKER HUSK GUI
+2 (0x0000) AP0: DEBUG_OPTIONS 0x00000000000000000000000002480103
+6 (0x0000) AP0: allocator: frame table 1572230 frames (12284 KiB) at 0x0000000000100000; 1043750 usable, 0 held
+0 (0x0000) AP0: Interrupts enabled
+0 (0x0000) AP0: charset: CP437 map checked against zap-ext-light16.psf - 0 drifted, 39 not in the face
+2 (0x0000) AP0: ***** OS64 (built 2026-10-12 02:31:19) - system booting at 10/12/2026 18:53:51 *****
+2 (0x0000) AP0: FPU: x87 MMX SSE SSE2 SSE3 enabled, FXSAVE per thread (MXCSR mask 0xFFFF); no XSAVE
+2 (0x0000) AP0: Commandline: ROOT=2f4fd02e-68b4-4c82-98bc-72467529b3fc BACKSTOP=10 KWORKER HUSK GUI
+2 (0x0000) AP0: DEBUG_OPTIONS 0x00000000000000000000000002480103
+6 (0x0000) AP0: allocator: frame table 1572230 frames (12284 KiB) at 0x0000000000100000; 1043750 usable, 0 held
+21 (0x0000) AP0: log: 4 ring(s) x 16 MB, 100 ticks/sec
+22 (0x0000) AP0: symbols: 2451 names loaded, 49472 bytes of strings
+22 (0x0000) AP0: ACPI: Limine passed PCI base address of 0x00000000000f5280, we'll use that
+22 (0x0000) AP0: ACPI: RSDP found at 0x00000000000f5280
+22 (0x0000) AP0: ACPI: RSDP revision = 0x00, OEMID = BOCHS 
+22 (0x0000) AP0: ACPI: Using RSDT at 0x7ffe2458
+22 (0x0000) AP0: ACPI: Root SDT signature: RSDT
+22 (0x0000) AP0: ACPI: Parsing RSDT with 5 entries
+22 (0x0000) AP0: ACPI: FACP table found at 0x7ffe2238
+22 (0x0000) AP0: ACPI: DSDT table found at 0x7ffe0040
+22 (0x0000) AP0: ACPI: Root SDT signature: RSDT
+22 (0x0000) AP0: ACPI: Parsing RSDT with 5 entries
+22 (0x0000) AP0: ACPI: MCFG table found at 0x7ffe23f4
+22 (0x0000) AP0: ACPI: Entry 0: BaseAddress=0x00000000b0000000, SegmentGroup=0, StartBus=0, EndBus=255
+22 (0x0000) AP0: ACPI: *Found PCI Segment 0 Base Address: 0xb0000000, mapping 0x7800 pages so that we can scan 120 busses
+24 (0x0000) AP0: ACPI: Root SDT signature: RSDT
+24 (0x0000) AP0: ACPI: Parsing RSDT with 5 entries
+24 (0x0000) AP0: ACPI: MADT (APIC) table found at 000000007FFE232C
+24 (0x0000) AP0: ACPI: S5 ready — PM1a 0x0604 SLP_TYPa 0, PM1b 0x0000 SLP_TYPb 0
+24 (0x0000) AP0: tss: allocated 24 double-fault (IST1) stacks, CPU0's at 0xffff80007f087ff0
+24 (0x0000) AP0: tss: allocated 24 NMI (IST2) stacks, CPU0's at 0xffff80000009dff0
+131 (0x0000) AP0: blockcache: attached QEMU DVD-ROM (512-byte sectors, 128/line)
+131 (0x0000) AP0: blockcache: attached QEMU NVMe Ctrl (512-byte sectors, 128/line)
+131 (0x0000) AP0: blockcache: attached QEMU NVMe Ctrl (512-byte sectors, 128/line)
+131 (0x0000) AP0: blockcache: 3 device(s) attached
+431 (0x0000) AP0: random: rdrand ok, rdseed ok — pool seeded by rdseed (hw words 4, retries 0, jitter samples 0)
+432 (0x0000) AP0: net: loopback lo, 127.0.0.0/8, 1024-frame queue
+466 (0x0000) AP0: BUILT-IN TESTS: Running pre-boot tests:
+466 (0x0000) AP0: 	[Test] window_minimum_clamp... OK
+466 (0x0000) AP0: 	[Test] kmalloc_not_null... OK
+703 (0x0000) AP0: 	frame_table_scale: 120000 frames held live and released; free 4169661040 -> 4169661040
+703 (0x0000) AP0: 	[Test] frame_table_scale... OK
+703 (0x0000) AP0: 	[Test] allocator_try_refuses... OK
+703 (0x0000) AP0: 	allocator_zero_after_free: run reused, ledger object reused
+703 (0x0000) AP0: 	[Test] allocator_zero_after_free... OK
+703 (0x0000) AP0: 	[Test] fpu_state_round_trip... OK
+703 (0x0000) AP0: 	Page fault occurred during test mode, returning without halt.
+703 (0x0000) AP0: 	[Test] page_fault_test_mode_returns... OK
+703 (0x0000) AP0: 	[Test] page_zero_unmapped... OK
+703 (0x0000) AP0: 	[Test] dlist_basic_operations... OK
+703 (0x0000) AP0: 	[Test] arena_create_and_destroy... OK
+703 (0x0000) AP0: 	[Test] arena_basic_alloc... OK
+703 (0x0000) AP0: 	[Test] arena_aligned_alloc... OK
+703 (0x0000) AP0: 	[Test] arena_reset... OK
+704 (0x0000) AP0: 	[Test] arena_growth... OK
+704 (0x0000) AP0: 	[Test] vma_insert_and_lookup... OK
+704 (0x0000) AP0: 	[Test] vma_page_fault_resolved... OK
+704 (0x0000) AP0: 	[Test] vma_cow_write... OK
+704 (0x0000) AP0: 	[Test] env_create_empty... OK
+704 (0x0000) AP0: 	[Test] env_set_and_get... OK
+704 (0x0000) AP0: 	[Test] env_update_shorter_val... OK
+704 (0x0000) AP0: 	[Test] env_update_longer_val... OK
+704 (0x0000) AP0: 	[Test] env_multi_key... OK
+704 (0x0000) AP0: 	[Test] env_inherit_copies... OK
+704 (0x0000) AP0: 	[Test] env_inherit_independence... OK
+704 (0x0000) AP0: 	[Test] gmtime_negative_epoch... OK
+704 (0x0000) AP0: 	[Test] time_zone_minute_offsets... OK
+704 (0x0000) AP0: 	[Test] env_inherit_grown... OK
+704 (0x0000) AP0: 	[Test] env_count_accurate... OK
+705 (0x0000) AP0: 	[Test] env_capacity_full... OK
+705 (0x0000) AP0: 	[Test] task_arena_create_and_destroy... OK
+705 (0x0000) AP0: 	[Test] task_arena_alloc_and_convert... OK
+705 (0x0000) AP0: 	[Test] task_arena_aligned_alloc... OK
+705 (0x0000) AP0: 	[Test] task_arena_exhaustion... OK
+705 (0x0000) AP0: 	test_random_pool: seeded yes by rdseed (rdseed ok, rdrand ok, hw words 4, retries 0, exhausted 0, jitter 0)
+705 (0x0000) AP0: 	[Test] random_pool... OK
+705 (0x0000) AP0: BUILT-IN TESTS: 34 passed, 0 failed
+812 (0x0020) AP0: BOOT: If a ROOTPARTUUID (2f4fd02e-68b4-4c82-98bc-72467529b3fc) was passed in the commandline, we'll load it.
+812 (0x0020) AP0: BOOT: ROOTPARTUUID passed in commandline.  Will mount '2f4fd02e-68b4-4c82-98bc-72467529b3fc' as the root partition
+PAGE1 PAGE2
+dyn_consumer: firdyn_conssumer:t=0x first=0x00000000000300 secon30 d=0xs00eco00003nd=0x001000 031pac pked=0xacked0030003=0x01
+0300031
+813 (0x0020) AP2: BOOT: Root filesystem found, mounting
+813 (0x0020) AP2: BOOT: Root filesystem successfully mounted
+813 (0x0020) AP2: BOOT: skipping fat partition 0 on device 1 — GUID already mounted (twin)
+814 (0x0020) AP2: BOOT: mounted ext2 (device 1 partition 1, GPT name "ext2") at /ext2
+814 (0x0020) AP2: BOOT: mounted ext2 (device 2 partition 0, GPT name "home") at /home
+814 (0x0020) AP2: BOOT: mounted /proc (synthetic — processes as files)
+814 (0x0020) AP2: BOOT: mounted /sys (synthetic — the machine as files)
+814 (0x0020) AP2: BOOT: mounted /dev (synthetic — the kernel's objects as files)
+814 (0x0020) AP2: conf: search path /home:/etc (built-in default (/etc/os64.conf sets no conf))
+814 (0x0020) AP2: bootenv: /etc/bootenv.conf: 0 set, 0 unset
+815 (0x0020) AP2: BUILT-IN TESTS: Running post-boot tests:
+815 (0x0020) AP2: 	[Test] vma_file_backed_page_fault_resolved... OK
+815 (0x0020) AP2: 	[Test] vma_partial_page_bss_zero_filled... OK
+817 (0x0020) AP2: 	PASS: test_elf_loader (demand-paged, retVal correct, exited cleanly)
+817 (0x0020) AP2: 	[Test] elf_loader... OK
+818 (0x0020) AP2: 	PASS: test_dynamic_linking (symbol resolution, relocation, CoW isolation, and physical sharing all correct)
+818 (0x0020) AP2: 	[Test] dynamic_linking... OK
+818 (0x0020) AP2: 	[Test] pty_publication_hold... OK
+864 (0x0020) AP2: 	[Test] pty_history... OK
+864 (0x0020) AP2: 	[Test] pty_resize_modes... OK
+864 (0x0020) AP2: 	[Test] pty_stream_seats... OK
+865 (0x0020) AP2: 	PASS: test_task_args (argc/argv/env delivered at the ABI addresses, strings copied, BSS zero-filled)
+865 (0x0020) AP2: 	[Test] task_args... OK
+887 (0x0020) AP2: 	PASS: test_env_growth (block grew under the fixed window, pairs survived the copies, 64KB refusals were atomic)
+887 (0x0020) AP2: 	[Test] env_growth... OK
+895 (0x0020) AP2: 	PASS: test_ext2_real_partition (self-provision=written+verified [bs=1024], mkfs-fixtures=3/3, root listing, bogus path)
+895 (0x0020) AP2: 	[Test] ext2_real_partition... OK
+896 (0x0020) AP2: 	PASS: test_mount_table (6 mounts, 1 routed content checks)
+896 (0x0020) AP2: 	[Test] mount_table... OK
+896 (0x0020) AP2: 	[Test] devfs... OK
+896 (0x0020) AP2: 	PASS: test_net_arp_pending_order (synchronous ARP reply released parked IPv4 packet; parked=1 dropped=0)
+896 (0x0020) AP2: 	[Test] net_arp_pending_order... OK
+896 (0x0020) AP2: 	[Test] net_martian_dropped... OK
+896 (0x0020) AP2: 	SKIP: test_net_wire (no NIC — QEMU: -netdev user,id=n0 -device virtio-net-pci,netdev=n0)
+896 (0x0020) AP2: 	[Test] net_wire... OK
+896 (0x0020) AP2: 	SKIP: test_net_arp (no NIC)
+896 (0x0020) AP2: 	[Test] net_arp... OK
+896 (0x0020) AP2: 	SKIP: test_net_ping (no NIC)
+896 (0x0020) AP2: 	[Test] net_ping... OK
+896 (0x0020) AP2: 	SKIP: test_net_echo_responder (no NIC)
+896 (0x0020) AP2: 	[Test] net_echo_responder... OK
+896 (0x0020) AP2: 	SKIP: test_net_dhcp (no NIC)
+896 (0x0020) AP2: 	[Test] net_dhcp... OK
+896 (0x0020) AP2: 	SKIP: test_net_udp_conn (no NIC)
+896 (0x0020) AP2: 	[Test] net_udp_conn... OK
+896 (0x0020) AP2: 	SKIP: test_net_icmp_conn (no NIC)
+896 (0x0020) AP2: 	[Test] net_icmp_conn... OK
+897 (0x0020) AP2: 	PASS: test_vfs_write_mkdir (create/write/read-back, mkdir, nested file — under /etc/testdata)
+897 (0x0020) AP2: 	[Test] vfs_write_mkdir... OK
+898 (0x0020) AP2: 	PASS: test_vfs_rename (FAT: legacy plus safe policies, move, directory move, open-source survives, 5 refusals)
+898 (0x0020) AP2: 	[Test] vfs_rename... OK
+898 (0x0020) AP2: 	SKIP: test_ext2_published_insert_failure (root is not writable ext2)
+898 (0x0020) AP2: 	[Test] ext2_published_insert_failure... OK
+898 (0x0020) AP2: 	SKIP: test_ext2_orphan (root is not ext2)
+898 (0x0020) AP2: 	[Test] ext2_orphan... OK
+898 (0x0020) AP2: 	SKIP: test_ext2_readonly_demotion (root is not writable ext2)
+898 (0x0020) AP2: 	[Test] ext2_readonly_demotion... OK
+[user] husk: rc[user]: h usk: /hrome/husc: /home/husk.rc
+k.rc
+932 (0x0020) AP2: 	PASS: test_ext2_secondary_write (exclusive-create/create/append/truncate/indirect/hole/mkdir/rm/orphan/busy-refusal)
+932 (0x0020) AP2: 	[Test] ext2_secondary_write... OK
+934 (0x0020) AP2: 	PASS: test_shared_object_reload (unloaded at zero; reload and closure claims need a root that can replace an open file, and this one cannot)
+934 (0x0020) AP2: 	[Test] shared_object_reload... OK
+935 (0x0020) AP2: 	PASS: test_mount_unmount (/ext2: busy while held, unmounted idle, remounted ro by GUID at /mu_mount with its open refusing a pen, exact identifiers, a nested mount pinning its parent, restored rw)
+935 (0x0020) AP2: 	[Test] mount_unmount... OK
+938 (0x0020) AP1: 	PASS: test_console_read_deadline (poll + 3-tick patience; anything caught was put back)
+938 (0x0020) AP1: 	[Test] console_read_deadline... OK
+938 (0x0020) AP1: 	PASS: test_block_cache (warm hits 97, warm misses 0 vs cold 4; write invalidation honest)
+939 (0x0020) AP1: 	[Test] block_cache... OK
+939 (0x0020) AP1: 	PASS: test_dirent_mtime (/bin/top stamped 1791749190 — the plausible present)
+939 (0x0020) AP1: 	[Test] dirent_mtime... OK
+950 (0x0020) AP2: 	PASS: test_backstop_preemption (10 lease expiries on APIC 1, SIGKILL landed)
+950 (0x0020) AP2: 	[Test] backstop_preemption... OK
+950 (0x0020) AP2: BUILT-IN TESTS: 34 passed, 0 failed
+952 (0x0030) AP1: BUILT-IN TESTS: Running late tests:
+952 (0x002f) AP3: [user] husk: started
+952 (0x002e) AP1: [user] husk: started
+953 (0x002e) AP1: [user] husk: rc: /home/husk.rc
+953 (0x002f) AP3: [user] husk: rc: /home/husk.rc
+2139 (0x0030) AP2: 	task_teardown_leak: 2 cycles — free 4141289648 -> 4141289648 (lost 0 bytes), VMA backing reclaimed 106496 bytes
+2139 (0x0030) AP2: 	task_teardown_leak: window clean — 0 bytes lost, 106496 bytes of VMA backing reclaimed over 2 cycles
+2139 (0x0030) AP2: 	task_teardown_leak: attempt 1 of 4 was clean — measuring again on a fresh window
+3140 (0x0030) AP2: 	task_teardown_leak: 2 cycles — free 4141289648 -> 4141289648 (lost 0 bytes), VMA backing reclaimed 106496 bytes
+3140 (0x0030) AP2: 	task_teardown_leak: window clean — 0 bytes lost, 106496 bytes of VMA backing reclaimed over 2 cycles
+3140 (0x0030) AP2: 	PASS: test_task_teardown_leak (a task costs nothing — 2 independently measured windows agreed, with 0 unmeasurable)
+3140 (0x0030) AP2: 	[Test] task_teardown_leak... OK
+3142 (0x0030) AP2: 	PASS: test_doorbell_wakes_sleeper (3 rings, worst 1 tick(s), 2 wake(s) answered by a pass)
+3142 (0x0030) AP2: 	[Test] doorbell_wakes_sleeper... OK
+3142 (0x0030) AP2: 	SKIP: test_net_tcp_refused (no NIC)
+3142 (0x0030) AP2: 	[Test] net_tcp_refused... OK
+3142 (0x0030) AP2: BUILT-IN TESTS: 3 passed, 0 failed
+9725 (0x002e) AP2: [user] husk: task 58 (actiongallery) started
+13559 (0x002f) AP2: [user] husk: task 59 (cat) started
+13560 (0x002f) AP2: [user] husk: task 59 (cat) exited code 0
+13750 (0x002f) AP2: [user] husk: task 60 (sync) started
+13750 (0x002f) AP2: [user] husk: task 60 (sync) exited code 0
+16894 (0x002f) AP2: [user] husk: task 61 (cat) started
+16895 (0x002f) AP2: [user] husk: task 61 (cat) exited code 0
+17085 (0x002f) AP2: [user] husk: task 62 (sync) started
+17085 (0x002f) AP2: [user] husk: task 62 (sync) exited code 0
+17762 (0x002e) AP2: [user] husk: task 58 (actiongallery) exited code 0
+17895 (0x002e) AP2: [user] husk: task 63 (sync) started
+17895 (0x002e) AP2: [user] husk: task 63 (sync) exited code 0
+36472 (0x002e) AP2: [user] husk: task 64 (actiongallery) started
+37941 (0x002f) AP2: [user] husk: task 65 (fontsettingstest) started
+37951 (0x002f) AP3: [user] husk: task 65 (fontsettingstest) exited code 0
+38130 (0x002f) AP2: [user] husk: task 66 (sync) started
+38130 (0x002f) AP2: [user] husk: task 66 (sync) exited code 0
+39088 (0x002f) AP2: [user] husk: task 67 (fontsettingstest) started
+39090 (0x002f) AP3: [user] husk: task 67 (fontsettingstest) exited code 0
+39278 (0x002f) AP2: [user] husk: task 68 (sync) started
+39278 (0x002f) AP2: [user] husk: task 68 (sync) exited code 0
+39569 (0x002e) AP2: [user] husk: task 64 (actiongallery) exited code 0
+39699 (0x002e) AP2: [user] husk: task 69 (sync) started
+39699 (0x002e) AP2: [user] husk: task 69 (sync) exited code 0
+40474 (0x002e) AP2: [user] husk: task 70 (actiongallery) started
+41078 (0x002e) AP3: [user] husk: task 70 (actiongallery) exited code 0
+41210 (0x002e) AP2: [user] husk: task 71 (sync) started
+41210 (0x002e) AP2: [user] husk: task 71 (sync) exited code 0
+41931 (0x002f) AP2: [user] husk: task 72 (fontsettingstest) started
+41934 (0x002f) AP2: [user] husk: task 72 (fontsettingstest) exited code 0
+42122 (0x002f) AP2: [user] husk: task 73 (sync) started
+42122 (0x002f) AP2: [user] husk: task 73 (sync) exited code 0
+45607 (0x002f) AP2: [user] husk: task 74 (scribe) started
+46338 (0x002e) AP2: [user] husk: task 75 (actiongallery) started
+47623 (0x002e) AP0: [user] husk: task 75 (actiongallery) exited code 0
+47839 (0x002e) AP2: [user] husk: task 76 (sync) started
+47840 (0x002e) AP2: [user] husk: task 76 (sync) exited code 0

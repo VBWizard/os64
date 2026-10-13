@@ -1,0 +1,16 @@
+stale_refs: working tree vs HEAD
+
+== Names this change RETIRED that survive only in prose (read every line):
+-- evidence/e01k/README.md
+   DEBTS.md:240: | **gclock does not visibly follow Interface font Apply in Chris's setup** (reported 2026-10-11). Increasing the Interface font substantiall
+   docs/design/pending/explorer/E01K_HANDOFF.md:112: [Evidence](evidence/e01k/README.md) records the cross builds, supported sanitizers,
+   docs/design/pending/explorer/GUI_POPUPS.md:6: [E1K handoff](E01K_HANDOFF.md). See the [evidence](evidence/e01k/README.md); Chris confirmed QEMU and P5 validation after the diagnostic fix
+   docs/design/pending/explorer/SESSION_LOG.md:317: The [E1K evidence packet](evidence/e01k/README.md) records cross builds, queue
+   docs/design/pending/explorer/SESSION_LOG.md:388: [Round-1 evidence](evidence/e01k/README.md#pr-257-review-round-1--2026-10-11)
+   docs/design/pending/explorer/SESSION_LOG.md:413: both sides rerun before recording the comparison. [Evidence](evidence/e01k/README.md#pr-257-review-round-2--owned-popup-close-escalation)
+
+== No new superlative claims.
+
+Reviewed: the E1K evidence path still exists. These surviving links intentionally
+refer to prerequisite evidence and recorded review history; none names a deleted
+file. No added superlative claims were reported.

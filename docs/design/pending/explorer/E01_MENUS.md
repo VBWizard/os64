@@ -2,21 +2,24 @@
 
 ## Status and ownership
 
-- **State:** Designing; detailed contract drafted 2026-10-11. Not Ready.
+- **State:** E1A and E1K complete; E1B implemented and validating for ordinary review.
 - **Design owner:** Quinn. E1A owner: Sol (PR #254 merged `c6cc6e3c`, accepted).
-  E1K owner: Quinn. E1B implementation waits for the tested native API.
-- **Branch:** `codex/explorer-e1k`, based on `userland` at `2bc9f2f4`.
-- **Prerequisite:** E1K in [GUI_POPUPS.md](GUI_POPUPS.md) and the concrete
-  [handoff](E01K_HANDOFF.md). Fable's second review closes R1/R2; implementation,
-  guest evidence and ordinary review remain the native integration gate.
+  E1B owner: Quinn; implementation branch `codex/explorer-e1b`.
+- **Base:** fresh checkout at `b36e9ddc` (PR #257), advanced to current
+  `origin/userland` at `f7f2f508` before publication.
+- **Prerequisite:** E1K in [GUI_POPUPS.md](GUI_POPUPS.md) and its
+  [handoff](E01K_HANDOFF.md) is approved and merged. Chris confirmed E1K
+  complete when authorizing E1B; earlier pending banners were stale.
+- **Implementation:** [E1B handoff](E01B_HANDOFF.md), with
+  [host/guest evidence and P5 walkthrough](evidence/e01b/README.md).
 - **Fable scope:** E1K changes compositor ownership/input behavior and requires
   architectural review (D012/D013). E1's actions/widgets/adapters follow ordinary
   code review; new kernel work must not be folded into their PRs.
 - **Governing decisions:** D002, D008–D015 in [DECISIONS.md](DECISIONS.md).
 
-This is an implementation contract, not evidence that an API exists. Proposed
-public names below may change together during implementation; semantics and
-consumer boundaries may not silently change.
+This remains the governing contract. The concrete E1A/E1K/E1B APIs and evidence
+are in their handoffs; names in the original proposed-operation tables map to
+those headers. Consumer semantics and boundaries remain binding.
 
 ## Outcome and logical delivery boundaries
 
@@ -380,7 +383,9 @@ dependency (libimage already depends on libos64).
 
 ## Acceptance and evidence
 
-No runtime checks have been run for this design. These are implementation gates.
+These are the governing gates. Completed E1A/E1K checks remain in their evidence
+packets; E1B results and applicability are in its linked evidence packet. E1C
+consumer migrations and E1B hardware acceptance are not inferred from host tests.
 
 | Environment | Required evidence |
 | --- | --- |
@@ -404,12 +409,13 @@ commands, screenshots and exact tested commits, not only `/tmp`.
 
 ## Handoff and readiness
 
-- Current output: concrete userland contract and logical packet boundaries.
-- Prerequisite: E1K implementation, test evidence and ordinary review. Fable's
+- Current output: E1B toolkit and extended gallery; see its handoff and evidence.
+- Prerequisite: E1K approved and merged as `b36e9ddc` (PR #257). Fable's
   [second review](GUI_POPUPS_REVIEW.md) closes the design questions; the
   [concrete handoff](E01K_HANDOFF.md) includes queue-loss and lifecycle details.
 - Icon appearance: E2 visual choice remains open; NULL-provider behavior lets
   E1 progress without placeholder artwork becoming the shipped icon family.
-- E1A is accepted. Native E1B/E1C wait for E1K. E1B must explicitly test
+- E1A and E1K are complete. E1B ordinary review/P5 acceptance precede E1C.
+  E1B tests explicitly cover
   dismissal suppression expiry when a focus transition has no content click
   (titlebar, programmatic focus), as well as both cross-queue delivery orders.

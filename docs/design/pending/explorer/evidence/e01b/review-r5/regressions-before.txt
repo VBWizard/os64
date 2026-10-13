@@ -1,0 +1,83 @@
+ui_menu 3d0e20b069eaa91a7afa2faccefbfcf638077472a8688ad91ad3f6c67759aedd
+ui_menu_widget ce7010351656b7b3dbfeefe41ff97eb23bbbc945aee29510652715cb7b007e27
+action/status: 495 checks, 0 failures
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1111 [r5 I2/I6 report deferred failure after close, prioritizing teardown] error_active==(refused!=0)&&error_depth==refused
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1110 [r5 I2/I6 report deferred failure after close, prioritizing teardown] last_error==(refused?OS64_UI_ERROR:allocation?OS64_UI_NO_MEMORY:OS64_UI_LIMIT)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1111 [r5 I2/I6 report deferred failure after close, prioritizing teardown] error_active==(refused!=0)&&error_depth==refused
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1110 [r5 I2/I6 report deferred failure after close, prioritizing teardown] last_error==(refused?OS64_UI_ERROR:allocation?OS64_UI_NO_MEMORY:OS64_UI_LIMIT)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1143 [r5 I5/I9 refresh keeps bar-only selection usable] g.menus->active&&g.bar.selected==1&&menu_bar_enabled(&g.bar,g.bar.selected)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:822 [r5 I5/I9 refresh keeps bar-only selection usable] s->bar&&menu_bar_enabled(s->bar,s->bar->selected)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:822 [r5 I5/I9 refresh keeps bar-only selection usable] s->bar&&menu_bar_enabled(s->bar,s->bar->selected)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:822 [r5 I5/I9 refresh keeps bar-only selection usable] s->bar&&menu_bar_enabled(s->bar,s->bar->selected)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:822 [r5 I5/I9 refresh keeps bar-only selection usable] s->bar&&menu_bar_enabled(s->bar,s->bar->selected)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:822 [r5 I5/I9 refresh keeps bar-only selection usable] s->bar&&menu_bar_enabled(s->bar,s->bar->selected)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:822 [r5 I5/I9 refresh keeps bar-only selection usable] s->bar&&menu_bar_enabled(s->bar,s->bar->selected)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:822 [r5 I5/I9 refresh keeps bar-only selection usable] s->bar&&menu_bar_enabled(s->bar,s->bar->selected)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:822 [r5 I5/I9 refresh keeps bar-only selection usable] s->bar&&menu_bar_enabled(s->bar,s->bar->selected)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:822 [r5 I5/I9 refresh keeps bar-only selection usable] s->bar&&menu_bar_enabled(s->bar,s->bar->selected)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:822 [r5 I5/I9 refresh keeps bar-only selection usable] s->bar&&menu_bar_enabled(s->bar,s->bar->selected)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1144 [r5 I5/I9 refresh keeps bar-only selection usable] g.menus->depth&&g.menus->panels[0].widget->model==g.models[1]
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1143 [r5 I5/I9 refresh keeps bar-only selection usable] g.menus->active&&g.bar.selected==1&&menu_bar_enabled(&g.bar,g.bar.selected)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:822 [r5 I5/I9 refresh keeps bar-only selection usable] s->bar&&menu_bar_enabled(s->bar,s->bar->selected)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:822 [r5 I5/I9 refresh keeps bar-only selection usable] s->bar&&menu_bar_enabled(s->bar,s->bar->selected)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:822 [r5 I5/I9 refresh keeps bar-only selection usable] s->bar&&menu_bar_enabled(s->bar,s->bar->selected)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:822 [r5 I5/I9 refresh keeps bar-only selection usable] s->bar&&menu_bar_enabled(s->bar,s->bar->selected)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:822 [r5 I5/I9 refresh keeps bar-only selection usable] s->bar&&menu_bar_enabled(s->bar,s->bar->selected)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:822 [r5 I5/I9 refresh keeps bar-only selection usable] s->bar&&menu_bar_enabled(s->bar,s->bar->selected)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:822 [r5 I5/I9 refresh keeps bar-only selection usable] s->bar&&menu_bar_enabled(s->bar,s->bar->selected)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:822 [r5 I5/I9 refresh keeps bar-only selection usable] s->bar&&menu_bar_enabled(s->bar,s->bar->selected)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:822 [r5 I5/I9 refresh keeps bar-only selection usable] s->bar&&menu_bar_enabled(s->bar,s->bar->selected)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:822 [r5 I5/I9 refresh keeps bar-only selection usable] s->bar&&menu_bar_enabled(s->bar,s->bar->selected)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1144 [r5 I5/I9 refresh keeps bar-only selection usable] g.menus->depth&&g.menus->panels[0].widget->model==g.models[1]
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1143 [r5 I5/I9 refresh keeps bar-only selection usable] g.menus->active&&g.bar.selected==1&&menu_bar_enabled(&g.bar,g.bar.selected)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:822 [r5 I5/I9 refresh keeps bar-only selection usable] s->bar&&menu_bar_enabled(s->bar,s->bar->selected)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:822 [r5 I5/I9 refresh keeps bar-only selection usable] s->bar&&menu_bar_enabled(s->bar,s->bar->selected)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:822 [r5 I5/I9 refresh keeps bar-only selection usable] s->bar&&menu_bar_enabled(s->bar,s->bar->selected)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:822 [r5 I5/I9 refresh keeps bar-only selection usable] s->bar&&menu_bar_enabled(s->bar,s->bar->selected)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:822 [r5 I5/I9 refresh keeps bar-only selection usable] s->bar&&menu_bar_enabled(s->bar,s->bar->selected)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:822 [r5 I5/I9 refresh keeps bar-only selection usable] s->bar&&menu_bar_enabled(s->bar,s->bar->selected)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:822 [r5 I5/I9 refresh keeps bar-only selection usable] s->bar&&menu_bar_enabled(s->bar,s->bar->selected)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:822 [r5 I5/I9 refresh keeps bar-only selection usable] s->bar&&menu_bar_enabled(s->bar,s->bar->selected)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:822 [r5 I5/I9 refresh keeps bar-only selection usable] s->bar&&menu_bar_enabled(s->bar,s->bar->selected)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:822 [r5 I5/I9 refresh keeps bar-only selection usable] s->bar&&menu_bar_enabled(s->bar,s->bar->selected)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1144 [r5 I5/I9 refresh keeps bar-only selection usable] g.menus->depth&&g.menus->panels[0].widget->model==g.models[1]
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1143 [r5 I5/I9 refresh keeps bar-only selection usable] g.menus->active&&g.bar.selected==1&&menu_bar_enabled(&g.bar,g.bar.selected)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:822 [r5 I5/I9 refresh keeps bar-only selection usable] s->bar&&menu_bar_enabled(s->bar,s->bar->selected)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:822 [r5 I5/I9 refresh keeps bar-only selection usable] s->bar&&menu_bar_enabled(s->bar,s->bar->selected)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:822 [r5 I5/I9 refresh keeps bar-only selection usable] s->bar&&menu_bar_enabled(s->bar,s->bar->selected)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:822 [r5 I5/I9 refresh keeps bar-only selection usable] s->bar&&menu_bar_enabled(s->bar,s->bar->selected)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:822 [r5 I5/I9 refresh keeps bar-only selection usable] s->bar&&menu_bar_enabled(s->bar,s->bar->selected)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:822 [r5 I5/I9 refresh keeps bar-only selection usable] s->bar&&menu_bar_enabled(s->bar,s->bar->selected)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:822 [r5 I5/I9 refresh keeps bar-only selection usable] s->bar&&menu_bar_enabled(s->bar,s->bar->selected)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:822 [r5 I5/I9 refresh keeps bar-only selection usable] s->bar&&menu_bar_enabled(s->bar,s->bar->selected)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:822 [r5 I5/I9 refresh keeps bar-only selection usable] s->bar&&menu_bar_enabled(s->bar,s->bar->selected)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:822 [r5 I5/I9 refresh keeps bar-only selection usable] s->bar&&menu_bar_enabled(s->bar,s->bar->selected)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1144 [r5 I5/I9 refresh keeps bar-only selection usable] g.menus->depth&&g.menus->panels[0].widget->model==g.models[1]
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1154 [r5 I5/I9 refresh keeps bar-only selection usable] g.bar.selected==1&&menu_bar_enabled(&g.bar,g.bar.selected)
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1164 [r5 I3/I5 refresh cancels an invalid pending bar root before normalization] g.menus->active&&!g.menus->pending&&!g.menus->depth&&g.bar.selected==1
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1165 [r5 I3/I5 refresh cancels an invalid pending bar root before normalization] transport.creates==births
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1166 [r5 I3/I5 refresh cancels an invalid pending bar root before normalization] g.menus->depth&&g.menus->panels[0].widget->model==g.models[1]
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1176 [r5 I3/I5 refresh cancels an invalid pending bar root before normalization] !g.menus->active&&!g.menus->view&&!g.bar.temporary&&g.bar.w.hidden
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1198 [r5 I1/I3 no-op wheel preserves a short parent's child path] popup_handle()==child_handle&&transport.destroys==deaths
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1199 [r5 I1/I3 no-op wheel preserves a short parent's child path] g.menus->help_token==token
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1198 [r5 I1/I3 no-op wheel preserves a short parent's child path] popup_handle()==child_handle&&transport.destroys==deaths
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1199 [r5 I1/I3 no-op wheel preserves a short parent's child path] g.menus->help_token==token
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1198 [r5 I1/I3 no-op wheel preserves a short parent's child path] popup_handle()==child_handle&&transport.destroys==deaths
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1199 [r5 I1/I3 no-op wheel preserves a short parent's child path] g.menus->help_token==token
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1212 [r5 I3 no-op wheel preserves pending child intent] transport.creates==births+1&&g.menus->depth==2&&g.menus->panels[1].widget->model==g.models[3]
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1231 [r5 I1/I3 clamped viewport preserves child and help] popup_handle()==child_handle&&transport.destroys==deaths&&g.menus->help_token==token
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1237 [r5 I1/I3 clamped viewport preserves child and help] g.menus->depth==2&&g.menus->panels[0].widget->top==old_top
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1231 [r5 I1/I3 clamped viewport preserves child and help] popup_handle()==child_handle&&transport.destroys==deaths&&g.menus->help_token==token
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1237 [r5 I1/I3 clamped viewport preserves child and help] g.menus->depth==2&&g.menus->panels[0].widget->top==old_top
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1231 [r5 I1/I3 clamped viewport preserves child and help] popup_handle()==child_handle&&transport.destroys==deaths&&g.menus->help_token==token
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1237 [r5 I1/I3 clamped viewport preserves child and help] g.menus->depth==2&&g.menus->panels[0].widget->top==old_top
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1231 [r5 I1/I3 clamped viewport preserves child and help] popup_handle()==child_handle&&transport.destroys==deaths&&g.menus->help_token==token
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1237 [r5 I1/I3 clamped viewport preserves child and help] g.menus->depth==2&&g.menus->panels[0].widget->top==old_top
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1251 [r5 I9 final viewport packs mixed-height rows] p->bottom==p->model->count&&p->bottom-p->top>1
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1258 [r5 I9 final viewport packs mixed-height rows] used+preceding>room
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1251 [r5 I9 final viewport packs mixed-height rows] p->bottom==p->model->count&&p->bottom-p->top>1
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1258 [r5 I9 final viewport packs mixed-height rows] used+preceding>room
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1251 [r5 I9 final viewport packs mixed-height rows] p->bottom==p->model->count&&p->bottom-p->top>1
+FAIL /home/yogi/src/os64/.worktrees/explorer-e1b/tools/test_ui_menu_host.c:1258 [r5 I9 final viewport packs mixed-height rows] used+preceding>room
+r5: 32379 checks, 78 failures
+Expected behavioral failures reproduced; no fixture fault.

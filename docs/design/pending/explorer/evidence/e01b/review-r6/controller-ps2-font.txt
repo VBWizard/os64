@@ -1,0 +1,8 @@
+shot ps2-actions-final
+shot ps2-tall-final
+shot font-closed-final
+shot font32-view-final
+shot font32-palette-final
+shot overflow-owner-final
+shot overflow-menu-final
+shot overflow-child-final

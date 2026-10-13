@@ -221,8 +221,8 @@ from a chain of historical entries.
   be followed by an old down. Preserve control records/coalesced state. In E1B,
   tombstone handles and drain surviving queues after destruction before new
   creation; bounded dispatch may defer that creation into later turns.
-- **Boundary:** No kernel menu sessions or IPC. Sol starts E1B after the tested
-  E1K API is reviewable; its controller still needs the dismissal-expiry cases.
+- **Boundary:** No kernel menu sessions or IPC. Quinn implements E1B against the approved/merged E1K API; its controller
+  includes dismissal expiry and post-destruction quarantine tests.
 - **Record:** [E01K_HANDOFF.md](E01K_HANDOFF.md).
 
 ## Open choices
@@ -230,7 +230,7 @@ from a chain of historical entries.
 | ID | Choice | Resolve in | Current position |
 | --- | --- | --- | --- |
 | O001 (resolved) | Application name | D007, 2026-10-11 | Chris confirmed Roam. |
-| O002 | Menu interaction, shortcuts and status help | E1 design | Detailed contract drafted in E01_MENUS.md; E1K second review closes R1/R2; native implementation/evidence precede E1B. |
+| O002 | Menu interaction, shortcuts and status help | E1 design | Detailed contract drafted in E01_MENUS.md; E1K second review closes R1/R2; E1K is merged; E1B implementation/evidence is in E01B_HANDOFF.md. |
 | O003 | Icon family, sizes and rendering states | E1/E2 design | E02_ICONS.md proposes provider/ownership, sizes and inventory; Chris's visual choice remains open. |
 | O004 | Detailed directory fields, sorting and view behavior | E3/E4 design | Details-first with Name, Size, Type and Modified; only expose real metadata. |
 | O005 | Channel and service contracts | E6/E8 design | D004 is a proposal; snapshot/subscription, authority and lifecycle need concrete contracts. |

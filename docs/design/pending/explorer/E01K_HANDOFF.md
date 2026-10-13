@@ -5,6 +5,9 @@ review. Base: `2bc9f2f4`; branch `codex/explorer-e1k`. This is the focused GUI
 foundation for E1B, not menu widgets or application IPC. Governing design:
 [GUI_POPUPS.md](GUI_POPUPS.md); review: [second pass](GUI_POPUPS_REVIEW.md).
 
+**Current status:** approved and merged in PR #257 as `b36e9ddc`; E1K is
+complete. Chris confirmed this at E1B authorization.
+
 ## Concrete ABI
 
 - Syscall 63: `gui_event_wait_any(int64_t *out_handle)`. Nonconsuming readiness;
@@ -119,5 +122,11 @@ resize were checked visually. Re-review and fresh P5 validation are pending.
 Implementation commit `3fee1034` is pushed;
 [PR #257](https://github.com/VBWizard/os64/pull/257) targets `userland`.
 
-E1B starts after the public contract, guest evidence and ordinary review are settled.
+## Current status after merge
+
+PR #257 is approved and merged into `userland` as `b36e9ddc`. Chris confirmed
+E1K complete when authorizing Quinn's E1B implementation. Earlier checkpoint
+review/P5-pending text describes those earlier snapshots; it is not a blocker
+on the merged API. [E1B](E01B_HANDOFF.md) consumes the final wrappers.
+The deferred gclock Apply investigation remains in DEBTS without new work here.
 Keep any uncovered existing VA allocator race separate from this packet.

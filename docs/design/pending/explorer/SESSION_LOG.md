@@ -413,3 +413,223 @@ full-queue probe used a refused direct-focus operation; it was corrected and
 both sides rerun before recording the comparison. [Evidence](evidence/e01k/README.md#pr-257-review-round-2--owned-popup-close-escalation)
 includes reports, controller, serial logs and hashes. P5 revalidation and
 re-review remain pending; gclock font adoption remains deferred in DEBTS.
+
+## 2026-10-11–12 — E1B shared menus and action gallery
+
+Implemented immutable menu models, bar/overflow, retained popup widgets, cascade
+controller, optional synthetic icon provider and E1K-backed multi-window
+dispatch. The gallery demonstrates keyboard/pointer/context navigation, tall
+UTF-8 panels, independent action targets, visibility and hidden-bar recovery.
+Dismissal covers both queue orders; replacements drain surviving queues before
+handle reuse. INPUT_LOST cancels interaction; font adoption closes menus before
+old text bindings are released. Application callbacks run after family teardown.
+
+Host checks pass with ASan, UBSan and LeakSanitizer: 1,807 fake-font and 1,854
+real-font menu/action/status checks, plus existing UI/editor, Scribe and font
+contracts. Allocation sweeps and six behavioral mutations are covered. The
+whole userland cross build passes. Isolated four-core QEMU exercises PS/2 and
+USB HID, pointer dismissal/wheel/edges, font/color changes, VT and external
+focus, close routing, overflow and repeated-open resource stability.
+[Evidence and the P5 walkthrough](evidence/e01b/README.md) retain reports,
+controllers, screenshots and hashes. P5 acceptance awaits Chris.
+
+The branch began at PR #257 merge b36e9ddc and fast-forwarded to current
+userland f7f2f508 before publication. Corrected stale E1K pending banners;
+E1A/E1K are complete. Scribe/grootmenu migrations remain E1C and real icons
+remain E2. No kernel work or deferred gclock investigation is included.
+
+E1B is published as [PR #259](https://github.com/VBWizard/os64/pull/259),
+against userland. Tested implementation commit: `7c6de5cf`; publication metadata
+changes documentation only. Ordinary review and P5 acceptance remain pending.
+
+## 2026-10-12 — E1B P5 report and first PR review fixes
+
+Chris reports that the P5 walkthrough passed with no breakage. Long overflow
+heading intentionally shares the tall UTF-8 fixture; active bar hover switches
+top-level headings. Retrieved the supplied gallery log and retained it in
+[P5 evidence](evidence/e01b/p5-validation.txt): 32 callbacks see `menus=0`, popup
+pitch matches width, and exit reports zero font bytes/references. The installed
+commit/hash was not supplied; this hardware report precedes the review fixes.
+
+Addressed the five PR #259 findings: refresh closes invalid descendants and
+updates help; Alt/F10 chooses an enabled heading; native destruction failures
+propagate without freeing registered popup/session state; supplied bars must
+belong to the owner UI; owner wheel is consumed during active menus. Close and
+disposal now return a toolkit result, allowing retries before owner teardown.
+Font adoption/release refuse while surviving popups cannot be destroyed.
+
+The new navigation/ownership/wheel regressions fail before fixes and pass after.
+Destruction injection tests cover rejected disposal, callback prevention,
+root/child replacement, partial child-first closure, font refusal and recovery.
+Final fake/real host suites pass 2,079/2,127 checks with ASan, UBSan and
+LeakSanitizer enabled outside the sandbox. Real editor checks, font contracts,
+six mutation gates and full userland cross build pass. Reproduction and source
+hashes are retained in [review evidence](evidence/e01b/review-r1/README.md).
+Reran the retained four-core QEMU controller on the review binaries: HID,
+PS/2/fonts, external focus and quit modes pass. Dismissal/next-click behavior,
+real-font adoption, overflow, popup-local wheel and close cleanup remain correct.
+Live heap bytes/blocks return to the warm baseline after 24 more cycles; every
+gallery exit reports zero font bytes/references. The E1K kernel is unchanged.
+Ordinary re-review remains pending; E1C migrations and the gclock debt are untouched.
+
+Checking the native overflow screenshots revealed that the initial evidence's
+child capture did not open a child. The original trace and kernel implementation
+confirm this predates review changes: extended PS/2 navigation is press-only,
+but the menu held-key guard waited for a release. A targeted regression fails
+before the fix. Decoded navigation now repeats while command/mode keys retain
+their guard. Corrected the controller's redundant Right press and added a
+child-image assertion; corrected the earlier evidence claim in the same change.
+
+## 2026-10-12 — E1B second PR review fixes
+
+Addressed the five round-two findings on PR #259: refresh preserves failed
+teardown's ERROR over stale-action status; wheel/affordance scrolling clears
+hidden selection/help; selection movement cancels pending children before the
+queue drain can open them; direct hidden mnemonics highlight the overflow
+affordance; standalone focus treats zero as an external destination, not owner.
+The last report's nondismissal was not reproduced: the previous owner-content
+branch already closed standalone menus, but incorrectly armed suppression.
+
+Before-fix regressions reproduce the first four findings. Keyboard queue-race
+coverage includes arrows, Home/End, pages and duplicate mnemonics. Final host
+suites pass 2,526 fake-font / 2,574 real-font checks with ASan, UBSan and
+LeakSanitizer enabled outside the sandbox; six mutation gates and full userland
+cross build pass. [Second review evidence](evidence/e01b/review-r2/README.md)
+records reproduction and source/binary hashes. The P5 report predates this
+follow-up; ordinary re-review remains pending. Kernel/E1C/gclock scope is unchanged.
+
+Reran four-core native HID and PS/2 checks, plus focused probes on both inputs.
+Hidden Fixtures highlights overflow, entering overflow directly preserves it,
+and Left opens Actions. Wheel clears selection; the first Enter invokes nothing,
+then Down/Enter invokes visible Row 03 with menus closed. Broader font/overflow,
+external-focus and close routing checks pass. Live heap returns to the warm
+baseline after 24 more cycles; gallery traces exit with zero font bytes/references.
+The focused controller's first pointer path crossed Actions and correctly
+switched headings; that trial was discarded and the retained direct-entry path
+was verified. No code change was made for that controller path.
+
+## 2026-10-12 — E1B third PR review fixes
+
+Reproduced all four new findings: registered shortcuts precede menu keys,
+failed hidden-bar refresh leaves a temporary row, pending child intent survives
+Escape/Left parent collapse, and Page counts enabled moves instead of model rows.
+The isolated pending-collapse test reproduces UBSan's null-parent dereference.
+
+Centralized pending cancellation in close_to and guarded panel creation against
+missing parents. Menu gestures/mnemonics now precede unmodified shortcuts;
+failed retained-view refresh closes/collapses temporary reveal. Page computes
+one viewport's model-row target before adjusting for an enabled landing entry.
+Fixed an adjacent ownership detail by assigning the session view after retain
+succeeds, so failed retention cannot release a borrowed reference.
+
+Complete fake/real suites pass 3,673/3,721 checks with ASan, UBSan and
+LeakSanitizer enabled outside the sandbox; the isolated fixed collapse passes
+1,258 checks. Six mutation gates and strict full userland build pass.
+[Third review evidence](evidence/e01b/review-r3/README.md) records reproduction,
+source/binary hashes and limits. P5 evidence remains Chris's earlier report;
+ordinary re-review remains pending. No kernel, E1C or gclock debt changes.
+
+Four-core native HID, PS/2/fonts, external-focus/cleanup and quit controllers pass.
+Tall-menu End/Page Up, dismissal/next-click, real Interface adoption, overflow
+child creation and close routing remain correct. Every gallery trace exits with
+zero font bytes/references; live heap returns to the warm baseline after 24 more
+cycles. Shortcut conflicts, stale reveal and pending-collapse races are hosted
+in deterministic sanitizer tests, not claimed as induced native races.
+
+## 2026-10-12 — E1B fourth review and invariant audit
+
+Mapped the four findings to parent-path commitment, published bar state, input
+delivery pairing and observable request outcomes. Audited sibling transitions
+rather than stopping at the reported lines. Refresh uses the shared selection
+transaction, top-level replacement commits after successful teardown, and
+bar publication schedules damage for successful or invalidated snapshots.
+A context menu no longer highlights a remembered top-level heading. External
+loss and INPUT_LOST share input reset; coverage resets pairing and preserves
+menus. Bar-mode/opening share target preparation and event-only close errors
+reach the configured error hook.
+
+The first regression matrix reproduces all four findings with 45 failures.
+Expanded deterministic sequences observe native path/model/registration state
+between events and render the owner through production dirty rectangles.
+Complete fake/real suites pass 84,040/84,088 assertions with ASan, UBSan and
+LeakSanitizer enabled outside the sandbox. Forty-four parameterized sequences
+and 5,622 observation points are separate from those repeated assertions.
+The strict userland build passes. [Audit](E01B_INVARIANTS.md) and
+[fourth-review evidence](evidence/e01b/review-r4/README.md) record reproducibility
+and limits. Review remains pending; the earlier P5 report is separate evidence.
+
+Final native HID/pointer, PS/2/font/overflow, external-close and focused held-input
+controllers pass. Separate down/up routing confirms the first F10 and shortcut
+work after release outside the family, for both keyboards. Archived traces and
+pixel checks pass; all gallery exits release font bytes/target references, and
+live heap returns to the warm baseline after 24 more openings. Real-font
+UI/editor (1,626), Scribe (2,470) and font contract/ABI checks pass with leak
+detection. The evidence includes a focused P5 repeat for the updated build;
+no new P5 deployment or result is claimed.
+
+## 2026-10-12 — E1B fifth review: publication and viewport effects
+
+Confirmed all four findings against `36e93f67`: deferred failure notification
+preceded cleanup and hid failed teardown, bar-only refresh skipped selection
+normalization, a no-op wheel closed descendants, and downward scroll allowed a
+one-row final viewport. The audit extends selection eligibility after state
+publication and viewport effects. Failure cleanup gives teardown precedence
+before notification across deferred/root opening and preparation paths. Entry,
+refresh and bar-target publication share selection normalization; an invalid
+pending root is cancelled before its heading changes. A nonmutating viewport
+calculation gates descendant closure, preserving live/pending paths on no-op
+scrolling. Final viewport bounds use actual command/separator heights, including
+selection reveal.
+
+A scratch baseline compiles current regressions against the reviewed menu
+sources and records 78 failing assertions without fixture faults. Complete
+fake/real suites pass 125,601/125,649 assertions with ASan, UBSan and LeakSanitizer
+enabled outside the sandbox. Fourteen deliberate hazards are detected. Tests
+cover allocation/native opening failure combined with successful/refused parent
+teardown, error hook observation, bar-only refresh/same-view publication,
+invalid pending root, no-op/actual scroll and three mixed-height viewport sizes.
+The strict userland build passes. [Fifth review evidence](evidence/e01b/review-r5/README.md)
+records reproduction and manifests. Review remains pending; earlier P5 evidence
+remains separate from these changes.
+
+Final native HID and PS/2 scroll controllers preserve an open child on no-op
+wheel and show a packed final viewport (rows 18–49 at the bitmap Interface size),
+then invoke visible command 118 with menus closed. The standard keyboard,
+pointer, font/overflow and external-close controllers also pass. Archived trace,
+image and heap checks confirm zero font/target ownership at exit and stable
+live heap across warm/repeated openings. A focused P5 repeat is documented;
+no new hardware result or deployment is claimed.
+
+## 2026-10-12 — E1B sixth review: binding identity and fresh candidates
+
+Confirmed both findings against `e37cca21`: an inactive bar could bind a foreign
+registry model while retaining its old view, and opening eligibility read a
+preceding snapshot. Bar model binding now validates the retained view's registry
+before retention/preparation/publication, matching the existing view setter.
+Opening prepares a retained fresh candidate and evaluates its requested heading
+or overflow group against that snapshot. Horizontal navigation passes the same
+candidate into opening. The saved target is replaced after successful teardown;
+declined/failed requests preserve it. Shared enabled-state lookup also keeps
+reveal/reflow checks against the prepared candidate.
+
+A regression-first check caught that refreshing a candidate sharing the live
+view could invalidate its parent row during a declined request. That route now
+shares explicit menu refresh's selection reconciliation, including partial
+teardown failure, without querying twice. Tests check the old root model,
+selection/child path and independently retained target.
+
+The reviewed-source scratch baseline reproduces 26 failing assertions without
+fixture faults. Complete fake/real suites pass 150,351/150,399 assertions with
+ASan, UBSan and LeakSanitizer enabled outside the sandbox; sixteen injected
+hazards are detected and the strict full userland build passes. Between-event
+observation checks registry pairs as well as ownership and selections.
+[Sixth review evidence](evidence/e01b/review-r6/README.md) records both snapshot
+transitions through mnemonic/pointer/overflow and keyboard navigation, stale
+candidates, failed teardown and the intermediate reconciliation regression.
+Review remains pending. Earlier P5/editor/Scribe/font evidence is retained
+separately; no additional hardware result or kernel/E1C/gclock work is claimed.
+
+Final native HID/pointer, PS/2/font/overflow and external/close controllers pass.
+Archived traces show callbacks after menu closure and zero font/target ownership
+at exit; repeated openings return live heap to the warm baseline. Both new
+findings and same-view snapshot interruption are deterministic host fixtures.

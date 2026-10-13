@@ -2,7 +2,7 @@
 
 **Status:** architecture revised after [Fable's review](GUI_POPUPS_REVIEW.md),
 2026-10-11. Quinn selects focus-taking owned windows. The whole E1K packet is
-**Implemented; awaiting ordinary code review** following Fable's second pass and the concrete
+**Approved and merged in PR #257 (`b36e9ddc`)** following Fable's second pass and the concrete
 [E1K handoff](E01K_HANDOFF.md). See the [evidence](evidence/e01k/README.md); Chris confirmed QEMU and P5 validation after the diagnostic fix. [Disposition](GUI_POPUPS_DISPOSITION.md) records what
 was accepted, changed and declined. E1A is merged and Chris has completed its
 P5 walkthrough. E1K implementation owner: Quinn.
@@ -246,7 +246,7 @@ cross-thread canvas-sharing promise and no general shootdown subsystem.
 | Packet | Scope | Readiness |
 | --- | --- | --- |
 | E1K-W | Any-window wait, shared waiter conflict rule, wrappers and diagnostic | Implemented; see E01K_HANDOFF.md and the evidence packet. |
-| E1K-O | Owner links, focus identity/activation/return, content readback, chrome/switcher and input-loss contract | Implemented and exercised by popuptest; ordinary review pending. |
+| E1K-O | Owner links, focus identity/activation/return, content readback, chrome/switcher and input-loss contract | Implemented and exercised by popuptest; approved and merged. |
 | E1K-C | Popup birth-size capacity in both stores, comments and resource tests | Implemented; small popup pitch/minimum checks pass in the guest. |
 
 These are scope boundaries, not three mandatory PRs. Keep E1K-O coherent with
@@ -271,5 +271,6 @@ protocol explicit after destruction, and discards queued gesture records at
 loss delivery so stale presses cannot re-arm state. These are implementation
 requirements of the reviewed identity/loss guarantees, not a kernel menu object.
 
-E1B/E1C wait for the implementation evidence and stable public wrappers. E6
+E1K is complete, as Chris confirmed at E1B authorization. E1B consumes the
+merged wrappers; E1C follows the shared toolkit. E6
 still needs its own standalone channel design and architectural review.

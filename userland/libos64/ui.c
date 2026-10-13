@@ -81,6 +81,10 @@ void os64_ui_init(os64_ui_t *ui, os64_draw_ctx_t *ctx)
 	ui->font_plan_commit = (void (*)(os64_ui_t *, void *, void *))0;
 	ui->font_plan_discard = (void (*)(os64_ui_t *, void *, void *))0;
 	ui->font_plan_user = (void *)0;
+	ui->menu = NULL;
+	ui->menu_event = NULL;
+	ui->menu_before_font = NULL;
+	ui->menu_turn = NULL;
 }
 
 void os64_ui_widget_fixed_height(os64_ui_widget_t *w, int32_t h)
@@ -245,6 +249,15 @@ static os64_ui_widget_t *hit_test(os64_ui_widget_t *w, int32_t x, int32_t y)
 
 // ── dispatch ────────────────────────────────────────────────────────────────
 
+bool os64_ui_context(os64_ui_t *ui, const os64_gui_event_t *ev, bool keyboard)
+{
+	os64_ui_widget_t *w = keyboard ? ui->focus : hit_test(ui->root, ev->mouse.x, ev->mouse.y);
+	for (; w; w = w->parent)
+		if (os64_ui_widget_enabled(w) && w->on_context && w->on_context(w, ev, w->context_user))
+			return true;
+	return false;
+}
+
 static void update_hover(os64_ui_t *ui, int32_t x, int32_t y)
 {
 	os64_ui_widget_t *w = hit_test(ui->root, x, y);
@@ -314,6 +327,8 @@ bool os64_ui_dispatch(os64_ui_t *ui, const os64_gui_event_t *ev)
 		}
 		return true;
 	case OS64_GUI_EVENT_MOUSE_BUTTON_DOWN: {
+		if (ev->mouse.button == OS64_GUI_MOUSE_RIGHT)
+			return os64_ui_context(ui, ev, false);
 		if (ev->mouse.button != OS64_GUI_MOUSE_LEFT || ui->grab) return false;
 		update_hover(ui, ev->mouse.x, ev->mouse.y);
 		os64_ui_widget_t *w = hit_test(ui->root, ev->mouse.x, ev->mouse.y);
@@ -461,6 +476,10 @@ void os64_ui_run(os64_ui_t *ui, int64_t win, volatile bool *running)
 	os64_ui_paint(ui);   // first frame: whatever set_root marked
 
 	while ((running == (volatile bool *)0 || *running) && !ui->quit) {
+		if (ui->menu_turn) {
+			if (ui->menu_turn(ui) < 0) break;
+			continue;
+		}
 		os64_gui_event_t ev;
 		int64_t rc = os64_gui_event_wait(win, &ev);
 		if (rc != 1)
