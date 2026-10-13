@@ -848,6 +848,30 @@ static bool mix_length(flow_length_t a, flow_length_t b, double t, flow_length_t
     return true;
 }
 
+// A length its property keeps at 0 or more — a padding, a gap, a size, a
+// radius — held there when an overshooting easing carries it below, as
+// Chrome holds it. A length or a percentage that is below 0 is 0, and so
+// is a mix of the two whose parts both are; one whose parts differ in
+// sign depends on what the percentage is of, and is held where it is
+// used, as a calc() is (BROWSER_DEBTS: padding is not, yet).
+static void hold_nonneg(flow_length_t *l)
+{
+    if (l->kind == FLOW_LENGTH_PX && l->value < 0)
+        l->value = 0;
+    else if (l->kind == FLOW_LENGTH_PERCENT && l->value <= 0 && l->offset <= 0)
+        l->value = l->offset = 0;
+}
+
+// The same, mixed and held (mix_length, hold_nonneg).
+static bool mix_nonneg(flow_length_t a, flow_length_t b, double t, flow_length_t *out)
+{
+    if (!mix_length(a, b, t, out))
+        return false;
+    if (out != NULL)
+        hold_nonneg(out);
+    return true;
+}
+
 // A colour (0xTTRRGGBB), premultiplied by its alpha, each channel in
 // doubles, divided back and rounded half up once (Color 4 § 13.4).
 static uint32_t mix_colour(uint32_t a, uint32_t b, double t)
@@ -981,7 +1005,7 @@ static bool mix_sizes(const flow_bg_size_t *a, int32_t na, const flow_bg_size_t 
         list[i] = a[i % na];
         for (int k = 0; k < 2; k++)
             if (list[i].size[k].kind != FLOW_LENGTH_AUTO)
-                (void)mix_length(a[i % na].size[k], b[i % nb].size[k], t, &list[i].size[k]);
+                (void)mix_nonneg(a[i % na].size[k], b[i % nb].size[k], t, &list[i].size[k]);
     }
     *out = list;
     *nout = n;
@@ -1463,7 +1487,7 @@ static bool mix_prop(garb_prop_t p, const flow_style_t *a, const flow_style_t *b
     case GARB_PADDING_TOP: case GARB_PADDING_RIGHT: case GARB_PADDING_BOTTOM:
     case GARB_PADDING_LEFT:
         i = p - GARB_PADDING_TOP;
-        if (!mix_length(a->padding[i], b->padding[i], t, d != NULL ? &d->padding[i] : NULL))
+        if (!mix_nonneg(a->padding[i], b->padding[i], t, d != NULL ? &d->padding[i] : NULL))
             break;
         return true;
     case GARB_BORDER_TOP_WIDTH: case GARB_BORDER_RIGHT_WIDTH: case GARB_BORDER_BOTTOM_WIDTH:
@@ -1484,11 +1508,8 @@ static bool mix_prop(garb_prop_t p, const flow_style_t *a, const flow_style_t *b
         const flow_length_t *la = (const flow_length_t *)((const char *)a + off);
         const flow_length_t *lb = (const flow_length_t *)((const char *)b + off);
         flow_length_t r;
-        if (!mix_length(*la, *lb, t, &r))
+        if (!mix_nonneg(*la, *lb, t, &r))
             break;
-        // Not negative (Sizing 3): an overshoot holds at 0.
-        if (r.kind == FLOW_LENGTH_PX && r.value < 0)
-            r.value = 0;
         if (d != NULL)
             *(flow_length_t *)((char *)d + off) = r;
         return true;
@@ -1558,7 +1579,7 @@ static bool mix_prop(garb_prop_t p, const flow_style_t *a, const flow_style_t *b
         return true;
     }
     case GARB_FLEX_BASIS:
-        if (!mix_length(a->flex_basis, b->flex_basis, t, d != NULL ? &d->flex_basis : NULL))
+        if (!mix_nonneg(a->flex_basis, b->flex_basis, t, d != NULL ? &d->flex_basis : NULL))
             break;
         return true;
     case GARB_ORDER:
@@ -1567,7 +1588,7 @@ static bool mix_prop(garb_prop_t p, const flow_style_t *a, const flow_style_t *b
         return true;
     case GARB_ROW_GAP: case GARB_COLUMN_GAP: {
         bool row = p == GARB_ROW_GAP;
-        if (!mix_length(row ? a->row_gap : a->column_gap, row ? b->row_gap : b->column_gap, t,
+        if (!mix_nonneg(row ? a->row_gap : a->column_gap, row ? b->row_gap : b->column_gap, t,
                         d != NULL ? (row ? &d->row_gap : &d->column_gap) : NULL))
             break;
         return true;
@@ -1579,8 +1600,8 @@ static bool mix_prop(garb_prop_t p, const flow_style_t *a, const flow_style_t *b
             !mix_length(a->radius[i][1], b->radius[i][1], t, NULL))
             break;
         if (d != NULL) {
-            (void)mix_length(a->radius[i][0], b->radius[i][0], t, &d->radius[i][0]);
-            (void)mix_length(a->radius[i][1], b->radius[i][1], t, &d->radius[i][1]);
+            (void)mix_nonneg(a->radius[i][0], b->radius[i][0], t, &d->radius[i][0]);
+            (void)mix_nonneg(a->radius[i][1], b->radius[i][1], t, &d->radius[i][1]);
         }
         return true;
     case GARB_BOX_SHADOW: case GARB_TEXT_SHADOW: {

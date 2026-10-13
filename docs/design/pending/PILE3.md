@@ -1567,7 +1567,7 @@ out, and a layout at a time is the page at that time.
 
 | The field | How it is interpolated |
 |---|---|
-| a length (`flow_length_t`): PX, PERCENT, and PERCENT with an offset, which is how a `calc()` mix computes | each part separately — a length with a percentage mixes into the PERCENT-with-offset form (Values 4 § 5.6.1); AUTO and the other keywords discrete; each part rounded to its own unit, 1/64 px or 1/64 of a percent |
+| a length (`flow_length_t`): PX, PERCENT, and PERCENT with an offset, which is how a `calc()` mix computes | each part separately — a length with a percentage mixes into the PERCENT-with-offset form (Values 4 § 5.6.1); AUTO and the other keywords discrete; each part rounded to its own unit, 1/64 px or 1/64 of a percent. A length its property keeps at 0 or more (widths and heights, padding, gaps, radii, `flex-basis`, `background-size`) is held at 0 through an overshoot, as Chrome holds it; a mix whose parts differ in sign is held where it is used, as a `calc()` is |
 | a size in 26.6 (`font_size`, border widths, `border-spacing`, transform-origin's z) | a number in 26.6, rounded to 1/64 px |
 | a colour (`0xTTRRGGBB`) | premultiplied by its alpha, each channel in doubles, then divided back and rounded half up to 8 bits (Color 4 § 13.4) |
 | `opacity`, the flex factors (thousandths), `font-weight` | a real number, rounded to the field's grid |
@@ -1632,9 +1632,11 @@ and that is a change of structure: the face is due a layout at its end.
 **The face lays out at the frames.** yonder hands each layout
 `yonder_now_ms()`, and asks libflow when the page next changes:
 `flow_motion_due(tree, view, scroll)` answers the earliest time an
-animation whose element can be seen in `view` — its box, or for one
-that makes none (`display: contents`) the boxes inside it, which draw
-what it hands down — shows another value: the layout's own time for a
+animation whose element can be seen in `view` — its box; for one that
+makes none (`display: contents`) the boxes inside it, which draw what it
+hands down; or any box inside it drawn outside it, positioned, fixed or
+moved by a transform, which no ancestor's overflow holds — shows another
+value: the layout's own time for a
 value that moves continuously, which leaves when the next frame is to
 the face; the next step's edge for one in `steps()`; the millisecond
 after each crossing of a discrete value's level (one half, or for

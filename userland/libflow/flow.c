@@ -1668,7 +1668,7 @@ static bool motion_seen(const flow_tree_t *tree, const os64_html_node_t *n, os64
 
 uint64_t flow_motion_due(const flow_tree_t *tree, os64_gui_rect_t view, flow_point_t scroll)
 {
-    if (tree == NULL || tree->styles == NULL)
+    if (tree == NULL || tree->styles == NULL || tree->styles->nanimated == 0)
         return FLOW_NEVER;
     double now = (double)tree->now_ms, next = INFINITY;
     for (int32_t i = 0; i < tree->styles->nanimated && next > now; i++) {
@@ -1677,6 +1677,21 @@ uint64_t flow_motion_due(const flow_tree_t *tree, os64_gui_rect_t view, flow_poi
         if (st == NULL || st->motion == NULL || !motion_seen(tree, n, view, scroll))
             continue;
         next = fmin(next, f_motion_next(st->motion, now));
+    }
+    // What draws outside the boxes it is inside — a positioned box, a
+    // fixed one, one a transform moves, none of them in their ancestors'
+    // overflow: each that can be seen makes the animated elements it is
+    // inside due as well, since what they hand down (a colour, a fade, a
+    // turn) is drawn there.
+    for (int32_t i = 0; i < tree->nstacked && next > now; i++) {
+        const flow_box_t *b = tree->stacked[i];
+        if (b->node == NULL || !box_seen(b, view, scroll))
+            continue;
+        for (const os64_html_node_t *a = b->node->parent; a != NULL && next > now; a = a->parent) {
+            const FStyled *st = a->kind == OS64_HTML_ELEMENT ? f_style_of(tree->styles, a) : NULL;
+            if (st != NULL && st->motion != NULL)
+                next = fmin(next, f_motion_next(st->motion, now));
+        }
     }
     if (!(next < INFINITY))
         return FLOW_NEVER;

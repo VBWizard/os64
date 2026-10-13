@@ -517,6 +517,32 @@ static void motion_cascade_cases(void)
            s != NULL && s->z_index == INT32_MIN && s->order == INT32_MIN, NULL);
     moving_close(&m);
 
+    // Chrome's answers (10/13): a length its property keeps at 0 or more
+    // is held at 0 when an overshooting easing carries it below — a
+    // padding, a gap, a radius, a background's size, a flex basis, a width
+    // in percent, a padding in percent.
+    moving_open(&m, MOTION_STYLE
+        "@keyframes k{from{padding-left:10px;column-gap:10px;border-top-left-radius:10px;"
+        "background-size:10px 10px;flex-basis:10px;width:10%}"
+        "to{padding-left:0;column-gap:0;border-top-left-radius:0;background-size:0 0;"
+        "flex-basis:0;width:0%}}"
+        "@keyframes q{from{padding-left:10%}to{padding-left:0%}}"
+        "#k{display:flex;background-image:linear-gradient(red,blue);"
+        "animation:k 1s cubic-bezier(0,3,1,3) -.5s paused}"
+        "#q{animation:q 1s cubic-bezier(0,3,1,3) -.5s paused}"
+        "</style><div id=k></div><div id=q></div>", 1000);
+    s = moving_style(&m, "k");
+    expect("motion: lengths kept at 0 or more are held there through an overshoot",
+           s != NULL && s->padding[3].value == 0 && s->column_gap.value == 0 &&
+               s->radius[0][0].value == 0 && s->radius[0][1].value == 0 &&
+               s->backgrounds.size[0].size[0].value == 0 &&
+               s->backgrounds.size[0].size[1].value == 0 && s->flex_basis.value == 0 &&
+               s->width.value == 0 && s->width.offset == 0, NULL);
+    s = moving_style(&m, "q");
+    expect("motion: and a padding in percent",
+           s != NULL && s->padding[3].kind == FLOW_LENGTH_PERCENT && s->padding[3].value == 0, NULL);
+    moving_close(&m);
+
     // Forty keyframes of one property, 2.5% apart: halfway is the
     // twentieth, however many there are.
     char many[4096];
@@ -776,6 +802,36 @@ static void motion_due_cases(void)
                : i == 1 ? "motion due: display: contents, seen through its text"
                         : "motion due: display: contents, all it holds out of view",
                due == (i < 2 ? 1000 : FLOW_NEVER), NULL);
+        moving_close(&m);
+    }
+
+    // What an element hands down is drawn by a box inside it that is drawn
+    // outside it — fixed, positioned, moved by a transform — and that no
+    // ancestor's overflow holds: the element is due where that box is
+    // seen, and not when it, too, is out of view.
+    static const char *const kOutside[] = {
+        "<div class=c style='margin-top:2000px'><p style='position:fixed;top:0'>x</p></div>",
+        "<div class=c style='position:relative;margin-top:2000px'>"
+        "<p style='position:absolute;top:-2000px'>x</p></div>",
+        "<div class=c style='margin-top:2000px'><p style='transform:translateY(-2000px)'>x</p></div>",
+        "<div class=c style='position:relative;margin-top:2000px'>"
+        "<p style='position:absolute;top:100px'>x</p></div>",
+    };
+    static const char *const kOutsideNames[] = {
+        "motion due: seen through a fixed box inside it",
+        "motion due: seen through a positioned box inside it",
+        "motion due: seen through a box inside it a transform moves",
+        "motion due: not when the positioned box is out of view too",
+    };
+    for (int i = 0; i < 4; i++) {
+        char html[512];
+        snprintf(html, sizeof(html), MOTION_STYLE "@keyframes c{to{color:red}}"
+                 ".c{animation:c 1s linear}</style>%s", kOutside[i]);
+        moving_open(&m, html, 1000);
+        uint64_t due = flow_motion_due(m.tree, kView, (flow_point_t){0, 0});
+        char detail[48];
+        snprintf(detail, sizeof(detail), "got %llu", (unsigned long long)due);
+        expect(kOutsideNames[i], due == (i < 3 ? 1000 : FLOW_NEVER), detail);
         moving_close(&m);
     }
 
