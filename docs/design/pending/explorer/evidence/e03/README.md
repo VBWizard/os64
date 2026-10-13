@@ -213,3 +213,20 @@ the sandbox. Cross-building `libos64.so` and `actiongallery` passes. The refresh
 files served from `/tmp/e3-wire`. These are build hashes; the original native
 receipts above remain tied to `8b5d13a7`. This follow-up has not been installed
 or walked through on P5.
+
+## Underscore fixture follow-up — 2026-10-13
+
+At Chris's request, synthetic filenames use underscores between the name and
+number and between words in the long-name suffix. Other display fields retain
+their formatting. The Space selection/typeahead contract is unchanged.
+
+The production widget regression starts at the first row, types `beta_0000`,
+checks focus remains on `Beta_000002`, adds `1` and checks focus moves to
+`Beta_000010`, then adds `0` to verify the complete filename. The
+[real-font ASan/UBSan/LeakSanitizer run](underscore-followup-host.txt) passes
+14,975 checks, reusing the real-font objects from the clock follow-up. The
+library/gallery cross-build passes. The refreshed gallery is in `/tmp/e3-wire`;
+[these four-file bundle hashes](underscore-followup-bundle-sha256.txt) supersede
+the earlier bundle for acceptance delivery. Original native screenshots and
+installed-byte receipts retain their original space-separated fixtures and
+source revision. This fixture follow-up has not been installed on P5.

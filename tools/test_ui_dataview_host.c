@@ -187,6 +187,17 @@ static void widget_input(const char *dir)
     key_event(f,OS64_GUI_EVENT_KEY_DOWN,'\b',0x0e,0); CHECK(os64_ui_selection_focus(&f->selection)==narrowed);
     test_time+=1000001; key_event(f,OS64_GUI_EVENT_KEY_DOWN,'b',0x30,0);
     CHECK(os64_ui_data_row(f->data,os64_ui_selection_focus(&f->selection))->search.bytes[0]=='B');
+    CHECK(os64_ui_dataview_command(&f->view,OS64_UI_SELECTION_CHOOSE,id_at(f,0),true)==OS64_UI_OK);
+    test_time+=1000001;
+    const char *filename_prefix="beta_0000";
+    const uint8_t filename_codes[]={0x30,0x12,0x14,0x1e,0x0c,0x0b,0x0b,0x0b,0x0b};
+    for (size_t i=0;filename_prefix[i];++i)
+        key_event(f,OS64_GUI_EVENT_KEY_DOWN,filename_prefix[i],filename_codes[i],filename_prefix[i]=='_'?OS64_GUI_MOD_SHIFT:0);
+    CHECK(os64_ui_selection_focus(&f->selection)==id_at(f,2));
+    key_event(f,OS64_GUI_EVENT_KEY_DOWN,'1',0x02,0);
+    CHECK(os64_ui_selection_focus(&f->selection)==id_at(f,10));
+    key_event(f,OS64_GUI_EVENT_KEY_DOWN,'0',0x0b,0);
+    CHECK(!strcmp(os64_ui_data_row(f->data,os64_ui_selection_focus(&f->selection))->search.bytes,"Beta_000010"));
     test_time=-1;
     key_event(f,OS64_GUI_EVENT_KEY_DOWN,'a',0x1e,0);
     uint64_t unavailable_focus=os64_ui_selection_focus(&f->selection);

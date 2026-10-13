@@ -838,3 +838,15 @@ passes. The four-file `/tmp/e3-wire` acceptance bundle is refreshed; hashes and
 [the follow-up receipt](evidence/e03/README.md#clock-diagnostic-follow-up--2026-10-13)
 record its scope. Earlier QEMU/image/guest receipts remain for `8b5d13a7`; no
 P5 follow-up install or hardware acceptance is claimed.
+
+
+## 2026-10-13 — E3 synthetic filenames use underscores
+
+Chris requested underscore examples after a search containing a space ended
+its prefix. Updated synthetic filenames, including long-name suffixes, and the
+P5 acceptance example. The production typeahead regression verifies
+`Beta_000002` moves to `Beta_000010` on the final `1` in `beta_00001` and matches
+the full filename after another `0`. ASan/UBSan/LeakSanitizer passes 14,975
+checks and the gallery cross-build passes. The `/tmp/e3-wire` gallery is
+refreshed; [follow-up evidence](evidence/e03/README.md#underscore-fixture-follow-up--2026-10-13)
+records hashes and scope. Space handling is unchanged; P5 acceptance is pending.

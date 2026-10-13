@@ -59,8 +59,8 @@ static os64_ui_status_code_t details_fixture(size_t count,uint64_t domain,unsign
         source_row *r=&source[i]; *r=(source_row){0};
         bool folder=i%9==0;
         static const char *prefixes[]={"Alpha","Alpine","Beta","Bravo","Caf\xc3\xa9","Delta","Echo","\xe6\x96\x87\xe4\xbb\xb6"};
-        os64_snprintf(r->name,sizeof(r->name),"%s %06lu%s",prefixes[i%8],(unsigned long)i,
-            i%13==0?" — a deliberately long synthetic label that clips inside its column":"");
+        os64_snprintf(r->name,sizeof(r->name),"%s_%06lu%s",prefixes[i%8],(unsigned long)i,
+            i%13==0?"_—_a_deliberately_long_synthetic_label_that_clips_inside_its_column":"");
         uint64_t size=i==1?10:i==2?2:i*971;
         os64_snprintf(r->size,sizeof(r->size),"%lu bytes",(unsigned long)size);
         os64_snprintf(r->date,sizeof(r->date),"2026-10-%02u 09:%02u",1+(unsigned)(i%28),(unsigned)(i%60));

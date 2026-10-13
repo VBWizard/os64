@@ -206,6 +206,8 @@ P5 walkthrough, after deploying both library and gallery:
 3. Filter out a selected row and clear the filter. Its selection must stay gone.
    Refresh/delete the anchor fixture, then sort while several items are selected.
 4. Type repeated initials and a longer prefix, pause a second, then type again.
+   With focus at the first row, type `beta_00001` without a one-second pause;
+   selection should move from `Beta_000002` to `Beta_000010` on the `1`.
    Test Enter/double-click activation and returning from another window.
 5. Resize/move/hide columns; restore them through View > Columns. Shrink the
    window; inspect both scrollbars and the last row. Change Interface font and
