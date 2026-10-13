@@ -593,6 +593,25 @@ static void paint_cases(void)
                     "fill 0 0 100 50 #fefefe\n"
                     "text \"Hi\" 0 14 #640000 clip 0 0 100 20\n"
                     "text \"Hi\" 0 14 #000000/0\n");
+    s_clip_refused = false;
+    // A clip the face made whose layers then find no memory — the
+    // gradient's pixels — is rescued as a refused one is, over what it
+    // laid: the text in the gradient's middle, not a headline gone.
+    s_paint_starved = true;
+    paint_page_case("a text clip whose gradient finds no memory still draws its words",
+                    "<!doctype html><style>body { margin: 0 } div {"
+                    " background: linear-gradient(#000000, #c80000); background-clip: text;"
+                    " color: transparent }</style><div>Hi</div>",
+                    100, (os64_gui_rect_t){0, 0, 100, 50}, true,
+                    "fill 0 0 100 50 #fefefe\n"
+                    "clip 0 2 12 16\n"
+                    "text \"Hi\" 0 14 #ffffff clip 0 0 100 20\n"
+                    "fill clip\n"
+                    "end clip\n"
+                    "text \"Hi\" 0 14 #640000 clip 0 0 100 20\n"
+                    "text \"Hi\" 0 14 #000000/0\n");
+    s_paint_starved = false;
+    s_clip_refused = true;
     // Its colour, when it has one, at full opacity: a half-transparent
     // #c80000 rescues the text in #c80000.
     paint_page_case("a refused text clip draws its text in its colour, opaque",

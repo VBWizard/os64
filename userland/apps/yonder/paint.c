@@ -1014,18 +1014,20 @@ static double wrap(double x, double size)
 
 // Gradient `g` in `tile`, drawn over `area` (and the view), cut to `shape`
 // when `round`; a currentColor stop is `current`, the colour of the box it
-// is drawn on.
-static void gradient(const Painter *p, const flow_gradient_t *g, const yonder_tile_t *tile,
+// is drawn on. False only when its pixels found no memory and nothing was
+// drawn — a text clip must know (text_clip); true when it is drawn, or
+// there is nothing of it to draw.
+static bool gradient(const Painter *p, const flow_gradient_t *g, const yonder_tile_t *tile,
                      os64_gui_rect_t area, const Round *shape, bool round, uint32_t current)
 {
     double tx = tile->at.x, ty = tile->at.y, w = tile->at.w, h = tile->at.h;
     if (w <= 0 || h <= 0)
-        return;
+        return true;
     int64_t x0 = max64(area.x, p->view.x), y0 = max64(area.y, p->view.y);
     int64_t x1 = min64((int64_t)area.x + area.w, (int64_t)p->view.x + p->view.w);
     int64_t y1 = min64((int64_t)area.y + area.h, (int64_t)p->view.y + p->view.h);
     if (x1 <= x0 || y1 <= y0 || p->v->pixels == NULL)
-        return;
+        return true;
     // The line (linear) or the ray (radial) and its length in px.
     double dx = 0, dy = 0, len, cx = w / 2, cy = h / 2, rx = 1, ry = 1;
     bool flat = false;
@@ -1094,7 +1096,7 @@ static void gradient(const Painter *p, const flow_gradient_t *g, const yonder_ti
     }
     Stops stops;
     if (!(len > 0) || !stops_resolve(g, len, current, &stops))
-        return;
+        return true;
     // One colour everywhere: the flat ellipse, and a repeating gradient
     // whose repeat is shorter than a pixel along the way it runs — none
     // at all, or one no pixel can show (§ 3.6) — which is its average. A
@@ -1106,7 +1108,7 @@ static void gradient(const Painter *p, const flow_gradient_t *g, const yonder_ti
     bool rep_x = tile->repeat_x, rep_y = tile->repeat_y;
     uint32_t *out = os64_malloc((size_t)((x1 - x0) * (y1 - y0)) * sizeof(*out));
     if (out == NULL)
-        return;
+        return false;
     for (int64_t y = y0; y < y1; y++) {
         int64_t a = 0, e = 0;
         bool row = !round || round_row(shape, y * SUB + SUB / 2, &a, &e);
@@ -1134,6 +1136,7 @@ static void gradient(const Painter *p, const flow_gradient_t *g, const yonder_ti
                                    (int32_t)(x1 - x0), (int32_t)(y1 - y0)},
                  out);
     os64_free(out);
+    return true;
 }
 
 // Layers `from` down to `to` of a box's background (`n` of them; at `n`,
@@ -1159,15 +1162,16 @@ static bool clipped_to_text(const flow_style_t *s, int32_t i, int32_t n)
 // to its clip box — rounded as the box is when `outer` is its shape (a
 // clip to the text is the border box: yonder_box_edge). With no picture or
 // gradient from a sheet, a `background` attribute's picture is drawn as
-// the top layer.
-static void frame_layer(const Painter *p, const flow_box_t *b, const Round *outer, int32_t i,
+// the top layer. False only when a gradient's pixels found no memory
+// (gradient).
+static bool frame_layer(const Painter *p, const flow_box_t *b, const Round *outer, int32_t i,
                         int32_t n)
 {
     const flow_style_t *s = b->style;
     bool sheet = flow_background_has_image(s);
     flow_layer_t l = flow_background_layer(s, i < n ? i : n - 1);
     if (i == n && !s->has_background)
-        return;
+        return true;
     os64_gui_rect_t cut = yonder_box_edge(b, b->rect, l.clip);
     Round shape = {0};
     if (outer != NULL)
@@ -1179,13 +1183,14 @@ static void frame_layer(const Painter *p, const flow_box_t *b, const Round *oute
         fill(p, cut.x, cut.y, cut.w, cut.h, paper_of(p, s->background));
     } else if (l.gradient != NULL) {
         if (yonder_background_tile(&l, yonder_box_edge(b, b->rect, l.origin), 0, 0, &tile))
-            gradient(p, l.gradient, &tile, cut, &shape, outer != NULL, s->color);
+            return gradient(p, l.gradient, &tile, cut, &shape, outer != NULL, s->color);
     } else if (l.image != NULL || (!sheet && i == 0)) {
         os64_gui_rect_t area = on_page(p, cut);
         os64_gui_rect_t origin = on_page(p, yonder_box_edge(b, b->rect, l.origin));
         (void)p->v->backdrop(p->v->ctx, b, sheet ? i : -1, &area, origin, area.x, area.y,
                              on_page(p, p->view));
     }
+    return true;
 }
 
 // One layer of an inline box's piece. A piece is its content area, with no
@@ -1193,28 +1198,33 @@ static void frame_layer(const Painter *p, const flow_box_t *b, const Round *oute
 // all the piece; its colour is right on every piece, and its gradient
 // layers are placed on each — the browsers lay the pieces end to end and
 // draw one gradient along them, which needs knowledge the public tree does
-// not have (PILE3.md § Booked).
-static void piece_layer(const Painter *p, const flow_box_t *b, int32_t i, int32_t n)
+// not have (PILE3.md § Booked). False as frame_layer's is.
+static bool piece_layer(const Painter *p, const flow_box_t *b, int32_t i, int32_t n)
 {
     if (i == n) {
         if (b->style->has_background)
             fill(p, b->rect.x, b->rect.y, b->rect.w, b->rect.h, paper_of(p, b->style->background));
-        return;
+        return true;
     }
     flow_layer_t l = flow_background_layer(b->style, i);
     yonder_tile_t tile;
     if (l.gradient != NULL && yonder_background_tile(&l, b->rect, 0, 0, &tile))
-        gradient(p, l.gradient, &tile, b->rect, NULL, false, b->style->color);
+        return gradient(p, l.gradient, &tile, b->rect, NULL, false, b->style->color);
+    return true;
 }
 
-static void run_layers(const Painter *p, const LayerRun *run)
+// Every layer of the run, each drawn whatever came of the last; false when
+// one of them found no memory.
+static bool run_layers(const Painter *p, const LayerRun *run)
 {
+    bool drawn = true;
     for (int32_t i = run->from; i >= run->to; i--) {
         if (run->piece)
-            piece_layer(p, run->b, i, run->n);
+            drawn = piece_layer(p, run->b, i, run->n) && drawn;
         else
-            frame_layer(p, run->b, run->outer, i, run->n);
+            drawn = frame_layer(p, run->b, run->outer, i, run->n) && drawn;
     }
+    return drawn;
 }
 
 // A box's background over its outer shadows, its colour then its layers
@@ -1232,7 +1242,7 @@ static void background_of(const Painter *p, const flow_box_t *b, const Round *ou
         if (clipped_to_text(s, i, n))
             text_clip(p, &run);
         else
-            run_layers(p, &run);
+            (void)run_layers(p, &run);
         i = run.to;
     }
 }
@@ -1619,9 +1629,10 @@ static uint32_t clip_solid(const Painter *p, const LayerRun *run)
 // the text's own coverage — then the layers into the clip's group, which
 // the face lays over what is under it at each pixel's coverage. A face that
 // cannot (no such verbs, past its limits, no memory) gets the text in one
-// solid colour instead (clip_solid): never the layers as a box over
-// transparent text, nor a headline whose words are gone. A run that draws
-// nothing (run_paints) makes no clip and rescues nothing.
+// solid colour instead (clip_solid), and so does a clip whose layers found
+// no memory once it was open, over what it laid: never the layers as a box
+// over transparent text, nor a headline whose words are gone. A run that
+// draws nothing (run_paints) makes no clip and rescues nothing.
 static void text_clip(const Painter *p, const LayerRun *run)
 {
     if (!run_paints(p, run))
@@ -1645,9 +1656,10 @@ static void text_clip(const Painter *p, const LayerRun *run)
         pen.pen = 0x00ffffffu;
         flow_visit_text_clip(run->b, pen_text, &pen);
         p->v->clip_fill(p->v->ctx);
-        run_layers(p, run);
+        bool drawn = run_layers(p, run);
         p->v->clip_close(p->v->ctx);
-        return;
+        if (drawn)
+            return;
     }
     pen.pen = clip_solid(p, run);
     flow_visit_text_clip(run->b, pen_text, &pen);
@@ -1824,7 +1836,7 @@ void yonder_paint(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_
         yonder_tile_t tile;
         if (l.gradient != NULL) {
             if (yonder_background_tile(&l, origin, 0, 0, &tile))
-                gradient(&p, l.gradient, &tile, viewport, NULL, false, owner->style->color);
+                (void)gradient(&p, l.gradient, &tile, viewport, NULL, false, owner->style->color);
         } else if (l.image != NULL || (!sheet && i == 0)) {
             (void)verbs->backdrop(verbs->ctx, owner, sheet ? i : -1, &viewport, origin, 0, 0,
                                   viewport);

@@ -77,8 +77,15 @@ void os64_exit(int32_t code)
     (void)code;
     exit(3);
 }
+// While set, every allocation the painter asks for fails: paint_of sets it
+// around yonder_paint alone when a case says the page is painted short of
+// memory (s_paint_starved), so laying the page out is unaffected.
+static bool s_alloc_starved;
+
 void *os64_malloc(size_t size)
 {
+    if (s_alloc_starved)
+        return NULL;
     void *at = malloc(size != 0 ? size : 1);
     if (at != NULL)
         live++;
@@ -454,6 +461,8 @@ static os64_html_document_t *parse(const char *html, size_t len)
 static const char **s_canvas_owner;
 // When set, the page is cascaded and painted dark (paint.h's yonder_dark_t).
 static const yonder_dark_t *s_dark_paint;
+// When set, the page is painted with no memory to be had (s_alloc_starved).
+static bool s_paint_starved;
 
 static char *paint_of(const char *html, size_t len, int32_t width, os64_gui_rect_t view,
                       bool *escaped, bool css)
@@ -484,8 +493,10 @@ static char *paint_of(const char *html, size_t len, int32_t width, os64_gui_rect
                         rec_control,   rec_backdrop, rec_group_open, rec_group_close,
                         rec_mask,      rec_pixels,   rec_frame,      rec_through_open,
                         rec_through_close, rec_clip_open, rec_clip_fill, rec_clip_close};
+    s_alloc_starved = s_paint_starved;
     if (t != NULL)
         yonder_paint(t, view, (flow_point_t){view.x, view.y}, kEnv.paper, s_dark_paint, &v);
+    s_alloc_starved = false;
     if (s_canvas_owner != NULL) {
         const flow_box_t *o = t != NULL ? yonder_canvas_owner(t, &v) : NULL;
         *s_canvas_owner = o == NULL ? "none"

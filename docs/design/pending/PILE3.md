@@ -1237,7 +1237,9 @@ Written before the code (the lesson of S7b's nineteen rounds):
   from the background: its colour if it has one, else its top gradient's
   middle, else `color` — each at full opacity, since a transparent one is
   the case being rescued. The headline loses its gradient and keeps its
-  words.
+  words. A clip the face made whose layers then find no memory (a
+  gradient's pixels) is rescued the same way, over what it laid (#262,
+  Codex): the layers report it, since only they know.
 - **An all-covering mask is the opaque group**: a text clip whose mask is
   255 everywhere lays its group exactly as the warp lays an opaque one —
   the oracle the face's tests are checked against.
@@ -1262,7 +1264,7 @@ coverage against the content laid at that opacity, worked apart from the
 warp; coverage 0 leaving a pixel as it is; the offset and the clip; and
 the all-covering oracle. yonder's host harness: the verb sequence of a clip
 (open, the text and its underline in white, fill, layers, close, the shadow
-after), the refused clip's solid text, and a clip with nothing to draw,
-each by hand. A mutant harness breaks each rule. In the guest,
+after), the refused clip's solid text, a clip whose gradient finds no
+memory once it is open, and a clip with nothing to draw, each by hand. A mutant harness breaks each rule. In the guest,
 `tools/pages/pile3-cliptext.html` — the two probe pages — beside headless
 Chrome.
