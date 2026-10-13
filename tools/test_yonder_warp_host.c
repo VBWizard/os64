@@ -311,6 +311,88 @@ int main(void)
                out[4] == 3 && isfinite(out[5]) && out[5] == 9 && t2[4] == 41 && t2[5] == -28);
     }
 
+    // A TEXT CLIP's group (PILE3.md § The text clip). Covered everywhere,
+    // it is the opaque warp, to the bit: the oracle the design names.
+    {
+        Group g;
+        group_make(&g, 13, 9, 1);
+        uint32_t *d = backdrop(13, 9), *ref = malloc(13 * 9 * 4), *mask = malloc(13 * 9 * 4);
+        memcpy(ref, d, 13 * 9 * 4);
+        for (int32_t k = 0; k < 13 * 9; k++)
+            mask[k] = 0xffffffffu;
+        yonder_sheets_t s = {g.black, g.white, 13, 9};
+        const double id[6] = {1, 0, 0, 1, 0, 0};
+        os64_gui_rect_t all = {0, 0, 13, 9};
+        int ok = yonder_warp_masked(d, 13, all, &s, mask, 0, 0) && lay(ref, 13, all, &s, id, 255);
+        expect("text clip: a mask covering everything lays the group as the opaque warp does",
+               ok && memcmp(d, ref, 13 * 9 * 4) == 0);
+        free(d);
+        free(ref);
+        free(mask);
+        group_free(&g);
+    }
+
+    // At each pixel's own coverage c: the content laid over the backdrop at
+    // opacity c of 255 — a(content over D) + (1 - a) D, here apart from the
+    // warp — to within the level two roundings part by; 0 leaves the pixel
+    // as it is, the top byte kept everywhere.
+    {
+        Group g;
+        group_make(&g, 11, 8, 1);
+        uint32_t *d = backdrop(11, 8), *was = malloc(11 * 8 * 4), *mask = malloc(11 * 8 * 4);
+        memcpy(was, d, 11 * 8 * 4);
+        for (int32_t k = 0; k < 11 * 8; k++) {
+            uint32_t c = k % 5 == 0 ? 0 : rnd() & 0xff;
+            mask[k] = 0xff000000u | c << 16 | c << 8 | c;
+        }
+        yonder_sheets_t s = {g.black, g.white, 11, 8};
+        int ok = yonder_warp_masked(d, 11, (os64_gui_rect_t){0, 0, 11, 8}, &s, mask, 0, 0);
+        for (int32_t k = 0; k < 11 * 8; k++) {
+            double a = ((mask[k] >> 8) & 0xff) / 255.0;
+            uint32_t full = over(g.content[k], was[k]), want = 0;
+            for (int sh = 0; sh <= 16; sh += 8) {
+                double v = a * ((full >> sh) & 0xff) + (1 - a) * ((was[k] >> sh) & 0xff);
+                want |= (uint32_t)(v + 0.5) << sh;
+            }
+            ok = ok && near(d[k], want, 1) && (d[k] >> 24) == 0xab &&
+                 (((mask[k] >> 8) & 0xff) != 0 || d[k] == was[k]);
+        }
+        expect("text clip: each pixel laid at its own coverage, none where it is 0", ok);
+        free(d);
+        free(was);
+        free(mask);
+        group_free(&g);
+    }
+
+    // Moved: a 5 by 4 group at (3, 2) of a 12 by 10 target, inside a clip
+    // 3 by 2 from (4, 3) that cuts it on every side — its pixel (i, j) on
+    // (i + 3, j + 2), and nothing outside where it lands or outside the
+    // clip touched.
+    {
+        Group g;
+        group_make(&g, 5, 4, 0);
+        uint32_t *d = backdrop(12, 10), *was = malloc(12 * 10 * 4), *mask = malloc(5 * 4 * 4);
+        memcpy(was, d, 12 * 10 * 4);
+        for (int32_t k = 0; k < 5 * 4; k++)
+            mask[k] = 0xffffffffu;
+        yonder_sheets_t s = {g.black, g.white, 5, 4};
+        int ok = yonder_warp_masked(d, 12, (os64_gui_rect_t){4, 3, 3, 2}, &s, mask, 3, 2);
+        for (int32_t y = 0; y < 10; y++)
+            for (int32_t x = 0; x < 12; x++) {
+                bool on = x >= 4 && y >= 3 && x < 4 + 3 && y < 3 + 2;
+                uint32_t want = on ? over(g.content[(y - 2) * 5 + (x - 3)], was[y * 12 + x])
+                                   : was[y * 12 + x];
+                ok = ok && (d[y * 12 + x] & 0xffffffu) == (want & 0xffffffu);
+            }
+        expect("text clip: a group laid at its offset, inside the clip only", ok);
+        expect("text clip: no mask or no sheets lays nothing",
+               !yonder_warp_masked(d, 12, (os64_gui_rect_t){0, 0, 12, 10}, &s, NULL, 0, 0));
+        free(d);
+        free(was);
+        free(mask);
+        group_free(&g);
+    }
+
     printf("yonder warp: %d checks, %d failed\n", s_checks, s_failed);
     return s_failed != 0;
 }

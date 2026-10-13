@@ -521,7 +521,7 @@ draws it, but for the smoothing below.
 | Debt | Why it waits | Trigger |
 |---|---|---|
 | Every layer of a list | — | done in S4c, below |
-| `background-clip: text` | the glyphs are drawn by the text verb, with no mask to fill with a picture; a background clipped to its text is not drawn on any box (the canvas's is drawn across the canvas whatever the clip says, as § 2.11.1 says and Chrome draws it), and `@supports (background-clip: text)` says no, so a page takes the fallback it wrote | a page whose gradient headline matters |
+| `background-clip: text` | — | done in S7c, § The text clip, below (the canvas's background is still drawn across the canvas whatever the clip says, as § 2.11.1 says and Chrome draws it) |
 | An inline box's origin and clip boxes | a piece in the public tree is its content area — inline padding and borders are neither laid out nor drawn — so every box of a piece is the piece itself | a page whose padded inline background matters |
 | A content box with percentage padding | the tree does not carry the width a percentage padding resolved against, so it counts as none, as for an atom's content | a page whose content-box background sits wrong |
 | A scaled picture's smoothing | — | done in § Zoom, below |
@@ -952,7 +952,7 @@ a fixed bar inside a transformed panel — and grokipedia read from the P5.
 | Debt | Why it waits | Trigger |
 |---|---|---|
 | Every matrix but a translation drawn upright | the painter draws into the page, never into a surface of its own | S7b |
-| `background-clip: text` | a background drawn through a mask of the text is a surface of its own | S7c |
+| `background-clip: text` | — | done in S7c, § The text clip, below |
 | `perspective`, `perspective()`, `transform-style: preserve-3d`, `backface-visibility` | a flat drawing is the answer without them; with them it is a 3D renderer | a page whose 3D card flip matters |
 | `transform-box` | the border box is the default for HTML, and SVG is not drawn | SVG |
 | A transform on a table's rows, row groups and columns | they are no containing blocks here, as `position: relative` on them is not (POSITION.md § Booked) | a page whose transformed row matters |
@@ -1081,7 +1081,7 @@ its matrix not at all.
 | A large `visibility: hidden` box inside a turned group still sizes its sheets | the bounds come from layout overflow, which keeps what is hidden; a page whose hidden content pushes a turned group past the sheet limits gets it upright | a page that does |
 | A sticky box, a scroll container's bars, or a fragment revealed inside a drawn-through box | each is worked against the page's viewport, which the box's own coordinates are not | a page that scrolls inside a turned box |
 | `perspective` and non-flat matrices | carried over from S7a | a page whose 3D card flip matters |
-| `background-clip: text` | its own slice, S7c, on these surfaces | S7c |
+| `background-clip: text` | — | done in S7c, § The text clip, below |
 
 ### Proof
 
@@ -1105,3 +1105,163 @@ a matrix that cannot be undone laying nothing.
 `tools/test_libflow_transform_mutants.py` breaks each rule, painter's
 included. In the guest, the fixture's last two rows beside headless
 Chrome: turned, grown, a half-turned chevron, a mirror, a skew.
+
+## The text clip (slice S7c, `background-clip: text`)
+
+A background clipped to its text is the gradient headline: a gradient (or a
+picture) painted only where the letters are, the letters themselves left
+transparent so the gradient shows through them. Chris, 10/10: done for
+real, on S7b's surfaces.
+
+### What CSS asks
+
+Backgrounds 4 § 2.8: "The background is painted within (clipped to) the
+intersection of the border box and the geometry of the text, including any
+decorations and emphasis marks in the element and its in-flow and floated
+descendants. The text color has no effect on the painting of the
+background." The background colour is cut by the bottom layer's clip, as
+for any clip (§ 2.1), so `background-clip: text` with a colour clips the
+colour to the text too. On the root it has no effect (§ 2.11.1, which S4b
+already follows).
+
+The page also has to stop the text covering what it is clipped to, and the
+web does that with a prefixed property. The Compatibility Standard defines
+both names pages write: **`-webkit-background-clip`** is a legacy name
+alias of `background-clip` (§ 3.4.1), and **`-webkit-text-fill-color`**
+(§ 3.4.6.1, `<color>`, initially `currentcolor`, inherited) is the colour a
+glyph is FILLED with — `color` still decides decorations, shadows'
+`currentcolor`, and everything else. The idiom is
+`-webkit-background-clip: text; -webkit-text-fill-color: transparent`, and
+a page that writes only the standard names writes `color: transparent`.
+
+libgarb drops every prefixed name today, on the rule that one is one
+engine's dialect. These two are not: the Compatibility Standard makes every
+engine read them, so they are read as their standard twins are, and the
+diagnostics rule (YONDER_DIAGNOSTICS.md: a prefixed name is not counted as
+missing) is unchanged — it counts, it does not read.
+
+### What Chrome draws
+
+The spec leaves the edges open, so Chrome was asked (two probe pages,
+headless, 2026-10-12; they become this slice's fixture):
+
+| The case | Chrome |
+|---|---|
+| decorations: underline, wavy, line-through | in the clip: an underline of a transparent colour shows the gradient |
+| a text shadow | not in the clip; drawn with the text, over the clipped background |
+| a relatively positioned child, with or without `z-index` | in the clip |
+| an absolutely positioned child | not in the clip (out of flow) |
+| a float, a block child, a plain inline-block | in the clip |
+| a TRANSFORMED child | not in the clip — its text disappears |
+| a child below full opacity | in the clip, at FULL strength: the mask is the glyphs, not how they are drawn |
+| a list marker's bullet | not in the clip |
+| a child with a background of its own | painted over the clipped background, as painting order says |
+| text past the border box | cut at the border box |
+| a span that wraps | one gradient laid along the pieces end to end |
+
+That table is the set this slice draws. The last row is the debt S4b
+already booked (an inline box's layers are placed on each piece); it stays
+booked, and a wrapped gradient span shows each piece its own gradient.
+
+### How it is built
+
+**libgarb.** `-webkit-background-clip` is read as `background-clip` (one
+alias table, the Compatibility Standard's § 3.4.1 rows that are drawn —
+this one). `-webkit-text-fill-color` is a new inherited colour property.
+`background-clip: text` leaves `kApproximated`, so `@supports` says yes.
+
+**libflow.** The style gains the fill colour (`currentcolor` until set,
+resolved where `color` is). And libflow owns WHICH TEXT a box's clip holds,
+because that is CSS and the table above, not drawing:
+`flow_visit_text_clip(box, visit, ctx)` hands `visit`, in tree order,
+every TEXT box the clip of `box` holds — the box's own and its
+in-flow and floated descendants', skipping an out-of-flow descendant, a
+transformed one and everything in them, and markers. A block's are its
+subtree. A SPAN piece's are the text on its own line whose element is the
+span's or inside it, since a piece is the text's sibling on the line, not
+its parent.
+
+**The painter.** A run of consecutive layers clipped to the text (and the
+colour, when the bottom layer is one of them) is drawn as one TEXT CLIP:
+
+1. `clip_open(bounds)` — the face makes a mask and a group;
+2. every text box of the clip set is painted with a PEN: by `paint_box`
+   itself, the code that paints it normally, at its own offset and inside
+   its own clips, but its run and its decorations in white, with no
+   shadows and nothing else, and no opacity group around anything;
+3. `clip_fill()` — what follows is the group;
+4. the layers, as they are drawn without the clip, cut to the border box;
+5. `clip_close()` — the group is laid over what was under it, at each
+   pixel's coverage in the mask.
+
+Then the text is painted where it always is, in its fill colour: a
+transparent fill draws nothing, and a solid one paints over the gradient,
+as Chrome's row 7 does. A run that draws nothing — no colour, no picture,
+no gradient — makes no clip and rescues nothing: Chrome shows nothing
+there either.
+
+**The face.** A text clip is an opacity group whose opacity is PER PIXEL.
+S7b already lays a group painted on two backdrops — B on black, W on white
+— over the page as a·B + (1 − a + a·T)·D; here `a` is the mask's coverage
+at each pixel instead of the group's opacity. The mask is a third surface,
+white text on black, and white over black at coverage c is c — the text
+verb's own blending is the coverage: (255·c + 127) / 255 is c, to the
+level. The group nests inside a group drawn through its matrix (its
+surfaces are in the coordinates being painted, as every group's are).
+Nothing inside a text clip opens a group of its own: its mask is text, its
+group is the layers.
+
+### Contracts
+
+Written before the code (the lesson of S7b's nineteen rounds):
+
+- **Coverage is the text's own.** The mask is drawn by the code that draws
+  the text and its decorations, in white. There is no second account of
+  where a glyph or an underline is, so the two cannot disagree.
+- **Membership is libflow's.** `flow_visit_text_clip` is the one answer to
+  which text a clip holds, and it says Chrome's table; the painter asks it
+  and does not decide.
+- **Bounds are at least the ink** (§ Transforms, the painter, Booked: THE
+  BOUNDS CONTRACT): the text clip's bounds hold the clip set's ink — each
+  text box's rect grown by its own `ink` — cut to the border box and the
+  view. Never less.
+- **The composition is the warp's own**: each channel is the one
+  function the warp lays a group with, B + (1 − a + a·T)·D, with the
+  mask's coverage as `a` (`yonder_warp_masked`). No claim past that.
+- **A refused clip is never nothing and never a box.** When the face
+  cannot make the clip (past the sheet limits, out of memory, or a face
+  with no such verbs), drawing the layers unclipped would
+  paint a rectangle over transparent text, and drawing nothing would leave
+  no text at all. So the text clip set is painted in ONE solid colour taken
+  from the background: its colour if it has one, else its top gradient's
+  middle, else `color` — each at full opacity, since a transparent one is
+  the case being rescued. The headline loses its gradient and keeps its
+  words.
+- **An all-covering mask is the opaque group**: a text clip whose mask is
+  255 everywhere lays its group exactly as the warp lays an opaque one —
+  the oracle the face's tests are checked against.
+
+### Booked
+
+| Debt | Why it waits | Trigger |
+|---|---|---|
+| A gradient span that wraps is a gradient per piece | an inline box's layers are placed on each piece (S4b, above) | a page whose wrapped gradient span matters |
+| `-webkit-text-stroke` | an outline of a glyph is a rasteriser's verb the text engine does not have | a page whose outlined headline matters |
+| Emphasis marks | yonder does not draw `text-emphasis` at all | the slice that draws them |
+| `background-clip: border-area` (Backgrounds 4) | a newer value no page in the census writes; `@supports` says no | a page that writes it |
+
+### Proof
+
+libgarb's corpus: both spellings read, the alias's value list the same,
+the fill colour inherited, `@supports` yes for `text` and for each
+prefixed name. libflow: the clip set for every row of Chrome's table,
+worked by hand (`flow_visit_text_clip` lists the text boxes it visits), a
+span's from its line. warp's host harness: each pixel laid at its own
+coverage against the content laid at that opacity, worked apart from the
+warp; coverage 0 leaving a pixel as it is; the offset and the clip; and
+the all-covering oracle. yonder's host harness: the verb sequence of a clip
+(open, the text and its underline in white, fill, layers, close, the shadow
+after), the refused clip's solid text, and a clip with nothing to draw,
+each by hand. A mutant harness breaks each rule. In the guest,
+`tools/pages/pile3-cliptext.html` — the two probe pages — beside headless
+Chrome.

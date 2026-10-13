@@ -6101,11 +6101,26 @@ typedef struct {
     os64_gui_rect_t bounds;     // the sheets' page coordinates
 } GlassThrough;
 
+// A TEXT CLIP (PILE3.md § The text clip): a mask the clip's text is drawn
+// into, white on black, then a group of two sheets as a laid group has,
+// laid at the close over the targets outside at each pixel's coverage
+// (yonder_warp_masked). One is open at a time — nothing inside a clip
+// opens another — and it is bounded as a laid group's sheets are.
+typedef struct {
+    Glass sheet[3];             // the mask, then the group on black and on white
+    GlassGroups groups[3];
+    os64_gui_surface_t surf[3];
+    Glass *was[2];
+    int32_t was_n;
+    os64_gui_rect_t bounds;     // page coordinates
+} GlassClip;
+
 typedef struct {
     Glass *now[2];
     int32_t n;
     GlassThrough *open[GLASS_THROUGHS];
     int32_t depth;
+    GlassClip *clip;
 } GlassPane;
 
 static void pane_fill(void *ctx, os64_gui_rect_t r, uint32_t colour)
@@ -6290,6 +6305,90 @@ static void pane_through_close(void *ctx, uint8_t alpha)
     through_free(t);
 }
 
+static void clip_free(GlassClip *c)
+{
+    for (int k = 0; k < 3; k++)
+        os64_free(c->surf[k].pixels);
+    os64_free(c);
+}
+
+// The mask and the group's two sheets, `bounds` of the coordinates being
+// painted, black, black and white; the mask the target until clip_fill.
+static bool pane_clip_open(void *ctx, os64_gui_rect_t bounds)
+{
+    GlassPane *gp = ctx;
+    // Bounded as a laid group's sheets, for the same reasons
+    // (pane_through_open).
+    const int64_t half = INT32_MAX / 2;
+    if (gp->clip != NULL || bounds.w <= 0 || bounds.h <= 0 || bounds.w > SHEET_SIDE ||
+        bounds.h > SHEET_SIDE || (int64_t)bounds.w * bounds.h > SHEET_PIXELS ||
+        bounds.x < -half || bounds.y < -half || (int64_t)bounds.x + bounds.w > half ||
+        (int64_t)bounds.y + bounds.h > half)
+        return false;
+    GlassClip *c = os64_malloc(sizeof(*c));
+    if (c == NULL)
+        return false;
+    os64_memset(c, 0, sizeof(*c));
+    size_t n = (size_t)bounds.w * (size_t)bounds.h;
+    for (int k = 0; k < 3; k++) {
+        c->surf[k].pixels = os64_malloc(n * sizeof(uint32_t));
+        if (c->surf[k].pixels == NULL) {
+            clip_free(c);
+            return false;
+        }
+        c->surf[k].width = c->surf[k].pitch_px = (uint32_t)bounds.w;
+        c->surf[k].height = (uint32_t)bounds.h;
+        uint32_t paper = k < 2 ? 0xff000000u : 0xffffffffu;
+        for (size_t i = 0; i < n; i++)
+            c->surf[k].pixels[i] = paper;
+        c->sheet[k] = (Glass){&c->surf[k], -bounds.x, -bounds.y,
+                              (os64_gui_rect_t){0, 0, bounds.w, bounds.h}, &c->groups[k]};
+    }
+    c->bounds = bounds;
+    c->was_n = gp->n;
+    for (int32_t k = 0; k < gp->n; k++)
+        c->was[k] = gp->now[k];
+    gp->clip = c;
+    gp->now[0] = &c->sheet[0];
+    gp->n = 1;
+    return true;
+}
+
+static void pane_clip_fill(void *ctx)
+{
+    GlassPane *gp = ctx;
+    if (gp->clip == NULL)
+        return;
+    gp->now[0] = &gp->clip->sheet[1];
+    gp->now[1] = &gp->clip->sheet[2];
+    gp->n = 2;
+}
+
+// The group laid onto each target outside at the mask's coverage — a sheet
+// pixel (i, j) is the page's (i + bounds.x, j + bounds.y), which the
+// target's offset takes onto its pixels — inside what the target paints.
+static void pane_clip_close(void *ctx)
+{
+    GlassPane *gp = ctx;
+    GlassClip *c = gp->clip;
+    if (c == NULL)
+        return;
+    gp->clip = NULL;
+    gp->n = c->was_n;
+    for (int32_t k = 0; k < c->was_n; k++)
+        gp->now[k] = c->was[k];
+    yonder_sheets_t s = {c->surf[1].pixels, c->surf[2].pixels, c->bounds.w, c->bounds.h};
+    for (int32_t k = 0; k < gp->n; k++) {
+        const Glass *on = gp->now[k];
+        os64_gui_rect_t cut = on_glass(on, c->bounds);
+        if (cut.w > 0 && cut.h > 0)
+            (void)yonder_warp_masked(on->surf->pixels, on->surf->pitch_px, cut, &s,
+                                     c->surf[0].pixels, c->bounds.x + on->dx,
+                                     c->bounds.y + on->dy);
+    }
+    clip_free(c);
+}
+
 // Only the part of the view that is dirty is painted: the kernel takes
 // exactly that rectangle when libui publishes, so nothing outside it is
 // seen, and a moving picture costs its own box rather than the page.
@@ -6305,11 +6404,11 @@ static void view_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_
         os64_draw_fill_rect(&ctx->surf, part, 0xff000000u | (s_dark ? kDark.paper : PAGE_PAPER));
         return;
     }
-    GlassPane pane = {{&gl, NULL}, 1, {NULL}, 0};
+    GlassPane pane = {{&gl, NULL}, 1, {NULL}, 0, NULL};
     yonder_verbs_t v = {&pane,        pane_fill,     pane_text,       pane_image,
                         pane_control, pane_backdrop, pane_group_open, pane_group_close,
                         pane_mask,    pane_pixels,   pane_frame,      pane_through_open,
-                        pane_through_close};
+                        pane_through_close, pane_clip_open, pane_clip_fill, pane_clip_close};
     os64_gui_rect_t view = {part.x - gl.dx, part.y - gl.dy, part.w, part.h};
     yonder_paint(g.page.tree, view, scroll_now(), PAGE_PAPER, s_dark ? &kDark : NULL, &v);
     box_bars(&gl, view);

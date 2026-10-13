@@ -417,6 +417,27 @@ IN: background-clip: padding-box, text
 OUT: background-clip: padding-box, text
 IN: background-clip: text
 OUT: background-clip: text
+# The Compatibility Standard's names (§ 3.4.1, § 3.4.6.1): the prefixed
+# clip is the standard one, in any case and with the same list; no other
+# prefixed background name is read. The fill colour is a colour, inherited.
+IN: -webkit-background-clip: text
+OUT: background-clip: text
+IN: -WebKit-Background-Clip: padding-box, text
+OUT: background-clip: padding-box, text
+IN: -webkit-background-clip: border-area
+OUT: invalid
+IN: -webkit-background-size: cover
+OUT: unknown
+IN: -moz-background-clip: text
+OUT: unknown
+IN: -webkit-text-fill-color: transparent
+OUT: -webkit-text-fill-color: rgba(0, 0, 0, 0)
+IN: -webkit-text-fill-color: currentcolor
+OUT: -webkit-text-fill-color: currentcolor
+IN: -webkit-text-fill-color: inherit
+OUT: -webkit-text-fill-color: inherit
+IN: -webkit-text-fill-color: 3px
+OUT: invalid
 IN: background: none
 OUT: background-color: rgba(0, 0, 0, 0); background-image: none; background-repeat: repeat; background-position-x: 0%; background-position-y: 0%; background-size: auto auto; background-origin: padding-box; background-clip: border-box
 IN: background-position: right bottom

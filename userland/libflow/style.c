@@ -336,6 +336,8 @@ static flow_style_t initial(const Ctx *c)
     s.font_style = FLOW_FONT_NORMAL;
     s.font_size = css(c, c->env->viewport_font_px);
     s.color = c->env->ink;
+    s.fill = s.color;
+    s.current_colours = FLOW_CURRENT_FILL;
     s.backgrounds = kBackgrounds;
     s.opacity = 1000;
     s.flex_shrink = 1000;
@@ -369,6 +371,9 @@ static flow_style_t inherit(const Ctx *c, const flow_style_t *parent)
     s.font_style = parent->font_style;
     s.font_size = parent->font_size;
     s.color = parent->color;
+    s.fill = parent->fill;
+    s.current_colours = (uint8_t)((s.current_colours & ~FLOW_CURRENT_FILL) |
+                                  (parent->current_colours & FLOW_CURRENT_FILL));
     s.text_align = parent->text_align;
     s.white_space = parent->white_space;
     s.line_height = parent->line_height;
@@ -1760,6 +1765,11 @@ static void take(Spec *dst, const Spec *src, garb_prop_t prop)
         d->flow_root = s->flow_root;
         break;
     case GARB_COLOR: d->color = s->color; break;
+    case GARB_TEXT_FILL_COLOR:
+        d->fill = s->fill;
+        d->current_colours = (uint8_t)((d->current_colours & ~FLOW_CURRENT_FILL) |
+                                       (s->current_colours & FLOW_CURRENT_FILL));
+        break;
     case GARB_BACKGROUND_COLOR:
         d->has_background = s->has_background;
         d->background = s->background;
@@ -2740,6 +2750,17 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
         else if (v->kind == GARB_V_COLOR)
             s->color = colour_of(v->color);
         break;
+    case GARB_TEXT_FILL_COLOR:
+        if (v->kind != GARB_V_COLOR)
+            break;
+        // currentColor is resolved in finish, as the background's is.
+        if (v->color.current) {
+            s->current_colours |= FLOW_CURRENT_FILL;
+        } else {
+            s->current_colours &= (uint8_t)~FLOW_CURRENT_FILL;
+            s->fill = colour_of(v->color);
+        }
+        break;
     case GARB_BACKGROUND_COLOR:
         if (v->kind != GARB_V_COLOR)
             break;
@@ -3301,6 +3322,8 @@ static void finish(const Ctx *c, Spec *sp, const flow_style_t *parent, bool item
         s->has_background = flow_alpha(s->color) > 0;
         s->background = s->color;
     }
+    if (s->current_colours & FLOW_CURRENT_FILL)
+        s->fill = s->color;
     s->width = resolve(sp->width, s->font_size, automatic);
     s->height = resolve(sp->height, s->font_size, automatic);
     for (int i = 0; i < 4; i++) {

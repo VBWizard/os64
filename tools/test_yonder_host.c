@@ -367,6 +367,32 @@ static void rec_through_close(void *ctx, uint8_t alpha)
     out(&rec->out, "end through %d\n", (int)alpha);
 }
 
+// A text clip (PILE3.md § The text clip): its bounds, where its mask ends
+// and its group begins, and its close. Refused when the case says the
+// face cannot make one (s_clip_refused).
+static bool s_clip_refused;
+
+static bool rec_clip_open(void *ctx, os64_gui_rect_t bounds)
+{
+    Rec *rec = ctx;
+    if (s_clip_refused)
+        return false;
+    if (!inside(bounds, rec->view))
+        rec->escaped = true;
+    out(&rec->out, "clip %d %d %d %d\n", bounds.x, bounds.y, bounds.w, bounds.h);
+    return true;
+}
+
+static void rec_clip_fill(void *ctx)
+{
+    out(&((Rec *)ctx)->out, "fill clip\n");
+}
+
+static void rec_clip_close(void *ctx)
+{
+    out(&((Rec *)ctx)->out, "end clip\n");
+}
+
 // A shadow's mask: where, its colour, and the sum and the largest of its
 // alphas, which a hand-worked case can check without listing every pixel.
 // When set, every mask's alphas are also written here, a 200 x 100 page: a
@@ -457,7 +483,7 @@ static char *paint_of(const char *html, size_t len, int32_t width, os64_gui_rect
     yonder_verbs_t v = {&rec,          rec_fill,     rec_text,       rec_image,
                         rec_control,   rec_backdrop, rec_group_open, rec_group_close,
                         rec_mask,      rec_pixels,   rec_frame,      rec_through_open,
-                        rec_through_close};
+                        rec_through_close, rec_clip_open, rec_clip_fill, rec_clip_close};
     if (t != NULL)
         yonder_paint(t, view, (flow_point_t){view.x, view.y}, kEnv.paper, s_dark_paint, &v);
     if (s_canvas_owner != NULL) {

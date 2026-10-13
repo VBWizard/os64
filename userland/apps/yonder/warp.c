@@ -115,6 +115,37 @@ bool yonder_warp(uint32_t *dst, uint32_t pitch, os64_gui_rect_t clip, const yond
     return true;
 }
 
+bool yonder_warp_masked(uint32_t *dst, uint32_t pitch, os64_gui_rect_t clip,
+                        const yonder_sheets_t *s, const uint32_t *mask, int32_t dx, int32_t dy)
+{
+    if (s->w <= 0 || s->h <= 0 || mask == NULL)
+        return false;
+    // Where the sheets land, met with the clip, in 64 bits: an offset and a
+    // side each fit 32, their sum may not.
+    int64_t x0 = dx > clip.x ? dx : clip.x, y0 = dy > clip.y ? dy : clip.y;
+    int64_t x1 = (int64_t)dx + s->w, y1 = (int64_t)dy + s->h;
+    if ((int64_t)clip.x + clip.w < x1)
+        x1 = (int64_t)clip.x + clip.w;
+    if ((int64_t)clip.y + clip.h < y1)
+        y1 = (int64_t)clip.y + clip.h;
+    for (int64_t y = y0; y < y1; y++) {
+        uint32_t *row = dst + (size_t)y * pitch;
+        size_t j = (size_t)(y - dy);
+        for (int64_t x = x0; x < x1; x++) {
+            size_t at = j * (size_t)s->w + (size_t)(x - dx);
+            uint32_t c = (mask[at] >> 8) & 0xffu;
+            if (c == 0)
+                continue;
+            uint32_t pb = s->black[at], pw = s->white[at], d = row[x], out = 0;
+            for (int k = 0; k < 3; k++)
+                out |= lay(part(pb, 16 - 8 * k), part(pw, 16 - 8 * k), part(d, 16 - 8 * k),
+                           c / 255.0) << (16 - 8 * k);
+            row[x] = (d & 0xff000000u) | out;
+        }
+    }
+    return true;
+}
+
 void yonder_warp_rebase(const double m[6], int32_t bx, int32_t by, int32_t dx, int32_t dy,
                         double out[6])
 {

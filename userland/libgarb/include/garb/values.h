@@ -83,6 +83,10 @@ typedef enum {
     // PERCENTAGE. `rotate`: none, an ANGLE about z, or a NUMBER whose four
     // items are an axis's x, y and z and the ANGLE.
     GARB_TRANSFORM, GARB_TRANSFORM_ORIGIN, GARB_TRANSLATE, GARB_ROTATE, GARB_SCALE,
+    // Compatibility § 3.4.6.1: the colour a glyph is FILLED with, a COLOR
+    // or the KEYWORD currentcolor. Its name is the prefixed one; there is
+    // no other.
+    GARB_TEXT_FILL_COLOR,
     GARB_NPROPS
 } garb_prop_t;
 
