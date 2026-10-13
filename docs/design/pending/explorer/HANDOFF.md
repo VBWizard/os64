@@ -31,7 +31,7 @@ Chris's P5 HID/performance walkthrough remain pending; E3 is not called accepted
 E4's real directory browser follows accepted E3.
 
 The design branch `codex/explorer-e3-design` / `.worktrees/explorer-e3` remains
-separate. The implementation PR against `userland` carries its design packet.
+separate. The implementation [draft PR #264](https://github.com/VBWizard/os64/pull/264) against `userland` carries its design packet.
 
 | Work | State | Next action |
 | --- | --- | --- |

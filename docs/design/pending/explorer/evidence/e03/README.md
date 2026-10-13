@@ -4,7 +4,7 @@ Implementation branch `codex/explorer-e3-implementation`, fresh from
 `origin/codex/explorer-e3-design` (`75227ada`), based on `userland` E2 merge
 `f39b0ae0`. E3A is `ee24fb64`; E3B and the final tested source are `8b5d13a7`.
 The subsequent evidence commit changes documentation and receipts. No kernel or ABI source changed. Review and P5 acceptance are
-pending; this record does not call the slice accepted.
+pending in [draft PR #264](https://github.com/VBWizard/os64/pull/264) against `userland`; this record does not call the slice accepted.
 
 ## Acceptance matrix
 

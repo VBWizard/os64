@@ -821,3 +821,6 @@ ms under TCG. Host p95 is 1.947 ms. Neither is claimed as P5 latency.
 logs, screenshots and the invariant map. Independent review and Chris's P5
 HID/performance walkthrough remain pending. E3 is implemented, not accepted;
 E4 follows accepted E3.
+
+Published as [draft PR #264](https://github.com/VBWizard/os64/pull/264) against `userland`. The source remains `8b5d13a7`;
+the publication follow-up changes documentation links only.
