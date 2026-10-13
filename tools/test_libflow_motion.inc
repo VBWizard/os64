@@ -567,6 +567,67 @@ static void motion_cascade_cases(void)
            s != NULL && s->border_style[0] == FLOW_BORDER_SOLID && s->border_width[0] == 3 * 64, NULL);
     moving_close(&m);
 
+    // Chrome's answers (10/14): what a style's float, position and
+    // overflow make of each other is settled once, from what every
+    // animation makes together — an inline span floated by one animation
+    // and positioned by another is a block; overflow-x hidden on its own
+    // turns a visible overflow-y auto. And a colour or a shadow in
+    // currentColor at both ends follows the element's colour as another
+    // animation moves it, whatever the element's own colour field was.
+    moving_open(&m, MOTION_STYLE
+        "@keyframes fl{from{float:left}to{float:left}}"
+        "@keyframes po{from{position:relative}to{position:relative}}"
+        "@keyframes ox{from{overflow-x:hidden}to{overflow-x:hidden}}"
+        "@keyframes col{from{color:rgb(0,0,0)}to{color:rgb(200,0,0)}}"
+        "@keyframes sh{from{box-shadow:0 0 0 currentColor;border-top-color:currentColor}"
+        "to{box-shadow:10px 0 0 currentColor;border-top-color:currentColor}}"
+        "#sp{animation:fl 1s linear -.5s paused,po 1s linear -.5s paused}"
+        "#ov{animation:ox 1s linear -.5s paused}"
+        "#cc{border-top:2px solid blue;animation:col 1s linear -.5s paused,sh 1s linear -.5s paused}"
+        "</style><p><span id=sp>x</span></p><div id=ov></div><div id=cc></div>", 1000);
+    s = moving_style(&m, "sp");
+    expect("motion: floated by one animation and positioned by another, a block",
+           s != NULL && s->display == FLOW_DISPLAY_BLOCK && s->float_side == FLOW_FLOAT_LEFT &&
+               s->position == FLOW_POSITION_RELATIVE && s->specified_inline, NULL);
+    s = moving_style(&m, "ov");
+    expect("motion: an overflow axis animated alone, its pair settled",
+           s != NULL && s->overflow_x == FLOW_OVERFLOW_HIDDEN && s->overflow_y == FLOW_OVERFLOW_AUTO, NULL);
+    s = moving_style(&m, "cc");
+    expect("motion: currentColor at both ends follows the moving colour",
+           s != NULL && s->color == 0x640000u && s->nbox_shadows == 1 && s->box_shadows[0].current &&
+               s->box_shadows[0].x > 0 && s->border_color[0] == 0x640000u &&
+               (s->current_colours & FLOW_CURRENT_BORDER(0)), NULL);
+    moving_close(&m);
+    // And what the element's own rules settled stays settled: the base is
+    // its computed style, and only a keyframe's values are as written
+    // (Chrome, the same day). A span its rules float, an animation taking
+    // the float away: a block, floated nowhere. An axis its rules hide, an
+    // animation setting it back: both axes auto, since its pair was auto.
+    // A keyframe hiding one axis beside the other visible, and a later
+    // animation setting it back: both visible.
+    moving_open(&m, MOTION_STYLE
+        "@keyframes nf{from{float:none}to{float:none}}"
+        "@keyframes a{from{overflow-x:hidden;overflow-y:visible}to{overflow-x:hidden;overflow-y:visible}}"
+        "@keyframes b{from{overflow-x:visible}to{overflow-x:visible}}"
+        "#nf{float:left;animation:nf 1s linear -.5s paused}"
+        "#p{overflow-x:hidden;animation:b 1s linear -.5s paused}"
+        "#o{animation:a 1s linear -.5s paused,b 1s linear -.5s paused}"
+        "#q{animation:a 1s linear -.5s paused}"
+        "</style><p><span id=nf>x</span></p><div id=p></div><div id=o></div><div id=q></div>", 1000);
+    s = moving_style(&m, "nf");
+    expect("motion: a float its rules gave, taken away by an animation, leaves a block",
+           s != NULL && s->display == FLOW_DISPLAY_BLOCK && s->float_side == FLOW_FLOAT_NONE, NULL);
+    s = moving_style(&m, "p");
+    expect("motion: an axis its rules hid, set back by an animation, leaves both auto",
+           s != NULL && s->overflow_x == FLOW_OVERFLOW_AUTO && s->overflow_y == FLOW_OVERFLOW_AUTO, NULL);
+    s = moving_style(&m, "o");
+    expect("motion: a keyframe's own overflow pair is not settled before the mix",
+           s != NULL && s->overflow_x == FLOW_OVERFLOW_VISIBLE && s->overflow_y == FLOW_OVERFLOW_VISIBLE, NULL);
+    s = moving_style(&m, "q");
+    expect("motion: and settled after it",
+           s != NULL && s->overflow_x == FLOW_OVERFLOW_HIDDEN && s->overflow_y == FLOW_OVERFLOW_AUTO, NULL);
+    moving_close(&m);
+
     // Two axes past sqrt(DBL_MAX) are compared as the unit vectors they are:
     // x and y, which differ, so they turn as matrices, as the same axes
     // written small do.
@@ -726,9 +787,10 @@ static void motion_timeline_cases(void)
     // gone is dropped by a complete layout and not by an incomplete one;
     // the holds are let go (a document freed with one held would end the
     // program).
-    os64_html_document_t *doc = parse("<!doctype html><p id=x>x</p><p id=y>y</p>");
+    os64_html_document_t *doc = parse("<!doctype html><p id=x>x</p><p id=y>y</p><p id=z>z</p>");
     const os64_html_node_t *x = motion_find(doc->document, "x");
     const os64_html_node_t *y = motion_find(doc->document, "y");
+    const os64_html_node_t *z = motion_find(doc->document, "z");
     flow_timeline_t *tl = flow_timeline_new(doc);
     FAnimation an[2];
     memset(an, 0, sizeof(an));
@@ -822,6 +884,56 @@ static void motion_timeline_cases(void)
     f_timeline_end(tl, true);
     expect("motion: a record made in an incomplete layout joins its element's chain",
            ok && two_names[0].record == kept_a, NULL);
+
+    // A layout that fails is undone: what it paused runs on from where it
+    // ran, what it made goes, and the chains it grew end where they did —
+    // x's at its a, z's at none — so the next layout makes b and z's a
+    // again, and keeps the rest.
+    FAnimation u;
+    memset(&u, 0, sizeof(u));
+    u.timing.name = (flow_name_t){"u", 1};
+    u.timing.duration_ms = 1000;
+    u.timing.iterations = 1;
+    FMotion undone = {.anims = &u, .nanims = 1};
+    f_timeline_begin(tl);
+    ok = f_timeline_element(tl, y, &undone, 18000) && f_timeline_element(tl, x, &just_a, 18000);
+    f_timeline_end(tl, true);
+    int32_t kept_records = f_timeline_records(tl);
+    FRecord *kept_u = u.record;
+    kept_a = two_names[0].record;
+    u.timing.paused = true;
+    f_timeline_begin(tl);
+    ok = ok && f_timeline_element(tl, y, &undone, 18200) && f_timeline_element(tl, x, &a_and_b, 18200) &&
+         f_timeline_element(tl, z, &one, 18200);
+    bool grew = f_timeline_records(tl) == kept_records + 2;
+    f_timeline_undo(tl);
+    u.timing.paused = false;
+    u.record = kept_u;
+    expect("motion: a layout undone leaves what it paused running, and makes nothing",
+           ok && grew && kept_records == 2 && f_timeline_records(tl) == kept_records &&
+               f_motion_next(&undone, 18500) == 19000, NULL);
+    f_timeline_begin(tl);
+    ok = f_timeline_element(tl, y, &undone, 18300) && f_timeline_element(tl, x, &a_and_b, 18300) &&
+         f_timeline_element(tl, z, &one, 18300);
+    f_timeline_end(tl, true);
+    expect("motion: after an undone layout, the chains it grew are made again",
+           ok && u.record == kept_u && two_names[0].record == kept_a && two_names[1].record != NULL &&
+               an[0].record != NULL && f_timeline_records(tl) == 4, NULL);
+    // The undoing allocates nothing: replacing a key's value never grows
+    // the map, even a map one key short of growing, with no memory left.
+    FMap full = {0};
+    static int keys[49];
+    bool put = true;
+    for (int i = 0; i < 48; i++)
+        put = put && f_map_put(&full, &keys[i], &keys[i]);
+    fail_single = false;
+    allocations = 0;
+    fail_at = 1;
+    bool replaced = f_map_put(&full, &keys[47], NULL) && f_map_get(&full, &keys[47]) == NULL;
+    bool added = f_map_put(&full, &keys[48], &keys[48]);
+    fail_at = 0;
+    expect("motion: replacing a key's value needs no room", put && replaced && !added, NULL);
+    f_map_free(&full);
 
     // Matching at scale: three thousand names, a and b in turn, matched
     // as Animations 1 § 2 says — the last of each name to the last record
@@ -945,6 +1057,9 @@ static void motion_due_cases(void)
          "@keyframes k{from{visibility:hidden}to{visibility:visible}}", "k 1s linear reverse 2"},
         {"motion due backwards: steps inside three keyframes, reversed",
          "@keyframes k{0%{opacity:0}40%{opacity:.4}100%{opacity:1}}", "k 1s steps(2,end) reverse 2"},
+        {"motion due: visibility through a curve whose slope a double cannot hold",
+         "@keyframes k{from{visibility:hidden}to{visibility:visible}}",
+         "k 1s cubic-bezier(.5,1e308,.5,-1e308) 2"},
     };
     for (size_t i = 0; i < sizeof(kBack) / sizeof(kBack[0]); i++) {
         char html[512];
@@ -1017,6 +1132,34 @@ static void motion_due_cases(void)
                : i == 1 ? "motion due: display: contents, seen through its text"
                         : "motion due: display: contents, all it holds out of view",
                due == (i < 2 ? 1000 : FLOW_NEVER), NULL);
+        moving_close(&m);
+    }
+
+    // An inline element is seen where any of its pieces is: a later line
+    // in view with its first scrolled out, or its last piece after a block
+    // it was split round; with every piece out of view, it waits.
+    static const struct {
+        const char *name, *body;
+        int32_t y;
+        uint64_t due;
+    } kPieces[] = {
+        {"motion due: an inline element seen by a later line",
+         "<p style='width:60px;margin:0'><span class=c>aa bb cc dd ee ff gg hh ii jj kk ll mm nn oo pp</span></p>",
+         60, 1000},
+        {"motion due: an inline element seen by its piece after a block inside it",
+         "<span class=c>first<div style='height:500px'></div>last</span>", 520, 1000},
+        {"motion due: an inline element with every piece out of view waits",
+         "<p style='width:60px;margin:0'><span class=c>aa bb cc dd ee ff gg hh ii jj kk ll mm nn oo pp</span></p>",
+         5000, FLOW_NEVER},
+    };
+    for (size_t i = 0; i < sizeof(kPieces) / sizeof(kPieces[0]); i++) {
+        char html[512];
+        snprintf(html, sizeof(html), MOTION_STYLE "@keyframes c{to{color:red}}"
+                 ".c{animation:c 1s linear}</style>%s", kPieces[i].body);
+        moving_open(&m, html, 1000);
+        uint64_t due = flow_motion_due(m.tree, (os64_gui_rect_t){0, kPieces[i].y, 800, 50},
+                                       (flow_point_t){0, 0});
+        expect(kPieces[i].name, due == kPieces[i].due, NULL);
         moving_close(&m);
     }
 
@@ -1219,10 +1362,64 @@ static void motion_sweep_in(bool single)
     moving_close(&m);
 }
 
+// A layout that fails part way — each of its allocations failing in turn,
+// and every one after it — is undone: the tree still shown keeps running
+// what the failed layout paused, no record it made is kept, and the next
+// layout finds the timeline as the shown tree left it (x, running since
+// 1000, is 4 s into its 10 at 5000; paused at 3000 and resumed, it would
+// be 2).
+static void motion_sweep_undo(void)
+{
+    static const char kUndoPage[] = MOTION_STYLE
+        "@keyframes k{from{opacity:0}to{opacity:1}}"
+        "#x{animation:k 10s linear}"
+        "@media (prefers-reduced-motion:reduce){#x{animation-play-state:paused}#y{animation:k 10s linear}}"
+        "</style><div id=x>x</div><div id=y>y</div>";
+    static const os64_gui_rect_t kView = {0, 0, 800, 600};
+    size_t tried = 0;
+    bool failed = false;
+    for (size_t at = 1; !failed; at++) {
+        Moving m;
+        moving_open(&m, kUndoPage, 1000);
+        garb_sheet_in_t in[16];
+        for (int32_t k = 0; k < m.p.n; k++)
+            in[k] = (garb_sheet_in_t){.sheet = &m.p.sheets[k]};
+        garb_cascade_t *calm =
+            garb_cascade(in, m.p.n, m.p.doc, (garb_env_t){.width = 800, .height = 600, .reduced_motion = true});
+        m.p.env.cascade = calm;
+        m.p.env.now_ms = 3000;
+        allocations = 0;
+        fail_at = at;
+        flow_tree_t *staged = flow_layout(m.p.doc, m.p.page, 800, &m.p.env);
+        fail_at = 0;
+        bool reached = allocations >= at;
+        m.p.env.cascade = m.p.cascade;
+        if (staged == NULL && reached) {
+            tried++;
+            bool due = m.tree != NULL && flow_motion_due(m.tree, kView, (flow_point_t){0, 0}) != FLOW_NEVER;
+            bool none = f_timeline_records(m.tl) == 1;
+            moving_again(&m, 5000);
+            const flow_style_t *xs = moving_style(&m, "x");
+            bool ran = xs != NULL && xs->opacity == 400;
+            expect("motion sweep: a failed layout leaves the shown tree's animation running", due, NULL);
+            expect("motion sweep: and keeps no record it made", none, NULL);
+            expect("motion sweep: and the next layout finds the timeline as the shown tree left it", ran, NULL);
+            failed = !due || !none || !ran;
+        }
+        flow_free(staged);
+        garb_cascade_free(calm);
+        moving_close(&m);
+        if (!reached)
+            break;
+    }
+    printf("libflow motion sweep: %zu failed layouts undone\n", tried);
+}
+
 static void motion_sweep(void)
 {
     motion_sweep_in(false);
     motion_sweep_in(true);
+    motion_sweep_undo();
 }
 
 static void motion_cases(void)

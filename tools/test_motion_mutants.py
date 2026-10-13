@@ -27,7 +27,7 @@ import sys
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--logs', type=pathlib.Path, default=pathlib.Path('/tmp/motion-mutants'))
-parser.add_argument('--only', help='run the mutants whose name contains this')
+parser.add_argument('--only', help='run the mutants whose name contains this, or any of these, comma-separated')
 args = parser.parse_args()
 root = pathlib.Path(__file__).resolve().parent.parent
 args.logs.mkdir(parents=True, exist_ok=True)
@@ -40,6 +40,7 @@ MOTION = 'userland/libflow/motion.c'
 STYLE = 'userland/libflow/style.c'
 FLOW = 'userland/libflow/flow.c'
 INTERNAL = 'userland/libflow/internal.h'
+STORE = 'userland/libflow/store.c'
 YONDER = 'userland/apps/yonder/yonder.c'
 SETTINGS = 'userland/apps/yonder/settings.c'
 
@@ -70,8 +71,8 @@ mutants = [
      '        else if (at(r, "keyframes") || at(r, "-webkit-keyframes"))',
      '        else if (at(r, "keyframes"))', GARB),
     ('an-earlier-rule-of-a-name-wins', CASCADE,
-     '    c->keyframes[at_] = (Keyframes){name, len, blocks, nblocks, pending, NULL, 0};',
-     '    if (at_ == c->nkeyframes - 1)\n        c->keyframes[at_] = (Keyframes){name, len, blocks, nblocks, pending, NULL, 0};', GARB),
+     '        if (i + 1 < n && keyframes_cmp(&c->keyframes[i], &c->keyframes[i + 1]) == 0)',
+     '        if (i > 0 && keyframes_cmp(&c->keyframes[i], &c->keyframes[i - 1]) == 0)', GARB),
     ('an-important-keyframe-declaration-is-kept', CASCADE,
      '            if (items[j].kind != GARB_ITEM_DECL || d->important || garb_decl_is_custom(d) ||',
      '            if (items[j].kind != GARB_ITEM_DECL || garb_decl_is_custom(d) ||', GARB),
@@ -120,17 +121,17 @@ mutants = [
      '', LIBFLOW),
     # libflow: the timeline.
     ('a-paused-animation-does-not-hold', MOTION,
-     '        if (an->timing.paused && !r->paused) {\n            r->hold = now - r->start;\n            r->paused = true;',
-     '        if (an->timing.paused && !r->paused) {\n            r->hold = now - r->start;', LIBFLOW),
+     '        if (an->timing.paused && !r->now.paused) {\n            r->now.hold = now - r->now.start;\n            r->now.paused = true;',
+     '        if (an->timing.paused && !r->now.paused) {\n            r->now.hold = now - r->now.start;', LIBFLOW),
     ('a-resumed-animation-starts-over', MOTION,
-     '            r->start = now - r->hold;\n            r->paused = false;',
-     '            r->start = now;\n            r->paused = false;', LIBFLOW),
+     '            r->now.start = now - r->now.hold;\n            r->now.paused = false;',
+     '            r->now.start = now;\n            r->now.paused = false;', LIBFLOW),
     ('an-incomplete-layout-drops-records', MOTION,
      '    if (t == NULL || !complete)\n        return;\n    // The map over',
      '    (void)complete;\n    if (t == NULL)\n        return;\n    // The map over', LIBFLOW),
     ('a-complete-layout-keeps-every-record', MOTION,
-     '        if (r->seen == t->layout) {\n            r->next = next[i];',
-     '        if (true) {\n            r->next = r->seen == t->layout ? next[i] : NULL;', LIBFLOW),
+     '        if (r->now.seen == t->layout) {\n            r->next = next[i];',
+     '        if (true) {\n            r->next = r->now.seen == t->layout ? next[i] : NULL;', LIBFLOW),
     ('no-room-for-the-map-drops-every-record', MOTION,
      '    if (!room) {\n        os64_free(next);\n        f_map_free(&map);\n        return;\n    }',
      '    if (!room) {\n        os64_free(next);\n        f_map_free(&map);\n        for (int32_t k = 0; k < t->n; k++)\n'
@@ -254,8 +255,8 @@ mutants = [
      '    return round_i32(floor(v + 0.5));',
      '    return (int32_t)floor(v + 0.5);', LIBFLOW),
     ('an-element-without-a-box-is-never-seen', FLOW,
-     '    if (b != NULL)\n        return box_seen(b, view, scroll);\n    for (',
-     '    if (true)\n        return b != NULL && box_seen(b, view, scroll);\n    for (', LIBFLOW),
+     '    if (b != NULL)\n        return pieces_seen(b, view, scroll);\n    for (',
+     '    if (true)\n        return b != NULL && pieces_seen(b, view, scroll);\n    for (', LIBFLOW),
     ('an-inherited-name-shares-the-frames', CASCADE,
      '    while (v != NULL && v->kind == GARB_V_WIDE && os64_streq(v->keyword, "inherit")) {',
      '    while (false && v != NULL && v->kind == GARB_V_WIDE && os64_streq(v->keyword, "inherit")) {', LIBFLOW),
@@ -263,7 +264,7 @@ mutants = [
      '            next = fmin(next, base + k.before_end);\n            continue;',
      '            continue;', LIBFLOW),
     ('a-paused-animation-is-due', MOTION,
-     '        if (an->record == NULL || an->record->paused)\n            continue;\n        double local = local_time(an->record, now), base',
+     '        if (an->record == NULL || an->record->now.paused)\n            continue;\n        double local = local_time(an->record, now), base',
      '        if (an->record == NULL)\n            continue;\n        double local = local_time(an->record, now), base', LIBFLOW),
     ('what-the-view-cannot-see-is-due', FLOW,
      '    return meets(flow_box_doc_rect(b, scroll), view) || meets(moved(b->overflow, o.x, o.y), view);',
@@ -342,6 +343,93 @@ mutants = [
      '                                                  garb_cascade_env(cascade).reduced_motion !=\n'
      '                                                      view.reduced_motion))) {',
      '                                                  false))) {', WINDOW),
+    # libgarb: @keyframes at any scale, and Animations 2's duration keyword.
+    ('keyframes-group-across-easings', CASCADE,
+     '            while (j < n && at[j].offset == at[i].offset && os64_streq(at[j].text, at[i].text))',
+     '            while (j < n && at[j].offset == at[i].offset)', GARB),
+    ('a-tie-at-one-offset-goes-later-first', CASCADE,
+     '    return (x->order > y->order) - (x->order < y->order);\n}\n\n// A rule\'s keyframes',
+     '    return (x->order < y->order) - (x->order > y->order);\n}\n\n// A rule\'s keyframes', GARB),
+    ('keyframes-sort-one-at-a-time', CASCADE,
+     '        merge_sort(at, at + n, n, sizeof(*at), key_at_cmp);',
+     '        for (int32_t q = 1; q < n; q++) {\n'
+     '            KeyAt x = at[q];\n'
+     '            int32_t j = q - 1;\n'
+     '            while (j >= 0 && key_at_cmp(&at[j], &x) > 0) {\n'
+     '                at[j + 1] = at[j];\n'
+     '                j--;\n'
+     '            }\n'
+     '            at[j + 1] = x;\n'
+     '        }', GARB),
+    ('the-shorthand-auto-is-a-name', PROPS,
+     '        } else if (!have[A_DURATION] && vc_keyword(c, kAuto) != NULL) {',
+     '        } else if (false && vc_keyword(c, kAuto) != NULL) {', GARB),
+    # libflow: a curve no double holds, a failed layout undone, an inline
+    # element's pieces, and what float, position, overflow and currentColor
+    # make of each other across animations.
+    ('crossing-coefficients-overflow-a-double', MOTION,
+     '    long double lc = 3.0L * p[1], lb = 3.0L * ((long double)p[3] - p[1]) - lc, la = 1 - lc - lb;\n'
+     '    long double la3 = 3 * la, lb2 = 2 * lb;\n'
+     '    long double big = la3 < 0 ? -la3 : la3, mb = lb2 < 0 ? -lb2 : lb2, mc = lc < 0 ? -lc : lc;\n'
+     '    big = mb > big ? mb : big;\n'
+     '    big = mc > big ? mc : big;\n'
+     '    double qa = (double)(la3 / big), qb = (double)(lb2 / big), qc = (double)(lc / big);',
+     '    double c = 3 * p[1], b = 3 * (p[3] - p[1]) - c, a = 1 - c - b;\n'
+     '    double qa = 3 * a, qb = 2 * b, qc = c;', LIBFLOW),
+    ('a-failed-layout-is-not-undone', MOTION,
+     'void f_timeline_undo(flow_timeline_t *t)\n{\n    if (t == NULL)\n        return;',
+     'void f_timeline_undo(flow_timeline_t *t)\n{\n    if (t != NULL || t == NULL)\n        return;', LIBFLOW),
+    ('an-undone-layout-keeps-what-it-changed', MOTION,
+     '        if (t->records[i]->now.seen == t->layout)\n            t->records[i]->now = t->records[i]->was;',
+     '        (void)t->records[i];', LIBFLOW),
+    ('an-undone-layout-keeps-what-it-made', MOTION,
+     '    for (int32_t i = t->base; i < t->n; i++)\n        record_free(t, t->records[i]);\n    t->n = t->base;',
+     '', LIBFLOW),
+    ('an-undone-chain-keeps-its-new-tail', MOTION,
+     '            r->after->next = NULL;',
+     '            (void)r->after;', LIBFLOW),
+    ('an-undone-element-keeps-its-new-first-record', MOTION,
+     '            (void)f_map_put(&t->by_node, r->node, NULL);',
+     '            (void)0;', LIBFLOW),
+    ('a-failed-box-build-is-not-undone', FLOW,
+     '        flow_free(tree);\n        f_timeline_undo(env->timeline);\n        return NULL;\n    }\n    tree->incomplete',
+     '        flow_free(tree);\n        return NULL;\n    }\n    tree->incomplete', LIBFLOW),
+    ('a-failed-public-build-is-not-undone', FLOW,
+     '            flow_free(tree);\n            f_timeline_undo(env->timeline);\n            return NULL;',
+     '            flow_free(tree);\n            return NULL;', LIBFLOW),
+    ('replacing-a-key-grows-the-map', STORE,
+     '    if (map->cap != 0) {\n'
+     '        size_t at = hash_ptr(key) & (map->cap - 1);\n'
+     '        while (map->keys[at] != NULL && map->keys[at] != key)\n'
+     '            at = (at + 1) & (map->cap - 1);\n'
+     '        if (map->keys[at] == key) {\n'
+     '            map->vals[at] = val;\n'
+     '            return true;\n'
+     '        }\n'
+     '    }\n',
+     '', LIBFLOW),
+    ('an-inline-element-is-its-first-piece', FLOW,
+     '    if (b->kind == FLOW_BOX_SPAN)\n        while',
+     '    if (false)\n        while', LIBFLOW),
+    ('an-inline-element-is-its-anonymous-block', FLOW,
+     '        while (b->parent != NULL && !(block_level(b->kind) && b->node != NULL))',
+     '        while (b->parent != NULL && !block_level(b->kind))', LIBFLOW),
+    ('the-base-is-unsettled', STYLE,
+     '        m->base.border_width[side] = base.border_px[side];\n    for (int32_t i = 0; i < count; i++) {',
+     '        m->base.border_width[side] = base.border_px[side];\n    unsettled(&m->base, &sp->s);\n'
+     '    for (int32_t i = 0; i < count; i++) {', LIBFLOW),
+    ('a-keyframe-is-settled-alone', STYLE,
+     '            unsettled(&k.s, &specified);',
+     '            (void)specified;\n            (void)unsettled;', LIBFLOW),
+    ('the-mix-is-not-settled', STYLE,
+     '    if (lists.no_memory)\n        return false;\n    settle_box(c, &s, item, root);',
+     '    if (lists.no_memory)\n        return false;', LIBFLOW),
+    ('a-current-shadow-is-resolved', MOTION,
+     '    r.current = a->current && b->current;',
+     '    r.current = false;', LIBFLOW),
+    ('a-current-colour-is-resolved', MOTION,
+     '    if (a->current_colours & b->current_colours & bit)\n        d->current_colours |= bit;',
+     '    (void)a;\n    (void)b;\n    if (false)\n        d->current_colours |= bit;', LIBFLOW),
     ('the-switches-are-not-applied', SETTINGS,
      '    s.motion_use(s.run.checked, s.reduce.checked);',
      '', WINDOW),
@@ -357,7 +445,7 @@ mutants = [
 
 caught, missed, unbuilt = [], [], []
 for name, rel, old, new, cases in mutants:
-    if args.only and args.only not in name:
+    if args.only and not any(o in name for o in args.only.split(',')):
         continue
     path = root / rel
     original = path.read_bytes()

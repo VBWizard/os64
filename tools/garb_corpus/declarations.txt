@@ -987,6 +987,14 @@ IN: animation: ease ease 1s
 OUT: animation-name: "ease"; animation-duration: 1s; animation-timing-function: ease; animation-iteration-count: 1; animation-direction: normal; animation-play-state: running; animation-delay: 0s; animation-fill-mode: none
 IN: animation: 1s 2s mv
 OUT: animation-name: "mv"; animation-duration: 1s; animation-timing-function: ease; animation-iteration-count: 1; animation-direction: normal; animation-play-state: running; animation-delay: 2s; animation-fill-mode: none
+IN: animation: auto spin
+OUT: animation-name: "spin"; animation-duration: auto; animation-timing-function: ease; animation-iteration-count: 1; animation-direction: normal; animation-play-state: running; animation-delay: 0s; animation-fill-mode: none
+IN: animation: auto
+OUT: animation-name: none; animation-duration: auto; animation-timing-function: ease; animation-iteration-count: 1; animation-direction: normal; animation-play-state: running; animation-delay: 0s; animation-fill-mode: none
+IN: animation: 1s auto
+OUT: animation-name: "auto"; animation-duration: 1s; animation-timing-function: ease; animation-iteration-count: 1; animation-direction: normal; animation-play-state: running; animation-delay: 0s; animation-fill-mode: none
+IN: animation: auto 1s spin
+OUT: animation-name: "spin"; animation-duration: auto; animation-timing-function: ease; animation-iteration-count: 1; animation-direction: normal; animation-play-state: running; animation-delay: 1s; animation-fill-mode: none
 IN: animation: x 1s, y 2s steps(2, end) 3 alternate both paused 500ms
 OUT: animation-name: "x", "y"; animation-duration: 1s, 2s; animation-timing-function: ease, steps(2, end); animation-iteration-count: 1, 3; animation-direction: normal, alternate; animation-play-state: running, paused; animation-delay: 0s, 500ms; animation-fill-mode: none, both
 IN: animation: none

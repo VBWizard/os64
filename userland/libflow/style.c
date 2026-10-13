@@ -3474,9 +3474,8 @@ static bool blockify(flow_style_t *s)
 // BLOCKIFIED — laid out as the block they compute to — keeping one bit of
 // the display they were given (flow_style_t.specified_inline). A float on
 // a box that makes none, or makes no box of its own, is no float.
-static void positioning(const Ctx *c, Spec *sp)
+static void positioning(const Ctx *c, flow_style_t *s)
 {
-    flow_style_t *s = &sp->s;
     if (c->env->static_only) {
         s->position = FLOW_POSITION_STATIC;
         s->float_side = FLOW_FLOAT_NONE;
@@ -3485,6 +3484,29 @@ static void positioning(const Ctx *c, Spec *sp)
         s->float_side = FLOW_FLOAT_NONE;
     if ((f_out_of_flow(s) || s->float_side != FLOW_FLOAT_NONE) && !blockify(s))
         s->float_side = FLOW_FLOAT_NONE;
+}
+
+// What a style's display, float, position and overflow make of each
+// other once every origin has spoken: an item floats nowhere, positioning
+// blockifies (positioning), an item or the root is blockified, and visible
+// or clip does not stand beside an axis that scrolls or hides (CSS
+// Overflow 3 § 3). From the display, float and overflow as specified —
+// and for an animated element's final style, from its computed style with
+// each keyframe's values laid over it as written (animate, unsettled),
+// since the float, the position and each axis may each be animated.
+static void settle_box(const Ctx *c, flow_style_t *s, bool item, bool root)
+{
+    if (item)
+        s->float_side = FLOW_FLOAT_NONE;
+    positioning(c, s);
+    if ((item || root) && !f_out_of_flow(s))
+        (void)blockify(s);
+    bool x_scrolls = s->overflow_x != FLOW_OVERFLOW_VISIBLE && s->overflow_x != FLOW_OVERFLOW_CLIP;
+    bool y_scrolls = s->overflow_y != FLOW_OVERFLOW_VISIBLE && s->overflow_y != FLOW_OVERFLOW_CLIP;
+    if (x_scrolls != y_scrolls) {
+        flow_overflow_t *other = x_scrolls ? &s->overflow_y : &s->overflow_x;
+        *other = *other == FLOW_OVERFLOW_VISIBLE ? FLOW_OVERFLOW_AUTO : FLOW_OVERFLOW_HIDDEN;
+    }
 }
 
 // `item`: the element's box is its parent's flex or grid item, and is
@@ -3528,19 +3550,7 @@ static void finish(const Ctx *c, Spec *sp, const flow_style_t *parent, bool item
         s->inset[i] = resolve(sp->inset[i], s->font_size, automatic);
         s->legacy_clip[i] = resolve(sp->clip[i], s->font_size, automatic);
     }
-    if (item)
-        s->float_side = FLOW_FLOAT_NONE;
-    positioning(c, sp);
-    if ((item || root) && !f_out_of_flow(s))
-        (void)blockify(s);
-    // CSS Overflow 3 § 3: visible and clip do not stand beside an axis
-    // that scrolls or hides.
-    bool x_scrolls = s->overflow_x != FLOW_OVERFLOW_VISIBLE && s->overflow_x != FLOW_OVERFLOW_CLIP;
-    bool y_scrolls = s->overflow_y != FLOW_OVERFLOW_VISIBLE && s->overflow_y != FLOW_OVERFLOW_CLIP;
-    if (x_scrolls != y_scrolls) {
-        flow_overflow_t *other = x_scrolls ? &s->overflow_y : &s->overflow_x;
-        *other = *other == FLOW_OVERFLOW_VISIBLE ? FLOW_OVERFLOW_AUTO : FLOW_OVERFLOW_HIDDEN;
-    }
+    settle_box(c, s, item, root);
     if (sp->text_indent.kind != L_UNSET)
         s->text_indent = resolve(sp->text_indent, s->font_size, zero);
     s->min_width = resolve(sp->min_width, s->font_size, automatic);
@@ -3570,6 +3580,24 @@ static void *motion_alloc(void *ctx, size_t bytes)
     if (p == NULL && !spent)
         ml->no_memory = true;
     return p;
+}
+
+// A keyframe's display, float and overflow as its declarations left them
+// (`specified`), before settle_box made what it does of them: the float,
+// the position and each overflow axis may come from different animations,
+// laid over the element's computed style, and settle_box decides once from
+// what they make together — Chrome's answers: a keyframe's own
+// `overflow-x: hidden` does not turn its `overflow-y: visible` to `auto`
+// when another animation sets `overflow-x` back, while the element's own
+// rules' settling stays, so a span its rules float is still a block when an
+// animation takes the float away.
+static void unsettled(flow_style_t *s, const flow_style_t *specified)
+{
+    s->display = specified->display;
+    s->specified_inline = specified->specified_inline;
+    s->float_side = specified->float_side;
+    s->overflow_x = specified->overflow_x;
+    s->overflow_y = specified->overflow_y;
 }
 
 // An element's animations at the layout's time: for each name whose
@@ -3629,9 +3657,11 @@ static bool animate(Ctx *c, const os64_html_node_t *n, Spec *sp, const Spec *ua,
             Spec k = *sp;
             if (!lay_sets(c, &k, ua, parent, kf[j].sets, NULL, kf[j].nsets, &important))
                 return false;
+            flow_style_t specified = k.s;
             finish(c, &k, parent, item, root);
             for (int side = 0; side < 4; side++)
                 k.s.border_width[side] = k.border_px[side];
+            unsettled(&k.s, &specified);
             f->offset = kf[j].offset;
             f->has_easing = kf[j].easing != NULL && easing_of(kf[j].easing, &f->easing);
             f->style = k.s;
@@ -3656,6 +3686,7 @@ static bool animate(Ctx *c, const os64_html_node_t *n, Spec *sp, const Spec *ua,
     (void)f_motion_style(m, now, &s, motion_alloc, &lists);
     if (lists.no_memory)
         return false;
+    settle_box(c, &s, item, root);
     s.animating = f_motion_effects(m, now);
     sp->s = s;
     *out = m;

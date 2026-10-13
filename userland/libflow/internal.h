@@ -153,7 +153,8 @@ typedef struct {
     size_t cap, count;
 } FMap;
 
-bool f_map_put(FMap *map, const void *key, void *val);  // false on no memory
+// False on no memory; replacing the value of a key the map holds never is.
+bool f_map_put(FMap *map, const void *key, void *val);
 void *f_map_get(const FMap *map, const void *key);      // NULL when absent
 void f_map_free(FMap *map);
 
@@ -288,10 +289,14 @@ bool f_motion_in_place(const FMotion *m);
 double f_motion_next(const FMotion *m, double now);
 // A layout's dealings with the timeline: it begins, each animated element
 // is matched to its records (Animations 1 § 2) — false on no memory — and
-// it ends, a complete one dropping every record it did not meet.
+// it ends, a complete one dropping every record it did not meet. A layout
+// that fails is undone instead (f_timeline_undo), which allocates nothing:
+// what it made goes and what it changed is put back, so the records are as
+// the layout before it left them, for the tree that layout made.
 void f_timeline_begin(flow_timeline_t *t);
 bool f_timeline_element(flow_timeline_t *t, const os64_html_node_t *n, FMotion *m, double now);
 void f_timeline_end(flow_timeline_t *t, bool complete);
+void f_timeline_undo(flow_timeline_t *t);
 // How many records the timeline keeps, each holding its element.
 int32_t f_timeline_records(const flow_timeline_t *t);
 // A transform function's matrix, made from its primitive and arguments

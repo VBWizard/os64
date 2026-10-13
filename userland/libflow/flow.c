@@ -1597,13 +1597,15 @@ flow_tree_t *flow_layout(const os64_html_document_t *doc, const os64_page_t *mod
     tree->arena.cap = SIZE_MAX;
     tree->now_ms = env->now_ms;
     // A layout is a style change event for the page's animations: it meets
-    // the ones it styles, and a complete one drops the rest (motion.c).
+    // the ones it styles, and a complete one drops the rest; one that fails
+    // changes none of them (motion.c).
     f_timeline_begin(env->timeline);
     tree->styles = f_style_build(doc, model, env);
     tree->boxes = tree->styles != NULL ? f_boxes_build(doc, model, tree->styles, env) : NULL;
     tree->layout = tree->boxes != NULL ? f_layout(tree->boxes, doc, model, env, width) : NULL;
     if (tree->layout == NULL) {
         flow_free(tree);
+        f_timeline_undo(env->timeline);
         return NULL;
     }
     tree->incomplete = tree->layout->incomplete;
@@ -1621,6 +1623,7 @@ flow_tree_t *flow_layout(const os64_html_document_t *doc, const os64_page_t *mod
         // page: nothing half-built is handed over.
         if (bd.failed || !stack_build(tree)) {
             flow_free(tree);
+            f_timeline_undo(env->timeline);
             return NULL;
         }
         reach_stacked(tree);
@@ -1632,6 +1635,7 @@ flow_tree_t *flow_layout(const os64_html_document_t *doc, const os64_page_t *mod
 }
 
 static bool meets(os64_gui_rect_t a, os64_gui_rect_t b);
+static bool block_level(flow_box_kind_t k);
 
 // Whether a box can be seen in `view`: where it is drawn, or its overflow
 // where its own frame leaves it — whichever reaches the view.
@@ -1641,7 +1645,21 @@ static bool box_seen(const flow_box_t *b, os64_gui_rect_t view, flow_point_t scr
     return meets(flow_box_doc_rect(b, scroll), view) || meets(moved(b->overflow, o.x, o.y), view);
 }
 
-// Whether what element `n` animates in place can be seen: its own box,
+// Whether what an element draws, its first box `b`, can be seen. An inline
+// element's first box is its piece on one line, and it may have pieces on
+// many, in several anonymous blocks when it is split round a block inside
+// it: the nearest block with an element of its own holds every piece, so
+// its box stands for them — more than the element draws, which can cost a
+// layout the element did not need and never one it did.
+static bool pieces_seen(const flow_box_t *b, os64_gui_rect_t view, flow_point_t scroll)
+{
+    if (b->kind == FLOW_BOX_SPAN)
+        while (b->parent != NULL && !(block_level(b->kind) && b->node != NULL))
+            b = b->parent;
+    return box_seen(b, view, scroll);
+}
+
+// Whether what element `n` animates in place can be seen: its own boxes,
 // or, for an element that makes none (`display: contents`), whose
 // inherited values its descendants draw, the nearest boxes inside it —
 // each one's overflow standing for what is inside it.
@@ -1650,10 +1668,10 @@ static bool motion_seen(const flow_tree_t *tree, const os64_html_node_t *n, os64
 {
     const flow_box_t *b = f_map_get(&tree->first, n);
     if (b != NULL)
-        return box_seen(b, view, scroll);
+        return pieces_seen(b, view, scroll);
     for (const os64_html_node_t *c = n->first_child; c != NULL;) {
         b = f_map_get(&tree->first, c);
-        if (b != NULL && box_seen(b, view, scroll))
+        if (b != NULL && pieces_seen(b, view, scroll))
             return true;
         if (b == NULL && c->first_child != NULL) {
             c = c->first_child;

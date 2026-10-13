@@ -982,7 +982,8 @@ bool flow_incomplete(const flow_tree_t *tree);
 // TIMELINE per document — made with it, freed before it — and hands it to
 // every layout with the time (flow_env_t). A layout starts what its styles
 // newly name, keeps what they still name with its start time, and, when it
-// is complete, drops the rest; each element a timeline keeps an animation
+// is complete, drops the rest; one that fails (NULL) leaves the timeline as
+// the layout before it left it. Each element a timeline keeps an animation
 // for it holds (os64_html_hold), so no node a script removes is reused for
 // another while it does. NULL on no memory.
 typedef struct flow_timeline flow_timeline_t;

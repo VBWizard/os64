@@ -1494,7 +1494,11 @@ element, name, …)` answers an element's keyframes for a name, built by
 Animations 2 § 3.2: grouped by offset and easing, the declarations of
 each group read as winners are — into the longhands they set, `var()`
 replaced against the element's own custom properties — and dropped where
-Animations 2 drops them. The implicit keyframes are libflow's, which
+Animations 2 drops them. The rules are sorted by name once, when the
+cascade is built, and an element's blocks are grouped by sorting them:
+however many names and offsets a sheet writes, finding one is a binary
+search and grouping is a sort, never each against every other. The
+implicit keyframes are libflow's, which
 alone knows the computed values. An element's winners now say which were
 `!important` (`garb_style_t.important`), which an animated value may not
 override. And `garb_env_t` gains `reduced_motion`, which
@@ -1543,7 +1547,11 @@ starts when they arrive. A paused animation stores the time it has run
 and a resumed one is restarted that much before `now`. A record no
 COMPLETE layout styled is dropped — its element gone, its name gone, its
 subtree `display: none`; an incomplete layout drops nothing it did not
-reach. A record HOLDS its element (`os64_html_hold`), so a node a script
+reach. A layout that FAILS — no memory, and no tree — is undone: what it
+made goes and what it changed is put back, so the tree still shown runs
+on as it was (a pause the failed layout read is not taken until a layout
+that succeeds reads it again), and the undoing allocates nothing. A
+record HOLDS its element (`os64_html_hold`), so a node a script
 removes is not reused for another while a record names it, and the hold
 goes with the record.
 
@@ -1557,8 +1565,17 @@ font, its parent, its `currentColor`, its zoom. Each keyframe is then a
 computed style, and the implicit keyframes are the base's. The value of
 each animated property at `now` is worked from those (§ What CSS asks:
 the clock, the value) and written into the element's style, and the derived
-facts — a border or background or fill in `currentColor` follows the
-animated `color` — are resolved from it. The element's children inherit
+facts are resolved from it once, from what every animation leaves
+together: a border or background or fill in `currentColor` follows the
+animated `color`, and a colour or shadow that is `currentColor` at both
+of its keyframes stays `currentColor` through the mix, so it follows a
+`color` another animation moves; a float or a position makes the element
+a block, and an `overflow` axis that is not `visible` turns its pair's
+`visible` to `auto` — worked once, from the element's computed style with
+each animation's values laid over it as its keyframes wrote them, so one
+animation's keyframe never undoes what another's set, and what the
+element's own rules settled stays settled (Chrome's answers: a span its
+rules float is still a block when an animation takes the float away). The element's children inherit
 from that style. So an animated `color`, `visibility` or `text-shadow`
 reaches the descendants that inherit it, an animated `width` is laid
 out, and a layout at a time is the page at that time.
@@ -1574,7 +1591,7 @@ out, and a layout at a time is the page at that time.
 | `z-index`, `order` | a real number, rounded half up (Values 4 § 5.2.1, as Chrome rounds 2.5) and held to the field's range, which an overshooting easing passes; a `z-index` between two numbers is a number, whatever the element's own, and `auto` at either end is discrete |
 | `line-height` | a number with a number, a length with a length; else discrete |
 | `visibility` | `visible` for every fraction strictly between 0 and 1 if either end is `visible`; else discrete (Web Animations Appendix A) |
-| a shadow list | shadow by shadow, the shorter padded with transparent ones of no size that match the other's `inset`; a pair differing in `inset` makes the whole list discrete; colours as above (Appendix A) |
+| a shadow list | shadow by shadow, the shorter padded with transparent ones of no size that match the other's `inset`; a pair differing in `inset` makes the whole list discrete; colours as above, and a pair both `currentColor` stays `currentColor` (Appendix A) |
 | `background-position`, `background-size` | repeatable lists: repeated to their least common multiple, then item by item as lengths (`cover` and `contain` discrete) |
 | a transform | below |
 | everything else — keywords, families, pictures and gradients, grid tracks | discrete |
@@ -1635,8 +1652,11 @@ and that is a change of structure: the face is due a layout at its end.
 animation that can show in `view` shows another value. One that only
 repaints where its element draws — a colour, a fade, visibility, a
 background's position, the corners' curves — can show there when its
-element can be seen: its box; for one that makes none (`display:
-contents`) the boxes inside it, which draw what it hands down; or any box
+element can be seen: its box — for an inline element, whose pieces may
+lie on many lines and, split round a block inside it, in several
+anonymous blocks, the nearest block with an element of its own, which
+holds them all; for one that makes none (`display: contents`) the boxes
+inside it, which draw what it hands down; or any box
 inside it drawn outside it, positioned, fixed or moved by a transform,
 which no ancestor's overflow holds. Any other — a transform, a size, a
 position, a shadow's offset — may carry what it draws into view from
@@ -1855,9 +1875,12 @@ string and compared exactly, `none` refused, offsets past 100% dropped,
 the last of a name winning across sheets and inside `@media` that holds,
 not inside one that does not; `!important` and the `animation-*` in a
 keyframe dropped but its own easing; the shorthand's two times and its
-keyword rule (`ease ease`); every longhand's list, the easings' checks;
-`will-change`; `@supports`; `prefers-reduced-motion` both ways; the
-winners' importance; `var()` in a keyframe replaced per element.
+keyword rule (`ease ease`), and `auto` as its duration (Chrome's answers);
+every longhand's list, the easings' checks; `will-change`; `@supports`;
+`prefers-reduced-motion` both ways; the winners' importance; `var()` in a
+keyframe replaced per element. And `garb_driver --keyframes-scale`: 4,000
+names and a rule of 40,000 offsets come back whole and in order at a
+sort's cost, written either way round.
 
 libflow's harness (`--motion`): the clock over a table of phases, fills,
 iterations — fractional and infinite — directions, negative delays, a
@@ -1871,13 +1894,17 @@ pages, recorded with the page that asked; transforms' padding, pairing,
 `scaleX(-1)`, a skew against a skew, a skewed turn, `matrix()` against
 `matrix()`; 3D: a perspective door, two axes);
 the side effects against Chrome's
-containing-block answers; the timeline across layouts — a start kept,
-`a` to `a, a`, a name gone, an element gone and its hold let go, a
-pause and a resume, an incomplete layout dropping nothing; each due
-time; an animated page's layout with each of its allocations failed in
-turn, alone and with every one after it, leaking nothing, whole only
-when it is the page, and its timeline coming through each failure with
-its start times; and S8b's tick against a layout at the same time,
+containing-block answers, and what float, position, overflow and
+`currentColor` make of each other across two animations; the timeline
+across layouts — a start kept, `a` to `a, a`, a name gone, an element
+gone and its hold let go, a pause and a resume, an incomplete layout
+dropping nothing, a failed one undone, three thousand names matched;
+each due time, an inline element's later pieces and a curve whose
+slope no double holds among them; an animated page's layout with each
+of its allocations failed in turn, alone and with every one after it,
+leaking nothing, whole only when it is the page, and its timeline
+coming through each failure with its start times — and with a pause
+the failed layout read not taken; and S8b's tick against a layout at the same time,
 field by field and frame by frame to the bit, at many times; its damage
 holding what was painted before and after; ink that only grows.
 

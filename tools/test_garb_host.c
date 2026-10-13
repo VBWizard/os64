@@ -12,7 +12,7 @@
 // without recursing), `--numbers` dumps numbers past int64_t's reach and
 // past a double's, and `--cost BYTES` and `--full` hold a parse to what
 // GARB.md says it costs, and to keeping what it finished when the arena
-// fills.
+// fills; `--keyframes-scale` holds @keyframes to a sort's cost.
 
 #include <pthread.h>
 #include <signal.h>
@@ -20,6 +20,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "os64/arena.h"
@@ -1138,8 +1139,90 @@ static int cost(size_t bytes, bool full)
     return ok ? 0 : 1;
 }
 
+static const os64_html_node_t *by_id(const os64_html_node_t *n, const char *id)
+{
+    for (; n != NULL; n = n->next) {
+        const os64_html_attr_t *a = n->kind == OS64_HTML_ELEMENT ? os64_html_attr(n, "id") : NULL;
+        if (a != NULL && a->value != NULL && strcmp(a->value, id) == 0)
+            return n;
+        const os64_html_node_t *in = by_id(n->first_child, id);
+        if (in != NULL)
+            return in;
+    }
+    return NULL;
+}
+
+// What @keyframes cost at scale (PILE3.md § Animations): 4,000 rules of
+// different names, then one of 40,000 offsets, every one different. The
+// element's keyframes are every offset, in order, and the cascade and the
+// answer take a sort's work, whichever order the offsets are written in.
+// Two bounds, since a quadratic can hide behind either: under the sanitizers
+// the whole costs under a second of CPU where grouping each offset against
+// those gathered before it took 45 (KEYFRAMES_SCALE_SECONDS sits between),
+// and written last to first it costs what it does written first to last,
+// where sorting one at a time made it five times as much
+// (KEYFRAMES_SCALE_BACKWARDS).
+#define KEYFRAMES_SCALE_SECONDS 10.0
+#define KEYFRAMES_SCALE_BACKWARDS 2.0
+
+// One run of it, the offsets written `backwards` or not: true when the
+// keyframes came back whole and in order, the CPU it took in *took.
+static bool keyframes_at_scale(bool backwards, int *nkeyframes, double *took)
+{
+    enum { kNames = 4000, kOffsets = 40000 };
+    size_t cap = (size_t)kNames * 40 + (size_t)kOffsets * 32 + 64, len = 0;
+    char *text = malloc(cap);
+    for (int i = 0; i < kNames; i++)
+        len += (size_t)snprintf(text + len, cap - len, "@keyframes n%d{to{opacity:0}}", i);
+    len += (size_t)snprintf(text + len, cap - len, "@keyframes big{");
+    for (int k = 0; k < kOffsets; k++) {
+        int i = backwards ? kOffsets - 1 - k : k;
+        len += (size_t)snprintf(text + len, cap - len, "%.4f%%{opacity:.5}", i * 100.0 / kOffsets);
+    }
+    len += (size_t)snprintf(text + len, cap - len, "}");
+    static const char kPage[] = "<!doctype html><div id=x style='animation-name:big'></div>";
+    os64_html_options_t opt = os64_html_options_default();
+    os64_html_parser_t *hp = os64_html_parser_new(&opt);
+    os64_html_parser_feed(hp, kPage, sizeof(kPage) - 1);
+    os64_html_document_t *doc = os64_html_parser_finish(hp);
+    garb_parsed_t r;
+    garb_status_t st = garb_parse_sheet_text(text, len, &r);
+    clock_t t0 = clock();
+    garb_sheet_in_t in = {.sheet = &r};
+    garb_cascade_t *c = garb_cascade(&in, 1, doc, (garb_env_t){.width = 800, .height = 600});
+    const garb_keyframe_t *f = NULL;
+    int32_t nf = c != NULL ? garb_keyframes(c, by_id(doc->document, "x"), "big", 3, &f) : -1;
+    *took = (double)(clock() - t0) / CLOCKS_PER_SEC;
+    bool ordered = st == GARB_OK && !r.incomplete && nf == kOffsets;
+    for (int32_t i = 1; ordered && i < nf; i++)
+        ordered = f[i].offset > f[i - 1].offset;
+    *nkeyframes = nf;
+    garb_cascade_free(c);
+    garb_free(&r);
+    os64_html_document_free(doc);
+    free(text);
+    return ordered;
+}
+
+static int keyframes_scale(void)
+{
+    int nf = 0, nb = 0;
+    double forwards = 0, backwards = 0;
+    bool whole_forwards = keyframes_at_scale(false, &nf, &forwards);
+    bool whole_backwards = keyframes_at_scale(true, &nb, &backwards);
+    bool whole = whole_forwards && whole_backwards;
+    int ok = whole && forwards < KEYFRAMES_SCALE_SECONDS && backwards < KEYFRAMES_SCALE_SECONDS &&
+             backwards < KEYFRAMES_SCALE_BACKWARDS * forwards;
+    printf("libgarb keyframes: 4000 names and 40000 offsets, %d and %d keyframes in order%s, "
+           "in %.3f s of CPU written forwards and %.3f backwards%s\n",
+           nf, nb, whole ? "" : " - NOT", forwards, backwards, ok ? "" : " - FAILED");
+    return ok ? 0 : 1;
+}
+
 int main(int argc, char **argv)
 {
+    if (argc == 2 && strcmp(argv[1], "--keyframes-scale") == 0)
+        return keyframes_scale();
     if (argc == 3 && strcmp(argv[1], "--cost") == 0)
         return cost((size_t)strtoul(argv[2], NULL, 10), false);
     if (argc == 2 && strcmp(argv[1], "--full") == 0)

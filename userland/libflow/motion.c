@@ -213,15 +213,24 @@ static Clock clock_at(const flow_animation_t *a, double local)
 
 // ── The timeline ────────────────────────────────────────────────────────
 
-struct FRecord {
-    const os64_html_node_t *node;
-    char *name;
-    uint32_t len;
+// What a layout changes in a record it meets, kept from before the first
+// change so a layout that fails can put it back (f_timeline_undo).
+typedef struct {
     double start;               // on the face's clock, ms
     double hold;                // paused: how far it had run
     bool paused;
     uint32_t seen;              // the layout that last met it
     int32_t place;              // its place in its element's list then
+} FRecordState;
+
+struct FRecord {
+    const os64_html_node_t *node;
+    char *name;
+    uint32_t len;
+    FRecordState now;
+    FRecordState was;           // before the layout that last met it
+    uint32_t made;              // the layout that made it
+    FRecord *after;             // the record it was chained after then, or NULL
     FRecord *next;              // its element's next record
 };
 
@@ -229,6 +238,7 @@ struct flow_timeline {
     const os64_html_document_t *doc;
     FRecord **records;
     int32_t n, cap;
+    int32_t base;               // how many there were when this layout began
     uint32_t layout;
     FMap by_node;               // node -> its first record
 };
@@ -266,14 +276,16 @@ int32_t f_timeline_records(const flow_timeline_t *t)
 
 void f_timeline_begin(flow_timeline_t *t)
 {
-    if (t != NULL)
+    if (t != NULL) {
         t->layout++;
+        t->base = t->n;
+    }
 }
 
 // The local time a record is at: what it holds while paused.
 static double local_time(const FRecord *r, double now)
 {
-    return r->paused ? r->hold : now - r->start;
+    return r->now.paused ? r->now.hold : now - r->now.start;
 }
 
 // A name with its order in its list — a record's place, or a name's index
@@ -321,7 +333,7 @@ bool f_timeline_element(flow_timeline_t *t, const os64_html_node_t *n, FMotion *
     int32_t nold = 0;
     FRecord *tail = NULL;
     for (FRecord *r = f_map_get(&t->by_node, n); r != NULL; r = r->next) {
-        nold += r->seen != t->layout;
+        nold += r->now.seen != t->layout;
         tail = r;
     }
     int32_t total = nold + m->nanims;
@@ -332,8 +344,8 @@ bool f_timeline_element(flow_timeline_t *t, const os64_html_node_t *n, FMotion *
     Named *old = buf, *names = buf + nold, *tmp = buf + total;
     int32_t k = 0;
     for (FRecord *r = f_map_get(&t->by_node, n); r != NULL; r = r->next)
-        if (r->seen != t->layout)
-            old[k++] = (Named){r->name, r->len, r->place, r};
+        if (r->now.seen != t->layout)
+            old[k++] = (Named){r->name, r->len, r->now.place, r};
     for (int32_t i = 0; i < m->nanims; i++) {
         m->anims[i].record = NULL;
         names[i] = (Named){m->anims[i].timing.name.text, m->anims[i].timing.name.len, i, NULL};
@@ -384,19 +396,22 @@ bool f_timeline_element(flow_timeline_t *t, const os64_html_node_t *n, FMotion *
             r->node = n;
             r->name = copy;
             r->len = name->len;
-            r->start = now;
-            r->paused = an->timing.paused;
+            r->now.start = now;
+            r->now.paused = an->timing.paused;
+            r->made = t->layout;
             os64_html_hold(t->doc, n);
             t->records[t->n++] = r;
         }
-        r->seen = t->layout;
-        r->place = i;
-        if (an->timing.paused && !r->paused) {
-            r->hold = now - r->start;
-            r->paused = true;
-        } else if (!an->timing.paused && r->paused) {
-            r->start = now - r->hold;
-            r->paused = false;
+        if (r->now.seen != t->layout)
+            r->was = r->now;
+        r->now.seen = t->layout;
+        r->now.place = i;
+        if (an->timing.paused && !r->now.paused) {
+            r->now.hold = now - r->now.start;
+            r->now.paused = true;
+        } else if (!an->timing.paused && r->now.paused) {
+            r->now.start = now - r->now.hold;
+            r->now.paused = false;
         }
         an->record = r;
     }
@@ -404,6 +419,7 @@ bool f_timeline_element(flow_timeline_t *t, const os64_html_node_t *n, FMotion *
     // so the chain keeps the timeline's order without the timeline walked.
     for (int32_t j = made; j < t->n; j++) {
         t->records[j]->next = NULL;
+        t->records[j]->after = tail;
         if (tail != NULL)
             tail->next = t->records[j];
         else if (!f_map_put(&t->by_node, n, t->records[j]))
@@ -411,6 +427,29 @@ bool f_timeline_element(flow_timeline_t *t, const os64_html_node_t *n, FMotion *
         tail = t->records[j];
     }
     return ok;
+}
+
+void f_timeline_undo(flow_timeline_t *t)
+{
+    if (t == NULL)
+        return;
+    // The records it made end their elements' chains: the record each
+    // first one was chained after ends its chain again, or its element
+    // goes back to none — a key's value replaced, which cannot fail. Then
+    // they go, and what it changed in the rest is put back.
+    for (int32_t i = t->base; i < t->n; i++) {
+        FRecord *r = t->records[i];
+        if (r->after != NULL && r->after->made != t->layout)
+            r->after->next = NULL;
+        else if (r->after == NULL && f_map_get(&t->by_node, r->node) == r)
+            (void)f_map_put(&t->by_node, r->node, NULL);
+    }
+    for (int32_t i = t->base; i < t->n; i++)
+        record_free(t, t->records[i]);
+    t->n = t->base;
+    for (int32_t i = 0; i < t->n; i++)
+        if (t->records[i]->now.seen == t->layout)
+            t->records[i]->now = t->records[i]->was;
 }
 
 void f_timeline_end(flow_timeline_t *t, bool complete)
@@ -427,7 +466,7 @@ void f_timeline_end(flow_timeline_t *t, bool complete)
     bool room = t->n == 0 || next != NULL;
     for (int32_t i = t->n - 1; room && i >= 0; i--) {
         FRecord *r = t->records[i];
-        if (r->seen != t->layout)
+        if (r->now.seen != t->layout)
             continue;
         next[i] = f_map_get(&map, r->node);
         room = f_map_put(&map, r->node, r);
@@ -440,7 +479,7 @@ void f_timeline_end(flow_timeline_t *t, bool complete)
     int32_t kept = 0;
     for (int32_t i = 0; i < t->n; i++) {
         FRecord *r = t->records[i];
-        if (r->seen == t->layout) {
+        if (r->now.seen == t->layout) {
             r->next = next[i];
             t->records[kept++] = r;
         } else {
@@ -967,6 +1006,19 @@ static uint32_t mix_colour(uint32_t a, uint32_t b, double t)
     return (uint32_t)ta << 24 | r;
 }
 
+// A colour field's currentColor mark, mixed: currentColor when both ends
+// are — so it follows the element's colour as that colour moves, whatever
+// the element's own field is (f_motion_style resolves it) — and the mixed
+// colour otherwise.
+static void hand_current(flow_style_t *d, const flow_style_t *a, const flow_style_t *b,
+                         uint8_t bit)
+{
+    if (a->current_colours & b->current_colours & bit)
+        d->current_colours |= bit;
+    else
+        d->current_colours &= (uint8_t)~bit;
+}
+
 // One shadow with another of the same `inset`.
 static flow_shadow_t mix_shadow(const flow_shadow_t *a, const flow_shadow_t *b, double t)
 {
@@ -976,7 +1028,9 @@ static flow_shadow_t mix_shadow(const flow_shadow_t *a, const flow_shadow_t *b, 
     r.blur = round_i32(fmax(lerp(a->blur, b->blur, t), 0));
     r.spread = round_i32(lerp(a->spread, b->spread, t));
     r.colour = mix_colour(a->colour, b->colour, t);
-    r.current = false;
+    // Both currentColor: the mix is currentColor, the colour the element
+    // has once every animation is laid over (the painter resolves it).
+    r.current = a->current && b->current;
     return r;
 }
 
@@ -1395,19 +1449,11 @@ static void copy_prop(garb_prop_t p, flow_style_t *d, const flow_style_t *s)
         break;
     case GARB_BORDER_COLLAPSE: d->border_collapse = s->border_collapse; break;
     case GARB_CAPTION_SIDE: d->caption_side = s->caption_side; break;
-    // A float and a position bring the display they blockify (CSS 2.1
-    // § 9.7), as that keyframe computed it.
-    case GARB_FLOAT:
-        d->float_side = s->float_side;
-        d->display = s->display;
-        d->specified_inline = s->specified_inline;
-        break;
+    // A float and a position alone: the display they blockify is settled
+    // once, from what every animation makes of them (style.c, settle_box).
+    case GARB_FLOAT: d->float_side = s->float_side; break;
     case GARB_CLEAR: d->clear = s->clear; break;
-    case GARB_POSITION:
-        d->position = s->position;
-        d->display = s->display;
-        d->specified_inline = s->specified_inline;
-        break;
+    case GARB_POSITION: d->position = s->position; break;
     case GARB_TOP: case GARB_RIGHT: case GARB_BOTTOM: case GARB_LEFT:
         i = p - GARB_TOP;
         d->inset[i] = s->inset[i];
@@ -1510,8 +1556,7 @@ static bool mix_prop(garb_prop_t p, const flow_style_t *a, const flow_style_t *b
     case GARB_TEXT_FILL_COLOR:
         if (d != NULL) {
             d->fill = mix_colour(a->fill, b->fill, t);
-            if (!((a->current_colours & b->current_colours) & FLOW_CURRENT_FILL))
-                d->current_colours &= (uint8_t)~FLOW_CURRENT_FILL;
+            hand_current(d, a, b, FLOW_CURRENT_FILL);
         }
         return true;
     case GARB_BACKGROUND_COLOR:
@@ -1520,8 +1565,7 @@ static bool mix_prop(garb_prop_t p, const flow_style_t *a, const flow_style_t *b
             uint32_t cb = b->has_background ? b->background : 0xFF000000u;
             d->background = mix_colour(ca, cb, t);
             d->has_background = flow_alpha(d->background) > 0;
-            if (!((a->current_colours & b->current_colours) & FLOW_CURRENT_BACKGROUND))
-                d->current_colours &= (uint8_t)~FLOW_CURRENT_BACKGROUND;
+            hand_current(d, a, b, FLOW_CURRENT_BACKGROUND);
         }
         return true;
     case GARB_BORDER_TOP_COLOR: case GARB_BORDER_RIGHT_COLOR: case GARB_BORDER_BOTTOM_COLOR:
@@ -1529,8 +1573,7 @@ static bool mix_prop(garb_prop_t p, const flow_style_t *a, const flow_style_t *b
         i = p - GARB_BORDER_TOP_COLOR;
         if (d != NULL) {
             d->border_color[i] = mix_colour(a->border_color[i], b->border_color[i], t);
-            if (!((a->current_colours & b->current_colours) & FLOW_CURRENT_BORDER(i)))
-                d->current_colours &= (uint8_t)~FLOW_CURRENT_BORDER(i);
+            hand_current(d, a, b, FLOW_CURRENT_BORDER(i));
         }
         return true;
     case GARB_BACKGROUND_POSITION_X: case GARB_BACKGROUND_POSITION_Y: {
@@ -1910,9 +1953,16 @@ static int32_t ease_crossings(const flow_easing_t *e, double level, double xs[3]
         xs[0] = level;
         return 1;
     }
+    // y's slope, qa t^2 + qb t + qc, worked in long double as bezier_y is
+    // (3 y1 alone can overflow a double) and divided by its largest
+    // coefficient, which moves no root and leaves the rest in [-1, 1].
     const double *p = e->p;
-    double c = 3 * p[1], b = 3 * (p[3] - p[1]) - c, a = 1 - c - b;
-    double qa = 3 * a, qb = 2 * b, qc = c;      // y's slope, qa t^2 + qb t + qc
+    long double lc = 3.0L * p[1], lb = 3.0L * ((long double)p[3] - p[1]) - lc, la = 1 - lc - lb;
+    long double la3 = 3 * la, lb2 = 2 * lb;
+    long double big = la3 < 0 ? -la3 : la3, mb = lb2 < 0 ? -lb2 : lb2, mc = lc < 0 ? -lc : lc;
+    big = mb > big ? mb : big;
+    big = mc > big ? mc : big;
+    double qa = (double)(la3 / big), qb = (double)(lb2 / big), qc = (double)(lc / big);
     double cut[4] = {0};
     int32_t nc = 1;
     double roots[2];
@@ -2014,9 +2064,9 @@ double f_motion_next(const FMotion *m, double now)
     double next = INFINITY;
     for (int32_t a = 0; a < m->nanims; a++) {
         const FAnimation *an = &m->anims[a];
-        if (an->record == NULL || an->record->paused)
+        if (an->record == NULL || an->record->now.paused)
             continue;
-        double local = local_time(an->record, now), base = an->record->start;
+        double local = local_time(an->record, now), base = an->record->now.start;
         Clock k = clock_at(&an->timing, local);
         if (k.phase == PHASE_BEFORE) {
             next = fmin(next, base + k.before_end);

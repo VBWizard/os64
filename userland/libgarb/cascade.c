@@ -139,10 +139,11 @@ struct garb_cascade {
     bool incomplete;
     Rule *rules;
     int32_t nrules, rulecap;
-    // The @keyframes rules, one per name: a later one of a name takes the
-    // earlier one's place.
+    // The @keyframes rules: each as it is read, then, once every sheet is
+    // (keyframes_settle), one per name — the last of it — sorted by name.
     Keyframes *keyframes;
     int32_t nkeyframes, keyframecap;
+    bool keyframes_sorted;
     Entry *entries;
     int32_t nentries, entrycap;
     Table ids, classes, types;
@@ -600,12 +601,12 @@ static bool key_dropped(const garb_decl_t *d, bool *easing)
     return false;
 }
 
-// A @keyframes rule, kept in place of any earlier one of its name: the
-// last in cascade order wins whole (Animations 1 § 3). Its blocks'
-// declarations are read as a style rule's are, and a block's last timing
-// function kept apart from them as its easing; `!important` ones, and the
-// custom properties a keyframe would set (PILE3.md § Animations, Booked),
-// are not kept.
+// A @keyframes rule, kept; the last of a name in cascade order wins whole
+// (Animations 1 § 3), once every sheet is read (keyframes_settle). Its
+// blocks' declarations are read as a style rule's are, and a block's last
+// timing function kept apart from them as its easing; `!important` ones,
+// and the custom properties a keyframe would set (PILE3.md § Animations,
+// Booked), are not kept.
 static void add_keyframes(garb_cascade_t *c, garb_parsed_t *owner, const garb_rule_t *r)
 {
     const char *name;
@@ -662,16 +663,9 @@ static void add_keyframes(garb_cascade_t *c, garb_parsed_t *owner, const garb_ru
         }
         nblocks++;
     }
-    int32_t at_ = 0;
-    while (at_ < c->nkeyframes && !(c->keyframes[at_].len == len &&
-                                    os64_memcmp(c->keyframes[at_].name, name, len) == 0))
-        at_++;
-    if (at_ == c->nkeyframes) {
-        if (!grow(c, (void **)&c->keyframes, c->nkeyframes, &c->keyframecap, sizeof(Keyframes)))
-            return;
-        c->nkeyframes++;
-    }
-    c->keyframes[at_] = (Keyframes){name, len, blocks, nblocks, pending, NULL, 0};
+    if (!grow(c, (void **)&c->keyframes, c->nkeyframes, &c->keyframecap, sizeof(Keyframes)))
+        return;
+    c->keyframes[c->nkeyframes++] = (Keyframes){name, len, blocks, nblocks, pending, NULL, 0};
 }
 
 static void add_rules(garb_cascade_t *c, garb_parsed_t *owner, const garb_item_t *items,
@@ -1083,145 +1077,268 @@ static int32_t key_sets(garb_cascade_t *c, const Decl *d, const CustomMap *custo
     return n > 0 ? n : 0;
 }
 
-// One keyframe as it is gathered: its offset, its easing (and that as
-// text, to tell two easings apart), and each longhand's last value.
+// A stable sort of `n` items `size` bytes each, by `cmp`: a merge through
+// `tmp`, room for n more — n log n, however many a page's CSS makes.
+static void merge_sort(void *v, void *tmp, int32_t n, size_t size,
+                       int (*cmp)(const void *, const void *))
+{
+    if (n < 2)
+        return;
+    int32_t h = n / 2;
+    char *p = v, *t = tmp;
+    merge_sort(p, t, h, size, cmp);
+    merge_sort(p + (size_t)h * size, t, n - h, size, cmp);
+    int32_t i = 0, j = h, k = 0;
+    while (i < h && j < n) {
+        const char *a = p + (size_t)i * size, *b = p + (size_t)j * size;
+        bool right = cmp(b, a) < 0;
+        os64_memcpy(t + (size_t)k++ * size, right ? b : a, size);
+        right ? j++ : i++;
+    }
+    while (i < h)
+        os64_memcpy(t + (size_t)k++ * size, p + (size_t)i++ * size, size);
+    while (j < n)
+        os64_memcpy(t + (size_t)k++ * size, p + (size_t)j++ * size, size);
+    os64_memcpy(p, t, (size_t)n * size);
+}
+
+static int name_cmp(const char *a, size_t la, const char *b, size_t lb)
+{
+    int c = os64_memcmp(a, b, la < lb ? la : lb);
+    return c != 0 ? c : (la > lb) - (la < lb);
+}
+
+// One block at one of its offsets: the offset, the block's easing and that
+// as text (two easings are told apart by it), the block, and where it was
+// written among the rule's.
 typedef struct {
     double offset;
     const garb_val_t *easing;
-    char easing_text[128];
-    garb_set_t win[GARB_NPROPS];
-    bool have[GARB_NPROPS];
-} Gather;
+    const char *text;
+    int32_t block;
+    int32_t order;
+} KeyAt;
+
+static int key_at_cmp(const void *a, const void *b)
+{
+    const KeyAt *x = a, *y = b;
+    if (x->offset != y->offset)
+        return x->offset < y->offset ? -1 : 1;
+    int t = os64_strcmp(x->text, y->text);
+    return t != 0 ? t : (x->order > y->order) - (x->order < y->order);
+}
+
+// A keyframe: the run of KeyAt that makes it, and where its first block was
+// written.
+typedef struct {
+    int32_t first, count, order;
+    double offset;
+} KeyRun;
+
+static int key_run_cmp(const void *a, const void *b)
+{
+    const KeyRun *x = a, *y = b;
+    if (x->offset != y->offset)
+        return x->offset < y->offset ? -1 : 1;
+    return (x->order > y->order) - (x->order < y->order);
+}
 
 // A rule's keyframes, read for an element (`own`, its custom properties
 // `customs`) or for none: Animations 2 § 3.2's groups — the blocks at one
 // offset with one easing, each longhand's last declaration among them —
-// in the order each was first written, then sorted by offset. Two blocks
+// sorted by offset, a tie in the order each was first written. Two blocks
 // at one offset, one giving an easing equal to the element's and one
-// giving none, are two keyframes here where § 3.2 makes them one; the
-// value differs at that offset alone. Into the cascade's arena; how many.
+// giving none, are two keyframes here where § 3.2 makes them one; the value
+// differs at that offset alone. Grouped by sorting, not by searching the
+// groups so far: a rule may have as many offsets as a page can write. Into
+// the cascade's arena; how many.
 static int32_t build_frames(garb_cascade_t *c, const Keyframes *k, const CustomMap *customs,
                             bool own, garb_keyframe_t **out)
 {
-    Gather **g = NULL;
-    int32_t ng = 0, gcap = 0;
-    bool ok = true;
+    *out = NULL;
+    int32_t n = 0;
+    for (int32_t b = 0; b < k->nblocks; b++)
+        n += k->blocks[b].noffsets;
+    if (n == 0)
+        return 0;
+    // Each block's easing, read once: the timing function's first item, in
+    // the arena; and as text.
+    const garb_val_t **easings = os64_calloc((size_t)k->nblocks, sizeof(*easings));
+    char (*texts)[128] = os64_calloc((size_t)k->nblocks, sizeof(*texts));
+    KeyAt *at = os64_malloc((size_t)n * 2 * sizeof(*at));
+    KeyRun *runs = os64_malloc((size_t)n * 2 * sizeof(*runs));
+    garb_set_t *win = os64_malloc((size_t)GARB_NPROPS * sizeof(*win));
+    int32_t *stamp = os64_calloc((size_t)GARB_NPROPS, sizeof(*stamp));
+    garb_prop_t *props = os64_malloc((size_t)GARB_NPROPS * sizeof(*props));
+    bool ok = easings != NULL && texts != NULL && at != NULL && runs != NULL && win != NULL &&
+              stamp != NULL && props != NULL;
     garb_set_t sets[GARB_SETS_MAX];
+    int32_t m = 0;
     for (int32_t b = 0; ok && b < k->nblocks; b++) {
         const KeyBlock *kb = &k->blocks[b];
-        // The easing: the timing function's first item, kept in the arena.
-        const garb_val_t *easing = NULL;
         if (kb->easing && key_sets(c, &kb->decls[0], customs, own, sets) == 1 &&
             sets[0].value.kind != GARB_V_WIDE) {
             garb_val_t *e = alloc(c, sizeof(*e));
             if (e != NULL)
                 *e = sets[0].value.kind == GARB_V_LAYERS ? sets[0].value.items[0] : sets[0].value;
-            easing = e;
+            easings[b] = e;
         }
-        char text[128] = "";
-        if (easing != NULL)
-            (void)garb_val_dump(easing, text, sizeof(text));
-        for (int32_t o = 0; ok && o < kb->noffsets; o++) {
-            int32_t at_ = 0;
-            while (at_ < ng && !(g[at_]->offset == kb->offsets[o] &&
-                                 os64_streq(g[at_]->easing_text, text)))
-                at_++;
-            if (at_ == ng) {
-                if (ng == gcap) {
-                    int32_t cap = gcap > 0 ? gcap * 2 : 8;
-                    Gather **more = os64_realloc(g, (size_t)cap * sizeof(*more));
-                    if (more == NULL) {
-                        ok = false;
-                        break;
-                    }
-                    g = more;
-                    gcap = cap;
-                }
-                if ((g[ng] = os64_calloc(1, sizeof(Gather))) == NULL) {
-                    ok = false;
-                    break;
-                }
-                g[ng]->offset = kb->offsets[o];
-                g[ng]->easing = easing;
-                os64_strcopy(g[ng]->easing_text, sizeof(g[ng]->easing_text), text);
-                ng++;
-            }
+        if (easings[b] != NULL)
+            (void)garb_val_dump(easings[b], texts[b], sizeof(texts[b]));
+        for (int32_t o = 0; o < kb->noffsets; o++, m++)
+            at[m] = (KeyAt){kb->offsets[o], easings[b], texts[b], b, m};
+    }
+    // Runs of one offset and one easing, each a keyframe; then sorted by
+    // offset, a tie in the order first written.
+    int32_t nruns = 0;
+    if (ok) {
+        merge_sort(at, at + n, n, sizeof(*at), key_at_cmp);
+        for (int32_t i = 0; i < n;) {
+            int32_t j = i + 1;
+            while (j < n && at[j].offset == at[i].offset && os64_streq(at[j].text, at[i].text))
+                j++;
+            runs[nruns++] = (KeyRun){i, j - i, at[i].order, at[i].offset};
+            i = j;
+        }
+        merge_sort(runs, runs + nruns, nruns, sizeof(*runs), key_run_cmp);
+    }
+    garb_keyframe_t *frames = ok ? alloc(c, (size_t)nruns * sizeof(*frames)) : NULL;
+    for (int32_t r = 0; frames != NULL && r < nruns; r++) {
+        // Each longhand's last value among the run's blocks, in the order
+        // written, and the longhands in their table's order.
+        int32_t np = 0;
+        for (int32_t i = runs[r].first; i < runs[r].first + runs[r].count; i++) {
+            const KeyBlock *kb = &k->blocks[at[i].block];
             for (int32_t d = kb->easing ? 1 : 0; d < kb->ndecls; d++) {
-                int32_t n = key_sets(c, &kb->decls[d], customs, own, sets);
-                for (int32_t s = 0; s < n; s++) {
-                    g[at_]->win[sets[s].prop] = sets[s];
-                    g[at_]->have[sets[s].prop] = true;
+                int32_t ns = key_sets(c, &kb->decls[d], customs, own, sets);
+                for (int32_t s2 = 0; s2 < ns; s2++) {
+                    garb_prop_t p = sets[s2].prop;
+                    win[p] = sets[s2];
+                    if (stamp[p] != r + 1) {
+                        stamp[p] = r + 1;
+                        props[np++] = p;
+                    }
                 }
             }
         }
-    }
-    // Sorted by offset, a tie kept in the order first written.
-    for (int32_t i = 1; i < ng; i++) {
-        Gather *x = g[i];
-        int32_t j = i - 1;
-        while (j >= 0 && g[j]->offset > x->offset) {
-            g[j + 1] = g[j];
-            j--;
+        for (int32_t i = 1; i < np; i++) {      // at most GARB_NPROPS
+            garb_prop_t x = props[i];
+            int32_t j = i - 1;
+            while (j >= 0 && props[j] > x) {
+                props[j + 1] = props[j];
+                j--;
+            }
+            props[j + 1] = x;
         }
-        g[j + 1] = x;
+        garb_set_t *kept = np > 0 ? alloc(c, (size_t)np * sizeof(*kept)) : NULL;
+        for (int32_t i = 0; kept != NULL && i < np; i++)
+            kept[i] = win[props[i]];
+        frames[r] = (garb_keyframe_t){runs[r].offset, at[runs[r].first].easing, kept,
+                                      kept != NULL ? np : 0};
     }
-    garb_keyframe_t *frames = ok && ng > 0 ? alloc(c, (size_t)ng * sizeof(*frames)) : NULL;
-    for (int32_t i = 0; frames != NULL && i < ng; i++) {
-        int32_t n = 0;
-        for (int p = 0; p < GARB_NPROPS; p++)
-            n += g[i]->have[p];
-        garb_set_t *kept = n > 0 ? alloc(c, (size_t)n * sizeof(*kept)) : NULL;
-        int32_t m = 0;
-        for (int p = 0; kept != NULL && p < GARB_NPROPS; p++)
-            if (g[i]->have[p])
-                kept[m++] = g[i]->win[p];
-        frames[i] = (garb_keyframe_t){g[i]->offset, g[i]->easing, kept, m};
-    }
-    for (int32_t i = 0; i < ng; i++)
-        os64_free(g[i]);
-    os64_free(g);
-    if (!ok)
+    os64_free(easings);
+    os64_free(texts);
+    os64_free(at);
+    os64_free(runs);
+    os64_free(win);
+    os64_free(stamp);
+    os64_free(props);
+    if (!ok || frames == NULL)
         c->incomplete = true;
     *out = frames;
-    return frames != NULL ? ng : 0;
+    return frames != NULL ? nruns : 0;
+}
+
+static int keyframes_cmp(const void *a, const void *b)
+{
+    const Keyframes *x = a, *y = b;
+    return name_cmp(x->name, x->len, y->name, y->len);
+}
+
+// One rule per name, the last of it in cascade order, sorted by name for
+// keyframes_named's search. With no room to sort, the rules stay as read
+// and are searched from the last.
+static void keyframes_settle(garb_cascade_t *c)
+{
+    int32_t n = c->nkeyframes;
+    Keyframes *tmp = n > 1 ? os64_malloc((size_t)n * sizeof(*tmp)) : NULL;
+    if (n > 1 && tmp == NULL) {
+        c->incomplete = true;
+        return;
+    }
+    merge_sort(c->keyframes, tmp, n, sizeof(*tmp), keyframes_cmp);
+    os64_free(tmp);
+    int32_t kept = 0;
+    for (int32_t i = 0; i < n; i++) {
+        if (i + 1 < n && keyframes_cmp(&c->keyframes[i], &c->keyframes[i + 1]) == 0)
+            continue;           // a later one of this name follows
+        c->keyframes[kept++] = c->keyframes[i];
+    }
+    c->nkeyframes = kept;
+    c->keyframes_sorted = true;
 }
 
 static const Keyframes *keyframes_named(const garb_cascade_t *c, const char *name, size_t len)
 {
-    for (int32_t i = 0; i < c->nkeyframes; i++)
-        if (c->keyframes[i].len == len && os64_memcmp(c->keyframes[i].name, name, len) == 0)
+    if (c->keyframes_sorted) {
+        int32_t lo = 0, hi = c->nkeyframes;
+        while (lo < hi) {
+            int32_t mid = lo + (hi - lo) / 2;
+            int x = name_cmp(c->keyframes[mid].name, c->keyframes[mid].len, name, len);
+            if (x == 0)
+                return &c->keyframes[mid];
+            if (x < 0)
+                lo = mid + 1;
+            else
+                hi = mid;
+        }
+        return NULL;
+    }
+    for (int32_t i = c->nkeyframes - 1; i >= 0; i--)
+        if (name_cmp(c->keyframes[i].name, c->keyframes[i].len, name, len) == 0)
             return &c->keyframes[i];
     return NULL;
 }
 
+static int own_frames_cmp(const void *a, const void *b)
+{
+    uintptr_t x = (uintptr_t)((const OwnFrames *)a)->rule, y = (uintptr_t)((const OwnFrames *)b)->rule;
+    return (x > y) - (x < y);
+}
+
 // An element that animates — by its winners' names or by those it
 // inherits (animation_names) — reads, against its own custom properties,
-// each named rule that holds var(); the rest it shares.
+// each named rule that holds var(), once however often it is named; the
+// rest it shares. Sorted by rule for garb_keyframes' search.
 static void own_frames(garb_cascade_t *c, Slot *slot, const garb_val_t *names,
                        const CustomMap *customs)
 {
     const garb_val_t *items = names->kind == GARB_V_LAYERS ? names->items : names;
-    int32_t n = names->kind == GARB_V_LAYERS ? names->nitems : 1;
-    for (int32_t i = 0; i < n; i++) {
-        if (items[i].kind != GARB_V_STRING)
-            continue;
-        const Keyframes *k = keyframes_named(c, items[i].text, items[i].len);
-        bool read = k == NULL || !k->pending;
-        for (int32_t j = 0; !read && j < slot->nframes; j++)
-            read = slot->frames[j].rule == k;
-        if (read)
-            continue;
-        OwnFrames *grown = alloc(c, (size_t)(slot->nframes + 1) * sizeof(*grown));
-        if (grown == NULL)
-            return;
-        if (slot->nframes > 0)
-            os64_memcpy(grown, slot->frames, (size_t)slot->nframes * sizeof(*grown));
-        grown[slot->nframes].rule = k;
-        grown[slot->nframes].nframes = build_frames(c, k, customs, true,
-                                                    &grown[slot->nframes].frames);
-        slot->frames = grown;
-        slot->nframes++;
+    int32_t n = names->kind == GARB_V_LAYERS ? names->nitems : 1, m = 0;
+    OwnFrames *own = n > 0 ? alloc(c, (size_t)n * sizeof(*own)) : NULL;
+    for (int32_t i = 0; own != NULL && i < n; i++) {
+        const Keyframes *k = items[i].kind == GARB_V_STRING
+                           ? keyframes_named(c, items[i].text, items[i].len) : NULL;
+        if (k != NULL && k->pending)
+            own[m++] = (OwnFrames){k, NULL, 0};
     }
+    if (m == 0)
+        return;
+    OwnFrames *tmp = m > 1 ? os64_malloc((size_t)m * sizeof(*tmp)) : NULL;
+    if (m > 1 && tmp == NULL) {
+        c->incomplete = true;
+        return;
+    }
+    merge_sort(own, tmp, m, sizeof(*own), own_frames_cmp);
+    os64_free(tmp);
+    int32_t u = 0;
+    for (int32_t i = 0; i < m; i++)
+        if (u == 0 || own[u - 1].rule != own[i].rule)
+            own[u++] = own[i];
+    for (int32_t i = 0; i < u; i++)
+        own[i].nframes = build_frames(c, own[i].rule, customs, true, &own[i].frames);
+    slot->frames = own;
+    slot->nframes = u;
 }
 
 static bool is_el(const os64_html_node_t *n);
@@ -1565,6 +1682,7 @@ garb_cascade_t *garb_cascade(const garb_sheet_in_t *sheets, int32_t n,
             continue;
         add_rules(c, sheet, sheet->items, sheet->nitems, &order, 0, s);
     }
+    keyframes_settle(c);
     // Each @keyframes read for no element: what an element shares.
     for (int32_t k = 0; k < c->nkeyframes; k++)
         c->keyframes[k].nframes = build_frames(c, &c->keyframes[k], NULL, false,
@@ -1676,11 +1794,18 @@ int32_t garb_keyframes(const garb_cascade_t *c, const os64_html_node_t *element,
     if (k == NULL)
         return -1;
     const Slot *s = k->pending ? slot_for(c, element, false) : NULL;
-    for (int32_t i = 0; s != NULL && i < s->nframes; i++)
-        if (s->frames[i].rule == k) {
-            *out = s->frames[i].frames;
-            return s->frames[i].nframes;
-        }
+    int32_t lo = 0, hi = s != NULL ? s->nframes : 0;
+    while (lo < hi) {
+        int32_t mid = lo + (hi - lo) / 2;
+        if ((uintptr_t)s->frames[mid].rule < (uintptr_t)k)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    if (s != NULL && lo < s->nframes && s->frames[lo].rule == k) {
+        *out = s->frames[lo].frames;
+        return s->frames[lo].nframes;
+    }
     *out = k->frames;
     return k->nframes;
 }

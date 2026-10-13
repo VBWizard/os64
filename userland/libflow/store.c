@@ -91,6 +91,17 @@ static bool map_grow(FMap *map)
 
 bool f_map_put(FMap *map, const void *key, void *val)
 {
+    // A key the map holds takes its new value where it is, so replacing
+    // one never grows the map and cannot fail.
+    if (map->cap != 0) {
+        size_t at = hash_ptr(key) & (map->cap - 1);
+        while (map->keys[at] != NULL && map->keys[at] != key)
+            at = (at + 1) & (map->cap - 1);
+        if (map->keys[at] == key) {
+            map->vals[at] = val;
+            return true;
+        }
+    }
     // Kept under three quarters full, so a probe always ends.
     if ((map->count + 1) * 4 > map->cap * 3 && !map_grow(map))
         return false;

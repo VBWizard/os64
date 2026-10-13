@@ -3036,6 +3036,9 @@ static bool animation_one(Sets *s, VCur *c, garb_val_t v[A_N])
             got = !have[A_DURATION] ? A_DURATION : !have[A_DELAY] ? A_DELAY : -1;
             if (got == A_DURATION && one.number < 0)
                 return false;
+        } else if (!have[A_DURATION] && vc_keyword(c, kAuto) != NULL) {
+            got = A_DURATION;           // Animations 2's duration keyword
+            one = kw("auto");
         } else if (!have[A_EASING] && easing(s, c, &one)) {
             got = A_EASING;
         } else if (!have[A_COUNT] && iterations(s, c, &one)) {
