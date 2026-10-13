@@ -23,16 +23,15 @@ os64get delivery. Chris's P5 gallery visual acceptance follows `a3602b30` and
 predates the manifest error-handling fix `4ccaf82f`; no installed binary hash
 was captured. [E2 evidence](evidence/e02/README.md) preserves that distinction.
 
-**Next: give Sol [E03_HANDOFF.md](E03_HANDOFF.md) and its governing
-[E3 contract](E03_DATA_VIEW.md).** Implement the data/selection core, then the
-Details widget and gallery. This is userland work; E4's real directory browser
-follows it. No E3 implementation or runtime validation has been performed.
+**E3A/E3B are implemented on `codex/explorer-e3-implementation`, in the fresh
+`.worktrees/explorer-e3-implementation` worktree, starting from the published
+`origin/codex/explorer-e3-design` packet.** [Evidence](evidence/e03/README.md)
+records host, native, packaging and delivery scope. Independent review and
+Chris's P5 HID/performance walkthrough remain pending; E3 is not called accepted.
+E4's real directory browser follows accepted E3.
 
-Design packet: `codex/explorer-e3-design`, worktree `.worktrees/explorer-e3`,
-based on `f39b0ae0`. Published as a design branch; no separate PR or merge.
-Start Sol's implementation from `origin/codex/explorer-e3-design` in a fresh
-worktree, or incorporate the design commit into a branch based on current
-`userland`. The eventual E3 implementation PR may carry this packet with it.
+The design branch `codex/explorer-e3-design` / `.worktrees/explorer-e3` remains
+separate. The implementation PR against `userland` carries its design packet.
 
 | Work | State | Next action |
 | --- | --- | --- |
@@ -41,7 +40,7 @@ worktree, or incorporate the design commit into a branch based on current
 | [E1B menus](E01B_HANDOFF.md) | Approved and merged, PR #259 | Reuse the shared controller and dispatcher. |
 | E1C consumers | Approved and merged, PR #260; P5 tested | Reuse production menus. |
 | [E2 icons](E02_ICONS.md) | Merged, PR #261 | Reuse provider and shipped assets; [evidence](evidence/e02/README.md). |
-| [E3 data view and selection](E03_DATA_VIEW.md) | Ready; implementation unstarted | Assign [the implementation packet](E03_HANDOFF.md) to Sol. |
+| [E3 data view and selection](E03_DATA_VIEW.md) | Implemented; review/P5 pending | Review the implementation and run [the P5 acceptance packet](E03_HANDOFF.md). |
 | E6 channels | Umbrella proposal only | Separate platform design and Fable review. |
 
 Install another icon set by extracting its folder, selecting its absolute path

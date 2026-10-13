@@ -1,7 +1,9 @@
-# E3 — Implementation packet for Sol
+# E3 — Implementation and acceptance packet
 
-2026-10-13. Design owner: Quinn. Implementation is unstarted; intended
-implementer is Sol when assigned by Chris. The governing contract is
+2026-10-13. Design and implementation owner: Quinn. E3A/E3B are implemented
+on `codex/explorer-e3-implementation`; [evidence](evidence/e03/README.md) and
+[the invariant map](evidence/e03/INVARIANTS.md) record validation scope.
+P5 acceptance and independent review remain pending. The governing contract is
 [E03_DATA_VIEW.md](E03_DATA_VIEW.md); this file supplies execution order and
 acceptance cases, not a competing behavior specification.
 
@@ -167,13 +169,13 @@ scope and revision, separate from later review fixes.
 
 | Check | Expected evidence | Current result |
 | --- | --- | --- |
-| Core and real-font host behavior | ASan/UBSan/LeakSanitizer; state fixtures, allocation sweep, interrupted sequences and two independent views | Not run |
-| Production rendering/damage | Instrument row visits and allocation/I/O calls during paint; image/pixel checks for stale highlights, focus, header and row clipping | Not run |
-| Existing consumer regression | Affected UI/menu/font suites; existing listbox and gallery modes remain usable | Not run |
-| Cross-build and deployment | libos64 plus gallery; normal image installation and os64get deployment include the same tested library/test executable | Not run |
-| QEMU | Native Details walkthrough with PS/2 input, real icon set, Interface font changes and tiny/large windows | Not run |
+| Core and real-font host behavior | ASan/UBSan/LeakSanitizer; state fixtures, allocation sweep, interrupted sequences and two independent views | PASS; [E3 evidence](evidence/e03/README.md) |
+| Production rendering/damage | Instrument row visits and allocation/I/O calls during paint; image/pixel checks for stale highlights, focus, header and row clipping | PASS; real renderer/font harness |
+| Existing consumer regression | Affected UI/menu/font suites; existing listbox and gallery modes remain usable | PASS; host suites and native gallery smoke |
+| Cross-build and deployment | libos64 plus gallery; normal image installation and os64get deployment include the same tested library/test executable | PASS; matching image/guest hashes |
+| QEMU | Native Details walkthrough with PS/2 input, real icon set, Interface font changes and tiny/large windows | PASS; final source `8b5d13a7` |
 | P5 | Chris's walkthrough with HID input, appearance, selection, sort/filter/scroll, resize and activation | Not run |
-| Resource/performance bounds | Measurements below, repeated create/replace/dispose reaches baseline | Not run |
+| Resource/performance bounds | Measurements below, repeated create/replace/dispose reaches baseline | Host/QEMU recorded; P5 p95 pending |
 
 Leak detection stays enabled. If the sandbox denies LSan thread attachment,
 diagnose and rerun the same binaries outside it through the normal permission
@@ -213,7 +215,7 @@ P5 walkthrough, after deploying both library and gallery:
 
 ## Review and handoff discipline
 
-No E3 implementation or independent review exists yet. E1B's six finding-bearing
+E3 implementation exists; independent review remains pending. E1B's six finding-bearing
 rounds are the reason for explicit transitions and intermediate observations;
 large assertion counts did not by themselves prove those contracts. Its
 [invariant audit](E01B_INVARIANTS.md) is a method to reuse, not menu behavior to

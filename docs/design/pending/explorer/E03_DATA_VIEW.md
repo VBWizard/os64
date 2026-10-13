@@ -2,9 +2,10 @@
 
 ## Status and ownership
 
-- **State:** Ready for implementation; design dated 2026-10-13. No E3 code or
-  runtime acceptance is claimed by this packet.
-- **Design owner:** Quinn. Intended implementer: Sol when Chris assigns it.
+- **State:** E3A/E3B implemented on `codex/explorer-e3-implementation`.
+  [Evidence](evidence/e03/README.md) records host/native scope; P5 acceptance
+  and independent review remain pending. Design dated 2026-10-13.
+- **Design and implementation owner:** Quinn; Chris assigned E3 on 2026-10-13.
 - **Design branch/worktree:** `codex/explorer-e3-design`,
   `.worktrees/explorer-e3`, based on `userland` at `f39b0ae0` (E2 merge).
   Publication and the implementation resume point are in [HANDOFF.md](HANDOFF.md).
@@ -381,11 +382,11 @@ not complete the slice; the real font/drawing and native input paths need proof.
 
 - [x] Reconcile the design with the merged toolkit and E2 boundary.
 - [x] Settle identity, filtering, range, failure and repaint contracts.
-- [ ] Implement E3A and its meaningful behavioral tests.
-- [ ] Implement E3B and the diagnostic consumer.
+- [x] Implement E3A and its meaningful behavioral tests.
+- [x] Implement E3B and the diagnostic consumer.
 - [ ] Record host, QEMU and P5 evidence separately.
 - [ ] Complete ordinary review; record implementation/merge commits.
 
-No implementation findings have been recorded; the design has not had an
-independent review. Outstanding work is implementation and its acceptance,
-not an unresolved IPC or kernel dependency.
+Implementation and host evidence are recorded in [E3 evidence](evidence/e03/README.md).
+P5 acceptance and independent review remain outstanding; no IPC or kernel
+prerequisite was added.

@@ -447,6 +447,8 @@ the first browser to simulate it.
 
 [E1](explorer/E01_MENUS.md) and [E2](explorer/E02_ICONS.md) are merged.
 [E3's detailed contract](explorer/E03_DATA_VIEW.md) and
-[implementation packet](explorer/E03_HANDOFF.md) define the next reusable
-Details view and selection work. The first real directory browser follows in
-E4, without waiting for the separate E6 message-channel architecture.
+[implementation packet](explorer/E03_HANDOFF.md) now have a reusable Details
+view and selection implementation; [evidence](explorer/evidence/e03/README.md)
+records validation scope. E3 awaits independent review and P5 acceptance.
+The first real directory browser follows accepted E3 in E4, without waiting
+for the separate E6 message-channel architecture.

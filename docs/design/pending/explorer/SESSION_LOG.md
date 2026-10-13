@@ -790,3 +790,34 @@ files were retired. Reviewed selection examples and failure transitions against
 the current input/font APIs. Runtime tests are not applicable to this docs-only
 packet and remain unrun for E3. The packet is published on its design branch;
 no separate PR or merge, allowing the implementation PR to carry the design.
+
+
+## 2026-10-13 — E3A/E3B implementation
+
+Chris assigned E3 from `origin/codex/explorer-e3-design` in a fresh worktree.
+Quinn implemented copied domain-scoped data, indexed projections, typed stable
+sorting and detached selection in `ee24fb64`, then the transactional Details
+widget/gallery in `8b5d13a7`. The branch is `codex/explorer-e3-implementation`;
+the worktree is `.worktrees/explorer-e3-implementation`. No kernel or ABI source
+was changed, and existing worktrees were retained.
+
+The real-font/renderer suite passes 14,875 checks, including 251 replacement
+and 204 font preparation failure points, complete tuple/pixel checks, paired
+failures, interrupted input, callback guards and lifecycle/resource bounds.
+The detached core passes 276 checks; existing menu and font/listbox suites and
+real PNG/theme checks pass. ASan/UBSan/LeakSanitizer remain enabled; sandbox
+thread attachment EPERM with TracerPid 0 was diagnosed and runs passed outside
+it. Font-error notices are deferred until a dispatch boundary; model/layout
+publication preserves held-key guards while input loss resets them.
+
+Normal FAT/ext2 image recipes and guest-read library/gallery hashes agree.
+Final QEMU source `8b5d13a7` exercises 0/1/10000/100000 rows, sort/filter/refresh/
+reset, selection/typeahead/activation, columns, an independent second view,
+Interface 32, light/dark appearance, resize and existing gallery modes. Its
+100 ordinary events after 10 warmups measure median/p95/max 46.194/48.486/49.554
+ms under TCG. Host p95 is 1.947 ms. Neither is claimed as P5 latency.
+
+[E3 evidence](evidence/e03/README.md) records commands, source/installed hashes,
+logs, screenshots and the invariant map. Independent review and Chris's P5
+HID/performance walkthrough remain pending. E3 is implemented, not accepted;
+E4 follows accepted E3.

@@ -1,0 +1,33 @@
+Details gallery: reusable virtualized table, synthetic rows and E2 icons; no filesystem commands.
+Details native diagnostics: snapshot=3723216 metadata=93624 peak=106216 font-engine=214506 font-peak=406544 runs=96 leases=23 painted-rows=23 prepared-rows=23 construction-us=322438
+Details ordinary native event-to-paint: samples=100 after-10-warmups median-us=46194 p95-us=48486 max-us=49554 (environment must be identified by tester)
+Details shared icon pixel cache: 2080 bytes; theme routing metadata and decoder scratch excluded.
+Details command=10 view=1 result=0 rows=10000 second=0 filter=0
+Details native sort/publication: elapsed-us=37261
+Details native sort/publication: elapsed-us=37913
+Details activation domain=1 ID=9000169932 (synthetic; no file action)
+Details native prefix input: ascii=97 elapsed-us=978 focus=9000000153 status=0
+Details native prefix input: ascii=97 elapsed-us=482 focus=9000001224 status=0
+Details native prefix input: ascii=108 elapsed-us=541 focus=9000001224 status=0
+Details command=5 view=1 result=0 rows=3334 second=0 filter=1
+Details command=5 view=1 result=0 rows=10000 second=0 filter=0
+Details construction/publication: rows=10000 snapshot-bytes=3723216 elapsed-us=426344
+Details command=6 view=1 result=0 rows=10000 second=0 filter=0
+Details construction/publication: rows=10000 snapshot-bytes=3723216 elapsed-us=396802
+Details command=7 view=1 result=0 rows=10000 second=0 filter=0
+Details command=104 view=1 result=0 rows=10000 second=0 filter=0
+Details command=102 view=1 result=0 rows=10000 second=0 filter=0
+Details command=8 view=1 result=0 rows=10000 second=1 filter=0
+Details command=8 view=1 result=0 rows=10000 second=0 filter=0
+Details construction/publication: rows=0 snapshot-bytes=288 elapsed-us=109209
+Details command=1 view=1 result=0 rows=0 second=0 filter=0
+Details construction/publication: rows=1 snapshot-bytes=816 elapsed-us=1564
+Details command=2 view=1 result=0 rows=1 second=0 filter=0
+Details construction/publication: rows=100000 snapshot-bytes=37044176 elapsed-us=2920044
+Details command=4 view=1 result=0 rows=100000 second=0 filter=0
+Details construction/publication: rows=10000 snapshot-bytes=3723216 elapsed-us=1352072
+Details command=3 view=1 result=0 rows=10000 second=0 filter=0
+Details command=15 view=1 result=0 rows=10000 second=0 filter=0
+Details native diagnostics: snapshot=3723216 metadata=91864 peak=1186584 font-engine=927205 font-peak=1166575 runs=16 leases=3 painted-rows=3 prepared-rows=3 construction-us=1352072
+Details ordinary native event-to-paint: samples=100 after-10-warmups median-us=46194 p95-us=48486 max-us=49554 (environment must be identified by tester)
+Details shared icon pixel cache: 10304 bytes; theme routing metadata and decoder scratch excluded.
