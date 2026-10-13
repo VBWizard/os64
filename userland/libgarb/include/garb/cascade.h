@@ -119,10 +119,11 @@ typedef struct {
 // They come from the last `@keyframes` (or `@-webkit-keyframes`, Compat
 // § 3.1) of that name in cascade order inside the `@media` and `@supports`
 // that hold. A keyframe's var() is replaced against the element's custom
-// properties when its own winners name the animation, and the declaration
-// dropped otherwise. Answers how many and points `out` at them, which live
-// as long as the cascade; -1 when no rule has that name, and the animation
-// starts nothing.
+// properties when the element animates by that name — its winners name
+// it, or it inherits names that do (`animation-name: inherit`) — and the
+// declaration dropped otherwise. Answers how many and points `out` at
+// them, which live as long as the cascade; -1 when no rule has that name,
+// and the animation starts nothing.
 int32_t garb_keyframes(const garb_cascade_t *c, const os64_html_node_t *element,
                        const char *name, size_t len, const garb_keyframe_t **out);
 void garb_cascade_free(garb_cascade_t *c);

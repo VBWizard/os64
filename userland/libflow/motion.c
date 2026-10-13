@@ -817,6 +817,14 @@ static int32_t round_i32(double v)
     return v > INT32_MAX ? INT32_MAX : v < INT32_MIN ? INT32_MIN : (int32_t)v;
 }
 
+// An integer's value, rounded half up as Chrome rounds 2.5 and -2.5 (Values
+// 4 § 5.2.1), held to an int32_t: an easing that overshoots carries it past
+// either end.
+static int32_t half_up_i32(double v)
+{
+    return round_i32(floor(v + 0.5));
+}
+
 // A length (flow_length_t): a PX and a PERCENT with its offset are each a
 // percentage and a length, mixed part by part (Values 4 § 5.6.1); a
 // keyword is discrete.
@@ -1529,11 +1537,13 @@ static bool mix_prop(garb_prop_t p, const flow_style_t *a, const flow_style_t *b
             break;
         return true;
     case GARB_Z_INDEX:
+        // Two numbers make a number, whatever the element's own is.
         if (!a->has_z_index || !b->has_z_index)
             break;
-        // Rounded half up, as Chrome rounds 2.5 (Values 4 § 5.2.1).
-        if (d != NULL)
-            d->z_index = (int32_t)floor(lerp(a->z_index, b->z_index, t) + 0.5);
+        if (d != NULL) {
+            d->has_z_index = true;
+            d->z_index = half_up_i32(lerp(a->z_index, b->z_index, t));
+        }
         return true;
     case GARB_OPACITY:
         if (d != NULL)
@@ -1553,7 +1563,7 @@ static bool mix_prop(garb_prop_t p, const flow_style_t *a, const flow_style_t *b
         return true;
     case GARB_ORDER:
         if (d != NULL)
-            d->order = (int32_t)floor(lerp(a->order, b->order, t) + 0.5);
+            d->order = half_up_i32(lerp(a->order, b->order, t));
         return true;
     case GARB_ROW_GAP: case GARB_COLUMN_GAP: {
         bool row = p == GARB_ROW_GAP;
@@ -1639,55 +1649,81 @@ typedef struct {
     const flow_easing_t *easing;
 } Frame;
 
-// The two keyframes around `progress` among those that set `p` — with the
-// implicit ones, the base's at 0 and 1 where no keyframe sets it there,
-// eased as the animation is (Animations 2 § 3.2) — as Web Animations 1
+// The frames property `p` is worked between: the implicit first, the
+// base's at 0, where no keyframe that sets it is at 0; those that do, in
+// their order; the implicit last, the base's at 1, where none is at 1 —
+// eased as the animation is (Animations 2 § 3.2).
+typedef struct {
+    const FMotion *m;
+    const FAnimation *an;
+    garb_prop_t p;
+    bool at0, at1;
+} Line;
+
+// The line's `i`th frame. Walked, not listed: a list would be one more
+// allocation a value could fail on.
+static Frame line_frame(const Line *l, int32_t i)
+{
+    const flow_easing_t *own = &l->an->timing.easing;
+    if (!l->at0) {
+        if (i == 0)
+            return (Frame){&l->m->base, 0, own};
+        i--;
+    }
+    for (int32_t j = 0; j < l->an->nframes; j++) {
+        const FKeyframe *f = &l->an->frames[j];
+        if (f_props_has(&f->sets, l->p) && i-- == 0)
+            return (Frame){&f->style, f->offset, f->has_easing ? &f->easing : own};
+    }
+    return (Frame){&l->m->base, 1, own};
+}
+
+// The two frames of the line around `progress`, as Web Animations 1
 // § 5.3.4 finds them: the last at or before the progress and before 1,
 // and the one after; of several at 1, at the end, the last alone (`*start`
-// and `*end` the same). False when there is no room to list them.
-static bool interval(const FMotion *m, const FAnimation *an, garb_prop_t p, double progress,
+// and `*end` the same).
+static void interval(const FMotion *m, const FAnimation *an, garb_prop_t p, double progress,
                      Frame *start, Frame *end)
 {
-    const flow_easing_t *own = &an->timing.easing;
-    Frame few[32], *list = few;
-    if (an->nframes + 2 > F_ARRAY(few) &&
-        (list = os64_malloc((size_t)(an->nframes + 2) * sizeof(*list))) == NULL)
-        return false;
-    bool at0 = false, at1 = false;
+    Line l = {m, an, p, false, false};
     for (int32_t i = 0; i < an->nframes; i++)
         if (f_props_has(&an->frames[i].sets, p)) {
-            at0 |= an->frames[i].offset == 0;
-            at1 |= an->frames[i].offset == 1;
+            l.at0 |= an->frames[i].offset == 0;
+            l.at1 |= an->frames[i].offset == 1;
         }
-    int32_t n = 0, ones = 0;
-    if (!at0)
-        list[n++] = (Frame){&m->base, 0, own};
-    for (int32_t i = 0; i < an->nframes; i++) {
-        const FKeyframe *f = &an->frames[i];
-        if (f_props_has(&f->sets, p))
-            list[n++] = (Frame){&f->style, f->offset, f->has_easing ? &f->easing : own};
+    // One pass over the line's offsets: how many frames, how many at 1,
+    // the last at or before the progress and before 1, the last at 0.
+    int32_t n = 0, ones = 0, s = -1, zero = -1;
+    for (int32_t j = -1; j <= an->nframes; j++) {
+        double offset;
+        if (j == -1) {
+            if (l.at0)
+                continue;
+            offset = 0;
+        } else if (j == an->nframes) {
+            if (l.at1)
+                continue;
+            offset = 1;
+        } else if (f_props_has(&an->frames[j].sets, p)) {
+            offset = an->frames[j].offset;
+        } else {
+            continue;
+        }
+        ones += offset == 1;
+        if (offset <= progress && offset < 1)
+            s = n;
+        if (offset == 0)
+            zero = n;
+        n++;
     }
-    if (!at1)
-        list[n++] = (Frame){&m->base, 1, own};
-    for (int32_t i = 0; i < n; i++)
-        ones += list[i].offset == 1;
     if (progress >= 1 && ones > 1) {
-        *start = *end = list[n - 1];
-    } else {
-        int32_t s = -1;
-        for (int32_t i = 0; i < n; i++)
-            if (list[i].offset <= progress && list[i].offset < 1)
-                s = i;
-        if (s < 0)
-            for (int32_t i = 0; i < n; i++)
-                if (list[i].offset == 0)
-                    s = i;
-        *start = list[s];
-        *end = list[s + 1 < n ? s + 1 : s];
+        *start = *end = line_frame(&l, n - 1);
+        return;
     }
-    if (list != few)
-        os64_free(list);
-    return true;
+    if (s < 0)
+        s = zero;
+    *start = line_frame(&l, s);
+    *end = line_frame(&l, s + 1 < n ? s + 1 : s);
 }
 
 // The fraction between the two, through the first's easing.
@@ -1717,8 +1753,8 @@ bool f_motion_style(const FMotion *m, double now, flow_style_t *out, FAlloc allo
                     continue;
                 Frame s, e;
                 MixKind kind;
-                if (!interval(m, an, (garb_prop_t)p, k.progress, &s, &e) ||
-                    !mix_prop((garb_prop_t)p, s.style, e.style,
+                interval(m, an, (garb_prop_t)p, k.progress, &s, &e);
+                if (!mix_prop((garb_prop_t)p, s.style, e.style,
                               eased(&s, &e, k.progress, k.before), out, &kind, alloc, ctx))
                     ok = false;
             }
@@ -1762,28 +1798,62 @@ uint8_t f_motion_effects(const FMotion *m, double now)
 
 // ── When a value next changes ───────────────────────────────────────────
 
-// The first x in [0, 1] at which an easing's output reaches one half: a
-// discrete value's flip. Halving where it is monotone; a curve that
-// overshoots is searched in 64 slices for its first crossing first.
-static double half_way(const flow_easing_t *e)
+// Every x in (0, 1) at which easing `e` — linear or a cubic, not steps —
+// crosses `level`, rising or falling: at most three, in order, into `xs`;
+// how many. A cubic's y is a cubic in the curve's parameter, so it is cut
+// where it turns (its slope's roots), and each piece whose ends lie either
+// side of `level` is halved down to the crossing; x rises with the
+// parameter (x1 and x2 are in [0, 1]), so the crossings come in order. A
+// curve that only touches `level` crosses nothing there.
+static int32_t ease_crossings(const flow_easing_t *e, double level, double xs[3])
 {
-    double lo = 0, hi = 1;
-    for (int i = 1; i <= 64; i++) {
-        double x = i / 64.0;
-        if (f_ease(e, x, false) >= 0.5) {
-            hi = x;
-            lo = (i - 1) / 64.0;
-            break;
+    if (e == NULL || e->kind != FLOW_EASE_CUBIC) {
+        if (level <= 0 || level >= 1)
+            return 0;
+        xs[0] = level;
+        return 1;
+    }
+    const double *p = e->p;
+    double c = 3 * p[1], b = 3 * (p[3] - p[1]) - c, a = 1 - c - b;
+    double qa = 3 * a, qb = 2 * b, qc = c;      // y's slope, qa t^2 + qb t + qc
+    double cut[4] = {0};
+    int32_t nc = 1;
+    double roots[2];
+    int32_t nr = 0;
+    if (fabs(qa) < 1e-12) {
+        if (fabs(qb) > 1e-12)
+            roots[nr++] = -qc / qb;
+    } else {
+        double disc = qb * qb - 4 * qa * qc;
+        if (disc >= 0) {
+            double sq = sqrt(disc);
+            double r0 = (-qb - sq) / (2 * qa), r1 = (-qb + sq) / (2 * qa);
+            roots[nr++] = fmin(r0, r1);
+            roots[nr++] = fmax(r0, r1);
         }
     }
-    for (int i = 0; i < 60; i++) {
-        double mid = (lo + hi) / 2;
-        if (f_ease(e, mid, false) >= 0.5)
-            hi = mid;
-        else
-            lo = mid;
+    for (int32_t i = 0; i < nr; i++)
+        if (roots[i] > 0 && roots[i] < 1)
+            cut[nc++] = roots[i];
+    cut[nc++] = 1;
+    int32_t n = 0;
+    for (int32_t i = 0; i + 1 < nc; i++) {
+        double t0 = cut[i], t1 = cut[i + 1];
+        double y0 = bezier(p[1], p[3], t0) - level, y1 = bezier(p[1], p[3], t1) - level;
+        if (!((y0 < 0 && y1 > 0) || (y0 > 0 && y1 < 0)))
+            continue;
+        for (int k = 0; k < 64; k++) {
+            double mid = (t0 + t1) / 2, ym = bezier(p[1], p[3], mid) - level;
+            if ((ym < 0) == (y0 < 0))
+                t0 = mid;
+            else
+                t1 = mid;
+        }
+        double x = bezier(p[0], p[2], t1);
+        if (x > 0 && x < 1 && n < 3)
+            xs[n++] = x;
     }
-    return hi;
+    return n;
 }
 
 // The earliest local time after `local` at which progress `p` of the
@@ -1818,17 +1888,19 @@ double f_motion_next(const FMotion *m, double now)
             if (!f_props_has(&an->props, (garb_prop_t)p) || !animatable((garb_prop_t)p))
                 continue;
             Frame s, e;
-            if (!interval(m, an, (garb_prop_t)p, k.progress, &s, &e))
-                return now;     // no room to look: the next frame, to be safe
+            interval(m, an, (garb_prop_t)p, k.progress, &s, &e);
             MixKind kind;
             (void)mix_prop((garb_prop_t)p, s.style, e.style, 0.5, NULL, &kind, NULL, NULL);
             const flow_easing_t *ease = s.easing;
             bool stepped = ease != NULL && ease->kind == FLOW_EASE_STEPS;
             if (kind == MIX_CONTINUOUS && !stepped && s.style != e.style)
                 return now;     // moving continuously
-            // Visibility turns visible the moment its interval begins.
-            if (p == GARB_VISIBILITY && k.progress == s.offset && s.style != e.style)
-                return now;
+            // Hidden to visible is the start's at the interval's start
+            // and visible just past it (Appendix A): due the millisecond
+            // after.
+            if (p == GARB_VISIBILITY && k.progress == s.offset &&
+                s.style->visibility != FLOW_VISIBLE && e.style->visibility == FLOW_VISIBLE)
+                soonest = fmin(soonest, floor(now) + 1);
             // The interval's ends, and inside it its steps' edges, or a
             // discrete value's flip.
             double edges[2] = {s.offset, e.offset};
@@ -1845,10 +1917,25 @@ double f_motion_next(const FMotion *m, double now)
                     if (at > now)
                         soonest = fmin(soonest, at);
                 }
-            } else if (kind == MIX_DISCRETE && p != GARB_VISIBILITY) {
-                double at = base + at_progress(&k, &an->timing, s.offset + span * half_way(ease));
-                if (at > now)
-                    soonest = fmin(soonest, at);
+            } else if (kind == MIX_DISCRETE) {
+                // A discrete value flips where the eased fraction crosses
+                // one half; visibility, when either end is visible, where
+                // it crosses 0 or 1 (Appendix A) — each time the easing
+                // does, overshoot and all, whichever way the iteration
+                // runs. Due the millisecond after: a fraction falling
+                // through its level changes the value just past it.
+                bool vis = p == GARB_VISIBILITY && (s.style->visibility == FLOW_VISIBLE ||
+                                                    e.style->visibility == FLOW_VISIBLE);
+                const double levels[2] = {vis ? 0 : 0.5, 1};
+                for (int l = 0; l < (vis ? 2 : 1); l++) {
+                    double xs[3];
+                    int32_t nx = ease_crossings(ease, levels[l], xs);
+                    for (int32_t j = 0; j < nx; j++) {
+                        double at = base + at_progress(&k, &an->timing, s.offset + span * xs[j]);
+                        if (at >= now)
+                            soonest = fmin(soonest, floor(at) + 1);
+                    }
+                }
             }
         }
         next = fmin(next, soonest);

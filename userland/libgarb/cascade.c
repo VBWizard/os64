@@ -1194,8 +1194,9 @@ static const Keyframes *keyframes_named(const garb_cascade_t *c, const char *nam
     return NULL;
 }
 
-// An element whose winners name animations reads, against its own custom
-// properties, each named rule that holds var(); the rest it shares.
+// An element that animates — by its winners' names or by those it
+// inherits (animation_names) — reads, against its own custom properties,
+// each named rule that holds var(); the rest it shares.
 static void own_frames(garb_cascade_t *c, Slot *slot, const garb_val_t *names,
                        const CustomMap *customs)
 {
@@ -1221,6 +1222,27 @@ static void own_frames(garb_cascade_t *c, Slot *slot, const garb_val_t *names,
         slot->frames = grown;
         slot->nframes++;
     }
+}
+
+static bool is_el(const os64_html_node_t *n);
+
+// The animation names element `el` computes from its winner `v`: the
+// winner's own, or for `inherit` its parent's, as far up as `inherit`
+// goes — whose rules with var() are then built against `el`'s custom
+// properties, since `el` animates with them. NULL for none: no winner, or
+// another wide keyword (animation-name does not inherit).
+static const garb_val_t *animation_names(const garb_cascade_t *c, const os64_html_node_t *el,
+                                         const garb_val_t *v)
+{
+    while (v != NULL && v->kind == GARB_V_WIDE && os64_streq(v->keyword, "inherit")) {
+        el = el->parent;
+        const Slot *up = is_el(el) ? slot_for(c, el, false) : NULL;
+        v = NULL;
+        for (int32_t i = 0; up != NULL && i < up->style.n; i++)
+            if (up->style.sets[i].prop == GARB_ANIMATION_NAME)
+                v = &up->style.sets[i].value;
+    }
+    return v != NULL && v->kind != GARB_V_WIDE ? v : NULL;
 }
 
 // ── Per element ─────────────────────────────────────────────────────────
@@ -1503,8 +1525,10 @@ static void cascade_element(garb_cascade_t *c, const os64_html_node_t *el,
     slot->style.sheet = kept_from;
     slot->style.important = kept_important;
     slot->style.n = nwin;
-    if (have[GARB_ANIMATION_NAME])
-        own_frames(c, slot, &win[GARB_ANIMATION_NAME].value, customs);
+    const garb_val_t *names = animation_names(c, el, have[GARB_ANIMATION_NAME]
+                                                     ? &win[GARB_ANIMATION_NAME].value : NULL);
+    if (names != NULL)
+        own_frames(c, slot, names, customs);
 }
 
 // ── The door ────────────────────────────────────────────────────────────

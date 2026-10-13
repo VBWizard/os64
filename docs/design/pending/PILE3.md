@@ -1571,7 +1571,7 @@ out, and a layout at a time is the page at that time.
 | a size in 26.6 (`font_size`, border widths, `border-spacing`, transform-origin's z) | a number in 26.6, rounded to 1/64 px |
 | a colour (`0xTTRRGGBB`) | premultiplied by its alpha, each channel in doubles, then divided back and rounded half up to 8 bits (Color 4 § 13.4) |
 | `opacity`, the flex factors (thousandths), `font-weight` | a real number, rounded to the field's grid |
-| `z-index`, `order` | a real number, rounded half up (Values 4 § 5.2.1, as Chrome rounds 2.5) |
+| `z-index`, `order` | a real number, rounded half up (Values 4 § 5.2.1, as Chrome rounds 2.5) and held to the field's range, which an overshooting easing passes; a `z-index` between two numbers is a number, whatever the element's own, and `auto` at either end is discrete |
 | `line-height` | a number with a number, a length with a length; else discrete |
 | `visibility` | `visible` for every fraction strictly between 0 and 1 if either end is `visible`; else discrete (Web Animations Appendix A) |
 | a shadow list | shadow by shadow, the shorter padded with transparent ones of no size that match the other's `inset`; a pair differing in `inset` makes the whole list discrete; colours as above (Appendix A) |
@@ -1632,11 +1632,14 @@ and that is a change of structure: the face is due a layout at its end.
 **The face lays out at the frames.** yonder hands each layout
 `yonder_now_ms()`, and asks libflow when the page next changes:
 `flow_motion_due(tree, view, scroll)` answers the earliest time an
-animation whose box can be seen in `view` shows another value — the
-layout's own time
-for a value that moves continuously, which leaves when the next frame is
-to the face; the next step's edge for one in `steps()` or a discrete
-one; the start of an active phase; an end — and never for one that is
+animation whose element can be seen in `view` — its box, or for one
+that makes none (`display: contents`) the boxes inside it, which draw
+what it hands down — shows another value: the layout's own time for a
+value that moves continuously, which leaves when the next frame is to
+the face; the next step's edge for one in `steps()`; the millisecond
+after each crossing of a discrete value's level (one half, or for
+visibility 0 and 1) by its easing, every crossing an overshooting curve
+makes; the start of an active phase; an end — and never for one that is
 paused, finished and filling, or out of view. It joins the deadlines the
 ticker keeps already (`pictures_schedule`). When it rings for an
 animation the page is laid out again, quietly: the scroll kept as any

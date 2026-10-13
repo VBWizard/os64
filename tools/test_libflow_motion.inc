@@ -477,6 +477,58 @@ static void motion_cascade_cases(void)
     expect_i64("motion: in its delay, not filling, the element's value",
                (b = moving_box(&m, "nf")) != NULL ? b->rect.x : -1, 50);
     moving_close(&m);
+
+    // Chrome's answers (10/13): an element that inherits its animation
+    // reads a rule's var() against its own custom properties, whether it
+    // inherits the shorthand or the name alone; z-index from auto between
+    // two numbers is a number, 2.5 rounded up.
+    moving_open(&m, MOTION_STYLE
+        "@keyframes v{to{margin-left:var(--x)}}"
+        "@keyframes z{from{z-index:1}to{z-index:4}}"
+        "#par{--x:100px;animation:v 1s linear -.5s paused}"
+        "#kid{--x:200px;animation:inherit}"
+        "#kn{--x:300px;animation-name:inherit;" AT("0.5") "}"
+        "</style><div id=par><p id=kid>a</p><p id=kn>b</p></div>"
+        "<div id=z style='animation-name:z;" AT("0.5") "'></div>", 1000);
+    expect_i64("motion: the animating element's own var()",
+               (s = moving_style(&m, "par")) != NULL ? s->margin[3].value : -1, 50 * 64);
+    expect_i64("motion: an inherited animation reads its rule's var() against its own",
+               (s = moving_style(&m, "kid")) != NULL ? s->margin[3].value : -1, 100 * 64);
+    expect_i64("motion: and an inherited name alone",
+               (s = moving_style(&m, "kn")) != NULL ? s->margin[3].value : -1, 150 * 64);
+    s = moving_style(&m, "z");
+    expect("motion: z-index from auto between two numbers is a number, 2.5 rounded up",
+           s != NULL && s->has_z_index && s->z_index == 3, NULL);
+    moving_close(&m);
+
+    // An easing that overshoots carries an integer past its type's ends:
+    // it is held there, never wrapped (a cast past them is undefined, and
+    // the harness's sanitizer says so).
+    moving_open(&m, MOTION_STYLE
+        "@keyframes big{from{z-index:0;order:0}to{z-index:2000000000;order:2000000000}}"
+        "@keyframes neg{from{z-index:0;order:0}to{z-index:-2000000000;order:-2000000000}}"
+        "</style><div id=up style='animation:big 1s cubic-bezier(0,3,1,3) -.5s paused'></div>"
+        "<div id=down style='animation:neg 1s cubic-bezier(0,3,1,3) -.5s paused'></div>", 1000);
+    s = moving_style(&m, "up");
+    expect("motion: an overshooting integer is held at its type's top",
+           s != NULL && s->z_index == INT32_MAX && s->order == INT32_MAX, NULL);
+    s = moving_style(&m, "down");
+    expect("motion: and its bottom",
+           s != NULL && s->z_index == INT32_MIN && s->order == INT32_MIN, NULL);
+    moving_close(&m);
+
+    // Forty keyframes of one property, 2.5% apart: halfway is the
+    // twentieth, however many there are.
+    char many[4096];
+    size_t at = (size_t)snprintf(many, sizeof(many), MOTION_STYLE "@keyframes many{");
+    for (int i = 0; i <= 40; i++)
+        at += (size_t)snprintf(many + at, sizeof(many) - at, "%g%%{margin-left:%dpx}", i * 2.5, i * 10);
+    snprintf(many + at, sizeof(many) - at,
+             "}</style><div id=many style='animation-name:many;" AT("0.5") "'></div>");
+    moving_open(&m, many, 1000);
+    expect_i64("motion: forty keyframes, halfway",
+               (s = moving_style(&m, "many")) != NULL ? s->margin[3].value : -1, 200 * 64);
+    moving_close(&m);
 }
 
 // ── The side effects (Web Animations 1 § 5.6, Will Change 1) ───────────
@@ -677,14 +729,18 @@ static void motion_due_cases(void)
         {"motion due: steps at the next edge", "mv 1s steps(4,end)", 1250},
         {"motion due: paused, never", "mv 1s linear paused", FLOW_NEVER},
         {"motion due: in its delay, its start", "mv 1s linear 500ms", 1500},
-        {"motion due: a discrete value at its flip", "ff 1s linear", 1500},
+        {"motion due: a discrete value the millisecond after its flip", "ff 1s linear", 1501},
         {"motion due: ended and filling, never", "mv 1s linear forwards -2s", FLOW_NEVER},
+        {"motion due: hidden to visible, the millisecond after its start", "hv 1s linear", 1001},
+        {"motion due: visible to hidden, its end", "vh 1s linear", 2000},
     };
     for (size_t i = 0; i < sizeof(kCases) / sizeof(kCases[0]); i++) {
         char html[512];
         snprintf(html, sizeof(html), MOTION_STYLE
                  "@keyframes mv{from{transform:translateX(0)}to{transform:translateX(100px)}}"
                  "@keyframes ff{from{font-family:serif}to{font-family:monospace}}"
+                 "@keyframes hv{from{visibility:hidden}to{visibility:visible}}"
+                 "@keyframes vh{from{visibility:visible}to{visibility:hidden}}"
                  "</style><div style='animation:%s'>x</div>", kCases[i].animation);
         Moving m;
         moving_open(&m, html, 1000);
@@ -702,6 +758,83 @@ static void motion_due_cases(void)
     expect("motion due: out of view, never",
            flow_motion_due(m.tree, kView, (flow_point_t){0, 0}) == FLOW_NEVER, NULL);
     moving_close(&m);
+
+    // An element that makes no box hands its animated colour down: it is
+    // seen where what it holds is — a block, or bare text — and not when
+    // all it holds is out of view.
+    static const char *const kContents[] = {
+        "<div class=c><p>x</p></div>", "<div class=c>bare text</div>",
+        "<div class=c><p style='margin-top:2000px'>x</p></div>",
+    };
+    for (int i = 0; i < 3; i++) {
+        char html[512];
+        snprintf(html, sizeof(html), MOTION_STYLE "@keyframes c{to{color:red}}"
+                 ".c{display:contents;animation:c 1s linear}</style>%s", kContents[i]);
+        moving_open(&m, html, 1000);
+        uint64_t due = flow_motion_due(m.tree, kView, (flow_point_t){0, 0});
+        expect(i == 0 ? "motion due: display: contents, seen through its block"
+               : i == 1 ? "motion due: display: contents, seen through its text"
+                        : "motion due: display: contents, all it holds out of view",
+               due == (i < 2 ? 1000 : FLOW_NEVER), NULL);
+        moving_close(&m);
+    }
+
+    // An easing that overshoots: visible to hidden through a curve that
+    // passes 1 early turns hidden there, not at the keyframe; a discrete
+    // value through a curve that crosses one half three times flips three
+    // times. Each crossing inside the interval is found here from the
+    // easing itself, scanned, and is due the millisecond after.
+    static const struct {
+        const char *name, *keyframes, *easing;
+        double level;
+        bool hidden_after;
+    } kCross[] = {
+        {"motion due: visibility hidden where an overshoot passes 1",
+         "@keyframes vh{from{visibility:visible}to{visibility:hidden}}", "cubic-bezier(0,2,1,2)", 1, true},
+        {"motion due: a discrete value at each of three crossings",
+         "@keyframes ff{from{font-family:serif}to{font-family:monospace}}", "cubic-bezier(.3,2,.7,-1)",
+         0.5, false},
+    };
+    for (size_t i = 0; i < sizeof(kCross) / sizeof(kCross[0]); i++) {
+        char html[512];
+        snprintf(html, sizeof(html), MOTION_STYLE "%s</style><div id=x style='animation:%s 1s %s'>x</div>",
+                 kCross[i].keyframes, i == 0 ? "vh" : "ff", kCross[i].easing);
+        flow_easing_t e = {.kind = FLOW_EASE_CUBIC};
+        sscanf(kCross[i].easing, "cubic-bezier(%lf,%lf,%lf,%lf)", &e.p[0], &e.p[1], &e.p[2], &e.p[3]);
+        double crossings[4];
+        int nc = 0;
+        double prev = f_ease(&e, 0, false) - kCross[i].level;
+        for (int k = 1; k < 1000000 && nc < 4; k++) {
+            double y = f_ease(&e, k / 1e6, false) - kCross[i].level;
+            if ((prev < 0 && y >= 0) || (prev > 0 && y <= 0))
+                crossings[nc++] = k / 1e6 * 1000;
+            prev = y;
+        }
+        moving_open(&m, html, 1000);
+        bool ok = nc == (i == 0 ? 1 : 3);
+        uint64_t now = 1000;
+        for (int k = 0; ok && k < nc; k++) {
+            uint64_t due = flow_motion_due(m.tree, kView, (flow_point_t){0, 0});
+            uint64_t want = (uint64_t)floor(1000 + crossings[k]) + 1;
+            // The scan finds a crossing to a microsecond; the curve's own
+            // root may sit the other side of a millisecond's edge.
+            ok = due + 1 >= want && due <= want + 1 && due > now;
+            if (ok && i == 0) {
+                const flow_style_t *st = moving_style(&m, "x");
+                ok = st != NULL && st->visibility == FLOW_VISIBLE;
+                moving_again(&m, due);
+                st = moving_style(&m, "x");
+                ok = ok && st != NULL && st->visibility == FLOW_HIDDEN;
+            } else if (ok) {
+                moving_again(&m, due);
+            }
+            now = due;
+        }
+        char detail[96];
+        snprintf(detail, sizeof(detail), "%d crossings, first at %.3f ms", nc, nc > 0 ? crossings[0] : -1.0);
+        expect(kCross[i].name, ok, ok ? NULL : detail);
+        moving_close(&m);
+    }
 }
 
 // ── The allocation sweep ────────────────────────────────────────────────
