@@ -3,6 +3,7 @@
 #include "image/icon_theme.h"
 #include "image/icons.h"
 #include "os64/conf.h"
+#include "os64/io.h"
 #include "os64/slurp.h"
 #include <assert.h>
 #include <malloc.h>
@@ -20,6 +21,9 @@ struct os64_icon_catalog {
 static const char *configured_set;
 static const char *selected_manifest = "format = 1\nname = Quaint\nauthor = Fixture author\n";
 static unsigned selected_calls, default_calls, releases;
+static const char *fault_root;
+static os64_slurp_status_t read_fault;
+static int64_t parse_fault, config_fault;
 static uint32_t pixel = 0xff123456;
 
 void *os64_malloc(size_t n) { return malloc(n); }
@@ -39,6 +43,7 @@ int32_t os64_hprintf(int32_t handle, const char *fmt, ...)
 int64_t os64_conf_get(const char *name, const char *key, char *out, size_t cap)
 {
     assert(!strcmp(name, "icons.conf") && !strcmp(key, "set"));
+    if (config_fault) return config_fault;
     if (!configured_set) return OS64_CONF_NO_FILE;
     if (strlen(configured_set) >= cap) return OS64_CONF_TRUNCATED;
     strcpy(out, configured_set);
@@ -48,6 +53,9 @@ os64_slurp_status_t os64_slurp(const char *path, size_t cap,
                                uint8_t **out, size_t *length)
 {
     (void)cap;
+    *out = NULL; *length = 0;
+    if (fault_root && strstr(path, fault_root) && read_fault)
+        return read_fault;
     const char *data = strstr(path, "/quaint/") ? selected_manifest :
                        strstr(path, "/default/") ?
                        "format = 1\nname = Default\nauthor = os64\n" : NULL;
@@ -59,6 +67,10 @@ os64_slurp_status_t os64_slurp(const char *path, size_t cap,
 }
 int64_t os64_conf_parse(const char *text, size_t length, os64_conf_fn fn, void *user)
 {
+    if (parse_fault && fault_root &&
+        ((strstr(fault_root, "quaint") && strstr(text, "Quaint")) ||
+         (strstr(fault_root, "default") && strstr(text, "Default"))))
+        return parse_fault;
     char *copy = malloc(length + 1);
     memcpy(copy, text, length);
     copy[length] = 0;
@@ -76,6 +88,54 @@ int64_t os64_conf_parse(const char *text, size_t length, os64_conf_fn fn, void *
     free(copy);
     return count;
 }
+int64_t os64_stat(const char *path, os64_dirent_t *out)
+{
+    (void)out;
+    return strstr(path, "/default/") ||
+           (strstr(path, "/quaint/") && selected_manifest) ? 0 : -1;
+}
+
+static void transient_creation_failures(void)
+{
+    const char *roots[] = {"/quaint/", "/default/"};
+    const os64_slurp_status_t failures[] = {
+        OS64_SLURP_NO_FILE, OS64_SLURP_IO_ERROR, OS64_SLURP_NO_MEMORY
+    };
+    for (size_t r = 0; r < 2; ++r) {
+        fault_root = roots[r];
+        for (size_t i = 0; i < 3; ++i) {
+            os64_icon_theme_t *theme = (void *)1;
+            read_fault = failures[i];
+            os64_ui_status_code_t want = failures[i] == OS64_SLURP_NO_MEMORY ?
+                OS64_UI_NO_MEMORY : OS64_UI_ERROR;
+            assert(os64_icon_theme_create(&theme) == want && !theme);
+            read_fault = OS64_SLURP_OK;
+            assert(os64_icon_theme_create(&theme) == OS64_UI_OK);
+            assert(!strcmp(os64_icon_theme_name(theme), "Quaint"));
+            assert(os64_icon_theme_destroy(theme) == OS64_UI_OK);
+        }
+        os64_icon_theme_t *theme = (void *)1;
+        parse_fault = OS64_CONF_NO_MEMORY;
+        assert(os64_icon_theme_create(&theme) == OS64_UI_NO_MEMORY && !theme);
+        parse_fault = 0;
+        assert(os64_icon_theme_create(&theme) == OS64_UI_OK);
+        assert(!strcmp(os64_icon_theme_name(theme), "Quaint"));
+        assert(os64_icon_theme_destroy(theme) == OS64_UI_OK);
+    }
+    fault_root = NULL;
+    const int64_t failures_config[] = {OS64_CONF_NO_MEMORY, OS64_CONF_IO_ERROR};
+    for (size_t i = 0; i < 2; ++i) {
+        os64_icon_theme_t *theme = (void *)1;
+        config_fault = failures_config[i];
+        assert(os64_icon_theme_create(&theme) ==
+               (i ? OS64_UI_ERROR : OS64_UI_NO_MEMORY) && !theme);
+        config_fault = 0;
+        assert(os64_icon_theme_create(&theme) == OS64_UI_OK);
+        assert(!strcmp(os64_icon_theme_name(theme), "Quaint"));
+        assert(os64_icon_theme_destroy(theme) == OS64_UI_OK);
+    }
+}
+
 static os64_ui_icon_status_t acquire(void *user, const char *key, uint32_t size,
                                       os64_ui_icon_lease_t *out)
 {
@@ -116,6 +176,7 @@ os64_ui_status_code_t os64_icon_catalog_destroy(os64_icon_catalog_t *c)
 int main(void)
 {
     configured_set = "/home/icons/quaint";
+    transient_creation_failures();
     os64_icon_theme_t *theme = NULL;
     assert(os64_icon_theme_create(&theme) == OS64_UI_OK);
     assert(!strcmp(os64_icon_theme_path(theme), configured_set));

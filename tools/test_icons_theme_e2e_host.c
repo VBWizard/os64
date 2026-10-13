@@ -18,6 +18,8 @@ static size_t allocation_calls, fail_after=SIZE_MAX;
 static char config_path[512];
 static char selected_icon_path[512], default_folder_path[512];
 static bool open_fail_once;
+static const char *manifest_fault_path;
+static os64_slurp_status_t manifest_read_fault;
 static size_t default_folder_reads;
 void *os64_malloc(size_t n)
 {
@@ -55,6 +57,8 @@ int32_t os64_hprintf(int32_t h,const char *fmt,...)
 os64_slurp_status_t os64_slurp(const char *path,size_t cap,uint8_t **out,size_t *len)
 {
     *out=NULL; *len=0;
+    if (manifest_fault_path && !strcmp(path,manifest_fault_path))
+        return manifest_read_fault;
     if (!strcmp(path,default_folder_path)) ++default_folder_reads;
     if (open_fail_once && !strcmp(path,selected_icon_path)) {
         open_fail_once=false; return OS64_SLURP_NO_FILE;
@@ -93,8 +97,11 @@ int64_t os64_conf_get(const char *name,const char *key,char *out,size_t cap)
 {
     assert(!strcmp(name,"icons.conf") && !strcmp(key,"set"));
     uint8_t *bytes; size_t len;
-    if (os64_slurp(config_path,4096,&bytes,&len)!=OS64_SLURP_OK)
-        return OS64_CONF_NO_FILE;
+    os64_slurp_status_t read=os64_slurp(config_path,4096,&bytes,&len);
+    if (read==OS64_SLURP_NO_MEMORY) return OS64_CONF_NO_MEMORY;
+    if (read==OS64_SLURP_IO_ERROR) return OS64_CONF_IO_ERROR;
+    if (read==OS64_SLURP_TOO_BIG) return OS64_CONF_TRUNCATED;
+    if (read!=OS64_SLURP_OK) return OS64_CONF_NO_FILE;
     setting_t s={out,cap,false};
     int64_t rc=os64_conf_parse((const char *)bytes,len,setting,&s);
     os64_free(bytes);
@@ -138,13 +145,39 @@ int main(int argc,char **argv)
     snprintf(staged,sizeof(staged),"%s/selected/staged.conf",argv[1]);
     snprintf(root,sizeof(root),"%s/default",argv[1]);
     os64_icon_theme_t *theme=NULL;
-    fail_after=allocation_calls;
-    assert(os64_icon_theme_create(&theme)==OS64_UI_NO_MEMORY && !theme);
-    fail_after=SIZE_MAX;
-    fail_after=allocation_calls+1;
-    assert(os64_icon_theme_create(&theme)==OS64_UI_NO_MEMORY && !theme);
-    fail_after=SIZE_MAX;
-    assert(live==0);
+    /* Walk actual allocation sites, including both manifest parser buffers
+     * and the config reader. No failure may produce a successful default. */
+    size_t failures=0;
+    for (size_t n=0; n<32; ++n) {
+        fail_after=allocation_calls+n;
+        os64_ui_status_code_t rc=os64_icon_theme_create(&theme);
+        fail_after=SIZE_MAX;
+        if (rc==OS64_UI_OK) {
+            assert(!strcmp(os64_icon_theme_name(theme),"Selected fixture"));
+            assert(os64_icon_theme_destroy(theme)==OS64_UI_OK);
+            break;
+        }
+        assert(rc==OS64_UI_NO_MEMORY && !theme && live==0);
+        ++failures;
+        assert(os64_icon_theme_create(&theme)==OS64_UI_OK);
+        assert(!strcmp(os64_icon_theme_name(theme),"Selected fixture"));
+        assert(os64_icon_theme_destroy(theme)==OS64_UI_OK);
+    }
+    assert(failures>=9 && failures<32 && live==0);
+    char default_manifest[512];
+    snprintf(default_manifest,sizeof(default_manifest),"%s/default/theme.conf",argv[1]);
+    const char *manifests[]={manifest,default_manifest};
+    for (size_t m=0; m<2; ++m) {
+        const os64_slurp_status_t faults[]={OS64_SLURP_NO_FILE,OS64_SLURP_IO_ERROR};
+        for (size_t f=0; f<2; ++f) {
+            manifest_fault_path=manifests[m]; manifest_read_fault=faults[f];
+            assert(os64_icon_theme_create(&theme)==OS64_UI_ERROR && !theme && live==0);
+            manifest_fault_path=NULL;
+            assert(os64_icon_theme_create(&theme)==OS64_UI_OK);
+            assert(!strcmp(os64_icon_theme_name(theme),"Selected fixture"));
+            assert(os64_icon_theme_destroy(theme)==OS64_UI_OK);
+        }
+    }
     assert(os64_icon_theme_create(&theme)==OS64_UI_OK);
     assert(!strcmp(os64_icon_theme_name(theme),"Selected fixture"));
     const os64_ui_icon_provider_t *p=os64_icon_theme_provider(theme);

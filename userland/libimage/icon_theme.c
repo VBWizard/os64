@@ -2,6 +2,7 @@
 #include "image/icons.h"
 #include "os64/conf.h"
 #include "os64/fmt.h"
+#include "os64/io.h"
 #include "os64/mem.h"
 #include "os64/slurp.h"
 #include "os64/str.h"
@@ -94,27 +95,39 @@ static bool manifest_line(const char *key, const char *value, void *user)
     return true;
 }
 
-static bool read_manifest(const char *root, theme_manifest_t *out)
+static os64_ui_icon_status_t read_manifest(const char *root, theme_manifest_t *out)
 {
     size_t n = bounded_len(root, OS64_CONF_PATH_MAX);
     /* The catalog needs room for its longest validated key and filename. */
     if (!n || n == OS64_CONF_PATH_MAX || root[0] != '/' ||
         n + (root[n - 1] == '/' ? 0u : 1u) + 55u > OS64_CONF_PATH_MAX)
-        return false;
+        return OS64_UI_ICON_INVALID;
     char path[OS64_CONF_PATH_MAX];
     os64_memcpy(path, root, n);
     if (path[n - 1] != '/') path[n++] = '/';
     os64_memcpy(path + n, "theme.conf", sizeof("theme.conf"));
     uint8_t *bytes = NULL;
     size_t length = 0;
-    if (os64_slurp(path, MANIFEST_CAP, &bytes, &length) != OS64_SLURP_OK)
-        return false;
+    os64_slurp_status_t read = os64_slurp(path, MANIFEST_CAP, &bytes, &length);
+    if (read == OS64_SLURP_NO_FILE) {
+        /* Open failure does not prove absence. Preserve a retryable error
+         * when stat can still find the manifest. A failed stat is ambiguous
+         * under this ABI and follows the missing-manifest fallback policy. */
+        os64_dirent_t entry;
+        return os64_stat(path, &entry) == 0 ? OS64_UI_ICON_IO :
+                                               OS64_UI_ICON_MISSING;
+    }
+    if (read == OS64_SLURP_NO_MEMORY) return OS64_UI_ICON_NO_MEMORY;
+    if (read == OS64_SLURP_TOO_BIG) return OS64_UI_ICON_MALFORMED;
+    if (read != OS64_SLURP_OK) return OS64_UI_ICON_IO;
     *out = (theme_manifest_t){0};
     int64_t parsed = os64_conf_parse((const char *)bytes, length,
                                      manifest_line, out);
     os64_free(bytes);
+    if (parsed == OS64_CONF_NO_MEMORY) return OS64_UI_ICON_NO_MEMORY;
+    if (parsed == OS64_CONF_IO_ERROR) return OS64_UI_ICON_IO;
     return parsed >= 0 && !out->bad && out->format &&
-           out->name[0] && out->author[0];
+           out->name[0] && out->author[0] ? OS64_UI_ICON_OK : OS64_UI_ICON_MALFORMED;
 }
 
 static os64_ui_icon_status_t theme_acquire(void *user, const char *key,
@@ -191,7 +204,12 @@ os64_ui_status_code_t os64_icon_theme_create(os64_icon_theme_t **out)
     os64_strcopy(theme->name, sizeof(theme->name), "Default");
     os64_strcopy(theme->author, sizeof(theme->author), "os64");
     theme_manifest_t manifest;
-    if (read_manifest(OS64_ICON_DEFAULT_ROOT, &manifest)) {
+    os64_ui_icon_status_t manifest_status = read_manifest(OS64_ICON_DEFAULT_ROOT, &manifest);
+    if (manifest_status == OS64_UI_ICON_NO_MEMORY || manifest_status == OS64_UI_ICON_IO) {
+        status = manifest_status == OS64_UI_ICON_NO_MEMORY ? OS64_UI_NO_MEMORY : OS64_UI_ERROR;
+        goto failed;
+    }
+    if (manifest_status == OS64_UI_ICON_OK) {
         os64_strcopy(theme->name, sizeof(theme->name), manifest.name);
         os64_strcopy(theme->author, sizeof(theme->author), manifest.author);
     }
@@ -199,26 +217,36 @@ os64_ui_status_code_t os64_icon_theme_create(os64_icon_theme_t **out)
     char selected[OS64_CONF_PATH_MAX];
     int64_t config = os64_conf_get("icons.conf", "set", selected,
                                    sizeof(selected));
+    if (config == OS64_CONF_NO_MEMORY || config == OS64_CONF_IO_ERROR) {
+        status = config == OS64_CONF_NO_MEMORY ? OS64_UI_NO_MEMORY : OS64_UI_ERROR;
+        goto failed;
+    }
     if (config == 0 && os64_streq(selected, OS64_ICON_DEFAULT_ROOT)) {
         *out = theme;
         return OS64_UI_OK;
     }
-    if (config == 0 && read_manifest(selected, &manifest)) {
-        status = os64_icon_catalog_create(selected, 2, &theme->selected);
-        if (status == OS64_UI_OK) {
+    if (config == 0) {
+        manifest_status = read_manifest(selected, &manifest);
+        if (manifest_status == OS64_UI_ICON_NO_MEMORY || manifest_status == OS64_UI_ICON_IO) {
+            status = manifest_status == OS64_UI_ICON_NO_MEMORY ? OS64_UI_NO_MEMORY : OS64_UI_ERROR;
+            goto failed;
+        }
+        if (manifest_status == OS64_UI_ICON_OK) {
+            status = os64_icon_catalog_create(selected, 2, &theme->selected);
+            if (status != OS64_UI_OK) goto failed;
             os64_strcopy(theme->path, sizeof(theme->path), selected);
             os64_strcopy(theme->name, sizeof(theme->name), manifest.name);
             os64_strcopy(theme->author, sizeof(theme->author), manifest.author);
-        } else if (status == OS64_UI_NO_MEMORY) {
-            (void)os64_icon_catalog_destroy(theme->fallback);
-            os64_free(theme);
-            return status;
         }
     }
     if (config != OS64_CONF_NO_FILE && (config != 0 || !theme->selected))
         os64_hprintf(2, "icons: icons.conf set is invalid; using %s\n", OS64_ICON_DEFAULT_ROOT);
     *out = theme;
     return OS64_UI_OK;
+
+failed:
+    (void)os64_icon_theme_destroy(theme);
+    return status;
 }
 
 const os64_ui_icon_provider_t *os64_icon_theme_provider(os64_icon_theme_t *theme)

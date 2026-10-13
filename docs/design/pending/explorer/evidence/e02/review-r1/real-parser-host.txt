@@ -1,0 +1,3 @@
+icons: icons.conf set is invalid; using /tmp/tmp.s2l3n0rAwl/default
+icons: icons.conf set is invalid; using /tmp/tmp.s2l3n0rAwl/default
+icon theme/catalog/PNG end-to-end: PASS

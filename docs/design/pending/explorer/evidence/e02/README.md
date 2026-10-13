@@ -85,8 +85,9 @@ was exercised in Scribe; the toolkit host suite covers absent providers.
 
 ## Limits and next acceptance
 
-P5 acceptance of these installed assets is pending. Chris approved the earlier
-preview in light/dark, which is distinct from testing the installed revision.
+Chris has confirmed visual acceptance of the installed P5 gallery after the
+os64get correction, specifically praising disabled rendering. This is a user
+report without an installed-binary hash; it predates review 1 below.
 To walk this build on P5:
 
 1. Install the branch's userland, libraries, `/etc/icons/default` and
@@ -129,4 +130,43 @@ from the real os64serve into an empty `/etc/icons/wire` on scratch QEMU:
 extracted after shutdown and compared byte for byte with the sources. A new
 gallery instance selected that directory and [rendered the downloaded set](wire/gallery.png).
 The [tested client hash](wire/os64get-sha256.txt) records the native binary.
-The temporary VM and loopback server were stopped. P5 retest remains pending.
+The temporary VM and loopback server were stopped. Chris subsequently confirmed
+the P5 gallery visually accepted, as recorded in review 1 below.
+
+
+## Review 1 — preserve transient theme creation failures
+
+[Finding](https://github.com/VBWizard/os64/pull/261#discussion_r4259064423): a
+failed manifest read/parse returned the same boolean as invalid contents,
+allowing successful construction of a default theme after a transient failure.
+The [regression failed before the fix](review-r1/before.txt).
+
+`read_manifest` now returns a typed icon status. Creation maps allocation
+failure to `OS64_UI_NO_MEMORY` and detected read failure to `OS64_UI_ERROR`,
+leaves the caller's theme NULL, and cleans up temporary catalogs/metadata.
+Both manifest paths, configuration errors and selected catalog construction
+errors are covered. Missing/invalid manifests retain their fallback policy.
+Open failure with successful stat is an I/O error; failed stat retains the
+existing lookup ambiguity, documented in the public contract.
+
+- [Resolver fault tests](review-r1/resolver-host.txt): selected/default manifest
+  open/read/allocation/parse failures and config IO/NO_MEMORY; clearing each
+  fault permits a retry that recovers the selected family.
+- [Real-parser tests](review-r1/real-parser-host.txt): allocation sweep through
+  actual config and manifest parser buffers (at least nine failure sites),
+  NULL outputs and zero live allocations after failure, successful retry,
+  open/read errors on both manifests, and existing missing/invalid fallback.
+- Both suites pass ASan/UBSan/LSan outside the sandbox with leak detection on.
+  libimage, Scribe, grootmenu and actiongallery cross-build successfully.
+- [Native gallery smoke check](review-r1/gallery.png) uses the revised library
+  and the set previously delivered through os64get. The stopped scratch VM's
+  libimage matches the [recorded binary hash](review-r1/sha256.txt). Transient
+  fault coverage is from the host tests; the native check verifies normal use.
+
+The pre-commit stale-reference audit reported existing evidence links rather
+than retired interfaces; each hit was checked. No new superlative comments
+were reported.
+
+Chris's P5 gallery approval applies to the preceding installed revision,
+including the disabled app state; it does not claim hardware fault injection
+or acceptance of this later error-handling change.

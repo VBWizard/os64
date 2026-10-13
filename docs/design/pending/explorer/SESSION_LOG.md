@@ -731,3 +731,27 @@ and checks all 133 shipped filenames against the config. Single/batch smoke
 tests and cross-build pass. Native QEMU os64get downloads 133 files with exit 0;
 readback matches source bytes and the gallery renders that downloaded set.
 Evidence: `evidence/e02/wire/`. Follow-up goes into PR #261; P5 retest pending.
+
+
+## 2026-10-13 — P5 gallery acceptance and E2 review 1
+
+Chris confirms the installed P5 icon gallery is visually accepted, with an
+explicit thumbs-up for the disabled app icon. This user-reported acceptance
+follows the os64get delivery fix `a3602b30`; no installed binary hash was
+captured. It precedes this review correction.
+
+PR #261 has one P2: transient manifest read/parse failures were collapsed into
+invalid-manifest fallback, silently replacing the selected set for the app's
+lifetime. Reproduced before editing production code. The manifest helper now
+returns a typed result; creation preserves NO_MEMORY and detected I/O failures
+for both default and selected manifests, and for icons.conf. The output stays
+NULL with temporary state cleaned up; retry can recover the selected family.
+Selected catalog construction failures propagate too. Missing/invalid
+manifest fallback remains; failed open plus failed stat retains the existing
+ABI ambiguity documented by E2. The host allocation sweep covers real config
+and manifest parser buffers, and selected/default read faults exercise retry.
+
+Review validation: both host suites pass ASan/UBSan/LSan; affected library and
+consumers cross-build. Native QEMU gallery smoke check passes with the revised
+library and downloaded set; the staged library matches its recorded hash.
+The scratch VM is stopped. Receipts: `evidence/e02/review-r1/`.

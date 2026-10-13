@@ -12,7 +12,12 @@ typedef struct os64_icon_theme os64_icon_theme_t;
  * and keeps it alive while consumers hold icon leases. A theme has up to two
  * catalogs, each with a 2 MiB retained-pixel limit and a 64 KiB catalog
  * metadata limit. The theme object and its live lease-routing records share
- * a separate 64 KiB metadata limit, including allocation overhead. */
+ * a separate 64 KiB metadata limit, including allocation overhead.
+ * Creation returns NO_MEMORY for allocation failure and ERROR for I/O failure
+ * reading configuration or manifests; out remains NULL so the caller can retry.
+ * Missing/invalid selected manifests retain the default-set fallback. Open
+ * failure with successful stat is I/O; failed stat cannot prove absence in
+ * this ABI and follows the missing-manifest policy. */
 os64_ui_status_code_t os64_icon_theme_create(os64_icon_theme_t **out);
 const os64_ui_icon_provider_t *os64_icon_theme_provider(os64_icon_theme_t *theme);
 os64_ui_status_code_t os64_icon_theme_destroy(os64_icon_theme_t *theme);

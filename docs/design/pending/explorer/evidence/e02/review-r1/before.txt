@@ -1,0 +1,2 @@
+icon_theme_test: /home/yogi/src/os64/.worktrees/explorer-e2/userland/libimage/tests/icon_theme_test.c:111: transient_creation_failures: Assertion `os64_icon_theme_create(&theme) == want && !theme' failed.
+Aborted

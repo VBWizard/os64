@@ -7,7 +7,8 @@
   is open against `userland`; the branch is pushed.
   Host, asset, FAT/ext2 packaging and QEMU checks pass;
   [E2 evidence](evidence/e02/README.md) records their scope. Installed P5
-  acceptance remains pending.
+  gallery visual acceptance is confirmed by Chris; review fixes follow that
+  hardware report.
 - **Design owner:** Quinn. Chris approved the Roam Classic visual direction and
   original image generation.
 - **Prerequisite:** E1's optional icon-provider contract is available.
@@ -102,7 +103,10 @@ The shipped set is installed at `/etc/icons/default/`. Each set is an extracted
 folder containing `theme.conf` (`format = 1`, `name = ...`, `author = ...`) and
 fixed `<key>-<size>.png` filenames. The resolver finds `icons.conf` on the
 standard config ladder; `set = /home/icons/roam-classic` selects an absolute
-folder path. It rejects a selected folder with a missing or invalid manifest
+folder path. Creation returns `OS64_UI_NO_MEMORY` on allocation failure and
+`OS64_UI_ERROR` on detected I/O failure reading either manifest or `icons.conf`;
+no theme is returned, permitting retry. Selected catalog construction failures
+also propagate. It rejects a selected folder with a missing or invalid manifest
 and uses the shipped default. A selected set that lacks a requested icon uses
 the default set for that icon. Other selected-set errors retain their typed
 status, including malformed PNG and I/O failure. No manifest path mapping,
@@ -221,7 +225,9 @@ a desktop implementation or an excuse to modify the wallpaper application.
 
 E1B tested the in-memory provider boundary and drawing helper with synthetic
 pixels. E2 host tests, asset checks, FAT/ext2 packaging and QEMU checks pass;
-P5 acceptance is pending. Results and limitations are in
+Chris confirms the installed P5 gallery visually accepted, including disabled
+rendering. The report predates the manifest error-handling review fix. Results
+and limitations are in
 [evidence/e02/README.md](evidence/e02/README.md). Required E2 evidence:
 
 | Environment | Check |
@@ -241,7 +247,8 @@ caps are separate acceptance assertions.
 
 The provider and resolver are implemented in libimage over the E1 interface in
 libos64. E2A and E2B share this PR, with separate host/provider and artwork/native
-evidence. Next: ordinary review and Chris's P5 walkthrough. The installable-set
+evidence. Next: review of the manifest error-handling correction. Chris has
+confirmed the P5 gallery visually accepted. The installable-set
 archive can be rebuilt with `tools/build_icon_assets.py --archive PATH`; see
 [installation instructions](../../../../assets/icons/README.md). Native archive
 extraction, folder selection and partial-set fallback are verified.

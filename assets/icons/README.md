@@ -90,7 +90,10 @@ If `/home/icons.conf` already exists, merge the setting into that file instead
 of replacing its other contents. Start a new application instance to read the
 selection. There is no GUI chooser or live switching. An absent or invalid
 selected manifest uses `/etc/icons/default`; a missing icon in a valid set
-also uses the shipped default.
+also uses the shipped default. Detected manifest/config I/O or allocation
+failures return an error instead of selecting another family; callers can retry
+creation. An open failure followed by failed stat remains ambiguous under the
+current filesystem ABI and follows the missing-manifest policy.
 
 `sources/default/` holds the generated 256 px raster masters and
 `generation.json`; `default/provenance.json` records their exports. The
