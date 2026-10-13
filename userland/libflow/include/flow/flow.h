@@ -991,10 +991,13 @@ void flow_timeline_free(flow_timeline_t *t);
 
 #define FLOW_NEVER UINT64_MAX
 // When the page next shows another value than the layout at its time
-// (flow_env_t.now_ms) drew, as far as the animations whose element can be
-// seen in `view` (page coordinates, at `scroll`) say — its box, or, for one
-// that makes none (`display: contents`), its descendants', or any box in it
-// drawn outside it (positioned, fixed, moved by a transform): that time
+// (flow_env_t.now_ms) drew, as far as the animations say that can show it
+// in `view` (page coordinates, at `scroll`): one that only repaints where
+// its element draws (a colour, a fade) when that element can be seen — its
+// box, or, for one that makes none (`display: contents`), its
+// descendants', or any box in it drawn outside it (positioned, fixed,
+// moved by a transform) — and any other, which may carry what it draws
+// into view from anywhere, wherever its element is: that time
 // itself for one moving continuously, which leaves when the next frame is
 // to the face; the next step's edge, the next discrete change, the start
 // of an active phase or an end; FLOW_NEVER for none. A time already gone

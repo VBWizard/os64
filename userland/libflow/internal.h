@@ -251,10 +251,13 @@ typedef struct {
 // An element's animations: its style with none of them (each property's
 // underlying value, the implicit keyframes'), and those that run, in
 // `animation-name` order — a later one's value replacing an earlier's.
+// `in_place` when every property they set only repaints where the element
+// already draws (f_motion_in_place).
 typedef struct {
     flow_style_t base;
     FAnimation *anims;
     int32_t nanims;
+    bool in_place;
 } FMotion;
 
 // What the lists an animated value makes come from — a transform's, the
@@ -273,6 +276,13 @@ bool f_motion_style(const FMotion *m, double now, flow_style_t *out, FAlloc allo
 // Of FLOW_WILL_*, what an animation that is current or in effect at `now`
 // animates (Web Animations 1 § 5.6).
 uint8_t f_motion_effects(const FMotion *m, double now);
+// Whether every property `m`'s animations set only repaints where the
+// element, and what it holds, already draw — colours, opacity,
+// visibility, a background's position, the corners' curves. Such an
+// animation can wait while its element is out of view; any other (a
+// transform, a size, a position, a shadow's offset) may carry what it
+// draws into view from anywhere (flow_motion_due).
+bool f_motion_in_place(const FMotion *m);
 // When an animated value next changes after `now` — `now` itself for one
 // moving continuously, INFINITY for none.
 double f_motion_next(const FMotion *m, double now);

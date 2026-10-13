@@ -543,6 +543,67 @@ static void motion_cascade_cases(void)
            s != NULL && s->padding[3].kind == FLOW_LENGTH_PERCENT && s->padding[3].value == 0, NULL);
     moving_close(&m);
 
+    // Chrome's answers (10/13): a side's width and its style are each their
+    // own property. Moved by one animation while another turns the style
+    // from none to solid, the width is the first's (15px of 0 to 20 at
+    // three quarters); while the style is none, 0; and with the style
+    // turned solid and the width not animated, the element's own 3px.
+    moving_open(&m, MOTION_STYLE
+        "div{border-top:3px none black}"
+        "@keyframes w{from{border-top-width:0}to{border-top-width:20px}}"
+        "@keyframes st{from{border-top-style:none}to{border-top-style:solid}}"
+        "#ba{animation:w 1s linear -.75s paused,st 1s linear -.75s paused}"
+        "#bb{animation:w 1s linear -.25s paused,st 1s linear -.25s paused}"
+        "#bc{animation:st 1s linear -.75s paused}"
+        "</style><div id=ba></div><div id=bb></div><div id=bc></div>", 1000);
+    s = moving_style(&m, "ba");
+    expect("motion: a width moved by one animation, its style by another",
+           s != NULL && s->border_style[0] == FLOW_BORDER_SOLID && s->border_width[0] == 15 * 64, NULL);
+    s = moving_style(&m, "bb");
+    expect("motion: and while the style is none, no width",
+           s != NULL && s->border_style[0] == FLOW_BORDER_NONE && s->border_width[0] == 0, NULL);
+    s = moving_style(&m, "bc");
+    expect("motion: a style turned solid draws the element's own width",
+           s != NULL && s->border_style[0] == FLOW_BORDER_SOLID && s->border_width[0] == 3 * 64, NULL);
+    moving_close(&m);
+
+    // Two axes past sqrt(DBL_MAX) are compared as the unit vectors they are:
+    // x and y, which differ, so they turn as matrices, as the same axes
+    // written small do.
+    moving_open(&m, MOTION_STYLE
+        "@keyframes big{from{transform:rotate3d(1e200,0,0,90deg)}to{transform:rotate3d(0,1e200,0,90deg)}}"
+        "@keyframes small{from{transform:rotate3d(1,0,0,90deg)}to{transform:rotate3d(0,1,0,90deg)}}"
+        "</style><div id=big style='animation-name:big;" AT("0.5") "'></div>"
+        "<div id=small style='animation-name:small;" AT("0.5") "'></div>", 1000);
+    double want[16], got[16];
+    bool both = moving_matrix(&m, "small", want) && moving_matrix(&m, "big", got);
+    bool same = both;
+    for (int i = 0; both && i < 16; i++)
+        same &= fabs(want[i] - got[i]) < 1e-9;
+    expect("motion: rotation axes past sqrt(DBL_MAX) compared as units", same, NULL);
+    moving_close(&m);
+
+    // An easing at the edge of what a double holds: its output is held to
+    // a double's range, and a value mixed with itself stays itself, never
+    // the no-number infinity less infinity makes.
+    flow_easing_t edge = {.kind = FLOW_EASE_CUBIC, .p = {1e-300, 1e308, 1, 1e308}};
+    expect("motion: an easing at a double's edge gives a number",
+           isfinite(f_ease(&edge, 0.5, false)) && isfinite(f_ease(&edge, -1, false)) &&
+               isfinite(f_ease(&edge, 2, false)), NULL);
+    moving_open(&m, MOTION_STYLE
+        "@keyframes sc{from{transform:scale(2) rotate(10deg)}to{transform:scale(2) rotate(10deg)}}"
+        "@keyframes mx{from{transform:scale(2)}to{transform:rotate(10deg) scale(3)}}"
+        "</style><div id=sc style='animation:sc 1s cubic-bezier(0,1e308,1,1e308) -.5s paused'></div>"
+        "<div id=mx style='animation:mx 1s cubic-bezier(0,1e308,1,1e308) -.5s paused'></div>", 1000);
+    double same_m[16] = {0}, wild[16] = {0};
+    bool finite = moving_matrix(&m, "sc", same_m) && moving_matrix(&m, "mx", wild);
+    for (int i = 0; finite && i < 16; i++)
+        finite = isfinite(same_m[i]) && !isnan(wild[i]);
+    double c10 = cos(10 * 3.14159265358979323846 / 180), s10 = sin(10 * 3.14159265358979323846 / 180);
+    expect("motion: a value mixed with itself at a huge fraction stays itself",
+           finite && fabs(same_m[0] - 2 * c10) < 1e-9 && fabs(same_m[1] - 2 * s10) < 1e-9, NULL);
+    moving_close(&m);
+
     // Forty keyframes of one property, 2.5% apart: halfway is the
     // twentieth, however many there are.
     char many[4096];
@@ -738,6 +799,61 @@ static void motion_timeline_cases(void)
     f_timeline_end(tl, true);
     expect("motion: resumed, it ends what it held short of",
            ok && f_motion_next(&running, 13000) == 13700, NULL);
+
+    // A record made in an incomplete layout joins its element's chain
+    // beside the ones it had, though no complete layout rebuilds the
+    // chains after it: a, then a and b incomplete, then a again keeps the
+    // first a.
+    FAnimation two_names[2];
+    memset(two_names, 0, sizeof(two_names));
+    two_names[0].timing.name = (flow_name_t){"a", 1};
+    two_names[1].timing.name = (flow_name_t){"b", 1};
+    FMotion just_a = {.anims = two_names, .nanims = 1};
+    FMotion a_and_b = {.anims = two_names, .nanims = 2};
+    f_timeline_begin(tl);
+    ok = f_timeline_element(tl, x, &just_a, 15000);
+    f_timeline_end(tl, true);
+    FRecord *kept_a = two_names[0].record;
+    f_timeline_begin(tl);
+    ok = ok && f_timeline_element(tl, x, &a_and_b, 16000);
+    f_timeline_end(tl, false);
+    f_timeline_begin(tl);
+    ok = ok && f_timeline_element(tl, x, &just_a, 17000);
+    f_timeline_end(tl, true);
+    expect("motion: a record made in an incomplete layout joins its element's chain",
+           ok && two_names[0].record == kept_a, NULL);
+
+    // Matching at scale: three thousand names, a and b in turn, matched
+    // as Animations 1 § 2 says — the last of each name to the last record
+    // of its name — and a list that drops its first half keeps the
+    // records of the half it keeps, in their places; the rest go.
+    enum { kMany = 3000 };
+    FAnimation *many = calloc(kMany, sizeof(*many));
+    FRecord **first_records = calloc(kMany, sizeof(*first_records));
+    for (int i = 0; i < kMany; i++)
+        many[i].timing.name = (flow_name_t){i % 2 ? "b" : "a", 1};
+    FMotion lots = {.anims = many, .nanims = kMany};
+    f_timeline_begin(tl);
+    ok = f_timeline_element(tl, x, &lots, 20000);
+    f_timeline_end(tl, true);
+    for (int i = 0; i < kMany; i++)
+        first_records[i] = many[i].record;
+    f_timeline_begin(tl);
+    ok = ok && f_timeline_element(tl, x, &lots, 21000);
+    f_timeline_end(tl, true);
+    bool kept = ok && f_timeline_records(tl) == kMany;
+    for (int i = 0; kept && i < kMany; i++)
+        kept = many[i].record == first_records[i];
+    FMotion half = {.anims = many + kMany / 2, .nanims = kMany / 2};
+    f_timeline_begin(tl);
+    ok = ok && f_timeline_element(tl, x, &half, 22000);
+    f_timeline_end(tl, true);
+    for (int i = 0; kept && i < kMany / 2; i++)
+        kept = many[kMany / 2 + i].record == first_records[kMany / 2 + i];
+    expect("motion: three thousand names matched, and half of them dropped",
+           kept && f_timeline_records(tl) == kMany / 2, NULL);
+    free(many);
+    free(first_records);
     flow_timeline_free(tl);
     os64_html_document_free(doc);
 }
@@ -755,7 +871,7 @@ static void motion_due_cases(void)
         {"motion due: steps at the next edge", "mv 1s steps(4,end)", 1250},
         {"motion due: paused, never", "mv 1s linear paused", FLOW_NEVER},
         {"motion due: in its delay, its start", "mv 1s linear 500ms", 1500},
-        {"motion due: a discrete value the millisecond after its flip", "ff 1s linear", 1501},
+        {"motion due: a discrete value at its flip", "ff 1s linear", 1500},
         {"motion due: ended and filling, never", "mv 1s linear forwards -2s", FLOW_NEVER},
         {"motion due: hidden to visible, the millisecond after its start", "hv 1s linear", 1001},
         {"motion due: visible to hidden, its end", "vh 1s linear", 2000},
@@ -776,13 +892,112 @@ static void motion_due_cases(void)
         expect(kCases[i].name, due == kCases[i].due, due == kCases[i].due ? NULL : detail);
         moving_close(&m);
     }
-    // Out of view: nothing is due.
+    // steps(2147483647): the next edge is worked out, not walked to — a
+    // walk is two billion turns on the window's thread.
     Moving m;
     moving_open(&m, MOTION_STYLE
-        "@keyframes mv{from{transform:translateX(0)}to{transform:translateX(100px)}}"
-        "</style><div style='margin-top:2000px;animation:mv 1s linear'>x</div>", 1000);
-    expect("motion due: out of view, never",
+        "@keyframes c{to{color:red}}"
+        "</style><div style='animation:c 1s steps(2147483647)'>x</div>", 1000);
+    expect("motion due: the next of two billion steps, at once",
+           flow_motion_due(m.tree, kView, (flow_point_t){0, 0}) == 1001, NULL);
+    moving_close(&m);
+
+    // Running backwards the progress falls through each edge, and the
+    // step below shows just past it: steps(2, end) reversed is at its
+    // halfway value at 500 ms, at its first just after.
+    moving_open(&m, MOTION_STYLE
+        "@keyframes o{from{opacity:0}to{opacity:1}}"
+        "</style><div id=o style='animation:o 1s steps(2,end) reverse'>x</div>", 1000);
+    moving_again(&m, 1500);
+    const flow_style_t *os = moving_style(&m, "o");
+    uint64_t odue = flow_motion_due(m.tree, kView, (flow_point_t){0, 0});
+    bool half = os != NULL && os->opacity == 500 && odue == 1501;
+    moving_again(&m, odue);
+    os = moving_style(&m, "o");
+    expect("motion due: reversed, a step falls the millisecond after its edge",
+           half && os != NULL && os->opacity == 0, NULL);
+    moving_close(&m);
+
+    // Played either way — forwards, reverse, alternate, alternate-reverse
+    // — every change is due when it shows. The oracle is the page laid out
+    // at every millisecond for two seconds beside it; the face, following
+    // only flow_motion_due from 1000, must lay out at each instant the
+    // value differs from the one before.
+    static const struct {
+        const char *name, *keyframes, *animation;
+    } kBack[] = {
+        {"motion due: a discrete value through a curve crossing one half three times",
+         "@keyframes k{from{text-align:left}to{text-align:right}}", "k 1s cubic-bezier(.3,2,.7,-1) 2"},
+        {"motion due: steps inside three keyframes",
+         "@keyframes k{0%{opacity:0}40%{opacity:.4}100%{opacity:1}}", "k 1s steps(2,end) 2"},
+        {"motion due: steps(3, start) forwards",
+         "@keyframes k{from{opacity:0}to{opacity:1}}", "k 1s steps(3,start) 2"},
+        {"motion due backwards: steps(4) reversed",
+         "@keyframes k{from{opacity:0}to{opacity:1}}", "k 1s steps(4,end) reverse 2"},
+        {"motion due backwards: steps(3, start) alternating",
+         "@keyframes k{from{opacity:0}to{opacity:1}}", "k 1s steps(3,start) alternate 2"},
+        {"motion due backwards: a discrete value through an overshooting curve, reversed",
+         "@keyframes k{from{text-align:left}to{text-align:right}}", "k 1s cubic-bezier(.3,2,.7,-1) reverse 2"},
+        {"motion due backwards: visible to hidden overshooting, alternate-reverse",
+         "@keyframes k{from{visibility:visible}to{visibility:hidden}}",
+         "k 1s cubic-bezier(0,2,1,2) alternate-reverse 2"},
+        {"motion due backwards: hidden to visible, reversed",
+         "@keyframes k{from{visibility:hidden}to{visibility:visible}}", "k 1s linear reverse 2"},
+        {"motion due backwards: steps inside three keyframes, reversed",
+         "@keyframes k{0%{opacity:0}40%{opacity:.4}100%{opacity:1}}", "k 1s steps(2,end) reverse 2"},
+    };
+    for (size_t i = 0; i < sizeof(kBack) / sizeof(kBack[0]); i++) {
+        char html[512];
+        snprintf(html, sizeof(html), MOTION_STYLE "%s</style><div id=x style='animation:%s'>x</div>",
+                 kBack[i].keyframes, kBack[i].animation);
+        Moving oracle, face;
+        moving_open(&oracle, html, 1000);
+        moving_open(&face, html, 1000);
+        uint32_t values[2001];
+        for (int t = 0; t <= 2000; t++) {
+            if (t > 0)
+                moving_again(&oracle, 1000 + (uint64_t)t);
+            const flow_style_t *st = moving_style(&oracle, "x");
+            values[t] = st == NULL ? UINT32_MAX
+                      : (uint32_t)st->opacity << 16 | (uint32_t)st->visibility << 8 | (uint32_t)st->text_align;
+        }
+        bool seen[2001] = {false};
+        seen[0] = true;
+        for (uint64_t now = 1000; now <= 3000;) {
+            uint64_t due = flow_motion_due(face.tree, kView, (flow_point_t){0, 0});
+            if (due == FLOW_NEVER || due > 3000)
+                break;
+            now = due > now ? due : now + 1;
+            moving_again(&face, now);
+            if (now <= 3000)
+                seen[now - 1000] = true;
+        }
+        int missed = -1;
+        for (int t = 1; t <= 2000 && missed < 0; t++)
+            if (values[t] != values[t - 1] && !seen[t])
+                missed = t;
+        char detail[64];
+        snprintf(detail, sizeof(detail), "change at %d ms not laid out", 1000 + missed);
+        expect(kBack[i].name, missed < 0, missed < 0 ? NULL : detail);
+        moving_close(&oracle);
+        moving_close(&face);
+    }
+
+    // Out of view, an animation that only repaints where its element is
+    // waits; one that moves it is due all the same, since a later frame
+    // may carry it into view (a box sliding in from the left, starting
+    // wholly outside).
+    moving_open(&m, MOTION_STYLE
+        "@keyframes c{to{color:red}}"
+        "</style><div style='margin-top:2000px;animation:c 1s linear'>x</div>", 1000);
+    expect("motion due: out of view, an animation in place waits",
            flow_motion_due(m.tree, kView, (flow_point_t){0, 0}) == FLOW_NEVER, NULL);
+    moving_close(&m);
+    moving_open(&m, MOTION_STYLE
+        "@keyframes in{from{transform:translateX(-1000px)}to{transform:translateX(1000px)}}"
+        "</style><div style='animation:in 1s linear'>x</div>", 1000);
+    expect("motion due: out of view, an animation that moves its element is due",
+           flow_motion_due(m.tree, kView, (flow_point_t){0, 0}) == 1000, NULL);
     moving_close(&m);
 
     // An element that makes no box hands its animated colour down: it is
@@ -836,10 +1051,9 @@ static void motion_due_cases(void)
     }
 
     // An easing that overshoots: visible to hidden through a curve that
-    // passes 1 early turns hidden there, not at the keyframe; a discrete
-    // value through a curve that crosses one half three times flips three
-    // times. Each crossing inside the interval is found here from the
-    // easing itself, scanned, and is due the millisecond after.
+    // passes 1 early turns hidden there, not at the keyframe. The crossing
+    // is found here from the easing itself, scanned, and the page is due
+    // when it shows: the next millisecond, as it rises through 1.
     static const struct {
         const char *name, *keyframes, *easing;
         double level;
@@ -847,9 +1061,6 @@ static void motion_due_cases(void)
     } kCross[] = {
         {"motion due: visibility hidden where an overshoot passes 1",
          "@keyframes vh{from{visibility:visible}to{visibility:hidden}}", "cubic-bezier(0,2,1,2)", 1, true},
-        {"motion due: a discrete value at each of three crossings",
-         "@keyframes ff{from{font-family:serif}to{font-family:monospace}}", "cubic-bezier(.3,2,.7,-1)",
-         0.5, false},
     };
     for (size_t i = 0; i < sizeof(kCross) / sizeof(kCross[0]); i++) {
         char html[512];
@@ -867,7 +1078,7 @@ static void motion_due_cases(void)
             prev = y;
         }
         moving_open(&m, html, 1000);
-        bool ok = nc == (i == 0 ? 1 : 3);
+        bool ok = nc == 1;
         uint64_t now = 1000;
         for (int k = 0; ok && k < nc; k++) {
             uint64_t due = flow_motion_due(m.tree, kView, (flow_point_t){0, 0});

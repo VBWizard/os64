@@ -1004,15 +1004,26 @@ static void motion_cases(void) {
         "motion: a layout for an animation that fails keeps the page and is its last");
     probe_drop();
 
-    /* What the view shows: an animation out of view is due for nothing, and
-     * one in steps is due at its next edge. */
+    /* What the view shows: an animation that only repaints where its
+     * element is waits out of view, and one in steps is due at its next
+     * edge; one that moves its element is due wherever it is, since a
+     * later frame may carry it into view. */
     now_ms=1000;
-    probe_page(kMotionPage,false);
+    probe_page("<!doctype html><style>body{margin:0}@keyframes tint{to{color:red}}"
+        "#near{height:10px;animation:tint 1s linear infinite}"
+        "#far{margin-top:3000px;height:10px;animation:tint 1s steps(4) infinite}</style>"
+        "<div id=near>a</div><div id=far>b</div>",false);
     relayout(true);
     scroll_to(0,3000);
     check(motion_next()==1250,"motion: in view, a stepped animation is due at its next step");
     scroll_to(0,1000);
-    check(motion_next()==YONDER_NEVER,"motion: an animation out of view is due for nothing");
+    check(motion_next()==YONDER_NEVER,"motion: an animation in place, out of view, is due for nothing");
+    probe_drop();
+    now_ms=1000;
+    probe_page(kMotionPage,false);
+    relayout(true);
+    scroll_to(0,1000);
+    check(motion_next()==1000,"motion: an animation that moves its element is due out of view");
     scroll_to(0,0);
 
     /* The switches. Off, nothing is due — even while the page on screen is

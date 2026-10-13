@@ -7,6 +7,7 @@
 // keyframes and the time, every time (the contracts, PILE3.md § Animations,
 // both slices).
 
+#include <float.h>
 #include <math.h>
 #include <stddef.h>
 
@@ -49,6 +50,23 @@ static double bezier(double p1, double p2, double t)
     return ((a * t + b) * t + c) * t;
 }
 
+// A value held to a double's range. An easing's y1 and y2 may be anything
+// a double holds, and its output whatever they make: worked in long double
+// and held here, the arithmetic after it never meets infinity, nor
+// infinity less infinity, which is no number at all.
+static double held(long double v)
+{
+    return v > DBL_MAX ? DBL_MAX : v < -DBL_MAX ? -DBL_MAX : (double)v;
+}
+
+// The curve's y at t: bezier's arithmetic in long double, held, since 3 y1
+// alone can overflow a double.
+static double bezier_y(double p1, double p2, double t)
+{
+    long double c = 3.0L * p1, b = 3.0L * ((long double)p2 - p1) - c, a = 1 - c - b;
+    return held(((a * t + b) * t + c) * t);
+}
+
 static double bezier_slope(double p1, double p2, double t)
 {
     double c = 3 * p1, b = 3 * (p2 - p1) - c, a = 1 - c - b;
@@ -64,7 +82,7 @@ static double cubic(const double p[4], double x)
     for (int i = 0; i < 8; i++) {
         double err = bezier(p[0], p[2], t) - x;
         if (fabs(err) <= 1e-7)
-            return bezier(p[1], p[3], t);
+            return bezier_y(p[1], p[3], t);
         double d = bezier_slope(p[0], p[2], t);
         if (fabs(d) < 1e-9)
             break;
@@ -84,7 +102,7 @@ static double cubic(const double p[4], double x)
             hi = t;
         t = (lo + hi) / 2;
     }
-    return bezier(p[1], p[3], t);
+    return bezier_y(p[1], p[3], t);
 }
 
 double f_ease(const flow_easing_t *e, double x, bool before)
@@ -93,19 +111,20 @@ double f_ease(const flow_easing_t *e, double x, bool before)
         return x;
     if (e->kind == FLOW_EASE_CUBIC) {
         const double *p = e->p;
-        // Outside [0, 1], the tangent at the nearer end (§ 2.2.1).
+        // Outside [0, 1], the tangent at the nearer end (§ 2.2.1), held
+        // as the curve is.
         if (x < 0) {
             if (p[0] > 0)
-                return p[1] / p[0] * x;
+                return held((long double)p[1] / p[0] * x);
             if (p[2] > 0)
-                return p[3] / p[2] * x;
+                return held((long double)p[3] / p[2] * x);
             return 0;
         }
         if (x > 1) {
             if (p[2] < 1)
-                return 1 + (p[3] - 1) / (p[2] - 1) * (x - 1);
+                return held(1 + ((long double)p[3] - 1) / (p[2] - 1) * (x - 1));
             if (p[0] < 1)
-                return 1 + (p[1] - 1) / (p[0] - 1) * (x - 1);
+                return held(1 + ((long double)p[1] - 1) / (p[0] - 1) * (x - 1));
             return 1;
         }
         return cubic(p, x);
@@ -257,47 +276,91 @@ static double local_time(const FRecord *r, double now)
     return r->paused ? r->hold : now - r->start;
 }
 
+// A name with its order in its list — a record's place, or a name's index
+// — and the record it is or is matched to.
+typedef struct {
+    const char *text;
+    uint32_t len;
+    int32_t order;
+    FRecord *record;
+} Named;
+
+static int32_t name_cmp(const Named *a, const Named *b)
+{
+    int c = os64_memcmp(a->text, b->text, a->len < b->len ? a->len : b->len);
+    return c != 0 ? c : (a->len > b->len) - (a->len < b->len);
+}
+
+// By name, and within a name by order: a merge through `tmp`.
+static void sort_named(Named *v, Named *tmp, int32_t n)
+{
+    if (n < 2)
+        return;
+    int32_t h = n / 2;
+    sort_named(v, tmp, h);
+    sort_named(v + h, tmp, n - h);
+    int32_t i = 0, j = h, k = 0;
+    while (i < h && j < n) {
+        int32_t c = name_cmp(&v[j], &v[i]);
+        tmp[k++] = c < 0 || (c == 0 && v[j].order < v[i].order) ? v[j++] : v[i++];
+    }
+    while (i < h)
+        tmp[k++] = v[i++];
+    while (j < n)
+        tmp[k++] = v[j++];
+    os64_memcpy(v, tmp, (size_t)n * sizeof(*v));
+}
+
 bool f_timeline_element(flow_timeline_t *t, const os64_html_node_t *n, FMotion *m, double now)
 {
-    // Its records from the last layout, in their places.
-    FRecord *had[64], **old = had;
-    int32_t nold = 0, cap = F_ARRAY(had);
+    // Its records from the last layout and its names now, each sorted by
+    // name and then by place: Animations 1 § 2 matches from the last name
+    // to the first, each to the last unmatched record of its name, which
+    // is then one walk down both lists from their ends — however many
+    // names a page writes, none is compared with every record.
+    int32_t nold = 0;
+    FRecord *tail = NULL;
     for (FRecord *r = f_map_get(&t->by_node, n); r != NULL; r = r->next) {
-        if (r->seen == t->layout)
-            continue;
-        if (nold == cap) {
-            FRecord **more = os64_malloc((size_t)cap * 2 * sizeof(*more));
-            if (more == NULL) {
-                if (old != had)
-                    os64_free(old);
-                return false;
-            }
-            os64_memcpy(more, old, (size_t)nold * sizeof(*more));
-            if (old != had)
-                os64_free(old);
-            old = more;
-            cap *= 2;
-        }
-        int32_t k = nold++;
-        while (k > 0 && old[k - 1]->place > r->place) {
-            old[k] = old[k - 1];
-            k--;
-        }
-        old[k] = r;
+        nold += r->seen != t->layout;
+        tail = r;
     }
+    int32_t total = nold + m->nanims;
+    Named few[32], *buf = few;
+    if (2 * total > F_ARRAY(few) &&
+        (buf = os64_malloc((size_t)2 * (size_t)total * sizeof(*buf))) == NULL)
+        return false;
+    Named *old = buf, *names = buf + nold, *tmp = buf + total;
+    int32_t k = 0;
+    for (FRecord *r = f_map_get(&t->by_node, n); r != NULL; r = r->next)
+        if (r->seen != t->layout)
+            old[k++] = (Named){r->name, r->len, r->place, r};
+    for (int32_t i = 0; i < m->nanims; i++) {
+        m->anims[i].record = NULL;
+        names[i] = (Named){m->anims[i].timing.name.text, m->anims[i].timing.name.len, i, NULL};
+    }
+    sort_named(old, tmp, nold);
+    sort_named(names, tmp, m->nanims);
+    for (int32_t a = nold - 1, b = m->nanims - 1; a >= 0 && b >= 0;) {
+        int32_t c = name_cmp(&old[a], &names[b]);
+        if (c > 0) {
+            a--;                // a record whose name is gone
+        } else if (c < 0) {
+            b--;                // a name with no record left: it starts
+        } else {
+            m->anims[names[b].order].record = old[a].record;
+            a--;
+            b--;
+        }
+    }
+    if (buf != few)
+        os64_free(buf);
     bool ok = true;
-    // From the last name to the first, each matched to the last unmatched
-    // record of its name (Animations 1 § 2); a name with none starts now.
+    int32_t made = t->n;
+    // From the last name to the first; a name matched to nothing starts now.
     for (int32_t i = m->nanims - 1; ok && i >= 0; i--) {
         FAnimation *an = &m->anims[i];
         const flow_name_t *name = &an->timing.name;
-        FRecord *r = NULL;
-        for (int32_t j = nold - 1; j >= 0 && r == NULL; j--)
-            if (old[j] != NULL && old[j]->len == name->len &&
-                os64_memcmp(old[j]->name, name->text, name->len) == 0) {
-                r = old[j];
-                old[j] = NULL;
-            }
+        FRecord *r = an->record;
         if (r == NULL) {
             r = os64_calloc(1, sizeof(*r));
             char *copy = os64_malloc(name->len > 0 ? name->len : 1);
@@ -337,17 +400,16 @@ bool f_timeline_element(flow_timeline_t *t, const os64_html_node_t *n, FMotion *
         }
         an->record = r;
     }
-    if (old != had)
-        os64_free(old);
-    // The element's records chained again, every one it has.
-    FRecord *head = NULL;
-    for (int32_t k = t->n - 1; ok && k >= 0; k--)
-        if (t->records[k]->node == n) {
-            t->records[k]->next = head;
-            head = t->records[k];
-        }
-    if (ok && head != NULL)
-        ok = f_map_put(&t->by_node, n, head);
+    // The records made here join the element's chain after those it had,
+    // so the chain keeps the timeline's order without the timeline walked.
+    for (int32_t j = made; j < t->n; j++) {
+        t->records[j]->next = NULL;
+        if (tail != NULL)
+            tail->next = t->records[j];
+        else if (!f_map_put(&t->by_node, n, t->records[j]))
+            return false;
+        tail = t->records[j];
+    }
     return ok;
 }
 
@@ -512,9 +574,16 @@ static bool invert4(const double m[16], double out[16])
     return true;
 }
 
+// A vector's length, taken by its largest part first, so that neither a
+// part past sqrt(DBL_MAX) overflows the squares nor a tiny one underflows
+// them (rotation() makes its axis a unit the same way).
 static double len3(const double v[3])
 {
-    return sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+    double k = fmax(fabs(v[0]), fmax(fabs(v[1]), fabs(v[2])));
+    if (!(k > 0) || !isfinite(k))
+        return k;
+    double x = v[0] / k, y = v[1] / k, z = v[2] / k;
+    return k * sqrt(x * x + y * y + z * z);
 }
 
 static double dot3(const double a[3], const double b[3])
@@ -666,6 +735,8 @@ static void slerp(const double a[4], const double b[4], double t, double out[4])
         out[i] = wa * from[i] + wb * b[i];
 }
 
+static double lerp(double a, double b, double t);
+
 bool f_matrix_mix(const double a[16], const double b[16], double t, double out[16])
 {
     D3 da, db, r;
@@ -673,11 +744,11 @@ bool f_matrix_mix(const double a[16], const double b[16], double t, double out[1
         !(is_2d(b) ? decompose_2d(b, &db) : decompose_3d(b, &db)))
         return false;
     for (int i = 0; i < 4; i++)
-        r.persp[i] = (1 - t) * da.persp[i] + t * db.persp[i];
+        r.persp[i] = lerp(da.persp[i], db.persp[i], t);
     for (int i = 0; i < 3; i++) {
-        r.tr[i] = (1 - t) * da.tr[i] + t * db.tr[i];
-        r.sc[i] = (1 - t) * da.sc[i] + t * db.sc[i];
-        r.sk[i] = (1 - t) * da.sk[i] + t * db.sk[i];
+        r.tr[i] = lerp(da.tr[i], db.tr[i], t);
+        r.sc[i] = lerp(da.sc[i], db.sc[i], t);
+        r.sk[i] = lerp(da.sk[i], db.sk[i], t);
     }
     slerp(da.q, db.q, t, r.q);
     compose(&r, out);
@@ -802,10 +873,15 @@ void f_transform_fn_matrix(flow_transform_t *f)
 
 typedef enum { MIX_CONTINUOUS, MIX_DISCRETE } MixKind;
 
-// (1 - t) a + t b: at t = 0 exactly a, at t = 1 exactly b.
+// a + (b - a) t, as Chromium blends: at t = 0 exactly a, at t = 1 exactly
+// b, and a value mixed with itself exactly itself at any t — which
+// (1 - t) a + t b is not when t is huge and the two products cancel. In
+// long double and held, as the easing that hands it `t` is.
 static double lerp(double a, double b, double t)
 {
-    return (1 - t) * a + t * b;
+    if (t == 1)
+        return b;
+    return held(a + ((long double)b - a) * t);
 }
 
 // Rounded half away from zero, held to an int32_t.
@@ -1275,13 +1351,13 @@ static void copy_prop(garb_prop_t p, flow_style_t *d, const flow_style_t *s)
         i = p - GARB_BORDER_TOP_WIDTH;
         d->border_width[i] = s->border_width[i];
         break;
-    // A side's style brings the width that style computed it to: none's is
-    // 0 (Backgrounds 3 § 4.3), and the other's is that keyframe's.
+    // A side's style alone: its width is its own property, which another
+    // animation may be moving, and a side drawn as none or hidden has none
+    // once every animation is laid over (f_motion_style).
     case GARB_BORDER_TOP_STYLE: case GARB_BORDER_RIGHT_STYLE: case GARB_BORDER_BOTTOM_STYLE:
     case GARB_BORDER_LEFT_STYLE:
         i = p - GARB_BORDER_TOP_STYLE;
         d->border_style[i] = s->border_style[i];
-        d->border_width[i] = s->border_width[i];
         break;
     case GARB_BORDER_TOP_COLOR: case GARB_BORDER_RIGHT_COLOR: case GARB_BORDER_BOTTOM_COLOR:
     case GARB_BORDER_LEFT_COLOR:
@@ -1860,11 +1936,11 @@ static int32_t ease_crossings(const flow_easing_t *e, double level, double xs[3]
     int32_t n = 0;
     for (int32_t i = 0; i + 1 < nc; i++) {
         double t0 = cut[i], t1 = cut[i + 1];
-        double y0 = bezier(p[1], p[3], t0) - level, y1 = bezier(p[1], p[3], t1) - level;
+        double y0 = bezier_y(p[1], p[3], t0) - level, y1 = bezier_y(p[1], p[3], t1) - level;
         if (!((y0 < 0 && y1 > 0) || (y0 > 0 && y1 < 0)))
             continue;
         for (int k = 0; k < 64; k++) {
-            double mid = (t0 + t1) / 2, ym = bezier(p[1], p[3], mid) - level;
+            double mid = (t0 + t1) / 2, ym = bezier_y(p[1], p[3], mid) - level;
             if ((ym < 0) == (y0 < 0))
                 t0 = mid;
             else
@@ -1883,6 +1959,54 @@ static double at_progress(const Clock *k, const flow_animation_t *a, double p)
 {
     double dur = a->duration_ms;
     return k->iteration_start + (k->forwards ? p : 1 - p) * dur;
+}
+
+// The properties whose frames repaint only where the element and what it
+// holds already draw (f_motion_in_place).
+static bool repaints_in_place(garb_prop_t p)
+{
+    switch (p) {
+    case GARB_COLOR: case GARB_TEXT_FILL_COLOR: case GARB_BACKGROUND_COLOR:
+    case GARB_BORDER_TOP_COLOR: case GARB_BORDER_RIGHT_COLOR: case GARB_BORDER_BOTTOM_COLOR:
+    case GARB_BORDER_LEFT_COLOR: case GARB_OPACITY: case GARB_VISIBILITY:
+    case GARB_BACKGROUND_POSITION_X: case GARB_BACKGROUND_POSITION_Y:
+    case GARB_BORDER_TOP_LEFT_RADIUS: case GARB_BORDER_TOP_RIGHT_RADIUS:
+    case GARB_BORDER_BOTTOM_RIGHT_RADIUS: case GARB_BORDER_BOTTOM_LEFT_RADIUS:
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool f_motion_in_place(const FMotion *m)
+{
+    for (int32_t a = 0; a < m->nanims; a++)
+        for (int p = 0; p < GARB_NPROPS; p++)
+            if (f_props_has(&m->anims[a].props, (garb_prop_t)p) && animatable((garb_prop_t)p) &&
+                !repaints_in_place((garb_prop_t)p))
+                return false;
+    return true;
+}
+
+// When a change at time `at` first shows, after `now`. A value rising to
+// a step or a level changes there; one falling through it changes just
+// past it (running backwards, the before flag is clear in the active
+// phase, Web Animations 1 § 4.7.7); and a change near a whole millisecond
+// may land a hair either side of it once the clock's arithmetic has
+// rounded. So the millisecond `at` is in or touches is due, and failing
+// that the one after: never late, and at most one layout early.
+// INFINITY for a change already shown.
+static double change_due(double at, double now)
+{
+    double first = ceil(at - 1e-6), after = floor(at) + 1;
+    return first > now ? first : after > now ? after : INFINITY;
+}
+
+// When a change at progress `p` of the current iteration shows
+// (change_due).
+static double edge_due(const Clock *k, const flow_animation_t *a, double base, double p, double now)
+{
+    return change_due(base + at_progress(k, a, p), now);
 }
 
 double f_motion_next(const FMotion *m, double now)
@@ -1922,40 +2046,39 @@ double f_motion_next(const FMotion *m, double now)
             if (p == GARB_VISIBILITY && k.progress == s.offset &&
                 s.style->visibility != FLOW_VISIBLE && e.style->visibility == FLOW_VISIBLE)
                 soonest = fmin(soonest, floor(now) + 1);
-            // The interval's ends, and inside it its steps' edges, or a
-            // discrete value's flip.
-            double edges[2] = {s.offset, e.offset};
-            for (int j = 0; j < 2; j++) {
-                double at = base + at_progress(&k, &an->timing, edges[j]);
-                if (at > now)
-                    soonest = fmin(soonest, at);
-            }
+            // Only what lies ahead of the progress the way it runs: the
+            // interval's far end, and inside it the next of its steps'
+            // edges — worked out from where the progress is, never walked
+            // to (a page may ask for steps(2147483647)) — or a discrete
+            // value's crossings. What is behind it shows already, since the
+            // values are worked from the same progress; one the progress
+            // stands on may yet change just past it (change_due).
+            soonest = fmin(soonest, edge_due(&k, &an->timing, base, k.forwards ? e.offset : s.offset, now));
             double span = e.offset - s.offset;
-            if (stepped) {
-                for (int32_t j = 1; j < ease->steps; j++) {
-                    double at = base + at_progress(&k, &an->timing,
-                                                   s.offset + span * j / ease->steps);
-                    if (at > now)
-                        soonest = fmin(soonest, at);
-                }
+            double here = span > 0 ? (k.progress - s.offset) / span : 0;
+            if (stepped && span > 0) {
+                double n = ease->steps, x = here * n;
+                // Running backwards the progress may stand on the
+                // interval's top, x = n, whose step falls just past it.
+                double j = k.forwards ? floor(x) + 1 : floor(x);
+                if (j >= 1 && j <= (k.forwards ? n - 1 : n))
+                    soonest = fmin(soonest, edge_due(&k, &an->timing, base, s.offset + span * j / n, now));
             } else if (kind == MIX_DISCRETE) {
                 // A discrete value flips where the eased fraction crosses
                 // one half; visibility, when either end is visible, where
                 // it crosses 0 or 1 (Appendix A) — each time the easing
                 // does, overshoot and all, whichever way the iteration
-                // runs. Due the millisecond after: a fraction falling
-                // through its level changes the value just past it.
+                // runs, each when it shows (change_due).
                 bool vis = p == GARB_VISIBILITY && (s.style->visibility == FLOW_VISIBLE ||
                                                     e.style->visibility == FLOW_VISIBLE);
                 const double levels[2] = {vis ? 0 : 0.5, 1};
                 for (int l = 0; l < (vis ? 2 : 1); l++) {
                     double xs[3];
                     int32_t nx = ease_crossings(ease, levels[l], xs);
-                    for (int32_t j = 0; j < nx; j++) {
-                        double at = base + at_progress(&k, &an->timing, s.offset + span * xs[j]);
-                        if (at >= now)
-                            soonest = fmin(soonest, floor(at) + 1);
-                    }
+                    for (int32_t j = 0; j < nx; j++)
+                        if (k.forwards ? xs[j] >= here : xs[j] <= here)
+                            soonest = fmin(soonest, edge_due(&k, &an->timing, base,
+                                                             s.offset + span * xs[j], now));
                 }
             }
         }

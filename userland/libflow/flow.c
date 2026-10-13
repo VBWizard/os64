@@ -1641,10 +1641,10 @@ static bool box_seen(const flow_box_t *b, os64_gui_rect_t view, flow_point_t scr
     return meets(flow_box_doc_rect(b, scroll), view) || meets(moved(b->overflow, o.x, o.y), view);
 }
 
-// Whether what element `n` animates can be seen: its own box, or, for an
-// element that makes none (`display: contents`), whose inherited values
-// its descendants draw, the nearest boxes inside it — each one's overflow
-// standing for what is inside it.
+// Whether what element `n` animates in place can be seen: its own box,
+// or, for an element that makes none (`display: contents`), whose
+// inherited values its descendants draw, the nearest boxes inside it —
+// each one's overflow standing for what is inside it.
 static bool motion_seen(const flow_tree_t *tree, const os64_html_node_t *n, os64_gui_rect_t view,
                         flow_point_t scroll)
 {
@@ -1674,15 +1674,16 @@ uint64_t flow_motion_due(const flow_tree_t *tree, os64_gui_rect_t view, flow_poi
     for (int32_t i = 0; i < tree->styles->nanimated && next > now; i++) {
         const os64_html_node_t *n = tree->styles->animated[i];
         const FStyled *st = f_style_of(tree->styles, n);
-        if (st == NULL || st->motion == NULL || !motion_seen(tree, n, view, scroll))
+        if (st == NULL || st->motion == NULL ||
+            (st->motion->in_place && !motion_seen(tree, n, view, scroll)))
             continue;
         next = fmin(next, f_motion_next(st->motion, now));
     }
     // What draws outside the boxes it is inside — a positioned box, a
     // fixed one, one a transform moves, none of them in their ancestors'
     // overflow: each that can be seen makes the animated elements it is
-    // inside due as well, since what they hand down (a colour, a fade, a
-    // turn) is drawn there.
+    // inside due as well, since what they hand down in place (a colour, a
+    // fade) is drawn there.
     for (int32_t i = 0; i < tree->nstacked && next > now; i++) {
         const flow_box_t *b = tree->stacked[i];
         if (b->node == NULL || !box_seen(b, view, scroll))

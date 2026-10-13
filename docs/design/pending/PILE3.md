@@ -1632,17 +1632,28 @@ and that is a change of structure: the face is due a layout at its end.
 **The face lays out at the frames.** yonder hands each layout
 `yonder_now_ms()`, and asks libflow when the page next changes:
 `flow_motion_due(tree, view, scroll)` answers the earliest time an
-animation whose element can be seen in `view` — its box; for one that
-makes none (`display: contents`) the boxes inside it, which draw what it
-hands down; or any box inside it drawn outside it, positioned, fixed or
-moved by a transform, which no ancestor's overflow holds — shows another
-value: the layout's own time for a
-value that moves continuously, which leaves when the next frame is to
-the face; the next step's edge for one in `steps()`; the millisecond
-after each crossing of a discrete value's level (one half, or for
-visibility 0 and 1) by its easing, every crossing an overshooting curve
-makes; the start of an active phase; an end — and never for one that is
-paused, finished and filling, or out of view. It joins the deadlines the
+animation that can show in `view` shows another value. One that only
+repaints where its element draws — a colour, a fade, visibility, a
+background's position, the corners' curves — can show there when its
+element can be seen: its box; for one that makes none (`display:
+contents`) the boxes inside it, which draw what it hands down; or any box
+inside it drawn outside it, positioned, fixed or moved by a transform,
+which no ancestor's overflow holds. Any other — a transform, a size, a
+position, a shadow's offset — may carry what it draws into view from
+anywhere, and is due wherever its element is. The time: the layout's own
+for a value that moves continuously, which leaves when the next frame is
+to the face; for one that changes at an instant — the next step's edge in
+`steps()`, worked out from where the progress is and never walked to; each
+crossing of a discrete value's level (one half, or for visibility 0 and
+1) by its easing, every one an overshooting curve makes; the interval's
+far end — the instant it shows, ahead of the progress the way it runs. A
+value rising to a step changes there, one falling through it (running
+backwards) just past it, and the clock's rounding may put either a hair
+the other side of a whole millisecond: so the millisecond the instant
+lies in is due, and failing that the one after — never late, and at
+most one layout early. Then the start of an active phase; an end — and
+never for one that is paused, finished and filling, or in place and out
+of view. It joins the deadlines the
 ticker keeps already (`pictures_schedule`). When it rings for an
 animation the page is laid out again, quietly: the scroll kept as any
 relayout keeps it, the controls placed, the cascade reused — the
@@ -1835,6 +1846,7 @@ the perf slice.
 | A keyframe's `em` while `font-size` animates | its keyframes are computed at the layout's font | a page that animates both |
 | The rest of Compat § 3.4.1's drawn rows (`-webkit-box-shadow`, `-webkit-border-radius` and the others) | not animation's | a page that writes only the prefixed name |
 | `linear()` easing (Easing 2) | no page in the census writes it | a page that does |
+| An animation that moves its element rests out of view | it may carry what it draws into view from anywhere, so S8a keeps it due wherever it is; a bound on where its frames can reach — a spinner turns inside its own circle — would let it rest | S8b, where such a tick is arithmetic and a repaint, or a page whose spinners out of view cost what the P5 notices |
 
 ### Proof
 

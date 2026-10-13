@@ -3602,9 +3602,15 @@ static bool animate(Ctx *c, const os64_html_node_t *n, Spec *sp, const Spec *ua,
     if (anims == NULL)
         return false;
     m->anims = anims;
+    // The animations' inputs keep each side's own width, which finish makes
+    // 0 for a side drawn as none or hidden: the side's style may itself be
+    // animated, and its width is settled once every animation is laid over
+    // (f_motion_style).
     Spec base = *sp;
     finish(c, &base, parent, item, root);
     m->base = base.s;
+    for (int side = 0; side < 4; side++)
+        m->base.border_width[side] = base.border_px[side];
     for (int32_t i = 0; i < count; i++) {
         flow_animation_t timing = f_animation_at(&m->base, i);
         const garb_keyframe_t *kf = NULL;
@@ -3624,6 +3630,8 @@ static bool animate(Ctx *c, const os64_html_node_t *n, Spec *sp, const Spec *ua,
             if (!lay_sets(c, &k, ua, parent, kf[j].sets, NULL, kf[j].nsets, &important))
                 return false;
             finish(c, &k, parent, item, root);
+            for (int side = 0; side < 4; side++)
+                k.s.border_width[side] = k.border_px[side];
             f->offset = kf[j].offset;
             f->has_easing = kf[j].easing != NULL && easing_of(kf[j].easing, &f->easing);
             f->style = k.s;
@@ -3638,6 +3646,7 @@ static bool animate(Ctx *c, const os64_html_node_t *n, Spec *sp, const Spec *ua,
     }
     if (m->nanims == 0)
         return true;
+    m->in_place = f_motion_in_place(m);
     double now = (double)c->env->now_ms;
     if (!f_timeline_element(tl, n, m, now))
         return false;
