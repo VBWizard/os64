@@ -674,3 +674,13 @@ checks); cross-builds and QEMU layout/save/quit checks pass. Follow-up evidence
 is in `evidence/e01c/toolbar-removal/`. Earlier P5 acceptance predates this
 cleanup. E2's selected preview direction is classic colorful icons with crisp
 outlines; icon work has not begun.
+
+
+## 2026-10-13 — E1C first review
+
+Chris confirmed testing the button-removal follow-up and submitted PR #260
+for review. Addressed three findings: empty child cascades suppressing the
+launcher, stale Scribe scrollbar ranges after chrome changes, and duplicate
+startup popup error diagnostics. The consumer harness now covers each case.
+Host suites pass 4,072 checks with ASan/UBSan/LSan; cross-builds and focused
+QEMU checks pass. Evidence and limits: `evidence/e01c/README.md`, Review 1.

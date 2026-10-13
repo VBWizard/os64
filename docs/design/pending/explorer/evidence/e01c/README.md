@@ -135,5 +135,37 @@ QEMU used the same scratch disks and E1B ISO with the rebuilt Scribe staged
 before boot. Screenshots show the reclaimed document space, Open and Save As
 fields, successful save, and dirty-quit path prompt. Enter at that prompt
 saved the added line and exited. `saved-document.txt` records the exact saved
-bytes after guest sync. The VM was stopped. The original P5 acceptance above
-predates this follow-up; this layout change has host/QEMU validation.
+bytes after guest sync. The VM was stopped. Chris confirmed testing this button-removal follow-up on October 13 before
+submitting it for review. That report predates the review fixes below.
+
+
+## Review 1 — 2026-10-13
+
+Address all three findings on `dad725e5`:
+
+- Omit empty inline/referenced cascades locally, including nested and
+  separator-only children and repeated references to cached empty models.
+  Usable parent items remain available; an entirely empty root still fails.
+- Synchronize Scribe scrollbars after applying live layout, covering explicit
+  bar toggles, temporary menu reveal/dismissal, field rows and window resize.
+  Font adoption retains its separate staged-layout commit path.
+- Track whether the launcher error hook reported a startup failure. Report
+  unreported failures once and retain failure exit status without duplicating
+  diagnostics already delivered by the controller. Later child-popup failures
+  still report while leaving the parent usable.
+
+`review-1/` holds binary hashes, logs, scratch config and screenshots. Scribe
+passes 2,526 host checks and menu consumers pass 1,546 with ASan/UBSan/LSan
+outside the sandbox, reusing instrumented FreeType objects. Regressions cover
+empty cascade variants and successful sibling launch; immediate scrollbar
+viewport/range updates and end dragging; native creation/placement failures
+and an early failure that bypasses the error hook, each yielding one diagnostic.
+Scribe, grootmenu and scribefonttest cross-build. Whitespace and retirement
+audits pass.
+
+QEMU used scratch disk copies and the E1B ISO. The recorded empty-cascade
+config opens its surviving Editor item, which launches Scribe. A 36-line
+file shows immediate thumb resizing when hiding and temporarily revealing
+the menu. The VM was stopped after sync. Native allocation/placement failures
+were injected in the host suite, not forced in QEMU. These review fixes have
+not been reported tested on P5.

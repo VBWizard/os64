@@ -20,7 +20,7 @@ static os64_ui_dispatcher_t dispatcher;
 /* Cache by first node, so references share models instead of expanding a DAG. */
 static os64_ui_menu_model_t *models[OS64_MENU_NODES_MAX];
 static bool building[OS64_MENU_NODES_MAX];
-static bool failed;
+static bool failed, error_reported;
 
 static void launch(const os64_menu_node_t *node)
 {
@@ -68,7 +68,7 @@ static os64_ui_status_code_t convert(int16_t first, unsigned depth)
     if (first >= gMenu.count) return OS64_UI_INVALID;
     if (depth >= OS64_UI_MENU_DEPTH) return OS64_UI_LIMIT;
     if (building[first]) return OS64_UI_INVALID;
-    if (models[first]) return OS64_UI_OK;
+    if (models[first]) return os64_ui_menu_model_count(models[first]) ? OS64_UI_OK : OS64_UI_EMPTY;
     building[first] = true;
     os64_ui_menu_entry_t entries[OS64_UI_MENU_ENTRIES] = {0};
     size_t count = 0;
@@ -82,6 +82,8 @@ static os64_ui_status_code_t convert(int16_t first, unsigned depth)
         else if (node->kind == OS64_MENU_SEPARATOR) entry->kind = OS64_UI_MENU_SEPARATOR;
         else if (node->kind == OS64_MENU_SUBMENU) {
             rc = convert(node->first_child, depth + 1);
+            // Empty placeholders do not prevent usable siblings from opening.
+            if (rc == OS64_UI_EMPTY) { --count; rc = OS64_UI_OK; continue; }
             if (rc) break;
             *entry = (os64_ui_menu_entry_t){.kind=OS64_UI_MENU_SUBMENU,
                 .label=node->label, .child=models[node->first_child]};
@@ -89,6 +91,7 @@ static os64_ui_status_code_t convert(int16_t first, unsigned depth)
     }
     if (!rc) rc = os64_ui_menu_model_create(actions, entries, count, &models[first]);
     building[first] = false;
+    if (!rc && !os64_ui_menu_model_count(models[first])) rc = OS64_UI_EMPTY;
     return rc;
 }
 static os64_ui_status_code_t build(int16_t first)
@@ -109,12 +112,21 @@ static os64_ui_status_code_t build(int16_t first)
 static void launcher_error(void *user, os64_ui_status_code_t rc)
 {
     (void)user;
+    error_reported = true;
     const char *why = rc == OS64_UI_EMPTY ? "empty menu or cascade" :
         rc == OS64_UI_LIMIT ? "menu exceeds toolkit row, graph, depth or screen limits" :
         rc == OS64_UI_NO_MEMORY ? "out of memory" :
         rc == OS64_UI_INVALID ? "unsupported label or invalid menu graph" :
         "native menu or font operation failed";
     os64_complain("grootmenu: %s: %s (%u)\n", gMenu.path, why, (unsigned)rc);
+}
+static void startup_result(os64_ui_status_code_t rc)
+{
+    if (rc && rc != OS64_UI_BUSY) {
+        failed = true;
+        // Some open failures return before the controller calls its error hook.
+        if (!error_reported) launcher_error(NULL,rc);
+    }
 }
 static bool dispose(void)
 {
@@ -134,6 +146,7 @@ static int grootmenu_main(int argc, char **argv)
     // looks like. Sniffing the first character made a menu named "123"
     // unopenable: it read as a coordinate and the name silently stayed
     // "root". How data is spelled may not change how it is read.
+    failed = error_reported = false;
     int32_t x = 0, y = 0;
     const char *name = "root";
     if (argc == 2) {
@@ -184,7 +197,7 @@ static int grootmenu_main(int argc, char **argv)
     }
     if (!rc) rc = os64_ui_menu_open(session,models[first],view,
         (os64_gui_rect_t){x,y,0,0},OS64_UI_MENU_CONTEXT);
-    if (rc && rc != OS64_UI_BUSY) { failed = true; launcher_error(NULL,rc); }
+    startup_result(rc);
     while (!failed && os64_ui_menu_active(session)) {
         if (os64_ui_dispatcher_turn(&dispatcher,true) < 0) { failed = true; break; }
     }

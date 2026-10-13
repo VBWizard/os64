@@ -128,7 +128,7 @@ into the document when a native popup takes focus.
 
 The bottom status widget holds file/dirty/line information, menu help, and
 operation notices. View independently hides the menu and status bars and
-reclaims their space. Alt/F10 temporarily reveal a hidden menu; right-click
+reclaims their space and immediately resynchronizes scrollbar ranges. Alt/F10 temporarily reveal a hidden menu; right-click
 or Shift+F10 opens editing commands and Show Menu Bar without moving the
 caret or replacing the selection. A new operation notice re-shows hidden
 status so an error or save/discard prompt remains visible.

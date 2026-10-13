@@ -334,7 +334,8 @@ Keep invocation syntax, config ladder, named menus, grammar limits, command
 parsing, error reporting and spawn policy. Convert parsed nodes into the shared
 model; use registry IDs derived from stable node indices for that load. The
 adapter owns command strings and invokes `os64_menu_argv`/spawn only after the
-menu closes. An empty named menu or unsupported model limit still reports why.
+menu closes. Empty child cascades are omitted without suppressing usable
+siblings. An empty named menu or unsupported model limit still reports why.
 Do not add inline icon syntax to menu.conf in E1; E2 can map known applications
 to semantic icons with a generic fallback without changing the grammar.
 

@@ -326,6 +326,9 @@ static void apply_layout(const scribe_layout_t *l, bool staged)
     place(&g.hscroll.w, l->hscroll, staged);
 }
 
+// Defined with the scrollbar wiring below.
+static void sync_scrollbar(void);
+
 // The live layout. A measurement refused here leaves every widget where it
 // was: the window is already wearing a face whose captions measured fine
 // when it was adopted, so a refusal now is transient, and the next resize
@@ -337,15 +340,13 @@ static void layout(os64_ui_t *ui)
         return;
     g.mode_label.hidden = g.field.w.hidden = !l.bar2;
     apply_layout(&l, false);
+    sync_scrollbar();
 }
 
 static void on_resize(os64_ui_t *ui)
 {
     layout(ui);
 }
-
-// Defined with the scrollbar wiring below.
-static void sync_scrollbar(void);
 
 // ── adopting a face ─────────────────────────────────────────────────────────
 // Scribe's half of a font change. libui stages the widgets' text; this stages

@@ -179,6 +179,39 @@ static void scribe_menu_visibility_and_help(void)
     menu_key(27,1,0); CHECK(!g.help_active);
     menu_end();
 }
+static void check_scroll_viewport(void)
+{
+    int32_t rows=os64_ui_textview_rows(&g.view,&g.ui.theme);
+    CHECK(g.scroll.visible==rows);
+    CHECK(g.hscroll.visible==os64_ui_textview_width(&g.view));
+    // Dragging to the end must use the current viewport, without an edit first.
+    g.scroll.pos=g.scroll.total-g.scroll.visible;
+    scrolled(&g.scroll,NULL);
+    CHECK(g.view.top==(size_t)(g.scroll.total-rows));
+}
+static void scribe_chrome_scrollbars(void)
+{
+    current="Scribe chrome scrollbars"; menu_begin();
+    char doc[1600]; size_t n=0;
+    for(unsigned i=0;i<100;++i) n+=(size_t)snprintf(doc+n,sizeof(doc)-n,"line %u\n",i);
+    sh_put("/long",doc,n); do_load("/long");
+    check_scroll_viewport();
+    CHECK(os64_ui_action_invoke(g.action_views[0],ACT_BAR).status==OS64_UI_OK);
+    check_scroll_viewport();
+    CHECK(os64_ui_action_invoke(g.action_views[0],ACT_STATUS).status==OS64_UI_OK);
+    check_scroll_viewport();
+    menu_key(0,0x44,0); CHECK(g.bar.temporary); check_scroll_viewport();
+    menu_key(27,1,0); CHECK(g.bar.w.hidden); check_scroll_viewport();
+    CHECK(os64_ui_action_invoke(g.action_views[0],ACT_BAR).status==OS64_UI_OK);
+    check_scroll_viewport();
+    CHECK(os64_ui_action_invoke(g.action_views[0],ACT_STATUS).status==OS64_UI_OK);
+    check_scroll_viewport();
+    enter_mode(MODE_OPEN,"open:",""); check_scroll_viewport();
+    field_cancel(&g.field,NULL); check_scroll_viewport();
+    g.root.bounds.w-=80; g.root.bounds.h-=30;
+    on_resize(&g.ui); check_scroll_viewport();
+    menu_end(); sh_rm("/long");
+}
 static void scribe_build_refusals(void)
 {
     current="Scribe initialization refusals";
@@ -321,14 +354,70 @@ static void grootmenu_models_and_launch(void)
     launch(&bad); CHECK(spawned==before && complaints==old+1);
 }
 
+static void grootmenu_empty_cascades(void)
+{
+    current="grootmenu empty cascades";
+    const char *configs[]={
+        "menu root {\n menu Empty {\n }\n item Clock /bin/gclock\n}\n",
+        "menu root {\n menu Empty empty\n item Clock /bin/gclock\n}\nmenu empty {\n}\n",
+        "menu root {\n menu Empty empty\n menu Again empty\n item Clock /bin/gclock\n}\nmenu empty {\n menu Nested {\n }\n}\n",
+        "menu root {\n menu Empty {\n separator\n }\n item Clock /bin/gclock\n}\n"
+    };
+    for(size_t i=0;i<sizeof(configs)/sizeof(configs[0]);++i) {
+        CHECK(load_config(configs[i])==OS64_MENU_OK);
+        int16_t first=os64_menu_find(&gMenu,"root");
+        os64_ui_init(&ui,NULL); CHECK(build(first)==OS64_UI_OK);
+        CHECK(os64_ui_menu_model_count(models[first])==1);
+        memset(&transport,0,sizeof(transport)); transport.sw=1024; transport.sh=768;
+        os64_ui_dispatcher_init(&dispatcher,&backend); transport.dispatcher=&dispatcher;
+        CHECK(os64_ui_menu_session_create(&dispatcher,&ui,0,NULL,NULL,NULL,&session)==OS64_UI_OK);
+        CHECK(os64_ui_menu_open(session,models[first],view,(os64_gui_rect_t){10,10,0,0},OS64_UI_MENU_CONTEXT)==OS64_UI_OK);
+        menu_drain(); unsigned before=spawned;
+        menu_key('\r',0x1c,0);
+        CHECK(spawned==before+1 && !strcmp(spawned_path,"/bin/gclock"));
+        CHECK(dispose()); CHECK(transport.creates==transport.destroys);
+    }
+    CHECK(load_config("menu root {\n menu Empty {\n }\n}\nmenu other {\n item Clock /bin/gclock\n}\n")==OS64_MENU_OK);
+    os64_ui_init(&ui,NULL);
+    CHECK(build(os64_menu_find(&gMenu,"root"))==OS64_UI_EMPTY); CHECK(dispose());
+}
+static void grootmenu_startup_errors(void)
+{
+    current="grootmenu startup errors";
+    for(unsigned mode=0;mode<3;++mode) {
+        CHECK(load_config("menu root {\n item Clock /bin/gclock\n}\n")==OS64_MENU_OK);
+        int16_t first=os64_menu_find(&gMenu,"root");
+        os64_ui_init(&ui,NULL); CHECK(build(first)==OS64_UI_OK);
+        memset(&transport,0,sizeof(transport)); transport.sw=1024; transport.sh=768;
+        transport.fail_create=mode==0;
+        if(mode==1) transport.sw=transport.sh=1;
+        os64_ui_dispatcher_init(&dispatcher,&backend); transport.dispatcher=&dispatcher;
+        CHECK(os64_ui_menu_session_create(&dispatcher,&ui,0,NULL,NULL,NULL,&session)==OS64_UI_OK);
+        os64_ui_menu_hooks(session,NULL,launcher_error,NULL);
+        failed=error_reported=false;
+        unsigned before=complaints;
+        os64_gui_rect_t anchor={10,10,mode==2?-1:0,0};
+        os64_ui_status_code_t rc=os64_ui_menu_open(session,models[first],view,anchor,OS64_UI_MENU_CONTEXT);
+        CHECK(rc!=OS64_UI_OK && rc!=OS64_UI_BUSY);
+        CHECK(complaints==before+(mode==2?0:1));
+        startup_result(rc);
+        CHECK(failed && complaints==before+1);
+        CHECK(dispose()); CHECK(transport.creates==transport.destroys);
+    }
+    failed=error_reported=false;
+}
+
 int main(int argc,char **argv)
 {
     sh_dir=argc>1?argv[1]:"userland/libfreetype/fixtures";
     scribe_menu_targets();
     scribe_menu_visibility_and_help();
+    scribe_chrome_scrollbars();
     scribe_menu_quit_and_cleanup();
     scribe_build_refusals();
     grootmenu_models_and_launch();
+    grootmenu_empty_cascades();
+    grootmenu_startup_errors();
     for (size_t i=0;i<8;++i) free(sh_fs[i].bytes);
     printf("test_menu_apps_host: %lu checks, %d failures\n",checks,failures);
     return failures ? 1 : 0;
