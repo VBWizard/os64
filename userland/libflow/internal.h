@@ -322,9 +322,9 @@ void f_transform_fn_matrix(flow_transform_t *f);
 flow_angle_unit_t f_angle_common(flow_angle_unit_t a, flow_angle_unit_t b);
 double f_angle_in_unit(double v, flow_angle_unit_t from, flow_angle_unit_t to);
 // Two matrices interpolated as Transforms 1 § 11 (both 2D) or 2 § 13
-// (else) say: false when either cannot be decomposed — singular, or its
-// arithmetic or the composed answer past a double's range — and the pair
-// is discrete.
+// (else) say: false when either cannot be decomposed — singular, holding
+// an entry past a double, or its arithmetic or the composed answer past a
+// double's range — and the pair is discrete.
 bool f_matrix_mix(const double a[16], const double b[16], double t, double out[16]);
 // A tail of an animation's mix (FLOW_FN_BLEND) multiplied out, each
 // function T(x, y) · its matrix, the translations' percentages of the box

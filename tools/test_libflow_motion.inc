@@ -995,6 +995,17 @@ static void motion_cascade_cases(void)
         }
         expect("motion: a 2D matrix whose determinant passes a double mixes as its small self",
                scaled, NULL);
+        // A singular one a list made that large is still singular: (1, 2; 2,
+        // 4) times 1e300, its determinant infinity less infinity, read row
+        // by row as 0 — where compared as a NaN it fell through, and its
+        // rounding left a second axis of 7e284 to mix.
+        double sing[16] = {1e300, 2e300, 0, 0, 2e300, 4e300, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+        expect("motion: a singular 2D matrix past a double makes no mix",
+               !f_matrix_mix(sing, unit, 0.5, out), NULL);
+        // And in 3D, column by column.
+        double sing3[16] = {1e300, 2e300, 0, 0, 2e300, 4e300, 0, 0, 0, 0, 3e300, 0, 0, 0, 0, 1};
+        expect("motion: a singular 3D matrix past a double makes no mix",
+               !f_matrix_mix(sing3, unit, 0.5, out), NULL);
     }
 
     // Whatever two matrices a list multiplies out to — not held, as what a

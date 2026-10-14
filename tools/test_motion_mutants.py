@@ -48,6 +48,7 @@ args.logs.mkdir(parents=True, exist_ok=True)
 
 PROPS = 'userland/libgarb/props.c'
 VALUES = 'userland/libgarb/values.c'
+VALUES_H = 'userland/libgarb/include/garb/values.h'
 CASCADE = 'userland/libgarb/cascade.c'
 MEDIA = 'userland/libgarb/media.c'
 MOTION = 'userland/libflow/motion.c'
@@ -491,9 +492,6 @@ mutants = [
     ('a-row-length-is-not-scaled', MOTION,
      '    double a = x / k, b = y / k;\n    return k * sqrt(a * a + b * b);',
      '    (void)k;\n    return sqrt(x * x + y * y);', LIBFLOW),
-    ('a-2d-flip-reads-the-whole-determinant', MOTION,
-     '    bool flip = m11 / s0 * m22 - m12 / s0 * m21 < 0;',
-     '    bool flip = m11 * m22 - m12 * m21 < 0;', LIBFLOW),
     ('a-non-finite-composition-is-kept', MOTION,
      '    for (int i = 0; i < 16; i++)\n        if (!isfinite(out[i]))\n            return false;\n    return true;',
      '    return true;', LIBFLOW),
@@ -535,8 +533,8 @@ mutants = [
      '        return a->fn == b->fn && a->blend != NULL && b->blend != NULL && blend_same(a, b);',
      '        return false && blend_same(a, b);', LIBFLOW),
     ('a-3d-determinant-past-a-double-is-refused', MOTION,
-     '    if (det4(pm) == 0)\n        return false;',
-     '    if (det4(pm) == 0 || !isfinite(det4(pm)))\n        return false;', LIBFLOW),
+     '    double dp = det4(pm);\n    if (!isfinite(dp)) {',
+     '    double dp = det4(pm);\n    if (!isfinite(dp))\n        return false;\n    if (!isfinite(dp)) {', LIBFLOW),
     ('a-zero-axis-keeps-its-angle', MOTION,
      '        double ta = has_axis(a) ? a->a[3] : 0, tb = has_axis(b) ? b->a[3] : 0;',
      '        double ta = a->a[3], tb = b->a[3];\n        (void)has_axis;', LIBFLOW),
@@ -583,6 +581,34 @@ mutants = [
     ('an-iteration-count-is-not-held', PROPS,
      '    out->number = garb_hold(out->number, GARB_ITERATIONS_MAX);  // the domain (values.h)\n',
      '', GARB),
+    ('a-calc-leaf-is-not-held', STYLE,
+     '            *out = (Lp){garb_hold(k->leaf.number, GARB_TRANSFORM_NUMBER_MAX), 0, true};',
+     '            *out = (Lp){k->leaf.number, 0, true};', LIBFLOW),
+    ('a-settled-leaf-is-not-held', PROPS,
+     '        *v = garb_hold(k->leaf.number, *number ? GARB_TRANSFORM_NUMBER_MAX\n'
+     '                                               : GARB_TRANSFORM_NUMBER_MAX * 100);',
+     '        *v = k->leaf.number;', GARB),
+    ('a-settled-number-is-not-held', PROPS,
+     '    *out = garb_hold(*out, GARB_TRANSFORM_NUMBER_MAX);\n    return true;\n}',
+     '    return true;\n}', GARB),
+    ('a-nan-is-kept', VALUES_H,
+     '    return v > limit ? limit : v < -limit ? -limit : v == v ? v : 0;',
+     '    return v > limit ? limit : v < -limit ? -limit : v;', LIBFLOW),
+    ('a-length-nan-is-cast', STYLE,
+     '    if (!(v == v))\n        return 0;\n    return (int32_t)(v < 0 ? v - 0.5 : v + 0.5);',
+     '    return (int32_t)(v < 0 ? v - 0.5 : v + 0.5);', LIBFLOW),
+    ('a-subnormal-shift-in-one-power', FLOW,
+     '    long double by = power_of_two(-shift / 2), by2 = power_of_two(-shift + shift / 2);',
+     '    long double by = power_of_two(-shift), by2 = 1;', LIBFLOW),
+    ('a-2d-nan-determinant-is-compared', MOTION,
+     '    if (!isfinite(det)) {\n        double r0 = len2(m11, m12), r1 = len2(m21, m22);',
+     '    if (false) {\n        double r0 = len2(m11, m12), r1 = len2(m21, m22);', LIBFLOW),
+    ('a-3d-nan-determinant-is-compared', MOTION,
+     '    double dp = det4(pm);\n    if (!isfinite(dp)) {',
+     '    double dp = det4(pm);\n    if (false) {', LIBFLOW),
+    ('a-non-finite-entry-is-decomposed', MOTION,
+     '        if (!isfinite(a[i]) || !isfinite(b[i]))\n            return false;',
+     '        if (false)\n            return false;', LIBFLOW),
     ('the-first-y-is-not-held', PROPS,
      '        a[1].number = garb_hold(a[1].number, GARB_EASING_Y_MAX);\n',
      '', GARB),

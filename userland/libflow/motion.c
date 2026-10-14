@@ -578,19 +578,26 @@ static bool decompose_2d(const double m[16], D3 *d)
     // 2x2 divided by its largest entry, which loses a small axis beside a
     // large one: matrix(1e15, 0, 0, 1e-15, 0, 0) keeps its scales.
     double m11 = m[0], m12 = m[1], m21 = m[4], m22 = m[5];
-    if (m11 * m22 - m12 * m21 == 0)
+    // The determinant as a double works it, Chrome's test: tiny entries'
+    // rounds to 0. Where it passes a double — an infinity, or infinity less
+    // infinity, which is no number to compare — each row divided by its own
+    // length reads its zero and its sign, a determinant over both lengths a
+    // double holds (a row of zeros made the first one 0 already).
+    double det = m11 * m22 - m12 * m21;
+    if (!isfinite(det)) {
+        double r0 = len2(m11, m12), r1 = len2(m21, m22);
+        det = m11 / r0 * (m22 / r1) - m12 / r0 * (m21 / r1);
+    }
+    if (det == 0)
         return false;           // cannot be undone: the pair is discrete
     os64_memset(d, 0, sizeof(*d));
     d->persp[3] = 1;
     d->tr[0] = m[12];
     d->tr[1] = m[13];
     d->sc[2] = 1;
-    // A flip, on the axis whose diagonal is the smaller: the determinant's
-    // sign, read over the first row's length, where the determinant
-    // itself may pass a double (matrix(1e200, 2e200, 2e200, 1e200, 0, 0)
-    // is infinity less infinity).
+    // A flip, on the axis whose diagonal is the smaller.
     double s0 = len2(m11, m12), s1;
-    bool flip = m11 / s0 * m22 - m12 / s0 * m21 < 0;
+    bool flip = det < 0;
     if (flip && m11 < m22)
         s0 = -s0;
     m11 /= s0;
@@ -723,7 +730,26 @@ static bool decompose_3d(const double in[16], D3 *d)
     os64_memcpy(pm, m, sizeof(pm));
     pm[3] = pm[7] = pm[11] = 0;
     pm[15] = 1;
-    if (det4(pm) == 0)
+    // Its determinant as decompose_2d reads it: where a double cannot hold
+    // it, each column divided by its own largest part, a determinant over
+    // their product that is zero exactly when the first is. A column of
+    // zeros is singular, and one holding an infinity is a part a double
+    // cannot hold.
+    double dp = det4(pm);
+    if (!isfinite(dp)) {
+        double u[16];
+        for (int c = 0; c < 4; c++) {
+            double k = 0;
+            for (int r = 0; r < 4; r++)
+                k = fmax(k, fabs(pm[c * 4 + r]));
+            if (!(k > 0) || !isfinite(k))
+                return false;
+            for (int r = 0; r < 4; r++)
+                u[c * 4 + r] = pm[c * 4 + r] / k;
+        }
+        dp = det4(u);
+    }
+    if (dp == 0)
         return false;
     if (m[3] != 0 || m[7] != 0 || m[11] != 0) {
         double rhs[4] = {m[3], m[7], m[11], m[15]}, inv[16];
@@ -863,6 +889,11 @@ static double lerp(double a, double b, double t);
 bool f_matrix_mix(const double a[16], const double b[16], double t, double out[16])
 {
     D3 da, db, r;
+    // A matrix holding an entry no double holds — a tail multiplied out
+    // past one (f_tail_matrix) — makes no decomposition.
+    for (int i = 0; i < 16; i++)
+        if (!isfinite(a[i]) || !isfinite(b[i]))
+            return false;
     if (!(is_2d(a) ? decompose_2d(a, &da) : decompose_3d(a, &da)) ||
         !(is_2d(b) ? decompose_2d(b, &db) : decompose_3d(b, &db)))
         return false;

@@ -1418,10 +1418,13 @@ static bool calc(const Author *a, const garb_calc_t *k, double font, Lp *out)
     *out = (Lp){0, 0, false};
     switch (k->op) {
     case GARB_CALC_LEAF:
+        // A number, or a percentage, held to the domain (values.h) before
+        // any arithmetic, as Chrome holds each leaf at a float's range:
+        // calc(1e400 - 1e400) is 0 and calc(1e400 / 1e400) is 1.
         if (k->leaf.kind == GARB_V_NUMBER)
-            *out = (Lp){k->leaf.number, 0, true};
+            *out = (Lp){garb_hold(k->leaf.number, GARB_TRANSFORM_NUMBER_MAX), 0, true};
         else if (k->leaf.kind == GARB_V_PERCENTAGE)
-            out->pct = k->leaf.number;
+            out->pct = garb_hold(k->leaf.number, GARB_TRANSFORM_NUMBER_MAX * 100);
         else if (k->leaf.kind == GARB_V_LENGTH)
             out->px = length_px(a, &k->leaf, font);
         else
@@ -1494,12 +1497,16 @@ static bool calc(const Author *a, const garb_calc_t *k, double font, Lp *out)
     return false;
 }
 
+// A length as an int32_t: held, and a NaN — calc(1e400px - 1e400px), its
+// leaves past a double — 0, as Values 4 censors a calculation's NaN.
 static int32_t round_i32(double v)
 {
     if (v > 2e9)
         return 2000000000;
     if (v < -2e9)
         return -2000000000;
+    if (!(v == v))
+        return 0;
     return (int32_t)(v < 0 ? v - 0.5 : v + 0.5);
 }
 

@@ -116,9 +116,11 @@ END
 
 # A transform that is not drawn flat is drawn upright where it moves the
 # box (PILE3.md § Transforms, the painter), and counted by the function
-# whose w reads more than itself, or written with a number past a double
-# (1e400, read as infinite); a flat one is drawn as it says, and the
-# individual properties are when their numbers are finite.
+# whose w reads more than itself; a flat one is drawn as it says, and so
+# are the individual properties. A number past the domain is held at its
+# limit (values.h), which is how the page's value is read, so one written
+# with 1e400, a calc() of it, or a calc() that comes to past a double is
+# not counted.
 VIEWPORT 800x600
 PAGE
 <!doctype html><style>
@@ -134,9 +136,6 @@ em { transform: scale(calc(1e300 * 1e300)) }
 WANT
 value transform: matrix3d 1
 value transform: perspective 1
-value transform: matrix 1
-value scale: scale 1
-value transform: scale 2
 (end)
 END
 

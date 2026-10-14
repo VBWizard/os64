@@ -254,6 +254,50 @@ static void transform_layout_cases(void)
         "  block body 0 0 400 10\n"
         "    block div 0 0 100 10 stacked through 174 -985 985 174 36394 53372\n");
 
+    // A list of tiny numbers multiplied past a long double's normal range is
+    // still narrowed to what it is: sixteen matrix3d()s of 1e-300 and one of
+    // 1e-140, the identity times 1e-4940 — subnormal, its power of two past
+    // what one long double holds, so taken in two halves.
+    {
+        char css[2048];
+        int32_t n = snprintf(css, sizeof(css), "%s", XFORM_STYLE
+                             "div{width:100px;height:10px;transform-origin:0 0;transform:");
+        for (int32_t i = 0; i < 17; i++)
+            n += snprintf(css + n, sizeof(css) - (size_t)n,
+                          " matrix3d(%s,0,0,0,0,%s,0,0,0,0,%s,0,0,0,0,%s)", i < 16 ? "1e-300" : "1e-140",
+                          i < 16 ? "1e-300" : "1e-140", i < 16 ? "1e-300" : "1e-140",
+                          i < 16 ? "1e-300" : "1e-140");
+        snprintf(css + n, sizeof(css) - (size_t)n, "}</style><div></div>");
+        cascade_layout_case("transform: a subnormal composite is narrowed to what it is", css, 400,
+            "page 400 10\n"
+            "block html 0 0 400 10\n"
+            "  block body 0 0 400 10\n"
+            "    block div 0 0 100 10 stacked transform 0 0\n");
+    }
+
+    // A calc()'s leaves are held before its arithmetic, as Chrome 155 holds
+    // each at a float's range: scale(calc(1e400 - 1e400)) is scale(0), and
+    // calc(1e400 / 1e400) is 1, never a NaN; a length's calc of the same is
+    // a NaN to the double that works it, and moves nothing; and held leaves
+    // whose product passes a double, less the same, are a NaN that is 0
+    // (Values 4 censors a calculation's NaN).
+#define D21 "1e15 * 1e15 * 1e15 * 1e15 * 1e15 * 1e15 * 1e15 * 1e15 * 1e15 * 1e15 * 1e15 * " \
+    "1e15 * 1e15 * 1e15 * 1e15 * 1e15 * 1e15 * 1e15 * 1e15 * 1e15 * 1e15"
+    cascade_layout_case("transform: a calc() past the domain is worked from held leaves",
+        XFORM_STYLE "div{width:100px;height:10px;transform-origin:0 0}"
+        ".a{transform:scale(calc(1e400 - 1e400))} .b{transform:scale(calc(1e400 / 1e400))}"
+        ".c{transform:translateX(calc(1e400px - 1e400px))}"
+        ".d{transform:scale(calc(" D21 " - " D21 "))}</style>"
+        "<div class=a></div><div class=b></div><div class=c></div><div class=d></div>", 400,
+        "page 400 40\n"
+        "block html 0 0 400 40\n"
+        "  block body 0 0 400 40\n"
+        "    block div 0 0 100 10 stacked through 0 0 0 0 0 0\n"
+        "    block div 0 10 100 10 stacked transform 0 0\n"
+        "    block div 0 20 100 10 stacked transform 0 0\n"
+        "    block div 0 30 100 10 stacked through 0 0 0 0 0 30000\n");
+#undef D21
+
     // A scale written as a calc() of a percentage is that hundredth, in a
     // list and as the property: half about the centre (50, 5), 0.5x + 35
     // with the 20 halved; twice about (50, 15), the 10 doubled, reaching 25.

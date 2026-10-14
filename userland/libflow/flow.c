@@ -636,9 +636,11 @@ void f_transform_matrix(const flow_style_t *s, int64_t x, int64_t y, int64_t w, 
         while (big < 1) { big *= 0x1p+64L; shift -= 64; }
         while (big >= 2) { big *= 0.5L; shift++; }
     }
-    long double by = power_of_two(-shift);
+    // In two halves: a subnormal long double's shift is past -16383, whose
+    // power of two no long double holds, where each half's is.
+    long double by = power_of_two(-shift / 2), by2 = power_of_two(-shift + shift / 2);
     for (int i = 0; i < 16; i++)
-        out[i] = (double)(m[i] * by);
+        out[i] = (double)(m[i] * by * by2);
 }
 
 // A move in 26.6 as whole pixels, held to what a point says; one that is

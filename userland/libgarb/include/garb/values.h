@@ -254,9 +254,11 @@ typedef struct {
 #define GARB_TRANSFORM_NUMBER_MAX 1e15
 #define GARB_ANGLE_DEG_MAX 1e15
 
+// `v` held to ±`limit`; a NaN, which only a calc() of infinities makes, is
+// 0, as Values 4 censors a top-level calculation's NaN.
 static inline double garb_hold(double v, double limit)
 {
-    return v > limit ? limit : v < -limit ? -limit : v;
+    return v > limit ? limit : v < -limit ? -limit : v == v ? v : 0;
 }
 
 // A declaration read against its property's grammar: the longhands it sets
