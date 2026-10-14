@@ -173,13 +173,6 @@ static void motion_easing_cases(void)
 {
     static const flow_easing_t kEase = {FLOW_EASE_CUBIC, {0.25, 0.1, 0.25, 1}, 0, 0, true};
     static const flow_easing_t kOver = {FLOW_EASE_CUBIC, {0.2, 0.86, 0.32, 1.22}, 0, 0, false};
-    // Controls that cancel: cubic-bezier(0.5, 1e300, 0.5, -1e300) is x 0.5
-    // and y 1/8 at the curve's middle, the two huge terms equal and
-    // opposite there — which a power form, its coefficients 6e300 and
-    // -9e300 with the 1 lost beside them, works out as 0.
-    static const flow_easing_t kCancel = {FLOW_EASE_CUBIC, {0.5, 1e300, 0.5, -1e300}, 0, 0, false};
-    expect("easing: controls that cancel leave the curve's own y",
-           f_ease(&kCancel, 0.5, false) == 0.125, NULL);
     // On [0, 1], y at the parameter whose x is the input, found to the
     // last bit: within the curve's slope times a hair of the exact y.
     for (int i = 0; i <= 100; i++) {
@@ -197,10 +190,10 @@ static void motion_easing_cases(void)
     }
     expect("easing: a cubic is its curve", true, NULL);
     // The curve's ends are its ends, however far its controls reach: 0 at
-    // 0 and 1 at 1, exactly — where controls at a double's extremes once
-    // cancelled each other and lost the 1 that ends the curve.
+    // 0 and 1 at 1, exactly — where the power form's rounding misses 1 by
+    // 2e-10 for cubic-bezier(0, 0.1, 1, 1e6), and by more below.
     static const double kFar[][4] = {
-        {0.994, 0, 0.746, 1e308}, {0.5, 1e308, 0.5, -1e308}, {0, -1e308, 1, 1e308}, {0.3, 2, 0.7, -1},
+        {0, 0.1, 1, 1e6}, {0.5, 0.7, 0.5, -1e6}, {0, 123456.789, 1, -987654.321}, {0.3, 2, 0.7, -1},
     };
     bool ends = true;
     for (size_t i = 0; i < sizeof(kFar) / sizeof(kFar[0]) && ends; i++) {
@@ -865,9 +858,9 @@ static void motion_cascade_cases(void)
     }
     moving_close(&m);
 
-    // Two axes past sqrt(DBL_MAX) are compared as the unit vectors they are:
-    // x and y, which differ, so they turn as matrices, as the same axes
-    // written small do.
+    // Two axes past the domain are held at its limit (values.h) and
+    // compared as the unit vectors they are: x and y, which differ, so they
+    // turn as matrices, as the same axes written small do.
     moving_open(&m, MOTION_STYLE
         "@keyframes big{from{transform:rotate3d(1e200,0,0,90deg)}to{transform:rotate3d(0,1e200,0,90deg)}}"
         "@keyframes small{from{transform:rotate3d(1,0,0,90deg)}to{transform:rotate3d(0,1,0,90deg)}}"
@@ -878,56 +871,84 @@ static void motion_cascade_cases(void)
     bool same = both;
     for (int i = 0; both && i < 16; i++)
         same &= fabs(want[i] - got[i]) < 1e-9;
-    expect("motion: rotation axes past sqrt(DBL_MAX) compared as units", same, NULL);
+    expect("motion: rotation axes past the domain compared as units", same, NULL);
     moving_close(&m);
 
-    // And axes whose lengths a double cannot hold at all, compared the same
-    // way; matrices whose entries square past a double, mixed as the same
-    // matrices written small are, scaled by 1e200; and a turn in radians
-    // past what degrees hold, mixed against degrees in
-    // the coarser unit, a turn and not the NaN degrees made of it (which
-    // turn, a double cannot say: an ulp of 5e307 radians is past 1e291).
+    // A matrix past the domain mixes as the one at its limit, and that one
+    // as the same matrix written small, scaled by 1e15. Two angles in two
+    // units mix in degrees (f_angle_common), and Chrome 155 agrees to its
+    // six digits: rotate(1rad) to rotate(0.5turn) at 0.3 is matrix(-0.0716201,
+    // 0.997432, ...), and an angle past the domain is held in degrees,
+    // whatever its unit: rotate(1e15rad) and rotate(1e13turn), each to
+    // rotate(0deg), mix as the same 1e15deg.
     moving_open(&m, MOTION_STYLE
-        "@keyframes huge{from{transform:rotate3d(1.7e308,1.7e308,0,90deg)}"
-        "to{transform:rotate3d(1.7e308,0,1.7e308,90deg)}}"
-        "@keyframes tame{from{transform:rotate3d(1,1,0,90deg)}to{transform:rotate3d(1,0,1,90deg)}}"
-        "@keyframes mbig{from{transform:matrix(1e200,0,0,1e200,0,0)}to{transform:matrix(3e200,1e200,-1e200,3e200,0,0)}}"
-        "@keyframes msmall{from{transform:matrix(1,0,0,1,0,0)}to{transform:matrix(3,1,-1,3,0,0)}}"
-        "@keyframes rad{from{transform:rotate(1e308rad)}to{transform:rotate(0deg)}}"
-        "</style><div id=huge style='animation-name:huge;" AT("0.5") "'></div>"
-        "<div id=tame style='animation-name:tame;" AT("0.5") "'></div>"
+        "@keyframes mpast{from{transform:matrix(1e200,0,0,1e200,0,0)}to{transform:matrix(3e200,1e15,-1e15,3e200,0,0)}}"
+        "@keyframes mbig{from{transform:matrix(1e15,0,0,1e15,0,0)}to{transform:matrix(1e15,1e15,-1e15,1e15,0,0)}}"
+        "@keyframes msmall{from{transform:matrix(1,0,0,1,0,0)}to{transform:matrix(1,1,-1,1,0,0)}}"
+        "@keyframes units{from{transform:rotate(1rad)}to{transform:rotate(0.5turn)}}"
+        "@keyframes rad{from{transform:rotate(1e15rad)}to{transform:rotate(0deg)}}"
+        "@keyframes turn{from{transform:rotate(1e13turn)}to{transform:rotate(0deg)}}"
+        "</style><div id=mpast style='animation-name:mpast;" AT("0.5") "'></div>"
         "<div id=mbig style='animation-name:mbig;" AT("0.5") "'></div>"
         "<div id=msmall style='animation-name:msmall;" AT("0.5") "'></div>"
-        "<div id=rad style='animation-name:rad;" AT("0.5") "'></div>", 1000);
-    both = moving_matrix(&m, "tame", want) && moving_matrix(&m, "huge", got);
-    same = both;
-    for (int i = 0; both && i < 16; i++)
-        same &= fabs(want[i] - got[i]) < 1e-9;
-    expect("motion: rotation axes past a double's length compared as units", same, NULL);
-    both = moving_matrix(&m, "msmall", want) && moving_matrix(&m, "mbig", got);
+        "<div id=units style='animation-name:units;" AT("0.3") "'></div>"
+        "<div id=rad style='animation-name:rad;" AT("0.3") "'></div>"
+        "<div id=turn style='animation-name:turn;" AT("0.3") "'></div>", 1000);
+    double small_m[16];
+    both = moving_matrix(&m, "msmall", small_m) && moving_matrix(&m, "mbig", want) &&
+           moving_matrix(&m, "mpast", got);
     same = both;
     for (int i = 0; both && i < 16; i++) {
-        // The 2x2 scaled by 1e200, translation and the rest as they were.
+        // The 2x2 scaled by 1e15, translation and the rest as they were.
         bool linear = i == 0 || i == 1 || i == 4 || i == 5;
-        double w = linear ? want[i] * 1e200 : want[i];
-        same &= isfinite(got[i]) && fabs(w - got[i]) <= 1e-9 * fmax(1, fabs(w));
+        double w = linear ? small_m[i] * 1e15 : small_m[i];
+        same &= want[i] == got[i] && fabs(w - want[i]) <= 1e-9 * fmax(1, fabs(w));
     }
-    expect("motion: matrices whose entries square past a double mix as their small selves", same, NULL);
-    same = moving_matrix(&m, "rad", got);
-    for (int i = 0; same && i < 16; i++)
-        same &= isfinite(got[i]);
-    same = same && fabs(got[0] * got[0] + got[1] * got[1] - 1) < 1e-9 && got[0] == got[5] &&
-           got[1] == -got[4];
-    expect("motion: radians past what degrees hold mix in radians, a turn", same, NULL);
+    expect("motion: a matrix past the domain mixes as its limit, and that as its small self", same,
+           NULL);
+    same = moving_matrix(&m, "units", got) && fabs(got[0] - -0.0716201) < 5e-7 &&
+           fabs(got[1] - 0.997432) < 5e-7;
+    expect("motion: two units mix in degrees, as Chrome's", same, NULL);
+    both = moving_matrix(&m, "rad", want) && moving_matrix(&m, "turn", got);
+    same = both;
+    for (int i = 0; both && i < 16; i++)
+        same &= isfinite(got[i]) && fabs(want[i] - got[i]) < 1e-9;
+    expect("motion: an angle past the domain is held in degrees, whatever its unit", same, NULL);
     moving_close(&m);
+
+    // A tail a list multiplies out past a double makes the pair discrete,
+    // as Chrome 155's is (twenty-two scale(1e15) and a turn, to
+    // rotate(2deg), is rotate(2deg) at one half): past it the second, and
+    // before it the first — twenty-one scale(1e15), whose last multiply
+    // makes a clean infinity, no zero times it yet to make a NaN, which
+    // the painter carries through and never divides down for ever.
+    {
+        char css[1024];
+        int32_t n = snprintf(css, sizeof(css), "%s@keyframes far{from{transform:", MOTION_STYLE);
+        for (int32_t i = 0; i < 21; i++)
+            n += snprintf(css + n, sizeof(css) - (size_t)n, "scale(1e15) ");
+        snprintf(css + n, sizeof(css) - (size_t)n,
+                 "}to{transform:rotate(2deg)}}</style>"
+                 "<div id=near style='animation:far 1s linear -.25s paused'></div>"
+                 "<div id=past style='animation:far 1s linear -.75s paused'></div>"
+                 "<div id=two style='transform:rotate(2deg)'></div>");
+        moving_open(&m, css, 1000);
+        double past[16], two[16], near[16];
+        bool flipped = moving_matrix(&m, "past", past) && moving_matrix(&m, "two", two);
+        for (int i = 0; flipped && i < 16; i++)
+            flipped = past[i] == two[i];
+        expect("motion: a tail past a double is discrete, the second past one half", flipped, NULL);
+        expect("motion: and the first before it, carried as the infinity it is",
+               moving_matrix(&m, "near", near) && !isfinite(near[0]), NULL);
+        moving_close(&m);
+    }
 
     // A zero-length axis turns nothing, so it mixes as no turn about the
     // other's axis (Chrome, 10/14: rotate3d(1,0,0,45deg) to
     // rotate3d(0,0,0,90deg) is rotateX(22.5deg) halfway, and none at its
-    // end); and a 3D matrix whose scales square past a double, with a
-    // perspective row, is undone and mixed, not dropped — its 1e-200 in
-    // that row, a w of 1 + 1e-200 x, as near as a double says (the
-    // decomposition holds it as 1e-400, which no double can).
+    // end); and a 3D matrix at the domain's limit, with a perspective row,
+    // is undone and mixed, where one a list multiplies out past a double's
+    // determinant makes no mix, and the pair is discrete.
     moving_open(&m, MOTION_STYLE
         "@keyframes z{from{transform:rotate3d(1,0,0,45deg)}to{transform:rotate3d(0,0,0,90deg)}}"
         "</style><div id=zh style='animation:z 1s linear -.5s paused'></div>"
@@ -944,18 +965,28 @@ static void motion_cascade_cases(void)
     expect("motion: and ends turning nothing", same, NULL);
     moving_close(&m);
     {
-        double big3d[16] = {1e200, 0, 0, 1e-200, 0, 1e200, 0, 0, 0, 0, 1e200, 0, 0, 0, 0, 1}, out[16];
+        double big3d[16] = {1e15, 0, 0, 1e-15, 0, 1e15, 0, 0, 0, 0, 1e15, 0, 0, 0, 0, 1}, out[16];
         bool undone = f_matrix_mix(big3d, big3d, 0.5, out);
         for (int i = 0; undone && i < 16; i++)
             undone = fabs(out[i] - big3d[i]) <= 1e-9 * fmax(fabs(big3d[i]), 1);
-        expect("motion: a 3D matrix whose scales square past a double is undone", undone, NULL);
+        expect("motion: a 3D matrix at the domain's limit is undone", undone, NULL);
+        double past[16] = {1e200, 0, 0, 1e-200, 0, 1e200, 0, 0, 0, 0, 1e200, 0, 0, 0, 0, 1};
+        expect("motion: a 3D perspective whose inverse a double cannot hold makes no mix",
+               !f_matrix_mix(past, big3d, 0.5, out), NULL);
+        // With no perspective to undo, only the determinant's zero is read.
+        double flat3[16] = {1e200, 0, 0, 0, 0, 1e200, 0, 0, 0, 0, 1e200, 0, 0, 0, 0, 1};
+        undone = f_matrix_mix(flat3, flat3, 0.5, out);
+        for (int i = 0; undone && i < 16; i++)
+            undone = fabs(out[i] - flat3[i]) <= 1e-9 * fmax(fabs(flat3[i]), 1);
+        expect("motion: a 3D matrix whose determinant passes a double is undone", undone, NULL);
     }
 
     // A 2D matrix whose axes are a double's whole range apart keeps both:
-    // matrix(1e308, 0, 0, 1e-308, 0, 0), its determinant 1, mixed halfway
-    // to the identity is scales of 5e307 and a half; and one whose
-    // determinant is past a double's smallest, matrix(1e-200, …), is
-    // undone too, mixed as its large self is, scaled.
+    // matrix(1e308, 0, 0, 1e-308, 0, 0), as a list may multiply out, its
+    // determinant 1, mixed halfway to the identity is scales of 5e307 and a
+    // half. One whose determinant a double rounds to 0 is discrete, as
+    // Chrome 155's is: matrix(1e-200, 0, 0, 1e-200, 0, 0) to none is none
+    // at one half, where matrix(1e-160, …) mixes to a half.
     {
         double far[16] = {1e308, 0, 0, 0, 0, 1e-308, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
         double unit[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1}, out[16];
@@ -963,35 +994,57 @@ static void motion_cascade_cases(void)
                     fabs(out[5] - 0.5) < 1e-9 && out[1] == 0 && out[4] == 0;
         expect("motion: a 2D matrix's axes a double's range apart are both kept", kept, NULL);
         double tiny[16] = {1e-200, 0, 0, 0, 0, 1e-200, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
-        double tiny2[16] = {3e-200, 1e-200, 0, 0, -1e-200, 3e-200, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
-        double big[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
-        double big2[16] = {3, 1, 0, 0, -1, 3, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1}, want_m[16];
-        bool small = f_matrix_mix(tiny, tiny2, 0.5, out) && f_matrix_mix(big, big2, 0.5, want_m);
-        for (int i = 0; small && i < 16; i++) {
+        double small[16] = {1e-160, 0, 0, 0, 0, 1e-160, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+        expect("motion: a 2D matrix whose determinant a double rounds to 0 makes no mix",
+               !f_matrix_mix(tiny, unit, 0.5, out), NULL);
+        expect("motion: and one just above it mixes, as Chrome's",
+               f_matrix_mix(small, unit, 0.5, out) && fabs(out[0] - 0.5) < 1e-12 &&
+                   fabs(out[5] - 0.5) < 1e-12, NULL);
+        // One whose determinant passes a double mixes as its small self,
+        // scaled: only the determinant's zero and sign are read.
+        double huge[16] = {1e200, 0, 0, 0, 0, 1e200, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+        double huge2[16] = {3e200, 1e200, 0, 0, -1e200, 3e200, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+        double one2[16] = {3, 1, 0, 0, -1, 3, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1}, want_m[16];
+        bool scaled = f_matrix_mix(huge, huge2, 0.5, out) && f_matrix_mix(unit, one2, 0.5, want_m);
+        for (int i = 0; scaled && i < 16; i++) {
             bool linear = i == 0 || i == 1 || i == 4 || i == 5;
-            double w = linear ? want_m[i] * 1e-200 : want_m[i];
-            small = fabs(w - out[i]) <= 1e-9 * fmax(fabs(w), linear ? 1e-200 : 1);
+            double w = linear ? want_m[i] * 1e200 : want_m[i];
+            scaled = fabs(w - out[i]) <= 1e-9 * fmax(fabs(w), 1);
         }
-        expect("motion: a 2D matrix whose determinant is past a double's smallest is undone", small, NULL);
+        expect("motion: a 2D matrix whose determinant passes a double mixes as its small self",
+               scaled, NULL);
+        // A singular one a list made that large is still singular: (1, 2; 2,
+        // 4) times 1e300, its determinant infinity less infinity, read row
+        // by row as 0 — where compared as a NaN it fell through, and its
+        // rounding left a second axis of 7e284 to mix.
+        double sing[16] = {1e300, 2e300, 0, 0, 2e300, 4e300, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+        expect("motion: a singular 2D matrix past a double makes no mix",
+               !f_matrix_mix(sing, unit, 0.5, out), NULL);
+        // And in 3D, column by column.
+        double sing3[16] = {1e300, 2e300, 0, 0, 2e300, 4e300, 0, 0, 0, 0, 3e300, 0, 0, 0, 0, 1};
+        expect("motion: a singular 3D matrix past a double makes no mix",
+               !f_matrix_mix(sing3, unit, 0.5, out), NULL);
     }
 
-    // Whatever two matrices a page writes, their mix is a matrix or no mix
-    // (the pair discrete) — never a NaN or an infinity, and at its ends
+    // Whatever two matrices a list multiplies out to — not held, as what a
+    // page writes is — their mix is a matrix or no mix (the pair
+    // discrete), never a NaN or an infinity, and at its ends
     // each end itself, never another matrix a part held to a double's range
     // composes: huge scales, shears and turns in 2D, a 2D row whose length
-    // passes DBL_MAX though its entries do not, 3D rows whose lengths a
+    // passes DBL_MAX though its entries do not, a flipped 2D matrix whose
+    // determinant is infinity less infinity, 3D rows whose lengths a
     // double cannot hold, and a perspective undone by an inverse with an
     // entry a double cannot hold.
     {
         const double M = DBL_MAX, H = 1.7e308, r = 0.7071067811865476;
-        static double kMats[10][16];
+        static double kMats[11][16];
         memset(kMats, 0, sizeof(kMats));
-        const double flat[8][6] = {
+        const double flat[9][6] = {
             {1, 0, 0, 1, 0, 0}, {1e200, 0, 0, 1e200, 0, 0}, {M, 0, 0, M, 0, 0}, {M, 0, M, M, 0, 0},
             {M * r, M * r, -M * r, M * r, 0, 0}, {1e-300, 0, 0, 1e-300, 0, 0}, {0, 0, 0, 0, 0, 0},
-            {H, H, 0, 1, 0, 0},
+            {H, H, 0, 1, 0, 0}, {1e200, 2e200, 2e200, 1e200, 0, 0},
         };
-        for (int i = 0; i < 8; i++) {
+        for (int i = 0; i < 9; i++) {
             kMats[i][0] = flat[i][0];
             kMats[i][1] = flat[i][1];
             kMats[i][4] = flat[i][2];
@@ -1001,13 +1054,13 @@ static void motion_cascade_cases(void)
             kMats[i][10] = kMats[i][15] = 1;
         }
         const double rows3d[16] = {H, H, 0, 0, 0, H, H, 0, H, 0, H, 0, 0, 0, 0, 1};
-        memcpy(kMats[8], rows3d, sizeof(rows3d));
+        memcpy(kMats[9], rows3d, sizeof(rows3d));
         const double persp3d[16] = {1e-310, 0, 0, 1e-10, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
-        memcpy(kMats[9], persp3d, sizeof(persp3d));
+        memcpy(kMats[10], persp3d, sizeof(persp3d));
         bool sound = true, ends = true;
         char detail[160] = "";
-        for (int i = 0; i < 10 && sound && ends; i++)
-            for (int j = 0; j < 10 && sound && ends; j++)
+        for (int i = 0; i < 11 && sound && ends; i++)
+            for (int j = 0; j < 11 && sound && ends; j++)
                 for (int k = 0; k <= 4 && sound && ends; k++) {
                     double out[16];
                     if (!f_matrix_mix(kMats[i], kMats[j], k / 4.0, out))
@@ -1034,39 +1087,44 @@ static void motion_cascade_cases(void)
         expect("motion: a 2D row longer than a double holds makes no mix", refused, NULL);
     }
 
-    // skew(a, b) in two units keeps the coarser, so each finite angle
-    // stays finite in it: skew(1e308rad, 0deg) is skew(1e308rad), not a
-    // NaN, and skew(45deg, 50grad) is skew(45deg, 45deg).
+    // skew(a, b) in two units is worked in degrees (f_angle_common), each
+    // angle held there first: skew(1e308rad, 0deg) is skew(1e15deg, 0deg),
+    // and skew(45deg, 50grad) is skew(45deg, 45deg).
     {
         Moving sk;
         moving_open(&sk, MOTION_STYLE "</style>"
                     "<div id=k1 style='transform:skew(1e308rad, 0deg)'></div>"
-                    "<div id=k2 style='transform:skew(1e308rad)'></div>"
+                    "<div id=k2 style='transform:skew(1e15deg, 0deg)'></div>"
                     "<div id=k3 style='transform:skew(45deg, 50grad)'></div>"
                     "<div id=k4 style='transform:skew(45deg, 45deg)'></div>", 0);
         double m1[16], m2[16], m3[16], m4[16];
         bool got = moving_matrix(&sk, "k1", m1) && moving_matrix(&sk, "k2", m2) &&
                    moving_matrix(&sk, "k3", m3) && moving_matrix(&sk, "k4", m4);
-        bool finite = got, same = got, mixed = got;
+        bool same = got, mixed = got;
         for (int i = 0; got && i < 16; i++) {
-            finite &= isfinite(m1[i]);
             same &= m1[i] == m2[i];
             mixed &= fabs(m3[i] - m4[i]) <= 1e-12;
         }
-        expect("motion: skew(1e308rad, 0deg) is finite, and skew(1e308rad)", finite && same, NULL);
+        expect("motion: skew(1e308rad, 0deg) is skew(1e15deg, 0deg)", same, NULL);
         expect("motion: skew(45deg, 50grad) is skew(45deg, 45deg)", mixed, NULL);
         moving_close(&sk);
     }
 
-    // An easing at the edge of what a double holds: its output is held to
-    // a double's range, and a value mixed with itself stays itself, never
-    // the no-number infinity less infinity makes.
-    flow_easing_t edge = {.kind = FLOW_EASE_CUBIC, .p = {1e-300, 1e308, 1, 1e308}};
-    expect("motion: an easing at a double's edge gives a number",
-           isfinite(f_ease(&edge, 0.5, false)) && isfinite(f_ease(&edge, -1, false)) &&
-               isfinite(f_ease(&edge, 2, false)), NULL);
+    // An easing's y controls past the domain are held at its limit, so a
+    // value mixed with itself at the huge fraction they make stays itself.
+    {
+        Moving ez;
+        moving_open(&ez, MOTION_STYLE "</style>"
+                    "<div id=e style='animation:k 1s cubic-bezier(0,1e308,1,-1e308)'></div>", 0);
+        const flow_style_t *es = moving_style(&ez, "e");
+        bool held = es != NULL && es->animations.neasing == 1 &&
+                    es->animations.easing[0].p[1] == GARB_EASING_Y_MAX &&
+                    es->animations.easing[0].p[3] == -GARB_EASING_Y_MAX;
+        expect("motion: an easing's y past the domain is held at its limit", held, NULL);
+        moving_close(&ez);
+    }
     moving_open(&m, MOTION_STYLE
-        "@keyframes sc{from{transform:scale(2) rotate(10deg)}to{transform:scale(2) rotate(10deg)}}"
+        "@keyframes sc{from{transform:scale(1.3) rotate(3.7deg)}to{transform:scale(1.3) rotate(3.7deg)}}"
         "@keyframes mx{from{transform:scale(2)}to{transform:rotate(10deg) scale(3)}}"
         "</style><div id=sc style='animation:sc 1s cubic-bezier(0,1e308,1,1e308) -.5s paused'></div>"
         "<div id=mx style='animation:mx 1s cubic-bezier(0,1e308,1,1e308) -.5s paused'></div>", 1000);
@@ -1074,9 +1132,16 @@ static void motion_cascade_cases(void)
     bool finite = moving_matrix(&m, "sc", same_m) && moving_matrix(&m, "mx", wild);
     for (int i = 0; finite && i < 16; i++)
         finite = isfinite(same_m[i]) && !isnan(wild[i]);
-    double c10 = cos(10 * 3.14159265358979323846 / 180), s10 = sin(10 * 3.14159265358979323846 / 180);
+    double turn = 3.7 * 3.14159265358979323846 / 180;
+    // And to the bit, in the functions' own arguments, where (1 - t) a + t a
+    // misses by a few last bits of t a (1.2999999999301508 here).
+    const flow_style_t *ss = moving_style(&m, "sc");
+    bool exact = ss != NULL && ss->ntransform == 2 && ss->transform[0].a[0] == 1.3 &&
+                 ss->transform[0].a[1] == 1.3 && ss->transform[1].a[3] == 3.7;
     expect("motion: a value mixed with itself at a huge fraction stays itself",
-           finite && fabs(same_m[0] - 2 * c10) < 1e-9 && fabs(same_m[1] - 2 * s10) < 1e-9, NULL);
+           finite && exact && fabs(same_m[0] - 1.3 * cos(turn)) < 1e-9 &&
+               fabs(same_m[1] - 1.3 * sin(turn)) < 1e-9,
+           NULL);
     moving_close(&m);
 
     // Forty keyframes of one property, 2.5% apart: halfway is the
@@ -1521,7 +1586,7 @@ static void motion_due_cases(void)
          "@keyframes k{from{visibility:hidden}to{visibility:visible}}", "k 1s linear reverse 2"},
         {"motion due backwards: steps inside three keyframes, reversed",
          "@keyframes k{0%{opacity:0}40%{opacity:.4}100%{opacity:1}}", "k 1s steps(2,end) reverse 2"},
-        {"motion due: visibility through a curve whose slope a double cannot hold",
+        {"motion due: visibility through a curve whose controls are held at the domain's limit",
          "@keyframes k{from{visibility:hidden}to{visibility:visible}}",
          "k 1s cubic-bezier(.5,1e308,.5,-1e308) 2"},
         {"motion due backwards: visible to hidden, reversed",
@@ -2071,7 +2136,10 @@ static int fuzz_below(FuzzRng *r, int n)
 
 static flow_easing_t fuzz_easing(FuzzRng *r)
 {
-    static const double kY[] = {-1, -0.5, 0, 0.25, 0.5, 1, 1.5, 2, 1e308, -1e308};
+    // Ten, the last two the domain's limit, which a page's 1e308 is held
+    // at: kFuzzRegressions' seeds were found against a table this long.
+    static const double kY[] = {-1, -0.5, 0, 0.25, 0.5, 1, 1.5, 2, GARB_EASING_Y_MAX,
+                                -GARB_EASING_Y_MAX};
     flow_easing_t e;
     memset(&e, 0, sizeof(e));
     switch (fuzz_below(r, 4)) {
@@ -2223,8 +2291,25 @@ static bool fuzz_case(FuzzRng *r, int *kind, flow_style_t *base, FAnimation an[2
     return still;
 }
 
-// One case, the animation `r` makes from where it stands.
-static void motion_fuzz_one(FuzzRun *f, FuzzRng *r, long c)
+// An animation moved to the time domain's edge (values.h), its edges still
+// inside the horizon: begun the longest time ago, repeating for ever or as
+// many times as the domain allows; or an iteration as long as the domain
+// allows, ending where its delay put it. The clock there works on times a
+// double resolves to a tenth of a microsecond.
+static void fuzz_edge(FuzzRng *r, FAnimation *an)
+{
+    double behind = an->timing.delay_ms + 800;
+    an->timing.delay_ms = -GARB_TIME_MS_MAX + behind;
+    int k = fuzz_below(r, 3);
+    if (k == 2 && an->timing.duration_ms > 0)
+        an->timing.duration_ms = GARB_TIME_MS_MAX;
+    else
+        an->timing.iterations = k == 1 ? GARB_ITERATIONS_MAX : INFINITY;
+}
+
+// One case, the animation `r` makes from where it stands, at the time
+// domain's edge when `edge` says (fuzz_edge).
+static void motion_fuzz_one(FuzzRun *f, FuzzRng *r, long c, bool edge)
 {
     enum { kHorizon = FUZZ_HORIZON };
     static uint32_t values[kHorizon + 1];
@@ -2237,6 +2322,8 @@ static void motion_fuzz_one(FuzzRun *f, FuzzRng *r, long c)
     FAnimation an[2];
     FKeyframe frames[2][FUZZ_FRAMES];
     bool still = fuzz_case(r, &kind, &base, an, frames, &nanims);
+    for (int a = 0; edge && a < nanims; a++)
+        fuzz_edge(r, &an[a]);
     f->pairs += nanims == 2;
     FMotion m;
     memset(&m, 0, sizeof(m));
@@ -2282,8 +2369,8 @@ static void motion_fuzz_one(FuzzRun *f, FuzzRng *r, long c)
     f->still += still;
     if (!ok || missed >= 0 || !idle) {
         char detail[256];
-        snprintf(detail, sizeof(detail), "case %ld (seed %llu): kind %d, %d animation%s; %s at %d ms", c,
-                 (unsigned long long)seed, kind, nanims, nanims > 1 ? "s" : "",
+        snprintf(detail, sizeof(detail), "%scase %ld (seed %llu): kind %d, %d animation%s; %s at %d ms",
+                 edge ? "edge " : "", c, (unsigned long long)seed, kind, nanims, nanims > 1 ? "s" : "",
                  !ok ? "no record" : missed >= 0 ? "a change not laid out" : "a still value laid out",
                  missed >= 0 ? missed : layouts);
         expect("motion fuzz: the predictor names every change the evaluator makes", false, detail);
@@ -2334,15 +2421,20 @@ static void motion_fuzz_cases(void)
     FuzzRun f = {motion_find(doc->document, "x"), doc, 0, 0, 0, 0};
     for (size_t i = 0; i < sizeof(kFuzzRegressions) / sizeof(kFuzzRegressions[0]); i++) {
         FuzzRng one = {kFuzzRegressions[i]};
-        motion_fuzz_one(&f, &one, -1 - (long)i);
+        motion_fuzz_one(&f, &one, -1 - (long)i, false);
     }
     for (long c = 0; c < cases && f.failed < 5; c++)
-        motion_fuzz_one(&f, &r, c);
+        motion_fuzz_one(&f, &r, c, false);
+    // A quarter as many again at the time domain's edge, from a stream of
+    // their own.
+    FuzzRng er = {r.s ^ 0x5DEECE66DULL};
+    for (long c = 0; c < cases / 4 && f.failed < 5; c++)
+        motion_fuzz_one(&f, &er, c, true);
     if (f.failed == 0)
         expect("motion fuzz: the predictor names every change the evaluator makes", true, NULL);
-    printf("libflow motion fuzz: %ld cases and %zu regressions (%ld with two animations), %ld changes, "
-           "%ld standing still\n", cases, sizeof(kFuzzRegressions) / sizeof(kFuzzRegressions[0]), f.pairs,
-           f.changes, f.still);
+    printf("libflow motion fuzz: %ld cases, %ld at the domain's edge, and %zu regressions (%ld with "
+           "two animations), %ld changes, %ld standing still\n", cases, cases / 4,
+           sizeof(kFuzzRegressions) / sizeof(kFuzzRegressions[0]), f.pairs, f.changes, f.still);
     os64_html_document_free(doc);
 }
 
@@ -2588,34 +2680,50 @@ static void motion_dropped_cases(void)
     free(html);
 }
 
-// A time past a double in milliseconds is held to the longest one, never
-// an infinity: a 1e308s iteration begun -5e307s ago is over — its delay
-// and its duration both the longest — as Chrome's, held to a float's
-// seconds, is over too. Its fill is none, so the value is the base's, and
-// nothing is due.
+// A time past the domain is held at its limit (values.h): a 1e308s
+// iteration begun -5e307s ago is over — its delay and its duration both
+// held at 1e12 ms — as Chrome's, held to a float's seconds, is over too.
+// Its fill is none, so the value is the base's, and nothing is due.
 static void motion_held_time_cases(void)
 {
     Moving m;
     moving_open(&m, MOTION_STYLE "@keyframes k{from{opacity:0}to{opacity:1}}"
                 "</style><div id=x style='animation:k 1e308s linear -5e307s paused'>x</div>", 1000);
     const flow_style_t *s = moving_style(&m, "x");
-    bool held = s != NULL && s->animations.nduration == 1 && s->animations.duration[0] == DBL_MAX &&
-                s->animations.ndelay == 1 && s->animations.delay[0] == -DBL_MAX;
-    expect("motion: 1e308s is the longest time a double holds, not an infinity", held, NULL);
+    bool held = s != NULL && s->animations.nduration == 1 &&
+                s->animations.duration[0] == GARB_TIME_MS_MAX && s->animations.ndelay == 1 &&
+                s->animations.delay[0] == -GARB_TIME_MS_MAX;
+    expect("motion: a time past the domain is held at its limit", held, NULL);
+    // A count past the domain is held at its limit, finite, never read as
+    // `infinite`: 1e308 iterations of 1e-12 ms are held to 1e15, a second
+    // in all, so 1.5 s in it is over where an infinite one still runs.
+    {
+        Moving c;
+        moving_open(&c, MOTION_STYLE "@keyframes h{from{opacity:0}to{opacity:.5}}</style>"
+                    "<div id=n style='animation:h 1e-15s linear 1e308 -1.5s paused'>x</div>"
+                    "<div id=f style='animation:h 1e-15s linear infinite -1.5s paused'>x</div>",
+                    1000);
+        const flow_style_t *n = moving_style(&c, "n"), *f = moving_style(&c, "f");
+        expect("motion: a count past the domain is held at its limit, and ends",
+               n != NULL && n->animations.niterations == 1 &&
+                   n->animations.iterations[0] == GARB_ITERATIONS_MAX && n->opacity == 1000 &&
+                   f != NULL && f->opacity < 1000,
+               NULL);
+        moving_close(&c);
+    }
     char detail[64];
     snprintf(detail, sizeof(detail), "opacity %d", s != NULL ? (int)s->opacity : -1);
-    expect("motion: an iteration held at the longest time is over", s != NULL && s->opacity == 1000, detail);
-    expect("motion due: an animation held at the longest time is due for nothing",
+    expect("motion: an iteration held at the domain's longest time is over",
+           s != NULL && s->opacity == 1000, detail);
+    expect("motion due: an animation held at the domain's longest time is due for nothing",
            flow_motion_due(m.tree, (os64_gui_rect_t){0, 0, 800, 600}, (flow_point_t){0, 0}) == FLOW_NEVER,
            NULL);
     moving_close(&m);
 }
 
-// A crossing in an interval so long that the clock's rounding puts the
-// flip a long way either side of the time worked back to it: the schedule
-// wakes at the start of that window, and a layout inside it finds a time
-// due no later than the crossing and not behind it — and on two days'
-// animation, the window is within the millisecond of the flip.
+// A crossing on two days' animation, and on the domain's longest (values.h),
+// wakes within the millisecond of the flip: a double resolves the time to
+// a tenth of a microsecond there.
 static void motion_long_crossing_cases(void)
 {
     os64_html_document_t *doc = parse("<!doctype html><p id=x>x</p>");
@@ -2631,7 +2739,7 @@ static void motion_long_crossing_cases(void)
         frames[k].style.text_align = k ? FLOW_ALIGN_RIGHT : FLOW_ALIGN_LEFT;
         f_props_add(&frames[k].sets, GARB_TEXT_ALIGN);
     }
-    static const double kDur[2] = {1e8, 1e18};
+    static const double kDur[2] = {1e8, GARB_TIME_MS_MAX};
     for (int d = 0; d < 2; d++) {
         FAnimation an;
         memset(&an, 0, sizeof(an));
@@ -2648,22 +2756,19 @@ static void motion_long_crossing_cases(void)
         m.nanims = 1;
         bool ok;
         flow_timeline_t *tl = motion_meet(doc, x, &m, 0, &ok);
-        double half = kDur[d] / 2, wake = f_motion_next(&m, 0), late = f_motion_next(&m, half - 100);
+        double half = kDur[d] / 2, wake = f_motion_next(&m, 0);
         char detail[96];
-        snprintf(detail, sizeof(detail), "wake %.17g late %.17g half %.17g", wake, late, half);
-        if (d == 0)
-            expect("motion: two days' crossing wakes within its millisecond",
-                   ok && wake <= half && wake >= half - 1, detail);
-        else
-            expect("motion: a layout inside a crossing's window finds it due",
-                   ok && wake < half - 100 && late >= half - 100 && late <= half, detail);
+        snprintf(detail, sizeof(detail), "wake %.17g half %.17g", wake, half);
+        expect(d == 0 ? "motion: two days' crossing wakes within its millisecond"
+                      : "motion: the domain's longest crossing wakes within its millisecond",
+               ok && wake <= half && wake >= half - 1, detail);
         flow_timeline_free(tl);
     }
 
     // A curve whose slope's roots lie far apart in size: cubic-bezier(1/3,
-    // 1, 2/3, -1e18) rises, turns at 5e-19 and is back below 0 by 1e-18.
-    // Hidden to visible over 1e22 ms, it shows at once and is hidden again
-    // at 10000 ms — which is due there, the turn kept though a root that
+    // 1, 2/3, -1e6) rises, turns at 5e-7 and is back below 0 by 1e-6.
+    // Hidden to visible over 1e12 ms, it shows at once and is hidden again
+    // at 999999 ms — which is due there, the turn kept though a root that
     // much larger stands beside it, and the crossing found to the last bit.
     FKeyframe vf[2];
     memset(vf, 0, sizeof(vf));
@@ -2676,9 +2781,10 @@ static void motion_long_crossing_cases(void)
     FAnimation va;
     memset(&va, 0, sizeof(va));
     va.timing.name = (flow_name_t){"v", 1};
-    va.timing.duration_ms = 1e22;
+    va.timing.duration_ms = GARB_TIME_MS_MAX;
     va.timing.iterations = 1;
-    va.timing.easing = (flow_easing_t){FLOW_EASE_CUBIC, {1.0 / 3, 1, 2.0 / 3, -1e18}, 0, 0, false};
+    va.timing.easing =
+        (flow_easing_t){FLOW_EASE_CUBIC, {1.0 / 3, 1, 2.0 / 3, -GARB_EASING_Y_MAX}, 0, 0, false};
     va.frames = vf;
     va.nframes = 2;
     f_props_add(&va.props, GARB_VISIBILITY);
@@ -2695,59 +2801,8 @@ static void motion_long_crossing_cases(void)
     char vdetail[64];
     snprintf(vdetail, sizeof(vdetail), "visible %d, due %.17g", shown.visibility == FLOW_VISIBLE, back);
     expect("motion: a turn beside a far larger root is kept, and the return due",
-           vok && shown.visibility == FLOW_VISIBLE && back >= 9990 && back <= 10001, vdetail);
+           vok && shown.visibility == FLOW_VISIBLE && back >= 999990 && back <= 1000001, vdetail);
     flow_timeline_free(vt);
-
-    // A crossing by an end, run back from it: cubic-bezier(0.98, -1e308,
-    // 0.027, 0.25) crosses one half at t = 1 - 4e-155, an x a double
-    // rounds to 1, and the value — its parameter the least whose x reaches
-    // the progress — keeps the end's reading down to the x of the last
-    // parameter below 1. Over 1e20 ms, reversed, the clock carries the
-    // progress there some 28000 ms in, a last bit of 1 being 11000 ms: the
-    // schedule is due no later than the millisecond the value changes, not
-    // dropped behind as an x of 1.
-    FKeyframe af[2];
-    memset(af, 0, sizeof(af));
-    for (int k = 0; k < 2; k++) {
-        af[k].offset = k;
-        af[k].style = base;
-        af[k].style.text_align = k ? FLOW_ALIGN_RIGHT : FLOW_ALIGN_LEFT;
-        f_props_add(&af[k].sets, GARB_TEXT_ALIGN);
-    }
-    FAnimation aa;
-    memset(&aa, 0, sizeof(aa));
-    aa.timing.name = (flow_name_t){"a", 1};
-    aa.timing.duration_ms = 1e20;
-    aa.timing.iterations = 1;
-    aa.timing.direction = FLOW_DIRECTION_REVERSE;
-    aa.timing.easing = (flow_easing_t){FLOW_EASE_CUBIC, {0.98, -1e308, 0.027, 0.25}, 0, 0, false};
-    aa.frames = af;
-    aa.nframes = 2;
-    f_props_add(&aa.props, GARB_TEXT_ALIGN);
-    FMotion am;
-    memset(&am, 0, sizeof(am));
-    am.base = base;
-    am.anims = &aa;
-    am.nanims = 1;
-    bool aok;
-    flow_timeline_t *at = motion_meet(doc, x, &am, 0, &aok);
-    double adue = f_motion_next(&am, 10000);
-    flow_style_t before = am.base;
-    (void)f_motion_style(&am, 10000, &before, NULL, NULL, NULL, false);
-    double changes = 0;
-    for (double t = 10001; t <= 100000 && changes == 0; t++) {
-        flow_style_t v = am.base;
-        (void)f_motion_style(&am, t, &v, NULL, NULL, NULL, false);
-        if (v.text_align != before.text_align)
-            changes = t;
-    }
-    char adetail[96];
-    snprintf(adetail, sizeof(adetail), "due %.17g, the value changes at %.17g", adue, changes);
-    expect("motion: a crossing an x rounds to the end it runs back from is due before it flips",
-           aok && before.text_align == FLOW_ALIGN_RIGHT && changes > 10000 && adue > 10000 &&
-               adue <= changes,
-           adetail);
-    flow_timeline_free(at);
     os64_html_document_free(doc);
 }
 

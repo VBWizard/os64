@@ -942,10 +942,21 @@ IN: animation-duration: 1px
 OUT: invalid
 IN: animation-delay: -0.5s, 2S
 OUT: animation-delay: -0.5s, 2s
+# A time past the domain is held at its limit, 1e12 ms, in its own unit
+# (values.h): never refused, which would change which declaration wins.
+IN: animation-duration: 1e9s, 1e12ms, 1.0000001e9s, 1e300ms
+OUT: animation-duration: 1000000000s, 1000000000000ms, 1000000000s, 1000000000000ms
+IN: animation-delay: -1e300s, 1.0000001e12ms, -1e12ms
+OUT: animation-delay: -1000000000s, 1000000000000ms, -1000000000000ms
+IN: animation: k 1e308s -5e307s
+OUT: animation-name: "k"; animation-duration: 1000000000s; animation-timing-function: ease; animation-iteration-count: 1; animation-direction: normal; animation-play-state: running; animation-delay: -1000000000s; animation-fill-mode: none
 IN: animation-timing-function: ease-in-out, cubic-bezier(0.2, 0.86, 0.32, 1.22), steps(4, jump-start), steps(2), step-end
 OUT: animation-timing-function: ease-in-out, cubic-bezier(0.2, 0.86, 0.32, 1.22), steps(4, jump-start), steps(2), step-end
 IN: animation-timing-function: cubic-bezier(0, -2, 1, 3)
 OUT: animation-timing-function: cubic-bezier(0, -2, 1, 3)
+# A y control past the domain is held at its limit, 1e6 (values.h).
+IN: animation-timing-function: cubic-bezier(0, 1e6, 1, -1e6), cubic-bezier(0.5, 1000000.1, 0.5, -1e308)
+OUT: animation-timing-function: cubic-bezier(0, 1000000, 1, -1000000), cubic-bezier(0.5, 1000000, 0.5, -1000000)
 IN: animation-timing-function: cubic-bezier(1.1, 0, 0, 1)
 OUT: invalid
 IN: animation-timing-function: cubic-bezier(0, 0, -0.1, 1)
@@ -968,6 +979,12 @@ IN: animation-timing-function: linear(0, 1)
 OUT: invalid
 IN: animation-iteration-count: infinite, 2.5, 0
 OUT: animation-iteration-count: infinite, 2.5, 0
+# A count past the domain is held at its limit, 1e15 (values.h): finite
+# still, never read as infinite.
+IN: animation-iteration-count: 1e308, 999999999999999
+OUT: animation-iteration-count: 1.0000000000000000e15, 999999999999999
+IN: animation: k 1s 1e300
+OUT: animation-name: "k"; animation-duration: 1s; animation-timing-function: ease; animation-iteration-count: 1.0000000000000000e15; animation-direction: normal; animation-play-state: running; animation-delay: 0s; animation-fill-mode: none
 IN: animation-iteration-count: -1
 OUT: invalid
 IN: animation-direction: alternate-reverse, normal

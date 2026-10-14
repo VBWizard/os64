@@ -280,21 +280,15 @@ mutants = [
      '    for (int32_t i = 0; i < s->ntransform; i++)\n        mat_fn(m, &s->transform[i], w, h);',
      '    for (int32_t i = 0; i < s->ntransform; i++) {\n        mat_fn(m, &s->transform[i], w, h);\n'
      '        for (int k = 0; k < 16; k++)\n'
-     '            m[k] = wide_norm((double)(m[k].u * power_of_two((int)m[k].e)), 0);\n    }'),
-    ('the-list-is-composed-in-long-double', FLOW,
-     '    return (Wide){u < 0 ? -a : a, e};',
-     '    return (Wide){(u < 0 ? -a : a) * power_of_two((int)e), 0};'),
+     '            m[k] = (double)m[k];\n    }'),
     ('a-huge-composite-is-not-divided-down', FLOW,
-     '    int64_t shift = most > 1000 || (most != INT64_MIN && most < -1000) ? most : 0;',
-     '    int64_t shift = 0 * most;'),
+     '    if (big >= 0x1p+1001L || (big != 0 && big < 0x1p-1000L)) {',
+     '    if (false) {'),
     ('the-inverse-moves-from-rounded-rows', FLOW,
      '                        determinant(m[2], m[3], m[4], m[5]) / det,\n'
      '                        determinant(m[1], m[0], m[5], m[4]) / det};',
      '                        0, 0};\n    r[4] = -(r[0] * m[4] + r[2] * m[5]);\n'
      '    r[5] = -(r[1] * m[4] + r[3] * m[5]);'),
-    ('quarters-divide-before-reducing', MOTION,
-     '    double q = fmod(n, 4 * per) / per;',
-     '    double q = fmod(n / per, 4);'),
     ('a-huge-angle-is-scaled-first', MOTION,
      '    default: return fmod(v, 360) * kPi / 180;',
      '    default: return v * kPi / 180;'),

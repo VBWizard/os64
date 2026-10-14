@@ -187,8 +187,9 @@ static bool calc_settled(const garb_calc_t *k, double *v, bool *number)
     case GARB_CALC_LEAF:
         if (k->leaf.kind != GARB_V_NUMBER && k->leaf.kind != GARB_V_PERCENTAGE)
             return false;
-        *v = k->leaf.number;
         *number = k->leaf.kind == GARB_V_NUMBER;
+        *v = garb_hold(k->leaf.number, *number ? GARB_TRANSFORM_NUMBER_MAX
+                                               : GARB_TRANSFORM_NUMBER_MAX * 100);
         return true;
     case GARB_CALC_SUM:
         *v = 0;
@@ -237,18 +238,19 @@ static bool calc_settled(const garb_calc_t *k, double *v, bool *number)
     return false;
 }
 
-// A matrix3d() argument as written: a number, or a calc() of numbers as
-// it comes to, so that what the matrix does is known before anything is
-// laid out.
+// A matrix3d() argument as libflow reads it: a number, or a calc() of
+// numbers as it comes to, held to the domain (values.h), so that what the
+// matrix does is known before anything is laid out.
 static bool settled(const garb_val_t *v, double *out)
 {
     bool number;
-    if (v->kind == GARB_V_NUMBER) {
+    if (v->kind == GARB_V_NUMBER)
         *out = v->number;
-        return true;
-    }
-    return v->kind == GARB_V_CALC && v->calc != NULL && calc_settled(v->calc, out, &number) &&
-           number;
+    else if (!(v->kind == GARB_V_CALC && v->calc != NULL && calc_settled(v->calc, out, &number) &&
+               number))
+        return false;
+    *out = garb_hold(*out, GARB_TRANSFORM_NUMBER_MAX);
+    return true;
 }
 
 // Whether a transform function is drawn FLAT (PILE3.md § Transforms, the
@@ -271,62 +273,20 @@ static bool drawn_flat(const garb_val_t *f)
            settled(&a[15], &m15) && m3 == 0 && m7 == 0 && m11 == 0 && m15 > 0;
 }
 
-// Whether every number `v` is written with is finite: one past a double
-// (1e400) is read as infinite, and no matrix is made from it.
-// Whether every leaf of a calc() is finite.
-static bool finite_calc(const garb_calc_t *k)
-{
-    if (k->op == GARB_CALC_LEAF)
-        return __builtin_isfinite(k->leaf.number);
-    for (int32_t i = 0; i < k->nargs; i++)
-        if (!finite_calc(k->args[i]))
-            return false;
-    return true;
-}
-
-// An individual property keeps its numbers as items under a value of
-// their kind, so the items are walked whatever the kind; a calc()'s are
-// its leaves, and what it comes to when it settles here — calc(1e300 *
-// 1e300) has finite leaves and no finite value.
-static bool finite_numbers(const garb_val_t *v)
-{
-    double settled_to;
-    bool number;
-    if (v->kind == GARB_V_CALC && v->calc != NULL &&
-        (!finite_calc(v->calc) ||
-         (calc_settled(v->calc, &settled_to, &number) && !__builtin_isfinite(settled_to))))
-        return false;
-    switch (v->kind) {
-    case GARB_V_NUMBER: case GARB_V_LENGTH: case GARB_V_PERCENTAGE: case GARB_V_ANGLE:
-        if (!__builtin_isfinite(v->number))
-            return false;
-        break;
-    default:
-        break;
-    }
-    for (int32_t i = 0; i < v->nitems; i++)
-        if (!finite_numbers(&v->items[i]))
-            return false;
-    return true;
-}
-
 // What of a transform value is drawn as something other than it says, by
-// the name of the function or property: one that is not drawn flat, or is
-// written with a number past a double, which is drawn upright where it
-// moves the box's origin. The individual properties are always flat. Each
-// function is judged by its own numbers: finite ones that compose, or
-// scale to device units, past what the face draws are not named here (the
+// the name of the function: one that is not drawn flat. A number past the
+// domain is held at its limit (values.h), which is how the page's value is
+// read, and Chrome's @supports says yes to it too. The individual
+// properties are always flat.
+// Each function is judged by its own numbers: ones that compose, or scale
+// to device units, past what the face draws are not named here (the
 // numeric contract, PILE3.md § Transforms, the painter, Booked).
 static const char *transform_approximated(garb_prop_t prop, const garb_val_t *v)
 {
-    if (v->kind == GARB_V_KEYWORD)
+    if (v->kind == GARB_V_KEYWORD || prop != GARB_TRANSFORM)
         return NULL;
-    if (prop != GARB_TRANSFORM)
-        return finite_numbers(v) ? NULL : prop == GARB_ROTATE ? "rotate"
-                                       : prop == GARB_SCALE  ? "scale"
-                                                             : "translate";
     for (int32_t i = 0; i < v->nitems; i++)
-        if (!drawn_flat(&v->items[i]) || !finite_numbers(&v->items[i]))
+        if (!drawn_flat(&v->items[i]))
             return v->items[i].keyword;
     return NULL;
 }
@@ -2547,7 +2507,8 @@ static bool lone_number(VCur *c, garb_val_t *out)
 }
 
 // <easing-function> (Easing 1 § 2): a keyword; cubic-bezier(x1, y1, x2,
-// y2) with each x in [0, 1]; or steps(<integer>, <position>?), whose count
+// y2) with each x in [0, 1], each y held to the domain (values.h); or
+// steps(<integer>, <position>?), whose count
 // is at least 1, and at least 2 with jump-none, which takes no step at
 // either end. Easing 2's linear() is not read (PILE3.md § Animations,
 // Booked).
@@ -2569,6 +2530,8 @@ static bool easing(Sets *s, VCur *c, garb_val_t *out)
                 return false;
         if (!(a[0].number >= 0 && a[0].number <= 1 && a[2].number >= 0 && a[2].number <= 1))
             return false;
+        a[1].number = garb_hold(a[1].number, GARB_EASING_Y_MAX);
+        a[3].number = garb_hold(a[3].number, GARB_EASING_Y_MAX);
         *out = fn_val(s, "cubic-bezier", a, 4);
     } else if (is_fn(t, "steps")) {
         int32_t n = fn_args(t, args, 2);
@@ -2605,6 +2568,7 @@ static bool iterations(Sets *s, VCur *c, garb_val_t *out)
     VCur look = *c;
     if (!vc_dim(&look, ACCEPT_NUMBER, false, false, &s->a, out) || out->kind != GARB_V_NUMBER)
         return false;
+    out->number = garb_hold(out->number, GARB_ITERATIONS_MAX);  // the domain (values.h)
     *c = look;
     return true;
 }

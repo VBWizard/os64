@@ -184,7 +184,9 @@ bool vc_time(VCur *c, bool negative, garb_val_t *out)
         out->unit = GARB_U_MS;
     else
         return false;
-    out->number = t->number;
+    // Held to the domain in its own unit (values.h).
+    out->number = garb_hold(t->number, out->unit == GARB_U_S ? GARB_TIME_MS_MAX / 1000
+                                                             : GARB_TIME_MS_MAX);
     c->i++;
     return true;
 }

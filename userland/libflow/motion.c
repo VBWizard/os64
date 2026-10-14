@@ -50,24 +50,15 @@ static double bezier(double p1, double p2, double t)
     return ((a * t + b) * t + c) * t;
 }
 
-// A value held to a double's range. An easing's y1 and y2 may be anything
-// a double holds, and its output whatever they make: worked in long double
-// and held here, the arithmetic after it never meets infinity, nor
-// infinity less infinity, which is no number at all.
-static double held(long double v)
-{
-    return v > DBL_MAX ? DBL_MAX : v < -DBL_MAX ? -DBL_MAX : (double)v;
-}
-
-// The curve's y at t, in long double and held, since 3 y1 alone can
-// overflow a double — and in Bernstein form, each control weighted by its
-// own polynomial: the power form's coefficients cancel each other at the
-// extremes (3e308 less 3e308 is 0, and the 1 that ends the curve lost
-// beside them), where these weights are 0 at t = 0 and 1 at t = 1 exactly.
+// The curve's y at t, in Bernstein form, each control weighted by its own
+// polynomial: the power form's coefficients are millions when the controls
+// are, and their rounding moves the curve's ends off 0 and 1, where these
+// weights are 0 at t = 0 and 1 at t = 1 exactly. The controls are held to
+// the domain (values.h), so no product leaves a double.
 static double bezier_y(double p1, double p2, double t)
 {
-    long double u = 1 - (long double)t, v = t;
-    return held(3 * u * u * v * p1 + 3 * u * v * v * p2 + v * v * v);
+    double u = 1 - t, v = t;
+    return 3 * u * u * v * p1 + 3 * u * v * v * p2 + v * v * v;
 }
 
 // The curve's y at the parameter whose x is `x`: the least t with x(t) at
@@ -103,20 +94,21 @@ double f_ease(const flow_easing_t *e, double x, bool before)
         return x;
     if (e->kind == FLOW_EASE_CUBIC) {
         const double *p = e->p;
-        // Outside [0, 1], the tangent at the nearer end (§ 2.2.1), held
-        // as the curve is.
+        // Outside [0, 1], the tangent at the nearer end (§ 2.2.1). A CSS
+        // animation never asks there: its x is a fraction of the interval
+        // it is in (eased()).
         if (x < 0) {
             if (p[0] > 0)
-                return held((long double)p[1] / p[0] * x);
+                return p[1] / p[0] * x;
             if (p[2] > 0)
-                return held((long double)p[3] / p[2] * x);
+                return p[3] / p[2] * x;
             return 0;
         }
         if (x > 1) {
             if (p[2] < 1)
-                return held(1 + ((long double)p[3] - 1) / (p[2] - 1) * (x - 1));
+                return 1 + (p[3] - 1) / (p[2] - 1) * (x - 1);
             if (p[0] < 1)
-                return held(1 + ((long double)p[1] - 1) / (p[0] - 1) * (x - 1));
+                return 1 + (p[1] - 1) / (p[0] - 1) * (x - 1);
             return 1;
         }
         return cubic(p, x);
@@ -491,37 +483,48 @@ static bool is_2d(const double m[16])
 // scale. Where a 2D matrix holds no shear this is Transforms 1 § 11.2's
 // answer (scaleX(-1) against rotate(90deg)); where it does, it is not
 // (PILE3.md § Animations, What Chrome draws).
+//
+// A matrix a page writes, held to the domain (values.h), never takes its
+// decomposition past a double's largest, as Chrome's does not; a list of
+// them multiplied out may. The domain bounds only how large a number is,
+// so tiny entries may make a determinant a double rounds to 0. A matrix
+// whose determinant is 0 so, or whose parts a double cannot hold (a 3D
+// one's perspective, undone through its inverse, among them), makes no
+// decomposition, and the pair is discrete, each end exactly itself
+// (Transforms 2 § 13's fallback). Chrome's go discrete so too: past its
+// float range, and where its determinant rounds to 0.
 typedef struct {
     double persp[4], tr[3], sc[3], sk[3], q[4];
 } D3;
 
-// Whether a double holds `v`.
-static bool fits(long double v)
+// A 2-vector's length, taken by its own largest part: the squares worked
+// on parts no greater than 1, so neither a part past sqrt(DBL_MAX)
+// overflows them nor a tiny one is lost to its own square.
+static double len2(double x, double y)
 {
-    return v <= DBL_MAX && v >= -DBL_MAX;
-}
-
-// A 2-vector's length in long double, taken by its own largest part: the
-// squares worked on parts no greater than 1, so neither a part past
-// sqrt(DBL_MAX) overflows them nor a tiny one is lost to its own square.
-static long double len2(long double x, long double y)
-{
-    long double ax = x < 0 ? -x : x, ay = y < 0 ? -y : y, k = ax > ay ? ax : ay;
+    double k = fmax(fabs(x), fabs(y));
     if (k == 0)
         return 0;
-    double a = (double)(x / k), b = (double)(y / k);
-    return k * (long double)sqrt(a * a + b * b);
+    double a = x / k, b = y / k;
+    return k * sqrt(a * a + b * b);
 }
 
 static bool decompose_2d(const double m[16], D3 *d)
 {
-    // Worked in long double, each row's length taken by its own largest
-    // part — never the whole 2x2 divided by its largest entry, which loses
-    // a small axis beside a large one: matrix(1e200, 0, 0, 1e200, 0, 0)
-    // squares nothing past a double, and matrix(1e308, 0, 0, 1e-308, 0, 0)
-    // keeps its determinant of 1.
-    long double m11 = m[0], m12 = m[1], m21 = m[4], m22 = m[5];
-    long double det = m11 * m22 - m12 * m21;
+    // Each row's length taken by its own largest part — never the whole
+    // 2x2 divided by its largest entry, which loses a small axis beside a
+    // large one: matrix(1e15, 0, 0, 1e-15, 0, 0) keeps its scales.
+    double m11 = m[0], m12 = m[1], m21 = m[4], m22 = m[5];
+    // The determinant as a double works it, Chrome's test: tiny entries'
+    // rounds to 0. Where it passes a double — an infinity, or infinity less
+    // infinity, which is no number to compare — each row divided by its own
+    // length reads its zero and its sign, a determinant over both lengths a
+    // double holds (a row of zeros made the first one 0 already).
+    double det = m11 * m22 - m12 * m21;
+    if (!isfinite(det)) {
+        double r0 = len2(m11, m12), r1 = len2(m21, m22);
+        det = m11 / r0 * (m22 / r1) - m12 / r0 * (m21 / r1);
+    }
     if (det == 0)
         return false;           // cannot be undone: the pair is discrete
     os64_memset(d, 0, sizeof(*d));
@@ -530,47 +533,47 @@ static bool decompose_2d(const double m[16], D3 *d)
     d->tr[1] = m[13];
     d->sc[2] = 1;
     // A flip, on the axis whose diagonal is the smaller.
-    long double s0 = len2(m11, m12), s1;
-    if (det < 0 && m11 < m22)
+    double s0 = len2(m11, m12), s1;
+    bool flip = det < 0;
+    if (flip && m11 < m22)
         s0 = -s0;
     m11 /= s0;
     m12 /= s0;
-    long double shear = m11 * m21 + m12 * m22;
+    double shear = m11 * m21 + m12 * m22;
     m21 -= m11 * shear;
     m22 -= m12 * shear;
     s1 = len2(m21, m22);
-    if (det < 0 && !(m[0] < m[5]))
+    if (flip && !(m[0] < m[5]))
         s1 = -s1;
     // A part a double cannot hold — a row's length past DBL_MAX though each
     // of its entries is not — makes no decomposition: held, it would
-    // compose another matrix even at the mix's ends, where refused the
-    // pair is discrete and each end itself.
-    long double sk = shear / s1;
-    if (!fits(s0) || !fits(s1) || !fits(sk))
+    // compose another matrix even at the mix's ends.
+    double sk = shear / s1;
+    if (!isfinite(s0) || !isfinite(s1) || !isfinite(sk))
         return false;
-    d->sc[0] = (double)s0;
-    d->sc[1] = (double)s1;
-    d->sk[0] = (double)sk;
-    double angle = atan2((double)m12, (double)m11);
+    d->sc[0] = s0;
+    d->sc[1] = s1;
+    d->sk[0] = sk;
+    double angle = atan2(m12, m11);
     d->q[2] = sin(0.5 * angle);
     d->q[3] = cos(0.5 * angle);
     return true;
 }
 
-// Determinants in long double, whose range holds any product of four
-// doubles: matrix3d(1e200, …)'s is 1e800, and a matrix of huge and tiny
-// entries together keeps its tiny product too — where a double, or a
-// matrix divided down by its largest entry, loses one or the other.
-static long double det3(long double a, long double b, long double c, long double d, long double e,
-                        long double f, long double g, long double h, long double i)
+// Determinants as written, never divided down by the largest entry, which
+// would lose the tiny product of a matrix holding huge and tiny entries
+// together; a matrix3d() held to the domain (values.h) has no determinant
+// past a double's largest.
+static double det3(double a, double b, double c, double d, double e, double f, double g,
+                   double h, double i)
 {
     return a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
 }
 
-static long double det4(const double m[16])
+static double det4(const double m[16])
 {
     // Along the first column (m[col * 4 + row]).
-    long double r = 0;
+    double r = 0;
     for (int k = 0; k < 4; k++) {
         double s[9];
         int n = 0;
@@ -578,7 +581,7 @@ static long double det4(const double m[16])
             for (int row = 0; row < 4; row++)
                 if (row != k)
                     s[n++] = m[col * 4 + row];
-        long double minor = det3(s[0], s[3], s[6], s[1], s[4], s[7], s[2], s[5], s[8]);
+        double minor = det3(s[0], s[3], s[6], s[1], s[4], s[7], s[2], s[5], s[8]);
         r += (k % 2 ? -1 : 1) * m[k] * minor;
     }
     return r;
@@ -586,8 +589,8 @@ static long double det4(const double m[16])
 
 static bool invert4(const double m[16], double out[16])
 {
-    long double d = det4(m);
-    if (d == 0)
+    double d = det4(m);
+    if (d == 0 || !isfinite(d))
         return false;
     for (int col = 0; col < 4; col++)
         for (int row = 0; row < 4; row++) {
@@ -598,25 +601,25 @@ static bool invert4(const double m[16], double out[16])
                 for (int r = 0; r < 4; r++)
                     if (c != row && r != col)
                         s[n++] = m[c * 4 + r];
-            long double minor = det3(s[0], s[3], s[6], s[1], s[4], s[7], s[2], s[5], s[8]);
-            long double q = ((row + col) % 2 ? -1 : 1) * minor / d;
+            double minor = det3(s[0], s[3], s[6], s[1], s[4], s[7], s[2], s[5], s[8]);
+            double q = ((row + col) % 2 ? -1 : 1) * minor / d;
             // An entry a double cannot hold makes no inverse, rather than
             // a held one that is the inverse of another matrix.
-            if (!fits(q))
+            if (!isfinite(q))
                 return false;
-            out[col * 4 + row] = (double)q;
+            out[col * 4 + row] = q;
         }
     return true;
 }
 
-// A vector made a unit, scaled by its largest part first so that neither
-// a part past sqrt(DBL_MAX) overflows the squares nor a tiny one
-// underflows them, its length never taken whole: false for a vector of no
-// length, or not finite.
+// A rotation's axis made a unit, scaled by its largest part first so that
+// a tiny one does not underflow the squares (its parts held to the domain,
+// values.h, a large one cannot overflow them): false for an axis of no
+// length.
 static bool unit3(double x, double y, double z, double u[3])
 {
     double k = fmax(fabs(x), fmax(fabs(y), fabs(z)));
-    if (!(k > 0) || !isfinite(k))
+    if (!(k > 0))
         return false;
     x /= k;
     y /= k;
@@ -664,7 +667,26 @@ static bool decompose_3d(const double in[16], D3 *d)
     os64_memcpy(pm, m, sizeof(pm));
     pm[3] = pm[7] = pm[11] = 0;
     pm[15] = 1;
-    if (det4(pm) == 0)
+    // Its determinant as decompose_2d reads it: where a double cannot hold
+    // it, each column divided by its own largest part, a determinant over
+    // their product that is zero exactly when the first is. A column of
+    // zeros is singular, and one holding an infinity is a part a double
+    // cannot hold.
+    double dp = det4(pm);
+    if (!isfinite(dp)) {
+        double u[16];
+        for (int c = 0; c < 4; c++) {
+            double k = 0;
+            for (int r = 0; r < 4; r++)
+                k = fmax(k, fabs(pm[c * 4 + r]));
+            if (!(k > 0) || !isfinite(k))
+                return false;
+            for (int r = 0; r < 4; r++)
+                u[c * 4 + r] = pm[c * 4 + r] / k;
+        }
+        dp = det4(u);
+    }
+    if (dp == 0)
         return false;
     if (m[3] != 0 || m[7] != 0 || m[11] != 0) {
         double rhs[4] = {m[3], m[7], m[11], m[15]}, inv[16];
@@ -804,6 +826,11 @@ static double lerp(double a, double b, double t);
 bool f_matrix_mix(const double a[16], const double b[16], double t, double out[16])
 {
     D3 da, db, r;
+    // A matrix holding an entry no double holds — a tail multiplied out
+    // past one (f_tail_matrix) — makes no decomposition.
+    for (int i = 0; i < 16; i++)
+        if (!isfinite(a[i]) || !isfinite(b[i]))
+            return false;
     if (!(is_2d(a) ? decompose_2d(a, &da) : decompose_3d(a, &da)) ||
         !(is_2d(b) ? decompose_2d(b, &db) : decompose_3d(b, &db)))
         return false;
@@ -828,9 +855,9 @@ bool f_matrix_mix(const double a[16], const double b[16], double t, double out[1
 // ── A transform function's matrix ───────────────────────────────────────
 
 // An angle in radians, reduced by whole turns in its own unit first (fmod
-// is exact): rotate(1e308deg) times pi would be past a double, and a turn
-// more or less is the same turn. Radians stay as written; cos and sin
-// reduce them themselves.
+// is exact), since a turn more or less is the same turn: rotate(1e15deg)
+// is 280deg, where taken to radians first it rounds by a twentieth of a
+// degree. Radians stay as written; cos and sin reduce them themselves.
 static double radians(double v, flow_angle_unit_t unit)
 {
     switch (unit) {
@@ -849,13 +876,14 @@ static int quarters(double n, flow_angle_unit_t unit)
 {
     double per = unit == FLOW_ANGLE_GRAD ? 100 : unit == FLOW_ANGLE_TURN ? 0.25
                  : unit == FLOW_ANGLE_RAD ? 0 : 90;
-    if (!isfinite(n) || (per == 0 ? n != 0 : fmod(n, per) != 0))
+    if (per == 0 ? n != 0 : fmod(n, per) != 0)
         return -1;
     if (per == 0)
         return 0;
-    // Reduced by a whole turn before it is divided, so a huge angle
-    // (1e308turn) never overflows on the way to its quarter.
-    double q = fmod(n, 4 * per) / per;
+    // A whole number of quarters divides to the whole number it is,
+    // exactly; held to the domain (values.h), a turn's four to the turn
+    // cannot overflow on the way.
+    double q = fmod(n / per, 4);
     return (int)(q < 0 ? q + 4 : q);
 }
 
@@ -939,13 +967,15 @@ typedef enum { MIX_CONTINUOUS, MIX_DISCRETE } MixKind;
 
 // a + (b - a) t, as Chromium blends: at t = 0 exactly a, at t = 1 exactly
 // b, and a value mixed with itself exactly itself at any t — which
-// (1 - t) a + t b is not when t is huge and the two products cancel. In
-// long double and held, as the easing that hands it `t` is.
+// (1 - t) a + t b is not when t is huge and the two products cancel. A
+// value and an easing held to the domain (values.h) mix to a double; the
+// parts of a decomposed list of matrices may not, and f_matrix_mix turns
+// that mix away.
 static double lerp(double a, double b, double t)
 {
     if (t == 1)
         return b;
-    return held(a + ((long double)b - a) * t);
+    return a + (b - a) * t;
 }
 
 // Rounded half away from zero, held to an int32_t.
@@ -1013,12 +1043,14 @@ static bool mix_nonneg(flow_length_t a, flow_length_t b, double t, flow_length_t
 }
 
 // A colour (0xTTRRGGBB), premultiplied by its alpha, each channel in
-// doubles, divided back and rounded half up once (Color 4 § 13.4).
+// doubles, divided back and rounded half up once (Color 4 § 13.4). The
+// alpha is mixed in its own 0..255, where an alpha of 0.2 is the 51 it is
+// stored as rather than a fifth no double holds.
 static uint32_t mix_colour(uint32_t a, uint32_t b, double t)
 {
-    double aa = flow_alpha(a) / 255.0, ab = flow_alpha(b) / 255.0;
-    double alpha = fmin(fmax(lerp(aa, ab, t), 0), 1);
-    uint8_t ta = (uint8_t)(255 - round_i32(alpha * 255));
+    double aa = flow_alpha(a), ab = flow_alpha(b);
+    double alpha = fmin(fmax(lerp(aa, ab, t), 0), 255);
+    uint8_t ta = (uint8_t)(255 - round_i32(alpha));
     if (ta == 255)
         return 0xFF000000u;
     uint32_t r = 0;
@@ -1215,9 +1247,9 @@ static double per_turn(flow_angle_unit_t unit)
     }
 }
 
-flow_angle_unit_t f_angle_coarser(flow_angle_unit_t a, flow_angle_unit_t b)
+flow_angle_unit_t f_angle_common(flow_angle_unit_t a, flow_angle_unit_t b)
 {
-    return per_turn(a) <= per_turn(b) ? a : b;
+    return a == b ? a : FLOW_ANGLE_DEG;
 }
 
 double f_angle_in_unit(double v, flow_angle_unit_t from, flow_angle_unit_t to)
@@ -1240,8 +1272,8 @@ static bool has_axis(const flow_transform_t *f)
 static bool same_axis(const flow_transform_t *a, const flow_transform_t *b, double axis[3])
 {
     double ua[3] = {a->a[0], a->a[1], a->a[2]}, ub[3] = {b->a[0], b->a[1], b->a[2]};
-    // Compared as unit vectors, no length ever taken (unit3): two axes
-    // past sqrt(DBL_MAX) are as different as their directions.
+    // Compared as unit vectors, no length ever taken (unit3): two axes of
+    // parts too small to square are as different as their directions.
     double na[3], nb[3];
     bool has_a = unit3(ua[0], ua[1], ua[2], na), has_b = unit3(ub[0], ub[1], ub[2], nb);
     if (a->a[3] == 0 && b->a[3] == 0) {
@@ -1295,7 +1327,7 @@ static flow_transform_t mix_fn(const flow_transform_t *a, const flow_transform_t
         double axis[3];
         (void)same_axis(a, b, axis);
         os64_memcpy(r.a, axis, sizeof(axis));
-        r.unit = f_angle_coarser(a->unit, b->unit);
+        r.unit = f_angle_common(a->unit, b->unit);
         double ta = has_axis(a) ? a->a[3] : 0, tb = has_axis(b) ? b->a[3] : 0;
         r.a[3] = lerp(f_angle_in_unit(ta, a->unit, r.unit), f_angle_in_unit(tb, b->unit, r.unit),
                       t);
@@ -1304,7 +1336,7 @@ static flow_transform_t mix_fn(const flow_transform_t *a, const flow_transform_t
     default: {
         // The skews: their angles, in one unit.
         int n = a->fn == FLOW_FN_SKEW ? 2 : 1;
-        r.unit = f_angle_coarser(a->unit, b->unit);
+        r.unit = f_angle_common(a->unit, b->unit);
         for (int i = 0; i < n; i++)
             r.a[i] = lerp(f_angle_in_unit(a->a[i], a->unit, r.unit),
                           f_angle_in_unit(b->a[i], b->unit, r.unit), t);
@@ -2248,9 +2280,7 @@ static bool past_level(double y, double level, bool strict)
 // the least t whose x reaches the input (cubic), so it reads as before a
 // crossing up to the x of the last parameter on that side, and after it
 // past that x — which is the one kept, not the x of the first parameter
-// beyond, which by an end is one a double rounds to the end
-// (cubic-bezier(0.98, -1e308, 0.027, 0.25) crosses one half at
-// t = 1 - 4e-155, and run backwards flips near x = 1 - 3e-16).
+// beyond.
 static int32_t ease_crossings(const flow_easing_t *e, double level, bool strict, double xs[3])
 {
     if (e == NULL || e->kind != FLOW_EASE_CUBIC) {
@@ -2259,30 +2289,25 @@ static int32_t ease_crossings(const flow_easing_t *e, double level, bool strict,
         xs[0] = level;
         return 1;
     }
-    // y's slope, qa t^2 + qb t + qc, worked in long double as bezier_y is
-    // (3 y1 alone can overflow a double) and divided by its largest
-    // coefficient, which moves no root and leaves the rest in [-1, 1].
+    // y's slope, qa t^2 + qb t + qc (the controls are held to the domain,
+    // values.h, so its coefficients and their squares are doubles).
     const double *p = e->p;
-    long double lc = 3.0L * p[1], lb = 3.0L * ((long double)p[3] - p[1]) - lc, la = 1 - lc - lb;
-    long double la3 = 3 * la, lb2 = 2 * lb;
-    long double big = la3 < 0 ? -la3 : la3, mb = lb2 < 0 ? -lb2 : lb2, mc = lc < 0 ? -lc : lc;
-    big = mb > big ? mb : big;
-    big = mc > big ? mc : big;
-    long double qa = la3 / big, qb = lb2 / big, qc = lc / big;
+    double qc = 3 * p[1], lb = 3 * (p[3] - p[1]) - qc, qa = 3 * (1 - qc - lb), qb = 2 * lb;
     double cut[4] = {0};
     int32_t nc = 1;
     // Its roots by the quadratic formula's stable form: qb and the
     // discriminant's root added at one sign, never one taken from the
     // other, give the larger root, and the roots' product the smaller — so
     // a root beside a far larger one is not lost to cancellation
-    // (cubic-bezier(1/3, 1, 2/3, -1e18) turns at 5e-19), and a vanishing
-    // qa leaves the one root a line has.
+    // (cubic-bezier(1/3, 1, 2/3, -1e6) turns at 5e-7, where the plain
+    // formula loses six of a double's digits), and a vanishing qa leaves
+    // the one root a line has.
     double roots[2];
     int32_t nr = 0;
-    long double disc = qb * qb - 4 * qa * qc;
+    double disc = qb * qb - 4 * qa * qc;
     if (disc >= 0) {
-        long double sq = sqrt((double)disc), q = -0.5L * (qb + (qb < 0 ? -sq : sq));
-        double r0 = qa != 0 ? (double)(q / qa) : NAN, r1 = q != 0 ? (double)(qc / q) : NAN;
+        double sq = sqrt(disc), q = -0.5 * (qb + (qb < 0 ? -sq : sq));
+        double r0 = qa != 0 ? q / qa : NAN, r1 = q != 0 ? qc / q : NAN;
         roots[nr++] = fmin(r0, r1);
         roots[nr++] = fmax(r0, r1);
     }
@@ -2298,8 +2323,8 @@ static int32_t ease_crossings(const flow_easing_t *e, double level, bool strict,
         if (past[i] == past[i + 1])
             continue;
         // Halved to the last bit, as the curve's own parameter is (cubic):
-        // a fixed count of halvings is a fixed size, and a crossing at
-        // 1e-18 beside a piece 0.7 long would land 4% wide of it.
+        // a fixed count of halvings is a fixed size, however near an end
+        // the crossing.
         double t0 = cut[i], t1 = cut[i + 1];
         for (int k = 0; k < 1100; k++) {
             double mid = t0 + (t1 - t0) / 2;

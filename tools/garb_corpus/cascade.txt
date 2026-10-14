@@ -148,6 +148,29 @@ p: margin-top: 1px; margin-right: 2px; margin-bottom: 3px; padding-bottom: 7px; 
 (end)
 END
 
+# Numbers past the domain in @supports: held at its limit (values.h), which
+# is how the page's value is read, so the answer is yes — Chrome 155's is
+# too. A calc()'s leaves are held before its arithmetic, so 1e400 less
+# 1e400 is 0, 1e400 over 1e400 is 1, and the matrix3d()s below are drawn
+# flat; held leaves whose product passes a double, less the same, are a
+# NaN, which is 0.
+VIEWPORT 800x600
+PAGE
+<!doctype html><style>
+@supports (transform: scale(1e400)) { p { margin-top: 1px } }
+@supports (transform: scale(calc(1e400 - 1e400))) { p { margin-right: 2px } }
+@supports (transform: translateX(1e400px)) { p { margin-bottom: 3px } }
+@supports (rotate: 1e400deg) { p { margin-left: 4px } }
+@supports (transform: matrix3d(1,0,0,0, 0,1,0,0, 0,0,1,calc(1e400 - 1e400), 0,0,0,1)) { p { padding-top: 5px } }
+@supports (transform: matrix3d(1,0,0,0, 0,1,0,0, 0,0,1,calc(1e15 * 1e15 * 1e15 * 1e15 * 1e15 * 1e15 * 1e15 * 1e15 * 1e15 * 1e15 * 1e15 * 1e15 * 1e15 * 1e15 * 1e15 * 1e15 * 1e15 * 1e15 * 1e15 * 1e15 * 1e15 - 1e15 * 1e15 * 1e15 * 1e15 * 1e15 * 1e15 * 1e15 * 1e15 * 1e15 * 1e15 * 1e15 * 1e15 * 1e15 * 1e15 * 1e15 * 1e15 * 1e15 * 1e15 * 1e15 * 1e15 * 1e15), 0,0,0,1)) { p { padding-right: 6px } }
+@supports (transform: matrix3d(1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,calc(1e400 / 1e400))) { p { padding-bottom: 7px } }
+</style>
+<p>x
+WANT
+p: margin-top: 1px; margin-right: 2px; margin-bottom: 3px; margin-left: 4px; padding-top: 5px; padding-right: 6px; padding-bottom: 7px
+(end)
+END
+
 # Floats in @supports: a float, `clear` and `flow-root` are laid out as they
 # say (FLOATS.md), so a page that asks is not handed its fallback.
 VIEWPORT 800x600

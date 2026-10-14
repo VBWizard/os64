@@ -1075,8 +1075,8 @@ its matrix not at all.
 | A box scaled up softens | its surface is painted at its own size and stretched; Chrome paints at the scale | a page whose scaled-up text matters |
 | A control in a drawn-through box is drawn turned but edited upright | a live widget is drawn on the glass, not through a matrix | a page with a turned form |
 | A group the face refuses (past its sheet limits, out of memory) is drawn upright but hit through its matrix; inside a group that was laid, it is cut by that group's sheet, sized for it turned, and an enclosing opacity group saves no backdrop where the upright drawing falls, so it is opaque there | libflow answers hits and bounds for the page as written; which groups a face refuses is decided at paint time, and only it knows | a page whose turned group passes the sheet limits and is clicked, or is cut |
-| Nested turned groups whose matrices only compose to something ordinary (`scale(1e308)` inside `scale(1e-308)`) are hit and measured where they are, but painted nowhere | each group's sheet is laid onto the one outside in whole pixels, and the inner one lands past what a pixel can say; drawing it would mean composing the matrices across groups, not a sheet per group | a page that nests reciprocal extremes |
-| THE NUMERIC CONTRACT: transforms are as accurate as a browser's and strictly safe. Numbers a page actually writes are composed, undone and drawn right; past that — a composite that, w divided out, is past a double (`scale(1e200) scale(1e200)`), a cancellation finer than a long double's 64 bits (`matrix(1+2^-52, 2^104, …)` lists), a translation past what 26.6 holds (`matrix(1,0,0,1,1e307,0)`), a z entry so large that dividing the matrix down leaves its w 0 (`scaleZ(1e308)` twice) — a box may be drawn upright, or not at all where its matrix comes out singular, though `@supports` said yes; and a page scrolled past half a 32-bit coordinate (about 1.07 billion px; Chrome's layout saturates near 33.5 million) may lose a turned group nothing clips, its absent clip being the plane only that far. Any input, however hostile, is never a crash, a hang or undefined behaviour | exactness past a browser's has no end: each widening of the arithmetic (#258 rounds 13 to 17) met an input just past it, and Chrome composes in doubles; libgarb judges each function's numbers, not their product | a look at the whole contract, booked by Chris (2026-10-12); a page that needs more |
+| Nested turned groups whose matrices only compose to something ordinary (`scale(1e15)` inside `scale(1e-15)`) are hit and measured where they are, but painted nowhere | each group's sheet is laid onto the one outside in whole pixels, and the inner one lands past what a pixel can say; drawing it would mean composing the matrices across groups, not a sheet per group | a page that nests reciprocal extremes |
+| THE NUMERIC CONTRACT: transforms are as accurate as a browser's and strictly safe. Numbers a page actually writes are composed, undone and drawn right; past that — a composite that, w divided out, is past a double (twenty-one `scale(1e15)`), a cancellation finer than a long double's 64 bits, a translation past what 26.6 holds (`matrix(1,0,0,1,1e15,0)`), a z entry so large that dividing the matrix down leaves its w 0 (`scaleZ(1e15)` sixty-four times) — a box may be drawn upright, or not at all where its matrix comes out singular, though `@supports` said yes; and a page scrolled past half a 32-bit coordinate (about 1.07 billion px; Chrome's layout saturates near 33.5 million) may lose a turned group nothing clips, its absent clip being the plane only that far. Any input, however hostile, is never a crash, a hang or undefined behaviour | exactness past a browser's has no end: each widening of the arithmetic (#258 rounds 13 to 17) met an input just past it, and Chrome composes in doubles; libgarb judges each function's numbers, not their product | a look at the whole contract, booked by Chris (2026-10-12); a page that needs more |
 | THE BOUNDS CONTRACT: a group's bounds hold AT LEAST its ink, never less. Less is a bug, fixed (#258 rounds 15 to 19: shadow reach, glyph overhang, decorations). More is the stated behaviour: a fully transparent shadow (a `transparent` colour or `currentColor`), a positioned box under `opacity: 0` that is never painted, and the like are still counted, and a group they push past the sheet limits is drawn upright | counting only what is drawn means following every way a thing can paint nothing — each narrowing met the next (round 19) — and the cost of counting more is the degraded drawing, never a wrong one | a look with the numeric contract, booked by Chris (2026-10-12); a page whose invisible content refuses a turned group |
 | A large `visibility: hidden` box inside a turned group still sizes its sheets | the bounds come from layout overflow, which keeps what is hidden; a page whose hidden content pushes a turned group past the sheet limits gets it upright | a page that does |
 | A sticky box, a scroll container's bars, or a fragment revealed inside a drawn-through box | each is worked against the page's viewport, which the box's own coordinates are not | a page that scrolls inside a turned box |
@@ -1457,6 +1457,22 @@ read back through `getComputedStyle` (10/13):
 | a transform animation from `none`: paused at its start, in its delay, ended `forwards`; and `will-change: transform` | each the containing block of a fixed child |
 | the same animation ended with no fill | no longer one |
 
+And at the edges of what a page can write (10/14, for the input domain,
+§ Contracts):
+
+| The case | Chrome |
+|---|---|
+| `scale(1e39)`, `matrix(1e300, 0, 0, 1, 0, 0)` | 3.40282e+38: a number held at a float's largest |
+| `matrix(1e200, 0, 0, 1e200, 0, 0)` to `none`, 50% | `matrix(1.70141e+38, …)`: held, then mixed |
+| `rotate(1e15rad)` and `rotate(1e13turn)`, each to `rotate(0deg)`, 30% | one matrix: an angle held in degrees, whatever its unit |
+| `rotate(1rad)` to `rotate(0.5turn)`, 30% | `matrix(-0.0716201, 0.997432, …)`: two units mixed in degrees |
+| `rotate(1e15deg)` | `rotate(280deg)`, exactly |
+| `cubic-bezier(0, y, 1, y)` at its middle | linear in y, to a float's largest |
+| a `1e38s` duration; a `-1e300s` delay; 1e300 iterations of `1s` | 1e41 ms; held at a float's longest second; its end held there too |
+| ten, or twenty-two, `scale(1e15)` and a turn, to `rotate(2deg)`, 50% | `rotate(2deg)`: the list multiplied out passes a float, and the pair is discrete |
+| `matrix(1e-200, 0, 0, 1e-200, 0, 0)` to `none`, 50% | `none`: its determinant rounds to 0 in a double, so discrete; `matrix(1e-160, …)` mixes to 0.5 |
+| a `1e-6s` infinite animation | iteration infinite, progress 0, where `1.01e-6s` runs: Chrome's time tolerance, the phase from the duration and the progress as if there were none. Not copied — it is an epsilon, not a limit |
+
 ### The split
 
 - **S8a, the model.** Everything above is applied where the page is
@@ -1639,10 +1655,9 @@ Chrome interpolates them, not as Transforms 1 § 11.2 writes it, since the
 two part where a matrix holds a shear (§ Animations, What Chrome draws)
 and a page is written against what browsers draw. Each matrix is decomposed on its
 own: a 2D one into a translation, a scale (a flip on the axis whose
-diagonal is the smaller), a shear and a turn about z, worked in long
-double with each row's length taken by its own largest part, so neither
-does `matrix(1e200, …)` square past a double nor `matrix(1e308, 0, 0,
-1e-308, …)` lose its small axis; any other by
+diagonal is the smaller), a shear and a turn about z, each row's length
+taken by its own largest part, so `matrix(1e15, 0, 0, 1e-15, …)` keeps
+its small axis; any other by
 Transforms 2 § 13.1.1, into perspective, translation, scale, skew and a
 quaternion. The parts are mixed, the turns slerped the shorter way — two
 too close for slerp's division mixed linearly and made unit again, so the
@@ -1652,14 +1667,14 @@ Chromium's DecomposeTransform and ComposeTransform, whose answers the
 proof checks to Chrome's six digits: `scaleX(-1)` against
 `rotate(90deg)`, a skewed turn, `matrix()` against `matrix()`, and
 protoweb.org's doors. A matrix that cannot be decomposed makes the pair
-discrete (Transforms 1 § 11), and so does one whose decomposition, or
-the matrix composed from the mix, leaves a double's range — a pair held,
-never a NaN; a 3D one's determinant and inverse are worked in long
-double, whose range holds any product of four doubles. Two angles in
-different units are mixed in the coarser of
-the two (fewer to the turn), so moving one into it divides and no angle
-its own unit holds overflows — and so are a `skew()`'s two, kept in one
-unit (`skew(1e308rad, 0deg)` in radians). The tail's lengths need the border box, so the tail is kept as
+discrete (Transforms 1 § 11), and so do one whose determinant a double
+rounds to 0 and one whose decomposition, or the matrix composed from the
+mix, leaves a double's range — never a NaN. A matrix a page writes is
+held to the domain (§ Contracts), and its decomposition never passes a
+double's largest; a list multiplied out may, and Chrome's go discrete there too
+(What Chrome draws). Only a 2D determinant's zero and sign are read, the
+sign over the first row's length, so one past a double still mixes. Two angles in different units are mixed in degrees, as Chrome
+mixes them, and so are a `skew()`'s two. The tail's lengths need the border box, so the tail is kept as
 its two lists and the fraction, and multiplied out where the frame's
 matrix is made (`f_transform_matrix`), with the box known. A tail may
 hold a blend an animation underneath made, the value an implicit keyframe
@@ -1734,12 +1749,12 @@ far end — the instant it shows, ahead of the progress the way it runs. A
 value rising to a step changes there, one falling through it (running
 backwards) just past it, and the clock's rounding may put either some
 way from the time worked back to it — a millionth of a millisecond, or a
-few last bits of the times the clock works in where those are wider (run
-back over 1e20 ms, some 11000 ms): so the first millisecond that window
-touches is due, and while a layout stands inside it the next — never
-late, and early by at most the window. The window's width is an estimate
-of that rounding (`clock_tol`), held by the fuzzing at a page's scales
-and by single cases out to 1e22 ms, not proven. A crossing is read as the value
+few last bits of the times the clock works in where those are wider (at
+the domain's longest, 1e12 ms, some five thousandths of one): so the
+first millisecond that window touches is due, and while a layout stands
+inside it the next — never late, and early by at most the window. The
+window's width is an estimate of that rounding (`clock_tol`), held by
+the fuzzing at a page's scales and at the domain's edge, not proven. A crossing is read as the value
 reads the eased fraction (one half and past it; visibility past 0, and
 at 1), at the x the value flips past: the last parameter on the near
 side of it, where the value's own solving lands. And
@@ -1893,20 +1908,35 @@ Written before the code (the lesson of S7b's nineteen rounds):
   mirror it there, and the proof asks `f_motion_style` at every
   millisecond of thousands of animations made at random and holds
   `f_motion_next` to each change.
-- **The extremes are held, not resolved.** A page may write any double —
-  easing controls to ±DBL_MAX, `steps(2147483647)`, durations and delays
-  at the ends of their range. Arithmetic that can pass a double is worked
-  in long double and held to the double range, so nothing becomes an
-  infinity or a NaN, nothing crashes or hangs, and no loop walks a count a
-  page chose: `1e308s` is the longest time a double holds in
-  milliseconds, so an iteration of it begun `-5e307s` ago is over, as
-  Chrome's is (it holds a time to a float's seconds). A part a
-  decomposition needs and a double cannot hold is no decomposition, and
-  the pair is discrete, rather than held to compose another matrix. Past what long double resolves — a crossing nearer an end
-  than its precision, two turns closer than slerp can divide — the answer
-  is the nearest a double says, and the schedule errs early. Exactness
-  past that is not promised: as THE NUMERIC CONTRACT found, each widening
-  of the arithmetic meets an input just past it.
+- **The input domain is clamped at the parser to what a page means, and
+  past it a value is held at the limit** (Chris, 10/14). Each number is
+  held once, where it is first read (`values.h`): a time to ±1e12 ms (31
+  years, where a double still resolves a tenth of a microsecond), an
+  iteration count to 1e15 (so a count times a time is finite, and a
+  finite count is never read as `infinite`), an easing's y controls to
+  ±1e6, a transform function's numbers to ±1e15, and its angles to ±1e15
+  degrees in whatever unit they are written, as Chrome holds an angle in
+  degrees; a `steps()` count to an `int32_t`. The domain bounds how large
+  a number is, never how small: `scale(1e-300)` is read as written, and
+  tiny numbers a list multiplies past a double's smallest come out 0 — a
+  2D determinant then 0 makes the pair discrete, as Chrome's is
+  (`matrix(1e-200, …)` to `none`, What Chrome draws).
+  Past the limit a value is held, never refused: refusing would change
+  which declaration wins, the cascade's question and not arithmetic's.
+  Chrome holds at a float's range — the same rule, further out (What
+  Chrome draws). Inside the domain the arithmetic is a double's, so
+  nothing becomes an infinity or a NaN, nothing crashes or hangs, and no
+  loop walks a count a page chose: `1e308s` is held at 1e12 ms, so an
+  iteration of it begun `-5e307s` ago is over, as Chrome's is. What the
+  arithmetic BUILDS from held values is not an input and is not held: a
+  transform list multiplied out may pass a double, and a matrix a double
+  cannot decompose makes its pair discrete, each end exactly itself
+  (Transforms 2 § 13's fallback, and Chrome's). The painter composes a
+  list in long double, which holds the largest that 64 held functions can
+  make (THE NUMERIC CONTRACT, § Transforms). Past what a double resolves — a
+  crossing nearer an end than its precision, two turns closer than slerp
+  can divide — the answer is the nearest a double says, and the schedule
+  errs early.
 - **A value lands on its field's own grid once**: a length on 1/64 px
   (the layout's unit and Chrome's), a colour on 8 bits a channel from
   premultiplied doubles, `opacity` on a thousandth, an integer half up.
@@ -1984,7 +2014,6 @@ the perf slice.
 | `linear()` easing (Easing 2) | no page in the census writes it | a page that does |
 | An animation that moves its element rests out of view | it may carry what it draws into view from anywhere, so S8a keeps it due wherever it is; a bound on where its frames can reach — a spinner turns inside its own circle — would let it rest | S8b, where such a tick is arithmetic and a repaint, or a page whose spinners out of view cost what the P5 notices |
 | The predictor: `f_motion_next` works each change out ahead — a curve's crossings, steps' edges, the clock's rounding windows, what an implicit keyframe rests on — and review found corner after corner of it, round after round | the cure is the simplification: lay out at the frame rate while anything that can show is in its active phase, and work out only the phases' edges — most of the schedule deleted. It trades a layout for nothing for less code, which the contracts (never late; a value that stands still not asked for) decide | Ruled (Chris, 10/14): the frame rate while anything that can show is active, the phases' edges, and one rule kept — an interval whose two ends are equal holds still, due at its end; "a value that stands still is not asked for" narrows to that. Its own PR, after the parser's clamps |
-| The input domain: every double a page may write is held, not resolved — long double through the easings, the decompositions and the clock, `fits()` and `held()`, the clock's tolerance, `F_BLEND_DEPTH_MAX` | the cure is the simplification: clamp at the parser, each time, easing control, angle and count to a domain a page means (Chrome already holds a time to a float's seconds), and the scaffolding goes. "The extremes are held, not resolved" is the contract it rewrites | Ruled (Chris, 10/14): the input domain is clamped at the parser to what a page means, and past it a value is held at the limit. Its own PR, the first of the four, which rewrites the contract with the code |
 | Finished-keyframe mixing: each keyframe is a whole computed style, the base with its declarations laid over it (`FKeyframe.style`), and an implicit keyframe the whole style underneath | the cure is the simplification: sparse keyframes, each only the longhands it sets, the rest read from underneath where they are mixed — less built per keyframe, and one meaning for an implicit keyframe. It touches the most semantics (`currentColor`, `em`, a width settled with its style) and wants its own Chrome probes | Ruled (Chris, 10/14): the last of the four, from a design note with Chrome's answers written before its code |
 
 ### Proof
@@ -1995,7 +2024,8 @@ the last of a name winning across sheets and inside `@media` that holds,
 not inside one that does not; `!important` and the `animation-*` in a
 keyframe dropped but its own easing; the shorthand's two times and its
 keyword rule (`ease ease`), and `auto` as its duration (Chrome's answers);
-every longhand's list, the easings' checks; `will-change`; `@supports`;
+every longhand's list, the easings' checks, times, counts and y controls past
+the domain held at its limit in their own units; `will-change`; `@supports`;
 `prefers-reduced-motion` both ways; the winners' importance; `var()` in a
 keyframe replaced per element. And `garb_driver --keyframes-scale`: 4,000
 names and a rule of 40,000 offsets come back whole and in order at a
@@ -2026,8 +2056,9 @@ budget with its last allocations failed in turn), a failed layout and
 one discarded unshown leaving the timeline shown as it was, one with no
 room to carry its records on failing, a tree laid out with no timeline
 keeping the page's, three thousand names matched;
-each due time, an inline element's later pieces, a curve whose slope
-no double holds and one whose slope's roots lie 1e18 apart, lists the
+each due time, an inline element's later pieces, a curve whose controls
+are held at the domain's limit and one whose slope's roots lie 1e6
+apart, lists the
 budget or the probe had no room for — under another animation's and
 over it — a fuzzer case remade of transform lists, an animation resting on
 a moving one's value, and the canvas's background with its owner's box
@@ -2035,9 +2066,12 @@ out of view among them, and values that stand still and animations of
 nothing that can show not asked for; implicit keyframes against
 Chrome's values over another animation; THE SCHEDULE AGAINST THE VALUE — thousands of animations
 made at random (one to five keyframes at any offsets, several at one,
-two animations of a property, every easing to a double's extremes,
-every direction and fill), the value asked at every millisecond and
-each change held to a millisecond the schedule named; an animated
+two animations of a property, every easing to the domain's limits,
+every direction and fill, and a quarter as many again begun the
+domain's longest time ago, repeating for ever or as often as the domain
+allows, or as long as it allows), the value asked at
+every millisecond and each change held to a millisecond the schedule
+named; an animated
 page's layout with each
 of its allocations failed in turn, alone and with every one after it,
 leaking nothing, whole only when it is the page, and its timeline
