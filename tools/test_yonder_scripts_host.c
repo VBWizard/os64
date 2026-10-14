@@ -717,8 +717,9 @@ static void scripted_face_budget(void) {
             check(!lay_out_page(&g.page,800,600) && g.page.tree==NULL,
                 "ordinary relayout cannot bypass owed DOM rebuild after reclaim");
             // The discarded layout started the fade the script's class
-            // names; never shown, it is undone, so the fade starts at the
-            // layout that recovers, five seconds on, not half run.
+            // names; never shown, it took its timeline with it, so the
+            // fade starts at the layout that recovers, five seconds on,
+            // not half run.
             uint64_t was_now=now_ms;
             now_ms+=5000;
             script_turn();
@@ -1071,14 +1072,38 @@ static void motion_cases(void) {
     probe_drop();
 
     /* A script's change is laid out on the page's timeline, which the
-     * rebuild makes when the page has none. */
+     * rebuild makes when the page has none, and the animation it starts is
+     * the page's once the rebuild is published: laid out again later, it
+     * has run since. */
     now_ms=2500;
-    probe_page("<!doctype html><style>@keyframes slide{to{margin-left:100px}}"
-        ".go{animation:slide 1s infinite}</style><div id=a></div>"
+    probe_page("<!doctype html><style>body{margin:0}@keyframes slide{to{margin-left:100px}}"
+        ".go{animation:slide 1s linear infinite}</style><div id=a></div>"
         "<script>document.getElementById('a').className='go'</script>",true);
     script_turn(); script_turn();
     check(g.page.timeline!=NULL && motion_next()==2500,
         "motion: a script's change starts an animation on the page's timeline");
+    now_ms=2750;
+    relayout(true);
+    check(motion_x("a")==25,"motion: and the rebuild's animation runs on in the layouts after it");
+    probe_drop();
+
+    /* A script's change owes the page a rebuild, and until it is made no
+     * frame is due: page_lay_out refuses any other layout, and a frame
+     * refused would count as one past every limit, the page's last. Once
+     * it is made, frames are due again. */
+    now_ms=3000;
+    probe_page("<!doctype html><style>@keyframes slide{to{margin-left:100px}}"
+        "#a{animation:slide 1s infinite}</style><div id=a></div>"
+        "<script>document.getElementById('a').title='changed'</script>",true);
+    relayout(true);
+    os64_js_outcome_t out;
+    check(motion_next()==3000 && yonder_scripts_step(g.page.scripts,&out) && out.status==OS64_JS_OK &&
+          motion_next()==YONDER_NEVER,
+        "motion: while a script's change waits for its rebuild, nothing is due");
+    now_ms=3100;
+    motion_tick();
+    check(script_rebuild() && g.motion_us!=UINT64_MAX && motion_next()==3100,
+        "motion: once the rebuild is made, frames are due again");
     probe_drop();
     s_animations=was_run; s_reduce_motion=was_reduce;
 }

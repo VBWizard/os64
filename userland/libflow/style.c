@@ -3737,7 +3737,7 @@ static bool animate(Ctx *c, const os64_html_node_t *n, Spec *sp, const Spec *ua,
                     const flow_style_t *parent, bool item, bool root, FMotion **out)
 {
     *out = NULL;
-    flow_timeline_t *tl = c->env->timeline;
+    flow_timeline_t *tl = c->out->timeline;
     int32_t count = f_animations(&sp->s);
     if (tl == NULL || c->env->cascade == NULL || count == 0)
         return true;
@@ -3989,6 +3989,12 @@ FStyles *f_style_build(const os64_html_document_t *doc, const os64_page_t *model
     // the page.
     out->arena.cap = SIZE_MAX;
     out->lists_left = F_STYLE_LISTS_BUDGET;
+    // A layout is a style change event for the page's animations: it
+    // builds their timeline anew from the one the page shows (motion.c).
+    if (env->timeline != NULL && (out->timeline = f_timeline_begin(env->timeline)) == NULL) {
+        f_style_free(out);
+        return NULL;
+    }
     Ctx c = {.doc = doc, .model = model, .env = env, .out = out,
              .quirks = doc->quirks == OS64_HTML_QUIRKS,
              .zoom = env->zoom != 0 ? env->zoom / 1000.0 : 1.0};
@@ -4057,5 +4063,6 @@ void f_style_free(FStyles *styles)
     f_map_free(&styles->map);
     f_arena_free(&styles->arena);
     os64_free(styles->animated);
+    flow_timeline_free(styles->timeline);
     os64_free(styles);
 }
