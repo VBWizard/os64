@@ -547,12 +547,13 @@ static bool is_2d(const double m[16])
 // answer (scaleX(-1) against rotate(90deg)); where it does, it is not
 // (PILE3.md § Animations, What Chrome draws).
 //
-// A matrix a page writes, held to the domain (values.h), is decomposed in
-// a double without leaving its range, as Chrome's is; a list of them
-// multiplied out may leave it. A matrix whose
-// determinant a double rounds to 0, or whose parts a double cannot hold —
-// a 3D one's perspective, undone through its inverse, among them — makes
-// no decomposition, and the pair is discrete, each end exactly itself
+// A matrix a page writes, held to the domain (values.h), never takes its
+// decomposition past a double's largest, as Chrome's does not; a list of
+// them multiplied out may. The domain bounds only how large a number is,
+// so tiny entries may make a determinant a double rounds to 0. A matrix
+// whose determinant is 0 so, or whose parts a double cannot hold (a 3D
+// one's perspective, undone through its inverse, among them), makes no
+// decomposition, and the pair is discrete, each end exactly itself
 // (Transforms 2 § 13's fallback). Chrome's go discrete so too: past its
 // float range, and where its determinant rounds to 0.
 typedef struct {
@@ -617,8 +618,8 @@ static bool decompose_2d(const double m[16], D3 *d)
 
 // Determinants as written, never divided down by the largest entry, which
 // would lose the tiny product of a matrix holding huge and tiny entries
-// together; a matrix3d() held to the domain (values.h) has a determinant
-// a double holds.
+// together; a matrix3d() held to the domain (values.h) has no determinant
+// past a double's largest.
 static double det3(double a, double b, double c, double d, double e, double f, double g,
                    double h, double i)
 {

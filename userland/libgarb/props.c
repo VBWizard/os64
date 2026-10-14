@@ -2608,6 +2608,7 @@ static bool iterations(Sets *s, VCur *c, garb_val_t *out)
     VCur look = *c;
     if (!vc_dim(&look, ACCEPT_NUMBER, false, false, &s->a, out) || out->kind != GARB_V_NUMBER)
         return false;
+    out->number = garb_hold(out->number, GARB_ITERATIONS_MAX);  // the domain (values.h)
     *c = look;
     return true;
 }

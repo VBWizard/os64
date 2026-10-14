@@ -509,10 +509,12 @@ static long double power_of_two(int e);
 // underflows instead. Held to the domain (values.h), each function grows
 // an entry at most 1e31-fold — four of its largest entry, 1e15px at the
 // largest zoom in 26.6, with a move of up to 2^32 — so a list's 64, the
-// individual three and the origin's moves stay under 1e2100, and above
-// its inverse, where a long double holds them (to 1e4932). Each product
-// and sum rounds to 64 bits, which is past a browser's doubles and is the
-// numeric contract (PILE3.md § Transforms, the painter, Booked).
+// individual three and the origin's moves stay under 1e2100, where a long
+// double holds them (to 1e4932). The domain bounds how large a number is,
+// not how small: tiny ones may multiply past a long double's smallest, to
+// 0, and a w lost so leaves the box upright (the narrowing, below). Each
+// product and sum rounds to 64 bits, which is past a browser's doubles and
+// is the numeric contract (PILE3.md § Transforms, the painter, Booked).
 
 // a · b, column-major.
 static void mat_mul(long double out[16], const long double a[16], const double b[16])

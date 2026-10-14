@@ -2296,18 +2296,19 @@ static bool fuzz_case(FuzzRng *r, int *kind, flow_style_t *base, FAnimation an[2
 }
 
 // An animation moved to the time domain's edge (values.h), its edges still
-// inside the horizon: begun the longest time ago, repeating for ever; or
-// an iteration as long as the domain allows, ending where its delay put
-// it. The clock there works on times a double resolves to a tenth of a
-// microsecond.
+// inside the horizon: begun the longest time ago, repeating for ever or as
+// many times as the domain allows; or an iteration as long as the domain
+// allows, ending where its delay put it. The clock there works on times a
+// double resolves to a tenth of a microsecond.
 static void fuzz_edge(FuzzRng *r, FAnimation *an)
 {
     double behind = an->timing.delay_ms + 800;
     an->timing.delay_ms = -GARB_TIME_MS_MAX + behind;
-    if (fuzz_below(r, 2) == 0 || an->timing.duration_ms == 0)
-        an->timing.iterations = INFINITY;
-    else
+    int k = fuzz_below(r, 3);
+    if (k == 2 && an->timing.duration_ms > 0)
         an->timing.duration_ms = GARB_TIME_MS_MAX;
+    else
+        an->timing.iterations = k == 1 ? GARB_ITERATIONS_MAX : INFINITY;
 }
 
 // One case, the animation `r` makes from where it stands, at the time
@@ -2703,6 +2704,23 @@ static void motion_held_time_cases(void)
                 s->animations.duration[0] == GARB_TIME_MS_MAX && s->animations.ndelay == 1 &&
                 s->animations.delay[0] == -GARB_TIME_MS_MAX;
     expect("motion: a time past the domain is held at its limit", held, NULL);
+    // A count past the domain is held at its limit, finite, never read as
+    // `infinite`: 1e308 iterations of 1e-12 ms are held to 1e15, a second
+    // in all, so 1.5 s in it is over where an infinite one still runs.
+    {
+        Moving c;
+        moving_open(&c, MOTION_STYLE "@keyframes h{from{opacity:0}to{opacity:.5}}</style>"
+                    "<div id=n style='animation:h 1e-15s linear 1e308 -1.5s paused'>x</div>"
+                    "<div id=f style='animation:h 1e-15s linear infinite -1.5s paused'>x</div>",
+                    1000);
+        const flow_style_t *n = moving_style(&c, "n"), *f = moving_style(&c, "f");
+        expect("motion: a count past the domain is held at its limit, and ends",
+               n != NULL && n->animations.niterations == 1 &&
+                   n->animations.iterations[0] == GARB_ITERATIONS_MAX && n->opacity == 1000 &&
+                   f != NULL && f->opacity < 1000,
+               NULL);
+        moving_close(&c);
+    }
     char detail[64];
     snprintf(detail, sizeof(detail), "opacity %d", s != NULL ? (int)s->opacity : -1);
     expect("motion: an iteration held at the domain's longest time is over",

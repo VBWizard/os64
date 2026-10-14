@@ -1468,7 +1468,7 @@ And at the edges of what a page can write (10/14, for the input domain,
 | `rotate(1rad)` to `rotate(0.5turn)`, 30% | `matrix(-0.0716201, 0.997432, …)`: two units mixed in degrees |
 | `rotate(1e15deg)` | `rotate(280deg)`, exactly |
 | `cubic-bezier(0, y, 1, y)` at its middle | linear in y, to a float's largest |
-| a `1e38s` duration; a `-1e300s` delay | 1e41 ms; held at a float's longest second |
+| a `1e38s` duration; a `-1e300s` delay; 1e300 iterations of `1s` | 1e41 ms; held at a float's longest second; its end held there too |
 | ten, or twenty-two, `scale(1e15)` and a turn, to `rotate(2deg)`, 50% | `rotate(2deg)`: the list multiplied out passes a float, and the pair is discrete |
 | `matrix(1e-200, 0, 0, 1e-200, 0, 0)` to `none`, 50% | `none`: its determinant rounds to 0 in a double, so discrete; `matrix(1e-160, …)` mixes to 0.5 |
 | a `1e-6s` infinite animation | iteration infinite, progress 0, where `1.01e-6s` runs: Chrome's time tolerance, the phase from the duration and the progress as if there were none. Not copied — it is an epsilon, not a limit |
@@ -1669,8 +1669,8 @@ protoweb.org's doors. A matrix that cannot be decomposed makes the pair
 discrete (Transforms 1 § 11), and so do one whose determinant a double
 rounds to 0 and one whose decomposition, or the matrix composed from the
 mix, leaves a double's range — never a NaN. A matrix a page writes is
-held to the domain (§ Contracts), and its decomposition never leaves a
-double; a list multiplied out may, and Chrome's go discrete there too
+held to the domain (§ Contracts), and its decomposition never passes a
+double's largest; a list multiplied out may, and Chrome's go discrete there too
 (What Chrome draws). Only a 2D determinant's zero and sign are read, the
 sign over the first row's length, so one past a double still mixes. Two angles in different units are mixed in degrees, as Chrome
 mixes them, and so are a `skew()`'s two. The tail's lengths need the border box, so the tail is kept as
@@ -1911,9 +1911,15 @@ Written before the code (the lesson of S7b's nineteen rounds):
   past it a value is held at the limit** (Chris, 10/14). Each number is
   held once, where it is first read (`values.h`): a time to ±1e12 ms (31
   years, where a double still resolves a tenth of a microsecond), an
-  easing's y controls to ±1e6, a transform function's numbers to ±1e15,
-  and its angles to ±1e15 degrees in whatever unit they are written, as
-  Chrome holds an angle in degrees; a `steps()` count to an `int32_t`.
+  iteration count to 1e15 (so a count times a time is finite, and a
+  finite count is never read as `infinite`), an easing's y controls to
+  ±1e6, a transform function's numbers to ±1e15, and its angles to ±1e15
+  degrees in whatever unit they are written, as Chrome holds an angle in
+  degrees; a `steps()` count to an `int32_t`. The domain bounds how large
+  a number is, never how small: `scale(1e-300)` is read as written, and
+  tiny numbers a list multiplies past a double's smallest come out 0 — a
+  2D determinant then 0 makes the pair discrete, as Chrome's is
+  (`matrix(1e-200, …)` to `none`, What Chrome draws).
   Past the limit a value is held, never refused: refusing would change
   which declaration wins, the cascade's question and not arithmetic's.
   Chrome holds at a float's range — the same rule, further out (What
@@ -1925,8 +1931,8 @@ Written before the code (the lesson of S7b's nineteen rounds):
   transform list multiplied out may pass a double, and a matrix a double
   cannot decompose makes its pair discrete, each end exactly itself
   (Transforms 2 § 13's fallback, and Chrome's). The painter composes a
-  list in long double, which holds what 64 held functions can make (THE
-  NUMERIC CONTRACT, § Transforms). Past what a double resolves — a
+  list in long double, which holds the largest that 64 held functions can
+  make (THE NUMERIC CONTRACT, § Transforms). Past what a double resolves — a
   crossing nearer an end than its precision, two turns closer than slerp
   can divide — the answer is the nearest a double says, and the schedule
   errs early.
@@ -2018,7 +2024,7 @@ the last of a name winning across sheets and inside `@media` that holds,
 not inside one that does not; `!important` and the `animation-*` in a
 keyframe dropped but its own easing; the shorthand's two times and its
 keyword rule (`ease ease`), and `auto` as its duration (Chrome's answers);
-every longhand's list, the easings' checks, times and y controls past
+every longhand's list, the easings' checks, times, counts and y controls past
 the domain held at its limit in their own units; `will-change`; `@supports`;
 `prefers-reduced-motion` both ways; the winners' importance; `var()` in a
 keyframe replaced per element. And `garb_driver --keyframes-scale`: 4,000
@@ -2060,7 +2066,8 @@ Chrome's values over another animation; THE SCHEDULE AGAINST THE VALUE — thous
 made at random (one to five keyframes at any offsets, several at one,
 two animations of a property, every easing to the domain's limits,
 every direction and fill, and a quarter as many again begun the
-domain's longest time ago or as long as it allows), the value asked at
+domain's longest time ago, repeating for ever or as often as the domain
+allows, or as long as it allows), the value asked at
 every millisecond and each change held to a millisecond the schedule
 named; an animated
 page's layout with each

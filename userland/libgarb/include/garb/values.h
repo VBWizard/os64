@@ -236,9 +236,16 @@ typedef struct {
 // writes is worked in a double; what libflow builds from it — a transform
 // list multiplied out — may leave one, and is answered where it is built.
 //
+// The domain bounds how large a number is, never how small: scale(1e-300)
+// is read as written.
+//
 // A time, in milliseconds: at 1e12 ms (31 years) a double still resolves a
 // tenth of a microsecond.
 #define GARB_TIME_MS_MAX 1e12
+// An iteration count (`infinite` is its own keyword): at 1e15 a double
+// still counts every iteration, and a count times a time is finite, so a
+// finite count is never read as an infinite one.
+#define GARB_ITERATIONS_MAX 1e15
 // A cubic-bezier()'s y controls. Its x controls are already in [0, 1].
 #define GARB_EASING_Y_MAX 1e6
 // A transform function's numbers (scale, matrix(), rotate3d()'s axis) and

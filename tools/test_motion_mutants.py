@@ -580,6 +580,9 @@ mutants = [
      '    out->number = garb_hold(t->number, out->unit == GARB_U_S ? GARB_TIME_MS_MAX / 1000\n'
      '                                                             : GARB_TIME_MS_MAX);',
      '    out->number = garb_hold(t->number, GARB_TIME_MS_MAX);', GARB),
+    ('an-iteration-count-is-not-held', PROPS,
+     '    out->number = garb_hold(out->number, GARB_ITERATIONS_MAX);  // the domain (values.h)\n',
+     '', GARB),
     ('the-first-y-is-not-held', PROPS,
      '        a[1].number = garb_hold(a[1].number, GARB_EASING_Y_MAX);\n',
      '', GARB),
