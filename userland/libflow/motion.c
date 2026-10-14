@@ -70,48 +70,37 @@ static double bezier_y(double p1, double p2, double t)
     return held(3 * u * u * v * p1 + 3 * u * v * v * p2 + v * v * v);
 }
 
-static double bezier_slope(double p1, double p2, double t)
-{
-    double c = 3 * p1, b = 3 * (p2 - p1) - c, a = 1 - c - b;
-    return (3 * a * t + 2 * b) * t + c;
-}
+// How far a crossing the schedule finds may lie from where the value
+// flips, in the eased interval's x: both find the curve's parameter to the
+// last bit, by the same arithmetic, so a few ulps of x — and the schedule
+// wakes that much early.
+#define EASE_X_SLACK 1e-15
 
-// How near the x a cubic's y is read at lies to the x asked for (the
-// contract); and the slack the schedule gives a crossing, a little more,
-// so that the value and the schedule cannot be a millisecond apart.
-#define EASE_X_TOLERANCE 1e-7
-#define EASE_X_SLACK (4 * EASE_X_TOLERANCE)
-
-// The curve's y at a point whose x is within EASE_X_TOLERANCE of `x`:
-// Newton's steps from t = x, and halving the interval where they do not
-// land — x(t) never falls, since x1 and x2 are in [0, 1].
+// The curve's y at the parameter whose x is `x`: the least t with x(t) at
+// or past it, found by halving [0, 1] until no double lies between the
+// halves (x(t) never falls, since x1 and x2 are in [0, 1]). Never stopped
+// at the first t whose x is near: a curve flat in x near an end is solved
+// — cubic-bezier(0, 100, 0, 100) at 9.26e-8 is y 1.35, where t = x would
+// say 0.000028.
 static double cubic(const double p[4], double x)
 {
-    double t = x;
-    for (int i = 0; i < 8; i++) {
-        double err = bezier(p[0], p[2], t) - x;
-        if (fabs(err) <= EASE_X_TOLERANCE)
-            return bezier_y(p[1], p[3], t);
-        double d = bezier_slope(p[0], p[2], t);
-        if (fabs(d) < 1e-9)
-            break;
-        t -= err / d;
-        if (t < 0 || t > 1)
-            break;
-    }
+    // The ends are the curve's ends: no halving finds t = 0 for x = 0, nor
+    // keeps t = 1 for x = 1 where x(t) rounds to 1 a hair before it.
+    if (x <= 0)
+        return 0;
+    if (x >= 1)
+        return 1;
     double lo = 0, hi = 1;
-    t = x;
-    for (int i = 0; i < 64; i++) {
-        double xt = bezier(p[0], p[2], t);
-        if (fabs(xt - x) <= EASE_X_TOLERANCE)
+    for (int i = 0; i < 1100; i++) {
+        double mid = lo + (hi - lo) / 2;
+        if (!(mid > lo && mid < hi))
             break;
-        if (xt < x)
-            lo = t;
+        if (bezier(p[0], p[2], mid) < x)
+            lo = mid;
         else
-            hi = t;
-        t = (lo + hi) / 2;
+            hi = mid;
     }
-    return bezier_y(p[1], p[3], t);
+    return bezier_y(p[1], p[3], hi);
 }
 
 double f_ease(const flow_easing_t *e, double x, bool before)
@@ -1061,6 +1050,15 @@ static uint32_t mix_colour(uint32_t a, uint32_t b, double t)
     return (uint32_t)ta << 24 | r;
 }
 
+// A colour field's end as it is mixed: in currentColor, the colour the
+// element has once every animation is laid over (`d`'s, composed first —
+// CSS Color 4 § 12 mixes currentColor's used value), whatever the keyframe
+// worked it out as; else its own.
+static uint32_t used_colour(const flow_style_t *s, uint8_t bit, uint32_t own, const flow_style_t *d)
+{
+    return (s->current_colours & bit) && d != NULL ? d->color : own;
+}
+
 // A colour field's currentColor mark, mixed: currentColor when both ends
 // are — so it follows the element's colour as that colour moves, whatever
 // the element's own field is (f_motion_style resolves it) — and the mixed
@@ -1772,14 +1770,17 @@ static bool mix_prop(garb_prop_t p, const flow_style_t *a, const flow_style_t *b
         return true;
     case GARB_TEXT_FILL_COLOR:
         if (d != NULL) {
-            d->fill = mix_colour(a->fill, b->fill, t);
+            d->fill = mix_colour(used_colour(a, FLOW_CURRENT_FILL, a->fill, d),
+                                 used_colour(b, FLOW_CURRENT_FILL, b->fill, d), t);
             hand_current(d, a, b, FLOW_CURRENT_FILL);
         }
         return true;
     case GARB_BACKGROUND_COLOR:
         if (d != NULL) {
-            uint32_t ca = a->has_background ? a->background : 0xFF000000u;
-            uint32_t cb = b->has_background ? b->background : 0xFF000000u;
+            uint32_t ca = used_colour(a, FLOW_CURRENT_BACKGROUND,
+                                      a->has_background ? a->background : 0xFF000000u, d);
+            uint32_t cb = used_colour(b, FLOW_CURRENT_BACKGROUND,
+                                      b->has_background ? b->background : 0xFF000000u, d);
             d->background = mix_colour(ca, cb, t);
             d->has_background = flow_alpha(d->background) > 0;
             hand_current(d, a, b, FLOW_CURRENT_BACKGROUND);
@@ -1789,7 +1790,8 @@ static bool mix_prop(garb_prop_t p, const flow_style_t *a, const flow_style_t *b
     case GARB_BORDER_LEFT_COLOR:
         i = p - GARB_BORDER_TOP_COLOR;
         if (d != NULL) {
-            d->border_color[i] = mix_colour(a->border_color[i], b->border_color[i], t);
+            d->border_color[i] = mix_colour(used_colour(a, FLOW_CURRENT_BORDER(i), a->border_color[i], d),
+                                            used_colour(b, FLOW_CURRENT_BORDER(i), b->border_color[i], d), t);
             hand_current(d, a, b, FLOW_CURRENT_BORDER(i));
         }
         return true;
@@ -1952,7 +1954,8 @@ static bool mix_prop(garb_prop_t p, const flow_style_t *a, const flow_style_t *b
             return true;
         flow_shadow_t *list = NULL;
         int32_t n = 0;
-        if (!mix_shadows(sa, na, sb, nb, a->color, b->color, t, &list, &n, alloc, ctx))
+        // A shadow in currentColor mixes the colour the element ends with.
+        if (!mix_shadows(sa, na, sb, nb, d->color, d->color, t, &list, &n, alloc, ctx))
             return false;
         *(box ? &d->box_shadows : &d->text_shadows) = list;
         *(box ? &d->nbox_shadows : &d->ntext_shadows) = n;
@@ -2097,19 +2100,22 @@ bool f_motion_style(const FMotion *m, double now, flow_style_t *out, FAlloc allo
                     FProps *dropped)
 {
     bool ok = true;
-    for (int32_t a = 0; a < m->nanims; a++) {
-        const FAnimation *an = &m->anims[a];
-        if (an->record == NULL)
-            continue;
-        Clock k = clock_at(&an->timing, local_time(an->record, now));
-        if (!k.in_effect)
-            continue;
-        // A side's width after its style, which brings a width of its own.
-        for (int pass = 0; pass < 2; pass++)
+    // `color` first, every animation's, so a currentColor anything else
+    // mixes is the colour the element ends with (CSS Color 4 § 12, its
+    // used value); then the rest; and a side's width after its style,
+    // which brings a width of its own.
+    for (int pass = 0; pass < 3; pass++)
+        for (int32_t a = 0; a < m->nanims; a++) {
+            const FAnimation *an = &m->anims[a];
+            if (an->record == NULL)
+                continue;
+            Clock k = clock_at(&an->timing, local_time(an->record, now));
+            if (!k.in_effect)
+                continue;
             for (int p = 0; p < GARB_NPROPS; p++) {
                 bool width = p >= GARB_BORDER_TOP_WIDTH && p <= GARB_BORDER_LEFT_WIDTH;
-                if (width != (pass == 1) || !f_props_has(&an->props, (garb_prop_t)p) ||
-                    !animatable((garb_prop_t)p))
+                int in = p == GARB_COLOR ? 0 : width ? 2 : 1;
+                if (in != pass || !f_props_has(&an->props, (garb_prop_t)p) || !animatable((garb_prop_t)p))
                     continue;
                 Frame s, e;
                 MixKind kind;
@@ -2121,7 +2127,7 @@ bool f_motion_style(const FMotion *m, double now, flow_style_t *out, FAlloc allo
                         f_props_add(dropped, (garb_prop_t)p);
                 }
             }
-    }
+        }
     // What is in currentColor follows the colour as it moves; a side drawn
     // as none or hidden has no width (Backgrounds 3 § 4.3).
     for (int i = 0; i < 4; i++) {
@@ -2430,11 +2436,15 @@ double f_motion_next(const FMotion *m, double now)
                     double xs[3];
                     int32_t nx = ease_crossings(ease, levels[l], strict[l], xs);
                     for (int32_t j = 0; j < nx; j++) {
-                        // Early by the slack the way it runs: the value's
-                        // own x may land that near the crossing.
+                        // Early by the slack the way it runs, the value's
+                        // own x landing that near the crossing — and at the
+                        // crossing too, still due when a layout comes late
+                        // past the early one (change_due drops a time gone).
                         double x = fmin(fmax(xs[j] + (k.forwards ? -EASE_X_SLACK : EASE_X_SLACK), 0), 1);
                         if (k.forwards ? xs[j] >= here : xs[j] <= here)
-                            soonest = fmin(soonest, edge_due(&k, &an->timing, base, s.offset + span * x, now));
+                            soonest = fmin(soonest,
+                                           fmin(edge_due(&k, &an->timing, base, s.offset + span * x, now),
+                                                edge_due(&k, &an->timing, base, s.offset + span * xs[j], now)));
                     }
                 }
             }

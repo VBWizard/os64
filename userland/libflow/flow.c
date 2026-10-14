@@ -1640,13 +1640,18 @@ flow_tree_t *flow_layout(const os64_html_document_t *doc, const os64_page_t *mod
 
 static bool meets(os64_gui_rect_t a, os64_gui_rect_t b);
 static bool block_level(flow_box_kind_t k);
+static os64_gui_rect_t doc_rect_of(const flow_box_t *box, os64_gui_rect_t local, flow_point_t scroll);
 
-// Whether a box can be seen in `view`: where it is drawn, or its overflow
-// where its own frame leaves it — whichever reaches the view.
+// Whether a box can be seen in `view`: all it paints — its overflow and
+// what its ink reaches past it (a shadow, a glyph's overhang, the like
+// from a box inside it) — where the page paints it, through any transform.
 static bool box_seen(const flow_box_t *b, os64_gui_rect_t view, flow_point_t scroll)
 {
-    flow_point_t o = flow_box_doc_offset(b, scroll);
-    return meets(flow_box_doc_rect(b, scroll), view) || meets(moved(b->overflow, o.x, o.y), view);
+    os64_gui_rect_t o = b->overflow;
+    os64_gui_rect_t inked =
+        rect_from((int64_t)o.x - b->ink[FLOW_LEFT], (int64_t)o.y - b->ink[FLOW_TOP],
+                  (int64_t)o.x + o.w + b->ink[FLOW_RIGHT], (int64_t)o.y + o.h + b->ink[FLOW_BOTTOM]);
+    return meets(doc_rect_of(b, inked, scroll), view);
 }
 
 // Whether what an element draws, its first box `b`, can be seen. An inline
@@ -2150,8 +2155,16 @@ os64_gui_rect_t flow_box_doc_rect(const flow_box_t *box, flow_point_t scroll)
 {
     if (box == NULL)
         return (os64_gui_rect_t){0, 0, 0, 0};
+    return doc_rect_of(box, box->rect, scroll);
+}
+
+// A rect in box `box`'s coordinates where the page paints it: moved by the
+// frames it is in, and through each drawn-through transform, the bounds
+// of its corners.
+static os64_gui_rect_t doc_rect_of(const flow_box_t *box, os64_gui_rect_t local, flow_point_t scroll)
+{
     flow_point_t o = flow_box_doc_offset(box, scroll);
-    os64_gui_rect_t r = moved(box->rect, o.x, o.y);
+    os64_gui_rect_t r = moved(local, o.x, o.y);
     if (inner_through(box->frame) == NULL)
         return r;
     double x0 = INFINITY, y0 = INFINITY, x1 = -INFINITY, y1 = -INFINITY;

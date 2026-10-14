@@ -1671,7 +1671,9 @@ and that is a change of structure: the face is due a layout at its end.
 animation that can show in `view` shows another value. One that only
 repaints where its element draws — a colour, a fade, visibility, a
 background's position, the corners' curves — can show there when its
-element can be seen: its box — for an inline element, whose pieces may
+element can be seen: all its box paints, the ink its shadows and the
+like reach past it included, through any transform — for an inline
+element, whose pieces may
 lie on many lines and, split round a block inside it, in several
 anonymous blocks, the nearest block with an element of its own, which
 holds them all; for one that makes none (`display: contents`) the boxes
@@ -1820,9 +1822,12 @@ Written before the code (the lesson of S7b's nineteen rounds):
 - **The timing is Web Animations' arithmetic**, in doubles of
   milliseconds from the start time. No promise past it.
 - **An easing is a point on its curve.** On [0, 1] a cubic's output is
-  the curve's y at a point whose x is within 1e-7 of the input — a
-  promise about x, since near a vertical tangent a small step in x is a
-  large one in y, and no solver can promise y there; the curve's ends are
+  the curve's y at the parameter whose x is the input, found to the last
+  bit (halving, x never falling) — so a curve flat in x near an end is
+  solved, never stopped at the first parameter whose x is near; near a
+  vertical tangent a small step in x is still a large one in y; the
+  schedule finds a crossing by the same arithmetic and wakes a few ulps
+  of x early, and is due at the crossing itself too; the curve's ends are
   its ends, y 0 at x 0 and 1 at x 1, however far its controls reach;
   outside [0, 1] the end tangents are exact; steps are exact, their before
   flag with them.

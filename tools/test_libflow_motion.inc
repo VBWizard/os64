@@ -155,9 +155,8 @@ static void motion_easing_cases(void)
 {
     static const flow_easing_t kEase = {FLOW_EASE_CUBIC, {0.25, 0.1, 0.25, 1}, 0, 0};
     static const flow_easing_t kOver = {FLOW_EASE_CUBIC, {0.2, 0.86, 0.32, 1.22}, 0, 0};
-    // On [0, 1], y at a point whose x is within 1e-7 of the input: so the
-    // answer is within the curve's slope times 1e-7 of the exact y — a
-    // slope at most a few here.
+    // On [0, 1], y at the parameter whose x is the input, found to the
+    // last bit: within the curve's slope times a hair of the exact y.
     for (int i = 0; i <= 100; i++) {
         double x = i / 100.0;
         const flow_easing_t *e[2] = {&kEase, &kOver};
@@ -184,6 +183,14 @@ static void motion_easing_cases(void)
         ends = f_ease(&e, 0, false) == 0 && f_ease(&e, 1, false) == 1;
     }
     expect("easing: a cubic's ends are 0 and 1, whatever its controls", ends, NULL);
+    // A curve flat in x near an end is solved, not stopped at the first t
+    // whose x is near: cubic-bezier(0, 100, 0, 100) at 9.26e-8, about the
+    // first 16 ms of two days, is y 1.35, where t = x would say 0.000028.
+    flow_easing_t flat = {FLOW_EASE_CUBIC, {0, 100, 0, 100}, 0, 0};
+    double fy = f_ease(&flat, 9.26e-8, false), fw = reference_cubic(flat.p, 9.26e-8);
+    char fd[64];
+    snprintf(fd, sizeof(fd), "got %.6g want %.6g", fy, fw);
+    expect("easing: a curve flat in x near its start is solved", fabs(fy - fw) < 1e-6 && fy > 1, fd);
     // Outside [0, 1], the tangent at the nearer end (§ 2.2.1): through
     // P0 and P1 below, P2 and P3 above.
     expect("easing: below 0, the line through P0 and P1",
@@ -728,6 +735,25 @@ static void motion_cascade_cases(void)
                (s = moving_style(&m, "jb")) != NULL ? s->opacity : -1, 100);
     expect_i64("motion: and so is one naming linear when the element eases in",
                (s = moving_style(&m, "jc")) != NULL ? s->opacity : -1, 63);
+    moving_close(&m);
+
+    // A shadow and a border mixed from currentColor to a colour use the
+    // colour the element ends with, which another animation moves (Chrome,
+    // 10/14: rgb(100,0,0) composed, both rgb(50,0,128) halfway to blue).
+    moving_open(&m, MOTION_STYLE
+        "@keyframes col{from{color:rgb(0,0,0)}to{color:rgb(200,0,0)}}"
+        "@keyframes sh{from{box-shadow:5px 0 0 0 currentColor;border-top-color:currentColor}"
+        "to{box-shadow:5px 0 0 0 rgb(0,0,255);border-top-color:rgb(0,0,255)}}"
+        "#pc{border-top:2px solid;animation:col 1s linear -.5s paused,sh 1s linear -.5s paused}"
+        "#pd{border-top:2px solid;animation:sh 1s linear -.5s paused,col 1s linear -.5s paused}"
+        "</style><div id=pc></div><div id=pd></div>", 1000);
+    for (int i = 0; i < 2; i++) {
+        s = moving_style(&m, i == 0 ? "pc" : "pd");
+        expect(i == 0 ? "motion: a one-sided currentColor mixes the composed colour"
+                      : "motion: and so with the colour's animation named after it",
+               s != NULL && s->color == 0x640000u && s->nbox_shadows == 1 &&
+                   s->box_shadows[0].colour == 0x320080u && s->border_color[0] == 0x320080u, NULL);
+    }
     moving_close(&m);
 
     // Two axes past sqrt(DBL_MAX) are compared as the unit vectors they are:
@@ -1381,6 +1407,16 @@ static void motion_due_cases(void)
         "</style><div id=fl style='animation:flat 1s linear infinite'></div>", 1000);
     expect_u32("motion due: a transform that cannot be undone flips at one half",
                (uint32_t)flow_motion_due(m.tree, kView, (flow_point_t){0, 0}), 1500);
+    moving_close(&m);
+
+    // An element out of view whose shadow reaches into it is seen there:
+    // a colour animation moving that shadow's currentColor is due.
+    moving_open(&m, MOTION_STYLE
+        "@keyframes c{to{color:red}}"
+        "</style><div style='margin-top:2000px;box-shadow:0 -1900px 0 currentColor;"
+        "animation:c 1s linear'>x</div>", 1000);
+    expect_u32("motion due: seen by a shadow cast into view",
+               (uint32_t)flow_motion_due(m.tree, kView, (flow_point_t){0, 0}), 1000);
     moving_close(&m);
 
     // Out of view, an animation that only repaints where its element is
@@ -2108,6 +2144,58 @@ static void motion_dropped_cases(void)
     free(html);
 }
 
+// A crossing in an interval so long that the schedule's early wake lies a
+// long way before it: a layout late past that wake, still short of the
+// crossing, finds the crossing itself due — and on two days' animation,
+// the wake lies within the millisecond of the flip.
+static void motion_long_crossing_cases(void)
+{
+    os64_html_document_t *doc = parse("<!doctype html><p id=x>x</p>");
+    const os64_html_node_t *x = motion_find(doc->document, "x");
+    flow_style_t base;
+    memset(&base, 0, sizeof(base));
+    base.opacity = 1000;
+    FKeyframe frames[2];
+    memset(frames, 0, sizeof(frames));
+    for (int k = 0; k < 2; k++) {
+        frames[k].offset = k;
+        frames[k].style = base;
+        frames[k].style.text_align = k ? FLOW_ALIGN_RIGHT : FLOW_ALIGN_LEFT;
+        f_props_add(&frames[k].sets, GARB_TEXT_ALIGN);
+    }
+    static const double kDur[2] = {1e8, 1e18};
+    for (int d = 0; d < 2; d++) {
+        FAnimation an;
+        memset(&an, 0, sizeof(an));
+        an.timing.name = (flow_name_t){"l", 1};
+        an.timing.duration_ms = kDur[d];
+        an.timing.iterations = 1;
+        an.frames = frames;
+        an.nframes = 2;
+        f_props_add(&an.props, GARB_TEXT_ALIGN);
+        FMotion m;
+        memset(&m, 0, sizeof(m));
+        m.base = base;
+        m.anims = &an;
+        m.nanims = 1;
+        flow_timeline_t *tl = flow_timeline_new(doc);
+        f_timeline_begin(tl);
+        bool ok = f_timeline_element(tl, x, &m, 0);
+        f_timeline_end(tl, true);
+        double half = kDur[d] / 2, wake = f_motion_next(&m, 0), late = f_motion_next(&m, half - 100);
+        char detail[96];
+        snprintf(detail, sizeof(detail), "wake %.17g late %.17g half %.17g", wake, late, half);
+        if (d == 0)
+            expect("motion: two days' crossing wakes within its millisecond",
+                   ok && wake <= half && wake >= half - 1, detail);
+        else
+            expect("motion: a layout late past the early wake finds the crossing due",
+                   ok && wake < half - 100 && late >= half - 1 && late <= half + 1, detail);
+        flow_timeline_free(tl);
+    }
+    os64_html_document_free(doc);
+}
+
 static void motion_sweep(void)
 {
     motion_sweep_in(false);
@@ -2125,5 +2213,6 @@ static void motion_cases(void)
     motion_due_cases();
     motion_fuzz_cases();
     motion_dropped_cases();
+    motion_long_crossing_cases();
     motion_sweep();
 }
