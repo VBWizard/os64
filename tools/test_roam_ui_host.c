@@ -38,6 +38,7 @@ struct os64_browser {
     unsigned activates, polls, backs, forwards;
 };
 static struct os64_browser fake;
+static os64_ui_status_code_t filter_error;
 
 os64_ui_status_code_t os64_browser_create(os64_ui_dataview_t *v,
     const os64_ui_icon_provider_t *icons,int64_t window,uint32_t bit,os64_browser_t **out)
@@ -57,7 +58,7 @@ void os64_browser_cancel(os64_browser_t *b) { b->loading=false; }
 os64_ui_status_code_t os64_browser_poll(os64_browser_t *b)
 { ++b->polls;return OS64_UI_OK; }
 os64_ui_status_code_t os64_browser_filter(os64_browser_t *b,const char *text,bool hidden)
-{ snprintf(b->filter,sizeof(b->filter),"%s",text);b->hidden=hidden;++b->revision;return OS64_UI_OK; }
+{ if(filter_error) return filter_error;snprintf(b->filter,sizeof(b->filter),"%s",text);b->hidden=hidden;++b->revision;return OS64_UI_OK; }
 os64_ui_status_code_t os64_browser_activate(os64_browser_t *b,uint64_t domain,os64_ui_data_id_t id)
 { (void)domain;(void)id;++b->activates;return os64_browser_navigate(b,"/home/folder"); }
 const char *os64_browser_location(const os64_browser_t *b) { return b->location; }
@@ -140,6 +141,81 @@ static void breadcrumb_failure_tests(void)
     ++fake.revision;os64_ui_browser_sync(p);
 }
 
+static void message_filter_failure_tests(void)
+{
+    os64_ui_browser_t *p=&app.browser_ui;
+    bool replaced=false;size_t refusals=0;
+    for (long nth=0;nth<256;++nth) {
+        os64_ui_browser_message(p,"Existing help");
+        uint64_t old=p->help_token;
+        CHECK(old!=0);
+        deny_countdown=nth;
+        os64_ui_browser_message(p,"Replacement help");
+        deny_countdown=-1;
+        if (!strcmp(p->status.help.text,"Existing help")) {
+            ++refusals;CHECK(p->help_token==old);
+        } else {replaced=true;CHECK(p->help_token!=old && p->help_token!=0);}
+        ++fake.revision;os64_ui_browser_sync(p);
+        CHECK(p->help_token==0 && p->status.help.token==0 && !p->status.help.text);
+        if(replaced) break;
+    }
+    CHECK(replaced && refusals>1);
+    CHECK(os64_browser_filter(&fake,"accepted",false)==OS64_UI_OK);
+    os64_ui_set_focus(&app.ui,&p->details.w);os64_ui_browser_sync(p);
+    os64_ui_set_focus(&app.ui,&p->filter.w);
+    uint64_t revision=fake.revision;
+    filter_error=OS64_UI_NO_MEMORY;
+    os64_ui_textfield_set(&app.ui,&p->filter,"rejected");
+    p->filter.on_change(&p->filter,p);
+    CHECK(!strcmp(p->filter.buf,"accepted") && !strcmp(fake.filter,"accepted"));
+    CHECK(fake.revision==revision && app.ui.focus==&p->filter.w);
+    p->filter.on_cancel(&p->filter,p);
+    CHECK(!strcmp(p->filter.buf,"accepted") && !strcmp(fake.filter,"accepted"));
+    CHECK(fake.revision==revision);
+    filter_error=OS64_UI_OK;
+    p->filter.on_cancel(&p->filter,p);
+    CHECK(!*p->filter.buf && !*fake.filter);
+    ++fake.revision;os64_ui_browser_sync(p);
+}
+
+static void details_layout_failure_tests(void)
+{
+    os64_ui_browser_t *p=&app.browser_ui;
+    for (int mode=0;mode<2;++mode) {
+        size_t refusals=0,blocked=0;bool succeeded=false;
+        for (long nth=0;nth<1024;++nth) {
+            os64_gui_rect_t old_details=p->details.w.bounds;
+            os64_gui_rect_t old_crumb=p->crumbs[1].bounds;
+            os64_gui_rect_t old_toolbar=p->toolbar.bounds;
+            if (!mode) app.root.bounds.w=app.root.bounds.w==880?840:880;
+            deny_countdown=nth;
+            os64_font_status_t rc=OS64_FONT_OK;
+            if (!mode) rc=layout(&app,false);
+            else os64_ui_browser_show(p,OS64_UI_BROWSER_STATUS,
+                !os64_ui_browser_visible(p,OS64_UI_BROWSER_STATUS));
+            deny_countdown=-1;
+            if (p->layout_pending) {
+                ++refusals;
+                if (!mode) CHECK(rc!=OS64_FONT_OK);
+                if (os64_ui_dataview_blocked(&p->details)) ++blocked;
+                CHECK(!memcmp(&old_details,&p->details.w.bounds,sizeof(old_details)));
+                CHECK(!memcmp(&old_crumb,&p->crumbs[1].bounds,sizeof(old_crumb)));
+                CHECK(!memcmp(&old_toolbar,&p->toolbar.bounds,sizeof(old_toolbar)));
+                os64_ui_browser_sync(p);
+            } else succeeded=true;
+            CHECK(!p->layout_pending && !os64_ui_dataview_blocked(&p->details));
+            CHECK(memcmp(&old_details,&p->details.w.bounds,sizeof(old_details))!=0);
+            if (succeeded) break;
+        }
+        CHECK(succeeded && refusals>0 && blocked>0);
+        printf("%s layout: %zu refusals, %zu Details failures recovered\n",
+            mode?"pane":"resize",refusals,blocked);
+    }
+    app.root.bounds.w=880;
+    os64_ui_browser_show(p,OS64_UI_BROWSER_STATUS,true);
+    CHECK(layout(&app,false)==OS64_FONT_OK);
+}
+
 static void roam_ui_tests(const char *font_dir)
 {
     current="roam UI";
@@ -214,6 +290,8 @@ static void roam_ui_tests(const char *font_dir)
     CHECK(os64_ui_text_measure(&app.ui,OS64_FONT_ROLE_UI,"Forward",7,&text_width)==OS64_FONT_OK);
     CHECK(app.browser_ui.forward.bounds.w>=text_width);
     breadcrumb_failure_tests();
+    message_filter_failure_tests();
+    details_layout_failure_tests();
     fake.directory.incomplete=true;
     os64_ui_browser_sync(&app.browser_ui);
     uint64_t notice=app.browser_ui.notice_token;

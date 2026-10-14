@@ -45,8 +45,13 @@ static void address_cancel(os64_ui_textfield_t *tf, void *user)
 static void filter_changed(os64_ui_textfield_t *tf, void *user)
 {
     os64_ui_browser_t *p = user;
-    if (p->browser) request_result(p, os64_browser_filter(p->browser,
-        tf->buf, os64_browser_hidden(p->browser)));
+    if (!p->browser) return;
+    os64_ui_status_code_t rc=os64_browser_filter(p->browser,
+        tf->buf,os64_browser_hidden(p->browser));
+    if (rc!=OS64_UI_OK) {
+        os64_ui_textfield_set(p->ui,tf,os64_browser_filter_text(p->browser));
+        os64_ui_browser_message(p,"Could not apply that filter.");
+    }
 }
 
 static void filter_cancel(os64_ui_textfield_t *tf, void *user)
@@ -148,14 +153,24 @@ void os64_ui_browser_init(os64_ui_browser_t *p, os64_ui_t *ui,
 void os64_ui_browser_bind(os64_ui_browser_t *p, os64_browser_t *browser)
 { p->browser = browser; p->seen_revision = 0; os64_ui_browser_sync(p); }
 
-static void place(os64_ui_widget_t *w, os64_gui_rect_t r, bool staged)
-{ if (staged) os64_ui_widget_stage_bounds(w,r); else w->bounds=r; }
+typedef struct {
+    struct { os64_ui_widget_t *widget; os64_gui_rect_t bounds; }
+        items[32+OS64_UI_BROWSER_CRUMBS];
+    size_t count;
+} browser_geometry_t;
+
+static void place(browser_geometry_t *plan,os64_ui_widget_t *w,os64_gui_rect_t r)
+{
+    plan->items[plan->count].widget=w;
+    plan->items[plan->count++].bounds=r;
+}
 
 static os64_font_status_t measured_width(os64_ui_browser_t *p,const char *text,int32_t *width)
 { return os64_ui_run_width(p->ui,NULL,OS64_FONT_ROLE_UI,text,os64_strlen(text),width); }
 
-os64_font_status_t os64_ui_browser_layout(os64_ui_browser_t *p, bool staged)
+static os64_font_status_t browser_layout(os64_ui_browser_t *p, bool staged)
 {
+    browser_geometry_t plan={0};
     os64_gui_rect_t area = staged && p->parent->bounds_staged_valid ?
         p->parent->bounds_staged : p->parent->bounds;
     int32_t pad=p->ui->theme.pad, gap=p->ui->theme.gap;
@@ -165,7 +180,7 @@ os64_font_status_t os64_ui_browser_layout(os64_ui_browser_t *p, bool staged)
     int32_t width=nonnegative(area.w-2*pad), bottom=area.y+area.h-pad;
     int32_t row=os64_ui_control_min_height(p->ui);
     if (row<1) row=1;
-    /* Measure before publishing geometry so a refused run leaves hit boxes intact. */
+    /* Collect geometry before preparing Details; publish bounds after it succeeds. */
     os64_ui_widget_t *buttons[]={&p->back,&p->forward,&p->up,&p->refresh};
     int32_t natural[4],total=3*gap;
     for (size_t i=0;i<4;++i) {
@@ -203,28 +218,28 @@ os64_font_status_t os64_ui_browser_layout(os64_ui_browser_t *p, bool staged)
     for (size_t i=0;i<4;++i) {
         int32_t h=p->visible[kinds[i]] && bottom-y>row+48 ? row : 0;
         ys[i]=y; heights[i]=h;
-        place(rows[i],(os64_gui_rect_t){x,y,width,h},staged);
+        place(&plan,rows[i],(os64_gui_rect_t){x,y,width,h});
         if (h) y+=h+gap;
     }
     int32_t button_x=x,avail=width;
     for (size_t i=0;i<4;++i) {
         int32_t button_width=total<=width?natural[i]:
             smaller(natural[i],nonnegative((avail-(int32_t)(3-i)*gap)/(int32_t)(4-i)));
-        place(buttons[i],(os64_gui_rect_t){button_x,ys[0],button_width,
-            heights[0]},staged);
+        place(&plan,buttons[i],(os64_gui_rect_t){button_x,ys[0],button_width,
+            heights[0]});
         button_x+=button_width+gap;
         avail=nonnegative(x+width-button_x);
     }
     label_width=smaller(label_width+pad,width/3);
-    place(&p->address_label,(os64_gui_rect_t){x,ys[1],label_width,
-        heights[1]},staged);
-    place(&p->address.w,(os64_gui_rect_t){x+label_width+gap,ys[1],
-        nonnegative(width-label_width-gap),heights[1]},staged);
+    place(&plan,&p->address_label,(os64_gui_rect_t){x,ys[1],label_width,
+        heights[1]});
+    place(&plan,&p->address.w,(os64_gui_rect_t){x+label_width+gap,ys[1],
+        nonnegative(width-label_width-gap),heights[1]});
     filter_label_width=smaller(filter_label_width+pad,width/3);
-    place(&p->filter_label,(os64_gui_rect_t){x,ys[3],filter_label_width,
-        heights[3]},staged);
-    place(&p->filter.w,(os64_gui_rect_t){x+filter_label_width+gap,ys[3],
-        nonnegative(width-filter_label_width-gap),heights[3]},staged);
+    place(&plan,&p->filter_label,(os64_gui_rect_t){x,ys[3],filter_label_width,
+        heights[3]});
+    place(&plan,&p->filter.w,(os64_gui_rect_t){x+filter_label_width+gap,ys[3],
+        nonnegative(width-filter_label_width-gap),heights[3]});
 
     int32_t status_h=p->visible[OS64_UI_BROWSER_STATUS] && bottom-y>row+24 ? row : 0;
     int32_t content_bottom=bottom-(status_h?status_h+gap:0);
@@ -232,22 +247,22 @@ os64_font_status_t os64_ui_browser_layout(os64_ui_browser_t *p, bool staged)
     if(volume_title>side_title) side_title=volume_title;
     int32_t side_width=p->visible[OS64_UI_BROWSER_SIDEBAR] && width>=420 ?
         smaller(width/3,larger(188,side_title+4*pad+48)) : 0;
-    place(&p->sidebar,(os64_gui_rect_t){x,y,side_width,height},staged);
+    place(&plan,&p->sidebar,(os64_gui_rect_t){x,y,side_width,height});
     int32_t details_x=x+(side_width?side_width+gap:0);
-    place(&p->details.w,(os64_gui_rect_t){details_x,y,
-        nonnegative(width-(details_x-x)),height},staged);
-    place(&p->status.w,(os64_gui_rect_t){x,content_bottom+(status_h?gap:0),
-        width,status_h},staged);
+    place(&plan,&p->details.w,(os64_gui_rect_t){details_x,y,
+        nonnegative(width-(details_x-x)),height});
+    place(&plan,&p->status.w,(os64_gui_rect_t){x,content_bottom+(status_h?gap:0),
+        width,status_h});
     int32_t heading=os64_ui_font_row_height(p->ui,OS64_FONT_ROLE_UI)+4;
-    place(&p->favorites_label,(os64_gui_rect_t){x+pad,y+pad,
-        nonnegative(side_width-2*pad),heading},staged);
-    place(&p->favorites.w,(os64_gui_rect_t){x+pad,y+pad+heading,
-        nonnegative(side_width-2*pad),2*row+gap},staged);
+    place(&plan,&p->favorites_label,(os64_gui_rect_t){x+pad,y+pad,
+        nonnegative(side_width-2*pad),heading});
+    place(&plan,&p->favorites.w,(os64_gui_rect_t){x+pad,y+pad+heading,
+        nonnegative(side_width-2*pad),2*row+gap});
     int32_t mounts_y=y+pad+heading+2*row+2*gap;
-    place(&p->mounts_label,(os64_gui_rect_t){x+pad,mounts_y,
-        nonnegative(side_width-2*pad),heading},staged);
-    place(&p->mounts.w,(os64_gui_rect_t){x+pad,mounts_y+heading,
-        nonnegative(side_width-2*pad),nonnegative(y+height-pad-(mounts_y+heading))},staged);
+    place(&plan,&p->mounts_label,(os64_gui_rect_t){x+pad,mounts_y,
+        nonnegative(side_width-2*pad),heading});
+    place(&plan,&p->mounts.w,(os64_gui_rect_t){x+pad,mounts_y+heading,
+        nonnegative(side_width-2*pad),nonnegative(y+height-pad-(mounts_y+heading))});
     int32_t root_width=p->crumb_count?smaller(crumb_widths[0],width):0;
     int32_t budget=nonnegative(width-root_width-(p->crumb_count>1?gap:0));
     int32_t chosen=0;
@@ -268,19 +283,43 @@ os64_font_status_t os64_ui_browser_layout(os64_ui_browser_t *p, bool staged)
         if(i>=first && i<p->crumb_count) {
             cw=smaller(crumb_widths[i],nonnegative(x+width-crumb_x));
         }
-        place(&p->crumbs[i],(os64_gui_rect_t){crumb_x,ys[2],cw,
-            heights[2]},staged);
+        place(&plan,&p->crumbs[i],(os64_gui_rect_t){crumb_x,ys[2],cw,
+            heights[2]});
         if(cw) crumb_x+=cw+gap;
         if(i==0) {
             int32_t ow=first>1?smaller(overflow_width,
                 nonnegative(x+width-crumb_x)):0;
-            place(&p->overflow,(os64_gui_rect_t){crumb_x,ys[2],ow,
-                heights[2]},staged);
+            place(&plan,&p->overflow,(os64_gui_rect_t){crumb_x,ys[2],ow,
+                heights[2]});
             if(ow) crumb_x+=ow+gap;
         }
     }
-    if (!staged && p->details.state) (void)os64_ui_dataview_layout(&p->details);
+    if (!staged && p->details.state) {
+        os64_gui_rect_t previous=p->details.w.bounds;
+        for (size_t i=0;i<plan.count;++i)
+            if (plan.items[i].widget==&p->details.w)
+                p->details.w.bounds=plan.items[i].bounds;
+        os64_ui_status_code_t rc=os64_ui_dataview_layout(&p->details);
+        if (rc!=OS64_UI_OK) {
+            p->details.w.bounds=previous;
+            return rc==OS64_UI_NO_MEMORY?OS64_FONT_NO_MEMORY:
+                rc==OS64_UI_BUSY?OS64_FONT_BUSY:OS64_FONT_ENGINE_ERROR;
+        }
+    }
+    for (size_t i=0;i<plan.count;++i) {
+        if (staged) os64_ui_widget_stage_bounds(plan.items[i].widget,plan.items[i].bounds);
+        else plan.items[i].widget->bounds=plan.items[i].bounds;
+    }
     return OS64_FONT_OK;
+}
+
+os64_font_status_t os64_ui_browser_layout(os64_ui_browser_t *p,bool staged)
+{
+    os64_font_status_t rc=browser_layout(p,staged);
+    /* Resize and pane callbacks cannot report failure. Retry at a later sync,
+     * including when Details blocked input after failing to prepare its frame. */
+    if (!staged) p->layout_pending=rc!=OS64_FONT_OK;
+    return rc;
 }
 
 static void breadcrumbs(os64_ui_browser_t *p, const char *path)
@@ -329,6 +368,7 @@ static void breadcrumbs(os64_ui_browser_t *p, const char *path)
 void os64_ui_browser_sync(os64_ui_browser_t *p)
 {
     if (!p->browser) return;
+    if (p->layout_pending) (void)os64_ui_browser_layout(p,false);
     const char *location=os64_browser_location(p->browser);
     if(!location) location="";
     uint64_t revision=os64_browser_revision(p->browser);
@@ -433,7 +473,7 @@ void os64_ui_browser_show(os64_ui_browser_t *p,os64_ui_browser_part_t id,bool vi
     }
     os64_ui_set_hidden(p->ui,w[id],!visible);
     if (id==OS64_UI_BROWSER_BREADCRUMBS && visible && p->browser)
-        breadcrumbs(p,os64_browser_location(p->browser));
+        breadcrumbs(p,p->seen_location);
     os64_ui_browser_layout(p,false);
     os64_ui_mark_dirty(p->ui,p->parent);
 }
@@ -452,4 +492,8 @@ void os64_ui_browser_focus_filter(os64_ui_browser_t *p)
     os64_ui_set_focus(p->ui,&p->filter.w);
 }
 void os64_ui_browser_message(os64_ui_browser_t *p,const char *message)
-{ (void)os64_ui_status_help(&p->status,message,&p->help_token); }
+{
+    uint64_t token=0;
+    if (os64_ui_status_help(&p->status,message,&token)==OS64_UI_OK)
+        p->help_token=token;
+}

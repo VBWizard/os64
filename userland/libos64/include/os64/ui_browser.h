@@ -40,6 +40,7 @@ typedef struct os64_ui_browser {
     char seen_location[OS64_DIRECTORY_PATH];
     char seen_requested[OS64_DIRECTORY_PATH];
     bool visible[OS64_UI_BROWSER_PARTS];
+    bool layout_pending;
 } os64_ui_browser_t;
 
 /* The parent and widget storage remain owned by the caller. Bind the browser
@@ -47,6 +48,8 @@ typedef struct os64_ui_browser {
 void os64_ui_browser_init(os64_ui_browser_t *part, os64_ui_t *ui,
     os64_ui_widget_t *parent);
 void os64_ui_browser_bind(os64_ui_browser_t *part, os64_browser_t *browser);
+/* A failed live layout is retried by sync; Details may block input until
+ * a replacement frame can be prepared. Staged layout follows font adoption. */
 os64_font_status_t os64_ui_browser_layout(os64_ui_browser_t *part, bool staged);
 void os64_ui_browser_sync(os64_ui_browser_t *part);
 void os64_ui_browser_show(os64_ui_browser_t *part, os64_ui_browser_part_t part_id,

@@ -92,11 +92,8 @@ static void clear_cache(os64_browser_t *b, history_t *h)
 static void evict(os64_browser_t *b)
 {
     for (;;) {
-        size_t states=b->current?1:0, victim=OS64_BROWSER_HISTORY;
-        os64_ui_data_projection_t *active=os64_ui_selection_projection(&b->selection);
-        size_t total=b->cache_bytes+(b->current?os64_directory_bytes(b->current):0)+
-            os64_ui_selection_bytes(&b->selection)+os64_ui_data_projection_bytes(active)+
-            os64_ui_data_bytes(os64_ui_data_projection_snapshot(active));
+        size_t states=0, victim=OS64_BROWSER_HISTORY;
+        size_t total=b->cache_bytes;
         uint64_t oldest=UINT64_MAX;
         for (size_t i=0;i<b->count;++i) {
             history_t *h=&b->history[i];

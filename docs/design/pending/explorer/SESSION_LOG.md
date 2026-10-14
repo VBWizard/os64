@@ -896,3 +896,17 @@ is recorded in [E4 validation](evidence/e04/README.md#pr-267--first-review-follo
 Chris also reported more than ten minutes of successful hands-on browsing and
 hide-all minimalist mode; the machine was not specified. File associations
 remain reserved for discussion before E5.
+
+
+## 2026-10-13 — E4 second review corrections
+
+Addressed PR #267's four findings: active-view accounting against the saved
+history budget, lost help tokens on replacement failure, ignored Details
+layout errors, and rejected filter text left visible. Layout collects geometry
+before preparing Details, preserves prior bounds on refusal, and retries
+through sync. The earlier comment about refused runs preserving hit boxes
+was incomplete because it ignored Details preparation; the code and comment
+now cover that child. Controller tests and 3,931 real-font UI checks pass with
+ASan/UBSan/LeakSanitizer; the full userland build and stale-reference checks
+pass. [Review evidence](evidence/e04/README.md#pr-267--second-review-follow-up)
+records the allocation sweeps and remaining native-test scope.

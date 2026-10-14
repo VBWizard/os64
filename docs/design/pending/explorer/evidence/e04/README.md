@@ -130,3 +130,31 @@ sandbox thread-attachment policy requires it. `make -C userland`,
 `git diff --check` and `tools/stale_refs.sh` pass. No native walkthrough was
 repeated for this follow-up; the screenshots and installed hashes above refer
 to the original implementation, not these review corrections.
+
+
+## PR #267 — second review follow-up
+
+The history budget counts cached states and their retained bytes separately
+from the active view. The controller regression verifies identity, selection,
+focus, anchor and viewport after eight intervening locations, and fresh
+identity after nine. It also verifies that a refused filter publication keeps
+the previous projection, filter and revision.
+
+Roam retains the previous help token when replacement fails and restores the
+accepted filter text when an edit or Escape-to-clear cannot be applied.
+Browser geometry is collected before preparing Details. A failed Details
+preparation restores its prior bounds and propagates an error; sync retries
+pending live layout, including callers reached through resize and pane
+callbacks. Breadcrumb rollback keeps labels and targets paired with the prior
+geometry. Details can suspend input during a refused preparation; successful
+retry publishes the new frame and resumes input.
+
+The browser host suite passes. The real-font UI suite passes **3,931 checks**:
+81 breadcrumb allocation refusals recover; resize and pane-toggle sweeps each
+recover 76 refusals, including 21 inside Details preparation. Help replacement
+covers allocation and text-layout failure followed by navigation cleanup;
+filter rejection covers edits, failed clear and subsequent successful clear.
+ASan, UBSan and LeakSanitizer are enabled for both suites outside the sandbox.
+`make -C userland`, `git diff --check` and `tools/stale_refs.sh` pass. No native
+walkthrough was repeated in this review round; earlier images and installed
+hashes remain evidence for their stated source revisions.

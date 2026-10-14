@@ -114,7 +114,31 @@ int main(void)
     assert(os64_browser_can_forward(b));
     assert(os64_browser_activate(b,999,1)==OS64_UI_STALE);
     assert(os64_browser_activate(b,os64_directory_domain(os64_browser_directory(b)),1)==OS64_UI_REFUSED);
+    os64_ui_selection_t *live=view.state;
+    os64_ui_data_projection_t *old_projection=os64_ui_selection_projection(live);
+    uint64_t filter_revision=os64_browser_revision(b);
+    fail_restore=true;
+    assert(os64_browser_filter(b,"alpha",false)==OS64_UI_NO_MEMORY);
+    fail_restore=false;
+    assert(!strcmp(os64_browser_filter_text(b),"beta"));
+    assert(os64_browser_revision(b)==filter_revision);
+    assert(os64_ui_selection_projection(live)==old_projection);
+    uint64_t selected=os64_ui_data_projection_id(old_projection,0);
+    assert(os64_ui_selection_command(live,OS64_UI_SELECTION_CHOOSE,selected)==OS64_UI_OK);
+    top=1;left=17;
     uint64_t cached_domain=os64_directory_domain(os64_browser_directory(b));
+    for (int i=0;i<8;++i) {
+        char path[32];snprintf(path,sizeof(path),"/retain/%d",i);
+        assert(os64_browser_navigate(b,path)==OS64_UI_OK);finish(b);
+    }
+    for (int i=0;i<8;++i) {assert(os64_browser_back(b)==OS64_UI_OK);finish(b);}
+    assert(!strcmp(os64_browser_location(b),"/B"));
+    assert(os64_directory_domain(os64_browser_directory(b))==cached_domain);
+    assert(os64_ui_selection_contains(view.state,selected));
+    assert(os64_ui_selection_focus(view.state)==selected);
+    assert(os64_ui_selection_anchor(view.state)==selected);
+    assert(top==1 && left==17);
+
     for (int i=0;i<9;++i) {
         char path[32];snprintf(path,sizeof(path),"/evict/%d",i);
         assert(os64_browser_navigate(b,path)==OS64_UI_OK);finish(b);
