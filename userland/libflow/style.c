@@ -2544,14 +2544,13 @@ static bool author_fn(const Author *a, const garb_val_t *f, flow_transform_t *ou
         out->a[0] = v[0].number;
         out->a[1] = 0;
         out->unit = angle_unit(&v[0]);
-        // skew(a, b) keeps one unit: b in a's, or both in degrees.
-        if (k > 1 && angle_unit(&v[1]) == out->unit) {
-            out->a[1] = v[1].number;
-        } else if (k > 1) {
-            static const double kPer[] = {1, 0.9, 57.29577951308232, 360};
-            out->a[0] *= kPer[out->unit];
-            out->a[1] = v[1].number * kPer[angle_unit(&v[1])];
-            out->unit = FLOW_ANGLE_DEG;
+        // skew(a, b) keeps one unit, the coarser of the two, so that each
+        // finite angle stays finite in it.
+        if (k > 1) {
+            flow_angle_unit_t second = angle_unit(&v[1]), to = f_angle_coarser(out->unit, second);
+            out->a[0] = f_angle_in_unit(v[0].number, out->unit, to);
+            out->a[1] = f_angle_in_unit(v[1].number, second, to);
+            out->unit = to;
         }
     } else if (is_fn(n, "matrix", NULL) && k == 6) {
         out->fn = FLOW_FN_MATRIX;

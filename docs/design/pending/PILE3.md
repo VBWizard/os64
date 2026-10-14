@@ -1296,9 +1296,13 @@ dropped; the `animation-*` properties are dropped, but for
 `animation-timing-function`, which is that keyframe's own easing; and a
 property that is not animatable is ignored. A property some keyframe
 sets but none at 0% (or at 100%) gets a keyframe there holding its
-computed value on the element — the IMPLICIT keyframes, which are how
+value underneath — the IMPLICIT keyframes, which are how
 `@keyframes in { from { opacity: 0 } }` fades to whatever opacity the
-element has.
+element has. Underneath is the element's computed value with every
+animation before this one in `animation-name` laid over it: Web
+Animations 1 § 5.4.4's effect stack makes each one's result the next
+one's underlying value (Chrome, 10/14: an opacity from 0 to 1 under
+`to { opacity: 0 }` is 0.25 halfway, not 0.5).
 
 **The properties.** `animation-name` lists the animations; `-duration`,
 `-timing-function`, `-iteration-count`, `-direction`, `-play-state`,
@@ -1578,7 +1582,8 @@ holds — each resolved by `finish` as the element's own style is: at its
 font, its parent, its `currentColor`, its zoom, and a relative `url()`
 against the sheet its `@keyframes` rule was written in, as a winner's is
 against its own (`garb_keyframe_t.sheet`). Each keyframe is then a
-computed style, and the implicit keyframes are the base's. The value of
+computed style, and the implicit keyframes are what the animations before
+each one made of the base. The value of
 each animated property at `now` is worked from those (§ What CSS asks:
 the clock, the value) and written into the element's style, and the derived
 facts are resolved from it once, from what every animation leaves
@@ -1648,7 +1653,8 @@ never a NaN; a 3D one's determinant and inverse are worked in long
 double, whose range holds any product of four doubles. Two angles in
 different units are mixed in the coarser of
 the two (fewer to the turn), so moving one into it divides and no angle
-its own unit holds overflows. The tail's lengths need the border box, so the tail is kept as
+its own unit holds overflows — and so are a `skew()`'s two, kept in one
+unit (`skew(1e308rad, 0deg)` in radians). The tail's lengths need the border box, so the tail is kept as
 its two lists and the fraction, and multiplied out where the frame's
 matrix is made (`f_transform_matrix`), with the box known.
 
@@ -1700,7 +1706,10 @@ is due; nor does one that is not drawn moving: a property a later
 animation in effect replaces, whatever the earlier one does to it — an
 animation whose list for it found no room in the layout's budget
 replaces nothing and is due for nothing there, the tree showing the
-property as it was — and a
+property as it was, and one whose interval rests on an implicit
+keyframe replaces nothing either: the value underneath shows through it,
+so the ones below are due for their own changes, and it is still only
+where that value is its own end — and a
 transform whose matrices cannot be undone, drawn as the first and then
 the second (`f_blend_matrix`), which flips at one half as a discrete
 value does; for one that changes at an instant — the next step's edge in
@@ -1709,19 +1718,25 @@ crossing of a discrete value's level (one half, or for visibility 0 and
 1) by its easing, every one an overshooting curve makes; the interval's
 far end — the instant it shows, ahead of the progress the way it runs. A
 value rising to a step changes there, one falling through it (running
-backwards) just past it, and the clock's rounding may put either a hair
-the other side of a whole millisecond: so the millisecond the instant
-lies in is due, and failing that the one after — never late, and at
-most one layout early. A crossing is read as the value reads the eased
-fraction (one half and past it; visibility past 0, and at 1), and is
-due a hair early, by more than the easing's own tolerance in x. And
+backwards) just past it, and the clock's rounding may put either some
+way from the time worked back to it — a millionth of a millisecond, or a
+few last bits of the times the clock works in where those are wider (run
+back over 1e20 ms, some 11000 ms): so the first millisecond that window
+touches is due, and while a layout stands inside it the next — never
+late, and early by at most the window. A crossing is read as the value
+reads the eased fraction (one half and past it; visibility past 0, and
+at 1), at the x the value flips past: the last parameter on the near
+side of it, where the value's own solving lands. And
 because what lies a hair past the instant the progress stands on — an
 end it leaves, a step, a crossing nearer than rounding can place — is
 where no arithmetic of its own can be trusted to the bit, the next
-millisecond is asked of the value itself (`f_motion_style` at now and
-the millisecond after): any difference makes it due — but for a list
-past the look's own room, which is not asked about, since the value it
-is left as may be an earlier animation's that the tree does not show. Then the start of
+millisecond is asked of the value itself (the walk `f_motion_style` is
+built on, at now and the millisecond after, the two in step): any
+difference makes it due, and so does a change in a value an implicit
+keyframe rests on, which the animation resting on it may show later
+though nothing shows it now — but for a list past the look's own room,
+which is not asked about, since the value it is left as may be an
+earlier animation's that the tree does not show. Then the start of
 an active phase; an end — and
 never for one that is paused, finished and filling, or in place and out
 of view, nor for one of nothing that can show: no property it sets is
@@ -1845,8 +1860,11 @@ Written before the code (the lesson of S7b's nineteen rounds):
   bit (halving, x never falling) — so a curve flat in x near an end is
   solved, never stopped at the first parameter whose x is near; near a
   vertical tangent a small step in x is still a large one in y; the
-  schedule finds a crossing by the same arithmetic and wakes a few ulps
-  of x early, and is due at the crossing itself too; the curve's ends are
+  schedule finds a crossing by the same arithmetic — the curve cut where
+  it turns, at its slope's roots by the quadratic formula's stable form,
+  and each piece halved to the last bit — and places it at the x the
+  value flips past, not at a neighbour a double rounds to the curve's
+  end; the curve's ends are
   its ends, y 0 at x 0 and 1 at x 1, however far its controls reach;
   outside [0, 1] the end tangents are exact; steps are exact, their before
   flag with them.
@@ -1985,11 +2003,13 @@ gone and its hold let go, a pause and a resume, an incomplete layout
 dropping nothing, a failed one undone, a cleanup with no room marking
 what it could not drop, three thousand names matched;
 each due time, an inline element's later pieces, a curve whose slope
-no double holds, lists the budget or the probe had no room for — under
-another animation's and over it — a list's change only the probe sees,
-and the canvas's background with its owner's box out of view among
-them, and values that stand still and animations of nothing that can
-show not asked for; THE SCHEDULE AGAINST THE VALUE — thousands of animations
+no double holds and one whose slope's roots lie 1e18 apart, lists the
+budget or the probe had no room for — under another animation's and
+over it — a fuzzer case remade of transform lists, an animation resting on
+a moving one's value, and the canvas's background with its owner's box
+out of view among them, and values that stand still and animations of
+nothing that can show not asked for; implicit keyframes against
+Chrome's values over another animation; THE SCHEDULE AGAINST THE VALUE — thousands of animations
 made at random (one to five keyframes at any offsets, several at one,
 two animations of a property, every easing to a double's extremes,
 every direction and fill), the value asked at every millisecond and

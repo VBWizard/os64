@@ -155,6 +155,13 @@ static void motion_easing_cases(void)
 {
     static const flow_easing_t kEase = {FLOW_EASE_CUBIC, {0.25, 0.1, 0.25, 1}, 0, 0, true};
     static const flow_easing_t kOver = {FLOW_EASE_CUBIC, {0.2, 0.86, 0.32, 1.22}, 0, 0, false};
+    // Controls that cancel: cubic-bezier(0.5, 1e300, 0.5, -1e300) is x 0.5
+    // and y 1/8 at the curve's middle, the two huge terms equal and
+    // opposite there — which a power form, its coefficients 6e300 and
+    // -9e300 with the 1 lost beside them, works out as 0.
+    static const flow_easing_t kCancel = {FLOW_EASE_CUBIC, {0.5, 1e300, 0.5, -1e300}, 0, 0, false};
+    expect("easing: controls that cancel leave the curve's own y",
+           f_ease(&kCancel, 0.5, false) == 0.125, NULL);
     // On [0, 1], y at the parameter whose x is the input, found to the
     // last bit: within the curve's slope times a hair of the exact y.
     for (int i = 0; i <= 100; i++) {
@@ -762,6 +769,25 @@ static void motion_cascade_cases(void)
                (s = moving_style(&m, "jg")) != NULL ? s->opacity : -1, 802);
     moving_close(&m);
 
+    // An implicit keyframe is the value the animations before it made,
+    // not the element's own (Chrome, 10/14: 0.25, 0.25, 0.75, 0.125 — the
+    // last with the one underneath a quarter through).
+    moving_open(&m, MOTION_STYLE
+        "@keyframes up{from{opacity:0}to{opacity:1}}@keyframes dn{to{opacity:0}}"
+        "@keyframes df{from{opacity:0}}@keyframes st{to{opacity:1}}"
+        "#ua{animation:up 1s linear -.5s paused,dn 1s linear -.5s paused}"
+        "#ub{animation:up 1s linear -.5s paused,df 1s linear -.5s paused}"
+        "#uc{animation:up 1s linear -.5s paused,st 1s linear -.5s paused}"
+        "#ud{animation:up 1s linear -.25s paused,dn 1s linear -.5s paused}"
+        "</style><div id=ua></div><div id=ub></div><div id=uc></div><div id=ud></div>", 1000);
+    static const struct { const char *id; int64_t want; } kUnder[] = {
+        {"ua", 250}, {"ub", 250}, {"uc", 750}, {"ud", 125},
+    };
+    for (size_t i = 0; i < sizeof(kUnder) / sizeof(kUnder[0]); i++)
+        expect_i64("motion: an implicit keyframe is the value underneath",
+                   (s = moving_style(&m, kUnder[i].id)) != NULL ? s->opacity : -1, kUnder[i].want);
+    moving_close(&m);
+
     // A shadow and a border mixed from currentColor to a colour use the
     // colour the element ends with, which another animation moves (Chrome,
     // 10/14: rgb(100,0,0) composed, both rgb(50,0,128) halfway to blue).
@@ -948,6 +974,30 @@ static void motion_cascade_cases(void)
         for (int k = 0; k <= 4; k++)
             refused &= !f_matrix_mix(kMats[7], kMats[0], k / 4.0, out);
         expect("motion: a 2D row longer than a double holds makes no mix", refused, NULL);
+    }
+
+    // skew(a, b) in two units keeps the coarser, so each finite angle
+    // stays finite in it: skew(1e308rad, 0deg) is skew(1e308rad), not a
+    // NaN, and skew(45deg, 50grad) is skew(45deg, 45deg).
+    {
+        Moving sk;
+        moving_open(&sk, MOTION_STYLE "</style>"
+                    "<div id=k1 style='transform:skew(1e308rad, 0deg)'></div>"
+                    "<div id=k2 style='transform:skew(1e308rad)'></div>"
+                    "<div id=k3 style='transform:skew(45deg, 50grad)'></div>"
+                    "<div id=k4 style='transform:skew(45deg, 45deg)'></div>", 0);
+        double m1[16], m2[16], m3[16], m4[16];
+        bool got = moving_matrix(&sk, "k1", m1) && moving_matrix(&sk, "k2", m2) &&
+                   moving_matrix(&sk, "k3", m3) && moving_matrix(&sk, "k4", m4);
+        bool finite = got, same = got, mixed = got;
+        for (int i = 0; got && i < 16; i++) {
+            finite &= isfinite(m1[i]);
+            same &= m1[i] == m2[i];
+            mixed &= fabs(m3[i] - m4[i]) <= 1e-12;
+        }
+        expect("motion: skew(1e308rad, 0deg) is finite, and skew(1e308rad)", finite && same, NULL);
+        expect("motion: skew(45deg, 50grad) is skew(45deg, 45deg)", mixed, NULL);
+        moving_close(&sk);
     }
 
     // An easing at the edge of what a double holds: its output is held to
@@ -1503,6 +1553,44 @@ static void motion_due_cases(void)
     expect_u32("motion due: an opacity a later animation holds is not moving",
                (uint32_t)flow_motion_due(m.tree, kView, (flow_point_t){0, 0}), 2000);
     moving_close(&m);
+    // An animation resting on the value underneath shows it through: its
+    // own end the element's opacity, it still moves while the one under
+    // it does — and so does that one, which it does not replace.
+    moving_open(&m, MOTION_STYLE
+        "@keyframes up{from{opacity:0}to{opacity:1}}@keyframes st{to{opacity:1}}"
+        "</style><div id=ov style='animation:up 1s linear,st 1s linear'>x</div>", 1000);
+    expect_u32("motion due: an animation resting on a moving one moves",
+               (uint32_t)flow_motion_due(m.tree, kView, (flow_point_t){0, 0}), 1000);
+    moving_close(&m);
+    // An animation resting on the value underneath, still where it rests
+    // on its own end, replaces nothing: the one under it is due at its
+    // step, where the value under the later one moves.
+    moving_open(&m, MOTION_STYLE
+        "@keyframes up{from{opacity:0}to{opacity:1}}@keyframes dn{to{opacity:0}}"
+        "</style><div id=ov style='animation:up 1s steps(2, end),dn 1s linear'>x</div>", 1000);
+    expect_u32("motion due: the one under an implicit keyframe is due for its own change",
+               (uint32_t)flow_motion_due(m.tree, kView, (flow_point_t){0, 0}), 1500);
+    moving_close(&m);
+    // A value underneath the schedule's walk had no room to make — a
+    // 64-function list held still — is not known, and the animation
+    // resting on it, from it to none, moves.
+    {
+        size_t cap = 64 * 17 * 2 + 512, at = 0;
+        char *html = malloc(cap);
+        at += (size_t)snprintf(html + at, cap - at, MOTION_STYLE "@keyframes big{from{transform:");
+        for (int i = 0; i < 64; i++)
+            at += (size_t)snprintf(html + at, cap - at, "translateX(1px) ");
+        at += (size_t)snprintf(html + at, cap - at, "}to{transform:");
+        for (int i = 0; i < 64; i++)
+            at += (size_t)snprintf(html + at, cap - at, "translateX(1px) ");
+        (void)snprintf(html + at, cap - at, "}}@keyframes off{to{transform:none}}</style>"
+                       "<div style='animation:big 1s linear,off 1s linear'>x</div>");
+        moving_open(&m, html, 1000);
+        expect_u32("motion due: an animation resting on a value the walk could not make moves",
+                   (uint32_t)flow_motion_due(m.tree, kView, (flow_point_t){0, 0}), 1000);
+        moving_close(&m);
+        free(html);
+    }
     // And where the earlier one also sets a colour it holds still, which
     // shows: its clock counts, its opacity still does not move.
     moving_open(&m, MOTION_STYLE
@@ -2039,12 +2127,16 @@ static int fuzz_edges(const FAnimation *an, int horizon)
 // The seeds of every case the schedule has failed, run first and every
 // time: each holds a rounding the schedule must place as the value does —
 // an edge a hair behind the millisecond the progress stands on, a curve
-// flat where it meets its level, a progress an ulp short of a keyframe.
+// flat where it meets its level, a progress an ulp short of a keyframe —
+// and changes nothing shows yet, under an animation resting on the value
+// that will show them later: a crossing whose x rounds to the end the
+// progress runs back from, a change just past the instant the progress
+// stands on.
 static const uint64_t kFuzzRegressions[] = {
     8590968431883392784ULL,  6633983532214220214ULL,  7087835111071699824ULL,
     8040739818910956811ULL,  13009149457079927089ULL, 14972483720120255669ULL,
     14583056590173832281ULL, 8411317154603802884ULL,  8985172716612446494ULL,
-    9795968407517579881ULL,
+    9795968407517579881ULL,  9496088273930796795ULL,  17289734992611070855ULL,
 };
 
 typedef struct {
@@ -2214,13 +2306,12 @@ static void fuzz_as_list(flow_style_t *s, int kind, const flow_style_t *const li
     }
 }
 
-// A change only the probe of the next millisecond sees — the fuzzer's seed
+// A case the fuzzer found the schedule late for — seed
 // 15973564121497552185, a discrete text-align changing at 76 ms, two
 // animations of it — made a transform list's: each of the three values a
 // list that mixes only discretely (two translations, then a singular
 // matrix no decomposition undoes), small enough that both animations'
-// mixes fit in one look's lists, and two looks' would not. Each look with
-// its own, the change is due at its millisecond.
+// mixes fit in a probe look's lists. The change is due at its millisecond.
 static void motion_probe_list_cases(void)
 {
     Moving lm;
@@ -2265,7 +2356,8 @@ static void motion_probe_list_cases(void)
     double due = f_motion_next(&m, 75);
     char detail[64];
     snprintf(detail, sizeof(detail), "due %.17g", due);
-    expect("motion due: a list's change only the probe sees is due", ok && due > 75 && due <= 76, detail);
+    expect("motion due: the fuzzer's case made of transform lists is due at its change",
+           ok && due > 75 && due <= 76, detail);
     flow_timeline_free(tl);
     moving_close(&lm);
 }
@@ -2468,10 +2560,11 @@ static void motion_held_time_cases(void)
     moving_close(&m);
 }
 
-// A crossing in an interval so long that the schedule's early wake lies a
-// long way before it: a layout late past that wake, still short of the
-// crossing, finds the crossing itself due — and on two days' animation,
-// the wake lies within the millisecond of the flip.
+// A crossing in an interval so long that the clock's rounding puts the
+// flip a long way either side of the time worked back to it: the schedule
+// wakes at the start of that window, and a layout inside it finds a time
+// due no later than the crossing and not behind it — and on two days'
+// animation, the window is within the millisecond of the flip.
 static void motion_long_crossing_cases(void)
 {
     os64_html_document_t *doc = parse("<!doctype html><p id=x>x</p>");
@@ -2513,10 +2606,103 @@ static void motion_long_crossing_cases(void)
             expect("motion: two days' crossing wakes within its millisecond",
                    ok && wake <= half && wake >= half - 1, detail);
         else
-            expect("motion: a layout late past the early wake finds the crossing due",
-                   ok && wake < half - 100 && late >= half - 1 && late <= half + 1, detail);
+            expect("motion: a layout inside a crossing's window finds it due",
+                   ok && wake < half - 100 && late >= half - 100 && late <= half, detail);
         flow_timeline_free(tl);
     }
+
+    // A curve whose slope's roots lie far apart in size: cubic-bezier(1/3,
+    // 1, 2/3, -1e18) rises, turns at 5e-19 and is back below 0 by 1e-18.
+    // Hidden to visible over 1e22 ms, it shows at once and is hidden again
+    // at 10000 ms — which is due there, the turn kept though a root that
+    // much larger stands beside it, and the crossing found to the last bit.
+    FKeyframe vf[2];
+    memset(vf, 0, sizeof(vf));
+    for (int k = 0; k < 2; k++) {
+        vf[k].offset = k;
+        vf[k].style = base;
+        vf[k].style.visibility = k ? FLOW_VISIBLE : FLOW_HIDDEN;
+        f_props_add(&vf[k].sets, GARB_VISIBILITY);
+    }
+    FAnimation va;
+    memset(&va, 0, sizeof(va));
+    va.timing.name = (flow_name_t){"v", 1};
+    va.timing.duration_ms = 1e22;
+    va.timing.iterations = 1;
+    va.timing.easing = (flow_easing_t){FLOW_EASE_CUBIC, {1.0 / 3, 1, 2.0 / 3, -1e18}, 0, 0, false};
+    va.frames = vf;
+    va.nframes = 2;
+    f_props_add(&va.props, GARB_VISIBILITY);
+    FMotion vm;
+    memset(&vm, 0, sizeof(vm));
+    vm.base = base;
+    vm.anims = &va;
+    vm.nanims = 1;
+    flow_timeline_t *vt = flow_timeline_new(doc);
+    f_timeline_begin(vt);
+    bool vok = f_timeline_element(vt, x, &vm, 0);
+    f_timeline_end(vt, true);
+    flow_style_t shown = vm.base;
+    (void)f_motion_style(&vm, 1, &shown, NULL, NULL, NULL, false);
+    double back = f_motion_next(&vm, 1);
+    char vdetail[64];
+    snprintf(vdetail, sizeof(vdetail), "visible %d, due %.17g", shown.visibility == FLOW_VISIBLE, back);
+    expect("motion: a turn beside a far larger root is kept, and the return due",
+           vok && shown.visibility == FLOW_VISIBLE && back >= 9990 && back <= 10001, vdetail);
+    flow_timeline_free(vt);
+
+    // A crossing by an end, run back from it: cubic-bezier(0.98, -1e308,
+    // 0.027, 0.25) crosses one half at t = 1 - 4e-155, an x a double
+    // rounds to 1, and the value — its parameter the least whose x reaches
+    // the progress — keeps the end's reading down to the x of the last
+    // parameter below 1. Over 1e20 ms, reversed, the clock carries the
+    // progress there some 28000 ms in, a last bit of 1 being 11000 ms: the
+    // schedule is due no later than the millisecond the value changes, not
+    // dropped behind as an x of 1.
+    FKeyframe af[2];
+    memset(af, 0, sizeof(af));
+    for (int k = 0; k < 2; k++) {
+        af[k].offset = k;
+        af[k].style = base;
+        af[k].style.text_align = k ? FLOW_ALIGN_RIGHT : FLOW_ALIGN_LEFT;
+        f_props_add(&af[k].sets, GARB_TEXT_ALIGN);
+    }
+    FAnimation aa;
+    memset(&aa, 0, sizeof(aa));
+    aa.timing.name = (flow_name_t){"a", 1};
+    aa.timing.duration_ms = 1e20;
+    aa.timing.iterations = 1;
+    aa.timing.direction = FLOW_DIRECTION_REVERSE;
+    aa.timing.easing = (flow_easing_t){FLOW_EASE_CUBIC, {0.98, -1e308, 0.027, 0.25}, 0, 0, false};
+    aa.frames = af;
+    aa.nframes = 2;
+    f_props_add(&aa.props, GARB_TEXT_ALIGN);
+    FMotion am;
+    memset(&am, 0, sizeof(am));
+    am.base = base;
+    am.anims = &aa;
+    am.nanims = 1;
+    flow_timeline_t *at = flow_timeline_new(doc);
+    f_timeline_begin(at);
+    bool aok = f_timeline_element(at, x, &am, 0);
+    f_timeline_end(at, true);
+    double adue = f_motion_next(&am, 10000);
+    flow_style_t before = am.base;
+    (void)f_motion_style(&am, 10000, &before, NULL, NULL, NULL, false);
+    double changes = 0;
+    for (double t = 10001; t <= 100000 && changes == 0; t++) {
+        flow_style_t v = am.base;
+        (void)f_motion_style(&am, t, &v, NULL, NULL, NULL, false);
+        if (v.text_align != before.text_align)
+            changes = t;
+    }
+    char adetail[96];
+    snprintf(adetail, sizeof(adetail), "due %.17g, the value changes at %.17g", adue, changes);
+    expect("motion: a crossing an x rounds to the end it runs back from is due before it flips",
+           aok && before.text_align == FLOW_ALIGN_RIGHT && changes > 10000 && adue > 10000 &&
+               adue <= changes,
+           adetail);
+    flow_timeline_free(at);
     os64_html_document_free(doc);
 }
 

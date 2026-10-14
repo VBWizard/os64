@@ -70,12 +70,6 @@ static double bezier_y(double p1, double p2, double t)
     return held(3 * u * u * v * p1 + 3 * u * v * v * p2 + v * v * v);
 }
 
-// How far a crossing the schedule finds may lie from where the value
-// flips, in the eased interval's x: both find the curve's parameter to the
-// last bit, by the same arithmetic, so a few ulps of x — and the schedule
-// wakes that much early.
-#define EASE_X_SLACK 1e-15
-
 // The curve's y at the parameter whose x is `x`: the least t with x(t) at
 // or past it, found by halving [0, 1] until no double lies between the
 // halves (x(t) never falls, since x1 and x2 are in [0, 1]). Never stopped
@@ -1269,16 +1263,12 @@ static double per_turn(flow_angle_unit_t unit)
     }
 }
 
-// Of two angles' units, the coarser — fewer to the turn — which both are
-// mixed in: moving an angle into it divides, so no angle a unit holds
-// overflows on the way (rotate(1e308rad) against rotate(0deg) mixes in
-// radians).
-static flow_angle_unit_t coarser(flow_angle_unit_t a, flow_angle_unit_t b)
+flow_angle_unit_t f_angle_coarser(flow_angle_unit_t a, flow_angle_unit_t b)
 {
     return per_turn(a) <= per_turn(b) ? a : b;
 }
 
-static double in_unit(double v, flow_angle_unit_t from, flow_angle_unit_t to)
+double f_angle_in_unit(double v, flow_angle_unit_t from, flow_angle_unit_t to)
 {
     return from == to ? v : v * (per_turn(to) / per_turn(from));
 }
@@ -1353,17 +1343,19 @@ static flow_transform_t mix_fn(const flow_transform_t *a, const flow_transform_t
         double axis[3];
         (void)same_axis(a, b, axis);
         os64_memcpy(r.a, axis, sizeof(axis));
-        r.unit = coarser(a->unit, b->unit);
+        r.unit = f_angle_coarser(a->unit, b->unit);
         double ta = has_axis(a) ? a->a[3] : 0, tb = has_axis(b) ? b->a[3] : 0;
-        r.a[3] = lerp(in_unit(ta, a->unit, r.unit), in_unit(tb, b->unit, r.unit), t);
+        r.a[3] = lerp(f_angle_in_unit(ta, a->unit, r.unit), f_angle_in_unit(tb, b->unit, r.unit),
+                      t);
         break;
     }
     default: {
         // The skews: their angles, in one unit.
         int n = a->fn == FLOW_FN_SKEW ? 2 : 1;
-        r.unit = coarser(a->unit, b->unit);
+        r.unit = f_angle_coarser(a->unit, b->unit);
         for (int i = 0; i < n; i++)
-            r.a[i] = lerp(in_unit(a->a[i], a->unit, r.unit), in_unit(b->a[i], b->unit, r.unit), t);
+            r.a[i] = lerp(f_angle_in_unit(a->a[i], a->unit, r.unit),
+                          f_angle_in_unit(b->a[i], b->unit, r.unit), t);
         break;
     }
     }
@@ -2039,20 +2031,26 @@ static bool mix_prop(garb_prop_t p, const flow_style_t *a, const flow_style_t *b
 
 // ── An animation's value (Web Animations 1 § 5.3.4) ─────────────────────
 
-// A keyframe as one property sees it: its style, offset and easing.
+// A keyframe as one property sees it: its style, offset and easing, and
+// whether it is implicit — the value underneath, not the animation's own.
 typedef struct {
     const flow_style_t *style;
     double offset;
     const flow_easing_t *easing;
+    bool implicit;
 } Frame;
 
-// The frames property `p` is worked between: the implicit first, the
-// base's at 0, where no keyframe that sets it is at 0; those that do, in
-// their order; the implicit last, the base's at 1, where none is at 1 —
-// eased as the animation is (Animations 2 § 3.2).
+// The frames property `p` is worked between: the implicit first at 0,
+// where no keyframe that sets it is at 0; those that do, in their order;
+// the implicit last at 1, where none is at 1 — eased as the animation is
+// (Animations 2 § 3.2). An implicit frame is `under`, the value the
+// animations before this one made of the element's own: Web Animations 1
+// § 5.4.4's effect stack makes each one's result the next one's
+// underlying value (Chrome, 10/14: from 0 to 1 under `to {opacity: 0}`
+// is 0.25 halfway, not 0.5).
 typedef struct {
-    const FMotion *m;
     const FAnimation *an;
+    const flow_style_t *under;
     garb_prop_t p;
     bool at0, at1;
 } Line;
@@ -2064,25 +2062,25 @@ static Frame line_frame(const Line *l, int32_t i)
     const flow_easing_t *own = &l->an->timing.easing;
     if (!l->at0) {
         if (i == 0)
-            return (Frame){&l->m->base, 0, own};
+            return (Frame){l->under, 0, own, true};
         i--;
     }
     for (int32_t j = 0; j < l->an->nframes; j++) {
         const FKeyframe *f = &l->an->frames[j];
         if (f_props_has(&f->sets, l->p) && i-- == 0)
-            return (Frame){&f->style, f->offset, f->has_easing ? &f->easing : own};
+            return (Frame){&f->style, f->offset, f->has_easing ? &f->easing : own, false};
     }
-    return (Frame){&l->m->base, 1, own};
+    return (Frame){l->under, 1, own, true};
 }
 
 // The two frames of the line around `progress`, as Web Animations 1
 // § 5.3.4 finds them: the last at or before the progress and before 1,
 // and the one after; of several at 1, at the end, the last alone (`*start`
 // and `*end` the same).
-static void interval(const FMotion *m, const FAnimation *an, garb_prop_t p, double progress,
+static void interval(const FAnimation *an, const flow_style_t *under, garb_prop_t p, double progress,
                      Frame *start, Frame *end)
 {
-    Line l = {m, an, p, false, false};
+    Line l = {an, under, p, false, false};
     for (int32_t i = 0; i < an->nframes; i++)
         if (f_props_has(&an->frames[i].sets, p)) {
             l.at0 |= an->frames[i].offset == 0;
@@ -2131,43 +2129,92 @@ static double eased(const Frame *start, const Frame *end, double progress, bool 
     return f_ease(start->easing, x, before);
 }
 
-bool f_motion_style(const FMotion *m, double now, flow_style_t *out, FAlloc alloc, void *ctx,
-                    FProps *failed, bool record)
+// One look of a walk (motion_walk): its time, the style the values are
+// laid over — which holds the base — where its lists come from, and the
+// properties whose lists found no room.
+typedef struct {
+    double now;
+    flow_style_t *out;
+    FAlloc alloc;
+    void *ctx;
+    FProps *failed;
+} Look;
+
+enum { LOOKS_MAX = 2 };
+
+// What a walk hands its step before each value is mixed, where every look
+// has the animation in effect: the animation, the property, and each
+// look's clock and the frames around its progress. False from the step
+// ends the walk.
+typedef bool (*Step)(void *ctx, int32_t a, garb_prop_t p, int32_t nlooks, const Clock *k, const Frame *s,
+                     const Frame *e);
+
+// The animations' values laid over each look's style at its time, the
+// looks in step — `step`, when given, told of each before it is mixed.
+// `color` first, every animation's, so a currentColor anything else
+// mixes is the colour the element ends with (CSS Color 4 § 12, its used
+// value); then the rest; and a side's width after its style, which brings
+// a width of its own. Each animation's implicit frames are what the ones
+// before it made, held still while it mixes over the look's style.
+static bool motion_walk(const FMotion *m, Look *looks, int32_t nlooks, bool record, Step step, void *sctx)
 {
     bool ok = true;
-    // `color` first, every animation's, so a currentColor anything else
-    // mixes is the colour the element ends with (CSS Color 4 § 12, its
-    // used value); then the rest; and a side's width after its style,
-    // which brings a width of its own.
+    flow_style_t under[LOOKS_MAX];
+    Clock k[LOOKS_MAX];
     for (int pass = 0; pass < 3; pass++)
         for (int32_t a = 0; a < m->nanims; a++) {
             const FAnimation *an = &m->anims[a];
             if (an->record == NULL)
                 continue;
-            Clock k = clock_at(&an->timing, local_time(an->record, now));
-            if (!k.in_effect)
+            int32_t in = 0;
+            for (int32_t i = 0; i < nlooks; i++) {
+                k[i] = clock_at(&an->timing, local_time(an->record, looks[i].now));
+                in += k[i].in_effect;
+            }
+            if (in == 0)
                 continue;
+            bool held = false;
             for (int p = 0; p < GARB_NPROPS; p++) {
                 bool width = p >= GARB_BORDER_TOP_WIDTH && p <= GARB_BORDER_LEFT_WIDTH;
-                int in = p == GARB_COLOR ? 0 : width ? 2 : 1;
-                if (in != pass || !f_props_has(&an->props, (garb_prop_t)p) || !animatable((garb_prop_t)p) ||
+                int at = p == GARB_COLOR ? 0 : width ? 2 : 1;
+                if (at != pass || !f_props_has(&an->props, (garb_prop_t)p) || !animatable((garb_prop_t)p) ||
                     f_props_has(&an->dropped, (garb_prop_t)p))
                     continue;
-                Frame s, e;
-                MixKind kind;
-                interval(m, an, (garb_prop_t)p, k.progress, &s, &e);
-                if (!mix_prop((garb_prop_t)p, s.style, e.style,
-                              eased(&s, &e, k.progress, k.before), out, &kind, alloc, ctx)) {
+                if (!held) {
+                    for (int32_t i = 0; i < nlooks; i++)
+                        if (k[i].in_effect)
+                            under[i] = *looks[i].out;
+                    held = true;
+                }
+                Frame s[LOOKS_MAX], e[LOOKS_MAX];
+                for (int32_t i = 0; i < nlooks; i++)
+                    if (k[i].in_effect)
+                        interval(an, &under[i], (garb_prop_t)p, k[i].progress, &s[i], &e[i]);
+                if (step != NULL && in == nlooks && !step(sctx, a, (garb_prop_t)p, nlooks, k, s, e))
+                    return ok;
+                for (int32_t i = 0; i < nlooks; i++) {
+                    MixKind kind;
+                    if (!k[i].in_effect ||
+                        mix_prop((garb_prop_t)p, s[i].style, e[i].style,
+                                 eased(&s[i], &e[i], k[i].progress, k[i].before), looks[i].out, &kind,
+                                 looks[i].alloc, looks[i].ctx))
+                        continue;
                     ok = false;
-                    if (failed != NULL)
-                        f_props_add(failed, (garb_prop_t)p);
+                    if (looks[i].failed != NULL)
+                        f_props_add(looks[i].failed, (garb_prop_t)p);
                     if (record)
                         f_props_add(&m->anims[a].dropped, (garb_prop_t)p);
                 }
             }
         }
-    // What is in currentColor follows the colour as it moves; a side drawn
-    // as none or hidden has no width (Backgrounds 3 § 4.3).
+    return ok;
+}
+
+// What every animation leaves together, worked once from the style they
+// leave: what is in currentColor follows the colour as it moves; a side
+// drawn as none or hidden has no width (Backgrounds 3 § 4.3).
+static void motion_settle(flow_style_t *out)
+{
     for (int i = 0; i < 4; i++) {
         if (out->current_colours & FLOW_CURRENT_BORDER(i))
             out->border_color[i] = out->color;
@@ -2180,6 +2227,14 @@ bool f_motion_style(const FMotion *m, double now, flow_style_t *out, FAlloc allo
     }
     if (out->current_colours & FLOW_CURRENT_FILL)
         out->fill = out->color;
+}
+
+bool f_motion_style(const FMotion *m, double now, flow_style_t *out, FAlloc alloc, void *ctx,
+                    FProps *failed, bool record)
+{
+    Look look = {now, out, alloc, ctx, failed};
+    bool ok = motion_walk(m, &look, 1, record, NULL, NULL);
+    motion_settle(out);
     return ok;
 }
 
@@ -2223,12 +2278,18 @@ static bool past_level(double y, double level, bool strict)
 // takes y past `level` or back (past_level): at most three, in order, into
 // `xs`; how many. A cubic's y is a cubic in the curve's parameter, so it
 // is cut where it turns (its slope's roots), and each piece whose ends
-// read differently is halved down to where the reading changes — asked of
-// the y the value itself is worked from, so a crossing lands where the
-// value flips even where y rounds to the level across a stretch of the
-// curve (an inflection flat there). x rises with the parameter (x1 and x2
-// are in [0, 1]), so the crossings come in order; one so near an end that
-// its x rounds to it is kept, the value changing just past that end.
+// read differently is halved to the last bit, where the reading changes
+// — asked of the y the value itself is worked from, so a crossing lands
+// where the value flips even where y rounds to the level across a
+// stretch of the curve (an inflection flat there). x rises with the
+// parameter (x1 and x2 are in [0, 1]), so the crossings come in order.
+// Each is the x the value flips past: the value solves its parameter as
+// the least t whose x reaches the input (cubic), so it reads as before a
+// crossing up to the x of the last parameter on that side, and after it
+// past that x — which is the one kept, not the x of the first parameter
+// beyond, which by an end is one a double rounds to the end
+// (cubic-bezier(0.98, -1e308, 0.027, 0.25) crosses one half at
+// t = 1 - 4e-155, and run backwards flips near x = 1 - 3e-16).
 static int32_t ease_crossings(const flow_easing_t *e, double level, bool strict, double xs[3])
 {
     if (e == NULL || e->kind != FLOW_EASE_CUBIC) {
@@ -2246,22 +2307,23 @@ static int32_t ease_crossings(const flow_easing_t *e, double level, bool strict,
     long double big = la3 < 0 ? -la3 : la3, mb = lb2 < 0 ? -lb2 : lb2, mc = lc < 0 ? -lc : lc;
     big = mb > big ? mb : big;
     big = mc > big ? mc : big;
-    double qa = (double)(la3 / big), qb = (double)(lb2 / big), qc = (double)(lc / big);
+    long double qa = la3 / big, qb = lb2 / big, qc = lc / big;
     double cut[4] = {0};
     int32_t nc = 1;
+    // Its roots by the quadratic formula's stable form: qb and the
+    // discriminant's root added at one sign, never one taken from the
+    // other, give the larger root, and the roots' product the smaller — so
+    // a root beside a far larger one is not lost to cancellation
+    // (cubic-bezier(1/3, 1, 2/3, -1e18) turns at 5e-19), and a vanishing
+    // qa leaves the one root a line has.
     double roots[2];
     int32_t nr = 0;
-    if (fabs(qa) < 1e-12) {
-        if (fabs(qb) > 1e-12)
-            roots[nr++] = -qc / qb;
-    } else {
-        double disc = qb * qb - 4 * qa * qc;
-        if (disc >= 0) {
-            double sq = sqrt(disc);
-            double r0 = (-qb - sq) / (2 * qa), r1 = (-qb + sq) / (2 * qa);
-            roots[nr++] = fmin(r0, r1);
-            roots[nr++] = fmax(r0, r1);
-        }
+    long double disc = qb * qb - 4 * qa * qc;
+    if (disc >= 0) {
+        long double sq = sqrt((double)disc), q = -0.5L * (qb + (qb < 0 ? -sq : sq));
+        double r0 = qa != 0 ? (double)(q / qa) : NAN, r1 = q != 0 ? (double)(qc / q) : NAN;
+        roots[nr++] = fmin(r0, r1);
+        roots[nr++] = fmax(r0, r1);
     }
     for (int32_t i = 0; i < nr; i++)
         if (roots[i] > 0 && roots[i] < 1)
@@ -2274,15 +2336,20 @@ static int32_t ease_crossings(const flow_easing_t *e, double level, bool strict,
     for (int32_t i = 0; i + 1 < nc && n < 3; i++) {
         if (past[i] == past[i + 1])
             continue;
+        // Halved to the last bit, as the curve's own parameter is (cubic):
+        // a fixed count of halvings is a fixed size, and a crossing at
+        // 1e-18 beside a piece 0.7 long would land 4% wide of it.
         double t0 = cut[i], t1 = cut[i + 1];
-        for (int k = 0; k < 64; k++) {
-            double mid = (t0 + t1) / 2;
+        for (int k = 0; k < 1100; k++) {
+            double mid = t0 + (t1 - t0) / 2;
+            if (!(mid > t0 && mid < t1))
+                break;
             if (past_level(bezier_y(p[1], p[3], mid), level, strict) == past[i])
                 t0 = mid;
             else
                 t1 = mid;
         }
-        xs[n++] = fmin(fmax(bezier(p[0], p[2], t1), 0), 1);
+        xs[n++] = fmin(fmax(bezier(p[0], p[2], t0), 0), 1);
     }
     return n;
 }
@@ -2322,34 +2389,47 @@ bool f_motion_in_place(const FMotion *m)
     return true;
 }
 
-// When a change at time `at` first shows, after `now`. A value rising to
-// a step or a level changes there; one falling through it changes just
-// past it (running backwards, the before flag is clear in the active
-// phase, Web Animations 1 § 4.7.7); and a change near a whole millisecond
-// may land a hair either side of it once the clock's arithmetic has
-// rounded. So the millisecond `at` is in or touches is due, and failing
-// that the one after: never late, and at most one layout early. A change
-// at the instant the progress stands on — worked back from a progress, so
-// a hair either side of `now` — is due the millisecond after. INFINITY for
-// a change already shown.
-static double change_due(double at, double now)
+// When a change at time `at` first shows, after `now`, `at` true to `tol`.
+// A value rising to a step or a level changes there; one falling through it
+// changes just past it (running backwards, the before flag is clear in the
+// active phase, Web Animations 1 § 4.7.7); and the clock's arithmetic may
+// put the change anywhere `tol` either side of `at`. So the first
+// millisecond that window touches is due — and while a layout stands
+// inside it, the next: never late, and early by at most the window. A
+// change at the instant the progress stands on — worked back from a
+// progress, so a hair either side of `now` — is due the millisecond after.
+// INFINITY for a change already shown.
+static double change_due(double at, double tol, double now)
 {
-    double first = ceil(at - 1e-6), after = floor(at + 1e-6) + 1;
-    return first > now ? first : after > now ? after : INFINITY;
+    double first = ceil(at - tol), after = floor(at + tol) + 1;
+    return first > now ? first : after > now ? floor(now) + 1 : INFINITY;
+}
+
+// How far the clock's rounding can put a change from the time worked back
+// to it from a progress: a few ulps of the times it is worked in — the
+// time itself and how far into the animation it is — and, running
+// backwards, where the progress is one less a fraction and so true only to
+// a last bit of 1, of the duration too; never less than a millionth of a
+// millisecond. Run back over 1e20 ms, that last bit is some 11000 ms.
+static double clock_tol(double at, double base, double dur, bool forwards)
+{
+    return fmax(1e-6, 8 * DBL_EPSILON * (fabs(at) + fabs(at - base) + (forwards ? 0 : fabs(dur))));
 }
 
 // When a change at progress `p` of the current iteration shows
 // (change_due).
 static double edge_due(const Clock *k, const flow_animation_t *a, double base, double p, double now)
 {
-    return change_due(base + at_progress(k, a, p), now);
+    double at = base + at_progress(k, a, p);
+    return change_due(at, clock_tol(at, base, a->duration_ms, k->forwards), now);
 }
 
-// Lists for one of a probe's two looks, on the stack, each look its own: a
-// list that moves continuously is due already, and one past the room is
-// not asked about — the look names it, and what the schedule reckons of
-// it stands, rather than the value it was left as, which may be an
-// earlier animation's that the tree does not show.
+// Lists for one look of a walk the schedule makes — its own, or one of the
+// probe's two — on the stack, each look its own. A list that moves
+// continuously is due already; one past the room is named, and is not
+// asked about by the probe, since the value it was left as may be an
+// earlier animation's that the tree does not show, and the value it
+// leaves under a later animation is not known (due_step).
 typedef struct {
     _Alignas(16) unsigned char buf[4096];
     size_t used;
@@ -2365,11 +2445,40 @@ static void *probe_alloc(void *ctx, size_t bytes)
     return l->buf + at;
 }
 
+// The probe's two looks (changes_by): whether a value an implicit
+// keyframe rests on differs between them, and the properties either had
+// no room for.
+typedef struct {
+    bool moved;
+    const FProps *fa, *fb;
+} Under;
+
+// Whether the value under animation `a`'s implicit keyframe of `p` moves
+// between the probe's looks: what rests on it may show the change later,
+// though nothing shows it now (an implicit keyframe whose own animation
+// has not yet eased toward it).
+static bool under_step(void *ctx, int32_t a, garb_prop_t p, int32_t nlooks, const Clock *k, const Frame *s,
+                       const Frame *e)
+{
+    (void)a;
+    (void)nlooks;
+    (void)k;
+    Under *u = ctx;
+    const flow_style_t *u0 = s[0].implicit ? s[0].style : e[0].implicit ? e[0].style : NULL;
+    const flow_style_t *u1 = s[1].implicit ? s[1].style : e[1].implicit ? e[1].style : NULL;
+    if (u0 == NULL || u1 == NULL || f_props_has(u->fa, p) || f_props_has(u->fb, p) || same_value(p, u0, u1))
+        return true;
+    u->moved = true;
+    return false;
+}
+
 // Whether what `m` animates shows another value at `then` than at `now`,
-// asked of the value itself (f_motion_style): what lies a hair past the
-// instant the progress stands on — an end it leaves, a step, a crossing —
-// is placed there by no rounding. A property either look had no room for
-// is not asked about (ProbeLists).
+// asked of the value itself (motion_walk, the two looks in step): what
+// lies a hair past the instant the progress stands on — an end it leaves,
+// a step, a crossing — is placed there by no rounding. And whether a value
+// an implicit keyframe rests on moves, which the animation resting on it
+// may show later. A property either look had no room for is not asked
+// about (ProbeLists).
 static bool changes_by(const FMotion *m, double now, double then)
 {
     ProbeLists la, lb;
@@ -2378,8 +2487,13 @@ static bool changes_by(const FMotion *m, double now, double then)
     os64_memset(&fa, 0, sizeof(fa));
     os64_memset(&fb, 0, sizeof(fb));
     flow_style_t a = m->base, b = m->base;
-    (void)f_motion_style(m, now, &a, probe_alloc, &la, &fa, false);
-    (void)f_motion_style(m, then, &b, probe_alloc, &lb, &fb, false);
+    Look looks[2] = {{now, &a, probe_alloc, &la, &fa}, {then, &b, probe_alloc, &lb, &fb}};
+    Under u = {false, &fa, &fb};
+    (void)motion_walk(m, looks, 2, false, under_step, &u);
+    if (u.moved)
+        return true;
+    motion_settle(&a);
+    motion_settle(&b);
     for (int32_t i = 0; i < m->nanims; i++)
         for (int p = 0; p < GARB_NPROPS; p++)
             if (f_props_has(&m->anims[i].props, (garb_prop_t)p) && animatable((garb_prop_t)p) &&
@@ -2407,120 +2521,159 @@ static bool anim_shows(const FAnimation *an, int32_t a, const int32_t last[GARB_
     return false;
 }
 
+// What the schedule's walk (f_motion_next) keeps: the element, the time,
+// when its value next changes, which animation shows each property
+// (`last`), and the properties whose lists the walk had no room for —
+// over which the value under a later animation is not known.
+typedef struct {
+    const FMotion *m;
+    double now, next;
+    const int32_t *last;
+    FProps failed;
+} Due;
+
+// When what animation `a` shows of `p` next changes, the frames around its
+// progress `s` and `e` — an implicit one the value the animations before
+// it made, so that an animation resting on that value is still where it
+// is the animation's own other end, and moves where it differs.
+static bool due_step(void *ctx, int32_t a, garb_prop_t p, int32_t nlooks, const Clock *k, const Frame *s,
+                     const Frame *e)
+{
+    (void)nlooks;
+    Due *d = ctx;
+    if (d->next <= d->now)
+        return false;
+    const FAnimation *an = &d->m->anims[a];
+    if (k->phase != PHASE_ACTIVE || an->record->now.paused || d->last[p] > a)
+        return true;
+    double now = d->now, base = an->record->now.start;
+    // A value underneath that the walk had no room to make is not known:
+    // the interval resting on it is taken to move.
+    bool unknown = (s->implicit || e->implicit) && f_props_has(&d->failed, p);
+    MixKind kind;
+    (void)mix_prop(p, s->style, e->style, 0.5, NULL, &kind, NULL, NULL);
+    const flow_easing_t *ease = s->easing;
+    bool stepped = ease != NULL && ease->kind == FLOW_EASE_STEPS;
+    // One value at both ends: nothing inside the interval changes, whatever
+    // its easing — only past its far end.
+    bool still = !unknown && same_value(p, s->style, e->style);
+    if (kind == MIX_CONTINUOUS && !stepped && !still) {
+        d->next = d->now;   // moving continuously
+        return false;
+    }
+    // Only what lies ahead of the progress the way it runs: the interval's
+    // far end, and inside it the next of its steps' edges — worked out from
+    // where the progress is, never walked to (a page may ask for
+    // steps(2147483647)) — or a discrete value's crossings. What is behind
+    // it shows already, since the values are worked from the same progress;
+    // one the progress stands on may yet change just past it (change_due).
+    d->next = fmin(d->next, edge_due(k, &an->timing, base, k->forwards ? e->offset : s->offset, now));
+    if (still)
+        return true;
+    double span = e->offset - s->offset;
+    double here = span > 0 ? (k->progress - s->offset) / span : 0;
+    if (stepped && span > 0) {
+        double n = ease->steps, x = here * n;
+        // Running backwards the progress may stand on the interval's top,
+        // x = n, whose step falls just past it.
+        double j = k->forwards ? floor(x) + 1 : floor(x);
+        if (j >= 1 && j <= (k->forwards ? n - 1 : n))
+            d->next = fmin(d->next, edge_due(k, &an->timing, base, s->offset + span * j / n, now));
+    } else if (kind == MIX_DISCRETE) {
+        // A discrete value flips where the eased fraction crosses one half;
+        // visibility, when either end is visible, is visible between 0 and 1
+        // and the ends' own beyond them (Appendix A), so it changes where it
+        // crosses 0 if its start is not visible and 1 if its end is not —
+        // each time the easing does, overshoot and all, whichever way the
+        // iteration runs, each when it shows (change_due).
+        bool vis = p == GARB_VISIBILITY && (s->style->visibility == FLOW_VISIBLE ||
+                                            e->style->visibility == FLOW_VISIBLE);
+        double levels[2];
+        bool strict[2];
+        int nl = 0;
+        if (!vis) {
+            levels[nl] = 0.5;
+            strict[nl++] = false;
+        }
+        if (vis && s->style->visibility != FLOW_VISIBLE) {
+            levels[nl] = 0;
+            strict[nl++] = true;
+        }
+        if (vis && e->style->visibility != FLOW_VISIBLE) {
+            levels[nl] = 1;
+            strict[nl++] = false;
+        }
+        for (int l = 0; l < nl; l++) {
+            double xs[3];
+            int32_t nx = ease_crossings(ease, levels[l], strict[l], xs);
+            for (int32_t j = 0; j < nx; j++) {
+                if (k->forwards ? xs[j] >= here : xs[j] <= here)
+                    d->next = fmin(d->next, edge_due(k, &an->timing, base, s->offset + span * xs[j], now));
+            }
+        }
+    }
+    return true;
+}
+
 double f_motion_next(const FMotion *m, double now)
 {
-    // Of the animations in effect now, the last to set each property, its
-    // list for it not dropped: its value replaces an earlier one's
-    // (f_motion_style), so what an earlier one does to that property is not
-    // shown — until the later one's effect ends, which that one is due for
+    // Of the animations in effect now, the last to set each property with a
+    // value wholly its own — its list for it not dropped, its interval
+    // between two of its own keyframes, not resting on the value
+    // underneath: that value replaces an earlier one's (f_motion_style), so
+    // what an earlier one does to the property is not shown — until the
+    // later one's interval or its effect ends, which that one is due for
     // itself.
     int32_t last[GARB_NPROPS];
     for (int p = 0; p < GARB_NPROPS; p++)
         last[p] = -1;
     for (int32_t a = m->nanims - 1; a >= 0; a--) {
         const FAnimation *an = &m->anims[a];
-        if (an->record == NULL || !clock_at(&an->timing, local_time(an->record, now)).in_effect)
+        if (an->record == NULL)
             continue;
-        for (int p = 0; p < GARB_NPROPS; p++)
-            if (last[p] < 0 && f_props_has(&an->props, (garb_prop_t)p) &&
-                !f_props_has(&an->dropped, (garb_prop_t)p))
+        Clock k = clock_at(&an->timing, local_time(an->record, now));
+        if (!k.in_effect)
+            continue;
+        for (int p = 0; p < GARB_NPROPS; p++) {
+            if (last[p] >= 0 || !f_props_has(&an->props, (garb_prop_t)p) ||
+                f_props_has(&an->dropped, (garb_prop_t)p))
+                continue;
+            Frame s, e;
+            interval(an, &m->base, (garb_prop_t)p, k.progress, &s, &e);
+            if (!s.implicit && !e.implicit)
                 last[p] = a;
+        }
     }
+    // Each animation's phases: the start of its active phase, its end, and
+    // the current iteration's.
     double next = INFINITY;
     for (int32_t a = 0; a < m->nanims; a++) {
         const FAnimation *an = &m->anims[a];
         if (an->record == NULL || an->record->now.paused || !anim_shows(an, a, last))
             continue;
-        double local = local_time(an->record, now), base = an->record->now.start;
-        Clock k = clock_at(&an->timing, local);
+        double base = an->record->now.start;
+        Clock k = clock_at(&an->timing, local_time(an->record, now));
         if (k.phase == PHASE_BEFORE) {
             next = fmin(next, base + k.before_end);
             continue;
         }
         if (k.phase == PHASE_AFTER)
             continue;
-        // The active phase: its end, and the current iteration's.
-        double soonest = base + k.active_end;
+        next = fmin(next, base + k.active_end);
         double dur = an->timing.duration_ms;
         if (dur > 0 && isfinite(k.iteration_start))
-            soonest = fmin(soonest, base + k.iteration_start + dur);
-        for (int p = 0; p < GARB_NPROPS && soonest > now; p++) {
-            if (!f_props_has(&an->props, (garb_prop_t)p) || !animatable((garb_prop_t)p) ||
-                f_props_has(&an->dropped, (garb_prop_t)p) || last[p] > a)
-                continue;
-            Frame s, e;
-            interval(m, an, (garb_prop_t)p, k.progress, &s, &e);
-            MixKind kind;
-            (void)mix_prop((garb_prop_t)p, s.style, e.style, 0.5, NULL, &kind, NULL, NULL);
-            const flow_easing_t *ease = s.easing;
-            bool stepped = ease != NULL && ease->kind == FLOW_EASE_STEPS;
-            // One value at both ends: nothing inside the interval changes,
-            // whatever its easing — only past its far end.
-            bool still = same_value((garb_prop_t)p, s.style, e.style);
-            if (kind == MIX_CONTINUOUS && !stepped && !still)
-                return now;     // moving continuously
-            // Only what lies ahead of the progress the way it runs: the
-            // interval's far end, and inside it the next of its steps'
-            // edges — worked out from where the progress is, never walked
-            // to (a page may ask for steps(2147483647)) — or a discrete
-            // value's crossings. What is behind it shows already, since the
-            // values are worked from the same progress; one the progress
-            // stands on may yet change just past it (change_due).
-            soonest = fmin(soonest, edge_due(&k, &an->timing, base, k.forwards ? e.offset : s.offset, now));
-            if (still)
-                continue;
-            double span = e.offset - s.offset;
-            double here = span > 0 ? (k.progress - s.offset) / span : 0;
-            if (stepped && span > 0) {
-                double n = ease->steps, x = here * n;
-                // Running backwards the progress may stand on the
-                // interval's top, x = n, whose step falls just past it.
-                double j = k.forwards ? floor(x) + 1 : floor(x);
-                if (j >= 1 && j <= (k.forwards ? n - 1 : n))
-                    soonest = fmin(soonest, edge_due(&k, &an->timing, base, s.offset + span * j / n, now));
-            } else if (kind == MIX_DISCRETE) {
-                // A discrete value flips where the eased fraction crosses
-                // one half; visibility, when either end is visible, is
-                // visible between 0 and 1 and the ends' own beyond them
-                // (Appendix A), so it changes where it crosses 0 if its
-                // start is not visible and 1 if its end is not — each time
-                // the easing does, overshoot and all, whichever way the
-                // iteration runs, each when it shows (change_due).
-                bool vis = p == GARB_VISIBILITY && (s.style->visibility == FLOW_VISIBLE ||
-                                                    e.style->visibility == FLOW_VISIBLE);
-                double levels[2];
-                bool strict[2];
-                int nl = 0;
-                if (!vis) {
-                    levels[nl] = 0.5;
-                    strict[nl++] = false;
-                }
-                if (vis && s.style->visibility != FLOW_VISIBLE) {
-                    levels[nl] = 0;
-                    strict[nl++] = true;
-                }
-                if (vis && e.style->visibility != FLOW_VISIBLE) {
-                    levels[nl] = 1;
-                    strict[nl++] = false;
-                }
-                for (int l = 0; l < nl; l++) {
-                    double xs[3];
-                    int32_t nx = ease_crossings(ease, levels[l], strict[l], xs);
-                    for (int32_t j = 0; j < nx; j++) {
-                        // Early by the slack the way it runs, the value's
-                        // own x landing that near the crossing — and at the
-                        // crossing too, still due when a layout comes late
-                        // past the early one (change_due drops a time gone).
-                        double x = fmin(fmax(xs[j] + (k.forwards ? -EASE_X_SLACK : EASE_X_SLACK), 0), 1);
-                        if (k.forwards ? xs[j] >= here : xs[j] <= here)
-                            soonest = fmin(soonest,
-                                           fmin(edge_due(&k, &an->timing, base, s.offset + span * x, now),
-                                                edge_due(&k, &an->timing, base, s.offset + span * xs[j], now)));
-                    }
-                }
-            }
-        }
-        next = fmin(next, soonest);
+            next = fmin(next, base + k.iteration_start + dur);
+    }
+    // And each one's intervals, walked as the value is, so that each sees
+    // the value the ones before it made.
+    if (next > now) {
+        Due d = {m, now, next, last, {{0}}};
+        ProbeLists lists;
+        lists.used = 0;
+        flow_style_t walked = m->base;
+        Look look = {now, &walked, probe_alloc, &lists, &d.failed};
+        (void)motion_walk(m, &look, 1, false, due_step, &d);
+        next = d.next;
     }
     // And the millisecond after this one, asked of the value itself.
     double then = floor(now) + 1;
