@@ -1,8 +1,9 @@
 <!doctype html><html><head><title>pile3 motion</title>
-<!-- S8a (PILE3.md § The animation model). FROZEN rows are paused at a fixed
-moment by a negative delay, or long finished, so they hold still: each box's
-left edge sits on its blue line, which is where Chrome put it (measured
-2026-10-13), or looks like its neighbour. LIVE rows move. -->
+<!-- S8a (PILE3.md § The animation model), and the input domain (§ Animations,
+both slices, Contracts). FROZEN rows are paused at a fixed moment by a
+negative delay, or long finished, so they hold still: each box's left edge
+sits on its blue line, which is where Chrome put it (measured 2026-10-13;
+rows 25-29 2026-10-14), or looks like its neighbour. LIVE rows move. -->
 <style>
 body{margin:8px;font:13px sans-serif;background:#fff;color:#000}
 h2{font-size:15px;margin:10px 0 4px}
@@ -24,6 +25,9 @@ h2{font-size:15px;margin:10px 0 4px}
 @keyframes pulse{from{opacity:1}to{opacity:.15}}
 @keyframes hue{0%{background:#f00}33%{background:#0a0}66%{background:#00f}100%{background:#f00}}
 @keyframes march{from{left:0}to{left:200px}}
+@keyframes far{from{transform:scale(1e15) scale(1e15) scale(1e15) scale(1e15) scale(1e15) scale(1e15) scale(1e15) scale(1e15) scale(1e15) scale(1e15) scale(1e15) scale(1e15) scale(1e15) scale(1e15) scale(1e15) scale(1e15) scale(1e15) scale(1e15) scale(1e15) scale(1e15) scale(1e15) scale(1e15) rotate(1deg)}to{transform:rotate(2deg)}}
+@keyframes units{from{transform:rotate(1rad)}to{transform:rotate(0.5turn)}}
+@keyframes tiny{from{transform:matrix(1e-200,0,0,1e-200,0,0)}to{transform:none}}
 .rm{animation:spin 2s linear infinite}
 @media (prefers-reduced-motion: reduce){.rm{animation:none}}
 </style></head><body>
@@ -55,4 +59,10 @@ h2{font-size:15px;margin:10px 0 4px}
 <div class=row><b class="b rm" id=r23></b><span class=lab>23 turns, unless Settings says Reduce motion</span></div>
 <div style="height:1500px"></div>
 <div class=row><b class=b style="animation:spin 2s linear infinite"></b><span class=lab>24 far below: turning when you scroll to it</span></div>
+<h2>FROZEN, at the edges of what a page can write: the box looks like its neighbour</h2>
+<div class=row><b class=b style="transform:rotate(1e15deg)"></b><b class=n style="transform:rotate(280deg)"></b><span class=lab>25 rotate(1e15deg) is rotate(280deg), exactly</span></div>
+<div class=row><b class=b style="animation:units 1s linear -.3s paused"></b><b class=n style="transform:matrix(-0.0716201,0.997432,-0.997432,-0.0716201,0,0)"></b><span class=lab>26 radians to turns, 30% in: mixed in degrees</span></div>
+<div class=row><b class=b style="animation:far 1s linear -.5s paused"></b><b class=n style="transform:rotate(2deg)"></b><span class=lab>27 a list past a float, half way: the second, not a mix</span></div>
+<div class=row><b class=b style="animation:tiny 1s linear -.5s paused"></b><b class=n></b><span class=lab>28 a matrix too small to undo, half way: the second, not a mix</span></div>
+<div class=row><i class=g style="left:30px"></i><b class=b style="left:30px;animation:slide 1e308s linear -5e307s paused"></b><span class=lab>29 begun -5e307s ago, 1e308s long: over, back where its rules put it</span></div>
 </body></html>

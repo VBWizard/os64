@@ -502,79 +502,39 @@ static void sticky_reach_scrolled(flow_tree_t *t)
 
 static long double power_of_two(int e);
 
-// A number as `u` 2^`e`, 1 <= |u| < 2 or u = 0 (one that is no finite
-// number is kept as it is, e = 0): a long double's 64-bit significand with
-// an exponent no product of a transform list's 64 functions can pass. A
-// matrix entry's magnitude is the PRODUCT of its factors', so 17
-// scaleX(1e308) before 17 scaleX(1e-308) — a finite composite, near the
-// identity — would leave even a long double's range on the way, and
-// dividing the whole matrix down cannot save it: what one column grows by,
-// the next does not, and the spread underflows instead. Its RANGE is all
-// it widens: each product and sum still rounds to 64 bits, which is past
-// a browser's doubles and is the numeric contract (PILE3.md § Transforms,
-// the painter, Booked).
-typedef struct {
-    long double u;
-    int64_t e;
-} Wide;
-
-static Wide wide_norm(long double u, int64_t e)
-{
-    if (u == 0 || !(u - u == 0))
-        return (Wide){u, 0};            // 0, or not a number to scale
-    long double a = u < 0 ? -u : u;
-    while (a >= 0x1p+64L) { a *= 0x1p-64L; e += 64; }
-    while (a < 0x1p-64L) { a *= 0x1p+64L; e -= 64; }
-    while (a >= 2) { a *= 0.5L; e += 1; }
-    while (a < 1) { a *= 2; e -= 1; }
-    return (Wide){u < 0 ? -a : a, e};
-}
-
-static Wide wide_mul(Wide a, Wide b)
-{
-    return wide_norm(a.u * b.u, a.e + b.e);
-}
-
-// a + b, rounded once: the smaller brought to the larger's exponent
-// exactly (a power of two), or left off where it is below half its last
-// place.
-static Wide wide_add(Wide a, Wide b)
-{
-    if (a.u == 0)
-        return b;
-    if (b.u == 0)
-        return a;
-    if (a.e < b.e) {
-        Wide t = a;
-        a = b;
-        b = t;
-    }
-    if (a.e - b.e > 66)
-        return a;
-    return wide_norm(a.u + b.u * power_of_two((int)(b.e - a.e)), a.e);
-}
+// A transform list is composed in long double. A matrix entry's magnitude
+// is the PRODUCT of its factors', so a list's way can leave a double —
+// 21 scale(1e15) are 1e315 — and dividing the whole matrix down cannot
+// save it: what one column grows by, the next does not, and the spread
+// underflows instead. Held to the domain (values.h), each function grows
+// an entry at most 1e31-fold — four of its largest entry, 1e15px at the
+// largest zoom in 26.6, with a move of up to 2^32 — so a list's 64, the
+// individual three and the origin's moves stay under 1e2100, and above
+// its inverse, where a long double holds them (to 1e4932). Each product
+// and sum rounds to 64 bits, which is past a browser's doubles and is the
+// numeric contract (PILE3.md § Transforms, the painter, Booked).
 
 // a · b, column-major.
-static void mat_mul(Wide out[16], const Wide a[16], const double b[16])
+static void mat_mul(long double out[16], const long double a[16], const double b[16])
 {
-    Wide r[16];
+    long double r[16];
     for (int c = 0; c < 4; c++)
         for (int k = 0; k < 4; k++) {
-            Wide s = {0, 0};
+            long double s = 0;
             for (int i = 0; i < 4; i++)
-                s = wide_add(s, wide_mul(a[i * 4 + k], wide_norm(b[c * 4 + i], 0)));
+                s += a[i * 4 + k] * b[c * 4 + i];
             r[c * 4 + k] = s;
         }
     os64_memcpy(out, r, sizeof(r));
 }
 
 // m · T(x, y, z): a translation applied before m.
-static void mat_translate(Wide m[16], double x, double y, double z)
+static void mat_translate(long double m[16], double x, double y, double z)
 {
-    Wide v[3] = {wide_norm(x, 0), wide_norm(y, 0), wide_norm(z, 0)};
+    double v[3] = {x, y, z};
     for (int k = 0; k < 4; k++)
         for (int i = 0; i < 3; i++)
-            m[12 + k] = wide_add(m[12 + k], wide_mul(m[i * 4 + k], v[i]));
+            m[12 + k] += m[i * 4 + k] * v[i];
 }
 
 // A tail of an animation's mix (FLOW_FN_BLEND) multiplied out, each
@@ -620,7 +580,7 @@ void f_blend_matrix(const flow_transform_t *f, int64_t w, int64_t h, double out[
 // m · T(the function's x, y) · its matrix, a percentage of the border box
 // `w` by `h` — or, for an animation's mix of two tails, the mix's matrix
 // (f_blend_matrix).
-static void mat_fn(Wide m[16], const flow_transform_t *f, int64_t w, int64_t h)
+static void mat_fn(long double m[16], const flow_transform_t *f, int64_t w, int64_t h)
 {
     if (f->fn == FLOW_FN_BLEND && f->blend != NULL) {
         double mix[16];
@@ -635,11 +595,11 @@ static void mat_fn(Wide m[16], const flow_transform_t *f, int64_t w, int64_t h)
 void f_transform_matrix(const flow_style_t *s, int64_t x, int64_t y, int64_t w, int64_t h,
                         double out[16])
 {
-    // Composed in Wide, narrowed once, so how far outside a double the way
-    // goes does not matter: matrix(1e308, 1e308, 1e308, 1e308, 0, 0)
-    // matrix(1e308, -1e308, -1e308, 1e308, 0, 0) is the zero matrix.
-    Wide m[16] = {{0, 0}};
-    m[0] = m[5] = m[10] = m[15] = (Wide){1, 0};
+    // Composed in long double, narrowed once, so how far outside a double
+    // the way goes does not matter: 21 scaleX(1e15) before 21
+    // scaleX(1e-15) is the identity.
+    long double m[16] = {0};
+    m[0] = m[5] = m[10] = m[15] = 1;
     double ox = (double)(x + f_len(s->transform_origin[0], w));
     double oy = (double)(y + f_len(s->transform_origin[1], h));
     double oz = s->transform_origin_z;
@@ -659,21 +619,29 @@ void f_transform_matrix(const flow_style_t *s, int64_t x, int64_t y, int64_t w, 
     // homogeneous, and each divides by w. An entry too small for a double
     // beside the largest is lost, to 0: a w lost so is no longer flat, and
     // the box is drawn upright (the numeric contract, above).
-    int64_t most = INT64_MIN;
-    for (int i = 0; i < 16; i++)
-        if (m[i].u != 0 && m[i].e > most)
-            most = m[i].e;
-    int64_t shift = most > 1000 || (most != INT64_MIN && most < -1000) ? most : 0;
+    // Only a finite entry sets the power of two: an animation's tail,
+    // multiplied out in doubles (f_tail_matrix), may hand in an infinity,
+    // which stays one, and a matrix holding one is never drawn through.
+    long double big = 0;
     for (int i = 0; i < 16; i++) {
-        int64_t e = m[i].e - shift;
-        out[i] = m[i].u == 0 || e < -1100 ? 0.0 * (double)m[i].u
-                                          : (double)(m[i].u * power_of_two((int)e));
+        long double a = m[i] < 0 ? -m[i] : m[i];
+        big = a - a == 0 && a > big ? a : big;
     }
+    int shift = 0;
+    if (big >= 0x1p+1001L || (big != 0 && big < 0x1p-1000L)) {
+        // The power of two at or below `big`.
+        while (big >= 0x1p+64L) { big *= 0x1p-64L; shift += 64; }
+        while (big < 1) { big *= 0x1p+64L; shift -= 64; }
+        while (big >= 2) { big *= 0.5L; shift++; }
+    }
+    long double by = power_of_two(-shift);
+    for (int i = 0; i < 16; i++)
+        out[i] = (double)(m[i] * by);
 }
 
 // A move in 26.6 as whole pixels, held to what a point says; one that is
-// not a number — a matrix the page wrote with an infinity in it — moves
-// nothing.
+// not a number — a matrix an animation's tail multiplied out past a double
+// (f_transform_matrix) — moves nothing.
 static int32_t move_px(double d)
 {
     if (!(d == d))

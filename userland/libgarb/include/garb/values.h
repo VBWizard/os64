@@ -229,6 +229,29 @@ typedef struct {
 // invalid.
 #define GARB_TRANSFORMS_MAX 64
 
+// The domain a page means (PILE3.md § Animations, both slices, Contracts).
+// A number past its limit is held at the limit where it is first read,
+// never refused: refusing would change which declaration wins, and that is
+// the cascade's question, not arithmetic's. Within these limits what a page
+// writes is worked in a double; what libflow builds from it — a transform
+// list multiplied out — may leave one, and is answered where it is built.
+//
+// A time, in milliseconds: at 1e12 ms (31 years) a double still resolves a
+// tenth of a microsecond.
+#define GARB_TIME_MS_MAX 1e12
+// A cubic-bezier()'s y controls. Its x controls are already in [0, 1].
+#define GARB_EASING_Y_MAX 1e6
+// A transform function's numbers (scale, matrix(), rotate3d()'s axis) and
+// its angles, an angle in degrees whatever its unit: at 1e15 a double
+// still resolves an eighth of a degree.
+#define GARB_TRANSFORM_NUMBER_MAX 1e15
+#define GARB_ANGLE_DEG_MAX 1e15
+
+static inline double garb_hold(double v, double limit)
+{
+    return v > limit ? limit : v < -limit ? -limit : v;
+}
+
 // A declaration read against its property's grammar: the longhands it sets
 // into `out` (a shorthand sets them all, the ones it leaves out to their
 // initial values), how many answered; 0 for a property libgarb does not

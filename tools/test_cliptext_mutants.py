@@ -43,8 +43,8 @@ CASES = ('bash tools/test_yonder_warp_host.sh && bash tools/test_libflow_host.sh
 mutants = [
     # libgarb: the Compatibility Standard's names, and what @supports says.
     ('the-prefixed-clip-is-not-read', PROPS,
-     '    {"-webkit-background-clip", GARB_BACKGROUND_CLIP},',
-     '    {"-webkit-background-clipx", GARB_BACKGROUND_CLIP},'),
+     '    {"-webkit-background-clip", "background-clip"},',
+     '    {"-webkit-background-clipx", "background-clip"},'),
     ('a-clip-to-the-text-is-approximated', PROPS,
      '    {GARB_NPROPS, NULL},\n};',
      '    {GARB_BACKGROUND_CLIP, "text"},\n    {GARB_NPROPS, NULL},\n};'),

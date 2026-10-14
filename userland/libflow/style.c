@@ -17,7 +17,6 @@
 // The walk is iterative, over the tree's own parent pointers, so a page as
 // deep as libhtml allows is styled without a stack as deep as the page.
 
-#include <float.h>
 #include <math.h>
 
 #include "internal.h"
@@ -2432,7 +2431,8 @@ static flow_angle_unit_t angle_unit(const garb_val_t *v)
 }
 
 // A number, a percentage as its hundredth, or a calc() of either, which
-// libgarb lets hold no length where a number or a percentage is.
+// libgarb lets hold no length where a number or a percentage is. Held to
+// the domain (values.h) here, where a calc() settles.
 static bool author_number(const Author *a, const garb_val_t *v, double *out)
 {
     Lp r;
@@ -2444,7 +2444,16 @@ static bool author_number(const Author *a, const garb_val_t *v, double *out)
         return false;
     else
         *out = r.number ? r.px : r.pct / 100;
+    *out = garb_hold(*out, GARB_TRANSFORM_NUMBER_MAX);
     return true;
+}
+
+// An ANGLE as the function keeps it, in its own unit, held to the domain's
+// degrees (values.h).
+static void author_angle(const garb_val_t *v, double *out, flow_angle_unit_t *unit)
+{
+    *unit = angle_unit(v);
+    *out = garb_hold(v->number, f_angle_in_unit(GARB_ANGLE_DEG_MAX, FLOW_ANGLE_DEG, *unit));
 }
 
 // A length, in 26.6.
@@ -2536,20 +2545,19 @@ static bool author_fn(const Author *a, const garb_val_t *f, flow_transform_t *ou
         out->a[0] = os64_streq(n, "rotate3d") ? d[0] : os64_streq(n, "rotatex");
         out->a[1] = os64_streq(n, "rotate3d") ? d[1] : os64_streq(n, "rotatey");
         out->a[2] = os64_streq(n, "rotate3d") ? d[2] : is_fn(n, "rotate", "rotatez");
-        out->a[3] = angle->number;
-        out->unit = angle_unit(angle);
+        author_angle(angle, &out->a[3], &out->unit);
     } else if (is_fn(n, "skew", "skewx") || is_fn(n, "skewy", NULL)) {
         out->fn = os64_streq(n, "skew") ? FLOW_FN_SKEW : os64_streq(n, "skewx") ? FLOW_FN_SKEW_X
                                                                               : FLOW_FN_SKEW_Y;
-        out->a[0] = v[0].number;
         out->a[1] = 0;
-        out->unit = angle_unit(&v[0]);
-        // skew(a, b) keeps one unit, the coarser of the two, so that each
-        // finite angle stays finite in it.
+        author_angle(&v[0], &out->a[0], &out->unit);
+        // skew(a, b) keeps one unit (f_angle_common).
         if (k > 1) {
-            flow_angle_unit_t second = angle_unit(&v[1]), to = f_angle_coarser(out->unit, second);
-            out->a[0] = f_angle_in_unit(v[0].number, out->unit, to);
-            out->a[1] = f_angle_in_unit(v[1].number, second, to);
+            flow_angle_unit_t second, to;
+            author_angle(&v[1], &out->a[1], &second);
+            to = f_angle_common(out->unit, second);
+            out->a[0] = f_angle_in_unit(out->a[0], out->unit, to);
+            out->a[1] = f_angle_in_unit(out->a[1], second, to);
             out->unit = to;
         }
     } else if (is_fn(n, "matrix", NULL) && k == 6) {
@@ -2640,18 +2648,15 @@ static bool author_individual(const Author *a, flow_style_t *s, garb_prop_t p,
     } else if (v->kind == GARB_V_ANGLE) {
         t.fn = FLOW_FN_ROTATE;
         t.a[2] = 1;
-        t.a[3] = v->number;
-        t.unit = angle_unit(v);
+        author_angle(v, &t.a[3], &t.unit);
     } else {
         t.fn = FLOW_FN_ROTATE;
         t.three_d = true;
         ok = n == 4 && it[3].kind == GARB_V_ANGLE;
         for (int i = 0; i < 3 && ok; i++)
             ok = author_number(a, &it[i], &t.a[i]);
-        if (ok) {
-            t.a[3] = it[3].number;
-            t.unit = angle_unit(&it[3]);
-        }
+        if (ok)
+            author_angle(&it[3], &t.a[3], &t.unit);
     }
     if (!ok)
         return true;
@@ -2811,16 +2816,12 @@ static bool easing_of(const garb_val_t *v, flow_easing_t *out)
     return false;
 }
 
-// A time, in milliseconds: seconds made milliseconds in long double and
-// held to a double's range, so 1e308s is the longest time a double holds
-// and not an infinity (PILE3.md § Animations, Contracts: held, not
-// resolved).
+// A time, in milliseconds (libgarb held it to the domain, values.h).
 static double ms_of(const garb_val_t *v)
 {
     if (v->kind != GARB_V_TIME)
         return 0;
-    long double ms = v->unit == GARB_U_S ? (long double)v->number * 1000 : v->number;
-    return ms > DBL_MAX ? DBL_MAX : ms < -DBL_MAX ? -DBL_MAX : (double)ms;
+    return v->unit == GARB_U_S ? v->number * 1000 : v->number;
 }
 
 // An `animation-*` longhand's list (values.h): one item an animation, an

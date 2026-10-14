@@ -315,12 +315,11 @@ int32_t f_timeline_elements(const flow_timeline_t *t);
 // A transform function's matrix, made from its primitive and arguments
 // (flow_transform_t): not for FLOW_FN_BLEND, which waits for the box.
 void f_transform_fn_matrix(flow_transform_t *f);
-// Of two angles' units, the coarser — fewer to the turn — which two angles
-// held together are moved into: moving an angle into it divides, so no
-// angle its own unit holds overflows on the way (rotate(1e308rad) against
-// rotate(0deg) mixes in radians, and skew(1e308rad, 0deg) is kept in
-// them). And angle `v` in unit `from` moved into unit `to`.
-flow_angle_unit_t f_angle_coarser(flow_angle_unit_t a, flow_angle_unit_t b);
+// The unit two angles held together are worked in: theirs, or degrees
+// when they differ, as Chrome works every angle; an angle held to the
+// domain (values.h) is finite in any unit. And angle `v` in unit `from`
+// moved into unit `to`.
+flow_angle_unit_t f_angle_common(flow_angle_unit_t a, flow_angle_unit_t b);
 double f_angle_in_unit(double v, flow_angle_unit_t from, flow_angle_unit_t to);
 // Two matrices interpolated as Transforms 1 § 11 (both 2D) or 2 § 13
 // (else) say: false when either cannot be decomposed — singular, or its

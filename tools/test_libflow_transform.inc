@@ -139,15 +139,18 @@ static void transform_layout_cases(void)
         "    block div 0 0 100 10 stacked transform 0 0 upright\n"
         "    block div 0 10 100 10 stacked transform 0 0\n");
 
-    // A matrix may hold any finite number: scale(1e20) is dumped held to
-    // what the dump's integers can say, and reaches as far as a rect can.
-    cascade_layout_case("transform: a huge scale is dumped held",
+    // A scale past the domain is held at its limit (values.h): scale(1e20)
+    // is scale(1e15), about the centre (50, 5) — its moves 50 - 50e15 and
+    // 5 - 5e15, the second the double -4999999999999994.88 in thousandths —
+    // dumped held to what the dump's integers can say, and reaching as far
+    // as a rect can.
+    cascade_layout_case("transform: a scale past the domain is held at its limit",
         XFORM_STYLE "div{width:100px;height:10px;transform:scale(1e20)}</style><div></div>", 400,
         "page 1073741823 1073741823\n"
         "block html 0 0 400 10\n"
         "  block body 0 0 400 10\n"
-        "    block div 0 0 100 10 stacked through 9000000000000000000 0 0 9000000000000000000"
-        " -9000000000000000000 -9000000000000000000\n");
+        "    block div 0 0 100 10 stacked through 1000000000000000000 0 0 1000000000000000000"
+        " -9000000000000000000 -4999999999999994880\n");
 
     // A whole number of quarter turns is exact in any unit — 450deg is a
     // quarter, -100grad three — and a turn a hair short of a quarter is
@@ -167,7 +170,7 @@ static void transform_layout_cases(void)
 
     // A translation is exactly the identity moved: a deliberate 9e-10
     // shear is drawn through. rotate3d(1e308, 0, 0, 45deg) turns about x,
-    // its axis made a unit vector without overflowing.
+    // its axis held at the domain's limit and made a unit vector.
     cascade_layout_case("transform: a hair of shear is drawn; a huge axis is still an axis",
         XFORM_STYLE "div{width:100px;height:10px}"
         ".a{transform:matrix(1,9e-10,0,1,0,0)} .b{transform:rotate3d(1e308,0,0,45deg)}</style>"
@@ -178,9 +181,9 @@ static void transform_layout_cases(void)
         "    block div 0 0 100 10 stacked through 1000 0 0 1000 0 0\n"
         "    block div 0 10 100 10 stacked through 1000 0 0 707 0 4393\n");
 
-    // Two finite functions whose product is ordinary are composed without
-    // passing a double: these two matrices multiply to the zero matrix, so
-    // the box collapses — drawn through a matrix of nothing, not upright.
+    // Two matrices past the domain, held at its limit, whose product is
+    // ordinary: they multiply to the zero matrix, so the box collapses —
+    // drawn through a matrix of nothing, not upright.
     cascade_layout_case("transform: a list composed past a double collapses as it should",
         XFORM_STYLE "div{width:100px;height:10px;transform-origin:0 0;"
         "transform:matrix(1e308,1e308,1e308,1e308,0,0) matrix(1e308,-1e308,-1e308,1e308,0,0)}"
@@ -190,46 +193,66 @@ static void transform_layout_cases(void)
         "  block body 0 0 400 10\n"
         "    block div 0 0 100 10 stacked through 0 0 0 0 0 0\n");
 
-    // However far outside even a long double the way goes: 17 scaleX(1e308)
-    // before 17 scaleX(1e-308) is 1e5236 on the way and near 1 at the end,
-    // and the end is what is drawn — through, about the identity.
+    // However far outside a double the way goes: 32 scaleX(1e15) before 32
+    // scaleX(1e-15) is 1e480 on the way and near 1 at the end, and the end
+    // is what is drawn — through, about the identity.
     {
         char css[1024];
         int32_t n = snprintf(css, sizeof(css), "%s", XFORM_STYLE
                                   "div{width:100px;height:10px;transform-origin:0 0;transform:");
-        for (int32_t i = 0; i < 34; i++)
-            n += snprintf(css + n, sizeof(css) - (size_t)n, i < 17 ? " scaleX(1e308)"
-                                                                       : " scaleX(1e-308)");
+        for (int32_t i = 0; i < 64; i++)
+            n += snprintf(css + n, sizeof(css) - (size_t)n, i < 32 ? " scaleX(1e15)"
+                                                                       : " scaleX(1e-15)");
         snprintf(css + n, sizeof(css) - (size_t)n, "}</style><div></div>");
-        cascade_layout_case("transform: a list whose way passes any range ends where it ends", css,
-            400,
+        cascade_layout_case("transform: a list whose way passes a double's range ends where it ends",
+            css, 400,
             "page 400 10\n"
             "block html 0 0 400 10\n"
             "  block body 0 0 400 10\n"
             "    block div 0 0 100 10 stacked through 1000 0 0 1000 0 0\n");
     }
 
-    // A composite no double holds, drawn as what it is: these two multiply
-    // to x and y by 1e616 over a w of 5e615, which is scale(2) — divided
-    // down by a power of two, the matrix being homogeneous, not upright.
-    cascade_layout_case("transform: a composite past a double's range is divided down",
-        XFORM_STYLE "div{width:100px;height:10px;transform-origin:0 0;transform:"
-        "matrix3d(1e308,0,0,0,0,1e308,0,0,0,0,1,0,0,0,0,1e308) "
-        "matrix3d(1e308,0,0,0,0,1e308,0,0,0,0,1,0,0,0,0,5e307)}</style><div></div>", 400,
-        "page 400 20\n"
-        "block html 0 0 400 10\n"
-        "  block body 0 0 400 10\n"
-        "    block div 0 0 100 10 stacked through 2000 0 0 2000 0 0\n");
+    // A composite no double holds, drawn as what it is: 21 of x and y by
+    // 1e15 over a w of 1e15, the last's w 5e14, multiply to x and y by
+    // 1e315 over a w of 5e314, which is scale(2) — divided down by a power
+    // of two, the matrix being homogeneous, not upright.
+    {
+        char css[2048];
+        int32_t n = snprintf(css, sizeof(css), "%s", XFORM_STYLE
+                                  "div{width:100px;height:10px;transform-origin:0 0;transform:");
+        for (int32_t i = 0; i < 21; i++)
+            n += snprintf(css + n, sizeof(css) - (size_t)n,
+                          " matrix3d(1e15,0,0,0,0,1e15,0,0,0,0,1,0,0,0,0,%s)", i < 20 ? "1e15" : "5e14");
+        snprintf(css + n, sizeof(css) - (size_t)n, "}</style><div></div>");
+        cascade_layout_case("transform: a composite past a double's range is divided down", css, 400,
+            "page 400 20\n"
+            "block html 0 0 400 10\n"
+            "  block body 0 0 400 10\n"
+            "    block div 0 0 100 10 stacked through 2000 0 0 2000 0 0\n");
+    }
 
-    // A huge angle is a whole number of turns, or reduced by them first:
-    // rotate(1e308turn) is no turn at all.
-    cascade_layout_case("transform: a huge whole number of turns is none",
+    // A huge angle is held at the domain's limit in its own unit (values.h),
+    // and reduced by whole turns: rotate(1e308turn) is rotate(1e15deg /
+    // 360 turns), the double 2777777777777.77783203125, which is 0.77783203125
+    // of a turn past a whole number — about the centre (50, 5).
+    cascade_layout_case("transform: a turn past the domain is held at its limit",
         XFORM_STYLE "div{width:100px;height:10px}"
         ".a{transform:rotate(1e308turn)}</style><div class=a></div>", 400,
-        "page 400 10\n"
+        "page 400 56\n"
         "block html 0 0 400 10\n"
         "  block body 0 0 400 10\n"
-        "    block div 0 0 100 10 stacked transform 0 0\n");
+        "    block div 0 0 100 10 stacked through 174 -985 985 174 36377 53368\n");
+
+    // And at the limit in degrees, reduced by whole turns exactly:
+    // rotate(1e15deg) is rotate(280deg), as Chrome 155 draws it, where taken
+    // to radians first it is a twentieth of a degree off (cos 0.17281).
+    cascade_layout_case("transform: the domain's largest angle is reduced exactly",
+        XFORM_STYLE "div{width:100px;height:10px}"
+        ".a{transform:rotate(1e15deg)}</style><div class=a></div>", 400,
+        "page 400 56\n"
+        "block html 0 0 400 10\n"
+        "  block body 0 0 400 10\n"
+        "    block div 0 0 100 10 stacked through 174 -985 985 174 36394 53372\n");
 
     // A scale written as a calc() of a percentage is that hundredth, in a
     // list and as the property: half about the centre (50, 5), 0.5x + 35
@@ -1015,14 +1038,25 @@ static void transform_through_cases(void)
     flow_free(t);
     sheeted_close(&q);
 
-    // Reciprocal scales, nested: scale(1e308) inside scale(1e-308), both
-    // about the corner, is where it was laid out; between them its corner
-    // is at 1e310, which a long double holds and a double would not.
-    sheeted_open(&q, XFORM_STYLE ".o{position:absolute;left:0;top:0;width:100px;height:100px;"
-                     "transform-origin:0 0;transform:scale(1e-308)} .i{position:absolute;left:0;"
-                     "top:0;width:100px;height:20px;transform-origin:0 0;transform:scale(1e308)}"
-                     "</style><div class=o><div class=i id=i></div></div>",
-                 400, 600);
+    // Reciprocal scales, nested: two boxes each 20 scale(1e15) inside two
+    // each 20 scale(1e-15), all about the corner, is where it was laid out;
+    // each frame's matrix a double holds, but between them the corner is
+    // at 1e600, which a long double holds and a double would not.
+    {
+        char css[4096];
+        int32_t n = snprintf(css, sizeof(css), "%s", XFORM_STYLE
+                             "div{position:absolute;left:0;top:0;width:100px;height:100px;"
+                             "transform-origin:0 0} #i{height:20px}");
+        for (int32_t k = 0; k < 2; k++) {
+            n += snprintf(css + n, sizeof(css) - (size_t)n, " .%c{transform:", k ? 'u' : 'd');
+            for (int32_t i = 0; i < 20; i++)
+                n += snprintf(css + n, sizeof(css) - (size_t)n, k ? " scale(1e15)" : " scale(1e-15)");
+            n += snprintf(css + n, sizeof(css) - (size_t)n, "}");
+        }
+        snprintf(css + n, sizeof(css) - (size_t)n, "</style><div class=d><div class=d><div class=u>"
+                 "<div class=u id=i></div></div></div></div>");
+        sheeted_open(&q, css, 400, 600);
+    }
     t = flow_layout(q.doc, q.page, 400, &q.env);
     const flow_box_t *rb = box_with_id(t, q.doc->document, "i");
     point = flow_box_point(rb, top, 50, 10, &back);

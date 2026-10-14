@@ -26,6 +26,12 @@ places it too; and the probe's two looks given one set of lists between
 them, where a list the second has no room for is not asked about — no
 case is known of a list's change only the probe sees (300,000 fuzzed
 cases with the probe off miss nothing but visibility, which is no list).
+Inside the input domain (values.h) three more are left out: the turning
+roots worked by the plain quadratic formula, which at a y control of 1e6
+loses digits no due time can see; a crossing halved a fixed 64 times,
+which already places one within 1e-7 ms of an interval of 1e12; and
+rotation axes compared by their lengths, which an axis held to 1e15
+takes as unit3 does, by its largest part.
 """
 import argparse
 import pathlib
@@ -152,10 +158,10 @@ mutants = [
      '    if (c < 0) {\n        for (int i = 0; i < 4; i++)\n            from[i] = -from[i];\n        c = -c;\n    }',
      '', LIBFLOW),
     ('a-2d-shear-is-dropped', MOTION,
-     '    d->sk[0] = (double)sk;',
+     '    d->sk[0] = sk;',
      '    d->sk[0] = 0;', LIBFLOW),
     ('a-2d-flip-is-lost', MOTION,
-     '    if (det < 0 && m11 < m22)\n        s0 = -s0;',
+     '    if (flip && m11 < m22)\n        s0 = -s0;',
      '    if (false && m11 < m22)\n        s0 = -s0;', LIBFLOW),
     # libflow: values mixed.
     ('colours-mix-unpremultiplied', MOTION,
@@ -211,11 +217,8 @@ mutants = [
      '    d->next = fmin(d->next, edge_due(k, &an->timing, base, s->offset, now));\n'
      '    d->next = fmin(d->next, edge_due(k, &an->timing, base, e->offset, now));\n    if (still)', LIBFLOW),
     ('a-mix-cancels-at-a-huge-fraction', MOTION,
-     '    if (t == 1)\n        return b;\n    return held(a + ((long double)b - a) * t);',
-     '    return held((1 - (long double)t) * a + (long double)t * b);', LIBFLOW),
-    ('an-easing-overflows', MOTION,
-     '    long double u = 1 - (long double)t, v = t;\n    return held(3 * u * u * v * p1 + 3 * u * v * v * p2 + v * v * v);',
-     '    return bezier(p1, p2, t);', LIBFLOW),
+     '    if (t == 1)\n        return b;\n    return a + (b - a) * t;',
+     '    return (1 - t) * a + t * b;', LIBFLOW),
     ('records-chain-without-their-new-ones', MOTION,
      '        if (tail != NULL)\n            tail->next = t->records[j];',
      '        if (false)\n            tail->next = t->records[j];', LIBFLOW),
@@ -377,18 +380,9 @@ mutants = [
     ('the-shorthand-auto-is-a-name', PROPS,
      '        } else if (!have[A_DURATION] && vc_keyword(c, kAuto) != NULL) {',
      '        } else if (false && vc_keyword(c, kAuto) != NULL) {', GARB),
-    # libflow: a curve no double holds, a failed layout undone, an inline
-    # element's pieces, and what float, position, overflow and currentColor
-    # make of each other across animations.
-    ('crossing-coefficients-overflow-a-double', MOTION,
-     '    long double lc = 3.0L * p[1], lb = 3.0L * ((long double)p[3] - p[1]) - lc, la = 1 - lc - lb;\n'
-     '    long double la3 = 3 * la, lb2 = 2 * lb;\n'
-     '    long double big = la3 < 0 ? -la3 : la3, mb = lb2 < 0 ? -lb2 : lb2, mc = lc < 0 ? -lc : lc;\n'
-     '    big = mb > big ? mb : big;\n'
-     '    big = mc > big ? mc : big;\n'
-     '    long double qa = la3 / big, qb = lb2 / big, qc = lc / big;',
-     '    double c = 3 * p[1], b = 3 * (p[3] - p[1]) - c, a = 1 - c - b;\n'
-     '    double qa = 3 * a, qb = 2 * b, qc = c;', LIBFLOW),
+    # libflow: a failed layout undone, an inline element's pieces, and what
+    # float, position, overflow and currentColor make of each other across
+    # animations.
     ('a-failed-layout-is-not-undone', MOTION,
      'void f_timeline_undo(flow_timeline_t *t)\n{\n    if (t == NULL)\n        return;',
      'void f_timeline_undo(flow_timeline_t *t)\n{\n    if (t != NULL || t == NULL)\n        return;', LIBFLOW),
@@ -470,10 +464,10 @@ mutants = [
     # libflow: what the schedule against the value found, and a side's
     # own width.
     ('the-curve-is-cubed-by-powers', MOTION,
-     '    long double u = 1 - (long double)t, v = t;\n'
-     '    return held(3 * u * u * v * p1 + 3 * u * v * v * p2 + v * v * v);',
-     '    long double c = 3.0L * p1, b = 3.0L * ((long double)p2 - p1) - c, a = 1 - c - b;\n'
-     '    return held(((a * t + b) * t + c) * t);', LIBFLOW),
+     '    double u = 1 - t, v = t;\n'
+     '    return 3 * u * u * v * p1 + 3 * u * v * v * p2 + v * v * v;',
+     '    double c = 3 * p1, b = 3 * (p2 - p1) - c, a = 1 - c - b;\n'
+     '    return ((a * t + b) * t + c) * t;', LIBFLOW),
     ('a-change-at-now-is-shown', MOTION,
      '    double first = ceil(at - tol), after = floor(at + tol) + 1;',
      '    double first = ceil(at - tol), after = floor(at) + 1;', LIBFLOW),
@@ -492,23 +486,20 @@ mutants = [
     ('a-keyframe-width-is-not-its-own', STYLE,
      '    if (sp->border_px[side] != 0 || author_declares(st, w) || author_declares(sets, w))',
      '    (void)sets;\n    if (sp->border_px[side] != 0 || author_declares(st, w))', LIBFLOW),
-    # libflow: finite inputs whose arithmetic overflows, a list dropped for
-    # the budget, and blocks that ease as the element does.
+    # libflow: matrices a list multiplies out past a double, a list dropped
+    # for the budget, and blocks that ease as the element does.
     ('a-row-length-is-not-scaled', MOTION,
-     '    double a = (double)(x / k), b = (double)(y / k);\n    return k * (long double)sqrt(a * a + b * b);',
-     '    (void)k;\n    double a = (double)x, b = (double)y;\n    return (long double)sqrt(a * a + b * b);', LIBFLOW),
-    ('a-2d-determinant-in-doubles', MOTION,
-     '    long double det = m11 * m22 - m12 * m21;\n    if (det == 0)\n        return false;           // cannot be undone',
-     '    long double det = (double)m11 * (double)m22 - (double)m12 * (double)m21;\n    if (det == 0)\n        return false;           // cannot be undone', LIBFLOW),
+     '    double a = x / k, b = y / k;\n    return k * sqrt(a * a + b * b);',
+     '    (void)k;\n    return sqrt(x * x + y * y);', LIBFLOW),
+    ('a-2d-flip-reads-the-whole-determinant', MOTION,
+     '    bool flip = m11 / s0 * m22 - m12 / s0 * m21 < 0;',
+     '    bool flip = m11 * m22 - m12 * m21 < 0;', LIBFLOW),
     ('a-non-finite-composition-is-kept', MOTION,
      '    for (int i = 0; i < 16; i++)\n        if (!isfinite(out[i]))\n            return false;\n    return true;',
      '    return true;', LIBFLOW),
-    ('axes-are-compared-by-length', MOTION,
-     '        if (na[i] != nb[i])\n            return false;\n    os64_memcpy(axis, ua, sizeof(ua));',
-     '        if (ua[i] / len3(ua) != ub[i] / len3(ub))\n            return false;\n    os64_memcpy(axis, ua, sizeof(ua));', LIBFLOW),
-    ('angles-mix-in-degrees', MOTION,
-     '    return per_turn(a) <= per_turn(b) ? a : b;',
-     '    (void)a;\n    (void)b;\n    return FLOW_ANGLE_DEG;', LIBFLOW),
+    ('two-units-mix-in-the-first', MOTION,
+     '    return a == b ? a : FLOW_ANGLE_DEG;',
+     '    (void)b;\n    return a;', LIBFLOW),
     ('a-dropped-list-is-walked', MOTION,
      '                if (at != pass || !f_props_has(&an->props, (garb_prop_t)p) || !animatable((garb_prop_t)p) ||\n'
      '                    f_props_has(&an->dropped, (garb_prop_t)p))',
@@ -526,8 +517,8 @@ mutants = [
     ('garb-forgets-where-it-wrote', CASCADE,
      '                    written[p] = (uint64_t)(uint32_t)at[i].order << 32 | (uint32_t)d;',
      '                    written[p] = 0;\n                    (void)d;', LIBFLOW),
-    # libflow: what is drawn moving, a 3D inverse at the extremes, an axis
-    # of no length.
+    # libflow: what is drawn moving, a 3D determinant past a double, an
+    # axis of no length.
     ('a-replaced-value-is-moving', MOTION,
      '    if (k->phase != PHASE_ACTIVE || an->record->now.paused || d->last[p] > a)',
      '    if (k->phase != PHASE_ACTIVE || an->record->now.paused)', LIBFLOW),
@@ -543,9 +534,9 @@ mutants = [
     ('a-blend-is-never-the-same', MOTION,
      '        return a->fn == b->fn && a->blend != NULL && b->blend != NULL && blend_same(a, b);',
      '        return false && blend_same(a, b);', LIBFLOW),
-    ('a-3d-determinant-overflows', MOTION,
+    ('a-3d-determinant-past-a-double-is-refused', MOTION,
      '    if (det4(pm) == 0)\n        return false;',
-     '    if ((double)det4(pm) == 0 || !isfinite((double)det4(pm)))\n        return false;', LIBFLOW),
+     '    if (det4(pm) == 0 || !isfinite(det4(pm)))\n        return false;', LIBFLOW),
     ('a-zero-axis-keeps-its-angle', MOTION,
      '        double ta = has_axis(a) ? a->a[3] : 0, tb = has_axis(b) ? b->a[3] : 0;',
      '        double ta = a->a[3], tb = b->a[3];\n        (void)has_axis;', LIBFLOW),
@@ -580,9 +571,30 @@ mutants = [
     ('the-probe-asks-what-it-could-not-mix', MOTION,
      '                !f_props_has(&fa, (garb_prop_t)p) && !f_props_has(&fb, (garb_prop_t)p) &&\n',
      '', LIBFLOW),
-    ('a-time-past-a-double-is-infinite', STYLE,
-     '    return ms > DBL_MAX ? DBL_MAX : ms < -DBL_MAX ? -DBL_MAX : (double)ms;',
-     '    return (double)ms;', LIBFLOW),
+    # The input domain (values.h): one break for each clamp.
+    ('a-time-is-not-held', VALUES,
+     '    out->number = garb_hold(t->number, out->unit == GARB_U_S ? GARB_TIME_MS_MAX / 1000\n'
+     '                                                             : GARB_TIME_MS_MAX);',
+     '    out->number = t->number;', GARB),
+    ('seconds-are-held-as-milliseconds', VALUES,
+     '    out->number = garb_hold(t->number, out->unit == GARB_U_S ? GARB_TIME_MS_MAX / 1000\n'
+     '                                                             : GARB_TIME_MS_MAX);',
+     '    out->number = garb_hold(t->number, GARB_TIME_MS_MAX);', GARB),
+    ('the-first-y-is-not-held', PROPS,
+     '        a[1].number = garb_hold(a[1].number, GARB_EASING_Y_MAX);\n',
+     '', GARB),
+    ('the-second-y-is-not-held', PROPS,
+     '        a[3].number = garb_hold(a[3].number, GARB_EASING_Y_MAX);\n',
+     '', GARB),
+    ('a-transform-number-is-not-held', STYLE,
+     '    *out = garb_hold(*out, GARB_TRANSFORM_NUMBER_MAX);\n',
+     '', LIBFLOW),
+    ('an-angle-is-not-held', STYLE,
+     '    *out = garb_hold(v->number, f_angle_in_unit(GARB_ANGLE_DEG_MAX, FLOW_ANGLE_DEG, *unit));',
+     '    *out = v->number;', LIBFLOW),
+    ('an-angle-is-held-in-its-own-number', STYLE,
+     '    *out = garb_hold(v->number, f_angle_in_unit(GARB_ANGLE_DEG_MAX, FLOW_ANGLE_DEG, *unit));',
+     '    *out = garb_hold(v->number, GARB_ANGLE_DEG_MAX);', LIBFLOW),
     ('easings-compare-as-printed', CASCADE,
      '            e.n[i] = v->items[i].number;',
      '            e.n[i] = (double)(int64_t)(v->items[i].number * 1e6);', GARB),
@@ -602,12 +614,16 @@ mutants = [
      '                              : (flow_easing_t){FLOW_EASE_CUBIC, {0.25, 0.1, 0.25, 1}, 0, 0, true};',
      '                              : (flow_easing_t){FLOW_EASE_CUBIC, {0.25, 0.1, 0.25, 1}, 0, 0, false};', LIBFLOW),
     ('a-2d-length-past-a-double-is-held', MOTION,
-     '    if (!fits(s0) || !fits(s1) || !fits(sk))\n        return false;\n'
-     '    d->sc[0] = (double)s0;\n    d->sc[1] = (double)s1;\n    d->sk[0] = (double)sk;',
-     '    d->sc[0] = held(s0);\n    d->sc[1] = held(s1);\n    d->sk[0] = held(sk);', LIBFLOW),
+     '    if (!isfinite(s0) || !isfinite(s1) || !isfinite(sk))\n        return false;\n'
+     '    d->sc[0] = s0;\n    d->sc[1] = s1;\n    d->sk[0] = sk;',
+     '    d->sc[0] = fmin(fmax(s0, -DBL_MAX), DBL_MAX);\n    d->sc[1] = fmin(fmax(s1, -DBL_MAX), DBL_MAX);\n'
+     '    d->sk[0] = fmin(fmax(sk, -DBL_MAX), DBL_MAX);', LIBFLOW),
+    ('an-infinity-is-divided-down', FLOW,
+     '        big = a - a == 0 && a > big ? a : big;',
+     '        big = a > big ? a : big;', LIBFLOW),
     ('an-inverse-entry-past-a-double-is-held', MOTION,
-     '            if (!fits(q))\n                return false;\n            out[col * 4 + row] = (double)q;',
-     '            out[col * 4 + row] = held(q);', LIBFLOW),
+     '            if (!isfinite(q))\n                return false;\n            out[col * 4 + row] = q;',
+     '            out[col * 4 + row] = fmin(fmax(q, -DBL_MAX), DBL_MAX);', LIBFLOW),
     ('a-new-window-refuses-its-face', UI_SETTINGS,
      '    if(d->opening)grow(d);',
      '', UI_TEXT),
@@ -653,15 +669,6 @@ mutants = [
     ('an-unknown-underlying-is-still', MOTION,
      '    bool still = !unknown && same_value(p, s->style, e->style);',
      '    bool still = same_value(p, s->style, e->style);\n    (void)unknown;', LIBFLOW),
-    ('the-turning-roots-cancel', MOTION,
-     '        long double sq = sqrt((double)disc), q = -0.5L * (qb + (qb < 0 ? -sq : sq));\n'
-     '        double r0 = qa != 0 ? (double)(q / qa) : NAN, r1 = q != 0 ? (double)(qc / q) : NAN;',
-     '        long double sq = sqrt((double)disc);\n'
-     '        double r0 = qa != 0 ? (double)((-qb - sq) / (2 * qa)) : NAN,\n'
-     '               r1 = qa != 0 ? (double)((-qb + sq) / (2 * qa)) : NAN;', LIBFLOW),
-    ('crossings-are-halved-a-fixed-count', MOTION,
-     '        for (int k = 0; k < 1100; k++) {\n            double mid = t0 + (t1 - t0) / 2;',
-     '        for (int k = 0; k < 64; k++) {\n            double mid = t0 + (t1 - t0) / 2;', LIBFLOW),
     ('the-probe-ignores-the-value-underneath', MOTION,
      '    u->moved = true;\n    return false;',
      '    (void)u;\n    return true;', LIBFLOW),
@@ -697,9 +704,9 @@ mutants = [
     ('a-discarded-layout-keeps-its-timeline', YONDER,
      '        (void)flow_timeline_undo_incomplete(s_env.timeline);\n',
      '', WINDOW),
-    ('skew-is-kept-in-degrees', STYLE,
-     '            flow_angle_unit_t second = angle_unit(&v[1]), to = f_angle_coarser(out->unit, second);',
-     '            flow_angle_unit_t second = angle_unit(&v[1]), to = FLOW_ANGLE_DEG;', LIBFLOW),
+    ('a-skew-keeps-its-first-unit', STYLE,
+     '            to = f_angle_common(out->unit, second);',
+     '            to = out->unit;', LIBFLOW),
     ('the-switches-are-not-applied', SETTINGS,
      '    s.motion_use(s.run.checked, s.reduce.checked);',
      '', WINDOW),

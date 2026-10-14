@@ -2547,7 +2547,8 @@ static bool lone_number(VCur *c, garb_val_t *out)
 }
 
 // <easing-function> (Easing 1 § 2): a keyword; cubic-bezier(x1, y1, x2,
-// y2) with each x in [0, 1]; or steps(<integer>, <position>?), whose count
+// y2) with each x in [0, 1], each y held to the domain (values.h); or
+// steps(<integer>, <position>?), whose count
 // is at least 1, and at least 2 with jump-none, which takes no step at
 // either end. Easing 2's linear() is not read (PILE3.md § Animations,
 // Booked).
@@ -2569,6 +2570,8 @@ static bool easing(Sets *s, VCur *c, garb_val_t *out)
                 return false;
         if (!(a[0].number >= 0 && a[0].number <= 1 && a[2].number >= 0 && a[2].number <= 1))
             return false;
+        a[1].number = garb_hold(a[1].number, GARB_EASING_Y_MAX);
+        a[3].number = garb_hold(a[3].number, GARB_EASING_Y_MAX);
         *out = fn_val(s, "cubic-bezier", a, 4);
     } else if (is_fn(t, "steps")) {
         int32_t n = fn_args(t, args, 2);
