@@ -1559,7 +1559,9 @@ starts when they arrive. A paused animation stores the time it has run
 and a resumed one is restarted that much before `now`. A record no
 COMPLETE layout styled is dropped — its element gone, its name gone, its
 subtree `display: none`; an incomplete layout drops nothing it did not
-reach. A layout that FAILS — no memory, and no tree — is undone: what it
+reach. A complete layout with no room to drop them still marks them
+gone: matched to no name again, so a name dropped and written again
+starts anew, and dropped by the next layout that has room. A layout that FAILS — no memory, and no tree — is undone: what it
 made goes and what it changed is put back, so the tree still shown runs
 on as it was (a pause the failed layout read is not taken until a layout
 that succeeds reads it again), and the undoing allocates nothing. A
@@ -1685,7 +1687,10 @@ anonymous blocks, the nearest block with an element of its own, which
 holds them all; for one that makes none (`display: contents`) the boxes
 inside it, which draw what it hands down; or any box
 inside it drawn outside it, positioned, fixed or moved by a transform,
-which no ancestor's overflow holds. Any other — a transform, a size, a
+which no ancestor's overflow holds. The root and the body are seen
+wherever their boxes are: the canvas may take either one's background
+and paint it over the whole view, and which one it takes is the
+painter's to know. Any other — a transform, a size, a
 position, a shadow's offset — may carry what it draws into view from
 anywhere, and is due wherever its element is. The time: the layout's own
 for a value that moves continuously, which leaves when the next frame is
@@ -1719,7 +1724,10 @@ past the look's own room, which is not asked about, since the value it
 is left as may be an earlier animation's that the tree does not show. Then the start of
 an active phase; an end — and
 never for one that is paused, finished and filling, or in place and out
-of view. It joins the deadlines the
+of view, nor for one of nothing that can show: no property it sets is
+drawn (animatable, its list not dropped) or has a side effect, or each
+one is replaced by a later animation in effect, which is due for its
+own end. It joins the deadlines the
 ticker keeps already (`pictures_schedule`). When it rings for an
 animation the page is laid out again, quietly: the scroll kept as any
 relayout keeps it, the controls placed, the cascade reused — the
@@ -1974,11 +1982,14 @@ a side draws with when an animation draws its style; a keyframe's
 `url()` against its own sheet; the timeline
 across layouts — a start kept, `a` to `a, a`, a name gone, an element
 gone and its hold let go, a pause and a resume, an incomplete layout
-dropping nothing, a failed one undone, three thousand names matched;
+dropping nothing, a failed one undone, a cleanup with no room marking
+what it could not drop, three thousand names matched;
 each due time, an inline element's later pieces, a curve whose slope
 no double holds, lists the budget or the probe had no room for — under
-another animation's and over it — and a list's change only the probe
-sees among them, and values that stand still not asked for; THE SCHEDULE AGAINST THE VALUE — thousands of animations
+another animation's and over it — a list's change only the probe sees,
+and the canvas's background with its owner's box out of view among
+them, and values that stand still and animations of nothing that can
+show not asked for; THE SCHEDULE AGAINST THE VALUE — thousands of animations
 made at random (one to five keyframes at any offsets, several at one,
 two animations of a property, every easing to a double's extremes,
 every direction and fill), the value asked at every millisecond and

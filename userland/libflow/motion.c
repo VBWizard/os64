@@ -228,6 +228,9 @@ struct FRecord {
     FRecordState now;
     FRecordState was;           // before the layout that last met it
     uint32_t made;              // the layout that made it
+    // Not met by a complete layout whose cleanup had no room to drop it:
+    // matched to no name again, and dropped by the next cleanup with room.
+    bool gone;
     FRecord *after;             // the record it was chained after then, or NULL
     FRecord *next;              // its element's next record
 };
@@ -336,7 +339,7 @@ bool f_timeline_element(flow_timeline_t *t, const os64_html_node_t *n, FMotion *
     int32_t nold = 0;
     FRecord *tail = NULL;
     for (FRecord *r = f_map_get(&t->by_node, n); r != NULL; r = r->next) {
-        nold += r->now.seen != t->layout;
+        nold += r->now.seen != t->layout && !r->gone;
         tail = r;
     }
     int32_t total = nold + m->nanims;
@@ -347,7 +350,7 @@ bool f_timeline_element(flow_timeline_t *t, const os64_html_node_t *n, FMotion *
     Named *old = buf, *names = buf + nold, *tmp = buf + total;
     int32_t k = 0;
     for (FRecord *r = f_map_get(&t->by_node, n); r != NULL; r = r->next)
-        if (r->now.seen != t->layout)
+        if (r->now.seen != t->layout && !r->gone)
             old[k++] = (Named){r->name, r->len, r->now.place, r};
     for (int32_t i = 0; i < m->nanims; i++) {
         m->anims[i].record = NULL;
@@ -461,9 +464,11 @@ void f_timeline_end(flow_timeline_t *t, bool complete)
         return;
     // The map over the records kept, and each one's next in its element's
     // chain, are made before anything changes: with no room for them
-    // nothing is dropped, and a later complete layout drops what this one
-    // would have. A dropped record's node is no key of the new map, since
-    // the node may be reused for another element once it is let go.
+    // nothing is dropped, but what this layout did not meet is gone all
+    // the same — no later layout matches it, so a name a page drops and
+    // writes again starts anew — and the next cleanup with room drops it.
+    // A dropped record's node is no key of the new map, since the node may
+    // be reused for another element once it is let go.
     FMap map = {0};
     FRecord **next = t->n > 0 ? os64_malloc((size_t)t->n * sizeof(*next)) : NULL;
     bool room = t->n == 0 || next != NULL;
@@ -475,6 +480,9 @@ void f_timeline_end(flow_timeline_t *t, bool complete)
         room = f_map_put(&map, r->node, r);
     }
     if (!room) {
+        for (int32_t i = 0; i < t->n; i++)
+            if (t->records[i]->now.seen != t->layout)
+                t->records[i]->gone = true;
         os64_free(next);
         f_map_free(&map);
         return;
@@ -2175,6 +2183,14 @@ bool f_motion_style(const FMotion *m, double now, flow_style_t *out, FAlloc allo
     return ok;
 }
 
+// The side effect an animation of `p` gives its element (FLOW_WILL_*), or 0.
+static uint8_t will_bit(garb_prop_t p)
+{
+    return p == GARB_TRANSFORM || p == GARB_TRANSLATE || p == GARB_ROTATE || p == GARB_SCALE
+               ? FLOW_WILL_TRANSFORM
+           : p == GARB_OPACITY ? FLOW_WILL_OPACITY : 0;
+}
+
 uint8_t f_motion_effects(const FMotion *m, double now)
 {
     uint8_t bits = 0;
@@ -2186,11 +2202,9 @@ uint8_t f_motion_effects(const FMotion *m, double now)
         // Current — before or in its active phase — or in effect.
         if (k.phase == PHASE_AFTER && !k.in_effect)
             continue;
-        if (f_props_has(&an->props, GARB_TRANSFORM) || f_props_has(&an->props, GARB_TRANSLATE) ||
-            f_props_has(&an->props, GARB_ROTATE) || f_props_has(&an->props, GARB_SCALE))
-            bits |= FLOW_WILL_TRANSFORM;
-        if (f_props_has(&an->props, GARB_OPACITY))
-            bits |= FLOW_WILL_OPACITY;
+        for (int p = 0; p < GARB_NPROPS; p++)
+            if (f_props_has(&an->props, (garb_prop_t)p))
+                bits |= will_bit((garb_prop_t)p);
     }
     return bits;
 }
@@ -2375,6 +2389,24 @@ static bool changes_by(const FMotion *m, double now, double then)
     return false;
 }
 
+// Whether anything animation `a` does can show, `last` naming the
+// animation in effect that shows each property (f_motion_next): a
+// property it sets that is drawn — animatable, its list not dropped — or
+// whose side effect follows its clock (f_motion_effects), unless a later
+// animation in effect replaces it, which then shows the property and
+// gives the same side effect. An animation of nothing that can show —
+// an empty rule, `display` alone, declarations an `!important` winner
+// holds — changes nothing at any of its edges.
+static bool anim_shows(const FAnimation *an, int32_t a, const int32_t last[GARB_NPROPS])
+{
+    for (int p = 0; p < GARB_NPROPS; p++)
+        if (f_props_has(&an->props, (garb_prop_t)p) && !(last[p] > a) &&
+            ((animatable((garb_prop_t)p) && !f_props_has(&an->dropped, (garb_prop_t)p)) ||
+             will_bit((garb_prop_t)p) != 0))
+            return true;
+    return false;
+}
+
 double f_motion_next(const FMotion *m, double now)
 {
     // Of the animations in effect now, the last to set each property, its
@@ -2397,7 +2429,7 @@ double f_motion_next(const FMotion *m, double now)
     double next = INFINITY;
     for (int32_t a = 0; a < m->nanims; a++) {
         const FAnimation *an = &m->anims[a];
-        if (an->record == NULL || an->record->now.paused)
+        if (an->record == NULL || an->record->now.paused || !anim_shows(an, a, last))
             continue;
         double local = local_time(an->record, now), base = an->record->now.start;
         Clock k = clock_at(&an->timing, local);

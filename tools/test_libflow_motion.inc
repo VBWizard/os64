@@ -1123,12 +1123,45 @@ static void motion_timeline_cases(void)
     f_timeline_end(tl, true);
     expect("motion: an incomplete layout drops nothing, a complete one the rest",
            ok && an[0].record == first && f_timeline_records(tl) == 1, NULL);
+    // A complete layout whose cleanup has no room drops nothing, but what
+    // it did not meet is gone all the same: a name it did not meet, written
+    // again later, starts anew — its one second due from the later start,
+    // not over long since — and the next cleanup drops the old record.
+    FAnimation g;
+    memset(&g, 0, sizeof(g));
+    g.timing.name = (flow_name_t){"g", 1};
+    g.timing.duration_ms = 1000;
+    g.timing.iterations = 1;
+    f_props_add(&g.props, GARB_OPACITY);
+    FMotion gm = {.anims = &g, .nanims = 1};
+    flow_timeline_t *gt = flow_timeline_new(doc);
+    f_timeline_begin(gt);
+    ok = f_timeline_element(gt, z, &gm, 20000);
+    f_timeline_end(gt, true);
+    f_timeline_begin(gt);
+    allocations = 0;
+    fail_single = true;
+    fail_at = 1;
+    f_timeline_end(gt, true);
+    fail_at = 0;
+    fail_single = false;
+    int32_t unfreed = f_timeline_records(gt);
+    g.record = NULL;
+    f_timeline_begin(gt);
+    ok = ok && f_timeline_element(gt, z, &gm, 30000);
+    f_timeline_end(gt, true);
+    expect("motion: a name a cleanup had no room to drop starts anew written again",
+           ok && unfreed == 1 && f_motion_next(&gm, 30000) == 31000 && f_timeline_records(gt) == 1, NULL);
+    flow_timeline_free(gt);
     // A paused animation holds its time — nothing is due while it is — and
     // resumed, it runs from there: started paused at 5000, resumed at
-    // 9000, its one second ends at 10000.
+    // 9000, its one second ends at 10000. (Each animation here sets
+    // opacity, which it holds still: one that sets nothing is due for
+    // nothing.)
     FAnimation p;
     memset(&p, 0, sizeof(p));
     p.timing.name = (flow_name_t){"p", 1};
+    f_props_add(&p.props, GARB_OPACITY);
     p.timing.duration_ms = 1000;
     p.timing.iterations = 1;
     p.timing.paused = true;
@@ -1149,6 +1182,7 @@ static void motion_timeline_cases(void)
     FAnimation r;
     memset(&r, 0, sizeof(r));
     r.timing.name = (flow_name_t){"r", 1};
+    f_props_add(&r.props, GARB_OPACITY);
     r.timing.duration_ms = 1000;
     r.timing.iterations = 1;
     FMotion running = {.anims = &r, .nanims = 1};
@@ -1198,6 +1232,7 @@ static void motion_timeline_cases(void)
     FAnimation u;
     memset(&u, 0, sizeof(u));
     u.timing.name = (flow_name_t){"u", 1};
+    f_props_add(&u.props, GARB_OPACITY);
     u.timing.duration_ms = 1000;
     u.timing.iterations = 1;
     FMotion undone = {.anims = &u, .nanims = 1};
@@ -1468,6 +1503,15 @@ static void motion_due_cases(void)
     expect_u32("motion due: an opacity a later animation holds is not moving",
                (uint32_t)flow_motion_due(m.tree, kView, (flow_point_t){0, 0}), 2000);
     moving_close(&m);
+    // And where the earlier one also sets a colour it holds still, which
+    // shows: its clock counts, its opacity still does not move.
+    moving_open(&m, MOTION_STYLE
+        "@keyframes mov{from{opacity:0;color:red}to{opacity:1;color:red}}"
+        "@keyframes fix{from{opacity:1}to{opacity:1}}"
+        "</style><div id=ov style='animation:mov 1s linear infinite,fix 1s linear infinite'>x</div>", 1000);
+    expect_u32("motion due: and so where the earlier one sets something else that shows",
+               (uint32_t)flow_motion_due(m.tree, kView, (flow_point_t){0, 0}), 2000);
+    moving_close(&m);
     moving_open(&m, MOTION_STYLE
         "@keyframes mov{from{opacity:0}to{opacity:1}}"
         "@keyframes fix{from{opacity:1}to{opacity:1}}"
@@ -1508,6 +1552,45 @@ static void motion_due_cases(void)
     expect("motion due: out of view, an animation that moves its element is due",
            flow_motion_due(m.tree, kView, (flow_point_t){0, 0}) == 1000, NULL);
     moving_close(&m);
+
+    // An animation of nothing that can show is due for nothing, however
+    // fast its clock runs: an empty rule, `display` alone, what an
+    // `!important` winner holds — and opacity a later animation in effect
+    // replaces, whose own end is what is due.
+    static const struct { const char *name, *css; uint64_t due; } kNothing[] = {
+        {"motion due: an empty rule is due for nothing", "@keyframes e{}#n{animation:e 1ms infinite}",
+         FLOW_NEVER},
+        {"motion due: display alone is due for nothing",
+         "@keyframes d{to{display:none}}#n{animation:d 1ms infinite}", FLOW_NEVER},
+        {"motion due: what an !important winner holds is due for nothing",
+         "@keyframes o{to{opacity:0}}#n{opacity:.5 !important;animation:o 1ms infinite}", FLOW_NEVER},
+        {"motion due: an animation a later one replaces is due for nothing",
+         "@keyframes o{to{opacity:0}}@keyframes s{from{opacity:.5}to{opacity:.5}}"
+         "#n{animation:o 7ms infinite,s 1s linear}", 2000},
+    };
+    // The root's background, or the body's, is the canvas's, painted over
+    // the whole view wherever its box is: either animated in place is due
+    // with its box moved out of view.
+    moving_open(&m, MOTION_STYLE "@keyframes bg{to{background-color:blue}}"
+                "body{transform:translateX(-5000px);animation:bg 1s linear}</style><p>x</p>", 1000);
+    expect("motion due: the body's background, the canvas's, is due with the body out of view",
+           flow_motion_due(m.tree, kView, (flow_point_t){0, 0}) == 1000, NULL);
+    moving_close(&m);
+    moving_open(&m, MOTION_STYLE "@keyframes bg{to{background-color:blue}}"
+                "html{transform:translateX(-5000px);animation:bg 1s linear}</style><p>x</p>", 1000);
+    expect("motion due: and so is the root's",
+           flow_motion_due(m.tree, kView, (flow_point_t){0, 0}) == 1000, NULL);
+    moving_close(&m);
+    for (size_t i = 0; i < sizeof(kNothing) / sizeof(kNothing[0]); i++) {
+        char html[512];
+        snprintf(html, sizeof(html), MOTION_STYLE "%s</style><div id=n>x</div>", kNothing[i].css);
+        moving_open(&m, html, 1000);
+        uint64_t due = flow_motion_due(m.tree, kView, (flow_point_t){0, 0});
+        char detail[48];
+        snprintf(detail, sizeof(detail), "due %llu", (unsigned long long)due);
+        expect(kNothing[i].name, due == kNothing[i].due, detail);
+        moving_close(&m);
+    }
 
     // An element that makes no box hands its animated colour down: it is
     // seen where what it holds is — a block, or bare text — and not when
@@ -2268,6 +2351,17 @@ static void motion_dropped_cases(void)
     char detail[64];
     snprintf(detail, sizeof(detail), "moving %g, dropped %g", moving, dropped);
     expect("motion: a dropped value is due for nothing", ok && moving == 100 && dropped == 1000, detail);
+    // Opacity's side effect follows the animation's clock, so its end is
+    // due; a dropped list that gives none leaves nothing that can show,
+    // and the endless animation is due for nothing at all.
+    memset(&an.props, 0, sizeof(an.props));
+    memset(&an.dropped, 0, sizeof(an.dropped));
+    f_props_add(&an.props, GARB_BOX_SHADOW);
+    f_props_add(&an.dropped, GARB_BOX_SHADOW);
+    an.timing.iterations = INFINITY;
+    double nothing = f_motion_next(&m, 100);
+    snprintf(detail, sizeof(detail), "due %g", nothing);
+    expect("motion: a dropped list with no side effect is due for nothing", isinf(nothing), detail);
     flow_timeline_free(tl);
     os64_html_document_free(doc);
 

@@ -1645,6 +1645,7 @@ static os64_gui_rect_t doc_rect_of(const flow_box_t *box, os64_gui_rect_t local,
 // Whether a box can be seen in `view`: all it paints — its overflow and
 // what its ink reaches past it (a shadow, a glyph's overhang, the like
 // from a box inside it) — where the page paints it, through any transform.
+// A background the canvas takes is the canvas's to paint (may_own_canvas).
 static bool box_seen(const flow_box_t *b, os64_gui_rect_t view, flow_point_t scroll)
 {
     os64_gui_rect_t o = b->overflow;
@@ -1693,6 +1694,19 @@ static bool motion_seen(const flow_tree_t *tree, const os64_html_node_t *n, os64
     return false;
 }
 
+// Whether `n` may be the element whose background the canvas takes and
+// paints over the whole view, wherever its box is: the root, or the body
+// its child, the canvas's when the root has none (Backgrounds 3 § 2.11).
+// Which one does depends on the painter's pictures as well as the styles,
+// so both count as seen: a layout early, at most, for the one whose
+// background the canvas does not take, and never late.
+static bool may_own_canvas(const flow_tree_t *tree, const os64_html_node_t *n)
+{
+    const os64_html_node_t *root = tree->root != NULL ? tree->root->node : NULL;
+    return root != NULL &&
+           (n == root || (n->parent == root && n->kind == OS64_HTML_ELEMENT && n->tag == OS64_HTML_TAG_BODY));
+}
+
 uint64_t flow_motion_due(const flow_tree_t *tree, os64_gui_rect_t view, flow_point_t scroll)
 {
     if (tree == NULL || tree->styles == NULL || tree->styles->nanimated == 0)
@@ -1702,7 +1716,7 @@ uint64_t flow_motion_due(const flow_tree_t *tree, os64_gui_rect_t view, flow_poi
         const os64_html_node_t *n = tree->styles->animated[i];
         const FStyled *st = f_style_of(tree->styles, n);
         if (st == NULL || st->motion == NULL ||
-            (st->motion->in_place && !motion_seen(tree, n, view, scroll)))
+            (st->motion->in_place && !may_own_canvas(tree, n) && !motion_seen(tree, n, view, scroll)))
             continue;
         next = fmin(next, f_motion_next(st->motion, now));
     }
