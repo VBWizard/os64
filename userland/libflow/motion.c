@@ -592,16 +592,20 @@ static bool decompose_2d(const double m[16], D3 *d)
     return true;
 }
 
-static double det3(double a, double b, double c, double d, double e, double f, double g,
-                   double h, double i)
+// Determinants in long double, whose range holds any product of four
+// doubles: matrix3d(1e200, …)'s is 1e800, and a matrix of huge and tiny
+// entries together keeps its tiny product too — where a double, or a
+// matrix divided down by its largest entry, loses one or the other.
+static long double det3(long double a, long double b, long double c, long double d, long double e,
+                        long double f, long double g, long double h, long double i)
 {
     return a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
 }
 
-static double det4(const double m[16])
+static long double det4(const double m[16])
 {
     // Along the first column (m[col * 4 + row]).
-    double r = 0;
+    long double r = 0;
     for (int k = 0; k < 4; k++) {
         double s[9];
         int n = 0;
@@ -609,7 +613,7 @@ static double det4(const double m[16])
             for (int row = 0; row < 4; row++)
                 if (row != k)
                     s[n++] = m[col * 4 + row];
-        double minor = det3(s[0], s[3], s[6], s[1], s[4], s[7], s[2], s[5], s[8]);
+        long double minor = det3(s[0], s[3], s[6], s[1], s[4], s[7], s[2], s[5], s[8]);
         r += (k % 2 ? -1 : 1) * m[k] * minor;
     }
     return r;
@@ -617,8 +621,8 @@ static double det4(const double m[16])
 
 static bool invert4(const double m[16], double out[16])
 {
-    double d = det4(m);
-    if (d == 0 || !isfinite(d))
+    long double d = det4(m);
+    if (d == 0)
         return false;
     for (int col = 0; col < 4; col++)
         for (int row = 0; row < 4; row++) {
@@ -629,8 +633,8 @@ static bool invert4(const double m[16], double out[16])
                 for (int r = 0; r < 4; r++)
                     if (c != row && r != col)
                         s[n++] = m[c * 4 + r];
-            double minor = det3(s[0], s[3], s[6], s[1], s[4], s[7], s[2], s[5], s[8]);
-            out[col * 4 + row] = ((row + col) % 2 ? -1 : 1) * minor / d;
+            long double minor = det3(s[0], s[3], s[6], s[1], s[4], s[7], s[2], s[5], s[8]);
+            out[col * 4 + row] = held(((row + col) % 2 ? -1 : 1) * minor / d);
         }
     return true;
 }
@@ -1246,8 +1250,18 @@ static double in_unit(double v, flow_angle_unit_t from, flow_angle_unit_t to)
     return from == to ? v : v * (per_turn(to) / per_turn(from));
 }
 
-// Two rotations' axes, made unit vectors: equal, or either angle none, and
-// they mix by their angle about the turned one's axis (Transforms 2 § 14).
+// Whether a rotation turns about an axis at all: one of no length turns
+// nothing (rotation()).
+static bool has_axis(const flow_transform_t *f)
+{
+    double u[3];
+    return unit3(f->a[0], f->a[1], f->a[2], u);
+}
+
+// Two rotations' axes, made unit vectors: equal, or either turning nothing
+// — an angle of 0, or an axis of no length — and they mix about the other's
+// axis, the one that turns nothing at an angle of 0 (mix_fn; Transforms 2
+// § 14, and Chrome's answer).
 static bool same_axis(const flow_transform_t *a, const flow_transform_t *b, double axis[3])
 {
     double ua[3] = {a->a[0], a->a[1], a->a[2]}, ub[3] = {b->a[0], b->a[1], b->a[2]};
@@ -1307,7 +1321,8 @@ static flow_transform_t mix_fn(const flow_transform_t *a, const flow_transform_t
         (void)same_axis(a, b, axis);
         os64_memcpy(r.a, axis, sizeof(axis));
         r.unit = coarser(a->unit, b->unit);
-        r.a[3] = lerp(in_unit(a->a[3], a->unit, r.unit), in_unit(b->a[3], b->unit, r.unit), t);
+        double ta = has_axis(a) ? a->a[3] : 0, tb = has_axis(b) ? b->a[3] : 0;
+        r.a[3] = lerp(in_unit(ta, a->unit, r.unit), in_unit(tb, b->unit, r.unit), t);
         break;
     }
     default: {
@@ -1595,12 +1610,30 @@ static bool length_same(flow_length_t a, flow_length_t b)
     return a.kind == b.kind && a.value == b.value && a.offset == b.offset;
 }
 
-// Two transform functions with one value. A tail waiting for its box
-// (FLOW_FN_BLEND) is never called the same as anything.
+// Whether two mixes of tails (FLOW_FN_BLEND) draw as one matrix: as the
+// painter draws each (f_blend_matrix), in a box of no size and in one of a
+// thousand pixels, so a percentage that differs shows in the second.
+static bool blend_same(const flow_transform_t *a, const flow_transform_t *b)
+{
+    for (int64_t box = 0; box <= 1000 * 64; box += 1000 * 64) {
+        double ma[16], mb[16];
+        f_blend_matrix(a, box, box, ma);
+        f_blend_matrix(b, box, box, mb);
+        for (int i = 0; i < 16; i++)
+            if (ma[i] != mb[i])
+                return false;
+    }
+    return true;
+}
+
+// Two transform functions with one value; two mixes of tails, the matrices
+// they draw as.
 static bool function_same(const flow_transform_t *a, const flow_transform_t *b)
 {
     if (a == NULL || b == NULL)
         return a == b;
+    if (a->fn == FLOW_FN_BLEND || b->fn == FLOW_FN_BLEND)
+        return a->fn == b->fn && a->blend != NULL && b->blend != NULL && blend_same(a, b);
     if (a->fn != b->fn || a->three_d != b->three_d || a->unit != b->unit || a->blend != NULL ||
         b->blend != NULL || !length_same(a->x, b->x) || !length_same(a->y, b->y))
         return false;
@@ -1687,6 +1720,41 @@ static bool animatable(garb_prop_t p)
 {
     return p != GARB_DISPLAY && p != GARB_WILL_CHANGE &&
            !(p >= GARB_ANIMATION_NAME && p <= GARB_ANIMATION_FILL_MODE);
+}
+
+// Whether two transform lists mix by moving or only flip at one half, as
+// the painter draws their mix: a pair that pairs and differs moves; a pair
+// or tail that mixes as matrices moves when both can be decomposed, and
+// otherwise is drawn as the first below one half and the second from there
+// (f_blend_matrix) — a flip. Decomposition does not depend on the
+// translations, so the box the tails are multiplied out in is none.
+static MixKind transforms_kind(const flow_transform_t *a, int32_t na, const flow_transform_t *b,
+                               int32_t nb)
+{
+    int32_t n = na > nb ? na : nb;
+    bool flips = false;
+    for (int32_t i = 0; i < n; i++) {
+        flow_transform_t fa = i < na ? a[i] : identity_of(&b[i]);
+        flow_transform_t fb = i < nb ? b[i] : identity_of(&a[i]);
+        if (pairs(&fa, &fb)) {
+            if (!function_same(&fa, &fb))
+                return MIX_CONTINUOUS;
+            continue;
+        }
+        bool alone = fa.fn == fb.fn &&
+                     (fa.fn == FLOW_FN_MATRIX || fa.fn == FLOW_FN_PERSPECTIVE || fa.fn == FLOW_FN_ROTATE);
+        int32_t to = alone ? i + 1 : n;
+        int32_t ca = (to < na ? to : na) - i, cb = (to < nb ? to : nb) - i;
+        double ma[16], mb[16], mix[16];
+        f_tail_matrix(a + i, ca > 0 ? ca : 0, 0, 0, ma);
+        f_tail_matrix(b + i, cb > 0 ? cb : 0, 0, 0, mb);
+        if (f_matrix_mix(ma, mb, 0.5, mix))
+            return MIX_CONTINUOUS;
+        flips = true;
+        if (!alone)
+            break;
+    }
+    return flips ? MIX_DISCRETE : MIX_CONTINUOUS;
 }
 
 // Property `p` at `t` between keyframe styles `a` and `b`, into `d` — or,
@@ -1891,8 +1959,10 @@ static bool mix_prop(garb_prop_t p, const flow_style_t *a, const flow_style_t *b
         return true;
     }
     case GARB_TRANSFORM:
-        if (d == NULL)
+        if (d == NULL) {
+            *kind = transforms_kind(a->transform, a->ntransform, b->transform, b->ntransform);
             return true;
+        }
         return mix_transforms(a->transform, a->ntransform, b->transform, b->ntransform, t,
                               &d->transform, &d->ntransform, alloc, ctx);
     case GARB_TRANSLATE: case GARB_ROTATE: case GARB_SCALE: {
@@ -2264,6 +2334,21 @@ static bool changes_by(const FMotion *m, double now, double then)
 
 double f_motion_next(const FMotion *m, double now)
 {
+    // Of the animations in effect now, the last to set each property: its
+    // value replaces an earlier one's (f_motion_style), so what an earlier
+    // one does to that property is not shown — until the later one's
+    // effect ends, which that one is due for itself.
+    int32_t last[GARB_NPROPS];
+    for (int p = 0; p < GARB_NPROPS; p++)
+        last[p] = -1;
+    for (int32_t a = m->nanims - 1; a >= 0; a--) {
+        const FAnimation *an = &m->anims[a];
+        if (an->record == NULL || !clock_at(&an->timing, local_time(an->record, now)).in_effect)
+            continue;
+        for (int p = 0; p < GARB_NPROPS; p++)
+            if (last[p] < 0 && f_props_has(&an->props, (garb_prop_t)p))
+                last[p] = a;
+    }
     double next = INFINITY;
     for (int32_t a = 0; a < m->nanims; a++) {
         const FAnimation *an = &m->anims[a];
@@ -2284,7 +2369,7 @@ double f_motion_next(const FMotion *m, double now)
             soonest = fmin(soonest, base + k.iteration_start + dur);
         for (int p = 0; p < GARB_NPROPS && soonest > now; p++) {
             if (!f_props_has(&an->props, (garb_prop_t)p) || !animatable((garb_prop_t)p) ||
-                f_props_has(&m->dropped, (garb_prop_t)p))
+                f_props_has(&m->dropped, (garb_prop_t)p) || last[p] > a)
                 continue;
             Frame s, e;
             interval(m, an, (garb_prop_t)p, k.progress, &s, &e);

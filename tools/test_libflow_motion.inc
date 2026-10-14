@@ -786,6 +786,36 @@ static void motion_cascade_cases(void)
     expect("motion: radians past what degrees hold mix in radians, a turn", same, NULL);
     moving_close(&m);
 
+    // A zero-length axis turns nothing, so it mixes as no turn about the
+    // other's axis (Chrome, 10/14: rotate3d(1,0,0,45deg) to
+    // rotate3d(0,0,0,90deg) is rotateX(22.5deg) halfway, and none at its
+    // end); and a 3D matrix whose scales square past a double, with a
+    // perspective row, is undone and mixed, not dropped — its 1e-200 in
+    // that row, a w of 1 + 1e-200 x, as near as a double says (the
+    // decomposition holds it as 1e-400, which no double can).
+    moving_open(&m, MOTION_STYLE
+        "@keyframes z{from{transform:rotate3d(1,0,0,45deg)}to{transform:rotate3d(0,0,0,90deg)}}"
+        "</style><div id=zh style='animation:z 1s linear -.5s paused'></div>"
+        "<div id=ze style='animation:z 1s linear -1s paused forwards'></div>"
+        "<div id=zx style='transform:rotateX(22.5deg)'></div>", 1000);
+    both = moving_matrix(&m, "zx", want) && moving_matrix(&m, "zh", got);
+    same = both;
+    for (int i = 0; both && i < 16; i++)
+        same &= fabs(want[i] - got[i]) < 1e-9;
+    expect("motion: a zero-length axis mixes as no turn about the other's", same, NULL);
+    same = moving_matrix(&m, "ze", got);
+    for (int i = 0; same && i < 16; i++)
+        same &= fabs(got[i] - (i % 5 == 0 ? 1 : 0)) < 1e-9;
+    expect("motion: and ends turning nothing", same, NULL);
+    moving_close(&m);
+    {
+        double big3d[16] = {1e200, 0, 0, 1e-200, 0, 1e200, 0, 0, 0, 0, 1e200, 0, 0, 0, 0, 1}, out[16];
+        bool undone = f_matrix_mix(big3d, big3d, 0.5, out);
+        for (int i = 0; undone && i < 16; i++)
+            undone = fabs(out[i] - big3d[i]) <= 1e-9 * fmax(fabs(big3d[i]), 1);
+        expect("motion: a 3D matrix whose scales square past a double is undone", undone, NULL);
+    }
+
     // Whatever two matrices a page writes, their mix is a matrix or no mix
     // (the pair discrete) — never a NaN or an infinity: huge scales, shears
     // and turns in 2D, and 3D rows whose lengths a double cannot hold.
@@ -1326,6 +1356,32 @@ static void motion_due_cases(void)
         expect(kStillNames[i], due == 2000, detail);
         moving_close(&m);
     }
+
+    // What is not drawn moving is not due every frame: an opacity a later
+    // animation holds still, whatever the earlier one does to it; and a
+    // transform whose matrices cannot be undone, drawn as one and then the
+    // other (f_blend_matrix), is due where it flips, at one half.
+    moving_open(&m, MOTION_STYLE
+        "@keyframes mov{from{opacity:0}to{opacity:1}}"
+        "@keyframes fix{from{opacity:1}to{opacity:1}}"
+        "@keyframes flat{from{transform:matrix(0,0,0,0,0,0)}to{transform:matrix(1,0,0,1,0,0)}}"
+        "</style><div id=ov style='animation:mov 1s linear infinite,fix 1s linear infinite'></div>", 1000);
+    expect_u32("motion due: an opacity a later animation holds is not moving",
+               (uint32_t)flow_motion_due(m.tree, kView, (flow_point_t){0, 0}), 2000);
+    moving_close(&m);
+    moving_open(&m, MOTION_STYLE
+        "@keyframes mov{from{opacity:0}to{opacity:1}}"
+        "@keyframes fix{from{opacity:1}to{opacity:1}}"
+        "</style><div id=ov style='animation:mov 1s linear infinite,fix 1s linear 5s'></div>", 1000);
+    expect_u32("motion due: but only while the later one is in effect",
+               (uint32_t)flow_motion_due(m.tree, kView, (flow_point_t){0, 0}), 1000);
+    moving_close(&m);
+    moving_open(&m, MOTION_STYLE
+        "@keyframes flat{from{transform:matrix(0,0,0,0,0,0)}to{transform:matrix(1,0,0,1,0,0)}}"
+        "</style><div id=fl style='animation:flat 1s linear infinite'></div>", 1000);
+    expect_u32("motion due: a transform that cannot be undone flips at one half",
+               (uint32_t)flow_motion_due(m.tree, kView, (flow_point_t){0, 0}), 1500);
+    moving_close(&m);
 
     // Out of view, an animation that only repaints where its element is
     // waits; one that moves it is due all the same, since a later frame

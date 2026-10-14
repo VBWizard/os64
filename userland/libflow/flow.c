@@ -581,8 +581,7 @@ static void mat_translate(Wide m[16], double x, double y, double z)
 // function T(x, y) · its matrix, the translations' percentages of the box
 // `w` by `h`: in doubles, the arithmetic of the mix it goes into
 // (f_matrix_mix).
-static void tail_matrix(const flow_transform_t *f, int32_t n, int64_t w, int64_t h,
-                        double out[16])
+void f_tail_matrix(const flow_transform_t *f, int32_t n, int64_t w, int64_t h, double out[16])
 {
     os64_memset(out, 0, 16 * sizeof(double));
     out[0] = out[5] = out[10] = out[15] = 1;
@@ -603,18 +602,23 @@ static void tail_matrix(const flow_transform_t *f, int32_t n, int64_t w, int64_t
     }
 }
 
+void f_blend_matrix(const flow_transform_t *f, int64_t w, int64_t h, double out[16])
+{
+    double a[16], b[16];
+    f_tail_matrix(f->blend->from, f->blend->nfrom, w, h, a);
+    f_tail_matrix(f->blend->to, f->blend->nto, w, h, b);
+    if (!f_matrix_mix(a, b, f->blend->t, out))
+        os64_memcpy(out, f->blend->t < 0.5 ? a : b, 16 * sizeof(double));
+}
+
 // m · T(the function's x, y) · its matrix, a percentage of the border box
-// `w` by `h` — or, for an animation's mix of two tails, the two multiplied
-// out and mixed, the first or the second where they cannot be (Transforms
-// 1 § 11).
+// `w` by `h` — or, for an animation's mix of two tails, the mix's matrix
+// (f_blend_matrix).
 static void mat_fn(Wide m[16], const flow_transform_t *f, int64_t w, int64_t h)
 {
     if (f->fn == FLOW_FN_BLEND && f->blend != NULL) {
-        double a[16], b[16], mix[16];
-        tail_matrix(f->blend->from, f->blend->nfrom, w, h, a);
-        tail_matrix(f->blend->to, f->blend->nto, w, h, b);
-        if (!f_matrix_mix(a, b, f->blend->t, mix))
-            os64_memcpy(mix, f->blend->t < 0.5 ? a : b, sizeof(mix));
+        double mix[16];
+        f_blend_matrix(f, w, h, mix);
         mat_mul(m, m, mix);
         return;
     }

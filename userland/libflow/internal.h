@@ -315,6 +315,15 @@ void f_transform_fn_matrix(flow_transform_t *f);
 // arithmetic or the composed answer past a double's range — and the pair
 // is discrete.
 bool f_matrix_mix(const double a[16], const double b[16], double t, double out[16]);
+// A tail of an animation's mix (FLOW_FN_BLEND) multiplied out, each
+// function T(x, y) · its matrix, the translations' percentages of the box
+// `w` by `h`: in doubles, the arithmetic of the mix it goes into.
+void f_tail_matrix(const flow_transform_t *f, int32_t n, int64_t w, int64_t h, double out[16]);
+// A FLOW_FN_BLEND's matrix in a box `w` by `h`: its two tails multiplied
+// out and mixed (f_matrix_mix), or, where they cannot be, the first below
+// a fraction of one half and the second from there (Transforms 1 § 11) —
+// the one way a mix of tails is drawn, and so the way it is compared.
+void f_blend_matrix(const flow_transform_t *f, int64_t w, int64_t h, double out[16]);
 
 typedef struct {
     flow_style_t style;

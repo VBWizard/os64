@@ -1530,7 +1530,9 @@ builds from them as it builds it today. The primitives pair as
 Transforms 1 § 7.2 and 2 § 12.3 say and Chrome agrees: the translations
 with each other, the scales, the rotations (`rotate`, `rotateZ`,
 `rotateX`, `rotateY` and `rotate3d`, about axes Transforms 2 § 14
-compares); a skew with nothing but its own name; and `matrix()`,
+compares — one with an axis of no length turns nothing, and mixes as no
+turn about the other's axis, as Chrome mixes it); a skew with nothing but
+its own name; and `matrix()`,
 `matrix3d()` and `perspective()` only as matrices (§ 14).
 
 **The timeline.** Animations outlive the layouts that compute them: a
@@ -1634,7 +1636,9 @@ proof checks to Chrome's six digits: `scaleX(-1)` against
 protoweb.org's doors. A matrix that cannot be decomposed makes the pair
 discrete (Transforms 1 § 11), and so does one whose decomposition, or
 the matrix composed from the mix, leaves a double's range — a pair held,
-never a NaN. Two angles in different units are mixed in the coarser of
+never a NaN; a 3D one's determinant and inverse are worked in long
+double, whose range holds any product of four doubles. Two angles in
+different units are mixed in the coarser of
 the two (fewer to the turn), so moving one into it divides and no angle
 its own unit holds overflows. The tail's lengths need the border box, so the tail is kept as
 its two lists and the fraction, and multiplied out where the frame's
@@ -1679,7 +1683,11 @@ anywhere, and is due wherever its element is. The time: the layout's own
 for a value that moves continuously, which leaves when the next frame is
 to the face — and a value the same at both ends of its interval does not
 move, however its keyframes are written, so only the interval's far end
-is due; for one that changes at an instant — the next step's edge in
+is due; nor does one that is not drawn moving: a property a later
+animation in effect replaces, whatever the earlier one does to it, and a
+transform whose matrices cannot be undone, drawn as the first and then
+the second (`f_blend_matrix`), which flips at one half as a discrete
+value does; for one that changes at an instant — the next step's edge in
 `steps()`, worked out from where the progress is and never walked to; each
 crossing of a discrete value's level (one half, or for visibility 0 and
 1) by its easing, every one an overshooting curve makes; the interval's
