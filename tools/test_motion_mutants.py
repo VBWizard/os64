@@ -31,7 +31,9 @@ roots worked by the plain quadratic formula, which at a y control of 1e6
 loses digits no due time can see; a crossing halved a fixed 64 times,
 which already places one within 1e-7 ms of an interval of 1e12; and
 rotation axes compared by their lengths, which an axis held to 1e15
-takes as unit3 does, by its largest part.
+takes as unit3 does, by its largest part. And f_matrix_mix's door for a
+matrix holding a non-finite entry, which the decompositions' own guards
+refuse further in: the door is there so that no NaN comparison decides.
 """
 import argparse
 import pathlib
@@ -603,9 +605,6 @@ mutants = [
     ('a-3d-nan-determinant-is-compared', MOTION,
      '    double dp = det4(pm);\n    if (!isfinite(dp)) {',
      '    double dp = det4(pm);\n    if (false) {', LIBFLOW),
-    ('a-non-finite-entry-is-decomposed', MOTION,
-     '        if (!isfinite(a[i]) || !isfinite(b[i]))\n            return false;',
-     '        if (false)\n            return false;', LIBFLOW),
     ('the-first-y-is-not-held', PROPS,
      '        a[1].number = garb_hold(a[1].number, GARB_EASING_Y_MAX);\n',
      '', GARB),
