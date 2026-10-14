@@ -1110,13 +1110,60 @@ static int name_cmp(const char *a, size_t la, const char *b, size_t lb)
     return c != 0 ? c : (la > lb) - (la < lb);
 }
 
-// One block at one of its offsets: the offset, the block's easing and that
-// as text (two easings are told apart by it), the block, and where it was
-// written among the rule's.
+// An easing as keyframes are grouped by it (Chrome's answer): a keyword
+// curve by its name — `ease` is another easing than cubic-bezier(0.25,
+// 0.1, 0.25, 1); cubic-bezier() by its four numbers, each compared as the
+// number it is and not as printed (garb_val_dump rounds to six places,
+// which made cubic-bezier(0, 1e-7, 1, 1) and (0, 2e-7, 1, 1) one); and
+// steps by their count and where they jump, however written — step-start
+// and step-end are steps(1, start) and steps(1, end), and jump-start and
+// jump-end are start and end.
+typedef struct {
+    const char *word;
+    double n[4];
+    const char *jump;
+} Easing;
+
+static Easing easing_canon(const garb_val_t *v)
+{
+    Easing e = {v->keyword != NULL ? v->keyword : "", {0, 0, 0, 0}, ""};
+    if (v->kind == GARB_V_KEYWORD && (os64_streq(e.word, "step-start") || os64_streq(e.word, "step-end"))) {
+        e.jump = e.word + 5;
+        e.word = "steps";
+        e.n[0] = 1;
+    } else if (v->kind == GARB_V_FUNCTION && os64_streq(e.word, "steps")) {
+        e.n[0] = v->nitems > 0 ? v->items[0].number : 0;
+        e.jump = v->nitems > 1 && v->items[1].keyword != NULL ? v->items[1].keyword : "end";
+        if (os64_streq(e.jump, "jump-start") || os64_streq(e.jump, "jump-end"))
+            e.jump += 5;
+    } else if (v->kind == GARB_V_FUNCTION) {
+        for (int32_t i = 0; i < v->nitems && i < 4; i++)
+            e.n[i] = v->items[i].number;
+    }
+    return e;
+}
+
+// Two easings in a total order, equal when they are one easing
+// (easing_canon); no easing sorts first.
+static int easing_cmp(const garb_val_t *a, const garb_val_t *b)
+{
+    if (a == NULL || b == NULL)
+        return (a != NULL) - (b != NULL);
+    Easing x = easing_canon(a), y = easing_canon(b);
+    int k = os64_strcmp(x.word, y.word);
+    if (k != 0)
+        return k;
+    for (int i = 0; i < 4; i++)
+        if (x.n[i] != y.n[i])
+            return x.n[i] < y.n[i] ? -1 : 1;
+    return os64_strcmp(x.jump, y.jump);
+}
+
+// One block at one of its offsets: the offset, the block's easing, the
+// block, and where it was written among the rule's.
 typedef struct {
     double offset;
     const garb_val_t *easing;
-    const char *text;
     int32_t block;
     int32_t order;
 } KeyAt;
@@ -1126,7 +1173,7 @@ static int key_at_cmp(const void *a, const void *b)
     const KeyAt *x = a, *y = b;
     if (x->offset != y->offset)
         return x->offset < y->offset ? -1 : 1;
-    int t = os64_strcmp(x->text, y->text);
+    int t = easing_cmp(x->easing, y->easing);
     return t != 0 ? t : (x->order > y->order) - (x->order < y->order);
 }
 
@@ -1165,16 +1212,15 @@ static int32_t build_frames(garb_cascade_t *c, const Keyframes *k, const CustomM
     if (n == 0)
         return 0;
     // Each block's easing, read once: the timing function's first item, in
-    // the arena; and as text.
+    // the arena.
     const garb_val_t **easings = os64_calloc((size_t)k->nblocks, sizeof(*easings));
-    char (*texts)[128] = os64_calloc((size_t)k->nblocks, sizeof(*texts));
     KeyAt *at = os64_malloc((size_t)n * 2 * sizeof(*at));
     KeyRun *runs = os64_malloc((size_t)n * 2 * sizeof(*runs));
     garb_set_t *win = os64_malloc((size_t)GARB_NPROPS * sizeof(*win));
     uint64_t *written = os64_malloc((size_t)GARB_NPROPS * sizeof(*written));
     int32_t *stamp = os64_calloc((size_t)GARB_NPROPS, sizeof(*stamp));
     garb_prop_t *props = os64_malloc((size_t)GARB_NPROPS * sizeof(*props));
-    bool ok = easings != NULL && texts != NULL && at != NULL && runs != NULL && win != NULL &&
+    bool ok = easings != NULL && at != NULL && runs != NULL && win != NULL &&
               written != NULL && stamp != NULL && props != NULL;
     garb_set_t sets[GARB_SETS_MAX];
     int32_t m = 0;
@@ -1187,10 +1233,8 @@ static int32_t build_frames(garb_cascade_t *c, const Keyframes *k, const CustomM
                 *e = sets[0].value.kind == GARB_V_LAYERS ? sets[0].value.items[0] : sets[0].value;
             easings[b] = e;
         }
-        if (easings[b] != NULL)
-            (void)garb_val_dump(easings[b], texts[b], sizeof(texts[b]));
         for (int32_t o = 0; o < kb->noffsets; o++, m++)
-            at[m] = (KeyAt){kb->offsets[o], easings[b], texts[b], b, m};
+            at[m] = (KeyAt){kb->offsets[o], easings[b], b, m};
     }
     // Runs of one offset and one easing, each a keyframe; then sorted by
     // offset, a tie in the order first written.
@@ -1199,7 +1243,7 @@ static int32_t build_frames(garb_cascade_t *c, const Keyframes *k, const CustomM
         merge_sort(at, at + n, n, sizeof(*at), key_at_cmp);
         for (int32_t i = 0; i < n;) {
             int32_t j = i + 1;
-            while (j < n && at[j].offset == at[i].offset && os64_streq(at[j].text, at[i].text))
+            while (j < n && at[j].offset == at[i].offset && easing_cmp(at[j].easing, at[i].easing) == 0)
                 j++;
             runs[nruns++] = (KeyRun){i, j - i, at[i].order, at[i].offset};
             i = j;
@@ -1249,7 +1293,6 @@ static int32_t build_frames(garb_cascade_t *c, const Keyframes *k, const CustomM
     }
     os64_free(written);
     os64_free(easings);
-    os64_free(texts);
     os64_free(at);
     os64_free(runs);
     os64_free(win);

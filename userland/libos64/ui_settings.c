@@ -37,10 +37,24 @@ static bool arrange(os64_ui_settings_t *d,bool staged)
         place(&d->actions[i],(os64_gui_rect_t){pad+(int32_t)i*(bw+pad),h-row-pad,bw,row},staged);
     return true;
 }
+// Taller than the window (a theme's padding, a larger face), the window
+// grows to hold every row: a resizable window's canvas is the screen's.
+static void grow(os64_ui_settings_t *d)
+{
+    int64_t need=height_needed(d);
+    if(need>(int64_t)d->ctx.surf.height && need<=UINT32_MAX &&
+        os64_gui_window_set_min_size(d->window,d->ctx.surf.width,(uint32_t)need)==0)
+        (void)os64_draw_ctx_refresh(&d->ctx);
+}
+// Opening, the window grows to the row the staged font makes before the
+// font is judged (height_needed measures in it); a live window refuses a
+// font it cannot hold.
 static os64_font_status_t plan(os64_ui_t *ui,void *user,void **out)
 {
     (void)ui;*out=NULL;
-    return arrange(user,true)?OS64_FONT_OK:OS64_FONT_LIMIT;
+    os64_ui_settings_t *d=user;
+    if(d->opening)grow(d);
+    return arrange(d,true)?OS64_FONT_OK:OS64_FONT_LIMIT;
 }
 static void planned(os64_ui_t *ui,void *user,void *p)
 {(void)ui;(void)user;(void)p;}
@@ -86,14 +100,13 @@ bool os64_ui_settings_open(os64_ui_settings_t *d,int64_t parent,const char *titl
 void os64_ui_settings_ready(os64_ui_settings_t *d)
 {
     if(d->window<=0)return;
-    // Taller than the guess (a theme's padding, a larger face), the window
-    // grows to hold every row: a resizable window's canvas is the screen's.
-    int64_t need=height_needed(d);
-    if(need>(int64_t)d->ctx.surf.height && need<=UINT32_MAX &&
-        os64_gui_window_set_min_size(d->window,d->ctx.surf.width,(uint32_t)need)==0)
-        (void)os64_draw_ctx_refresh(&d->ctx);
+    // Grown to the guess's rows in the face it wears, then to the person's
+    // configured face's as it is adopted (plan, opening).
+    d->opening=true;
+    grow(d);
     (void)arrange(d,false);
     (void)os64_ui_font_follow(&d->ui);
+    d->opening=false;
     // Pin the initial usable content envelope; fonts that cannot fit a live
     // window are refused by the planner without disturbing the current layout.
     (void)os64_gui_window_set_min_size(d->window,d->ctx.surf.width,d->ctx.surf.height);

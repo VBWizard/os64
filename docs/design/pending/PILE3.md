@@ -1491,8 +1491,12 @@ cascade where `add_rules` meets them, inside the `@media` and `@supports`
 that hold, the last of a name in cascade order replacing the rest; the
 cascade no longer counts them as passed over. `garb_keyframes(cascade,
 element, name, …)` answers an element's keyframes for a name, built by
-Animations 2 § 3.2: grouped by offset and easing, the declarations of
-each group read as winners are — into the longhands they set, `var()`
+Animations 2 § 3.2: grouped by offset and easing — two easings one when
+they compute alike, as Chrome groups them: a keyword curve is not the
+same curve written as `cubic-bezier()`, steps are their count and where
+they jump however written (`step-end` is `steps(1, end)` is `steps(1,
+jump-end)`), and every number is compared as the number it is, never as
+printed — the declarations of each group read as winners are — into the longhands they set, `var()`
 replaced against the element's own custom properties — and dropped where
 Animations 2 drops them. A block that eases as the element does,
 naming its easing, and one naming none are one keyframe (Chrome's
@@ -1512,8 +1516,9 @@ from `dark`.
 
 **libflow keeps the lists in the style.** Each `animation-*` longhand is
 a list in `flow_style_t`, coordinated by `animation-name` where it is
-used; an easing is a `flow_easing_t` — linear, a cubic's four numbers,
-or a step count and position. `will-change` is two bits, TRANSFORM and
+used; an easing is a `flow_easing_t` — linear, a cubic's four numbers
+(and whether a keyword named them, which grouping tells apart), or a
+step count and position. `will-change` is two bits, TRANSFORM and
 OPACITY — any of `transform`, `translate`, `rotate` and `scale` sets
 the first — the two whose effects this slice gives; the rest of what it
 names is read and does nothing (§ Booked).
@@ -1687,7 +1692,10 @@ for a value that moves continuously, which leaves when the next frame is
 to the face — and a value the same at both ends of its interval does not
 move, however its keyframes are written, so only the interval's far end
 is due; nor does one that is not drawn moving: a property a later
-animation in effect replaces, whatever the earlier one does to it, and a
+animation in effect replaces, whatever the earlier one does to it — an
+animation whose list for it found no room in the layout's budget
+replaces nothing and is due for nothing there, the tree showing the
+property as it was — and a
 transform whose matrices cannot be undone, drawn as the first and then
 the second (`f_blend_matrix`), which flips at one half as a discrete
 value does; for one that changes at an instant — the next step's edge in
@@ -1706,7 +1714,9 @@ because what lies a hair past the instant the progress stands on — an
 end it leaves, a step, a crossing nearer than rounding can place — is
 where no arithmetic of its own can be trusted to the bit, the next
 millisecond is asked of the value itself (`f_motion_style` at now and
-the millisecond after): any difference makes it due. Then the start of
+the millisecond after): any difference makes it due — but for a list
+past the look's own room, which is not asked about, since the value it
+is left as may be an earlier animation's that the tree does not show. Then the start of
 an active phase; an end — and
 never for one that is paused, finished and filling, or in place and out
 of view. It joins the deadlines the
@@ -1846,7 +1856,11 @@ Written before the code (the lesson of S7b's nineteen rounds):
   at the ends of their range. Arithmetic that can pass a double is worked
   in long double and held to the double range, so nothing becomes an
   infinity or a NaN, nothing crashes or hangs, and no loop walks a count a
-  page chose. Past what long double resolves — a crossing nearer an end
+  page chose: `1e308s` is the longest time a double holds in
+  milliseconds, so an iteration of it begun `-5e307s` ago is over, as
+  Chrome's is (it holds a time to a float's seconds). A part a
+  decomposition needs and a double cannot hold is no decomposition, and
+  the pair is discrete, rather than held to compose another matrix. Past what long double resolves — a crossing nearer an end
   than its precision, two turns closer than slerp can divide — the answer
   is the nearest a double says, and the schedule errs early. Exactness
   past that is not promised: as THE NUMERIC CONTRACT found, each widening
@@ -1961,9 +1975,10 @@ a side draws with when an animation draws its style; a keyframe's
 across layouts — a start kept, `a` to `a, a`, a name gone, an element
 gone and its hold let go, a pause and a resume, an incomplete layout
 dropping nothing, a failed one undone, three thousand names matched;
-each due time, an inline element's later pieces and a curve whose
-slope no double holds among them, and values that stand still not
-asked for; THE SCHEDULE AGAINST THE VALUE — thousands of animations
+each due time, an inline element's later pieces, a curve whose slope
+no double holds, lists the budget or the probe had no room for — under
+another animation's and over it — and a list's change only the probe
+sees among them, and values that stand still not asked for; THE SCHEDULE AGAINST THE VALUE — thousands of animations
 made at random (one to five keyframes at any offsets, several at one,
 two animations of a property, every easing to a double's extremes,
 every direction and fill), the value asked at every millisecond and

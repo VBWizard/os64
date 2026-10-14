@@ -17,6 +17,7 @@
 // The walk is iterative, over the tree's own parent pointers, so a page as
 // deep as libhtml allows is styled without a stack as deep as the page.
 
+#include <float.h>
 #include <math.h>
 
 #include "internal.h"
@@ -1367,7 +1368,9 @@ typedef struct {
     int32_t sheet;              // the winner being read: the sheet it came from
 } Author;
 
-static bool word(const garb_val_t *v, const char *w)
+// Not `word`: built -masm=intel, a function GCC leaves out of line is
+// named in the assembly, and a symbol named word reads as WORD there.
+static bool is_word(const garb_val_t *v, const char *w)
 {
     return v->kind == GARB_V_KEYWORD && os64_streq(v->keyword, w);
 }
@@ -1507,7 +1510,7 @@ static bool author_len(const Author *a, const garb_val_t *v, bool allow_auto, Le
 {
     switch (v->kind) {
     case GARB_V_KEYWORD:
-        if (allow_auto && word(v, "auto")) {
+        if (allow_auto && is_word(v, "auto")) {
             *out = kAuto;
             return true;
         }
@@ -1686,9 +1689,9 @@ static void author_font_size(Author *a, Spec *sp, const garb_val_t *v)
     if (i >= 0) {
         sp->fs_kind = FS_KEYWORD;
         sp->fs_v = i;
-    } else if (word(v, "larger")) {
+    } else if (is_word(v, "larger")) {
         sp->fs_kind = FS_LARGER;
-    } else if (word(v, "smaller")) {
+    } else if (is_word(v, "smaller")) {
         sp->fs_kind = FS_SMALLER;
     } else if (v->kind == GARB_V_PERCENTAGE) {
         sp->fs_kind = FS_EM;
@@ -1711,13 +1714,13 @@ static void author_font_weight(Author *a, Spec *sp, const garb_val_t *v)
 {
     uint16_t up = a->parent != NULL ? a->parent->font_weight : 400;
     sp->bolder = false;
-    if (word(v, "normal"))
+    if (is_word(v, "normal"))
         sp->s.font_weight = 400;
-    else if (word(v, "bold"))
+    else if (is_word(v, "bold"))
         sp->s.font_weight = 700;
-    else if (word(v, "bolder"))
+    else if (is_word(v, "bolder"))
         sp->s.font_weight = bolder(up);
-    else if (word(v, "lighter"))    // Fonts 4 § 2.2's table
+    else if (is_word(v, "lighter"))    // Fonts 4 § 2.2's table
         sp->s.font_weight = up < 100 ? up : up < 550 ? 100 : up < 750 ? 400 : 700;
     else if (v->kind == GARB_V_NUMBER)
         sp->s.font_weight = (uint16_t)(v->number < 1 ? 1 : v->number > 1000 ? 1000
@@ -2063,8 +2066,8 @@ static bool author_breadth(const Author *a, const garb_val_t *v, flow_breadth_t 
         return true;
     }
     if (v->kind == GARB_V_KEYWORD) {
-        out->kind = word(v, "min-content")   ? FLOW_TRACK_MIN_CONTENT
-                    : word(v, "max-content") ? FLOW_TRACK_MAX_CONTENT
+        out->kind = is_word(v, "min-content")   ? FLOW_TRACK_MIN_CONTENT
+                    : is_word(v, "max-content") ? FLOW_TRACK_MAX_CONTENT
                                              : FLOW_TRACK_AUTO;
         return true;
     }
@@ -2119,7 +2122,7 @@ static GridRead author_tracks(Author *a, const garb_val_t *v, flow_tracks_t *out
 {
     os64_memset(out, 0, sizeof(*out));
     if (v->kind == GARB_V_KEYWORD)
-        return word(v, "none") || word(v, "auto") ? GRID_READ_OK : GRID_READ_UNUSABLE;
+        return is_word(v, "none") || is_word(v, "auto") ? GRID_READ_OK : GRID_READ_UNUSABLE;
     // A single size (grid-auto-*) is a list of one.
     const garb_val_t *items = v->kind == GARB_V_TRACKS ? v->items : v;
     int32_t n = v->kind == GARB_V_TRACKS ? v->nitems : 1;
@@ -2151,7 +2154,7 @@ static GridRead author_tracks(Author *a, const garb_val_t *v, flow_tracks_t *out
         if (automatic) {
             out->repeat_at = k;
             out->repeat_n = inner->nitems;
-            out->repeat_fit = word(&t->items[0], "auto-fit");
+            out->repeat_fit = is_word(&t->items[0], "auto-fit");
         }
         for (int64_t r = 0; r < times && k < total; r++)
             for (int32_t j = 0; j < inner->nitems && k < total; j++)
@@ -2172,7 +2175,7 @@ static GridRead author_areas(Author *a, const garb_val_t *v, flow_style_t *s)
     s->grid_areas = NULL;
     s->ngrid_areas = s->grid_area_rows = s->grid_area_cols = 0;
     if (v->kind != GARB_V_STRING || v->nitems <= 0)
-        return word(v, "none") ? GRID_READ_OK : GRID_READ_UNUSABLE;
+        return is_word(v, "none") ? GRID_READ_OK : GRID_READ_UNUSABLE;
     int32_t rows = v->nitems;
     int32_t cols = garb_area_cells(v->items[0].text, (uint32_t)v->items[0].len, NULL, 0);
     if (cols <= 0 || (int64_t)rows * cols > F_GRID_AREA_CELLS)
@@ -2306,13 +2309,13 @@ static bool author_gradient(const Author *a, const flow_style_t *s, const garb_v
         };
         g->kind = FLOW_GRADIENT_LINEAR;
         for (size_t k = 0; k < F_ARRAY(kTo); k++)
-            if (word(geo, kTo[k].name)) {
+            if (is_word(geo, kTo[k].name)) {
                 g->to_x = kTo[k].x;
                 g->to_y = kTo[k].y;
             }
     } else {
         g->kind = FLOW_GRADIENT_RADIAL;
-        g->circle = word(geo, "circle");
+        g->circle = is_word(geo, "circle");
         g->extent = FLOW_EXTENT_FARTHEST_CORNER;
         g->radii[0] = g->radii[1] = kUnwritten;
         g->centre[0] = g->centre[1] = kHalf;
@@ -2325,7 +2328,7 @@ static bool author_gradient(const Author *a, const flow_style_t *s, const garb_v
             } else {
                 g->extent = FLOW_EXTENT_SIZE;
                 g->radii[0] = author_lp(a, &geo->items[0], kUnwritten);
-                g->radii[1] = word(&geo->items[1], "auto") ? g->radii[0]
+                g->radii[1] = is_word(&geo->items[1], "auto") ? g->radii[0]
                                                             : author_lp(a, &geo->items[1], kUnwritten);
             }
             g->centre[0] = author_lp(a, &geo->items[2], kHalf);
@@ -2362,7 +2365,7 @@ static bool author_shadows(const Author *a, flow_style_t *s, const garb_val_t *v
 {
     const flow_shadow_t **list = box ? &s->box_shadows : &s->text_shadows;
     int32_t *count = box ? &s->nbox_shadows : &s->ntext_shadows;
-    if (word(v, "none") || v->nitems == 0) {
+    if (is_word(v, "none") || v->nitems == 0) {
         *list = NULL;
         *count = 0;
         return true;
@@ -2376,7 +2379,7 @@ static bool author_shadows(const Author *a, flow_style_t *s, const garb_val_t *v
         int32_t k = 0;
         flow_shadow_t *sh = &out[i];
         os64_memset(sh, 0, sizeof(*sh));
-        if (k < one->nitems && word(&one->items[k], "inset")) {
+        if (k < one->nitems && is_word(&one->items[k], "inset")) {
             sh->inset = true;
             k++;
         }
@@ -2577,7 +2580,7 @@ static bool author_fn(const Author *a, const garb_val_t *f, flow_transform_t *ou
 // when memory runs out.
 static bool author_transform(const Author *a, flow_style_t *s, const garb_val_t *v)
 {
-    if (word(v, "none")) {
+    if (is_word(v, "none")) {
         s->transform = NULL;
         s->ntransform = 0;
         return true;
@@ -2604,7 +2607,7 @@ static bool author_individual(const Author *a, flow_style_t *s, garb_prop_t p,
 {
     const flow_transform_t **slot = p == GARB_TRANSLATE ? &s->translate
                                   : p == GARB_ROTATE ? &s->rotate : &s->scale;
-    if (word(v, "none")) {
+    if (is_word(v, "none")) {
         *slot = NULL;
         return true;
     }
@@ -2769,13 +2772,13 @@ static bool easing_of(const garb_val_t *v, flow_easing_t *out)
 {
     // Easing 1 § 2.2's keywords as their curves, § 2.3's as their steps.
     static const struct { const char *word; flow_easing_t e; } kWords[] = {
-        {"linear", {FLOW_EASE_LINEAR, {0, 0, 0, 0}, 0, FLOW_JUMP_END}},
-        {"ease", {FLOW_EASE_CUBIC, {0.25, 0.1, 0.25, 1}, 0, FLOW_JUMP_END}},
-        {"ease-in", {FLOW_EASE_CUBIC, {0.42, 0, 1, 1}, 0, FLOW_JUMP_END}},
-        {"ease-out", {FLOW_EASE_CUBIC, {0, 0, 0.58, 1}, 0, FLOW_JUMP_END}},
-        {"ease-in-out", {FLOW_EASE_CUBIC, {0.42, 0, 0.58, 1}, 0, FLOW_JUMP_END}},
-        {"step-start", {FLOW_EASE_STEPS, {0, 0, 0, 0}, 1, FLOW_JUMP_START}},
-        {"step-end", {FLOW_EASE_STEPS, {0, 0, 0, 0}, 1, FLOW_JUMP_END}},
+        {"linear", {FLOW_EASE_LINEAR, {0, 0, 0, 0}, 0, FLOW_JUMP_END, false}},
+        {"ease", {FLOW_EASE_CUBIC, {0.25, 0.1, 0.25, 1}, 0, FLOW_JUMP_END, true}},
+        {"ease-in", {FLOW_EASE_CUBIC, {0.42, 0, 1, 1}, 0, FLOW_JUMP_END, true}},
+        {"ease-out", {FLOW_EASE_CUBIC, {0, 0, 0.58, 1}, 0, FLOW_JUMP_END, true}},
+        {"ease-in-out", {FLOW_EASE_CUBIC, {0.42, 0, 0.58, 1}, 0, FLOW_JUMP_END, true}},
+        {"step-start", {FLOW_EASE_STEPS, {0, 0, 0, 0}, 1, FLOW_JUMP_START, false}},
+        {"step-end", {FLOW_EASE_STEPS, {0, 0, 0, 0}, 1, FLOW_JUMP_END, false}},
     };
     if (v->kind == GARB_V_KEYWORD) {
         for (int32_t k = 0; k < F_ARRAY(kWords); k++)
@@ -2802,17 +2805,23 @@ static bool easing_of(const garb_val_t *v, flow_easing_t *out)
         if (v->nitems == 2) {
             int32_t w = pick(&v->items[1], kJumps, F_ARRAY(kJumps));
             out->jump = w >= 0 ? (flow_jump_t)w
-                      : word(&v->items[1], "start") ? FLOW_JUMP_START : FLOW_JUMP_END;
+                      : is_word(&v->items[1], "start") ? FLOW_JUMP_START : FLOW_JUMP_END;
         }
         return true;
     }
     return false;
 }
 
-// A time, in milliseconds.
+// A time, in milliseconds: seconds made milliseconds in long double and
+// held to a double's range, so 1e308s is the longest time a double holds
+// and not an infinity (PILE3.md § Animations, Contracts: held, not
+// resolved).
 static double ms_of(const garb_val_t *v)
 {
-    return v->kind == GARB_V_TIME ? (v->unit == GARB_U_S ? v->number * 1000 : v->number) : 0;
+    if (v->kind != GARB_V_TIME)
+        return 0;
+    long double ms = v->unit == GARB_U_S ? (long double)v->number * 1000 : v->number;
+    return ms > DBL_MAX ? DBL_MAX : ms < -DBL_MAX ? -DBL_MAX : (double)ms;
 }
 
 // An `animation-*` longhand's list (values.h): one item an animation, an
@@ -2850,7 +2859,7 @@ static bool author_animations(const Author *a, flow_style_t *s, garb_prop_t p, c
                                 &((flow_easing_t *)list)[k]);
             break;
         case GARB_ANIMATION_ITERATION_COUNT:
-            ((double *)list)[k] = word(one, "infinite") ? INFINITY
+            ((double *)list)[k] = is_word(one, "infinite") ? INFINITY
                                 : one->kind == GARB_V_NUMBER ? one->number : 1;
             break;
         case GARB_ANIMATION_DIRECTION: {
@@ -2867,7 +2876,7 @@ static bool author_animations(const Author *a, flow_style_t *s, garb_prop_t p, c
             break;
         }
         case GARB_ANIMATION_PLAY_STATE:
-            ((bool *)list)[k] = word(one, "paused");
+            ((bool *)list)[k] = is_word(one, "paused");
             break;
         default:
             break;
@@ -2994,7 +3003,7 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
         break;
     }
     case GARB_LINE_HEIGHT:
-        if (word(v, "normal")) {
+        if (is_word(v, "normal")) {
             s->line_height = (flow_line_height_t){FLOW_LINE_NORMAL, 0};
         } else if (v->kind == GARB_V_NUMBER && v->number >= 0) {
             s->line_height = (flow_line_height_t){FLOW_LINE_NUMBER, round_i32(v->number * 1000)};
@@ -3025,13 +3034,13 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
         break;
     }
     case GARB_BOX_SIZING:
-        s->box_sizing = word(v, "border-box") ? FLOW_BORDER_BOX : FLOW_CONTENT_BOX;
+        s->box_sizing = is_word(v, "border-box") ? FLOW_BORDER_BOX : FLOW_CONTENT_BOX;
         break;
     case GARB_FONT_FAMILY: return author_family(a, v, &s->family);
     case GARB_FONT_SIZE: break;         // read first, by author()
     case GARB_FONT_WEIGHT: author_font_weight(a, sp, v); break;
     case GARB_FONT_STYLE:
-        s->font_style = word(v, "normal") ? FLOW_FONT_NORMAL : FLOW_FONT_ITALIC;
+        s->font_style = is_word(v, "normal") ? FLOW_FONT_NORMAL : FLOW_FONT_ITALIC;
         break;
     case GARB_TEXT_ALIGN: {
         static const char *const words[] = {"left", "right", "center", "justify", "start", "end"};
@@ -3040,7 +3049,7 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
                                                FLOW_ALIGN_LEFT, FLOW_ALIGN_RIGHT};
         if ((i = pick(v, words, F_ARRAY(words))) >= 0)
             s->text_align = as[i];
-        else if (word(v, "match-parent") && a->parent != NULL)
+        else if (is_word(v, "match-parent") && a->parent != NULL)
             s->text_align = a->parent->text_align;
         break;
     }
@@ -3074,9 +3083,9 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
         // An overline and blink are not drawn.
         s->text_decoration = 0;
         for (int32_t k = 0; k < v->nitems; k++) {
-            if (word(&v->items[k], "underline"))
+            if (is_word(&v->items[k], "underline"))
                 s->text_decoration |= FLOW_DECORATION_UNDERLINE;
-            else if (word(&v->items[k], "line-through"))
+            else if (is_word(&v->items[k], "line-through"))
                 s->text_decoration |= FLOW_DECORATION_LINE_THROUGH;
         }
         break;
@@ -3096,7 +3105,7 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
     }
     case GARB_LIST_STYLE_TYPE: author_list_type(sp, v); break;
     case GARB_LIST_STYLE_POSITION:
-        s->list_style_position = word(v, "inside") ? FLOW_LIST_INSIDE : FLOW_LIST_OUTSIDE;
+        s->list_style_position = is_word(v, "inside") ? FLOW_LIST_INSIDE : FLOW_LIST_OUTSIDE;
         break;
     case GARB_BORDER_SPACING:
         for (int32_t k = 0; k < 2 && k < v->nitems; k++) {
@@ -3106,10 +3115,10 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
         }
         break;
     case GARB_BORDER_COLLAPSE:
-        s->border_collapse = word(v, "collapse") ? FLOW_COLLAPSE_BORDERS : FLOW_SEPARATE;
+        s->border_collapse = is_word(v, "collapse") ? FLOW_COLLAPSE_BORDERS : FLOW_SEPARATE;
         break;
     case GARB_CAPTION_SIDE:
-        s->caption_side = word(v, "bottom") ? FLOW_CAPTION_BOTTOM : FLOW_CAPTION_TOP;
+        s->caption_side = is_word(v, "bottom") ? FLOW_CAPTION_BOTTOM : FLOW_CAPTION_TOP;
         break;
     case GARB_FLOAT: {
         static const char *const words[] = {"none", "left", "right", "inline-start",
@@ -3149,7 +3158,7 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
         break;
     case GARB_POINTER_EVENTS:
         // SVG's values are auto to an HTML box.
-        s->pointer_events_none = word(v, "none");
+        s->pointer_events_none = is_word(v, "none");
         break;
     case GARB_FLEX_DIRECTION: {
         static const char *const words[] = {"row", "row-reverse", "column", "column-reverse"};
@@ -3190,7 +3199,7 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
         // `content` is the content's size, and so, here, are the three
         // sizing keywords: max-content exactly, min-content and fit-content
         // as the nearest this reads (FLEX.md § Booked).
-        if (v->kind == GARB_V_KEYWORD && !word(v, "auto"))
+        if (v->kind == GARB_V_KEYWORD && !is_word(v, "auto"))
             sp->flex_basis = kContent;
         else
             author_len(a, v, true, &sp->flex_basis);
@@ -3219,8 +3228,8 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
         break;
     case GARB_GRID_AUTO_FLOW:
         if (v->kind == GARB_V_KEYWORD) {
-            s->grid_auto_flow_column = word(v, "column") || word(v, "column dense");
-            s->grid_dense = word(v, "row dense") || word(v, "column dense");
+            s->grid_auto_flow_column = is_word(v, "column") || is_word(v, "column dense");
+            s->grid_dense = is_word(v, "row dense") || is_word(v, "column dense");
         }
         break;
     case GARB_GRID_ROW_START: case GARB_GRID_ROW_END:
@@ -3244,7 +3253,7 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
             "normal", "auto", "stretch", "flex-start", "flex-end", "center", "baseline",
             "start", "end", "self-start", "self-end", "left", "right"};
         i = pick(v, words, F_ARRAY(words));
-        if (i < 0 && word(v, "legacy"))
+        if (i < 0 && is_word(v, "legacy"))
             i = FLOW_PLACE_NORMAL;
         if (i >= 0)
             *(p == GARB_JUSTIFY_ITEMS ? &s->justify_items : &s->justify_self) = (flow_place_t)i;
@@ -3283,7 +3292,7 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
         break;
     case GARB_ROW_GAP: case GARB_COLUMN_GAP: {
         Len *gap = p == GARB_ROW_GAP ? &sp->row_gap : &sp->column_gap;
-        if (word(v, "normal"))
+        if (is_word(v, "normal"))
             *gap = kAuto;
         else
             author_len(a, v, false, gap);
@@ -3596,12 +3605,17 @@ static flow_unit_t own_width(const Ctx *c, const Spec *sp, garb_style_t st, garb
     return css(c, 3);
 }
 
+// Whether two easings are one where keyframes are grouped: a keyword curve
+// is itself and not the same curve written as cubic-bezier(), and steps
+// are their count and where they jump however written (Chrome's answer,
+// as libgarb groups the blocks).
 static bool easing_same(const flow_easing_t *a, const flow_easing_t *b)
 {
     if (a->kind != b->kind)
         return false;
     if (a->kind == FLOW_EASE_CUBIC)
-        return a->p[0] == b->p[0] && a->p[1] == b->p[1] && a->p[2] == b->p[2] && a->p[3] == b->p[3];
+        return a->named == b->named && a->p[0] == b->p[0] && a->p[1] == b->p[1] && a->p[2] == b->p[2] &&
+               a->p[3] == b->p[3];
     if (a->kind == FLOW_EASE_STEPS)
         return a->steps == b->steps && a->jump == b->jump;
     return true;
@@ -3794,10 +3808,10 @@ static bool animate(Ctx *c, const os64_html_node_t *n, Spec *sp, const Spec *ua,
     if (!f_timeline_element(tl, n, m, now))
         return false;
     flow_style_t s = m->base;
-    // A list past the budget leaves its property as the base has it, and
-    // named in m->dropped, so nothing is due for it in this tree.
+    // A list past the budget leaves its property as it was, named in its
+    // animation's `dropped`, so nothing is due for that one's motion of it.
     MotionLists lists = {c, false};
-    (void)f_motion_style(m, now, &s, motion_alloc, &lists, &m->dropped);
+    (void)f_motion_style(m, now, &s, motion_alloc, &lists, NULL, true);
     if (lists.no_memory)
         return false;
     settle_box(c, &s, item, root);

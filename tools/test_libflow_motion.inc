@@ -153,8 +153,8 @@ static double reference_cubic(const double p[4], double x)
 
 static void motion_easing_cases(void)
 {
-    static const flow_easing_t kEase = {FLOW_EASE_CUBIC, {0.25, 0.1, 0.25, 1}, 0, 0};
-    static const flow_easing_t kOver = {FLOW_EASE_CUBIC, {0.2, 0.86, 0.32, 1.22}, 0, 0};
+    static const flow_easing_t kEase = {FLOW_EASE_CUBIC, {0.25, 0.1, 0.25, 1}, 0, 0, true};
+    static const flow_easing_t kOver = {FLOW_EASE_CUBIC, {0.2, 0.86, 0.32, 1.22}, 0, 0, false};
     // On [0, 1], y at the parameter whose x is the input, found to the
     // last bit: within the curve's slope times a hair of the exact y.
     for (int i = 0; i <= 100; i++) {
@@ -179,14 +179,14 @@ static void motion_easing_cases(void)
     };
     bool ends = true;
     for (size_t i = 0; i < sizeof(kFar) / sizeof(kFar[0]) && ends; i++) {
-        flow_easing_t e = {FLOW_EASE_CUBIC, {kFar[i][0], kFar[i][1], kFar[i][2], kFar[i][3]}, 0, 0};
+        flow_easing_t e = {FLOW_EASE_CUBIC, {kFar[i][0], kFar[i][1], kFar[i][2], kFar[i][3]}, 0, 0, false};
         ends = f_ease(&e, 0, false) == 0 && f_ease(&e, 1, false) == 1;
     }
     expect("easing: a cubic's ends are 0 and 1, whatever its controls", ends, NULL);
     // A curve flat in x near an end is solved, not stopped at the first t
     // whose x is near: cubic-bezier(0, 100, 0, 100) at 9.26e-8, about the
     // first 16 ms of two days, is y 1.35, where t = x would say 0.000028.
-    flow_easing_t flat = {FLOW_EASE_CUBIC, {0, 100, 0, 100}, 0, 0};
+    flow_easing_t flat = {FLOW_EASE_CUBIC, {0, 100, 0, 100}, 0, 0, false};
     double fy = f_ease(&flat, 9.26e-8, false), fw = reference_cubic(flat.p, 9.26e-8);
     char fd[64];
     snprintf(fd, sizeof(fd), "got %.6g want %.6g", fy, fw);
@@ -199,18 +199,18 @@ static void motion_easing_cases(void)
            fabs(f_ease(&kOver, 1.5, false) - (1 + (1.22 - 1) / (0.32 - 1) * 0.5)) < 1e-12, NULL);
     // With x1 at 0, below 0 the line through P0 and P2; with both at 0,
     // and above 1 with both at 1, no line: the end's own value.
-    static const flow_easing_t kX2 = {FLOW_EASE_CUBIC, {0, 0, 0.5, 0.25}, 0, 0};
-    static const flow_easing_t kLow = {FLOW_EASE_CUBIC, {0, 0.3, 0, 0.6}, 0, 0};
-    static const flow_easing_t kHigh = {FLOW_EASE_CUBIC, {1, 0.3, 1, 0.6}, 0, 0};
+    static const flow_easing_t kX2 = {FLOW_EASE_CUBIC, {0, 0, 0.5, 0.25}, 0, 0, false};
+    static const flow_easing_t kLow = {FLOW_EASE_CUBIC, {0, 0.3, 0, 0.6}, 0, 0, false};
+    static const flow_easing_t kHigh = {FLOW_EASE_CUBIC, {1, 0.3, 1, 0.6}, 0, 0, false};
     expect("easing: below 0 with x1 at 0, the line through P0 and P2",
            f_ease(&kX2, -1, false) == -0.5, NULL);
     expect("easing: with both x at an end, past it the end's value",
            f_ease(&kLow, -1, false) == 0 && f_ease(&kHigh, 2, false) == 1, NULL);
     // Steps (§ 2.3.1): the examples' table.
-    static const flow_easing_t kEnd = {FLOW_EASE_STEPS, {0}, 4, FLOW_JUMP_END};
-    static const flow_easing_t kStart = {FLOW_EASE_STEPS, {0}, 4, FLOW_JUMP_START};
-    static const flow_easing_t kNone = {FLOW_EASE_STEPS, {0}, 4, FLOW_JUMP_NONE};
-    static const flow_easing_t kBoth = {FLOW_EASE_STEPS, {0}, 4, FLOW_JUMP_BOTH};
+    static const flow_easing_t kEnd = {FLOW_EASE_STEPS, {0}, 4, FLOW_JUMP_END, false};
+    static const flow_easing_t kStart = {FLOW_EASE_STEPS, {0}, 4, FLOW_JUMP_START, false};
+    static const flow_easing_t kNone = {FLOW_EASE_STEPS, {0}, 4, FLOW_JUMP_NONE, false};
+    static const flow_easing_t kBoth = {FLOW_EASE_STEPS, {0}, 4, FLOW_JUMP_BOTH, false};
     expect("easing: jump-end steps at each quarter, from 0",
            f_ease(&kEnd, 0, false) == 0 && f_ease(&kEnd, 0.24, false) == 0 &&
            f_ease(&kEnd, 0.25, false) == 0.25 && f_ease(&kEnd, 0.99, false) == 0.75 &&
@@ -737,6 +737,31 @@ static void motion_cascade_cases(void)
                (s = moving_style(&m, "jc")) != NULL ? s->opacity : -1, 63);
     moving_close(&m);
 
+    // The element's easing is one easing with a block's as keyframes are
+    // grouped: `ease` naming itself joins, the same curve written out does
+    // not, and steps are one however written (Chrome, 10/14: 0.160481, 0.5,
+    // 0.802403 at a quarter) — and `ease` is the initial easing, which an
+    // element names by naming none.
+    moving_open(&m, MOTION_STYLE
+        "@keyframes jl{0%{opacity:0}50%{opacity:.2;animation-timing-function:cubic-bezier(0.25,0.1,0.25,1)}"
+        "50%{opacity:1}}"
+        "@keyframes jm{0%{opacity:0}50%{opacity:.2;animation-timing-function:steps(2, jump-end)}50%{opacity:1}}"
+        "@keyframes jn{0%{opacity:0}50%{opacity:.2;animation-timing-function:ease}50%{opacity:1}}"
+        "#jd{animation:jl 1s -.25s paused}"
+        "#je{animation:jm 1s steps(2) -.25s paused}"
+        "#jf{animation:jn 1s -.25s paused}"
+        "#jg{animation-name:jn;animation-duration:1s;animation-delay:-.25s;animation-play-state:paused}"
+        "</style><div id=jd></div><div id=je></div><div id=jf></div><div id=jg></div>", 1000);
+    expect_i64("motion: a curve written out is another easing than the keyword it draws",
+               (s = moving_style(&m, "jd")) != NULL ? s->opacity : -1, 160);
+    expect_i64("motion: steps are one easing however written",
+               (s = moving_style(&m, "je")) != NULL ? s->opacity : -1, 500);
+    expect_i64("motion: a keyword naming the element's easing joins it",
+               (s = moving_style(&m, "jf")) != NULL ? s->opacity : -1, 802);
+    expect_i64("motion: and so does `ease` where the element names no easing",
+               (s = moving_style(&m, "jg")) != NULL ? s->opacity : -1, 802);
+    moving_close(&m);
+
     // A shadow and a border mixed from currentColor to a colour use the
     // colour the element ends with, which another animation moves (Chrome,
     // 10/14: rgb(100,0,0) composed, both rgb(50,0,128) halfway to blue).
@@ -867,17 +892,22 @@ static void motion_cascade_cases(void)
     }
 
     // Whatever two matrices a page writes, their mix is a matrix or no mix
-    // (the pair discrete) — never a NaN or an infinity: huge scales, shears
-    // and turns in 2D, and 3D rows whose lengths a double cannot hold.
+    // (the pair discrete) — never a NaN or an infinity, and at its ends
+    // each end itself, never another matrix a part held to a double's range
+    // composes: huge scales, shears and turns in 2D, a 2D row whose length
+    // passes DBL_MAX though its entries do not, 3D rows whose lengths a
+    // double cannot hold, and a perspective undone by an inverse with an
+    // entry a double cannot hold.
     {
         const double M = DBL_MAX, H = 1.7e308, r = 0.7071067811865476;
-        static double kMats[8][16];
+        static double kMats[10][16];
         memset(kMats, 0, sizeof(kMats));
-        const double flat[7][6] = {
+        const double flat[8][6] = {
             {1, 0, 0, 1, 0, 0}, {1e200, 0, 0, 1e200, 0, 0}, {M, 0, 0, M, 0, 0}, {M, 0, M, M, 0, 0},
             {M * r, M * r, -M * r, M * r, 0, 0}, {1e-300, 0, 0, 1e-300, 0, 0}, {0, 0, 0, 0, 0, 0},
+            {H, H, 0, 1, 0, 0},
         };
-        for (int i = 0; i < 7; i++) {
+        for (int i = 0; i < 8; i++) {
             kMats[i][0] = flat[i][0];
             kMats[i][1] = flat[i][1];
             kMats[i][4] = flat[i][2];
@@ -887,18 +917,37 @@ static void motion_cascade_cases(void)
             kMats[i][10] = kMats[i][15] = 1;
         }
         const double rows3d[16] = {H, H, 0, 0, 0, H, H, 0, H, 0, H, 0, 0, 0, 0, 1};
-        memcpy(kMats[7], rows3d, sizeof(rows3d));
-        bool sound = true;
-        for (int i = 0; i < 8 && sound; i++)
-            for (int j = 0; j < 8 && sound; j++)
-                for (int k = 0; k <= 4 && sound; k++) {
+        memcpy(kMats[8], rows3d, sizeof(rows3d));
+        const double persp3d[16] = {1e-310, 0, 0, 1e-10, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+        memcpy(kMats[9], persp3d, sizeof(persp3d));
+        bool sound = true, ends = true;
+        char detail[160] = "";
+        for (int i = 0; i < 10 && sound && ends; i++)
+            for (int j = 0; j < 10 && sound && ends; j++)
+                for (int k = 0; k <= 4 && sound && ends; k++) {
                     double out[16];
                     if (!f_matrix_mix(kMats[i], kMats[j], k / 4.0, out))
                         continue;
+                    const double *end = k == 0 ? kMats[i] : kMats[j];
+                    double big = 0;
                     for (int e = 0; e < 16; e++)
+                        big = fmax(big, fabs(end[e]));
+                    for (int e = 0; e < 16; e++) {
                         sound &= isfinite(out[e]);
+                        if ((k == 0 || k == 4) && !(fabs(out[e] - end[e]) <= big * 1e-12)) {
+                            ends = false;
+                            snprintf(detail, sizeof(detail), "%d to %d at %d: [%d] %.17g, not %.17g", i, j, k,
+                                     e, out[e], end[e]);
+                        }
+                    }
                 }
         expect("motion: a mix of matrices is a matrix or none, never a NaN", sound, NULL);
+        expect("motion: a mix of matrices is each end at its ends", ends, detail);
+        double out[16];
+        bool refused = true;
+        for (int k = 0; k <= 4; k++)
+            refused &= !f_matrix_mix(kMats[7], kMats[0], k / 4.0, out);
+        expect("motion: a 2D row longer than a double holds makes no mix", refused, NULL);
     }
 
     // An easing at the edge of what a double holds: its output is held to
@@ -1924,6 +1973,24 @@ typedef struct {
 
 enum { FUZZ_HORIZON = 6000 };
 
+// The case `r` makes from where it stands: the property's kind, the base,
+// and one animation of it or two — a second a third of the time, the
+// later replacing the earlier wherever it is in effect. True when every
+// keyframe holds the base's value.
+static bool fuzz_case(FuzzRng *r, int *kind, flow_style_t *base, FAnimation an[2],
+                      FKeyframe frames[2][FUZZ_FRAMES], int *nanims)
+{
+    *kind = fuzz_below(r, FUZZ_KINDS);
+    memset(base, 0, sizeof(*base));
+    base->opacity = 1000;
+    fuzz_set(base, *kind, fuzz_below(r, 3));
+    *nanims = fuzz_below(r, 3) == 0 ? 2 : 1;
+    bool still = true;
+    for (int a = 0; a < *nanims; a++)
+        still &= fuzz_animation(r, *kind, base, a == 0 ? "f" : "g", &an[a], frames[a]);
+    return still;
+}
+
 // One case, the animation `r` makes from where it stands.
 static void motion_fuzz_one(FuzzRun *f, FuzzRng *r, long c)
 {
@@ -1933,19 +2000,11 @@ static void motion_fuzz_one(FuzzRun *f, FuzzRng *r, long c)
     const os64_html_node_t *x = f->x;
     const os64_html_document_t *doc = f->doc;
     uint64_t seed = r->s;
-    int kind = fuzz_below(r, FUZZ_KINDS);
+    int kind, nanims;
     flow_style_t base;
-    memset(&base, 0, sizeof(base));
-    base.opacity = 1000;
-    fuzz_set(&base, kind, fuzz_below(r, 3));
-    // A second animation of the same property, a third of the time:
-    // the later replaces the earlier wherever it is in effect.
     FAnimation an[2];
     FKeyframe frames[2][FUZZ_FRAMES];
-    int nanims = fuzz_below(r, 3) == 0 ? 2 : 1;
-    bool still = true;
-    for (int a = 0; a < nanims; a++)
-        still &= fuzz_animation(r, kind, &base, a == 0 ? "f" : "g", &an[a], frames[a]);
+    bool still = fuzz_case(r, &kind, &base, an, frames, &nanims);
     f->pairs += nanims == 2;
     FMotion m;
     memset(&m, 0, sizeof(m));
@@ -1964,7 +2023,7 @@ static void motion_fuzz_one(FuzzRun *f, FuzzRng *r, long c)
     }
     for (int t = 0; t <= horizon; t++) {
         flow_style_t out = m.base;
-        (void)f_motion_style(&m, t, &out, NULL, NULL, NULL);
+        (void)f_motion_style(&m, t, &out, NULL, NULL, NULL, false);
         values[t] = fuzz_get(&out, kind);
         seen[t] = false;
     }
@@ -2057,13 +2116,87 @@ static void motion_fuzz_cases(void)
     os64_html_document_free(doc);
 }
 
+// `s`'s value of the fuzzer's `kind` made the transform list of its index
+// among the three the fuzzer writes.
+static void fuzz_as_list(flow_style_t *s, int kind, const flow_style_t *const lists[3])
+{
+    for (int i = 0; i < 3; i++) {
+        flow_style_t one;
+        memset(&one, 0, sizeof(one));
+        fuzz_set(&one, kind, i);
+        if (fuzz_get(&one, kind) == fuzz_get(s, kind)) {
+            s->transform = lists[i]->transform;
+            s->ntransform = lists[i]->ntransform;
+        }
+    }
+}
+
+// A change only the probe of the next millisecond sees — the fuzzer's seed
+// 15973564121497552185, a discrete text-align changing at 76 ms, two
+// animations of it — made a transform list's: each of the three values a
+// list that mixes only discretely (two translations, then a singular
+// matrix no decomposition undoes), small enough that both animations'
+// mixes fit in one look's lists, and two looks' would not. Each look with
+// its own, the change is due at its millisecond.
+static void motion_probe_list_cases(void)
+{
+    Moving lm;
+    moving_open(&lm, MOTION_STYLE "</style>"
+                "<div id=v0 style='transform:translateX(0px) translateX(0px) matrix(0,0,0,0,0,0)'></div>"
+                "<div id=v1 style='transform:translateX(0px) translateX(0px) matrix(0,0,0,0,1,0)'></div>"
+                "<div id=v2 style='transform:translateX(0px) translateX(0px) matrix(0,0,0,0,2,0)'></div>", 0);
+    const flow_style_t *lists[3] = {moving_style(&lm, "v0"), moving_style(&lm, "v1"), moving_style(&lm, "v2")};
+    FuzzRng r = {15973564121497552185ULL};
+    int kind, nanims;
+    flow_style_t base;
+    FAnimation an[2];
+    FKeyframe frames[2][FUZZ_FRAMES];
+    (void)fuzz_case(&r, &kind, &base, an, frames, &nanims);
+    bool shaped = kind == FUZZ_ALIGN && nanims == 2;
+    for (int i = 0; i < 3; i++)
+        shaped &= lists[i] != NULL && lists[i]->ntransform == 3;
+    expect("motion: the probe's case is the fuzzer's, its values three lists", shaped, NULL);
+    if (!shaped) {
+        moving_close(&lm);
+        return;
+    }
+    fuzz_as_list(&base, kind, lists);
+    for (int a = 0; a < nanims; a++) {
+        memset(&an[a].props, 0, sizeof(an[a].props));
+        f_props_add(&an[a].props, GARB_TRANSFORM);
+        for (int k = 0; k < an[a].nframes; k++) {
+            fuzz_as_list(&frames[a][k].style, kind, lists);
+            memset(&frames[a][k].sets, 0, sizeof(frames[a][k].sets));
+            f_props_add(&frames[a][k].sets, GARB_TRANSFORM);
+        }
+    }
+    FMotion m;
+    memset(&m, 0, sizeof(m));
+    m.base = base;
+    m.anims = an;
+    m.nanims = nanims;
+    flow_timeline_t *tl = flow_timeline_new(lm.p.doc);
+    f_timeline_begin(tl);
+    bool ok = f_timeline_element(tl, motion_find(lm.p.doc->document, "v0"), &m, 0);
+    f_timeline_end(tl, true);
+    double due = f_motion_next(&m, 75);
+    char detail[64];
+    snprintf(detail, sizeof(detail), "due %.17g", due);
+    expect("motion due: a list's change only the probe sees is due", ok && due > 75 && due <= 76, detail);
+    flow_timeline_free(tl);
+    moving_close(&lm);
+}
+
 // A page of `divs` elements, each a 64-function transform (libgarb's most)
-// out of the lists' budget, then one animating a 64-function list.
-static char *dropped_page(int divs)
+// out of the lists' budget, then one animating a 64-function list — and,
+// when `two`, a one-function list before it, written first.
+static char *dropped_page(int divs, bool two)
 {
     size_t cap = (size_t)divs * 24 + 64 * 17 * 3 + 1024, at = 0;
     char *html = malloc(cap);
-    at += (size_t)snprintf(html + at, cap - at, MOTION_STYLE ".s{transform:");
+    at += (size_t)snprintf(html + at, cap - at, MOTION_STYLE
+                           "@keyframes short{from{transform:translateX(0px)}to{transform:translateX(10px)}}"
+                           ".s{transform:");
     for (int i = 0; i < 64; i++)
         at += (size_t)snprintf(html + at, cap - at, "translateX(1px) ");
     at += (size_t)snprintf(html + at, cap - at, "}@keyframes long{from{transform:");
@@ -2075,14 +2208,15 @@ static char *dropped_page(int divs)
     at += (size_t)snprintf(html + at, cap - at, "}}</style>");
     for (int i = 0; i < divs; i++)
         at += (size_t)snprintf(html + at, cap - at, "<div class=s></div>");
-    (void)snprintf(html + at, cap - at, "<div id=long style='animation:long 1s linear'></div>");
+    (void)snprintf(html + at, cap - at, "<div id=long style='animation:%slong 1s linear'></div>",
+                   two ? "short 1s linear," : "");
     return html;
 }
 
 // What styling `divs` of them leaves of the lists' budget.
-static size_t dropped_left(int divs)
+static size_t dropped_left(int divs, bool two)
 {
-    char *html = dropped_page(divs);
+    char *html = dropped_page(divs, two);
     Moving m;
     moving_open(&m, html, 1000);
     FStyles *fs = f_style_build(m.p.doc, m.p.page, &m.p.env);
@@ -2129,7 +2263,7 @@ static void motion_dropped_cases(void)
     bool ok = f_timeline_element(tl, x, &m, 0);
     f_timeline_end(tl, true);
     double moving = f_motion_next(&m, 100);
-    f_props_add(&m.dropped, GARB_OPACITY);
+    f_props_add(&an.dropped, GARB_OPACITY);
     double dropped = f_motion_next(&m, 100);
     char detail[64];
     snprintf(detail, sizeof(detail), "moving %g, dropped %g", moving, dropped);
@@ -2142,10 +2276,10 @@ static void motion_dropped_cases(void)
     // and its mix, half again as much, does not (calibrated from what one
     // element and the animated one cost, so the sizes may change). Its
     // value is left as the base has it, and it is due at its end.
-    size_t left0 = dropped_left(0), each = left0 - dropped_left(1);
+    size_t left0 = dropped_left(0, false), each = left0 - dropped_left(1, false);
     size_t animated = F_STYLE_LISTS_BUDGET - left0;
     int divs = each > 0 ? (int)((left0 + animated - animated * 7 / 10) / each) : 0;
-    char *html = dropped_page(divs);
+    char *html = dropped_page(divs, false);
     Moving lm;
     moving_open(&lm, html, 1000);
     FStyles *fs = f_style_build(lm.p.doc, lm.p.page, &lm.p.env);
@@ -2166,6 +2300,78 @@ static void motion_dropped_cases(void)
            detail);
     moving_close(&lm);
     free(html);
+
+    // Two animations of one property, the earlier's mix one function and
+    // the later's 64, with room left for the earlier's alone (calibrated
+    // as above): the later's is dropped, and the earlier's, which the
+    // style shows, moves — so the element is due now, not at the end.
+    left0 = dropped_left(0, true);
+    each = left0 - dropped_left(1, true);
+    animated = F_STYLE_LISTS_BUDGET - left0;
+    divs = each > 0 ? (int)((left0 + animated - animated * 7 / 10) / each) : 0;
+    html = dropped_page(divs, true);
+    moving_open(&lm, html, 1000);
+    fs = f_style_build(lm.p.doc, lm.p.page, &lm.p.env);
+    ln = motion_find(lm.p.doc->document, "long");
+    st = ln != NULL && fs != NULL ? f_style_of(fs, ln) : NULL;
+    bool split = st != NULL && st->motion != NULL && st->motion->nanims == 2 &&
+                 st->motion->anims[1].frames[0].style.ntransform == 64 && st->style.ntransform == 1 &&
+                 !f_props_has(&st->motion->anims[0].dropped, GARB_TRANSFORM) &&
+                 f_props_has(&st->motion->anims[1].dropped, GARB_TRANSFORM);
+    expect("motion: the page leaves room for the earlier animation's mix and none for the later's", split,
+           NULL);
+    f_style_free(fs);
+    uint64_t due = flow_motion_due(lm.tree, (os64_gui_rect_t){0, 0, 800, 1000000}, (flow_point_t){0, 0});
+    snprintf(detail, sizeof(detail), "due %llu", (unsigned long long)due);
+    expect("motion due: what one animation dropped leaves another's motion of it due", due == 1000, detail);
+    moving_close(&lm);
+    free(html);
+
+    // The other way round: a 64-function list that stands still replaces a
+    // one-function list moving under it, and the tree shows it still. The
+    // probe of the next millisecond has no room for it, and the value its
+    // look leaves is the moving one's — which is not what is drawn, so
+    // nothing is due until the end.
+    size_t cap = 64 * 17 * 2 + 1024, at = 0;
+    html = malloc(cap);
+    at += (size_t)snprintf(html + at, cap - at, MOTION_STYLE
+                           "@keyframes mv{from{transform:translateX(0px)}to{transform:translateX(10px)}}"
+                           "@keyframes st{from{transform:");
+    for (int i = 0; i < 64; i++)
+        at += (size_t)snprintf(html + at, cap - at, "translateX(1px) ");
+    at += (size_t)snprintf(html + at, cap - at, "}to{transform:");
+    for (int i = 0; i < 64; i++)
+        at += (size_t)snprintf(html + at, cap - at, "translateX(1px) ");
+    (void)snprintf(html + at, cap - at, "}}</style><div style='animation:mv 1s linear,st 1s linear'>x</div>");
+    moving_open(&lm, html, 1000);
+    due = flow_motion_due(lm.tree, (os64_gui_rect_t){0, 0, 800, 600}, (flow_point_t){0, 0});
+    snprintf(detail, sizeof(detail), "due %llu", (unsigned long long)due);
+    expect("motion due: a list past the probe's room is not asked about", due == 2000, detail);
+    moving_close(&lm);
+    free(html);
+}
+
+// A time past a double in milliseconds is held to the longest one, never
+// an infinity: a 1e308s iteration begun -5e307s ago is over — its delay
+// and its duration both the longest — as Chrome's, held to a float's
+// seconds, is over too. Its fill is none, so the value is the base's, and
+// nothing is due.
+static void motion_held_time_cases(void)
+{
+    Moving m;
+    moving_open(&m, MOTION_STYLE "@keyframes k{from{opacity:0}to{opacity:1}}"
+                "</style><div id=x style='animation:k 1e308s linear -5e307s paused'>x</div>", 1000);
+    const flow_style_t *s = moving_style(&m, "x");
+    bool held = s != NULL && s->animations.nduration == 1 && s->animations.duration[0] == DBL_MAX &&
+                s->animations.ndelay == 1 && s->animations.delay[0] == -DBL_MAX;
+    expect("motion: 1e308s is the longest time a double holds, not an infinity", held, NULL);
+    char detail[64];
+    snprintf(detail, sizeof(detail), "opacity %d", s != NULL ? (int)s->opacity : -1);
+    expect("motion: an iteration held at the longest time is over", s != NULL && s->opacity == 1000, detail);
+    expect("motion due: an animation held at the longest time is due for nothing",
+           flow_motion_due(m.tree, (os64_gui_rect_t){0, 0, 800, 600}, (flow_point_t){0, 0}) == FLOW_NEVER,
+           NULL);
+    moving_close(&m);
 }
 
 // A crossing in an interval so long that the schedule's early wake lies a
@@ -2236,7 +2442,9 @@ static void motion_cases(void)
     motion_timeline_cases();
     motion_due_cases();
     motion_fuzz_cases();
+    motion_probe_list_cases();
     motion_dropped_cases();
+    motion_held_time_cases();
     motion_long_crossing_cases();
     motion_sweep();
 }

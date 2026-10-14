@@ -2,9 +2,10 @@
 """One deliberate break at a time to the animation model (docs/design/
 pending/PILE3.md § The animation model, slice S8a) — libgarb's grammars,
 @keyframes and media answer, libflow's easing, clock, timeline, mixing and
-side effects, and yonder's layouts for motion and its two switches —
-against the cases that state its rules: libgarb's corpus, libflow's
---motion run, and the yonder window's host. A mutant is CAUGHT when they
+side effects, yonder's layouts for motion and its two switches, and the
+settings window those switches live in — against the cases that state
+its rules: libgarb's corpus, libflow's --motion run, the yonder window's
+host, and the toolkit's text host. A mutant is CAUGHT when they
 fail, MISSED when they pass, which means a test is missing and gets
 written. A build failure is neither.
 
@@ -49,10 +50,12 @@ INTERNAL = 'userland/libflow/internal.h'
 STORE = 'userland/libflow/store.c'
 YONDER = 'userland/apps/yonder/yonder.c'
 SETTINGS = 'userland/apps/yonder/settings.c'
+UI_SETTINGS = 'userland/libos64/ui_settings.c'
 
 GARB = 'bash tools/test_garb_host.sh'
 LIBFLOW = 'bash tools/test_libflow_host.sh --motion'
 WINDOW = 'bash tools/test_yonder_scripts_host.sh'
+UI_TEXT = 'python3 tools/test_ui_text_host.py --real'
 
 # (name, file, old, new, cases). Each breaks one rule the design states.
 mutants = [
@@ -147,7 +150,7 @@ mutants = [
      '    if (c < 0) {\n        for (int i = 0; i < 4; i++)\n            from[i] = -from[i];\n        c = -c;\n    }',
      '', LIBFLOW),
     ('a-2d-shear-is-dropped', MOTION,
-     '    d->sk[0] = held(shear / s1);',
+     '    d->sk[0] = (double)sk;',
      '    d->sk[0] = 0;', LIBFLOW),
     ('a-2d-flip-is-lost', MOTION,
      '    if (det < 0 && m11 < m22)\n        s0 = -s0;',
@@ -351,7 +354,7 @@ mutants = [
      '                                                  false))) {', WINDOW),
     # libgarb: @keyframes at any scale, and Animations 2's duration keyword.
     ('keyframes-group-across-easings', CASCADE,
-     '            while (j < n && at[j].offset == at[i].offset && os64_streq(at[j].text, at[i].text))',
+     '            while (j < n && at[j].offset == at[i].offset && easing_cmp(at[j].easing, at[i].easing) == 0)',
      '            while (j < n && at[j].offset == at[i].offset)', GARB),
     ('a-tie-at-one-offset-goes-later-first', CASCADE,
      '    return (x->order > y->order) - (x->order < y->order);\n}\n\n// A rule\'s keyframes',
@@ -486,8 +489,8 @@ mutants = [
      '    if (sp->border_px[side] != 0 || author_declares(st, w) || author_declares(sets, w))',
      '    (void)sets;\n    if (sp->border_px[side] != 0 || author_declares(st, w))', LIBFLOW),
     ('the-probe-shares-its-lists', MOTION,
-     '    (void)f_motion_style(m, then, &b, probe_alloc, &lb, NULL);',
-     '    (void)f_motion_style(m, then, &b, probe_alloc, &la, NULL);', LIBFLOW),
+     '    (void)f_motion_style(m, then, &b, probe_alloc, &lb, &fb, false);',
+     '    (void)f_motion_style(m, then, &b, probe_alloc, &la, &fb, false);', LIBFLOW),
     # libflow: finite inputs whose arithmetic overflows, a list dropped for
     # the budget, and blocks that ease as the element does.
     ('a-row-length-is-not-scaled', MOTION,
@@ -506,14 +509,16 @@ mutants = [
      '    return per_turn(a) <= per_turn(b) ? a : b;',
      '    (void)a;\n    (void)b;\n    return FLOW_ANGLE_DEG;', LIBFLOW),
     ('a-dropped-list-is-due', MOTION,
-     '            if (!f_props_has(&an->props, (garb_prop_t)p) || !animatable((garb_prop_t)p) ||\n                f_props_has(&m->dropped, (garb_prop_t)p) || last[p] > a)',
+     '            if (!f_props_has(&an->props, (garb_prop_t)p) || !animatable((garb_prop_t)p) ||\n                f_props_has(&an->dropped, (garb_prop_t)p) || last[p] > a)',
      '            if (!f_props_has(&an->props, (garb_prop_t)p) || !animatable((garb_prop_t)p) ||\n                last[p] > a)', LIBFLOW),
     ('the-probe-asks-a-dropped-list', MOTION,
-     '                !f_props_has(&m->dropped, (garb_prop_t)p) && !same_value((garb_prop_t)p, &a, &b))',
-     '                !same_value((garb_prop_t)p, &a, &b))', LIBFLOW),
+     '                if (in != pass || !f_props_has(&an->props, (garb_prop_t)p) || !animatable((garb_prop_t)p) ||\n'
+     '                    f_props_has(&an->dropped, (garb_prop_t)p))',
+     '                if (in != pass || !f_props_has(&an->props, (garb_prop_t)p) || !animatable((garb_prop_t)p))',
+     LIBFLOW),
     ('the-style-names-nothing-dropped', STYLE,
-     '    (void)f_motion_style(m, now, &s, motion_alloc, &lists, &m->dropped);',
-     '    (void)f_motion_style(m, now, &s, motion_alloc, &lists, NULL);', LIBFLOW),
+     '    (void)f_motion_style(m, now, &s, motion_alloc, &lists, NULL, true);',
+     '    (void)f_motion_style(m, now, &s, motion_alloc, &lists, NULL, false);', LIBFLOW),
     ('the-own-easing-joins-nothing', STYLE,
      '    if (joins == 0)\n        return true;\n    garb_keyframe_t *out',
      '    if (joins >= 0)\n        return true;\n    garb_keyframe_t *out', LIBFLOW),
@@ -526,11 +531,11 @@ mutants = [
     # libflow: what is drawn moving, a 3D inverse at the extremes, an axis
     # of no length.
     ('a-replaced-value-is-moving', MOTION,
-     '                f_props_has(&m->dropped, (garb_prop_t)p) || last[p] > a)',
-     '                f_props_has(&m->dropped, (garb_prop_t)p))', LIBFLOW),
+     '                f_props_has(&an->dropped, (garb_prop_t)p) || last[p] > a)',
+     '                f_props_has(&an->dropped, (garb_prop_t)p))', LIBFLOW),
     ('the-last-animation-is-the-first', MOTION,
-     '            if (last[p] < 0 && f_props_has(&an->props, (garb_prop_t)p))',
-     '            if (f_props_has(&an->props, (garb_prop_t)p))', LIBFLOW),
+     '            if (last[p] < 0 && f_props_has(&an->props, (garb_prop_t)p) &&',
+     '            if (f_props_has(&an->props, (garb_prop_t)p) &&', LIBFLOW),
     ('an-ended-animation-still-replaces', MOTION,
      '        if (an->record == NULL || !clock_at(&an->timing, local_time(an->record, now)).in_effect)',
      '        if (an->record == NULL)', LIBFLOW),
@@ -574,6 +579,50 @@ mutants = [
      '        rect_from((int64_t)o.x - b->ink[FLOW_LEFT], (int64_t)o.y - b->ink[FLOW_TOP],\n'
      '                  (int64_t)o.x + o.w + b->ink[FLOW_RIGHT], (int64_t)o.y + o.h + b->ink[FLOW_BOTTOM]);',
      '        rect_from((int64_t)o.x, (int64_t)o.y, (int64_t)o.x + o.w, (int64_t)o.y + o.h);', LIBFLOW),
+    # Round 9: what one animation dropped, a time past a double, easings
+    # grouped by what they compute to, a decomposition a double cannot
+    # hold, and a settings window's first face.
+    ('a-dropped-list-replaces-the-earlier', MOTION,
+     '            if (last[p] < 0 && f_props_has(&an->props, (garb_prop_t)p) &&\n'
+     '                !f_props_has(&an->dropped, (garb_prop_t)p))',
+     '            if (last[p] < 0 && f_props_has(&an->props, (garb_prop_t)p))', LIBFLOW),
+    ('the-probe-asks-what-it-could-not-mix', MOTION,
+     '                !f_props_has(&fa, (garb_prop_t)p) && !f_props_has(&fb, (garb_prop_t)p) &&\n',
+     '', LIBFLOW),
+    ('a-time-past-a-double-is-infinite', STYLE,
+     '    return ms > DBL_MAX ? DBL_MAX : ms < -DBL_MAX ? -DBL_MAX : (double)ms;',
+     '    return (double)ms;', LIBFLOW),
+    ('easings-compare-as-printed', CASCADE,
+     '            e.n[i] = v->items[i].number;',
+     '            e.n[i] = (double)(int64_t)(v->items[i].number * 1e6);', GARB),
+    ('jump-end-is-not-end', CASCADE,
+     '        if (os64_streq(e.jump, "jump-start") || os64_streq(e.jump, "jump-end"))\n            e.jump += 5;',
+     '', GARB),
+    ('bare-steps-jump-nowhere', CASCADE,
+     '        e.jump = v->nitems > 1 && v->items[1].keyword != NULL ? v->items[1].keyword : "end";',
+     '        e.jump = v->nitems > 1 && v->items[1].keyword != NULL ? v->items[1].keyword : "";', GARB),
+    ('a-step-keyword-is-not-steps', CASCADE,
+     '    if (v->kind == GARB_V_KEYWORD && (os64_streq(e.word, "step-start") || os64_streq(e.word, "step-end"))) {',
+     '    if (false) {', GARB),
+    ('a-keyword-curve-is-its-points', STYLE,
+     '        return a->named == b->named && a->p[0] == b->p[0]',
+     '        return a->p[0] == b->p[0]', LIBFLOW),
+    ('the-initial-easing-is-unnamed', MOTION,
+     '                              : (flow_easing_t){FLOW_EASE_CUBIC, {0.25, 0.1, 0.25, 1}, 0, 0, true};',
+     '                              : (flow_easing_t){FLOW_EASE_CUBIC, {0.25, 0.1, 0.25, 1}, 0, 0, false};', LIBFLOW),
+    ('a-2d-length-past-a-double-is-held', MOTION,
+     '    if (!fits(s0) || !fits(s1) || !fits(sk))\n        return false;\n'
+     '    d->sc[0] = (double)s0;\n    d->sc[1] = (double)s1;\n    d->sk[0] = (double)sk;',
+     '    d->sc[0] = held(s0);\n    d->sc[1] = held(s1);\n    d->sk[0] = held(sk);', LIBFLOW),
+    ('an-inverse-entry-past-a-double-is-held', MOTION,
+     '            if (!fits(q))\n                return false;\n            out[col * 4 + row] = (double)q;',
+     '            out[col * 4 + row] = held(q);', LIBFLOW),
+    ('a-new-window-refuses-its-face', UI_SETTINGS,
+     '    if(d->opening)grow(d);',
+     '', UI_TEXT),
+    ('a-live-window-grows-for-a-face', UI_SETTINGS,
+     '    if(d->opening)grow(d);',
+     '    grow(d);', UI_TEXT),
     ('the-switches-are-not-applied', SETTINGS,
      '    s.motion_use(s.run.checked, s.reduce.checked);',
      '', WINDOW),

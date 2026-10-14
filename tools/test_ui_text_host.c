@@ -3098,10 +3098,29 @@ static void ui_test_wheel_dispatch(void)
     current="";
 }
 
-/* Exercise the production helper's layout without a guest window syscall. */
+/* Exercise the production helper's layout without a guest window syscall:
+ * the window's limits and its surface stand in here, the surface growing to
+ * the least height asked for. */
+static uint32_t ui_test_min_h;
+static int64_t ui_test_set_min_size(int64_t handle, uint32_t width, uint32_t height)
+{
+    (void)handle; (void)width;
+    ui_test_min_h = height;
+    return 0;
+}
+static int64_t ui_test_ctx_refresh(os64_draw_ctx_t *ctx)
+{
+    if (ui_test_min_h > ctx->surf.height)
+        ctx->surf.height = ui_test_min_h;
+    return 0;
+}
+#define os64_gui_window_set_min_size ui_test_set_min_size
+#define os64_draw_ctx_refresh ui_test_ctx_refresh
 #define place ui_test_settings_place
 #include "../userland/libos64/ui_settings.c"
 #undef place
+#undef os64_draw_ctx_refresh
+#undef os64_gui_window_set_min_size
 static void ui_test_settings_envelope(void)
 {
     current="settings root bounds";
@@ -3135,6 +3154,60 @@ static void ui_test_settings_envelope(void)
     current="";
 }
 
+#ifdef UI_TEXT_REAL
+/* A new settings window adopts the person's face, however tall its rows:
+ * opening, it grows to them before the face is judged (the planner measures
+ * in the staged face); a live window refuses a face it cannot hold, and
+ * keeps its size. */
+static void ui_test_settings_grows_for_its_face(const char *dir)
+{
+    current = "settings grows for its face";
+    os64_ui_settings_t d = {0};
+    d.window = 7;
+    d.ctx.surf.width = 760; d.ctx.surf.height = 420; d.ui.ctx = &d.ctx;
+    d.ui.theme = (os64_ui_theme_t){.pad = 6, .button_h = 28, .gap = 4};
+    d.body_rows = 12;
+    os64_ui_panel(&d.root); os64_ui_panel(&d.body); os64_ui_set_root(&d.ui, &d.root);
+    os64_ui_add_child(&d.root, &d.body);
+    const char *captions[] = {"Apply", "Save as default", "Close"};
+    for (unsigned i = 0; i < 3; ++i) {
+        os64_ui_button(&d.actions[i], captions[i], NULL, NULL);
+        os64_ui_add_child(&d.root, &d.actions[i]);
+    }
+    CHECK(os64_ui_font_planner(&d.ui, plan, planned, planned, &d) == OS64_FONT_OK);
+    os64_text_context_t *text = os64_ui_font_context(&d.ui);
+    // Faces whose captions fit a third of the width: what the window must
+    // find room for is their rows.
+    os64_font_set_t *tall = outline_set(text, dir, "DejaVuSans.ttf", 24);
+    os64_font_set_t *taller = outline_set(text, dir, "DejaVuSans.ttf", 28);
+    CHECK(tall != NULL && taller != NULL);
+    if (tall != NULL && taller != NULL) {
+        os64_font_consumer_t consumer;
+        os64_ui_font_consumer(&d.ui, &consumer);
+        d.opening = true;
+        ui_test_min_h = 0;
+        CHECK(os64_font_adopt(tall, &consumer, 1, NULL) == OS64_FONT_OK);
+        d.opening = false;
+        CHECK(d.ctx.surf.height > 420 && (int64_t)d.ctx.surf.height >= height_needed(&d));
+        uint32_t kept = d.ctx.surf.height;
+        CHECK(os64_font_adopt(taller, &consumer, 1, NULL) == OS64_FONT_LIMIT);
+        CHECK(d.ctx.surf.height == kept);
+        // Opening again, the taller face is held by a taller window: its
+        // refusal above was the height alone.
+        d.opening = true;
+        CHECK(os64_font_adopt(taller, &consumer, 1, NULL) == OS64_FONT_OK);
+        d.opening = false;
+        CHECK(d.ctx.surf.height > kept);
+    }
+    if (tall != NULL)
+        os64_font_set_release(tall);
+    if (taller != NULL)
+        os64_font_set_release(taller);
+    CHECK(os64_ui_font_release(&d.ui) == OS64_FONT_OK);
+    current = "";
+}
+#endif
+
 int main(int argc, char **argv)
 {
     const char *dir = argc > 1 ? argv[1] : "userland/libfreetype/fixtures";
@@ -3163,6 +3236,7 @@ int main(int argc, char **argv)
     tab_interval_failure_travels(dir);
     button_paints_from_its_run(dir);
     list_stages_its_candidate_rows(dir);
+    ui_test_settings_grows_for_its_face(dir);
     app_face_beside_the_settings(dir);
     app_face_change_is_measured_again(dir);
     changed_caption_is_not_placed_from_nothing(dir);

@@ -33,7 +33,7 @@ flow_animation_t f_animation_at(const flow_style_t *s, int32_t i)
     r.delay_ms = a->ndelay > 0 ? a->delay[i % a->ndelay] : 0;
     // `ease`, the initial easing.
     r.easing = a->neasing > 0 ? a->easing[i % a->neasing]
-                              : (flow_easing_t){FLOW_EASE_CUBIC, {0.25, 0.1, 0.25, 1}, 0, 0};
+                              : (flow_easing_t){FLOW_EASE_CUBIC, {0.25, 0.1, 0.25, 1}, 0, 0, true};
     r.iterations = a->niterations > 0 ? a->iterations[i % a->niterations] : 1;
     r.direction = a->ndirection > 0 ? a->direction[i % a->ndirection] : FLOW_DIRECTION_NORMAL;
     r.fill = a->nfill > 0 ? a->fill[i % a->nfill] : FLOW_FILL_NONE;
@@ -541,6 +541,12 @@ typedef struct {
     double persp[4], tr[3], sc[3], sk[3], q[4];
 } D3;
 
+// Whether a double holds `v`.
+static bool fits(long double v)
+{
+    return v <= DBL_MAX && v >= -DBL_MAX;
+}
+
 // A 2-vector's length in long double, taken by its own largest part: the
 // squares worked on parts no greater than 1, so neither a part past
 // sqrt(DBL_MAX) overflows them nor a tiny one is lost to its own square.
@@ -581,9 +587,16 @@ static bool decompose_2d(const double m[16], D3 *d)
     s1 = len2(m21, m22);
     if (det < 0 && !(m[0] < m[5]))
         s1 = -s1;
-    d->sc[0] = held(s0);
-    d->sc[1] = held(s1);
-    d->sk[0] = held(shear / s1);
+    // A part a double cannot hold — a row's length past DBL_MAX though each
+    // of its entries is not — makes no decomposition: held, it would
+    // compose another matrix even at the mix's ends, where refused the
+    // pair is discrete and each end itself.
+    long double sk = shear / s1;
+    if (!fits(s0) || !fits(s1) || !fits(sk))
+        return false;
+    d->sc[0] = (double)s0;
+    d->sc[1] = (double)s1;
+    d->sk[0] = (double)sk;
     double angle = atan2((double)m12, (double)m11);
     d->q[2] = sin(0.5 * angle);
     d->q[3] = cos(0.5 * angle);
@@ -632,7 +645,12 @@ static bool invert4(const double m[16], double out[16])
                     if (c != row && r != col)
                         s[n++] = m[c * 4 + r];
             long double minor = det3(s[0], s[3], s[6], s[1], s[4], s[7], s[2], s[5], s[8]);
-            out[col * 4 + row] = held(((row + col) % 2 ? -1 : 1) * minor / d);
+            long double q = ((row + col) % 2 ? -1 : 1) * minor / d;
+            // An entry a double cannot hold makes no inverse, rather than
+            // a held one that is the inverse of another matrix.
+            if (!fits(q))
+                return false;
+            out[col * 4 + row] = (double)q;
         }
     return true;
 }
@@ -2106,7 +2124,7 @@ static double eased(const Frame *start, const Frame *end, double progress, bool 
 }
 
 bool f_motion_style(const FMotion *m, double now, flow_style_t *out, FAlloc alloc, void *ctx,
-                    FProps *dropped)
+                    FProps *failed, bool record)
 {
     bool ok = true;
     // `color` first, every animation's, so a currentColor anything else
@@ -2124,7 +2142,8 @@ bool f_motion_style(const FMotion *m, double now, flow_style_t *out, FAlloc allo
             for (int p = 0; p < GARB_NPROPS; p++) {
                 bool width = p >= GARB_BORDER_TOP_WIDTH && p <= GARB_BORDER_LEFT_WIDTH;
                 int in = p == GARB_COLOR ? 0 : width ? 2 : 1;
-                if (in != pass || !f_props_has(&an->props, (garb_prop_t)p) || !animatable((garb_prop_t)p))
+                if (in != pass || !f_props_has(&an->props, (garb_prop_t)p) || !animatable((garb_prop_t)p) ||
+                    f_props_has(&an->dropped, (garb_prop_t)p))
                     continue;
                 Frame s, e;
                 MixKind kind;
@@ -2132,8 +2151,10 @@ bool f_motion_style(const FMotion *m, double now, flow_style_t *out, FAlloc allo
                 if (!mix_prop((garb_prop_t)p, s.style, e.style,
                               eased(&s, &e, k.progress, k.before), out, &kind, alloc, ctx)) {
                     ok = false;
-                    if (dropped != NULL)
-                        f_props_add(dropped, (garb_prop_t)p);
+                    if (failed != NULL)
+                        f_props_add(failed, (garb_prop_t)p);
+                    if (record)
+                        f_props_add(&m->anims[a].dropped, (garb_prop_t)p);
                 }
             }
         }
@@ -2311,8 +2332,10 @@ static double edge_due(const Clock *k, const flow_animation_t *a, double base, d
 }
 
 // Lists for one of a probe's two looks, on the stack, each look its own: a
-// list past the room is left as the element's own, alike at both times,
-// and a list that moves continuously is due already.
+// list that moves continuously is due already, and one past the room is
+// not asked about — the look names it, and what the schedule reckons of
+// it stands, rather than the value it was left as, which may be an
+// earlier animation's that the tree does not show.
 typedef struct {
     _Alignas(16) unsigned char buf[4096];
     size_t used;
@@ -2331,28 +2354,34 @@ static void *probe_alloc(void *ctx, size_t bytes)
 // Whether what `m` animates shows another value at `then` than at `now`,
 // asked of the value itself (f_motion_style): what lies a hair past the
 // instant the progress stands on — an end it leaves, a step, a crossing —
-// is placed there by no rounding.
+// is placed there by no rounding. A property either look had no room for
+// is not asked about (ProbeLists).
 static bool changes_by(const FMotion *m, double now, double then)
 {
     ProbeLists la, lb;
     la.used = lb.used = 0;
+    FProps fa, fb;
+    os64_memset(&fa, 0, sizeof(fa));
+    os64_memset(&fb, 0, sizeof(fb));
     flow_style_t a = m->base, b = m->base;
-    (void)f_motion_style(m, now, &a, probe_alloc, &la, NULL);
-    (void)f_motion_style(m, then, &b, probe_alloc, &lb, NULL);
+    (void)f_motion_style(m, now, &a, probe_alloc, &la, &fa, false);
+    (void)f_motion_style(m, then, &b, probe_alloc, &lb, &fb, false);
     for (int32_t i = 0; i < m->nanims; i++)
         for (int p = 0; p < GARB_NPROPS; p++)
             if (f_props_has(&m->anims[i].props, (garb_prop_t)p) && animatable((garb_prop_t)p) &&
-                !f_props_has(&m->dropped, (garb_prop_t)p) && !same_value((garb_prop_t)p, &a, &b))
+                !f_props_has(&fa, (garb_prop_t)p) && !f_props_has(&fb, (garb_prop_t)p) &&
+                !same_value((garb_prop_t)p, &a, &b))
                 return true;
     return false;
 }
 
 double f_motion_next(const FMotion *m, double now)
 {
-    // Of the animations in effect now, the last to set each property: its
-    // value replaces an earlier one's (f_motion_style), so what an earlier
-    // one does to that property is not shown — until the later one's
-    // effect ends, which that one is due for itself.
+    // Of the animations in effect now, the last to set each property, its
+    // list for it not dropped: its value replaces an earlier one's
+    // (f_motion_style), so what an earlier one does to that property is not
+    // shown — until the later one's effect ends, which that one is due for
+    // itself.
     int32_t last[GARB_NPROPS];
     for (int p = 0; p < GARB_NPROPS; p++)
         last[p] = -1;
@@ -2361,7 +2390,8 @@ double f_motion_next(const FMotion *m, double now)
         if (an->record == NULL || !clock_at(&an->timing, local_time(an->record, now)).in_effect)
             continue;
         for (int p = 0; p < GARB_NPROPS; p++)
-            if (last[p] < 0 && f_props_has(&an->props, (garb_prop_t)p))
+            if (last[p] < 0 && f_props_has(&an->props, (garb_prop_t)p) &&
+                !f_props_has(&an->dropped, (garb_prop_t)p))
                 last[p] = a;
     }
     double next = INFINITY;
@@ -2384,7 +2414,7 @@ double f_motion_next(const FMotion *m, double now)
             soonest = fmin(soonest, base + k.iteration_start + dur);
         for (int p = 0; p < GARB_NPROPS && soonest > now; p++) {
             if (!f_props_has(&an->props, (garb_prop_t)p) || !animatable((garb_prop_t)p) ||
-                f_props_has(&m->dropped, (garb_prop_t)p) || last[p] > a)
+                f_props_has(&an->dropped, (garb_prop_t)p) || last[p] > a)
                 continue;
             Frame s, e;
             interval(m, an, (garb_prop_t)p, k.progress, &s, &e);

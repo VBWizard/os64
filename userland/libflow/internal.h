@@ -241,28 +241,29 @@ typedef struct {
 
 // One animation whose @keyframes exist: its timing, its record, its
 // keyframes in their used order, and every longhand any of them sets.
+// `dropped`: those whose lists found no room in this layout's style
+// (f_motion_style), each left as it was — the base's, or an earlier
+// animation's, which the tree shows — so nothing is due for this one's
+// motion of them (f_motion_next) until a later layout finds room.
 typedef struct {
     flow_animation_t timing;
     FRecord *record;
     FKeyframe *frames;
     int32_t nframes;
     FProps props;
+    FProps dropped;
 } FAnimation;
 
 // An element's animations: its style with none of them (each property's
 // underlying value, the implicit keyframes'), and those that run, in
 // `animation-name` order — a later one's value replacing an earlier's.
 // `in_place` when every property they set only repaints where the element
-// already draws (f_motion_in_place). `dropped`: those whose lists found no
-// room in this layout's style (f_motion_style), each left as the base has
-// it — the tree cannot show them move, so nothing is due for them
-// (f_motion_next) until a later layout finds room.
+// already draws (f_motion_in_place).
 typedef struct {
     flow_style_t base;
     FAnimation *anims;
     int32_t nanims;
     bool in_place;
-    FProps dropped;
 } FMotion;
 
 // What the lists an animated value makes come from — a transform's, the
@@ -276,10 +277,12 @@ flow_animation_t f_animation_at(const flow_style_t *s, int32_t i);
 double f_ease(const flow_easing_t *e, double x, bool before);
 // The element's style at time `now` (ms): `out`, which holds the base,
 // with each animated property's value — false when a list found no room,
-// and that property is left as it was and, when `dropped` is given, named
-// there.
+// and that property is left as it was, named in `failed` when it is given
+// and, when `record`, in its animation's `dropped`. What an animation
+// dropped is left as it was at every time asked, as the layout that
+// dropped it left it.
 bool f_motion_style(const FMotion *m, double now, flow_style_t *out, FAlloc alloc, void *ctx,
-                    FProps *dropped);
+                    FProps *failed, bool record);
 // Of FLOW_WILL_*, what an animation that is current or in effect at `now`
 // animates (Web Animations 1 § 5.6).
 uint8_t f_motion_effects(const FMotion *m, double now);

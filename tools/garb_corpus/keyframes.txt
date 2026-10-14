@@ -111,6 +111,52 @@ p: k
 (end)
 END
 
+# Two blocks at one offset are one keyframe when their easings are one
+# easing (Chrome, 10/14): a number past its sixth place tells two curves
+# apart, though both print alike; a keyword curve is another easing than
+# the same curve written out; steps are their count and where they jump
+# however written.
+VIEWPORT 800x600
+PAGE
+<!doctype html><style>
+@keyframes e {
+  50% { animation-timing-function: cubic-bezier(0, 0.0000001, 1, 1); opacity: 0.2 }
+  50% { animation-timing-function: cubic-bezier(0, 0.0000002, 1, 1); opacity: 0.4 }
+  50% { animation-timing-function: cubic-bezier(0, 0.0000001, 1, 1); color: red }
+}
+@keyframes s {
+  20% { animation-timing-function: steps(2); opacity: 0.1 }
+  20% { animation-timing-function: steps(2, jump-end); color: red }
+  40% { animation-timing-function: step-start; opacity: 0.2 }
+  40% { animation-timing-function: steps(1, jump-start); color: red }
+  60% { animation-timing-function: step-end; opacity: 0.3 }
+  60% { animation-timing-function: steps(1, end); color: red }
+  80% { animation-timing-function: ease; opacity: 0.4 }
+  80% { animation-timing-function: cubic-bezier(0.25, 0.1, 0.25, 1); color: red }
+  80% { animation-timing-function: linear; opacity: 0.5 }
+  80% { animation-timing-function: cubic-bezier(0, 0, 1, 1); opacity: 0.6 }
+  90% { animation-timing-function: cubic-bezier(0, 0, 1, 1); opacity: 0.7 }
+  90% { animation-timing-function: cubic-bezier(0, -0, 1, 1); color: red }
+}
+p { animation-name: e, s }
+</style>
+<p>x
+WANT
+p: e
+  50% cubic-bezier(0, 0, 1, 1): color: rgb(255, 0, 0); opacity: 0.2
+  50% cubic-bezier(0, 0, 1, 1): opacity: 0.4
+p: s
+  20% steps(2): color: rgb(255, 0, 0); opacity: 0.1
+  40% step-start: color: rgb(255, 0, 0); opacity: 0.2
+  60% step-end: color: rgb(255, 0, 0); opacity: 0.3
+  80% ease: opacity: 0.4
+  80% cubic-bezier(0.25, 0.1, 0.25, 1): color: rgb(255, 0, 0)
+  80% linear: opacity: 0.5
+  80% cubic-bezier(0, 0, 1, 1): opacity: 0.6
+  90% cubic-bezier(0, 0, 1, 1): color: rgb(255, 0, 0); opacity: 0.7
+(end)
+END
+
 # A selector that is not from, to or a percentage in [0%, 100%] drops its
 # block; the rest stand.
 VIEWPORT 800x600

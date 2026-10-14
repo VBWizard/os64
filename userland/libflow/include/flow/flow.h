@@ -445,8 +445,11 @@ struct flow_transform {
 
 // An easing (Easing 1 § 2): linear; a cubic Bézier through (0, 0),
 // (p[0], p[1]), (p[2], p[3]) and (1, 1), which the keywords ease, ease-in,
-// ease-out and ease-in-out are; or `steps` steps jumping as `jump` says,
-// which step-start and step-end are.
+// ease-out and ease-in-out are — `named` when one of them is how it was
+// written, which is another easing than the same curve written as
+// cubic-bezier() where keyframes are grouped by easing (Chrome's answer);
+// or `steps` steps jumping as `jump` says, which step-start and step-end
+// are, and are the same easing as.
 typedef enum { FLOW_EASE_LINEAR = 0, FLOW_EASE_CUBIC, FLOW_EASE_STEPS } flow_ease_kind_t;
 typedef enum { FLOW_JUMP_END = 0, FLOW_JUMP_START, FLOW_JUMP_NONE, FLOW_JUMP_BOTH } flow_jump_t;
 typedef struct {
@@ -454,6 +457,7 @@ typedef struct {
     double p[4];
     int32_t steps;
     flow_jump_t jump;
+    bool named;
 } flow_easing_t;
 
 typedef enum {
