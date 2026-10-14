@@ -421,11 +421,15 @@ typedef enum { FLOW_ANGLE_DEG = 0, FLOW_ANGLE_GRAD, FLOW_ANGLE_RAD, FLOW_ANGLE_T
 
 typedef struct flow_transform flow_transform_t;
 
-// FLOW_FN_BLEND's: each list's tail, and how far from one to the other.
+// FLOW_FN_BLEND's: each list's tail, and how far from one to the other;
+// and how deeply blends nest in the tails, itself included — a tail may
+// hold the blend an animation underneath made, its value an implicit
+// keyframe of this one's mix.
 typedef struct {
     const flow_transform_t *from, *to;
     int32_t nfrom, nto;
     double t;
+    int32_t depth;
 } flow_transform_blend_t;
 
 struct flow_transform {
@@ -993,6 +997,14 @@ bool flow_incomplete(const flow_tree_t *tree);
 typedef struct flow_timeline flow_timeline_t;
 flow_timeline_t *flow_timeline_new(const os64_html_document_t *doc);
 void flow_timeline_free(flow_timeline_t *t);
+// An incomplete tree the face discards unshown, to lay the page out again
+// (in more room, say): what its layout did to `t` is undone, as a failed
+// layout's is, so the timeline is as the layout the page shows left it —
+// and a layout after that, failing too, leaves it so. Call it with the tree
+// freed and before any other layout; false when the last layout with `t`
+// was complete, or is undone already, and there is nothing to undo.
+// Allocates nothing.
+bool flow_timeline_undo_incomplete(flow_timeline_t *t);
 
 #define FLOW_NEVER UINT64_MAX
 // When the page next shows another value than the layout at its time

@@ -699,9 +699,13 @@ static bool page_lay_out(Page *p, int32_t width, int32_t height, uint32_t zoom, 
     // engine's budget and its face limit — so a layout at new sizes (a
     // zoom, most of all) can stop partway for want of the room the old tree
     // holds. Then both go, and the page is laid out once more in the whole
-    // budget.
+    // budget — what the discarded layout did to the timeline undone first,
+    // since it was never shown: a retry that fails leaves the timeline as
+    // the shown page's layout did, not with animations the discarded one
+    // started at its own time.
     if (fresh != NULL && flow_incomplete(fresh) && reclaim != NULL && reclaim->tree != NULL) {
         flow_free(fresh);
+        (void)flow_timeline_undo_incomplete(s_env.timeline);
         flow_free(reclaim->tree);
         reclaim->tree = NULL;
         if (reclaim != p) {

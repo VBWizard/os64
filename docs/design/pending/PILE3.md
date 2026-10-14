@@ -1532,10 +1532,10 @@ function as its matrix and a translation's two lengths, which is all
 drawing wants. Interpolation wants more: `rotate(0)` to
 `rotate(720deg)` turns twice, and a matrix of either is the identity. So
 each function keeps its PRIMITIVE and its arguments as computed — a
-translation's lengths, a scale's factors, an angle in degrees and NOT
-reduced by whole turns, a 3D rotation's axis, a skew's two angles, a
-matrix's sixteen numbers — beside the matrix it makes, which style.c
-builds from them as it builds it today. The primitives pair as
+translation's lengths, a scale's factors, an angle in its own unit as
+written and NOT reduced by whole turns, a 3D rotation's axis, a skew's
+two angles in one unit, a matrix's sixteen numbers — beside the matrix
+it makes, which `f_transform_fn_matrix` builds from them. The primitives pair as
 Transforms 1 § 7.2 and 2 § 12.3 say and Chrome agrees: the translations
 with each other, the scales, the rotations (`rotate`, `rotateZ`,
 `rotateX`, `rotateY` and `rotate3d`, about axes Transforms 2 § 14
@@ -1568,7 +1568,11 @@ gone: matched to no name again, so a name dropped and written again
 starts anew, and dropped by the next layout that has room. A layout that FAILS — no memory, and no tree — is undone: what it
 made goes and what it changed is put back, so the tree still shown runs
 on as it was (a pause the failed layout read is not taken until a layout
-that succeeds reads it again), and the undoing allocates nothing. A
+that succeeds reads it again), and the undoing allocates nothing. So is
+an incomplete one whose tree the face discards unshown, to lay the page
+out again in more room (`flow_timeline_undo_incomplete`): a retry that
+fails then leaves the timeline as the shown page's layout did, not with
+animations the discarded one started at its own time. A
 record HOLDS its element (`os64_html_hold`), so a node a script
 removes is not reused for another while a record names it, and the hold
 goes with the record.
@@ -1656,7 +1660,16 @@ the two (fewer to the turn), so moving one into it divides and no angle
 its own unit holds overflows — and so are a `skew()`'s two, kept in one
 unit (`skew(1e308rad, 0deg)` in radians). The tail's lengths need the border box, so the tail is kept as
 its two lists and the fraction, and multiplied out where the frame's
-matrix is made (`f_transform_matrix`), with the box known.
+matrix is made (`f_transform_matrix`), with the box known. A tail may
+hold a blend an animation underneath made, the value an implicit keyframe
+rests on, and that blend is worked out within it as it would be drawn
+(Chrome, 10/14: `rotate(0)` to `translateX(100px)` under `to { transform:
+scale(2) }` is `matrix(1, 0, 0, 1, 50, 0)` at the later one's start); a
+mix nesting blends deeper than `F_BLEND_DEPTH_MAX` (32) finds no room, as
+a list past the budget does — each nested blend is worked out within the
+one around it, so a nest as deep as a page could stack animations would
+be a stack as deep. Past it, the transform is left as the animations
+under it made it, which is not what Chrome draws.
 
 **The side effects are fixed for an animation's life.** At each layout,
 an element with an animation of a property that is current or in effect
@@ -1723,7 +1736,9 @@ way from the time worked back to it — a millionth of a millisecond, or a
 few last bits of the times the clock works in where those are wider (run
 back over 1e20 ms, some 11000 ms): so the first millisecond that window
 touches is due, and while a layout stands inside it the next — never
-late, and early by at most the window. A crossing is read as the value
+late, and early by at most the window. The window's width is an estimate
+of that rounding (`clock_tol`), held by the fuzzing at a page's scales
+and by single cases out to 1e22 ms, not proven. A crossing is read as the value
 reads the eased fraction (one half and past it; visibility past 0, and
 at 1), at the x the value flips past: the last parameter on the near
 side of it, where the value's own solving lands. And
@@ -1967,6 +1982,10 @@ the perf slice.
 | The rest of Compat § 3.4.1's drawn rows (`-webkit-box-shadow`, `-webkit-border-radius` and the others) | not animation's | a page that writes only the prefixed name |
 | `linear()` easing (Easing 2) | no page in the census writes it | a page that does |
 | An animation that moves its element rests out of view | it may carry what it draws into view from anywhere, so S8a keeps it due wherever it is; a bound on where its frames can reach — a spinner turns inside its own circle — would let it rest | S8b, where such a tick is arithmetic and a repaint, or a page whose spinners out of view cost what the P5 notices |
+| The predictor: `f_motion_next` works each change out ahead — a curve's crossings, steps' edges, the clock's rounding windows, what an implicit keyframe rests on — and review found corner after corner of it, round after round | the cure is the simplification: lay out at the frame rate while anything that can show is in its active phase, and work out only the phases' edges — most of the schedule deleted. It trades a layout for nothing for less code, which the contracts (never late; a value that stands still not asked for) decide | Chris's ruling on the contracts |
+| The input domain: every double a page may write is held, not resolved — long double through the easings, the decompositions and the clock, `fits()` and `held()`, the clock's tolerance, `F_BLEND_DEPTH_MAX` | the cure is the simplification: clamp at the parser, each time, easing control, angle and count to a domain a page means (Chrome already holds a time to a float's seconds), and the scaffolding goes. "The extremes are held, not resolved" is the contract it rewrites | Chris's ruling on that contract |
+| Finished-keyframe mixing: each keyframe is a whole computed style, the base with its declarations laid over it (`FKeyframe.style`), and an implicit keyframe the whole style underneath | the cure is the simplification: sparse keyframes, each only the longhands it sets, the rest read from underneath where they are mixed — less built per keyframe, and one meaning for an implicit keyframe. It touches the most semantics (`currentColor`, `em`, a width settled with its style) and wants its own Chrome probes | Chris's ruling |
+| The in-place timeline: a layout changes the page's timeline as it goes, and undoes what it did when it fails or its tree is discarded (`f_timeline_undo`, `flow_timeline_undo_incomplete`, records a cleanup with no room marks gone) | the cure is the simplification: build and swap — each layout builds the records it meets beside the timeline, and the face swaps them in with the tree it shows, so there is nothing to undo, and the transaction rounds 3, 10 and 12 patched goes | Chris's ruling |
 
 ### Proof
 
@@ -1992,7 +2011,9 @@ every row of the table above against Chrome 155's answers to the probe
 pages, recorded with the page that asked; transforms' padding, pairing,
 3D pairs, and tails by both decompositions against Chrome's (2D:
 `scaleX(-1)`, a skew against a skew, a skewed turn, `matrix()` against
-`matrix()`; 3D: a perspective door, two axes);
+`matrix()`; 3D: a perspective door, two axes), and a blend resting on a
+blend against Chrome's, twenty thousand of them nested no deeper than
+the nest allows;
 the side effects against Chrome's
 containing-block answers, and what float, position, overflow and
 `currentColor` make of each other across two animations, and the width
@@ -2000,8 +2021,9 @@ a side draws with when an animation draws its style; a keyframe's
 `url()` against its own sheet; the timeline
 across layouts — a start kept, `a` to `a, a`, a name gone, an element
 gone and its hold let go, a pause and a resume, an incomplete layout
-dropping nothing, a failed one undone, a cleanup with no room marking
-what it could not drop, three thousand names matched;
+dropping nothing, a failed one undone, an incomplete one discarded
+unshown undone, a cleanup with no room marking what it could not drop,
+three thousand names matched;
 each due time, an inline element's later pieces, a curve whose slope
 no double holds and one whose slope's roots lie 1e18 apart, lists the
 budget or the probe had no room for — under another animation's and
@@ -2018,9 +2040,10 @@ page's layout with each
 of its allocations failed in turn, alone and with every one after it,
 leaking nothing, whole only when it is the page, and its timeline
 coming through each failure with its start times — and with a pause
-the failed layout read not taken; and S8b's tick against a layout at the same time,
-field by field and frame by frame to the bit, at many times; its damage
-holding what was painted before and after; ink that only grows.
+the failed layout read not taken. S8b, when it is built, adds its tick
+against a layout at the same time, field by field and frame by frame to
+the bit, at many times; its damage holding what was painted before and
+after; ink that only grows.
 
 yonder's host harness, which hosts yonder.c with clocks it sets: S8a's
 deadlines — the cost limit, a frame's paint counted in its cost, the
@@ -2028,10 +2051,11 @@ page's own cost before its first frame, the shares, the interval, a
 covered window, an
 animation out of view, a step's edge — the quiet layout, a failed one
 being the last, an arriving page starting its animations and its costs
-afresh, a script's change starting one, an element removed; the two
+afresh, a script's change starting one, an element removed, a layout
+discarded for more room starting nothing that outlives it; the two
 settings saved and applied, what the media answers, and with animations
-off the rules' styles and nothing due. S8b's marks cut to the view, and
-controls placed after a frame moved.
+off the rules' styles and nothing due. S8b, when it is built, adds its
+marks cut to the view, and controls placed after a frame moved.
 
 `tools/test_motion_mutants.py` breaks each rule. In the guest,
 `tools/pages/pile3-motion.html`: FROZEN rows, paused at chosen times or

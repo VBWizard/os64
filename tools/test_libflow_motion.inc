@@ -788,6 +788,46 @@ static void motion_cascade_cases(void)
                    (s = moving_style(&m, kUnder[i].id)) != NULL ? s->opacity : -1, kUnder[i].want);
     moving_close(&m);
 
+    // A transform underneath that is a blend — rotate(0) to translateX(100px),
+    // mixed as matrices — is what an implicit keyframe over it rests on,
+    // worked out as drawn (Chrome, 10/14: matrix(1, 0, 0, 1, 50, 0) at the
+    // later one's start, matrix(1.5, 0, 0, 1.5, 25, 0) halfway).
+    moving_open(&m, MOTION_STYLE
+        "@keyframes mv{from{transform:rotate(0)}to{transform:translateX(100px)}}"
+        "@keyframes sc{to{transform:scale(2)}}"
+        "#ba{animation:mv 1s linear -.5s paused,sc 1s linear 0s paused}"
+        "#bb{animation:mv 1s linear -.5s paused,sc 1s linear -.5s paused}"
+        "</style><div id=ba></div><div id=bb></div>", 1000);
+    expect_matrix("motion: a blend underneath is its matrix at the start of the one over it", &m, "ba",
+                  (const double[6]){1, 0, 0, 1, 50, 0});
+    expect_matrix("motion: and halfway", &m, "bb", (const double[6]){1.5, 0, 0, 1.5, 25, 0});
+    moving_close(&m);
+
+    // Twenty thousand animations each resting on the blend the one under
+    // it made: a mix nesting blends past F_BLEND_DEPTH_MAX finds no room,
+    // so the nest the painter works out stays shallow, and the page draws.
+    {
+        enum { kNames = 20000 };
+        size_t cap = (size_t)kNames * 4 + 1024, at = 0;
+        char *html = malloc(cap);
+        at += (size_t)snprintf(html + at, cap - at, MOTION_STYLE
+                               "@keyframes ka{to{transform:rotate(45deg)}}@keyframes kb{to{transform:scale(2)}}"
+                               "#deep{animation-duration:1s;animation-timing-function:linear;"
+                               "animation-delay:-.5s;animation-play-state:paused;animation-name:");
+        for (int i = 0; i < kNames; i++)
+            at += (size_t)snprintf(html + at, cap - at, "%s%s", i ? "," : "", i % 2 ? "kb" : "ka");
+        (void)snprintf(html + at, cap - at, "}</style><div id=deep></div>");
+        moving_open(&m, html, 1000);
+        double deep[16];
+        bool drawn = moving_matrix(&m, "deep", deep);
+        for (int i = 0; drawn && i < 16; i++)
+            drawn = isfinite(deep[i]);
+        expect("motion: animations resting on one another's blends, deeper than the nest allows, draw",
+               drawn, NULL);
+        moving_close(&m);
+        free(html);
+    }
+
     // A shadow and a border mixed from currentColor to a colour use the
     // colour the element ends with, which another animation moves (Chrome,
     // 10/14: rgb(100,0,0) composed, both rgb(50,0,128) halfway to blue).
@@ -1203,6 +1243,38 @@ static void motion_timeline_cases(void)
     expect("motion: a name a cleanup had no room to drop starts anew written again",
            ok && unfreed == 1 && f_motion_next(&gm, 30000) == 31000 && f_timeline_records(gt) == 1, NULL);
     flow_timeline_free(gt);
+
+    // An incomplete layout whose tree the face discards unshown is undone:
+    // the animation it paused runs on from its start, the one it started
+    // goes — and only that layout: undone once, or after a complete one,
+    // there is nothing to undo.
+    FAnimation ua[2];
+    memset(ua, 0, sizeof(ua));
+    ua[0].timing.name = (flow_name_t){"r", 1};
+    ua[1].timing.name = (flow_name_t){"s", 1};
+    for (int i = 0; i < 2; i++) {
+        ua[i].timing.duration_ms = 1000;
+        ua[i].timing.iterations = 1;
+        f_props_add(&ua[i].props, GARB_OPACITY);
+    }
+    FMotion uone = {.anims = ua, .nanims = 1}, utwo = {.anims = ua, .nanims = 2};
+    flow_timeline_t *ut = flow_timeline_new(doc);
+    f_timeline_begin(ut);
+    ok = f_timeline_element(ut, z, &uone, 40000);
+    f_timeline_end(ut, true);
+    bool after_complete = flow_timeline_undo_incomplete(ut);
+    FRecord *kept_r = ua[0].record;
+    ua[0].timing.paused = true;
+    f_timeline_begin(ut);
+    ok = ok && f_timeline_element(ut, z, &utwo, 40500);
+    f_timeline_end(ut, false);
+    bool discarded = flow_timeline_undo_incomplete(ut), twice = flow_timeline_undo_incomplete(ut);
+    ua[0].timing.paused = false;
+    expect("motion: an incomplete layout discarded unshown is undone, and only it",
+           ok && !after_complete && discarded && !twice && f_timeline_records(ut) == 1 &&
+               ua[0].record == kept_r && f_motion_next(&uone, 40600) == 41000,
+           NULL);
+    flow_timeline_free(ut);
     // A paused animation holds its time — nothing is due while it is — and
     // resumed, it runs from there: started paused at 5000, resumed at
     // 9000, its one second ends at 10000. (Each animation here sets

@@ -236,6 +236,9 @@ struct flow_timeline {
     int32_t base;               // how many there were when this layout began
     uint32_t layout;
     FMap by_node;               // node -> its first record
+    // The last layout ended incomplete, and none has begun since: what it
+    // did can still be undone (flow_timeline_undo_incomplete).
+    bool undoable;
 };
 
 flow_timeline_t *flow_timeline_new(const os64_html_document_t *doc)
@@ -279,6 +282,7 @@ void f_timeline_begin(flow_timeline_t *t)
     if (t != NULL) {
         t->layout++;
         t->base = t->n;
+        t->undoable = false;
     }
 }
 
@@ -429,6 +433,14 @@ bool f_timeline_element(flow_timeline_t *t, const os64_html_node_t *n, FMotion *
     return ok;
 }
 
+bool flow_timeline_undo_incomplete(flow_timeline_t *t)
+{
+    if (t == NULL || !t->undoable)
+        return false;
+    f_timeline_undo(t);
+    return true;
+}
+
 void f_timeline_undo(flow_timeline_t *t)
 {
     if (t == NULL)
@@ -450,10 +462,13 @@ void f_timeline_undo(flow_timeline_t *t)
     for (int32_t i = 0; i < t->n; i++)
         if (t->records[i]->now.seen == t->layout)
             t->records[i]->now = t->records[i]->was;
+    t->undoable = false;
 }
 
 void f_timeline_end(flow_timeline_t *t, bool complete)
 {
+    if (t != NULL)
+        t->undoable = !complete;
     if (t == NULL || !complete)
         return;
     // The map over the records kept, and each one's next in its element's
@@ -1366,7 +1381,8 @@ static flow_transform_t mix_fn(const flow_transform_t *a, const flow_transform_t
 // Two transform lists (Transforms 1 § 9): padded with identities, then
 // pair by pair while they pair; a pair that mixes only as matrices, and
 // the tails from the first pair that does not, are a FLOW_FN_BLEND each,
-// multiplied out with the box (f_transform_matrix).
+// multiplied out with the box (f_transform_matrix). A blend nesting blends
+// deeper than F_BLEND_DEPTH_MAX finds no room.
 static bool mix_transforms(const flow_transform_t *a, int32_t na, const flow_transform_t *b,
                            int32_t nb, double t, const flow_transform_t **out, int32_t *nout,
                            FAlloc alloc, void *ctx)
@@ -1401,11 +1417,19 @@ static bool mix_transforms(const flow_transform_t *a, int32_t na, const flow_tra
         bool alone = pa[i].fn == pb[i].fn && (pa[i].fn == FLOW_FN_MATRIX ||
                                               pa[i].fn == FLOW_FN_PERSPECTIVE ||
                                               pa[i].fn == FLOW_FN_ROTATE);
-        int32_t to = alone ? i + 1 : n;
+        int32_t to = alone ? i + 1 : n, depth = 1;
+        for (int32_t j = i; j < to; j++) {
+            const flow_transform_t *two[2] = {&pa[j], &pb[j]};
+            for (int k = 0; k < 2; k++)
+                if (two[k]->fn == FLOW_FN_BLEND && two[k]->blend != NULL && two[k]->blend->depth >= depth)
+                    depth = two[k]->blend->depth + 1;
+        }
+        if (depth > F_BLEND_DEPTH_MAX)
+            return false;
         flow_transform_blend_t *bl = alloc(ctx, sizeof(*bl));
         if (bl == NULL)
             return false;
-        *bl = (flow_transform_blend_t){&pa[i], &pb[i], to - i, to - i, t};
+        *bl = (flow_transform_blend_t){&pa[i], &pb[i], to - i, to - i, t, depth};
         flow_transform_t f;
         os64_memset(&f, 0, sizeof(f));
         f.fn = FLOW_FN_BLEND;

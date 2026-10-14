@@ -301,7 +301,9 @@ double f_motion_next(const FMotion *m, double now);
 // it ends, a complete one dropping every record it did not meet. A layout
 // that fails is undone instead (f_timeline_undo), which allocates nothing:
 // what it made goes and what it changed is put back, so the records are as
-// the layout before it left them, for the tree that layout made.
+// the layout before it left them, for the tree that layout made — and so is
+// an incomplete one whose tree the face discards unshown
+// (flow_timeline_undo_incomplete).
 void f_timeline_begin(flow_timeline_t *t);
 bool f_timeline_element(flow_timeline_t *t, const os64_html_node_t *n, FMotion *m, double now);
 void f_timeline_end(flow_timeline_t *t, bool complete);
@@ -387,6 +389,11 @@ typedef struct {
 // it reaches (style.c, list_alloc): the one part of styling a page can
 // multiply.
 #define F_STYLE_LISTS_BUDGET ((size_t)32 << 20)
+// How deeply an animation's mix of transforms may nest blends
+// (flow_transform_blend_t.depth): each nested one is worked out within the
+// one around it as it is drawn, so a nest a page could stack thousands of
+// animations deep would be a stack as deep. A mix past it finds no room.
+#define F_BLEND_DEPTH_MAX 32
 
 typedef struct {
     const os64_html_document_t *doc;

@@ -579,7 +579,9 @@ static void mat_translate(Wide m[16], double x, double y, double z)
 
 // A tail of an animation's mix (FLOW_FN_BLEND) multiplied out, each
 // function T(x, y) · its matrix, the translations' percentages of the box
-// `w` by `h`: in doubles, the arithmetic of the mix it goes into
+// `w` by `h` — or, for a blend the tail holds, an animation underneath
+// having made it, that blend's own matrix (f_blend_matrix), worked out as
+// the painter works it: in doubles, the arithmetic of the mix it goes into
 // (f_matrix_mix).
 void f_tail_matrix(const flow_transform_t *f, int32_t n, int64_t w, int64_t h, double out[16])
 {
@@ -587,10 +589,14 @@ void f_tail_matrix(const flow_transform_t *f, int32_t n, int64_t w, int64_t h, d
     out[0] = out[5] = out[10] = out[15] = 1;
     for (int32_t i = 0; i < n; i++) {
         double one[16], r[16];
-        os64_memcpy(one, f[i].m, sizeof(one));
-        double tx = (double)f_len(f[i].x, w), ty = (double)f_len(f[i].y, h);
-        for (int k = 0; k < 4; k++)
-            one[12 + k] += tx * one[k] + ty * one[4 + k];
+        if (f[i].fn == FLOW_FN_BLEND && f[i].blend != NULL) {
+            f_blend_matrix(&f[i], w, h, one);
+        } else {
+            os64_memcpy(one, f[i].m, sizeof(one));
+            double tx = (double)f_len(f[i].x, w), ty = (double)f_len(f[i].y, h);
+            for (int k = 0; k < 4; k++)
+                one[12 + k] += tx * one[k] + ty * one[4 + k];
+        }
         for (int c = 0; c < 4; c++)
             for (int k = 0; k < 4; k++) {
                 double s = 0;

@@ -691,7 +691,8 @@ static void scripted_face_budget(void) {
         probe_borrow_font=true;
         os64_font_config_defaults(&s_fonts_conf);
         strcpy(s_fonts_conf.roles[OS64_FONT_CONFIG_WEB].face[0],"builtin");
-        probe_page("<style>#one{font-size:16px}#two{font-size:20px}#three{font-size:24px}</style>"
+        probe_page("<style>#one{font-size:16px}#two{font-size:20px}#three{font-size:24px}"
+            "@keyframes fade{to{opacity:0}}.changed{animation:fade 10s linear}</style>"
             "<p id=one>one<input id=field value=kept></p><p id=two>two</p><p id=three>three</p>"
             "<script>document.getElementById('one').setAttribute('class','changed');</script>"
             "<script>document.getElementById('three').textContent='last';</script>",true);
@@ -715,9 +716,18 @@ static void scripted_face_budget(void) {
                 "refused retry keeps rebuild owed, queue pending and stale controls hidden");
             check(!lay_out_page(&g.page,800,600) && g.page.tree==NULL,
                 "ordinary relayout cannot bypass owed DOM rebuild after reclaim");
+            // The discarded layout started the fade the script's class
+            // names; never shown, it is undone, so the fade starts at the
+            // layout that recovers, five seconds on, not half run.
+            uint64_t was_now=now_ms;
+            now_ms+=5000;
             script_turn();
             check(probe_text_is("three","last") && !yonder_scripts_pending(g.page.scripts),
                 "next UI turn recovers a tree before executing the queued script");
+            const flow_box_t *faded=g.page.tree!=NULL ? flow_box_for(g.page.tree,probe_id("one")) : NULL;
+            check(faded!=NULL && faded->style->opacity==1000,
+                "a discarded layout's animations start at the layout that is shown");
+            now_ms=was_now;
         } else {
             check(rebuilt,"staged font-budget rebuild succeeds");
         }
