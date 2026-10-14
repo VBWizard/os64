@@ -1622,9 +1622,10 @@ Chrome interpolates them, not as Transforms 1 § 11.2 writes it, since the
 two part where a matrix holds a shear (§ Animations, What Chrome draws)
 and a page is written against what browsers draw. Each matrix is decomposed on its
 own: a 2D one into a translation, a scale (a flip on the axis whose
-diagonal is the smaller), a shear and a turn about z, worked on its 2x2
-divided by its largest entry so `matrix(1e200, …)` squares nothing past
-a double; any other by
+diagonal is the smaller), a shear and a turn about z, worked in long
+double with each row's length taken by its own largest part, so neither
+does `matrix(1e200, …)` square past a double nor `matrix(1e308, 0, 0,
+1e-308, …)` lose its small axis; any other by
 Transforms 2 § 13.1.1, into perspective, translation, scale, skew and a
 quaternion. The parts are mixed, the turns slerped the shorter way — two
 too close for slerp's division mixed linearly and made unit again, so the

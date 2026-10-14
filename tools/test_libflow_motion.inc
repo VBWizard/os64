@@ -842,6 +842,30 @@ static void motion_cascade_cases(void)
         expect("motion: a 3D matrix whose scales square past a double is undone", undone, NULL);
     }
 
+    // A 2D matrix whose axes are a double's whole range apart keeps both:
+    // matrix(1e308, 0, 0, 1e-308, 0, 0), its determinant 1, mixed halfway
+    // to the identity is scales of 5e307 and a half; and one whose
+    // determinant is past a double's smallest, matrix(1e-200, …), is
+    // undone too, mixed as its large self is, scaled.
+    {
+        double far[16] = {1e308, 0, 0, 0, 0, 1e-308, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+        double unit[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1}, out[16];
+        bool kept = f_matrix_mix(far, unit, 0.5, out) && fabs(out[0] / 5e307 - 1) < 1e-9 &&
+                    fabs(out[5] - 0.5) < 1e-9 && out[1] == 0 && out[4] == 0;
+        expect("motion: a 2D matrix's axes a double's range apart are both kept", kept, NULL);
+        double tiny[16] = {1e-200, 0, 0, 0, 0, 1e-200, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+        double tiny2[16] = {3e-200, 1e-200, 0, 0, -1e-200, 3e-200, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+        double big[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+        double big2[16] = {3, 1, 0, 0, -1, 3, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1}, want_m[16];
+        bool small = f_matrix_mix(tiny, tiny2, 0.5, out) && f_matrix_mix(big, big2, 0.5, want_m);
+        for (int i = 0; small && i < 16; i++) {
+            bool linear = i == 0 || i == 1 || i == 4 || i == 5;
+            double w = linear ? want_m[i] * 1e-200 : want_m[i];
+            small = fabs(w - out[i]) <= 1e-9 * fmax(fabs(w), linear ? 1e-200 : 1);
+        }
+        expect("motion: a 2D matrix whose determinant is past a double's smallest is undone", small, NULL);
+    }
+
     // Whatever two matrices a page writes, their mix is a matrix or no mix
     // (the pair discrete) — never a NaN or an infinity: huge scales, shears
     // and turns in 2D, and 3D rows whose lengths a double cannot hold.

@@ -541,43 +541,52 @@ typedef struct {
     double persp[4], tr[3], sc[3], sk[3], q[4];
 } D3;
 
+// A 2-vector's length in long double, taken by its own largest part: the
+// squares worked on parts no greater than 1, so neither a part past
+// sqrt(DBL_MAX) overflows them nor a tiny one is lost to its own square.
+static long double len2(long double x, long double y)
+{
+    long double ax = x < 0 ? -x : x, ay = y < 0 ? -y : y, k = ax > ay ? ax : ay;
+    if (k == 0)
+        return 0;
+    double a = (double)(x / k), b = (double)(y / k);
+    return k * (long double)sqrt(a * a + b * b);
+}
+
 static bool decompose_2d(const double m[16], D3 *d)
 {
-    // Worked on the 2x2 divided by its largest entry, which moves neither
-    // the turn nor the shear and scales the scales, multiplied back at the
-    // end: matrix(1e200, 0, 0, 1e200, 0, 0) squares nothing past a double.
-    double k = fmax(fmax(fabs(m[0]), fabs(m[1])), fmax(fabs(m[4]), fabs(m[5])));
-    if (!(k > 0) || !isfinite(k))
-        return false;
-    double m11 = m[0] / k, m12 = m[1] / k, m21 = m[4] / k, m22 = m[5] / k;
-    double det = m11 * m22 - m12 * m21;
+    // Worked in long double, each row's length taken by its own largest
+    // part — never the whole 2x2 divided by its largest entry, which loses
+    // a small axis beside a large one: matrix(1e200, 0, 0, 1e200, 0, 0)
+    // squares nothing past a double, and matrix(1e308, 0, 0, 1e-308, 0, 0)
+    // keeps its determinant of 1.
+    long double m11 = m[0], m12 = m[1], m21 = m[4], m22 = m[5];
+    long double det = m11 * m22 - m12 * m21;
     if (det == 0)
         return false;           // cannot be undone: the pair is discrete
     os64_memset(d, 0, sizeof(*d));
     d->persp[3] = 1;
     d->tr[0] = m[12];
     d->tr[1] = m[13];
-    d->sc[0] = d->sc[1] = d->sc[2] = 1;
+    d->sc[2] = 1;
     // A flip, on the axis whose diagonal is the smaller.
-    if (det < 0) {
-        if (m11 < m22)
-            d->sc[0] = -1;
-        else
-            d->sc[1] = -1;
-    }
-    d->sc[0] *= sqrt(m11 * m11 + m12 * m12);
-    m11 /= d->sc[0];
-    m12 /= d->sc[0];
-    double shear = m11 * m21 + m12 * m22;
+    long double s0 = len2(m11, m12), s1;
+    if (det < 0 && m11 < m22)
+        s0 = -s0;
+    m11 /= s0;
+    m12 /= s0;
+    long double shear = m11 * m21 + m12 * m22;
     m21 -= m11 * shear;
     m22 -= m12 * shear;
-    d->sc[1] *= sqrt(m21 * m21 + m22 * m22);
-    d->sk[0] = shear / d->sc[1];
-    double angle = atan2(m12, m11);
+    s1 = len2(m21, m22);
+    if (det < 0 && !(m[0] < m[5]))
+        s1 = -s1;
+    d->sc[0] = held(s0);
+    d->sc[1] = held(s1);
+    d->sk[0] = held(shear / s1);
+    double angle = atan2((double)m12, (double)m11);
     d->q[2] = sin(0.5 * angle);
     d->q[3] = cos(0.5 * angle);
-    d->sc[0] = held((long double)d->sc[0] * k);
-    d->sc[1] = held((long double)d->sc[1] * k);
     return true;
 }
 
