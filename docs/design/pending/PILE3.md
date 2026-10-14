@@ -1546,36 +1546,37 @@ its own name; and `matrix()`,
 
 **The timeline.** Animations outlive the layouts that compute them: a
 start time must survive every layout after the one that started it — a
-picture arriving, a zoom, a script's change. So the face owns a
-`flow_timeline_t` per page, made empty when the page is first laid out
-to be shown and freed after its tree, which points into it, and before
-its document, whose elements it holds; and hands it to each layout in
-the environment with the time (`flow_env_t.timeline`, `.now_ms`). A
-layout that measures a page not yet shown, for its scripts, has none. It keeps one record per
-running animation: its element, its name and place in the element's
-list, its start time, and while it is paused the time it holds. A layout
-is a style change event, and updates it as Animations 1 § 2 says: an
-element's new list is matched from the last name to the first against
-its records, each match kept with its start time and given the new
-properties of its place; an unmatched name with keyframes starts at
-`now`; a name whose `@keyframes` do not exist yet starts nothing, and
-starts when they arrive. A paused animation stores the time it has run
-and a resumed one is restarted that much before `now`. A record no
-COMPLETE layout styled is dropped — its element gone, its name gone, its
-subtree `display: none`; an incomplete layout drops nothing it did not
-reach. A complete layout with no room to drop them still marks them
-gone: matched to no name again, so a name dropped and written again
-starts anew, and dropped by the next layout that has room. A layout that FAILS — no memory, and no tree — is undone: what it
-made goes and what it changed is put back, so the tree still shown runs
-on as it was (a pause the failed layout read is not taken until a layout
-that succeeds reads it again), and the undoing allocates nothing. So is
-an incomplete one whose tree the face discards unshown, to lay the page
-out again in more room (`flow_timeline_undo_incomplete`): a retry that
-fails then leaves the timeline as the shown page's layout did, not with
-animations the discarded one started at its own time. A
-record HOLDS its element (`os64_html_hold`), so a node a script
-removes is not reused for another while a record names it, and the hold
-goes with the record.
+picture arriving, a zoom, a script's change. So the face keeps the
+`flow_timeline_t` its page SHOWS — made empty when the page is first
+laid out to be shown, freed after its tree, which points into it, and
+before its document, whose elements it holds — and hands it to each
+layout in the environment with the time (`flow_env_t.timeline`,
+`.now_ms`). A layout that measures a page not yet shown, for its
+scripts, has none. A timeline keeps one record per running animation:
+its element, its name and place in the element's list, its start time,
+and while it is paused the time it holds. A layout is a style change
+event, and it READS the timeline shown and BUILDS one of its own, as
+Animations 1 § 2 says: an element's new list is matched from the last
+name to the first against its records, and every name gets a record of
+the new timeline — a matched one carrying its record's start on, given
+the new properties of its place; an unmatched name with keyframes
+starting at `now`; a name whose `@keyframes` do not exist yet starting
+nothing, and starting when they arrive. A paused animation stores the
+time it has run and a resumed one is restarted that much before `now`.
+A COMPLETE layout keeps only what it matched, so a record it did not is
+gone — its element gone, its name gone, its subtree `display: none`; an
+INCOMPLETE one carries every record it did not match on as it was. The
+new timeline rides with the tree until the face SHOWS the tree, and then
+takes the old one's place (`flow_timeline_commit`; yonder's door is
+`page_show`, and a staged rebuild goes through it at its publish). A
+layout that fails, or a tree the face discards unshown — an incomplete
+one laid out again in more room — takes its timeline with it, so the
+timeline shown is as it was and there is nothing to undo: a pause the
+failed layout read is not taken until a layout that is shown reads it
+again. A tree laid out with no timeline, animations being off, built
+none, and showing it keeps the page's. A record HOLDS its element
+(`os64_html_hold`), so a node a script removes is not reused for
+another while a record names it, and the hold goes with the record.
 
 **The style pass gives each animated element its value at `now`.** Where
 `style_element` has applied the author's winners and before `finish`
@@ -1985,7 +1986,6 @@ the perf slice.
 | The predictor: `f_motion_next` works each change out ahead — a curve's crossings, steps' edges, the clock's rounding windows, what an implicit keyframe rests on — and review found corner after corner of it, round after round | the cure is the simplification: lay out at the frame rate while anything that can show is in its active phase, and work out only the phases' edges — most of the schedule deleted. It trades a layout for nothing for less code, which the contracts (never late; a value that stands still not asked for) decide | Ruled (Chris, 10/14): the frame rate while anything that can show is active, the phases' edges, and one rule kept — an interval whose two ends are equal holds still, due at its end; "a value that stands still is not asked for" narrows to that. Its own PR, after the parser's clamps |
 | The input domain: every double a page may write is held, not resolved — long double through the easings, the decompositions and the clock, `fits()` and `held()`, the clock's tolerance, `F_BLEND_DEPTH_MAX` | the cure is the simplification: clamp at the parser, each time, easing control, angle and count to a domain a page means (Chrome already holds a time to a float's seconds), and the scaffolding goes. "The extremes are held, not resolved" is the contract it rewrites | Ruled (Chris, 10/14): the input domain is clamped at the parser to what a page means, and past it a value is held at the limit. Its own PR, the first of the four, which rewrites the contract with the code |
 | Finished-keyframe mixing: each keyframe is a whole computed style, the base with its declarations laid over it (`FKeyframe.style`), and an implicit keyframe the whole style underneath | the cure is the simplification: sparse keyframes, each only the longhands it sets, the rest read from underneath where they are mixed — less built per keyframe, and one meaning for an implicit keyframe. It touches the most semantics (`currentColor`, `em`, a width settled with its style) and wants its own Chrome probes | Ruled (Chris, 10/14): the last of the four, from a design note with Chrome's answers written before its code |
-| The in-place timeline: a layout changes the page's timeline as it goes, and undoes what it did when it fails or its tree is discarded (`f_timeline_undo`, `flow_timeline_undo_incomplete`, records a cleanup with no room marks gone) | the cure is the simplification: build and swap — each layout builds the records it meets beside the timeline, and the face swaps them in with the tree it shows, so there is nothing to undo, and the transaction rounds 3, 10 and 12 patched goes | Ruled (Chris, 10/14): its own PR, beside the clamps and the scheduler |
 
 ### Proof
 
@@ -2021,9 +2021,11 @@ a side draws with when an animation draws its style; a keyframe's
 `url()` against its own sheet; the timeline
 across layouts — a start kept, `a` to `a, a`, a name gone, an element
 gone and its hold let go, a pause and a resume, an incomplete layout
-dropping nothing, a failed one undone, an incomplete one discarded
-unshown undone, a cleanup with no room marking what it could not drop,
-three thousand names matched;
+dropping nothing (told directly, and on a page laid out in too small a
+budget with its last allocations failed in turn), a failed layout and
+one discarded unshown leaving the timeline shown as it was, one with no
+room to carry its records on failing, a tree laid out with no timeline
+keeping the page's, three thousand names matched;
 each due time, an inline element's later pieces, a curve whose slope
 no double holds and one whose slope's roots lie 1e18 apart, lists the
 budget or the probe had no room for — under another animation's and
@@ -2051,8 +2053,9 @@ page's own cost before its first frame, the shares, the interval, a
 covered window, an
 animation out of view, a step's edge — the quiet layout, a failed one
 being the last, an arriving page starting its animations and its costs
-afresh, a script's change starting one, an element removed, a layout
-discarded for more room starting nothing that outlives it; the two
+afresh, a script's change starting one that runs on once its rebuild is
+published, nothing due while a rebuild is owed, an element removed, a
+layout discarded for more room starting nothing that outlives it; the two
 settings saved and applied, what the media answers, and with animations
 off the rules' styles and nothing due. S8b, when it is built, adds its
 marks cut to the view, and controls placed after a frame moved.

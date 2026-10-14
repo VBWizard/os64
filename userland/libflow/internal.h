@@ -155,7 +155,6 @@ typedef struct {
 
 bool f_map_put(FMap *map, const void *key, void *val);  // false on no memory
 void *f_map_get(const FMap *map, const void *key);      // NULL when absent
-void f_map_remove(FMap *map, const void *key);          // allocates nothing
 void f_map_free(FMap *map);
 
 // ── The page's attribute grammars (attrs.c) ─────────────────────────────
@@ -296,18 +295,17 @@ bool f_motion_in_place(const FMotion *m);
 // When an animated value next changes after `now` — `now` itself for one
 // moving continuously, INFINITY for none.
 double f_motion_next(const FMotion *m, double now);
-// A layout's dealings with the timeline: it begins, each animated element
-// is matched to its records (Animations 1 § 2) — false on no memory — and
-// it ends, a complete one dropping every record it did not meet. A layout
-// that fails is undone instead (f_timeline_undo), which allocates nothing:
-// what it made goes and what it changed is put back, so the records are as
-// the layout before it left them, for the tree that layout made — and so is
-// an incomplete one whose tree the face discards unshown
-// (flow_timeline_undo_incomplete).
-void f_timeline_begin(flow_timeline_t *t);
+// A layout's dealings with the timeline: it begins a timeline of its own
+// beside the one the page shows (`from`, read and never changed; NULL on
+// no memory), each animated element is matched to its records there
+// (Animations 1 § 2) and given records of the new one's — false on no
+// memory — and it ends: a complete layout keeps only what it matched, an
+// incomplete one carries every record it did not match on as it was. The
+// new timeline is the tree's (FStyles.timeline) until the face shows the
+// tree (flow_timeline_commit), and `from` must live until it ends.
+flow_timeline_t *f_timeline_begin(const flow_timeline_t *from);
 bool f_timeline_element(flow_timeline_t *t, const os64_html_node_t *n, FMotion *m, double now);
-void f_timeline_end(flow_timeline_t *t, bool complete);
-void f_timeline_undo(flow_timeline_t *t);
+bool f_timeline_end(flow_timeline_t *t, bool complete);
 // How many records the timeline keeps, each holding its element; and how
 // many elements its map names.
 int32_t f_timeline_records(const flow_timeline_t *t);
@@ -404,6 +402,10 @@ typedef struct {
     // The elements an animation runs on, in document order (FStyled.motion).
     const os64_html_node_t **animated;
     int32_t nanimated, cap_animated;
+    // The timeline this layout builds when the environment hands it one
+    // (f_timeline_begin), which its FMotions point into; freed with the
+    // styles unless the face takes it (flow_timeline_commit).
+    flow_timeline_t *timeline;
 } FStyles;
 
 // ALL OR NOTHING: NULL when memory runs out anywhere. A style is a few

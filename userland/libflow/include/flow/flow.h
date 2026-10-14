@@ -798,11 +798,11 @@ typedef struct {
     // The document's parsing mode: enabled scripting hides noscript's raw
     // fallback text. Zero keeps the fallback visible for script-free faces.
     bool scripting;
-    // The page's animations across its layouts (flow_timeline_new), or
-    // NULL: then no animation runs, and every element has the style its
-    // rules give it. `now_ms` is the time the layout is the page at, on the
-    // face's clock in milliseconds.
-    struct flow_timeline *timeline;
+    // The timeline the page shows, which the layout reads to build its own
+    // (flow_timeline_commit), or NULL: then no animation runs, and every
+    // element has the style its rules give it. `now_ms` is the time the
+    // layout is the page at, on the face's clock in milliseconds.
+    const struct flow_timeline *timeline;
     uint64_t now_ms;
 } flow_env_t;
 
@@ -986,25 +986,28 @@ bool flow_incomplete(const flow_tree_t *tree);
 
 // ── Animations (PILE3.md § Animations) ──────────────────────────────────
 //
-// An animation outlives the layouts that compute it, so the face keeps a
-// TIMELINE per document — made with it, freed before it — and hands it to
-// every layout with the time (flow_env_t). A layout starts what its styles
-// newly name, keeps what they still name with its start time, and, when it
-// is complete, drops the rest; one that fails (NULL) leaves the timeline as
-// the layout before it left it. Each element a timeline keeps an animation
-// for it holds (os64_html_hold), so no node a script removes is reused for
-// another while it does. NULL on no memory.
+// An animation outlives the layouts that compute it, so the face keeps the
+// TIMELINE its page shows — made empty for the page's first layout to be
+// shown, freed before the document — and hands it to every layout with the
+// time (flow_env_t). A layout only reads it: it builds a timeline of its
+// own, which starts what its styles newly name, keeps what they still name
+// with its start time, and, when the layout is incomplete, carries on as
+// it was every animation they no longer name; and its tree carries that
+// timeline until the face shows the tree (flow_timeline_commit). A tree
+// the face discards, or a layout that fails, takes its timeline with it,
+// so the one shown is as it was. Each element a timeline keeps an
+// animation for it holds (os64_html_hold), so no node a script removes is
+// reused for another while it does. NULL on no memory.
 typedef struct flow_timeline flow_timeline_t;
 flow_timeline_t *flow_timeline_new(const os64_html_document_t *doc);
 void flow_timeline_free(flow_timeline_t *t);
-// An incomplete tree the face discards unshown, to lay the page out again
-// (in more room, say): what its layout did to `t` is undone, as a failed
-// layout's is, so the timeline is as the layout the page shows left it —
-// and a layout after that, failing too, leaves it so. Call it with the tree
-// freed and before any other layout; false when the last layout with `t`
-// was complete, or is undone already, and there is nothing to undo.
-// Allocates nothing.
-bool flow_timeline_undo_incomplete(flow_timeline_t *t);
+// The face shows `tree` from now on: the timeline its layout built takes
+// the place of `*shown`, which is freed, so the tree shown before, which
+// points into it, goes first; and `*shown` is kept until `tree`, which
+// points into it from then on, is freed. A tree laid out with no timeline
+// built none and leaves `*shown` as it is, so animations turned off and on
+// again run on from their starts. Allocates nothing.
+void flow_timeline_commit(flow_timeline_t **shown, flow_tree_t *tree);
 
 #define FLOW_NEVER UINT64_MAX
 // When the page next shows another value than the layout at its time
