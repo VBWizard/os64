@@ -25,14 +25,16 @@
 #define CONF_DIAGNOSTICS "diagnostics"
 #define CONF_APPEARANCE "appearance"
 #define CONF_SCRIPT_SECONDS "script_seconds"
+#define CONF_ANIMATIONS "animations"
+#define CONF_MOTION "motion"
 
 // The list's height, in rows; the dialog's rows are a line of words, the
-// list, field, cache row, zoom row, and the page-script switch with the
-// script time limit beside it. Cache usage appears on the dialog's status
-// line; a body must fit the helper's window, which is sized for this many
-// rows and no more.
+// list, field, cache row, zoom row, the page-script switch with the
+// script time limit beside it, and the animations' two switches. Cache
+// usage appears on the dialog's status line; a body must fit the helper's
+// window, which is sized for this many rows and no more.
 #define LIST_ROWS 6
-#define BODY_ROWS (LIST_ROWS + 5)
+#define BODY_ROWS (LIST_ROWS + 6)
 
 // Whole-percent zoom limits; yonder's keyboard steps lie between them.
 #define ZOOM_MIN 25
@@ -64,6 +66,9 @@ static struct {
     // Dark pages, at the zoom row's right end.
     os64_ui_checkbox_t dark;
     void (*dark_use)(bool dark);
+    // Run animations and Reduce motion, on a row of their own.
+    os64_ui_checkbox_t run, reduce;
+    void (*motion_use)(bool run, bool reduce);
     // The relay: `thread` waits for events at the dialog's window and
     // rings `bell` on `window`, then waits on `pumped` until the loop has
     // handled them — one ring outstanding at a time, so it never spins on
@@ -113,6 +118,20 @@ bool yonder_settings_saved_dark(void)
     char value[8];
     return os64_conf_get(CONF_NAME, CONF_APPEARANCE, value, sizeof(value)) == 0 &&
            os64_streq_nocase(value, "dark");
+}
+
+bool yonder_settings_saved_animations(void)
+{
+    char value[8];
+    return !(os64_conf_get(CONF_NAME, CONF_ANIMATIONS, value, sizeof(value)) == 0 &&
+             os64_streq_nocase(value, "off"));
+}
+
+bool yonder_settings_saved_reduce_motion(void)
+{
+    char value[16];
+    return os64_conf_get(CONF_NAME, CONF_MOTION, value, sizeof(value)) == 0 &&
+           os64_streq_nocase(value, "reduce");
 }
 
 bool yonder_settings_saved_scripts(void)
@@ -371,6 +390,20 @@ static bool arrange(os64_ui_settings_t *d, os64_gui_rect_t b, int32_t row, bool 
     place(&s.limit.w, (os64_gui_rect_t){at, script_y, slider, row}, staged);
     at += slider;
     place(&s.limit_value, (os64_gui_rect_t){at + row / 2, script_y, limit_value - row / 2, row}, staged);
+    // The animations' switches, side by side.
+    int32_t run_w = 0, reduce_w = 0;
+    if (os64_ui_text_measure(&d->ui, OS64_FONT_ROLE_UI, s.run.w.text, os64_strlen(s.run.w.text),
+                             &run_w) ||
+        os64_ui_text_measure(&d->ui, OS64_FONT_ROLE_UI, s.reduce.w.text,
+                             os64_strlen(s.reduce.w.text), &reduce_w))
+        return false;
+    run_w += 2 * row;
+    reduce_w += 2 * row;
+    if (run_w + row + reduce_w > b.w)
+        return false;
+    int32_t motion_y = last + 3 * row;
+    place(&s.run.w, (os64_gui_rect_t){b.x, motion_y, run_w, row}, staged);
+    place(&s.reduce.w, (os64_gui_rect_t){b.x + run_w + row, motion_y, reduce_w, row}, staged);
     return true;
 }
 
@@ -415,6 +448,7 @@ static void apply(os64_ui_settings_t *d, bool save)
     s.use(agent, s.scripts.checked, seconds);
     s.zoom_use(zoom);
     s.dark_use(s.dark.checked);
+    s.motion_use(s.run.checked, s.reduce.checked);
     const char *name = yonder_agent_name(agent);
     // A cache that cannot keep anything has no box to tick, and saves no
     // `cache = off` that would outlive whatever stopped it.
@@ -432,6 +466,10 @@ static void apply(os64_ui_settings_t *d, bool save)
                            os64_conf_set(CONF_NAME, CONF_ZOOM, s.zoom_buf) == 0 &&
                            os64_conf_set(CONF_NAME, CONF_APPEARANCE,
                                           s.dark.checked ? "dark" : "light") == 0 &&
+                           os64_conf_set(CONF_NAME, CONF_ANIMATIONS,
+                                          s.run.checked ? "on" : "off") == 0 &&
+                           os64_conf_set(CONF_NAME, CONF_MOTION,
+                                          s.reduce.checked ? "reduce" : "no-preference") == 0 &&
                            (!s.usable || (os64_conf_set(CONF_NAME, CONF_CACHE,
                                                         keeping ? "on" : "off") == 0 &&
                                           os64_conf_set(CONF_NAME, CONF_CACHE_MB,
@@ -451,7 +489,8 @@ void yonder_settings_open(int64_t parent, uint32_t bell, const char *agent,
                           void (*use)(const char *agent, bool scripts, uint32_t script_seconds),
                           way_cache_t *cache, bool scripts, uint32_t script_seconds, uint32_t zoom,
                           void (*zoom_use)(uint32_t thousandths), bool dark,
-                          void (*dark_use)(bool dark))
+                          void (*dark_use)(bool dark), bool run, bool reduce,
+                          void (*motion_use)(bool run, bool reduce))
 {
     // Open already: the helper brings it forward and keeps what was typed.
     if (!os64_ui_settings_open(&s.d, parent, "yonder Settings", BODY_ROWS, arrange, apply, NULL))
@@ -459,6 +498,7 @@ void yonder_settings_open(int64_t parent, uint32_t bell, const char *agent,
     s.use = use;
     s.zoom_use = zoom_use;
     s.dark_use = dark_use;
+    s.motion_use = motion_use;
     s.cache = cache;
     s.usable = false;
     s.window = parent;
@@ -487,10 +527,12 @@ void yonder_settings_open(int64_t parent, uint32_t bell, const char *agent,
     os64_ui_textfield(&s.zoom, s.zoom_buf, sizeof(s.zoom_buf), NULL, NULL, NULL);
     os64_ui_label(&s.percent, "%");
     os64_ui_checkbox(&s.dark, "Dark pages", dark, NULL, NULL);
+    os64_ui_checkbox(&s.run, "Run animations", run, NULL, NULL);
+    os64_ui_checkbox(&s.reduce, "Reduce motion", reduce, NULL, NULL);
     os64_ui_widget_t *kids[] = {&s.heading, &s.list.w,     &s.field.w, &s.keep.w,  &s.size.w,
                                 &s.mb,      &s.empty,      &s.zoom_words, &s.zoom.w, &s.percent,
                                 &s.scripts.w, &s.limit_words, &s.limit.w, &s.limit_value,
-                                &s.dark.w};
+                                &s.dark.w, &s.run.w, &s.reduce.w};
     for (size_t i = 0; i < sizeof(kids) / sizeof(kids[0]); i++)
         os64_ui_add_child(&s.d.body, kids[i]);
     os64_ui_listbox_set(&s.d.ui, &s.list, yonder_agent_npresets(), selected);

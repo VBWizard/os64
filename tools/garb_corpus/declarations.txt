@@ -909,3 +909,138 @@ IN: quirks clip: rect(1, 20, 30, 4)
 OUT: invalid
 IN: clip: inherit
 OUT: clip: inherit
+
+# ── Animations (Animations 1 § 4, Easing 1 § 2, Will Change 1 § 2) ──
+# A name is kept as written, an identifier or a string alike — `"none"` is
+# a name and `none` is none — and none of the CSS-wide words or `default`
+# may be one; each longhand is a list, one item an animation.
+IN: animation-name: spin
+OUT: animation-name: "spin"
+IN: animation-name: Spin, none, "none"
+OUT: animation-name: "Spin", none, "none"
+IN: animation-name: none
+OUT: animation-name: none
+IN: animation-name: inherit
+OUT: animation-name: inherit
+IN: animation-name: x, initial
+OUT: invalid
+IN: animation-name: default
+OUT: invalid
+IN: animation-name: ""
+OUT: invalid
+IN: animation-name: x y
+OUT: invalid
+IN: animation-duration: 1s, 250ms, 0s
+OUT: animation-duration: 1s, 250ms, 0s
+IN: animation-duration: auto
+OUT: animation-duration: auto
+IN: animation-duration: -1s
+OUT: invalid
+IN: animation-duration: 0
+OUT: invalid
+IN: animation-duration: 1px
+OUT: invalid
+IN: animation-delay: -0.5s, 2S
+OUT: animation-delay: -0.5s, 2s
+IN: animation-timing-function: ease-in-out, cubic-bezier(0.2, 0.86, 0.32, 1.22), steps(4, jump-start), steps(2), step-end
+OUT: animation-timing-function: ease-in-out, cubic-bezier(0.2, 0.86, 0.32, 1.22), steps(4, jump-start), steps(2), step-end
+IN: animation-timing-function: cubic-bezier(0, -2, 1, 3)
+OUT: animation-timing-function: cubic-bezier(0, -2, 1, 3)
+IN: animation-timing-function: cubic-bezier(1.1, 0, 0, 1)
+OUT: invalid
+IN: animation-timing-function: cubic-bezier(0, 0, -0.1, 1)
+OUT: invalid
+IN: animation-timing-function: cubic-bezier(0, 0, 1)
+OUT: invalid
+IN: animation-timing-function: steps(0)
+OUT: invalid
+IN: animation-timing-function: steps(1.5)
+OUT: invalid
+IN: animation-timing-function: steps(1, jump-none)
+OUT: invalid
+IN: animation-timing-function: steps(2, jump-none)
+OUT: animation-timing-function: steps(2, jump-none)
+IN: animation-timing-function: steps(3, start)
+OUT: animation-timing-function: steps(3, start)
+IN: animation-timing-function: steps(3, middle)
+OUT: invalid
+IN: animation-timing-function: linear(0, 1)
+OUT: invalid
+IN: animation-iteration-count: infinite, 2.5, 0
+OUT: animation-iteration-count: infinite, 2.5, 0
+IN: animation-iteration-count: -1
+OUT: invalid
+IN: animation-direction: alternate-reverse, normal
+OUT: animation-direction: alternate-reverse, normal
+IN: animation-play-state: paused
+OUT: animation-play-state: paused
+IN: animation-fill-mode: both, forwards, none
+OUT: animation-fill-mode: both, forwards, none
+IN: animation-fill-mode: sideways
+OUT: invalid
+# The shorthand: the first time is the duration, the second the delay; a
+# keyword another longhand takes is that longhand's until it has one, so
+# the name is what is left (Animations 1 § 4.9).
+IN: animation: spin 1s linear infinite
+OUT: animation-name: "spin"; animation-duration: 1s; animation-timing-function: linear; animation-iteration-count: infinite; animation-direction: normal; animation-play-state: running; animation-delay: 0s; animation-fill-mode: none
+IN: animation: ease ease 1s
+OUT: animation-name: "ease"; animation-duration: 1s; animation-timing-function: ease; animation-iteration-count: 1; animation-direction: normal; animation-play-state: running; animation-delay: 0s; animation-fill-mode: none
+IN: animation: 1s 2s mv
+OUT: animation-name: "mv"; animation-duration: 1s; animation-timing-function: ease; animation-iteration-count: 1; animation-direction: normal; animation-play-state: running; animation-delay: 2s; animation-fill-mode: none
+IN: animation: auto spin
+OUT: animation-name: "spin"; animation-duration: auto; animation-timing-function: ease; animation-iteration-count: 1; animation-direction: normal; animation-play-state: running; animation-delay: 0s; animation-fill-mode: none
+IN: animation: auto
+OUT: animation-name: none; animation-duration: auto; animation-timing-function: ease; animation-iteration-count: 1; animation-direction: normal; animation-play-state: running; animation-delay: 0s; animation-fill-mode: none
+IN: animation: 1s auto
+OUT: animation-name: "auto"; animation-duration: 1s; animation-timing-function: ease; animation-iteration-count: 1; animation-direction: normal; animation-play-state: running; animation-delay: 0s; animation-fill-mode: none
+IN: animation: auto 1s spin
+OUT: animation-name: "spin"; animation-duration: auto; animation-timing-function: ease; animation-iteration-count: 1; animation-direction: normal; animation-play-state: running; animation-delay: 1s; animation-fill-mode: none
+IN: animation: x 1s, y 2s steps(2, end) 3 alternate both paused 500ms
+OUT: animation-name: "x", "y"; animation-duration: 1s, 2s; animation-timing-function: ease, steps(2, end); animation-iteration-count: 1, 3; animation-direction: normal, alternate; animation-play-state: running, paused; animation-delay: 0s, 500ms; animation-fill-mode: none, both
+IN: animation: none
+OUT: animation-name: none; animation-duration: 0s; animation-timing-function: ease; animation-iteration-count: 1; animation-direction: normal; animation-play-state: running; animation-delay: 0s; animation-fill-mode: none
+IN: animation: none none
+OUT: animation-name: none; animation-duration: 0s; animation-timing-function: ease; animation-iteration-count: 1; animation-direction: normal; animation-play-state: running; animation-delay: 0s; animation-fill-mode: none
+IN: animation: forwards forwards
+OUT: animation-name: "forwards"; animation-duration: 0s; animation-timing-function: ease; animation-iteration-count: 1; animation-direction: normal; animation-play-state: running; animation-delay: 0s; animation-fill-mode: forwards
+IN: animation: x 1s 2s 3s
+OUT: invalid
+IN: animation: x y
+OUT: invalid
+IN: animation: x,
+OUT: invalid
+IN: animation: , x
+OUT: invalid
+IN: animation: -1s x
+OUT: invalid
+IN: animation: inherit
+OUT: animation-name: inherit; animation-duration: inherit; animation-timing-function: inherit; animation-iteration-count: inherit; animation-direction: inherit; animation-play-state: inherit; animation-delay: inherit; animation-fill-mode: inherit
+# The Compatibility Standard's names (§ 3.4.1): the prefixed animation
+# properties and the prefixed transform are the standard ones.
+IN: -webkit-animation: spin 1s
+OUT: animation-name: "spin"; animation-duration: 1s; animation-timing-function: ease; animation-iteration-count: 1; animation-direction: normal; animation-play-state: running; animation-delay: 0s; animation-fill-mode: none
+IN: -webkit-animation-name: spin
+OUT: animation-name: "spin"
+IN: -webkit-animation-timing-function: steps(2, end)
+OUT: animation-timing-function: steps(2, end)
+IN: -webkit-transform: rotate(10deg)
+OUT: transform: rotate(10deg)
+IN: -webkit-transform-origin: left
+OUT: transform-origin: 0% 50% 0px
+IN: -moz-animation: spin 1s
+OUT: unknown
+# will-change: auto alone, or what will change, each kept as written.
+IN: will-change: transform, opacity
+OUT: will-change: "transform", "opacity"
+IN: will-change: auto
+OUT: will-change: auto
+IN: will-change: scroll-position
+OUT: will-change: "scroll-position"
+IN: will-change: auto, transform
+OUT: invalid
+IN: will-change: none
+OUT: invalid
+IN: will-change: transform, all
+OUT: invalid
+IN: will-change: 3px
+OUT: invalid

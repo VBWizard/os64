@@ -74,6 +74,9 @@ struct flow_tree {
     flow_frame_t **scrollers;
     int32_t nscrollers, cap_scrollers;
     bool incomplete;
+    // The time the page was laid out at (flow_env_t.now_ms): what its
+    // animated values are, and what flow_motion_due counts from.
+    uint64_t now_ms;
 };
 
 typedef struct {
@@ -574,10 +577,57 @@ static void mat_translate(Wide m[16], double x, double y, double z)
             m[12 + k] = wide_add(m[12 + k], wide_mul(m[i * 4 + k], v[i]));
 }
 
+// A tail of an animation's mix (FLOW_FN_BLEND) multiplied out, each
+// function T(x, y) · its matrix, the translations' percentages of the box
+// `w` by `h` — or, for a blend the tail holds, an animation underneath
+// having made it, that blend's own matrix (f_blend_matrix), worked out as
+// the painter works it: in doubles, the arithmetic of the mix it goes into
+// (f_matrix_mix).
+void f_tail_matrix(const flow_transform_t *f, int32_t n, int64_t w, int64_t h, double out[16])
+{
+    os64_memset(out, 0, 16 * sizeof(double));
+    out[0] = out[5] = out[10] = out[15] = 1;
+    for (int32_t i = 0; i < n; i++) {
+        double one[16], r[16];
+        if (f[i].fn == FLOW_FN_BLEND && f[i].blend != NULL) {
+            f_blend_matrix(&f[i], w, h, one);
+        } else {
+            os64_memcpy(one, f[i].m, sizeof(one));
+            double tx = (double)f_len(f[i].x, w), ty = (double)f_len(f[i].y, h);
+            for (int k = 0; k < 4; k++)
+                one[12 + k] += tx * one[k] + ty * one[4 + k];
+        }
+        for (int c = 0; c < 4; c++)
+            for (int k = 0; k < 4; k++) {
+                double s = 0;
+                for (int j = 0; j < 4; j++)
+                    s += out[j * 4 + k] * one[c * 4 + j];
+                r[c * 4 + k] = s;
+            }
+        os64_memcpy(out, r, sizeof(r));
+    }
+}
+
+void f_blend_matrix(const flow_transform_t *f, int64_t w, int64_t h, double out[16])
+{
+    double a[16], b[16];
+    f_tail_matrix(f->blend->from, f->blend->nfrom, w, h, a);
+    f_tail_matrix(f->blend->to, f->blend->nto, w, h, b);
+    if (!f_matrix_mix(a, b, f->blend->t, out))
+        os64_memcpy(out, f->blend->t < 0.5 ? a : b, 16 * sizeof(double));
+}
+
 // m · T(the function's x, y) · its matrix, a percentage of the border box
-// `w` by `h`.
+// `w` by `h` — or, for an animation's mix of two tails, the mix's matrix
+// (f_blend_matrix).
 static void mat_fn(Wide m[16], const flow_transform_t *f, int64_t w, int64_t h)
 {
+    if (f->fn == FLOW_FN_BLEND && f->blend != NULL) {
+        double mix[16];
+        f_blend_matrix(f, w, h, mix);
+        mat_mul(m, m, mix);
+        return;
+    }
     mat_translate(m, (double)f_len(f->x, w), (double)f_len(f->y, h), 0);
     mat_mul(m, m, f->m);
 }
@@ -668,7 +718,7 @@ static const flow_frame_t *transform_new(Build *bd, const flow_style_t *s, int64
     // w row (0, 0, 0, 1), and so does their product, its 0s to the bit. A
     // TRANSLATION besides when what it does to x and y, w divided out, is
     // exactly the identity — every turn by whole quarters, rotate(0),
-    // scale(1) and skew(0) are exact (style.c's quarters), so nothing is
+    // scale(1) and skew(0) are exact (motion.c's quarters), so nothing is
     // taken for one that is not: a deliberate 9e-10 shear is drawn.
     bool flat = m[3] == 0 && m[7] == 0 && m[15] > 0 && isfinite(m[15]);
     bool moves = flat && m[0] / m[15] == 1 && m[5] / m[15] == 1 && m[1] == 0 && m[4] == 0;
@@ -1225,12 +1275,13 @@ static flow_box_t *public_box(Build *bd, const FBox *src, flow_box_t *parent, fl
     if (src->positioned &&
         !push_list(bd, &bd->t->positioned, &bd->t->npositioned, &bd->t->cap_positioned, b))
         return b;
-    // Below full opacity, a box its block-level parent's walks would reach
-    // is a stacking context of its own, painted whole; and so is one
-    // transformed. The root is the first context already, and an
-    // inline-block's content is painted where its atom is.
+    // Below full opacity (f_opacity_context), a box its block-level
+    // parent's walks would reach is a stacking context of its own, painted
+    // whole; and so is one transformed. The root is the first context
+    // already, and an inline-block's content is painted where its atom is.
     b->stacked = src->positioned || (parent != NULL && own_transform(src, b)) ||
-                 (src->style->opacity < 1000 && parent != NULL && parent->kind <= FLOW_BOX_CELL);
+                 (f_opacity_context(src->style) && parent != NULL &&
+                  parent->kind <= FLOW_BOX_CELL);
     if (b->stacked &&
         !push_list(bd, &bd->t->stacked, &bd->t->nstacked, &bd->t->cap_stacked, b))
         return b;
@@ -1375,7 +1426,7 @@ static bool makes_context(const flow_box_t *b)
 {
     const flow_style_t *s = b->style;
     return s->has_z_index || s->position == FLOW_POSITION_FIXED ||
-           s->position == FLOW_POSITION_STICKY || s->opacity < 1000 ||
+           s->position == FLOW_POSITION_STICKY || f_opacity_context(s) ||
            (b->frame != NULL && b->frame->box == b && b->frame->kind == F_FRAME_TRANSFORM);
 }
 
@@ -1393,10 +1444,13 @@ static bool own_through(const flow_box_t *b)
 }
 
 // Composited whole: below full opacity, or drawn through its matrix, and
-// painted at all.
+// painted at all — and for the life of an animation of its opacity or its
+// transform, whatever their values, so a frame that fades or turns it is
+// painted as one (PILE3.md § Animations).
 static bool is_group(const flow_box_t *b)
 {
-    return (b->style->opacity < 1000 || own_through(b)) && !b->unpainted;
+    return (b->style->opacity < 1000 || own_through(b) || b->style->animating != 0) &&
+           !b->unpainted;
 }
 
 typedef struct {
@@ -1552,11 +1606,17 @@ flow_tree_t *flow_layout(const os64_html_document_t *doc, const os64_page_t *mod
     // fragment, so the budgeted arenas already bound them: no cap of their
     // own, which would turn a page the budget cut short into no page.
     tree->arena.cap = SIZE_MAX;
+    tree->now_ms = env->now_ms;
+    // A layout is a style change event for the page's animations: it meets
+    // the ones it styles, and a complete one drops the rest; one that fails
+    // changes none of them (motion.c).
+    f_timeline_begin(env->timeline);
     tree->styles = f_style_build(doc, model, env);
     tree->boxes = tree->styles != NULL ? f_boxes_build(doc, model, tree->styles, env) : NULL;
     tree->layout = tree->boxes != NULL ? f_layout(tree->boxes, doc, model, env, width) : NULL;
     if (tree->layout == NULL) {
         flow_free(tree);
+        f_timeline_undo(env->timeline);
         return NULL;
     }
     tree->incomplete = tree->layout->incomplete;
@@ -1574,13 +1634,120 @@ flow_tree_t *flow_layout(const os64_html_document_t *doc, const os64_page_t *mod
         // page: nothing half-built is handed over.
         if (bd.failed || !stack_build(tree)) {
             flow_free(tree);
+            f_timeline_undo(env->timeline);
             return NULL;
         }
         reach_stacked(tree);
         sticky_reach_scrolled(tree);
         ink_reach(tree->root);
     }
+    f_timeline_end(env->timeline, !tree->incomplete);
     return tree;
+}
+
+static bool meets(os64_gui_rect_t a, os64_gui_rect_t b);
+static bool block_level(flow_box_kind_t k);
+static os64_gui_rect_t doc_rect_of(const flow_box_t *box, os64_gui_rect_t local, flow_point_t scroll);
+
+// Whether a box can be seen in `view`: all it paints — its overflow and
+// what its ink reaches past it (a shadow, a glyph's overhang, the like
+// from a box inside it) — where the page paints it, through any transform.
+// A background the canvas takes is the canvas's to paint (may_own_canvas).
+static bool box_seen(const flow_box_t *b, os64_gui_rect_t view, flow_point_t scroll)
+{
+    os64_gui_rect_t o = b->overflow;
+    os64_gui_rect_t inked =
+        rect_from((int64_t)o.x - b->ink[FLOW_LEFT], (int64_t)o.y - b->ink[FLOW_TOP],
+                  (int64_t)o.x + o.w + b->ink[FLOW_RIGHT], (int64_t)o.y + o.h + b->ink[FLOW_BOTTOM]);
+    return meets(doc_rect_of(b, inked, scroll), view);
+}
+
+// Whether what an element draws, its first box `b`, can be seen. An inline
+// element's first box is its piece on one line, and it may have pieces on
+// many, in several anonymous blocks when it is split round a block inside
+// it: the nearest block with an element of its own holds every piece, so
+// its box stands for them — more than the element draws, which can cost a
+// layout the element did not need and never one it did.
+static bool pieces_seen(const flow_box_t *b, os64_gui_rect_t view, flow_point_t scroll)
+{
+    if (b->kind == FLOW_BOX_SPAN)
+        while (b->parent != NULL && !(block_level(b->kind) && b->node != NULL))
+            b = b->parent;
+    return box_seen(b, view, scroll);
+}
+
+// Whether what element `n` animates in place can be seen: its own boxes,
+// or, for an element that makes none (`display: contents`), whose
+// inherited values its descendants draw, the nearest boxes inside it —
+// each one's overflow standing for what is inside it.
+static bool motion_seen(const flow_tree_t *tree, const os64_html_node_t *n, os64_gui_rect_t view,
+                        flow_point_t scroll)
+{
+    const flow_box_t *b = f_map_get(&tree->first, n);
+    if (b != NULL)
+        return pieces_seen(b, view, scroll);
+    for (const os64_html_node_t *c = n->first_child; c != NULL;) {
+        b = f_map_get(&tree->first, c);
+        if (b != NULL && pieces_seen(b, view, scroll))
+            return true;
+        if (b == NULL && c->first_child != NULL) {
+            c = c->first_child;
+            continue;
+        }
+        while (c != n && c->next == NULL)
+            c = c->parent;
+        c = c != n ? c->next : NULL;
+    }
+    return false;
+}
+
+// Whether `n` may be the element whose background the canvas takes and
+// paints over the whole view, wherever its box is: the root, or the body
+// its child, the canvas's when the root has none (Backgrounds 3 § 2.11).
+// Which one does depends on the painter's pictures as well as the styles,
+// so both count as seen: a layout early, at most, for the one whose
+// background the canvas does not take, and never late.
+static bool may_own_canvas(const flow_tree_t *tree, const os64_html_node_t *n)
+{
+    const os64_html_node_t *root = tree->root != NULL ? tree->root->node : NULL;
+    return root != NULL &&
+           (n == root || (n->parent == root && n->kind == OS64_HTML_ELEMENT && n->tag == OS64_HTML_TAG_BODY));
+}
+
+uint64_t flow_motion_due(const flow_tree_t *tree, os64_gui_rect_t view, flow_point_t scroll)
+{
+    if (tree == NULL || tree->styles == NULL || tree->styles->nanimated == 0)
+        return FLOW_NEVER;
+    double now = (double)tree->now_ms, next = INFINITY;
+    for (int32_t i = 0; i < tree->styles->nanimated && next > now; i++) {
+        const os64_html_node_t *n = tree->styles->animated[i];
+        const FStyled *st = f_style_of(tree->styles, n);
+        if (st == NULL || st->motion == NULL ||
+            (st->motion->in_place && !may_own_canvas(tree, n) && !motion_seen(tree, n, view, scroll)))
+            continue;
+        next = fmin(next, f_motion_next(st->motion, now));
+    }
+    // What draws outside the boxes it is inside — a positioned box, a
+    // fixed one, one a transform moves, none of them in their ancestors'
+    // overflow: each that can be seen makes the animated elements it is
+    // inside due as well, since what they hand down in place (a colour, a
+    // fade) is drawn there.
+    for (int32_t i = 0; i < tree->nstacked && next > now; i++) {
+        const flow_box_t *b = tree->stacked[i];
+        if (b->node == NULL || !box_seen(b, view, scroll))
+            continue;
+        for (const os64_html_node_t *a = b->node->parent; a != NULL && next > now; a = a->parent) {
+            const FStyled *st = a->kind == OS64_HTML_ELEMENT ? f_style_of(tree->styles, a) : NULL;
+            if (st != NULL && st->motion != NULL)
+                next = fmin(next, f_motion_next(st->motion, now));
+        }
+    }
+    if (!(next < INFINITY))
+        return FLOW_NEVER;
+    if (next <= now)
+        return tree->now_ms;
+    double up = ceil(next);
+    return up >= (double)UINT64_MAX ? FLOW_NEVER : (uint64_t)up;
 }
 
 bool flow_incomplete(const flow_tree_t *tree)
@@ -2019,8 +2186,16 @@ os64_gui_rect_t flow_box_doc_rect(const flow_box_t *box, flow_point_t scroll)
 {
     if (box == NULL)
         return (os64_gui_rect_t){0, 0, 0, 0};
+    return doc_rect_of(box, box->rect, scroll);
+}
+
+// A rect in box `box`'s coordinates where the page paints it: moved by the
+// frames it is in, and through each drawn-through transform, the bounds
+// of its corners.
+static os64_gui_rect_t doc_rect_of(const flow_box_t *box, os64_gui_rect_t local, flow_point_t scroll)
+{
     flow_point_t o = flow_box_doc_offset(box, scroll);
-    os64_gui_rect_t r = moved(box->rect, o.x, o.y);
+    os64_gui_rect_t r = moved(local, o.x, o.y);
     if (inner_through(box->frame) == NULL)
         return r;
     double x0 = INFINITY, y0 = INFINITY, x1 = -INFINITY, y1 = -INFINITY;

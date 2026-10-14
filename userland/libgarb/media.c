@@ -6,12 +6,10 @@
 // maybe)` does not turn into true. A whole query that ends UNKNOWN is
 // false.
 //
-// What the machine answers, and why: a screen, a mouse (fine pointer, can
-// hover), 8 bits a colour channel, 1 dppx, a light scheme, no scripting,
-// and reduced motion — yonder runs no CSS animations or transitions, and a
-// page that knows so spends nothing on them. So every
-// `@media (prefers-reduced-motion: reduce)` block applies, and some pages
-// hide more than motion in one (a carousel, a video's autoplay).
+// What the machine answers: a screen, a mouse (fine pointer, can hover), 8
+// bits a colour channel, 1 dppx, and no scripting; and what the person
+// asked for — a light or dark scheme, and full or reduced motion — from the
+// env (garb_env_t), each the first unless they asked otherwise.
 
 #include "values_internal.h"
 #include "garb/cascade.h"
@@ -51,7 +49,9 @@ static const garb_value_t *peek(MCur *c)
     return c->i < c->n ? &c->v[c->i] : NULL;
 }
 
-static bool word(const garb_value_t *t, const char *w)
+// Not `word`: built -masm=intel, a function GCC leaves out of line is
+// named in the assembly, and a symbol named word reads as WORD there.
+static bool is_word(const garb_value_t *t, const char *w)
 {
     return t != NULL && t->kind == GARB_IDENT && ieq(t->text, t->len, w);
 }
@@ -120,7 +120,7 @@ static const Feature kFeatures[] = {
     {"any-hover", F_WORDS, "hover", false}, {"pointer", F_WORDS, "fine", false},
     {"any-pointer", F_WORDS, "fine", false},
     {"prefers-color-scheme", F_WORDS, "light", false},     // or `dark`: answered from the env
-    {"prefers-reduced-motion", F_WORDS, "reduce", false},
+    {"prefers-reduced-motion", F_WORDS, "no-preference", false},   // or `reduce`: the env's
     {"prefers-reduced-transparency", F_WORDS, "no-preference", false},
     {"prefers-contrast", F_WORDS, "no-preference", false},
     {"forced-colors", F_WORDS, "none", false}, {"inverted-colors", F_WORDS, "none", false},
@@ -233,6 +233,17 @@ static const Feature *feature_named(const char *s, size_t n)
     return NULL;
 }
 
+// What a word feature answers here: the machine's, or for the two the
+// person chooses, what they chose.
+static const char *answer_of(const Feature *f, garb_env_t env)
+{
+    if (os64_streq(f->name, "prefers-color-scheme") && env.dark)
+        return "dark";
+    if (os64_streq(f->name, "prefers-reduced-motion") && env.reduced_motion)
+        return "reduce";
+    return f->answer;
+}
+
 // `( … )`: a feature in plain, boolean or range form. UNKNOWN for anything
 // else — Level 4's <general-enclosed>.
 static Tri feature(const garb_value_t *block, garb_env_t env)
@@ -256,7 +267,7 @@ static Tri feature(const garb_value_t *block, garb_env_t env)
             return M_UNKNOWN;
         double left, right, here = 0;
         Op op1, op2;
-        if (!written(f, &probe, &left) || !comparison(&probe, &op1) || !word(peek(&probe), f->name))
+        if (!written(f, &probe, &left) || !comparison(&probe, &op1) || !is_word(peek(&probe), f->name))
             return M_UNKNOWN;
         probe.i++;
         actual(f, env, &here);
@@ -296,9 +307,9 @@ static Tri feature(const garb_value_t *block, garb_env_t env)
             return M_UNKNOWN;
         double here;
         if (f->kind == F_WORDS) {
-            // Orientation always has one; the rest are true unless this
-            // machine's answer is `none` or `no-preference`.
-            const char *a = f->answer;
+            // Orientation always has one; the rest are true unless the
+            // answer here is `none` or `no-preference`.
+            const char *a = answer_of(f, env);
             bool off = a != NULL && (os64_streq(a, "none") || os64_streq(a, "no-preference"));
             return off ? M_FALSE : M_TRUE;
         }
@@ -315,14 +326,11 @@ static Tri feature(const garb_value_t *block, garb_env_t env)
                 return M_UNKNOWN;
             if (f->answer == NULL) {    // orientation
                 const char *o = env.height >= env.width ? "portrait" : "landscape";
-                if (!word(w, "portrait") && !word(w, "landscape"))
+                if (!is_word(w, "portrait") && !is_word(w, "landscape"))
                     return M_UNKNOWN;
-                return word(w, o) ? M_TRUE : M_FALSE;
+                return is_word(w, o) ? M_TRUE : M_FALSE;
             }
-            const char *answer = f->answer;
-            if (os64_streq(f->name, "prefers-color-scheme") && env.dark)
-                answer = "dark";
-            return word(w, answer) ? M_TRUE : M_FALSE;
+            return is_word(w, answer_of(f, env)) ? M_TRUE : M_FALSE;
         }
         double want, here = 0;
         if (!written(f, &c, &want) || peek(&c) != NULL)
@@ -359,7 +367,7 @@ static Tri in_parens(MCur *c)
     // A nested condition, or a feature.
     MCur inner = {t->children, t->nchildren, 0, c->env};
     const garb_value_t *first = peek(&inner);
-    if (first != NULL && (first->kind == GARB_BLOCK || word(first, "not"))) {
+    if (first != NULL && (first->kind == GARB_BLOCK || is_word(first, "not"))) {
         Tri r = condition(&inner, true);
         return peek(&inner) == NULL ? r : M_UNKNOWN;
     }
@@ -369,16 +377,16 @@ static Tri in_parens(MCur *c)
 // <media-condition>: `not` one, or a run joined all by `and` or all by `or`.
 static Tri condition(MCur *c, bool allow_or)
 {
-    if (word(peek(c), "not")) {
+    if (is_word(peek(c), "not")) {
         c->i++;
         return tri_not(in_parens(c));
     }
     Tri r = in_parens(c);
     const garb_value_t *t = peek(c);
-    bool ands = word(t, "and"), ors = word(t, "or");
+    bool ands = is_word(t, "and"), ors = is_word(t, "or");
     if (ors && !allow_or)
         return M_UNKNOWN;
-    while ((ands && word(peek(c), "and")) || (ors && word(peek(c), "or"))) {
+    while ((ands && is_word(peek(c), "and")) || (ors && is_word(peek(c), "or"))) {
         c->i++;
         Tri next = in_parens(c);
         r = ands ? tri_and(r, next) : tri_or(r, next);
@@ -394,33 +402,33 @@ static bool query(MCur *c)
         return false;
     bool negate = false;
     Tri r;
-    if (t->kind == GARB_IDENT && !word(t, "not") && !word(t, "only")) {
+    if (t->kind == GARB_IDENT && !is_word(t, "not") && !is_word(t, "only")) {
         // A media type.
         static const char *const kNone[] = {"print", "speech", "tty", "tv", "projection",
                                             "handheld", "braille", "embossed", "aural", NULL};
-        bool screen = word(t, "all") || word(t, "screen");
+        bool screen = is_word(t, "all") || is_word(t, "screen");
         bool known_no = false;
         for (int k = 0; kNone[k] != NULL; k++)
-            known_no |= word(t, kNone[k]);
-        if (!screen && !known_no && (word(t, "and") || word(t, "or")))
+            known_no |= is_word(t, kNone[k]);
+        if (!screen && !known_no && (is_word(t, "and") || is_word(t, "or")))
             return false;
         c->i++;
         r = screen ? M_TRUE : M_FALSE;
-        if (word(peek(c), "and")) {
+        if (is_word(peek(c), "and")) {
             c->i++;
             r = tri_and(r, condition(c, false));
         }
-    } else if (word(t, "not") || word(t, "only")) {
+    } else if (is_word(t, "not") || is_word(t, "only")) {
         MCur look = *c;
         look.i++;
         const garb_value_t *after = peek(&look);
         if (after != NULL && after->kind == GARB_IDENT) {
-            negate = word(t, "not");
+            negate = is_word(t, "not");
             c->i = look.i;
-            bool screen = word(after, "all") || word(after, "screen");
+            bool screen = is_word(after, "all") || is_word(after, "screen");
             c->i++;
             r = screen ? M_TRUE : M_FALSE;
-            if (word(peek(c), "and")) {
+            if (is_word(peek(c), "and")) {
                 c->i++;
                 r = tri_and(r, condition(c, false));
             }

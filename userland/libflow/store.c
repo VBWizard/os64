@@ -117,6 +117,33 @@ void *f_map_get(const FMap *map, const void *key)
     return NULL;
 }
 
+void f_map_remove(FMap *map, const void *key)
+{
+    if (map->cap == 0 || key == NULL)
+        return;
+    size_t mask = map->cap - 1, hole = hash_ptr(key) & mask;
+    while (map->keys[hole] != NULL && map->keys[hole] != key)
+        hole = (hole + 1) & mask;
+    if (map->keys[hole] == NULL)
+        return;
+    // Each key after the hole in its run moves back into it unless its
+    // home lies after the hole, up to where it sits — so every probe still
+    // reaches its key before an empty slot, with no tombstone left behind
+    // (Knuth's Algorithm R).
+    for (size_t j = (hole + 1) & mask; map->keys[j] != NULL; j = (j + 1) & mask) {
+        size_t home = hash_ptr(map->keys[j]) & mask;
+        bool stays = hole <= j ? hole < home && home <= j : hole < home || home <= j;
+        if (stays)
+            continue;
+        map->keys[hole] = map->keys[j];
+        map->vals[hole] = map->vals[j];
+        hole = j;
+    }
+    map->keys[hole] = NULL;
+    map->vals[hole] = NULL;
+    map->count--;
+}
+
 void f_map_free(FMap *map)
 {
     os64_free(map->keys);

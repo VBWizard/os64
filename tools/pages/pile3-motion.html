@@ -1,0 +1,58 @@
+<!doctype html><html><head><title>pile3 motion</title>
+<!-- S8a (PILE3.md § The animation model). FROZEN rows are paused at a fixed
+moment by a negative delay, or long finished, so they hold still: each box's
+left edge sits on its blue line, which is where Chrome put it (measured
+2026-10-13), or looks like its neighbour. LIVE rows move. -->
+<style>
+body{margin:8px;font:13px sans-serif;background:#fff;color:#000}
+h2{font-size:15px;margin:10px 0 4px}
+.row{position:relative;height:44px;margin:0 0 4px}
+.b{position:absolute;left:0;top:2px;width:40px;height:40px;background:#c00}
+.n{position:absolute;left:60px;top:2px;width:40px;height:40px;background:#c00}
+.g{position:absolute;top:0;width:2px;height:44px;background:#06f}
+.lab{position:absolute;left:300px;top:14px;white-space:nowrap}
+@keyframes slide{from{left:0}to{left:200px}}
+@-webkit-keyframes wslide{from{left:0}to{left:200px}}
+@keyframes toonly{to{left:200px}}
+@keyframes fade{from{opacity:0}to{opacity:1}}
+@keyframes paint{from{background:#f00}to{background:#00f}}
+@keyframes turn{from{transform:rotate(0)}to{transform:rotate(90deg)}}
+@keyframes mixed{from{transform:translateX(0) rotate(0)}to{transform:rotate(90deg) translateX(60px)}}
+@keyframes held{0%{left:0;animation-timing-function:steps(1,end)}100%{left:200px}}
+@keyframes show{from{visibility:hidden}to{visibility:visible}}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes pulse{from{opacity:1}to{opacity:.15}}
+@keyframes hue{0%{background:#f00}33%{background:#0a0}66%{background:#00f}100%{background:#f00}}
+@keyframes march{from{left:0}to{left:200px}}
+.rm{animation:spin 2s linear infinite}
+@media (prefers-reduced-motion: reduce){.rm{animation:none}}
+</style></head><body>
+<h2>FROZEN: the box's left edge is on the blue line</h2>
+<div class=row><i class=g style="left:100px"></i><b class=b id=r1 style="animation:slide 1s linear -.5s paused"></b><span class=lab>1 linear, half way</span></div>
+<div class=row><i class=g style="left:26px"></i><b class=b id=r2 style="animation:slide 1s ease-in-out -.25s paused"></b><span class=lab>2 ease-in-out, a quarter in: slow to start</span></div>
+<div class=row><i class=g style="left:100px"></i><b class=b id=r3 style="animation:slide 1s steps(4) -.6s paused"></b><span class=lab>3 steps(4), 60% in: the second step</span></div>
+<div class=row><i class=g style="left:150px"></i><b class=b id=r4 style="animation:slide 1s steps(4,jump-start) -.6s paused"></b><span class=lab>4 steps(4, jump-start), 60% in: the third</span></div>
+<div class=row><i class=g style="left:150px"></i><b class=b id=r5 style="animation:slide 1s linear -1.25s 3 alternate paused"></b><span class=lab>5 alternate: the second pass runs back</span></div>
+<div class=row><i class=g style="left:0"></i><b class=b id=r6 style="left:50px;animation:slide 1s 600s backwards"></b><span class=lab>6 waiting to start, filling backwards: at the start</span></div>
+<div class=row><i class=g style="left:200px"></i><b class=b id=r7 style="animation:slide 1s -5s forwards"></b><span class=lab>7 finished, filling forwards: at the end</span></div>
+<div class=row><i class=g style="left:30px"></i><b class=b id=r8 style="left:30px;animation:slide 1s -5s"></b><span class=lab>8 finished, no fill: back where its rules put it</span></div>
+<div class=row><i class=g style="left:60px"></i><b class=b id=r9 style="left:60px!important;animation:slide 1s linear -.5s paused"></b><span class=lab>9 !important wins over the animation</span></div>
+<div class=row><i class=g style="left:150px"></i><b class=b id=r10 style="left:100px;animation:toonly 1s linear -.5s paused"></b><span class=lab>10 only a "to": starts from its own place</span></div>
+<div class=row><i class=g style="left:0"></i><b class=b id=r11 style="animation:held 1s linear -.5s paused"></b><span class=lab>11 the keyframe's own steps(1): holds still</span></div>
+<div class=row><i class=g style="left:100px"></i><b class=b id=r12 style="-webkit-animation:wslide 1s linear -.5s;-webkit-animation-play-state:paused"></b><span class=lab>12 -webkit- names</span></div>
+<h2>FROZEN: the box looks like its neighbour</h2>
+<div class=row><b class=b style="animation:fade 1s linear -.5s paused"></b><b class=n style="opacity:.5"></b><span class=lab>13 half faded in</span></div>
+<div class=row><b class=b style="animation:paint 1s linear -.5s paused"></b><b class=n style="background:#800080"></b><span class=lab>14 red to blue, half way: purple</span></div>
+<div class=row><b class=b style="animation:turn 1s linear -.5s paused"></b><b class=n style="transform:rotate(45deg)"></b><span class=lab>15 turned half of 90 degrees</span></div>
+<div class=row style="height:84px"><b class=b id=r16 style="animation:mixed 1s linear -.5s paused"></b><b class=n style="transform:matrix(0.707107,0.707107,-0.707107,0.707107,0,30)"></b><span class=lab>16 lists that do not match, mixed as matrices</span></div>
+<div class=row><b class=b style="animation:show 1s linear -.1s paused"></b><b class=n></b><span class=lab>17 hidden to visible, 10% in: visible</span></div>
+<h2>LIVE</h2>
+<div class=row><b class=b style="animation:spin 2s linear infinite"></b><span class=lab>18 turns smoothly, once every 2 s</span></div>
+<div class=row><b class=b style="animation:pulse 1s ease-in-out infinite alternate"></b><span class=lab>19 fades and returns</span></div>
+<div class=row><b class=b style="animation:hue 3s linear infinite"></b><span class=lab>20 red, green, blue, red</span></div>
+<div class=row><b class=b style="animation:march 2s steps(8) infinite"></b><span class=lab>21 jumps 8 times, every 2 s</span></div>
+<div class=row><b class=b style="animation:march 2s 3s ease-in-out both"></b><span class=lab>22 waits 3 s from loading, slides once, stays</span></div>
+<div class=row><b class="b rm" id=r23></b><span class=lab>23 turns, unless Settings says Reduce motion</span></div>
+<div style="height:1500px"></div>
+<div class=row><b class=b style="animation:spin 2s linear infinite"></b><span class=lab>24 far below: turning when you scroll to it</span></div>
+</body></html>

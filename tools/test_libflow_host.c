@@ -6,6 +6,7 @@
 // CSS 2.1 with a pencil, not captured from the engine: a case that passes
 // says the engine agrees with the rule.
 
+#include <float.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <math.h>
@@ -1390,6 +1391,7 @@ static void layout_sweep(void)
 #include "test_libflow_floats.inc"
 #include "test_libflow_transform.inc"
 #include "test_libflow_cliptext.inc"
+#include "test_libflow_motion.inc"
 
 int main(int argc, char **argv)
 {
@@ -1443,14 +1445,16 @@ int main(int argc, char **argv)
         free(html);
         return 0;
     }
-    // `--floats`, `--transforms` and `--cliptext`: those cases and the
-    // style dumps alone, for a mutant run (tools/test_libflow_float_mutants.py,
-    // tools/test_libflow_transform_mutants.py), which wants an answer in
-    // seconds rather than the whole suite's minutes. The text clip's run
-    // has the transforms' cases too, since it paints through their groups.
+    // `--floats`, `--transforms`, `--cliptext` and `--motion`: those cases
+    // and the style dumps alone, for a mutant run (the test_*_mutants.py
+    // harnesses), which wants an answer in seconds rather than the whole
+    // suite's minutes. The text clip's run and the animations' have the
+    // transforms' cases too: one paints through their groups, the other
+    // mixes their functions.
     bool floats = argc == 2 && strcmp(argv[1], "--floats") == 0;
     bool cliptext = argc == 2 && strcmp(argv[1], "--cliptext") == 0;
-    if (floats || cliptext || (argc == 2 && strcmp(argv[1], "--transforms") == 0)) {
+    bool motion = argc == 2 && strcmp(argv[1], "--motion") == 0;
+    if (floats || cliptext || motion || (argc == 2 && strcmp(argv[1], "--transforms") == 0)) {
         text_setup();
         style_cases();
         if (floats)
@@ -1459,6 +1463,8 @@ int main(int argc, char **argv)
             transform_cases();
         if (cliptext)
             cliptext_cases();
+        if (motion)
+            motion_cases();
         text_teardown();
         printf("libflow: %d checks, %d failed%s\n", checks, failures,
                live != 0 ? " (AND LEAKED)" : "");
@@ -1494,6 +1500,7 @@ int main(int argc, char **argv)
     float_cases();
     transform_cases();
     cliptext_cases();
+    motion_cases();
     fixed_cases();
     paint_cases();
     decoration_colour_cases();

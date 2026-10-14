@@ -14,6 +14,8 @@ a:link, a:visited { color: #00e !important; text-decoration: underline }
 .card { &:hover { transform: translate(-2px, 1.5e1px) rotate(3deg) } color: rgb(10 20 30 / 50%) }
 @font-face { font-family: "Pixel"; src: url(pixel.woff2) format("woff2"); }
 @keyframes blink { 0% { opacity: 1 } 50% { opacity: 0 } }
+@keyframes slide { from { margin-left: var(--pad, 2px) } 50%, 75% { opacity: .5; animation-timing-function: steps(2) } }
+.title { animation: blink 1s, slide 2s steps(3, end) infinite; will-change: transform, opacity }
 .bad { color: red; width: 10px 20px {oops}; } } .after { color: \62 lue }
 <!-- .cdo { x: y } -->
 .unterminated { content: "abc

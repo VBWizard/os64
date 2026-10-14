@@ -3,7 +3,8 @@
 # css-parsing-tests through the driver, then every allocation failed in turn
 # over a real 2026 sheet and through every entry point, then a million
 # nested ( on a small stack, numbers past int64_t's reach, and what a parse
-# costs (GARB.md § The cost): a 4 MiB sheet whole, one at the cap kept.
+# costs (GARB.md § The cost): a 4 MiB sheet whole, one at the cap kept, and
+# @keyframes at scale held to a sort's cost.
 set -eu
 cd "$(git rev-parse --show-toplevel)"
 
@@ -41,3 +42,4 @@ python3 tools/test_garb_suite.py "$work/garb_driver"
 "$work/garb_driver" --numbers
 "$work/garb_driver" --cost 4194304
 "$work/garb_driver" --full
+"$work/garb_driver" --keyframes-scale

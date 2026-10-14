@@ -12,6 +12,10 @@ struct os64_ui_settings {
     os64_ui_widget_t root, body, status, actions[3];
     int64_t window;
     unsigned body_rows;
+    /* ready() is adopting the window's first font: the planner may grow the
+     * window to the row that font makes, where a live window refuses a font
+     * it cannot hold. */
+    bool opening;
     char message[160];
     void *user;
     bool (*arrange)(os64_ui_settings_t *, os64_gui_rect_t, int32_t row, bool staged);

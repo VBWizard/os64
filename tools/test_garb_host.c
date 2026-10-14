@@ -12,7 +12,7 @@
 // without recursing), `--numbers` dumps numbers past int64_t's reach and
 // past a double's, and `--cost BYTES` and `--full` hold a parse to what
 // GARB.md says it costs, and to keeping what it finished when the arena
-// fills.
+// fills; `--keyframes-scale` holds @keyframes to a sort's cost.
 
 #include <pthread.h>
 #include <signal.h>
@@ -20,6 +20,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "os64/arena.h"
@@ -316,12 +317,65 @@ static void media(const char *text)
         puts("bad case");
         return;
     }
-    // `WIDTHxHEIGHT dark ...`: the person's scheme is dark.
+    // `WIDTHxHEIGHT dark ...`: the person's scheme is dark; `reduce ...`:
+    // they asked for less motion.
     if (strncmp(text + used, "dark ", 5) == 0) {
         env.dark = true;
         used += 5;
     }
+    if (strncmp(text + used, "reduce ", 7) == 0) {
+        env.reduced_motion = true;
+        used += 7;
+    }
     puts(garb_media_text_matches(text + used, env) ? "true" : "false");
+}
+
+// The keyframes mode: for each element whose winners name animations, in
+// document order, each name and its keyframes as garb_keyframes answers
+// them — `  OFFSET% [EASING]: prop: value; ...` — or `(no rule)`.
+static void print_keyframes(const garb_cascade_t *c, const os64_html_document_t *doc)
+{
+    for (const os64_html_node_t *x = doc->document; x != NULL;) {
+        garb_style_t st = x->kind == OS64_HTML_ELEMENT ? garb_style_for(c, x)
+                                                       : (garb_style_t){NULL, NULL, NULL, 0};
+        for (int32_t k = 0; k < st.n; k++) {
+            if (st.sets[k].prop != GARB_ANIMATION_NAME)
+                continue;
+            const garb_val_t *v = &st.sets[k].value;
+            const garb_val_t *items = v->kind == GARB_V_LAYERS ? v->items : v;
+            int32_t n = v->kind == GARB_V_LAYERS ? v->nitems : 1;
+            for (int32_t i = 0; i < n; i++) {
+                if (items[i].kind != GARB_V_STRING)
+                    continue;
+                const os64_html_attr_t *id = os64_html_attr(x, "id");
+                printf("%s%s%s: %.*s\n", x->name, id != NULL ? "#" : "",
+                       id != NULL ? id->value : "", (int)items[i].len, items[i].text);
+                const garb_keyframe_t *f;
+                int32_t nf = garb_keyframes(c, x, items[i].text, items[i].len, &f);
+                if (nf < 0)
+                    puts("  (no rule)");
+                for (int32_t j = 0; j < nf; j++) {
+                    char e[256] = "";
+                    if (f[j].easing != NULL)
+                        garb_val_dump(f[j].easing, e, sizeof(e));
+                    printf("  %g%%%s%s:", f[j].offset * 100, f[j].easing != NULL ? " " : "", e);
+                    for (int32_t s = 0; s < f[j].nsets; s++) {
+                        char val[512];
+                        garb_val_dump(&f[j].sets[s].value, val, sizeof(val));
+                        printf("%s %s: %s", s ? ";" : "", garb_prop_name(f[j].sets[s].prop), val);
+                    }
+                    putchar('\n');
+                }
+            }
+        }
+        if (x->first_child != NULL) {
+            x = x->first_child;
+            continue;
+        }
+        while (x != NULL && x->next == NULL)
+            x = x->parent;
+        x = x != NULL ? x->next : NULL;
+    }
 }
 
 // The sheets a case supplies beside its page, for its @imports: the page's
@@ -434,8 +488,11 @@ static void print_skips(const garb_cascade_t *c)
 }
 
 // A page and "WIDTHxHEIGHT": every element's author winners, or with
-// `skips`, what the cascade passed over.
-static void cascade(const char *html, size_t hlen, const char *viewport, bool skips)
+// `skips`, what the cascade passed over, or with `keyframes`, the
+// animations its elements name.
+typedef enum { CASCADE_WINNERS, CASCADE_SKIPS, CASCADE_KEYFRAMES } CascadeMode;
+
+static void cascade(const char *html, size_t hlen, const char *viewport, CascadeMode mode)
 {
     garb_env_t env = {.width = 800, .height = 600};
     if (viewport != NULL)
@@ -449,8 +506,11 @@ static void cascade(const char *html, size_t hlen, const char *viewport, bool sk
     memset(&in, 0, sizeof(in));
     collect_styles(doc->document, &in);
     garb_cascade_t *c = garb_cascade(in.in, in.n, doc, env);
-    if (skips) {
+    if (mode == CASCADE_SKIPS) {
         print_skips(c);
+        puts(garb_cascade_incomplete(c) ? "(incomplete)" : "(end)");
+    } else if (mode == CASCADE_KEYFRAMES) {
+        print_keyframes(c, doc);
         puts(garb_cascade_incomplete(c) ? "(incomplete)" : "(end)");
     } else {
         size_t need = garb_cascade_dump(c, doc, NULL, 0) + 1;
@@ -895,7 +955,11 @@ static int sweep_grown_lists(void)
                                         "transform: translate(1px, 2px) rotate(3deg) scale(2) "
                                         "matrix(1, 0, 0, 1, 0, 0)",
                                         "transform-origin: left 10px 2px", "rotate: 1 1 0 10deg",
-                                        "translate: 1px 2%"};
+                                        "translate: 1px 2%",
+                                        "animation: a 1s, b 2s steps(2, end), c 3s ease-in 2",
+                                        "animation-timing-function: cubic-bezier(0, 0, 1, 1), "
+                                        "steps(3), ease",
+                                        "will-change: transform, opacity, left"};
     int failures = 0;
     for (size_t d = 0; d < sizeof(decls) / sizeof(decls[0]); d++) {
         garb_set_t sets[GARB_SETS_MAX];
@@ -1075,8 +1139,90 @@ static int cost(size_t bytes, bool full)
     return ok ? 0 : 1;
 }
 
+static const os64_html_node_t *by_id(const os64_html_node_t *n, const char *id)
+{
+    for (; n != NULL; n = n->next) {
+        const os64_html_attr_t *a = n->kind == OS64_HTML_ELEMENT ? os64_html_attr(n, "id") : NULL;
+        if (a != NULL && a->value != NULL && strcmp(a->value, id) == 0)
+            return n;
+        const os64_html_node_t *in = by_id(n->first_child, id);
+        if (in != NULL)
+            return in;
+    }
+    return NULL;
+}
+
+// What @keyframes cost at scale (PILE3.md § Animations): 4,000 rules of
+// different names, then one of 40,000 offsets, every one different. The
+// element's keyframes are every offset, in order, and the cascade and the
+// answer take a sort's work, whichever order the offsets are written in.
+// Two bounds, since a quadratic can hide behind either: under the sanitizers
+// the whole costs under a second of CPU where grouping each offset against
+// those gathered before it took 45 (KEYFRAMES_SCALE_SECONDS sits between),
+// and written last to first it costs what it does written first to last,
+// where sorting one at a time made it five times as much
+// (KEYFRAMES_SCALE_BACKWARDS).
+#define KEYFRAMES_SCALE_SECONDS 10.0
+#define KEYFRAMES_SCALE_BACKWARDS 2.0
+
+// One run of it, the offsets written `backwards` or not: true when the
+// keyframes came back whole and in order, the CPU it took in *took.
+static bool keyframes_at_scale(bool backwards, int *nkeyframes, double *took)
+{
+    enum { kNames = 4000, kOffsets = 40000 };
+    size_t cap = (size_t)kNames * 40 + (size_t)kOffsets * 32 + 64, len = 0;
+    char *text = malloc(cap);
+    for (int i = 0; i < kNames; i++)
+        len += (size_t)snprintf(text + len, cap - len, "@keyframes n%d{to{opacity:0}}", i);
+    len += (size_t)snprintf(text + len, cap - len, "@keyframes big{");
+    for (int k = 0; k < kOffsets; k++) {
+        int i = backwards ? kOffsets - 1 - k : k;
+        len += (size_t)snprintf(text + len, cap - len, "%.4f%%{opacity:.5}", i * 100.0 / kOffsets);
+    }
+    len += (size_t)snprintf(text + len, cap - len, "}");
+    static const char kPage[] = "<!doctype html><div id=x style='animation-name:big'></div>";
+    os64_html_options_t opt = os64_html_options_default();
+    os64_html_parser_t *hp = os64_html_parser_new(&opt);
+    os64_html_parser_feed(hp, kPage, sizeof(kPage) - 1);
+    os64_html_document_t *doc = os64_html_parser_finish(hp);
+    garb_parsed_t r;
+    garb_status_t st = garb_parse_sheet_text(text, len, &r);
+    clock_t t0 = clock();
+    garb_sheet_in_t in = {.sheet = &r};
+    garb_cascade_t *c = garb_cascade(&in, 1, doc, (garb_env_t){.width = 800, .height = 600});
+    const garb_keyframe_t *f = NULL;
+    int32_t nf = c != NULL ? garb_keyframes(c, by_id(doc->document, "x"), "big", 3, &f) : -1;
+    *took = (double)(clock() - t0) / CLOCKS_PER_SEC;
+    bool ordered = st == GARB_OK && !r.incomplete && nf == kOffsets;
+    for (int32_t i = 1; ordered && i < nf; i++)
+        ordered = f[i].offset > f[i - 1].offset;
+    *nkeyframes = nf;
+    garb_cascade_free(c);
+    garb_free(&r);
+    os64_html_document_free(doc);
+    free(text);
+    return ordered;
+}
+
+static int keyframes_scale(void)
+{
+    int nf = 0, nb = 0;
+    double forwards = 0, backwards = 0;
+    bool whole_forwards = keyframes_at_scale(false, &nf, &forwards);
+    bool whole_backwards = keyframes_at_scale(true, &nb, &backwards);
+    bool whole = whole_forwards && whole_backwards;
+    int ok = whole && forwards < KEYFRAMES_SCALE_SECONDS && backwards < KEYFRAMES_SCALE_SECONDS &&
+             backwards < KEYFRAMES_SCALE_BACKWARDS * forwards;
+    printf("libgarb keyframes: 4000 names and 40000 offsets, %d and %d keyframes in order%s, "
+           "in %.3f s of CPU written forwards and %.3f backwards%s\n",
+           nf, nb, whole ? "" : " - NOT", forwards, backwards, ok ? "" : " - FAILED");
+    return ok ? 0 : 1;
+}
+
 int main(int argc, char **argv)
 {
+    if (argc == 2 && strcmp(argv[1], "--keyframes-scale") == 0)
+        return keyframes_scale();
     if (argc == 3 && strcmp(argv[1], "--cost") == 0)
         return cost((size_t)strtoul(argv[2], NULL, 10), false);
     if (argc == 2 && strcmp(argv[1], "--full") == 0)
@@ -1107,8 +1253,12 @@ int main(int argc, char **argv)
             declaration(text, len);
         else if (strcmp(argv[1], "media") == 0)
             media(text);
-        else if (strcmp(argv[1], "cascade") == 0 || strcmp(argv[1], "skips") == 0)
-            cascade(text, len, pabsent ? NULL : protocol, strcmp(argv[1], "skips") == 0);
+        else if (strcmp(argv[1], "cascade") == 0)
+            cascade(text, len, pabsent ? NULL : protocol, CASCADE_WINNERS);
+        else if (strcmp(argv[1], "skips") == 0)
+            cascade(text, len, pabsent ? NULL : protocol, CASCADE_SKIPS);
+        else if (strcmp(argv[1], "keyframes") == 0)
+            cascade(text, len, pabsent ? NULL : protocol, CASCADE_KEYFRAMES);
         else if (strcmp(argv[1], "select") == 0)
             select_page(text, len, protocol);
         else

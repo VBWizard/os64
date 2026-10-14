@@ -6,7 +6,7 @@
 # those knows a box exists. libgarb and libmath are included first so
 # LIBGARB_SO and LIBMATH_SO are defined when this file's rules are read.
 LIBFLOW_SRCS := libflow/store.c libflow/attrs.c libflow/style.c libflow/boxes.c libflow/layout.c \
-                libflow/flow.c libflow/dump.c
+                libflow/flow.c libflow/motion.c libflow/dump.c
 LIBFLOW_OBJS := $(patsubst %,$(OBJ)/pic/%.o,$(LIBFLOW_SRCS))
 LIBFLOW_SO := $(BIN)/libflow.so
 # -O2, libhtml's and libpage's reasoning: a page is walked once per layout

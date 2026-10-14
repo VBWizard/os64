@@ -1,0 +1,2707 @@
+// motion.c — animations (PILE3.md § Animations): the timeline that keeps
+// them across layouts, Web Animations 1's clock, Easing 1's curves, a
+// keyframe effect's value property by property by its animation type, and
+// the matrices Transforms 1 and 2 interpolate.
+//
+// Nothing here is built from a frame before: a value is worked from its
+// keyframes and the time, every time (the contracts, PILE3.md § Animations,
+// both slices).
+
+#include <float.h>
+#include <math.h>
+#include <stddef.h>
+
+#include "internal.h"
+#include "html/html.h"
+
+static const double kPi = 3.14159265358979323846;
+
+// ── The lists an element's style names ──────────────────────────────────
+
+int32_t f_animations(const flow_style_t *s)
+{
+    return s->animations.nname;
+}
+
+flow_animation_t f_animation_at(const flow_style_t *s, int32_t i)
+{
+    const flow_animations_t *a = &s->animations;
+    flow_animation_t r;
+    os64_memset(&r, 0, sizeof(r));
+    r.name = a->nname > 0 ? a->name[i % a->nname] : (flow_name_t){NULL, 0};
+    r.duration_ms = a->nduration > 0 ? a->duration[i % a->nduration] : 0;
+    r.delay_ms = a->ndelay > 0 ? a->delay[i % a->ndelay] : 0;
+    // `ease`, the initial easing.
+    r.easing = a->neasing > 0 ? a->easing[i % a->neasing]
+                              : (flow_easing_t){FLOW_EASE_CUBIC, {0.25, 0.1, 0.25, 1}, 0, 0, true};
+    r.iterations = a->niterations > 0 ? a->iterations[i % a->niterations] : 1;
+    r.direction = a->ndirection > 0 ? a->direction[i % a->ndirection] : FLOW_DIRECTION_NORMAL;
+    r.fill = a->nfill > 0 ? a->fill[i % a->nfill] : FLOW_FILL_NONE;
+    r.paused = a->npaused > 0 && a->paused[i % a->npaused];
+    return r;
+}
+
+// ── Easing (Easing 1 § 2) ───────────────────────────────────────────────
+
+// A cubic Bézier's x or y at t, the curve from 0 to 1 through p1 and p2.
+static double bezier(double p1, double p2, double t)
+{
+    double c = 3 * p1, b = 3 * (p2 - p1) - c, a = 1 - c - b;
+    return ((a * t + b) * t + c) * t;
+}
+
+// A value held to a double's range. An easing's y1 and y2 may be anything
+// a double holds, and its output whatever they make: worked in long double
+// and held here, the arithmetic after it never meets infinity, nor
+// infinity less infinity, which is no number at all.
+static double held(long double v)
+{
+    return v > DBL_MAX ? DBL_MAX : v < -DBL_MAX ? -DBL_MAX : (double)v;
+}
+
+// The curve's y at t, in long double and held, since 3 y1 alone can
+// overflow a double — and in Bernstein form, each control weighted by its
+// own polynomial: the power form's coefficients cancel each other at the
+// extremes (3e308 less 3e308 is 0, and the 1 that ends the curve lost
+// beside them), where these weights are 0 at t = 0 and 1 at t = 1 exactly.
+static double bezier_y(double p1, double p2, double t)
+{
+    long double u = 1 - (long double)t, v = t;
+    return held(3 * u * u * v * p1 + 3 * u * v * v * p2 + v * v * v);
+}
+
+// The curve's y at the parameter whose x is `x`: the least t with x(t) at
+// or past it, found by halving [0, 1] until no double lies between the
+// halves (x(t) never falls, since x1 and x2 are in [0, 1]). Never stopped
+// at the first t whose x is near: a curve flat in x near an end is solved
+// — cubic-bezier(0, 100, 0, 100) at 9.26e-8 is y 1.35, where t = x would
+// say 0.000028.
+static double cubic(const double p[4], double x)
+{
+    // The ends are the curve's ends: no halving finds t = 0 for x = 0, nor
+    // keeps t = 1 for x = 1 where x(t) rounds to 1 a hair before it.
+    if (x <= 0)
+        return 0;
+    if (x >= 1)
+        return 1;
+    double lo = 0, hi = 1;
+    for (int i = 0; i < 1100; i++) {
+        double mid = lo + (hi - lo) / 2;
+        if (!(mid > lo && mid < hi))
+            break;
+        if (bezier(p[0], p[2], mid) < x)
+            lo = mid;
+        else
+            hi = mid;
+    }
+    return bezier_y(p[1], p[3], hi);
+}
+
+double f_ease(const flow_easing_t *e, double x, bool before)
+{
+    if (e == NULL || e->kind == FLOW_EASE_LINEAR)
+        return x;
+    if (e->kind == FLOW_EASE_CUBIC) {
+        const double *p = e->p;
+        // Outside [0, 1], the tangent at the nearer end (§ 2.2.1), held
+        // as the curve is.
+        if (x < 0) {
+            if (p[0] > 0)
+                return held((long double)p[1] / p[0] * x);
+            if (p[2] > 0)
+                return held((long double)p[3] / p[2] * x);
+            return 0;
+        }
+        if (x > 1) {
+            if (p[2] < 1)
+                return held(1 + ((long double)p[3] - 1) / (p[2] - 1) * (x - 1));
+            if (p[0] < 1)
+                return held(1 + ((long double)p[1] - 1) / (p[0] - 1) * (x - 1));
+            return 1;
+        }
+        return cubic(p, x);
+    }
+    // Steps (§ 2.3.1).
+    double n = e->steps > 0 ? e->steps : 1;
+    double step = floor(x * n);
+    if (e->jump == FLOW_JUMP_START || e->jump == FLOW_JUMP_BOTH)
+        step += 1;
+    if (before && fmod(x * n, 1.0) == 0)
+        step -= 1;
+    if (x >= 0 && step < 0)
+        step = 0;
+    double jumps = e->jump == FLOW_JUMP_NONE ? n - 1 : e->jump == FLOW_JUMP_BOTH ? n + 1 : n;
+    if (x <= 1 && step > jumps)
+        step = jumps;
+    return step / jumps;
+}
+
+// ── The clock (Web Animations 1 § 4.6, § 4.7) ───────────────────────────
+
+typedef enum { PHASE_BEFORE, PHASE_ACTIVE, PHASE_AFTER } Phase;
+
+typedef struct {
+    Phase phase;
+    double before_end, active_end;  // the boundaries, in local time
+    bool in_effect;                 // it has an active time: it shows a value
+    double progress;                // the iteration progress, directed
+    double iteration;               // the current iteration's index
+    double iteration_start;         // where that iteration starts, in local time
+    bool forwards;                  // the current direction
+    bool before;                    // the easing's before flag (§ 4.7.7)
+} Clock;
+
+static bool current_forwards(const flow_animation_t *a, double iteration)
+{
+    switch (a->direction) {
+    case FLOW_DIRECTION_NORMAL: return true;
+    case FLOW_DIRECTION_REVERSE: return false;
+    default: {
+        double d = iteration + (a->direction == FLOW_DIRECTION_ALTERNATE_REVERSE);
+        return isinf(d) || fmod(d, 2) == 0;
+    }
+    }
+}
+
+static Clock clock_at(const flow_animation_t *a, double local)
+{
+    Clock k;
+    os64_memset(&k, 0, sizeof(k));
+    double dur = a->duration_ms > 0 ? a->duration_ms : 0;
+    double count = a->iterations > 0 ? a->iterations : 0;
+    double active = dur == 0 || count == 0 ? 0 : dur * count;
+    double delay = a->delay_ms;
+    double end = fmax(delay + active, 0);
+    k.before_end = fmax(fmin(delay, end), 0);
+    k.active_end = fmax(fmin(delay + active, end), 0);
+    // Forwards, and the active interval's end not in it.
+    k.phase = local < k.before_end ? PHASE_BEFORE
+            : local >= k.active_end ? PHASE_AFTER : PHASE_ACTIVE;
+    double at;
+    if (k.phase == PHASE_BEFORE) {
+        if (a->fill != FLOW_FILL_BACKWARDS && a->fill != FLOW_FILL_BOTH)
+            return k;
+        at = fmax(local - delay, 0);
+    } else if (k.phase == PHASE_ACTIVE) {
+        at = local - delay;
+    } else {
+        if (a->fill != FLOW_FILL_FORWARDS && a->fill != FLOW_FILL_BOTH)
+            return k;
+        at = fmax(fmin(local - delay, active), 0);
+    }
+    k.in_effect = true;
+    double overall = dur == 0 ? (k.phase == PHASE_BEFORE ? 0 : count) : at / dur;
+    double simple = isinf(overall) ? 0 : fmod(overall, 1.0);
+    if (simple == 0 && k.phase != PHASE_BEFORE && at == active && count != 0)
+        simple = 1;
+    k.iteration = k.phase == PHASE_AFTER && isinf(count) ? INFINITY
+                : simple == 1 ? floor(overall) - 1 : floor(overall);
+    k.iteration_start = isinf(k.iteration) ? INFINITY : delay + k.iteration * dur;
+    k.forwards = current_forwards(a, k.iteration);
+    k.progress = k.forwards ? simple : 1 - simple;
+    k.before = (k.phase == PHASE_BEFORE && k.forwards) || (k.phase == PHASE_AFTER && !k.forwards);
+    return k;
+}
+
+// ── The timeline ────────────────────────────────────────────────────────
+
+// What a layout changes in a record it meets, kept from before the first
+// change so a layout that fails can put it back (f_timeline_undo).
+typedef struct {
+    double start;               // on the face's clock, ms
+    double hold;                // paused: how far it had run
+    bool paused;
+    uint32_t seen;              // the layout that last met it
+    int32_t place;              // its place in its element's list then
+} FRecordState;
+
+struct FRecord {
+    const os64_html_node_t *node;
+    char *name;
+    uint32_t len;
+    FRecordState now;
+    FRecordState was;           // before the layout that last met it
+    uint32_t made;              // the layout that made it
+    // Not met by a complete layout whose cleanup had no room to drop it:
+    // matched to no name again, and dropped by the next cleanup with room.
+    bool gone;
+    FRecord *after;             // the record it was chained after then, or NULL
+    FRecord *next;              // its element's next record
+};
+
+struct flow_timeline {
+    const os64_html_document_t *doc;
+    FRecord **records;
+    int32_t n, cap;
+    int32_t base;               // how many there were when this layout began
+    uint32_t layout;
+    FMap by_node;               // node -> its first record
+    // The last layout ended incomplete, and none has begun since: what it
+    // did can still be undone (flow_timeline_undo_incomplete).
+    bool undoable;
+};
+
+flow_timeline_t *flow_timeline_new(const os64_html_document_t *doc)
+{
+    flow_timeline_t *t = os64_calloc(1, sizeof(*t));
+    if (t != NULL)
+        t->doc = doc;
+    return t;
+}
+
+static void record_free(flow_timeline_t *t, FRecord *r)
+{
+    os64_html_release(t->doc, r->node);
+    os64_free(r->name);
+    os64_free(r);
+}
+
+void flow_timeline_free(flow_timeline_t *t)
+{
+    if (t == NULL)
+        return;
+    for (int32_t i = 0; i < t->n; i++)
+        record_free(t, t->records[i]);
+    os64_free(t->records);
+    f_map_free(&t->by_node);
+    os64_free(t);
+}
+
+int32_t f_timeline_records(const flow_timeline_t *t)
+{
+    return t != NULL ? t->n : 0;
+}
+
+int32_t f_timeline_elements(const flow_timeline_t *t)
+{
+    return t != NULL ? (int32_t)t->by_node.count : 0;
+}
+
+void f_timeline_begin(flow_timeline_t *t)
+{
+    if (t != NULL) {
+        t->layout++;
+        t->base = t->n;
+        t->undoable = false;
+    }
+}
+
+// The local time a record is at: what it holds while paused.
+static double local_time(const FRecord *r, double now)
+{
+    return r->now.paused ? r->now.hold : now - r->now.start;
+}
+
+// A name with its order in its list — a record's place, or a name's index
+// — and the record it is or is matched to.
+typedef struct {
+    const char *text;
+    uint32_t len;
+    int32_t order;
+    FRecord *record;
+} Named;
+
+static int32_t name_cmp(const Named *a, const Named *b)
+{
+    int c = os64_memcmp(a->text, b->text, a->len < b->len ? a->len : b->len);
+    return c != 0 ? c : (a->len > b->len) - (a->len < b->len);
+}
+
+// By name, and within a name by order: a merge through `tmp`.
+static void sort_named(Named *v, Named *tmp, int32_t n)
+{
+    if (n < 2)
+        return;
+    int32_t h = n / 2;
+    sort_named(v, tmp, h);
+    sort_named(v + h, tmp, n - h);
+    int32_t i = 0, j = h, k = 0;
+    while (i < h && j < n) {
+        int32_t c = name_cmp(&v[j], &v[i]);
+        tmp[k++] = c < 0 || (c == 0 && v[j].order < v[i].order) ? v[j++] : v[i++];
+    }
+    while (i < h)
+        tmp[k++] = v[i++];
+    while (j < n)
+        tmp[k++] = v[j++];
+    os64_memcpy(v, tmp, (size_t)n * sizeof(*v));
+}
+
+bool f_timeline_element(flow_timeline_t *t, const os64_html_node_t *n, FMotion *m, double now)
+{
+    // Its records from the last layout and its names now, each sorted by
+    // name and then by place: Animations 1 § 2 matches from the last name
+    // to the first, each to the last unmatched record of its name, which
+    // is then one walk down both lists from their ends — however many
+    // names a page writes, none is compared with every record.
+    int32_t nold = 0;
+    FRecord *tail = NULL;
+    for (FRecord *r = f_map_get(&t->by_node, n); r != NULL; r = r->next) {
+        nold += r->now.seen != t->layout && !r->gone;
+        tail = r;
+    }
+    int32_t total = nold + m->nanims;
+    Named few[32], *buf = few;
+    if (2 * total > F_ARRAY(few) &&
+        (buf = os64_malloc((size_t)2 * (size_t)total * sizeof(*buf))) == NULL)
+        return false;
+    Named *old = buf, *names = buf + nold, *tmp = buf + total;
+    int32_t k = 0;
+    for (FRecord *r = f_map_get(&t->by_node, n); r != NULL; r = r->next)
+        if (r->now.seen != t->layout && !r->gone)
+            old[k++] = (Named){r->name, r->len, r->now.place, r};
+    for (int32_t i = 0; i < m->nanims; i++) {
+        m->anims[i].record = NULL;
+        names[i] = (Named){m->anims[i].timing.name.text, m->anims[i].timing.name.len, i, NULL};
+    }
+    sort_named(old, tmp, nold);
+    sort_named(names, tmp, m->nanims);
+    for (int32_t a = nold - 1, b = m->nanims - 1; a >= 0 && b >= 0;) {
+        int32_t c = name_cmp(&old[a], &names[b]);
+        if (c > 0) {
+            a--;                // a record whose name is gone
+        } else if (c < 0) {
+            b--;                // a name with no record left: it starts
+        } else {
+            m->anims[names[b].order].record = old[a].record;
+            a--;
+            b--;
+        }
+    }
+    if (buf != few)
+        os64_free(buf);
+    bool ok = true;
+    int32_t made = t->n;
+    // From the last name to the first; a name matched to nothing starts now.
+    for (int32_t i = m->nanims - 1; ok && i >= 0; i--) {
+        FAnimation *an = &m->anims[i];
+        const flow_name_t *name = &an->timing.name;
+        FRecord *r = an->record;
+        if (r == NULL) {
+            r = os64_calloc(1, sizeof(*r));
+            char *copy = os64_malloc(name->len > 0 ? name->len : 1);
+            bool room = t->n < t->cap;
+            if (!room && r != NULL && copy != NULL) {
+                int32_t grown = t->cap > 0 ? t->cap * 2 : 16;
+                FRecord **more = os64_realloc(t->records, (size_t)grown * sizeof(*more));
+                if (more != NULL) {
+                    t->records = more;
+                    t->cap = grown;
+                    room = true;
+                }
+            }
+            if (r == NULL || copy == NULL || !room) {
+                os64_free(r);
+                os64_free(copy);
+                ok = false;
+                break;
+            }
+            os64_memcpy(copy, name->text, name->len);
+            r->node = n;
+            r->name = copy;
+            r->len = name->len;
+            r->now.start = now;
+            r->now.paused = an->timing.paused;
+            r->made = t->layout;
+            os64_html_hold(t->doc, n);
+            t->records[t->n++] = r;
+        }
+        if (r->now.seen != t->layout)
+            r->was = r->now;
+        r->now.seen = t->layout;
+        r->now.place = i;
+        if (an->timing.paused && !r->now.paused) {
+            r->now.hold = now - r->now.start;
+            r->now.paused = true;
+        } else if (!an->timing.paused && r->now.paused) {
+            r->now.start = now - r->now.hold;
+            r->now.paused = false;
+        }
+        an->record = r;
+    }
+    // The records made here join the element's chain after those it had,
+    // so the chain keeps the timeline's order without the timeline walked.
+    for (int32_t j = made; j < t->n; j++) {
+        t->records[j]->next = NULL;
+        t->records[j]->after = tail;
+        if (tail != NULL)
+            tail->next = t->records[j];
+        else if (!f_map_put(&t->by_node, n, t->records[j]))
+            return false;
+        tail = t->records[j];
+    }
+    return ok;
+}
+
+bool flow_timeline_undo_incomplete(flow_timeline_t *t)
+{
+    if (t == NULL || !t->undoable)
+        return false;
+    f_timeline_undo(t);
+    return true;
+}
+
+void f_timeline_undo(flow_timeline_t *t)
+{
+    if (t == NULL)
+        return;
+    // The records it made end their elements' chains: the record each
+    // first one was chained after ends its chain again, or its element
+    // goes back to none — its key removed, which allocates nothing. Then
+    // they go, and what it changed in the rest is put back.
+    for (int32_t i = t->base; i < t->n; i++) {
+        FRecord *r = t->records[i];
+        if (r->after != NULL && r->after->made != t->layout)
+            r->after->next = NULL;
+        else if (r->after == NULL && f_map_get(&t->by_node, r->node) == r)
+            f_map_remove(&t->by_node, r->node);
+    }
+    for (int32_t i = t->base; i < t->n; i++)
+        record_free(t, t->records[i]);
+    t->n = t->base;
+    for (int32_t i = 0; i < t->n; i++)
+        if (t->records[i]->now.seen == t->layout)
+            t->records[i]->now = t->records[i]->was;
+    t->undoable = false;
+}
+
+void f_timeline_end(flow_timeline_t *t, bool complete)
+{
+    if (t != NULL)
+        t->undoable = !complete;
+    if (t == NULL || !complete)
+        return;
+    // The map over the records kept, and each one's next in its element's
+    // chain, are made before anything changes: with no room for them
+    // nothing is dropped, but what this layout did not meet is gone all
+    // the same — no later layout matches it, so a name a page drops and
+    // writes again starts anew — and the next cleanup with room drops it.
+    // A dropped record's node is no key of the new map, since the node may
+    // be reused for another element once it is let go.
+    FMap map = {0};
+    FRecord **next = t->n > 0 ? os64_malloc((size_t)t->n * sizeof(*next)) : NULL;
+    bool room = t->n == 0 || next != NULL;
+    for (int32_t i = t->n - 1; room && i >= 0; i--) {
+        FRecord *r = t->records[i];
+        if (r->now.seen != t->layout)
+            continue;
+        next[i] = f_map_get(&map, r->node);
+        room = f_map_put(&map, r->node, r);
+    }
+    if (!room) {
+        for (int32_t i = 0; i < t->n; i++)
+            if (t->records[i]->now.seen != t->layout)
+                t->records[i]->gone = true;
+        os64_free(next);
+        f_map_free(&map);
+        return;
+    }
+    int32_t kept = 0;
+    for (int32_t i = 0; i < t->n; i++) {
+        FRecord *r = t->records[i];
+        if (r->now.seen == t->layout) {
+            r->next = next[i];
+            t->records[kept++] = r;
+        } else {
+            record_free(t, r);
+        }
+    }
+    t->n = kept;
+    os64_free(next);
+    f_map_free(&t->by_node);
+    t->by_node = map;
+}
+
+// ── Matrices (Transforms 1 § 11, 2 § 13) ────────────────────────────────
+
+// Column-major, as CSS's matrix3d() is: m[col * 4 + row].
+static void mat_identity(double m[16])
+{
+    os64_memset(m, 0, 16 * sizeof(double));
+    m[0] = m[5] = m[10] = m[15] = 1;
+}
+
+static void mat_mul(double out[16], const double a[16], const double b[16])
+{
+    double r[16];
+    for (int col = 0; col < 4; col++)
+        for (int row = 0; row < 4; row++) {
+            double s = 0;
+            for (int k = 0; k < 4; k++)
+                s += a[k * 4 + row] * b[col * 4 + k];
+            r[col * 4 + row] = s;
+        }
+    os64_memcpy(out, r, sizeof(r));
+}
+
+// A 2D matrix: its third row and column, and its perspective row, are the
+// identity's.
+static bool is_2d(const double m[16])
+{
+    return m[2] == 0 && m[3] == 0 && m[6] == 0 && m[7] == 0 && m[8] == 0 && m[9] == 0 &&
+           m[10] == 1 && m[11] == 0 && m[14] == 0 && m[15] == 1;
+}
+
+// A matrix decomposed (Transforms 2 § 13.1.1's parts): its perspective,
+// translation, scale, skew, and its rotation as a quaternion.
+//
+// The matrices are mixed as Chrome mixes them (Chromium's
+// DecomposeTransform and ComposeTransform), which is what a page is
+// written against and what the proof checks: a 2D matrix is decomposed as
+// a translation, a scale, a shear and a turn about z; a 3D one by
+// Transforms 2 § 13.1.1; the parts mixed — the turns slerped the shorter
+// way — and composed as perspective · translation · rotation · skew ·
+// scale. Where a 2D matrix holds no shear this is Transforms 1 § 11.2's
+// answer (scaleX(-1) against rotate(90deg)); where it does, it is not
+// (PILE3.md § Animations, What Chrome draws).
+typedef struct {
+    double persp[4], tr[3], sc[3], sk[3], q[4];
+} D3;
+
+// Whether a double holds `v`.
+static bool fits(long double v)
+{
+    return v <= DBL_MAX && v >= -DBL_MAX;
+}
+
+// A 2-vector's length in long double, taken by its own largest part: the
+// squares worked on parts no greater than 1, so neither a part past
+// sqrt(DBL_MAX) overflows them nor a tiny one is lost to its own square.
+static long double len2(long double x, long double y)
+{
+    long double ax = x < 0 ? -x : x, ay = y < 0 ? -y : y, k = ax > ay ? ax : ay;
+    if (k == 0)
+        return 0;
+    double a = (double)(x / k), b = (double)(y / k);
+    return k * (long double)sqrt(a * a + b * b);
+}
+
+static bool decompose_2d(const double m[16], D3 *d)
+{
+    // Worked in long double, each row's length taken by its own largest
+    // part — never the whole 2x2 divided by its largest entry, which loses
+    // a small axis beside a large one: matrix(1e200, 0, 0, 1e200, 0, 0)
+    // squares nothing past a double, and matrix(1e308, 0, 0, 1e-308, 0, 0)
+    // keeps its determinant of 1.
+    long double m11 = m[0], m12 = m[1], m21 = m[4], m22 = m[5];
+    long double det = m11 * m22 - m12 * m21;
+    if (det == 0)
+        return false;           // cannot be undone: the pair is discrete
+    os64_memset(d, 0, sizeof(*d));
+    d->persp[3] = 1;
+    d->tr[0] = m[12];
+    d->tr[1] = m[13];
+    d->sc[2] = 1;
+    // A flip, on the axis whose diagonal is the smaller.
+    long double s0 = len2(m11, m12), s1;
+    if (det < 0 && m11 < m22)
+        s0 = -s0;
+    m11 /= s0;
+    m12 /= s0;
+    long double shear = m11 * m21 + m12 * m22;
+    m21 -= m11 * shear;
+    m22 -= m12 * shear;
+    s1 = len2(m21, m22);
+    if (det < 0 && !(m[0] < m[5]))
+        s1 = -s1;
+    // A part a double cannot hold — a row's length past DBL_MAX though each
+    // of its entries is not — makes no decomposition: held, it would
+    // compose another matrix even at the mix's ends, where refused the
+    // pair is discrete and each end itself.
+    long double sk = shear / s1;
+    if (!fits(s0) || !fits(s1) || !fits(sk))
+        return false;
+    d->sc[0] = (double)s0;
+    d->sc[1] = (double)s1;
+    d->sk[0] = (double)sk;
+    double angle = atan2((double)m12, (double)m11);
+    d->q[2] = sin(0.5 * angle);
+    d->q[3] = cos(0.5 * angle);
+    return true;
+}
+
+// Determinants in long double, whose range holds any product of four
+// doubles: matrix3d(1e200, …)'s is 1e800, and a matrix of huge and tiny
+// entries together keeps its tiny product too — where a double, or a
+// matrix divided down by its largest entry, loses one or the other.
+static long double det3(long double a, long double b, long double c, long double d, long double e,
+                        long double f, long double g, long double h, long double i)
+{
+    return a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
+}
+
+static long double det4(const double m[16])
+{
+    // Along the first column (m[col * 4 + row]).
+    long double r = 0;
+    for (int k = 0; k < 4; k++) {
+        double s[9];
+        int n = 0;
+        for (int col = 1; col < 4; col++)
+            for (int row = 0; row < 4; row++)
+                if (row != k)
+                    s[n++] = m[col * 4 + row];
+        long double minor = det3(s[0], s[3], s[6], s[1], s[4], s[7], s[2], s[5], s[8]);
+        r += (k % 2 ? -1 : 1) * m[k] * minor;
+    }
+    return r;
+}
+
+static bool invert4(const double m[16], double out[16])
+{
+    long double d = det4(m);
+    if (d == 0)
+        return false;
+    for (int col = 0; col < 4; col++)
+        for (int row = 0; row < 4; row++) {
+            // The cofactor of (row, col), transposed.
+            double s[9];
+            int n = 0;
+            for (int c = 0; c < 4; c++)
+                for (int r = 0; r < 4; r++)
+                    if (c != row && r != col)
+                        s[n++] = m[c * 4 + r];
+            long double minor = det3(s[0], s[3], s[6], s[1], s[4], s[7], s[2], s[5], s[8]);
+            long double q = ((row + col) % 2 ? -1 : 1) * minor / d;
+            // An entry a double cannot hold makes no inverse, rather than
+            // a held one that is the inverse of another matrix.
+            if (!fits(q))
+                return false;
+            out[col * 4 + row] = (double)q;
+        }
+    return true;
+}
+
+// A vector made a unit, scaled by its largest part first so that neither
+// a part past sqrt(DBL_MAX) overflows the squares nor a tiny one
+// underflows them, its length never taken whole: false for a vector of no
+// length, or not finite.
+static bool unit3(double x, double y, double z, double u[3])
+{
+    double k = fmax(fabs(x), fmax(fabs(y), fabs(z)));
+    if (!(k > 0) || !isfinite(k))
+        return false;
+    x /= k;
+    y /= k;
+    z /= k;
+    double len = sqrt(x * x + y * y + z * z);
+    u[0] = x / len;
+    u[1] = y / len;
+    u[2] = z / len;
+    return true;
+}
+
+// A vector's length, taken by its largest part first, so that neither a
+// part past sqrt(DBL_MAX) overflows the squares nor a tiny one underflows
+// them; a length past DBL_MAX is infinity all the same (f_matrix_mix
+// turns a mix that meets one away).
+static double len3(const double v[3])
+{
+    double k = fmax(fabs(v[0]), fmax(fabs(v[1]), fabs(v[2])));
+    if (!(k > 0) || !isfinite(k))
+        return k;
+    double x = v[0] / k, y = v[1] / k, z = v[2] / k;
+    return k * sqrt(x * x + y * y + z * z);
+}
+
+static double dot3(const double a[3], const double b[3])
+{
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+
+// a * as + b * bs.
+static void combine(double out[3], const double a[3], const double b[3], double as, double bs)
+{
+    for (int i = 0; i < 3; i++)
+        out[i] = as * a[i] + bs * b[i];
+}
+
+static bool decompose_3d(const double in[16], D3 *d)
+{
+    double m[16];
+    if (in[15] == 0)
+        return false;
+    for (int i = 0; i < 16; i++)
+        m[i] = in[i] / in[15];
+    double pm[16];
+    os64_memcpy(pm, m, sizeof(pm));
+    pm[3] = pm[7] = pm[11] = 0;
+    pm[15] = 1;
+    if (det4(pm) == 0)
+        return false;
+    if (m[3] != 0 || m[7] != 0 || m[11] != 0) {
+        double rhs[4] = {m[3], m[7], m[11], m[15]}, inv[16];
+        if (!invert4(pm, inv))
+            return false;
+        // rhs times the transposed inverse: the inverse's columns as rows.
+        for (int i = 0; i < 4; i++)
+            d->persp[i] = rhs[0] * inv[i * 4 + 0] + rhs[1] * inv[i * 4 + 1] +
+                          rhs[2] * inv[i * 4 + 2] + rhs[3] * inv[i * 4 + 3];
+    } else {
+        d->persp[0] = d->persp[1] = d->persp[2] = 0;
+        d->persp[3] = 1;
+    }
+    for (int i = 0; i < 3; i++)
+        d->tr[i] = m[12 + i];
+    double row[3][3];
+    for (int i = 0; i < 3; i++)
+        for (int j = 0; j < 3; j++)
+            row[i][j] = m[i * 4 + j];
+    d->sc[0] = len3(row[0]);
+    if (d->sc[0] == 0)
+        return false;
+    for (int j = 0; j < 3; j++)
+        row[0][j] /= d->sc[0];
+    d->sk[0] = dot3(row[0], row[1]);
+    combine(row[1], row[1], row[0], 1, -d->sk[0]);
+    d->sc[1] = len3(row[1]);
+    if (d->sc[1] == 0)
+        return false;
+    for (int j = 0; j < 3; j++)
+        row[1][j] /= d->sc[1];
+    d->sk[0] /= d->sc[1];
+    d->sk[1] = dot3(row[0], row[2]);
+    combine(row[2], row[2], row[0], 1, -d->sk[1]);
+    d->sk[2] = dot3(row[1], row[2]);
+    combine(row[2], row[2], row[1], 1, -d->sk[2]);
+    d->sc[2] = len3(row[2]);
+    if (d->sc[2] == 0)
+        return false;
+    for (int j = 0; j < 3; j++)
+        row[2][j] /= d->sc[2];
+    d->sk[1] /= d->sc[2];
+    d->sk[2] /= d->sc[2];
+    // A coordinate system flip: negate the scale and the rows.
+    double pdum3[3] = {row[1][1] * row[2][2] - row[1][2] * row[2][1],
+                       row[1][2] * row[2][0] - row[1][0] * row[2][2],
+                       row[1][0] * row[2][1] - row[1][1] * row[2][0]};
+    if (dot3(row[0], pdum3) < 0)
+        for (int i = 0; i < 3; i++) {
+            d->sc[i] = -d->sc[i];
+            for (int j = 0; j < 3; j++)
+                row[i][j] = -row[i][j];
+        }
+    d->q[0] = 0.5 * sqrt(fmax(1 + row[0][0] - row[1][1] - row[2][2], 0));
+    d->q[1] = 0.5 * sqrt(fmax(1 - row[0][0] + row[1][1] - row[2][2], 0));
+    d->q[2] = 0.5 * sqrt(fmax(1 - row[0][0] - row[1][1] + row[2][2], 0));
+    d->q[3] = 0.5 * sqrt(fmax(1 + row[0][0] + row[1][1] + row[2][2], 0));
+    if (row[2][1] > row[1][2])
+        d->q[0] = -d->q[0];
+    if (row[0][2] > row[2][0])
+        d->q[1] = -d->q[1];
+    if (row[1][0] > row[0][1])
+        d->q[2] = -d->q[2];
+    return true;
+}
+
+// The parts composed: perspective · translation · rotation · skew · scale,
+// the rotation's matrix the quaternion's (x, y, z, w).
+static void compose(const D3 *d, double m[16])
+{
+    double x = d->q[0], y = d->q[1], z = d->q[2], w = d->q[3], part[16];
+    mat_identity(m);
+    for (int i = 0; i < 4; i++)
+        m[i * 4 + 3] = d->persp[i];
+    mat_identity(part);
+    part[12] = d->tr[0];
+    part[13] = d->tr[1];
+    part[14] = d->tr[2];
+    mat_mul(m, m, part);
+    mat_identity(part);
+    part[0] = 1 - 2 * (y * y + z * z);
+    part[4] = 2 * (x * y - z * w);
+    part[8] = 2 * (x * z + y * w);
+    part[1] = 2 * (x * y + z * w);
+    part[5] = 1 - 2 * (x * x + z * z);
+    part[9] = 2 * (y * z - x * w);
+    part[2] = 2 * (x * z - y * w);
+    part[6] = 2 * (y * z + x * w);
+    part[10] = 1 - 2 * (x * x + y * y);
+    mat_mul(m, m, part);
+    mat_identity(part);
+    part[4] = d->sk[0];
+    part[8] = d->sk[1];
+    part[9] = d->sk[2];
+    mat_mul(m, m, part);
+    mat_identity(part);
+    part[0] = d->sc[0];
+    part[5] = d->sc[1];
+    part[10] = d->sc[2];
+    mat_mul(m, m, part);
+}
+
+// The quaternions slerped from `a` to `b`, the shorter way round: one is
+// turned to the other's side when their half angle passes 90 degrees. Two
+// that share their axis and angle within 1e-5, where slerp's division is
+// lost, are mixed linearly and made unit again — so every mix ends at `b`,
+// within rounding, where Chromium keeps `a`.
+static void slerp(const double a[4], const double b[4], double t, double out[4])
+{
+    double from[4] = {a[0], a[1], a[2], a[3]};
+    double c = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3];
+    if (c < 0) {
+        for (int i = 0; i < 4; i++)
+            from[i] = -from[i];
+        c = -c;
+    }
+    c = fmin(c, 1.0);
+    double s = sqrt(1 - c * c);
+    if (s < 1e-5) {
+        double len = 0;
+        for (int i = 0; i < 4; i++) {
+            out[i] = from[i] + (b[i] - from[i]) * t;
+            len += out[i] * out[i];
+        }
+        len = sqrt(len);
+        for (int i = 0; i < 4; i++)
+            out[i] = len > 0 ? out[i] / len : from[i];
+        return;
+    }
+    double half = acos(c), wa = sin((1 - t) * half) / s, wb = sin(t * half) / s;
+    for (int i = 0; i < 4; i++)
+        out[i] = wa * from[i] + wb * b[i];
+}
+
+static double lerp(double a, double b, double t);
+
+bool f_matrix_mix(const double a[16], const double b[16], double t, double out[16])
+{
+    D3 da, db, r;
+    if (!(is_2d(a) ? decompose_2d(a, &da) : decompose_3d(a, &da)) ||
+        !(is_2d(b) ? decompose_2d(b, &db) : decompose_3d(b, &db)))
+        return false;
+    for (int i = 0; i < 4; i++)
+        r.persp[i] = lerp(da.persp[i], db.persp[i], t);
+    for (int i = 0; i < 3; i++) {
+        r.tr[i] = lerp(da.tr[i], db.tr[i], t);
+        r.sc[i] = lerp(da.sc[i], db.sc[i], t);
+        r.sk[i] = lerp(da.sk[i], db.sk[i], t);
+    }
+    slerp(da.q, db.q, t, r.q);
+    compose(&r, out);
+    // A mix whose arithmetic left the double range — in a decomposition,
+    // which a part not a number carries into the matrix, or in the matrix
+    // itself — is no mix: the pair is discrete, never a NaN.
+    for (int i = 0; i < 16; i++)
+        if (!isfinite(out[i]))
+            return false;
+    return true;
+}
+
+// ── A transform function's matrix ───────────────────────────────────────
+
+// An angle in radians, reduced by whole turns in its own unit first (fmod
+// is exact): rotate(1e308deg) times pi would be past a double, and a turn
+// more or less is the same turn. Radians stay as written; cos and sin
+// reduce them themselves.
+static double radians(double v, flow_angle_unit_t unit)
+{
+    switch (unit) {
+    case FLOW_ANGLE_GRAD: return fmod(v, 400) * kPi / 200;
+    case FLOW_ANGLE_RAD: return v;
+    case FLOW_ANGLE_TURN: return fmod(v, 1) * 2 * kPi;
+    default: return fmod(v, 360) * kPi / 180;
+    }
+}
+
+// The quarter turns `v` is, when it is written as a whole number of them —
+// 90deg, 100grad, 0.25turn, each tested exactly — so that its sine and
+// cosine are exact, as a double's cos(pi / 2), 6e-17, is not: 0 to 3, or
+// -1 for any other angle, which is worked out as written.
+static int quarters(double n, flow_angle_unit_t unit)
+{
+    double per = unit == FLOW_ANGLE_GRAD ? 100 : unit == FLOW_ANGLE_TURN ? 0.25
+                 : unit == FLOW_ANGLE_RAD ? 0 : 90;
+    if (!isfinite(n) || (per == 0 ? n != 0 : fmod(n, per) != 0))
+        return -1;
+    if (per == 0)
+        return 0;
+    // Reduced by a whole turn before it is divided, so a huge angle
+    // (1e308turn) never overflows on the way to its quarter.
+    double q = fmod(n, 4 * per) / per;
+    return (int)(q < 0 ? q + 4 : q);
+}
+
+// A turn by the angle about the axis (x, y, z), into `m`: Rodrigues'
+// rotation, which is Transforms 2 § 12.2's rotate3d() — clockwise on the
+// glass about z, since y points down — with the axis made a unit vector.
+// An axis of no length turns nothing. A whole number of quarter turns is
+// exact, so rotateX(90deg) is edge-on: collapsed, drawn and hit nowhere.
+static void rotation(double m[16], double x, double y, double z, double angle,
+                     flow_angle_unit_t unit)
+{
+    double u[3];
+    if (!unit3(x, y, z, u))
+        return;
+    x = u[0];
+    y = u[1];
+    z = u[2];
+    static const double kCos[4] = {1, 0, -1, 0}, kSin[4] = {0, 1, 0, -1};
+    int q = quarters(angle, unit);
+    double r = radians(angle, unit);
+    double c = q >= 0 ? kCos[q] : cos(r), s = q >= 0 ? kSin[q] : sin(r);
+    double t = 1 - c;
+    m[0] = c + x * x * t;
+    m[1] = y * x * t + z * s;
+    m[2] = z * x * t - y * s;
+    m[4] = x * y * t - z * s;
+    m[5] = c + y * y * t;
+    m[6] = z * y * t + x * s;
+    m[8] = x * z * t + y * s;
+    m[9] = y * z * t - x * s;
+    m[10] = c + z * z * t;
+}
+
+void f_transform_fn_matrix(flow_transform_t *f)
+{
+    double *m = f->m;
+    switch (f->fn) {
+    case FLOW_FN_TRANSLATE:
+        mat_identity(m);
+        m[14] = f->a[2];
+        break;
+    case FLOW_FN_SCALE:
+        mat_identity(m);
+        m[0] = f->a[0];
+        m[5] = f->a[1];
+        m[10] = f->a[2];
+        break;
+    case FLOW_FN_ROTATE:
+        mat_identity(m);
+        rotation(m, f->a[0], f->a[1], f->a[2], f->a[3], f->unit);
+        break;
+    case FLOW_FN_SKEW:
+        mat_identity(m);
+        m[4] = tan(radians(f->a[0], f->unit));
+        m[1] = tan(radians(f->a[1], f->unit));
+        break;
+    case FLOW_FN_SKEW_X:
+        mat_identity(m);
+        m[4] = tan(radians(f->a[0], f->unit));
+        break;
+    case FLOW_FN_SKEW_Y:
+        mat_identity(m);
+        m[1] = tan(radians(f->a[0], f->unit));
+        break;
+    case FLOW_FN_PERSPECTIVE:
+        // a[0] is held to a pixel at least where it is read (style.c);
+        // 0 is `none`.
+        mat_identity(m);
+        if (f->a[0] > 0)
+            m[11] = -1 / f->a[0];
+        break;
+    case FLOW_FN_MATRIX:
+    case FLOW_FN_BLEND:
+        break;                  // its own, or the box's to make
+    }
+}
+
+// ── Interpolation, by the property (Web Animations 1 § 5.2, Appendix A) ─
+
+typedef enum { MIX_CONTINUOUS, MIX_DISCRETE } MixKind;
+
+// a + (b - a) t, as Chromium blends: at t = 0 exactly a, at t = 1 exactly
+// b, and a value mixed with itself exactly itself at any t — which
+// (1 - t) a + t b is not when t is huge and the two products cancel. In
+// long double and held, as the easing that hands it `t` is.
+static double lerp(double a, double b, double t)
+{
+    if (t == 1)
+        return b;
+    return held(a + ((long double)b - a) * t);
+}
+
+// Rounded half away from zero, held to an int32_t.
+static int32_t round_i32(double v)
+{
+    if (!(v == v))
+        return 0;
+    v = v < 0 ? -floor(-v + 0.5) : floor(v + 0.5);
+    return v > INT32_MAX ? INT32_MAX : v < INT32_MIN ? INT32_MIN : (int32_t)v;
+}
+
+// An integer's value, rounded half up as Chrome rounds 2.5 and -2.5 (Values
+// 4 § 5.2.1), held to an int32_t: an easing that overshoots carries it past
+// either end.
+static int32_t half_up_i32(double v)
+{
+    return round_i32(floor(v + 0.5));
+}
+
+// A length (flow_length_t): a PX and a PERCENT with its offset are each a
+// percentage and a length, mixed part by part (Values 4 § 5.6.1); a
+// keyword is discrete.
+static bool mix_length(flow_length_t a, flow_length_t b, double t, flow_length_t *out)
+{
+    bool la = a.kind == FLOW_LENGTH_PX || a.kind == FLOW_LENGTH_PERCENT;
+    bool lb = b.kind == FLOW_LENGTH_PX || b.kind == FLOW_LENGTH_PERCENT;
+    if (!la || !lb)
+        return false;
+    if (out == NULL)
+        return true;
+    double pa = a.kind == FLOW_LENGTH_PERCENT ? a.value : 0;
+    double pb = b.kind == FLOW_LENGTH_PERCENT ? b.value : 0;
+    double xa = a.kind == FLOW_LENGTH_PERCENT ? a.offset : a.value;
+    double xb = b.kind == FLOW_LENGTH_PERCENT ? b.offset : b.value;
+    if (a.kind == FLOW_LENGTH_PX && b.kind == FLOW_LENGTH_PX)
+        *out = (flow_length_t){FLOW_LENGTH_PX, round_i32(lerp(xa, xb, t)), 0};
+    else
+        *out = (flow_length_t){FLOW_LENGTH_PERCENT, round_i32(lerp(pa, pb, t)),
+                               round_i32(lerp(xa, xb, t))};
+    return true;
+}
+
+// A length its property keeps at 0 or more — a padding, a gap, a size, a
+// radius — held there when an overshooting easing carries it below, as
+// Chrome holds it. A length or a percentage that is below 0 is 0, and so
+// is a mix of the two whose parts both are; one whose parts differ in
+// sign depends on what the percentage is of, and is held where it is
+// used, as a calc() is (BROWSER_DEBTS: padding is not, yet).
+static void hold_nonneg(flow_length_t *l)
+{
+    if (l->kind == FLOW_LENGTH_PX && l->value < 0)
+        l->value = 0;
+    else if (l->kind == FLOW_LENGTH_PERCENT && l->value <= 0 && l->offset <= 0)
+        l->value = l->offset = 0;
+}
+
+// The same, mixed and held (mix_length, hold_nonneg).
+static bool mix_nonneg(flow_length_t a, flow_length_t b, double t, flow_length_t *out)
+{
+    if (!mix_length(a, b, t, out))
+        return false;
+    if (out != NULL)
+        hold_nonneg(out);
+    return true;
+}
+
+// A colour (0xTTRRGGBB), premultiplied by its alpha, each channel in
+// doubles, divided back and rounded half up once (Color 4 § 13.4).
+static uint32_t mix_colour(uint32_t a, uint32_t b, double t)
+{
+    double aa = flow_alpha(a) / 255.0, ab = flow_alpha(b) / 255.0;
+    double alpha = fmin(fmax(lerp(aa, ab, t), 0), 1);
+    uint8_t ta = (uint8_t)(255 - round_i32(alpha * 255));
+    if (ta == 255)
+        return 0xFF000000u;
+    uint32_t r = 0;
+    for (int shift = 16; shift >= 0; shift -= 8) {
+        double ca = ((a >> shift) & 0xFF) * aa, cb = ((b >> shift) & 0xFF) * ab;
+        double c = lerp(ca, cb, t) / alpha;
+        int32_t v = (int32_t)floor(fmin(fmax(c, 0), 255) + 0.5);
+        r |= (uint32_t)(v > 255 ? 255 : v) << shift;
+    }
+    return (uint32_t)ta << 24 | r;
+}
+
+// A colour field's end as it is mixed: in currentColor, the colour the
+// element has once every animation is laid over (`d`'s, composed first —
+// CSS Color 4 § 12 mixes currentColor's used value), whatever the keyframe
+// worked it out as; else its own.
+static uint32_t used_colour(const flow_style_t *s, uint8_t bit, uint32_t own, const flow_style_t *d)
+{
+    return (s->current_colours & bit) && d != NULL ? d->color : own;
+}
+
+// A colour field's currentColor mark, mixed: currentColor when both ends
+// are — so it follows the element's colour as that colour moves, whatever
+// the element's own field is (f_motion_style resolves it) — and the mixed
+// colour otherwise.
+static void hand_current(flow_style_t *d, const flow_style_t *a, const flow_style_t *b,
+                         uint8_t bit)
+{
+    if (a->current_colours & b->current_colours & bit)
+        d->current_colours |= bit;
+    else
+        d->current_colours &= (uint8_t)~bit;
+}
+
+// One shadow with another of the same `inset`.
+static flow_shadow_t mix_shadow(const flow_shadow_t *a, const flow_shadow_t *b, double t)
+{
+    flow_shadow_t r = *a;
+    r.x = round_i32(lerp(a->x, b->x, t));
+    r.y = round_i32(lerp(a->y, b->y, t));
+    r.blur = round_i32(fmax(lerp(a->blur, b->blur, t), 0));
+    r.spread = round_i32(lerp(a->spread, b->spread, t));
+    r.colour = mix_colour(a->colour, b->colour, t);
+    // Both currentColor: the mix is currentColor, the colour the element
+    // has once every animation is laid over (the painter resolves it).
+    r.current = a->current && b->current;
+    return r;
+}
+
+// Shadow lists (Appendix A): the shorter padded with transparent shadows
+// of no size matching the longer's `inset`; a pair that differs in
+// `inset` makes the list discrete. A `current` shadow's colour is the
+// element's (`colour_a`, `colour_b`), resolved before it is mixed.
+static bool mix_shadows(const flow_shadow_t *a, int32_t na, const flow_shadow_t *b, int32_t nb,
+                        uint32_t colour_a, uint32_t colour_b, double t, flow_shadow_t **out,
+                        int32_t *nout, FAlloc alloc, void *ctx)
+{
+    int32_t n = na > nb ? na : nb;
+    for (int32_t i = 0; i < n && i < na && i < nb; i++)
+        if (a[i].inset != b[i].inset)
+            return false;
+    if (out == NULL)
+        return true;
+    flow_shadow_t *list = n > 0 ? alloc(ctx, (size_t)n * sizeof(*list)) : NULL;
+    if (n > 0 && list == NULL)
+        return false;
+    for (int32_t i = 0; i < n; i++) {
+        flow_shadow_t pa, pb;
+        const flow_shadow_t *other = i < na ? &a[i] : &b[i];
+        flow_shadow_t none = {0, 0, 0, 0, 0xFF000000u, other->inset, false};
+        pa = i < na ? a[i] : none;
+        pb = i < nb ? b[i] : none;
+        if (pa.current)
+            pa.colour = colour_a;
+        if (pb.current)
+            pb.colour = colour_b;
+        list[i] = mix_shadow(&pa, &pb, t);
+    }
+    *out = list;
+    *nout = n;
+    return true;
+}
+
+static int32_t gcd(int32_t a, int32_t b)
+{
+    while (b != 0) {
+        int32_t r = a % b;
+        a = b;
+        b = r;
+    }
+    return a;
+}
+
+// Repeatable lists (§ 5.2): repeated to their least common multiple, here
+// held to a thousand items, past which they are discrete.
+static int32_t lcm_items(int32_t a, int32_t b)
+{
+    if (a <= 0 || b <= 0)
+        return -1;
+    int64_t l = (int64_t)a / gcd(a, b) * b;
+    return l > 1000 ? -1 : (int32_t)l;
+}
+
+static bool mix_lengths(const flow_length_t *a, int32_t na, const flow_length_t *b, int32_t nb,
+                        double t, const flow_length_t **out, int32_t *nout, FAlloc alloc,
+                        void *ctx)
+{
+    int32_t n = lcm_items(na, nb);
+    if (n < 0)
+        return false;
+    for (int32_t i = 0; i < n; i++)
+        if (!mix_length(a[i % na], b[i % nb], t, NULL))
+            return false;
+    if (out == NULL)
+        return true;
+    flow_length_t *list = alloc(ctx, (size_t)n * sizeof(*list));
+    if (list == NULL)
+        return false;
+    for (int32_t i = 0; i < n; i++)
+        (void)mix_length(a[i % na], b[i % nb], t, &list[i]);
+    *out = list;
+    *nout = n;
+    return true;
+}
+
+static bool mix_sizes(const flow_bg_size_t *a, int32_t na, const flow_bg_size_t *b, int32_t nb,
+                      double t, const flow_bg_size_t **out, int32_t *nout, FAlloc alloc,
+                      void *ctx)
+{
+    int32_t n = lcm_items(na, nb);
+    if (n < 0)
+        return false;
+    for (int32_t i = 0; i < n; i++) {
+        const flow_bg_size_t *x = &a[i % na], *y = &b[i % nb];
+        if (x->fit != FLOW_FIT_LENGTHS || y->fit != FLOW_FIT_LENGTHS)
+            return false;
+        for (int k = 0; k < 2; k++)
+            if ((x->size[k].kind == FLOW_LENGTH_AUTO) != (y->size[k].kind == FLOW_LENGTH_AUTO) ||
+                (x->size[k].kind != FLOW_LENGTH_AUTO && !mix_length(x->size[k], y->size[k], t, NULL)))
+                return false;
+    }
+    if (out == NULL)
+        return true;
+    flow_bg_size_t *list = alloc(ctx, (size_t)n * sizeof(*list));
+    if (list == NULL)
+        return false;
+    for (int32_t i = 0; i < n; i++) {
+        list[i] = a[i % na];
+        for (int k = 0; k < 2; k++)
+            if (list[i].size[k].kind != FLOW_LENGTH_AUTO)
+                (void)mix_nonneg(a[i % na].size[k], b[i % nb].size[k], t, &list[i].size[k]);
+    }
+    *out = list;
+    *nout = n;
+    return true;
+}
+
+// ── Transforms (Transforms 1 § 9, § 10; 2 § 14) ────────────────────────
+
+// The identity of `f`'s primitive: what pads a shorter list.
+static flow_transform_t identity_of(const flow_transform_t *f)
+{
+    flow_transform_t r;
+    os64_memset(&r, 0, sizeof(r));
+    r.fn = f->fn;
+    r.three_d = f->three_d;
+    r.unit = f->unit;
+    r.x = r.y = (flow_length_t){FLOW_LENGTH_PX, 0, 0};
+    switch (f->fn) {
+    case FLOW_FN_SCALE: r.a[0] = r.a[1] = r.a[2] = 1; break;
+    case FLOW_FN_ROTATE:
+        r.a[0] = f->a[0];
+        r.a[1] = f->a[1];
+        r.a[2] = f->a[2];
+        break;
+    default: break;
+    }
+    f_transform_fn_matrix(&r);
+    if (f->fn == FLOW_FN_MATRIX || f->fn == FLOW_FN_BLEND) {
+        r.fn = FLOW_FN_MATRIX;
+        mat_identity(r.m);
+    }
+    return r;
+}
+
+// How many of a unit make a turn.
+static double per_turn(flow_angle_unit_t unit)
+{
+    switch (unit) {
+    case FLOW_ANGLE_GRAD: return 400;
+    case FLOW_ANGLE_RAD: return 2 * kPi;
+    case FLOW_ANGLE_TURN: return 1;
+    default: return 360;
+    }
+}
+
+flow_angle_unit_t f_angle_coarser(flow_angle_unit_t a, flow_angle_unit_t b)
+{
+    return per_turn(a) <= per_turn(b) ? a : b;
+}
+
+double f_angle_in_unit(double v, flow_angle_unit_t from, flow_angle_unit_t to)
+{
+    return from == to ? v : v * (per_turn(to) / per_turn(from));
+}
+
+// Whether a rotation turns about an axis at all: one of no length turns
+// nothing (rotation()).
+static bool has_axis(const flow_transform_t *f)
+{
+    double u[3];
+    return unit3(f->a[0], f->a[1], f->a[2], u);
+}
+
+// Two rotations' axes, made unit vectors: equal, or either turning nothing
+// — an angle of 0, or an axis of no length — and they mix about the other's
+// axis, the one that turns nothing at an angle of 0 (mix_fn; Transforms 2
+// § 14, and Chrome's answer).
+static bool same_axis(const flow_transform_t *a, const flow_transform_t *b, double axis[3])
+{
+    double ua[3] = {a->a[0], a->a[1], a->a[2]}, ub[3] = {b->a[0], b->a[1], b->a[2]};
+    // Compared as unit vectors, no length ever taken (unit3): two axes
+    // past sqrt(DBL_MAX) are as different as their directions.
+    double na[3], nb[3];
+    bool has_a = unit3(ua[0], ua[1], ua[2], na), has_b = unit3(ub[0], ub[1], ub[2], nb);
+    if (a->a[3] == 0 && b->a[3] == 0) {
+        axis[0] = axis[1] = 0;
+        axis[2] = 1;
+        return true;
+    }
+    if (a->a[3] == 0 || !has_a) {
+        os64_memcpy(axis, ub, sizeof(ub));
+        return true;
+    }
+    if (b->a[3] == 0 || !has_b) {
+        os64_memcpy(axis, ua, sizeof(ua));
+        return true;
+    }
+    for (int i = 0; i < 3; i++)
+        if (na[i] != nb[i])
+            return false;
+    os64_memcpy(axis, ua, sizeof(ua));
+    return true;
+}
+
+// Whether a pair mixes by its arguments: one primitive (a skew only with
+// its own name), and two rotations about one axis; matrix() and
+// perspective() mix only as matrices (§ 14).
+static bool pairs(const flow_transform_t *a, const flow_transform_t *b)
+{
+    double axis[3];
+    if (a->fn != b->fn || a->fn == FLOW_FN_MATRIX || a->fn == FLOW_FN_PERSPECTIVE ||
+        a->fn == FLOW_FN_BLEND)
+        return false;
+    return a->fn != FLOW_FN_ROTATE || same_axis(a, b, axis);
+}
+
+static flow_transform_t mix_fn(const flow_transform_t *a, const flow_transform_t *b, double t)
+{
+    flow_transform_t r = *a;
+    r.three_d = a->three_d || b->three_d;
+    r.blend = NULL;
+    switch (a->fn) {
+    case FLOW_FN_TRANSLATE:
+        (void)mix_length(a->x, b->x, t, &r.x);
+        (void)mix_length(a->y, b->y, t, &r.y);
+        r.a[2] = lerp(a->a[2], b->a[2], t);
+        break;
+    case FLOW_FN_SCALE:
+        for (int i = 0; i < 3; i++)
+            r.a[i] = lerp(a->a[i], b->a[i], t);
+        break;
+    case FLOW_FN_ROTATE: {
+        double axis[3];
+        (void)same_axis(a, b, axis);
+        os64_memcpy(r.a, axis, sizeof(axis));
+        r.unit = f_angle_coarser(a->unit, b->unit);
+        double ta = has_axis(a) ? a->a[3] : 0, tb = has_axis(b) ? b->a[3] : 0;
+        r.a[3] = lerp(f_angle_in_unit(ta, a->unit, r.unit), f_angle_in_unit(tb, b->unit, r.unit),
+                      t);
+        break;
+    }
+    default: {
+        // The skews: their angles, in one unit.
+        int n = a->fn == FLOW_FN_SKEW ? 2 : 1;
+        r.unit = f_angle_coarser(a->unit, b->unit);
+        for (int i = 0; i < n; i++)
+            r.a[i] = lerp(f_angle_in_unit(a->a[i], a->unit, r.unit),
+                          f_angle_in_unit(b->a[i], b->unit, r.unit), t);
+        break;
+    }
+    }
+    f_transform_fn_matrix(&r);
+    return r;
+}
+
+// Two transform lists (Transforms 1 § 9): padded with identities, then
+// pair by pair while they pair; a pair that mixes only as matrices, and
+// the tails from the first pair that does not, are a FLOW_FN_BLEND each,
+// multiplied out with the box (f_transform_matrix). A blend nesting blends
+// deeper than F_BLEND_DEPTH_MAX finds no room.
+static bool mix_transforms(const flow_transform_t *a, int32_t na, const flow_transform_t *b,
+                           int32_t nb, double t, const flow_transform_t **out, int32_t *nout,
+                           FAlloc alloc, void *ctx)
+{
+    int32_t n = na > nb ? na : nb;
+    if (n == 0) {
+        if (out != NULL) {
+            *out = NULL;
+            *nout = 0;
+        }
+        return true;
+    }
+    if (out == NULL)
+        return true;
+    flow_transform_t *pa = alloc(ctx, (size_t)n * 2 * sizeof(*pa));
+    flow_transform_t *list = alloc(ctx, (size_t)n * sizeof(*list));
+    if (pa == NULL || list == NULL)
+        return false;
+    flow_transform_t *pb = pa + n;
+    for (int32_t i = 0; i < n; i++) {
+        pa[i] = i < na ? a[i] : identity_of(&b[i]);
+        pb[i] = i < nb ? b[i] : identity_of(&a[i]);
+    }
+    int32_t k = 0;
+    for (int32_t i = 0; i < n; i++) {
+        if (pairs(&pa[i], &pb[i])) {
+            list[k++] = mix_fn(&pa[i], &pb[i], t);
+            continue;
+        }
+        // One primitive that mixes only as matrices (§ 14) is a pair of
+        // its own; anything else ends the pairing, its tails the rest.
+        bool alone = pa[i].fn == pb[i].fn && (pa[i].fn == FLOW_FN_MATRIX ||
+                                              pa[i].fn == FLOW_FN_PERSPECTIVE ||
+                                              pa[i].fn == FLOW_FN_ROTATE);
+        int32_t to = alone ? i + 1 : n, depth = 1;
+        for (int32_t j = i; j < to; j++) {
+            const flow_transform_t *two[2] = {&pa[j], &pb[j]};
+            for (int k = 0; k < 2; k++)
+                if (two[k]->fn == FLOW_FN_BLEND && two[k]->blend != NULL && two[k]->blend->depth >= depth)
+                    depth = two[k]->blend->depth + 1;
+        }
+        if (depth > F_BLEND_DEPTH_MAX)
+            return false;
+        flow_transform_blend_t *bl = alloc(ctx, sizeof(*bl));
+        if (bl == NULL)
+            return false;
+        *bl = (flow_transform_blend_t){&pa[i], &pb[i], to - i, to - i, t, depth};
+        flow_transform_t f;
+        os64_memset(&f, 0, sizeof(f));
+        f.fn = FLOW_FN_BLEND;
+        f.blend = bl;
+        f.x = f.y = (flow_length_t){FLOW_LENGTH_PX, 0, 0};
+        mat_identity(f.m);
+        list[k++] = f;
+        if (!alone)
+            break;
+    }
+    *out = list;
+    *nout = k;
+    return true;
+}
+
+// An individual property (`translate`, `rotate`, `scale`): one function,
+// NULL for none, which mixes as its identity.
+static bool mix_individual(const flow_transform_t *a, const flow_transform_t *b, double t,
+                           const flow_transform_t **out, FAlloc alloc, void *ctx)
+{
+    if (a == NULL && b == NULL) {
+        if (out != NULL)
+            *out = NULL;
+        return true;
+    }
+    if (out == NULL)
+        return true;
+    flow_transform_t ia = a != NULL ? *a : identity_of(b), ib = b != NULL ? *b : identity_of(a);
+    const flow_transform_t *list;
+    int32_t n;
+    if (!mix_transforms(&ia, 1, &ib, 1, t, &list, &n, alloc, ctx) || n != 1)
+        return false;
+    *out = list;
+    return true;
+}
+
+// ── One property's value ────────────────────────────────────────────────
+
+// Takes property `p`'s computed value from `s` into `d`: the discrete
+// half of mixing.
+static void copy_prop(garb_prop_t p, flow_style_t *d, const flow_style_t *s)
+{
+    int i;
+    switch (p) {
+    case GARB_COLOR: d->color = s->color; break;
+    case GARB_TEXT_FILL_COLOR:
+        d->fill = s->fill;
+        d->current_colours = (uint8_t)((d->current_colours & ~FLOW_CURRENT_FILL) |
+                                       (s->current_colours & FLOW_CURRENT_FILL));
+        break;
+    case GARB_BACKGROUND_COLOR:
+        d->has_background = s->has_background;
+        d->background = s->background;
+        d->current_colours = (uint8_t)((d->current_colours & ~FLOW_CURRENT_BACKGROUND) |
+                                       (s->current_colours & FLOW_CURRENT_BACKGROUND));
+        break;
+    case GARB_BACKGROUND_IMAGE:
+        d->backgrounds.image = s->backgrounds.image;
+        d->backgrounds.nimage = s->backgrounds.nimage;
+        break;
+    case GARB_BACKGROUND_REPEAT:
+        d->backgrounds.repeat = s->backgrounds.repeat;
+        d->backgrounds.nrepeat = s->backgrounds.nrepeat;
+        break;
+    case GARB_BACKGROUND_POSITION_X:
+        d->backgrounds.x = s->backgrounds.x;
+        d->backgrounds.nx = s->backgrounds.nx;
+        break;
+    case GARB_BACKGROUND_POSITION_Y:
+        d->backgrounds.y = s->backgrounds.y;
+        d->backgrounds.ny = s->backgrounds.ny;
+        break;
+    case GARB_BACKGROUND_SIZE:
+        d->backgrounds.size = s->backgrounds.size;
+        d->backgrounds.nsize = s->backgrounds.nsize;
+        break;
+    case GARB_BACKGROUND_ORIGIN:
+        d->backgrounds.origin = s->backgrounds.origin;
+        d->backgrounds.norigin = s->backgrounds.norigin;
+        break;
+    case GARB_BACKGROUND_CLIP:
+        d->backgrounds.clip = s->backgrounds.clip;
+        d->backgrounds.nclip = s->backgrounds.nclip;
+        break;
+    case GARB_MARGIN_TOP: case GARB_MARGIN_RIGHT: case GARB_MARGIN_BOTTOM: case GARB_MARGIN_LEFT:
+        i = p - GARB_MARGIN_TOP;
+        d->margin[i] = s->margin[i];
+        break;
+    case GARB_PADDING_TOP: case GARB_PADDING_RIGHT: case GARB_PADDING_BOTTOM:
+    case GARB_PADDING_LEFT:
+        i = p - GARB_PADDING_TOP;
+        d->padding[i] = s->padding[i];
+        break;
+    case GARB_BORDER_TOP_WIDTH: case GARB_BORDER_RIGHT_WIDTH: case GARB_BORDER_BOTTOM_WIDTH:
+    case GARB_BORDER_LEFT_WIDTH:
+        i = p - GARB_BORDER_TOP_WIDTH;
+        d->border_width[i] = s->border_width[i];
+        break;
+    // A side's style alone: its width is its own property, which another
+    // animation may be moving, and a side drawn as none or hidden has none
+    // once every animation is laid over (f_motion_style).
+    case GARB_BORDER_TOP_STYLE: case GARB_BORDER_RIGHT_STYLE: case GARB_BORDER_BOTTOM_STYLE:
+    case GARB_BORDER_LEFT_STYLE:
+        i = p - GARB_BORDER_TOP_STYLE;
+        d->border_style[i] = s->border_style[i];
+        break;
+    case GARB_BORDER_TOP_COLOR: case GARB_BORDER_RIGHT_COLOR: case GARB_BORDER_BOTTOM_COLOR:
+    case GARB_BORDER_LEFT_COLOR:
+        i = p - GARB_BORDER_TOP_COLOR;
+        d->border_color[i] = s->border_color[i];
+        d->current_colours = (uint8_t)((d->current_colours & ~FLOW_CURRENT_BORDER(i)) |
+                                       (s->current_colours & FLOW_CURRENT_BORDER(i)));
+        break;
+    case GARB_WIDTH: d->width = s->width; break;
+    case GARB_HEIGHT: d->height = s->height; break;
+    case GARB_MIN_WIDTH: d->min_width = s->min_width; break;
+    case GARB_MAX_WIDTH: d->max_width = s->max_width; break;
+    case GARB_MIN_HEIGHT: d->min_height = s->min_height; break;
+    case GARB_MAX_HEIGHT: d->max_height = s->max_height; break;
+    case GARB_BOX_SIZING: d->box_sizing = s->box_sizing; break;
+    case GARB_OVERFLOW_X: d->overflow_x = s->overflow_x; break;
+    case GARB_OVERFLOW_Y: d->overflow_y = s->overflow_y; break;
+    case GARB_FONT_FAMILY: d->family = s->family; break;
+    case GARB_FONT_SIZE: d->font_size = s->font_size; break;
+    case GARB_FONT_WEIGHT: d->font_weight = s->font_weight; break;
+    case GARB_FONT_STYLE: d->font_style = s->font_style; break;
+    case GARB_TEXT_ALIGN: d->text_align = s->text_align; break;
+    case GARB_VERTICAL_ALIGN: d->vertical_align = s->vertical_align; break;
+    case GARB_WHITE_SPACE: d->white_space = s->white_space; break;
+    case GARB_LINE_HEIGHT: d->line_height = s->line_height; break;
+    case GARB_TEXT_INDENT: d->text_indent = s->text_indent; break;
+    case GARB_TEXT_TRANSFORM: d->text_transform = s->text_transform; break;
+    case GARB_TEXT_DECORATION_LINE: d->text_decoration = s->text_decoration; break;
+    case GARB_VISIBILITY: d->visibility = s->visibility; break;
+    case GARB_LIST_STYLE_TYPE: d->list_style_type = s->list_style_type; break;
+    case GARB_LIST_STYLE_POSITION: d->list_style_position = s->list_style_position; break;
+    case GARB_BORDER_SPACING:
+        d->border_spacing[0] = s->border_spacing[0];
+        d->border_spacing[1] = s->border_spacing[1];
+        break;
+    case GARB_BORDER_COLLAPSE: d->border_collapse = s->border_collapse; break;
+    case GARB_CAPTION_SIDE: d->caption_side = s->caption_side; break;
+    // A float and a position alone: the display they blockify is settled
+    // once, from what every animation makes of them (style.c, settle_box).
+    case GARB_FLOAT: d->float_side = s->float_side; break;
+    case GARB_CLEAR: d->clear = s->clear; break;
+    case GARB_POSITION: d->position = s->position; break;
+    case GARB_TOP: case GARB_RIGHT: case GARB_BOTTOM: case GARB_LEFT:
+        i = p - GARB_TOP;
+        d->inset[i] = s->inset[i];
+        break;
+    case GARB_Z_INDEX:
+        d->has_z_index = s->has_z_index;
+        d->z_index = s->z_index;
+        break;
+    case GARB_CLIP:
+        d->legacy_clip_set = s->legacy_clip_set;
+        os64_memcpy(d->legacy_clip, s->legacy_clip, sizeof(d->legacy_clip));
+        break;
+    case GARB_OPACITY: d->opacity = s->opacity; break;
+    case GARB_POINTER_EVENTS: d->pointer_events_none = s->pointer_events_none; break;
+    case GARB_FLEX_DIRECTION: d->flex_direction = s->flex_direction; break;
+    case GARB_FLEX_WRAP: d->flex_wrap = s->flex_wrap; break;
+    case GARB_JUSTIFY_CONTENT: d->justify_content = s->justify_content; break;
+    case GARB_ALIGN_ITEMS: d->align_items = s->align_items; break;
+    case GARB_ALIGN_SELF: d->align_self = s->align_self; break;
+    case GARB_ALIGN_CONTENT: d->align_content = s->align_content; break;
+    case GARB_FLEX_GROW: d->flex_grow = s->flex_grow; break;
+    case GARB_FLEX_SHRINK: d->flex_shrink = s->flex_shrink; break;
+    case GARB_FLEX_BASIS: d->flex_basis = s->flex_basis; break;
+    case GARB_ORDER: d->order = s->order; break;
+    case GARB_ROW_GAP: d->row_gap = s->row_gap; break;
+    case GARB_COLUMN_GAP: d->column_gap = s->column_gap; break;
+    case GARB_GRID_TEMPLATE_COLUMNS: d->grid_template_columns = s->grid_template_columns; break;
+    case GARB_GRID_TEMPLATE_ROWS: d->grid_template_rows = s->grid_template_rows; break;
+    case GARB_GRID_AUTO_COLUMNS: d->grid_auto_columns = s->grid_auto_columns; break;
+    case GARB_GRID_AUTO_ROWS: d->grid_auto_rows = s->grid_auto_rows; break;
+    case GARB_GRID_TEMPLATE_AREAS:
+        d->grid_areas = s->grid_areas;
+        d->ngrid_areas = s->ngrid_areas;
+        d->grid_area_rows = s->grid_area_rows;
+        d->grid_area_cols = s->grid_area_cols;
+        break;
+    case GARB_GRID_AUTO_FLOW:
+        d->grid_auto_flow_column = s->grid_auto_flow_column;
+        d->grid_dense = s->grid_dense;
+        break;
+    case GARB_GRID_ROW_START: d->grid_row_start = s->grid_row_start; break;
+    case GARB_GRID_ROW_END: d->grid_row_end = s->grid_row_end; break;
+    case GARB_GRID_COLUMN_START: d->grid_column_start = s->grid_column_start; break;
+    case GARB_GRID_COLUMN_END: d->grid_column_end = s->grid_column_end; break;
+    case GARB_JUSTIFY_ITEMS: d->justify_items = s->justify_items; break;
+    case GARB_JUSTIFY_SELF: d->justify_self = s->justify_self; break;
+    case GARB_BORDER_TOP_LEFT_RADIUS: case GARB_BORDER_TOP_RIGHT_RADIUS:
+    case GARB_BORDER_BOTTOM_RIGHT_RADIUS: case GARB_BORDER_BOTTOM_LEFT_RADIUS:
+        i = p - GARB_BORDER_TOP_LEFT_RADIUS;
+        d->radius[i][0] = s->radius[i][0];
+        d->radius[i][1] = s->radius[i][1];
+        break;
+    case GARB_BOX_SHADOW:
+        d->box_shadows = s->box_shadows;
+        d->nbox_shadows = s->nbox_shadows;
+        break;
+    case GARB_TEXT_SHADOW:
+        d->text_shadows = s->text_shadows;
+        d->ntext_shadows = s->ntext_shadows;
+        break;
+    case GARB_IMAGE_RENDERING: d->pixelated = s->pixelated; break;
+    case GARB_TRANSFORM:
+        d->transform = s->transform;
+        d->ntransform = s->ntransform;
+        break;
+    case GARB_TRANSFORM_ORIGIN:
+        d->transform_origin[0] = s->transform_origin[0];
+        d->transform_origin[1] = s->transform_origin[1];
+        d->transform_origin_z = s->transform_origin_z;
+        break;
+    case GARB_TRANSLATE: d->translate = s->translate; break;
+    case GARB_ROTATE: d->rotate = s->rotate; break;
+    case GARB_SCALE: d->scale = s->scale; break;
+    default: break;
+    }
+}
+
+static bool length_same(flow_length_t a, flow_length_t b)
+{
+    return a.kind == b.kind && a.value == b.value && a.offset == b.offset;
+}
+
+// Whether two mixes of tails (FLOW_FN_BLEND) draw as one matrix: as the
+// painter draws each (f_blend_matrix), in a box of no size and in one of a
+// thousand pixels, so a percentage that differs shows in the second.
+static bool blend_same(const flow_transform_t *a, const flow_transform_t *b)
+{
+    for (int64_t box = 0; box <= 1000 * 64; box += 1000 * 64) {
+        double ma[16], mb[16];
+        f_blend_matrix(a, box, box, ma);
+        f_blend_matrix(b, box, box, mb);
+        for (int i = 0; i < 16; i++)
+            if (ma[i] != mb[i])
+                return false;
+    }
+    return true;
+}
+
+// Two transform functions with one value; two mixes of tails, the matrices
+// they draw as.
+static bool function_same(const flow_transform_t *a, const flow_transform_t *b)
+{
+    if (a == NULL || b == NULL)
+        return a == b;
+    if (a->fn == FLOW_FN_BLEND || b->fn == FLOW_FN_BLEND)
+        return a->fn == b->fn && a->blend != NULL && b->blend != NULL && blend_same(a, b);
+    if (a->fn != b->fn || a->three_d != b->three_d || a->unit != b->unit || a->blend != NULL ||
+        b->blend != NULL || !length_same(a->x, b->x) || !length_same(a->y, b->y))
+        return false;
+    for (int i = 0; i < 4; i++)
+        if (a->a[i] != b->a[i])
+            return false;
+    for (int i = 0; i < 16; i++)
+        if (a->m[i] != b->m[i])
+            return false;
+    return true;
+}
+
+static bool shadows_same(const flow_shadow_t *a, int32_t na, const flow_shadow_t *b, int32_t nb)
+{
+    if (na != nb)
+        return false;
+    for (int32_t i = 0; i < na; i++)
+        if (a[i].x != b[i].x || a[i].y != b[i].y || a[i].blur != b[i].blur ||
+            a[i].spread != b[i].spread || a[i].colour != b[i].colour || a[i].inset != b[i].inset ||
+            a[i].current != b[i].current)
+            return false;
+    return true;
+}
+
+// Whether styles `a` and `b` give property `p` one value — every
+// field it sets equal, and a list item by item, since copy_prop moves a
+// list by its pointer. Two values called different that are not cost a
+// layout for nothing; two called the same that are not would miss one, so
+// what is not compared field by field is compared byte by byte, where
+// padding can only tell two equal values apart.
+static bool same_value(garb_prop_t p, const flow_style_t *a, const flow_style_t *b)
+{
+    switch (p) {
+    case GARB_TRANSFORM:
+        if (a->ntransform != b->ntransform)
+            return false;
+        for (int32_t i = 0; i < a->ntransform; i++)
+            if (!function_same(&a->transform[i], &b->transform[i]))
+                return false;
+        return true;
+    case GARB_TRANSLATE: return function_same(a->translate, b->translate);
+    case GARB_ROTATE: return function_same(a->rotate, b->rotate);
+    case GARB_SCALE: return function_same(a->scale, b->scale);
+    case GARB_BOX_SHADOW:
+        return shadows_same(a->box_shadows, a->nbox_shadows, b->box_shadows, b->nbox_shadows);
+    case GARB_TEXT_SHADOW:
+        return shadows_same(a->text_shadows, a->ntext_shadows, b->text_shadows, b->ntext_shadows);
+    case GARB_BACKGROUND_POSITION_X: case GARB_BACKGROUND_POSITION_Y: {
+        bool x = p == GARB_BACKGROUND_POSITION_X;
+        int32_t na = x ? a->backgrounds.nx : a->backgrounds.ny;
+        int32_t nb = x ? b->backgrounds.nx : b->backgrounds.ny;
+        const flow_length_t *la = x ? a->backgrounds.x : a->backgrounds.y;
+        const flow_length_t *lb = x ? b->backgrounds.x : b->backgrounds.y;
+        if (na != nb)
+            return false;
+        for (int32_t i = 0; i < na; i++)
+            if (!length_same(la[i], lb[i]))
+                return false;
+        return true;
+    }
+    case GARB_BACKGROUND_SIZE:
+        if (a->backgrounds.nsize != b->backgrounds.nsize)
+            return false;
+        for (int32_t i = 0; i < a->backgrounds.nsize; i++) {
+            const flow_bg_size_t *x = &a->backgrounds.size[i], *y = &b->backgrounds.size[i];
+            if (x->fit != y->fit || !length_same(x->size[0], y->size[0]) ||
+                !length_same(x->size[1], y->size[1]))
+                return false;
+        }
+        return true;
+    default: {
+        flow_style_t x;
+        os64_memcpy(&x, b, sizeof(x));
+        copy_prop(p, &x, a);
+        return os64_memcmp(&x, b, sizeof(x)) == 0;
+    }
+    }
+}
+
+// Whether an animation may set `p`: `display` builds and unbuilds boxes
+// (PILE3.md § Animations, Booked), and the animations' own longhands and
+// `will-change` are not animatable (Animations 1 § 3, Will Change 1).
+static bool animatable(garb_prop_t p)
+{
+    return p != GARB_DISPLAY && p != GARB_WILL_CHANGE &&
+           !(p >= GARB_ANIMATION_NAME && p <= GARB_ANIMATION_FILL_MODE);
+}
+
+// Whether two transform lists mix by moving or only flip at one half, as
+// the painter draws their mix: a pair that pairs and differs moves; a pair
+// or tail that mixes as matrices moves when both can be decomposed, and
+// otherwise is drawn as the first below one half and the second from there
+// (f_blend_matrix) — a flip. Decomposition does not depend on the
+// translations, so the box the tails are multiplied out in is none.
+static MixKind transforms_kind(const flow_transform_t *a, int32_t na, const flow_transform_t *b,
+                               int32_t nb)
+{
+    int32_t n = na > nb ? na : nb;
+    bool flips = false;
+    for (int32_t i = 0; i < n; i++) {
+        flow_transform_t fa = i < na ? a[i] : identity_of(&b[i]);
+        flow_transform_t fb = i < nb ? b[i] : identity_of(&a[i]);
+        if (pairs(&fa, &fb)) {
+            if (!function_same(&fa, &fb))
+                return MIX_CONTINUOUS;
+            continue;
+        }
+        bool alone = fa.fn == fb.fn &&
+                     (fa.fn == FLOW_FN_MATRIX || fa.fn == FLOW_FN_PERSPECTIVE || fa.fn == FLOW_FN_ROTATE);
+        int32_t to = alone ? i + 1 : n;
+        int32_t ca = (to < na ? to : na) - i, cb = (to < nb ? to : nb) - i;
+        double ma[16], mb[16], mix[16];
+        f_tail_matrix(a + i, ca > 0 ? ca : 0, 0, 0, ma);
+        f_tail_matrix(b + i, cb > 0 ? cb : 0, 0, 0, mb);
+        if (f_matrix_mix(ma, mb, 0.5, mix))
+            return MIX_CONTINUOUS;
+        flips = true;
+        if (!alone)
+            break;
+    }
+    return flips ? MIX_DISCRETE : MIX_CONTINUOUS;
+}
+
+// Property `p` at `t` between keyframe styles `a` and `b`, into `d` — or,
+// with `d` NULL, only whether these two values mix continuously or flip.
+// False when a list found no room, and the property is left as it was.
+static bool mix_prop(garb_prop_t p, const flow_style_t *a, const flow_style_t *b, double t,
+                     flow_style_t *d, MixKind *kind, FAlloc alloc, void *ctx)
+{
+    int i;
+    *kind = MIX_CONTINUOUS;
+    switch (p) {
+    case GARB_COLOR:
+        if (d != NULL)
+            d->color = mix_colour(a->color, b->color, t);
+        return true;
+    case GARB_TEXT_FILL_COLOR:
+        if (d != NULL) {
+            d->fill = mix_colour(used_colour(a, FLOW_CURRENT_FILL, a->fill, d),
+                                 used_colour(b, FLOW_CURRENT_FILL, b->fill, d), t);
+            hand_current(d, a, b, FLOW_CURRENT_FILL);
+        }
+        return true;
+    case GARB_BACKGROUND_COLOR:
+        if (d != NULL) {
+            uint32_t ca = used_colour(a, FLOW_CURRENT_BACKGROUND,
+                                      a->has_background ? a->background : 0xFF000000u, d);
+            uint32_t cb = used_colour(b, FLOW_CURRENT_BACKGROUND,
+                                      b->has_background ? b->background : 0xFF000000u, d);
+            d->background = mix_colour(ca, cb, t);
+            d->has_background = flow_alpha(d->background) > 0;
+            hand_current(d, a, b, FLOW_CURRENT_BACKGROUND);
+        }
+        return true;
+    case GARB_BORDER_TOP_COLOR: case GARB_BORDER_RIGHT_COLOR: case GARB_BORDER_BOTTOM_COLOR:
+    case GARB_BORDER_LEFT_COLOR:
+        i = p - GARB_BORDER_TOP_COLOR;
+        if (d != NULL) {
+            d->border_color[i] = mix_colour(used_colour(a, FLOW_CURRENT_BORDER(i), a->border_color[i], d),
+                                            used_colour(b, FLOW_CURRENT_BORDER(i), b->border_color[i], d), t);
+            hand_current(d, a, b, FLOW_CURRENT_BORDER(i));
+        }
+        return true;
+    case GARB_BACKGROUND_POSITION_X: case GARB_BACKGROUND_POSITION_Y: {
+        bool x = p == GARB_BACKGROUND_POSITION_X;
+        const flow_length_t *la = x ? a->backgrounds.x : a->backgrounds.y;
+        const flow_length_t *lb = x ? b->backgrounds.x : b->backgrounds.y;
+        int32_t na = x ? a->backgrounds.nx : a->backgrounds.ny;
+        int32_t nb = x ? b->backgrounds.nx : b->backgrounds.ny;
+        if (!mix_lengths(la, na, lb, nb, t, NULL, NULL, alloc, ctx))
+            break;
+        if (d == NULL)
+            return true;
+        return mix_lengths(la, na, lb, nb, t, x ? &d->backgrounds.x : &d->backgrounds.y,
+                           x ? &d->backgrounds.nx : &d->backgrounds.ny, alloc, ctx);
+    }
+    case GARB_BACKGROUND_SIZE:
+        if (!mix_sizes(a->backgrounds.size, a->backgrounds.nsize, b->backgrounds.size,
+                       b->backgrounds.nsize, t, NULL, NULL, alloc, ctx))
+            break;
+        if (d == NULL)
+            return true;
+        return mix_sizes(a->backgrounds.size, a->backgrounds.nsize, b->backgrounds.size,
+                         b->backgrounds.nsize, t, &d->backgrounds.size, &d->backgrounds.nsize,
+                         alloc, ctx);
+    case GARB_MARGIN_TOP: case GARB_MARGIN_RIGHT: case GARB_MARGIN_BOTTOM: case GARB_MARGIN_LEFT:
+        i = p - GARB_MARGIN_TOP;
+        if (!mix_length(a->margin[i], b->margin[i], t, d != NULL ? &d->margin[i] : NULL))
+            break;
+        return true;
+    case GARB_PADDING_TOP: case GARB_PADDING_RIGHT: case GARB_PADDING_BOTTOM:
+    case GARB_PADDING_LEFT:
+        i = p - GARB_PADDING_TOP;
+        if (!mix_nonneg(a->padding[i], b->padding[i], t, d != NULL ? &d->padding[i] : NULL))
+            break;
+        return true;
+    case GARB_BORDER_TOP_WIDTH: case GARB_BORDER_RIGHT_WIDTH: case GARB_BORDER_BOTTOM_WIDTH:
+    case GARB_BORDER_LEFT_WIDTH:
+        i = p - GARB_BORDER_TOP_WIDTH;
+        if (d != NULL)
+            d->border_width[i] = round_i32(fmax(lerp(a->border_width[i], b->border_width[i], t), 0));
+        return true;
+    case GARB_WIDTH: case GARB_HEIGHT: case GARB_MIN_WIDTH: case GARB_MAX_WIDTH:
+    case GARB_MIN_HEIGHT: case GARB_MAX_HEIGHT: {
+        static const size_t at[] = {offsetof(flow_style_t, width), offsetof(flow_style_t, height),
+                                    offsetof(flow_style_t, min_width),
+                                    offsetof(flow_style_t, max_width),
+                                    offsetof(flow_style_t, min_height),
+                                    offsetof(flow_style_t, max_height)};
+        size_t off = p == GARB_WIDTH ? at[0] : p == GARB_HEIGHT ? at[1] : p == GARB_MIN_WIDTH ? at[2]
+                   : p == GARB_MAX_WIDTH ? at[3] : p == GARB_MIN_HEIGHT ? at[4] : at[5];
+        const flow_length_t *la = (const flow_length_t *)((const char *)a + off);
+        const flow_length_t *lb = (const flow_length_t *)((const char *)b + off);
+        flow_length_t r;
+        if (!mix_nonneg(*la, *lb, t, &r))
+            break;
+        if (d != NULL)
+            *(flow_length_t *)((char *)d + off) = r;
+        return true;
+    }
+    case GARB_FONT_SIZE:
+        if (d != NULL)
+            d->font_size = round_i32(fmax(lerp(a->font_size, b->font_size, t), 0));
+        return true;
+    case GARB_FONT_WEIGHT:
+        // A number from 1 to 1000 (Fonts 4 § 2.2).
+        if (d != NULL)
+            d->font_weight = (uint16_t)round_i32(fmin(fmax(lerp(a->font_weight, b->font_weight,
+                                                                t), 1), 1000));
+        return true;
+    case GARB_LINE_HEIGHT:
+        if (a->line_height.kind != b->line_height.kind ||
+            a->line_height.kind == FLOW_LINE_NORMAL)
+            break;
+        if (d != NULL)
+            d->line_height.value = round_i32(fmax(lerp(a->line_height.value,
+                                                       b->line_height.value, t), 0));
+        if (d != NULL)
+            d->line_height.kind = a->line_height.kind;
+        return true;
+    case GARB_TEXT_INDENT:
+        if (!mix_length(a->text_indent, b->text_indent, t, d != NULL ? &d->text_indent : NULL))
+            break;
+        return true;
+    case GARB_VISIBILITY:
+        // Appendix A: visible all the way between if either end is.
+        if (a->visibility != FLOW_VISIBLE && b->visibility != FLOW_VISIBLE)
+            break;
+        *kind = MIX_DISCRETE;
+        if (d != NULL)
+            d->visibility = t <= 0 ? a->visibility : t >= 1 ? b->visibility : FLOW_VISIBLE;
+        return true;
+    case GARB_BORDER_SPACING:
+        if (d != NULL)
+            for (int k = 0; k < 2; k++)
+                d->border_spacing[k] = round_i32(fmax(lerp(a->border_spacing[k],
+                                                           b->border_spacing[k], t), 0));
+        return true;
+    case GARB_TOP: case GARB_RIGHT: case GARB_BOTTOM: case GARB_LEFT:
+        i = p - GARB_TOP;
+        if (!mix_length(a->inset[i], b->inset[i], t, d != NULL ? &d->inset[i] : NULL))
+            break;
+        return true;
+    case GARB_Z_INDEX:
+        // Two numbers make a number, whatever the element's own is.
+        if (!a->has_z_index || !b->has_z_index)
+            break;
+        if (d != NULL) {
+            d->has_z_index = true;
+            d->z_index = half_up_i32(lerp(a->z_index, b->z_index, t));
+        }
+        return true;
+    case GARB_OPACITY:
+        if (d != NULL)
+            d->opacity = (uint16_t)round_i32(fmin(fmax(lerp(a->opacity, b->opacity, t), 0), 1000));
+        return true;
+    case GARB_FLEX_GROW: case GARB_FLEX_SHRINK: {
+        int32_t va = p == GARB_FLEX_GROW ? a->flex_grow : a->flex_shrink;
+        int32_t vb = p == GARB_FLEX_GROW ? b->flex_grow : b->flex_shrink;
+        if (d != NULL)
+            *(p == GARB_FLEX_GROW ? &d->flex_grow : &d->flex_shrink) =
+                round_i32(fmax(lerp(va, vb, t), 0));
+        return true;
+    }
+    case GARB_FLEX_BASIS:
+        if (!mix_nonneg(a->flex_basis, b->flex_basis, t, d != NULL ? &d->flex_basis : NULL))
+            break;
+        return true;
+    case GARB_ORDER:
+        if (d != NULL)
+            d->order = half_up_i32(lerp(a->order, b->order, t));
+        return true;
+    case GARB_ROW_GAP: case GARB_COLUMN_GAP: {
+        bool row = p == GARB_ROW_GAP;
+        if (!mix_nonneg(row ? a->row_gap : a->column_gap, row ? b->row_gap : b->column_gap, t,
+                        d != NULL ? (row ? &d->row_gap : &d->column_gap) : NULL))
+            break;
+        return true;
+    }
+    case GARB_BORDER_TOP_LEFT_RADIUS: case GARB_BORDER_TOP_RIGHT_RADIUS:
+    case GARB_BORDER_BOTTOM_RIGHT_RADIUS: case GARB_BORDER_BOTTOM_LEFT_RADIUS:
+        i = p - GARB_BORDER_TOP_LEFT_RADIUS;
+        if (!mix_length(a->radius[i][0], b->radius[i][0], t, NULL) ||
+            !mix_length(a->radius[i][1], b->radius[i][1], t, NULL))
+            break;
+        if (d != NULL) {
+            (void)mix_nonneg(a->radius[i][0], b->radius[i][0], t, &d->radius[i][0]);
+            (void)mix_nonneg(a->radius[i][1], b->radius[i][1], t, &d->radius[i][1]);
+        }
+        return true;
+    case GARB_BOX_SHADOW: case GARB_TEXT_SHADOW: {
+        bool box = p == GARB_BOX_SHADOW;
+        const flow_shadow_t *sa = box ? a->box_shadows : a->text_shadows;
+        const flow_shadow_t *sb = box ? b->box_shadows : b->text_shadows;
+        int32_t na = box ? a->nbox_shadows : a->ntext_shadows;
+        int32_t nb = box ? b->nbox_shadows : b->ntext_shadows;
+        if (!mix_shadows(sa, na, sb, nb, a->color, b->color, t, NULL, NULL, alloc, ctx))
+            break;
+        if (d == NULL)
+            return true;
+        flow_shadow_t *list = NULL;
+        int32_t n = 0;
+        // A shadow in currentColor mixes the colour the element ends with.
+        if (!mix_shadows(sa, na, sb, nb, d->color, d->color, t, &list, &n, alloc, ctx))
+            return false;
+        *(box ? &d->box_shadows : &d->text_shadows) = list;
+        *(box ? &d->nbox_shadows : &d->ntext_shadows) = n;
+        return true;
+    }
+    case GARB_TRANSFORM:
+        if (d == NULL) {
+            *kind = transforms_kind(a->transform, a->ntransform, b->transform, b->ntransform);
+            return true;
+        }
+        return mix_transforms(a->transform, a->ntransform, b->transform, b->ntransform, t,
+                              &d->transform, &d->ntransform, alloc, ctx);
+    case GARB_TRANSLATE: case GARB_ROTATE: case GARB_SCALE: {
+        const flow_transform_t *fa = p == GARB_TRANSLATE ? a->translate
+                                   : p == GARB_ROTATE ? a->rotate : a->scale;
+        const flow_transform_t *fb = p == GARB_TRANSLATE ? b->translate
+                                   : p == GARB_ROTATE ? b->rotate : b->scale;
+        if (d == NULL)
+            return true;
+        return mix_individual(fa, fb, t, p == GARB_TRANSLATE ? &d->translate
+                                       : p == GARB_ROTATE ? &d->rotate : &d->scale,
+                              alloc, ctx);
+    }
+    case GARB_TRANSFORM_ORIGIN:
+        if (!mix_length(a->transform_origin[0], b->transform_origin[0], t, NULL) ||
+            !mix_length(a->transform_origin[1], b->transform_origin[1], t, NULL))
+            break;
+        if (d != NULL) {
+            (void)mix_length(a->transform_origin[0], b->transform_origin[0], t,
+                             &d->transform_origin[0]);
+            (void)mix_length(a->transform_origin[1], b->transform_origin[1], t,
+                             &d->transform_origin[1]);
+            d->transform_origin_z = round_i32(lerp(a->transform_origin_z,
+                                                   b->transform_origin_z, t));
+        }
+        return true;
+    default:
+        break;
+    }
+    // Discrete: the first value until one half, the second from it.
+    *kind = MIX_DISCRETE;
+    if (d != NULL)
+        copy_prop(p, d, t < 0.5 ? a : b);
+    return true;
+}
+
+// ── An animation's value (Web Animations 1 § 5.3.4) ─────────────────────
+
+// A keyframe as one property sees it: its style, offset and easing, and
+// whether it is implicit — the value underneath, not the animation's own.
+typedef struct {
+    const flow_style_t *style;
+    double offset;
+    const flow_easing_t *easing;
+    bool implicit;
+} Frame;
+
+// The frames property `p` is worked between: the implicit first at 0,
+// where no keyframe that sets it is at 0; those that do, in their order;
+// the implicit last at 1, where none is at 1 — eased as the animation is
+// (Animations 2 § 3.2). An implicit frame is `under`, the value the
+// animations before this one made of the element's own: Web Animations 1
+// § 5.4.4's effect stack makes each one's result the next one's
+// underlying value (Chrome, 10/14: from 0 to 1 under `to {opacity: 0}`
+// is 0.25 halfway, not 0.5).
+typedef struct {
+    const FAnimation *an;
+    const flow_style_t *under;
+    garb_prop_t p;
+    bool at0, at1;
+} Line;
+
+// The line's `i`th frame. Walked, not listed: a list would be one more
+// allocation a value could fail on.
+static Frame line_frame(const Line *l, int32_t i)
+{
+    const flow_easing_t *own = &l->an->timing.easing;
+    if (!l->at0) {
+        if (i == 0)
+            return (Frame){l->under, 0, own, true};
+        i--;
+    }
+    for (int32_t j = 0; j < l->an->nframes; j++) {
+        const FKeyframe *f = &l->an->frames[j];
+        if (f_props_has(&f->sets, l->p) && i-- == 0)
+            return (Frame){&f->style, f->offset, f->has_easing ? &f->easing : own, false};
+    }
+    return (Frame){l->under, 1, own, true};
+}
+
+// The two frames of the line around `progress`, as Web Animations 1
+// § 5.3.4 finds them: the last at or before the progress and before 1,
+// and the one after; of several at 1, at the end, the last alone (`*start`
+// and `*end` the same).
+static void interval(const FAnimation *an, const flow_style_t *under, garb_prop_t p, double progress,
+                     Frame *start, Frame *end)
+{
+    Line l = {an, under, p, false, false};
+    for (int32_t i = 0; i < an->nframes; i++)
+        if (f_props_has(&an->frames[i].sets, p)) {
+            l.at0 |= an->frames[i].offset == 0;
+            l.at1 |= an->frames[i].offset == 1;
+        }
+    // One pass over the line's offsets: how many frames, how many at 1,
+    // the last at or before the progress and before 1, the last at 0.
+    int32_t n = 0, ones = 0, s = -1, zero = -1;
+    for (int32_t j = -1; j <= an->nframes; j++) {
+        double offset;
+        if (j == -1) {
+            if (l.at0)
+                continue;
+            offset = 0;
+        } else if (j == an->nframes) {
+            if (l.at1)
+                continue;
+            offset = 1;
+        } else if (f_props_has(&an->frames[j].sets, p)) {
+            offset = an->frames[j].offset;
+        } else {
+            continue;
+        }
+        ones += offset == 1;
+        if (offset <= progress && offset < 1)
+            s = n;
+        if (offset == 0)
+            zero = n;
+        n++;
+    }
+    if (progress >= 1 && ones > 1) {
+        *start = *end = line_frame(&l, n - 1);
+        return;
+    }
+    if (s < 0)
+        s = zero;
+    *start = line_frame(&l, s);
+    *end = line_frame(&l, s + 1 < n ? s + 1 : s);
+}
+
+// The fraction between the two, through the first's easing.
+static double eased(const Frame *start, const Frame *end, double progress, bool before)
+{
+    double span = end->offset - start->offset;
+    double x = span != 0 ? (progress - start->offset) / span : 1;
+    return f_ease(start->easing, x, before);
+}
+
+// One look of a walk (motion_walk): its time, the style the values are
+// laid over — which holds the base — where its lists come from, and the
+// properties whose lists found no room.
+typedef struct {
+    double now;
+    flow_style_t *out;
+    FAlloc alloc;
+    void *ctx;
+    FProps *failed;
+} Look;
+
+enum { LOOKS_MAX = 2 };
+
+// What a walk hands its step before each value is mixed, where every look
+// has the animation in effect: the animation, the property, and each
+// look's clock and the frames around its progress. False from the step
+// ends the walk.
+typedef bool (*Step)(void *ctx, int32_t a, garb_prop_t p, int32_t nlooks, const Clock *k, const Frame *s,
+                     const Frame *e);
+
+// The animations' values laid over each look's style at its time, the
+// looks in step — `step`, when given, told of each before it is mixed.
+// `color` first, every animation's, so a currentColor anything else
+// mixes is the colour the element ends with (CSS Color 4 § 12, its used
+// value); then the rest; and a side's width after its style, which brings
+// a width of its own. Each animation's implicit frames are what the ones
+// before it made, held still while it mixes over the look's style.
+static bool motion_walk(const FMotion *m, Look *looks, int32_t nlooks, bool record, Step step, void *sctx)
+{
+    bool ok = true;
+    flow_style_t under[LOOKS_MAX];
+    Clock k[LOOKS_MAX];
+    for (int pass = 0; pass < 3; pass++)
+        for (int32_t a = 0; a < m->nanims; a++) {
+            const FAnimation *an = &m->anims[a];
+            if (an->record == NULL)
+                continue;
+            int32_t in = 0;
+            for (int32_t i = 0; i < nlooks; i++) {
+                k[i] = clock_at(&an->timing, local_time(an->record, looks[i].now));
+                in += k[i].in_effect;
+            }
+            if (in == 0)
+                continue;
+            bool held = false;
+            for (int p = 0; p < GARB_NPROPS; p++) {
+                bool width = p >= GARB_BORDER_TOP_WIDTH && p <= GARB_BORDER_LEFT_WIDTH;
+                int at = p == GARB_COLOR ? 0 : width ? 2 : 1;
+                if (at != pass || !f_props_has(&an->props, (garb_prop_t)p) || !animatable((garb_prop_t)p) ||
+                    f_props_has(&an->dropped, (garb_prop_t)p))
+                    continue;
+                if (!held) {
+                    for (int32_t i = 0; i < nlooks; i++)
+                        if (k[i].in_effect)
+                            under[i] = *looks[i].out;
+                    held = true;
+                }
+                Frame s[LOOKS_MAX], e[LOOKS_MAX];
+                for (int32_t i = 0; i < nlooks; i++)
+                    if (k[i].in_effect)
+                        interval(an, &under[i], (garb_prop_t)p, k[i].progress, &s[i], &e[i]);
+                if (step != NULL && in == nlooks && !step(sctx, a, (garb_prop_t)p, nlooks, k, s, e))
+                    return ok;
+                for (int32_t i = 0; i < nlooks; i++) {
+                    MixKind kind;
+                    if (!k[i].in_effect ||
+                        mix_prop((garb_prop_t)p, s[i].style, e[i].style,
+                                 eased(&s[i], &e[i], k[i].progress, k[i].before), looks[i].out, &kind,
+                                 looks[i].alloc, looks[i].ctx))
+                        continue;
+                    ok = false;
+                    if (looks[i].failed != NULL)
+                        f_props_add(looks[i].failed, (garb_prop_t)p);
+                    if (record)
+                        f_props_add(&m->anims[a].dropped, (garb_prop_t)p);
+                }
+            }
+        }
+    return ok;
+}
+
+// What every animation leaves together, worked once from the style they
+// leave: what is in currentColor follows the colour as it moves; a side
+// drawn as none or hidden has no width (Backgrounds 3 § 4.3).
+static void motion_settle(flow_style_t *out)
+{
+    for (int i = 0; i < 4; i++) {
+        if (out->current_colours & FLOW_CURRENT_BORDER(i))
+            out->border_color[i] = out->color;
+        if (out->border_style[i] == FLOW_BORDER_NONE || out->border_style[i] == FLOW_BORDER_HIDDEN)
+            out->border_width[i] = 0;
+    }
+    if (out->current_colours & FLOW_CURRENT_BACKGROUND) {
+        out->has_background = flow_alpha(out->color) > 0;
+        out->background = out->color;
+    }
+    if (out->current_colours & FLOW_CURRENT_FILL)
+        out->fill = out->color;
+}
+
+bool f_motion_style(const FMotion *m, double now, flow_style_t *out, FAlloc alloc, void *ctx,
+                    FProps *failed, bool record)
+{
+    Look look = {now, out, alloc, ctx, failed};
+    bool ok = motion_walk(m, &look, 1, record, NULL, NULL);
+    motion_settle(out);
+    return ok;
+}
+
+// The side effect an animation of `p` gives its element (FLOW_WILL_*), or 0.
+static uint8_t will_bit(garb_prop_t p)
+{
+    return p == GARB_TRANSFORM || p == GARB_TRANSLATE || p == GARB_ROTATE || p == GARB_SCALE
+               ? FLOW_WILL_TRANSFORM
+           : p == GARB_OPACITY ? FLOW_WILL_OPACITY : 0;
+}
+
+uint8_t f_motion_effects(const FMotion *m, double now)
+{
+    uint8_t bits = 0;
+    for (int32_t a = 0; a < m->nanims; a++) {
+        const FAnimation *an = &m->anims[a];
+        if (an->record == NULL)
+            continue;
+        Clock k = clock_at(&an->timing, local_time(an->record, now));
+        // Current — before or in its active phase — or in effect.
+        if (k.phase == PHASE_AFTER && !k.in_effect)
+            continue;
+        for (int p = 0; p < GARB_NPROPS; p++)
+            if (f_props_has(&an->props, (garb_prop_t)p))
+                bits |= will_bit((garb_prop_t)p);
+    }
+    return bits;
+}
+
+// ── When a value next changes ───────────────────────────────────────────
+
+// Whether eased fraction `y` is past `level` as the value reads it: a
+// discrete value takes its end at one half and past it, visibility leaves
+// its start past 0 and takes its end at 1 (mix_prop).
+static bool past_level(double y, double level, bool strict)
+{
+    return strict ? y > level : y >= level;
+}
+
+// Every x in [0, 1] at which easing `e` — linear or a cubic, not steps —
+// takes y past `level` or back (past_level): at most three, in order, into
+// `xs`; how many. A cubic's y is a cubic in the curve's parameter, so it
+// is cut where it turns (its slope's roots), and each piece whose ends
+// read differently is halved to the last bit, where the reading changes
+// — asked of the y the value itself is worked from, so a crossing lands
+// where the value flips even where y rounds to the level across a
+// stretch of the curve (an inflection flat there). x rises with the
+// parameter (x1 and x2 are in [0, 1]), so the crossings come in order.
+// Each is the x the value flips past: the value solves its parameter as
+// the least t whose x reaches the input (cubic), so it reads as before a
+// crossing up to the x of the last parameter on that side, and after it
+// past that x — which is the one kept, not the x of the first parameter
+// beyond, which by an end is one a double rounds to the end
+// (cubic-bezier(0.98, -1e308, 0.027, 0.25) crosses one half at
+// t = 1 - 4e-155, and run backwards flips near x = 1 - 3e-16).
+static int32_t ease_crossings(const flow_easing_t *e, double level, bool strict, double xs[3])
+{
+    if (e == NULL || e->kind != FLOW_EASE_CUBIC) {
+        if (level <= 0 || level >= 1)
+            return 0;
+        xs[0] = level;
+        return 1;
+    }
+    // y's slope, qa t^2 + qb t + qc, worked in long double as bezier_y is
+    // (3 y1 alone can overflow a double) and divided by its largest
+    // coefficient, which moves no root and leaves the rest in [-1, 1].
+    const double *p = e->p;
+    long double lc = 3.0L * p[1], lb = 3.0L * ((long double)p[3] - p[1]) - lc, la = 1 - lc - lb;
+    long double la3 = 3 * la, lb2 = 2 * lb;
+    long double big = la3 < 0 ? -la3 : la3, mb = lb2 < 0 ? -lb2 : lb2, mc = lc < 0 ? -lc : lc;
+    big = mb > big ? mb : big;
+    big = mc > big ? mc : big;
+    long double qa = la3 / big, qb = lb2 / big, qc = lc / big;
+    double cut[4] = {0};
+    int32_t nc = 1;
+    // Its roots by the quadratic formula's stable form: qb and the
+    // discriminant's root added at one sign, never one taken from the
+    // other, give the larger root, and the roots' product the smaller — so
+    // a root beside a far larger one is not lost to cancellation
+    // (cubic-bezier(1/3, 1, 2/3, -1e18) turns at 5e-19), and a vanishing
+    // qa leaves the one root a line has.
+    double roots[2];
+    int32_t nr = 0;
+    long double disc = qb * qb - 4 * qa * qc;
+    if (disc >= 0) {
+        long double sq = sqrt((double)disc), q = -0.5L * (qb + (qb < 0 ? -sq : sq));
+        double r0 = qa != 0 ? (double)(q / qa) : NAN, r1 = q != 0 ? (double)(qc / q) : NAN;
+        roots[nr++] = fmin(r0, r1);
+        roots[nr++] = fmax(r0, r1);
+    }
+    for (int32_t i = 0; i < nr; i++)
+        if (roots[i] > 0 && roots[i] < 1)
+            cut[nc++] = roots[i];
+    cut[nc++] = 1;
+    bool past[4];
+    for (int32_t i = 0; i < nc; i++)
+        past[i] = past_level(bezier_y(p[1], p[3], cut[i]), level, strict);
+    int32_t n = 0;
+    for (int32_t i = 0; i + 1 < nc && n < 3; i++) {
+        if (past[i] == past[i + 1])
+            continue;
+        // Halved to the last bit, as the curve's own parameter is (cubic):
+        // a fixed count of halvings is a fixed size, and a crossing at
+        // 1e-18 beside a piece 0.7 long would land 4% wide of it.
+        double t0 = cut[i], t1 = cut[i + 1];
+        for (int k = 0; k < 1100; k++) {
+            double mid = t0 + (t1 - t0) / 2;
+            if (!(mid > t0 && mid < t1))
+                break;
+            if (past_level(bezier_y(p[1], p[3], mid), level, strict) == past[i])
+                t0 = mid;
+            else
+                t1 = mid;
+        }
+        xs[n++] = fmin(fmax(bezier(p[0], p[2], t0), 0), 1);
+    }
+    return n;
+}
+
+// The earliest local time after `local` at which progress `p` of the
+// current iteration comes round, the iteration running as `k` says.
+static double at_progress(const Clock *k, const flow_animation_t *a, double p)
+{
+    double dur = a->duration_ms;
+    return k->iteration_start + (k->forwards ? p : 1 - p) * dur;
+}
+
+// The properties whose frames repaint only where the element and what it
+// holds already draw (f_motion_in_place).
+static bool repaints_in_place(garb_prop_t p)
+{
+    switch (p) {
+    case GARB_COLOR: case GARB_TEXT_FILL_COLOR: case GARB_BACKGROUND_COLOR:
+    case GARB_BORDER_TOP_COLOR: case GARB_BORDER_RIGHT_COLOR: case GARB_BORDER_BOTTOM_COLOR:
+    case GARB_BORDER_LEFT_COLOR: case GARB_OPACITY: case GARB_VISIBILITY:
+    case GARB_BACKGROUND_POSITION_X: case GARB_BACKGROUND_POSITION_Y:
+    case GARB_BORDER_TOP_LEFT_RADIUS: case GARB_BORDER_TOP_RIGHT_RADIUS:
+    case GARB_BORDER_BOTTOM_RIGHT_RADIUS: case GARB_BORDER_BOTTOM_LEFT_RADIUS:
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool f_motion_in_place(const FMotion *m)
+{
+    for (int32_t a = 0; a < m->nanims; a++)
+        for (int p = 0; p < GARB_NPROPS; p++)
+            if (f_props_has(&m->anims[a].props, (garb_prop_t)p) && animatable((garb_prop_t)p) &&
+                !repaints_in_place((garb_prop_t)p))
+                return false;
+    return true;
+}
+
+// When a change at time `at` first shows, after `now`, `at` true to `tol`.
+// A value rising to a step or a level changes there; one falling through it
+// changes just past it (running backwards, the before flag is clear in the
+// active phase, Web Animations 1 § 4.7.7); and the clock's arithmetic may
+// put the change anywhere `tol` either side of `at`. So the first
+// millisecond that window touches is due — and while a layout stands
+// inside it, the next: never late, and early by at most the window. A
+// change at the instant the progress stands on — worked back from a
+// progress, so a hair either side of `now` — is due the millisecond after.
+// INFINITY for a change already shown.
+static double change_due(double at, double tol, double now)
+{
+    double first = ceil(at - tol), after = floor(at + tol) + 1;
+    return first > now ? first : after > now ? floor(now) + 1 : INFINITY;
+}
+
+// How far the clock's rounding can put a change from the time worked back
+// to it from a progress: a few ulps of the times it is worked in — the
+// time itself and how far into the animation it is — and, running
+// backwards, where the progress is one less a fraction and so true only to
+// a last bit of 1, of the duration too; never less than a millionth of a
+// millisecond. Run back over 1e20 ms, that last bit is some 11000 ms.
+static double clock_tol(double at, double base, double dur, bool forwards)
+{
+    return fmax(1e-6, 8 * DBL_EPSILON * (fabs(at) + fabs(at - base) + (forwards ? 0 : fabs(dur))));
+}
+
+// When a change at progress `p` of the current iteration shows
+// (change_due).
+static double edge_due(const Clock *k, const flow_animation_t *a, double base, double p, double now)
+{
+    double at = base + at_progress(k, a, p);
+    return change_due(at, clock_tol(at, base, a->duration_ms, k->forwards), now);
+}
+
+// Lists for one look of a walk the schedule makes — its own, or one of the
+// probe's two — on the stack, each look its own. A list that moves
+// continuously is due already; one past the room is named, and is not
+// asked about by the probe, since the value it was left as may be an
+// earlier animation's that the tree does not show, and the value it
+// leaves under a later animation is not known (due_step).
+typedef struct {
+    _Alignas(16) unsigned char buf[4096];
+    size_t used;
+} ProbeLists;
+
+static void *probe_alloc(void *ctx, size_t bytes)
+{
+    ProbeLists *l = ctx;
+    size_t at = (l->used + 15) & ~(size_t)15;
+    if (at > sizeof(l->buf) || bytes > sizeof(l->buf) - at)
+        return NULL;
+    l->used = at + bytes;
+    return l->buf + at;
+}
+
+// The probe's two looks (changes_by): whether a value an implicit
+// keyframe rests on differs between them, and the properties either had
+// no room for.
+typedef struct {
+    bool moved;
+    const FProps *fa, *fb;
+} Under;
+
+// Whether the value under animation `a`'s implicit keyframe of `p` moves
+// between the probe's looks: what rests on it may show the change later,
+// though nothing shows it now (an implicit keyframe whose own animation
+// has not yet eased toward it).
+static bool under_step(void *ctx, int32_t a, garb_prop_t p, int32_t nlooks, const Clock *k, const Frame *s,
+                       const Frame *e)
+{
+    (void)a;
+    (void)nlooks;
+    (void)k;
+    Under *u = ctx;
+    const flow_style_t *u0 = s[0].implicit ? s[0].style : e[0].implicit ? e[0].style : NULL;
+    const flow_style_t *u1 = s[1].implicit ? s[1].style : e[1].implicit ? e[1].style : NULL;
+    if (u0 == NULL || u1 == NULL || f_props_has(u->fa, p) || f_props_has(u->fb, p) || same_value(p, u0, u1))
+        return true;
+    u->moved = true;
+    return false;
+}
+
+// Whether what `m` animates shows another value at `then` than at `now`,
+// asked of the value itself (motion_walk, the two looks in step): what
+// lies a hair past the instant the progress stands on — an end it leaves,
+// a step, a crossing — is placed there by no rounding. And whether a value
+// an implicit keyframe rests on moves, which the animation resting on it
+// may show later. A property either look had no room for is not asked
+// about (ProbeLists).
+static bool changes_by(const FMotion *m, double now, double then)
+{
+    ProbeLists la, lb;
+    la.used = lb.used = 0;
+    FProps fa, fb;
+    os64_memset(&fa, 0, sizeof(fa));
+    os64_memset(&fb, 0, sizeof(fb));
+    flow_style_t a = m->base, b = m->base;
+    Look looks[2] = {{now, &a, probe_alloc, &la, &fa}, {then, &b, probe_alloc, &lb, &fb}};
+    Under u = {false, &fa, &fb};
+    (void)motion_walk(m, looks, 2, false, under_step, &u);
+    if (u.moved)
+        return true;
+    motion_settle(&a);
+    motion_settle(&b);
+    for (int32_t i = 0; i < m->nanims; i++)
+        for (int p = 0; p < GARB_NPROPS; p++)
+            if (f_props_has(&m->anims[i].props, (garb_prop_t)p) && animatable((garb_prop_t)p) &&
+                !f_props_has(&fa, (garb_prop_t)p) && !f_props_has(&fb, (garb_prop_t)p) &&
+                !same_value((garb_prop_t)p, &a, &b))
+                return true;
+    return false;
+}
+
+// Whether anything animation `a` does can show, `last` naming the
+// animation in effect that shows each property (f_motion_next): a
+// property it sets that is drawn — animatable, its list not dropped — or
+// whose side effect follows its clock (f_motion_effects), unless a later
+// animation in effect replaces it, which then shows the property and
+// gives the same side effect. An animation of nothing that can show —
+// an empty rule, `display` alone, declarations an `!important` winner
+// holds — changes nothing at any of its edges.
+static bool anim_shows(const FAnimation *an, int32_t a, const int32_t last[GARB_NPROPS])
+{
+    for (int p = 0; p < GARB_NPROPS; p++)
+        if (f_props_has(&an->props, (garb_prop_t)p) && !(last[p] > a) &&
+            ((animatable((garb_prop_t)p) && !f_props_has(&an->dropped, (garb_prop_t)p)) ||
+             will_bit((garb_prop_t)p) != 0))
+            return true;
+    return false;
+}
+
+// What the schedule's walk (f_motion_next) keeps: the element, the time,
+// when its value next changes, which animation shows each property
+// (`last`), and the properties whose lists the walk had no room for —
+// over which the value under a later animation is not known.
+typedef struct {
+    const FMotion *m;
+    double now, next;
+    const int32_t *last;
+    FProps failed;
+} Due;
+
+// When what animation `a` shows of `p` next changes, the frames around its
+// progress `s` and `e` — an implicit one the value the animations before
+// it made, so that an animation resting on that value is still where it
+// is the animation's own other end, and moves where it differs.
+static bool due_step(void *ctx, int32_t a, garb_prop_t p, int32_t nlooks, const Clock *k, const Frame *s,
+                     const Frame *e)
+{
+    (void)nlooks;
+    Due *d = ctx;
+    if (d->next <= d->now)
+        return false;
+    const FAnimation *an = &d->m->anims[a];
+    if (k->phase != PHASE_ACTIVE || an->record->now.paused || d->last[p] > a)
+        return true;
+    double now = d->now, base = an->record->now.start;
+    // A value underneath that the walk had no room to make is not known:
+    // the interval resting on it is taken to move.
+    bool unknown = (s->implicit || e->implicit) && f_props_has(&d->failed, p);
+    MixKind kind;
+    (void)mix_prop(p, s->style, e->style, 0.5, NULL, &kind, NULL, NULL);
+    const flow_easing_t *ease = s->easing;
+    bool stepped = ease != NULL && ease->kind == FLOW_EASE_STEPS;
+    // One value at both ends: nothing inside the interval changes, whatever
+    // its easing — only past its far end.
+    bool still = !unknown && same_value(p, s->style, e->style);
+    if (kind == MIX_CONTINUOUS && !stepped && !still) {
+        d->next = d->now;   // moving continuously
+        return false;
+    }
+    // Only what lies ahead of the progress the way it runs: the interval's
+    // far end, and inside it the next of its steps' edges — worked out from
+    // where the progress is, never walked to (a page may ask for
+    // steps(2147483647)) — or a discrete value's crossings. What is behind
+    // it shows already, since the values are worked from the same progress;
+    // one the progress stands on may yet change just past it (change_due).
+    d->next = fmin(d->next, edge_due(k, &an->timing, base, k->forwards ? e->offset : s->offset, now));
+    if (still)
+        return true;
+    double span = e->offset - s->offset;
+    double here = span > 0 ? (k->progress - s->offset) / span : 0;
+    if (stepped && span > 0) {
+        double n = ease->steps, x = here * n;
+        // Running backwards the progress may stand on the interval's top,
+        // x = n, whose step falls just past it.
+        double j = k->forwards ? floor(x) + 1 : floor(x);
+        if (j >= 1 && j <= (k->forwards ? n - 1 : n))
+            d->next = fmin(d->next, edge_due(k, &an->timing, base, s->offset + span * j / n, now));
+    } else if (kind == MIX_DISCRETE) {
+        // A discrete value flips where the eased fraction crosses one half;
+        // visibility, when either end is visible, is visible between 0 and 1
+        // and the ends' own beyond them (Appendix A), so it changes where it
+        // crosses 0 if its start is not visible and 1 if its end is not —
+        // each time the easing does, overshoot and all, whichever way the
+        // iteration runs, each when it shows (change_due).
+        bool vis = p == GARB_VISIBILITY && (s->style->visibility == FLOW_VISIBLE ||
+                                            e->style->visibility == FLOW_VISIBLE);
+        double levels[2];
+        bool strict[2];
+        int nl = 0;
+        if (!vis) {
+            levels[nl] = 0.5;
+            strict[nl++] = false;
+        }
+        if (vis && s->style->visibility != FLOW_VISIBLE) {
+            levels[nl] = 0;
+            strict[nl++] = true;
+        }
+        if (vis && e->style->visibility != FLOW_VISIBLE) {
+            levels[nl] = 1;
+            strict[nl++] = false;
+        }
+        for (int l = 0; l < nl; l++) {
+            double xs[3];
+            int32_t nx = ease_crossings(ease, levels[l], strict[l], xs);
+            for (int32_t j = 0; j < nx; j++) {
+                if (k->forwards ? xs[j] >= here : xs[j] <= here)
+                    d->next = fmin(d->next, edge_due(k, &an->timing, base, s->offset + span * xs[j], now));
+            }
+        }
+    }
+    return true;
+}
+
+double f_motion_next(const FMotion *m, double now)
+{
+    // Of the animations in effect now, the last to set each property with a
+    // value wholly its own — its list for it not dropped, its interval
+    // between two of its own keyframes, not resting on the value
+    // underneath: that value replaces an earlier one's (f_motion_style), so
+    // what an earlier one does to the property is not shown — until the
+    // later one's interval or its effect ends, which that one is due for
+    // itself.
+    int32_t last[GARB_NPROPS];
+    for (int p = 0; p < GARB_NPROPS; p++)
+        last[p] = -1;
+    for (int32_t a = m->nanims - 1; a >= 0; a--) {
+        const FAnimation *an = &m->anims[a];
+        if (an->record == NULL)
+            continue;
+        Clock k = clock_at(&an->timing, local_time(an->record, now));
+        if (!k.in_effect)
+            continue;
+        for (int p = 0; p < GARB_NPROPS; p++) {
+            if (last[p] >= 0 || !f_props_has(&an->props, (garb_prop_t)p) ||
+                f_props_has(&an->dropped, (garb_prop_t)p))
+                continue;
+            Frame s, e;
+            interval(an, &m->base, (garb_prop_t)p, k.progress, &s, &e);
+            if (!s.implicit && !e.implicit)
+                last[p] = a;
+        }
+    }
+    // Each animation's phases: the start of its active phase, its end, and
+    // the current iteration's.
+    double next = INFINITY;
+    for (int32_t a = 0; a < m->nanims; a++) {
+        const FAnimation *an = &m->anims[a];
+        if (an->record == NULL || an->record->now.paused || !anim_shows(an, a, last))
+            continue;
+        double base = an->record->now.start;
+        Clock k = clock_at(&an->timing, local_time(an->record, now));
+        if (k.phase == PHASE_BEFORE) {
+            next = fmin(next, base + k.before_end);
+            continue;
+        }
+        if (k.phase == PHASE_AFTER)
+            continue;
+        next = fmin(next, base + k.active_end);
+        double dur = an->timing.duration_ms;
+        if (dur > 0 && isfinite(k.iteration_start))
+            next = fmin(next, base + k.iteration_start + dur);
+    }
+    // And each one's intervals, walked as the value is, so that each sees
+    // the value the ones before it made.
+    if (next > now) {
+        Due d = {m, now, next, last, {{0}}};
+        ProbeLists lists;
+        lists.used = 0;
+        flow_style_t walked = m->base;
+        Look look = {now, &walked, probe_alloc, &lists, &d.failed};
+        (void)motion_walk(m, &look, 1, false, due_step, &d);
+        next = d.next;
+    }
+    // And the millisecond after this one, asked of the value itself.
+    double then = floor(now) + 1;
+    if (next > then && changes_by(m, now, then))
+        next = then;
+    return next;
+}

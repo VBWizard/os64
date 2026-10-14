@@ -157,7 +157,9 @@ void os64_ui_theme_current(os64_ui_theme_t *theme, uint64_t *installed) {
 int64_t os64_ticks(os64_ticks_t *ticks) { *ticks=(os64_ticks_t){.ticks=100,.per_second=1000}; return 0; }
 static uint64_t now_ms=100;
 uint64_t yonder_now_ms(void) { return now_ms; }
-void yonder_ticker_set(yonder_ticker_t *ticker, uint64_t due) { (void)ticker; (void)due; }
+/* The ticker's deadline, as the window last handed it over. */
+static uint64_t ticker_due=YONDER_NEVER;
+void yonder_ticker_set(yonder_ticker_t *ticker, uint64_t due) { (void)ticker; ticker_due=due; }
 /* THE POOL, FAKED. A stream case (below) lets one navigation be submitted
  * and plays its worker itself; every other case still treats a submission
  * as a mistake. */
@@ -383,12 +385,13 @@ bool os64_ui_theme_session(os64_ui_theme_t *theme, uint64_t *installed, uint64_t
     (void)theme; (void)installed; (void)hint; return false;
 }
 static char saved_scripts[8], saved_zoom[8], saved_seconds[8], saved_diagnostics[256], saved_appearance[8],
-    settings_report[256];
+    saved_animations[8], saved_motion[16], settings_report[256];
 int64_t os64_conf_get(const char *file, const char *key, char *out, size_t cap) {
     check(os64_streq(file,"yonder.conf"),"settings read Yonder configuration");
     const char *value=os64_streq(key,"scripts") ? saved_scripts :
         os64_streq(key,"zoom") ? saved_zoom : os64_streq(key,"script_seconds") ? saved_seconds :
-        os64_streq(key,"diagnostics") ? saved_diagnostics : os64_streq(key,"appearance") ? saved_appearance : "";
+        os64_streq(key,"diagnostics") ? saved_diagnostics : os64_streq(key,"appearance") ? saved_appearance :
+        os64_streq(key,"animations") ? saved_animations : os64_streq(key,"motion") ? saved_motion : "";
     if(!value[0]) return OS64_CONF_NO_KEY;
     os64_strcopy(out,cap,value); return 0;
 }
@@ -398,6 +401,8 @@ int64_t os64_conf_set(const char *file, const char *key, const char *value) {
     if(os64_streq(key,"zoom")) os64_strcopy(saved_zoom,sizeof(saved_zoom),value);
     if(os64_streq(key,"script_seconds")) os64_strcopy(saved_seconds,sizeof(saved_seconds),value);
     if(os64_streq(key,"appearance")) os64_strcopy(saved_appearance,sizeof(saved_appearance),value);
+    if(os64_streq(key,"animations")) os64_strcopy(saved_animations,sizeof(saved_animations),value);
+    if(os64_streq(key,"motion")) os64_strcopy(saved_motion,sizeof(saved_motion),value);
     return 0;
 }
 void os64_ui_settings_report(os64_ui_settings_t *dialog, const char *text) {
@@ -686,7 +691,8 @@ static void scripted_face_budget(void) {
         probe_borrow_font=true;
         os64_font_config_defaults(&s_fonts_conf);
         strcpy(s_fonts_conf.roles[OS64_FONT_CONFIG_WEB].face[0],"builtin");
-        probe_page("<style>#one{font-size:16px}#two{font-size:20px}#three{font-size:24px}</style>"
+        probe_page("<style>#one{font-size:16px}#two{font-size:20px}#three{font-size:24px}"
+            "@keyframes fade{to{opacity:0}}.changed{animation:fade 10s linear}</style>"
             "<p id=one>one<input id=field value=kept></p><p id=two>two</p><p id=three>three</p>"
             "<script>document.getElementById('one').setAttribute('class','changed');</script>"
             "<script>document.getElementById('three').textContent='last';</script>",true);
@@ -710,9 +716,18 @@ static void scripted_face_budget(void) {
                 "refused retry keeps rebuild owed, queue pending and stale controls hidden");
             check(!lay_out_page(&g.page,800,600) && g.page.tree==NULL,
                 "ordinary relayout cannot bypass owed DOM rebuild after reclaim");
+            // The discarded layout started the fade the script's class
+            // names; never shown, it is undone, so the fade starts at the
+            // layout that recovers, five seconds on, not half run.
+            uint64_t was_now=now_ms;
+            now_ms+=5000;
             script_turn();
             check(probe_text_is("three","last") && !yonder_scripts_pending(g.page.scripts),
                 "next UI turn recovers a tree before executing the queued script");
+            const flow_box_t *faded=g.page.tree!=NULL ? flow_box_for(g.page.tree,probe_id("one")) : NULL;
+            check(faded!=NULL && faded->style->opacity==1000,
+                "a discarded layout's animations start at the layout that is shown");
+            now_ms=was_now;
         } else {
             check(rebuilt,"staged font-budget rebuild succeeds");
         }
@@ -829,6 +844,8 @@ static void settings_zoom_capture(uint32_t zoom) { settings_zoom=zoom; }
 static uint32_t settings_seconds;
 static int settings_dark=-1;
 static void settings_dark_capture(bool dark) { settings_dark=dark; }
+static int settings_run=-1, settings_reduce=-1;
+static void settings_motion_capture(bool run, bool reduce) { settings_run=run; settings_reduce=reduce; }
 static void settings_capture(const char *agent, bool enabled, uint32_t seconds) {
     check(os64_streq(agent,YONDER_AGENT),"settings preserves agent while applying scripts");
     settings_applied=enabled;
@@ -844,6 +861,7 @@ static void switch_cases(void) {
     settings_fixture.use=settings_capture;
     settings_fixture.zoom_use=settings_zoom_capture;
     settings_fixture.dark_use=settings_dark_capture;
+    settings_fixture.motion_use=settings_motion_capture;
     strcpy(settings_fixture.zoom_buf,"125");
     saved_appearance[0]=0;
     check(!yonder_settings_saved_dark(),"pages are light unless yonder.conf says dark");
@@ -868,6 +886,32 @@ static void switch_cases(void) {
     check(settings_dark==1 && os64_streq(saved_appearance,"light"),"Apply turns this window dark without saving it");
     apply(&settings_fixture.d,true);
     check(os64_streq(saved_appearance,"dark") && yonder_settings_saved_dark(),"Save as default saves dark pages");
+    /* The animations' switches: run unless `animations = off`, reduce only
+     * on `motion = reduce`; Apply hands both over, Save writes both. */
+    saved_animations[0]=saved_motion[0]=0;
+    check(yonder_settings_saved_animations() && !yonder_settings_saved_reduce_motion(),
+        "motion settings: animations run and motion is not reduced unless yonder.conf says so");
+    strcpy(saved_animations,"OFF"); strcpy(saved_motion,"Reduce");
+    check(!yonder_settings_saved_animations() && yonder_settings_saved_reduce_motion(),
+        "motion settings: `animations = off` and `motion = reduce`, either case");
+    strcpy(saved_animations,"bogus"); strcpy(saved_motion,"bogus");
+    check(yonder_settings_saved_animations() && !yonder_settings_saved_reduce_motion(),
+        "motion settings: any other word is the default");
+    saved_animations[0]=saved_motion[0]=0;
+    settings_fixture.run.checked=false; settings_fixture.reduce.checked=true;
+    apply(&settings_fixture.d,false);
+    check(settings_run==0 && settings_reduce==1 && saved_animations[0]==0 && saved_motion[0]==0,
+        "motion settings: Apply hands this window both switches without saving them");
+    apply(&settings_fixture.d,true);
+    check(os64_streq(saved_animations,"off") && os64_streq(saved_motion,"reduce") &&
+          !yonder_settings_saved_animations() && yonder_settings_saved_reduce_motion(),
+        "motion settings: Save as default writes both");
+    settings_fixture.run.checked=true; settings_fixture.reduce.checked=false;
+    apply(&settings_fixture.d,true);
+    check(settings_run==1 && settings_reduce==0 && os64_streq(saved_animations,"on") &&
+          os64_streq(saved_motion,"no-preference") && yonder_settings_saved_animations() &&
+          !yonder_settings_saved_reduce_motion(),
+        "motion settings: and back");
     settings_fixture.dark.checked=false;
     settings_fixture.scripts.checked=false;
     apply(&settings_fixture.d,true);
@@ -884,6 +928,159 @@ static void switch_cases(void) {
     check(strstr(g.status_text,"SCRIPTS ON")==NULL,"off clears status indicator");
     probe_drop();
     yonder_agents_release();
+}
+
+/* THE ANIMATIONS' LAYOUTS (PILE3.md § The animation model): the shown page
+ * is laid out again when what the view shows next changes — quietly, held
+ * to what its layouts cost, never for a covered window or with animations
+ * off — on a timeline it keeps across its layouts. The fake clocks stand
+ * still: now_ms is the window's, and a layout costs geometry_layout_delay. */
+static int32_t motion_x(const char *id) {
+    const flow_box_t *b=flow_box_for(g.page.tree,probe_id(id));
+    return b!=NULL ? b->rect.x : -1;
+}
+static const char kMotionPage[]="<!doctype html><style>body{margin:0}"
+    "@keyframes slide{from{margin-left:0}to{margin-left:100px}}"
+    "#a{margin-left:20px;width:10px;height:10px;animation:slide 1s linear infinite}"
+    "@media (prefers-reduced-motion: reduce){#a{animation:none}}"
+    "#far{margin-top:3000px;width:10px;height:10px;animation:slide 1s steps(4) infinite}</style>"
+    "<div id=a></div><div id=far></div>";
+static void motion_cases(void) {
+    bool was_run=s_animations, was_reduce=s_reduce_motion;
+    s_animations=true; s_reduce_motion=false;
+    clock_step=0; geometry_layout_delay=0;
+    now_ms=100;
+    probe_page(kMotionPage,false);
+    check(g.page.timeline==NULL && motion_next()==YONDER_NEVER,
+        "motion: a layout not made to be shown starts nothing, and nothing is due");
+    relayout(true);
+    check(g.page.timeline!=NULL && motion_x("a")==0 && motion_next()==100 && ticker_due==100,
+        "motion: the shown page's layout starts its animations, and one moving is due at once");
+    char status[sizeof(g.status_text)];
+    os64_strcopy(status,sizeof(status),g.status_text);
+    now_ms=600; geometry_layout_delay=5000;
+    g.laid_ms=37;
+    motion_tick();
+    check(motion_x("a")==50 && g.motion_laid && g.motion_began==600 && g.motion_us==5000 &&
+          os64_streq(status,g.status_text) && g.laid_ms==37,
+        "motion: a tick lays the page out at its moment, quietly, and keeps what it cost apart");
+    check(motion_next()==616 && ticker_due==616,
+        "motion: the next comes a frame after the last began when twice its cost is sooner");
+    geometry_layout_delay=40000; now_ms=616;
+    motion_tick();
+    check(motion_x("a")==52 && motion_next()==696,
+        "motion: a costlier layout (51.6 px, at the nearest pixel) waits twice its cost after it ends");
+    now_ms=650;
+    motion_tick();
+    check(g.motion_began==616,"motion: a ring before an animation's layout is due lays nothing out");
+    /* A frame's paint is part of its cost: a layout of 5 ms at 700 whose
+     * paint ends at 730, 30 ms of micros later, costs 35 ms and ends at
+     * 730, so the next waits until 800. */
+    geometry_layout_delay=5000; now_ms=700;
+    motion_tick();
+    clock_us+=30000; now_ms=730;
+    motion_painted();
+    check(g.motion_began==700 && g.motion_us==35000 && g.motion_ended==730 && !g.motion_painting &&
+          motion_next()==800,
+        "motion: a frame costs its layout and its paint, and ends when it is painted");
+    clock_us+=10000; now_ms=740;
+    motion_painted();
+    check(g.motion_us==35000 && g.motion_ended==730,
+        "motion: a paint with no frame before it costs nothing");
+    g.covered=true;
+    pictures_schedule();
+    check(motion_next()==YONDER_NEVER && ticker_due==YONDER_NEVER,"motion: a covered window lays out for none");
+    g.covered=false;
+    geometry_layout_delay=201000; now_ms=800;
+    motion_tick();
+    check(g.motion_began==800 && motion_next()==YONDER_NEVER,
+        "motion: a page whose frame for an animation took more than MOTION_COST_MS lays out for none");
+    geometry_layout_delay=0;
+    probe_drop();
+
+    /* Before its first layout for an animation, the page's own last layout
+     * stands for the cost; one that fails is the page's last. */
+    now_ms=1000;
+    probe_page(kMotionPage,false);
+    relayout(true);
+    g.laid_ms=MOTION_COST_MS+1;
+    check(motion_next()==YONDER_NEVER,"motion: a page whose own layout was too slow lays out for no animation");
+    g.laid_ms=MOTION_COST_MS;
+    check(motion_next()==1000,"motion: one at the limit still does");
+    geometry_refuse_layout=true;
+    motion_tick();
+    geometry_refuse_layout=false;
+    check(g.page.tree!=NULL && g.motion_us==UINT64_MAX && motion_next()==YONDER_NEVER,
+        "motion: a layout for an animation that fails keeps the page and is its last");
+    probe_drop();
+
+    /* What the view shows: an animation that only repaints where its
+     * element is waits out of view, and one in steps is due at its next
+     * edge; one that moves its element is due wherever it is, since a
+     * later frame may carry it into view. */
+    now_ms=1000;
+    probe_page("<!doctype html><style>body{margin:0}@keyframes tint{to{color:red}}"
+        "#near{height:10px;animation:tint 1s linear infinite}"
+        "#far{margin-top:3000px;height:10px;animation:tint 1s steps(4) infinite}</style>"
+        "<div id=near>a</div><div id=far>b</div>",false);
+    relayout(true);
+    scroll_to(0,3000);
+    check(motion_next()==1250,"motion: in view, a stepped animation is due at its next step");
+    scroll_to(0,1000);
+    check(motion_next()==YONDER_NEVER,"motion: an animation in place, out of view, is due for nothing");
+    probe_drop();
+    now_ms=1000;
+    probe_page(kMotionPage,false);
+    relayout(true);
+    scroll_to(0,1000);
+    check(motion_next()==1000,"motion: an animation that moves its element is due out of view");
+    scroll_to(0,0);
+
+    /* The switches. Off, nothing is due — even while the page on screen is
+     * one laid out with its animations, its new layout having failed. */
+    geometry_refuse_layout=true;
+    motion_use(false,false);
+    geometry_refuse_layout=false;
+    check(g.page.tree!=NULL && motion_x("a")==0 && motion_next()==YONDER_NEVER,
+        "motion: animations off, nothing is due, even on the layout made with them");
+    relayout(true);
+    check(motion_x("a")==20 && motion_next()==YONDER_NEVER && g.page.timeline!=NULL,
+        "motion: animations off lay the page out as its rules say, nothing due, the timeline kept");
+    now_ms=1750;
+    motion_use(true,false);
+    check(motion_x("a")==75,"motion: on again, an animation is as far along as its start says");
+    motion_use(true,true);
+    check(motion_x("a")==20 && garb_cascade_env(g.page.cascade).reduced_motion,
+        "motion: Reduce motion has the page told so, and the page's rule turns its animation off");
+    now_ms=1800;
+    motion_use(true,false);
+    check(motion_x("a")==0,"motion: an animation its rules name again starts over");
+    probe_drop();
+
+    /* A script removes the animated element: the next complete layout
+     * drops its record and lets the node go. */
+    now_ms=2000;
+    probe_page("<!doctype html><style>@keyframes slide{to{margin-left:100px}}"
+        "#a{animation:slide 1s infinite}</style><div id=a></div>"
+        "<script>document.getElementById('a').remove()</script>",true);
+    relayout(true);
+    check(motion_next()==2000,"motion: the element to be removed animates");
+    script_turn(); script_turn();
+    check(probe_id("a")==NULL && motion_next()==YONDER_NEVER,
+        "motion: once the element is removed, nothing is due");
+    probe_drop();
+
+    /* A script's change is laid out on the page's timeline, which the
+     * rebuild makes when the page has none. */
+    now_ms=2500;
+    probe_page("<!doctype html><style>@keyframes slide{to{margin-left:100px}}"
+        ".go{animation:slide 1s infinite}</style><div id=a></div>"
+        "<script>document.getElementById('a').className='go'</script>",true);
+    script_turn(); script_turn();
+    check(g.page.timeline!=NULL && motion_next()==2500,
+        "motion: a script's change starts an animation on the page's timeline");
+    probe_drop();
+    s_animations=was_run; s_reduce_motion=was_reduce;
 }
 
 static void edit_and_kind_changes(void) {
@@ -2274,7 +2471,28 @@ static void loop_cases(void) {
     loop_local_file();
     loop_write_cases();
 }
+/* A page that arrives starts its animations at the layout that shows it,
+ * and is judged by its own costs: the page before it was too slow to
+ * animate. The page it replaced goes with its timeline. */
+static void stream_motion(void) {
+    stream_window();
+    now_ms=5000;
+    g.motion_laid=true; g.motion_us=UINT64_MAX;
+    start_trip("http://fixture.test/p",NULL,NAV_GO,NULL);
+    static const char page[]="<!doctype html><style>@keyframes slide{to{margin-left:100px}}"
+        "#a{animation:slide 1s infinite}</style><div id=a>x</div>";
+    way_head_t h=stream_head("text/html","",false);
+    yonder_mail_post_head(g.stream.mail,&h);
+    stream_post_body((const uint8_t *)page,strlen(page),YONDER_STREAM_CHUNK);
+    stream_post_verdict(true,OS64_FETCH_OK,"");
+    while(stream_turn()) {}
+    check(g.page.tree!=NULL && g.page.timeline!=NULL && !g.motion_laid && motion_next()==5000,
+        "motion: an arriving page starts its animations at the layout that shows it, judged by its own cost");
+    stream_window_drop();
+}
+
 static void stream_cases(void) {
+    stream_motion();
     stream_captures_mode();
     stream_slices();
     stream_reaped_first();
@@ -3785,6 +4003,7 @@ int main(void)
     script_lifecycle();
     native_refusals();
     switch_cases();
+    motion_cases();
     edit_and_kind_changes();
     password_edits();
     reset_editors();

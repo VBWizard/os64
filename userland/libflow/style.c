@@ -17,6 +17,7 @@
 // The walk is iterative, over the tree's own parent pointers, so a page as
 // deep as libhtml allows is styled without a stack as deep as the page.
 
+#include <float.h>
 #include <math.h>
 
 #include "internal.h"
@@ -1367,7 +1368,9 @@ typedef struct {
     int32_t sheet;              // the winner being read: the sheet it came from
 } Author;
 
-static bool word(const garb_val_t *v, const char *w)
+// Not `word`: built -masm=intel, a function GCC leaves out of line is
+// named in the assembly, and a symbol named word reads as WORD there.
+static bool is_word(const garb_val_t *v, const char *w)
 {
     return v->kind == GARB_V_KEYWORD && os64_streq(v->keyword, w);
 }
@@ -1507,7 +1510,7 @@ static bool author_len(const Author *a, const garb_val_t *v, bool allow_auto, Le
 {
     switch (v->kind) {
     case GARB_V_KEYWORD:
-        if (allow_auto && word(v, "auto")) {
+        if (allow_auto && is_word(v, "auto")) {
             *out = kAuto;
             return true;
         }
@@ -1686,9 +1689,9 @@ static void author_font_size(Author *a, Spec *sp, const garb_val_t *v)
     if (i >= 0) {
         sp->fs_kind = FS_KEYWORD;
         sp->fs_v = i;
-    } else if (word(v, "larger")) {
+    } else if (is_word(v, "larger")) {
         sp->fs_kind = FS_LARGER;
-    } else if (word(v, "smaller")) {
+    } else if (is_word(v, "smaller")) {
         sp->fs_kind = FS_SMALLER;
     } else if (v->kind == GARB_V_PERCENTAGE) {
         sp->fs_kind = FS_EM;
@@ -1711,13 +1714,13 @@ static void author_font_weight(Author *a, Spec *sp, const garb_val_t *v)
 {
     uint16_t up = a->parent != NULL ? a->parent->font_weight : 400;
     sp->bolder = false;
-    if (word(v, "normal"))
+    if (is_word(v, "normal"))
         sp->s.font_weight = 400;
-    else if (word(v, "bold"))
+    else if (is_word(v, "bold"))
         sp->s.font_weight = 700;
-    else if (word(v, "bolder"))
+    else if (is_word(v, "bolder"))
         sp->s.font_weight = bolder(up);
-    else if (word(v, "lighter"))    // Fonts 4 § 2.2's table
+    else if (is_word(v, "lighter"))    // Fonts 4 § 2.2's table
         sp->s.font_weight = up < 100 ? up : up < 550 ? 100 : up < 750 ? 400 : 700;
     else if (v->kind == GARB_V_NUMBER)
         sp->s.font_weight = (uint16_t)(v->number < 1 ? 1 : v->number > 1000 ? 1000
@@ -1947,6 +1950,39 @@ static void take(Spec *dst, const Spec *src, garb_prop_t prop)
     case GARB_TRANSLATE: d->translate = s->translate; break;
     case GARB_ROTATE: d->rotate = s->rotate; break;
     case GARB_SCALE: d->scale = s->scale; break;
+    case GARB_ANIMATION_NAME:
+        d->animations.name = s->animations.name;
+        d->animations.nname = s->animations.nname;
+        break;
+    case GARB_ANIMATION_DURATION:
+        d->animations.duration = s->animations.duration;
+        d->animations.nduration = s->animations.nduration;
+        break;
+    case GARB_ANIMATION_TIMING_FUNCTION:
+        d->animations.easing = s->animations.easing;
+        d->animations.neasing = s->animations.neasing;
+        break;
+    case GARB_ANIMATION_ITERATION_COUNT:
+        d->animations.iterations = s->animations.iterations;
+        d->animations.niterations = s->animations.niterations;
+        break;
+    case GARB_ANIMATION_DIRECTION:
+        d->animations.direction = s->animations.direction;
+        d->animations.ndirection = s->animations.ndirection;
+        break;
+    case GARB_ANIMATION_PLAY_STATE:
+        d->animations.paused = s->animations.paused;
+        d->animations.npaused = s->animations.npaused;
+        break;
+    case GARB_ANIMATION_DELAY:
+        d->animations.delay = s->animations.delay;
+        d->animations.ndelay = s->animations.ndelay;
+        break;
+    case GARB_ANIMATION_FILL_MODE:
+        d->animations.fill = s->animations.fill;
+        d->animations.nfill = s->animations.nfill;
+        break;
+    case GARB_WILL_CHANGE: d->will_change = s->will_change; break;
     default: break;
     }
 }
@@ -2030,8 +2066,8 @@ static bool author_breadth(const Author *a, const garb_val_t *v, flow_breadth_t 
         return true;
     }
     if (v->kind == GARB_V_KEYWORD) {
-        out->kind = word(v, "min-content")   ? FLOW_TRACK_MIN_CONTENT
-                    : word(v, "max-content") ? FLOW_TRACK_MAX_CONTENT
+        out->kind = is_word(v, "min-content")   ? FLOW_TRACK_MIN_CONTENT
+                    : is_word(v, "max-content") ? FLOW_TRACK_MAX_CONTENT
                                              : FLOW_TRACK_AUTO;
         return true;
     }
@@ -2086,7 +2122,7 @@ static GridRead author_tracks(Author *a, const garb_val_t *v, flow_tracks_t *out
 {
     os64_memset(out, 0, sizeof(*out));
     if (v->kind == GARB_V_KEYWORD)
-        return word(v, "none") || word(v, "auto") ? GRID_READ_OK : GRID_READ_UNUSABLE;
+        return is_word(v, "none") || is_word(v, "auto") ? GRID_READ_OK : GRID_READ_UNUSABLE;
     // A single size (grid-auto-*) is a list of one.
     const garb_val_t *items = v->kind == GARB_V_TRACKS ? v->items : v;
     int32_t n = v->kind == GARB_V_TRACKS ? v->nitems : 1;
@@ -2118,7 +2154,7 @@ static GridRead author_tracks(Author *a, const garb_val_t *v, flow_tracks_t *out
         if (automatic) {
             out->repeat_at = k;
             out->repeat_n = inner->nitems;
-            out->repeat_fit = word(&t->items[0], "auto-fit");
+            out->repeat_fit = is_word(&t->items[0], "auto-fit");
         }
         for (int64_t r = 0; r < times && k < total; r++)
             for (int32_t j = 0; j < inner->nitems && k < total; j++)
@@ -2139,7 +2175,7 @@ static GridRead author_areas(Author *a, const garb_val_t *v, flow_style_t *s)
     s->grid_areas = NULL;
     s->ngrid_areas = s->grid_area_rows = s->grid_area_cols = 0;
     if (v->kind != GARB_V_STRING || v->nitems <= 0)
-        return word(v, "none") ? GRID_READ_OK : GRID_READ_UNUSABLE;
+        return is_word(v, "none") ? GRID_READ_OK : GRID_READ_UNUSABLE;
     int32_t rows = v->nitems;
     int32_t cols = garb_area_cells(v->items[0].text, (uint32_t)v->items[0].len, NULL, 0);
     if (cols <= 0 || (int64_t)rows * cols > F_GRID_AREA_CELLS)
@@ -2273,13 +2309,13 @@ static bool author_gradient(const Author *a, const flow_style_t *s, const garb_v
         };
         g->kind = FLOW_GRADIENT_LINEAR;
         for (size_t k = 0; k < F_ARRAY(kTo); k++)
-            if (word(geo, kTo[k].name)) {
+            if (is_word(geo, kTo[k].name)) {
                 g->to_x = kTo[k].x;
                 g->to_y = kTo[k].y;
             }
     } else {
         g->kind = FLOW_GRADIENT_RADIAL;
-        g->circle = word(geo, "circle");
+        g->circle = is_word(geo, "circle");
         g->extent = FLOW_EXTENT_FARTHEST_CORNER;
         g->radii[0] = g->radii[1] = kUnwritten;
         g->centre[0] = g->centre[1] = kHalf;
@@ -2292,7 +2328,7 @@ static bool author_gradient(const Author *a, const flow_style_t *s, const garb_v
             } else {
                 g->extent = FLOW_EXTENT_SIZE;
                 g->radii[0] = author_lp(a, &geo->items[0], kUnwritten);
-                g->radii[1] = word(&geo->items[1], "auto") ? g->radii[0]
+                g->radii[1] = is_word(&geo->items[1], "auto") ? g->radii[0]
                                                             : author_lp(a, &geo->items[1], kUnwritten);
             }
             g->centre[0] = author_lp(a, &geo->items[2], kHalf);
@@ -2329,7 +2365,7 @@ static bool author_shadows(const Author *a, flow_style_t *s, const garb_val_t *v
 {
     const flow_shadow_t **list = box ? &s->box_shadows : &s->text_shadows;
     int32_t *count = box ? &s->nbox_shadows : &s->ntext_shadows;
-    if (word(v, "none") || v->nitems == 0) {
+    if (is_word(v, "none") || v->nitems == 0) {
         *list = NULL;
         *count = 0;
         return true;
@@ -2343,7 +2379,7 @@ static bool author_shadows(const Author *a, flow_style_t *s, const garb_val_t *v
         int32_t k = 0;
         flow_shadow_t *sh = &out[i];
         os64_memset(sh, 0, sizeof(*sh));
-        if (k < one->nitems && word(&one->items[k], "inset")) {
+        if (k < one->nitems && is_word(&one->items[k], "inset")) {
             sh->inset = true;
             k++;
         }
@@ -2367,10 +2403,13 @@ static bool author_shadows(const Author *a, flow_style_t *s, const garb_val_t *v
 
 // ── Transforms (CSS Transforms 1 § 9, 2 § 12) ──────────────────────────
 //
-// Each function is made its matrix here, at the element's font, once; only
-// a translation's percentages wait for the box (flow_transform_t). A
-// function libflow cannot work out — a calc() it cannot settle — leaves the
-// property as it was, as a value it cannot read does.
+// Each function is read here, at the element's font, once, into its
+// primitive and arguments (flow_transform_t), and made its matrix by
+// f_transform_fn_matrix — what an animation's mixed functions are made by
+// too, so a keyframe's matrix and the style's are one; only a
+// translation's percentages wait for the box. A function libflow cannot
+// work out — a calc() it cannot settle — leaves the property as it was, as
+// a value it cannot read does.
 
 static const flow_length_t kNoLength = {FLOW_LENGTH_AUTO, 0, 0};
 
@@ -2380,18 +2419,15 @@ static void identity(double m[16])
     m[0] = m[5] = m[10] = m[15] = 1;
 }
 
-// An angle in radians, reduced by whole turns in its own unit first
-// (fmod is exact): rotate(1e308deg) times pi would be past a double, and
-// a turn more or less is the same turn. Radians stay as written; cos and
-// sin reduce them themselves.
-static double radians(const garb_val_t *v)
+// An angle's unit, as the function keeps it (flow_transform_t): its matrix
+// is worked in it (motion.c's f_transform_fn_matrix).
+static flow_angle_unit_t angle_unit(const garb_val_t *v)
 {
-    static const double kPi = 3.14159265358979323846;
     switch (v->unit) {
-    case GARB_U_GRAD: return fmod(v->number, 400) * kPi / 200;
-    case GARB_U_RAD: return v->number;
-    case GARB_U_TURN: return fmod(v->number, 1) * 2 * kPi;
-    default: return fmod(v->number, 360) * kPi / 180;
+    case GARB_U_GRAD: return FLOW_ANGLE_GRAD;
+    case GARB_U_RAD: return FLOW_ANGLE_RAD;
+    case GARB_U_TURN: return FLOW_ANGLE_TURN;
+    default: return FLOW_ANGLE_DEG;
     }
 }
 
@@ -2421,137 +2457,120 @@ static bool author_px(const Author *a, const garb_val_t *v, double *out)
     return true;
 }
 
-// The quarter turns `v` is, when it is written as a whole number of them —
-// 90deg, 100grad, 0.25turn, each tested exactly — so that its sine and
-// cosine are exact, as a double's cos(pi / 2), 6e-17, is not: 0 to 3, or
-// -1 for any other angle, which is worked out as written.
-static int quarters(const garb_val_t *v)
-{
-    double n = v->number, per = v->unit == GARB_U_GRAD ? 100 : v->unit == GARB_U_TURN ? 0.25
-                                : v->unit == GARB_U_RAD ? 0 : 90;
-    if (!isfinite(n) || (per == 0 ? n != 0 : fmod(n, per) != 0))
-        return -1;
-    if (per == 0)
-        return 0;
-    // Reduced by a whole turn before it is divided, so a huge angle
-    // (1e308turn) never overflows on the way to its quarter.
-    double q = fmod(n, 4 * per) / per;
-    return (int)(q < 0 ? q + 4 : q);
-}
-
-// A turn by the angle `v` about the axis (x, y, z), into `m`: Rodrigues'
-// rotation, which is Transforms 2 § 12.2's rotate3d() — clockwise on the
-// glass about z, since y points down — with the axis made a unit vector.
-// An axis of no length turns nothing. A whole number of quarter turns is
-// exact, so rotateX(90deg) is edge-on: collapsed, drawn and hit nowhere.
-static void rotation(double m[16], double x, double y, double z, const garb_val_t *v)
-{
-    // Made a unit vector scaled by its largest part first, so that neither
-    // rotate3d(1e308, 0, 0, a) overflows nor a tiny axis underflows to none.
-    double k = fmax(fabs(x), fmax(fabs(y), fabs(z)));
-    if (!(k > 0) || !isfinite(k))
-        return;
-    x /= k;
-    y /= k;
-    z /= k;
-    double len = sqrt(x * x + y * y + z * z);
-    x /= len;
-    y /= len;
-    z /= len;
-    static const double kCos[4] = {1, 0, -1, 0}, kSin[4] = {0, 1, 0, -1};
-    int q = quarters(v);
-    double angle = radians(v);
-    double c = q >= 0 ? kCos[q] : cos(angle), s = q >= 0 ? kSin[q] : sin(angle);
-    double t = 1 - c;
-    m[0] = c + x * x * t;
-    m[1] = y * x * t + z * s;
-    m[2] = z * x * t - y * s;
-    m[4] = x * y * t - z * s;
-    m[5] = c + y * y * t;
-    m[6] = z * y * t + x * s;
-    m[8] = x * z * t + y * s;
-    m[9] = y * z * t - x * s;
-    m[10] = c + z * z * t;
-}
-
 static bool is_fn(const char *n, const char *a, const char *b)
 {
     return os64_streq(n, a) || (b != NULL && os64_streq(n, b));
 }
 
-// One function of a transform list, by libgarb's name for it (values.h).
+// One function of a transform list, by libgarb's name for it (values.h):
+// its primitive and arguments (flow_transform_t), and the matrix they make.
 static bool author_fn(const Author *a, const garb_val_t *f, flow_transform_t *out)
 {
     const char *n = f->keyword;
     const garb_val_t *v = f->items;
     int32_t k = f->nitems;
     double *m = out->m, unit = FLOW_UNITS_PER_PX * a->c->zoom, d[16];
+    os64_memset(out, 0, sizeof(*out));
     out->x = out->y = (flow_length_t){FLOW_LENGTH_PX, 0, 0};
     identity(m);
     if (k < 1)
         return false;
     if (is_fn(n, "translate", "translatex") || is_fn(n, "translatey", "translate3d")) {
         bool y_only = os64_streq(n, "translatey");
+        out->fn = FLOW_FN_TRANSLATE;
+        out->three_d = os64_streq(n, "translate3d");
         if (!y_only)
             out->x = author_lp(a, &v[0], kNoLength);
         if (y_only || (k > 1 && !os64_streq(n, "translatex")))
             out->y = author_lp(a, &v[y_only ? 0 : 1], kNoLength);
-        return out->x.kind != FLOW_LENGTH_AUTO && out->y.kind != FLOW_LENGTH_AUTO &&
-               (!os64_streq(n, "translate3d") || (k == 3 && author_px(a, &v[2], &m[14])));
+        if (out->x.kind == FLOW_LENGTH_AUTO || out->y.kind == FLOW_LENGTH_AUTO ||
+            (out->three_d && !(k == 3 && author_px(a, &v[2], &out->a[2]))))
+            return false;
+        f_transform_fn_matrix(out);
+        return true;
     }
-    if (os64_streq(n, "translatez"))
-        return author_px(a, &v[0], &m[14]);
+    if (os64_streq(n, "translatez")) {
+        out->fn = FLOW_FN_TRANSLATE;
+        out->three_d = true;
+        if (!author_px(a, &v[0], &out->a[2]))
+            return false;
+        f_transform_fn_matrix(out);
+        return true;
+    }
     if (os64_streq(n, "perspective")) {
         // `none` is no perspective; a distance below 1px is 1px
         // (Transforms 2 § 12.2).
         double dist;
+        out->fn = FLOW_FN_PERSPECTIVE;
+        out->three_d = true;
         if (v[0].kind == GARB_V_KEYWORD)
             return true;
         if (!author_px(a, &v[0], &dist))
             return false;
-        m[11] = -1 / (dist > unit ? dist : unit);
+        out->a[0] = dist > unit ? dist : unit;
+        f_transform_fn_matrix(out);
         return true;
     }
     for (int32_t i = 0; i < k && i < 16; i++)
         if (v[i].kind != GARB_V_ANGLE && !author_number(a, &v[i], &d[i]))
             return false;
+    out->fn = FLOW_FN_SCALE;
+    out->a[0] = out->a[1] = out->a[2] = 1;
     if (is_fn(n, "scale", "scale3d")) {
-        m[0] = d[0];
-        m[5] = k > 1 ? d[1] : d[0];
-        m[10] = k > 2 ? d[2] : 1;
+        out->three_d = os64_streq(n, "scale3d");
+        out->a[0] = d[0];
+        out->a[1] = k > 1 ? d[1] : d[0];
+        out->a[2] = k > 2 ? d[2] : 1;
     } else if (is_fn(n, "scalex", NULL)) {
-        m[0] = d[0];
+        out->a[0] = d[0];
     } else if (is_fn(n, "scaley", NULL)) {
-        m[5] = d[0];
+        out->a[1] = d[0];
     } else if (is_fn(n, "scalez", NULL)) {
-        m[10] = d[0];
-    } else if (is_fn(n, "rotate", "rotatez")) {
-        rotation(m, 0, 0, 1, &v[0]);
-    } else if (is_fn(n, "rotatex", NULL)) {
-        rotation(m, 1, 0, 0, &v[0]);
-    } else if (is_fn(n, "rotatey", NULL)) {
-        rotation(m, 0, 1, 0, &v[0]);
-    } else if (is_fn(n, "rotate3d", NULL) && k == 4) {
-        rotation(m, d[0], d[1], d[2], &v[3]);
-    } else if (is_fn(n, "skew", "skewx")) {
-        m[4] = tan(radians(&v[0]));
-        if (k > 1)
-            m[1] = tan(radians(&v[1]));
-    } else if (is_fn(n, "skewy", NULL)) {
-        m[1] = tan(radians(&v[0]));
+        out->three_d = true;
+        out->a[2] = d[0];
+    } else if (is_fn(n, "rotate", "rotatez") || is_fn(n, "rotatex", "rotatey") ||
+               (is_fn(n, "rotate3d", NULL) && k == 4)) {
+        const garb_val_t *angle = &v[os64_streq(n, "rotate3d") ? 3 : 0];
+        out->fn = FLOW_FN_ROTATE;
+        out->three_d = !is_fn(n, "rotate", "rotatez");
+        out->a[0] = os64_streq(n, "rotate3d") ? d[0] : os64_streq(n, "rotatex");
+        out->a[1] = os64_streq(n, "rotate3d") ? d[1] : os64_streq(n, "rotatey");
+        out->a[2] = os64_streq(n, "rotate3d") ? d[2] : is_fn(n, "rotate", "rotatez");
+        out->a[3] = angle->number;
+        out->unit = angle_unit(angle);
+    } else if (is_fn(n, "skew", "skewx") || is_fn(n, "skewy", NULL)) {
+        out->fn = os64_streq(n, "skew") ? FLOW_FN_SKEW : os64_streq(n, "skewx") ? FLOW_FN_SKEW_X
+                                                                              : FLOW_FN_SKEW_Y;
+        out->a[0] = v[0].number;
+        out->a[1] = 0;
+        out->unit = angle_unit(&v[0]);
+        // skew(a, b) keeps one unit, the coarser of the two, so that each
+        // finite angle stays finite in it.
+        if (k > 1) {
+            flow_angle_unit_t second = angle_unit(&v[1]), to = f_angle_coarser(out->unit, second);
+            out->a[0] = f_angle_in_unit(v[0].number, out->unit, to);
+            out->a[1] = f_angle_in_unit(v[1].number, second, to);
+            out->unit = to;
+        }
     } else if (is_fn(n, "matrix", NULL) && k == 6) {
+        out->fn = FLOW_FN_MATRIX;
         m[0] = d[0], m[1] = d[1], m[4] = d[2], m[5] = d[3];
         m[12] = d[4] * unit, m[13] = d[5] * unit;
+        return true;
     } else if (is_fn(n, "matrix3d", NULL) && k == 16) {
         // Its lengths are CSS pixels: the translation is scaled into 26.6,
         // and the perspective row, which divides by a length, out of it.
+        out->fn = FLOW_FN_MATRIX;
+        out->three_d = true;
         for (int i = 0; i < 16; i++)
             m[i] = d[i];
         m[12] *= unit, m[13] *= unit, m[14] *= unit;
         m[3] /= unit, m[7] /= unit, m[11] /= unit;
+        return true;
     } else {
         return false;
     }
+    f_transform_fn_matrix(out);
     return true;
 }
 
@@ -2560,7 +2579,7 @@ static bool author_fn(const Author *a, const garb_val_t *f, flow_transform_t *ou
 // when memory runs out.
 static bool author_transform(const Author *a, flow_style_t *s, const garb_val_t *v)
 {
-    if (word(v, "none")) {
+    if (is_word(v, "none")) {
         s->transform = NULL;
         s->ntransform = 0;
         return true;
@@ -2587,45 +2606,56 @@ static bool author_individual(const Author *a, flow_style_t *s, garb_prop_t p,
 {
     const flow_transform_t **slot = p == GARB_TRANSLATE ? &s->translate
                                   : p == GARB_ROTATE ? &s->rotate : &s->scale;
-    if (word(v, "none")) {
+    if (is_word(v, "none")) {
         *slot = NULL;
         return true;
     }
     flow_transform_t t;
+    os64_memset(&t, 0, sizeof(t));
     t.x = t.y = (flow_length_t){FLOW_LENGTH_PX, 0, 0};
-    identity(t.m);
     const garb_val_t *it = v->items;
     int32_t n = v->nitems;
     bool ok = true;
     if (p == GARB_TRANSLATE) {
+        t.fn = FLOW_FN_TRANSLATE;
+        t.three_d = n >= 3;
         ok = n >= 1;
         if (n >= 1)
             t.x = author_lp(a, &it[0], kNoLength);
         if (n >= 2)
             t.y = author_lp(a, &it[1], kNoLength);
         if (n >= 3)
-            ok = author_px(a, &it[2], &t.m[14]);
+            ok = author_px(a, &it[2], &t.a[2]);
         ok = ok && t.x.kind != FLOW_LENGTH_AUTO && t.y.kind != FLOW_LENGTH_AUTO;
     } else if (p == GARB_SCALE) {
         double sc[3] = {1, 1, 1};
+        t.fn = FLOW_FN_SCALE;
+        t.three_d = n >= 3;
         ok = n >= 1;
         for (int32_t i = 0; i < n && i < 3 && ok; i++)
             ok = author_number(a, &it[i], &sc[i]);
-        t.m[0] = sc[0];
-        t.m[5] = n == 1 ? sc[0] : sc[1];
-        t.m[10] = sc[2];
+        t.a[0] = sc[0];
+        t.a[1] = n == 1 ? sc[0] : sc[1];
+        t.a[2] = sc[2];
     } else if (v->kind == GARB_V_ANGLE) {
-        rotation(t.m, 0, 0, 1, v);
+        t.fn = FLOW_FN_ROTATE;
+        t.a[2] = 1;
+        t.a[3] = v->number;
+        t.unit = angle_unit(v);
     } else {
-        double axis[3];
+        t.fn = FLOW_FN_ROTATE;
+        t.three_d = true;
         ok = n == 4 && it[3].kind == GARB_V_ANGLE;
         for (int i = 0; i < 3 && ok; i++)
-            ok = author_number(a, &it[i], &axis[i]);
-        if (ok)
-            rotation(t.m, axis[0], axis[1], axis[2], &it[3]);
+            ok = author_number(a, &it[i], &t.a[i]);
+        if (ok) {
+            t.a[3] = it[3].number;
+            t.unit = angle_unit(&it[3]);
+        }
     }
     if (!ok)
         return true;
+    f_transform_fn_matrix(&t);
     bool spent;
     flow_transform_t *out = list_alloc(a->c, sizeof(*out), &spent);
     if (out == NULL)
@@ -2736,6 +2766,160 @@ static bool author_layers(const Author *a, flow_style_t *s, garb_prop_t p, const
     }
 }
 
+// An easing, as libgarb read it (values.h); false for none it read.
+static bool easing_of(const garb_val_t *v, flow_easing_t *out)
+{
+    // Easing 1 § 2.2's keywords as their curves, § 2.3's as their steps.
+    static const struct { const char *word; flow_easing_t e; } kWords[] = {
+        {"linear", {FLOW_EASE_LINEAR, {0, 0, 0, 0}, 0, FLOW_JUMP_END, false}},
+        {"ease", {FLOW_EASE_CUBIC, {0.25, 0.1, 0.25, 1}, 0, FLOW_JUMP_END, true}},
+        {"ease-in", {FLOW_EASE_CUBIC, {0.42, 0, 1, 1}, 0, FLOW_JUMP_END, true}},
+        {"ease-out", {FLOW_EASE_CUBIC, {0, 0, 0.58, 1}, 0, FLOW_JUMP_END, true}},
+        {"ease-in-out", {FLOW_EASE_CUBIC, {0.42, 0, 0.58, 1}, 0, FLOW_JUMP_END, true}},
+        {"step-start", {FLOW_EASE_STEPS, {0, 0, 0, 0}, 1, FLOW_JUMP_START, false}},
+        {"step-end", {FLOW_EASE_STEPS, {0, 0, 0, 0}, 1, FLOW_JUMP_END, false}},
+    };
+    if (v->kind == GARB_V_KEYWORD) {
+        for (int32_t k = 0; k < F_ARRAY(kWords); k++)
+            if (os64_streq(v->keyword, kWords[k].word)) {
+                *out = kWords[k].e;
+                return true;
+            }
+        return false;
+    }
+    if (v->kind != GARB_V_FUNCTION)
+        return false;
+    os64_memset(out, 0, sizeof(*out));
+    if (os64_streq(v->keyword, "cubic-bezier") && v->nitems == 4) {
+        out->kind = FLOW_EASE_CUBIC;
+        for (int k = 0; k < 4; k++)
+            out->p[k] = v->items[k].number;
+        return true;
+    }
+    if (os64_streq(v->keyword, "steps") && v->nitems >= 1) {
+        static const char *const kJumps[] = {"jump-end", "jump-start", "jump-none", "jump-both"};
+        out->kind = FLOW_EASE_STEPS;
+        out->steps = v->items[0].number < INT32_MAX ? (int32_t)v->items[0].number : INT32_MAX;
+        out->jump = FLOW_JUMP_END;
+        if (v->nitems == 2) {
+            int32_t w = pick(&v->items[1], kJumps, F_ARRAY(kJumps));
+            out->jump = w >= 0 ? (flow_jump_t)w
+                      : is_word(&v->items[1], "start") ? FLOW_JUMP_START : FLOW_JUMP_END;
+        }
+        return true;
+    }
+    return false;
+}
+
+// A time, in milliseconds: seconds made milliseconds in long double and
+// held to a double's range, so 1e308s is the longest time a double holds
+// and not an infinity (PILE3.md § Animations, Contracts: held, not
+// resolved).
+static double ms_of(const garb_val_t *v)
+{
+    if (v->kind != GARB_V_TIME)
+        return 0;
+    long double ms = v->unit == GARB_U_S ? (long double)v->number * 1000 : v->number;
+    return ms > DBL_MAX ? DBL_MAX : ms < -DBL_MAX ? -DBL_MAX : (double)ms;
+}
+
+// An `animation-*` longhand's list (values.h): one item an animation, an
+// item libflow cannot read the property's initial value. Past the lists'
+// budget (list_alloc), the list is left as it was.
+static bool author_animations(const Author *a, flow_style_t *s, garb_prop_t p, const garb_val_t *v)
+{
+    const garb_val_t *items = v->kind == GARB_V_LAYERS ? v->items : v;
+    int32_t n = v->kind == GARB_V_LAYERS ? v->nitems : 1, w;
+    flow_animations_t *an = &s->animations;
+    bool spent;
+    size_t each = p == GARB_ANIMATION_NAME ? sizeof(flow_name_t)
+                : p == GARB_ANIMATION_TIMING_FUNCTION ? sizeof(flow_easing_t)
+                : p == GARB_ANIMATION_DIRECTION ? sizeof(flow_direction_t)
+                : p == GARB_ANIMATION_FILL_MODE ? sizeof(flow_fill_t)
+                : p == GARB_ANIMATION_PLAY_STATE ? sizeof(bool) : sizeof(double);
+    void *list = n > 0 ? list_alloc(a->c, (size_t)n * each, &spent) : NULL;
+    if (list == NULL)
+        return n <= 0 || spent;
+    for (int32_t k = 0; k < n; k++) {
+        const garb_val_t *one = &items[k];
+        switch (p) {
+        case GARB_ANIMATION_NAME:
+            ((flow_name_t *)list)[k] = one->kind == GARB_V_STRING
+                                           ? (flow_name_t){one->text, (uint32_t)one->len}
+                                           : (flow_name_t){NULL, 0};
+            break;
+        case GARB_ANIMATION_DURATION:
+        case GARB_ANIMATION_DELAY:
+            ((double *)list)[k] = ms_of(one);
+            break;
+        case GARB_ANIMATION_TIMING_FUNCTION:
+            if (!easing_of(one, &((flow_easing_t *)list)[k]))
+                (void)easing_of(&(garb_val_t){.kind = GARB_V_KEYWORD, .keyword = "ease"},
+                                &((flow_easing_t *)list)[k]);
+            break;
+        case GARB_ANIMATION_ITERATION_COUNT:
+            ((double *)list)[k] = is_word(one, "infinite") ? INFINITY
+                                : one->kind == GARB_V_NUMBER ? one->number : 1;
+            break;
+        case GARB_ANIMATION_DIRECTION: {
+            static const char *const words[] = {"normal", "reverse", "alternate",
+                                                "alternate-reverse"};
+            ((flow_direction_t *)list)[k] = (w = pick(one, words, F_ARRAY(words))) >= 0
+                                                ? (flow_direction_t)w : FLOW_DIRECTION_NORMAL;
+            break;
+        }
+        case GARB_ANIMATION_FILL_MODE: {
+            static const char *const words[] = {"none", "forwards", "backwards", "both"};
+            ((flow_fill_t *)list)[k] = (w = pick(one, words, F_ARRAY(words))) >= 0
+                                           ? (flow_fill_t)w : FLOW_FILL_NONE;
+            break;
+        }
+        case GARB_ANIMATION_PLAY_STATE:
+            ((bool *)list)[k] = is_word(one, "paused");
+            break;
+        default:
+            break;
+        }
+    }
+    switch (p) {
+    case GARB_ANIMATION_NAME: an->name = list, an->nname = n; break;
+    case GARB_ANIMATION_DURATION: an->duration = list, an->nduration = n; break;
+    case GARB_ANIMATION_DELAY: an->delay = list, an->ndelay = n; break;
+    case GARB_ANIMATION_TIMING_FUNCTION: an->easing = list, an->neasing = n; break;
+    case GARB_ANIMATION_ITERATION_COUNT: an->iterations = list, an->niterations = n; break;
+    case GARB_ANIMATION_DIRECTION: an->direction = list, an->ndirection = n; break;
+    case GARB_ANIMATION_FILL_MODE: an->fill = list, an->nfill = n; break;
+    case GARB_ANIMATION_PLAY_STATE: an->paused = list, an->npaused = n; break;
+    default: break;
+    }
+    return true;
+}
+
+// `will-change`'s effects (FLOW_WILL_*): what it names, compared as a
+// property's name is, without case.
+static uint8_t will_change_of(const garb_val_t *v)
+{
+    static const struct { const char *name; uint8_t bit; } kBits[] = {
+        {"transform", FLOW_WILL_TRANSFORM}, {"translate", FLOW_WILL_TRANSFORM},
+        {"rotate", FLOW_WILL_TRANSFORM}, {"scale", FLOW_WILL_TRANSFORM},
+        {"opacity", FLOW_WILL_OPACITY},
+    };
+    const garb_val_t *items = v->kind == GARB_V_LAYERS ? v->items : v;
+    int32_t n = v->kind == GARB_V_LAYERS ? v->nitems : 1;
+    uint8_t bits = 0;
+    for (int32_t k = 0; k < n; k++)
+        for (int32_t j = 0; items[k].kind == GARB_V_STRING && j < F_ARRAY(kBits); j++) {
+            const char *name = kBits[j].name;
+            size_t i = 0;
+            while (i < items[k].len && name[i] != '\0' &&
+                   (items[k].text[i] | 0x20) == name[i])
+                i++;
+            if (i == items[k].len && name[i] == '\0')
+                bits |= kBits[j].bit;
+        }
+    return bits;
+}
+
 static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
 {
     const garb_val_t *v = &set->value;
@@ -2818,7 +3002,7 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
         break;
     }
     case GARB_LINE_HEIGHT:
-        if (word(v, "normal")) {
+        if (is_word(v, "normal")) {
             s->line_height = (flow_line_height_t){FLOW_LINE_NORMAL, 0};
         } else if (v->kind == GARB_V_NUMBER && v->number >= 0) {
             s->line_height = (flow_line_height_t){FLOW_LINE_NUMBER, round_i32(v->number * 1000)};
@@ -2849,13 +3033,13 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
         break;
     }
     case GARB_BOX_SIZING:
-        s->box_sizing = word(v, "border-box") ? FLOW_BORDER_BOX : FLOW_CONTENT_BOX;
+        s->box_sizing = is_word(v, "border-box") ? FLOW_BORDER_BOX : FLOW_CONTENT_BOX;
         break;
     case GARB_FONT_FAMILY: return author_family(a, v, &s->family);
     case GARB_FONT_SIZE: break;         // read first, by author()
     case GARB_FONT_WEIGHT: author_font_weight(a, sp, v); break;
     case GARB_FONT_STYLE:
-        s->font_style = word(v, "normal") ? FLOW_FONT_NORMAL : FLOW_FONT_ITALIC;
+        s->font_style = is_word(v, "normal") ? FLOW_FONT_NORMAL : FLOW_FONT_ITALIC;
         break;
     case GARB_TEXT_ALIGN: {
         static const char *const words[] = {"left", "right", "center", "justify", "start", "end"};
@@ -2864,7 +3048,7 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
                                                FLOW_ALIGN_LEFT, FLOW_ALIGN_RIGHT};
         if ((i = pick(v, words, F_ARRAY(words))) >= 0)
             s->text_align = as[i];
-        else if (word(v, "match-parent") && a->parent != NULL)
+        else if (is_word(v, "match-parent") && a->parent != NULL)
             s->text_align = a->parent->text_align;
         break;
     }
@@ -2898,9 +3082,9 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
         // An overline and blink are not drawn.
         s->text_decoration = 0;
         for (int32_t k = 0; k < v->nitems; k++) {
-            if (word(&v->items[k], "underline"))
+            if (is_word(&v->items[k], "underline"))
                 s->text_decoration |= FLOW_DECORATION_UNDERLINE;
-            else if (word(&v->items[k], "line-through"))
+            else if (is_word(&v->items[k], "line-through"))
                 s->text_decoration |= FLOW_DECORATION_LINE_THROUGH;
         }
         break;
@@ -2920,7 +3104,7 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
     }
     case GARB_LIST_STYLE_TYPE: author_list_type(sp, v); break;
     case GARB_LIST_STYLE_POSITION:
-        s->list_style_position = word(v, "inside") ? FLOW_LIST_INSIDE : FLOW_LIST_OUTSIDE;
+        s->list_style_position = is_word(v, "inside") ? FLOW_LIST_INSIDE : FLOW_LIST_OUTSIDE;
         break;
     case GARB_BORDER_SPACING:
         for (int32_t k = 0; k < 2 && k < v->nitems; k++) {
@@ -2930,10 +3114,10 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
         }
         break;
     case GARB_BORDER_COLLAPSE:
-        s->border_collapse = word(v, "collapse") ? FLOW_COLLAPSE_BORDERS : FLOW_SEPARATE;
+        s->border_collapse = is_word(v, "collapse") ? FLOW_COLLAPSE_BORDERS : FLOW_SEPARATE;
         break;
     case GARB_CAPTION_SIDE:
-        s->caption_side = word(v, "bottom") ? FLOW_CAPTION_BOTTOM : FLOW_CAPTION_TOP;
+        s->caption_side = is_word(v, "bottom") ? FLOW_CAPTION_BOTTOM : FLOW_CAPTION_TOP;
         break;
     case GARB_FLOAT: {
         static const char *const words[] = {"none", "left", "right", "inline-start",
@@ -2973,7 +3157,7 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
         break;
     case GARB_POINTER_EVENTS:
         // SVG's values are auto to an HTML box.
-        s->pointer_events_none = word(v, "none");
+        s->pointer_events_none = is_word(v, "none");
         break;
     case GARB_FLEX_DIRECTION: {
         static const char *const words[] = {"row", "row-reverse", "column", "column-reverse"};
@@ -3014,7 +3198,7 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
         // `content` is the content's size, and so, here, are the three
         // sizing keywords: max-content exactly, min-content and fit-content
         // as the nearest this reads (FLEX.md § Booked).
-        if (v->kind == GARB_V_KEYWORD && !word(v, "auto"))
+        if (v->kind == GARB_V_KEYWORD && !is_word(v, "auto"))
             sp->flex_basis = kContent;
         else
             author_len(a, v, true, &sp->flex_basis);
@@ -3043,8 +3227,8 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
         break;
     case GARB_GRID_AUTO_FLOW:
         if (v->kind == GARB_V_KEYWORD) {
-            s->grid_auto_flow_column = word(v, "column") || word(v, "column dense");
-            s->grid_dense = word(v, "row dense") || word(v, "column dense");
+            s->grid_auto_flow_column = is_word(v, "column") || is_word(v, "column dense");
+            s->grid_dense = is_word(v, "row dense") || is_word(v, "column dense");
         }
         break;
     case GARB_GRID_ROW_START: case GARB_GRID_ROW_END:
@@ -3068,7 +3252,7 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
             "normal", "auto", "stretch", "flex-start", "flex-end", "center", "baseline",
             "start", "end", "self-start", "self-end", "left", "right"};
         i = pick(v, words, F_ARRAY(words));
-        if (i < 0 && word(v, "legacy"))
+        if (i < 0 && is_word(v, "legacy"))
             i = FLOW_PLACE_NORMAL;
         if (i >= 0)
             *(p == GARB_JUSTIFY_ITEMS ? &s->justify_items : &s->justify_self) = (flow_place_t)i;
@@ -3107,7 +3291,7 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
         break;
     case GARB_ROW_GAP: case GARB_COLUMN_GAP: {
         Len *gap = p == GARB_ROW_GAP ? &sp->row_gap : &sp->column_gap;
-        if (word(v, "normal"))
+        if (is_word(v, "normal"))
             *gap = kAuto;
         else
             author_len(a, v, false, gap);
@@ -3128,6 +3312,13 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
         s->opacity = (uint16_t)(o <= 0 ? 0 : o >= 1 ? 1000 : (int32_t)(o * 1000 + 0.5));
         break;
     }
+    case GARB_ANIMATION_NAME: case GARB_ANIMATION_DURATION: case GARB_ANIMATION_TIMING_FUNCTION:
+    case GARB_ANIMATION_ITERATION_COUNT: case GARB_ANIMATION_DIRECTION:
+    case GARB_ANIMATION_PLAY_STATE: case GARB_ANIMATION_DELAY: case GARB_ANIMATION_FILL_MODE:
+        if (!author_animations(a, s, p, v))
+            return false;
+        break;
+    case GARB_WILL_CHANGE: s->will_change = will_change_of(v); break;
     default:
         break;
     }
@@ -3157,23 +3348,25 @@ static bool author_declares(garb_style_t st, int32_t prop)
 // The element's author winners over what the chapter and the hints wrote.
 // `ua` is the Spec as the user-agent origin left it, which `revert` goes
 // back to. False on no memory only.
-static bool author(Ctx *c, const os64_html_node_t *n, Spec *sp, const Spec *ua,
-                   const flow_style_t *parent)
+// Declarations laid over `sp` as the author's are: `sets` (`n` of them),
+// each from the sheet `sheets` names — or, with `sheets` NULL, all from
+// `sheet` (-1: the element's `style` attribute's place) — but those `skip`
+// names (NULL: none). False on no memory.
+static bool lay_sets(Ctx *c, Spec *sp, const Spec *ua, const flow_style_t *parent,
+                     const garb_set_t *sets, const int32_t *sheets, int32_t sheet, int32_t n,
+                     const FProps *skip)
 {
-    if (c->env->cascade == NULL)
-        return true;
-    garb_style_t st = garb_style_for(c->env->cascade, n);
-    if (st.n == 0)
-        return true;
     Author a = {c, parent, 0, garb_cascade_env(c->env->cascade), -1};
     Spec init, inh;
     bool have_init = false, have_inh = false;
     // font-size and color before the rest: every other em on the element
     // is its font size, and every currentColor its colour.
     for (int pass = 0; pass < 2; pass++) {
-        for (int32_t i = 0; i < st.n; i++) {
-            const garb_set_t *set = &st.sets[i];
-            a.sheet = st.sheet != NULL ? st.sheet[i] : -1;
+        for (int32_t i = 0; i < n; i++) {
+            const garb_set_t *set = &sets[i];
+            if (skip != NULL && f_props_has(skip, set->prop))
+                continue;
+            a.sheet = sheets != NULL ? sheets[i] : sheet;
             bool font = set->prop == GARB_FONT_SIZE;
             bool first = font || set->prop == GARB_COLOR;
             if (first != (pass == 0))
@@ -3207,6 +3400,19 @@ static bool author(Ctx *c, const os64_html_node_t *n, Spec *sp, const Spec *ua,
         if (pass == 0)
             a.font = sp->fs_kind != FS_INHERIT ? font_size(c, sp, parent) : sp->s.font_size;
     }
+    return true;
+}
+
+static bool author(Ctx *c, const os64_html_node_t *n, Spec *sp, const Spec *ua,
+                   const flow_style_t *parent)
+{
+    if (c->env->cascade == NULL)
+        return true;
+    garb_style_t st = garb_style_for(c->env->cascade, n);
+    if (st.n == 0)
+        return true;
+    if (!lay_sets(c, sp, ua, parent, st.sets, st.sheet, -1, st.n, NULL))
+        return false;
     // A border style the author drew with no width from any origin has the
     // initial width, medium. The Spec's declared width starts at 0, not
     // medium, because the chapter always declares the width it draws — so a
@@ -3276,9 +3482,8 @@ static bool blockify(flow_style_t *s)
 // BLOCKIFIED — laid out as the block they compute to — keeping one bit of
 // the display they were given (flow_style_t.specified_inline). A float on
 // a box that makes none, or makes no box of its own, is no float.
-static void positioning(const Ctx *c, Spec *sp)
+static void positioning(const Ctx *c, flow_style_t *s)
 {
-    flow_style_t *s = &sp->s;
     if (c->env->static_only) {
         s->position = FLOW_POSITION_STATIC;
         s->float_side = FLOW_FLOAT_NONE;
@@ -3287,6 +3492,29 @@ static void positioning(const Ctx *c, Spec *sp)
         s->float_side = FLOW_FLOAT_NONE;
     if ((f_out_of_flow(s) || s->float_side != FLOW_FLOAT_NONE) && !blockify(s))
         s->float_side = FLOW_FLOAT_NONE;
+}
+
+// What a style's display, float, position and overflow make of each
+// other once every origin has spoken: an item floats nowhere, positioning
+// blockifies (positioning), an item or the root is blockified, and visible
+// or clip does not stand beside an axis that scrolls or hides (CSS
+// Overflow 3 § 3). From the display, float and overflow as specified —
+// and for an animated element's final style, from its computed style with
+// each keyframe's values laid over it as written (animate, unsettled),
+// since the float, the position and each axis may each be animated.
+static void settle_box(const Ctx *c, flow_style_t *s, bool item, bool root)
+{
+    if (item)
+        s->float_side = FLOW_FLOAT_NONE;
+    positioning(c, s);
+    if ((item || root) && !f_out_of_flow(s))
+        (void)blockify(s);
+    bool x_scrolls = s->overflow_x != FLOW_OVERFLOW_VISIBLE && s->overflow_x != FLOW_OVERFLOW_CLIP;
+    bool y_scrolls = s->overflow_y != FLOW_OVERFLOW_VISIBLE && s->overflow_y != FLOW_OVERFLOW_CLIP;
+    if (x_scrolls != y_scrolls) {
+        flow_overflow_t *other = x_scrolls ? &s->overflow_y : &s->overflow_x;
+        *other = *other == FLOW_OVERFLOW_VISIBLE ? FLOW_OVERFLOW_AUTO : FLOW_OVERFLOW_HIDDEN;
+    }
 }
 
 // `item`: the element's box is its parent's flex or grid item, and is
@@ -3330,19 +3558,7 @@ static void finish(const Ctx *c, Spec *sp, const flow_style_t *parent, bool item
         s->inset[i] = resolve(sp->inset[i], s->font_size, automatic);
         s->legacy_clip[i] = resolve(sp->clip[i], s->font_size, automatic);
     }
-    if (item)
-        s->float_side = FLOW_FLOAT_NONE;
-    positioning(c, sp);
-    if ((item || root) && !f_out_of_flow(s))
-        (void)blockify(s);
-    // CSS Overflow 3 § 3: visible and clip do not stand beside an axis
-    // that scrolls or hides.
-    bool x_scrolls = s->overflow_x != FLOW_OVERFLOW_VISIBLE && s->overflow_x != FLOW_OVERFLOW_CLIP;
-    bool y_scrolls = s->overflow_y != FLOW_OVERFLOW_VISIBLE && s->overflow_y != FLOW_OVERFLOW_CLIP;
-    if (x_scrolls != y_scrolls) {
-        flow_overflow_t *other = x_scrolls ? &s->overflow_y : &s->overflow_x;
-        *other = *other == FLOW_OVERFLOW_VISIBLE ? FLOW_OVERFLOW_AUTO : FLOW_OVERFLOW_HIDDEN;
-    }
+    settle_box(c, s, item, root);
     if (sp->text_indent.kind != L_UNSET)
         s->text_indent = resolve(sp->text_indent, s->font_size, zero);
     s->min_width = resolve(sp->min_width, s->font_size, automatic);
@@ -3352,6 +3568,256 @@ static void finish(const Ctx *c, Spec *sp, const flow_style_t *parent, bool item
     s->flex_basis = resolve(sp->flex_basis, s->font_size, automatic);
     s->row_gap = resolve(sp->row_gap, s->font_size, automatic);
     s->column_gap = resolve(sp->column_gap, s->font_size, automatic);
+}
+
+// ── Animations (motion.c; PILE3.md § Animations) ───────────────────────
+
+// The lists an animated value makes come out of the styles' arena, within
+// the lists' budget (list_alloc). Past the budget the value is dropped, as
+// a declaration's is; out of memory, the style pass fails.
+typedef struct {
+    Ctx *c;
+    bool no_memory;
+} MotionLists;
+
+static void *motion_alloc(void *ctx, size_t bytes)
+{
+    MotionLists *ml = ctx;
+    bool spent;
+    void *p = list_alloc(ml->c, bytes, &spent);
+    if (p == NULL && !spent)
+        ml->no_memory = true;
+    return p;
+}
+
+// A side's own width, which the animations' inputs keep whatever its style
+// — finish makes it 0 for a side drawn as none or hidden, and the side's
+// style may itself be animated: the width an origin declared (the chapter,
+// the element's winners `st`, a keyframe's `sets`), or, declared by none,
+// the initial `medium` (Chrome's answers: a style an animation turns solid
+// draws 3px, and a width animated from nowhere starts at 3px).
+static flow_unit_t own_width(const Ctx *c, const Spec *sp, garb_style_t st, garb_style_t sets, int side)
+{
+    int32_t w = GARB_BORDER_TOP_WIDTH + side;
+    if (sp->border_px[side] != 0 || author_declares(st, w) || author_declares(sets, w))
+        return sp->border_px[side];
+    return css(c, 3);
+}
+
+// Whether two easings are one where keyframes are grouped: a keyword curve
+// is itself and not the same curve written as cubic-bezier(), and steps
+// are their count and where they jump however written (Chrome's answer,
+// as libgarb groups the blocks).
+static bool easing_same(const flow_easing_t *a, const flow_easing_t *b)
+{
+    if (a->kind != b->kind)
+        return false;
+    if (a->kind == FLOW_EASE_CUBIC)
+        return a->named == b->named && a->p[0] == b->p[0] && a->p[1] == b->p[1] && a->p[2] == b->p[2] &&
+               a->p[3] == b->p[3];
+    if (a->kind == FLOW_EASE_STEPS)
+        return a->steps == b->steps && a->jump == b->jump;
+    return true;
+}
+
+// Whether keyframe `f` eases as the element's own easing `own` does: it
+// names none (or one libflow cannot read, which is none), or names `own`.
+static bool eases_own(const garb_keyframe_t *f, const flow_easing_t *own)
+{
+    flow_easing_t e;
+    return f->easing == NULL || !easing_of(f->easing, &e) || easing_same(&e, own);
+}
+
+// Keyframes at one offset that ease as the element's own easing — one
+// naming it, one naming none — are one keyframe (Animations 2 § 3.2;
+// Chrome's answer), which libgarb cannot see, not knowing the element:
+// they cascade here, each longhand's last written declaration winning
+// (garb_keyframe_t.order), at the place of the first. One pass, each
+// longhand found by its number, however many blocks a page repeats. `*kf`
+// is replaced when any are joined; false on no memory.
+static bool join_own_easing(Ctx *c, const garb_keyframe_t **kf, int32_t *nk, const flow_easing_t *own)
+{
+    const garb_keyframe_t *in = *kf;
+    int32_t n = *nk, joins = 0;
+    for (int32_t j = 0, owners = 0; j < n; j++) {
+        if (j > 0 && in[j].offset != in[j - 1].offset)
+            owners = 0;
+        if (eases_own(&in[j], own) && owners++ > 0)
+            joins++;
+    }
+    if (joins == 0)
+        return true;
+    garb_keyframe_t *out = f_arena_alloc(&c->out->arena, (size_t)(n - joins) * sizeof(*out));
+    const garb_set_t **best = os64_malloc((size_t)GARB_NPROPS * sizeof(*best));
+    uint64_t *written = os64_malloc((size_t)GARB_NPROPS * sizeof(*written));
+    int32_t *seen = os64_calloc((size_t)GARB_NPROPS, sizeof(*seen));
+    bool ok = out != NULL && best != NULL && written != NULL && seen != NULL;
+    int32_t m = 0, run = 0;
+    for (int32_t lo = 0, hi; ok && lo < n; lo = hi) {
+        int32_t owners = 0, first = -1;
+        for (hi = lo; hi < n && in[hi].offset == in[lo].offset; hi++)
+            if (eases_own(&in[hi], own) && owners++ == 0)
+                first = hi;
+        garb_keyframe_t joined = first >= 0 ? in[first] : (garb_keyframe_t){0};
+        if (owners > 1) {
+            // Each longhand's last written declaration among them.
+            run++;
+            int32_t count = 0;
+            for (int32_t j = lo; j < hi; j++) {
+                if (!eases_own(&in[j], own))
+                    continue;
+                for (int32_t k = 0; k < in[j].nsets; k++) {
+                    garb_prop_t p = in[j].sets[k].prop;
+                    uint64_t at = in[j].order != NULL ? in[j].order[k] : 0;
+                    if (seen[p] != run) {
+                        seen[p] = run;
+                        count++;
+                    } else if (at <= written[p]) {
+                        continue;
+                    }
+                    best[p] = &in[j].sets[k];
+                    written[p] = at;
+                }
+            }
+            garb_set_t *sets = count > 0 ? f_arena_alloc(&c->out->arena, (size_t)count * sizeof(*sets)) : NULL;
+            ok = count == 0 || sets != NULL;
+            int32_t w = 0;
+            for (int32_t p = 0; ok && p < GARB_NPROPS; p++)
+                if (seen[p] == run)
+                    sets[w++] = *best[p];
+            joined.sets = sets;
+            joined.order = NULL;
+            joined.nsets = w;
+        }
+        for (int32_t j = lo; ok && j < hi; j++)
+            if (j == first)
+                out[m++] = joined;
+            else if (!eases_own(&in[j], own))
+                out[m++] = in[j];
+    }
+    os64_free(best);
+    os64_free(written);
+    os64_free(seen);
+    if (!ok)
+        return false;
+    *kf = out;
+    *nk = m;
+    return true;
+}
+
+// A keyframe's display, float and overflow as its declarations left them
+// (`specified`), before settle_box made what it does of them: the float,
+// the position and each overflow axis may come from different animations,
+// laid over the element's computed style, and settle_box decides once from
+// what they make together — Chrome's answers: a keyframe's own
+// `overflow-x: hidden` does not turn its `overflow-y: visible` to `auto`
+// when another animation sets `overflow-x` back, while the element's own
+// rules' settling stays, so a span its rules float is still a block when an
+// animation takes the float away.
+static void unsettled(flow_style_t *s, const flow_style_t *specified)
+{
+    s->display = specified->display;
+    s->specified_inline = specified->specified_inline;
+    s->float_side = specified->float_side;
+    s->overflow_x = specified->overflow_x;
+    s->overflow_y = specified->overflow_y;
+}
+
+// An element's animations at the layout's time: for each name whose
+// @keyframes exist, every keyframe's computed style — its declarations
+// laid over the element's own, as the author's are, but where an
+// `!important` winner holds — and the name's record on the timeline; then
+// the element's style at `now`, and what its animations make it
+// (flow_style_t.animating). `sp` is the element's Spec before `finish`.
+// With animations, `*out` is the element's FMotion and `sp`'s style is
+// computed; with none, `*out` is NULL and `sp` as it was. A keyframe's
+// url() is read against the sheet its @keyframes rule was written in, as a
+// winner's is against its own. False on no memory.
+static bool animate(Ctx *c, const os64_html_node_t *n, Spec *sp, const Spec *ua,
+                    const flow_style_t *parent, bool item, bool root, FMotion **out)
+{
+    *out = NULL;
+    flow_timeline_t *tl = c->env->timeline;
+    int32_t count = f_animations(&sp->s);
+    if (tl == NULL || c->env->cascade == NULL || count == 0)
+        return true;
+    FProps important;
+    os64_memset(&important, 0, sizeof(important));
+    garb_style_t st = garb_style_for(c->env->cascade, n);
+    for (int32_t i = 0; st.important != NULL && i < st.n; i++)
+        if (st.important[i])
+            f_props_add(&important, st.sets[i].prop);
+    FMotion *m = f_arena_alloc(&c->out->arena, sizeof(*m));
+    FAnimation *anims = m != NULL ? f_arena_alloc(&c->out->arena, (size_t)count * sizeof(*anims))
+                                  : NULL;
+    if (anims == NULL)
+        return false;
+    m->anims = anims;
+    // The animations' inputs keep each side's own width (own_width), and
+    // its width is settled once every animation is laid over
+    // (f_motion_style).
+    const garb_style_t none = {NULL, NULL, NULL, 0};
+    Spec base = *sp;
+    finish(c, &base, parent, item, root);
+    m->base = base.s;
+    for (int side = 0; side < 4; side++)
+        m->base.border_width[side] = own_width(c, &base, st, none, side);
+    for (int32_t i = 0; i < count; i++) {
+        flow_animation_t timing = f_animation_at(&m->base, i);
+        const garb_keyframe_t *kf = NULL;
+        int32_t nk = timing.name.text == NULL ? -1
+                   : garb_keyframes(c->env->cascade, n, timing.name.text, timing.name.len, &kf);
+        if (nk < 0)
+            continue;               // no rule of that name: it starts nothing
+        if (!join_own_easing(c, &kf, &nk, &timing.easing))
+            return false;
+        FAnimation *an = &anims[m->nanims];
+        an->timing = timing;
+        an->frames = nk > 0 ? f_arena_alloc(&c->out->arena, (size_t)nk * sizeof(FKeyframe))
+                            : NULL;
+        if (nk > 0 && an->frames == NULL)
+            return false;
+        for (int32_t j = 0; j < nk; j++) {
+            FKeyframe *f = &an->frames[j];
+            Spec k = *sp;
+            if (!lay_sets(c, &k, ua, parent, kf[j].sets, NULL, kf[j].sheet, kf[j].nsets, &important))
+                return false;
+            flow_style_t specified = k.s;
+            finish(c, &k, parent, item, root);
+            for (int side = 0; side < 4; side++)
+                k.s.border_width[side] =
+                    own_width(c, &k, st, (garb_style_t){kf[j].sets, NULL, NULL, kf[j].nsets}, side);
+            unsettled(&k.s, &specified);
+            f->offset = kf[j].offset;
+            f->has_easing = kf[j].easing != NULL && easing_of(kf[j].easing, &f->easing);
+            f->style = k.s;
+            for (int32_t s = 0; s < kf[j].nsets; s++)
+                if (!f_props_has(&important, kf[j].sets[s].prop)) {
+                    f_props_add(&f->sets, kf[j].sets[s].prop);
+                    f_props_add(&an->props, kf[j].sets[s].prop);
+                }
+        }
+        an->nframes = nk;
+        m->nanims++;
+    }
+    if (m->nanims == 0)
+        return true;
+    m->in_place = f_motion_in_place(m);
+    double now = (double)c->env->now_ms;
+    if (!f_timeline_element(tl, n, m, now))
+        return false;
+    flow_style_t s = m->base;
+    // A list past the budget leaves its property as it was, named in its
+    // animation's `dropped`, so nothing is due for that one's motion of it.
+    MotionLists lists = {c, false};
+    (void)f_motion_style(m, now, &s, motion_alloc, &lists, NULL, true);
+    if (lists.no_memory)
+        return false;
+    settle_box(c, &s, item, root);
+    s.animating = f_motion_effects(m, now);
+    sp->s = s;
+    *out = m;
+    return true;
 }
 
 // ── The walk ────────────────────────────────────────────────────────────
@@ -3385,6 +3851,8 @@ static FStyled *style_element(Ctx *c, const os64_html_node_t *n)
     Spec sp;
     os64_memset(&sp, 0, sizeof(sp));
     sp.s = inherit(c, parent);
+    bool item = up != NULL && up->lays_out_items, root = n == c->doc->html;
+    FMotion *motion = NULL;
     if (n->ns != OS64_HTML_NS_HTML) {
         // An SVG or MathML element draws nothing here, and the HTML inside
         // it is laid out as its parent's (LAYOUT.md § Pass 2).
@@ -3421,9 +3889,28 @@ static FStyled *style_element(Ctx *c, const os64_html_node_t *n)
         // author display declarations must not reveal its raw fallback text.
         if (is(n, OS64_HTML_TAG_NOSCRIPT) && c->env->scripting)
             sp.s.display = FLOW_DISPLAY_NONE;
+        // `display: none` ends its animations (Animations 1 § 2): the
+        // timeline drops what no layout styles.
+        if (sp.s.display != FLOW_DISPLAY_NONE &&
+            !animate(c, n, &sp, &ua, parent, item, root, &motion))
+            return NULL;
     }
-    finish(c, &sp, parent, up != NULL && up->lays_out_items, n == c->doc->html);
+    if (motion == NULL)
+        finish(c, &sp, parent, item, root);
     out->style = sp.s;
+    out->motion = motion;
+    if (motion != NULL) {
+        FStyles *st = c->out;
+        if (st->nanimated == st->cap_animated) {
+            int32_t cap = st->cap_animated > 0 ? st->cap_animated * 2 : 16;
+            const os64_html_node_t **more = os64_realloc(st->animated, (size_t)cap * sizeof(*more));
+            if (more == NULL)
+                return NULL;
+            st->animated = more;
+            st->cap_animated = cap;
+        }
+        st->animated[st->nanimated++] = n;
+    }
     out->lays_out_items = f_display_flex(sp.s.display) || f_display_grid(sp.s.display) ||
                           (sp.s.display == FLOW_DISPLAY_CONTENTS && up != NULL &&
                            up->lays_out_items);
@@ -3440,7 +3927,10 @@ static FStyled *style_element(Ctx *c, const os64_html_node_t *n)
     out->anchor = f_contains_absolute(&sp.s) ? n : up != NULL ? up->anchor : NULL;
     out->fixed_anchor = f_contains_absolute(&sp.s) && f_transformed(&sp.s) ? n
                       : up != NULL ? up->fixed_anchor : NULL;
-    out->transparent = sp.s.opacity == 0 || (up != NULL && up->transparent);
+    // An opacity an animation moves is the painter's to judge as it paints
+    // (PILE3.md § Animations): none of it is gone for the layout.
+    out->transparent = (sp.s.opacity == 0 && !(sp.s.animating & FLOW_WILL_OPACITY)) ||
+                       (up != NULL && up->transparent);
     FStyled *holder = f_map_get(&c->out->map, n->parent);
     if (holder != NULL && is(n, OS64_HTML_TAG_RP))
         holder->has_rp = true;
@@ -3566,5 +4056,6 @@ void f_style_free(FStyles *styles)
         return;
     f_map_free(&styles->map);
     f_arena_free(&styles->arena);
+    os64_free(styles->animated);
     os64_free(styles);
 }
