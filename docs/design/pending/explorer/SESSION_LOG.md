@@ -882,3 +882,17 @@ is the next action. Discuss file associations before beginning E5.
 Published as [draft PR #267](https://github.com/VBWizard/os64/pull/267) against `userland`,
 with source `243663dc` and native evidence `f930fda3`. The publication follow-up
 adds links only; the implementation is not merged.
+
+
+## 2026-10-13 — E4 first review corrections
+
+Addressed PR #267's three findings: pool-owned input lifetime after worker
+failure, failed-create attachment ownership, and transactional breadcrumb
+geometry with retry. The controller regression reproduced the original
+use-after-free, then passed with ASan/UBSan/LeakSanitizer. The real-font Roam
+suite passes 2,283 checks, including 60 allocation failures and recovery;
+the userland build and stale-reference checks pass. The follow-up evidence
+is recorded in [E4 validation](evidence/e04/README.md#pr-267--first-review-follow-up).
+Chris also reported more than ten minutes of successful hands-on browsing and
+hide-all minimalist mode; the machine was not specified. File associations
+remain reserved for discussion before E5.

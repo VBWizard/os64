@@ -29,7 +29,6 @@ typedef struct browser_job {
     struct os64_browser *browser;
     browser_request_t request;
     os64_directory_t *previous;
-    bool cancelled_owner;
 } browser_job_t;
 typedef struct {
     os64_directory_t *raw;
@@ -50,7 +49,7 @@ struct os64_browser {
     browser_request_t intent;
     bool has_intent, closing;
     os64_work_id_t live_id;
-    browser_job_t *live_job, *intent_job;
+    browser_job_t *intent_job;
     size_t retired, retired_seen;
     char requested[OS64_DIRECTORY_PATH];
     char filter[OS64_DIRECTORY_FILTER];
@@ -121,10 +120,18 @@ static void release_job(void *input, void *output)
     }
     if (job) {
         os64_directory_release(job->previous);
-        if (__atomic_load_n(&job->cancelled_owner,__ATOMIC_ACQUIRE) && job->browser)
-            __atomic_add_fetch(&job->browser->retired,1,__ATOMIC_RELEASE);
         os64_free(job);
     }
+}
+/* Pool callbacks can run before submit returns, including on pool failure.
+ * Retire through the browser, whose lifetime covers the pool's joined workers;
+ * the UI keeps a job ID and does not dereference pool-owned input. */
+static void release_pool_job(void *input, void *output)
+{
+    browser_job_t *job=input;
+    os64_browser_t *b=job->browser;
+    release_job(input,output);
+    __atomic_add_fetch(&b->retired,1,__ATOMIC_RELEASE);
 }
 static int64_t run_job(void *input, bool (*cancelled)(void *), void *ctx, void **out)
 {
@@ -158,21 +165,18 @@ static bool submit_intent(os64_browser_t *b)
 {
     if (!b->has_intent || b->inflight>=2) return false;
     browser_job_t *job=b->intent_job;
-    os64_work_t work={.run=run_job,.release=release_job,.job=job,
+    os64_work_t work={.run=run_job,.release=release_pool_job,.job=job,
         .reserve=BROWSER_WORK_RESERVE};
     os64_work_id_t id=os64_work_submit(b->pool,&work);
     if (!id) { b->status=OS64_UI_REFUSED; return false; }
-    b->live_id=id; b->live_job=job; ++b->inflight;
+    b->live_id=id; ++b->inflight;
     b->has_intent=false; b->intent_job=NULL;
     return true;
 }
 static void cancel_live(os64_browser_t *b)
 {
     if (!b->live_id) return;
-    /* The pool owns the cancelled input. It reports its release separately. */
     os64_work_id_t id=b->live_id; b->live_id=0;
-    __atomic_store_n(&b->live_job->cancelled_owner,true,__ATOMIC_RELEASE);
-    b->live_job=NULL;
     os64_work_cancel(b->pool,id);
 }
 
@@ -194,13 +198,22 @@ os64_ui_status_code_t os64_browser_create(os64_ui_dataview_t *view,
     os64_ui_status_code_t rc=os64_ui_data_create(1,&c,1,NULL,0,&data);
     if (!rc) rc=os64_ui_data_projection_identity(data,&projection);
     if (!rc) rc=os64_ui_selection_bind(&b->selection,projection,OS64_UI_DATA_RESET);
-    if (!rc) rc=os64_ui_dataview_attach(view,&b->selection,icons);
+    bool attached=false;
+    if (!rc) {
+        rc=os64_ui_dataview_attach(view,&b->selection,icons);
+        attached=rc==OS64_UI_OK;
+    }
     os64_ui_data_projection_release(projection); os64_ui_data_release(data);
     if (!rc) {
         b->pool=os64_work_pool_create(2,2u*BROWSER_WORK_RESERVE,window,doorbell_bit);
         if (!b->pool) rc=OS64_UI_ERROR;
     }
-    if (rc) { os64_ui_dataview_dispose(view); os64_ui_selection_dispose(&b->selection); os64_free(b); return rc; }
+    if (rc) {
+        if (attached) os64_ui_dataview_dispose(view);
+        os64_ui_selection_dispose(&b->selection);
+        os64_free(b);
+        return rc;
+    }
     *out=b; return OS64_UI_OK;
 }
 
@@ -227,7 +240,7 @@ static os64_ui_status_code_t request(os64_browser_t *b,const char *path,
     os64_directory_retain(job->previous);
     os64_work_id_t admitted=0;
     if (b->inflight<2) {
-        os64_work_t work={.run=run_job,.release=release_job,.job=job,
+        os64_work_t work={.run=run_job,.release=release_pool_job,.job=job,
             .reserve=BROWSER_WORK_RESERVE};
         admitted=os64_work_submit(b->pool,&work);
         if (!admitted) { release_job(job,NULL); return OS64_UI_REFUSED; }
@@ -240,7 +253,7 @@ static os64_ui_status_code_t request(os64_browser_t *b,const char *path,
     cancel_live(b);
     b->generation=next.generation;
     b->intent=next;
-    if (admitted) {b->live_id=admitted;b->live_job=job;++b->inflight;}
+    if (admitted) {b->live_id=admitted;++b->inflight;}
     else {b->has_intent=true;b->intent_job=job;}
     copy_string(b->requested,normal,sizeof(b->requested));
     b->status=OS64_UI_OK; b->io_error=0; ++b->revision;
@@ -375,7 +388,7 @@ os64_ui_status_code_t os64_browser_poll(os64_browser_t *b)
         browser_product_t *product=output;
         if (b->inflight) --b->inflight;
         if (id==b->live_id && job->request.generation==b->generation) {
-            b->live_id=0; b->live_job=NULL;
+            b->live_id=0;
             last=product?publish_product(b,&job->request,product):
                 verdict>=0?(os64_ui_status_code_t)verdict:OS64_UI_ERROR;
             b->status=last;

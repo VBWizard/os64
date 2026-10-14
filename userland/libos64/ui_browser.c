@@ -165,6 +165,37 @@ os64_font_status_t os64_ui_browser_layout(os64_ui_browser_t *p, bool staged)
     int32_t width=nonnegative(area.w-2*pad), bottom=area.y+area.h-pad;
     int32_t row=os64_ui_control_min_height(p->ui);
     if (row<1) row=1;
+    /* Measure before publishing geometry so a refused run leaves hit boxes intact. */
+    os64_ui_widget_t *buttons[]={&p->back,&p->forward,&p->up,&p->refresh};
+    int32_t natural[4],total=3*gap;
+    for (size_t i=0;i<4;++i) {
+        os64_font_status_t rc=measured_width(p,buttons[i]->text,&natural[i]);
+        if(rc!=OS64_FONT_OK) return rc;
+        natural[i]+=2*pad+16;
+        total+=natural[i];
+    }
+    int32_t label_width=0;
+    os64_font_status_t rc=measured_width(p,"Location",&label_width);
+    if(rc!=OS64_FONT_OK) return rc;
+    int32_t filter_label_width=0;
+    rc=measured_width(p,"Filter",&filter_label_width);
+    if(rc!=OS64_FONT_OK) return rc;
+    int32_t side_title=0;
+    rc=measured_width(p,"Favorites",&side_title);
+    if(rc!=OS64_FONT_OK) return rc;
+    int32_t volume_title=0;
+    rc=measured_width(p,"Volumes",&volume_title);
+    if(rc!=OS64_FONT_OK) return rc;
+    int32_t crumb_widths[OS64_UI_BROWSER_CRUMBS]={0};
+    for(size_t i=0;i<p->crumb_count;++i) {
+        rc=measured_width(p,p->crumb_names[i],&crumb_widths[i]);
+        if(rc!=OS64_FONT_OK) return rc;
+        crumb_widths[i]+=2*pad+12;
+    }
+    int32_t overflow_width=0;
+    rc=measured_width(p,"...",&overflow_width);
+    if(rc!=OS64_FONT_OK) return rc;
+    overflow_width+=2*pad+12;
     os64_ui_widget_t *rows[]={&p->toolbar,&p->address_row,&p->crumb_row,&p->filter_row};
     os64_ui_browser_part_t kinds[]={OS64_UI_BROWSER_TOOLBAR,OS64_UI_BROWSER_ADDRESS,
         OS64_UI_BROWSER_BREADCRUMBS,OS64_UI_BROWSER_FILTER};
@@ -175,14 +206,6 @@ os64_font_status_t os64_ui_browser_layout(os64_ui_browser_t *p, bool staged)
         place(rows[i],(os64_gui_rect_t){x,y,width,h},staged);
         if (h) y+=h+gap;
     }
-    os64_ui_widget_t *buttons[]={&p->back,&p->forward,&p->up,&p->refresh};
-    int32_t natural[4],total=3*gap;
-    for (size_t i=0;i<4;++i) {
-        os64_font_status_t rc=measured_width(p,buttons[i]->text,&natural[i]);
-        if(rc!=OS64_FONT_OK) return rc;
-        natural[i]+=2*pad+16;
-        total+=natural[i];
-    }
     int32_t button_x=x,avail=width;
     for (size_t i=0;i<4;++i) {
         int32_t button_width=total<=width?natural[i]:
@@ -192,17 +215,11 @@ os64_font_status_t os64_ui_browser_layout(os64_ui_browser_t *p, bool staged)
         button_x+=button_width+gap;
         avail=nonnegative(x+width-button_x);
     }
-    int32_t label_width=0;
-    os64_font_status_t rc=measured_width(p,"Location",&label_width);
-    if(rc!=OS64_FONT_OK) return rc;
     label_width=smaller(label_width+pad,width/3);
     place(&p->address_label,(os64_gui_rect_t){x,ys[1],label_width,
         heights[1]},staged);
     place(&p->address.w,(os64_gui_rect_t){x+label_width+gap,ys[1],
         nonnegative(width-label_width-gap),heights[1]},staged);
-    int32_t filter_label_width=0;
-    rc=measured_width(p,"Filter",&filter_label_width);
-    if(rc!=OS64_FONT_OK) return rc;
     filter_label_width=smaller(filter_label_width+pad,width/3);
     place(&p->filter_label,(os64_gui_rect_t){x,ys[3],filter_label_width,
         heights[3]},staged);
@@ -212,12 +229,6 @@ os64_font_status_t os64_ui_browser_layout(os64_ui_browser_t *p, bool staged)
     int32_t status_h=p->visible[OS64_UI_BROWSER_STATUS] && bottom-y>row+24 ? row : 0;
     int32_t content_bottom=bottom-(status_h?status_h+gap:0);
     int32_t height=nonnegative(content_bottom-y);
-    int32_t side_title=0;
-    rc=measured_width(p,"Favorites",&side_title);
-    if(rc!=OS64_FONT_OK) return rc;
-    int32_t volume_title=0;
-    rc=measured_width(p,"Volumes",&volume_title);
-    if(rc!=OS64_FONT_OK) return rc;
     if(volume_title>side_title) side_title=volume_title;
     int32_t side_width=p->visible[OS64_UI_BROWSER_SIDEBAR] && width>=420 ?
         smaller(width/3,larger(188,side_title+4*pad+48)) : 0;
@@ -237,17 +248,7 @@ os64_font_status_t os64_ui_browser_layout(os64_ui_browser_t *p, bool staged)
         nonnegative(side_width-2*pad),heading},staged);
     place(&p->mounts.w,(os64_gui_rect_t){x+pad,mounts_y+heading,
         nonnegative(side_width-2*pad),nonnegative(y+height-pad-(mounts_y+heading))},staged);
-    int32_t crumb_widths[OS64_UI_BROWSER_CRUMBS]={0};
-    for(size_t i=0;i<p->crumb_count;++i) {
-        rc=measured_width(p,p->crumb_names[i],&crumb_widths[i]);
-        if(rc!=OS64_FONT_OK) return rc;
-        crumb_widths[i]+=2*pad+12;
-    }
     int32_t root_width=p->crumb_count?smaller(crumb_widths[0],width):0;
-    int32_t overflow_width=0;
-    rc=measured_width(p,"...",&overflow_width);
-    if(rc!=OS64_FONT_OK) return rc;
-    overflow_width+=2*pad+12;
     int32_t budget=nonnegative(width-root_width-(p->crumb_count>1?gap:0));
     int32_t chosen=0;
     size_t first=p->crumb_count;
@@ -341,14 +342,24 @@ void os64_ui_browser_sync(os64_ui_browser_t *p)
         }
     }
     if(!os64_streq(location,p->seen_location)) {
-        os64_snprintf(p->seen_location,sizeof(p->seen_location),"%s",location);
         if(p->help_token) {
             (void)os64_ui_status_clear_help(&p->status,p->help_token);
             p->help_token=0;
         }
+        size_t old_count=p->crumb_count;
         breadcrumbs(p,location);
-        os64_ui_browser_layout(p,false);
-        os64_ui_mark_dirty(p->ui,&p->crumb_row);
+        if (os64_ui_browser_layout(p,false)==OS64_FONT_OK) {
+            os64_snprintf(p->seen_location,sizeof(p->seen_location),"%s",location);
+            os64_ui_mark_dirty(p->ui,&p->crumb_row);
+        } else {
+            /* Keep labels and targets paired with their old geometry. Leaving
+             * seen_location unchanged retries this navigation on the next sync. */
+            breadcrumbs(p,p->seen_location);
+            p->crumb_count=old_count;
+            for (size_t i=0;i<OS64_UI_BROWSER_CRUMBS;++i)
+                os64_ui_set_hidden(p->ui,&p->crumbs[i],
+                    i>=old_count || !p->visible[OS64_UI_BROWSER_BREADCRUMBS]);
+        }
     }
     if(p->ui->focus!=&p->address.w && !os64_streq(p->address.buf,location))
         os64_ui_textfield_set(p->ui,&p->address,location);

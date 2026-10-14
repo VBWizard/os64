@@ -104,3 +104,29 @@ Serve `userland/bin` and the icon lot through `os64serve.py`, then use guest
 routing. Runtime checks are functional TCG evidence, not P5 latency measurements.
 
 [P5 instructions](../../E04_HANDOFF.md) give the remaining hardware walkthrough.
+
+
+## PR #267 — first review follow-up
+
+The three findings cover pool-error input lifetime, ownership during failed
+browser creation, and breadcrumb layout recovery. The controller retains job
+IDs after admission; pool release callbacks retire through the browser, which
+outlives pool teardown. Creation disposes the supplied view on failure when
+this invocation successfully attached it. Browser layout measures text before
+publishing geometry; a refused navigation layout restores breadcrumb labels,
+targets and visibility, leaving the location pending for the next sync.
+
+The added controller regression reproduced the original heap-use-after-free
+in `cancel_live()` under AddressSanitizer before the fix. The corrected suite
+passes pool-driven release before poll/cancel/destroy, existing-view attachment
+and allocation failures, and pool-creation cleanup. The real-font UI suite
+passes **2,283 checks**, including **60 allocation refusals** preserving old
+breadcrumb targets and geometry and recovering without a new navigation or
+resize. Both suites pass ASan, UBSan and LeakSanitizer outside the sandbox.
+
+Reproduce with `tools/test_browser_host.py` and `tools/test_roam_ui_host.py`;
+their `--build-only` option permits a separate leak-enabled execution when
+sandbox thread-attachment policy requires it. `make -C userland`,
+`git diff --check` and `tools/stale_refs.sh` pass. No native walkthrough was
+repeated for this follow-up; the screenshots and installed hashes above refer
+to the original implementation, not these review corrections.

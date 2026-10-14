@@ -87,6 +87,59 @@ os64_ui_status_code_t os64_directory_home(char out[OS64_DIRECTORY_PATH])
 const char *os64_getenv(const char *key)
 { return !strcmp(key,"HOME")?"/home":NULL; }
 
+static void breadcrumb_failure_tests(void)
+{
+    os64_ui_browser_t *p=&app.browser_ui;
+    size_t refused=0;
+    bool accepted=false;
+    for (long nth=0;nth<1024;++nth) {
+        size_t old_count=p->crumb_count;
+        char old_location[OS64_DIRECTORY_PATH];
+        char names[OS64_UI_BROWSER_CRUMBS][OS64_DIRECTORY_PATH];
+        char paths[OS64_UI_BROWSER_CRUMBS][OS64_DIRECTORY_PATH];
+        os64_gui_rect_t bounds[OS64_UI_BROWSER_CRUMBS];
+        bool hidden[OS64_UI_BROWSER_CRUMBS];
+        strcpy(old_location,p->seen_location);
+        memcpy(names,p->crumb_names,sizeof(names));
+        memcpy(paths,p->crumb_paths,sizeof(paths));
+        for (size_t i=0;i<OS64_UI_BROWSER_CRUMBS;++i) {
+            bounds[i]=p->crumbs[i].bounds;hidden[i]=p->crumbs[i].hidden;
+        }
+        os64_gui_rect_t overflow=p->overflow.bounds;
+        snprintf(fake.location,sizeof(fake.location),"/allocation-%ld/child-%ld",nth,nth);
+        ++fake.revision;
+        deny_countdown=nth;
+        os64_ui_browser_sync(p);
+        deny_countdown=-1;
+        if (strcmp(p->seen_location,fake.location)) {
+            ++refused;
+            CHECK(!strcmp(p->seen_location,old_location));
+            CHECK(p->crumb_count==old_count);
+            for (size_t i=0;i<OS64_UI_BROWSER_CRUMBS;++i) {
+                CHECK(!memcmp(&bounds[i],&p->crumbs[i].bounds,sizeof(bounds[i])));
+                CHECK(hidden[i]==p->crumbs[i].hidden);
+                if (i<old_count) {
+                    CHECK(!strcmp(names[i],p->crumbs[i].text));
+                    CHECK(!strcmp(paths[i],p->crumb_paths[i]));
+                }
+            }
+            CHECK(!memcmp(&overflow,&p->overflow.bounds,sizeof(overflow)));
+            /* The same location/revision must retry without a resize. */
+            os64_ui_browser_sync(p);
+        } else accepted=true;
+        CHECK(!strcmp(p->seen_location,fake.location));
+        CHECK(p->crumb_count==3);
+        CHECK(p->crumbs[2].bounds.w>0 && !p->crumbs[2].hidden);
+        p->crumbs[2].on_click(&p->crumbs[2],p);
+        CHECK(!strcmp(fake.requested,fake.location));
+        if (accepted) break;
+    }
+    CHECK(refused>0 && accepted);
+    printf("breadcrumb allocation sweep: %zu refusals recovered\n",refused);
+    strcpy(fake.location,"/home");fake.requested[0]=0;fake.loading=false;
+    ++fake.revision;os64_ui_browser_sync(p);
+}
+
 static void roam_ui_tests(const char *font_dir)
 {
     current="roam UI";
@@ -160,6 +213,7 @@ static void roam_ui_tests(const char *font_dir)
     int32_t text_width=0;
     CHECK(os64_ui_text_measure(&app.ui,OS64_FONT_ROLE_UI,"Forward",7,&text_width)==OS64_FONT_OK);
     CHECK(app.browser_ui.forward.bounds.w>=text_width);
+    breadcrumb_failure_tests();
     fake.directory.incomplete=true;
     os64_ui_browser_sync(&app.browser_ui);
     uint64_t notice=app.browser_ui.notice_token;
