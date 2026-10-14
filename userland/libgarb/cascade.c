@@ -1148,12 +1148,13 @@ static int key_run_cmp(const void *a, const void *b)
 // A rule's keyframes, read for an element (`own`, its custom properties
 // `customs`) or for none: Animations 2 § 3.2's groups — the blocks at one
 // offset with one easing, each longhand's last declaration among them —
-// sorted by offset, a tie in the order each was first written. Two blocks
-// at one offset, one giving an easing equal to the element's and one
-// giving none, are two keyframes here where § 3.2 makes them one; the value
-// differs at that offset alone. Grouped by sorting, not by searching the
-// groups so far: a rule may have as many offsets as a page can write. Into
-// the cascade's arena; how many.
+// sorted by offset, a tie in the order each was first written; each kept
+// declaration with where it was written. Two blocks at one offset, one
+// giving an easing equal to the element's and one giving none, are two
+// keyframes here, since the element's easing is not this library's to
+// know: libflow, which knows it, makes them one by those places. Grouped by
+// sorting, not by searching the groups so far: a rule may have as many
+// offsets as a page can write. Into the cascade's arena; how many.
 static int32_t build_frames(garb_cascade_t *c, const Keyframes *k, const CustomMap *customs,
                             bool own, garb_keyframe_t **out)
 {
@@ -1170,10 +1171,11 @@ static int32_t build_frames(garb_cascade_t *c, const Keyframes *k, const CustomM
     KeyAt *at = os64_malloc((size_t)n * 2 * sizeof(*at));
     KeyRun *runs = os64_malloc((size_t)n * 2 * sizeof(*runs));
     garb_set_t *win = os64_malloc((size_t)GARB_NPROPS * sizeof(*win));
+    uint64_t *written = os64_malloc((size_t)GARB_NPROPS * sizeof(*written));
     int32_t *stamp = os64_calloc((size_t)GARB_NPROPS, sizeof(*stamp));
     garb_prop_t *props = os64_malloc((size_t)GARB_NPROPS * sizeof(*props));
     bool ok = easings != NULL && texts != NULL && at != NULL && runs != NULL && win != NULL &&
-              stamp != NULL && props != NULL;
+              written != NULL && stamp != NULL && props != NULL;
     garb_set_t sets[GARB_SETS_MAX];
     int32_t m = 0;
     for (int32_t b = 0; ok && b < k->nblocks; b++) {
@@ -1216,6 +1218,7 @@ static int32_t build_frames(garb_cascade_t *c, const Keyframes *k, const CustomM
                 for (int32_t s2 = 0; s2 < ns; s2++) {
                     garb_prop_t p = sets[s2].prop;
                     win[p] = sets[s2];
+                    written[p] = (uint64_t)(uint32_t)at[i].order << 32 | (uint32_t)d;
                     if (stamp[p] != r + 1) {
                         stamp[p] = r + 1;
                         props[np++] = p;
@@ -1233,11 +1236,18 @@ static int32_t build_frames(garb_cascade_t *c, const Keyframes *k, const CustomM
             props[j + 1] = x;
         }
         garb_set_t *kept = np > 0 ? alloc(c, (size_t)np * sizeof(*kept)) : NULL;
-        for (int32_t i = 0; kept != NULL && i < np; i++)
+        uint64_t *order = np > 0 ? alloc(c, (size_t)np * sizeof(*order)) : NULL;
+        if (order == NULL)
+            kept = NULL;
+        for (int32_t i = 0; kept != NULL && i < np; i++) {
             kept[i] = win[props[i]];
-        frames[r] = (garb_keyframe_t){runs[r].offset, at[runs[r].first].easing, kept,
-                                      kept != NULL ? np : 0, k->sheet};
+            order[i] = written[props[i]];
+        }
+        frames[r] = (garb_keyframe_t){.offset = runs[r].offset, .easing = at[runs[r].first].easing,
+                                      .sets = kept, .order = kept != NULL ? order : NULL,
+                                      .nsets = kept != NULL ? np : 0, .sheet = k->sheet};
     }
+    os64_free(written);
     os64_free(easings);
     os64_free(texts);
     os64_free(at);

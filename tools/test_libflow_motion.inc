@@ -711,6 +711,25 @@ static void motion_cascade_cases(void)
            s != NULL && s->overflow_x == FLOW_OVERFLOW_HIDDEN && s->overflow_y == FLOW_OVERFLOW_AUTO, NULL);
     moving_close(&m);
 
+    // Blocks at one offset that ease as the element's own easing are one
+    // keyframe, the last written of each longhand winning; one naming
+    // another easing is a keyframe of its own (Chrome, 10/14: 0.5, 0.1,
+    // 0.0630713 at a quarter).
+    moving_open(&m, MOTION_STYLE
+        "@keyframes jk{0%{opacity:0}50%{opacity:.2;animation-timing-function:linear}50%{opacity:1}}"
+        "@keyframes jj{0%{opacity:0}50%{opacity:.2;animation-timing-function:ease-in}50%{opacity:1}}"
+        "#ja{animation:jk 1s linear -.25s paused}"
+        "#jb{animation:jj 1s linear -.25s paused}"
+        "#jc{animation:jk 1s ease-in -.25s paused}"
+        "</style><div id=ja></div><div id=jb></div><div id=jc></div>", 1000);
+    expect_i64("motion: a block easing as the element does joins the one easing as nothing",
+               (s = moving_style(&m, "ja")) != NULL ? s->opacity : -1, 500);
+    expect_i64("motion: a block naming another easing is a keyframe of its own",
+               (s = moving_style(&m, "jb")) != NULL ? s->opacity : -1, 100);
+    expect_i64("motion: and so is one naming linear when the element eases in",
+               (s = moving_style(&m, "jc")) != NULL ? s->opacity : -1, 63);
+    moving_close(&m);
+
     // Two axes past sqrt(DBL_MAX) are compared as the unit vectors they are:
     // x and y, which differ, so they turn as matrices, as the same axes
     // written small do.
@@ -726,6 +745,81 @@ static void motion_cascade_cases(void)
         same &= fabs(want[i] - got[i]) < 1e-9;
     expect("motion: rotation axes past sqrt(DBL_MAX) compared as units", same, NULL);
     moving_close(&m);
+
+    // And axes whose lengths a double cannot hold at all, compared the same
+    // way; matrices whose entries square past a double, mixed as the same
+    // matrices written small are, scaled by 1e200; and a turn in radians
+    // past what degrees hold, mixed against degrees in
+    // the coarser unit, a turn and not the NaN degrees made of it (which
+    // turn, a double cannot say: an ulp of 5e307 radians is past 1e291).
+    moving_open(&m, MOTION_STYLE
+        "@keyframes huge{from{transform:rotate3d(1.7e308,1.7e308,0,90deg)}"
+        "to{transform:rotate3d(1.7e308,0,1.7e308,90deg)}}"
+        "@keyframes tame{from{transform:rotate3d(1,1,0,90deg)}to{transform:rotate3d(1,0,1,90deg)}}"
+        "@keyframes mbig{from{transform:matrix(1e200,0,0,1e200,0,0)}to{transform:matrix(3e200,1e200,-1e200,3e200,0,0)}}"
+        "@keyframes msmall{from{transform:matrix(1,0,0,1,0,0)}to{transform:matrix(3,1,-1,3,0,0)}}"
+        "@keyframes rad{from{transform:rotate(1e308rad)}to{transform:rotate(0deg)}}"
+        "</style><div id=huge style='animation-name:huge;" AT("0.5") "'></div>"
+        "<div id=tame style='animation-name:tame;" AT("0.5") "'></div>"
+        "<div id=mbig style='animation-name:mbig;" AT("0.5") "'></div>"
+        "<div id=msmall style='animation-name:msmall;" AT("0.5") "'></div>"
+        "<div id=rad style='animation-name:rad;" AT("0.5") "'></div>", 1000);
+    both = moving_matrix(&m, "tame", want) && moving_matrix(&m, "huge", got);
+    same = both;
+    for (int i = 0; both && i < 16; i++)
+        same &= fabs(want[i] - got[i]) < 1e-9;
+    expect("motion: rotation axes past a double's length compared as units", same, NULL);
+    both = moving_matrix(&m, "msmall", want) && moving_matrix(&m, "mbig", got);
+    same = both;
+    for (int i = 0; both && i < 16; i++) {
+        // The 2x2 scaled by 1e200, translation and the rest as they were.
+        bool linear = i == 0 || i == 1 || i == 4 || i == 5;
+        double w = linear ? want[i] * 1e200 : want[i];
+        same &= isfinite(got[i]) && fabs(w - got[i]) <= 1e-9 * fmax(1, fabs(w));
+    }
+    expect("motion: matrices whose entries square past a double mix as their small selves", same, NULL);
+    same = moving_matrix(&m, "rad", got);
+    for (int i = 0; same && i < 16; i++)
+        same &= isfinite(got[i]);
+    same = same && fabs(got[0] * got[0] + got[1] * got[1] - 1) < 1e-9 && got[0] == got[5] &&
+           got[1] == -got[4];
+    expect("motion: radians past what degrees hold mix in radians, a turn", same, NULL);
+    moving_close(&m);
+
+    // Whatever two matrices a page writes, their mix is a matrix or no mix
+    // (the pair discrete) — never a NaN or an infinity: huge scales, shears
+    // and turns in 2D, and 3D rows whose lengths a double cannot hold.
+    {
+        const double M = DBL_MAX, H = 1.7e308, r = 0.7071067811865476;
+        static double kMats[8][16];
+        memset(kMats, 0, sizeof(kMats));
+        const double flat[7][6] = {
+            {1, 0, 0, 1, 0, 0}, {1e200, 0, 0, 1e200, 0, 0}, {M, 0, 0, M, 0, 0}, {M, 0, M, M, 0, 0},
+            {M * r, M * r, -M * r, M * r, 0, 0}, {1e-300, 0, 0, 1e-300, 0, 0}, {0, 0, 0, 0, 0, 0},
+        };
+        for (int i = 0; i < 7; i++) {
+            kMats[i][0] = flat[i][0];
+            kMats[i][1] = flat[i][1];
+            kMats[i][4] = flat[i][2];
+            kMats[i][5] = flat[i][3];
+            kMats[i][12] = flat[i][4];
+            kMats[i][13] = flat[i][5];
+            kMats[i][10] = kMats[i][15] = 1;
+        }
+        const double rows3d[16] = {H, H, 0, 0, 0, H, H, 0, H, 0, H, 0, 0, 0, 0, 1};
+        memcpy(kMats[7], rows3d, sizeof(rows3d));
+        bool sound = true;
+        for (int i = 0; i < 8 && sound; i++)
+            for (int j = 0; j < 8 && sound; j++)
+                for (int k = 0; k <= 4 && sound; k++) {
+                    double out[16];
+                    if (!f_matrix_mix(kMats[i], kMats[j], k / 4.0, out))
+                        continue;
+                    for (int e = 0; e < 16; e++)
+                        sound &= isfinite(out[e]);
+                }
+        expect("motion: a mix of matrices is a matrix or none, never a NaN", sound, NULL);
+    }
 
     // An easing at the edge of what a double holds: its output is held to
     // a double's range, and a value mixed with itself stays itself, never
@@ -1754,7 +1848,7 @@ static void motion_fuzz_one(FuzzRun *f, FuzzRng *r, long c)
     }
     for (int t = 0; t <= horizon; t++) {
         flow_style_t out = m.base;
-        (void)f_motion_style(&m, t, &out, NULL, NULL);
+        (void)f_motion_style(&m, t, &out, NULL, NULL, NULL);
         values[t] = fuzz_get(&out, kind);
         seen[t] = false;
     }
@@ -1847,6 +1941,117 @@ static void motion_fuzz_cases(void)
     os64_html_document_free(doc);
 }
 
+// A page of `divs` elements, each a 64-function transform (libgarb's most)
+// out of the lists' budget, then one animating a 64-function list.
+static char *dropped_page(int divs)
+{
+    size_t cap = (size_t)divs * 24 + 64 * 17 * 3 + 1024, at = 0;
+    char *html = malloc(cap);
+    at += (size_t)snprintf(html + at, cap - at, MOTION_STYLE ".s{transform:");
+    for (int i = 0; i < 64; i++)
+        at += (size_t)snprintf(html + at, cap - at, "translateX(1px) ");
+    at += (size_t)snprintf(html + at, cap - at, "}@keyframes long{from{transform:");
+    for (int i = 0; i < 64; i++)
+        at += (size_t)snprintf(html + at, cap - at, "translateX(0px) ");
+    at += (size_t)snprintf(html + at, cap - at, "}to{transform:");
+    for (int i = 0; i < 64; i++)
+        at += (size_t)snprintf(html + at, cap - at, "translateX(1px) ");
+    at += (size_t)snprintf(html + at, cap - at, "}}</style>");
+    for (int i = 0; i < divs; i++)
+        at += (size_t)snprintf(html + at, cap - at, "<div class=s></div>");
+    (void)snprintf(html + at, cap - at, "<div id=long style='animation:long 1s linear'></div>");
+    return html;
+}
+
+// What styling `divs` of them leaves of the lists' budget.
+static size_t dropped_left(int divs)
+{
+    char *html = dropped_page(divs);
+    Moving m;
+    moving_open(&m, html, 1000);
+    FStyles *fs = f_style_build(m.p.doc, m.p.page, &m.p.env);
+    size_t left = fs != NULL ? fs->lists_left : 0;
+    f_style_free(fs);
+    moving_close(&m);
+    free(html);
+    return left;
+}
+
+// A property the layout's style dropped is due for nothing — not by the
+// schedule's own reckoning, nor by its look at the next millisecond: an
+// opacity moving from 0 to 1 for a second, dropped, is due at its end.
+static void motion_dropped_cases(void)
+{
+    os64_html_document_t *doc = parse("<!doctype html><p id=x>x</p>");
+    const os64_html_node_t *x = motion_find(doc->document, "x");
+    flow_style_t base;
+    memset(&base, 0, sizeof(base));
+    base.opacity = 1000;
+    FKeyframe frames[2];
+    memset(frames, 0, sizeof(frames));
+    for (int k = 0; k < 2; k++) {
+        frames[k].offset = k;
+        frames[k].style = base;
+        frames[k].style.opacity = (uint16_t)(k * 1000);
+        f_props_add(&frames[k].sets, GARB_OPACITY);
+    }
+    FAnimation an;
+    memset(&an, 0, sizeof(an));
+    an.timing.name = (flow_name_t){"o", 1};
+    an.timing.duration_ms = 1000;
+    an.timing.iterations = 1;
+    an.frames = frames;
+    an.nframes = 2;
+    f_props_add(&an.props, GARB_OPACITY);
+    FMotion m;
+    memset(&m, 0, sizeof(m));
+    m.base = base;
+    m.anims = &an;
+    m.nanims = 1;
+    flow_timeline_t *tl = flow_timeline_new(doc);
+    f_timeline_begin(tl);
+    bool ok = f_timeline_element(tl, x, &m, 0);
+    f_timeline_end(tl, true);
+    double moving = f_motion_next(&m, 100);
+    f_props_add(&m.dropped, GARB_OPACITY);
+    double dropped = f_motion_next(&m, 100);
+    char detail[64];
+    snprintf(detail, sizeof(detail), "moving %g, dropped %g", moving, dropped);
+    expect("motion: a dropped value is due for nothing", ok && moving == 100 && dropped == 1000, detail);
+    flow_timeline_free(tl);
+    os64_html_document_free(doc);
+
+    // And through a layout: enough elements before it spend the lists'
+    // budget that the animated one's keyframes find room for their lists
+    // and its mix, half again as much, does not (calibrated from what one
+    // element and the animated one cost, so the sizes may change). Its
+    // value is left as the base has it, and it is due at its end.
+    size_t left0 = dropped_left(0), each = left0 - dropped_left(1);
+    size_t animated = F_STYLE_LISTS_BUDGET - left0;
+    int divs = each > 0 ? (int)((left0 + animated - animated * 7 / 10) / each) : 0;
+    char *html = dropped_page(divs);
+    Moving lm;
+    moving_open(&lm, html, 1000);
+    FStyles *fs = f_style_build(lm.p.doc, lm.p.page, &lm.p.env);
+    const os64_html_node_t *ln = motion_find(lm.p.doc->document, "long");
+    const FStyled *st = ln != NULL && fs != NULL ? f_style_of(fs, ln) : NULL;
+    bool keyframes = st != NULL && st->motion != NULL && st->motion->nanims == 1 &&
+                     st->motion->anims[0].nframes == 2 &&
+                     st->motion->anims[0].frames[0].style.ntransform == 64 &&
+                     st->motion->anims[0].frames[1].style.ntransform == 64;
+    expect("motion: the page leaves room for the keyframes and none for their mix",
+           keyframes && st->style.ntransform == 0, NULL);
+    f_style_free(fs);
+    snprintf(detail, sizeof(detail), "due %llu",
+             (unsigned long long)flow_motion_due(lm.tree, (os64_gui_rect_t){0, 0, 800, 1000000},
+                                                 (flow_point_t){0, 0}));
+    expect("motion due: a value whose lists found no room is not due every frame",
+           flow_motion_due(lm.tree, (os64_gui_rect_t){0, 0, 800, 1000000}, (flow_point_t){0, 0}) == 2000,
+           detail);
+    moving_close(&lm);
+    free(html);
+}
+
 static void motion_sweep(void)
 {
     motion_sweep_in(false);
@@ -1863,5 +2068,6 @@ static void motion_cases(void)
     motion_timeline_cases();
     motion_due_cases();
     motion_fuzz_cases();
+    motion_dropped_cases();
     motion_sweep();
 }

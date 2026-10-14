@@ -6,6 +6,7 @@
 // CSS 2.1 with a pencil, not captured from the engine: a case that passes
 // says the engine agrees with the rule.
 
+#include <float.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <math.h>

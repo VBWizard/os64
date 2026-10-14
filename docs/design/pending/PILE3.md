@@ -1494,7 +1494,12 @@ element, name, …)` answers an element's keyframes for a name, built by
 Animations 2 § 3.2: grouped by offset and easing, the declarations of
 each group read as winners are — into the longhands they set, `var()`
 replaced against the element's own custom properties — and dropped where
-Animations 2 drops them. The rules are sorted by name once, when the
+Animations 2 drops them. A block that eases as the element does,
+naming its easing, and one naming none are one keyframe (Chrome's
+answer), which libgarb cannot see, not knowing the element: it hands
+each kept declaration with where it was written (`order`), and libflow,
+which knows the easing, joins them, each longhand's last written winning.
+The rules are sorted by name once, when the
 cascade is built, and an element's blocks are grouped by sorting them:
 however many names and offsets a sheet writes, finding one is a binary
 search and grouping is a sort, never each against every other. The
@@ -1615,7 +1620,9 @@ Chrome interpolates them, not as Transforms 1 § 11.2 writes it, since the
 two part where a matrix holds a shear (§ Animations, What Chrome draws)
 and a page is written against what browsers draw. Each matrix is decomposed on its
 own: a 2D one into a translation, a scale (a flip on the axis whose
-diagonal is the smaller), a shear and a turn about z; any other by
+diagonal is the smaller), a shear and a turn about z, worked on its 2x2
+divided by its largest entry so `matrix(1e200, …)` squares nothing past
+a double; any other by
 Transforms 2 § 13.1.1, into perspective, translation, scale, skew and a
 quaternion. The parts are mixed, the turns slerped the shorter way — two
 too close for slerp's division mixed linearly and made unit again, so the
@@ -1625,7 +1632,11 @@ Chromium's DecomposeTransform and ComposeTransform, whose answers the
 proof checks to Chrome's six digits: `scaleX(-1)` against
 `rotate(90deg)`, a skewed turn, `matrix()` against `matrix()`, and
 protoweb.org's doors. A matrix that cannot be decomposed makes the pair
-discrete (Transforms 1 § 11). The tail's lengths need the border box, so the tail is kept as
+discrete (Transforms 1 § 11), and so does one whose decomposition, or
+the matrix composed from the mix, leaves a double's range — a pair held,
+never a NaN. Two angles in different units are mixed in the coarser of
+the two (fewer to the turn), so moving one into it divides and no angle
+its own unit holds overflows. The tail's lengths need the border box, so the tail is kept as
 its two lists and the fraction, and multiplied out where the frame's
 matrix is made (`f_transform_matrix`), with the box known.
 

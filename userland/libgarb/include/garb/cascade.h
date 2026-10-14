@@ -102,7 +102,8 @@ garb_style_t garb_style_for(const garb_cascade_t *c, const os64_html_node_t *ele
 
 // One keyframe of an animation (Animations 2 § 3.2): its offset in [0, 1];
 // its easing — the keyframe's own `animation-timing-function`, or NULL for
-// the element's; the longhands it sets, read as winners are read; and, as
+// the element's; the longhands it sets, read as winners are read, and for
+// each where it was written in the rule (`order`, later greater); and, as
 // a winner's, the index in garb_cascade's `sheets` of the sheet its rule
 // was written in, which a relative url() in it is resolved against. Of
 // several declarations of one longhand in a keyframe, the last is the one
@@ -111,6 +112,7 @@ typedef struct {
     double offset;
     const garb_val_t *easing;
     const garb_set_t *sets;
+    const uint64_t *order;
     int32_t nsets;
     int32_t sheet;
 } garb_keyframe_t;
@@ -118,7 +120,9 @@ typedef struct {
 // The keyframes `name` names (`len` bytes, compared codepoint for
 // codepoint) for `element`, in their used order — by offset, and blocks at
 // one offset with one easing grouped, in the order each group was first
-// written; the implicit 0% and 100% keyframes are the caller's to add.
+// written; the implicit 0% and 100% keyframes are the caller's to add, and
+// so is the grouping of a block that gives the element's own easing with
+// one that gives none, which only the caller can see are one (`order`).
 // They come from the last `@keyframes` (or `@-webkit-keyframes`, Compat
 // § 3.1) of that name in cascade order inside the `@media` and `@supports`
 // that hold. A keyframe's var() is replaced against the element's custom

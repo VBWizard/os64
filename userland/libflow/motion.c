@@ -554,7 +554,13 @@ typedef struct {
 
 static bool decompose_2d(const double m[16], D3 *d)
 {
-    double m11 = m[0], m12 = m[1], m21 = m[4], m22 = m[5];
+    // Worked on the 2x2 divided by its largest entry, which moves neither
+    // the turn nor the shear and scales the scales, multiplied back at the
+    // end: matrix(1e200, 0, 0, 1e200, 0, 0) squares nothing past a double.
+    double k = fmax(fmax(fabs(m[0]), fabs(m[1])), fmax(fabs(m[4]), fabs(m[5])));
+    if (!(k > 0) || !isfinite(k))
+        return false;
+    double m11 = m[0] / k, m12 = m[1] / k, m21 = m[4] / k, m22 = m[5] / k;
     double det = m11 * m22 - m12 * m21;
     if (det == 0)
         return false;           // cannot be undone: the pair is discrete
@@ -581,6 +587,8 @@ static bool decompose_2d(const double m[16], D3 *d)
     double angle = atan2(m12, m11);
     d->q[2] = sin(0.5 * angle);
     d->q[3] = cos(0.5 * angle);
+    d->sc[0] = held((long double)d->sc[0] * k);
+    d->sc[1] = held((long double)d->sc[1] * k);
     return true;
 }
 
@@ -627,9 +635,29 @@ static bool invert4(const double m[16], double out[16])
     return true;
 }
 
+// A vector made a unit, scaled by its largest part first so that neither
+// a part past sqrt(DBL_MAX) overflows the squares nor a tiny one
+// underflows them, its length never taken whole: false for a vector of no
+// length, or not finite.
+static bool unit3(double x, double y, double z, double u[3])
+{
+    double k = fmax(fabs(x), fmax(fabs(y), fabs(z)));
+    if (!(k > 0) || !isfinite(k))
+        return false;
+    x /= k;
+    y /= k;
+    z /= k;
+    double len = sqrt(x * x + y * y + z * z);
+    u[0] = x / len;
+    u[1] = y / len;
+    u[2] = z / len;
+    return true;
+}
+
 // A vector's length, taken by its largest part first, so that neither a
 // part past sqrt(DBL_MAX) overflows the squares nor a tiny one underflows
-// them (rotation() makes its axis a unit the same way).
+// them; a length past DBL_MAX is infinity all the same (f_matrix_mix
+// turns a mix that meets one away).
 static double len3(const double v[3])
 {
     double k = fmax(fabs(v[0]), fmax(fabs(v[1]), fabs(v[2])));
@@ -814,6 +842,12 @@ bool f_matrix_mix(const double a[16], const double b[16], double t, double out[1
     }
     slerp(da.q, db.q, t, r.q);
     compose(&r, out);
+    // A mix whose arithmetic left the double range — in a decomposition,
+    // which a part not a number carries into the matrix, or in the matrix
+    // itself — is no mix: the pair is discrete, never a NaN.
+    for (int i = 0; i < 16; i++)
+        if (!isfinite(out[i]))
+            return false;
     return true;
 }
 
@@ -859,18 +893,12 @@ static int quarters(double n, flow_angle_unit_t unit)
 static void rotation(double m[16], double x, double y, double z, double angle,
                      flow_angle_unit_t unit)
 {
-    // Made a unit vector scaled by its largest part first, so that neither
-    // rotate3d(1e308, 0, 0, a) overflows nor a tiny axis underflows to none.
-    double k = fmax(fabs(x), fmax(fabs(y), fabs(z)));
-    if (!(k > 0) || !isfinite(k))
+    double u[3];
+    if (!unit3(x, y, z, u))
         return;
-    x /= k;
-    y /= k;
-    z /= k;
-    double len = sqrt(x * x + y * y + z * z);
-    x /= len;
-    y /= len;
-    z /= len;
+    x = u[0];
+    y = u[1];
+    z = u[2];
     static const double kCos[4] = {1, 0, -1, 0}, kSin[4] = {0, 1, 0, -1};
     int q = quarters(angle, unit);
     double r = radians(angle, unit);
@@ -1193,15 +1221,29 @@ static flow_transform_t identity_of(const flow_transform_t *f)
     return r;
 }
 
-// An angle in another unit, in degrees.
-static double degrees(double v, flow_angle_unit_t unit)
+// How many of a unit make a turn.
+static double per_turn(flow_angle_unit_t unit)
 {
     switch (unit) {
-    case FLOW_ANGLE_GRAD: return v * 9 / 10;
-    case FLOW_ANGLE_RAD: return v * 180 / kPi;
-    case FLOW_ANGLE_TURN: return v * 360;
-    default: return v;
+    case FLOW_ANGLE_GRAD: return 400;
+    case FLOW_ANGLE_RAD: return 2 * kPi;
+    case FLOW_ANGLE_TURN: return 1;
+    default: return 360;
     }
+}
+
+// Of two angles' units, the coarser — fewer to the turn — which both are
+// mixed in: moving an angle into it divides, so no angle a unit holds
+// overflows on the way (rotate(1e308rad) against rotate(0deg) mixes in
+// radians).
+static flow_angle_unit_t coarser(flow_angle_unit_t a, flow_angle_unit_t b)
+{
+    return per_turn(a) <= per_turn(b) ? a : b;
+}
+
+static double in_unit(double v, flow_angle_unit_t from, flow_angle_unit_t to)
+{
+    return from == to ? v : v * (per_turn(to) / per_turn(from));
 }
 
 // Two rotations' axes, made unit vectors: equal, or either angle none, and
@@ -1209,22 +1251,25 @@ static double degrees(double v, flow_angle_unit_t unit)
 static bool same_axis(const flow_transform_t *a, const flow_transform_t *b, double axis[3])
 {
     double ua[3] = {a->a[0], a->a[1], a->a[2]}, ub[3] = {b->a[0], b->a[1], b->a[2]};
-    double la = len3(ua), lb = len3(ub);
+    // Compared as unit vectors, no length ever taken (unit3): two axes
+    // past sqrt(DBL_MAX) are as different as their directions.
+    double na[3], nb[3];
+    bool has_a = unit3(ua[0], ua[1], ua[2], na), has_b = unit3(ub[0], ub[1], ub[2], nb);
     if (a->a[3] == 0 && b->a[3] == 0) {
         axis[0] = axis[1] = 0;
         axis[2] = 1;
         return true;
     }
-    if (a->a[3] == 0 || la == 0) {
+    if (a->a[3] == 0 || !has_a) {
         os64_memcpy(axis, ub, sizeof(ub));
         return true;
     }
-    if (b->a[3] == 0 || lb == 0) {
+    if (b->a[3] == 0 || !has_b) {
         os64_memcpy(axis, ua, sizeof(ua));
         return true;
     }
     for (int i = 0; i < 3; i++)
-        if (ua[i] / la != ub[i] / lb)
+        if (na[i] != nb[i])
             return false;
     os64_memcpy(axis, ua, sizeof(ua));
     return true;
@@ -1261,25 +1306,16 @@ static flow_transform_t mix_fn(const flow_transform_t *a, const flow_transform_t
         double axis[3];
         (void)same_axis(a, b, axis);
         os64_memcpy(r.a, axis, sizeof(axis));
-        if (a->unit == b->unit) {
-            r.a[3] = lerp(a->a[3], b->a[3], t);
-        } else {
-            r.unit = FLOW_ANGLE_DEG;
-            r.a[3] = lerp(degrees(a->a[3], a->unit), degrees(b->a[3], b->unit), t);
-        }
+        r.unit = coarser(a->unit, b->unit);
+        r.a[3] = lerp(in_unit(a->a[3], a->unit, r.unit), in_unit(b->a[3], b->unit, r.unit), t);
         break;
     }
     default: {
         // The skews: their angles, in one unit.
         int n = a->fn == FLOW_FN_SKEW ? 2 : 1;
-        for (int i = 0; i < n; i++) {
-            if (a->unit == b->unit) {
-                r.a[i] = lerp(a->a[i], b->a[i], t);
-            } else {
-                r.unit = FLOW_ANGLE_DEG;
-                r.a[i] = lerp(degrees(a->a[i], a->unit), degrees(b->a[i], b->unit), t);
-            }
-        }
+        r.unit = coarser(a->unit, b->unit);
+        for (int i = 0; i < n; i++)
+            r.a[i] = lerp(in_unit(a->a[i], a->unit, r.unit), in_unit(b->a[i], b->unit, r.unit), t);
         break;
     }
     }
@@ -1987,7 +2023,8 @@ static double eased(const Frame *start, const Frame *end, double progress, bool 
     return f_ease(start->easing, x, before);
 }
 
-bool f_motion_style(const FMotion *m, double now, flow_style_t *out, FAlloc alloc, void *ctx)
+bool f_motion_style(const FMotion *m, double now, flow_style_t *out, FAlloc alloc, void *ctx,
+                    FProps *dropped)
 {
     bool ok = true;
     for (int32_t a = 0; a < m->nanims; a++) {
@@ -2008,8 +2045,11 @@ bool f_motion_style(const FMotion *m, double now, flow_style_t *out, FAlloc allo
                 MixKind kind;
                 interval(m, an, (garb_prop_t)p, k.progress, &s, &e);
                 if (!mix_prop((garb_prop_t)p, s.style, e.style,
-                              eased(&s, &e, k.progress, k.before), out, &kind, alloc, ctx))
+                              eased(&s, &e, k.progress, k.before), out, &kind, alloc, ctx)) {
                     ok = false;
+                    if (dropped != NULL)
+                        f_props_add(dropped, (garb_prop_t)p);
+                }
             }
     }
     // What is in currentColor follows the colour as it moves; a side drawn
@@ -2212,12 +2252,12 @@ static bool changes_by(const FMotion *m, double now, double then)
     ProbeLists la, lb;
     la.used = lb.used = 0;
     flow_style_t a = m->base, b = m->base;
-    (void)f_motion_style(m, now, &a, probe_alloc, &la);
-    (void)f_motion_style(m, then, &b, probe_alloc, &lb);
+    (void)f_motion_style(m, now, &a, probe_alloc, &la, NULL);
+    (void)f_motion_style(m, then, &b, probe_alloc, &lb, NULL);
     for (int32_t i = 0; i < m->nanims; i++)
         for (int p = 0; p < GARB_NPROPS; p++)
             if (f_props_has(&m->anims[i].props, (garb_prop_t)p) && animatable((garb_prop_t)p) &&
-                !same_value((garb_prop_t)p, &a, &b))
+                !f_props_has(&m->dropped, (garb_prop_t)p) && !same_value((garb_prop_t)p, &a, &b))
                 return true;
     return false;
 }
@@ -2243,7 +2283,8 @@ double f_motion_next(const FMotion *m, double now)
         if (dur > 0 && isfinite(k.iteration_start))
             soonest = fmin(soonest, base + k.iteration_start + dur);
         for (int p = 0; p < GARB_NPROPS && soonest > now; p++) {
-            if (!f_props_has(&an->props, (garb_prop_t)p) || !animatable((garb_prop_t)p))
+            if (!f_props_has(&an->props, (garb_prop_t)p) || !animatable((garb_prop_t)p) ||
+                f_props_has(&m->dropped, (garb_prop_t)p))
                 continue;
             Frame s, e;
             interval(m, an, (garb_prop_t)p, k.progress, &s, &e);

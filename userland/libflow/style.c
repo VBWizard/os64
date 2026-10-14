@@ -3596,6 +3596,102 @@ static flow_unit_t own_width(const Ctx *c, const Spec *sp, garb_style_t st, garb
     return css(c, 3);
 }
 
+static bool easing_same(const flow_easing_t *a, const flow_easing_t *b)
+{
+    if (a->kind != b->kind)
+        return false;
+    if (a->kind == FLOW_EASE_CUBIC)
+        return a->p[0] == b->p[0] && a->p[1] == b->p[1] && a->p[2] == b->p[2] && a->p[3] == b->p[3];
+    if (a->kind == FLOW_EASE_STEPS)
+        return a->steps == b->steps && a->jump == b->jump;
+    return true;
+}
+
+// Whether keyframe `f` eases as the element's own easing `own` does: it
+// names none (or one libflow cannot read, which is none), or names `own`.
+static bool eases_own(const garb_keyframe_t *f, const flow_easing_t *own)
+{
+    flow_easing_t e;
+    return f->easing == NULL || !easing_of(f->easing, &e) || easing_same(&e, own);
+}
+
+// Keyframes at one offset that ease as the element's own easing — one
+// naming it, one naming none — are one keyframe (Animations 2 § 3.2;
+// Chrome's answer), which libgarb cannot see, not knowing the element:
+// they cascade here, each longhand's last written declaration winning
+// (garb_keyframe_t.order), at the place of the first. One pass, each
+// longhand found by its number, however many blocks a page repeats. `*kf`
+// is replaced when any are joined; false on no memory.
+static bool join_own_easing(Ctx *c, const garb_keyframe_t **kf, int32_t *nk, const flow_easing_t *own)
+{
+    const garb_keyframe_t *in = *kf;
+    int32_t n = *nk, joins = 0;
+    for (int32_t j = 0, owners = 0; j < n; j++) {
+        if (j > 0 && in[j].offset != in[j - 1].offset)
+            owners = 0;
+        if (eases_own(&in[j], own) && owners++ > 0)
+            joins++;
+    }
+    if (joins == 0)
+        return true;
+    garb_keyframe_t *out = f_arena_alloc(&c->out->arena, (size_t)(n - joins) * sizeof(*out));
+    const garb_set_t **best = os64_malloc((size_t)GARB_NPROPS * sizeof(*best));
+    uint64_t *written = os64_malloc((size_t)GARB_NPROPS * sizeof(*written));
+    int32_t *seen = os64_calloc((size_t)GARB_NPROPS, sizeof(*seen));
+    bool ok = out != NULL && best != NULL && written != NULL && seen != NULL;
+    int32_t m = 0, run = 0;
+    for (int32_t lo = 0, hi; ok && lo < n; lo = hi) {
+        int32_t owners = 0, first = -1;
+        for (hi = lo; hi < n && in[hi].offset == in[lo].offset; hi++)
+            if (eases_own(&in[hi], own) && owners++ == 0)
+                first = hi;
+        garb_keyframe_t joined = first >= 0 ? in[first] : (garb_keyframe_t){0};
+        if (owners > 1) {
+            // Each longhand's last written declaration among them.
+            run++;
+            int32_t count = 0;
+            for (int32_t j = lo; j < hi; j++) {
+                if (!eases_own(&in[j], own))
+                    continue;
+                for (int32_t k = 0; k < in[j].nsets; k++) {
+                    garb_prop_t p = in[j].sets[k].prop;
+                    uint64_t at = in[j].order != NULL ? in[j].order[k] : 0;
+                    if (seen[p] != run) {
+                        seen[p] = run;
+                        count++;
+                    } else if (at <= written[p]) {
+                        continue;
+                    }
+                    best[p] = &in[j].sets[k];
+                    written[p] = at;
+                }
+            }
+            garb_set_t *sets = count > 0 ? f_arena_alloc(&c->out->arena, (size_t)count * sizeof(*sets)) : NULL;
+            ok = count == 0 || sets != NULL;
+            int32_t w = 0;
+            for (int32_t p = 0; ok && p < GARB_NPROPS; p++)
+                if (seen[p] == run)
+                    sets[w++] = *best[p];
+            joined.sets = sets;
+            joined.order = NULL;
+            joined.nsets = w;
+        }
+        for (int32_t j = lo; ok && j < hi; j++)
+            if (j == first)
+                out[m++] = joined;
+            else if (!eases_own(&in[j], own))
+                out[m++] = in[j];
+    }
+    os64_free(best);
+    os64_free(written);
+    os64_free(seen);
+    if (!ok)
+        return false;
+    *kf = out;
+    *nk = m;
+    return true;
+}
+
 // A keyframe's display, float and overflow as its declarations left them
 // (`specified`), before settle_box made what it does of them: the float,
 // the position and each overflow axis may come from different animations,
@@ -3660,6 +3756,8 @@ static bool animate(Ctx *c, const os64_html_node_t *n, Spec *sp, const Spec *ua,
                    : garb_keyframes(c->env->cascade, n, timing.name.text, timing.name.len, &kf);
         if (nk < 0)
             continue;               // no rule of that name: it starts nothing
+        if (!join_own_easing(c, &kf, &nk, &timing.easing))
+            return false;
         FAnimation *an = &anims[m->nanims];
         an->timing = timing;
         an->frames = nk > 0 ? f_arena_alloc(&c->out->arena, (size_t)nk * sizeof(FKeyframe))
@@ -3696,9 +3794,10 @@ static bool animate(Ctx *c, const os64_html_node_t *n, Spec *sp, const Spec *ua,
     if (!f_timeline_element(tl, n, m, now))
         return false;
     flow_style_t s = m->base;
-    // A list past the budget leaves its property as the base has it.
+    // A list past the budget leaves its property as the base has it, and
+    // named in m->dropped, so nothing is due for it in this tree.
     MotionLists lists = {c, false};
-    (void)f_motion_style(m, now, &s, motion_alloc, &lists);
+    (void)f_motion_style(m, now, &s, motion_alloc, &lists, &m->dropped);
     if (lists.no_memory)
         return false;
     settle_box(c, &s, item, root);
