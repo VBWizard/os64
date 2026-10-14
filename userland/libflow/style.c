@@ -3341,11 +3341,11 @@ static bool author_declares(garb_style_t st, int32_t prop)
 // `ua` is the Spec as the user-agent origin left it, which `revert` goes
 // back to. False on no memory only.
 // Declarations laid over `sp` as the author's are: `sets` (`n` of them),
-// each from the sheet `sheets` names (NULL: all from the element's `style`
-// attribute's place, -1), but those `skip` names (NULL: none). False on
-// no memory.
+// each from the sheet `sheets` names — or, with `sheets` NULL, all from
+// `sheet` (-1: the element's `style` attribute's place) — but those `skip`
+// names (NULL: none). False on no memory.
 static bool lay_sets(Ctx *c, Spec *sp, const Spec *ua, const flow_style_t *parent,
-                     const garb_set_t *sets, const int32_t *sheets, int32_t n,
+                     const garb_set_t *sets, const int32_t *sheets, int32_t sheet, int32_t n,
                      const FProps *skip)
 {
     Author a = {c, parent, 0, garb_cascade_env(c->env->cascade), -1};
@@ -3358,7 +3358,7 @@ static bool lay_sets(Ctx *c, Spec *sp, const Spec *ua, const flow_style_t *paren
             const garb_set_t *set = &sets[i];
             if (skip != NULL && f_props_has(skip, set->prop))
                 continue;
-            a.sheet = sheets != NULL ? sheets[i] : -1;
+            a.sheet = sheets != NULL ? sheets[i] : sheet;
             bool font = set->prop == GARB_FONT_SIZE;
             bool first = font || set->prop == GARB_COLOR;
             if (first != (pass == 0))
@@ -3403,7 +3403,7 @@ static bool author(Ctx *c, const os64_html_node_t *n, Spec *sp, const Spec *ua,
     garb_style_t st = garb_style_for(c->env->cascade, n);
     if (st.n == 0)
         return true;
-    if (!lay_sets(c, sp, ua, parent, st.sets, st.sheet, st.n, NULL))
+    if (!lay_sets(c, sp, ua, parent, st.sets, st.sheet, -1, st.n, NULL))
         return false;
     // A border style the author drew with no width from any origin has the
     // initial width, medium. The Spec's declared width starts at 0, not
@@ -3582,6 +3582,20 @@ static void *motion_alloc(void *ctx, size_t bytes)
     return p;
 }
 
+// A side's own width, which the animations' inputs keep whatever its style
+// — finish makes it 0 for a side drawn as none or hidden, and the side's
+// style may itself be animated: the width an origin declared (the chapter,
+// the element's winners `st`, a keyframe's `sets`), or, declared by none,
+// the initial `medium` (Chrome's answers: a style an animation turns solid
+// draws 3px, and a width animated from nowhere starts at 3px).
+static flow_unit_t own_width(const Ctx *c, const Spec *sp, garb_style_t st, garb_style_t sets, int side)
+{
+    int32_t w = GARB_BORDER_TOP_WIDTH + side;
+    if (sp->border_px[side] != 0 || author_declares(st, w) || author_declares(sets, w))
+        return sp->border_px[side];
+    return css(c, 3);
+}
+
 // A keyframe's display, float and overflow as its declarations left them
 // (`specified`), before settle_box made what it does of them: the float,
 // the position and each overflow axis may come from different animations,
@@ -3608,8 +3622,8 @@ static void unsettled(flow_style_t *s, const flow_style_t *specified)
 // (flow_style_t.animating). `sp` is the element's Spec before `finish`.
 // With animations, `*out` is the element's FMotion and `sp`'s style is
 // computed; with none, `*out` is NULL and `sp` as it was. A keyframe's
-// url() is read against the document, as a `style` attribute's is. False
-// on no memory.
+// url() is read against the sheet its @keyframes rule was written in, as a
+// winner's is against its own. False on no memory.
 static bool animate(Ctx *c, const os64_html_node_t *n, Spec *sp, const Spec *ua,
                     const flow_style_t *parent, bool item, bool root, FMotion **out)
 {
@@ -3630,15 +3644,15 @@ static bool animate(Ctx *c, const os64_html_node_t *n, Spec *sp, const Spec *ua,
     if (anims == NULL)
         return false;
     m->anims = anims;
-    // The animations' inputs keep each side's own width, which finish makes
-    // 0 for a side drawn as none or hidden: the side's style may itself be
-    // animated, and its width is settled once every animation is laid over
+    // The animations' inputs keep each side's own width (own_width), and
+    // its width is settled once every animation is laid over
     // (f_motion_style).
+    const garb_style_t none = {NULL, NULL, NULL, 0};
     Spec base = *sp;
     finish(c, &base, parent, item, root);
     m->base = base.s;
     for (int side = 0; side < 4; side++)
-        m->base.border_width[side] = base.border_px[side];
+        m->base.border_width[side] = own_width(c, &base, st, none, side);
     for (int32_t i = 0; i < count; i++) {
         flow_animation_t timing = f_animation_at(&m->base, i);
         const garb_keyframe_t *kf = NULL;
@@ -3655,12 +3669,13 @@ static bool animate(Ctx *c, const os64_html_node_t *n, Spec *sp, const Spec *ua,
         for (int32_t j = 0; j < nk; j++) {
             FKeyframe *f = &an->frames[j];
             Spec k = *sp;
-            if (!lay_sets(c, &k, ua, parent, kf[j].sets, NULL, kf[j].nsets, &important))
+            if (!lay_sets(c, &k, ua, parent, kf[j].sets, NULL, kf[j].sheet, kf[j].nsets, &important))
                 return false;
             flow_style_t specified = k.s;
             finish(c, &k, parent, item, root);
             for (int side = 0; side < 4; side++)
-                k.s.border_width[side] = k.border_px[side];
+                k.s.border_width[side] =
+                    own_width(c, &k, st, (garb_style_t){kf[j].sets, NULL, NULL, kf[j].nsets}, side);
             unsettled(&k.s, &specified);
             f->offset = kf[j].offset;
             f->has_easing = kf[j].easing != NULL && easing_of(kf[j].easing, &f->easing);

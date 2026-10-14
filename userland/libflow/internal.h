@@ -153,9 +153,9 @@ typedef struct {
     size_t cap, count;
 } FMap;
 
-// False on no memory; replacing the value of a key the map holds never is.
-bool f_map_put(FMap *map, const void *key, void *val);
+bool f_map_put(FMap *map, const void *key, void *val);  // false on no memory
 void *f_map_get(const FMap *map, const void *key);      // NULL when absent
+void f_map_remove(FMap *map, const void *key);          // allocates nothing
 void f_map_free(FMap *map);
 
 // ── The page's attribute grammars (attrs.c) ─────────────────────────────
@@ -297,8 +297,10 @@ void f_timeline_begin(flow_timeline_t *t);
 bool f_timeline_element(flow_timeline_t *t, const os64_html_node_t *n, FMotion *m, double now);
 void f_timeline_end(flow_timeline_t *t, bool complete);
 void f_timeline_undo(flow_timeline_t *t);
-// How many records the timeline keeps, each holding its element.
+// How many records the timeline keeps, each holding its element; and how
+// many elements its map names.
 int32_t f_timeline_records(const flow_timeline_t *t);
+int32_t f_timeline_elements(const flow_timeline_t *t);
 // A transform function's matrix, made from its primitive and arguments
 // (flow_transform_t): not for FLOW_FN_BLEND, which waits for the box.
 void f_transform_fn_matrix(flow_transform_t *f);

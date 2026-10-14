@@ -1561,7 +1561,9 @@ resolves them, an element with animations keeps that specified state as
 its BASE and makes, for each keyframe, the state its declarations make
 laid over the base — every property but those an `!important` winner
 holds — each resolved by `finish` as the element's own style is: at its
-font, its parent, its `currentColor`, its zoom. Each keyframe is then a
+font, its parent, its `currentColor`, its zoom, and a relative `url()`
+against the sheet its `@keyframes` rule was written in, as a winner's is
+against its own (`garb_keyframe_t.sheet`). Each keyframe is then a
 computed style, and the implicit keyframes are the base's. The value of
 each animated property at `now` is worked from those (§ What CSS asks:
 the clock, the value) and written into the element's style, and the derived
@@ -1615,7 +1617,9 @@ and a page is written against what browsers draw. Each matrix is decomposed on i
 own: a 2D one into a translation, a scale (a flip on the axis whose
 diagonal is the smaller), a shear and a turn about z; any other by
 Transforms 2 § 13.1.1, into perspective, translation, scale, skew and a
-quaternion. The parts are mixed, the turns slerped the shorter way, and
+quaternion. The parts are mixed, the turns slerped the shorter way — two
+too close for slerp's division mixed linearly and made unit again, so the
+mix ends at the second turn where Chromium keeps the first — and
 composed as perspective · translation · rotation · skew · scale —
 Chromium's DecomposeTransform and ComposeTransform, whose answers the
 proof checks to Chrome's six digits: `scaleX(-1)` against
@@ -1662,7 +1666,9 @@ which no ancestor's overflow holds. Any other — a transform, a size, a
 position, a shadow's offset — may carry what it draws into view from
 anywhere, and is due wherever its element is. The time: the layout's own
 for a value that moves continuously, which leaves when the next frame is
-to the face; for one that changes at an instant — the next step's edge in
+to the face — and a value the same at both ends of its interval does not
+move, however its keyframes are written, so only the interval's far end
+is due; for one that changes at an instant — the next step's edge in
 `steps()`, worked out from where the progress is and never walked to; each
 crossing of a discrete value's level (one half, or for visibility 0 and
 1) by its easing, every one an overshooting curve makes; the interval's
@@ -1671,7 +1677,15 @@ value rising to a step changes there, one falling through it (running
 backwards) just past it, and the clock's rounding may put either a hair
 the other side of a whole millisecond: so the millisecond the instant
 lies in is due, and failing that the one after — never late, and at
-most one layout early. Then the start of an active phase; an end — and
+most one layout early. A crossing is read as the value reads the eased
+fraction (one half and past it; visibility past 0, and at 1), and is
+due a hair early, by more than the easing's own tolerance in x. And
+because what lies a hair past the instant the progress stands on — an
+end it leaves, a step, a crossing nearer than rounding can place — is
+where no arithmetic of its own can be trusted to the bit, the next
+millisecond is asked of the value itself (`f_motion_style` at now and
+the millisecond after): any difference makes it due. Then the start of
+an active phase; an end — and
 never for one that is paused, finished and filling, or in place and out
 of view. It joins the deadlines the
 ticker keeps already (`pictures_schedule`). When it rings for an
@@ -1789,8 +1803,29 @@ Written before the code (the lesson of S7b's nineteen rounds):
 - **An easing is a point on its curve.** On [0, 1] a cubic's output is
   the curve's y at a point whose x is within 1e-7 of the input — a
   promise about x, since near a vertical tangent a small step in x is a
-  large one in y, and no solver can promise y there; outside [0, 1] the
-  end tangents are exact; steps are exact, their before flag with them.
+  large one in y, and no solver can promise y there; the curve's ends are
+  its ends, y 0 at x 0 and 1 at x 1, however far its controls reach;
+  outside [0, 1] the end tangents are exact; steps are exact, their before
+  flag with them.
+- **The schedule is never late.** Every change the value makes shows on
+  the millisecond it falls in: `flow_motion_due` names that millisecond
+  or one before it. Early is allowed — a layout for nothing at an instant
+  the arithmetic cannot place to the bit, and every layout a value it
+  cannot prove still asks for — late never. The value is the referee,
+  twice: the schedule asks it about the next millisecond rather than
+  mirror it there, and the proof asks `f_motion_style` at every
+  millisecond of thousands of animations made at random and holds
+  `f_motion_next` to each change.
+- **The extremes are held, not resolved.** A page may write any double —
+  easing controls to ±DBL_MAX, `steps(2147483647)`, durations and delays
+  at the ends of their range. Arithmetic that can pass a double is worked
+  in long double and held to the double range, so nothing becomes an
+  infinity or a NaN, nothing crashes or hangs, and no loop walks a count a
+  page chose. Past what long double resolves — a crossing nearer an end
+  than its precision, two turns closer than slerp can divide — the answer
+  is the nearest a double says, and the schedule errs early. Exactness
+  past that is not promised: as THE NUMERIC CONTRACT found, each widening
+  of the arithmetic meets an input just past it.
 - **A value lands on its field's own grid once**: a length on 1/64 px
   (the layout's unit and Chrome's), a colour on 8 bits a channel from
   premultiplied doubles, `opacity` on a thousandth, an integer half up.
@@ -1895,12 +1930,20 @@ pages, recorded with the page that asked; transforms' padding, pairing,
 `matrix()`; 3D: a perspective door, two axes);
 the side effects against Chrome's
 containing-block answers, and what float, position, overflow and
-`currentColor` make of each other across two animations; the timeline
+`currentColor` make of each other across two animations, and the width
+a side draws with when an animation draws its style; a keyframe's
+`url()` against its own sheet; the timeline
 across layouts — a start kept, `a` to `a, a`, a name gone, an element
 gone and its hold let go, a pause and a resume, an incomplete layout
 dropping nothing, a failed one undone, three thousand names matched;
 each due time, an inline element's later pieces and a curve whose
-slope no double holds among them; an animated page's layout with each
+slope no double holds among them, and values that stand still not
+asked for; THE SCHEDULE AGAINST THE VALUE — thousands of animations
+made at random (one to five keyframes at any offsets, several at one,
+two animations of a property, every easing to a double's extremes,
+every direction and fill), the value asked at every millisecond and
+each change held to a millisecond the schedule named; an animated
+page's layout with each
 of its allocations failed in turn, alone and with every one after it,
 leaking nothing, whole only when it is the page, and its timeline
 coming through each failure with its start times — and with a pause

@@ -15,9 +15,15 @@ before the change, checked byte for byte, whatever happens. Run it from a
 clean tree, and never beside another harness that edits the same tree; the
 per-mutant logs are in --logs.
 
-One break is left out because nothing can tell it apart from the code: a
+Breaks are left out where nothing can tell them apart from the code: a
 measured layout handed the timeline of the page it copies (the pages a
-measured layout copies are never shown, and have none).
+measured layout copies are never shown, and have none); a crossing whose
+x rounds to an end of its interval dropped, which the schedule's own look
+at the next millisecond places just as early; visibility's start read at
+0 inclusively, where only a curve's first point is 0 itself and that look
+places it too; and a crossing scheduled with no slack, which is late only
+when the value's own x tolerance straddles a millisecond's edge — a
+window of about 1e-5 ms, which no case at a millisecond's grain reaches.
 """
 import argparse
 import pathlib
@@ -173,8 +179,8 @@ mutants = [
      '        if (out->current_colours & FLOW_CURRENT_BORDER(i))\n            out->border_color[i] = out->color;',
      '', LIBFLOW),
     ('an-important-winner-is-animated', STYLE,
-     '            if (!lay_sets(c, &k, ua, parent, kf[j].sets, NULL, kf[j].nsets, &important))',
-     '            if (!lay_sets(c, &k, ua, parent, kf[j].sets, NULL, kf[j].nsets, NULL))', LIBFLOW),
+     '            if (!lay_sets(c, &k, ua, parent, kf[j].sets, NULL, kf[j].sheet, kf[j].nsets, &important))',
+     '            if (!lay_sets(c, &k, ua, parent, kf[j].sets, NULL, kf[j].sheet, kf[j].nsets, NULL))', LIBFLOW),
     ('no-memory-for-a-list-is-a-whole-layout', STYLE,
      '    if (lists.no_memory)\n        return false;',
      '', LIBFLOW),
@@ -186,8 +192,8 @@ mutants = [
      '                if (j >= 1 && j <= (k.forwards ? n - 1 : n))',
      '                if (j >= 1 && j <= n - 1)', LIBFLOW),
     ('a-crossing-is-not-due', MOTION,
-     '                            soonest = fmin(soonest, edge_due(&k, &an->timing, base,\n                                                             s.offset + span * xs[j], now));',
-     '                            (void)0;', LIBFLOW),
+     '                            soonest = fmin(soonest, edge_due(&k, &an->timing, base, s.offset + span * x, now));',
+     '                            (void)x;', LIBFLOW),
     ('a-change-shows-only-the-millisecond-after', MOTION,
      '    return first > now ? first : after > now ? after : INFINITY;',
      '    (void)first;\n    return after > now ? after : INFINITY;', LIBFLOW),
@@ -201,7 +207,7 @@ mutants = [
      '    if (t == 1)\n        return b;\n    return held(a + ((long double)b - a) * t);',
      '    return held((1 - (long double)t) * a + (long double)t * b);', LIBFLOW),
     ('an-easing-overflows', MOTION,
-     '    long double c = 3.0L * p1, b = 3.0L * ((long double)p2 - p1) - c, a = 1 - c - b;\n    return held(((a * t + b) * t + c) * t);',
+     '    long double u = 1 - (long double)t, v = t;\n    return held(3 * u * u * v * p1 + 3 * u * v * v * p2 + v * v * v);',
      '    return bezier(p1, p2, t);', LIBFLOW),
     ('records-chain-without-their-new-ones', MOTION,
      '        if (tail != NULL)\n            tail->next = t->records[j];',
@@ -234,20 +240,18 @@ mutants = [
      '        d->border_style[i] = s->border_style[i];\n        break;',
      '        d->border_style[i] = s->border_style[i];\n        d->border_width[i] = s->border_width[i];\n        break;', LIBFLOW),
     ('the-base-loses-a-hidden-width', STYLE,
-     '    for (int side = 0; side < 4; side++)\n        m->base.border_width[side] = base.border_px[side];',
-     '', LIBFLOW),
+     '    for (int side = 0; side < 4; side++)\n        m->base.border_width[side] = own_width(c, &base, st, none, side);',
+     '    (void)none;', LIBFLOW),
     ('a-keyframe-loses-a-hidden-width', STYLE,
-     '            for (int side = 0; side < 4; side++)\n                k.s.border_width[side] = k.border_px[side];',
+     '            for (int side = 0; side < 4; side++)\n                k.s.border_width[side] =\n'
+     '                    own_width(c, &k, st, (garb_style_t){kf[j].sets, NULL, NULL, kf[j].nsets}, side);',
      '', LIBFLOW),
     ('only-the-first-crossing-is-found', MOTION,
-     '        if (x > 0 && x < 1 && n < 3)\n            xs[n++] = x;',
-     '        if (x > 0 && x < 1 && n < 1)\n            xs[n++] = x;', LIBFLOW),
+     '    for (int32_t i = 0; i + 1 < nc && n < 3; i++) {',
+     '    for (int32_t i = 0; i + 1 < nc && n < 1; i++) {', LIBFLOW),
     ('visibility-crosses-at-one-half', MOTION,
-     '                for (int l = 0; l < (vis ? 2 : 1); l++) {',
-     '                for (int l = 0; l < (vis ? 0 : 1); l++) {', LIBFLOW),
-    ('hidden-to-visible-is-not-due-at-its-start', MOTION,
-     '                soonest = fmin(soonest, floor(now) + 1);\n            // Only what lies ahead',
-     '                (void)0;\n            // Only what lies ahead', LIBFLOW),
+     '                for (int l = 0; l < nl; l++) {',
+     '                for (int l = 0; l < (vis ? 0 : nl); l++) {', LIBFLOW),
     ('z-index-from-auto-stays-auto', MOTION,
      '            d->has_z_index = true;\n',
      '', LIBFLOW),
@@ -389,25 +393,49 @@ mutants = [
      '            r->after->next = NULL;',
      '            (void)r->after;', LIBFLOW),
     ('an-undone-element-keeps-its-new-first-record', MOTION,
-     '            (void)f_map_put(&t->by_node, r->node, NULL);',
+     '            f_map_remove(&t->by_node, r->node);',
      '            (void)0;', LIBFLOW),
+    ('an-undone-element-keeps-its-key', MOTION,
+     '            f_map_remove(&t->by_node, r->node);',
+     '            (void)f_map_put(&t->by_node, r->node, NULL);', LIBFLOW),
+    ('a-removed-key-leaves-a-hole', STORE,
+     '        if (stays)\n            continue;',
+     '        if (stays || true)\n            continue;', LIBFLOW),
+    ('a-removal-moves-every-key-back', STORE,
+     '        if (stays)\n            continue;',
+     '        (void)stays;', LIBFLOW),
+    ('the-map-count-stays', STORE,
+     '    map->vals[hole] = NULL;\n    map->count--;',
+     '    map->vals[hole] = NULL;', LIBFLOW),
+    ('a-same-value-is-moving', MOTION,
+     '            bool still = same_value((garb_prop_t)p, s.style, e.style);',
+     '            bool still = false;\n            (void)same_value;', LIBFLOW),
+    ('transforms-are-compared-by-pointer', MOTION,
+     '    for (int i = 0; i < 16; i++)\n        if (a->m[i] != b->m[i])\n            return false;\n    return true;',
+     '    for (int i = 0; i < 16; i++)\n        if (a->m[i] != b->m[i])\n            return false;\n    return a == b;', LIBFLOW),
+    ('shadows-are-compared-by-pointer', MOTION,
+     '    if (na != nb)\n        return false;\n    for (int32_t i = 0; i < na; i++)\n        if (a[i].x != b[i].x',
+     '    if (na != nb || a != b)\n        return false;\n    for (int32_t i = 0; i < na; i++)\n        if (a[i].x != b[i].x', LIBFLOW),
+    ('a-still-interval-skips-its-far-end', MOTION,
+     '            soonest = fmin(soonest, edge_due(&k, &an->timing, base, k.forwards ? e.offset : s.offset, now));\n'
+     '            if (still)\n                continue;',
+     '            if (still)\n                continue;\n'
+     '            soonest = fmin(soonest, edge_due(&k, &an->timing, base, k.forwards ? e.offset : s.offset, now));', LIBFLOW),
+    ('near-quaternions-are-the-start', MOTION,
+     '    if (s < 1e-5) {\n        double len = 0;',
+     '    if (s < 1e-5) {\n        os64_memcpy(out, a, 4 * sizeof(double));\n        return;\n        double len = 0;', LIBFLOW),
+    ('a-keyframe-url-is-the-documents', STYLE,
+     'kf[j].sets, NULL, kf[j].sheet, kf[j].nsets, &important)',
+     'kf[j].sets, NULL, -1, kf[j].nsets, &important)', LIBFLOW),
+    ('a-keyframe-forgets-its-sheet', CASCADE,
+     '                                      kept != NULL ? np : 0, k->sheet};',
+     '                                      kept != NULL ? np : 0, -1};', LIBFLOW),
     ('a-failed-box-build-is-not-undone', FLOW,
      '        flow_free(tree);\n        f_timeline_undo(env->timeline);\n        return NULL;\n    }\n    tree->incomplete',
      '        flow_free(tree);\n        return NULL;\n    }\n    tree->incomplete', LIBFLOW),
     ('a-failed-public-build-is-not-undone', FLOW,
      '            flow_free(tree);\n            f_timeline_undo(env->timeline);\n            return NULL;',
      '            flow_free(tree);\n            return NULL;', LIBFLOW),
-    ('replacing-a-key-grows-the-map', STORE,
-     '    if (map->cap != 0) {\n'
-     '        size_t at = hash_ptr(key) & (map->cap - 1);\n'
-     '        while (map->keys[at] != NULL && map->keys[at] != key)\n'
-     '            at = (at + 1) & (map->cap - 1);\n'
-     '        if (map->keys[at] == key) {\n'
-     '            map->vals[at] = val;\n'
-     '            return true;\n'
-     '        }\n'
-     '    }\n',
-     '', LIBFLOW),
     ('an-inline-element-is-its-first-piece', FLOW,
      '    if (b->kind == FLOW_BOX_SPAN)\n        while',
      '    if (false)\n        while', LIBFLOW),
@@ -415,8 +443,8 @@ mutants = [
      '        while (b->parent != NULL && !(block_level(b->kind) && b->node != NULL))',
      '        while (b->parent != NULL && !block_level(b->kind))', LIBFLOW),
     ('the-base-is-unsettled', STYLE,
-     '        m->base.border_width[side] = base.border_px[side];\n    for (int32_t i = 0; i < count; i++) {',
-     '        m->base.border_width[side] = base.border_px[side];\n    unsettled(&m->base, &sp->s);\n'
+     '        m->base.border_width[side] = own_width(c, &base, st, none, side);\n    for (int32_t i = 0; i < count; i++) {',
+     '        m->base.border_width[side] = own_width(c, &base, st, none, side);\n    unsettled(&m->base, &sp->s);\n'
      '    for (int32_t i = 0; i < count; i++) {', LIBFLOW),
     ('a-keyframe-is-settled-alone', STYLE,
      '            unsettled(&k.s, &specified);',
@@ -430,6 +458,34 @@ mutants = [
     ('a-current-colour-is-resolved', MOTION,
      '    if (a->current_colours & b->current_colours & bit)\n        d->current_colours |= bit;',
      '    (void)a;\n    (void)b;\n    if (false)\n        d->current_colours |= bit;', LIBFLOW),
+    # libflow: what the schedule against the value found, and a side's
+    # own width.
+    ('the-curve-is-cubed-by-powers', MOTION,
+     '    long double u = 1 - (long double)t, v = t;\n'
+     '    return held(3 * u * u * v * p1 + 3 * u * v * v * p2 + v * v * v);',
+     '    long double c = 3.0L * p1, b = 3.0L * ((long double)p2 - p1) - c, a = 1 - c - b;\n'
+     '    return held(((a * t + b) * t + c) * t);', LIBFLOW),
+    ('a-change-at-now-is-shown', MOTION,
+     '    double first = ceil(at - 1e-6), after = floor(at + 1e-6) + 1;',
+     '    double first = ceil(at - 1e-6), after = floor(at) + 1;', LIBFLOW),
+    ('visibility-reads-both-levels', MOTION,
+     '                if (vis && s.style->visibility != FLOW_VISIBLE) {',
+     '                if (vis) {', LIBFLOW),
+    ('a-crossing-is-read-from-the-curve', MOTION,
+     '            if (past_level(bezier_y(p[1], p[3], mid), level, strict) == past[i])',
+     '            if ((bezier_y(p[1], p[3], mid) > level) == past[i])', LIBFLOW),
+    ('the-next-millisecond-is-not-asked', MOTION,
+     '    if (next > then && changes_by(m, now, then))',
+     '    if (false && changes_by(m, now, then))', LIBFLOW),
+    ('a-side-with-no-width-has-none', STYLE,
+     '        return sp->border_px[side];\n    return css(c, 3);',
+     '        return sp->border_px[side];\n    return css(c, 3) * 0;', LIBFLOW),
+    ('a-keyframe-width-is-not-its-own', STYLE,
+     '    if (sp->border_px[side] != 0 || author_declares(st, w) || author_declares(sets, w))',
+     '    (void)sets;\n    if (sp->border_px[side] != 0 || author_declares(st, w))', LIBFLOW),
+    ('the-probe-shares-its-lists', MOTION,
+     '    (void)f_motion_style(m, then, &b, probe_alloc, &lb);',
+     '    (void)f_motion_style(m, then, &b, probe_alloc, &la);', LIBFLOW),
     ('the-switches-are-not-applied', SETTINGS,
      '    s.motion_use(s.run.checked, s.reduce.checked);',
      '', WINDOW),

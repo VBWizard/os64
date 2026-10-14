@@ -172,6 +172,18 @@ static void motion_easing_cases(void)
         }
     }
     expect("easing: a cubic is its curve", true, NULL);
+    // The curve's ends are its ends, however far its controls reach: 0 at
+    // 0 and 1 at 1, exactly — where controls at a double's extremes once
+    // cancelled each other and lost the 1 that ends the curve.
+    static const double kFar[][4] = {
+        {0.994, 0, 0.746, 1e308}, {0.5, 1e308, 0.5, -1e308}, {0, -1e308, 1, 1e308}, {0.3, 2, 0.7, -1},
+    };
+    bool ends = true;
+    for (size_t i = 0; i < sizeof(kFar) / sizeof(kFar[0]) && ends; i++) {
+        flow_easing_t e = {FLOW_EASE_CUBIC, {kFar[i][0], kFar[i][1], kFar[i][2], kFar[i][3]}, 0, 0};
+        ends = f_ease(&e, 0, false) == 0 && f_ease(&e, 1, false) == 1;
+    }
+    expect("easing: a cubic's ends are 0 and 1, whatever its controls", ends, NULL);
     // Outside [0, 1], the tangent at the nearer end (§ 2.2.1): through
     // P0 and P1 below, P2 and P3 above.
     expect("easing: below 0, the line through P0 and P1",
@@ -384,6 +396,39 @@ static void motion_chrome_cases(void)
            s->backgrounds.image[0].gradient->stops[0].colour == 0x0000ffu, NULL);
     moving_close(&m);
 
+    // A keyframe's url() is read against the sheet its @keyframes rule was
+    // written in, as a winner's is (Chrome, 10/14: `url(spinner.png)` in
+    // /css/site.css's keyframes is /css/spinner.png): the second sheet
+    // here, not the first, nor the document.
+    moving_open(&m, MOTION_STYLE "</style><style>"
+        "@keyframes bg{to{background-image:url(spinner.png)}}"
+        "#bg{animation:bg 1s linear -.75s paused}"
+        "</style><div id=bg></div>", 1000);
+    s = moving_style(&m, "bg");
+    expect("motion: a keyframe's url() is its own sheet's",
+           s != NULL && s->backgrounds.nimage == 1 && s->backgrounds.image[0].url != NULL &&
+               s->backgrounds.image[0].sheet == 1, NULL);
+    moving_close(&m);
+
+    // A turn too small for slerp's division between two matrices that
+    // scale a million times: the mix ends at the second matrix — the
+    // turn's 1e-6 radians a whole pixel at that scale — and between them
+    // the turn is mixed, not held at the first.
+    double ma[16], mb[16], mo[16];
+    memset(ma, 0, sizeof(ma));
+    memset(mb, 0, sizeof(mb));
+    ma[0] = ma[5] = 1e6;
+    ma[10] = ma[15] = mb[10] = mb[15] = 1;
+    mb[0] = mb[5] = 1e6 * cos(1e-6);
+    mb[1] = 1e6 * sin(1e-6);
+    mb[4] = -mb[1];
+    bool ends = f_matrix_mix(ma, mb, 1, mo);
+    for (int i = 0; i < 16 && ends; i++)
+        ends = fabs(mo[i] - mb[i]) <= 1e-9 * fmax(1, fabs(mb[i]));
+    bool midway = f_matrix_mix(ma, mb, 0.5, mo) && fabs(mo[1] - mb[1] / 2) < 1e-6;
+    expect("motion: two matrices a hair's turn apart end at the second", ends, NULL);
+    expect("motion: and between them the turn is mixed", midway, NULL);
+
     // The clock: a step's before flag in a backwards delay; 2.5 iterations
     // filling forwards; alternate's second iteration, backwards; a zero
     // duration filling both.
@@ -565,6 +610,44 @@ static void motion_cascade_cases(void)
     s = moving_style(&m, "bc");
     expect("motion: a style turned solid draws the element's own width",
            s != NULL && s->border_style[0] == FLOW_BORDER_SOLID && s->border_width[0] == 3 * 64, NULL);
+    moving_close(&m);
+    // And a side whose width no origin declared has its initial one,
+    // medium, whatever its style (Chrome, 10/14): a style an animation
+    // turns solid draws 3px; a width declared, even 0, is the width; a
+    // drawn border an animation turns to none has none; a width animated
+    // from nowhere starts at medium (6px of 3 to 7 at three quarters); and
+    // a keyframe's own 0 is 0.
+    moving_open(&m, MOTION_STYLE
+        "@keyframes bs{to{border-top-style:solid}}"
+        "@keyframes bn{to{border-top-style:none}}"
+        "@keyframes bw{to{border-top-style:solid;border-top-width:7px}}"
+        "@keyframes bz{to{border-top-style:solid;border-top-width:0}}"
+        "#ua{animation:bs 1s linear -.75s paused}"
+        "#ub{border-top-width:10px;animation:bs 1s linear -.75s paused}"
+        "#uc{border-top-width:0;animation:bs 1s linear -.75s paused}"
+        "#ud{border-top:solid;animation:bn 1s linear -.75s paused}"
+        "#ue{animation:bw 1s linear -.75s paused}"
+        "#uf{animation:bz 1s linear -1s paused forwards}"
+        "</style><div id=ua></div><div id=ub></div><div id=uc></div><div id=ud></div><div id=ue></div>"
+        "<div id=uf></div>",
+        1000);
+    static const struct {
+        const char *id, *name;
+        flow_unit_t width;
+    } kWidths[] = {
+        {"ua", "motion: a style turned solid with no width declared draws medium", 3 * 64},
+        {"ub", "motion: a width declared under a style of none is the width drawn", 10 * 64},
+        {"uc", "motion: a width declared 0 stays 0", 0},
+        {"ud", "motion: a drawn border turned to none has no width", 0},
+        {"ue", "motion: a width animated from none declared starts at medium", 6 * 64},
+        {"uf", "motion: a keyframe's own width of 0 is 0", 0},
+    };
+    for (size_t i = 0; i < sizeof(kWidths) / sizeof(kWidths[0]); i++) {
+        s = moving_style(&m, kWidths[i].id);
+        char detail[64];
+        snprintf(detail, sizeof(detail), "width %d", s != NULL ? s->border_width[0] : -1);
+        expect(kWidths[i].name, s != NULL && s->border_width[0] == kWidths[i].width, detail);
+    }
     moving_close(&m);
 
     // Chrome's answers (10/14): what a style's float, position and
@@ -887,8 +970,8 @@ static void motion_timeline_cases(void)
 
     // A layout that fails is undone: what it paused runs on from where it
     // ran, what it made goes, and the chains it grew end where they did —
-    // x's at its a, z's at none — so the next layout makes b and z's a
-    // again, and keeps the rest.
+    // x's at its a, z's at none, its key gone from the map — so the next
+    // layout makes b and z's a again, and keeps the rest.
     FAnimation u;
     memset(&u, 0, sizeof(u));
     u.timing.name = (flow_name_t){"u", 1};
@@ -898,7 +981,7 @@ static void motion_timeline_cases(void)
     f_timeline_begin(tl);
     ok = f_timeline_element(tl, y, &undone, 18000) && f_timeline_element(tl, x, &just_a, 18000);
     f_timeline_end(tl, true);
-    int32_t kept_records = f_timeline_records(tl);
+    int32_t kept_records = f_timeline_records(tl), kept_elements = f_timeline_elements(tl);
     FRecord *kept_u = u.record;
     kept_a = two_names[0].record;
     u.timing.paused = true;
@@ -911,6 +994,7 @@ static void motion_timeline_cases(void)
     u.record = kept_u;
     expect("motion: a layout undone leaves what it paused running, and makes nothing",
            ok && grew && kept_records == 2 && f_timeline_records(tl) == kept_records &&
+               kept_elements == 2 && f_timeline_elements(tl) == kept_elements &&
                f_motion_next(&undone, 18500) == 19000, NULL);
     f_timeline_begin(tl);
     ok = f_timeline_element(tl, y, &undone, 18300) && f_timeline_element(tl, x, &a_and_b, 18300) &&
@@ -919,21 +1003,38 @@ static void motion_timeline_cases(void)
     expect("motion: after an undone layout, the chains it grew are made again",
            ok && u.record == kept_u && two_names[0].record == kept_a && two_names[1].record != NULL &&
                an[0].record != NULL && f_timeline_records(tl) == 4, NULL);
-    // The undoing allocates nothing: replacing a key's value never grows
-    // the map, even a map one key short of growing, with no memory left.
-    FMap full = {0};
-    static int keys[49];
-    bool put = true;
-    for (int i = 0; i < 48; i++)
-        put = put && f_map_put(&full, &keys[i], &keys[i]);
+    // The undoing allocates nothing, and removing a key leaves no trace:
+    // puts and removals at random over a pool of keys, every key found
+    // exactly when the reference holds it, the count the reference's, and
+    // no removal allocating — the map one key short of growing throughout.
+    FMap map = {0};
+    static int pool[48];
+    bool held[48] = {false};
+    int32_t holding = 0;
+    bool agreed = true;
+    uint32_t seed = 12345;
     fail_single = false;
-    allocations = 0;
-    fail_at = 1;
-    bool replaced = f_map_put(&full, &keys[47], NULL) && f_map_get(&full, &keys[47]) == NULL;
-    bool added = f_map_put(&full, &keys[48], &keys[48]);
-    fail_at = 0;
-    expect("motion: replacing a key's value needs no room", put && replaced && !added, NULL);
-    f_map_free(&full);
+    for (int step = 0; step < 20000 && agreed; step++) {
+        seed = seed * 1103515245u + 12345u;
+        int k = (int)((seed >> 8) % 48);
+        if (held[k]) {
+            allocations = 0;
+            fail_at = 1;
+            f_map_remove(&map, &pool[k]);
+            fail_at = 0;
+            held[k] = false;
+            holding--;
+        } else {
+            agreed = f_map_put(&map, &pool[k], &pool[k]);
+            held[k] = true;
+            holding++;
+        }
+        for (int i = 0; i < 48 && agreed; i++)
+            agreed = f_map_get(&map, &pool[i]) == (held[i] ? &pool[i] : NULL);
+        agreed = agreed && (int32_t)map.count == holding && map.cap == 64;
+    }
+    expect("motion: a removed key leaves every other key found, and nothing behind", agreed, NULL);
+    f_map_free(&map);
 
     // Matching at scale: three thousand names, a and b in turn, matched
     // as Animations 1 § 2 says — the last of each name to the last record
@@ -1060,6 +1161,10 @@ static void motion_due_cases(void)
         {"motion due: visibility through a curve whose slope a double cannot hold",
          "@keyframes k{from{visibility:hidden}to{visibility:visible}}",
          "k 1s cubic-bezier(.5,1e308,.5,-1e308) 2"},
+        {"motion due backwards: visible to hidden, reversed",
+         "@keyframes k{from{visibility:visible}to{visibility:hidden}}", "k 1s linear reverse 2"},
+        {"motion due: a value standing still, then moving",
+         "@keyframes k{0%{opacity:1}50%{opacity:1}100%{opacity:0}}", "k 1s linear 2"},
     };
     for (size_t i = 0; i < sizeof(kBack) / sizeof(kBack[0]); i++) {
         char html[512];
@@ -1096,6 +1201,36 @@ static void motion_due_cases(void)
         expect(kBack[i].name, missed < 0, missed < 0 ? NULL : detail);
         moving_close(&oracle);
         moving_close(&face);
+    }
+
+    // A value that does not change is not moving, however its keyframes
+    // are written: due at its iteration's end, not every frame — an
+    // opacity, a transform, a shadow, each the same at both ends.
+    static const char *const kStill[] = {
+        "@keyframes k{from{opacity:1}to{opacity:1}}",
+        "@keyframes k{from{transform:rotate(10deg) translateX(5px)}to{transform:rotate(10deg) translateX(5px)}}",
+        "@keyframes k{from{box-shadow:2px 3px 4px red}to{box-shadow:2px 3px 4px red}}",
+        // Five functions: room in each of the schedule's two looks at the
+        // next millisecond, not in both together.
+        "@keyframes k{from{transform:rotate(1deg) translateX(5px) scale(2) skewX(5deg) rotate(3deg)}"
+        "to{transform:rotate(1deg) translateX(5px) scale(2) skewX(5deg) rotate(3deg)}}",
+    };
+    for (int i = 0; i < 4; i++) {
+        char html[512];
+        snprintf(html, sizeof(html), MOTION_STYLE "%s</style><div style='animation:k 1s linear infinite'>x</div>",
+                 kStill[i]);
+        moving_open(&m, html, 1000);
+        uint64_t due = flow_motion_due(m.tree, kView, (flow_point_t){0, 0});
+        static const char *const kStillNames[] = {
+            "motion due: an opacity that stands still is due at its iteration's end",
+            "motion due: a transform that stands still is due at its iteration's end",
+            "motion due: a shadow that stands still is due at its iteration's end",
+            "motion due: a long transform list that stands still is due at its iteration's end",
+        };
+        char detail[48];
+        snprintf(detail, sizeof(detail), "got %llu", (unsigned long long)due);
+        expect(kStillNames[i], due == 2000, detail);
+        moving_close(&m);
     }
 
     // Out of view, an animation that only repaints where its element is
@@ -1415,6 +1550,303 @@ static void motion_sweep_undo(void)
     printf("libflow motion sweep: %zu failed layouts undone\n", tried);
 }
 
+// ── The predictor against the evaluator, at random ─────────────────────
+//
+// f_motion_next says when an animation's value next changes; f_motion_style
+// says what the value is. The two are written separately, so each case
+// here is an animation made at random — one to four keyframes at random
+// offsets, the element's own value standing in for any missing at 0 or 1;
+// linear, cubic (overshooting, and at a double's extremes) and steps
+// easings, the animation's and a keyframe's own; every direction and fill,
+// fractional and whole iterations, delays either side of zero, a zero
+// duration — over a continuous value (opacity, a colour), a discrete one
+// (text-align) and visibility, values from a small pool so that some stand
+// still. The evaluator, asked at every millisecond, is the oracle: each
+// change must fall on a millisecond the predictor named (one layout early
+// is allowed, late never), and a value that never changes may not be
+// asked for more than the animation's edges.
+
+typedef struct {
+    uint64_t s;
+} FuzzRng;
+
+static double fuzz_unit(FuzzRng *r)
+{
+    r->s = r->s * 6364136223846793005ULL + 1442695040888963407ULL;
+    return (double)(r->s >> 11) * 0x1p-53;
+}
+
+static int fuzz_below(FuzzRng *r, int n)
+{
+    int k = (int)(fuzz_unit(r) * n);
+    return k < n ? k : n - 1;
+}
+
+static flow_easing_t fuzz_easing(FuzzRng *r)
+{
+    static const double kY[] = {-1, -0.5, 0, 0.25, 0.5, 1, 1.5, 2, 1e308, -1e308};
+    flow_easing_t e;
+    memset(&e, 0, sizeof(e));
+    switch (fuzz_below(r, 4)) {
+    case 0:
+        e.kind = FLOW_EASE_LINEAR;
+        break;
+    case 1:
+        e.kind = FLOW_EASE_STEPS;
+        e.jump = (flow_jump_t)fuzz_below(r, 4);
+        e.steps = 1 + fuzz_below(r, 5);
+        if (e.jump == FLOW_JUMP_NONE && e.steps < 2)
+            e.steps = 2;
+        break;
+    default:
+        e.kind = FLOW_EASE_CUBIC;
+        e.p[0] = fuzz_unit(r);
+        e.p[2] = fuzz_unit(r);
+        e.p[1] = kY[fuzz_below(r, 10)];
+        e.p[3] = kY[fuzz_below(r, 10)];
+        break;
+    }
+    return e;
+}
+
+enum { FUZZ_OPACITY, FUZZ_COLOR, FUZZ_ALIGN, FUZZ_VISIBILITY, FUZZ_KINDS };
+
+static void fuzz_set(flow_style_t *s, int kind, int v)
+{
+    static const uint16_t kOpacity[] = {0, 250, 1000};
+    static const uint32_t kColor[] = {0x000000u, 0xff0000u, 0x00ff00u};
+    static const flow_text_align_t kAlign[] = {FLOW_ALIGN_LEFT, FLOW_ALIGN_RIGHT, FLOW_ALIGN_CENTER};
+    static const flow_visibility_t kVis[] = {FLOW_VISIBLE, FLOW_HIDDEN, FLOW_COLLAPSE};
+    switch (kind) {
+    case FUZZ_OPACITY: s->opacity = kOpacity[v]; break;
+    case FUZZ_COLOR: s->color = kColor[v]; break;
+    case FUZZ_ALIGN: s->text_align = kAlign[v]; break;
+    default: s->visibility = kVis[v]; break;
+    }
+}
+
+static uint32_t fuzz_get(const flow_style_t *s, int kind)
+{
+    switch (kind) {
+    case FUZZ_OPACITY: return s->opacity;
+    case FUZZ_COLOR: return s->color;
+    case FUZZ_ALIGN: return (uint32_t)s->text_align;
+    default: return (uint32_t)s->visibility;
+    }
+}
+
+enum { FUZZ_FRAMES = 5 };
+
+// One animation over property `kind` at random, named `name`, into `an`,
+// its keyframes into `frames` — one to five, at offsets that may repeat,
+// several at 1 among them: true when every one holds the element's own
+// value, so that the animation, whatever else it does, stands still.
+static bool fuzz_animation(FuzzRng *r, int kind, const flow_style_t *base, const char *name,
+                           FAnimation *an, FKeyframe *frames)
+{
+    static const garb_prop_t kProp[] = {GARB_OPACITY, GARB_COLOR, GARB_TEXT_ALIGN, GARB_VISIBILITY};
+    static const double kIterations[] = {0.5, 1, 1.5, 2, 2.75, 3, INFINITY};
+    static const double kOffsets[] = {0, 0.2, 0.4, 0.5, 0.75, 1};
+    memset(an, 0, sizeof(*an));
+    an->timing.name = (flow_name_t){name, 1};
+    an->timing.duration_ms = fuzz_below(r, 20) == 0 ? 0 : 100 + fuzz_below(r, 900);
+    an->timing.delay_ms = (fuzz_below(r, 1600) - 800) + (fuzz_below(r, 2) ? 0.5 : 0);
+    an->timing.iterations = kIterations[fuzz_below(r, 7)];
+    an->timing.direction = (flow_direction_t)fuzz_below(r, 4);
+    an->timing.fill = (flow_fill_t)fuzz_below(r, 4);
+    an->timing.easing = fuzz_easing(r);
+    int nk = 1 + fuzz_below(r, FUZZ_FRAMES);
+    double offsets[FUZZ_FRAMES];
+    for (int k = 0; k < nk; k++) {
+        double o = kOffsets[fuzz_below(r, 6)];
+        int j = k;
+        for (; j > 0 && offsets[j - 1] > o; j--)
+            offsets[j] = offsets[j - 1];
+        offsets[j] = o;
+    }
+    bool same = true;
+    for (int k = 0; k < nk; k++) {
+        FKeyframe *f = &frames[k];
+        memset(f, 0, sizeof(*f));
+        f->offset = offsets[k];
+        f->style = *base;
+        fuzz_set(&f->style, kind, fuzz_below(r, 3));
+        same &= fuzz_get(&f->style, kind) == fuzz_get(base, kind);
+        if (fuzz_below(r, 3) == 0) {
+            f->has_easing = true;
+            f->easing = fuzz_easing(r);
+        }
+        f_props_add(&f->sets, kProp[kind]);
+    }
+    f_props_add(&an->props, kProp[kind]);
+    an->frames = frames;
+    an->nframes = nk;
+    return same;
+}
+
+// The layouts an animation that stands still may still ask for within
+// `horizon`: each phase's end, and each keyframe's edge in each iteration
+// the horizon holds.
+static int fuzz_edges(const FAnimation *an, int horizon)
+{
+    double dur = an->timing.duration_ms;
+    double iterations = dur > 0 ? fmin(an->timing.iterations, horizon / dur + 1) : 1;
+    return 4 + ((int)ceil(iterations) + 1) * (an->nframes + 2) * 2;
+}
+
+// The seeds of every case the schedule has failed, run first and every
+// time: each holds a rounding the schedule must place as the value does —
+// an edge a hair behind the millisecond the progress stands on, a curve
+// flat where it meets its level, a progress an ulp short of a keyframe.
+static const uint64_t kFuzzRegressions[] = {
+    8590968431883392784ULL,  6633983532214220214ULL,  7087835111071699824ULL,
+    8040739818910956811ULL,  13009149457079927089ULL, 14972483720120255669ULL,
+    14583056590173832281ULL, 8411317154603802884ULL,  8985172716612446494ULL,
+    9795968407517579881ULL,
+};
+
+typedef struct {
+    const os64_html_node_t *x;
+    const os64_html_document_t *doc;
+    int failed;
+    long changes, still, pairs;
+} FuzzRun;
+
+enum { FUZZ_HORIZON = 6000 };
+
+// One case, the animation `r` makes from where it stands.
+static void motion_fuzz_one(FuzzRun *f, FuzzRng *r, long c)
+{
+    enum { kHorizon = FUZZ_HORIZON };
+    static uint32_t values[kHorizon + 1];
+    static bool seen[kHorizon + 1];
+    const os64_html_node_t *x = f->x;
+    const os64_html_document_t *doc = f->doc;
+    uint64_t seed = r->s;
+    int kind = fuzz_below(r, FUZZ_KINDS);
+    flow_style_t base;
+    memset(&base, 0, sizeof(base));
+    base.opacity = 1000;
+    fuzz_set(&base, kind, fuzz_below(r, 3));
+    // A second animation of the same property, a third of the time:
+    // the later replaces the earlier wherever it is in effect.
+    FAnimation an[2];
+    FKeyframe frames[2][FUZZ_FRAMES];
+    int nanims = fuzz_below(r, 3) == 0 ? 2 : 1;
+    bool still = true;
+    for (int a = 0; a < nanims; a++)
+        still &= fuzz_animation(r, kind, &base, a == 0 ? "f" : "g", &an[a], frames[a]);
+    f->pairs += nanims == 2;
+    FMotion m;
+    memset(&m, 0, sizeof(m));
+    m.base = base;
+    m.anims = an;
+    m.nanims = nanims;
+    flow_timeline_t *tl = flow_timeline_new(doc);
+    f_timeline_begin(tl);
+    bool ok = f_timeline_element(tl, x, &m, 0);
+    f_timeline_end(tl, true);
+    int horizon = 200;
+    for (int a = 0; a < nanims; a++) {
+        double end = an[a].timing.delay_ms + an[a].timing.duration_ms * an[a].timing.iterations + 200;
+        int h = !(end < kHorizon) ? kHorizon : end < 200 ? 200 : (int)end;
+        horizon = h > horizon ? h : horizon;
+    }
+    for (int t = 0; t <= horizon; t++) {
+        flow_style_t out = m.base;
+        (void)f_motion_style(&m, t, &out, NULL, NULL);
+        values[t] = fuzz_get(&out, kind);
+        seen[t] = false;
+    }
+    seen[0] = true;
+    int layouts = 0;
+    for (uint64_t now = 0; now <= (uint64_t)horizon;) {
+        double d = f_motion_next(&m, (double)now);
+        if (!(d < INFINITY))
+            break;
+        uint64_t due = d <= (double)now ? now : (uint64_t)ceil(d);
+        now = due > now ? due : now + 1;
+        if (now <= (uint64_t)horizon)
+            seen[now] = true;
+        layouts++;
+    }
+    int missed = -1;
+    for (int t = 1; t <= horizon; t++) {
+        f->changes += values[t] != values[t - 1];
+        if (values[t] != values[t - 1] && !seen[t] && missed < 0)
+            missed = t;
+    }
+    int edges = 0;
+    for (int a = 0; a < nanims; a++)
+        edges += fuzz_edges(&an[a], horizon);
+    bool idle = !still || layouts <= edges;
+    f->still += still;
+    if (!ok || missed >= 0 || !idle) {
+        char detail[256];
+        snprintf(detail, sizeof(detail), "case %ld (seed %llu): kind %d, %d animation%s; %s at %d ms", c,
+                 (unsigned long long)seed, kind, nanims, nanims > 1 ? "s" : "",
+                 !ok ? "no record" : missed >= 0 ? "a change not laid out" : "a still value laid out",
+                 missed >= 0 ? missed : layouts);
+        expect("motion fuzz: the predictor names every change the evaluator makes", false, detail);
+        f->failed++;
+        // The whole case, so a failure can be read without a debugger.
+        fprintf(stderr, "  base %u\n", fuzz_get(&base, kind));
+        for (int a = 0; a < nanims; a++) {
+            const flow_animation_t *tm = &an[a].timing;
+            const flow_easing_t *ae = &tm->easing;
+            fprintf(stderr, "  %s: dur %g delay %g iter %g dir %d fill %d easing %d [%g %g %g %g] "
+                    "steps %d jump %d\n", tm->name.text, tm->duration_ms, tm->delay_ms, tm->iterations,
+                    tm->direction, tm->fill, ae->kind, ae->p[0], ae->p[1], ae->p[2], ae->p[3], ae->steps,
+                    ae->jump);
+            for (int j = 0; j < an[a].nframes; j++) {
+                const FKeyframe *f = &an[a].frames[j];
+                const flow_easing_t *fe = &f->easing;
+                fprintf(stderr, "    frame %g: %u", f->offset, fuzz_get(&f->style, kind));
+                if (f->has_easing)
+                    fprintf(stderr, " easing %d [%g %g %g %g] steps %d jump %d", fe->kind, fe->p[0],
+                            fe->p[1], fe->p[2], fe->p[3], fe->steps, fe->jump);
+                fputc('\n', stderr);
+            }
+        }
+        int at = missed >= 0 ? missed : 0;
+        for (uint64_t now = 0, prev = 0; now <= (uint64_t)at;) {
+            double d = f_motion_next(&m, (double)now);
+            uint64_t due = !(d < INFINITY) ? UINT64_MAX : d <= (double)now ? now : (uint64_t)ceil(d);
+            prev = now;
+            now = due == UINT64_MAX ? UINT64_MAX : due > now ? due : now + 1;
+            if (now > (uint64_t)at) {
+                fprintf(stderr, "  last layout before it %llu ms: next %.9f\n", (unsigned long long)prev, d);
+                break;
+            }
+        }
+        for (int t = at - 3 > 0 ? at - 3 : 0; t <= at + 2 && t <= horizon; t++)
+            fprintf(stderr, "  %d ms: %u%s\n", t, values[t], seen[t] ? " laid out" : "");
+    }
+    flow_timeline_free(tl);
+}
+
+static void motion_fuzz_cases(void)
+{
+    // MOTION_FUZZ_CASES and MOTION_FUZZ_SEED run it longer, or elsewhere.
+    const char *env_cases = getenv("MOTION_FUZZ_CASES"), *env_seed = getenv("MOTION_FUZZ_SEED");
+    long cases = env_cases != NULL ? strtol(env_cases, NULL, 10) : 3000;
+    FuzzRng r = {env_seed != NULL ? strtoull(env_seed, NULL, 10) : 20261014};
+    os64_html_document_t *doc = parse("<!doctype html><p id=x>x</p>");
+    FuzzRun f = {motion_find(doc->document, "x"), doc, 0, 0, 0, 0};
+    for (size_t i = 0; i < sizeof(kFuzzRegressions) / sizeof(kFuzzRegressions[0]); i++) {
+        FuzzRng one = {kFuzzRegressions[i]};
+        motion_fuzz_one(&f, &one, -1 - (long)i);
+    }
+    for (long c = 0; c < cases && f.failed < 5; c++)
+        motion_fuzz_one(&f, &r, c);
+    if (f.failed == 0)
+        expect("motion fuzz: the predictor names every change the evaluator makes", true, NULL);
+    printf("libflow motion fuzz: %ld cases and %zu regressions (%ld with two animations), %ld changes, "
+           "%ld standing still\n", cases, sizeof(kFuzzRegressions) / sizeof(kFuzzRegressions[0]), f.pairs,
+           f.changes, f.still);
+    os64_html_document_free(doc);
+}
+
 static void motion_sweep(void)
 {
     motion_sweep_in(false);
@@ -1430,5 +1862,6 @@ static void motion_cases(void)
     motion_effect_cases();
     motion_timeline_cases();
     motion_due_cases();
+    motion_fuzz_cases();
     motion_sweep();
 }

@@ -59,12 +59,15 @@ static double held(long double v)
     return v > DBL_MAX ? DBL_MAX : v < -DBL_MAX ? -DBL_MAX : (double)v;
 }
 
-// The curve's y at t: bezier's arithmetic in long double, held, since 3 y1
-// alone can overflow a double.
+// The curve's y at t, in long double and held, since 3 y1 alone can
+// overflow a double — and in Bernstein form, each control weighted by its
+// own polynomial: the power form's coefficients cancel each other at the
+// extremes (3e308 less 3e308 is 0, and the 1 that ends the curve lost
+// beside them), where these weights are 0 at t = 0 and 1 at t = 1 exactly.
 static double bezier_y(double p1, double p2, double t)
 {
-    long double c = 3.0L * p1, b = 3.0L * ((long double)p2 - p1) - c, a = 1 - c - b;
-    return held(((a * t + b) * t + c) * t);
+    long double u = 1 - (long double)t, v = t;
+    return held(3 * u * u * v * p1 + 3 * u * v * v * p2 + v * v * v);
 }
 
 static double bezier_slope(double p1, double p2, double t)
@@ -73,7 +76,13 @@ static double bezier_slope(double p1, double p2, double t)
     return (3 * a * t + 2 * b) * t + c;
 }
 
-// The curve's y at a point whose x is within 1e-7 of `x` (the contract):
+// How near the x a cubic's y is read at lies to the x asked for (the
+// contract); and the slack the schedule gives a crossing, a little more,
+// so that the value and the schedule cannot be a millisecond apart.
+#define EASE_X_TOLERANCE 1e-7
+#define EASE_X_SLACK (4 * EASE_X_TOLERANCE)
+
+// The curve's y at a point whose x is within EASE_X_TOLERANCE of `x`:
 // Newton's steps from t = x, and halving the interval where they do not
 // land — x(t) never falls, since x1 and x2 are in [0, 1].
 static double cubic(const double p[4], double x)
@@ -81,7 +90,7 @@ static double cubic(const double p[4], double x)
     double t = x;
     for (int i = 0; i < 8; i++) {
         double err = bezier(p[0], p[2], t) - x;
-        if (fabs(err) <= 1e-7)
+        if (fabs(err) <= EASE_X_TOLERANCE)
             return bezier_y(p[1], p[3], t);
         double d = bezier_slope(p[0], p[2], t);
         if (fabs(d) < 1e-9)
@@ -94,7 +103,7 @@ static double cubic(const double p[4], double x)
     t = x;
     for (int i = 0; i < 64; i++) {
         double xt = bezier(p[0], p[2], t);
-        if (fabs(xt - x) <= 1e-7)
+        if (fabs(xt - x) <= EASE_X_TOLERANCE)
             break;
         if (xt < x)
             lo = t;
@@ -274,6 +283,11 @@ int32_t f_timeline_records(const flow_timeline_t *t)
     return t != NULL ? t->n : 0;
 }
 
+int32_t f_timeline_elements(const flow_timeline_t *t)
+{
+    return t != NULL ? (int32_t)t->by_node.count : 0;
+}
+
 void f_timeline_begin(flow_timeline_t *t)
 {
     if (t != NULL) {
@@ -435,14 +449,14 @@ void f_timeline_undo(flow_timeline_t *t)
         return;
     // The records it made end their elements' chains: the record each
     // first one was chained after ends its chain again, or its element
-    // goes back to none — a key's value replaced, which cannot fail. Then
+    // goes back to none — its key removed, which allocates nothing. Then
     // they go, and what it changed in the rest is put back.
     for (int32_t i = t->base; i < t->n; i++) {
         FRecord *r = t->records[i];
         if (r->after != NULL && r->after->made != t->layout)
             r->after->next = NULL;
         else if (r->after == NULL && f_map_get(&t->by_node, r->node) == r)
-            (void)f_map_put(&t->by_node, r->node, NULL);
+            f_map_remove(&t->by_node, r->node);
     }
     for (int32_t i = t->base; i < t->n; i++)
         record_free(t, t->records[i]);
@@ -752,8 +766,10 @@ static void compose(const D3 *d, double m[16])
 }
 
 // The quaternions slerped from `a` to `b`, the shorter way round: one is
-// turned to the other's side when their half angle passes 90 degrees, and
-// two that share their axis and angle (within 1e-5) are `a`.
+// turned to the other's side when their half angle passes 90 degrees. Two
+// that share their axis and angle within 1e-5, where slerp's division is
+// lost, are mixed linearly and made unit again — so every mix ends at `b`,
+// within rounding, where Chromium keeps `a`.
 static void slerp(const double a[4], const double b[4], double t, double out[4])
 {
     double from[4] = {a[0], a[1], a[2], a[3]};
@@ -766,7 +782,14 @@ static void slerp(const double a[4], const double b[4], double t, double out[4])
     c = fmin(c, 1.0);
     double s = sqrt(1 - c * c);
     if (s < 1e-5) {
-        os64_memcpy(out, a, 4 * sizeof(double));
+        double len = 0;
+        for (int i = 0; i < 4; i++) {
+            out[i] = from[i] + (b[i] - from[i]) * t;
+            len += out[i] * out[i];
+        }
+        len = sqrt(len);
+        for (int i = 0; i < 4; i++)
+            out[i] = len > 0 ? out[i] / len : from[i];
         return;
     }
     double half = acos(c), wa = sin((1 - t) * half) / s, wb = sin(t * half) / s;
@@ -1531,6 +1554,96 @@ static void copy_prop(garb_prop_t p, flow_style_t *d, const flow_style_t *s)
     }
 }
 
+static bool length_same(flow_length_t a, flow_length_t b)
+{
+    return a.kind == b.kind && a.value == b.value && a.offset == b.offset;
+}
+
+// Two transform functions with one value. A tail waiting for its box
+// (FLOW_FN_BLEND) is never called the same as anything.
+static bool function_same(const flow_transform_t *a, const flow_transform_t *b)
+{
+    if (a == NULL || b == NULL)
+        return a == b;
+    if (a->fn != b->fn || a->three_d != b->three_d || a->unit != b->unit || a->blend != NULL ||
+        b->blend != NULL || !length_same(a->x, b->x) || !length_same(a->y, b->y))
+        return false;
+    for (int i = 0; i < 4; i++)
+        if (a->a[i] != b->a[i])
+            return false;
+    for (int i = 0; i < 16; i++)
+        if (a->m[i] != b->m[i])
+            return false;
+    return true;
+}
+
+static bool shadows_same(const flow_shadow_t *a, int32_t na, const flow_shadow_t *b, int32_t nb)
+{
+    if (na != nb)
+        return false;
+    for (int32_t i = 0; i < na; i++)
+        if (a[i].x != b[i].x || a[i].y != b[i].y || a[i].blur != b[i].blur ||
+            a[i].spread != b[i].spread || a[i].colour != b[i].colour || a[i].inset != b[i].inset ||
+            a[i].current != b[i].current)
+            return false;
+    return true;
+}
+
+// Whether styles `a` and `b` give property `p` one value — every
+// field it sets equal, and a list item by item, since copy_prop moves a
+// list by its pointer. Two values called different that are not cost a
+// layout for nothing; two called the same that are not would miss one, so
+// what is not compared field by field is compared byte by byte, where
+// padding can only tell two equal values apart.
+static bool same_value(garb_prop_t p, const flow_style_t *a, const flow_style_t *b)
+{
+    switch (p) {
+    case GARB_TRANSFORM:
+        if (a->ntransform != b->ntransform)
+            return false;
+        for (int32_t i = 0; i < a->ntransform; i++)
+            if (!function_same(&a->transform[i], &b->transform[i]))
+                return false;
+        return true;
+    case GARB_TRANSLATE: return function_same(a->translate, b->translate);
+    case GARB_ROTATE: return function_same(a->rotate, b->rotate);
+    case GARB_SCALE: return function_same(a->scale, b->scale);
+    case GARB_BOX_SHADOW:
+        return shadows_same(a->box_shadows, a->nbox_shadows, b->box_shadows, b->nbox_shadows);
+    case GARB_TEXT_SHADOW:
+        return shadows_same(a->text_shadows, a->ntext_shadows, b->text_shadows, b->ntext_shadows);
+    case GARB_BACKGROUND_POSITION_X: case GARB_BACKGROUND_POSITION_Y: {
+        bool x = p == GARB_BACKGROUND_POSITION_X;
+        int32_t na = x ? a->backgrounds.nx : a->backgrounds.ny;
+        int32_t nb = x ? b->backgrounds.nx : b->backgrounds.ny;
+        const flow_length_t *la = x ? a->backgrounds.x : a->backgrounds.y;
+        const flow_length_t *lb = x ? b->backgrounds.x : b->backgrounds.y;
+        if (na != nb)
+            return false;
+        for (int32_t i = 0; i < na; i++)
+            if (!length_same(la[i], lb[i]))
+                return false;
+        return true;
+    }
+    case GARB_BACKGROUND_SIZE:
+        if (a->backgrounds.nsize != b->backgrounds.nsize)
+            return false;
+        for (int32_t i = 0; i < a->backgrounds.nsize; i++) {
+            const flow_bg_size_t *x = &a->backgrounds.size[i], *y = &b->backgrounds.size[i];
+            if (x->fit != y->fit || !length_same(x->size[0], y->size[0]) ||
+                !length_same(x->size[1], y->size[1]))
+                return false;
+        }
+        return true;
+    default: {
+        flow_style_t x;
+        os64_memcpy(&x, b, sizeof(x));
+        copy_prop(p, &x, a);
+        return os64_memcmp(&x, b, sizeof(x)) == 0;
+    }
+    }
+}
+
 // Whether an animation may set `p`: `display` builds and unbuilds boxes
 // (PILE3.md § Animations, Booked), and the animations' own longhands and
 // `will-change` are not animatable (Animations 1 § 3, Will Change 1).
@@ -1938,14 +2051,25 @@ uint8_t f_motion_effects(const FMotion *m, double now)
 
 // ── When a value next changes ───────────────────────────────────────────
 
-// Every x in (0, 1) at which easing `e` — linear or a cubic, not steps —
-// crosses `level`, rising or falling: at most three, in order, into `xs`;
-// how many. A cubic's y is a cubic in the curve's parameter, so it is cut
-// where it turns (its slope's roots), and each piece whose ends lie either
-// side of `level` is halved down to the crossing; x rises with the
-// parameter (x1 and x2 are in [0, 1]), so the crossings come in order. A
-// curve that only touches `level` crosses nothing there.
-static int32_t ease_crossings(const flow_easing_t *e, double level, double xs[3])
+// Whether eased fraction `y` is past `level` as the value reads it: a
+// discrete value takes its end at one half and past it, visibility leaves
+// its start past 0 and takes its end at 1 (mix_prop).
+static bool past_level(double y, double level, bool strict)
+{
+    return strict ? y > level : y >= level;
+}
+
+// Every x in [0, 1] at which easing `e` — linear or a cubic, not steps —
+// takes y past `level` or back (past_level): at most three, in order, into
+// `xs`; how many. A cubic's y is a cubic in the curve's parameter, so it
+// is cut where it turns (its slope's roots), and each piece whose ends
+// read differently is halved down to where the reading changes — asked of
+// the y the value itself is worked from, so a crossing lands where the
+// value flips even where y rounds to the level across a stretch of the
+// curve (an inflection flat there). x rises with the parameter (x1 and x2
+// are in [0, 1]), so the crossings come in order; one so near an end that
+// its x rounds to it is kept, the value changing just past that end.
+static int32_t ease_crossings(const flow_easing_t *e, double level, bool strict, double xs[3])
 {
     if (e == NULL || e->kind != FLOW_EASE_CUBIC) {
         if (level <= 0 || level >= 1)
@@ -1983,22 +2107,22 @@ static int32_t ease_crossings(const flow_easing_t *e, double level, double xs[3]
         if (roots[i] > 0 && roots[i] < 1)
             cut[nc++] = roots[i];
     cut[nc++] = 1;
+    bool past[4];
+    for (int32_t i = 0; i < nc; i++)
+        past[i] = past_level(bezier_y(p[1], p[3], cut[i]), level, strict);
     int32_t n = 0;
-    for (int32_t i = 0; i + 1 < nc; i++) {
-        double t0 = cut[i], t1 = cut[i + 1];
-        double y0 = bezier_y(p[1], p[3], t0) - level, y1 = bezier_y(p[1], p[3], t1) - level;
-        if (!((y0 < 0 && y1 > 0) || (y0 > 0 && y1 < 0)))
+    for (int32_t i = 0; i + 1 < nc && n < 3; i++) {
+        if (past[i] == past[i + 1])
             continue;
+        double t0 = cut[i], t1 = cut[i + 1];
         for (int k = 0; k < 64; k++) {
-            double mid = (t0 + t1) / 2, ym = bezier_y(p[1], p[3], mid) - level;
-            if ((ym < 0) == (y0 < 0))
+            double mid = (t0 + t1) / 2;
+            if (past_level(bezier_y(p[1], p[3], mid), level, strict) == past[i])
                 t0 = mid;
             else
                 t1 = mid;
         }
-        double x = bezier(p[0], p[2], t1);
-        if (x > 0 && x < 1 && n < 3)
-            xs[n++] = x;
+        xs[n++] = fmin(fmax(bezier(p[0], p[2], t1), 0), 1);
     }
     return n;
 }
@@ -2044,11 +2168,13 @@ bool f_motion_in_place(const FMotion *m)
 // phase, Web Animations 1 § 4.7.7); and a change near a whole millisecond
 // may land a hair either side of it once the clock's arithmetic has
 // rounded. So the millisecond `at` is in or touches is due, and failing
-// that the one after: never late, and at most one layout early.
-// INFINITY for a change already shown.
+// that the one after: never late, and at most one layout early. A change
+// at the instant the progress stands on — worked back from a progress, so
+// a hair either side of `now` — is due the millisecond after. INFINITY for
+// a change already shown.
 static double change_due(double at, double now)
 {
-    double first = ceil(at - 1e-6), after = floor(at) + 1;
+    double first = ceil(at - 1e-6), after = floor(at + 1e-6) + 1;
     return first > now ? first : after > now ? after : INFINITY;
 }
 
@@ -2057,6 +2183,43 @@ static double change_due(double at, double now)
 static double edge_due(const Clock *k, const flow_animation_t *a, double base, double p, double now)
 {
     return change_due(base + at_progress(k, a, p), now);
+}
+
+// Lists for one of a probe's two looks, on the stack, each look its own: a
+// list past the room is left as the element's own, alike at both times,
+// and a list that moves continuously is due already.
+typedef struct {
+    _Alignas(16) unsigned char buf[4096];
+    size_t used;
+} ProbeLists;
+
+static void *probe_alloc(void *ctx, size_t bytes)
+{
+    ProbeLists *l = ctx;
+    size_t at = (l->used + 15) & ~(size_t)15;
+    if (at > sizeof(l->buf) || bytes > sizeof(l->buf) - at)
+        return NULL;
+    l->used = at + bytes;
+    return l->buf + at;
+}
+
+// Whether what `m` animates shows another value at `then` than at `now`,
+// asked of the value itself (f_motion_style): what lies a hair past the
+// instant the progress stands on — an end it leaves, a step, a crossing —
+// is placed there by no rounding.
+static bool changes_by(const FMotion *m, double now, double then)
+{
+    ProbeLists la, lb;
+    la.used = lb.used = 0;
+    flow_style_t a = m->base, b = m->base;
+    (void)f_motion_style(m, now, &a, probe_alloc, &la);
+    (void)f_motion_style(m, then, &b, probe_alloc, &lb);
+    for (int32_t i = 0; i < m->nanims; i++)
+        for (int p = 0; p < GARB_NPROPS; p++)
+            if (f_props_has(&m->anims[i].props, (garb_prop_t)p) && animatable((garb_prop_t)p) &&
+                !same_value((garb_prop_t)p, &a, &b))
+                return true;
+    return false;
 }
 
 double f_motion_next(const FMotion *m, double now)
@@ -2088,14 +2251,11 @@ double f_motion_next(const FMotion *m, double now)
             (void)mix_prop((garb_prop_t)p, s.style, e.style, 0.5, NULL, &kind, NULL, NULL);
             const flow_easing_t *ease = s.easing;
             bool stepped = ease != NULL && ease->kind == FLOW_EASE_STEPS;
-            if (kind == MIX_CONTINUOUS && !stepped && s.style != e.style)
+            // One value at both ends: nothing inside the interval changes,
+            // whatever its easing — only past its far end.
+            bool still = same_value((garb_prop_t)p, s.style, e.style);
+            if (kind == MIX_CONTINUOUS && !stepped && !still)
                 return now;     // moving continuously
-            // Hidden to visible is the start's at the interval's start
-            // and visible just past it (Appendix A): due the millisecond
-            // after.
-            if (p == GARB_VISIBILITY && k.progress == s.offset &&
-                s.style->visibility != FLOW_VISIBLE && e.style->visibility == FLOW_VISIBLE)
-                soonest = fmin(soonest, floor(now) + 1);
             // Only what lies ahead of the progress the way it runs: the
             // interval's far end, and inside it the next of its steps'
             // edges — worked out from where the progress is, never walked
@@ -2104,6 +2264,8 @@ double f_motion_next(const FMotion *m, double now)
             // values are worked from the same progress; one the progress
             // stands on may yet change just past it (change_due).
             soonest = fmin(soonest, edge_due(&k, &an->timing, base, k.forwards ? e.offset : s.offset, now));
+            if (still)
+                continue;
             double span = e.offset - s.offset;
             double here = span > 0 ? (k.progress - s.offset) / span : 0;
             if (stepped && span > 0) {
@@ -2115,24 +2277,47 @@ double f_motion_next(const FMotion *m, double now)
                     soonest = fmin(soonest, edge_due(&k, &an->timing, base, s.offset + span * j / n, now));
             } else if (kind == MIX_DISCRETE) {
                 // A discrete value flips where the eased fraction crosses
-                // one half; visibility, when either end is visible, where
-                // it crosses 0 or 1 (Appendix A) — each time the easing
-                // does, overshoot and all, whichever way the iteration
-                // runs, each when it shows (change_due).
+                // one half; visibility, when either end is visible, is
+                // visible between 0 and 1 and the ends' own beyond them
+                // (Appendix A), so it changes where it crosses 0 if its
+                // start is not visible and 1 if its end is not — each time
+                // the easing does, overshoot and all, whichever way the
+                // iteration runs, each when it shows (change_due).
                 bool vis = p == GARB_VISIBILITY && (s.style->visibility == FLOW_VISIBLE ||
                                                     e.style->visibility == FLOW_VISIBLE);
-                const double levels[2] = {vis ? 0 : 0.5, 1};
-                for (int l = 0; l < (vis ? 2 : 1); l++) {
+                double levels[2];
+                bool strict[2];
+                int nl = 0;
+                if (!vis) {
+                    levels[nl] = 0.5;
+                    strict[nl++] = false;
+                }
+                if (vis && s.style->visibility != FLOW_VISIBLE) {
+                    levels[nl] = 0;
+                    strict[nl++] = true;
+                }
+                if (vis && e.style->visibility != FLOW_VISIBLE) {
+                    levels[nl] = 1;
+                    strict[nl++] = false;
+                }
+                for (int l = 0; l < nl; l++) {
                     double xs[3];
-                    int32_t nx = ease_crossings(ease, levels[l], xs);
-                    for (int32_t j = 0; j < nx; j++)
+                    int32_t nx = ease_crossings(ease, levels[l], strict[l], xs);
+                    for (int32_t j = 0; j < nx; j++) {
+                        // Early by the slack the way it runs: the value's
+                        // own x may land that near the crossing.
+                        double x = fmin(fmax(xs[j] + (k.forwards ? -EASE_X_SLACK : EASE_X_SLACK), 0), 1);
                         if (k.forwards ? xs[j] >= here : xs[j] <= here)
-                            soonest = fmin(soonest, edge_due(&k, &an->timing, base,
-                                                             s.offset + span * xs[j], now));
+                            soonest = fmin(soonest, edge_due(&k, &an->timing, base, s.offset + span * x, now));
+                    }
                 }
             }
         }
         next = fmin(next, soonest);
     }
+    // And the millisecond after this one, asked of the value itself.
+    double then = floor(now) + 1;
+    if (next > then && changes_by(m, now, then))
+        next = then;
     return next;
 }

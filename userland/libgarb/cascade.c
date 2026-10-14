@@ -108,6 +108,7 @@ typedef struct {
     size_t len;
     KeyBlock *blocks;
     int32_t nblocks;
+    int32_t sheet;              // which input sheet it came from
     bool pending;               // a declaration holds var(): read per element
     // Read against no element: the answer for one whose winners do not
     // name it, its var()s dropped.
@@ -607,7 +608,8 @@ static bool key_dropped(const garb_decl_t *d, bool *easing)
 // timing function kept apart from them as its easing; `!important` ones,
 // and the custom properties a keyframe would set (PILE3.md § Animations,
 // Booked), are not kept.
-static void add_keyframes(garb_cascade_t *c, garb_parsed_t *owner, const garb_rule_t *r)
+static void add_keyframes(garb_cascade_t *c, garb_parsed_t *owner, const garb_rule_t *r,
+                          int32_t sheet)
 {
     const char *name;
     size_t len;
@@ -665,7 +667,7 @@ static void add_keyframes(garb_cascade_t *c, garb_parsed_t *owner, const garb_ru
     }
     if (!grow(c, (void **)&c->keyframes, c->nkeyframes, &c->keyframecap, sizeof(Keyframes)))
         return;
-    c->keyframes[c->nkeyframes++] = (Keyframes){name, len, blocks, nblocks, pending, NULL, 0};
+    c->keyframes[c->nkeyframes++] = (Keyframes){name, len, blocks, nblocks, sheet, pending, NULL, 0};
 }
 
 static void add_rules(garb_cascade_t *c, garb_parsed_t *owner, const garb_item_t *items,
@@ -697,7 +699,7 @@ static void add_rules(garb_cascade_t *c, garb_parsed_t *owner, const garb_item_t
         if (at(r, "font-face"))
             skipped_face(c, owner, r);
         else if (at(r, "keyframes") || at(r, "-webkit-keyframes"))
-            add_keyframes(c, owner, r);
+            add_keyframes(c, owner, r, sheet);
         else if (!at(r, "media") && !at(r, "supports") && !at(r, "layer") && !at(r, "import") &&
                  !at(r, "charset"))
             skipped(c, GARB_SKIP_AT_RULE, r->name, r->len);
@@ -1234,7 +1236,7 @@ static int32_t build_frames(garb_cascade_t *c, const Keyframes *k, const CustomM
         for (int32_t i = 0; kept != NULL && i < np; i++)
             kept[i] = win[props[i]];
         frames[r] = (garb_keyframe_t){runs[r].offset, at[runs[r].first].easing, kept,
-                                      kept != NULL ? np : 0};
+                                      kept != NULL ? np : 0, k->sheet};
     }
     os64_free(easings);
     os64_free(texts);

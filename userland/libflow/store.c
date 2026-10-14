@@ -91,17 +91,6 @@ static bool map_grow(FMap *map)
 
 bool f_map_put(FMap *map, const void *key, void *val)
 {
-    // A key the map holds takes its new value where it is, so replacing
-    // one never grows the map and cannot fail.
-    if (map->cap != 0) {
-        size_t at = hash_ptr(key) & (map->cap - 1);
-        while (map->keys[at] != NULL && map->keys[at] != key)
-            at = (at + 1) & (map->cap - 1);
-        if (map->keys[at] == key) {
-            map->vals[at] = val;
-            return true;
-        }
-    }
     // Kept under three quarters full, so a probe always ends.
     if ((map->count + 1) * 4 > map->cap * 3 && !map_grow(map))
         return false;
@@ -126,6 +115,33 @@ void *f_map_get(const FMap *map, const void *key)
         at = (at + 1) & (map->cap - 1);
     }
     return NULL;
+}
+
+void f_map_remove(FMap *map, const void *key)
+{
+    if (map->cap == 0 || key == NULL)
+        return;
+    size_t mask = map->cap - 1, hole = hash_ptr(key) & mask;
+    while (map->keys[hole] != NULL && map->keys[hole] != key)
+        hole = (hole + 1) & mask;
+    if (map->keys[hole] == NULL)
+        return;
+    // Each key after the hole in its run moves back into it unless its
+    // home lies after the hole, up to where it sits — so every probe still
+    // reaches its key before an empty slot, with no tombstone left behind
+    // (Knuth's Algorithm R).
+    for (size_t j = (hole + 1) & mask; map->keys[j] != NULL; j = (j + 1) & mask) {
+        size_t home = hash_ptr(map->keys[j]) & mask;
+        bool stays = hole <= j ? hole < home && home <= j : hole < home || home <= j;
+        if (stays)
+            continue;
+        map->keys[hole] = map->keys[j];
+        map->vals[hole] = map->vals[j];
+        hole = j;
+    }
+    map->keys[hole] = NULL;
+    map->vals[hole] = NULL;
+    map->count--;
 }
 
 void f_map_free(FMap *map)

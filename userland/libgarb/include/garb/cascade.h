@@ -102,7 +102,9 @@ garb_style_t garb_style_for(const garb_cascade_t *c, const os64_html_node_t *ele
 
 // One keyframe of an animation (Animations 2 § 3.2): its offset in [0, 1];
 // its easing — the keyframe's own `animation-timing-function`, or NULL for
-// the element's; and the longhands it sets, read as winners are read. Of
+// the element's; the longhands it sets, read as winners are read; and, as
+// a winner's, the index in garb_cascade's `sheets` of the sheet its rule
+// was written in, which a relative url() in it is resolved against. Of
 // several declarations of one longhand in a keyframe, the last is the one
 // kept; `!important` ones and the `animation-*` longhands are not kept.
 typedef struct {
@@ -110,6 +112,7 @@ typedef struct {
     const garb_val_t *easing;
     const garb_set_t *sets;
     int32_t nsets;
+    int32_t sheet;
 } garb_keyframe_t;
 
 // The keyframes `name` names (`len` bytes, compared codepoint for
