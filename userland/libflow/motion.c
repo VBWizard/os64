@@ -197,40 +197,31 @@ static Clock clock_at(const flow_animation_t *a, double local)
 
 // ── The timeline ────────────────────────────────────────────────────────
 
-// What a layout changes in a record it meets, kept from before the first
-// change so a layout that fails can put it back (f_timeline_undo).
-typedef struct {
+// One running animation: its element and name, when it started, and while
+// it is paused, the time it holds.
+struct FRecord {
+    const os64_html_node_t *node;
     double start;               // on the face's clock, ms
     double hold;                // paused: how far it had run
     bool paused;
-    uint32_t seen;              // the layout that last met it
-    int32_t place;              // its place in its element's list then
-} FRecordState;
-
-struct FRecord {
-    const os64_html_node_t *node;
-    char *name;
-    uint32_t len;
-    FRecordState now;
-    FRecordState was;           // before the layout that last met it
-    uint32_t made;              // the layout that made it
-    // Not met by a complete layout whose cleanup had no room to drop it:
-    // matched to no name again, and dropped by the next cleanup with room.
-    bool gone;
-    FRecord *after;             // the record it was chained after then, or NULL
+    int32_t place;              // its place in its element's list
+    int32_t index;              // its place in its timeline's records
     FRecord *next;              // its element's next record
+    uint32_t len;
+    char name[];
 };
 
+// A layout builds a timeline of its own, reading the one the page shows
+// (`from`) and changing nothing in it, so a layout that fails, or a tree
+// the face discards, takes its timeline with it and leaves nothing to put
+// back. `from` and `met` are the layout's, and go at f_timeline_end.
 struct flow_timeline {
     const os64_html_document_t *doc;
     FRecord **records;
     int32_t n, cap;
-    int32_t base;               // how many there were when this layout began
-    uint32_t layout;
     FMap by_node;               // node -> its first record
-    // The last layout ended incomplete, and none has begun since: what it
-    // did can still be undone (flow_timeline_undo_incomplete).
-    bool undoable;
+    const flow_timeline_t *from;
+    bool *met;                  // which of `from`'s records a name took
 };
 
 flow_timeline_t *flow_timeline_new(const os64_html_document_t *doc)
@@ -241,20 +232,16 @@ flow_timeline_t *flow_timeline_new(const os64_html_document_t *doc)
     return t;
 }
 
-static void record_free(flow_timeline_t *t, FRecord *r)
-{
-    os64_html_release(t->doc, r->node);
-    os64_free(r->name);
-    os64_free(r);
-}
-
 void flow_timeline_free(flow_timeline_t *t)
 {
     if (t == NULL)
         return;
-    for (int32_t i = 0; i < t->n; i++)
-        record_free(t, t->records[i]);
+    for (int32_t i = 0; i < t->n; i++) {
+        os64_html_release(t->doc, t->records[i]->node);
+        os64_free(t->records[i]);
+    }
     os64_free(t->records);
+    os64_free(t->met);
     f_map_free(&t->by_node);
     os64_free(t);
 }
@@ -269,19 +256,53 @@ int32_t f_timeline_elements(const flow_timeline_t *t)
     return t != NULL ? (int32_t)t->by_node.count : 0;
 }
 
-void f_timeline_begin(flow_timeline_t *t)
+flow_timeline_t *f_timeline_begin(const flow_timeline_t *from)
 {
-    if (t != NULL) {
-        t->layout++;
-        t->base = t->n;
-        t->undoable = false;
+    flow_timeline_t *t = flow_timeline_new(from->doc);
+    if (t == NULL)
+        return NULL;
+    t->from = from;
+    if (from->n > 0 && (t->met = os64_calloc((size_t)from->n, sizeof(*t->met))) == NULL) {
+        os64_free(t);
+        return NULL;
     }
+    return t;
+}
+
+// A record of `n` named `name`, holding `n`, with the times of `was` when
+// it carries one on and none when it starts; NULL on no memory.
+static FRecord *record_add(flow_timeline_t *t, const os64_html_node_t *n, const char *name, uint32_t len,
+                           const FRecord *was)
+{
+    if (t->n == t->cap) {
+        int32_t grown = t->cap > 0 ? t->cap * 2 : 16;
+        FRecord **more = os64_realloc(t->records, (size_t)grown * sizeof(*more));
+        if (more == NULL)
+            return NULL;
+        t->records = more;
+        t->cap = grown;
+    }
+    FRecord *r = os64_calloc(1, sizeof(*r) + len);
+    if (r == NULL)
+        return NULL;
+    os64_memcpy(r->name, name, len);
+    r->len = len;
+    r->node = n;
+    r->index = t->n;
+    if (was != NULL) {
+        r->start = was->start;
+        r->hold = was->hold;
+        r->paused = was->paused;
+    }
+    os64_html_hold(t->doc, n);
+    t->records[t->n++] = r;
+    return r;
 }
 
 // The local time a record is at: what it holds while paused.
 static double local_time(const FRecord *r, double now)
 {
-    return r->now.paused ? r->now.hold : now - r->now.start;
+    return r->paused ? r->hold : now - r->start;
 }
 
 // A name with its order in its list — a record's place, or a name's index
@@ -290,7 +311,7 @@ typedef struct {
     const char *text;
     uint32_t len;
     int32_t order;
-    FRecord *record;
+    const FRecord *record;
 } Named;
 
 static int32_t name_cmp(const Named *a, const Named *b)
@@ -321,17 +342,14 @@ static void sort_named(Named *v, Named *tmp, int32_t n)
 
 bool f_timeline_element(flow_timeline_t *t, const os64_html_node_t *n, FMotion *m, double now)
 {
-    // Its records from the last layout and its names now, each sorted by
-    // name and then by place: Animations 1 § 2 matches from the last name
-    // to the first, each to the last unmatched record of its name, which
-    // is then one walk down both lists from their ends — however many
-    // names a page writes, none is compared with every record.
+    // Its records on the timeline the page shows and its names now, each
+    // sorted by name and then by place: Animations 1 § 2 matches from the
+    // last name to the first, each to the last unmatched record of its
+    // name, which is then one walk down both lists from their ends —
+    // however many names a page writes, none is compared with every record.
     int32_t nold = 0;
-    FRecord *tail = NULL;
-    for (FRecord *r = f_map_get(&t->by_node, n); r != NULL; r = r->next) {
-        nold += r->now.seen != t->layout && !r->gone;
-        tail = r;
-    }
+    for (const FRecord *r = f_map_get(&t->from->by_node, n); r != NULL; r = r->next)
+        nold++;
     int32_t total = nold + m->nanims;
     Named few[32], *buf = few;
     if (2 * total > F_ARRAY(few) &&
@@ -339,13 +357,10 @@ bool f_timeline_element(flow_timeline_t *t, const os64_html_node_t *n, FMotion *
         return false;
     Named *old = buf, *names = buf + nold, *tmp = buf + total;
     int32_t k = 0;
-    for (FRecord *r = f_map_get(&t->by_node, n); r != NULL; r = r->next)
-        if (r->now.seen != t->layout && !r->gone)
-            old[k++] = (Named){r->name, r->len, r->now.place, r};
-    for (int32_t i = 0; i < m->nanims; i++) {
-        m->anims[i].record = NULL;
+    for (const FRecord *r = f_map_get(&t->from->by_node, n); r != NULL; r = r->next)
+        old[k++] = (Named){r->name, r->len, r->place, r};
+    for (int32_t i = 0; i < m->nanims; i++)
         names[i] = (Named){m->anims[i].timing.name.text, m->anims[i].timing.name.len, i, NULL};
-    }
     sort_named(old, tmp, nold);
     sort_named(names, tmp, m->nanims);
     for (int32_t a = nold - 1, b = m->nanims - 1; a >= 0 && b >= 0;) {
@@ -355,153 +370,75 @@ bool f_timeline_element(flow_timeline_t *t, const os64_html_node_t *n, FMotion *
         } else if (c < 0) {
             b--;                // a name with no record left: it starts
         } else {
-            m->anims[names[b].order].record = old[a].record;
+            names[b].record = old[a].record;
             a--;
             b--;
         }
     }
-    if (buf != few)
-        os64_free(buf);
+    // Each name gets a record of this layout's: a matched one carries its
+    // record's times on, and one matched to nothing starts now.
     bool ok = true;
-    int32_t made = t->n;
-    // From the last name to the first; a name matched to nothing starts now.
-    for (int32_t i = m->nanims - 1; ok && i >= 0; i--) {
-        FAnimation *an = &m->anims[i];
-        const flow_name_t *name = &an->timing.name;
-        FRecord *r = an->record;
+    for (int32_t b = 0; ok && b < m->nanims; b++) {
+        FAnimation *an = &m->anims[names[b].order];
+        const FRecord *was = names[b].record;
+        FRecord *r = record_add(t, n, an->timing.name.text, an->timing.name.len, was);
         if (r == NULL) {
-            r = os64_calloc(1, sizeof(*r));
-            char *copy = os64_malloc(name->len > 0 ? name->len : 1);
-            bool room = t->n < t->cap;
-            if (!room && r != NULL && copy != NULL) {
-                int32_t grown = t->cap > 0 ? t->cap * 2 : 16;
-                FRecord **more = os64_realloc(t->records, (size_t)grown * sizeof(*more));
-                if (more != NULL) {
-                    t->records = more;
-                    t->cap = grown;
-                    room = true;
-                }
-            }
-            if (r == NULL || copy == NULL || !room) {
-                os64_free(r);
-                os64_free(copy);
-                ok = false;
-                break;
-            }
-            os64_memcpy(copy, name->text, name->len);
-            r->node = n;
-            r->name = copy;
-            r->len = name->len;
-            r->now.start = now;
-            r->now.paused = an->timing.paused;
-            r->made = t->layout;
-            os64_html_hold(t->doc, n);
-            t->records[t->n++] = r;
+            ok = false;
+            break;
         }
-        if (r->now.seen != t->layout)
-            r->was = r->now;
-        r->now.seen = t->layout;
-        r->now.place = i;
-        if (an->timing.paused && !r->now.paused) {
-            r->now.hold = now - r->now.start;
-            r->now.paused = true;
-        } else if (!an->timing.paused && r->now.paused) {
-            r->now.start = now - r->now.hold;
-            r->now.paused = false;
+        r->place = names[b].order;
+        if (was != NULL) {
+            t->met[was->index] = true;
+        } else {
+            r->start = now;
+            r->paused = an->timing.paused;
+        }
+        if (an->timing.paused && !r->paused) {
+            r->hold = now - r->start;
+            r->paused = true;
+        } else if (!an->timing.paused && r->paused) {
+            r->start = now - r->hold;
+            r->paused = false;
         }
         an->record = r;
     }
-    // The records made here join the element's chain after those it had,
-    // so the chain keeps the timeline's order without the timeline walked.
-    for (int32_t j = made; j < t->n; j++) {
-        t->records[j]->next = NULL;
-        t->records[j]->after = tail;
-        if (tail != NULL)
-            tail->next = t->records[j];
-        else if (!f_map_put(&t->by_node, n, t->records[j]))
-            return false;
-        tail = t->records[j];
-    }
-    return ok;
-}
-
-bool flow_timeline_undo_incomplete(flow_timeline_t *t)
-{
-    if (t == NULL || !t->undoable)
+    if (buf != few)
+        os64_free(buf);
+    if (!ok)
         return false;
-    f_timeline_undo(t);
-    return true;
+    FRecord *head = NULL;
+    for (int32_t i = m->nanims - 1; i >= 0; i--) {
+        m->anims[i].record->next = head;
+        head = m->anims[i].record;
+    }
+    return head == NULL || f_map_put(&t->by_node, n, head);
 }
 
-void f_timeline_undo(flow_timeline_t *t)
+bool f_timeline_end(flow_timeline_t *t, bool complete)
 {
     if (t == NULL)
-        return;
-    // The records it made end their elements' chains: the record each
-    // first one was chained after ends its chain again, or its element
-    // goes back to none — its key removed, which allocates nothing. Then
-    // they go, and what it changed in the rest is put back.
-    for (int32_t i = t->base; i < t->n; i++) {
-        FRecord *r = t->records[i];
-        if (r->after != NULL && r->after->made != t->layout)
-            r->after->next = NULL;
-        else if (r->after == NULL && f_map_get(&t->by_node, r->node) == r)
-            f_map_remove(&t->by_node, r->node);
-    }
-    for (int32_t i = t->base; i < t->n; i++)
-        record_free(t, t->records[i]);
-    t->n = t->base;
-    for (int32_t i = 0; i < t->n; i++)
-        if (t->records[i]->now.seen == t->layout)
-            t->records[i]->now = t->records[i]->was;
-    t->undoable = false;
-}
-
-void f_timeline_end(flow_timeline_t *t, bool complete)
-{
-    if (t != NULL)
-        t->undoable = !complete;
-    if (t == NULL || !complete)
-        return;
-    // The map over the records kept, and each one's next in its element's
-    // chain, are made before anything changes: with no room for them
-    // nothing is dropped, but what this layout did not meet is gone all
-    // the same — no later layout matches it, so a name a page drops and
-    // writes again starts anew — and the next cleanup with room drops it.
-    // A dropped record's node is no key of the new map, since the node may
-    // be reused for another element once it is let go.
-    FMap map = {0};
-    FRecord **next = t->n > 0 ? os64_malloc((size_t)t->n * sizeof(*next)) : NULL;
-    bool room = t->n == 0 || next != NULL;
-    for (int32_t i = t->n - 1; room && i >= 0; i--) {
-        FRecord *r = t->records[i];
-        if (r->now.seen != t->layout)
+        return true;
+    // A complete layout is the whole page, so a record no name took is done
+    // with: its element is gone, its name is, or its subtree is `display:
+    // none`. An incomplete one is not, so what no name took goes on beside
+    // what it built, as it was, until a complete layout drops it.
+    bool ok = true;
+    for (int32_t i = 0; ok && !complete && i < t->from->n; i++) {
+        const FRecord *was = t->from->records[i];
+        if (t->met[i])
             continue;
-        next[i] = f_map_get(&map, r->node);
-        room = f_map_put(&map, r->node, r);
-    }
-    if (!room) {
-        for (int32_t i = 0; i < t->n; i++)
-            if (t->records[i]->now.seen != t->layout)
-                t->records[i]->gone = true;
-        os64_free(next);
-        f_map_free(&map);
-        return;
-    }
-    int32_t kept = 0;
-    for (int32_t i = 0; i < t->n; i++) {
-        FRecord *r = t->records[i];
-        if (r->now.seen == t->layout) {
-            r->next = next[i];
-            t->records[kept++] = r;
-        } else {
-            record_free(t, r);
+        FRecord *r = record_add(t, was->node, was->name, was->len, was);
+        ok = r != NULL;
+        if (ok) {
+            r->place = was->place;
+            r->next = f_map_get(&t->by_node, was->node);
+            ok = f_map_put(&t->by_node, was->node, r);
         }
     }
-    t->n = kept;
-    os64_free(next);
-    f_map_free(&t->by_node);
-    t->by_node = map;
+    os64_free(t->met);
+    t->met = NULL;
+    t->from = NULL;
+    return ok;
 }
 
 // ── Matrices (Transforms 1 § 11, 2 § 13) ────────────────────────────────
@@ -2593,9 +2530,9 @@ static bool due_step(void *ctx, int32_t a, garb_prop_t p, int32_t nlooks, const 
     if (d->next <= d->now)
         return false;
     const FAnimation *an = &d->m->anims[a];
-    if (k->phase != PHASE_ACTIVE || an->record->now.paused || d->last[p] > a)
+    if (k->phase != PHASE_ACTIVE || an->record->paused || d->last[p] > a)
         return true;
-    double now = d->now, base = an->record->now.start;
+    double now = d->now, base = an->record->start;
     // A value underneath that the walk had no room to make is not known:
     // the interval resting on it is taken to move.
     bool unknown = (s->implicit || e->implicit) && f_props_has(&d->failed, p);
@@ -2698,9 +2635,9 @@ double f_motion_next(const FMotion *m, double now)
     double next = INFINITY;
     for (int32_t a = 0; a < m->nanims; a++) {
         const FAnimation *an = &m->anims[a];
-        if (an->record == NULL || an->record->now.paused || !anim_shows(an, a, last))
+        if (an->record == NULL || an->record->paused || !anim_shows(an, a, last))
             continue;
-        double base = an->record->now.start;
+        double base = an->record->start;
         Clock k = clock_at(&an->timing, local_time(an->record, now));
         if (k.phase == PHASE_BEFORE) {
             next = fmin(next, base + k.before_end);

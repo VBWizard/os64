@@ -426,10 +426,12 @@ typedef struct Page {
     os64_html_document_t *plain;
     os64_page_t *plain_model;
     flow_tree_t *tree;
-    // The page's animations across its layouts (flow/flow.h), made when it
-    // is laid out to be shown (page_timeline). The tree points into it, so
-    // it goes after the tree and before the document whose elements it
-    // holds. A struct copy of a Page borrows it; only page_clear frees it.
+    // The page's animations as its tree shows them (flow/flow.h): made
+    // empty when it is first laid out to be shown (page_timeline), and
+    // replaced each time a tree its layout built is (page_show). The tree
+    // points into it, so it goes after the tree and before the document
+    // whose elements it holds. A struct copy of a Page borrows it; only
+    // page_show and page_clear free it.
     flow_timeline_t *timeline;
     int32_t laid_width, laid_height;    // device pixels
     uint32_t laid_zoom;                 // thousandths (flow_env_t.zoom)
@@ -652,13 +654,33 @@ static bool lay_out_page_reclaim(Page *p, int32_t width, int32_t height, Page *r
 // Window-owner count: a provider takes its delta to include layout retries.
 static uint64_t geometry_layout_total;
 
+// A script changed the page since it was last laid out to be shown: its
+// next layout is script_rebuild's staged one, and no other may be made of
+// the old Page.
+static bool page_rebuild_owed(const Page *p)
+{
+    return p->rendered_version != 0 && p->rendered_version != os64_html_version(page_doc(p));
+}
+
+// The tree a Page holds from now on, and with it the animations its layout
+// built (flow_timeline_commit): the old tree goes first, since it points
+// into the timeline they replace.
+static void page_show(Page *p, flow_tree_t *tree)
+{
+    flow_free(p->tree);
+    p->tree = tree;
+    flow_timeline_commit(&p->timeline, tree);
+}
+
 // Publish a layout beside the old one. `reclaim` owns geometry whose faces
 // an incomplete attempt may release before retrying; it may be this Page
 // or the shown Page beside a staged DOM rebuild. An owed rebuild refuses
 // before layout work on its old Page so stale meaning cannot get new geometry.
+// A staged Page borrows the shown one's timeline, so its tree keeps the
+// animations it built until script_rebuild publishes it.
 static bool page_lay_out(Page *p, int32_t width, int32_t height, uint32_t zoom, Page *reclaim)
 {
-    if (p->rendered_version != 0 && p->rendered_version != os64_html_version(page_doc(p)))
+    if (page_rebuild_owed(p))
         return false;
     garb_cascade_t *cascade = p->cascade;
     int32_t entry[SHEETS_MAX] = {0};
@@ -699,13 +721,11 @@ static bool page_lay_out(Page *p, int32_t width, int32_t height, uint32_t zoom, 
     // engine's budget and its face limit — so a layout at new sizes (a
     // zoom, most of all) can stop partway for want of the room the old tree
     // holds. Then both go, and the page is laid out once more in the whole
-    // budget — what the discarded layout did to the timeline undone first,
-    // since it was never shown: a retry that fails leaves the timeline as
-    // the shown page's layout did, not with animations the discarded one
-    // started at its own time.
+    // budget — the discarded tree's animations with it, since it was never
+    // shown: the retry reads the timeline the page shows, as the first
+    // attempt did.
     if (fresh != NULL && flow_incomplete(fresh) && reclaim != NULL && reclaim->tree != NULL) {
         flow_free(fresh);
-        (void)flow_timeline_undo_incomplete(s_env.timeline);
         flow_free(reclaim->tree);
         reclaim->tree = NULL;
         if (reclaim != p) {
@@ -722,13 +742,17 @@ static bool page_lay_out(Page *p, int32_t width, int32_t height, uint32_t zoom, 
             garb_cascade_free(cascade);
         return false;
     }
-    flow_free(p->tree);
+    if (reclaim != NULL && reclaim != p) {
+        flow_free(p->tree);
+        p->tree = fresh;
+    } else {
+        page_show(p, fresh);
+    }
     if (cascade != p->cascade) {
         garb_cascade_free(p->cascade);
         p->cascade = cascade;
         os64_memcpy(p->cascade_entry, entry, sizeof(entry));
     }
-    p->tree = fresh;
     // A box keeps where it was scrolled to, as near as the new layout lets
     // it: the range may have shrunk, and the element may make no scroll
     // container now. Where it was is in device pixels, so a new zoom
@@ -3317,10 +3341,12 @@ static bool picture_on_screen(int32_t k, bool mark)
 // When the shown page is next laid out for an animation: when libflow says
 // what the view shows next changes, held to the cost rules
 // (MOTION_COST_MS); never while animations are off or the window is
-// covered.
+// covered, nor while a script's change waits for its rebuild — a layout
+// then is script_rebuild's, page_lay_out refuses any other, and a frame
+// refused would read as one past every limit.
 static uint64_t motion_next(void)
 {
-    if (!s_animations || g.covered || g.page.tree == NULL)
+    if (!s_animations || g.covered || g.page.tree == NULL || page_rebuild_owed(&g.page))
         return YONDER_NEVER;
     uint64_t cost_us = g.motion_laid ? g.motion_us : g.laid_ms * 1000;
     if (cost_us > (uint64_t)MOTION_COST_MS * 1000)
@@ -4086,7 +4112,8 @@ static bool script_rebuild(void)
             offset = scale_zoom(offset, g.zoom, p->laid_zoom);
             sx = scale_zoom(sx, g.zoom, p->laid_zoom);
         }
-        // The staged copy shares the page's timeline: its animations go on.
+        // The staged copy reads the page's timeline, and its animations go
+        // on from it once it is published.
         page_timeline(p);
         Page next = *p;
         next.rendered_version = version; // the staged layout's target DOM version
@@ -4114,7 +4141,7 @@ static bool script_rebuild(void)
             return false;
         }
         sheets_leave(p);
-        flow_free(p->tree);
+        page_show(p, next.tree);
         garb_cascade_free(p->cascade);
         // A borrowed parse has one staged borrower. Once its old cascade
         // is gone, transfer its arena before freeing the old sheet table.
@@ -4127,7 +4154,6 @@ static bool script_rebuild(void)
         p->laid_width = next.laid_width;
         p->laid_height = next.laid_height;
         p->laid_zoom = next.laid_zoom;
-        p->tree = next.tree;
         p->cascade = next.cascade;
         p->sheets = next.sheets;
         p->nsheets = next.nsheets;
@@ -6663,7 +6689,7 @@ static bool lay_out_page_reclaim(Page *p, int32_t width, int32_t height, Page *r
 {
     // An owed DOM version goes through the staged rebuild, including
     // after a failed retry reclaimed its old geometry.
-    if (p->rendered_version != 0 && p->rendered_version != os64_html_version(page_doc(p)))
+    if (page_rebuild_owed(p))
         return false;
     os64_font_set_t *was = NULL;
     uint32_t was_px = 0;

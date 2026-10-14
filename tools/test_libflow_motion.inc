@@ -34,6 +34,19 @@ static const os64_html_node_t *motion_find(const os64_html_node_t *n, const char
     return NULL;
 }
 
+// The timeline one complete layout builds from none with `n`'s animations
+// met in it at `now`, each FAnimation given its record; `*ok` false on no
+// memory.
+static flow_timeline_t *motion_meet(const os64_html_document_t *doc, const os64_html_node_t *n, FMotion *m,
+                                    double now, bool *ok)
+{
+    flow_timeline_t *none = flow_timeline_new(doc);
+    flow_timeline_t *t = none != NULL ? f_timeline_begin(none) : NULL;
+    *ok = t != NULL && f_timeline_element(t, n, m, now) && f_timeline_end(t, true);
+    flow_timeline_free(none);
+    return t;
+}
+
 static void moving_open(Moving *m, const char *html, uint64_t now)
 {
     sheeted_open(&m->p, html, 800, 600);
@@ -41,14 +54,19 @@ static void moving_open(Moving *m, const char *html, uint64_t now)
     m->p.env.timeline = m->tl;
     m->p.env.now_ms = now;
     m->tree = flow_layout(m->p.doc, m->p.page, 800, &m->p.env);
+    flow_timeline_commit(&m->tl, m->tree);
+    m->p.env.timeline = m->tl;
 }
 
-// The page laid out again at `now`, its timeline kept.
+// The page laid out again at `now` and shown, as a face does: the tree
+// replaced, and its timeline with it.
 static void moving_again(Moving *m, uint64_t now)
 {
     flow_free(m->tree);
     m->p.env.now_ms = now;
     m->tree = flow_layout(m->p.doc, m->p.page, 800, &m->p.env);
+    flow_timeline_commit(&m->tl, m->tree);
+    m->p.env.timeline = m->tl;
 }
 
 static void moving_close(Moving *m)
@@ -1227,6 +1245,46 @@ static void motion_effect_cases(void)
 
 // ── The timeline ────────────────────────────────────────────────────────
 
+// An animation `name` of `ms` milliseconds, once, of opacity, which it holds
+// still: so it is due at its end and nothing before.
+static void timed(FAnimation *an, const char *name, double ms)
+{
+    an->timing.name = (flow_name_t){name, (uint32_t)strlen(name)};
+    an->timing.duration_ms = ms;
+    an->timing.iterations = 1;
+    f_props_add(&an->props, GARB_OPACITY);
+}
+
+// When an animation that holds still ends: its start, told by its record.
+static double motion_end(FAnimation *an, double now)
+{
+    FMotion alone = {.anims = an, .nanims = 1};
+    return f_motion_next(&alone, now);
+}
+
+// One layout's dealings with the timeline, told directly: begun from the
+// one shown, each element in `meets` met at `now`, ended; and, when it
+// comes through, shown in its place, as a face shows a tree's.
+typedef struct {
+    const os64_html_node_t *n;
+    FMotion *m;
+} Meet;
+
+static bool timeline_layout(flow_timeline_t **shown, double now, bool complete, int count, const Meet *meets)
+{
+    flow_timeline_t *t = f_timeline_begin(*shown);
+    bool ok = t != NULL;
+    for (int i = 0; ok && i < count; i++)
+        ok = f_timeline_element(t, meets[i].n, meets[i].m, now);
+    if (!ok || !f_timeline_end(t, complete)) {
+        flow_timeline_free(t);
+        return false;
+    }
+    flow_timeline_free(*shown);
+    *shown = t;
+    return true;
+}
+
 static void motion_timeline_cases(void)
 {
     // A start time survives every layout after the one that started it.
@@ -1243,11 +1301,35 @@ static void motion_timeline_cases(void)
     expect_matrix("motion: and again", &m, "a", (const double[6]){1, 0, 0, 1, 75, 0});
     moving_close(&m);
 
+    // Animations off: a tree laid out with no timeline builds none, and
+    // shown, it leaves the page's as it was — so turned on again, the
+    // animation runs on from its start.
+    moving_open(&m, MOTION_STYLE
+        "@keyframes mv{from{transform:translateX(0)}to{transform:translateX(100px)}}"
+        "</style><div id=a style='animation:mv 1s linear'></div>", 1000);
+    m.p.env.timeline = NULL;
+    m.p.env.now_ms = 1500;
+    flow_tree_t *still = flow_layout(m.p.doc, m.p.page, 800, &m.p.env);
+    flow_free(m.tree);
+    m.tree = still;
+    flow_timeline_t *was = m.tl;
+    flow_timeline_commit(&m.tl, m.tree);
+    m.p.env.timeline = m.tl;
+    expect_matrix("motion: laid out with no timeline, its rules' style", &m, "a",
+                  (const double[6]){1, 0, 0, 1, 0, 0});
+    expect("motion: and shown, the page's timeline is kept", m.tl == was && f_timeline_records(m.tl) == 1, NULL);
+    moving_again(&m, 1750);
+    expect_matrix("motion: turned on again, it runs on from its start", &m, "a",
+                  (const double[6]){1, 0, 0, 1, 75, 0});
+    moving_close(&m);
+
     // Animations 1 § 2's matching, and the records' lives, told directly:
-    // `a` to `a, a` keeps `a` as the second and starts a first; a name
-    // gone is dropped by a complete layout and not by an incomplete one;
-    // the holds are let go (a document freed with one held would end the
-    // program).
+    // each layout begun from the timeline shown and, when it comes through,
+    // shown (timeline_layout); a record's start read as when its ten
+    // seconds end (motion_end). `a` to `a, a` keeps `a` as the second and
+    // starts a first; a name gone is dropped by a complete layout and not
+    // by an incomplete one; the holds are let go (a document freed with one
+    // held would end the program).
     os64_html_document_t *doc = parse("<!doctype html><p id=x>x</p><p id=y>y</p><p id=z>z</p>");
     const os64_html_node_t *x = motion_find(doc->document, "x");
     const os64_html_node_t *y = motion_find(doc->document, "y");
@@ -1255,112 +1337,76 @@ static void motion_timeline_cases(void)
     flow_timeline_t *tl = flow_timeline_new(doc);
     FAnimation an[2];
     memset(an, 0, sizeof(an));
-    an[0].timing.name = an[1].timing.name = (flow_name_t){"a", 1};
+    for (int i = 0; i < 2; i++)
+        timed(&an[i], "a", 10000);
     FMotion one = {.anims = an, .nanims = 1};
-    f_timeline_begin(tl);
-    bool ok = f_timeline_element(tl, x, &one, 1000);
-    f_timeline_end(tl, true);
-    FRecord *first = an[0].record;
     FMotion two = {.anims = an, .nanims = 2};
-    f_timeline_begin(tl);
-    ok = ok && f_timeline_element(tl, x, &two, 2000);
-    f_timeline_end(tl, true);
+    bool ok = timeline_layout(&tl, 1000, true, 1, (Meet[]){{x, &one}}) &&
+              timeline_layout(&tl, 2000, true, 1, (Meet[]){{x, &two}});
     expect("motion: a to a, a keeps a as the second",
-           ok && an[1].record == first && an[0].record != first && an[0].record != NULL, NULL);
+           ok && motion_end(&an[1], 2000) == 11000 && motion_end(&an[0], 2000) == 12000, NULL);
     // The element styled with nothing in an incomplete layout keeps its
     // records; in a complete one they go.
-    an[0].record = an[1].record = NULL;
-    f_timeline_begin(tl);
-    ok = f_timeline_element(tl, y, &one, 3000);
-    f_timeline_end(tl, false);
-    f_timeline_begin(tl);
-    ok = ok && f_timeline_element(tl, x, &one, 4000);
-    f_timeline_end(tl, true);
+    ok = timeline_layout(&tl, 3000, false, 1, (Meet[]){{y, &one}}) &&
+         timeline_layout(&tl, 4000, true, 1, (Meet[]){{x, &one}});
     expect("motion: an incomplete layout drops nothing, a complete one the rest",
-           ok && an[0].record == first && f_timeline_records(tl) == 1, NULL);
-    // A complete layout whose cleanup has no room drops nothing, but what
-    // it did not meet is gone all the same: a name it did not meet, written
-    // again later, starts anew — its one second due from the later start,
-    // not over long since — and the next cleanup drops the old record.
+           ok && motion_end(&an[0], 4000) == 11000 && f_timeline_records(tl) == 1, NULL);
+
+    // An incomplete layout with no room to carry on what it did not reach
+    // fails, and the timeline shown is as it was: z's g, started at 20000,
+    // is matched by the next layout with that start.
     FAnimation g;
     memset(&g, 0, sizeof(g));
-    g.timing.name = (flow_name_t){"g", 1};
-    g.timing.duration_ms = 1000;
-    g.timing.iterations = 1;
-    f_props_add(&g.props, GARB_OPACITY);
+    timed(&g, "g", 10000);
     FMotion gm = {.anims = &g, .nanims = 1};
     flow_timeline_t *gt = flow_timeline_new(doc);
-    f_timeline_begin(gt);
-    ok = f_timeline_element(gt, z, &gm, 20000);
-    f_timeline_end(gt, true);
-    f_timeline_begin(gt);
+    ok = timeline_layout(&gt, 20000, true, 1, (Meet[]){{z, &gm}});
+    flow_timeline_t *short_of = f_timeline_begin(gt);
     allocations = 0;
     fail_single = true;
     fail_at = 1;
-    f_timeline_end(gt, true);
+    bool carried = short_of != NULL && f_timeline_end(short_of, false);
     fail_at = 0;
     fail_single = false;
-    int32_t unfreed = f_timeline_records(gt);
-    g.record = NULL;
-    f_timeline_begin(gt);
-    ok = ok && f_timeline_element(gt, z, &gm, 30000);
-    f_timeline_end(gt, true);
-    expect("motion: a name a cleanup had no room to drop starts anew written again",
-           ok && unfreed == 1 && f_motion_next(&gm, 30000) == 31000 && f_timeline_records(gt) == 1, NULL);
+    flow_timeline_free(short_of);
+    ok = ok && short_of != NULL && timeline_layout(&gt, 25000, true, 1, (Meet[]){{z, &gm}});
+    expect("motion: an incomplete layout with no room to carry on fails, and changes nothing",
+           ok && !carried && motion_end(&g, 25000) == 30000 && f_timeline_records(gt) == 1, NULL);
     flow_timeline_free(gt);
 
-    // An incomplete layout whose tree the face discards unshown is undone:
-    // the animation it paused runs on from its start, the one it started
-    // goes — and only that layout: undone once, or after a complete one,
-    // there is nothing to undo.
+    // A layout whose tree the face discards unshown changes nothing: the
+    // animation it paused runs on from its start, the one it started is
+    // not kept.
     FAnimation ua[2];
     memset(ua, 0, sizeof(ua));
-    ua[0].timing.name = (flow_name_t){"r", 1};
-    ua[1].timing.name = (flow_name_t){"s", 1};
-    for (int i = 0; i < 2; i++) {
-        ua[i].timing.duration_ms = 1000;
-        ua[i].timing.iterations = 1;
-        f_props_add(&ua[i].props, GARB_OPACITY);
-    }
+    timed(&ua[0], "r", 1000);
+    timed(&ua[1], "s", 1000);
     FMotion uone = {.anims = ua, .nanims = 1}, utwo = {.anims = ua, .nanims = 2};
     flow_timeline_t *ut = flow_timeline_new(doc);
-    f_timeline_begin(ut);
-    ok = f_timeline_element(ut, z, &uone, 40000);
-    f_timeline_end(ut, true);
-    bool after_complete = flow_timeline_undo_incomplete(ut);
-    FRecord *kept_r = ua[0].record;
+    ok = timeline_layout(&ut, 40000, true, 1, (Meet[]){{z, &uone}});
     ua[0].timing.paused = true;
-    f_timeline_begin(ut);
-    ok = ok && f_timeline_element(ut, z, &utwo, 40500);
-    f_timeline_end(ut, false);
-    bool discarded = flow_timeline_undo_incomplete(ut), twice = flow_timeline_undo_incomplete(ut);
+    flow_timeline_t *unshown = f_timeline_begin(ut);
+    ok = ok && unshown != NULL && f_timeline_element(unshown, z, &utwo, 40500) &&
+         f_timeline_end(unshown, false);
+    flow_timeline_free(unshown);
     ua[0].timing.paused = false;
-    expect("motion: an incomplete layout discarded unshown is undone, and only it",
-           ok && !after_complete && discarded && !twice && f_timeline_records(ut) == 1 &&
-               ua[0].record == kept_r && f_motion_next(&uone, 40600) == 41000,
-           NULL);
+    ok = ok && timeline_layout(&ut, 40600, true, 1, (Meet[]){{z, &uone}});
+    expect("motion: a layout discarded unshown changes nothing",
+           ok && f_timeline_records(ut) == 1 && motion_end(&ua[0], 40600) == 41000, NULL);
     flow_timeline_free(ut);
+
     // A paused animation holds its time — nothing is due while it is — and
     // resumed, it runs from there: started paused at 5000, resumed at
-    // 9000, its one second ends at 10000. (Each animation here sets
-    // opacity, which it holds still: one that sets nothing is due for
-    // nothing.)
+    // 9000, its one second ends at 10000.
     FAnimation p;
     memset(&p, 0, sizeof(p));
-    p.timing.name = (flow_name_t){"p", 1};
-    f_props_add(&p.props, GARB_OPACITY);
-    p.timing.duration_ms = 1000;
-    p.timing.iterations = 1;
+    timed(&p, "p", 1000);
     p.timing.paused = true;
     FMotion paused = {.anims = &p, .nanims = 1};
-    f_timeline_begin(tl);
-    ok = f_timeline_element(tl, y, &paused, 5000);
-    f_timeline_end(tl, true);
+    ok = timeline_layout(&tl, 5000, true, 1, (Meet[]){{y, &paused}});
     expect("motion: paused, nothing is due", ok && isinf(f_motion_next(&paused, 5000)), NULL);
     p.timing.paused = false;
-    f_timeline_begin(tl);
-    ok = ok && f_timeline_element(tl, y, &paused, 9000);
-    f_timeline_end(tl, true);
+    ok = ok && timeline_layout(&tl, 9000, true, 1, (Meet[]){{y, &paused}});
     expect("motion: resumed, it runs from where it was held",
            ok && f_motion_next(&paused, 9000) == 10000, NULL);
     // One running before it pauses holds what it has run: started at
@@ -1368,150 +1414,87 @@ static void motion_timeline_cases(void)
     // its one second ends at 13700.
     FAnimation r;
     memset(&r, 0, sizeof(r));
-    r.timing.name = (flow_name_t){"r", 1};
-    f_props_add(&r.props, GARB_OPACITY);
-    r.timing.duration_ms = 1000;
-    r.timing.iterations = 1;
+    timed(&r, "r", 1000);
     FMotion running = {.anims = &r, .nanims = 1};
-    f_timeline_begin(tl);
-    ok = f_timeline_element(tl, y, &running, 11000);
-    f_timeline_end(tl, true);
+    ok = timeline_layout(&tl, 11000, true, 1, (Meet[]){{y, &running}});
     r.timing.paused = true;
-    f_timeline_begin(tl);
-    ok = ok && f_timeline_element(tl, y, &running, 11300);
-    f_timeline_end(tl, true);
+    ok = ok && timeline_layout(&tl, 11300, true, 1, (Meet[]){{y, &running}});
     expect("motion: paused while running, nothing is due",
            ok && isinf(f_motion_next(&running, 11500)), NULL);
     r.timing.paused = false;
-    f_timeline_begin(tl);
-    ok = ok && f_timeline_element(tl, y, &running, 13000);
-    f_timeline_end(tl, true);
+    ok = ok && timeline_layout(&tl, 13000, true, 1, (Meet[]){{y, &running}});
     expect("motion: resumed, it ends what it held short of",
            ok && f_motion_next(&running, 13000) == 13700, NULL);
 
-    // A record made in an incomplete layout joins its element's chain
-    // beside the ones it had, though no complete layout rebuilds the
-    // chains after it: a, then a and b incomplete, then a again keeps the
-    // first a.
+    // A record an incomplete layout made is kept, and so is the one it
+    // carried a name on in — once, not again beside it as a record no name
+    // took: a, then a and b incomplete, then a again keeps the first a's
+    // start.
     FAnimation two_names[2];
     memset(two_names, 0, sizeof(two_names));
-    two_names[0].timing.name = (flow_name_t){"a", 1};
-    two_names[1].timing.name = (flow_name_t){"b", 1};
+    timed(&two_names[0], "a", 10000);
+    timed(&two_names[1], "b", 10000);
     FMotion just_a = {.anims = two_names, .nanims = 1};
     FMotion a_and_b = {.anims = two_names, .nanims = 2};
-    f_timeline_begin(tl);
-    ok = f_timeline_element(tl, x, &just_a, 15000);
-    f_timeline_end(tl, true);
-    FRecord *kept_a = two_names[0].record;
-    f_timeline_begin(tl);
-    ok = ok && f_timeline_element(tl, x, &a_and_b, 16000);
-    f_timeline_end(tl, false);
-    f_timeline_begin(tl);
-    ok = ok && f_timeline_element(tl, x, &just_a, 17000);
-    f_timeline_end(tl, true);
-    expect("motion: a record made in an incomplete layout joins its element's chain",
-           ok && two_names[0].record == kept_a, NULL);
+    ok = timeline_layout(&tl, 15000, true, 1, (Meet[]){{x, &just_a}}) &&
+         timeline_layout(&tl, 16000, false, 1, (Meet[]){{x, &a_and_b}});
+    int32_t carried_on = f_timeline_records(tl);
+    ok = ok && timeline_layout(&tl, 17000, true, 1, (Meet[]){{x, &just_a}});
+    expect("motion: what an incomplete layout carried on is matched after it",
+           ok && carried_on == 2 && motion_end(&two_names[0], 17000) == 25000, NULL);
 
-    // A layout that fails is undone: what it paused runs on from where it
-    // ran, what it made goes, and the chains it grew end where they did —
-    // x's at its a, z's at none, its key gone from the map — so the next
-    // layout makes b and z's a again, and keeps the rest.
+    // A layout that fails part way takes what it built with it: the
+    // timeline shown keeps its records, what the failed layout paused runs
+    // on from where it ran, and the next layout makes b and z's a anew and
+    // keeps the rest.
     FAnimation u;
     memset(&u, 0, sizeof(u));
-    u.timing.name = (flow_name_t){"u", 1};
-    f_props_add(&u.props, GARB_OPACITY);
-    u.timing.duration_ms = 1000;
-    u.timing.iterations = 1;
-    FMotion undone = {.anims = &u, .nanims = 1};
-    f_timeline_begin(tl);
-    ok = f_timeline_element(tl, y, &undone, 18000) && f_timeline_element(tl, x, &just_a, 18000);
-    f_timeline_end(tl, true);
+    timed(&u, "u", 1000);
+    FMotion pausing = {.anims = &u, .nanims = 1};
+    ok = timeline_layout(&tl, 18000, true, 2, (Meet[]){{y, &pausing}, {x, &just_a}});
     int32_t kept_records = f_timeline_records(tl), kept_elements = f_timeline_elements(tl);
-    FRecord *kept_u = u.record;
-    kept_a = two_names[0].record;
     u.timing.paused = true;
-    f_timeline_begin(tl);
-    ok = ok && f_timeline_element(tl, y, &undone, 18200) && f_timeline_element(tl, x, &a_and_b, 18200) &&
-         f_timeline_element(tl, z, &one, 18200);
-    bool grew = f_timeline_records(tl) == kept_records + 2;
-    f_timeline_undo(tl);
+    flow_timeline_t *failed = f_timeline_begin(tl);
+    ok = ok && failed != NULL && f_timeline_element(failed, y, &pausing, 18200) &&
+         f_timeline_element(failed, x, &a_and_b, 18200) && f_timeline_element(failed, z, &one, 18200);
+    bool grew = f_timeline_records(failed) == kept_records + 2;
+    flow_timeline_free(failed);
     u.timing.paused = false;
-    u.record = kept_u;
-    expect("motion: a layout undone leaves what it paused running, and makes nothing",
+    expect("motion: a layout that fails leaves the timeline shown as it was",
            ok && grew && kept_records == 2 && f_timeline_records(tl) == kept_records &&
-               kept_elements == 2 && f_timeline_elements(tl) == kept_elements &&
-               f_motion_next(&undone, 18500) == 19000, NULL);
-    f_timeline_begin(tl);
-    ok = f_timeline_element(tl, y, &undone, 18300) && f_timeline_element(tl, x, &a_and_b, 18300) &&
-         f_timeline_element(tl, z, &one, 18300);
-    f_timeline_end(tl, true);
-    expect("motion: after an undone layout, the chains it grew are made again",
-           ok && u.record == kept_u && two_names[0].record == kept_a && two_names[1].record != NULL &&
-               an[0].record != NULL && f_timeline_records(tl) == 4, NULL);
-    // The undoing allocates nothing, and removing a key leaves no trace:
-    // puts and removals at random over a pool of keys, every key found
-    // exactly when the reference holds it, the count the reference's, and
-    // no removal allocating — the map one key short of growing throughout.
-    FMap map = {0};
-    static int pool[48];
-    bool held[48] = {false};
-    int32_t holding = 0;
-    bool agreed = true;
-    uint32_t seed = 12345;
-    fail_single = false;
-    for (int step = 0; step < 20000 && agreed; step++) {
-        seed = seed * 1103515245u + 12345u;
-        int k = (int)((seed >> 8) % 48);
-        if (held[k]) {
-            allocations = 0;
-            fail_at = 1;
-            f_map_remove(&map, &pool[k]);
-            fail_at = 0;
-            held[k] = false;
-            holding--;
-        } else {
-            agreed = f_map_put(&map, &pool[k], &pool[k]);
-            held[k] = true;
-            holding++;
-        }
-        for (int i = 0; i < 48 && agreed; i++)
-            agreed = f_map_get(&map, &pool[i]) == (held[i] ? &pool[i] : NULL);
-        agreed = agreed && (int32_t)map.count == holding && map.cap == 64;
-    }
-    expect("motion: a removed key leaves every other key found, and nothing behind", agreed, NULL);
-    f_map_free(&map);
+               kept_elements == 2 && f_timeline_elements(tl) == kept_elements, NULL);
+    ok = timeline_layout(&tl, 18300, true, 3, (Meet[]){{y, &pausing}, {x, &a_and_b}, {z, &one}});
+    expect("motion: and the next layout keeps the shown starts, and makes anew what the failed one made",
+           ok && motion_end(&u, 18300) == 19000 && motion_end(&two_names[0], 18300) == 25000 &&
+               motion_end(&two_names[1], 18300) == 28300 && motion_end(&an[0], 18300) == 28300 &&
+               f_timeline_records(tl) == 4, NULL);
 
     // Matching at scale: three thousand names, a and b in turn, matched
     // as Animations 1 § 2 says — the last of each name to the last record
-    // of its name — and a list that drops its first half keeps the
-    // records of the half it keeps, in their places; the rest go.
+    // of its name. Fifteen hundred are laid out at 20000, all three
+    // thousand at 21000, which gives the second half the first half's
+    // records and starts the first half anew; then a list of the second
+    // half alone keeps those records, the earlier start, and the rest go.
     enum { kMany = 3000 };
     FAnimation *many = calloc(kMany, sizeof(*many));
-    FRecord **first_records = calloc(kMany, sizeof(*first_records));
     for (int i = 0; i < kMany; i++)
-        many[i].timing.name = (flow_name_t){i % 2 ? "b" : "a", 1};
+        timed(&many[i], i % 2 ? "b" : "a", 100000);
+    FMotion first = {.anims = many, .nanims = kMany / 2};
     FMotion lots = {.anims = many, .nanims = kMany};
-    f_timeline_begin(tl);
-    ok = f_timeline_element(tl, x, &lots, 20000);
-    f_timeline_end(tl, true);
-    for (int i = 0; i < kMany; i++)
-        first_records[i] = many[i].record;
-    f_timeline_begin(tl);
-    ok = ok && f_timeline_element(tl, x, &lots, 21000);
-    f_timeline_end(tl, true);
-    bool kept = ok && f_timeline_records(tl) == kMany;
+    flow_timeline_t *mt = flow_timeline_new(doc);
+    ok = timeline_layout(&mt, 20000, true, 1, (Meet[]){{x, &first}}) &&
+         timeline_layout(&mt, 21000, true, 1, (Meet[]){{x, &lots}});
+    bool kept = ok && f_timeline_records(mt) == kMany;
     for (int i = 0; kept && i < kMany; i++)
-        kept = many[i].record == first_records[i];
+        kept = motion_end(&many[i], 21000) == (i < kMany / 2 ? 121000 : 120000);
     FMotion half = {.anims = many + kMany / 2, .nanims = kMany / 2};
-    f_timeline_begin(tl);
-    ok = ok && f_timeline_element(tl, x, &half, 22000);
-    f_timeline_end(tl, true);
+    ok = ok && timeline_layout(&mt, 22000, true, 1, (Meet[]){{x, &half}});
     for (int i = 0; kept && i < kMany / 2; i++)
-        kept = many[kMany / 2 + i].record == first_records[kMany / 2 + i];
+        kept = motion_end(&many[kMany / 2 + i], 22000) == 120000;
     expect("motion: three thousand names matched, and half of them dropped",
-           kept && f_timeline_records(tl) == kMany / 2, NULL);
+           ok && kept && f_timeline_records(mt) == kMany / 2, NULL);
     free(many);
-    free(first_records);
+    flow_timeline_free(mt);
     flow_timeline_free(tl);
     os64_html_document_free(doc);
 }
@@ -2040,7 +2023,8 @@ static void motion_sweep_in(bool single)
     base_live = live;
     size_t made = 0;
     for (size_t at = 1; !failed; at++) {
-        m.tl = m.p.env.timeline = flow_timeline_new(m.p.doc);
+        m.tl = flow_timeline_new(m.p.doc);
+        m.p.env.timeline = m.tl;
         allocations = 0;
         fail_at = at;
         m.tree = flow_layout(m.p.doc, m.p.page, 800, &m.p.env);
@@ -2050,7 +2034,8 @@ static void motion_sweep_in(bool single)
         flow_free(m.tree);
         m.tree = NULL;
         flow_timeline_free(m.tl);
-        m.tl = m.p.env.timeline = NULL;
+        m.tl = NULL;
+        m.p.env.timeline = NULL;
         made++;
         expect("motion sweep: a first layout that fails leaks nothing", live == base_live, NULL);
         failed |= live != base_live;
@@ -2065,14 +2050,14 @@ static void motion_sweep_in(bool single)
 }
 
 // A layout that fails part way — each of its allocations failing in turn,
-// and every one after it — is undone: the tree still shown keeps running
-// what the failed layout paused, no record it made is kept, and the next
-// layout finds the timeline as the shown tree left it (x, running since
-// 1000, is 4 s into its 10 at 5000; paused at 3000 and resumed, it would
-// be 2).
-static void motion_sweep_undo(void)
+// and every one after it — takes what it built with it: the tree still
+// shown keeps running what the failed layout paused, no record it made is
+// kept, and the next layout finds the timeline as the shown tree left it
+// (x, running since 1000, is 4 s into its 10 at 5000; paused at 3000 and
+// resumed, it would be 2).
+static void motion_sweep_failed(void)
 {
-    static const char kUndoPage[] = MOTION_STYLE
+    static const char kFailedPage[] = MOTION_STYLE
         "@keyframes k{from{opacity:0}to{opacity:1}}"
         "#x{animation:k 10s linear}"
         "@media (prefers-reduced-motion:reduce){#x{animation-play-state:paused}#y{animation:k 10s linear}}"
@@ -2082,7 +2067,7 @@ static void motion_sweep_undo(void)
     bool failed = false;
     for (size_t at = 1; !failed; at++) {
         Moving m;
-        moving_open(&m, kUndoPage, 1000);
+        moving_open(&m, kFailedPage, 1000);
         garb_sheet_in_t in[16];
         for (int32_t k = 0; k < m.p.n; k++)
             in[k] = (garb_sheet_in_t){.sheet = &m.p.sheets[k]};
@@ -2114,7 +2099,7 @@ static void motion_sweep_undo(void)
         if (!reached)
             break;
     }
-    printf("libflow motion sweep: %zu failed layouts undone\n", tried);
+    printf("libflow motion sweep: %zu failed layouts left the timeline shown as it was\n", tried);
 }
 
 // ── The predictor against the evaluator, at random ─────────────────────
@@ -2345,10 +2330,8 @@ static void motion_fuzz_one(FuzzRun *f, FuzzRng *r, long c, bool edge)
     m.base = base;
     m.anims = an;
     m.nanims = nanims;
-    flow_timeline_t *tl = flow_timeline_new(doc);
-    f_timeline_begin(tl);
-    bool ok = f_timeline_element(tl, x, &m, 0);
-    f_timeline_end(tl, true);
+    bool ok;
+    flow_timeline_t *tl = motion_meet(doc, x, &m, 0, &ok);
     int horizon = 200;
     for (int a = 0; a < nanims; a++) {
         double end = an[a].timing.delay_ms + an[a].timing.duration_ms * an[a].timing.iterations + 200;
@@ -2513,10 +2496,8 @@ static void motion_probe_list_cases(void)
     m.base = base;
     m.anims = an;
     m.nanims = nanims;
-    flow_timeline_t *tl = flow_timeline_new(lm.p.doc);
-    f_timeline_begin(tl);
-    bool ok = f_timeline_element(tl, motion_find(lm.p.doc->document, "v0"), &m, 0);
-    f_timeline_end(tl, true);
+    bool ok;
+    flow_timeline_t *tl = motion_meet(lm.p.doc, motion_find(lm.p.doc->document, "v0"), &m, 0, &ok);
     double due = f_motion_next(&m, 75);
     char detail[64];
     snprintf(detail, sizeof(detail), "due %.17g", due);
@@ -2597,10 +2578,8 @@ static void motion_dropped_cases(void)
     m.base = base;
     m.anims = &an;
     m.nanims = 1;
-    flow_timeline_t *tl = flow_timeline_new(doc);
-    f_timeline_begin(tl);
-    bool ok = f_timeline_element(tl, x, &m, 0);
-    f_timeline_end(tl, true);
+    bool ok;
+    flow_timeline_t *tl = motion_meet(doc, x, &m, 0, &ok);
     double moving = f_motion_next(&m, 100);
     f_props_add(&an.dropped, GARB_OPACITY);
     double dropped = f_motion_next(&m, 100);
@@ -2775,10 +2754,8 @@ static void motion_long_crossing_cases(void)
         m.base = base;
         m.anims = &an;
         m.nanims = 1;
-        flow_timeline_t *tl = flow_timeline_new(doc);
-        f_timeline_begin(tl);
-        bool ok = f_timeline_element(tl, x, &m, 0);
-        f_timeline_end(tl, true);
+        bool ok;
+        flow_timeline_t *tl = motion_meet(doc, x, &m, 0, &ok);
         double half = kDur[d] / 2, wake = f_motion_next(&m, 0);
         char detail[96];
         snprintf(detail, sizeof(detail), "wake %.17g half %.17g", wake, half);
@@ -2816,10 +2793,8 @@ static void motion_long_crossing_cases(void)
     vm.base = base;
     vm.anims = &va;
     vm.nanims = 1;
-    flow_timeline_t *vt = flow_timeline_new(doc);
-    f_timeline_begin(vt);
-    bool vok = f_timeline_element(vt, x, &vm, 0);
-    f_timeline_end(vt, true);
+    bool vok;
+    flow_timeline_t *vt = motion_meet(doc, x, &vm, 0, &vok);
     flow_style_t shown = vm.base;
     (void)f_motion_style(&vm, 1, &shown, NULL, NULL, NULL, false);
     double back = f_motion_next(&vm, 1);
@@ -2831,11 +2806,85 @@ static void motion_long_crossing_cases(void)
     os64_html_document_free(doc);
 }
 
+// An incomplete layout styles the whole page and stops before laying it
+// all out, so what its styles no longer name is carried on: only a
+// complete layout may drop it. Here #a's animation, started at 1000, is
+// named by no rule of a cascade the page is laid out with at 3000 in too
+// small a budget; that tree shown, a layout at 5000 back on the page's own
+// cascade finds the animation 4 s into its 10 — and with each of the
+// incomplete layout's last allocations failed in turn, where it carries
+// the record on, a tree comes back only with the record carried.
+static void motion_incomplete_cases(void)
+{
+    size_t cap = 8192;
+    char *html = malloc(cap);
+    size_t at = (size_t)snprintf(html, cap, MOTION_STYLE
+        "@keyframes mv{from{transform:translateX(0)}to{transform:translateX(100px)}}"
+        "#a{animation:mv 10s linear}"
+        "@media (prefers-reduced-motion:reduce){#a{animation:none}}"
+        "</style><div id=a>a</div>");
+    for (int i = 0; i < 40; i++)
+        at += (size_t)snprintf(html + at, cap - at, "<b>");
+    for (int i = 0; i < 100; i++)
+        at += (size_t)snprintf(html + at, cap - at, "x<div></div>");
+    size_t tried = 0, shown = 0;
+    bool failed = false;
+    for (size_t back = 0; back <= 8 && !failed; back++) {
+        Moving m;
+        moving_open(&m, html, 1000);
+        garb_sheet_in_t in[16];
+        for (int32_t k = 0; k < m.p.n; k++)
+            in[k] = (garb_sheet_in_t){.sheet = &m.p.sheets[k]};
+        garb_cascade_t *calm =
+            garb_cascade(in, m.p.n, m.p.doc, (garb_env_t){.width = 800, .height = 600, .reduced_motion = true});
+        m.p.env.cascade = calm;
+        m.p.env.max_arena_bytes = 4096;
+        m.p.env.now_ms = 3000;
+        allocations = 0;
+        flow_tree_t *probe = flow_layout(m.p.doc, m.p.page, 800, &m.p.env);
+        size_t count = allocations;
+        bool incomplete = probe != NULL && flow_incomplete(probe);
+        flow_free(probe);
+        if (back == 0)
+            expect("motion: a layout in too small a budget is incomplete", incomplete, NULL);
+        failed |= !incomplete;
+        if (back < count) {
+            allocations = 0;
+            fail_single = true;
+            fail_at = back > 0 ? count + 1 - back : 0;
+            flow_tree_t *tree = flow_layout(m.p.doc, m.p.page, 800, &m.p.env);
+            fail_at = 0;
+            fail_single = false;
+            tried++;
+            if (tree != NULL) {
+                shown++;
+                flow_free(m.tree);
+                m.tree = tree;
+                flow_timeline_commit(&m.tl, tree);
+                m.p.env.timeline = m.tl;
+            }
+        }
+        m.p.env.cascade = m.p.cascade;
+        m.p.env.max_arena_bytes = 0;
+        moving_again(&m, 5000);
+        double g[16];
+        bool ran = moving_matrix(&m, "a", g) && fabs(g[12] - 40) <= 1.0 / 128 + 1e-4;
+        expect("motion: what an incomplete layout's styles no longer name is carried on", ran, NULL);
+        failed |= !ran;
+        garb_cascade_free(calm);
+        moving_close(&m);
+    }
+    free(html);
+    printf("libflow motion: an incomplete layout carried its records on, %zu of its last allocations failed "
+           "(%zu trees shown)\n", tried, shown);
+}
+
 static void motion_sweep(void)
 {
     motion_sweep_in(false);
     motion_sweep_in(true);
-    motion_sweep_undo();
+    motion_sweep_failed();
+    motion_incomplete_cases();
 }
 
 static void motion_cases(void)

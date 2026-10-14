@@ -1373,6 +1373,15 @@ void flow_free(flow_tree_t *tree)
     os64_free(tree);
 }
 
+void flow_timeline_commit(flow_timeline_t **shown, flow_tree_t *tree)
+{
+    if (tree == NULL || tree->styles == NULL || tree->styles->timeline == NULL)
+        return;
+    flow_timeline_free(*shown);
+    *shown = tree->styles->timeline;
+    tree->styles->timeline = NULL;
+}
+
 const os64_page_t *flow_model(const flow_tree_t *tree)
 {
     return tree != NULL ? tree->model : NULL;
@@ -1579,16 +1588,11 @@ flow_tree_t *flow_layout(const os64_html_document_t *doc, const os64_page_t *mod
     // own, which would turn a page the budget cut short into no page.
     tree->arena.cap = SIZE_MAX;
     tree->now_ms = env->now_ms;
-    // A layout is a style change event for the page's animations: it meets
-    // the ones it styles, and a complete one drops the rest; one that fails
-    // changes none of them (motion.c).
-    f_timeline_begin(env->timeline);
     tree->styles = f_style_build(doc, model, env);
     tree->boxes = tree->styles != NULL ? f_boxes_build(doc, model, tree->styles, env) : NULL;
     tree->layout = tree->boxes != NULL ? f_layout(tree->boxes, doc, model, env, width) : NULL;
     if (tree->layout == NULL) {
         flow_free(tree);
-        f_timeline_undo(env->timeline);
         return NULL;
     }
     tree->incomplete = tree->layout->incomplete;
@@ -1606,14 +1610,16 @@ flow_tree_t *flow_layout(const os64_html_document_t *doc, const os64_page_t *mod
         // page: nothing half-built is handed over.
         if (bd.failed || !stack_build(tree)) {
             flow_free(tree);
-            f_timeline_undo(env->timeline);
             return NULL;
         }
         reach_stacked(tree);
         sticky_reach_scrolled(tree);
         ink_reach(tree->root);
     }
-    f_timeline_end(env->timeline, !tree->incomplete);
+    if (!f_timeline_end(tree->styles->timeline, !tree->incomplete)) {
+        flow_free(tree);
+        return NULL;
+    }
     return tree;
 }
 
