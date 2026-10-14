@@ -71,6 +71,10 @@ typedef enum { OS64_UI_SELECTION_CHOOSE, OS64_UI_SELECTION_FOCUS,
     OS64_UI_SELECTION_CONTEXT } os64_ui_selection_command_t;
 /* Initialize fresh storage; dispose before reinitializing. */
 void os64_ui_selection_init(os64_ui_selection_t *);
+/* Copy a bound selection into a fresh empty handle. The result is detached,
+ * retains its projection, and can be reconciled without changing the source.
+ * Read on the source's lifecycle thread, including when it is view-attached. */
+os64_ui_status_code_t os64_ui_selection_clone(const os64_ui_selection_t *, os64_ui_selection_t *out);
 os64_ui_status_code_t os64_ui_selection_dispose(os64_ui_selection_t *);
 os64_ui_status_code_t os64_ui_selection_bind(os64_ui_selection_t *, os64_ui_data_projection_t *, os64_ui_data_bind_t);
 os64_ui_status_code_t os64_ui_selection_command(os64_ui_selection_t *, os64_ui_selection_command_t, os64_ui_data_id_t);

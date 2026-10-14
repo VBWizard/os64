@@ -52,6 +52,11 @@ void os64_ui_dataview_init(os64_ui_dataview_t *);
 os64_ui_status_code_t os64_ui_dataview_attach(os64_ui_dataview_t *, os64_ui_selection_t *, const os64_ui_icon_provider_t *);
 os64_ui_status_code_t os64_ui_dataview_dispose(os64_ui_dataview_t *);
 os64_ui_status_code_t os64_ui_dataview_bind(os64_ui_dataview_t *, os64_ui_data_projection_t *, os64_ui_data_bind_t);
+/* Restore a saved selection and viewport as one prepared transaction. Copies
+ * the selection, keeps compatible live columns, and advances live revisions.
+ * Failure keeps the current model/presentation; the saved state stays owned
+ * by its caller on either outcome. No user change callback is synthesized. */
+os64_ui_status_code_t os64_ui_dataview_restore(os64_ui_dataview_t *, const os64_ui_selection_t *, size_t top, int64_t left);
 os64_ui_status_code_t os64_ui_dataview_layout(os64_ui_dataview_t *);
 os64_ui_status_code_t os64_ui_dataview_scroll(os64_ui_dataview_t *, size_t top, int64_t left);
 os64_ui_status_code_t os64_ui_dataview_sort(os64_ui_dataview_t *, os64_ui_data_sort_t);

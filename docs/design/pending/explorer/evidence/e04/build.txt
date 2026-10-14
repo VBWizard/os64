@@ -1,0 +1,5 @@
+Source: 243663dc
+Command: make -C userland
+Result: exit 0; no compiler warnings or errors
+x86_64-elf-gcc (GCC) 14.2.0
+QEMU emulator version 8.2.2 (Debian 1:8.2.2+ds-0ubuntu1.18)

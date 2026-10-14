@@ -850,3 +850,63 @@ the full filename after another `0`. ASan/UBSan/LeakSanitizer passes 14,975
 checks and the gallery cross-build passes. The `/tmp/e3-wire` gallery is
 refreshed; [follow-up evidence](evidence/e03/README.md#underscore-fixture-follow-up--2026-10-13)
 records hashes and scope. Space handling is unchanged; P5 acceptance is pending.
+
+
+## 2026-10-13 — E4 creates Roam
+
+Chris authorized the first real browser after E3 merged and explicitly reserved
+file associations for discussion before E5. Quinn integrated the E4 contract,
+Sol's directory/controller and reusable UI/application packets, and focused
+E3 selection-clone/view-restore additions. Source `243663dc` is on
+`codex/roam-e4` in `.worktrees/roam-e4`, based on `5a521b63`.
+
+Roam provides asynchronous read-only directory browsing, Details/icons,
+navigation/history, address/breadcrumbs, filtering, favorites/volumes and
+independent pane visibility including menu recovery. No kernel changes or
+file-launch policy were introduced. Ctrl+[ / Ctrl+] avoid Os64's reserved
+Alt+Left/Right VT bindings. Native integration caught reserved shortcut
+registration, a menu-owned dispatcher hook collision, and a missed shortcut
+release across address focus; fixes have host regressions. Font layout and
+failed-navigation address publication were checked against actual rendering.
+
+The full userland build and directory/controller suites pass. The real-font
+Details suite passes 20,713 checks; Roam composition passes 60. ASan/UBSan and
+LeakSanitizer remain enabled; attachment-denied sandbox runs were repeated
+outside it. The final QEMU walkthrough uses real FAT/ext2 directories, a
+10,001-file fixture, history/selection/scroll/error/filter tests, hide-all/menu
+recovery, and live font/palette changes. [Evidence](evidence/e04/README.md)
+preserves screenshots, source/package identification and delivery results.
+Independent review and P5 acceptance remain pending; [the handoff](E04_HANDOFF.md)
+is the next action. Discuss file associations before beginning E5.
+
+Published as [draft PR #267](https://github.com/VBWizard/os64/pull/267) against `userland`,
+with source `243663dc` and native evidence `f930fda3`. The publication follow-up
+adds links only; the implementation is not merged.
+
+
+## 2026-10-13 — E4 first review corrections
+
+Addressed PR #267's three findings: pool-owned input lifetime after worker
+failure, failed-create attachment ownership, and transactional breadcrumb
+geometry with retry. The controller regression reproduced the original
+use-after-free, then passed with ASan/UBSan/LeakSanitizer. The real-font Roam
+suite passes 2,283 checks, including 60 allocation failures and recovery;
+the userland build and stale-reference checks pass. The follow-up evidence
+is recorded in [E4 validation](evidence/e04/README.md#pr-267--first-review-follow-up).
+Chris also reported more than ten minutes of successful hands-on browsing and
+hide-all minimalist mode; the machine was not specified. File associations
+remain reserved for discussion before E5.
+
+
+## 2026-10-13 — E4 second review corrections
+
+Addressed PR #267's four findings: active-view accounting against the saved
+history budget, lost help tokens on replacement failure, ignored Details
+layout errors, and rejected filter text left visible. Layout collects geometry
+before preparing Details, preserves prior bounds on refusal, and retries
+through sync. The earlier comment about refused runs preserving hit boxes
+was incomplete because it ignored Details preparation; the code and comment
+now cover that child. Controller tests and 3,931 real-font UI checks pass with
+ASan/UBSan/LeakSanitizer; the full userland build and stale-reference checks
+pass. [Review evidence](evidence/e04/README.md#pr-267--second-review-follow-up)
+records the allocation sweeps and remaining native-test scope.
