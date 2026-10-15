@@ -1250,10 +1250,13 @@ static const char *trim(const char *s)
     return s;
 }
 
+// What the status row says before anything while scripts run.
+#define SCRIPTS_ON_SAID "SCRIPTS ON | "
+
 static void status_set(const char *text)
 {
     os64_snprintf(g.status_text, sizeof(g.status_text), "%s%s",
-                  g.scripts_on ? "SCRIPTS ON | " : "", text);
+                  g.scripts_on ? SCRIPTS_ON_SAID : "", text);
     os64_ui_mark_dirty(&g.ui, &g.status);
 }
 
@@ -1724,18 +1727,27 @@ static void say_laid_out(uint64_t ms)
         if (g.page.diag != NULL)
             yonder_diag_fact(g.page.diag, "animations", fact);
     } else if (was_paused && g.page.diag != NULL) {
-        // Why the pause is over: animations turned off, none left, or a
-        // layout before the page's first frame that cost less.
+        // Why the pause is over: animations turned off, none with a
+        // change left to show, or a layout before the page's first frame
+        // that cost less.
         yonder_diag_fact(g.page.diag, "animations", !s_animations ? "off"
-                                                  : !flow_animated(g.page.tree) ? "none"
+                                                  : !flow_motion_pending(g.page.tree) ? "none"
                                                   : "running");
     }
-    os64_snprintf(line, sizeof(line), "%s%s%s - laid out at %d px%s in %lu ms%s%s%s%s%s",
-                  g.page.way.url, g.page.way.note[0] ? " - " : "", g.page.way.note,
+    // The notices first, and the address and the server's note in what the
+    // status row leaves them (SCRIPTS_ON_SAID before it all): an address
+    // may be thousands of bytes, and a notice cut off is a mode unsaid.
+    char tail[sizeof(line)];
+    os64_snprintf(tail, sizeof(tail), " - laid out at %d px%s in %lu ms%s%s%s%s%s",
                   g.page.laid_width, zoomed, (unsigned long)ms, pictures, asking,
                   s_env.static_only ? " - POSITIONING OFF (p)" : "",
                   flow_incomplete(g.page.tree) ? " - INCOMPLETE: the layout stopped partway" : "",
                   paused);
+    size_t used = os64_strlen(tail) + sizeof(SCRIPTS_ON_SAID) - 1;
+    size_t head = used < sizeof(line) ? sizeof(line) - used : 1;
+    os64_snprintf(line, head, "%s%s%s", g.page.way.url, g.page.way.note[0] ? " - " : "",
+                  g.page.way.note);
+    os64_strcopy(line + os64_strlen(line), sizeof(line) - os64_strlen(line), tail);
     status_rest(line);
 }
 
@@ -3371,17 +3383,18 @@ static uint64_t motion_cost_us(void)
 }
 
 // Whether the cost rule is what keeps the shown page's animations still,
-// and if so, in `out`, what cost too much: a page with animations, in view
-// or not, whose frame — before its first, its own layout — took more than
-// MOTION_COST_MS. It is the page's state, not the view's: scrolling
+// and if so, in `out`, what cost too much: a page with an animation that
+// has a change to show (flow_motion_pending), in view or not, whose frame
+// — before its first, its own layout — took more than MOTION_COST_MS. It
+// is the page's state at its tree's time, not the view's: scrolling
 // changes nothing about it. A frame that failed is said where it failed
-// (say_failed), and a page with no animations has nothing paused.
+// (say_failed), and a page with nothing to show has nothing paused.
 static bool motion_paused_why(char *out, size_t cap)
 {
     out[0] = '\0';
     uint64_t cost_us = motion_cost_us();
-    if (!s_animations || !flow_animated(g.page.tree) || cost_us == UINT64_MAX ||
-        cost_us <= (uint64_t)MOTION_COST_MS * 1000)
+    if (!s_animations || cost_us == UINT64_MAX || cost_us <= (uint64_t)MOTION_COST_MS * 1000 ||
+        !flow_motion_pending(g.page.tree))
         return false;
     os64_snprintf(out, cap, "%s took %lu ms, over %d", g.motion_laid ? "a frame" : "the layout",
                   (unsigned long)((cost_us + 999) / 1000), MOTION_COST_MS);
@@ -3482,20 +3495,30 @@ static void motion_tick(void)
 
 // The window painted: a frame for an animation costs its layout and the
 // paint that shows it, so the frame ends now and costs all of it. A frame
-// that cost too much is the page's last, and the standing line says so:
-// true when it changed the line, which the paint just made is without, so
-// the caller paints again — nothing may wake the window after the last
-// frame.
-static bool motion_painted(void)
+// that cost too much is the page's last (motion_pause_said says so).
+static void motion_painted(void)
 {
     if (!g.motion_painting)
-        return false;
+        return;
     g.motion_painting = false;
     g.motion_ended = yonder_now_ms();
     g.motion_us = (uint64_t)(os64_micros() - g.motion_began_us);
+}
+
+// The standing line made to say what the cost rule does to the shown page
+// now (motion_paused_why), when that changed since it last said it: true
+// when it was said again. The window loop asks before each paint, and after
+// a frame's paint ends, which may be the page's last — whatever changed it,
+// a frame, a layout, a script's rebuild, the settings, the page.
+static bool motion_pause_said(void)
+{
     char why[64];
-    if (g.motion_paused || !motion_paused_why(why, sizeof(why)))
+    if (motion_paused_why(why, sizeof(why)) == g.motion_paused)
         return false;
+    if (g.page.tree == NULL) {
+        g.motion_paused = false;
+        return false;
+    }
     say_laid_out(g.laid_ms);
     return true;
 }
@@ -7552,8 +7575,10 @@ int main(int argc, char **argv)
         bool coming_more = coming_turn();
         bool scripts_ready = script_turn();
         pictures_settle();
+        (void)motion_pause_said();
         os64_ui_paint(&g.ui);
-        if (motion_painted())
+        motion_painted();
+        if (motion_pause_said())
             os64_ui_paint(&g.ui);
         if (stream_more)
             (void)os64_gui_event_ring(g.win, BELL_STREAM);

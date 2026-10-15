@@ -1024,9 +1024,11 @@ void flow_timeline_commit(flow_timeline_t **shown, flow_tree_t *tree);
 // active phase or an end; FLOW_NEVER for none. A time already gone is due
 // at once.
 uint64_t flow_motion_due(const flow_tree_t *tree, os64_gui_rect_t view, flow_point_t scroll);
-// Whether any element of the tree runs an animation whose @keyframes
-// exist, wherever it is and whatever it shows now.
-bool flow_animated(const flow_tree_t *tree);
+// Whether an animation of the tree, wherever its element is, still has a
+// change to show after the tree's time (flow_env_t.now_ms): one running,
+// or waiting out its delay — not one paused, over, or of nothing that can
+// show.
+bool flow_motion_pending(const flow_tree_t *tree);
 
 // The root box: the html element's. NULL for a page with nothing to lay out.
 const flow_box_t *flow_root(const flow_tree_t *tree);

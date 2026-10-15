@@ -999,14 +999,16 @@ static void motion_cases(void) {
         "motion: a page whose frame for an animation took more than MOTION_COST_MS lays out for none");
     check(strstr(g.status_text,"ANIMATIONS PAUSED")==NULL,
         "motion: a frame is judged when its paint ends, not before");
-    bool repaint=motion_painted();
+    motion_painted();
+    bool said=motion_pause_said();
     char record[2048];
     yonder_diag_render(g.page.diag,record,sizeof(record));
-    check(repaint && strstr(g.status_text," - ANIMATIONS PAUSED: a frame took 201 ms, over 200")!=NULL &&
+    check(said && strstr(g.status_text," - ANIMATIONS PAUSED: a frame took 201 ms, over 200")!=NULL &&
           strstr(record,"animations: paused: a frame took 201 ms, over 200")!=NULL,
         "motion: the frame that stops the animations is said, on the standing line and in the record, "
         "and the line is to be painted again");
-    check(!motion_painted(),"motion: a paint with no frame says nothing new");
+    motion_painted();
+    check(!motion_pause_said(),"motion: a paint with no frame says nothing new");
     yonder_diag_free(g.page.diag); g.page.diag=NULL;
     geometry_layout_delay=0;
     probe_drop();
@@ -1060,9 +1062,45 @@ static void motion_cases(void) {
     check(strstr(g.status_text," - ANIMATIONS PAUSED: the layout took 201 ms, over 200")!=NULL,
         "motion: an animation out of view is paused by what the page costs");
     scroll_to(0,3000);
+    check(!motion_pause_said() &&
+          strstr(g.status_text," - ANIMATIONS PAUSED: the layout took 201 ms, over 200")!=NULL,
+        "motion: scrolling it into view says the same, and nothing is said again");
+    /* An address as long as an address may be leaves the notices whole. */
+    char *was=strdup(g.page.way.url);
+    memset(g.page.way.url,'a',sizeof(g.page.way.url)-1);
+    g.page.way.url[sizeof(g.page.way.url)-1]='\0';
+    g.scripts_on=true;
     say_laid_out(MOTION_COST_MS+1);
-    check(strstr(g.status_text," - ANIMATIONS PAUSED: the layout took 201 ms, over 200")!=NULL,
-        "motion: scrolling it into view says the same");
+    size_t len=strlen(g.status_text);
+    check(len>=strlen("over 200") && strcmp(g.status_text+len-strlen("over 200"),"over 200")==0 &&
+          strncmp(g.status_text,"SCRIPTS ON | aaa",16)==0,
+        "motion: a long address gives way to the notices after it");
+    g.scripts_on=false;
+    os64_strcopy(g.page.way.url,sizeof(g.page.way.url),was);
+    free(was);
+    probe_drop();
+    /* A paused animation is not one the cost rule stops. */
+    probe_page("<!doctype html><style>@keyframes tint{to{color:red}}"
+        "#a{animation:tint 1s linear infinite paused}</style><div id=a>a</div>",false);
+    relayout(true);
+    say_laid_out(MOTION_COST_MS+1);
+    check(strstr(g.status_text,"ANIMATIONS PAUSED")==NULL,
+        "motion: an animation the page paused is not paused by what a frame costs");
+    probe_drop();
+    /* A script's change publishes the tree an animation starts in, which no
+     * layout of the shown page's says: the loop's next look says it. */
+    now_ms=2000;
+    probe_page("<!doctype html><style>@keyframes slide{to{margin-left:100px}}"
+        ".go{animation:slide 1s infinite}</style><div id=a></div>"
+        "<script>document.getElementById('a').className='go'</script>",true);
+    relayout(true);
+    say_laid_out(MOTION_COST_MS+1);
+    check(strstr(g.status_text,"ANIMATIONS PAUSED")==NULL,
+        "motion: a slow page with nothing to move has nothing paused");
+    script_turn(); script_turn();
+    check(motion_pause_said() &&
+          strstr(g.status_text," - ANIMATIONS PAUSED: the layout took 201 ms, over 200")!=NULL,
+        "motion: an animation a script starts on a slow page is said to be paused");
     probe_drop();
 
     /* What the view shows: an animation that only repaints where its

@@ -1703,9 +1703,16 @@ static bool clips_to_text(const flow_style_t *s)
     return false;
 }
 
-bool flow_animated(const flow_tree_t *tree)
+bool flow_motion_pending(const flow_tree_t *tree)
 {
-    return tree != NULL && tree->styles != NULL && tree->styles->nanimated > 0;
+    if (tree == NULL || tree->styles == NULL)
+        return false;
+    for (int32_t i = 0; i < tree->styles->nanimated; i++) {
+        const FStyled *st = f_style_of(tree->styles, tree->styles->animated[i]);
+        if (st != NULL && st->motion != NULL && f_motion_next(st->motion, (double)tree->now_ms, NULL) < INFINITY)
+            return true;
+    }
+    return false;
 }
 
 uint64_t flow_motion_due(const flow_tree_t *tree, os64_gui_rect_t view, flow_point_t scroll)

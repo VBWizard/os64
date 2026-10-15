@@ -1786,12 +1786,19 @@ thread busy all the time):
   stops is SAID, for a page whose animations stopped looks like a page
   with none: its standing line ends `ANIMATIONS PAUSED: a frame took
   240 ms, over 200` (before a first frame, `the layout took`), and its
-  record carries `animations: paused: …`. It is the page's state, in
-  view or not. The record follows the pause out: `off` when animations
-  are turned off, `none` when none are left, and `running` when a
-  layout before the page's first frame came in under the limit. A page
-  with no animations, animations turned off, or a frame that failed
-  (said where it failed) says nothing of it;
+  record carries `animations: paused: …`. It is the page's state at its
+  tree's time, in view or not, and only for an animation with a change
+  still to show (`flow_motion_pending`: not one paused, over, or of
+  nothing that can show). The window loop asks before each paint and
+  after a frame's paint ends, so whatever changes it — a frame, a
+  layout, a script's rebuild, the settings — is said once, and painted.
+  The notices come first on the standing line, the address in what they
+  leave, so a long address never cuts one off. The record follows the
+  pause out: `off` when animations are turned off, `none` when none has
+  a change left to show, and `running` when a layout before the page's
+  first frame came in under the limit. A page with nothing to show,
+  animations turned off, or a frame that failed (said where it failed)
+  says nothing of it;
 - otherwise the next frame waits until twice the last one's cost has
   passed since its paint ended — at most a third of the window's time
   spent on motion — and never comes sooner than MOTION_FRAME_MS (16)
