@@ -963,8 +963,6 @@ void f_transform_fn_matrix(flow_transform_t *f)
 
 // ── Interpolation, by the property (Web Animations 1 § 5.2, Appendix A) ─
 
-typedef enum { MIX_CONTINUOUS, MIX_DISCRETE } MixKind;
-
 // a + (b - a) t, as Chromium blends: at t = 0 exactly a, at t = 1 exactly
 // b, and a value mixed with itself exactly itself at any t — which
 // (1 - t) a + t b is not when t is huge and the two products cancel. A
@@ -1628,24 +1626,32 @@ static bool length_same(flow_length_t a, flow_length_t b)
     return a.kind == b.kind && a.value == b.value && a.offset == b.offset;
 }
 
-// Whether two mixes of tails (FLOW_FN_BLEND) draw as one matrix: as the
-// painter draws each (f_blend_matrix), in a box of no size and in one of a
-// thousand pixels, so a percentage that differs shows in the second.
+static bool function_same(const flow_transform_t *a, const flow_transform_t *b);
+
+// Whether two mixes of tails (FLOW_FN_BLEND) are one: the same fraction
+// between the same two tails, function by function, a blend in a tail
+// compared the same way (a nest no deeper than F_BLEND_DEPTH_MAX). By what
+// they are, never by sampling what they draw: a percentage that follows
+// the width at one end and the height at the other agrees in every square
+// box, and with perspective() a matrix does not follow the box linearly,
+// so no set of boxes is complete. Two equal mixes this calls different
+// cost a layout for nothing; the reverse would miss one.
 static bool blend_same(const flow_transform_t *a, const flow_transform_t *b)
 {
-    for (int64_t box = 0; box <= 1000 * 64; box += 1000 * 64) {
-        double ma[16], mb[16];
-        f_blend_matrix(a, box, box, ma);
-        f_blend_matrix(b, box, box, mb);
-        for (int i = 0; i < 16; i++)
-            if (ma[i] != mb[i])
-                return false;
-    }
+    const flow_transform_blend_t *x = a->blend, *y = b->blend;
+    if (x->t != y->t || x->nfrom != y->nfrom || x->nto != y->nto)
+        return false;
+    for (int32_t i = 0; i < x->nfrom; i++)
+        if (!function_same(&x->from[i], &y->from[i]))
+            return false;
+    for (int32_t i = 0; i < x->nto; i++)
+        if (!function_same(&x->to[i], &y->to[i]))
+            return false;
     return true;
 }
 
-// Two transform functions with one value; two mixes of tails, the matrices
-// they draw as.
+// Two transform functions with one value; two mixes of tails, the same
+// mix (blend_same).
 static bool function_same(const flow_transform_t *a, const flow_transform_t *b)
 {
     if (a == NULL || b == NULL)
@@ -1740,80 +1746,37 @@ static bool animatable(garb_prop_t p)
            !(p >= GARB_ANIMATION_NAME && p <= GARB_ANIMATION_FILL_MODE);
 }
 
-// Whether two transform lists mix by moving or only flip at one half, as
-// the painter draws their mix: a pair that pairs and differs moves; a pair
-// or tail that mixes as matrices moves when both can be decomposed, and
-// otherwise is drawn as the first below one half and the second from there
-// (f_blend_matrix) — a flip. Decomposition does not depend on the
-// translations, so the box the tails are multiplied out in is none.
-static MixKind transforms_kind(const flow_transform_t *a, int32_t na, const flow_transform_t *b,
-                               int32_t nb)
-{
-    int32_t n = na > nb ? na : nb;
-    bool flips = false;
-    for (int32_t i = 0; i < n; i++) {
-        flow_transform_t fa = i < na ? a[i] : identity_of(&b[i]);
-        flow_transform_t fb = i < nb ? b[i] : identity_of(&a[i]);
-        if (pairs(&fa, &fb)) {
-            if (!function_same(&fa, &fb))
-                return MIX_CONTINUOUS;
-            continue;
-        }
-        bool alone = fa.fn == fb.fn &&
-                     (fa.fn == FLOW_FN_MATRIX || fa.fn == FLOW_FN_PERSPECTIVE || fa.fn == FLOW_FN_ROTATE);
-        int32_t to = alone ? i + 1 : n;
-        int32_t ca = (to < na ? to : na) - i, cb = (to < nb ? to : nb) - i;
-        double ma[16], mb[16], mix[16];
-        f_tail_matrix(a + i, ca > 0 ? ca : 0, 0, 0, ma);
-        f_tail_matrix(b + i, cb > 0 ? cb : 0, 0, 0, mb);
-        if (f_matrix_mix(ma, mb, 0.5, mix))
-            return MIX_CONTINUOUS;
-        flips = true;
-        if (!alone)
-            break;
-    }
-    return flips ? MIX_DISCRETE : MIX_CONTINUOUS;
-}
-
-// Property `p` at `t` between keyframe styles `a` and `b`, into `d` — or,
-// with `d` NULL, only whether these two values mix continuously or flip.
-// False when a list found no room, and the property is left as it was.
+// Property `p` at `t` between keyframe styles `a` and `b`, into `d`. False
+// when a list found no room, and the property is left as it was.
 static bool mix_prop(garb_prop_t p, const flow_style_t *a, const flow_style_t *b, double t,
-                     flow_style_t *d, MixKind *kind, FAlloc alloc, void *ctx)
+                     flow_style_t *d, FAlloc alloc, void *ctx)
 {
     int i;
-    *kind = MIX_CONTINUOUS;
     switch (p) {
     case GARB_COLOR:
-        if (d != NULL)
-            d->color = mix_colour(a->color, b->color, t);
+        d->color = mix_colour(a->color, b->color, t);
         return true;
     case GARB_TEXT_FILL_COLOR:
-        if (d != NULL) {
-            d->fill = mix_colour(used_colour(a, FLOW_CURRENT_FILL, a->fill, d),
-                                 used_colour(b, FLOW_CURRENT_FILL, b->fill, d), t);
-            hand_current(d, a, b, FLOW_CURRENT_FILL);
-        }
+        d->fill = mix_colour(used_colour(a, FLOW_CURRENT_FILL, a->fill, d),
+                             used_colour(b, FLOW_CURRENT_FILL, b->fill, d), t);
+        hand_current(d, a, b, FLOW_CURRENT_FILL);
         return true;
-    case GARB_BACKGROUND_COLOR:
-        if (d != NULL) {
-            uint32_t ca = used_colour(a, FLOW_CURRENT_BACKGROUND,
-                                      a->has_background ? a->background : 0xFF000000u, d);
-            uint32_t cb = used_colour(b, FLOW_CURRENT_BACKGROUND,
-                                      b->has_background ? b->background : 0xFF000000u, d);
-            d->background = mix_colour(ca, cb, t);
-            d->has_background = flow_alpha(d->background) > 0;
-            hand_current(d, a, b, FLOW_CURRENT_BACKGROUND);
-        }
+    case GARB_BACKGROUND_COLOR: {
+        uint32_t ca = used_colour(a, FLOW_CURRENT_BACKGROUND,
+                                  a->has_background ? a->background : 0xFF000000u, d);
+        uint32_t cb = used_colour(b, FLOW_CURRENT_BACKGROUND,
+                                  b->has_background ? b->background : 0xFF000000u, d);
+        d->background = mix_colour(ca, cb, t);
+        d->has_background = flow_alpha(d->background) > 0;
+        hand_current(d, a, b, FLOW_CURRENT_BACKGROUND);
         return true;
+    }
     case GARB_BORDER_TOP_COLOR: case GARB_BORDER_RIGHT_COLOR: case GARB_BORDER_BOTTOM_COLOR:
     case GARB_BORDER_LEFT_COLOR:
         i = p - GARB_BORDER_TOP_COLOR;
-        if (d != NULL) {
-            d->border_color[i] = mix_colour(used_colour(a, FLOW_CURRENT_BORDER(i), a->border_color[i], d),
-                                            used_colour(b, FLOW_CURRENT_BORDER(i), b->border_color[i], d), t);
-            hand_current(d, a, b, FLOW_CURRENT_BORDER(i));
-        }
+        d->border_color[i] = mix_colour(used_colour(a, FLOW_CURRENT_BORDER(i), a->border_color[i], d),
+                                        used_colour(b, FLOW_CURRENT_BORDER(i), b->border_color[i], d), t);
+        hand_current(d, a, b, FLOW_CURRENT_BORDER(i));
         return true;
     case GARB_BACKGROUND_POSITION_X: case GARB_BACKGROUND_POSITION_Y: {
         bool x = p == GARB_BACKGROUND_POSITION_X;
@@ -1823,8 +1786,6 @@ static bool mix_prop(garb_prop_t p, const flow_style_t *a, const flow_style_t *b
         int32_t nb = x ? b->backgrounds.nx : b->backgrounds.ny;
         if (!mix_lengths(la, na, lb, nb, t, NULL, NULL, alloc, ctx))
             break;
-        if (d == NULL)
-            return true;
         return mix_lengths(la, na, lb, nb, t, x ? &d->backgrounds.x : &d->backgrounds.y,
                            x ? &d->backgrounds.nx : &d->backgrounds.ny, alloc, ctx);
     }
@@ -1832,27 +1793,24 @@ static bool mix_prop(garb_prop_t p, const flow_style_t *a, const flow_style_t *b
         if (!mix_sizes(a->backgrounds.size, a->backgrounds.nsize, b->backgrounds.size,
                        b->backgrounds.nsize, t, NULL, NULL, alloc, ctx))
             break;
-        if (d == NULL)
-            return true;
         return mix_sizes(a->backgrounds.size, a->backgrounds.nsize, b->backgrounds.size,
                          b->backgrounds.nsize, t, &d->backgrounds.size, &d->backgrounds.nsize,
                          alloc, ctx);
     case GARB_MARGIN_TOP: case GARB_MARGIN_RIGHT: case GARB_MARGIN_BOTTOM: case GARB_MARGIN_LEFT:
         i = p - GARB_MARGIN_TOP;
-        if (!mix_length(a->margin[i], b->margin[i], t, d != NULL ? &d->margin[i] : NULL))
+        if (!mix_length(a->margin[i], b->margin[i], t, &d->margin[i]))
             break;
         return true;
     case GARB_PADDING_TOP: case GARB_PADDING_RIGHT: case GARB_PADDING_BOTTOM:
     case GARB_PADDING_LEFT:
         i = p - GARB_PADDING_TOP;
-        if (!mix_nonneg(a->padding[i], b->padding[i], t, d != NULL ? &d->padding[i] : NULL))
+        if (!mix_nonneg(a->padding[i], b->padding[i], t, &d->padding[i]))
             break;
         return true;
     case GARB_BORDER_TOP_WIDTH: case GARB_BORDER_RIGHT_WIDTH: case GARB_BORDER_BOTTOM_WIDTH:
     case GARB_BORDER_LEFT_WIDTH:
         i = p - GARB_BORDER_TOP_WIDTH;
-        if (d != NULL)
-            d->border_width[i] = round_i32(fmax(lerp(a->border_width[i], b->border_width[i], t), 0));
+        d->border_width[i] = round_i32(fmax(lerp(a->border_width[i], b->border_width[i], t), 0));
         return true;
     case GARB_WIDTH: case GARB_HEIGHT: case GARB_MIN_WIDTH: case GARB_MAX_WIDTH:
     case GARB_MIN_HEIGHT: case GARB_MAX_HEIGHT: {
@@ -1868,86 +1826,73 @@ static bool mix_prop(garb_prop_t p, const flow_style_t *a, const flow_style_t *b
         flow_length_t r;
         if (!mix_nonneg(*la, *lb, t, &r))
             break;
-        if (d != NULL)
-            *(flow_length_t *)((char *)d + off) = r;
+        *(flow_length_t *)((char *)d + off) = r;
         return true;
     }
     case GARB_FONT_SIZE:
-        if (d != NULL)
-            d->font_size = round_i32(fmax(lerp(a->font_size, b->font_size, t), 0));
+        d->font_size = round_i32(fmax(lerp(a->font_size, b->font_size, t), 0));
         return true;
     case GARB_FONT_WEIGHT:
         // A number from 1 to 1000 (Fonts 4 § 2.2).
-        if (d != NULL)
-            d->font_weight = (uint16_t)round_i32(fmin(fmax(lerp(a->font_weight, b->font_weight,
-                                                                t), 1), 1000));
+        d->font_weight = (uint16_t)round_i32(fmin(fmax(lerp(a->font_weight, b->font_weight,
+                                                            t), 1), 1000));
         return true;
     case GARB_LINE_HEIGHT:
         if (a->line_height.kind != b->line_height.kind ||
             a->line_height.kind == FLOW_LINE_NORMAL)
             break;
-        if (d != NULL)
-            d->line_height.value = round_i32(fmax(lerp(a->line_height.value,
-                                                       b->line_height.value, t), 0));
-        if (d != NULL)
-            d->line_height.kind = a->line_height.kind;
+        d->line_height.value = round_i32(fmax(lerp(a->line_height.value,
+                                                   b->line_height.value, t), 0));
+        d->line_height.kind = a->line_height.kind;
         return true;
     case GARB_TEXT_INDENT:
-        if (!mix_length(a->text_indent, b->text_indent, t, d != NULL ? &d->text_indent : NULL))
+        if (!mix_length(a->text_indent, b->text_indent, t, &d->text_indent))
             break;
         return true;
     case GARB_VISIBILITY:
         // Appendix A: visible all the way between if either end is.
         if (a->visibility != FLOW_VISIBLE && b->visibility != FLOW_VISIBLE)
             break;
-        *kind = MIX_DISCRETE;
-        if (d != NULL)
-            d->visibility = t <= 0 ? a->visibility : t >= 1 ? b->visibility : FLOW_VISIBLE;
+        d->visibility = t <= 0 ? a->visibility : t >= 1 ? b->visibility : FLOW_VISIBLE;
         return true;
     case GARB_BORDER_SPACING:
-        if (d != NULL)
-            for (int k = 0; k < 2; k++)
-                d->border_spacing[k] = round_i32(fmax(lerp(a->border_spacing[k],
-                                                           b->border_spacing[k], t), 0));
+        for (int k = 0; k < 2; k++)
+            d->border_spacing[k] = round_i32(fmax(lerp(a->border_spacing[k],
+                                                       b->border_spacing[k], t), 0));
         return true;
     case GARB_TOP: case GARB_RIGHT: case GARB_BOTTOM: case GARB_LEFT:
         i = p - GARB_TOP;
-        if (!mix_length(a->inset[i], b->inset[i], t, d != NULL ? &d->inset[i] : NULL))
+        if (!mix_length(a->inset[i], b->inset[i], t, &d->inset[i]))
             break;
         return true;
     case GARB_Z_INDEX:
         // Two numbers make a number, whatever the element's own is.
         if (!a->has_z_index || !b->has_z_index)
             break;
-        if (d != NULL) {
-            d->has_z_index = true;
-            d->z_index = half_up_i32(lerp(a->z_index, b->z_index, t));
-        }
+        d->has_z_index = true;
+        d->z_index = half_up_i32(lerp(a->z_index, b->z_index, t));
         return true;
     case GARB_OPACITY:
-        if (d != NULL)
-            d->opacity = (uint16_t)round_i32(fmin(fmax(lerp(a->opacity, b->opacity, t), 0), 1000));
+        d->opacity = (uint16_t)round_i32(fmin(fmax(lerp(a->opacity, b->opacity, t), 0), 1000));
         return true;
     case GARB_FLEX_GROW: case GARB_FLEX_SHRINK: {
         int32_t va = p == GARB_FLEX_GROW ? a->flex_grow : a->flex_shrink;
         int32_t vb = p == GARB_FLEX_GROW ? b->flex_grow : b->flex_shrink;
-        if (d != NULL)
-            *(p == GARB_FLEX_GROW ? &d->flex_grow : &d->flex_shrink) =
-                round_i32(fmax(lerp(va, vb, t), 0));
+        *(p == GARB_FLEX_GROW ? &d->flex_grow : &d->flex_shrink) =
+            round_i32(fmax(lerp(va, vb, t), 0));
         return true;
     }
     case GARB_FLEX_BASIS:
-        if (!mix_nonneg(a->flex_basis, b->flex_basis, t, d != NULL ? &d->flex_basis : NULL))
+        if (!mix_nonneg(a->flex_basis, b->flex_basis, t, &d->flex_basis))
             break;
         return true;
     case GARB_ORDER:
-        if (d != NULL)
-            d->order = half_up_i32(lerp(a->order, b->order, t));
+        d->order = half_up_i32(lerp(a->order, b->order, t));
         return true;
     case GARB_ROW_GAP: case GARB_COLUMN_GAP: {
         bool row = p == GARB_ROW_GAP;
         if (!mix_nonneg(row ? a->row_gap : a->column_gap, row ? b->row_gap : b->column_gap, t,
-                        d != NULL ? (row ? &d->row_gap : &d->column_gap) : NULL))
+                        row ? &d->row_gap : &d->column_gap))
             break;
         return true;
     }
@@ -1957,10 +1902,8 @@ static bool mix_prop(garb_prop_t p, const flow_style_t *a, const flow_style_t *b
         if (!mix_length(a->radius[i][0], b->radius[i][0], t, NULL) ||
             !mix_length(a->radius[i][1], b->radius[i][1], t, NULL))
             break;
-        if (d != NULL) {
-            (void)mix_nonneg(a->radius[i][0], b->radius[i][0], t, &d->radius[i][0]);
-            (void)mix_nonneg(a->radius[i][1], b->radius[i][1], t, &d->radius[i][1]);
-        }
+        (void)mix_nonneg(a->radius[i][0], b->radius[i][0], t, &d->radius[i][0]);
+        (void)mix_nonneg(a->radius[i][1], b->radius[i][1], t, &d->radius[i][1]);
         return true;
     case GARB_BOX_SHADOW: case GARB_TEXT_SHADOW: {
         bool box = p == GARB_BOX_SHADOW;
@@ -1970,8 +1913,6 @@ static bool mix_prop(garb_prop_t p, const flow_style_t *a, const flow_style_t *b
         int32_t nb = box ? b->nbox_shadows : b->ntext_shadows;
         if (!mix_shadows(sa, na, sb, nb, a->color, b->color, t, NULL, NULL, alloc, ctx))
             break;
-        if (d == NULL)
-            return true;
         flow_shadow_t *list = NULL;
         int32_t n = 0;
         // A shadow in currentColor mixes the colour the element ends with.
@@ -1982,10 +1923,6 @@ static bool mix_prop(garb_prop_t p, const flow_style_t *a, const flow_style_t *b
         return true;
     }
     case GARB_TRANSFORM:
-        if (d == NULL) {
-            *kind = transforms_kind(a->transform, a->ntransform, b->transform, b->ntransform);
-            return true;
-        }
         return mix_transforms(a->transform, a->ntransform, b->transform, b->ntransform, t,
                               &d->transform, &d->ntransform, alloc, ctx);
     case GARB_TRANSLATE: case GARB_ROTATE: case GARB_SCALE: {
@@ -1993,8 +1930,6 @@ static bool mix_prop(garb_prop_t p, const flow_style_t *a, const flow_style_t *b
                                    : p == GARB_ROTATE ? a->rotate : a->scale;
         const flow_transform_t *fb = p == GARB_TRANSLATE ? b->translate
                                    : p == GARB_ROTATE ? b->rotate : b->scale;
-        if (d == NULL)
-            return true;
         return mix_individual(fa, fb, t, p == GARB_TRANSLATE ? &d->translate
                                        : p == GARB_ROTATE ? &d->rotate : &d->scale,
                               alloc, ctx);
@@ -2003,22 +1938,18 @@ static bool mix_prop(garb_prop_t p, const flow_style_t *a, const flow_style_t *b
         if (!mix_length(a->transform_origin[0], b->transform_origin[0], t, NULL) ||
             !mix_length(a->transform_origin[1], b->transform_origin[1], t, NULL))
             break;
-        if (d != NULL) {
-            (void)mix_length(a->transform_origin[0], b->transform_origin[0], t,
-                             &d->transform_origin[0]);
-            (void)mix_length(a->transform_origin[1], b->transform_origin[1], t,
-                             &d->transform_origin[1]);
-            d->transform_origin_z = round_i32(lerp(a->transform_origin_z,
-                                                   b->transform_origin_z, t));
-        }
+        (void)mix_length(a->transform_origin[0], b->transform_origin[0], t,
+                         &d->transform_origin[0]);
+        (void)mix_length(a->transform_origin[1], b->transform_origin[1], t,
+                         &d->transform_origin[1]);
+        d->transform_origin_z = round_i32(lerp(a->transform_origin_z,
+                                               b->transform_origin_z, t));
         return true;
     default:
         break;
     }
     // Discrete: the first value until one half, the second from it.
-    *kind = MIX_DISCRETE;
-    if (d != NULL)
-        copy_prop(p, d, t < 0.5 ? a : b);
+    copy_prop(p, d, t < 0.5 ? a : b);
     return true;
 }
 
@@ -2122,7 +2053,7 @@ static double eased(const Frame *start, const Frame *end, double progress, bool 
     return f_ease(start->easing, x, before);
 }
 
-// One look of a walk (motion_walk): its time, the style the values are
+// The look a walk (motion_walk) makes: its time, the style the values are
 // laid over — which holds the base — where its lists come from, and the
 // properties whose lists found no room.
 typedef struct {
@@ -2133,38 +2064,29 @@ typedef struct {
     FProps *failed;
 } Look;
 
-enum { LOOKS_MAX = 2 };
+// What a walk hands its step before each value is mixed, where the
+// animation is in effect: the animation, the property, its clock and the
+// frames around its progress. False from the step ends the walk.
+typedef bool (*Step)(void *ctx, int32_t a, garb_prop_t p, const Clock *k, const Frame *s, const Frame *e);
 
-// What a walk hands its step before each value is mixed, where every look
-// has the animation in effect: the animation, the property, and each
-// look's clock and the frames around its progress. False from the step
-// ends the walk.
-typedef bool (*Step)(void *ctx, int32_t a, garb_prop_t p, int32_t nlooks, const Clock *k, const Frame *s,
-                     const Frame *e);
-
-// The animations' values laid over each look's style at its time, the
-// looks in step — `step`, when given, told of each before it is mixed.
-// `color` first, every animation's, so a currentColor anything else
-// mixes is the colour the element ends with (CSS Color 4 § 12, its used
-// value); then the rest; and a side's width after its style, which brings
-// a width of its own. Each animation's implicit frames are what the ones
-// before it made, held still while it mixes over the look's style.
-static bool motion_walk(const FMotion *m, Look *looks, int32_t nlooks, bool record, Step step, void *sctx)
+// The animations' values laid over the look's style at its time — `step`,
+// when given, told of each before it is mixed. `color` first, every
+// animation's, so a currentColor anything else mixes is the colour the
+// element ends with (CSS Color 4 § 12, its used value); then the rest; and
+// a side's width after its style, which brings a width of its own. Each
+// animation's implicit frames are what the ones before it made, held still
+// while it mixes over the look's style.
+static bool motion_walk(const FMotion *m, Look *look, bool record, Step step, void *sctx)
 {
     bool ok = true;
-    flow_style_t under[LOOKS_MAX];
-    Clock k[LOOKS_MAX];
+    flow_style_t under;
     for (int pass = 0; pass < 3; pass++)
         for (int32_t a = 0; a < m->nanims; a++) {
             const FAnimation *an = &m->anims[a];
             if (an->record == NULL)
                 continue;
-            int32_t in = 0;
-            for (int32_t i = 0; i < nlooks; i++) {
-                k[i] = clock_at(&an->timing, local_time(an->record, looks[i].now));
-                in += k[i].in_effect;
-            }
-            if (in == 0)
+            Clock k = clock_at(&an->timing, local_time(an->record, look->now));
+            if (!k.in_effect)
                 continue;
             bool held = false;
             for (int p = 0; p < GARB_NPROPS; p++) {
@@ -2174,30 +2096,21 @@ static bool motion_walk(const FMotion *m, Look *looks, int32_t nlooks, bool reco
                     f_props_has(&an->dropped, (garb_prop_t)p))
                     continue;
                 if (!held) {
-                    for (int32_t i = 0; i < nlooks; i++)
-                        if (k[i].in_effect)
-                            under[i] = *looks[i].out;
+                    under = *look->out;
                     held = true;
                 }
-                Frame s[LOOKS_MAX], e[LOOKS_MAX];
-                for (int32_t i = 0; i < nlooks; i++)
-                    if (k[i].in_effect)
-                        interval(an, &under[i], (garb_prop_t)p, k[i].progress, &s[i], &e[i]);
-                if (step != NULL && in == nlooks && !step(sctx, a, (garb_prop_t)p, nlooks, k, s, e))
+                Frame s, e;
+                interval(an, &under, (garb_prop_t)p, k.progress, &s, &e);
+                if (step != NULL && !step(sctx, a, (garb_prop_t)p, &k, &s, &e))
                     return ok;
-                for (int32_t i = 0; i < nlooks; i++) {
-                    MixKind kind;
-                    if (!k[i].in_effect ||
-                        mix_prop((garb_prop_t)p, s[i].style, e[i].style,
-                                 eased(&s[i], &e[i], k[i].progress, k[i].before), looks[i].out, &kind,
-                                 looks[i].alloc, looks[i].ctx))
-                        continue;
-                    ok = false;
-                    if (looks[i].failed != NULL)
-                        f_props_add(looks[i].failed, (garb_prop_t)p);
-                    if (record)
-                        f_props_add(&m->anims[a].dropped, (garb_prop_t)p);
-                }
+                if (mix_prop((garb_prop_t)p, s.style, e.style, eased(&s, &e, k.progress, k.before),
+                             look->out, look->alloc, look->ctx))
+                    continue;
+                ok = false;
+                if (look->failed != NULL)
+                    f_props_add(look->failed, (garb_prop_t)p);
+                if (record)
+                    f_props_add(&m->anims[a].dropped, (garb_prop_t)p);
             }
         }
     return ok;
@@ -2226,7 +2139,7 @@ bool f_motion_style(const FMotion *m, double now, flow_style_t *out, FAlloc allo
                     FProps *failed, bool record)
 {
     Look look = {now, out, alloc, ctx, failed};
-    bool ok = motion_walk(m, &look, 1, record, NULL, NULL);
+    bool ok = motion_walk(m, &look, record, NULL, NULL);
     motion_settle(out);
     return ok;
 }
@@ -2258,87 +2171,13 @@ uint8_t f_motion_effects(const FMotion *m, double now)
 }
 
 // ── When a value next changes ───────────────────────────────────────────
-
-// Whether eased fraction `y` is past `level` as the value reads it: a
-// discrete value takes its end at one half and past it, visibility leaves
-// its start past 0 and takes its end at 1 (mix_prop).
-static bool past_level(double y, double level, bool strict)
-{
-    return strict ? y > level : y >= level;
-}
-
-// Every x in [0, 1] at which easing `e` — linear or a cubic, not steps —
-// takes y past `level` or back (past_level): at most three, in order, into
-// `xs`; how many. A cubic's y is a cubic in the curve's parameter, so it
-// is cut where it turns (its slope's roots), and each piece whose ends
-// read differently is halved to the last bit, where the reading changes
-// — asked of the y the value itself is worked from, so a crossing lands
-// where the value flips even where y rounds to the level across a
-// stretch of the curve (an inflection flat there). x rises with the
-// parameter (x1 and x2 are in [0, 1]), so the crossings come in order.
-// Each is the x the value flips past: the value solves its parameter as
-// the least t whose x reaches the input (cubic), so it reads as before a
-// crossing up to the x of the last parameter on that side, and after it
-// past that x — which is the one kept, not the x of the first parameter
-// beyond.
-static int32_t ease_crossings(const flow_easing_t *e, double level, bool strict, double xs[3])
-{
-    if (e == NULL || e->kind != FLOW_EASE_CUBIC) {
-        if (level <= 0 || level >= 1)
-            return 0;
-        xs[0] = level;
-        return 1;
-    }
-    // y's slope, qa t^2 + qb t + qc (the controls are held to the domain,
-    // values.h, so its coefficients and their squares are doubles).
-    const double *p = e->p;
-    double qc = 3 * p[1], lb = 3 * (p[3] - p[1]) - qc, qa = 3 * (1 - qc - lb), qb = 2 * lb;
-    double cut[4] = {0};
-    int32_t nc = 1;
-    // Its roots by the quadratic formula's stable form: qb and the
-    // discriminant's root added at one sign, never one taken from the
-    // other, give the larger root, and the roots' product the smaller — so
-    // a root beside a far larger one is not lost to cancellation
-    // (cubic-bezier(1/3, 1, 2/3, -1e6) turns at 5e-7, where the plain
-    // formula loses six of a double's digits), and a vanishing qa leaves
-    // the one root a line has.
-    double roots[2];
-    int32_t nr = 0;
-    double disc = qb * qb - 4 * qa * qc;
-    if (disc >= 0) {
-        double sq = sqrt(disc), q = -0.5 * (qb + (qb < 0 ? -sq : sq));
-        double r0 = qa != 0 ? q / qa : NAN, r1 = q != 0 ? qc / q : NAN;
-        roots[nr++] = fmin(r0, r1);
-        roots[nr++] = fmax(r0, r1);
-    }
-    for (int32_t i = 0; i < nr; i++)
-        if (roots[i] > 0 && roots[i] < 1)
-            cut[nc++] = roots[i];
-    cut[nc++] = 1;
-    bool past[4];
-    for (int32_t i = 0; i < nc; i++)
-        past[i] = past_level(bezier_y(p[1], p[3], cut[i]), level, strict);
-    int32_t n = 0;
-    for (int32_t i = 0; i + 1 < nc && n < 3; i++) {
-        if (past[i] == past[i + 1])
-            continue;
-        // Halved to the last bit, as the curve's own parameter is (cubic):
-        // a fixed count of halvings is a fixed size, however near an end
-        // the crossing.
-        double t0 = cut[i], t1 = cut[i + 1];
-        for (int k = 0; k < 1100; k++) {
-            double mid = t0 + (t1 - t0) / 2;
-            if (!(mid > t0 && mid < t1))
-                break;
-            if (past_level(bezier_y(p[1], p[3], mid), level, strict) == past[i])
-                t0 = mid;
-            else
-                t1 = mid;
-        }
-        xs[n++] = fmin(fmax(bezier(p[0], p[2], t0), 0), 1);
-    }
-    return n;
-}
+//
+// The middle ground (PILE3.md § Animations, both slices, Contracts): while
+// an animation that can show is in its active phase, what it shows moves
+// at the frame rate, unless an interval's two ends hold one value — then
+// it holds still, and is due at the interval's far end. Otherwise only the
+// phases' edges are worked out: the active phase's start and end, and the
+// current iteration's.
 
 // The earliest local time after `local` at which progress `p` of the
 // current iteration comes round, the iteration running as `k` says.
@@ -2375,118 +2214,24 @@ bool f_motion_in_place(const FMotion *m)
     return true;
 }
 
-// When a change at time `at` first shows, after `now`, `at` true to `tol`.
-// A value rising to a step or a level changes there; one falling through it
-// changes just past it (running backwards, the before flag is clear in the
-// active phase, Web Animations 1 § 4.7.7); and the clock's arithmetic may
-// put the change anywhere `tol` either side of `at`. So the first
-// millisecond that window touches is due — and while a layout stands
-// inside it, the next: never late, and early by at most the window. A
-// change at the instant the progress stands on — worked back from a
-// progress, so a hair either side of `now` — is due the millisecond after.
-// INFINITY for a change already shown.
-static double change_due(double at, double tol, double now)
+// When a change at time `at` first shows, after `now`: the millisecond it
+// falls in — or, for one at `now` itself, the next, since a value falling
+// through an edge (running backwards, the before flag is clear in the
+// active phase, Web Animations 1 § 4.7.7) changes just past it. INFINITY
+// for a change already shown. Inside the domain (values.h) the clock's
+// arithmetic places an edge on the millisecond its value changes in; the
+// fuzzer at the domain's edge is the referee.
+static double change_due(double at, double now)
 {
-    double first = ceil(at - tol), after = floor(at + tol) + 1;
-    return first > now ? first : after > now ? floor(now) + 1 : INFINITY;
-}
-
-// How far the clock's rounding can put a change from the time worked back
-// to it from a progress: a few ulps of the times it is worked in — the
-// time itself and how far into the animation it is — and, running
-// backwards, where the progress is one less a fraction and so true only to
-// a last bit of 1, of the duration too; never less than a millionth of a
-// millisecond. Run back over 1e20 ms, that last bit is some 11000 ms.
-static double clock_tol(double at, double base, double dur, bool forwards)
-{
-    return fmax(1e-6, 8 * DBL_EPSILON * (fabs(at) + fabs(at - base) + (forwards ? 0 : fabs(dur))));
+    double first = ceil(at), after = floor(at) + 1;
+    return first > now ? first : after > now ? after : INFINITY;
 }
 
 // When a change at progress `p` of the current iteration shows
 // (change_due).
 static double edge_due(const Clock *k, const flow_animation_t *a, double base, double p, double now)
 {
-    double at = base + at_progress(k, a, p);
-    return change_due(at, clock_tol(at, base, a->duration_ms, k->forwards), now);
-}
-
-// Lists for one look of a walk the schedule makes — its own, or one of the
-// probe's two — on the stack, each look its own. A list that moves
-// continuously is due already; one past the room is named, and is not
-// asked about by the probe, since the value it was left as may be an
-// earlier animation's that the tree does not show, and the value it
-// leaves under a later animation is not known (due_step).
-typedef struct {
-    _Alignas(16) unsigned char buf[4096];
-    size_t used;
-} ProbeLists;
-
-static void *probe_alloc(void *ctx, size_t bytes)
-{
-    ProbeLists *l = ctx;
-    size_t at = (l->used + 15) & ~(size_t)15;
-    if (at > sizeof(l->buf) || bytes > sizeof(l->buf) - at)
-        return NULL;
-    l->used = at + bytes;
-    return l->buf + at;
-}
-
-// The probe's two looks (changes_by): whether a value an implicit
-// keyframe rests on differs between them, and the properties either had
-// no room for.
-typedef struct {
-    bool moved;
-    const FProps *fa, *fb;
-} Under;
-
-// Whether the value under animation `a`'s implicit keyframe of `p` moves
-// between the probe's looks: what rests on it may show the change later,
-// though nothing shows it now (an implicit keyframe whose own animation
-// has not yet eased toward it).
-static bool under_step(void *ctx, int32_t a, garb_prop_t p, int32_t nlooks, const Clock *k, const Frame *s,
-                       const Frame *e)
-{
-    (void)a;
-    (void)nlooks;
-    (void)k;
-    Under *u = ctx;
-    const flow_style_t *u0 = s[0].implicit ? s[0].style : e[0].implicit ? e[0].style : NULL;
-    const flow_style_t *u1 = s[1].implicit ? s[1].style : e[1].implicit ? e[1].style : NULL;
-    if (u0 == NULL || u1 == NULL || f_props_has(u->fa, p) || f_props_has(u->fb, p) || same_value(p, u0, u1))
-        return true;
-    u->moved = true;
-    return false;
-}
-
-// Whether what `m` animates shows another value at `then` than at `now`,
-// asked of the value itself (motion_walk, the two looks in step): what
-// lies a hair past the instant the progress stands on — an end it leaves,
-// a step, a crossing — is placed there by no rounding. And whether a value
-// an implicit keyframe rests on moves, which the animation resting on it
-// may show later. A property either look had no room for is not asked
-// about (ProbeLists).
-static bool changes_by(const FMotion *m, double now, double then)
-{
-    ProbeLists la, lb;
-    la.used = lb.used = 0;
-    FProps fa, fb;
-    os64_memset(&fa, 0, sizeof(fa));
-    os64_memset(&fb, 0, sizeof(fb));
-    flow_style_t a = m->base, b = m->base;
-    Look looks[2] = {{now, &a, probe_alloc, &la, &fa}, {then, &b, probe_alloc, &lb, &fb}};
-    Under u = {false, &fa, &fb};
-    (void)motion_walk(m, looks, 2, false, under_step, &u);
-    if (u.moved)
-        return true;
-    motion_settle(&a);
-    motion_settle(&b);
-    for (int32_t i = 0; i < m->nanims; i++)
-        for (int p = 0; p < GARB_NPROPS; p++)
-            if (f_props_has(&m->anims[i].props, (garb_prop_t)p) && animatable((garb_prop_t)p) &&
-                !f_props_has(&fa, (garb_prop_t)p) && !f_props_has(&fb, (garb_prop_t)p) &&
-                !same_value((garb_prop_t)p, &a, &b))
-                return true;
-    return false;
+    return change_due(base + at_progress(k, a, p), now);
 }
 
 // Whether anything animation `a` does can show, `last` naming the
@@ -2507,97 +2252,54 @@ static bool anim_shows(const FAnimation *an, int32_t a, const int32_t last[GARB_
     return false;
 }
 
+// The schedule's walk makes no lists: one it would mix is left unknown.
+static void *no_lists(void *ctx, size_t bytes)
+{
+    (void)ctx;
+    (void)bytes;
+    return NULL;
+}
+
 // What the schedule's walk (f_motion_next) keeps: the element, the time,
 // when its value next changes, which animation shows each property
-// (`last`), and the properties whose lists the walk had no room for —
-// over which the value under a later animation is not known.
+// (`last`), the properties an animation in its active phase moves, and
+// those whose lists the walk had no room for (it makes none: a list is
+// left unknown) — over either, the value under a later animation is not
+// known to hold.
 typedef struct {
     const FMotion *m;
     double now, next;
     const int32_t *last;
-    FProps failed;
+    FProps moving, failed;
 } Due;
 
 // When what animation `a` shows of `p` next changes, the frames around its
-// progress `s` and `e` — an implicit one the value the animations before
-// it made, so that an animation resting on that value is still where it
-// is the animation's own other end, and moves where it differs.
-static bool due_step(void *ctx, int32_t a, garb_prop_t p, int32_t nlooks, const Clock *k, const Frame *s,
-                     const Frame *e)
+// progress `s` and `e`. One value at both ends holds still, whatever the
+// easing, and is due at the interval's far end; anything else, while its
+// animation runs, is due now. An implicit end rests on the value the
+// animations before made: where one of them moves it, or the walk could
+// not make it, the two ends are equal only at this instant, and the
+// interval moves.
+static bool due_step(void *ctx, int32_t a, garb_prop_t p, const Clock *k, const Frame *s, const Frame *e)
 {
-    (void)nlooks;
     Due *d = ctx;
     if (d->next <= d->now)
         return false;
     const FAnimation *an = &d->m->anims[a];
-    if (k->phase != PHASE_ACTIVE || an->record->paused || d->last[p] > a)
-        return true;
-    double now = d->now, base = an->record->start;
-    // A value underneath that the walk had no room to make is not known:
-    // the interval resting on it is taken to move.
-    bool unknown = (s->implicit || e->implicit) && f_props_has(&d->failed, p);
-    MixKind kind;
-    (void)mix_prop(p, s->style, e->style, 0.5, NULL, &kind, NULL, NULL);
-    const flow_easing_t *ease = s->easing;
-    bool stepped = ease != NULL && ease->kind == FLOW_EASE_STEPS;
-    // One value at both ends: nothing inside the interval changes, whatever
-    // its easing — only past its far end.
+    bool active = k->phase == PHASE_ACTIVE && !an->record->paused;
+    bool unknown = (s->implicit || e->implicit) &&
+                   (f_props_has(&d->moving, p) || f_props_has(&d->failed, p));
     bool still = !unknown && same_value(p, s->style, e->style);
-    if (kind == MIX_CONTINUOUS && !stepped && !still) {
-        d->next = d->now;   // moving continuously
+    if (active && !still)
+        f_props_add(&d->moving, p);
+    if (!active || d->last[p] > a)
+        return true;
+    if (!still) {
+        d->next = d->now;
         return false;
     }
-    // Only what lies ahead of the progress the way it runs: the interval's
-    // far end, and inside it the next of its steps' edges — worked out from
-    // where the progress is, never walked to (a page may ask for
-    // steps(2147483647)) — or a discrete value's crossings. What is behind
-    // it shows already, since the values are worked from the same progress;
-    // one the progress stands on may yet change just past it (change_due).
-    d->next = fmin(d->next, edge_due(k, &an->timing, base, k->forwards ? e->offset : s->offset, now));
-    if (still)
-        return true;
-    double span = e->offset - s->offset;
-    double here = span > 0 ? (k->progress - s->offset) / span : 0;
-    if (stepped && span > 0) {
-        double n = ease->steps, x = here * n;
-        // Running backwards the progress may stand on the interval's top,
-        // x = n, whose step falls just past it.
-        double j = k->forwards ? floor(x) + 1 : floor(x);
-        if (j >= 1 && j <= (k->forwards ? n - 1 : n))
-            d->next = fmin(d->next, edge_due(k, &an->timing, base, s->offset + span * j / n, now));
-    } else if (kind == MIX_DISCRETE) {
-        // A discrete value flips where the eased fraction crosses one half;
-        // visibility, when either end is visible, is visible between 0 and 1
-        // and the ends' own beyond them (Appendix A), so it changes where it
-        // crosses 0 if its start is not visible and 1 if its end is not —
-        // each time the easing does, overshoot and all, whichever way the
-        // iteration runs, each when it shows (change_due).
-        bool vis = p == GARB_VISIBILITY && (s->style->visibility == FLOW_VISIBLE ||
-                                            e->style->visibility == FLOW_VISIBLE);
-        double levels[2];
-        bool strict[2];
-        int nl = 0;
-        if (!vis) {
-            levels[nl] = 0.5;
-            strict[nl++] = false;
-        }
-        if (vis && s->style->visibility != FLOW_VISIBLE) {
-            levels[nl] = 0;
-            strict[nl++] = true;
-        }
-        if (vis && e->style->visibility != FLOW_VISIBLE) {
-            levels[nl] = 1;
-            strict[nl++] = false;
-        }
-        for (int l = 0; l < nl; l++) {
-            double xs[3];
-            int32_t nx = ease_crossings(ease, levels[l], strict[l], xs);
-            for (int32_t j = 0; j < nx; j++) {
-                if (k->forwards ? xs[j] >= here : xs[j] <= here)
-                    d->next = fmin(d->next, edge_due(k, &an->timing, base, s->offset + span * xs[j], now));
-            }
-        }
-    }
+    d->next = fmin(d->next, edge_due(k, &an->timing, an->record->start,
+                                     k->forwards ? e->offset : s->offset, d->now));
     return true;
 }
 
@@ -2640,30 +2342,24 @@ double f_motion_next(const FMotion *m, double now)
         double base = an->record->start;
         Clock k = clock_at(&an->timing, local_time(an->record, now));
         if (k.phase == PHASE_BEFORE) {
-            next = fmin(next, base + k.before_end);
+            next = fmin(next, change_due(base + k.before_end, now));
             continue;
         }
         if (k.phase == PHASE_AFTER)
             continue;
-        next = fmin(next, base + k.active_end);
+        next = fmin(next, change_due(base + k.active_end, now));
         double dur = an->timing.duration_ms;
         if (dur > 0 && isfinite(k.iteration_start))
-            next = fmin(next, base + k.iteration_start + dur);
+            next = fmin(next, change_due(base + k.iteration_start + dur, now));
     }
-    // And each one's intervals, walked as the value is, so that each sees
-    // the value the ones before it made.
+    // And what each shows in its active phase, walked as the value is, so
+    // that each sees the value the ones before it made.
     if (next > now) {
-        Due d = {m, now, next, last, {{0}}};
-        ProbeLists lists;
-        lists.used = 0;
+        Due d = {m, now, next, last, {{0}}, {{0}}};
         flow_style_t walked = m->base;
-        Look look = {now, &walked, probe_alloc, &lists, &d.failed};
-        (void)motion_walk(m, &look, 1, false, due_step, &d);
+        Look look = {now, &walked, no_lists, NULL, &d.failed};
+        (void)motion_walk(m, &look, false, due_step, &d);
         next = d.next;
     }
-    // And the millisecond after this one, asked of the value itself.
-    double then = floor(now) + 1;
-    if (next > then && changes_by(m, now, then))
-        next = then;
     return next;
 }

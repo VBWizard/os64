@@ -1727,49 +1727,31 @@ wherever their boxes are: the canvas may take either one's background
 and paint it over the whole view, and which one it takes is the
 painter's to know. Any other — a transform, a size, a
 position, a shadow's offset — may carry what it draws into view from
-anywhere, and is due wherever its element is. The time: the layout's own
-for a value that moves continuously, which leaves when the next frame is
-to the face — and a value the same at both ends of its interval does not
-move, however its keyframes are written, so only the interval's far end
-is due; nor does one that is not drawn moving: a property a later
-animation in effect replaces, whatever the earlier one does to it — an
-animation whose list for it found no room in the layout's budget
-replaces nothing and is due for nothing there, the tree showing the
-property as it was, and one whose interval rests on an implicit
-keyframe replaces nothing either: the value underneath shows through it,
-so the ones below are due for their own changes, and it is still only
-where that value is its own end — and a
-transform whose matrices cannot be undone, drawn as the first and then
-the second (`f_blend_matrix`), which flips at one half as a discrete
-value does; for one that changes at an instant — the next step's edge in
-`steps()`, worked out from where the progress is and never walked to; each
-crossing of a discrete value's level (one half, or for visibility 0 and
-1) by its easing, every one an overshooting curve makes; the interval's
-far end — the instant it shows, ahead of the progress the way it runs. A
-value rising to a step changes there, one falling through it (running
-backwards) just past it, and the clock's rounding may put either some
-way from the time worked back to it — a millionth of a millisecond, or a
-few last bits of the times the clock works in where those are wider (at
-the domain's longest, 1e12 ms, some five thousandths of one): so the
-first millisecond that window touches is due, and while a layout stands
-inside it the next — never late, and early by at most the window. The
-window's width is an estimate of that rounding (`clock_tol`), held by
-the fuzzing at a page's scales and at the domain's edge, not proven. A crossing is read as the value
-reads the eased fraction (one half and past it; visibility past 0, and
-at 1), at the x the value flips past: the last parameter on the near
-side of it, where the value's own solving lands. And
-because what lies a hair past the instant the progress stands on — an
-end it leaves, a step, a crossing nearer than rounding can place — is
-where no arithmetic of its own can be trusted to the bit, the next
-millisecond is asked of the value itself (the walk `f_motion_style` is
-built on, at now and the millisecond after, the two in step): any
-difference makes it due, and so does a change in a value an implicit
-keyframe rests on, which the animation resting on it may show later
-though nothing shows it now — but for a list past the look's own room,
-which is not asked about, since the value it is left as may be an
-earlier animation's that the tree does not show. Then the start of
-an active phase; an end — and
-never for one that is paused, finished and filling, or in place and out
+anywhere, and is due wherever its element is. The time (Chris, 10/14,
+the middle ground): while an animation that can show is in its active
+phase and what it shows moves, the layout's own, which leaves when the
+next frame is to the face — a step, a discrete flip, visibility and a
+transform whose matrices cannot be undone (drawn as the first and then
+the second, `f_blend_matrix`) among them, none worked out ahead. One
+value at both ends of an interval holds still, however its keyframes are
+written and whatever its easing, so only the interval's far end is due —
+unless an end is implicit and rests on a value an animation before it
+moves in its active phase, or one the schedule's walk could not make (it
+makes no lists), when the two ends are equal only at that instant and
+the interval moves. Two mixes of tails are one value when they are one
+by structure — the same fraction between the same tails — never by what
+they draw in some boxes, which no set of boxes decides. Nor is one due
+that is not drawn moving: a property a later animation in effect
+replaces, whatever the earlier one does to it — an animation whose list
+for it found no room in the layout's budget replaces nothing and is due
+for nothing there, the tree showing the property as it was, and one
+whose interval rests on an implicit keyframe replaces nothing either:
+the value underneath shows through it, so the ones below are due for
+their own changes. Then the start of an active phase, its end and the
+current iteration's, each due on the millisecond it falls in, or the
+next when it falls on the layout's own — inside the domain the clock's
+arithmetic puts an edge in the millisecond its value changes in, and the
+fuzzer at the domain's edge holds it to that. And never for one that is paused, finished and filling, or in place and out
 of view, nor for one of nothing that can show: no property it sets is
 drawn (animatable, its list not dropped) or has a side effect, or each
 one is replaced by a later animation in effect, which is due for its
@@ -1891,23 +1873,21 @@ Written before the code (the lesson of S7b's nineteen rounds):
   bit (halving, x never falling) — so a curve flat in x near an end is
   solved, never stopped at the first parameter whose x is near; near a
   vertical tangent a small step in x is still a large one in y; the
-  schedule finds a crossing by the same arithmetic — the curve cut where
-  it turns, at its slope's roots by the quadratic formula's stable form,
-  and each piece halved to the last bit — and places it at the x the
-  value flips past, not at a neighbour a double rounds to the curve's
-  end; the curve's ends are
-  its ends, y 0 at x 0 and 1 at x 1, however far its controls reach;
+  curve's ends are its ends, y 0 at x 0 and 1 at x 1, however far its
+  controls reach;
   outside [0, 1] the end tangents are exact; steps are exact, their before
   flag with them.
 - **The schedule is never late.** Every change the value makes shows on
   the millisecond it falls in: `flow_motion_due` names that millisecond
-  or one before it. Early is allowed — a layout for nothing at an instant
-  the arithmetic cannot place to the bit, and every layout a value it
-  cannot prove still asks for — late never. The value is the referee,
-  twice: the schedule asks it about the next millisecond rather than
-  mirror it there, and the proof asks `f_motion_style` at every
-  millisecond of thousands of animations made at random and holds
-  `f_motion_next` to each change.
+  or an earlier one. Early is allowed — every frame of an animation in
+  its active phase whose value moves, by design — late never. The value
+  is the referee: the proof asks `f_motion_style` at every millisecond of thousands of
+  animations made at random and holds `f_motion_next` to each change.
+- **A value holding still between two equal keyframes is not asked for**
+  (Chris, 10/14): an interval whose two ends hold one value is due only at
+  its far end, whatever its easing — a carousel's hold, a pause written
+  into the keyframes. Nothing else is held still ahead: a step, a flip, a
+  crossing all run at the frame rate.
 - **The input domain is clamped at the parser to what a page means, and
   past it a value is held at the limit** (Chris, 10/14). Each number is
   held once, where it is first read (`values.h`): a time to ±1e12 ms (31
@@ -1933,10 +1913,9 @@ Written before the code (the lesson of S7b's nineteen rounds):
   cannot decompose makes its pair discrete, each end exactly itself
   (Transforms 2 § 13's fallback, and Chrome's). The painter composes a
   list in long double, which holds the largest that 64 held functions can
-  make (THE NUMERIC CONTRACT, § Transforms). Past what a double resolves — a
-  crossing nearer an end than its precision, two turns closer than slerp
-  can divide — the answer is the nearest a double says, and the schedule
-  errs early.
+  make (THE NUMERIC CONTRACT, § Transforms). Past what a double resolves —
+  two turns closer than slerp can divide — the answer is the nearest a
+  double says.
 - **A value lands on its field's own grid once**: a length on 1/64 px
   (the layout's unit and Chrome's), a colour on 8 bits a channel from
   premultiplied doubles, `opacity` on a thousandth, an integer half up.
@@ -2013,7 +1992,8 @@ the perf slice.
 | The rest of Compat § 3.4.1's drawn rows (`-webkit-box-shadow`, `-webkit-border-radius` and the others) | not animation's | a page that writes only the prefixed name |
 | `linear()` easing (Easing 2) | no page in the census writes it | a page that does |
 | An animation that moves its element rests out of view | it may carry what it draws into view from anywhere, so S8a keeps it due wherever it is; a bound on where its frames can reach — a spinner turns inside its own circle — would let it rest | S8b, where such a tick is arithmetic and a repaint, or a page whose spinners out of view cost what the P5 notices |
-| The predictor: `f_motion_next` works each change out ahead — a curve's crossings, steps' edges, the clock's rounding windows, what an implicit keyframe rests on — and review found corner after corner of it, round after round | the cure is the simplification: lay out at the frame rate while anything that can show is in its active phase, and work out only the phases' edges — most of the schedule deleted. It trades a layout for nothing for less code, which the contracts (never late; a value that stands still not asked for) decide | Ruled (Chris, 10/14): the frame rate while anything that can show is active, the phases' edges, and one rule kept — an interval whose two ends are equal holds still, due at its end; "a value that stands still is not asked for" narrows to that. Its own PR, after the parser's clamps |
+| The wake through a seen stacked descendant (`flow_motion_due`) asks the ancestor's whole motion, its in-place properties that draw nothing in the descendant (`background-color`) among them (#265 round 13) | the cost is a layout for nothing, never one late | lane A's third PR: the wake asks only what an ancestor's animation can draw into the descendant — the inherited properties and the group effects such as opacity |
+| A `rotate3d()` axis of tiny parts turns about its direction, where Chrome 155 draws one of 1e-160 or 1e-200 as no turn (and turns at 1e-15) — likely its float storage of the axis; no test holds either answer (#270's full mutant run: `a-huge-axis-overflows`) | an input no page writes | a page that does, or a look at Chrome's threshold |
 | Finished-keyframe mixing: each keyframe is a whole computed style, the base with its declarations laid over it (`FKeyframe.style`), and an implicit keyframe the whole style underneath | the cure is the simplification: sparse keyframes, each only the longhands it sets, the rest read from underneath where they are mixed — less built per keyframe, and one meaning for an implicit keyframe. It touches the most semantics (`currentColor`, `em`, a width settled with its style) and wants its own Chrome probes | Ruled (Chris, 10/14): the last of the four, from a design note with Chrome's answers written before its code |
 
 ### Proof
@@ -2056,11 +2036,12 @@ budget with its last allocations failed in turn), a failed layout and
 one discarded unshown leaving the timeline shown as it was, one with no
 room to carry its records on failing, a tree laid out with no timeline
 keeping the page's, three thousand names matched;
-each due time, an inline element's later pieces, a curve whose controls
-are held at the domain's limit and one whose slope's roots lie 1e6
-apart, lists the
-budget or the probe had no room for — under another animation's and
-over it — a fuzzer case remade of transform lists, an animation resting on
+each due time — a step, a flip and visibility at the frame rate while
+they run, two equal ends held to their far end through any easing, resting
+on a moving value and on a still one, and two mixes of tails told apart by
+structure where every square box draws them alike — an inline element's
+later pieces, lists the budget had no room for — under another animation's
+and over it — a fuzzer case remade of transform lists, an animation resting on
 a moving one's value, and the canvas's background with its owner's box
 out of view among them, and values that stand still and animations of
 nothing that can show not asked for; implicit keyframes against
@@ -2085,7 +2066,7 @@ yonder's host harness, which hosts yonder.c with clocks it sets: S8a's
 deadlines — the cost limit, a frame's paint counted in its cost, the
 page's own cost before its first frame, the shares, the interval, a
 covered window, an
-animation out of view, a step's edge — the quiet layout, a failed one
+animation out of view, a stepped one in view due now — the quiet layout, a failed one
 being the last, an arriving page starting its animations and its costs
 afresh, a script's change starting one that runs on once its rebuild is
 published, nothing due while a rebuild is owed, an element removed, a

@@ -1016,9 +1016,9 @@ static void motion_cases(void) {
     probe_drop();
 
     /* What the view shows: an animation that only repaints where its
-     * element is waits out of view, and one in steps is due at its next
-     * edge; one that moves its element is due wherever it is, since a
-     * later frame may carry it into view. */
+     * element is waits out of view, and in view one in steps is due now,
+     * at the frame rate while it runs; one that moves its element is due
+     * wherever it is, since a later frame may carry it into view. */
     now_ms=1000;
     probe_page("<!doctype html><style>body{margin:0}@keyframes tint{to{color:red}}"
         "#near{height:10px;animation:tint 1s linear infinite}"
@@ -1026,7 +1026,7 @@ static void motion_cases(void) {
         "<div id=near>a</div><div id=far>b</div>",false);
     relayout(true);
     scroll_to(0,3000);
-    check(motion_next()==1250,"motion: in view, a stepped animation is due at its next step");
+    check(motion_next()==1000,"motion: in view, a stepped animation, while it runs, is due now");
     scroll_to(0,1000);
     check(motion_next()==YONDER_NEVER,"motion: an animation in place, out of view, is due for nothing");
     probe_drop();

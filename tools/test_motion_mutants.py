@@ -18,22 +18,15 @@ per-mutant logs are in --logs.
 
 Breaks are left out where nothing can tell them apart from the code: a
 measured layout handed the timeline of the page it copies (the pages a
-measured layout copies are never shown, and have none); a crossing whose
-x rounds to an end of its interval dropped, which the schedule's own look
-at the next millisecond places just as early; visibility's start read at
-0 inclusively, where only a curve's first point is 0 itself and that look
-places it too; and the probe's two looks given one set of lists between
-them, where a list the second has no room for is not asked about — no
-case is known of a list's change only the probe sees (300,000 fuzzed
-cases with the probe off miss nothing but visibility, which is no list).
-Inside the input domain (values.h) three more are left out: the turning
-roots worked by the plain quadratic formula, which at a y control of 1e6
-loses digits no due time can see; a crossing halved a fixed 64 times,
-which already places one within 1e-7 ms of an interval of 1e12; and
-rotation axes compared by their lengths, which an axis held to 1e15
-takes as unit3 does, by its largest part. And f_matrix_mix's door for a
+measured layout copies are never shown, and have none); rotation axes
+compared by their lengths, which an axis held to the domain (values.h)
+takes as unit3 does, by its largest part; and f_matrix_mix's door for a
 matrix holding a non-finite entry, which the decompositions' own guards
 refuse further in: the door is there so that no NaN comparison decides.
+The curve's power form, whose rounding at y controls of 1e6 is some 2e-10,
+below every grid a value lands on, is left out too: cubic() returns the
+curve's ends itself, and beside them the solved parameter's own last bit
+moves y as far.
 """
 import argparse
 import pathlib
@@ -183,11 +176,11 @@ mutants = [
      '    return round_i32(floor(v + 0.5));',
      '    return round_i32(floor(v));', LIBFLOW),
     ('a-discrete-value-flips-at-the-start', MOTION,
-     '        copy_prop(p, d, t < 0.5 ? a : b);',
-     '        copy_prop(p, d, t <= 0 ? a : b);', LIBFLOW),
+     '    copy_prop(p, d, t < 0.5 ? a : b);',
+     '    copy_prop(p, d, t <= 0 ? a : b);', LIBFLOW),
     ('visibility-flips-half-way', MOTION,
-     '            d->visibility = t <= 0 ? a->visibility : t >= 1 ? b->visibility : FLOW_VISIBLE;',
-     '            d->visibility = t < 0.5 ? a->visibility : b->visibility;', LIBFLOW),
+     '        d->visibility = t <= 0 ? a->visibility : t >= 1 ? b->visibility : FLOW_VISIBLE;',
+     '        d->visibility = t < 0.5 ? a->visibility : b->visibility;', LIBFLOW),
     ('shadow-lists-are-not-padded', MOTION,
      '    int32_t n = na > nb ? na : nb;\n    for (int32_t i = 0; i < n && i < na && i < nb; i++)\n        if (a[i].inset != b[i].inset)\n            return false;',
      '    int32_t n = na > nb ? na : nb;\n    if (na != nb)\n        return false;\n    for (int32_t i = 0; i < n && i < na && i < nb; i++)\n        if (a[i].inset != b[i].inset)\n            return false;', LIBFLOW),
@@ -208,26 +201,12 @@ mutants = [
      '    if (lists.no_memory)\n        return false;',
      '', LIBFLOW),
     # libflow: when the page next changes.
-    ('a-step-edge-is-not-due', MOTION,
-     '        if (j >= 1 && j <= (k->forwards ? n - 1 : n))\n            d->next = fmin(d->next, edge_due(k, &an->timing, base, s->offset + span * j / n, now));',
-     '        (void)j;', LIBFLOW),
-    ('a-reversed-top-step-is-not-due', MOTION,
-     '        if (j >= 1 && j <= (k->forwards ? n - 1 : n))',
-     '        if (j >= 1 && j <= n - 1)', LIBFLOW),
-    ('a-crossing-is-not-due', MOTION,
-     '                if (k->forwards ? xs[j] >= here : xs[j] <= here)\n'
-     '                    d->next = fmin(d->next, edge_due(k, &an->timing, base, s->offset + span * xs[j], now));',
-     '                (void)xs;', LIBFLOW),
     ('a-change-shows-only-the-millisecond-after', MOTION,
-     '    return first > now ? first : after > now ? floor(now) + 1 : INFINITY;',
-     '    return first > now ? floor(at + tol) + 1 : after > now ? floor(now) + 1 : INFINITY;', LIBFLOW),
+     '    return first > now ? first : after > now ? after : INFINITY;',
+     '    return first > now ? after : after > now ? after : INFINITY;', LIBFLOW),
     ('a-change-never-falls-past-its-millisecond', MOTION,
-     '    return first > now ? first : after > now ? floor(now) + 1 : INFINITY;',
+     '    return first > now ? first : after > now ? after : INFINITY;',
      '    (void)after;\n    return first > now ? first : INFINITY;', LIBFLOW),
-    ('an-edge-behind-is-due', MOTION,
-     '    d->next = fmin(d->next, edge_due(k, &an->timing, base, k->forwards ? e->offset : s->offset, now));\n    if (still)',
-     '    d->next = fmin(d->next, edge_due(k, &an->timing, base, s->offset, now));\n'
-     '    d->next = fmin(d->next, edge_due(k, &an->timing, base, e->offset, now));\n    if (still)', LIBFLOW),
     ('a-mix-cancels-at-a-huge-fraction', MOTION,
      '    if (t == 1)\n        return b;\n    return a + (b - a) * t;',
      '    return (1 - t) * a + t * b;', LIBFLOW),
@@ -246,9 +225,6 @@ mutants = [
     ('a-box-drawn-outside-is-not-seen', FLOW,
      '    for (int32_t i = 0; i < tree->nstacked && next > now; i++) {',
      '    for (int32_t i = 0; false && i < tree->nstacked && next > now; i++) {', LIBFLOW),
-    ('a-step-edge-is-skipped', MOTION,
-     '        double j = k->forwards ? floor(x) + 1 : floor(x);',
-     '        double j = k->forwards ? floor(x) + 2 : floor(x);', LIBFLOW),
     ('an-animation-that-moves-waits-out-of-view', FLOW,
      '            (st->motion->in_place && !may_own_canvas(tree, n) && !motion_seen(tree, n, view, scroll)))',
      '            (!may_own_canvas(tree, n) && !motion_seen(tree, n, view, scroll)))', LIBFLOW),
@@ -268,14 +244,8 @@ mutants = [
      '            for (int side = 0; side < 4; side++)\n                k.s.border_width[side] =\n'
      '                    own_width(c, &k, st, (garb_style_t){kf[j].sets, NULL, NULL, kf[j].nsets}, side);',
      '', LIBFLOW),
-    ('only-the-first-crossing-is-found', MOTION,
-     '    for (int32_t i = 0; i + 1 < nc && n < 3; i++) {',
-     '    for (int32_t i = 0; i + 1 < nc && n < 1; i++) {', LIBFLOW),
-    ('visibility-crosses-at-one-half', MOTION,
-     '        for (int l = 0; l < nl; l++) {',
-     '        for (int l = 0; l < (vis ? 0 : nl); l++) {', LIBFLOW),
     ('z-index-from-auto-stays-auto', MOTION,
-     '            d->has_z_index = true;\n',
+     '        d->has_z_index = true;\n',
      '', LIBFLOW),
     ('an-overshooting-integer-is-cast-unheld', MOTION,
      '    return round_i32(floor(v + 0.5));',
@@ -287,7 +257,7 @@ mutants = [
      '    while (v != NULL && v->kind == GARB_V_WIDE && os64_streq(v->keyword, "inherit")) {',
      '    while (false && v != NULL && v->kind == GARB_V_WIDE && os64_streq(v->keyword, "inherit")) {', LIBFLOW),
     ('a-delayed-start-is-not-due', MOTION,
-     '            next = fmin(next, base + k.before_end);\n            continue;',
+     '            next = fmin(next, change_due(base + k.before_end, now));\n            continue;',
      '            continue;', LIBFLOW),
     ('a-paused-animation-is-due', MOTION,
      '        if (an->record == NULL || an->record->paused || !anim_shows(an, a, last))\n            continue;\n'
@@ -408,10 +378,9 @@ mutants = [
      '    if (na != nb)\n        return false;\n    for (int32_t i = 0; i < na; i++)\n        if (a[i].x != b[i].x',
      '    if (na != nb || a != b)\n        return false;\n    for (int32_t i = 0; i < na; i++)\n        if (a[i].x != b[i].x', LIBFLOW),
     ('a-still-interval-skips-its-far-end', MOTION,
-     '    d->next = fmin(d->next, edge_due(k, &an->timing, base, k->forwards ? e->offset : s->offset, now));\n'
-     '    if (still)\n        return true;',
-     '    if (still)\n        return true;\n'
-     '    d->next = fmin(d->next, edge_due(k, &an->timing, base, k->forwards ? e->offset : s->offset, now));', LIBFLOW),
+     '    d->next = fmin(d->next, edge_due(k, &an->timing, an->record->start,\n'
+     '                                     k->forwards ? e->offset : s->offset, d->now));\n',
+     '    (void)edge_due;\n', LIBFLOW),
     ('near-quaternions-are-the-start', MOTION,
      '    if (s < 1e-5) {\n        double len = 0;',
      '    if (s < 1e-5) {\n        os64_memcpy(out, a, 4 * sizeof(double));\n        return;\n        double len = 0;', LIBFLOW),
@@ -461,25 +430,7 @@ mutants = [
     ('a-current-colour-is-resolved', MOTION,
      '    if (a->current_colours & b->current_colours & bit)\n        d->current_colours |= bit;',
      '    (void)a;\n    (void)b;\n    if (false)\n        d->current_colours |= bit;', LIBFLOW),
-    # libflow: what the schedule against the value found, and a side's
-    # own width.
-    ('the-curve-is-cubed-by-powers', MOTION,
-     '    double u = 1 - t, v = t;\n'
-     '    return 3 * u * u * v * p1 + 3 * u * v * v * p2 + v * v * v;',
-     '    double c = 3 * p1, b = 3 * (p2 - p1) - c, a = 1 - c - b;\n'
-     '    return ((a * t + b) * t + c) * t;', LIBFLOW),
-    ('a-change-at-now-is-shown', MOTION,
-     '    double first = ceil(at - tol), after = floor(at + tol) + 1;',
-     '    double first = ceil(at - tol), after = floor(at) + 1;', LIBFLOW),
-    ('visibility-reads-both-levels', MOTION,
-     '        if (vis && s->style->visibility != FLOW_VISIBLE) {',
-     '        if (vis) {', LIBFLOW),
-    ('a-crossing-is-read-from-the-curve', MOTION,
-     '            if (past_level(bezier_y(p[1], p[3], mid), level, strict) == past[i])',
-     '            if ((bezier_y(p[1], p[3], mid) > level) == past[i])', LIBFLOW),
-    ('the-next-millisecond-is-not-asked', MOTION,
-     '    if (next > then && changes_by(m, now, then))',
-     '    if (false && changes_by(m, now, then))', LIBFLOW),
+    # libflow: a side's own width.
     ('a-side-with-no-width-has-none', STYLE,
      '        return sp->border_px[side];\n    return css(c, 3);',
      '        return sp->border_px[side];\n    return css(c, 3) * 0;', LIBFLOW),
@@ -517,17 +468,38 @@ mutants = [
     # libflow: what is drawn moving, a 3D determinant past a double, an
     # axis of no length.
     ('a-replaced-value-is-moving', MOTION,
-     '    if (k->phase != PHASE_ACTIVE || an->record->paused || d->last[p] > a)',
-     '    if (k->phase != PHASE_ACTIVE || an->record->paused)', LIBFLOW),
+     '    if (!active || d->last[p] > a)\n        return true;',
+     '    if (!active)\n        return true;', LIBFLOW),
     ('the-last-animation-is-the-first', MOTION,
      '            if (last[p] >= 0 || !f_props_has(&an->props, (garb_prop_t)p) ||',
      '            if (!f_props_has(&an->props, (garb_prop_t)p) ||', LIBFLOW),
     ('an-ended-animation-still-replaces', MOTION,
      '        if (!k.in_effect)\n            continue;\n        for (int p = 0; p < GARB_NPROPS; p++) {\n            if (last[p] >= 0',
      '        (void)k.in_effect;\n        for (int p = 0; p < GARB_NPROPS; p++) {\n            if (last[p] >= 0', LIBFLOW),
-    ('a-flat-transform-is-moving', MOTION,
-     '    return flips ? MIX_DISCRETE : MIX_CONTINUOUS;',
-     '    (void)flips;\n    return MIX_CONTINUOUS;', LIBFLOW),
+    # The middle ground (A2): the frame rate while an animation runs, two
+    # equal ends held still to their far end, and what rests on a moving
+    # or unmade value moving with it.
+    ('equal-ends-do-not-hold', MOTION,
+     '    bool still = !unknown && same_value(p, s->style, e->style);',
+     '    bool still = !unknown && false && same_value(p, s->style, e->style);', LIBFLOW),
+    ('a-moving-value-underneath-holds', MOTION,
+     '                   (f_props_has(&d->moving, p) || f_props_has(&d->failed, p));',
+     '                   ((false && f_props_has(&d->moving, p)) || f_props_has(&d->failed, p));', LIBFLOW),
+    ('an-unmade-value-underneath-holds', MOTION,
+     '                   (f_props_has(&d->moving, p) || f_props_has(&d->failed, p));',
+     '                   (f_props_has(&d->moving, p) || (false && f_props_has(&d->failed, p)));', LIBFLOW),
+    ('a-held-animation-moves-what-rests-on-it', MOTION,
+     '    if (active && !still)\n        f_props_add(&d->moving, p);',
+     '    if (active)\n        f_props_add(&d->moving, p);', LIBFLOW),
+    ('a-paused-animation-runs', MOTION,
+     '    bool active = k->phase == PHASE_ACTIVE && !an->record->paused;',
+     '    bool active = k->phase == PHASE_ACTIVE;', LIBFLOW),
+    ('blends-of-two-fractions-are-one', MOTION,
+     '    if (x->t != y->t || x->nfrom != y->nfrom || x->nto != y->nto)',
+     '    if (x->nfrom != y->nfrom || x->nto != y->nto)', LIBFLOW),
+    ('blends-compare-their-fractions-alone', MOTION,
+     '    for (int32_t i = 0; i < x->nfrom; i++)\n        if (!function_same(&x->from[i], &y->from[i]))\n            return false;',
+     '', LIBFLOW),
     ('a-blend-is-never-the-same', MOTION,
      '        return a->fn == b->fn && a->blend != NULL && b->blend != NULL && blend_same(a, b);',
      '        return false && blend_same(a, b);', LIBFLOW),
@@ -565,9 +537,6 @@ mutants = [
      '            if (last[p] >= 0 || !f_props_has(&an->props, (garb_prop_t)p) ||\n'
      '                f_props_has(&an->dropped, (garb_prop_t)p))',
      '            if (last[p] >= 0 || !f_props_has(&an->props, (garb_prop_t)p))', LIBFLOW),
-    ('the-probe-asks-what-it-could-not-mix', MOTION,
-     '                !f_props_has(&fa, (garb_prop_t)p) && !f_props_has(&fb, (garb_prop_t)p) &&\n',
-     '', LIBFLOW),
     # The input domain (values.h): one break for each clamp.
     ('a-time-is-not-held', VALUES,
      '    out->number = garb_hold(t->number, out->unit == GARB_U_S ? GARB_TIME_MS_MAX / 1000\n'
@@ -682,31 +651,14 @@ mutants = [
     # Round 11: the value underneath, a curve's turns and crossings to the
     # last bit, and a skew's unit.
     ('an-implicit-frame-is-the-base', MOTION,
-     '                        interval(an, &under[i], (garb_prop_t)p, k[i].progress, &s[i], &e[i]);',
-     '                        (void)under, interval(an, &m->base, (garb_prop_t)p, k[i].progress, &s[i], &e[i]);',
-     LIBFLOW),
+     '                interval(an, &under, (garb_prop_t)p, k.progress, &s, &e);',
+     '                (void)under;\n                interval(an, &m->base, (garb_prop_t)p, k.progress, &s, &e);', LIBFLOW),
     ('an-implicit-interval-replaces', MOTION,
      '            if (!s.implicit && !e.implicit)\n                last[p] = a;',
      '            last[p] = a;', LIBFLOW),
     ('an-unknown-underlying-is-still', MOTION,
      '    bool still = !unknown && same_value(p, s->style, e->style);',
      '    bool still = same_value(p, s->style, e->style);\n    (void)unknown;', LIBFLOW),
-    ('the-probe-ignores-the-value-underneath', MOTION,
-     '    u->moved = true;\n    return false;',
-     '    (void)u;\n    return true;', LIBFLOW),
-    ('the-clock-tolerance-is-fixed', MOTION,
-     '    return fmax(1e-6, 8 * DBL_EPSILON * (fabs(at) + fabs(at - base) + (forwards ? 0 : fabs(dur))));',
-     '    (void)at;\n    (void)base;\n    (void)dur;\n    (void)forwards;\n    return 1e-6;', LIBFLOW),
-    ('a-backward-run-is-charged-forwards', MOTION,
-     '    return fmax(1e-6, 8 * DBL_EPSILON * (fabs(at) + fabs(at - base) + (forwards ? 0 : fabs(dur))));',
-     '    return fmax(1e-6, 8 * DBL_EPSILON * (fabs(at) + fabs(at - base) + (forwards || true ? 0 : fabs(dur))));',
-     LIBFLOW),
-    ('the-window-waits-for-its-end', MOTION,
-     '    return first > now ? first : after > now ? floor(now) + 1 : INFINITY;',
-     '    return first > now ? first : after > now ? after : INFINITY;', LIBFLOW),
-    ('a-crossing-is-placed-past-it', MOTION,
-     '        xs[n++] = fmin(fmax(bezier(p[0], p[2], t0), 0), 1);',
-     '        xs[n++] = fmin(fmax(bezier(p[0], p[2], t1), 0), 1);', LIBFLOW),
     # Round 12: a blend under a blend; and the timeline built and swapped —
     # a layout discarded unshown, a tree shown, a staged one published.
     ('a-nested-blend-is-its-placeholder', FLOW,

@@ -1017,11 +1017,12 @@ void flow_timeline_commit(flow_timeline_t **shown, flow_tree_t *tree);
 // box, or, for one that makes none (`display: contents`), its
 // descendants', or any box in it drawn outside it (positioned, fixed,
 // moved by a transform) — and any other, which may carry what it draws
-// into view from anywhere, wherever its element is: that time
-// itself for one moving continuously, which leaves when the next frame is
-// to the face; the next step's edge, the next discrete change, the start
-// of an active phase or an end; FLOW_NEVER for none. A time already gone
-// is due at once.
+// into view from anywhere, wherever its element is: that time itself for
+// one in its active phase whose value moves — a step or a discrete flip
+// among them — which leaves when the next frame is to the face; the far
+// end of an interval whose two ends hold one value; the start of an
+// active phase or an end; FLOW_NEVER for none. A time already gone is due
+// at once.
 uint64_t flow_motion_due(const flow_tree_t *tree, os64_gui_rect_t view, flow_point_t scroll);
 
 // The root box: the html element's. NULL for a page with nothing to lay out.
