@@ -1005,7 +1005,7 @@ static void motion_cases(void) {
     bool said=motion_pause_said();
     char record[2048];
     yonder_diag_render(g.page.diag,record,sizeof(record));
-    check(said && strstr(g.status_text," - ANIMATIONS PAUSED: a frame took 231 ms, over 200")!=NULL &&
+    check(said && strstr(g.status_text,"ANIMATIONS PAUSED: a frame took 231 ms, over 200")!=NULL &&
           strstr(record,"animations: paused: a frame took 231 ms, over 200")!=NULL,
         "motion: the frame that stops the animations is said, on the standing line and in the record, "
         "and the line is to be painted again");
@@ -1023,7 +1023,7 @@ static void motion_cases(void) {
     g.page.diag=yonder_diag_new("http://m.test/",2,0);
     say_laid_out(MOTION_COST_MS+1);
     check(motion_next()==YONDER_NEVER,"motion: a page whose own layout was too slow lays out for no animation");
-    check(strstr(g.status_text," - ANIMATIONS PAUSED: the layout took 201 ms, over 200")!=NULL,
+    check(strstr(g.status_text,"ANIMATIONS PAUSED: the layout took 201 ms, over 200")!=NULL,
         "motion: before its first frame, the page's own layout is what is said to cost too much");
     say_laid_out(MOTION_COST_MS);
     check(motion_next()==1000,"motion: one at the limit still does");
@@ -1061,11 +1061,11 @@ static void motion_cases(void) {
         "<div id=far>b</div>",false);
     relayout(true);
     say_laid_out(MOTION_COST_MS+1);
-    check(strstr(g.status_text," - ANIMATIONS PAUSED: the layout took 201 ms, over 200")!=NULL,
+    check(strstr(g.status_text,"ANIMATIONS PAUSED: the layout took 201 ms, over 200")!=NULL,
         "motion: an animation out of view is paused by what the page costs");
     scroll_to(0,3000);
     check(!motion_pause_said() &&
-          strstr(g.status_text," - ANIMATIONS PAUSED: the layout took 201 ms, over 200")!=NULL,
+          strstr(g.status_text,"ANIMATIONS PAUSED: the layout took 201 ms, over 200")!=NULL,
         "motion: scrolling it into view says the same, and nothing is said again");
     /* An address as long as an address may be leaves the notices whole. */
     char *was=strdup(g.page.way.url);
@@ -1074,9 +1074,14 @@ static void motion_cases(void) {
     g.scripts_on=true;
     say_laid_out(MOTION_COST_MS+1);
     size_t len=strlen(g.status_text);
-    check(len>=strlen("over 200") && strcmp(g.status_text+len-strlen("over 200"),"over 200")==0 &&
-          strncmp(g.status_text,"SCRIPTS ON | aaa",16)==0,
-        "motion: a long address gives way to the notices after it");
+    const char *modes="SCRIPTS ON | ANIMATIONS PAUSED: the layout took 201 ms, over 200 | aaa";
+    check(len>=strlen("in 201 ms") && strcmp(g.status_text+len-strlen("in 201 ms"),"in 201 ms")==0 &&
+          strncmp(g.status_text,modes,strlen(modes))==0,
+        "motion: a long address gives way to the modes before it and the notices after it");
+    status_rest("Page says: hello");
+    check(strcmp(g.status_text,"SCRIPTS ON | ANIMATIONS PAUSED: the layout took 201 ms, over 200 | "
+                 "Page says: hello")==0,
+        "motion: a message in the status row keeps the pause said before it");
     g.scripts_on=false;
     os64_strcopy(g.page.way.url,sizeof(g.page.way.url),was);
     free(was);
@@ -1101,7 +1106,7 @@ static void motion_cases(void) {
         "motion: a slow page with nothing to move has nothing paused");
     script_turn(); script_turn();
     check(motion_pause_said() &&
-          strstr(g.status_text," - ANIMATIONS PAUSED: the layout took 201 ms, over 200")!=NULL,
+          strstr(g.status_text,"ANIMATIONS PAUSED: the layout took 201 ms, over 200")!=NULL,
         "motion: an animation a script starts on a slow page is said to be paused");
     probe_drop();
 

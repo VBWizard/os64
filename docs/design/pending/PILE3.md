@@ -1784,16 +1784,19 @@ thread busy all the time):
   page's last too: nothing measures a cheaper one after it, so its
   animations stay still until the page is left. A page the cost rule
   stops is SAID, for a page whose animations stopped looks like a page
-  with none: its standing line ends `ANIMATIONS PAUSED: a frame took
-  240 ms, over 200` (before a first frame, `the layout took`), and its
-  record carries `animations: paused: …`. It is the page's state at its
-  tree's time, in view or not, and only for an animation with a change
-  still to show (`flow_motion_pending`: not one paused, over, or of
-  nothing that can show). The window loop asks before each paint and
+  with none. It is a MODE of the status row, as `SCRIPTS ON` is, said
+  before every message the row shows — `ANIMATIONS PAUSED: a frame took
+  240 ms, over 200 | ` (before a first frame, `the layout took`) — so no
+  message, an alert or a link under the pointer, hides it; and the
+  page's record carries `animations: paused: …`. It is the page's state
+  at its tree's time, in view or not, and only for an animation with a
+  change still to show (`flow_motion_pending`: not one paused, over, or
+  of nothing that can show). The window loop asks before each paint and
   after a frame's paint ends, so whatever changes it — a frame, a
   layout, a script's rebuild, the settings — is said once, and painted.
-  The notices come first on the standing line, the address in what they
-  leave, so a long address never cuts one off. The record follows the
+  The standing line's own notices come before the address, which takes
+  what they and the modes leave, so a long address never cuts one off.
+  The record follows the
   pause out: `off` when animations are turned off, `none` when none has
   a change left to show, and `running` when a layout before the page's
   first frame came in under the limit. A page with nothing to show,
