@@ -1617,38 +1617,17 @@ static bool length_same(flow_length_t a, flow_length_t b)
     return a.kind == b.kind && a.value == b.value && a.offset == b.offset;
 }
 
-static bool function_same(const flow_transform_t *a, const flow_transform_t *b);
-
-// Whether two mixes of tails (FLOW_FN_BLEND) are one: the same fraction
-// between the same two tails, function by function, a blend in a tail
-// compared the same way (a nest no deeper than F_BLEND_DEPTH_MAX). By what
-// they are, never by sampling what they draw: a percentage that follows
-// the width at one end and the height at the other agrees in every square
-// box, and with perspective() a matrix does not follow the box linearly,
-// so no set of boxes is complete. Two equal mixes this calls different
-// cost a layout for nothing; the reverse would miss one.
-static bool blend_same(const flow_transform_t *a, const flow_transform_t *b)
-{
-    const flow_transform_blend_t *x = a->blend, *y = b->blend;
-    if (x->t != y->t || x->nfrom != y->nfrom || x->nto != y->nto)
-        return false;
-    for (int32_t i = 0; i < x->nfrom; i++)
-        if (!function_same(&x->from[i], &y->from[i]))
-            return false;
-    for (int32_t i = 0; i < x->nto; i++)
-        if (!function_same(&x->to[i], &y->to[i]))
-            return false;
-    return true;
-}
-
-// Two transform functions with one value; two mixes of tails, the same
-// mix (blend_same).
+// Two transform functions with one value. Two mixes of tails
+// (FLOW_FN_BLEND) are one only as one mix: a keyframe's declarations never
+// hold one, so the mixes an interval's two ends can hold are the value
+// underneath on both sides, the same mix; any other two are called
+// different, which costs a layout for nothing at the worst.
 static bool function_same(const flow_transform_t *a, const flow_transform_t *b)
 {
     if (a == NULL || b == NULL)
         return a == b;
     if (a->fn == FLOW_FN_BLEND || b->fn == FLOW_FN_BLEND)
-        return a->fn == b->fn && a->blend != NULL && b->blend != NULL && blend_same(a, b);
+        return a->blend != NULL && a->blend == b->blend;
     if (a->fn != b->fn || a->three_d != b->three_d || a->unit != b->unit || a->blend != NULL ||
         b->blend != NULL || !length_same(a->x, b->x) || !length_same(a->y, b->y))
         return false;

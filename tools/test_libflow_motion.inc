@@ -983,6 +983,21 @@ static void motion_cascade_cases(void)
     expect("motion: rotation axes past the domain compared as units", same, NULL);
     moving_close(&m);
 
+    // And two axes too small to square (the domain bounds how large a
+    // number is, never how small): taken by their largest part, they are
+    // the same units, where squared whole they would underflow to no axis.
+    moving_open(&m, MOTION_STYLE
+        "@keyframes tiny{from{transform:rotate3d(1e-200,0,0,90deg)}to{transform:rotate3d(0,1e-200,0,90deg)}}"
+        "@keyframes small{from{transform:rotate3d(1,0,0,90deg)}to{transform:rotate3d(0,1,0,90deg)}}"
+        "</style><div id=tiny style='animation-name:tiny;" AT("0.5") "'></div>"
+        "<div id=small style='animation-name:small;" AT("0.5") "'></div>", 1000);
+    both = moving_matrix(&m, "small", want) && moving_matrix(&m, "tiny", got);
+    same = both;
+    for (int i = 0; both && i < 16; i++)
+        same &= fabs(want[i] - got[i]) < 1e-9;
+    expect("motion: rotation axes too small to square compared as units", same, NULL);
+    moving_close(&m);
+
     // A matrix past the domain mixes as the one at its limit, and that one
     // as the same matrix written small, scaled by 1e15. Two angles in two
     // units mix in degrees (f_angle_common), and Chrome 155 agrees to its
@@ -2868,6 +2883,11 @@ static void motion_dropped_cases(void)
     double moving = layout_next(&m, 100, by);
     f_props_add(&an.dropped, GARB_OPACITY);
     double dropped = layout_next(&m, 100, by);
+    // What an animation dropped is left as it was at every time asked
+    // after (f_motion_style), not mixed again where there may be room.
+    flow_style_t held = m.base;
+    (void)f_motion_style(&m, 500, &held, lists_alloc, hand_resolved, (void *)by, NULL, false);
+    expect_i64("motion: a dropped value is left as it was at a later time", held.opacity, 1000);
     char detail[64];
     snprintf(detail, sizeof(detail), "moving %g, dropped %g", moving, dropped);
     expect("motion: a dropped value is due for nothing", ok && moving == 100 && dropped == 1000, detail);

@@ -26,7 +26,12 @@ refuse further in: the door is there so that no NaN comparison decides.
 The curve's power form, whose rounding at y controls of 1e6 is some 2e-10,
 below every grid a value lands on, is left out too: cubic() returns the
 curve's ends itself, and beside them the solved parameter's own last bit
-moves y as far.
+moves y as far. Two mixes of tails compared field by field are left out:
+the only mixes an interval's two ends can hold are the value underneath on
+both sides, one mix, so the schedule asks whether they are the same mix.
+And a shadow in currentColor mixed in its ends' colour rather than the
+colour every animation made is the same mix: each end is resolved against
+that colour already.
 """
 import argparse
 import pathlib
@@ -562,15 +567,6 @@ mutants = [
     ('a-paused-animation-runs', MOTION,
      '        if (an->record == NULL || an->record->paused)\n            continue;\n        Clock k = clock_at(&an->timing, local_time(an->record, now));\n        if (k.phase != PHASE_ACTIVE)',
      '        if (an->record == NULL)\n            continue;\n        Clock k = clock_at(&an->timing, local_time(an->record, now));\n        if (k.phase != PHASE_ACTIVE)', LIBFLOW),
-    ('blends-of-two-fractions-are-one', MOTION,
-     '    if (x->t != y->t || x->nfrom != y->nfrom || x->nto != y->nto)',
-     '    if (x->nfrom != y->nfrom || x->nto != y->nto)', LIBFLOW),
-    ('blends-compare-their-fractions-alone', MOTION,
-     '    for (int32_t i = 0; i < x->nfrom; i++)\n        if (!function_same(&x->from[i], &y->from[i]))\n            return false;',
-     '', LIBFLOW),
-    ('a-blend-is-never-the-same', MOTION,
-     '        return a->fn == b->fn && a->blend != NULL && b->blend != NULL && blend_same(a, b);',
-     '        return false && blend_same(a, b);', LIBFLOW),
     ('a-3d-determinant-past-a-double-is-refused', MOTION,
      '    double dp = det4(pm);\n    if (!isfinite(dp)) {',
      '    double dp = det4(pm);\n    if (!isfinite(dp))\n        return false;\n    if (!isfinite(dp)) {', LIBFLOW),
@@ -619,9 +615,6 @@ mutants = [
     ('an-earlier-layout-holds-stand', MOTION,
      '    for (int32_t a = 0; record && a < m->nanims; a++)\n        os64_memset(&m->anims[a].holds, 0, sizeof(m->anims[a].holds));\n',
      '', LIBFLOW),
-    ('a-shadow-mixes-the-keyframe-colour', MOTION,
-     '        if (!mix_shadows(sa, na, sb, nb, d->color, d->color, t, &list, &n, alloc, ctx))',
-     '        if (!mix_shadows(sa, na, sb, nb, a->color, b->color, t, &list, &n, alloc, ctx))', LIBFLOW),
     ('ink-is-not-seen', FLOW,
      '        rect_from((int64_t)o.x - b->ink[FLOW_LEFT], (int64_t)o.y - b->ink[FLOW_TOP],\n'
      '                  (int64_t)o.x + o.w + b->ink[FLOW_RIGHT], (int64_t)o.y + o.h + b->ink[FLOW_BOTTOM]);',
