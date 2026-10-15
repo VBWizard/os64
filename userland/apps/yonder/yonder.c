@@ -3388,12 +3388,15 @@ static uint64_t motion_cost_us(void)
 // — before its first, its own layout — took more than MOTION_COST_MS. It
 // is the page's state at its tree's time, not the view's: scrolling
 // changes nothing about it. A frame that failed is said where it failed
-// (say_failed), and a page with nothing to show has nothing paused.
+// (say_failed), and a page with nothing to show has nothing paused. A
+// frame whose paint is still to come is not judged until it is whole
+// (motion_painted): its cost so far is its layout's alone.
 static bool motion_paused_why(char *out, size_t cap)
 {
     out[0] = '\0';
     uint64_t cost_us = motion_cost_us();
-    if (!s_animations || cost_us == UINT64_MAX || cost_us <= (uint64_t)MOTION_COST_MS * 1000 ||
+    if (!s_animations || g.motion_painting || cost_us == UINT64_MAX ||
+        cost_us <= (uint64_t)MOTION_COST_MS * 1000 ||
         !flow_motion_pending(g.page.tree))
         return false;
     os64_snprintf(out, cap, "%s took %lu ms, over %d", g.motion_laid ? "a frame" : "the layout",

@@ -997,14 +997,16 @@ static void motion_cases(void) {
     motion_tick();
     check(g.motion_began==800 && motion_next()==YONDER_NEVER,
         "motion: a page whose frame for an animation took more than MOTION_COST_MS lays out for none");
-    check(strstr(g.status_text,"ANIMATIONS PAUSED")==NULL,
-        "motion: a frame is judged when its paint ends, not before");
+    say_laid_out(g.laid_ms);
+    check(!motion_pause_said() && strstr(g.status_text,"ANIMATIONS PAUSED")==NULL,
+        "motion: a frame is judged when its paint ends, not before, whatever says the line meanwhile");
+    clock_us+=30000;
     motion_painted();
     bool said=motion_pause_said();
     char record[2048];
     yonder_diag_render(g.page.diag,record,sizeof(record));
-    check(said && strstr(g.status_text," - ANIMATIONS PAUSED: a frame took 201 ms, over 200")!=NULL &&
-          strstr(record,"animations: paused: a frame took 201 ms, over 200")!=NULL,
+    check(said && strstr(g.status_text," - ANIMATIONS PAUSED: a frame took 231 ms, over 200")!=NULL &&
+          strstr(record,"animations: paused: a frame took 231 ms, over 200")!=NULL,
         "motion: the frame that stops the animations is said, on the standing line and in the record, "
         "and the line is to be painted again");
     motion_painted();
