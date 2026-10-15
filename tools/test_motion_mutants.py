@@ -225,6 +225,22 @@ mutants = [
     ('a-box-drawn-outside-is-not-seen', FLOW,
      '    for (int32_t i = 0; i < tree->nstacked && next > now; i++) {',
      '    for (int32_t i = 0; false && i < tree->nstacked && next > now; i++) {', LIBFLOW),
+    # The wake through a box drawn outside asks only what is handed down.
+    ('the-wake-asks-the-whole-motion', FLOW,
+     '                next = fmin(next, f_motion_next(st->motion, now, &handed));',
+     '                next = fmin(next, f_motion_next(st->motion, now, false ? &handed : NULL));', LIBFLOW),
+    ('a-fade-is-not-handed-down', FLOW,
+     '        if (garb_prop_inherited((garb_prop_t)p) || p == GARB_OPACITY)',
+     '        if (garb_prop_inherited((garb_prop_t)p))', LIBFLOW),
+    ('nothing-inherited-is-handed-down', FLOW,
+     '        if (garb_prop_inherited((garb_prop_t)p) || p == GARB_OPACITY)',
+     '        if (p == GARB_OPACITY)', LIBFLOW),
+    ('the-walk-judges-what-is-not-asked', MOTION,
+     '    if (d->only != NULL && !f_props_has(d->only, p))\n        return true;\n',
+     '', LIBFLOW),
+    ('the-edges-count-what-is-not-asked', MOTION,
+     '            (only == NULL || f_props_has(only, (garb_prop_t)p)) &&',
+     '            (only == NULL || only != NULL) &&', LIBFLOW),
     ('an-animation-that-moves-waits-out-of-view', FLOW,
      '            (st->motion->in_place && !may_own_canvas(tree, n) && !motion_seen(tree, n, view, scroll)))',
      '            (!may_own_canvas(tree, n) && !motion_seen(tree, n, view, scroll)))', LIBFLOW),
@@ -260,9 +276,9 @@ mutants = [
      '            next = fmin(next, change_due(base + k.before_end, now));\n            continue;',
      '            continue;', LIBFLOW),
     ('a-paused-animation-is-due', MOTION,
-     '        if (an->record == NULL || an->record->paused || !anim_shows(an, a, last))\n            continue;\n'
+     '        if (an->record == NULL || an->record->paused || !anim_shows(an, a, last, only))\n            continue;\n'
      '        double base = an->record->start;',
-     '        if (an->record == NULL || !anim_shows(an, a, last))\n            continue;\n'
+     '        if (an->record == NULL || !anim_shows(an, a, last, only))\n            continue;\n'
      '        double base = an->record->start;', LIBFLOW),
     ('what-the-view-cannot-see-is-due', FLOW,
      '    return meets(doc_rect_of(b, inked, scroll), view);',
@@ -621,8 +637,8 @@ mutants = [
     # Round 10: animations of nothing that can show, and the canvas's
     # background.
     ('an-animation-of-nothing-is-due', MOTION,
-     '        if (an->record == NULL || an->record->paused || !anim_shows(an, a, last))',
-     '        if (an->record == NULL || an->record->paused || (false && !anim_shows(an, a, last)))', LIBFLOW),
+     '        if (an->record == NULL || an->record->paused || !anim_shows(an, a, last, only))',
+     '        if (an->record == NULL || an->record->paused || (false && !anim_shows(an, a, last, only)))', LIBFLOW),
     ('a-replaced-animation-shows', MOTION,
      '        if (f_props_has(&an->props, (garb_prop_t)p) && !(last[p] > a) &&',
      '        if (f_props_has(&an->props, (garb_prop_t)p) && (true || !(last[p] > a)) &&', LIBFLOW),

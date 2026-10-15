@@ -1703,13 +1703,19 @@ uint64_t flow_motion_due(const flow_tree_t *tree, os64_gui_rect_t view, flow_poi
         if (st == NULL || st->motion == NULL ||
             (st->motion->in_place && !may_own_canvas(tree, n) && !motion_seen(tree, n, view, scroll)))
             continue;
-        next = fmin(next, f_motion_next(st->motion, now));
+        next = fmin(next, f_motion_next(st->motion, now, NULL));
     }
     // What draws outside the boxes it is inside — a positioned box, a
     // fixed one, one a transform moves, none of them in their ancestors'
     // overflow: each that can be seen makes the animated elements it is
-    // inside due as well, since what they hand down in place (a colour, a
-    // fade) is drawn there.
+    // inside due as well, for what they hand down to it: the inherited
+    // properties (a colour, visibility) and the group effect (a fade).
+    // What an element repaints of its own box alone — a background, a
+    // border — is not drawn there.
+    FProps handed = {{0}};
+    for (int p = 0; p < GARB_NPROPS; p++)
+        if (garb_prop_inherited((garb_prop_t)p) || p == GARB_OPACITY)
+            f_props_add(&handed, (garb_prop_t)p);
     for (int32_t i = 0; i < tree->nstacked && next > now; i++) {
         const flow_box_t *b = tree->stacked[i];
         if (b->node == NULL || !box_seen(b, view, scroll))
@@ -1717,7 +1723,7 @@ uint64_t flow_motion_due(const flow_tree_t *tree, os64_gui_rect_t view, flow_poi
         for (const os64_html_node_t *a = b->node->parent; a != NULL && next > now; a = a->parent) {
             const FStyled *st = a->kind == OS64_HTML_ELEMENT ? f_style_of(tree->styles, a) : NULL;
             if (st != NULL && st->motion != NULL)
-                next = fmin(next, f_motion_next(st->motion, now));
+                next = fmin(next, f_motion_next(st->motion, now, &handed));
         }
     }
     if (!(next < INFINITY))

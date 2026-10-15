@@ -297,12 +297,12 @@ uint8_t f_motion_effects(const FMotion *m, double now);
 // transform, a size, a position, a shadow's offset) may carry what it
 // draws into view from anywhere (flow_motion_due).
 bool f_motion_in_place(const FMotion *m);
-// When an animated value is next due after `now`: `now` itself while an
-// animation that can show is in its active phase and what it shows moves,
-// a step or a discrete flip among them; the far end of an interval whose
-// two ends hold one value; a phase's edge; INFINITY for none. Early is
-// allowed, late never.
-double f_motion_next(const FMotion *m, double now);
+// When an animated value is next due after `now`, of the properties `only`
+// names (NULL for all): `now` itself while an animation that can show is
+// in its active phase and what it shows moves, a step or a discrete flip
+// among them; the far end of an interval whose two ends hold one value; a
+// phase's edge; INFINITY for none. Early is allowed, late never.
+double f_motion_next(const FMotion *m, double now, const FProps *only);
 // A layout's dealings with the timeline: it begins a timeline of its own
 // beside the one the page shows (`from`, read and never changed; NULL on
 // no memory), each animated element is matched to its records there
