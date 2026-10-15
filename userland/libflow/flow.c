@@ -1923,6 +1923,18 @@ uint64_t flow_motion_due(const flow_tree_t *tree, os64_gui_rect_t view, flow_poi
     return motion_due(tree, view, scroll, false);
 }
 
+bool flow_motion_pending_in(const flow_tree_t *tree, bool ticks)
+{
+    if (tree == NULL || tree->styles == NULL)
+        return false;
+    for (int32_t i = 0; i < tree->styles->nanimated; i++) {
+        const FStyled *st = f_style_of(tree->styles, tree->styles->animated[i]);
+        if (st != NULL && st->motion != NULL && element_due(tree, st->motion, NULL, ticks) < INFINITY)
+            return true;
+    }
+    return false;
+}
+
 uint64_t flow_motion_tick_due(const flow_tree_t *tree, os64_gui_rect_t view, flow_point_t scroll)
 {
     return motion_due(tree, view, scroll, true);

@@ -1807,13 +1807,15 @@ thread busy all the time):
   animations stay still until the page is left. A page the cost rule
   stops is SAID, for a page whose animations stopped looks like a page
   with none. It is a MODE of the status row, as `SCRIPTS ON` is, said
-  before every message the row shows — `ANIMATIONS PAUSED: a frame took
-  240 ms, over 200 | ` (before a first frame, `the layout took`) — so no
-  message, an alert or a link under the pointer, hides it; and the
-  page's record carries `animations: paused: …`. It is the page's state
-  at its tree's time, in view or not, and only for an animation with a
-  change still to show (`flow_motion_pending`: not one paused, over, or
-  of nothing that can show). The window loop asks before each paint and
+  before every message the row shows — `ANIMATIONS PAUSED: a layout's
+  frame took 240 ms, over 200 | ` (before a first frame, `the layout
+  took`; and `SOME ` before it while the ticks still move, § Animations
+  in place) — so no message, an alert or a link under the pointer, hides
+  it; and the page's record carries `animations: paused: …` (`some
+  paused: …`). It is the page's state at its tree's time, in view or
+  not, and only for a half with a change still to show
+  (`flow_motion_pending_in`: not one paused, over, or of nothing that
+  can show). The window loop asks before each paint and
   after a frame's paint ends, so whatever changes it — a frame, a
   layout, a script's rebuild, the settings — is said once, and painted.
   The standing line's own notices come before the address, which takes
@@ -1943,7 +1945,8 @@ The face marks each, cut to the view first — marks are joined into one
 rectangle (§ The one dirty rectangle, below), and one outside the view
 would stretch it across the view — and the whole view for the canvas's
 owner, whose background it paints across the view, told by the
-painter's own rule from the box. An element out of view is marked
+painter's own rule from the box, asked at each mark: a tick may change
+which box that is, the root's background being what moves. An element out of view is marked
 nothing, and a tick that marks nothing paints nothing. A tick that moved a frame places
 the page's live controls again (`forms_place`), so a field inside a
 sliding panel slides with it.
@@ -1969,7 +1972,11 @@ said by the status row's mode, naming its kind of frame — `SOME
 ANIMATIONS PAUSED: a layout's frame took 223 ms, over 200 | ` while the
 other half still has changes to show and runs, `ANIMATIONS PAUSED: …`
 when nothing that has one runs (`a tick's frame took`, and before a
-first frame, `the layout took`) — and in the diag fact.
+first frame, `the layout took`) — and in the diag fact (`animations:
+some paused: …`). A tick that is not taken is a layout instead, which
+is that tick's frame; with the layouts stopped by what they cost, the
+ticks stop too, and that is said where it failed, as a layout that fails
+is.
 
 **Before a whole view is painted.** The face ticks before it paints
 the whole view for any other reason — a scroll that brings an animation
@@ -2232,10 +2239,13 @@ settings saved and applied, what the media answers, and with animations
 off the rules' styles and nothing due. S8b's: the tick's deadline apart
 from the layout's, a layout due by then winning; its pacing and its own
 cost rule, a page whose layouts cost too much still ticking, and `SOME
-ANIMATIONS PAUSED` against `ANIMATIONS PAUSED`; its marks cut to the
-view, none for an element out of view, the whole view for the canvas's
-owner; controls placed after a frame moved; a tick before a scroll's
-paint and none before a picture's.
+ANIMATIONS PAUSED` against `ANIMATIONS PAUSED`; a tick not taken laying
+the page out as its frame, and with the layouts stopped, stopping the
+ticks and saying so; its marks cut to the view, one reaching past it
+cut too, none for an element out of view, the whole view for the
+canvas's owner, even one far shorter than the view whose background is
+what moves; controls placed after a frame moved; a tick before a
+scroll's paint and none before a picture's.
 
 `tools/test_motion_mutants.py` breaks each rule. In the guest,
 `tools/pages/pile3-motion.html`: FROZEN rows, paused at chosen times or
