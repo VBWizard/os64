@@ -1780,7 +1780,28 @@ thread busy all the time):
   took more than MOTION_COST_MS (200) lays out for no animation: its
   animations show what they were at the last layout made for another
   reason, until S8b moves the ones it can. One whose layout fails is its
-  last, as though it had cost too much;
+  last, as though it had cost too much. A frame over the limit is the
+  page's last too: nothing measures a cheaper one after it, so its
+  animations stay still until the page is left. A page the cost rule
+  stops is SAID, for a page whose animations stopped looks like a page
+  with none. It is a MODE of the status row, as `SCRIPTS ON` is, said
+  before every message the row shows — `ANIMATIONS PAUSED: a frame took
+  240 ms, over 200 | ` (before a first frame, `the layout took`) — so no
+  message, an alert or a link under the pointer, hides it; and the
+  page's record carries `animations: paused: …`. It is the page's state
+  at its tree's time, in view or not, and only for an animation with a
+  change still to show (`flow_motion_pending`: not one paused, over, or
+  of nothing that can show). The window loop asks before each paint and
+  after a frame's paint ends, so whatever changes it — a frame, a
+  layout, a script's rebuild, the settings — is said once, and painted.
+  The standing line's own notices come before the address, which takes
+  what they and the modes leave, so a long address never cuts one off.
+  The record follows the
+  pause out: `off` when animations are turned off, `none` when none has
+  a change left to show, and `running` when a layout before the page's
+  first frame came in under the limit. A page with nothing to show,
+  animations turned off, or a frame that failed (said where it failed)
+  says nothing of it;
 - otherwise the next frame waits until twice the last one's cost has
   passed since its paint ended — at most a third of the window's time
   spent on motion — and never comes sooner than MOTION_FRAME_MS (16)

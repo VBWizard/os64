@@ -112,7 +112,9 @@ Click the Settings icon in the title bar.
 - **Run page scripts**, and the **Script time limit** beside it: whether
   a page's JavaScript runs, and how long one piece of it may run.
 - **Run animations**: whether a page's CSS animations move. Turn it off if
-  one makes a page too slow.
+  one makes a page too slow. yonder stops them by itself on a page where
+  one frame takes more than 200 ms, and the status line says ANIMATIONS
+  PAUSED with what the frame took.
 - **Reduce motion**: tells pages you would rather see less movement; many
   turn their animations off when told.
 - **Apply** changes this window from the next page on. **Save as default**
