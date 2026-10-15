@@ -339,6 +339,14 @@ static const char *const kBoxSizing[] = {"content-box", "border-box", NULL};
 static const char *const kGeneric[] = {"serif", "sans-serif", "monospace", "cursive", "fantasy",
                                        "system-ui", "ui-serif", "ui-sans-serif", "ui-monospace",
                                        "ui-rounded", "math", "emoji", "fangsong", NULL};
+bool garb_generic_family(const char *text, size_t len)
+{
+    for (int k = 0; kGeneric[k] != NULL; k++)
+        if (ieq(text, len, kGeneric[k]))
+            return true;
+    return false;
+}
+
 static const char *const kFontSize[] = {"xx-small", "x-small", "small", "medium", "large",
                                         "x-large", "xx-large", "xxx-large", "larger", "smaller",
                                         NULL};

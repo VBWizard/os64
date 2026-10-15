@@ -19,6 +19,9 @@ bool vc_done(VCur *c);
 // lowercase words): the list's own spelling, and consumed.
 const char *vc_keyword(VCur *c, const char *const *allowed);
 bool ieq(const char *a, size_t alen, const char *b);
+// Whether `text` is a generic family's keyword (Fonts 4 § 3.1.1), as
+// `font-family` reads one and `@font-face` refuses one.
+bool garb_generic_family(const char *text, size_t len);
 bool is_delim_v(const garb_value_t *v, char ch);
 
 // Where values that outlive the call are kept, and whether it ran out.

@@ -29,10 +29,13 @@ typedef enum {
 #define YONDER_FONT_SFNT_MAX ((size_t)64 << 20)
 #define YONDER_FONT_EXPANSION_MAX 64
 
-// A WOFF 1.0 container's SFNT: the table directory read — its tables
-// within the file, 4-byte aligned, not overlapping once sorted by offset
-// (sfwoff.c's rules), none longer than it says it unpacks to, the whole
-// as long as the header says — each table taken as stored or inflated
+// A WOFF 1.0 container's SFNT: the header read — a plain font's flavor,
+// never a collection's or another container's, at most 0xFFF tables —
+// and the directory: tags ascending, none packed longer than it unpacks,
+// and the file nothing but its parts, each table where the last one's
+// padding ended, the metadata and private blocks after them, the file
+// ending where the last does (sfwoff.c's rules) — each table taken as
+// stored or inflated
 // through libgzip's zlib door to exactly its length, and laid out again
 // under an SFNT directory — the data in the order it lay in the container,
 // the directory in its tags' — each on a 4-byte boundary, zero-padded. The

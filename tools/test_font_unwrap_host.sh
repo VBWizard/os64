@@ -107,7 +107,33 @@ big = synth([(b'aaaa', bytes(range(256)) * 8192)])
 w = woff(big, store={b'aaaa'})     # 2 MiB as stored: 64 to 1 allows 128 MiB
 struct.pack_into('>I', w, 16, (64 << 20) + 4)
 status('an SFNT past 64 MiB within 64 to 1', w, 'past the size limits')
-print('WOFF unwrap: misalignment, a stream with bytes after it, overlap and 64 MiB, each alone')
+many = synth([(struct.pack('>I', i), b'\x01\x02\x03\x04') for i in range(4096)])
+status('4096 tables, past the 16-bit search fields', woff(many), 'malformed container')
+status('4095 tables, the most', woff(synth([(struct.pack('>I', i), b'\x01\x02\x03\x04') for i in range(4095)])), 'ok')
+for flavor in (b'ttcf', b'wOFF', b'wOF2'):
+    w = woff(mono)
+    w[4:8] = flavor
+    status(f'a {flavor.decode()} flavor', w, 'malformed container')
+w = woff(mono, store={b'name'})
+off1 = struct.unpack_from('>I', w, 44 + 20 * 1 + 4)[0]
+gap = w[:off1] + b'\0\0\0\0' + w[off1:]
+for i in range(len(mono_tables)):
+    o = struct.unpack_from('>I', gap, 44 + 20 * i + 4)[0]
+    if o >= off1:
+        struct.pack_into('>I', gap, 44 + 20 * i + 4, o + 4)
+struct.pack_into('>I', gap, 8, len(gap))
+status('a gap between two tables', gap, 'malformed container')
+w = woff(mono) + b'\0\0\0\0'
+struct.pack_into('>I', w, 8, len(w))
+status('bytes after the last part', w, 'malformed container')
+w = woff(mono)
+struct.pack_into('>I', w, 28, 4)
+status('a metadata length with no offset', w, 'malformed container')
+w = woff(mono)
+struct.pack_into('>I', w, 40, 4)
+status('a private length with no offset', w, 'malformed container')
+print('WOFF unwrap: misalignment, a stream with bytes after it, overlap, 64 MiB, 4096 tables, '
+      'a collection or container flavor, a gap, trailing bytes and lengths with no offset, each alone')
 
 # Each field broken in turn, each to the status it must give.
 base = woff((fixtures / 'DejaVuSansMono.ttf').read_bytes(), meta=b'<metadata/>')

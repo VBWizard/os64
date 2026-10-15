@@ -140,7 +140,8 @@ void garb_cascade_free(garb_cascade_t *c);
 // against the sheet the rule was written in (`sheet`, an index into
 // garb_cascade's sheets), with its format() hint (the first one, as
 // written, or NULL) — or a local() family name; the weights it covers, 1
-// to 1000 (one weight is a range of one); its style; and the code points
+// to 1000 as written, fractions and all (one weight is a range of one);
+// its style; and the code points
 // it covers, as inclusive ranges, NULL and 0 for all of them. A source
 // with tech() is dropped (this engine supports no font technology), as is
 // one written wrong; a rule left with no family or no source is no face.
@@ -161,7 +162,7 @@ typedef struct {
     size_t family_len;
     const garb_face_src_t *src;
     int32_t nsrc;
-    uint16_t weight_min, weight_max;
+    float weight_min, weight_max;
     garb_face_style_t style;
     const garb_unicode_range_t *ranges;
     int32_t nranges;
@@ -169,12 +170,14 @@ typedef struct {
 } garb_font_face_t;
 
 // The page's faces, from the `@font-face` rules inside the `@media` and
-// `@supports` that hold, in cascade order: a later rule of one family
-// with the same weights, style and ranges replaces an earlier one in its
-// place (Fonts 4 § 4.1). At most GARB_FONT_FACES_MAX are kept, the rest
-// counted in `lost` (may be NULL), as is one memory ran out for — which
-// the cascade also says (garb_cascade_incomplete). Answers how many and
-// points `out` at them, which live as long as the cascade.
+// `@supports` that hold, in cascade order — every one, faces of one family
+// with the same weights, style and ranges among them: they make one
+// composite face, the later tried first (Fonts 4 § 4.5.1), so an earlier
+// one still serves when a later fails. At most GARB_FONT_FACES_MAX are
+// kept, the rest counted in `lost` (may be NULL), as is one memory ran
+// out for, which is dropped whole — and which the cascade also says
+// (garb_cascade_incomplete). Answers how many and points `out` at them,
+// which live as long as the cascade.
 #define GARB_FONT_FACES_MAX 256
 int32_t garb_cascade_font_faces(const garb_cascade_t *c, const garb_font_face_t **out, uint32_t *lost);
 

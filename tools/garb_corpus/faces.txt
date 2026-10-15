@@ -32,8 +32,10 @@ WANT
 (end)
 END
 
-# Weights: keywords, one number, auto; oblique with its angles. A rule
-# with no family, no src, or a generic for its family is no face; a src
+# Weights: keywords, one number, a fraction kept, auto; oblique with up
+# to two angles from -90 to 90 degrees, and nothing else after it. A rule
+# with no family, no src, or a generic for its family (ui-serif among
+# them) or a CSS-wide keyword is no face; a src
 # entry written wrong or with tech() is dropped and the rest kept; a
 # later declaration of a descriptor wins, an invalid one is dropped.
 VIEWPORT 800x600
@@ -47,6 +49,13 @@ PAGE
 @font-face { font-family: serif; src: url(generic) }
 @font-face { font-family: E; src: url(e1) tech(variations), bogus, url(e2) format(woff) format(woff2), local(L) format(woff), url(e3) }
 @font-face { font-family: F; src: url(f1); font-weight: 600; font-weight: 9000; font-style: sideways }
+@font-face { font-family: G; src: url(g1); font-weight: 400.9; font-style: oblique -0.25turn 1.5rad }
+@font-face { font-family: H; src: url(h1); font-style: italic; font-style: oblique sideways }
+@font-face { font-family: I; src: url(i1); font-style: italic; font-style: oblique 91deg }
+@font-face { font-family: J; src: url(j1); font-style: italic; font-style: oblique 1deg 2deg 3deg }
+@font-face { font-family: K; src: url(k1); font-style: italic; font-style: oblique 0.3turn }
+@font-face { font-family: ui-serif; src: url(generic2) }
+@font-face { font-family: initial; src: url(keyword) }
 </style>
 WANT
 "A" 700 normal sheet 0
@@ -59,6 +68,16 @@ WANT
   url(e3)
 "F" 600 normal sheet 0
   url(f1)
+"G" 400.9 oblique sheet 0
+  url(g1)
+"H" 400 italic sheet 0
+  url(h1)
+"I" 400 italic sheet 0
+  url(i1)
+"J" 400 italic sheet 0
+  url(j1)
+"K" 400 italic sheet 0
+  url(k1)
 (end)
 END
 
@@ -92,9 +111,9 @@ WANT
 END
 
 # Only the @media that holds: a face inside one that does not is no face.
-# A later rule of one family with the same weights, style and ranges
-# replaces the earlier in its place; families compare without case; a
-# different style is another face. The sheet a face came from.
+# Rules of one family with the same weights, style and ranges are all
+# kept, in order — one composite face, the later tried first (Fonts 4
+# § 4.5.1), which is the matcher's to read. The sheet a face came from.
 VIEWPORT 800x600
 PAGE
 <!doctype html><style>
@@ -104,13 +123,18 @@ PAGE
 @media (min-width: 10px) { @font-face { font-family: Shown; src: url(yes) } }
 </style><style>
 @font-face { font-family: SAME; src: url(second) }
+@font-face { font-family: Same; src: url(third) }
 </style>
 WANT
-"SAME" 400 normal sheet 1
-  url(second)
+"Same" 400 normal sheet 0
+  url(first)
 "Same" 400 italic sheet 0
   url(italic)
 "Shown" 400 normal sheet 0
   url(yes)
+"SAME" 400 normal sheet 1
+  url(second)
+"Same" 400 normal sheet 1
+  url(third)
 (end)
 END

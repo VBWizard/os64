@@ -6,7 +6,7 @@
 // name (the browsers' own trick: an element tries only the rules that could
 // possibly match it), its declarations read once; every @keyframes, the
 // last of each name kept and its keyframes read once; and every
-// @font-face, read whole, a later one of the same face replacing it.
+// @font-face, read whole.
 //
 // Then, per element in document order: the rules that match, weighed by
 // §6's order — importance, then specificity (a rule matching through
@@ -165,13 +165,18 @@ struct garb_cascade {
     garb_font_face_t *faces;
     int32_t nfaces, facecap;
     uint32_t faces_lost;
+    // How many allocations have failed, so a reader can tell whether its
+    // own did (add_face).
+    uint32_t allocs_failed;
 };
 
 static void *alloc(garb_cascade_t *c, size_t n)
 {
     void *p = os64_arena_calloc(c->self.arena, 1, n);
-    if (p == NULL)
+    if (p == NULL) {
         c->incomplete = true;
+        c->allocs_failed++;
+    }
     return p;
 }
 
@@ -184,6 +189,7 @@ static bool grow(garb_cascade_t *c, void **list, int32_t n, int32_t *cap, size_t
     void *next = os64_arena_alloc(c->self.arena, (size_t)bigger * size);
     if (next == NULL) {
         c->incomplete = true;
+        c->allocs_failed++;
         return false;
     }
     if (n > 0)
@@ -450,7 +456,8 @@ static void trim(const garb_value_t *v, int32_t *i, int32_t *n)
 }
 
 // A <family-name> in [i, n): one string, or identifiers joined by single
-// spaces — none of them a generic family's keyword, which names no face.
+// spaces — not one identifier that is a generic family's keyword or a
+// CSS-wide one, which name no face.
 // Into `out` (cap bytes): its length, or -1.
 static int32_t family_name(const garb_value_t *v, int32_t i, int32_t n, char *out, int32_t cap)
 {
@@ -460,9 +467,8 @@ static int32_t family_name(const garb_value_t *v, int32_t i, int32_t n, char *ou
     if (v[i].kind == GARB_STRING)
         return i + 1 == n && (int32_t)v[i].len < cap
                    ? (os64_memcpy(out, v[i].text, v[i].len), (int32_t)v[i].len) : -1;
-    static const char *const kGenerics[] = {"serif", "sans-serif", "monospace", "cursive", "fantasy",
-                                            "system-ui", "math", "emoji", "fangsong", "inherit",
-                                            "initial", "unset", "default", NULL};
+    static const char *const kReserved[] = {"inherit", "initial", "unset", "revert", "revert-layer",
+                                            "default", NULL};
     int32_t len = 0, words = 0;
     for (; i < n; i++) {
         if (v[i].kind == GARB_WHITESPACE)
@@ -474,8 +480,10 @@ static int32_t family_name(const garb_value_t *v, int32_t i, int32_t n, char *ou
         os64_memcpy(out + len, v[i].text, v[i].len);
         len += (int32_t)v[i].len;
     }
-    for (int k = 0; words == 1 && kGenerics[k] != NULL; k++)
-        if (ieq(out, (size_t)len, kGenerics[k]))
+    if (words == 1 && garb_generic_family(out, (size_t)len))
+        return -1;
+    for (int k = 0; words == 1 && kReserved[k] != NULL; k++)
+        if (ieq(out, (size_t)len, kReserved[k]))
             return -1;
     return len;
 }
@@ -642,9 +650,9 @@ static bool range_part(garb_cascade_t *c, const garb_value_t *v, int32_t a, int3
 }
 
 // A face's weight: `normal` (400), `bold` (700) or a number from 1 to
-// 1000; two make a range, in either order (Fonts 4 § 4.5). `auto` is all
-// of them.
-static bool face_weight(const garb_decl_t *d, uint16_t *lo, uint16_t *hi)
+// 1000, a fraction kept (matching does not round); two make a range, in
+// either order (Fonts 4 § 4.5). `auto` is all of them.
+static bool face_weight(const garb_decl_t *d, float *lo, float *hi)
 {
     double w[2];
     int32_t k = 0;
@@ -669,12 +677,30 @@ static bool face_weight(const garb_decl_t *d, uint16_t *lo, uint16_t *hi)
         return false;
     if (k == 1)
         w[1] = w[0];
-    *lo = (uint16_t)(w[0] < w[1] ? w[0] : w[1]);
-    *hi = (uint16_t)(w[0] < w[1] ? w[1] : w[0]);
+    *lo = (float)(w[0] < w[1] ? w[0] : w[1]);
+    *hi = (float)(w[0] < w[1] ? w[1] : w[0]);
     return true;
 }
 
-// A face's style: `normal`, `italic`, or `oblique` with any angles after it.
+// An angle in degrees, from a dimension in one of the four angle units.
+static bool angle_deg(const garb_value_t *t, double *deg)
+{
+    static const struct {
+        const char *unit;
+        double per;
+    } kUnits[] = {{"deg", 1}, {"rad", 57.29577951308232}, {"grad", 0.9}, {"turn", 360}};
+    if (t->kind != GARB_DIMENSION)
+        return false;
+    for (size_t k = 0; k < sizeof(kUnits) / sizeof(kUnits[0]); k++)
+        if (ieq(t->unit, t->unit_len, kUnits[k].unit)) {
+            *deg = t->number * kUnits[k].per;
+            return true;
+        }
+    return false;
+}
+
+// A face's style: `normal`, `italic`, or `oblique` with up to two angles
+// after it, each between -90 and 90 degrees (Fonts 4 § 4.4).
 static bool face_style(const garb_decl_t *d, garb_face_style_t *out)
 {
     int32_t i = 0, n = d->nvalue;
@@ -682,53 +708,44 @@ static bool face_style(const garb_decl_t *d, garb_face_style_t *out)
     if (i >= n || d->value[i].kind != GARB_IDENT)
         return false;
     const garb_value_t *t = &d->value[i];
-    if (ieq(t->text, t->len, "normal") && i + 1 == n)
+    if (ieq(t->text, t->len, "normal") && i + 1 == n) {
         *out = GARB_FACE_NORMAL;
-    else if (ieq(t->text, t->len, "italic") && i + 1 == n)
+        return true;
+    }
+    if (ieq(t->text, t->len, "italic") && i + 1 == n) {
         *out = GARB_FACE_ITALIC;
-    else if (ieq(t->text, t->len, "oblique"))
-        *out = GARB_FACE_OBLIQUE;
-    else
+        return true;
+    }
+    if (!ieq(t->text, t->len, "oblique"))
         return false;
-    return true;
-}
-
-// Two family names compared as CSS compares them: ASCII case folded on
-// both sides (ieq folds only its first).
-static bool same_family(const char *a, size_t alen, const char *b, size_t blen)
-{
-    if (alen != blen)
-        return false;
-    for (size_t i = 0; i < alen; i++) {
-        char x = a[i] >= 'A' && a[i] <= 'Z' ? (char)(a[i] + 32) : a[i];
-        char y = b[i] >= 'A' && b[i] <= 'Z' ? (char)(b[i] + 32) : b[i];
-        if (x != y)
+    int32_t angles = 0;
+    for (i++; i < n; i++) {
+        double deg;
+        if (d->value[i].kind == GARB_WHITESPACE)
+            continue;
+        if (++angles > 2 || !angle_deg(&d->value[i], &deg) || deg < -90 || deg > 90)
             return false;
     }
-    return true;
-}
-
-static bool same_face(const garb_font_face_t *a, const garb_font_face_t *b)
-{
-    if (!same_family(a->family, a->family_len, b->family, b->family_len) ||
-        a->weight_min != b->weight_min || a->weight_max != b->weight_max || a->style != b->style ||
-        a->nranges != b->nranges)
-        return false;
-    for (int32_t i = 0; i < a->nranges; i++)
-        if (a->ranges[i].first != b->ranges[i].first || a->ranges[i].last != b->ranges[i].last)
-            return false;
+    *out = GARB_FACE_OBLIQUE;
     return true;
 }
 
 // An @font-face rule, read whole and kept (garb_cascade_font_faces). Each
 // descriptor's last valid declaration is the one kept; one written wrong
-// is dropped, as a property's is.
+// is dropped, as a property's is. A face any allocation failed for is
+// dropped whole and counted lost: half a source list is not the rule.
 static void add_face(garb_cascade_t *c, garb_parsed_t *owner, const garb_rule_t *r, int32_t sheet)
 {
     garb_item_t *items;
     int32_t n;
-    if (!r->has_block || !garb_items_of(owner, r->block, r->nblock, &items, &n))
+    if (!r->has_block)
         return;
+    if (!garb_items_of(owner, r->block, r->nblock, &items, &n)) {
+        c->incomplete = true;
+        c->faces_lost++;
+        return;
+    }
+    uint32_t failed = c->allocs_failed;
     garb_font_face_t face = {NULL, 0, NULL, 0, 400, 400, GARB_FACE_NORMAL, NULL, 0, sheet};
     for (int32_t i = 0; i < n; i++) {
         const garb_decl_t *d = &items[i].decl;
@@ -762,13 +779,12 @@ static void add_face(garb_cascade_t *c, garb_parsed_t *owner, const garb_rule_t 
                 face.ranges = ranges, face.nranges = got;
         }
     }
+    if (c->allocs_failed != failed) {
+        c->faces_lost++;
+        return;
+    }
     if (face.family == NULL || face.nsrc == 0)
         return;
-    for (int32_t i = 0; i < c->nfaces; i++)
-        if (same_face(&c->faces[i], &face)) {
-            c->faces[i] = face;
-            return;
-        }
     if (c->nfaces == GARB_FONT_FACES_MAX ||
         !grow(c, (void **)&c->faces, c->nfaces, &c->facecap, sizeof(garb_font_face_t))) {
         c->faces_lost++;

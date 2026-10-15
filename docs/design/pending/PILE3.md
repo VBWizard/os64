@@ -2315,17 +2315,22 @@ container round it lives privately in libpng.
 
 **The faces (libgarb).** `@font-face` is read whole into the cascade:
 the family; `src` as a list of `url()` with its `format()` hint, or
-`local()` with its name; `font-weight` as a range, `font-style`
-(normal, italic, oblique), `unicode-range` as a list of ranges (read
+`local()` with its name; `font-weight` as a range, fractions kept
+(matching does not round), `font-style` (normal, italic, oblique with
+up to two angles), `unicode-range` as a list of ranges (read
 from component values, the draft's way — GARB.md booked it here); the
 sheet it was written in, for resolving the url. A rule in a sheet whose
-media does not hold, or inside a failed `@media`, is not one; within one
-family, a later rule with the same weight, style and ranges replaces an
-earlier one (Fonts 4 § 4.1). `font-display` is read and has no effect
-(below). `garb_cascade_font_faces` hands them out; `GARB_SKIP_FONT` is
-counted no more. A page keeps at most 256 faces — the census's most is
-135 (YouTube; median 7) — and they cost tens of bytes each, fetched or
-not.
+media does not hold, or inside a failed `@media`, is not one. Rules of
+one family with the same weight, style and ranges are ALL kept: they
+make one composite face, the later tried first (Fonts 4 § 4.5.1), so an
+earlier one still serves when a later fails to load or lacks the
+character. `font-display` is read and has no effect (below).
+`garb_cascade_font_faces` hands them out in order. A page keeps at most
+256 faces — the census's most is 135 (YouTube; median 7) — and they
+cost tens of bytes each, fetched or not; one a failed allocation would
+leave half-read is dropped whole and counted lost. `GARB_SKIP_FONT`
+still counts each face's family until S9a2, where the resolver fetches
+faces and says `MISSING font` itself of a family no face serves.
 
 **Which face (yonder's resolver).** The resolver is asked for a family
 list, bold or not, italic or not, and a size, as now — and, as
@@ -2337,7 +2342,8 @@ read (booked), so style first (italic, then oblique, then normal), then
 weight (the nearest the algorithm's direction allows; the resolver is
 still asked bold or not, so 700 or 400 — the weights between are booked
 with 04-web-faces) — and every OPEN face of the chosen style and weight
-joins the list, each with its `unicode-range`, which the text layout
+joins the list, the later of a composite first, each with its
+`unicode-range`, which the text layout
 honours: a face is asked only for the characters in its ranges
 (`os64_text_font_t` gains them). A face wanted and not open is recorded
 for fetching (below). A name with no page face is looked for among the
@@ -2400,8 +2406,11 @@ not: the unwrapper (`yonder_font_unwrap_woff`, `font_unwrap.c` beside
 the worker that calls it — libos64 cannot hold it, libgzip being built on
 libos64 — pure, host-tested) makes the SFNT back, and keeps the rules of
 the FreeType module it stands in for
-— the directory sorted by offset and refused on overlap or overrun
-(`sfwoff.c`), and an SFNT over 64 MiB or an expansion past 64 to 1
+(`sfwoff.c`) — a plain font's flavor, never a collection's or another
+container's; at most 0xFFF tables, what the SFNT's 16-bit search fields
+can say; tags ascending; and the file nothing but its parts, each table
+where the last one's padding ended, then the metadata, then the private
+block, the file ending where the last part does — and an SFNT over 64 MiB or an expansion past 64 to 1
 refused (FreeType's `656cb77`, which UPSTREAM_REVIEW lists as "module
 not compiled": the fix moves with the job). The zlib container — the
 two-byte header and Adler-32 — is HOISTED into libgzip as the zlib door
@@ -2490,10 +2499,12 @@ serve nothing else, draw their faces — S9b's page uses the preset.
 
 libgarb's corpus: `@font-face` read whole — `src` lists of `url()`,
 `format()` hints and `local()` in every spelling, weight ranges and
-keywords, the three styles, `unicode-range` in single points, ranges
-and wildcards (`U+4??`), a rule inside `@media` that holds and one that
-does not, a later rule replacing an earlier one, the 257th face passed
-over. yonder's host: the matching table of Fonts 4 § 5.2 against the
+keywords and fractions, the three styles and oblique's angles,
+`unicode-range` in single points, ranges and wildcards (`U+4??`), a
+generic family's name and a CSS-wide keyword refused, a rule inside
+`@media` that holds and one that does not, a composite's rules all kept
+in order, the 257th face passed over, and each allocation failed alone and then with every one after it
+leaving every face whole or counted lost. yonder's host: the matching table of Fonts 4 § 5.2 against the
 faces it is handed (DejaVu's own files served as page faces), a
 character outside every range drawn in the next face, a face fetched
 only when the resolver wants it and its range meets the document's

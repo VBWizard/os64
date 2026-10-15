@@ -91,11 +91,18 @@ yonder_font_status_t yonder_font_unwrap_woff(const uint8_t *woff, size_t len, ui
     uint16_t ntables = be16(woff + 12), reserved = be16(woff + 14);
     uint32_t total = be32(woff + 16);
     uint32_t meta_offset = be32(woff + 24), meta_length = be32(woff + 28);
+    uint32_t meta_orig = be32(woff + 32);
     uint32_t priv_offset = be32(woff + 36), priv_length = be32(woff + 40);
-    if (length != len || ntables == 0 || reserved != 0 ||
+    // The flavor is the font inside: a plain one, never a collection or
+    // another container. More than 0xFFF tables is past what the SFNT's
+    // 16-bit search fields can say. A block with no offset has no length.
+    uint8_t flavor_bytes[4] = {(uint8_t)(flavor >> 24), (uint8_t)(flavor >> 16), (uint8_t)(flavor >> 8),
+                               (uint8_t)flavor};
+    if (length != len || ntables == 0 || ntables > 0xFFF || reserved != 0 ||
+        yonder_font_sniff(flavor_bytes, 4) != YONDER_FONT_SFNT ||
         WOFF_HEADER + (uint64_t)WOFF_ENTRY * ntables > len ||
-        (meta_length != 0 && (uint64_t)meta_offset + meta_length > len) ||
-        (priv_length != 0 && (uint64_t)priv_offset + priv_length > len))
+        (meta_offset == 0 && (meta_length != 0 || meta_orig != 0)) ||
+        (priv_offset == 0 && priv_length != 0))
         return YONDER_FONT_MALFORMED;
     if (total > YONDER_FONT_SFNT_MAX || (uint64_t)total > (uint64_t)YONDER_FONT_EXPANSION_MAX * len)
         return YONDER_FONT_LIMIT;
@@ -107,28 +114,46 @@ yonder_font_status_t yonder_font_unwrap_woff(const uint8_t *woff, size_t len, ui
         os64_free(order);
         return YONDER_FONT_NO_MEMORY;
     }
-    // The directory: tags ascending, each table in the file past it,
-    // 4-byte aligned, and no longer packed than unpacked; the SFNT it makes
-    // as long as the header says.
+    // The directory: tags ascending, and no table longer packed than
+    // unpacked; the SFNT it makes as long as the header says.
     yonder_font_status_t st = YONDER_FONT_OK;
     uint64_t need = SFNT_HEADER + (uint64_t)SFNT_ENTRY * ntables;
-    uint32_t first = WOFF_HEADER + WOFF_ENTRY * (uint32_t)ntables;
     for (uint16_t i = 0; i < ntables && st == YONDER_FONT_OK; i++) {
         const uint8_t *e = woff + WOFF_HEADER + (size_t)WOFF_ENTRY * i;
         t[i] = (Table){be32(e), be32(e + 4), be32(e + 8), be32(e + 12), be32(e + 16)};
-        if ((i > 0 && t[i].tag <= t[i - 1].tag) || t[i].offset % 4 != 0 || t[i].offset < first ||
-            (uint64_t)t[i].offset + t[i].comp > len || t[i].comp > t[i].orig)
+        if ((i > 0 && t[i].tag <= t[i - 1].tag) || t[i].comp > t[i].orig)
             st = YONDER_FONT_MALFORMED;
         need += ((uint64_t)t[i].orig + 3) & ~(uint64_t)3;
     }
     if (st == YONDER_FONT_OK && need != total)
         st = YONDER_FONT_MALFORMED;
-    // No two tables overlap, read in the order they lie in.
+    // The file is its parts and nothing else (WOFF 1.0 § 3; sfwoff.c):
+    // read in the order they lie in, each table where the last one's
+    // padding ended, the first right after the directory; the metadata
+    // right after the last table, the private block on the next 4-byte
+    // boundary after that; and the file ending where the last part does.
     if (st == YONDER_FONT_OK) {
         by_offset(t, order, ntables);
-        for (uint16_t i = 1; i < ntables && st == YONDER_FONT_OK; i++)
-            if ((uint64_t)t[order[i - 1]].offset + t[order[i - 1]].comp > t[order[i]].offset)
+        uint64_t at = WOFF_HEADER + (uint64_t)WOFF_ENTRY * ntables;
+        for (uint16_t i = 0; i < ntables && st == YONDER_FONT_OK; i++) {
+            const Table *x = &t[order[i]];
+            if (x->offset != at)
                 st = YONDER_FONT_MALFORMED;
+            at += ((uint64_t)x->comp + 3) & ~(uint64_t)3;
+        }
+        if (st == YONDER_FONT_OK && meta_offset != 0) {
+            if (meta_offset != at)
+                st = YONDER_FONT_MALFORMED;
+            at += meta_length;
+        }
+        if (st == YONDER_FONT_OK && priv_offset != 0) {
+            at = (at + 3) & ~(uint64_t)3;
+            if (priv_offset != at)
+                st = YONDER_FONT_MALFORMED;
+            at += priv_length;
+        }
+        if (st == YONDER_FONT_OK && at != len)
+            st = YONDER_FONT_MALFORMED;
     }
     uint8_t *out = st == YONDER_FONT_OK ? os64_malloc(total) : NULL;
     os64_zlib_t *z = st == YONDER_FONT_OK ? os64_zlib_create(0) : NULL;
