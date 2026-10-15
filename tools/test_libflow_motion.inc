@@ -1952,17 +1952,25 @@ static void motion_due_cases(void)
     }
     // An `inherit` in a keyframe takes as one in a declaration does; and a
     // background cut to the text inside it is drawn through that text,
-    // wherever a box moves it.
+    // wherever a box moves it — but not through a box that leaves the clip,
+    // fixed, or inside an absolute box.
     static const struct {
         const char *name, *html;
+        uint64_t due;
     } kThrough[] = {
         {"motion due: through an element between whose keyframes inherit it",
          "@keyframes hold{from{background-color:inherit}to{background-color:inherit}}</style>"
          "<div class=c style='margin-top:2000px'><div style='animation:hold 10s linear'>"
-         "<p style='position:fixed;top:0;background-color:inherit'>x</p></div></div>"},
+         "<p style='position:fixed;top:0;background-color:inherit'>x</p></div></div>", 1000},
         {"motion due: a background cut to the text a moved box holds",
          "</style><div class=c style='margin-top:2000px;background-clip:text'>"
-         "<div style='position:relative;top:-2000px'>x</div></div>"},
+         "<div style='position:relative;top:-2000px'>x</div></div>", 1000},
+        {"motion due: not through a fixed box the clip does not hold",
+         "</style><div class=c style='margin-top:2000px;background-clip:text'>"
+         "<p style='position:fixed;top:0'>x</p></div>", FLOW_NEVER},
+        {"motion due: nor through one inside an absolute box",
+         "</style><div class=c style='margin-top:2000px;background-clip:text'><div style='position:absolute'>"
+         "<div style='position:relative;top:-2000px'>x</div></div></div>", FLOW_NEVER},
     };
     for (size_t i = 0; i < sizeof(kThrough) / sizeof(kThrough[0]); i++) {
         char html[768];
@@ -1972,7 +1980,7 @@ static void motion_due_cases(void)
         uint64_t due = flow_motion_due(m.tree, kView, (flow_point_t){0, 0});
         char detail[48];
         snprintf(detail, sizeof(detail), "got %llu", (unsigned long long)due);
-        expect(kThrough[i].name, due == 1000, detail);
+        expect(kThrough[i].name, due == kThrough[i].due, detail);
         moving_close(&m);
     }
 }

@@ -1723,10 +1723,10 @@ uint64_t flow_motion_due(const flow_tree_t *tree, os64_gui_rect_t view, flow_poi
     // properties (a colour, visibility), the group effect (a fade), and
     // whatever the author took by keyword at every element between them
     // (FStyled.taken) — an `inherit` hands down a background too — and, for
-    // an element whose background is cut to its text, everything, since
-    // that background is drawn through the text inside it, wherever the
-    // text is. What an element repaints of its own box alone is not drawn
-    // there.
+    // an element whose background is cut to the text the box holds,
+    // everything, since that background is drawn through that text,
+    // wherever it is. What an element repaints of its own box alone is not
+    // drawn there.
     FProps handed = {{0}};
     for (int p = 0; p < GARB_NPROPS; p++)
         if (garb_prop_inherited((garb_prop_t)p) || p == GARB_OPACITY)
@@ -1742,17 +1742,24 @@ uint64_t flow_motion_due(const flow_tree_t *tree, os64_gui_rect_t view, flow_poi
         FProps took;
         for (int w = 0; w < F_PROP_WORDS; w++)
             took.w[w] = own != NULL ? own->taken.w[w] : ~(uint64_t)0;
+        // Whether an element's text clip holds the box: neither it nor a
+        // box between them leaves the clip (flow_visit_text_clip).
+        bool in_clip = !leaves_text_clip(b);
         for (const os64_html_node_t *a = b->node->parent; a != NULL && next > now; a = a->parent) {
             const FStyled *st = a->kind == OS64_HTML_ELEMENT ? f_style_of(tree->styles, a) : NULL;
             if (st != NULL && st->motion != NULL) {
                 FProps ask;
                 for (int w = 0; w < F_PROP_WORDS; w++)
                     ask.w[w] = handed.w[w] | took.w[w];
-                next = fmin(next, f_motion_next(st->motion, now, clips_to_text(&st->style) ? NULL : &ask));
+                bool through = in_clip && clips_to_text(&st->style);
+                next = fmin(next, f_motion_next(st->motion, now, through ? NULL : &ask));
             }
             if (st != NULL)
                 for (int w = 0; w < F_PROP_WORDS; w++)
                     took.w[w] &= st->taken.w[w];
+            const flow_box_t *ab = f_map_get(&tree->first, a);
+            if (ab != NULL && leaves_text_clip(ab))
+                in_clip = false;
         }
     }
     if (!(next < INFINITY))
