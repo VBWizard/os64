@@ -190,8 +190,7 @@ static void motion_easing_cases(void)
     }
     expect("easing: a cubic is its curve", true, NULL);
     // The curve's ends are its ends, however far its controls reach: 0 at
-    // 0 and 1 at 1, exactly — where the power form's rounding misses 1 by
-    // 2e-10 for cubic-bezier(0, 0.1, 1, 1e6), and by more below.
+    // 0 and 1 at 1, exactly.
     static const double kFar[][4] = {
         {0, 0.1, 1, 1e6}, {0.5, 0.7, 0.5, -1e6}, {0, 123456.789, 1, -987654.321}, {0.3, 2, 0.7, -1},
     };
@@ -1509,21 +1508,28 @@ static void motion_due_cases(void)
         uint64_t due;
     } kCases[] = {
         {"motion due: a continuous value now", "mv 1s linear", 1000},
-        {"motion due: steps at the next edge", "mv 1s steps(4,end)", 1250},
+        {"motion due: steps, while they run, now", "mv 1s steps(4,end)", 1000},
         {"motion due: paused, never", "mv 1s linear paused", FLOW_NEVER},
         {"motion due: in its delay, its start", "mv 1s linear 500ms", 1500},
-        {"motion due: a discrete value at its flip", "ff 1s linear", 1500},
+        {"motion due: a discrete value, while it runs, now", "ff 1s linear", 1000},
         {"motion due: ended and filling, never", "mv 1s linear forwards -2s", FLOW_NEVER},
-        {"motion due: hidden to visible, the millisecond after its start", "hv 1s linear", 1001},
-        {"motion due: visible to hidden, its end", "vh 1s linear", 2000},
+        {"motion due: hidden to visible, while it runs, now", "hv 1s linear", 1000},
+        {"motion due: visible to hidden, while it runs, now", "vh 1s linear", 1000},
+        // Two equal ends hold still, whatever the easing, and are due at
+        // the interval's far end; a pause that resumes is due there too.
+        {"motion due: two equal ends hold still, due at their far end", "hd 1s linear", 1500},
+        {"motion due: and so through steps", "hd 1s steps(3,end)", 1500},
+        {"motion due: and on a discrete value", "fh 1s linear", 1400},
     };
     for (size_t i = 0; i < sizeof(kCases) / sizeof(kCases[0]); i++) {
-        char html[512];
+        char html[1024];
         snprintf(html, sizeof(html), MOTION_STYLE
                  "@keyframes mv{from{transform:translateX(0)}to{transform:translateX(100px)}}"
                  "@keyframes ff{from{font-family:serif}to{font-family:monospace}}"
                  "@keyframes hv{from{visibility:hidden}to{visibility:visible}}"
                  "@keyframes vh{from{visibility:visible}to{visibility:hidden}}"
+                 "@keyframes hd{0%%{opacity:.5}50%%{opacity:.5}100%%{opacity:1}}"
+                 "@keyframes fh{0%%{font-family:serif}40%%{font-family:serif}100%%{font-family:monospace}}"
                  "</style><div style='animation:%s'>x</div>", kCases[i].animation);
         Moving m;
         moving_open(&m, html, 1000);
@@ -1533,30 +1539,58 @@ static void motion_due_cases(void)
         expect(kCases[i].name, due == kCases[i].due, due == kCases[i].due ? NULL : detail);
         moving_close(&m);
     }
-    // steps(2147483647): the next edge is worked out, not walked to — a
-    // walk is two billion turns on the window's thread.
+    // steps(2147483647) runs at the frame rate: due now, nothing walked.
     Moving m;
     moving_open(&m, MOTION_STYLE
         "@keyframes c{to{color:red}}"
         "</style><div style='animation:c 1s steps(2147483647)'>x</div>", 1000);
-    expect("motion due: the next of two billion steps, at once",
-           flow_motion_due(m.tree, kView, (flow_point_t){0, 0}) == 1001, NULL);
+    expect("motion due: two billion steps, while they run, now",
+           flow_motion_due(m.tree, kView, (flow_point_t){0, 0}) == 1000, NULL);
     moving_close(&m);
 
-    // Running backwards the progress falls through each edge, and the
-    // step below shows just past it: steps(2, end) reversed is at its
-    // halfway value at 500 ms, at its first just after.
+    // An implicit end rests on the value underneath: where an animation
+    // under it moves that value, the two ends are equal only at this
+    // instant, and the interval moves; where it holds still (paused), the
+    // ends hold, and the one resting on it is due at its own end.
     moving_open(&m, MOTION_STYLE
-        "@keyframes o{from{opacity:0}to{opacity:1}}"
-        "</style><div id=o style='animation:o 1s steps(2,end) reverse'>x</div>", 1000);
-    moving_again(&m, 1500);
-    const flow_style_t *os = moving_style(&m, "o");
-    uint64_t odue = flow_motion_due(m.tree, kView, (flow_point_t){0, 0});
-    bool half = os != NULL && os->opacity == 500 && odue == 1501;
-    moving_again(&m, odue);
-    os = moving_style(&m, "o");
-    expect("motion due: reversed, a step falls the millisecond after its edge",
-           half && os != NULL && os->opacity == 0, NULL);
+        "@keyframes up{from{opacity:0}to{opacity:1}}@keyframes zr{to{opacity:0}}"
+        "</style><div style='animation:up 1s linear,zr 1s linear'>x</div>", 1000);
+    expect_u32("motion due: equal ends resting on a moving value move",
+               (uint32_t)flow_motion_due(m.tree, kView, (flow_point_t){0, 0}), 1000);
+    moving_close(&m);
+    moving_open(&m, MOTION_STYLE
+        "@keyframes up{from{opacity:0}to{opacity:1}}@keyframes zr{to{opacity:0}}"
+        "</style><div style='animation:up 1s linear paused,zr 1s linear'>x</div>", 1000);
+    expect_u32("motion due: and resting on a still one hold, due at their end",
+               (uint32_t)flow_motion_due(m.tree, kView, (flow_point_t){0, 0}), 2000);
+    moving_close(&m);
+    // An animation running but holding still (its own two ends equal) moves
+    // nothing under the one resting on it: both are due at the first's end
+    // of its hold, 1500.
+    moving_open(&m, MOTION_STYLE
+        "@keyframes hd{0%{opacity:0}50%{opacity:0}100%{opacity:1}}@keyframes zr{to{opacity:0}}"
+        "</style><div style='animation:hd 1s linear,zr 1s linear'>x</div>", 1000);
+    expect_u32("motion due: and resting on one running but holding still hold too",
+               (uint32_t)flow_motion_due(m.tree, kView, (flow_point_t){0, 0}), 1500);
+    moving_close(&m);
+    // Two ends of an animation's own replace the value underneath and what
+    // moved it: the one resting on them holds, and both are due at their
+    // end.
+    moving_open(&m, MOTION_STYLE
+        "@keyframes up{from{opacity:0}to{opacity:1}}@keyframes hf{from{opacity:.5}to{opacity:.5}}"
+        "@keyframes zh{to{opacity:.5}}"
+        "</style><div style='animation:up 1s linear,hf 1s linear,zh 1s linear'>x</div>", 1000);
+    expect_u32("motion due: and resting on two ends replacing a moving value hold too",
+               (uint32_t)flow_motion_due(m.tree, kView, (flow_point_t){0, 0}), 2000);
+    moving_close(&m);
+    // And replace a value the schedule's walk could not make: the shadows
+    // under them make a list, none at both ends makes none.
+    moving_open(&m, MOTION_STYLE
+        "@keyframes sh{from{box-shadow:0 0 red}to{box-shadow:5px 5px red}}"
+        "@keyframes nn{from{box-shadow:none}to{box-shadow:none}}@keyframes zn{to{box-shadow:none}}"
+        "</style><div style='animation:sh 1s linear,nn 1s linear,zn 1s linear'>x</div>", 1000);
+    expect_u32("motion due: and resting on two ends replacing an unmade value hold too",
+               (uint32_t)flow_motion_due(m.tree, kView, (flow_point_t){0, 0}), 2000);
     moving_close(&m);
 
     // Played either way — forwards, reverse, alternate, alternate-reverse
@@ -1682,14 +1716,13 @@ static void motion_due_cases(void)
     expect_u32("motion due: an animation resting on a moving one moves",
                (uint32_t)flow_motion_due(m.tree, kView, (flow_point_t){0, 0}), 1000);
     moving_close(&m);
-    // An animation resting on the value underneath, still where it rests
-    // on its own end, replaces nothing: the one under it is due at its
-    // step, where the value under the later one moves.
+    // An animation resting on the value underneath replaces nothing: the
+    // one under it, stepping, runs at the frame rate.
     moving_open(&m, MOTION_STYLE
         "@keyframes up{from{opacity:0}to{opacity:1}}@keyframes dn{to{opacity:0}}"
         "</style><div id=ov style='animation:up 1s steps(2, end),dn 1s linear'>x</div>", 1000);
-    expect_u32("motion due: the one under an implicit keyframe is due for its own change",
-               (uint32_t)flow_motion_due(m.tree, kView, (flow_point_t){0, 0}), 1500);
+    expect_u32("motion due: the one under an implicit keyframe, while it runs, now",
+               (uint32_t)flow_motion_due(m.tree, kView, (flow_point_t){0, 0}), 1000);
     moving_close(&m);
     // A value underneath the schedule's walk had no room to make — a
     // 64-function list held still — is not known, and the animation
@@ -1730,8 +1763,8 @@ static void motion_due_cases(void)
     moving_open(&m, MOTION_STYLE
         "@keyframes flat{from{transform:matrix(0,0,0,0,0,0)}to{transform:matrix(1,0,0,1,0,0)}}"
         "</style><div id=fl style='animation:flat 1s linear infinite'></div>", 1000);
-    expect_u32("motion due: a transform that cannot be undone flips at one half",
-               (uint32_t)flow_motion_due(m.tree, kView, (flow_point_t){0, 0}), 1500);
+    expect_u32("motion due: a transform that cannot be undone, while it runs, now",
+               (uint32_t)flow_motion_due(m.tree, kView, (flow_point_t){0, 0}), 1000);
     moving_close(&m);
 
     // An element out of view whose shadow reaches into it is seen there:
@@ -1875,59 +1908,6 @@ static void motion_due_cases(void)
         char detail[48];
         snprintf(detail, sizeof(detail), "got %llu", (unsigned long long)due);
         expect(kOutsideNames[i], due == (i < 3 ? 1000 : FLOW_NEVER), detail);
-        moving_close(&m);
-    }
-
-    // An easing that overshoots: visible to hidden through a curve that
-    // passes 1 early turns hidden there, not at the keyframe. The crossing
-    // is found here from the easing itself, scanned, and the page is due
-    // when it shows: the next millisecond, as it rises through 1.
-    static const struct {
-        const char *name, *keyframes, *easing;
-        double level;
-        bool hidden_after;
-    } kCross[] = {
-        {"motion due: visibility hidden where an overshoot passes 1",
-         "@keyframes vh{from{visibility:visible}to{visibility:hidden}}", "cubic-bezier(0,2,1,2)", 1, true},
-    };
-    for (size_t i = 0; i < sizeof(kCross) / sizeof(kCross[0]); i++) {
-        char html[512];
-        snprintf(html, sizeof(html), MOTION_STYLE "%s</style><div id=x style='animation:%s 1s %s'>x</div>",
-                 kCross[i].keyframes, i == 0 ? "vh" : "ff", kCross[i].easing);
-        flow_easing_t e = {.kind = FLOW_EASE_CUBIC};
-        sscanf(kCross[i].easing, "cubic-bezier(%lf,%lf,%lf,%lf)", &e.p[0], &e.p[1], &e.p[2], &e.p[3]);
-        double crossings[4];
-        int nc = 0;
-        double prev = f_ease(&e, 0, false) - kCross[i].level;
-        for (int k = 1; k < 1000000 && nc < 4; k++) {
-            double y = f_ease(&e, k / 1e6, false) - kCross[i].level;
-            if ((prev < 0 && y >= 0) || (prev > 0 && y <= 0))
-                crossings[nc++] = k / 1e6 * 1000;
-            prev = y;
-        }
-        moving_open(&m, html, 1000);
-        bool ok = nc == 1;
-        uint64_t now = 1000;
-        for (int k = 0; ok && k < nc; k++) {
-            uint64_t due = flow_motion_due(m.tree, kView, (flow_point_t){0, 0});
-            uint64_t want = (uint64_t)floor(1000 + crossings[k]) + 1;
-            // The scan finds a crossing to a microsecond; the curve's own
-            // root may sit the other side of a millisecond's edge.
-            ok = due + 1 >= want && due <= want + 1 && due > now;
-            if (ok && i == 0) {
-                const flow_style_t *st = moving_style(&m, "x");
-                ok = st != NULL && st->visibility == FLOW_VISIBLE;
-                moving_again(&m, due);
-                st = moving_style(&m, "x");
-                ok = ok && st != NULL && st->visibility == FLOW_HIDDEN;
-            } else if (ok) {
-                moving_again(&m, due);
-            }
-            now = due;
-        }
-        char detail[96];
-        snprintf(detail, sizeof(detail), "%d crossings, first at %.3f ms", nc, nc > 0 ? crossings[0] : -1.0);
-        expect(kCross[i].name, ok, ok ? NULL : detail);
         moving_close(&m);
     }
 }
@@ -2457,9 +2437,10 @@ static void fuzz_as_list(flow_style_t *s, int kind, const flow_style_t *const li
 // 15973564121497552185, a discrete text-align changing at 76 ms, two
 // animations of it — made a transform list's: each of the three values a
 // list that mixes only discretely (two translations, then a singular
-// matrix no decomposition undoes), small enough that both animations'
-// mixes fit in a probe look's lists. The change is due at its millisecond.
-static void motion_probe_list_cases(void)
+// matrix no decomposition undoes). The schedule's walk makes no lists, so
+// what rests on them is unknown; the change is due no later than its
+// millisecond.
+static void motion_list_case_cases(void)
 {
     Moving lm;
     moving_open(&lm, MOTION_STYLE "</style>"
@@ -2476,7 +2457,7 @@ static void motion_probe_list_cases(void)
     bool shaped = kind == FUZZ_ALIGN && nanims == 2;
     for (int i = 0; i < 3; i++)
         shaped &= lists[i] != NULL && lists[i]->ntransform == 3;
-    expect("motion: the probe's case is the fuzzer's, its values three lists", shaped, NULL);
+    expect("motion: the list case is the fuzzer's, its values three lists", shaped, NULL);
     if (!shaped) {
         moving_close(&lm);
         return;
@@ -2501,8 +2482,8 @@ static void motion_probe_list_cases(void)
     double due = f_motion_next(&m, 75);
     char detail[64];
     snprintf(detail, sizeof(detail), "due %.17g", due);
-    expect("motion due: the fuzzer's case made of transform lists is due at its change",
-           ok && due > 75 && due <= 76, detail);
+    expect("motion due: the fuzzer's case made of transform lists is due by its change",
+           ok && due >= 75 && due <= 76, detail);
     flow_timeline_free(tl);
     moving_close(&lm);
 }
@@ -2721,13 +2702,53 @@ static void motion_held_time_cases(void)
     moving_close(&m);
 }
 
-// A crossing on two days' animation, and on the domain's longest (values.h),
-// wakes within the millisecond of the flip: a double resolves the time to
-// a tenth of a microsecond there.
-static void motion_long_crossing_cases(void)
+// Two mixes of tails that draw alike in every square box and apart in any
+// other: rotate(90deg) translateX(50%) moves by half the width, and
+// translateY(50%) rotate(90deg) by half the height, the same way. An
+// interval between them moves in a 100 by 40 box, so it is due now, and
+// the value a millisecond on differs — where comparing what they draw in
+// square boxes held the interval still.
+static flow_transform_t motion_fn(flow_fn_t fn, double turn, flow_length_t x, flow_length_t y)
+{
+    flow_transform_t f;
+    memset(&f, 0, sizeof(f));
+    f.fn = fn;
+    f.a[2] = 1;
+    f.a[3] = turn;
+    f.x = x;
+    f.y = y;
+    f_transform_fn_matrix(&f);
+    return f;
+}
+
+static void motion_blend_structure_cases(void)
 {
     os64_html_document_t *doc = parse("<!doctype html><p id=x>x</p>");
     const os64_html_node_t *x = motion_find(doc->document, "x");
+    const flow_length_t zero = {FLOW_LENGTH_PX, 0, 0}, half = {FLOW_LENGTH_PERCENT, 50 * 64, 0};
+    flow_transform_t wide[2] = {motion_fn(FLOW_FN_ROTATE, 90, zero, zero),
+                                motion_fn(FLOW_FN_TRANSLATE, 0, half, zero)};
+    flow_transform_t tall[2] = {motion_fn(FLOW_FN_TRANSLATE, 0, zero, half),
+                                motion_fn(FLOW_FN_ROTATE, 90, zero, zero)};
+    flow_transform_t none[1] = {motion_fn(FLOW_FN_TRANSLATE, 0, zero, zero)};
+    flow_transform_blend_t bw = {wide, none, 2, 1, 0.5, 1}, bt = {tall, none, 2, 1, 0.5, 1};
+    flow_transform_t ends[2];
+    memset(ends, 0, sizeof(ends));
+    ends[0].fn = ends[1].fn = FLOW_FN_BLEND;
+    ends[0].blend = &bw;
+    ends[1].blend = &bt;
+    for (int k = 0; k < 2; k++) {
+        ends[k].x = ends[k].y = zero;
+        ends[k].m[0] = ends[k].m[5] = ends[k].m[10] = ends[k].m[15] = 1;
+    }
+    double sq0[16], sq1[16];
+    f_blend_matrix(&ends[0], 1000 * 64, 1000 * 64, sq0);
+    f_blend_matrix(&ends[1], 1000 * 64, 1000 * 64, sq1);
+    bool alike = memcmp(sq0, sq1, sizeof(sq0)) == 0;
+    f_blend_matrix(&ends[0], 100 * 64, 40 * 64, sq0);
+    f_blend_matrix(&ends[1], 100 * 64, 40 * 64, sq1);
+    expect("motion: the two blends draw alike in a square box and apart in another",
+           alike && memcmp(sq0, sq1, sizeof(sq0)) != 0, NULL);
     flow_style_t base;
     memset(&base, 0, sizeof(base));
     base.opacity = 1000;
@@ -2736,75 +2757,53 @@ static void motion_long_crossing_cases(void)
     for (int k = 0; k < 2; k++) {
         frames[k].offset = k;
         frames[k].style = base;
-        frames[k].style.text_align = k ? FLOW_ALIGN_RIGHT : FLOW_ALIGN_LEFT;
-        f_props_add(&frames[k].sets, GARB_TEXT_ALIGN);
+        frames[k].style.transform = &ends[k];
+        frames[k].style.ntransform = 1;
+        f_props_add(&frames[k].sets, GARB_TRANSFORM);
     }
-    static const double kDur[2] = {1e8, GARB_TIME_MS_MAX};
-    for (int d = 0; d < 2; d++) {
-        FAnimation an;
-        memset(&an, 0, sizeof(an));
-        an.timing.name = (flow_name_t){"l", 1};
-        an.timing.duration_ms = kDur[d];
-        an.timing.iterations = 1;
-        an.frames = frames;
-        an.nframes = 2;
-        f_props_add(&an.props, GARB_TEXT_ALIGN);
-        FMotion m;
-        memset(&m, 0, sizeof(m));
-        m.base = base;
-        m.anims = &an;
-        m.nanims = 1;
-        bool ok;
-        flow_timeline_t *tl = motion_meet(doc, x, &m, 0, &ok);
-        double half = kDur[d] / 2, wake = f_motion_next(&m, 0);
-        char detail[96];
-        snprintf(detail, sizeof(detail), "wake %.17g half %.17g", wake, half);
-        expect(d == 0 ? "motion: two days' crossing wakes within its millisecond"
-                      : "motion: the domain's longest crossing wakes within its millisecond",
-               ok && wake <= half && wake >= half - 1, detail);
-        flow_timeline_free(tl);
-    }
-
-    // A curve whose slope's roots lie far apart in size: cubic-bezier(1/3,
-    // 1, 2/3, -1e6) rises, turns at 5e-7 and is back below 0 by 1e-6.
-    // Hidden to visible over 1e12 ms, it shows at once and is hidden again
-    // at 999999 ms — which is due there, the turn kept though a root that
-    // much larger stands beside it, and the crossing found to the last bit.
-    FKeyframe vf[2];
-    memset(vf, 0, sizeof(vf));
-    for (int k = 0; k < 2; k++) {
-        vf[k].offset = k;
-        vf[k].style = base;
-        vf[k].style.visibility = k ? FLOW_VISIBLE : FLOW_HIDDEN;
-        f_props_add(&vf[k].sets, GARB_VISIBILITY);
-    }
-    FAnimation va;
-    memset(&va, 0, sizeof(va));
-    va.timing.name = (flow_name_t){"v", 1};
-    va.timing.duration_ms = GARB_TIME_MS_MAX;
-    va.timing.iterations = 1;
-    va.timing.easing =
-        (flow_easing_t){FLOW_EASE_CUBIC, {1.0 / 3, 1, 2.0 / 3, -GARB_EASING_Y_MAX}, 0, 0, false};
-    va.frames = vf;
-    va.nframes = 2;
-    f_props_add(&va.props, GARB_VISIBILITY);
-    FMotion vm;
-    memset(&vm, 0, sizeof(vm));
-    vm.base = base;
-    vm.anims = &va;
-    vm.nanims = 1;
-    bool vok;
-    flow_timeline_t *vt = motion_meet(doc, x, &vm, 0, &vok);
-    flow_style_t shown = vm.base;
-    (void)f_motion_style(&vm, 1, &shown, NULL, NULL, NULL, false);
-    double back = f_motion_next(&vm, 1);
-    char vdetail[64];
-    snprintf(vdetail, sizeof(vdetail), "visible %d, due %.17g", shown.visibility == FLOW_VISIBLE, back);
-    expect("motion: a turn beside a far larger root is kept, and the return due",
-           vok && shown.visibility == FLOW_VISIBLE && back >= 999990 && back <= 1000001, vdetail);
-    flow_timeline_free(vt);
+    FAnimation an;
+    memset(&an, 0, sizeof(an));
+    an.timing.name = (flow_name_t){"b", 1};
+    an.timing.duration_ms = 1000;
+    an.timing.iterations = 1;
+    an.frames = frames;
+    an.nframes = 2;
+    f_props_add(&an.props, GARB_TRANSFORM);
+    FMotion m;
+    memset(&m, 0, sizeof(m));
+    m.base = base;
+    m.anims = &an;
+    m.nanims = 1;
+    bool ok;
+    flow_timeline_t *tl = motion_meet(doc, x, &m, 0, &ok);
+    double due = f_motion_next(&m, 500);
+    char detail[64];
+    snprintf(detail, sizeof(detail), "due %.17g", due);
+    expect("motion: blends compared by structure, not by square boxes, keep their interval due",
+           ok && due == 500, detail);
+    flow_timeline_free(tl);
+    // And one tail mixed at two fractions is two values.
+    flow_transform_blend_t early = {wide, none, 2, 1, 0.25, 1}, late = {wide, none, 2, 1, 0.75, 1};
+    ends[0].blend = &early;
+    ends[1].blend = &late;
+    tl = motion_meet(doc, x, &m, 0, &ok);
+    due = f_motion_next(&m, 500);
+    snprintf(detail, sizeof(detail), "due %.17g", due);
+    expect("motion: one tail at two fractions is two blends", ok && due == 500, detail);
+    flow_timeline_free(tl);
+    // And two blends that are one — the same tails, the same fraction —
+    // hold the interval still: due at its far end, 1000.
+    flow_transform_blend_t twin = bw;
+    ends[0].blend = &bw;
+    ends[1].blend = &twin;
+    tl = motion_meet(doc, x, &m, 0, &ok);
+    due = f_motion_next(&m, 500);
+    snprintf(detail, sizeof(detail), "due %.17g", due);
+    expect("motion: two blends that are one hold still", ok && due == 1000, detail);
+    flow_timeline_free(tl);
     os64_html_document_free(doc);
 }
+
 
 // An incomplete layout styles the whole page and stops before laying it
 // all out, so what its styles no longer name is carried on: only a
@@ -2896,9 +2895,9 @@ static void motion_cases(void)
     motion_timeline_cases();
     motion_due_cases();
     motion_fuzz_cases();
-    motion_probe_list_cases();
+    motion_list_case_cases();
     motion_dropped_cases();
     motion_held_time_cases();
-    motion_long_crossing_cases();
+    motion_blend_structure_cases();
     motion_sweep();
 }
