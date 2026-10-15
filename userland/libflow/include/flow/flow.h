@@ -1054,6 +1054,10 @@ bool flow_motion_tick(flow_tree_t *tree, uint64_t now, flow_point_t scroll,
 // or waiting out its delay — not one paused, over, or of nothing that can
 // show.
 bool flow_motion_pending(const flow_tree_t *tree);
+// flow_motion_pending of one half, wherever its element is: a change for a
+// tick to show (`ticks`; flow_motion_tick_due's) or for a layout
+// (flow_motion_due's).
+bool flow_motion_pending_in(const flow_tree_t *tree, bool ticks);
 
 // The root box: the html element's. NULL for a page with nothing to lay out.
 const flow_box_t *flow_root(const flow_tree_t *tree);

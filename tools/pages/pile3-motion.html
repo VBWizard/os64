@@ -3,7 +3,9 @@
 both slices, Contracts). FROZEN rows are paused at a fixed moment by a
 negative delay, or long finished, so they hold still: each box's left edge
 sits on its blue line, which is where Chrome put it (measured 2026-10-13;
-rows 25-29 2026-10-14), or looks like its neighbour. LIVE rows move. -->
+rows 25-29 2026-10-14), or looks like its neighbour. LIVE rows move: 30 and
+31 tick between layouts (S8b, § Animations in place), the colour beside 31
+does not. -->
 <style>
 body{margin:8px;font:13px sans-serif;background:#fff;color:#000}
 h2{font-size:15px;margin:10px 0 4px}
@@ -28,6 +30,8 @@ h2{font-size:15px;margin:10px 0 4px}
 @keyframes far{from{transform:scale(1e15) scale(1e15) scale(1e15) scale(1e15) scale(1e15) scale(1e15) scale(1e15) scale(1e15) scale(1e15) scale(1e15) scale(1e15) scale(1e15) scale(1e15) scale(1e15) scale(1e15) scale(1e15) scale(1e15) scale(1e15) scale(1e15) scale(1e15) scale(1e15) scale(1e15) rotate(1deg)}to{transform:rotate(2deg)}}
 @keyframes units{from{transform:rotate(1rad)}to{transform:rotate(0.5turn)}}
 @keyframes tiny{from{transform:matrix(1e-200,0,0,1e-200,0,0)}to{transform:none}}
+@keyframes glide{to{transform:translateX(120px)}}
+@keyframes tint{to{color:#c00}}
 .rm{animation:spin 2s linear infinite}
 @media (prefers-reduced-motion: reduce){.rm{animation:none}}
 </style></head><body>
@@ -57,6 +61,8 @@ h2{font-size:15px;margin:10px 0 4px}
 <div class=row><b class=b style="animation:march 2s steps(8) infinite"></b><span class=lab>21 jumps 8 times, every 2 s</span></div>
 <div class=row><b class=b style="animation:march 2s 3s ease-in-out both"></b><span class=lab>22 waits 3 s from loading, slides once, stays</span></div>
 <div class=row><b class="b rm" id=r23></b><span class=lab>23 turns, unless Settings says Reduce motion</span></div>
+<div class=row><div style="position:absolute;left:0;top:2px;width:150px;height:40px;background:#cde;animation:glide 3s ease-in-out infinite alternate"><input size=8 value="along"></div><span class=lab>30 a panel slides, its field with it</span></div>
+<div class=row><b class=b style="animation:spin 2s linear infinite"></b><span class=n style="background:none;font:bold 30px sans-serif;animation:tint 1s linear infinite alternate">A</span><span class=lab>31 turns beside a letter whose colour pulses</span></div>
 <div style="height:1500px"></div>
 <div class=row><b class=b style="animation:spin 2s linear infinite"></b><span class=lab>24 far below: turning when you scroll to it</span></div>
 <h2>FROZEN, at the edges of what a page can write: the box looks like its neighbour</h2>

@@ -454,6 +454,15 @@ static os64_font_status_t budget_face_open(os64_font_engine_t *engine,
 }
 flow_tree_t *__real_flow_layout(const os64_html_document_t *,const os64_page_t *,int32_t,
     const flow_env_t *);
+/* A tick refused as one whose lists find no room is (flow_motion_tick). */
+static bool tick_refuse;
+bool __real_flow_motion_tick(flow_tree_t *,uint64_t,flow_point_t,
+    void (*)(void *,const flow_box_t *,os64_gui_rect_t),void *,bool *);
+bool __wrap_flow_motion_tick(flow_tree_t *tree,uint64_t now,flow_point_t scroll,
+    void (*mark)(void *,const flow_box_t *,os64_gui_rect_t),void *ctx,bool *moved) {
+    if(tick_refuse) { if(moved!=NULL) *moved=false; return false; }
+    return __real_flow_motion_tick(tree,now,scroll,mark,ctx,moved);
+}
 flow_tree_t *__wrap_flow_layout(const os64_html_document_t *doc,const os64_page_t *model,
     int32_t width,const flow_env_t *env) {
     // A refusal after reclaiming the old geometry exercises the retry's
@@ -946,6 +955,187 @@ static const char kMotionPage[]="<!doctype html><style>body{margin:0}"
     "@media (prefers-reduced-motion: reduce){#a{animation:none}}"
     "#far{margin-top:3000px;width:10px;height:10px;animation:slide 1s steps(4) infinite}</style>"
     "<div id=a></div><div id=far></div>";
+
+/* THE TICKS (PILE3.md § Animations in place): what only painting reads
+ * moves between layouts, on a deadline of its own, paced and held to the
+ * cost rule by its own frames; a layout due by then wins; what a tick
+ * repaints is marked, cut to the view; controls inside a frame that moved
+ * are placed again; and a scroll's paint shows the ticks at its time. */
+static int32_t tick_x(const char *id) {
+    const flow_box_t *b=flow_box_for(g.page.tree,probe_id(id));
+    return b!=NULL ? flow_box_doc_rect(b,scroll_now()).x : -1;
+}
+static const char kTickPage[]="<!doctype html><style>body{margin:0}"
+    "@keyframes go{to{transform:translateX(100px)}}@keyframes hue{to{background-color:blue}}"
+    "#t{width:40px;height:20px;animation:go 1s linear infinite}"
+    "#far{margin-top:3000px;width:10px;height:10px;background:red;animation:hue 1s linear infinite}"
+    "</style><div id=t><input id=in size=2></div><div id=far></div>";
+static void tick_cases(void) {
+    bool was_run=s_animations, was_reduce=s_reduce_motion;
+    s_animations=true; s_reduce_motion=false;
+    clock_step=0; geometry_layout_delay=0;
+    now_ms=100;
+    probe_page(kTickPage,false);
+    relayout(true);
+    check(motion_next()==YONDER_NEVER && tick_next()==100 && ticker_due==100,
+        "ticks: what only painting reads is due for a tick, not a layout");
+    int32_t field_was=g.nfw==1 ? g.fw[0]->w->bounds.x : -1;
+    uint64_t laid_began=g.motion_began;
+    g.ui.any_dirty=false;
+    now_ms=600;
+    motion_tick();
+    check(tick_x("t")==50 && g.ticked && g.tick_painting && g.tick_began==600 && g.motion_began==laid_began,
+        "ticks: a tick moves its element at its moment and lays nothing out");
+    check(g.nfw==1 && g.fw[0]->w->bounds.x==field_was+50,
+        "ticks: a control inside a frame that moved is placed again");
+    check(tick_next()==YONDER_NEVER,"ticks: a tick waiting for its paint is the only frame");
+    os64_gui_rect_t d=g.ui.dirty, v=g.view.bounds;
+    check(g.ui.any_dirty && d.x<=v.x && d.x+d.w>=v.x+90 && d.w<v.w && d.y+d.h<=v.y+40,
+        "ticks: a tick marks where its element was and is, cut to the view, and none of what is out of it");
+    clock_us+=3000; now_ms=603;
+    motion_painted();
+    check(g.tick_us==3000 && g.tick_ended==603 && !g.tick_painting && tick_next()==616,
+        "ticks: a tick costs its arithmetic and its paint, and the next comes a frame after it began");
+    now_ms=616;
+    motion_tick();
+    clock_us+=30000; now_ms=646;
+    motion_painted();
+    check(tick_next()==676,"ticks: a costlier tick waits as long again after it ends");
+    /* A tick not taken is a layout instead, which is that tick's frame. */
+    tick_refuse=true; geometry_layout_delay=4000; now_ms=676;
+    uint64_t laid_was=g.motion_began;
+    motion_tick();
+    tick_refuse=false; geometry_layout_delay=0;
+    clock_us+=2000; now_ms=678;
+    motion_painted();
+    check(g.motion_began==laid_was && tick_x("t")==58 && g.tick_began==676 && g.tick_us==6000 &&
+          tick_next()==692,
+        "ticks: a tick not taken lays the page out instead, which with its paint is the tick's frame");
+    /* A whole view marked for any reason — a box's scroll among them —
+     * brings what it shows to now before it is painted; and a tick before
+     * a paint that is not taken lays out instead, as the tick's frame. */
+    now_ms=685;
+    os64_ui_mark_dirty(&g.ui,&g.view);
+    before_paint();
+    check(tick_x("t")==59 && !g.tick_painting && g.tick_began==676,
+        "ticks: a whole view marked to be painted shows the ticks at its time, and is no tick's frame");
+    tick_refuse=true; now_ms=690;
+    os64_ui_mark_dirty(&g.ui,&g.view);
+    before_paint();
+    tick_refuse=false;
+    check(g.tick_painting && g.tick_began==690 && tick_x("t")==59,
+        "ticks: one not taken lays out instead, as the tick's frame");
+    motion_painted();
+    g.page.diag=yonder_diag_new("http://t.test/",1,0);
+    now_ms=710;
+    motion_tick();
+    clock_us+=201000; now_ms=911;
+    motion_painted();
+    bool said=motion_pause_said();
+    char record[2048];
+    yonder_diag_render(g.page.diag,record,sizeof(record));
+    check(tick_next()==YONDER_NEVER && said &&
+          strstr(g.status_text,"ANIMATIONS PAUSED: a tick's frame took 201 ms, over 200")!=NULL &&
+          strstr(g.status_text,"SOME ")==NULL &&
+          strstr(record,"animations: paused: a tick's frame took 201 ms, over 200")!=NULL,
+        "ticks: a tick's frame over MOTION_COST_MS stops the ticks, and is said as one");
+    yonder_diag_free(g.page.diag); g.page.diag=NULL;
+    probe_drop();
+
+    /* A mark that reaches past the view is cut to it: a column taller than
+     * the view, its colour moving, marks the view's part of it alone. */
+    now_ms=500;
+    probe_page("<!doctype html><style>body{margin:0}@keyframes hue{to{background-color:blue}}"
+        "#col{width:10px;height:5000px;background:red;animation:hue 1s linear infinite}"
+        "</style><div id=col></div>",false);
+    relayout(true);
+    g.ui.any_dirty=false;
+    now_ms=700;
+    motion_tick();
+    d=g.ui.dirty; v=g.view.bounds;
+    check(g.ui.any_dirty && d.y>=v.y && d.y+d.h<=v.y+v.h && d.w<v.w,
+        "ticks: a mark that reaches past the view is cut to it");
+    probe_drop();
+
+    /* The canvas's owner, its box far shorter than the view: the whole
+     * view is its background's, and the whole view is marked. */
+    probe_page("<!doctype html><style>body{margin:0}@keyframes bg{to{background-color:blue}}"
+        "html{animation:bg 1s infinite}</style><div style='height:20px'>short</div>",false);
+    relayout(true);
+    g.ui.any_dirty=false;
+    now_ms=900;
+    motion_tick();
+    d=g.ui.dirty; v=g.view.bounds;
+    check(g.ui.any_dirty && d.y<=v.y && d.y+d.h>=v.y+v.h && d.x<=v.x && d.x+d.w>=v.x+v.w,
+        "ticks: the canvas's owner, shorter than the view, repaints the whole view");
+    probe_drop();
+
+    /* Both halves on one page: a layout due wins; layouts that cost too
+     * much leave the ticks moving, said as SOME; the canvas's owner repaints
+     * the whole view; a scroll's paint ticks first, a picture's does not. */
+    now_ms=1000;
+    probe_page("<!doctype html><style>body{margin:0}"
+        "@keyframes go{to{transform:translateX(100px)}}@keyframes slide{to{margin-left:100px}}"
+        "@keyframes bg{to{background-color:blue}}html{animation:bg 1s infinite}"
+        "#t{width:40px;height:20px;animation:go 1s linear infinite}"
+        "#a{width:10px;height:10px;animation:slide 1s linear infinite}#tall{height:3000px}"
+        "</style><div id=t></div><div id=a></div><div id=tall></div>",false);
+    relayout(true);
+    check(motion_next()==1000 && tick_next()==1000,"ticks: a page of both is due for both");
+    now_ms=1100;
+    motion_tick();
+    check(g.motion_began==1100 && !g.tick_painting && tick_x("t")==10,
+        "ticks: a layout due by then wins, and brings what ticks to its time");
+    motion_painted();
+    geometry_layout_delay=201000; now_ms=1200;
+    motion_tick();
+    clock_us+=1000;
+    motion_painted();
+    geometry_layout_delay=0;
+    g.page.diag=yonder_diag_new("http://t.test/",2,0);
+    said=motion_pause_said();
+    yonder_diag_render(g.page.diag,record,sizeof(record));
+    check(said && motion_next()==YONDER_NEVER &&
+          strstr(g.status_text,"SOME ANIMATIONS PAUSED: a layout's frame took 202 ms, over 200")!=NULL &&
+          strstr(record,"animations: some paused: a layout's frame took 202 ms, over 200")!=NULL,
+        "ticks: layouts stopped by what they cost while ticks move are said as some");
+    g.ui.any_dirty=false;
+    now_ms=1500;
+    motion_tick();
+    check(tick_x("t")==50 && g.tick_began==1500,
+        "ticks: a page whose layouts cost too much keeps its ticking animations moving");
+    check(!motion_pause_said() && strstr(g.status_text,"SOME ANIMATIONS PAUSED")!=NULL,
+        "ticks: a pause said stays said while the other half's frame waits for its paint");
+    d=g.ui.dirty; v=g.view.bounds;
+    check(g.ui.any_dirty && d.x<=v.x && d.y<=v.y && d.x+d.w>=v.x+v.w && d.y+d.h>=v.y+v.h,
+        "ticks: the canvas's owner repaints the whole view");
+    clock_us+=1000;
+    motion_painted();
+    now_ms=1700;
+    g.ui.any_dirty=false;
+    pictures_tick();
+    before_paint();
+    check(tick_x("t")==50,"ticks: a picture's paint does not tick");
+    scroll_to(0,1);
+    before_paint();
+    check(tick_x("t")==70 && g.tick_began==1500 && !g.tick_painting,
+        "ticks: a scroll's paint shows the ticks at its time, and is no tick's frame");
+    /* With the layouts stopped, a tick not taken stops the ticks, said
+     * where it failed. */
+    tick_refuse=true; now_ms=1800;
+    motion_tick();
+    tick_refuse=false;
+    yonder_diag_render(g.page.diag,record,sizeof(record));
+    check(tick_next()==YONDER_NEVER && g.motion_began==1200 &&
+          strstr(g.status_text,"No room to move the page's animations between layouts")!=NULL &&
+          strstr(record,"No room to move the page's animations between layouts")!=NULL,
+        "ticks: with the layouts stopped, a tick not taken stops the ticks and says so");
+    yonder_diag_free(g.page.diag); g.page.diag=NULL;
+    probe_drop();
+    s_animations=was_run; s_reduce_motion=was_reduce;
+    clock_step=0;
+}
+
 static void motion_cases(void) {
     bool was_run=s_animations, was_reduce=s_reduce_motion;
     s_animations=true; s_reduce_motion=false;
@@ -965,10 +1155,15 @@ static void motion_cases(void) {
     check(motion_x("a")==50 && g.motion_laid && g.motion_began==600 && g.motion_us==5000 &&
           os64_streq(status,g.status_text) && g.laid_ms==37,
         "motion: a tick lays the page out at its moment, quietly, and keeps what it cost apart");
+    check(motion_next()==YONDER_NEVER && tick_next()==YONDER_NEVER,
+        "motion: a frame waiting for its paint is the only frame, of either half");
+    motion_painted();
+    pictures_schedule();
     check(motion_next()==616 && ticker_due==616,
         "motion: the next comes a frame after the last began when twice its cost is sooner");
     geometry_layout_delay=40000; now_ms=616;
     motion_tick();
+    motion_painted();
     check(motion_x("a")==52 && motion_next()==696,
         "motion: a costlier layout (51.6 px, at the nearest pixel) waits twice its cost after it ends");
     now_ms=650;
@@ -1005,8 +1200,8 @@ static void motion_cases(void) {
     bool said=motion_pause_said();
     char record[2048];
     yonder_diag_render(g.page.diag,record,sizeof(record));
-    check(said && strstr(g.status_text,"ANIMATIONS PAUSED: a frame took 231 ms, over 200")!=NULL &&
-          strstr(record,"animations: paused: a frame took 231 ms, over 200")!=NULL,
+    check(said && strstr(g.status_text,"ANIMATIONS PAUSED: a layout's frame took 231 ms, over 200")!=NULL &&
+          strstr(record,"animations: paused: a layout's frame took 231 ms, over 200")!=NULL,
         "motion: the frame that stops the animations is said, on the standing line and in the record, "
         "and the line is to be painted again");
     motion_painted();
@@ -4124,6 +4319,7 @@ int main(void)
     native_refusals();
     switch_cases();
     motion_cases();
+    tick_cases();
     edit_and_kind_changes();
     password_edits();
     reset_editors();
