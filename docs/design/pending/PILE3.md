@@ -1780,14 +1780,18 @@ thread busy all the time):
   took more than MOTION_COST_MS (200) lays out for no animation: its
   animations show what they were at the last layout made for another
   reason, until S8b moves the ones it can. One whose layout fails is its
-  last, as though it had cost too much. A page the cost rule stops is
-  SAID: its standing line ends `ANIMATIONS PAUSED: a frame took 240 ms,
-  over 200` (before a first frame, `the layout took`), and its record
-  carries `animations: paused: …`, then `running` should a cheaper
-  layout start them again — for a page whose animations stopped looks
-  like a page with none. A page with nothing to move, animations
-  turned off, or a frame that failed (said where it failed) says nothing
-  of it;
+  last, as though it had cost too much. A frame over the limit is the
+  page's last too: nothing measures a cheaper one after it, so its
+  animations stay still until the page is left. A page the cost rule
+  stops is SAID, for a page whose animations stopped looks like a page
+  with none: its standing line ends `ANIMATIONS PAUSED: a frame took
+  240 ms, over 200` (before a first frame, `the layout took`), and its
+  record carries `animations: paused: …`. It is the page's state, in
+  view or not. The record follows the pause out: `off` when animations
+  are turned off, `none` when none are left, and `running` when a
+  layout before the page's first frame came in under the limit. A page
+  with no animations, animations turned off, or a frame that failed
+  (said where it failed) says nothing of it;
 - otherwise the next frame waits until twice the last one's cost has
   passed since its paint ended — at most a third of the window's time
   spent on motion — and never comes sooner than MOTION_FRAME_MS (16)

@@ -1724,7 +1724,11 @@ static void say_laid_out(uint64_t ms)
         if (g.page.diag != NULL)
             yonder_diag_fact(g.page.diag, "animations", fact);
     } else if (was_paused && g.page.diag != NULL) {
-        yonder_diag_fact(g.page.diag, "animations", "running");
+        // Why the pause is over: animations turned off, none left, or a
+        // layout before the page's first frame that cost less.
+        yonder_diag_fact(g.page.diag, "animations", !s_animations ? "off"
+                                                  : !flow_animated(g.page.tree) ? "none"
+                                                  : "running");
     }
     os64_snprintf(line, sizeof(line), "%s%s%s - laid out at %d px%s in %lu ms%s%s%s%s%s",
                   g.page.way.url, g.page.way.note[0] ? " - " : "", g.page.way.note,
@@ -3367,19 +3371,17 @@ static uint64_t motion_cost_us(void)
 }
 
 // Whether the cost rule is what keeps the shown page's animations still,
-// and if so, in `out`, what cost too much: a page with animations to run
-// whose frame — before its first, its own layout — took more than
-// MOTION_COST_MS. A frame that failed is said where it failed (say_failed),
-// and a page with nothing that would move has nothing paused.
+// and if so, in `out`, what cost too much: a page with animations, in view
+// or not, whose frame — before its first, its own layout — took more than
+// MOTION_COST_MS. It is the page's state, not the view's: scrolling
+// changes nothing about it. A frame that failed is said where it failed
+// (say_failed), and a page with no animations has nothing paused.
 static bool motion_paused_why(char *out, size_t cap)
 {
     out[0] = '\0';
     uint64_t cost_us = motion_cost_us();
-    if (!s_animations || g.page.tree == NULL || cost_us == UINT64_MAX ||
+    if (!s_animations || !flow_animated(g.page.tree) || cost_us == UINT64_MAX ||
         cost_us <= (uint64_t)MOTION_COST_MS * 1000)
-        return false;
-    os64_gui_rect_t view = {g.sx, g.sy, g.view.bounds.w, g.view.bounds.h};
-    if (flow_motion_due(g.page.tree, view, scroll_now()) == FLOW_NEVER)
         return false;
     os64_snprintf(out, cap, "%s took %lu ms, over %d", g.motion_laid ? "a frame" : "the layout",
                   (unsigned long)((cost_us + 999) / 1000), MOTION_COST_MS);
@@ -3480,17 +3482,22 @@ static void motion_tick(void)
 
 // The window painted: a frame for an animation costs its layout and the
 // paint that shows it, so the frame ends now and costs all of it. A frame
-// that cost too much is the page's last, and the standing line says so.
-static void motion_painted(void)
+// that cost too much is the page's last, and the standing line says so:
+// true when it changed the line, which the paint just made is without, so
+// the caller paints again — nothing may wake the window after the last
+// frame.
+static bool motion_painted(void)
 {
     if (!g.motion_painting)
-        return;
+        return false;
     g.motion_painting = false;
     g.motion_ended = yonder_now_ms();
     g.motion_us = (uint64_t)(os64_micros() - g.motion_began_us);
     char why[64];
-    if (!g.motion_paused && motion_paused_why(why, sizeof(why)))
-        say_laid_out(g.laid_ms);
+    if (g.motion_paused || !motion_paused_why(why, sizeof(why)))
+        return false;
+    say_laid_out(g.laid_ms);
+    return true;
 }
 
 // The window was covered or uncovered. The flag is the truth and the event
@@ -7546,7 +7553,8 @@ int main(int argc, char **argv)
         bool scripts_ready = script_turn();
         pictures_settle();
         os64_ui_paint(&g.ui);
-        motion_painted();
+        if (motion_painted())
+            os64_ui_paint(&g.ui);
         if (stream_more)
             (void)os64_gui_event_ring(g.win, BELL_STREAM);
         if (coming_more || (scripts_ready && scripts_owed(g.page.scripts)))

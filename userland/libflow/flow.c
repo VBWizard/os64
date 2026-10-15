@@ -1703,6 +1703,11 @@ static bool clips_to_text(const flow_style_t *s)
     return false;
 }
 
+bool flow_animated(const flow_tree_t *tree)
+{
+    return tree != NULL && tree->styles != NULL && tree->styles->nanimated > 0;
+}
+
 uint64_t flow_motion_due(const flow_tree_t *tree, os64_gui_rect_t view, flow_point_t scroll)
 {
     if (tree == NULL || tree->styles == NULL || tree->styles->nanimated == 0)

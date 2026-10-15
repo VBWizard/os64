@@ -999,12 +999,14 @@ static void motion_cases(void) {
         "motion: a page whose frame for an animation took more than MOTION_COST_MS lays out for none");
     check(strstr(g.status_text,"ANIMATIONS PAUSED")==NULL,
         "motion: a frame is judged when its paint ends, not before");
-    motion_painted();
+    bool repaint=motion_painted();
     char record[2048];
     yonder_diag_render(g.page.diag,record,sizeof(record));
-    check(strstr(g.status_text," - ANIMATIONS PAUSED: a frame took 201 ms, over 200")!=NULL &&
+    check(repaint && strstr(g.status_text," - ANIMATIONS PAUSED: a frame took 201 ms, over 200")!=NULL &&
           strstr(record,"animations: paused: a frame took 201 ms, over 200")!=NULL,
-        "motion: the frame that stops the animations is said, on the standing line and in the record");
+        "motion: the frame that stops the animations is said, on the standing line and in the record, "
+        "and the line is to be painted again");
+    check(!motion_painted(),"motion: a paint with no frame says nothing new");
     yonder_diag_free(g.page.diag); g.page.diag=NULL;
     geometry_layout_delay=0;
     probe_drop();
@@ -1024,10 +1026,12 @@ static void motion_cases(void) {
     yonder_diag_render(g.page.diag,record,sizeof(record));
     check(strstr(g.status_text,"ANIMATIONS PAUSED")==NULL && strstr(record,"animations: running")!=NULL,
         "motion: animations running again are said so, and the record follows");
+    say_laid_out(MOTION_COST_MS+1);
     s_animations=false;
     say_laid_out(MOTION_COST_MS+1);
-    check(strstr(g.status_text,"ANIMATIONS PAUSED")==NULL,
-        "motion: animations turned off are not paused by what a frame costs");
+    yonder_diag_render(g.page.diag,record,sizeof(record));
+    check(strstr(g.status_text,"ANIMATIONS PAUSED")==NULL && strstr(record,"animations: off")!=NULL,
+        "motion: animations turned off are not paused by what a frame costs, and the record says off");
     s_animations=true;
     say_laid_out(MOTION_COST_MS);
     geometry_refuse_layout=true;
@@ -1045,6 +1049,20 @@ static void motion_cases(void) {
     say_laid_out(MOTION_COST_MS+1);
     check(strstr(g.status_text,"ANIMATIONS PAUSED")==NULL,
         "motion: a slow page with no animations has none paused");
+    probe_drop();
+    /* The pause is the page's, not the view's: an animation in place and
+     * out of view is paused all the same, and scrolling changes nothing. */
+    probe_page("<!doctype html><style>body{margin:0}@keyframes tint{to{color:red}}"
+        "#far{margin-top:3000px;height:10px;animation:tint 1s linear infinite}</style>"
+        "<div id=far>b</div>",false);
+    relayout(true);
+    say_laid_out(MOTION_COST_MS+1);
+    check(strstr(g.status_text," - ANIMATIONS PAUSED: the layout took 201 ms, over 200")!=NULL,
+        "motion: an animation out of view is paused by what the page costs");
+    scroll_to(0,3000);
+    say_laid_out(MOTION_COST_MS+1);
+    check(strstr(g.status_text," - ANIMATIONS PAUSED: the layout took 201 ms, over 200")!=NULL,
+        "motion: scrolling it into view says the same");
     probe_drop();
 
     /* What the view shows: an animation that only repaints where its
