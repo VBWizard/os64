@@ -1258,7 +1258,7 @@ static void timed(FAnimation *an, const char *name, double ms)
 static double motion_end(FAnimation *an, double now)
 {
     FMotion alone = {.anims = an, .nanims = 1};
-    return f_motion_next(&alone, now);
+    return f_motion_next(&alone, now, NULL);
 }
 
 // One layout's dealings with the timeline, told directly: begun from the
@@ -1403,11 +1403,11 @@ static void motion_timeline_cases(void)
     p.timing.paused = true;
     FMotion paused = {.anims = &p, .nanims = 1};
     ok = timeline_layout(&tl, 5000, true, 1, (Meet[]){{y, &paused}});
-    expect("motion: paused, nothing is due", ok && isinf(f_motion_next(&paused, 5000)), NULL);
+    expect("motion: paused, nothing is due", ok && isinf(f_motion_next(&paused, 5000, NULL)), NULL);
     p.timing.paused = false;
     ok = ok && timeline_layout(&tl, 9000, true, 1, (Meet[]){{y, &paused}});
     expect("motion: resumed, it runs from where it was held",
-           ok && f_motion_next(&paused, 9000) == 10000, NULL);
+           ok && f_motion_next(&paused, 9000, NULL) == 10000, NULL);
     // One running before it pauses holds what it has run: started at
     // 11000, paused at 11300, nothing is due at 11500; resumed at 13000,
     // its one second ends at 13700.
@@ -1419,11 +1419,11 @@ static void motion_timeline_cases(void)
     r.timing.paused = true;
     ok = ok && timeline_layout(&tl, 11300, true, 1, (Meet[]){{y, &running}});
     expect("motion: paused while running, nothing is due",
-           ok && isinf(f_motion_next(&running, 11500)), NULL);
+           ok && isinf(f_motion_next(&running, 11500, NULL)), NULL);
     r.timing.paused = false;
     ok = ok && timeline_layout(&tl, 13000, true, 1, (Meet[]){{y, &running}});
     expect("motion: resumed, it ends what it held short of",
-           ok && f_motion_next(&running, 13000) == 13700, NULL);
+           ok && f_motion_next(&running, 13000, NULL) == 13700, NULL);
 
     // A record an incomplete layout made is kept, and so is the one it
     // carried a name on in — once, not again beside it as a record no name
@@ -1910,6 +1910,79 @@ static void motion_due_cases(void)
         expect(kOutsideNames[i], due == (i < 3 ? 1000 : FLOW_NEVER), detail);
         moving_close(&m);
     }
+    // And only for what it hands down: an inherited value and a fade reach
+    // the box inside it; its own background and border do not — unless
+    // the author hands them down by keyword, at every element between.
+    static const char *const kFixed = "<p style='position:fixed;top:0'>x</p>";
+    static const char *const kTakes = "<p style='position:fixed;top:0;background-color:inherit'>x</p>";
+    static const struct {
+        const char *name, *keyframes, *between, *box;
+        uint64_t due;
+    } kHanded[] = {
+        {"motion due: seen through a box inside it, a fade", "to{opacity:0}", NULL, kFixed, 1000},
+        {"motion due: seen through a box inside it, visibility", "to{visibility:hidden}", NULL, kFixed, 1000},
+        {"motion due: not for its own background", "to{background-color:red}", NULL, kFixed, FLOW_NEVER},
+        {"motion due: nor for its own border", "to{border-top-color:red}", NULL, kFixed, FLOW_NEVER},
+        {"motion due: but for a background the box inherits", "to{background-color:red}", NULL, kTakes, 1000},
+        {"motion due: and through everything between that inherits it",
+         "to{background-color:red}", "background-color:inherit", kTakes, 1000},
+        {"motion due: not through an element between that does not",
+         "to{background-color:red}", "color:blue", kTakes, FLOW_NEVER},
+        {"motion due: unset on a background is no inheritance", "to{background-color:red}", NULL,
+         "<p style='position:fixed;top:0;background-color:unset'>x</p>", FLOW_NEVER},
+        {"motion due: nor an inherit a later declaration replaces", "to{background-color:red}", NULL,
+         "<p style='position:fixed;top:0;background-color:inherit;background-color:blue'>x</p>", FLOW_NEVER},
+    };
+    for (size_t i = 0; i < sizeof(kHanded) / sizeof(kHanded[0]); i++) {
+        // `between`, when given, is the style of an element between them.
+        char inner[256], html[768];
+        if (kHanded[i].between != NULL)
+            snprintf(inner, sizeof(inner), "<div style='%s'>%s</div>", kHanded[i].between, kHanded[i].box);
+        else
+            snprintf(inner, sizeof(inner), "%s", kHanded[i].box);
+        snprintf(html, sizeof(html), MOTION_STYLE "@keyframes c{%s}"
+                 ".c{animation:c 1s linear;border-top:2px solid}</style>"
+                 "<div class=c style='margin-top:2000px'>%s</div>", kHanded[i].keyframes, inner);
+        moving_open(&m, html, 1000);
+        uint64_t due = flow_motion_due(m.tree, kView, (flow_point_t){0, 0});
+        char detail[48];
+        snprintf(detail, sizeof(detail), "got %llu", (unsigned long long)due);
+        expect(kHanded[i].name, due == kHanded[i].due, detail);
+        moving_close(&m);
+    }
+    // An `inherit` in a keyframe takes as one in a declaration does; and a
+    // background cut to the text inside it is drawn through that text,
+    // wherever a box moves it — but not through a box that leaves the clip,
+    // fixed, or inside an absolute box.
+    static const struct {
+        const char *name, *html;
+        uint64_t due;
+    } kThrough[] = {
+        {"motion due: through an element between whose keyframes inherit it",
+         "@keyframes hold{from{background-color:inherit}to{background-color:inherit}}</style>"
+         "<div class=c style='margin-top:2000px'><div style='animation:hold 10s linear'>"
+         "<p style='position:fixed;top:0;background-color:inherit'>x</p></div></div>", 1000},
+        {"motion due: a background cut to the text a moved box holds",
+         "</style><div class=c style='margin-top:2000px;background-clip:text'>"
+         "<div style='position:relative;top:-2000px'>x</div></div>", 1000},
+        {"motion due: not through a fixed box the clip does not hold",
+         "</style><div class=c style='margin-top:2000px;background-clip:text'>"
+         "<p style='position:fixed;top:0'>x</p></div>", FLOW_NEVER},
+        {"motion due: nor through one inside an absolute box",
+         "</style><div class=c style='margin-top:2000px;background-clip:text'><div style='position:absolute'>"
+         "<div style='position:relative;top:-2000px'>x</div></div></div>", FLOW_NEVER},
+    };
+    for (size_t i = 0; i < sizeof(kThrough) / sizeof(kThrough[0]); i++) {
+        char html[768];
+        snprintf(html, sizeof(html), MOTION_STYLE "@keyframes c{to{background-color:red}}"
+                 ".c{animation:c 1s linear}%s", kThrough[i].html);
+        moving_open(&m, html, 1000);
+        uint64_t due = flow_motion_due(m.tree, kView, (flow_point_t){0, 0});
+        char detail[48];
+        snprintf(detail, sizeof(detail), "got %llu", (unsigned long long)due);
+        expect(kThrough[i].name, due == kThrough[i].due, detail);
+        moving_close(&m);
+    }
 }
 
 // ── The allocation sweep ────────────────────────────────────────────────
@@ -2327,7 +2400,7 @@ static void motion_fuzz_one(FuzzRun *f, FuzzRng *r, long c, bool edge)
     seen[0] = true;
     int layouts = 0;
     for (uint64_t now = 0; now <= (uint64_t)horizon;) {
-        double d = f_motion_next(&m, (double)now);
+        double d = f_motion_next(&m, (double)now, NULL);
         if (!(d < INFINITY))
             break;
         uint64_t due = d <= (double)now ? now : (uint64_t)ceil(d);
@@ -2376,7 +2449,7 @@ static void motion_fuzz_one(FuzzRun *f, FuzzRng *r, long c, bool edge)
         }
         int at = missed >= 0 ? missed : 0;
         for (uint64_t now = 0, prev = 0; now <= (uint64_t)at;) {
-            double d = f_motion_next(&m, (double)now);
+            double d = f_motion_next(&m, (double)now, NULL);
             uint64_t due = !(d < INFINITY) ? UINT64_MAX : d <= (double)now ? now : (uint64_t)ceil(d);
             prev = now;
             now = due == UINT64_MAX ? UINT64_MAX : due > now ? due : now + 1;
@@ -2479,7 +2552,7 @@ static void motion_list_case_cases(void)
     m.nanims = nanims;
     bool ok;
     flow_timeline_t *tl = motion_meet(lm.p.doc, motion_find(lm.p.doc->document, "v0"), &m, 0, &ok);
-    double due = f_motion_next(&m, 75);
+    double due = f_motion_next(&m, 75, NULL);
     char detail[64];
     snprintf(detail, sizeof(detail), "due %.17g", due);
     expect("motion due: the fuzzer's case made of transform lists is due by its change",
@@ -2561,9 +2634,9 @@ static void motion_dropped_cases(void)
     m.nanims = 1;
     bool ok;
     flow_timeline_t *tl = motion_meet(doc, x, &m, 0, &ok);
-    double moving = f_motion_next(&m, 100);
+    double moving = f_motion_next(&m, 100, NULL);
     f_props_add(&an.dropped, GARB_OPACITY);
-    double dropped = f_motion_next(&m, 100);
+    double dropped = f_motion_next(&m, 100, NULL);
     char detail[64];
     snprintf(detail, sizeof(detail), "moving %g, dropped %g", moving, dropped);
     expect("motion: a dropped value is due for nothing", ok && moving == 100 && dropped == 1000, detail);
@@ -2575,7 +2648,7 @@ static void motion_dropped_cases(void)
     f_props_add(&an.props, GARB_BOX_SHADOW);
     f_props_add(&an.dropped, GARB_BOX_SHADOW);
     an.timing.iterations = INFINITY;
-    double nothing = f_motion_next(&m, 100);
+    double nothing = f_motion_next(&m, 100, NULL);
     snprintf(detail, sizeof(detail), "due %g", nothing);
     expect("motion: a dropped list with no side effect is due for nothing", isinf(nothing), detail);
     flow_timeline_free(tl);
@@ -2776,7 +2849,7 @@ static void motion_blend_structure_cases(void)
     m.nanims = 1;
     bool ok;
     flow_timeline_t *tl = motion_meet(doc, x, &m, 0, &ok);
-    double due = f_motion_next(&m, 500);
+    double due = f_motion_next(&m, 500, NULL);
     char detail[64];
     snprintf(detail, sizeof(detail), "due %.17g", due);
     expect("motion: blends compared by structure, not by square boxes, keep their interval due",
@@ -2787,7 +2860,7 @@ static void motion_blend_structure_cases(void)
     ends[0].blend = &early;
     ends[1].blend = &late;
     tl = motion_meet(doc, x, &m, 0, &ok);
-    due = f_motion_next(&m, 500);
+    due = f_motion_next(&m, 500, NULL);
     snprintf(detail, sizeof(detail), "due %.17g", due);
     expect("motion: one tail at two fractions is two blends", ok && due == 500, detail);
     flow_timeline_free(tl);
@@ -2797,7 +2870,7 @@ static void motion_blend_structure_cases(void)
     ends[0].blend = &bw;
     ends[1].blend = &twin;
     tl = motion_meet(doc, x, &m, 0, &ok);
-    due = f_motion_next(&m, 500);
+    due = f_motion_next(&m, 500, NULL);
     snprintf(detail, sizeof(detail), "due %.17g", due);
     expect("motion: two blends that are one hold still", ok && due == 1000, detail);
     flow_timeline_free(tl);

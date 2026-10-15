@@ -64,6 +64,7 @@ typedef struct {
     bool border_color_set[4];
     int32_t border_px[4];       // declared widths in 26.6; style decides if drawn
     bool bolder;
+    FProps taken;               // FStyled.taken
 } Spec;
 
 typedef struct {
@@ -3389,6 +3390,8 @@ static bool lay_sets(Ctx *c, Spec *sp, const Spec *ua, const flow_style_t *paren
             const char *k = set->value.keyword;
             bool inherits = os64_streq(k, "inherit") ||
                             (os64_streq(k, "unset") && garb_prop_inherited(set->prop));
+            if (inherits)
+                f_props_add(&sp->taken, set->prop);
             if (os64_streq(k, "revert") || os64_streq(k, "revert-layer")) {
                 // No user origin, and no layers: both go back to the
                 // user-agent origin (Cascade 5 § 7.3, § 7.4).
@@ -3790,6 +3793,10 @@ static bool animate(Ctx *c, const os64_html_node_t *n, Spec *sp, const Spec *ua,
             Spec k = *sp;
             if (!lay_sets(c, &k, ua, parent, kf[j].sets, NULL, kf[j].sheet, kf[j].nsets, &important))
                 return false;
+            // A keyframe's `inherit` takes from the parent as the element's
+            // own declaration does (FStyled.taken).
+            for (int w = 0; w < F_PROP_WORDS; w++)
+                sp->taken.w[w] |= k.taken.w[w];
             flow_style_t specified = k.s;
             finish(c, &k, parent, item, root);
             for (int side = 0; side < 4; side++)
@@ -3939,6 +3946,7 @@ static FStyled *style_element(Ctx *c, const os64_html_node_t *n)
     // (PILE3.md § Animations): none of it is gone for the layout.
     out->transparent = (sp.s.opacity == 0 && !(sp.s.animating & FLOW_WILL_OPACITY)) ||
                        (up != NULL && up->transparent);
+    out->taken = sp.taken;
     FStyled *holder = f_map_get(&c->out->map, n->parent);
     if (holder != NULL && is(n, OS64_HTML_TAG_RP))
         holder->has_rp = true;

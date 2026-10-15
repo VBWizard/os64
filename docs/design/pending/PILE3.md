@@ -1720,9 +1720,14 @@ element, whose pieces may
 lie on many lines and, split round a block inside it, in several
 anonymous blocks, the nearest block with an element of its own, which
 holds them all; for one that makes none (`display: contents`) the boxes
-inside it, which draw what it hands down; or any box
-inside it drawn outside it, positioned, fixed or moved by a transform,
-which no ancestor's overflow holds. The root and the body are seen
+inside it, which draw what it hands down; or, for what it hands down —
+the inherited values, the fade, and what the author takes by keyword
+(`inherit`, in a declaration or a keyframe) at every element between,
+and the whole of a background cut to the text that box holds — not a
+fixed, absolute or transformed one, which leaves the clip — drawn through
+that text wherever it is, never its own background or border
+otherwise — any box inside it drawn outside it, positioned, fixed or
+moved by a transform, which no ancestor's overflow holds. The root and the body are seen
 wherever their boxes are: the canvas may take either one's background
 and paint it over the whole view, and which one it takes is the
 painter's to know. Any other — a transform, a size, a
@@ -1995,7 +2000,6 @@ the perf slice.
 | The rest of Compat § 3.4.1's drawn rows (`-webkit-box-shadow`, `-webkit-border-radius` and the others) | not animation's | a page that writes only the prefixed name |
 | `linear()` easing (Easing 2) | no page in the census writes it | a page that does |
 | An animation that moves its element rests out of view | it may carry what it draws into view from anywhere, so S8a keeps it due wherever it is; a bound on where its frames can reach — a spinner turns inside its own circle — would let it rest | S8b, where such a tick is arithmetic and a repaint, or a page whose spinners out of view cost what the P5 notices |
-| The wake through a seen stacked descendant (`flow_motion_due`) asks the ancestor's whole motion, its in-place properties that draw nothing in the descendant (`background-color`) among them (#265 round 13) | the cost is a layout for nothing, never one late | lane A's third PR: the wake asks only what an ancestor's animation can draw into the descendant — the inherited properties and the group effects such as opacity |
 | A `rotate3d()` axis of tiny parts turns about its direction, where Chrome 155 draws one of 1e-160 or 1e-200 as no turn (and turns at 1e-15) — likely its float storage of the axis; no test holds either answer (#270's full mutant run: `a-huge-axis-overflows`) | an input no page writes | a page that does, or a look at Chrome's threshold |
 | Finished-keyframe mixing: each keyframe is a whole computed style, the base with its declarations laid over it (`FKeyframe.style`), and an implicit keyframe the whole style underneath | the cure is the simplification: sparse keyframes, each only the longhands it sets, the rest read from underneath where they are mixed — less built per keyframe, and one meaning for an implicit keyframe. It touches the most semantics (`currentColor`, `em`, a width settled with its style) and wants its own Chrome probes | Ruled (Chris, 10/14): the last of the four, from a design note with Chrome's answers written before its code |
 
@@ -2047,8 +2051,12 @@ apart by structure where every square box draws them alike — an inline
 element's later pieces, lists the budget had no room for — under another animation's
 and over it — a fuzzer case remade of transform lists, an animation resting on
 a moving one's value, and the canvas's background with its owner's box
-out of view among them, and values that stand still and animations of
-nothing that can show not asked for; implicit keyframes against
+out of view among them, and values that stand still, animations of
+nothing that can show, and an element's own background and border seen
+only through a box drawn outside it not asked for, unless every element
+between inherits them by keyword, a keyframe's among them, or the
+background is cut to the text that box holds — not one a fixed box or
+one inside an absolute box shows; implicit keyframes against
 Chrome's values over another animation; THE SCHEDULE AGAINST THE VALUE — thousands of animations
 made at random (one to five keyframes at any offsets, several at one,
 two animations of a property, every easing to the domain's limits,

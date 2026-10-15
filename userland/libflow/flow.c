@@ -1692,6 +1692,17 @@ static bool may_own_canvas(const flow_tree_t *tree, const os64_html_node_t *n)
            (n == root || (n->parent == root && n->kind == OS64_HTML_ELEMENT && n->tag == OS64_HTML_TAG_BODY));
 }
 
+// Whether a background of `s` is cut to the text inside its box: drawn
+// through that text, a box drawn outside the element among it
+// (flow_visit_text_clip).
+static bool clips_to_text(const flow_style_t *s)
+{
+    for (int32_t i = 0; i < flow_background_layers(s); i++)
+        if (flow_background_layer(s, i).clip == FLOW_EDGE_TEXT)
+            return true;
+    return false;
+}
+
 uint64_t flow_motion_due(const flow_tree_t *tree, os64_gui_rect_t view, flow_point_t scroll)
 {
     if (tree == NULL || tree->styles == NULL || tree->styles->nanimated == 0)
@@ -1703,21 +1714,52 @@ uint64_t flow_motion_due(const flow_tree_t *tree, os64_gui_rect_t view, flow_poi
         if (st == NULL || st->motion == NULL ||
             (st->motion->in_place && !may_own_canvas(tree, n) && !motion_seen(tree, n, view, scroll)))
             continue;
-        next = fmin(next, f_motion_next(st->motion, now));
+        next = fmin(next, f_motion_next(st->motion, now, NULL));
     }
     // What draws outside the boxes it is inside — a positioned box, a
     // fixed one, one a transform moves, none of them in their ancestors'
     // overflow: each that can be seen makes the animated elements it is
-    // inside due as well, since what they hand down in place (a colour, a
-    // fade) is drawn there.
+    // inside due as well, for what they hand down to it: the inherited
+    // properties (a colour, visibility), the group effect (a fade), and
+    // whatever the author took by keyword at every element between them
+    // (FStyled.taken) — an `inherit` hands down a background too — and, for
+    // an element whose background is cut to the text the box holds,
+    // everything, since that background is drawn through that text,
+    // wherever it is. What an element repaints of its own box alone is not
+    // drawn there.
+    FProps handed = {{0}};
+    for (int p = 0; p < GARB_NPROPS; p++)
+        if (garb_prop_inherited((garb_prop_t)p) || p == GARB_OPACITY)
+            f_props_add(&handed, (garb_prop_t)p);
     for (int32_t i = 0; i < tree->nstacked && next > now; i++) {
         const flow_box_t *b = tree->stacked[i];
         if (b->node == NULL || !box_seen(b, view, scroll))
             continue;
+        // What reaches the box by keyword from the element above: what it
+        // took; from one further up, only what everything between took too.
+        // An element with no style of its own is taken to take everything.
+        const FStyled *own = f_style_of(tree->styles, b->node);
+        FProps took;
+        for (int w = 0; w < F_PROP_WORDS; w++)
+            took.w[w] = own != NULL ? own->taken.w[w] : ~(uint64_t)0;
+        // Whether an element's text clip holds the box: neither it nor a
+        // box between them leaves the clip (flow_visit_text_clip).
+        bool in_clip = !leaves_text_clip(b);
         for (const os64_html_node_t *a = b->node->parent; a != NULL && next > now; a = a->parent) {
             const FStyled *st = a->kind == OS64_HTML_ELEMENT ? f_style_of(tree->styles, a) : NULL;
-            if (st != NULL && st->motion != NULL)
-                next = fmin(next, f_motion_next(st->motion, now));
+            if (st != NULL && st->motion != NULL) {
+                FProps ask;
+                for (int w = 0; w < F_PROP_WORDS; w++)
+                    ask.w[w] = handed.w[w] | took.w[w];
+                bool through = in_clip && clips_to_text(&st->style);
+                next = fmin(next, f_motion_next(st->motion, now, through ? NULL : &ask));
+            }
+            if (st != NULL)
+                for (int w = 0; w < F_PROP_WORDS; w++)
+                    took.w[w] &= st->taken.w[w];
+            const flow_box_t *ab = f_map_get(&tree->first, a);
+            if (ab != NULL && leaves_text_clip(ab))
+                in_clip = false;
         }
     }
     if (!(next < INFINITY))

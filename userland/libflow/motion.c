@@ -2234,18 +2234,19 @@ static double edge_due(const Clock *k, const flow_animation_t *a, double base, d
     return change_due(base + at_progress(k, a, p), now);
 }
 
-// Whether anything animation `a` does can show, `last` naming the
-// animation in effect that shows each property (f_motion_next): a
-// property it sets that is drawn — animatable, its list not dropped — or
-// whose side effect follows its clock (f_motion_effects), unless a later
-// animation in effect replaces it, which then shows the property and
-// gives the same side effect. An animation of nothing that can show —
-// an empty rule, `display` alone, declarations an `!important` winner
-// holds — changes nothing at any of its edges.
-static bool anim_shows(const FAnimation *an, int32_t a, const int32_t last[GARB_NPROPS])
+// Whether anything animation `a` does can show, `last` naming the animation
+// in effect that shows each property (f_motion_next), of the properties
+// `only` names (NULL for all): a property it sets that is drawn —
+// animatable, its list not dropped — or whose side effect follows its clock
+// (f_motion_effects), unless a later animation in effect replaces it, which
+// then shows the property and gives the same side effect. An animation of
+// nothing that can show — an empty rule, `display` alone, declarations an
+// `!important` winner holds — changes nothing at any of its edges.
+static bool anim_shows(const FAnimation *an, int32_t a, const int32_t last[GARB_NPROPS], const FProps *only)
 {
     for (int p = 0; p < GARB_NPROPS; p++)
         if (f_props_has(&an->props, (garb_prop_t)p) && !(last[p] > a) &&
+            (only == NULL || f_props_has(only, (garb_prop_t)p)) &&
             ((animatable((garb_prop_t)p) && !f_props_has(&an->dropped, (garb_prop_t)p)) ||
              will_bit((garb_prop_t)p) != 0))
             return true;
@@ -2261,13 +2262,15 @@ static void *no_lists(void *ctx, size_t bytes)
 }
 
 // What the schedule's walk (f_motion_next) keeps: the element, the time,
-// when its value next changes, which animation shows each property
-// (`last`), and the properties of the value the walk has made so far whose
-// lists it had no room for (it makes none: a list is left unknown) — over
-// one, the value under a later animation is not known to hold.
+// the properties asked for (`only`, NULL for all), when their value next
+// changes, which animation shows each property (`last`), and the properties
+// of the value the walk has made so far whose lists it had no room for (it
+// makes none: a list is left unknown) — over one, the value under a later
+// animation is not known to hold.
 typedef struct {
     const FMotion *m;
     double now, next;
+    const FProps *only;
     const int32_t *last;
     FProps failed;
 } Due;
@@ -2288,6 +2291,8 @@ static bool due_step(void *ctx, int32_t a, garb_prop_t p, const Clock *k, const 
     Due *d = ctx;
     if (d->next <= d->now)
         return false;
+    if (d->only != NULL && !f_props_has(d->only, p))
+        return true;
     const FAnimation *an = &d->m->anims[a];
     bool active = k->phase == PHASE_ACTIVE && !an->record->paused;
     bool own = !s->implicit && !e->implicit;
@@ -2305,7 +2310,7 @@ static bool due_step(void *ctx, int32_t a, garb_prop_t p, const Clock *k, const 
     return true;
 }
 
-double f_motion_next(const FMotion *m, double now)
+double f_motion_next(const FMotion *m, double now, const FProps *only)
 {
     // Of the animations in effect now, the last to set each property with a
     // value wholly its own — its list for it not dropped, its interval
@@ -2339,7 +2344,7 @@ double f_motion_next(const FMotion *m, double now)
     double next = INFINITY;
     for (int32_t a = 0; a < m->nanims; a++) {
         const FAnimation *an = &m->anims[a];
-        if (an->record == NULL || an->record->paused || !anim_shows(an, a, last))
+        if (an->record == NULL || an->record->paused || !anim_shows(an, a, last, only))
             continue;
         double base = an->record->start;
         Clock k = clock_at(&an->timing, local_time(an->record, now));
@@ -2357,7 +2362,7 @@ double f_motion_next(const FMotion *m, double now)
     // And what each shows in its active phase, walked as the value is, so
     // that each sees the value the ones before it made.
     if (next > now) {
-        Due d = {m, now, next, last, {{0}}};
+        Due d = {m, now, next, only, last, {{0}}};
         flow_style_t walked = m->base;
         Look look = {now, &walked, no_lists, NULL, &d.failed};
         (void)motion_walk(m, &look, false, due_step, &d);
