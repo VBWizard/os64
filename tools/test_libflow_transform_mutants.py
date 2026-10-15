@@ -133,7 +133,7 @@ mutants = [
      '    if (s != NULL && s->kind == F_FRAME_TRANSFORM && s->through && !m->untransformed)\n        return (flow_point_t){0, 0};',
      '    if (false)\n        return (flow_point_t){0, 0};'),
     ('a-turned-box-is-where-it-was-laid-out', FLOW,
-     '    if (inner_through(box->frame) == NULL)\n        return r;',
+     '    if (inner_through(f) == NULL)\n        return r;',
      '    if (true)\n        return r;'),
     ('nothing-is-taken-back-through-a-matrix', FLOW,
      '    const flow_frame_t *t = inner_through(f);\n    if (t == NULL)\n        return true;',

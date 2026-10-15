@@ -267,27 +267,42 @@ typedef struct {
     FProps holds;
 } FAnimation;
 
-// An element's animations: its style with none of them (each property's
-// underlying value, the implicit keyframes'), and those that run, in
-// `animation-name` order — a later one's value replacing an earlier's.
-// `in_place` when every property they set only repaints where the element
-// already draws (f_motion_in_place).
-typedef struct {
-    flow_style_t base;
-    FAnimation *anims;
-    int32_t nanims;
-    bool in_place;
-} FMotion;
-
-// What the lists an animated value makes come from — a transform's, the
-// shadows', a background's positions: NULL when none is left.
-typedef void *(*FAlloc)(void *ctx, size_t bytes);
 // A keyframe resolved (FResolve): its style, and the longhands whose lists
 // found no room in the lists' budget, which its mix leaves as they were.
 typedef struct {
     flow_style_t style;
     FProps refused;
 } FResolved;
+
+// An element's animations: its style with none of them (each property's
+// underlying value, the implicit keyframes'), and those that run, in
+// `animation-name` order — a later one's value replacing an earlier's.
+// `in_place` when every property they set only repaints where the element
+// already draws (f_motion_in_place) — the view's question, not `ticks`.
+// `ticks` when the element's values move between layouts (PILE3.md §
+// Animations in place; f_motion_ticks and the style pass's conditions):
+// then `resolved` holds every keyframe resolved, two to a keyframe as the
+// style pass keeps them (`first` each animation's first) and living as
+// long as the styles, `mixed` what the lists of the layout's mix of its
+// values spent of the lists' budget (not its keyframes', which it keeps),
+// `edge` when its next phase edge shows (f_motion_next_of,
+// F_NEXT_EDGES, from the layout's time) and `at` the time its style is the
+// element's at — the layout's, or the last tick's that moved it.
+typedef struct {
+    flow_style_t base;
+    FAnimation *anims;
+    int32_t nanims;
+    bool in_place;
+    bool ticks;
+    const FResolved **resolved;
+    const int32_t *first;
+    size_t mixed;
+    double edge, at;
+} FMotion;
+
+// What the lists an animated value makes come from — a transform's, the
+// shadows', a background's positions: NULL when none is left.
+typedef void *(*FAlloc)(void *ctx, size_t bytes);
 // Animation `a`'s keyframe `frame` resolved: its declarations laid over
 // the element's own, against the parent when `over` is NULL — for the
 // font size and the colour, which are worked out first — and otherwise
@@ -321,6 +336,20 @@ uint8_t f_motion_effects(const FMotion *m, double now);
 // transform, a size, a position, a shadow's offset) may carry what it
 // draws into view from anywhere (flow_motion_due).
 bool f_motion_in_place(const FMotion *m);
+// Whether every property `m`'s animations set is of the TICK SET, which
+// nothing but painting reads and nothing inherits: the transform's four
+// properties and its origin, opacity, the background's colour and
+// position, the border colours, `box-shadow` (PILE3.md § Animations in
+// place).
+bool f_motion_ticks(const FMotion *m);
+// Whether any property `m`'s animations set has another value in `a` than
+// in `b`: a blend in a transform is the same only as itself, so two worked
+// apart differ.
+bool f_motion_changed(const FMotion *m, const flow_style_t *a, const flow_style_t *b);
+// Every property `m`'s animations set taken from `worked` into `live`,
+// each as a keyframe's discrete value is taken (its fields, and the
+// currentColor it holds).
+void f_motion_take(const FMotion *m, flow_style_t *live, const flow_style_t *worked);
 // When an animated value is next due after `now`, of the properties `only`
 // names (NULL for all): `now` itself while an animation that can show is
 // in its active phase and what it shows moves, a step or a discrete flip
@@ -329,6 +358,13 @@ bool f_motion_in_place(const FMotion *m);
 // intervals hold is what the layout at `now` found (FAnimation.holds): at
 // another time, none does, and that is early.
 double f_motion_next(const FMotion *m, double now, const FProps *only);
+// f_motion_next in halves: F_NEXT_EDGES, the starts and ends of active
+// phases, where what an animation does to the page's structure may change
+// (f_motion_effects) — a layout's to show for an element that ticks; and
+// F_NEXT_VALUES, everything else — the ticks'. The earlier of the two is
+// f_motion_next.
+typedef enum { F_NEXT_ALL, F_NEXT_EDGES, F_NEXT_VALUES } FNext;
+double f_motion_next_of(const FMotion *m, double now, const FProps *only, FNext half);
 // A layout's dealings with the timeline: it begins a timeline of its own
 // beside the one the page shows (`from`, read and never changed; NULL on
 // no memory), each animated element is matched to its records there
@@ -934,6 +970,10 @@ struct flow_frame {
     double affine[6];
     bool through, upright;
     flow_point_t by;
+    // And the border box, in 26.6 as it was laid out, that the matrix is
+    // worked against, so a tick works its new one against the same
+    // (flow_motion_tick).
+    int64_t box_x, box_y, box_w, box_h;
     // When its containing block is a scroll container (`outer`'s box), the
     // block's content reaches as far down as the container scrolls, so
     // `hi[1]` is `room_down` — the room to the padding box's foot, which

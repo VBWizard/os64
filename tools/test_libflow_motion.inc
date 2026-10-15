@@ -1,11 +1,12 @@
-// tools/test_libflow_motion.inc — animations, the model (PILE3.md
-// § Animations, slice S8a), included by test_libflow_host.c. Every
-// expected value is headless Chrome 155's answer to the probe pages of
-// 10/13 — animations paused at a negative delay, read back through
-// getComputedStyle — or worked by hand from Web Animations 1, CSS
-// Animations 1 and 2, Easing 1 and Transforms 1 and 2, never captured from
-// the engine. A length lands on 1/64 px (the contracts), so a translation
-// is held to Chrome's within half of that.
+// tools/test_libflow_motion.inc — animations, the model and its ticks
+// (PILE3.md § Animations, slices S8a and S8b), included by
+// test_libflow_host.c. Every expected value is headless Chrome 155's
+// answer to the probe pages of 10/13 — animations paused at a negative
+// delay, read back through getComputedStyle — or worked by hand from Web
+// Animations 1, CSS Animations 1 and 2, Easing 1 and Transforms 1 and 2,
+// never captured from the engine; but a tick's, which is the layout's at
+// the same time, to the bit (the contracts). A length lands on 1/64 px, so
+// a translation is held to Chrome's within half of that.
 
 #define MOTION_STYLE "<!doctype html><style>body{margin:0} div{width:100px;height:40px}"
 // Paused at a time: a paused animation holds its local time at 0, so a
@@ -47,15 +48,21 @@ static flow_timeline_t *motion_meet(const os64_html_document_t *doc, const os64_
     return t;
 }
 
-static void moving_open(Moving *m, const char *html, uint64_t now)
+static void moving_open_for(Moving *m, const char *html, uint64_t now, bool ticks)
 {
     sheeted_open(&m->p, html, 800, 600);
+    m->p.env.ticks = ticks;
     m->tl = flow_timeline_new(m->p.doc);
     m->p.env.timeline = m->tl;
     m->p.env.now_ms = now;
     m->tree = flow_layout(m->p.doc, m->p.page, 800, &m->p.env);
     flow_timeline_commit(&m->tl, m->tree);
     m->p.env.timeline = m->tl;
+}
+
+static void moving_open(Moving *m, const char *html, uint64_t now)
+{
+    moving_open_for(m, html, now, false);
 }
 
 // The page laid out again at `now` and shown, as a face does: the tree
@@ -1428,7 +1435,13 @@ static double layout_next(FMotion *m, double now, Hand *const *hands)
     flow_style_t at = m->base;
     s_lists_used = 0;
     (void)f_motion_style(m, now, &at, lists_alloc, hand_resolved, (void *)hands, NULL, true);
-    return f_motion_next(m, now, NULL);
+    double next = f_motion_next(m, now, NULL);
+    // The layouts' half and the ticks' are the whole of it.
+    double edges = f_motion_next_of(m, now, NULL, F_NEXT_EDGES);
+    double values = f_motion_next_of(m, now, NULL, F_NEXT_VALUES);
+    if (fmin(edges, values) != next)
+        expect("motion: the schedule's two halves are the whole of it", false, NULL);
+    return next;
 }
 
 // An animation `name` of `ms` milliseconds, once, of opacity, which it holds
@@ -2205,8 +2218,9 @@ static char *motion_values(const Moving *m)
 // uninterrupted run makes, and the timeline comes through each failure
 // with its start times: the layout after it is that one too. `single`
 // fails that one allocation alone, every other succeeding; otherwise it
-// and every one after it fail.
-static void motion_sweep_in(bool single)
+// and every one after it fail. `ticks`: laid out for a face that ticks,
+// whose layout resolves every keyframe of what ticks and lists its boxes.
+static void motion_sweep_in(bool single, bool ticks)
 {
     static const char kHtml[] = MOTION_STYLE
         "@keyframes mv{from{transform:translateX(0);opacity:0}"
@@ -2215,9 +2229,10 @@ static void motion_sweep_in(bool single)
         "#a{--m:30px;animation:mv 1s linear infinite,col 2s steps(3) both}"
         "#b{animation:mv 700ms ease-in-out 200ms 3 alternate paused}"
         "#in{display:inline-block;animation:col 1s 100ms backwards}"
-        "</style><div id=a>moving</div><p id=b>held <span id=in>inside</span></p>";
+        "</style><div id=a>moving</div><p id=b>held <span id=in>inside</span></p>"
+        "<div id=t style='animation:mv 900ms linear infinite'></div>";
     Moving m;
-    moving_open(&m, kHtml, 0);
+    moving_open_for(&m, kHtml, 0, ticks);
     moving_again(&m, 500);
     char *whole = motion_values(&m);
     fail_single = single;
@@ -2283,8 +2298,9 @@ static void motion_sweep_in(bool single)
             break;
     }
     fail_single = false;
-    printf("libflow motion sweep: each of %zu allocations failed in turn%s (%zu with the records made), "
-           "nothing leaked\n", tried, single ? " alone" : ", and every one after it", made);
+    printf("libflow motion sweep: each of %zu allocations failed in turn%s (%zu with the records made)%s, "
+           "nothing leaked\n", tried, single ? " alone" : ", and every one after it", made,
+           ticks ? ", ticking" : "");
     free(whole);
     moving_close(&m);
 }
@@ -3122,10 +3138,639 @@ static void motion_incomplete_cases(void)
            "(%zu trees shown)\n", tried, shown);
 }
 
+// ── Ticks (PILE3.md § Animations in place, slice S8b) ──────────────────
+
+// A page of every kind of value the tick set moves, each element's
+// animations repeating for ever so no phase edge falls inside the times it
+// is asked at: transforms in percentages and `em`, lists that pair and
+// lists mixed as matrices, an origin and the individual three, opacity over
+// a value underneath and in steps, colours with currentColor at one end,
+// background positions of 2 and 3 items mixed to 6, shadows in
+// currentColor, a hold between equal keyframes, an element inside a
+// turned one, and an inline-block turning on its line, whose frame is its
+// atom's. `w`, last on the page, moves by layouts.
+static const char kTickPage[] = MOTION_STYLE
+    "@keyframes spin{from{transform:rotate(0deg) translateX(10%)}"
+    "to{transform:rotate(360deg) translateX(2em)}}"
+    "@keyframes mixed{0%{transform:translate(10px,5px)}40%{transform:scale(2) rotate(30deg)}"
+    "to{transform:skewX(20deg) translateY(-3em) perspective(400px) rotateY(40deg)}}"
+    "@keyframes fade{from{opacity:0}50%{opacity:.8}to{opacity:.2}}"
+    "@keyframes over{to{opacity:.5}}"
+    "@keyframes hue{from{background-color:red;border-color:currentColor}"
+    "to{background-color:rgba(0,0,255,.5);border-color:green}}"
+    "@keyframes pos{from{background-position:0 0,10px 20%}to{background-position:50% 3em,1px 2px,30% 40%}}"
+    "@keyframes glow{from{box-shadow:0 0 0 red}"
+    "to{box-shadow:5px 5px 10px 2px currentColor,inset 0 0 4px blue}}"
+    "@keyframes origin{from{transform-origin:0 0}"
+    "to{transform-origin:100% 50%;translate:10px 1em;rotate:45deg;scale:1.5}}"
+    "@keyframes hold{0%,40%{transform:translateX(0)}60%,to{transform:translateX(50px)}}"
+    "@keyframes wide{to{width:300px}}"
+    "#a{font-size:20px;animation:spin 1.3s linear infinite}"
+    "#b{animation:mixed 2s ease-in-out infinite alternate}"
+    "#c{opacity:.3;animation:fade 700ms steps(4) infinite,over 900ms infinite}"
+    "#d{color:orange;border:3px solid;animation:hue 1.1s cubic-bezier(.3,1.6,.6,-.4) infinite}"
+    "#e{background-image:linear-gradient(red,blue),linear-gradient(green,white);"
+    "animation:pos 1.7s infinite}"
+    "#f{color:teal;animation:glow 1s infinite reverse}"
+    "#g{font-size:12px;animation:origin 1.5s infinite}"
+    "#h{animation:hold 1s ease infinite}"
+    "#wrap{transform:rotate(10deg)}"
+    "#in{animation:fade 800ms infinite,hue 600ms infinite}"
+    "#ib{display:inline-block;width:60px;animation:spin 1.1s linear infinite}"
+    "#w{animation:wide 1s linear infinite}"
+    "</style><div id=a></div><div id=b></div><div id=c></div><div id=d></div><div id=e></div>"
+    "<div id=f></div><div id=g></div><div id=h></div><div id=wrap><div id=in></div></div>"
+    "<p>an <span id=ib>atom</span> on its line</p><div id=w></div>";
+static const char *const kTickIds[] = {"a", "b", "c", "d", "e", "f", "g", "h", "in", "ib"};
+
+static const flow_frame_t *own_frame(const flow_box_t *b)
+{
+    return b->frame != NULL && b->frame->box == b && b->frame->kind == F_FRAME_TRANSFORM ? b->frame : NULL;
+}
+
+// What first differs between two styles in the tick set, to the bit, or
+// NULL: a transform as the matrix it makes of a 100 by 40 box.
+static const char *tick_differs(const flow_style_t *a, const flow_style_t *b)
+{
+    if (a->opacity != b->opacity)
+        return "opacity";
+    if (a->has_background != b->has_background || a->background != b->background)
+        return "the background's colour";
+    if (a->current_colours != b->current_colours)
+        return "what is in currentColor";
+    if (memcmp(a->border_color, b->border_color, sizeof(a->border_color)) != 0)
+        return "the border colours";
+    if (memcmp(a->transform_origin, b->transform_origin, sizeof(a->transform_origin)) != 0 ||
+        a->transform_origin_z != b->transform_origin_z)
+        return "transform-origin";
+    const flow_backgrounds_t *x = &a->backgrounds, *y = &b->backgrounds;
+    if (x->nx != y->nx || x->ny != y->ny ||
+        (x->nx > 0 && memcmp(x->x, y->x, (size_t)x->nx * sizeof(*x->x)) != 0) ||
+        (x->ny > 0 && memcmp(x->y, y->y, (size_t)x->ny * sizeof(*x->y)) != 0))
+        return "the background's position";
+    if (a->nbox_shadows != b->nbox_shadows ||
+        (a->nbox_shadows > 0 &&
+         memcmp(a->box_shadows, b->box_shadows, (size_t)a->nbox_shadows * sizeof(*a->box_shadows)) != 0))
+        return "box-shadow";
+    double ma[16], mb[16];
+    f_transform_matrix(a, 0, 0, 100 * 64, 40 * 64, ma);
+    f_transform_matrix(b, 0, 0, 100 * 64, 40 * 64, mb);
+    if (memcmp(ma, mb, sizeof(ma)) != 0)
+        return "the transform";
+    return NULL;
+}
+
+// What first differs between two boxes' own transform frames, or NULL.
+static const char *frame_differs(const flow_frame_t *a, const flow_frame_t *b)
+{
+    if ((a == NULL) != (b == NULL))
+        return "whether there is a frame";
+    if (a == NULL)
+        return NULL;
+    if (memcmp(a->matrix, b->matrix, sizeof(a->matrix)) != 0)
+        return "the frame's matrix";
+    if (a->by.x != b->by.x || a->by.y != b->by.y)
+        return "the frame's move";
+    if (a->through != b->through || a->upright != b->upright ||
+        memcmp(a->affine, b->affine, sizeof(a->affine)) != 0)
+        return "how the frame is drawn";
+    return NULL;
+}
+
+// A box `t` ticked to a time and `l` laid out at it: the same style and
+// frame, and ink no less; `why` says what was not.
+static bool box_ticks_as_laid(const flow_box_t *t, const flow_box_t *l, char *why, size_t cap)
+{
+    const char *d = t == NULL || l == NULL ? "a box" : tick_differs(t->style, l->style);
+    if (d == NULL)
+        d = frame_differs(own_frame(t), own_frame(l));
+    for (int k = 0; d == NULL && k < 4; k++)
+        if (t->ink[k] < l->ink[k])
+            d = "ink less than the layout's";
+    if (d != NULL)
+        snprintf(why, cap, "%s", d);
+    return d == NULL;
+}
+
+static const os64_gui_rect_t kTickView = {0, 0, 800, 600};
+
+// A tick at a time draws what a layout at that time draws, to the bit, at
+// every time asked, one tick after another — and two trees, each ticked,
+// keep their lists apart (ASan reads every one of them each time).
+static void motion_tick_layout_cases(void)
+{
+    Moving tick, lay;
+    moving_open_for(&tick, kTickPage, 0, true);
+    moving_open(&lay, kTickPage, 0);
+    expect("tick: a page whose values tick is due for ticks at once",
+           flow_motion_tick_due(tick.tree, kTickView, (flow_point_t){0, 0}) == 0, NULL);
+    expect("tick: a face that does not tick is due for no tick",
+           flow_motion_tick_due(lay.tree, kTickView, (flow_point_t){0, 0}) == FLOW_NEVER, NULL);
+    int compared = 0, bad = 0, refused = 0;
+    for (uint64_t t = 1; t <= 4000; t += 37) {
+        refused += !flow_motion_tick(tick.tree, t, (flow_point_t){0, 0}, NULL, NULL, NULL);
+        moving_again(&lay, t);
+        for (size_t i = 0; i < sizeof(kTickIds) / sizeof(kTickIds[0]); i++) {
+            char why[96];
+            compared++;
+            if (!box_ticks_as_laid(moving_box(&tick, kTickIds[i]), moving_box(&lay, kTickIds[i]), why,
+                                   sizeof(why))) {
+                char detail[160];
+                snprintf(detail, sizeof(detail), "#%s at %llu ms: %s", kTickIds[i], (unsigned long long)t,
+                         why);
+                expect("tick: a tick at a time draws what a layout at that time draws", false, detail);
+                if (++bad > 8)
+                    t = UINT64_MAX - 37;
+            }
+        }
+    }
+    expect("tick: every tick was taken", refused == 0, NULL);
+    // `w` moves by layouts: a tick leaves it where the layout put it.
+    const flow_style_t *w = moving_style(&tick, "w");
+    expect("tick: what moves by layouts stands where the layout left it",
+           w != NULL && w->width.value == 100 * 64, NULL);
+    printf("libflow ticks: %d values ticked, each the layout's to the bit\n", compared);
+    moving_close(&tick);
+    moving_close(&lay);
+}
+
+// What the schedule makes of `css` and `body` laid out at 100 ms, with an
+// element animated for ever: 't' when it ticks — due for ticks and not
+// for layouts — 'l' when it moves by layouts, '?' for anything else.
+static char page_moves(const char *css, const char *body, bool ticks)
+{
+    char html[2048];
+    snprintf(html, sizeof(html), MOTION_STYLE "%s</style>%s", css, body);
+    Moving m;
+    moving_open_for(&m, html, 100, ticks);
+    uint64_t lay = flow_motion_due(m.tree, kTickView, (flow_point_t){0, 0});
+    uint64_t tick = flow_motion_tick_due(m.tree, kTickView, (flow_point_t){0, 0});
+    moving_close(&m);
+    return lay == FLOW_NEVER && tick == 100 ? 't' : lay == 100 && tick == FLOW_NEVER ? 'l' : '?';
+}
+
+// What makes an element tick, and each thing that keeps it from it.
+static void motion_tick_condition_cases(void)
+{
+    static const struct {
+        const char *name, *css, *body;
+        bool ticks;
+        char expect;
+    } kCases[] = {
+        {"a transform ticks",
+         "@keyframes k{to{transform:rotate(90deg)}}#x{animation:k 1s infinite}", "<div id=x></div>", true,
+         't'},
+        {"every property of the tick set ticks together",
+         "@keyframes k{to{transform:scale(2);translate:1px;rotate:5deg;scale:2;transform-origin:0 0;"
+         "opacity:.5;background-color:red;background-position:1px 2px;border-color:blue;"
+         "box-shadow:1px 1px red}}#x{animation:k 1s infinite}",
+         "<div id=x></div>", true, 't'},
+        {"a face that does not tick lays it out",
+         "@keyframes k{to{transform:rotate(90deg)}}#x{animation:k 1s infinite}", "<div id=x></div>", false,
+         'l'},
+        {"a width is laid out",
+         "@keyframes k{to{width:10px}}#x{animation:k 1s infinite}", "<div id=x></div>", true, 'l'},
+        {"a colour is laid out, inherited",
+         "@keyframes k{to{color:red;transform:none}}#x{animation:k 1s infinite}", "<div id=x></div>", true,
+         'l'},
+        {"a child's inherit takes the ticks away",
+         "@keyframes k{to{background-color:red}}#x{animation:k 1s infinite}#y{background-color:inherit}",
+         "<div id=x><div id=y></div></div>", true, 'l'},
+        {"a child's keyframe inherit takes the ticks away",
+         "@keyframes k{to{background-color:red}}@keyframes c{to{background-color:inherit;color:red}}"
+         "#x{animation:k 1s infinite}#y{animation:c 1s infinite}",
+         "<div id=x><div id=y></div></div>", true, 'l'},
+        {"a child's inherit of another property leaves them",
+         "@keyframes k{to{background-color:red}}#x{animation:k 1s infinite}#y{border-color:inherit}",
+         "<div id=x><div id=y></div></div>", true, 't'},
+        {"a background cut to the text is laid out",
+         "@keyframes k{to{background-color:red}}#x{background-clip:text;animation:k 1s infinite}",
+         "<div id=x>text</div>", true, 'l'},
+    };
+    // Each half asks its own elements: a hold that ticks is due at its far
+    // end however the width beside it moves.
+    static const char kBoth[] = MOTION_STYLE
+        "@keyframes hold{0%,40%{transform:none}60%,to{transform:rotate(9deg)}}@keyframes w{to{width:9px}}"
+        "#t{animation:hold 1s linear infinite}#w{animation:w 1s linear infinite}"
+        "</style><div id=t></div><div id=w></div>";
+    Moving both;
+    moving_open_for(&both, kBoth, 100, true);
+    expect("tick: a laid-out value is due for layouts, a held tick at its far end",
+           flow_motion_due(both.tree, kTickView, (flow_point_t){0, 0}) == 100 &&
+               flow_motion_tick_due(both.tree, kTickView, (flow_point_t){0, 0}) == 500, NULL);
+    moving_close(&both);
+    for (size_t i = 0; i < sizeof(kCases) / sizeof(kCases[0]); i++) {
+        char got = page_moves(kCases[i].css, kCases[i].body, kCases[i].ticks);
+        char detail[160];
+        snprintf(detail, sizeof(detail), "%s: '%c', not '%c'", kCases[i].name, got, kCases[i].expect);
+        expect("tick: what ticks, and what keeps it from it", got == kCases[i].expect, detail);
+    }
+}
+
+// A phase edge is the layout's: one past it is not ticked across, and stays
+// as the last tick before it left it; and a hold is due at its far end.
+static void motion_tick_edge_cases(void)
+{
+    static const char kEdge[] = MOTION_STYLE
+        "@keyframes k{from{transform:translateX(0)}to{transform:translateX(100px)}}"
+        "@keyframes hold{0%,40%{opacity:0}60%,to{opacity:1}}"
+        "#x{animation:k 1s linear 500ms both}#h{animation:hold 1s linear infinite}"
+        "</style><div id=x></div><div id=h></div>";
+    const flow_point_t o = {0, 0};
+    Moving m, lay;
+    moving_open_for(&m, kEdge, 0, true);
+    moving_open(&lay, kEdge, 0);
+    expect("tick: the start of an active phase is the layout's",
+           flow_motion_due(m.tree, kTickView, o) == 500, NULL);
+    // At 100 the hold's first interval holds still (0 to 40%): due at 400.
+    (void)flow_motion_tick(m.tree, 100, o, NULL, NULL, NULL);
+    expect("tick: a hold is due at its far end", flow_motion_tick_due(m.tree, kTickView, o) == 400, NULL);
+    moving_again(&m, 600);
+    expect("tick: the end of an active phase is the layout's",
+           flow_motion_due(m.tree, kTickView, o) == 1500, NULL);
+    expect("tick: a value in its active phase is due for a tick",
+           flow_motion_tick_due(m.tree, kTickView, o) == 600, NULL);
+    (void)flow_motion_tick(m.tree, 1200, o, NULL, NULL, NULL);
+    (void)flow_motion_tick(m.tree, 1700, o, NULL, NULL, NULL);
+    moving_again(&lay, 1200);
+    char why[96];
+    expect("tick: past its edge, a value stays as the last tick before it left it",
+           box_ticks_as_laid(moving_box(&m, "x"), moving_box(&lay, "x"), why, sizeof(why)), why);
+    moving_again(&lay, 1700);
+    expect("tick: other values tick on past one element's edge",
+           box_ticks_as_laid(moving_box(&m, "h"), moving_box(&lay, "h"), why, sizeof(why)), why);
+    moving_close(&m);
+    moving_close(&lay);
+    // A tick's holds are what it found, asked at its own time: laid out at
+    // 500, between the hold's two ends, and ticked to 700, where it holds
+    // to the iteration's end.
+    static const char kHold[] = MOTION_STYLE
+        "@keyframes hold{0%,40%{opacity:0}60%,to{opacity:1}}#h{animation:hold 1s linear infinite}"
+        "</style><div id=h></div>";
+    moving_open_for(&m, kHold, 0, true);
+    moving_again(&m, 500);
+    (void)flow_motion_tick(m.tree, 700, o, NULL, NULL, NULL);
+    expect("tick: a tick's holds are its own, asked at its time",
+           flow_motion_tick_due(m.tree, kTickView, o) == 1000, NULL);
+    moving_close(&m);
+    static const char kAlone[] = MOTION_STYLE
+        "@keyframes k{from{transform:translateX(0)}to{transform:translateX(100px)}}"
+        "#x{animation:k 1s linear 500ms both}</style><div id=x></div>";
+    moving_open_for(&m, kAlone, 0, true);
+    moving_again(&m, 600);
+    (void)flow_motion_tick(m.tree, 1700, o, NULL, NULL, NULL);
+    expect("tick: past its edge an element is due for no tick, but for the layout",
+           flow_motion_tick_due(m.tree, kTickView, o) == FLOW_NEVER &&
+               flow_motion_due(m.tree, kTickView, o) == 1500, NULL);
+    moving_close(&m);
+}
+
+typedef struct {
+    os64_gui_rect_t r[64];
+    const flow_box_t *box[64];
+    int n;
+} TickMarks;
+
+static void tick_mark(void *ctx, const flow_box_t *box, os64_gui_rect_t r)
+{
+    TickMarks *k = ctx;
+    if (k->n < 64) {
+        k->r[k->n] = r;
+        k->box[k->n++] = box;
+    }
+}
+
+// Whether `r` lies inside the marks handed for `box`, joined.
+static bool marked(const TickMarks *k, const flow_box_t *box, os64_gui_rect_t r)
+{
+    int64_t x0 = INT64_MAX, y0 = INT64_MAX, x1 = INT64_MIN, y1 = INT64_MIN;
+    for (int i = 0; i < k->n; i++)
+        if (k->box[i] == box) {
+            x0 = k->r[i].x < x0 ? k->r[i].x : x0;
+            y0 = k->r[i].y < y0 ? k->r[i].y : y0;
+            x1 = (int64_t)k->r[i].x + k->r[i].w > x1 ? (int64_t)k->r[i].x + k->r[i].w : x1;
+            y1 = (int64_t)k->r[i].y + k->r[i].h > y1 ? (int64_t)k->r[i].y + k->r[i].h : y1;
+        }
+    return x0 <= r.x && y0 <= r.y && (int64_t)r.x + r.w <= x1 && (int64_t)r.y + r.h <= y1;
+}
+
+static bool marks_box(const TickMarks *k, const flow_box_t *box)
+{
+    for (int i = 0; i < k->n; i++)
+        if (k->box[i] == box)
+            return true;
+    return false;
+}
+
+// `r` grown by `by` on every side.
+static os64_gui_rect_t tick_grown(os64_gui_rect_t r, int32_t by)
+{
+    return (os64_gui_rect_t){r.x - by, r.y - by, r.w + 2 * by, r.h + 2 * by};
+}
+
+// What a tick marks: where a turning element was and is, inside a turned
+// one too; a shadow's reach where no group holds it; the root, whose
+// background is the canvas's; nothing for a value holding still; and
+// whether a frame moved.
+static void motion_tick_mark_cases(void)
+{
+    static const char kMarks[] = MOTION_STYLE
+        "@keyframes spin{to{transform:rotate(360deg)}}"
+        "@keyframes glow{from{box-shadow:none}to{box-shadow:0 0 0 20px red}}"
+        "@keyframes hold{0%,50%{opacity:.5}to{opacity:1}}"
+        "@keyframes bg{to{background-color:blue}}"
+        "html{animation:bg 1s infinite}"
+        "#s{animation:spin 1s linear infinite}#g{animation:glow 1s linear infinite}"
+        "#h{animation:hold 1s linear infinite}#wrap{transform:rotate(30deg)}"
+        "#in{animation:spin 1s linear infinite}#far{position:absolute;left:400px;top:0;width:10px;height:10px}"
+        "#gin{animation:glow 1s linear infinite}"
+        "</style><div id=s><div id=far></div></div><div id=gw><div id=g></div></div><div id=h></div>"
+        "<div id=wrap><div id=in></div><div id=gin></div></div>";
+    const flow_point_t o = {0, 0};
+    Moving m;
+    moving_open_for(&m, kMarks, 0, true);
+    const flow_box_t *s = moving_box(&m, "s"), *g = moving_box(&m, "g"), *in = moving_box(&m, "in");
+    const flow_box_t *far = moving_box(&m, "far"), *gw = moving_box(&m, "gw"), *gin = moving_box(&m, "gin");
+    os64_gui_rect_t s_was = flow_box_doc_rect(s, o), in_was = flow_box_doc_rect(in, o);
+    os64_gui_rect_t far_was = flow_box_doc_rect(far, o);
+    TickMarks k = {.n = 0};
+    bool moved = false;
+    (void)flow_motion_tick(m.tree, 125, o, tick_mark, &k, &moved);
+    expect("tick marks: a tick that turns a frame says so", moved, NULL);
+    expect("tick marks: where a turning element was", marked(&k, s, s_was), NULL);
+    expect("tick marks: where it is", marked(&k, s, flow_box_doc_rect(s, o)), NULL);
+    expect("tick marks: where a positioned box inside it was, the group's whole",
+           marked(&k, s, far_was), NULL);
+    expect("tick marks: where it is", marked(&k, s, flow_box_doc_rect(far, o)), NULL);
+    expect("tick marks: where one inside a turned one was, through its matrix", marked(&k, in, in_was), NULL);
+    expect("tick marks: where it is, through its matrix", marked(&k, in, flow_box_doc_rect(in, o)), NULL);
+    expect("tick marks: a shadow's reach, with no group to hold it",
+           marked(&k, g, tick_grown(flow_box_doc_rect(g, o), 2)), NULL);
+    expect("tick marks: and inside a turned one, through its matrix", marked(&k, gin, flow_box_doc_rect(gin, o)),
+           NULL);
+    expect("tick marks: the root, by its own box", marks_box(&k, flow_root(m.tree)), NULL);
+    expect("tick marks: nothing for a value holding still", !marks_box(&k, moving_box(&m, "h")), NULL);
+    // A shadow grows its ink, and its ink does not shrink back.
+    int32_t ink = g->ink[FLOW_TOP];
+    expect("tick marks: a growing shadow grows its box's ink", ink >= 2, NULL);
+    expect("tick marks: and hands it up", gw->ink[FLOW_TOP] >= ink, NULL);
+    (void)flow_motion_tick(m.tree, 1010, o, NULL, NULL, NULL);
+    expect("tick marks: a box's ink only grows", g->ink[FLOW_TOP] >= ink, NULL);
+    moving_close(&m);
+    static const char kColours[] = MOTION_STYLE
+        "@keyframes bg{to{background-color:blue}}#x{animation:bg 1s infinite}</style><div id=x></div>";
+    moving_open_for(&m, kColours, 0, true);
+    moved = true;
+    (void)flow_motion_tick(m.tree, 500, o, NULL, NULL, &moved);
+    expect("tick marks: a tick of colours moves no frame", !moved, NULL);
+    moving_close(&m);
+}
+
+// A tick with each of its allocations failed in turn is not taken, leaves
+// the tree as the tick before it left it, and leaks nothing; the next one
+// is the layout's.
+static void motion_tick_sweep_cases(void)
+{
+    const flow_point_t o = {0, 0};
+    Moving m, lay;
+    size_t base_live = live, tried = 0;
+    moving_open_for(&m, kTickPage, 0, true);
+    moving_open(&lay, kTickPage, 0);
+    (void)flow_motion_tick(m.tree, 300, o, NULL, NULL, NULL);
+    moving_again(&lay, 300);
+    int bad = 0;
+    for (size_t at = 1;; at++) {
+        TickMarks k = {.n = 0};
+        allocations = 0;
+        fail_at = at;
+        bool taken = flow_motion_tick(m.tree, 300 + (uint64_t)at, o, tick_mark, &k, NULL);
+        fail_at = 0;
+        bool reached = allocations >= at;
+        if (!reached && taken)
+            break;
+        tried++;
+        if (taken) {
+            moving_again(&lay, 300 + (uint64_t)at);
+            continue;
+        }
+        for (size_t i = 0; i < sizeof(kTickIds) / sizeof(kTickIds[0]); i++) {
+            char why[96];
+            if (!box_ticks_as_laid(moving_box(&m, kTickIds[i]), moving_box(&lay, kTickIds[i]), why,
+                                   sizeof(why)) && bad++ < 4)
+                expect("tick sweep: a tick not taken leaves the tree as it was", false, why);
+        }
+    }
+    (void)flow_motion_tick(m.tree, 5000, o, NULL, NULL, NULL);
+    moving_again(&lay, 5000);
+    for (size_t i = 0; i < sizeof(kTickIds) / sizeof(kTickIds[0]); i++) {
+        char why[96];
+        if (!box_ticks_as_laid(moving_box(&m, kTickIds[i]), moving_box(&lay, kTickIds[i]), why, sizeof(why)))
+            expect("tick sweep: the tick after a failed one is the layout's", false, why);
+    }
+    printf("libflow ticks: each of %zu allocations failed in turn, and every one after it\n", tried);
+    moving_close(&m);
+    moving_close(&lay);
+    expect("tick sweep: failed ticks leak nothing", live == base_live, NULL);
+    // A tick not taken leaves the holds as the tick before it found them:
+    // `h` holds still at 100 (due at 400) and moves at 500; `t` holds one
+    // list for ever (due at its iteration's end), worked after `h`, and
+    // its list finds no memory.
+    static const char kHolds[] = MOTION_STYLE
+        "@keyframes hold{0%,40%{opacity:0}60%,to{opacity:1}}"
+        "@keyframes t{from,to{transform:translateX(9px) rotate(9deg)}}"
+        "#h{animation:hold 1s linear infinite}#t{animation:t 1s linear infinite}"
+        "</style><div id=h></div><div id=t></div>";
+    moving_open_for(&m, kHolds, 0, true);
+    (void)flow_motion_tick(m.tree, 100, o, NULL, NULL, NULL);
+    allocations = 0;
+    fail_at = 1;
+    bool taken = flow_motion_tick(m.tree, 500, o, NULL, NULL, NULL);
+    fail_at = 0;
+    const flow_box_t *hb = moving_box(&m, "h");
+    expect("tick sweep: a tick not taken leaves the holds as they were",
+           !taken && hb != NULL && hb->style->opacity == 0 &&
+               flow_motion_tick_due(m.tree, kTickView, o) == 400, NULL);
+    moving_close(&m);
+}
+
+
+// A page of `coarse` filler elements that each spend 32 transform
+// functions of the lists' budget and `fine` that each spend one background
+// position, then #p, animated by `keyframes` for ever.
+static char *budget_page(int coarse, int fine, const char *keyframes)
+{
+    size_t cap = (size_t)(coarse + fine) * 24 + strlen(keyframes) + 32 * 17 + 1024, at = 0;
+    char *html = malloc(cap);
+    at += (size_t)snprintf(html + at, cap - at, MOTION_STYLE ".s{transform:");
+    for (int i = 0; i < 32; i++)
+        at += (size_t)snprintf(html + at, cap - at, "translateX(1px) ");
+    at += (size_t)snprintf(html + at, cap - at,
+                           "}.f{background-position-x:1px}%s#p{animation:k 1s linear infinite}</style>",
+                           keyframes);
+    for (int i = 0; i < coarse; i++)
+        at += (size_t)snprintf(html + at, cap - at, "<div class=s></div>");
+    for (int i = 0; i < fine; i++)
+        at += (size_t)snprintf(html + at, cap - at, "<div class=f></div>");
+    (void)snprintf(html + at, cap - at, "<div id=p></div>");
+    return html;
+}
+
+// What styling budget_page leaves of #p for a face that ticks, at 100 ms:
+// whether it animates at all (its `animation` lists are the budget's too),
+// whether it ticks, whether its mix dropped a list, what styling left of
+// the budget and what #p's own mix spent — a tick may spend the two.
+typedef struct {
+    bool animates, ticks, dropped;
+    size_t left, mixed;
+} BudgetSeen;
+
+static BudgetSeen budget_of(int coarse, int fine, const char *keyframes)
+{
+    char *html = budget_page(coarse, fine, keyframes);
+    Sheeted p;
+    sheeted_open(&p, html, 800, 600);
+    flow_timeline_t *tl = flow_timeline_new(p.doc);
+    p.env.timeline = tl;
+    p.env.now_ms = 100;
+    p.env.ticks = true;
+    FStyles *fs = f_style_build(p.doc, p.page, &p.env);
+    const FStyled *st = fs != NULL ? f_style_of(fs, motion_find(p.doc->document, "p")) : NULL;
+    BudgetSeen seen = {false, false, false, 0, 0};
+    if (st != NULL && st->motion != NULL) {
+        seen.animates = true;
+        seen.ticks = st->motion->ticks;
+        seen.dropped = st->motion->anims[0].dropped.w[GARB_BACKGROUND_POSITION_X / 64] != 0;
+        seen.left = fs->lists_left;
+        seen.mixed = st->motion->mixed;
+    }
+    f_style_free(fs);
+    flow_timeline_free(tl);
+    sheeted_close(&p);
+    free(html);
+    return seen;
+}
+
+// Whether `s` is on the near side of the edge budget_edge looks for: #p
+// ticks (`ticks`), or it animates and its mix is whole, with at least
+// `left` of the budget left besides.
+static bool budget_near(BudgetSeen s, bool ticks, size_t left)
+{
+    return (ticks ? s.ticks : s.animates && !s.dropped) && s.left >= left;
+}
+
+// The most filler, coarse and then fine, that leaves `ticks` (or, when it
+// is false, that leaves #p's mix whole); false when more than a page holds
+// never does. The coarse filler is held to leaving 64KB, more than one of
+// it spends: past where a filler's own list finds no room it spends
+// nothing, and more of it would change nothing.
+static bool budget_edge(const char *keyframes, bool ticks, int *coarse, int *fine)
+{
+    int at[2] = {0, 0};
+    for (int k = 0; k < 2; k++) {
+        size_t left = k == 0 ? (size_t)64 << 10 : 0;
+        int lo = 0, hi = 1;
+        for (;;) {
+            at[k] = hi;
+            BudgetSeen s = budget_of(at[0], at[1], keyframes);
+            if (!budget_near(s, ticks, left))
+                break;
+            lo = hi;
+            hi *= 2;
+            if (hi > (1 << 17))
+                return false;
+        }
+        while (hi - lo > 1) {
+            at[k] = lo + (hi - lo) / 2;
+            BudgetSeen s = budget_of(at[0], at[1], keyframes);
+            if (budget_near(s, ticks, left))
+                lo = at[k];
+            else
+                hi = at[k];
+        }
+        at[k] = lo;
+    }
+    *coarse = at[0];
+    *fine = at[1];
+    return true;
+}
+
+// A tick's lists are held to what the layout's budget left them, and what
+// its own mix spent: at the most filler that leaves #p ticking, a tick in
+// the first half — a list of eight, as the layout mixed — is taken, and one
+// in the second — 1000, 8 and 125 items mixed to their least common
+// multiple, which the layout never made — is not, and the tree is as it
+// was. And a list the layout's mix dropped keeps its element from ticking.
+static void motion_tick_room_cases(void)
+{
+    static const char kFar[] = "@keyframes k{0%{background-position-x:1px,1px,1px,1px,1px,1px,1px,1px}"
+                               "50%{background-position-x:2px,2px,2px,2px,2px,2px,2px,2px}"
+                               "to{background-position-x:0px";
+    size_t cap = sizeof(kFar) + 125 * 4 + 8;
+    char *keyframes = malloc(cap);
+    size_t at = (size_t)snprintf(keyframes, cap, "%s", kFar);
+    for (int i = 1; i < 125; i++)
+        at += (size_t)snprintf(keyframes + at, cap - at, ",%dpx", i % 10);
+    (void)snprintf(keyframes + at, cap - at, "}}");
+    int coarse = 0, fine = 0;
+    bool found = budget_edge(keyframes, true, &coarse, &fine);
+    BudgetSeen seen = budget_of(coarse, fine, keyframes);
+    size_t room = seen.left + seen.mixed, need = 1000 * sizeof(flow_length_t);
+    char detail[128];
+    snprintf(detail, sizeof(detail), "%d and %d filler leave %zu, its mix spent %zu", coarse, fine, seen.left,
+             seen.mixed);
+    expect("tick room: filler that leaves #p ticking with less than its own mix besides",
+           found && seen.ticks && seen.left < seen.mixed, detail);
+    char *html = budget_page(coarse, fine, keyframes);
+    Moving m;
+    moving_open_for(&m, html, 100, true);
+    const flow_point_t o = {0, 0};
+    // Far below the filler, and a position waits out of view: the whole page.
+    const os64_gui_rect_t page = {0, 0, 800, INT32_MAX / 2};
+    expect("tick room: it ticks", flow_motion_tick_due(m.tree, page, o) == 100, NULL);
+    expect("tick room: a tick needing what the layout's mix spent is taken",
+           flow_motion_tick(m.tree, 300, o, NULL, NULL, NULL), NULL);
+    const flow_style_t *s = moving_style(&m, "p");
+    flow_length_t at300 = s != NULL && s->backgrounds.nx == 8 ? s->backgrounds.x[0] : (flow_length_t){0};
+    expect("tick room: a tick that needs more room than the layout left is not taken",
+           room < need && !flow_motion_tick(m.tree, 700, o, NULL, NULL, NULL), NULL);
+    s = moving_style(&m, "p");
+    expect("tick room: and the tree is as the last tick left it",
+           s != NULL && s->backgrounds.nx == 8 && memcmp(&s->backgrounds.x[0], &at300, sizeof(at300)) == 0, NULL);
+    // One item of filler more and the keyframe of 125 finds no room where
+    // the layout resolves it, though the mix does: laid out.
+    BudgetSeen past = budget_of(coarse, fine + 1, keyframes);
+    expect("tick room: a keyframe whose list finds no room keeps its element from ticking",
+           past.animates && !past.dropped && !past.ticks, NULL);
+    printf("libflow ticks: %d and %d filler elements leave a tick %zu bytes\n", coarse, fine, room);
+    moving_close(&m);
+    free(html);
+    free(keyframes);
+    // Two keyframes of 2 and 3 items, both resolved where they are mixed,
+    // mixed as 6: one item of filler more than leaves the mix whole drops
+    // it, and the element is laid out.
+    static const char kSix[] = "@keyframes k{from{background-position-x:1px,2px}"
+                               "to{background-position-x:3px,4px,5px}}";
+    found = budget_edge(kSix, false, &coarse, &fine);
+    BudgetSeen whole = budget_of(coarse, fine, kSix), dropped = budget_of(coarse, fine + 1, kSix);
+    expect("tick room: a list the layout's mix drops keeps its element from ticking",
+           found && whole.ticks && dropped.dropped && !dropped.ticks, NULL);
+}
+
+static void motion_tick_cases(void)
+{
+    motion_tick_layout_cases();
+    motion_tick_condition_cases();
+    motion_tick_edge_cases();
+    motion_tick_mark_cases();
+    motion_tick_sweep_cases();
+    motion_tick_room_cases();
+}
+
 static void motion_sweep(void)
 {
-    motion_sweep_in(false);
-    motion_sweep_in(true);
+    motion_sweep_in(false, false);
+    motion_sweep_in(true, false);
+    motion_sweep_in(false, true);
     motion_sweep_failed();
     motion_incomplete_cases();
 }
@@ -3144,5 +3789,6 @@ static void motion_cases(void)
     motion_list_case_cases();
     motion_dropped_cases();
     motion_held_time_cases();
+    motion_tick_cases();
     motion_sweep();
 }

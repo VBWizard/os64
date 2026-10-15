@@ -3608,11 +3608,13 @@ static void finish(const Ctx *c, Spec *sp, const flow_style_t *parent, bool item
 // element's Spec before `finish`, against its parent, with its winners
 // `st` for a side's own width and the longhands an `!important` winner
 // holds left out — once for the font size and colour, once for the rest
-// (`resolved`, two to a keyframe, `first` each animation's first). Out of
-// memory, the style pass fails.
+// (`resolved`, two to a keyframe, `first` each animation's first) — and
+// counts what the mix's own lists spent (`mixed`), which a tick may spend
+// again. Out of memory, the style pass fails.
 typedef struct {
     Ctx *c;
     bool no_memory;
+    size_t mixed;
     const FMotion *m;
     const Spec *sp, *ua;
     const flow_style_t *parent;
@@ -3630,6 +3632,8 @@ static void *motion_alloc(void *ctx, size_t bytes)
     void *p = list_alloc(ml->c, bytes, &spent);
     if (p == NULL && !spent)
         ml->no_memory = true;
+    if (p != NULL)
+        ml->mixed += bytes;
     return p;
 }
 
@@ -3822,6 +3826,43 @@ static const FResolved *keyframe_resolved(void *ctx, int32_t a, int32_t j, const
     return r;
 }
 
+// Whether the element's animations TICK (PILE3.md § Animations in place,
+// What ticks), `s` its style at the layout's time: every property they set
+// is of the tick set, none of their lists was dropped, and its background
+// is not cut to its text; then every keyframe is resolved — once each, as
+// the mix resolves it, against the font size and colour the animations
+// leave, which they do not move — and kept for the ticks, none of their
+// lists refused. A child's `inherit` of one of them takes the ticks away
+// later (style_element). False on no memory.
+static bool ticks(Ctx *c, FMotion *m, const flow_style_t *s, Mixing *mix)
+{
+    if (!f_motion_ticks(m))
+        return true;
+    for (int32_t a = 0; a < m->nanims; a++)
+        for (int w = 0; w < F_PROP_WORDS; w++)
+            if (m->anims[a].dropped.w[w] != 0)
+                return true;
+    for (int32_t i = 0; i < flow_background_layers(s); i++)
+        if (flow_background_layer(s, i).clip == FLOW_EDGE_TEXT)
+            return true;
+    for (int32_t a = 0; a < m->nanims; a++)
+        for (int32_t j = 0; j < m->anims[a].nframes; j++) {
+            const FResolved *r = keyframe_resolved(mix, a, j, s);
+            if (r == NULL)
+                return false;
+            for (int w = 0; w < F_PROP_WORDS; w++)
+                if (r->refused.w[w] != 0)
+                    return true;
+        }
+    double now = (double)c->env->now_ms;
+    m->ticks = true;
+    m->resolved = mix->resolved;
+    m->first = mix->first;
+    m->edge = f_motion_next_of(m, now, NULL, F_NEXT_EDGES);
+    m->at = now;
+    return true;
+}
+
 // An element's animations at the layout's time: for each name whose
 // @keyframes exist, every keyframe's declarations and the longhands they
 // set but where an `!important` winner holds, and the name's record on the
@@ -3910,12 +3951,15 @@ static bool animate(Ctx *c, const os64_html_node_t *n, Spec *sp, const Spec *ua,
     flow_style_t s = m->base;
     // A list past the budget leaves its property as it was, named in its
     // animation's `dropped`, so nothing is due for that one's motion of it.
-    Mixing mix = {c, false, m, sp, ua, parent, item, root, st, important,
+    Mixing mix = {c, false, 0, m, sp, ua, parent, item, root, st, important,
                   f_arena_alloc(&c->out->arena, (size_t)(2 * nframes + 1) * sizeof(*mix.resolved)), first};
     if (mix.resolved == NULL)
         return false;
     (void)f_motion_style(m, now, &s, motion_alloc, keyframe_resolved, &mix, NULL, true);
     if (mix.no_memory)
+        return false;
+    m->mixed = mix.mixed;
+    if (c->env->ticks && !ticks(c, m, &s, &mix))
         return false;
     settle_box(c, &s, item, root);
     s.animating = f_motion_effects(m, now);
@@ -4036,6 +4080,13 @@ static FStyled *style_element(Ctx *c, const os64_html_node_t *n)
     out->transparent = (sp.s.opacity == 0 && !(sp.s.animating & FLOW_WILL_OPACITY)) ||
                        (up != NULL && up->transparent);
     out->taken = sp.taken;
+    // What a child takes by keyword moves only when it is laid out, so a
+    // parent whose animation it takes moves by layouts too.
+    if (up != NULL && up->motion != NULL && up->motion->ticks)
+        for (int32_t a = 0; a < up->motion->nanims; a++)
+            for (int w = 0; w < F_PROP_WORDS; w++)
+                if (up->motion->anims[a].props.w[w] & sp.taken.w[w])
+                    up->motion->ticks = false;
     FStyled *holder = f_map_get(&c->out->map, n->parent);
     if (holder != NULL && is(n, OS64_HTML_TAG_RP))
         holder->has_rp = true;

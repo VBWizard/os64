@@ -50,6 +50,22 @@ typedef struct {
     LayerPart part;
 } Layer;
 
+// An element whose animations tick (FMotion.ticks; PILE3.md § Animations in
+// place): its styles, its boxes, the layer of its group's OPEN or -1 when
+// it is no group, and what a tick works before it writes — its style, the
+// time it is at, each animation's holds and dropped lists as they were,
+// for a tick that is not taken, and whether the tick changed it.
+typedef struct {
+    FStyled *st;
+    flow_box_t **boxes;
+    int32_t nboxes;
+    int32_t open;
+    flow_style_t worked;
+    double at;
+    FProps *saved;
+    bool changed;
+} FTick;
+
 struct flow_tree {
     const os64_html_document_t *doc;
     os64_html_pin_t pin;
@@ -77,6 +93,17 @@ struct flow_tree {
     // The time the page was laid out at (flow_env_t.now_ms): what its
     // animated values are, and what flow_motion_due counts from.
     uint64_t now_ms;
+    // The elements whose animations tick, in document order; the two arenas
+    // a tick's lists come from in turn, `live` the one the styles point into
+    // (-1 for none: the styles' own); what of the lists' budget a tick may
+    // spend — what the layout's left, and what its ticking elements' mixes
+    // spent; and the time of the last tick, or the layout's.
+    FTick *ticking;
+    int32_t nticking;
+    FArena tick_lists[2];
+    int live;
+    size_t tick_room;
+    uint64_t tick_ms;
 };
 
 typedef struct {
@@ -653,27 +680,14 @@ static int32_t move_px(double d)
     return edge32(round_px((int64_t)fmax(fmin(d, 4e18), -4e18)));
 }
 
-// A transformed box's frame, its border box at (x, y), `w` by `h` in 26.6:
-// it and everything in it are drawn through its matrix, and `clip`, what
-// clips it from outside, stays where it is. Drawn flat, the point (x, y)
-// goes where the matrix sends (x, y, 0), over w (Transforms 2 § 4); `by`
-// is how far that moves the transform-origin.
-static const flow_frame_t *transform_new(Build *bd, const flow_style_t *s, int64_t x, int64_t y,
-                                         int64_t w, int64_t h, const flow_box_t *b, Clip clip)
+// What a transform frame draws, from its style `s` and the border box it
+// keeps: its matrix, and what it is drawn as. Drawn flat, the point (x, y)
+// goes where the matrix sends (x, y, 0), over w (Transforms 2 § 4); `by` is
+// how far that moves the transform-origin. A layout fills it, and so does a
+// tick (flow_motion_tick), which is how the two agree to the bit.
+static void transform_fill(flow_frame_t *f, const flow_style_t *s)
 {
-    flow_frame_t *f = f_arena_alloc(&bd->t->arena, sizeof(*f));
-    if (f == NULL) {
-        bd->failed = true;
-        return NULL;
-    }
-    f->kind = F_FRAME_TRANSFORM;
-    f->box = b;
-    f->moves = true;
-    f->mover = f;
-    f->outer = b->frame;
-    f->clips = clip.x || clip.y;
-    f->clip = clip_rect(clip);
-    f->clipped = f->clips || (f->outer != NULL && f->outer->clipped);
+    int64_t x = f->box_x, y = f->box_y, w = f->box_w, h = f->box_h;
     double *m = f->matrix;
     f_transform_matrix(s, x, y, w, h, m);
     double ox = (double)(x + f_len(s->transform_origin[0], w));
@@ -696,6 +710,7 @@ static const flow_frame_t *transform_new(Build *bd, const flow_style_t *s, int64
     bool moves = flat && m[0] / m[15] == 1 && m[5] / m[15] == 1 && m[1] == 0 && m[4] == 0;
     f->upright = !flat;
     f->through = flat && !moves;
+    os64_memset(f->affine, 0, sizeof(f->affine));
     if (f->through) {
         double w = m[15];
         double a[6] = {m[0] / w, m[1] / w, m[4] / w, m[5] / w, m[12] / w / 64, m[13] / w / 64};
@@ -705,6 +720,32 @@ static const flow_frame_t *transform_new(Build *bd, const flow_style_t *s, int64
         if (!f->through)
             f->upright = true;          // what cannot be worked out is drawn upright
     }
+}
+
+// A transformed box's frame, its border box at (x, y), `w` by `h` in 26.6:
+// it and everything in it are drawn through its matrix (transform_fill),
+// and `clip`, what clips it from outside, stays where it is.
+static const flow_frame_t *transform_new(Build *bd, const flow_style_t *s, int64_t x, int64_t y,
+                                         int64_t w, int64_t h, const flow_box_t *b, Clip clip)
+{
+    flow_frame_t *f = f_arena_alloc(&bd->t->arena, sizeof(*f));
+    if (f == NULL) {
+        bd->failed = true;
+        return NULL;
+    }
+    f->kind = F_FRAME_TRANSFORM;
+    f->box = b;
+    f->moves = true;
+    f->mover = f;
+    f->outer = b->frame;
+    f->clips = clip.x || clip.y;
+    f->clip = clip_rect(clip);
+    f->clipped = f->clips || (f->outer != NULL && f->outer->clipped);
+    f->box_x = x;
+    f->box_y = y;
+    f->box_w = w;
+    f->box_h = h;
+    transform_fill(f, s);
     return f;
 }
 
@@ -1361,6 +1402,8 @@ void flow_free(flow_tree_t *tree)
     f_style_free(tree->styles);
     f_map_free(&tree->first);
     f_arena_free(&tree->arena);
+    f_arena_free(&tree->tick_lists[0]);
+    f_arena_free(&tree->tick_lists[1]);
     os64_free(tree->images);
     os64_free(tree->controls);
     os64_free(tree->positioned);
@@ -1564,6 +1607,71 @@ static bool stack_build(flow_tree_t *t)
     return ok;
 }
 
+// The tree's ticking elements (FTick), each with every box it makes, found
+// in one walk of the tree, and its group's OPEN in one of the layers. False
+// on no memory.
+static bool ticking_build(flow_tree_t *t)
+{
+    FStyles *st = t->styles;
+    int32_t n = 0;
+    for (int32_t i = 0; i < st->nanimated; i++) {
+        const FStyled *s = f_style_of(st, st->animated[i]);
+        n += s != NULL && s->motion != NULL && s->motion->ticks;
+    }
+    if (n == 0)
+        return true;
+    t->ticking = f_arena_alloc(&t->arena, (size_t)n * sizeof(*t->ticking));
+    if (t->ticking == NULL)
+        return false;
+    FMap of = {0};
+    bool ok = true;
+    t->tick_room = st->lists_left;
+    for (int32_t i = 0; ok && i < st->nanimated; i++) {
+        FStyled *s = (FStyled *)f_style_of(st, st->animated[i]);
+        if (s == NULL || s->motion == NULL || !s->motion->ticks)
+            continue;
+        FTick *e = &t->ticking[t->nticking++];
+        e->st = s;
+        e->open = -1;
+        e->saved = f_arena_alloc(&t->arena, (size_t)(2 * s->motion->nanims) * sizeof(*e->saved));
+        t->tick_room += s->motion->mixed;
+        ok = e->saved != NULL && f_map_put(&of, st->animated[i], e);
+    }
+    // Twice down the tree: counting each element's boxes, then listing them.
+    for (int pass = 0; ok && pass < 2 && t->root != NULL; pass++) {
+        flow_box_t *b = t->root;
+        while (b != NULL) {
+            FTick *e = b->node != NULL ? f_map_get(&of, b->node) : NULL;
+            if (e != NULL && pass == 0)
+                e->nboxes++;
+            else if (e != NULL)
+                e->boxes[e->nboxes++] = b;
+            if (b->first != NULL) {
+                b = (flow_box_t *)b->first;
+                continue;
+            }
+            while (b != NULL && b->next == NULL)
+                b = (flow_box_t *)b->parent;
+            b = b != NULL ? (flow_box_t *)b->next : NULL;
+        }
+        for (int32_t i = 0; pass == 0 && ok && i < t->nticking; i++) {
+            FTick *e = &t->ticking[i];
+            e->boxes = e->nboxes > 0 ? f_arena_alloc(&t->arena, (size_t)e->nboxes * sizeof(*e->boxes))
+                                     : NULL;
+            ok = e->nboxes == 0 || e->boxes != NULL;
+            e->nboxes = 0;
+        }
+    }
+    for (int32_t k = 0; ok && k < t->nlayers; k++) {
+        const Layer *l = &t->layers[k];
+        FTick *e = l->part == PART_OPEN && l->box->node != NULL ? f_map_get(&of, l->box->node) : NULL;
+        if (e != NULL && e->open < 0)
+            e->open = k;
+    }
+    f_map_free(&of);
+    return ok;
+}
+
 flow_tree_t *flow_layout(const os64_html_document_t *doc, const os64_page_t *model,
                          int32_t width, const flow_env_t *env)
 {
@@ -1588,6 +1696,8 @@ flow_tree_t *flow_layout(const os64_html_document_t *doc, const os64_page_t *mod
     // own, which would turn a page the budget cut short into no page.
     tree->arena.cap = SIZE_MAX;
     tree->now_ms = env->now_ms;
+    tree->tick_ms = env->now_ms;
+    tree->live = -1;
     tree->styles = f_style_build(doc, model, env);
     tree->boxes = tree->styles != NULL ? f_boxes_build(doc, model, tree->styles, env) : NULL;
     tree->layout = tree->boxes != NULL ? f_layout(tree->boxes, doc, model, env, width) : NULL;
@@ -1616,7 +1726,7 @@ flow_tree_t *flow_layout(const os64_html_document_t *doc, const os64_page_t *mod
         sticky_reach_scrolled(tree);
         ink_reach(tree->root);
     }
-    if (!f_timeline_end(tree->styles->timeline, !tree->incomplete)) {
+    if (!ticking_build(tree) || !f_timeline_end(tree->styles->timeline, !tree->incomplete)) {
         flow_free(tree);
         return NULL;
     }
@@ -1626,6 +1736,7 @@ flow_tree_t *flow_layout(const os64_html_document_t *doc, const os64_page_t *mod
 static bool meets(os64_gui_rect_t a, os64_gui_rect_t b);
 static bool block_level(flow_box_kind_t k);
 static os64_gui_rect_t doc_rect_of(const flow_box_t *box, os64_gui_rect_t local, flow_point_t scroll);
+static os64_gui_rect_t space_rect(const flow_frame_t *f, os64_gui_rect_t r, flow_point_t scroll);
 
 // Whether a box can be seen in `view`: all it paints — its overflow and
 // what its ink reaches past it (a shadow, a glyph's overhang, the like
@@ -1709,24 +1820,49 @@ bool flow_motion_pending(const flow_tree_t *tree)
         return false;
     for (int32_t i = 0; i < tree->styles->nanimated; i++) {
         const FStyled *st = f_style_of(tree->styles, tree->styles->animated[i]);
-        if (st != NULL && st->motion != NULL && f_motion_next(st->motion, (double)tree->now_ms, NULL) < INFINITY)
+        // An element that ticks is asked at the time its holds are of.
+        if (st != NULL && st->motion != NULL &&
+            f_motion_next(st->motion, st->motion->ticks ? st->motion->at : (double)tree->now_ms, NULL) <
+                INFINITY)
             return true;
     }
     return false;
 }
 
-uint64_t flow_motion_due(const flow_tree_t *tree, os64_gui_rect_t view, flow_point_t scroll)
+// What one animated element makes due, of the properties `only` names
+// (NULL for all): for a layout (`ticks` false), every change of an element
+// that does not tick and a ticking one's phase edges, from the layout's
+// time; for a tick, a ticking element's other changes, from the time its
+// style is at — none once the tree's ticks have reached its next edge,
+// which is the layout's to show, and none at or past it.
+static double element_due(const flow_tree_t *tree, const FMotion *m, const FProps *only, bool ticks)
 {
-    if (tree == NULL || tree->styles == NULL || tree->styles->nanimated == 0)
+    if (!m->ticks)
+        return ticks ? INFINITY : f_motion_next(m, (double)tree->now_ms, only);
+    if (!ticks)
+        return f_motion_next_of(m, (double)tree->now_ms, only, F_NEXT_EDGES);
+    if ((double)tree->tick_ms >= m->edge)
+        return INFINITY;
+    double next = f_motion_next_of(m, m->at, only, F_NEXT_VALUES);
+    return next < m->edge ? next : INFINITY;
+}
+
+// flow_motion_due and flow_motion_tick_due: the layouts' half, or the
+// ticks' (element_due), counted from the tree's time for that half.
+static uint64_t motion_due(const flow_tree_t *tree, os64_gui_rect_t view, flow_point_t scroll, bool ticks)
+{
+    if (tree == NULL || tree->styles == NULL || tree->styles->nanimated == 0 ||
+        (ticks && tree->nticking == 0))
         return FLOW_NEVER;
-    double now = (double)tree->now_ms, next = INFINITY;
+    uint64_t at = ticks ? tree->tick_ms : tree->now_ms;
+    double now = (double)at, next = INFINITY;
     for (int32_t i = 0; i < tree->styles->nanimated && next > now; i++) {
         const os64_html_node_t *n = tree->styles->animated[i];
         const FStyled *st = f_style_of(tree->styles, n);
         if (st == NULL || st->motion == NULL ||
             (st->motion->in_place && !may_own_canvas(tree, n) && !motion_seen(tree, n, view, scroll)))
             continue;
-        next = fmin(next, f_motion_next(st->motion, now, NULL));
+        next = fmin(next, element_due(tree, st->motion, NULL, ticks));
     }
     // What draws outside the boxes it is inside — a positioned box, a
     // fixed one, one a transform moves, none of them in their ancestors'
@@ -1764,7 +1900,7 @@ uint64_t flow_motion_due(const flow_tree_t *tree, os64_gui_rect_t view, flow_poi
                 for (int w = 0; w < F_PROP_WORDS; w++)
                     ask.w[w] = handed.w[w] | took.w[w];
                 bool through = in_clip && clips_to_text(&st->style);
-                next = fmin(next, f_motion_next(st->motion, now, through ? NULL : &ask));
+                next = fmin(next, element_due(tree, st->motion, through ? NULL : &ask, ticks));
             }
             if (st != NULL)
                 for (int w = 0; w < F_PROP_WORDS; w++)
@@ -1777,9 +1913,19 @@ uint64_t flow_motion_due(const flow_tree_t *tree, os64_gui_rect_t view, flow_poi
     if (!(next < INFINITY))
         return FLOW_NEVER;
     if (next <= now)
-        return tree->now_ms;
+        return at;
     double up = ceil(next);
     return up >= (double)UINT64_MAX ? FLOW_NEVER : (uint64_t)up;
+}
+
+uint64_t flow_motion_due(const flow_tree_t *tree, os64_gui_rect_t view, flow_point_t scroll)
+{
+    return motion_due(tree, view, scroll, false);
+}
+
+uint64_t flow_motion_tick_due(const flow_tree_t *tree, os64_gui_rect_t view, flow_point_t scroll)
+{
+    return motion_due(tree, view, scroll, true);
 }
 
 bool flow_incomplete(const flow_tree_t *tree)
@@ -2227,14 +2373,21 @@ os64_gui_rect_t flow_box_doc_rect(const flow_box_t *box, flow_point_t scroll)
 static os64_gui_rect_t doc_rect_of(const flow_box_t *box, os64_gui_rect_t local, flow_point_t scroll)
 {
     flow_point_t o = flow_box_doc_offset(box, scroll);
-    os64_gui_rect_t r = moved(local, o.x, o.y);
-    if (inner_through(box->frame) == NULL)
+    return space_rect(box->frame, moved(local, o.x, o.y), scroll);
+}
+
+// A rect painted in the coordinates of frame `f`'s drawn-through frame
+// (from_space) where the page paints it: the bounds of its corners taken
+// out through every matrix.
+static os64_gui_rect_t space_rect(const flow_frame_t *f, os64_gui_rect_t r, flow_point_t scroll)
+{
+    if (inner_through(f) == NULL)
         return r;
     double x0 = INFINITY, y0 = INFINITY, x1 = -INFINITY, y1 = -INFINITY;
     for (int k = 0; k < 4; k++) {
         long double lx = (long double)r.x + (k & 1 ? r.w : 0);
         long double ly = (long double)r.y + (k & 2 ? r.h : 0);
-        from_space(box->frame, scroll, &lx, &ly);
+        from_space(f, scroll, &lx, &ly);
         double x = (double)lx, y = (double)ly;
         x0 = fmin(x0, x);
         y0 = fmin(y0, y);
@@ -2966,4 +3119,160 @@ int64_t flow_dump(const flow_tree_t *tree, char *out, size_t cap)
     return f_tree_dump(tree->root, (const flow_frame_t *const *)tree->scrollers, flow_width(tree),
                        flow_height(tree), tree->incomplete, out,
                        cap);
+}
+
+// ── Ticks (PILE3.md § Animations in place) ─────────────────────────────
+
+// What a tick's values are made with (f_motion_style): the arena its lists
+// come from, within what is left of the room the layout left them
+// (flow_tree.tick_room); and the element's keyframes, every one resolved
+// by the layout (FMotion.resolved).
+typedef struct {
+    FArena *arena;
+    size_t left;
+    const FMotion *m;
+} Ticking;
+
+static void *tick_alloc(void *ctx, size_t bytes)
+{
+    Ticking *k = ctx;
+    if (bytes > k->left)
+        return NULL;
+    void *p = f_arena_alloc(k->arena, bytes);
+    if (p != NULL)
+        k->left -= bytes;
+    return p;
+}
+
+static const FResolved *tick_resolved(void *ctx, int32_t a, int32_t frame, const flow_style_t *over)
+{
+    const FMotion *m = ((Ticking *)ctx)->m;
+    return m->resolved[2 * (m->first[a] + frame) + (over != NULL)];
+}
+
+// A box's ink with its shadows as they are now, MERGED into what it was —
+// a box's ink only grows while its tree lives — and handed up as ink_reach
+// hands it.
+static void ink_grown(flow_box_t *b)
+{
+    int32_t was[4];
+    os64_memcpy(was, b->ink, sizeof(was));
+    own_ink(b);
+    for (int k = 0; k < 4; k++)
+        b->ink[k] = b->ink[k] > was[k] ? b->ink[k] : was[k];
+    for (const flow_box_t *c = b; c->parent != NULL && !c->stacked; c = c->parent)
+        ink_up(c);
+}
+
+// What each element a tick changes paints, handed to `mark` in page
+// coordinates at `scroll`: a group's bounds (group_bounds) taken out
+// through every matrix; any other element's boxes' overflow rects grown by
+// their ink and cut to their clips, as a group holds them (layer_reach).
+static void tick_marks(const flow_tree_t *t, flow_point_t scroll,
+                       void (*mark)(void *ctx, const flow_box_t *box, os64_gui_rect_t r), void *ctx)
+{
+    bool groups = false;
+    for (int32_t i = 0; i < t->nticking; i++)
+        groups |= t->ticking[i].changed && t->ticking[i].open >= 0;
+    os64_gui_rect_t *bounds = groups ? all_group_bounds(t, scroll) : NULL;
+    for (int32_t i = 0; i < t->nticking; i++) {
+        const FTick *e = &t->ticking[i];
+        if (!e->changed)
+            continue;
+        if (e->open >= 0) {
+            const flow_box_t *g = t->layers[e->open].box;
+            int32_t end;
+            os64_gui_rect_t r = space_rect(g->frame, bounds != NULL ? bounds[e->open]
+                                                                    : group_bounds(t, e->open, scroll, &end),
+                                           scroll);
+            if (r.w > 0 && r.h > 0)
+                mark(ctx, g, r);
+            continue;
+        }
+        for (int32_t j = 0; j < e->nboxes; j++) {
+            const flow_box_t *b = e->boxes[j];
+            os64_gui_rect_t r;
+            if (b->unpainted || !layer_reach(&(Layer){b, PART_WHOLE}, scroll, &r))
+                continue;
+            r = space_rect(b->frame, r, scroll);
+            if (r.w > 0 && r.h > 0)
+                mark(ctx, b, r);
+        }
+    }
+    os64_free(bounds);
+}
+
+bool flow_motion_tick(flow_tree_t *tree, uint64_t now, flow_point_t scroll,
+                      void (*mark)(void *ctx, const flow_box_t *box, os64_gui_rect_t r), void *ctx,
+                      bool *moved)
+{
+    if (moved != NULL)
+        *moved = false;
+    if (tree == NULL || tree->nticking == 0)
+        return true;
+    // The lists come from the arena the styles do not point into, so the
+    // one they do is left whole for a tick that is not taken.
+    int to = tree->live == 0 ? 1 : 0;
+    FArena *lists = &tree->tick_lists[to];
+    f_arena_free(lists);
+    lists->cap = SIZE_MAX;
+    Ticking k = {lists, tree->tick_room, NULL};
+    for (int32_t i = 0; i < tree->nticking; i++) {
+        const FMotion *m = tree->ticking[i].st->motion;
+        for (int32_t a = 0; a < m->nanims; a++) {
+            tree->ticking[i].saved[2 * a] = m->anims[a].holds;
+            tree->ticking[i].saved[2 * a + 1] = m->anims[a].dropped;
+        }
+    }
+    // Every element worked before any is written. One past its next phase
+    // edge stays at the time it is at, which the layout moves it on from;
+    // its lists are made again all the same, in the arena the styles will
+    // point into.
+    bool ok = true;
+    for (int32_t i = 0; ok && i < tree->nticking; i++) {
+        FTick *e = &tree->ticking[i];
+        const FMotion *m = e->st->motion;
+        e->at = (double)now < m->edge ? (double)now : m->at;
+        e->worked = m->base;
+        k.m = m;
+        ok = f_motion_style(m, e->at, &e->worked, tick_alloc, tick_resolved, &k, NULL, true);
+    }
+    if (!ok) {
+        for (int32_t i = 0; i < tree->nticking; i++) {
+            const FMotion *m = tree->ticking[i].st->motion;
+            for (int32_t a = 0; a < m->nanims; a++) {
+                m->anims[a].holds = tree->ticking[i].saved[2 * a];
+                m->anims[a].dropped = tree->ticking[i].saved[2 * a + 1];
+            }
+        }
+        f_arena_free(lists);
+        return false;
+    }
+    for (int32_t i = 0; i < tree->nticking; i++) {
+        FTick *e = &tree->ticking[i];
+        e->changed = f_motion_changed(e->st->motion, &e->st->style, &e->worked);
+    }
+    if (mark != NULL)
+        tick_marks(tree, scroll, mark, ctx);
+    for (int32_t i = 0; i < tree->nticking; i++) {
+        FTick *e = &tree->ticking[i];
+        f_motion_take(e->st->motion, &e->st->style, &e->worked);
+        e->st->motion->at = e->at;
+        for (int32_t j = 0; e->changed && j < e->nboxes; j++) {
+            flow_box_t *b = e->boxes[j];
+            flow_frame_t *f = (flow_frame_t *)b->frame;
+            if (f != NULL && f->box == b && f->kind == F_FRAME_TRANSFORM) {
+                flow_frame_t was = *f;
+                transform_fill(f, b->style);
+                if (moved != NULL && os64_memcmp(&was, f, sizeof(was)) != 0)
+                    *moved = true;
+            }
+            ink_grown(b);
+        }
+    }
+    if (mark != NULL)
+        tick_marks(tree, scroll, mark, ctx);
+    tree->live = to;
+    tree->tick_ms = now;
+    return true;
 }

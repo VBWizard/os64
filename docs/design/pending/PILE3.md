@@ -1800,7 +1800,8 @@ thread busy all the time):
 - a page whose last frame — or, before there was one, its last layout —
   took more than MOTION_COST_MS (200) lays out for no animation: its
   animations show what they were at the last layout made for another
-  reason, until S8b moves the ones it can. One whose layout fails is its
+  reason, but for those that tick, which are held to their own cost (§
+  Animations in place, What a tick may cost). One whose layout fails is its
   last, as though it had cost too much. A frame over the limit is the
   page's last too: nothing measures a cheaper one after it, so its
   animations stay still until the page is left. A page the cost rule
@@ -1856,54 +1857,127 @@ switch's.
 
 ### How it is built
 
-**What moves in place.** A property moves between layouts when nothing
-but painting reads it, its effect on structure is fixed for the
-animation's life (S8a's side effects), and nothing inherits it: the
-transform's four properties and `transform-origin`, `opacity`,
-`background-color`, `background-position`, the four border colours and
-`box-shadow`. Every other animated property still moves by layouts, as
-in S8a. A descendant that takes one of these by `inherit` makes it move
-by layouts on that element, since a tick rewrites the animated element's
-style and no other.
+**What ticks.** An animated element TICKS — its values move between
+layouts — when nothing but painting reads what its animations set, and
+what they do to the page's structure is fixed for their life:
+
+- every property any of its animations sets is one of the TICK SET: the
+  transform's four properties and `transform-origin`, `opacity`,
+  `background-color`, `background-position`, the four border colours and
+  `box-shadow`. None is inherited, so no other element's style reads
+  them — but by keyword, so
+- no child takes one of them by `inherit` (FStyled.taken): the child's
+  value would move only at layouts;
+- its background is not cut to its text (`background-clip: text`),
+  which draws through text that may be anywhere;
+- the layout dropped none of its values for the lists' budget, and found
+  room to resolve every one of its keyframes (below).
+
+Any other animated element moves by layouts, as in S8a. The tick set is
+not `FMotion.in_place`, which is the view's question — what may wait
+while its element is out of view — and holds colours an element hands
+down; the two are kept apart by name (`f_motion_ticks`).
+
+**Why its keyframes can be resolved once.** A keyframe is resolved
+against its element's base, its parent's style and the font size and
+colour its animations make (§ keyframes resolved where they are mixed).
+A ticking element's animations make neither a font size nor a colour,
+and its parent's style is the layout's until the next layout. So the
+layout resolves EVERY keyframe of a ticking element, not only the two
+its time asks for, and keeps the table (`FMotion.resolved`, in the
+styles' arena with the lists it made); a tick's resolver reads it. That
+is the whole of what a tick needs from the style pass: what is resolved
+against what holds still between layouts.
 
 **A tick is the style pass's arithmetic, again.**
-`flow_motion_tick(tree, now, view, damage, ctx)` works each in-place
-animated value at `now` with the function the style pass works it with,
-its keyframes resolved as the style pass resolves them — so the tree
-keeps their declarations and what they are resolved against, the base and
-the parent — and writes it into the element's style. What the layout derived from those
-fields is made again:
+`flow_motion_tick(tree, now, scroll, mark, ctx, moved)` works each ticking element at
+`now` with `f_motion_style`, the function the style pass mixes with,
+over its base and its kept keyframes — recording its holds, as a layout
+does — and writes the tick set's fields into the element's style, which
+every box of the element reads (`flow_box_t.style` is FStyled's). Every
+ticking element is worked at every tick, in view or not: the lists it
+makes come from one of two arenas the tree keeps, used in turn and
+emptied before use, so no style is left pointing into the arena a tick
+empties. Those lists are held to what the layout's budget left them —
+what styling left, and what the ticking elements' own mixes spent
+(`FMotion.mixed`, not their keyframes', which stay) — since a mixed list may
+be longer than either end (a repeatable list is mixed to their least
+common multiple); a tick that finds no room, or no memory, is not taken
+and the face lays out instead, whose budget decides what is dropped. A
+tick is whole or not taken: every element is worked before any is
+written, so one that fails leaves the tree as the last tick left it.
+Then what the layout derived from those fields is made again:
 
-- the transform frame from its matrix: `f_transform_matrix` with the
-  border box in 26.6, which the frame now keeps, and the frame's move,
-  `through`, `upright` and affine as `transform_new` makes them;
-- the box's ink for its shadows (`own_ink`'s shadow part), MERGED into
-  `flow_box_t.ink` and handed up as `ink_up` hands it — so a box's ink
-  only grows while its tree lives, which THE BOUNDS CONTRACT allows;
+- each of the element's transform frames, from its matrix: the frame
+  keeps its border box in 26.6, and what `transform_new` fills — the
+  matrix, `by`, `upright`, `through`, the affine — is filled by one
+  function both call;
+- each of its boxes' ink, worked again (`own_ink`) and MERGED into what
+  `flow_box_t.ink` was, then handed up as `ink_up` hands it — so a box's
+  ink only grows while its tree lives, which THE BOUNDS CONTRACT allows;
 - nothing else: group bounds, hits, a box's place and its clip read the
-  frames when they are asked.
+  frames when they are asked, and the painter reads the style when it
+  paints — the canvas's owner among it (Backgrounds 3 § 2.11).
 
-**What it repaints.** For each element a tick changed, `damage` is handed
-what the element painted before it and what it paints after, in the
-page's coordinates: a group's bounds as `flow_visit_groups` works them
-(everything in its stacking context, through every matrix); for any
-other element, each of its boxes' overflow rect grown by its ink and cut
-to its clip, through its frames; the whole view for the canvas's owner,
-whose background is the canvas's. The face marks each, cut to the view
-first — marks are joined into one rectangle (§ The one dirty rectangle,
-below), and one outside the view would stretch it across the view. A
-tick that moved a frame places the page's live controls again
-(`forms_place`), so a field inside a sliding panel slides with it.
+What a layout decides from an animation — whether the element is a
+stacking context, a group, a frame, a containing block — it decides from
+`flow_style_t.animating`, which holds while the animations are current
+or in effect, so it holds from one phase edge to the next; a ticking
+element's phase edges are the LAYOUT's to show (below), and a tick never
+crosses one: past its next edge an element stays as the last tick before
+the edge left it, and is due for no tick, until the layout.
 
-**When the next frame is.** `flow_motion_due` answers for the in-place
-animations as it does for the rest, apart: the face ticks at the
-in-place deadline and lays out at the other. A tick waits MOTION_FRAME_MS
-after the last, and as long again as the last tick and its painting
-took, so motion spends at most half the time; a value that only moves at
-its steps ticks only at their edges, and a stretch where the keyframes
-hold one value does not tick inside it. The face also ticks before
-it paints the page for any other reason — a scroll brings an animation
-into view — so what is painted is the value at the time it is painted.
+**What it repaints.** For each element whose fields a tick changed,
+`mark` is handed what the element painted before the tick and what it
+paints after, in the page's coordinates at `scroll`, with the box that
+paints it:
+
+- for a group — every element whose transform or opacity animates is one
+  for the animation's life (`is_group`) — everything in it, its bounds as
+  `flow_visit_groups` works them, taken out through every matrix;
+- for any other, each of its boxes' overflow rect grown by its ink and
+  cut to its clip, through its frames — what changed is its own
+  background, borders and shadows, which its own boxes paint.
+
+The face marks each, cut to the view first — marks are joined into one
+rectangle (§ The one dirty rectangle, below), and one outside the view
+would stretch it across the view — and the whole view for the canvas's
+owner, whose background it paints across the view, told by the
+painter's own rule from the box. An element out of view is marked
+nothing, and a tick that marks nothing paints nothing. A tick that moved a frame places
+the page's live controls again (`forms_place`), so a field inside a
+sliding panel slides with it.
+
+**When the next tick is.** `f_motion_next` answers ticking elements in
+two halves: their values' changes inside a phase, which are the TICKS'
+— `flow_motion_tick_due`, the view's question asked as `flow_motion_due`
+asks it, and the opacity a ticking ancestor hands to a box drawn outside
+it among them — and their phase edges, which are the LAYOUTS'
+(`flow_motion_due`), with every animated value of every other element.
+A tick's holds are what the tick found, as a layout's are. The face
+ticks at the tick deadline and lays out at the other; a layout due by
+then wins, and brings every ticking element to its time itself.
+
+**What a tick may cost.** Ticks are paced and held to the cost rule as
+layouts are, by their OWN frames: a tick waits MOTION_FRAME_MS after the
+last began, and as long again as the last tick and its painting took
+after it ended — so ticking spends at most half the time — and a tick
+frame over MOTION_COST_MS stops the ticks as a layout over it stops the
+layouts. So a page whose layouts cost too much — danlegt's took 223 ms
+on the P5 — keeps its ticking animations moving. Each stopped half is
+said by the status row's mode, naming its kind of frame — `SOME
+ANIMATIONS PAUSED: a layout's frame took 223 ms, over 200 | ` while the
+other half still has changes to show and runs, `ANIMATIONS PAUSED: …`
+when nothing that has one runs (`a tick's frame took`, and before a
+first frame, `the layout took`) — and in the diag fact.
+
+**Before a whole view is painted.** The face ticks before it paints
+the whole view for any other reason — a scroll that brings an animation
+into view, whose last tick may be seconds old since nothing out of view
+was due — so such a paint shows every ticking animation at the time it
+is painted. A paint of a part (a picture's frame) does not tick: what it
+repaints of an animation is what is on the glass beside it already, and
+a tick would join its marks to the part's.
 
 ## Animations, both slices
 
@@ -1913,9 +1987,13 @@ Written before the code (the lesson of S7b's nineteen rounds):
 
 - **A value is a function of the time.** An animation's value at a time
   depends on that time, its start time and the page's styles, and on
-  nothing else: no frame is built from the frame before. A layout at a
-  time and a tick at that time give the same style fields and the same
-  frame, to the bit — the tick calls the function the style pass calls.
+  nothing else: no frame is built from the frame before. A tick at a
+  time gives the style fields and the frames a layout at that time gives,
+  to the bit — before its element's next phase edge, on a page whose
+  values that move by layouts stand where the last layout left them, and
+  within the lists' budget — for the tick
+  calls the function the style pass calls, over keyframes the style pass
+  resolved.
   A frame the face skips is not drawn, and the next is right.
 - **The timing is Web Animations' arithmetic**, in doubles of
   milliseconds from the start time. No promise past it.
@@ -1933,7 +2011,9 @@ Written before the code (the lesson of S7b's nineteen rounds):
   or an earlier one. Early is allowed — every frame of an animation in
   its active phase whose value moves, by design — late never. The value
   is the referee: the proof asks `f_motion_style` at every millisecond of thousands of
-  animations made at random and holds `f_motion_next` to each change.
+  animations made at random and holds `f_motion_next` to each change —
+  both halves of it, a ticking element's values to the ticks and its
+  phase edges to the layouts.
 - **A value holding still between two equal keyframes is not asked for**
   (Chris, 10/14): an interval whose two ends hold one value is due only at
   its far end, whatever its easing — a carousel's hold, a pause written
@@ -2041,7 +2121,9 @@ the perf slice.
 | A page's scrollable extent following a transform's frames | the extent is the layout's | a page scrolled to where an animation carried something |
 | The rest of Compat § 3.4.1's drawn rows (`-webkit-box-shadow`, `-webkit-border-radius` and the others) | not animation's | a page that writes only the prefixed name |
 | `linear()` easing (Easing 2) | no page in the census writes it | a page that does |
-| An animation that moves its element rests out of view | it may carry what it draws into view from anywhere, so S8a keeps it due wherever it is; a bound on where its frames can reach — a spinner turns inside its own circle — would let it rest | S8b, where such a tick is arithmetic and a repaint, or a page whose spinners out of view cost what the P5 notices |
+| A frame over MOTION_COST_MS stops its half of the page's motion for good: SLOW it instead — no hard stop at 200 ms, a stop only well past it (about a second) and a retry after, said as `ANIMATIONS SLOWED` apart from `PAUSED` | the perf slice decides how often a page reaches it (danlegt's 223 ms layout on the P5, 10/15) | Pile 3 and the perf slice done (Chris, 10/15) |
+| A frame-timing switch in Settings that shows where a paused page's time went — the style pass, the layout, the tick, the paint | wanted beside the paused notice, and cheapest built once perf has measured those halves | Pile 3 and the perf slice done (Chris, 10/15) |
+| An animation that moves its element rests out of view | it may carry what it draws into view from anywhere, so S8a keeps it due wherever it is; a bound on where its frames can reach — a spinner turns inside its own circle — would let it rest | a page whose spinners out of view cost what the P5 notices: a tick out of view is arithmetic and paints nothing (S8b), but the face still wakes for it |
 | A `rotate3d()` axis of tiny parts turns about its direction, where Chrome 155 draws one of 1e-160 or 1e-200 as no turn (and turns at 1e-15) — likely its float storage of the axis; no test holds either answer (#270's full mutant run: `a-huge-axis-overflows`) | an input no page writes | a page that does, or a look at Chrome's threshold |
 
 ### Proof
@@ -2116,10 +2198,26 @@ page's layout with each
 of its allocations failed in turn, alone and with every one after it,
 leaking nothing, whole only when it is the page, and its timeline
 coming through each failure with its start times — and with a pause
-the failed layout read not taken. S8b, when it is built, adds its tick
-against a layout at the same time, field by field and frame by frame to
-the bit, at many times; its damage holding what was painted before and
-after; ink that only grows.
+the failed layout read not taken. S8b's: a tick against a layout at the
+same time, field by field and frame by frame to the bit, at every
+millisecond of animations made at random of the tick set — their
+keyframes' `em`, `%` and `currentColor` among them, implicit keyframes
+over the base, and two animations of one property — and of every
+row of the table above that ticks; each condition that keeps an element
+from ticking keeping it (a property outside the tick set, a face that does
+not tick, a child's `inherit` in a declaration or a keyframe, a
+background cut to its text, a list the layout's mix dropped, a keyframe
+whose list found no room); every keyframe kept and none resolved again
+by a tick; the arenas in turn leaving no list behind; a phase edge due
+for a layout and never ticked across, and an element past it due for no
+tick; the tick's holds, its own, asked at its time; its room — what the
+layout left and the element's own mix spent, calibrated to a list item,
+a tick needing that taken and one needing more not; its marks holding
+what each element painted before and after it, a group's whole with its
+positioned boxes, through its matrices, each with the box that paints
+it; ink that only grows, handed up; and a tick with each of its
+allocations failed in turn, not taken, the tree and its holds as they
+were and nothing leaked — and the layout's own sweep, ticking.
 
 yonder's host harness, which hosts yonder.c with clocks it sets: S8a's
 deadlines — the cost limit, a frame's paint counted in its cost, the
@@ -2131,13 +2229,20 @@ afresh, a script's change starting one that runs on once its rebuild is
 published, nothing due while a rebuild is owed, an element removed, a
 layout discarded for more room starting nothing that outlives it; the two
 settings saved and applied, what the media answers, and with animations
-off the rules' styles and nothing due. S8b, when it is built, adds its
-marks cut to the view, and controls placed after a frame moved.
+off the rules' styles and nothing due. S8b's: the tick's deadline apart
+from the layout's, a layout due by then winning; its pacing and its own
+cost rule, a page whose layouts cost too much still ticking, and `SOME
+ANIMATIONS PAUSED` against `ANIMATIONS PAUSED`; its marks cut to the
+view, none for an element out of view, the whole view for the canvas's
+owner; controls placed after a frame moved; a tick before a scroll's
+paint and none before a picture's.
 
 `tools/test_motion_mutants.py` breaks each rule. In the guest,
 `tools/pages/pile3-motion.html`: FROZEN rows, paused at chosen times or
 long finished, each box on a blue line where headless Chrome put it or
 beside a neighbour drawn as Chrome computes it; and LIVE rows (a
 spinner, a pulse, a hue cycle, a steps march, a delayed start, one
-Reduce motion stops, one far below the fold) watched; then danlegt on
-the P5.
+Reduce motion stops, one far below the fold — and with S8b a sliding
+panel holding a text field, and a ticking spinner beside a pulse of
+`color`, which lays out) watched; then danlegt on the P5, its marquee
+moving while its layouts are paused.

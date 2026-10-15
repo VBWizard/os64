@@ -2218,6 +2218,50 @@ bool f_motion_in_place(const FMotion *m)
     return true;
 }
 
+// The TICK SET (PILE3.md § Animations in place): what nothing but painting
+// reads, and nothing inherits.
+static bool ticks_in_place(garb_prop_t p)
+{
+    switch (p) {
+    case GARB_TRANSFORM: case GARB_TRANSLATE: case GARB_ROTATE: case GARB_SCALE:
+    case GARB_TRANSFORM_ORIGIN: case GARB_OPACITY: case GARB_BACKGROUND_COLOR:
+    case GARB_BACKGROUND_POSITION_X: case GARB_BACKGROUND_POSITION_Y:
+    case GARB_BORDER_TOP_COLOR: case GARB_BORDER_RIGHT_COLOR: case GARB_BORDER_BOTTOM_COLOR:
+    case GARB_BORDER_LEFT_COLOR: case GARB_BOX_SHADOW:
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool f_motion_ticks(const FMotion *m)
+{
+    for (int32_t a = 0; a < m->nanims; a++)
+        for (int p = 0; p < GARB_NPROPS; p++)
+            if (f_props_has(&m->anims[a].props, (garb_prop_t)p) && animatable((garb_prop_t)p) &&
+                !ticks_in_place((garb_prop_t)p))
+                return false;
+    return true;
+}
+
+bool f_motion_changed(const FMotion *m, const flow_style_t *a, const flow_style_t *b)
+{
+    for (int32_t i = 0; i < m->nanims; i++)
+        for (int p = 0; p < GARB_NPROPS; p++)
+            if (f_props_has(&m->anims[i].props, (garb_prop_t)p) && animatable((garb_prop_t)p) &&
+                !same_value((garb_prop_t)p, a, b))
+                return true;
+    return false;
+}
+
+void f_motion_take(const FMotion *m, flow_style_t *live, const flow_style_t *worked)
+{
+    for (int32_t i = 0; i < m->nanims; i++)
+        for (int p = 0; p < GARB_NPROPS; p++)
+            if (f_props_has(&m->anims[i].props, (garb_prop_t)p) && animatable((garb_prop_t)p))
+                copy_prop((garb_prop_t)p, live, worked);
+}
+
 // When a change at time `at` first shows, after `now`: the millisecond it
 // falls in — or, for one at `now` itself, the next, since a value falling
 // through an edge (running backwards, the before flag is clear in the
@@ -2259,6 +2303,11 @@ static bool anim_shows(const FAnimation *an, int32_t a, const int32_t last[GARB_
 
 double f_motion_next(const FMotion *m, double now, const FProps *only)
 {
+    return f_motion_next_of(m, now, only, F_NEXT_ALL);
+}
+
+double f_motion_next_of(const FMotion *m, double now, const FProps *only, FNext half)
+{
     // Of the animations in effect now, the last to set each property with a
     // value wholly its own — its list for it not dropped, its interval
     // between two of its own keyframes, not resting on the value
@@ -2286,8 +2335,8 @@ double f_motion_next(const FMotion *m, double now, const FProps *only)
                 last[p] = a;
         }
     }
-    // Each animation's phases: the start of its active phase, its end, and
-    // the current iteration's.
+    // Each animation's phases: the start of its active phase and its end —
+    // the edges — and the current iteration's end, which is the values'.
     double next = INFINITY;
     for (int32_t a = 0; a < m->nanims; a++) {
         const FAnimation *an = &m->anims[a];
@@ -2296,20 +2345,22 @@ double f_motion_next(const FMotion *m, double now, const FProps *only)
         double base = an->record->start;
         Clock k = clock_at(&an->timing, local_time(an->record, now));
         if (k.phase == PHASE_BEFORE) {
-            next = fmin(next, change_due(base + k.before_end, now));
+            if (half != F_NEXT_VALUES)
+                next = fmin(next, change_due(base + k.before_end, now));
             continue;
         }
         if (k.phase == PHASE_AFTER)
             continue;
-        next = fmin(next, change_due(base + k.active_end, now));
+        if (half != F_NEXT_VALUES)
+            next = fmin(next, change_due(base + k.active_end, now));
         double dur = an->timing.duration_ms;
-        if (dur > 0 && isfinite(k.iteration_start))
+        if (half != F_NEXT_EDGES && dur > 0 && isfinite(k.iteration_start))
             next = fmin(next, change_due(base + k.iteration_start + dur, now));
     }
     // And what each shows in its active phase: an interval that holds one
     // value (FAnimation.holds) at its far end, whatever its easing;
     // anything else now.
-    for (int32_t a = 0; a < m->nanims && next > now; a++) {
+    for (int32_t a = 0; half != F_NEXT_EDGES && a < m->nanims && next > now; a++) {
         const FAnimation *an = &m->anims[a];
         if (an->record == NULL || an->record->paused)
             continue;
