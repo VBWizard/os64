@@ -388,6 +388,10 @@ typedef struct {
     // container, or it makes no box (`display: contents`) inside one. Pass
     // 1 blockifies them (Flexbox 1 § 4, Grid 2 § 6).
     bool lays_out_items;
+    // What the author took from the parent by keyword — `inherit`, or
+    // `unset` on an inherited property — whatever the property is: a value
+    // an ancestor hands down to a box it does not hold (flow_motion_due).
+    FProps taken;
 } FStyled;
 
 // What is left of the budget for the lists a declaration hands each element

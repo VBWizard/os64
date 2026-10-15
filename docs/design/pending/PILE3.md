@@ -1721,9 +1721,10 @@ lie on many lines and, split round a block inside it, in several
 anonymous blocks, the nearest block with an element of its own, which
 holds them all; for one that makes none (`display: contents`) the boxes
 inside it, which draw what it hands down; or, for what it hands down —
-the inherited values and the fade, never its own background or border —
-any box inside it drawn outside it, positioned, fixed or moved by a
-transform, which no ancestor's overflow holds. The root and the body are seen
+the inherited values, the fade, and what the author takes by keyword
+(`inherit`) at every element between, never its own background or
+border otherwise — any box inside it drawn outside it, positioned, fixed
+or moved by a transform, which no ancestor's overflow holds. The root and the body are seen
 wherever their boxes are: the canvas may take either one's background
 and paint it over the whole view, and which one it takes is the
 painter's to know. Any other — a transform, a size, a
@@ -2049,7 +2050,8 @@ and over it — a fuzzer case remade of transform lists, an animation resting on
 a moving one's value, and the canvas's background with its owner's box
 out of view among them, and values that stand still, animations of
 nothing that can show, and an element's own background and border seen
-only through a box drawn outside it not asked for; implicit keyframes against
+only through a box drawn outside it not asked for, unless every element
+between inherits them by keyword; implicit keyframes against
 Chrome's values over another animation; THE SCHEDULE AGAINST THE VALUE — thousands of animations
 made at random (one to five keyframes at any offsets, several at one,
 two animations of a property, every easing to the domain's limits,

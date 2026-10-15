@@ -1709,9 +1709,10 @@ uint64_t flow_motion_due(const flow_tree_t *tree, os64_gui_rect_t view, flow_poi
     // fixed one, one a transform moves, none of them in their ancestors'
     // overflow: each that can be seen makes the animated elements it is
     // inside due as well, for what they hand down to it: the inherited
-    // properties (a colour, visibility) and the group effect (a fade).
-    // What an element repaints of its own box alone — a background, a
-    // border — is not drawn there.
+    // properties (a colour, visibility), the group effect (a fade), and
+    // whatever the author took by keyword at every element between them
+    // (FStyled.taken) — an `inherit` hands down a background too. What an
+    // element repaints of its own box alone is not drawn there.
     FProps handed = {{0}};
     for (int p = 0; p < GARB_NPROPS; p++)
         if (garb_prop_inherited((garb_prop_t)p) || p == GARB_OPACITY)
@@ -1720,10 +1721,24 @@ uint64_t flow_motion_due(const flow_tree_t *tree, os64_gui_rect_t view, flow_poi
         const flow_box_t *b = tree->stacked[i];
         if (b->node == NULL || !box_seen(b, view, scroll))
             continue;
+        // What reaches the box by keyword from the element above: what it
+        // took; from one further up, only what everything between took too.
+        // An element with no style of its own is taken to take everything.
+        const FStyled *own = f_style_of(tree->styles, b->node);
+        FProps took;
+        for (int w = 0; w < F_PROP_WORDS; w++)
+            took.w[w] = own != NULL ? own->taken.w[w] : ~(uint64_t)0;
         for (const os64_html_node_t *a = b->node->parent; a != NULL && next > now; a = a->parent) {
             const FStyled *st = a->kind == OS64_HTML_ELEMENT ? f_style_of(tree->styles, a) : NULL;
-            if (st != NULL && st->motion != NULL)
-                next = fmin(next, f_motion_next(st->motion, now, &handed));
+            if (st != NULL && st->motion != NULL) {
+                FProps ask;
+                for (int w = 0; w < F_PROP_WORDS; w++)
+                    ask.w[w] = handed.w[w] | took.w[w];
+                next = fmin(next, f_motion_next(st->motion, now, &ask));
+            }
+            if (st != NULL)
+                for (int w = 0; w < F_PROP_WORDS; w++)
+                    took.w[w] &= st->taken.w[w];
         }
     }
     if (!(next < INFINITY))

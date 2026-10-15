@@ -1911,20 +1911,38 @@ static void motion_due_cases(void)
         moving_close(&m);
     }
     // And only for what it hands down: an inherited value and a fade reach
-    // the box inside it; its own background and border do not.
+    // the box inside it; its own background and border do not — unless
+    // the author hands them down by keyword, at every element between.
+    static const char *const kFixed = "<p style='position:fixed;top:0'>x</p>";
+    static const char *const kTakes = "<p style='position:fixed;top:0;background-color:inherit'>x</p>";
     static const struct {
-        const char *name, *keyframes;
+        const char *name, *keyframes, *between, *box;
         uint64_t due;
     } kHanded[] = {
-        {"motion due: seen through a box inside it, a fade", "to{opacity:0}", 1000},
-        {"motion due: seen through a box inside it, visibility", "to{visibility:hidden}", 1000},
-        {"motion due: not for its own background", "to{background-color:red}", FLOW_NEVER},
-        {"motion due: nor for its own border", "to{border-top-color:red}", FLOW_NEVER},
+        {"motion due: seen through a box inside it, a fade", "to{opacity:0}", NULL, kFixed, 1000},
+        {"motion due: seen through a box inside it, visibility", "to{visibility:hidden}", NULL, kFixed, 1000},
+        {"motion due: not for its own background", "to{background-color:red}", NULL, kFixed, FLOW_NEVER},
+        {"motion due: nor for its own border", "to{border-top-color:red}", NULL, kFixed, FLOW_NEVER},
+        {"motion due: but for a background the box inherits", "to{background-color:red}", NULL, kTakes, 1000},
+        {"motion due: and through everything between that inherits it",
+         "to{background-color:red}", "background-color:inherit", kTakes, 1000},
+        {"motion due: not through an element between that does not",
+         "to{background-color:red}", "color:blue", kTakes, FLOW_NEVER},
+        {"motion due: unset on a background is no inheritance", "to{background-color:red}", NULL,
+         "<p style='position:fixed;top:0;background-color:unset'>x</p>", FLOW_NEVER},
+        {"motion due: nor an inherit a later declaration replaces", "to{background-color:red}", NULL,
+         "<p style='position:fixed;top:0;background-color:inherit;background-color:blue'>x</p>", FLOW_NEVER},
     };
     for (size_t i = 0; i < sizeof(kHanded) / sizeof(kHanded[0]); i++) {
-        char html[512];
+        // `between`, when given, is the style of an element between them.
+        char inner[256], html[768];
+        if (kHanded[i].between != NULL)
+            snprintf(inner, sizeof(inner), "<div style='%s'>%s</div>", kHanded[i].between, kHanded[i].box);
+        else
+            snprintf(inner, sizeof(inner), "%s", kHanded[i].box);
         snprintf(html, sizeof(html), MOTION_STYLE "@keyframes c{%s}"
-                 ".c{animation:c 1s linear;border-top:2px solid}</style>%s", kHanded[i].keyframes, kOutside[0]);
+                 ".c{animation:c 1s linear;border-top:2px solid}</style>"
+                 "<div class=c style='margin-top:2000px'>%s</div>", kHanded[i].keyframes, inner);
         moving_open(&m, html, 1000);
         uint64_t due = flow_motion_due(m.tree, kView, (flow_point_t){0, 0});
         char detail[48];
