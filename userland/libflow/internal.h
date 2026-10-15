@@ -222,6 +222,11 @@ static inline void f_props_add(FProps *p, garb_prop_t prop)
     p->w[prop / 64] |= (uint64_t)1 << (prop % 64);
 }
 
+static inline void f_props_remove(FProps *p, garb_prop_t prop)
+{
+    p->w[prop / 64] &= ~((uint64_t)1 << (prop % 64));
+}
+
 // The timeline's record of one running animation: when it started, and
 // while it is paused, the time it holds (motion.c).
 typedef struct FRecord FRecord;

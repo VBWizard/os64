@@ -1573,6 +1573,25 @@ static void motion_due_cases(void)
     expect_u32("motion due: and resting on one running but holding still hold too",
                (uint32_t)flow_motion_due(m.tree, kView, (flow_point_t){0, 0}), 1500);
     moving_close(&m);
+    // Two ends of an animation's own replace the value underneath and what
+    // moved it: the one resting on them holds, and both are due at their
+    // end.
+    moving_open(&m, MOTION_STYLE
+        "@keyframes up{from{opacity:0}to{opacity:1}}@keyframes hf{from{opacity:.5}to{opacity:.5}}"
+        "@keyframes zh{to{opacity:.5}}"
+        "</style><div style='animation:up 1s linear,hf 1s linear,zh 1s linear'>x</div>", 1000);
+    expect_u32("motion due: and resting on two ends replacing a moving value hold too",
+               (uint32_t)flow_motion_due(m.tree, kView, (flow_point_t){0, 0}), 2000);
+    moving_close(&m);
+    // And replace a value the schedule's walk could not make: the shadows
+    // under them make a list, none at both ends makes none.
+    moving_open(&m, MOTION_STYLE
+        "@keyframes sh{from{box-shadow:0 0 red}to{box-shadow:5px 5px red}}"
+        "@keyframes nn{from{box-shadow:none}to{box-shadow:none}}@keyframes zn{to{box-shadow:none}}"
+        "</style><div style='animation:sh 1s linear,nn 1s linear,zn 1s linear'>x</div>", 1000);
+    expect_u32("motion due: and resting on two ends replacing an unmade value hold too",
+               (uint32_t)flow_motion_due(m.tree, kView, (flow_point_t){0, 0}), 2000);
+    moving_close(&m);
 
     // Played either way — forwards, reverse, alternate, alternate-reverse
     // — every change is due when it shows. The oracle is the page laid out

@@ -2262,24 +2262,27 @@ static void *no_lists(void *ctx, size_t bytes)
 
 // What the schedule's walk (f_motion_next) keeps: the element, the time,
 // when its value next changes, which animation shows each property
-// (`last`), the properties an animation in its active phase moves, and
-// those whose lists the walk had no room for (it makes none: a list is
-// left unknown) — over either, the value under a later animation is not
-// known to hold.
+// (`last`), and the properties of the value the walk has made so far whose
+// lists it had no room for (it makes none: a list is left unknown) — over
+// one, the value under a later animation is not known to hold.
 typedef struct {
     const FMotion *m;
     double now, next;
     const int32_t *last;
-    FProps moving, failed;
+    FProps failed;
 } Due;
 
 // When what animation `a` shows of `p` next changes, the frames around its
 // progress `s` and `e`. One value at both ends holds still, whatever the
 // easing, and is due at the interval's far end; anything else, while its
 // animation runs, is due now. An implicit end rests on the value the
-// animations before made: where one of them moves it, or the walk could
-// not make it, the two ends are equal only at this instant, and the
-// interval moves.
+// animations before made: where the walk could not make it, the two ends
+// are equal only at this instant, and the interval moves. One resting on a
+// value an earlier animation moves needs nothing more: that one shows the
+// property, and is due now, unless a later interval between two keyframes
+// of its own replaces the value — and the motion with it. Two ends of its
+// own rest on nothing the walk could not make: the value is this one's,
+// and its own mix marks it again if that finds no room either.
 static bool due_step(void *ctx, int32_t a, garb_prop_t p, const Clock *k, const Frame *s, const Frame *e)
 {
     Due *d = ctx;
@@ -2287,11 +2290,10 @@ static bool due_step(void *ctx, int32_t a, garb_prop_t p, const Clock *k, const 
         return false;
     const FAnimation *an = &d->m->anims[a];
     bool active = k->phase == PHASE_ACTIVE && !an->record->paused;
-    bool unknown = (s->implicit || e->implicit) &&
-                   (f_props_has(&d->moving, p) || f_props_has(&d->failed, p));
-    bool still = !unknown && same_value(p, s->style, e->style);
-    if (active && !still)
-        f_props_add(&d->moving, p);
+    bool own = !s->implicit && !e->implicit;
+    bool still = (own || !f_props_has(&d->failed, p)) && same_value(p, s->style, e->style);
+    if (own)
+        f_props_remove(&d->failed, p);
     if (!active || d->last[p] > a)
         return true;
     if (!still) {
@@ -2355,7 +2357,7 @@ double f_motion_next(const FMotion *m, double now)
     // And what each shows in its active phase, walked as the value is, so
     // that each sees the value the ones before it made.
     if (next > now) {
-        Due d = {m, now, next, last, {{0}}, {{0}}};
+        Due d = {m, now, next, last, {{0}}};
         flow_style_t walked = m->base;
         Look look = {now, &walked, no_lists, NULL, &d.failed};
         (void)motion_walk(m, &look, false, due_step, &d);

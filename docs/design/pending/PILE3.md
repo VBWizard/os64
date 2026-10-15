@@ -1735,12 +1735,15 @@ transform whose matrices cannot be undone (drawn as the first and then
 the second, `f_blend_matrix`) among them, none worked out ahead. One
 value at both ends of an interval holds still, however its keyframes are
 written and whatever its easing, so only the interval's far end is due —
-unless an end is implicit and rests on a value an animation before it
-moves in its active phase, or one the schedule's walk could not make (it
-makes no lists), when the two ends are equal only at that instant and
-the interval moves. Two mixes of tails are one value when they are one
-by structure — the same fraction between the same tails — never by what
-they draw in some boxes, which no set of boxes decides. Nor is one due
+unless an end is implicit and rests on a value the schedule's walk could
+not make (it makes no lists), when the two ends are equal only at that
+instant and the interval moves. One resting on a value an animation
+before it moves needs no rule of its own: that animation shows the
+property and is due now, unless a later interval between two keyframes
+of its own replaces the value, and the motion with it. Two mixes of
+tails are one value when they are one by structure — the same fraction
+between the same tails — never by what they draw in some boxes, which no
+set of boxes decides. Nor is one due
 that is not drawn moving: a property a later animation in effect
 replaces, whatever the earlier one does to it — an animation whose list
 for it found no room in the layout's budget replaces nothing and is due
@@ -2038,9 +2041,10 @@ room to carry its records on failing, a tree laid out with no timeline
 keeping the page's, three thousand names matched;
 each due time — a step, a flip and visibility at the frame rate while
 they run, two equal ends held to their far end through any easing, resting
-on a moving value and on a still one, and two mixes of tails told apart by
-structure where every square box draws them alike — an inline element's
-later pieces, lists the budget had no room for — under another animation's
+on a moving value and on a still one, two ends of an animation's own
+replacing a moving value and an unmade one, and two mixes of tails told
+apart by structure where every square box draws them alike — an inline
+element's later pieces, lists the budget had no room for — under another animation's
 and over it — a fuzzer case remade of transform lists, an animation resting on
 a moving one's value, and the canvas's background with its owner's box
 out of view among them, and values that stand still and animations of

@@ -369,8 +369,8 @@ mutants = [
     # what float, position, overflow and currentColor make of each other
     # across animations.
     ('a-same-value-is-moving', MOTION,
-     '    bool still = !unknown && same_value(p, s->style, e->style);',
-     '    bool still = false;\n    (void)same_value;\n    (void)unknown;', LIBFLOW),
+     '    bool still = (own || !f_props_has(&d->failed, p)) && same_value(p, s->style, e->style);',
+     '    bool still = false;\n    (void)same_value;', LIBFLOW),
     ('transforms-are-compared-by-pointer', MOTION,
      '    for (int i = 0; i < 16; i++)\n        if (a->m[i] != b->m[i])\n            return false;\n    return true;',
      '    for (int i = 0; i < 16; i++)\n        if (a->m[i] != b->m[i])\n            return false;\n    return a == b;', LIBFLOW),
@@ -477,20 +477,14 @@ mutants = [
      '        if (!k.in_effect)\n            continue;\n        for (int p = 0; p < GARB_NPROPS; p++) {\n            if (last[p] >= 0',
      '        (void)k.in_effect;\n        for (int p = 0; p < GARB_NPROPS; p++) {\n            if (last[p] >= 0', LIBFLOW),
     # The middle ground (A2): the frame rate while an animation runs, two
-    # equal ends held still to their far end, and what rests on a moving
-    # or unmade value moving with it.
+    # equal ends held still to their far end, and what rests on an unmade
+    # value moving with it, until two ends of an animation's own replace it.
     ('equal-ends-do-not-hold', MOTION,
-     '    bool still = !unknown && same_value(p, s->style, e->style);',
-     '    bool still = !unknown && false && same_value(p, s->style, e->style);', LIBFLOW),
-    ('a-moving-value-underneath-holds', MOTION,
-     '                   (f_props_has(&d->moving, p) || f_props_has(&d->failed, p));',
-     '                   ((false && f_props_has(&d->moving, p)) || f_props_has(&d->failed, p));', LIBFLOW),
-    ('an-unmade-value-underneath-holds', MOTION,
-     '                   (f_props_has(&d->moving, p) || f_props_has(&d->failed, p));',
-     '                   (f_props_has(&d->moving, p) || (false && f_props_has(&d->failed, p)));', LIBFLOW),
-    ('a-held-animation-moves-what-rests-on-it', MOTION,
-     '    if (active && !still)\n        f_props_add(&d->moving, p);',
-     '    if (active)\n        f_props_add(&d->moving, p);', LIBFLOW),
+     '    bool still = (own || !f_props_has(&d->failed, p)) && same_value(p, s->style, e->style);',
+     '    bool still = (own || !f_props_has(&d->failed, p)) && false && same_value(p, s->style, e->style);', LIBFLOW),
+    ('a-replaced-value-is-still-unmade', MOTION,
+     '    if (own)\n        f_props_remove(&d->failed, p);',
+     '', LIBFLOW),
     ('a-paused-animation-runs', MOTION,
      '    bool active = k->phase == PHASE_ACTIVE && !an->record->paused;',
      '    bool active = k->phase == PHASE_ACTIVE;', LIBFLOW),
@@ -657,8 +651,8 @@ mutants = [
      '            if (!s.implicit && !e.implicit)\n                last[p] = a;',
      '            last[p] = a;', LIBFLOW),
     ('an-unknown-underlying-is-still', MOTION,
-     '    bool still = !unknown && same_value(p, s->style, e->style);',
-     '    bool still = same_value(p, s->style, e->style);\n    (void)unknown;', LIBFLOW),
+     '    bool still = (own || !f_props_has(&d->failed, p)) && same_value(p, s->style, e->style);',
+     '    bool still = same_value(p, s->style, e->style);', LIBFLOW),
     # Round 12: a blend under a blend; and the timeline built and swapped —
     # a layout discarded unshown, a tree shown, a staged one published.
     ('a-nested-blend-is-its-placeholder', FLOW,
