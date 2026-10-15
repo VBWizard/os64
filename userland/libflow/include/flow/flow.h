@@ -804,6 +804,10 @@ typedef struct {
     // layout is the page at, on the face's clock in milliseconds.
     const struct flow_timeline *timeline;
     uint64_t now_ms;
+    // The face ticks (flow_motion_tick): an element whose animations change
+    // only what is painted moves between layouts, and its values are due
+    // for ticks, not layouts. Without it every animation moves by layouts.
+    bool ticks;
 } flow_env_t;
 
 #define FLOW_ARENA_DEFAULT ((size_t)64 << 20)
@@ -1021,9 +1025,30 @@ void flow_timeline_commit(flow_timeline_t **shown, flow_tree_t *tree);
 // one in its active phase whose value moves — a step or a discrete flip
 // among them — which leaves when the next frame is to the face; the far
 // end of an interval whose two ends hold one value; the start of an
-// active phase or an end; FLOW_NEVER for none. A time already gone is due
-// at once.
+// active phase or an end; FLOW_NEVER for none. Of an element that ticks
+// (flow_motion_tick_due), only the starts and ends. A time already gone is
+// due at once.
 uint64_t flow_motion_due(const flow_tree_t *tree, os64_gui_rect_t view, flow_point_t scroll);
+// When a page laid out for a face that ticks (flow_env_t.ticks) next shows
+// another value of an animation that TICKS (PILE3.md § Animations in
+// place) than its last tick, or the layout, drew — asked as
+// flow_motion_due asks, in `view` at `scroll`. Those values are not
+// flow_motion_due's, but their phase edges are, which a tick never
+// crosses: one waits for the layout. A time already gone is due at once.
+uint64_t flow_motion_tick_due(const flow_tree_t *tree, os64_gui_rect_t view, flow_point_t scroll);
+// The page's ticking animations moved to `now`, which is no earlier than
+// the tree's last tick or its layout (PILE3.md § Animations in place, A
+// tick): each element's style rewritten, its transform frames remade and
+// the ink of its shadows grown. `mark`, when not NULL, is handed what each
+// element that changed painted before the tick and what it paints after,
+// in page coordinates at `scroll`, with the box that paints it, and
+// `*moved` (when not NULL) says whether a frame changed. False when the
+// tick is not taken — its lists found no room in what the layout's budget
+// left them, or no memory — and the tree is as the last tick left it: lay
+// the page out instead.
+bool flow_motion_tick(flow_tree_t *tree, uint64_t now, flow_point_t scroll,
+                      void (*mark)(void *ctx, const flow_box_t *box, os64_gui_rect_t r), void *ctx,
+                      bool *moved);
 // Whether an animation of the tree, wherever its element is, still has a
 // change to show after the tree's time (flow_env_t.now_ms): one running,
 // or waiting out its delay — not one paused, over, or of nothing that can
