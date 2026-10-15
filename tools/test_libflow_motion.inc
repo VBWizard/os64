@@ -2791,6 +2791,38 @@ static int32_t declared_items(const FKeyframe *f, garb_prop_t p)
     return -1;
 }
 
+// What styling a page leaves of the lists' budget.
+static size_t lists_left_of(const char *html)
+{
+    Moving m;
+    moving_open(&m, html, 1000);
+    FStyles *fs = f_style_build(m.p.doc, m.p.page, &m.p.env);
+    size_t left = fs != NULL ? fs->lists_left : 0;
+    f_style_free(fs);
+    moving_close(&m);
+    return left;
+}
+
+// A keyframe's declaration an `!important` winner holds is never mixed, so
+// it is never laid where the keyframe is resolved either: a transform list
+// it writes costs the lists' budget nothing.
+static void motion_important_budget_cases(void)
+{
+    char list[64 * 17 + 1] = "";
+    for (int i = 0; i < 64; i++)
+        strcat(list, "translateX(1px) ");
+    char held[4096], none[4096];
+    snprintf(held, sizeof(held), MOTION_STYLE
+             "@keyframes k{from{opacity:0;transform:%s}to{opacity:1;transform:%s}}"
+             "#e{transform:translateX(1px) !important;animation:k 1s linear}</style><div id=e></div>",
+             list, list);
+    snprintf(none, sizeof(none), MOTION_STYLE
+             "@keyframes k{from{opacity:0}to{opacity:1}}"
+             "#e{transform:translateX(1px) !important;animation:k 1s linear}</style><div id=e></div>");
+    expect_i64("motion: a keyframe's list an important winner holds costs the budget nothing",
+               (int64_t)lists_left_of(held), (int64_t)lists_left_of(none));
+}
+
 static void motion_dropped_cases(void)
 {
     os64_html_document_t *doc = parse("<!doctype html><p id=x>x</p>");
@@ -3071,6 +3103,7 @@ static void motion_cases(void)
     motion_easing_cases();
     motion_chrome_cases();
     motion_sparse_cases();
+    motion_important_budget_cases();
     motion_cascade_cases();
     motion_effect_cases();
     motion_timeline_cases();

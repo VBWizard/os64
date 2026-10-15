@@ -589,6 +589,9 @@ mutants = [
      '                int at = resolved_first((garb_prop_t)p) ? 0 : width ? 2 : 1;',
      '                int at = ((void)resolved_first, p == GARB_FONT_SIZE ? 0 : width ? 2 : 1);', LIBFLOW),
     # Keyframes resolved where they are mixed (PILE3_SPARSE_KEYFRAMES.md).
+    ('a-held-keyframe-list-spends-the-budget', STYLE,
+     '    FProps skip = x->important;',
+     '    FProps skip = {{0}};\n    (void)x->important;', LIBFLOW),
     ('font-size-is-composed-with-the-rest', MOTION,
      '    return p == GARB_COLOR || p == GARB_FONT_SIZE;',
      '    return p == GARB_COLOR;', LIBFLOW),

@@ -3606,9 +3606,10 @@ static void finish(const Ctx *c, Spec *sp, const flow_style_t *parent, bool item
 // budget (list_alloc): past the budget the value is dropped, as a
 // declaration's is. Each keyframe is resolved (keyframe_resolved) over the
 // element's Spec before `finish`, against its parent, with its winners
-// `st` for a side's own width — once for the font size and colour, once
-// for the rest (`resolved`, two to a keyframe, `first` each animation's
-// first). Out of memory, the style pass fails.
+// `st` for a side's own width and the longhands an `!important` winner
+// holds left out — once for the font size and colour, once for the rest
+// (`resolved`, two to a keyframe, `first` each animation's first). Out of
+// memory, the style pass fails.
 typedef struct {
     Ctx *c;
     bool no_memory;
@@ -3617,6 +3618,7 @@ typedef struct {
     const flow_style_t *parent;
     bool item, root;
     garb_style_t st;
+    FProps important;
     const FResolved **resolved;
     int32_t *first;
 } Mixing;
@@ -3765,9 +3767,9 @@ static void unsettled(flow_style_t *s, const flow_style_t *specified)
 }
 
 // Animation `a`'s keyframe `j` resolved (FResolve): its declarations laid
-// over the element's own, as the author's are — the walk mixes only the
-// longhands the keyframe sets, which leave out what an `!important` winner
-// holds (animate) — then finished, each side keeping its own width, and its
+// over the element's own, as the author's are, but where an `!important`
+// winner holds — the walk never mixes those (animate), and laid they
+// would only spend the lists' budget on nothing — then finished, each side keeping its own width, and its
 // display, float and overflow as it left them (unsettled); and the
 // longhands whose lists found no room. Against `over`, the font size and
 // colour every animation made are the element's, and the keyframe's own
@@ -3781,8 +3783,7 @@ static const FResolved *keyframe_resolved(void *ctx, int32_t a, int32_t j, const
     if (*slot != NULL)
         return *slot;
     Spec k = *x->sp;
-    FProps skip;
-    os64_memset(&skip, 0, sizeof(skip));
+    FProps skip = x->important;
     if (over != NULL) {
         k.fs_kind = FS_INHERIT;
         k.s.font_size = over->font_size;
@@ -3900,7 +3901,7 @@ static bool animate(Ctx *c, const os64_html_node_t *n, Spec *sp, const Spec *ua,
     flow_style_t s = m->base;
     // A list past the budget leaves its property as it was, named in its
     // animation's `dropped`, so nothing is due for that one's motion of it.
-    Mixing mix = {c, false, m, sp, ua, parent, item, root, st,
+    Mixing mix = {c, false, m, sp, ua, parent, item, root, st, important,
                   f_arena_alloc(&c->out->arena, (size_t)(2 * nframes + 1) * sizeof(*mix.resolved)), first};
     if (mix.resolved == NULL)
         return false;
