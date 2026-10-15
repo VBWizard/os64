@@ -1,0 +1,116 @@
+# @font-face (Fonts 4 § 4), worked by hand: each PAGE laid before a
+# VIEWPORT; WANT is each face garb_cascade_font_faces answers, in order —
+# `"FAMILY" WEIGHTS STYLE [RANGES] sheet N`, then its sources, each
+# `url(TEXT) [format(F)]` or `local(NAME)` — and `(N lost)` when any were,
+# ending (end).
+
+# The whole of a face: a string family; url() unquoted and quoted, with
+# format() as a string and as a keyword; local() as a string and as words;
+# a weight range written backwards; italic; ranges as a point, a range and
+# a wildcard. Defaults: weight 400, normal, every code point.
+VIEWPORT 800x600
+PAGE
+<!doctype html><style>
+@font-face {
+  font-family: "Pixel Operator";
+  src: local("Pixel Operator"), local(Pixel   Op Mono), url(fonts/po.woff2) format("woff2"),
+       url("fonts/po.ttf") format(truetype);
+  font-weight: 700 300;
+  font-style: italic;
+  unicode-range: U+0025, U+0-7F, U+4??;
+}
+@font-face { font-family: Plain Words; src: url(a.ttf) }
+</style>
+WANT
+"Pixel Operator" 300-700 italic U+25-25, U+0-7F, U+400-4FF sheet 0
+  local(Pixel Operator)
+  local(Pixel Op Mono)
+  url(fonts/po.woff2) format(woff2)
+  url(fonts/po.ttf) format(truetype)
+"Plain Words" 400 normal sheet 0
+  url(a.ttf)
+(end)
+END
+
+# Weights: keywords, one number, auto; oblique with its angles. A rule
+# with no family, no src, or a generic for its family is no face; a src
+# entry written wrong or with tech() is dropped and the rest kept; a
+# later declaration of a descriptor wins, an invalid one is dropped.
+VIEWPORT 800x600
+PAGE
+<!doctype html><style>
+@font-face { font-family: A; src: url(a1); font-weight: bold }
+@font-face { font-family: B; src: url(b1); font-weight: 250; font-style: oblique 10deg 20deg }
+@font-face { font-family: C; src: url(c1); font-weight: auto }
+@font-face { src: url(none) }
+@font-face { font-family: D }
+@font-face { font-family: serif; src: url(generic) }
+@font-face { font-family: E; src: url(e1) tech(variations), bogus, url(e2) format(woff) format(woff2), local(L) format(woff), url(e3) }
+@font-face { font-family: F; src: url(f1); font-weight: 600; font-weight: 9000; font-style: sideways }
+</style>
+WANT
+"A" 700 normal sheet 0
+  url(a1)
+"B" 250 oblique sheet 0
+  url(b1)
+"C" 1-1000 normal sheet 0
+  url(c1)
+"E" 400 normal sheet 0
+  url(e3)
+"F" 600 normal sheet 0
+  url(f1)
+(end)
+END
+
+# Ranges written wrong are a dropped descriptor (every code point), as is
+# one past U+10FFFF or backwards, and a list holding one such among good
+# ones; a range in two hex runs about a dash.
+VIEWPORT 800x600
+PAGE
+<!doctype html><style>
+@font-face { font-family: R1; src: url(r1); unicode-range: U+0100-024F, u+a0-FF }
+@font-face { font-family: R2; src: url(r2); unicode-range: U+110000 }
+@font-face { font-family: R3; src: url(r3); unicode-range: U+FF-0 }
+@font-face { font-family: R4; src: url(r4); unicode-range: U+4?F }
+@font-face { font-family: R5; src: url(r5); unicode-range: U+1F600-1F64F }
+@font-face { font-family: R6; src: url(r6); unicode-range: U+0-7F, U+110000 }
+</style>
+WANT
+"R1" 400 normal U+100-24F, U+A0-FF sheet 0
+  url(r1)
+"R2" 400 normal sheet 0
+  url(r2)
+"R3" 400 normal sheet 0
+  url(r3)
+"R4" 400 normal sheet 0
+  url(r4)
+"R5" 400 normal U+1F600-1F64F sheet 0
+  url(r5)
+"R6" 400 normal sheet 0
+  url(r6)
+(end)
+END
+
+# Only the @media that holds: a face inside one that does not is no face.
+# A later rule of one family with the same weights, style and ranges
+# replaces the earlier in its place; families compare without case; a
+# different style is another face. The sheet a face came from.
+VIEWPORT 800x600
+PAGE
+<!doctype html><style>
+@font-face { font-family: Same; src: url(first) }
+@font-face { font-family: Same; font-style: italic; src: url(italic) }
+@media (max-width: 10px) { @font-face { font-family: Hidden; src: url(no) } }
+@media (min-width: 10px) { @font-face { font-family: Shown; src: url(yes) } }
+</style><style>
+@font-face { font-family: SAME; src: url(second) }
+</style>
+WANT
+"SAME" 400 normal sheet 1
+  url(second)
+"Same" 400 italic sheet 0
+  url(italic)
+"Shown" 400 normal sheet 0
+  url(yes)
+(end)
+END

@@ -267,14 +267,16 @@ def main():
     cascade_failed = cascade_pages(driver, 'cascade')
     skips_failed = cascade_pages(driver, 'skips')
     keyframes_failed = cascade_pages(driver, 'keyframes')
+    faces_failed = cascade_pages(driver, 'faces')
     sys.exit(1 if failed or anb_failed or color_failed or decl_failed or media_failed
-             or cascade_failed or skips_failed or keyframes_failed else 0)
+             or cascade_failed or skips_failed or keyframes_failed or faces_failed else 0)
 
 
 def cascade_pages(driver, kind):
     """The cascade, worked by hand: its winners (tools/garb_corpus/cascade.txt),
-    what it passed over (skips.txt), or its elements' keyframes
-    (keyframes.txt), through the driver mode of that name."""
+    what it passed over (skips.txt), its elements' keyframes
+    (keyframes.txt) or its @font-face rules (faces.txt), through the driver
+    mode of that name."""
     pages, mode, viewport, page, want = [], None, None, [], []
     for line in (SUITE.parent / 'garb_corpus' / (kind + '.txt')).read_text().splitlines():
         if mode is None and line.startswith('VIEWPORT '):

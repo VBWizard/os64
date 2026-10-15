@@ -152,17 +152,18 @@ $(OBJ)/pic/shared/%.c.o: ../shared/%.c
 
 LIBOS64_SO   := $(BIN)/libos64.so
 
-# libgzip is a separate shared module: the raw DEFLATE engine serves gzip,
-# libpng's zlib framing, and HTTP content decoding without becoming part of
-# libos64's foundational C surface. Its gzip framing reuses libos64's
-# established CRC32, heap, and memory primitives, so the object records a real
-# DT_NEEDED on libos64.so instead of carrying private copies of them.
-LIBGZIP_SRCS := libgzip/inflate.c libgzip/deflate.c libgzip/gzip.c
+# libgzip is a separate shared module: the raw DEFLATE engine and the gzip
+# and zlib containers round it serve HTTP content decoding, PNG's image data
+# and WOFF's tables without becoming part of libos64's foundational C
+# surface. Its framing reuses libos64's established CRC32, heap, and memory
+# primitives, so the object records a real DT_NEEDED on libos64.so instead of
+# carrying private copies of them.
+LIBGZIP_SRCS := libgzip/inflate.c libgzip/deflate.c libgzip/gzip.c libgzip/zlib.c
 LIBGZIP_OBJS := $(patsubst %,$(OBJ)/pic/%.o,$(LIBGZIP_SRCS))
 LIBGZIP_SO   := $(BIN)/libgzip.so
 
-# libpng owns PNG chunks, zlib framing, filters and color conversion. It uses
-# libgzip's raw DEFLATE door and libos64's heap/CRC primitives, but neither of
+# libpng owns PNG chunks, filters and color conversion. It uses libgzip's
+# zlib door and libos64's heap/CRC primitives, but neither of
 # those lower libraries knows an image format exists. That direction keeps a
 # decoder out of every program's foundational runtime.
 LIBPNG_SRCS := libpng/png.c
@@ -262,8 +263,9 @@ TELNET_ENGINE_OBJ      := $(OBJ)/apps/telnet/telnet_protocol.c.o
 # These programs consume the standalone gzip module. Keep the dependency
 # selective: linking libgzip into every app would turn an optional format
 # engine into part of the foundational runtime by accident. (os64get is not
-# here: it names libfetch, which carries its own edges on libgzip and libtls.)
-LIBGZIP_PROGRAMS := gzip gunzip gziptest vncd
+# here: it names libfetch, which carries its own edges on libgzip and libtls;
+# yonder is, for the zlib door it calls itself, unwrapping a WOFF font.)
+LIBGZIP_PROGRAMS := gzip gunzip gziptest vncd yonder
 
 # Programs that download: they name libfetch and get its whole closure.
 LIBFETCH_PROGRAMS := os64get wend worktest fetchhooktest fetchposttest yonder

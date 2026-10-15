@@ -26,7 +26,7 @@ cc "${common[@]}" -Dos64_conf_get=os64_conf_get_unused \
 cc "${common[@]}" "-DOS64_ICON_DEFAULT_ROOT=\"$work/default\"" \
     userland/libimage/icon_theme.c userland/libimage/icons.c \
     userland/libos64/ui_icon.c \
-    userland/libpng/png.c userland/libgzip/inflate.c \
+    userland/libpng/png.c userland/libgzip/inflate.c userland/libgzip/zlib.c \
     userland/libos64/crc32.c tools/test_icons_theme_e2e_host.c "$work/conf.o" \
     -Wl,--gc-sections -o "$work/test_icons_theme"
 ASAN_OPTIONS=detect_leaks=1 "$work/test_icons_theme" "$work"

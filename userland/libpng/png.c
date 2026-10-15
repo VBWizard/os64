@@ -3,13 +3,13 @@
 // The input is untrusted. The first pass validates chunk framing and ordering
 // before allocating from dimensions in IHDR. Bad critical CRCs are fatal; a
 // bad ancillary CRC discards that chunk without trusting its contents. The
-// second pass feeds IDAT directly to libgzip's raw inflater: compressed data is
+// second pass feeds IDAT directly to libgzip's zlib door: compressed data is
 // never copied into a second whole-file buffer, and decoded data is held one
 // scanline at a time.
 
 #include "png/png.h"
 
-#include "gzip/inflate.h"
+#include "gzip/zlib.h"
 #include "os64/crc32.h"
 #include "os64/mem.h"
 #include "os64/str.h"
@@ -18,7 +18,6 @@
 
 #define PNG_SIGNATURE_SIZE 8u
 #define PNG_CHUNK_OVERHEAD 12u
-#define PNG_ADLER_MOD 65521u
 
 #define PNG_CHUNK(a, b, c, d) \
     (((uint32_t)(a) << 24) | ((uint32_t)(b) << 16) | \
@@ -54,11 +53,6 @@ typedef enum {
     CHUNKS_IN_IDAT,
     CHUNKS_AFTER_IDAT
 } png_chunk_phase_t;
-
-typedef struct {
-    uint32_t first;
-    uint32_t second;
-} png_adler_t;
 
 static const uint8_t kPngSignature[PNG_SIGNATURE_SIZE] = {
     137, 80, 78, 71, 13, 10, 26, 10
@@ -413,32 +407,23 @@ static bool convert_row(const png_info_t *info, const uint8_t *row,
     return true;
 }
 
-static void adler_update(png_adler_t *adler, const uint8_t *bytes,
-                         size_t length)
-{
-    for (size_t i = 0; i < length; i++) {
-        adler->first += bytes[i];
-        if (adler->first >= PNG_ADLER_MOD)
-            adler->first -= PNG_ADLER_MOD;
-        adler->second += adler->first;
-        if (adler->second >= PNG_ADLER_MOD)
-            adler->second -= PNG_ADLER_MOD;
-    }
-}
-
-static os64_png_status_t map_inflate_status(os64_inflate_status_t status)
+static os64_png_status_t map_zlib_status(os64_zlib_status_t status)
 {
     switch (status) {
-        case OS64_INFLATE_TRUNCATED: return OS64_PNG_MALFORMED;
-        case OS64_INFLATE_MALFORMED: return OS64_PNG_MALFORMED;
-        case OS64_INFLATE_LIMIT:
+        case OS64_ZLIB_TRUNCATED: return OS64_PNG_MALFORMED;
+        case OS64_ZLIB_MALFORMED: return OS64_PNG_MALFORMED;
+        // PNG forbids zlib preset dictionaries: a malformed PNG, not a valid
+        // variant awaiting support.
+        case OS64_ZLIB_UNSUPPORTED: return OS64_PNG_MALFORMED;
+        case OS64_ZLIB_LIMIT:
             // This cap is IHDR's exact filtered raster size. Exceeding it means
             // the stream contradicts the raster, not that a resource cap fired.
             return OS64_PNG_MALFORMED;
-        case OS64_INFLATE_BAD_ARGUMENT: return OS64_PNG_BAD_ARGUMENT;
-        case OS64_INFLATE_NEED_INPUT:
-        case OS64_INFLATE_NEED_OUTPUT:
-        case OS64_INFLATE_DONE:
+        case OS64_ZLIB_CHECKSUM: return OS64_PNG_CHECKSUM;
+        case OS64_ZLIB_BAD_ARGUMENT: return OS64_PNG_BAD_ARGUMENT;
+        case OS64_ZLIB_NEED_INPUT:
+        case OS64_ZLIB_NEED_OUTPUT:
+        case OS64_ZLIB_DONE:
             break;
     }
     return OS64_PNG_MALFORMED;
@@ -464,19 +449,14 @@ static os64_png_status_t finish_row(const png_info_t *info, uint8_t **current,
 static os64_png_status_t decode_idat(const uint8_t *data, size_t length,
                                      const png_info_t *info, uint32_t *pixels,
                                      uint8_t *rows,
-                                     os64_inflate_t *inflate)
+                                     os64_zlib_t *zlib)
 {
     size_t row_size = info->row_bytes + 1u;
     uint8_t *previous = rows;
     uint8_t *current = rows + row_size;
     size_t row_have = 0;
     uint32_t row_index = 0;
-    uint8_t zlib_header[2];
-    uint8_t header_have = 0;
-    uint8_t trailer[4];
-    uint8_t trailer_have = 0;
-    bool deflate_done = false;
-    png_adler_t adler = {1, 0};
+    bool zlib_done = false;
 
     size_t offset = PNG_SIGNATURE_SIZE;
     while (offset < length) {
@@ -487,41 +467,18 @@ static os64_png_status_t decode_idat(const uint8_t *data, size_t length,
 
         if (type == PNG_IDAT) {
             while (input_length != 0) {
-                if (header_have < 2) {
-                    zlib_header[header_have++] = *input++;
-                    input_length--;
-                    if (header_have == 2) {
-                        uint16_t header = (uint16_t)((uint16_t)zlib_header[0]
-                                                     << 8 | zlib_header[1]);
-                        if ((zlib_header[0] & 15u) != 8 ||
-                            (zlib_header[0] >> 4) > 7 || header % 31u != 0)
-                            return OS64_PNG_MALFORMED;
-                        // PNG forbids zlib preset dictionaries. This is a
-                        // malformed PNG, not a valid variant awaiting support.
-                        if ((zlib_header[1] & 0x20u) != 0)
-                            return OS64_PNG_MALFORMED;
-                    }
-                    continue;
-                }
-                if (deflate_done) {
-                    if (trailer_have == 4)
-                        return OS64_PNG_MALFORMED;
-                    trailer[trailer_have++] = *input++;
-                    input_length--;
-                    continue;
-                }
+                // Bytes after the zlib stream's checksum.
+                if (zlib_done)
+                    return OS64_PNG_MALFORMED;
 
                 size_t output_length = row_index < info->height
                                      ? row_size - row_have : 0;
                 uint8_t *output = current + row_have;
-                const uint8_t *produced_at = output;
                 size_t offered_output = output_length;
-                os64_inflate_status_t ist = os64_inflate_process(
-                    inflate, &input, &input_length, &output, &output_length,
+                os64_zlib_status_t zst = os64_zlib_process(
+                    zlib, &input, &input_length, &output, &output_length,
                     false);
-                size_t produced = offered_output - output_length;
-                adler_update(&adler, produced_at, produced);
-                row_have += produced;
+                row_have += offered_output - output_length;
 
                 if (row_have == row_size) {
                     os64_png_status_t status = finish_row(
@@ -532,15 +489,15 @@ static os64_png_status_t decode_idat(const uint8_t *data, size_t length,
                     row_have = 0;
                 }
 
-                if (ist == OS64_INFLATE_DONE) {
+                if (zst == OS64_ZLIB_DONE) {
                     if (row_index != info->height || row_have != 0 ||
-                        os64_inflate_output_size(inflate) != info->filtered_size)
+                        os64_zlib_output_size(zlib) != info->filtered_size)
                         return OS64_PNG_MALFORMED;
-                    deflate_done = true;
-                } else if (ist == OS64_INFLATE_NEED_INPUT) {
+                    zlib_done = true;
+                } else if (zst == OS64_ZLIB_NEED_INPUT) {
                     if (input_length != 0)
                         return OS64_PNG_MALFORMED;
-                } else if (ist == OS64_INFLATE_NEED_OUTPUT) {
+                } else if (zst == OS64_ZLIB_NEED_OUTPUT) {
                     // A complete row is consumed above. With rows remaining,
                     // the next pass offers a fresh row; with none remaining,
                     // the inflater's exact output limit distinguishes the
@@ -548,7 +505,7 @@ static os64_png_status_t decode_idat(const uint8_t *data, size_t length,
                     if (row_index < info->height && row_have != 0)
                         return OS64_PNG_MALFORMED;
                 } else {
-                    return map_inflate_status(ist);
+                    return map_zlib_status(zst);
                 }
             }
         }
@@ -558,12 +515,7 @@ static os64_png_status_t decode_idat(const uint8_t *data, size_t length,
         offset += (size_t)chunk_length + PNG_CHUNK_OVERHEAD;
     }
 
-    if (header_have != 2 || !deflate_done || trailer_have != 4)
-        return OS64_PNG_MALFORMED;
-    uint32_t actual_adler = adler.second << 16 | adler.first;
-    if (read_be32(trailer) != actual_adler)
-        return OS64_PNG_CHECKSUM;
-    return OS64_PNG_OK;
+    return zlib_done ? OS64_PNG_OK : OS64_PNG_MALFORMED;
 }
 
 os64_png_status_t os64_png_decode(const uint8_t *data, size_t length,
@@ -592,16 +544,16 @@ os64_png_status_t os64_png_decode(const uint8_t *data, size_t length,
     uint32_t *pixels = os64_malloc((size_t)pixel_count * sizeof(*pixels));
     size_t row_size = info.row_bytes + 1u;
     uint8_t *rows = os64_malloc(row_size * 2u);
-    os64_inflate_t *inflate = os64_inflate_create(info.filtered_size);
-    if (pixels == NULL || rows == NULL || inflate == NULL) {
+    os64_zlib_t *zlib = os64_zlib_create(info.filtered_size);
+    if (pixels == NULL || rows == NULL || zlib == NULL) {
         os64_free(pixels);
         os64_free(rows);
-        os64_inflate_destroy(inflate);
+        os64_zlib_destroy(zlib);
         return OS64_PNG_NO_MEMORY;
     }
 
-    status = decode_idat(data, length, &info, pixels, rows, inflate);
-    os64_inflate_destroy(inflate);
+    status = decode_idat(data, length, &info, pixels, rows, zlib);
+    os64_zlib_destroy(zlib);
     os64_free(rows);
     if (status != OS64_PNG_OK) {
         os64_free(pixels);
