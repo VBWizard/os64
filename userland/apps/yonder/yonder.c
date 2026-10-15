@@ -1591,7 +1591,6 @@ static void sync_bars(void)
 
 static void hover(int32_t x, int32_t y);
 static void forms_place(void);
-static void ticks_to_now(void);
 
 static void scroll_to(int32_t x, int32_t y)
 {
@@ -1599,7 +1598,6 @@ static void scroll_to(int32_t x, int32_t y)
     g.sy = y;
     clamp_scroll();
     sync_bars();
-    ticks_to_now();
     os64_ui_mark_dirty(&g.ui, &g.view);
     forms_place();
     pictures_schedule();
@@ -1784,9 +1782,13 @@ static void css_pictures(Page *p);
 // or positioned boxes only the width moves anything; with sheets the
 // height does too, which is what their media queries and vh units read,
 // and with a positioned box, whose initial containing block is the view.
-// A layout `for_motion` (motion_tick) is quiet: the standing line goes on
-// saying what the page's own layout cost, and its cost is kept apart.
-static bool lay_out_shown(bool again, bool for_motion)
+// What a layout is for: the page (said on the standing line), or a frame
+// for an animation — a layout's (motion_tick) or a tick's that was not
+// taken (tick_page) — which is quiet, so the standing line goes on saying
+// what the page's own layout cost, and is that half's frame.
+typedef enum { LAID_FOR_PAGE, LAID_FOR_MOTION, LAID_FOR_TICK } LaidFor;
+
+static bool lay_out_shown(bool again, LaidFor laid_for)
 {
     int32_t width = g.view.bounds.w, height = g.view.bounds.h;
     bool height_matters = g.page.sheets_ready != 0 || flow_npositioned(g.page.tree) > 0;
@@ -1814,15 +1816,22 @@ static bool lay_out_shown(bool again, bool for_motion)
     bool laid = lay_out_page(&g.page, width, height);
     os64_ticks(&t1);
     // A frame's layout; its paint is added when it is done (motion_painted).
-    // One that fails is the page's last for an animation: its cost reads
-    // as past every limit (motion_next).
-    if (for_motion) {
+    // One that fails is its half's last: its cost reads as past every limit
+    // (motion_next, ticks_run).
+    if (laid_for == LAID_FOR_MOTION) {
         g.motion_laid = true;
         g.motion_painting = laid;
         g.motion_began = began_ms;
         g.motion_began_us = began_us;
         g.motion_ended = yonder_now_ms();
         g.motion_us = laid ? (uint64_t)(os64_micros() - began_us) : UINT64_MAX;
+    } else if (laid_for == LAID_FOR_TICK) {
+        g.ticked = true;
+        g.tick_painting = laid;
+        g.tick_began = began_ms;
+        g.tick_began_us = began_us;
+        g.tick_ended = yonder_now_ms();
+        g.tick_us = laid ? (uint64_t)(os64_micros() - began_us) : UINT64_MAX;
     }
     // The attempt consumes the moves whether or not it fits: kept, they
     // would retry a layout that just failed at every event batch.
@@ -1844,7 +1853,7 @@ static bool lay_out_shown(bool again, bool for_motion)
     sync_bars();
     forms_place();
     pictures_schedule();
-    if (!for_motion)
+    if (laid_for == LAID_FOR_PAGE)
         say_laid_out(ms_between(&t0, &t1));
     os64_ui_mark_dirty(&g.ui, &g.view);
     return !flow_incomplete(g.page.tree);
@@ -1852,7 +1861,7 @@ static bool lay_out_shown(bool again, bool for_motion)
 
 static bool relayout(bool again)
 {
-    return lay_out_shown(again, false);
+    return lay_out_shown(again, LAID_FOR_PAGE);
 }
 
 static void request_navigate(os64_page_request_t *request, NavKind kind, way_ask_t ask);
@@ -3396,22 +3405,26 @@ static uint64_t motion_cost_us(void)
 // where it failed (say_failed), and a page with nothing to show has
 // nothing paused. A frame whose paint is still to come is not judged until
 // it is whole (motion_painted): its cost so far is its layout's or its
-// tick's alone.
+// tick's alone. Its half was running when the frame began, and is taken to
+// run until then; the other half is judged as it stands, so a pause said
+// stays said while the other half paints.
 static bool motion_paused_why(char *out, size_t cap, bool *some)
 {
     out[0] = '\0';
     *some = false;
-    if (!s_animations || g.motion_painting || g.tick_painting)
+    if (!s_animations)
         return false;
     uint64_t lay_us = motion_cost_us(), tick_us = g.ticked ? g.tick_us : 0;
     uint64_t limit = (uint64_t)MOTION_COST_MS * 1000;
     bool lay_owed = flow_motion_pending_in(g.page.tree, false);
     bool tick_owed = flow_motion_pending_in(g.page.tree, true);
-    bool lay_stopped = lay_us != UINT64_MAX && lay_us > limit && lay_owed;
-    bool tick_stopped = tick_us != UINT64_MAX && tick_us > limit && tick_owed;
+    bool lay_over = !g.motion_painting && lay_us > limit;
+    bool tick_over = !g.tick_painting && tick_us > limit;
+    bool lay_stopped = lay_us != UINT64_MAX && lay_over && lay_owed;
+    bool tick_stopped = tick_us != UINT64_MAX && tick_over && tick_owed;
     if (!lay_stopped && !tick_stopped)
         return false;
-    *some = lay_stopped ? tick_owed && tick_us <= limit : lay_owed && lay_us <= limit;
+    *some = lay_stopped ? tick_owed && !tick_over : lay_owed && !lay_over;
     uint64_t cost_us = lay_stopped ? lay_us : tick_us;
     os64_snprintf(out, cap, "%s took %lu ms, over %d",
                   !lay_stopped ? "a tick's frame" : g.motion_laid ? "a layout's frame" : "the layout",
@@ -3419,15 +3432,27 @@ static bool motion_paused_why(char *out, size_t cap, bool *some)
     return true;
 }
 
+// Whether a frame for an animation — a layout's or a tick's — waits for its
+// paint (motion_painted): it is then the only frame, of either half. A
+// next one is due only once it is painted, when its cost is whole, and so
+// no event batch makes frames nobody sees, each costing what only the last
+// is charged for.
+static bool frame_unpainted(void)
+{
+    return g.motion_painting || g.tick_painting;
+}
+
 // When the shown page is next laid out for an animation: when libflow says
 // what the view shows next changes, held to the cost rules
 // (MOTION_COST_MS); never while animations are off or the window is
-// covered, nor while a script's change waits for its rebuild — a layout
-// then is script_rebuild's, page_lay_out refuses any other, and a frame
-// refused would read as one past every limit.
+// covered, nor while a frame waits for its paint (frame_unpainted), nor
+// while a script's change waits for its rebuild — a layout then is
+// script_rebuild's, page_lay_out refuses any other, and a frame refused
+// would read as one past every limit.
 static uint64_t motion_next(void)
 {
-    if (!s_animations || g.covered || g.page.tree == NULL || page_rebuild_owed(&g.page))
+    if (!s_animations || g.covered || g.page.tree == NULL || page_rebuild_owed(&g.page) ||
+        frame_unpainted())
         return YONDER_NEVER;
     uint64_t cost_us = motion_cost_us();
     if (cost_us > (uint64_t)MOTION_COST_MS * 1000)
@@ -3460,10 +3485,11 @@ static bool ticks_run(void)
 // When the shown page's animations next tick: when libflow says what the
 // view shows of them next changes (flow_motion_tick_due), a frame after
 // the last tick began and, after it ended, as long again as it and its
-// painting took — so ticking spends at most half the time.
+// painting took — so ticking spends at most half the time — and never
+// while a frame waits for its paint (frame_unpainted).
 static uint64_t tick_next(void)
 {
-    if (!ticks_run())
+    if (!ticks_run() || frame_unpainted())
         return YONDER_NEVER;
     os64_gui_rect_t view = {g.sx, g.sy, g.view.bounds.w, g.view.bounds.h};
     uint64_t due = flow_motion_tick_due(g.page.tree, view, scroll_now());
@@ -3559,31 +3585,27 @@ static void tick_mark(void *ctx, const flow_box_t *box, os64_gui_rect_t r)
 // The shown page's ticking animations moved to `now` (flow_motion_tick),
 // what they repainted marked, and the controls placed again when a frame
 // moved. A `frame` is the ticks' own, timed for the cost rule until its
-// paint ends (motion_painted). One whose tick is not taken — its lists
-// found no room — is a layout instead, which is that frame; with the
+// paint ends (motion_painted). A tick that is no frame — before a whole
+// view is painted for something else — marks nothing: the whole view is.
+// One not taken, either way — its lists found no room — is a layout
+// instead, the ticks' frame with its paint (LAID_FOR_TICK); with the
 // layouts stopped by what they cost, the ticks stop too, said where they
-// failed (say_failed). A tick that is no
-// frame — before a whole view is painted for something else — marks
-// nothing: the whole view is.
+// failed (say_failed).
 static void tick_page(uint64_t now, bool frame)
 {
     os64_gui_rect_t v = {g.sx, g.sy, g.view.bounds.w, g.view.bounds.h};
     int64_t began_us = os64_micros();
     bool moved = false;
     if (!flow_motion_tick(g.page.tree, now, scroll_now(), frame ? tick_mark : NULL, &v, &moved)) {
-        if (!frame)
-            return;
-        g.ticked = true;
-        g.tick_began = now;
         if (motion_cost_us() > (uint64_t)MOTION_COST_MS * 1000) {
+            g.ticked = true;
+            g.tick_began = now;
             g.tick_us = UINT64_MAX;
             say_failed(g.page.diag, "animations",
                        "No room to move the page's animations between layouts; they stop here.");
             return;
         }
-        (void)lay_out_shown(true, true);
-        g.tick_ended = yonder_now_ms();
-        g.tick_us = (uint64_t)(os64_micros() - began_us);
+        (void)lay_out_shown(true, LAID_FOR_TICK);
         return;
     }
     if (moved)
@@ -3596,14 +3618,25 @@ static void tick_page(uint64_t now, bool frame)
     }
 }
 
-// Before the whole view is painted for another reason — a scroll may bring
-// an animation into view whose last tick is long past, since nothing out of
-// view was due — the ticking animations brought to now, so the paint shows
-// each at the time it is painted. Not a frame: its paint is the scroll's.
-static void ticks_to_now(void)
+// Before the whole view is painted — a scroll, the page's or a box's, may
+// bring an animation into view whose last tick is long past, since nothing
+// out of view was due — the ticking animations the view shows brought to
+// now when any is behind (flow_motion_tick_due, unpaced), so the paint
+// shows each at the time it is painted. Not a frame: its paint is the
+// scroll's. A paint of a part does not tick: what it repaints of an
+// animation is on the glass beside it already. The window loop asks before
+// each paint.
+static void ticks_before_paint(void)
 {
-    if (ticks_run() && flow_motion_pending_in(g.page.tree, true))
-        tick_page(yonder_now_ms(), false);
+    const os64_gui_rect_t v = g.view.bounds;
+    const os64_gui_rect_t d = g.ui.dirty;
+    if (!g.ui.any_dirty || d.x > v.x || d.y > v.y || (int64_t)d.x + d.w < (int64_t)v.x + v.w ||
+        (int64_t)d.y + d.h < (int64_t)v.y + v.h || !ticks_run() || frame_unpainted())
+        return;
+    uint64_t now = yonder_now_ms();
+    os64_gui_rect_t view = {g.sx, g.sy, v.w, v.h};
+    if (flow_motion_tick_due(g.page.tree, view, scroll_now()) <= now)
+        tick_page(now, false);
 }
 
 // The ticker rang: when an animation's layout is due, the page is laid out
@@ -3614,7 +3647,7 @@ static void motion_tick(void)
 {
     uint64_t now = yonder_now_ms();
     if (motion_next() <= now)
-        (void)lay_out_shown(true, true);
+        (void)lay_out_shown(true, LAID_FOR_MOTION);
     else if (tick_next() <= now)
         tick_page(now, true);
 }
@@ -3666,6 +3699,15 @@ static bool motion_pause_said(void)
     os64_strcopy(g.motion_pause, sizeof(g.motion_pause), now);
     status_set(g.status_rest);
     return true;
+}
+
+// What the window loop does before each paint: a whole view's paint shows
+// the ticking animations at its time (ticks_before_paint), and the status
+// row says what the cost rule does then (motion_pause_said).
+static void before_paint(void)
+{
+    ticks_before_paint();
+    (void)motion_pause_said();
 }
 
 // The window was covered or uncovered. The flag is the truth and the event
@@ -7720,7 +7762,7 @@ int main(int argc, char **argv)
         bool coming_more = coming_turn();
         bool scripts_ready = script_turn();
         pictures_settle();
-        (void)motion_pause_said();
+        before_paint();
         os64_ui_paint(&g.ui);
         motion_painted();
         if (motion_pause_said())

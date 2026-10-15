@@ -1828,7 +1828,8 @@ thread busy all the time):
   says nothing of it;
 - otherwise the next frame waits until twice the last one's cost has
   passed since its paint ended — at most a third of the window's time
-  spent on motion — and never comes sooner than MOTION_FRAME_MS (16)
+  spent on motion — and is not due at all while a frame, a layout's or a
+  tick's, waits for its paint; never sooner than MOTION_FRAME_MS (16)
   after the last began, which the window's clock, in 10 ms ticks, makes
   20: fifty a second at most;
 - a covered window lays out for no animation, as it shows no picture's
@@ -1966,25 +1967,32 @@ layouts are, by their OWN frames: a tick waits MOTION_FRAME_MS after the
 last began, and as long again as the last tick and its painting took
 after it ended — so ticking spends at most half the time — and a tick
 frame over MOTION_COST_MS stops the ticks as a layout over it stops the
-layouts. So a page whose layouts cost too much — danlegt's took 223 ms
+layouts. A frame of either half waiting for its paint is the only frame:
+no next one, of either half, is due until it is painted and its cost is
+whole, so no batch of events makes frames nobody sees. So a page whose layouts cost too much — danlegt's took 223 ms
 on the P5 — keeps its ticking animations moving. Each stopped half is
 said by the status row's mode, naming its kind of frame — `SOME
 ANIMATIONS PAUSED: a layout's frame took 223 ms, over 200 | ` while the
 other half still has changes to show and runs, `ANIMATIONS PAUSED: …`
 when nothing that has one runs (`a tick's frame took`, and before a
 first frame, `the layout took`) — and in the diag fact (`animations:
-some paused: …`). A tick that is not taken is a layout instead, which
-is that tick's frame; with the layouts stopped by what they cost, the
-ticks stop too, and that is said where it failed, as a layout that fails
-is.
+some paused: …`). A half whose frame waits for its paint is judged when
+it is whole, and the other as it stands, so a pause said stays said
+while the other half paints. A tick that is not taken, scheduled or
+before a paint, is a layout instead, which with its paint is that tick's
+frame; with the layouts stopped by what they cost, the ticks stop too,
+and that is said where it failed, as a layout that fails is.
 
-**Before a whole view is painted.** The face ticks before it paints
-the whole view for any other reason — a scroll that brings an animation
-into view, whose last tick may be seconds old since nothing out of view
-was due — so such a paint shows every ticking animation at the time it
-is painted. A paint of a part (a picture's frame) does not tick: what it
-repaints of an animation is what is on the glass beside it already, and
-a tick would join its marks to the part's.
+**Before a whole view is painted.** The window loop, before each paint
+of the whole view — a scroll of the page or of a box, a layout, anything
+that marks it all — brings the ticking animations the view shows to now
+when any is behind (`flow_motion_tick_due`, unpaced): a scroll may bring
+an animation into view whose last tick is long past, since nothing out
+of view was due. So such a paint shows every ticking animation at the
+time it is painted. It is no tick's frame: its paint is the scroll's. A
+paint of a part (a picture's frame) does not tick: what it repaints of
+an animation is what is on the glass beside it already, and a tick would
+join its marks to the part's.
 
 ## Animations, both slices
 
@@ -2239,13 +2247,15 @@ settings saved and applied, what the media answers, and with animations
 off the rules' styles and nothing due. S8b's: the tick's deadline apart
 from the layout's, a layout due by then winning; its pacing and its own
 cost rule, a page whose layouts cost too much still ticking, and `SOME
-ANIMATIONS PAUSED` against `ANIMATIONS PAUSED`; a tick not taken laying
+ANIMATIONS PAUSED` against `ANIMATIONS PAUSED`, a pause said staying said
+while the other half paints; a frame waiting for its paint the only one
+of either half; a tick not taken — scheduled, or before a paint — laying
 the page out as its frame, and with the layouts stopped, stopping the
 ticks and saying so; its marks cut to the view, one reaching past it
 cut too, none for an element out of view, the whole view for the
 canvas's owner, even one far shorter than the view whose background is
-what moves; controls placed after a frame moved; a tick before a
-scroll's paint and none before a picture's.
+what moves; controls placed after a frame moved; a tick before any whole view's
+paint and none before a picture's.
 
 `tools/test_motion_mutants.py` breaks each rule. In the guest,
 `tools/pages/pile3-motion.html`: FROZEN rows, paused at chosen times or

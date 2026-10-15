@@ -988,6 +988,7 @@ static void tick_cases(void) {
         "ticks: a tick moves its element at its moment and lays nothing out");
     check(g.nfw==1 && g.fw[0]->w->bounds.x==field_was+50,
         "ticks: a control inside a frame that moved is placed again");
+    check(tick_next()==YONDER_NEVER,"ticks: a tick waiting for its paint is the only frame");
     os64_gui_rect_t d=g.ui.dirty, v=g.view.bounds;
     check(g.ui.any_dirty && d.x<=v.x && d.x+d.w>=v.x+90 && d.w<v.w && d.y+d.h<=v.y+40,
         "ticks: a tick marks where its element was and is, cut to the view, and none of what is out of it");
@@ -1005,14 +1006,30 @@ static void tick_cases(void) {
     uint64_t laid_was=g.motion_began;
     motion_tick();
     tick_refuse=false; geometry_layout_delay=0;
-    check(g.motion_began==676 && laid_was!=676 && tick_x("t")==58 && g.tick_began==676 && g.tick_us==4000 &&
+    clock_us+=2000; now_ms=678;
+    motion_painted();
+    check(g.motion_began==laid_was && tick_x("t")==58 && g.tick_began==676 && g.tick_us==6000 &&
           tick_next()==692,
-        "ticks: a tick not taken lays the page out instead, and that is the tick's frame");
+        "ticks: a tick not taken lays the page out instead, which with its paint is the tick's frame");
+    /* A whole view marked for any reason — a box's scroll among them —
+     * brings what it shows to now before it is painted; and a tick before
+     * a paint that is not taken lays out instead, as the tick's frame. */
+    now_ms=685;
+    os64_ui_mark_dirty(&g.ui,&g.view);
+    before_paint();
+    check(tick_x("t")==59 && !g.tick_painting && g.tick_began==676,
+        "ticks: a whole view marked to be painted shows the ticks at its time, and is no tick's frame");
+    tick_refuse=true; now_ms=690;
+    os64_ui_mark_dirty(&g.ui,&g.view);
+    before_paint();
+    tick_refuse=false;
+    check(g.tick_painting && g.tick_began==690 && tick_x("t")==59,
+        "ticks: one not taken lays out instead, as the tick's frame");
     motion_painted();
     g.page.diag=yonder_diag_new("http://t.test/",1,0);
-    now_ms=700;
+    now_ms=710;
     motion_tick();
-    clock_us+=201000; now_ms=901;
+    clock_us+=201000; now_ms=911;
     motion_painted();
     bool said=motion_pause_said();
     char record[2048];
@@ -1087,15 +1104,20 @@ static void tick_cases(void) {
     motion_tick();
     check(tick_x("t")==50 && g.tick_began==1500,
         "ticks: a page whose layouts cost too much keeps its ticking animations moving");
+    check(!motion_pause_said() && strstr(g.status_text,"SOME ANIMATIONS PAUSED")!=NULL,
+        "ticks: a pause said stays said while the other half's frame waits for its paint");
     d=g.ui.dirty; v=g.view.bounds;
     check(g.ui.any_dirty && d.x<=v.x && d.y<=v.y && d.x+d.w>=v.x+v.w && d.y+d.h>=v.y+v.h,
         "ticks: the canvas's owner repaints the whole view");
     clock_us+=1000;
     motion_painted();
     now_ms=1700;
+    g.ui.any_dirty=false;
     pictures_tick();
+    before_paint();
     check(tick_x("t")==50,"ticks: a picture's paint does not tick");
     scroll_to(0,1);
+    before_paint();
     check(tick_x("t")==70 && g.tick_began==1500 && !g.tick_painting,
         "ticks: a scroll's paint shows the ticks at its time, and is no tick's frame");
     /* With the layouts stopped, a tick not taken stops the ticks, said
@@ -1133,10 +1155,15 @@ static void motion_cases(void) {
     check(motion_x("a")==50 && g.motion_laid && g.motion_began==600 && g.motion_us==5000 &&
           os64_streq(status,g.status_text) && g.laid_ms==37,
         "motion: a tick lays the page out at its moment, quietly, and keeps what it cost apart");
+    check(motion_next()==YONDER_NEVER && tick_next()==YONDER_NEVER,
+        "motion: a frame waiting for its paint is the only frame, of either half");
+    motion_painted();
+    pictures_schedule();
     check(motion_next()==616 && ticker_due==616,
         "motion: the next comes a frame after the last began when twice its cost is sooner");
     geometry_layout_delay=40000; now_ms=616;
     motion_tick();
+    motion_painted();
     check(motion_x("a")==52 && motion_next()==696,
         "motion: a costlier layout (51.6 px, at the nearest pixel) waits twice its cost after it ends");
     now_ms=650;
