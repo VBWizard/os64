@@ -3793,6 +3793,10 @@ static bool animate(Ctx *c, const os64_html_node_t *n, Spec *sp, const Spec *ua,
             Spec k = *sp;
             if (!lay_sets(c, &k, ua, parent, kf[j].sets, NULL, kf[j].sheet, kf[j].nsets, &important))
                 return false;
+            // A keyframe's `inherit` takes from the parent as the element's
+            // own declaration does (FStyled.taken).
+            for (int w = 0; w < F_PROP_WORDS; w++)
+                sp->taken.w[w] |= k.taken.w[w];
             flow_style_t specified = k.s;
             finish(c, &k, parent, item, root);
             for (int side = 0; side < 4; side++)

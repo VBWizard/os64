@@ -1722,9 +1722,11 @@ anonymous blocks, the nearest block with an element of its own, which
 holds them all; for one that makes none (`display: contents`) the boxes
 inside it, which draw what it hands down; or, for what it hands down —
 the inherited values, the fade, and what the author takes by keyword
-(`inherit`) at every element between, never its own background or
-border otherwise — any box inside it drawn outside it, positioned, fixed
-or moved by a transform, which no ancestor's overflow holds. The root and the body are seen
+(`inherit`, in a declaration or a keyframe) at every element between,
+and the whole of a background cut to its text, which is drawn through
+the text inside it wherever that is, never its own background or border
+otherwise — any box inside it drawn outside it, positioned, fixed or
+moved by a transform, which no ancestor's overflow holds. The root and the body are seen
 wherever their boxes are: the canvas may take either one's background
 and paint it over the whole view, and which one it takes is the
 painter's to know. Any other — a transform, a size, a
@@ -2051,7 +2053,8 @@ a moving one's value, and the canvas's background with its owner's box
 out of view among them, and values that stand still, animations of
 nothing that can show, and an element's own background and border seen
 only through a box drawn outside it not asked for, unless every element
-between inherits them by keyword; implicit keyframes against
+between inherits them by keyword, a keyframe's among them, or the
+background is cut to the text that box holds; implicit keyframes against
 Chrome's values over another animation; THE SCHEDULE AGAINST THE VALUE — thousands of animations
 made at random (one to five keyframes at any offsets, several at one,
 two animations of a property, every easing to the domain's limits,

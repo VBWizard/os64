@@ -1950,6 +1950,31 @@ static void motion_due_cases(void)
         expect(kHanded[i].name, due == kHanded[i].due, detail);
         moving_close(&m);
     }
+    // An `inherit` in a keyframe takes as one in a declaration does; and a
+    // background cut to the text inside it is drawn through that text,
+    // wherever a box moves it.
+    static const struct {
+        const char *name, *html;
+    } kThrough[] = {
+        {"motion due: through an element between whose keyframes inherit it",
+         "@keyframes hold{from{background-color:inherit}to{background-color:inherit}}</style>"
+         "<div class=c style='margin-top:2000px'><div style='animation:hold 10s linear'>"
+         "<p style='position:fixed;top:0;background-color:inherit'>x</p></div></div>"},
+        {"motion due: a background cut to the text a moved box holds",
+         "</style><div class=c style='margin-top:2000px;background-clip:text'>"
+         "<div style='position:relative;top:-2000px'>x</div></div>"},
+    };
+    for (size_t i = 0; i < sizeof(kThrough) / sizeof(kThrough[0]); i++) {
+        char html[768];
+        snprintf(html, sizeof(html), MOTION_STYLE "@keyframes c{to{background-color:red}}"
+                 ".c{animation:c 1s linear}%s", kThrough[i].html);
+        moving_open(&m, html, 1000);
+        uint64_t due = flow_motion_due(m.tree, kView, (flow_point_t){0, 0});
+        char detail[48];
+        snprintf(detail, sizeof(detail), "got %llu", (unsigned long long)due);
+        expect(kThrough[i].name, due == 1000, detail);
+        moving_close(&m);
+    }
 }
 
 // ── The allocation sweep ────────────────────────────────────────────────

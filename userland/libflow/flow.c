@@ -1692,6 +1692,17 @@ static bool may_own_canvas(const flow_tree_t *tree, const os64_html_node_t *n)
            (n == root || (n->parent == root && n->kind == OS64_HTML_ELEMENT && n->tag == OS64_HTML_TAG_BODY));
 }
 
+// Whether a background of `s` is cut to the text inside its box: drawn
+// through that text, a box drawn outside the element among it
+// (flow_visit_text_clip).
+static bool clips_to_text(const flow_style_t *s)
+{
+    for (int32_t i = 0; i < flow_background_layers(s); i++)
+        if (flow_background_layer(s, i).clip == FLOW_EDGE_TEXT)
+            return true;
+    return false;
+}
+
 uint64_t flow_motion_due(const flow_tree_t *tree, os64_gui_rect_t view, flow_point_t scroll)
 {
     if (tree == NULL || tree->styles == NULL || tree->styles->nanimated == 0)
@@ -1711,8 +1722,11 @@ uint64_t flow_motion_due(const flow_tree_t *tree, os64_gui_rect_t view, flow_poi
     // inside due as well, for what they hand down to it: the inherited
     // properties (a colour, visibility), the group effect (a fade), and
     // whatever the author took by keyword at every element between them
-    // (FStyled.taken) — an `inherit` hands down a background too. What an
-    // element repaints of its own box alone is not drawn there.
+    // (FStyled.taken) — an `inherit` hands down a background too — and, for
+    // an element whose background is cut to its text, everything, since
+    // that background is drawn through the text inside it, wherever the
+    // text is. What an element repaints of its own box alone is not drawn
+    // there.
     FProps handed = {{0}};
     for (int p = 0; p < GARB_NPROPS; p++)
         if (garb_prop_inherited((garb_prop_t)p) || p == GARB_OPACITY)
@@ -1734,7 +1748,7 @@ uint64_t flow_motion_due(const flow_tree_t *tree, os64_gui_rect_t view, flow_poi
                 FProps ask;
                 for (int w = 0; w < F_PROP_WORDS; w++)
                     ask.w[w] = handed.w[w] | took.w[w];
-                next = fmin(next, f_motion_next(st->motion, now, &ask));
+                next = fmin(next, f_motion_next(st->motion, now, clips_to_text(&st->style) ? NULL : &ask));
             }
             if (st != NULL)
                 for (int w = 0; w < F_PROP_WORDS; w++)

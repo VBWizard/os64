@@ -389,8 +389,9 @@ typedef struct {
     // 1 blockifies them (Flexbox 1 § 4, Grid 2 § 6).
     bool lays_out_items;
     // What the author took from the parent by keyword — `inherit`, or
-    // `unset` on an inherited property — whatever the property is: a value
-    // an ancestor hands down to a box it does not hold (flow_motion_due).
+    // `unset` on an inherited property — whatever the property is, in a
+    // declaration or any keyframe of its animations: a value an ancestor
+    // hands down to a box it does not hold (flow_motion_due).
     FProps taken;
 } FStyled;
 
