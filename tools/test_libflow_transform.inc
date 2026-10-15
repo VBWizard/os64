@@ -170,16 +170,20 @@ static void transform_layout_cases(void)
 
     // A translation is exactly the identity moved: a deliberate 9e-10
     // shear is drawn through. rotate3d(1e308, 0, 0, 45deg) turns about x,
-    // its axis held at the domain's limit and made a unit vector.
-    cascade_layout_case("transform: a hair of shear is drawn; a huge axis is still an axis",
+    // its axis held at the domain's limit and made a unit vector; and so
+    // does rotate3d(1e-200, 0, 0, 45deg), whose axis the domain does not
+    // touch and whose parts are too small to square.
+    cascade_layout_case("transform: a hair of shear is drawn; a huge axis and a tiny one are still axes",
         XFORM_STYLE "div{width:100px;height:10px}"
-        ".a{transform:matrix(1,9e-10,0,1,0,0)} .b{transform:rotate3d(1e308,0,0,45deg)}</style>"
-        "<div class=a></div><div class=b></div>", 400,
-        "page 400 20\n"
-        "block html 0 0 400 20\n"
-        "  block body 0 0 400 20\n"
+        ".a{transform:matrix(1,9e-10,0,1,0,0)} .b{transform:rotate3d(1e308,0,0,45deg)}"
+        ".c{transform:rotate3d(1e-200,0,0,45deg)}</style>"
+        "<div class=a></div><div class=b></div><div class=c></div>", 400,
+        "page 400 30\n"
+        "block html 0 0 400 30\n"
+        "  block body 0 0 400 30\n"
         "    block div 0 0 100 10 stacked through 1000 0 0 1000 0 0\n"
-        "    block div 0 10 100 10 stacked through 1000 0 0 707 0 4393\n");
+        "    block div 0 10 100 10 stacked through 1000 0 0 707 0 4393\n"
+        "    block div 0 20 100 10 stacked through 1000 0 0 707 0 7322\n");
 
     // Two matrices past the domain, held at its limit, whose product is
     // ordinary: they multiply to the zero matrix, so the box collapses —

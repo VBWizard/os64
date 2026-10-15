@@ -79,6 +79,11 @@ typedef struct {
     uint32_t body_link;
     flow_unit_t root_font;      // the html element's font size: what `rem` is
     double zoom;                // device pixels per CSS pixel (flow_env_t.zoom)
+    // A list refused for the budget since lay_sets last looked
+    // (list_alloc), and, while a keyframe is resolved (keyframe_resolved),
+    // the longhands whose lists were: its mix leaves them as they were.
+    bool spent;
+    FProps *refused;
 } Ctx;
 
 // `n` CSS pixels in the tree's units, which are device pixels' (zoomed).
@@ -1344,8 +1349,10 @@ static void margin_quirks(const Ctx *c, const os64_html_node_t *n, Spec *sp)
 static void *list_alloc(Ctx *c, size_t bytes, bool *spent)
 {
     *spent = bytes > c->out->lists_left;
-    if (*spent)
+    if (*spent) {
+        c->spent = true;
         return NULL;
+    }
     void *p = f_arena_alloc(&c->out->arena, bytes);
     if (p != NULL)
         c->out->lists_left -= bytes;
@@ -3354,6 +3361,15 @@ static bool author_declares(garb_style_t st, int32_t prop)
     return false;
 }
 
+// Whether a declaration takes its value from the parent by keyword:
+// `inherit`, or `unset` on an inherited property (FStyled.taken).
+static bool takes_parent(const garb_set_t *set)
+{
+    const char *k = set->value.keyword;
+    return set->value.kind == GARB_V_WIDE &&
+           (os64_streq(k, "inherit") || (os64_streq(k, "unset") && garb_prop_inherited(set->prop)));
+}
+
 // The element's author winners over what the chapter and the hints wrote.
 // `ua` is the Spec as the user-agent origin left it, which `revert` goes
 // back to. False on no memory only.
@@ -3381,15 +3397,17 @@ static bool lay_sets(Ctx *c, Spec *sp, const Spec *ua, const flow_style_t *paren
             if (first != (pass == 0))
                 continue;
             if (set->value.kind != GARB_V_WIDE) {
+                c->spent = false;
                 if (font)
                     author_font_size(&a, sp, &set->value);
                 else if (!author_value(&a, sp, set))
                     return false;
+                if (c->spent && c->refused != NULL)
+                    f_props_add(c->refused, set->prop);
                 continue;
             }
             const char *k = set->value.keyword;
-            bool inherits = os64_streq(k, "inherit") ||
-                            (os64_streq(k, "unset") && garb_prop_inherited(set->prop));
+            bool inherits = takes_parent(set);
             if (inherits)
                 f_props_add(&sp->taken, set->prop);
             if (os64_streq(k, "revert") || os64_streq(k, "revert-layer")) {
@@ -3583,17 +3601,31 @@ static void finish(const Ctx *c, Spec *sp, const flow_style_t *parent, bool item
 
 // ── Animations (motion.c; PILE3.md § Animations) ───────────────────────
 
-// The lists an animated value makes come out of the styles' arena, within
-// the lists' budget (list_alloc). Past the budget the value is dropped, as
-// a declaration's is; out of memory, the style pass fails.
+// What an element's animations are mixed with (f_motion_style). The lists
+// an animated value makes come out of the styles' arena, within the lists'
+// budget (list_alloc): past the budget the value is dropped, as a
+// declaration's is. Each keyframe is resolved (keyframe_resolved) over the
+// element's Spec before `finish`, against its parent, with its winners
+// `st` for a side's own width and the longhands an `!important` winner
+// holds left out — once for the font size and colour, once for the rest
+// (`resolved`, two to a keyframe, `first` each animation's first). Out of
+// memory, the style pass fails.
 typedef struct {
     Ctx *c;
     bool no_memory;
-} MotionLists;
+    const FMotion *m;
+    const Spec *sp, *ua;
+    const flow_style_t *parent;
+    bool item, root;
+    garb_style_t st;
+    FProps important;
+    const FResolved **resolved;
+    int32_t *first;
+} Mixing;
 
 static void *motion_alloc(void *ctx, size_t bytes)
 {
-    MotionLists *ml = ctx;
+    Mixing *ml = ctx;
     bool spent;
     void *p = list_alloc(ml->c, bytes, &spent);
     if (p == NULL && !spent)
@@ -3734,11 +3766,67 @@ static void unsettled(flow_style_t *s, const flow_style_t *specified)
     s->overflow_y = specified->overflow_y;
 }
 
+// Animation `a`'s keyframe `j` resolved (FResolve): its declarations laid
+// over the element's own, as the author's are, but where an `!important`
+// winner holds — the walk never mixes those (animate) — and only those its
+// pass mixes (the font size and colour without `over`, the rest with it);
+// then finished, each side keeping its own width, and its
+// display, float and overflow as it left them (unsettled); and the
+// longhands whose lists found no room. Against `over`, the font size and
+// colour every animation made are the element's, and the keyframe's own
+// are not laid: a keyframe's `em` is of the font the animations make, not
+// of its own font size (Chrome, 10/15).
+static const FResolved *keyframe_resolved(void *ctx, int32_t a, int32_t j, const flow_style_t *over)
+{
+    Mixing *x = ctx;
+    const FKeyframe *f = &x->m->anims[a].frames[j];
+    const FResolved **slot = &x->resolved[2 * (x->first[a] + j) + (over != NULL)];
+    if (*slot != NULL)
+        return *slot;
+    // Each resolution lays only what its pass mixes, and what an
+    // `!important` winner holds never: anything else would spend the lists'
+    // budget on a value nobody reads.
+    Spec k = *x->sp;
+    FProps skip = x->important;
+    if (over != NULL) {
+        k.fs_kind = FS_INHERIT;
+        k.s.font_size = over->font_size;
+        k.s.color = over->color;
+        f_props_add(&skip, GARB_FONT_SIZE);
+        f_props_add(&skip, GARB_COLOR);
+    } else {
+        for (int w = 0; w < F_PROP_WORDS; w++)
+            skip.w[w] = ~(uint64_t)0;
+        f_props_remove(&skip, GARB_FONT_SIZE);
+        f_props_remove(&skip, GARB_COLOR);
+    }
+    FResolved *r = f_arena_alloc(&x->c->out->arena, sizeof(*r));
+    if (r == NULL) {
+        x->no_memory = true;
+        return NULL;
+    }
+    x->c->refused = &r->refused;
+    bool laid = lay_sets(x->c, &k, x->ua, x->parent, f->decls, NULL, f->sheet, f->ndecls, &skip);
+    x->c->refused = NULL;
+    if (!laid) {
+        x->no_memory = true;
+        return NULL;
+    }
+    flow_style_t specified = k.s;
+    finish(x->c, &k, x->parent, x->item, x->root);
+    for (int side = 0; side < 4; side++)
+        k.s.border_width[side] = own_width(x->c, &k, x->st, (garb_style_t){f->decls, NULL, NULL, f->ndecls}, side);
+    unsettled(&k.s, &specified);
+    r->style = k.s;
+    *slot = r;
+    return r;
+}
+
 // An element's animations at the layout's time: for each name whose
-// @keyframes exist, every keyframe's computed style — its declarations
-// laid over the element's own, as the author's are, but where an
-// `!important` winner holds — and the name's record on the timeline; then
-// the element's style at `now`, and what its animations make it
+// @keyframes exist, every keyframe's declarations and the longhands they
+// set but where an `!important` winner holds, and the name's record on the
+// timeline; then the element's style at `now`, each keyframe resolved
+// where it is mixed (keyframe_resolved), and what its animations make it
 // (flow_style_t.animating). `sp` is the element's Spec before `finish`.
 // With animations, `*out` is the element's FMotion and `sp`'s style is
 // computed; with none, `*out` is NULL and `sp` as it was. A keyframe's
@@ -3773,6 +3861,10 @@ static bool animate(Ctx *c, const os64_html_node_t *n, Spec *sp, const Spec *ua,
     m->base = base.s;
     for (int side = 0; side < 4; side++)
         m->base.border_width[side] = own_width(c, &base, st, none, side);
+    int32_t *first = f_arena_alloc(&c->out->arena, (size_t)count * sizeof(*first));
+    if (first == NULL)
+        return false;
+    int32_t nframes = 0;
     for (int32_t i = 0; i < count; i++) {
         flow_animation_t timing = f_animation_at(&m->base, i);
         const garb_keyframe_t *kf = NULL;
@@ -3790,30 +3882,24 @@ static bool animate(Ctx *c, const os64_html_node_t *n, Spec *sp, const Spec *ua,
             return false;
         for (int32_t j = 0; j < nk; j++) {
             FKeyframe *f = &an->frames[j];
-            Spec k = *sp;
-            if (!lay_sets(c, &k, ua, parent, kf[j].sets, NULL, kf[j].sheet, kf[j].nsets, &important))
-                return false;
-            // A keyframe's `inherit` takes from the parent as the element's
-            // own declaration does (FStyled.taken).
-            for (int w = 0; w < F_PROP_WORDS; w++)
-                sp->taken.w[w] |= k.taken.w[w];
-            flow_style_t specified = k.s;
-            finish(c, &k, parent, item, root);
-            for (int side = 0; side < 4; side++)
-                k.s.border_width[side] =
-                    own_width(c, &k, st, (garb_style_t){kf[j].sets, NULL, NULL, kf[j].nsets}, side);
-            unsettled(&k.s, &specified);
             f->offset = kf[j].offset;
             f->has_easing = kf[j].easing != NULL && easing_of(kf[j].easing, &f->easing);
-            f->style = k.s;
+            f->decls = kf[j].sets;
+            f->ndecls = kf[j].nsets;
+            f->sheet = kf[j].sheet;
             for (int32_t s = 0; s < kf[j].nsets; s++)
                 if (!f_props_has(&important, kf[j].sets[s].prop)) {
                     f_props_add(&f->sets, kf[j].sets[s].prop);
                     f_props_add(&an->props, kf[j].sets[s].prop);
+                    // A keyframe's `inherit` takes from the parent as the
+                    // element's own declaration does (FStyled.taken).
+                    if (takes_parent(&kf[j].sets[s]))
+                        f_props_add(&sp->taken, kf[j].sets[s].prop);
                 }
         }
         an->nframes = nk;
-        m->nanims++;
+        first[m->nanims++] = nframes;
+        nframes += nk;
     }
     if (m->nanims == 0)
         return true;
@@ -3824,9 +3910,12 @@ static bool animate(Ctx *c, const os64_html_node_t *n, Spec *sp, const Spec *ua,
     flow_style_t s = m->base;
     // A list past the budget leaves its property as it was, named in its
     // animation's `dropped`, so nothing is due for that one's motion of it.
-    MotionLists lists = {c, false};
-    (void)f_motion_style(m, now, &s, motion_alloc, &lists, NULL, true);
-    if (lists.no_memory)
+    Mixing mix = {c, false, m, sp, ua, parent, item, root, st, important,
+                  f_arena_alloc(&c->out->arena, (size_t)(2 * nframes + 1) * sizeof(*mix.resolved)), first};
+    if (mix.resolved == NULL)
+        return false;
+    (void)f_motion_style(m, now, &s, motion_alloc, keyframe_resolved, &mix, NULL, true);
+    if (mix.no_memory)
         return false;
     settle_box(c, &s, item, root);
     s.animating = f_motion_effects(m, now);
