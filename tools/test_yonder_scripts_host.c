@@ -993,9 +993,19 @@ static void motion_cases(void) {
     check(motion_next()==YONDER_NEVER && ticker_due==YONDER_NEVER,"motion: a covered window lays out for none");
     g.covered=false;
     geometry_layout_delay=201000; now_ms=800;
+    g.page.diag=yonder_diag_new("http://m.test/",1,0);
     motion_tick();
     check(g.motion_began==800 && motion_next()==YONDER_NEVER,
         "motion: a page whose frame for an animation took more than MOTION_COST_MS lays out for none");
+    check(strstr(g.status_text,"ANIMATIONS PAUSED")==NULL,
+        "motion: a frame is judged when its paint ends, not before");
+    motion_painted();
+    char record[2048];
+    yonder_diag_render(g.page.diag,record,sizeof(record));
+    check(strstr(g.status_text," - ANIMATIONS PAUSED: a frame took 201 ms, over 200")!=NULL &&
+          strstr(record,"animations: paused: a frame took 201 ms, over 200")!=NULL,
+        "motion: the frame that stops the animations is said, on the standing line and in the record");
+    yonder_diag_free(g.page.diag); g.page.diag=NULL;
     geometry_layout_delay=0;
     probe_drop();
 
@@ -1004,15 +1014,37 @@ static void motion_cases(void) {
     now_ms=1000;
     probe_page(kMotionPage,false);
     relayout(true);
-    g.laid_ms=MOTION_COST_MS+1;
+    g.page.diag=yonder_diag_new("http://m.test/",2,0);
+    say_laid_out(MOTION_COST_MS+1);
     check(motion_next()==YONDER_NEVER,"motion: a page whose own layout was too slow lays out for no animation");
-    g.laid_ms=MOTION_COST_MS;
+    check(strstr(g.status_text," - ANIMATIONS PAUSED: the layout took 201 ms, over 200")!=NULL,
+        "motion: before its first frame, the page's own layout is what is said to cost too much");
+    say_laid_out(MOTION_COST_MS);
     check(motion_next()==1000,"motion: one at the limit still does");
+    yonder_diag_render(g.page.diag,record,sizeof(record));
+    check(strstr(g.status_text,"ANIMATIONS PAUSED")==NULL && strstr(record,"animations: running")!=NULL,
+        "motion: animations running again are said so, and the record follows");
+    s_animations=false;
+    say_laid_out(MOTION_COST_MS+1);
+    check(strstr(g.status_text,"ANIMATIONS PAUSED")==NULL,
+        "motion: animations turned off are not paused by what a frame costs");
+    s_animations=true;
+    say_laid_out(MOTION_COST_MS);
     geometry_refuse_layout=true;
     motion_tick();
     geometry_refuse_layout=false;
     check(g.page.tree!=NULL && g.motion_us==UINT64_MAX && motion_next()==YONDER_NEVER,
         "motion: a layout for an animation that fails keeps the page and is its last");
+    say_laid_out(g.laid_ms);
+    check(strstr(g.status_text,"ANIMATIONS PAUSED")==NULL,
+        "motion: a frame that failed is said where it failed, not as one that cost too much");
+    yonder_diag_free(g.page.diag); g.page.diag=NULL;
+    probe_drop();
+    probe_page("<!doctype html><p>nothing moves</p>",false);
+    relayout(true);
+    say_laid_out(MOTION_COST_MS+1);
+    check(strstr(g.status_text,"ANIMATIONS PAUSED")==NULL,
+        "motion: a slow page with no animations has none paused");
     probe_drop();
 
     /* What the view shows: an animation that only repaints where its
