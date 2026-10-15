@@ -476,6 +476,116 @@ static void motion_chrome_cases(void)
 
 // ── Keyframes, the cascade, inheritance ─────────────────────────────────
 
+// A keyframe is resolved where it is mixed, against what the animations
+// make (PILE3_SPARSE_KEYFRAMES.md): its `em` of the font size every
+// animation has made, not of the element's own or the keyframe's; its
+// currentColor of the colour they made; the value underneath an implicit
+// keyframe a computed value, never resolved again. Chrome 155, 10/15,
+// each paused halfway (the probes' rows p1-p9 and q1-q8).
+#define HALF(name) name " 1s linear -.5s paused"
+#define AT_Q(name, d) name " 1s linear -" d "s paused"
+
+static void motion_sparse_cases(void)
+{
+    Moving m;
+    moving_open(&m, MOTION_STYLE
+        "@keyframes fs{to{font-size:30px}}"
+        "@keyframes w10em{from{width:10em}to{width:10em}}"
+        "@keyframes both1{from{font-size:10px;width:10em}to{font-size:30px;width:100px}}"
+        "@keyframes wto100{to{width:100px}}"
+        "@keyframes cfs{from{font-size:2em}to{font-size:2em}}"
+        "@keyframes col{to{color:rgb(200,0,0)}}"
+        "@keyframes bcur{from{background-color:currentColor}to{background-color:currentColor}}"
+        "@keyframes pw{to{width:300px}}"
+        "@keyframes winh{from{width:inherit}to{width:inherit}}"
+        "@keyframes lh{from{line-height:2em}to{line-height:2em}}"
+        "@keyframes bw{from{border-left-width:1em}to{border-left-width:1em}}"
+        "@keyframes tr{from{transform:translateX(1em)}to{transform:translateX(1em)}}"
+        "@keyframes sh{from{box-shadow:1em 0 0 red}to{box-shadow:1em 0 0 red}}"
+        "@keyframes cw{from{width:calc(1em + 10px)}to{width:calc(1em + 10px)}}"
+        "@keyframes bstyle{from{border-left-style:none}to{border-left-style:solid}}"
+        "@keyframes bw5{from{border-left-width:5px}to{border-left-width:5px}}"
+        "@keyframes bmix{from{background-color:currentColor}to{background-color:rgb(0,0,200)}}"
+        "@keyframes bto{to{background-color:rgb(0,0,200)}}"
+        "</style>"
+        "<div id=p1 style='font-size:10px;animation:" HALF("fs") "," HALF("w10em") "'></div>"
+        "<div id=p2 style='font-size:10px;animation:" HALF("both1") "'></div>"
+        "<div id=p3 style='font-size:10px;width:10em;animation:" HALF("fs") "," HALF("wto100") "'></div>"
+        "<div style='font-size:10px;animation:" HALF("fs") "'><div id=p4 style='animation:" HALF("w10em")
+            "'></div><div id=p5 style='animation:" HALF("cfs") "'></div></div>"
+        "<div id=p6 style='color:rgb(0,0,0);animation:" HALF("col") "," HALF("bcur") "'></div>"
+        "<div style='width:100px;animation:" HALF("pw") "'><div id=p7 style='animation:" HALF("winh")
+            "'></div></div>"
+        "<div id=p8 style='font-size:10px;animation:" HALF("fs") "," HALF("lh") "'></div>"
+        "<div id=p9 style='font-size:10px;animation:" HALF("fs") "," HALF("bw") "'></div>"
+        "<div id=p9b style='font-size:10px;border-left-style:solid;animation:" HALF("fs") "," HALF("bw")
+            "'></div>"
+        "<div id=q1 style='font-size:10px;animation:" HALF("fs") "," HALF("tr") "'></div>"
+        "<div id=q2 style='font-size:10px;animation:" HALF("fs") "," HALF("sh") "'></div>"
+        "<div id=q7 style='font-size:10px;animation:" HALF("fs") "," HALF("cw") "'></div>"
+        "<div id=q8 style='animation:" AT_Q("bstyle", ".75") "," AT_Q("bw5", ".75") "'></div>"
+        "<div id=q8b style='animation:" AT_Q("bstyle", ".25") "," AT_Q("bw5", ".25") "'></div>"
+        "<div id=r1 style='color:rgb(0,0,0);animation:" HALF("col") "," HALF("bmix") "'></div>"
+        "<div id=r2 style='color:rgb(0,0,0);background-color:currentColor;animation:" HALF("col") ","
+            HALF("bto") "'></div>", 1000);
+    const flow_style_t *s;
+    s = moving_style(&m, "p1");
+    expect_i64("motion: a keyframe's em is of the font the animations make",
+               s != NULL && s->font_size == 20 * 64 && s->width.kind == FLOW_LENGTH_PX ? s->width.value : -1,
+               200 * 64);
+    s = moving_style(&m, "p2");
+    expect_i64("motion: and not of the keyframe's own font size",
+               s != NULL && s->width.kind == FLOW_LENGTH_PX ? s->width.value : -1, 150 * 64);
+    s = moving_style(&m, "p3");
+    expect_i64("motion: the value under an implicit keyframe is computed, never resolved again",
+               s != NULL && s->width.kind == FLOW_LENGTH_PX ? s->width.value : -1, 100 * 64);
+    s = moving_style(&m, "p4");
+    expect_i64("motion: a child's em is of its parent's animated font",
+               s != NULL && s->width.kind == FLOW_LENGTH_PX ? s->width.value : -1, 200 * 64);
+    s = moving_style(&m, "p5");
+    expect_i64("motion: and so is a child's font size in em", s != NULL ? s->font_size : -1, 40 * 64);
+    s = moving_style(&m, "p6");
+    expect_u32("motion: a keyframe's currentColor is the colour the animations make",
+               s != NULL && s->color == 0x640000u ? s->background : 0, 0x640000u);
+    s = moving_style(&m, "p7");
+    expect_i64("motion: a keyframe's inherit takes the parent's animated value",
+               s != NULL && s->width.kind == FLOW_LENGTH_PX ? s->width.value : -1, 200 * 64);
+    s = moving_style(&m, "p8");
+    expect_i64("motion: a line height in em is of the font the animations make",
+               s != NULL && s->line_height.kind == FLOW_LINE_PX ? s->line_height.value : -1, 40 * 64);
+    s = moving_style(&m, "p9");
+    expect_i64("motion: a border width in em, its side drawn as none, is 0",
+               s != NULL ? s->border_width[FLOW_LEFT] : -1, 0);
+    s = moving_style(&m, "p9b");
+    expect_i64("motion: and drawn, of the font the animations make",
+               s != NULL ? s->border_width[FLOW_LEFT] : -1, 20 * 64);
+    s = moving_style(&m, "q1");
+    expect_i64("motion: a translation in em is of the font the animations make",
+               s != NULL && s->ntransform == 1 && s->transform[0].x.kind == FLOW_LENGTH_PX
+                   ? s->transform[0].x.value : -1, 20 * 64);
+    s = moving_style(&m, "q2");
+    expect_i64("motion: so is a shadow's offset",
+               s != NULL && s->nbox_shadows == 1 ? s->box_shadows[0].x : -1, 20);
+    s = moving_style(&m, "q7");
+    expect_i64("motion: and an em inside calc()",
+               s != NULL && s->width.kind == FLOW_LENGTH_PX ? s->width.value : -1, 30 * 64);
+    s = moving_style(&m, "q8");
+    expect_i64("motion: a side's style an animation draws gives it its own width",
+               s != NULL && s->border_style[FLOW_LEFT] == FLOW_BORDER_SOLID ? s->border_width[FLOW_LEFT] : -1,
+               5 * 64);
+    s = moving_style(&m, "q8b");
+    expect_i64("motion: and one drawn as none, none",
+               s != NULL && s->border_style[FLOW_LEFT] == FLOW_BORDER_NONE ? s->border_width[FLOW_LEFT] : -1,
+               0);
+    s = moving_style(&m, "r1");
+    expect_u32("motion: a keyframe's currentColor mixed with a colour is the colour the animations make",
+               s != NULL ? s->background : 0, 0x320064u);
+    s = moving_style(&m, "r2");
+    expect_u32("motion: and so is the value underneath in currentColor",
+               s != NULL ? s->background : 0, 0x320064u);
+    moving_close(&m);
+}
+
 static void motion_cascade_cases(void)
 {
     Moving m;
@@ -1242,7 +1352,69 @@ static void motion_effect_cases(void)
     moving_close(&m);
 }
 
+// A keyframe made by hand — the fuzzer's, and cases of the schedule's —
+// resolved to the style the case sets, `r.style`, whatever it is resolved
+// against; and the one declaration standing for it, a keyword spelling its
+// value, so that two hand keyframes write one declaration exactly when
+// they hold one value, which is what the schedule compares (frames_hold).
+typedef struct {
+    FResolved r;
+    garb_set_t set;
+    char word[24];
+} Hand;
+
+// The resolver for hand keyframes (FResolve): `ctx` holds each animation's
+// hands, by keyframe.
+static const FResolved *hand_resolved(void *ctx, int32_t a, int32_t j, const flow_style_t *over)
+{
+    (void)over;
+    Hand *const *hands = ctx;
+    return &hands[a][j].r;
+}
+
+// Keyframe `f` at `offset`, setting `p`: made by hand from `h`, whose style
+// the caller sets, its declaration a keyword spelling `value`.
+static void hand_frame(FKeyframe *f, Hand *h, garb_prop_t p, double offset, unsigned value)
+{
+    memset(f, 0, sizeof(*f));
+    f->offset = offset;
+    snprintf(h->word, sizeof(h->word), "v%u", value);
+    memset(&h->set, 0, sizeof(h->set));
+    h->set.prop = p;
+    h->set.value.kind = GARB_V_KEYWORD;
+    h->set.value.keyword = h->word;
+    f->decls = &h->set;
+    f->ndecls = 1;
+    f_props_add(&f->sets, p);
+}
+
 // ── The timeline ────────────────────────────────────────────────────────
+
+// Lists for layout_next's walk, from a pool it empties each time.
+static unsigned char s_lists[1 << 20];
+static size_t s_lists_used;
+
+static void *lists_alloc(void *ctx, size_t bytes)
+{
+    (void)ctx;
+    bytes = (bytes + 15) & ~(size_t)15;
+    if (bytes > sizeof(s_lists) - s_lists_used)
+        return NULL;
+    void *p = s_lists + s_lists_used;
+    s_lists_used += bytes;
+    return p;
+}
+
+// What the schedule says at `now`, asked as the face asks it: after the
+// layout at `now` it answers for (f_motion_style with `record`), each
+// keyframe made by hand resolved from `hands` (hand_resolved).
+static double layout_next(FMotion *m, double now, Hand *const *hands)
+{
+    flow_style_t at = m->base;
+    s_lists_used = 0;
+    (void)f_motion_style(m, now, &at, lists_alloc, hand_resolved, (void *)hands, NULL, true);
+    return f_motion_next(m, now, NULL);
+}
 
 // An animation `name` of `ms` milliseconds, once, of opacity, which it holds
 // still: so it is due at its end and nothing before.
@@ -1258,7 +1430,7 @@ static void timed(FAnimation *an, const char *name, double ms)
 static double motion_end(FAnimation *an, double now)
 {
     FMotion alone = {.anims = an, .nanims = 1};
-    return f_motion_next(&alone, now, NULL);
+    return layout_next(&alone, now, NULL);
 }
 
 // One layout's dealings with the timeline, told directly: begun from the
@@ -1403,11 +1575,11 @@ static void motion_timeline_cases(void)
     p.timing.paused = true;
     FMotion paused = {.anims = &p, .nanims = 1};
     ok = timeline_layout(&tl, 5000, true, 1, (Meet[]){{y, &paused}});
-    expect("motion: paused, nothing is due", ok && isinf(f_motion_next(&paused, 5000, NULL)), NULL);
+    expect("motion: paused, nothing is due", ok && isinf(layout_next(&paused, 5000, NULL)), NULL);
     p.timing.paused = false;
     ok = ok && timeline_layout(&tl, 9000, true, 1, (Meet[]){{y, &paused}});
     expect("motion: resumed, it runs from where it was held",
-           ok && f_motion_next(&paused, 9000, NULL) == 10000, NULL);
+           ok && layout_next(&paused, 9000, NULL) == 10000, NULL);
     // One running before it pauses holds what it has run: started at
     // 11000, paused at 11300, nothing is due at 11500; resumed at 13000,
     // its one second ends at 13700.
@@ -1419,11 +1591,11 @@ static void motion_timeline_cases(void)
     r.timing.paused = true;
     ok = ok && timeline_layout(&tl, 11300, true, 1, (Meet[]){{y, &running}});
     expect("motion: paused while running, nothing is due",
-           ok && isinf(f_motion_next(&running, 11500, NULL)), NULL);
+           ok && isinf(layout_next(&running, 11500, NULL)), NULL);
     r.timing.paused = false;
     ok = ok && timeline_layout(&tl, 13000, true, 1, (Meet[]){{y, &running}});
     expect("motion: resumed, it ends what it held short of",
-           ok && f_motion_next(&running, 13000, NULL) == 13700, NULL);
+           ok && layout_next(&running, 13000, NULL) == 13700, NULL);
 
     // A record an incomplete layout made is kept, and so is the one it
     // carried a name on in — once, not again beside it as a record no name
@@ -2246,11 +2418,13 @@ static uint32_t fuzz_get(const flow_style_t *s, int kind)
 enum { FUZZ_FRAMES = 5 };
 
 // One animation over property `kind` at random, named `name`, into `an`,
-// its keyframes into `frames` — one to five, at offsets that may repeat,
-// several at 1 among them: true when every one holds the element's own
-// value, so that the animation, whatever else it does, stands still.
+// its keyframes into `frames` made from `hands` — one to five, at offsets
+// that may repeat, several at 1 among them: true when every one holds the
+// element's own value and keyframes stand at 0 and at 1, so that every
+// interval lies between two equal keyframes of its own and the animation,
+// whatever else it does, stands still where the schedule may see it.
 static bool fuzz_animation(FuzzRng *r, int kind, const flow_style_t *base, const char *name,
-                           FAnimation *an, FKeyframe *frames)
+                           FAnimation *an, FKeyframe *frames, Hand *hands)
 {
     static const garb_prop_t kProp[] = {GARB_OPACITY, GARB_COLOR, GARB_TEXT_ALIGN, GARB_VISIBILITY};
     static const double kIterations[] = {0.5, 1, 1.5, 2, 2.75, 3, INFINITY};
@@ -2272,19 +2446,18 @@ static bool fuzz_animation(FuzzRng *r, int kind, const flow_style_t *base, const
             offsets[j] = offsets[j - 1];
         offsets[j] = o;
     }
-    bool same = true;
+    bool same = offsets[0] == 0 && offsets[nk - 1] == 1;
     for (int k = 0; k < nk; k++) {
         FKeyframe *f = &frames[k];
-        memset(f, 0, sizeof(*f));
-        f->offset = offsets[k];
-        f->style = *base;
-        fuzz_set(&f->style, kind, fuzz_below(r, 3));
-        same &= fuzz_get(&f->style, kind) == fuzz_get(base, kind);
+        Hand *h = &hands[k];
+        h->r.style = *base;
+        fuzz_set(&h->r.style, kind, fuzz_below(r, 3));
+        hand_frame(f, h, kProp[kind], offsets[k], fuzz_get(&h->r.style, kind));
+        same &= fuzz_get(&h->r.style, kind) == fuzz_get(base, kind);
         if (fuzz_below(r, 3) == 0) {
             f->has_easing = true;
             f->easing = fuzz_easing(r);
         }
-        f_props_add(&f->sets, kProp[kind]);
     }
     f_props_add(&an->props, kProp[kind]);
     an->frames = frames;
@@ -2331,7 +2504,7 @@ enum { FUZZ_HORIZON = 6000 };
 // later replacing the earlier wherever it is in effect. True when every
 // keyframe holds the base's value.
 static bool fuzz_case(FuzzRng *r, int *kind, flow_style_t *base, FAnimation an[2],
-                      FKeyframe frames[2][FUZZ_FRAMES], int *nanims)
+                      FKeyframe frames[2][FUZZ_FRAMES], Hand hands[2][FUZZ_FRAMES], int *nanims)
 {
     *kind = fuzz_below(r, FUZZ_KINDS);
     memset(base, 0, sizeof(*base));
@@ -2340,7 +2513,7 @@ static bool fuzz_case(FuzzRng *r, int *kind, flow_style_t *base, FAnimation an[2
     *nanims = fuzz_below(r, 3) == 0 ? 2 : 1;
     bool still = true;
     for (int a = 0; a < *nanims; a++)
-        still &= fuzz_animation(r, *kind, base, a == 0 ? "f" : "g", &an[a], frames[a]);
+        still &= fuzz_animation(r, *kind, base, a == 0 ? "f" : "g", &an[a], frames[a], hands[a]);
     return still;
 }
 
@@ -2374,7 +2547,9 @@ static void motion_fuzz_one(FuzzRun *f, FuzzRng *r, long c, bool edge)
     flow_style_t base;
     FAnimation an[2];
     FKeyframe frames[2][FUZZ_FRAMES];
-    bool still = fuzz_case(r, &kind, &base, an, frames, &nanims);
+    static Hand hands[2][FUZZ_FRAMES];
+    Hand *const by[2] = {hands[0], hands[1]};
+    bool still = fuzz_case(r, &kind, &base, an, frames, hands, &nanims);
     for (int a = 0; edge && a < nanims; a++)
         fuzz_edge(r, &an[a]);
     f->pairs += nanims == 2;
@@ -2393,14 +2568,14 @@ static void motion_fuzz_one(FuzzRun *f, FuzzRng *r, long c, bool edge)
     }
     for (int t = 0; t <= horizon; t++) {
         flow_style_t out = m.base;
-        (void)f_motion_style(&m, t, &out, NULL, NULL, NULL, false);
+        (void)f_motion_style(&m, t, &out, NULL, hand_resolved, (void *)by, NULL, false);
         values[t] = fuzz_get(&out, kind);
         seen[t] = false;
     }
     seen[0] = true;
     int layouts = 0;
     for (uint64_t now = 0; now <= (uint64_t)horizon;) {
-        double d = f_motion_next(&m, (double)now, NULL);
+        double d = layout_next(&m, (double)now, by);
         if (!(d < INFINITY))
             break;
         uint64_t due = d <= (double)now ? now : (uint64_t)ceil(d);
@@ -2440,7 +2615,7 @@ static void motion_fuzz_one(FuzzRun *f, FuzzRng *r, long c, bool edge)
             for (int j = 0; j < an[a].nframes; j++) {
                 const FKeyframe *f = &an[a].frames[j];
                 const flow_easing_t *fe = &f->easing;
-                fprintf(stderr, "    frame %g: %u", f->offset, fuzz_get(&f->style, kind));
+                fprintf(stderr, "    frame %g: %u", f->offset, fuzz_get(&hands[a][j].r.style, kind));
                 if (f->has_easing)
                     fprintf(stderr, " easing %d [%g %g %g %g] steps %d jump %d", fe->kind, fe->p[0],
                             fe->p[1], fe->p[2], fe->p[3], fe->steps, fe->jump);
@@ -2449,7 +2624,7 @@ static void motion_fuzz_one(FuzzRun *f, FuzzRng *r, long c, bool edge)
         }
         int at = missed >= 0 ? missed : 0;
         for (uint64_t now = 0, prev = 0; now <= (uint64_t)at;) {
-            double d = f_motion_next(&m, (double)now, NULL);
+            double d = layout_next(&m, (double)now, by);
             uint64_t due = !(d < INFINITY) ? UINT64_MAX : d <= (double)now ? now : (uint64_t)ceil(d);
             prev = now;
             now = due == UINT64_MAX ? UINT64_MAX : due > now ? due : now + 1;
@@ -2510,9 +2685,9 @@ static void fuzz_as_list(flow_style_t *s, int kind, const flow_style_t *const li
 // 15973564121497552185, a discrete text-align changing at 76 ms, two
 // animations of it — made a transform list's: each of the three values a
 // list that mixes only discretely (two translations, then a singular
-// matrix no decomposition undoes). The schedule's walk makes no lists, so
-// what rests on them is unknown; the change is due no later than its
-// millisecond.
+// matrix no decomposition undoes). The schedule compares the keyframes'
+// declarations, never the lists they make; the change is due no later
+// than its millisecond.
 static void motion_list_case_cases(void)
 {
     Moving lm;
@@ -2526,7 +2701,8 @@ static void motion_list_case_cases(void)
     flow_style_t base;
     FAnimation an[2];
     FKeyframe frames[2][FUZZ_FRAMES];
-    (void)fuzz_case(&r, &kind, &base, an, frames, &nanims);
+    static Hand hands[2][FUZZ_FRAMES];
+    (void)fuzz_case(&r, &kind, &base, an, frames, hands, &nanims);
     bool shaped = kind == FUZZ_ALIGN && nanims == 2;
     for (int i = 0; i < 3; i++)
         shaped &= lists[i] != NULL && lists[i]->ntransform == 3;
@@ -2540,9 +2716,10 @@ static void motion_list_case_cases(void)
         memset(&an[a].props, 0, sizeof(an[a].props));
         f_props_add(&an[a].props, GARB_TRANSFORM);
         for (int k = 0; k < an[a].nframes; k++) {
-            fuzz_as_list(&frames[a][k].style, kind, lists);
+            fuzz_as_list(&hands[a][k].r.style, kind, lists);
             memset(&frames[a][k].sets, 0, sizeof(frames[a][k].sets));
             f_props_add(&frames[a][k].sets, GARB_TRANSFORM);
+            hands[a][k].set.prop = GARB_TRANSFORM;
         }
     }
     FMotion m;
@@ -2552,7 +2729,8 @@ static void motion_list_case_cases(void)
     m.nanims = nanims;
     bool ok;
     flow_timeline_t *tl = motion_meet(lm.p.doc, motion_find(lm.p.doc->document, "v0"), &m, 0, &ok);
-    double due = f_motion_next(&m, 75, NULL);
+    Hand *const by[2] = {hands[0], hands[1]};
+    double due = layout_next(&m, 75, by);
     char detail[64];
     snprintf(detail, sizeof(detail), "due %.17g", due);
     expect("motion due: the fuzzer's case made of transform lists is due by its change",
@@ -2564,14 +2742,14 @@ static void motion_list_case_cases(void)
 // A page of `divs` elements, each a 64-function transform (libgarb's most)
 // out of the lists' budget, then one animating a 64-function list — and,
 // when `two`, a one-function list before it, written first.
-static char *dropped_page(int divs, bool two)
+static char *dropped_page(int divs, bool two, int filler)
 {
     size_t cap = (size_t)divs * 24 + 64 * 17 * 3 + 1024, at = 0;
     char *html = malloc(cap);
     at += (size_t)snprintf(html + at, cap - at, MOTION_STYLE
                            "@keyframes short{from{transform:translateX(0px)}to{transform:translateX(10px)}}"
                            ".s{transform:");
-    for (int i = 0; i < 64; i++)
+    for (int i = 0; i < filler; i++)
         at += (size_t)snprintf(html + at, cap - at, "translateX(1px) ");
     at += (size_t)snprintf(html + at, cap - at, "}@keyframes long{from{transform:");
     for (int i = 0; i < 64; i++)
@@ -2588,9 +2766,9 @@ static char *dropped_page(int divs, bool two)
 }
 
 // What styling `divs` of them leaves of the lists' budget.
-static size_t dropped_left(int divs, bool two)
+static size_t dropped_left(int divs, bool two, int filler)
 {
-    char *html = dropped_page(divs, two);
+    char *html = dropped_page(divs, two, filler);
     Moving m;
     moving_open(&m, html, 1000);
     FStyles *fs = f_style_build(m.p.doc, m.p.page, &m.p.env);
@@ -2604,6 +2782,15 @@ static size_t dropped_left(int divs, bool two)
 // A property the layout's style dropped is due for nothing — not by the
 // schedule's own reckoning, nor by its look at the next millisecond: an
 // opacity moving from 0 to 1 for a second, dropped, is due at its end.
+// How many items keyframe `f`'s declaration of `p` holds, or -1.
+static int32_t declared_items(const FKeyframe *f, garb_prop_t p)
+{
+    for (int32_t i = f->ndecls - 1; i >= 0; i--)
+        if (f->decls[i].prop == p)
+            return f->decls[i].value.nitems;
+    return -1;
+}
+
 static void motion_dropped_cases(void)
 {
     os64_html_document_t *doc = parse("<!doctype html><p id=x>x</p>");
@@ -2612,12 +2799,11 @@ static void motion_dropped_cases(void)
     memset(&base, 0, sizeof(base));
     base.opacity = 1000;
     FKeyframe frames[2];
-    memset(frames, 0, sizeof(frames));
+    static Hand hands[2];
     for (int k = 0; k < 2; k++) {
-        frames[k].offset = k;
-        frames[k].style = base;
-        frames[k].style.opacity = (uint16_t)(k * 1000);
-        f_props_add(&frames[k].sets, GARB_OPACITY);
+        hands[k].r.style = base;
+        hands[k].r.style.opacity = (uint16_t)(k * 1000);
+        hand_frame(&frames[k], &hands[k], GARB_OPACITY, k, (unsigned)(k * 1000));
     }
     FAnimation an;
     memset(&an, 0, sizeof(an));
@@ -2634,9 +2820,10 @@ static void motion_dropped_cases(void)
     m.nanims = 1;
     bool ok;
     flow_timeline_t *tl = motion_meet(doc, x, &m, 0, &ok);
-    double moving = f_motion_next(&m, 100, NULL);
+    Hand *const by[1] = {hands};
+    double moving = layout_next(&m, 100, by);
     f_props_add(&an.dropped, GARB_OPACITY);
-    double dropped = f_motion_next(&m, 100, NULL);
+    double dropped = layout_next(&m, 100, by);
     char detail[64];
     snprintf(detail, sizeof(detail), "moving %g, dropped %g", moving, dropped);
     expect("motion: a dropped value is due for nothing", ok && moving == 100 && dropped == 1000, detail);
@@ -2648,7 +2835,7 @@ static void motion_dropped_cases(void)
     f_props_add(&an.props, GARB_BOX_SHADOW);
     f_props_add(&an.dropped, GARB_BOX_SHADOW);
     an.timing.iterations = INFINITY;
-    double nothing = f_motion_next(&m, 100, NULL);
+    double nothing = layout_next(&m, 100, by);
     snprintf(detail, sizeof(detail), "due %g", nothing);
     expect("motion: a dropped list with no side effect is due for nothing", isinf(nothing), detail);
     flow_timeline_free(tl);
@@ -2659,10 +2846,10 @@ static void motion_dropped_cases(void)
     // and its mix, half again as much, does not (calibrated from what one
     // element and the animated one cost, so the sizes may change). Its
     // value is left as the base has it, and it is due at its end.
-    size_t left0 = dropped_left(0, false), each = left0 - dropped_left(1, false);
+    size_t left0 = dropped_left(0, false, 64), each = left0 - dropped_left(1, false, 64);
     size_t animated = F_STYLE_LISTS_BUDGET - left0;
     int divs = each > 0 ? (int)((left0 + animated - animated * 7 / 10) / each) : 0;
-    char *html = dropped_page(divs, false);
+    char *html = dropped_page(divs, false, 64);
     Moving lm;
     moving_open(&lm, html, 1000);
     FStyles *fs = f_style_build(lm.p.doc, lm.p.page, &lm.p.env);
@@ -2670,8 +2857,8 @@ static void motion_dropped_cases(void)
     const FStyled *st = ln != NULL && fs != NULL ? f_style_of(fs, ln) : NULL;
     bool keyframes = st != NULL && st->motion != NULL && st->motion->nanims == 1 &&
                      st->motion->anims[0].nframes == 2 &&
-                     st->motion->anims[0].frames[0].style.ntransform == 64 &&
-                     st->motion->anims[0].frames[1].style.ntransform == 64;
+                     declared_items(&st->motion->anims[0].frames[0], GARB_TRANSFORM) == 64 &&
+                     declared_items(&st->motion->anims[0].frames[1], GARB_TRANSFORM) == 64;
     expect("motion: the page leaves room for the keyframes and none for their mix",
            keyframes && st->style.ntransform == 0, NULL);
     f_style_free(fs);
@@ -2684,21 +2871,46 @@ static void motion_dropped_cases(void)
     moving_close(&lm);
     free(html);
 
+    // No room for either keyframe's list where it is resolved, and room for
+    // the animation's own: the budget spent by elements whose lists are a
+    // quarter of a keyframe's, down to between a half and three quarters
+    // of one. The value is dropped as a mix with no room is — left as the
+    // base has it, and due at its end — never mixed against the element's
+    // own list in the keyframes' place, which here, an empty list mixed
+    // with itself, needs no room and would pass for a value.
+    size_t quarter = dropped_left(0, false, 16) - dropped_left(1, false, 16);
+    divs = quarter > 0 ? (int)((F_STYLE_LISTS_BUDGET - 2 * quarter) / quarter) : 0;
+    html = dropped_page(divs, false, 16);
+    moving_open(&lm, html, 1000);
+    fs = f_style_build(lm.p.doc, lm.p.page, &lm.p.env);
+    ln = motion_find(lm.p.doc->document, "long");
+    st = ln != NULL && fs != NULL ? f_style_of(fs, ln) : NULL;
+    expect("motion: a keyframe whose list finds no room leaves its value dropped",
+           st != NULL && st->motion != NULL && st->style.ntransform == 0 &&
+               f_props_has(&st->motion->anims[0].dropped, GARB_TRANSFORM), NULL);
+    f_style_free(fs);
+    uint64_t refused = flow_motion_due(lm.tree, (os64_gui_rect_t){0, 0, 800, 1000000}, (flow_point_t){0, 0});
+    snprintf(detail, sizeof(detail), "due %llu", (unsigned long long)refused);
+    expect("motion due: and it is due at its end", refused == 2000, detail);
+    moving_close(&lm);
+    free(html);
+
     // Two animations of one property, the earlier's mix one function and
     // the later's 64, with room left for the earlier's alone (calibrated
     // as above): the later's is dropped, and the earlier's, which the
     // style shows, moves — so the element is due now, not at the end.
-    left0 = dropped_left(0, true);
-    each = left0 - dropped_left(1, true);
+    left0 = dropped_left(0, true, 64);
+    each = left0 - dropped_left(1, true, 64);
     animated = F_STYLE_LISTS_BUDGET - left0;
     divs = each > 0 ? (int)((left0 + animated - animated * 7 / 10) / each) : 0;
-    html = dropped_page(divs, true);
+    html = dropped_page(divs, true, 64);
     moving_open(&lm, html, 1000);
     fs = f_style_build(lm.p.doc, lm.p.page, &lm.p.env);
     ln = motion_find(lm.p.doc->document, "long");
     st = ln != NULL && fs != NULL ? f_style_of(fs, ln) : NULL;
     bool split = st != NULL && st->motion != NULL && st->motion->nanims == 2 &&
-                 st->motion->anims[1].frames[0].style.ntransform == 64 && st->style.ntransform == 1 &&
+                 declared_items(&st->motion->anims[1].frames[0], GARB_TRANSFORM) == 64 &&
+                 st->style.ntransform == 1 &&
                  !f_props_has(&st->motion->anims[0].dropped, GARB_TRANSFORM) &&
                  f_props_has(&st->motion->anims[1].dropped, GARB_TRANSFORM);
     expect("motion: the page leaves room for the earlier animation's mix and none for the later's", split,
@@ -2711,10 +2923,8 @@ static void motion_dropped_cases(void)
     free(html);
 
     // The other way round: a 64-function list that stands still replaces a
-    // one-function list moving under it, and the tree shows it still. The
-    // probe of the next millisecond has no room for it, and the value its
-    // look leaves is the moving one's — which is not what is drawn, so
-    // nothing is due until the end.
+    // one-function list moving under it, and the tree shows it still: its
+    // two keyframes write one declaration, so nothing is due until the end.
     size_t cap = 64 * 17 * 2 + 1024, at = 0;
     html = malloc(cap);
     at += (size_t)snprintf(html + at, cap - at, MOTION_STYLE
@@ -2729,7 +2939,7 @@ static void motion_dropped_cases(void)
     moving_open(&lm, html, 1000);
     due = flow_motion_due(lm.tree, (os64_gui_rect_t){0, 0, 800, 600}, (flow_point_t){0, 0});
     snprintf(detail, sizeof(detail), "due %llu", (unsigned long long)due);
-    expect("motion due: a list past the probe's room is not asked about", due == 2000, detail);
+    expect("motion due: a still list over a moving one is due at its end", due == 2000, detail);
     moving_close(&lm);
     free(html);
 }
@@ -2774,109 +2984,6 @@ static void motion_held_time_cases(void)
            NULL);
     moving_close(&m);
 }
-
-// Two mixes of tails that draw alike in every square box and apart in any
-// other: rotate(90deg) translateX(50%) moves by half the width, and
-// translateY(50%) rotate(90deg) by half the height, the same way. An
-// interval between them moves in a 100 by 40 box, so it is due now, and
-// the value a millisecond on differs — where comparing what they draw in
-// square boxes held the interval still.
-static flow_transform_t motion_fn(flow_fn_t fn, double turn, flow_length_t x, flow_length_t y)
-{
-    flow_transform_t f;
-    memset(&f, 0, sizeof(f));
-    f.fn = fn;
-    f.a[2] = 1;
-    f.a[3] = turn;
-    f.x = x;
-    f.y = y;
-    f_transform_fn_matrix(&f);
-    return f;
-}
-
-static void motion_blend_structure_cases(void)
-{
-    os64_html_document_t *doc = parse("<!doctype html><p id=x>x</p>");
-    const os64_html_node_t *x = motion_find(doc->document, "x");
-    const flow_length_t zero = {FLOW_LENGTH_PX, 0, 0}, half = {FLOW_LENGTH_PERCENT, 50 * 64, 0};
-    flow_transform_t wide[2] = {motion_fn(FLOW_FN_ROTATE, 90, zero, zero),
-                                motion_fn(FLOW_FN_TRANSLATE, 0, half, zero)};
-    flow_transform_t tall[2] = {motion_fn(FLOW_FN_TRANSLATE, 0, zero, half),
-                                motion_fn(FLOW_FN_ROTATE, 90, zero, zero)};
-    flow_transform_t none[1] = {motion_fn(FLOW_FN_TRANSLATE, 0, zero, zero)};
-    flow_transform_blend_t bw = {wide, none, 2, 1, 0.5, 1}, bt = {tall, none, 2, 1, 0.5, 1};
-    flow_transform_t ends[2];
-    memset(ends, 0, sizeof(ends));
-    ends[0].fn = ends[1].fn = FLOW_FN_BLEND;
-    ends[0].blend = &bw;
-    ends[1].blend = &bt;
-    for (int k = 0; k < 2; k++) {
-        ends[k].x = ends[k].y = zero;
-        ends[k].m[0] = ends[k].m[5] = ends[k].m[10] = ends[k].m[15] = 1;
-    }
-    double sq0[16], sq1[16];
-    f_blend_matrix(&ends[0], 1000 * 64, 1000 * 64, sq0);
-    f_blend_matrix(&ends[1], 1000 * 64, 1000 * 64, sq1);
-    bool alike = memcmp(sq0, sq1, sizeof(sq0)) == 0;
-    f_blend_matrix(&ends[0], 100 * 64, 40 * 64, sq0);
-    f_blend_matrix(&ends[1], 100 * 64, 40 * 64, sq1);
-    expect("motion: the two blends draw alike in a square box and apart in another",
-           alike && memcmp(sq0, sq1, sizeof(sq0)) != 0, NULL);
-    flow_style_t base;
-    memset(&base, 0, sizeof(base));
-    base.opacity = 1000;
-    FKeyframe frames[2];
-    memset(frames, 0, sizeof(frames));
-    for (int k = 0; k < 2; k++) {
-        frames[k].offset = k;
-        frames[k].style = base;
-        frames[k].style.transform = &ends[k];
-        frames[k].style.ntransform = 1;
-        f_props_add(&frames[k].sets, GARB_TRANSFORM);
-    }
-    FAnimation an;
-    memset(&an, 0, sizeof(an));
-    an.timing.name = (flow_name_t){"b", 1};
-    an.timing.duration_ms = 1000;
-    an.timing.iterations = 1;
-    an.frames = frames;
-    an.nframes = 2;
-    f_props_add(&an.props, GARB_TRANSFORM);
-    FMotion m;
-    memset(&m, 0, sizeof(m));
-    m.base = base;
-    m.anims = &an;
-    m.nanims = 1;
-    bool ok;
-    flow_timeline_t *tl = motion_meet(doc, x, &m, 0, &ok);
-    double due = f_motion_next(&m, 500, NULL);
-    char detail[64];
-    snprintf(detail, sizeof(detail), "due %.17g", due);
-    expect("motion: blends compared by structure, not by square boxes, keep their interval due",
-           ok && due == 500, detail);
-    flow_timeline_free(tl);
-    // And one tail mixed at two fractions is two values.
-    flow_transform_blend_t early = {wide, none, 2, 1, 0.25, 1}, late = {wide, none, 2, 1, 0.75, 1};
-    ends[0].blend = &early;
-    ends[1].blend = &late;
-    tl = motion_meet(doc, x, &m, 0, &ok);
-    due = f_motion_next(&m, 500, NULL);
-    snprintf(detail, sizeof(detail), "due %.17g", due);
-    expect("motion: one tail at two fractions is two blends", ok && due == 500, detail);
-    flow_timeline_free(tl);
-    // And two blends that are one — the same tails, the same fraction —
-    // hold the interval still: due at its far end, 1000.
-    flow_transform_blend_t twin = bw;
-    ends[0].blend = &bw;
-    ends[1].blend = &twin;
-    tl = motion_meet(doc, x, &m, 0, &ok);
-    due = f_motion_next(&m, 500, NULL);
-    snprintf(detail, sizeof(detail), "due %.17g", due);
-    expect("motion: two blends that are one hold still", ok && due == 1000, detail);
-    flow_timeline_free(tl);
-    os64_html_document_free(doc);
-}
-
 
 // An incomplete layout styles the whole page and stops before laying it
 // all out, so what its styles no longer name is carried on: only a
@@ -2963,6 +3070,7 @@ static void motion_cases(void)
 {
     motion_easing_cases();
     motion_chrome_cases();
+    motion_sparse_cases();
     motion_cascade_cases();
     motion_effect_cases();
     motion_timeline_cases();
@@ -2971,6 +3079,5 @@ static void motion_cases(void)
     motion_list_case_cases();
     motion_dropped_cases();
     motion_held_time_cases();
-    motion_blend_structure_cases();
     motion_sweep();
 }

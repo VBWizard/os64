@@ -1597,14 +1597,34 @@ another while a record names it, and the hold goes with the record.
 **The style pass gives each animated element its value at `now`.** Where
 `style_element` has applied the author's winners and before `finish`
 resolves them, an element with animations keeps that specified state as
-its BASE and makes, for each keyframe, the state its declarations make
-laid over the base — every property but those an `!important` winner
-holds — each resolved by `finish` as the element's own style is: at its
-font, its parent, its `currentColor`, its zoom, and a relative `url()`
-against the sheet its `@keyframes` rule was written in, as a winner's is
-against its own (`garb_keyframe_t.sheet`). Each keyframe is then a
-computed style, and the implicit keyframes are what the animations before
-each one made of the base. The value of
+its BASE, and each keyframe keeps its declarations as written
+(`FKeyframe.decls`) and the longhands they set, but those an
+`!important` winner holds. A keyframe is RESOLVED where it is mixed
+(`keyframe_resolved`, the `FResolve` the style pass hands
+`f_motion_style`), its declarations laid over the base as the element's
+own are — at its parent, its zoom, and a relative `url()` against the
+sheet its `@keyframes` rule was written in, as a winner's is against its
+own (`garb_keyframe_t.sheet`) — and against what the animations make:
+font size and colour are mixed first, every animation's, each keyframe of
+theirs resolved against the parent; then every other keyframe is resolved
+against that font size and colour, so its `em`, `lh`, `calc()` and
+`currentColor` are of the values the animations are making, and a
+keyframe's own font size does not resolve its own `em`. The implicit
+keyframes are what the animations before each one made of the base, a
+computed value never resolved again: an element's rule `width: 10em` is
+10em of the font it has before any animation runs. (Chrome 155's
+answers, 10/15: `width: 10em` while another animation takes the font from
+10px to 30px is 200px halfway; one keyframe writing `font-size: 10px;
+width: 10em` mixed with `font-size: 30px; width: 100px` is 150px; the rule
+`width: 10em` under `to {width: 100px}` with the font animated is 100px;
+`line-height: 2em` is 40px; a border of `1em` 20px and none where its side
+is drawn as none; `translateX(1em)`, a shadow's `1em` and `calc(1em +
+10px)` 20, 20 and 30px; `currentColor` mixed with `rgb(0, 0, 200)` under a
+colour at `rgb(100, 0, 0)` is `rgb(50, 0, 100)`, a keyframe's or the value
+underneath alike.) A keyframe's list that finds no room in the lists'
+budget where it is resolved drops its property as a mix that finds none
+does (`FResolved.refused`), never mixing against the element's own list
+in its place. The value of
 each animated property at `now` is worked from those (§ What CSS asks:
 the clock, the value) and written into the element's style, and the derived
 facts are resolved from it once, from what every animation leaves
@@ -1739,16 +1759,17 @@ next frame is to the face — a step, a discrete flip, visibility and a
 transform whose matrices cannot be undone (drawn as the first and then
 the second, `f_blend_matrix`) among them, none worked out ahead. One
 value at both ends of an interval holds still, however its keyframes are
-written and whatever its easing, so only the interval's far end is due —
-unless an end is implicit and rests on a value the schedule's walk could
-not make (it makes no lists), when the two ends are equal only at that
-instant and the interval moves. One resting on a value an animation
+written and whatever its easing, so only the interval's far end is due.
+Which intervals hold is what the layout found: its walk resolves both
+ends to mix them, and records each interval whose two ends are one value
+(`FAnimation.holds`, an implicit end the value underneath), which the
+schedule reads at the layout's time — the only time the face asks it; at
+any other, nothing holds, which is early. What a held interval is
+resolved against moves only by an animation of its own, due for itself,
+or by a layout, which records again. One resting on a value an animation
 before it moves needs no rule of its own: that animation shows the
 property and is due now, unless a later interval between two keyframes
-of its own replaces the value, and the motion with it. Two mixes of
-tails are one value when they are one by structure — the same fraction
-between the same tails — never by what they draw in some boxes, which no
-set of boxes decides. Nor is one due
+of its own replaces the value, and the motion with it. Nor is one due
 that is not drawn moving: a property a later animation in effect
 replaces, whatever the earlier one does to it — an animation whose list
 for it found no room in the layout's budget replaces nothing and is due
@@ -1848,8 +1869,9 @@ style and no other.
 **A tick is the style pass's arithmetic, again.**
 `flow_motion_tick(tree, now, view, damage, ctx)` works each in-place
 animated value at `now` with the function the style pass works it with,
-from the keyframe styles the layout made — the tree keeps them — and
-writes it into the element's style. What the layout derived from those
+its keyframes resolved as the style pass resolves them — so the tree
+keeps their declarations and what they are resolved against, the base and
+the parent — and writes it into the element's style. What the layout derived from those
 fields is made again:
 
 - the transform frame from its matrix: `f_transform_matrix` with the
@@ -2017,12 +2039,10 @@ the perf slice.
 | Animations on `::before` and `::after` | yonder generates no content for them at all | the slice that does |
 | Inherited properties in place — `color`, `visibility`, `text-shadow`, the fill | they move by layouts, whose cost is ruled (S8a, the face); in place they would need every inheriting descendant's style rewritten | a page whose inherited animation costs too much in layouts |
 | A page's scrollable extent following a transform's frames | the extent is the layout's | a page scrolled to where an animation carried something |
-| A keyframe's `em` while `font-size` animates | its keyframes are computed at the layout's font | a page that animates both |
 | The rest of Compat § 3.4.1's drawn rows (`-webkit-box-shadow`, `-webkit-border-radius` and the others) | not animation's | a page that writes only the prefixed name |
 | `linear()` easing (Easing 2) | no page in the census writes it | a page that does |
 | An animation that moves its element rests out of view | it may carry what it draws into view from anywhere, so S8a keeps it due wherever it is; a bound on where its frames can reach — a spinner turns inside its own circle — would let it rest | S8b, where such a tick is arithmetic and a repaint, or a page whose spinners out of view cost what the P5 notices |
 | A `rotate3d()` axis of tiny parts turns about its direction, where Chrome 155 draws one of 1e-160 or 1e-200 as no turn (and turns at 1e-15) — likely its float storage of the axis; no test holds either answer (#270's full mutant run: `a-huge-axis-overflows`) | an input no page writes | a page that does, or a look at Chrome's threshold |
-| Finished-keyframe mixing: each keyframe is a whole computed style, the base with its declarations laid over it (`FKeyframe.style`), and an implicit keyframe the whole style underneath | the cure is the simplification: sparse keyframes, each only the longhands it sets, the rest read from underneath where they are mixed — less built per keyframe, and one meaning for an implicit keyframe. It touches the most semantics (`currentColor`, `em`, a width settled with its style) and wants its own Chrome probes | Ruled (Chris, 10/14): the last of the four, from a design note with Chrome's answers written before its code |
 
 ### Proof
 
@@ -2067,8 +2087,7 @@ keeping the page's, three thousand names matched;
 each due time — a step, a flip and visibility at the frame rate while
 they run, two equal ends held to their far end through any easing, resting
 on a moving value and on a still one, two ends of an animation's own
-replacing a moving value and an unmade one, and two mixes of tails told
-apart by structure where every square box draws them alike — an inline
+replacing a moving value and an unmade one — an inline
 element's later pieces, lists the budget had no room for — under another animation's
 and over it — a fuzzer case remade of transform lists, an animation resting on
 a moving one's value, and the canvas's background with its owner's box
@@ -2078,7 +2097,14 @@ only through a box drawn outside it not asked for, unless every element
 between inherits them by keyword, a keyframe's among them, or the
 background is cut to the text that box holds — not one a fixed box or
 one inside an absolute box shows; implicit keyframes against
-Chrome's values over another animation; THE SCHEDULE AGAINST THE VALUE — thousands of animations
+Chrome's values over another animation; keyframes resolved where they are
+mixed against Chrome's answers of 10/15 — `em` of the animated
+font in a width, a line height, a border, a translation, a shadow and a
+`calc()`, a keyframe's own font size not its own `em`'s, the value
+underneath never resolved again, `inherit` and a child's `em` of an
+animated parent, `currentColor` of the animated colour on both sides of a
+mix — and a keyframe's list with no room where it is resolved dropping
+its value; THE SCHEDULE AGAINST THE VALUE — thousands of animations
 made at random (one to five keyframes at any offsets, several at one,
 two animations of a property, every easing to the domain's limits,
 every direction and fill, and a quarter as many again begun the

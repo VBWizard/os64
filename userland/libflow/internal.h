@@ -231,15 +231,19 @@ static inline void f_props_remove(FProps *p, garb_prop_t prop)
 // while it is paused, the time it holds (motion.c).
 typedef struct FRecord FRecord;
 
-// One keyframe, computed: its offset; its own easing, or none and the
-// animation's; the element's style with the keyframe's declarations laid
-// over it, every property but those an `!important` winner holds; and the
-// longhands it sets.
+// One keyframe: its offset; its own easing, or none and the animation's;
+// its declarations as written (in the cascade, or the styles' arena where
+// keyframes at one offset were joined), and the sheet they were written in,
+// which a url() is read against; and the longhands it sets, every one but
+// those an `!important` winner holds. Its style is resolved where it is
+// mixed, against the values the animations make (FResolve).
 typedef struct {
     double offset;
     bool has_easing;
     flow_easing_t easing;
-    flow_style_t style;
+    const garb_set_t *decls;
+    int32_t ndecls;
+    int32_t sheet;
     FProps sets;
 } FKeyframe;
 
@@ -249,6 +253,10 @@ typedef struct {
 // (f_motion_style), each left as it was — the base's, or an earlier
 // animation's, which the tree shows — so nothing is due for this one's
 // motion of them (f_motion_next) until a later layout finds room.
+// `holds`: those whose interval at this layout's time has two ends of one
+// value, an implicit end the value underneath, both resolved as they are
+// mixed (f_motion_style) — what moves them, a font size, a colour, a
+// parent, a value underneath, is an animation of its own, due for itself.
 typedef struct {
     flow_animation_t timing;
     FRecord *record;
@@ -256,6 +264,7 @@ typedef struct {
     int32_t nframes;
     FProps props;
     FProps dropped;
+    FProps holds;
 } FAnimation;
 
 // An element's animations: its style with none of them (each property's
@@ -273,6 +282,18 @@ typedef struct {
 // What the lists an animated value makes come from — a transform's, the
 // shadows', a background's positions: NULL when none is left.
 typedef void *(*FAlloc)(void *ctx, size_t bytes);
+// A keyframe resolved (FResolve): its style, and the longhands whose lists
+// found no room in the lists' budget, which its mix leaves as they were.
+typedef struct {
+    flow_style_t style;
+    FProps refused;
+} FResolved;
+// Animation `a`'s keyframe `frame` resolved: its declarations laid over
+// the element's own, against the parent when `over` is NULL — for the
+// font size and the colour, which are worked out first — and otherwise
+// against `over`'s font size and colour, which every animation has made by
+// then. It lasts as long as the look it is asked for; NULL on no memory.
+typedef const FResolved *(*FResolve)(void *ctx, int32_t a, int32_t frame, const flow_style_t *over);
 
 // The `i`th animation `s` names, its lists coordinated (flow_animation_t).
 int32_t f_animations(const flow_style_t *s);
@@ -280,13 +301,16 @@ flow_animation_t f_animation_at(const flow_style_t *s, int32_t i);
 // Easing 1 § 2's output for the input `x`, the before flag `before`.
 double f_ease(const flow_easing_t *e, double x, bool before);
 // The element's style at time `now` (ms): `out`, which holds the base,
-// with each animated property's value — false when a list found no room,
+// with each animated property's value — and, when `record`, which of its
+// intervals hold one value (FAnimation.holds) — its keyframes resolved by
+// `resolve` — false when a list found no room, a keyframe's or the mix's,
 // and that property is left as it was, named in `failed` when it is given
-// and, when `record`, in its animation's `dropped`. What an animation
-// dropped is left as it was at every time asked, as the layout that
-// dropped it left it.
-bool f_motion_style(const FMotion *m, double now, flow_style_t *out, FAlloc alloc, void *ctx,
-                    FProps *failed, bool record);
+// and, when `record`, in its animation's `dropped`; false too when a
+// keyframe found no memory to be resolved, which is the caller's to know. What an animation dropped is
+// left as it was at every time asked, as the layout that dropped it left
+// it.
+bool f_motion_style(const FMotion *m, double now, flow_style_t *out, FAlloc alloc, FResolve resolve,
+                    void *ctx, FProps *failed, bool record);
 // Of FLOW_WILL_*, what an animation that is current or in effect at `now`
 // animates (Web Animations 1 § 5.6).
 uint8_t f_motion_effects(const FMotion *m, double now);
@@ -301,7 +325,9 @@ bool f_motion_in_place(const FMotion *m);
 // names (NULL for all): `now` itself while an animation that can show is
 // in its active phase and what it shows moves, a step or a discrete flip
 // among them; the far end of an interval whose two ends hold one value; a
-// phase's edge; INFINITY for none. Early is allowed, late never.
+// phase's edge; INFINITY for none. Early is allowed, late never. Which
+// intervals hold is what the layout at `now` found (FAnimation.holds): at
+// another time, none does, and that is early.
 double f_motion_next(const FMotion *m, double now, const FProps *only);
 // A layout's dealings with the timeline: it begins a timeline of its own
 // beside the one the page shows (`from`, read and never changed; NULL on

@@ -1061,15 +1061,6 @@ static uint32_t mix_colour(uint32_t a, uint32_t b, double t)
     return (uint32_t)ta << 24 | r;
 }
 
-// A colour field's end as it is mixed: in currentColor, the colour the
-// element has once every animation is laid over (`d`'s, composed first —
-// CSS Color 4 § 12 mixes currentColor's used value), whatever the keyframe
-// worked it out as; else its own.
-static uint32_t used_colour(const flow_style_t *s, uint8_t bit, uint32_t own, const flow_style_t *d)
-{
-    return (s->current_colours & bit) && d != NULL ? d->color : own;
-}
-
 // A colour field's currentColor mark, mixed: currentColor when both ends
 // are — so it follows the element's colour as that colour moves, whatever
 // the element's own field is (f_motion_style resolves it) — and the mixed
@@ -1757,15 +1748,12 @@ static bool mix_prop(garb_prop_t p, const flow_style_t *a, const flow_style_t *b
         d->color = mix_colour(a->color, b->color, t);
         return true;
     case GARB_TEXT_FILL_COLOR:
-        d->fill = mix_colour(used_colour(a, FLOW_CURRENT_FILL, a->fill, d),
-                             used_colour(b, FLOW_CURRENT_FILL, b->fill, d), t);
+        d->fill = mix_colour(a->fill, b->fill, t);
         hand_current(d, a, b, FLOW_CURRENT_FILL);
         return true;
     case GARB_BACKGROUND_COLOR: {
-        uint32_t ca = used_colour(a, FLOW_CURRENT_BACKGROUND,
-                                  a->has_background ? a->background : 0xFF000000u, d);
-        uint32_t cb = used_colour(b, FLOW_CURRENT_BACKGROUND,
-                                  b->has_background ? b->background : 0xFF000000u, d);
+        uint32_t ca = a->has_background ? a->background : 0xFF000000u;
+        uint32_t cb = b->has_background ? b->background : 0xFF000000u;
         d->background = mix_colour(ca, cb, t);
         d->has_background = flow_alpha(d->background) > 0;
         hand_current(d, a, b, FLOW_CURRENT_BACKGROUND);
@@ -1774,8 +1762,7 @@ static bool mix_prop(garb_prop_t p, const flow_style_t *a, const flow_style_t *b
     case GARB_BORDER_TOP_COLOR: case GARB_BORDER_RIGHT_COLOR: case GARB_BORDER_BOTTOM_COLOR:
     case GARB_BORDER_LEFT_COLOR:
         i = p - GARB_BORDER_TOP_COLOR;
-        d->border_color[i] = mix_colour(used_colour(a, FLOW_CURRENT_BORDER(i), a->border_color[i], d),
-                                        used_colour(b, FLOW_CURRENT_BORDER(i), b->border_color[i], d), t);
+        d->border_color[i] = mix_colour(a->border_color[i], b->border_color[i], t);
         hand_current(d, a, b, FLOW_CURRENT_BORDER(i));
         return true;
     case GARB_BACKGROUND_POSITION_X: case GARB_BACKGROUND_POSITION_Y: {
@@ -1955,13 +1942,15 @@ static bool mix_prop(garb_prop_t p, const flow_style_t *a, const flow_style_t *b
 
 // ── An animation's value (Web Animations 1 § 5.3.4) ─────────────────────
 
-// A keyframe as one property sees it: its style, offset and easing, and
-// whether it is implicit — the value underneath, not the animation's own.
+// A keyframe as one property sees it: its offset and easing, and whether
+// it is implicit — the value underneath, `style` — or the animation's own,
+// its `frame`th, whose style is resolved where it is mixed (motion_walk).
 typedef struct {
     const flow_style_t *style;
     double offset;
     const flow_easing_t *easing;
     bool implicit;
+    int32_t frame;
 } Frame;
 
 // The frames property `p` is worked between: the implicit first at 0,
@@ -1986,15 +1975,15 @@ static Frame line_frame(const Line *l, int32_t i)
     const flow_easing_t *own = &l->an->timing.easing;
     if (!l->at0) {
         if (i == 0)
-            return (Frame){l->under, 0, own, true};
+            return (Frame){l->under, 0, own, true, -1};
         i--;
     }
     for (int32_t j = 0; j < l->an->nframes; j++) {
         const FKeyframe *f = &l->an->frames[j];
         if (f_props_has(&f->sets, l->p) && i-- == 0)
-            return (Frame){&f->style, f->offset, f->has_easing ? &f->easing : own, false};
+            return (Frame){NULL, f->offset, f->has_easing ? &f->easing : own, false, j};
     }
-    return (Frame){l->under, 1, own, true};
+    return (Frame){l->under, 1, own, true, -1};
 }
 
 // The two frames of the line around `progress`, as Web Animations 1
@@ -2054,33 +2043,61 @@ static double eased(const Frame *start, const Frame *end, double progress, bool 
 }
 
 // The look a walk (motion_walk) makes: its time, the style the values are
-// laid over — which holds the base — where its lists come from, and the
-// properties whose lists found no room.
+// laid over — which holds the base — where its lists come from, how its
+// keyframes are resolved, and the properties whose lists found no room.
 typedef struct {
     double now;
     flow_style_t *out;
     FAlloc alloc;
+    FResolve resolve;
     void *ctx;
     FProps *failed;
 } Look;
 
-// What a walk hands its step before each value is mixed, where the
-// animation is in effect: the animation, the property, its clock and the
-// frames around its progress. False from the step ends the walk.
-typedef bool (*Step)(void *ctx, int32_t a, garb_prop_t p, const Clock *k, const Frame *s, const Frame *e);
+// The longhands the element's other values are resolved against: worked
+// out first, every animation's, as an element's own declarations are.
+static bool resolved_first(garb_prop_t p)
+{
+    return p == GARB_COLOR || p == GARB_FONT_SIZE;
+}
 
-// The animations' values laid over the look's style at its time — `step`,
-// when given, told of each before it is mixed. `color` first, every
-// animation's, so a currentColor anything else mixes is the colour the
-// element ends with (CSS Color 4 § 12, its used value); then the rest; and
-// a side's width after its style, which brings a width of its own. Each
-// animation's implicit frames are what the ones before it made, held still
-// while it mixes over the look's style.
-static bool motion_walk(const FMotion *m, Look *look, bool record, Step step, void *sctx)
+// What follows the colour, worked from the style `out` holds: every field
+// in currentColor.
+static void follow_colour(flow_style_t *out)
+{
+    for (int i = 0; i < 4; i++)
+        if (out->current_colours & FLOW_CURRENT_BORDER(i))
+            out->border_color[i] = out->color;
+    if (out->current_colours & FLOW_CURRENT_BACKGROUND) {
+        out->has_background = flow_alpha(out->color) > 0;
+        out->background = out->color;
+    }
+    if (out->current_colours & FLOW_CURRENT_FILL)
+        out->fill = out->color;
+}
+
+// The animations' values laid over the look's style at its time. Font
+// size and colour first, every animation's (resolved_first), each
+// keyframe of theirs resolved against the parent as the element's own
+// are; then what is in currentColor follows the colour; then the rest,
+// each keyframe resolved against that font size and colour, so its `em`,
+// `calc()` and currentColor are of the values the animations make (Chrome,
+// 10/15: `width: 10em` while another animation takes the font from 10px
+// to 30px is 200px halfway, and a keyframe's own font size does not
+// resolve its own `em`); and a side's width after its style, which brings
+// a width of its own. Each animation's implicit frames are what the ones
+// before it made, held still while it mixes over the look's style, and
+// never resolved again. When `record`, each interval whose two ends are
+// one value is recorded for the schedule (FAnimation.holds).
+static bool motion_walk(const FMotion *m, Look *look, bool record)
 {
     bool ok = true;
     flow_style_t under;
-    for (int pass = 0; pass < 3; pass++)
+    for (int32_t a = 0; record && a < m->nanims; a++)
+        os64_memset(&m->anims[a].holds, 0, sizeof(m->anims[a].holds));
+    for (int pass = 0; pass < 3; pass++) {
+        if (pass == 1)
+            follow_colour(look->out);
         for (int32_t a = 0; a < m->nanims; a++) {
             const FAnimation *an = &m->anims[a];
             if (an->record == NULL)
@@ -2091,7 +2108,7 @@ static bool motion_walk(const FMotion *m, Look *look, bool record, Step step, vo
             bool held = false;
             for (int p = 0; p < GARB_NPROPS; p++) {
                 bool width = p >= GARB_BORDER_TOP_WIDTH && p <= GARB_BORDER_LEFT_WIDTH;
-                int at = p == GARB_COLOR ? 0 : width ? 2 : 1;
+                int at = resolved_first((garb_prop_t)p) ? 0 : width ? 2 : 1;
                 if (at != pass || !f_props_has(&an->props, (garb_prop_t)p) || !animatable((garb_prop_t)p) ||
                     f_props_has(&an->dropped, (garb_prop_t)p))
                     continue;
@@ -2101,18 +2118,34 @@ static bool motion_walk(const FMotion *m, Look *look, bool record, Step step, vo
                 }
                 Frame s, e;
                 interval(an, &under, (garb_prop_t)p, k.progress, &s, &e);
-                if (step != NULL && !step(sctx, a, (garb_prop_t)p, &k, &s, &e))
-                    return ok;
-                if (mix_prop((garb_prop_t)p, s.style, e.style, eased(&s, &e, k.progress, k.before),
+                // A keyframe resolved with no memory leaves the property as
+                // it was, and the walk's caller knows; one whose list found
+                // no room is dropped, as a mix that finds none is.
+                const flow_style_t *over = pass == 0 ? NULL : look->out;
+                bool room = true;
+                for (int end = 0; end < 2; end++) {
+                    Frame *f = end == 0 ? &s : &e;
+                    if (f->implicit)
+                        continue;
+                    const FResolved *r = look->resolve(look->ctx, a, f->frame, over);
+                    f->style = r != NULL ? &r->style : NULL;
+                    room = room && (r == NULL || !f_props_has(&r->refused, (garb_prop_t)p));
+                }
+                bool resolved = s.style != NULL && e.style != NULL;
+                if (record && resolved && same_value((garb_prop_t)p, s.style, e.style))
+                    f_props_add(&m->anims[a].holds, (garb_prop_t)p);
+                if (resolved && room &&
+                    mix_prop((garb_prop_t)p, s.style, e.style, eased(&s, &e, k.progress, k.before),
                              look->out, look->alloc, look->ctx))
                     continue;
                 ok = false;
                 if (look->failed != NULL)
                     f_props_add(look->failed, (garb_prop_t)p);
-                if (record)
+                if (record && resolved)
                     f_props_add(&m->anims[a].dropped, (garb_prop_t)p);
             }
         }
+    }
     return ok;
 }
 
@@ -2121,25 +2154,17 @@ static bool motion_walk(const FMotion *m, Look *look, bool record, Step step, vo
 // drawn as none or hidden has no width (Backgrounds 3 § 4.3).
 static void motion_settle(flow_style_t *out)
 {
-    for (int i = 0; i < 4; i++) {
-        if (out->current_colours & FLOW_CURRENT_BORDER(i))
-            out->border_color[i] = out->color;
+    follow_colour(out);
+    for (int i = 0; i < 4; i++)
         if (out->border_style[i] == FLOW_BORDER_NONE || out->border_style[i] == FLOW_BORDER_HIDDEN)
             out->border_width[i] = 0;
-    }
-    if (out->current_colours & FLOW_CURRENT_BACKGROUND) {
-        out->has_background = flow_alpha(out->color) > 0;
-        out->background = out->color;
-    }
-    if (out->current_colours & FLOW_CURRENT_FILL)
-        out->fill = out->color;
 }
 
-bool f_motion_style(const FMotion *m, double now, flow_style_t *out, FAlloc alloc, void *ctx,
-                    FProps *failed, bool record)
+bool f_motion_style(const FMotion *m, double now, flow_style_t *out, FAlloc alloc, FResolve resolve,
+                    void *ctx, FProps *failed, bool record)
 {
-    Look look = {now, out, alloc, ctx, failed};
-    bool ok = motion_walk(m, &look, record, NULL, NULL);
+    Look look = {now, out, alloc, resolve, ctx, failed};
+    bool ok = motion_walk(m, &look, record);
     motion_settle(out);
     return ok;
 }
@@ -2253,63 +2278,6 @@ static bool anim_shows(const FAnimation *an, int32_t a, const int32_t last[GARB_
     return false;
 }
 
-// The schedule's walk makes no lists: one it would mix is left unknown.
-static void *no_lists(void *ctx, size_t bytes)
-{
-    (void)ctx;
-    (void)bytes;
-    return NULL;
-}
-
-// What the schedule's walk (f_motion_next) keeps: the element, the time,
-// the properties asked for (`only`, NULL for all), when their value next
-// changes, which animation shows each property (`last`), and the properties
-// of the value the walk has made so far whose lists it had no room for (it
-// makes none: a list is left unknown) — over one, the value under a later
-// animation is not known to hold.
-typedef struct {
-    const FMotion *m;
-    double now, next;
-    const FProps *only;
-    const int32_t *last;
-    FProps failed;
-} Due;
-
-// When what animation `a` shows of `p` next changes, the frames around its
-// progress `s` and `e`. One value at both ends holds still, whatever the
-// easing, and is due at the interval's far end; anything else, while its
-// animation runs, is due now. An implicit end rests on the value the
-// animations before made: where the walk could not make it, the two ends
-// are equal only at this instant, and the interval moves. One resting on a
-// value an earlier animation moves needs nothing more: that one shows the
-// property, and is due now, unless a later interval between two keyframes
-// of its own replaces the value — and the motion with it. Two ends of its
-// own rest on nothing the walk could not make: the value is this one's,
-// and its own mix marks it again if that finds no room either.
-static bool due_step(void *ctx, int32_t a, garb_prop_t p, const Clock *k, const Frame *s, const Frame *e)
-{
-    Due *d = ctx;
-    if (d->next <= d->now)
-        return false;
-    if (d->only != NULL && !f_props_has(d->only, p))
-        return true;
-    const FAnimation *an = &d->m->anims[a];
-    bool active = k->phase == PHASE_ACTIVE && !an->record->paused;
-    bool own = !s->implicit && !e->implicit;
-    bool still = (own || !f_props_has(&d->failed, p)) && same_value(p, s->style, e->style);
-    if (own)
-        f_props_remove(&d->failed, p);
-    if (!active || d->last[p] > a)
-        return true;
-    if (!still) {
-        d->next = d->now;
-        return false;
-    }
-    d->next = fmin(d->next, edge_due(k, &an->timing, an->record->start,
-                                     k->forwards ? e->offset : s->offset, d->now));
-    return true;
-}
-
 double f_motion_next(const FMotion *m, double now, const FProps *only)
 {
     // Of the animations in effect now, the last to set each property with a
@@ -2334,7 +2302,7 @@ double f_motion_next(const FMotion *m, double now, const FProps *only)
                 f_props_has(&an->dropped, (garb_prop_t)p))
                 continue;
             Frame s, e;
-            interval(an, &m->base, (garb_prop_t)p, k.progress, &s, &e);
+            interval(an, NULL, (garb_prop_t)p, k.progress, &s, &e);
             if (!s.implicit && !e.implicit)
                 last[p] = a;
         }
@@ -2359,14 +2327,28 @@ double f_motion_next(const FMotion *m, double now, const FProps *only)
         if (dur > 0 && isfinite(k.iteration_start))
             next = fmin(next, change_due(base + k.iteration_start + dur, now));
     }
-    // And what each shows in its active phase, walked as the value is, so
-    // that each sees the value the ones before it made.
-    if (next > now) {
-        Due d = {m, now, next, only, last, {{0}}};
-        flow_style_t walked = m->base;
-        Look look = {now, &walked, no_lists, NULL, &d.failed};
-        (void)motion_walk(m, &look, false, due_step, &d);
-        next = d.next;
+    // And what each shows in its active phase: an interval that holds one
+    // value (FAnimation.holds) at its far end, whatever its easing;
+    // anything else now.
+    for (int32_t a = 0; a < m->nanims && next > now; a++) {
+        const FAnimation *an = &m->anims[a];
+        if (an->record == NULL || an->record->paused)
+            continue;
+        Clock k = clock_at(&an->timing, local_time(an->record, now));
+        if (k.phase != PHASE_ACTIVE)
+            continue;
+        for (int p = 0; p < GARB_NPROPS && next > now; p++) {
+            if (!f_props_has(&an->props, (garb_prop_t)p) || !animatable((garb_prop_t)p) ||
+                f_props_has(&an->dropped, (garb_prop_t)p) || last[p] > a ||
+                (only != NULL && !f_props_has(only, (garb_prop_t)p)))
+                continue;
+            Frame s, e;
+            interval(an, NULL, (garb_prop_t)p, k.progress, &s, &e);
+            next = f_props_has(&an->holds, (garb_prop_t)p)
+                       ? fmin(next, edge_due(&k, &an->timing, an->record->start,
+                                             k.forwards ? e.offset : s.offset, now))
+                       : now;
+        }
     }
     return next;
 }
