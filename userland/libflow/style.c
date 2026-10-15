@@ -3768,8 +3768,9 @@ static void unsettled(flow_style_t *s, const flow_style_t *specified)
 
 // Animation `a`'s keyframe `j` resolved (FResolve): its declarations laid
 // over the element's own, as the author's are, but where an `!important`
-// winner holds — the walk never mixes those (animate), and laid they
-// would only spend the lists' budget on nothing — then finished, each side keeping its own width, and its
+// winner holds — the walk never mixes those (animate) — and only those its
+// pass mixes (the font size and colour without `over`, the rest with it);
+// then finished, each side keeping its own width, and its
 // display, float and overflow as it left them (unsettled); and the
 // longhands whose lists found no room. Against `over`, the font size and
 // colour every animation made are the element's, and the keyframe's own
@@ -3782,6 +3783,9 @@ static const FResolved *keyframe_resolved(void *ctx, int32_t a, int32_t j, const
     const FResolved **slot = &x->resolved[2 * (x->first[a] + j) + (over != NULL)];
     if (*slot != NULL)
         return *slot;
+    // Each resolution lays only what its pass mixes, and what an
+    // `!important` winner holds never: anything else would spend the lists'
+    // budget on a value nobody reads.
     Spec k = *x->sp;
     FProps skip = x->important;
     if (over != NULL) {
@@ -3790,6 +3794,11 @@ static const FResolved *keyframe_resolved(void *ctx, int32_t a, int32_t j, const
         k.s.color = over->color;
         f_props_add(&skip, GARB_FONT_SIZE);
         f_props_add(&skip, GARB_COLOR);
+    } else {
+        for (int w = 0; w < F_PROP_WORDS; w++)
+            skip.w[w] = ~(uint64_t)0;
+        f_props_remove(&skip, GARB_FONT_SIZE);
+        f_props_remove(&skip, GARB_COLOR);
     }
     FResolved *r = f_arena_alloc(&x->c->out->arena, sizeof(*r));
     if (r == NULL) {

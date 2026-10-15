@@ -2821,6 +2821,18 @@ static void motion_important_budget_cases(void)
              "#e{transform:translateX(1px) !important;animation:k 1s linear}</style><div id=e></div>");
     expect_i64("motion: a keyframe's list an important winner holds costs the budget nothing",
                (int64_t)lists_left_of(held), (int64_t)lists_left_of(none));
+    // And a keyframe setting the colour is resolved once more, for the
+    // colour alone: its transform list is built once, as one setting no
+    // colour builds it.
+    char coloured[4096], plain[4096];
+    snprintf(coloured, sizeof(coloured), MOTION_STYLE
+             "@keyframes k{from{color:red;transform:%s}to{color:blue;transform:%s}}"
+             "#e{animation:k 1s linear}</style><div id=e></div>", list, list);
+    snprintf(plain, sizeof(plain), MOTION_STYLE
+             "@keyframes k{from{transform:%s}to{transform:%s}}"
+             "#e{animation:k 1s linear}</style><div id=e></div>", list, list);
+    expect_i64("motion: the colour's resolution builds no list the colour does not read",
+               (int64_t)lists_left_of(coloured), (int64_t)lists_left_of(plain));
 }
 
 static void motion_dropped_cases(void)
