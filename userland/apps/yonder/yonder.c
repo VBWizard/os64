@@ -4685,11 +4685,16 @@ static bool paint_lines(DiagText *t, DiagText *u)
     dt_put(t, "; %lu script tasks: %lu scripts, %lu timers", (unsigned long)(s_cost.scripts + s_cost.timers),
            (unsigned long)s_cost.scripts, (unsigned long)s_cost.timers);
 
+    // The ticker's counts are its own: none once it has stopped, on the
+    // way out, or when it never started.
     yonder_ticker_counts_t ticker = yonder_ticker_counts(g.ticker);
-    dt_put(t, "; %lu bells, the ticker woke %lu times, rang at most %lu ms late, slept at most %lu ms past "
-           "its time; deadlines already past when handed to it:",
-           (unsigned long)s_cost.bells, (unsigned long)ticker.wakes, (unsigned long)ticker.rang_late_most,
-           (unsigned long)ticker.overslept_most);
+    if (g.ticker != NULL)
+        dt_put(t, "; %lu bells, the ticker woke %lu times, rang at most %lu ms late, slept at most %lu ms "
+               "past its time", (unsigned long)s_cost.bells, (unsigned long)ticker.wakes,
+               (unsigned long)ticker.rang_late_most, (unsigned long)ticker.overslept_most);
+    else
+        dt_put(t, "; %lu bells, the ticker not running", (unsigned long)s_cost.bells);
+    dt_put(t, "; deadlines already past when handed to it:");
     for (int32_t i = 0; i < PAST_COUNT; i++)
         dt_put(t, "%s %s %lu", i ? "," : "", kPastDeadline[i], (unsigned long)s_cost.past[i]);
     // Tenths of a millisecond: cycles / (rate per microsecond x 100).
@@ -9699,6 +9704,7 @@ int main(int argc, char **argv)
     // nothing after this should.
     yonder_settings_close();
     yonder_ticker_stop(g.ticker);
+    g.ticker = NULL;                    // the page's record, written after, reads its counts
     // The workers next: destroy cancels them — a fetch and a question
     // alike hear the pool's own predicate — and joins them, and releases
     // what they held, before anything they could touch goes away.
