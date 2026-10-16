@@ -1629,17 +1629,18 @@ static void diag_cascade(yonder_diag_t *d, const garb_cascade_t *c)
 // whole walk — the root panel and the chrome as well as the view — and
 // VIEW the page's part of it; the rest are inside VIEW but for PUBLISH,
 // handing the damage to the compositor. TICKS is a tick's work before its
-// paint, and SCHEDULE handing the ticker its next deadline
-// (pictures_schedule), counted a call — a tick's own schedule is in its
-// time as well as here.
+// paint, SCHEDULE handing the ticker its next deadline (pictures_schedule),
+// counted a call — a tick's own schedule is in its time as well as here —
+// and TASKS the shown page's script tasks, a script or a timer each, with
+// what they ask of the page after (script_turn), counted a task.
 typedef enum {
     PS_RENDER, PS_VIEW, PS_BACKGROUNDS, PS_PICTURES, PS_TEXT, PS_GROUPS, PS_SHADOWS, PS_GRADIENTS,
-    PS_WARPS, PS_PUBLISH, PS_TICKS, PS_SCHEDULE, PS_COUNT
+    PS_WARPS, PS_PUBLISH, PS_TICKS, PS_SCHEDULE, PS_TASKS, PS_COUNT
 } PaintStage;
 
 static const char *const kPaintStage[PS_COUNT] = {
     "render", "view", "backgrounds", "pictures", "text", "groups", "shadows", "gradients",
-    "warps", "publish", "ticks", "schedule",
+    "warps", "publish", "ticks", "schedule", "tasks",
 };
 
 // The deadlines a schedule hands the ticker, by where the next came from:
@@ -1664,7 +1665,7 @@ static const char *const kPastDeadline[PAST_COUNT] = {
 static struct {
     uint64_t now[PS_COUNT], total[PS_COUNT], most[PS_COUNT], began[PS_COUNT];
     uint32_t depth[PS_COUNT];
-    uint64_t paints, whole, pixels, ticks, schedules, waited;
+    uint64_t paints, whole, pixels, ticks, schedules, waited, scripts, timers;
     uint64_t bells, past[PAST_COUNT];       // the ticker's rings; deadlines handed it already past
     uint64_t from_wakes;                    // the ticker's looks when the counts began
     uint64_t from_cycles;
@@ -4655,6 +4656,8 @@ static bool paint_lines(DiagText *t, DiagText *u)
            (unsigned long)s_cost.whole, (unsigned long)(s_cost.pixels / 1000000),
            (unsigned long)(s_cost.pixels / 100000 % 10), (unsigned long)s_cost.ticks,
            (unsigned long)s_cost.schedules, (unsigned long)busy);
+    dt_put(t, "; %lu script tasks: %lu scripts, %lu timers", (unsigned long)(s_cost.scripts + s_cost.timers),
+           (unsigned long)s_cost.scripts, (unsigned long)s_cost.timers);
     dt_put(t, "; %lu bells, the ticker woke %lu times; deadlines already past when handed to it:",
            (unsigned long)s_cost.bells, (unsigned long)(yonder_ticker_wakes(g.ticker) - s_cost.from_wakes));
     for (int32_t i = 0; i < PAST_COUNT; i++)
@@ -4668,10 +4671,12 @@ static bool paint_lines(DiagText *t, DiagText *u)
     uint64_t rest = s_cost.total[PS_VIEW] > inner ? s_cost.total[PS_VIEW] - inner : 0;
     dt_put(u, "ms a paint (most):");
     for (int32_t s = 0; s < PS_COUNT; s++) {
-        uint64_t n = s == PS_TICKS ? s_cost.ticks : s == PS_SCHEDULE ? s_cost.schedules : s_cost.paints;
+        uint64_t n = s == PS_TICKS ? s_cost.ticks : s == PS_SCHEDULE ? s_cost.schedules
+                   : s == PS_TASKS ? s_cost.scripts + s_cost.timers : s_cost.paints;
         uint64_t avg = n > 0 ? s_cost.total[s] / n / per : 0, most = s_cost.most[s] / per;
         dt_put(u, "%s %s %lu.%lu (%lu.%lu)", s ? "," : "",
-               s == PS_TICKS ? "ticks (a tick)" : s == PS_SCHEDULE ? "schedule (a call)" : kPaintStage[s],
+               s == PS_TICKS ? "ticks (a tick)" : s == PS_SCHEDULE ? "schedule (a call)"
+               : s == PS_TASKS ? "tasks (a task)" : kPaintStage[s],
                (unsigned long)(avg / 10), (unsigned long)(avg % 10), (unsigned long)(most / 10),
                (unsigned long)(most % 10));
     }
@@ -6711,6 +6716,7 @@ static bool script_turn(void)
     forms_flush();
     const os64_html_document_t *doc = page_doc(&g.page);
     os64_js_outcome_t out;
+    cost_begin(PS_TASKS);
     int64_t began = task_begin(g.page.scripts);
     const char *what = "script";
     bool ran = yonder_scripts_step(g.page.scripts, &out);
@@ -6718,14 +6724,23 @@ static bool script_turn(void)
         what = "timer";
         ran = yonder_scripts_timer_fire(g.page.scripts, yonder_now_ms(), &out);
     }
-    if (!ran)
+    if (!ran) {
+        cost_end(PS_TASKS);
+        s_cost.now[PS_TASKS] = 0;
         return false;
+    }
+    if (what[0] == 't')
+        s_cost.timers++;
+    else
+        s_cost.scripts++;
     task_said(g.page.scripts, true, what, &out, began);
     // The rendering step before the asks: a form a script sent is read
     // from a model as current as its tree.
     bool rendered = script_rebuild();
     if (rendered)
         asks_perform(g.page.scripts, doc, true);
+    cost_end(PS_TASKS);
+    cost_fold(PS_TASKS, PS_TASKS);
     return rendered;
 }
 
