@@ -361,6 +361,9 @@ static void ranges(void)
     static os64_text_range_t many[OS64_TEXT_RANGES_MAX+1];
     for (size_t i=0;i<=OS64_TEXT_RANGES_MAX;i++) many[i]=(os64_text_range_t){(uint32_t)i*2,(uint32_t)i*2};
     CHECK(os64_text_font_open_ranged(c,&name,1,&fo,many,OS64_TEXT_RANGES_MAX+1,&f)==OS64_FONT_LIMIT && !f);
+    many[0]=(os64_text_range_t){'B','A'};
+    CHECK(os64_text_font_open_ranged(c,&name,1,&fo,many,OS64_TEXT_RANGES_MAX+1,&f)==OS64_FONT_LIMIT && !f);
+    many[0]=(os64_text_range_t){0,0};
     CHECK(os64_text_font_open_ranged(c,&name,1,&fo,many,OS64_TEXT_RANGES_MAX,&f)==OS64_FONT_OK &&
           f->range_count==OS64_TEXT_RANGES_MAX);
     os64_text_font_release(f);os64_text_font_release(a);os64_text_font_release(b);

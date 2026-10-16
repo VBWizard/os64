@@ -175,6 +175,8 @@ os64_font_status_t os64_font_family_open(os64_font_family_cache_t *cache,
     if (!families || !out || families->generic < OS64_FONT_FAMILY_SERIF ||
         families->generic >= OS64_FONT_FAMILY_COUNT || (families->count && !families->names) ||
         !size || size > OS64_FONT_PIXEL_MAX) return OS64_FONT_BAD_ARGUMENT;
+    for (uint32_t k = 0; k < families->count; ++k)
+        if (families->names[k].len && !families->names[k].name) return OS64_FONT_BAD_ARGUMENT;
     uint32_t style = (bold ? 1u : 0u) + (italic ? 2u : 0u);
     /* The first name that is one of the families' own chooses it; with
      * none, the generic. */

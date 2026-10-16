@@ -83,7 +83,7 @@ typedef enum {
 #define OS64_FONT_FAMILY_STYLES 4u /* regular, bold, italic, bolditalic */
 #define OS64_FONT_FAMILY_CACHE_MAX 32u
 typedef struct {
-    const char *name; /* borrowed bytes; need not be NUL-terminated */
+    const char *name; /* borrowed bytes; need not be NUL-terminated; NULL only when len is 0 */
     uint32_t len;
 } os64_font_family_name_t;
 typedef struct {

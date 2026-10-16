@@ -209,6 +209,14 @@ static void names(void)
     CHECK(resolved_slice(cache,"Contract fixture, serif",15,OS64_FONT_FAMILY_MONO)==id[2]);
     CHECK(resolved_slice(cache,"Contract fixture, serif",16,OS64_FONT_FAMILY_MONO)==id[0]);
 #endif
+    {
+        const os64_font_family_name_t bad[] = {{NULL,16}}, empty[] = {{NULL,0}};
+        os64_font_family_list_t list = {bad,1,OS64_FONT_FAMILY_SANS};
+        os64_font_role_view_t v;
+        CHECK(os64_font_family_open(cache,&list,false,false,16,&v)==OS64_FONT_BAD_ARGUMENT);
+        list.names = empty;
+        CHECK(!os64_font_family_open(cache,&list,false,false,16,&v) && v.identity==id[1]);
+    }
     os64_font_family_cache_destroy(cache);
     cache=NULL; CHECK(!os64_font_family_cache_create(text,NULL,&cache,NULL,NULL));
     uint64_t sans=resolved(cache,NULL,NULL,OS64_FONT_FAMILY_SANS);

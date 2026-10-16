@@ -137,9 +137,11 @@ os64_font_status_t os64_text_font_open_ranged(os64_text_context_t *c, const uint
         o->pixel_height>OS64_FONT_PIXEL_MAX || (o->hint!=OS64_FONT_HINT_NORMAL && o->hint!=OS64_FONT_HINT_NONE) ||
         (range_count && !ranges))
         return OS64_FONT_BAD_ARGUMENT;
-    for (size_t i=0;i<range_count && i<OS64_TEXT_RANGES_MAX;i++)
+    /* Too many is LIMIT whatever they hold; then each is read. */
+    if (range_count>OS64_TEXT_RANGES_MAX) return OS64_FONT_LIMIT;
+    for (size_t i=0;i<range_count;i++)
         if (ranges[i].first>ranges[i].last || ranges[i].last>0x10FFFF) return OS64_FONT_BAD_ARGUMENT;
-    if (length>OS64_FONT_FILE_MAX || range_count>OS64_TEXT_RANGES_MAX) return OS64_FONT_LIMIT;
+    if (length>OS64_FONT_FILE_MAX) return OS64_FONT_LIMIT;
     os64_text_font_t *f=NULL;
     os64_font_status_t status=new_font(c,&f);
     if (status!=OS64_FONT_OK) return status;
