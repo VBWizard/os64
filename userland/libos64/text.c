@@ -8,6 +8,18 @@ static void include_metrics(os64_text_run_t *r, const os64_font_face_info_t *inf
     if (info->descent>r->view.descent) r->view.descent=info->descent;
     if (info->line_height>r->view.line_height) r->view.line_height=info->line_height;
 }
+/* Whether `f` answers for `scalar`: every font does that was opened with
+ * no ranges. */
+static bool covers(const os64_text_font_t *f, uint32_t scalar)
+{
+    if (!f->range_count) return true;
+    size_t lo=0,hi=f->range_count;
+    while (lo<hi) {
+        size_t mid=lo+(hi-lo)/2;
+        if (f->ranges[mid].last<scalar) lo=mid+1;else hi=mid;
+    }
+    return lo<f->range_count && f->ranges[lo].first<=scalar;
+}
 static os64_font_status_t resolve(os64_text_run_t *r, uint32_t scalar,
     os64_text_font_t **chosen, uint32_t *index, text_image **image)
 {
@@ -25,7 +37,9 @@ static os64_font_status_t resolve(os64_text_run_t *r, uint32_t scalar,
         for (size_t n=0;n<r->font_count;n++) {
             os64_text_font_t *f=r->fonts[n];
             os64_font_status_t status;
-            if (f->face) {
+            if (!covers(f,scalar)) {
+                status=OS64_FONT_MISSING;
+            } else if (f->face) {
                 for (unsigned attempt=0;;attempt++) {
                     c->refusal=OS64_FONT_OK;
                     status=c->backend->lookup(f->face,scalar,index);
@@ -49,7 +63,7 @@ static os64_font_status_t resolve(os64_text_run_t *r, uint32_t scalar,
                 text_image_unpin(*image);*image=NULL;scalar=TEXT_MARKER;break;
             }
             if (status!=OS64_FONT_MISSING && status!=OS64_FONT_UNSUPPORTED) return text_status(c,status);
-            if (n==0 && r->cell_advance && scalar>=0x2500 && scalar<=0x259f) {
+            if (n==0 && r->cell_advance && scalar>=0x2500 && scalar<=0x259f && covers(primary,scalar)) {
                 *chosen=primary;*index=0;
                 return text_image_get(primary,scalar,w,h,top,image);
             }

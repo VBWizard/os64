@@ -164,6 +164,65 @@ static void failures(void)
     os64_font_family_cache_destroy(cache); CHECK(!os64_text_destroy(text)); CHECK(!live);
 }
 #endif
+/* The identity of the list a family list resolves to, at one size. */
+static uint64_t resolved(os64_font_family_cache_t *cache, const char *a, const char *b,
+                         os64_font_family_t generic)
+{
+    os64_font_family_name_t names[2] = {{a,a ? (uint32_t)strlen(a) : 0},{b,b ? (uint32_t)strlen(b) : 0}};
+    os64_font_family_list_t list = {names,(uint32_t)(!!a + !!b),generic};
+    os64_font_role_view_t v;
+    CHECK(!os64_font_family_open(cache,&list,false,false,16,&v));
+    return v.identity;
+}
+/* As resolved, the one name a slice of `text` `len` long, as a page's
+ * names arrive: not terminated, the text running on past it. */
+static uint64_t resolved_slice(os64_font_family_cache_t *cache, const char *text, uint32_t len,
+                               os64_font_family_t generic)
+{
+    os64_font_family_name_t name = {text,len};
+    os64_font_family_list_t list = {&name,1,generic};
+    os64_font_role_view_t v;
+    CHECK(!os64_font_family_open(cache,&list,false,false,16,&v));
+    return v.identity;
+}
+/* A name that is a family's own chooses it, the first such name winning;
+ * a name that is not, or a builtin family's, chooses nothing. */
+static void names(void)
+{
+    os64_text_context_t *text=context(0); os64_font_family_cache_t *cache=NULL;
+    CHECK(!os64_font_family_cache_create(text,specs,&cache,NULL,NULL));
+    uint64_t id[3];
+    for (size_t f=0;f<3;++f) id[f]=resolved(cache,NULL,NULL,(os64_font_family_t)f);
+    CHECK(id[0]!=id[1] && id[1]!=id[2] && id[0]!=id[2]);
+#ifdef FAMILY_REAL
+    const char *own[3]={"dejavu SERIF","DejaVu Sans","DEJAVU sans mono"};
+    for (size_t f=0;f<3;++f)
+        CHECK(resolved(cache,"Nope",own[f],(os64_font_family_t)((f+1)%3))==id[f]);
+    CHECK(resolved(cache,own[2],own[0],OS64_FONT_FAMILY_SERIF)==id[2]);
+    CHECK(resolved(cache,"DejaVu",NULL,OS64_FONT_FAMILY_MONO)==id[2]);
+    CHECK(resolved(cache,"DejaVu Sans ",NULL,OS64_FONT_FAMILY_MONO)==id[2]);
+    CHECK(resolved_slice(cache,"DejaVu Sans Mono, serif",11,OS64_FONT_FAMILY_SERIF)==id[1]);
+#else
+    CHECK(resolved(cache,"Nope","contract FIXTURE",OS64_FONT_FAMILY_MONO)==id[0]);
+    CHECK(resolved(cache,"Contract fixtur",NULL,OS64_FONT_FAMILY_MONO)==id[2]);
+    CHECK(resolved(cache,"Contract fixture ",NULL,OS64_FONT_FAMILY_MONO)==id[2]);
+    CHECK(resolved_slice(cache,"Contract fixture, serif",15,OS64_FONT_FAMILY_MONO)==id[2]);
+    CHECK(resolved_slice(cache,"Contract fixture, serif",16,OS64_FONT_FAMILY_MONO)==id[0]);
+#endif
+    {
+        const os64_font_family_name_t bad[] = {{NULL,16}}, empty[] = {{NULL,0}};
+        os64_font_family_list_t list = {bad,1,OS64_FONT_FAMILY_SANS};
+        os64_font_role_view_t v;
+        CHECK(os64_font_family_open(cache,&list,false,false,16,&v)==OS64_FONT_BAD_ARGUMENT);
+        list.names = empty;
+        CHECK(!os64_font_family_open(cache,&list,false,false,16,&v) && v.identity==id[1]);
+    }
+    os64_font_family_cache_destroy(cache);
+    cache=NULL; CHECK(!os64_font_family_cache_create(text,NULL,&cache,NULL,NULL));
+    uint64_t sans=resolved(cache,NULL,NULL,OS64_FONT_FAMILY_SANS);
+    CHECK(resolved(cache,"Builtin",NULL,OS64_FONT_FAMILY_SANS)==sans);
+    os64_font_family_cache_destroy(cache); CHECK(!os64_text_destroy(text)); CHECK(!live);
+}
 int main(int argc,char **argv)
 {
     CHECK(argc>=2); sources(argv[1]);
@@ -176,7 +235,7 @@ int main(int argc,char **argv)
         os64_text_font_t *volatile invalid=stale[0]; (void)invalid;
         return 99;
     }
-    normal(); pinned_limit(); fallbacks();
+    normal(); pinned_limit(); fallbacks(); names();
 #ifndef FAMILY_REAL
     failures();
 #endif

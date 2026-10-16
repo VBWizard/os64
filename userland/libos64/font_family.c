@@ -17,6 +17,9 @@ struct os64_font_family_cache {
     uint8_t *files[FAMILY_FILES];
     size_t file_count, count;
     family_entry entries[OS64_FONT_FAMILY_CACHE_MAX]; /* oldest first */
+    /* Each family's own name, as its regular face reports it; empty for a
+     * builtin regular, which no page names. */
+    char names[OS64_FONT_FAMILY_COUNT][OS64_FONT_NAME_CAP];
     os64_text_font_t **borrowed;
 };
 
@@ -67,6 +70,7 @@ os64_font_status_t os64_font_family_cache_create(os64_text_context_t *text,
     if (status) goto fail;
     const uint8_t *original[FAMILY_FILES] = {0};
     size_t lengths[FAMILY_FILES] = {0};
+    char file_names[FAMILY_FILES][OS64_FONT_NAME_CAP] = {{0}};
     for (size_t f = 0; f < OS64_FONT_FAMILY_COUNT; ++f) {
         if (family) *family = (os64_font_family_t)f;
         if (source) *source = SIZE_MAX;
@@ -102,10 +106,12 @@ os64_font_status_t os64_font_family_cache_create(os64_text_context_t *text,
                 os64_text_font_t *probe = NULL;
                 os64_font_source_t check = {OS64_FONT_SOURCE_OUTLINE, copy, in->length};
                 status = source_open(text, &check, 16, &probe);
+                if (!status) os64_memcpy(file_names[i], probe->info.family, OS64_FONT_NAME_CAP);
                 os64_text_font_release(probe);
                 if (status) goto fail;
             }
             *dst = (os64_font_source_t){OS64_FONT_SOURCE_OUTLINE, cache->files[i], in->length};
+            if (s == 0) os64_memcpy(cache->names[f], file_names[i], OS64_FONT_NAME_CAP);
         }
     }
     if (family) *family = OS64_FONT_FAMILY_COUNT;
@@ -142,6 +148,20 @@ static os64_font_status_t entry_open(os64_font_family_cache_t *cache, family_ent
     }
     return OS64_FONT_OK;
 }
+/* Whether a page's family name is `own`, compared as CSS compares family
+ * names: ASCII letters folded, nothing else. */
+static bool same_name(const os64_font_family_name_t *name, const char *own)
+{
+    size_t len = os64_strlen(own);
+    if (!len || name->len != len) return false;
+    for (size_t i = 0; i < len; ++i) {
+        char a = name->name[i], b = own[i];
+        if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');
+        if (b >= 'A' && b <= 'Z') b = (char)(b - 'A' + 'a');
+        if (a != b) return false;
+    }
+    return true;
+}
 os64_font_status_t os64_font_family_open(os64_font_family_cache_t *cache,
     const os64_font_family_list_t *families, bool bold, bool italic,
     uint32_t size, os64_font_role_view_t *out)
@@ -155,11 +175,20 @@ os64_font_status_t os64_font_family_open(os64_font_family_cache_t *cache,
     if (!families || !out || families->generic < OS64_FONT_FAMILY_SERIF ||
         families->generic >= OS64_FONT_FAMILY_COUNT || (families->count && !families->names) ||
         !size || size > OS64_FONT_PIXEL_MAX) return OS64_FONT_BAD_ARGUMENT;
+    for (uint32_t k = 0; k < families->count; ++k)
+        if (families->names[k].len && !families->names[k].name) return OS64_FONT_BAD_ARGUMENT;
     uint32_t style = (bold ? 1u : 0u) + (italic ? 2u : 0u);
+    /* The first name that is one of the families' own chooses it; with
+     * none, the generic. */
+    os64_font_family_t chosen = families->generic;
+    for (uint32_t k = 0, found = 0; k < families->count && !found; ++k)
+        for (size_t f = 0; f < OS64_FONT_FAMILY_COUNT && !found; ++f)
+            if (same_name(&families->names[k], cache->names[f]))
+                chosen = (os64_font_family_t)f, found = 1;
     size_t index = 0;
     while (index < cache->count) {
         family_entry *e = &cache->entries[index];
-        if (e->family == families->generic && e->style == style && e->size == size) break;
+        if (e->family == chosen && e->style == style && e->size == size) break;
         ++index;
     }
     family_entry entry = {0};
@@ -170,7 +199,7 @@ os64_font_status_t os64_font_family_open(os64_font_family_cache_t *cache,
     } else {
         if (cache->count == OS64_FONT_FAMILY_CACHE_MAX) evict(cache);
         for (;;) {
-            entry = (family_entry){.family = families->generic, .style = style, .size = size};
+            entry = (family_entry){.family = chosen, .style = style, .size = size};
             os64_font_status_t status = entry_open(cache, &entry);
             if (!status) break;
             entry_release(&entry);

@@ -37,6 +37,8 @@ struct os64_text_font {
     os64_font_face_info_t info;
     os64_font_face_options_t options;
     text_file *file;                /* NULL for the bitmap face */
+    os64_text_range_t *ranges;      /* sorted, merged; NULL for every scalar */
+    size_t range_count;
     uint64_t identity;
     size_t refs;
 };

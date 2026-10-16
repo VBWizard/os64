@@ -12,6 +12,7 @@
 #define OS64_TEXT_FALLBACK_MAX 8u
 #define OS64_TEXT_CACHE_DEFAULT (8u * 1024u * 1024u)
 #define OS64_TEXT_MEMORY_DEFAULT (128u * 1024u * 1024u)
+#define OS64_TEXT_RANGES_MAX 4096u
 
 typedef struct os64_text_context os64_text_context_t;
 typedef struct os64_text_font os64_text_font_t;
@@ -33,6 +34,18 @@ os64_font_status_t os64_text_create(const os64_text_options_t *, os64_text_conte
 os64_font_status_t os64_text_destroy(os64_text_context_t *);
 os64_font_status_t os64_text_font_open(os64_text_context_t *, const uint8_t *,
     size_t length, const os64_font_face_options_t *, os64_text_font_t **out);
+/* An inclusive span of Unicode scalars, first <= last <= 0x10FFFF. */
+typedef struct {
+    uint32_t first, last;
+} os64_text_range_t;
+/* Open as above, the font answering only for the scalars in `ranges` (a
+ * CSS `unicode-range`): a layout passes any other on to the next font, as
+ * if this one had no glyph for it. The ranges are copied, in any order,
+ * overlapping or not; count 0 (ranges may then be NULL) covers every
+ * scalar. More than OS64_TEXT_RANGES_MAX is LIMIT, whatever they hold. */
+os64_font_status_t os64_text_font_open_ranged(os64_text_context_t *, const uint8_t *,
+    size_t length, const os64_font_face_options_t *, const os64_text_range_t *ranges,
+    size_t range_count, os64_text_font_t **out);
 os64_font_status_t os64_text_font_bitmap(os64_text_context_t *, os64_text_font_t **out);
 void os64_text_font_release(os64_text_font_t *);
 

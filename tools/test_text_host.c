@@ -307,13 +307,84 @@ static void real_fonts(const char *dir)
     }
 }
 #endif
+static os64_text_font_t *open_ranged(os64_text_context_t *ctx,uint8_t name,
+    const os64_text_range_t *ranges,size_t count)
+{
+    os64_text_font_t *f=NULL;os64_font_face_options_t o={16,OS64_FONT_HINT_NORMAL};
+    CHECK(os64_text_font_open_ranged(ctx,&name,1,&o,ranges,count,&f)==OS64_FONT_OK);return f;
+}
+/* A font opened with ranges answers only inside them; a layout passes any
+ * other scalar on to the next font, and past the last to the marker. */
+static void ranges(void)
+{
+    current="a font's unicode-range";c=create(0,0);
+    const os64_text_range_t some[]={{'V','W'},{'A','A'},{'W','W'},{'B','C'}};
+    os64_text_font_t *a=open_ranged(c,'P',some,4),*b=open_font(c,'M');
+    CHECK(a->range_count==2 && a->ranges[0].first=='A' && a->ranges[0].last=='C' &&
+          a->ranges[1].first=='V' && a->ranges[1].last=='W');
+    os64_text_font_t *both[]={a,b};
+    os64_text_layout_t o={.fonts=both,.font_count=2,.tab_interval=512};
+    os64_text_run_t *r=NULL;
+    CHECK(os64_text_layout(c,(const uint8_t *)"AiWe",4,&o,&r)==OS64_FONT_OK);
+    CHECK(r->view.glyph_count==4 && r->view.glyphs[0].font_identity==a->identity &&
+          r->view.glyphs[1].font_identity==b->identity && r->view.glyphs[2].font_identity==a->identity &&
+          r->view.glyphs[3].font_identity==b->identity);
+    os64_text_run_release(r);
+    o=(os64_text_layout_t){.fonts=&a,.font_count=1,.tab_interval=512};
+    CHECK(os64_text_layout(c,(const uint8_t *)"Ai",2,&o,&r)==OS64_FONT_OK);
+    CHECK(r->view.glyphs[0].font_identity==a->identity && r->view.glyphs[1].font_identity==0);
+    os64_text_run_release(r);
+    /* Every scalar at the ends of the range, and the one past each. */
+    const os64_text_range_t edge[]={{0x10FFFF,0x10FFFF},{0,0}};
+    os64_text_font_t *e=open_ranged(c,'P',edge,2);
+    CHECK(e->range_count==2 && e->ranges[0].first==0 && e->ranges[1].last==0x10FFFF);
+    os64_text_font_release(e);
+    /* A grid's box-drawing stand-in is the primary's only for a scalar
+     * the primary answers for. */
+    const os64_text_range_t ascii[]={{0x20,0x7e}};
+    os64_text_font_t *t=open_ranged(c,'T',ascii,1),*u=open_font(c,'T');
+    const uint8_t box[]={0xc4};
+    o=(os64_text_layout_t){.fonts=&t,.font_count=1,.encoding=OS64_TEXT_CP437,.tab_interval=512,.cell_advance=512};
+    CHECK(os64_text_layout(c,box,1,&o,&r)==OS64_FONT_OK && r->view.glyphs[0].font_identity==0);
+    os64_text_run_release(r);
+    o.fonts=&u;
+    CHECK(os64_text_layout(c,box,1,&o,&r)==OS64_FONT_OK && r->view.glyphs[0].font_identity==u->identity);
+    os64_text_run_release(r);
+    os64_text_font_release(t);os64_text_font_release(u);
+    current="a font's unicode-range written wrong";
+    os64_font_face_options_t fo={16,OS64_FONT_HINT_NORMAL};os64_text_font_t *f=(void *)1;
+    uint8_t name='P';
+    const os64_text_range_t backwards[]={{'B','A'}},past[]={{0x10FFFF,0x110000}};
+    CHECK(os64_text_font_open_ranged(c,&name,1,&fo,backwards,1,&f)==OS64_FONT_BAD_ARGUMENT && !f);
+    CHECK(os64_text_font_open_ranged(c,&name,1,&fo,past,1,&f)==OS64_FONT_BAD_ARGUMENT && !f);
+    CHECK(os64_text_font_open_ranged(c,&name,1,&fo,NULL,1,&f)==OS64_FONT_BAD_ARGUMENT && !f);
+    static os64_text_range_t many[OS64_TEXT_RANGES_MAX+1];
+    for (size_t i=0;i<=OS64_TEXT_RANGES_MAX;i++) many[i]=(os64_text_range_t){(uint32_t)i*2,(uint32_t)i*2};
+    CHECK(os64_text_font_open_ranged(c,&name,1,&fo,many,OS64_TEXT_RANGES_MAX+1,&f)==OS64_FONT_LIMIT && !f);
+    many[0]=(os64_text_range_t){'B','A'};
+    CHECK(os64_text_font_open_ranged(c,&name,1,&fo,many,OS64_TEXT_RANGES_MAX+1,&f)==OS64_FONT_LIMIT && !f);
+    many[0]=(os64_text_range_t){0,0};
+    CHECK(os64_text_font_open_ranged(c,&name,1,&fo,many,OS64_TEXT_RANGES_MAX,&f)==OS64_FONT_OK &&
+          f->range_count==OS64_TEXT_RANGES_MAX);
+    os64_text_font_release(f);os64_text_font_release(a);os64_text_font_release(b);
+    CHECK(os64_text_destroy(c)==OS64_FONT_OK && live==0);
+    current="a ranged open with each allocation refused";
+    for (size_t point=1;point<6;point++) {
+        c=create(0,0);size_t baseline=allocations;deny=baseline+point;f=(void *)1;
+        os64_font_status_t status=os64_text_font_open_ranged(c,&name,1,&fo,some,4,&f);
+        deny=0;
+        CHECK((status==OS64_FONT_OK && f->range_count==2) || (status==OS64_FONT_NO_MEMORY && !f));
+        os64_text_font_release(status==OS64_FONT_OK ? f : NULL);
+        CHECK(os64_text_destroy(c)==OS64_FONT_OK && live==0);
+    }
+}
 int main(int argc,char **argv)
 {
     (void)argc;(void)argv;
     c=create(0,0);frozen_vectors();CHECK(os64_text_destroy(c)==OS64_FONT_OK);CHECK(live==0);
-    lifetimes();failures();backend_limits();geometry();unicode_profile();bitmap();
+    lifetimes();failures();backend_limits();geometry();unicode_profile();bitmap();ranges();
 #ifdef TEXT_REAL
     CHECK(argc==2);real_fonts(argv[1]);
 #endif
-    printf("PASS: %zu checks, F2 vectors, ownership, failure, drawing and profile\n",checks);return 0;
+    printf("PASS: %zu checks, F2 vectors, ownership, failure, drawing, profile and ranges\n",checks);return 0;
 }

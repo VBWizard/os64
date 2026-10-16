@@ -35,10 +35,12 @@ def tables(sfnt):
         out.append((tag, check, sfnt[off:off + length]))
     return struct.unpack_from('>I', sfnt, 0)[0], out
 
-def woff(sfnt, store=(), meta=b'', reverse=False, shift=None, tail=None):
+def woff(sfnt, store=(), meta=b'', reverse=False, shift=None, tail=None, priv=b'', priv_pad=True):
     # `reverse` lays the data in the opposite order to the tags; `shift`
     # puts that table's data 2 bytes off a 4-byte boundary; `tail` follows
     # that table's zlib stream with 4 stray bytes inside its length.
+    # `priv` follows the metadata on its 4-byte boundary, or right after
+    # it when `priv_pad` is false.
     flavor, ts = tables(sfnt)
     n = len(ts)
     entries, data = [None] * n, b''
@@ -56,10 +58,13 @@ def woff(sfnt, store=(), meta=b'', reverse=False, shift=None, tail=None):
         data += packed + b'\0' * (-len(data + packed) % 4)
     total = 12 + 16 * n + sum((len(b) + 3) & ~3 for _, _, b in ts)
     meta_off = first + len(data) if meta else 0
-    length = first + len(data) + len(meta)
+    after = first + len(data) + len(meta)
+    pad = b'\0' * (-after % 4) if priv and priv_pad else b''
+    priv_off = after + len(pad) if priv else 0
+    length = after + len(pad) + len(priv)
     head = struct.pack('>4sIIHHIHHIIIII', b'wOFF', flavor, length, n, 0, total, 1, 0,
-                       meta_off, len(meta), len(meta), 0, 0)
-    return bytearray(head + b''.join(struct.pack('>4sIIII', *e) for e in entries) + data + meta)
+                       meta_off, len(meta), len(meta), priv_off, len(priv))
+    return bytearray(head + b''.join(struct.pack('>4sIIII', *e) for e in entries) + data + meta + pad + priv)
 
 def run(*args):
     return subprocess.run([unwrap, *map(str, args)], capture_output=True, text=True)
@@ -132,6 +137,9 @@ status('a metadata length with no offset', w, 'malformed container')
 w = woff(mono)
 struct.pack_into('>I', w, 40, 4)
 status('a private length with no offset', w, 'malformed container')
+status('a private block on the boundary after odd metadata', woff(mono, meta=b'<m/>x', priv=b'secret'), 'ok')
+status('a private block right after odd metadata', woff(mono, meta=b'<m/>x', priv=b'secret', priv_pad=False),
+       'malformed container')
 w = woff(synth([(b'aaaa', b'')]))
 struct.pack_into('>I', w, 44 + 12, 8000)      # nothing stored, 8000 claimed:
 struct.pack_into('>I', w, 16, 12 + 16 + 8000)  # past 64 to 1 if read on
