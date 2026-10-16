@@ -170,7 +170,8 @@ gets plain lines for its fonts at every write, after `sheets:`:
     font family DejaVu Sans Mono: a system family
 
 - **A face line walks its sources in order** up to the one the face is
-  drawn from, whole however long (only its ranges past the first 64 are
+  drawn from — every one of them when no file of the face's is kept (not
+  asked for yet, never asked for, or each failed) — whole however long (only its ranges past the first 64 are
   counted, `and 4033 more`, not spelled). An open file says `listed` (the
   container and the bytes that came) when the face was in a list the
   layout of the tree on screen gave text — the text context then draws
@@ -245,13 +246,18 @@ page's text as it is at the write.
 
 **The writes.** Arrival: the adopted families, faces with no source asked
 for yet. The second write: once nothing is out and the page is laid out
-again. Departure: everything, before the fonts are let go. A page let go
+again — owed by the last picture or font in, by a font failure, and by
+arrival itself for a page with faces, whose first layout on screen may
+ask for no file at all. Departure: everything, before the fonts are let go. A page let go
 unshown: its own rules and its staged families, never the shown page's
 files.
 
 **Caps: every one is said when it is passed.** Faces past 256 a page
 keeps (the `fonts:` line counts them); files past 512 (a `FAILED font`
-line); families past 512 (the `fonts:` line says so); a table's 512 lines
+line); families past 512 (the `fonts:` line says so, and that their
+missing counts are floors — in lower case, a plain line never spelling a
+token — a name the record could not keep has no
+tally, so its line counts at least the one lookup that wrote it); a table's 512 lines
 (`not kept: N`); lost lines past the 4,096 the record can tell apart
 (`, and more not counted`); a face's ranges past 64 (`and N more`).
 

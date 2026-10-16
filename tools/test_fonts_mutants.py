@@ -648,6 +648,17 @@ mutants = [
     ('the-census-keys-on-the-layout-alone', YONDER,
      'if (s_web.chars_layout == geometry_layout_total && s_web.chars_doc == doc && s_web.chars_version == version)',
      'if (s_web.chars_layout == geometry_layout_total)', WINDOW),
+    # #280 round 7: arrival owes the write after the first layout on screen;
+    # a face drawn from no source says every one; overflowed counts are floors.
+    ('arrival-owes-no-write', YONDER,
+     '        g.page.record_owed = s_web.moved && g.page.diag != NULL;',
+     '        (void)0;', WINDOW),
+    ('an-unasked-face-stops-at-its-first-source', YONDER,
+     '                    last = w != NULL && w->state != WF_FAILED;',
+     '                    last = w == NULL || w->state != WF_FAILED;', WINDOW),
+    ('overflowed-counts-are-not-floors', YONDER,
+     'the record keeps (their missing counts are floors)",',
+     'the record keeps",', WINDOW),
     ('an-unkept-source-tells-no-badge', YONDER,
      '        s_web.unkept = false;\n        badge_follow();',
      '        s_web.unkept = false;', WINDOW),

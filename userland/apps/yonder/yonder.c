@@ -2174,10 +2174,13 @@ static void arrive_now(Page *fresh, NavKind kind, const way_position_t *crumb,
     g.pictures_moved = false;
     // The page was laid out before it was shown, when no face of its is
     // wanted (page_fonts): one with faces is laid out again on screen, at
-    // the next batch, to learn which it uses.
+    // the next batch, to learn which it uses — and its record is owed the
+    // write after that layout, which says what it found, whether or not
+    // it asks for a file whose coming would write it.
     {
         const garb_font_face_t *faces;
         s_web.moved = g.page.cascade != NULL && garb_cascade_font_faces(g.page.cascade, &faces, NULL) > 0;
+        g.page.record_owed = s_web.moved && g.page.diag != NULL;
     }
     g.settle_due = YONDER_NEVER;       // the deadline goes with the moves it was for
     g.laid_at = t1;
@@ -4416,7 +4419,8 @@ static void diag_ready(DiagText *t, const char *url, const WebFontFile *w, int32
 }
 
 // One face on the record: its family, weights, style and ranges, and
-// each of its sources in order up to the one it is drawn from — open
+// each of its sources in order up to the one it is drawn from — all of
+// them when it is drawn from none — open
 // (diag_ready), coming, held for room to open, failed (the reason is its
 // FAILED font line, a source the table could not keep included), a
 // format() or local() passed over — or why it was not asked for: not yet,
@@ -4463,16 +4467,17 @@ static void diag_face(Page *p, int32_t i, const garb_font_face_t *f, bool shown)
                 } else if (!shown) {
                     // The files are the shown page's: this page asked for none.
                     dt_put(&t, "%s not asked for yet: a page is laid out in its faces once it is shown", url);
-                    last = true;
                 } else {
                     int32_t file = webfonts_find(url);
                     const WebFontFile *w = file >= 0 ? &s_web.files[file] : NULL;
                     // A layout that met this face tried each source in
                     // turn, so one it could not keep is a failed one.
                     bool unkept = w == NULL && (s_web.face_use[i] & WF_USE_UNKEPT);
-                    // The face is drawn from the first source whose file
-                    // has not failed, so the sources after it say nothing.
-                    last = !unkept && (w == NULL || w->state != WF_FAILED);
+                    // The face is drawn from the first source whose file is
+                    // kept and has not failed, so the sources after it say
+                    // nothing; a face no layout asked for is drawn from
+                    // none, and every source is said.
+                    last = w != NULL && w->state != WF_FAILED;
                     if (unkept || (w != NULL && w->state == WF_FAILED))
                         dt_put(&t, "%s failed", url);
                     else if (w == NULL && s_web.use_layout == 0)
@@ -4534,10 +4539,11 @@ static void diag_fonts(Page *p)
                   s_web.files[i].state == WF_HELD;
     }
     char v[320];
-    char full[64] = "";
+    char full[112] = "";
     if (fams->full)
-        os64_snprintf(full, sizeof(full), "; more families than the %d the record keeps", (int)WEBFONT_FAMILIES_MAX);
-    char more[112];
+        os64_snprintf(full, sizeof(full), "; more families than the %d the record keeps (their missing counts are floors)",
+                      (int)WEBFONT_FAMILIES_MAX);
+    char more[176];
     os64_snprintf(more, sizeof(more), "%s%s", full,
                   fams->short_of_memory ? "; families not kept: no memory for them" : "");
     os64_snprintf(v, sizeof(v), "%d faces (%u past the most a page keeps), %d files: %d open, %d failed, %d coming%s",

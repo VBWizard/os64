@@ -4544,6 +4544,29 @@ static void webfont_cases(void) {
     loop_drop();
     probe_web=false;
     fake_reset();
+    /* A page with faces is owed the write after its first layout on
+     * screen, even when that layout asks for no file whose coming would
+     * write it; and a face drawn from no source says every one. */
+    check(diag_dir_open()==NULL,"web fonts: first layout owed: the record has a directory");
+    probe_web=true;
+    loop_page("<style>@font-face{font-family:Unused;src:url(u1.ttf),url(u2.ttf)}</style><p>hello</p>");
+    check(loop_settle() && g.page.tree!=NULL,"web fonts: first layout owed: the page arrives");
+    {
+        char name[64]; yonder_diag_file_name(g.page.diag,name,sizeof(name));
+        check(has(diag_file("/tmp/diag",name),"u1.ttf not asked for yet: a page is laid out in its faces once it is shown; "
+                                              "http://fixture.test/u2.ttf not asked for yet"),
+              "web fonts: on the arrival write, a face drawn from no source says every one");
+        pictures_settle();
+        const char *file=diag_file("/tmp/diag",name);
+        check(g.page.record_owed==false && has(file,"\nwritten: when its pictures and fonts were in\n") &&
+              has(file,"u1.ttf never asked for: no text asked for it, or its lists had no place; "
+                       "http://fixture.test/u2.ttf never asked for"),
+              "web fonts: the first layout on screen writes the record, though it asked for no file");
+    }
+    while(nfont_jobs>0) os64_free(font_jobs[--nfont_jobs].job);
+    loop_drop();
+    probe_web=false;
+    fake_reset();
     /* On the arrival write, a face whose range meets the page's text is
      * not "not needed", and its source is not asked for yet, not never. */
     check(diag_dir_open()==NULL,"web fonts: arrival census: the record has a directory");
@@ -4927,7 +4950,7 @@ static void webfont_cases(void) {
         web_page(page);
         diag_fonts(&g.page);
         yonder_diag_render(g.page.diag,rec,sizeof(rec));
-        check(strstr(rec,"; more families than the 512 the record keeps\n")!=NULL &&
+        check(strstr(rec,"; more families than the 512 the record keeps (their missing counts are floors)\n")!=NULL &&
               strstr(rec,"\nmissing names not kept: 8\n")!=NULL,
               "web fonts: on the record, families past the 512 kept are said to be missing, and every MISSING line is kept or counted");
         web_drop();
