@@ -71,7 +71,11 @@ the view, and within the view the canvas (the page's background), the
 pictures, the text, opacity groups, shadows' masks, gradients and turned
 boxes; and publishing the damage to the compositor. Per stage: the total,
 the most one paint took, and how many paints were whole views. The ticks
-too: how many, and the time spent finding what they mark.
+too: how many, and the time spent finding what they mark. And the rest of
+what the main loop does between paints: the layouts and the script tasks
+(counted and timed), the ticker's bells, the deadlines already past when
+handed to it and where each came from, how late moving pictures' frames
+were shown, and the loop's longest single wait.
 
 **How it is timed.** A paint draws thousands of runs, so a stage is timed
 with the processor's time-stamp counter (`rdtsc`, readable in ring 3),
@@ -90,7 +94,7 @@ sit side by side in one file: scroll there, `d`, wait ten seconds, `d`.
 | State | Begun | Changed | Written | Let go |
 |---|---|---|---|---|
 | Paint counts (per stage: total, most, paints) | when a page is shown | at every paint and tick | at every write of the page's record | after an asked-for write (`d`), and with the page |
-| The ticker's counts (its looks, how late it rang, how far past its time it slept) | when the ticker starts | at each look, on the ticker's thread, under its lock | at every write of the page's record | restarted with the paint counts |
+| The ticker's counts (its looks, how late it rang, how far past its time it slept) | when the ticker starts | at each look, on the ticker's thread, under its lock | at every write of the page's record | restarted with the paint counts; with the ticker on the way out, after which the record says it is not running |
 | The readings (`paint reading N`) | when a page is shown, numbered from 1 | one more at each `d` | kept in the record from then on | with the page's record |
 | The counter's rate | at the first paint of the run | — | used at each write | never: the processor's |
 
@@ -151,6 +155,28 @@ second, and the ticks cost 12-20% of the thread on their own.
    past; the bell still meets its own at once (pictures, ticks, layouts,
    an arriving page's wait). QEMU, danlegt with scripts on, 13.9 s: 1982
    bells to 169, the ticker's wakes 4098 to 447, paints 67 to 90.
+
+5. **What the ring loop was hiding.** With (4) in, every GIF on danlegt's
+   top paused together about once a second, with neither thread busy. The
+   reading grew the numbers that named it: how late frames were shown
+   against when they were due (the most, and how many more than 30 ms),
+   the main loop's longest single wait, and the ticker's own counts (how
+   late it rang against its deadline, or against when the deadline was
+   handed over if that was later, and how far past its time a sleep
+   lasted). The P5: frames up to 250 ms late, the loop's longest wait
+   249-264 ms, the ticker on time to within 19 ms. The ring was reaching
+   a loop on its way into the GUI event wait, and the kernel lost it to
+   the wait's quarter-second backstop; the ring loop had covered it by
+   ringing again within milliseconds. The cure is the kernel's
+   (WAKE_OWED.md, #282): a wake that lands mid-park is owed and paid by
+   the park. The P5 after it (record 0020, danlegt's top): the longest
+   wait 25 ms, frames late at most 20 ms, none more than 30.
+
+**Where perf-1 leaves danlegt on the P5** (Chris, a 2560x1440 screen):
+at the top the main thread ~75% and the ticker ~25%, and at the bottom
+~50-60% and ~10%, neither reaching 100% even in a very large window. The
+middle, Scratch 2000.exe beside the GIF strip, still fills the main
+thread: its paints are gradients and shadows (perf-2).
 
 **perf-2:** the gradient and shadow caches — each box's gradient pixels
 and blurred shadow mask kept between paints, keyed by what draws them —
