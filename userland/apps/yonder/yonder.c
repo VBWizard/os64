@@ -191,8 +191,9 @@ _Static_assert(sizeof(garb_unicode_range_t) == sizeof(os64_text_range_t) &&
 
 // HELD: the file came and is sound, and opening it was refused for room
 // (the tree on screen holds its faces in the same budget): its bytes are
-// kept, and it is opened again after the next layout — while the held
-// files' bytes stay within WEBFONT_HELD_MAX; past it, the file fails.
+// kept, and it is opened once more after the next layout of the shown
+// page, which has let the old tree's room go. Refused again, or past
+// WEBFONT_HELD_MAX of held bytes, the file fails.
 typedef enum { WF_QUEUED, WF_WAITING, WF_HELD, WF_READY, WF_FAILED } WebFontState;
 
 typedef struct {
@@ -246,7 +247,7 @@ static struct {
     const int32_t *entry;
 } s_laying;
 
-static void webfonts_feed(void);
+static void webfonts_feed(bool laid);
 static void webfonts_leave(void);
 static void webfonts_orphaned(void);
 
@@ -1909,7 +1910,7 @@ static bool lay_out_shown(bool again, LaidFor laid_for)
     g.laid_at = t1;
     g.sx = sx;
     css_pictures(&g.page);
-    webfonts_feed();
+    webfonts_feed(true);
     if (anchor != NULL) {
         const flow_box_t *b = flow_box_for(g.page.tree, anchor);
         if (b != NULL)
@@ -3743,41 +3744,51 @@ static const char *webfonts_refusal(os64_font_status_t st)
                                        : "would not open";
 }
 
-// After a layout: the files held for room opened again — the tree that
-// held it may be gone — and the files wanted and not yet asked for handed
-// to the pool, at most WEBFONTS_AT_ONCE out at a time. A file that cannot
-// be asked for is failed, and the page laid out again for its next source.
-static void webfonts_feed(void)
+// A file is failed: named in the page's record, and the badge told.
+static void webfonts_fail(WebFontFile *w, const char *why)
 {
-    for (int32_t i = 0; i < s_web.nfiles; i++) {
+    w->state = WF_FAILED;
+    char line[OS64_FETCH_URL_MAX + 80];
+    os64_snprintf(line, sizeof(line), "%s: %s", w->url, why);
+    yonder_diag_failed(g.page.diag, "font", line);
+    badge_follow();
+}
+
+// The files wanted and not yet asked for handed to the pool, at most
+// WEBFONTS_AT_ONCE out at a time; a file that cannot be asked for is
+// failed, and the page laid out again for its next source. After a layout
+// of the shown page (`laid`), which let the old tree's room go, the files
+// held for room are opened once more — refused again, they fail — and a
+// size refused for room gets its one more layout.
+static void webfonts_feed(bool laid)
+{
+    for (int32_t i = 0; laid && i < s_web.nfiles; i++) {
         WebFontFile *w = &s_web.files[i];
         if (w->state != WF_HELD)
             continue;
         os64_font_status_t st = webfonts_open(w, w->sfnt, w->sfnt_len);
-        if (st == OS64_FONT_LIMIT || st == OS64_FONT_NO_MEMORY)
-            continue;
         os64_free(w->sfnt);
         w->sfnt = NULL;
         s_web.held_bytes -= w->sfnt_len;
-        if (st == OS64_FONT_OK) {
+        if (st == OS64_FONT_OK)
             w->state = WF_READY;
-        } else {
-            w->state = WF_FAILED;
-            char line[OS64_FETCH_URL_MAX + 80];
-            os64_snprintf(line, sizeof(line), "%s: %s", w->url, webfonts_refusal(st));
-            yonder_diag_failed(g.page.diag, "font", line);
-        }
+        else if (st == OS64_FONT_LIMIT || st == OS64_FONT_NO_MEMORY)
+            webfonts_fail(w, "no room to open it");
+        else
+            webfonts_fail(w, webfonts_refusal(st));
         webfonts_move();
     }
     // A size refused for room gets one more layout: the tree that held the
     // room is gone after it. Refused again, the fallback stands.
-    if (s_web.reopen_wanted && !s_web.reopen_tried) {
-        s_web.reopen_tried = true;
-        webfonts_move();
-    } else if (!s_web.reopen_wanted) {
-        s_web.reopen_tried = false;
+    if (laid) {
+        if (s_web.reopen_wanted && !s_web.reopen_tried) {
+            s_web.reopen_tried = true;
+            webfonts_move();
+        } else if (!s_web.reopen_wanted) {
+            s_web.reopen_tried = false;
+        }
+        s_web.reopen_wanted = false;
     }
-    s_web.reopen_wanted = false;
     while (s_web.next < s_web.nfiles && s_web.in_flight < WEBFONTS_AT_ONCE) {
         WebFontFile *w = &s_web.files[s_web.next];
         if (w->state != WF_QUEUED) {
@@ -3805,12 +3816,9 @@ static void webfonts_feed(void)
             }
         }
         if (why != NULL) {
-            w->state = WF_FAILED;
             s_web.waiting--;
+            webfonts_fail(w, why);
             webfonts_move();
-            char line[OS64_FETCH_URL_MAX + 80];
-            os64_snprintf(line, sizeof(line), "%s: %s", w->url, why);
-            yonder_diag_failed(g.page.diag, "font", line);
         } else {
             w->state = WF_WAITING;
             s_web.in_flight++;
@@ -3836,8 +3844,8 @@ static void webfont_arrived(const yonder_webfont_job_t *job, yonder_webfont_t *p
         os64_font_status_t st = webfonts_open(w, product->sfnt, product->len);
         bool room = st == OS64_FONT_LIMIT || st == OS64_FONT_NO_MEMORY;
         if (room && product->len <= WEBFONT_HELD_MAX - s_web.held_bytes) {
-            // Room, not the file: held, and opened again after the next
-            // layout, which this asks for (webfonts_feed).
+            // Room, not the file: held, and opened once more after the
+            // next layout, which this asks for (webfonts_feed).
             w->state = WF_HELD;
             w->sfnt = product->sfnt;
             w->sfnt_len = product->len;
@@ -3851,15 +3859,10 @@ static void webfont_arrived(const yonder_webfont_job_t *job, yonder_webfont_t *p
         else if (st != OS64_FONT_OK)
             why = webfonts_refusal(st);
     }
-    if (why != NULL) {
-        w->state = WF_FAILED;
-        char line[OS64_FETCH_URL_MAX + 80];
-        os64_snprintf(line, sizeof(line), "%s: %s", w->url, why);
-        yonder_diag_failed(g.page.diag, "font", line);
-        badge_follow();
-    } else {
+    if (why != NULL)
+        webfonts_fail(w, why);
+    else
         w->state = WF_READY;
-    }
     // Either way the page is laid out again: a face to draw, or the next
     // source to want.
     webfonts_move();
@@ -3875,14 +3878,11 @@ static void webfonts_orphaned(void)
         WebFontFile *w = &s_web.files[i];
         if (w->state != WF_WAITING)
             continue;
-        w->state = WF_FAILED;
         s_web.waiting--;
-        char line[OS64_FETCH_URL_MAX + 80];
-        os64_snprintf(line, sizeof(line), "%s: the workers stopped", w->url);
-        yonder_diag_failed(g.page.diag, "font", line);
+        webfonts_fail(w, "the workers stopped");
     }
     s_web.in_flight = 0;
-    webfonts_feed();
+    webfonts_feed(false);
 }
 
 // The page is being left: its files in the pool are cancelled, and every
@@ -5114,6 +5114,7 @@ static bool script_rebuild(void)
                 g.sy = b->rect.y - offset;
         }
         css_pictures(p);
+        webfonts_feed(true);
         forms_build();
         clamp_scroll();
         sync_bars();
@@ -6072,7 +6073,7 @@ static void reaped(os64_work_id_t id, void *job, void *product)
     if (*(const uint32_t *)job == YONDER_JOB_FONT) {
         webfont_arrived(job, product);
         yonder_webfont_release(job, product);
-        webfonts_feed();
+        webfonts_feed(false);
         return;
     }
     if (*(const uint32_t *)job == YONDER_JOB_SHEET) {
@@ -8474,6 +8475,7 @@ int main(int argc, char **argv)
     // alike hear the pool's own predicate — and joins them, and releases
     // what they held, before anything they could touch goes away.
     os64_work_pool_destroy(g.pool);
+    g.pool = NULL;                      // and no teardown below cancels through it
     if (g.asker == ASK_REQUEST)
         os64_page_request_free(&g.pending);
     if (g.stream.active)

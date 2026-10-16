@@ -2368,10 +2368,12 @@ layouts — the shown page, and the copies a script's rebuild or a
 measurement lays out — are told by their DOCUMENT, the one on screen,
 not by the serial a sheet's job keys on, which a rebuild renews. A
 file whose open is refused for room (the tree on screen holds faces in
-the same budget) is held and opened again after the next layout, the
-held files' bytes together kept within 64 MiB (past it, a file refused
-room fails); a SIZE of an open file refused for room gets one more
-layout, and then the fallback stands. The list is
+the same budget) is held and opened once more after the next layout of
+the shown page, a script's rebuild included, which has let the old
+tree's room go; refused again it fails, as it does when the held files'
+bytes together would pass 64 MiB. A SIZE of an open file refused for
+room gets one more layout, and then the fallback stands. Every font
+failure reaches the badge as it is recorded. The list is
 the eight a layout takes: the system's family and the generic keep their
 places, and the page's faces have the rest — a composite past that, its
 latest rules. `local()` names an installed font by its full name, and

@@ -4300,7 +4300,7 @@ static void web_page_scripted(const char *html, bool scripts) {
     g.page.diag=yonder_diag_new(g.page.way.url,1,0);
     check(g.page.diag!=NULL && page_lay_out(&g.page,800,600,g.zoom,&g.page),"web fonts: the page laid out on its record");
     g.pool=(os64_work_pool_t *)&pool_fake; pool_open=true;
-    webfonts_feed();
+    webfonts_feed(true);
 }
 static void web_page(const char *html) { web_page_scripted(html,false); }
 static void web_drop(void) {
@@ -4480,23 +4480,37 @@ static void webfont_cases(void) {
         check(first_text_font()==web && s_web.nfiles==1,"web fonts: the rebuilt page keeps its face");
     }
     web_drop();
+    /* A face a script brings is asked for by the rebuild that lays it out. */
+    web_page_scripted("<p id=t>hello</p><script>var s=document.createElement('style');"
+                      "s.textContent='@font-face{font-family:Web;src:url(s.ttf)}p{font-family:Web}';"
+                      "document.body.appendChild(s)</script>",true);
+    {
+        os64_js_outcome_t out;
+        check(s_web.nfiles==0 && yonder_scripts_step(g.page.scripts,&out) && out.status==OS64_JS_OK && script_rebuild(),
+              "web fonts: a script adds a face and the page is rebuilt");
+        check(web_file("https://fixture.test/s.ttf")==0 && s_web.files[0].state==WF_WAITING && nfont_jobs==1,
+              "web fonts: the rebuild asks for the script's face");
+    }
+    web_drop();
     /* A file the pool will not take fails, and the page is laid out again
      * so the face's next source is wanted. */
     font_refuse=true;
+    g.badge_missing=g.badge_failed=0; g.badge_text[0]=0;
     web_page("<style>@font-face{font-family:Web;src:url(a.ttf),url(b.ttf)}p{font-family:Web}</style><p>a");
     font_refuse=false;
     check(s_web.files[0].state==WF_FAILED && s_web.moved,"web fonts: a refused file fails and moves the page");
+    check(strstr(g.badge_text,"FAILED 1")!=NULL,"web fonts: and the badge is told");
     pictures_settle();
     check(web_file("https://fixture.test/b.ttf")==1 && s_web.files[1].state==WF_WAITING,
           "web fonts: and the next source is asked for");
     web_drop();
-    /* An open refused for room is held, and opened after the next layout. */
+    /* An open refused for room is held, and opened after the next layout
+     * — not by the feed that follows the arrival, while the old tree still
+     * holds the room. */
     web_page("<style>@font-face{font-family:Web;src:url(w.ttf)}p{font-family:Web}</style><p>hello");
     {
         uint64_t fallback=first_text_font();
-        /* Refused at arrival, and again by the feed that follows it while
-         * the old tree still holds the room. */
-        font_open_refusals=2;
+        font_open_refusals=1;
         check(font_land("w.ttf","A",NULL) && s_web.files[0].state==WF_HELD && s_web.moved,
               "web fonts: an open refused for room holds the file");
         pictures_settle();
@@ -4509,11 +4523,26 @@ static void webfont_cases(void) {
     /* A held open that succeeds in the feed after a settle's own layout
      * arms the next settle rather than waiting for an event. */
     web_page("<style>@font-face{font-family:Web;src:url(w.ttf)}p{font-family:Web}</style><p>hello");
-    font_open_refusals=2;
+    font_open_refusals=1;
     check(font_land("w.ttf","A",NULL) && s_web.files[0].state==WF_HELD,"web fonts: armed: held");
     pictures_settle();
     check(s_web.files[0].state==WF_READY && s_web.moved && g.settle_due!=YONDER_NEVER,
           "web fonts: a face the feed opened after the settle's layout arms the next settle");
+    font_open_refusals=0;
+    web_drop();
+    /* Refused again after the layout, the held file fails: its bytes go,
+     * the badge is told, and the face's next source is wanted. */
+    web_page("<style>@font-face{font-family:Web;src:url(w.ttf),url(v.ttf)}p{font-family:Web}</style><p>hello");
+    font_open_refusals=2;
+    g.badge_missing=g.badge_failed=0; g.badge_text[0]=0;
+    check(font_land("w.ttf","A",NULL) && s_web.files[0].state==WF_HELD,"web fonts: refused twice: held");
+    pictures_settle();
+    check(s_web.files[0].state==WF_FAILED && s_web.held_bytes==0 && s_web.files[0].sfnt==NULL &&
+          strstr(g.badge_text,"FAILED 1")!=NULL && s_web.moved,
+          "web fonts: refused again after the layout, the held file fails and the badge is told");
+    pictures_settle();
+    check(web_file("https://fixture.test/v.ttf")==1 && s_web.files[1].state==WF_WAITING,
+          "web fonts: and the face's next source is asked for");
     font_open_refusals=0;
     web_drop();
     /* Past the bytes held, a file refused room is failed. */
@@ -4547,6 +4576,7 @@ static void webfont_cases(void) {
         s_web.moved=true;
         pictures_settle();
         check(s_web.moved,"web fonts: a refused size asks for its one retry");
+        webfonts_feed(false);           /* an arrival's feed between: no second retry */
         pictures_settle();
         check(!s_web.moved,"web fonts: refused again, the fallback stands");
         font_like_refusals=0;
