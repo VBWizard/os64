@@ -207,6 +207,10 @@ gets plain lines for its fonts at every write, after `sheets:`:
   before it was shown. A page draws in none of its own faces until then,
   so a name they answer is the page's faces with none in the list there,
   and not MISSING; the layout on screen that follows says what they serve.
+  A page let go before it was shown (its layout failed, or the navigation
+  was abandoned) writes its fonts section from its own rules and the
+  families its layout staged, with their MISSING lines — never from the
+  files the page on screen fetched.
 - The records: `FAILED font: <address>: <why>` for a file that did not
   fetch, unwrap or open, or that the page's table of files could not keep,
   and `MISSING font <family>` for a family with neither a page face nor a
@@ -299,7 +303,9 @@ gets plain lines for its fonts at every write, after `sheets:`:
   key, a line cannot be told from one counted already, so the count stands
   and the line says `, and more not counted`; a line that could not even
   be named for want of memory is said on its own line (`some lines not
-  kept: no memory to name them`).
+  kept: no memory to name them`). A plain line whose latest value had no
+  memory to keep says `no memory to write this line` rather than standing
+  empty or keeping the value before it.
 - **A failed write is said once a run**, in the log and on the status
   line. A `diagnostics` that is not a full path is logged and ignored.
 

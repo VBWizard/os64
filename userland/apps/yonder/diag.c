@@ -9,7 +9,7 @@
 
 typedef struct {
     char *a, *b;            // MISSING: kind, name; FAILED: what, message; fact: key, value
-    uint32_t count;
+    uint32_t count;         // a fact's: 1 when its latest value had no memory to keep
 } Line;
 
 // The lines that met no room are counted as distinct lines, as the file
@@ -207,7 +207,12 @@ void yonder_diag_fact(yonder_diag_t *d, const char *key, const char *value)
     if (d == NULL)
         return;
     Line *l = table_line(&d->facts, key, "", false, YONDER_DIAG_FACTS_MAX);
-    char *v = l != NULL ? copy(value) : NULL;
+    if (l == NULL)
+        return;
+    // A value with no memory to keep is not left empty, nor the one before
+    // it standing as if it were this one: the line says it went.
+    char *v = copy(value);
+    l->count = v == NULL;
     if (v == NULL)
         return;
     os64_free(l->b);
@@ -367,7 +372,10 @@ size_t yonder_diag_render(const yonder_diag_t *d, char *out, size_t cap)
     for (uint32_t i = 0; i < d->facts.n; i++) {
         put_text(&o, d->facts.lines[i].a);
         puts_(&o, ": ");
-        put_text(&o, d->facts.lines[i].b);
+        if (d->facts.lines[i].count != 0)
+            puts_(&o, "no memory to write this line");
+        else
+            put_text(&o, d->facts.lines[i].b);
         puts_(&o, "\n");
     }
     // What met no room is said, in words that are neither token: the

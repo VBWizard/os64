@@ -4048,6 +4048,33 @@ static void diag_arriving_released_case(void) {
     check(!s_arriving.staged && s_arriving.families.n==0 && s_arriving.families.f==NULL,
           "diag: a page let go before it was shown takes its staged families with it");
 }
+/* A fact whose value had no memory to keep says so: not empty, and not
+ * the value before it standing as if it were this one. */
+static void diag_fact_short_case(void) {
+    yonder_diag_t *d=yonder_diag_new("http://fixture.test/",1,0);
+    static char text[8192];
+    yonder_diag_fact(d,"kept","first");
+    fail_at=attempts+1;
+    yonder_diag_fact(d,"kept","second");
+    fail_at=0;
+    yonder_diag_render(d,text,sizeof(text));
+    check(strstr(text,"\nkept: no memory to write this line\n")!=NULL,"diag: a value with no memory to keep is said to be gone");
+    yonder_diag_fact(d,"kept","third");
+    yonder_diag_render(d,text,sizeof(text));
+    check(strstr(text,"\nkept: third\n")!=NULL,"diag: and the next value that fits is the line again");
+    unsigned empty=0;
+    for(size_t cut=1;cut<=6;cut++) {
+        char key[16]; snprintf(key,sizeof(key),"new%u",(unsigned)cut);
+        fail_at=attempts+cut;
+        yonder_diag_fact(d,key,"value");
+        fail_at=0;
+        yonder_diag_render(d,text,sizeof(text));
+        char empty_line[32]; snprintf(empty_line,sizeof(empty_line),"\n%s: \n",key);
+        empty+=strstr(text,empty_line)!=NULL;
+    }
+    check(empty==0,"diag: a new fact short of memory is never an empty line");
+    yonder_diag_free(d);
+}
 static void diag_css_unasked_case(void) {
     /* A page whose only picture is refused before the table: nothing will
      * ever come in to write the record, so meeting it writes it. */
@@ -4962,6 +4989,49 @@ static void webfont_cases(void) {
         webfonts_families_free(&t);
         yonder_diag_free(d);
     }
+    /* A page let go before it was shown writes its fonts too: its faces as
+     * its rules declare them, none asked for, whatever the page on screen
+     * fetched, and the families its layout staged, MISSING lines and all. */
+    web_page("<style>@font-face{font-family:Web;src:url(w.ttf)}p{font-family:Web,Nope}</style><p>hello");
+    {
+        static Page fresh;
+        fresh=g.page;
+        memset(&g.page,0,sizeof(g.page));
+        /* Its own record, so its MISSING line is the staged one's. */
+        yonder_diag_free(fresh.diag);
+        fresh.diag=yonder_diag_new("http://fixture.test/fresh",99,0);
+        s_arriving.staged=true; s_arriving.seq=yonder_diag_seq(fresh.diag);
+        webfonts_served(&s_arriving.families,NULL,"Nope",4,WF_SERVED_NONE,"Test Sans");
+        diag_observe(&fresh,"when the page was left");
+        static char rec[8192];
+        yonder_diag_render(fresh.diag,rec,sizeof(rec));
+        check(strstr(rec,"\nfonts: 1 faces (0 past the most a page keeps), 0 files: 0 open, 0 failed, 0 coming\n")!=NULL &&
+              strstr(rec,"\nfont face 1: Web 400 normal: https://fixture.test/w.ttf not asked for yet")!=NULL &&
+              strstr(rec,"\nfont family Nope: no face; the list begins with Test Sans\n")!=NULL &&
+              strstr(rec,"MISSING font Nope (1)")!=NULL,
+              "web fonts: a page let go before it was shown writes its own fonts, not the shown page's");
+        webfonts_families_free(&s_arriving.families);
+        memset(&s_arriving,0,sizeof(s_arriving));
+        g.page=fresh;
+    }
+    web_drop();
+    /* A face's range is met against the page's text as it is at the
+     * write, after a script changed it. */
+    web_page_scripted("<style>@font-face{font-family:Cjk;src:url(cjk.ttf);unicode-range:U+4E00-9FFF}"
+                      "p{font-family:Cjk}</style><p id=t>hello</p>"
+                      "<script>document.getElementById('t').textContent='\xe4\xb8\xad'</script>",true);
+    diag_fonts(&g.page);
+    yonder_diag_render(g.page.diag,record,sizeof(record));
+    check(strstr(record,"Cjk 400 normal U+4E00-9FFF: not needed")!=NULL,"web fonts: census at the write: not needed first");
+    {
+        os64_js_outcome_t out;
+        check(yonder_scripts_step(g.page.scripts,&out) && out.status==OS64_JS_OK,"web fonts: census at the write: the text changes");
+    }
+    diag_fonts(&g.page);
+    yonder_diag_render(g.page.diag,record,sizeof(record));
+    check(strstr(record,"Cjk 400 normal U+4E00-9FFF: not needed")==NULL,
+          "web fonts: on the record, a face's range meets the text as it is at the write");
+    web_drop();
     /* A layout's answers are its own: what a layout that was never shown
      * found is not the record's at the next. */
     web_page("<style>@font-face{font-family:Web;src:url(w.ttf)}p{font-family:Web}</style><p>a");
@@ -5438,6 +5508,7 @@ static void diag_cases(void) {
     diag_picture_unasked_case();
     diag_css_unasked_case();
     diag_lost_distinct_case();
+    diag_fact_short_case();
     diag_lost_overflow_case();
     diag_arriving_released_case();
     diag_picture_moves_case();

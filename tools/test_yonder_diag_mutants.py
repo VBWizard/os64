@@ -187,6 +187,13 @@ mutants = [
     ('memory-short-is-unsaid', DIAG,
      '    if (d->short_of_memory)\n        puts_(&o, "some lines',
      '    if (false)\n        puts_(&o, "some lines', WINDOW),
+    # #280 round 6: a value with no memory to keep says so.
+    ('a-short-value-reads-empty', DIAG,
+     '    l->count = v == NULL;',
+     '    (void)0;', WINDOW),
+    ('a-short-value-is-unsaid', DIAG,
+     '        if (d->facts.lines[i].count != 0)',
+     '        if (false)', WINDOW),
 ]
 
 caught, missed, unbuilt = [], [], []
