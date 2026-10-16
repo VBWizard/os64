@@ -184,6 +184,11 @@ LIBFETCH_SO   := $(BIN)/libfetch.so
 # per-app link bases — which is what lets a host debugger tell two running
 # programs apart — while a PIC library can live outside the crowded low 2GB.
 LIBOS64_CFLAGS := $(filter-out -fno-pic -fno-pie,$(CFLAGS)) -fPIC
+# The shared libraries build -O2: yonder paints every pixel through
+# libos64's draw, text and font code, and the libraries derived from these
+# flags (libgzip, libpng, libfetch, libimage) sit on its path too. The
+# other libraries already ask for -O2 in their own makefiles.
+LIBOS64_CFLAGS += -O2
 LIBGZIP_CFLAGS := $(LIBOS64_CFLAGS)
 LIBPNG_CFLAGS  := $(LIBOS64_CFLAGS)
 LIBFETCH_CFLAGS := $(LIBOS64_CFLAGS)
@@ -597,7 +602,7 @@ $(OBJ)/pic/%.S.o: %.S
 # program lives under tests/, and a pattern-specific variable that matches
 # nothing is silent — the -O2 would simply stop applying with no diagnostic.
 # fpu_demo made exactly that move on the day /tests was created.
-OPTIMIZED_APPS := fpu_demo vncd
+OPTIMIZED_APPS := fpu_demo vncd yonder
 $(foreach a,$(OPTIMIZED_APPS),\
   $(eval $(OBJ)/$(if $(filter $(a),$(TESTS)),tests,apps)/$(a)/%.c.o: CFLAGS += -O2))
 
