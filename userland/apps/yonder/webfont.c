@@ -12,6 +12,8 @@
 #define WEBFONT_ACCEPT "font/ttf, font/otf, font/woff, */*;q=0.5"
 _Static_assert(sizeof(WEBFONT_ACCEPT) <= OS64_FETCH_ACCEPT_MAX,
                "libfetch refuses an Accept longer than OS64_FETCH_ACCEPT_MAX");
+_Static_assert(YONDER_FONT_SFNT_MAX == OS64_FONT_FILE_MAX,
+               "an unwrapped font is no larger than a text context opens");
 
 // The bytes as an SFNT, by their signature: kept as they are, unwrapped,
 // or refused with the reason. The caller keeps `bytes`.

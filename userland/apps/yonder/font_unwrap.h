@@ -24,9 +24,11 @@ typedef enum {
     YONDER_FONT_NO_MEMORY,
 } yonder_font_status_t;
 
-// The most an unwrapped SFNT may be, and the most it may be per byte of
-// its container (FreeType's sfwoff.c, after its 656cb77).
-#define YONDER_FONT_SFNT_MAX ((size_t)64 << 20)
+// The most an unwrapped SFNT may be — the most a text context opens
+// (OS64_FONT_FILE_MAX; webfont.c asserts it), so no unwrap makes a font
+// that cannot be opened — and the most it may be per byte of its
+// container (FreeType's sfwoff.c, after its 656cb77).
+#define YONDER_FONT_SFNT_MAX ((size_t)32 << 20)
 #define YONDER_FONT_EXPANSION_MAX 64
 
 // A WOFF 1.0 container's SFNT: the header read — a plain font's flavor,

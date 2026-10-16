@@ -196,7 +196,8 @@ _Static_assert(sizeof(garb_unicode_range_t) == sizeof(os64_text_range_t) &&
 // (the tree on screen holds its faces in the same budget): its bytes are
 // kept, and it is opened once more after the next layout of the shown
 // page, which has let the old tree's room go. Refused again, or past
-// WEBFONT_HELD_MAX of held bytes, the file fails.
+// WEBFONT_HELD_MAX of held bytes, or when that layout fails, the file
+// fails.
 typedef enum { WF_QUEUED, WF_WAITING, WF_HELD, WF_READY, WF_FAILED } WebFontState;
 
 typedef struct {
@@ -236,12 +237,13 @@ static struct {
     // layout, forgotten once a layout refuses none.
     uint64_t refused[WEBFONT_REFUSED_MAX], retried[WEBFONT_REFUSED_MAX];
     int32_t nrefused, nretried;
-    // The document's characters, a bit per 256 code points, as the layout
-    // `chars_layout` found them; and for each 256, how many of the 256s up
-    // to it hold one, so a range meets them in two reads.
+    // The document's characters, a bit per code point, as the layout
+    // `chars_layout` found them; and for each 64-bit word of them, how many
+    // words up to it hold one, so a range meets them in a few reads
+    // whatever its width (webfonts_any).
     uint64_t chars_layout;
-    uint8_t chars[0x110000 / 256 / 8];
-    uint16_t chars_upto[0x110000 / 256];
+    uint64_t chars[0x110000 / 64];
+    uint16_t chars_upto[0x110000 / 64];
     // The answer page_fonts lends until its next call.
     os64_text_font_t *list[OS64_TEXT_FALLBACK_MAX];
 } s_web;
@@ -255,6 +257,7 @@ static struct {
 } s_laying;
 
 static void webfonts_feed(bool laid);
+static void webfonts_unhold(void);
 static void webfonts_leave(void);
 static void webfonts_orphaned(void);
 
@@ -1911,6 +1914,7 @@ static bool lay_out_shown(bool again, LaidFor laid_for)
     s_web.moved = false;
     g.settle_due = YONDER_NEVER;       // the deadline goes with the moves it was for
     if (!laid) {
+        webfonts_unhold();
         say_failed(g.page.diag, "layout", "Out of memory laying the page out; this is the last layout that fit.");
         return false;
     }
@@ -3351,9 +3355,22 @@ static bool fold_eq(const char *a, size_t alen, const char *b, size_t blen)
     return true;
 }
 
+// The elements whose text is never drawn, and so meets no face's range:
+// the head, the title, and what holds sheets, scripts and templates.
+static bool webfonts_undrawn(const os64_html_node_t *n)
+{
+    static const char *const kUndrawn[] = {"head", "style", "script", "template", "title", NULL};
+    if (n->kind != OS64_HTML_ELEMENT || n->name == NULL || n->ns != OS64_HTML_NS_HTML)
+        return false;
+    for (int k = 0; kUndrawn[k] != NULL; k++)
+        if (os64_streq(n->name, kUndrawn[k]))
+            return true;
+    return false;
+}
+
 // The document's characters (s_web.chars), found once a layout: its text
-// nodes. Generated content is not laid out by libflow, so
-// it has none to add (GARB.md's G5).
+// nodes, but for those webfonts_undrawn holds. Generated content is not
+// laid out by libflow, so it has none to add (GARB.md's G5).
 static void webfonts_chars(const Page *p)
 {
     if (s_web.chars_layout == geometry_layout_total)
@@ -3366,10 +3383,11 @@ static void webfonts_chars(const Page *p)
             for (size_t at = 0; at < n->text_len;) {
                 uint32_t cp;
                 at += os64_utf8_decode(n->text + at, n->text_len - at, &cp);
-                s_web.chars[cp >> 11] |= (uint8_t)(1u << ((cp >> 8) & 7));
+                if (cp <= 0x10FFFF)
+                    s_web.chars[cp >> 6] |= 1ull << (cp & 63);
             }
         }
-        if (n->first_child != NULL) {
+        if (n->first_child != NULL && !webfonts_undrawn(n)) {
             n = n->first_child;
             continue;
         }
@@ -3378,10 +3396,22 @@ static void webfonts_chars(const Page *p)
         n = n != NULL ? n->next : NULL;
     }
     uint16_t upto = 0;
-    for (uint32_t b = 0; b < 0x110000 / 256; b++) {
-        upto += (s_web.chars[b >> 3] >> (b & 7)) & 1;
-        s_web.chars_upto[b] = upto;
+    for (uint32_t w = 0; w < 0x110000 / 64; w++) {
+        upto += s_web.chars[w] != 0;
+        s_web.chars_upto[w] = upto;
     }
+}
+
+// Whether the document has a character from `first` to `last`: the
+// first and last words masked to the range, the words between counted.
+static bool webfonts_any(uint32_t first, uint32_t last)
+{
+    uint32_t wf = first >> 6, wl = last >> 6;
+    uint64_t head = ~0ull << (first & 63), tail = ~0ull >> (63 - (last & 63));
+    if (wf == wl)
+        return (s_web.chars[wf] & head & tail) != 0;
+    return (s_web.chars[wf] & head) != 0 || (s_web.chars[wl] & tail) != 0 ||
+           s_web.chars_upto[wl - 1] != s_web.chars_upto[wf];
 }
 
 // Whether a face's ranges meet the document's characters: one without
@@ -3390,11 +3420,9 @@ static bool webfonts_meet(const garb_font_face_t *f)
 {
     if (f->nranges == 0)
         return true;
-    for (int32_t i = 0; i < f->nranges; i++) {
-        uint32_t lo = f->ranges[i].first >> 8, hi = f->ranges[i].last >> 8;
-        if (s_web.chars_upto[hi] != (lo > 0 ? s_web.chars_upto[lo - 1] : 0))
+    for (int32_t i = 0; i < f->nranges; i++)
+        if (webfonts_any(f->ranges[i].first, f->ranges[i].last))
             return true;
-    }
     return false;
 }
 
@@ -3470,8 +3498,10 @@ static int32_t webfonts_add(const char *url)
 }
 
 // The file a face is drawn from: its first source yonder can read whose
-// file has not failed, interned when it is wanted for the first time; -1
-// when there is none, or none could be interned.
+// file has not failed, interned when it is wanted for the first time — a
+// source that cannot be interned (the table full, no memory) is passed
+// over like a failed one, for a later source already in hand; -1 when
+// there is none.
 // local() names a system font by its full name, and yonder's have none a
 // page writes: it is passed over to the next source.
 static int32_t webfonts_file(const Page *p, const garb_font_face_t *f)
@@ -3482,10 +3512,10 @@ static int32_t webfonts_file(const Page *p, const garb_font_face_t *f)
         if (s->kind != GARB_FACE_URL || !webfonts_readable(s) || !webfonts_url(p, f, s, url, sizeof(url)))
             continue;
         int32_t file = webfonts_find(url);
-        if (file >= 0 && s_web.files[file].state == WF_FAILED)
-            continue;
         if (file < 0)
             file = webfonts_add(url);
+        if (file < 0 || s_web.files[file].state == WF_FAILED)
+            continue;
         return file;
     }
     return -1;
@@ -3884,6 +3914,24 @@ static void webfonts_feed(bool laid)
             s_web.in_flight++;
         }
         s_web.next++;
+    }
+}
+
+// A layout of the shown page failed, so the room the held files wait for
+// was not let go: each fails, its bytes freed, rather than waiting for a
+// layout that may not come. The page is not moved for them — the failed
+// layout's moves were consumed so it is not retried at every batch — and
+// the next layout wants each face's next source.
+static void webfonts_unhold(void)
+{
+    for (int32_t i = 0; i < s_web.nfiles; i++) {
+        WebFontFile *w = &s_web.files[i];
+        if (w->state != WF_HELD)
+            continue;
+        os64_free(w->sfnt);
+        w->sfnt = NULL;
+        s_web.held_bytes -= w->sfnt_len;
+        webfonts_fail(w, "no room to open it");
     }
 }
 

@@ -2371,7 +2371,7 @@ file whose open is refused for room (the tree on screen holds faces in
 the same budget) is held and opened once more after the next layout of
 the shown page, a script's rebuild included, which has let the old
 tree's room go; refused again it fails, as it does when the held files'
-bytes together would pass 64 MiB. A SIZE of an open file refused for
+bytes together would pass 64 MiB and when that layout itself fails. A SIZE of an open file refused for
 room gets one more layout, and then the fallback stands — each size
 once, until a layout refuses none, so a zoom's new size gets its own.
 Every font failure reaches the badge as it is recorded. The list is
@@ -2380,10 +2380,11 @@ places, and the page's faces have the rest — a composite past that, its
 latest rules. A face is fetched only while its list has a place for it:
 a file coming, or a size of one refused for room, holds a place (once,
 however often its name is written), so the faces after it wait, and one
-whose file fails gives its place to the next. A face with more
-`unicode-range` entries than a text font takes (4096) is never fetched,
-and a range meets the document's characters in two reads, whatever its
-width. `local()` names an installed font by its full name, and
+whose file fails gives its place to the next; a source that cannot be
+interned (the table of 512 files full) passes to the face's next source
+as a failed one does. A face with more `unicode-range` entries than a
+text font takes (4096) is never fetched, and a range meets the
+document's characters in a few reads, whatever its width. `local()` names an installed font by its full name, and
 yonder's have none a page writes: it is passed over to the next `src`.
 A family the resolver finds neither a face nor a system family for is
 `MISSING font`, which the resolver says itself (S9a3; libgarb's
@@ -2395,11 +2396,13 @@ lays out in the system's fonts until it is shown.
 **When a face is fetched.** When the resolver first wants it, and only
 then: a page names families it never uses. A face with a
 `unicode-range` is fetched only when the document's characters meet its
-range. Those are a RUNNING set — one bit per 256 code points (4,352
-bits), rebuilt from the tree at each layout, so text a stream chunk or a
+range. Those are a RUNNING set — one bit per code point (1,114,112
+bits, with a count per 64-bit word so a range's middle is two reads),
+rebuilt from the tree at each layout, so text a stream chunk or a
 script adds after the first layout counts — and a face passed over by
 range is asked again when the set grows. What counts as the document's
-characters: its text nodes. Generated content (`::before` and `::after`
+characters: its text nodes, but for the text of `head`, `style`,
+`script`, `template` and `title`, which is never drawn. Generated content (`::before` and `::after`
 `content:`) would count too, but nothing lays it out yet — libgarb sets
 pseudo-elements' rules aside and libflow generates no boxes for them
 (GARB.md's G5) — so the census's icon fonts, Glyphicons and Font
@@ -2451,7 +2454,7 @@ can say; neither file its directory alone; no block length without an
 offset, and no metadata unpacking to nothing; tags ascending from above
 zero; and the file nothing but its parts, each table
 where the last one's padding ended, then the metadata, then the private
-block, the file ending where the last part does — and an SFNT over 64 MiB or an expansion past 64 to 1
+block, the file ending where the last part does — and an SFNT over 32 MiB (the most a text context opens) or an expansion past 64 to 1
 refused (FreeType's `656cb77`, which UPSTREAM_REVIEW lists as "module
 not compiled": the fix moves with the job). The zlib container — the
 two-byte header and Adler-32 — is HOISTED into libgzip as the zlib door

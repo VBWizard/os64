@@ -4444,6 +4444,62 @@ static void webfont_cases(void) {
         check(strstr(rec,want1)!=NULL && strstr(rec,want2)!=NULL,"web fonts: MISSING font keeps a long name whole");
         web_drop();
     }
+    /* A range is met by the document's own code points, not their
+     * neighbours: text of U+0061 alone meets U+61 and U+0-FFFF, not U+62,
+     * U+0-60 or U+62-FFFF. */
+    {
+        static const struct { const char *range; bool met; } kRanges[] = {
+            {"U+61",true},{"U+62",false},{"U+0-60",false},{"U+0-FFFF",true},{"U+62-FFFF",false},
+            {"U+40-7F",true},{"U+0-3F,U+61",true},{"U+20-10FFFF",true},{"U+80-10FFFF",false},
+        };
+        for(size_t r=0;r<sizeof(kRanges)/sizeof(kRanges[0]);r++) {
+            char page[512];
+            snprintf(page,sizeof(page),"<style>@font-face{font-family:Web;src:url(w.ttf);unicode-range:%s}"
+                     "p{font-family:Web}</style><p>a",kRanges[r].range);
+            web_page(page);
+            char what[96]; snprintf(what,sizeof(what),"web fonts: text of U+0061 %s %s",
+                                    kRanges[r].met?"meets":"does not meet",kRanges[r].range);
+            check(s_web.nfiles==(kRanges[r].met?1:0),what);
+            web_drop();
+        }
+    }
+    /* A source that cannot be interned is passed over for a later source
+     * already in hand. */
+    web_page_scripted("<style>@font-face{font-family:Z;src:url(shared.ttf)}"
+                      "@font-face{font-family:W;src:url(new.ttf),url(shared.ttf)}</style>"
+                      "<p id=t style='font-family:Z'>hello</p>"
+                      "<script>document.getElementById('t').style.fontFamily='W'</script>",true);
+    check(font_land("shared.ttf","A",NULL),"web fonts: intern: the shared file arrives");
+    pictures_settle();
+    {
+        uint64_t shared=first_text_font();
+        while(webfonts_add("https://fixture.test/filler") >= 0) {
+            s_web.files[s_web.nfiles-1].state=WF_FAILED; s_web.waiting--;
+        }
+        os64_js_outcome_t out;
+        check(yonder_scripts_step(g.page.scripts,&out) && out.status==OS64_JS_OK && script_rebuild(),
+              "web fonts: intern: the text changes family with the table full");
+        check(web_file("https://fixture.test/new.ttf")<0 && first_text_font()==shared,
+              "web fonts: a source that cannot be interned passes to one already in hand");
+    }
+    web_drop();
+    /* A held file whose reclaiming layout fails is failed and let go, not
+     * held for a layout that may not come. */
+    web_page("<style>@font-face{font-family:Web;src:url(w.ttf)}p{font-family:Web}</style><p>hello");
+    font_open_refusals=1;
+    g.badge_missing=g.badge_failed=0; g.badge_text[0]=0;
+    check(font_land("w.ttf","A",NULL) && s_web.files[0].state==WF_HELD && s_web.held_bytes>0,"web fonts: unhold: held");
+    {
+        os64_html_pin_t pins[512]; size_t n=0;
+        while(n<512 && (pins[n]=os64_html_pin(g.page.way.doc))!=0) n++;
+        pictures_settle();
+        check(n<512 && s_web.files[0].state==WF_FAILED && s_web.held_bytes==0 && s_web.files[0].sfnt==NULL &&
+              strstr(g.badge_text,"FAILED")!=NULL,
+              "web fonts: a held file whose layout fails is failed and its bytes let go");
+        for(size_t i=0;i<n;i++) os64_html_unpin(g.page.way.doc,pins[i]);
+    }
+    font_open_refusals=0;
+    web_drop();
     /* A name written again counts its file once: the family after the
      * repeats still has a place. */
     web_page("<style>@font-face{font-family:W;src:url(w.ttf)}@font-face{font-family:X;src:url(x.ttf)}"
