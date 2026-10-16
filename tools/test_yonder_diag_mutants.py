@@ -167,6 +167,16 @@ mutants = [
     ('every-picture-writes', YONDER,
      '        if (waiting > 0 && g.page.waiting == 0 && s_web.waiting == 0)',
      '        if ((void)waiting, g.page.waiting == 0 && s_web.waiting == 0)', WINDOW),
+    # #280 round 4: a line that met no room is counted once.
+    ('lost-lines-recount', DIAG,
+     '    for (uint32_t i = 0; i < t->ngone; i++)\n        if (same_key(&t->gone[i], a, b, both))\n            return;\n',
+     '    (void)both;\n', WINDOW),
+    ('forget-keeps-the-lost', DIAG,
+     '    for (int k = 0; k < 2; k++) {',
+     '    for (int k = 0; k < 1; k++) {', WINDOW),
+    ('found-stays-lost', DIAG,
+     '    table_found(t, a, b, both);\n',
+     '    (void)table_found;\n', WINDOW),
 ]
 
 caught, missed, unbuilt = [], [], []

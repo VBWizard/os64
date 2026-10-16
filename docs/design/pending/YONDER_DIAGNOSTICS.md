@@ -170,32 +170,36 @@ gets plain lines for its fonts at every write, after `sheets:`:
     font family DejaVu Sans Mono: a system family
 
 - **A face line walks its sources in order** up to the one the face is
-  drawn from. An open file says `listed` (the container and the bytes
-  that came) when the face was in a list a layout gave text — the text
-  context then draws each glyph from the first font in the list that has
-  it, so a listed face may draw none — or `came` with why it was not:
-  `not listed since it came` before a layout has met it, a size refused
-  for room or refused to open, or no text asked for it (the file may be
-  another face's that shares it). Then `coming`,
-  `came …, held for room to open` (the open waits for the room the tree on
-  screen holds), `failed` (the reason is the file's `FAILED font` line —
-  one the page's table of files had no room to keep among them), a
-  `format()` or `local()` passed over, or `never asked for`: no text asked
-  for its family, or the lists it was in had no place left for it
-  (PILE3.md § Web fonts). A face that is passed over whatever its file
-  says only that, in place of its sources: `not needed` when its ranges
-  miss the page's text, `passed over` with the count when it has more
-  ranges than a text font takes. A file several faces name is one file,
-  and each face says how IT fared, as the latest layout that asked for
-  fonts found it. The `fonts:` line counts files by their state — `open`
-  is opened, not drawn — and says when more families were asked for than
-  the 64 the record keeps. The section is written whole at each write, so a face a
-  script's rebuild took away goes with it.
-- **A family line is what the layout on screen found** for a family name
-  it was asked, the best any of its runs found (a name one run listed a
-  face of is the page's faces) — a layout that fails leaves the lines of
-  the one still shown, and a name the page no longer asks for goes: the page's faces, the page's faces with none in the list yet
-  (and what drew the text meanwhile), a system family by that name, or
+  drawn from, whole however long (only its ranges past the first 64 are
+  counted, `and 4033 more`, not spelled). An open file says `listed` (the
+  container and the bytes that came) when the face was in a list the
+  layout of the tree on screen gave text — the text context then draws
+  each glyph from the first font in the list that has it, so a listed
+  face may draw none — or `came` with why it was not: `not listed since
+  it came` before a layout has met it, a size refused for room or refused
+  to open, or no text asked for it (the file may be another face's that
+  shares it). Then `coming`, `came …, held for room to open` (the open
+  waits for the room the tree on screen holds), `failed` (the reason is
+  the file's `FAILED font` line — one the page's table of files had no
+  room to keep among them), a `format()` or `local()` passed over, `not
+  asked for yet` on a page whose tree on screen was laid out before it was
+  shown (a page is laid out in its faces once it is), or `never asked
+  for`: no text asked for its family, or the lists it was in had no place
+  left for it (PILE3.md § Web fonts). A face that is passed over whatever
+  its file says only that, in place of its sources: `not needed` when its
+  ranges miss the page's text as it is at the write, `passed over` with
+  the count when it has more ranges than a text font takes. A file
+  several faces name is one file, and each face says how IT fared. The
+  `fonts:` line counts files by their state — `open` is opened, not drawn
+  — and says when more families were asked for than the 512 the record
+  keeps. The section is written whole at each write, so a face a script's
+  rebuild took away goes with it.
+- **A family line is what the layout of the tree on screen found** for a
+  family name it was asked, the best any of its runs found (a name one run
+  listed a face of is the page's faces) — a layout that fails leaves the
+  lines of the one still shown, and a name the page no longer asks for
+  goes: the page's faces, the page's faces with none in the list yet (and
+  what drew the text meanwhile), a system family by that name, or
   nothing. A page's arrival write has the families its layout asked for
   before it was shown. A page draws in none of its own faces until then,
   so a name they answer is the page's faces with none in the list there,
@@ -203,7 +207,8 @@ gets plain lines for its fonts at every write, after `sheets:`:
 - The records: `FAILED font: <address>: <why>` for a file that did not
   fetch, unwrap or open, or that the page's table of files could not keep,
   and `MISSING font <family>` for a family with neither a page face nor a
-  system family.
+  system family, its count the most lookups one layout made for it (each
+  run of text in it, each time a list names it).
 - **The second write waits for the last picture AND the last font**, and,
   as for pictures, for the layout a face that arrived owes (`written: when
   its pictures and fonts were in`) — and for anything that layout wanted
@@ -285,7 +290,9 @@ gets plain lines for its fonts at every write, after `sheets:`:
   source name, so it gets a script line only when it fails.
 - **A table holds 512 distinct lines.** Past that, the rest are counted on
   a plain line (`missing names not kept: 3`) in words that are neither
-  token.
+  token — each line once, however often it is asked for (a condition
+  looked at each layout, a section written again whole), until room is
+  found for it.
 - **A failed write is said once a run**, in the log and on the status
   line. A `diagnostics` that is not a full path is logged and ignored.
 

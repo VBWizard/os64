@@ -12,9 +12,17 @@ typedef struct {
     uint32_t count;
 } Line;
 
+// The lines that met no room are counted as distinct lines, as the file
+// says them: each is kept by its key (`gone`) so a line asked for again —
+// a condition looked at once a layout, a section written again whole —
+// is not counted again. Past GONE_MAX of them, or with no memory to keep
+// one, the rest are counted as they come (`uncounted`).
+#define GONE_MAX 4096u
 typedef struct {
     Line *lines;
-    uint32_t n, cap, lost;
+    uint32_t n, cap;
+    Line *gone;
+    uint32_t ngone, cap_gone, uncounted;
 } Table;
 
 struct yonder_diag {
@@ -40,24 +48,80 @@ static void table_free(Table *t)
         os64_free(t->lines[i].b);
     }
     os64_free(t->lines);
+    for (uint32_t i = 0; i < t->ngone; i++) {
+        os64_free(t->gone[i].a);
+        os64_free(t->gone[i].b);
+    }
+    os64_free(t->gone);
+}
+
+static bool same_key(const Line *l, const char *a, const char *b, bool both)
+{
+    return os64_streq(l->a, a) && (!both || os64_streq(l->b, b));
+}
+
+static uint32_t table_lost(const Table *t)
+{
+    return t->ngone > UINT32_MAX - t->uncounted ? UINT32_MAX : t->ngone + t->uncounted;
+}
+
+// The line keyed `a` (and `b`) met no room: counted once, however often it
+// is asked for.
+static void table_lose(Table *t, const char *a, const char *b, bool both)
+{
+    for (uint32_t i = 0; i < t->ngone; i++)
+        if (same_key(&t->gone[i], a, b, both))
+            return;
+    if (t->ngone == t->cap_gone && t->ngone < GONE_MAX) {
+        uint32_t bigger = t->cap_gone != 0 ? t->cap_gone * 2 : 16;
+        Line *next = os64_malloc((size_t)bigger * sizeof(Line));
+        if (next != NULL) {
+            if (t->ngone != 0)
+                os64_memcpy(next, t->gone, (size_t)t->ngone * sizeof(Line));
+            os64_free(t->gone);
+            t->gone = next;
+            t->cap_gone = bigger;
+        }
+    }
+    Line one = {t->ngone < t->cap_gone ? copy(a) : NULL, t->ngone < t->cap_gone ? copy(b) : NULL, 0};
+    if (one.a == NULL || one.b == NULL) {
+        os64_free(one.a);
+        os64_free(one.b);
+        if (t->uncounted < UINT32_MAX)
+            t->uncounted++;
+        return;
+    }
+    t->gone[t->ngone++] = one;
+}
+
+// A key given room after all is no longer lost.
+static void table_found(Table *t, const char *a, const char *b, bool both)
+{
+    for (uint32_t i = 0; i < t->ngone; i++)
+        if (same_key(&t->gone[i], a, b, both)) {
+            os64_free(t->gone[i].a);
+            os64_free(t->gone[i].b);
+            t->gone[i] = t->gone[--t->ngone];
+            return;
+        }
 }
 
 // The line keyed `a` (and `b`, when `both`), found or added. NULL when the
-// table is full or memory ran out: the line is then counted as lost.
+// table is full or memory ran out: the line is then counted as lost, once.
 static Line *table_line(Table *t, const char *a, const char *b, bool both, uint32_t max)
 {
     for (uint32_t i = 0; i < t->n; i++)
-        if (os64_streq(t->lines[i].a, a) && (!both || os64_streq(t->lines[i].b, b)))
+        if (same_key(&t->lines[i], a, b, both))
             return &t->lines[i];
     if (t->n == max) {
-        t->lost++;
+        table_lose(t, a, b, both);
         return NULL;
     }
     if (t->n == t->cap) {
         uint32_t bigger = t->cap != 0 ? t->cap * 2 : 16;
         Line *next = os64_malloc((size_t)bigger * sizeof(Line));
         if (next == NULL) {
-            t->lost++;
+            table_lose(t, a, b, both);
             return NULL;
         }
         if (t->n != 0)
@@ -70,9 +134,10 @@ static Line *table_line(Table *t, const char *a, const char *b, bool both, uint3
     if (one.a == NULL || one.b == NULL) {
         os64_free(one.a);
         os64_free(one.b);
-        t->lost++;
+        table_lose(t, a, b, both);
         return NULL;
     }
+    table_found(t, a, b, both);
     t->lines[t->n] = one;
     return &t->lines[t->n++];
 }
@@ -156,17 +221,23 @@ void yonder_diag_forget(yonder_diag_t *d, const char *prefix)
     if (d == NULL)
         return;
     size_t len = os64_strlen(prefix);
-    uint32_t kept = 0;
-    for (uint32_t i = 0; i < d->facts.n; i++) {
-        Line *l = &d->facts.lines[i];
-        if (os64_strlen(l->a) >= len && os64_memcmp(l->a, prefix, len) == 0) {
-            os64_free(l->a);
-            os64_free(l->b);
-        } else {
-            d->facts.lines[kept++] = *l;
+    // The lines, and the lines that met no room: the set is asked for
+    // again whole.
+    Line *lists[2] = {d->facts.lines, d->facts.gone};
+    uint32_t *counts[2] = {&d->facts.n, &d->facts.ngone};
+    for (int k = 0; k < 2; k++) {
+        uint32_t kept = 0;
+        for (uint32_t i = 0; i < *counts[k]; i++) {
+            Line *l = &lists[k][i];
+            if (os64_strlen(l->a) >= len && os64_memcmp(l->a, prefix, len) == 0) {
+                os64_free(l->a);
+                os64_free(l->b);
+            } else {
+                lists[k][kept++] = *l;
+            }
         }
+        *counts[k] = kept;
     }
-    d->facts.n = kept;
 }
 
 void yonder_diag_failed_seen(yonder_diag_t *d, const char *what, const char *message)
@@ -296,9 +367,9 @@ size_t yonder_diag_render(const yonder_diag_t *d, char *out, size_t cap)
     }
     // What met no room is said, in words that are neither token: the
     // verdict already counts every line that was kept.
-    put_lost(&o, "missing names", d->missing.lost);
-    put_lost(&o, "failures", d->failed.lost);
-    put_lost(&o, "facts", d->facts.lost);
+    put_lost(&o, "missing names", table_lost(&d->missing));
+    put_lost(&o, "failures", table_lost(&d->failed));
+    put_lost(&o, "facts", table_lost(&d->facts));
     if (cap != 0)
         out[o.at < cap ? o.at : cap - 1] = '\0';
     return o.at;
