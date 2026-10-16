@@ -4412,6 +4412,38 @@ static void webfont_cases(void) {
               "web fonts: a size that will not open gives its place to the next face");
         web_drop();
     }
+    /* A face whose range misses the text takes nothing, even when another
+     * rule fetched its file. */
+    web_page("<style>@font-face{font-family:Z;src:url(s.ttf)}"
+             "@font-face{font-family:Cjk;src:url(s.ttf);unicode-range:U+4E00-9FFF}"
+             "p{font-family:Z,Cjk}</style><p>hello");
+    check(font_land("s.ttf","A",NULL),"web fonts: shared: the file arrives");
+    pictures_settle();
+    check(s_web.nhandles==1,"web fonts: a face whose range misses the text is not opened from a shared file");
+    web_drop();
+    /* The workers stopping fails a file out and lays the page out again
+     * for the face's next source. */
+    web_page("<style>@font-face{font-family:Web;src:url(a.ttf),url(b.ttf)}p{font-family:Web}</style><p>hello");
+    s_web.moved=false;
+    webfonts_orphaned();
+    check(s_web.files[0].state==WF_FAILED && s_web.moved,"web fonts: a file out when the workers stop fails and moves the page");
+    web_drop();
+    /* MISSING font keeps the whole name: two long ones that begin alike
+     * are two. */
+    {
+        static char page[2048], one[400], two[400];
+        memset(one,'n',300); one[300]='1'; one[301]=0;
+        memset(two,'n',300); two[300]='2'; two[301]=0;
+        snprintf(page,sizeof(page),"<style>@font-face{font-family:Web;src:url(w.ttf)}</style>"
+                 "<p style=\"font-family:'%s'\">a</p><p style=\"font-family:'%s'\">b</p>",one,two);
+        web_page(page);
+        static char rec[8192], want1[420], want2[420];
+        yonder_diag_render(g.page.diag,rec,sizeof(rec));
+        snprintf(want1,sizeof(want1),"MISSING font %s",one);
+        snprintf(want2,sizeof(want2),"MISSING font %s",two);
+        check(strstr(rec,want1)!=NULL && strstr(rec,want2)!=NULL,"web fonts: MISSING font keeps a long name whole");
+        web_drop();
+    }
     /* A name written again counts its file once: the family after the
      * repeats still has a place. */
     web_page("<style>@font-face{font-family:W;src:url(w.ttf)}@font-face{font-family:X;src:url(x.ttf)}"

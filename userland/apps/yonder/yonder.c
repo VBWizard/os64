@@ -3326,7 +3326,7 @@ static void picture_arrived(yonder_picture_job_t *job, yonder_picture_t *product
 // layout passes on what it does not cover — and one that is not is
 // WANTED: its first source yonder can read is interned here, to be fetched
 // once the layout is done (webfonts_feed), because a resolver does no I/O
-// (flow_env_t.fonts). A face with a range is wanted only when the
+// (flow_env_t.fonts). A face with a range is wanted, and drawn, only when the
 // document's characters meet it. Text draws at once in the fallback and is
 // laid out again when a face arrives, batched as pictures are
 // (pictures_settle): every font-display is swap here.
@@ -3470,10 +3470,11 @@ static int32_t webfonts_add(const char *url)
 }
 
 // The file a face is drawn from: its first source yonder can read whose
-// file has not failed — interned when `want`, else only found — or -1.
+// file has not failed, interned when it is wanted for the first time; -1
+// when there is none, or none could be interned.
 // local() names a system font by its full name, and yonder's have none a
 // page writes: it is passed over to the next source.
-static int32_t webfonts_file(const Page *p, const garb_font_face_t *f, bool want)
+static int32_t webfonts_file(const Page *p, const garb_font_face_t *f)
 {
     for (int32_t i = 0; i < f->nsrc; i++) {
         const garb_face_src_t *s = &f->src[i];
@@ -3483,7 +3484,7 @@ static int32_t webfonts_file(const Page *p, const garb_font_face_t *f, bool want
         int32_t file = webfonts_find(url);
         if (file >= 0 && s_web.files[file].state == WF_FAILED)
             continue;
-        if (file < 0 && want)
+        if (file < 0)
             file = webfonts_add(url);
         return file;
     }
@@ -3684,11 +3685,16 @@ static os64_font_status_t page_fonts(void *ctx, const flow_family_list_t *famili
             const os64_font_family_name_t *nm = &asked.names[k];
             if (os64_font_family_known(s_faces.families, nm))
                 continue;
-            char name[256];
-            size_t len = nm->len < sizeof(name) - 1 ? nm->len : sizeof(name) - 1;
-            os64_memcpy(name, nm->name, len);
-            name[len] = '\0';
+            // The whole name: two long ones that begin alike are two.
+            char small_name[256];
+            char *name = nm->len < sizeof(small_name) ? small_name : os64_malloc(nm->len + 1);
+            if (name == NULL)
+                continue;
+            os64_memcpy(name, nm->name, nm->len);
+            name[nm->len] = '\0';
             yonder_diag_missing_seen(g.page.diag, "font", name, 1);
+            if (name != small_name)
+                os64_free(name);
         }
     if (rest != small)
         os64_free(rest);
@@ -3699,8 +3705,9 @@ static os64_font_status_t page_fonts(void *ctx, const flow_family_list_t *famili
     // coming, or a size of one refused for room, holds a place, once, so
     // the faces after it are not fetched while it may yet draw; a face
     // whose file failed, or whose size will not open for another reason,
-    // gives its place to the next. A face with more ranges than a text
-    // font takes never opens, and is passed over.
+    // gives its place to the next. A face whose ranges miss the document's
+    // characters, or with more than a text font takes, is passed over —
+    // even when another rule already fetched its file.
     os64_text_font_t *mine[WEBFONT_LIST_MAX];
     uint32_t mine_name[WEBFONT_LIST_MAX];
     int32_t pending[WEBFONT_LIST_MAX];
@@ -3710,9 +3717,9 @@ static os64_font_status_t page_fonts(void *ctx, const flow_family_list_t *famili
         int32_t m = webfonts_match(faces, nfaces, &families->names[k], italic, bold, chosen, WEBFONT_LIST_MAX);
         for (int32_t i = 0; i < m && places < keep; i++) {
             const garb_font_face_t *f = &faces[chosen[i]];
-            if (f->nranges > (int32_t)OS64_TEXT_RANGES_MAX)
+            if (f->nranges > (int32_t)OS64_TEXT_RANGES_MAX || !webfonts_meet(f))
                 continue;
-            int32_t file = webfonts_file(p, f, webfonts_meet(f));
+            int32_t file = webfonts_file(p, f);
             if (file < 0)
                 continue;
             bool ready = s_web.files[file].state == WF_READY, room = false;
@@ -3923,8 +3930,8 @@ static void webfont_arrived(const yonder_webfont_job_t *job, yonder_webfont_t *p
 }
 
 // The workers stopped with files out: each one with them is named as
-// failed, and each still queued goes through webfonts_feed, which names
-// it too.
+// failed, and the page laid out again for each face's next source; each
+// still queued goes through webfonts_feed, which names it too.
 static void webfonts_orphaned(void)
 {
     for (int32_t i = 0; i < s_web.nfiles; i++) {
@@ -3933,6 +3940,7 @@ static void webfonts_orphaned(void)
             continue;
         s_web.waiting--;
         webfonts_fail(w, "the workers stopped");
+        webfonts_move();
     }
     s_web.in_flight = 0;
     webfonts_feed(false);
