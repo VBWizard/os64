@@ -1652,8 +1652,9 @@ static const char *const kPaintStage[PS_COUNT] = {
 };
 
 // The deadlines a schedule hands the ticker, by where the next came from:
-// one already past when it is handed over rings at once, so a source
-// counted often here is a loop of rings that does no work.
+// one already past when it is handed over is rung for at once, or at the
+// clock's next tick when the loop meets it itself (pictures_schedule), so a
+// source counted often here is rings that may do no work.
 typedef enum {
     PAST_SETTLE, PAST_LAYOUTS, PAST_TICKS, PAST_ARRIVAL, PAST_STREAM, PAST_TIMERS, PAST_PICTURES, PAST_COUNT
 } PastDeadline;
