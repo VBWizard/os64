@@ -180,7 +180,9 @@ oversized lines, preserving the complete document. See the editor packet for
 source-offset mapping and explicit continuation indicators.
 
 Fonts are ordered primary then fallbacks (1..8 total); resolution happens before
-positions are computed. Layout falls back on MISSING or a glyph-local UNSUPPORTED;
+positions are computed. Layout falls back on MISSING, a glyph-local UNSUPPORTED,
+or a scalar outside the ranges a font was opened with (`os64_text_font_open_ranged`,
+a CSS `unicode-range`: such a font is not asked);
 malformed-engine errors fail layout; allocation and limit errors follow the
 bounded cache-recovery rule above and fail if recovery cannot complete. Exhausted fallback
 uses a synthetic outlined missing marker, width 8 pixels, with bitmap 8x16

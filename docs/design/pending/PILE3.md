@@ -2334,7 +2334,7 @@ cost tens of bytes each, fetched or not; every rule after them is
 counted lost unread, so a page cannot spend the cascade's arena on faces
 it will not keep; one a failed allocation would leave half-read is
 dropped whole and counted lost. `GARB_SKIP_FONT` still counts the family
-each rule before the cap names, from the same read, until S9a2, where the resolver fetches
+each rule before the cap names, from the same read, until S9a3, where the resolver fetches
 faces and says `MISSING font` itself of a family no face serves.
 
 **Which face (yonder's resolver).** The resolver is asked for a family
@@ -2349,12 +2349,13 @@ still asked bold or not, so 700 or 400 — the weights between are booked
 with 04-web-faces) — and every OPEN face of the chosen style and weight
 joins the list, the later of a composite first, each with its
 `unicode-range`, which the text layout
-honours: a face is asked only for the characters in its ranges
-(`os64_text_font_t` gains them). A face wanted and not open is recorded
+honours: a face is asked only for the characters in its ranges — it is
+opened with them (`os64_text_font_open_ranged`, one handle per rule and
+size), and a layout passes any other character to the next font. A face wanted and not open is recorded
 for fetching (below). A name with no page face is looked for among the
-system's families by name — DejaVu's own names, which is new work in
-libos64's provider (it matches the three generics and no name today) —
-and otherwise passed over; the generic comes last, as now. The list is
+system's families by name — each family's own, as its regular face
+reports it (`DejaVu Sans`), ASCII case folded, matched by libos64's
+provider (`os64_font_family_open`) — and otherwise passed over; the generic comes last, as now. The list is
 the eight a layout takes: past that, the rest are the generic's.
 `local()` names a system family the same way, and yonder has none of
 the names pages write, so in practice it is passed over to the next
@@ -2477,11 +2478,14 @@ open time, refused and why.
 swap and the batched relayout, the worker's unwrap, TrueType, OpenType
 and WOFF with the zlib door hoisted. Google Fonts serves yonder's own
 agent TrueType, and danlegt's faces are `.ttf`: S9a is what those pages
-need, and its test page uses yonder's default agent. It goes in two
+need, and its test page uses yonder's default agent. It goes in three
 parts: **S9a1** the pure libraries — libgarb's faces, libgzip's zlib
-door with libpng on it, the WOFF unwrapper — and **S9a2** what uses them:
-the text layout's ranges, the provider's names, yonder's resolver, fetch,
-worker and relayout. **S9b** — WOFF2:
+door with libpng on it, the WOFF unwrapper; **S9a2** libos64's half — a
+font opened with its ranges and the layout honouring them, and the
+provider matching its families' own names; and **S9a3** yonder's — the
+resolver, the running set, fetch, the worker's unwrap, the open, the
+relayout, `GARB_SKIP_FONT` retired, and the diagnostics page file's
+fonts section (BROWSER_DEBTS). **S9b** — WOFF2:
 Brotli vendored and pinned, the port's patch, the backend's verb, the
 audit rows walked again; then the Chrome preset, and the 24 hosts that
 serve nothing else, draw their faces — S9b's page uses the preset.
@@ -2516,7 +2520,15 @@ name, a range spelled with an escape and a rule with a prelude refused, a rule i
 `@media` that holds and one that does not, a composite's rules all kept
 in order, the 257th face passed over and a rule past the cap costing
 nothing however long, and each allocation failed alone and then with every one after it
-leaving every face whole or counted lost. yonder's host: the matching table of Fonts 4 § 5.2 against the
+leaving every face whole or counted lost. libos64's text suite: a font
+opened with ranges answering inside them and passing the rest on, out of
+order, overlapping and touching ranges merged, both ends of Unicode, the
+grid's box-drawing stand-in taken only from a primary that covers it,
+each bad range and one past the cap refused, each allocation of the open
+refused with nothing leaked — on the fake backend and FreeType; its
+family suite: a family's own name in any case choosing it, the first
+such name winning, a prefix and an unterminated slice short of the name
+refused, a builtin family matching nothing. yonder's host: the matching table of Fonts 4 § 5.2 against the
 faces it is handed (DejaVu's own files served as page faces), a
 character outside every range drawn in the next face, a face fetched
 only when the resolver wants it and its range meets the document's

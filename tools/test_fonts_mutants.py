@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """One deliberate break at a time to web fonts (docs/design/pending/PILE3.md
 § Web fonts, slice S9) — libgarb's @font-face, libgzip's zlib door and
-libpng on it, yonder's WOFF unwrapper — against the suite that holds each
-rule: libgarb's corpus and probes, libgzip's, libpng's, and the
-unwrapper's. A mutant is CAUGHT when its suite fails, MISSED when it
+libpng on it, yonder's WOFF unwrapper, libos64's ranged fonts and family
+names — against the suite that holds each rule: libgarb's corpus and
+probes, libgzip's, libpng's, the unwrapper's, and libos64's text and
+family suites. A mutant is CAUGHT when its suite fails, MISSED when it
 passes, which means a test is missing and gets written. A build failure is
 neither.
 
@@ -34,10 +35,15 @@ CASCADE = 'userland/libgarb/cascade.c'
 ZLIB = 'userland/libgzip/zlib.c'
 PNG = 'userland/libpng/png.c'
 UNWRAP = 'userland/apps/yonder/font_unwrap.c'
+TEXT = 'userland/libos64/text.c'
+TEXT_CACHE = 'userland/libos64/text_cache.c'
+FAMILY = 'userland/libos64/font_family.c'
 GARB = 'bash tools/test_garb_host.sh'
 GZIP = 'bash tools/test_gzip_host.sh'
 PNGS = 'bash tools/test_png_host.sh'
 UNWRAPS = 'bash tools/test_font_unwrap_host.sh'
+TEXTS = 'python3 tools/test_text_host.py'
+FAMILIES = 'python3 tools/test_font_family_host.py'
 
 # (name, file, old, new, cases). Each breaks one rule the design states.
 mutants = [
@@ -265,6 +271,49 @@ mutants = [
     ('the-directory-in-data-order', UNWRAP,
      '            uint8_t *e = out + SFNT_HEADER + (size_t)SFNT_ENTRY * order[i];',
      '            uint8_t *e = out + SFNT_HEADER + (size_t)SFNT_ENTRY * i;', UNWRAPS),
+    # libos64: a font's unicode-range, and a family chosen by its own name.
+    ('a-range-is-ignored', TEXT,
+     '            if (!covers(f,scalar)) {',
+     '            if (false && !covers(f,scalar)) {', TEXTS),
+    ('a-range-ends-short', TEXT,
+     '    return lo<f->range_count && f->ranges[lo].first<=scalar;',
+     '    return lo<f->range_count && f->ranges[lo].first<scalar;', TEXTS),
+    ('the-search-skips-the-last', TEXT,
+     '        if (f->ranges[mid].last<scalar) lo=mid+1;else hi=mid;',
+     '        if (f->ranges[mid].last<=scalar) lo=mid+1;else hi=mid;', TEXTS),
+    ('the-grid-stand-in-ignores-ranges', TEXT,
+     ' && covers(primary,scalar)) {',
+     ') {', TEXTS),
+    ('touching-ranges-stay-apart', TEXT_CACHE,
+     '        if (kept && r[i].first<=r[kept-1].last+1) {',
+     '        if (kept && r[i].first<=r[kept-1].last) {', TEXTS),
+    ('ranges-stay-unsorted', TEXT_CACHE,
+     '        while (j && r[j-1].first>x.first) {r[j]=r[j-1];j--;}',
+     '        while (false && j && r[j-1].first>x.first) {r[j]=r[j-1];j--;}', TEXTS),
+    ('a-backwards-range-opens', TEXT_CACHE,
+     '        if (ranges[i].first>ranges[i].last || ranges[i].last>0x10FFFF) return OS64_FONT_BAD_ARGUMENT;',
+     '        if (ranges[i].last>0x10FFFF) return OS64_FONT_BAD_ARGUMENT;', TEXTS),
+    ('a-range-past-unicode-opens', TEXT_CACHE,
+     '        if (ranges[i].first>ranges[i].last || ranges[i].last>0x10FFFF) return OS64_FONT_BAD_ARGUMENT;',
+     '        if (ranges[i].first>ranges[i].last) return OS64_FONT_BAD_ARGUMENT;', TEXTS),
+    ('ranges-are-uncapped', TEXT_CACHE,
+     '    if (length>OS64_FONT_FILE_MAX || range_count>OS64_TEXT_RANGES_MAX) return OS64_FONT_LIMIT;',
+     '    if (length>OS64_FONT_FILE_MAX) return OS64_FONT_LIMIT;', TEXTS),
+    ('released-ranges-leak', TEXT_CACHE,
+     '    file_release(c,f->file);text_free(c,f->ranges);text_free(c,f);\n}',
+     '    file_release(c,f->file);text_free(c,f);\n}', TEXTS),
+    ('a-failed-open-leaks-its-ranges', TEXT_CACHE,
+     '    c->backend->face_close(f->face);file_release(c,f->file);text_free(c,f->ranges);text_free(c,f);',
+     '    c->backend->face_close(f->face);file_release(c,f->file);text_free(c,f);', TEXTS),
+    ('a-name-chooses-nothing', FAMILY,
+     '                chosen = (os64_font_family_t)f, found = 1;',
+     '                found = 1;', FAMILIES),
+    ('names-keep-their-case', FAMILY,
+     "        if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');",
+     '', FAMILIES),
+    ('a-prefix-is-the-name', FAMILY,
+     '    if (!len || name->len != len) return false;',
+     '    if (!len || name->len > len) return false;', FAMILIES),
 ]
 
 caught, missed, unbuilt = [], [], []

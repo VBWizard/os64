@@ -111,17 +111,44 @@ static void file_release(os64_text_context_t *c, text_file *f)
     while (*at!=f) at=&(*at)->next;
     *at=f->next;text_free(c,f);
 }
-os64_font_status_t os64_text_font_open(os64_text_context_t *c, const uint8_t *bytes,
-    size_t length, const os64_font_face_options_t *o, os64_text_font_t **out)
+/* The ranges sorted by first scalar and merged where they touch, so a
+ * layout asks with one binary search; the count of what is left. */
+static size_t ranges_merge(os64_text_range_t *r, size_t n)
+{
+    for (size_t i=1;i<n;i++) {
+        os64_text_range_t x=r[i];size_t j=i;
+        while (j && r[j-1].first>x.first) {r[j]=r[j-1];j--;}
+        r[j]=x;
+    }
+    size_t kept=0;
+    for (size_t i=0;i<n;i++) {
+        if (kept && r[i].first<=r[kept-1].last+1) {
+            if (r[i].last>r[kept-1].last) r[kept-1].last=r[i].last;
+        } else r[kept++]=r[i];
+    }
+    return kept;
+}
+os64_font_status_t os64_text_font_open_ranged(os64_text_context_t *c, const uint8_t *bytes,
+    size_t length, const os64_font_face_options_t *o, const os64_text_range_t *ranges,
+    size_t range_count, os64_text_font_t **out)
 {
     if (out) *out=NULL;
     if (!c || !out || !bytes || !length || !o || !o->pixel_height ||
-        o->pixel_height>OS64_FONT_PIXEL_MAX || (o->hint!=OS64_FONT_HINT_NORMAL && o->hint!=OS64_FONT_HINT_NONE))
+        o->pixel_height>OS64_FONT_PIXEL_MAX || (o->hint!=OS64_FONT_HINT_NORMAL && o->hint!=OS64_FONT_HINT_NONE) ||
+        (range_count && !ranges))
         return OS64_FONT_BAD_ARGUMENT;
-    if (length>OS64_FONT_FILE_MAX) return OS64_FONT_LIMIT;
+    for (size_t i=0;i<range_count && i<OS64_TEXT_RANGES_MAX;i++)
+        if (ranges[i].first>ranges[i].last || ranges[i].last>0x10FFFF) return OS64_FONT_BAD_ARGUMENT;
+    if (length>OS64_FONT_FILE_MAX || range_count>OS64_TEXT_RANGES_MAX) return OS64_FONT_LIMIT;
     os64_text_font_t *f=NULL;
     os64_font_status_t status=new_font(c,&f);
     if (status!=OS64_FONT_OK) return status;
+    if (range_count) {
+        f->ranges=text_alloc(c,range_count*sizeof(*f->ranges));
+        if (!f->ranges) {status=c->refusal;goto fail;}
+        os64_memcpy(f->ranges,ranges,range_count*sizeof(*f->ranges));
+        f->range_count=ranges_merge(f->ranges,range_count);
+    }
     f->options=*o;f->file=file_take(c,bytes,length);
     if (!f->file) {status=c->refusal;goto fail;}
     for (unsigned attempt=0;;attempt++) {
@@ -139,7 +166,13 @@ os64_font_status_t os64_text_font_open(os64_text_context_t *c, const uint8_t *by
     }
     f->next=c->fonts;c->fonts=f;*out=f;return OS64_FONT_OK;
 fail:
-    c->backend->face_close(f->face);file_release(c,f->file);text_free(c,f);return status;
+    c->backend->face_close(f->face);file_release(c,f->file);text_free(c,f->ranges);text_free(c,f);
+    return status;
+}
+os64_font_status_t os64_text_font_open(os64_text_context_t *c, const uint8_t *bytes,
+    size_t length, const os64_font_face_options_t *o, os64_text_font_t **out)
+{
+    return os64_text_font_open_ranged(c,bytes,length,o,NULL,0,out);
 }
 os64_font_status_t os64_text_font_bitmap(os64_text_context_t *c, os64_text_font_t **out)
 {
@@ -161,7 +194,7 @@ void os64_text_font_release(os64_text_font_t *f)
     os64_text_font_t **at=&c->fonts;
     while (*at!=f) at=&(*at)->next;
     *at=f->next;c->backend->face_close(f->face);
-    file_release(c,f->file);text_free(c,f);
+    file_release(c,f->file);text_free(c,f->ranges);text_free(c,f);
 }
 static size_t bucket(uint64_t identity, uint32_t index)
 {
