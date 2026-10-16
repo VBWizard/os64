@@ -437,8 +437,9 @@ static void trim(const garb_value_t *v, int32_t *i, int32_t *n)
 }
 
 // A <family-name> in [i, n): one string, or identifiers joined by single
-// spaces — not one identifier that is a generic family's keyword or a
-// CSS-wide one, which name no face. Copied into the arena at its own
+// spaces — not one identifier that is a generic family's keyword, a
+// system font's, or a CSS-wide one, which must be quoted to name a face
+// (Fonts 4 § 2.1.1). Copied into the arena at its own
 // length, `*len` set: NULL for a name written wrong, or memory refused.
 static const char *family_name(garb_cascade_t *c, const garb_value_t *v, int32_t i, int32_t n, size_t *len)
 {
@@ -461,6 +462,8 @@ static const char *family_name(garb_cascade_t *c, const garb_value_t *v, int32_t
         need += (words++ > 0) + v[k].len;
     }
     if (words == 1 && garb_generic_family(v[first].text, v[first].len))
+        return NULL;
+    if (words == 1 && garb_system_font(v[first].text, v[first].len))
         return NULL;
     for (int k = 0; words == 1 && kReserved[k] != NULL; k++)
         if (ieq(v[first].text, v[first].len, kReserved[k]))
@@ -669,7 +672,8 @@ static bool range_part(garb_cascade_t *c, const garb_value_t *v, int32_t a, int3
 
 // A face's weight: `normal` (400), `bold` (700) or a number from 1 to
 // 1000, a fraction kept (matching does not round); two make a range, in
-// either order (Fonts 4 § 4.5). `auto` is all of them.
+// either order (Fonts 4 § 4.5). `auto` selects as `normal` (§ 4.4: it
+// only spares a variable face's axis its clamp, and no axis is read here).
 static bool face_weight(const garb_decl_t *d, float *lo, float *hi)
 {
     double w[2];
@@ -687,7 +691,7 @@ static bool face_weight(const garb_decl_t *d, float *lo, float *hi)
         else if (t->kind == GARB_IDENT && ieq(t->text, t->len, "bold"))
             w[k++] = 700;
         else if (t->kind == GARB_IDENT && ieq(t->text, t->len, "auto") && d->nvalue == 1)
-            w[0] = 1, w[1] = 1000, k = 2;
+            w[0] = 400, w[1] = 400, k = 2;
         else
             return false;
     }

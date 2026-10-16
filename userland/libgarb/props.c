@@ -358,6 +358,14 @@ static const char *const kFontStretch[] = {"normal", "ultra-condensed", "extra-c
                                            "expanded", "extra-expanded", "ultra-expanded", NULL};
 static const char *const kSystemFont[] = {"caption", "icon", "menu", "message-box",
                                           "small-caption", "status-bar", NULL};
+bool garb_system_font(const char *text, size_t len)
+{
+    for (int k = 0; kSystemFont[k] != NULL; k++)
+        if (ieq(text, len, kSystemFont[k]))
+            return true;
+    return false;
+}
+
 static const char *const kNormal[] = {"normal", NULL};
 static const char *const kTextAlign[] = {"left", "right", "center", "justify", "start", "end",
                                          "match-parent", NULL};
