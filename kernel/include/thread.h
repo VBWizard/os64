@@ -75,6 +75,12 @@ typedef struct s_thread
 	// A doorbell answered for this thread this pass: the pick takes it over
 	// aging, once, and the dispatch clears it (doorbell.h). Not a priority.
 	bool expedite;
+	// A wake that found this thread registered as a waiter but not yet
+	// parked (scheduler_wake_or_owe): the requeue that would park it in
+	// ISLEEP makes it RUNNABLE instead, and the wait voids it at the top of
+	// each pass. Read and written only under the scheduler queue lock
+	// (WAKE_OWED.md).
+	bool wakeOwed;
 	volatile uint64_t retVal;
 	thread_context_t regs;
 	// The x87/MMX/SSE register file belongs to the thread just as regs does.

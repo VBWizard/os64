@@ -2331,6 +2331,70 @@ static bool test_random_pool(void)
     return true;
 }
 
+// The owed wake (WAKE_OWED.md), three ways, each judged against a 10 s
+// backstop so a wake that did not happen is unmistakable:
+//   1. owed while RUNNING — exactly the state between registering and the
+//      park — then parked: the requeue pays it, within a few ticks;
+//   2. parked first, then woken from a pass (processSignals, armed through
+//      kWakeOwedTestTarget three ticks out): the plain ISLEEP wake, which
+//      must still work;
+//   3. owed, then voided as a wait's pass-top would, then nap(100): the whole
+//      100 ms must be slept. nap is the instrument on purpose — it is one
+//      signal_raise with no loop, so a debt that leaked past its void cuts
+//      it short visibly, where syscall_sleep re-checks its deadline and
+//      would hide the leak behind one extra pass. Do not swap it for a
+//      looping sleep.
+// The counts are machine-wide and a live desktop may move them too, so they
+// are checked as "at least this many more".
+
+static bool test_wake_owed(void)
+{
+    thread_t *self = get_core_local_storage()->currentThread;
+    const uint64_t backstop = 10 * TICKS_PER_SECOND;
+
+    scheduler_wake_counts_t c0 = scheduler_wake_counts();
+    uint64_t before = kTicksSinceStart;
+    scheduler_wake_or_owe(self);
+    signal_raise(SIGSLEEP, kTicksSinceStart + backstop, self);
+    uint64_t paid_took = kTicksSinceStart - before;
+    scheduler_wake_counts_t c1 = scheduler_wake_counts();
+    if (paid_took > 3 || c1.owed < c0.owed + 1 || c1.paid < c0.paid + 1) {
+        printd(DEBUG_TESTS, "\tFAIL: test_wake_owed - a wake owed mid-park took %lu ticks (owed +%lu, paid +%lu)\n",
+               paid_took, c1.owed - c0.owed, c1.paid - c0.paid);
+        return false;
+    }
+
+    before = kTicksSinceStart;
+    kWakeOwedTestTick = before + 3;
+    __sync_synchronize();
+    kWakeOwedTestTarget = self;
+    signal_raise(SIGSLEEP, kTicksSinceStart + backstop, self);
+    uint64_t woke_took = kTicksSinceStart - before;
+    if (kWakeOwedTestTarget != NULL || woke_took < 3 || woke_took > 8) {
+        kWakeOwedTestTarget = NULL;
+        printd(DEBUG_TESTS, "\tFAIL: test_wake_owed - a parked thread woke after %lu ticks for a wake aimed at tick 3\n",
+               woke_took);
+        return false;
+    }
+
+    scheduler_wake_counts_t c2 = scheduler_wake_counts();
+    scheduler_wake_or_owe(self);
+    scheduler_forget_owed_wake(self);
+    before = kTicksSinceStart;
+    nap(100);
+    uint64_t nap_took = kTicksSinceStart - before;
+    scheduler_wake_counts_t c3 = scheduler_wake_counts();
+    if (nap_took < 100 / MS_PER_TICK - 1 || c3.voided < c2.voided + 1) {
+        printd(DEBUG_TESTS, "\tFAIL: test_wake_owed - a voided debt let a 100 ms nap end after %lu ticks (voided +%lu)\n",
+               nap_took, c3.voided - c2.voided);
+        return false;
+    }
+
+    printd(DEBUG_TESTS, "\tPASS: test_wake_owed (paid at the park in %lu tick(s), parked wake in %lu, voided debt slept %lu)\n",
+           paid_took, woke_took, nap_took);
+    return true;
+}
+
 // A sleeper parked on a bell is woken by the next pass that rings it, not
 // by its backstop. processSignals rings kDoorbellTestBell on the pass after
 // the arm is set, so a wake within a couple of ticks is the primitive
@@ -6016,6 +6080,7 @@ static void register_builtin_tests(void)
     // path, both costs stop being costs at all.
     test_register("task_teardown_leak", test_task_teardown_leak, TEST_PHASE_LATE);
     test_register("doorbell_wakes_sleeper", test_doorbell_wakes_sleeper, TEST_PHASE_LATE);
+    test_register("wake_owed", test_wake_owed, TEST_PHASE_LATE);
     test_register("ext2_real_partition", test_ext2_real_partition, TEST_PHASE_POSTBOOT);
     test_register("mount_table", test_mount_table, TEST_PHASE_POSTBOOT);
     test_register("devfs", test_devfs, TEST_PHASE_POSTBOOT);

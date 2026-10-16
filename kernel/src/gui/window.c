@@ -23,7 +23,7 @@ _Static_assert(GUI_WINDOW_TITLE_MAX == OS64_GUI_TITLE_MAX,
 #include "kmalloc.h"
 #include "memset.h"
 #include "printd.h"
-#include "scheduler.h"   // scheduler_wake_isleep_thread — event_wait's alarm bell
+#include "scheduler.h"   // scheduler_wake_or_owe — event_wait's alarm bell
 #include "strcpy.h"
 #include <limits.h>
 #include "os64/text_profile.h"
@@ -867,18 +867,20 @@ void wm_deliver_event(window_t *w, const input_event_t *ev)
 	if (stored == 2)
 		printd(DEBUG_GUI, "wm: window %u queue full — oldest event evicted to deliver a focus change\n", w->id);
 
-	// Aim a wake at a parked event_wait-er. Runs in THREAD context under
+	// Aim a wake at the event_wait-er. Runs in THREAD context under
 	// kGuiLock — the compositor's thread, or a client's own thread inside a
 	// create/destroy/ring syscall or appearance publication, since those deliver
 	// from there. Never an ISR under either, which is what invariant 4 needs.
 	// The wake takes only the scheduler queue lock inside, no trigger: the
 	// woken thread runs on the next scheduler pass, which is the latency
-	// the design already accepted. A waiter still mid-park is deliberately
-	// left alone (the wake API's own rule) — its backstop re-runs the drain
-	// moments later. The slot is NOT cleared here: the waiter owns its
-	// registration, and a redundant wake at worst re-checks an empty queue.
+	// the design already accepted. A waiter still mid-park keeps its backstop
+	// and is OWED the wake, which the requeue that parks it pays — owed
+	// under kGuiLock, the lock the waiter registers and voids under, so the
+	// debt cannot outlive its wait (WAKE_OWED.md). The slot is NOT cleared
+	// here: the waiter owns its registration, and a redundant wake at worst
+	// re-checks an empty queue.
 	if (w->waiter != NULL)
-		scheduler_wake_isleep_thread(w->waiter);
+		scheduler_wake_or_owe(w->waiter);
 }
 
 void wm_appearance_changed(uint64_t generation)

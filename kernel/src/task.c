@@ -392,15 +392,18 @@ void task_idle_loop()
 // sweep calls scheduler_remove_task while holding it), never after. Nothing in
 // scheduler.c touches a deadChild list — they are private to task.c, which is
 // what makes that ordering safe by construction rather than by convention. The
-// one place that WOULD have inverted it is the parent-wake below, and that is
-// deliberately performed after the release.
+// parent-wake below takes the queue lock INSIDE this one, which is that order;
+// what it must never do inside it is trigger a pass (scheduler_trigger
+// halt-waits for a pass that needs the queue lock), so the trigger comes after
+// the release.
 static spinlock_t kDeadChildLock = 0;
 
-// The list append, caller holding kDeadChildLock. Returns the parent's
-// WAITING THREAD if it has one and must be woken, NULL otherwise — the wake
-// itself happens OUTSIDE the lock (see the wrapper), because
-// scheduler_wake_task_waiter takes scheduler queue locks and doing that from
-// inside this one is the one lock inversion this design has to avoid.
+// The list append, caller holding kDeadChildLock. Wakes the parent's WAITING
+// THREAD if it has one, or owes it the wake if it has registered and not yet
+// parked (WAKE_OWED.md), and returns it so the caller can trigger a pass once
+// the lock is released; NULL when there is nobody to wake. The wake is aimed
+// UNDER this lock, the one task_wait registers and voids under, so a debt can
+// never be owed to whatever the waiter parks in after its wait.
 //
 // A thread, not a bool (2026-08-25): the wake used to aim at
 // `parent->threads`, the FIRST thread, and the first thread is not always
@@ -429,6 +432,7 @@ static thread_t *task_enqueue_dead_child_locked(task_t *child)
 		return NULL;
 	}
 	parent->waitingForChild = false;
+	scheduler_wake_task_waiter(parent, parent->waitThread);
 	return parent->waitThread;
 }
 
@@ -445,9 +449,9 @@ static void task_enqueue_dead_child(task_t *child)
 	spinlock_release_irqrestore(&kDeadChildLock, flags);
 
 	if (waiter != NULL) {
-		// Wake the parent to re-check its children. The wake is unconditional
-		// on ANY child death; task_wait's own scan decides whether THIS death
-		// matches what the parent is waiting for.
+		// The parent re-checks its children when it runs. The wake is
+		// unconditional on ANY child death; task_wait's own scan decides
+		// whether THIS death matches what the parent is waiting for.
 		//
 		// THE BACKSTOP IS NOT OURS TO CANCEL (fixed 2026-08-09; this cost a
 		// shell). Until today these three lines cleared the parent's SIGSLEEP
@@ -466,17 +470,15 @@ static void task_enqueue_dead_child(task_t *child)
 		// that test waits on a child too. Periodic just splits the window far
 		// more often than tickless does; it is not a periodic-only bug.
 		//
-		// scheduler_wake_task_waiter delegates to the helper that has had
-		// this right all along (scheduler_wake_isleep_thread_locked): the
-		// ISLEEP test, the SIGSLEEP cancel and the relink are ONE atomic act
-		// under the queue lock, and a thread that has not parked yet is left
-		// completely untouched — so its backstop survives to fire a tick later
-		// and re-run the scan. Worst case the parent notices one second late
-		// instead of never, which is precisely what a backstop is for.
-		//
-		// And it wakes THE WAITER — the thread captured under kDeadChildLock
-		// above — not the task's first thread (2026-08-25, waitThread).
-		scheduler_wake_task_waiter(parent, waiter);
+		// The wake was aimed under the lock (task_enqueue_dead_child_locked,
+		// through scheduler_wake_or_owe): the ISLEEP test, the SIGSLEEP cancel
+		// and the relink are ONE atomic act under the queue lock, and a thread
+		// that has not parked yet keeps its backstop and is OWED the wake,
+		// which the requeue that parks it pays (WAKE_OWED.md). It aims at THE
+		// WAITER — the thread captured under kDeadChildLock — not the task's
+		// first thread (2026-08-25, waitThread). What is left here, outside
+		// every lock, is the pass that runs it.
+		scheduler_trigger(NULL);
 	}
 }
 
@@ -861,8 +863,8 @@ static void task_reparent_orphans_locked(task_t *dying)
 		// Return value deliberately ignored: the new parent is ALWAYS
 		// kKernelTask, which has no wait loop and never will (see the decree
 		// above), so waitingForChild is never set on it and there is never a
-		// deferred wake to perform. If ktask ever learns to wait, this must
-		// grow the same wake-after-unlock treatment as the wrapper.
+		// pass to trigger. If ktask ever learns to wait, this must trigger
+		// one after the release, as the wrapper does.
 		(void)task_enqueue_dead_child_locked(c);   // returns the (never-set) waiter
 	}
 	dying->deadChildTail = NULL;
@@ -1167,8 +1169,9 @@ int task_reap_eligible_zombies(size_t max_to_reap)
 	// logging.c); scheduler_remove_task is safe because the lock order is
 	// kDeadChildLock → scheduler queue lock and NOTHING in scheduler.c ever
 	// touches a deadChild list, so the reverse order does not exist to collide
-	// with. The one call that WOULD have inverted it — the parent wake — is in
-	// task_enqueue_dead_child, deliberately after its release.
+	// with. The parent wake in task_enqueue_dead_child_locked takes the queue
+	// lock inside this one too, the same order; its pass is triggered after
+	// the release.
 	uint64_t sweep_flags = spinlock_acquire_irqsave(&kDeadChildLock);
 	task_t *task = kTaskList;
 	while (task != NO_TASK && task != NULL && reaped < max_to_reap) {
@@ -1516,11 +1519,11 @@ void task_exit(void)
 	__builtin_unreachable();
 }
 
-// Backstop sleep for task_wait: a child exit normally wakes the parent
-// immediately (task_enqueue_dead_child), but the backstop guarantees liveness
-// if that wake is ever lost to the classic check-then-sleep race — the parent
-// re-checks its dead children within a second regardless. (Same discipline as
-// console_read.)
+// Backstop sleep for task_wait: a child exit wakes the parent at once, or owes
+// it the wake if it is between registering and parking (task_enqueue_dead_child,
+// WAKE_OWED.md). The backstop is the house rule that a missed edge costs a
+// tick, never a hang: whatever the wake misses, the parent re-checks its dead
+// children within a second.
 #define TASK_WAIT_BACKSTOP_TICKS TICKS_PER_SECOND
 
 // Find the first dead child matching targetPid (0 = any) on the parent's
@@ -1677,6 +1680,27 @@ uint64_t task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode)
 
 	while (1==1)
 	{
+		// Awake at the top of a pass: the registration the last park made is
+		// void, and so is any wake owed for it (WAKE_OWED.md). A debt found
+		// here was owed while this thread was already awake, and the scan
+		// below finds what it announced. Under the lock the dead-child wake
+		// is aimed under, so no wake can be owed to this wait after it, and
+		// before the signal check, so no way out of this loop leaves either
+		// behind. The slot is voided only if it names this thread: a sibling
+		// thread's wait is its own. The thread is read from GS with the lock
+		// held, interrupts off, for the migration reason the park below
+		// spells out.
+		{
+			uint64_t top_flags = spinlock_acquire_irqsave(&kDeadChildLock);
+			thread_t *self = get_core_local_storage()->currentThread;
+			if (parent->waitThread == self) {
+				parent->waitingForChild = false;
+				parent->waitThread = NULL;
+			}
+			scheduler_forget_owed_wake(self);
+			spinlock_release_irqrestore(&kDeadChildLock, top_flags);
+		}
+
 		// Level-triggered like every park in this kernel: the sweep in
 		// processSignals wakes us for a signal this park must end for, and
 		// this is where a woken waiter LEAVES — without it the loop below
@@ -1719,6 +1743,18 @@ uint64_t task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode)
 		}
 		bool childPending = endedPid == 0 &&
 		    task_has_uncollected_child_locked(parent, targetPid);
+		// A wait that will park registers HERE, in the same hold as the scan
+		// that found nothing to collect: a child that exits after the release
+		// then finds the registration and wakes this thread, or owes it the
+		// wake (WAKE_OWED.md). Registered in a later hold, a child exiting
+		// between the two found nobody waiting, and the park slept out its
+		// backstop. The rest of the registration's story is at the park.
+		thread_t *waiter = NULL;
+		if (childPending) {
+			waiter = get_core_local_storage()->currentThread;
+			parent->waitThread = waiter;
+			parent->waitingForChild = true;
+		}
 		spinlock_release_irqrestore(&kDeadChildLock, lock_flags);
 
 		if (endedPid != 0) {
@@ -1760,7 +1796,9 @@ uint64_t task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode)
 		}
 
 		// Park until a child exits (woken by task_enqueue_dead_child) or the
-		// backstop fires; then loop and re-check. SIGSLEEP parks atomically.
+		// backstop fires; then loop and re-check. A child that exits between
+		// the registration above and the park is owed to it, and the park is
+		// paid instead of slept (WAKE_OWED.md).
 		//
 		// PARK THE CALLING THREAD, and say which one it is (2026-08-25). This
 		// used to park `parent->threads` — the task's FIRST thread — which is
@@ -1769,22 +1807,14 @@ uint64_t task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode)
 		// the main thread to sleep and came straight back to loop here,
 		// hot, for as long as any child lived. The waiter is published
 		// under kDeadChildLock, the same lock the flag travels under, so the
-		// dead-child wake reads a consistent (flag, thread) pair.
-		lock_flags = spinlock_acquire_irqsave(&kDeadChildLock);
-		// Re-read CLS on EVERY pass: a thread that parked on one core can
-		// resume on another, and the `cls` captured at entry then names some
-		// other core's current thread — which the first cut of this fix
-		// parked by mistake, making every waiter in the system spin after its
-		// first wake (and putting strangers to sleep). GS is per-core; read
-		// it where you stand.
-		parent->waitThread = get_core_local_storage()->currentThread;
-		parent->waitingForChild = true;
-		spinlock_release_irqrestore(&kDeadChildLock, lock_flags);
-		signal_raise(SIGSLEEP, kTicksSinceStart + TASK_WAIT_BACKSTOP_TICKS, parent->waitThread);
-		lock_flags = spinlock_acquire_irqsave(&kDeadChildLock);
-		parent->waitingForChild = false;
-		parent->waitThread = NULL;
-		spinlock_release_irqrestore(&kDeadChildLock, lock_flags);
+		// dead-child wake reads a consistent (flag, thread) pair. It is read
+		// from GS on EVERY pass, with that lock held and interrupts off: a
+		// thread that parked on one core can resume on another, and the `cls`
+		// captured at entry then names some other core's current thread —
+		// which the first cut of this fix parked by mistake, making every
+		// waiter in the system spin after its first wake (and putting
+		// strangers to sleep). GS is per-core; read it where you stand.
+		signal_raise(SIGSLEEP, kTicksSinceStart + TASK_WAIT_BACKSTOP_TICKS, waiter);
 	}
 }
 

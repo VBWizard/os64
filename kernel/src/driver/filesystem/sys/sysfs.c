@@ -1320,6 +1320,15 @@ static void sys_gen_gui(synth_text_t *t)
 	// Who is watching the screen through /dev/glass (gui/glass.h) — a
 	// remote viewer is otherwise invisible from the machine it watches.
 	synth_text_addf(t, "glass_viewers: %u\n", glass_view_count());
+	// The scheduler's owed wakes (WAKE_OWED.md), machine-wide, here until the
+	// scheduler has a file of its own. paid counts wakes that landed mid-park
+	// and would have waited for the backstop; refused counts slots that
+	// outlived their thread's wait. owed = paid + voided + outstanding.
+	scheduler_wake_counts_t wakes = scheduler_wake_counts();
+	synth_text_addf(t, "wakes_owed: %lu\n", wakes.owed);
+	synth_text_addf(t, "wakes_paid: %lu\n", wakes.paid);
+	synth_text_addf(t, "wakes_voided: %lu\n", wakes.voided);
+	synth_text_addf(t, "wakes_refused: %lu\n", wakes.refused);
 }
 
 // ── /sys/net (2026-08-20) ───────────────────────────────────────────────────
