@@ -151,6 +151,24 @@ void yonder_diag_fact(yonder_diag_t *d, const char *key, const char *value)
     l->b = v;
 }
 
+void yonder_diag_forget(yonder_diag_t *d, const char *prefix)
+{
+    if (d == NULL)
+        return;
+    size_t len = os64_strlen(prefix);
+    uint32_t kept = 0;
+    for (uint32_t i = 0; i < d->facts.n; i++) {
+        Line *l = &d->facts.lines[i];
+        if (os64_strlen(l->a) >= len && os64_memcmp(l->a, prefix, len) == 0) {
+            os64_free(l->a);
+            os64_free(l->b);
+        } else {
+            d->facts.lines[kept++] = *l;
+        }
+    }
+    d->facts.n = kept;
+}
+
 void yonder_diag_failed_seen(yonder_diag_t *d, const char *what, const char *message)
 {
     Line *l = d != NULL ? table_line(&d->failed, what, message, true, YONDER_DIAG_RECORDS_MAX) : NULL;

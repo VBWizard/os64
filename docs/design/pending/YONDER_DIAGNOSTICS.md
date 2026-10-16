@@ -170,7 +170,11 @@ gets plain lines for its fonts at every write, after `sheets:`:
     font family DejaVu Sans Mono: a system family
 
 - **A face line walks its sources in order** up to the one the face is
-  drawn from: `drawn` (the container and the bytes that came), `coming`,
+  drawn from: `drawn` (the container and the bytes that came), or `came`
+  with why it was not drawn — `not drawn since it came` before a layout
+  has drawn in it, a size refused for room or refused to open, or no text
+  drawn in it (the file may be another face's that shares it) — and
+  `coming`,
   `came …, held for room to open` (the open waits for the room the tree on
   screen holds), `failed` (the reason is the file's `FAILED font` line), a
   `format()` or `local()` passed over, or `never asked for`: no text drew
@@ -178,18 +182,26 @@ gets plain lines for its fonts at every write, after `sheets:`:
   (PILE3.md § Web fonts). A face that is passed over whatever its file
   says only that, in place of its sources: `not needed` when its ranges
   miss the page's text, `passed over` with the count when it has more
-  ranges than a text font takes. A file several faces name is one file.
+  ranges than a text font takes. A file several faces name is one file,
+  and each face says how IT was drawn, as the latest layout that asked for
+  fonts found it. The section is written whole at each write, so a face a
+  script's rebuild took away goes with it.
 - **A family line is what the latest layout found** for a family name it
   was asked: the page's faces, the page's faces with none in the list yet
   (and what drew the text meanwhile), a system family by that name, or
-  nothing.
+  nothing. A page with no faces of its own has its families on its
+  arrival write: such a page answers the same before it is shown as on
+  screen, so it is not laid out again to learn them.
 - The records are unchanged: `FAILED font: <address>: <why>` for a file
   that did not fetch, unwrap or open, and `MISSING font <family>` for a
   family with neither a page face nor a system family.
 - **The second write waits for the last picture AND the last font**, and,
   as for pictures, for the layout a face that arrived owes (`written: when
-  its pictures and fonts were in`). The departure write is made before the
-  page's fonts are let go, so it names them too.
+  its pictures and fonts were in`) — and for anything that layout wanted
+  in turn, a failed face's next source. A font that fails with no job to
+  come back (no worker, a job the pool would not take, a held file
+  refused again) owes the write too. The departure write is made before
+  the page's fonts are let go, so it names them too.
 
 ### Built differently from the brief, and why
 

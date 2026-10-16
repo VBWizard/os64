@@ -156,7 +156,7 @@ mutants = [
      '    pictures_feed(p);\n    // A refusal met with nothing out to write the record when it comes in\n    // is written now, as one met with the pictures in would be.\n    if (fresh && p->waiting == 0)\n        diag_pictures_in(p);',
      '    pictures_feed(p);\n    (void)fresh;', WINDOW),
     ('a-moving-last-picture-writes-before-its-layout', YONDER,
-     '    if (p == &g.page && (g.pictures_moved || s_web.moved)) {\n        p->record_owed = true;\n        return;\n    }',
+     '    if (p->waiting > 0 || (p == &g.page && (g.pictures_moved || s_web.moved || s_web.waiting > 0))) {\n        p->record_owed = true;\n        return;\n    }',
      '', WINDOW),
     ('an-owed-record-is-never-written', YONDER,
      '    if (g.page.record_owed && !g.pictures_moved && !s_web.moved)\n        diag_pictures_in(&g.page);',

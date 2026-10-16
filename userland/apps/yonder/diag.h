@@ -58,6 +58,9 @@ void yonder_diag_failed_seen(yonder_diag_t *d, const char *what, const char *mes
 // A plain line, `key: value`, kept where its key was first set and
 // replaced by a later setting of the same key.
 void yonder_diag_fact(yonder_diag_t *d, const char *key, const char *value);
+// The plain lines whose keys begin `prefix` let go, the rest kept in
+// order: a set of lines rewritten whole, when there may be fewer now.
+void yonder_diag_forget(yonder_diag_t *d, const char *prefix);
 
 // Distinct record lines of each token: the verdict's numbers, the badge's.
 uint32_t yonder_diag_missing_lines(const yonder_diag_t *d);
