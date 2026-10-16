@@ -184,7 +184,7 @@ static os64_font_config_t s_fonts_conf;
 // The names of one style's list looked up among the system's families.
 #define WEBFONT_NAMES_MAX 32
 // The sizes refused for room one layout records, and the sizes given
-// their one more layout in one geometry: as many as the handle table
+// their one more layout at one zoom and width: as many as the handle table
 // keeps, since more sizes than that cannot all be open at once.
 #define WEBFONT_REFUSED_MAX WEBFONT_HANDLES_MAX
 
@@ -236,7 +236,7 @@ static struct {
     // The sizes of open files refused for room in the last layout
     // (webfonts_size_key), and the sizes already given their one more
     // layout, forgotten once a layout refuses none or the page is laid
-    // out at another zoom or width — a geometry the retries were for.
+    // out at another zoom or width, the zoom and width they were for.
     uint64_t refused[WEBFONT_REFUSED_MAX], retried[WEBFONT_REFUSED_MAX];
     int32_t nrefused, nretried;
     uint32_t retried_zoom;
@@ -3884,8 +3884,10 @@ static void webfonts_feed(bool laid)
     }
     // A size refused for room gets one more layout: the tree that held the
     // room is gone after it. Refused again, the fallback stands — for that
-    // size, until a layout refuses none or the geometry changes, when its
-    // sizes are new ones.
+    // size, until a layout refuses none or the page is laid out at another
+    // zoom or width, when its sizes are new ones. A new tree at the same
+    // zoom and width (a height alone changed, a script's rebuild) forgets
+    // nothing, though it may have let the room go: BROWSER_DEBTS.md.
     if (laid) {
         if (g.page.laid_zoom != s_web.retried_zoom || g.page.laid_width != s_web.retried_width) {
             s_web.nretried = 0;
