@@ -165,8 +165,8 @@ gets plain lines for its fonts at every write, after `sheets:`:
     font face 2: Body 400 italic U+0-7F: format(woff2) not read: b.woff2; https://site/b.ttf failed; https://site/c.ttf coming
     font face 3: Cjk 400 normal U+4E00-9FFF: not needed: its range is not in the page's text
     font family Web: the page's faces
-    font family Body: the page's faces, none in the list: drawn in DejaVu Serif
-    font family Arial: no face; drawn in DejaVu Serif
+    font family Body: the page's faces, none in the list, which begins with DejaVu Serif
+    font family Arial: no face; the list begins with DejaVu Serif
     font family DejaVu Sans Mono: a system family
 
 - **A face line walks its sources in order** up to the one the face is
@@ -192,15 +192,18 @@ gets plain lines for its fonts at every write, after `sheets:`:
   several faces name is one file, and each face says how IT fared. The
   `fonts:` line counts files by their state — `open` is opened, not drawn
   — and says when more families were asked for than the 512 the record
-  keeps. The section is written whole at each write, so a face a script's
+  keeps, or when some were not kept for want of memory: the two are told
+  apart. The section is written whole at each write, so a face a script's
   rebuild took away goes with it.
 - **A family line is what the layout of the tree on screen found** for a
   family name it was asked, the best any of its runs found (a name one run
   listed a face of is the page's faces) — a layout that fails leaves the
   lines of the one still shown, and a name the page no longer asks for
-  goes: the page's faces, the page's faces with none in the list yet (and
-  what drew the text meanwhile), a system family by that name, or
-  nothing. A page's arrival write has the families its layout asked for
+  goes: the page's faces, the page's faces with none in the list yet, a
+  system family by that name, or nothing — and the font the run's list
+  begins with (the text context draws each glyph from the first font in
+  the list that has it, so this is where the text starts looking, a page
+  face the list puts first included). A page's arrival write has the families its layout asked for
   before it was shown. A page draws in none of its own faces until then,
   so a name they answer is the page's faces with none in the list there,
   and not MISSING; the layout on screen that follows says what they serve.
@@ -292,7 +295,11 @@ gets plain lines for its fonts at every write, after `sheets:`:
   a plain line (`missing names not kept: 3`) in words that are neither
   token — each line once, however often it is asked for (a condition
   looked at each layout, a section written again whole), until room is
-  found for it.
+  found for it. Past 4,096 such lines, or with no memory to keep one's
+  key, a line cannot be told from one counted already, so the count stands
+  and the line says `, and more not counted`; a line that could not even
+  be named for want of memory is said on its own line (`some lines not
+  kept: no memory to name them`).
 - **A failed write is said once a run**, in the log and on the status
   line. A `diagnostics` that is not a full path is logged and ignored.
 

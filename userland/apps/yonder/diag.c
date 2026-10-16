@@ -16,13 +16,15 @@ typedef struct {
 // says them: each is kept by its key (`gone`) so a line asked for again —
 // a condition looked at once a layout, a section written again whole —
 // is not counted again. Past GONE_MAX of them, or with no memory to keep
-// one, the rest are counted as they come (`uncounted`).
+// one, a line cannot be told from one counted already, so the count
+// stands and the file says there are more (`more`).
 #define GONE_MAX 4096u
 typedef struct {
     Line *lines;
     uint32_t n, cap;
     Line *gone;
-    uint32_t ngone, cap_gone, uncounted;
+    uint32_t ngone, cap_gone;
+    bool more;
 } Table;
 
 struct yonder_diag {
@@ -30,6 +32,8 @@ struct yonder_diag {
     uint32_t seq;
     int64_t began_us;
     Table missing, failed, facts;
+    // A line went with no memory even to name it (yonder_diag_short).
+    bool short_of_memory;
 };
 
 static char *copy(const char *s)
@@ -60,11 +64,6 @@ static bool same_key(const Line *l, const char *a, const char *b, bool both)
     return os64_streq(l->a, a) && (!both || os64_streq(l->b, b));
 }
 
-static uint32_t table_lost(const Table *t)
-{
-    return t->ngone > UINT32_MAX - t->uncounted ? UINT32_MAX : t->ngone + t->uncounted;
-}
-
 // The line keyed `a` (and `b`) met no room: counted once, however often it
 // is asked for.
 static void table_lose(Table *t, const char *a, const char *b, bool both)
@@ -87,8 +86,7 @@ static void table_lose(Table *t, const char *a, const char *b, bool both)
     if (one.a == NULL || one.b == NULL) {
         os64_free(one.a);
         os64_free(one.b);
-        if (t->uncounted < UINT32_MAX)
-            t->uncounted++;
+        t->more = true;
         return;
     }
     t->gone[t->ngone++] = one;
@@ -240,6 +238,12 @@ void yonder_diag_forget(yonder_diag_t *d, const char *prefix)
     }
 }
 
+void yonder_diag_short(yonder_diag_t *d)
+{
+    if (d != NULL)
+        d->short_of_memory = true;
+}
+
 void yonder_diag_failed_seen(yonder_diag_t *d, const char *what, const char *message)
 {
     Line *l = d != NULL ? table_line(&d->failed, what, message, true, YONDER_DIAG_RECORDS_MAX) : NULL;
@@ -313,12 +317,13 @@ static void put_count(Out *o, uint32_t n)
     puts_(o, num);
 }
 
-static void put_lost(Out *o, const char *what, uint32_t lost)
+static void put_lost(Out *o, const char *what, const Table *t)
 {
-    if (lost == 0)
+    if (t->ngone == 0 && !t->more)
         return;
     char line[96];
-    os64_snprintf(line, sizeof(line), "%s not kept: %lu\n", what, (unsigned long)lost);
+    os64_snprintf(line, sizeof(line), "%s not kept: %lu%s\n", what, (unsigned long)t->ngone,
+                  t->more ? ", and more not counted" : "");
     puts_(o, line);
 }
 
@@ -367,9 +372,11 @@ size_t yonder_diag_render(const yonder_diag_t *d, char *out, size_t cap)
     }
     // What met no room is said, in words that are neither token: the
     // verdict already counts every line that was kept.
-    put_lost(&o, "missing names", table_lost(&d->missing));
-    put_lost(&o, "failures", table_lost(&d->failed));
-    put_lost(&o, "facts", table_lost(&d->facts));
+    put_lost(&o, "missing names", &d->missing);
+    put_lost(&o, "failures", &d->failed);
+    put_lost(&o, "facts", &d->facts);
+    if (d->short_of_memory)
+        puts_(&o, "some lines not kept: no memory to name them\n");
     if (cap != 0)
         out[o.at < cap ? o.at : cap - 1] = '\0';
     return o.at;

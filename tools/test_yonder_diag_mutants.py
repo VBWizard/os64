@@ -177,6 +177,16 @@ mutants = [
     ('found-stays-lost', DIAG,
      '    table_found(t, a, b, both);\n',
      '    (void)table_found;\n', WINDOW),
+    # #280 round 5: past what it can tell apart, it says there are more.
+    ('more-is-unsaid', DIAG,
+     '                  t->more ? ", and more not counted" : "");',
+     '                  "");', WINDOW),
+    ('more-recounts', DIAG,
+     '        t->more = true;\n        return;',
+     '        t->more = true;\n        if (t->ngone > 0)\n            t->ngone++;\n        return;', WINDOW),
+    ('memory-short-is-unsaid', DIAG,
+     '    if (d->short_of_memory)\n        puts_(&o, "some lines',
+     '    if (false)\n        puts_(&o, "some lines', WINDOW),
 ]
 
 caught, missed, unbuilt = [], [], []
