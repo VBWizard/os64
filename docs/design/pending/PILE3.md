@@ -2372,11 +2372,18 @@ the same budget) is held and opened once more after the next layout of
 the shown page, a script's rebuild included, which has let the old
 tree's room go; refused again it fails, as it does when the held files'
 bytes together would pass 64 MiB. A SIZE of an open file refused for
-room gets one more layout, and then the fallback stands. Every font
-failure reaches the badge as it is recorded. The list is
+room gets one more layout, and then the fallback stands — each size
+once, until a layout refuses none, so a zoom's new size gets its own.
+Every font failure reaches the badge as it is recorded. The list is
 the eight a layout takes: the system's family and the generic keep their
 places, and the page's faces have the rest — a composite past that, its
-latest rules. `local()` names an installed font by its full name, and
+latest rules. A face is fetched only while its list has a place for it:
+a file coming, or a size of one refused for room, holds a place (once,
+however often its name is written), so the faces after it wait, and one
+whose file fails gives its place to the next. A face with more
+`unicode-range` entries than a text font takes (4096) is never fetched,
+and a range meets the document's characters in two reads, whatever its
+width. `local()` names an installed font by its full name, and
 yonder's have none a page writes: it is passed over to the next `src`.
 A family the resolver finds neither a face nor a system family for is
 `MISSING font`, which the resolver says itself (S9a3; libgarb's

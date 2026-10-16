@@ -190,11 +190,12 @@ static bool font_refuse;            /* the pool will not take a font job */
 static int font_open_refusals;
 /* The next opens of another size refused for room, likewise. */
 static int font_like_refusals;
+static os64_font_status_t font_like_status=OS64_FONT_LIMIT;   /* what a refusal says */
 os64_font_status_t __real_os64_text_font_open_like(const os64_text_font_t *, const os64_font_face_options_t *,
                                                    const os64_text_range_t *, size_t, os64_text_font_t **);
 os64_font_status_t __wrap_os64_text_font_open_like(const os64_text_font_t *like, const os64_font_face_options_t *o,
                                                    const os64_text_range_t *r, size_t n, os64_text_font_t **out) {
-    if(font_like_refusals>0) { font_like_refusals--; *out=NULL; return OS64_FONT_LIMIT; }
+    if(font_like_refusals>0) { font_like_refusals--; *out=NULL; return font_like_status; }
     return __real_os64_text_font_open_like(like,o,r,n,out);
 }
 os64_font_status_t __real_os64_text_font_open(os64_text_context_t *, const uint8_t *, size_t,
@@ -4355,6 +4356,69 @@ static void webfont_cases(void) {
              "p{font-family:Cjk}</style><p>\xe4\xb8\xad</p>");
     check(s_web.nfiles==1 && nfont_jobs==1,"web fonts: a range the text meets is fetched");
     web_drop();
+    /* The first 256 code points, and a meeting range after one that does
+     * not, are met too. */
+    web_page("<style>@font-face{font-family:Web;src:url(w.ttf);unicode-range:U+61-7F}p{font-family:Web}</style><p>hello");
+    check(s_web.nfiles==1,"web fonts: a range in the first 256 code points meets");
+    web_drop();
+    web_page("<style>@font-face{font-family:Web;src:url(w.ttf);unicode-range:U+4E00-9FFF,U+3000-30FF,U+0-FF}"
+             "p{font-family:Web}</style><p>hello");
+    check(s_web.nfiles==1,"web fonts: a range after ranges that miss meets");
+    web_drop();
+    /* A face with more ranges than a text font takes is never fetched;
+     * one with as many is. */
+    for(int over=0;over<2;over++) {
+        static char big[80000];
+        size_t at=(size_t)snprintf(big,sizeof(big),"<style>@font-face{font-family:Web;src:url(w.ttf);unicode-range:");
+        int n=(int)OS64_TEXT_RANGES_MAX+over;
+        for(int i=0;i<n;i++) at+=(size_t)snprintf(big+at,sizeof(big)-at,"%sU+%X",i?",":"",(unsigned)(2*i));
+        snprintf(big+at,sizeof(big)-at,"}p{font-family:Web}</style><p>b");
+        web_page(big);
+        check(s_web.nfiles==(over?0:1),over ? "web fonts: past the ranges a text font takes, a face is not fetched"
+                                            : "web fonts: as many ranges as a text font takes, a face is fetched");
+        web_drop();
+    }
+    /* A list fetches only the faces it has places for: one coming holds
+     * its place, and one that fails gives it to the next. */
+    {
+        char many[2048]; size_t at=0;
+        at+=(size_t)snprintf(many+at,sizeof(many)-at,"<style>");
+        for(int i=0;i<10;i++) at+=(size_t)snprintf(many+at,sizeof(many)-at,"@font-face{font-family:F%d;src:url(f%d.ttf)}",i,i);
+        at+=(size_t)snprintf(many+at,sizeof(many)-at,"p{font-family:");
+        for(int i=0;i<10;i++) at+=(size_t)snprintf(many+at,sizeof(many)-at,"%sF%d",i?",":"",i);
+        snprintf(many+at,sizeof(many)-at,"}</style><p>hello");
+        web_page(many);
+        int32_t asked=s_web.nfiles;
+        check(asked>=1 && asked<(int32_t)OS64_TEXT_FALLBACK_MAX && web_file("https://fixture.test/f0.ttf")==0,
+              "web fonts: the faces a list has no place for are not fetched");
+        pictures_settle();
+        check(s_web.nfiles==asked,"web fonts: a face coming holds its place at the next layout");
+        check(font_land("f0.ttf",NULL,"HTTP 404"),"web fonts: places: the first face fails");
+        pictures_settle();
+        char next[64]; snprintf(next,sizeof(next),"https://fixture.test/f%d.ttf",(int)asked);
+        check(s_web.nfiles==asked+1 && web_file(next)==asked,"web fonts: and the next face takes its place");
+        web_drop();
+        /* A size that will not open, not for room, gives its place too. */
+        web_page(many);
+        for(int32_t i=0;i<asked;i++) {
+            char tail[24]; snprintf(tail,sizeof(tail),"f%d.ttf",(int)i);
+            while(font_land(tail,"A",NULL)) {}
+        }
+        check(s_web.waiting==0,"web fonts: places: every file asked for arrives");
+        font_like_status=OS64_FONT_UNSUPPORTED; font_like_refusals=1;
+        pictures_settle();
+        font_like_status=OS64_FONT_LIMIT; font_like_refusals=0;
+        check(s_web.nfiles==asked+1 && web_file(next)==asked,
+              "web fonts: a size that will not open gives its place to the next face");
+        web_drop();
+    }
+    /* A name written again counts its file once: the family after the
+     * repeats still has a place. */
+    web_page("<style>@font-face{font-family:W;src:url(w.ttf)}@font-face{font-family:X;src:url(x.ttf)}"
+             "p{font-family:W,W,W,W,W,W,W,W,X}</style><p>hello");
+    check(s_web.nfiles==2 && web_file("https://fixture.test/x.ttf")==1,
+          "web fonts: a file coming holds one place, however often its name is written");
+    web_drop();
     /* A format() yonder does not read is passed over; a failed file sends
      * the next layout to the next source. */
     web_page("<style>@font-face{font-family:Web;src:url(a.woff2) format('woff2'),url(b.ttf),url(c.ttf)}"
@@ -4400,9 +4464,10 @@ static void webfont_cases(void) {
     check(s_web.nfiles==2 && web_file("https://fixture.test/two.ttf")==0 && web_file("https://fixture.test/one.ttf")==1,
           "web fonts: a composite's rules are all wanted, the later first");
     web_drop();
-    /* At most WEBFONTS_AT_ONCE files out at a time; the rest follow as
-     * each comes in. Then a composite past the eight a layout takes: the
-     * list holds what fits, and the page still lays out. */
+    /* A composite past the places a list has: the latest that fit are
+     * wanted, a name written twice counting its files once, at most
+     * WEBFONTS_AT_ONCE out at a time; the rest follow as each comes in,
+     * and the page lays out in them. */
     {
         char many[2048]; size_t at=0;
         at+=snprintf(many+at,sizeof(many)-at,"<style>");
@@ -4410,9 +4475,11 @@ static void webfont_cases(void) {
         snprintf(many+at,sizeof(many)-at,"p{font-family:W,W}</style><p>a");
         web_page(many);
         uint64_t fallback=first_text_font();
-        check(s_web.nfiles==8 && web_file("https://fixture.test/f0.ttf")<0 &&
+        int32_t fit=s_web.nfiles;
+        check(fit>WEBFONTS_AT_ONCE && fit<8 && web_file("https://fixture.test/f8.ttf")==0 &&
+              web_file("https://fixture.test/f0.ttf")<0 &&
               nfont_jobs==WEBFONTS_AT_ONCE && s_web.in_flight==WEBFONTS_AT_ONCE,
-              "web fonts: a composite's latest eight are wanted, at most WEBFONTS_AT_ONCE out at a time");
+              "web fonts: a composite's latest that fit are wanted, at most WEBFONTS_AT_ONCE out at a time");
         for(int round=0;round<9 && nfont_jobs>0;round++) {
             char tail[16]; snprintf(tail,sizeof(tail),"%s",font_jobs[0].job->url+strlen(font_jobs[0].job->url)-6);
             check(font_land(tail,"A",NULL),"web fonts: each file arrives");
@@ -4421,7 +4488,7 @@ static void webfont_cases(void) {
         pictures_settle();
         check(g.page.tree!=NULL && !flow_incomplete(g.page.tree) && first_text_font()!=0 &&
               first_text_font()!=fallback,
-              "web fonts: eight faces, a name twice, and the list still lays out in them");
+              "web fonts: the faces that fit, a name twice, and the list lays out in them");
         web_drop();
     }
     /* Another page laid out beside the shown one — a page arriving, its
@@ -4579,6 +4646,14 @@ static void webfont_cases(void) {
         webfonts_feed(false);           /* an arrival's feed between: no second retry */
         pictures_settle();
         check(!s_web.moved,"web fonts: refused again, the fallback stands");
+        /* Another size is another first refusal: zoomed, it gets its own. */
+        g.zoom=1250;
+        s_web.moved=true;
+        pictures_settle();
+        check(s_web.moved,"web fonts: a new size refused for room gets its own retry");
+        pictures_settle();
+        check(!s_web.moved,"web fonts: and refused again, its fallback stands");
+        g.zoom=1000;
         font_like_refusals=0;
     }
     web_drop();

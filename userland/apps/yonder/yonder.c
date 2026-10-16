@@ -183,6 +183,9 @@ static os64_font_config_t s_fonts_conf;
 #define WEBFONT_LIST_MAX OS64_TEXT_FALLBACK_MAX
 // The names of one style's list looked up among the system's families.
 #define WEBFONT_NAMES_MAX 32
+// The sizes refused for room one layout records, and the sizes given
+// their one more layout until a layout refuses none.
+#define WEBFONT_REFUSED_MAX 16
 
 _Static_assert(sizeof(garb_unicode_range_t) == sizeof(os64_text_range_t) &&
                offsetof(garb_unicode_range_t, first) == offsetof(os64_text_range_t, first) &&
@@ -228,13 +231,17 @@ static struct {
     bool moved;
     // The bytes of the HELD files, held to WEBFONT_HELD_MAX.
     size_t held_bytes;
-    // A face of an open file was refused a size for room in the last
-    // layout, and whether the layout after it was the one retry it gets.
-    bool reopen_wanted, reopen_tried;
+    // The sizes of open files refused for room in the last layout
+    // (webfonts_size_key), and the sizes already given their one more
+    // layout, forgotten once a layout refuses none.
+    uint64_t refused[WEBFONT_REFUSED_MAX], retried[WEBFONT_REFUSED_MAX];
+    int32_t nrefused, nretried;
     // The document's characters, a bit per 256 code points, as the layout
-    // `chars_layout` found them.
+    // `chars_layout` found them; and for each 256, how many of the 256s up
+    // to it hold one, so a range meets them in two reads.
     uint64_t chars_layout;
     uint8_t chars[0x110000 / 256 / 8];
+    uint16_t chars_upto[0x110000 / 256];
     // The answer page_fonts lends until its next call.
     os64_text_font_t *list[OS64_TEXT_FALLBACK_MAX];
 } s_web;
@@ -3370,18 +3377,24 @@ static void webfonts_chars(const Page *p)
             n = n->parent;
         n = n != NULL ? n->next : NULL;
     }
+    uint16_t upto = 0;
+    for (uint32_t b = 0; b < 0x110000 / 256; b++) {
+        upto += (s_web.chars[b >> 3] >> (b & 7)) & 1;
+        s_web.chars_upto[b] = upto;
+    }
 }
 
 // Whether a face's ranges meet the document's characters: one without
-// ranges always does.
+// ranges always does. libgarb keeps a range within U+10FFFF and forwards.
 static bool webfonts_meet(const garb_font_face_t *f)
 {
     if (f->nranges == 0)
         return true;
-    for (int32_t i = 0; i < f->nranges; i++)
-        for (uint32_t b = f->ranges[i].first >> 8; b <= f->ranges[i].last >> 8; b++)
-            if (s_web.chars[b >> 3] & (1u << (b & 7)))
-                return true;
+    for (int32_t i = 0; i < f->nranges; i++) {
+        uint32_t lo = f->ranges[i].first >> 8, hi = f->ranges[i].last >> 8;
+        if (s_web.chars_upto[hi] != (lo > 0 ? s_web.chars_upto[lo - 1] : 0))
+            return true;
+    }
     return false;
 }
 
@@ -3487,12 +3500,20 @@ static uint64_t webfonts_ranges_key(const garb_font_face_t *f)
     return h;
 }
 
+// One size of one file with one rule's ranges, as a refusal records it.
+static uint64_t webfonts_size_key(int32_t file, uint32_t px, uint64_t ranges)
+{
+    return (ranges ^ ((uint64_t)(uint32_t)file << 32 | px)) * 1099511628211ull;
+}
+
 // A face of a READY file at `px` with the rule's ranges, kept for the
 // layouts after this one; the least lately used goes when the table is
 // full (a run that holds it keeps it). NULL when it will not open — and
-// one refused for room asks for a layout after this one (webfonts_feed).
-static os64_text_font_t *webfonts_handle(int32_t file, const garb_font_face_t *f, uint32_t px)
+// one refused for room (`*room`) is recorded, to ask for a layout after
+// this one (webfonts_feed).
+static os64_text_font_t *webfonts_handle(int32_t file, const garb_font_face_t *f, uint32_t px, bool *room)
 {
+    *room = false;
     uint64_t key = webfonts_ranges_key(f);
     for (int32_t i = 0; i < s_web.nhandles; i++) {
         WebFontHandle *h = &s_web.handles[i];
@@ -3507,8 +3528,13 @@ static os64_text_font_t *webfonts_handle(int32_t file, const garb_font_face_t *f
                                                       (size_t)f->nranges, &font);
     if (st != OS64_FONT_OK) {
         // Room the tree on screen may hold: tried again after this layout.
-        if (st == OS64_FONT_LIMIT || st == OS64_FONT_NO_MEMORY)
-            s_web.reopen_wanted = true;
+        uint64_t size = webfonts_size_key(file, px, key);
+        bool known = false;
+        for (int32_t i = 0; i < s_web.nrefused; i++)
+            known |= s_web.refused[i] == size;
+        *room = st == OS64_FONT_LIMIT || st == OS64_FONT_NO_MEMORY;
+        if (*room && !known && s_web.nrefused < WEBFONT_REFUSED_MAX)
+            s_web.refused[s_web.nrefused++] = size;
         return NULL;
     }
     int32_t at = s_web.nhandles;
@@ -3633,31 +3659,10 @@ static os64_font_status_t page_fonts(void *ctx, const flow_family_list_t *famili
             return OS64_FONT_NO_MEMORY;
     }
     uint32_t nrest = 0;
-    os64_text_font_t *mine[WEBFONT_LIST_MAX];
-    uint32_t mine_name[WEBFONT_LIST_MAX];
-    size_t nmine = 0;
-    for (uint32_t k = 0; k < families->count; k++) {
-        int32_t chosen[WEBFONT_LIST_MAX];
-        int32_t m = nfaces > 0 ? webfonts_match(faces, nfaces, &families->names[k], italic, bold, chosen,
-                                                WEBFONT_LIST_MAX) : 0;
-        if (m == 0) {
+    for (uint32_t k = 0; k < families->count && nfaces > 0; k++) {
+        int32_t one;
+        if (webfonts_match(faces, nfaces, &families->names[k], italic, bold, &one, 1) == 0)
             rest[nrest++] = (os64_font_family_name_t){families->names[k].name, families->names[k].len};
-            continue;
-        }
-        for (int32_t i = 0; i < m; i++) {
-            const garb_font_face_t *f = &faces[chosen[i]];
-            int32_t file = webfonts_file(p, f, webfonts_meet(f));
-            if (file < 0 || s_web.files[file].state != WF_READY)
-                continue;
-            os64_text_font_t *font = webfonts_handle(file, f, px);
-            bool dup = false;
-            for (size_t j = 0; j < nmine; j++)
-                dup |= mine[j] == font;
-            if (font != NULL && !dup && nmine < WEBFONT_LIST_MAX) {
-                mine_name[nmine] = k;
-                mine[nmine++] = font;
-            }
-        }
     }
     os64_font_family_list_t asked = {
         .names = nfaces > 0 ? rest : (const os64_font_family_name_t *)families->names,
@@ -3690,8 +3695,47 @@ static os64_font_status_t page_fonts(void *ctx, const flow_family_list_t *famili
     if (st != OS64_FONT_OK)
         return st;
     size_t keep = view.font_count < OS64_TEXT_FALLBACK_MAX ? OS64_TEXT_FALLBACK_MAX - view.font_count : 0;
-    if (nmine > keep)
-        nmine = keep;
+    // The page's faces, in order, while the list has a place: a file
+    // coming, or a size of one refused for room, holds a place, once, so
+    // the faces after it are not fetched while it may yet draw; a face
+    // whose file failed, or whose size will not open for another reason,
+    // gives its place to the next. A face with more ranges than a text
+    // font takes never opens, and is passed over.
+    os64_text_font_t *mine[WEBFONT_LIST_MAX];
+    uint32_t mine_name[WEBFONT_LIST_MAX];
+    int32_t pending[WEBFONT_LIST_MAX];
+    size_t nmine = 0, npending = 0, places = 0;
+    for (uint32_t k = 0; k < families->count && nfaces > 0 && places < keep; k++) {
+        int32_t chosen[WEBFONT_LIST_MAX];
+        int32_t m = webfonts_match(faces, nfaces, &families->names[k], italic, bold, chosen, WEBFONT_LIST_MAX);
+        for (int32_t i = 0; i < m && places < keep; i++) {
+            const garb_font_face_t *f = &faces[chosen[i]];
+            if (f->nranges > (int32_t)OS64_TEXT_RANGES_MAX)
+                continue;
+            int32_t file = webfonts_file(p, f, webfonts_meet(f));
+            if (file < 0)
+                continue;
+            bool ready = s_web.files[file].state == WF_READY, room = false;
+            os64_text_font_t *font = ready ? webfonts_handle(file, f, px, &room) : NULL;
+            if (ready && font == NULL && !room)
+                continue;
+            bool dup = false;
+            if (font == NULL)
+                for (size_t j = 0; j < npending; j++)
+                    dup |= pending[j] == file;
+            else
+                for (size_t j = 0; j < nmine; j++)
+                    dup |= mine[j] == font;
+            if (font == NULL && !dup) {
+                pending[npending++] = file;
+                places++;
+            } else if (font != NULL && !dup) {
+                mine_name[nmine] = k;
+                mine[nmine++] = font;
+                places++;
+            }
+        }
+    }
     // The names' written order: the page's faces of the names before the
     // system family the provider chose, that family's face, the page's
     // faces of the names after it, and last the provider's fallbacks and
@@ -3779,15 +3823,24 @@ static void webfonts_feed(bool laid)
         webfonts_move();
     }
     // A size refused for room gets one more layout: the tree that held the
-    // room is gone after it. Refused again, the fallback stands.
+    // room is gone after it. Refused again, the fallback stands — for that
+    // size, until a layout refuses none.
     if (laid) {
-        if (s_web.reopen_wanted && !s_web.reopen_tried) {
-            s_web.reopen_tried = true;
-            webfonts_move();
-        } else if (!s_web.reopen_wanted) {
-            s_web.reopen_tried = false;
+        bool again = false;
+        for (int32_t i = 0; i < s_web.nrefused; i++) {
+            bool tried = false;
+            for (int32_t j = 0; j < s_web.nretried; j++)
+                tried |= s_web.retried[j] == s_web.refused[i];
+            if (!tried && s_web.nretried < WEBFONT_REFUSED_MAX) {
+                s_web.retried[s_web.nretried++] = s_web.refused[i];
+                again = true;
+            }
         }
-        s_web.reopen_wanted = false;
+        if (s_web.nrefused == 0)
+            s_web.nretried = 0;
+        s_web.nrefused = 0;
+        if (again)
+            webfonts_move();
     }
     while (s_web.next < s_web.nfiles && s_web.in_flight < WEBFONTS_AT_ONCE) {
         WebFontFile *w = &s_web.files[s_web.next];
