@@ -4043,7 +4043,7 @@ static void diag_arriving_released_case(void) {
     memset(&p,0,sizeof(p));
     p.diag=yonder_diag_new("http://fixture.test/",77,0);
     s_arriving.staged=true; s_arriving.seq=yonder_diag_seq(p.diag);
-    webfonts_served(&s_arriving.families,NULL,"Staged",6,WF_SERVED_NONE,"Test Sans");
+    webfonts_served(&s_arriving.families,"Staged",6,WF_SERVED_NONE,"Test Sans");
     diag_leave(&p);
     check(!s_arriving.staged && s_arriving.families.n==0 && s_arriving.families.f==NULL,
           "diag: a page let go before it was shown takes its staged families with it");
@@ -4512,7 +4512,7 @@ static void webfont_cases(void) {
     check(diag_dir_open()==NULL,"web fonts: arrival, own answers: the record has a directory");
     probe_web=true;
     s_arriving.staged=true; s_arriving.seq=s_diag.next;
-    webfonts_served(&s_arriving.families,NULL,"Stale",5,WF_SERVED_NONE,"Test Sans");
+    webfonts_served(&s_arriving.families,"Stale",5,WF_SERVED_NONE,"Test Sans");
     loop_page("<style>p{font-family:Nope}</style><p>hello</p>");
     check(loop_settle() && g.page.tree!=NULL,"web fonts: arrival, own answers: the page arrives");
     {
@@ -4826,6 +4826,43 @@ static void webfont_cases(void) {
     }
     font_open_refusals=0;
     web_drop();
+    /* A layout that adds a MISSING font tells the badge as it is shown. */
+    web_page_scripted("<style>@font-face{font-family:Web;src:url(w.ttf)}</style><p>a</p>"
+                      "<script>var q=document.createElement('p');q.style.fontFamily='Nope';q.textContent='x';"
+                      "document.body.appendChild(q)</script>",true);
+    check(strstr(g.badge_text,"MISSING")==NULL,"web fonts: badge: nothing missing first");
+    {
+        os64_js_outcome_t out;
+        check(yonder_scripts_step(g.page.scripts,&out) && out.status==OS64_JS_OK,"web fonts: badge: the script adds a family");
+        g.badge_missing=g.badge_failed=0; g.badge_text[0]=0;
+        badge_follow();
+        check(strstr(g.badge_text,"MISSING")==NULL,"web fonts: badge: still nothing missing before the rebuild");
+        check(script_rebuild(),"web fonts: badge: the page is rebuilt");
+    }
+    check(strstr(g.badge_text,"MISSING 1")!=NULL,"web fonts: a layout that adds a MISSING font tells the badge when it is shown");
+    web_drop();
+    /* The face's next source after one that failed since the layout on
+     * screen is not asked for yet: the failed layout asks for nothing, and
+     * the next layout will. */
+    web_page("<style>@font-face{font-family:Web;src:url(w.ttf),url(w2.ttf)}p{font-family:Web}</style><p>hello");
+    font_open_refusals=1;
+    check(font_land("w.ttf","A",NULL) && s_web.files[0].state==WF_HELD,"web fonts: held then failed: held");
+    {
+        os64_html_pin_t pins[512]; size_t n=0;
+        while(n<512 && (pins[n]=os64_html_pin(g.page.way.doc))!=0) n++;
+        pictures_settle();
+        for(size_t i=0;i<n;i++) os64_html_unpin(g.page.way.doc,pins[i]);
+    }
+    font_open_refusals=0;
+    diag_fonts(&g.page);
+    yonder_diag_render(g.page.diag,record,sizeof(record));
+    check(s_web.files[0].state==WF_FAILED &&
+          strstr(record,"w.ttf failed; https://fixture.test/w2.ttf not asked for yet: the source before it failed "
+                        "since the page was laid out\n")!=NULL,
+          "web fonts: on the record, a source after one that failed since the layout is not asked for yet");
+    check(lay_out_page(&g.page,800,600) && web_file("https://fixture.test/w2.ttf")>=0,
+          "web fonts: held then failed: the next layout asks for the next source");
+    web_drop();
     /* A composite whose latest rules cannot serve falls back to an
      * earlier one, past the eight a list keeps. */
     {
@@ -4950,9 +4987,9 @@ static void webfont_cases(void) {
         web_page(page);
         diag_fonts(&g.page);
         yonder_diag_render(g.page.diag,rec,sizeof(rec));
-        check(strstr(rec,"; more families than the 512 the record keeps (their missing counts are floors)\n")!=NULL &&
-              strstr(rec,"\nmissing names not kept: 8\n")!=NULL,
-              "web fonts: on the record, families past the 512 kept are said to be missing, and every MISSING line is kept or counted");
+        check(strstr(rec,"; more families than the 512 the record keeps, the rest on no line here\n")!=NULL &&
+              strstr(rec,"MISSING font N519")==NULL && strstr(rec,"MISSING font N511")!=NULL,
+              "web fonts: on the record, families past the 512 kept are on no line, and the fonts line says so");
         web_drop();
     }
     /* A family line names the font its run's list begins with: a page
@@ -4987,6 +5024,7 @@ static void webfont_cases(void) {
             short_said+=strstr(rec,"families not kept: no memory for them")!=NULL ||
                         strstr(rec,"some lines not kept: no memory to name them")!=NULL;
             bool missing_told=!laid || (strstr(rec,"MISSING font Aa")!=NULL && strstr(rec,"MISSING font Bb")!=NULL) ||
+                              strstr(rec,"families not kept: no memory for them, nor a line here")!=NULL ||
                               strstr(rec,"some lines not kept")!=NULL || strstr(rec,"missing names not kept")!=NULL;
             check(strstr(rec,"more families than")==NULL &&
                   ((strstr(rec,"\nfont family Aa: ")!=NULL && strstr(rec,"\nfont family Bb: ")!=NULL) || told) &&
@@ -4996,21 +5034,18 @@ static void webfont_cases(void) {
         }
         check(short_said>0,"web fonts: the memory sweep reaches the families' own allocations");
     }
-    /* A name with no memory to copy it is still said to be gone: its
-     * MISSING line cannot be written, so the record says a line went. */
+    /* A name with no memory to copy it only flags its layout's table:
+     * nothing reaches the record before the layout's tree is shown, and
+     * then the fonts line says families went. */
     {
         WebFontFamilies t={0};
-        yonder_diag_t *d=yonder_diag_new("http://fixture.test/",1,0);
-        webfonts_served(&t,d,"First",5,WF_SERVED_NONE,"Test Sans");
+        webfonts_served(&t,"First",5,WF_SERVED_NONE,"Test Sans");
         fail_at=attempts+1;
-        webfonts_served(&t,d,"Gone",4,WF_SERVED_NONE,"Test Sans");
+        webfonts_served(&t,"Gone",4,WF_SERVED_NONE,"Test Sans");
         fail_at=0;
-        static char rec[4096];
-        yonder_diag_render(d,rec,sizeof(rec));
-        check(t.n==1 && t.short_of_memory && strstr(rec,"\nsome lines not kept: no memory to name them\n")!=NULL,
-              "web fonts: a MISSING font with no memory to name it is said to be gone");
+        check(t.n==1 && t.short_of_memory && !t.full,
+              "web fonts: a family with no memory to keep flags its table, and is not taken for the cap");
         webfonts_families_free(&t);
-        yonder_diag_free(d);
     }
     /* A page let go before it was shown writes its fonts too: its faces as
      * its rules declare them, none asked for, whatever the page on screen
@@ -5024,7 +5059,7 @@ static void webfont_cases(void) {
         yonder_diag_free(fresh.diag);
         fresh.diag=yonder_diag_new("http://fixture.test/fresh",99,0);
         s_arriving.staged=true; s_arriving.seq=yonder_diag_seq(fresh.diag);
-        webfonts_served(&s_arriving.families,NULL,"Nope",4,WF_SERVED_NONE,"Test Sans");
+        webfonts_served(&s_arriving.families,"Nope",4,WF_SERVED_NONE,"Test Sans");
         diag_observe(&fresh,"when the page was left");
         static char rec[8192];
         yonder_diag_render(fresh.diag,rec,sizeof(rec));
@@ -5058,7 +5093,7 @@ static void webfont_cases(void) {
     /* A layout's answers are its own: what a layout that was never shown
      * found is not the record's at the next. */
     web_page("<style>@font-face{font-family:Web;src:url(w.ttf)}p{font-family:Web}</style><p>a");
-    webfonts_served(&s_web.laying,NULL,"Stale",5,WF_SERVED_NONE,"Test Sans");
+    webfonts_served(&s_web.laying,"Stale",5,WF_SERVED_NONE,"Test Sans");
     check(lay_out_page(&g.page,800,600),"web fonts: own answers: the page is laid out again");
     diag_fonts(&g.page);
     yonder_diag_render(g.page.diag,record,sizeof(record));

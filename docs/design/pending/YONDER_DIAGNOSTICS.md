@@ -184,7 +184,10 @@ gets plain lines for its fonts at every write, after `sheets:`:
   the file's `FAILED font` line — one the page's table of files had no
   room to keep among them), a `format()` or `local()` passed over, `not
   asked for yet` on a page whose tree on screen was laid out before it was
-  shown (a page is laid out in its faces once it is), or `never asked
+  shown (a page is laid out in its faces once it is) or for a source after
+  one that failed since that layout (the next layout asks for it; a
+  failed layout's held files fail without asking for one, so as not to
+  lay the page out again at every batch), or `never asked
   for`: no text asked for its family, or the lists it was in had no place
   left for it (PILE3.md § Web fonts). A face that is passed over whatever
   its file says only that, in place of its sources: `not needed` when its
@@ -231,7 +234,8 @@ Written after six review rounds had each found a part of this the slice
 had not decided. Each cell is a promise the code keeps, and each is
 checked against the code before a review is asked for.
 
-**Which moment the record describes: the tree on screen.** Faces' use and
+**Which moment the record describes: the tree on screen.** Nothing a
+layout finds reaches the record before its tree is shown. Faces' use and
 families are what the layout that made the shown tree found; files are
 the shown page's, as they stand; a face's range is met against the
 page's text as it is at the write.
@@ -240,7 +244,7 @@ page's text as it is at the write.
 |---|---|---|---|---|---|
 | Files (`s_web.files`) | a shown layout wants a face's source | fetch, hold, open, fail | as they stand, at every write | the files it wanted stay asked for | with the shown page (`webfonts_leave`, after the departure write) |
 | Faces' use (`face_laying`) | every layout of the shown document (`webfonts_layout_begins`), whether or not its text asks for a font | each lookup of that layout | when its tree is shown (`page_show`) | the record keeps the tree on screen's | with the shown page |
-| Families (`s_web.laying`) | as faces' use | each lookup: the best answer of the layout's runs, and its MISSING count | with faces' use, MISSING lines written then | as faces' use | with the shown page |
+| Families (`s_web.laying`) | as faces' use | each lookup: the best answer of the layout's runs, and its MISSING count; a name past the table, or with no memory, only flags it | with faces' use, MISSING lines written then and the badge told | as faces' use | with the shown page |
 | An arriving page's families (`s_arriving`) | every layout of a page not yet shown that has a record | each lookup | at arrival (`arrive_now`), MISSING lines written then | its next layout begins them again | adopted, or written with the departure of a page let go unshown and freed with its record (`diag_leave`) |
 | The characters (`s_web.chars`) | asked for by a lookup or a write | — | keyed by document, version and layout | — | rebuilt for whichever page asks |
 
@@ -254,10 +258,11 @@ files.
 
 **Caps: every one is said when it is passed.** Faces past 256 a page
 keeps (the `fonts:` line counts them); files past 512 (a `FAILED font`
-line); families past 512 (the `fonts:` line says so, and that their
-missing counts are floors — in lower case, a plain line never spelling a
-token — a name the record could not keep has no
-tally, so its line counts at least the one lookup that wrote it); a table's 512 lines
+line); families past 512, or with no memory to keep (the `fonts:` line
+says which, and that those names have no line here, a missing one
+included — nothing about a layout reaches the record before its tree is
+shown, so a name the census could not keep is written nowhere rather than
+early); a table's 512 lines
 (`not kept: N`); lost lines past the 4,096 the record can tell apart
 (`, and more not counted`); a face's ranges past 64 (`and N more`).
 

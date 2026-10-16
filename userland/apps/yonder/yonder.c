@@ -215,6 +215,9 @@ typedef struct {
     yonder_font_kind_t container;
     size_t got;
     uint64_t ready_layout;
+    // The layouts begun when it failed: a face's next source is asked for
+    // by the next layout, so one after a failure that late is not yet.
+    uint64_t failed_layout;
 } WebFontFile;
 
 // A family a layout asked for, and what served it: the page's faces; the
@@ -3812,10 +3815,12 @@ static bool webfonts_chosen(const garb_font_face_t *f, const flow_family_name_t 
 // faces, whatever its other runs found.
 // A lookup that found nothing counts toward the name's MISSING font line,
 // written when the layout's answers are the record's
-// (webfonts_families_missing); a name the table cannot keep goes on the
-// record `diag` at once, so no MISSING line is lost with it.
-static void webfonts_served(WebFontFamilies *t, yonder_diag_t *diag, const char *name, size_t len,
-                            WebFontServed served, const char *in)
+// (webfonts_families_missing). A name the table cannot keep — past its
+// 512, or with no memory — only flags the table: nothing a layout finds
+// reaches the record before its tree is shown, and the fonts line then
+// says those names have no line.
+static void webfonts_served(WebFontFamilies *t, const char *name, size_t len, WebFontServed served,
+                            const char *in)
 {
     WebFontFamily *f = NULL;
     for (int32_t i = 0; i < t->n && f == NULL; i++)
@@ -3840,12 +3845,6 @@ static void webfonts_served(WebFontFamilies *t, yonder_diag_t *diag, const char 
                 t->full = true;
             else
                 t->short_of_memory = true;
-            // Its MISSING line, as a name past the table would have had;
-            // with no memory to name it, the record says one went.
-            if (served == WF_SERVED_NONE && copy != NULL)
-                yonder_diag_missing_seen(diag, "font", copy, 1);
-            else if (served == WF_SERVED_NONE)
-                yonder_diag_short(diag);
             os64_free(copy);
             return;
         }
@@ -3896,7 +3895,8 @@ static void webfonts_layout_begins(const Page *p)
 
 // A tree is shown: on the shown page, what the layout that made it found
 // is the record's — its families, how its faces fared, and its MISSING
-// fonts. A layout that fails leaves the record saying what is on screen.
+// fonts, which the badge then counts. A layout that fails leaves the
+// record saying what is on screen.
 static void webfonts_families_shown(const Page *p)
 {
     if (p != &g.page || s_web.laying_layout != geometry_layout_total)
@@ -3907,6 +3907,7 @@ static void webfonts_families_shown(const Page *p)
     os64_memcpy(s_web.face_use, s_web.face_laying, sizeof(s_web.face_use));
     s_web.use_layout = s_web.laying_layout;
     webfonts_families_missing(&s_web.families, g.page.diag);
+    badge_follow();
 }
 
 // The list is borrowed until the next call, which is libflow's contract
@@ -3933,17 +3934,13 @@ static os64_font_status_t page_fonts(void *ctx, const flow_family_list_t *famili
     const garb_font_face_t *faces = NULL;
     int32_t own = s_laying.cascade != NULL ? garb_cascade_font_faces(s_laying.cascade, &faces, NULL) : 0;
     int32_t nfaces = shown ? own : 0;
-    // Where the answers go on the record: the shown page's, or a page
-    // arriving's.
+    // Where the answers are kept for the record: the shown page's
+    // layout's, or a page arriving's.
     WebFontFamilies *record = NULL;
-    yonder_diag_t *diag = NULL;
-    if (shown) {
+    if (shown)
         record = &s_web.laying;
-        diag = g.page.diag;
-    } else if (p != NULL && p->diag != NULL && s_arriving.staged && s_arriving.seq == yonder_diag_seq(p->diag)) {
+    else if (p != NULL && p->diag != NULL && s_arriving.staged && s_arriving.seq == yonder_diag_seq(p->diag))
         record = &s_arriving.families;
-        diag = p->diag;
-    }
     if (nfaces > 0)
         webfonts_chars(p);
     // The names no page face serves, and the names they do with how many
@@ -4078,11 +4075,11 @@ static os64_font_status_t page_fonts(void *ctx, const flow_family_list_t *famili
         WebFontPick pick;
         bool faced = !shown && own > 0 &&
                      webfonts_match(faces, own, &(flow_family_name_t){nm->name, (uint32_t)nm->len}, italic, bold, &pick);
-        webfonts_served(record, diag, nm->name, nm->len,
+        webfonts_served(record, nm->name, nm->len,
                         faced ? WF_SERVED_PAGE_UNLISTED : system ? WF_SERVED_SYSTEM : WF_SERVED_NONE, primary->family);
     }
     for (uint32_t k = 0; shown && k < nserved; k++)
-        webfonts_served(&s_web.laying, g.page.diag, served[k].name, served[k].len,
+        webfonts_served(&s_web.laying, served[k].name, served[k].len,
                         served[k].joined > 0 ? WF_SERVED_PAGE : WF_SERVED_PAGE_UNLISTED, primary->family);
     if (rest != small)
         os64_free(rest);
@@ -4118,6 +4115,7 @@ static const char *webfonts_refusal(os64_font_status_t st)
 static void webfonts_fail(WebFontFile *w, const char *why)
 {
     w->state = WF_FAILED;
+    w->failed_layout = geometry_layout_total;
     char line[OS64_FETCH_URL_MAX + 80];
     os64_snprintf(line, sizeof(line), "%s: %s", w->url, why);
     yonder_diag_failed(g.page.diag, "font", line);
@@ -4229,8 +4227,9 @@ static void webfonts_feed(bool laid)
 // A layout of the shown page failed, so the room the held files wait for
 // was not let go: each fails, its bytes freed, rather than waiting for a
 // layout that may not come. The page is not moved for them — the failed
-// layout's moves were consumed so it is not retried at every batch — and
-// the next layout wants each face's next source.
+// layout's moves were consumed so it is not retried at every batch — so
+// each face's next source is asked for by whichever layout comes next,
+// and until then the record says it is not asked for yet.
 static void webfonts_unhold(void)
 {
     for (int32_t i = 0; i < s_web.nfiles; i++) {
@@ -4425,7 +4424,8 @@ static void diag_ready(DiagText *t, const char *url, const WebFontFile *w, int32
 // FAILED font line, a source the table could not keep included), a
 // format() or local() passed over — or why it was not asked for: not yet,
 // before the page is laid out on screen in its faces (and always on a page
-// let go before it was shown), or no text asked.
+// let go before it was shown) or after a source that failed since that
+// layout, or no text asked.
 // A face with more ranges than a text font takes, or whose ranges miss
 // the page's text, says only that: it is passed over whatever its file.
 // The line is whole, however long, but for the ranges past the first
@@ -4451,6 +4451,7 @@ static void diag_face(Page *p, int32_t i, const garb_font_face_t *f, bool shown)
     } else if (!webfonts_meet(f)) {
         dt_put(&t, "not needed: its range is not in the page's text");
     } else {
+        bool failed_late = false;
         for (int32_t k = 0; k < f->nsrc; k++) {
             const garb_face_src_t *s = &f->src[k];
             bool last = false;
@@ -4482,6 +4483,8 @@ static void diag_face(Page *p, int32_t i, const garb_font_face_t *f, bool shown)
                         dt_put(&t, "%s failed", url);
                     else if (w == NULL && s_web.use_layout == 0)
                         dt_put(&t, "%s not asked for yet: a page is laid out in its faces once it is shown", url);
+                    else if (w == NULL && failed_late)
+                        dt_put(&t, "%s not asked for yet: the source before it failed since the page was laid out", url);
                     else if (w == NULL)
                         dt_put(&t, "%s never asked for: no text asked for it, or its lists had no place", url);
                     else if (w->state == WF_READY)
@@ -4491,6 +4494,10 @@ static void diag_face(Page *p, int32_t i, const garb_font_face_t *f, bool shown)
                                webfonts_container(w->container), (unsigned long)w->got);
                     else
                         dt_put(&t, "%s coming", url);
+                    // A source that failed since the layout on screen leaves
+                    // the next one for the next layout to ask for.
+                    if (w != NULL && w->state == WF_FAILED)
+                        failed_late = w->failed_layout >= s_web.use_layout;
                 }
             }
             if (last)
@@ -4541,11 +4548,11 @@ static void diag_fonts(Page *p)
     char v[320];
     char full[112] = "";
     if (fams->full)
-        os64_snprintf(full, sizeof(full), "; more families than the %d the record keeps (their missing counts are floors)",
+        os64_snprintf(full, sizeof(full), "; more families than the %d the record keeps, the rest on no line here",
                       (int)WEBFONT_FAMILIES_MAX);
     char more[176];
     os64_snprintf(more, sizeof(more), "%s%s", full,
-                  fams->short_of_memory ? "; families not kept: no memory for them" : "");
+                  fams->short_of_memory ? "; families not kept: no memory for them, nor a line here" : "");
     os64_snprintf(v, sizeof(v), "%d faces (%u past the most a page keeps), %d files: %d open, %d failed, %d coming%s",
                   (int)n, (unsigned)lost, (int)nfiles, (int)open, (int)failed, (int)coming, more);
     yonder_diag_fact(p->diag, "fonts", v);
