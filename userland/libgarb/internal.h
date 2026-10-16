@@ -58,6 +58,7 @@ typedef struct {
     os64_arena_t *arena;    // where token text goes
     const size_t *open;     // the parse's open lists, which text must leave room for
     bool short_of_memory;
+    bool escaped;           // the token being read resolved an escape
     // A scratch buffer for building UTF-8 before it is copied into the arena.
     char *buf;
     size_t buflen, bufcap;

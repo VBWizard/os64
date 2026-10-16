@@ -7,7 +7,10 @@
 # The whole of a face: a string family; url() unquoted and quoted, with
 # format() as a string and as a keyword; local() as a string and as words;
 # a weight range written backwards; italic; ranges as a point, a range and
-# a wildcard. Defaults: weight 400, normal, every code point.
+# a wildcard. Defaults: weight 400, normal, every code point. A generic's
+# word inside a longer name is a name (Chromium and Gecko read it so, and
+# `Noto Serif` unquoted is everywhere); a range spelled with an escape is
+# none; a rule with a prelude is no rule.
 VIEWPORT 800x600
 PAGE
 <!doctype html><style>
@@ -20,6 +23,8 @@ PAGE
   unicode-range: U+0025, U+0-7F, U+4??;
 }
 @font-face { font-family: Plain Words; src: url(a.ttf) }
+@font-face { font-family: Noto Serif; src: url(ns.ttf); unicode-range: U+30; unicode-range: u\+41 }
+@font-face bogus { font-family: Prelude; src: url(p.ttf) }
 </style>
 WANT
 "Pixel Operator" 300-700 italic U+25-25, U+0-7F, U+400-4FF sheet 0
@@ -29,6 +34,8 @@ WANT
   url(fonts/po.ttf) format(truetype)
 "Plain Words" 400 normal sheet 0
   url(a.ttf)
+"Noto Serif" 400 normal U+30-30 sheet 0
+  url(ns.ttf)
 (end)
 END
 

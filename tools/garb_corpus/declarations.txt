@@ -209,6 +209,8 @@ IN: font-family: "Times New Roman", serif
 OUT: font-family: "Times New Roman", serif
 IN: font-family: Helvetica   Neue, sans-serif
 OUT: font-family: "Helvetica Neue", sans-serif
+IN: font-family: Noto Serif, serif
+OUT: font-family: "Noto Serif", serif
 IN: font-family: inherit
 OUT: font-family: inherit
 IN: font-family: Arial, inherit

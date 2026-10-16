@@ -568,8 +568,9 @@ static int hexval(char ch)
 
 // One <urange> in [i, n): the tokenizer makes no such token, so its text is
 // the representations of the tokens that spell it, joined (Syntax 3,
-// "consume the value of a unicode-range descriptor"): `u` or `U`, `+`, one
-// to six hex digits and `?`s — the `?`s, all trailing, as 0 below and F
+// "consume the value of a unicode-range descriptor"), none written with
+// an escape, since that reads the source's own characters: `u` or `U`,
+// `+`, one to six hex digits and `?`s — the `?`s, all trailing, as 0 below and F
 // above — or two runs of hex digits about a `-`. False for anything else,
 // or a range past U+10FFFF or backwards.
 static bool urange(const garb_value_t *v, int32_t i, int32_t n, garb_unicode_range_t *out)
@@ -580,7 +581,7 @@ static bool urange(const garb_value_t *v, int32_t i, int32_t n, garb_unicode_ran
     for (; i < n; i++) {
         const garb_value_t *t = &v[i];
         size_t need = t->len + (t->kind == GARB_DIMENSION ? t->unit_len : 0);
-        if (t->kind == GARB_WHITESPACE || len + need >= sizeof(text) ||
+        if (t->kind == GARB_WHITESPACE || t->escaped || len + need >= sizeof(text) ||
             (t->kind != GARB_IDENT && t->kind != GARB_NUMBER && t->kind != GARB_DIMENSION &&
              t->kind != GARB_DELIM))
             return false;
@@ -758,6 +759,11 @@ static void add_face(garb_cascade_t *c, garb_parsed_t *owner, const garb_rule_t 
     int32_t n;
     if (!r->has_block)
         return;
+    // The rule has no prelude (Fonts 4 § 4.1): one written with one is no
+    // rule at all.
+    for (int32_t i = 0; i < r->nprelude; i++)
+        if (r->prelude[i].kind != GARB_WHITESPACE)
+            return;
     // Past the cap, a rule is counted and nothing of it read or kept.
     if (c->nfaces == GARB_FONT_FACES_MAX) {
         c->faces_lost++;

@@ -2509,8 +2509,10 @@ libgarb's corpus: `@font-face` read whole — `src` lists of `url()`,
 wrong every way, names past 256 bytes, weight ranges and
 keywords and fractions, the three styles and oblique's angles,
 `unicode-range` in single points, ranges and wildcards (`U+4??`), a
-generic family's name and a system font's refused unquoted, a CSS-wide
-keyword or `default` refused as any word of a name, a rule inside
+generic family's name and a system font's refused unquoted — as the
+whole name only, so `Noto Serif` unquoted is a name, as Chromium and
+Gecko read it — a CSS-wide keyword or `default` refused as any word of a
+name, a range spelled with an escape and a rule with a prelude refused, a rule inside
 `@media` that holds and one that does not, a composite's rules all kept
 in order, the 257th face passed over and a rule past the cap costing
 nothing however long, and each allocation failed alone and then with every one after it
