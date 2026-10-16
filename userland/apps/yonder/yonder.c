@@ -1642,6 +1642,17 @@ static const char *const kPaintStage[PS_COUNT] = {
     "warps", "publish", "ticks", "schedule",
 };
 
+// The deadlines a schedule hands the ticker, by where the next came from:
+// one already past when it is handed over rings at once, so a source
+// counted often here is a loop of rings that does no work.
+typedef enum {
+    PAST_SETTLE, PAST_LAYOUTS, PAST_TICKS, PAST_ARRIVAL, PAST_TIMERS, PAST_PICTURES, PAST_COUNT
+} PastDeadline;
+
+static const char *const kPastDeadline[PAST_COUNT] = {
+    "settle", "layouts", "ticks", "arrival", "timers", "pictures",
+};
+
 // Counted with the processor's time-stamp counter, not a system call: a
 // paint draws thousands of runs. A stage may open inside itself (a group in
 // a group), so it is timed from its outermost opening. `now` is the paint's
@@ -1654,6 +1665,8 @@ static struct {
     uint64_t now[PS_COUNT], total[PS_COUNT], most[PS_COUNT], began[PS_COUNT];
     uint32_t depth[PS_COUNT];
     uint64_t paints, whole, pixels, ticks, schedules, waited;
+    uint64_t bells, past[PAST_COUNT];       // the ticker's rings; deadlines handed it already past
+    uint64_t from_wakes;                    // the ticker's looks when the counts began
     uint64_t from_cycles;
     int64_t from_us;
 } s_cost;
@@ -1697,6 +1710,7 @@ static void cost_reset(void)
     os64_memset(&s_cost, 0, sizeof(s_cost));
     s_cost.from_cycles = cycles();
     s_cost.from_us = os64_micros();
+    s_cost.from_wakes = yonder_ticker_wakes(g.ticker);
 }
 
 static void cost_painter(yonder_paint_stage_t stage, bool begin)
@@ -4641,6 +4655,10 @@ static bool paint_lines(DiagText *t, DiagText *u)
            (unsigned long)s_cost.whole, (unsigned long)(s_cost.pixels / 1000000),
            (unsigned long)(s_cost.pixels / 100000 % 10), (unsigned long)s_cost.ticks,
            (unsigned long)s_cost.schedules, (unsigned long)busy);
+    dt_put(t, "; %lu bells, the ticker woke %lu times; deadlines already past when handed to it:",
+           (unsigned long)s_cost.bells, (unsigned long)(yonder_ticker_wakes(g.ticker) - s_cost.from_wakes));
+    for (int32_t i = 0; i < PAST_COUNT; i++)
+        dt_put(t, "%s %s %lu", i ? "," : "", kPastDeadline[i], (unsigned long)s_cost.past[i]);
     // Tenths of a millisecond: cycles / (rate per microsecond x 100).
     uint64_t per = rate * 100;
     uint64_t inner = 0;
@@ -5169,16 +5187,18 @@ static uint64_t tick_next(void)
 static void pictures_schedule(void)
 {
     cost_begin(PS_SCHEDULE);
+    // Which deadline is the next, for the counts (PastDeadline).
+    PastDeadline from = PAST_SETTLE;
     uint64_t next = g.covered ? YONDER_NEVER : g.settle_due;
     uint64_t motion = motion_next(), tick = tick_next();
     if (motion < next)
-        next = motion;
+        next = motion, from = PAST_LAYOUTS;
     if (tick < next)
-        next = tick;
+        next = tick, from = PAST_TICKS;
     if (g.coming.active && g.coming.due < next)
-        next = g.coming.due;
+        next = g.coming.due, from = PAST_ARRIVAL;
     if (g.stream.active && g.stream.sheets_due != 0 && g.stream.sheets_due < next)
-        next = g.stream.sheets_due;
+        next = g.stream.sheets_due, from = PAST_ARRIVAL;
     // A page's timers, covered or not: a page that counts down keeps
     // counting while another window is in front (DOM_D7.md § The clock).
     const yonder_scripts_t *hosts[] = {g.page.scripts, g.stream.scripts,
@@ -5186,7 +5206,7 @@ static void pictures_schedule(void)
     for (size_t i = 0; i < sizeof(hosts) / sizeof(hosts[0]); i++) {
         uint64_t due = yonder_scripts_timer_next(hosts[i]);
         if (due < next)
-            next = due;
+            next = due, from = PAST_TIMERS;
     }
     // The pictures on screen, found in one pass when any could be next.
     bool asks = false;
@@ -5199,10 +5219,12 @@ static void pictures_schedule(void)
     for (int32_t k = 0; asks && k < g.page.npics; k++) {
         const Picture *pic = &g.page.pics[k];
         if (pic->playing && pic->due < next && (seen != NULL ? seen[k] : picture_on_screen(k, false)))
-            next = pic->due;
+            next = pic->due, from = PAST_PICTURES;
     }
     if (seen != NULL)
         picture_flags_free(seen, small);
+    if (next != YONDER_NEVER && next <= yonder_now_ms())
+        s_cost.past[from]++;
     yonder_ticker_set(g.ticker, next);
     cost_end(PS_SCHEDULE);
     s_cost.schedules++;
@@ -7803,6 +7825,7 @@ static void on_doorbell(os64_ui_t *ui, const os64_gui_event_t *ev)
     if (mask & BELL_SETTINGS)
         yonder_settings_rung();
     if (mask & BELL_TICK) {
+        s_cost.bells++;
         if (g.coming.active && yonder_now_ms() >= g.coming.due)
             coming_show();
         pictures_tick();

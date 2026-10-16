@@ -18,6 +18,7 @@ struct yonder_ticker {
     int64_t thread;
     int64_t window;
     uint32_t bell;
+    uint64_t wakes;             // the thread's looks at the deadline, for the paint counts
 };
 
 uint64_t yonder_now_ms(void)
@@ -35,6 +36,7 @@ static int64_t tick(void *arg)
         os64_lock_acquire(&t->lock);
         bool stopping = t->stopping;
         uint64_t due = t->due;
+        t->wakes++;
         os64_lock_release(&t->lock);
         if (stopping)
             return 0;
@@ -96,6 +98,16 @@ void yonder_ticker_set(yonder_ticker_t *t, uint64_t due_ms)
     // finds this, and sleeps again.
     if (due_ms < was)
         wake(t);
+}
+
+uint64_t yonder_ticker_wakes(yonder_ticker_t *t)
+{
+    if (t == NULL)
+        return 0;
+    os64_lock_acquire(&t->lock);
+    uint64_t wakes = t->wakes;
+    os64_lock_release(&t->lock);
+    return wakes;
 }
 
 void yonder_ticker_stop(yonder_ticker_t *t)

@@ -24,6 +24,9 @@ yonder_ticker_t *yonder_ticker_start(int64_t window, uint32_t bell);
 // is forgotten; the window hands over the next one after it has looked.
 void yonder_ticker_set(yonder_ticker_t *t, uint64_t due_ms);
 // Stops and joins the thread and frees the ticker. NULL is accepted.
+// How many times the thread has looked at its deadline since it started:
+// each ring, each wake, each timeout (the paint counts read it).
+uint64_t yonder_ticker_wakes(yonder_ticker_t *t);
 void yonder_ticker_stop(yonder_ticker_t *t);
 
 #endif
