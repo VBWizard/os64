@@ -184,8 +184,9 @@ static os64_font_config_t s_fonts_conf;
 // The names of one style's list looked up among the system's families.
 #define WEBFONT_NAMES_MAX 32
 // The sizes refused for room one layout records, and the sizes given
-// their one more layout until a layout refuses none.
-#define WEBFONT_REFUSED_MAX 16
+// their one more layout in one geometry: as many as the handle table
+// keeps, since more sizes than that cannot all be open at once.
+#define WEBFONT_REFUSED_MAX WEBFONT_HANDLES_MAX
 
 _Static_assert(sizeof(garb_unicode_range_t) == sizeof(os64_text_range_t) &&
                offsetof(garb_unicode_range_t, first) == offsetof(os64_text_range_t, first) &&
@@ -234,9 +235,12 @@ static struct {
     size_t held_bytes;
     // The sizes of open files refused for room in the last layout
     // (webfonts_size_key), and the sizes already given their one more
-    // layout, forgotten once a layout refuses none.
+    // layout, forgotten once a layout refuses none or the page is laid
+    // out at another zoom or width — a geometry the retries were for.
     uint64_t refused[WEBFONT_REFUSED_MAX], retried[WEBFONT_REFUSED_MAX];
     int32_t nrefused, nretried;
+    uint32_t retried_zoom;
+    int32_t retried_width;
     // The document's characters, a bit per code point, as the layout
     // `chars_layout` found them; and for each 64-bit word of them, how many
     // words up to it hold one, so a range meets them in a few reads
@@ -3880,8 +3884,14 @@ static void webfonts_feed(bool laid)
     }
     // A size refused for room gets one more layout: the tree that held the
     // room is gone after it. Refused again, the fallback stands — for that
-    // size, until a layout refuses none.
+    // size, until a layout refuses none or the geometry changes, when its
+    // sizes are new ones.
     if (laid) {
+        if (g.page.laid_zoom != s_web.retried_zoom || g.page.laid_width != s_web.retried_width) {
+            s_web.nretried = 0;
+            s_web.retried_zoom = g.page.laid_zoom;
+            s_web.retried_width = g.page.laid_width;
+        }
         bool again = false;
         for (int32_t i = 0; i < s_web.nrefused; i++) {
             bool tried = false;

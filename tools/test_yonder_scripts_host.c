@@ -4792,6 +4792,16 @@ static void webfont_cases(void) {
         webfonts_feed(false);           /* an arrival's feed between: no second retry */
         pictures_settle();
         check(!s_web.moved,"web fonts: refused again, the fallback stands");
+        /* In the same geometry, another size refused for room is another
+         * first refusal, and gets its own. */
+        {
+            const garb_font_face_t *faces; bool room;
+            check(garb_cascade_font_faces(g.page.cascade,&faces,NULL)==1 &&
+                  webfonts_handle(0,&faces[0],77,&room)==NULL && room,"web fonts: a second size is refused for room");
+            s_web.moved=false;
+            webfonts_feed(true);
+            check(s_web.moved,"web fonts: a second size refused in one geometry gets its own retry");
+        }
         /* Another size is another first refusal: zoomed, it gets its own. */
         g.zoom=1250;
         s_web.moved=true;
@@ -4799,6 +4809,16 @@ static void webfont_cases(void) {
         check(s_web.moved,"web fonts: a new size refused for room gets its own retry");
         pictures_settle();
         check(!s_web.moved,"web fonts: and refused again, its fallback stands");
+        /* The retries spent fill the table: another geometry still gets
+         * its own. */
+        for(int32_t r=s_web.nretried;r<WEBFONT_REFUSED_MAX;r++) s_web.retried[r]=0x5eed0000u+(uint64_t)r;
+        s_web.nretried=WEBFONT_REFUSED_MAX;
+        g.zoom=1500;
+        s_web.moved=true;
+        pictures_settle();
+        check(s_web.moved,"web fonts: with the retries spent filling the table, a new geometry's size gets its retry");
+        pictures_settle();
+        check(!s_web.moved,"web fonts: and its fallback stands after");
         g.zoom=1000;
         font_like_refusals=0;
     }

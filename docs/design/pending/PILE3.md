@@ -2375,7 +2375,8 @@ bytes together would pass 64 MiB and when that layout itself fails — a
 failed layout, or a script's failed rebuild, still asks for the files it
 queued. A SIZE of an open file refused for
 room gets one more layout, and then the fallback stands — each size
-once, until a layout refuses none, so a zoom's new size gets its own.
+once, until a layout refuses none or the page is laid out at another
+zoom or width, whose sizes are new ones (as many as the 64 handles hold).
 Every font failure reaches the badge as it is recorded. The list is
 the eight a layout takes: the system's family and the generic keep their
 places, and the page's faces have the rest — a composite past that, its
