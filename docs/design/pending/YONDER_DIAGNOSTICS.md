@@ -23,7 +23,7 @@ them ranks what to build first.
 - One file per page load: `<host>-<seq>.txt`, the sequence per run,
   zero-padded to four digits so `ls` sorts in browse order. The first
   line carries the full address; the name only has to be findable.
-- Written when the page arrives, again when its last picture is in, and
+- Written when the page arrives, again when its last picture and font are in, and
   when it is left (navigation, reload, close), because the asks keep coming after load: timers,
   clicks, a script that dies on hover. The departure write is complete.
   Write a temp beside it and rename over, the `os64_conf_write` shape.
@@ -154,6 +154,42 @@ Reload, so this is the departure write):
     pictures: 0, 0 shown, 0 could not be read, 0 past the memory kept, 0 still coming, 0 not asked for
     sheets: 1, 1 ready
     script file:///tests/pages/diag.html#timer-1: failed
+
+### The page's fonts (S9a4, PILE3.md § Web fonts)
+
+A page with `@font-face` rules, or one whose layout asked for a family,
+gets plain lines for its fonts at every write, after `sheets:`:
+
+    fonts: 3 faces (0 past the most a page keeps), 2 files: 1 drawn, 1 failed, 0 coming
+    font face 1: Web 400 normal: https://site/w.woff drawn (WOFF, 34120 bytes)
+    font face 2: Body 400 italic U+0-7F: format(woff2) not read: b.woff2; https://site/b.ttf failed; https://site/c.ttf coming
+    font face 3: Cjk 400 normal U+4E00-9FFF: not needed: its range is not in the page's text
+    font family Web: the page's faces
+    font family Body: the page's faces, none in the list: drawn in DejaVu Serif
+    font family Arial: no face; drawn in DejaVu Serif
+    font family DejaVu Sans Mono: a system family
+
+- **A face line walks its sources in order** up to the one the face is
+  drawn from: `drawn` (the container and the bytes that came), `coming`,
+  `came …, held for room to open` (the open waits for the room the tree on
+  screen holds), `failed` (the reason is the file's `FAILED font` line), a
+  `format()` or `local()` passed over, or `never asked for`: no text drew
+  in its family, or the lists it was in had no place left for it
+  (PILE3.md § Web fonts). A face that is passed over whatever its file
+  says only that, in place of its sources: `not needed` when its ranges
+  miss the page's text, `passed over` with the count when it has more
+  ranges than a text font takes. A file several faces name is one file.
+- **A family line is what the latest layout found** for a family name it
+  was asked: the page's faces, the page's faces with none in the list yet
+  (and what drew the text meanwhile), a system family by that name, or
+  nothing.
+- The records are unchanged: `FAILED font: <address>: <why>` for a file
+  that did not fetch, unwrap or open, and `MISSING font <family>` for a
+  family with neither a page face nor a system family.
+- **The second write waits for the last picture AND the last font**, and,
+  as for pictures, for the layout a face that arrived owes (`written: when
+  its pictures and fonts were in`). The departure write is made before the
+  page's fonts are let go, so it names them too.
 
 ### Built differently from the brief, and why
 

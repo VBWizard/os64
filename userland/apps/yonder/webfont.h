@@ -37,6 +37,7 @@ typedef struct {
     size_t len;
     yonder_font_kind_t container;
     bool fetched;                   // bytes came, whatever they were
+    size_t got;                     // how many, as fetched or read
     // Why there is no SFNT, for the page's record: "HTTP 404", "did not
     // fetch (tls-failed)", "an empty reply", "could not be read", "a WOFF2,
     // not read yet", "not a font", "a broken WOFF (malformed container)".
