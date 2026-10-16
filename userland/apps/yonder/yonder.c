@@ -1647,11 +1647,11 @@ static const char *const kPaintStage[PS_COUNT] = {
 // one already past when it is handed over rings at once, so a source
 // counted often here is a loop of rings that does no work.
 typedef enum {
-    PAST_SETTLE, PAST_LAYOUTS, PAST_TICKS, PAST_ARRIVAL, PAST_TIMERS, PAST_PICTURES, PAST_COUNT
+    PAST_SETTLE, PAST_LAYOUTS, PAST_TICKS, PAST_ARRIVAL, PAST_STREAM, PAST_TIMERS, PAST_PICTURES, PAST_COUNT
 } PastDeadline;
 
 static const char *const kPastDeadline[PAST_COUNT] = {
-    "settle", "layouts", "ticks", "arrival", "timers", "pictures",
+    "settle", "layouts", "ticks", "arrival", "stream", "timers", "pictures",
 };
 
 // Counted with the processor's time-stamp counter, not a system call: a
@@ -4658,6 +4658,7 @@ static bool paint_lines(DiagText *t, DiagText *u)
            (unsigned long)s_cost.schedules, (unsigned long)busy);
     dt_put(t, "; %lu script tasks: %lu scripts, %lu timers", (unsigned long)(s_cost.scripts + s_cost.timers),
            (unsigned long)s_cost.scripts, (unsigned long)s_cost.timers);
+
     dt_put(t, "; %lu bells, the ticker woke %lu times; deadlines already past when handed to it:",
            (unsigned long)s_cost.bells, (unsigned long)(yonder_ticker_wakes(g.ticker) - s_cost.from_wakes));
     for (int32_t i = 0; i < PAST_COUNT; i++)
@@ -5203,7 +5204,7 @@ static void pictures_schedule(void)
     if (g.coming.active && g.coming.due < next)
         next = g.coming.due, from = PAST_ARRIVAL;
     if (g.stream.active && g.stream.sheets_due != 0 && g.stream.sheets_due < next)
-        next = g.stream.sheets_due, from = PAST_ARRIVAL;
+        next = g.stream.sheets_due, from = PAST_STREAM;
     // A page's timers, covered or not: a page that counts down keeps
     // counting while another window is in front (DOM_D7.md § The clock).
     const yonder_scripts_t *hosts[] = {g.page.scripts, g.stream.scripts,
@@ -5228,8 +5229,21 @@ static void pictures_schedule(void)
     }
     if (seen != NULL)
         picture_flags_free(seen, small);
-    if (next != YONDER_NEVER && next <= yonder_now_ms())
+    uint64_t now = yonder_now_ms();
+    if (next != YONDER_NEVER && next <= now) {
         s_cost.past[from]++;
+        // A deadline the loop meets itself, after the events — a script's
+        // timer (script_turn, and the stream's and the arriving page's
+        // turns), the settle (pictures_settle), the stream's wait for its
+        // sheets (stream_turn) — is the loop's to meet at its turn, not the
+        // ticker's to ring for: the bell is dispatched among the events,
+        // which cannot meet it, so it is handed on again and rings again,
+        // the batch ringing itself until its bound. One still owed when the
+        // loop next waits is rung for at the clock's next tick. The bell
+        // meets the rest itself (pictures_tick, motion_tick, coming_show).
+        if (from == PAST_TIMERS || from == PAST_SETTLE || from == PAST_STREAM)
+            next = now + 1;
+    }
     yonder_ticker_set(g.ticker, next);
     cost_end(PS_SCHEDULE);
     s_cost.schedules++;

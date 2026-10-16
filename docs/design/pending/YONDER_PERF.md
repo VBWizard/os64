@@ -135,6 +135,22 @@ second, and the ticks cost 12-20% of the thread on their own.
    asking picture by picture when a page has more and no memory for them.
    No state outlives the call.
 
+4. **A due deadline the loop meets itself is not rung for.** The P5's
+   readings after (2) and (3): ticks cheap, but ~350 a second against ~38
+   paints, and a second yonder thread (the ticker) at 10-25%. The counts
+   named it: ~240 deadlines a second already past when handed to the
+   ticker, all the page's script timers, while ~21 timers a second ran. A
+   timer runs at the loop's turn after the events (script_turn); a
+   schedule made among the events — a bell's own — saw it still due,
+   handed the ticker the past, the ticker rang at once, and the bell,
+   dispatched in the same batch, could not run it: the batch rang itself
+   some thirty times a turn. Now a deadline the loop meets after the
+   events (a script's timer, the settle, the stream's wait for its sheets)
+   is handed to the ticker as the clock's next tick when it is already
+   past; the bell still meets its own at once (pictures, ticks, layouts,
+   an arriving page's wait). QEMU, danlegt with scripts on, 13.9 s: 1982
+   bells to 169, the ticker's wakes 4098 to 447, paints 67 to 90.
+
 **perf-2:** the gradient and shadow caches — each box's gradient pixels
 and blurred shadow mask kept between paints, keyed by what draws them —
 with their lifecycle table here before their code.

@@ -4493,7 +4493,7 @@ static void paint_cost_cases(void) {
     yonder_diag_render(g.page.diag,rec,sizeof(rec));
     check(strstr(rec,"\npaint: 2 paints in 1.0 s (1 whole views), 3.0 Mpx of the view; 4 ticks, 5 schedules; "
                      "the main loop busy 75%; 0 script tasks: 0 scripts, 0 timers; 0 bells, the ticker woke 0 times; deadlines already past when handed to it: settle 0, "
-                     "layouts 0, ticks 0, arrival 0, timers 0, pictures 0\n")!=NULL &&
+                     "layouts 0, ticks 0, arrival 0, stream 0, timers 0, pictures 0\n")!=NULL &&
           strstr(rec,", schedule (a call) 1.0 (0.0)")!=NULL &&
           strstr(rec,"paint stages: ms a paint (most): render 12.0 (13.0), view 10.0 (0.0)")!=NULL &&
           strstr(rec,", text 2.0 (0.0)")!=NULL && strstr(rec,", ticks (a tick) 2.0 (0.0)")!=NULL &&
@@ -4532,13 +4532,20 @@ static void paint_cost_cases(void) {
     saved_diagnostics[0]='\0';
     memset(&s_diag,0,sizeof(s_diag)); s_diag.next=1;
     /* The shown page's script tasks are counted by kind: a script, then
-     * the timer it set. */
-    probe_page("<p id=out>x</p><script>setTimeout(function(){document.getElementById('out').textContent='y'},0)</script>",true);
+     * the timers it set. And a timer already due is the loop's to run at
+     * its turn: the ticker is handed the clock's next tick, never the past
+     * — or its bell, met among the events, rings again and again. */
+    probe_page("<p id=out>x</p><script>setTimeout(function(){document.getElementById('out').textContent='y'},0);"
+               "setTimeout(function(){},0)</script>",true);
     cost_reset();
     check(script_turn() && s_cost.scripts==1 && s_cost.timers==0,"paint counts: a script is counted as a script task");
     now_ms+=10;
     check(script_turn() && s_cost.timers==1 && probe_text_is("out","y"),"paint counts: a timer is counted as a timer task");
-    check(!script_turn() && s_cost.scripts+s_cost.timers==2,"paint counts: a turn with no task counts none");
+    pictures_schedule();
+    check(ticker_due==now_ms+1 && s_cost.past[PAST_TIMERS]>=1,
+          "timer ring: a due timer is handed to the ticker as the next tick, not the past");
+    check(script_turn() && s_cost.timers==2,"timer ring: and the loop's turn runs it");
+    check(!script_turn() && s_cost.scripts+s_cost.timers==3,"paint counts: a turn with no task counts none");
     probe_drop();
 }
 static void webfont_cases(void) {
