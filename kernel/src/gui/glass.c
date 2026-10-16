@@ -23,8 +23,9 @@
 #define GLASS_PENDING_MAX 16
 
 // A parked reader's longest nap. The compositor's feed wakes it the moment a
-// frame lands; this is the net under a wake that found it not yet asleep, and
-// the cadence at which a reader notices the screen changing hands.
+// frame lands, or owes it the wake if it has not parked yet (WAKE_OWED.md);
+// this is the house rule's net under a missed edge, and the cadence at which a
+// reader notices the screen changing hands.
 #define GLASS_BACKSTOP_TICKS (TICKS_PER_SECOND / 4)
 
 struct glass_view
@@ -145,9 +146,10 @@ void glass_view_close(glass_view_t *v)
 	uint64_t flags = spinlock_acquire_irqsave(&kGuiLock);
 	v->closed = true;
 	// The slot is the waiter's to clear (gui_client.c's event wait has the
-	// reason); this only makes sure it wakes to see `closed`.
+	// reason); this only makes sure it wakes to see `closed` — owed, if it
+	// is still on its way to the park.
 	if (v->waiter != NULL)
-		scheduler_wake_isleep_thread(v->waiter);
+		scheduler_wake_or_owe(v->waiter);
 	spinlock_release_irqrestore(&kGuiLock, flags);
 	glass_view_release(v);
 }
@@ -164,9 +166,12 @@ long glass_view_read(glass_view_t *v, void *out, size_t cap, uint64_t deadline)
 	{
 		uint64_t flags = spinlock_acquire_irqsave(&kGuiLock);
 		// Awake at the top: a registration left by the park we came out of
-		// is void (the signals doctrine, CLAUDE.md).
+		// is void (the signals doctrine, CLAUDE.md), and so is a wake owed
+		// for it — what it announced is pending, and the take below finds it
+		// (WAKE_OWED.md).
 		if (v->waiter == self)
 			v->waiter = NULL;
+		scheduler_forget_owed_wake(self);
 		if (v->closed)
 		{
 			spinlock_release_irqrestore(&kGuiLock, flags);
@@ -260,7 +265,7 @@ void glass_damage_locked(const rect_t *rects, uint32_t count)
 				changed = true;
 			}
 		if (changed && v->waiter != NULL)
-			scheduler_wake_isleep_thread(v->waiter);
+			scheduler_wake_or_owe(v->waiter);
 	}
 }
 

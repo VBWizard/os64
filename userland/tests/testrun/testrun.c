@@ -93,6 +93,7 @@ static const fixture_t kFixtures[] = {
     { "/tests/threadtest",      NULL, 0x1B2EAD00,  0,          "threads: create, argument, join, shared address space" },
     { "/tests/worktest",        NULL, 0x600C0000,  0x600C0002, "Worker pool: ownership, admission, cancellation, shutdown" },
     { "/tests/doorbelltest",    NULL, 0x600B0000,  0x600B0002, "GUI doorbell: owner, coalescing, overflow, worker wake, libui" },
+    { "/tests/guiwake",         NULL, 0x60E00000,  0x60E00002, "GUI event wait: a ring landing mid-park wakes the waiter, not its backstop" },
     { "/tests/pintest",         NULL, 0x91A70000,  0,          "a handle closed by a sibling thread under a parked read: pipe, pty master, thread handle" },
     { "/tests/streamseat",      NULL, 0x57EA0000,  0,          "STREAM EOF refuses another seat; failed load and GRID reuse" },
     { "/tests/argsize",         NULL, 0xA2650000,  0,          "128 KiB spawn arguments arrive whole; too long, too many and too much are refused by name" },

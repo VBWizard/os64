@@ -663,14 +663,13 @@ int64_t gui_event_ring(int64_t handle, uint32_t mask)
 // The gait is console_read's, ported: drain → return if got → register as
 // the window's waiter → park on a SIGSLEEP backstop → re-loop on wake. The
 // wake is EDGE-triggered (wm_deliver_event aims at the waiter the moment it
-// pushes) with the backstop as the lost-race net: if the deliverer's wake
-// finds us still mid-park (not yet ISLEEP), scheduler_wake_isleep_thread
-// deliberately leaves us alone — cancelling a not-yet-parked thread's
-// backstop is how task_enqueue_dead_child once put a thread to sleep
-// forever — and the backstop deadline re-runs the drain a moment later.
-// A pending TERMINATE — or a signal a handler will catch — outranks the wait,
-// checked every pass (processSignals wakes sleepers for exactly those; this
-// check is how a woken waiter LEAVES).
+// pushes) and closed against the lost race: a deliverer that finds us still
+// mid-park (registered, not yet ISLEEP) OWES us the wake, and the requeue
+// that would park us pays it instead (scheduler_wake_or_owe, WAKE_OWED.md).
+// The backstop stays as the house rule that a missed edge costs a tick,
+// never a hang. A pending TERMINATE — or a signal a handler will catch —
+// outranks the wait, checked every pass (processSignals wakes sleepers for
+// exactly those; this check is how a woken waiter LEAVES).
 #define GUI_EVENT_WAIT_BACKSTOP_TICKS (TICKS_PER_SECOND / 4)
 
 //
@@ -689,6 +688,12 @@ int64_t gui_event_wait(int64_t handle, input_event_t *out)
 		int64_t err;
 		uint64_t irqflags = spinlock_acquire_irqsave(&kGuiLock);
 
+		// Awake at the top of a pass: a wake owed for the last park is void
+		// — what it announced is in the queue, and the pop below takes it —
+		// and no deliverer can owe us another until we register again, since
+		// they owe under this lock (WAKE_OWED.md).
+		scheduler_forget_owed_wake(self);
+
 		// The window is re-looked-up EVERY pass: it can die while we sleep
 		// (our own task's exit sweep is the usual killer), and a handle is
 		// only ever as fresh as the last time the lock said so.
@@ -698,12 +703,13 @@ int64_t gui_event_wait(int64_t handle, input_event_t *out)
 			return err;
 		}
 
+		// The registration the last park made is void too (the signals
+		// doctrine): a slot left naming a thread that returned is a spurious
+		// wake out of some LATER unrelated sleep — console_read's scar.
+		if (win->waiter == self)
+			win->waiter = NULL;
+
 		if (signal_park_must_end(self)) {   // a terminate, or a signal a handler is waiting for
-			// Un-register on the way out — console_read's scar: a stale
-			// waiter slot is a spurious wake out of some LATER unrelated
-			// sleep.
-			if (win->waiter == self)
-				win->waiter = NULL;
 			spinlock_release_irqrestore(&kGuiLock, irqflags);
 			return GUI_ERR_INTERRUPTED;
 		}
@@ -714,8 +720,6 @@ int64_t gui_event_wait(int64_t handle, input_event_t *out)
         }
 
 		if (out ? wm_pop_event(win, out) : wm_has_event(win)) {
-			if (win->waiter == self)
-				win->waiter = NULL;
 			spinlock_release_irqrestore(&kGuiLock, irqflags);
 			return 1;
 		}
@@ -740,6 +744,10 @@ int64_t gui_event_wait_any(int64_t *out_handle)
     const uint64_t owner = gui_current_task_id();
     for (;;) {
         uint64_t irqflags = spinlock_acquire_irqsave(&kGuiLock);
+        // Awake at the top: the last park's debt is void with its slots
+        // (gui_event_wait says why). Several windows' deliverers may have
+        // owed one wake; the scan below finds every event they announced.
+        scheduler_forget_owed_wake(self);
         unsigned count = 0;
         bool busy = false;
         // Cleanup covers the whole table even if a former selected slot died.

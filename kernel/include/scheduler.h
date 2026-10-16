@@ -49,6 +49,27 @@
 	void scheduler_change_thread_queue_locked(thread_t* thread, eThreadState newState);
 	void scheduler_wake_isleep_thread(thread_t *w);
 	void scheduler_wake_isleep_thread_locked(thread_t *w);
+	// The owed wake (WAKE_OWED.md), for a waiter with no sweep behind it: a
+	// parked thread is woken, one registered but not yet parked is owed the
+	// wake, which the requeue that would park it pays. The deliverer owes
+	// under the lock its waiter registers under; the public variant takes the
+	// queue lock and never triggers a pass. The wait voids its own debt at
+	// the top of every pass (scheduler_forget_owed_wake).
+	void scheduler_wake_or_owe(thread_t *w);
+	void scheduler_wake_or_owe_locked(thread_t *w);
+	void scheduler_forget_owed_wake(thread_t *self);
+	// What it has done since boot: wakes owed, debts paid at the park, debts
+	// voided at a pass's top, and wakes refused because the slot named a
+	// thread in no wait. owed = paid + voided + outstanding (WAKE_OWED.md).
+	typedef struct {
+		uint64_t owed, paid, voided, refused;
+	} scheduler_wake_counts_t;
+	scheduler_wake_counts_t scheduler_wake_counts(void);
+	// The owed-wake fixture (kernel/test/test_main.c): processSignals aims
+	// scheduler_wake_or_owe_locked at the target on the first pass at or
+	// after the tick, then clears the target.
+	extern thread_t *volatile kWakeOwedTestTarget;
+	extern volatile uint64_t kWakeOwedTestTick;
 	// The queue lock for thread-context callers outside scheduler.c (IF off
 	// while held, restored on unlock). doorbell_park is the customer.
 	uint64_t scheduler_lock_queues(void);
@@ -58,8 +79,10 @@
 	// see the walker-safety note at the definition).
 	void scheduler_remove_task(task_t *task);
 	void scheduler_trigger(core_local_storage_t *cls);
-	// Wake the thread of `task` that is parked in task_wait (the waiter is
-	// named because it is not always the first thread — task.h, waitThread).
+	// Wake the thread of `task` that waits in task_wait, or owe it the wake
+	// (the waiter is named because it is not always the first thread —
+	// task.h, waitThread). Caller holds kDeadChildLock and triggers a pass
+	// after releasing it.
 	void scheduler_wake_task_waiter(task_t *task, thread_t *waiter);
     bool in_scheduler_context(void);
 #endif

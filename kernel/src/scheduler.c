@@ -575,7 +575,9 @@ void scheduler_change_thread_queue(thread_t* thread, eThreadState newState)
 // Wake a thread parked in ISLEEP — the pipe/console blocking-loop wake. Only
 // a thread that has ACTUALLY parked can be woken here; one still RUNNING has
 // not finished registering as a waiter — the caller's level-triggered sweep
-// catches it next pass (pipe.c documents that contract). The ISLEEP check,
+// catches it next pass (pipe.c documents that contract). A waiter with no
+// sweep takes scheduler_wake_or_owe below instead, which leaves such a
+// thread's backstop alone too but owes it the wake. The ISLEEP check,
 // the SIGSLEEP cancel, and the relink must be one atomic act under the queue
 // lock: without it, a wake running in the WAKER's thread context (possibly
 // on an AP since the fan-out) races processSignals' tick-driven walk of the
@@ -603,6 +605,71 @@ void scheduler_wake_isleep_thread(thread_t *w)
 	scheduler_wake_isleep_thread_locked(w);
 	scheduler_queues_unlock(flags);
 }
+
+// What the owed wake has done since boot (WAKE_OWED.md § What it reports).
+// Updated under the queue lock; read without it, racy by design.
+static scheduler_wake_counts_t s_wake_counts;
+
+// The wake for a waiter that registered under its object's lock and parks
+// after releasing it, with no sweep behind it (WAKE_OWED.md). ISLEEP: woken
+// now, as scheduler_wake_isleep_thread_locked. RUNNING or RUNNABLE: the
+// thread is registered and not yet parked, so the wake is OWED, and the
+// requeue that would park it pays it (scheduler_run_new_thread). Any other
+// state is a registration that outlived its thread's wait: nothing is done,
+// and it is counted. The caller holds the queue lock and the lock its
+// waiter registers under, so a debt is never owed to a later wait (the
+// owed-wake fixture, which aims at its own thread, holds only the first).
+void scheduler_wake_or_owe_locked(thread_t *w)
+{
+	if (w == NULL)
+		return;
+	if (w->threadState == THREAD_STATE_ISLEEP)
+		scheduler_wake_isleep_thread_locked(w);
+	else if (w->threadState == THREAD_STATE_RUNNING || w->threadState == THREAD_STATE_RUNNABLE)
+	{
+		w->wakeOwed = true;
+		s_wake_counts.owed++;
+	}
+	else
+		s_wake_counts.refused++;
+}
+
+// Takes the queue lock and never triggers a pass: every caller holds an
+// object's lock with interrupts off, and scheduler_trigger enables them and
+// halt-waits for a pass. The woken or paid thread runs at the next pass.
+void scheduler_wake_or_owe(thread_t *w)
+{
+	if (w == NULL)
+		return;
+
+	uint64_t flags = scheduler_queues_lock();
+	scheduler_wake_or_owe_locked(w);
+	scheduler_queues_unlock(flags);
+}
+
+// A wait voids its own debt at the top of every pass, under the lock it
+// registers under: no wake can be owed for it again until it registers, and
+// a debt from before this point announced what the pass will find.
+void scheduler_forget_owed_wake(thread_t *self)
+{
+	uint64_t flags = scheduler_queues_lock();
+	if (self->wakeOwed)
+	{
+		self->wakeOwed = false;
+		s_wake_counts.voided++;
+	}
+	scheduler_queues_unlock(flags);
+}
+
+scheduler_wake_counts_t scheduler_wake_counts(void)
+{
+	return s_wake_counts;
+}
+
+// The owed-wake fixture's aim (scheduler.h): processSignals wakes this thread
+// on the first pass at or after the tick.
+thread_t *volatile kWakeOwedTestTarget;
+volatile uint64_t kWakeOwedTestTick;
 
 void scheduler_submit_new_task(task_t *newTask)
 {
@@ -966,34 +1033,35 @@ void scheduler_remove_from_queue(thread_t *queue, thread_t* thread, bool panicOn
         panic("scheduler_remove_from_queue: Can't find queue entry to remove!");
 }
 
-// Wake `waiter`, a thread of `task` parked in task_wait. It was
-// scheduler_wake_isleep_task(task) and woke task->threads — the FIRST thread
-// — until 2026-08-25, when a second-thread waiter (the desktop's reaper)
-// showed that the first thread and the waiting thread are not the same
-// thing. The caller names the thread; this function's only opinion is HOW to
-// wake it safely.
+// Wake `waiter`, a thread of `task` parked in task_wait, or owe it the wake if
+// it has registered and not yet parked (scheduler_wake_or_owe, WAKE_OWED.md).
+// It was scheduler_wake_isleep_task(task) and woke task->threads — the FIRST
+// thread — until 2026-08-25, when a second-thread waiter (the desktop's
+// reaper) showed that the first thread and the waiting thread are not the
+// same thing. The caller names the thread; this function's only opinion is
+// HOW to wake it safely.
+//
+// The caller holds kDeadChildLock, the lock task_wait registers and voids
+// under, so a debt is never owed to a later wait; that lock is taken before
+// the queue lock everywhere. It does NOT trigger a pass: scheduler_trigger
+// halt-waits for a pass that needs the queue lock, so the caller triggers one
+// after releasing every lock (task_enqueue_dead_child).
+//
+// The SIGSLEEP cancel lives in the wake, never in the caller, and only for a
+// thread that has actually parked: cancelling the backstop of a thread still
+// mid-park destroys its only retry, and it lands in ISLEEP with no flag and no
+// deadline, asleep for good. task_enqueue_dead_child used to do exactly that
+// (see its comment, 2026-08-09). A not-yet-parked thread keeps its backstop;
+// the debt is paid by the requeue that parks it.
 void scheduler_wake_task_waiter(task_t *task, thread_t *waiter) {
     if (task == NULL || waiter == NULL) return; // Ensure task is valid
 
-    // Check-and-relink atomically (this runs in thread context — task_exit
-    // waking a parent — which the fan-out can place on any core). The
-    // trigger stays OUTSIDE the lock: it hlt-waits for a scheduler pass that
-    // needs this very lock, so triggering while holding it is a guaranteed
-    // self-deadlock.
-    // Delegate to the helper that already gets this exactly right (above):
-    // ISLEEP test + SIGSLEEP cancel + relink as ONE act under the lock. The
-    // cancel MUST live in here rather than in the caller, and it must be
-    // conditional on the thread having actually parked — cancelling a backstop
-    // for a thread that is still mid-park destroys the only retry the waiter
-    // has, and it lands in ISLEEP with no flag and no deadline: asleep for
-    // good. task_enqueue_dead_child used to do exactly that (see its comment,
-    // 2026-08-09). Leaving a not-yet-parked thread untouched is the whole
-    // trick: its own SIGSLEEP deadline fires a tick later and it re-checks.
     uint64_t flags = scheduler_queues_lock();
-    scheduler_wake_isleep_thread_locked(waiter);
+    scheduler_wake_or_owe_locked(waiter);
+    // The boost reaches a thread woken now; a debt paid at the park is
+    // relinked RUNNABLE from zero, and competes on aging like any wake.
     waiter->prioritizedTicksInRunnable += HIGH_PRIORITY_TICKS_BOOST;
     scheduler_queues_unlock(flags);
-    scheduler_trigger(NULL);
 }
 
 thread_t *scheduler_find_thread_to_run(core_local_storage_t *cls, bool justBrowsing)
@@ -1337,7 +1405,23 @@ void scheduler_run_new_thread()
 			//TODO: If this is the last thread for the task then do something with the task, INCLUDING resetting its GDT entry
 		}
         else if (sigset_has(threadToStop->signals.sigind, SIGSLEEP))
-			threadToStopNewQueue=THREAD_STATE_ISLEEP;
+		{
+			if (threadToStop->wakeOwed)
+			{
+				// A wake came while this thread was on its way here, between
+				// registering as a waiter and this requeue: it is paid now,
+				// instead of by the backstop (WAKE_OWED.md). Under the queue
+				// lock the wake took, so it came either before this check
+				// (owed) or after the park (a plain ISLEEP wake).
+				threadToStop->wakeOwed = false;
+				sigset_del(&threadToStop->signals.sigind, SIGSLEEP);
+				threadToStop->signals.sigdata[SIGSLEEP] = 0;
+				s_wake_counts.paid++;
+				threadToStopNewQueue=THREAD_STATE_RUNNABLE;
+			}
+			else
+				threadToStopNewQueue=THREAD_STATE_ISLEEP;
+		}
 		else
             threadToStopNewQueue=THREAD_STATE_RUNNABLE;
         scheduler_store_thread(cls, threadToStop);              //we're taking it off the cpu so save the registers
