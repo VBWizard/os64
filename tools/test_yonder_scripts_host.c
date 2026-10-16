@@ -4495,7 +4495,7 @@ static void paint_cost_cases(void) {
     diag_paint(&g.page);
     yonder_diag_render(g.page.diag,rec,sizeof(rec));
     check(strstr(rec,"\npaint: 2 paints in 1.0 s (1 whole views), 3.0 Mpx of the view; 4 ticks, 5 schedules; "
-                     "the main loop busy 75%; 0 layouts; 0 script tasks: 0 scripts, 0 timers; 0 bells, the ticker woke 0 times; deadlines already past when handed to it: settle 0, "
+                     "the main loop busy 75%; 0 layouts; frames late at most 0 ms, 0 more than 30 ms; the longest wait 0 ms; 0 script tasks: 0 scripts, 0 timers; 0 bells, the ticker woke 0 times; deadlines already past when handed to it: settle 0, "
                      "layouts 0, ticks 0, arrival 0, stream 0, timers 0, pictures 0\n")!=NULL &&
           strstr(rec,", schedule (a call) 1.0 (0.0)")!=NULL &&
           strstr(rec,"paint stages: ms a paint (most): render 12.0 (13.0), view 10.0 (0.0)")!=NULL &&

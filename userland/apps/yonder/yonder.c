@@ -146,6 +146,9 @@ static bool s_animations = true;
 // taking its own: a GIF's delays are hundredths of a second, so its cadence
 // is kept.
 #define FRAME_GRID_MS 10
+// A frame shown this much after it was due is counted late (the paint
+// counts): two of the grid's steps, past what a tick's own lateness is.
+#define FRAME_LATE_MS 30
 
 // ── The page's fonts ────────────────────────────────────────────────────
 //
@@ -1671,6 +1674,10 @@ static struct {
     uint64_t now[PS_COUNT], total[PS_COUNT], most[PS_COUNT], began[PS_COUNT];
     uint32_t depth[PS_COUNT];
     uint64_t paints, whole, pixels, ticks, schedules, waited, scripts, timers, layouts;
+    // The longest one wait of the main loop (cycles), and how late a moving
+    // picture's frame was shown against when it was due (ms): the most, and
+    // the frames shown more than FRAME_LATE_MS late.
+    uint64_t slept_most, late_most, late_frames;
     uint64_t bells, past[PAST_COUNT];       // the ticker's rings; deadlines handed it already past
     uint64_t from_wakes;                    // the ticker's looks when the counts began
     uint64_t from_cycles;
@@ -4673,6 +4680,9 @@ static bool paint_lines(DiagText *t, DiagText *u)
            (unsigned long)(s_cost.pixels / 100000 % 10), (unsigned long)s_cost.ticks,
            (unsigned long)s_cost.schedules, (unsigned long)busy);
     dt_put(t, "; %lu layouts", (unsigned long)s_cost.layouts);
+    dt_put(t, "; frames late at most %lu ms, %lu more than %d ms; the longest wait %lu ms",
+           (unsigned long)s_cost.late_most, (unsigned long)s_cost.late_frames, FRAME_LATE_MS,
+           (unsigned long)(s_cost.slept_most / rate / 1000));
     dt_put(t, "; %lu script tasks: %lu scripts, %lu timers", (unsigned long)(s_cost.scripts + s_cost.timers),
            (unsigned long)s_cost.scripts, (unsigned long)s_cost.timers);
 
@@ -5296,6 +5306,9 @@ static void pictures_tick(void)
             pic->playing = false;
             continue;
         }
+        if (now - pic->due > s_cost.late_most)
+            s_cost.late_most = now - pic->due;
+        s_cost.late_frames += now - pic->due > FRAME_LATE_MS;
         pic->due = frame_due(pic, now);
         if (moved != NULL)
             moved[k] = any = true;
@@ -9613,7 +9626,10 @@ int main(int argc, char **argv)
     while (g.running && !g.ui.quit) {
         uint64_t asleep = cycles();
         int64_t woke = held ? 1 : os64_gui_event_wait(g.win, &ev);
-        s_cost.waited += cycles() - asleep;
+        uint64_t slept = cycles() - asleep;
+        s_cost.waited += slept;
+        if (slept > s_cost.slept_most)
+            s_cost.slept_most = slept;
         if (woke != 1)
             break;
         held = false;
