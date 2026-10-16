@@ -191,8 +191,10 @@ gets plain lines for its fonts at every write, after `sheets:`:
   is opened, not drawn — and says when more families were asked for than
   the 64 the record keeps. The section is written whole at each write, so a face a
   script's rebuild took away goes with it.
-- **A family line is what the latest layout found** for a family name it
-  was asked: the page's faces, the page's faces with none in the list yet
+- **A family line is what the layout on screen found** for a family name
+  it was asked, the best any of its runs found (a name one run listed a
+  face of is the page's faces) — a layout that fails leaves the lines of
+  the one still shown, and a name the page no longer asks for goes: the page's faces, the page's faces with none in the list yet
   (and what drew the text meanwhile), a system family by that name, or
   nothing. A page's arrival write has the families its layout asked for
   before it was shown. A page draws in none of its own faces until then,

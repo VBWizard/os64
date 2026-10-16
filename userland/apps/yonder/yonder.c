@@ -221,6 +221,7 @@ typedef struct {
 // page's faces; the page's faces, none of them in the list (none open
 // yet, or none with a place), so the text drawn in `in`; a system family by that name; or nothing — drawn in `in`, the
 // generic's family. For the page's record (diag_fonts).
+// Best first: a layout's answer for a name is the best its runs found.
 typedef enum { WF_SERVED_PAGE, WF_SERVED_PAGE_UNLISTED, WF_SERVED_SYSTEM, WF_SERVED_NONE } WebFontServed;
 typedef struct {
     char *name;                     // owned: the whole name, as first written
@@ -292,7 +293,12 @@ static struct {
     uint16_t chars_upto[0x110000 / 64];
     // The answer page_fonts lends until its next call.
     os64_text_font_t *list[OS64_TEXT_FALLBACK_MAX];
-    WebFontFamilies families;
+    // What served each family the tree on screen asked for, for the
+    // record; and the answers of the layout `laying_layout` of the shown
+    // document, made the record's when its tree is shown (page_show) — a
+    // layout that fails leaves the record saying what is on screen.
+    WebFontFamilies families, laying;
+    uint64_t laying_layout;
     // Each face of the cascade as the layout `use_layout` found it
     // (WF_USE_*), for the page's record.
     uint64_t use_layout;
@@ -311,6 +317,7 @@ static struct {
 static struct {
     bool staged;
     uint32_t seq;
+    uint64_t layout;                // the layout they are from: its answers alone
     WebFontFamilies families;
 } s_arriving;
 
@@ -619,6 +626,7 @@ typedef struct Page {
     int32_t nbox_scrolls, cap_box_scrolls;
 } Page;
 
+static void webfonts_families_shown(const Page *p);
 static void pictures_schedule(void);
 static uint64_t frame_delay(const Picture *pic);
 
@@ -810,6 +818,7 @@ static void page_show(Page *p, flow_tree_t *tree)
     flow_free(p->tree);
     p->tree = tree;
     flow_timeline_commit(&p->timeline, tree);
+    webfonts_families_shown(p);
 }
 
 // Publish a layout beside the old one. `reclaim` owns geometry whose faces
@@ -3771,9 +3780,10 @@ static bool webfonts_chosen(const garb_font_face_t *f, const flow_family_name_t 
            fold_eq(f->family, f->family_len, name->name, name->len);
 }
 
-// What served a family a layout asked for, once a name for the record
-// (s_web.families, or s_arriving's): the latest answer, so a face that
-// arrived since is what it says.
+// What served a family a layout asked for, once a name for its answers
+// (s_web.laying, or s_arriving's): the best of the layout's answers, in
+// WebFontServed's order — a name some run listed a face of is the page's
+// faces, whatever its other runs found.
 static void webfonts_served(WebFontFamilies *t, const char *name, size_t len, WebFontServed served,
                             const char *in)
 {
@@ -3791,6 +3801,8 @@ static void webfonts_served(WebFontFamilies *t, const char *name, size_t len, We
         copy[len] = '\0';
         f = &t->f[t->n++];
         f->name = copy;
+    } else if (served >= f->served) {
+        return;
     }
     f->served = served;
     os64_strcopy(f->in, sizeof(f->in), in);
@@ -3802,6 +3814,20 @@ static void webfonts_families_free(WebFontFamilies *t)
         os64_free(t->f[i].name);
     t->n = 0;
     t->lost = false;
+}
+
+// A tree is shown: on the shown page, the answers of the layout that made
+// it are the record's, or none when it asked for no family.
+static void webfonts_families_shown(const Page *p)
+{
+    if (p != &g.page)
+        return;
+    webfonts_families_free(&s_web.families);
+    if (s_web.laying_layout == geometry_layout_total) {
+        s_web.families = s_web.laying;
+        s_web.laying.n = 0;
+        s_web.laying.lost = false;
+    }
 }
 
 // The list is borrowed until the next call, which is libflow's contract
@@ -3833,13 +3859,19 @@ static os64_font_status_t page_fonts(void *ctx, const flow_family_list_t *famili
     WebFontFamilies *record = NULL;
     yonder_diag_t *diag = NULL;
     if (shown) {
-        record = &s_web.families;
+        if (s_web.laying_layout != geometry_layout_total) {
+            webfonts_families_free(&s_web.laying);
+            s_web.laying_layout = geometry_layout_total;
+        }
+        record = &s_web.laying;
         diag = g.page.diag;
     } else if (p != NULL && p->diag != NULL) {
-        if (!s_arriving.staged || s_arriving.seq != yonder_diag_seq(p->diag)) {
+        if (!s_arriving.staged || s_arriving.seq != yonder_diag_seq(p->diag) ||
+            s_arriving.layout != geometry_layout_total) {
             webfonts_families_free(&s_arriving.families);
             s_arriving.staged = true;
             s_arriving.seq = yonder_diag_seq(p->diag);
+            s_arriving.layout = geometry_layout_total;
         }
         record = &s_arriving.families;
         diag = p->diag;
@@ -3975,7 +4007,7 @@ static os64_font_status_t page_fonts(void *ctx, const flow_family_list_t *famili
         }
     }
     for (uint32_t k = 0; shown && k < nserved; k++)
-        webfonts_served(&s_web.families, served[k].name, served[k].len,
+        webfonts_served(&s_web.laying, served[k].name, served[k].len,
                         served[k].joined > 0 ? WF_SERVED_PAGE : WF_SERVED_PAGE_UNLISTED, view.primary.family);
     if (served != small_served)
         os64_free(served);
@@ -4246,6 +4278,7 @@ static void webfonts_leave(void)
     for (int32_t i = 0; i < s_web.nhandles; i++)
         os64_text_font_release(s_web.handles[i].font);
     webfonts_families_free(&s_web.families);
+    webfonts_families_free(&s_web.laying);
     os64_free(s_web.files);
     os64_memset(&s_web, 0, sizeof(s_web));
 }
@@ -4401,8 +4434,9 @@ static void diag_face(Page *p, int32_t i, const garb_font_face_t *f)
 }
 
 // The shown page's fonts on its record, at each write: how many faces and
-// files and how they stand, each face (diag_face), and each family a
-// layout asked for with what served it. A page with none says nothing.
+// files and how they stand, each face (diag_face), and each family the
+// tree on screen asked for with what served it (s_web.families). A page
+// with none says nothing.
 static void diag_fonts(Page *p)
 {
     const garb_font_face_t *faces = NULL;
