@@ -2361,12 +2361,17 @@ reports it (`DejaVu Sans`), ASCII case folded, matched by libos64's
 provider (`os64_font_family_open`) — and otherwise passed over; the
 generic comes last, as now. The list keeps the names' written order: a
 system family written before a page family stands before its faces
-(`"DejaVu Sans", Web` draws in DejaVu, Web its fallback). A page's own
+(`"DejaVu Sans", Web` draws in DejaVu, Web its fallback), and only that
+family's own face does: the provider's fallbacks and its builtin come
+after the page faces of the names that follow it, last. A page's own
 layouts — the shown page, and the copies a script's rebuild or a
 measurement lays out — are told by their DOCUMENT, the one on screen,
 not by the serial a sheet's job keys on, which a rebuild renews. A
 file whose open is refused for room (the tree on screen holds faces in
-the same budget) is held and opened again after the next layout. The list is
+the same budget) is held and opened again after the next layout, the
+held files' bytes together kept within 64 MiB (past it, a file refused
+room fails); a SIZE of an open file refused for room gets one more
+layout, and then the fallback stands. The list is
 the eight a layout takes: the system's family and the generic keep their
 places, and the page's faces have the rest — a composite past that, its
 latest rules. `local()` names an installed font by its full name, and

@@ -175,6 +175,9 @@ static os64_font_config_t s_fonts_conf;
 #define WEBFONT_FILES_MAX 512
 #define WEBFONT_HANDLES_MAX 64
 #define WEBFONTS_AT_ONCE 4
+// The most the HELD files may keep, together: past it, a file refused
+// room is failed rather than held.
+#define WEBFONT_HELD_MAX ((size_t)64 << 20)
 // The page faces one list may gather; page_fonts keeps what the system's
 // family and the generic leave of the eight.
 #define WEBFONT_LIST_MAX OS64_TEXT_FALLBACK_MAX
@@ -188,7 +191,8 @@ _Static_assert(sizeof(garb_unicode_range_t) == sizeof(os64_text_range_t) &&
 
 // HELD: the file came and is sound, and opening it was refused for room
 // (the tree on screen holds its faces in the same budget): its bytes are
-// kept, and it is opened again after the next layout.
+// kept, and it is opened again after the next layout — while the held
+// files' bytes stay within WEBFONT_HELD_MAX; past it, the file fails.
 typedef enum { WF_QUEUED, WF_WAITING, WF_HELD, WF_READY, WF_FAILED } WebFontState;
 
 typedef struct {
@@ -221,6 +225,11 @@ static struct {
     uint64_t clock;
     // A face arrived since the page was last laid out (pictures_settle).
     bool moved;
+    // The bytes of the HELD files, held to WEBFONT_HELD_MAX.
+    size_t held_bytes;
+    // A face of an open file was refused a size for room in the last
+    // layout, and whether the layout after it was the one retry it gets.
+    bool reopen_wanted, reopen_tried;
     // The document's characters, a bit per 256 code points, as the layout
     // `chars_layout` found them.
     uint64_t chars_layout;
@@ -3479,7 +3488,8 @@ static uint64_t webfonts_ranges_key(const garb_font_face_t *f)
 
 // A face of a READY file at `px` with the rule's ranges, kept for the
 // layouts after this one; the least lately used goes when the table is
-// full (a run that holds it keeps it). NULL when it will not open.
+// full (a run that holds it keeps it). NULL when it will not open — and
+// one refused for room asks for a layout after this one (webfonts_feed).
 static os64_text_font_t *webfonts_handle(int32_t file, const garb_font_face_t *f, uint32_t px)
 {
     uint64_t key = webfonts_ranges_key(f);
@@ -3492,9 +3502,14 @@ static os64_text_font_t *webfonts_handle(int32_t file, const garb_font_face_t *f
     }
     os64_font_face_options_t o = {px, OS64_FONT_HINT_NORMAL};
     os64_text_font_t *font = NULL;
-    if (os64_text_font_open_like(s_web.files[file].base, &o, (const os64_text_range_t *)f->ranges,
-                                 (size_t)f->nranges, &font) != OS64_FONT_OK)
+    os64_font_status_t st = os64_text_font_open_like(s_web.files[file].base, &o, (const os64_text_range_t *)f->ranges,
+                                                      (size_t)f->nranges, &font);
+    if (st != OS64_FONT_OK) {
+        // Room the tree on screen may hold: tried again after this layout.
+        if (st == OS64_FONT_LIMIT || st == OS64_FONT_NO_MEMORY)
+            s_web.reopen_wanted = true;
         return NULL;
+    }
     int32_t at = s_web.nhandles;
     if (at == WEBFONT_HANDLES_MAX) {
         at = 0;
@@ -3608,7 +3623,14 @@ static os64_font_status_t page_fonts(void *ctx, const flow_family_list_t *famili
     int32_t nfaces = shown ? garb_cascade_font_faces(s_laying.cascade, &faces, NULL) : 0;
     if (nfaces > 0)
         webfonts_chars(p);
-    os64_font_family_name_t rest[WEBFONT_NAMES_MAX];
+    // The names no page face serves, as many as the list holds.
+    os64_font_family_name_t small[WEBFONT_NAMES_MAX];
+    os64_font_family_name_t *rest = small;
+    if (nfaces > 0 && families->count > WEBFONT_NAMES_MAX) {
+        rest = os64_malloc((size_t)families->count * sizeof(*rest));
+        if (rest == NULL)
+            return OS64_FONT_NO_MEMORY;
+    }
     uint32_t nrest = 0;
     os64_text_font_t *mine[WEBFONT_LIST_MAX];
     uint32_t mine_name[WEBFONT_LIST_MAX];
@@ -3618,8 +3640,7 @@ static os64_font_status_t page_fonts(void *ctx, const flow_family_list_t *famili
         int32_t m = nfaces > 0 ? webfonts_match(faces, nfaces, &families->names[k], italic, bold, chosen,
                                                 WEBFONT_LIST_MAX) : 0;
         if (m == 0) {
-            if (nrest < WEBFONT_NAMES_MAX)
-                rest[nrest++] = (os64_font_family_name_t){families->names[k].name, families->names[k].len};
+            rest[nrest++] = (os64_font_family_name_t){families->names[k].name, families->names[k].len};
             continue;
         }
         for (int32_t i = 0; i < m; i++) {
@@ -3644,12 +3665,18 @@ static os64_font_status_t page_fonts(void *ctx, const flow_family_list_t *famili
     };
     os64_font_role_view_t view;
     os64_font_status_t st = os64_font_family_open(s_faces.families, &asked, bold, italic, px, &view);
-    if (st != OS64_FONT_OK)
-        return st;
-    if (shown && g.page.diag != NULL)
+    // The name the system's family answers: the first the provider knows,
+    // which is the one it chose; the count when it chose the generic.
+    uint32_t system_at = families->count;
+    for (uint32_t r = 0; r < asked.count && system_at == families->count; r++)
+        if (os64_font_family_known(s_faces.families, &asked.names[r]))
+            for (uint32_t k = 0; k < families->count; k++)
+                if (families->names[k].name == asked.names[r].name)
+                    system_at = k;
+    if (st == OS64_FONT_OK && shown && g.page.diag != NULL)
         for (uint32_t k = 0; k < asked.count; k++) {
             const os64_font_family_name_t *nm = &asked.names[k];
-            if (fold_eq(nm->name, nm->len, view.primary.family, os64_strlen(view.primary.family)))
+            if (os64_font_family_known(s_faces.families, nm))
                 continue;
             char name[256];
             size_t len = nm->len < sizeof(name) - 1 ? nm->len : sizeof(name) - 1;
@@ -3657,28 +3684,31 @@ static os64_font_status_t page_fonts(void *ctx, const flow_family_list_t *famili
             name[len] = '\0';
             yonder_diag_missing_seen(g.page.diag, "font", name, 1);
         }
+    if (rest != small)
+        os64_free(rest);
+    if (st != OS64_FONT_OK)
+        return st;
     size_t keep = view.font_count < OS64_TEXT_FALLBACK_MAX ? OS64_TEXT_FALLBACK_MAX - view.font_count : 0;
     if (nmine > keep)
         nmine = keep;
     // The names' written order: the page's faces of the names before the
-    // system family the provider chose stand before it, the rest after
-    // it; with no system family by name, all of them before the generic.
-    uint32_t system_at = families->count;
-    for (uint32_t r = 0; r < asked.count && system_at == families->count; r++)
-        if (fold_eq(asked.names[r].name, asked.names[r].len, view.primary.family, os64_strlen(view.primary.family)))
-            for (uint32_t k = 0; k < families->count; k++)
-                if (families->names[k].name == asked.names[r].name)
-                    system_at = k;
+    // system family the provider chose, that family's face, the page's
+    // faces of the names after it, and last the provider's fallbacks and
+    // its builtin — or, with no system family by name, every page face
+    // and then the generic with its fallbacks.
+    bool named = system_at < families->count;
     size_t n = 0;
     for (size_t i = 0; i < nmine; i++)
         if (mine_name[i] < system_at)
             s_web.list[n++] = mine[i];
     bool page_first = n > 0;
-    for (size_t i = 0; i < view.font_count; i++)
-        s_web.list[n++] = view.fonts[i];
+    if (named)
+        s_web.list[n++] = view.fonts[0];
     for (size_t i = 0; i < nmine; i++)
         if (mine_name[i] > system_at)
             s_web.list[n++] = mine[i];
+    for (size_t i = named ? 1 : 0; i < view.font_count; i++)
+        s_web.list[n++] = view.fonts[i];
     *list = s_web.list;
     *count = n;
     if (page_first)
@@ -3688,6 +3718,16 @@ static os64_font_status_t page_fonts(void *ctx, const flow_family_list_t *famili
     if (primary->line_height < primary->ascent + primary->descent)
         primary->line_height = primary->ascent + primary->descent;
     return OS64_FONT_OK;
+}
+
+// The page is to be laid out again (pictures_settle) — and now, so a move
+// made after a settle has run (by the feed, after its layout) is not left
+// waiting for an event: the ticker is armed for this moment.
+static void webfonts_move(void)
+{
+    s_web.moved = true;
+    g.settle_due = yonder_now_ms();
+    pictures_schedule();
 }
 
 // A file opened in the page's text context, at 16 px with every scalar.
@@ -3718,6 +3758,7 @@ static void webfonts_feed(void)
             continue;
         os64_free(w->sfnt);
         w->sfnt = NULL;
+        s_web.held_bytes -= w->sfnt_len;
         if (st == OS64_FONT_OK) {
             w->state = WF_READY;
         } else {
@@ -3726,8 +3767,17 @@ static void webfonts_feed(void)
             os64_snprintf(line, sizeof(line), "%s: %s", w->url, webfonts_refusal(st));
             yonder_diag_failed(g.page.diag, "font", line);
         }
-        s_web.moved = true;
+        webfonts_move();
     }
+    // A size refused for room gets one more layout: the tree that held the
+    // room is gone after it. Refused again, the fallback stands.
+    if (s_web.reopen_wanted && !s_web.reopen_tried) {
+        s_web.reopen_tried = true;
+        webfonts_move();
+    } else if (!s_web.reopen_wanted) {
+        s_web.reopen_tried = false;
+    }
+    s_web.reopen_wanted = false;
     while (s_web.next < s_web.nfiles && s_web.in_flight < WEBFONTS_AT_ONCE) {
         WebFontFile *w = &s_web.files[s_web.next];
         if (w->state != WF_QUEUED) {
@@ -3757,7 +3807,7 @@ static void webfonts_feed(void)
         if (why != NULL) {
             w->state = WF_FAILED;
             s_web.waiting--;
-            s_web.moved = true;
+            webfonts_move();
             char line[OS64_FETCH_URL_MAX + 80];
             os64_snprintf(line, sizeof(line), "%s: %s", w->url, why);
             yonder_diag_failed(g.page.diag, "font", line);
@@ -3784,17 +3834,21 @@ static void webfont_arrived(const yonder_webfont_job_t *job, yonder_webfont_t *p
     const char *why = product == NULL ? "no memory to fetch it" : product->why[0] ? product->why : NULL;
     if (why == NULL) {
         os64_font_status_t st = webfonts_open(w, product->sfnt, product->len);
-        if (st == OS64_FONT_LIMIT || st == OS64_FONT_NO_MEMORY) {
+        bool room = st == OS64_FONT_LIMIT || st == OS64_FONT_NO_MEMORY;
+        if (room && product->len <= WEBFONT_HELD_MAX - s_web.held_bytes) {
             // Room, not the file: held, and opened again after the next
             // layout, which this asks for (webfonts_feed).
             w->state = WF_HELD;
             w->sfnt = product->sfnt;
             w->sfnt_len = product->len;
+            s_web.held_bytes += product->len;
             product->sfnt = NULL;
-            s_web.moved = true;
+            webfonts_move();
             return;
         }
-        if (st != OS64_FONT_OK)
+        if (room)
+            why = "no room to open it";
+        else if (st != OS64_FONT_OK)
             why = webfonts_refusal(st);
     }
     if (why != NULL) {
@@ -3808,7 +3862,7 @@ static void webfont_arrived(const yonder_webfont_job_t *job, yonder_webfont_t *p
     }
     // Either way the page is laid out again: a face to draw, or the next
     // source to want.
-    s_web.moved = true;
+    webfonts_move();
     os64_ui_mark_dirty(&g.ui, &g.view);
 }
 
@@ -3874,6 +3928,10 @@ static void pictures_settle(void)
         if (now_ok)
             relayout(true);
     }
+    // A face the layout's own feed moved (webfonts_move) is owed the next
+    // batch, not dropped with the deadline this pass started from.
+    if (s_web.moved && due == YONDER_NEVER)
+        due = g.settle_due;
     if (g.page.record_owed && !g.pictures_moved)
         diag_pictures_in(&g.page);
     if (due != g.settle_due) {

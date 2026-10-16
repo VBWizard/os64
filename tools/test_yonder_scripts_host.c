@@ -188,6 +188,15 @@ static unsigned font_cancels;
 static bool font_refuse;            /* the pool will not take a font job */
 /* The next opens of a font refused for room, as a full budget does. */
 static int font_open_refusals;
+/* The next opens of another size refused for room, likewise. */
+static int font_like_refusals;
+os64_font_status_t __real_os64_text_font_open_like(const os64_text_font_t *, const os64_font_face_options_t *,
+                                                   const os64_text_range_t *, size_t, os64_text_font_t **);
+os64_font_status_t __wrap_os64_text_font_open_like(const os64_text_font_t *like, const os64_font_face_options_t *o,
+                                                   const os64_text_range_t *r, size_t n, os64_text_font_t **out) {
+    if(font_like_refusals>0) { font_like_refusals--; *out=NULL; return OS64_FONT_LIMIT; }
+    return __real_os64_text_font_open_like(like,o,r,n,out);
+}
 os64_font_status_t __real_os64_text_font_open(os64_text_context_t *, const uint8_t *, size_t,
                                               const os64_font_face_options_t *, os64_text_font_t **);
 os64_font_status_t __wrap_os64_text_font_open(os64_text_context_t *c, const uint8_t *bytes, size_t len,
@@ -4302,11 +4311,14 @@ static void web_drop(void) {
     while(nfont_jobs>0) os64_free(font_jobs[--nfont_jobs].job);
 }
 static void webfont_cases(void) {
-    const uint8_t serif='S';
+    /* Serif and mono are Test Serif; sans is Test Sans, a system family a
+     * page can name apart from the generic. */
+    static const uint8_t serif='S', sans='A';
     os64_font_family_spec_t specs[OS64_FONT_FAMILY_COUNT]={0};
     for(size_t f=0;f<OS64_FONT_FAMILY_COUNT;f++)
         for(size_t st=0;st<OS64_FONT_FAMILY_STYLES;st++)
-            specs[f].styles[st]=(os64_font_source_t){OS64_FONT_SOURCE_OUTLINE,&serif,1};
+            specs[f].styles[st]=(os64_font_source_t){OS64_FONT_SOURCE_OUTLINE,
+                f==OS64_FONT_FAMILY_SANS ? &sans : &serif,1};
     check(os64_font_family_cache_create(probe_text,specs,&s_faces.families,NULL,NULL)==OS64_FONT_OK,
           "web fonts: the system's families");
     s_faces.text=probe_text;
@@ -4494,6 +4506,90 @@ static void webfont_cases(void) {
         font_open_refusals=0;
     }
     web_drop();
+    /* A held open that succeeds in the feed after a settle's own layout
+     * arms the next settle rather than waiting for an event. */
+    web_page("<style>@font-face{font-family:Web;src:url(w.ttf)}p{font-family:Web}</style><p>hello");
+    font_open_refusals=2;
+    check(font_land("w.ttf","A",NULL) && s_web.files[0].state==WF_HELD,"web fonts: armed: held");
+    pictures_settle();
+    check(s_web.files[0].state==WF_READY && s_web.moved && g.settle_due!=YONDER_NEVER,
+          "web fonts: a face the feed opened after the settle's layout arms the next settle");
+    font_open_refusals=0;
+    web_drop();
+    /* Past the bytes held, a file refused room is failed. */
+    web_page("<style>@font-face{font-family:Web;src:url(w.ttf)}p{font-family:Web}</style><p>hello");
+    s_web.held_bytes=WEBFONT_HELD_MAX;
+    font_open_refusals=1;
+    check(font_land("w.ttf","A",NULL) && s_web.files[0].state==WF_FAILED,
+          "web fonts: past the held bytes, a file refused room fails");
+    yonder_diag_render(g.page.diag,record,sizeof(record));
+    check(strstr(record,"FAILED font: https://fixture.test/w.ttf: no room to open it")!=NULL,
+          "web fonts: and says why");
+    font_open_refusals=0;
+    s_web.held_bytes=0;
+    web_drop();
+    /* A size refused for room gets one more layout, and only one. */
+    web_page("<style>@font-face{font-family:Web;src:url(w.ttf)}p{font-family:Web}</style><p>hello");
+    {
+        uint64_t fallback=first_text_font();
+        check(font_land("w.ttf","A",NULL),"web fonts: reopen: the file is open");
+        font_like_refusals=1000;
+        pictures_settle();
+        check(first_text_font()==fallback && s_web.moved && g.settle_due!=YONDER_NEVER,
+              "web fonts: a size refused for room is drawn in the fallback, and laid out again");
+        font_like_refusals=0;
+        pictures_settle();
+        check(first_text_font()!=fallback,"web fonts: the retry draws the face");
+        /* The sizes the page holds let go, so the next layout opens them. */
+        for(int32_t i=0;i<s_web.nhandles;i++) os64_text_font_release(s_web.handles[i].font);
+        s_web.nhandles=0;
+        font_like_refusals=1000;
+        s_web.moved=true;
+        pictures_settle();
+        check(s_web.moved,"web fonts: a refused size asks for its one retry");
+        pictures_settle();
+        check(!s_web.moved,"web fonts: refused again, the fallback stands");
+        font_like_refusals=0;
+    }
+    web_drop();
+    /* The provider's fallbacks come after a page face named after the
+     * system family; a second system family named is no MISSING font; a
+     * system family named past 32 names is found. */
+    web_page("<style>@font-face{font-family:Web;src:url(w.ttf)}</style>"
+             "<p style=\"font-family:'test serif',Web,'test sans'\">a</p>");
+    check(font_land("w.ttf","A",NULL),"web fonts: fallbacks: the face arrives");
+    pictures_settle();
+    {
+        flow_family_name_t names[]={{"test serif",10},{"Web",3}};
+        flow_family_list_t ask={names,2,FLOW_GENERIC_SERIF};
+        os64_text_font_t *const *list; size_t n; os64_font_face_info_t info, second;
+        s_laying.cascade=g.page.cascade; s_laying.entry=g.page.cascade_entry;
+        check(page_fonts(&g.page,&ask,false,false,16,&list,&n,&info)==OS64_FONT_OK && n>=3 &&
+              os64_text_font_info(list[1],&second)==OS64_FONT_OK && strcmp(info.family,"Test Serif")==0 &&
+              strcmp(second.family,"Test Sans")==0,
+              "web fonts: the system face, then the page face named after it, then the fallbacks");
+        s_laying.cascade=NULL; s_laying.entry=NULL;
+    }
+    yonder_diag_render(g.page.diag,record,sizeof(record));
+    check(strstr(record,"MISSING font test")==NULL,"web fonts: a second system family named is not missing");
+    web_drop();
+    {
+        char many[4096]; size_t at=0;
+        at+=snprintf(many+at,sizeof(many)-at,"<style>@font-face{font-family:Web;src:url(w.ttf)}</style><p style=\"font-family:");
+        for(int i=0;i<34;i++) at+=snprintf(many+at,sizeof(many)-at,"n%d,",i);
+        snprintf(many+at,sizeof(many)-at,"'test sans'\">a</p>");
+        web_page(many);
+        flow_family_name_t names[36]; char text[36][16];
+        for(int i=0;i<34;i++) { snprintf(text[i],16,"n%d",i); names[i]=(flow_family_name_t){text[i],(uint32_t)strlen(text[i])}; }
+        names[34]=(flow_family_name_t){"test sans",9};
+        flow_family_list_t ask={names,35,FLOW_GENERIC_SERIF};
+        os64_text_font_t *const *list; size_t n; os64_font_face_info_t info;
+        s_laying.cascade=g.page.cascade; s_laying.entry=g.page.cascade_entry;
+        check(page_fonts(&g.page,&ask,false,false,16,&list,&n,&info)==OS64_FONT_OK && strcmp(info.family,"Test Sans")==0,
+              "web fonts: a system family named past 32 names is found");
+        s_laying.cascade=NULL; s_laying.entry=NULL;
+        web_drop();
+    }
     /* A face in a linked sheet resolves against the sheet. */
     probe_web=true;
     loop_page("<link rel=stylesheet href=css/s.css><p style='font-family:Web'>x</p>");
