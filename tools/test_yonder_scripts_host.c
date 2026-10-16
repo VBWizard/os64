@@ -4498,7 +4498,7 @@ static void paint_cost_cases(void) {
     diag_paint(&g.page);
     yonder_diag_render(g.page.diag,rec,sizeof(rec));
     check(strstr(rec,"\npaint: 2 paints in 1.0 s (1 whole views), 3.0 Mpx of the view; 4 ticks, 5 schedules; "
-                     "the main loop busy 75%; 0 layouts; frames late at most 0 ms, 0 more than 30 ms; the longest wait 0 ms; 0 script tasks: 0 scripts, 0 timers; 0 bells, the ticker not running; deadlines already past when handed to it: settle 0, "
+                     "the main loop busy 75%; 0 layouts; frames late at most 0 ms, 0 more than 30 ms; the longest wait 0 ms; 0 script tasks: 0 scripts, 0 timers, 0 events; 0 bells, the ticker not running; deadlines already past when handed to it: settle 0, "
                      "layouts 0, ticks 0, arrival 0, stream 0, timers 0, pictures 0\n")!=NULL &&
           strstr(rec,", schedule (a call) 1.0 (0.0)")!=NULL &&
           strstr(rec,"paint stages: ms a paint (most): render 12.0 (13.0), view 10.0 (0.0)")!=NULL &&
@@ -4542,6 +4542,49 @@ static void paint_cost_cases(void) {
         check(has(file,"\npaint reading 1: at y 0: 2 paints in ") && has(file,"\npaint reading 2: at y 0: 1 paints in ") &&
               s_cost_readings==2,
               "paint counts: each d adds a reading, and the ones before it stay");
+    }
+    /* A `d` whose file cannot be written keeps its reading and the counts:
+     * the next `d` writes both. */
+    {
+        char name[64]; yonder_diag_file_name(g.page.diag,name,sizeof(name));
+        s_cost.paints=3; s_cost.total[PS_RENDER]=5000000;
+        s_cost.from_cycles=cycles()-1000000000ull; s_cost.from_us=os64_micros()-1000000;
+        fake_fail_open=true;
+        diag_asked();
+        fake_fail_open=false;
+        check(s_cost_readings==3 && s_cost.paints==3 && has(g.status_rest,"Paint reading 3 kept, but the page file "
+              "could not be written in /tmp/diag; the counts go on."),
+              "paint counts: a d whose file is not written keeps the counts going and says so");
+        diag_asked();
+        const char *file=diag_file("/tmp/diag",name);
+        check(has(file,"\npaint reading 3: at y 0: 3 paints in ") && has(file,"\npaint reading 4: at y 0: 3 paints in ") &&
+              s_cost.paints==0,
+              "paint counts: the next d writes the kept reading and its own, then starts again");
+        /* No page files to write: d says so and keeps nothing. */
+        char dir[sizeof(s_diag.dir)];
+        memcpy(dir,s_diag.dir,sizeof(dir));
+        s_diag.dir[0]='\0';
+        diag_asked();
+        check(s_cost_readings==4 && has(g.status_rest,"No page files: set diagnostics in yonder.conf to write them."),
+              "paint counts: d with no page files says so, and keeps no reading");
+        memcpy(s_diag.dir,dir,sizeof(dir));
+    }
+    /* Every script task the loop runs is counted by its kind; an interval
+     * whose counter stepped back counts as nothing, and the reading says so. */
+    {
+        cost_reset();
+        task_cost("script"); task_cost("timer"); task_cost("timer"); task_cost("click"); task_cost("load");
+        check(s_cost.scripts==1 && s_cost.timers==2 && s_cost.events==2,
+              "paint counts: a script, a timer and an event are each a task of their kind");
+        uint64_t before=s_cost.backward;
+        check(cycles_since(cycles()+1000000000000ull)==0 && s_cost.backward==before+1,
+              "paint counts: a counter read behind its start is an interval of nothing, counted");
+        s_cost.paints=1; s_cost.from_cycles=cycles()-1000000000ull; s_cost.from_us=os64_micros()-1000000;
+        diag_paint(&g.page);
+        yonder_diag_render(g.page.diag,rec,sizeof(rec));
+        check(strstr(rec,"; the counter stepped back 1 times (the cores' counters disagree: these times are suspect); ")!=NULL &&
+              strstr(rec,"; 5 script tasks: 1 scripts, 2 timers, 2 events;")!=NULL,
+              "paint counts: the reading names a counter that stepped back, and the tasks by kind");
     }
     web_drop();
     saved_diagnostics[0]='\0';

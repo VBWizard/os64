@@ -81,7 +81,21 @@ were shown, and the loop's longest single wait.
 with the processor's time-stamp counter (`rdtsc`, readable in ring 3),
 not a system call; the counter's rate is taken from `os64_micros` across
 the page's life when the record is written, so the record says
-milliseconds.
+milliseconds. That trusts the cores' counters to agree: the main thread
+may move between cores between two readings, ring 3 cannot tell, and a
+system call at every stage would cost more than the stages it timed.
+`os64_micros` makes the same assumption, and the boot-time check that
+would make it a guarantee is booked (DEBTS § micros). So an interval whose
+second reading is behind its first counts as nothing, and the reading
+says how many there were ("the counter stepped back N times"): a machine
+whose counters disagree, and that moves the thread, shows it there rather
+than in numbers nobody can see are wrong.
+
+A script task is timed from `task_begin` to `task_said`, the two every
+task passes through — a script, a timer, or an event (`load`,
+`DOMContentLoaded`, a click) — so the count is every task the loop runs,
+by kind. The layouts it forces while it runs are in its time; the rebuild
+after it is a layout's.
 
 **Where it is read.** A `paint:` section on the page's record
 (YONDER_DIAGNOSTICS.md) at each write. To measure one part of a page —
@@ -89,11 +103,13 @@ the starfield alone, the roaches, Scratch 2000 — the record can be written
 on demand: the `d` key in the view writes it ("written: when asked"),
 keeps the counts since the last `d` as a numbered reading with the scroll
 position, and starts them again — so readings of several parts of a page
-sit side by side in one file: scroll there, `d`, wait ten seconds, `d`.
+sit side by side in one file: scroll there, `d`, wait ten seconds, `d`. A
+`d` whose file is not written keeps its reading in the record and lets
+the counts run on, and says so; the next `d` writes both.
 
 | State | Begun | Changed | Written | Let go |
 |---|---|---|---|---|
-| Paint counts (per stage: total, most, paints) | when a page is shown | at every paint and tick | at every write of the page's record | after an asked-for write (`d`), and with the page |
+| Paint counts (per stage: total, most, paints) | when a page is shown | at every paint and tick | at every write of the page's record | after an asked-for write (`d`) that reached its file, and with the page |
 | The ticker's counts (its looks, how late it rang, how far past its time it slept) | when the ticker starts | at each look, on the ticker's thread, under its lock | at every write of the page's record | restarted with the paint counts; with the ticker on the way out, after which the record says it is not running |
 | The readings (`paint reading N`) | when a page is shown, numbered from 1 | one more at each `d` | kept in the record from then on | with the page's record |
 | The counter's rate | at the first paint of the run | — | used at each write | never: the processor's |

@@ -1511,19 +1511,24 @@ static yonder_diag_t *diag_begin(const char *url)
     return yonder_diag_new(url, s_diag.next++, os64_micros());
 }
 
-// The record as it stands, written when yonder.conf asks for files. A
-// failure is said once a run, in the log and on the status line.
-static void diag_write(const yonder_diag_t *d)
+// The record as it stands, written when yonder.conf asks for files; true
+// when the file was written. A failure is said once a run, in the log and
+// on the status line.
+static bool diag_write(const yonder_diag_t *d)
 {
-    if (d == NULL || s_diag.dir[0] == '\0' || yonder_diag_write(d, s_diag.dir) == 0 ||
-        s_diag.write_said)
-        return;
+    if (d == NULL || s_diag.dir[0] == '\0')
+        return false;
+    if (yonder_diag_write(d, s_diag.dir) == 0)
+        return true;
+    if (s_diag.write_said)
+        return false;
     s_diag.write_said = true;
     char line[OS64_PATH_MAX + 96];
     os64_snprintf(line, sizeof(line), "A page file could not be written in %s; the rest are tried.",
                   s_diag.dir);
     os64_debug_log(line);
     status_rest(line);
+    return false;
 }
 
 // The badge follows the shown page's counts; its width moves the status
@@ -1636,11 +1641,12 @@ static void diag_cascade(yonder_diag_t *d, const garb_cascade_t *c)
 // handing the damage to the compositor. TICKS is a tick's work before its
 // paint, SCHEDULE handing the ticker its next deadline (pictures_schedule),
 // counted a call — a tick's own schedule is in its time as well as here —
-// TASKS the shown page's script tasks, a script or a timer each, with what
-// they ask of the page after (script_turn), counted a task, and LAYOUTS
-// every layout made (page_lay_out: the shown page's, a rebuild's, a
-// measurement's), counted a layout — a task's own layouts are in its time
-// as well as here.
+// TASKS every script task the loop runs, the shown page's or an arriving
+// one's — a script, a timer or an event — from task_begin to task_said,
+// the run itself (task_cost), counted a task, and LAYOUTS every layout made
+// (page_lay_out: the shown page's, a rebuild's, a measurement's), counted a
+// layout — a layout a task forces while it runs is in its time as well as
+// here; the rebuild after it is a layout's alone.
 typedef enum {
     PS_RENDER, PS_VIEW, PS_BACKGROUNDS, PS_PICTURES, PS_TEXT, PS_GROUPS, PS_SHADOWS, PS_GRADIENTS,
     PS_WARPS, PS_PUBLISH, PS_TICKS, PS_SCHEDULE, PS_TASKS, PS_LAYOUTS, PS_COUNT
@@ -1664,8 +1670,13 @@ static const char *const kPastDeadline[PAST_COUNT] = {
 };
 
 // Counted with the processor's time-stamp counter, not a system call: a
-// paint draws thousands of runs. A stage may open inside itself (a group in
-// a group), so it is timed from its outermost opening. `now` is the paint's
+// paint draws thousands of runs. That trusts the cores' counters to agree,
+// which nothing here can check — the thread may move between cores between
+// two readings, and os64_micros makes the same assumption (DEBTS § micros).
+// An interval whose second reading is behind its first counts as nothing,
+// and is counted in `backward`, which the reading names: a machine whose
+// counters disagree shows it there. A stage may open inside itself (a group
+// in a group), so it is timed from its outermost opening. `now` is the paint's
 // (or the tick's, or the call's) until it is folded into `total` and
 // `most`; the counter's rate is taken from os64_micros across the counts'
 // life when they are written (diag_paint). `waited` is the main loop's
@@ -1674,7 +1685,8 @@ static const char *const kPastDeadline[PAST_COUNT] = {
 static struct {
     uint64_t now[PS_COUNT], total[PS_COUNT], most[PS_COUNT], began[PS_COUNT];
     uint32_t depth[PS_COUNT];
-    uint64_t paints, whole, pixels, ticks, schedules, waited, scripts, timers, layouts;
+    uint64_t paints, whole, pixels, ticks, schedules, waited, scripts, timers, events, layouts;
+    uint64_t backward;                      // intervals whose counter stepped back
     // The longest one wait of the main loop (cycles), and how late a moving
     // picture's frame was shown against when it was due (ms): the most, and
     // the frames shown more than FRAME_LATE_MS late.
@@ -1694,6 +1706,17 @@ static inline uint64_t cycles(void)
     return (uint64_t)hi << 32 | lo;
 }
 
+// The counter since `from`: nothing, and counted, when it reads behind it.
+static uint64_t cycles_since(uint64_t from)
+{
+    uint64_t now = cycles();
+    if (now < from) {
+        s_cost.backward++;
+        return 0;
+    }
+    return now - from;
+}
+
 static void cost_begin(PaintStage s)
 {
     if (s_cost.depth[s]++ == 0)
@@ -1703,7 +1726,7 @@ static void cost_begin(PaintStage s)
 static void cost_end(PaintStage s)
 {
     if (s_cost.depth[s] > 0 && --s_cost.depth[s] == 0)
-        s_cost.now[s] += cycles() - s_cost.began[s];
+        s_cost.now[s] += cycles_since(s_cost.began[s]);
 }
 
 // The stages `from`..`to` of one paint or tick into the counts.
@@ -4666,12 +4689,13 @@ static void diag_face(Page *p, int32_t i, const garb_font_face_t *f, bool shown)
 static bool paint_lines(DiagText *t, DiagText *u)
 {
     uint64_t span_us = (uint64_t)(os64_micros() - s_cost.from_us);
-    uint64_t rate = span_us > 0 ? (cycles() - s_cost.from_cycles) / span_us : 0;   // per microsecond
+    // The whole span, read once (a counter behind its start reads as none).
+    uint64_t at = cycles(), span = at > s_cost.from_cycles ? at - s_cost.from_cycles : 0;
+    uint64_t rate = span_us > 0 ? span / span_us : 0;   // per microsecond
     if (rate == 0 || s_cost.paints == 0) {
         dt_put(t, "nothing painted since the counts began");
         return false;
     }
-    uint64_t span = cycles() - s_cost.from_cycles;
     uint64_t busy = span > s_cost.waited ? (span - s_cost.waited) * 100 / span : 0;
     dt_put(t, "%lu paints in %lu.%lu s (%lu whole views), %lu.%lu Mpx of the view; %lu ticks, %lu schedules; "
            "the main loop busy %lu%%",
@@ -4679,12 +4703,16 @@ static bool paint_lines(DiagText *t, DiagText *u)
            (unsigned long)s_cost.whole, (unsigned long)(s_cost.pixels / 1000000),
            (unsigned long)(s_cost.pixels / 100000 % 10), (unsigned long)s_cost.ticks,
            (unsigned long)s_cost.schedules, (unsigned long)busy);
+    if (s_cost.backward != 0)
+        dt_put(t, "; the counter stepped back %lu times (the cores' counters disagree: these times are suspect)",
+               (unsigned long)s_cost.backward);
     dt_put(t, "; %lu layouts", (unsigned long)s_cost.layouts);
     dt_put(t, "; frames late at most %lu ms, %lu more than %d ms; the longest wait %lu ms",
            (unsigned long)s_cost.late_most, (unsigned long)s_cost.late_frames, FRAME_LATE_MS,
            (unsigned long)(s_cost.slept_most / rate / 1000));
-    dt_put(t, "; %lu script tasks: %lu scripts, %lu timers", (unsigned long)(s_cost.scripts + s_cost.timers),
-           (unsigned long)s_cost.scripts, (unsigned long)s_cost.timers);
+    dt_put(t, "; %lu script tasks: %lu scripts, %lu timers, %lu events",
+           (unsigned long)(s_cost.scripts + s_cost.timers + s_cost.events), (unsigned long)s_cost.scripts,
+           (unsigned long)s_cost.timers, (unsigned long)s_cost.events);
 
     // The ticker's counts are its own: none once it has stopped, on the
     // way out, or when it never started.
@@ -4708,7 +4736,8 @@ static bool paint_lines(DiagText *t, DiagText *u)
     dt_put(u, "ms a paint (most):");
     for (int32_t s = 0; s < PS_COUNT; s++) {
         uint64_t n = s == PS_TICKS ? s_cost.ticks : s == PS_SCHEDULE ? s_cost.schedules
-                   : s == PS_TASKS ? s_cost.scripts + s_cost.timers : s == PS_LAYOUTS ? s_cost.layouts
+                   : s == PS_TASKS ? s_cost.scripts + s_cost.timers + s_cost.events
+                   : s == PS_LAYOUTS ? s_cost.layouts
                    : s_cost.paints;
         uint64_t avg = n > 0 ? s_cost.total[s] / n / per : 0, most = s_cost.most[s] / per;
         dt_put(u, "%s %s %lu.%lu (%lu.%lu)", s ? "," : "",
@@ -6411,13 +6440,33 @@ static void script_arrived(const yonder_script_job_t *job, const yonder_script_t
                                got != NULL ? got->length : 0);
 }
 
+// When the task running began (task_begin), for its cost (task_cost). A
+// begun task that finds nothing to run never reaches task_said, and the
+// next task_begin starts it again.
+static uint64_t s_task_began;
+
 // A task is about to run: the layouts it forces are counted from zero
-// (DOM.md § Geometry), and the audit's clock starts. Every task kind
-// begins here and ends at task_said.
+// (DOM.md § Geometry), and the audit's clock starts, and the paint counts'.
+// Every task kind begins here and ends at task_said.
 static int64_t task_begin(yonder_scripts_t *host)
 {
     (void)yonder_scripts_geometry_stats(host, true);
+    s_task_began = cycles();
     return s_script_audit ? os64_micros() : 0;
+}
+
+// A task ran (task_said): its run into the paint counts, by its kind — a
+// script's source, a timer, or an event by the event's name.
+static void task_cost(const char *what)
+{
+    s_cost.now[PS_TASKS] += cycles_since(s_task_began);
+    cost_fold(PS_TASKS, PS_TASKS);
+    if (os64_streq(what, "script"))
+        s_cost.scripts++;
+    else if (os64_streq(what, "timer"))
+        s_cost.timers++;
+    else
+        s_cost.events++;
 }
 
 // What a task said, on the status line: the layouts it forced and what they
@@ -6428,6 +6477,7 @@ static int64_t task_begin(yonder_scripts_t *host)
 static void task_said(yonder_scripts_t *host, bool was_alive, const char *what,
                       const os64_js_outcome_t *out, int64_t began)
 {
+    task_cost(what);
     os64_dom_geometry_stats_t forced = yonder_scripts_geometry_stats(host, false);
     if (s_script_audit) {
         char line[OS64_JS_SOURCE_NAME_CAP + 160];
@@ -6769,7 +6819,6 @@ static bool script_turn(void)
     forms_flush();
     const os64_html_document_t *doc = page_doc(&g.page);
     os64_js_outcome_t out;
-    cost_begin(PS_TASKS);
     int64_t began = task_begin(g.page.scripts);
     const char *what = "script";
     bool ran = yonder_scripts_step(g.page.scripts, &out);
@@ -6777,23 +6826,14 @@ static bool script_turn(void)
         what = "timer";
         ran = yonder_scripts_timer_fire(g.page.scripts, yonder_now_ms(), &out);
     }
-    if (!ran) {
-        cost_end(PS_TASKS);
-        s_cost.now[PS_TASKS] = 0;
+    if (!ran)
         return false;
-    }
-    if (what[0] == 't')
-        s_cost.timers++;
-    else
-        s_cost.scripts++;
     task_said(g.page.scripts, true, what, &out, began);
     // The rendering step before the asks: a form a script sent is read
     // from a model as current as its tree.
     bool rendered = script_rebuild();
     if (rendered)
         asks_perform(g.page.scripts, doc, true);
-    cost_end(PS_TASKS);
-    cost_fold(PS_TASKS, PS_TASKS);
     return rendered;
 }
 
@@ -8763,16 +8803,29 @@ static Key view_key(const os64_gui_event_t *ev)
 // counts since the last `d` as a numbered reading with where the page was
 // scrolled (diag_paint_reading), and starts them again — so each part of a
 // page can be measured on its own: scroll there, `d`, wait, `d`, and the
-// next part. Without a record, it says so.
+// next part. With no page files to write, or no record (one is made for
+// every page, short of memory), it says which. When the file is not written
+// the reading stays in the record and the counts go on, so the next `d`
+// writes both, its own reading counted from the same start.
 static void diag_asked(void)
 {
+    if (s_diag.dir[0] == '\0') {
+        status_rest("No page files: set diagnostics in yonder.conf to write them.");
+        return;
+    }
     if (g.page.diag == NULL) {
-        status_rest("No record: set diagnostics in yonder.conf to keep one.");
+        status_rest("No record for this page: there was no memory to keep one.");
         return;
     }
     diag_observe(&g.page, "when asked");
     diag_paint_reading(&g.page, ++s_cost_readings);
-    diag_write(g.page.diag);
+    if (!diag_write(g.page.diag)) {
+        char said[OS64_PATH_MAX + 96];
+        os64_snprintf(said, sizeof(said), "Paint reading %u kept, but the page file could not be written in %s; "
+                      "the counts go on.", (unsigned)s_cost_readings, s_diag.dir);
+        status_rest(said);
+        return;
+    }
     cost_reset();
     char said[96];
     os64_snprintf(said, sizeof(said), "Paint reading %u written; the counts start again.", (unsigned)s_cost_readings);
@@ -9634,7 +9687,7 @@ int main(int argc, char **argv)
     while (g.running && !g.ui.quit) {
         uint64_t asleep = cycles();
         int64_t woke = held ? 1 : os64_gui_event_wait(g.win, &ev);
-        uint64_t slept = cycles() - asleep;
+        uint64_t slept = cycles_since(asleep);
         s_cost.waited += slept;
         if (slept > s_cost.slept_most)
             s_cost.slept_most = slept;

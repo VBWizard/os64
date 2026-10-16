@@ -250,8 +250,8 @@ mutants = [
      '    g.page_serial++;', WINDOW),
     # The count and the sentence, for every task kind.
     ('join-count-from-zero-each-task', YONDER,
-     '    (void)yonder_scripts_geometry_stats(host, true);\n    return s_script_audit',
-     '    (void)host;\n    return s_script_audit', WINDOW),
+     '    (void)yonder_scripts_geometry_stats(host, true);\n    s_task_began = cycles();',
+     '    (void)host;\n    s_task_began = cycles();', WINDOW),
     ('join-count-in-the-audit', YONDER,
      '                      (unsigned long)yonder_scripts_written(host), (unsigned long)forced.layouts,',
      '                      (unsigned long)yonder_scripts_written(host), (unsigned long)0,', WINDOW),

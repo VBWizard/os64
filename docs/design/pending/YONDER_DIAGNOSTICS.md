@@ -289,8 +289,17 @@ was shown, or since its record was last written on asking:
   `the view's rest` is the view outside those. **`publish`** hands the
   damage to the compositor. **`ticks`** are per tick, not per paint: a
   tick's work finding what moved and marking it, before its paint.
+  **`schedule`** is per call (handing the ticker its next deadline),
+  **`tasks`** per script task (a script, a timer or an event, its run),
+  **`layouts`** per layout. The `paint:` line has grown since this
+  example: the layouts, how late frames were, the loop's longest wait, the
+  script tasks by kind, the ticker's bells and its own counts, and the
+  deadlines already past when handed to it, by source (YONDER_PERF.md §
+  Measure first).
 - Timed with the processor's counter, its rate taken from the clock across
   the same span, so the numbers are the machine's own: the P5's on the P5.
+  An interval whose counter stepped back (the thread moved to a core whose
+  counter is behind) counts as nothing, and the line says how many.
 - **`d` in the page writes the record now** (`written: when asked`),
   keeping the counts since the last `d` as a numbered reading with where
   the page was scrolled — `paint reading 2: at y 2140: 96 paints in 10.1 s
@@ -298,7 +307,8 @@ was shown, or since its record was last written on asking:
   part of a page is measured on its own and every reading stays: scroll
   there, `d`, wait, `d`, scroll on, wait, `d`. The status line names the
   reading it wrote. `paint` and `paint stages` are the counts since the
-  last `d`.
+  last `d` that reached its file: one that did not keeps its reading in
+  the record, lets the counts run on, and says so on the status line.
 
 ### Built differently from the brief, and why
 
