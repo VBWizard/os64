@@ -106,6 +106,9 @@ os64_font_status_t os64_font_family_cache_create(os64_text_context_t *,
     const os64_font_family_spec_t [OS64_FONT_FAMILY_COUNT],
     os64_font_family_cache_t **out, os64_font_family_t *family, size_t *source);
 void os64_font_family_cache_destroy(os64_font_family_cache_t *);
+/* Whether `name` is one of the families' own names, as os64_font_family_open
+ * matches them: false for NULL or an empty name. */
+bool os64_font_family_known(const os64_font_family_cache_t *, const os64_font_family_name_t *name);
 /* Serialized with the text context. The family is the first of `names` that
  * is one of the families' own names — the name its regular face reports,
  * compared with ASCII letters folded — or the generic when none is. The

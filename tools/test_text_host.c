@@ -351,6 +351,41 @@ static void ranges(void)
     CHECK(os64_text_layout(c,box,1,&o,&r)==OS64_FONT_OK && r->view.glyphs[0].font_identity==u->identity);
     os64_text_run_release(r);
     os64_text_font_release(t);os64_text_font_release(u);
+    current="another face of the same file";
+    {
+        size_t files=0;for (text_file *x=c->files;x;x=x->next) files++;
+        os64_font_face_options_t big={24,OS64_FONT_HINT_NORMAL};
+        const os64_text_range_t only_w[]={{'W','W'}};
+        os64_text_font_t *like=NULL;
+        CHECK(os64_text_font_open_like(b,&big,only_w,1,&like)==OS64_FONT_OK);
+        size_t after=0;for (text_file *x=c->files;x;x=x->next) after++;
+        CHECK(after==files && like->file==b->file && like->identity!=b->identity &&
+              like->options.pixel_height==24 && like->range_count==1);
+        os64_font_face_info_t info;
+        CHECK(os64_text_font_info(like,&info)==OS64_FONT_OK && info.line_height==like->info.line_height &&
+              !os64_strcmp(info.family,"Contract fixture"));
+        CHECK(os64_text_font_info(NULL,&info)==OS64_FONT_BAD_ARGUMENT && info.line_height==0);
+        os64_text_font_t *pair[]={like,b};
+        o=(os64_text_layout_t){.fonts=pair,.font_count=2,.tab_interval=512};
+        CHECK(os64_text_layout(c,(const uint8_t *)"Wi",2,&o,&r)==OS64_FONT_OK);
+        CHECK(r->view.glyphs[0].font_identity==like->identity && r->view.glyphs[1].font_identity==b->identity);
+        os64_text_run_release(r);
+        os64_text_font_t *bm=NULL,*none=(void *)1;
+        CHECK(os64_text_font_bitmap(c,&bm)==OS64_FONT_OK);
+        CHECK(os64_text_font_open_like(bm,&big,NULL,0,&none)==OS64_FONT_BAD_ARGUMENT && !none);
+        none=(void *)1;
+        CHECK(os64_text_font_open_like(NULL,&big,NULL,0,&none)==OS64_FONT_BAD_ARGUMENT && !none);
+        os64_text_font_release(bm);
+        os64_text_font_release(like);
+        /* The file outlives the font it was first opened for. */
+        os64_text_font_t *base=open_font(c,'L'),*kept=NULL;
+        CHECK(os64_text_font_open_like(base,&big,NULL,0,&kept)==OS64_FONT_OK && kept->file==base->file);
+        os64_text_font_release(base);
+        o=(os64_text_layout_t){.fonts=&kept,.font_count=1,.tab_interval=512};
+        CHECK(os64_text_layout(c,(const uint8_t *)"i",1,&o,&r)==OS64_FONT_OK &&
+              r->view.glyphs[0].font_identity==kept->identity);
+        os64_text_run_release(r);os64_text_font_release(kept);
+    }
     current="a font's unicode-range written wrong";
     os64_font_face_options_t fo={16,OS64_FONT_HINT_NORMAL};os64_text_font_t *f=(void *)1;
     uint8_t name='P';

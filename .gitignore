@@ -39,3 +39,4 @@ net_capture.pcap
 
 # Python bytecode from running tools/*.py
 __pycache__/
+tools/pages/fonts/

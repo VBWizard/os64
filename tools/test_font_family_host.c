@@ -208,6 +208,11 @@ static void names(void)
     CHECK(resolved(cache,"Contract fixture ",NULL,OS64_FONT_FAMILY_MONO)==id[2]);
     CHECK(resolved_slice(cache,"Contract fixture, serif",15,OS64_FONT_FAMILY_MONO)==id[2]);
     CHECK(resolved_slice(cache,"Contract fixture, serif",16,OS64_FONT_FAMILY_MONO)==id[0]);
+    {
+        os64_font_family_name_t yes={"CONTRACT fixture",16}, no={"Contract fixtur",15}, empty={NULL,0};
+        CHECK(os64_font_family_known(cache,&yes) && !os64_font_family_known(cache,&no) &&
+              !os64_font_family_known(cache,&empty) && !os64_font_family_known(NULL,&yes));
+    }
 #endif
     {
         const os64_font_family_name_t bad[] = {{NULL,16}}, empty[] = {{NULL,0}};

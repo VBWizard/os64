@@ -162,6 +162,13 @@ static bool same_name(const os64_font_family_name_t *name, const char *own)
     }
     return true;
 }
+bool os64_font_family_known(const os64_font_family_cache_t *cache, const os64_font_family_name_t *name)
+{
+    if (!cache || !name || !name->len || !name->name) return false;
+    for (size_t f = 0; f < OS64_FONT_FAMILY_COUNT; ++f)
+        if (same_name(name, cache->names[f])) return true;
+    return false;
+}
 os64_font_status_t os64_font_family_open(os64_font_family_cache_t *cache,
     const os64_font_family_list_t *families, bool bold, bool italic,
     uint32_t size, os64_font_role_view_t *out)

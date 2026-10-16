@@ -40,10 +40,12 @@ them ranks what to build first.
   script yonder refuses to run (`type=module`, a worker, a service worker
   registration), an element drawn as nothing (canvas, video, audio, svg,
   a custom element), a CSS property, at-rule or function the cascade
-  skipped, a font face not fetched.
+  skipped, a font family with neither a page face nor a system family
+  (the resolver's: PILE3.md § Web fonts).
 - `FAILED <what>: <message>`: a script that died with its message and
   source name, one stopped at the execution limit, out of memory in
-  layout or reading, a link refused and why. Everything the status line
+  layout or reading, a link refused and why, a font file that did not
+  fetch, unwrap or open. Everything the status line
   says today and then loses.
 - Plain lines for the rest: final address after redirects, time to
   arrive, bytes, scripts by source name with outcome, layouts and their
@@ -125,8 +127,9 @@ drift check covers the inline one.
 **The cascade's half is in libgarb**: `garb_cascade_skips`, a tally the
 build keeps of each property with no reader, each at-rule it keeps no rule
 of, each function no reader accepts in a declaration it dropped, and each
-`@font-face` family. A tally that finds no room never marks the cascade
-incomplete.
+value it dropped or approximated. A tally that finds no room never marks
+the cascade incomplete. `MISSING font` is the font resolver's
+(PILE3.md § Web fonts), not this tally's.
 
 **A file, as the guest wrote it** (`/tests/pages/diag.html`, left by
 Reload, so this is the departure write):
