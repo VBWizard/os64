@@ -141,6 +141,11 @@ static bool s_animations = true;
 // A GIF frame that asks for 10 ms or less is shown for this long, as every
 // browser shows the ones that ask for "as fast as you can".
 #define FRAME_FLOOR_MS 100
+// A moving picture's next frame is due on this grid of the clock, so
+// pictures of one delay share their ticks and their paints instead of each
+// taking its own: a GIF's delays are hundredths of a second, so its cadence
+// is kept.
+#define FRAME_GRID_MS 10
 
 // ── The page's fonts ────────────────────────────────────────────────────
 //
@@ -643,6 +648,7 @@ static void webfonts_families_shown(const Page *p);
 static void webfonts_layout_begins(const Page *p);
 static void pictures_schedule(void);
 static uint64_t frame_delay(const Picture *pic);
+static uint64_t frame_due(const Picture *pic, uint64_t now);
 
 // A shown picture's pixels: the still image, or the frame a moving one is on.
 static const uint32_t *picture_pixels(const Picture *pic, uint32_t *w, uint32_t *h)
@@ -1619,30 +1625,35 @@ static void diag_cascade(yonder_diag_t *d, const garb_cascade_t *c)
 
 // ── What paints cost (YONDER_PERF.md § Measure first) ───────────────────
 
-// The stages of a paint, and the ticks beside them. RENDER is libui's whole
-// walk — the root panel and the chrome as well as the view — and VIEW the
-// page's part of it; the rest are inside VIEW but for PUBLISH, handing the
-// damage to the compositor, and TICKS, a tick's work before its paint.
+// The stages of a paint, and the work beside paints. RENDER is libui's
+// whole walk — the root panel and the chrome as well as the view — and
+// VIEW the page's part of it; the rest are inside VIEW but for PUBLISH,
+// handing the damage to the compositor. TICKS is a tick's work before its
+// paint, and SCHEDULE handing the ticker its next deadline
+// (pictures_schedule), counted a call — a tick's own schedule is in its
+// time as well as here.
 typedef enum {
     PS_RENDER, PS_VIEW, PS_BACKGROUNDS, PS_PICTURES, PS_TEXT, PS_GROUPS, PS_SHADOWS, PS_GRADIENTS,
-    PS_WARPS, PS_PUBLISH, PS_TICKS, PS_COUNT
+    PS_WARPS, PS_PUBLISH, PS_TICKS, PS_SCHEDULE, PS_COUNT
 } PaintStage;
 
 static const char *const kPaintStage[PS_COUNT] = {
     "render", "view", "backgrounds", "pictures", "text", "groups", "shadows", "gradients",
-    "warps", "publish", "ticks",
+    "warps", "publish", "ticks", "schedule",
 };
 
 // Counted with the processor's time-stamp counter, not a system call: a
 // paint draws thousands of runs. A stage may open inside itself (a group in
 // a group), so it is timed from its outermost opening. `now` is the paint's
-// (or the tick's) until it is folded into `total` and `most`; the counter's
-// rate is taken from os64_micros across the counts' life when they are
-// written (diag_paint).
+// (or the tick's, or the call's) until it is folded into `total` and
+// `most`; the counter's rate is taken from os64_micros across the counts'
+// life when they are written (diag_paint). `waited` is the main loop's
+// time asleep for its next event, so the rest of the span is the time it
+// was busy.
 static struct {
     uint64_t now[PS_COUNT], total[PS_COUNT], most[PS_COUNT], began[PS_COUNT];
     uint32_t depth[PS_COUNT];
-    uint64_t paints, whole, pixels, ticks;
+    uint64_t paints, whole, pixels, ticks, schedules, waited;
     uint64_t from_cycles;
     int64_t from_us;
 } s_cost;
@@ -3520,7 +3531,7 @@ static void picture_arrived(yonder_picture_job_t *job, yonder_picture_t *product
     g.page.kept_bytes += bytes;
     if (pic->moving != NULL) {
         pic->playing = true;
-        pic->due = yonder_now_ms() + frame_delay(pic);
+        pic->due = frame_due(pic, yonder_now_ms());
         pictures_schedule();
     }
     if (picture_moves_page(&g.page, job->index))
@@ -4622,10 +4633,14 @@ static bool paint_lines(DiagText *t, DiagText *u)
         dt_put(t, "nothing painted since the counts began");
         return false;
     }
-    dt_put(t, "%lu paints in %lu.%lu s (%lu whole views), %lu.%lu Mpx of the view; %lu ticks",
+    uint64_t span = cycles() - s_cost.from_cycles;
+    uint64_t busy = span > s_cost.waited ? (span - s_cost.waited) * 100 / span : 0;
+    dt_put(t, "%lu paints in %lu.%lu s (%lu whole views), %lu.%lu Mpx of the view; %lu ticks, %lu schedules; "
+           "the main loop busy %lu%%",
            (unsigned long)s_cost.paints, (unsigned long)(span_us / 1000000), (unsigned long)(span_us / 100000 % 10),
            (unsigned long)s_cost.whole, (unsigned long)(s_cost.pixels / 1000000),
-           (unsigned long)(s_cost.pixels / 100000 % 10), (unsigned long)s_cost.ticks);
+           (unsigned long)(s_cost.pixels / 100000 % 10), (unsigned long)s_cost.ticks,
+           (unsigned long)s_cost.schedules, (unsigned long)busy);
     // Tenths of a millisecond: cycles / (rate per microsecond x 100).
     uint64_t per = rate * 100;
     uint64_t inner = 0;
@@ -4635,9 +4650,10 @@ static bool paint_lines(DiagText *t, DiagText *u)
     uint64_t rest = s_cost.total[PS_VIEW] > inner ? s_cost.total[PS_VIEW] - inner : 0;
     dt_put(u, "ms a paint (most):");
     for (int32_t s = 0; s < PS_COUNT; s++) {
-        uint64_t n = s == PS_TICKS ? (s_cost.ticks > 0 ? s_cost.ticks : 1) : s_cost.paints;
-        uint64_t avg = s_cost.total[s] / n / per, most = s_cost.most[s] / per;
-        dt_put(u, "%s %s %lu.%lu (%lu.%lu)", s ? "," : "", s == PS_TICKS ? "ticks (a tick)" : kPaintStage[s],
+        uint64_t n = s == PS_TICKS ? s_cost.ticks : s == PS_SCHEDULE ? s_cost.schedules : s_cost.paints;
+        uint64_t avg = n > 0 ? s_cost.total[s] / n / per : 0, most = s_cost.most[s] / per;
+        dt_put(u, "%s %s %lu.%lu (%lu.%lu)", s ? "," : "",
+               s == PS_TICKS ? "ticks (a tick)" : s == PS_SCHEDULE ? "schedule (a call)" : kPaintStage[s],
                (unsigned long)(avg / 10), (unsigned long)(avg % 10), (unsigned long)(most / 10),
                (unsigned long)(most % 10));
     }
@@ -4803,6 +4819,14 @@ static uint64_t frame_delay(const Picture *pic)
     return ms <= 10 ? FRAME_FLOOR_MS : ms;
 }
 
+// When the frame on show from `now` gives way: its delay on, at the
+// nearest point of FRAME_GRID_MS.
+static uint64_t frame_due(const Picture *pic, uint64_t now)
+{
+    uint64_t due = now + frame_delay(pic);
+    return (due + FRAME_GRID_MS / 2) / FRAME_GRID_MS * FRAME_GRID_MS;
+}
+
 // Marks a part of the view, in page coordinates, for repainting: libui
 // marks a widget's bounds, so a stand-in with the part's is how.
 static void mark_part(os64_gui_rect_t r)
@@ -4907,6 +4931,109 @@ static bool picture_on_screen(int32_t k, bool mark)
     SheetPictureSeen look = {k, mark, view, false, owner};
     flow_visit(p->tree, view, scroll_now(), sheet_picture_seen, &look);
     return seen || look.seen;
+}
+
+typedef struct {
+    bool *seen;
+    const bool *mark;
+    int32_t n;
+    os64_gui_rect_t view;       // page coordinates
+    const flow_box_t *owner;    // the canvas's: asked apart from the walk
+} SheetPicturesSeen;
+
+// One box of the view's walk: which pictures does a sheet put behind it?
+static void sheet_pictures_seen(void *ctx, const flow_box_t *b)
+{
+    SheetPicturesSeen *look = ctx;
+    os64_gui_rect_t meet;
+    if (b == look->owner || !os64_rect_intersect(flow_box_doc_rect(b, scroll_now()), look->view, &meet))
+        return;
+    for (int32_t i = 0; i < flow_background_layers(b->style); i++) {
+        flow_layer_t l = flow_background_layer(b->style, i);
+        int32_t k = l.image != NULL ? css_picture(&g.page, &l) : -1;
+        if (k < 0 || k >= look->n)
+            continue;
+        look->seen[k] = true;
+        if (look->mark != NULL && look->mark[k])
+            mark_part(meet);
+    }
+}
+
+// What picture_on_screen answers for one picture, for every picture of the
+// shown page in one pass over it: which meet the view (`seen`, a flag a
+// picture), and for each `mark` names (NULL: none), its boxes' parts of
+// the glass marked for repainting. One pass, where asking each picture
+// apart walks the page once a picture — at every tick and every schedule.
+static void pictures_seen(bool *seen, const bool *mark)
+{
+    const Page *p = &g.page;
+    const os64_page_t *model = page_model(p);
+    os64_memset(seen, 0, (size_t)p->npics * sizeof(*seen));
+    if (p->tree == NULL || model == NULL)
+        return;
+    os64_gui_rect_t view = {g.sx, g.sy, g.view.bounds.w, g.view.bounds.h}, meet;
+    for (int32_t i = 0; p->pic_of != NULL && i < flow_nimages(p->tree); i++) {
+        const flow_box_t *b = flow_image(p->tree, i);
+        int32_t at = os64_page_image_for(model, b->node);
+        int32_t k = at >= 0 && at < p->nimage_map ? p->pic_of[at] : -1;
+        if (k < 0 || k >= p->npics || !os64_rect_intersect(flow_box_doc_rect(b, scroll_now()), view, &meet))
+            continue;
+        seen[k] = true;
+        if (mark != NULL && mark[k])
+            mark_part(meet);
+    }
+    // The canvas's pictures: behind the whole view, its owner found by the
+    // painter's own rule (picture_on_screen), each as box_shows answers.
+    const yonder_verbs_t asking = {.backdrop = glass_backdrop};
+    const flow_box_t *owner = yonder_canvas_owner(p->tree, &asking);
+    if (owner != NULL && flow_background_has_image(owner->style)) {
+        for (int32_t i = 0; i < flow_background_layers(owner->style); i++) {
+            flow_layer_t l = flow_background_layer(owner->style, i);
+            int32_t k = l.image != NULL ? css_picture(p, &l) : -1;
+            if (k < 0 || k >= p->npics)
+                continue;
+            seen[k] = true;
+            if (mark != NULL && mark[k])
+                mark_part(view);
+        }
+    } else if (owner != NULL) {
+        int32_t k = attribute_picture(p, owner);
+        if (k >= 0 && k < p->npics) {
+            seen[k] = true;
+            if (mark != NULL && mark[k])
+                mark_part(view);
+        }
+    }
+    for (int32_t i = 0; p->bg_of != NULL && i < os64_page_nbackgrounds(model) && i < p->nbackground_map; i++) {
+        int32_t k = p->bg_of[i];
+        if (k < 0 || k >= p->npics)
+            continue;
+        const flow_box_t *b = flow_box_for(p->tree, os64_page_background(model, i)->node);
+        if (b == NULL || b == owner || !os64_rect_intersect(flow_box_doc_rect(b, scroll_now()), view, &meet))
+            continue;
+        seen[k] = true;
+        if (mark != NULL && mark[k])
+            mark_part(meet);
+    }
+    SheetPicturesSeen look = {seen, mark, p->npics, view, owner};
+    flow_visit(p->tree, view, scroll_now(), sheet_pictures_seen, &look);
+}
+
+// A flag a picture of the shown page, for pictures_seen: `small` when the
+// page has few, else the heap — NULL with no memory, and the caller asks
+// picture by picture instead.
+#define PICTURE_FLAGS_SMALL 64
+static bool *picture_flags(bool *small)
+{
+    if (g.page.npics <= PICTURE_FLAGS_SMALL)
+        return small;
+    return os64_malloc((size_t)g.page.npics * sizeof(bool));
+}
+
+static void picture_flags_free(bool *flags, bool *small)
+{
+    if (flags != small)
+        os64_free(flags);
 }
 
 // What the shown page's frames are held to (MOTION_COST_MS), in
@@ -5041,6 +5168,7 @@ static uint64_t tick_next(void)
 // page's scripts, covered or not.
 static void pictures_schedule(void)
 {
+    cost_begin(PS_SCHEDULE);
     uint64_t next = g.covered ? YONDER_NEVER : g.settle_due;
     uint64_t motion = motion_next(), tick = tick_next();
     if (motion < next)
@@ -5060,12 +5188,25 @@ static void pictures_schedule(void)
         if (due < next)
             next = due;
     }
-    for (int32_t k = 0; !g.covered && k < g.page.npics; k++) {
+    // The pictures on screen, found in one pass when any could be next.
+    bool asks = false;
+    for (int32_t k = 0; !g.covered && k < g.page.npics && !asks; k++)
+        asks = g.page.pics[k].playing && g.page.pics[k].due < next;
+    bool small[PICTURE_FLAGS_SMALL];
+    bool *seen = asks ? picture_flags(small) : NULL;
+    if (seen != NULL)
+        pictures_seen(seen, NULL);
+    for (int32_t k = 0; asks && k < g.page.npics; k++) {
         const Picture *pic = &g.page.pics[k];
-        if (pic->playing && pic->due < next && picture_on_screen(k, false))
+        if (pic->playing && pic->due < next && (seen != NULL ? seen[k] : picture_on_screen(k, false)))
             next = pic->due;
     }
+    if (seen != NULL)
+        picture_flags_free(seen, small);
     yonder_ticker_set(g.ticker, next);
+    cost_end(PS_SCHEDULE);
+    s_cost.schedules++;
+    cost_fold(PS_SCHEDULE, PS_SCHEDULE);
 }
 
 // The ticker rang: every picture that is due and on screen shows its next
@@ -5076,9 +5217,19 @@ static void pictures_tick(void)
 {
     cost_begin(PS_TICKS);
     uint64_t now = yonder_now_ms();
+    // One pass finds the pictures on screen and one marks those that moved
+    // (pictures_seen); with no memory for their flags, each is asked apart.
+    bool small_seen[PICTURE_FLAGS_SMALL], small_moved[PICTURE_FLAGS_SMALL];
+    bool *seen = !g.covered ? picture_flags(small_seen) : NULL;
+    bool *moved = seen != NULL ? picture_flags(small_moved) : NULL;
+    if (moved != NULL) {
+        pictures_seen(seen, NULL);
+        os64_memset(moved, 0, (size_t)g.page.npics * sizeof(*moved));
+    }
+    bool any = false;
     for (int32_t k = 0; !g.covered && k < g.page.npics; k++) {
         Picture *pic = &g.page.pics[k];
-        if (!pic->playing || pic->due > now || !picture_on_screen(k, false))
+        if (!pic->playing || pic->due > now || !(moved != NULL ? seen[k] : picture_on_screen(k, false)))
             continue;
         // END holds the last frame and a failure the last good one: either
         // way the picture stays as it is, and stops.
@@ -5086,9 +5237,18 @@ static void pictures_tick(void)
             pic->playing = false;
             continue;
         }
-        pic->due = now + frame_delay(pic);
-        (void)picture_on_screen(k, true);
+        pic->due = frame_due(pic, now);
+        if (moved != NULL)
+            moved[k] = any = true;
+        else
+            (void)picture_on_screen(k, true);
     }
+    if (any)
+        pictures_seen(seen, moved);
+    if (moved != NULL)
+        picture_flags_free(moved, small_moved);
+    if (seen != NULL)
+        picture_flags_free(seen, small_seen);
     pictures_schedule();
     cost_end(PS_TICKS);
     s_cost.ticks++;
@@ -9381,7 +9541,10 @@ int main(int argc, char **argv)
     os64_gui_event_t ev;
     bool held = false;              // an event taken while looking for an empty queue
     while (g.running && !g.ui.quit) {
-        if (!held && os64_gui_event_wait(g.win, &ev) != 1)
+        uint64_t asleep = cycles();
+        int64_t woke = held ? 1 : os64_gui_event_wait(g.win, &ev);
+        s_cost.waited += cycles() - asleep;
+        if (woke != 1)
             break;
         held = false;
         YonderEventBatch batch = {.held=true,.pending=ev};

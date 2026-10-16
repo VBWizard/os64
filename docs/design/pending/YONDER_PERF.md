@@ -104,28 +104,58 @@ quarter.** Two things the reading of the code did not rank: the gradients
 paint), and the ticks — 38 GIFs, each on its own deadline, each tick
 walking the page once per moving picture to find what to mark.
 
-## The fixes, in order, each measured before the next
+**The P5's readings (Chris, 2026-10-16, danlegt, the view 826 px wide,
+a whole view about 0.94 Mpx).** At the top: 40 paints a second, 6.4 ms
+each, and 306 ticks a second at 0.4 ms. In the middle, Scratch 2000.exe
+beside the GIF strip: 14 paints a second at 53.5 ms each — gradients 30.7,
+shadows 11.0 — the thread full. At the bottom, the starfield alone: 14 a
+second at 12.3 ms, every one a whole view, and 251 ticks a second at 0.8
+ms. The canvas's tile is 1.1-1.7 ms of any paint, the window 0.4-0.8: the
+starfield costs what the content over it costs to repaint, eleven times a
+second, and the ticks cost 12-20% of the thread on their own.
 
-1. **The starfield's floor** — whatever the instrument says a background
-   frame spends. The likely first find is the tiler: an opaque tile shown
-   at its own size is a copy of rows, and a paint of the canvas should
-   cost about what its pixels do.
-2. **A background frame that repaints only the background.** The boxes
-   over a moving canvas do not change when it does; for ordinary
-   compositing a pixel is `background x T + C`, where T (how much of the
-   background shows through) and C (what the boxes put on it) do not
-   depend on the background — so the view's content can be painted once
-   over black and once over white, which gives both, and each background
-   frame is then one pass over the view. Its own design, with its own
-   lifecycle table (what invalidates the layer: a scroll, a layout, any
-   other animation's mark, a picture arriving), before any code.
-3. **libui paints the part** — the root panel's fill, and every widget's,
-   cut to the dirty rectangle — and **the dirty area becomes a short list
-   of rectangles**, so two marks far apart paint two parts.
-4. **What the instrument says next**: the on-screen walk once a tick, not
-   once a picture; shared deadlines; scaled frames kept; masks, gradients
-   and warps kept. Each that adds a cache gets its lifecycle row here
-   before its code.
+## The fixes, in the order the readings set
+
+**perf-1 (this branch, under `-O2`):**
+
+1. **The instrument**, above, with the work beside the paints counted too:
+   handing the ticker its next deadline (`schedule`, a call), and the
+   main loop's time asleep, so a reading says how busy the thread was.
+2. **Shared deadlines.** A moving picture's next frame is due on a 10 ms
+   grid of the clock (`frame_due`, FRAME_GRID_MS): pictures of one delay
+   share their ticks and their paints, and there are at most a hundred
+   ticks a second. A GIF's delays are hundredths of a second, so its
+   cadence is kept.
+3. **One pass over the page a tick.** `pictures_seen` answers which
+   pictures meet the view, and marks the ones a tick moved, in one pass —
+   what `picture_on_screen` answers for one picture, which walked every
+   image, every background and the view's boxes (resolving each layer's
+   address) once a picture, at every tick and every schedule. Ticks and
+   schedules use it, with the flags on the stack for up to 64 pictures and
+   asking picture by picture when a page has more and no memory for them.
+   No state outlives the call.
+
+**perf-2:** the gradient and shadow caches — each box's gradient pixels
+and blurred shadow mask kept between paints, keyed by what draws them —
+with their lifecycle table here before their code.
+
+**Then measure again**, and decide whether these are still worth their
+complexity:
+
+- **A background frame that repaints only the background.** The boxes
+  over a moving canvas do not change when it does; for ordinary
+  compositing a pixel is `background x T + C`, where T (how much of the
+  background shows through) and C (what the boxes put on it) do not
+  depend on the background — so the view's content can be painted once
+  over black and once over white, which gives both, and each background
+  frame is then one pass over the view. Its own design, with its own
+  lifecycle table (what invalidates the layer: a scroll, a layout, any
+  other animation's mark, a picture arriving), before any code.
+- **libui paints the part** — the root panel's fill, and every widget's,
+  cut to the dirty rectangle — and **the dirty area becomes a short list
+  of rectangles**, so two marks far apart paint two parts. Worth more on a
+  page without a moving background than on danlegt.
+- What the instrument says next: scaled frames kept, warps.
 
 Also owed to this slice (PILE3.md): the paused-animation test, "throttle,
 not freeze", and the frame-timing switch.

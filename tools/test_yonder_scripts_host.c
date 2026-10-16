@@ -411,13 +411,18 @@ static bool script_land(const char *tail, const char *source) {
 /* Reached from the doorbell's other bits, which no case rings. */
 int64_t os64_thread_join(int32_t handle, int64_t *retval) { (void)handle; (void)retval; return -1; }
 void os64_ui_settings_pump(os64_ui_settings_t *dialog) { (void)dialog; check(false,"no settings relay"); }
+/* A moving picture a case plays (picture_tick_cases): its frame, and how
+ * many times it was advanced. No other case has one. */
+struct os64_image_sequence { os64_image_frame_t frame; uint32_t nexts; };
 os64_image_status_t os64_image_sequence_next(os64_image_sequence_t *seq) {
-    (void)seq; check(false,"no moving picture"); return OS64_IMAGE_OK;
+    if(seq==NULL) { check(false,"no moving picture"); return OS64_IMAGE_OK; }
+    seq->nexts++; return OS64_IMAGE_OK;
 }
 void os64_image_free(os64_image_t *image) { os64_free(image->pixels); memset(image,0,sizeof(*image)); }
 void os64_image_sequence_free(os64_image_sequence_t *sequence) { check(sequence==NULL,"no unexpected moving image"); }
 const os64_image_frame_t *os64_image_sequence_frame(const os64_image_sequence_t *sequence) {
-    (void)sequence; check(false,"unexpected animation read"); return NULL;
+    if(sequence==NULL) { check(false,"unexpected animation read"); return NULL; }
+    return &sequence->frame;
 }
 /* A file a case serves (open_local), or none. */
 static const char *slurp_path, *slurp_bytes;
@@ -4099,6 +4104,69 @@ static void diag_css_unasked_case(void) {
 
 /* A last picture that moves the page is written for after the page is laid
  * out again, so the record says what that layout came to. */
+/* The ticks of moving pictures (YONDER_PERF.md): one pass over the page
+ * answers and marks what asking each picture apart does, for every kind
+ * of place a picture is shown; a tick advances the pictures due and on
+ * screen; and a frame's next deadline lands on the grid, so two pictures
+ * of one delay share their ticks. */
+static void picture_tick_cases(void) {
+    static struct os64_image_sequence fakes[8];
+    probe_page("<!doctype html><style>body{margin:0;background:url(d.gif)}"
+               "#c{width:50px;height:30px;background:url(c.gif)}</style>"
+               "<img src=a.gif width=20 height=20><div id=c></div>"
+               "<table background=e.gif width=40 height=20><tr><td>x</td></tr></table>"
+               "<div style='height:3000px'></div><img src=b.gif width=20 height=20>",false);
+    pictures_start(&g.page);
+    css_pictures(&g.page);
+    check(g.page.npics==5 && g.page.npics<=8,"picture ticks: five pictures, in every kind of place");
+    for(int32_t k=0;k<g.page.npics && k<8;k++) {
+        memset(&fakes[k],0,sizeof(fakes[k]));
+        fakes[k].frame.delay_ms=100; fakes[k].frame.width=fakes[k].frame.height=1;
+        g.page.pics[k].state=PIC_SHOWN; g.page.pics[k].moving=&fakes[k];
+        g.page.pics[k].playing=true; g.page.pics[k].due=1000;
+    }
+    bool seen[8], mark[8];
+    pictures_seen(seen,NULL);
+    bool same=true, offscreen=false;
+    for(int32_t k=0;k<g.page.npics;k++) {
+        same=same && seen[k]==picture_on_screen(k,false);
+        if(strstr(g.page.pics[k].url,"b.gif")!=NULL) offscreen=!seen[k];
+    }
+    check(same && offscreen,"picture ticks: one pass answers what asking each picture apart does");
+    bool marks_same=true;
+    for(int32_t k=0;k<g.page.npics;k++) {
+        memset(mark,0,sizeof(mark)); mark[k]=true;
+        g.ui.any_dirty=false; g.ui.dirty=(os64_gui_rect_t){0,0,0,0};
+        pictures_seen(seen,mark);
+        bool any1=g.ui.any_dirty; os64_gui_rect_t d1=g.ui.dirty;
+        g.ui.any_dirty=false; g.ui.dirty=(os64_gui_rect_t){0,0,0,0};
+        (void)picture_on_screen(k,true);
+        marks_same=marks_same && any1==g.ui.any_dirty && (!any1 || (d1.x==g.ui.dirty.x && d1.y==g.ui.dirty.y &&
+                   d1.w==g.ui.dirty.w && d1.h==g.ui.dirty.h));
+    }
+    check(marks_same,"picture ticks: one pass marks what asking each picture apart marks");
+    /* Due at two moments a few milliseconds apart, both advanced by the
+     * tick after; then both due on the grid, together. */
+    int32_t a=-1, c=-1, b=-1;
+    for(int32_t k=0;k<g.page.npics;k++) {
+        if(strstr(g.page.pics[k].url,"a.gif")) a=k;
+        if(strstr(g.page.pics[k].url,"c.gif")) c=k;
+        if(strstr(g.page.pics[k].url,"b.gif")) b=k;
+    }
+    g.page.pics[a].due=1003; g.page.pics[c].due=1007;
+    now_ms=1008;
+    pictures_tick();
+    check(fakes[a].nexts==1 && fakes[c].nexts==1 && fakes[b].nexts==0,
+          "picture ticks: a tick advances the pictures due and on screen, not one scrolled away");
+    check(g.page.pics[a].due==1110 && g.page.pics[c].due==1110,
+          "picture ticks: the next frames are due on the grid, together");
+    check(frame_due(&g.page.pics[a],1004)==1100 && frame_due(&g.page.pics[a],1006)==1110,
+          "picture ticks: a deadline goes to the nearest point of the grid");
+    for(int32_t k=0;k<g.page.npics;k++) { g.page.pics[k].moving=NULL; g.page.pics[k].playing=false; }
+    now_ms=0;
+    probe_drop();
+}
+
 static void diag_picture_moves_case(void) {
     probe_page("<img src=file:///grows.png>",true);
     pictures_start(&g.page);
@@ -4415,12 +4483,16 @@ static void paint_cost_cases(void) {
     /* Two paints of 12 ms each in render at a counter of 1000 a microsecond. */
     s_cost.from_cycles=cycles()-1000000000ull;
     s_cost.from_us=os64_micros()-1000000;
-    s_cost.paints=2; s_cost.whole=1; s_cost.pixels=3000000; s_cost.ticks=4;
+    s_cost.paints=2; s_cost.whole=1; s_cost.pixels=3000000; s_cost.ticks=4; s_cost.schedules=5;
+    s_cost.waited=250000000ull;      /* a quarter of the span asleep */
+    s_cost.total[PS_SCHEDULE]=5000000;
     s_cost.total[PS_RENDER]=24000000; s_cost.most[PS_RENDER]=13000000;
     s_cost.total[PS_VIEW]=20000000; s_cost.total[PS_TEXT]=4000000; s_cost.total[PS_TICKS]=8000000;
     diag_paint(&g.page);
     yonder_diag_render(g.page.diag,rec,sizeof(rec));
-    check(strstr(rec,"\npaint: 2 paints in 1.0 s (1 whole views), 3.0 Mpx of the view; 4 ticks\n")!=NULL &&
+    check(strstr(rec,"\npaint: 2 paints in 1.0 s (1 whole views), 3.0 Mpx of the view; 4 ticks, 5 schedules; "
+                     "the main loop busy 75%\n")!=NULL &&
+          strstr(rec,", schedule (a call) 1.0 (0.0)")!=NULL &&
           strstr(rec,"paint stages: ms a paint (most): render 12.0 (13.0), view 10.0 (0.0)")!=NULL &&
           strstr(rec,", text 2.0 (0.0)")!=NULL && strstr(rec,", ticks (a tick) 2.0 (0.0)")!=NULL &&
           strstr(rec,"; window 2.0, the view's rest 8.0\n")!=NULL,
@@ -5697,6 +5769,7 @@ static void diag_cases(void) {
     diag_picture_unasked_case();
     diag_css_unasked_case();
     diag_lost_distinct_case();
+    picture_tick_cases();
     diag_fact_short_case();
     diag_lost_overflow_case();
     diag_arriving_released_case();
