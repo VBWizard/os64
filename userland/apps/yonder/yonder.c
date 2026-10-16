@@ -847,7 +847,9 @@ static void page_show(Page *p, flow_tree_t *tree)
 // before layout work on its old Page so stale meaning cannot get new geometry.
 // A staged Page borrows the shown one's timeline, so its tree keeps the
 // animations it built until script_rebuild publishes it.
-static bool page_lay_out(Page *p, int32_t width, int32_t height, uint32_t zoom, Page *reclaim)
+static bool page_lay_out(Page *p, int32_t width, int32_t height, uint32_t zoom, Page *reclaim);
+
+static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zoom, Page *reclaim)
 {
     if (page_rebuild_owed(p))
         return false;
@@ -1631,16 +1633,19 @@ static void diag_cascade(yonder_diag_t *d, const garb_cascade_t *c)
 // handing the damage to the compositor. TICKS is a tick's work before its
 // paint, SCHEDULE handing the ticker its next deadline (pictures_schedule),
 // counted a call — a tick's own schedule is in its time as well as here —
-// and TASKS the shown page's script tasks, a script or a timer each, with
-// what they ask of the page after (script_turn), counted a task.
+// TASKS the shown page's script tasks, a script or a timer each, with what
+// they ask of the page after (script_turn), counted a task, and LAYOUTS
+// every layout made (page_lay_out: the shown page's, a rebuild's, a
+// measurement's), counted a layout — a task's own layouts are in its time
+// as well as here.
 typedef enum {
     PS_RENDER, PS_VIEW, PS_BACKGROUNDS, PS_PICTURES, PS_TEXT, PS_GROUPS, PS_SHADOWS, PS_GRADIENTS,
-    PS_WARPS, PS_PUBLISH, PS_TICKS, PS_SCHEDULE, PS_TASKS, PS_COUNT
+    PS_WARPS, PS_PUBLISH, PS_TICKS, PS_SCHEDULE, PS_TASKS, PS_LAYOUTS, PS_COUNT
 } PaintStage;
 
 static const char *const kPaintStage[PS_COUNT] = {
     "render", "view", "backgrounds", "pictures", "text", "groups", "shadows", "gradients",
-    "warps", "publish", "ticks", "schedule", "tasks",
+    "warps", "publish", "ticks", "schedule", "tasks", "layouts",
 };
 
 // The deadlines a schedule hands the ticker, by where the next came from:
@@ -1665,7 +1670,7 @@ static const char *const kPastDeadline[PAST_COUNT] = {
 static struct {
     uint64_t now[PS_COUNT], total[PS_COUNT], most[PS_COUNT], began[PS_COUNT];
     uint32_t depth[PS_COUNT];
-    uint64_t paints, whole, pixels, ticks, schedules, waited, scripts, timers;
+    uint64_t paints, whole, pixels, ticks, schedules, waited, scripts, timers, layouts;
     uint64_t bells, past[PAST_COUNT];       // the ticker's rings; deadlines handed it already past
     uint64_t from_wakes;                    // the ticker's looks when the counts began
     uint64_t from_cycles;
@@ -1712,6 +1717,17 @@ static void cost_reset(void)
     s_cost.from_cycles = cycles();
     s_cost.from_us = os64_micros();
     s_cost.from_wakes = yonder_ticker_wakes(g.ticker);
+}
+
+// A layout, timed (s_cost): page_lay_out_run is the layout itself.
+static bool page_lay_out(Page *p, int32_t width, int32_t height, uint32_t zoom, Page *reclaim)
+{
+    cost_begin(PS_LAYOUTS);
+    bool laid = page_lay_out_run(p, width, height, zoom, reclaim);
+    cost_end(PS_LAYOUTS);
+    s_cost.layouts++;
+    cost_fold(PS_LAYOUTS, PS_LAYOUTS);
+    return laid;
 }
 
 static void cost_painter(yonder_paint_stage_t stage, bool begin)
@@ -4656,6 +4672,7 @@ static bool paint_lines(DiagText *t, DiagText *u)
            (unsigned long)s_cost.whole, (unsigned long)(s_cost.pixels / 1000000),
            (unsigned long)(s_cost.pixels / 100000 % 10), (unsigned long)s_cost.ticks,
            (unsigned long)s_cost.schedules, (unsigned long)busy);
+    dt_put(t, "; %lu layouts", (unsigned long)s_cost.layouts);
     dt_put(t, "; %lu script tasks: %lu scripts, %lu timers", (unsigned long)(s_cost.scripts + s_cost.timers),
            (unsigned long)s_cost.scripts, (unsigned long)s_cost.timers);
 
@@ -4673,11 +4690,12 @@ static bool paint_lines(DiagText *t, DiagText *u)
     dt_put(u, "ms a paint (most):");
     for (int32_t s = 0; s < PS_COUNT; s++) {
         uint64_t n = s == PS_TICKS ? s_cost.ticks : s == PS_SCHEDULE ? s_cost.schedules
-                   : s == PS_TASKS ? s_cost.scripts + s_cost.timers : s_cost.paints;
+                   : s == PS_TASKS ? s_cost.scripts + s_cost.timers : s == PS_LAYOUTS ? s_cost.layouts
+                   : s_cost.paints;
         uint64_t avg = n > 0 ? s_cost.total[s] / n / per : 0, most = s_cost.most[s] / per;
         dt_put(u, "%s %s %lu.%lu (%lu.%lu)", s ? "," : "",
                s == PS_TICKS ? "ticks (a tick)" : s == PS_SCHEDULE ? "schedule (a call)"
-               : s == PS_TASKS ? "tasks (a task)" : kPaintStage[s],
+               : s == PS_TASKS ? "tasks (a task)" : s == PS_LAYOUTS ? "layouts (a layout)" : kPaintStage[s],
                (unsigned long)(avg / 10), (unsigned long)(avg % 10), (unsigned long)(most / 10),
                (unsigned long)(most % 10));
     }

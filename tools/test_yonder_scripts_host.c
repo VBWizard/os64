@@ -4481,6 +4481,9 @@ static void paint_cost_cases(void) {
     yonder_diag_render(g.page.diag,rec,sizeof(rec));
     check(strstr(rec,"\npaint: nothing painted since the counts began\n")!=NULL && strstr(rec,"paint stages")==NULL,
           "paint counts: nothing painted says so");
+    check(lay_out_page(&g.page,800,600) && s_cost.layouts==1 && s_cost.total[PS_LAYOUTS]>0,
+          "paint counts: a layout is counted, and timed");
+    cost_reset();
     /* Two paints of 12 ms each in render at a counter of 1000 a microsecond. */
     s_cost.from_cycles=cycles()-1000000000ull;
     s_cost.from_us=os64_micros()-1000000;
@@ -4492,7 +4495,7 @@ static void paint_cost_cases(void) {
     diag_paint(&g.page);
     yonder_diag_render(g.page.diag,rec,sizeof(rec));
     check(strstr(rec,"\npaint: 2 paints in 1.0 s (1 whole views), 3.0 Mpx of the view; 4 ticks, 5 schedules; "
-                     "the main loop busy 75%; 0 script tasks: 0 scripts, 0 timers; 0 bells, the ticker woke 0 times; deadlines already past when handed to it: settle 0, "
+                     "the main loop busy 75%; 0 layouts; 0 script tasks: 0 scripts, 0 timers; 0 bells, the ticker woke 0 times; deadlines already past when handed to it: settle 0, "
                      "layouts 0, ticks 0, arrival 0, stream 0, timers 0, pictures 0\n")!=NULL &&
           strstr(rec,", schedule (a call) 1.0 (0.0)")!=NULL &&
           strstr(rec,"paint stages: ms a paint (most): render 12.0 (13.0), view 10.0 (0.0)")!=NULL &&
