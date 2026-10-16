@@ -107,9 +107,9 @@ big = synth([(b'aaaa', bytes(range(256)) * 8192)])
 w = woff(big, store={b'aaaa'})     # 2 MiB as stored: 64 to 1 allows 128 MiB
 struct.pack_into('>I', w, 16, (64 << 20) + 4)
 status('an SFNT past 64 MiB within 64 to 1', w, 'past the size limits')
-many = synth([(struct.pack('>I', i), b'\x01\x02\x03\x04') for i in range(4096)])
+many = synth([(struct.pack('>I', i), b'\x01\x02\x03\x04') for i in range(1, 4097)])
 status('4096 tables, past the 16-bit search fields', woff(many), 'malformed container')
-status('4095 tables, the most', woff(synth([(struct.pack('>I', i), b'\x01\x02\x03\x04') for i in range(4095)])), 'ok')
+status('4095 tables, the most', woff(synth([(struct.pack('>I', i), b'\x01\x02\x03\x04') for i in range(1, 4096)])), 'ok')
 for flavor in (b'ttcf', b'wOFF', b'wOF2'):
     w = woff(mono)
     w[4:8] = flavor
@@ -127,13 +127,24 @@ w = woff(mono) + b'\0\0\0\0'
 struct.pack_into('>I', w, 8, len(w))
 status('bytes after the last part', w, 'malformed container')
 w = woff(mono)
-struct.pack_into('>I', w, 28, 4)
+struct.pack_into('>II', w, 28, 4, 4)
 status('a metadata length with no offset', w, 'malformed container')
 w = woff(mono)
 struct.pack_into('>I', w, 40, 4)
 status('a private length with no offset', w, 'malformed container')
+w = woff(synth([(b'aaaa', b'')]))
+struct.pack_into('>I', w, 44 + 12, 8000)      # nothing stored, 8000 claimed:
+struct.pack_into('>I', w, 16, 12 + 16 + 8000)  # past 64 to 1 if read on
+status('a container that is its directory alone', w, 'malformed container')
+status('an SFNT that is its directory alone', woff(synth([(b'aaaa', b''), (b'bbbb', b'')]), meta=b'<m/>'),
+       'malformed container')
+w = woff(mono, meta=b'<metadata/>')
+struct.pack_into('>I', w, 32, 0)
+status('metadata unpacking to nothing', w, 'malformed container')
+status('a first tag of zero', woff(synth([(b'\0\0\0\0', b'1234'), (b'bbbb', b'5678')])), 'malformed container')
 print('WOFF unwrap: misalignment, a stream with bytes after it, overlap, 64 MiB, 4096 tables, '
-      'a collection or container flavor, a gap, trailing bytes and lengths with no offset, each alone')
+      'a collection or container flavor, a gap, trailing bytes, lengths with no offset, either file '
+      'its directory alone, metadata from nothing and a zero first tag, each alone')
 
 # Each field broken in turn, each to the status it must give.
 base = woff((fixtures / 'DejaVuSansMono.ttf').read_bytes(), meta=b'<metadata/>')

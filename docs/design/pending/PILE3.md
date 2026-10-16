@@ -2314,7 +2314,9 @@ container round it lives privately in libpng.
 ### How it is built
 
 **The faces (libgarb).** `@font-face` is read whole into the cascade:
-the family; `src` as a list of `url()` with its `format()` hint, or
+the family, any length; `src` as a list of `url()` with its `format()`
+hint — `format()` read whole, one of its keywords or the older list of
+strings, the first the hint, anything else dropping the source — or
 `local()` with its name; `font-weight` as a range, fractions kept
 (matching does not round), `font-style` (normal, italic, oblique with
 up to two angles), `unicode-range` as a list of ranges (read
@@ -2327,9 +2329,11 @@ earlier one still serves when a later fails to load or lacks the
 character. `font-display` is read and has no effect (below).
 `garb_cascade_font_faces` hands them out in order. A page keeps at most
 256 faces — the census's most is 135 (YouTube; median 7) — and they
-cost tens of bytes each, fetched or not; one a failed allocation would
-leave half-read is dropped whole and counted lost. `GARB_SKIP_FONT`
-still counts each face's family until S9a2, where the resolver fetches
+cost tens of bytes each, fetched or not; every rule after them is
+counted lost unread, so a page cannot spend the cascade's arena on faces
+it will not keep; one a failed allocation would leave half-read is
+dropped whole and counted lost. `GARB_SKIP_FONT` still counts the family
+each rule before the cap names, from the same read, until S9a2, where the resolver fetches
 faces and says `MISSING font` itself of a family no face serves.
 
 **Which face (yonder's resolver).** The resolver is asked for a family
@@ -2408,7 +2412,9 @@ libos64 — pure, host-tested) makes the SFNT back, and keeps the rules of
 the FreeType module it stands in for
 (`sfwoff.c`) — a plain font's flavor, never a collection's or another
 container's; at most 0xFFF tables, what the SFNT's 16-bit search fields
-can say; tags ascending; and the file nothing but its parts, each table
+can say; neither file its directory alone; no block length without an
+offset, and no metadata unpacking to nothing; tags ascending from above
+zero; and the file nothing but its parts, each table
 where the last one's padding ended, then the metadata, then the private
 block, the file ending where the last part does — and an SFNT over 64 MiB or an expansion past 64 to 1
 refused (FreeType's `656cb77`, which UPSTREAM_REVIEW lists as "module
@@ -2498,12 +2504,14 @@ serve nothing else, draw their faces — S9b's page uses the preset.
 ### Proof
 
 libgarb's corpus: `@font-face` read whole — `src` lists of `url()`,
-`format()` hints and `local()` in every spelling, weight ranges and
+`format()` hints and `local()` in every spelling, `format()` written
+wrong every way, names past 256 bytes, weight ranges and
 keywords and fractions, the three styles and oblique's angles,
 `unicode-range` in single points, ranges and wildcards (`U+4??`), a
 generic family's name and a CSS-wide keyword refused, a rule inside
 `@media` that holds and one that does not, a composite's rules all kept
-in order, the 257th face passed over, and each allocation failed alone and then with every one after it
+in order, the 257th face passed over and a rule past the cap costing
+nothing however long, and each allocation failed alone and then with every one after it
 leaving every face whole or counted lost. yonder's host: the matching table of Fonts 4 § 5.2 against the
 faces it is handed (DejaVu's own files served as page faces), a
 character outside every range drawn in the next face, a face fetched

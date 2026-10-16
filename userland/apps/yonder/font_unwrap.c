@@ -95,13 +95,17 @@ yonder_font_status_t yonder_font_unwrap_woff(const uint8_t *woff, size_t len, ui
     uint32_t priv_offset = be32(woff + 36), priv_length = be32(woff + 40);
     // The flavor is the font inside: a plain one, never a collection or
     // another container. More than 0xFFF tables is past what the SFNT's
-    // 16-bit search fields can say. A block with no offset has no length.
+    // 16-bit search fields can say. Neither file is its directory alone.
+    // A block with no offset has no length, and metadata packed from
+    // nothing is none.
     uint8_t flavor_bytes[4] = {(uint8_t)(flavor >> 24), (uint8_t)(flavor >> 16), (uint8_t)(flavor >> 8),
                                (uint8_t)flavor};
     if (length != len || ntables == 0 || ntables > 0xFFF || reserved != 0 ||
         yonder_font_sniff(flavor_bytes, 4) != YONDER_FONT_SFNT ||
-        WOFF_HEADER + (uint64_t)WOFF_ENTRY * ntables > len ||
+        WOFF_HEADER + (uint64_t)WOFF_ENTRY * ntables >= len ||
+        SFNT_HEADER + (uint64_t)SFNT_ENTRY * ntables >= total ||
         (meta_offset == 0 && (meta_length != 0 || meta_orig != 0)) ||
+        (meta_length != 0 && meta_orig == 0) ||
         (priv_offset == 0 && priv_length != 0))
         return YONDER_FONT_MALFORMED;
     if (total > YONDER_FONT_SFNT_MAX || (uint64_t)total > (uint64_t)YONDER_FONT_EXPANSION_MAX * len)
@@ -114,14 +118,14 @@ yonder_font_status_t yonder_font_unwrap_woff(const uint8_t *woff, size_t len, ui
         os64_free(order);
         return YONDER_FONT_NO_MEMORY;
     }
-    // The directory: tags ascending, and no table longer packed than
-    // unpacked; the SFNT it makes as long as the header says.
+    // The directory: tags ascending from above zero, and no table longer
+    // packed than unpacked; the SFNT it makes as long as the header says.
     yonder_font_status_t st = YONDER_FONT_OK;
     uint64_t need = SFNT_HEADER + (uint64_t)SFNT_ENTRY * ntables;
     for (uint16_t i = 0; i < ntables && st == YONDER_FONT_OK; i++) {
         const uint8_t *e = woff + WOFF_HEADER + (size_t)WOFF_ENTRY * i;
         t[i] = (Table){be32(e), be32(e + 4), be32(e + 8), be32(e + 12), be32(e + 16)};
-        if ((i > 0 && t[i].tag <= t[i - 1].tag) || t[i].comp > t[i].orig)
+        if (t[i].tag <= (i > 0 ? t[i - 1].tag : 0) || t[i].comp > t[i].orig)
             st = YONDER_FONT_MALFORMED;
         need += ((uint64_t)t[i].orig + 3) & ~(uint64_t)3;
     }

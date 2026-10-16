@@ -138,8 +138,9 @@ void garb_cascade_free(garb_cascade_t *c);
 // One `@font-face` rule (Fonts 4 § 4), read whole: the family it names; its
 // sources in order — a url() as written, resolved by whoever fetches it
 // against the sheet the rule was written in (`sheet`, an index into
-// garb_cascade's sheets), with its format() hint (the first one, as
-// written, or NULL) — or a local() family name; the weights it covers, 1
+// garb_cascade's sheets), with its format() hint (one format keyword, or
+// the first of a list of strings, as written; NULL with no format()) — or
+// a local() family name, any length; the weights it covers, 1
 // to 1000 as written, fractions and all (one weight is a range of one);
 // its style; and the code points
 // it covers, as inclusive ranges, NULL and 0 for all of them. A source
@@ -174,8 +175,9 @@ typedef struct {
 // with the same weights, style and ranges among them: they make one
 // composite face, the later tried first (Fonts 4 § 4.5.1), so an earlier
 // one still serves when a later fails. At most GARB_FONT_FACES_MAX are
-// kept, the rest counted in `lost` (may be NULL), as is one memory ran
-// out for, which is dropped whole — and which the cascade also says
+// kept; every `@font-face` rule after them is counted in `lost` (may be
+// NULL) unread, face or not. So is a face memory ran out for, which is
+// dropped whole — and which the cascade also says
 // (garb_cascade_incomplete). Answers how many and points `out` at them,
 // which live as long as the cascade.
 #define GARB_FONT_FACES_MAX 256
@@ -184,7 +186,7 @@ int32_t garb_cascade_font_faces(const garb_cascade_t *c, const garb_font_face_t 
 // What the build passed over because this library does not read it — a
 // property it has no reader for, an at-rule it does not keep, a function
 // no reader accepts in a declaration it dropped, the family of an
-// @font-face (no face is fetched), and a VALUE: `<property>: <words>` for
+// @font-face before the faces' cap (no face is fetched), and a VALUE: `<property>: <words>` for
 // a declaration of a property it reads, dropped though its value is bare
 // words, or read and laid out as something else (an approximation) — each
 // name once, lower case, with how often it was met. A prefixed name

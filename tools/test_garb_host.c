@@ -1287,6 +1287,47 @@ static int faces_cap(void)
     return ok ? 0 : 1;
 }
 
+// What a cascade allocates for GARB_FONT_FACES_MAX small faces and then
+// one rule of `extra` sources.
+static size_t faces_past_cap_cost(int extra)
+{
+    size_t cap = (size_t)GARB_FONT_FACES_MAX * 64 + (size_t)extra * 16 + 128, len = 0;
+    char *text = malloc(cap);
+    for (int i = 0; i < GARB_FONT_FACES_MAX; i++)
+        len += (size_t)snprintf(text + len, cap - len, "@font-face{font-family:f%d;src:url(a%d)}", i, i);
+    len += (size_t)snprintf(text + len, cap - len, "@font-face{font-family:late;src:url(z)");
+    for (int i = 0; i < extra; i++)
+        len += (size_t)snprintf(text + len, cap - len, ",url(z%d)", i);
+    len += (size_t)snprintf(text + len, cap - len, "}");
+    static const char kPage[] = "<!doctype html><p>x";
+    os64_html_options_t opt = os64_html_options_default();
+    os64_html_parser_t *hp = os64_html_parser_new(&opt);
+    os64_html_parser_feed(hp, kPage, sizeof(kPage) - 1);
+    os64_html_document_t *doc = os64_html_parser_finish(hp);
+    garb_parsed_t r;
+    fail_at = 0;
+    (void)garb_parse_sheet_text(text, len, &r);
+    garb_sheet_in_t in = {.sheet = &r};
+    allocations = 0;
+    garb_cascade_free(garb_cascade(&in, 1, doc, (garb_env_t){.width = 800, .height = 600}));
+    size_t cost = allocations;
+    garb_free(&r);
+    os64_html_document_free(doc);
+    free(text);
+    return cost;
+}
+
+// A rule past the cap costs the cascade nothing however long it is: it is
+// counted, not read.
+static int faces_past_cap(void)
+{
+    size_t small = faces_past_cap_cost(0), large = faces_past_cap_cost(2000);
+    bool ok = small == large;
+    printf("libgarb faces: a rule past the cap costs %zu allocations with 1 source and %zu with 2001%s\n",
+           small, large, ok ? "" : " - FAILED");
+    return ok ? 0 : 1;
+}
+
 // The faces with each allocation failing alone: a face is kept whole —
 // every one of its sources — or counted lost, never kept in part.
 static int faces_sweep(void)
@@ -1381,7 +1422,7 @@ int main(int argc, char **argv)
     if (argc == 2 && strcmp(argv[1], "--keyframes-scale") == 0)
         return keyframes_scale();
     if (argc == 2 && strcmp(argv[1], "--faces-cap") == 0)
-        return faces_cap() | faces_sweep();
+        return faces_cap() | faces_past_cap() | faces_sweep();
     if (argc == 3 && strcmp(argv[1], "--cost") == 0)
         return cost((size_t)strtoul(argv[2], NULL, 10), false);
     if (argc == 2 && strcmp(argv[1], "--full") == 0)

@@ -416,25 +416,6 @@ static bool only_words(const garb_value_t *v, int32_t n)
     return any;
 }
 
-// An @font-face rule's family: the face a page asked for and did not get.
-static void skipped_face(garb_cascade_t *c, garb_parsed_t *owner, const garb_rule_t *r)
-{
-    garb_item_t *items;
-    int32_t n;
-    if (!r->has_block || !garb_items_of(owner, r->block, r->nblock, &items, &n))
-        return;
-    for (int32_t i = 0; i < n; i++) {
-        const garb_decl_t *d = &items[i].decl;
-        if (items[i].kind != GARB_ITEM_DECL || !ieq(d->name, d->len, "font-family"))
-            continue;
-        for (int32_t k = 0; k < d->nvalue; k++)
-            if (d->value[k].kind == GARB_STRING || d->value[k].kind == GARB_IDENT) {
-                skipped(c, GARB_SKIP_FONT, d->value[k].text, d->value[k].len);
-                return;
-            }
-    }
-}
-
 // ── @font-face (Fonts 4 § 4) ────────────────────────────────────────────
 
 // `text` copied into the cascade's arena, NUL after it; NULL on no memory.
@@ -457,35 +438,76 @@ static void trim(const garb_value_t *v, int32_t *i, int32_t *n)
 
 // A <family-name> in [i, n): one string, or identifiers joined by single
 // spaces — not one identifier that is a generic family's keyword or a
-// CSS-wide one, which name no face.
-// Into `out` (cap bytes): its length, or -1.
-static int32_t family_name(const garb_value_t *v, int32_t i, int32_t n, char *out, int32_t cap)
+// CSS-wide one, which name no face. Copied into the arena at its own
+// length, `*len` set: NULL for a name written wrong, or memory refused.
+static const char *family_name(garb_cascade_t *c, const garb_value_t *v, int32_t i, int32_t n, size_t *len)
 {
     trim(v, &i, &n);
     if (i >= n)
-        return -1;
-    if (v[i].kind == GARB_STRING)
-        return i + 1 == n && (int32_t)v[i].len < cap
-                   ? (os64_memcpy(out, v[i].text, v[i].len), (int32_t)v[i].len) : -1;
+        return NULL;
+    if (v[i].kind == GARB_STRING) {
+        *len = v[i].len;
+        return i + 1 == n ? copy_text(c, v[i].text, v[i].len) : NULL;
+    }
     static const char *const kReserved[] = {"inherit", "initial", "unset", "revert", "revert-layer",
                                             "default", NULL};
-    int32_t len = 0, words = 0;
+    size_t need = 0;
+    int32_t words = 0, first = i;
+    for (int32_t k = i; k < n; k++) {
+        if (v[k].kind == GARB_WHITESPACE)
+            continue;
+        if (v[k].kind != GARB_IDENT)
+            return NULL;
+        need += (words++ > 0) + v[k].len;
+    }
+    if (words == 1 && garb_generic_family(v[first].text, v[first].len))
+        return NULL;
+    for (int k = 0; words == 1 && kReserved[k] != NULL; k++)
+        if (ieq(v[first].text, v[first].len, kReserved[k]))
+            return NULL;
+    char *out = alloc(c, need + 1);
+    if (out == NULL)
+        return NULL;
+    size_t at = 0;
+    for (int32_t k = i; k < n; k++) {
+        if (v[k].kind == GARB_WHITESPACE)
+            continue;
+        if (at > 0)
+            out[at++] = ' ';
+        os64_memcpy(out + at, v[k].text, v[k].len);
+        at += v[k].len;
+    }
+    *len = need;
+    return out;
+}
+
+// format()'s argument, whole (Fonts 4 § 4.3): one of the format keywords,
+// or strings separated by commas — the older grammar pages still write.
+// Its first value, the hint; NULL for anything else.
+static const garb_value_t *format_hint(const garb_value_t *v, int32_t n)
+{
+    static const char *const kFormats[] = {"collection", "embedded-opentype", "opentype", "svg",
+                                           "truetype", "woff", "woff2", NULL};
+    int32_t i = 0;
+    trim(v, &i, &n);
+    if (i + 1 == n && v[i].kind == GARB_IDENT) {
+        for (int k = 0; kFormats[k] != NULL; k++)
+            if (ieq(v[i].text, v[i].len, kFormats[k]))
+                return &v[i];
+        return NULL;
+    }
+    const garb_value_t *first = NULL;
+    bool want_string = true;
     for (; i < n; i++) {
         if (v[i].kind == GARB_WHITESPACE)
             continue;
-        if (v[i].kind != GARB_IDENT || len + (int32_t)v[i].len + 1 >= cap)
-            return -1;
-        if (words++ > 0)
-            out[len++] = ' ';
-        os64_memcpy(out + len, v[i].text, v[i].len);
-        len += (int32_t)v[i].len;
+        if (want_string ? v[i].kind != GARB_STRING : v[i].kind != GARB_COMMA)
+            return NULL;
+        if (first == NULL)
+            first = &v[i];
+        want_string = !want_string;
     }
-    if (words == 1 && garb_generic_family(out, (size_t)len))
-        return -1;
-    for (int k = 0; words == 1 && kReserved[k] != NULL; k++)
-        if (ieq(out, (size_t)len, kReserved[k]))
-            return -1;
-    return len;
+    return want_string ? NULL : first;
 }
 
 // One `src` entry in [i, n): url() [format()] — tech() drops it — or
@@ -498,13 +520,10 @@ static bool face_src(garb_cascade_t *c, const garb_value_t *v, int32_t i, int32_
     os64_memset(out, 0, sizeof(*out));
     const garb_value_t *first = &v[i];
     if (first->kind == GARB_FUNCTION && ieq(first->text, first->len, "local")) {
-        char name[256];
-        int32_t len = family_name(first->children, 0, first->nchildren, name, (int32_t)sizeof(name));
-        if (len < 0 || i + 1 != n)
+        if (i + 1 != n)
             return false;
         out->kind = GARB_FACE_LOCAL;
-        out->text = copy_text(c, name, (size_t)len);
-        out->len = (size_t)len;
+        out->text = family_name(c, first->children, 0, first->nchildren, &out->len);
         return out->text != NULL;
     }
     out->kind = GARB_FACE_URL;
@@ -530,12 +549,11 @@ static bool face_src(garb_cascade_t *c, const garb_value_t *v, int32_t i, int32_
             return false;
         if (!ieq(v[i].text, v[i].len, "format") || out->format != NULL)
             return false;
-        int32_t a = 0, b = v[i].nchildren;
-        trim(v[i].children, &a, &b);
-        if (a >= b || (v[i].children[a].kind != GARB_STRING && v[i].children[a].kind != GARB_IDENT))
+        const garb_value_t *hint = format_hint(v[i].children, v[i].nchildren);
+        if (hint == NULL)
             return false;
-        out->format = copy_text(c, v[i].children[a].text, v[i].children[a].len);
-        out->format_len = v[i].children[a].len;
+        out->format = copy_text(c, hint->text, hint->len);
+        out->format_len = hint->len;
         if (out->format == NULL)
             return false;
     }
@@ -740,6 +758,11 @@ static void add_face(garb_cascade_t *c, garb_parsed_t *owner, const garb_rule_t 
     int32_t n;
     if (!r->has_block)
         return;
+    // Past the cap, a rule is counted and nothing of it read or kept.
+    if (c->nfaces == GARB_FONT_FACES_MAX) {
+        c->faces_lost++;
+        return;
+    }
     if (!garb_items_of(owner, r->block, r->nblock, &items, &n)) {
         c->incomplete = true;
         c->faces_lost++;
@@ -752,11 +775,10 @@ static void add_face(garb_cascade_t *c, garb_parsed_t *owner, const garb_rule_t 
         if (items[i].kind != GARB_ITEM_DECL)
             continue;
         if (ieq(d->name, d->len, "font-family")) {
-            char name[256];
-            int32_t len = family_name(d->value, 0, d->nvalue, name, (int32_t)sizeof(name));
-            const char *copy = len >= 0 ? copy_text(c, name, (size_t)len) : NULL;
-            if (copy != NULL)
-                face.family = copy, face.family_len = (size_t)len;
+            size_t len;
+            const char *name = family_name(c, d->value, 0, d->nvalue, &len);
+            if (name != NULL)
+                face.family = name, face.family_len = len;
         } else if (ieq(d->name, d->len, "src")) {
             int32_t most = 1;
             for (int32_t k = 0; k < d->nvalue; k++)
@@ -779,14 +801,16 @@ static void add_face(garb_cascade_t *c, garb_parsed_t *owner, const garb_rule_t 
                 face.ranges = ranges, face.nranges = got;
         }
     }
+    // The family the page asked for and does not get yet (GARB_SKIP_FONT).
+    if (face.family != NULL)
+        skipped(c, GARB_SKIP_FONT, face.family, face.family_len);
     if (c->allocs_failed != failed) {
         c->faces_lost++;
         return;
     }
     if (face.family == NULL || face.nsrc == 0)
         return;
-    if (c->nfaces == GARB_FONT_FACES_MAX ||
-        !grow(c, (void **)&c->faces, c->nfaces, &c->facecap, sizeof(garb_font_face_t))) {
+    if (!grow(c, (void **)&c->faces, c->nfaces, &c->facecap, sizeof(garb_font_face_t))) {
         c->faces_lost++;
         return;
     }
@@ -1065,10 +1089,8 @@ static void add_rules(garb_cascade_t *c, garb_parsed_t *owner, const garb_item_t
                    : at(r, "layer") && r->has_block;
         // What is read elsewhere is not passed over: @import's sheet is the
         // face's, @charset was the decoder's.
-        if (at(r, "font-face")) {
-            skipped_face(c, owner, r);
+        if (at(r, "font-face"))
             add_face(c, owner, r, sheet);
-        }
         else if (at(r, "keyframes") || at(r, "-webkit-keyframes"))
             add_keyframes(c, owner, r, sheet);
         else if (!at(r, "media") && !at(r, "supports") && !at(r, "layer") && !at(r, "import") &&
