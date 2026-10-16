@@ -2530,7 +2530,8 @@ provider matching its families' own names; **S9a3** yonder's — the
 resolver, the running set, fetch, the worker's unwrap, the open (a
 face's other sizes from the context's one copy,
 `os64_text_font_open_like`), the relayout, `GARB_SKIP_FONT` retired;
-and **S9a4** the diagnostics page file's fonts section (BROWSER_DEBTS). **S9b** — WOFF2:
+and **S9a4** the diagnostics page file's fonts section
+(YONDER_DIAGNOSTICS.md § The page's fonts), Chris's ask of 10/15. **S9b** — WOFF2:
 Brotli vendored and pinned, the port's patch, the backend's verb, the
 audit rows walked again; then the Chrome preset, and the 24 hosts that
 serve nothing else, draw their faces — S9b's page uses the preset.

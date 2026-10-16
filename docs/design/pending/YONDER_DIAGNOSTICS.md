@@ -23,7 +23,7 @@ them ranks what to build first.
 - One file per page load: `<host>-<seq>.txt`, the sequence per run,
   zero-padded to four digits so `ls` sorts in browse order. The first
   line carries the full address; the name only has to be findable.
-- Written when the page arrives, again when its last picture is in, and
+- Written when the page arrives, again when its last picture and font are in, and
   when it is left (navigation, reload, close), because the asks keep coming after load: timers,
   clicks, a script that dies on hover. The departure write is complete.
   Write a temp beside it and rename over, the `os64_conf_write` shape.
@@ -155,6 +155,123 @@ Reload, so this is the departure write):
     sheets: 1, 1 ready
     script file:///tests/pages/diag.html#timer-1: failed
 
+### The page's fonts (S9a4, PILE3.md § Web fonts)
+
+A page with `@font-face` rules, or one whose layout asked for a family,
+gets plain lines for its fonts at every write, after `sheets:`:
+
+    fonts: 3 faces (0 past the most a page keeps), 2 files: 1 open, 1 failed, 0 coming
+    font face 1: Web 400 normal: https://site/w.woff listed (WOFF, 34120 bytes)
+    font face 2: Body 400 italic U+0-7F: format(woff2) not read: b.woff2; https://site/b.ttf failed; https://site/c.ttf coming
+    font face 3: Cjk 400 normal U+4E00-9FFF: not needed: its range is not in the page's text
+    font family Web: the page's faces
+    font family Body: the page's faces, none in the list, which begins with DejaVu Serif
+    font family Arial: no face; the list begins with DejaVu Serif
+    font family DejaVu Sans Mono: a system family
+
+- **A face line walks its sources in order** up to the one the face is
+  drawn from — every one of them when no file of the face's is kept (not
+  asked for yet, never asked for, or each failed) — whole however long (only its ranges past the first 64 are
+  counted, `and 4033 more`, not spelled). An open file says `listed` (the
+  container and the bytes that came) when the face was in a list the
+  layout of the tree on screen gave text — the text context then draws
+  each glyph from the first font in the list that has it, so a listed
+  face may draw none — or `came` with why it was not: `not listed since
+  it came` before a layout has met it, a size refused for room or refused
+  to open, or no text asked for it (the file may be another face's that
+  shares it). Then `coming`, `came …, held for room to open` (the open
+  waits for the room the tree on screen holds), `failed` (the reason is
+  the file's `FAILED font` line — one the page's table of files had no
+  room to keep among them), a `format()` or `local()` passed over, `not
+  asked for yet` on a page whose tree on screen was laid out before it was
+  shown (a page is laid out in its faces once it is) or for a source after
+  one that failed since that layout (the next layout asks for it; a
+  failed layout's held files fail without asking for one, so as not to
+  lay the page out again at every batch), or `never asked
+  for`: no text asked for its family, or the lists it was in had no place
+  left for it (PILE3.md § Web fonts). A face that is passed over whatever
+  its file says only that, in place of its sources: `not needed` when its
+  ranges miss the page's text as it is at the write, `passed over` with
+  the count when it has more ranges than a text font takes. A file
+  several faces name is one file, and each face says how IT fared. The
+  `fonts:` line counts files by their state — `open` is opened, not drawn
+  — and says when more families were asked for than the 512 the record
+  keeps, or when some were not kept for want of memory: the two are told
+  apart. The section is written whole at each write, so a face a script's
+  rebuild took away goes with it.
+- **A family line is what the layout of the tree on screen found** for a
+  family name it was asked, the best any of its runs found (a name one run
+  listed a face of is the page's faces) — a layout that fails leaves the
+  lines of the one still shown, and a name the page no longer asks for
+  goes: the page's faces, the page's faces with none in the list yet, a
+  system family by that name, or nothing — and the font the run's list
+  begins with (the text context draws each glyph from the first font in
+  the list that has it, so this is where the text starts looking, a page
+  face the list puts first included). A page's arrival write has the families its layout asked for
+  before it was shown. A page draws in none of its own faces until then,
+  so a name they answer is the page's faces with none in the list there,
+  and not MISSING; the layout on screen that follows says what they serve.
+  A page let go before it was shown (its layout failed, or the navigation
+  was abandoned) writes its fonts section from its own rules and the
+  families its layout staged, with their MISSING lines — never from the
+  files the page on screen fetched.
+- The records: `FAILED font: <address>: <why>` for a file that did not
+  fetch, unwrap or open, or that the page's table of files could not keep,
+  and `MISSING font <family>` for a family with neither a page face nor a
+  system family, its count the most lookups one layout made for it (each
+  run of text in it, each time a list names it).
+- **The second write waits for the last picture AND the last font**, and,
+  as for pictures, for the layout a face that arrived owes (`written: when
+  its pictures and fonts were in`) — and for anything that layout wanted
+  in turn, a failed face's next source. A font that fails with no job to
+  come back (no worker, a job the pool would not take, a held file
+  refused again) owes the write too. The departure write is made before
+  the page's fonts are let go, so it names them too.
+
+#### The fonts record's state, and when each part is true
+
+Written after six review rounds had each found a part of this the slice
+had not decided. Each cell is a promise the code keeps, and each is
+checked against the code before a review is asked for.
+
+**Which moment the record describes: the tree on screen.** Nothing a
+layout finds reaches the record before its tree is shown. Faces' use and
+families are what the layout that made the shown tree found; files are
+the shown page's, as they stand; a face's range is met against the
+page's text as it is at the write.
+
+| State | Begun | Changed | Made the record's | On a failed layout | Let go |
+|---|---|---|---|---|---|
+| Files (`s_web.files`) | a shown layout wants a face's source | fetch, hold, open, fail | as they stand, at every write | the files it wanted stay asked for | with the shown page (`webfonts_leave`, after the departure write) |
+| Faces' use (`face_laying`) | every layout of the shown document (`webfonts_layout_begins`), whether or not its text asks for a font | each lookup of that layout | when its tree is shown (`page_show`) | the record keeps the tree on screen's | with the shown page |
+| Families (`s_web.laying`) | as faces' use | each lookup: the best answer of the layout's runs, and its MISSING count; a name past the table, or with no memory, only flags it, as does a lookup that ran short before it could answer | with faces' use, MISSING lines written then and the badge told | as faces' use | with the shown page |
+| An arriving page's families (`s_arriving`) | every layout of a page not yet shown that has a record | each lookup | at arrival (`arrive_now`), MISSING lines written then | its next layout begins them again | adopted, or written with the departure of a page let go unshown and freed with its record (`diag_leave`) |
+| The characters (`s_web.chars`) | asked for by a lookup or a write | — | keyed by document, version and layout | — | rebuilt for whichever page asks |
+
+**The writes.** Arrival: the adopted families, faces with no source asked
+for yet. The second write: once nothing is out and the page is laid out
+again — owed by the last picture or font in, by a font failure, and by
+arrival itself for a page with faces, whose first layout on screen may
+ask for no file at all. Departure: everything, before the fonts are let go. A page let go
+unshown: its own rules and its staged families, never the shown page's
+files.
+
+**Caps: every one is said when it is passed.** Faces past 256 a page
+keeps (the `fonts:` line counts them); files past 512 (a `FAILED font`
+line); families past 512, or with no memory to keep (the `fonts:` line
+says which, and that those names have no line here, a missing one
+included — nothing about a layout reaches the record before its tree is
+shown, so a name the census could not keep is written nowhere rather than
+early); a table's 512 lines
+(`not kept: N`); lost lines past the 4,096 the record can tell apart
+(`, and more not counted`); a face's ranges past 64 (`and N more`).
+
+**Short of memory, the record is best effort, and says when it is.**
+What it writes is true; where memory ran out it says that something was
+not kept — on the line it could not finish, or on its own line when it
+could not even name what went — without promising to say which. Counts
+stay exact while memory lasts and are marked as floors once it does not.
+
 ### Built differently from the brief, and why
 
 - **The sequence continues across runs.** A per-run sequence restarts at
@@ -228,7 +345,15 @@ Reload, so this is the departure write):
   source name, so it gets a script line only when it fails.
 - **A table holds 512 distinct lines.** Past that, the rest are counted on
   a plain line (`missing names not kept: 3`) in words that are neither
-  token.
+  token — each line once, however often it is asked for (a condition
+  looked at each layout, a section written again whole), until room is
+  found for it. Past 4,096 such lines, or with no memory to keep one's
+  key, a line cannot be told from one counted already, so the count stands
+  and the line says `, and more not counted`; a line that could not even
+  be named for want of memory is said on its own line (`some lines not
+  kept: no memory to name them`). A plain line whose latest value had no
+  memory to keep says `no memory to write this line` rather than standing
+  empty or keeping the value before it.
 - **A failed write is said once a run**, in the log and on the status
   line. A `diagnostics` that is not a full path is logged and ignored.
 

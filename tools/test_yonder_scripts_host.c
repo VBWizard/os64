@@ -166,6 +166,9 @@ void yonder_ticker_set(yonder_ticker_t *ticker, uint64_t due) { (void)ticker; ti
 static bool pool_open;
 static os64_work_t pool_work;
 static os64_work_id_t pool_ids, pool_cancelled;
+/* The id the one held job (pool_work) was given: other jobs draw ids from
+ * the same count, so the newest id need not be its. */
+static os64_work_id_t pool_work_id;
 static int64_t pool_error;
 static int pool_fake;
 /* A cancelled job is the pool's to release (work.h), and the window never
@@ -219,7 +222,7 @@ void os64_work_cancel(os64_work_pool_t *pool, os64_work_id_t id) {
         os64_free(font_jobs[i].job); font_jobs[i]=font_jobs[--nfont_jobs]; font_cancels++; return;
     }
     pool_cancelled=id;
-    if(id==pool_ids && pool_work.job!=NULL) {
+    if(id==pool_work_id && pool_work.job!=NULL) {
         pool_work.release(pool_work.job,NULL); memset(&pool_work,0,sizeof(pool_work));
     }
 }
@@ -242,7 +245,7 @@ os64_work_id_t os64_work_submit(os64_work_pool_t *pool, const os64_work_t *work)
         font_jobs[nfont_jobs].id=++pool_ids; font_jobs[nfont_jobs].job=work->job;
         return font_jobs[nfont_jobs++].id;
     }
-    pool_work=*work; return ++pool_ids;
+    pool_work=*work; pool_work_id=++pool_ids; return pool_work_id;
 }
 bool os64_work_reap(os64_work_pool_t *pool, os64_work_id_t *id, int64_t *verdict, void **job,
                     void **product) {
@@ -1941,7 +1944,7 @@ static void stream_window(void) {
     g.view.bounds=(os64_gui_rect_t){0,0,800,600};
     s_env.text=probe_text; s_env.fonts=probe_fonts; s_env.replaced_size=replaced_size;
     g.pool=(os64_work_pool_t *)&pool_fake;
-    pool_open=true; pool_ids=0; pool_cancelled=0; pool_error=0; memset(&pool_work,0,sizeof(pool_work));
+    pool_open=true; pool_ids=0; pool_work_id=0; pool_cancelled=0; pool_error=0; memset(&pool_work,0,sizeof(pool_work));
 }
 static void stream_window_drop(void) {
     pool_open=false;
@@ -3846,7 +3849,7 @@ static void diag_picture_case(void) {
     check(has(webp_record,"MISSING image webp (1)") &&
           has(webp_record,"picture file:///animation.webp: webp, animated"),
           "diag: unsupported WebP keeps both the format census and animation reason");
-    check(g.page.waiting==0 && has(file,"\nwritten: when its pictures were in\n") &&
+    check(g.page.waiting==0 && has(file,"\nwritten: when its pictures and fonts were in\n") &&
         has(file,"\npictures: 5, 0 shown, 5 could not be read, 0 past the memory kept, 0 still coming, 0 not asked for\n") &&
         has(file,"FAILED picture: file:///absent.png"),
         "diag: the last picture in rewrites the file, every failure named");
@@ -3906,7 +3909,7 @@ static void diag_picture_workerless_case(void) {
     char name[64]; yonder_diag_file_name(g.page.diag,name,sizeof(name));
     const char *file=diag_file("/tmp/diag",name);
     check(g.page.pics[0].state==PIC_FAILED && g.page.pics[1].state==PIC_FAILED && g.page.waiting==0 &&
-          has(file,"\nwritten: when its pictures were in\n") &&
+          has(file,"\nwritten: when its pictures and fonts were in\n") &&
           has(file,"FAILED picture: file:///one.png: no worker to fetch it (1)") &&
           has(file,"FAILED picture: file:///two.png: no worker to fetch it (1)") &&
           !strcmp(g.badge_text,"FAILED 2"),
@@ -3991,6 +3994,87 @@ static void diag_picture_unasked_case(void) {
 
 /* A sheet's background in a scheme nothing fetches is refused before the
  * table too, and on the record. */
+/* A line that met no room is counted once, however often it is asked
+ * for: a condition looked at each layout, a section written again whole. */
+static void diag_lost_distinct_case(void) {
+    yonder_diag_t *d=yonder_diag_new("http://fixture.test/",1,0);
+    static char text[131072];
+    char key[32];
+    for(int i=0;i<YONDER_DIAG_FACTS_MAX;i++) { snprintf(key,sizeof(key),"fact %d",i); yonder_diag_fact(d,key,"x"); }
+    for(int i=0;i<YONDER_DIAG_RECORDS_MAX;i++) { snprintf(key,sizeof(key),"n%d",i); yonder_diag_missing_seen(d,"font",key,1); }
+    for(int round=0;round<3;round++) {
+        yonder_diag_fact(d,"font face 1","one");
+        yonder_diag_fact(d,"font face 2","two");
+        yonder_diag_missing_seen(d,"font","late",1);
+        yonder_diag_forget(d,"font ");
+    }
+    yonder_diag_fact(d,"font face 1","one");
+    yonder_diag_render(d,text,sizeof(text));
+    check(strstr(text,"\nfacts not kept: 1\n")!=NULL && strstr(text,"\nmissing names not kept: 1\n")!=NULL,
+          "diag: a line that met no room is counted once, however often it is asked for");
+    yonder_diag_forget(d,"fact 1");
+    yonder_diag_fact(d,"font face 1","one");
+    yonder_diag_render(d,text,sizeof(text));
+    check(strstr(text,"\nfont face 1: one\n")!=NULL && strstr(text,"facts not kept")==NULL,
+          "diag: a line given room after all is no longer counted as not kept");
+    yonder_diag_free(d);
+}
+/* Past the lines the record can tell apart, it says there are more and
+ * never counts one twice. */
+static void diag_lost_overflow_case(void) {
+    yonder_diag_t *d=yonder_diag_new("http://fixture.test/",1,0);
+    static char text[262144], once[256];
+    char key[32];
+    for(int i=0;i<YONDER_DIAG_FACTS_MAX;i++) { snprintf(key,sizeof(key),"fact %d",i); yonder_diag_fact(d,key,"x"); }
+    for(int i=0;i<5000;i++) { snprintf(key,sizeof(key),"lost %d",i); yonder_diag_fact(d,key,"x"); }
+    yonder_diag_render(d,text,sizeof(text));
+    const char *line=strstr(text,"\nfacts not kept: ");
+    snprintf(once,sizeof(once),"%.60s",line!=NULL ? line : "");
+    yonder_diag_fact(d,"lost 4999","x");
+    yonder_diag_fact(d,"lost 7",  "x");
+    yonder_diag_render(d,text,sizeof(text));
+    check(strstr(text,"\nfacts not kept: 4096, and more not counted\n")!=NULL && strstr(text,once)!=NULL,
+          "diag: past the lines it can tell apart, the record says there are more and counts none twice");
+    yonder_diag_free(d);
+}
+/* A page let go before it was shown takes the families staged for it. */
+static void diag_arriving_released_case(void) {
+    static Page p;
+    memset(&p,0,sizeof(p));
+    p.diag=yonder_diag_new("http://fixture.test/",77,0);
+    s_arriving.staged=true; s_arriving.seq=yonder_diag_seq(p.diag);
+    webfonts_served(&s_arriving.families,"Staged",6,WF_SERVED_NONE,"Test Sans");
+    diag_leave(&p);
+    check(!s_arriving.staged && s_arriving.families.n==0 && s_arriving.families.f==NULL,
+          "diag: a page let go before it was shown takes its staged families with it");
+}
+/* A fact whose value had no memory to keep says so: not empty, and not
+ * the value before it standing as if it were this one. */
+static void diag_fact_short_case(void) {
+    yonder_diag_t *d=yonder_diag_new("http://fixture.test/",1,0);
+    static char text[8192];
+    yonder_diag_fact(d,"kept","first");
+    fail_at=attempts+1;
+    yonder_diag_fact(d,"kept","second");
+    fail_at=0;
+    yonder_diag_render(d,text,sizeof(text));
+    check(strstr(text,"\nkept: no memory to write this line\n")!=NULL,"diag: a value with no memory to keep is said to be gone");
+    yonder_diag_fact(d,"kept","third");
+    yonder_diag_render(d,text,sizeof(text));
+    check(strstr(text,"\nkept: third\n")!=NULL,"diag: and the next value that fits is the line again");
+    unsigned empty=0;
+    for(size_t cut=1;cut<=6;cut++) {
+        char key[16]; snprintf(key,sizeof(key),"new%u",(unsigned)cut);
+        fail_at=attempts+cut;
+        yonder_diag_fact(d,key,"value");
+        fail_at=0;
+        yonder_diag_render(d,text,sizeof(text));
+        char empty_line[32]; snprintf(empty_line,sizeof(empty_line),"\n%s: \n",key);
+        empty+=strstr(text,empty_line)!=NULL;
+    }
+    check(empty==0,"diag: a new fact short of memory is never an empty line");
+    yonder_diag_free(d);
+}
 static void diag_css_unasked_case(void) {
     /* A page whose only picture is refused before the table: nothing will
      * ever come in to write the record, so meeting it writes it. */
@@ -4027,10 +4111,10 @@ static void diag_picture_moves_case(void) {
     got->status=OS64_IMAGE_OK;
     reaped(0,job,got);
     char name[64]; yonder_diag_file_name(g.page.diag,name,sizeof(name));
-    check(g.page.record_owed && !has(diag_file("/tmp/diag",name),"when its pictures were in"),
+    check(g.page.record_owed && !has(diag_file("/tmp/diag",name),"when its pictures and fonts were in"),
         "diag: the last picture that moves the page waits for its layout to be written");
     pictures_settle();
-    check(!g.page.record_owed && has(diag_file("/tmp/diag",name),"\nwritten: when its pictures were in\n"),
+    check(!g.page.record_owed && has(diag_file("/tmp/diag",name),"\nwritten: when its pictures and fonts were in\n"),
         "diag: once the page is laid out again, the record is written");
     /* The workers stopping after such a picture waits for the layout too. */
     g.page.pics[0].state=PIC_WAITING; g.page.waiting=g.page.in_flight=1;
@@ -4268,7 +4352,7 @@ static bool font_land(const char *tail, const char *bytes, const char *why) {
         font_jobs[i]=font_jobs[--nfont_jobs];
         yonder_webfont_t *got=os64_calloc(1,sizeof(*got));
         if(bytes!=NULL) {
-            got->ok=true; got->len=strlen(bytes); got->sfnt=os64_malloc(got->len);
+            got->ok=true; got->len=got->got=strlen(bytes); got->sfnt=os64_malloc(got->len);
             memcpy(got->sfnt,bytes,got->len); got->container=YONDER_FONT_SFNT; got->fetched=true;
         } else {
             os64_strcopy(got->why,sizeof(got->why),why);
@@ -4341,7 +4425,201 @@ static void webfont_cases(void) {
           "web fonts: the page is laid out again in the face, named twice and listed once");
     yonder_diag_render(g.page.diag,record,sizeof(record));
     check(strstr(record,"MISSING font")==NULL,"web fonts: a family a face serves is not missing");
+    diag_fonts(&g.page);
+    yonder_diag_render(g.page.diag,record,sizeof(record));
+    check(strstr(record,"\nfonts: 1 faces (0 past the most a page keeps), 1 files: 1 open, 0 failed, 0 coming\n")!=NULL &&
+          strstr(record,"\nfont face 1: Web 400 normal: https://fixture.test/fonts/web.ttf listed (SFNT, 1 bytes)\n")!=NULL &&
+          strstr(record,"\nfont family Web: the page's faces\n")!=NULL,
+          "web fonts: the record says each face, its file, and what served the family");
     web_drop();
+    /* The file is written again when the last font is in, as when the
+     * last picture is: after the layout that font moved. */
+    fake_reset();
+    memset(&s_diag,0,sizeof(s_diag)); s_diag.next=1;
+    snprintf(saved_diagnostics,sizeof(saved_diagnostics),"/tmp/diag");
+    check(diag_dir_open()==NULL,"web fonts: the record has a directory");
+    web_page("<style>@font-face{font-family:Web;src:url(gone.ttf)}p{font-family:Web}</style><p>hello");
+    {
+        char name[64]; yonder_diag_file_name(g.page.diag,name,sizeof(name));
+        check(!has(diag_file("/tmp/diag",name),"FAILED font"),"web fonts: no file while a font is out");
+        check(font_land("gone.ttf",NULL,"HTTP 404") && g.page.record_owed && !has(diag_file("/tmp/diag",name),"FAILED font"),
+              "web fonts: the last font in owes the record until the page is laid out again");
+        pictures_settle();
+        const char *file=diag_file("/tmp/diag",name);
+        check(!g.page.record_owed && has(file,"\nwritten: when its pictures and fonts were in\n") &&
+              has(file,"FAILED font: https://fixture.test/gone.ttf: HTTP 404") &&
+              has(file,"\nfont face 1: Web 400 normal: https://fixture.test/gone.ttf failed\n"),
+              "web fonts: then the file names the font that failed");
+    }
+    web_drop();
+    /* A face's next source, wanted by the layout after its first failed,
+     * is waited for too: the file is not written while it is out. */
+    fake_reset();
+    check(diag_dir_open()==NULL,"web fonts: next source: the record has a directory");
+    web_page("<style>@font-face{font-family:Web;src:url(a.ttf),url(b.ttf)}p{font-family:Web}</style><p>hello");
+    {
+        char name[64]; yonder_diag_file_name(g.page.diag,name,sizeof(name));
+        check(font_land("a.ttf",NULL,"HTTP 404"),"web fonts: next source: the first fails");
+        pictures_settle();
+        check(s_web.waiting==1 && g.page.record_owed && !has(diag_file("/tmp/diag",name),"when its pictures and fonts were in"),
+              "web fonts: next source: the record waits for the source the layout wanted");
+        check(font_land("b.ttf","A",NULL),"web fonts: next source: it arrives");
+        pictures_settle();
+        const char *file=diag_file("/tmp/diag",name);
+        check(!g.page.record_owed && has(file,"\nwritten: when its pictures and fonts were in\n") &&
+              has(file,"https://fixture.test/b.ttf listed (SFNT, 1 bytes)\n"),
+              "web fonts: next source: then the file says what it came to");
+    }
+    web_drop();
+    /* A font the pool will not take fails as the layout's feed meets it,
+     * with no job to come back: the record is owed all the same. */
+    fake_reset();
+    check(diag_dir_open()==NULL,"web fonts: refused job: the record has a directory");
+    font_refuse=true;
+    web_page("<style>@font-face{font-family:Web;src:url(r.ttf)}p{font-family:Web}</style><p>hello");
+    font_refuse=false;
+    {
+        char name[64]; yonder_diag_file_name(g.page.diag,name,sizeof(name));
+        check(s_web.waiting==0 && g.page.record_owed && !has(diag_file("/tmp/diag",name),"when its pictures and fonts were in"),
+              "web fonts: refused job: the record is owed until the page is laid out again");
+        pictures_settle();
+        const char *file=diag_file("/tmp/diag",name);
+        check(!g.page.record_owed && has(file,"\nwritten: when its pictures and fonts were in\n") &&
+              has(file,"FAILED font: https://fixture.test/r.ttf: the workers would not take it"),
+              "web fonts: refused job: then the file names it");
+    }
+    web_drop();
+    /* A page arriving with no faces of its own has its families on the
+     * record it arrives with: it is not laid out again to learn them. */
+    fake_reset();
+    check(diag_dir_open()==NULL,"web fonts: arrival: the record has a directory");
+    probe_web=true;
+    loop_page("<style>p{font-family:Nope,'test serif'}</style><p>hello</p>");
+    check(loop_settle() && g.page.tree!=NULL,"web fonts: arrival: the page arrives");
+    {
+        char name[64]; yonder_diag_file_name(g.page.diag,name,sizeof(name));
+        const char *file=diag_file("/tmp/diag",name);
+        check(has(file,"\nwritten: when the page arrived\n") && has(file,"\nfont family Nope: no face; the list begins with ") &&
+              has(file,"\nfont family test serif: a system family\n") && has(file,"\nMISSING font Nope"),
+              "web fonts: arrival: the families it asked for are on its first write");
+    }
+    while(nfont_jobs>0) os64_free(font_jobs[--nfont_jobs].job);
+    loop_drop();
+    probe_web=false;
+    fake_reset();
+    /* An arriving page's families are its latest layout's: one an
+     * earlier layout of it found is not on its first write. */
+    check(diag_dir_open()==NULL,"web fonts: arrival, own answers: the record has a directory");
+    probe_web=true;
+    s_arriving.staged=true; s_arriving.seq=s_diag.next;
+    webfonts_served(&s_arriving.families,"Stale",5,WF_SERVED_NONE,"Test Sans");
+    loop_page("<style>p{font-family:Nope}</style><p>hello</p>");
+    check(loop_settle() && g.page.tree!=NULL,"web fonts: arrival, own answers: the page arrives");
+    {
+        char name[64]; yonder_diag_file_name(g.page.diag,name,sizeof(name));
+        const char *file=diag_file("/tmp/diag",name);
+        check(has(file,"\nfont family Nope: ") && !has(file,"font family Stale"),
+              "web fonts: arrival: the families are the arriving page's latest layout's");
+    }
+    while(nfont_jobs>0) os64_free(font_jobs[--nfont_jobs].job);
+    loop_drop();
+    probe_web=false;
+    fake_reset();
+    /* A page arriving with faces draws in none of them until it is shown:
+     * a name they answer is theirs on the arrival write, none in the
+     * list, and not missing. */
+    check(diag_dir_open()==NULL,"web fonts: arrival with faces: the record has a directory");
+    probe_web=true;
+    loop_page("<style>@font-face{font-family:Web;src:url(w.ttf)}p{font-family:Web,Nope}</style><p>hello</p>");
+    check(loop_settle() && g.page.tree!=NULL,"web fonts: arrival with faces: the page arrives");
+    {
+        char name[64]; yonder_diag_file_name(g.page.diag,name,sizeof(name));
+        const char *file=diag_file("/tmp/diag",name);
+        check(has(file,"\nwritten: when the page arrived\n") &&
+              has(file,"\nfont family Web: the page's faces, none in the list, which begins with ") &&
+              !has(file,"MISSING font Web") && has(file,"\nMISSING font Nope"),
+              "web fonts: arrival with faces: a name its faces answer is theirs on its first write");
+    }
+    while(nfont_jobs>0) os64_free(font_jobs[--nfont_jobs].job);
+    loop_drop();
+    probe_web=false;
+    fake_reset();
+    /* A page with faces is owed the write after its first layout on
+     * screen, even when that layout asks for no file whose coming would
+     * write it; and a face drawn from no source says every one. */
+    check(diag_dir_open()==NULL,"web fonts: first layout owed: the record has a directory");
+    probe_web=true;
+    loop_page("<style>@font-face{font-family:Unused;src:url(u1.ttf),url(u2.ttf)}</style><p>hello</p>");
+    check(loop_settle() && g.page.tree!=NULL,"web fonts: first layout owed: the page arrives");
+    {
+        char name[64]; yonder_diag_file_name(g.page.diag,name,sizeof(name));
+        check(has(diag_file("/tmp/diag",name),"u1.ttf not asked for yet: a page is laid out in its faces once it is shown; "
+                                              "http://fixture.test/u2.ttf not asked for yet"),
+              "web fonts: on the arrival write, a face drawn from no source says every one");
+        pictures_settle();
+        const char *file=diag_file("/tmp/diag",name);
+        check(g.page.record_owed==false && has(file,"\nwritten: when its pictures and fonts were in\n") &&
+              has(file,"u1.ttf never asked for: no text asked for it, or its lists had no place; "
+                       "http://fixture.test/u2.ttf never asked for"),
+              "web fonts: the first layout on screen writes the record, though it asked for no file");
+    }
+    while(nfont_jobs>0) os64_free(font_jobs[--nfont_jobs].job);
+    loop_drop();
+    probe_web=false;
+    fake_reset();
+    /* On the arrival write, a face whose range meets the page's text is
+     * not "not needed", and its source is not asked for yet, not never. */
+    check(diag_dir_open()==NULL,"web fonts: arrival census: the record has a directory");
+    probe_web=true;
+    loop_page("<style>@font-face{font-family:Cjk;src:url(cjk.ttf);unicode-range:U+4E00-9FFF}"
+              "p{font-family:Cjk}</style><p>&#x4E2D;</p>");
+    check(loop_settle() && g.page.tree!=NULL,"web fonts: arrival census: the page arrives");
+    {
+        char name[64]; yonder_diag_file_name(g.page.diag,name,sizeof(name));
+        const char *file=diag_file("/tmp/diag",name);
+        check(has(file,"\nwritten: when the page arrived\n") && !has(file,"not needed") &&
+              has(file,"cjk.ttf not asked for yet: a page is laid out in its faces once it is shown\n"),
+              "web fonts: arrival census: a face whose range meets the text is not yet asked for");
+    }
+    while(nfont_jobs>0) os64_free(font_jobs[--nfont_jobs].job);
+    loop_drop();
+    probe_web=false;
+    fake_reset();
+    saved_diagnostics[0]='\0';
+    memset(&s_diag,0,sizeof(s_diag)); s_diag.next=1;
+    /* The departure write is made before the page's fonts are let go, so
+     * the file a page leaves names them. */
+    fake_reset();
+    memset(&s_diag,0,sizeof(s_diag)); s_diag.next=1;
+    snprintf(saved_diagnostics,sizeof(saved_diagnostics),"/tmp/diag");
+    check(diag_dir_open()==NULL,"web fonts: departure: the record has a directory");
+    probe_web=true;
+    loop_page("<style>@font-face{font-family:Web;src:url(w.ttf)}p{font-family:Web}</style><p>hello</p>");
+    check(loop_settle(),"web fonts: departure: the page arrives");
+    pictures_settle();
+    check(font_land("w.ttf","A",NULL),"web fonts: departure: its face arrives");
+    pictures_settle();
+    {
+        char first[64]; yonder_diag_file_name(g.page.diag,first,sizeof(first));
+        start_trip("http://fixture.test/second",NULL,NAV_GO,NULL);
+        way_head_t h=stream_head("text/html","",false);
+        yonder_mail_post_head(g.stream.mail,&h);
+        const char *body="<!doctype html><p>second</p>";
+        stream_post_body((const uint8_t *)body,strlen(body),YONDER_STREAM_CHUNK);
+        stream_post_verdict(true,OS64_FETCH_OK,"");
+        check(loop_settle() && g.page.tree!=NULL,"web fonts: departure: the next page arrives");
+        const char *file=diag_file("/tmp/diag",first);
+        check(has(file,"\nwritten: when the page was left\n") &&
+              has(file,"\nfont face 1: Web 400 normal: http://fixture.test/w.ttf listed (SFNT, 1 bytes)\n"),
+              "web fonts: the departure write names the fonts of the page it leaves");
+        check(s_web.nfiles==0,"web fonts: and the next page starts with none");
+    }
+    while(nfont_jobs>0) os64_free(font_jobs[--nfont_jobs].job);
+    loop_drop();
+    probe_web=false;
+    fake_reset();
+    saved_diagnostics[0]='\0';
+    memset(&s_diag,0,sizeof(s_diag)); s_diag.next=1;
     /* A face whose range the text does not meet is not fetched; a family
      * with neither a face nor a system face is missing; the system's own
      * name is not. */
@@ -4353,6 +4631,13 @@ static void webfont_cases(void) {
     check(strstr(record,"MISSING font Nope")!=NULL && strstr(record,"MISSING font Cjk")==NULL &&
           strstr(record,"MISSING font test")==NULL,
           "web fonts: MISSING font is a family nothing serves");
+    diag_fonts(&g.page);
+    yonder_diag_render(g.page.diag,record,sizeof(record));
+    check(strstr(record,"\nfont face 1: Cjk 400 normal U+4E00-9FFF: not needed: its range is not in the page's text\n")!=NULL &&
+          strstr(record,"\nfont family Cjk: the page's faces, none in the list, which begins with Test Sans\n")!=NULL &&
+          strstr(record,"\nfont family Nope: no face; the list begins with Test Sans\n")!=NULL &&
+          strstr(record,"\nfont family test serif: a system family\n")!=NULL,
+          "web fonts: the record says a face not needed, and what drew each family");
     web_drop();
     web_page("<style>@font-face{font-family:Cjk;src:url(cjk.ttf);unicode-range:U+4E00-9FFF}"
              "p{font-family:Cjk}</style><p>\xe4\xb8\xad</p>");
@@ -4378,6 +4663,12 @@ static void webfont_cases(void) {
         web_page(big);
         check(s_web.nfiles==(over?0:1),over ? "web fonts: past the ranges a text font takes, a face is not fetched"
                                             : "web fonts: as many ranges as a text font takes, a face is fetched");
+        if(over) {
+            diag_fonts(&g.page);
+            yonder_diag_render(g.page.diag,record,sizeof(record));
+            check(strstr(record,": passed over: 4097 ranges, past the 4096 a font takes\n")!=NULL,
+                  "web fonts: on the record, a face past the ranges says so");
+        }
         web_drop();
     }
     /* A list fetches only the faces it has places for: one coming holds
@@ -4412,6 +4703,26 @@ static void webfont_cases(void) {
         font_like_status=OS64_FONT_LIMIT; font_like_refusals=0;
         check(s_web.nfiles==asked+1 && web_file(next)==asked,
               "web fonts: a size that will not open gives its place to the next face");
+        diag_fonts(&g.page);
+        yonder_diag_render(g.page.diag,record,sizeof(record));
+        check(strstr(record,"\nfont face 1: F0 400 normal: https://fixture.test/f0.ttf listed (SFNT, 1 bytes), "
+                            "but a size that would not open\n")!=NULL,
+              "web fonts: on the record, a face one of whose sizes would not open says so");
+        web_drop();
+        /* Refused for room, it says that instead. */
+        web_page(many);
+        for(int32_t i=0;i<asked;i++) {
+            char tail[24]; snprintf(tail,sizeof(tail),"f%d.ttf",(int)i);
+            while(font_land(tail,"A",NULL)) {}
+        }
+        font_like_refusals=1;
+        pictures_settle();
+        font_like_refusals=0;
+        diag_fonts(&g.page);
+        yonder_diag_render(g.page.diag,record,sizeof(record));
+        check(strstr(record,"\nfont face 1: F0 400 normal: https://fixture.test/f0.ttf listed (SFNT, 1 bytes), "
+                            "but a size refused for room\n")!=NULL,
+              "web fonts: on the record, a face one of whose sizes was refused for room says so");
         web_drop();
     }
     /* A face whose range misses the text takes nothing, even when another
@@ -4422,6 +4733,10 @@ static void webfont_cases(void) {
     check(font_land("s.ttf","A",NULL),"web fonts: shared: the file arrives");
     pictures_settle();
     check(s_web.nhandles==1,"web fonts: a face whose range misses the text is not opened from a shared file");
+    diag_fonts(&g.page);
+    yonder_diag_render(g.page.diag,record,sizeof(record));
+    check(strstr(record,"\nfont face 2: Cjk 400 normal U+4E00-9FFF: not needed: its range is not in the page's text\n")!=NULL,
+          "web fonts: on the record, a face whose range misses is not needed, though its file came");
     web_drop();
     /* The workers stopping fails a file out and lays the page out again
      * for the face's next source. */
@@ -4475,7 +4790,8 @@ static void webfont_cases(void) {
     pictures_settle();
     {
         uint64_t shared=first_text_font();
-        while(webfonts_add("https://fixture.test/filler") >= 0) {
+        const char *why;
+        while(webfonts_add("https://fixture.test/filler",&why) >= 0) {
             s_web.files[s_web.nfiles-1].state=WF_FAILED; s_web.waiting--;
         }
         os64_js_outcome_t out;
@@ -4483,6 +4799,14 @@ static void webfont_cases(void) {
               "web fonts: intern: the text changes family with the table full");
         check(web_file("https://fixture.test/new.ttf")<0 && first_text_font()==shared,
               "web fonts: a source that cannot be interned passes to one already in hand");
+        diag_fonts(&g.page);
+        char rec[8192];
+        yonder_diag_render(g.page.diag,rec,sizeof(rec));
+        check(strstr(rec,"FAILED font: https://fixture.test/new.ttf: past the font files a page keeps")!=NULL &&
+              strstr(rec,"\nfont face 2: W 400 normal: https://fixture.test/new.ttf failed; "
+                         "https://fixture.test/shared.ttf listed (SFNT, 1 bytes)\n")!=NULL &&
+              g.page.record_owed && !strcmp(g.badge_text,"FAILED 1"),
+              "web fonts: on the record, a source the table could not keep failed, and the badge says so");
     }
     web_drop();
     /* A held file whose reclaiming layout fails is failed and let go, not
@@ -4501,6 +4825,66 @@ static void webfont_cases(void) {
         for(size_t i=0;i<n;i++) os64_html_unpin(g.page.way.doc,pins[i]);
     }
     font_open_refusals=0;
+    web_drop();
+    /* A layout that adds a MISSING font tells the badge as it is shown. */
+    web_page_scripted("<style>@font-face{font-family:Web;src:url(w.ttf)}</style><p>a</p>"
+                      "<script>var q=document.createElement('p');q.style.fontFamily='Nope';q.textContent='x';"
+                      "document.body.appendChild(q)</script>",true);
+    check(strstr(g.badge_text,"MISSING")==NULL,"web fonts: badge: nothing missing first");
+    {
+        os64_js_outcome_t out;
+        check(yonder_scripts_step(g.page.scripts,&out) && out.status==OS64_JS_OK,"web fonts: badge: the script adds a family");
+        g.badge_missing=g.badge_failed=0; g.badge_text[0]=0;
+        badge_follow();
+        check(strstr(g.badge_text,"MISSING")==NULL,"web fonts: badge: still nothing missing before the rebuild");
+        check(script_rebuild(),"web fonts: badge: the page is rebuilt");
+    }
+    check(strstr(g.badge_text,"MISSING 1")!=NULL,"web fonts: a layout that adds a MISSING font tells the badge when it is shown");
+    web_drop();
+    /* The face's next source after one that failed since the layout on
+     * screen is not asked for yet: the failed layout asks for nothing, and
+     * the next layout will. */
+    web_page("<style>@font-face{font-family:Web;src:url(w.ttf),url(w2.ttf)}p{font-family:Web}</style><p>hello");
+    font_open_refusals=1;
+    check(font_land("w.ttf","A",NULL) && s_web.files[0].state==WF_HELD,"web fonts: held then failed: held");
+    {
+        os64_html_pin_t pins[512]; size_t n=0;
+        while(n<512 && (pins[n]=os64_html_pin(g.page.way.doc))!=0) n++;
+        pictures_settle();
+        for(size_t i=0;i<n;i++) os64_html_unpin(g.page.way.doc,pins[i]);
+    }
+    font_open_refusals=0;
+    diag_fonts(&g.page);
+    yonder_diag_render(g.page.diag,record,sizeof(record));
+    check(s_web.files[0].state==WF_FAILED &&
+          strstr(record,"w.ttf failed; https://fixture.test/w2.ttf not asked for yet: the source before it failed "
+                        "since the page was laid out\n")!=NULL,
+          "web fonts: on the record, a source after one that failed since the layout is not asked for yet");
+    check(lay_out_page(&g.page,800,600) && web_file("https://fixture.test/w2.ttf")>=0,
+          "web fonts: held then failed: the next layout asks for the next source");
+    web_drop();
+    /* A late failure is not undone by an older one after it: the layout
+     * stopped at the source that failed since, so the sources past every
+     * failure are not asked for yet. */
+    web_page("<style>@font-face{font-family:X;src:url(b.ttf)}@font-face{font-family:Y;src:url(a.ttf),url(b.ttf),url(c.ttf)}"
+             "</style><p style='font-family:X'>x</p><p style='font-family:Y'>y</p>");
+    check(font_land("b.ttf",NULL,"HTTP 404"),"web fonts: sticky: b fails early");
+    pictures_settle();
+    font_open_refusals=1;
+    check(font_land("a.ttf","A",NULL) && s_web.files[web_file("https://fixture.test/a.ttf")].state==WF_HELD,
+          "web fonts: sticky: a is held");
+    {
+        os64_html_pin_t pins[512]; size_t n=0;
+        while(n<512 && (pins[n]=os64_html_pin(g.page.way.doc))!=0) n++;
+        pictures_settle();
+        for(size_t i=0;i<n;i++) os64_html_unpin(g.page.way.doc,pins[i]);
+    }
+    font_open_refusals=0;
+    diag_fonts(&g.page);
+    yonder_diag_render(g.page.diag,record,sizeof(record));
+    check(strstr(record,"a.ttf failed; https://fixture.test/b.ttf failed; https://fixture.test/c.ttf not asked for yet: "
+                        "the source before it failed since the page was laid out\n")!=NULL,
+          "web fonts: on the record, a late failure is not undone by an older one after it");
     web_drop();
     /* A composite whose latest rules cannot serve falls back to an
      * earlier one, past the eight a list keeps. */
@@ -4533,7 +4917,8 @@ static void webfont_cases(void) {
     /* A layout that fails still asks for the files it wanted. */
     web_page("<style>@font-face{font-family:Web;src:url(w.ttf)}p{font-family:Web}</style><p>hello");
     {
-        int32_t late=webfonts_add("https://fixture.test/late.ttf");
+        const char *why;
+        int32_t late=webfonts_add("https://fixture.test/late.ttf",&why);
         os64_html_pin_t pins[512]; size_t n=0;
         while(n<512 && (pins[n]=os64_html_pin(g.page.way.doc))!=0) n++;
         s_web.moved=true;
@@ -4545,7 +4930,8 @@ static void webfont_cases(void) {
     web_page_scripted("<style>@font-face{font-family:Web;src:url(w.ttf)}p{font-family:Web}</style>"
                       "<p id=t>hello</p><script>document.getElementById('t').textContent='changed'</script>",true);
     {
-        int32_t late=webfonts_add("https://fixture.test/late.ttf");
+        const char *why;
+        int32_t late=webfonts_add("https://fixture.test/late.ttf",&why);
         os64_js_outcome_t out;
         check(yonder_scripts_step(g.page.scripts,&out) && out.status==OS64_JS_OK,"web fonts: a script changes the page");
         os64_page_t *model=os64_page_rebuild(page_model(&g.page));
@@ -4558,6 +4944,356 @@ static void webfont_cases(void) {
         for(size_t i=0;i<n;i++) os64_html_unpin(g.page.way.doc,pins[i]);
     }
     web_drop();
+    /* On the record: a face past its list's places was never asked for,
+     * and says why it may not have been. */
+    {
+        char many[2048]; size_t at=0;
+        at+=(size_t)snprintf(many+at,sizeof(many)-at,"<style>");
+        for(int i=0;i<10;i++) at+=(size_t)snprintf(many+at,sizeof(many)-at,"@font-face{font-family:F%d;src:url(f%d.ttf)}",i,i);
+        snprintf(many+at,sizeof(many)-at,"p{font-family:F0,F1,F2,F3,F4,F5,F6,F7,F8,F9}</style><p>hello");
+        web_page(many);
+        diag_fonts(&g.page);
+        yonder_diag_render(g.page.diag,record,sizeof(record));
+        check(strstr(record,"f9.ttf never asked for: no text asked for it, or its lists had no place\n")!=NULL,
+              "web fonts: on the record, a face with no place was never asked for");
+        web_drop();
+    }
+    /* On the record, a family of 509 bytes is whole, and so is the rest of
+     * its line: with its weight it passes 512 by one, where a buffer of
+     * that size would have been written past. */
+    {
+        static char page[4096], fam[700], rec[16384];
+        memset(fam,'x',509); fam[509]=0;
+        snprintf(page,sizeof(page),"<style>@font-face{font-family:'%s';src:url(x.ttf);unicode-range:U+0-FF,U+100-1FF}"
+                 "p{font-family:'%s'}</style><p>hello",fam,fam);
+        web_page(page);
+        diag_fonts(&g.page);
+        yonder_diag_render(g.page.diag,rec,sizeof(rec));
+        static char want[800];
+        snprintf(want,sizeof(want),"\nfont face 1: %s 400 normal U+0-FF,U+100-1FF: https://fixture.test/x.ttf ",fam);
+        check(strstr(rec,want)!=NULL,"web fonts: on the record, a long family is whole on its line, and the line goes on");
+        web_drop();
+    }
+    /* Two faces of one file: the face no text asked for is not listed
+     * because the other's file came. */
+    web_page("<style>@font-face{font-family:A;src:url(s.ttf)}@font-face{font-family:B;src:url(s.ttf)}"
+             "p{font-family:A}</style><p>hello");
+    check(font_land("s.ttf","A",NULL),"web fonts: one file, two faces: it arrives");
+    diag_fonts(&g.page);
+    yonder_diag_render(g.page.diag,record,sizeof(record));
+    check(strstr(record,"\nfont face 1: A 400 normal: https://fixture.test/s.ttf came (SFNT, 1 bytes), not listed since it came\n")!=NULL,
+          "web fonts: on the record, a file not yet laid out in is not listed");
+    pictures_settle();
+    diag_fonts(&g.page);
+    yonder_diag_render(g.page.diag,record,sizeof(record));
+    check(strstr(record,"\nfont face 1: A 400 normal: https://fixture.test/s.ttf listed (SFNT, 1 bytes)\n")!=NULL &&
+          strstr(record,"\nfont face 2: B 400 normal: https://fixture.test/s.ttf came (SFNT, 1 bytes), not listed: "
+                        "no text asked for it, or its lists had no place\n")!=NULL,
+          "web fonts: on the record, a face is listed by its own use, not by its file's");
+    /* The section is written whole: a face line no rule names now goes,
+     * and the faces stay before the families. */
+    yonder_diag_fact(g.page.diag,"font face 9","a rule that is gone");
+    diag_fonts(&g.page);
+    yonder_diag_render(g.page.diag,record,sizeof(record));
+    {
+        const char *face=strstr(record,"\nfont face 1: "), *fam=strstr(record,"\nfont family A: ");
+        check(strstr(record,"font face 9")==NULL && face!=NULL && fam!=NULL && face<fam,
+              "web fonts: on the record, the faces are the cascade's now, before the families");
+    }
+    web_drop();
+    /* Past the families the record keeps, it says some are not on it. */
+    {
+        static char page[32768], rec[262144];
+        size_t at=0;
+        at+=(size_t)snprintf(page+at,sizeof(page)-at,"<style>@font-face{font-family:Web;src:url(w.ttf)}</style>");
+        for(int i=0;i<520;i++) at+=(size_t)snprintf(page+at,sizeof(page)-at,"<p style='font-family:N%d'>a</p>",i);
+        web_page(page);
+        diag_fonts(&g.page);
+        yonder_diag_render(g.page.diag,rec,sizeof(rec));
+        check(strstr(rec,"; more families than the 512 the record keeps, the rest on no line here\n")!=NULL &&
+              strstr(rec,"MISSING font N519")==NULL && strstr(rec,"MISSING font N511")!=NULL,
+              "web fonts: on the record, families past the 512 kept are on no line, and the fonts line says so");
+        web_drop();
+    }
+    /* A family line names the font its run's list begins with: a page
+     * face the list puts first, not the system's family after it. */
+    web_page("<style>@font-face{font-family:A;src:url(a.ttf)}p{font-family:A,Nope}</style><p>hello");
+    /* The fixture's face of byte S is Test Serif; the system's sans is Test Sans. */
+    check(font_land("a.ttf","S",NULL),"web fonts: list begins: the face arrives");
+    pictures_settle();
+    diag_fonts(&g.page);
+    yonder_diag_render(g.page.diag,record,sizeof(record));
+    check(strstr(record,"\nfont family Nope: no face; the list begins with Test Serif\n")!=NULL,
+          "web fonts: on the record, a family line names the font its list begins with");
+    web_drop();
+    /* With memory short anywhere in a layout or a write, the record never
+     * claims the 512 were passed, and every family is on it or said not
+     * to be. */
+    {
+        unsigned short_said=0;
+        for(size_t cut=1;cut<=400;cut++) {
+            web_page("<style>@font-face{font-family:Web;src:url(w.ttf)}</style>"
+                     "<p style='font-family:Aa'>a</p><p style='font-family:Bb'>b</p>");
+            /* A fresh record, so the lines are this layout's alone. */
+            yonder_diag_free(g.page.diag);
+            g.page.diag=yonder_diag_new(g.page.way.url,1,0);
+            fail_at=attempts+cut;
+            bool laid=lay_out_page(&g.page,800,600);
+            diag_fonts(&g.page);
+            fail_at=0;
+            static char rec[16384];
+            yonder_diag_render(g.page.diag,rec,sizeof(rec));
+            bool told=strstr(rec,"not kept")!=NULL;
+            short_said+=strstr(rec,"families not kept: no memory for them")!=NULL ||
+                        strstr(rec,"some lines not kept: no memory to name them")!=NULL;
+            bool missing_told=!laid || (strstr(rec,"MISSING font Aa")!=NULL && strstr(rec,"MISSING font Bb")!=NULL) ||
+                              strstr(rec,"families not kept: no memory for them, nor a line here")!=NULL ||
+                              strstr(rec,"some lines not kept")!=NULL || strstr(rec,"missing names not kept")!=NULL;
+            check(strstr(rec,"more families than")==NULL &&
+                  ((strstr(rec,"\nfont family Aa: ")!=NULL && strstr(rec,"\nfont family Bb: ")!=NULL) || told) &&
+                  missing_told,
+                  "web fonts: short of memory, the record never claims the cap and says what it lost");
+            web_drop();
+        }
+        check(short_said>0,"web fonts: the memory sweep reaches the families' own allocations");
+    }
+    /* A long list whose scratch the resolver had no memory for: if the
+     * layout is shown, the record says its families went. */
+    {
+        static char page[4096];
+        size_t at=0;
+        at+=(size_t)snprintf(page+at,sizeof(page)-at,"<style>");
+        for(int i=0;i<40;i++) at+=(size_t)snprintf(page+at,sizeof(page)-at,"@font-face{font-family:F%d;src:url(f%d.ttf)}",i,i);
+        at+=(size_t)snprintf(page+at,sizeof(page)-at,"p{font-family:F0");
+        for(int i=1;i<40;i++) at+=(size_t)snprintf(page+at,sizeof(page)-at,",F%d",i);
+        snprintf(page+at,sizeof(page)-at,"}</style><p>hello");
+        unsigned silent=0, reached=0;
+        for(size_t cut=1;cut<=300;cut++) {
+            web_page(page);
+            fail_at=attempts+cut;
+            bool laid=lay_out_page(&g.page,800,600);
+            fail_at=0;
+            diag_fonts(&g.page);
+            static char rec[32768];
+            yonder_diag_render(g.page.diag,rec,sizeof(rec));
+            bool told=strstr(rec,"families not kept")!=NULL || strstr(rec,"some lines not kept")!=NULL ||
+                      strstr(rec,"facts not kept")!=NULL;
+            reached+=strstr(rec,"families not kept: no memory for them")!=NULL;
+            silent+=laid && strstr(rec,"\nfont family F39: ")==NULL && !told;
+            web_drop();
+        }
+        check(silent==0 && reached>0,"web fonts: a list's scratch short of memory is said on the record");
+        /* Every lookup's scratch failing through one layout, which goes on
+         * and is shown without the list's answers: the record says so. */
+        web_page(page);
+        fail_size=40*sizeof(os64_font_family_name_t);
+        bool laid=lay_out_page(&g.page,800,600);
+        fail_size=0;
+        diag_fonts(&g.page);
+        static char rec2[32768];
+        yonder_diag_render(g.page.diag,rec2,sizeof(rec2));
+        check(laid && strstr(rec2,"\nfont family F0: ")==NULL &&
+              strstr(rec2,"families not kept: no memory for them, nor a line here")!=NULL,
+              "web fonts: a layout shown without a list's answers says its families went");
+        web_drop();
+    }
+    /* The system's family refused for room through a layout that goes on
+     * and is shown: its families went, and the record says so. */
+    web_page("<style>@font-face{font-family:Web;src:url(w.ttf)}</style><p style='font-family:Nope'>hello</p>");
+    {
+        uint32_t zoom=g.zoom;
+        g.zoom=zoom*2;
+        font_open_refusals=100000;
+        bool laid=lay_out_page(&g.page,800,600);
+        font_open_refusals=0;
+        g.zoom=zoom;
+        diag_fonts(&g.page);
+        yonder_diag_render(g.page.diag,record,sizeof(record));
+        check(laid && strstr(record,"families not kept: no memory for them, nor a line here")!=NULL &&
+              strstr(record,"\nfont family Nope: ")==NULL,
+              "web fonts: the system's family refused for room, a shown layout says its families went");
+    }
+    web_drop();
+    /* A name with no memory to copy it only flags its layout's table:
+     * nothing reaches the record before the layout's tree is shown, and
+     * then the fonts line says families went. */
+    {
+        WebFontFamilies t={0};
+        webfonts_served(&t,"First",5,WF_SERVED_NONE,"Test Sans");
+        fail_at=attempts+1;
+        webfonts_served(&t,"Gone",4,WF_SERVED_NONE,"Test Sans");
+        fail_at=0;
+        check(t.n==1 && t.short_of_memory && !t.full,
+              "web fonts: a family with no memory to keep flags its table, and is not taken for the cap");
+        webfonts_families_free(&t);
+    }
+    /* A page let go before it was shown writes its fonts too: its faces as
+     * its rules declare them, none asked for, whatever the page on screen
+     * fetched, and the families its layout staged, MISSING lines and all. */
+    web_page("<style>@font-face{font-family:Web;src:url(w.ttf)}p{font-family:Web,Nope}</style><p>hello");
+    {
+        static Page fresh;
+        fresh=g.page;
+        memset(&g.page,0,sizeof(g.page));
+        /* Its own record, so its MISSING line is the staged one's. */
+        yonder_diag_free(fresh.diag);
+        fresh.diag=yonder_diag_new("http://fixture.test/fresh",99,0);
+        s_arriving.staged=true; s_arriving.seq=yonder_diag_seq(fresh.diag);
+        webfonts_served(&s_arriving.families,"Nope",4,WF_SERVED_NONE,"Test Sans");
+        diag_observe(&fresh,"when the page was left");
+        static char rec[8192];
+        yonder_diag_render(fresh.diag,rec,sizeof(rec));
+        check(strstr(rec,"\nfonts: 1 faces (0 past the most a page keeps), 0 files: 0 open, 0 failed, 0 coming\n")!=NULL &&
+              strstr(rec,"\nfont face 1: Web 400 normal: https://fixture.test/w.ttf not asked for yet")!=NULL &&
+              strstr(rec,"\nfont family Nope: no face; the list begins with Test Sans\n")!=NULL &&
+              strstr(rec,"MISSING font Nope (1)")!=NULL,
+              "web fonts: a page let go before it was shown writes its own fonts, not the shown page's");
+        webfonts_families_free(&s_arriving.families);
+        memset(&s_arriving,0,sizeof(s_arriving));
+        g.page=fresh;
+    }
+    web_drop();
+    /* A face's range is met against the page's text as it is at the
+     * write, after a script changed it. */
+    web_page_scripted("<style>@font-face{font-family:Cjk;src:url(cjk.ttf);unicode-range:U+4E00-9FFF}"
+                      "p{font-family:Cjk}</style><p id=t>hello</p>"
+                      "<script>document.getElementById('t').textContent='\xe4\xb8\xad'</script>",true);
+    diag_fonts(&g.page);
+    yonder_diag_render(g.page.diag,record,sizeof(record));
+    check(strstr(record,"Cjk 400 normal U+4E00-9FFF: not needed")!=NULL,"web fonts: census at the write: not needed first");
+    {
+        os64_js_outcome_t out;
+        check(yonder_scripts_step(g.page.scripts,&out) && out.status==OS64_JS_OK,"web fonts: census at the write: the text changes");
+    }
+    diag_fonts(&g.page);
+    yonder_diag_render(g.page.diag,record,sizeof(record));
+    check(strstr(record,"Cjk 400 normal U+4E00-9FFF: not needed")==NULL,
+          "web fonts: on the record, a face's range meets the text as it is at the write");
+    web_drop();
+    /* A layout's answers are its own: what a layout that was never shown
+     * found is not the record's at the next. */
+    web_page("<style>@font-face{font-family:Web;src:url(w.ttf)}p{font-family:Web}</style><p>a");
+    webfonts_served(&s_web.laying,"Stale",5,WF_SERVED_NONE,"Test Sans");
+    check(lay_out_page(&g.page,800,600),"web fonts: own answers: the page is laid out again");
+    diag_fonts(&g.page);
+    yonder_diag_render(g.page.diag,record,sizeof(record));
+    check(strstr(record,"\nfont family Stale: ")==NULL && strstr(record,"\nfont family Web: ")!=NULL,
+          "web fonts: on the record, a layout's families are its own");
+    web_drop();
+    /* A name one run lists a face of is the page's faces, whichever runs
+     * came before or after it. */
+    {
+        static char page[4096];
+        size_t at=0;
+        at+=(size_t)snprintf(page+at,sizeof(page)-at,"<style>@font-face{font-family:Web;src:url(w.ttf)}");
+        for(int i=0;i<10;i++) at+=(size_t)snprintf(page+at,sizeof(page)-at,"@font-face{font-family:A%d;src:url(a%d.ttf)}",i,i);
+        at+=(size_t)snprintf(page+at,sizeof(page)-at,"</style><p style='font-family:A0");
+        for(int i=1;i<10;i++) at+=(size_t)snprintf(page+at,sizeof(page)-at,",A%d",i);
+        at+=(size_t)snprintf(page+at,sizeof(page)-at,",Web'>first</p><p style='font-family:Web'>second</p>"
+                             "<p style='font-family:A0");
+        for(int i=1;i<10;i++) at+=(size_t)snprintf(page+at,sizeof(page)-at,",A%d",i);
+        snprintf(page+at,sizeof(page)-at,",Web;font-size:20px'>third</p>");
+        web_page(page);
+        for(int round=0;round<4;round++) {
+            while(font_land("w.ttf","A",NULL)) {}
+            for(int i=0;i<10;i++) { char tail[24]; snprintf(tail,sizeof(tail),"a%d.ttf",i); while(font_land(tail,"A",NULL)) {} }
+            pictures_settle();
+        }
+        diag_fonts(&g.page);
+        static char rec[16384];
+        yonder_diag_render(g.page.diag,rec,sizeof(rec));
+        check(strstr(rec,"\nfont family A9: the page's faces, none in the list")!=NULL,
+              "web fonts: best answer: the first run's list has no place for its last names");
+        check(strstr(rec,"\nfont family Web: the page's faces\n")!=NULL,
+              "web fonts: on the record, a family is the page's faces when any run listed one");
+        web_drop();
+    }
+    /* A face line is whole, however many sources it walks. */
+    {
+        static char page[16384], rec[32768];
+        size_t at=0;
+        at+=(size_t)snprintf(page+at,sizeof(page)-at,"<style>@font-face{font-family:Web;src:");
+        for(int i=0;i<30;i++) {
+            at+=(size_t)snprintf(page+at,sizeof(page)-at,"url(");
+            for(int k=0;k<120;k++) page[at++]='a';
+            at+=(size_t)snprintf(page+at,sizeof(page)-at,"%d.woff2) format('woff2'),",i);
+        }
+        snprintf(page+at,sizeof(page)-at,"url(last.ttf)}p{font-family:Web}</style><p>hello");
+        web_page(page);
+        diag_fonts(&g.page);
+        yonder_diag_render(g.page.diag,rec,sizeof(rec));
+        check(strstr(rec,"29.woff2; https://fixture.test/last.ttf coming\n")!=NULL,
+              "web fonts: on the record, a face line walks every source, however long");
+        web_drop();
+    }
+    /* A layout whose text asks for no font still begins the faces' state
+     * afresh: a face listed by the last tree is not listed by this one. */
+    web_page_scripted("<style>@font-face{font-family:A;src:url(s.ttf)}p{font-family:A}</style><p>hello</p>"
+                      "<script>document.body.style.display='none'</script>",true);
+    check(font_land("s.ttf","A",NULL),"web fonts: no lookup: the file arrives");
+    pictures_settle();
+    diag_fonts(&g.page);
+    yonder_diag_render(g.page.diag,record,sizeof(record));
+    check(strstr(record,"s.ttf listed (SFNT, 1 bytes)\n")!=NULL,"web fonts: no lookup: the face is listed first");
+    {
+        os64_js_outcome_t out;
+        check(yonder_scripts_step(g.page.scripts,&out) && out.status==OS64_JS_OK && script_rebuild(),
+              "web fonts: no lookup: the script hides the text");
+    }
+    diag_fonts(&g.page);
+    yonder_diag_render(g.page.diag,record,sizeof(record));
+    check(strstr(record,"s.ttf came (SFNT, 1 bytes), not listed: no text asked for it")!=NULL,
+          "web fonts: on the record, a tree whose text asks for no font lists no face");
+    web_drop();
+    /* MISSING font counts the most lookups one layout made for the name,
+     * not one, and not one more each layout. */
+    web_page("<style>@font-face{font-family:Web;src:url(w.ttf)}</style>"
+             "<p style='font-family:Nope,Nope'>a</p><p style='font-family:Nope;font-size:20px'>b</p>");
+    {
+        yonder_diag_render(g.page.diag,record,sizeof(record));
+        const char *m=strstr(record,"MISSING font Nope (");
+        int first=m!=NULL ? atoi(m+strlen("MISSING font Nope (")) : 0;
+        check(lay_out_page(&g.page,800,600),"web fonts: missing count: laid out again");
+        yonder_diag_render(g.page.diag,record,sizeof(record));
+        m=strstr(record,"MISSING font Nope (");
+        int again=m!=NULL ? atoi(m+strlen("MISSING font Nope (")) : 0;
+        check(first>=3 && again==first,"web fonts: MISSING font counts one layout's lookups, once");
+    }
+    web_drop();
+    /* Every name of a long list that a face answers is on the record. */
+    {
+        static char page[8192], rec[32768];
+        size_t at=0;
+        at+=(size_t)snprintf(page+at,sizeof(page)-at,"<style>");
+        for(int i=0;i<40;i++) at+=(size_t)snprintf(page+at,sizeof(page)-at,"@font-face{font-family:F%d;src:url(f%d.ttf)}",i,i);
+        at+=(size_t)snprintf(page+at,sizeof(page)-at,"p{font-family:F0");
+        for(int i=1;i<40;i++) at+=(size_t)snprintf(page+at,sizeof(page)-at,",F%d",i);
+        snprintf(page+at,sizeof(page)-at,"}</style><p>hello");
+        web_page(page);
+        diag_fonts(&g.page);
+        yonder_diag_render(g.page.diag,rec,sizeof(rec));
+        check(strstr(rec,"\nfont family F39: the page's faces")!=NULL,
+              "web fonts: on the record, a list's names past 32 are there too");
+        web_drop();
+    }
+    /* On the record, a family's whole name: two long ones that begin
+     * alike are two lines. */
+    {
+        static char page[2048], one[400], two[400], want[460];
+        memset(one,'m',200); one[200]='1'; one[201]=0;
+        memset(two,'m',200); two[200]='2'; two[201]=0;
+        snprintf(page,sizeof(page),"<style>@font-face{font-family:Web;src:url(w.ttf)}</style>"
+                 "<p style=\"font-family:'%s'\">a</p><p style=\"font-family:'%s'\">b</p>",one,two);
+        web_page(page);
+        diag_fonts(&g.page);
+        static char rec[8192];
+        yonder_diag_render(g.page.diag,rec,sizeof(rec));
+        snprintf(want,sizeof(want),"\nfont family %s: no face; the list begins with",one);
+        bool first=strstr(rec,want)!=NULL;
+        snprintf(want,sizeof(want),"\nfont family %s: no face; the list begins with",two);
+        check(first && strstr(rec,want)!=NULL,"web fonts: on the record, a family keeps its whole name");
+        web_drop();
+    }
     /* A name written again counts its file once: the family after the
      * repeats still has a place. */
     web_page("<style>@font-face{font-family:W;src:url(w.ttf)}@font-face{font-family:X;src:url(x.ttf)}"
@@ -4581,6 +5317,11 @@ static void webfont_cases(void) {
           "web fonts: the next source is wanted");
     check(font_land("c.ttf","Q",NULL) && s_web.files[1].state==WF_FAILED,
           "web fonts: bytes the engine will not open fail too");
+    diag_fonts(&g.page);
+    yonder_diag_render(g.page.diag,record,sizeof(record));
+    check(strstr(record,"\nfont face 1: Web 400 normal: format(woff2) not read: a.woff2; https://fixture.test/b.ttf failed; "
+                        "https://fixture.test/c.ttf failed\n")!=NULL,
+          "web fonts: the record walks a face's sources to where it stands");
     web_drop();
     /* Style, then weight: each asks only for its own face. */
     const char *kFaces="<style>@font-face{font-family:W;src:url(plain.ttf)}"
@@ -4726,6 +5467,11 @@ static void webfont_cases(void) {
         font_open_refusals=1;
         check(font_land("w.ttf","A",NULL) && s_web.files[0].state==WF_HELD && s_web.moved,
               "web fonts: an open refused for room holds the file");
+        diag_fonts(&g.page);
+        char held[4096]; yonder_diag_render(g.page.diag,held,sizeof(held));
+        check(strstr(held,"https://fixture.test/w.ttf came (SFNT, 1 bytes), held for room to open")!=NULL &&
+              strstr(held,"1 files: 0 open, 0 failed, 1 coming")!=NULL,
+              "web fonts: the record says a file held for room");
         pictures_settle();
         check(s_web.files[0].state==WF_READY && s_web.moved,"web fonts: after the layout, it opens");
         pictures_settle();
@@ -4899,6 +5645,10 @@ static void diag_cases(void) {
     diag_picture_workerless_case();
     diag_picture_unasked_case();
     diag_css_unasked_case();
+    diag_lost_distinct_case();
+    diag_fact_short_case();
+    diag_lost_overflow_case();
+    diag_arriving_released_case();
     diag_picture_moves_case();
     diag_long_source_case();
     diag_tokens_exclusive();

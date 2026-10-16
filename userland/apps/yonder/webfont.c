@@ -20,6 +20,7 @@ _Static_assert(YONDER_FONT_SFNT_MAX == OS64_FONT_FILE_MAX,
 static void make_sfnt(const uint8_t *bytes, size_t len, yonder_webfont_t *f)
 {
     f->fetched = true;
+    f->got = len;
     f->container = yonder_font_sniff(bytes, len);
     if (f->container == YONDER_FONT_SFNT) {
         f->sfnt = os64_malloc(len);
