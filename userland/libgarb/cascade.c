@@ -437,9 +437,9 @@ static void trim(const garb_value_t *v, int32_t *i, int32_t *n)
 }
 
 // A <family-name> in [i, n): one string, or identifiers joined by single
-// spaces — not one identifier that is a generic family's keyword, a
-// system font's, or a CSS-wide one, which must be quoted to name a face
-// (Fonts 4 § 2.1.1). Copied into the arena at its own
+// spaces — none of them a CSS-wide keyword or `default`, and not one
+// identifier alone that is a generic family's keyword or a system font's,
+// which must be quoted to name a face (Fonts 4 § 2.1.1). Copied into the arena at its own
 // length, `*len` set: NULL for a name written wrong, or memory refused.
 static const char *family_name(garb_cascade_t *c, const garb_value_t *v, int32_t i, int32_t n, size_t *len)
 {
@@ -450,14 +450,12 @@ static const char *family_name(garb_cascade_t *c, const garb_value_t *v, int32_t
         *len = v[i].len;
         return i + 1 == n ? copy_text(c, v[i].text, v[i].len) : NULL;
     }
-    static const char *const kReserved[] = {"inherit", "initial", "unset", "revert", "revert-layer",
-                                            "default", NULL};
     size_t need = 0;
     int32_t words = 0, first = i;
     for (int32_t k = i; k < n; k++) {
         if (v[k].kind == GARB_WHITESPACE)
             continue;
-        if (v[k].kind != GARB_IDENT)
+        if (v[k].kind != GARB_IDENT || garb_family_word_reserved(v[k].text, v[k].len))
             return NULL;
         need += (words++ > 0) + v[k].len;
     }
@@ -465,9 +463,6 @@ static const char *family_name(garb_cascade_t *c, const garb_value_t *v, int32_t
         return NULL;
     if (words == 1 && garb_system_font(v[first].text, v[first].len))
         return NULL;
-    for (int k = 0; words == 1 && kReserved[k] != NULL; k++)
-        if (ieq(v[first].text, v[first].len, kReserved[k]))
-            return NULL;
     char *out = alloc(c, need + 1);
     if (out == NULL)
         return NULL;
@@ -722,7 +717,8 @@ static bool angle_deg(const garb_value_t *t, double *deg)
 }
 
 // A face's style: `normal`, `italic`, or `oblique` with up to two angles
-// after it, each between -90 and 90 degrees (Fonts 4 § 4.4).
+// after it, each between -90 and 90 degrees (Fonts 4 § 4.4) — and `auto`,
+// which selects as `normal`, as the weight's does.
 static bool face_style(const garb_decl_t *d, garb_face_style_t *out)
 {
     int32_t i = 0, n = d->nvalue;
@@ -730,7 +726,7 @@ static bool face_style(const garb_decl_t *d, garb_face_style_t *out)
     if (i >= n || d->value[i].kind != GARB_IDENT)
         return false;
     const garb_value_t *t = &d->value[i];
-    if (ieq(t->text, t->len, "normal") && i + 1 == n) {
+    if ((ieq(t->text, t->len, "normal") || ieq(t->text, t->len, "auto")) && i + 1 == n) {
         *out = GARB_FACE_NORMAL;
         return true;
     }

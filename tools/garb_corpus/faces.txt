@@ -35,8 +35,9 @@ END
 # Weights: keywords, one number, a fraction kept, auto; oblique with up
 # to two angles from -90 to 90 degrees, and nothing else after it. A rule
 # with no family, no src, or a generic for its family (ui-serif among
-# them), a system font's keyword unquoted, or a CSS-wide keyword is no
-# face; `auto` weighs as normal; a src
+# them) or a system font's keyword unquoted, or a CSS-wide keyword or
+# `default` as any of its words, is no face; `auto` weighs and slants as
+# normal; a src
 # entry written wrong or with tech() is dropped and the rest kept; a
 # later declaration of a descriptor wins, an invalid one is dropped.
 VIEWPORT 800x600
@@ -58,6 +59,8 @@ PAGE
 @font-face { font-family: ui-serif; src: url(generic2) }
 @font-face { font-family: initial; src: url(keyword) }
 @font-face { font-family: caption; src: url(system) }
+@font-face { font-family: Good initial; src: url(wide) }
+@font-face { font-family: Good; src: local(Good default), url(o1); font-style: italic; font-style: auto }
 @font-face { font-family: "caption"; src: local(menu), local("Status-Bar"), url(n1) }
 </style>
 WANT
@@ -81,6 +84,8 @@ WANT
   url(j1)
 "K" 400 italic sheet 0
   url(k1)
+"Good" 400 normal sheet 0
+  url(o1)
 "caption" 400 normal sheet 0
   local(Status-Bar)
   url(n1)

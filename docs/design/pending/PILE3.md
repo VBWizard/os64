@@ -2318,8 +2318,8 @@ the family, any length; `src` as a list of `url()` with its `format()`
 hint — `format()` read whole, one of its keywords or the older list of
 strings, the first the hint, anything else dropping the source — or
 `local()` with its name; `font-weight` as a range, fractions kept
-(matching does not round), `auto` as `normal` (§ 4.4 — it spares only a
-variable axis its clamp), `font-style` (normal, italic, oblique with
+(matching does not round), `auto` as `normal` for weight and style alike
+(§ 4.4 — it spares only a variable axis its clamp), `font-style` (normal, italic, oblique with
 up to two angles), `unicode-range` as a list of ranges (read
 from component values, the draft's way — GARB.md booked it here); the
 sheet it was written in, for resolving the url. A rule in a sheet whose
@@ -2509,8 +2509,8 @@ libgarb's corpus: `@font-face` read whole — `src` lists of `url()`,
 wrong every way, names past 256 bytes, weight ranges and
 keywords and fractions, the three styles and oblique's angles,
 `unicode-range` in single points, ranges and wildcards (`U+4??`), a
-generic family's name, a system font's and a CSS-wide keyword refused
-unquoted, a rule inside
+generic family's name and a system font's refused unquoted, a CSS-wide
+keyword or `default` refused as any word of a name, a rule inside
 `@media` that holds and one that does not, a composite's rules all kept
 in order, the 257th face passed over and a rule past the cap costing
 nothing however long, and each allocation failed alone and then with every one after it

@@ -146,6 +146,13 @@ bool garb_prop_inherited(garb_prop_t prop)
 // ── Keywords ────────────────────────────────────────────────────────────
 
 static const char *const kWide[] = {"inherit", "initial", "unset", "revert", "revert-layer", NULL};
+bool garb_family_word_reserved(const char *text, size_t len)
+{
+    for (int k = 0; kWide[k] != NULL; k++)
+        if (ieq(text, len, kWide[k]))
+            return true;
+    return ieq(text, len, "default");
+}
 static const char *const kDisplay[] = {
     "none", "block", "inline", "inline-block", "list-item", "table", "inline-table",
     "table-row-group", "table-header-group", "table-footer-group", "table-row",
@@ -807,8 +814,7 @@ static bool families(Sets *s, VCur *c, garb_val_t *out)
                 size_t total = 0;
                 int32_t start = c->i, words = 0;
                 while ((t = vc_peek(c)) != NULL && t->kind == GARB_IDENT) {
-                    if (vc_keyword(&(VCur){c->v, c->n, c->i}, kWide) != NULL ||
-                        ieq(t->text, t->len, "default"))
+                    if (garb_family_word_reserved(t->text, t->len))
                         return false;
                     total += t->len + 1;
                     words++;
