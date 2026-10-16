@@ -128,7 +128,9 @@ static size_t ranges_merge(os64_text_range_t *r, size_t n)
     }
     return kept;
 }
-os64_font_status_t os64_text_font_open_ranged(os64_text_context_t *c, const uint8_t *bytes,
+/* A face of `bytes`, or of `shared` — a file already in the context —
+ * when that is not NULL. */
+static os64_font_status_t font_open(os64_text_context_t *c, text_file *shared, const uint8_t *bytes,
     size_t length, const os64_font_face_options_t *o, const os64_text_range_t *ranges,
     size_t range_count, os64_text_font_t **out)
 {
@@ -151,7 +153,9 @@ os64_font_status_t os64_text_font_open_ranged(os64_text_context_t *c, const uint
         os64_memcpy(f->ranges,ranges,range_count*sizeof(*f->ranges));
         f->range_count=ranges_merge(f->ranges,range_count);
     }
-    f->options=*o;f->file=file_take(c,bytes,length);
+    f->options=*o;
+    if (shared) {f->file=shared;shared->refs++;}
+    else f->file=file_take(c,bytes,length);
     if (!f->file) {status=c->refusal;goto fail;}
     for (unsigned attempt=0;;attempt++) {
         c->refusal=OS64_FONT_OK;
@@ -171,10 +175,25 @@ fail:
     c->backend->face_close(f->face);file_release(c,f->file);text_free(c,f->ranges);text_free(c,f);
     return status;
 }
+os64_font_status_t os64_text_font_open_ranged(os64_text_context_t *c, const uint8_t *bytes,
+    size_t length, const os64_font_face_options_t *o, const os64_text_range_t *ranges,
+    size_t range_count, os64_text_font_t **out)
+{
+    return font_open(c,NULL,bytes,length,o,ranges,range_count,out);
+}
 os64_font_status_t os64_text_font_open(os64_text_context_t *c, const uint8_t *bytes,
     size_t length, const os64_font_face_options_t *o, os64_text_font_t **out)
 {
-    return os64_text_font_open_ranged(c,bytes,length,o,NULL,0,out);
+    return font_open(c,NULL,bytes,length,o,NULL,0,out);
+}
+os64_font_status_t os64_text_font_open_like(const os64_text_font_t *like,
+    const os64_font_face_options_t *o, const os64_text_range_t *ranges, size_t range_count,
+    os64_text_font_t **out)
+{
+    if (out) *out=NULL;
+    if (!like || !like->file) return OS64_FONT_BAD_ARGUMENT;
+    return font_open(like->context,like->file,like->file->bytes,like->file->length,o,
+        ranges,range_count,out);
 }
 os64_font_status_t os64_text_font_bitmap(os64_text_context_t *c, os64_text_font_t **out)
 {
@@ -187,6 +206,12 @@ os64_font_status_t os64_text_font_bitmap(os64_text_context_t *c, os64_text_font_
     f->info=(os64_font_face_info_t){.glyph_count=256,.flags=OS64_FONT_FACE_FIXED_WIDTH,
         .family="Builtin",.style="8x16",.ascent=768,.descent=256,.line_height=1024};
     f->next=c->fonts;c->fonts=f;*out=f;return OS64_FONT_OK;
+}
+os64_font_status_t os64_text_font_info(const os64_text_font_t *f, os64_font_face_info_t *out)
+{
+    if (out) *out=(os64_font_face_info_t){0};
+    if (!f || !out) return OS64_FONT_BAD_ARGUMENT;
+    *out=f->info;return OS64_FONT_OK;
 }
 void os64_text_font_release(os64_text_font_t *f)
 {

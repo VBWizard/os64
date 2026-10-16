@@ -46,8 +46,17 @@ typedef struct {
 os64_font_status_t os64_text_font_open_ranged(os64_text_context_t *, const uint8_t *,
     size_t length, const os64_font_face_options_t *, const os64_text_range_t *ranges,
     size_t range_count, os64_text_font_t **out);
+/* Another face of the file `like` was opened from — at another size, with
+ * its own ranges — sharing the context's one copy of the bytes, so the
+ * caller need not keep them. `like` must be an outline font of this
+ * context; ranges are as for open_ranged. */
+os64_font_status_t os64_text_font_open_like(const os64_text_font_t *like,
+    const os64_font_face_options_t *, const os64_text_range_t *ranges, size_t range_count,
+    os64_text_font_t **out);
 os64_font_status_t os64_text_font_bitmap(os64_text_context_t *, os64_text_font_t **out);
 void os64_text_font_release(os64_text_font_t *);
+/* What the font's face reports: its names and metrics at its size. */
+os64_font_status_t os64_text_font_info(const os64_text_font_t *, os64_font_face_info_t *out);
 
 typedef enum {
     OS64_TEXT_UTF8_WESTERN_V1 = 0,

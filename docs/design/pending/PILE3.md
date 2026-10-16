@@ -2333,9 +2333,9 @@ character. `font-display` is read and has no effect (below).
 cost tens of bytes each, fetched or not; every rule after them is
 counted lost unread, so a page cannot spend the cascade's arena on faces
 it will not keep; one a failed allocation would leave half-read is
-dropped whole and counted lost. `GARB_SKIP_FONT` still counts the family
-each rule before the cap names, from the same read, until S9a3, where the resolver fetches
-faces and says `MISSING font` itself of a family no face serves.
+dropped whole and counted lost. A face is no skip: the cascade hands it
+out, and the resolver says `MISSING font` itself of a family nothing
+serves (below).
 
 **Which face (yonder's resolver).** The resolver is asked for a family
 list, bold or not, italic or not, and a size, as now — and, as
@@ -2356,10 +2356,16 @@ for fetching (below). A name with no page face is looked for among the
 system's families by name — each family's own, as its regular face
 reports it (`DejaVu Sans`), ASCII case folded, matched by libos64's
 provider (`os64_font_family_open`) — and otherwise passed over; the generic comes last, as now. The list is
-the eight a layout takes: past that, the rest are the generic's.
-`local()` names a system family the same way, and yonder has none of
-the names pages write, so in practice it is passed over to the next
-`src`. A family the resolver finds no face for stays a `MISSING font`.
+the eight a layout takes: the system's family and the generic keep their
+places, and the page's faces have the rest — a composite past that, its
+latest rules. `local()` names an installed font by its full name, and
+yonder's have none a page writes: it is passed over to the next `src`.
+A family the resolver finds neither a face nor a system family for is
+`MISSING font`, which the resolver says itself (S9a3; libgarb's
+`GARB_SKIP_FONT` tally of every face's family retired with it, a face
+now being the cascade's to hand out, not a thing skipped). Only the
+SHOWN page's layouts use and want its faces: a page arriving beside it
+lays out in the system's fonts until it is shown.
 
 **When a face is fetched.** When the resolver first wants it, and only
 then: a page names families it never uses. A face with a
@@ -2368,11 +2374,13 @@ range. Those are a RUNNING set — one bit per 256 code points (4,352
 bits), rebuilt from the tree at each layout, so text a stream chunk or a
 script adds after the first layout counts — and a face passed over by
 range is asked again when the set grows. What counts as the document's
-characters: its text nodes, generated content (`::before` and
-`::after` `content:` — the census's icon fonts, Glyphicons and Font
-Awesome, put their characters there and nowhere else) and control
-values. The test is the whole document's, not the family's, so it
-fetches early, never late. Each face is fetched once a page, through
+characters: its text nodes. Generated content (`::before` and `::after`
+`content:`) would count too, but nothing lays it out yet — libgarb sets
+pseudo-elements' rules aside and libflow generates no boxes for them
+(GARB.md's G5) — so the census's icon fonts, Glyphicons and Font
+Awesome, which put their characters there and nowhere else, draw
+nothing until it does (booked below). The test is the whole document's,
+not the family's, so it fetches early, never late. Each face is fetched once a page, through
 the pool as a picture is, under the disk cache, from its first `src`
 yonder can read: a `format()` it cannot read is passed over unfetched
 (Fonts 4 § 4.3) — `woff2-variations` among them, since the backend
@@ -2482,10 +2490,11 @@ need, and its test page uses yonder's default agent. It goes in three
 parts: **S9a1** the pure libraries — libgarb's faces, libgzip's zlib
 door with libpng on it, the WOFF unwrapper; **S9a2** libos64's half — a
 font opened with its ranges and the layout honouring them, and the
-provider matching its families' own names; and **S9a3** yonder's — the
-resolver, the running set, fetch, the worker's unwrap, the open, the
-relayout, `GARB_SKIP_FONT` retired, and the diagnostics page file's
-fonts section (BROWSER_DEBTS). **S9b** — WOFF2:
+provider matching its families' own names; **S9a3** yonder's — the
+resolver, the running set, fetch, the worker's unwrap, the open (a
+face's other sizes from the context's one copy,
+`os64_text_font_open_like`), the relayout, `GARB_SKIP_FONT` retired;
+and **S9a4** the diagnostics page file's fonts section (BROWSER_DEBTS). **S9b** — WOFF2:
 Brotli vendored and pinned, the port's patch, the backend's verb, the
 audit rows walked again; then the Chrome preset, and the 24 hosts that
 serve nothing else, draw their faces — S9b's page uses the preset.
@@ -2503,6 +2512,7 @@ serve nothing else, draw their faces — S9b's page uses the preset.
 | Faces kept open across pages — keyed by address and content, so a page visited again (danlegt, Chris's check-out page) neither unwraps nor opens its faces again | the disk cache already keeps the bytes across visits and boots (CACHE.md), so what repeats is milliseconds a page, not a download | a session whose page loads measure the faces' open time worth keeping |
 | A downloaded face installed for the system (`/home/fonts`, fonts.conf) | a web font is licensed to the site that serves it, and many licences forbid it: only ever the person's own act, never automatic — a ruling for Chris | Chris asks for it |
 | The text context dropping a container's copy | moot while the worker hands the window's thread an SFNT; a `face_open` contract question if it ever opens a container | a context that opens WOFF itself |
+| Icon fonts whose characters are only in `content:` (Glyphicons, Font Awesome) | nothing lays out generated content (GARB.md's G5), so neither the running set nor a run ever holds those characters | G5's generated content, which adds them to the running set |
 | The CSS Font Loading API (`document.fonts`) | scripts' surface (Platform waits for its arc) | a page whose script waits on `document.fonts.ready` |
 | `font-feature-settings`, `font-variation-settings` | not read | a page whose ligatures or figures matter |
 
@@ -2528,14 +2538,23 @@ each bad range and one past the cap refused, each allocation of the open
 refused with nothing leaked — on the fake backend and FreeType; its
 family suite: a family's own name in any case choosing it, the first
 such name winning, a prefix and an unterminated slice short of the name
-refused, a builtin family matching nothing. yonder's host: the matching table of Fonts 4 § 5.2 against the
-faces it is handed (DejaVu's own files served as page faces), a
-character outside every range drawn in the next face, a face fetched
-only when the resolver wants it and its range meets the document's
-characters — text a later stream chunk adds, and `content:` — a
-`format()` passed over unfetched and a hintless `url()` known by its
-signature, a refused face going on to the next `src`, the relayout
-batched. WOFF's container is os64's own code, not FreeType's, so its
+refused, a builtin family matching nothing. yonder's scripted-page host (S9a3): a face wanted, fetched with the
+page's base, landed, opened and drawn after the batched relayout; a page
+laid out before it was shown laid out again on screen to learn its
+faces, with a linked sheet's face resolved against the sheet; style then
+weight choosing the one face each ask wants, italic falling to normal; a
+composite's latest rules all wanted, later first; a range the text does
+not meet not fetched and one it meets fetched; `format('woff2')` passed
+over; a failed file on the record and the next source wanted; bytes the
+engine refuses failing too; at most four files out; eight faces and a
+name written twice still one list a layout takes; another page drawing
+none of the shown page's faces; a stale arrival let go; leaving
+cancelling and clearing; `MISSING font` for a family nothing serves and
+not for the system's own name. The worker's own suite
+(`tools/test_webfont_host.sh`): a file read, an SFNT and a WOFF fetched,
+a broken WOFF, a WOFF2, bytes that are no font, an error's body, an empty
+reply, a failed and a cancelled fetch, each to its reason, and every
+allocation refused in turn with nothing leaked. WOFF's container is os64's own code, not FreeType's, so its
 walk is the unwrapper's own (`tools/test_font_unwrap_host.sh`, S9a): WOFF
 files made from four of the licensed faces with Python's `zlib` alone —
 the host has no `fontTools` — every table back byte for byte, every
@@ -2552,8 +2571,10 @@ licensed faces, their derivation recorded as `fixtures/FIXTURES.md`
 records the rest; the host has neither `woff2_compress` nor Python's
 `brotli`, so the fixture generator is S9b's to bring.
 Brotli's and FreeType's fuzzing upstream (OSS-Fuzz) is support, not the
-proof. In the guest, `tools/pages/pile3-fonts.html`: a `.ttf`, a
-`.woff`, a face in two `unicode-range` halves, one only in `content:`,
-and one never served, each beside its name; then danlegt and a Google
+proof. In the guest, `tools/pages/pile3-fonts.html` (its fonts put beside it by
+`tools/pages/fonts.sh`): a `.otf`, a `.woff`, a face in two
+`unicode-range` halves, a `woff2` source passed over, a face never
+served, a range the page never uses, a family with no face and the
+system's own family by name, each beside its name; then danlegt and a Google
 Fonts page on the P5, by yonder's own agent (S9a) and the Chrome preset
 (S9b).

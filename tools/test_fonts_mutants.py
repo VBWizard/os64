@@ -38,12 +38,16 @@ UNWRAP = 'userland/apps/yonder/font_unwrap.c'
 TEXT = 'userland/libos64/text.c'
 TEXT_CACHE = 'userland/libos64/text_cache.c'
 FAMILY = 'userland/libos64/font_family.c'
+YONDER = 'userland/apps/yonder/yonder.c'
+WEBFONT = 'userland/apps/yonder/webfont.c'
 GARB = 'bash tools/test_garb_host.sh'
 GZIP = 'bash tools/test_gzip_host.sh'
 PNGS = 'bash tools/test_png_host.sh'
 UNWRAPS = 'bash tools/test_font_unwrap_host.sh'
 TEXTS = 'python3 tools/test_text_host.py'
 FAMILIES = 'python3 tools/test_font_family_host.py'
+WINDOW = 'bash tools/test_yonder_scripts_host.sh'
+WEBFONTS = 'bash tools/test_webfont_host.sh'
 
 # (name, file, old, new, cases). Each breaks one rule the design states.
 mutants = [
@@ -115,10 +119,6 @@ mutants = [
     ('format-strings-need-no-commas', CASCADE,
      '        if (want_string ? v[i].kind != GARB_STRING : v[i].kind != GARB_COMMA)',
      '        if (v[i].kind != GARB_STRING && v[i].kind != GARB_COMMA)', GARB),
-    ('a-face-skips-each-name', CASCADE,
-     '            if (name != NULL)\n                face.family = name, face.family_len = len;',
-     '            if (name != NULL)\n                face.family = name, face.family_len = len, '
-     'skipped(c, GARB_SKIP_FONT, name, len);', GARB),
     ('a-face-inside-failed-media-is-one', CASCADE,
      '        if (!group || !r->has_block)\n            continue;',
      '        if (((void)group, false) || !r->has_block)\n            continue;', GARB),
@@ -320,6 +320,73 @@ mutants = [
     ('a-prefix-is-the-name', FAMILY,
      '    if (!len || name->len != len) return false;',
      '    if (!len || name->len > len) return false;', FAMILIES),
+    # yonder: the page's web fonts, and the job that fetches one.
+    ('a-range-the-text-misses-is-fetched', YONDER,
+     '            int32_t file = webfonts_file(p, f, webfonts_meet(f));',
+     '            int32_t file = webfonts_file(p, f, webfonts_meet(f) || true);', WINDOW),
+    ('the-text-is-not-read', YONDER,
+     '        if (n->kind == OS64_HTML_TEXT) {\n            for (size_t at = 0; at < n->text_len;) {',
+     '        if (false) {\n            for (size_t at = 0; at < n->text_len;) {', WINDOW),
+    ('an-unread-format-is-fetched', YONDER,
+     '    if (s->format == NULL)\n        return true;\n    for (int k = 0; kRead[k] != NULL; k++)',
+     '    if (true)\n        return true;\n    for (int k = 0; kRead[k] != NULL; k++)', WINDOW),
+    ('a-failed-file-is-wanted-again', YONDER,
+     '        if (file >= 0 && s_web.files[file].state == WF_FAILED)\n            continue;',
+     '        if (false && file >= 0 && s_web.files[file].state == WF_FAILED)\n            continue;', WINDOW),
+    ('a-system-family-is-missing', YONDER,
+     '            if (fold_eq(nm->name, nm->len, view.primary.family, os64_strlen(view.primary.family)))\n                continue;',
+     '', WINDOW),
+    ('italic-prefers-normal', YONDER,
+     '    const garb_face_style_t kItalic[] = {GARB_FACE_ITALIC, GARB_FACE_OBLIQUE, GARB_FACE_NORMAL};',
+     '    const garb_face_style_t kItalic[] = {GARB_FACE_NORMAL, GARB_FACE_OBLIQUE, GARB_FACE_ITALIC};', WINDOW),
+    ('the-first-weight-wins', YONDER,
+     '        if (best_tier < 0 || tier < best_tier || (tier == best_tier && dist < best_dist))',
+     '        if (best_tier < 0 || (false && (tier < best_tier || (tier == best_tier && dist < best_dist))))', WINDOW),
+    ('a-composite-earlier-first', YONDER,
+     '    for (int32_t i = n - 1; i >= 0 && got < cap; i--)',
+     '    for (int32_t i = 0; i < n && got < cap; i++)', WINDOW),
+    ('another-page-draws-the-faces', YONDER,
+     '    bool shown = p != NULL && p->serial == g.page.serial && s_laying.cascade != NULL;',
+     '    bool shown = p != NULL && s_laying.cascade != NULL;', WINDOW),
+    ('a-stale-file-is-taken', YONDER,
+     '    if (job->generation != g.page_serial || job->index < 0 || job->index >= s_web.nfiles)\n        return;                     // a page no longer on screen\n    WebFontFile',
+     '    if (job->index < 0 || job->index >= s_web.nfiles)\n        return;                     // a page no longer on screen\n    WebFontFile', WINDOW),
+    ('leaving-cancels-nothing', YONDER,
+     '        if (s_web.files[i].state == WF_WAITING && g.pool != NULL)\n            os64_work_cancel(g.pool, s_web.files[i].id);',
+     '', WINDOW),
+    ('no-feed-after-a-layout', YONDER,
+     '    css_pictures(&g.page);\n    webfonts_feed();',
+     '    css_pictures(&g.page);', WINDOW),
+    ('a-face-moves-nothing', YONDER,
+     '    if (g.pictures_moved || s_web.moved) {',
+     '    if (g.pictures_moved) {', WINDOW),
+    ('an-arrival-moves-nothing', YONDER,
+     '    // Either way the page is laid out again: a face to draw, or the next\n    // source to want.\n    s_web.moved = true;',
+     '', WINDOW),
+    ('files-are-unlimited-in-flight', YONDER,
+     '    while (s_web.next < s_web.nfiles && s_web.in_flight < WEBFONTS_AT_ONCE) {',
+     '    while (s_web.next < s_web.nfiles) {', WINDOW),
+    ('the-list-overflows', YONDER,
+     '    if (nmine > keep)\n        nmine = keep;',
+     '    if (false && nmine > keep)\n        nmine = keep;', WINDOW),
+    ('a-face-twice-in-a-list', YONDER,
+     '            if (font != NULL && !dup && nmine < WEBFONT_LIST_MAX)',
+     '            if (font != NULL && ((void)dup, true) && nmine < WEBFONT_LIST_MAX)', WINDOW),
+    ('a-face-against-the-page', YONDER,
+     '        if (sh->url != NULL)\n            base = sh->url;\n    }\n    if (!os64_page_url_absolute(base, written, out, cap))',
+     '        (void)sh;\n    }\n    if (!os64_page_url_absolute(base, written, out, cap))', WINDOW),
+    ('an-arriving-page-learns-no-faces', YONDER,
+     '        s_web.moved = g.page.cascade != NULL && garb_cascade_font_faces(g.page.cascade, &faces, NULL) > 0;',
+     '        s_web.moved = false && g.page.cascade != NULL && garb_cascade_font_faces(g.page.cascade, &faces, NULL) > 0;', WINDOW),
+    ('a-woff-is-kept-wrapped', WEBFONT,
+     '    } else if (f->container == YONDER_FONT_WOFF) {',
+     '    } else if (f->container == YONDER_FONT_UNKNOWN) {', WEBFONTS),
+    ('an-error-body-is-a-font', WEBFONT,
+     '    else if (body.status != 0 && (body.status < 200 || body.status >= 300))',
+     '    else if (false)', WEBFONTS),
+    ('a-woff2-is-kept', WEBFONT,
+     '    if (f->container == YONDER_FONT_SFNT) {',
+     '    if (f->container == YONDER_FONT_SFNT || f->container == YONDER_FONT_WOFF2) {', WEBFONTS),
 ]
 
 caught, missed, unbuilt = [], [], []

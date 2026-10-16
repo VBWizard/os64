@@ -807,9 +807,6 @@ static void add_face(garb_cascade_t *c, garb_parsed_t *owner, const garb_rule_t 
                 face.ranges = ranges, face.nranges = got;
         }
     }
-    // The family the page asked for and does not get yet (GARB_SKIP_FONT).
-    if (face.family != NULL)
-        skipped(c, GARB_SKIP_FONT, face.family, face.family_len);
     if (c->allocs_failed != failed) {
         c->faces_lost++;
         return;
