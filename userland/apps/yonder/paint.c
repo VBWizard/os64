@@ -773,8 +773,23 @@ static Round round_moved(const Round *s, int64_t dx, int64_t dy, int64_t by)
     return r;
 }
 
+void (*yonder_paint_stage)(yonder_paint_stage_t stage, bool begin);
+
+static void shadow_cast(const Painter *p, const flow_box_t *b, const Round *outer, const Round *inner,
+                        const flow_shadow_t *sh, bool square);
+
 static void shadow(const Painter *p, const flow_box_t *b, const Round *outer, const Round *inner,
                    const flow_shadow_t *sh, bool square)
+{
+    if (yonder_paint_stage != NULL)
+        yonder_paint_stage(YONDER_PAINT_SHADOW, true);
+    shadow_cast(p, b, outer, inner, sh, square);
+    if (yonder_paint_stage != NULL)
+        yonder_paint_stage(YONDER_PAINT_SHADOW, false);
+}
+
+static void shadow_cast(const Painter *p, const flow_box_t *b, const Round *outer, const Round *inner,
+                        const flow_shadow_t *sh, bool square)
 {
     // An outer shadow a negative spread collapses casts nothing — libflow's
     // rule (flow_shadow_casts), which a group's bounds follow.
@@ -1017,8 +1032,22 @@ static double wrap(double x, double size)
 // is drawn on. False only when its pixels found no memory and nothing was
 // drawn — a text clip must know (text_clip); true when it is drawn, or
 // there is nothing of it to draw.
+static bool gradient_paint(const Painter *p, const flow_gradient_t *g, const yonder_tile_t *tile,
+                           os64_gui_rect_t area, const Round *shape, bool round, uint32_t current);
+
 static bool gradient(const Painter *p, const flow_gradient_t *g, const yonder_tile_t *tile,
                      os64_gui_rect_t area, const Round *shape, bool round, uint32_t current)
+{
+    if (yonder_paint_stage != NULL)
+        yonder_paint_stage(YONDER_PAINT_GRADIENT, true);
+    bool drawn = gradient_paint(p, g, tile, area, shape, round, current);
+    if (yonder_paint_stage != NULL)
+        yonder_paint_stage(YONDER_PAINT_GRADIENT, false);
+    return drawn;
+}
+
+static bool gradient_paint(const Painter *p, const flow_gradient_t *g, const yonder_tile_t *tile,
+                           os64_gui_rect_t area, const Round *shape, bool round, uint32_t current)
 {
     double tx = tile->at.x, ty = tile->at.y, w = tile->at.w, h = tile->at.h;
     if (w <= 0 || h <= 0)

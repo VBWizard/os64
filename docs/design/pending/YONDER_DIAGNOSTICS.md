@@ -272,6 +272,29 @@ not kept — on the line it could not finish, or on its own line when it
 could not even name what went — without promising to say which. Counts
 stay exact while memory lasts and are marked as floors once it does not.
 
+### What paints cost (the perf slice, YONDER_PERF.md)
+
+The shown page's record carries two plain lines about its paints since it
+was shown, or since its record was last written on asking:
+
+    paint: 26 paints in 11.9 s (26 whole views), 10.9 Mpx of the view; 354 ticks
+    paint stages: ms a paint (most): render 121.4 (130.5), view 119.5 (128.6), backgrounds 11.1 (11.6), pictures 2.9 (3.2), text 0.9 (1.0), groups 0.0 (0.0), shadows 0.0 (0.0), gradients 63.0 (69.6), warps 31.3 (36.8), publish 10.6 (11.6), ticks (a tick) 22.0 (27.1); window 1.9, the view's rest 10.1
+
+- **`render`** is libui's whole paint, the root panel and the chrome
+  included, and **`view`** the page's part of it; `window` is the
+  difference. Inside the view: **`backgrounds`** (pictures behind boxes and
+  the canvas), **`pictures`**, **`text`**, opacity **`groups`**, box
+  **`shadows`** (their masks built and blurred), **`gradients`** (computed
+  pixel by pixel), **`warps`** (turned boxes drawn through their matrix);
+  `the view's rest` is the view outside those. **`publish`** hands the
+  damage to the compositor. **`ticks`** are per tick, not per paint: a
+  tick's work finding what moved and marking it, before its paint.
+- Timed with the processor's counter, its rate taken from the clock across
+  the same span, so the numbers are the machine's own: the P5's on the P5.
+- **`d` in the page writes the record now** (`written: when asked`) and
+  starts the counts again — so one part of a page is measured on its own:
+  scroll there, `d`, wait, `d`, and read the last write.
+
 ### Built differently from the brief, and why
 
 - **The sequence continues across runs.** A per-run sequence restarts at

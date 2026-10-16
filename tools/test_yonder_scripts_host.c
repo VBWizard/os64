@@ -4397,6 +4397,50 @@ static void web_drop(void) {
     probe_web=false;
     while(nfont_jobs>0) os64_free(font_jobs[--nfont_jobs].job);
 }
+/* The paint counts on the record (YONDER_PERF.md § Measure first): what
+ * nothing painted says, a paint's stages in milliseconds at the counter's
+ * rate, and `d` writing the record on asking and starting them again. */
+static void paint_cost_cases(void) {
+    fake_reset();
+    memset(&s_diag,0,sizeof(s_diag)); s_diag.next=1;
+    snprintf(saved_diagnostics,sizeof(saved_diagnostics),"/tmp/diag");
+    check(diag_dir_open()==NULL,"paint counts: the record has a directory");
+    web_page("<p>hello");
+    static char rec[8192];
+    cost_reset();
+    diag_paint(&g.page);
+    yonder_diag_render(g.page.diag,rec,sizeof(rec));
+    check(strstr(rec,"\npaint: nothing painted since the counts began\n")!=NULL && strstr(rec,"paint stages")==NULL,
+          "paint counts: nothing painted says so");
+    /* Two paints of 12 ms each in render at a counter of 1000 a microsecond. */
+    s_cost.from_cycles=cycles()-1000000000ull;
+    s_cost.from_us=os64_micros()-1000000;
+    s_cost.paints=2; s_cost.whole=1; s_cost.pixels=3000000; s_cost.ticks=4;
+    s_cost.total[PS_RENDER]=24000000; s_cost.most[PS_RENDER]=13000000;
+    s_cost.total[PS_VIEW]=20000000; s_cost.total[PS_TEXT]=4000000; s_cost.total[PS_TICKS]=8000000;
+    diag_paint(&g.page);
+    yonder_diag_render(g.page.diag,rec,sizeof(rec));
+    check(strstr(rec,"\npaint: 2 paints in 1.0 s (1 whole views), 3.0 Mpx of the view; 4 ticks\n")!=NULL &&
+          strstr(rec,"paint stages: ms a paint (most): render 12.0 (13.0), view 10.0 (0.0)")!=NULL &&
+          strstr(rec,", text 2.0 (0.0)")!=NULL && strstr(rec,", ticks (a tick) 2.0 (0.0)")!=NULL &&
+          strstr(rec,"; window 2.0, the view's rest 8.0\n")!=NULL,
+          "paint counts: each stage in milliseconds a paint, the window and the view's rest beside them");
+    /* `d` in the view writes the record on asking and starts the counts again. */
+    {
+        os64_gui_event_t ev={0};
+        ev.key.ascii='d';
+        check(view_key(&ev)==KEY_RECORD,"paint counts: d in the view asks for the record");
+        diag_asked();
+        char name[64]; yonder_diag_file_name(g.page.diag,name,sizeof(name));
+        const char *file=diag_file("/tmp/diag",name);
+        check(has(file,"\nwritten: when asked\n") && has(file,"\npaint: 2 paints") && s_cost.paints==0 &&
+              s_cost.total[PS_RENDER]==0,
+              "paint counts: the record is written when asked, and the counts start again");
+    }
+    web_drop();
+    saved_diagnostics[0]='\0';
+    memset(&s_diag,0,sizeof(s_diag)); s_diag.next=1;
+}
 static void webfont_cases(void) {
     /* Serif and mono are Test Serif; sans is Test Sans, a system family a
      * page can name apart from the generic. */
@@ -5763,6 +5807,7 @@ int main(void)
     if(getenv("YONDER_NO_STREAM")==NULL) join_cases();
     if(getenv("YONDER_NO_STREAM")==NULL) diag_cases();
     webfont_cases();
+    paint_cost_cases();
     os64_text_font_release(probe_font);
     check(os64_text_destroy(probe_text)==OS64_FONT_OK,"all layout text released");
     check(live==0,"native and engine heap is empty");
