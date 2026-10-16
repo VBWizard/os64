@@ -244,10 +244,11 @@
         // parked the MAIN thread instead and left the reaper spinning in
         // ring 0 for the shell's whole life (top showed /bin/desktop at 52%
         // of a core with one gterm child). Set by task_wait to the calling
-        // thread before it parks, cleared when it returns; read by the
-        // dead-child wake under kDeadChildLock, together with the flag
-        // above, so the wake can never target a thread that has already
-        // stopped waiting. One waiter per task, like the flag it travels with.
+        // thread before it parks, cleared by that thread at the top of its
+        // next pass, before any return; read by the dead-child wake under
+        // kDeadChildLock, together with the flag above, so the wake can never
+        // target a thread that has already stopped waiting. One waiter per
+        // task, like the flag it travels with.
         thread_t* waitThread;
         bool autoReap;
         // THE DEATH CERTIFICATE (ruling 2026-08-06: kworker buries only the

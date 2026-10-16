@@ -106,7 +106,8 @@ the packaged libui loop and both forms of the raw wait API.
   their existing position after queued input.
 - Ringing uses the existing GUI waiter wake path under `kGuiLock`.
   `os64_gui_event_wait(window, NULL)` wakes without consuming the event.
-  The existing wait backstop also covers a ring racing with thread park.
+  A ring racing with the thread's park is owed to it and paid by the
+  park (WAKE_OWED.md); the wait's backstop remains for a missed edge.
 - `os64_ui_dispatch` passes the unchanged borrowed event to
   `ui.on_doorbell(ui, event)` on the UI thread, even without a widget
   root. With no callback it returns false; widgets do not receive the

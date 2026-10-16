@@ -948,6 +948,17 @@ void processSignals()
 		doorbell_ring_in_pass(&kDoorbellTestBell);
 	}
 
+	// The owed-wake fixture (test_wake_owed) names a thread and a tick: the
+	// first pass at or after that tick aims the wake at it from inside a
+	// pass, under the queue lock this pass holds, as a deliverer on another
+	// core would.
+	thread_t *owedTarget = kWakeOwedTestTarget;
+	if (owedTarget != NULL && kTicksSinceStart >= kWakeOwedTestTick)
+	{
+		kWakeOwedTestTarget = NULL;
+		scheduler_wake_or_owe_locked(owedTarget);
+	}
+
 	// Blit-throttle flush: if a console scroll burst left the glass behind
 	// its shadow (BasicRenderer's ~30Hz throttle), deliver the finished
 	// frame. Costs one branch when the glass is current — which is always,
