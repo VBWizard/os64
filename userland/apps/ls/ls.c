@@ -1,8 +1,7 @@
 #include "os64/os64.h"
 
-#define MAX_DIR_ENTRIES 512
 #define LS_PATH_MAX 512
-#define LS_MAX_PATHS 512
+#define LS_INITIAL_ENTRIES 64
 // The width to lay out for when the terminal cannot be asked.
 #define LS_DEFAULT_WIDTH 80
 // GNU/POSIX ls's "six months" display boundary: half an average Gregorian
@@ -14,8 +13,6 @@ typedef enum {
     LS_SORT_TIME,
     LS_SORT_SIZE
 } ls_sort_t;
-
-static os64_dirent_t dirEntries[MAX_DIR_ENTRIES];
 
 // Name order is BYTE order, as in Unix's C locale: every capital sorts before
 // every lowercase letter, and nothing depends on a locale os64 does not have.
@@ -42,20 +39,38 @@ static int compare_entries(const os64_dirent_t *first,
     return compare_names(first->name, second->name);
 }
 
+static void sift_down(os64_dirent_t *entries, int32_t root,
+                      int32_t count, ls_sort_t sort)
+{
+    while (root < count / 2)
+    {
+        int32_t child = root * 2 + 1;
+        if (child >= count)
+            break;
+        if (child + 1 < count &&
+            compare_entries(&entries[child], &entries[child + 1], sort) < 0)
+            child++;
+        if (compare_entries(&entries[root], &entries[child], sort) >= 0)
+            break;
+        os64_dirent_t tmp = entries[root];
+        entries[root] = entries[child];
+        entries[child] = tmp;
+        root = child;
+    }
+}
+
 static void sort_entries(os64_dirent_t *entries, int32_t count, ls_sort_t sort)
 {
-    // Directory listings are capped at 512 entries. Insertion sort is small,
-    // stable, allocation-free, and plenty quick at that honest upper bound.
-    for (int32_t i = 1; i < count; i++)
+    // Heap sort keeps name, time and size ordering practical as a directory
+    // grows, without needing a second copy of its entries.
+    for (int32_t root = count / 2 - 1; root >= 0; root--)
+        sift_down(entries, root, count, sort);
+    for (int32_t end = count - 1; end > 0; end--)
     {
-        os64_dirent_t moving = entries[i];
-        int32_t j = i;
-        while (j > 0 && compare_entries(&moving, &entries[j - 1], sort) < 0)
-        {
-            entries[j] = entries[j - 1];
-            j--;
-        }
-        entries[j] = moving;
+        os64_dirent_t tmp = entries[0];
+        entries[0] = entries[end];
+        entries[end] = tmp;
+        sift_down(entries, 0, end, sort);
     }
 }
 
@@ -252,7 +267,7 @@ static void print_listing(const os64_dirent_t *entries, int32_t count,
 }
 
 static int32_t get_directory_listing(const char *path,
-                                     os64_dirent_t *entries,
+                                     os64_dirent_t **entries,
                                      int32_t *entryCount)
 {
     int32_t directory = (int32_t)os64_opendir(path);
@@ -262,35 +277,50 @@ static int32_t get_directory_listing(const char *path,
         return 1;
     }
 
+    int32_t capacity = 0;
     int64_t result = 0;
-    while (*entryCount < MAX_DIR_ENTRIES &&
-           (result = os64_readdir(directory, &entries[*entryCount])) == 1)
-        (*entryCount)++;
-
-    // Distinguish an exactly-full listing from a truncated one without ever
-    // writing past the array.
+    bool noMemory = false;
     bool tooMany = false;
-    if (*entryCount == MAX_DIR_ENTRIES)
+    os64_dirent_t next;
+    while ((result = os64_readdir(directory, &next)) == 1)
     {
-        os64_dirent_t extra = {0};
-        result = os64_readdir(directory, &extra);
-        tooMany = result == 1;
+        if (*entryCount == capacity)
+        {
+            if (capacity > INT32_MAX / 2)
+            {
+                tooMany = true;
+                break;
+            }
+            int32_t grown = capacity ? capacity * 2 : LS_INITIAL_ENTRIES;
+            os64_dirent_t *resized = os64_realloc(*entries,
+                                                  (size_t)grown * sizeof(**entries));
+            if (resized == NULL)
+            {
+                noMemory = true;
+                break;
+            }
+            *entries = resized;
+            capacity = grown;
+        }
+        (*entries)[(*entryCount)++] = next;
     }
 
     int32_t returnCode = 0;
-    if (result < 0)
+    if (noMemory)
     {
-        os64_hprintf(OS64_STDERR, "ls: cannot read directory '%s'\n", path);
+        os64_hprintf(OS64_STDERR, "ls: out of memory listing '%s'\n", path);
         returnCode = 1;
     }
     else if (tooMany)
     {
-        os64_hprintf(OS64_STDERR,
-                     "ls: directory '%s' exceeds the %d-entry limit\n",
-                     path, MAX_DIR_ENTRIES);
+        os64_hprintf(OS64_STDERR, "ls: too many entries in '%s'\n", path);
         returnCode = 1;
     }
-
+    else if (result < 0)
+    {
+        os64_hprintf(OS64_STDERR, "ls: cannot read directory '%s'\n", path);
+        returnCode = 1;
+    }
     if (os64_close(directory) < 0)
     {
         os64_hprintf(OS64_STDERR, "ls: cannot close directory '%s'\n", path);
@@ -307,7 +337,12 @@ int main(int argc, char **argv)
     bool sortSize = false;
     bool fullTime = false;
     os64_args_t args = {0};
-    const char *paths[LS_MAX_PATHS] = {0};
+    const char **paths = os64_malloc((size_t)(argc + 1) * sizeof(*paths));
+    if (paths == NULL)
+    {
+        os64_hprintf(OS64_STDERR, "ls: out of memory\n");
+        return 1;
+    }
     const os64_optspec_t specs[] = {
         {'l', "long", false, "one entry per line with size and modification time",
          .flag = &longMode},
@@ -327,11 +362,17 @@ int main(int argc, char **argv)
                    "when both are present, -t takes precedence.";
 
     int32_t positionals = os64_args_parse(
-        &args, "ls [-lhSt] [--full-time] [PATH ...]", paths, LS_MAX_PATHS);
+        &args, "ls [-lhSt] [--full-time] [PATH ...]", paths, argc + 1);
     if (positionals == OS64_ARG_HELP)
+    {
+        os64_free(paths);
         return 0;
+    }
     if (positionals < 0)
+    {
+        os64_free(paths);
         return 2;
+    }
 
     if (fullTime)
         longMode = true;
@@ -342,6 +383,7 @@ int main(int argc, char **argv)
         if (os64_getcwd(cwd, sizeof(cwd)) < 0)
         {
             os64_hprintf(OS64_STDERR, "ls: cannot get current directory\n");
+            os64_free(paths);
             return 1;
         }
         paths[0] = cwd;
@@ -393,15 +435,19 @@ int main(int argc, char **argv)
         }
 
         int32_t entryCount = 0;
-        if (get_directory_listing(path, dirEntries, &entryCount) != 0)
+        os64_dirent_t *dirEntries = NULL;
+        if (get_directory_listing(path, &dirEntries, &entryCount) != 0)
         {
+            os64_free(dirEntries);
             returnCode = 1;
             printedOperand = true;
             continue;
         }
         sort_entries(dirEntries, entryCount, sort);
         print_listing(dirEntries, entryCount, &options);
+        os64_free(dirEntries);
         printedOperand = true;
     }
+    os64_free(paths);
     return returnCode;
 }

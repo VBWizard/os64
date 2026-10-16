@@ -3937,15 +3937,17 @@ static uint64_t syscall_stat(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 // NULL user_argv means "no args" (argc 0).
 //
 // THE SPAWN BLOCK IS SIZED BY WHAT IS THERE, NOT BY WHAT COULD BE. The caps
-// are generous — 512 arguments, each up to OS64_SPAWN_ARG_MAX — so the worst
-// case is tens of megabytes, and an ordinary `ls` is a few hundred bytes.
+// are generous — OS64_SPAWN_MAX_ARGS arguments, each up to
+// OS64_SPAWN_ARG_MAX — so the theoretical product is huge, while an ordinary
+// `ls` is a few hundred bytes.
 // Measuring first is what lets both be true.
 //
 // The ANSWER TO "TOO MUCH" IS GIVEN HERE, before a byte is copied: an
-// argument that does not end within the per-argument cap, a 513th argument,
-// or a running total past the child's argument block (the pointer slots
-// included, as task_create lays them out) — and the scan stops at the first
-// of them, so a spawn asking for too much costs about one block's worth of
+// argument that does not end within the per-argument cap, more than
+// OS64_SPAWN_MAX_ARGS arguments, or a running total past the child's argument
+// block (pointer slots included, as task_create lays them out). The scan
+// stops at the first excess, so a spawn asking for too much costs about one
+// block's worth of
 // reading, not everything it asked for.
 typedef enum {
 	ARGV_FITS,

@@ -2754,8 +2754,8 @@ task_t *task_create_checked(char *path, int argc, char **argv, task_t *parentTas
 	// TASK_MAX_PATH_LEN slot, so `cat` (four bytes) reserved 128 and a 44-entry
 	// glob reserved 5.6KB to hold 660 bytes. Strings now sit end to end, each
 	// costing strlen+1, exactly the way a real execve argv block is laid out.
-	// That is what makes the generous ceilings FREE — 512 arguments, each up
-	// to OS64_SPAWN_ARG_MAX: they are caps, not reservations, so an ordinary
+	// That is what makes the generous ceilings FREE — OS64_SPAWN_MAX_ARGS
+	// arguments, each up to OS64_SPAWN_ARG_MAX: caps, not reservations, so an ordinary
 	// two-argument command still allocates a couple of hundred bytes and maps
 	// a single page. Wildcards are what forced the question — `cat /tmp/*` has
 	// to survive a busy directory — and a whole command line carried as one

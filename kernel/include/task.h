@@ -9,6 +9,7 @@
 #include "time.h"
 #include "env.h"
 #include "handle.h"
+#include "syscall_numbers.h"   // OS64_SPAWN_MAX_ARGS bounds the child argv block
 
 #define TASK_MAX_EXIT_HANDLERS 10
 #define TASK_DEFAULT_PRIORITY 0
@@ -61,7 +62,7 @@
 // OS64_SPAWN_TOO_LONG), and task_create checks the blob it builds against it
 // too — see the packing comment there.
 #define TASK_ARGV_MAX_BYTES 0x100000
-#define TASK_ARGV_MAX_ARGS 512
+#define TASK_ARGV_MAX_ARGS OS64_SPAWN_MAX_ARGS
 #define TASK_ENV_VIRT 0x6f100000
 // The env block's growth ceiling — the fixed-VA window between TASK_ENV_VIRT
 // and the exit trampoline. ENFORCED since 2026-08-14: env_grow (env.c) caps
