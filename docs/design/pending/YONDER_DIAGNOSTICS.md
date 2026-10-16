@@ -291,9 +291,14 @@ was shown, or since its record was last written on asking:
   tick's work finding what moved and marking it, before its paint.
 - Timed with the processor's counter, its rate taken from the clock across
   the same span, so the numbers are the machine's own: the P5's on the P5.
-- **`d` in the page writes the record now** (`written: when asked`) and
-  starts the counts again — so one part of a page is measured on its own:
-  scroll there, `d`, wait, `d`, and read the last write.
+- **`d` in the page writes the record now** (`written: when asked`),
+  keeping the counts since the last `d` as a numbered reading with where
+  the page was scrolled — `paint reading 2: at y 2140: 96 paints in 10.1 s
+  ... | ms a paint (most): render ...` — and starts them again. So each
+  part of a page is measured on its own and every reading stays: scroll
+  there, `d`, wait, `d`, scroll on, wait, `d`. The status line names the
+  reading it wrote. `paint` and `paint stages` are the counts since the
+  last `d`.
 
 ### Built differently from the brief, and why
 

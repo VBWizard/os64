@@ -4433,9 +4433,16 @@ static void paint_cost_cases(void) {
         diag_asked();
         char name[64]; yonder_diag_file_name(g.page.diag,name,sizeof(name));
         const char *file=diag_file("/tmp/diag",name);
-        check(has(file,"\nwritten: when asked\n") && has(file,"\npaint: 2 paints") && s_cost.paints==0 &&
-              s_cost.total[PS_RENDER]==0,
-              "paint counts: the record is written when asked, and the counts start again");
+        check(has(file,"\nwritten: when asked\n") && has(file,"\npaint reading 1: at y 0: 2 paints in ") &&
+              has(file," | ms a paint (most): render 12.0 (13.0)") && s_cost.paints==0 && s_cost.total[PS_RENDER]==0,
+              "paint counts: d keeps the counts as a reading, writes the record, and starts them again");
+        s_cost.paints=1; s_cost.total[PS_RENDER]=5000000;
+        s_cost.from_cycles=cycles()-1000000000ull; s_cost.from_us=os64_micros()-1000000;
+        diag_asked();
+        file=diag_file("/tmp/diag",name);
+        check(has(file,"\npaint reading 1: at y 0: 2 paints in ") && has(file,"\npaint reading 2: at y 0: 1 paints in ") &&
+              s_cost_readings==2,
+              "paint counts: each d adds a reading, and the ones before it stay");
     }
     web_drop();
     saved_diagnostics[0]='\0';

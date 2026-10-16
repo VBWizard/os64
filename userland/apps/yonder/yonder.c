@@ -1646,6 +1646,9 @@ static struct {
     uint64_t from_cycles;
     int64_t from_us;
 } s_cost;
+// The readings the shown page's record keeps (`d`): numbered from 1 for
+// each page shown.
+static uint32_t s_cost_readings;
 
 static inline uint64_t cycles(void)
 {
@@ -2240,8 +2243,9 @@ static void arrive_now(Page *fresh, NavKind kind, const way_position_t *crumb,
     webfonts_leave();
     g.page = *fresh;
     os64_memset(fresh, 0, sizeof(*fresh));
-    // Its paints are counted from here (diag_paint).
+    // Its paints are counted from here (diag_paint), its readings anew.
     cost_reset();
+    s_cost_readings = 0;
     // The families it asked for as it arrived (page_fonts) are the shown
     // page's now; another page's are let go.
     if (s_arriving.staged && g.page.diag != NULL && s_arriving.seq == yonder_diag_seq(g.page.diag)) {
@@ -4604,26 +4608,24 @@ static void diag_face(Page *p, int32_t i, const garb_font_face_t *f, bool shown)
 
 // The paints' cost since the page was shown, or since its record was last
 // written on asking (`d`, view_key): how many and how much of the view they
-// painted, and each stage in milliseconds a paint (a tick, for ticks) —
-// on average and at most — the counter's rate taken from os64_micros over
-// the same span. "window" is the render outside the view (the root panel,
-// the chrome); "the view's rest" is the view outside its timed stages.
-static void diag_paint(Page *p)
+// painted (`t`), and each stage in milliseconds a paint (a tick, for
+// ticks) — on average and at most — the counter's rate taken from
+// os64_micros over the same span (`u`). "window" is the render outside the
+// view (the root panel, the chrome); "the view's rest" is the view outside
+// its timed stages. False when nothing was painted: `t` says so, `u` is
+// empty.
+static bool paint_lines(DiagText *t, DiagText *u)
 {
     uint64_t span_us = (uint64_t)(os64_micros() - s_cost.from_us);
     uint64_t rate = span_us > 0 ? (cycles() - s_cost.from_cycles) / span_us : 0;   // per microsecond
     if (rate == 0 || s_cost.paints == 0) {
-        yonder_diag_fact(p->diag, "paint", "nothing painted since the counts began");
-        yonder_diag_forget(p->diag, "paint stages");
-        return;
+        dt_put(t, "nothing painted since the counts began");
+        return false;
     }
-    DiagText t = {0};
-    dt_put(&t, "%lu paints in %lu.%lu s (%lu whole views), %lu.%lu Mpx of the view; %lu ticks",
+    dt_put(t, "%lu paints in %lu.%lu s (%lu whole views), %lu.%lu Mpx of the view; %lu ticks",
            (unsigned long)s_cost.paints, (unsigned long)(span_us / 1000000), (unsigned long)(span_us / 100000 % 10),
            (unsigned long)s_cost.whole, (unsigned long)(s_cost.pixels / 1000000),
            (unsigned long)(s_cost.pixels / 100000 % 10), (unsigned long)s_cost.ticks);
-    yonder_diag_fact(p->diag, "paint", t.short_of_memory || t.s == NULL ? "no memory to write this line" : t.s);
-    os64_free(t.s);
     // Tenths of a millisecond: cycles / (rate per microsecond x 100).
     uint64_t per = rate * 100;
     uint64_t inner = 0;
@@ -4631,20 +4633,52 @@ static void diag_paint(Page *p)
         inner += s_cost.total[s];
     uint64_t window = s_cost.total[PS_RENDER] > s_cost.total[PS_VIEW] ? s_cost.total[PS_RENDER] - s_cost.total[PS_VIEW] : 0;
     uint64_t rest = s_cost.total[PS_VIEW] > inner ? s_cost.total[PS_VIEW] - inner : 0;
-    DiagText u = {0};
-    dt_put(&u, "ms a paint (most):");
+    dt_put(u, "ms a paint (most):");
     for (int32_t s = 0; s < PS_COUNT; s++) {
         uint64_t n = s == PS_TICKS ? (s_cost.ticks > 0 ? s_cost.ticks : 1) : s_cost.paints;
         uint64_t avg = s_cost.total[s] / n / per, most = s_cost.most[s] / per;
-        dt_put(&u, "%s %s %lu.%lu (%lu.%lu)", s ? "," : "", s == PS_TICKS ? "ticks (a tick)" : kPaintStage[s],
+        dt_put(u, "%s %s %lu.%lu (%lu.%lu)", s ? "," : "", s == PS_TICKS ? "ticks (a tick)" : kPaintStage[s],
                (unsigned long)(avg / 10), (unsigned long)(avg % 10), (unsigned long)(most / 10),
                (unsigned long)(most % 10));
     }
     uint64_t w = window / s_cost.paints / per, r = rest / s_cost.paints / per;
-    dt_put(&u, "; window %lu.%lu, the view's rest %lu.%lu", (unsigned long)(w / 10), (unsigned long)(w % 10),
+    dt_put(u, "; window %lu.%lu, the view's rest %lu.%lu", (unsigned long)(w / 10), (unsigned long)(w % 10),
            (unsigned long)(r / 10), (unsigned long)(r % 10));
-    yonder_diag_fact(p->diag, "paint stages", u.short_of_memory || u.s == NULL ? "no memory to write this line" : u.s);
+    return true;
+}
+
+static const char *dt_text(const DiagText *t)
+{
+    return t->short_of_memory || t->s == NULL ? "no memory to write this line" : t->s;
+}
+
+// The counts so far, as `paint` and `paint stages` (paint_lines).
+static void diag_paint(Page *p)
+{
+    DiagText t = {0}, u = {0};
+    bool painted = paint_lines(&t, &u);
+    yonder_diag_fact(p->diag, "paint", dt_text(&t));
+    if (painted)
+        yonder_diag_fact(p->diag, "paint stages", dt_text(&u));
+    else
+        yonder_diag_forget(p->diag, "paint stages");
+    os64_free(t.s);
     os64_free(u.s);
+}
+
+// The counts kept as reading `n` of the page, with where the page was
+// scrolled, before they start again (diag_asked): each `d` adds one.
+static void diag_paint_reading(Page *p, uint32_t n)
+{
+    DiagText t = {0}, u = {0}, v = {0};
+    bool painted = paint_lines(&t, &u);
+    dt_put(&v, "at y %ld: %s%s%s", (long)g.sy, dt_text(&t), painted ? " | " : "", painted ? dt_text(&u) : "");
+    char key[32];
+    os64_snprintf(key, sizeof(key), "paint reading %u", (unsigned)n);
+    yonder_diag_fact(p->diag, key, dt_text(&v));
+    os64_free(t.s);
+    os64_free(u.s);
+    os64_free(v.s);
 }
 
 // A page's fonts on its record, at each write: how many faces and files
@@ -8474,9 +8508,11 @@ static Key view_key(const os64_gui_event_t *ev)
     return a == ' ' ? KEY_SPACE : a == 'p' ? KEY_POSITIONING : a == 'd' ? KEY_RECORD : KEY_NONE;
 }
 
-// `d` writes the shown page's record now ("when asked") and starts its
-// paint counts again (diag_paint), so a part of a page can be measured on
-// its own: scroll there, `d`, wait, `d`. Without a record, it says so.
+// `d` writes the shown page's record now ("when asked"), keeping the paint
+// counts since the last `d` as a numbered reading with where the page was
+// scrolled (diag_paint_reading), and starts them again — so each part of a
+// page can be measured on its own: scroll there, `d`, wait, `d`, and the
+// next part. Without a record, it says so.
 static void diag_asked(void)
 {
     if (g.page.diag == NULL) {
@@ -8484,9 +8520,12 @@ static void diag_asked(void)
         return;
     }
     diag_observe(&g.page, "when asked");
+    diag_paint_reading(&g.page, ++s_cost_readings);
     diag_write(g.page.diag);
     cost_reset();
-    status_rest("Record written; the paint counts start again.");
+    char said[96];
+    os64_snprintf(said, sizeof(said), "Paint reading %u written; the counts start again.", (unsigned)s_cost_readings);
+    status_rest(said);
 }
 
 // `p` lays pages out with every box static — the page as it reads in

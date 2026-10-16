@@ -82,13 +82,15 @@ milliseconds.
 **Where it is read.** A `paint:` section on the page's record
 (YONDER_DIAGNOSTICS.md) at each write. To measure one part of a page —
 the starfield alone, the roaches, Scratch 2000 — the record can be written
-on demand: the `d` key in the view writes it ("written: when asked") and
-starts the counts again, so a reading is: scroll there, press `d`, wait
-ten seconds, press `d`.
+on demand: the `d` key in the view writes it ("written: when asked"),
+keeps the counts since the last `d` as a numbered reading with the scroll
+position, and starts them again — so readings of several parts of a page
+sit side by side in one file: scroll there, `d`, wait ten seconds, `d`.
 
 | State | Begun | Changed | Written | Let go |
 |---|---|---|---|---|
 | Paint counts (per stage: total, most, paints) | when a page is shown | at every paint and tick | at every write of the page's record | after an asked-for write (`d`), and with the page |
+| The readings (`paint reading N`) | when a page is shown, numbered from 1 | one more at each `d` | kept in the record from then on | with the page's record |
 | The counter's rate | at the first paint of the run | — | used at each write | never: the processor's |
 
 **The first reading (QEMU, emulated, so its milliseconds are not the
