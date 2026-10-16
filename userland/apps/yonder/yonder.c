@@ -1914,7 +1914,10 @@ static bool lay_out_shown(bool again, LaidFor laid_for)
     s_web.moved = false;
     g.settle_due = YONDER_NEVER;       // the deadline goes with the moves it was for
     if (!laid) {
+        // What the failed layout wanted is still asked for, and nothing
+        // is held for it.
         webfonts_unhold();
+        webfonts_feed(false);
         say_failed(g.page.diag, "layout", "Out of memory laying the page out; this is the last layout that fit.");
         return false;
     }
@@ -3538,8 +3541,9 @@ static uint64_t webfonts_size_key(int32_t file, uint32_t px, uint64_t ranges)
 }
 
 // A face of a READY file at `px` with the rule's ranges, kept for the
-// layouts after this one; the least lately used goes when the table is
-// full (a run that holds it keeps it). NULL when it will not open — and
+// layouts after this one; the least lately used goes, before the open,
+// when the table is full (a run that holds it keeps it). NULL when it
+// will not open — and
 // one refused for room (`*room`) is recorded, to ask for a layout after
 // this one (webfonts_feed).
 static os64_text_font_t *webfonts_handle(int32_t file, const garb_font_face_t *f, uint32_t px, bool *room)
@@ -3552,6 +3556,16 @@ static os64_text_font_t *webfonts_handle(int32_t file, const garb_font_face_t *f
             h->used = ++s_web.clock;
             return h->font;
         }
+    }
+    // The table full, the least lately used goes first, so its room is
+    // there for the open: a run that draws in it holds it.
+    if (s_web.nhandles == WEBFONT_HANDLES_MAX) {
+        int32_t lru = 0;
+        for (int32_t i = 1; i < s_web.nhandles; i++)
+            if (s_web.handles[i].used < s_web.handles[lru].used)
+                lru = i;
+        os64_text_font_release(s_web.handles[lru].font);
+        s_web.handles[lru] = s_web.handles[--s_web.nhandles];
     }
     os64_font_face_options_t o = {px, OS64_FONT_HINT_NORMAL};
     os64_text_font_t *font = NULL;
@@ -3568,17 +3582,7 @@ static os64_text_font_t *webfonts_handle(int32_t file, const garb_font_face_t *f
             s_web.refused[s_web.nrefused++] = size;
         return NULL;
     }
-    int32_t at = s_web.nhandles;
-    if (at == WEBFONT_HANDLES_MAX) {
-        at = 0;
-        for (int32_t i = 1; i < s_web.nhandles; i++)
-            if (s_web.handles[i].used < s_web.handles[at].used)
-                at = i;
-        os64_text_font_release(s_web.handles[at].font);
-    } else {
-        s_web.nhandles++;
-    }
-    s_web.handles[at] = (WebFontHandle){file, px, key, font, ++s_web.clock};
+    s_web.handles[s_web.nhandles++] = (WebFontHandle){file, px, key, font, ++s_web.clock};
     return font;
 }
 
@@ -3614,13 +3618,20 @@ static float webfonts_nearest(const garb_font_face_t *f, float want)
     return want < f->weight_min ? f->weight_min : want > f->weight_max ? f->weight_max : want;
 }
 
+// Which of a family's faces Fonts 4 § 5.2 chooses: a style and a weight
+// (webfonts_match), every face of both being the choice — a composite.
+typedef struct {
+    garb_face_style_t style;
+    float weight;
+} WebFontPick;
+
 // One family's faces chosen as Fonts 4 § 5.2 chooses them: its style,
 // italic then oblique then normal for an italic ask and normal then
 // oblique then italic otherwise; then its weight, the nearest by § 5.2's
-// order; then every face of both — a composite — into `out`, the later
-// rule first, as many as `cap` holds. Stretch is not read. The count.
-static int32_t webfonts_match(const garb_font_face_t *faces, int32_t n, const flow_family_name_t *name,
-                              bool italic, bool bold, int32_t *out, int32_t cap)
+// order. Stretch is not read. Whether the family has a face at all; the
+// choice into `*pick`, its faces told by webfonts_chosen.
+static bool webfonts_match(const garb_font_face_t *faces, int32_t n, const flow_family_name_t *name,
+                           bool italic, bool bold, WebFontPick *pick)
 {
     const garb_face_style_t kItalic[] = {GARB_FACE_ITALIC, GARB_FACE_OBLIQUE, GARB_FACE_NORMAL};
     const garb_face_style_t kNormal[] = {GARB_FACE_NORMAL, GARB_FACE_OBLIQUE, GARB_FACE_ITALIC};
@@ -3634,7 +3645,7 @@ static int32_t webfonts_match(const garb_font_face_t *faces, int32_t n, const fl
                 style = k;
     }
     if (style < 0)
-        return 0;
+        return false;
     float want = bold ? 700 : 400, best = 0;
     int best_tier = -1;
     float best_dist = 0;
@@ -3649,12 +3660,16 @@ static int32_t webfonts_match(const garb_font_face_t *faces, int32_t n, const fl
         if (best_tier < 0 || tier < best_tier || (tier == best_tier && dist < best_dist))
             best_tier = tier, best_dist = dist, best = w;
     }
-    int32_t got = 0;
-    for (int32_t i = n - 1; i >= 0 && got < cap; i--)
-        if (faces[i].style == order[style] && webfonts_nearest(&faces[i], want) == best &&
-            fold_eq(faces[i].family, faces[i].family_len, name->name, name->len))
-            out[got++] = i;
-    return got;
+    *pick = (WebFontPick){order[style], best};
+    return true;
+}
+
+// Whether `f` is of the family `name` and the choice webfonts_match made.
+static bool webfonts_chosen(const garb_font_face_t *f, const flow_family_name_t *name, bool bold,
+                            const WebFontPick *pick)
+{
+    return f->style == pick->style && webfonts_nearest(f, bold ? 700 : 400) == pick->weight &&
+           fold_eq(f->family, f->family_len, name->name, name->len);
 }
 
 // The list is borrowed until the next call, which is libflow's contract
@@ -3691,8 +3706,8 @@ static os64_font_status_t page_fonts(void *ctx, const flow_family_list_t *famili
     }
     uint32_t nrest = 0;
     for (uint32_t k = 0; k < families->count && nfaces > 0; k++) {
-        int32_t one;
-        if (webfonts_match(faces, nfaces, &families->names[k], italic, bold, &one, 1) == 0)
+        WebFontPick pick;
+        if (!webfonts_match(faces, nfaces, &families->names[k], italic, bold, &pick))
             rest[nrest++] = (os64_font_family_name_t){families->names[k].name, families->names[k].len};
     }
     os64_font_family_list_t asked = {
@@ -3737,17 +3752,21 @@ static os64_font_status_t page_fonts(void *ctx, const flow_family_list_t *famili
     // whose file failed, or whose size will not open for another reason,
     // gives its place to the next. A face whose ranges miss the document's
     // characters, or with more than a text font takes, is passed over —
-    // even when another rule already fetched its file.
+    // even when another rule already fetched its file. A composite is
+    // walked from its latest rule through every one, so an earlier face
+    // serves when the later ones cannot.
     os64_text_font_t *mine[WEBFONT_LIST_MAX];
     uint32_t mine_name[WEBFONT_LIST_MAX];
     int32_t pending[WEBFONT_LIST_MAX];
     size_t nmine = 0, npending = 0, places = 0;
     for (uint32_t k = 0; k < families->count && nfaces > 0 && places < keep; k++) {
-        int32_t chosen[WEBFONT_LIST_MAX];
-        int32_t m = webfonts_match(faces, nfaces, &families->names[k], italic, bold, chosen, WEBFONT_LIST_MAX);
-        for (int32_t i = 0; i < m && places < keep; i++) {
-            const garb_font_face_t *f = &faces[chosen[i]];
-            if (f->nranges > (int32_t)OS64_TEXT_RANGES_MAX || !webfonts_meet(f))
+        WebFontPick pick;
+        if (!webfonts_match(faces, nfaces, &families->names[k], italic, bold, &pick))
+            continue;
+        for (int32_t i = nfaces - 1; i >= 0 && places < keep; i--) {
+            const garb_font_face_t *f = &faces[i];
+            if (!webfonts_chosen(f, &families->names[k], bold, &pick) || f->nranges > (int32_t)OS64_TEXT_RANGES_MAX ||
+                !webfonts_meet(f))
                 continue;
             int32_t file = webfonts_file(p, f);
             if (file < 0)
@@ -5183,6 +5202,7 @@ static bool script_rebuild(void)
             flow_free(next.tree);
             garb_cascade_free(next.cascade);
             sheets_free(&next);
+            webfonts_feed(false);       // the files its layout wanted are still asked for
             say_failed(p->diag, "layout", p->tree != NULL
                 ? "Out of memory laying out the changed page; this is the last layout that fit."
                 : "Out of memory laying out the changed page.");

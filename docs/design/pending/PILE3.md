@@ -2371,13 +2371,17 @@ file whose open is refused for room (the tree on screen holds faces in
 the same budget) is held and opened once more after the next layout of
 the shown page, a script's rebuild included, which has let the old
 tree's room go; refused again it fails, as it does when the held files'
-bytes together would pass 64 MiB and when that layout itself fails. A SIZE of an open file refused for
+bytes together would pass 64 MiB and when that layout itself fails — a
+failed layout, or a script's failed rebuild, still asks for the files it
+queued. A SIZE of an open file refused for
 room gets one more layout, and then the fallback stands — each size
 once, until a layout refuses none, so a zoom's new size gets its own.
 Every font failure reaches the badge as it is recorded. The list is
 the eight a layout takes: the system's family and the generic keep their
 places, and the page's faces have the rest — a composite past that, its
-latest rules. A face is fetched only while its list has a place for it:
+latest rules that can serve: a composite is walked from its latest rule
+through every one, so an earlier face serves when the later ones cannot.
+A face is fetched only while its list has a place for it:
 a file coming, or a size of one refused for room, holds a place (once,
 however often its name is written), so the faces after it wait, and one
 whose file fails gives its place to the next; a source that cannot be

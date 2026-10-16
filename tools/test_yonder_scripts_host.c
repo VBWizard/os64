@@ -191,11 +191,13 @@ static int font_open_refusals;
 /* The next opens of another size refused for room, likewise. */
 static int font_like_refusals;
 static os64_font_status_t font_like_status=OS64_FONT_LIMIT;   /* what a refusal says */
+static bool font_like_refuse_full;  /* refused for room while the handle table is full */
 os64_font_status_t __real_os64_text_font_open_like(const os64_text_font_t *, const os64_font_face_options_t *,
                                                    const os64_text_range_t *, size_t, os64_text_font_t **);
 os64_font_status_t __wrap_os64_text_font_open_like(const os64_text_font_t *like, const os64_font_face_options_t *o,
                                                    const os64_text_range_t *r, size_t n, os64_text_font_t **out) {
     if(font_like_refusals>0) { font_like_refusals--; *out=NULL; return font_like_status; }
+    if(font_like_refuse_full && s_web.nhandles==WEBFONT_HANDLES_MAX) { *out=NULL; return OS64_FONT_LIMIT; }
     return __real_os64_text_font_open_like(like,o,r,n,out);
 }
 os64_font_status_t __real_os64_text_font_open(os64_text_context_t *, const uint8_t *, size_t,
@@ -4499,6 +4501,62 @@ static void webfont_cases(void) {
         for(size_t i=0;i<n;i++) os64_html_unpin(g.page.way.doc,pins[i]);
     }
     font_open_refusals=0;
+    web_drop();
+    /* A composite whose latest rules cannot serve falls back to an
+     * earlier one, past the eight a list keeps. */
+    {
+        char many[4096]; size_t at=0;
+        at+=(size_t)snprintf(many+at,sizeof(many)-at,"<style>@font-face{font-family:W;src:url(ok.ttf)}");
+        for(int i=0;i<9;i++)
+            at+=(size_t)snprintf(many+at,sizeof(many)-at,"@font-face{font-family:W;src:url(c%d.ttf);unicode-range:U+4E00-9FFF}",i);
+        snprintf(many+at,sizeof(many)-at,"p{font-family:W}</style><p>hello");
+        web_page(many);
+        check(s_web.nfiles==1 && web_file("https://fixture.test/ok.ttf")==0,
+              "web fonts: past nine later rules that cannot serve, the earliest is wanted");
+        web_drop();
+    }
+    /* With the handle table full, the least lately used goes before the
+     * open, so its room is there for the new size. */
+    web_page("<style>@font-face{font-family:Web;src:url(w.ttf)}p{font-family:Web}</style><p>hello");
+    check(font_land("w.ttf","A",NULL),"web fonts: lru: the file arrives");
+    pictures_settle();
+    {
+        const garb_font_face_t *faces; bool room;
+        check(garb_cascade_font_faces(g.page.cascade,&faces,NULL)==1,"web fonts: lru: one face");
+        for(uint32_t px=100;s_web.nhandles<WEBFONT_HANDLES_MAX;px++) (void)webfonts_handle(0,&faces[0],px,&room);
+        font_like_refuse_full=true;
+        check(webfonts_handle(0,&faces[0],999,&room)!=NULL && s_web.nhandles==WEBFONT_HANDLES_MAX,
+              "web fonts: a full table lets its least lately used go before the open");
+        font_like_refuse_full=false;
+    }
+    web_drop();
+    /* A layout that fails still asks for the files it wanted. */
+    web_page("<style>@font-face{font-family:Web;src:url(w.ttf)}p{font-family:Web}</style><p>hello");
+    {
+        int32_t late=webfonts_add("https://fixture.test/late.ttf");
+        os64_html_pin_t pins[512]; size_t n=0;
+        while(n<512 && (pins[n]=os64_html_pin(g.page.way.doc))!=0) n++;
+        s_web.moved=true;
+        pictures_settle();
+        check(n<512 && late>=0 && s_web.files[late].state==WF_WAITING,"web fonts: a failed layout still asks for what it queued");
+        for(size_t i=0;i<n;i++) os64_html_unpin(g.page.way.doc,pins[i]);
+    }
+    web_drop();
+    web_page_scripted("<style>@font-face{font-family:Web;src:url(w.ttf)}p{font-family:Web}</style>"
+                      "<p id=t>hello</p><script>document.getElementById('t').textContent='changed'</script>",true);
+    {
+        int32_t late=webfonts_add("https://fixture.test/late.ttf");
+        os64_js_outcome_t out;
+        check(yonder_scripts_step(g.page.scripts,&out) && out.status==OS64_JS_OK,"web fonts: a script changes the page");
+        os64_page_t *model=os64_page_rebuild(page_model(&g.page));
+        os64_page_free(g.page.way.model); g.page.way.model=model;
+        g.page.model_version=os64_html_version(g.page.way.doc);
+        os64_html_pin_t pins[512]; size_t n=0;
+        while(n<512 && (pins[n]=os64_html_pin(g.page.way.doc))!=0) n++;
+        check(n<512 && !script_rebuild() && late>=0 && s_web.files[late].state==WF_WAITING,
+              "web fonts: a failed rebuild still asks for what it queued");
+        for(size_t i=0;i<n;i++) os64_html_unpin(g.page.way.doc,pins[i]);
+    }
     web_drop();
     /* A name written again counts its file once: the family after the
      * repeats still has a place. */
