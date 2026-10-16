@@ -12,7 +12,11 @@
 // without recursing), `--numbers` dumps numbers past int64_t's reach and
 // past a double's, and `--cost BYTES` and `--full` hold a parse to what
 // GARB.md says it costs, and to keeping what it finished when the arena
-// fills; `--keyframes-scale` holds @keyframes to a sort's cost.
+// fills; `--keyframes-scale` holds @keyframes to a sort's cost, and
+// `--faces-cap` the @font-face rules to GARB_FONT_FACES_MAX.
+
+// open_memstream, for the sweep's answer.
+#define _POSIX_C_SOURCE 200809L
 
 #include <pthread.h>
 #include <signal.h>
@@ -330,6 +334,38 @@ static void media(const char *text)
     puts(garb_media_text_matches(text + used, env) ? "true" : "false");
 }
 
+// The faces mode: each face garb_cascade_font_faces answers, in order —
+// `"FAMILY" WEIGHTS STYLE [RANGES] sheet N` and then its sources, each
+// `url(TEXT) [format(F)]` or `local(NAME)` — and how many were lost.
+static void print_faces(const garb_cascade_t *c, FILE *to)
+{
+    static const char *const kStyles[] = {"normal", "italic", "oblique"};
+    const garb_font_face_t *f;
+    uint32_t lost;
+    int32_t n = garb_cascade_font_faces(c, &f, &lost);
+    for (int32_t i = 0; i < n; i++) {
+        fprintf(to, "\"%.*s\" %g", (int)f[i].family_len, f[i].family, f[i].weight_min);
+        if (f[i].weight_max != f[i].weight_min)
+            fprintf(to, "-%g", f[i].weight_max);
+        fprintf(to, " %s", kStyles[f[i].style]);
+        for (int32_t r = 0; r < f[i].nranges; r++)
+            fprintf(to, "%s U+%X-%X", r ? "," : "", f[i].ranges[r].first, f[i].ranges[r].last);
+        fprintf(to, " sheet %d\n", f[i].sheet);
+        for (int32_t s = 0; s < f[i].nsrc; s++) {
+            const garb_face_src_t *src = &f[i].src[s];
+            if (src->kind == GARB_FACE_LOCAL)
+                fprintf(to, "  local(%.*s)\n", (int)src->len, src->text);
+            else if (src->format != NULL)
+                fprintf(to, "  url(%.*s) format(%.*s)\n", (int)src->len, src->text, (int)src->format_len,
+                       src->format);
+            else
+                fprintf(to, "  url(%.*s)\n", (int)src->len, src->text);
+        }
+    }
+    if (lost > 0)
+        fprintf(to, "(%u lost)\n", lost);
+}
+
 // The keyframes mode: for each element whose winners name animations, in
 // document order, each name and its keyframes as garb_keyframes answers
 // them — `  OFFSET% [EASING]: prop: value; ...` — or `(no rule)`.
@@ -490,7 +526,7 @@ static void print_skips(const garb_cascade_t *c)
 // A page and "WIDTHxHEIGHT": every element's author winners, or with
 // `skips`, what the cascade passed over, or with `keyframes`, the
 // animations its elements name.
-typedef enum { CASCADE_WINNERS, CASCADE_SKIPS, CASCADE_KEYFRAMES } CascadeMode;
+typedef enum { CASCADE_WINNERS, CASCADE_SKIPS, CASCADE_KEYFRAMES, CASCADE_FACES } CascadeMode;
 
 static void cascade(const char *html, size_t hlen, const char *viewport, CascadeMode mode)
 {
@@ -511,6 +547,9 @@ static void cascade(const char *html, size_t hlen, const char *viewport, Cascade
         puts(garb_cascade_incomplete(c) ? "(incomplete)" : "(end)");
     } else if (mode == CASCADE_KEYFRAMES) {
         print_keyframes(c, doc);
+        puts(garb_cascade_incomplete(c) ? "(incomplete)" : "(end)");
+    } else if (mode == CASCADE_FACES) {
+        print_faces(c, stdout);
         puts(garb_cascade_incomplete(c) ? "(incomplete)" : "(end)");
     } else {
         size_t need = garb_cascade_dump(c, doc, NULL, 0) + 1;
@@ -891,9 +930,17 @@ static char *cascade_answer(const char *text, size_t len, bool *incomplete)
     garb_sheet_in_t in = {.sheet = &r};
     garb_env_t env = {.width = 800, .height = 600};
     garb_cascade_t *c = garb_cascade(&in, 1, s_sweep_doc, env);
+    // The winners, and then the faces, which no dump of winners holds.
+    char *out = NULL;
+    size_t size = 0;
+    FILE *text_out = open_memstream(&out, &size);
     size_t need = garb_cascade_dump(c, s_sweep_doc, NULL, 0) + 1;
-    char *out = malloc(need);
-    garb_cascade_dump(c, s_sweep_doc, out, need);
+    char *dump = malloc(need);
+    garb_cascade_dump(c, s_sweep_doc, dump, need);
+    fputs(dump, text_out);
+    free(dump);
+    print_faces(c, text_out);
+    fclose(text_out);
     *incomplete = garb_cascade_incomplete(c);
     garb_cascade_free(c);
     garb_free(&r);
@@ -1204,6 +1251,157 @@ static bool keyframes_at_scale(bool backwards, int *nkeyframes, double *took)
     return ordered;
 }
 
+// The faces kept: a sheet of 300 @font-face rules and one more of the
+// first face again keeps the first GARB_FONT_FACES_MAX and counts the rest
+// lost, the cascade whole — the repeat among them, since a repeat is a face
+// of its own (it joins the first in a composite), not a replacement.
+static int faces_cap(void)
+{
+    enum { kFaces = 300 };
+    size_t cap = (size_t)kFaces * 64 + 128, len = 0;
+    char *text = malloc(cap);
+    for (int i = 0; i < kFaces; i++)
+        len += (size_t)snprintf(text + len, cap - len, "@font-face{font-family:f%d;src:url(a%d)}", i, i);
+    len += (size_t)snprintf(text + len, cap - len, "@font-face{font-family:F0;src:url(again)}");
+    static const char kPage[] = "<!doctype html><p>x";
+    os64_html_options_t opt = os64_html_options_default();
+    os64_html_parser_t *hp = os64_html_parser_new(&opt);
+    os64_html_parser_feed(hp, kPage, sizeof(kPage) - 1);
+    os64_html_document_t *doc = os64_html_parser_finish(hp);
+    garb_parsed_t r;
+    (void)garb_parse_sheet_text(text, len, &r);
+    garb_sheet_in_t in = {.sheet = &r};
+    garb_cascade_t *c = garb_cascade(&in, 1, doc, (garb_env_t){.width = 800, .height = 600});
+    const garb_font_face_t *f = NULL;
+    uint32_t lost = 0;
+    int32_t n = garb_cascade_font_faces(c, &f, &lost);
+    bool ok = c != NULL && !garb_cascade_incomplete(c) && n == GARB_FONT_FACES_MAX &&
+              lost == kFaces + 1 - GARB_FONT_FACES_MAX && f[0].src[0].len == 2 &&
+              memcmp(f[0].src[0].text, "a0", 2) == 0;
+    printf("libgarb faces: %d rules, %d kept, %u lost, a repeat past the cap among them%s\n", kFaces + 1,
+           n, lost, ok ? "" : " - FAILED");
+    garb_cascade_free(c);
+    garb_free(&r);
+    os64_html_document_free(doc);
+    free(text);
+    return ok ? 0 : 1;
+}
+
+// What a cascade allocates for GARB_FONT_FACES_MAX small faces and then
+// one rule of `extra` sources.
+static size_t faces_past_cap_cost(int extra)
+{
+    size_t cap = (size_t)GARB_FONT_FACES_MAX * 64 + (size_t)extra * 16 + 128, len = 0;
+    char *text = malloc(cap);
+    for (int i = 0; i < GARB_FONT_FACES_MAX; i++)
+        len += (size_t)snprintf(text + len, cap - len, "@font-face{font-family:f%d;src:url(a%d)}", i, i);
+    len += (size_t)snprintf(text + len, cap - len, "@font-face{font-family:late;src:url(z)");
+    for (int i = 0; i < extra; i++)
+        len += (size_t)snprintf(text + len, cap - len, ",url(z%d)", i);
+    len += (size_t)snprintf(text + len, cap - len, "}");
+    static const char kPage[] = "<!doctype html><p>x";
+    os64_html_options_t opt = os64_html_options_default();
+    os64_html_parser_t *hp = os64_html_parser_new(&opt);
+    os64_html_parser_feed(hp, kPage, sizeof(kPage) - 1);
+    os64_html_document_t *doc = os64_html_parser_finish(hp);
+    garb_parsed_t r;
+    fail_at = 0;
+    (void)garb_parse_sheet_text(text, len, &r);
+    garb_sheet_in_t in = {.sheet = &r};
+    allocations = 0;
+    garb_cascade_free(garb_cascade(&in, 1, doc, (garb_env_t){.width = 800, .height = 600}));
+    size_t cost = allocations;
+    garb_free(&r);
+    os64_html_document_free(doc);
+    free(text);
+    return cost;
+}
+
+// A rule past the cap costs the cascade nothing however long it is: it is
+// counted, not read.
+static int faces_past_cap(void)
+{
+    size_t small = faces_past_cap_cost(0), large = faces_past_cap_cost(2000);
+    bool ok = small == large;
+    printf("libgarb faces: a rule past the cap costs %zu allocations with 1 source and %zu with 2001%s\n",
+           small, large, ok ? "" : " - FAILED");
+    return ok ? 0 : 1;
+}
+
+// The faces with each allocation failing alone: a face is kept whole —
+// every one of its sources — or counted lost, never kept in part.
+static int faces_sweep(void)
+{
+    // The three faces many times over, so the faces outgrow the arena's
+    // chunks and a failure lands inside a face's own reading. Each
+    // allocation is failed alone, and then it and every one after it —
+    // the arena retries a chunk it could not get at a smaller size, so
+    // only the second way fails the arena's own allocations. The sheet is
+    // parsed afresh each time: a failure marks the parse it lands in.
+    static const char kFaces[] =
+        "@font-face{font-family:\"One Face\";src:url(a.woff2) format(woff2),url(a.ttf),local(A)}"
+        "@font-face{font-family:Two;src:url(b1),url(b2) format(truetype);unicode-range:U+0-7F,U+100-17F}"
+        "@font-face{font-family:Three;src:local(\"Three Sans\"),url(c);font-weight:300 500}";
+    static const int32_t kSources[] = {3, 2, 2};
+    enum { COPIES = 80 };
+    static char sheet[COPIES * sizeof(kFaces)];
+    size_t len = 0;
+    for (int i = 0; i < COPIES; i++)
+        len += (size_t)snprintf(sheet + len, sizeof(sheet) - len, "%s", kFaces);
+    static const char kPage[] = "<!doctype html><p>x";
+    os64_html_options_t opt = os64_html_options_default();
+    os64_html_parser_t *hp = os64_html_parser_new(&opt);
+    os64_html_parser_feed(hp, kPage, sizeof(kPage) - 1);
+    os64_html_document_t *doc = os64_html_parser_finish(hp);
+    garb_parsed_t r;
+    garb_sheet_in_t in = {.sheet = &r};
+    fail_at = 0;
+    (void)garb_parse_sheet_text(sheet, len, &r);
+    allocations = 0;
+    garb_cascade_t *whole = garb_cascade(&in, 1, doc, (garb_env_t){.width = 800, .height = 600});
+    size_t count = allocations;
+    const garb_font_face_t *f;
+    int failures = whole == NULL || garb_cascade_incomplete(whole) ||
+                   garb_cascade_font_faces(whole, &f, NULL) != 3 * COPIES;
+    if (failures)
+        fprintf(stderr, "FAIL faces sweep: the cascade with no failure is not every face\n");
+    garb_cascade_free(whole);
+    garb_free(&r);
+    for (size_t step = 0; step < 2 * count; step++) {
+        size_t at = step % count + 1;
+        fail_at = 0;
+        (void)garb_parse_sheet_text(sheet, len, &r);
+        fail_single = step < count;
+        allocations = 0;
+        fail_at = at;
+        garb_cascade_t *c = garb_cascade(&in, 1, doc, (garb_env_t){.width = 800, .height = 600});
+        fail_at = 0;
+        uint32_t lost = 0;
+        int32_t n = c != NULL ? garb_cascade_font_faces(c, &f, &lost) : 3 * COPIES;
+        for (int32_t i = 0; i < n && c != NULL; i++) {
+            int32_t which = f[i].family_len == 8 ? 0 : f[i].family_len == 3 ? 1 : 2;
+            if (f[i].nsrc != kSources[which]) {
+                fprintf(stderr, "FAIL faces sweep: failure at %zu%s kept %.*s with %d of its %d sources\n",
+                        at, fail_single ? "" : " on", (int)f[i].family_len, f[i].family, f[i].nsrc,
+                        kSources[which]);
+                failures++;
+            }
+        }
+        if (n + (int32_t)lost != 3 * COPIES) {
+            fprintf(stderr, "FAIL faces sweep: failure at %zu%s kept %d and lost %u of %d\n", at,
+                    fail_single ? "" : " on", n, lost, 3 * COPIES);
+            failures++;
+        }
+        garb_cascade_free(c);
+        garb_free(&r);
+    }
+    fail_single = false;
+    os64_html_document_free(doc);
+    printf("libgarb faces sweep: each of %zu allocations failed alone and on, %s\n", count,
+           failures == 0 ? "every face kept whole or counted lost" : "FAILED");
+    return failures != 0;
+}
+
 static int keyframes_scale(void)
 {
     int nf = 0, nb = 0;
@@ -1223,6 +1421,8 @@ int main(int argc, char **argv)
 {
     if (argc == 2 && strcmp(argv[1], "--keyframes-scale") == 0)
         return keyframes_scale();
+    if (argc == 2 && strcmp(argv[1], "--faces-cap") == 0)
+        return faces_cap() | faces_past_cap() | faces_sweep();
     if (argc == 3 && strcmp(argv[1], "--cost") == 0)
         return cost((size_t)strtoul(argv[2], NULL, 10), false);
     if (argc == 2 && strcmp(argv[1], "--full") == 0)
@@ -1259,6 +1459,8 @@ int main(int argc, char **argv)
             cascade(text, len, pabsent ? NULL : protocol, CASCADE_SKIPS);
         else if (strcmp(argv[1], "keyframes") == 0)
             cascade(text, len, pabsent ? NULL : protocol, CASCADE_KEYFRAMES);
+        else if (strcmp(argv[1], "faces") == 0)
+            cascade(text, len, pabsent ? NULL : protocol, CASCADE_FACES);
         else if (strcmp(argv[1], "select") == 0)
             select_page(text, len, protocol);
         else

@@ -19,6 +19,16 @@ bool vc_done(VCur *c);
 // lowercase words): the list's own spelling, and consumed.
 const char *vc_keyword(VCur *c, const char *const *allowed);
 bool ieq(const char *a, size_t alen, const char *b);
+// Whether `text` is a generic family's keyword (Fonts 4 § 3.1.1), as
+// `font-family` reads one and `@font-face` refuses one.
+bool garb_generic_family(const char *text, size_t len);
+// Whether `text` is a system font's keyword (Fonts 4 § 2.1.3), as the
+// `font` shorthand reads one — a family of that name must be quoted.
+bool garb_system_font(const char *text, size_t len);
+// Whether one identifier of an unquoted family name is a CSS-wide keyword
+// or `default`, which no family name may hold in any word (Fonts 4
+// § 2.1.1) — for `font-family` and `@font-face` alike.
+bool garb_family_word_reserved(const char *text, size_t len);
 bool is_delim_v(const garb_value_t *v, char ch);
 
 // Where values that outlive the call are kept, and whether it ran out.

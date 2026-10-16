@@ -12,6 +12,7 @@
 #include "gzip/gzip.h"
 #include "gzip/deflate.h"
 #include "gzip/inflate.h"
+#include "gzip/zlib.h"
 #include "os64/str.h"
 
 void *os64_malloc(size_t size) { return malloc(size); }
@@ -488,6 +489,58 @@ static int run_edges(const uint8_t *in, size_t n, const char *path_a,
     return failed ? 1 : 0;
 }
 
+// The zlib door, as run_gzip runs gzip: `wanted_left` is how many bytes
+// after a DONE stream it must leave untouched, a container's to judge.
+static int run_zlib(const uint8_t *compressed, size_t compressed_length,
+                    const uint8_t *expected, size_t expected_length,
+                    size_t input_chunk, size_t output_chunk, uint64_t limit,
+                    const char *wanted_status, uint32_t wanted_left)
+{
+    os64_zlib_t *stream = os64_zlib_create(limit);
+    uint8_t *actual = calloc(1, expected_length + output_chunk + 16);
+    if (stream == NULL || actual == NULL) {
+        os64_zlib_destroy(stream);
+        free(actual);
+        return 2;
+    }
+    size_t input_position = 0, output_position = 0;
+    os64_zlib_status_t status = OS64_ZLIB_NEED_INPUT;
+    for (size_t turns = 0; turns < 10000000; turns++) {
+        size_t offered_input = compressed_length - input_position;
+        if (offered_input > input_chunk)
+            offered_input = input_chunk;
+        size_t offered_output = output_offer(output_chunk, output_position, limit);
+        const uint8_t *input = compressed + input_position;
+        uint8_t *output = actual + output_position;
+        size_t input_left = offered_input, output_left = offered_output;
+        bool finish = input_position + offered_input == compressed_length;
+        status = os64_zlib_process(stream, &input, &input_left, &output, &output_left, finish);
+        input_position += offered_input - input_left;
+        output_position += offered_output - output_left;
+        if (status != OS64_ZLIB_NEED_INPUT && status != OS64_ZLIB_NEED_OUTPUT)
+            break;
+        if (status == OS64_ZLIB_NEED_INPUT && input_left != 0) {
+            fprintf(stderr, "zlib decoder requested input with bytes unconsumed\n");
+            status = OS64_ZLIB_BAD_ARGUMENT;
+            break;
+        }
+    }
+    const char *name = os64_zlib_status_name(status);
+    int failed = strcmp(name, wanted_status) != 0;
+    if (!failed && status == OS64_ZLIB_DONE)
+        failed = input_position != compressed_length - wanted_left ||
+                 output_position != expected_length ||
+                 os64_zlib_output_size(stream) != expected_length ||
+                 memcmp(actual, expected, expected_length) != 0;
+    if (failed)
+        fprintf(stderr, "zlib failed: status=%s input=%zu/%zu output=%zu/%zu chunks=%zu/%zu\n", name,
+                input_position, compressed_length, output_position, expected_length, input_chunk,
+                output_chunk);
+    os64_zlib_destroy(stream);
+    free(actual);
+    return failed;
+}
+
 int main(int argc, char **argv)
 {
     if (argc == 6 && strcmp(argv[1], "edges") == 0) {
@@ -532,7 +585,7 @@ int main(int argc, char **argv)
 
     if (argc != 9) {
         fprintf(stderr,
-                "usage: %s raw|gzip COMPRESSED EXPECTED IN_CHUNK OUT_CHUNK LIMIT STATUS MEMBERS\n"
+                "usage: %s raw|gzip|zlib COMPRESSED EXPECTED IN_CHUNK OUT_CHUNK LIMIT STATUS MEMBERS|LEFT\n"
                 "       %s encode raw|gzip INPUT OUTPUT IN_CHUNK OUT_CHUNK MTIME\n",
                 argv[0],
                 argv[0]);
@@ -566,6 +619,10 @@ int main(int argc, char **argv)
                          argv[7]);
     else if (strcmp(argv[1], "gzip") == 0)
         result = run_gzip(compressed, compressed_length, expected,
+                          expected_length, input_chunk, output_chunk, limit,
+                          argv[7], members);
+    else if (strcmp(argv[1], "zlib") == 0)
+        result = run_zlib(compressed, compressed_length, expected,
                           expected_length, input_chunk, output_chunk, limit,
                           argv[7], members);
     else {

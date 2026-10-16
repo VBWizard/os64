@@ -135,10 +135,58 @@ int32_t garb_keyframes(const garb_cascade_t *c, const os64_html_node_t *element,
                        const char *name, size_t len, const garb_keyframe_t **out);
 void garb_cascade_free(garb_cascade_t *c);
 
+// One `@font-face` rule (Fonts 4 § 4), read whole: the family it names; its
+// sources in order — a url() as written, resolved by whoever fetches it
+// against the sheet the rule was written in (`sheet`, an index into
+// garb_cascade's sheets), with its format() hint (one format keyword, or
+// the first of a list of strings, as written; NULL with no format()) — or
+// a local() family name, any length; the weights it covers, 1
+// to 1000 as written, fractions and all (one weight is a range of one);
+// its style; and the code points
+// it covers, as inclusive ranges, NULL and 0 for all of them. A source
+// with tech() is dropped (this engine supports no font technology), as is
+// one written wrong; a rule left with no family or no source is no face.
+typedef enum { GARB_FACE_URL, GARB_FACE_LOCAL } garb_face_src_kind_t;
+typedef struct {
+    garb_face_src_kind_t kind;
+    const char *text;           // URL: the address; LOCAL: the family name
+    size_t len;
+    const char *format;         // URL: format()'s first, or NULL
+    size_t format_len;
+} garb_face_src_t;
+typedef enum { GARB_FACE_NORMAL, GARB_FACE_ITALIC, GARB_FACE_OBLIQUE } garb_face_style_t;
+typedef struct {
+    uint32_t first, last;
+} garb_unicode_range_t;
+typedef struct {
+    const char *family;
+    size_t family_len;
+    const garb_face_src_t *src;
+    int32_t nsrc;
+    float weight_min, weight_max;
+    garb_face_style_t style;
+    const garb_unicode_range_t *ranges;
+    int32_t nranges;
+    int32_t sheet;
+} garb_font_face_t;
+
+// The page's faces, from the `@font-face` rules inside the `@media` and
+// `@supports` that hold, in cascade order — every one, faces of one family
+// with the same weights, style and ranges among them: they make one
+// composite face, the later tried first (Fonts 4 § 4.5.1), so an earlier
+// one still serves when a later fails. At most GARB_FONT_FACES_MAX are
+// kept; every `@font-face` rule after them is counted in `lost` (may be
+// NULL) unread, face or not. So is a face memory ran out for, which is
+// dropped whole — and which the cascade also says
+// (garb_cascade_incomplete). Answers how many and points `out` at them,
+// which live as long as the cascade.
+#define GARB_FONT_FACES_MAX 256
+int32_t garb_cascade_font_faces(const garb_cascade_t *c, const garb_font_face_t **out, uint32_t *lost);
+
 // What the build passed over because this library does not read it — a
 // property it has no reader for, an at-rule it does not keep, a function
 // no reader accepts in a declaration it dropped, the family of an
-// @font-face (no face is fetched), and a VALUE: `<property>: <words>` for
+// @font-face before the faces' cap (no face is fetched), and a VALUE: `<property>: <words>` for
 // a declaration of a property it reads, dropped though its value is bare
 // words, or read and laid out as something else (an approximation) — each
 // name once, lower case, with how often it was met. A prefixed name

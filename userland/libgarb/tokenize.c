@@ -224,6 +224,7 @@ static const char *buf_keep(Tokenizer *tz, uint32_t *len)
 // §4.3.7, the backslash already consumed.
 static uint32_t consume_escape(Tokenizer *tz)
 {
+    tz->escaped = true;
     uint32_t c = consume(tz);
     if (c == EOF_CP)
         return REPLACEMENT;
@@ -533,7 +534,7 @@ static void consume_comments(Tokenizer *tz)
 }
 
 // §4.3.1
-Tok tz_next(Tokenizer *tz)
+static Tok next(Tokenizer *tz)
 {
     consume_comments(tz);
     uint32_t c = consume(tz);
@@ -626,4 +627,12 @@ Tok tz_next(Tokenizer *tz)
         return consume_ident_like(tz);
     }
     return delim(tz, c);
+}
+
+Tok tz_next(Tokenizer *tz)
+{
+    tz->escaped = false;
+    Tok t = next(tz);
+    t.v.escaped = tz->escaped;
+    return t;
 }

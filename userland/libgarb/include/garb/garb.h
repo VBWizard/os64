@@ -72,6 +72,10 @@ struct garb_value {
     // The token stands — the specification closes it for you — and a
     // reader that cares where the text broke off can see that it did.
     bool eof;
+    // An escape was resolved in this token: its text is not what the
+    // source spelled, which a reader of the source's own characters
+    // (unicode-range's) must know.
+    bool escaped;
 };
 
 // ── Rules, declarations, and the lists they come in (§5) ────────────────

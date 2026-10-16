@@ -11,7 +11,7 @@ trap 'rm -rf "$work"' EXIT
 cc -std=c11 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
    -I userland/libpng/include -I userland/libgzip/include \
    -I userland/libos64/include -I abi/include \
-   userland/libpng/png.c userland/libgzip/inflate.c \
+   userland/libpng/png.c userland/libgzip/inflate.c userland/libgzip/zlib.c \
    userland/libos64/crc32.c tools/test_png_host.c \
    -o "$work/test_png"
 

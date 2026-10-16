@@ -39,7 +39,7 @@ cc -std=c11 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
   -I userland/libimage/include -I userland/libos64/include \
   -I userland/libpng/include -I userland/libgzip/include -I abi/include \
   userland/libimage/icons.c userland/libos64/ui_icon.c \
-  userland/libpng/png.c userland/libgzip/inflate.c \
+  userland/libpng/png.c userland/libgzip/inflate.c userland/libgzip/zlib.c \
   userland/libos64/crc32.c tools/test_icons_host.c \
   -Wl,--gc-sections -o "$work/test_icons"
 ASAN_OPTIONS=detect_leaks=1 "$work/test_icons" "$work"

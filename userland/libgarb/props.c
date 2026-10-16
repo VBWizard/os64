@@ -146,6 +146,13 @@ bool garb_prop_inherited(garb_prop_t prop)
 // ── Keywords ────────────────────────────────────────────────────────────
 
 static const char *const kWide[] = {"inherit", "initial", "unset", "revert", "revert-layer", NULL};
+bool garb_family_word_reserved(const char *text, size_t len)
+{
+    for (int k = 0; kWide[k] != NULL; k++)
+        if (ieq(text, len, kWide[k]))
+            return true;
+    return ieq(text, len, "default");
+}
 static const char *const kDisplay[] = {
     "none", "block", "inline", "inline-block", "list-item", "table", "inline-table",
     "table-row-group", "table-header-group", "table-footer-group", "table-row",
@@ -339,6 +346,14 @@ static const char *const kBoxSizing[] = {"content-box", "border-box", NULL};
 static const char *const kGeneric[] = {"serif", "sans-serif", "monospace", "cursive", "fantasy",
                                        "system-ui", "ui-serif", "ui-sans-serif", "ui-monospace",
                                        "ui-rounded", "math", "emoji", "fangsong", NULL};
+bool garb_generic_family(const char *text, size_t len)
+{
+    for (int k = 0; kGeneric[k] != NULL; k++)
+        if (ieq(text, len, kGeneric[k]))
+            return true;
+    return false;
+}
+
 static const char *const kFontSize[] = {"xx-small", "x-small", "small", "medium", "large",
                                         "x-large", "xx-large", "xxx-large", "larger", "smaller",
                                         NULL};
@@ -350,6 +365,14 @@ static const char *const kFontStretch[] = {"normal", "ultra-condensed", "extra-c
                                            "expanded", "extra-expanded", "ultra-expanded", NULL};
 static const char *const kSystemFont[] = {"caption", "icon", "menu", "message-box",
                                           "small-caption", "status-bar", NULL};
+bool garb_system_font(const char *text, size_t len)
+{
+    for (int k = 0; kSystemFont[k] != NULL; k++)
+        if (ieq(text, len, kSystemFont[k]))
+            return true;
+    return false;
+}
+
 static const char *const kNormal[] = {"normal", NULL};
 static const char *const kTextAlign[] = {"left", "right", "center", "justify", "start", "end",
                                          "match-parent", NULL};
@@ -791,8 +814,7 @@ static bool families(Sets *s, VCur *c, garb_val_t *out)
                 size_t total = 0;
                 int32_t start = c->i, words = 0;
                 while ((t = vc_peek(c)) != NULL && t->kind == GARB_IDENT) {
-                    if (vc_keyword(&(VCur){c->v, c->n, c->i}, kWide) != NULL ||
-                        ieq(t->text, t->len, "default"))
+                    if (garb_family_word_reserved(t->text, t->len))
                         return false;
                     total += t->len + 1;
                     words++;

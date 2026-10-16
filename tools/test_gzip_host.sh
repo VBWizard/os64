@@ -11,7 +11,7 @@ trap 'rm -rf "$work"' EXIT
 cc -std=c11 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
    -I userland/libgzip/include -I userland/libos64/include -I abi/include \
    userland/libgzip/inflate.c userland/libgzip/deflate.c \
-   userland/libgzip/gzip.c \
+   userland/libgzip/gzip.c userland/libgzip/zlib.c \
    userland/libos64/crc32.c tools/test_gzip_host.c \
    -o "$work/test_gzip"
 
@@ -91,6 +91,32 @@ method[2] = 7
 (root / "trailing_long.gz").write_bytes(plain + b"not gzip" * 5)
 (root / "trailing_zero.gz").write_bytes(plain + bytes(512))
 (root / "next_header_truncated.gz").write_bytes(plain + b"\x1f\x8b\x08")
+
+# The zlib container (RFC 1950): every level, an empty stream, a 32 KiB
+# window; then each part of it wrong in turn.
+def zheader(cmf, flg_bits):
+    flg = flg_bits & 0xe0
+    flg |= 31 - ((cmf << 8 | flg) % 31) if (cmf << 8 | flg) % 31 else 0
+    return bytes([cmf, flg])
+
+zplain = zlib.compress(payload, 6)
+(root / "plain.z").write_bytes(zplain)
+(root / "stored.z").write_bytes(zlib.compress(payload, 0))
+(root / "best.z").write_bytes(zlib.compress(payload, 9))
+(root / "empty.z").write_bytes(zlib.compress(b""))
+(root / "far.z").write_bytes(zlib.compress(far_payload, 9))
+(root / "trailing.z").write_bytes(zplain + b"after")
+bad = bytearray(zplain); bad[0] = (bad[0] & 0xf0) | 7
+(root / "method.z").write_bytes(bytes(bad))
+(root / "window.z").write_bytes(zheader(0x88, 0) + zplain[2:])
+bad = bytearray(zplain); bad[1] ^= 0x01
+(root / "check.z").write_bytes(bytes(bad))
+(root / "dictionary.z").write_bytes(zheader(0x78, 0x20) + b"\x00\x00\x00\x01" + zplain[2:])
+bad = bytearray(zplain); bad[-1] ^= 0x01
+(root / "adler.z").write_bytes(bytes(bad))
+(root / "header_cut.z").write_bytes(zplain[:1])
+(root / "body_cut.z").write_bytes(zplain[:len(zplain) // 2])
+(root / "trailer_cut.z").write_bytes(zplain[:-2])
 PY
 
 run() {
@@ -281,3 +307,27 @@ run gzip "$work/concat.gz" "$work/concat_expected" 7 13 141186 done 2
 run gzip "$work/concat.gz" "$work/concat_expected" 7 13 141185 \
     "output limit exceeded" 0
 echo "gzip empty/history, corruption, truncation, and limit cases  PASS"
+
+for chunks in "1 1" "2 3" "11 17" "4096 31" "65536 65536"; do
+    set -- $chunks
+    for stream in plain stored best; do
+        run zlib "$work/$stream.z" "$work/payload" "$1" "$2" \
+            18446744073709551615 done 0
+    done
+done
+run zlib "$work/empty.z" "$work/empty" 1 1 0 done 0
+run zlib "$work/far.z" "$work/far_payload" 1 7 18446744073709551615 done 0
+run zlib "$work/trailing.z" "$work/payload" 5 19 18446744073709551615 done 5
+echo "zlib every level, empty, 32K history, bytes after it left alone PASS"
+
+run zlib "$work/method.z" "$work/empty" 1 1 18446744073709551615 "malformed stream" 0
+run zlib "$work/window.z" "$work/empty" 1 1 18446744073709551615 "malformed stream" 0
+run zlib "$work/check.z" "$work/empty" 1 1 18446744073709551615 "malformed stream" 0
+run zlib "$work/dictionary.z" "$work/empty" 1 1 18446744073709551615 "preset dictionary" 0
+run zlib "$work/adler.z" "$work/payload" 7 13 18446744073709551615 "checksum mismatch" 0
+run zlib "$work/header_cut.z" "$work/empty" 1 1 18446744073709551615 "truncated stream" 0
+run zlib "$work/body_cut.z" "$work/payload" 7 13 18446744073709551615 "truncated stream" 0
+run zlib "$work/trailer_cut.z" "$work/payload" 7 13 18446744073709551615 "truncated stream" 0
+run zlib "$work/plain.z" "$work/payload" 7 13 140724 done 0
+run zlib "$work/plain.z" "$work/payload" 7 13 140723 "output limit exceeded" 0
+echo "zlib method, window, check bits, dictionary, checksum, truncation, limit PASS"

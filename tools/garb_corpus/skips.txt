@@ -33,13 +33,15 @@ function round 1
 END
 
 # At-rules this library keeps no rule of; @font-face names the family that
-# was not fetched; @media and @supports and @import are read, matching or
+# was not fetched, the face's own — its last valid declaration, every
+# word; @media and @supports and @import are read, matching or
 # not. A rule nested in a matching group is reached.
 VIEWPORT 800x600
 PAGE
 <!doctype html><style>
 @import url(x.css);
 @font-face { font-family: "Fancy Sans"; src: url(f.woff2) }
+@font-face { font-family: First Try; font-family: Plain   Words; src: url(p.woff2) }
 @property --spin { syntax: "<angle>"; inherits: false; initial-value: 0deg }
 @media (max-width: 10px) { @container (min-width: 1px) { p { color: red } } }
 @media all { @container (min-width: 1px) { p { color: red } } p { contain: layout } }
@@ -48,6 +50,7 @@ PAGE
 <p>x
 WANT
 font fancy sans 1
+font plain words 1
 at-rule property 1
 at-rule container 1
 property contain 1
