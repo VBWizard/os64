@@ -244,7 +244,7 @@ page's text as it is at the write.
 |---|---|---|---|---|---|
 | Files (`s_web.files`) | a shown layout wants a face's source | fetch, hold, open, fail | as they stand, at every write | the files it wanted stay asked for | with the shown page (`webfonts_leave`, after the departure write) |
 | Faces' use (`face_laying`) | every layout of the shown document (`webfonts_layout_begins`), whether or not its text asks for a font | each lookup of that layout | when its tree is shown (`page_show`) | the record keeps the tree on screen's | with the shown page |
-| Families (`s_web.laying`) | as faces' use | each lookup: the best answer of the layout's runs, and its MISSING count; a name past the table, or with no memory, only flags it | with faces' use, MISSING lines written then and the badge told | as faces' use | with the shown page |
+| Families (`s_web.laying`) | as faces' use | each lookup: the best answer of the layout's runs, and its MISSING count; a name past the table, or with no memory, only flags it, as does a lookup that ran short before it could answer | with faces' use, MISSING lines written then and the badge told | as faces' use | with the shown page |
 | An arriving page's families (`s_arriving`) | every layout of a page not yet shown that has a record | each lookup | at arrival (`arrive_now`), MISSING lines written then | its next layout begins them again | adopted, or written with the departure of a page let go unshown and freed with its record (`diag_leave`) |
 | The characters (`s_web.chars`) | asked for by a lookup or a write | — | keyed by document, version and layout | — | rebuilt for whichever page asks |
 

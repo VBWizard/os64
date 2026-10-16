@@ -665,6 +665,17 @@ mutants = [
     ('a-late-failure-reads-never', YONDER,
      '                    else if (w == NULL && failed_late)',
      '                    else if (w == NULL && failed_late && false)', WINDOW),
+    # #280 round 9: a late failure is sticky; a run's answers lost to memory
+    # are said.
+    ('a-late-failure-is-undone', YONDER,
+     '                    if (w != NULL && w->state == WF_FAILED && w->failed_layout >= s_web.use_layout)\n                        failed_late = true;',
+     '                    if (w != NULL && w->state == WF_FAILED)\n                        failed_late = w->failed_layout >= s_web.use_layout;', WINDOW),
+    ('scratch-loss-unsaid', YONDER,
+     '            if (record != NULL)\n                record->short_of_memory = true;\n            return OS64_FONT_NO_MEMORY;',
+     '            return OS64_FONT_NO_MEMORY;', WINDOW),
+    ('provider-loss-unsaid', YONDER,
+     '        if (record != NULL && (st == OS64_FONT_NO_MEMORY || st == OS64_FONT_LIMIT))\n            record->short_of_memory = true;',
+     '        (void)record;', WINDOW),
     ('an-unkept-source-tells-no-badge', YONDER,
      '        s_web.unkept = false;\n        badge_follow();',
      '        s_web.unkept = false;', WINDOW),

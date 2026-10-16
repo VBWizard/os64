@@ -4863,6 +4863,29 @@ static void webfont_cases(void) {
     check(lay_out_page(&g.page,800,600) && web_file("https://fixture.test/w2.ttf")>=0,
           "web fonts: held then failed: the next layout asks for the next source");
     web_drop();
+    /* A late failure is not undone by an older one after it: the layout
+     * stopped at the source that failed since, so the sources past every
+     * failure are not asked for yet. */
+    web_page("<style>@font-face{font-family:X;src:url(b.ttf)}@font-face{font-family:Y;src:url(a.ttf),url(b.ttf),url(c.ttf)}"
+             "</style><p style='font-family:X'>x</p><p style='font-family:Y'>y</p>");
+    check(font_land("b.ttf",NULL,"HTTP 404"),"web fonts: sticky: b fails early");
+    pictures_settle();
+    font_open_refusals=1;
+    check(font_land("a.ttf","A",NULL) && s_web.files[web_file("https://fixture.test/a.ttf")].state==WF_HELD,
+          "web fonts: sticky: a is held");
+    {
+        os64_html_pin_t pins[512]; size_t n=0;
+        while(n<512 && (pins[n]=os64_html_pin(g.page.way.doc))!=0) n++;
+        pictures_settle();
+        for(size_t i=0;i<n;i++) os64_html_unpin(g.page.way.doc,pins[i]);
+    }
+    font_open_refusals=0;
+    diag_fonts(&g.page);
+    yonder_diag_render(g.page.diag,record,sizeof(record));
+    check(strstr(record,"a.ttf failed; https://fixture.test/b.ttf failed; https://fixture.test/c.ttf not asked for yet: "
+                        "the source before it failed since the page was laid out\n")!=NULL,
+          "web fonts: on the record, a late failure is not undone by an older one after it");
+    web_drop();
     /* A composite whose latest rules cannot serve falls back to an
      * earlier one, past the eight a list keeps. */
     {
@@ -5034,6 +5057,63 @@ static void webfont_cases(void) {
         }
         check(short_said>0,"web fonts: the memory sweep reaches the families' own allocations");
     }
+    /* A long list whose scratch the resolver had no memory for: if the
+     * layout is shown, the record says its families went. */
+    {
+        static char page[4096];
+        size_t at=0;
+        at+=(size_t)snprintf(page+at,sizeof(page)-at,"<style>");
+        for(int i=0;i<40;i++) at+=(size_t)snprintf(page+at,sizeof(page)-at,"@font-face{font-family:F%d;src:url(f%d.ttf)}",i,i);
+        at+=(size_t)snprintf(page+at,sizeof(page)-at,"p{font-family:F0");
+        for(int i=1;i<40;i++) at+=(size_t)snprintf(page+at,sizeof(page)-at,",F%d",i);
+        snprintf(page+at,sizeof(page)-at,"}</style><p>hello");
+        unsigned silent=0, reached=0;
+        for(size_t cut=1;cut<=300;cut++) {
+            web_page(page);
+            fail_at=attempts+cut;
+            bool laid=lay_out_page(&g.page,800,600);
+            fail_at=0;
+            diag_fonts(&g.page);
+            static char rec[32768];
+            yonder_diag_render(g.page.diag,rec,sizeof(rec));
+            bool told=strstr(rec,"families not kept")!=NULL || strstr(rec,"some lines not kept")!=NULL ||
+                      strstr(rec,"facts not kept")!=NULL;
+            reached+=strstr(rec,"families not kept: no memory for them")!=NULL;
+            silent+=laid && strstr(rec,"\nfont family F39: ")==NULL && !told;
+            web_drop();
+        }
+        check(silent==0 && reached>0,"web fonts: a list's scratch short of memory is said on the record");
+        /* Every lookup's scratch failing through one layout, which goes on
+         * and is shown without the list's answers: the record says so. */
+        web_page(page);
+        fail_size=40*sizeof(os64_font_family_name_t);
+        bool laid=lay_out_page(&g.page,800,600);
+        fail_size=0;
+        diag_fonts(&g.page);
+        static char rec2[32768];
+        yonder_diag_render(g.page.diag,rec2,sizeof(rec2));
+        check(laid && strstr(rec2,"\nfont family F0: ")==NULL &&
+              strstr(rec2,"families not kept: no memory for them, nor a line here")!=NULL,
+              "web fonts: a layout shown without a list's answers says its families went");
+        web_drop();
+    }
+    /* The system's family refused for room through a layout that goes on
+     * and is shown: its families went, and the record says so. */
+    web_page("<style>@font-face{font-family:Web;src:url(w.ttf)}</style><p style='font-family:Nope'>hello</p>");
+    {
+        uint32_t zoom=g.zoom;
+        g.zoom=zoom*2;
+        font_open_refusals=100000;
+        bool laid=lay_out_page(&g.page,800,600);
+        font_open_refusals=0;
+        g.zoom=zoom;
+        diag_fonts(&g.page);
+        yonder_diag_render(g.page.diag,record,sizeof(record));
+        check(laid && strstr(record,"families not kept: no memory for them, nor a line here")!=NULL &&
+              strstr(record,"\nfont family Nope: ")==NULL,
+              "web fonts: the system's family refused for room, a shown layout says its families went");
+    }
+    web_drop();
     /* A name with no memory to copy it only flags its layout's table:
      * nothing reaches the record before the layout's tree is shown, and
      * then the fonts line says families went. */

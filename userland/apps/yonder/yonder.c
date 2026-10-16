@@ -3955,6 +3955,10 @@ static os64_font_status_t page_fonts(void *ctx, const flow_family_list_t *famili
         if (rest == NULL || served == NULL) {
             os64_free(rest);
             os64_free(served);
+            // The layout may go on, and be shown, without this run's
+            // answers: the record says families went.
+            if (record != NULL)
+                record->short_of_memory = true;
             return OS64_FONT_NO_MEMORY;
         }
     }
@@ -3982,6 +3986,9 @@ static os64_font_status_t page_fonts(void *ctx, const flow_family_list_t *famili
                 if (families->names[k].name == asked.names[r].name)
                     system_at = k;
     if (st != OS64_FONT_OK) {
+        // As above, for want of memory or of the text engine's room.
+        if (record != NULL && (st == OS64_FONT_NO_MEMORY || st == OS64_FONT_LIMIT))
+            record->short_of_memory = true;
         if (rest != small)
             os64_free(rest);
         if (served != small_served)
@@ -4494,10 +4501,12 @@ static void diag_face(Page *p, int32_t i, const garb_font_face_t *f, bool shown)
                                webfonts_container(w->container), (unsigned long)w->got);
                     else
                         dt_put(&t, "%s coming", url);
-                    // A source that failed since the layout on screen leaves
-                    // the next one for the next layout to ask for.
-                    if (w != NULL && w->state == WF_FAILED)
-                        failed_late = w->failed_layout >= s_web.use_layout;
+                    // Once a source has failed since the layout on screen,
+                    // that layout stopped at or before it: every source
+                    // after it, past older failures too, is for the next
+                    // layout to ask for.
+                    if (w != NULL && w->state == WF_FAILED && w->failed_layout >= s_web.use_layout)
+                        failed_late = true;
                 }
             }
             if (last)
