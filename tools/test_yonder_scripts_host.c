@@ -185,6 +185,16 @@ static unsigned sheet_submits;      /* every sheet job the window ever sent */
 static struct { os64_work_id_t id; yonder_webfont_job_t *job; } font_jobs[32];
 static int nfont_jobs;
 static unsigned font_cancels;
+static bool font_refuse;            /* the pool will not take a font job */
+/* The next opens of a font refused for room, as a full budget does. */
+static int font_open_refusals;
+os64_font_status_t __real_os64_text_font_open(os64_text_context_t *, const uint8_t *, size_t,
+                                              const os64_font_face_options_t *, os64_text_font_t **);
+os64_font_status_t __wrap_os64_text_font_open(os64_text_context_t *c, const uint8_t *bytes, size_t len,
+                                              const os64_font_face_options_t *o, os64_text_font_t **out) {
+    if(font_open_refusals>0) { font_open_refusals--; *out=NULL; return OS64_FONT_LIMIT; }
+    return __real_os64_text_font_open(c,bytes,len,o,out);
+}
 void os64_work_cancel(os64_work_pool_t *pool, os64_work_id_t id) {
     (void)pool;
     for(int i=0;i<nscript_jobs;i++) if(script_jobs[i].id==id) {
@@ -216,7 +226,7 @@ os64_work_id_t os64_work_submit(os64_work_pool_t *pool, const os64_work_t *work)
         return sheet_jobs[nsheet_jobs++].id;
     }
     if(*(const uint32_t *)work->job==YONDER_JOB_FONT) {
-        if(nfont_jobs==32) return 0;
+        if(nfont_jobs==32 || font_refuse) return 0;
         font_jobs[nfont_jobs].id=++pool_ids; font_jobs[nfont_jobs].job=work->job;
         return font_jobs[nfont_jobs++].id;
     }
@@ -4275,14 +4285,15 @@ static int32_t web_file(const char *url) {
     return -1;
 }
 /* A page with web fonts, through yonder's resolver, on a window with workers. */
-static void web_page(const char *html) {
+static void web_page_scripted(const char *html, bool scripts) {
     probe_web=true;
-    probe_page(html,false);
+    probe_page(html,scripts);
     g.page.diag=yonder_diag_new(g.page.way.url,1,0);
     check(g.page.diag!=NULL && page_lay_out(&g.page,800,600,g.zoom,&g.page),"web fonts: the page laid out on its record");
     g.pool=(os64_work_pool_t *)&pool_fake; pool_open=true;
     webfonts_feed();
 }
+static void web_page(const char *html) { web_page_scripted(html,false); }
 static void web_drop(void) {
     webfonts_leave();
     pool_open=false; g.pool=NULL;
@@ -4408,7 +4419,7 @@ static void webfont_cases(void) {
     check(font_land("web.ttf","A",NULL),"web fonts: the shown page's face is open");
     {
         Page other=g.page;
-        other.serial=g.page.serial+7;
+        other.way.doc=parse_file((const uint8_t *)"<p>other",8,false);
         flow_family_name_t web={"Web",3};
         flow_family_list_t ask={&web,1,FLOW_GENERIC_SERIF};
         os64_text_font_t *const *list; size_t n; os64_font_face_info_t info;
@@ -4421,6 +4432,66 @@ static void webfont_cases(void) {
               strcmp(info.family,"Test Sans")==0,
               "web fonts: the shown page draws its own face");
         s_laying.cascade=NULL; s_laying.entry=NULL;
+        os64_html_document_free(other.way.doc);
+    }
+    web_drop();
+    /* The names' written order: a system family written first stays
+     * first, the page's face its fallback; written after, it is the
+     * page's face's. */
+    web_page("<style>@font-face{font-family:Web;src:url(w.ttf)}</style><p style=\"font-family:'test serif',Web\">a</p>");
+    {
+        uint64_t system=first_text_font();
+        check(font_land("w.ttf","A",NULL),"web fonts: order: the face arrives");
+        pictures_settle();
+        check(first_text_font()==system,"web fonts: a system family written first stays first");
+    }
+    web_drop();
+    web_page("<style>@font-face{font-family:Web;src:url(w.ttf)}</style><p style=\"font-family:Web,'test serif'\">a</p>");
+    {
+        uint64_t system=first_text_font();
+        check(font_land("w.ttf","A",NULL),"web fonts: order: the face arrives");
+        pictures_settle();
+        check(first_text_font()!=system,"web fonts: a face written first is drawn first");
+    }
+    web_drop();
+    /* A script's change lays the page out again in its staged copy: the
+     * faces stay, and the copy is the shown page's. */
+    web_page_scripted("<style>@font-face{font-family:Web;src:url(w.ttf)}p{font-family:Web}</style>"
+                      "<p id=t>hello</p><script>document.getElementById('t').textContent='changed'</script>",true);
+    check(font_land("w.ttf","A",NULL),"web fonts: rebuild: the face arrives");
+    pictures_settle();
+    {
+        uint64_t web=first_text_font();
+        os64_js_outcome_t out;
+        check(yonder_scripts_step(g.page.scripts,&out) && out.status==OS64_JS_OK && script_rebuild(),
+              "web fonts: a script changes the page and it is rebuilt");
+        check(first_text_font()==web && s_web.nfiles==1,"web fonts: the rebuilt page keeps its face");
+    }
+    web_drop();
+    /* A file the pool will not take fails, and the page is laid out again
+     * so the face's next source is wanted. */
+    font_refuse=true;
+    web_page("<style>@font-face{font-family:Web;src:url(a.ttf),url(b.ttf)}p{font-family:Web}</style><p>a");
+    font_refuse=false;
+    check(s_web.files[0].state==WF_FAILED && s_web.moved,"web fonts: a refused file fails and moves the page");
+    pictures_settle();
+    check(web_file("https://fixture.test/b.ttf")==1 && s_web.files[1].state==WF_WAITING,
+          "web fonts: and the next source is asked for");
+    web_drop();
+    /* An open refused for room is held, and opened after the next layout. */
+    web_page("<style>@font-face{font-family:Web;src:url(w.ttf)}p{font-family:Web}</style><p>hello");
+    {
+        uint64_t fallback=first_text_font();
+        /* Refused at arrival, and again by the feed that follows it while
+         * the old tree still holds the room. */
+        font_open_refusals=2;
+        check(font_land("w.ttf","A",NULL) && s_web.files[0].state==WF_HELD && s_web.moved,
+              "web fonts: an open refused for room holds the file");
+        pictures_settle();
+        check(s_web.files[0].state==WF_READY && s_web.moved,"web fonts: after the layout, it opens");
+        pictures_settle();
+        check(first_text_font()!=fallback,"web fonts: and is drawn");
+        font_open_refusals=0;
     }
     web_drop();
     /* A face in a linked sheet resolves against the sheet. */

@@ -2339,8 +2339,11 @@ serves (below).
 
 **Which face (yonder's resolver).** The resolver is asked for a family
 list, bold or not, italic or not, and a size, as now — and, as
-`flow.h` requires, it does no I/O and opens no font: it ANSWERS with
-faces already open and RECORDS what it wanted. For each name in the
+`flow.h` requires, it does no I/O and opens no font FILE: it ANSWERS
+with the faces of files already open — another size of one is opened
+from the bytes the text context holds (`os64_text_font_open_like`), as
+the system's provider opens its own sizes — and RECORDS the files it
+wanted. For each name in the
 list, in order, the page's faces of that family are matched as Fonts 4
 § 5.2 matches them — stretch, then style, then weight; stretch is not
 read (booked), so style first (italic, then oblique, then normal), then
@@ -2355,7 +2358,15 @@ size), and a layout passes any other character to the next font. A face wanted a
 for fetching (below). A name with no page face is looked for among the
 system's families by name — each family's own, as its regular face
 reports it (`DejaVu Sans`), ASCII case folded, matched by libos64's
-provider (`os64_font_family_open`) — and otherwise passed over; the generic comes last, as now. The list is
+provider (`os64_font_family_open`) — and otherwise passed over; the
+generic comes last, as now. The list keeps the names' written order: a
+system family written before a page family stands before its faces
+(`"DejaVu Sans", Web` draws in DejaVu, Web its fallback). A page's own
+layouts — the shown page, and the copies a script's rebuild or a
+measurement lays out — are told by their DOCUMENT, the one on screen,
+not by the serial a sheet's job keys on, which a rebuild renews. A
+file whose open is refused for room (the tree on screen holds faces in
+the same budget) is held and opened again after the next layout. The list is
 the eight a layout takes: the system's family and the generic keep their
 places, and the page's faces have the rest — a composite past that, its
 latest rules. `local()` names an installed font by its full name, and
