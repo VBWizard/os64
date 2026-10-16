@@ -627,8 +627,12 @@ void scheduler_wake_or_owe_locked(thread_t *w)
 		scheduler_wake_isleep_thread_locked(w);
 	else if (w->threadState == THREAD_STATE_RUNNING || w->threadState == THREAD_STATE_RUNNABLE)
 	{
+		// One debt however many deliverers owe it (several events, or
+		// several windows of one gui_event_wait_any): one requeue pays it,
+		// and owed counts debts, so owed = paid + voided + outstanding.
+		if (!w->wakeOwed)
+			s_wake_counts.owed++;
 		w->wakeOwed = true;
-		s_wake_counts.owed++;
 	}
 	else
 		s_wake_counts.refused++;

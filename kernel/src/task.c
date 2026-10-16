@@ -1743,6 +1743,18 @@ uint64_t task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode)
 		}
 		bool childPending = endedPid == 0 &&
 		    task_has_uncollected_child_locked(parent, targetPid);
+		// A wait that will park registers HERE, in the same hold as the scan
+		// that found nothing to collect: a child that exits after the release
+		// then finds the registration and wakes this thread, or owes it the
+		// wake (WAKE_OWED.md). Registered in a later hold, a child exiting
+		// between the two found nobody waiting, and the park slept out its
+		// backstop. The rest of the registration's story is at the park.
+		thread_t *waiter = NULL;
+		if (childPending) {
+			waiter = get_core_local_storage()->currentThread;
+			parent->waitThread = waiter;
+			parent->waitingForChild = true;
+		}
 		spinlock_release_irqrestore(&kDeadChildLock, lock_flags);
 
 		if (endedPid != 0) {
@@ -1785,8 +1797,8 @@ uint64_t task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode)
 
 		// Park until a child exits (woken by task_enqueue_dead_child) or the
 		// backstop fires; then loop and re-check. A child that exits between
-		// this registration and the park is owed to it, and the park is paid
-		// instead of slept (WAKE_OWED.md).
+		// the registration above and the park is owed to it, and the park is
+		// paid instead of slept (WAKE_OWED.md).
 		//
 		// PARK THE CALLING THREAD, and say which one it is (2026-08-25). This
 		// used to park `parent->threads` — the task's FIRST thread — which is
@@ -1795,18 +1807,14 @@ uint64_t task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode)
 		// the main thread to sleep and came straight back to loop here,
 		// hot, for as long as any child lived. The waiter is published
 		// under kDeadChildLock, the same lock the flag travels under, so the
-		// dead-child wake reads a consistent (flag, thread) pair.
-		lock_flags = spinlock_acquire_irqsave(&kDeadChildLock);
-		// Re-read CLS on EVERY pass: a thread that parked on one core can
-		// resume on another, and the `cls` captured at entry then names some
-		// other core's current thread — which the first cut of this fix
-		// parked by mistake, making every waiter in the system spin after its
-		// first wake (and putting strangers to sleep). GS is per-core; read
-		// it where you stand.
-		parent->waitThread = get_core_local_storage()->currentThread;
-		parent->waitingForChild = true;
-		spinlock_release_irqrestore(&kDeadChildLock, lock_flags);
-		signal_raise(SIGSLEEP, kTicksSinceStart + TASK_WAIT_BACKSTOP_TICKS, parent->waitThread);
+		// dead-child wake reads a consistent (flag, thread) pair. It is read
+		// from GS on EVERY pass, with that lock held and interrupts off: a
+		// thread that parked on one core can resume on another, and the `cls`
+		// captured at entry then names some other core's current thread —
+		// which the first cut of this fix parked by mistake, making every
+		// waiter in the system spin after its first wake (and putting
+		// strangers to sleep). GS is per-core; read it where you stand.
+		signal_raise(SIGSLEEP, kTicksSinceStart + TASK_WAIT_BACKSTOP_TICKS, waiter);
 	}
 }
 

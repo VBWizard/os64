@@ -58,7 +58,8 @@
 	void scheduler_wake_or_owe(thread_t *w);
 	void scheduler_wake_or_owe_locked(thread_t *w);
 	void scheduler_forget_owed_wake(thread_t *self);
-	// What it has done since boot: wakes owed, debts paid at the park, debts
+	// What it has done since boot: debts owed (a wake owed to a thread that
+	// already owes one is the same debt), debts paid at the park, debts
 	// voided at a pass's top, and wakes refused because the slot named a
 	// thread in no wait. owed = paid + voided + outstanding (WAKE_OWED.md).
 	typedef struct {

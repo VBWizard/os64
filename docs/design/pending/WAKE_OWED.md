@@ -177,11 +177,16 @@ registered, and a debt from before the wait began.
 | `gui_event_wait` | `wm_deliver_event`, under `kGuiLock` | under `kGuiLock`, before the lookup: the slot is voided if the window still names this thread, and the debt always |
 | `gui_event_wait_any` | the same | under `kGuiLock`, where it already voids every slot naming it |
 | `glass_view_read` | `glass_damage_locked` and `glass_view_close`, under `kGuiLock` | under `kGuiLock`, where it already voids its slot |
-| `task_wait` | `task_enqueue_dead_child_locked`, which now owes **inside** `kDeadChildLock` | under `kDeadChildLock`, at the top of the pass, where the slot is voided if it names this thread |
+| `task_wait` | `task_enqueue_dead_child_locked`, which now owes **inside** `kDeadChildLock` | under `kDeadChildLock`, at the top of the pass, where the slot is voided if it names this thread; it registers in the same hold as the scan that found nothing to collect |
 
 `task_wait`'s deliverer used to capture the waiter under `kDeadChildLock`
 and wake it after the release, so a wake delayed past the parent's next
-park would have been owed to the wrong wait. Owing inside the lock is
+park would have been owed to the wrong wait. And `task_wait` used to
+register in a second hold of the lock, after the scan's: a child that
+exited between the two found nobody waiting, so no wake was aimed at all
+and the parent slept out its second (Codex, #282 round 1). It registers in
+the scan's own hold now, the GUI wait's shape: whatever exits after the
+scan finds the registration. Owing inside the lock is
 legal: the order `kDeadChildLock` → queue lock already exists (the
 undertaker's sweep holds `kDeadChildLock` across `scheduler_remove_task`),
 and nothing takes `kDeadChildLock` under the queue lock. What must stay
@@ -197,7 +202,7 @@ requeue takes no new lock.
 | State | Set | Cleared | Read | Lock |
 |---|---|---|---|---|
 | `wakeOwed` | a wake for a registered waiter that is RUNNING or RUNNABLE | the requeue that pays it; the pass-top void | the requeue to ISLEEP | the queue lock always; the void also under the object's lock |
-| counts: owed, paid, voided, refused | each owe, each payment, each void that found a debt, each wake the verb refused | never (since boot) | `/sys/gui` | updated under the queue lock |
+| counts: owed, paid, voided, refused | each new debt (a wake owed to a thread that already owes one adds none: one requeue pays both), each payment, each void that found a debt, each wake the verb refused | never (since boot) | `/sys/gui` | updated under the queue lock |
 
 `owed = paid + voided + outstanding`, where outstanding is the debts held
 by threads between an owe and their next requeue or pass-top, plus the
