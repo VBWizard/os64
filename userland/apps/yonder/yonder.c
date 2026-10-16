@@ -1679,7 +1679,6 @@ static struct {
     // the frames shown more than FRAME_LATE_MS late.
     uint64_t slept_most, late_most, late_frames;
     uint64_t bells, past[PAST_COUNT];       // the ticker's rings; deadlines handed it already past
-    uint64_t from_wakes;                    // the ticker's looks when the counts began
     uint64_t from_cycles;
     int64_t from_us;
 } s_cost;
@@ -1723,7 +1722,7 @@ static void cost_reset(void)
     os64_memset(&s_cost, 0, sizeof(s_cost));
     s_cost.from_cycles = cycles();
     s_cost.from_us = os64_micros();
-    s_cost.from_wakes = yonder_ticker_wakes(g.ticker);
+    yonder_ticker_counts_restart(g.ticker);
 }
 
 // A layout, timed (s_cost): page_lay_out_run is the layout itself.
@@ -4686,8 +4685,11 @@ static bool paint_lines(DiagText *t, DiagText *u)
     dt_put(t, "; %lu script tasks: %lu scripts, %lu timers", (unsigned long)(s_cost.scripts + s_cost.timers),
            (unsigned long)s_cost.scripts, (unsigned long)s_cost.timers);
 
-    dt_put(t, "; %lu bells, the ticker woke %lu times; deadlines already past when handed to it:",
-           (unsigned long)s_cost.bells, (unsigned long)(yonder_ticker_wakes(g.ticker) - s_cost.from_wakes));
+    yonder_ticker_counts_t ticker = yonder_ticker_counts(g.ticker);
+    dt_put(t, "; %lu bells, the ticker woke %lu times, rang at most %lu ms late, slept at most %lu ms past "
+           "its time; deadlines already past when handed to it:",
+           (unsigned long)s_cost.bells, (unsigned long)ticker.wakes, (unsigned long)ticker.rang_late_most,
+           (unsigned long)ticker.overslept_most);
     for (int32_t i = 0; i < PAST_COUNT; i++)
         dt_put(t, "%s %s %lu", i ? "," : "", kPastDeadline[i], (unsigned long)s_cost.past[i]);
     // Tenths of a millisecond: cycles / (rate per microsecond x 100).

@@ -90,6 +90,7 @@ sit side by side in one file: scroll there, `d`, wait ten seconds, `d`.
 | State | Begun | Changed | Written | Let go |
 |---|---|---|---|---|
 | Paint counts (per stage: total, most, paints) | when a page is shown | at every paint and tick | at every write of the page's record | after an asked-for write (`d`), and with the page |
+| The ticker's counts (its looks, how late it rang, how far past its time it slept) | when the ticker starts | at each look, on the ticker's thread, under its lock | at every write of the page's record | restarted with the paint counts |
 | The readings (`paint reading N`) | when a page is shown, numbered from 1 | one more at each `d` | kept in the record from then on | with the page's record |
 | The counter's rate | at the first paint of the run | — | used at each write | never: the processor's |
 

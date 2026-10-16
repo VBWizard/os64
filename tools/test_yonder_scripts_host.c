@@ -160,7 +160,8 @@ uint64_t yonder_now_ms(void) { return now_ms; }
 /* The ticker's deadline, as the window last handed it over. */
 static uint64_t ticker_due=YONDER_NEVER;
 void yonder_ticker_set(yonder_ticker_t *ticker, uint64_t due) { (void)ticker; ticker_due=due; }
-uint64_t yonder_ticker_wakes(yonder_ticker_t *ticker) { (void)ticker; return 0; }
+yonder_ticker_counts_t yonder_ticker_counts(yonder_ticker_t *ticker) { (void)ticker; return (yonder_ticker_counts_t){0}; }
+void yonder_ticker_counts_restart(yonder_ticker_t *ticker) { (void)ticker; }
 /* THE POOL, FAKED. A stream case (below) lets one navigation be submitted
  * and plays its worker itself; every other case still treats a submission
  * as a mistake. */
@@ -4495,7 +4496,7 @@ static void paint_cost_cases(void) {
     diag_paint(&g.page);
     yonder_diag_render(g.page.diag,rec,sizeof(rec));
     check(strstr(rec,"\npaint: 2 paints in 1.0 s (1 whole views), 3.0 Mpx of the view; 4 ticks, 5 schedules; "
-                     "the main loop busy 75%; 0 layouts; frames late at most 0 ms, 0 more than 30 ms; the longest wait 0 ms; 0 script tasks: 0 scripts, 0 timers; 0 bells, the ticker woke 0 times; deadlines already past when handed to it: settle 0, "
+                     "the main loop busy 75%; 0 layouts; frames late at most 0 ms, 0 more than 30 ms; the longest wait 0 ms; 0 script tasks: 0 scripts, 0 timers; 0 bells, the ticker woke 0 times, rang at most 0 ms late, slept at most 0 ms past its time; deadlines already past when handed to it: settle 0, "
                      "layouts 0, ticks 0, arrival 0, stream 0, timers 0, pictures 0\n")!=NULL &&
           strstr(rec,", schedule (a call) 1.0 (0.0)")!=NULL &&
           strstr(rec,"paint stages: ms a paint (most): render 12.0 (13.0), view 10.0 (0.0)")!=NULL &&
