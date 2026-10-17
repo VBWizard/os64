@@ -28,8 +28,9 @@ time waiting off-CPU.
   runtime. All committed deltas use two TSC readings on the same core.
 - `/proc/<pid>/status` sums the task's thread `runCycles`; the thread status
   reports its own. Both render `runtime_us` after `mpAcctSettleAll()`.
-  `libos64` parses those files and its monitor computes interval CPU%. `top`
-  uses that monitor and can expand multi-threaded tasks with `t`.
+  `libos64` parses those files and its shared monitor computes interval CPU%.
+  Both `top` and `htop` use that monitor; `top` expands multi-threaded tasks
+  with `t`.
 - `task_t::usage` contains `ru_utime` and `ru_stime`, but neither is populated.
   Their `timeval` shape is not a raw-cycle ledger and should not become the
   single source of truth for this feature.
@@ -158,14 +159,15 @@ or partially updated ledgers into an NMI/IST path.
 
 ## Presentation and compatibility
 
-Keep the existing public proc and monitor record layouts intact. Add a new
-typed split-time accessor in `libos64` for the three cumulative status keys;
-the monitor may keep those values in private side arrays keyed to its sampled
-tasks and threads. A new monitor accessor returns the current interval split
-for a selected PID/TID. This avoids growing caller-allocated proc records or
-changing the layout of borrowed monitor snapshots when an older binary loads
-a newer library. Parse the split while collecting each status file so `top`
-does not double its proc I/O.
+Keep the existing public proc and monitor record layouts intact. Extend the
+shared `libos64` status parser internally so the monitor collects the three
+cumulative split keys in the same file reads it already makes. Keep the values
+in private monitor side arrays keyed to its sampled tasks and threads, and
+compute their interval deltas in `monitor.c` alongside the existing total CPU
+delta. New monitor accessors return the split for a selected PID/TID. This
+puts the collection, validation and arithmetic in the code shared by `top`
+and `htop`, without growing caller-allocated proc records, changing borrowed
+snapshot layouts, or doubling proc I/O.
 
 The monitor computes user and system deltas against the previous sample with
 the same PID/TID and denominator used by total CPU%. `top` adds `USR%` and
@@ -181,6 +183,12 @@ existing limitation or add a process/thread generation key before promising
 reuse detection. Use raw deltas to compute percentages before independent
 rounding; one-point display differences between `CPU%` and `USR% + SYS%` are
 rounding, not new time.
+
+`top` consumes the new shared-monitor accessors in this slice. `htop` keeps
+using the existing total CPU and TIME fields; new columns or controls there
+are outside this slice. Build and exercise `htop` against the changed library
+to catch a regression, but do not make an `htop` UI change a gate for shipping
+the accounting and `top` work.
 
 Do not repurpose `task_t::usage` as a cross-core accumulator. Consider filling
 its two `timeval` fields only when a real rusage reader is designed, from the
@@ -198,10 +206,12 @@ canonical cycle counters.
    assembly paths. Preserve `runCycles` and core ledgers. Review every
    changed comment and run `tools/stale_refs.sh` before a commit that moves
    or renames anything.
-3. **Status and consumer.** Emit the new proc fields from one settled read,
-   parse them through a new library accessor without changing the existing
-   public struct layouts, then add monitor deltas and `top` columns. Keep
-   existing total CPU% and TIME behavior.
+3. **Status, shared monitor and `top`.** Emit the new proc fields from one
+   settled read; extend the internal `libos64` parser and monitor collection,
+   validation and delta calculation. Expose the split through new monitor
+   accessors without changing existing public struct layouts. Add `top`
+   columns; keep existing total CPU% and TIME behavior. Check that `htop`
+   still builds and displays its existing fields.
 4. **Validation.** Exercise user-only spin, syscall-heavy copy/spin,
    repeated short syscalls, recoverable page faults, blocking inside a
    syscall, thread migration, kernel worker, compositor halt, and idle
