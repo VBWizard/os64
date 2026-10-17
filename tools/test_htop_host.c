@@ -13,6 +13,7 @@ static os64_monitor_snapshot_t snapshot;
 static ht_view_t view;
 static ht_cell_t grid[HT_WIDTH * HT_HEIGHT];
 static unsigned writes, closes, allocations, live, reads, samples, raw_calls;
+static unsigned task_split_calls, thread_split_calls;
 static bool fail_open, short_write, fail_close, raw_mode, run_loop;
 static char verb[16], path_written[80], output_text[2 * 1024 * 1024];
 static size_t output_used;
@@ -46,6 +47,19 @@ int32_t os64_proc_command(uint64_t pid,char **out)
 }
 char os64_proc_state_letter(os64_proc_state_t state) {return state==OS64_PROC_RUNNING?'R':state==OS64_PROC_ZOMBIE?'Z':'I';}
 const char *os64_proc_state_name(os64_proc_state_t state) {return state==OS64_PROC_RUNNING?"running":state==OS64_PROC_ZOMBIE?"zombie":"isleep";}
+bool os64_monitor_task_split(const os64_monitor_t *m,uint64_t pid,os64_monitor_split_t *out)
+{
+    assert(m);task_split_calls++;
+    if(pid==20)return false;
+    *out=(os64_monitor_split_t){.user={.percent=7,.valid=true},.system={.percent=3,.valid=true},.idle=pid==30};
+    return true;
+}
+bool os64_monitor_thread_split(const os64_monitor_t *m,uint64_t pid,uint64_t tid,os64_monitor_split_t *out)
+{
+    assert(m && pid==10);thread_split_calls++;
+    *out=(os64_monitor_split_t){.user={.percent=12,.valid=tid==20},.system={.percent=34,.valid=tid==20}};
+    return true;
+}
 static void setup(void)
 {
     assert(!live);memset(tasks,0,sizeof(tasks));memset(threads,0,sizeof(threads));memset(cores,0,sizeof(cores));
@@ -59,7 +73,8 @@ static void setup(void)
     snapshot=(os64_monitor_snapshot_t){.tasks=tasks,.threads=threads,.cores=cores,.task_count=4,.thread_count=2,.core_count=12,
         .zombies=1,.memory_valid=true,.summary_valid=true,.ticks={1000,100},.machine_percent={20,75,5},
         .memory={.total=1000,.usable=900,.used=500,.free=400,.available=400}};
-    writes=closes=reads=samples=raw_calls=allocations=0;fail_open=short_write=fail_close=raw_mode=run_loop=false;
+    writes=closes=reads=samples=raw_calls=allocations=task_split_calls=thread_split_calls=0;
+    fail_open=short_write=fail_close=raw_mode=run_loop=false;
     verb[0]=path_written[0]=0;output_used=0;output_text[0]=0;milliseconds=0;
     tty_cols=80;tty_rows=25;scheduled="q";key_count=1;key_pos=0;key_time[0]=200;
     ht_init(&view,999);ht_rebuild(&view,&snapshot,true);
@@ -120,21 +135,52 @@ static void actions(void)
 static void drawing(void)
 {
     setup();strcpy(tasks[0].info.command,"worker\033[2J\nspoof");
+    const os64_monitor_t *monitor=(const os64_monitor_t *)&snapshot;
     unsigned widths[]={0,1,20,59,60,80,100,240,1000}, heights[]={0,1,12,18,25,48,100,200};
     for(size_t i=0;i<sizeof(widths)/sizeof(widths[0]);i++)for(size_t j=0;j<sizeof(heights)/sizeof(heights[0]);j++)
         for(unsigned mode=HT_LIST;mode<=HT_CONFIRM;mode++) {
-            ht_layout(&view,widths[i],heights[j]);view.mode=(ht_mode_t)mode;ht_draw(&view,grid);
+            ht_layout(&view,widths[i],heights[j]);view.mode=(ht_mode_t)mode;ht_draw(&view,monitor,grid);
             for(unsigned y=0;y<HT_HEIGHT;y++)for(unsigned x=0;x<HT_WIDTH;x++) {
                 ht_cell_t c=grid[y*HT_WIDTH+x];assert(c.ch>=32 && c.ch<=126 && c.style<HT_STYLE_COUNT);
                 if(x>=view.cols || y>=view.lines)assert(c.ch==' ');
             }
         }
     view.mode=HT_LIST;ht_layout(&view,80,18);view.core_page=0;
-    ht_key(&view,']');assert(view.core_page==1);ht_draw(&view,grid);ht_key(&view,']');assert(view.core_page==2);
-    ht_layout(&view,80,25);ht_draw(&view,grid);assert(view.core_page==0); // narrower bank is now out of range
+    ht_key(&view,']');assert(view.core_page==1);ht_draw(&view,monitor,grid);ht_key(&view,']');assert(view.core_page==2);
+    ht_layout(&view,80,25);ht_draw(&view,monitor,grid);assert(view.core_page==0); // narrower bank is now out of range
     ht_layout(&view,80,25);view.mode=HT_DETAILS;view.command="A\033[31mB\nC";view.detail_line=1000000;
-    ht_draw(&view,grid);assert(view.detail_line==0);
-    snapshot.memory.used=UINT64_MAX;snapshot.memory.usable=UINT64_MAX;view.mode=HT_LIST;ht_draw(&view,grid);
+    ht_draw(&view,monitor,grid);assert(view.detail_line==0);
+    snapshot.memory.used=UINT64_MAX;snapshot.memory.usable=UINT64_MAX;view.mode=HT_LIST;ht_draw(&view,monitor,grid);
+}
+static void expect_cells(unsigned y,unsigned x,const char *expected)
+{
+    for(size_t i=0;expected[i];i++)assert(grid[y*HT_WIDTH+x+i].ch==(unsigned char)expected[i]);
+}
+static void split_columns(void)
+{
+    setup();const os64_monitor_t *monitor=(const os64_monitor_t *)&snapshot;
+    assert(view.show_split);ht_draw(&view,monitor,grid);
+    expect_cells(view.table_top-1,20,"USR%");expect_cells(view.table_top-1,26,"SYS%");
+    expect_cells(view.table_top-1,51,"COMMAND");
+    expect_cells(view.table_top,23,"7");expect_cells(view.table_top,29,"3");
+    expect_cells(view.table_top+1,23,"-");expect_cells(view.table_top+1,29,"-");
+    expect_cells(view.lines-1,17,"u U/S");
+    assert(task_split_calls==2 && thread_split_calls==0);
+    ht_key(&view,'i');ht_draw(&view,monitor,grid);
+    expect_cells(view.table_top+2,23,"-");expect_cells(view.table_top+2,29,"-");
+    ht_key(&view,'i');ht_key(&view,'t');ht_draw(&view,monitor,grid);
+    expect_cells(view.table_top+1,22,"12");expect_cells(view.table_top+1,28,"34");
+    expect_cells(view.table_top+2,23,"-");expect_cells(view.table_top+2,29,"-");
+    assert(thread_split_calls==2);
+    ht_layout(&view,60,18);ht_draw(&view,monitor,grid);
+    expect_cells(view.table_top-1,51,"COMMAND");expect_cells(view.table_top,51,"worker");
+    unsigned task_calls=task_split_calls,thread_calls=thread_split_calls;
+    ht_key(&view,'u');assert(!view.show_split);ht_draw(&view,monitor,grid);
+    expect_cells(view.table_top-1,19,"    HEAP");expect_cells(view.table_top-1,39,"COMMAND");
+    expect_cells(view.table_top,39,"worker --serve");
+    assert(task_split_calls==task_calls && thread_split_calls==thread_calls);
+    ht_key(&view,'U');assert(view.show_split);ht_draw(&view,monitor,grid);
+    expect_cells(view.table_top-1,20,"USR%");assert(thread_split_calls==thread_calls+2);
 }
 static void decoding(void)
 {
@@ -186,7 +232,7 @@ static void loop_test(const char *keys,const uint64_t *times,size_t n,unsigned e
 }
 int main(void)
 {
-    navigation();tree_and_disappearance();actions();drawing();decoding();
+    navigation();tree_and_disappearance();actions();drawing();split_columns();decoding();
     uint64_t queued[]={200,200,500,700};loop_test("Xynq",queued,4,0,0);
     uint64_t accepted[]={200,500,700};loop_test("Xyq",accepted,3,1,0);
     uint64_t interactive[]={200,300,400,500,600,700,800,900,1200,1500,1700,1900};

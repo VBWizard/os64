@@ -27,9 +27,10 @@ static int literal(const char *s) { return output(s, os64_strlen(s)); }
 
 // Emit changed rows as bounded runs of equal style. Each row includes its
 // trailing blanks, so shrinking text erases itself without a whole-screen flash.
-static int paint(ht_view_t *v, ht_cell_t *next, ht_cell_t *previous, bool clear)
+static int paint(ht_view_t *v, const os64_monitor_t *monitor, ht_cell_t *next,
+                 ht_cell_t *previous, bool clear)
 {
-    ht_draw(v, next);
+    ht_draw(v, monitor, next);
     if (clear) {
         if (literal("\033[0;37;40m\033[2J\033[H") < 0) return -1;
         os64_memset(previous, 255, sizeof(*previous) * HT_WIDTH * HT_HEIGHT);
@@ -142,7 +143,7 @@ int main(int argc, char **argv)
         if (v->mode != HT_DETAILS && command) { os64_free(command); command = NULL; v->command = NULL; }
         if (dirty) {
             bool confirmation_pending = v->mode == HT_CONFIRM && !v->confirm_drawn;
-            if (paint(v, grid, previous, clear) < 0) { status = 1; break; }
+            if (paint(v, monitor, grid, previous, clear) < 0) { status = 1; break; }
             dirty = clear = false;
             // Also discard bytes that arrived during the first paint. They
             // cannot be evidence of a response to the completed question.
