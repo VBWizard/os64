@@ -86,6 +86,8 @@ static bool s_alloc_starved;
 // s_alloc_starved).
 static long s_alloc_left = -1;
 static long s_paint_alloc_left = -1;
+// Every byte asked for, and what paint_of's own painting asked for.
+static size_t s_alloc_bytes, s_paint_bytes;
 
 void *os64_malloc(size_t size)
 {
@@ -93,6 +95,7 @@ void *os64_malloc(size_t size)
         return NULL;
     if (s_alloc_left > 0)
         s_alloc_left--;
+    s_alloc_bytes += size;
     void *at = malloc(size != 0 ? size : 1);
     if (at != NULL)
         live++;
@@ -495,6 +498,9 @@ static yonder_paint_cache_t *s_suite_cache, *s_small_cache;
 // When set, paint_of's own painting goes through this cache: a case that
 // counts what a cache did (paint_cache_cases).
 static yonder_paint_cache_t *s_through;
+// When set, the oracle paints through this cache too: a case's own, after
+// something was done to it (paint_cache_cases).
+static yonder_paint_cache_t *s_oracle_extra;
 
 // `t` painted through `view`, every pixel recorded, through `cache` (NULL
 // for none).
@@ -520,13 +526,13 @@ static void paint_oracle(flow_tree_t *t, os64_page_t *page, os64_gui_rect_t view
     if (s_suite_cache == NULL)
         return;
     char *plain = paint_whole(t, page, view, NULL);
-    yonder_paint_cache_t *through[3] = {s_suite_cache, s_suite_cache, s_small_cache};
-    for (int i = 0; i < 3; i++) {
+    yonder_paint_cache_t *through[4] = {s_suite_cache, s_suite_cache, s_small_cache, s_oracle_extra};
+    for (int i = 0; i < 4 && through[i] != NULL; i++) {
         char *kept = paint_whole(t, page, view, through[i]);
         bool same = plain != NULL && kept != NULL && strcmp(plain, kept) == 0;
         char what[160];
         snprintf(what, sizeof(what), "%s the paint cache paints what the painter works out: %.100s",
-                 i == 2 ? "small:" : i == 1 ? "again:" : "suite:", html);
+                 i == 3 ? "case's:" : i == 2 ? "small:" : i == 1 ? "again:" : "suite:", html);
         expect(what, same, same ? NULL : kept);
         free(kept);
     }
@@ -561,8 +567,10 @@ static char *paint_of(const char *html, size_t len, int32_t width, os64_gui_rect
     yonder_verbs_t v = verbs_of(&rec);
     s_alloc_starved = s_paint_starved;
     s_alloc_left = s_paint_alloc_left;
+    size_t bytes = s_alloc_bytes;
     if (t != NULL)
         yonder_paint(t, view, (flow_point_t){view.x, view.y}, kEnv.paper, s_dark_paint, s_through, &v);
+    s_paint_bytes = s_alloc_bytes - bytes;
     s_alloc_starved = false;
     s_alloc_left = -1;
     if (t != NULL)
@@ -1492,6 +1500,43 @@ static void paint_cache_cases(void)
     }
     expect("cache: memory refused after a block is made is counted, and the next paint keeps the picture",
            partial && counted && kept, NULL);
+
+    // A shadow's blocks are published only once nothing can fail before
+    // they are filled: whatever allocation gives out in a paint of one, the
+    // paint after, with memory, draws exactly what the painter works out
+    // (an entry left unfilled would draw ASan's fill pattern).
+    const char *shade = "<!doctype html><style>div { width: 200px; height: 50px; margin: 20px;"
+                        " box-shadow: 4px 4px 10px #000000 }</style><div></div>";
+    // And a paint that kept none of the shadow counted why.
+    bool every_refusal_counted = true;
+    for (long left = 0; left < 16; left++) {
+        c = yonder_paint_cache_new(YONDER_PAINT_CACHE_BUDGET);
+        s_paint_alloc_left = left;
+        n = paint_through(c, shade, view);
+        s_paint_alloc_left = -1;
+        every_refusal_counted &= n.made > 0 || n.no_memory >= 1;
+        s_oracle_extra = c;
+        free(paint_of(shade, strlen(shade), 400, view, NULL, true));
+        s_oracle_extra = NULL;
+        yonder_paint_cache_free(c);
+    }
+    expect("cache: a shadow kept in no block, for memory, is counted", every_refusal_counted, NULL);
+
+    // The blocks a paint is missing are blurred together, as the uncached
+    // path blurs the view's part: a 200 px blur's reach is 300, and a block
+    // blurring its own would ask for about ten times what the whole does.
+    const char *wide_blur = "<!doctype html><style>body { margin: 0 } div { width: 300px; height: 300px;"
+                            " box-shadow: 0 0 200px #000000 }</style><div></div>";
+    free(paint_of(wide_blur, strlen(wide_blur), 400, view, NULL, true));
+    size_t plain = s_paint_bytes;
+    c = yonder_paint_cache_new(YONDER_PAINT_CACHE_BUDGET);
+    n = paint_through(c, wide_blur, view);
+    char said[96];
+    snprintf(said, sizeof(said), "%zu bytes against %zu, %lu blocks made", s_paint_bytes, plain,
+             (unsigned long)n.made);
+    expect("cache: a first paint blurs its missing blocks once, as the uncached path does",
+           n.made == 16 && s_paint_bytes < 2 * plain, said);
+    yonder_paint_cache_free(c);
 
     // Room for two tiles: the one found again is the newest, so a third
     // lets the other go — once no paint of the last two has used it.

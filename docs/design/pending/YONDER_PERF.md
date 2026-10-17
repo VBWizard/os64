@@ -248,11 +248,15 @@ where the shape is, and the colour is laid on after.
 *The same pixels, by construction.* A tile pixel is the colour the
 gradient gives at its middle, which is what the uncached path asks at
 `x + 0.5 - tx` wrapped — the same doubles, since every operand is a whole
-number plus a half. A mask block is made as the uncached path makes the
-view's part: its pixels and the blur's reach around them on every side,
-cut after, and every pixel at least the reach inside a cut edge is the
-infinite plane's (the reasoning at `shadow_cast`, which holds on each
-axis). So a page painted with the cache is the page painted without it,
+number plus a half. The mask blocks a paint is missing are made
+together, as the uncached path makes the view's part: their pixels and
+the blur's reach around them, blurred once and cut into blocks after —
+a block blurring a halo of its own would cost, with a wide blur, many
+times what the whole does (Codex, #284 round 2) — and every pixel at
+least the reach inside a cut edge is the infinite plane's (the reasoning
+at `shadow_cast`, which holds on each axis). What every missing block
+needs is worked out before any entry is made, so an entry is published
+only once nothing can fail before it is filled. So a page painted with the cache is the page painted without it,
 pixel for pixel, and that is the test: the host suite paints each of its
 pages both ways, again after moving and duplicating boxes, and again with
 a budget too small to hold them, and the verbs each records must be the

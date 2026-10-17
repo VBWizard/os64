@@ -828,8 +828,17 @@ static int64_t floor_mod(int64_t a, int64_t b)
 // reads (an index into `bx`, -1 for none: off the picture) and where in it,
 // and the same down the rows; then every block the part reads, `nby` rows
 // of `nbx`, found or made by blocks_get.
+//
+// Making is in two steps so that an entry is published only once nothing
+// can fail before it is filled: PREPARE works out, once, what every block
+// the paint is missing needs — the picture's columns `c0` to `c1` and rows
+// `r0` to `r1` hold them all — and may fail for memory; FILL then writes
+// one block from that into its entry, and cannot. NULL prepare: the fill
+// works its block out on its own.
 typedef struct Blocks Blocks;
-typedef bool (*BlockFill)(const Painter *p, const Blocks *bk, int64_t bx, int64_t by, int64_t w,
+typedef bool (*BlockPrepare)(const Painter *p, Blocks *bk, int64_t c0, int64_t r0, int64_t c1,
+                             int64_t r1);
+typedef void (*BlockFill)(const Painter *p, const Blocks *bk, int64_t bx, int64_t by, int64_t w,
                           int64_t h, void *dst);
 struct Blocks {
     int64_t pw, ph;
@@ -844,6 +853,10 @@ struct Blocks {
     int32_t nbx, nby;
     void **blocks;
     void *maps;                     // the allocation the arrays above live in
+    // What a prepare worked out: `scratch`, `sw` x `sh` pixels of the
+    // picture from (sx, sy), or NULL.
+    void *scratch;
+    int64_t sx, sy, sw, sh;
 };
 
 // One axis of the part, `n` from `from`, on a picture `size` long placed
@@ -882,6 +895,7 @@ static int32_t axis_map(int64_t from, int64_t n, int64_t origin, int64_t size, b
 
 static void blocks_free(Blocks *bk)
 {
+    os64_free(bk->scratch);
     os64_free(bk->blocks);
     os64_free(bk->maps);
 }
@@ -927,25 +941,39 @@ static void blocks_release(const Painter *p, Blocks *bk)
             paint_cache_release(p->cache, bk->blocks[k]);
 }
 
-// Every block the part reads, found or made with `fill`: the ones held are
-// found first, and the rest made only when they all fit (paint_cache_room).
-// False, with none of them kept for the paint and the picture counted as
-// refused, when they do not or there is no memory.
-static bool blocks_get(const Painter *p, Blocks *bk, BlockFill fill)
+// Every block the part reads, found or made with `prepare` and `fill`: the
+// ones held are found first, and the rest made only when they all fit
+// (paint_cache_room) and what they need has been worked out. False, with
+// none of them kept for the paint and the picture counted as refused, when
+// they do not fit or there is no memory.
+static bool blocks_get(const Painter *p, Blocks *bk, BlockPrepare prepare, BlockFill fill)
 {
     size_t cost = 0;
+    int64_t c0 = INT64_MAX, r0 = INT64_MAX, c1 = 0, r1 = 0;
     for (int32_t j = 0; j < bk->nby; j++)
         for (int32_t i = 0; i < bk->nbx; i++) {
             uint64_t hash = block_key(bk, i, j);
             void **at = &bk->blocks[j * bk->nbx + i];
             *at = paint_cache_find(p->cache, bk->key.b, bk->key.n, hash);
-            if (*at == NULL)
-                cost += paint_cache_cost(bk->key.n, (size_t)(bk->bw[i] * min64(BLOCK, bk->ph - bk->by[j] * BLOCK)) *
-                                                        bk->pixel);
+            if (*at != NULL)
+                continue;
+            int64_t h = min64(BLOCK, bk->ph - bk->by[j] * BLOCK);
+            cost += paint_cache_cost(bk->key.n, (size_t)(bk->bw[i] * h) * bk->pixel);
+            c0 = min64(c0, bk->bx[i] * BLOCK);
+            c1 = max64(c1, bk->bx[i] * BLOCK + bk->bw[i]);
+            r0 = min64(r0, bk->by[j] * BLOCK);
+            r1 = max64(r1, bk->by[j] * BLOCK + h);
         }
-    if (cost > 0 && !paint_cache_room(p->cache, cost)) {
+    if (cost == 0)
+        return true;
+    if (!paint_cache_room(p->cache, cost)) {
         blocks_release(p, bk);
         paint_cache_refused(p->cache, false);
+        return false;
+    }
+    if (prepare != NULL && !prepare(p, bk, c0, r0, c1, r1)) {
+        blocks_release(p, bk);
+        paint_cache_refused(p->cache, true);
         return false;
     }
     for (int32_t j = 0; j < bk->nby; j++)
@@ -956,11 +984,12 @@ static bool blocks_get(const Painter *p, Blocks *bk, BlockFill fill)
             int64_t w = bk->bw[i], h = min64(BLOCK, bk->ph - bk->by[j] * BLOCK);
             uint64_t hash = block_key(bk, i, j);
             *at = paint_cache_make(p->cache, bk->key.b, bk->key.n, hash, (size_t)(w * h) * bk->pixel);
-            if (*at == NULL || !fill(p, bk, bk->bx[i], bk->by[j], w, h, *at)) {
+            if (*at == NULL) {
                 blocks_release(p, bk);
                 paint_cache_refused(p->cache, true);
                 return false;
             }
+            fill(p, bk, bk->bx[i], bk->by[j], w, h, *at);
         }
     return true;
 }
@@ -975,30 +1004,47 @@ typedef struct {
     int64_t blur, reach;
 } ShadowMask;
 
-// Block (bx, by) of the mask, made as the view's part is (shadow_cast):
-// its pixels and the blur's reach around them, cut after.
-static bool mask_fill(const Painter *p, const Blocks *bk, int64_t bx, int64_t by, int64_t w,
-                      int64_t h, void *dst)
+// The mask the missing blocks need, columns `c0` to `c1` and rows `r0` to
+// `r1`, made once as the view's part is (shadow_cast): those pixels and the
+// blur's reach around them, blurred together, so a block costs what its
+// share of the uncached path's work does.
+static bool mask_prepare(const Painter *p, Blocks *bk, int64_t c0, int64_t r0, int64_t c1,
+                         int64_t r1)
 {
     (void)p;
     const ShadowMask *sm = bk->what;
-    int64_t c0 = bx * BLOCK, r0 = by * BLOCK;
-    int64_t sc0 = max64(0, c0 - sm->reach), sc1 = min64(bk->pw, c0 + w + sm->reach);
-    int64_t sr0 = max64(0, r0 - sm->reach), sr1 = min64(bk->ph, r0 + h + sm->reach);
+    int64_t sc0 = max64(0, c0 - sm->reach), sc1 = min64(bk->pw, c1 + sm->reach);
+    int64_t sr0 = max64(0, r0 - sm->reach), sr1 = min64(bk->ph, r1 + sm->reach);
     Mask m = {sc0, sr0, sc1 - sc0, sr1 - sr0, NULL};
     m.a = os64_malloc((size_t)(m.w * m.h) * sizeof(*m.a));
     if (m.a == NULL)
         return false;
     mask_cover(&m, &sm->shape, sm->inset);
-    bool blurred = mask_blur(&m, sm->blur, sm->inset ? SUB : 0);
-    if (blurred) {
-        mask_times(&m, &sm->times, !sm->inset);
-        uint16_t *out = dst;
-        for (int64_t r = 0; r < h; r++)
-            os64_memcpy(out + r * w, m.a + (r0 - sr0 + r) * m.w + (c0 - sc0), (size_t)w * sizeof(*out));
+    if (!mask_blur(&m, sm->blur, sm->inset ? SUB : 0)) {
+        os64_free(m.a);
+        return false;
     }
-    os64_free(m.a);
-    return blurred;
+    mask_times(&m, &sm->times, !sm->inset);
+    bk->scratch = m.a;
+    bk->sx = m.x;
+    bk->sy = m.y;
+    bk->sw = m.w;
+    bk->sh = m.h;
+    return true;
+}
+
+// Block (bx, by) of the mask, cut from what mask_prepare made: every pixel
+// of it is the reach or more inside that region's cut edges, so it is the
+// whole mask's.
+static void mask_fill(const Painter *p, const Blocks *bk, int64_t bx, int64_t by, int64_t w,
+                      int64_t h, void *dst)
+{
+    (void)p;
+    const uint16_t *from = bk->scratch;
+    uint16_t *out = dst;
+    for (int64_t r = 0; r < h; r++)
+        os64_memcpy(out + r * w, from + (by * BLOCK - bk->sy + r) * bk->sw + (bx * BLOCK - bk->sx),
+                    (size_t)w * sizeof(*out));
 }
 
 // The view's part of the shadow whose whole mask is (fx0, fy0) to (fx1,
@@ -1030,7 +1076,7 @@ static bool shadow_kept(const Painter *p, const Round *shape, const Round *times
         paint_cache_refused(p->cache, true);
         return false;
     }
-    if (!blocks_get(p, &bk, mask_fill)) {
+    if (!blocks_get(p, &bk, mask_prepare, mask_fill)) {
         blocks_free(&bk);
         return false;
     }
@@ -1341,7 +1387,7 @@ static uint32_t line_at(const Painter *p, const Line *l, double u, double v)
 // Block (bx, by) of a gradient's tile: each pixel the colour at its
 // middle, which is where the uncached path asks (x + 0.5 - tx, wrapped, is
 // the column plus a half).
-static bool tile_fill(const Painter *p, const Blocks *bk, int64_t bx, int64_t by, int64_t w,
+static void tile_fill(const Painter *p, const Blocks *bk, int64_t bx, int64_t by, int64_t w,
                       int64_t h, void *dst)
 {
     const Line *line = bk->what;
@@ -1349,7 +1395,6 @@ static bool tile_fill(const Painter *p, const Blocks *bk, int64_t bx, int64_t by
     for (int64_t r = 0; r < h; r++)
         for (int64_t c = 0; c < w; c++)
             out[r * w + c] = line_at(p, line, bx * BLOCK + c + 0.5, by * BLOCK + r + 0.5);
-    return true;
 }
 
 // The blocks of `line`'s tile that the part `x0`..`x1` by `y0`..`y1` reads,
@@ -1381,7 +1426,7 @@ static bool tile_kept(const Painter *p, const Line *line, const yonder_tile_t *t
         paint_cache_refused(p->cache, true);
         return false;
     }
-    if (!blocks_get(p, bk, tile_fill)) {
+    if (!blocks_get(p, bk, NULL, tile_fill)) {
         blocks_free(bk);
         return false;
     }
