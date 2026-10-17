@@ -279,6 +279,17 @@ emptied when another page is shown, not at a layout, a zoom, a resize or
 a dark toggle: the keys already say all of those, and what they made
 ages out. One window paints on one thread, so the cache has no lock.
 
+*The first reading (QEMU, emulated; the proportions are the point).*
+danlegt's top from the local mirror, scripts on, the view 828 px wide, the
+same build with and without the cache (only `/bin/yonder` differs), 47 s
+each after the page settled: without it, 290 paints, every one a whole
+view, 130.4 ms each, gradients 64.1 of them; with it, 608 paints (384
+whole views), 59.5 ms each, gradients 16.3 — what is left is laying the
+copied pixels on the glass, which the cache does not change. The cache
+held 6 bands, 315 KiB, and found 1824 bands without making one. The main
+loop stayed busy (98-99%): it spends what it saved on painting twice as
+often, so the next reading to ask for is the P5's.
+
 **Then measure again**, and decide whether these are still worth their
 complexity:
 
