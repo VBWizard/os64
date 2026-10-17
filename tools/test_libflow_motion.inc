@@ -2050,6 +2050,10 @@ static void motion_due_cases(void)
          "to{text-shadow:0 -40px 0 red}", "linear", 60},
         {"text reach: none for an element that sets no text shadow", "",
          "to{color:red}", "linear", 0},
+        {"text reach: an overshoot over an overshoot is counted", "",
+         "from{text-shadow:0 0 0 red}to{text-shadow:0 -100px 0 red}}"
+         "@keyframes back{to{text-shadow:0 0 0 red}",
+         "cubic-bezier(0.2,0,0.2,2),back 1s cubic-bezier(0.2,-1,0.2,1)", 500},
         {"text reach: held to what an offset can say", "",
          "from{text-shadow:0 0 0 red}to{text-shadow:0 -40000000px 0 red}", "cubic-bezier(0.2,0,0.2,100)",
          INT32_MAX},
@@ -2957,6 +2961,71 @@ static size_t dropped_left(int divs, bool two, int filler)
     moving_close(&m);
     free(html);
     return left;
+}
+
+// A page of `divs` elements, each a `filler`-shadow text shadow out of the
+// lists' budget, then one animating three keyframes of 64 shadows each,
+// the last of them offset 1000 px up.
+static char *shadow_budget_page(int divs, int filler)
+{
+    size_t cap = (size_t)divs * 24 + 64 * 30 * 3 + (size_t)filler * 24 + 1024, at = 0;
+    char *html = malloc(cap);
+    at += (size_t)snprintf(html + at, cap - at, MOTION_STYLE ".s{text-shadow:");
+    for (int i = 0; i < filler; i++)
+        at += (size_t)snprintf(html + at, cap - at, "%s0 1px 0 red", i ? "," : "");
+    static const char *const kAt[] = {"from", "50%", "to"};
+    static const int kY[] = {0, 1, -1000};
+    at += (size_t)snprintf(html + at, cap - at, "}@keyframes far{");
+    for (int f = 0; f < 3; f++) {
+        at += (size_t)snprintf(html + at, cap - at, "%s{text-shadow:", kAt[f]);
+        for (int i = 0; i < 64; i++)
+            at += (size_t)snprintf(html + at, cap - at, "%s0 %dpx 0 red", i ? "," : "", kY[f]);
+        at += (size_t)snprintf(html + at, cap - at, "}");
+    }
+    at += (size_t)snprintf(html + at, cap - at, "}</style>");
+    for (int i = 0; i < divs; i++)
+        at += (size_t)snprintf(html + at, cap - at, "<div class=s></div>");
+    (void)snprintf(html + at, cap - at, "<div id=far style='animation:far 1s linear'>x</div>");
+    return html;
+}
+
+static size_t shadow_budget_left(int divs, int filler)
+{
+    char *html = shadow_budget_page(divs, filler);
+    Moving m;
+    moving_open(&m, html, 1000);
+    FStyles *fs = f_style_build(m.p.doc, m.p.page, &m.p.env);
+    size_t left = fs != NULL ? fs->lists_left : 0;
+    f_style_free(fs);
+    moving_close(&m);
+    free(html);
+    return left;
+}
+
+// A keyframe whose shadow list finds no room holds the value underneath,
+// which no bound can see past: with room left for the interval the layout
+// mixes (its two keyframes and the mix) and none for the far keyframe, the
+// reach is the farthest an offset can say (calibrated as the transform
+// pages are, from what an element and the animated one cost).
+static void motion_reach_budget_cases(void)
+{
+    size_t left0 = shadow_budget_left(0, 16), each = left0 - shadow_budget_left(1, 16);
+    size_t animated = F_STYLE_LISTS_BUDGET - left0;
+    int divs = each > 0 ? (int)((F_STYLE_LISTS_BUDGET - (animated - 2 * each)) / each) : 0;
+    char *html = shadow_budget_page(divs, 16);
+    Moving m;
+    moving_open(&m, html, 1000);
+    FStyles *fs = f_style_build(m.p.doc, m.p.page, &m.p.env);
+    const FStyled *st = fs != NULL ? f_style_of(fs, motion_find(m.p.doc->document, "far")) : NULL;
+    bool mixed = st != NULL && st->motion != NULL && st->style.ntext_shadows == 64;
+    int32_t reach = st != NULL && st->motion != NULL ? st->motion->text_reach : -1;
+    char detail[96];
+    snprintf(detail, sizeof(detail), "mixed %d, reach %d, divs %d", mixed, reach, divs);
+    expect("text reach: a keyframe with no room for its shadows is past every bound",
+           mixed && reach == INT32_MAX, detail);
+    f_style_free(fs);
+    moving_close(&m);
+    free(html);
 }
 
 // A property the layout's style dropped is due for nothing — not by the
@@ -3939,5 +4008,6 @@ static void motion_cases(void)
     motion_dropped_cases();
     motion_held_time_cases();
     motion_tick_cases();
+    motion_reach_budget_cases();
     motion_sweep();
 }

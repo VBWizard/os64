@@ -440,7 +440,12 @@ the record's layouts by cause; perf-4b is part 2.
    past both ends of an interval, and libflow does not clamp a signed
    length. So each interval's extent is its two ends' farther one, plus
    their difference times how far the easing's output leaves [0, 1] (0 for
-   `steps`, linear and every curve that stays inside). The seen test grows
+   `steps`, linear and every curve that stays inside). It is worked along
+   the animations as the mix lays them: a later animation's implicit end
+   is whatever the ones before it make, so an overshoot over an overshoot
+   is counted. And a keyframe whose shadow list found no room in the lists'
+   budget holds the value underneath, which no bound can see past, so its
+   reach is unbounded (Codex, #288 round 2, found both). The seen test grows
    the element's inked overflow by that reach: `motion_seen`, and the
    stacked boxes' test, which hands inherited values down. The inked
    overflow already holds the current shadow, so growing it by the full

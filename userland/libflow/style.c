@@ -3863,56 +3863,68 @@ static bool ticks(Ctx *c, FMotion *m, const flow_style_t *s, Mixing *mix)
     return true;
 }
 
-// The least and most of a style's text shadows' offsets, x then y, into
-// `lo` and `hi`.
-static void shadow_extremes(const flow_style_t *s, int32_t lo[2], int32_t hi[2])
+// The least and most of a style's text shadows' offsets, x then y, joined
+// into `lo` and `hi`.
+static void shadow_extremes(const flow_style_t *s, double lo[2], double hi[2])
 {
     for (int32_t i = 0; i < s->ntext_shadows; i++) {
-        int32_t v[2] = {s->text_shadows[i].x, s->text_shadows[i].y};
+        double v[2] = {s->text_shadows[i].x, s->text_shadows[i].y};
         for (int k = 0; k < 2; k++) {
-            lo[k] = v[k] < lo[k] ? v[k] : lo[k];
-            hi[k] = v[k] > hi[k] ? v[k] : hi[k];
+            lo[k] = fmin(lo[k], v[k]);
+            hi[k] = fmax(hi[k], v[k]);
         }
     }
 }
 
-// FMotion.text_reach, `s` the element's style at the layout's time: each
-// animation that sets `text-shadow` has every keyframe resolved as the mix
-// resolves it (keyframe_resolved, against `s` as ticks does), and the
-// value underneath counts with them (an implicit keyframe's), and so does
-// 0 (a shorter list is padded with shadows of no offset). A frame mixes
-// two of those values, and an easing carries it past either by their
-// difference times its overshoot (f_easing_overshoot), so no frame is
-// offset farther than the farthest value plus the whole span times the
-// most any easing there overshoots. False on no memory.
+// FMotion.text_reach, `s` the element's style at the layout's time: how far
+// any frame's text shadow can be offset, worked along the animations as the
+// mix lays them, each over what the ones before it make. The values start
+// as the one underneath and 0 (a shorter list is padded with shadows of no
+// offset). Each animation that sets `text-shadow` mixes its keyframes,
+// each resolved as the mix resolves it (keyframe_resolved, against `s` as
+// ticks does), and at an implicit end whatever the ones before it can
+// make. An easing carries a frame past either end of what it mixes by their
+// span times its overshoot (f_easing_overshoot), so that animation can make
+// anything in its values' range widened so. The next animation's values
+// underneath are anything either could make, so an overshoot over an
+// overshoot is counted. A keyframe whose shadow list found no room in the
+// lists' budget holds the value underneath instead of its own, which no
+// bound can see past: that reach is the farthest an offset can say. False
+// on no memory.
 static bool text_reach(FMotion *m, const flow_style_t *s, Mixing *mix)
 {
-    int32_t lo[2] = {0, 0}, hi[2] = {0, 0};
-    double over = 0;
-    bool sets = false;
-    for (int32_t a = 0; a < m->nanims; a++) {
+    double lo[2] = {0, 0}, hi[2] = {0, 0};
+    shadow_extremes(&m->base, lo, hi);
+    bool sets = false, unbounded = false;
+    for (int32_t a = 0; a < m->nanims && !unbounded; a++) {
         const FAnimation *an = &m->anims[a];
         if (!f_props_has(&an->props, GARB_TEXT_SHADOW))
             continue;
         sets = true;
-        over = fmax(over, f_easing_overshoot(&an->timing.easing));
+        double over = f_easing_overshoot(&an->timing.easing);
+        double alo[2] = {lo[0], lo[1]}, ahi[2] = {hi[0], hi[1]};
         for (int32_t j = 0; j < an->nframes; j++) {
             if (an->frames[j].has_easing)
                 over = fmax(over, f_easing_overshoot(&an->frames[j].easing));
             const FResolved *r = keyframe_resolved(mix, a, j, s);
             if (r == NULL)
                 return false;
-            shadow_extremes(&r->style, lo, hi);
+            unbounded |= f_props_has(&r->refused, GARB_TEXT_SHADOW);
+            shadow_extremes(&r->style, alo, ahi);
+        }
+        for (int k = 0; k < 2; k++) {
+            double span = ahi[k] - alo[k];
+            lo[k] = fmin(lo[k], alo[k] - span * over);
+            hi[k] = fmax(hi[k], ahi[k] + span * over);
         }
     }
     if (!sets)
         return true;
-    shadow_extremes(&m->base, lo, hi);
     double reach = 0;
     for (int k = 0; k < 2; k++)
-        reach = fmax(reach, fmax(-(double)lo[k], (double)hi[k]) + ((double)hi[k] - lo[k]) * over);
+        reach = fmax(reach, fmax(-lo[k], hi[k]));
     // Held to what an offset can say: no frame's shadow is drawn farther.
-    reach = ceil(reach);
+    reach = unbounded ? INFINITY : ceil(reach);
     m->text_reach = reach < INT32_MAX ? (int32_t)reach : INT32_MAX;
     return true;
 }
