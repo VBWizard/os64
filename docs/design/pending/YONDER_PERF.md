@@ -205,9 +205,79 @@ at the top the main thread ~75% and the ticker ~25%, and at the bottom
 middle, Scratch 2000.exe beside the GIF strip, still fills the main
 thread: its paints are gradients and shadows (perf-2).
 
-**perf-2:** the gradient and shadow caches — each box's gradient pixels
-and blurred shadow mask kept between paints, keyed by what draws them —
-with their lifecycle table here before their code.
+**perf-2: the paint cache.** What a gradient and a blurred shadow cost is
+arithmetic on values that rarely change: a gradient works out each pixel
+in doubles (a hypot, often a pow), and a shadow blurs its mask six times.
+Both are worked out again for the dirty part at every paint, so a GIF
+beside a panel of gradient buttons pays for the panel eleven times a
+second. The cache keeps what that arithmetic makes, keyed by the values
+that make it, and a paint copies its part out.
+
+*What an entry is.* A gradient's entry is its TILE — the picture one copy
+of the gradient is, `w` x `h` (the tile's size, which for a gradient is
+its positioning area or what `background-size` makes of it), each pixel
+straight-alpha ARGB already relit for a dark page. Where a box draws the
+tile, how it repeats, and the box's rounded corners are not in it: a
+paint takes each pixel it draws from the tile (wrapped, as `wrap` does)
+and cuts it to the corners as it does now. A shadow's entry is its whole
+MASK — the shape's coverage, blurred, times what the box allows (outside
+its border box, or inside its padding box) — across the shape and the
+blur's reach around it, before its colour: a paint lays the view's part
+of it on in the colour, as `mask_emit` does now. An entry is one BAND of
+its picture: the rows that fit in 64K pixels (256 KiB of a tile, 128 KiB
+of a mask), so a picture the height of a long page is kept a band at a
+time, and only the bands a paint touches are made.
+
+*The key is what draws it, after it is worked out.* A gradient's: its
+kind, whether it repeats, its line (the direction and length) or its ray
+(centre and radii), its stops RESOLVED — positions, colours with
+currentColor already the box's, hints — the tile's size, whether the page
+is dark, and the band. Two gradients written differently that resolve the
+same share one entry; one gradient on two boxes of one size shares one;
+a layout that makes the same box again finds it. A shadow's: its shape
+and the shape it is cut to, both moved so the mask's corner is (0, 0) —
+moved by whole pixels, which changes no pixel's coverage — whether it is
+inset, the blur, and the band. Its colour and offset are not in the key:
+the offset is in where the shape is, and the colour is laid on after.
+
+*The same pixels, by construction.* A tile pixel is the colour the
+gradient gives at its middle, which is what the uncached path asks at
+`x + 0.5 - tx` wrapped — the same doubles, since every operand is a whole
+number plus a half. A mask band is made as the uncached path makes the
+view's part: the rows it needs and the blur's reach either side, cut
+after, and every pixel at least the reach inside a cut edge is the
+infinite plane's (the reasoning at `shadow_cast`). So a page painted with
+the cache is the page painted without it, pixel for pixel, and that is
+the test: the host suite paints each of its pages both ways, again after
+moving and duplicating boxes, and again with a budget too small to hold
+them, and the verbs each records must be the same.
+
+*What is not kept.* A gradient that is one colour (the flat ellipse, a
+repeat shorter than a pixel) is a fill, already cheap; an outer square
+shadow with no blur is rectangles, already cheap. A picture wider than
+one band's 64K pixels is worked out as now, every paint.
+
+| State | Begun | Changed | Let go |
+|---|---|---|---|
+| An entry (one band of a tile or a mask, and its key) | made at the first paint that draws from a band not held | used at each paint that draws from it: it goes to the front of the list, stamped with the paint | evicted from the back of the list when making another would pass the budget; all of them when another page is shown, and at exit |
+| The budget | 16 MiB across both kinds — pixels, keys and each entry's own bytes | — | — |
+| The list (most recently used first) and the table (by key's hash) | with the first entry | at each entry made, used or evicted | with the last entry |
+| The cache's counts (hits, made, evicted, not kept and why, bytes held) | with the paint counts | at each draw that asks | restarted with the paint counts; written in the record's `paint:` section |
+
+*What the budget may not do.* An entry this paint has drawn from is never
+evicted to make room for another this paint wants: when the paint's own
+pictures do not fit, the one that does not fit is worked out for the
+view's part, as now, and counted. So a view whose pictures pass the
+budget costs what it costs today, and never more — an LRU list that
+evicted its own paint's bands would make every band again every paint,
+each one larger than the part it is for. A band whose memory is refused
+is worked out for the view's part the same way.
+
+*Who owns it.* The window does (`g`), and hands it to `yonder_paint`; NULL
+paints as before, which is how the host suite paints its oracle. It is
+emptied when another page is shown, not at a layout, a zoom, a resize or
+a dark toggle: the keys already say all of those, and what they made
+ages out. One window paints on one thread, so the cache has no lock.
 
 **Then measure again**, and decide whether these are still worth their
 complexity:
