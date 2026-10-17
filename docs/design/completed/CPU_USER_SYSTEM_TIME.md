@@ -121,6 +121,10 @@ counters, then restamps `acctLastDispatchTSC`. Its priority is:
 3. Otherwise charge user when the boundary's saved CS is ring 3; charge
    system when it is ring 0.
 
+An interrupt entry closes an in-task `hlt` under the halted redirect, then
+clears that redirect before charging the waking handler to the current
+thread's system time. Dispatch and the post-wake halt end also clear it.
+
 Every ordinary thread charge adds the same delta to `runCycles`, its user
 or system counter, and this core's `acctUserCycles` or `acctSystemCycles`.
 The idle charge adds to the idle thread's `runCycles` and `idleCycles`; the
@@ -144,7 +148,7 @@ several currently say runtime is charged only at context switches.
 | Scheduler pass entry | Close the outgoing span using the scheduler interrupt's saved CS; set `acctSchedSpanActive` after restamping. |
 | Scheduler pass exit | Close the scheduler span, clear its marker and restamp for the incoming thread. Its ring-3 `iretq` tail gets a system close. |
 | Settle-on-read IPI | Close the active scheduler span, or use the IPI's interrupted CS for a thread span; restamp either way. |
-| Compositor halt begin/end | Close active system work, redirect the halted span to idle, then restore system attribution after wake; a dispatch can clear the halt state. |
+| Compositor halt begin/end | Close active system work and redirect the nap to idle. Interrupt entry closes the nap and restores system attribution for its handler; a dispatch or halt end clears any remaining redirect. |
 | Exit without a user return | The last switch-out closes system time; no synthetic user interval is added. |
 
 The current settle handler skips a scheduler pass because the outgoing charge

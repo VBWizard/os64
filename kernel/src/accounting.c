@@ -164,7 +164,9 @@ static void interrupt_enter(uint64_t interrupted_cs, bool scheduler)
 	uint64_t flags = accounting_irq_save();
 	// IRQ0 can fire before a core has installed its GS self pointer.
 	core_local_storage_t *cls = try_get_core_local_storage();
-	charge_locked(cls, interrupted_cs, false, false, false, false);
+	// Close an in-task hlt as idle, then charge the waking IRQ to its thread.
+	// Leaving the halt redirect up would put the handler in idleCycles.
+	charge_locked(cls, interrupted_cs, false, false, true, false);
 	if (cls != NULL && !cls->acctSchedSpanActive &&
 	    cls->currentThread != NULL && cls->currentThread != NO_THREAD)
 	{

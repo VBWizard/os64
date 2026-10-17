@@ -784,11 +784,9 @@ extern volatile uint64_t kTicksSinceStart;
 // caller, THEN raise the flag so the nap ahead lands on idle.
 //
 // End: called after hlt returns, interrupts live again — wrapped in its own
-// cli window. Settles whatever span is open (if no dispatch intervened,
-// that span is the nap → flag still up → charged to idle; if the scheduler
-// ran meanwhile, dispatch already cleared the flag and charged the nap, and
-// this settle just charges the caller's genuine post-wake work), then drops
-// the flag. Idempotent when already down.
+// cli window. An ordinary IRQ or scheduler dispatch has already closed the
+// nap and cleared the redirect, so this settles the caller's post-wake tail.
+// If another wake source left the redirect up, End closes it here.
 void mpAcctHaltBegin(void)
 {
     accounting_halt_begin();

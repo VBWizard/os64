@@ -108,12 +108,12 @@ typedef struct
 
 	// acctCurrentHalted: the CURRENT thread is parked in an sti;hlt of its
 	// own making (the compositor's idle idiom — the one thread that idles
-	// OUTSIDE the scheduler's view). While raised, every charge site
-	// redirects this core's span to acctIdleThread instead of the current
-	// thread: halted time is idle time, whoever's rbp it happens under.
+	// OUTSIDE the scheduler's view). While raised, charges redirect this
+	// core's open span to acctIdleThread instead of the current thread.
 	// Raised by mpAcctHaltBegin (under cli, after settling the real work),
-	// dropped by mpAcctHaltEnd AND by every dispatch (a switched-in thread
-	// is never halted). Born 2026-08-17, the day top showed guicomp at 95%
+	// dropped at interrupt entry after the nap is charged, or by
+	// mpAcctHaltEnd or dispatch if no interrupt entry did so. A switched-in
+	// thread is never halted. Born 2026-08-17, the day top showed guicomp at 95%
 	// of a core while its flush counter proved it doing nothing — hlt-in-
 	// task bills as work unless the books are told otherwise.
 	bool acctCurrentHalted;
