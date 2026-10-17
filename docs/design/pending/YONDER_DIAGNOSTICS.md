@@ -296,7 +296,8 @@ was shown, or since its record was last written on asking:
   **`schedule`** is per call (handing the ticker its next deadline),
   **`tasks`** per script task (a script, a timer or an event, its run),
   **`layouts`** per layout. The `paint:` line has grown since this
-  example: the layouts, how late frames were, the loop's longest wait, the
+  example: the layouts, and how many of them were for the animations
+  alone (YONDER_PERF.md § perf-4), how late frames were, the loop's longest wait, the
   script tasks by kind, the ticker's bells and its own counts, the
   deadlines already past when handed to it, by source (YONDER_PERF.md §
   Measure first), and the paint cache's counts: the blocks it found and

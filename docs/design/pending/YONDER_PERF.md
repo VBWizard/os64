@@ -364,6 +364,239 @@ compositor (`publish`) 8.9, up to 52, about 33 times a second, half of
 them whole views: a full-screen window costs more there to publish than
 to paint.
 
+**perf-4: a layout repaints what it changed.** (Reviewed by Fable,
+2026-10-17: approved with seven findings, all taken in below.)
+
+*What is wrong.* On the P5 (record 0114, danlegt full screen at
+1920x1080), the top of the page paints about 33 times a second, and half
+of those paints are the whole view: 2 Mpx painted, published to the
+compositor and composited, each time. Nothing in the view needs it. The
+cockroaches are GIFs whose frames repaint only their own boxes, and the
+rainbow visit counter animates `background-position`, which ticks in
+place. A window cut to the roaches' height is smooth, because each of
+those whole-view paints is then small. It is the same everywhere on the
+page:
+
+| P5 0114, 30 s or so each | layouts | paints | whole views |
+|---|---|---|---|
+| the top | 349 | 1209 | 620 |
+| the middle (Scratch 2000) | 159 | 654 | 386 |
+| the bottom | 310 | 605 | 600 |
+
+*Why.* Two links in one chain:
+
+1. **An animation far below the view lays the page out about ten times
+   a second.** The QR-code ad below the Scratch 2000 and chat windows
+   ("TURN ANYTHING INTO A QR CODE!") animates the
+   `text-shadow` of its heading and its button, "chromatic", in
+   `steps(2)` across three keyframe intervals, at 1.65 s and 1.45 s:
+   about eight changes a second between them. They are laid out more
+   often than that: libflow does not schedule a stepped interval by its
+   steps. Any interval that is not one held value is due now
+   (`f_motion_next_of`), and the pace is left to the face, so the pair is
+   laid out at every frame yonder can make, as fast as its cost rule
+   allows. On the P5 that was about ten a second at the top. In QEMU it
+   was seven on the repro page below and twenty on a lighter one. libflow sorts an
+   animation's properties three ways (motion.c). The TICK set repaints
+   by a tick, with no layout: what nothing but painting reads and
+   nothing inherits. The IN-PLACE class (`repaints_in_place`) needs a
+   layout but repaints only where the element already draws, and
+   `flow_motion_due` makes it due only while that can be seen (a
+   colour, a fade). Anything else may carry what it draws into view
+   from anywhere, so it is due wherever its element is. `text-shadow`
+   is in neither list, so it is in the third class: due at every
+   change, off screen or not.
+2. **Every layout repaints the whole view.** `lay_out_shown` ends with
+   `os64_ui_mark_dirty(&g.ui, &g.view)`, whatever the layout changed.
+   So each of those layouts becomes a whole-view paint,
+   a whole-view publish (a copy under `kGuiLock` with interrupts off)
+   and a whole-view composite, wherever the page is scrolled.
+
+Reproduced in QEMU with a page whose only animation is that
+`text-shadow`, 3400 px below the view (danlegt's own layouts take over
+200 ms in QEMU, so yonder's cost rule, `MOTION_COST_MS`, stops its layout
+animations there): in 32 s at the top,
+237 layouts and 238 paints, 237 of them the whole view, the main loop
+32% busy. The same page without the animation painted once.
+
+*The fix, in two parts*, which ship as two slices: perf-4a is part 1 and
+the record's layouts by cause; perf-4b is part 2.
+
+1. **`text-shadow` animates in place** (libflow). It moves nothing and
+   changes nothing that a layout places; like `color`, which is already
+   in the class, it is inherited and changes only how text inside the
+   element draws. So it joins `repaints_in_place`, and an off-screen
+   chromatic heading costs nothing at all: no layout, no paint, no
+   publish. One thing is new for the class: a text shadow's ink reaches
+   past the box, by its offset and blur, and that reach changes from
+   frame to frame. `flow_motion_due` asks whether the element "can be
+   seen" from the ink the current layout gave it (`box_seen`, `b->ink`),
+   which holds only the shadow on show now. An element just out of view
+   whose next shadow reaches in would then be judged unseen and left
+   unpainted. So each element whose animations set `text-shadow` keeps
+   its REACH: the farthest any FRAME's shadow can draw from the text. A
+   keyframe's value is not the bound: an easing that overshoots (a
+   `cubic-bezier` whose control points leave [0, 1]) carries the offsets
+   past both ends of an interval, and libflow does not clamp a signed
+   length. So each interval's extent is its two ends' farther one, plus
+   their difference times how far the easing's output leaves [0, 1] (0 for
+   `steps`, linear and every curve that stays inside). The seen test grows
+   the element's inked overflow by that reach: `motion_seen`, and the
+   stacked boxes' test, which hands inherited values down. The inked
+   overflow already holds the current shadow, so growing it by the full
+   reach counts that shadow twice. That is safe, and it is left so: the
+   difference would be a bound only if the ink held nothing else.
+2. **A layout that changed only values painted in place repaints only
+   what they paint** (libflow hands the parts, yonder marks them). When
+   yonder lays the page out for its animations alone, with nothing else
+   changed since the tree on screen (no script change, no picture or
+   face arrived, the same width and zoom, `LAID_FOR_MOTION`), and every
+   animated value that changed is in the in-place class, then the box
+   trees are the same boxes in the same places. Only how some of them
+   paint has changed. The old tree is still alive when the new one is
+   ready (`page_lay_out` keeps it until `page_show`), so libflow can
+   hand over, for each animated element whose values changed, what it
+   painted in the old tree and what it paints in the new one. That is its
+   boxes' inked overflow (every piece of an inline element), or its
+   group's bounds when it opens one, as a tick hands them. To that it adds
+   the stacked boxes inside it that take what changed, by the rule
+   `motion_due` already applies and through the same function, not a copy
+   of it. A stacked box takes from the element what is handed down (the
+   inherited properties, and a fade), what it and every element between
+   them took by keyword (`FStyled.taken`: `background: inherit` takes a
+   background that is not inherited), and everything when a
+   `background-clip: text` chain holds it. That is the shape
+   `flow_motion_tick` already hands a tick's changes in, through the
+   same callback, so yonder marks each part with `mark_part`, as it does
+   for a tick. If anything else differs, libflow says so and yonder marks
+   the whole view as now. Each of these sends a layout to the whole view:
+   - a box tree of a different shape;
+   - a box at a different place;
+   - a changed value outside the class;
+   - the root's or the body's background, which the canvas takes over the
+     whole view.
+
+   As a check that costs one walk, libflow compares the two trees box by
+   box and treats any difference as "cannot bound". It compares the count,
+   and each box's node, kind, rect, overflow, clip, whether it clips,
+   whether it is stacked, positioned or floated, and the scroll of each
+   scroll container. It deliberately leaves out each box's ink: shadows
+   change a box's ink by design, so a compare that held it would refuse
+   every `text-shadow` frame and part 2 would never fire.
+
+   The two trees can then paint differently only where (a) the changed
+   elements' own boxes draw, (b) a stacked box inside them takes from them
+   by that rule, or (c) the canvas's element changed, which goes to the
+   whole view. A propagated decoration colour, a gradient stop in
+   `currentColor` or a clip to a changed radius is drawn by a box inside
+   (a) or (b) (Fable looked for a fourth door and found none).
+
+   Which layouts may hand parts is derived, not flagged. The rule is that
+   every change that is not an animation's reaches the glass through a
+   whole-view mark of its own, never through a motion layout. So a layout
+   hands parts only when it is for the animations alone
+   (`LAID_FOR_MOTION`) and reads the very cascade the tree on screen was
+   laid out from (`cascade == p->cascade`), at the same width, height and
+   zoom, with the old tree still alive (not the retry that frees it for
+   room). The cascade is rebuilt for any change of sheets or of its
+   environment (`width`, `height`, `dark`, `reduced_motion`), so those
+   cannot slip through. A script's change waits for its own rebuild
+   (`page_rebuild_owed` refuses a motion layout until then). A picture
+   or a face arriving marks the whole view itself, and libui's dirty marks
+   accumulate, so parts never undo it. Anything that moved a box is caught
+   by the compare.
+
+Wherever the ad is out of view, part 1 alone takes its layouts to none;
+where it is in view, part 2 takes each of its frames from 2 Mpx to its
+heading and its button. What is left there is a layout per frame for a
+visible chromatic heading, since a stepped interval is due every frame;
+its cost the record will say. Scheduling a stepped interval at its steps
+would take that to the steps' own rate (booked below). The finish beyond
+that is a tick that pushes an inherited value down to the boxes that do
+not override it (`taken`'s logic run the other way), a bigger design not
+taken here.
+
+*Why these and not something else.*
+
+- **Not the tick set.** A tick rewrites the animated element's own style
+  and nothing below it. `text-shadow` is inherited: the shadow is drawn
+  by the text boxes inside the element, whose styles a tick does not
+  touch. That is why the tick set leaves inherited properties out, and
+  `color` with them.
+- **Not "skip a layout whose element is off screen" alone.** That is
+  part 1 without the reach, and it draws wrong pixels: the shadow that
+  reaches into view from an element just outside it.
+- **Not throttling off-screen animations by time** (some browsers slow
+  them down). That still lays out and repaints the whole view, only less
+  often, and the view would show stale frames of anything that reaches
+  in. Due-when-seen is exact.
+- **Not a general diff of any two layouts.** Comparing every box's
+  painted values after any layout would also cover a script's change
+  that keeps the page's shape. It needs a "paints the same" comparison
+  over every property of every box, because a script can set any value
+  on any element, and the box compare cannot see a value that changes
+  paint and not shape. It is the bigger design, and no reading yet says
+  those layouts are the cost. Part 2 is that diff, cut to the case where
+  libflow already knows what changed (the timeline), with the box walk
+  as its proof.
+- **Not in the compositor.** Making publish and composite cheaper
+  (booked under Publishing below) shrinks the cost of each wasted frame.
+  This removes the frames.
+
+*What it does not change.* A layout for any other reason (a script's
+change, a picture or a face arriving, a resize, an animation of a
+property that moves boxes) still repaints the whole view. Publishing and
+compositing a whole-view frame cost what they do.
+
+*State it adds.*
+
+| State | Begun | Changed | Read | Let go |
+|---|---|---|---|---|
+| An animation's text-shadow reach | when the element's styles are built with that animation (FMotion) | never: the keyframes' values are fixed | by `flow_motion_due`'s seen tests | with the styles |
+| A layout's parts (old and new paint of each changed element) | not kept: handed through the mark callback while both trees are alive, between `flow_layout` and `page_show` | — | by yonder's `mark_part`, at once | at the end of the call; the old tree is freed by `page_show` as now |
+| (No flag: whether a layout may hand parts is derived from its cause, its cascade, its sizes and the old tree, above) | — | — | — | — |
+| The record's layouts by cause: for the animations alone, and of those the ones that painted parts | at a page shown, with the other counts | at each layout | at each write of the record | with the paint counts |
+
+*Tests.*
+- libflow:
+  - An off-screen `text-shadow` animation is not due.
+  - One whose reach crosses into the view is due.
+  - One whose overshoot frame crosses into the view is due.
+  - A stacked box that inherits it is judged by the same reach.
+- The parts: the old and new paint of the changed element. The whole
+  view when a box moved, the tree's shape changed, or the canvas's
+  element is animated.
+- yonder's oracle, extended: after an in-place layout, repainting only
+  the parts gives the same pixels as repainting the whole view.
+
+*How it is measured.* The QEMU page above: no layouts at the top. Then
+the P5 at danlegt's top, middle and bottom: the whole-view paints and
+the busy main loop are the numbers to watch. The before-numbers are
+paced by frames, not by the pair's steps (a stepped interval is due every
+frame): the P5's layouts a second are how fast a frame went, 11.6 at the
+top and fewer at the middle, where a frame costs more. So the
+after-reading is judged by the record's layouts by cause, which name what
+still lays out, not by the total alone.
+
+*perf-4a's reading (QEMU).* The repro page at its top, the heading 3400
+px below the view: 1 paint and no layouts in 32 s, where perf-3 laid it
+out 237 times. With the heading in view (a page of only it), it animates
+as before: 668 layouts in 32 s, all of them for animations, against 600
+on perf-3. That is a layout and a whole-view paint at every frame, which
+is perf-4b's and the stepped schedule's to cut.
+
+*Questions for review.*
+1. Is the in-place class the right home for `text-shadow`? Its ink is
+   the first in that class to change extent, which is what the reach is
+   for.
+2. Is the box-by-box comparison a sufficient proof that a layout moved
+   nothing, or is there a way two trees can match there and still paint
+   differently outside the changed elements' parts?
+3. Should the parts be handed for a script's layout too, when its change
+   touched only in-place values? No (Fable): the box compare cannot see
+   a value a script set that changes paint and not shape, so that needs
+   the general diff declined above.
+
 **Then measure again**, and decide whether these are still worth their
 complexity:
 
@@ -386,10 +619,19 @@ complexity:
   picture's exact time kept so its cadence does not drift by the
   rounding; what it costs in jitter and what it saves in paints is for a
   reading to say.
+- **A stepped interval due at its steps.** `f_motion_next_of` answers
+  "now" for any interval that is not one held value, so a `steps()`
+  animation in view is laid out at every frame yonder can make, not at
+  its steps. Its next change is the next step's time, which the easing
+  and the interval give, as a held interval's far end is given now. For
+  danlegt's chromatic pair in view that is about twenty layouts a second
+  (in QEMU, on a light page) against their 7.8 steps.
 - **Publishing.** At the top of danlegt, full screen on the P5, handing a
-  paint to the compositor costs more than the paint (record 0114), and a
-  window cut to the roaches' height is smooth. What it copies, and whether
-  that is more than the damage, is for a reading to say first.
+  paint to the compositor costs more than the paint (record 0114). Most of
+  those paints should not have happened (perf-4), but each frame still
+  moves its damage three times: the publish's copy (under `kGuiLock`,
+  interrupts off), the composite, and the flush. What each costs is for
+  a reading to say first.
 - What the instrument says next: scaled frames kept, warps.
 
 Also owed to this slice (PILE3.md): the paused-animation test, "throttle,

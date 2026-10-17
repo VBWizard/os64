@@ -1204,9 +1204,12 @@ static void motion_cases(void) {
     probe_page(kMotionPage,false);
     check(g.page.timeline==NULL && motion_next()==YONDER_NEVER,
         "motion: a layout not made to be shown starts nothing, and nothing is due");
+    uint64_t for_motion=s_cost.layouts_motion;
     relayout(true);
     check(g.page.timeline!=NULL && motion_x("a")==0 && motion_next()==100 && ticker_due==100,
         "motion: the shown page's layout starts its animations, and one moving is due at once");
+    check(s_cost.layouts_motion==for_motion,
+        "motion: the record does not count the page's own layout as one for animations");
     char status[sizeof(g.status_text)];
     os64_strcopy(status,sizeof(status),g.status_text);
     now_ms=600; geometry_layout_delay=5000;
@@ -1215,6 +1218,8 @@ static void motion_cases(void) {
     check(motion_x("a")==50 && g.motion_laid && g.motion_began==600 && g.motion_us==5000 &&
           os64_streq(status,g.status_text) && g.laid_ms==37,
         "motion: a tick lays the page out at its moment, quietly, and keeps what it cost apart");
+    check(s_cost.layouts_motion==for_motion+1,
+        "motion: the record counts a layout for the animations as one");
     check(motion_next()==YONDER_NEVER && tick_next()==YONDER_NEVER,
         "motion: a frame waiting for its paint is the only frame, of either half");
     motion_painted();
@@ -4511,7 +4516,7 @@ static void paint_cost_cases(void) {
     cost_reset();
     diag_paint(&g.page);
     yonder_diag_render(g.page.diag,rec,sizeof(rec));
-    check(strstr(rec,"\npaint: nothing painted in 0.0 s; 0 ticks, 0 schedules; too short a span to time; 0 layouts; ")!=NULL &&
+    check(strstr(rec,"\npaint: nothing painted in 0.0 s; 0 ticks, 0 schedules; too short a span to time; 0 layouts, 0 of them for animations; ")!=NULL &&
           strstr(rec,"paint stages")==NULL,
           "paint counts: nothing painted says so, and a span too short to time has no stages");
     check(lay_out_page(&g.page,800,600) && s_cost.layouts==1 && s_cost.total[PS_LAYOUTS]>0,
@@ -4523,6 +4528,7 @@ static void paint_cost_cases(void) {
     s_cost.from_cycles=cycles()-1000000000000ull;
     s_cost.from_us=os64_micros()-1000000000;
     s_cost.paints=2; s_cost.whole=1; s_cost.pixels=3000000; s_cost.ticks=4; s_cost.schedules=5;
+    s_cost.layouts=3; s_cost.layouts_motion=2;
     s_cost.waited=250000000000ull;   /* a quarter of the span asleep */
     s_cost.total[PS_SCHEDULE]=5000000;
     s_cost.total[PS_RENDER]=24000000; s_cost.most[PS_RENDER]=13000000;
@@ -4533,7 +4539,7 @@ static void paint_cost_cases(void) {
     diag_paint(&g.page);
     yonder_diag_render(g.page.diag,rec,sizeof(rec));
     check(strstr(rec,"\npaint: 2 paints in 1000.0 s (1 whole views), 3.0 Mpx of the view; 4 ticks, 5 schedules; "
-                     "the main loop busy 75%; 0 layouts; frames late at most 0 ms, 0 more than 30 ms; the longest wait 0 ms; no paint cache; 0 script tasks: 0 scripts, 0 timers, 0 events; 0 bells taken; the ticker not running; deadlines already past when handed to it: settle 0, "
+                     "the main loop busy 75%; 3 layouts, 2 of them for animations; frames late at most 0 ms, 0 more than 30 ms; the longest wait 0 ms; no paint cache; 0 script tasks: 0 scripts, 0 timers, 0 events; 0 bells taken; the ticker not running; deadlines already past when handed to it: settle 0, "
                      "layouts 0, ticks 0, arrival 0, stream 0, timers 0, pictures 0\n")!=NULL &&
           strstr(rec,", schedule (a call) 1.0 (0.0)")!=NULL &&
           strstr(rec,"paint stages: ms a paint (most): render 12.0 (13.0), view 10.0 (0.0)")!=NULL &&
@@ -4657,7 +4663,7 @@ static void paint_cost_cases(void) {
         diag_paint(&g.page);
         yonder_diag_render(g.page.diag,rec,sizeof(rec));
         check(strstr(rec,"\npaint: nothing painted in 1000.0 s; 0 ticks, 0 schedules; the main loop busy ")!=NULL &&
-              strstr(rec,"; 2 layouts;")!=NULL && strstr(rec,"; 1 script tasks: 0 scripts, 1 timers, 0 events;")!=NULL &&
+              strstr(rec,"; 2 layouts, ")!=NULL && strstr(rec,"; 1 script tasks: 0 scripts, 1 timers, 0 events;")!=NULL &&
               strstr(rec,"\npaint stages: ms a paint (most):")!=NULL,
               "paint counts: a span with nothing painted keeps its work and its stages");
     }

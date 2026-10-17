@@ -1687,6 +1687,7 @@ static struct {
     uint64_t now[PS_COUNT], total[PS_COUNT], most[PS_COUNT], began[PS_COUNT];
     uint32_t depth[PS_COUNT];
     uint64_t paints, whole, pixels, ticks, schedules, waited, scripts, timers, events, layouts;
+    uint64_t layouts_motion;                // of `layouts`, those for the animations alone
     uint64_t backward;                      // intervals whose counter stepped back
     // The longest one wait of the main loop (cycles), and how late a moving
     // picture's frame was shown against when it was due (ms): the most, and
@@ -2160,6 +2161,7 @@ static bool lay_out_shown(bool again, LaidFor laid_for)
     int64_t began_us = os64_micros();
     os64_ticks(&t0);
     page_timeline(&g.page);
+    s_cost.layouts_motion += laid_for == LAID_FOR_MOTION;
     bool laid = lay_out_page(&g.page, width, height);
     os64_ticks(&t1);
     // A frame's layout; its paint is added when it is done (motion_painted).
@@ -4730,7 +4732,8 @@ static bool paint_lines(DiagText *t, DiagText *u)
     if (s_cost.backward != 0)
         dt_put(t, "; the counter stepped back %lu times (the cores' counters disagree: these times are suspect)",
                (unsigned long)s_cost.backward);
-    dt_put(t, "; %lu layouts", (unsigned long)s_cost.layouts);
+    dt_put(t, "; %lu layouts, %lu of them for animations", (unsigned long)s_cost.layouts,
+           (unsigned long)s_cost.layouts_motion);
     dt_put(t, "; frames late at most %lu ms, %lu more than %d ms", (unsigned long)s_cost.late_most,
            (unsigned long)s_cost.late_frames, FRAME_LATE_MS);
     if (rate != 0)

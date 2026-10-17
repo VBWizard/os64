@@ -1994,6 +1994,140 @@ static void motion_due_cases(void)
            flow_motion_due(m.tree, kView, (flow_point_t){0, 0}) == 1000, NULL);
     moving_close(&m);
 
+    // A text shadow repaints in place, as far past the element's ink as the
+    // farthest offset any frame can take (FMotion.text_reach): out of view
+    // it waits; a later frame cast into view is due now, judged by that
+    // reach and not by the shadow on show; and an easing that overshoots
+    // carries a frame past its keyframes, which the reach counts. The box
+    // is 650 to 690 px down, a view of 600 above it.
+    static const struct {
+        const char *name, *keyframes, *easing, *top;
+        bool due;
+    } kShadows[] = {
+        {"motion due: out of view, a text shadow waits",
+         "from{text-shadow:2px 2px 0 red}to{text-shadow:-2px 1px 0 blue}", "linear", "2000px", false},
+        {"motion due: a text shadow a later frame casts into view is due",
+         "from{text-shadow:0 0 0 red}to{text-shadow:0 -100px 0 red}", "linear", "650px", true},
+        {"motion due: a text shadow that falls short of the view waits",
+         "from{text-shadow:0 0 0 red}to{text-shadow:0 -40px 0 red}", "linear", "650px", false},
+        {"motion due: a text shadow an overshooting easing carries into view is due",
+         "from{text-shadow:0 0 0 red}to{text-shadow:0 -40px 0 red}", "cubic-bezier(0.2,0,0.2,2)",
+         "650px", true},
+    };
+    for (size_t i = 0; i < sizeof(kShadows) / sizeof(*kShadows); i++) {
+        char html[512];
+        snprintf(html, sizeof(html), MOTION_STYLE "@keyframes ts{%s}</style>"
+                 "<div style='margin-top:%s;animation:ts 1s %s'>x</div>",
+                 kShadows[i].keyframes, kShadows[i].top, kShadows[i].easing);
+        moving_open(&m, html, 1000);
+        uint64_t due = flow_motion_due(m.tree, kView, (flow_point_t){0, 0});
+        char detail[48];
+        snprintf(detail, sizeof(detail), "got %llu", (unsigned long long)due);
+        expect(kShadows[i].name, due == (kShadows[i].due ? 1000 : FLOW_NEVER), detail);
+        moving_close(&m);
+    }
+    // The reach itself (FMotion.text_reach): the farthest offset among the
+    // keyframes, the value underneath and 0, plus their span times the most
+    // any easing there overshoots, either side (f_easing_overshoot).
+    static const struct {
+        const char *name, *own, *keyframes, *easing;
+        int32_t reach;
+    } kReach[] = {
+        {"text reach: the farthest keyframe's offset", "",
+         "from{text-shadow:3px -7px 0 red}to{text-shadow:-5px 2px 0 red}", "linear", 7},
+        {"text reach: an offset across counts as one down", "",
+         "from{text-shadow:-12px 1px 0 red}to{text-shadow:0 0 0 red}", "linear", 12},
+        {"text reach: the value underneath is a keyframe's", "text-shadow:0 30px 0 red;",
+         "to{text-shadow:0 -4px 0 red}", "linear", 30},
+        {"text reach: every shadow in the list", "",
+         "from{text-shadow:1px 1px 0 red,0 -9px 0 blue}to{text-shadow:0 0 0 red}", "linear", 9},
+        {"text reach: an easing past 1 carries the span past it", "",
+         "from{text-shadow:0 0 0 red}to{text-shadow:0 -40px 0 red}", "cubic-bezier(0.2,0,0.2,2)", 80},
+        {"text reach: an easing below 0 carries it the other way", "",
+         "from{text-shadow:0 0 0 red}to{text-shadow:0 -40px 0 red}", "cubic-bezier(0.2,-0.5,0.2,1)", 60},
+        {"text reach: a keyframe's own easing counts", "",
+         "from{text-shadow:0 0 0 red;animation-timing-function:cubic-bezier(0.2,0,0.2,1.5)}"
+         "to{text-shadow:0 -40px 0 red}", "linear", 60},
+        {"text reach: none for an element that sets no text shadow", "",
+         "to{color:red}", "linear", 0},
+    };
+    for (size_t i = 0; i < sizeof(kReach) / sizeof(*kReach); i++) {
+        char html[512];
+        snprintf(html, sizeof(html), MOTION_STYLE "@keyframes ts{%s}</style>"
+                 "<div id=r style='%sanimation:ts 1s %s'>x</div>",
+                 kReach[i].keyframes, kReach[i].own, kReach[i].easing);
+        moving_open(&m, html, 1000);
+        FStyles *styles = f_style_build(m.p.doc, m.p.page, &m.p.env);
+        const FStyled *st = styles != NULL ? f_style_of(styles, motion_find(m.p.doc->document, "r")) : NULL;
+        int32_t got = st != NULL && st->motion != NULL ? st->motion->text_reach : -1;
+        f_style_free(styles);
+        char detail[48];
+        snprintf(detail, sizeof(detail), "got %d, want %d", got, kReach[i].reach);
+        expect(kReach[i].name, got == kReach[i].reach, detail);
+        moving_close(&m);
+    }
+    static const struct {
+        const char *name;
+        flow_easing_t e;
+        double over;
+    } kOvershoot[] = {
+        {"overshoot: none for linear", {FLOW_EASE_LINEAR, {0}, 0, FLOW_JUMP_END, false}, 0},
+        {"overshoot: none for steps", {FLOW_EASE_STEPS, {0.5, 3, 0.5, -2}, 2, FLOW_JUMP_END, false}, 0},
+        {"overshoot: none for a curve that stays inside", {FLOW_EASE_CUBIC, {0.25, 0.1, 0.25, 1}, 0, FLOW_JUMP_END, true}, 0},
+        {"overshoot: past 1 by the higher control point", {FLOW_EASE_CUBIC, {0.1, 1.2, 0.2, 1.6}, 0, FLOW_JUMP_END, false}, 0.6},
+        {"overshoot: below 0 by the lower control point", {FLOW_EASE_CUBIC, {0.1, -0.7, 0.2, -0.2}, 0, FLOW_JUMP_END, false}, 0.7},
+        {"overshoot: the farther of the two sides", {FLOW_EASE_CUBIC, {0.1, -0.3, 0.2, 1.2}, 0, FLOW_JUMP_END, false}, 0.3},
+    };
+    for (size_t i = 0; i < sizeof(kOvershoot) / sizeof(*kOvershoot); i++) {
+        double got = f_easing_overshoot(&kOvershoot[i].e);
+        char detail[48];
+        snprintf(detail, sizeof(detail), "got %g", got);
+        expect(kOvershoot[i].name, fabs(got - kOvershoot[i].over) < 1e-9, detail);
+    }
+    // The reach grows the box on every side: a shadow cast into the view
+    // from below it, above it, and either side of it.
+    static const struct {
+        const char *name, *place, *to;
+        os64_gui_rect_t view;
+    } kSides[] = {
+        {"motion due: a text shadow cast up into view", "margin-top:650px", "0 -100px",
+         {0, 0, 800, 600}},
+        {"motion due: a text shadow cast down into view", "margin-top:650px", "0 400px",
+         {0, 1000, 800, 600}},
+        {"motion due: a text shadow cast left into view", "margin-left:900px", "-150px 0",
+         {0, 0, 800, 600}},
+        {"motion due: a text shadow cast right into view", "", "450px 0", {500, 0, 800, 600}},
+    };
+    for (size_t i = 0; i < sizeof(kSides) / sizeof(*kSides); i++) {
+        char html[512];
+        snprintf(html, sizeof(html), MOTION_STYLE
+                 "@keyframes ts{from{text-shadow:0 0 0 red}to{text-shadow:%s 0 red}}</style>"
+                 "<div style='%s;animation:ts 1s linear'>x</div>", kSides[i].to, kSides[i].place);
+        moving_open(&m, html, 1000);
+        uint64_t due = flow_motion_due(m.tree, kSides[i].view, (flow_point_t){0, 0});
+        char detail[48];
+        snprintf(detail, sizeof(detail), "got %llu", (unsigned long long)due);
+        expect(kSides[i].name, due == 1000, detail);
+        moving_close(&m);
+    }
+    // A box drawn outside the element inherits its text shadow, and is
+    // judged by the element's reach: a fixed box just below the view.
+    for (int far = 0; far < 2; far++) {
+        char html[512];
+        snprintf(html, sizeof(html), MOTION_STYLE
+                 "@keyframes ts{from{text-shadow:0 0 0 red}to{text-shadow:0 -%dpx 0 red}}"
+                 ".c{animation:ts 1s linear}</style><div class=c style='margin-top:2000px'>"
+                 "<p style='position:fixed;top:650px;margin:0'>x</p></div>", far ? 100 : 40);
+        moving_open(&m, html, 1000);
+        uint64_t due = flow_motion_due(m.tree, kView, (flow_point_t){0, 0});
+        char detail[48];
+        snprintf(detail, sizeof(detail), "got %llu", (unsigned long long)due);
+        expect(far ? "motion due: a fixed box inside takes the text shadow's reach"
+                   : "motion due: a fixed box inside waits when the reach falls short",
+               due == (far ? 1000 : FLOW_NEVER), detail);
+        moving_close(&m);
+    }
+
     // An animation of nothing that can show is due for nothing, however
     // fast its clock runs: an empty rule, `display` alone, what an
     // `!important` winner holds — and opacity a later animation in effect

@@ -1740,14 +1740,19 @@ static os64_gui_rect_t space_rect(const flow_frame_t *f, os64_gui_rect_t r, flow
 
 // Whether a box can be seen in `view`: all it paints — its overflow and
 // what its ink reaches past it (a shadow, a glyph's overhang, the like
-// from a box inside it) — where the page paints it, through any transform.
-// A background the canvas takes is the canvas's to paint (may_own_canvas).
-static bool box_seen(const flow_box_t *b, os64_gui_rect_t view, flow_point_t scroll)
+// from a box inside it) — where the page paints it, through any transform,
+// and `reach` px past that on every side, for a text shadow a frame may
+// cast farther than the ink holds (FMotion.text_reach). The ink already
+// holds the shadow on show, so the reach counts it twice: a bound, which
+// is all the question needs. A background the canvas takes is the
+// canvas's to paint (may_own_canvas).
+static bool box_seen(const flow_box_t *b, os64_gui_rect_t view, flow_point_t scroll, int32_t reach)
 {
     os64_gui_rect_t o = b->overflow;
     os64_gui_rect_t inked =
-        rect_from((int64_t)o.x - b->ink[FLOW_LEFT], (int64_t)o.y - b->ink[FLOW_TOP],
-                  (int64_t)o.x + o.w + b->ink[FLOW_RIGHT], (int64_t)o.y + o.h + b->ink[FLOW_BOTTOM]);
+        rect_from((int64_t)o.x - b->ink[FLOW_LEFT] - reach, (int64_t)o.y - b->ink[FLOW_TOP] - reach,
+                  (int64_t)o.x + o.w + b->ink[FLOW_RIGHT] + reach,
+                  (int64_t)o.y + o.h + b->ink[FLOW_BOTTOM] + reach);
     return meets(doc_rect_of(b, inked, scroll), view);
 }
 
@@ -1757,27 +1762,28 @@ static bool box_seen(const flow_box_t *b, os64_gui_rect_t view, flow_point_t scr
 // it: the nearest block with an element of its own holds every piece, so
 // its box stands for them — more than the element draws, which can cost a
 // layout the element did not need and never one it did.
-static bool pieces_seen(const flow_box_t *b, os64_gui_rect_t view, flow_point_t scroll)
+static bool pieces_seen(const flow_box_t *b, os64_gui_rect_t view, flow_point_t scroll, int32_t reach)
 {
     if (b->kind == FLOW_BOX_SPAN)
         while (b->parent != NULL && !(block_level(b->kind) && b->node != NULL))
             b = b->parent;
-    return box_seen(b, view, scroll);
+    return box_seen(b, view, scroll, reach);
 }
 
-// Whether what element `n` animates in place can be seen: its own boxes,
-// or, for an element that makes none (`display: contents`), whose
-// inherited values its descendants draw, the nearest boxes inside it —
-// each one's overflow standing for what is inside it.
+// Whether what element `n` animates in place can be seen, `reach` past
+// its ink (box_seen): its own boxes, or, for an element that makes none
+// (`display: contents`), whose inherited values its descendants draw, the
+// nearest boxes inside it — each one's overflow standing for what is
+// inside it.
 static bool motion_seen(const flow_tree_t *tree, const os64_html_node_t *n, os64_gui_rect_t view,
-                        flow_point_t scroll)
+                        flow_point_t scroll, int32_t reach)
 {
     const flow_box_t *b = f_map_get(&tree->first, n);
     if (b != NULL)
-        return pieces_seen(b, view, scroll);
+        return pieces_seen(b, view, scroll, reach);
     for (const os64_html_node_t *c = n->first_child; c != NULL;) {
         b = f_map_get(&tree->first, c);
-        if (b != NULL && pieces_seen(b, view, scroll))
+        if (b != NULL && pieces_seen(b, view, scroll, reach))
             return true;
         if (b == NULL && c->first_child != NULL) {
             c = c->first_child;
@@ -1856,11 +1862,15 @@ static uint64_t motion_due(const flow_tree_t *tree, os64_gui_rect_t view, flow_p
         return FLOW_NEVER;
     uint64_t at = ticks ? tree->tick_ms : tree->now_ms;
     double now = (double)at, next = INFINITY;
+    int32_t most_reach = 0;         // the farthest any element's text shadow reaches
     for (int32_t i = 0; i < tree->styles->nanimated && next > now; i++) {
         const os64_html_node_t *n = tree->styles->animated[i];
         const FStyled *st = f_style_of(tree->styles, n);
+        if (st != NULL && st->motion != NULL && st->motion->text_reach > most_reach)
+            most_reach = st->motion->text_reach;
         if (st == NULL || st->motion == NULL ||
-            (st->motion->in_place && !may_own_canvas(tree, n) && !motion_seen(tree, n, view, scroll)))
+            (st->motion->in_place && !may_own_canvas(tree, n) &&
+             !motion_seen(tree, n, view, scroll, st->motion->text_reach)))
             continue;
         next = fmin(next, element_due(tree, st->motion, NULL, ticks));
     }
@@ -1879,10 +1889,14 @@ static uint64_t motion_due(const flow_tree_t *tree, os64_gui_rect_t view, flow_p
     for (int p = 0; p < GARB_NPROPS; p++)
         if (garb_prop_inherited((garb_prop_t)p) || p == GARB_OPACITY)
             f_props_add(&handed, (garb_prop_t)p);
+    // A text shadow is handed down too, so a box is judged by the reach of
+    // the element it would take one from; one that cannot be seen even at
+    // the farthest reach of any is passed by.
     for (int32_t i = 0; i < tree->nstacked && next > now; i++) {
         const flow_box_t *b = tree->stacked[i];
-        if (b->node == NULL || !box_seen(b, view, scroll))
+        if (b->node == NULL || !box_seen(b, view, scroll, most_reach))
             continue;
+        bool seen = box_seen(b, view, scroll, 0);
         // What reaches the box by keyword from the element above: what it
         // took; from one further up, only what everything between took too.
         // An element with no style of its own is taken to take everything.
@@ -1895,7 +1909,8 @@ static uint64_t motion_due(const flow_tree_t *tree, os64_gui_rect_t view, flow_p
         bool in_clip = !leaves_text_clip(b);
         for (const os64_html_node_t *a = b->node->parent; a != NULL && next > now; a = a->parent) {
             const FStyled *st = a->kind == OS64_HTML_ELEMENT ? f_style_of(tree->styles, a) : NULL;
-            if (st != NULL && st->motion != NULL) {
+            if (st != NULL && st->motion != NULL &&
+                (seen || box_seen(b, view, scroll, st->motion->text_reach))) {
                 FProps ask;
                 for (int w = 0; w < F_PROP_WORDS; w++)
                     ask.w[w] = handed.w[w] | took.w[w];

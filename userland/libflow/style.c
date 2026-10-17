@@ -3863,6 +3863,59 @@ static bool ticks(Ctx *c, FMotion *m, const flow_style_t *s, Mixing *mix)
     return true;
 }
 
+// The least and most of a style's text shadows' offsets, x then y, into
+// `lo` and `hi`.
+static void shadow_extremes(const flow_style_t *s, int32_t lo[2], int32_t hi[2])
+{
+    for (int32_t i = 0; i < s->ntext_shadows; i++) {
+        int32_t v[2] = {s->text_shadows[i].x, s->text_shadows[i].y};
+        for (int k = 0; k < 2; k++) {
+            lo[k] = v[k] < lo[k] ? v[k] : lo[k];
+            hi[k] = v[k] > hi[k] ? v[k] : hi[k];
+        }
+    }
+}
+
+// FMotion.text_reach, `s` the element's style at the layout's time: each
+// animation that sets `text-shadow` has every keyframe resolved as the mix
+// resolves it (keyframe_resolved, against `s` as ticks does), and the
+// value underneath counts with them (an implicit keyframe's), and so does
+// 0 (a shorter list is padded with shadows of no offset). A frame mixes
+// two of those values, and an easing carries it past either by their
+// difference times its overshoot (f_easing_overshoot), so no frame is
+// offset farther than the farthest value plus the whole span times the
+// most any easing there overshoots. False on no memory.
+static bool text_reach(FMotion *m, const flow_style_t *s, Mixing *mix)
+{
+    int32_t lo[2] = {0, 0}, hi[2] = {0, 0};
+    double over = 0;
+    bool sets = false;
+    for (int32_t a = 0; a < m->nanims; a++) {
+        const FAnimation *an = &m->anims[a];
+        if (!f_props_has(&an->props, GARB_TEXT_SHADOW))
+            continue;
+        sets = true;
+        over = fmax(over, f_easing_overshoot(&an->timing.easing));
+        for (int32_t j = 0; j < an->nframes; j++) {
+            if (an->frames[j].has_easing)
+                over = fmax(over, f_easing_overshoot(&an->frames[j].easing));
+            const FResolved *r = keyframe_resolved(mix, a, j, s);
+            if (r == NULL)
+                return false;
+            shadow_extremes(&r->style, lo, hi);
+        }
+    }
+    if (!sets)
+        return true;
+    shadow_extremes(&m->base, lo, hi);
+    double reach = 0;
+    for (int k = 0; k < 2; k++)
+        reach = fmax(reach, fmax(-(double)lo[k], (double)hi[k]) + ((double)hi[k] - lo[k]) * over);
+    reach = ceil(reach);
+    m->text_reach = reach < INT32_MAX / 4 ? (int32_t)reach : INT32_MAX / 4;
+    return true;
+}
+
 // An element's animations at the layout's time: for each name whose
 // @keyframes exist, every keyframe's declarations and the longhands they
 // set but where an `!important` winner holds, and the name's record on the
@@ -3959,6 +4012,8 @@ static bool animate(Ctx *c, const os64_html_node_t *n, Spec *sp, const Spec *ua,
     if (mix.no_memory)
         return false;
     m->mixed = mix.mixed;
+    if (m->in_place && !text_reach(m, &s, &mix))
+        return false;
     if (c->env->ticks && !ticks(c, m, &s, &mix))
         return false;
     settle_box(c, &s, item, root);
