@@ -83,7 +83,9 @@ were shown, and the loop's longest single wait.
 with the processor's time-stamp counter (`rdtsc`, readable in ring 3),
 not a system call; the counter's rate is taken from `os64_micros` across
 the page's life when the record is written, so the record says
-milliseconds. That trusts the cores' counters to agree: the main thread
+milliseconds. Each read is fenced (`lfence` on each side, and a compiler
+barrier), so neither the compiler nor the processor moves the measured
+work across it. That trusts the cores' counters to agree: the main thread
 may move between cores between two readings, ring 3 cannot tell, and a
 system call at every stage would cost more than the stages it timed.
 `os64_micros` makes the same assumption, and the boot-time check that

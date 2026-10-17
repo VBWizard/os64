@@ -4508,17 +4508,19 @@ static void paint_cost_cases(void) {
     check(lay_out_page(&g.page,800,600) && s_cost.layouts==1 && s_cost.total[PS_LAYOUTS]>0,
           "paint counts: a layout is counted, and timed");
     cost_reset();
-    /* Two paints of 12 ms each in render at a counter of 1000 a microsecond. */
-    s_cost.from_cycles=cycles()-1000000000ull;
-    s_cost.from_us=os64_micros()-1000000;
+    /* Two paints of 12 ms each in render at a counter of 1000 a microsecond,
+     * over a span of 1000 s: the real counter runs on while the test does,
+     * and that drift must be too small to move a tenth of a millisecond. */
+    s_cost.from_cycles=cycles()-1000000000000ull;
+    s_cost.from_us=os64_micros()-1000000000;
     s_cost.paints=2; s_cost.whole=1; s_cost.pixels=3000000; s_cost.ticks=4; s_cost.schedules=5;
-    s_cost.waited=250000000ull;      /* a quarter of the span asleep */
+    s_cost.waited=250000000000ull;   /* a quarter of the span asleep */
     s_cost.total[PS_SCHEDULE]=5000000;
     s_cost.total[PS_RENDER]=24000000; s_cost.most[PS_RENDER]=13000000;
     s_cost.total[PS_VIEW]=20000000; s_cost.total[PS_TEXT]=4000000; s_cost.total[PS_TICKS]=8000000;
     diag_paint(&g.page);
     yonder_diag_render(g.page.diag,rec,sizeof(rec));
-    check(strstr(rec,"\npaint: 2 paints in 1.0 s (1 whole views), 3.0 Mpx of the view; 4 ticks, 5 schedules; "
+    check(strstr(rec,"\npaint: 2 paints in 1000.0 s (1 whole views), 3.0 Mpx of the view; 4 ticks, 5 schedules; "
                      "the main loop busy 75%; 0 layouts; frames late at most 0 ms, 0 more than 30 ms; the longest wait 0 ms; 0 script tasks: 0 scripts, 0 timers, 0 events; 0 bells taken; the ticker not running; deadlines already past when handed to it: settle 0, "
                      "layouts 0, ticks 0, arrival 0, stream 0, timers 0, pictures 0\n")!=NULL &&
           strstr(rec,", schedule (a call) 1.0 (0.0)")!=NULL &&
@@ -4557,7 +4559,7 @@ static void paint_cost_cases(void) {
               has(file," | ms a paint (most): render 12.0 (13.0)") && s_cost.paints==0 && s_cost.total[PS_RENDER]==0,
               "paint counts: d keeps the counts as a reading, writes the record, and starts them again");
         s_cost.paints=1; s_cost.total[PS_RENDER]=5000000;
-        s_cost.from_cycles=cycles()-1000000000ull; s_cost.from_us=os64_micros()-1000000;
+        s_cost.from_cycles=cycles()-1000000000000ull; s_cost.from_us=os64_micros()-1000000000;
         diag_asked();
         file=diag_file("/tmp/diag",name);
         check(has(file,"\npaint reading 1: at y 0: 2 paints in ") && has(file,"\npaint reading 2: at y 0: 1 paints in ") &&
@@ -4569,7 +4571,7 @@ static void paint_cost_cases(void) {
     {
         char name[64]; yonder_diag_file_name(g.page.diag,name,sizeof(name));
         s_cost.paints=3; s_cost.total[PS_RENDER]=5000000;
-        s_cost.from_cycles=cycles()-1000000000ull; s_cost.from_us=os64_micros()-1000000;
+        s_cost.from_cycles=cycles()-1000000000000ull; s_cost.from_us=os64_micros()-1000000000;
         fake_fail_open=true;
         diag_asked();
         fake_fail_open=false;
@@ -4600,7 +4602,7 @@ static void paint_cost_cases(void) {
         uint64_t before=s_cost.backward;
         check(cycles_since(cycles()+1000000000000ull)==0 && s_cost.backward==before+1,
               "paint counts: a counter read behind its start is an interval of nothing, counted");
-        s_cost.paints=1; s_cost.from_cycles=cycles()-1000000000ull; s_cost.from_us=os64_micros()-1000000;
+        s_cost.paints=1; s_cost.from_cycles=cycles()-1000000000000ull; s_cost.from_us=os64_micros()-1000000000;
         diag_paint(&g.page);
         yonder_diag_render(g.page.diag,rec,sizeof(rec));
         check(strstr(rec,"; the counter stepped back 1 times (the cores' counters disagree: these times are suspect); ")!=NULL &&
@@ -4611,17 +4613,17 @@ static void paint_cost_cases(void) {
         s_cost.from_cycles=cycles()+1000000000000ull;
         diag_paint(&g.page);
         yonder_diag_render(g.page.diag,rec,sizeof(rec));
-        check(strstr(rec,"\npaint: 1 paints in 1.0 s (0 whole views), 0.0 Mpx of the view; 0 ticks, 0 schedules; "
+        check(strstr(rec,"\npaint: 1 paints in 1000.0 s (0 whole views), 0.0 Mpx of the view; 0 ticks, 0 schedules; "
                          "the counter stepped back across the span (the cores' counters disagree): no times; ")!=NULL &&
               strstr(rec,"; 5 script tasks: 1 scripts, 2 timers, 2 events;")!=NULL,
               "paint counts: a span the counter stepped back across is said, and its counts are kept");
         /* Work with nothing painted is still counted on the record, timed. */
         cost_reset();
         task_cost("timer"); s_cost.layouts=2;
-        s_cost.from_cycles=cycles()-1000000000ull; s_cost.from_us=os64_micros()-1000000;
+        s_cost.from_cycles=cycles()-1000000000000ull; s_cost.from_us=os64_micros()-1000000000;
         diag_paint(&g.page);
         yonder_diag_render(g.page.diag,rec,sizeof(rec));
-        check(strstr(rec,"\npaint: nothing painted in 1.0 s; 0 ticks, 0 schedules; the main loop busy ")!=NULL &&
+        check(strstr(rec,"\npaint: nothing painted in 1000.0 s; 0 ticks, 0 schedules; the main loop busy ")!=NULL &&
               strstr(rec,"; 2 layouts;")!=NULL && strstr(rec,"; 1 script tasks: 0 scripts, 1 timers, 0 events;")!=NULL &&
               strstr(rec,"\npaint stages: ms a paint (most):")!=NULL,
               "paint counts: a span with nothing painted keeps its work and its stages");

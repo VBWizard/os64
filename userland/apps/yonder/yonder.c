@@ -1696,10 +1696,17 @@ static struct {
 // each page shown.
 static uint32_t s_cost_readings;
 
+// The counter, read where the program says: the memory clobber keeps the
+// compiler from moving the measured work across the read, and an lfence on
+// each side keeps the processor from running it early or late (lfence
+// waits for what came before it on Intel, and on AMD where it is
+// dispatch-serializing — Zen 2 and later; an older AMD part may still let
+// a read drift by a few instructions). Not rdtscp: a processor without it
+// would kill the program for asking.
 static inline uint64_t cycles(void)
 {
     uint32_t lo, hi;
-    __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi));
+    __asm__ volatile("lfence\n\trdtsc\n\tlfence" : "=a"(lo), "=d"(hi) : : "memory");
     return (uint64_t)hi << 32 | lo;
 }
 
