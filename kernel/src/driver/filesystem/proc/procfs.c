@@ -486,6 +486,30 @@ static uint64_t proc_cycles_to_us(uint64_t cycles)
 	return per_us ? cycles / per_us : 0;
 }
 
+static void proc_add_system_causes(synth_text_t *t, const accounting_thread_cycles_t *cycles,
+                                   uint64_t system_us)
+{
+	uint64_t fault_us = proc_cycles_to_us(cycles->fault);
+	uint64_t syscall_us = proc_cycles_to_us(cycles->syscall);
+	uint64_t interrupt_us = proc_cycles_to_us(cycles->interrupt);
+	uint64_t halt_us = proc_cycles_to_us(cycles->self_ipi_halt);
+	if (!kUseOldExceptions)
+		synth_text_addf(t, "fault_us\t%lu\n", fault_us);
+	synth_text_addf(t, "syscall_us\t%lu\n", syscall_us);
+	synth_text_addf(t, "interrupts\t%lu\n", cycles->interrupt_count);
+	synth_text_addf(t, "interrupt_us\t%lu\n", interrupt_us);
+	synth_text_addf(t, "self_ipi_halts\t%lu\n", cycles->self_ipi_halt_count);
+	synth_text_addf(t, "self_ipi_halt_us\t%lu\n", halt_us);
+	if (!kUseOldExceptions)
+	{
+		// The raw counters are disjoint and bounded by system cycles. Derive
+		// the displayed remainder after conversion so these printed fields
+		// also sum exactly to system_us despite per-bucket truncation.
+		uint64_t other_us = system_us - fault_us - syscall_us - interrupt_us - halt_us;
+		synth_text_addf(t, "other_system_us\t%lu\n", other_us);
+	}
+}
+
 // The per-core CPU-time ledger lived here as proc_gen_cores until 2026-08-12;
 // it is sys_gen_cpu_time now (sysfs.c), one file per core under /sys/cpu.
 
@@ -565,8 +589,7 @@ static void proc_gen_task_status(synth_text_t *t, task_t *task)
 	bool has_idle;
 	if (proc_task_accounting(task, &cycles, &has_idle))
 	{
-		// Convert disjoint buckets before summing: deriving a bucket from
-		// separately rounded totals can move it backward by one microsecond.
+		// Convert user, system, and idle separately; runtime is their printed sum.
 		uint64_t user = proc_cycles_to_us(cycles.user);
 		uint64_t system = proc_cycles_to_us(cycles.system);
 		uint64_t idle = proc_cycles_to_us(cycles.idle);
@@ -574,17 +597,7 @@ static void proc_gen_task_status(synth_text_t *t, task_t *task)
 		synth_text_addf(t, "runtime_us\t%lu\n", runtime);
 		synth_text_addf(t, "user_us\t%lu\n", user);
 		synth_text_addf(t, "system_us\t%lu\n", system);
-		if (!kUseOldExceptions)
-			synth_text_addf(t, "fault_us\t%lu\n", proc_cycles_to_us(cycles.fault));
-		synth_text_addf(t, "syscall_us\t%lu\n", proc_cycles_to_us(cycles.syscall));
-		synth_text_addf(t, "interrupts\t%lu\n", cycles.interrupt_count);
-		synth_text_addf(t, "interrupt_us\t%lu\n", proc_cycles_to_us(cycles.interrupt));
-		synth_text_addf(t, "self_ipi_halts\t%lu\n", cycles.self_ipi_halt_count);
-		synth_text_addf(t, "self_ipi_halt_us\t%lu\n", proc_cycles_to_us(cycles.self_ipi_halt));
-		if (!kUseOldExceptions)
-			synth_text_addf(t, "other_system_us\t%lu\n",
-			                proc_cycles_to_us(cycles.system - cycles.fault - cycles.syscall -
-			                                  cycles.interrupt - cycles.self_ipi_halt));
+		proc_add_system_causes(t, &cycles, system);
 		if (has_idle)
 			synth_text_addf(t, "idle_us\t%lu\n", idle);
 	}
@@ -1187,17 +1200,7 @@ static void proc_gen_thread_status(synth_text_t *t, task_t *task, thread_t *th)
 		synth_text_addf(t, "runtime_us\t%lu\n", runtime);
 		synth_text_addf(t, "user_us\t%lu\n", user);
 		synth_text_addf(t, "system_us\t%lu\n", system);
-		if (!kUseOldExceptions)
-			synth_text_addf(t, "fault_us\t%lu\n", proc_cycles_to_us(cycles.fault));
-		synth_text_addf(t, "syscall_us\t%lu\n", proc_cycles_to_us(cycles.syscall));
-		synth_text_addf(t, "interrupts\t%lu\n", cycles.interrupt_count);
-		synth_text_addf(t, "interrupt_us\t%lu\n", proc_cycles_to_us(cycles.interrupt));
-		synth_text_addf(t, "self_ipi_halts\t%lu\n", cycles.self_ipi_halt_count);
-		synth_text_addf(t, "self_ipi_halt_us\t%lu\n", proc_cycles_to_us(cycles.self_ipi_halt));
-		if (!kUseOldExceptions)
-			synth_text_addf(t, "other_system_us\t%lu\n",
-			                proc_cycles_to_us(cycles.system - cycles.fault - cycles.syscall -
-			                                  cycles.interrupt - cycles.self_ipi_halt));
+		proc_add_system_causes(t, &cycles, system);
 		if (th->idleThread)
 			synth_text_addf(t, "idle_us\t%lu\n", idle);
 	}
