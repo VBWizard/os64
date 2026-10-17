@@ -9,6 +9,7 @@ static bool optNoSummary = false;
 static bool optLog = false;
 static bool optPerCore = false;
 static bool optThreads = false;
+static bool optHideSplit = false;
 
 int main(int argc, char **argv)
 {
@@ -32,6 +33,8 @@ int main(int argc, char **argv)
          .flag = &optPerCore},
         {'t', "threads", false, "Expand multi-threaded tasks into per-thread rows",
          .flag = &optThreads},
+        {'u', "nosplit", false, "Hide user/system CPU time at startup",
+         .flag = &optHideSplit},
     };
 
     os64_args_init(&args, argc, argv, specs, sizeof(specs) / sizeof(specs[0]));
@@ -52,6 +55,7 @@ int main(int argc, char **argv)
         opts.logLedger = optLog;
         opts.perCore = optPerCore;
         opts.showThreads = optThreads;
+        opts.hideSplit = optHideSplit;
         returnCode = topMain(&opts);
     }
     else if (nPositionals > 0)

@@ -50,6 +50,7 @@
 #include "BasicRenderer.h"   // printf — the mount line belongs on the glass too
 #include "smp.h"             // core_local_storage_t (/proc/self's identity read)
 #include "smp_core.h"        // mpAcctSettleAll — the status files' freshness contract
+#include "accounting.h"
 #include "os64/heap.h"       // os64_heap_report_t — what ring 3 publishes for /proc/<id>/heap
 #include "os64/syscall_numbers.h"   // OS64_SPAWN_ARG_MAX — how long a cmdline argument can be
 
@@ -281,6 +282,34 @@ static uint64_t proc_task_run_cycles(task_t *t)
 	return cycles;
 }
 
+// Each thread tuple is copied coherently. The task's several threads can
+// advance between copies; the whole-machine snapshot plan addresses that
+// wider observation problem.
+static bool proc_task_accounting(task_t *task, accounting_thread_cycles_t *out,
+                                 bool *has_idle)
+{
+	accounting_thread_cycles_t sum = {0};
+	*has_idle = false;
+	for (thread_t *th = task ? task->threads : NULL; th != NULL; th = th->taskNext)
+	{
+		accounting_thread_cycles_t one;
+		if (!accounting_read_thread(th, &one))
+			return false;
+		if (UINT64_MAX - sum.runtime < one.runtime ||
+		    UINT64_MAX - sum.user < one.user ||
+		    UINT64_MAX - sum.system < one.system ||
+		    UINT64_MAX - sum.idle < one.idle)
+			return false;
+		sum.runtime += one.runtime;
+		sum.user += one.user;
+		sum.system += one.system;
+		sum.idle += one.idle;
+		*has_idle |= th->idleThread;
+	}
+	*out = sum;
+	return true;
+}
+
 // The old `ticks` counter, summed the same way runtime_us is — the two
 // CPU-time fields in the status file must describe the same set of threads
 // or they contradict each other under load.
@@ -502,15 +531,31 @@ static void proc_gen_task_status(synth_text_t *t, task_t *task)
 	// this time come off", without which per-core arithmetic is guesswork.
 	if (th != NULL)
 		synth_text_addf(t, "core\t%u\n", th->lastRunApicID);
-	// Real CPU time, charged at context-switch boundaries (thread.h has the
-	// doctrine). `ticks` below is the old sampling counter — kept because
-	// removing a field is an ABI event, but runtime_us is the honest one.
+	// CPU time committed at privilege and scheduler boundaries. `ticks`
+	// below is the old sampling counter, retained for the text ABI.
 	//
 	// SUMMED ACROSS THE TASK'S THREADS, which is what makes this number mean
 	// "what this program cost" rather than "what its first thread cost" —
 	// and on a threaded program those differ wildly, because the first
 	// thread is usually the one waiting.
-	synth_text_addf(t, "runtime_us\t%lu\n", proc_cycles_to_us(proc_task_run_cycles(task)));
+	accounting_thread_cycles_t cycles;
+	bool has_idle;
+	if (proc_task_accounting(task, &cycles, &has_idle))
+	{
+		// Convert disjoint buckets before summing: deriving a bucket from
+		// separately rounded totals can move it backward by one microsecond.
+		uint64_t user = proc_cycles_to_us(cycles.user);
+		uint64_t system = proc_cycles_to_us(cycles.system);
+		uint64_t idle = proc_cycles_to_us(cycles.idle);
+		uint64_t runtime = user + system + idle;
+		synth_text_addf(t, "runtime_us\t%lu\n", runtime);
+		synth_text_addf(t, "user_us\t%lu\n", user);
+		synth_text_addf(t, "system_us\t%lu\n", system);
+		if (has_idle)
+			synth_text_addf(t, "idle_us\t%lu\n", idle);
+	}
+	else
+		synth_text_addf(t, "runtime_us\t%lu\n", proc_cycles_to_us(proc_task_run_cycles(task)));
 	if (th != NULL)
 		synth_text_addf(t, "ticks\t%lu\n", proc_task_run_ticks(task));
 	// A live task has no exit status; saying "-" beats printing a zero that
@@ -1092,7 +1137,22 @@ static void proc_gen_thread_status(synth_text_t *t, task_t *task, thread_t *th)
 	synth_text_addf(t, "rip\t%p\n", (void *)th->regs.RIP);
 	synth_text_addf(t, "rsp\t%p\n", (void *)th->regs.RSP);
 	synth_text_addf(t, "ticks\t%lu\n", th->totalRunTicks);
-	synth_text_addf(t, "runtime_us\t%lu\n", proc_cycles_to_us(th->runCycles));
+	accounting_thread_cycles_t cycles;
+	if (accounting_read_thread(th, &cycles))
+	{
+		// Keep the same monotonic text partition as task status.
+		uint64_t user = proc_cycles_to_us(cycles.user);
+		uint64_t system = proc_cycles_to_us(cycles.system);
+		uint64_t idle = proc_cycles_to_us(cycles.idle);
+		uint64_t runtime = user + system + idle;
+		synth_text_addf(t, "runtime_us\t%lu\n", runtime);
+		synth_text_addf(t, "user_us\t%lu\n", user);
+		synth_text_addf(t, "system_us\t%lu\n", system);
+		if (th->idleThread)
+			synth_text_addf(t, "idle_us\t%lu\n", idle);
+	}
+	else
+		synth_text_addf(t, "runtime_us\t%lu\n", proc_cycles_to_us(th->runCycles));
 	// The pending SET, as the bitmask it is. `.bits` because the set is a
 	// tagged type now (signals.h) — the wrapper is what made the 2026-08-23
 	// renumbering safe, and reaching through it here is the one place a reader

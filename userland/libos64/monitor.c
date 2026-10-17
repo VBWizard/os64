@@ -6,10 +6,21 @@
 #include "os64/str.h"
 
 typedef struct {
+    uint64_t user_us, system_us;
+    uint64_t user_delta, system_delta;
+    os64_monitor_core_split_t display;
+    bool fields_valid, delta_valid;
+} core_split_sample_t;
+
+typedef struct {
     os64_monitor_snapshot_t snapshot;
     os64_monitor_task_t *tasks;
     os64_monitor_thread_t *threads;
     os64_monitor_core_t *cores;
+    os64_proc_cpu_split_t *task_split, *thread_split;
+    os64_monitor_split_t *task_usage, *thread_usage;
+    core_split_sample_t *core_split;
+    os64_monitor_core_split_t machine_split;
 } monitor_buffer_t;
 
 struct os64_monitor {
@@ -60,6 +71,29 @@ static void percentages(const os64_monitor_time_t *d, uint32_t out[3])
     }
 }
 
+static bool percentages4(const uint64_t parts[4], uint32_t out[4])
+{
+    uint64_t whole = 0, rem[4];
+    for (unsigned i = 0; i < 4; i++) {
+        if (whole > UINT64_MAX - parts[i]) return false;
+        whole += parts[i];
+    }
+    if (!whole) return false;
+    unsigned assigned = 0;
+    for (unsigned i = 0; i < 4; i++) {
+        out[i] = (uint32_t)scaled_ratio(parts[i], whole, 100, &rem[i]);
+        assigned += out[i];
+    }
+    while (assigned < 100) {
+        unsigned best = 4;
+        for (unsigned i = 0; i < 4; i++)
+            if (rem[i] && (best == 4 || rem[i] > rem[best])) best = i;
+        if (best == 4) break;
+        out[best]++; rem[best] = 0; assigned++;
+    }
+    return true;
+}
+
 static uint64_t ticks_us(uint64_t ticks, uint64_t rate)
 {
     if (!rate) return 0;
@@ -88,9 +122,16 @@ os64_monitor_t *os64_monitor_create(size_t tasks, size_t threads, size_t cores)
     for (unsigned i = 0; i < 2; i++) {
         monitor_buffer_t *b = &m->buffers[i];
         b->tasks = array_alloc(tasks, sizeof(*b->tasks));
+        b->task_split = array_alloc(tasks, sizeof(*b->task_split));
+        b->task_usage = array_alloc(tasks, sizeof(*b->task_usage));
         if (threads) b->threads = array_alloc(threads, sizeof(*b->threads));
+        if (threads) b->thread_split = array_alloc(threads, sizeof(*b->thread_split));
+        if (threads) b->thread_usage = array_alloc(threads, sizeof(*b->thread_usage));
         b->cores = array_alloc(cores, sizeof(*b->cores));
-        if (!b->tasks || (threads && !b->threads) || !b->cores) {
+        b->core_split = array_alloc(cores, sizeof(*b->core_split));
+        if (!b->tasks || !b->task_split || !b->task_usage ||
+            (threads && (!b->threads || !b->thread_split || !b->thread_usage)) ||
+            !b->cores || !b->core_split) {
             os64_monitor_destroy(m);
             return NULL;
         }
@@ -104,8 +145,13 @@ void os64_monitor_destroy(os64_monitor_t *m)
     if (!m) return;
     for (unsigned i = 0; i < 2; i++) {
         os64_free(m->buffers[i].tasks);
+        os64_free(m->buffers[i].task_split);
+        os64_free(m->buffers[i].task_usage);
         os64_free(m->buffers[i].threads);
+        os64_free(m->buffers[i].thread_split);
+        os64_free(m->buffers[i].thread_usage);
         os64_free(m->buffers[i].cores);
+        os64_free(m->buffers[i].core_split);
     }
     os64_free(m);
 }
@@ -128,7 +174,10 @@ static void collect_threads(os64_monitor_t *m, monitor_buffer_t *b, uint64_t pid
         }
         os64_monitor_thread_t *t = &b->threads[s->thread_count];
         os64_memset(t, 0, sizeof(*t));
-        if (os64_proc_read_thread(pid, tid, &t->info) == 0) s->thread_count++;
+        os64_memset(&b->thread_usage[s->thread_count], 0, sizeof(*b->thread_usage));
+        if (os64_proc_read_thread_split(pid, tid, &t->info,
+                                        &b->thread_split[s->thread_count]) == 0)
+            s->thread_count++;
     }
     if (os64_close((int32_t)h) < 0 || rc < 0) s->partial |= OS64_MONITOR_THREADS_PARTIAL;
 }
@@ -149,7 +198,8 @@ static int collect_tasks(os64_monitor_t *m, monitor_buffer_t *b, bool threads)
         }
         os64_monitor_task_t *t = &b->tasks[s->task_count];
         os64_memset(t, 0, sizeof(*t));
-        if (os64_proc_read(pid, &t->info) < 0) continue;
+        os64_memset(&b->task_usage[s->task_count], 0, sizeof(*b->task_usage));
+        if (os64_proc_read_split(pid, &t->info, &b->task_split[s->task_count]) < 0) continue;
         s->task_count++;
         if (t->info.state == OS64_PROC_ZOMBIE) s->zombies++;
         if (threads && t->info.threads >= 2) collect_threads(m, b, pid);
@@ -158,16 +208,18 @@ static int collect_tasks(os64_monitor_t *m, monitor_buffer_t *b, bool threads)
     return rc < 0 || closed < 0 ? -1 : 0;
 }
 
-static bool read_core(uint32_t id, os64_monitor_time_t *time)
+static bool read_core(uint32_t id, os64_monitor_time_t *time,
+                      core_split_sample_t *split)
 {
     char path[64], line[256];
     os64_snprintf(path, sizeof(path), "/sys/cpu/%u/time", id);
     int64_t h = os64_open(path, NULL);
     if (h < 0) return false;
-    const char *keys[4] = {"total_us:", "busy_us:", "idle_us:", "sched_us:"};
-    uint64_t values[4] = {0};
+    const char *keys[6] = {"total_us:", "busy_us:", "idle_us:", "sched_us:",
+                           "user_us:", "system_us:"};
+    uint64_t values[6] = {0};
     unsigned fields = 0;
-    bool good = true;
+    bool good = true, split_good = true;
     int64_t rc;
     while ((rc = os64_readline((int32_t)h, line, sizeof(line))) == 1) {
         char *value = line;
@@ -175,13 +227,16 @@ static bool read_core(uint32_t id, os64_monitor_time_t *time)
         if (!*value) continue;
         *value++ = 0;
         while (*value == ' ' || *value == '\t') value++;
-        for (unsigned i = 0; i < 4; i++) if (os64_streq(line, keys[i])) {
-            if ((fields & (1u << i)) || !os64_parse_u64(value, &values[i])) good = false;
+        for (unsigned i = 0; i < 6; i++) if (os64_streq(line, keys[i])) {
+            if ((fields & (1u << i)) || !os64_parse_u64(value, &values[i])) {
+                if (i < 4) good = false;
+                else split_good = false;
+            }
             fields |= 1u << i;
         }
     }
     if (os64_close((int32_t)h) < 0 || rc < 0) good = false;
-    if (!good || fields != 15) return false;
+    if (!good || (fields & 15u) != 15u) return false;
     *time = (os64_monitor_time_t){values[0], values[1], values[2], values[3]};
     // The producer rounds each bucket to microseconds independently. Permit
     // that rounding, but reject impossible ledgers and arithmetic overflow.
@@ -189,7 +244,11 @@ static bool read_core(uint32_t id, os64_monitor_time_t *time)
         time->busy > UINT64_MAX - time->idle ||
         time->busy + time->idle > UINT64_MAX - time->sched) return false;
     uint64_t sum = time->busy + time->idle + time->sched;
-    return sum > time->total ? sum - time->total <= 2 : time->total - sum <= 2;
+    if (sum > time->total ? sum - time->total > 2 : time->total - sum > 2) return false;
+    split->fields_valid = split_good && (fields & 48u) == 48u && values[4] <= time->busy &&
+                          values[5] == time->busy - values[4];
+    split->user_us = values[4]; split->system_us = values[5];
+    return true;
 }
 
 static void collect_cores(os64_monitor_t *m, monitor_buffer_t *b)
@@ -205,7 +264,10 @@ static void collect_cores(os64_monitor_t *m, monitor_buffer_t *b)
         if (s->core_count == m->core_capacity) { s->partial |= OS64_MONITOR_CORES_PARTIAL; break; }
         os64_monitor_core_t *c = &b->cores[s->core_count];
         os64_memset(c, 0, sizeof(*c)); c->id = (uint32_t)id;
-        if (!read_core(c->id, &c->time)) { s->partial |= OS64_MONITOR_CORES_PARTIAL; continue; }
+        os64_memset(&b->core_split[s->core_count], 0, sizeof(*b->core_split));
+        if (!read_core(c->id, &c->time, &b->core_split[s->core_count])) {
+            s->partial |= OS64_MONITOR_CORES_PARTIAL; continue;
+        }
         s->core_count++;
     }
     if (os64_close((int32_t)h) < 0 || rc < 0) s->partial |= OS64_MONITOR_CORES_PARTIAL;
@@ -226,6 +288,26 @@ static os64_monitor_usage_t usage(uint64_t now, uint64_t before, uint64_t interv
     u.percent = scaled_ratio(u.delta_us, interval, 100, &rem);
     if (rem >= interval - rem && u.percent < UINT64_MAX) u.percent++;
     return u;
+}
+
+static os64_monitor_split_t split_usage(const os64_proc_cpu_split_t *now,
+                                         const os64_proc_cpu_split_t *before,
+                                         uint64_t interval, uint64_t total_delta)
+{
+    os64_monitor_split_t out = {.idle = now->idle};
+    if (!now->valid || !before->valid || now->idle != before->idle ||
+        now->user_us < before->user_us || now->system_us < before->system_us ||
+        now->idle_us < before->idle_us) return out;
+    uint64_t du = now->user_us - before->user_us;
+    uint64_t ds = now->system_us - before->system_us;
+    uint64_t di = now->idle_us - before->idle_us;
+    if (du > total_delta || ds > total_delta - du || di != total_delta - du - ds)
+        return out;
+    if (!now->idle) {
+        out.user = usage(now->user_us, before->user_us, interval);
+        out.system = usage(now->system_us, before->system_us, interval);
+    }
+    return out;
 }
 
 static bool add_time(os64_monitor_time_t *sum, const os64_monitor_time_t *d)
@@ -266,6 +348,8 @@ static void calculate(os64_monitor_t *m, monitor_buffer_t *b,
         s->skew_tenths = scaled_ratio(mag, ledger, 1000, &rem);
     }
     os64_monitor_time_t machine = {0};
+    uint64_t machine4[4] = {0};
+    bool machine_split_valid = true;
     s->summary_valid = m->have_previous && s->interval_us && s->core_count &&
                        !(s->partial & OS64_MONITOR_CORES_PARTIAL);
     for (size_t i = 0; i < s->core_count; i++) {
@@ -276,12 +360,41 @@ static void calculate(os64_monitor_t *m, monitor_buffer_t *b,
             s->parked++;
             os64_monitor_time_t idle = {.idle = s->interval_us};
             if (!add_time(&machine, &idle)) s->summary_valid = false;
+            if (machine4[2] > UINT64_MAX - s->interval_us) machine_split_valid = false;
+            else machine4[2] += s->interval_us;
         } else {
             percentages(&c->delta, c->percent);
             if (!add_time(&machine, &c->delta)) s->summary_valid = false;
+            core_split_sample_t *d = &b->core_split[i];
+            const core_split_sample_t *old = NULL;
+            const os64_monitor_core_t *prior = find_core(previous, c->id);
+            if (prior) {
+                size_t index = (size_t)(prior - previous->cores);
+                old = &m->buffers[m->current].core_split[index];
+            }
+            if (old && d->fields_valid && old->fields_valid &&
+                d->user_us >= old->user_us && d->system_us >= old->system_us) {
+                d->user_delta = d->user_us - old->user_us;
+                d->system_delta = d->system_us - old->system_us;
+                d->delta_valid = d->user_delta <= c->delta.busy &&
+                                 d->system_delta == c->delta.busy - d->user_delta;
+            }
+            if (!d->delta_valid) machine_split_valid = false;
+            else {
+                uint64_t parts[4] = {d->user_delta, d->system_delta,
+                                     c->delta.idle, c->delta.sched};
+                d->display.valid = percentages4(parts, d->display.percent);
+                for (unsigned k = 0; k < 4; k++) {
+                    if (machine4[k] > UINT64_MAX - parts[k]) machine_split_valid = false;
+                    else machine4[k] += parts[k];
+                }
+            }
         }
     }
     if (s->summary_valid) percentages(&machine, s->machine_percent);
+    os64_memset(&b->machine_split, 0, sizeof(b->machine_split));
+    if (s->summary_valid && machine_split_valid)
+        b->machine_split.valid = percentages4(machine4, b->machine_split.percent);
     if (!m->have_previous) return;
     for (size_t i = 0; i < s->task_count; i++) {
         os64_monitor_task_t *t = &b->tasks[i];
@@ -289,6 +402,10 @@ static void calculate(os64_monitor_t *m, monitor_buffer_t *b,
             const os64_monitor_task_t *p = &previous->tasks[j];
             if (t->info.pid != p->info.pid) continue;
             t->cpu = usage(t->info.runtime_us, p->info.runtime_us, s->interval_us);
+            if (t->cpu.valid)
+                b->task_usage[i] = split_usage(&b->task_split[i],
+                    &m->buffers[m->current].task_split[j], s->interval_us,
+                    t->cpu.delta_us);
             break;
         }
     }
@@ -298,6 +415,11 @@ static void calculate(os64_monitor_t *m, monitor_buffer_t *b,
             const os64_monitor_thread_t *p = &previous->threads[j];
             if (t->info.pid != p->info.pid || t->info.tid != p->info.tid) continue;
             t->cpu = usage(t->info.runtime_us, p->info.runtime_us, s->interval_us);
+            if (t->cpu.valid && !(s->partial & OS64_MONITOR_THREADS_PARTIAL) &&
+                !(previous->partial & OS64_MONITOR_THREADS_PARTIAL))
+                b->thread_usage[i] = split_usage(&b->thread_split[i],
+                    &m->buffers[m->current].thread_split[j], s->interval_us,
+                    t->cpu.delta_us);
             break;
         }
     }
@@ -327,4 +449,44 @@ failed:
     m->have_previous = false;
     os64_memset(&m->initial_ticks, 0, sizeof(m->initial_ticks));
     return -1;
+}
+
+bool os64_monitor_task_split(const os64_monitor_t *m, uint64_t pid,
+                             os64_monitor_split_t *out)
+{
+    if (!m || !out || !m->have_previous) return false;
+    const monitor_buffer_t *b = &m->buffers[m->current];
+    for (size_t i = 0; i < b->snapshot.task_count; i++)
+        if (b->tasks[i].info.pid == pid) { *out = b->task_usage[i]; return true; }
+    return false;
+}
+
+bool os64_monitor_thread_split(const os64_monitor_t *m, uint64_t pid,
+                               uint64_t tid, os64_monitor_split_t *out)
+{
+    if (!m || !out || !m->have_previous) return false;
+    const monitor_buffer_t *b = &m->buffers[m->current];
+    for (size_t i = 0; i < b->snapshot.thread_count; i++)
+        if (b->threads[i].info.pid == pid && b->threads[i].info.tid == tid) {
+            *out = b->thread_usage[i]; return true;
+        }
+    return false;
+}
+
+bool os64_monitor_core_split(const os64_monitor_t *m, uint32_t id,
+                             os64_monitor_core_split_t *out)
+{
+    if (!m || !out || !m->have_previous) return false;
+    const monitor_buffer_t *b = &m->buffers[m->current];
+    for (size_t i = 0; i < b->snapshot.core_count; i++)
+        if (b->cores[i].id == id) { *out = b->core_split[i].display; return true; }
+    return false;
+}
+
+bool os64_monitor_machine_split(const os64_monitor_t *m,
+                                os64_monitor_core_split_t *out)
+{
+    if (!m || !out || !m->have_previous) return false;
+    *out = m->buffers[m->current].machine_split;
+    return true;
 }

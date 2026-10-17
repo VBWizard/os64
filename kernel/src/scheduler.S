@@ -17,6 +17,7 @@
 .extern mp_timesEnteringScheduler
 .extern mp_inScheduler
 .extern panic_no_shutdown
+.extern accounting_charge
 
 .globl _write_eoi
 .type _write_eoi, @function
@@ -422,8 +423,9 @@ overRestoreCR3:
     # the LAPIC's IRR holds exactly ONE pending instance per vector, so a
     # long IF=0 span collapses every tick that lands inside it into one.  A
     # full-pass CLI was tried historically and lost clock ticks in bulk.
-    # This window is about a dozen instructions; the clock only notices if
-    # the host stalls INSIDE it for more than two tick periods.
+    # This window includes the register restore and, on ring-3 returns, a
+    # C accounting charge. The clock only notices if the host stalls INSIDE
+    # it for more than two tick periods.
     cli
 
     mov rbx, [mp_isrSavedSS + rax * 8]
@@ -542,6 +544,36 @@ scheduler_halt_and_catch_a_coffee2:
 	call panic_no_shutdown
 	jmp scheduler_halt_and_catch_a_coffee2   # unreachable; the old behavior if panic ever returns
 scheduler_continue_2:
+	# The frame at RSP is the actual iretq target. Close the incoming
+	# thread's kernel return tail if it enters ring 3. Preserve every user
+	# caller-saved register before the C charge helper; RBX is scratch here
+	# and is restored from mp_isrSavedRBX below.
+	test byte ptr [rsp + 8], 3
+	jz scheduler_return_accounted
+	push rax
+	push rcx
+	push rdx
+	push rsi
+	push rdi
+	push r8
+	push r9
+	push r10
+	push r11
+	mov rbx, rsp
+	and rsp, -16
+	xor edi, edi
+	call accounting_charge
+	mov rsp, rbx
+	pop r11
+	pop r10
+	pop r9
+	pop r8
+	pop rdi
+	pop rsi
+	pop rdx
+	pop rcx
+	pop rax
+scheduler_return_accounted:
 
 	mov rbx, [mp_isrSavedRBX + rax * 8]
     call _write_eoi

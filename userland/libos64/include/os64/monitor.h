@@ -17,6 +17,16 @@ typedef struct {
 } os64_monitor_usage_t;
 
 typedef struct {
+    os64_monitor_usage_t user, system;
+    bool idle;
+} os64_monitor_split_t;
+
+typedef struct {
+    uint32_t percent[4]; // user, system, idle, scheduler
+    bool valid;
+} os64_monitor_core_split_t;
+
+typedef struct {
     os64_proc_info_t info;
     os64_monitor_usage_t cpu;
 } os64_monitor_task_t;
@@ -78,5 +88,16 @@ void os64_monitor_destroy(os64_monitor_t *monitor);
 // even on success. Turning thread sampling back on starts a new baseline.
 int32_t os64_monitor_sample(os64_monitor_t *monitor, bool threads,
                             const os64_monitor_snapshot_t **out);
+
+// Values from the latest sample. A missing identity returns false; usage.valid
+// (or core valid) reports an unavailable first or incomplete interval.
+bool os64_monitor_task_split(const os64_monitor_t *monitor, uint64_t pid,
+                             os64_monitor_split_t *out);
+bool os64_monitor_thread_split(const os64_monitor_t *monitor, uint64_t pid,
+                               uint64_t tid, os64_monitor_split_t *out);
+bool os64_monitor_core_split(const os64_monitor_t *monitor, uint32_t id,
+                             os64_monitor_core_split_t *out);
+bool os64_monitor_machine_split(const os64_monitor_t *monitor,
+                                os64_monitor_core_split_t *out);
 
 #endif

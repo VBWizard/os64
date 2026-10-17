@@ -21,6 +21,9 @@ Where it stands:
 - The current accounting settlement IPIs are still enabled. They must remain
   until a replacement has been implemented, compared against the old path,
   and proven on machines whose TSCs cannot be safely normalized.
+- The user/system split added short per-core and per-thread publication
+  sequences. It did not add the common-time capture or remove settlement
+  IPIs; the later snapshot still needs those steps.
 
 ## Executive summary
 
@@ -56,13 +59,14 @@ would become an accidental ABI for unrelated kernel state. The useful unit is
 
 ## The current model
 
-os64 accounts CPU time primarily at scheduler boundaries:
+os64 closes CPU time spans at scheduler, syscall, exception, halt and
+settle-on-read boundaries:
 
-- Each thread owns `runCycles`, a cumulative count in raw TSC cycles.
+- Each thread owns `runCycles` and its user/system/idle partition in raw TSC cycles.
 - Each core owns `acctZeroTSC`, `acctLastDispatchTSC`, scheduler-cycle totals,
   its current-thread pointer, and the halted/idle redirection state.
 - At scheduler entry, the outgoing open span is charged using two TSC reads
-  taken on that same core.
+  taken on that same core. The scheduler pass is charged to its own core bucket.
 - A thread which executes `sti; hlt` outside the idle task is represented by
   `acctCurrentHalted`; its halted span is charged to that core's idle thread.
 - `/proc/<pid>/status` and `/sys/cpu/<n>/time` convert the raw cumulative
@@ -271,7 +275,7 @@ charging a span. A lock taken by the reader would either require cross-core
 coordination or make interrupt paths wait on a monitor. A per-core sequence
 counter is the better fit because accounting has one writer per core.
 
-Each core gains an `acctSequence` value:
+Each core has an `acctSequence` value from the user/system split implementation:
 
 - Even means its published accounting state is stable.
 - The local writer increments it to odd before a transaction.
@@ -283,18 +287,15 @@ Every accounting writer must participate:
 
 - Scheduler entry charging and scheduler-exit restamping.
 - Scheduler-cycle bucket updates.
-- `acct_settle_local()` while the old path still exists.
+- `acct_settle_ISR()` while the settle-on-read path exists.
 - `mpAcctHaltBegin()` and `mpAcctHaltEnd()`.
 - Initial meter setup and dispatch state publication.
 
-The current scheduler charges the outgoing thread at pass entry but does not
-move `acctLastDispatchTSC` until pass exit. Between those operations, a reader
-would see a committed charge plus the old open-span boundary and would count
-the span twice. Therefore the first implementation should leave the sequence
-odd across that entire accounting transaction. If scheduler passes later prove
-too long for bounded snapshot retries, the accounting transaction can be
-restructured, but it must not publish a half-updated state merely to shorten
-the odd window.
+The scheduler now closes and restamps the outgoing thread span at pass entry,
+marks the open span as scheduler work, then closes and restamps that span at
+pass exit. Each short charge has its own sequence transaction. A snapshot
+must copy and validate the scheduler-span marker alongside the timestamp and
+counters; it cannot infer ownership from `mp_inScheduler` alone.
 
 The sequence field belongs in the accounting portion of core-local storage.
 Adding it at the end avoids changing offsets of assembly-visible CLS fields;
