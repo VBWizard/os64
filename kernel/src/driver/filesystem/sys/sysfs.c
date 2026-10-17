@@ -176,6 +176,7 @@
 #include "driver/net/tcp.h"             // /sys/net/tcp — kTcpStats + the conn list
 #include "random.h"                     // /sys/random — the entropy pool's counters
 #include "gui/compositor.h"             // /sys/gui — kEnableGUI, seat, census
+#include "gui/gui_internal.h"           // /sys/gui — kGuiLock's counts by site (gui_lock)
 #include "video.h"                      // kFrameBuffer — the resolution it reports
 #include "CONFIG.h"
 #include "logging/log.h"   // /sys/log — ring stats and sink state
@@ -1328,6 +1329,20 @@ static void sys_gen_gui(synth_text_t *t)
 	synth_text_addf(t, "wakes_paid: %lu\n", wakes.paid);
 	synth_text_addf(t, "wakes_voided: %lu\n", wakes.voided);
 	synth_text_addf(t, "wakes_refused: %lu\n", wakes.refused);
+	// Who waits for kGuiLock and who holds it (gui_lock): every taker names
+	// its site, so a stall reads as "the ring waited this long while publish
+	// held it". Totals since boot, so a read before and after a workload
+	// measures it; the worst of each since this file was last read.
+	gui_lock_count_t locks[GUI_LOCK_SITES];
+	gui_lock_counts(locks, true);
+	for (int s = 0; s < GUI_LOCK_SITES; s++) {
+		const gui_lock_count_t *l = &locks[s];
+		synth_text_addf(t, "lock %s: %lu acquisitions, %lu waited, %lu us waiting, %lu us holding; "
+		                "worst wait %lu us, worst hold %lu us since this file was last read\n",
+		                gui_lock_site_name((gui_lock_site_t)s), l->acquires, l->contended,
+		                sys_cycles_to_us(l->wait_cycles), sys_cycles_to_us(l->hold_cycles),
+		                sys_cycles_to_us(l->max_wait_cycles), sys_cycles_to_us(l->max_hold_cycles));
+	}
 }
 
 // ── /sys/net (2026-08-20) ───────────────────────────────────────────────────

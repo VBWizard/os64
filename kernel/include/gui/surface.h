@@ -9,9 +9,10 @@
 //
 // Every function here draws into ordinary cacheable RAM and clips against the
 // destination surface — callers may pass rects that hang off any edge. Only
-// surface_flush_rect() ever touches the real (uncached) framebuffer, and it
-// is write-only: we NEVER read from the framebuffer (UC reads are brutally
-// slow and there is never a reason to — the backbuffer is the truth).
+// surface_flush_rect() ever touches the real framebuffer (mapped
+// write-combining), and it is write-only: we NEVER read from the framebuffer
+// (a read of write-combining memory is not cached and is brutally slow, and
+// there is never a reason to — the backbuffer is the truth).
 
 // Allocate a w×h RAM surface (pixels zeroed). Returns 0 on success, -1 on
 // allocation failure. Failure must be handled by the caller — never panic
