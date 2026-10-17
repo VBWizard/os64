@@ -86,6 +86,8 @@ On the restored kernel, the main thread used 19.47 s of system time, the ticker 
 
 A further 110.9-second interval on the restored kernel stayed in the high-contention state: task system time was 65.1% of one core, main 32.2%, ticker 32.9%, ring lock waiting 32.7%, and composite lock holding 53.9%. The difference is sustained across minutes, rather than a brief launch spike.
 
+After the comparison, Chris authorized restoring the per-syscall image. The P5 boot image was copied back from `os64_kernel.syscall-diagnostic-20261017`, verified byte for byte, and rebooted. The post-boot `/proc/75/status` and `/proc/75/syscalls` smoke reads showed `syscall_us`, `other_system_us`, and populated syscall rows.
+
 ## Cause timing contract
 
 The next measurement should partition each non-idle thread's committed `systemCycles` into syscall work by number, resolved page-fault work, interrupt work, self-IPI halt time, and a remainder. Every cycle belongs to one bucket at a charge; a blocked thread accumulates no cycles. A task view sums its threads' raw counters before conversion to microseconds. The remainder is derived from the same coherent thread snapshot as `systemCycles`, never by subtracting separately rounded text values.
