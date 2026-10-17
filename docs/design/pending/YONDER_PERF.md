@@ -445,7 +445,10 @@ the record's layouts by cause; perf-4b is part 2.
    stacked boxes' test, which hands inherited values down. The inked
    overflow already holds the current shadow, so growing it by the full
    reach counts that shadow twice. That is safe, and it is left so: the
-   difference would be a bound only if the ink held nothing else.
+   difference would be a bound only if the ink held nothing else. A reach
+   of a quarter of what a coordinate can say or more is taken as seen
+   from anywhere, since a rect grown that far is past what one can hold
+   (Codex, #288 round 1, found the cap that stood there instead).
 2. **A layout that changed only values painted in place repaints only
    what they paint** (libflow hands the parts, yonder marks them). When
    yonder lays the page out for its animations alone, with nothing else

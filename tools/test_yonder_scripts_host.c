@@ -1063,9 +1063,11 @@ static void tick_cases(void) {
     check(tick_next()==676,"ticks: a costlier tick waits as long again after it ends");
     /* A tick not taken is a layout instead, which is that tick's frame. */
     tick_refuse=true; geometry_layout_delay=4000; now_ms=676;
-    uint64_t laid_was=g.motion_began;
+    uint64_t laid_was=g.motion_began, for_motion=s_cost.layouts_motion;
     motion_tick();
     tick_refuse=false; geometry_layout_delay=0;
+    check(s_cost.layouts_motion==for_motion+1,
+        "ticks: the record counts a tick's layout as one for animations");
     clock_us+=2000; now_ms=678;
     motion_painted();
     check(g.motion_began==laid_was && tick_x("t")==58 && g.tick_began==676 && g.tick_us==6000 &&

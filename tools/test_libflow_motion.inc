@@ -2050,6 +2050,9 @@ static void motion_due_cases(void)
          "to{text-shadow:0 -40px 0 red}", "linear", 60},
         {"text reach: none for an element that sets no text shadow", "",
          "to{color:red}", "linear", 0},
+        {"text reach: held to what an offset can say", "",
+         "from{text-shadow:0 0 0 red}to{text-shadow:0 -40000000px 0 red}", "cubic-bezier(0.2,0,0.2,100)",
+         INT32_MAX},
     };
     for (size_t i = 0; i < sizeof(kReach) / sizeof(*kReach); i++) {
         char html[512];
@@ -2084,6 +2087,18 @@ static void motion_due_cases(void)
         snprintf(detail, sizeof(detail), "got %g", got);
         expect(kOvershoot[i].name, fabs(got - kOvershoot[i].over) < 1e-9, detail);
     }
+    // A reach past what a quarter of an offset can say still counts: an
+    // element 700 million px down cast into view by a frame's overshoot.
+    moving_open(&m, MOTION_STYLE
+        "@keyframes ts{from{text-shadow:0 0 0 red}to{text-shadow:0 -40000000px 0 red}}</style>"
+        "<div style='margin-top:700000000px;animation:ts 1s cubic-bezier(0.2,0,0.2,100)'>x</div>", 1000);
+    {
+        uint64_t due = flow_motion_due(m.tree, kView, (flow_point_t){0, 0});
+        char detail[48];
+        snprintf(detail, sizeof(detail), "got %llu", (unsigned long long)due);
+        expect("motion due: a far reach is not cut short", due == 1000, detail);
+    }
+    moving_close(&m);
     // The reach grows the box on every side: a shadow cast into the view
     // from below it, above it, and either side of it.
     static const struct {

@@ -3911,8 +3911,9 @@ static bool text_reach(FMotion *m, const flow_style_t *s, Mixing *mix)
     double reach = 0;
     for (int k = 0; k < 2; k++)
         reach = fmax(reach, fmax(-(double)lo[k], (double)hi[k]) + ((double)hi[k] - lo[k]) * over);
+    // Held to what an offset can say: no frame's shadow is drawn farther.
     reach = ceil(reach);
-    m->text_reach = reach < INT32_MAX / 4 ? (int32_t)reach : INT32_MAX / 4;
+    m->text_reach = reach < INT32_MAX ? (int32_t)reach : INT32_MAX;
     return true;
 }
 

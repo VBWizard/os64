@@ -1054,11 +1054,20 @@ mutants = [
      '                  (int64_t)o.y + o.h + b->ink[FLOW_BOTTOM] + reach);',
      '                  (int64_t)o.y + o.h + b->ink[FLOW_BOTTOM]);', LIBFLOW),
     ('layouts-for-animations-are-not-counted', YONDER,
-     '    s_cost.layouts_motion += laid_for == LAID_FOR_MOTION;\n',
+     '    s_cost.layouts_motion += laid_for != LAID_FOR_PAGE;\n',
      '', WINDOW),
     ('every-layout-is-counted-for-animations', YONDER,
-     '    s_cost.layouts_motion += laid_for == LAID_FOR_MOTION;\n',
+     '    s_cost.layouts_motion += laid_for != LAID_FOR_PAGE;\n',
      '    s_cost.layouts_motion++;\n', WINDOW),
+    ('a-ticks-layout-is-not-counted-for-animations', YONDER,
+     '    s_cost.layouts_motion += laid_for != LAID_FOR_PAGE;\n',
+     '    s_cost.layouts_motion += laid_for == LAID_FOR_MOTION;\n', WINDOW),
+    ('a-far-reach-is-grown-past-a-rect', FLOW,
+     '    if (reach >= INT32_MAX / 4)\n        return true;\n',
+     '', LIBFLOW),
+    ('the-reach-is-held-to-a-quarter', STYLE,
+     '    m->text_reach = reach < INT32_MAX ? (int32_t)reach : INT32_MAX;',
+     '    m->text_reach = reach < INT32_MAX / 4 ? (int32_t)reach : INT32_MAX / 4;', LIBFLOW),
 ]
 
 caught, missed, unbuilt = [], [], []

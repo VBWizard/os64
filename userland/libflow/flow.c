@@ -1745,9 +1745,14 @@ static os64_gui_rect_t space_rect(const flow_frame_t *f, os64_gui_rect_t r, flow
 // cast farther than the ink holds (FMotion.text_reach). The ink already
 // holds the shadow on show, so the reach counts it twice: a bound, which
 // is all the question needs. A background the canvas takes is the
-// canvas's to paint (may_own_canvas).
+// canvas's to paint (may_own_canvas). A reach of a quarter of what a
+// coordinate can say or more is taken as seen from anywhere: a rect grown
+// that far is past what one can hold, and taking it as seen can cost a
+// layout, never miss one.
 static bool box_seen(const flow_box_t *b, os64_gui_rect_t view, flow_point_t scroll, int32_t reach)
 {
+    if (reach >= INT32_MAX / 4)
+        return true;
     os64_gui_rect_t o = b->overflow;
     os64_gui_rect_t inked =
         rect_from((int64_t)o.x - b->ink[FLOW_LEFT] - reach, (int64_t)o.y - b->ink[FLOW_TOP] - reach,
