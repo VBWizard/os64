@@ -52,6 +52,24 @@ The next build keeps an active syscall row on `thread_t` across blocking and mig
 
 Fault spans are excluded from syscall rows. Interrupts that preempt a syscall remain inside that syscall row until IRQ entry and return are stamped. The displayed `syscall_us` therefore measures an inclusive syscall span, and `other_system_us` is the unattributed residue at this stage; neither is the final exclusive partition. The QEMU build passed 34 preboot and 34 postboot tests, and both task and thread syscall files rendered expected rows. Before deploying this slice, the P5's fault-time kernel ran seven `syscallbench` rounds of 20,000 `taskid` calls; the best adjusted round was 21,924,111 cycles, or about 1,096 cycles per call. Use the same fixture after the new boot to measure the row-update overhead.
 
+On the P5 with per-syscall timing enabled, two 20,000-call `syscallbench` runs had best adjusted rounds of 19,438,353 and 24,592,722 cycles, or about 972 and 1,230 cycles per call. This run-to-run spread is larger than a plausible small row-update cost, so these samples do not establish an overhead percentage. Both runs completed correctly.
+
+### P5 reading with per-thread syscall rows
+
+With Yonder visible at 1920×1080, a 64.6-second interval on the syscall-timing kernel reproduced the high-system-time state from the original brief. Reads of task status, thread status, syscall rows, and `/sys/gui` were made by separate SSH commands, so the figures are approximate interval rates rather than one atomic snapshot.
+
+| scope | user time | system time | inclusive fault time | inclusive syscall time |
+| --- | ---: | ---: | ---: | ---: |
+| main thread (135) | 27.93 s | 20.32 s (31.4% core) | 0.218 s | 20.10 s |
+| ticker thread (148) | 0.015 s | 22.06 s (34.1% core) | 0 | 22.06 s |
+| whole task | 28.09 s | 42.10 s (65.2% core) | 0.219 s | 41.87 s |
+
+The main thread's largest syscall rows were `gui_window_publish`: 2,412 calls and 15.44 s; `gui_event_poll`: 5,034 calls and 2.71 s; `gui_event_wait`: 2,684 calls and 1.37 s; and `unmap`: 2,164 calls and 0.455 s. It zeroed 97,280 anonymous pages during the interval, yet fault handling used only 0.218 s. The ticker made 5,941 `gui_event_ring` calls taking 21.67 s; its 8,920 `read` calls took 0.070 s of *running* kernel time, excluding time asleep. It is not burning CPU in the pipe read.
+
+Across all GUI callers in the same interval, the ring lock site made 5,994 acquisitions, waited 21.84 s, and held the lock for 0.005 s. Yonder's ticker and main thread together made 5,978 ring calls, so nearly every acquisition was theirs. The ring wait closely matches the ticker's 21.67 s in `gui_event_ring`. The publish lock site made 2,573 acquisitions, waited 13.17 s, and held the lock for 2.47 s; Yonder's main thread made 2,412 publish calls taking 15.44 s. The site counters include other applications and the asynchronous reads can differ by a fraction of a second, but the correspondence is strong. The composite site held `kGuiLock` for 39.14 s during this 64.6-second interval. It is the likely source of much of the contention seen by both Yonder threads; the lock-site table does not identify each holder or prove that every wait was against a composite pass.
+
+The current display state explains why the earlier Yonder run showed about 12.5% main and 5.2% ticker system time: the GUI lock had much less contention then. This run reproduces the original 30%/35% reading and locates its dominant cost in GUI syscalls waiting for `kGuiLock`, particularly ring and publish. The inclusive syscall rows still contain any IRQ time that preempted them, so this measurement does not establish an exclusive IRQ total or an exact final partition. The lock-wait agreement makes a large, independent IRQ or scheduler cost unlikely in these two paths. A next performance slice should shorten the compositor's `kGuiLock` hold or avoid taking that lock from the ticker's doorbell, then repeat the same interval. IRQ stamps remain necessary if the project needs an exact general-purpose cause partition.
+
 ## Cause timing contract
 
 The next measurement should partition each non-idle thread's committed `systemCycles` into syscall work by number, resolved page-fault work, interrupt work, self-IPI halt time, and a remainder. Every cycle belongs to one bucket at a charge; a blocked thread accumulates no cycles. A task view sums its threads' raw counters before conversion to microseconds. The remainder is derived from the same coherent thread snapshot as `systemCycles`, never by subtracting separately rounded text values.
