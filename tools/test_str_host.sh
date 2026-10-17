@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# libos64's memset, memcpy and memmove are loops the compiler's own calls
-# land in, so an optimizer must not turn them back into those calls. Built
+# libos64's memset, memcpy and memmove are where the compiler's own calls
+# land, so an optimizer must not turn their loops back into those calls. Built
 # HOSTED at -O2 and -O3 with no sanitizer — no -ffreestanding to stop it, no
 # sanitizer memset to hide it — they must run, not recurse until the stack
 # runs out.
@@ -27,4 +27,18 @@ for level in -O2 -O3; do
         -o "$dir/probe" "$dir/probe.c" userland/libos64/str.c
     timeout 10 "$dir/probe"
 done
-echo "str: memset, memcpy and memmove stay loops at -O2 and -O3, hosted"
+echo "str: memset, memcpy and memmove do not call themselves at -O2 and -O3, hosted"
+# Their bytes, under the sanitizers and at the optimization userland is built
+# with. str.c defines the C library's own names for the compiler's calls, so
+# those are made local to its object: the test's memcpy and memcmp, and the
+# sanitizers', stay the C library's.
+for flags in "-O1 -g -fsanitize=address,undefined -fno-sanitize-recover=all" "-O2"; do
+    # shellcheck disable=SC2086
+    cc $flags -std=gnu11 -Wall -Wextra -Werror -msse2 -I userland/libos64/include -I abi/include \
+        -c userland/libos64/str.c -o "$dir/str.o"
+    objcopy --localize-symbol=memcpy --localize-symbol=memmove --localize-symbol=memset \
+        --localize-symbol=memcmp "$dir/str.o" "$dir/str-local.o"
+    # shellcheck disable=SC2086
+    cc $flags -std=gnu11 -Wall -Wextra -Werror -o "$dir/test_str" tools/test_str_host.c "$dir/str-local.o"
+    "$dir/test_str"
+done

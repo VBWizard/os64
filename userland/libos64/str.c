@@ -124,32 +124,145 @@ bool os64_streq_nocase(const char *a, const char *b)
 // no build of it has to remember.
 #define OS64_NO_LIBCALL_LOOPS __attribute__((optimize("no-tree-loop-distribute-patterns")))
 
-OS64_NO_LIBCALL_LOOPS
-void *os64_memcpy(void *dst, const void *src, size_t n)
-{
-    unsigned char *d = (unsigned char *)dst;
-    const unsigned char *s = (const unsigned char *)src;
+// How a copy or a fill moves its bytes, by size — measured, not guessed, on
+// a Ryzen 9 3900X (Zen 2). Under 16 bytes, two moves of the widest size
+// that fits, overlapping in the middle; then 16-byte SSE2 moves, which every
+// x86-64 has, 64 bytes a pass past 64 with the stores aligned. The CPU's own
+// string instructions start slowly but then move more a cycle than SSE2
+// can, so a copy of 2 KiB up to 128 KiB is `rep movsb` and a fill of 4 KiB
+// or more is `rep stosb`. Past 128 KiB `rep movsb` falls behind SSE2 again
+// on that machine — by more than twice at 1 MiB — while `rep stosb` does
+// not, hence a window for the one and a floor for the other. No CPUID is
+// asked, so one path serves every CPU; another machine's reading may move
+// the cutoffs.
+#define COPY_REP_FROM ((size_t)2 << 10)
+#define COPY_REP_UNTIL ((size_t)128 << 10)
+#define FILL_REP_FROM ((size_t)4 << 10)
 
-    for (size_t i = 0; i < n; i++)
-        d[i] = s[i];
-    return dst;
+typedef uint8_t v16 __attribute__((vector_size(16), aligned(1), may_alias));
+typedef uint8_t v16_aligned __attribute__((vector_size(16), aligned(16), may_alias));
+typedef uint64_t u64_any __attribute__((aligned(1), may_alias));
+typedef uint32_t u32_any __attribute__((aligned(1), may_alias));
+typedef uint16_t u16_any __attribute__((aligned(1), may_alias));
+
+// Up to 64 bytes: moves of the widest size that fits from each end (two of
+// them from each past 32), overlapping in the middle, all read before any
+// is written — so it is right however the two regions overlap, which
+// memmove relies on.
+OS64_NO_LIBCALL_LOOPS
+static inline void copy_short(uint8_t *d, const uint8_t *s, size_t n)
+{
+    if (n > 32) {
+        v16 a = *(const v16 *)s, b = *(const v16 *)(s + 16);
+        v16 c = *(const v16 *)(s + n - 32), e = *(const v16 *)(s + n - 16);
+        *(v16 *)d = a;
+        *(v16 *)(d + 16) = b;
+        *(v16 *)(d + n - 32) = c;
+        *(v16 *)(d + n - 16) = e;
+    } else if (n >= 16) {
+        v16 a = *(const v16 *)s, b = *(const v16 *)(s + n - 16);
+        *(v16 *)d = a;
+        *(v16 *)(d + n - 16) = b;
+    } else if (n >= 8) {
+        uint64_t a = *(const u64_any *)s, b = *(const u64_any *)(s + n - 8);
+        *(u64_any *)d = a;
+        *(u64_any *)(d + n - 8) = b;
+    } else if (n >= 4) {
+        uint32_t a = *(const u32_any *)s, b = *(const u32_any *)(s + n - 4);
+        *(u32_any *)d = a;
+        *(u32_any *)(d + n - 4) = b;
+    } else if (n >= 2) {
+        uint16_t a = *(const u16_any *)s, b = *(const u16_any *)(s + n - 2);
+        *(u16_any *)d = a;
+        *(u16_any *)(d + n - 2) = b;
+    } else if (n == 1) {
+        *d = *s;
+    }
+}
+
+// More than 64 bytes, first to last: `rep movsb` in its window, else the
+// first 16 and the last 64 read before anything is written, and between
+// them passes that each read 64 and then write 64, the stores aligned. With
+// `d` below `s` a pass's writes land wholly below the next pass's reads, and
+// `rep movsb` is defined byte by byte from the first, so memmove may copy
+// forward through here too.
+OS64_NO_LIBCALL_LOOPS
+static void copy_up(uint8_t *d, const uint8_t *s, size_t n)
+{
+    if (n >= COPY_REP_FROM && n < COPY_REP_UNTIL) {
+        __asm__ volatile("rep movsb" : "+D"(d), "+S"(s), "+c"(n) : : "memory");
+        return;
+    }
+    v16 head = *(const v16 *)s;
+    v16 t0 = *(const v16 *)(s + n - 64), t1 = *(const v16 *)(s + n - 48);
+    v16 t2 = *(const v16 *)(s + n - 32), t3 = *(const v16 *)(s + n - 16);
+    size_t skip = -(uintptr_t)d & 15;           // to the first aligned store
+    uint8_t *to = d + skip;
+    const uint8_t *from = s + skip;
+    for (size_t left = n - skip; left > 64; left -= 64, to += 64, from += 64) {
+        v16 a = *(const v16 *)from, b = *(const v16 *)(from + 16);
+        v16 c = *(const v16 *)(from + 32), e = *(const v16 *)(from + 48);
+        *(v16_aligned *)to = a;
+        *(v16_aligned *)(to + 16) = b;
+        *(v16_aligned *)(to + 32) = c;
+        *(v16_aligned *)(to + 48) = e;
+    }
+    *(v16 *)d = head;
+    *(v16 *)(d + n - 64) = t0;
+    *(v16 *)(d + n - 48) = t1;
+    *(v16 *)(d + n - 32) = t2;
+    *(v16 *)(d + n - 16) = t3;
+}
+
+// More than 64 bytes, last to first, for memmove when `d` lies inside the
+// source: copy_up mirrored. Each pass's writes land wholly above the next
+// pass's reads.
+OS64_NO_LIBCALL_LOOPS
+static void copy_down(uint8_t *d, const uint8_t *s, size_t n)
+{
+    v16 tail = *(const v16 *)(s + n - 16);
+    v16 h0 = *(const v16 *)s, h1 = *(const v16 *)(s + 16);
+    v16 h2 = *(const v16 *)(s + 32), h3 = *(const v16 *)(s + 48);
+    size_t skip = (uintptr_t)(d + n) & 15;      // to the end of the last aligned store
+    uint8_t *to = d + n - skip;
+    const uint8_t *from = s + n - skip;
+    for (size_t left = n - skip; left > 64; left -= 64, to -= 64, from -= 64) {
+        v16 a = *(const v16 *)(from - 16), b = *(const v16 *)(from - 32);
+        v16 c = *(const v16 *)(from - 48), e = *(const v16 *)(from - 64);
+        *(v16_aligned *)(to - 16) = a;
+        *(v16_aligned *)(to - 32) = b;
+        *(v16_aligned *)(to - 48) = c;
+        *(v16_aligned *)(to - 64) = e;
+    }
+    *(v16 *)(d + n - 16) = tail;
+    *(v16 *)d = h0;
+    *(v16 *)(d + 16) = h1;
+    *(v16 *)(d + 32) = h2;
+    *(v16 *)(d + 48) = h3;
 }
 
 OS64_NO_LIBCALL_LOOPS
+void *os64_memcpy(void *dst, const void *src, size_t n)
+{
+    if (n <= 64)
+        copy_short(dst, src, n);
+    else
+        copy_up(dst, src, n);
+    return dst;
+}
+
+// Forward unless `dst` lies inside the source past its start, where a
+// forward copy would write bytes not yet read: the subtraction wraps when
+// `dst` is below `src`, so one comparison asks both.
+OS64_NO_LIBCALL_LOOPS
 void *os64_memmove(void *dst, const void *src, size_t n)
 {
-    unsigned char *d = (unsigned char *)dst;
-    const unsigned char *s = (const unsigned char *)src;
-
-    // dst below src: copy forward. dst above: copy backward, so the bytes
-    // not yet read are never the bytes already written. Equal: nothing to do.
-    if (d < s) {
-        for (size_t i = 0; i < n; i++)
-            d[i] = s[i];
-    } else if (d > s) {
-        for (size_t i = n; i > 0; i--)
-            d[i - 1] = s[i - 1];
-    }
+    if (n <= 64)
+        copy_short(dst, src, n);
+    else if ((uintptr_t)dst - (uintptr_t)src >= n)
+        copy_up(dst, src, n);
+    else if (dst != src)
+        copy_down(dst, src, n);
     return dst;
 }
 
@@ -191,13 +304,50 @@ int os64_memcmp(const void *a, const void *b, size_t n)
     return 0;
 }
 
+// copy_short's and copy_up's shapes, one byte everywhere, and `rep stosb`
+// from its floor (the cutoffs above).
 OS64_NO_LIBCALL_LOOPS
 void *os64_memset(void *dst, int c, size_t n)
 {
-    unsigned char *d = (unsigned char *)dst;
-
-    for (size_t i = 0; i < n; i++)
-        d[i] = (unsigned char)c;
+    uint8_t *d = dst, b = (uint8_t)c;
+    uint64_t w = b * 0x0101010101010101ull;
+    v16 v = {0};
+    v += b;
+    if (n >= FILL_REP_FROM) {
+        __asm__ volatile("rep stosb" : "+D"(d), "+c"(n) : "a"(b) : "memory");
+    } else if (n > 64) {
+        *(v16 *)d = v;
+        uint8_t *to = d + (-(uintptr_t)d & 15);
+        for (size_t left = n - (size_t)(to - d); left > 64; left -= 64, to += 64) {
+            *(v16_aligned *)to = v;
+            *(v16_aligned *)(to + 16) = v;
+            *(v16_aligned *)(to + 32) = v;
+            *(v16_aligned *)(to + 48) = v;
+        }
+        *(v16 *)(d + n - 64) = v;
+        *(v16 *)(d + n - 48) = v;
+        *(v16 *)(d + n - 32) = v;
+        *(v16 *)(d + n - 16) = v;
+    } else if (n > 32) {
+        *(v16 *)d = v;
+        *(v16 *)(d + 16) = v;
+        *(v16 *)(d + n - 32) = v;
+        *(v16 *)(d + n - 16) = v;
+    } else if (n >= 16) {
+        *(v16 *)d = v;
+        *(v16 *)(d + n - 16) = v;
+    } else if (n >= 8) {
+        *(u64_any *)d = w;
+        *(u64_any *)(d + n - 8) = w;
+    } else if (n >= 4) {
+        *(u32_any *)d = (uint32_t)w;
+        *(u32_any *)(d + n - 4) = (uint32_t)w;
+    } else if (n >= 2) {
+        *(u16_any *)d = (uint16_t)w;
+        *(u16_any *)(d + n - 2) = (uint16_t)w;
+    } else if (n == 1) {
+        *d = b;
+    }
     return dst;
 }
 
