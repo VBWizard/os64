@@ -4173,6 +4173,19 @@ static void picture_tick_cases(void) {
           "picture ticks: a tick advances the pictures due and on screen, not one scrolled away");
     check(g.page.pics[a].due==1110 && g.page.pics[c].due==1110,
           "picture ticks: each next frame is due its delay after the tick that showed it");
+    /* A past moment the loop meets itself waits for the clock's next tick,
+     * unless a picture is due at the same moment: then it is rung for now. */
+    {
+        uint64_t settle=g.settle_due;
+        for(int32_t k=0;k<g.page.npics;k++) g.page.pics[k].playing=(k==a);
+        now_ms=2000; g.settle_due=1500; g.page.pics[a].due=1500;
+        pictures_schedule();
+        check(ticker_due==1500,"picture ticks: a picture due with the settle is rung for at once");
+        g.page.pics[a].due=1600;
+        pictures_schedule();
+        check(ticker_due==2001,"picture ticks: the settle alone waits for the clock's next tick");
+        g.settle_due=settle;
+    }
     for(int32_t k=0;k<g.page.npics;k++) { g.page.pics[k].moving=NULL; g.page.pics[k].playing=false; }
     now_ms=0;
     probe_drop();
@@ -4489,8 +4502,9 @@ static void paint_cost_cases(void) {
     cost_reset();
     diag_paint(&g.page);
     yonder_diag_render(g.page.diag,rec,sizeof(rec));
-    check(strstr(rec,"\npaint: nothing painted since the counts began\n")!=NULL && strstr(rec,"paint stages")==NULL,
-          "paint counts: nothing painted says so");
+    check(strstr(rec,"\npaint: nothing painted in 0.0 s; 0 ticks, 0 schedules; too short a span to time; 0 layouts; ")!=NULL &&
+          strstr(rec,"paint stages")==NULL,
+          "paint counts: nothing painted says so, and a span too short to time has no stages");
     check(lay_out_page(&g.page,800,600) && s_cost.layouts==1 && s_cost.total[PS_LAYOUTS]>0,
           "paint counts: a layout is counted, and timed");
     cost_reset();
@@ -4597,9 +4611,20 @@ static void paint_cost_cases(void) {
         s_cost.from_cycles=cycles()+1000000000000ull;
         diag_paint(&g.page);
         yonder_diag_render(g.page.diag,rec,sizeof(rec));
-        check(strstr(rec,"\npaint: 1 paints, but the counter stepped back across the span (the cores' counters "
-                         "disagree): no times\n")!=NULL,
-              "paint counts: a span the counter stepped back across is said, not called empty");
+        check(strstr(rec,"\npaint: 1 paints in 1.0 s (0 whole views), 0.0 Mpx of the view; 0 ticks, 0 schedules; "
+                         "the counter stepped back across the span (the cores' counters disagree): no times; ")!=NULL &&
+              strstr(rec,"; 5 script tasks: 1 scripts, 2 timers, 2 events;")!=NULL,
+              "paint counts: a span the counter stepped back across is said, and its counts are kept");
+        /* Work with nothing painted is still counted on the record, timed. */
+        cost_reset();
+        task_cost("timer"); s_cost.layouts=2;
+        s_cost.from_cycles=cycles()-1000000000ull; s_cost.from_us=os64_micros()-1000000;
+        diag_paint(&g.page);
+        yonder_diag_render(g.page.diag,rec,sizeof(rec));
+        check(strstr(rec,"\npaint: nothing painted in 1.0 s; 0 ticks, 0 schedules; the main loop busy ")!=NULL &&
+              strstr(rec,"; 2 layouts;")!=NULL && strstr(rec,"; 1 script tasks: 0 scripts, 1 timers, 0 events;")!=NULL &&
+              strstr(rec,"\npaint stages: ms a paint (most):")!=NULL,
+              "paint counts: a span with nothing painted keeps its work and its stages");
     }
     web_drop();
     saved_diagnostics[0]='\0';

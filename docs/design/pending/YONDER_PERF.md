@@ -176,7 +176,9 @@ second, and the ticks cost 12-20% of the thread on their own.
    events (a script's timer, the settle, the stream's wait for its sheets)
    is handed to the ticker as the clock's next tick when it is already
    past; the bell still meets its own at once (pictures, ticks, layouts,
-   an arriving page's wait). QEMU, danlegt with scripts on, 13.9 s: 1982
+   an arriving page's wait) — including at a moment one of its own shares
+   with the loop's, which the clock's 10 ms step makes common
+   (`deadline_offer`; Codex, #283 round 4). QEMU, danlegt with scripts on, 13.9 s: 1982
    bells taken to 169, the ticker's wakes 4098 to 447, paints 67 to 90.
 
 5. **What the ring loop was hiding.** With (4) in, every GIF on danlegt's

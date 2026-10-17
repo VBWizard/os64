@@ -4675,45 +4675,49 @@ static void diag_face(Page *p, int32_t i, const garb_font_face_t *f, bool shown)
     os64_free(t.s);
 }
 
-// The paints' cost since the page was shown, or since its record was last
-// written on asking (`d`, view_key): how many and how much of the view they
-// painted (`t`), and each stage in milliseconds a paint (a tick, for
-// ticks) — on average and at most — the counter's rate taken from
+// The main loop's work since the page was shown, or since its record was
+// last written on asking (`d`, view_key): how many paints and how much of
+// the view they painted, the ticks, schedules, layouts and script tasks,
+// the ticker's bells and the deadlines handed it — every count, painted or
+// not (`t`) — and, when the span has a rate, how busy the loop was and
+// each stage in milliseconds a paint (a tick, a call, a task, a layout for
+// those) — on average and at most — the counter's rate taken from
 // os64_micros over the same span (`u`). "window" is the render outside the
 // view (the root panel, the chrome); "the view's rest" is the view outside
-// its timed stages. False when nothing was painted: `t` says so, `u` is
+// its timed stages. False when there is no rate: `t` says why, `u` is
 // empty.
 static bool paint_lines(DiagText *t, DiagText *u)
 {
     uint64_t span_us = (uint64_t)(os64_micros() - s_cost.from_us);
     // The whole span, read once, as every interval is (cycles_since): one
-    // whose counter stepped back has no rate, and the line says that rather
-    // than that nothing was painted.
+    // whose counter stepped back has no rate, and the line says so.
+    uint64_t back = s_cost.backward;
     uint64_t span = cycles_since(s_cost.from_cycles);
+    bool stepped_back = s_cost.backward != back;
     uint64_t rate = span_us > 0 ? span / span_us : 0;   // per microsecond
-    if (s_cost.paints == 0) {
-        dt_put(t, "nothing painted since the counts began");
-        return false;
-    }
-    if (rate == 0) {
-        dt_put(t, "%lu paints, but the counter stepped back across the span (the cores' counters disagree): "
-               "no times", (unsigned long)s_cost.paints);
-        return false;
-    }
-    uint64_t busy = span > s_cost.waited ? (span - s_cost.waited) * 100 / span : 0;
-    dt_put(t, "%lu paints in %lu.%lu s (%lu whole views), %lu.%lu Mpx of the view; %lu ticks, %lu schedules; "
-           "the main loop busy %lu%%",
-           (unsigned long)s_cost.paints, (unsigned long)(span_us / 1000000), (unsigned long)(span_us / 100000 % 10),
-           (unsigned long)s_cost.whole, (unsigned long)(s_cost.pixels / 1000000),
-           (unsigned long)(s_cost.pixels / 100000 % 10), (unsigned long)s_cost.ticks,
-           (unsigned long)s_cost.schedules, (unsigned long)busy);
+    if (s_cost.paints == 0)
+        dt_put(t, "nothing painted in %lu.%lu s", (unsigned long)(span_us / 1000000),
+               (unsigned long)(span_us / 100000 % 10));
+    else
+        dt_put(t, "%lu paints in %lu.%lu s (%lu whole views), %lu.%lu Mpx of the view", (unsigned long)s_cost.paints,
+               (unsigned long)(span_us / 1000000), (unsigned long)(span_us / 100000 % 10),
+               (unsigned long)s_cost.whole, (unsigned long)(s_cost.pixels / 1000000),
+               (unsigned long)(s_cost.pixels / 100000 % 10));
+    dt_put(t, "; %lu ticks, %lu schedules", (unsigned long)s_cost.ticks, (unsigned long)s_cost.schedules);
+    if (rate == 0)
+        dt_put(t, stepped_back ? "; the counter stepped back across the span (the cores' counters disagree): no times"
+                               : "; too short a span to time");
+    else
+        dt_put(t, "; the main loop busy %lu%%",
+               (unsigned long)(span > s_cost.waited ? (span - s_cost.waited) * 100 / span : 0));
     if (s_cost.backward != 0)
         dt_put(t, "; the counter stepped back %lu times (the cores' counters disagree: these times are suspect)",
                (unsigned long)s_cost.backward);
     dt_put(t, "; %lu layouts", (unsigned long)s_cost.layouts);
-    dt_put(t, "; frames late at most %lu ms, %lu more than %d ms; the longest wait %lu ms",
-           (unsigned long)s_cost.late_most, (unsigned long)s_cost.late_frames, FRAME_LATE_MS,
-           (unsigned long)(s_cost.slept_most / rate / 1000));
+    dt_put(t, "; frames late at most %lu ms, %lu more than %d ms", (unsigned long)s_cost.late_most,
+           (unsigned long)s_cost.late_frames, FRAME_LATE_MS);
+    if (rate != 0)
+        dt_put(t, "; the longest wait %lu ms", (unsigned long)(s_cost.slept_most / rate / 1000));
     dt_put(t, "; %lu script tasks: %lu scripts, %lu timers, %lu events",
            (unsigned long)(s_cost.scripts + s_cost.timers + s_cost.events), (unsigned long)s_cost.scripts,
            (unsigned long)s_cost.timers, (unsigned long)s_cost.events);
@@ -4733,6 +4737,8 @@ static bool paint_lines(DiagText *t, DiagText *u)
     dt_put(t, "; deadlines already past when handed to it:");
     for (int32_t i = 0; i < PAST_COUNT; i++)
         dt_put(t, "%s %s %lu", i ? "," : "", kPastDeadline[i], (unsigned long)s_cost.past[i]);
+    if (rate == 0)
+        return false;
     // Tenths of a millisecond: cycles / (rate per microsecond x 100).
     uint64_t per = rate * 100;
     uint64_t inner = 0;
@@ -4753,7 +4759,8 @@ static bool paint_lines(DiagText *t, DiagText *u)
                (unsigned long)(avg / 10), (unsigned long)(avg % 10), (unsigned long)(most / 10),
                (unsigned long)(most % 10));
     }
-    uint64_t w = window / s_cost.paints / per, r = rest / s_cost.paints / per;
+    uint64_t paints = s_cost.paints > 0 ? s_cost.paints : 1;
+    uint64_t w = window / paints / per, r = rest / paints / per;
     dt_put(u, "; window %lu.%lu, the view's rest %lu.%lu", (unsigned long)(w / 10), (unsigned long)(w % 10),
            (unsigned long)(r / 10), (unsigned long)(r % 10));
     return true;
@@ -4768,9 +4775,9 @@ static const char *dt_text(const DiagText *t)
 static void diag_paint(Page *p)
 {
     DiagText t = {0}, u = {0};
-    bool painted = paint_lines(&t, &u);
+    bool timed = paint_lines(&t, &u);
     yonder_diag_fact(p->diag, "paint", dt_text(&t));
-    if (painted)
+    if (timed)
         yonder_diag_fact(p->diag, "paint stages", dt_text(&u));
     else
         yonder_diag_forget(p->diag, "paint stages");
@@ -4783,8 +4790,8 @@ static void diag_paint(Page *p)
 static void diag_paint_reading(Page *p, uint32_t n)
 {
     DiagText t = {0}, u = {0}, v = {0};
-    bool painted = paint_lines(&t, &u);
-    dt_put(&v, "at y %ld: %s%s%s", (long)g.sy, dt_text(&t), painted ? " | " : "", painted ? dt_text(&u) : "");
+    bool timed = paint_lines(&t, &u);
+    dt_put(&v, "at y %ld: %s%s%s", (long)g.sy, dt_text(&t), timed ? " | " : "", timed ? dt_text(&u) : "");
     char key[32];
     os64_snprintf(key, sizeof(key), "paint reading %u", (unsigned)n);
     yonder_diag_fact(p->diag, key, dt_text(&v));
@@ -5263,58 +5270,77 @@ static uint64_t tick_next(void)
 // sheets is shown whatever is still coming, the moment a script the stream
 // is stopped at stops waiting for its sheets, and the next timer of each
 // page's scripts, covered or not.
+// The earliest deadline offered so far (deadline_offer): when, where the
+// first offered at that moment came from (for the counts), and whether any
+// offered at that moment is the bell's to meet.
+typedef struct {
+    uint64_t next;
+    PastDeadline from;
+    bool bell;
+} NextDeadline;
+
+// A deadline offered to `d`. The loop meets a script's timer (script_turn,
+// and the stream's and the arriving page's turns), the settle
+// (pictures_settle) and the stream's wait for its sheets (stream_turn)
+// itself, after the events; the bell meets the rest (pictures_tick,
+// motion_tick, coming_show). Two at one moment are common — the clock
+// steps by the tick — and the moment is the bell's if either is.
+static void deadline_offer(NextDeadline *d, uint64_t due, PastDeadline from)
+{
+    bool bell = from != PAST_TIMERS && from != PAST_SETTLE && from != PAST_STREAM;
+    if (due < d->next) {
+        d->next = due;
+        d->from = from;
+        d->bell = bell;
+    } else if (due == d->next && due != YONDER_NEVER && bell) {
+        d->bell = true;
+    }
+}
+
 static void pictures_schedule(void)
 {
     cost_begin(PS_SCHEDULE);
-    // Which deadline is the next, for the counts (PastDeadline).
-    PastDeadline from = PAST_SETTLE;
-    uint64_t next = g.covered ? YONDER_NEVER : g.settle_due;
-    uint64_t motion = motion_next(), tick = tick_next();
-    if (motion < next)
-        next = motion, from = PAST_LAYOUTS;
-    if (tick < next)
-        next = tick, from = PAST_TICKS;
-    if (g.coming.active && g.coming.due < next)
-        next = g.coming.due, from = PAST_ARRIVAL;
-    if (g.stream.active && g.stream.sheets_due != 0 && g.stream.sheets_due < next)
-        next = g.stream.sheets_due, from = PAST_STREAM;
+    NextDeadline d = {YONDER_NEVER, PAST_SETTLE, false};
+    if (!g.covered)
+        deadline_offer(&d, g.settle_due, PAST_SETTLE);
+    deadline_offer(&d, motion_next(), PAST_LAYOUTS);
+    deadline_offer(&d, tick_next(), PAST_TICKS);
+    if (g.coming.active)
+        deadline_offer(&d, g.coming.due, PAST_ARRIVAL);
+    if (g.stream.active && g.stream.sheets_due != 0)
+        deadline_offer(&d, g.stream.sheets_due, PAST_STREAM);
     // A page's timers, covered or not: a page that counts down keeps
     // counting while another window is in front (DOM_D7.md § The clock).
     const yonder_scripts_t *hosts[] = {g.page.scripts, g.stream.scripts,
                                        g.coming.active ? g.coming.page.scripts : NULL};
-    for (size_t i = 0; i < sizeof(hosts) / sizeof(hosts[0]); i++) {
-        uint64_t due = yonder_scripts_timer_next(hosts[i]);
-        if (due < next)
-            next = due, from = PAST_TIMERS;
-    }
-    // The pictures on screen, found in one pass when any could be next.
+    for (size_t i = 0; i < sizeof(hosts) / sizeof(hosts[0]); i++)
+        deadline_offer(&d, yonder_scripts_timer_next(hosts[i]), PAST_TIMERS);
+    // The pictures on screen, found in one pass when any could be next or
+    // at the next moment.
     bool asks = false;
     for (int32_t k = 0; !g.covered && k < g.page.npics && !asks; k++)
-        asks = g.page.pics[k].playing && g.page.pics[k].due < next;
+        asks = g.page.pics[k].playing && g.page.pics[k].due <= d.next;
     bool small[PICTURE_FLAGS_SMALL];
     bool *seen = asks ? picture_flags(small) : NULL;
     if (seen != NULL)
         pictures_seen(seen, NULL);
     for (int32_t k = 0; asks && k < g.page.npics; k++) {
         const Picture *pic = &g.page.pics[k];
-        if (pic->playing && pic->due < next && (seen != NULL ? seen[k] : picture_on_screen(k, false)))
-            next = pic->due, from = PAST_PICTURES;
+        if (pic->playing && pic->due <= d.next && (seen != NULL ? seen[k] : picture_on_screen(k, false)))
+            deadline_offer(&d, pic->due, PAST_PICTURES);
     }
     if (seen != NULL)
         picture_flags_free(seen, small);
-    uint64_t now = yonder_now_ms();
+    uint64_t next = d.next, now = yonder_now_ms();
     if (next != YONDER_NEVER && next <= now) {
-        s_cost.past[from]++;
-        // A deadline the loop meets itself, after the events — a script's
-        // timer (script_turn, and the stream's and the arriving page's
-        // turns), the settle (pictures_settle), the stream's wait for its
-        // sheets (stream_turn) — is the loop's to meet at its turn, not the
-        // ticker's to ring for: the bell is dispatched among the events,
-        // which cannot meet it, so it is handed on again and rings again,
-        // the batch ringing itself until its bound. One still owed when the
-        // loop next waits is rung for at the clock's next tick. The bell
-        // meets the rest itself (pictures_tick, motion_tick, coming_show).
-        if (from == PAST_TIMERS || from == PAST_SETTLE || from == PAST_STREAM)
+        s_cost.past[d.from]++;
+        // A past moment that is the loop's alone is the loop's to meet at its
+        // turn, not the ticker's to ring for: the bell is dispatched among
+        // the events, which cannot meet it, so it is handed on again and
+        // rings again, the batch ringing itself until its bound. One still
+        // owed when the loop next waits is rung for at the clock's next
+        // tick. A moment the bell meets is rung for now.
+        if (!d.bell)
             next = now + 1;
     }
     yonder_ticker_set(g.ticker, next);

@@ -298,6 +298,11 @@ was shown, or since its record was last written on asking:
   Measure first).
 - Timed with the processor's counter, its rate taken from the clock across
   the same span, so the numbers are the machine's own: the P5's on the P5.
+  A span with nothing painted keeps every other count and its stages
+  (`nothing painted in 10.0 s; ...`): a page whose timers compute without
+  changing what is shown is still on the record. A span too short to
+  time, or one the counter stepped back across, says so and keeps its
+  counts without the times.
   An interval whose counter stepped back (the thread moved to a core whose
   counter is behind) counts as nothing, and the line says how many.
 - **`d` in the page writes the record now** (`written: when asked`),
