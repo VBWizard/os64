@@ -12,11 +12,11 @@ static char s_payload[OS64_APPEARANCE_PAYLOAD_MAX];
 int appearance_snapshot(char *out, size_t cap)
 {
     if (!out || cap < OS64_APPEARANCE_MAX) return -1;
-    uint64_t flags = spinlock_acquire_irqsave(&kGuiLock);
+    uint64_t flags = gui_lock(GUI_LOCK_OTHER);
     size_t head = os64_appearance_header_write(out, s_generation);
     memcpy(out + head, s_payload, s_length);
     int result = (int)(head + s_length);
-    spinlock_release_irqrestore(&kGuiLock, flags);
+    gui_unlock(flags);
     return result;
 }
 
@@ -27,24 +27,24 @@ int appearance_publish(const char *bytes, size_t length)
     if (length > OS64_APPEARANCE_MAX ||
         !os64_appearance_header_read(bytes, length, &expected, &body) ||
         length - body > OS64_APPEARANCE_PAYLOAD_MAX) return -1;
-    uint64_t flags = spinlock_acquire_irqsave(&kGuiLock);
+    uint64_t flags = gui_lock(GUI_LOCK_OTHER);
     if (expected != s_generation || s_generation == UINT64_MAX) {
-        spinlock_release_irqrestore(&kGuiLock, flags);
+        gui_unlock(flags);
         return -1;
     }
     s_length = length - body;
     memcpy(s_payload, bytes + body, s_length);
     ++s_generation;
     wm_appearance_changed(s_generation);
-    spinlock_release_irqrestore(&kGuiLock, flags);
+    gui_unlock(flags);
     return (int)length;
 }
 
 size_t appearance_length(void)
 {
     char header[OS64_APPEARANCE_HEADER_MAX];
-    uint64_t flags = spinlock_acquire_irqsave(&kGuiLock);
+    uint64_t flags = gui_lock(GUI_LOCK_OTHER);
     size_t result = os64_appearance_header_write(header, s_generation) + s_length;
-    spinlock_release_irqrestore(&kGuiLock, flags);
+    gui_unlock(flags);
     return result;
 }
