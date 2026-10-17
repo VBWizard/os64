@@ -19,11 +19,12 @@ identify which syscall or kernel function consumed the time. A low share for
 Yonder's main thread does not exclude compositor work, another thread, or
 time waiting off-CPU.
 
-## Current ledger and boundaries
+## Starting ledger and boundaries
 
-- `thread_t::runCycles` accumulates TSC cycles. `scheduler_do()` charges the
-  outgoing thread at pass entry; `acct_settle_local()` closes the open span
-  during an accounting IPI and the compositor's halt bookends. The broadcast
+- `thread_t::runCycles` accumulates TSC cycles. Before the split,
+  `scheduler_do()` charged the outgoing thread at pass entry; the local
+  accounting settle path closed the open span during an accounting IPI and
+  the compositor's halt bookends. The broadcast
   caller `mpAcctSettleAll()` limits those IPIs to one round per tick.
   The scheduler's own pass goes to `cls->acctSchedCycles`, outside thread
   runtime. All committed deltas use two TSC readings on the same core.
@@ -81,11 +82,13 @@ percentages continue to come from the existing core ledger.
 The names on the wire are `user_us`, `system_us`, and `idle_us`, beside the
 existing `runtime_us`, in task and thread status. Compute a task's values by
 summing the same linked threads used for `runtime_us`. Keep raw cycles in the
-kernel. Convert the raw `runCycles`, `userCycles`, and `idleCycles` sums with
-the fixed boot TSC rate; print `system_us = runtime_us - user_us - idle_us`.
-This makes the identity exact in text as well as raw cycles. Read a coherent
-tuple of each thread's counters before subtracting so a concurrent charge
-cannot make the remainder transiently negative or make system time go back.
+kernel. Convert each disjoint raw bucket with the fixed boot TSC rate, then
+print `runtime_us = user_us + system_us + idle_us`. Converting the total and
+deriving a bucket as its remainder can make that bucket decrease by 1 µs
+while its raw cycles stay constant, because fractional rounding moves.
+Summing the independently monotonic printed buckets keeps the identity exact
+in text as well as raw cycles. Read a coherent tuple of each thread's
+counters before converting them.
 These additive text keys preserve readers that ignore unknown fields.
 Today's status reads can race a thread running on another core, and separate
 task, thread and core files have different observation points. The raw-cycle
@@ -179,10 +182,11 @@ busy = user + system
 total = busy + idle + sched
 ```
 
-Read a coherent core tuple. Convert `total`, `idle`, `sched`, and `user` to
-microseconds; derive printed `busy = total - idle - sched` and
-`system = busy - user`, after checking the raw identities. That makes the
-text identities exact despite integer rounding. The shared monitor parses
+Read a coherent core tuple. Convert `user`, `system`, `idle`, and `sched` to
+microseconds; derive printed `busy = user + system` and
+`total = busy + idle + sched`, after checking the raw identities. That makes
+all cumulative text counters monotonic and the identities exact despite
+integer rounding. The shared monitor parses
 the new core fields, and `top` shows a machine `us/sy/id/sched` summary whose
 four shares use the sum of sampled core intervals as their denominator.
 Existing total CPU% remains based on the same core ledger. A failed identity
@@ -289,7 +293,7 @@ in this slice.
    before touching either. Measure a pre-change overhead baseline.
 2. **Kernel split.** Centralize cycle charging; add thread user/system/idle
    counters and core user/system counters. Convert `scheduler_do()`,
-   `acct_settle_local()`, and halt redirection to the common routine with a
+   the settle ISR, and halt redirection to the common routine with a
    scheduler span marker and short publication sequences. Stamp the three
    audited assembly doors. Preserve `runCycles` and the existing core keys.
    Re-read the comments at each changed site, especially `scheduler_do`'s

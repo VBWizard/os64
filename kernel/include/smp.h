@@ -94,14 +94,16 @@ typedef struct
 	// syscall_user_rsp above genuinely is per-core — stored and consumed
 	// nanoseconds apart under SFMASK's IF=0, before anything can park.)
 
-	// acct = CPU-time accounting (scheduler_do's switch-boundary charging).
-	// All three are written ONLY by this core, inside its own scheduler
-	// pass; /sys/cpu/<n>/time reads them cross-core, which is safe for the values
-	// (worst case one slice stale) as long as no reader ever SUBTRACTS a
-	// remote TSC reading from a local one.
+	// acct = CPU-time accounting. The owning core commits each span with
+	// same-core TSC subtraction. Readers use acctSequence to copy a complete
+	// tuple; a remote reader never subtracts its own TSC from these stamps.
+	uint64_t acctSequence;
 	uint64_t acctZeroTSC;          // this core's meter epoch (first pass)
-	uint64_t acctLastDispatchTSC;  // when the current thread got the core
+	uint64_t acctLastDispatchTSC;  // start of the uncommitted open span
 	uint64_t acctSchedCycles;      // cycles spent inside scheduler passes
+	uint64_t acctUserCycles;       // ring-3 time committed on this core
+	uint64_t acctSystemCycles;     // thread-attributed ring-0 time on this core
+	bool acctSchedSpanActive;      // open span belongs to acctSchedCycles
 
 	// acctCurrentHalted: the CURRENT thread is parked in an sti;hlt of its
 	// own making (the compositor's idle idiom — the one thread that idles

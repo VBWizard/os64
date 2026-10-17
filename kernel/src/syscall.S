@@ -6,6 +6,7 @@
 .intel_syntax noprefix
 
 .extern _syscall_dispatch
+.extern accounting_charge
 
 # ── os64 SYSCALL entry ────────────────────────────────────────────────────────
 #
@@ -40,6 +41,32 @@ syscall_Enter:
     # on every context switch, and is 16-byte aligned (stack top - 48).
     mov gs:[CLS_SYSCALL_USER_RSP_OFFSET], rsp
     mov rsp, gs:[CLS_KERNEL_RSP0_OFFSET]
+
+    # Close ring-3 time after reaching the trusted stack. RAX and RDX carry
+    # the syscall number and a1; all caller-saved argument/return registers
+    # must survive the C charge helper. No user-stack access occurs here.
+    push rax
+    push rcx
+    push rdx
+    push rdi
+    push rsi
+    push r8
+    push r9
+    push r10
+    push r11
+    sub rsp, 8
+    mov rdi, 3
+    call accounting_charge
+    add rsp, 8
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rsi
+    pop rdi
+    pop rdx
+    pop rcx
+    pop rax
 
     # Preserve the callee-saved registers (they hold live user values; the C
     # dispatcher is free to use them and will restore its own uses, but WE use
@@ -90,6 +117,17 @@ syscall_Enter:
     mov rdi, rax                                # syscall number
     call _syscall_dispatch
     add rsp, 8                                  # drop the stacked a5
+
+    # Close the kernel part before restoring the SYSRET frame. RDX is saved
+    # alongside the result: the future value:status ABI uses both registers.
+    push rax
+    push rdx
+    sub rsp, 8
+    xor edi, edi
+    call accounting_charge
+    add rsp, 8
+    pop rdx
+    pop rax
 
     # Result stays in RAX all the way back to the user.
     # Rebuild the SYSRET context from the saved frame.  RSI is used to carry

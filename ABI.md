@@ -54,6 +54,9 @@ RAX = result
    else runs on this core between stash and reload.
 2. The kernel stack comes from `CLS.kernel_rsp0`, kept in sync with the
    running thread by `tss_set_rsp0()` at every context switch.
+   CPU accounting closes the ring-3 span only after this trusted stack is
+   installed. The entry helper preserves the syscall number and arguments;
+   the return helper preserves RAX and RDX before `sysretq`.
 3. `sysretq` reloads CS/SS from STAR[63:48] and RFLAGS from R11 — the
    user's IF comes back on. (History: an earlier `retfq`-based return left
    ring 3 running with interrupts off. If you ever see an unpreemptible

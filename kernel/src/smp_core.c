@@ -21,6 +21,7 @@
 #include "gdt.h"
 #include "tss.h"
 #include "thread.h"
+#include "accounting.h"
 #include "idt.h"
 #include "panic.h"
 #include "fpu.h"
@@ -776,29 +777,6 @@ volatile bool mp_acctSettleAck[MAX_CPUS];
 extern volatile uint64_t kTicksSinceStart;
 
 
-// The core-local settle: charge the running thread up to "now", restamp.
-// Called from the IPI handler (interrupts off) and inline for the local
-// core (under cli) — in both cases it cannot interleave with this core's
-// own scheduler pass, which is the only other writer of these fields.
-static void acct_settle_local(void)
-{
-    core_local_storage_t *cls = get_core_local_storage();
-    if (cls == NULL)
-        return;
-    uint64_t now = rdtsc();
-    if (cls->acctLastDispatchTSC != 0 &&
-        cls->currentThread != NULL && cls->currentThread != NO_THREAD)
-    {
-        // A halted "current" thread is idle wearing a task's name — its
-        // span belongs to this core's idle thread (smp.h acctCurrentHalted).
-        thread_t *target = (cls->acctCurrentHalted && cls->acctIdleThread != NULL)
-                               ? cls->acctIdleThread
-                               : cls->currentThread;
-        target->runCycles += now - cls->acctLastDispatchTSC;
-        cls->acctLastDispatchTSC = now;
-    }
-}
-
 // The compositor's hlt-wait bookends (smp.h has the field doctrine).
 //
 // Begin: called UNDER CLI, immediately before sti;hlt — settle first, so
@@ -813,37 +791,23 @@ static void acct_settle_local(void)
 // the flag. Idempotent when already down.
 void mpAcctHaltBegin(void)
 {
-    acct_settle_local();
-    core_local_storage_t *cls = get_core_local_storage();
-    if (cls != NULL)
-        cls->acctCurrentHalted = true;
+    accounting_halt_begin();
 }
 
 void mpAcctHaltEnd(void)
 {
-    __asm__ volatile("cli" ::: "memory");
-    acct_settle_local();
-    core_local_storage_t *cls = get_core_local_storage();
-    if (cls != NULL)
-        cls->acctCurrentHalted = false;
-    __asm__ volatile("sti" ::: "memory");
+    accounting_halt_end();
 }
 
-void acct_settle_ISR(void)
+void acct_settle_ISR(uint64_t interrupted_cs)
 {
     core_local_storage_t *cls = get_core_local_storage();
-    // The pass owns the meter while it runs. scheduler_do charges the
-    // outgoing thread at pass ENTRY but doesn't move acctLastDispatchTSC
-    // until pass EXIT — and the pass runs with interrupts enabled, so this
-    // IPI can land in between. Settling in that window re-charges the whole
-    // [lastDispatch → now] span on top of the entry charge: on a monopolized
-    // core that goes seconds between passes, that's seconds double-billed
-    // (top -d 5000 showed hogs >100% exactly this way, P5 2026-07-30). One
-    // settle of staleness beats double-charging — skip, ack, let the pass
-    // close its own books. (The header's "cannot interleave with this core's
-    // own scheduler pass" claim was simply wrong; this makes it true.)
-    if (cls != NULL && !mp_inScheduler[cls->apic_id])
-        acct_settle_local();
+    // The scheduler owns its open span between its entry and exit charges.
+    // Its short prologue/epilogue windows still belong to the pass itself:
+    // do not settle there, where the saved interrupted CS may name a
+    // different thread. An active pass can settle into acctSchedCycles.
+    if (cls != NULL && (!mp_inScheduler[cls->apic_id] || cls->acctSchedSpanActive))
+        accounting_charge(interrupted_cs);
     if (cls != NULL)
         mp_acctSettleAck[cls->apic_id] = true;
     write_eoi();
@@ -916,11 +880,14 @@ void mpAcctSettleAll(void)
         return;
     lastSettleTick = kTicksSinceStart;
 
-    // Local core first, atomically vs our own interrupts.
+    // Local core first. The charge routine masks interrupts around its
+    // tuple update; the same scheduler-phase rule applies here and in the
+    // remote IPI handler.
     uint64_t flags;
-    __asm__ volatile("pushfq\n\tpop %0\n\tcli" : "=r"(flags) :: "memory");
-    acct_settle_local();
-    __asm__ volatile("push %0\n\tpopfq" :: "r"(flags) : "memory", "cc");
+    __asm__ volatile("pushfq\n\tpop %0" : "=r"(flags) :: "memory");
+    core_local_storage_t *local = get_core_local_storage();
+    if (local != NULL && (!mp_inScheduler[local->apic_id] || local->acctSchedSpanActive))
+        accounting_charge(0);
 
     if (!kSMPInitDone)
         return;

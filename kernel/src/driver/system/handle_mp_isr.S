@@ -29,6 +29,9 @@ vector130:
 	push r14
 	push r15
 	pushf
+	# Sixteen saved qwords precede the CPU frame: pass its interrupted CS so
+	# a settle that caught ring 3 closes a user span, not an ISR span.
+	mov rdi, [rsp + 136]
 	call acct_settle_ISR
 	popf
 	pop r15

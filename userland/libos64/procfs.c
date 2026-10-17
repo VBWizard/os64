@@ -57,7 +57,18 @@ char os64_proc_state_letter(os64_proc_state_t state)
     return state <= OS64_PROC_ZOMBIE ? letters[state] : '?';
 }
 
-static int read_task_status(uint64_t pid, os64_proc_info_t *info)
+static void finish_split(os64_proc_cpu_split_t *split, unsigned fields,
+                         uint64_t runtime)
+{
+    if (!split) return;
+    split->idle = (fields & 4u) != 0;
+    split->valid = (fields & 3u) == 3u &&
+        split->user_us <= runtime && split->idle_us <= runtime - split->user_us &&
+        split->system_us == runtime - split->user_us - split->idle_us;
+}
+
+static int read_task_status(uint64_t pid, os64_proc_info_t *info,
+                            os64_proc_cpu_split_t *split)
 {
     char path[PROC_PATH_MAX];
     char line[PROC_LINE_MAX];
@@ -68,6 +79,7 @@ static int read_task_status(uint64_t pid, os64_proc_info_t *info)
 
     info->pid = pid;
     int64_t result;
+    unsigned split_fields = 0;
     while ((result = os64_readline(h, line, sizeof(line))) == 1)
     {
         char *value = split_value(line);
@@ -84,6 +96,18 @@ static int read_task_status(uint64_t pid, os64_proc_info_t *info)
         else if (os64_streq(line, "threads")) info->threads = (uint32_t)os64_atou(value);
         else if (os64_streq(line, "core")) info->core = (uint32_t)os64_atou(value);
         else if (os64_streq(line, "runtime_us")) info->runtime_us = os64_atou(value);
+        else if (split && os64_streq(line, "user_us")) {
+            if (split_fields & 1u || !os64_parse_u64(value, &split->user_us)) split_fields |= 8u;
+            split_fields |= 1u;
+        }
+        else if (split && os64_streq(line, "system_us")) {
+            if (split_fields & 2u || !os64_parse_u64(value, &split->system_us)) split_fields |= 8u;
+            split_fields |= 2u;
+        }
+        else if (split && os64_streq(line, "idle_us")) {
+            if (split_fields & 4u || !os64_parse_u64(value, &split->idle_us)) split_fields |= 8u;
+            split_fields |= 4u;
+        }
         else if (os64_streq(line, "switches")) info->switches = os64_atou(value);
         else if (os64_streq(line, "faults"))
         {
@@ -95,6 +119,7 @@ static int read_task_status(uint64_t pid, os64_proc_info_t *info)
         }
     }
     os64_close(h);
+    if (!(split_fields & 8u)) finish_split(split, split_fields, info->runtime_us);
     return result < 0 ? -1 : 0;
 }
 
@@ -137,8 +162,15 @@ static uint64_t get_heap_value(uint64_t pid)
 
 int32_t os64_proc_read(uint64_t pid, os64_proc_info_t *out)
 {
+    return os64_proc_read_split(pid, out, NULL);
+}
+
+int32_t os64_proc_read_split(uint64_t pid, os64_proc_info_t *out,
+                             os64_proc_cpu_split_t *split)
+{
     os64_memset(out, 0, sizeof(*out));
-    if (read_task_status(pid, out) < 0)
+    if (split) os64_memset(split, 0, sizeof(*split));
+    if (read_task_status(pid, out, split) < 0)
         return -1;
     read_command(pid, out);
     out->heap = get_heap_value(pid);
@@ -192,12 +224,14 @@ int32_t os64_proc_snapshot(os64_proc_info_t *out, size_t capacity)
     return (int32_t)count;
 }
 
-static int read_thread_status(const char *path, os64_thread_info_t *info)
+static int read_thread_status(const char *path, os64_thread_info_t *info,
+                              os64_proc_cpu_split_t *split)
 {
     char line[PROC_LINE_MAX];
     int32_t h = (int32_t)os64_open(path, NULL);
     if (h < 0) return -1;
     int64_t result;
+    unsigned split_fields = 0;
     while ((result = os64_readline(h, line, sizeof(line))) == 1)
     {
         char *value = split_value(line);
@@ -207,19 +241,40 @@ static int read_thread_status(const char *path, os64_thread_info_t *info)
         else if (os64_streq(line, "state")) info->state = parse_state(value);
         else if (os64_streq(line, "core")) info->core = (uint32_t)os64_atou(value);
         else if (os64_streq(line, "runtime_us")) info->runtime_us = os64_atou(value);
+        else if (split && os64_streq(line, "user_us")) {
+            if (split_fields & 1u || !os64_parse_u64(value, &split->user_us)) split_fields |= 8u;
+            split_fields |= 1u;
+        }
+        else if (split && os64_streq(line, "system_us")) {
+            if (split_fields & 2u || !os64_parse_u64(value, &split->system_us)) split_fields |= 8u;
+            split_fields |= 2u;
+        }
+        else if (split && os64_streq(line, "idle_us")) {
+            if (split_fields & 4u || !os64_parse_u64(value, &split->idle_us)) split_fields |= 8u;
+            split_fields |= 4u;
+        }
         else if (os64_streq(line, "affinity")) os64_strcopy(info->affinity, sizeof(info->affinity), value);
     }
     os64_close(h);
+    if (!(split_fields & 8u)) finish_split(split, split_fields, info->runtime_us);
     return result < 0 ? -1 : 0;
 }
 
 int32_t os64_proc_read_thread(uint64_t pid, uint64_t tid,
                               os64_thread_info_t *out)
 {
+    return os64_proc_read_thread_split(pid, tid, out, NULL);
+}
+
+int32_t os64_proc_read_thread_split(uint64_t pid, uint64_t tid,
+                                    os64_thread_info_t *out,
+                                    os64_proc_cpu_split_t *split)
+{
     char path[PROC_PATH_MAX];
     os64_snprintf(path, sizeof(path), "/proc/%lu/thread/%lu/status", pid, tid);
     os64_memset(out, 0, sizeof(*out));
-    return read_thread_status(path, out);
+    if (split) os64_memset(split, 0, sizeof(*split));
+    return read_thread_status(path, out, split);
 }
 
 int32_t os64_proc_threads(uint64_t pid, os64_thread_info_t *out, size_t capacity)
@@ -236,7 +291,7 @@ int32_t os64_proc_threads(uint64_t pid, os64_thread_info_t *out, size_t capacity
         char path[PROC_PATH_MAX];
         os64_snprintf(path, sizeof(path), "/proc/%lu/thread/%s/status", pid, entry.name);
         os64_memset(&out[count], 0, sizeof(out[count]));
-        if (read_thread_status(path, &out[count]) == 0) count++;
+        if (read_thread_status(path, &out[count], NULL) == 0) count++;
     }
     os64_close(directory);
     return (int32_t)count;

@@ -158,16 +158,17 @@ typedef struct s_thread
 	// varies with core count and backstop activity; a threshold in it would
 	// mean a different real duration on every machine).
 	uint64_t runnableSinceTick;
-	// CPU time actually spent running, in TSC cycles — charged at context-
-	// switch boundaries by scheduler_do (NOT tick-sampled: a thread that
-	// runs 2ms slices between ticks is invisible to sampling but not to
-	// this). Written only by the core the thread runs on, using that core's
-	// own TSC for both endpoints of every delta — cross-core TSC math is
-	// the desync landmine and this field never commits it. Converted to
-	// microseconds at /proc read time (kCPUCyclesPerSecond); raw cycles
-	// never leave the kernel. Idle threads accumulate here like everyone
-	// else — that is what makes "idle %" a measurement, not an assumption.
+	// Committed CPU time, split at privilege and scheduler boundaries rather
+	// than sampled at ticks. A charge adds one same-core TSC delta to this
+	// total and to exactly one of the three buckets below. The sequence lets
+	// a remote /proc reader copy the tuple without seeing a half-written
+	// charge. Idle occupancy belongs to the idle bucket, including a
+	// compositor hlt redirected to this core's idle thread.
+	uint64_t acctSequence;
 	uint64_t runCycles;
+	uint64_t userCycles;
+	uint64_t systemCycles;
+	uint64_t idleCycles;
 	// Next handle index for task-window wait fairness; used by this thread.
 	uint32_t gui_wait_cursor;
 } thread_t;
