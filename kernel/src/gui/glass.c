@@ -95,13 +95,13 @@ glass_view_t *glass_view_open(bool writable)
 	v->writable = writable;
 	v->kbd.name = "glass";
 	v->kbd.debug = DEBUG_GUI;
-	uint64_t flags = spinlock_acquire_irqsave(&kGuiLock);
+	uint64_t flags = gui_lock(GUI_LOCK_GLASS);
 	v->pending[0] = screen_rect(bb);
 	v->count = 1;
 	v->owned_reported = gui_owns_glass();
 	v->next = s_views;
 	s_views = v;
-	spinlock_release_irqrestore(&kGuiLock, flags);
+	gui_unlock(flags);
 	return v;
 }
 
@@ -115,14 +115,14 @@ void glass_view_release(glass_view_t *v)
 	if (__sync_sub_and_fetch(&v->refs, 1) != 0)
 		return;
 	// The last reference: nothing can reach this view but the list.
-	uint64_t flags = spinlock_acquire_irqsave(&kGuiLock);
+	uint64_t flags = gui_lock(GUI_LOCK_GLASS);
 	for (glass_view_t **p = &s_views; *p != NULL; p = &(*p)->next)
 		if (*p == v)
 		{
 			*p = v->next;
 			break;
 		}
-	spinlock_release_irqrestore(&kGuiLock, flags);
+	gui_unlock(flags);
 	kfree(v);
 }
 
@@ -143,14 +143,14 @@ void glass_view_close(glass_view_t *v)
 	}
 	spinlock_release_irqrestore(&v->input_lock, iflags);
 
-	uint64_t flags = spinlock_acquire_irqsave(&kGuiLock);
+	uint64_t flags = gui_lock(GUI_LOCK_GLASS);
 	v->closed = true;
 	// The slot is the waiter's to clear (gui_client.c's event wait has the
 	// reason); this only makes sure it wakes to see `closed` — owed, if it
 	// is still on its way to the park.
 	if (v->waiter != NULL)
 		scheduler_wake_or_owe(v->waiter);
-	spinlock_release_irqrestore(&kGuiLock, flags);
+	gui_unlock(flags);
 	glass_view_release(v);
 }
 
@@ -164,7 +164,7 @@ long glass_view_read(glass_view_t *v, void *out, size_t cap, uint64_t deadline)
 
 	for (;;)
 	{
-		uint64_t flags = spinlock_acquire_irqsave(&kGuiLock);
+		uint64_t flags = gui_lock(GUI_LOCK_GLASS);
 		// Awake at the top: a registration left by the park we came out of
 		// is void (the signals doctrine, CLAUDE.md), and so is a wake owed
 		// for it — what it announced is pending, and the take below finds it
@@ -174,12 +174,12 @@ long glass_view_read(glass_view_t *v, void *out, size_t cap, uint64_t deadline)
 		scheduler_forget_owed_wake(self);
 		if (v->closed)
 		{
-			spinlock_release_irqrestore(&kGuiLock, flags);
+			gui_unlock(flags);
 			return GLASS_ERR_CLOSED;
 		}
 		if (signal_park_must_end(self))
 		{
-			spinlock_release_irqrestore(&kGuiLock, flags);
+			gui_unlock(flags);
 			return GLASS_ERR_INTERRUPTED;
 		}
 
@@ -199,7 +199,7 @@ long glass_view_read(glass_view_t *v, void *out, size_t cap, uint64_t deadline)
 			size_t row = (size_t)r.w * sizeof(uint32_t);
 			if (cap < sizeof(os64_glass_rect_t) + row)
 			{
-				spinlock_release_irqrestore(&kGuiLock, flags);
+				gui_unlock(flags);
 				return GLASS_ERR_SMALL;
 			}
 			// A band of whole rows from the top; the rest stays first in line.
@@ -216,7 +216,7 @@ long glass_view_read(glass_view_t *v, void *out, size_t cap, uint64_t deadline)
 				v->pending[0].y += (int32_t)rows;
 				v->pending[0].h -= (int32_t)rows;
 			}
-			spinlock_release_irqrestore(&kGuiLock, flags);
+			gui_unlock(flags);
 
 			// Copy outside the lock. A frame composited meanwhile may tear
 			// these pixels, and its damage — recorded after our take — brings
@@ -237,13 +237,13 @@ long glass_view_read(glass_view_t *v, void *out, size_t cap, uint64_t deadline)
 
 		if (deadline != 0 && kTicksSinceStart >= deadline)
 		{
-			spinlock_release_irqrestore(&kGuiLock, flags);
+			gui_unlock(flags);
 			return GLASS_ERR_TIMEOUT;
 		}
 		// Empty-handed: register in the same hold as the failed take, so a
 		// frame either landed before it (taken above) or will see us.
 		v->waiter = self;
-		spinlock_release_irqrestore(&kGuiLock, flags);
+		gui_unlock(flags);
 		uint64_t wake = kTicksSinceStart + GLASS_BACKSTOP_TICKS;
 		if (deadline != 0 && deadline < wake)
 			wake = deadline;
@@ -272,10 +272,10 @@ void glass_damage_locked(const rect_t *rects, uint32_t count)
 uint32_t glass_view_count(void)
 {
 	uint32_t n = 0;
-	uint64_t flags = spinlock_acquire_irqsave(&kGuiLock);
+	uint64_t flags = gui_lock(GUI_LOCK_GLASS);
 	for (glass_view_t *v = s_views; v != NULL; v = v->next)
 		n++;
-	spinlock_release_irqrestore(&kGuiLock, flags);
+	gui_unlock(flags);
 	return n;
 }
 
@@ -359,7 +359,7 @@ void glass_input_tick(void)
 	static uint32_t s_rotation;
 	glass_view_t *due[GLASS_TICK_MAX];
 	uint32_t n = 0, eligible = 0;
-	uint64_t flags = spinlock_acquire_irqsave(&kGuiLock);
+	uint64_t flags = gui_lock(GUI_LOCK_GLASS);
 	for (glass_view_t *v = s_views; v != NULL; v = v->next)
 		if (glass_tick_due(v))
 			eligible++;
@@ -380,7 +380,7 @@ void glass_input_tick(void)
 		}
 	}
 	s_rotation = start + n;
-	spinlock_release_irqrestore(&kGuiLock, flags);
+	gui_unlock(flags);
 
 	for (uint32_t i = 0; i < n; i++)
 	{

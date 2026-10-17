@@ -34,10 +34,10 @@ void decorations_discard(decoration_pending_t *p)
 int decorations_status(char *out, size_t capacity)
 {
     if (!out || capacity<OS64_DECOR_STATUS_MAX) return -1;
-    uint64_t flags=spinlock_acquire_irqsave(&kGuiLock);
+    uint64_t flags=gui_lock(GUI_LOCK_OTHER);
     os64_decor_status_t status={s_generation,s_fingerprint,s_bytes};
     int length=(int)os64_decor_status_write(out,&status);
-    spinlock_release_irqrestore(&kGuiLock,flags);
+    gui_unlock(flags);
     return length;
 }
 
@@ -75,12 +75,12 @@ int decorations_write(decoration_pending_t *p, const void *bytes, size_t length)
                  * identifier with the assets so readers see one generation. */
                 uint64_t fingerprint=os64_decor_fingerprint(p->bytes,p->length);
                 void *retired=NULL;
-                uint64_t gui_flags=spinlock_acquire_irqsave(&kGuiLock);
+                uint64_t gui_flags=gui_lock(GUI_LOCK_OTHER);
                 if (s_generation==p->expected && s_generation!=UINT64_MAX && wm_set_decoration(&view,&retired)) {
                     ++s_generation;s_fingerprint=fingerprint;s_bytes=(uint32_t)p->length;
                     p->bytes=NULL;p->length=p->used=0;result=(int)length;
                 }
-                spinlock_release_irqrestore(&kGuiLock,gui_flags);
+                gui_unlock(gui_flags);
                 kfree(retired);
             }
         }
