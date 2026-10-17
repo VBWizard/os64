@@ -287,7 +287,10 @@ was shown, or since its record was last written on asking:
   **`shadows`** (their masks built and blurred, or copied out of the paint
   cache), **`gradients`** (computed pixel by pixel, or copied out of it),
   **`warps`** (turned boxes drawn through their matrix);
-  `the view's rest` is the view outside those. **`publish`** hands the
+  `the view's rest` is the view outside those. **`laid`** is inside
+  `shadows` and `gradients`: the part of them spent laying their pixels on
+  the glass, the rest of each being working them out or copying them out
+  of the cache. **`publish`** hands the
   damage to the compositor. **`ticks`** are per tick, not per paint: a
   tick's work finding what moved and marking it, before its paint.
   **`schedule`** is per call (handing the ticker its next deadline),

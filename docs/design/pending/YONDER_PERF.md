@@ -69,7 +69,8 @@ the area they painted; and for each paint the time spent in its stages —
 the whole render (libui's walk, the root panel and the chrome included),
 the view, and within the view the canvas (the page's background), the
 pictures, the text, opacity groups, shadows' masks, gradients and turned
-boxes; and publishing the damage to the compositor. Per stage: the total,
+boxes, and inside the shadows and gradients the part spent laying their
+pixels on the glass; and publishing the damage to the compositor. Per stage: the total,
 the most one paint took, and how many paints were whole views. The ticks
 too: how many, and the time spent finding what they mark. And the rest of
 what the main loop does between paints: the layouts and the script tasks
@@ -299,8 +300,9 @@ scripts on, the view 828 px wide, the same build with and without the
 cache (only `/bin/yonder` differs), 47 s each after the page settled:
 without it, 290 paints, every one a whole view, 130.4 ms each, gradients
 64.1 of them; with it, 608 paints (384 whole views), 59.5 ms each,
-gradients 16.3 — what is left is laying the copied pixels on the glass,
-which the cache does not change. The cache held 6 bands, 315 KiB, and
+gradients 16.3 — taken then for laying the copied pixels on the glass,
+which the cache does not change; perf-3's instrument found it was mostly
+the copying (below). The cache held 6 bands, 315 KiB, and
 found 1824 bands without making one. The main loop stayed busy (98-99%):
 it spends what it saved on painting twice as often, so the next reading
 to ask for is the P5's.
@@ -322,6 +324,45 @@ each band just before the same paint wanted it. Blocks keep the view's
 share; the last two paints' entries are not evicted; and a picture whose
 blocks do not fit takes none of the budget (Codex, #284 round 1, found
 that last from the code).
+
+**perf-3: drawing out of the cache.** What the cache leaves is not
+laying the pixels on the glass, as the first reading above supposed. The
+instrument now times that part on its own (`laid`: the mask and pixels
+verbs, inside `shadows` and `gradients`), and at Scratch 2000 in QEMU,
+every block found, a whole-view paint's gradients took 460.7 ms, of which
+27.0 were laid. The rest is working the picture out of the cache, and
+the copy was a pixel at a time: each pixel looked its block and its place
+up in the maps and tested its middle against the tile's edges in floating
+point. That is not all of it (the readings below): most of a cached
+gradient's time in QEMU is still to be accounted for.
+
+So a row is copied in runs (`blocks_run`): from a column, the columns
+that read one block's row in order — up to where the block ends, which is
+also where a repeating tile wraps — are one copy, and a run off a tile
+that does not repeat is cleared. The tile is placed at whole pixels, so
+the test of a pixel's middle that the uncached path makes is the maps'
+"off the picture", and the copy makes no other. A rounded box's row is
+cut only where its edges cross a pixel (`row_cut`): a pixel the span
+covers wholly keeps its alpha, which is what the cut would give it. A
+shadow's mask is laid the same way, its values times the colour's alpha
+a run at a time. The pixels are perf-2's: the oracle paints every page
+with the cache and without it.
+
+The copy found what the per-pixel lookup had hidden: libos64's
+`os64_memcpy` and `os64_memset` were byte loops, four passes for every
+pixel copied. They copy by size now (#285), and the runs use them.
+
+*The readings.* In QEMU, at Scratch 2000 with every block found, gradients
+went from 460.7 ms a paint to 391.8 and laying stayed near 26; QEMU emulates
+`rep movsb`, which #285 uses from 2 KiB, so its numbers for copies no longer
+rank anything. The P5's (Chris, record 0114, 1920x1080, the middle, against
+0107 at the same place on perf-2): 21 paints a second as before, each 29.5
+ms instead of 38.2 — gradients 12.3 instead of 19.4, shadows 4.8 instead of
+7.5, 4.1 of the two laid — and the main loop 88% busy instead of 93-95%.
+At the top of the page the paint is 7.2 ms and handing it to the
+compositor (`publish`) 8.9, up to 52, about 33 times a second, half of
+them whole views: a full-screen window costs more there to publish than
+to paint.
 
 **Then measure again**, and decide whether these are still worth their
 complexity:
@@ -345,6 +386,10 @@ complexity:
   picture's exact time kept so its cadence does not drift by the
   rounding; what it costs in jitter and what it saves in paints is for a
   reading to say.
+- **Publishing.** At the top of danlegt, full screen on the P5, handing a
+  paint to the compositor costs more than the paint (record 0114), and a
+  window cut to the roaches' height is smooth. What it copies, and whether
+  that is more than the damage, is for a reading to say first.
 - What the instrument says next: scaled frames kept, warps.
 
 Also owed to this slice (PILE3.md): the paused-animation test, "throttle,
