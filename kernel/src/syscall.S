@@ -6,7 +6,8 @@
 .intel_syntax noprefix
 
 .extern _syscall_dispatch
-.extern accounting_charge
+.extern accounting_syscall_enter
+.extern accounting_syscall_exit
 
 # ── os64 SYSCALL entry ────────────────────────────────────────────────────────
 #
@@ -42,9 +43,9 @@ syscall_Enter:
     mov gs:[CLS_SYSCALL_USER_RSP_OFFSET], rsp
     mov rsp, gs:[CLS_KERNEL_RSP0_OFFSET]
 
-    # Close ring-3 time after reaching the trusted stack. RAX and RDX carry
-    # the syscall number and a1; all caller-saved argument/return registers
-    # must survive the C charge helper. No user-stack access occurs here.
+    # Close ring-3 time and open this syscall's row after reaching the
+    # trusted stack. All caller-saved argument/return registers survive
+    # the C helper. No user-stack access occurs here.
     push rax
     push rcx
     push rdx
@@ -55,8 +56,8 @@ syscall_Enter:
     push r10
     push r11
     sub rsp, 8
-    mov rdi, 3
-    call accounting_charge
+    mov rdi, rax
+    call accounting_syscall_enter
     add rsp, 8
     pop r11
     pop r10
@@ -118,13 +119,12 @@ syscall_Enter:
     call _syscall_dispatch
     add rsp, 8                                  # drop the stacked a5
 
-    # Close the kernel part before restoring the SYSRET frame. RDX is saved
-    # alongside the result: the future value:status ABI uses both registers.
+    # Close this syscall's kernel span before restoring the SYSRET frame.
+    # RDX is saved alongside the result for the future value:status ABI.
     push rax
     push rdx
     sub rsp, 8
-    xor edi, edi
-    call accounting_charge
+    call accounting_syscall_exit
     add rsp, 8
     pop rdx
     pop rax

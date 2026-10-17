@@ -40,6 +40,7 @@ table, it gets its own mount with its own name, and this file stays untouched.
 /proc/                      one entry per live task, named by decimal taskID
 /proc/<id>/                 a task
 /proc/<id>/status           state, parent, timing, fault counts
+/proc/<id>/syscalls         per-syscall calls and CPU time, summed over threads
 /proc/<id>/cmdline          argv, one argument per line
 /proc/<id>/cwd              the task's current directory
 /proc/<id>/handles          the handle table, one row per open handle
@@ -53,6 +54,7 @@ table, it gets its own mount with its own name, and this file stays untouched.
 /proc/<id>/ctl              WRITE: control. READ: the accepted vocabulary.
 /proc/<id>/thread/          one entry per thread of this task
 /proc/<id>/thread/<tid>/status
+/proc/<id>/thread/<tid>/syscalls
 ```
 
 **Threads are first-class** (Chris's call). Linux fudged this — threads hide
@@ -118,9 +120,10 @@ boundary-charging. (v1 honesty: ISR time rides on the interrupted thread.)
 
 Ratified: **text**, in the Plan 9 tradition rather than the Solaris one. The
 argument is not aesthetics, it is that `cat` and `ls` already exist and this
-costs userland nothing to consume. `key<TAB>value`, one per line — trivially
-splittable by a five-line parser, and the console renderer already honors
-`\t` so it reads as a table on the glass.
+costs userland nothing to consume. Keyed reports use `key<TAB>value`, one per
+line — trivially splittable by a five-line parser, and the console renderer
+already honors `\t` so it reads as a table on the glass. The `syscalls`
+reports use `number name calls us` rows and omit zero rows.
 
 The deliberate cost: **no ABI is frozen here.** These files are a human- and
 tool-readable *report*, not a struct. Fields may be added; a consumer parses

@@ -12,6 +12,11 @@
 #define MAX_THREADS (1024 * 1024 - 1)
 #define RESERVED_THREADS 32
 
+// Syscalls 0..127 have individual accounting rows; higher numbers, including
+// rejected ones, share row 128 so a new ABI number remains visible.
+#define ACCOUNTING_SYSCALL_OVERFLOW 128
+#define ACCOUNTING_SYSCALL_ROWS 129
+
 #define THREAD_USER_STACK_VIRTUAL_START 0x1000
 #define THREAD_USER_STACK_SIZE  0x100000	//1MB user stack
 #define THREAD_USER_STACK_INITIAL_VIRT_ADDRESS THREAD_USER_STACK_VIRTUAL_START + THREAD_USER_STACK_SIZE - 8
@@ -176,6 +181,14 @@ typedef struct s_thread
 	// entry and return are stamped too.
 	uint32_t acctFaultDepth;
 	uint64_t faultCycles;
+	uint16_t acctSyscallNumber;
+	bool acctInSyscall;
+	// A running syscall keeps its row across a scheduler block and migration.
+	// Fault time is excluded; IRQ time can remain inside until IRQ boundaries
+	// are stamped. The total is copied with systemCycles for a raw remainder.
+	uint64_t syscallCyclesTotal;
+	uint64_t acctSyscallCalls[ACCOUNTING_SYSCALL_ROWS];
+	uint64_t acctSyscallCycles[ACCOUNTING_SYSCALL_ROWS];
 	// Resolved page faults belong to the faulting thread. A major fault
 	// needed a file read; anonZeroPages counts demand-zero pages allocated
 	// while resolving faults, including a discarded twin resolution.
