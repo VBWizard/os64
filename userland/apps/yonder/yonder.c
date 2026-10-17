@@ -141,6 +141,9 @@ static bool s_animations = true;
 // A GIF frame that asks for 10 ms or less is shown for this long, as every
 // browser shows the ones that ask for "as fast as you can".
 #define FRAME_FLOOR_MS 100
+// A frame shown this much after it was due is counted late (the paint
+// counts): well past the clock's own step, which is a tick's lateness.
+#define FRAME_LATE_MS 30
 
 // ── The page's fonts ────────────────────────────────────────────────────
 //
@@ -841,7 +844,9 @@ static void page_show(Page *p, flow_tree_t *tree)
 // before layout work on its old Page so stale meaning cannot get new geometry.
 // A staged Page borrows the shown one's timeline, so its tree keeps the
 // animations it built until script_rebuild publishes it.
-static bool page_lay_out(Page *p, int32_t width, int32_t height, uint32_t zoom, Page *reclaim)
+static bool page_lay_out(Page *p, int32_t width, int32_t height, uint32_t zoom, Page *reclaim);
+
+static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zoom, Page *reclaim)
 {
     if (page_rebuild_owed(p))
         return false;
@@ -1500,19 +1505,24 @@ static yonder_diag_t *diag_begin(const char *url)
     return yonder_diag_new(url, s_diag.next++, os64_micros());
 }
 
-// The record as it stands, written when yonder.conf asks for files. A
-// failure is said once a run, in the log and on the status line.
-static void diag_write(const yonder_diag_t *d)
+// The record as it stands, written when yonder.conf asks for files; true
+// when the file was written. A failure is said once a run, in the log and
+// on the status line.
+static bool diag_write(const yonder_diag_t *d)
 {
-    if (d == NULL || s_diag.dir[0] == '\0' || yonder_diag_write(d, s_diag.dir) == 0 ||
-        s_diag.write_said)
-        return;
+    if (d == NULL || s_diag.dir[0] == '\0')
+        return false;
+    if (yonder_diag_write(d, s_diag.dir) == 0)
+        return true;
+    if (s_diag.write_said)
+        return false;
     s_diag.write_said = true;
     char line[OS64_PATH_MAX + 96];
     os64_snprintf(line, sizeof(line), "A page file could not be written in %s; the rest are tried.",
                   s_diag.dir);
     os64_debug_log(line);
     status_rest(line);
+    return false;
 }
 
 // The badge follows the shown page's counts; its width moves the status
@@ -1617,8 +1627,155 @@ static void diag_cascade(yonder_diag_t *d, const garb_cascade_t *c)
         yonder_diag_missing_seen(d, kinds[skips[i].kind], skips[i].name, skips[i].count);
 }
 
+// ── What paints cost (YONDER_PERF.md § Measure first) ───────────────────
+
+// The stages of a paint, and the work beside paints. RENDER is libui's
+// whole walk — the root panel and the chrome as well as the view — and
+// VIEW the page's part of it; the rest are inside VIEW but for PUBLISH,
+// handing the damage to the compositor. TICKS is a tick's work before its
+// paint, SCHEDULE handing the ticker its next deadline (pictures_schedule),
+// counted a call — a tick's own schedule is in its time as well as here —
+// TASKS every script task the loop runs, the shown page's or an arriving
+// one's — a script, a timer or an event — from task_begin to task_said,
+// the run itself (task_cost), counted a task, and LAYOUTS every layout made
+// (page_lay_out: the shown page's, a rebuild's, a measurement's), counted a
+// layout — a layout a task forces while it runs is in its time as well as
+// here; the rebuild after it is a layout's alone.
+typedef enum {
+    PS_RENDER, PS_VIEW, PS_BACKGROUNDS, PS_PICTURES, PS_TEXT, PS_GROUPS, PS_SHADOWS, PS_GRADIENTS,
+    PS_WARPS, PS_PUBLISH, PS_TICKS, PS_SCHEDULE, PS_TASKS, PS_LAYOUTS, PS_COUNT
+} PaintStage;
+
+static const char *const kPaintStage[PS_COUNT] = {
+    "render", "view", "backgrounds", "pictures", "text", "groups", "shadows", "gradients",
+    "warps", "publish", "ticks", "schedule", "tasks", "layouts",
+};
+
+// The deadlines a schedule hands the ticker, by where the next came from:
+// one already past when it is handed over is rung for at once, or at the
+// clock's next tick when the loop meets it itself (pictures_schedule), so a
+// source counted often here is rings that may do no work.
+typedef enum {
+    PAST_SETTLE, PAST_LAYOUTS, PAST_TICKS, PAST_ARRIVAL, PAST_STREAM, PAST_TIMERS, PAST_PICTURES, PAST_COUNT
+} PastDeadline;
+
+static const char *const kPastDeadline[PAST_COUNT] = {
+    "settle", "layouts", "ticks", "arrival", "stream", "timers", "pictures",
+};
+
+// Counted with the processor's time-stamp counter, not a system call: a
+// paint draws thousands of runs. That trusts the cores' counters to agree,
+// which nothing here can check — the thread may move between cores between
+// two readings, and os64_micros makes the same assumption (DEBTS § micros).
+// An interval whose second reading is behind its first counts as nothing,
+// and is counted in `backward`, which the reading names: a machine whose
+// counters disagree shows it there. A stage may open inside itself (a group
+// in a group), so it is timed from its outermost opening. `now` is the paint's
+// (or the tick's, or the call's) until it is folded into `total` and
+// `most`; the counter's rate is taken from os64_micros across the counts'
+// life when they are written (diag_paint). `waited` is the main loop's
+// time asleep for its next event, so the rest of the span is the time it
+// was busy.
+static struct {
+    uint64_t now[PS_COUNT], total[PS_COUNT], most[PS_COUNT], began[PS_COUNT];
+    uint32_t depth[PS_COUNT];
+    uint64_t paints, whole, pixels, ticks, schedules, waited, scripts, timers, events, layouts;
+    uint64_t backward;                      // intervals whose counter stepped back
+    // The longest one wait of the main loop (cycles), and how late a moving
+    // picture's frame was shown against when it was due (ms): the most, and
+    // the frames shown more than FRAME_LATE_MS late.
+    uint64_t slept_most, late_most, late_frames;
+    // The ticker's bells the loop took — rings made before the loop takes
+    // one arrive as one (the window's doorbell is a mask) — and the
+    // deadlines handed the ticker already past.
+    uint64_t bells, past[PAST_COUNT];
+    uint64_t from_cycles;
+    int64_t from_us;
+} s_cost;
+// The readings the shown page's record keeps (`d`): numbered from 1 for
+// each page shown.
+static uint32_t s_cost_readings;
+
+// The counter, read where the program says: the memory clobber keeps the
+// compiler from moving the measured work across the read, and an lfence on
+// each side keeps the processor from running it early or late (lfence
+// waits for what came before it on Intel, and on AMD where it is
+// dispatch-serializing — Zen 2 and later; an older AMD part may still let
+// a read drift by a few instructions). Not rdtscp: a processor without it
+// would kill the program for asking.
+static inline uint64_t cycles(void)
+{
+    uint32_t lo, hi;
+    __asm__ volatile("lfence\n\trdtsc\n\tlfence" : "=a"(lo), "=d"(hi) : : "memory");
+    return (uint64_t)hi << 32 | lo;
+}
+
+// The counter since `from`: nothing, and counted, when it reads behind it.
+static uint64_t cycles_since(uint64_t from)
+{
+    uint64_t now = cycles();
+    if (now < from) {
+        s_cost.backward++;
+        return 0;
+    }
+    return now - from;
+}
+
+static void cost_begin(PaintStage s)
+{
+    if (s_cost.depth[s]++ == 0)
+        s_cost.began[s] = cycles();
+}
+
+static void cost_end(PaintStage s)
+{
+    if (s_cost.depth[s] > 0 && --s_cost.depth[s] == 0)
+        s_cost.now[s] += cycles_since(s_cost.began[s]);
+}
+
+// The stages `from`..`to` of one paint or tick into the counts.
+static void cost_fold(PaintStage from, PaintStage to)
+{
+    for (int32_t s = (int32_t)from; s <= (int32_t)to; s++) {
+        s_cost.total[s] += s_cost.now[s];
+        if (s_cost.now[s] > s_cost.most[s])
+            s_cost.most[s] = s_cost.now[s];
+        s_cost.now[s] = 0;
+    }
+}
+
+// Counting starts again: a page shown, or its record written on asking.
+static void cost_reset(void)
+{
+    os64_memset(&s_cost, 0, sizeof(s_cost));
+    s_cost.from_cycles = cycles();
+    s_cost.from_us = os64_micros();
+    yonder_ticker_counts_restart(g.ticker);
+}
+
+// A layout, timed (s_cost): page_lay_out_run is the layout itself.
+static bool page_lay_out(Page *p, int32_t width, int32_t height, uint32_t zoom, Page *reclaim)
+{
+    cost_begin(PS_LAYOUTS);
+    bool laid = page_lay_out_run(p, width, height, zoom, reclaim);
+    cost_end(PS_LAYOUTS);
+    s_cost.layouts++;
+    cost_fold(PS_LAYOUTS, PS_LAYOUTS);
+    return laid;
+}
+
+static void cost_painter(yonder_paint_stage_t stage, bool begin)
+{
+    PaintStage s = stage == YONDER_PAINT_SHADOW ? PS_SHADOWS : PS_GRADIENTS;
+    if (begin)
+        cost_begin(s);
+    else
+        cost_end(s);
+}
+
 // The page's facts as they stand, and what its tree and cascade show now.
 static void diag_fonts(Page *p);
+static void diag_paint(Page *p);
 
 static void diag_observe(Page *p, const char *when)
 {
@@ -1648,6 +1805,8 @@ static void diag_observe(Page *p, const char *when)
     os64_snprintf(v, sizeof(v), "%d, %d ready", (int)p->nsheets, (int)p->sheets_ready);
     yonder_diag_fact(d, "sheets", v);
     diag_fonts(p);
+    if (p == &g.page)
+        diag_paint(p);
 }
 
 // The page has arrived: what it is now is written, and the badge is its.
@@ -2160,6 +2319,9 @@ static void arrive_now(Page *fresh, NavKind kind, const way_position_t *crumb,
     webfonts_leave();
     g.page = *fresh;
     os64_memset(fresh, 0, sizeof(*fresh));
+    // Its paints are counted from here (diag_paint), its readings anew.
+    cost_reset();
+    s_cost_readings = 0;
     // The families it asked for as it arrived (page_fonts) are the shown
     // page's now; another page's are let go.
     if (s_arriving.staged && g.page.diag != NULL && s_arriving.seq == yonder_diag_seq(g.page.diag)) {
@@ -4520,6 +4682,131 @@ static void diag_face(Page *p, int32_t i, const garb_font_face_t *f, bool shown)
     os64_free(t.s);
 }
 
+// The main loop's work since the page was shown, or since its record was
+// last written on asking (`d`, view_key): how many paints and how much of
+// the view they painted, the ticks, schedules, layouts and script tasks,
+// the ticker's bells and the deadlines handed it — every count, painted or
+// not (`t`) — and, when the span has a rate, how busy the loop was and
+// each stage in milliseconds a paint (a tick, a call, a task, a layout for
+// those) — on average and at most — the counter's rate taken from
+// os64_micros over the same span (`u`). "window" is the render outside the
+// view (the root panel, the chrome); "the view's rest" is the view outside
+// its timed stages. False when there is no rate: `t` says why, `u` is
+// empty.
+static bool paint_lines(DiagText *t, DiagText *u)
+{
+    uint64_t span_us = (uint64_t)(os64_micros() - s_cost.from_us);
+    // The whole span, read once, as every interval is (cycles_since): one
+    // whose counter stepped back has no rate, and the line says so.
+    uint64_t back = s_cost.backward;
+    uint64_t span = cycles_since(s_cost.from_cycles);
+    bool stepped_back = s_cost.backward != back;
+    uint64_t rate = span_us > 0 ? span / span_us : 0;   // per microsecond
+    if (s_cost.paints == 0)
+        dt_put(t, "nothing painted in %lu.%lu s", (unsigned long)(span_us / 1000000),
+               (unsigned long)(span_us / 100000 % 10));
+    else
+        dt_put(t, "%lu paints in %lu.%lu s (%lu whole views), %lu.%lu Mpx of the view", (unsigned long)s_cost.paints,
+               (unsigned long)(span_us / 1000000), (unsigned long)(span_us / 100000 % 10),
+               (unsigned long)s_cost.whole, (unsigned long)(s_cost.pixels / 1000000),
+               (unsigned long)(s_cost.pixels / 100000 % 10));
+    dt_put(t, "; %lu ticks, %lu schedules", (unsigned long)s_cost.ticks, (unsigned long)s_cost.schedules);
+    if (rate == 0)
+        dt_put(t, stepped_back ? "; the counter stepped back across the span (the cores' counters disagree): no times"
+                               : "; too short a span to time");
+    else
+        dt_put(t, "; the main loop busy %lu%%",
+               (unsigned long)(span > s_cost.waited ? (span - s_cost.waited) * 100 / span : 0));
+    if (s_cost.backward != 0)
+        dt_put(t, "; the counter stepped back %lu times (the cores' counters disagree: these times are suspect)",
+               (unsigned long)s_cost.backward);
+    dt_put(t, "; %lu layouts", (unsigned long)s_cost.layouts);
+    dt_put(t, "; frames late at most %lu ms, %lu more than %d ms", (unsigned long)s_cost.late_most,
+           (unsigned long)s_cost.late_frames, FRAME_LATE_MS);
+    if (rate != 0)
+        dt_put(t, "; the longest wait %lu ms", (unsigned long)(s_cost.slept_most / rate / 1000));
+    dt_put(t, "; %lu script tasks: %lu scripts, %lu timers, %lu events",
+           (unsigned long)(s_cost.scripts + s_cost.timers + s_cost.events), (unsigned long)s_cost.scripts,
+           (unsigned long)s_cost.timers, (unsigned long)s_cost.events);
+
+    // The bells the loop took, then the ticker's own counts: its rings —
+    // more than the bells when rings were made before the loop took one —
+    // and none once it has stopped, on the way out, or when it never
+    // started.
+    dt_put(t, "; %lu bells taken", (unsigned long)s_cost.bells);
+    yonder_ticker_counts_t ticker = yonder_ticker_counts(g.ticker);
+    if (g.ticker != NULL)
+        dt_put(t, "; the ticker rang %lu times, woke %lu times, rang at most %lu ms late, slept at most %lu ms "
+               "past its time", (unsigned long)ticker.rings, (unsigned long)ticker.wakes,
+               (unsigned long)ticker.rang_late_most, (unsigned long)ticker.overslept_most);
+    else
+        dt_put(t, "; the ticker not running");
+    dt_put(t, "; deadlines already past when handed to it:");
+    for (int32_t i = 0; i < PAST_COUNT; i++)
+        dt_put(t, "%s %s %lu", i ? "," : "", kPastDeadline[i], (unsigned long)s_cost.past[i]);
+    if (rate == 0)
+        return false;
+    // Tenths of a millisecond: cycles / (rate per microsecond x 100).
+    uint64_t per = rate * 100;
+    uint64_t inner = 0;
+    for (int32_t s = PS_BACKGROUNDS; s <= PS_WARPS; s++)
+        inner += s_cost.total[s];
+    uint64_t window = s_cost.total[PS_RENDER] > s_cost.total[PS_VIEW] ? s_cost.total[PS_RENDER] - s_cost.total[PS_VIEW] : 0;
+    uint64_t rest = s_cost.total[PS_VIEW] > inner ? s_cost.total[PS_VIEW] - inner : 0;
+    dt_put(u, "ms a paint (most):");
+    for (int32_t s = 0; s < PS_COUNT; s++) {
+        uint64_t n = s == PS_TICKS ? s_cost.ticks : s == PS_SCHEDULE ? s_cost.schedules
+                   : s == PS_TASKS ? s_cost.scripts + s_cost.timers + s_cost.events
+                   : s == PS_LAYOUTS ? s_cost.layouts
+                   : s_cost.paints;
+        uint64_t avg = n > 0 ? s_cost.total[s] / n / per : 0, most = s_cost.most[s] / per;
+        dt_put(u, "%s %s %lu.%lu (%lu.%lu)", s ? "," : "",
+               s == PS_TICKS ? "ticks (a tick)" : s == PS_SCHEDULE ? "schedule (a call)"
+               : s == PS_TASKS ? "tasks (a task)" : s == PS_LAYOUTS ? "layouts (a layout)" : kPaintStage[s],
+               (unsigned long)(avg / 10), (unsigned long)(avg % 10), (unsigned long)(most / 10),
+               (unsigned long)(most % 10));
+    }
+    uint64_t paints = s_cost.paints > 0 ? s_cost.paints : 1;
+    uint64_t w = window / paints / per, r = rest / paints / per;
+    dt_put(u, "; window %lu.%lu, the view's rest %lu.%lu", (unsigned long)(w / 10), (unsigned long)(w % 10),
+           (unsigned long)(r / 10), (unsigned long)(r % 10));
+    return true;
+}
+
+static const char *dt_text(const DiagText *t)
+{
+    return t->short_of_memory || t->s == NULL ? "no memory to write this line" : t->s;
+}
+
+// The counts so far, as `paint` and `paint stages` (paint_lines).
+static void diag_paint(Page *p)
+{
+    DiagText t = {0}, u = {0};
+    bool timed = paint_lines(&t, &u);
+    yonder_diag_fact(p->diag, "paint", dt_text(&t));
+    if (timed)
+        yonder_diag_fact(p->diag, "paint stages", dt_text(&u));
+    else
+        yonder_diag_forget(p->diag, "paint stages");
+    os64_free(t.s);
+    os64_free(u.s);
+}
+
+// The counts kept as reading `n` of the page, with where the page was
+// scrolled, before they start again (diag_asked): each `d` adds one.
+static void diag_paint_reading(Page *p, uint32_t n)
+{
+    DiagText t = {0}, u = {0}, v = {0};
+    bool timed = paint_lines(&t, &u);
+    dt_put(&v, "at y %ld: %s%s%s", (long)g.sy, dt_text(&t), timed ? " | " : "", timed ? dt_text(&u) : "");
+    char key[32];
+    os64_snprintf(key, sizeof(key), "paint reading %u", (unsigned)n);
+    yonder_diag_fact(p->diag, key, dt_text(&v));
+    os64_free(t.s);
+    os64_free(u.s);
+    os64_free(v.s);
+}
+
 // A page's fonts on its record, at each write: how many faces and files
 // and how they stand, each face (diag_face), and each family the tree on
 // screen asked for with what served it (s_web.families). A page let go
@@ -4685,12 +4972,18 @@ static int32_t attribute_picture(const Page *p, const flow_box_t *b)
     return i >= 0 && i < p->nbackground_map && p->bg_of != NULL ? p->bg_of[i] : -1;
 }
 
+// Whether a box's `background` attribute is what its background shows: a
+// sheet's picture or gradient replaces it, as glass_backdrop draws it.
+static bool attribute_shows(const flow_box_t *b)
+{
+    return !flow_background_has_image(b->style);
+}
+
 // Whether picture `k` is behind a box as glass_backdrop draws it: in a
-// sheet's layer, or the attribute's when no sheet gives the box a picture
-// or a gradient.
+// sheet's layer, or the attribute's when it shows (attribute_shows).
 static bool box_shows(const Page *p, const flow_box_t *b, int32_t k)
 {
-    if (flow_background_has_image(b->style))
+    if (!attribute_shows(b))
         return css_shows(p, b->style, k);
     return attribute_picture(p, b) == k;
 }
@@ -4729,13 +5022,14 @@ static bool picture_on_screen(int32_t k, bool mark)
             return true;
         mark_part(view);
     }
-    // Behind any other box: a `background` attribute's picture, and then a
-    // sheet's behind any box the view shows (the walk visits only those).
+    // Behind any other box: a `background` attribute's picture where it
+    // shows (attribute_shows), and then a sheet's behind any box the view
+    // shows (the walk visits only those).
     for (int32_t i = 0; p->bg_of != NULL && i < os64_page_nbackgrounds(model) && i < p->nbackground_map; i++) {
         if (p->bg_of[i] != k)
             continue;
         const flow_box_t *b = flow_box_for(p->tree, os64_page_background(model, i)->node);
-        if (b == NULL || b == owner ||
+        if (b == NULL || b == owner || !attribute_shows(b) ||
             !os64_rect_intersect(flow_box_doc_rect(b, scroll_now()), view, &meet))
             continue;
         seen = true;
@@ -4746,6 +5040,111 @@ static bool picture_on_screen(int32_t k, bool mark)
     SheetPictureSeen look = {k, mark, view, false, owner};
     flow_visit(p->tree, view, scroll_now(), sheet_picture_seen, &look);
     return seen || look.seen;
+}
+
+typedef struct {
+    bool *seen;
+    const bool *mark;
+    int32_t n;
+    os64_gui_rect_t view;       // page coordinates
+    const flow_box_t *owner;    // the canvas's: asked apart from the walk
+} SheetPicturesSeen;
+
+// One box of the view's walk: which pictures does a sheet put behind it?
+static void sheet_pictures_seen(void *ctx, const flow_box_t *b)
+{
+    SheetPicturesSeen *look = ctx;
+    os64_gui_rect_t meet;
+    if (b == look->owner || !os64_rect_intersect(flow_box_doc_rect(b, scroll_now()), look->view, &meet))
+        return;
+    for (int32_t i = 0; i < flow_background_layers(b->style); i++) {
+        flow_layer_t l = flow_background_layer(b->style, i);
+        int32_t k = l.image != NULL ? css_picture(&g.page, &l) : -1;
+        if (k < 0 || k >= look->n)
+            continue;
+        look->seen[k] = true;
+        if (look->mark != NULL && look->mark[k])
+            mark_part(meet);
+    }
+}
+
+// What picture_on_screen answers for one picture, for every picture of the
+// shown page in one pass over it: which meet the view (`seen`, a flag a
+// picture), and for each `mark` names (NULL: none), its boxes' parts of
+// the glass marked for repainting. One pass, where asking each picture
+// apart walks the page once a picture — at every tick and every schedule.
+static void pictures_seen(bool *seen, const bool *mark)
+{
+    const Page *p = &g.page;
+    const os64_page_t *model = page_model(p);
+    os64_memset(seen, 0, (size_t)p->npics * sizeof(*seen));
+    if (p->tree == NULL || model == NULL)
+        return;
+    os64_gui_rect_t view = {g.sx, g.sy, g.view.bounds.w, g.view.bounds.h}, meet;
+    for (int32_t i = 0; p->pic_of != NULL && i < flow_nimages(p->tree); i++) {
+        const flow_box_t *b = flow_image(p->tree, i);
+        int32_t at = os64_page_image_for(model, b->node);
+        int32_t k = at >= 0 && at < p->nimage_map ? p->pic_of[at] : -1;
+        if (k < 0 || k >= p->npics || !os64_rect_intersect(flow_box_doc_rect(b, scroll_now()), view, &meet))
+            continue;
+        seen[k] = true;
+        if (mark != NULL && mark[k])
+            mark_part(meet);
+    }
+    // The canvas's pictures: behind the whole view, its owner found by the
+    // painter's own rule (picture_on_screen), each as box_shows answers.
+    const yonder_verbs_t asking = {.backdrop = glass_backdrop};
+    const flow_box_t *owner = yonder_canvas_owner(p->tree, &asking);
+    if (owner != NULL && !attribute_shows(owner)) {
+        for (int32_t i = 0; i < flow_background_layers(owner->style); i++) {
+            flow_layer_t l = flow_background_layer(owner->style, i);
+            int32_t k = l.image != NULL ? css_picture(p, &l) : -1;
+            if (k < 0 || k >= p->npics)
+                continue;
+            seen[k] = true;
+            if (mark != NULL && mark[k])
+                mark_part(view);
+        }
+    } else if (owner != NULL) {
+        // The attribute shows: the branch above takes a sheet's picture.
+        int32_t k = attribute_picture(p, owner);
+        if (k >= 0 && k < p->npics) {
+            seen[k] = true;
+            if (mark != NULL && mark[k])
+                mark_part(view);
+        }
+    }
+    for (int32_t i = 0; p->bg_of != NULL && i < os64_page_nbackgrounds(model) && i < p->nbackground_map; i++) {
+        int32_t k = p->bg_of[i];
+        if (k < 0 || k >= p->npics)
+            continue;
+        const flow_box_t *b = flow_box_for(p->tree, os64_page_background(model, i)->node);
+        if (b == NULL || b == owner || !attribute_shows(b) ||
+            !os64_rect_intersect(flow_box_doc_rect(b, scroll_now()), view, &meet))
+            continue;
+        seen[k] = true;
+        if (mark != NULL && mark[k])
+            mark_part(meet);
+    }
+    SheetPicturesSeen look = {seen, mark, p->npics, view, owner};
+    flow_visit(p->tree, view, scroll_now(), sheet_pictures_seen, &look);
+}
+
+// A flag a picture of the shown page, for pictures_seen: `small` when the
+// page has few, else the heap — NULL with no memory, and the caller asks
+// picture by picture instead.
+#define PICTURE_FLAGS_SMALL 64
+static bool *picture_flags(bool *small)
+{
+    if (g.page.npics <= PICTURE_FLAGS_SMALL)
+        return small;
+    return os64_malloc((size_t)g.page.npics * sizeof(bool));
+}
+
+static void picture_flags_free(bool *flags, bool *small)
+{
+    if (flags != small)
+        os64_free(flags);
 }
 
 // What the shown page's frames are held to (MOTION_COST_MS), in
@@ -4878,43 +5277,106 @@ static uint64_t tick_next(void)
 // sheets is shown whatever is still coming, the moment a script the stream
 // is stopped at stops waiting for its sheets, and the next timer of each
 // page's scripts, covered or not.
+// The earliest deadline offered so far (deadline_offer): when, where the
+// first offered at that moment came from (for the counts), and whether any
+// offered at that moment is the bell's to meet.
+typedef struct {
+    uint64_t next;
+    PastDeadline from;
+    bool bell;
+} NextDeadline;
+
+// A deadline offered to `d`. The loop meets a script's timer (script_turn,
+// and the stream's and the arriving page's turns), the settle
+// (pictures_settle) and the stream's wait for its sheets (stream_turn)
+// itself, after the events; the bell meets the rest (pictures_tick,
+// motion_tick, coming_show). Two at one moment are common — the clock
+// steps by the tick — and the moment is the bell's if either is.
+static void deadline_offer(NextDeadline *d, uint64_t due, PastDeadline from)
+{
+    bool bell = from != PAST_TIMERS && from != PAST_SETTLE && from != PAST_STREAM;
+    if (due < d->next) {
+        d->next = due;
+        d->from = from;
+        d->bell = bell;
+    } else if (due == d->next && due != YONDER_NEVER && bell) {
+        d->bell = true;
+    }
+}
+
 static void pictures_schedule(void)
 {
-    uint64_t next = g.covered ? YONDER_NEVER : g.settle_due;
-    uint64_t motion = motion_next(), tick = tick_next();
-    if (motion < next)
-        next = motion;
-    if (tick < next)
-        next = tick;
-    if (g.coming.active && g.coming.due < next)
-        next = g.coming.due;
-    if (g.stream.active && g.stream.sheets_due != 0 && g.stream.sheets_due < next)
-        next = g.stream.sheets_due;
+    cost_begin(PS_SCHEDULE);
+    NextDeadline d = {YONDER_NEVER, PAST_SETTLE, false};
+    if (!g.covered)
+        deadline_offer(&d, g.settle_due, PAST_SETTLE);
+    deadline_offer(&d, motion_next(), PAST_LAYOUTS);
+    deadline_offer(&d, tick_next(), PAST_TICKS);
+    if (g.coming.active)
+        deadline_offer(&d, g.coming.due, PAST_ARRIVAL);
+    if (g.stream.active && g.stream.sheets_due != 0)
+        deadline_offer(&d, g.stream.sheets_due, PAST_STREAM);
     // A page's timers, covered or not: a page that counts down keeps
     // counting while another window is in front (DOM_D7.md § The clock).
     const yonder_scripts_t *hosts[] = {g.page.scripts, g.stream.scripts,
                                        g.coming.active ? g.coming.page.scripts : NULL};
-    for (size_t i = 0; i < sizeof(hosts) / sizeof(hosts[0]); i++) {
-        uint64_t due = yonder_scripts_timer_next(hosts[i]);
-        if (due < next)
-            next = due;
-    }
-    for (int32_t k = 0; !g.covered && k < g.page.npics; k++) {
+    for (size_t i = 0; i < sizeof(hosts) / sizeof(hosts[0]); i++)
+        deadline_offer(&d, yonder_scripts_timer_next(hosts[i]), PAST_TIMERS);
+    // The pictures on screen, found in one pass when any could be next or
+    // at the next moment.
+    bool asks = false;
+    for (int32_t k = 0; !g.covered && k < g.page.npics && !asks; k++)
+        asks = g.page.pics[k].playing && g.page.pics[k].due <= d.next;
+    bool small[PICTURE_FLAGS_SMALL];
+    bool *seen = asks ? picture_flags(small) : NULL;
+    if (seen != NULL)
+        pictures_seen(seen, NULL);
+    for (int32_t k = 0; asks && k < g.page.npics; k++) {
         const Picture *pic = &g.page.pics[k];
-        if (pic->playing && pic->due < next && picture_on_screen(k, false))
-            next = pic->due;
+        if (pic->playing && pic->due <= d.next && (seen != NULL ? seen[k] : picture_on_screen(k, false)))
+            deadline_offer(&d, pic->due, PAST_PICTURES);
+    }
+    if (seen != NULL)
+        picture_flags_free(seen, small);
+    uint64_t next = d.next, now = yonder_now_ms();
+    if (next != YONDER_NEVER && next <= now) {
+        s_cost.past[d.from]++;
+        // A past moment that is the loop's alone is the loop's to meet at its
+        // turn, not the ticker's to ring for: the bell is dispatched among
+        // the events, which cannot meet it, so it is handed on again and
+        // rings again, the batch ringing itself until its bound. One still
+        // owed when the loop next waits is rung for at the clock's next
+        // tick. A moment the bell meets is rung for now.
+        if (!d.bell)
+            next = now + 1;
     }
     yonder_ticker_set(g.ticker, next);
+    cost_end(PS_SCHEDULE);
+    s_cost.schedules++;
+    cost_fold(PS_SCHEDULE, PS_SCHEDULE);
 }
 
 // The ticker rang: every picture that is due and on screen shows its next
-// frame, and only its boxes are repainted.
+// frame, and where it shows is marked for repainting — its boxes, or the
+// whole view for the picture behind the page (picture_on_screen). Timed as
+// a tick (s_cost).
 static void pictures_tick(void)
 {
+    cost_begin(PS_TICKS);
     uint64_t now = yonder_now_ms();
+    // One pass finds the pictures on screen and one marks those that moved
+    // (pictures_seen); with no memory for their flags, each is asked apart.
+    bool small_seen[PICTURE_FLAGS_SMALL], small_moved[PICTURE_FLAGS_SMALL];
+    bool *seen = !g.covered ? picture_flags(small_seen) : NULL;
+    bool *moved = seen != NULL ? picture_flags(small_moved) : NULL;
+    if (moved != NULL) {
+        pictures_seen(seen, NULL);
+        os64_memset(moved, 0, (size_t)g.page.npics * sizeof(*moved));
+    }
+    bool any = false;
     for (int32_t k = 0; !g.covered && k < g.page.npics; k++) {
         Picture *pic = &g.page.pics[k];
-        if (!pic->playing || pic->due > now || !picture_on_screen(k, false))
+        if (!pic->playing || pic->due > now || !(moved != NULL ? seen[k] : picture_on_screen(k, false)))
             continue;
         // END holds the last frame and a failure the last good one: either
         // way the picture stays as it is, and stops.
@@ -4922,10 +5384,25 @@ static void pictures_tick(void)
             pic->playing = false;
             continue;
         }
+        if (now - pic->due > s_cost.late_most)
+            s_cost.late_most = now - pic->due;
+        s_cost.late_frames += now - pic->due > FRAME_LATE_MS;
         pic->due = now + frame_delay(pic);
-        (void)picture_on_screen(k, true);
+        if (moved != NULL)
+            moved[k] = any = true;
+        else
+            (void)picture_on_screen(k, true);
     }
+    if (any)
+        pictures_seen(seen, moved);
+    if (moved != NULL)
+        picture_flags_free(moved, small_moved);
+    if (seen != NULL)
+        picture_flags_free(seen, small_seen);
     pictures_schedule();
+    cost_end(PS_TICKS);
+    s_cost.ticks++;
+    cost_fold(PS_TICKS, PS_TICKS);
 }
 
 // A part a tick repaints (flow_motion_tick), cut to the view `ctx` holds,
@@ -4955,7 +5432,18 @@ static void tick_mark(void *ctx, const flow_box_t *box, os64_gui_rect_t r)
 // instead, the ticks' frame with its paint (LAID_FOR_TICK); with the
 // layouts stopped by what they cost, the ticks stop too, said where they
 // failed (say_failed).
+static void tick_page_run(uint64_t now, bool frame);
+
 static void tick_page(uint64_t now, bool frame)
+{
+    cost_begin(PS_TICKS);
+    tick_page_run(now, frame);
+    cost_end(PS_TICKS);
+    s_cost.ticks++;
+    cost_fold(PS_TICKS, PS_TICKS);
+}
+
+static void tick_page_run(uint64_t now, bool frame)
 {
     os64_gui_rect_t v = {g.sx, g.sy, g.view.bounds.w, g.view.bounds.h};
     int64_t began_us = os64_micros();
@@ -5063,6 +5551,30 @@ static bool motion_pause_said(void)
     os64_strcopy(g.motion_pause, sizeof(g.motion_pause), now);
     status_set(g.status_rest);
     return true;
+}
+
+// libui's paint, timed (s_cost): its render, then the damage handed to
+// the compositor, as os64_ui_paint does both.
+static void glass_paint(void)
+{
+    os64_gui_rect_t damage;
+    cost_begin(PS_RENDER);
+    bool painted = os64_ui_render(&g.ui, &damage);
+    cost_end(PS_RENDER);
+    if (!painted) {
+        os64_memset(s_cost.now, 0, sizeof(s_cost.now));
+        return;
+    }
+    cost_begin(PS_PUBLISH);
+    os64_draw_publish(g.ui.ctx, &damage);
+    cost_end(PS_PUBLISH);
+    os64_gui_rect_t meet;
+    if (os64_rect_intersect(damage, g.view.bounds, &meet)) {
+        s_cost.pixels += (uint64_t)meet.w * (uint64_t)meet.h;
+        s_cost.whole += meet.w == g.view.bounds.w && meet.h == g.view.bounds.h;
+    }
+    s_cost.paints++;
+    cost_fold(PS_RENDER, PS_PUBLISH);
 }
 
 // What the window loop does before each paint: a whole view's paint shows
@@ -5969,13 +6481,33 @@ static void script_arrived(const yonder_script_job_t *job, const yonder_script_t
                                got != NULL ? got->length : 0);
 }
 
+// When the task running began (task_begin), for its cost (task_cost). A
+// begun task that finds nothing to run never reaches task_said, and the
+// next task_begin starts it again.
+static uint64_t s_task_began;
+
 // A task is about to run: the layouts it forces are counted from zero
-// (DOM.md § Geometry), and the audit's clock starts. Every task kind
-// begins here and ends at task_said.
+// (DOM.md § Geometry), and the audit's clock starts, and the paint counts'.
+// Every task kind begins here and ends at task_said.
 static int64_t task_begin(yonder_scripts_t *host)
 {
     (void)yonder_scripts_geometry_stats(host, true);
+    s_task_began = cycles();
     return s_script_audit ? os64_micros() : 0;
+}
+
+// A task ran (task_said): its run into the paint counts, by its kind — a
+// script's source, a timer, or an event by the event's name.
+static void task_cost(const char *what)
+{
+    s_cost.now[PS_TASKS] += cycles_since(s_task_began);
+    cost_fold(PS_TASKS, PS_TASKS);
+    if (os64_streq(what, "script"))
+        s_cost.scripts++;
+    else if (os64_streq(what, "timer"))
+        s_cost.timers++;
+    else
+        s_cost.events++;
 }
 
 // What a task said, on the status line: the layouts it forced and what they
@@ -5986,6 +6518,7 @@ static int64_t task_begin(yonder_scripts_t *host)
 static void task_said(yonder_scripts_t *host, bool was_alive, const char *what,
                       const os64_js_outcome_t *out, int64_t began)
 {
+    task_cost(what);
     os64_dom_geometry_stats_t forced = yonder_scripts_geometry_stats(host, false);
     if (s_script_audit) {
         char line[OS64_JS_SOURCE_NAME_CAP + 160];
@@ -7441,6 +7974,7 @@ static void on_doorbell(os64_ui_t *ui, const os64_gui_event_t *ev)
     if (mask & BELL_SETTINGS)
         yonder_settings_rung();
     if (mask & BELL_TICK) {
+        s_cost.bells++;
         if (g.coming.active && yonder_now_ms() >= g.coming.due)
             coming_show();
         pictures_tick();
@@ -8184,6 +8718,60 @@ static void pane_clip_close(void *ctx)
 // Only the part of the view that is dirty is painted: the kernel takes
 // exactly that rectangle when libui publishes, so nothing outside it is
 // seen, and a moving picture costs its own box rather than the page.
+// The view's verbs, each timed as its stage (s_cost).
+static void timed_text(void *ctx, const flow_box_t *b, int32_t x, int32_t baseline, os64_gui_rect_t clip,
+                       uint32_t colour)
+{
+    cost_begin(PS_TEXT);
+    pane_text(ctx, b, x, baseline, clip, colour);
+    cost_end(PS_TEXT);
+}
+
+static void timed_image(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_gui_rect_t clip)
+{
+    cost_begin(PS_PICTURES);
+    pane_image(ctx, b, c, clip);
+    cost_end(PS_PICTURES);
+}
+
+static bool timed_backdrop(void *ctx, const flow_box_t *b, int32_t layer, const os64_gui_rect_t *area,
+                           os64_gui_rect_t origin, int32_t ox, int32_t oy, os64_gui_rect_t clip)
+{
+    cost_begin(PS_BACKGROUNDS);
+    bool any = pane_backdrop(ctx, b, layer, area, origin, ox, oy, clip);
+    cost_end(PS_BACKGROUNDS);
+    return any;
+}
+
+static void timed_group_open(void *ctx, os64_gui_rect_t bounds)
+{
+    cost_begin(PS_GROUPS);
+    pane_group_open(ctx, bounds);
+    cost_end(PS_GROUPS);
+}
+
+static void timed_group_close(void *ctx, uint8_t alpha)
+{
+    cost_begin(PS_GROUPS);
+    pane_group_close(ctx, alpha);
+    cost_end(PS_GROUPS);
+}
+
+static bool timed_through_open(void *ctx, os64_gui_rect_t bounds, const double m[6], os64_gui_rect_t clip)
+{
+    cost_begin(PS_WARPS);
+    bool open = pane_through_open(ctx, bounds, m, clip);
+    cost_end(PS_WARPS);
+    return open;
+}
+
+static void timed_through_close(void *ctx, uint8_t alpha)
+{
+    cost_begin(PS_WARPS);
+    pane_through_close(ctx, alpha);
+    cost_end(PS_WARPS);
+}
+
 static void view_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_theme_t *t)
 {
     (void)t;
@@ -8197,20 +8785,24 @@ static void view_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_
         return;
     }
     GlassPane pane = {{&gl, NULL}, 1, {NULL}, 0, NULL};
-    yonder_verbs_t v = {&pane,        pane_fill,     pane_text,       pane_image,
-                        pane_control, pane_backdrop, pane_group_open, pane_group_close,
-                        pane_mask,    pane_pixels,   pane_frame,      pane_through_open,
-                        pane_through_close, pane_clip_open, pane_clip_fill, pane_clip_close};
+    yonder_verbs_t v = {&pane,        pane_fill,     timed_text,       timed_image,
+                        pane_control, timed_backdrop, timed_group_open, timed_group_close,
+                        pane_mask,    pane_pixels,   pane_frame,      timed_through_open,
+                        timed_through_close, pane_clip_open, pane_clip_fill, pane_clip_close};
     os64_gui_rect_t view = {part.x - gl.dx, part.y - gl.dy, part.w, part.h};
+    cost_begin(PS_VIEW);
+    yonder_paint_stage = cost_painter;
     yonder_paint(g.page.tree, view, scroll_now(), PAGE_PAPER, s_dark ? &kDark : NULL, &v);
+    yonder_paint_stage = NULL;
     box_bars(&gl, view);
+    cost_end(PS_VIEW);
 }
 
 // The keyboard's arrows arrive as VT100 bursts (ESC [ A ...). libui's
 // decoder for them is private to libos64, so the view reads the few it
 // needs itself.
 typedef enum { KEY_NONE, KEY_UP, KEY_DOWN, KEY_LEFT, KEY_RIGHT, KEY_HOME, KEY_END,
-               KEY_PGUP, KEY_PGDN, KEY_SPACE, KEY_POSITIONING } Key;
+               KEY_PGUP, KEY_PGDN, KEY_SPACE, KEY_POSITIONING, KEY_RECORD } Key;
 
 static Key view_key(const os64_gui_event_t *ev)
 {
@@ -8245,7 +8837,40 @@ static Key view_key(const os64_gui_event_t *ev)
         g.seq = 1;
         return KEY_NONE;
     }
-    return a == ' ' ? KEY_SPACE : a == 'p' ? KEY_POSITIONING : KEY_NONE;
+    return a == ' ' ? KEY_SPACE : a == 'p' ? KEY_POSITIONING : a == 'd' ? KEY_RECORD : KEY_NONE;
+}
+
+// `d` writes the shown page's record now ("when asked"), keeping the paint
+// counts since the last `d` as a numbered reading with where the page was
+// scrolled (diag_paint_reading), and starts them again — so each part of a
+// page can be measured on its own: scroll there, `d`, wait, `d`, and the
+// next part. With no page files to write, or no record (one is made for
+// every page, short of memory), it says which. When the file is not written
+// the reading stays in the record and the counts go on, so the next `d`
+// writes both, its own reading counted from the same start.
+static void diag_asked(void)
+{
+    if (s_diag.dir[0] == '\0') {
+        status_rest("No page files: set diagnostics in yonder.conf to write them.");
+        return;
+    }
+    if (g.page.diag == NULL) {
+        status_rest("No record for this page: there was no memory to keep one.");
+        return;
+    }
+    diag_observe(&g.page, "when asked");
+    diag_paint_reading(&g.page, ++s_cost_readings);
+    if (!diag_write(g.page.diag)) {
+        char said[OS64_PATH_MAX + 96];
+        os64_snprintf(said, sizeof(said), "Paint reading %u kept, but the page file could not be written in %s; "
+                      "the counts go on.", (unsigned)s_cost_readings, s_diag.dir);
+        status_rest(said);
+        return;
+    }
+    cost_reset();
+    char said[96];
+    os64_snprintf(said, sizeof(said), "Paint reading %u written; the counts start again.", (unsigned)s_cost_readings);
+    status_rest(said);
 }
 
 // `p` lays pages out with every box static — the page as it reads in
@@ -8610,6 +9235,7 @@ static bool view_event(os64_ui_widget_t *w, os64_ui_t *ui, const os64_gui_event_
         case KEY_HOME: scroll_to(0, 0); return true;
         case KEY_END: scroll_to(g.sx, page_height()); return true;
         case KEY_POSITIONING: toggle_positioning(); return true;
+        case KEY_RECORD: diag_asked(); return true;
         default: return g.seq != 0;
         }
     default:
@@ -9096,11 +9722,17 @@ int main(int argc, char **argv)
     // queue is EMPTY: anything waiting may have been done before the bar
     // could be seen, so it is dispatched to a disarmed bar first.
     g.running = true;
-    os64_ui_paint(&g.ui);
+    glass_paint();
     os64_gui_event_t ev;
     bool held = false;              // an event taken while looking for an empty queue
     while (g.running && !g.ui.quit) {
-        if (!held && os64_gui_event_wait(g.win, &ev) != 1)
+        uint64_t asleep = cycles();
+        int64_t woke = held ? 1 : os64_gui_event_wait(g.win, &ev);
+        uint64_t slept = cycles_since(asleep);
+        s_cost.waited += slept;
+        if (slept > s_cost.slept_most)
+            s_cost.slept_most = slept;
+        if (woke != 1)
             break;
         held = false;
         YonderEventBatch batch = {.held=true,.pending=ev};
@@ -9139,10 +9771,10 @@ int main(int argc, char **argv)
         bool scripts_ready = script_turn();
         pictures_settle();
         before_paint();
-        os64_ui_paint(&g.ui);
+        glass_paint();
         motion_painted();
         if (motion_pause_said())
-            os64_ui_paint(&g.ui);
+            glass_paint();
         if (stream_more)
             (void)os64_gui_event_ring(g.win, BELL_STREAM);
         if (coming_more || (scripts_ready && scripts_owed(g.page.scripts)))
@@ -9158,7 +9790,7 @@ int main(int argc, char **argv)
             } else {
                 yonder_bar_settled(&g.bar);
                 bar_show(true);
-                os64_ui_paint(&g.ui);
+                glass_paint();
             }
         }
     }
@@ -9167,6 +9799,7 @@ int main(int argc, char **argv)
     // nothing after this should.
     yonder_settings_close();
     yonder_ticker_stop(g.ticker);
+    g.ticker = NULL;                    // the page's record, written after, reads its counts
     // The workers next: destroy cancels them — a fetch and a question
     // alike hear the pool's own predicate — and joins them, and releases
     // what they held, before anything they could touch goes away.

@@ -113,6 +113,11 @@ LDFLAGS ?= -nostdlib --no-as-needed --hash-style=sysv -rpath-link $(BIN) -T $(CU
 
 BIN     := $(CURDIR)/bin
 OBJ     := $(CURDIR)/obj
+# The flags stamps (written below the -O2 list): every object depends on the
+# stamp of its family, so it rebuilds when its flags change, not only when its
+# source does.
+PIC_FLAGS_STAMP    := $(OBJ)/flags/pic
+STATIC_FLAGS_STAMP := $(OBJ)/flags/static
 # The fixtures land in their own output directory because they land in their
 # own directory ON THE IMAGE (/tests, not /bin). Keeping the two apart here is
 # what lets the image rules route them without a hand-maintained list of which
@@ -146,7 +151,7 @@ LIBOS64_SRCS := libos64/init.c libos64/url.c libos64/io.c libos64/linereader.c l
 LIBOS64_OBJS := $(patsubst %,$(OBJ)/pic/%.o,$(LIBOS64_SRCS))
 LIBOS64_OBJS += $(OBJ)/pic/shared/decoration.c.o
 
-$(OBJ)/pic/shared/%.c.o: ../shared/%.c
+$(OBJ)/pic/shared/%.c.o: ../shared/%.c $(PIC_FLAGS_STAMP)
 	@mkdir -p $(@D)
 	$(CC) $(LIBOS64_CFLAGS) -c $< -o $@
 
@@ -184,6 +189,11 @@ LIBFETCH_SO   := $(BIN)/libfetch.so
 # per-app link bases — which is what lets a host debugger tell two running
 # programs apart — while a PIC library can live outside the crowded low 2GB.
 LIBOS64_CFLAGS := $(filter-out -fno-pic -fno-pie,$(CFLAGS)) -fPIC
+# The shared libraries build -O2: yonder paints every pixel through
+# libos64's draw, text and font code, and the libraries derived from these
+# flags (libgzip, libpng, libfetch, libimage) sit on its path too. The
+# other libraries already ask for -O2 in their own makefiles.
+LIBOS64_CFLAGS += -O2
 LIBGZIP_CFLAGS := $(LIBOS64_CFLAGS)
 LIBPNG_CFLAGS  := $(LIBOS64_CFLAGS)
 LIBFETCH_CFLAGS := $(LIBOS64_CFLAGS)
@@ -570,19 +580,19 @@ HEADER_DEPS := $(LAUNCH_OBJS:.o=.d) $(LIBOS64_OBJS:.o=.d) $(LIBGZIP_OBJS:.o=.d) 
 # does not decide that — the stems differ in length, and the more specific
 # prefix wins — but keeping them adjacent and commented means nobody has to
 # re-derive it.
-$(OBJ)/pic/libgzip/%.c.o: libgzip/%.c
+$(OBJ)/pic/libgzip/%.c.o: libgzip/%.c $(PIC_FLAGS_STAMP)
 	@mkdir -p "$(dir $@)"
 	$(CC) $(LIBGZIP_CFLAGS) -c $< -o $@
 
-$(OBJ)/pic/libpng/%.c.o: libpng/%.c
+$(OBJ)/pic/libpng/%.c.o: libpng/%.c $(PIC_FLAGS_STAMP)
 	@mkdir -p "$(dir $@)"
 	$(CC) $(LIBPNG_CFLAGS) -c $< -o $@
 
-$(OBJ)/pic/%.c.o: %.c
+$(OBJ)/pic/%.c.o: %.c $(PIC_FLAGS_STAMP)
 	@mkdir -p "$(dir $@)"
 	$(CC) $(LIBOS64_CFLAGS) -c $< -o $@
 
-$(OBJ)/pic/%.S.o: %.S
+$(OBJ)/pic/%.S.o: %.S $(PIC_FLAGS_STAMP)
 	@mkdir -p "$(dir $@)"
 	$(CC) $(LIBOS64_CFLAGS) -c $< -o $@
 
@@ -597,25 +607,44 @@ $(OBJ)/pic/%.S.o: %.S
 # program lives under tests/, and a pattern-specific variable that matches
 # nothing is silent — the -O2 would simply stop applying with no diagnostic.
 # fpu_demo made exactly that move on the day /tests was created.
-OPTIMIZED_APPS := fpu_demo vncd
+OPTIMIZED_APPS   := fpu_demo vncd yonder
+OPTIMIZED_CFLAGS := -O2
 $(foreach a,$(OPTIMIZED_APPS),\
-  $(eval $(OBJ)/$(if $(filter $(a),$(TESTS)),tests,apps)/$(a)/%.c.o: CFLAGS += -O2))
+  $(eval $(OBJ)/$(if $(filter $(a),$(TESTS)),tests,apps)/$(a)/%.c.o: CFLAGS += $(OPTIMIZED_CFLAGS)))
 
-$(OBJ)/%.c.o: %.c
+# SSH uses private BearSSL primitives without widening libtls.so ABI.
+SSH_CFLAGS := -O2 -I$(CURDIR)/libtls/port/include
+$(OBJ)/apps/sshd/%.c.o: CFLAGS += $(SSH_CFLAGS)
+$(OBJ)/tests/sshtest/%.c.o: CFLAGS += $(SSH_CFLAGS)
+
+# AN OBJECT REBUILDS WHEN ITS FLAGS CHANGE. Make compares dates, and nothing
+# dates a flag: before these stamps, an edit to the flags relinked the old
+# objects, and a library or an app put on -O2 went on running its -O0 code
+# under the new name. Each stamp holds a family's flags and is rewritten as
+# this file is read, only when they differ, so its date moves exactly when
+# they do. The PIC family's are the flags the obj/pic rules compile with;
+# the static family's are CFLAGS and every pattern-specific addition to it.
+# So an addition is a variable, and its variable is in the static stamp: one
+# spelled inline, or left out of the stamp, relinks stale objects the day it
+# changes.
+flags_same = $(if $(subst x$(1),,x$(2))$(subst x$(2),,x$(1)),,same)
+define flags_stamp
+$(if $(call flags_same,$(strip $(2)),$(strip $(file <$(1)))),,$(file >$(1),$(strip $(2))))
+endef
+$(shell mkdir -p $(OBJ)/flags)
+$(eval $(call flags_stamp,$(PIC_FLAGS_STAMP),$(LIBOS64_CFLAGS) | $(LIBGZIP_CFLAGS) | $(LIBPNG_CFLAGS) | $(LIBFETCH_CFLAGS)))
+$(eval $(call flags_stamp,$(STATIC_FLAGS_STAMP),$(CFLAGS) | $(OPTIMIZED_APPS) | $(OPTIMIZED_CFLAGS) | $(SSH_CFLAGS)))
+
+$(OBJ)/%.c.o: %.c $(STATIC_FLAGS_STAMP)
 	@mkdir -p "$(dir $@)"
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(OBJ)/%.S.o: %.S
+$(OBJ)/%.S.o: %.S $(STATIC_FLAGS_STAMP)
 	@mkdir -p "$(dir $@)"
 	$(CC) $(CFLAGS) -c $< -o $@
 
 .PHONY: clean
 clean:
 	rm -rf $(OBJ) $(BIN)
-
-# SSH uses private BearSSL primitives without widening libtls.so ABI.
-$(OBJ)/apps/sshd/%.c.o: CFLAGS += -O2 -I$(CURDIR)/libtls/port/include
-
-$(OBJ)/tests/sshtest/%.c.o: CFLAGS += -O2 -I$(CURDIR)/libtls/port/include
 
 -include $(OBJ)/pic/shared/decoration.c.d

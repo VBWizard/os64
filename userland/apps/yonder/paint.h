@@ -111,6 +111,13 @@ typedef struct {
 // to `scroll` (flow_visit's). `paper` is the canvas when neither the root
 // nor the body has a background, colour or picture; `dark`, when not NULL,
 // paints the page dark (above) and its paper is the canvas instead.
+// The painter's own work a caller may time: building and blurring a
+// shadow's mask, and computing a gradient's pixels — the verbs it calls
+// are the caller's to time. When set (yonder's paint counts, YONDER_PERF.md)
+// it is told each one's start (`begin`) and end; NULL, nothing is told.
+typedef enum { YONDER_PAINT_SHADOW, YONDER_PAINT_GRADIENT } yonder_paint_stage_t;
+extern void (*yonder_paint_stage)(yonder_paint_stage_t stage, bool begin);
+
 void yonder_paint(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll,
                   uint32_t paper, const yonder_dark_t *dark, const yonder_verbs_t *verbs);
 

@@ -13,11 +13,13 @@
 struct yonder_ticker {
     os64_lock_t lock;
     uint64_t due;
+    uint64_t set_at;            // when the window handed over `due`
     bool stopping;
     int32_t wake[2];
     int64_t thread;
     int64_t window;
     uint32_t bell;
+    yonder_ticker_counts_t counts;  // for the paint counts (ticker.h)
 };
 
 uint64_t yonder_now_ms(void)
@@ -28,13 +30,23 @@ uint64_t yonder_now_ms(void)
     return t.ticks * 1000 / t.per_second;
 }
 
+// The most of `*most` and `value`, under the ticker's lock.
+static void count_most(yonder_ticker_t *t, uint64_t *most, uint64_t value)
+{
+    os64_lock_acquire(&t->lock);
+    if (value > *most)
+        *most = value;
+    os64_lock_release(&t->lock);
+}
+
 static int64_t tick(void *arg)
 {
     yonder_ticker_t *t = arg;
     for (;;) {
         os64_lock_acquire(&t->lock);
         bool stopping = t->stopping;
-        uint64_t due = t->due;
+        uint64_t due = t->due, set_at = t->set_at;
+        t->counts.wakes++;
         os64_lock_release(&t->lock);
         if (stopping)
             return 0;
@@ -45,6 +57,13 @@ static int64_t tick(void *arg)
             os64_lock_acquire(&t->lock);
             if (t->due == due)
                 t->due = YONDER_NEVER;
+            // Late against when the deadline was due or was handed over,
+            // whichever came after: one handed over already past is not
+            // the ticker's lateness.
+            uint64_t from = due > set_at ? due : set_at;
+            if (now > from && now - from > t->counts.rang_late_most)
+                t->counts.rang_late_most = now - from;
+            t->counts.rings++;
             os64_lock_release(&t->lock);
             (void)os64_gui_event_ring(t->window, t->bell);
             continue;
@@ -53,6 +72,9 @@ static int64_t tick(void *arg)
         char bytes[64];
         (void)os64_read_for(t->wake[0], bytes, sizeof(bytes),
                             due == YONDER_NEVER ? OS64_WAIT_FOREVER : due - now);
+        uint64_t woke = yonder_now_ms();
+        if (due != YONDER_NEVER && woke > due)
+            count_most(t, &t->counts.overslept_most, woke - due);
     }
 }
 
@@ -88,14 +110,36 @@ void yonder_ticker_set(yonder_ticker_t *t, uint64_t due_ms)
 {
     if (t == NULL)
         return;
+    uint64_t at = yonder_now_ms();
     os64_lock_acquire(&t->lock);
     uint64_t was = t->due;
     t->due = due_ms;
+    t->set_at = at;
     os64_lock_release(&t->lock);
     // A later deadline needs no wake: the thread wakes at the earlier one,
     // finds this, and sleeps again.
     if (due_ms < was)
         wake(t);
+}
+
+yonder_ticker_counts_t yonder_ticker_counts(yonder_ticker_t *t)
+{
+    yonder_ticker_counts_t counts = {0};
+    if (t == NULL)
+        return counts;
+    os64_lock_acquire(&t->lock);
+    counts = t->counts;
+    os64_lock_release(&t->lock);
+    return counts;
+}
+
+void yonder_ticker_counts_restart(yonder_ticker_t *t)
+{
+    if (t == NULL)
+        return;
+    os64_lock_acquire(&t->lock);
+    t->counts = (yonder_ticker_counts_t){0};
+    os64_lock_release(&t->lock);
 }
 
 void yonder_ticker_stop(yonder_ticker_t *t)

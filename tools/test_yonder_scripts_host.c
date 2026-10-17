@@ -160,6 +160,10 @@ uint64_t yonder_now_ms(void) { return now_ms; }
 /* The ticker's deadline, as the window last handed it over. */
 static uint64_t ticker_due=YONDER_NEVER;
 void yonder_ticker_set(yonder_ticker_t *ticker, uint64_t due) { (void)ticker; ticker_due=due; }
+/* The ticker's counts, as a running ticker would give them. */
+static yonder_ticker_counts_t ticker_counts;
+yonder_ticker_counts_t yonder_ticker_counts(yonder_ticker_t *ticker) { return ticker!=NULL ? ticker_counts : (yonder_ticker_counts_t){0}; }
+void yonder_ticker_counts_restart(yonder_ticker_t *ticker) { (void)ticker; }
 /* THE POOL, FAKED. A stream case (below) lets one navigation be submitted
  * and plays its worker itself; every other case still treats a submission
  * as a mistake. */
@@ -411,13 +415,18 @@ static bool script_land(const char *tail, const char *source) {
 /* Reached from the doorbell's other bits, which no case rings. */
 int64_t os64_thread_join(int32_t handle, int64_t *retval) { (void)handle; (void)retval; return -1; }
 void os64_ui_settings_pump(os64_ui_settings_t *dialog) { (void)dialog; check(false,"no settings relay"); }
+/* A moving picture a case plays (picture_tick_cases): its frame, and how
+ * many times it was advanced. No other case has one. */
+struct os64_image_sequence { os64_image_frame_t frame; uint32_t nexts; };
 os64_image_status_t os64_image_sequence_next(os64_image_sequence_t *seq) {
-    (void)seq; check(false,"no moving picture"); return OS64_IMAGE_OK;
+    if(seq==NULL) { check(false,"no moving picture"); return OS64_IMAGE_OK; }
+    seq->nexts++; return OS64_IMAGE_OK;
 }
 void os64_image_free(os64_image_t *image) { os64_free(image->pixels); memset(image,0,sizeof(*image)); }
 void os64_image_sequence_free(os64_image_sequence_t *sequence) { check(sequence==NULL,"no unexpected moving image"); }
 const os64_image_frame_t *os64_image_sequence_frame(const os64_image_sequence_t *sequence) {
-    (void)sequence; check(false,"unexpected animation read"); return NULL;
+    if(sequence==NULL) { check(false,"unexpected animation read"); return NULL; }
+    return &sequence->frame;
 }
 /* A file a case serves (open_local), or none. */
 static const char *slurp_path, *slurp_bytes;
@@ -4099,6 +4108,89 @@ static void diag_css_unasked_case(void) {
 
 /* A last picture that moves the page is written for after the page is laid
  * out again, so the record says what that layout came to. */
+/* The ticks of moving pictures (YONDER_PERF.md): one pass over the page
+ * answers and marks what asking each picture apart does, for every kind
+ * of place a picture is shown; a tick advances the pictures due and on
+ * screen; and a frame's next deadline lands on the grid, so two pictures
+ * of one delay share their ticks. */
+static void picture_tick_cases(void) {
+    static struct os64_image_sequence fakes[8];
+    probe_page("<!doctype html><style>body{margin:0;background:url(d.gif)}"
+               "#c{width:50px;height:30px;background:url(c.gif)}</style>"
+               "<img src=a.gif width=20 height=20><div id=c></div>"
+               "<table background=e.gif width=40 height=20><tr><td>x</td></tr></table>"
+               "<table background=f.gif style='background-image:url(g.gif)' width=40 height=20><tr><td>y</td></tr></table>"
+               "<div style='height:3000px'></div><img src=b.gif width=20 height=20>",false);
+    pictures_start(&g.page);
+    css_pictures(&g.page);
+    check(g.page.npics==7 && g.page.npics<=8,"picture ticks: seven pictures, in every kind of place");
+    for(int32_t k=0;k<g.page.npics && k<8;k++) {
+        memset(&fakes[k],0,sizeof(fakes[k]));
+        fakes[k].frame.delay_ms=100; fakes[k].frame.width=fakes[k].frame.height=1;
+        g.page.pics[k].state=PIC_SHOWN; g.page.pics[k].moving=&fakes[k];
+        g.page.pics[k].playing=true; g.page.pics[k].due=1000;
+    }
+    bool seen[8], mark[8];
+    pictures_seen(seen,NULL);
+    bool same=true, offscreen=false;
+    for(int32_t k=0;k<g.page.npics;k++) {
+        same=same && seen[k]==picture_on_screen(k,false);
+        if(strstr(g.page.pics[k].url,"b.gif")!=NULL) offscreen=!seen[k];
+    }
+    check(same && offscreen,"picture ticks: one pass answers what asking each picture apart does");
+    /* A `background` attribute a sheet's picture replaces is not shown, so
+     * its picture is not on screen — asked either way — while the sheet's is. */
+    bool hidden_seen=true, shown_seen=false;
+    for(int32_t k=0;k<g.page.npics;k++) {
+        if(strstr(g.page.pics[k].url,"f.gif")) hidden_seen=seen[k] || picture_on_screen(k,false);
+        if(strstr(g.page.pics[k].url,"g.gif")) shown_seen=seen[k] && picture_on_screen(k,false);
+    }
+    check(!hidden_seen && shown_seen,"picture ticks: an attribute's picture a sheet replaces is not on screen");
+    bool marks_same=true;
+    for(int32_t k=0;k<g.page.npics;k++) {
+        memset(mark,0,sizeof(mark)); mark[k]=true;
+        g.ui.any_dirty=false; g.ui.dirty=(os64_gui_rect_t){0,0,0,0};
+        pictures_seen(seen,mark);
+        bool any1=g.ui.any_dirty; os64_gui_rect_t d1=g.ui.dirty;
+        g.ui.any_dirty=false; g.ui.dirty=(os64_gui_rect_t){0,0,0,0};
+        (void)picture_on_screen(k,true);
+        marks_same=marks_same && any1==g.ui.any_dirty && (!any1 || (d1.x==g.ui.dirty.x && d1.y==g.ui.dirty.y &&
+                   d1.w==g.ui.dirty.w && d1.h==g.ui.dirty.h));
+    }
+    check(marks_same,"picture ticks: one pass marks what asking each picture apart marks");
+    /* Due at two ticks of the clock, both advanced by the tick after, each
+     * then due its delay after the tick that showed it. */
+    int32_t a=-1, c=-1, b=-1;
+    for(int32_t k=0;k<g.page.npics;k++) {
+        if(strstr(g.page.pics[k].url,"a.gif")) a=k;
+        if(strstr(g.page.pics[k].url,"c.gif")) c=k;
+        if(strstr(g.page.pics[k].url,"b.gif")) b=k;
+    }
+    g.page.pics[a].due=1000; g.page.pics[c].due=1010;
+    now_ms=1010;
+    pictures_tick();
+    check(fakes[a].nexts==1 && fakes[c].nexts==1 && fakes[b].nexts==0,
+          "picture ticks: a tick advances the pictures due and on screen, not one scrolled away");
+    check(g.page.pics[a].due==1110 && g.page.pics[c].due==1110,
+          "picture ticks: each next frame is due its delay after the tick that showed it");
+    /* A past moment the loop meets itself waits for the clock's next tick,
+     * unless a picture is due at the same moment: then it is rung for now. */
+    {
+        uint64_t settle=g.settle_due;
+        for(int32_t k=0;k<g.page.npics;k++) g.page.pics[k].playing=(k==a);
+        now_ms=2000; g.settle_due=1500; g.page.pics[a].due=1500;
+        pictures_schedule();
+        check(ticker_due==1500,"picture ticks: a picture due with the settle is rung for at once");
+        g.page.pics[a].due=1600;
+        pictures_schedule();
+        check(ticker_due==2001,"picture ticks: the settle alone waits for the clock's next tick");
+        g.settle_due=settle;
+    }
+    for(int32_t k=0;k<g.page.npics;k++) { g.page.pics[k].moving=NULL; g.page.pics[k].playing=false; }
+    now_ms=0;
+    probe_drop();
+}
+
 static void diag_picture_moves_case(void) {
     probe_page("<img src=file:///grows.png>",true);
     pictures_start(&g.page);
@@ -4396,6 +4488,165 @@ static void web_drop(void) {
     probe_drop();
     probe_web=false;
     while(nfont_jobs>0) os64_free(font_jobs[--nfont_jobs].job);
+}
+/* The paint counts on the record (YONDER_PERF.md § Measure first): what
+ * nothing painted says, a paint's stages in milliseconds at the counter's
+ * rate, and `d` writing the record on asking and starting them again. */
+static void paint_cost_cases(void) {
+    fake_reset();
+    memset(&s_diag,0,sizeof(s_diag)); s_diag.next=1;
+    snprintf(saved_diagnostics,sizeof(saved_diagnostics),"/tmp/diag");
+    check(diag_dir_open()==NULL,"paint counts: the record has a directory");
+    web_page("<p>hello");
+    static char rec[8192];
+    cost_reset();
+    diag_paint(&g.page);
+    yonder_diag_render(g.page.diag,rec,sizeof(rec));
+    check(strstr(rec,"\npaint: nothing painted in 0.0 s; 0 ticks, 0 schedules; too short a span to time; 0 layouts; ")!=NULL &&
+          strstr(rec,"paint stages")==NULL,
+          "paint counts: nothing painted says so, and a span too short to time has no stages");
+    check(lay_out_page(&g.page,800,600) && s_cost.layouts==1 && s_cost.total[PS_LAYOUTS]>0,
+          "paint counts: a layout is counted, and timed");
+    cost_reset();
+    /* Two paints of 12 ms each in render at a counter of 1000 a microsecond,
+     * over a span of 1000 s: the real counter runs on while the test does,
+     * and that drift must be too small to move a tenth of a millisecond. */
+    s_cost.from_cycles=cycles()-1000000000000ull;
+    s_cost.from_us=os64_micros()-1000000000;
+    s_cost.paints=2; s_cost.whole=1; s_cost.pixels=3000000; s_cost.ticks=4; s_cost.schedules=5;
+    s_cost.waited=250000000000ull;   /* a quarter of the span asleep */
+    s_cost.total[PS_SCHEDULE]=5000000;
+    s_cost.total[PS_RENDER]=24000000; s_cost.most[PS_RENDER]=13000000;
+    s_cost.total[PS_VIEW]=20000000; s_cost.total[PS_TEXT]=4000000; s_cost.total[PS_TICKS]=8000000;
+    diag_paint(&g.page);
+    yonder_diag_render(g.page.diag,rec,sizeof(rec));
+    check(strstr(rec,"\npaint: 2 paints in 1000.0 s (1 whole views), 3.0 Mpx of the view; 4 ticks, 5 schedules; "
+                     "the main loop busy 75%; 0 layouts; frames late at most 0 ms, 0 more than 30 ms; the longest wait 0 ms; 0 script tasks: 0 scripts, 0 timers, 0 events; 0 bells taken; the ticker not running; deadlines already past when handed to it: settle 0, "
+                     "layouts 0, ticks 0, arrival 0, stream 0, timers 0, pictures 0\n")!=NULL &&
+          strstr(rec,", schedule (a call) 1.0 (0.0)")!=NULL &&
+          strstr(rec,"paint stages: ms a paint (most): render 12.0 (13.0), view 10.0 (0.0)")!=NULL &&
+          strstr(rec,", text 2.0 (0.0)")!=NULL && strstr(rec,", ticks (a tick) 2.0 (0.0)")!=NULL &&
+          strstr(rec,"; window 2.0, the view's rest 8.0\n")!=NULL,
+          "paint counts: each stage in milliseconds a paint, the window and the view's rest beside them");
+    /* A running ticker says what it did. */
+    g.ticker=(yonder_ticker_t *)&ticker_counts;
+    ticker_counts=(yonder_ticker_counts_t){.rings=9,.wakes=7,.rang_late_most=3,.overslept_most=2};
+    diag_paint(&g.page);
+    yonder_diag_render(g.page.diag,rec,sizeof(rec));
+    g.ticker=NULL;
+    check(strstr(rec,"; 0 bells taken; the ticker rang 9 times, woke 7 times, rang at most 3 ms late, slept at "
+                     "most 2 ms past its time; deadlines already past when handed to it: settle 0,")!=NULL,
+          "paint counts: the ticker's own counts, while it runs");
+    /* A deadline already past when it is handed to the ticker is counted
+     * against where it came from. */
+    {
+        uint64_t settle=g.settle_due;
+        now_ms=5000; g.settle_due=4000;
+        pictures_schedule();
+        check(s_cost.past[PAST_SETTLE]==1 && s_cost.past[PAST_PICTURES]==0,
+              "paint counts: a deadline already past is counted against its source");
+        g.settle_due=settle; now_ms=0;
+    }
+    /* `d` in the view writes the record on asking and starts the counts again. */
+    {
+        os64_gui_event_t ev={0};
+        ev.key.ascii='d';
+        check(view_key(&ev)==KEY_RECORD,"paint counts: d in the view asks for the record");
+        diag_asked();
+        char name[64]; yonder_diag_file_name(g.page.diag,name,sizeof(name));
+        const char *file=diag_file("/tmp/diag",name);
+        check(has(file,"\nwritten: when asked\n") && has(file,"\npaint reading 1: at y 0: 2 paints in ") &&
+              has(file," | ms a paint (most): render 12.0 (13.0)") && s_cost.paints==0 && s_cost.total[PS_RENDER]==0,
+              "paint counts: d keeps the counts as a reading, writes the record, and starts them again");
+        s_cost.paints=1; s_cost.total[PS_RENDER]=5000000;
+        s_cost.from_cycles=cycles()-1000000000000ull; s_cost.from_us=os64_micros()-1000000000;
+        diag_asked();
+        file=diag_file("/tmp/diag",name);
+        check(has(file,"\npaint reading 1: at y 0: 2 paints in ") && has(file,"\npaint reading 2: at y 0: 1 paints in ") &&
+              s_cost_readings==2,
+              "paint counts: each d adds a reading, and the ones before it stay");
+    }
+    /* A `d` whose file cannot be written keeps its reading and the counts:
+     * the next `d` writes both. */
+    {
+        char name[64]; yonder_diag_file_name(g.page.diag,name,sizeof(name));
+        s_cost.paints=3; s_cost.total[PS_RENDER]=5000000;
+        s_cost.from_cycles=cycles()-1000000000000ull; s_cost.from_us=os64_micros()-1000000000;
+        fake_fail_open=true;
+        diag_asked();
+        fake_fail_open=false;
+        check(s_cost_readings==3 && s_cost.paints==3 && has(g.status_rest,"Paint reading 3 kept, but the page file "
+              "could not be written in /tmp/diag; the counts go on."),
+              "paint counts: a d whose file is not written keeps the counts going and says so");
+        diag_asked();
+        const char *file=diag_file("/tmp/diag",name);
+        check(has(file,"\npaint reading 3: at y 0: 3 paints in ") && has(file,"\npaint reading 4: at y 0: 3 paints in ") &&
+              s_cost.paints==0,
+              "paint counts: the next d writes the kept reading and its own, then starts again");
+        /* No page files to write: d says so and keeps nothing. */
+        char dir[sizeof(s_diag.dir)];
+        memcpy(dir,s_diag.dir,sizeof(dir));
+        s_diag.dir[0]='\0';
+        diag_asked();
+        check(s_cost_readings==4 && has(g.status_rest,"No page files: set diagnostics in yonder.conf to write them."),
+              "paint counts: d with no page files says so, and keeps no reading");
+        memcpy(s_diag.dir,dir,sizeof(dir));
+    }
+    /* Every script task the loop runs is counted by its kind; an interval
+     * whose counter stepped back counts as nothing, and the reading says so. */
+    {
+        cost_reset();
+        task_cost("script"); task_cost("timer"); task_cost("timer"); task_cost("click"); task_cost("load");
+        check(s_cost.scripts==1 && s_cost.timers==2 && s_cost.events==2,
+              "paint counts: a script, a timer and an event are each a task of their kind");
+        uint64_t before=s_cost.backward;
+        check(cycles_since(cycles()+1000000000000ull)==0 && s_cost.backward==before+1,
+              "paint counts: a counter read behind its start is an interval of nothing, counted");
+        s_cost.paints=1; s_cost.from_cycles=cycles()-1000000000000ull; s_cost.from_us=os64_micros()-1000000000;
+        diag_paint(&g.page);
+        yonder_diag_render(g.page.diag,rec,sizeof(rec));
+        check(strstr(rec,"; the counter stepped back 1 times (the cores' counters disagree: these times are suspect); ")!=NULL &&
+              strstr(rec,"; 5 script tasks: 1 scripts, 2 timers, 2 events;")!=NULL,
+              "paint counts: the reading names a counter that stepped back, and the tasks by kind");
+        /* A span whose counter stepped back across it has no rate: the line
+         * says so, not that nothing was painted. */
+        s_cost.from_cycles=cycles()+1000000000000ull;
+        diag_paint(&g.page);
+        yonder_diag_render(g.page.diag,rec,sizeof(rec));
+        check(strstr(rec,"\npaint: 1 paints in 1000.0 s (0 whole views), 0.0 Mpx of the view; 0 ticks, 0 schedules; "
+                         "the counter stepped back across the span (the cores' counters disagree): no times; ")!=NULL &&
+              strstr(rec,"; 5 script tasks: 1 scripts, 2 timers, 2 events;")!=NULL,
+              "paint counts: a span the counter stepped back across is said, and its counts are kept");
+        /* Work with nothing painted is still counted on the record, timed. */
+        cost_reset();
+        task_cost("timer"); s_cost.layouts=2;
+        s_cost.from_cycles=cycles()-1000000000000ull; s_cost.from_us=os64_micros()-1000000000;
+        diag_paint(&g.page);
+        yonder_diag_render(g.page.diag,rec,sizeof(rec));
+        check(strstr(rec,"\npaint: nothing painted in 1000.0 s; 0 ticks, 0 schedules; the main loop busy ")!=NULL &&
+              strstr(rec,"; 2 layouts;")!=NULL && strstr(rec,"; 1 script tasks: 0 scripts, 1 timers, 0 events;")!=NULL &&
+              strstr(rec,"\npaint stages: ms a paint (most):")!=NULL,
+              "paint counts: a span with nothing painted keeps its work and its stages");
+    }
+    web_drop();
+    saved_diagnostics[0]='\0';
+    memset(&s_diag,0,sizeof(s_diag)); s_diag.next=1;
+    /* The shown page's script tasks are counted by kind: a script, then
+     * the timers it set. And a timer already due is the loop's to run at
+     * its turn: the ticker is handed the clock's next tick, never the past
+     * — or its bell, met among the events, rings again and again. */
+    probe_page("<p id=out>x</p><script>setTimeout(function(){document.getElementById('out').textContent='y'},0);"
+               "setTimeout(function(){},0)</script>",true);
+    cost_reset();
+    check(script_turn() && s_cost.scripts==1 && s_cost.timers==0,"paint counts: a script is counted as a script task");
+    now_ms+=10;
+    check(script_turn() && s_cost.timers==1 && probe_text_is("out","y"),"paint counts: a timer is counted as a timer task");
+    pictures_schedule();
+    check(ticker_due==now_ms+1 && s_cost.past[PAST_TIMERS]>=1,
+          "timer ring: a due timer is handed to the ticker as the next tick, not the past");
+    check(script_turn() && s_cost.timers==2,"timer ring: and the loop's turn runs it");
+    check(!script_turn() && s_cost.scripts+s_cost.timers==3,"paint counts: a turn with no task counts none");
+    probe_drop();
 }
 static void webfont_cases(void) {
     /* Serif and mono are Test Serif; sans is Test Sans, a system family a
@@ -5646,6 +5897,7 @@ static void diag_cases(void) {
     diag_picture_unasked_case();
     diag_css_unasked_case();
     diag_lost_distinct_case();
+    picture_tick_cases();
     diag_fact_short_case();
     diag_lost_overflow_case();
     diag_arriving_released_case();
@@ -5763,6 +6015,7 @@ int main(void)
     if(getenv("YONDER_NO_STREAM")==NULL) join_cases();
     if(getenv("YONDER_NO_STREAM")==NULL) diag_cases();
     webfont_cases();
+    paint_cost_cases();
     os64_text_font_release(probe_font);
     check(os64_text_destroy(probe_text)==OS64_FONT_OK,"all layout text released");
     check(live==0,"native and engine heap is empty");

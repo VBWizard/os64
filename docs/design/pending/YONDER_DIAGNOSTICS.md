@@ -272,6 +272,49 @@ not kept — on the line it could not finish, or on its own line when it
 could not even name what went — without promising to say which. Counts
 stay exact while memory lasts and are marked as floors once it does not.
 
+### What paints cost (the perf slice, YONDER_PERF.md)
+
+The shown page's record carries two plain lines about its paints since it
+was shown, or since its record was last written on asking:
+
+    paint: 26 paints in 11.9 s (26 whole views), 10.9 Mpx of the view; 354 ticks
+    paint stages: ms a paint (most): render 121.4 (130.5), view 119.5 (128.6), backgrounds 11.1 (11.6), pictures 2.9 (3.2), text 0.9 (1.0), groups 0.0 (0.0), shadows 0.0 (0.0), gradients 63.0 (69.6), warps 31.3 (36.8), publish 10.6 (11.6), ticks (a tick) 22.0 (27.1); window 1.9, the view's rest 10.1
+
+- **`render`** is libui's whole paint, the root panel and the chrome
+  included, and **`view`** the page's part of it; `window` is the
+  difference. Inside the view: **`backgrounds`** (pictures behind boxes and
+  the canvas), **`pictures`**, **`text`**, opacity **`groups`**, box
+  **`shadows`** (their masks built and blurred), **`gradients`** (computed
+  pixel by pixel), **`warps`** (turned boxes drawn through their matrix);
+  `the view's rest` is the view outside those. **`publish`** hands the
+  damage to the compositor. **`ticks`** are per tick, not per paint: a
+  tick's work finding what moved and marking it, before its paint.
+  **`schedule`** is per call (handing the ticker its next deadline),
+  **`tasks`** per script task (a script, a timer or an event, its run),
+  **`layouts`** per layout. The `paint:` line has grown since this
+  example: the layouts, how late frames were, the loop's longest wait, the
+  script tasks by kind, the ticker's bells and its own counts, and the
+  deadlines already past when handed to it, by source (YONDER_PERF.md §
+  Measure first).
+- Timed with the processor's counter, its rate taken from the clock across
+  the same span, so the numbers are the machine's own: the P5's on the P5.
+  A span with nothing painted keeps every other count and its stages
+  (`nothing painted in 10.0 s; ...`): a page whose timers compute without
+  changing what is shown is still on the record. A span too short to
+  time, or one the counter stepped back across, says so and keeps its
+  counts without the times.
+  An interval whose counter stepped back (the thread moved to a core whose
+  counter is behind) counts as nothing, and the line says how many.
+- **`d` in the page writes the record now** (`written: when asked`),
+  keeping the counts since the last `d` as a numbered reading with where
+  the page was scrolled — `paint reading 2: at y 2140: 96 paints in 10.1 s
+  ... | ms a paint (most): render ...` — and starts them again. So each
+  part of a page is measured on its own and every reading stays: scroll
+  there, `d`, wait, `d`, scroll on, wait, `d`. The status line names the
+  reading it wrote. `paint` and `paint stages` are the counts since the
+  last `d` that reached its file: one that did not keeps its reading in
+  the record, lets the counts run on, and says so on the status line.
+
 ### Built differently from the brief, and why
 
 - **The sequence continues across runs.** A per-run sequence restarts at
