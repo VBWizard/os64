@@ -1,6 +1,6 @@
 # Per-thread kernel time by cause
 
-*Design, 2026-10-17. Fault counters are implemented in `d40ae452`; cause timing remains to be implemented.*
+*Design and measurements, 2026-10-17. Fault counts, inclusive fault time, and per-syscall time are implemented; exclusive IRQ and self-IPI halt accounting remain open.*
 
 ## Question and current evidence
 
@@ -42,7 +42,15 @@ After the merged lock counters and inclusive `fault_us` were booted, a 67.3-seco
 
 The 146,925 resolved faults were minor, about 2,183 per second. Fault handling accounts for about 4% of the main thread's system time; the large-buffer churn is real but not the main CPU cost at this workload. The ticker's kernel time is unrelated to paging.
 
-Across all GUI callers in the same interval, the ring site made 8,811 acquisitions and waited 3.17 s for `kGuiLock`, holding it for 0.034 s. The publish site made 4,344 acquisitions, waited 1.73 s, and held the lock for 3.96 s. These site totals cannot be assigned exactly to Yonder's two threads, but their scale suggests lock acquisition as the next timing target. A per-syscall thread table must separate that work from other kernel time before attributing it.
+Across all GUI callers in the same interval, the ring site made 8,811 acquisitions and waited 3.17 s for `kGuiLock`, holding it for 0.034 s. The publish site made 4,344 acquisitions, waited 1.73 s, and held the lock for 3.96 s. These site totals have no thread IDs, but their scale suggests lock acquisition as the next timing target. A per-syscall thread table can identify each thread's caller time.
+
+On the next P5 boot, a 68.6-second desktop-only interval with Yonder absent made **zero** ring-site acquisitions and 139 publish-site acquisitions; those publishes held the lock for 0.002 s and waited less than 0.001 s. In the Yonder source, the ticker is the caller of `os64_gui_event_ring`. Together with the earlier Yonder interval, this makes the 3.17 s ring wait a strong explanation for most of the ticker's 3.47 s of system time, though the intervals are from different boots. Nearly all of the Yonder interval's publish lock time is additional to the desktop baseline. The per-thread syscall rows will confirm the ownership directly.
+
+### Per-syscall timing slice
+
+The next build keeps an active syscall row on `thread_t` across blocking and migration. `/proc/<pid>/thread/<tid>/syscalls` and `/proc/<pid>/syscalls` show nonzero `number name calls us` rows, with row 128 gathering numbers 128 and above. Status adds `syscall_us` and, under the unified exception path, `other_system_us` derived from raw system, fault, and syscall cycles. The per-thread row copy uses the accounting sequence; task rows sum those coherent thread copies.
+
+Fault spans are excluded from syscall rows. Interrupts that preempt a syscall remain inside that syscall row until IRQ entry and return are stamped. The displayed `syscall_us` therefore measures an inclusive syscall span, and `other_system_us` is the unattributed residue at this stage; neither is the final exclusive partition. The QEMU build passed 34 preboot and 34 postboot tests, and both task and thread syscall files rendered expected rows. Before deploying this slice, the P5's fault-time kernel ran seven `syscallbench` rounds of 20,000 `taskid` calls; the best adjusted round was 21,924,111 cycles, or about 1,096 cycles per call. Use the same fixture after the new boot to measure the row-update overhead.
 
 ## Cause timing contract
 
