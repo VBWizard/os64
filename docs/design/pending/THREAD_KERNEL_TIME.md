@@ -14,6 +14,20 @@ In that same interval `/sys/gui` added 2.38 seconds of ring-lock waiting across 
 
 Read task and thread status before and after a minute of the same Yonder display on the P5. Thousands of `anon_zero_pages` per second on the main thread would support the large-buffer churn hypothesis. A small count would rule out that specific mechanism as a major part of its system time. A fault count by itself is not a timing measurement.
 
+### P5 reading after the fault-counter boot
+
+With Yonder visible at 1920×1080, a 67.6-second interval on 2026-10-17 gave:
+
+| scope | user time | system time | resolved minor faults | anonymous pages zeroed |
+| --- | ---: | ---: | ---: | ---: |
+| main thread | 37.71 s (55.8% core) | 8.38 s (12.4% core) | 152,278 | 152,278 |
+| ticker thread | 0.02 s | 2.88 s (4.3% core) | 0 | 0 |
+| whole task | 37.73 s (55.8% core) | 11.26 s (16.7% core) | 152,278 | 152,278 |
+
+The main thread zeroed about 2,252 pages, or 8.8 MiB, per second. This confirms recurring anonymous page allocation on the main thread, though it is far below the 68,000 faults per second estimated for an 8 MiB buffer replaced on every 33 Hz paint. The count cannot say what fraction of its 8.38 seconds of system time was spent resolving those faults. The ticker's kernel time has a separate cause; it resolved no faults in the interval. No major fault was resolved during the sample.
+
+This boot was built from `userland` before the sibling GUI lock-count commit was merged. It therefore lacked the prior `/sys/gui` lock-site table; that commit has since been merged into this branch for the next kernel build. The thread counters above are unaffected.
+
 ## Cause timing contract
 
 The next measurement should partition each non-idle thread's committed `systemCycles` into syscall work by number, resolved page-fault work, interrupt work, self-IPI halt time, and a remainder. Every cycle belongs to one bucket at a charge; a blocked thread accumulates no cycles. A task view sums its threads' raw counters before conversion to microseconds. The remainder is derived from the same coherent thread snapshot as `systemCycles`, never by subtracting separately rounded text values.
