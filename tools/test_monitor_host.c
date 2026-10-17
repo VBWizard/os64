@@ -75,6 +75,21 @@ int32_t os64_proc_read_thread(uint64_t pid,uint64_t tid,os64_thread_info_t *out)
     for(size_t i=0;i<nthreads;i++) if(threads[i].pid==pid && threads[i].tid==tid) { *out=threads[i];return 0; }
     return -1;
 }
+int32_t os64_proc_read_split(uint64_t pid,os64_proc_info_t *out,os64_proc_cpu_split_t *split)
+{
+    int32_t rc=os64_proc_read(pid,out);
+    if(rc==0) *split=(os64_proc_cpu_split_t){.user_us=out->runtime_us/2,
+        .system_us=out->runtime_us-out->runtime_us/2,.valid=true};
+    return rc;
+}
+int32_t os64_proc_read_thread_split(uint64_t pid,uint64_t tid,
+                                    os64_thread_info_t *out,os64_proc_cpu_split_t *split)
+{
+    int32_t rc=os64_proc_read_thread(pid,tid,out);
+    if(rc==0) *split=(os64_proc_cpu_split_t){.user_us=out->runtime_us/2,
+        .system_us=out->runtime_us-out->runtime_us/2,.valid=true};
+    return rc;
+}
 int64_t os64_open(const char *path,const char *mode)
 {
     (void)mode; unsigned id; char tail;
@@ -95,7 +110,9 @@ int64_t os64_readline(int32_t h,char *out,size_t cap)
     case 2: snprintf(out,cap,"sched_us: %lu",c->sched);return 1;
     case 3: snprintf(out,cap,"busy_us: %lu%s",c->busy,malformed_core?"x":"");return 1;
     case 4: if(missing_core)return 0;snprintf(out,cap,"total_us: %lu",c->total);return 1;
-    case 5: if(duplicate_core){snprintf(out,cap,"total_us: %lu",c->total);return 1;}return 0;
+    case 5: if(duplicate_core){snprintf(out,cap,"total_us: %lu",c->total);return 1;}
+            snprintf(out,cap,"user_us: %lu",c->busy/2);return 1;
+    case 6: snprintf(out,cap,"system_us: %lu",c->busy-c->busy/2);return 1;
     default:return 0;
     }
 }
@@ -144,6 +161,15 @@ static void independent_consumers(void)
     assert(s->summary_valid && s->interval_us==1000000 && s->cores[1].id==7);
     assert(task(s,1)->cpu.percent==150 && s->threads[0].cpu.percent==50 && s->threads[1].cpu.percent==100);
     assert(s->machine_percent[0]==50 && s->machine_percent[1]==45 && s->machine_percent[2]==5);
+    os64_monitor_split_t split;
+    os64_monitor_core_split_t machine;
+    assert(os64_monitor_task_split(a,1,&split) && split.user.valid &&
+           split.user.percent==75 && split.system.percent==75);
+    assert(os64_monitor_thread_split(a,1,1,&split) && split.user.valid &&
+           split.user.percent==25 && split.system.percent==25);
+    assert(os64_monitor_machine_split(a,&machine) && machine.valid &&
+           machine.percent[0]+machine.percent[1]+machine.percent[2]+machine.percent[3]==100);
+    assert(machine.percent[0]==25 && machine.percent[1]==25);
     assert(held->sequence==1 && held->tasks[0].info.runtime_us==500000);
     assert(s->memory_valid && s->memory.free==400 && s->skew_valid && !s->skew_tenths);
     advance();tasks[0].runtime_us-=1000000; reverse_order=true;
@@ -225,7 +251,7 @@ static void allocation_failures(void)
 {
     setup();assert(!os64_monitor_create(0,1,1));assert(!os64_monitor_create(1,1,0));
     assert(!os64_monitor_create(SIZE_MAX,1,1));assert(!live_allocations);
-    for(unsigned i=1;i<=7;i++) {
+    for(unsigned i=1;i<=14;i++) {
         allocations=0;fail_allocation=i;assert(!os64_monitor_create(4,4,4));assert(!live_allocations);
     }
     fail_allocation=0;os64_monitor_destroy(NULL);

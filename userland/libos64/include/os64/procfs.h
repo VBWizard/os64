@@ -51,6 +51,13 @@ typedef struct {
     char affinity[24];
 } os64_thread_info_t;
 
+// Optional CPU fields from the same status read as the corresponding record.
+// Existing record layouts are ABI and cannot grow when libos64 is replaced.
+typedef struct {
+    uint64_t user_us, system_us, idle_us;
+    bool valid, idle;
+} os64_proc_cpu_split_t;
+
 // The controlling terminal, via /proc/self/tty — os64's TIOCGWINSZ, shaped
 // as a file. rows/cols are what a full-screen program lays itself out in;
 // focused lets it skip redraw work while nobody is looking.
@@ -91,6 +98,8 @@ int32_t os64_proc_snapshot(os64_proc_info_t *out, size_t capacity);
 // which already own an identity-keyed cache and should not allocate a second
 // whole-system snapshot merely to share the parser.
 int32_t os64_proc_read(uint64_t pid, os64_proc_info_t *out);
+int32_t os64_proc_read_split(uint64_t pid, os64_proc_info_t *out,
+                             os64_proc_cpu_split_t *split);
 // Read the complete command, joining cmdline's argument lines with spaces.
 // Returns 0 and allocated NUL-terminated text (release with os64_free), or -1
 // and *out == NULL on read/allocation/size failure. Empty reports yield "".
@@ -98,6 +107,9 @@ int32_t os64_proc_read(uint64_t pid, os64_proc_info_t *out);
 int32_t os64_proc_command(uint64_t pid, char **out);
 int32_t os64_proc_read_thread(uint64_t pid, uint64_t tid,
                               os64_thread_info_t *out);
+int32_t os64_proc_read_thread_split(uint64_t pid, uint64_t tid,
+                                    os64_thread_info_t *out,
+                                    os64_proc_cpu_split_t *split);
 
 // Read the calling process's controlling terminal (via /proc/self/tty).
 // Returns 0 on success, -1 if the file cannot be opened or parsed.

@@ -31,6 +31,7 @@
 # and halts, so the tail below is simply never reached.
 
 .extern exception_dispatch
+.extern accounting_charge
 
 # The per-vector stubs. Two shapes, differing only in who supplies the error
 # code — which is the entire reason the old file needed two macros too.
@@ -80,6 +81,15 @@ exc_common:
     push r14
     push r15
 
+    # The common frame saves every register before this call. Its CS is at
+    # +144: close ring-3 time for user faults, or ring-0 time for nested ones.
+    mov rbx, rsp
+    mov rdi, [rbx + 144]
+    and edi, 3
+    and rsp, -16
+    call accounting_charge
+    mov rsp, rbx
+
     # rsp now IS the exception_context_t. Hand it over.
     #
     # SysV wants rsp 16-byte aligned at the call, and we cannot assume it: a
@@ -92,6 +102,19 @@ exc_common:
     and rsp, -16
     call exception_dispatch
     mov rsp, rbx
+
+    # Dispatch may edit the return frame (signal delivery). Charge the
+    # kernel tail only when this iretq will actually enter ring 3.
+    mov rax, [rsp + 144]
+    and eax, 3
+    cmp eax, 3
+    jne exc_return_accounted
+    mov rbx, rsp
+    and rsp, -16
+    xor edi, edi
+    call accounting_charge
+    mov rsp, rbx
+exc_return_accounted:
 
     # Resolved. Unwind in exact reverse and resume — possibly at a DIFFERENT
     # rip, because exception_dispatch is allowed to edit the context (the

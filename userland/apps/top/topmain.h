@@ -17,6 +17,7 @@ typedef struct {
     bool showThreads;   // -t  (expand multi-threaded tasks into per-thread
                         //      rows under their task; default is the honest
                         //      aggregate — Chris's ruling, 2026-08-07)
+    bool hideSplit;     // -u  (start with user/system CPU time hidden)
 } top_options_t;
 
 int32_t topMain(const top_options_t *opts);

@@ -91,8 +91,8 @@ typedef struct {
 	// these can strike a core off the roster on its own:
 	//   inScheduler   — set: the nudge loop skips this core (scheduler.c:231),
 	//                   send_ipi drops its schedule IPI (smp_core.c:143), AND
-	//                   acct_settle_ISR refuses to settle (smp_core.c:641).
-	//                   One bit, three independent disappearances.
+	//                   acct_settle_ISR skips the scheduler's short guard
+	//                   windows around its charged pass (smp_core.c).
 	//   settleAck     — the liveness beacon mpAcctSettleAll already clears and
 	//                   sets and nothing has ever read.
 	//   lastIretqRIP  — where this core last returned to from a scheduler pass.

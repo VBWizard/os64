@@ -159,7 +159,6 @@
 #include "scheduler.h"              // mp_inScheduler, mp_lastIretqRIP
 #include "smp.h"                    // core_local_storage_t, kMPCoreCount
 #include "smp_core.h"               // get_core_local_storage_for_core, mpAcctSettleAll
-#include "task.h"                   // task_t — kIdleTasks' element type
 #include "nmi_probe.h"              // the probe trigger behind cpu/<n>/probe
 #include "driver/block/block_cache.h"   // /sys/cache — the block cache's own numbers
 #include "conf.h"                       // /sys/conf — the config search path and its takers
@@ -190,9 +189,9 @@
 #include "console_font.h"   // /sys/console/font — the VTs' face, and its door
 #include "shared_object.h"  // /sys/shlib — the loaded-shared-object registry
 #include "allocator.h"      // /sys/memory — the frame table and the ledger
+#include "accounting.h"
 
 extern volatile uint64_t kTicksSinceStart;   // /sys/log stamps the sink heartbeat against it
-extern task_t   *kIdleTasks[];         // per-core idle tasks — their runCycles IS idle time
 extern uint64_t  kCPUCyclesPerSecond;  // boot-calibrated: the cycles→µs exchange rate
 extern volatile bool mp_acctSettleAck[MAX_CPUS];
 extern bool mp_schedulerEnabled[MAX_CPUS];
@@ -1821,14 +1820,9 @@ static void sys_gen_net_card(synth_text_t *t, uint32_t index)
 // cpu/<n>/time — one core's slice of the CPU-time ledger (/proc/cores' whole
 // table until 2026-08-12, split per-core when it moved to the machine's tree).
 //
-// busy is DERIVED (total - idle - sched): the accounting charges threads,
-// the idle thread among them, and the scheduler's own passes; what the
-// three don't explain is genuinely unaccounted (early boot, ISR time —
-// documented v1 honesty). All values are written only by each core's own
-// scheduler pass — reading them cross-core here is safe (worst case one
-// slice stale); SUBTRACTING a remote TSC from a local rdtsc would not be,
-// which is why total comes from the core's own two stamps, never from
-// "now".
+// A coherent core tuple partitions committed time into user, system, idle
+// and scheduler spans. The per-core sequence protects the copy across
+// another core's short charge; no remote/local TSC subtraction is needed.
 static void sys_gen_cpu_time(synth_text_t *t, uint32_t core)
 {
 	// Settle-on-read: every core charges its in-flight span (locally, own
@@ -1841,21 +1835,28 @@ static void sys_gen_cpu_time(synth_text_t *t, uint32_t core)
 	core_local_storage_t *cls = get_core_local_storage_for_core(core);
 	if (cls == NULL)
 		return;
+	accounting_core_cycles_t cycles;
+	if (accounting_read_core(cls, &cycles))
+	{
+		// Round the disjoint buckets first. A remainder derived from
+		// separately rounded totals can decrease while its raw cycles grow.
+		uint64_t idle = sys_cycles_to_us(cycles.idle);
+		uint64_t sched = sys_cycles_to_us(cycles.sched);
+		uint64_t user = sys_cycles_to_us(cycles.user);
+		uint64_t system = sys_cycles_to_us(cycles.system);
+		uint64_t busy = user + system;
+		uint64_t total = busy + idle + sched;
+		synth_text_addf(t, "total_us: %lu\n", total);
+		synth_text_addf(t, "busy_us: %lu\n", busy);
+		synth_text_addf(t, "idle_us: %lu\n", idle);
+		synth_text_addf(t, "sched_us: %lu\n", sched);
+		synth_text_addf(t, "user_us: %lu\n", user);
+		synth_text_addf(t, "system_us: %lu\n", system);
+		return;
+	}
 
-	uint64_t total = (cls->acctLastDispatchTSC > cls->acctZeroTSC)
-	                 ? cls->acctLastDispatchTSC - cls->acctZeroTSC : 0;
-	uint64_t sched = cls->acctSchedCycles;
-	uint64_t idle  = 0;
-	if (kIdleTasks[core] != NULL && kIdleTasks[core]->threads != NULL)
-		idle = kIdleTasks[core]->threads->runCycles;
-
-	uint64_t accounted = idle + sched;
-	uint64_t busy = (total > accounted) ? total - accounted : 0;
-
-	synth_text_addf(t, "total_us: %lu\n", sys_cycles_to_us(total));
-	synth_text_addf(t, "busy_us: %lu\n",  sys_cycles_to_us(busy));
-	synth_text_addf(t, "idle_us: %lu\n",  sys_cycles_to_us(idle));
-	synth_text_addf(t, "sched_us: %lu\n", sys_cycles_to_us(sched));
+	// An empty report marks a bounded coherent-read failure. Rendering a
+	// mixture of raw counters here can create a plausible but false delta.
 }
 
 // cpu/<n>/state — the roster bits, raw. This file exists because of a core

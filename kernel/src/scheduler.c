@@ -14,6 +14,7 @@
 #include "strstr.h"
 #include "fpu.h"
 #include "doorbell.h"
+#include "accounting.h"
 
 volatile uint64_t mp_isrSavedRAX[MAX_CPUS],mp_isrSavedRBX[MAX_CPUS],mp_isrSavedRCX[MAX_CPUS],mp_isrSavedRDX[MAX_CPUS],mp_isrSavedRSI[MAX_CPUS],
                   mp_isrSavedRDI[MAX_CPUS],mp_isrSavedRBP[MAX_CPUS],mp_isrSavedCR0[MAX_CPUS],mp_isrSavedCR3[MAX_CPUS],mp_isrSavedCR4[MAX_CPUS],
@@ -1538,29 +1539,11 @@ void scheduler_do()
 	uint8_t apic_id = cls->apic_id;
     mp_waitingForScheduler[apic_id] = false;
 
-	// ── CPU-time accounting: the outgoing thread's slice ends HERE ──────────
-	// Charged at the switch boundary, not tick-sampled, so sub-tick slices
-	// are visible and nothing gets laundered into whoever the timer caught.
-	// Both rdtsc reads in every delta happen on THIS core (this function runs
-	// on the core being scheduled, even under tickless — the nudger only decides
-	// WHEN, the IPI makes each core run its own pass), so TSC desync between
-	// cores can never corrupt a delta. The ISR time between interrupt entry
-	// and this line rides on the outgoing thread — documented v1 honesty,
-	// fixable with entry stamps if it ever matters.
-	uint64_t acctPassStart = rdtsc();
-	if (cls->acctLastDispatchTSC != 0 &&
-	    cls->currentThread != NULL && cls->currentThread != NO_THREAD)
-	{
-		// Halted current = idle wearing a task's name; the span goes to
-		// this core's idle thread (smp.h acctCurrentHalted — the fix for
-		// top billing the compositor 95% of a core for sleeping).
-		thread_t *acctTarget = (cls->acctCurrentHalted && cls->acctIdleThread != NULL)
-		                           ? cls->acctIdleThread
-		                           : cls->currentThread;
-		acctTarget->runCycles += acctPassStart - cls->acctLastDispatchTSC;
-	}
-	if (cls->acctZeroTSC == 0)
-		cls->acctZeroTSC = acctPassStart;   // this core's meter starts now
+	// Close the outgoing thread using the CS captured by this scheduler
+	// interrupt, then name the next open span as scheduler work. Short device
+	// ISRs without their own stamps remain in the interrupted thread's class.
+	accounting_begin_scheduler(mp_isrSavedCS[apic_id]);
+	uint64_t acctPassStart = cls->acctLastDispatchTSC;
 
     printd(DEBUG_SCHEDULER,"***** SCHEDULER *****\n");
     printd(DEBUG_SCHEDULER,"scheduler: AP %u\n",apic_id);
@@ -1671,19 +1654,10 @@ void scheduler_do()
 #endif
     printd(DEBUG_SCHEDULER, "*********************\n");
 
-    // ── CPU-time accounting: the incoming thread's slice starts HERE ────────
-	// Covers both paths (switch and shortcut — a continued thread is still
-	// dispatched). Everything between acctPassStart and now was the
-	// scheduler's own time: it goes to this core's system bucket, which is
-	// what lets top show ghost-churn as "system: climbing" instead of
-	// laundering it into the innocent bystanders the timer interrupted.
-	uint64_t acctPassEnd = rdtsc();
-	cls->acctSchedCycles += acctPassEnd - acctPassStart;
-	cls->acctLastDispatchTSC = acctPassEnd;
-	// A dispatched thread is by definition not halted: every dispatch —
-	// switch or shortcut — drops the halted flag. The compositor re-raises
-	// it per nap; nobody else ever sets it.
-	cls->acctCurrentHalted = false;
+    // The pass owns this span even if a settle IPI interrupted it. Closing
+    // restamps for the incoming thread; the assembly return tail will close
+    // its own system time before an iretq to ring 3.
+	accounting_end_scheduler();
 
 	// ── The preemption lease (smp_core.c doctrine block) ────────────────────
 	// EVERY dispatch door funnels through this tail — switch, shortcut,
