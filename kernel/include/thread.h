@@ -16,6 +16,12 @@
 // rejected ones, share row 128 so a new ABI number remains visible.
 #define ACCOUNTING_SYSCALL_OVERFLOW 128
 #define ACCOUNTING_SYSCALL_ROWS 129
+#define ACCOUNTING_CAUSE_NESTING 16
+
+typedef enum {
+	ACCOUNTING_CAUSE_FAULT = 1,
+	ACCOUNTING_CAUSE_INTERRUPT = 2,
+} accounting_nested_cause_t;
 
 #define THREAD_USER_STACK_VIRTUAL_START 0x1000
 #define THREAD_USER_STACK_SIZE  0x100000	//1MB user stack
@@ -174,19 +180,25 @@ typedef struct s_thread
 	uint64_t userCycles;
 	uint64_t systemCycles;
 	uint64_t idleCycles;
-	// The unified exception entry tracks nested #PF work on the faulting
-	// thread, so a blocked resolver can resume on another core without
-	// handing its open fault span to that core's next tenant. faultCycles
-	// is a subset of systemCycles; IRQ time can remain inside it until IRQ
-	// entry and return are stamped too.
-	uint32_t acctFaultDepth;
+	// Recoverable faults and IRQs can nest in either order. The top cause
+	// owns each committed kernel span; a blocked resolver keeps the stack
+	// on its thread across dispatch and migration. Excess nesting is charged
+	// to the remainder until it unwinds instead of misnaming the owner.
+	uint8_t acctCauseStack[ACCOUNTING_CAUSE_NESTING];
+	uint8_t acctCauseDepth;
+	uint16_t acctCauseOverflow;
 	uint64_t faultCycles;
 	uint16_t acctSyscallNumber;
 	bool acctInSyscall;
+	bool acctSelfIpiHalt;
 	// A running syscall keeps its row across a scheduler block and migration.
-	// Fault time is excluded; IRQ time can remain inside until IRQ boundaries
-	// are stamped. The total is copied with systemCycles for a raw remainder.
+	// Nested fault and IRQ time and the self-IPI halt span are excluded.
+	// The total is copied with systemCycles for a raw remainder.
 	uint64_t syscallCyclesTotal;
+	uint64_t interruptCycles;
+	uint64_t interruptCount;
+	uint64_t selfIpiHaltCycles;
+	uint64_t selfIpiHaltCount;
 	uint64_t acctSyscallCalls[ACCOUNTING_SYSCALL_ROWS];
 	uint64_t acctSyscallCycles[ACCOUNTING_SYSCALL_ROWS];
 	// Resolved page faults belong to the faulting thread. A major fault

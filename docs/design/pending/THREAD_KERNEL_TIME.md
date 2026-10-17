@@ -1,6 +1,6 @@
 # Per-thread kernel time by cause
 
-*Design and measurements, 2026-10-17. Fault counts, inclusive fault time, and per-syscall time are implemented; exclusive IRQ and self-IPI halt accounting remain open.*
+*Design and measurements, 2026-10-17. The implementation now records disjoint fault, syscall, returning interrupt, self-IPI halt, and remainder buckets; validation is recorded below.*
 
 ## Question and current evidence
 
@@ -90,16 +90,24 @@ After the comparison, Chris authorized restoring the per-syscall image. The P5 b
 
 ## Cause timing contract
 
-The next measurement should partition each non-idle thread's committed `systemCycles` into syscall work by number, resolved page-fault work, interrupt work, self-IPI halt time, and a remainder. Every cycle belongs to one bucket at a charge; a blocked thread accumulates no cycles. A task view sums its threads' raw counters before conversion to microseconds. The remainder is derived from the same coherent thread snapshot as `systemCycles`, never by subtracting separately rounded text values.
+Each non-idle thread's committed `systemCycles` is partitioned into syscall work by number, resolved page-fault work, interrupt work, self-IPI halt time, and a remainder. Every cycle belongs to one bucket at a charge; a blocked thread accumulates no cycles. A task view sums its threads' raw counters before conversion to microseconds. The remainder is derived from the same coherent thread snapshot as `systemCycles`, never by subtracting separately rounded text values. Independently rounded `/proc` microsecond fields can differ by a few microseconds when added as text.
 
 The active cause belongs to `thread_t`, because a blocked syscall may resume on another core. A syscall entry closes the user span, records its number and call count, then opens the syscall cause under one local interrupt mask. Its return closes the syscall span and clears the cause under the same mask. The scheduler continues to close an outgoing thread's open span and charge the pass to its separate core bucket. TSC deltas remain same-core.
 
 A page fault inside a syscall closes the syscall span and opens the fault cause. The exception frame saves the prior cause. On return, including a recoverable ring-0 return, the fault span closes before the prior cause resumes. The unified exception path supplies the entry and return boundaries. The old exception path remains bootable, so any shipped timing must either instrument its recoverable fault return too or mark that configuration unsupported for cause timing.
 
-Interrupt time cannot honestly be called remainder while an IRQ entered in the middle of a syscall inherits the syscall's active cause. Timer, keyboard, mouse, NIC, and IPI stubs therefore need entry and exit stamps before an exact cause partition is exposed. Their saved-register and stack contracts differ; each stub must be checked separately. A self-IPI wait in `scheduler_trigger` needs its own bookends so time halted there does not masquerade as syscall work.
+Timer, keyboard, mouse, NIC, and returning IPI stubs close the interrupted span and push an interrupt cause, then close it and pop on return. A committed scheduler interrupt does the same before changing address spaces and closes the interrupt span before the scheduler's core-only span. The fatal freeze IPI has no return boundary. A nested fault or interrupt takes the top cause, with bounded stack overflow charged to the remainder. `scheduler_trigger` bookends its own `sti;hlt` wait so those cycles do not enter a syscall row. Entry prologues and return tails outside the stamps remain in the adjacent cause; the partition is exact for committed cycles at each accounting charge, not an instruction-level profile.
 
 Use `/proc/<pid>/thread/<tid>/syscalls` for nonzero rows (`number name calls us`) and `/proc/<pid>/syscalls` for the sum across the task's thread list. Keep thread `status` short with fault, interrupt, halt, and remainder totals beside `system_us`. The table uses 128 syscall rows plus an overflow row for numbers 128–255; each row has 64-bit call and cycle counters, about 2 KiB per thread. An overflow row makes a later syscall-number addition visible rather than silently dropping it. The reader copies the table under the thread's accounting sequence. Reuse the existing TSC stamp at syscall boundaries; `syscallbench` measures the cost of the extra index and counter updates.
 
 ## Verification
 
 Exercise a short syscall, a blocking syscall, an anonymous fault, a fault while copying a user buffer in a syscall, and an interrupt nested in each mode. For each coherent thread read, the raw cause buckets plus remainder must equal `systemCycles` and must remain monotonic across sleep and migration. Boot one-core and SMP QEMU, then repeat the P5 interval with Yonder in the same visible state. Compare `syscallbench` against the user/system split baseline before accepting hot-path stamps.
+
+### Final accounting slice
+
+The kernel built with the new nested cause stack and returning interrupt stamps. In both one-core and two-core QEMU, 34 preboot, 34 postboot, and 4 late built-in tests passed with no failure. The P5 booted the same 3,498,560-byte image (CRC32 `eb366b39`), and the desktop task's live status showed nonzero fault, syscall, interrupt, and self-IPI halt buckets. For example, one `/proc/66/status` read reported `system_us=56680`, `fault_us=4661`, `syscall_us=51206`, `interrupt_us=136`, `self_ipi_halt_us=669`, and `other_system_us=7`. The displayed components sum to 56,679 µs because each field is rounded separately; the kernel checks the raw subset relationship before publishing a snapshot.
+
+On that P5 boot, the existing seven-round `syscallbench` fixture measured a best adjusted 24,481,281 cycles for 20,000 `taskid` calls, about 1,224 cycles per call. This falls inside the previous syscall-timing boot's observed 972–1,230 cycle range; these noisy samples cannot isolate the additional IRQ stamp cost, which short syscalls do not normally exercise.
+
+Two reads of the desktop task's threads about 20 seconds apart also checked live deltas. Thread 66 gained 1,678 µs of system time, split into 516 µs syscall, 209 µs interrupt, and 953 µs self-IPI halt; the fault and remainder fields held steady. Thread 70 gained 447 µs of system time, while its displayed components gained 146, 38, and 262 µs respectively (446 µs after separate rounding). Both threads' counters were monotonic. Yonder was not running after the reboot, so the same-view Yonder interval still needs a visible session.

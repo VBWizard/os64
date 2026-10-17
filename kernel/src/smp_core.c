@@ -799,15 +799,16 @@ void mpAcctHaltEnd(void)
     accounting_halt_end();
 }
 
-void acct_settle_ISR(uint64_t interrupted_cs)
+void acct_settle_ISR(void)
 {
     core_local_storage_t *cls = get_core_local_storage();
     // The scheduler owns its open span between its entry and exit charges.
     // Its short prologue/epilogue windows still belong to the pass itself:
-    // do not settle there, where the saved interrupted CS may name a
-    // different thread. An active pass can settle into acctSchedCycles.
+    // do not settle there, where the saved scheduler frame may name a
+    // different thread. IRQ entry already closed the interrupted mode;
+    // an active pass can settle into acctSchedCycles.
     if (cls != NULL && (!mp_inScheduler[cls->apic_id] || cls->acctSchedSpanActive))
-        accounting_charge(interrupted_cs);
+        accounting_charge(0);
     if (cls != NULL)
         mp_acctSettleAck[cls->apic_id] = true;
     write_eoi();

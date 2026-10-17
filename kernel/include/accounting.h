@@ -8,6 +8,7 @@
 
 typedef struct {
 	uint64_t runtime, user, system, idle, fault, syscall;
+	uint64_t interrupt, interrupt_count, self_ipi_halt, self_ipi_halt_count;
 } accounting_thread_cycles_t;
 
 typedef struct {
@@ -24,10 +25,15 @@ typedef struct {
 void accounting_charge(uint64_t cs);
 void accounting_exception_enter(uint64_t interrupted_cs, uint64_t vector);
 void accounting_exception_exit(uint64_t vector);
+void accounting_interrupt_enter(uint64_t interrupted_cs);
+void accounting_interrupt_exit(void);
+void accounting_scheduler_interrupt_enter(uint64_t interrupted_cs);
 void accounting_syscall_enter(uint64_t syscall_number);
 void accounting_syscall_exit(void);
 void accounting_begin_scheduler(uint64_t interrupted_cs);
 void accounting_end_scheduler(void);
+void accounting_self_ipi_halt_begin(void);
+void accounting_self_ipi_halt_end(void);
 void accounting_halt_begin(void);
 void accounting_halt_end(void);
 bool accounting_read_thread(const thread_t *thread, accounting_thread_cycles_t *out);

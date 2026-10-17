@@ -1,6 +1,7 @@
 .code64
 .intel_syntax noprefix
 #include "utility_macros.inc"
+#include "irq_accounting.inc"
 
 # Vector 0x46 — the RTL8125's MSI (DOORBELL.md, 2026-09-05).
 #
@@ -30,6 +31,7 @@ handler_r8125_msi_asm:
     push r9
     push r10
     push r11
+	IRQ_ACCOUNT_ENTER 88
 
     sub rsp, 8              # 16-byte alignment before calling C
     call r8125_isr
@@ -37,6 +39,7 @@ handler_r8125_msi_asm:
 
     mov rax, qword ptr [rip + kMPApicBase]
     mov dword ptr [rax + 0xB0], 0     # LAPIC EOI
+	IRQ_ACCOUNT_EXIT
 
     pop r11
     pop r10

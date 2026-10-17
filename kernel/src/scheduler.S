@@ -18,6 +18,7 @@
 .extern mp_inScheduler
 .extern panic_no_shutdown
 .extern accounting_charge
+.extern accounting_scheduler_interrupt_enter
 
 .globl _write_eoi
 .type _write_eoi, @function
@@ -189,6 +190,36 @@ not_in_scheduler_continue:
 
 	# The frame pointer, written where a bounce can no longer reach it.
 	mov [temp_rsp + rax * 8], rsp
+
+	# Close the outgoing thread's interrupted span while its stack and CR3
+	# are still live. The scheduler pass later closes this IRQ cause before
+	# switching threads; a bounced nested entry never reaches this stamp.
+	# Save caller registers that the C helper may use before the normal
+	# register capture below. RBX is already saved in mp_isrSavedRBX.
+	push rax
+	push rcx
+	push rdx
+	push rsi
+	push rdi
+	push r8
+	push r9
+	push r10
+	push r11
+	mov rbx, rsp
+	mov rdi, [temp_rsp + rax * 8]
+	mov rdi, [rdi + 8]
+	and rsp, -16
+	call accounting_scheduler_interrupt_enter
+	mov rsp, rbx
+	pop r11
+	pop r10
+	pop r9
+	pop r8
+	pop rdi
+	pop rsi
+	pop rdx
+	pop rcx
+	pop rax
 
 	# Guard flag is up and every global this entry owns is written — a nested
 	# scheduler entry now exits via the already_in_scheduler path WITHOUT

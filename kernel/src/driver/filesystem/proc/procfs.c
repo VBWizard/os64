@@ -303,7 +303,11 @@ static bool proc_task_accounting(task_t *task, accounting_thread_cycles_t *out,
 		    UINT64_MAX - sum.system < one.system ||
 		    UINT64_MAX - sum.idle < one.idle ||
 		    UINT64_MAX - sum.fault < one.fault ||
-		    UINT64_MAX - sum.syscall < one.syscall)
+		    UINT64_MAX - sum.syscall < one.syscall ||
+		    UINT64_MAX - sum.interrupt < one.interrupt ||
+		    UINT64_MAX - sum.interrupt_count < one.interrupt_count ||
+		    UINT64_MAX - sum.self_ipi_halt < one.self_ipi_halt ||
+		    UINT64_MAX - sum.self_ipi_halt_count < one.self_ipi_halt_count)
 			return false;
 		sum.runtime += one.runtime;
 		sum.user += one.user;
@@ -311,6 +315,10 @@ static bool proc_task_accounting(task_t *task, accounting_thread_cycles_t *out,
 		sum.idle += one.idle;
 		sum.fault += one.fault;
 		sum.syscall += one.syscall;
+		sum.interrupt += one.interrupt;
+		sum.interrupt_count += one.interrupt_count;
+		sum.self_ipi_halt += one.self_ipi_halt;
+		sum.self_ipi_halt_count += one.self_ipi_halt_count;
 		*has_idle |= th->idleThread;
 	}
 	*out = sum;
@@ -569,9 +577,14 @@ static void proc_gen_task_status(synth_text_t *t, task_t *task)
 		if (!kUseOldExceptions)
 			synth_text_addf(t, "fault_us\t%lu\n", proc_cycles_to_us(cycles.fault));
 		synth_text_addf(t, "syscall_us\t%lu\n", proc_cycles_to_us(cycles.syscall));
+		synth_text_addf(t, "interrupts\t%lu\n", cycles.interrupt_count);
+		synth_text_addf(t, "interrupt_us\t%lu\n", proc_cycles_to_us(cycles.interrupt));
+		synth_text_addf(t, "self_ipi_halts\t%lu\n", cycles.self_ipi_halt_count);
+		synth_text_addf(t, "self_ipi_halt_us\t%lu\n", proc_cycles_to_us(cycles.self_ipi_halt));
 		if (!kUseOldExceptions)
 			synth_text_addf(t, "other_system_us\t%lu\n",
-			                proc_cycles_to_us(cycles.system - cycles.fault - cycles.syscall));
+			                proc_cycles_to_us(cycles.system - cycles.fault - cycles.syscall -
+			                                  cycles.interrupt - cycles.self_ipi_halt));
 		if (has_idle)
 			synth_text_addf(t, "idle_us\t%lu\n", idle);
 	}
@@ -1177,9 +1190,14 @@ static void proc_gen_thread_status(synth_text_t *t, task_t *task, thread_t *th)
 		if (!kUseOldExceptions)
 			synth_text_addf(t, "fault_us\t%lu\n", proc_cycles_to_us(cycles.fault));
 		synth_text_addf(t, "syscall_us\t%lu\n", proc_cycles_to_us(cycles.syscall));
+		synth_text_addf(t, "interrupts\t%lu\n", cycles.interrupt_count);
+		synth_text_addf(t, "interrupt_us\t%lu\n", proc_cycles_to_us(cycles.interrupt));
+		synth_text_addf(t, "self_ipi_halts\t%lu\n", cycles.self_ipi_halt_count);
+		synth_text_addf(t, "self_ipi_halt_us\t%lu\n", proc_cycles_to_us(cycles.self_ipi_halt));
 		if (!kUseOldExceptions)
 			synth_text_addf(t, "other_system_us\t%lu\n",
-			                proc_cycles_to_us(cycles.system - cycles.fault - cycles.syscall));
+			                proc_cycles_to_us(cycles.system - cycles.fault - cycles.syscall -
+			                                  cycles.interrupt - cycles.self_ipi_halt));
 		if (th->idleThread)
 			synth_text_addf(t, "idle_us\t%lu\n", idle);
 	}

@@ -104,6 +104,7 @@ typedef struct
 	uint64_t acctUserCycles;       // ring-3 time committed on this core
 	uint64_t acctSystemCycles;     // thread-attributed ring-0 time on this core
 	bool acctSchedSpanActive;      // open span belongs to acctSchedCycles
+	bool acctSchedulerIRQOpen;      // scheduler entry stamped the outgoing thread
 
 	// acctCurrentHalted: the CURRENT thread is parked in an sti;hlt of its
 	// own making (the compositor's idle idiom — the one thread that idles

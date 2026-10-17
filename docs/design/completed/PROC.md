@@ -114,7 +114,9 @@ charged like any other), and the scheduler's own overhead gets an honest
 interrupted. `busy` is derived (total − idle − sched); what the ledger can't
 explain stays visibly unexplained rather than misattributed. Per-task CPU
 time appears as `runtime_us` in each status file, same clock, same
-boundary-charging. (v1 honesty: ISR time rides on the interrupted thread.)
+boundary-charging. Returning interrupt stubs now close the interrupted
+span and charge their own time to that thread's interrupt bucket; scheduler
+passes still have their separate core bucket.
 
 ## The format: text, tabular, one record per line
 
