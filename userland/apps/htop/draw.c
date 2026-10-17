@@ -40,6 +40,12 @@ static void size_text(char *out, size_t cap, uint64_t bytes)
 }
 static void time_text(char *out, size_t cap, uint64_t us)
 { os64_snprintf(out, cap, "%lu:%02lu.%lu", us / 60000000, us / 1000000 % 60, us / 100000 % 10); }
+static void split_text(char *out, size_t cap, bool available, bool idle,
+                       const os64_monitor_usage_t *usage)
+{
+    if (available && !idle && usage->valid) os64_snprintf(out, cap, "%lu", usage->percent);
+    else os64_strcopy(out, cap, "-");
+}
 static unsigned filled(uint64_t part, uint64_t whole, unsigned width)
 {
     if (!whole) return 0;
@@ -125,17 +131,24 @@ static void header(ht_view_t *v, ht_cell_t *g)
     print(v, g, y + 1, half + 1, HT_DIM, "cores %u-%u/%lu  [ ] page", s->core_count ? v->core_page * per_page + 1 : 0,
           (unsigned)(s->core_count < (v->core_page + 1) * per_page ? s->core_count : (v->core_page + 1) * per_page), (uint64_t)s->core_count);
 }
-static void task_rows(const ht_view_t *v, ht_cell_t *g)
+static void task_rows(const ht_view_t *v, const os64_monitor_t *monitor, ht_cell_t *g)
 {
     band(v, g, v->table_top - 1, HT_COLUMN);
     unsigned heading = v->table_top - 1;
+    unsigned heap_x = v->show_split ? 31 : 19;
+    unsigned time_x = v->show_split ? 40 : 28;
+    unsigned command_x = v->show_split ? 51 : 39;
     field(v, g, heading, 1, 5, HT_COLUMN, "ID");
     text(v, g, heading, 7, HT_COLUMN, "S");
     field(v, g, heading, 9, 3, HT_COLUMN, "C");
     field(v, g, heading, 13, 5, HT_COLUMN, "CPU%");
-    field(v, g, heading, 19, 8, HT_COLUMN, "HEAP");
-    field(v, g, heading, 28, 9, HT_COLUMN, "TIME");
-    text(v, g, heading, 39, HT_COLUMN, "COMMAND");
+    if (v->show_split) {
+        field(v, g, heading, 19, 5, HT_COLUMN, "USR%");
+        field(v, g, heading, 25, 5, HT_COLUMN, "SYS%");
+    }
+    field(v, g, heading, heap_x, 8, HT_COLUMN, "HEAP");
+    field(v, g, heading, time_x, 9, HT_COLUMN, "TIME");
+    text(v, g, heading, command_x, HT_COLUMN, "COMMAND");
     for (unsigned line = 0; line < v->page; line++) {
         size_t at = v->scroll + line; if (at >= v->count) break;
         const ht_row_t *r = &v->rows[at];
@@ -150,10 +163,19 @@ static void task_rows(const ht_view_t *v, ht_cell_t *g)
         os64_snprintf(buf, sizeof(buf), "%u", th ? th->core : t->info.core); field(v, g, y, 9, 3, style, buf);
         if (cpu->valid) os64_snprintf(buf, sizeof(buf), "%lu", cpu->percent); else os64_strcopy(buf, sizeof(buf), "-");
         field(v, g, y, 13, 5, selected ? style : cpu->valid && cpu->percent ? HT_GREEN : HT_DIM, buf);
+        if (v->show_split) {
+            os64_monitor_split_t split = {0};
+            bool available = monitor && (th ? os64_monitor_thread_split(monitor, t->info.pid, th->tid, &split)
+                                            : os64_monitor_task_split(monitor, t->info.pid, &split));
+            split_text(buf, sizeof(buf), available, split.idle, &split.user);
+            field(v, g, y, 19, 5, selected ? style : split.user.valid && !split.idle ? HT_NORMAL : HT_DIM, buf);
+            split_text(buf, sizeof(buf), available, split.idle, &split.system);
+            field(v, g, y, 25, 5, selected ? style : split.system.valid && !split.idle ? HT_NORMAL : HT_DIM, buf);
+        }
         if (!th && t->info.heap) size_text(buf, sizeof(buf), t->info.heap); else os64_strcopy(buf, sizeof(buf), "-");
-        field(v, g, y, 19, 8, style, buf);
-        time_text(buf, sizeof(buf), th ? th->runtime_us : t->info.runtime_us); field(v, g, y, 28, 9, style, buf);
-        unsigned x = 39;
+        field(v, g, y, heap_x, 8, style, buf);
+        time_text(buf, sizeof(buf), th ? th->runtime_us : t->info.runtime_us); field(v, g, y, time_x, 9, style, buf);
+        unsigned x = command_x;
         if (r->depth) {
             unsigned indent = r->depth > 6 ? 6 : r->depth;
             x += indent * 2; text(v, g, y, x - 2, selected ? style : HT_DIM, r->is_thread ? ": " : "+-");
@@ -179,7 +201,7 @@ static void footer(const ht_view_t *v, ht_cell_t *g)
           sort_name(v->sort), v->reverse ? " rev" : "", v->tree ? "tree" : "list",
           v->threads ? "on" : "off", v->idle ? "on" : "off", v->zombies ? "on" : "off", v->filter);
     band(v, g, y + 1, HT_COLUMN);
-    text(v, g, y + 1, 1, HT_COLUMN, "q Quit  ? Help  / Filter  s Sort  t Threads  v Tree  Enter Info  x Signal");
+    text(v, g, y + 1, 1, HT_COLUMN, "q Quit  ? Help  u U/S  / Filter  s Sort  t Threads  v Tree  Enter Info  x Signal");
 }
 static void help(const ht_view_t *v, ht_cell_t *g)
 {
@@ -191,6 +213,7 @@ static void help(const ht_view_t *v, ht_cell_t *g)
         "Left/Right       Scroll the command horizontally",
         "/ then Enter     Filter names and commands; Esc clears",
         "s / S            Next sort column / reverse order",
+        "u / U            Show / hide USR% and SYS% columns",
         "v / t            Process tree / expand thread rows",
         "i / z            Show CPU idle tasks / zombies",
         "Enter            Task details; arrows scroll the command",
@@ -198,7 +221,7 @@ static void help(const ht_view_t *v, ht_cell_t *g)
         "                 Both ask first; thread rows name their owner",
         "Space pause/resume; + faster / - slower refresh",
         "[ / ]            Previous / next bank of CPU meters",
-        "Green = busy; amber = scheduler. CPU% uses one core.",
+        "Green = busy; amber = scheduler. CPU%/U/S use one core.",
         "HEAP excludes code/stacks; '-' is zero or unreported.",
         "q exits. In a panel, q or Esc returns to the list."
     };
@@ -244,7 +267,7 @@ static void confirm(const ht_view_t *v, ht_cell_t *g)
     text(v, g, 11, 3, HT_CYAN, "y Confirm    n / Esc Cancel");
     text(v, g, v->lines - 2, 3, HT_DIM, "The target stays pinned while the process list changes.");
 }
-void ht_draw(ht_view_t *v, ht_cell_t *g)
+void ht_draw(ht_view_t *v, const os64_monitor_t *monitor, ht_cell_t *g)
 {
     for (unsigned y = 0; y < HT_HEIGHT; y++) for (unsigned x = 0; x < HT_WIDTH; x++)
         g[y * HT_WIDTH + x] = (ht_cell_t){' ', HT_NORMAL};
@@ -256,5 +279,5 @@ void ht_draw(ht_view_t *v, ht_cell_t *g)
     if (v->mode == HT_HELP) help(v, g);
     else if (v->mode == HT_DETAILS) details(v, g);
     else if (v->mode == HT_CONFIRM) confirm(v, g);
-    else { header(v, g); task_rows(v, g); footer(v, g); }
+    else { header(v, g); task_rows(v, monitor, g); footer(v, g); }
 }

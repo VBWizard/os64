@@ -47,6 +47,7 @@ static void keep_visible(ht_view_t *v)
 void ht_init(ht_view_t *v, uint64_t self)
 {
     os64_memset(v, 0, sizeof(*v)); v->self = self; v->sort = HT_CPU; v->delay_ms = 1000;
+    v->show_split = true;
     ht_layout(v, 80, 25);
 }
 void ht_layout(ht_view_t *v, unsigned cols, unsigned lines)
@@ -208,6 +209,7 @@ int ht_key(ht_view_t *v, int key)
     case HT_RIGHT: if (v->command_offset < OS64_PROC_COMMAND_MAX - 8) v->command_offset += 8; break;
     case 's': v->sort = (ht_sort_t)((v->sort + 1) % HT_SORT_COUNT); v->reverse = false; ht_rebuild(v, v->sample, false); break;
     case 'S': v->reverse = !v->reverse; ht_rebuild(v, v->sample, false); break;
+    case 'u': case 'U': v->show_split = !v->show_split; break;
     case 'v': v->tree = !v->tree; ht_rebuild(v, v->sample, false); break;
     case 't': v->threads = !v->threads; ht_rebuild(v, v->sample, false); return HT_REFRESH_THREADS;
     case 'i': v->idle = !v->idle; ht_rebuild(v, v->sample, false); break;
