@@ -169,6 +169,13 @@ typedef struct s_thread
 	uint64_t userCycles;
 	uint64_t systemCycles;
 	uint64_t idleCycles;
+	// The unified exception entry tracks nested #PF work on the faulting
+	// thread, so a blocked resolver can resume on another core without
+	// handing its open fault span to that core's next tenant. faultCycles
+	// is a subset of systemCycles; IRQ time can remain inside it until IRQ
+	// entry and return are stamped too.
+	uint32_t acctFaultDepth;
+	uint64_t faultCycles;
 	// Resolved page faults belong to the faulting thread. A major fault
 	// needed a file read; anonZeroPages counts demand-zero pages allocated
 	// while resolving faults, including a discarded twin resolution.

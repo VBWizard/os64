@@ -26,6 +26,8 @@ With Yonder visible at 1920×1080, a 67.6-second interval on 2026-10-17 gave:
 
 The main thread zeroed about 2,252 pages, or 8.8 MiB, per second. This confirms recurring anonymous page allocation on the main thread, though it is far below the 68,000 faults per second estimated for an 8 MiB buffer replaced on every 33 Hz paint. The count cannot say what fraction of its 8.38 seconds of system time was spent resolving those faults. The ticker's kernel time has a separate cause; it resolved no faults in the interval. No major fault was resolved during the sample.
 
+The next slice adds `fault_us` to task and thread status for the unified exception path. It closes a fault span on both user and kernel returns, so a fault during a syscall is included. A sleeping resolver accrues no cycles while switched out. Until IRQ boundaries are stamped, interrupt work that preempts a fault handler can be included in `fault_us`; this field is an inclusive fault span, not yet the final exclusive cause bucket. `EXCOLD` does not expose the field because its separate recoverable #PF path lacks the stamps. The slice booted in two-core QEMU with 34 preboot and 34 postboot tests passing; a `cat /proc/self/status` smoke read showed `fault_us` beneath `system_us`.
+
 This boot was built from `userland` before the sibling GUI lock-count commit was merged. It therefore lacked the prior `/sys/gui` lock-site table; that commit has since been merged into this branch for the next kernel build. The thread counters above are unaffected.
 
 ## Cause timing contract

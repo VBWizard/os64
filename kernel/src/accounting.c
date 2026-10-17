@@ -72,6 +72,8 @@ static void charge_locked(core_local_storage_t *cls, uint64_t cs,
 			else
 			{
 				target->systemCycles += delta;
+				if (current->acctFaultDepth != 0)
+					target->faultCycles += delta;
 				cls->acctSystemCycles += delta;
 			}
 			sequence_end(&target->acctSequence);
@@ -93,6 +95,28 @@ void accounting_charge(uint64_t cs)
 {
 	uint64_t flags = accounting_irq_save();
 	charge_locked(get_core_local_storage(), cs, false, false, false, false);
+	accounting_irq_restore(flags);
+}
+
+void accounting_exception_enter(uint64_t interrupted_cs, uint64_t vector)
+{
+	uint64_t flags = accounting_irq_save();
+	core_local_storage_t *cls = get_core_local_storage();
+	charge_locked(cls, interrupted_cs, false, false, false, false);
+	if (vector == 14 && cls != NULL && cls->currentThread != NULL &&
+	    cls->currentThread != NO_THREAD)
+		cls->currentThread->acctFaultDepth++;
+	accounting_irq_restore(flags);
+}
+
+void accounting_exception_exit(uint64_t vector)
+{
+	uint64_t flags = accounting_irq_save();
+	core_local_storage_t *cls = get_core_local_storage();
+	charge_locked(cls, 0, false, false, false, false);
+	if (vector == 14 && cls != NULL && cls->currentThread != NULL &&
+	    cls->currentThread != NO_THREAD && cls->currentThread->acctFaultDepth != 0)
+		cls->currentThread->acctFaultDepth--;
 	accounting_irq_restore(flags);
 }
 
@@ -140,13 +164,15 @@ bool accounting_read_thread(const thread_t *thread, accounting_thread_cycles_t *
 			__atomic_load_n(&thread->userCycles, __ATOMIC_RELAXED),
 			__atomic_load_n(&thread->systemCycles, __ATOMIC_RELAXED),
 			__atomic_load_n(&thread->idleCycles, __ATOMIC_RELAXED),
+			__atomic_load_n(&thread->faultCycles, __ATOMIC_RELAXED),
 		};
 		// Keep tuple loads before the closing sequence check.
 		__atomic_thread_fence(__ATOMIC_ACQUIRE);
 		uint64_t after = __atomic_load_n(&thread->acctSequence, __ATOMIC_ACQUIRE);
 		if (before == after && !(after & 1) &&
 		    copy.runtime >= copy.user && copy.runtime - copy.user >= copy.system &&
-		    copy.runtime - copy.user - copy.system == copy.idle)
+		    copy.runtime - copy.user - copy.system == copy.idle &&
+		    copy.fault <= copy.system)
 		{
 			*out = copy;
 			return true;

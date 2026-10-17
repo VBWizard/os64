@@ -58,6 +58,7 @@ extern uint64_t  kCPUCyclesPerSecond;  // boot-calibrated: the cycles→µs exch
 
 extern uint64_t kTicksSinceStart;
 extern uintptr_t kHHDMOffset;
+extern bool kUseOldExceptions;
 
 // A task's VMA list and handle table are walked WITHOUT a lock (os64 has no
 // per-task lock to take). A corrupted or concurrently-spliced list must not
@@ -298,12 +299,14 @@ static bool proc_task_accounting(task_t *task, accounting_thread_cycles_t *out,
 		if (UINT64_MAX - sum.runtime < one.runtime ||
 		    UINT64_MAX - sum.user < one.user ||
 		    UINT64_MAX - sum.system < one.system ||
-		    UINT64_MAX - sum.idle < one.idle)
+		    UINT64_MAX - sum.idle < one.idle ||
+		    UINT64_MAX - sum.fault < one.fault)
 			return false;
 		sum.runtime += one.runtime;
 		sum.user += one.user;
 		sum.system += one.system;
 		sum.idle += one.idle;
+		sum.fault += one.fault;
 		*has_idle |= th->idleThread;
 	}
 	*out = sum;
@@ -559,6 +562,8 @@ static void proc_gen_task_status(synth_text_t *t, task_t *task)
 		synth_text_addf(t, "runtime_us\t%lu\n", runtime);
 		synth_text_addf(t, "user_us\t%lu\n", user);
 		synth_text_addf(t, "system_us\t%lu\n", system);
+		if (!kUseOldExceptions)
+			synth_text_addf(t, "fault_us\t%lu\n", proc_cycles_to_us(cycles.fault));
 		if (has_idle)
 			synth_text_addf(t, "idle_us\t%lu\n", idle);
 	}
@@ -1161,6 +1166,8 @@ static void proc_gen_thread_status(synth_text_t *t, task_t *task, thread_t *th)
 		synth_text_addf(t, "runtime_us\t%lu\n", runtime);
 		synth_text_addf(t, "user_us\t%lu\n", user);
 		synth_text_addf(t, "system_us\t%lu\n", system);
+		if (!kUseOldExceptions)
+			synth_text_addf(t, "fault_us\t%lu\n", proc_cycles_to_us(cycles.fault));
 		if (th->idleThread)
 			synth_text_addf(t, "idle_us\t%lu\n", idle);
 	}
