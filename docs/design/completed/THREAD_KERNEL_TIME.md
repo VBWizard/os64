@@ -1,6 +1,6 @@
 # Per-thread kernel time by cause
 
-*Design and measurements, 2026-10-17. The implementation now records disjoint fault, syscall, returning interrupt, self-IPI halt, and remainder buckets; validation is recorded below.*
+*Design and measurements, 2026-10-17. The implementation records disjoint fault, syscall, returning interrupt, self-IPI halt, and remainder buckets; QEMU and P5 validation are recorded below.*
 
 ## Question and current evidence
 
@@ -94,7 +94,7 @@ Each non-idle thread's committed `systemCycles` is partitioned into syscall work
 
 The active cause belongs to `thread_t`, because a blocked syscall may resume on another core. A syscall entry closes the user span, records its number and call count, then opens the syscall cause under one local interrupt mask. Its return closes the syscall span and clears the cause under the same mask. The scheduler continues to close an outgoing thread's open span and charge the pass to its separate core bucket. TSC deltas remain same-core.
 
-A page fault inside a syscall closes the syscall span and opens the fault cause. The exception frame saves the prior cause. On return, including a recoverable ring-0 return, the fault span closes before the prior cause resumes. The unified exception path supplies the entry and return boundaries. The old exception path remains bootable, so any shipped timing must either instrument its recoverable fault return too or mark that configuration unsupported for cause timing.
+A page fault inside a syscall closes the syscall span and opens the fault cause. The exception frame saves the prior cause. On return, including a recoverable ring-0 return, the fault span closes before the prior cause resumes. The unified exception path supplies the entry and return boundaries. The old `EXCOLD` path remains bootable but does not supply fault boundaries, so its status omits `fault_us` and `other_system_us` rather than presenting an incomplete partition.
 
 Timer, keyboard, mouse, NIC, and returning IPI stubs close the interrupted span and push an interrupt cause, then close it and pop on return. A committed scheduler interrupt does the same before changing address spaces and closes the interrupt span before the scheduler's core-only span. The fatal freeze IPI has no return boundary. A nested fault or interrupt takes the top cause, with bounded stack overflow charged to the remainder. `scheduler_trigger` bookends its own `sti;hlt` wait so those cycles do not enter a syscall row. Entry prologues and return tails outside the stamps remain in the adjacent cause; the partition is exact for committed cycles at each accounting charge, not an instruction-level profile.
 
@@ -102,7 +102,7 @@ Use `/proc/<pid>/thread/<tid>/syscalls` for nonzero rows (`number name calls us`
 
 ## Verification
 
-Exercise a short syscall, a blocking syscall, an anonymous fault, a fault while copying a user buffer in a syscall, and an interrupt nested in each mode. For each coherent thread read, the raw cause buckets plus remainder must equal `systemCycles` and must remain monotonic across sleep and migration. Boot one-core and SMP QEMU, then repeat the P5 interval with Yonder in the same visible state. Compare `syscallbench` against the user/system split baseline before accepting hot-path stamps.
+The built-in QEMU suite, `syscallbench`, and P5 desktop and Yonder intervals exercise short and blocking syscalls, anonymous faults, interrupts, and self-IPI waits during normal workloads. The coherent reader rejects a raw cause sum greater than `systemCycles`; its remainder is the difference. The live desktop and Yonder deltas below check monotonicity and the displayed partition within microsecond rounding. No deterministic test forces each possible fault/IRQ nesting order or migration while a nested cause is open; those remain limits of the verification evidence.
 
 ### Final accounting slice
 
@@ -110,4 +110,18 @@ The kernel built with the new nested cause stack and returning interrupt stamps.
 
 On that P5 boot, the existing seven-round `syscallbench` fixture measured a best adjusted 24,481,281 cycles for 20,000 `taskid` calls, about 1,224 cycles per call. This falls inside the previous syscall-timing boot's observed 972–1,230 cycle range; these noisy samples cannot isolate the additional IRQ stamp cost, which short syscalls do not normally exercise.
 
-Two reads of the desktop task's threads about 20 seconds apart also checked live deltas. Thread 66 gained 1,678 µs of system time, split into 516 µs syscall, 209 µs interrupt, and 953 µs self-IPI halt; the fault and remainder fields held steady. Thread 70 gained 447 µs of system time, while its displayed components gained 146, 38, and 262 µs respectively (446 µs after separate rounding). Both threads' counters were monotonic. Yonder was not running after the reboot, so the same-view Yonder interval still needs a visible session.
+Two reads of the desktop task's threads about 20 seconds apart also checked live deltas. Thread 66 gained 1,678 µs of system time, split into 516 µs syscall, 209 µs interrupt, and 953 µs self-IPI halt; the fault and remainder fields held steady. Thread 70 gained 447 µs of system time, while its displayed components gained 146, 38, and 262 µs respectively (446 µs after separate rounding). Both threads' counters were monotonic.
+
+### P5 Yonder interval with the final buckets
+
+With Yonder at the same top-of-page view on the 1920×1080 P5, one SSH command read task and thread status, syscall rows, and `/sys/gui` at both ends of a 70-second interval. Chris also saw about 54% user and 14% system in `top`. The `/proc` interval gave:
+
+| scope | user | system | faults | syscalls | interrupts | self-IPI halt | remainder |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| main thread (171) | 39.516 s | 9.369 s (13.4% core) | 0.364 s | 8.981 s | 0.014 s | 0.008 s | 0.001 s |
+| ticker thread (184) | 0.026 s | 4.017 s (5.7% core) | 0 | 3.959 s | 0.008 s | 0.050 s | 0 |
+| whole task | 39.542 s | 13.389 s (19.1% core) | 0.365 s | 12.937 s | 0.026 s | 0.061 s | 0.001 s |
+
+The task's displayed microsecond deltas partition exactly in this interval: 364,500 fault + 12,936,850 syscall + 25,537 interrupt + 61,003 self-IPI halt + 1,453 remainder = 13,389,343 system. The main thread zeroed 155,499 anonymous pages; paging was still under 4% of its system time. IRQ and self-IPI halt time together were 0.087 s across the whole task, about 0.13% of one core. The ticker's 3.748 s in `gui_event_ring` nearly matches all callers' 3.725 s waiting at the ring lock site. The main thread spent 5.367 s in `gui_window_publish`, 1.846 s in `gui_event_wait`, 0.791 s in `gui_event_poll`, and 0.755 s in `unmap`.
+
+This is the low-contention state seen earlier, not the prior 65% task-system state. Across all callers, ring lock waiting used 3.725 s (5.3% of one core), versus 21.84 s (33.8%) in the high run; compositor lock holding used 16.04 s (22.9%), versus 39.14 s (60.6%). The changed lock activity explains the immediate drop in Yonder syscall time. The earlier rollback showed the high state on a kernel without per-syscall accounting, so the cause instrumentation alone did not create it. This interval does not establish why the same visible page alternates between low and high lock contention, or whether the final scheduler wait change affects that transition.
