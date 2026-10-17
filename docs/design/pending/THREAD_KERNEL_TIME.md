@@ -30,6 +30,20 @@ The next slice adds `fault_us` to task and thread status for the unified excepti
 
 This boot was built from `userland` before the sibling GUI lock-count commit was merged. It therefore lacked the prior `/sys/gui` lock-site table; that commit has since been merged into this branch for the next kernel build. The thread counters above are unaffected.
 
+### P5 reading with fault time and GUI lock sites
+
+After the merged lock counters and inclusive `fault_us` were booted, a 67.3-second interval with Yonder visible at 1920×1080 gave:
+
+| scope | user time | system time | inclusive fault time | anonymous pages zeroed |
+| --- | ---: | ---: | ---: | ---: |
+| main thread | 37.99 s | 8.45 s (12.5% core) | 0.334 s (0.5% core) | 146,925 |
+| ticker thread | 0.02 s | 3.47 s (5.2% core) | 0 | 0 |
+| whole task | 38.01 s | 11.92 s (17.7% core) | 0.334 s | 146,925 |
+
+The 146,925 resolved faults were minor, about 2,183 per second. Fault handling accounts for about 4% of the main thread's system time; the large-buffer churn is real but not the main CPU cost at this workload. The ticker's kernel time is unrelated to paging.
+
+Across all GUI callers in the same interval, the ring site made 8,811 acquisitions and waited 3.17 s for `kGuiLock`, holding it for 0.034 s. The publish site made 4,344 acquisitions, waited 1.73 s, and held the lock for 3.96 s. These site totals cannot be assigned exactly to Yonder's two threads, but their scale suggests lock acquisition as the next timing target. A per-syscall thread table must separate that work from other kernel time before attributing it.
+
 ## Cause timing contract
 
 The next measurement should partition each non-idle thread's committed `systemCycles` into syscall work by number, resolved page-fault work, interrupt work, self-IPI halt time, and a remainder. Every cycle belongs to one bucket at a charge; a blocked thread accumulates no cycles. A task view sums its threads' raw counters before conversion to microseconds. The remainder is derived from the same coherent thread snapshot as `systemCycles`, never by subtracting separately rounded text values.
