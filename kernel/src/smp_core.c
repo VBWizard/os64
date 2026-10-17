@@ -883,6 +883,8 @@ void mpAcctSettleAll(void)
     // Local core first. The charge routine masks interrupts around its
     // tuple update; the same scheduler-phase rule applies here and in the
     // remote IPI handler.
+    // The ack policy below needs the caller's IF, which accounting_charge
+    // preserves across its own interrupt-masked update.
     uint64_t flags;
     __asm__ volatile("pushfq\n\tpop %0" : "=r"(flags) :: "memory");
     core_local_storage_t *local = get_core_local_storage();
@@ -939,7 +941,7 @@ void mpAcctSettleAll(void)
     // the freshness proc_gen_cores already accepts for its other fields
     // ("worst case one slice stale", procfs.c).
     //
-    // `flags` is the CALLER's RFLAGS, captured above before our own cli.
+    // `flags` is the caller's RFLAGS captured before the local charge.
     if (!(flags & 0x200))
         return;                                         // IF was off — send-and-go
 

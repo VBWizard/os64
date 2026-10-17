@@ -330,3 +330,21 @@ compositor's own `SYS%`. If the main thread is overwhelmingly user time,
 paint instrumentation is the next tool; if its system share is high, time the
 publish syscall and `kGuiLock` separately. The CPU split narrows that choice
 without pretending to profile individual functions.
+
+## Measured short-syscall cost
+
+On 2026-10-17, the same `syscallbench` fixture ran in separate QEMU boots of
+the `userland` base (`7e014e74`) and PR #287 with the review fixes. Both used
+the `vmboot` configuration: q35, qemu64, eight vCPUs, and TCG. Each of seven
+rounds timed 20,000 raw `SYSCALL_TASKID` calls with `lfence; rdtsc`, then
+subtracted an empty loop from that round. The table uses the lowest adjusted
+round from each boot to reduce timer and scheduling noise.
+
+| Kernel | QEMU TSC cycles per call |
+|---|---:|
+| Before split | 8,727 |
+| With split and review fixes | 13,138 |
+| Added cost | 4,410 (+50.5%) |
+
+This is a QEMU ratio for a short syscall, not an absolute hardware cost. P5
+measurement remains pending until that machine can run this branch.

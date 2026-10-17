@@ -423,8 +423,9 @@ overRestoreCR3:
     # the LAPIC's IRR holds exactly ONE pending instance per vector, so a
     # long IF=0 span collapses every tick that lands inside it into one.  A
     # full-pass CLI was tried historically and lost clock ticks in bulk.
-    # This window is about a dozen instructions; the clock only notices if
-    # the host stalls INSIDE it for more than two tick periods.
+    # This window includes the register restore and, on ring-3 returns, a
+    # C accounting charge. The clock only notices if the host stalls INSIDE
+    # it for more than two tick periods.
     cli
 
     mov rbx, [mp_isrSavedSS + rax * 8]

@@ -5,7 +5,9 @@
 #include "thread.h"
 #include "driver/system/x86_64.h"
 
-#define ACCOUNTING_READ_RETRIES 32
+// Pause between failed reads so a normal charge can close its odd sequence;
+// the bound still lets a stalled writer return an unavailable sample.
+#define ACCOUNTING_READ_RETRIES 1024
 
 static uint64_t accounting_irq_save(void)
 {
@@ -36,6 +38,10 @@ static void charge_locked(core_local_storage_t *cls, uint64_t cs,
                           bool change_halt, bool next_halt)
 {
 	if (cls == NULL)
+		return;
+	// A fault in this writer enters through the exception stamp again. Leave
+	// its odd sequence alone so the original fault reaches the reporter.
+	if (__atomic_load_n(&cls->acctSequence, __ATOMIC_RELAXED) & 1)
 		return;
 	thread_t *current = cls->currentThread;
 	if (cls->acctLastDispatchTSC == 0 && !change_sched &&
@@ -125,13 +131,18 @@ bool accounting_read_thread(const thread_t *thread, accounting_thread_cycles_t *
 	{
 		uint64_t before = __atomic_load_n(&thread->acctSequence, __ATOMIC_ACQUIRE);
 		if (before & 1)
+		{
+			__builtin_ia32_pause();
 			continue;
+		}
 		accounting_thread_cycles_t copy = {
 			__atomic_load_n(&thread->runCycles, __ATOMIC_RELAXED),
 			__atomic_load_n(&thread->userCycles, __ATOMIC_RELAXED),
 			__atomic_load_n(&thread->systemCycles, __ATOMIC_RELAXED),
 			__atomic_load_n(&thread->idleCycles, __ATOMIC_RELAXED),
 		};
+		// Keep tuple loads before the closing sequence check.
+		__atomic_thread_fence(__ATOMIC_ACQUIRE);
 		uint64_t after = __atomic_load_n(&thread->acctSequence, __ATOMIC_ACQUIRE);
 		if (before == after && !(after & 1) &&
 		    copy.runtime >= copy.user && copy.runtime - copy.user >= copy.system &&
@@ -140,6 +151,7 @@ bool accounting_read_thread(const thread_t *thread, accounting_thread_cycles_t *
 			*out = copy;
 			return true;
 		}
+		__builtin_ia32_pause();
 	}
 	return false;
 }
@@ -152,7 +164,10 @@ bool accounting_read_core(const core_local_storage_t *cls, accounting_core_cycle
 	{
 		uint64_t before = __atomic_load_n(&cls->acctSequence, __ATOMIC_ACQUIRE);
 		if (before & 1)
+		{
+			__builtin_ia32_pause();
 			continue;
+		}
 		uint64_t zero = __atomic_load_n(&cls->acctZeroTSC, __ATOMIC_RELAXED);
 		uint64_t last = __atomic_load_n(&cls->acctLastDispatchTSC, __ATOMIC_RELAXED);
 		thread_t *idle = __atomic_load_n(&cls->acctIdleThread, __ATOMIC_RELAXED);
@@ -163,6 +178,8 @@ bool accounting_read_core(const core_local_storage_t *cls, accounting_core_cycle
 			.idle = idle ? __atomic_load_n(&idle->runCycles, __ATOMIC_RELAXED) : 0,
 			.sched = __atomic_load_n(&cls->acctSchedCycles, __ATOMIC_RELAXED),
 		};
+		// Keep tuple loads before the closing sequence check.
+		__atomic_thread_fence(__ATOMIC_ACQUIRE);
 		uint64_t after = __atomic_load_n(&cls->acctSequence, __ATOMIC_ACQUIRE);
 		if (before == after && !(after & 1) &&
 		    copy.total >= copy.user && copy.total - copy.user >= copy.system &&
@@ -172,6 +189,7 @@ bool accounting_read_core(const core_local_storage_t *cls, accounting_core_cycle
 			*out = copy;
 			return true;
 		}
+		__builtin_ia32_pause();
 	}
 	return false;
 }
