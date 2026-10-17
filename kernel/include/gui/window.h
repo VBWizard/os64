@@ -399,7 +399,7 @@ void wm_composite(surface_t *backbuffer, rect_t damage);
 
 // Is this screen rect completely hidden behind some window ABOVE `w`? The
 // only question publish needs to ask before spending a composite and a slow
-// uncached flush on pixels nobody can see. Caller holds kGuiLock.
+// framebuffer flush on pixels nobody can see. Caller holds kGuiLock.
 bool wm_rect_is_occluded(const window_t *w, rect_t screen_rect);
 
 // Recompute GUI_WINDOW_COVERED for every window and announce each flip with

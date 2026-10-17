@@ -218,18 +218,18 @@ int64_t gui_window_create(const char *title, int32_t x, int32_t y,
         if ((create_flags & (GUI_WINDOW_NO_DECORATIONS | GUI_WINDOW_PINNED)) !=
             (GUI_WINDOW_NO_DECORATIONS | GUI_WINDOW_PINNED) ||
             (create_flags & GUI_WINDOW_START_UNFOCUSED)) return GUI_ERR_BAD_ARGS;
-        uint64_t lock = spinlock_acquire_irqsave(&kGuiLock);
+        uint64_t lock = gui_lock(GUI_LOCK_WINDOW);
         int64_t err;
         window_t *parent = handle_lookup_owned(parent_handle, &err);
         if (parent) {
             parent_id = parent->id;
             err = (wm_focused() == parent && !parent->retiring) ? 0 : GUI_ERR_NOT_FOCUSED;
         }
-        spinlock_release_irqrestore(&kGuiLock, lock);
+        gui_unlock(lock);
         if (err) return err;
     }
 	bool content_size=(flags & OS64_GUI_CREATE_CONTENT_SIZE)!=0;
-	uint64_t sizing_flags=spinlock_acquire_irqsave(&kGuiLock);
+	uint64_t sizing_flags=gui_lock(GUI_LOCK_WINDOW);
 	os64_decor_insets_t insets=wm_decoration_insets(create_flags);
 	int32_t content_w=(int32_t)w-(content_size?0:insets.left+insets.right);
 	int32_t content_h=(int32_t)h-(content_size?0:insets.top+insets.bottom);
@@ -241,7 +241,7 @@ int64_t gui_window_create(const char *title, int32_t x, int32_t y,
         if (content_h > max_h) content_h = max_h;
         w = (uint32_t)content_w; h = (uint32_t)content_h;
     }
-	spinlock_release_irqrestore(&kGuiLock,sizing_flags);
+	gui_unlock(sizing_flags);
 	if (content_w < GUI_MIN_CONTENT || content_h < GUI_MIN_CONTENT)
 		return GUI_ERR_BAD_ARGS;
 
@@ -300,7 +300,7 @@ int64_t gui_window_create(const char *title, int32_t x, int32_t y,
 		                 PAGE_PRESENT | PAGE_WRITE | PAGE_USER | PAGE_NO_EXECUTE);
 	}
 
-	uint64_t irqflags = spinlock_acquire_irqsave(&kGuiLock);
+	uint64_t irqflags = gui_lock(GUI_LOCK_WINDOW);
 
 	// Re-derive against the style held for creation; an Apply may have won
 	// while the canvas was allocated. Check the staged capacity before use.
@@ -309,7 +309,7 @@ int64_t gui_window_create(const char *title, int32_t x, int32_t y,
 		int64_t available_w=(int64_t)kFrameBuffer.width-insets.left-insets.right;
 		int64_t available_h=(int64_t)kFrameBuffer.height-insets.top-insets.bottom;
 		if (available_w<GUI_MIN_CONTENT || available_h<GUI_MIN_CONTENT) {
-			spinlock_release_irqrestore(&kGuiLock,irqflags);
+			gui_unlock(irqflags);
 			goto undo_pivot;
 		}
 		if (w>(uint64_t)available_w) w=(uint32_t)available_w;
@@ -321,7 +321,7 @@ int64_t gui_window_create(const char *title, int32_t x, int32_t y,
 	int64_t final_ch=(int64_t)frame_h-insets.top-insets.bottom;
 	if (frame_w>wm_dim_max() || frame_h>wm_dim_max() || final_cw<GUI_MIN_CONTENT ||
 		final_ch<GUI_MIN_CONTENT || (pivot && (final_cw>cap_w || final_ch>cap_h))) {
-		spinlock_release_irqrestore(&kGuiLock,irqflags);
+		gui_unlock(irqflags);
 		goto undo_pivot;
 	}
 	w=(uint32_t)frame_w;h=(uint32_t)frame_h;
@@ -340,7 +340,7 @@ int64_t gui_window_create(const char *title, int32_t x, int32_t y,
 		}
 	}
 	if (!handle) {
-		spinlock_release_irqrestore(&kGuiLock, irqflags);
+		gui_unlock(irqflags);
 		goto undo_pivot;
 	}
 
@@ -349,7 +349,7 @@ int64_t gui_window_create(const char *title, int32_t x, int32_t y,
         window_t *parent = handle_lookup_owned(parent_handle, &err);
         if (!parent || parent->id != parent_id || parent->retiring || wm_focused() != parent) {
             failure = !parent ? err : GUI_ERR_NOT_FOCUSED;
-            spinlock_release_irqrestore(&kGuiLock, irqflags);
+            gui_unlock(irqflags);
             goto undo_pivot;
         }
     }
@@ -357,7 +357,7 @@ int64_t gui_window_create(const char *title, int32_t x, int32_t y,
     window_t *win = wm_create(title, (rect_t){x, y, (int32_t)w, (int32_t)h},
                               create_flags, gui_current_task_id(), (uint16_t)handle, parent_id, popup_capacity);
 	if (!win) {
-		spinlock_release_irqrestore(&kGuiLock, irqflags);
+		gui_unlock(irqflags);
 		goto undo_pivot;
 	}
 
@@ -392,7 +392,7 @@ int64_t gui_window_create(const char *title, int32_t x, int32_t y,
 
 	s_handles[handle - 1] = win;
 
-	spinlock_release_irqrestore(&kGuiLock, irqflags);
+	gui_unlock(irqflags);
 	return handle;
 
 undo_pivot:
@@ -416,15 +416,15 @@ undo_pivot:
 int64_t gui_window_destroy(int64_t handle)
 {
 	int64_t err;
-	uint64_t irqflags = spinlock_acquire_irqsave(&kGuiLock);
+	uint64_t irqflags = gui_lock(GUI_LOCK_WINDOW);
 	window_t *win = handle_lookup_owned(handle, &err);
 	if (!win) {
-		spinlock_release_irqrestore(&kGuiLock, irqflags);
+		gui_unlock(irqflags);
 		return err;
 	}
     for (unsigned i = 0; i < GUI_MAX_WINDOWS; ++i) {
         if (s_handles[i] && s_handles[i]->popup_owner_id == win->id) {
-            spinlock_release_irqrestore(&kGuiLock, irqflags);
+            gui_unlock(irqflags);
             return GUI_ERR_BUSY;
         }
     }
@@ -445,7 +445,7 @@ int64_t gui_window_destroy(int64_t handle)
 		RELOAD_CR3
 	}
 	wm_destroy(win);   // damages the vacated area itself
-	spinlock_release_irqrestore(&kGuiLock, irqflags);
+	gui_unlock(irqflags);
 	return 0;
 }
 
@@ -459,10 +459,10 @@ int64_t gui_window_get_surface(int64_t handle, surface_t *out)
 	if (!out)
 		return GUI_ERR_BAD_ARGS;
 	int64_t err;
-	uint64_t irqflags = spinlock_acquire_irqsave(&kGuiLock);
+	uint64_t irqflags = gui_lock(GUI_LOCK_WINDOW);
 	window_t *win = handle_lookup_owned(handle, &err);
 	if (!win) {
-		spinlock_release_irqrestore(&kGuiLock, irqflags);
+		gui_unlock(irqflags);
 		return err;
 	}
 	*out = win->canvas;
@@ -473,7 +473,7 @@ int64_t gui_window_get_surface(int64_t handle, surface_t *out)
 	// what their kernel-thread owners dereference.
 	if (win->canvas_task_phys != 0)
 		out->pixels = (uint32_t *)win->canvas_task_va;
-	spinlock_release_irqrestore(&kGuiLock, irqflags);
+	gui_unlock(irqflags);
 	return 0;
 }
 
@@ -488,10 +488,10 @@ int64_t gui_window_get_state(int64_t handle, os64_gui_window_state_t *out)
 	if (!out)
 		return GUI_ERR_BAD_ARGS;
 	int64_t err;
-	uint64_t irqflags = spinlock_acquire_irqsave(&kGuiLock);
+	uint64_t irqflags = gui_lock(GUI_LOCK_WINDOW);
 	window_t *win = handle_lookup_owned(handle, &err);
 	if (!win) {
-		spinlock_release_irqrestore(&kGuiLock, irqflags);
+		gui_unlock(irqflags);
 		return err;
 	}
 	out->x      = win->frame.x;
@@ -505,34 +505,34 @@ int64_t gui_window_get_state(int64_t handle, os64_gui_window_state_t *out)
 	                            GUI_WINDOW_MAXIMIZED |
 	                            GUI_WINDOW_MINIMIZED |
 	                            GUI_WINDOW_COVERED | GUI_WINDOW_TITLE_UTF8 | GUI_WINDOW_HAS_SETTINGS);   // can anyone see me? — the frame clock's question
-	spinlock_release_irqrestore(&kGuiLock, irqflags);
+	gui_unlock(irqflags);
 	return 0;
 }
 
 int64_t gui_window_focus(int64_t handle)
 {
     int64_t err;
-    uint64_t flags=spinlock_acquire_irqsave(&kGuiLock);
+    uint64_t flags=gui_lock(GUI_LOCK_WINDOW);
     window_t *win=handle_lookup_owned(handle,&err);
     if(win && (win->flags & (GUI_WINDOW_DESKTOP | GUI_WINDOW_POPUP))) {
         win=NULL;err=GUI_ERR_BAD_ARGS;
     }
     if(win) { wm_set_minimized(win,false);wm_raise(win); }
-    spinlock_release_irqrestore(&kGuiLock,flags);
+    gui_unlock(flags);
     return win?0:err;
 }
 
 int64_t gui_window_set_min_size(int64_t handle, uint32_t width, uint32_t height)
 {
 	int64_t err;
-	uint64_t irqflags = spinlock_acquire_irqsave(&kGuiLock);
+	uint64_t irqflags = gui_lock(GUI_LOCK_WINDOW);
 	window_t *win = handle_lookup_owned(handle, &err);
 	if (!win) {
-		spinlock_release_irqrestore(&kGuiLock, irqflags);
+		gui_unlock(irqflags);
 		return err;
 	}
 	bool valid = wm_set_min_size(win, width, height);
-	spinlock_release_irqrestore(&kGuiLock, irqflags);
+	gui_unlock(irqflags);
 	return valid ? 0 : GUI_ERR_BAD_ARGS;
 }
 
@@ -543,10 +543,10 @@ int64_t gui_window_set_min_size(int64_t handle, uint32_t width, uint32_t height)
 int64_t gui_window_publish(int64_t handle, const rect_t *damage)
 {
 	int64_t err;
-	uint64_t irqflags = spinlock_acquire_irqsave(&kGuiLock);
+	uint64_t irqflags = gui_lock(GUI_LOCK_PUBLISH);
 	window_t *win = handle_lookup_owned(handle, &err);
 	if (!win) {
-		spinlock_release_irqrestore(&kGuiLock, irqflags);
+		gui_unlock(irqflags);
 		return err;
 	}
 
@@ -555,7 +555,7 @@ int64_t gui_window_publish(int64_t handle, const rect_t *damage)
 	rect_t local;
 	if (damage) {
 		if (!rect_intersect(*damage, content_bounds, &local)) {
-			spinlock_release_irqrestore(&kGuiLock, irqflags);
+			gui_unlock(irqflags);
 			return 0;   // empty damage: legal no-op
 		}
 	} else {
@@ -581,7 +581,7 @@ int64_t gui_window_publish(int64_t handle, const rect_t *damage)
 	                                local.w, local.h};
 
 	// Occlusion (2026-08-18): if none of this rect can reach the glass, stop
-	// here — no damage, so no composite and no uncached flush of pixels that
+	// here — no damage, so no composite and no framebuffer flush of pixels that
 	// cannot change.
 	//
 	// The SNAPSHOT above still happened, and that is exactly why this check
@@ -598,7 +598,7 @@ int64_t gui_window_publish(int64_t handle, const rect_t *damage)
 	// applications to volunteer, and they didn't). That half rides libui; see
 	// the occlusion row in DEBTS.
 	bool hidden = wm_rect_is_occluded(win, screen_damage);
-	spinlock_release_irqrestore(&kGuiLock, irqflags);
+	gui_unlock(irqflags);
 
 	if (hidden)
 		return 0;
@@ -614,14 +614,14 @@ int64_t gui_event_poll(int64_t handle, input_event_t *out)
 	if (!out)
 		return GUI_ERR_BAD_ARGS;
 	int64_t err;
-	uint64_t irqflags = spinlock_acquire_irqsave(&kGuiLock);
+	uint64_t irqflags = gui_lock(GUI_LOCK_POLL);
 	window_t *win = handle_lookup_owned(handle, &err);
 	if (!win) {
-		spinlock_release_irqrestore(&kGuiLock, irqflags);
+		gui_unlock(irqflags);
 		return err;
 	}
 	bool got = wm_pop_event(win, out);
-	spinlock_release_irqrestore(&kGuiLock, irqflags);
+	gui_unlock(irqflags);
 	return got ? 1 : 0;
 }
 
@@ -642,16 +642,16 @@ int64_t gui_event_ring(int64_t handle, uint32_t mask)
 	if (mask == 0)
 		return GUI_ERR_BAD_ARGS;
 	int64_t err;
-	uint64_t irqflags = spinlock_acquire_irqsave(&kGuiLock);
+	uint64_t irqflags = gui_lock(GUI_LOCK_RING);
 	window_t *win = handle_lookup_owned(handle, &err);
 	if (!win) {
-		spinlock_release_irqrestore(&kGuiLock, irqflags);
+		gui_unlock(irqflags);
 		return err;
 	}
 	input_event_t ev = {.type = INPUT_EVENT_DOORBELL,
 		.doorbell = {.mask = mask}, .tick = kTicksSinceStart};
 	wm_deliver_event(win, &ev);
-	spinlock_release_irqrestore(&kGuiLock, irqflags);
+	gui_unlock(irqflags);
 	return 0;
 }
 
@@ -686,7 +686,7 @@ int64_t gui_event_wait(int64_t handle, input_event_t *out)
 
 	for (;;) {
 		int64_t err;
-		uint64_t irqflags = spinlock_acquire_irqsave(&kGuiLock);
+		uint64_t irqflags = gui_lock(GUI_LOCK_WAIT);
 
 		// Awake at the top of a pass: a wake owed for the last park is void
 		// — what it announced is in the queue, and the pop below takes it —
@@ -699,7 +699,7 @@ int64_t gui_event_wait(int64_t handle, input_event_t *out)
 		// only ever as fresh as the last time the lock said so.
 		window_t *win = handle_lookup_owned(handle, &err);
 		if (!win) {
-			spinlock_release_irqrestore(&kGuiLock, irqflags);
+			gui_unlock(irqflags);
 			return err;
 		}
 
@@ -710,17 +710,17 @@ int64_t gui_event_wait(int64_t handle, input_event_t *out)
 			win->waiter = NULL;
 
 		if (signal_park_must_end(self)) {   // a terminate, or a signal a handler is waiting for
-			spinlock_release_irqrestore(&kGuiLock, irqflags);
+			gui_unlock(irqflags);
 			return GUI_ERR_INTERRUPTED;
 		}
 
         if (win->waiter && win->waiter != self) {
-            spinlock_release_irqrestore(&kGuiLock, irqflags);
+            gui_unlock(irqflags);
             return GUI_ERR_BUSY;
         }
 
 		if (out ? wm_pop_event(win, out) : wm_has_event(win)) {
-			spinlock_release_irqrestore(&kGuiLock, irqflags);
+			gui_unlock(irqflags);
 			return 1;
 		}
 
@@ -728,7 +728,7 @@ int64_t gui_event_wait(int64_t handle, input_event_t *out)
 		// critical section as the failed pop, so a deliverer either pushed
 		// before our pop (we returned above) or will see our registration.
 		win->waiter = self;
-		spinlock_release_irqrestore(&kGuiLock, irqflags);
+		gui_unlock(irqflags);
 
 		signal_raise(SIGSLEEP,
 		             kTicksSinceStart + GUI_EVENT_WAIT_BACKSTOP_TICKS, self);
@@ -743,7 +743,7 @@ int64_t gui_event_wait_any(int64_t *out_handle)
     if (!self || !out_handle) return GUI_ERR_BAD_ARGS;
     const uint64_t owner = gui_current_task_id();
     for (;;) {
-        uint64_t irqflags = spinlock_acquire_irqsave(&kGuiLock);
+        uint64_t irqflags = gui_lock(GUI_LOCK_WAIT);
         // Awake at the top: the last park's debt is void with its slots
         // (gui_event_wait says why). Several windows' deliverers may have
         // owed one wake; the scan below finds every event they announced.
@@ -762,7 +762,7 @@ int64_t gui_event_wait_any(int64_t *out_handle)
         int64_t rc = signal_park_must_end(self) ? GUI_ERR_INTERRUPTED :
                      !count ? GUI_ERR_INVALID_HANDLE : busy ? GUI_ERR_BUSY : 0;
         if (rc) {
-            spinlock_release_irqrestore(&kGuiLock, irqflags);
+            gui_unlock(irqflags);
             return rc;
         }
         for (unsigned n = 0; n < GUI_MAX_WINDOWS; ++n) {
@@ -771,14 +771,14 @@ int64_t gui_event_wait_any(int64_t *out_handle)
             if (w && w->owner == owner && wm_has_event(w)) {
                 *out_handle = (int64_t)i + 1;
                 self->gui_wait_cursor = (i + 1) % GUI_MAX_WINDOWS;
-                spinlock_release_irqrestore(&kGuiLock, irqflags);
+                gui_unlock(irqflags);
                 return 1;
             }
         }
         for (unsigned i = 0; i < GUI_MAX_WINDOWS; ++i)
             if (s_handles[i] && s_handles[i]->owner == owner)
                 s_handles[i]->waiter = self;
-        spinlock_release_irqrestore(&kGuiLock, irqflags);
+        gui_unlock(irqflags);
         signal_raise(SIGSLEEP, kTicksSinceStart + GUI_EVENT_WAIT_BACKSTOP_TICKS, self);
     }
 }
@@ -787,10 +787,10 @@ int64_t gui_window_get_content_rect(int64_t handle, rect_t *out)
 {
     if (!out) return GUI_ERR_BAD_ARGS;
     int64_t err;
-    uint64_t irqflags = spinlock_acquire_irqsave(&kGuiLock);
+    uint64_t irqflags = gui_lock(GUI_LOCK_WINDOW);
     window_t *win = handle_lookup_owned(handle, &err);
     if (win) *out = wm_content_rect_on_screen(win);
-    spinlock_release_irqrestore(&kGuiLock, irqflags);
+    gui_unlock(irqflags);
     return win ? 0 : err;
 }
 
@@ -836,7 +836,7 @@ void gui_task_destroy_windows(struct task *t)
 	if (!kEnableGUI || t == NULL || t->taskID == 0)
 		return;
 
-	uint64_t irqflags = spinlock_acquire_irqsave(&kGuiLock);
+	uint64_t irqflags = gui_lock(GUI_LOCK_WINDOW);
     // Exclude the whole exiting family before any focus succession runs.
     for (unsigned i = 0; i < GUI_MAX_WINDOWS; ++i) {
         if (s_handles[i] && s_handles[i]->owner == t->taskID)
@@ -858,5 +858,5 @@ void gui_task_destroy_windows(struct task *t)
 		canvas_release_locked(win, t);
 		wm_destroy(win);   // damages the vacated area itself
 	}
-	spinlock_release_irqrestore(&kGuiLock, irqflags);
+	gui_unlock(irqflags);
 }

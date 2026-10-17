@@ -2,7 +2,7 @@
 //
 // Design rules (see gui/surface.h and GRAPHICS.md):
 //  * All drawing happens in cacheable RAM. Only surface_flush_rect() touches
-//    the uncached hardware framebuffer, and it is strictly write-only.
+//    the write-combining hardware framebuffer, and it is strictly write-only.
 //  * Every primitive clips against the destination — callers never have to
 //    pre-clip, and rects hanging off any edge are legal.
 //  * Fixed 32-bpp XRGB throughout (what Limine gives us; X reserved).
@@ -213,10 +213,11 @@ void surface_flush_rect(const surface_t *back, rect_t r)
 		return;
 
 	// Row-by-row copy, widened to 64-bit stores. The framebuffer is mapped
-	// uncached (PCD), so each store goes straight to the bus — halving the
-	// store count roughly halves the flush cost. Alignment is chosen off the
-	// DESTINATION: a leading/trailing 32-bit store when the dst row start/end
-	// isn't 8-byte aligned, 64-bit stores for the body.
+	// write-combining (PAGE_WC, paging.c), so stores to it are gathered into
+	// bus writes rather than cached; wider stores mean fewer of them.
+	// Alignment is chosen off the DESTINATION: a leading/trailing 32-bit store
+	// when the dst row start/end isn't 8-byte aligned, 64-bit stores for the
+	// body.
 	for (int32_t y = c.y; y < c.y + c.h; y++) {
 		const uint32_t *src = back->pixels + (size_t)y * back->pitch_px + c.x;
 		uint32_t *dst = (uint32_t *)kFrameBuffer.base_address

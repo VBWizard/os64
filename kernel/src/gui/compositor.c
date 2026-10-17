@@ -2,7 +2,7 @@
 //
 // The pipeline (per frame): drain input → route events → recomposite damaged
 // screen regions into the RAM backbuffer (scene layers bottom-up, cursor
-// last) → flush only the damaged rects to the uncached hardware framebuffer.
+// last) → flush only the damaged rects to the write-combining framebuffer.
 // The backbuffer is the canonical screen image; the framebuffer only ever
 // receives finished pixels, which is why nothing can flicker.
 //
@@ -17,6 +17,7 @@
 #include "gui/gui_client.h"
 #include "gui/gui_internal.h"
 #include "gui/glass.h"         // glass_damage_locked — every frame feeds /dev/glass
+#include "driver/system/x86_64.h"   // rdtsc — the lock times itself for /sys/gui
 
 #include "tty.h"             // kTTY/kTTYFocused — glass ownership IS VT focus (VT8 chapter)
 #include "vt_select.h"       // the other side of the input fork: console mouse selection
@@ -48,10 +49,65 @@ task_t *kGuiCompTask = NULL;
 // ---------------------------------------------------------------------------
 // Shared GUI state. Everything guarded by kGuiLock is touched by client
 // threads (gui_window_* calls) and the compositor. Compositing into the RAM
-// backbuffer happens UNDER the lock (sub-ms; keeps window lifetimes safe);
-// only the flush to the slow uncached framebuffer runs after release.
+// backbuffer happens UNDER the lock (keeps window lifetimes safe; /sys/gui's
+// composite line says how long it holds it);
+// only the flush to the slower write-combining framebuffer runs after release.
 // ---------------------------------------------------------------------------
 spinlock_t kGuiLock = 0;   // shared with window.c / gui_client.c via gui_internal.h
+
+// gui_lock's counts (gui_internal.h): one row a site, and who holds the lock
+// now and since when, so gui_unlock charges the hold to the site that took it.
+static gui_lock_count_t s_lock_counts[GUI_LOCK_SITES];
+static gui_lock_site_t s_lock_holder;
+static uint64_t s_lock_since;
+
+static const char *const kLockSiteNames[GUI_LOCK_SITES] = {
+	"publish", "composite", "damage", "ring", "wait", "poll", "window", "glass", "other",
+};
+
+const char *gui_lock_site_name(gui_lock_site_t site)
+{
+	return site < GUI_LOCK_SITES ? kLockSiteNames[site] : "?";
+}
+
+uint64_t gui_lock(gui_lock_site_t site)
+{
+	uint64_t waited;
+	uint64_t flags = spinlock_acquire_irqsave_measured(&kGuiLock, rdtsc, &waited);
+	gui_lock_count_t *c = &s_lock_counts[site < GUI_LOCK_SITES ? site : GUI_LOCK_OTHER];
+	c->acquires++;
+	if (waited != 0) {
+		c->contended++;
+		c->wait_cycles += waited;
+		if (waited > c->max_wait_cycles)
+			c->max_wait_cycles = waited;
+	}
+	s_lock_holder = site < GUI_LOCK_SITES ? site : GUI_LOCK_OTHER;
+	s_lock_since = rdtsc();
+	return flags;
+}
+
+void gui_unlock(uint64_t irqflags)
+{
+	uint64_t now = rdtsc();
+	uint64_t hold = now > s_lock_since ? now - s_lock_since : 0;
+	gui_lock_count_t *c = &s_lock_counts[s_lock_holder];
+	c->hold_cycles += hold;
+	if (hold > c->max_hold_cycles)
+		c->max_hold_cycles = hold;
+	spinlock_release_irqrestore(&kGuiLock, irqflags);
+}
+
+void gui_lock_counts(gui_lock_count_t *out, bool restart)
+{
+	uint64_t flags = gui_lock(GUI_LOCK_OTHER);
+	for (int s = 0; s < GUI_LOCK_SITES; s++) {
+		out[s] = s_lock_counts[s];
+		if (restart)
+			s_lock_counts[s].max_wait_cycles = s_lock_counts[s].max_hold_cycles = 0;
+	}
+	gui_unlock(flags);
+}
 
 // ── VT8 glass ownership (Phase B, 2026-08-19 — GRAPHICS.md's VT8 chapter) ───
 // The GUI is VT8's seated shell, not the framebuffer's owner-by-force. One
@@ -83,7 +139,7 @@ bool gui_owns_glass(void)
 //
 // v1 kept ONE union rect, and the P5 shakedown priced that choice: a bouncing
 // ball in one corner unioned with a cursor in the other produced a near-
-// fullscreen rectangle, recomposited and pushed through the uncached
+// fullscreen rectangle, recomposited and pushed through the write-combining
 // framebuffer ~100 times a second. The screen was mostly unchanged; we paid
 // retail for it anyway. Two small rects should cost two small rects.
 //
@@ -279,9 +335,9 @@ void gui_damage_add_locked(rect_t screen_rect)
 
 void gui_damage_add(rect_t screen_rect)
 {
-	uint64_t flags = spinlock_acquire_irqsave(&kGuiLock);
+	uint64_t flags = gui_lock(GUI_LOCK_DAMAGE);
 	gui_damage_add_locked(screen_rect);
-	spinlock_release_irqrestore(&kGuiLock, flags);
+	gui_unlock(flags);
 }
 
 void gui_census(uint32_t *windows, uint64_t *surface_bytes)
@@ -291,9 +347,9 @@ void gui_census(uint32_t *windows, uint64_t *surface_bytes)
 	if (!kEnableGUI)
 		return;   // no compositor, no z-list, nothing to lock
 
-	uint64_t flags = spinlock_acquire_irqsave(&kGuiLock);
+	uint64_t flags = gui_lock(GUI_LOCK_OTHER);
 	wm_census_locked(windows, surface_bytes);
-	spinlock_release_irqrestore(&kGuiLock, flags);
+	gui_unlock(flags);
 }
 
 void gui_emergency_disable(void)
@@ -1546,7 +1602,7 @@ bool guicomp_thread(bool daemon)
 		frames++;
 
 		// -------- Drain input, route events, recomposite (one lock hold) ---
-		uint64_t irqflags = spinlock_acquire_irqsave(&kGuiLock);
+		uint64_t irqflags = gui_lock(GUI_LOCK_COMPOSITE);
 
 		input_event_t ev;
 		while (input_pop(&ev))
@@ -1607,7 +1663,7 @@ bool guicomp_thread(bool daemon)
 		// overlaps a copy records its damage after the copy's take.
 		glass_damage_locked(damage, damage_count);
 
-		spinlock_release_irqrestore(&kGuiLock, irqflags);
+		gui_unlock(irqflags);
 
 		// A /dev/glass keyboard's held key repeats here, outside kGuiLock as
 		// delivery must be (gui/glass.h, INPUT and glass_input_tick).
@@ -1622,7 +1678,7 @@ bool guicomp_thread(bool daemon)
 			gui_window_terminate_owner(owner);
 		}
 
-		// -------- Flush to the (slow, uncached) framebuffer, lock-free -----
+		// -------- Flush to the (write-combining) framebuffer, lock-free ----
 		// One flush per surviving rect. composite_locked clipped each to the
 		// screen and may have emptied it entirely; those are skipped here
 		// rather than filtered above, so the indices keep matching.

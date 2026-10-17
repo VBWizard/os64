@@ -1068,7 +1068,7 @@ bool wm_rect_is_covered(rect_t screen_rect)
 
 // Occlusion, the cheap half (2026-08-18). Painter's algorithm draws a covered
 // window and then draws over it: correct, and entirely wasted work — plus a
-// flush of uncached pixels that cannot possibly change. This answers the one
+// flush of framebuffer pixels that cannot possibly change. This answers the one
 // question that lets publish skip both.
 //
 // DELIBERATELY the simple test: is this rect inside ONE window above me? Two
