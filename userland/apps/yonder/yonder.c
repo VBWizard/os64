@@ -141,13 +141,8 @@ static bool s_animations = true;
 // A GIF frame that asks for 10 ms or less is shown for this long, as every
 // browser shows the ones that ask for "as fast as you can".
 #define FRAME_FLOOR_MS 100
-// A moving picture's next frame is due on this grid of the clock, so
-// pictures of one delay share their ticks and their paints instead of each
-// taking its own: a GIF's delays are hundredths of a second, so its cadence
-// is kept.
-#define FRAME_GRID_MS 10
 // A frame shown this much after it was due is counted late (the paint
-// counts): two of the grid's steps, past what a tick's own lateness is.
+// counts): well past the clock's own step, which is a tick's lateness.
 #define FRAME_LATE_MS 30
 
 // ── The page's fonts ────────────────────────────────────────────────────
@@ -651,7 +646,6 @@ static void webfonts_families_shown(const Page *p);
 static void webfonts_layout_begins(const Page *p);
 static void pictures_schedule(void);
 static uint64_t frame_delay(const Picture *pic);
-static uint64_t frame_due(const Picture *pic, uint64_t now);
 
 // A shown picture's pixels: the still image, or the frame a moving one is on.
 static const uint32_t *picture_pixels(const Picture *pic, uint32_t *w, uint32_t *h)
@@ -3595,7 +3589,7 @@ static void picture_arrived(yonder_picture_job_t *job, yonder_picture_t *product
     g.page.kept_bytes += bytes;
     if (pic->moving != NULL) {
         pic->playing = true;
-        pic->due = frame_due(pic, yonder_now_ms());
+        pic->due = yonder_now_ms() + frame_delay(pic);
         pictures_schedule();
     }
     if (picture_moves_page(&g.page, job->index))
@@ -4692,11 +4686,18 @@ static void diag_face(Page *p, int32_t i, const garb_font_face_t *f, bool shown)
 static bool paint_lines(DiagText *t, DiagText *u)
 {
     uint64_t span_us = (uint64_t)(os64_micros() - s_cost.from_us);
-    // The whole span, read once (a counter behind its start reads as none).
-    uint64_t at = cycles(), span = at > s_cost.from_cycles ? at - s_cost.from_cycles : 0;
+    // The whole span, read once, as every interval is (cycles_since): one
+    // whose counter stepped back has no rate, and the line says that rather
+    // than that nothing was painted.
+    uint64_t span = cycles_since(s_cost.from_cycles);
     uint64_t rate = span_us > 0 ? span / span_us : 0;   // per microsecond
-    if (rate == 0 || s_cost.paints == 0) {
+    if (s_cost.paints == 0) {
         dt_put(t, "nothing painted since the counts began");
+        return false;
+    }
+    if (rate == 0) {
+        dt_put(t, "%lu paints, but the counter stepped back across the span (the cores' counters disagree): "
+               "no times", (unsigned long)s_cost.paints);
         return false;
     }
     uint64_t busy = span > s_cost.waited ? (span - s_cost.waited) * 100 / span : 0;
@@ -4912,14 +4913,6 @@ static uint64_t frame_delay(const Picture *pic)
 {
     uint32_t ms = os64_image_sequence_frame(pic->moving)->delay_ms;
     return ms <= 10 ? FRAME_FLOOR_MS : ms;
-}
-
-// When the frame on show from `now` gives way: its delay on, at the
-// nearest point of FRAME_GRID_MS.
-static uint64_t frame_due(const Picture *pic, uint64_t now)
-{
-    uint64_t due = now + frame_delay(pic);
-    return (due + FRAME_GRID_MS / 2) / FRAME_GRID_MS * FRAME_GRID_MS;
 }
 
 // Marks a part of the view, in page coordinates, for repainting: libui
@@ -5361,7 +5354,7 @@ static void pictures_tick(void)
         if (now - pic->due > s_cost.late_most)
             s_cost.late_most = now - pic->due;
         s_cost.late_frames += now - pic->due > FRAME_LATE_MS;
-        pic->due = frame_due(pic, now);
+        pic->due = now + frame_delay(pic);
         if (moved != NULL)
             moved[k] = any = true;
         else

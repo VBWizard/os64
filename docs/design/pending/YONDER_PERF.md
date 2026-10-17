@@ -144,11 +144,16 @@ second, and the ticks cost 12-20% of the thread on their own.
 1. **The instrument**, above, with the work beside the paints counted too:
    handing the ticker its next deadline (`schedule`, a call), and the
    main loop's time asleep, so a reading says how busy the thread was.
-2. **Shared deadlines.** A moving picture's next frame is due on a 10 ms
-   grid of the clock (`frame_due`, FRAME_GRID_MS): pictures of one delay
-   share their ticks and their paints, and there are at most a hundred
-   ticks a second. A GIF's delays are hundredths of a second, so its
-   cadence is kept.
+2. **Shared deadlines — withdrawn.** A frame's next deadline was put on a
+   10 ms grid so that pictures of one delay would share their ticks and
+   paints. It never did anything (Codex, #283 round 3): yonder's clock is
+   the kernel's 100 Hz tick, a GIF's delays are whole hundredths, and the
+   floor is 100 ms, so every deadline was already on the grid and none was
+   moved; the host test had used times the clock cannot produce. The
+   readings below that credit (2) are (3)'s and (4)'s. Sharing ticks for
+   real needs another rule — each picture keeps its exact time and shows
+   at a coarser step — which is a design of its own (below, Then measure
+   again).
 3. **One pass over the page a tick.** `pictures_seen` answers which
    pictures meet the view, and marks the ones a tick moved, in one pass —
    what `picture_on_screen` answers for one picture, which walked every
@@ -159,7 +164,7 @@ second, and the ticks cost 12-20% of the thread on their own.
    No state outlives the call.
 
 4. **A due deadline the loop meets itself is not rung for.** The P5's
-   readings after (2) and (3): ticks cheap, but ~350 a second against ~38
+   readings after (3) (and (2), which changed nothing): ticks cheap, but ~350 a second against ~38
    paints, and a second yonder thread (the ticker) at 10-25%. The counts
    named it: ~240 deadlines a second already past when handed to the
    ticker, all the page's script timers, while ~21 timers a second ran. A
@@ -216,6 +221,12 @@ complexity:
   cut to the dirty rectangle — and **the dirty area becomes a short list
   of rectangles**, so two marks far apart paint two parts. Worth more on a
   page without a moving background than on danlegt.
+- **Moving pictures that share their ticks.** Pictures of one delay
+  started a tick apart stay a tick apart, and each tick is a paint. A
+  coarser display step (20-30 ms) would let them share, with each
+  picture's exact time kept so its cadence does not drift by the
+  rounding; what it costs in jitter and what it saves in paints is for a
+  reading to say.
 - What the instrument says next: scaled frames kept, warps.
 
 Also owed to this slice (PILE3.md): the paused-animation test, "throttle,

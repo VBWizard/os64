@@ -4158,23 +4158,21 @@ static void picture_tick_cases(void) {
                    d1.w==g.ui.dirty.w && d1.h==g.ui.dirty.h));
     }
     check(marks_same,"picture ticks: one pass marks what asking each picture apart marks");
-    /* Due at two moments a few milliseconds apart, both advanced by the
-     * tick after; then both due on the grid, together. */
+    /* Due at two ticks of the clock, both advanced by the tick after, each
+     * then due its delay after the tick that showed it. */
     int32_t a=-1, c=-1, b=-1;
     for(int32_t k=0;k<g.page.npics;k++) {
         if(strstr(g.page.pics[k].url,"a.gif")) a=k;
         if(strstr(g.page.pics[k].url,"c.gif")) c=k;
         if(strstr(g.page.pics[k].url,"b.gif")) b=k;
     }
-    g.page.pics[a].due=1003; g.page.pics[c].due=1007;
-    now_ms=1008;
+    g.page.pics[a].due=1000; g.page.pics[c].due=1010;
+    now_ms=1010;
     pictures_tick();
     check(fakes[a].nexts==1 && fakes[c].nexts==1 && fakes[b].nexts==0,
           "picture ticks: a tick advances the pictures due and on screen, not one scrolled away");
     check(g.page.pics[a].due==1110 && g.page.pics[c].due==1110,
-          "picture ticks: the next frames are due on the grid, together");
-    check(frame_due(&g.page.pics[a],1004)==1100 && frame_due(&g.page.pics[a],1006)==1110,
-          "picture ticks: a deadline goes to the nearest point of the grid");
+          "picture ticks: each next frame is due its delay after the tick that showed it");
     for(int32_t k=0;k<g.page.npics;k++) { g.page.pics[k].moving=NULL; g.page.pics[k].playing=false; }
     now_ms=0;
     probe_drop();
@@ -4594,6 +4592,14 @@ static void paint_cost_cases(void) {
         check(strstr(rec,"; the counter stepped back 1 times (the cores' counters disagree: these times are suspect); ")!=NULL &&
               strstr(rec,"; 5 script tasks: 1 scripts, 2 timers, 2 events;")!=NULL,
               "paint counts: the reading names a counter that stepped back, and the tasks by kind");
+        /* A span whose counter stepped back across it has no rate: the line
+         * says so, not that nothing was painted. */
+        s_cost.from_cycles=cycles()+1000000000000ull;
+        diag_paint(&g.page);
+        yonder_diag_render(g.page.diag,rec,sizeof(rec));
+        check(strstr(rec,"\npaint: 1 paints, but the counter stepped back across the span (the cores' counters "
+                         "disagree): no times\n")!=NULL,
+              "paint counts: a span the counter stepped back across is said, not called empty");
     }
     web_drop();
     saved_diagnostics[0]='\0';
