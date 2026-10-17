@@ -169,6 +169,12 @@ typedef struct s_thread
 	uint64_t userCycles;
 	uint64_t systemCycles;
 	uint64_t idleCycles;
+	// Resolved page faults belong to the faulting thread. A major fault
+	// needed a file read; anonZeroPages counts demand-zero pages allocated
+	// while resolving faults, including a discarded twin resolution.
+	uint64_t minorFaults;
+	uint64_t majorFaults;
+	uint64_t anonZeroPages;
 	// Next handle index for task-window wait fairness; used by this thread.
 	uint32_t gui_wait_cursor;
 } thread_t;

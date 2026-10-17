@@ -329,7 +329,7 @@
         uint32_t lastChildNumber;
         bool foreground, stdinRedirected, stdoutRedirected, stderrRedirected;
         uintptr_t *stackInitialPage;
-        uint32_t minorFaults, majorFaults, cSwitches;
+        uint32_t cSwitches;
 		uint64_t* pml4, *pml4v;
 		// Every table page of THIS address space — the PML4 and each PDPT/PD/
 		// PT — comes from here and dies with it (arena_destroy at burial, see

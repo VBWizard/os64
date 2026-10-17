@@ -181,8 +181,9 @@ static void kernel_read_page(void *arg)
     params->result = elf_read_page(params->file, params->phdrs, params->phnum, params->page_vaddr, params->dest);
 }
 
-uintptr_t shared_object_resolve_page(shared_object_t *so, size_t page_idx)
+uintptr_t shared_object_resolve_page(shared_object_t *so, size_t page_idx, bool *did_read)
 {
+    *did_read = false;
     // volatile: other cores write this slot concurrently; every read below
     // must really hit memory, not a stale register.
     volatile uintptr_t *slot = &so->page_phys[page_idx];
@@ -275,6 +276,7 @@ uintptr_t shared_object_resolve_page(shared_object_t *so, size_t page_idx)
     while (__sync_lock_test_and_set(&so->io_lock, 1)) {
         __builtin_ia32_pause();
     }
+    *did_read = true;
     call_in_kernel_context(kernel_read_page, params);
     __sync_lock_release(&so->io_lock);
 

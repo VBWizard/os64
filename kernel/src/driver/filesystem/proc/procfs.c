@@ -525,7 +525,15 @@ static void proc_gen_task_status(synth_text_t *t, task_t *task)
 	synth_text_addf(t, "entry\t%p\n", (void *)task->entryPoint);
 	if (task->loadBias)
 		synth_text_addf(t, "bias\t%p\n", (void *)task->loadBias);
-	synth_text_addf(t, "faults\t%u minor %u major\n", task->minorFaults, task->majorFaults);
+	uint64_t minor_faults = 0, major_faults = 0, anon_zero_pages = 0;
+	for (thread_t *fault_th = task->threads; fault_th != NULL; fault_th = fault_th->taskNext)
+	{
+		minor_faults += __atomic_load_n(&fault_th->minorFaults, __ATOMIC_RELAXED);
+		major_faults += __atomic_load_n(&fault_th->majorFaults, __ATOMIC_RELAXED);
+		anon_zero_pages += __atomic_load_n(&fault_th->anonZeroPages, __ATOMIC_RELAXED);
+	}
+	synth_text_addf(t, "faults\t%lu minor %lu major\n", minor_faults, major_faults);
+	synth_text_addf(t, "anon_zero_pages\t%lu\n", anon_zero_pages);
 	synth_text_addf(t, "switches\t%u\n", task->cSwitches);
 	// Where the task's thread last ran — the answer to "whose plate did
 	// this time come off", without which per-core arithmetic is guesswork.
@@ -1137,6 +1145,11 @@ static void proc_gen_thread_status(synth_text_t *t, task_t *task, thread_t *th)
 	synth_text_addf(t, "rip\t%p\n", (void *)th->regs.RIP);
 	synth_text_addf(t, "rsp\t%p\n", (void *)th->regs.RSP);
 	synth_text_addf(t, "ticks\t%lu\n", th->totalRunTicks);
+	synth_text_addf(t, "faults\t%lu minor %lu major\n",
+	                __atomic_load_n(&th->minorFaults, __ATOMIC_RELAXED),
+	                __atomic_load_n(&th->majorFaults, __ATOMIC_RELAXED));
+	synth_text_addf(t, "anon_zero_pages\t%lu\n",
+	                __atomic_load_n(&th->anonZeroPages, __ATOMIC_RELAXED));
 	accounting_thread_cycles_t cycles;
 	if (accounting_read_thread(th, &cycles))
 	{

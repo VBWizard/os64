@@ -2,6 +2,7 @@
 #define SHARED_OBJECT_H
 
 #include <stddef.h>
+#include <stdbool.h>
 #include <stdint.h>
 
 #include "dlist.h"
@@ -347,7 +348,8 @@ void shared_object_release(shared_object_t *so);
 /// concurrently from multiple cores: different pages resolve in parallel
 /// (file I/O serialized by so->io_lock only), and a core that loses the
 /// race for the same page spins until the winner publishes the result.
-uintptr_t shared_object_resolve_page(shared_object_t *so, size_t page_idx);
+/// did_read reports whether this call entered the file-reading path.
+uintptr_t shared_object_resolve_page(shared_object_t *so, size_t page_idx, bool *did_read);
 
 /// @brief Look up a symbol by name in `so`'s own export table (its DT_SYMTAB
 /// entries that are actually defined, i.e. st_shndx != SHN_UNDEF). Returns
