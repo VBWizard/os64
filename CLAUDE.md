@@ -87,9 +87,19 @@ os64 is a 64-bit x86 operating system kernel built for educational purposes. It 
 - `x86_64-elf-gcc` cross-compiler
 - `x86_64-elf-ld` linker
 - `make`
-- `nasm` (for assembly files)
+- (no `nasm`: the kernel makefile still carries a rule for `.asm` files, but
+  the tree has none; every assembly source is GNU `.S` through the cross gcc)
 - `qemu-system-x86_64` (for testing)
 - `xorriso` (for ISO creation)
+- `ccache` (OPTIONAL, dev-box convenience): the kernel and userland builds
+  put it in front of the cross compiler when it is on PATH and do nothing
+  when it is not. It exists because quickjs.c is a pinned 61,000-line upstream unit that
+  takes 30-40 s at `-O2` and never changes, so every clean build recompiled
+  it for identical bytes. The first line of each build says which compiler
+  command it chose. Entries are keyed by the compiler's exact command line,
+  which carries the tree's absolute path, so each worktree warms its own
+  (about 20 MB a tree in a 5 GB cache); `CCACHE_DISABLE=1` bypasses it,
+  `CCACHE_RECACHE=1` recompiles and overwrites, `ccache -C` empties it
 
 ### Common Commands
 

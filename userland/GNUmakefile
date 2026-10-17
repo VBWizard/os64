@@ -45,7 +45,21 @@ endif
 # breaks the root build instead: under -rR the origin is `undefined`.)
 ifeq ($(filter-out default undefined,$(origin CC)),)
 CC := x86_64-elf-gcc
+# ccache in front of the cross compiler WHEN THE MACHINE HAS ONE, and nothing
+# otherwise: a convenience of the dev box, never a requirement of the build.
+# quickjs.c is one pinned upstream translation unit that takes 30-40 s at
+# -O2 and never changes, so every clean build recompiled it for the same
+# bytes. ccache hashes the preprocessed source, the flags and the compiler
+# itself, and hands back the stored object on a match — byte for byte what
+# the compiler would emit, so a build with it and one without must not
+# differ; if two machines ever do, this line is the first question. Only
+# the `-c` compiles go through it; links are $(LD)'s. An explicit CC from
+# the command line or the environment is left alone, as above.
+ifneq ($(shell command -v ccache 2>/dev/null),)
+CC := ccache $(CC)
 endif
+endif
+$(info userland: CC is '$(CC)')
 ifeq ($(filter-out default undefined,$(origin LD)),)
 LD := x86_64-elf-ld
 endif

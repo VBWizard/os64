@@ -31,8 +31,23 @@ $(call USER_VARIABLE,DESTDIR,)
 # Install prefix; /usr/local is a good, standard default pick.
 $(call USER_VARIABLE,PREFIX,/usr/local)
 
-# User controllable C compiler command.
+# User controllable C compiler command — with ccache in front of it WHEN THE
+# MACHINE HAS ONE, and nothing otherwise: a convenience of the dev box, never
+# a requirement of the build. ccache hashes the preprocessed source, the
+# flags and the compiler itself and hands back the stored object on a match,
+# byte for byte what the compiler would emit, so a build with it and one
+# without must not differ; if two machines ever do, this line is the first
+# question. Only `-c` compiles go through it (-S and links pass straight to
+# the tool). Decided BEFORE USER_VARIABLE, which only assigns when CC is
+# make's own; an explicit CC from the command line or the environment is
+# left alone either way.
+ifeq ($(filter-out default undefined,$(origin CC)),)
+ifneq ($(shell command -v ccache 2>/dev/null),)
+override CC := ccache x86_64-elf-gcc
+endif
+endif
 $(call USER_VARIABLE,CC,x86_64-elf-gcc)
+$(info kernel: CC is '$(CC)')
 
 # User controllable archiver command.
 $(call USER_VARIABLE,AR,x86_64-elf-ar)
