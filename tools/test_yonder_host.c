@@ -400,6 +400,11 @@ static void rec_clip_close(void *ctx)
     out(&((Rec *)ctx)->out, "end clip\n");
 }
 
+// THE PAINT CACHE'S ORACLE (YONDER_PERF.md § perf-2): while set, a mask and
+// a picture are recorded whole, every alpha and every pixel, so two
+// paintings of one page compare pixel for pixel (paint_of).
+static bool s_record_all;
+
 // A shadow's mask: where, its colour, and the sum and the largest of its
 // alphas, which a hand-worked case can check without listing every pixel.
 // When set, every mask's alphas are also written here, a 200 x 100 page: a
@@ -423,6 +428,8 @@ static void rec_mask(void *ctx, os64_gui_rect_t r, const uint8_t *alpha, uint32_
     }
     out(&rec->out, "mask %d %d %d %d #%06x sum %ld max %d\n", r.x, r.y, r.w, r.h, colour, sum,
         most);
+    for (int32_t k = 0; s_record_all && k < r.w * r.h; k++)
+        out(&rec->out, "%02x%s", alpha[k], (k + 1) % r.w == 0 ? "\n" : "");
 }
 
 // A painted picture: where, and every pixel when it is small enough to be
@@ -435,7 +442,7 @@ static void rec_pixels(void *ctx, os64_gui_rect_t r, const uint32_t *argb)
     out(&rec->out, "pixels %d %d %d %d", r.x, r.y, r.w, r.h);
     int32_t n = r.w * r.h;
     for (int32_t k = 0; k < n; k++)
-        if (n <= 16 || k == 0 || k == n - 1)
+        if (n <= 16 || k == 0 || k == n - 1 || s_record_all)
             out(&rec->out, " %08x", argb[k]);
     out(&rec->out, "\n");
 }
@@ -464,6 +471,61 @@ static const yonder_dark_t *s_dark_paint;
 // When set, the page is painted with no memory to be had (s_alloc_starved).
 static bool s_paint_starved;
 
+static yonder_verbs_t verbs_of(Rec *rec)
+{
+    return (yonder_verbs_t){rec,          rec_fill,     rec_text,       rec_image,
+                            rec_control,  rec_backdrop, rec_group_open, rec_group_close,
+                            rec_mask,     rec_pixels,   rec_frame,      rec_through_open,
+                            rec_through_close, rec_clip_open, rec_clip_fill, rec_clip_close};
+}
+
+// The oracle's caches: the suite's, which every page painted before fills,
+// so a key that leaves out a value two pages differ in finds the other
+// page's pixels; and one too small to hold a page's, which must work out
+// what it cannot keep.
+static yonder_paint_cache_t *s_suite_cache, *s_small_cache;
+#define SMALL_CACHE_BUDGET 4096
+// When set, paint_of's own painting goes through this cache: a case that
+// counts what a cache did (paint_cache_cases).
+static yonder_paint_cache_t *s_through;
+
+// `t` painted through `view`, every pixel recorded, through `cache` (NULL
+// for none).
+static char *paint_whole(flow_tree_t *t, os64_page_t *page, os64_gui_rect_t view,
+                         yonder_paint_cache_t *cache)
+{
+    Rec rec = {{0}, view, false, page};
+    out(&rec.out, "%s", "");
+    yonder_verbs_t v = verbs_of(&rec);
+    s_record_all = true;
+    s_alloc_starved = s_paint_starved;
+    yonder_paint(t, view, (flow_point_t){view.x, view.y}, kEnv.paper, s_dark_paint, cache, &v);
+    s_alloc_starved = false;
+    s_record_all = false;
+    return rec.out.v;
+}
+
+// What the cache paints is what the painter works out: the page without
+// it, then through the suite's cache twice — the second paint finding what
+// the first made — and through the small one.
+static void paint_oracle(flow_tree_t *t, os64_page_t *page, os64_gui_rect_t view, const char *html)
+{
+    if (s_suite_cache == NULL)
+        return;
+    char *plain = paint_whole(t, page, view, NULL);
+    yonder_paint_cache_t *through[3] = {s_suite_cache, s_suite_cache, s_small_cache};
+    for (int i = 0; i < 3; i++) {
+        char *kept = paint_whole(t, page, view, through[i]);
+        bool same = plain != NULL && kept != NULL && strcmp(plain, kept) == 0;
+        char what[160];
+        snprintf(what, sizeof(what), "%s the paint cache paints what the painter works out: %.100s",
+                 i == 2 ? "small:" : i == 1 ? "again:" : "suite:", html);
+        expect(what, same, same ? NULL : kept);
+        free(kept);
+    }
+    free(plain);
+}
+
 static char *paint_of(const char *html, size_t len, int32_t width, os64_gui_rect_t view,
                       bool *escaped, bool css)
 {
@@ -489,14 +551,13 @@ static char *paint_of(const char *html, size_t len, int32_t width, os64_gui_rect
     flow_tree_t *t = flow_layout(doc, page, width, &env);
     Rec rec = {{0}, view, false, page};
     out(&rec.out, "%s", "");
-    yonder_verbs_t v = {&rec,          rec_fill,     rec_text,       rec_image,
-                        rec_control,   rec_backdrop, rec_group_open, rec_group_close,
-                        rec_mask,      rec_pixels,   rec_frame,      rec_through_open,
-                        rec_through_close, rec_clip_open, rec_clip_fill, rec_clip_close};
+    yonder_verbs_t v = verbs_of(&rec);
     s_alloc_starved = s_paint_starved;
     if (t != NULL)
-        yonder_paint(t, view, (flow_point_t){view.x, view.y}, kEnv.paper, s_dark_paint, &v);
+        yonder_paint(t, view, (flow_point_t){view.x, view.y}, kEnv.paper, s_dark_paint, s_through, &v);
     s_alloc_starved = false;
+    if (t != NULL)
+        paint_oracle(t, page, view, html);
     if (s_canvas_owner != NULL) {
         const flow_box_t *o = t != NULL ? yonder_canvas_owner(t, &v) : NULL;
         *s_canvas_owner = o == NULL ? "none"
@@ -1247,6 +1308,195 @@ static void agent_cases(void)
                !yonder_agent_valid("tab\there") && !yonder_agent_valid("caf\xc3\xa9"), NULL);
 }
 
+// What a cache did, painting `html` through `view` with it.
+static yonder_paint_cache_counts_t paint_through(yonder_paint_cache_t *c, const char *html,
+                                                 os64_gui_rect_t view)
+{
+    s_through = c;
+    free(paint_of(html, strlen(html), 400, view, NULL, true));
+    s_through = NULL;
+    return yonder_paint_cache_counts(c);
+}
+
+// A box with a gradient and a blurred shadow, 200 x 50: one band of each.
+#define CACHE_BOX "div { width: 200px; height: 50px; margin: 20px; " \
+                  "background: linear-gradient(90deg, #ff0000, #0000ff); box-shadow: 4px 4px 10px #000000 }"
+
+// Boxes alike but for one value each that makes their pixels — a stop's
+// colour, place or hint (a hint's colour is 0, so .g16's black stop where
+// .g4's hint is), the line's angle, a repeat, the ray's shape and centre,
+// currentColor's colour, the tile's size — a ray sized in px is the same
+// ray in any tile — and a shadow's blur, offset, spread, inset and corners
+// — and a small tile placed in from the box's corner, so the box's first
+// columns and rows are the tile's last, wrapped back — painted light, then
+// dark, through the
+// suite's cache in one paint: a key that left one out would hand the
+// second box the first's pixels, and the oracle (paint_oracle) sees it.
+static const char *kCacheKeys =
+    "<!doctype html><style>body { margin: 0 } div { display: inline-block; width: 60px; height: 30px;"
+    " margin: 6px; color: #ff0000 }"
+    " .g0 { background: linear-gradient(90deg, #ff0000, #0000ff) }"
+    " .g1 { background: linear-gradient(45deg, #ff0000, #0000ff) }"
+    " .g2 { background: linear-gradient(90deg, #ff0000, #00ff00) }"
+    " .g3 { background: linear-gradient(90deg, #ff0000 20%, #0000ff) }"
+    " .g4 { background: linear-gradient(90deg, #ff0000, 30%, #0000ff) }"
+    " .g5 { background: linear-gradient(90deg, #ff0000, #0000ff 20px) }"
+    " .g6 { background: repeating-linear-gradient(90deg, #ff0000, #0000ff 20px) }"
+    " .g7 { background: radial-gradient(#ff0000, #0000ff) }"
+    " .g8 { background: radial-gradient(circle, #ff0000, #0000ff) }"
+    " .g9 { background: radial-gradient(closest-side, #ff0000, #0000ff) }"
+    " .g10 { background: radial-gradient(at 20% 30%, #ff0000, #0000ff) }"
+    " .g11 { background: linear-gradient(90deg, currentColor, #0000ff) }"
+    " .g12 { background: linear-gradient(90deg, currentColor, #0000ff); color: #00ff00 }"
+    " .g13 { background: linear-gradient(90deg, #ff0000, #0000ff); width: 61px }"
+    " .g14 { background: linear-gradient(90deg, #ff0000, #0000ff); height: 31px }"
+    " .g15 { background: linear-gradient(90deg, rgba(255,0,0,0.5), #0000ff) }"
+    " .g16 { background: linear-gradient(90deg, #ff0000, #000000 30%, #0000ff) }"
+    " .g17 { background: radial-gradient(10px 10px at 5px 5px, #ff0000, #0000ff) }"
+    " .g18 { background: radial-gradient(10px 10px at 5px 5px, #ff0000, #0000ff); width: 70px }"
+    " .g19 { background: radial-gradient(10px 10px at 5px 5px, #ff0000, #0000ff); height: 31px }"
+    " .g20 { background: radial-gradient(#ff0000, #0000ff) 7px 5px / 20px 20px }"
+    " .s0 { box-shadow: 4px 4px 6px #000000 }"
+    " .s1 { box-shadow: 4px 4px 10px #000000 }"
+    " .s2 { box-shadow: 6px 4px 6px #000000 }"
+    " .s3 { box-shadow: 4px 4px 6px 3px #000000 }"
+    " .s4 { box-shadow: inset 4px 4px 6px #000000 }"
+    " .s5 { box-shadow: 4px 4px 6px #000000; border-radius: 8px }"
+    " .s6 { box-shadow: 4px 4px 6px #000000; border: 3px solid #808080 }"
+    " .s7 { box-shadow: inset 4px 4px 6px #000000; border: 3px solid #808080 }"
+    " .s8 { box-shadow: inset 6px 4px 6px #000000 }"
+    " .s9 { box-shadow: inset 4px 4px 6px 2px #000000 }"
+    "</style>"
+    "<div class=g0></div><div class=g1></div><div class=g2></div><div class=g3></div>"
+    "<div class=g4></div><div class=g5></div><div class=g6></div><div class=g7></div>"
+    "<div class=g8></div><div class=g9></div><div class=g10></div><div class=g11></div>"
+    "<div class=g12></div><div class=g13></div><div class=g14></div><div class=g15></div>"
+    "<div class=g16></div><div class=g17></div><div class=g18></div><div class=g19></div>"
+    "<div class=g20></div>"
+    "<div class=s0></div><div class=s1></div><div class=s2></div><div class=s3></div>"
+    "<div class=s4></div><div class=s5></div><div class=s6></div><div class=s7></div>"
+    "<div class=s8></div><div class=s9></div>";
+
+static void paint_cache_cases(void)
+{
+    const os64_gui_rect_t view = {0, 0, 400, 400};
+    free(paint_of(kCacheKeys, strlen(kCacheKeys), 400, view, NULL, true));
+    s_dark_paint = &kDarkPaint;
+    free(paint_of(kCacheKeys, strlen(kCacheKeys), 400, view, NULL, true));
+    s_dark_paint = NULL;
+
+    const char *one = "<!doctype html><style>" CACHE_BOX "</style><div></div>";
+    yonder_paint_cache_t *c = yonder_paint_cache_new(YONDER_PAINT_CACHE_BUDGET);
+    yonder_paint_cache_counts_t n = paint_through(c, one, view);
+    expect("cache: a first paint makes a band of the tile and one of the mask",
+           n.made == 2 && n.hits == 0 && n.entries == 2 && n.bytes > 200 * 50 * 4, NULL);
+    n = paint_through(c, one, view);
+    expect("cache: a second paint finds them, and makes nothing", n.made == 2 && n.hits == 2, NULL);
+    yonder_paint_cache_empty(c);
+    n = yonder_paint_cache_counts(c);
+    expect("cache: emptied, it holds nothing and keeps its counts",
+           n.entries == 0 && n.bytes == 0 && n.made == 2, NULL);
+    yonder_paint_cache_counts_restart(c);
+
+    // Four of one box, one hanging off the page's left edge: a mask moved
+    // by whole pixels is the same mask.
+    const char *four = "<!doctype html><style>" CACHE_BOX " .off { margin-left: -30px }</style>"
+                       "<div></div><div></div><div class=off></div><div></div>";
+    n = paint_through(c, four, view);
+    expect("cache: boxes of one size and one gradient and shadow share their entries",
+           n.made == 2 && n.hits == 6, NULL);
+    yonder_paint_cache_free(c);
+
+    // Room for one tile: the second gradient a paint wants finds only this
+    // paint's tile to let go, and is worked out instead; the next page's
+    // lets the last page's go.
+    const char *other = "<!doctype html><style>div { width: 200px; height: 50px;"
+                        " background: linear-gradient(#ff00ff, #00ff00) }</style><div></div>";
+    const char *two = "<!doctype html><style>div { width: 200px; height: 50px }"
+                      " .a { background: linear-gradient(#ff0000, #00ff00) }"
+                      " .b { background: linear-gradient(#0000ff, #00ff00) }</style>"
+                      "<div class=a></div><div class=b></div>";
+    c = yonder_paint_cache_new(200 * 50 * 4 + 4096);
+    n = paint_through(c, two, view);
+    expect("cache: a paint's own tile is never let go for another of its own",
+           n.made == 1 && n.no_room == 1 && n.evicted == 0, NULL);
+    n = paint_through(c, other, view);
+    expect("cache: another paint's tile is let go for room", n.evicted == 1 && n.made == 2, NULL);
+    yonder_paint_cache_free(c);
+    // A band found is this paint's as much as one made: the tile .a finds
+    // is not let go for .b's.
+    c = yonder_paint_cache_new(200 * 50 * 4 + 4096);
+    const char *a = "<!doctype html><style>div { width: 200px; height: 50px;"
+                    " background: linear-gradient(#ff0000, #00ff00) }</style><div></div>";
+    (void)paint_through(c, a, view);
+    n = paint_through(c, two, view);
+    expect("cache: a tile this paint found is never let go for another of its own",
+           n.made == 1 && n.hits == 1 && n.no_room == 1 && n.evicted == 0, NULL);
+    yonder_paint_cache_free(c);
+
+    // Room for two tiles: the one found again is the newest, so a third
+    // lets the other go.
+    const char *x = a, *y = other;
+    const char *z = "<!doctype html><style>div { width: 200px; height: 50px;"
+                    " background: linear-gradient(#00ffff, #00ff00) }</style><div></div>";
+    c = yonder_paint_cache_new(2 * 200 * 50 * 4 + 4096);
+    (void)paint_through(c, x, view);
+    (void)paint_through(c, y, view);
+    (void)paint_through(c, x, view);
+    (void)paint_through(c, z, view);
+    n = paint_through(c, x, view);
+    expect("cache: the least recently used is let go first", n.made == 3 && n.evicted == 1 && n.hits == 2, NULL);
+    yonder_paint_cache_free(c);
+
+    // More tiles than the table's first buckets: a table grown finds what
+    // it held.
+    char many[300 * 96 + 64];
+    size_t at = (size_t)snprintf(many, sizeof(many), "<!doctype html><style>div { width: 10px; height: 10px;"
+                                 " display: inline-block }</style>");
+    for (int i = 0; i < 300; i++)
+        at += (size_t)snprintf(many + at, sizeof(many) - at,
+                               "<div style=\"background: linear-gradient(%ddeg, #ff0000, #0000ff)\"></div>", i);
+    c = yonder_paint_cache_new(YONDER_PAINT_CACHE_BUDGET);
+    (void)paint_through(c, many, (os64_gui_rect_t){0, 0, 400, 2000});
+    n = paint_through(c, many, (os64_gui_rect_t){0, 0, 400, 2000});
+    expect("cache: a table grown past its first buckets finds every tile it holds",
+           n.made == 300 && n.hits == 300, NULL);
+    yonder_paint_cache_free(c);
+
+    // One colour is a fill: a repeat shorter than a pixel is its average.
+    const char *solid = "<!doctype html><style>div { width: 200px; height: 50px; background:"
+                        " repeating-linear-gradient(90deg, #ff0000 0px, #0000ff 0.5px) }</style><div></div>";
+    c = yonder_paint_cache_new(YONDER_PAINT_CACHE_BUDGET);
+    n = paint_through(c, solid, view);
+    expect("cache: a gradient of one colour is not kept", n.made == 0 && n.too_wide == 0, NULL);
+    yonder_paint_cache_free(c);
+
+    // Wider than a band: worked out every paint, the tile and the mask.
+    const char *wide = "<!doctype html><style>div { width: 70000px; height: 20px;"
+                       " background: linear-gradient(90deg, #ff0000, #0000ff); box-shadow: 0 0 6px #000000 }"
+                       "</style><div></div>";
+    c = yonder_paint_cache_new(YONDER_PAINT_CACHE_BUDGET);
+    n = paint_through(c, wide, view);
+    expect("cache: a picture wider than a band is not kept", n.too_wide == 2 && n.made == 0, NULL);
+    yonder_paint_cache_free(c);
+
+    // A box 20000 rows tall, seen 100 rows of: its tile and its mask kept
+    // a band at a time, the bands the view reads — a band of the 300 px
+    // tile is 218 rows, of the 318 px mask (the blur's reach of 9 each
+    // side) 206, from 9 rows above the box. The view's rows cross a band's
+    // edge in both.
+    const char *tall = "<!doctype html><style>body { margin: 0 } div { width: 300px; height: 20000px;"
+                       " background: linear-gradient(#ff0000, #0000ff); box-shadow: 0 0 6px #000000 }"
+                       "</style><div></div>";
+    c = yonder_paint_cache_new(YONDER_PAINT_CACHE_BUDGET);
+    n = paint_through(c, tall, (os64_gui_rect_t){0, 10000, 400, 100});
+    expect("cache: a tall tile and mask are kept by the bands the view reads",
+           n.made == 4 && n.bytes < 2 * 218 * 300 * 4 + 2 * 206 * 318 * 2 + 16384, NULL);
+    n = paint_through(c, tall, (os64_gui_rect_t){0, 10020, 400, 100});
+    expect("cache: a view moved within them finds them", n.made == 4 && n.hits == 4, NULL);
+    yonder_paint_cache_free(c);
+}
+
 int main(int argc, char **argv)
 {
     os64_text_options_t o = {
@@ -1271,6 +1521,8 @@ int main(int argc, char **argv)
     } else if (argc == 2 && strcmp(argv[1], "--write-corpus") == 0) {
         corpus(true);
     } else {
+        s_suite_cache = yonder_paint_cache_new(YONDER_PAINT_CACHE_BUDGET);
+        s_small_cache = yonder_paint_cache_new(SMALL_CACHE_BUDGET);
         paint_cases();
         shadow_blur_cases();
         huge_corner_case();
@@ -1284,6 +1536,9 @@ int main(int argc, char **argv)
         cost_cases();
         agent_cases();
         corpus(false);
+        paint_cache_cases();
+        yonder_paint_cache_free(s_suite_cache);
+        yonder_paint_cache_free(s_small_cache);
     }
     for (int i = 0; i < s_nfonts; i++)
         os64_text_font_release(s_fonts[i].font);

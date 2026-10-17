@@ -107,19 +107,47 @@ typedef struct {
     uint32_t paper;
 } yonder_dark_t;
 
+// THE PAINT CACHE (YONDER_PERF.md § perf-2): a gradient's tile and a
+// blurred shadow's mask, kept between paints by band and found by the
+// values that make them, so a paint copies its part out instead of working
+// it out again. What a paint draws from it is what it draws without it,
+// pixel for pixel. One window's, on its one thread: no lock.
+typedef struct yonder_paint_cache yonder_paint_cache_t;
+#define YONDER_PAINT_CACHE_BUDGET ((size_t)16 << 20)
+// An empty cache holding at most `budget` bytes, or NULL for no memory.
+yonder_paint_cache_t *yonder_paint_cache_new(size_t budget);
+// Every entry let go (another page is shown); the counts kept. NULL: nothing.
+void yonder_paint_cache_empty(yonder_paint_cache_t *c);
+void yonder_paint_cache_free(yonder_paint_cache_t *c);
+// Since the counts last restarted: bands found (`hits`) and made, entries
+// let go for room, and pictures worked out without the cache because a
+// band found no room (only this paint's entries were left to let go), no
+// memory, or the picture is wider than a band. And what is held now, in
+// bytes and entries, against the budget. All zero for NULL.
+typedef struct {
+    uint64_t hits, made, evicted, no_room, no_memory, too_wide;
+    uint64_t bytes, entries, budget;
+} yonder_paint_cache_counts_t;
+yonder_paint_cache_counts_t yonder_paint_cache_counts(const yonder_paint_cache_t *c);
+void yonder_paint_cache_counts_restart(yonder_paint_cache_t *c);
+
 // Paints every box that meets `viewport`, canvas first, the page scrolled
 // to `scroll` (flow_visit's). `paper` is the canvas when neither the root
 // nor the body has a background, colour or picture; `dark`, when not NULL,
 // paints the page dark (above) and its paper is the canvas instead.
+// `cache`, when not NULL, keeps what the painter works out between paints
+// (above); NULL paints the same pixels, working everything out.
 // The painter's own work a caller may time: building and blurring a
-// shadow's mask, and computing a gradient's pixels — the verbs it calls
-// are the caller's to time. When set (yonder's paint counts, YONDER_PERF.md)
-// it is told each one's start (`begin`) and end; NULL, nothing is told.
+// shadow's mask, and computing a gradient's pixels, or copying either out
+// of the cache — the verbs it calls are the caller's to time. When set
+// (yonder's paint counts, YONDER_PERF.md) it is told each one's start
+// (`begin`) and end; NULL, nothing is told.
 typedef enum { YONDER_PAINT_SHADOW, YONDER_PAINT_GRADIENT } yonder_paint_stage_t;
 extern void (*yonder_paint_stage)(yonder_paint_stage_t stage, bool begin);
 
 void yonder_paint(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll,
-                  uint32_t paper, const yonder_dark_t *dark, const yonder_verbs_t *verbs);
+                  uint32_t paper, const yonder_dark_t *dark, yonder_paint_cache_t *cache,
+                  const yonder_verbs_t *verbs);
 
 // One of `box`'s boxes — its border box `rect` (in any coordinates), or
 // the padding or content box inside it. A percentage padding counts as

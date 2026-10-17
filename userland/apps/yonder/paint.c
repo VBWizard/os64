@@ -6,8 +6,10 @@
 // looks like. Nothing here knows about a surface.
 
 #include "paint.h"
+#include "paint_cache.h"
 #include "html/html.h"
 #include "os64/mem.h"
+#include "os64/str.h"
 #include <math.h>
 
 // A painter works in the coordinates of the box it paints — a fixed box's
@@ -43,6 +45,8 @@ typedef struct {
     const flow_box_t *canvas_owner;
     // Dark pages (paint.h), NULL for none.
     const yonder_dark_t *dark;
+    // The paint cache (paint.h), NULL for none.
+    yonder_paint_cache_t *cache;
     // A TEXT CLIP's text (PILE3.md § The text clip): when `penned`, a text
     // box draws its run and its decorations in `pen` — no shadows, no
     // relighting — and every other box draws nothing.
@@ -667,7 +671,9 @@ static void round_borders(const Painter *p, const flow_box_t *b, const Round *ou
 // where it may fall: OUTSIDE the border box for an outer shadow, inside the
 // padding box for an inset one. The blur is three box blurs, whose sum is
 // near enough the Gaussian CSS asks for (standard deviation half the blur
-// radius). Only the view's part, and the blur's reach around it, is made.
+// radius). Only the view's part, and the blur's reach around it, is made —
+// or, when the paint cache keeps it, the bands of the whole mask that part
+// reads, which are the same pixels (shadow_kept).
 
 typedef struct {
     int64_t x, y, w, h;         // page pixels
@@ -773,6 +779,155 @@ static Round round_moved(const Round *s, int64_t dx, int64_t dy, int64_t by)
     return r;
 }
 
+// ── The paint cache's entries (YONDER_PERF.md § perf-2) ────────────────
+//
+// A gradient's tile, or a shadow's whole mask, kept a BAND at a time: the
+// rows that fit in BAND_PIXELS, all of the picture's width. A picture
+// wider than that is worked out as it always was.
+
+#define BAND_PIXELS 65536
+
+// An entry's key: the values that make its pixels, written out as bytes
+// (no padding, so equal values are equal keys), the band's number last.
+typedef struct {
+    uint8_t b[64 + 16 * 8 + 128 * 13];
+    uint32_t n, band_at;
+} Key;
+
+static void key_put(Key *k, const void *v, uint32_t n)
+{
+    os64_memcpy(k->b + k->n, v, n);
+    k->n += n;
+}
+
+static void key_i64(Key *k, int64_t v)
+{
+    key_put(k, &v, sizeof(v));
+}
+
+static void key_round(Key *k, const Round *s)
+{
+    key_i64(k, s->l);
+    key_i64(k, s->t);
+    key_i64(k, s->r);
+    key_i64(k, s->b);
+    for (int c = 0; c < 4; c++)
+        for (int i = 0; i < 2; i++)
+            key_i64(k, s->rad[c][i]);
+}
+
+// The key's band, written over the last one's.
+static uint64_t key_band(Key *k, int64_t band)
+{
+    k->n = k->band_at;
+    key_i64(k, band);
+    return paint_cache_hash(k->b, k->n);
+}
+
+static int64_t floor_mod(int64_t a, int64_t b)
+{
+    return a - b * floor_div(a, b);
+}
+
+// A shadow's mask, kept: its shape and the shape it is cut to (`times`,
+// whose coverage it is multiplied by — or what that leaves, when outer),
+// moved so the whole mask's corner (fx0, fy0) is (0, 0), which by whole
+// pixels changes no pixel; the mask `fw` x `fh`.
+typedef struct {
+    Round shape, times;
+    bool inset;
+    int64_t blur, reach, fw, fh, rows;
+    Key key;
+} ShadowMask;
+
+// Band `band` of the mask, made as the view's part is (shadow_cast): its
+// rows and the blur's reach either side, cut after. NULL, made or not,
+// when there is no memory or no room.
+static const uint16_t *shadow_band(const Painter *p, ShadowMask *sm, int64_t band)
+{
+    uint64_t hash = key_band(&sm->key, band);
+    uint16_t *kept = paint_cache_find(p->cache, sm->key.b, sm->key.n, hash);
+    if (kept != NULL)
+        return kept;
+    int64_t r0 = band * sm->rows, r1 = min64(sm->fh, r0 + sm->rows);
+    int64_t s0 = max64(0, r0 - sm->reach), s1 = min64(sm->fh, r1 + sm->reach);
+    Mask m = {0, s0, sm->fw, s1 - s0, NULL};
+    m.a = os64_malloc((size_t)(m.w * m.h) * sizeof(*m.a));
+    if (m.a == NULL)
+        return NULL;
+    mask_cover(&m, &sm->shape, sm->inset);
+    if (mask_blur(&m, sm->blur, sm->inset ? SUB : 0)) {
+        mask_times(&m, &sm->times, !sm->inset);
+        kept = paint_cache_make(p->cache, sm->key.b, sm->key.n, hash,
+                                (size_t)((r1 - r0) * sm->fw) * sizeof(*kept));
+        if (kept != NULL)
+            os64_memcpy(kept, m.a + (r0 - s0) * m.w, (size_t)((r1 - r0) * m.w) * sizeof(*kept));
+    }
+    os64_free(m.a);
+    return kept;
+}
+
+// The view's part of the shadow whose whole mask is (fx0, fy0) to (fx1,
+// fy1), drawn from the cache in `colour`. False when a band it needs could
+// not be kept: the caller works it out as it always did.
+static bool shadow_kept(const Painter *p, const Round *shape, const Round *times, bool inset,
+                        int64_t blur, int64_t reach, int64_t fx0, int64_t fy0, int64_t fx1,
+                        int64_t fy1, uint32_t colour)
+{
+    ShadowMask sm = {.inset = inset, .blur = blur, .reach = reach, .fw = fx1 - fx0, .fh = fy1 - fy0};
+    if (sm.fw > BAND_PIXELS) {
+        paint_cache_too_wide(p->cache);
+        return false;
+    }
+    int64_t x0 = max64(fx0, p->view.x), y0 = max64(fy0, p->view.y);
+    int64_t x1 = min64(fx1, (int64_t)p->view.x + p->view.w);
+    int64_t y1 = min64(fy1, (int64_t)p->view.y + p->view.h);
+    if (x1 <= x0 || y1 <= y0 || p->v->mask == NULL)
+        return true;
+    sm.rows = BAND_PIXELS / sm.fw;
+    sm.shape = round_moved(shape, -fx0 * SUB, -fy0 * SUB, 0);
+    sm.times = round_moved(times, -fx0 * SUB, -fy0 * SUB, 0);
+    key_put(&sm.key, "S", 1);
+    key_put(&sm.key, &sm.inset, 1);
+    key_i64(&sm.key, blur);
+    key_i64(&sm.key, sm.fw);
+    key_i64(&sm.key, sm.fh);
+    key_round(&sm.key, &sm.shape);
+    key_round(&sm.key, &sm.times);
+    sm.key.band_at = sm.key.n;
+    // Every band the part needs is found or made before any is read: one
+    // this paint has used is never let go, so they are all still there.
+    for (int64_t b = (y0 - fy0) / sm.rows; b <= (y1 - 1 - fy0) / sm.rows; b++)
+        if (shadow_band(p, &sm, b) == NULL)
+            return false;
+    uint8_t *alpha = os64_malloc((size_t)((x1 - x0) * (y1 - y0)));
+    if (alpha == NULL)
+        return true;
+    uint32_t a = flow_alpha(colour);
+    const uint16_t *band = NULL;
+    int64_t at = -1;
+    for (int64_t y = y0; y < y1; y++) {
+        int64_t b = (y - fy0) / sm.rows;
+        if (b != at) {
+            band = paint_cache_held(p->cache, sm.key.b, sm.key.n, key_band(&sm.key, b));
+            at = b;
+        }
+        if (band == NULL) {
+            os64_free(alpha);
+            return false;
+        }
+        const uint16_t *row = band + ((y - fy0) - b * sm.rows) * sm.fw;
+        for (int64_t x = x0; x < x1; x++)
+            alpha[(y - y0) * (x1 - x0) + (x - x0)] = (uint8_t)(row[x - fx0] * a / SUB);
+    }
+    p->v->mask(p->v->ctx,
+               (os64_gui_rect_t){(int32_t)(x0 + p->off.x), (int32_t)(y0 + p->off.y),
+                                 (int32_t)(x1 - x0), (int32_t)(y1 - y0)},
+               alpha, colour & 0xffffffu);
+    os64_free(alpha);
+    return true;
+}
+
 void (*yonder_paint_stage)(yonder_paint_stage_t stage, bool begin);
 
 static void shadow_cast(const Painter *p, const flow_box_t *b, const Round *outer, const Round *inner,
@@ -827,10 +982,14 @@ static void shadow_cast(const Painter *p, const flow_box_t *b, const Round *oute
     }
     // Where it can fall: around its shape by the blur's reach, outside the
     // border box (or inside the padding box), and in the view or the blur's
-    // reach of it.
+    // reach of it — or, from the cache, all of it.
     const Round *where = sh->inset ? inner : &shape;
+    const Round *times = sh->inset ? inner : outer;
     int64_t x0 = where->l / SUB - reach, y0 = where->t / SUB - reach;
     int64_t x1 = (where->r + SUB - 1) / SUB + reach, y1 = (where->b + SUB - 1) / SUB + reach;
+    if (p->cache != NULL &&
+        shadow_kept(p, &shape, times, sh->inset, blur, reach, x0, y0, x1, y1, colour))
+        return;
     x0 = max64(x0, (int64_t)p->view.x - reach);
     y0 = max64(y0, (int64_t)p->view.y - reach);
     x1 = min64(x1, (int64_t)p->view.x + p->view.w + reach);
@@ -844,7 +1003,7 @@ static void shadow_cast(const Painter *p, const flow_box_t *b, const Round *oute
     // An inset shadow is what its shape leaves, inside the padding box.
     mask_cover(&m, &shape, sh->inset);
     if (mask_blur(&m, blur, sh->inset ? SUB : 0)) {
-        mask_times(&m, sh->inset ? inner : outer, !sh->inset);
+        mask_times(&m, times, !sh->inset);
         mask_emit(p, &m, colour);
     }
     os64_free(m.a);
@@ -857,7 +1016,8 @@ static void shadow_cast(const Painter *p, const flow_box_t *b, const Round *oute
 // `background-repeat` says, and cut to its corners' curves. Each pixel of
 // it that the view shows is worked out on its own: where its middle falls
 // along the gradient's line (or ray), and the colour the stops give there,
-// mixed in premultiplied sRGB as CSS mixes colours with alpha.
+// mixed in premultiplied sRGB as CSS mixes colours with alpha — once a
+// tile, when the paint cache keeps it (tile_band).
 
 #define GRADIENT_STOPS_MAX 128
 
@@ -867,6 +1027,9 @@ typedef struct {
     bool hint[GRADIENT_STOPS_MAX];
     int32_t n;
 } Stops;
+
+// A tile's key holds every stop (tile_kept).
+_Static_assert(sizeof(((Key *)0)->b) >= 100 + GRADIENT_STOPS_MAX * 13, "a gradient's key must fit its stops");
 
 // A stop's position on a line `len` px long, or NAN for none written.
 static double stop_at(flow_length_t l, double len)
@@ -1027,6 +1190,107 @@ static double wrap(double x, double size)
     return x - size * floor(x / size);
 }
 
+// What works a gradient's pixels out, its stops resolved: the line through
+// the tile's middle (cx, cy) along (dx, dy), `len` long, or the ray from
+// the centre (cx, cy) with radii rx and ry.
+typedef struct {
+    flow_gradient_kind_t kind;
+    bool repeating;
+    double dx, dy, len, cx, cy, rx, ry;
+    Stops stops;
+} Line;
+
+// The tile's pixel whose middle is (u, v) in the tile, as the verb takes
+// it: straight alpha on top.
+static uint32_t line_at(const Painter *p, const Line *l, double u, double v)
+{
+    double t = l->kind == FLOW_GRADIENT_LINEAR ? ((u - l->cx) * l->dx + (v - l->cy) * l->dy) / l->len + 0.5
+                                               : hypot((u - l->cx) / l->rx, (v - l->cy) / l->ry);
+    uint32_t c = paper_of(p, stops_colour(&l->stops, t, l->repeating));
+    return (uint32_t)flow_alpha(c) << 24 | (c & 0xffffffu);
+}
+
+// A gradient's tile, kept (YONDER_PERF.md § perf-2): `tw` x `th`, the
+// tile's place `tx`, `ty`, BAND_PIXELS / tw rows a band, and the band the
+// paint is reading.
+typedef struct {
+    const Line *line;
+    int64_t tx, ty, tw, th, rows, at;
+    const uint32_t *band;
+    Key key;
+} TileBands;
+
+// Band `band` of the tile, found or made: each pixel the colour at its
+// middle, which is where the uncached path asks (x + 0.5 - tx, wrapped, is
+// the column plus a half). NULL when there is no room or no memory.
+static const uint32_t *tile_band(const Painter *p, TileBands *tb, int64_t band)
+{
+    uint64_t hash = key_band(&tb->key, band);
+    uint32_t *kept = paint_cache_find(p->cache, tb->key.b, tb->key.n, hash);
+    if (kept != NULL)
+        return kept;
+    int64_t r0 = band * tb->rows, r1 = min64(tb->th, r0 + tb->rows);
+    kept = paint_cache_make(p->cache, tb->key.b, tb->key.n, hash,
+                            (size_t)((r1 - r0) * tb->tw) * sizeof(*kept));
+    if (kept == NULL)
+        return NULL;
+    for (int64_t r = r0; r < r1; r++)
+        for (int64_t c = 0; c < tb->tw; c++)
+            kept[(r - r0) * tb->tw + c] = line_at(p, tb->line, c + 0.5, r + 0.5);
+    return kept;
+}
+
+// Every band of the tile that rows `y0` to `y1` read, found or made before
+// any is read, so all of them are this paint's and still there. False when
+// one cannot be kept, or the tile is wider than a band.
+static bool tile_kept(const Painter *p, const Line *line, const yonder_tile_t *tile, int64_t y0,
+                      int64_t y1, TileBands *tb)
+{
+    *tb = (TileBands){line, tile->at.x, tile->at.y, tile->at.w, tile->at.h, 0, -1, NULL, {{0}, 0, 0}};
+    if (tb->tw > BAND_PIXELS) {
+        paint_cache_too_wide(p->cache);
+        return false;
+    }
+    tb->rows = BAND_PIXELS / tb->tw;
+    uint8_t kind = (uint8_t)line->kind, dark = p->dark != NULL;
+    key_put(&tb->key, "G", 1);
+    key_put(&tb->key, &kind, 1);
+    key_put(&tb->key, &line->repeating, 1);
+    key_put(&tb->key, &dark, 1);
+    key_i64(&tb->key, tb->tw);
+    key_i64(&tb->key, tb->th);
+    const double geometry[7] = {line->dx, line->dy, line->len, line->cx, line->cy, line->rx, line->ry};
+    key_put(&tb->key, geometry, sizeof(geometry));
+    key_i64(&tb->key, line->stops.n);
+    for (int32_t i = 0; i < line->stops.n; i++) {
+        key_put(&tb->key, &line->stops.at[i], sizeof(line->stops.at[i]));
+        key_put(&tb->key, &line->stops.colour[i], sizeof(line->stops.colour[i]));
+        key_put(&tb->key, &line->stops.hint[i], 1);
+    }
+    tb->key.band_at = tb->key.n;
+    int64_t at = -1;
+    for (int64_t y = y0; y < y1; y++) {
+        if (!tile->repeat_y && (y - tb->ty < 0 || y - tb->ty >= tb->th))
+            continue;
+        int64_t band = floor_mod(y - tb->ty, tb->th) / tb->rows;
+        if (band != at && tile_band(p, tb, band) == NULL)
+            return false;
+        at = band;
+    }
+    return true;
+}
+
+// Row `y`'s pixels in the tile, from the band tile_kept found or made.
+static const uint32_t *tile_row(const Painter *p, TileBands *tb, int64_t y)
+{
+    int64_t r = floor_mod(y - tb->ty, tb->th), band = r / tb->rows;
+    if (band != tb->at) {
+        tb->band = paint_cache_held(p->cache, tb->key.b, tb->key.n, key_band(&tb->key, band));
+        tb->at = band;
+    }
+    return tb->band != NULL ? tb->band + (r - band * tb->rows) * tb->tw : NULL;
+}
+
 // Gradient `g` in `tile`, drawn over `area` (and the view), cut to `shape`
 // when `round`; a currentColor stop is `current`, the colour of the box it
 // is drawn on. False only when its pixels found no memory and nothing was
@@ -1123,41 +1387,44 @@ static bool gradient_paint(const Painter *p, const flow_gradient_t *g, const yon
         }
         len = rx;
     }
-    Stops stops;
-    if (!(len > 0) || !stops_resolve(g, len, current, &stops))
+    Line line = {g->kind, g->repeating, dx, dy, len, cx, cy, rx, ry, {{0}, {0}, {0}, 0}};
+    if (!(len > 0) || !stops_resolve(g, len, current, &line.stops))
         return true;
+    const Stops *stops = &line.stops;
     // One colour everywhere: the flat ellipse, and a repeating gradient
     // whose repeat is shorter than a pixel along the way it runs — none
     // at all, or one no pixel can show (§ 3.6) — which is its average. A
     // radial's repeat is shortest along its shorter radius.
-    double pixel_period = (stops.at[stops.n - 1] - stops.at[0]) *
+    double pixel_period = (stops->at[stops->n - 1] - stops->at[0]) *
                           (g->kind == FLOW_GRADIENT_LINEAR ? len : fmin(rx, ry));
     bool solid = flat || (g->repeating && !(pixel_period >= 1));
-    uint32_t solid_colour = g->repeating ? stops_average(&stops) : stops.colour[stops.n - 1];
+    uint32_t solid_colour = paper_of(p, g->repeating ? stops_average(stops) : stops->colour[stops->n - 1]);
+    uint32_t solid_px = (uint32_t)flow_alpha(solid_colour) << 24 | (solid_colour & 0xffffffu);
     bool rep_x = tile->repeat_x, rep_y = tile->repeat_y;
+    // One colour is a fill, already cheap; anything else is drawn from the
+    // tile when the cache keeps it.
+    TileBands tb;
+    bool kept = p->cache != NULL && !solid && tile_kept(p, &line, tile, y0, y1, &tb);
     uint32_t *out = os64_malloc((size_t)((x1 - x0) * (y1 - y0)) * sizeof(*out));
     if (out == NULL)
         return false;
     for (int64_t y = y0; y < y1; y++) {
         int64_t a = 0, e = 0;
         bool row = !round || round_row(shape, y * SUB + SUB / 2, &a, &e);
+        double v = y + 0.5 - ty;
+        const uint32_t *src = kept && row && (rep_y || (v >= 0 && v < h)) ? tile_row(p, &tb, y) : NULL;
         for (int64_t x = x0; x < x1; x++) {
             uint32_t *px_out = &out[(y - y0) * (x1 - x0) + (x - x0)];
-            double u = x + 0.5 - tx, v = y + 0.5 - ty;
+            double u = x + 0.5 - tx;
             if ((!rep_x && (u < 0 || u >= w)) || (!rep_y && (v < 0 || v >= h)) || !row) {
                 *px_out = 0;
                 continue;
             }
-            u = wrap(u, w);
-            v = wrap(v, h);
-            double t = g->kind == FLOW_GRADIENT_LINEAR
-                           ? ((u - cx) * dx + (v - cy) * dy) / len + 0.5
-                           : hypot((u - cx) / rx, (v - cy) / ry);
-            uint32_t c = paper_of(p, solid ? solid_colour : stops_colour(&stops, t, g->repeating));
-            uint32_t alpha = flow_alpha(c);
+            uint32_t px = src != NULL ? src[floor_mod(x - tb.tx, tb.tw)]
+                        : solid ? solid_px : line_at(p, &line, wrap(u, w), wrap(v, h));
             if (round)
-                alpha = (uint32_t)(alpha * cover(x, a, e) / SUB);
-            *px_out = alpha << 24 | (c & 0xffffffu);
+                px = (uint32_t)((px >> 24) * cover(x, a, e) / SUB) << 24 | (px & 0xffffffu);
+            *px_out = px;
         }
     }
     p->v->pixels(p->v->ctx,
@@ -1841,10 +2108,14 @@ const flow_box_t *yonder_canvas_owner(const flow_tree_t *tree, const yonder_verb
 
 
 void yonder_paint(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll,
-                  uint32_t paper, const yonder_dark_t *dark, const yonder_verbs_t *verbs)
+                  uint32_t paper, const yonder_dark_t *dark, yonder_paint_cache_t *cache,
+                  const yonder_verbs_t *verbs)
 {
     PaintGroups groups = {.depth = 0};
-    Painter p = {.v = verbs, .view = viewport, .scroll = scroll, .groups = &groups, .dark = dark};
+    Painter p = {.v = verbs, .view = viewport, .scroll = scroll, .groups = &groups, .dark = dark,
+                 .cache = cache};
+    if (cache != NULL)
+        paint_cache_begin(cache);
     if (dark != NULL)
         paper = dark->paper;
     const flow_box_t *root = flow_root(tree);
