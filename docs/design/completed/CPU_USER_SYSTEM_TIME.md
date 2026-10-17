@@ -1,6 +1,6 @@
 # Per-thread user and system CPU time
 
-*Design, 2026-10-17. Branch: `codex/cpu-user-system-accounting-design`.*
+*Design, 2026-10-17. Implemented in [PR #287](https://github.com/VBWizard/os64/pull/287); QEMU verified by Chris, P5 validation pending.*
 
 ## The question this answers
 
