@@ -42,7 +42,7 @@
 
 #define LINE_MAX HUSK_LINE_MAX
 _Static_assert(LINE_MAX <= OS64_SPAWN_ARG_MAX, "husk -c must fit one spawn argument");
-#define ARGS_MAX 512        // raised from 16 for globbing; matches the kernel SPAWN_MAX_ARGS ceiling
+#define ARGS_MAX (OS64_SPAWN_MAX_ARGS + 1) // argv includes its NULL terminator
 #define MAX_STAGES 4          // a | b | c | d is plenty of rope for now
 #define TASK_NAME_MAX 64      // lifecycle log identity; basename, always bounded
 
@@ -974,8 +974,8 @@ static int edit_line(char *buf, int cap)
 // Unix hides dotfiles, and os64 has no hidden-file convention to protect
 // (husk.rc, not .huskrc). Inheriting the exception without the reason would be
 // exactly the jargon this project declines.
-#define GLOB_POOL_BYTES  (512 * 256)   // the 512x256 ceiling, in BSS: demand-paged, so untouched pages cost nothing
 #define GLOB_PATH_MAX    256
+#define GLOB_POOL_BYTES  (OS64_SPAWN_MAX_ARGS * GLOB_PATH_MAX)
 
 static char   s_glob_pool[GLOB_POOL_BYTES];
 static size_t s_glob_used;
@@ -987,6 +987,37 @@ static int glob_strcmp(const char *a, const char *b)
 {
 	while (*a != '\0' && *a == *b) { a++; b++; }
 	return (int)(unsigned char)*a - (int)(unsigned char)*b;
+}
+
+static void glob_sift_down(char *matches[], int root, int count)
+{
+	while (root < count / 2)
+	{
+		int child = root * 2 + 1;
+		if (child >= count)
+			break;
+		if (child + 1 < count && glob_strcmp(matches[child], matches[child + 1]) < 0)
+			child++;
+		if (glob_strcmp(matches[root], matches[child]) >= 0)
+			break;
+		char *tmp = matches[root];
+		matches[root] = matches[child];
+		matches[child] = tmp;
+		root = child;
+	}
+}
+
+static void glob_sort(char *matches[], int count)
+{
+	for (int root = count / 2 - 1; root >= 0; root--)
+		glob_sift_down(matches, root, count);
+	for (int end = count - 1; end > 0; end--)
+	{
+		char *tmp = matches[0];
+		matches[0] = matches[end];
+		matches[end] = tmp;
+		glob_sift_down(matches, 0, end);
+	}
 }
 
 // A bracket starts a pattern class only when the class has an end. The first
@@ -1062,8 +1093,8 @@ static char *glob_pool_add(const char *dirPrefix, const char *name)
 
 // Expand one metacharacter-bearing token into argv[] starting at `argc`,
 // returning the new argc, or -1 on failure (message already printed).
-// Matches are inserted in sorted order — Unix has guaranteed sorted glob
-// results since the beginning, which is why `*` is reproducible.
+// Matches are sorted before return — Unix has guaranteed sorted glob results
+// since the beginning, which is why `*` is reproducible.
 static int glob_expand(const char *token, char *argv[], int argc, int maxargs)
 {
 	// Split into the directory to read and the pattern to match. Only the last
@@ -1142,15 +1173,7 @@ static int glob_expand(const char *token, char *argv[], int argc, int maxargs)
 			return -1;
 		}
 
-		// Insertion sort into this token's own run.
-		int at = argc;
-		while (at > first && glob_strcmp(argv[at - 1], stored) > 0)
-		{
-			argv[at] = argv[at - 1];
-			at--;
-		}
-		argv[at] = stored;
-		argc++;
+		argv[argc++] = stored;
 	}
 	os64_close((int32_t)d);
 
@@ -1165,6 +1188,7 @@ static int glob_expand(const char *token, char *argv[], int argc, int maxargs)
 		os64_hprintf(OS64_STDERR, "husk: no match: %s\n", token);
 		return -1;
 	}
+	glob_sort(argv + first, argc - first);
 	return argc;
 }
 
@@ -1352,10 +1376,15 @@ static int parse(char *line, char *argv[], int maxargs)
 	// kernel), and only then parses the next.
 	s_glob_used = 0;
 
-	while (*readp && argc < maxargs - 1)
+	while (*readp)
 	{
 		while (*readp == ' ' || *readp == '\t') readp++;
 		if (!*readp) break;
+		if (argc >= maxargs - 1)
+		{
+			os64_hprintf(OS64_STDERR, "husk: command exceeds the %d-argument limit\n", maxargs - 1);
+			return -1;
+		}
 
 		char *token = writep;
 		// Tracked HERE and nowhere else: this is the only point in husk that

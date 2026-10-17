@@ -147,20 +147,22 @@ int main(int argc, char **argv)
         return PASS | 6;
     os64_free(big);
 
-    // 512 arguments are carried; a 513th is refused, not quietly dropped.
-    static char *many[515];
+    // The count boundary is carried whole, and one more is refused.
+    static char *many[OS64_SPAWN_MAX_ARGS + 2];
+    char count_text[16];
+    os64_snprintf(count_text, sizeof(count_text), "%d", OS64_SPAWN_MAX_ARGS);
     many[0] = SELF;
     many[1] = "count";
-    many[2] = "512";
-    for (int i = 3; i < 514; i++)
+    many[2] = count_text;
+    for (int i = 3; i <= OS64_SPAWN_MAX_ARGS; i++)
         many[i] = "x";
-    many[512] = NULL;
+    many[OS64_SPAWN_MAX_ARGS] = NULL;
     int64_t pid = os64_spawn(SELF, many);
     int32_t code = -1;
     if (pid <= 0 || os64_wait(pid, &code) != pid || code != 0)
         return PASS | 7;
-    many[512] = "x";
-    many[513] = NULL;
+    many[OS64_SPAWN_MAX_ARGS] = "x";
+    many[OS64_SPAWN_MAX_ARGS + 1] = NULL;
     if (os64_spawn(SELF, many) != OS64_SPAWN_TOO_LONG)
         return PASS | 8;
 

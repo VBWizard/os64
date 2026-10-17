@@ -1795,7 +1795,7 @@ mu_cleanup:
 // its own Limine entry. So on an ordinary boot, argument processing had NO
 // coverage at all: you could break argv and every normal boot would stay green.
 // Chris asked for that gap to be closed (2026-08-13) the same evening the argv
-// blob was about to be re-laid — packed strings, new fixed VAs, a 512-argument
+// blob was about to be re-laid — packed strings, new fixed VAs, a larger argument
 // ceiling — which is exactly the change that would have broken it silently.
 //
 // Cheap: one spawn, no filesystem writes, and it fails with a number that says

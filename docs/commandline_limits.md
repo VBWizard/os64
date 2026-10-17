@@ -10,7 +10,7 @@ argument is one already-parsed string, and a path is a filesystem name.
 | husk expanded command | 4608 bytes |
 | One spawn argument | 128 KiB (`OS64_SPAWN_ARG_MAX`) |
 | Whole child argv block, pointers included | 1 MiB (`TASK_ARGV_MAX_BYTES`) |
-| Argument count | 512 |
+| Argument count | 4096 (`OS64_SPAWN_MAX_ARGS`) |
 | Path | 256 bytes (`OS64_PATH_MAX`) |
 | Environment block | 64 KiB |
 
@@ -93,7 +93,7 @@ correct, but that picture limitation remains tracked in `DEBTS.md`.
 - `python3 tools/test_sshd_host.py`: OpenSSH integration under ASan/UBSan,
   including accepted 1000/4095-byte commands and refused 4096-byte requests.
 - `/tests/argsize` through `testrun`: long argv/cmdline data, boundary-length
-  arguments, 512 arguments, excess length/count/aggregate, bad pointers,
+  arguments, 512 arguments at the time, excess length/count/aggregate, bad pointers,
   repeated oversized shebang refusals, fitting scripts, full command reads,
   and 255-character path creation/removal.
 - `tools/sshd_probe.py`: real guest SSH streams/status/rekey/PTY checks plus
@@ -125,3 +125,17 @@ passed long exec limits, interactive recall, nested expansion, rekeys, streams,
 and PTY resize. A live `ps -ef` capture preserved a command longer than 3 KiB,
 including its final marker. These review fixes were tested on QEMU; the P5
 results above describe the earlier revision.
+
+## October 16 2026 — larger directory globs
+
+The argument count is now 4096 so husk can expand a glob beyond 512 matches.
+The 1 MiB argv block still counts pointers and strings together, so a set of
+long paths can reach that byte limit before the count limit. `ls` grows its
+directory storage as it reads; its own path list follows the received argc.
+
+The strict kernel and userland build passed. `tools/test_large_directory_host.sh`
+checked `ls` and husk with 700 reversed entries, all three `ls` sort modes,
+and the glob argument-count boundary under ASan, UBSan and LeakSanitizer.
+`tools/test_spawn_argv_host.py` checked the new spawn count boundary under the
+same sanitizers. In QEMU, `testrun argsize` reported 1 passed, 0 failed;
+installed `ls /bin` and husk's `/bin/*` expansion returned the same 80 names.

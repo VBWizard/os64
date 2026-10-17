@@ -587,19 +587,20 @@ typedef enum os64_shutdown_mode
 // — answering OS64_SPAWN_TOO_LONG, so a caller holding a string of its own
 // choosing needs the number rather than a guess. The per-argument cap is not
 // what really bounds a spawn: the child's whole argument block is one
-// mebibyte, its pointers included, and at most 512 arguments. The cap is
-// this large because one argument can be a whole command line — `husk -c`
+// mebibyte, its pointers included, and at most OS64_SPAWN_MAX_ARGS arguments.
+// The cap is this large because one argument can be a whole command line — `husk -c`
 // carries it as a single string, and so does an ssh exec request — and a
 // limit a caller cannot see is one it reports as the wrong thing.
 #define OS64_SPAWN_ARG_MAX (128 * 1024)
+#define OS64_SPAWN_MAX_ARGS 4096
 
 // spawn()'s own refusal. The boundary's two answers keep their meanings (-1:
 // the kernel will not do it — no such program, a handle that cannot be
 // handed on; -2: a request it could not take in — an unreadable address, a
 // path it cannot resolve, a flag it does not know), and this one says the
 // arguments were readable and there is too much of them: one longer than
-// OS64_SPAWN_ARG_MAX, more than 512 of them, or more in all than a child's
-// argument block holds. Distinct because "cannot run" sends a person looking
+// OS64_SPAWN_ARG_MAX, more than OS64_SPAWN_MAX_ARGS of them, or more in all
+// than a child's argument block holds. Distinct because "cannot run" sends a person looking
 // for a program that is sitting right there — Unix's E2BIG, the "Argument
 // list too long" every shell user has met.
 #define OS64_SPAWN_TOO_LONG (-3)

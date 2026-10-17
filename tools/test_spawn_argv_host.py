@@ -46,9 +46,9 @@ program = r'''
 #include "os64/syscall_numbers.h"
 
 #define PAGE_SIZE 4096
-#define SPAWN_MAX_ARGS 512
+#define SPAWN_MAX_ARGS OS64_SPAWN_MAX_ARGS
 #define TASK_ARGV_MAX_BYTES 0x100000
-#define TASK_ARGV_MAX_ARGS 512
+#define TASK_ARGV_MAX_ARGS OS64_SPAWN_MAX_ARGS
 static const uintptr_t kHHDMOffset = (uintptr_t)0xffff800000000000ull;
 
 // One real hole: a page nobody may read.
@@ -144,12 +144,12 @@ int main(void)
     one[0] = over;
     assert(measure(one, &argc, &bytes) == ARGV_TOO_LONG);
 
-    // 512 arguments fit; a 513th does not.
-    char *many[515];
-    for (int i = 0; i < 514; i++) many[i] = "x";
-    many[512] = NULL;
-    assert(measure(many, &argc, &bytes) == ARGV_FITS && argc == 512);
-    many[512] = "x"; many[513] = NULL;
+    // The maximum count fits; one more does not.
+    char *many[OS64_SPAWN_MAX_ARGS + 2];
+    for (int i = 0; i < OS64_SPAWN_MAX_ARGS + 1; i++) many[i] = "x";
+    many[OS64_SPAWN_MAX_ARGS] = NULL;
+    assert(measure(many, &argc, &bytes) == ARGV_FITS && argc == OS64_SPAWN_MAX_ARGS);
+    many[OS64_SPAWN_MAX_ARGS] = "x"; many[OS64_SPAWN_MAX_ARGS + 1] = NULL;
     assert(measure(many, &argc, &bytes) == ARGV_TOO_LONG);
 
     // The block, exactly: eight strings whose pointers and bytes fill it to
@@ -267,7 +267,7 @@ int main(void)
     char *small[] = {"/bin/husk", "/home/probe", "ok"};
     assert(task_measure_argv("/bin/husk", 3, small, &layout));
     assert(layout == 4 * sizeof(char *) + 10 + 12 + 3);
-    assert(!task_measure_argv("/bin/husk", 513, NULL, &layout));
+    assert(!task_measure_argv("/bin/husk", OS64_SPAWN_MAX_ARGS + 1, NULL, &layout));
     char *overlong[] = {pattern(OS64_SPAWN_ARG_MAX)};
     assert(!task_measure_argv("prog", 1, overlong, &layout));
     assert(task_measure_argv("prog", 0, NULL, &layout) && layout == 2 * sizeof(char *) + 5);
@@ -281,7 +281,7 @@ int main(void)
     hole = NULL;
     puts("path final-byte/guard-page and rewritten argv preflight: PASS");
 
-    puts("spawn argv: caps exact at the terminator, the 512th argument and the block's last byte; "
+    puts("spawn argv: caps exact at the terminator, the argument-count limit and the block's last byte; "
          "the hole is never read; growth, cap-dodging and a moved terminator between passes refused, "
          "shrinking and added entries bounded PASS");
     return 0;
