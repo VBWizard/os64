@@ -18,15 +18,20 @@ its ASCII characters become denser as busy plus scheduler time rises. A `?`
 in that trail represents an unavailable reading, not zero activity.
 
 The process table has task/thread ID, state, last core, CPU percentage,
-allocator-reported heap memory, accumulated CPU time, and command. The selected
+user and system CPU percentages, allocator-reported heap memory, accumulated
+CPU time, and command. The `u` key hides or restores both `USR%` and `SYS%`;
+when hidden, the command column uses the reclaimed width. The selected
 row stays attached to its identity across refreshes and sorting. A thread
 identity includes its owning task. If the selected row disappears, selection
 moves to a remaining neighbor; an open action confirmation is cancelled when
 its pinned target disappears or changes name in a fresh sample.
 
 Machine and core meters describe their whole CPU capacity. Process CPU usage
-uses one core as 100%, so a multithreaded process may exceed 100%. HEAP is the
-existing process reader's allocator figure, not RSS or total process memory;
+uses one core as 100%, so a multithreaded process may exceed 100%. `USR%` and
+`SYS%` use the same interval and one-core scale as `CPU%`; rounding can make
+their displayed sum differ by one point. A dash means the split is unavailable
+for that interval or the row is an idle task. HEAP is the existing process
+reader's allocator figure, not RSS or total process memory;
 it excludes code and stacks. A dash in that column means zero or unreported.
 A dash in CPU usage means there is no valid interval yet.
 
@@ -46,6 +51,7 @@ command summaries; the details panel reads the complete command separately.
 | / | Edit a case-insensitive name/command filter; Enter applies, Esc cancels |
 | Esc in the list | Clear the applied filter |
 | s / S | Cycle CPU, heap, time, ID, name sorting / reverse direction |
+| u / U | Show or hide the user and system CPU columns |
 | v | Toggle the parent/child process tree |
 | t | Expand multithreaded tasks into thread rows |
 | i / z | Toggle CPU idle tasks / zombies |

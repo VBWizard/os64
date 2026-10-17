@@ -2192,10 +2192,12 @@ static double at_progress(const Clock *k, const flow_animation_t *a, double p)
 }
 
 // The properties whose frames repaint only where the element and what it
-// holds already draw (f_motion_in_place).
+// holds already draw, or, for a text shadow, as far past that as its reach
+// (f_motion_in_place).
 static bool repaints_in_place(garb_prop_t p)
 {
     switch (p) {
+    case GARB_TEXT_SHADOW:
     case GARB_COLOR: case GARB_TEXT_FILL_COLOR: case GARB_BACKGROUND_COLOR:
     case GARB_BORDER_TOP_COLOR: case GARB_BORDER_RIGHT_COLOR: case GARB_BORDER_BOTTOM_COLOR:
     case GARB_BORDER_LEFT_COLOR: case GARB_OPACITY: case GARB_VISIBILITY:
@@ -2206,6 +2208,14 @@ static bool repaints_in_place(garb_prop_t p)
     default:
         return false;
     }
+}
+
+double f_easing_overshoot(const flow_easing_t *e)
+{
+    if (e->kind != FLOW_EASE_CUBIC)
+        return 0;
+    double lo = fmin(e->p[1], e->p[3]), hi = fmax(e->p[1], e->p[3]);
+    return fmax(0, fmax(-lo, hi - 1));
 }
 
 bool f_motion_in_place(const FMotion *m)

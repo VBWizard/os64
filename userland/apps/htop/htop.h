@@ -27,7 +27,7 @@ typedef struct {
     ht_identity_t identity;
     ht_sort_t sort;
     ht_mode_t mode;
-    bool reverse, tree, threads, idle, zombies, paused, quit;
+    bool reverse, tree, threads, idle, zombies, show_split, paused, quit;
     unsigned cols, lines, table_top, page, core_page, command_offset, detail_line;
     char filter[64], edit[64], notice[160];
     size_t edit_len;
@@ -49,7 +49,7 @@ void ht_rebuild(ht_view_t *v, const os64_monitor_snapshot_t *sample, bool histor
 int ht_key(ht_view_t *v, int key);
 int ht_decode(ht_input_t *in, unsigned char byte);
 int ht_escape_timeout(ht_input_t *in);
-void ht_draw(ht_view_t *v, ht_cell_t *grid);
+void ht_draw(ht_view_t *v, const os64_monitor_t *monitor, ht_cell_t *grid);
 const char *ht_style(unsigned style);
 const os64_monitor_task_t *ht_selected_task(const ht_view_t *v);
 // Revalidate the pinned task immediately before one ctl write. Never retry
