@@ -4,7 +4,7 @@
 
 ## Question and current evidence
 
-The user/system split identifies a thread doing kernel work but cannot say why. A one-minute P5 interval with Yonder visible gave the main thread 8.20 seconds of system time (about 14% of one core), the ticker 2.72 seconds (about 4.5%), and the task 10.92 seconds (about 18%). These are interval figures. Chris reports that Yonder showed the same top of the page in this and the later high-system-time run, so the difference needs a controlled kernel comparison.
+The user/system split identifies a thread doing kernel work but cannot say why. A one-minute P5 interval with Yonder visible gave the main thread 8.20 seconds of system time (about 14% of one core), the ticker 2.72 seconds (about 4.5%), and the task 10.92 seconds (about 18%). These are interval figures. Chris reports that Yonder showed the same top of the page in this and the later high-system-time run. A rollback check below rules out the per-syscall accounting change as the cause of the difference; the variation between runs remains unexplained.
 
 In that same interval `/sys/gui` added 2.38 seconds of ring-lock waiting across all callers. Publish held the lock for 3.50 seconds and waited for 1.75 seconds across all callers. Those site totals cannot be assigned to Yonder threads from `/sys/gui` alone. The ticker's ring wait and its system time are similar in size, while the main thread still needs a page-fault reading.
 
@@ -68,7 +68,23 @@ The main thread's largest syscall rows were `gui_window_publish`: 2,412 calls an
 
 Across all GUI callers in the same interval, the ring lock site made 5,994 acquisitions, waited 21.84 s, and held the lock for 0.005 s. Yonder's ticker and main thread together made 5,978 ring calls, so nearly every acquisition was theirs. The ring wait closely matches the ticker's 21.67 s in `gui_event_ring`. The publish lock site made 2,573 acquisitions, waited 13.17 s, and held the lock for 2.47 s; Yonder's main thread made 2,412 publish calls taking 15.44 s. The site counters include other applications and the asynchronous reads can differ by a fraction of a second, but the correspondence is strong. The composite site held `kGuiLock` for 39.14 s during this 64.6-second interval. It is the likely source of much of the contention seen by both Yonder threads; the lock-site table does not identify each holder or prove that every wait was against a composite pass.
 
-This run reproduces the original 30%/35% reading and locates its immediate cost in GUI syscalls waiting for `kGuiLock`, particularly ring and publish. Chris reports the same top-of-page view as the earlier low-system-time runs. The per-syscall accounting kernel is the newest relevant change, so a rollback measurement with the saved pre-syscall kernel is needed before attributing the higher contention to the workload or choosing a performance fix. The inclusive syscall rows still contain any IRQ time that preempted them, so this measurement does not establish an exclusive IRQ total or an exact final partition. IRQ stamps remain necessary if the project needs an exact general-purpose cause partition.
+This run reproduces the original 30%/35% reading and locates its immediate cost in GUI syscalls waiting for `kGuiLock`, particularly ring and publish. Chris reports the same top-of-page view as the earlier low-system-time runs. The inclusive syscall rows still contain any IRQ time that preempted them, so this measurement does not establish an exclusive IRQ total or an exact final partition. IRQ stamps remain necessary if the project needs an exact general-purpose cause partition.
+
+### Controlled rollback check
+
+Chris observed the same top-of-page view in the low-system-time and high-system-time runs, so the newly added syscall stamps were a possible regression. The saved fault-time kernel, which has GUI lock counters but no per-syscall accounting, was restored on the P5. The syscall-timing image was preserved as `os64_kernel.syscall-diagnostic-20261017`. With Yonder restarted in the same view, a single SSH command read task status, main and ticker status, and `/sys/gui` at each end of a 62.8-second interval.
+
+| rate, percent of one core | syscall-timing kernel | restored fault-time kernel |
+| --- | ---: | ---: |
+| Yonder task system | 65.2% | 64.9% |
+| main system | 31.4% | 31.0% |
+| ticker system | 34.1% | 33.9% |
+| all callers waiting at ring lock site | 33.8% | 33.6% |
+| compositor holding `kGuiLock` | 60.6% | 59.7% |
+
+On the restored kernel, the main thread used 19.47 s of system time, the ticker 21.27 s, and the task 40.75 s during 62.8 s. Ring acquisitions waited 21.12 s and held the lock for 0.005 s; publish acquisitions waited 13.07 s and held it for 2.41 s. The compositor held `kGuiLock` for 37.52 s. These rates match the diagnostic-kernel interval closely. The per-syscall accounting change did not cause the high-system-time run. The reason this same visible page sometimes has much less lock contention remains unresolved; the lock measurements identify where the current CPU time goes, not what changed between runs.
+
+A further 110.9-second interval on the restored kernel stayed in the high-contention state: task system time was 65.1% of one core, main 32.2%, ticker 32.9%, ring lock waiting 32.7%, and composite lock holding 53.9%. The difference is sustained across minutes, rather than a brief launch spike.
 
 ## Cause timing contract
 
