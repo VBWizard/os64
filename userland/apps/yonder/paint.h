@@ -108,24 +108,24 @@ typedef struct {
 } yonder_dark_t;
 
 // THE PAINT CACHE (YONDER_PERF.md § perf-2): a gradient's tile and a
-// blurred shadow's mask, kept between paints by band and found by the
-// values that make them, so a paint copies its part out instead of working
-// it out again. What a paint draws from it is what it draws without it,
-// pixel for pixel. One window's, on its one thread: no lock.
+// blurred shadow's mask, kept between paints in 128-pixel blocks and found
+// by the values that make them, so a paint copies its part out instead of
+// working it out again. What a paint draws from it is what it draws
+// without it, pixel for pixel. One window's, on its one thread: no lock.
 typedef struct yonder_paint_cache yonder_paint_cache_t;
-#define YONDER_PAINT_CACHE_BUDGET ((size_t)16 << 20)
+#define YONDER_PAINT_CACHE_BUDGET ((size_t)32 << 20)
 // An empty cache holding at most `budget` bytes, or NULL for no memory.
 yonder_paint_cache_t *yonder_paint_cache_new(size_t budget);
 // Every entry let go (another page is shown); the counts kept. NULL: nothing.
 void yonder_paint_cache_empty(yonder_paint_cache_t *c);
 void yonder_paint_cache_free(yonder_paint_cache_t *c);
-// Since the counts last restarted: bands found (`hits`) and made, entries
-// let go for room, and pictures worked out without the cache because a
-// band found no room (only this paint's entries were left to let go), no
-// memory, or the picture is wider than a band. And what is held now, in
-// bytes and entries, against the budget. All zero for NULL.
+// Since the counts last restarted: blocks found (`hits`) and made, blocks
+// let go for room, and pictures worked out without the cache because their
+// blocks did not fit (what the last two paints used is not let go) or
+// found no memory. And what is held now, in bytes and blocks, against the
+// budget. All zero for NULL.
 typedef struct {
-    uint64_t hits, made, evicted, no_room, no_memory, too_wide;
+    uint64_t hits, made, evicted, no_room, no_memory;
     uint64_t bytes, entries, budget;
 } yonder_paint_cache_counts_t;
 yonder_paint_cache_counts_t yonder_paint_cache_counts(const yonder_paint_cache_t *c);

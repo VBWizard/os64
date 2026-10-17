@@ -8,7 +8,8 @@
 typedef struct Entry {
     struct Entry *chain;            // the next in its bucket
     struct Entry *newer, *older;    // the list, most recently used first
-    uint64_t hash, stamp;           // stamp: the paint that last used it
+    uint64_t hash;
+    uint64_t stamp;                 // the paint that last used it; 0 for none
     size_t size;                    // all of it, as the budget counts
     uint32_t klen;
     uint32_t pad;
@@ -23,7 +24,8 @@ struct yonder_paint_cache {
     size_t budget, held;
     Entry **buckets;
     uint32_t nbuckets;              // a power of two, or 0 before the first entry
-    uint64_t entries, stamp;
+    uint64_t entries;
+    uint64_t stamp;                 // this paint's; the first paint's is 1
     Entry *newest, *oldest;
     yonder_paint_cache_counts_t counts;
 };
@@ -36,6 +38,12 @@ static uint8_t *bytes_of(Entry *e)
 static uint8_t *key_of(Entry *e)
 {
     return bytes_of(e) + (e->size - sizeof(Entry) - e->klen);
+}
+
+// Used by this paint or the one before it: never let go for room.
+static bool kept_now(const yonder_paint_cache_t *c, const Entry *e)
+{
+    return e->stamp != 0 && e->stamp + 1 >= c->stamp;
 }
 
 yonder_paint_cache_t *yonder_paint_cache_new(size_t budget)
@@ -70,6 +78,17 @@ static void push_newest(yonder_paint_cache_t *c, Entry *e)
     else
         c->oldest = e;
     c->newest = e;
+}
+
+static void push_oldest(yonder_paint_cache_t *c, Entry *e)
+{
+    e->newer = c->oldest;
+    e->older = NULL;
+    if (c->oldest != NULL)
+        c->oldest->older = e;
+    else
+        c->newest = e;
+    c->oldest = e;
 }
 
 static void let_go(yonder_paint_cache_t *c, Entry *e)
@@ -124,41 +143,47 @@ void paint_cache_begin(yonder_paint_cache_t *c)
     c->stamp++;
 }
 
-// FNV-1a.
-uint64_t paint_cache_hash(const uint8_t *key, uint32_t klen)
+uint64_t paint_cache_hash_from(uint64_t h, const uint8_t *key, uint32_t n)
 {
-    uint64_t h = 0xcbf29ce484222325ull;
-    for (uint32_t i = 0; i < klen; i++)
+    for (uint32_t i = 0; i < n; i++)
         h = (h ^ key[i]) * 0x100000001b3ull;
     return h;
 }
 
-static Entry *lookup(yonder_paint_cache_t *c, const uint8_t *key, uint32_t klen, uint64_t hash)
+uint64_t paint_cache_hash(const uint8_t *key, uint32_t n)
 {
-    if (c->nbuckets == 0)
-        return NULL;
-    for (Entry *e = c->buckets[hash & (c->nbuckets - 1)]; e != NULL; e = e->chain)
-        if (e->hash == hash && e->klen == klen && os64_memcmp(key_of(e), key, klen) == 0)
-            return e;
-    return NULL;
+    return paint_cache_hash_from(0xcbf29ce484222325ull, key, n);
 }
 
 void *paint_cache_find(yonder_paint_cache_t *c, const uint8_t *key, uint32_t klen, uint64_t hash)
 {
-    Entry *e = lookup(c, key, klen, hash);
-    if (e == NULL)
+    if (c->nbuckets == 0)
         return NULL;
-    e->stamp = c->stamp;
-    unlink_list(c, e);
-    push_newest(c, e);
-    c->counts.hits++;
-    return bytes_of(e);
+    for (Entry *e = c->buckets[hash & (c->nbuckets - 1)]; e != NULL; e = e->chain) {
+        if (e->hash != hash || e->klen != klen || os64_memcmp(key_of(e), key, klen) != 0)
+            continue;
+        e->stamp = c->stamp;
+        unlink_list(c, e);
+        push_newest(c, e);
+        c->counts.hits++;
+        return bytes_of(e);
+    }
+    return NULL;
 }
 
-void *paint_cache_held(yonder_paint_cache_t *c, const uint8_t *key, uint32_t klen, uint64_t hash)
+size_t paint_cache_cost(uint32_t klen, size_t bytes)
 {
-    Entry *e = lookup(c, key, klen, hash);
-    return e != NULL && e->stamp == c->stamp ? bytes_of(e) : NULL;
+    return sizeof(Entry) + ((bytes + 7) & ~(size_t)7) + klen;
+}
+
+bool paint_cache_room(const yonder_paint_cache_t *c, size_t cost)
+{
+    if (cost > c->budget)
+        return false;
+    size_t free = c->budget - c->held;
+    for (const Entry *e = c->oldest; free < cost && e != NULL && !kept_now(c, e); e = e->newer)
+        free += e->size;
+    return free >= cost;
 }
 
 // Twice the buckets once there are as many entries as buckets. A table
@@ -190,29 +215,18 @@ static bool buckets_fit(yonder_paint_cache_t *c)
 void *paint_cache_make(yonder_paint_cache_t *c, const uint8_t *key, uint32_t klen, uint64_t hash,
                        size_t bytes)
 {
-    size_t data = (bytes + 7) & ~(size_t)7;
-    size_t size = sizeof(Entry) + data + klen;
-    if (size > c->budget) {
-        c->counts.no_room++;
+    size_t size = paint_cache_cost(klen, bytes);
+    if (!paint_cache_room(c, size))
         return NULL;
-    }
     while (c->held + size > c->budget) {
-        if (c->oldest->stamp == c->stamp) {
-            c->counts.no_room++;
-            return NULL;
-        }
         let_go(c, c->oldest);
         c->counts.evicted++;
     }
-    if (!buckets_fit(c)) {
-        c->counts.no_memory++;
+    if (!buckets_fit(c))
         return NULL;
-    }
     Entry *e = os64_malloc(size);
-    if (e == NULL) {
-        c->counts.no_memory++;
+    if (e == NULL)
         return NULL;
-    }
     os64_memset(e, 0, sizeof(*e));
     e->hash = hash;
     e->stamp = c->stamp;
@@ -228,7 +242,18 @@ void *paint_cache_make(yonder_paint_cache_t *c, const uint8_t *key, uint32_t kle
     return bytes_of(e);
 }
 
-void paint_cache_too_wide(yonder_paint_cache_t *c)
+void paint_cache_release(yonder_paint_cache_t *c, void *bytes)
 {
-    c->counts.too_wide++;
+    Entry *e = (Entry *)bytes - 1;
+    e->stamp = 0;
+    unlink_list(c, e);
+    push_oldest(c, e);
+}
+
+void paint_cache_refused(yonder_paint_cache_t *c, bool memory)
+{
+    if (memory)
+        c->counts.no_memory++;
+    else
+        c->counts.no_room++;
 }

@@ -296,7 +296,7 @@ was shown, or since its record was last written on asking:
   example: the layouts, how late frames were, the loop's longest wait, the
   script tasks by kind, the ticker's bells and its own counts, the
   deadlines already past when handed to it, by source (YONDER_PERF.md §
-  Measure first), and the paint cache's counts: the bands it found and
+  Measure first), and the paint cache's counts: the blocks it found and
   made, what it let go for room, how often a picture was worked out
   without it and why, and what it holds against its budget
   (YONDER_PERF.md § perf-2).

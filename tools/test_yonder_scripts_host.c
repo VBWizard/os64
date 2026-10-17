@@ -4544,8 +4544,8 @@ static void paint_cost_cases(void) {
     (void)paint_cache_make(g.paint_cache,(const uint8_t *)"k",1,paint_cache_hash((const uint8_t *)"k",1),2000);
     diag_paint(&g.page);
     yonder_diag_render(g.page.diag,rec,sizeof(rec));
-    check(strstr(rec,"; the paint cache: 0 bands found, 1 made, 0 let go for room; worked out without it 0 times "
-                     "for room, 0 for memory, 0 too wide; 2 KiB held in 1 entries, of 16384 KiB; ")!=NULL,
+    check(strstr(rec,"; the paint cache: 0 blocks found, 1 made, 0 let go for room; pictures worked out without it "
+                     "0 times for room, 0 for memory; 2 KiB held in 1 blocks, of 32768 KiB; ")!=NULL,
           "paint counts: what the paint cache found, made, let go and held");
     {
         /* The counts the checks below read are kept across the restart. */

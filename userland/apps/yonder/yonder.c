@@ -4735,10 +4735,10 @@ static bool paint_lines(DiagText *t, DiagText *u)
     // What the painter kept (YONDER_PERF.md § perf-2).
     yonder_paint_cache_counts_t kept = yonder_paint_cache_counts(g.paint_cache);
     if (g.paint_cache != NULL)
-        dt_put(t, "; the paint cache: %lu bands found, %lu made, %lu let go for room; worked out without it "
-               "%lu times for room, %lu for memory, %lu too wide; %lu KiB held in %lu entries, of %lu KiB",
+        dt_put(t, "; the paint cache: %lu blocks found, %lu made, %lu let go for room; pictures worked out "
+               "without it %lu times for room, %lu for memory; %lu KiB held in %lu blocks, of %lu KiB",
                (unsigned long)kept.hits, (unsigned long)kept.made, (unsigned long)kept.evicted,
-               (unsigned long)kept.no_room, (unsigned long)kept.no_memory, (unsigned long)kept.too_wide,
+               (unsigned long)kept.no_room, (unsigned long)kept.no_memory,
                (unsigned long)(kept.bytes / 1024), (unsigned long)kept.entries, (unsigned long)(kept.budget / 1024));
     else
         dt_put(t, "; no paint cache");
