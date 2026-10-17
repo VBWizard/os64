@@ -994,6 +994,26 @@ static bool blocks_get(const Painter *p, Blocks *bk, BlockPrepare prepare, Block
     return true;
 }
 
+// The run from column `c` of the part's row `r` (its `n` columns, the row
+// on the picture): how many columns from `c` read one block's row in order
+// — a run ends where its block does, which is also where a repeating
+// tile wraps — with `*src` its first pixel, or NULL for a run off the
+// picture.
+static int64_t blocks_run(const Blocks *bk, int64_t r, int64_t c, int64_t n, const void **src)
+{
+    int32_t i = bk->xb[c];
+    if (i < 0) {
+        int64_t k = 1;
+        while (c + k < n && bk->xb[c + k] < 0)
+            k++;
+        *src = NULL;
+        return k;
+    }
+    const uint8_t *block = bk->blocks[bk->yb[r] * bk->nbx + i];
+    *src = block + ((size_t)bk->yin[r] * (size_t)bk->bw[i] + (size_t)bk->xin[c]) * bk->pixel;
+    return min64(bk->bw[i] - bk->xin[c], n - c);
+}
+
 // A shadow's mask, kept: its shape and the shape it is cut to (`times`,
 // whose coverage it is multiplied by — or what that leaves, when outer),
 // moved so the whole mask's corner is (0, 0), which by whole pixels
@@ -1082,14 +1102,16 @@ static bool shadow_kept(const Painter *p, const Round *shape, const Round *times
     }
     uint8_t *alpha = os64_malloc((size_t)((x1 - x0) * (y1 - y0)));
     if (alpha != NULL) {
+        // The part lies inside the mask, so no run is off it.
         uint32_t a = flow_alpha(colour);
-        for (int64_t y = y0; y < y1; y++) {
-            int32_t j = bk.yb[y - y0], in_y = bk.yin[y - y0];
-            for (int64_t x = x0; x < x1; x++) {
-                int32_t i = bk.xb[x - x0];
-                const uint16_t *block = bk.blocks[j * bk.nbx + i];
-                alpha[(y - y0) * (x1 - x0) + (x - x0)] =
-                    (uint8_t)(block[in_y * bk.bw[i] + bk.xin[x - x0]] * a / SUB);
+        for (int64_t r = 0; r < y1 - y0; r++) {
+            uint8_t *row = alpha + r * (x1 - x0);
+            for (int64_t c = 0, n; c < x1 - x0; c += n) {
+                const void *src;
+                n = blocks_run(&bk, r, c, x1 - x0, &src);
+                const uint16_t *m = src;
+                for (int64_t k = 0; k < n; k++)
+                    row[c + k] = (uint8_t)(m[k] * a / SUB);
             }
         }
         p->v->mask(p->v->ctx,
@@ -1397,6 +1419,25 @@ static void tile_fill(const Painter *p, const Blocks *bk, int64_t bx, int64_t by
             out[r * w + c] = line_at(p, line, bx * BLOCK + c + 0.5, by * BLOCK + r + 0.5);
 }
 
+// Pixel `px` with its alpha times `share` of SUB.
+static uint32_t alpha_times(uint32_t px, int64_t share)
+{
+    return (uint32_t)((px >> 24) * share / SUB) << 24 | (px & 0xffffffu);
+}
+
+// Row `row`, columns `x0` to `x1`, cut to the span [a, e) (1/256 px): each
+// pixel's alpha times how much of it the span covers. The columns wholly
+// inside it keep theirs, so only those its edges cross are worked.
+static void row_cut(uint32_t *row, int64_t x0, int64_t x1, int64_t a, int64_t e)
+{
+    int64_t whole = min64(x1, max64(x0, -floor_div(-a, SUB)));     // the first wholly in
+    int64_t past = max64(whole, min64(x1, floor_div(e, SUB)));     // the first after them
+    for (int64_t x = x0; x < whole; x++)
+        row[x - x0] = alpha_times(row[x - x0], cover(x, a, e));
+    for (int64_t x = past; x < x1; x++)
+        row[x - x0] = alpha_times(row[x - x0], cover(x, a, e));
+}
+
 // The blocks of `line`'s tile that the part `x0`..`x1` by `y0`..`y1` reads,
 // found or made (YONDER_PERF.md § perf-2). False when they could not be
 // kept, and `bk` holds nothing to free.
@@ -1555,26 +1596,32 @@ static bool gradient_paint(const Painter *p, const flow_gradient_t *g, const yon
     }
     for (int64_t y = y0; y < y1; y++) {
         int64_t a = 0, e = 0;
-        bool row = !round || round_row(shape, y * SUB + SUB / 2, &a, &e);
+        uint32_t *row = &out[(y - y0) * (x1 - x0)];
         double v = y + 0.5 - ty;
-        // The tile's row this one reads, when the cache holds it: -1 off
-        // the tile, where the test below leaves the pixel clear.
-        int32_t j = kept ? bk.yb[y - y0] : -1;
-        for (int64_t x = x0; x < x1; x++) {
-            uint32_t *px_out = &out[(y - y0) * (x1 - x0) + (x - x0)];
-            double u = x + 0.5 - tx;
-            if ((!rep_x && (u < 0 || u >= w)) || (!rep_y && (v < 0 || v >= h)) || !row) {
-                *px_out = 0;
-                continue;
-            }
-            int32_t i = j >= 0 ? bk.xb[x - x0] : -1;
-            const uint32_t *block = i >= 0 ? bk.blocks[j * bk.nbx + i] : NULL;
-            uint32_t px = block != NULL ? block[bk.yin[y - y0] * bk.bw[i] + bk.xin[x - x0]]
-                        : solid ? solid_px : line_at(p, &line, wrap(u, w), wrap(v, h));
-            if (round)
-                px = (uint32_t)((px >> 24) * cover(x, a, e) / SUB) << 24 | (px & 0xffffffu);
-            *px_out = px;
+        if ((round && !round_row(shape, y * SUB + SUB / 2, &a, &e)) || (!rep_y && (v < 0 || v >= h))) {
+            os64_memset(row, 0, (size_t)(x1 - x0) * sizeof(*row));
+            continue;
         }
+        if (kept) {
+            // The tile is placed at whole pixels, so a pixel whose middle
+            // is off it is one the maps leave off the picture.
+            for (int64_t c = 0, n; c < x1 - x0; c += n) {
+                const void *src;
+                n = blocks_run(&bk, y - y0, c, x1 - x0, &src);
+                if (src != NULL)
+                    os64_memcpy(row + c, src, (size_t)n * sizeof(*row));
+                else
+                    os64_memset(row + c, 0, (size_t)n * sizeof(*row));
+            }
+        } else {
+            for (int64_t x = x0; x < x1; x++) {
+                double u = x + 0.5 - tx;
+                row[x - x0] = !rep_x && (u < 0 || u >= w) ? 0
+                            : solid ? solid_px : line_at(p, &line, wrap(u, w), wrap(v, h));
+            }
+        }
+        if (round)
+            row_cut(row, x0, x1, a, e);
     }
     p->v->pixels(p->v->ctx,
                  (os64_gui_rect_t){(int32_t)(x0 + p->off.x), (int32_t)(y0 + p->off.y),

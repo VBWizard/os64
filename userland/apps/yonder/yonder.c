@@ -1636,7 +1636,10 @@ static void diag_cascade(yonder_diag_t *d, const garb_cascade_t *c)
 // The stages of a paint, and the work beside paints. RENDER is libui's
 // whole walk — the root panel and the chrome as well as the view — and
 // VIEW the page's part of it; the rest are inside VIEW but for PUBLISH,
-// handing the damage to the compositor. TICKS is a tick's work before its
+// handing the damage to the compositor. LAID is inside SHADOWS and
+// GRADIENTS: the part of them spent laying their pixels on the glass (the
+// mask and pixels verbs), the rest being working them out or copying them
+// out of the paint cache. TICKS is a tick's work before its
 // paint, SCHEDULE handing the ticker its next deadline (pictures_schedule),
 // counted a call — a tick's own schedule is in its time as well as here —
 // TASKS every script task the loop runs, the shown page's or an arriving
@@ -1647,12 +1650,12 @@ static void diag_cascade(yonder_diag_t *d, const garb_cascade_t *c)
 // here; the rebuild after it is a layout's alone.
 typedef enum {
     PS_RENDER, PS_VIEW, PS_BACKGROUNDS, PS_PICTURES, PS_TEXT, PS_GROUPS, PS_SHADOWS, PS_GRADIENTS,
-    PS_WARPS, PS_PUBLISH, PS_TICKS, PS_SCHEDULE, PS_TASKS, PS_LAYOUTS, PS_COUNT
+    PS_WARPS, PS_LAID, PS_PUBLISH, PS_TICKS, PS_SCHEDULE, PS_TASKS, PS_LAYOUTS, PS_COUNT
 } PaintStage;
 
 static const char *const kPaintStage[PS_COUNT] = {
     "render", "view", "backgrounds", "pictures", "text", "groups", "shadows", "gradients",
-    "warps", "publish", "ticks", "schedule", "tasks", "layouts",
+    "warps", "laid", "publish", "ticks", "schedule", "tasks", "layouts",
 };
 
 // The deadlines a schedule hands the ticker, by where the next came from:
@@ -8789,6 +8792,20 @@ static void timed_through_close(void *ctx, uint8_t alpha)
     cost_end(PS_WARPS);
 }
 
+static void timed_mask(void *ctx, os64_gui_rect_t rect, const uint8_t *alpha, uint32_t colour)
+{
+    cost_begin(PS_LAID);
+    pane_mask(ctx, rect, alpha, colour);
+    cost_end(PS_LAID);
+}
+
+static void timed_pixels(void *ctx, os64_gui_rect_t rect, const uint32_t *argb)
+{
+    cost_begin(PS_LAID);
+    pane_pixels(ctx, rect, argb);
+    cost_end(PS_LAID);
+}
+
 static void view_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_theme_t *t)
 {
     (void)t;
@@ -8804,7 +8821,7 @@ static void view_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_
     GlassPane pane = {{&gl, NULL}, 1, {NULL}, 0, NULL};
     yonder_verbs_t v = {&pane,        pane_fill,     timed_text,       timed_image,
                         pane_control, timed_backdrop, timed_group_open, timed_group_close,
-                        pane_mask,    pane_pixels,   pane_frame,      timed_through_open,
+                        timed_mask,   timed_pixels,  pane_frame,      timed_through_open,
                         timed_through_close, pane_clip_open, pane_clip_fill, pane_clip_close};
     os64_gui_rect_t view = {part.x - gl.dx, part.y - gl.dy, part.w, part.h};
     cost_begin(PS_VIEW);

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """One deliberate break at a time to the paint cache (docs/design/pending/
 YONDER_PERF.md § perf-2) — the store's list, table and budget, the keys of
-a gradient's tile and a shadow's mask, the blocks, and yonder's half: the
-cache emptied when another page is shown, its counts restarted and
-written — against the cases that state its rules: yonder's painter
+a gradient's tile and a shadow's mask, the blocks and laying from them, and
+yonder's half: the cache emptied when another page is shown, its counts
+restarted and written, and the time laying takes said apart from the view's
+rest — against the cases that state its rules: yonder's painter
 harness, whose oracle paints every page with and without the cache, and
 yonder's scripted-page harness. A mutant is CAUGHT when they fail, MISSED
 when they pass, which means a test is missing and gets written. A build
@@ -19,9 +20,13 @@ Left out because nothing can tell them apart from the code: the blur and
 the kind in a key (a mask's size and its shapes' places already say the
 blur's reach, which is all of the blur a mask reads; a line has a
 direction and a ray has none), and a released entry's stamp check in the
-first paint (stamp 0 is the first paint's "one before"). The window making
-its cache at its first paint is read off a QEMU record's paint line: no
-host case paints the window's view.
+first paint (stamp 0 is the first paint's "one before"); two that only
+cost time: a run off the picture cut short, and a rounded row's column
+that its span covers wholly worked anyway; and a row its rounded shape
+misses drawn all the same, which the cut then leaves with no alpha, so
+only the colour under none differs. The window making its cache at its
+first paint, and timing what laying takes, are read off a QEMU record's
+paint lines: no host case paints the window's view.
 """
 import argparse
 import pathlib
@@ -167,6 +172,47 @@ mutants = [
     ('one-colour-is-kept', PAINT,
      '    bool kept = p->cache != NULL && !solid && tile_kept(p, &line, tile, x0, x1, y0, y1, &bk);',
      '    bool kept = p->cache != NULL && tile_kept(p, &line, tile, x0, x1, y0, y1, &bk);'),
+    # Laying from the blocks: a row by runs, and a rounded row cut only
+    # where its edges cross.
+    ('a-run-runs-past-its-block', PAINT,
+     '    return min64(bk->bw[i] - bk->xin[c], n - c);',
+     '    return n - c;'),
+    ('a-run-runs-to-a-full-block', PAINT,
+     '    return min64(bk->bw[i] - bk->xin[c], n - c);',
+     '    return min64(BLOCK - bk->xin[c], n - c);'),
+    ('a-run-reads-the-wrong-block-row', PAINT,
+     '    const uint8_t *block = bk->blocks[bk->yb[r] * bk->nbx + i];',
+     '    const uint8_t *block = bk->blocks[i];'),
+    ('a-run-reads-its-blocks-first-row', PAINT,
+     '    *src = block + ((size_t)bk->yin[r] * (size_t)bk->bw[i] + (size_t)bk->xin[c]) * bk->pixel;',
+     '    *src = block + ((size_t)0 * (size_t)bk->bw[i] + (size_t)bk->xin[c]) * bk->pixel;'),
+    ('a-run-reads-from-its-blocks-start', PAINT,
+     '    *src = block + ((size_t)bk->yin[r] * (size_t)bk->bw[i] + (size_t)bk->xin[c]) * bk->pixel;',
+     '    *src = block + ((size_t)bk->yin[r] * (size_t)bk->bw[i]) * bk->pixel;'),
+    ('a-run-off-the-tile-is-not-clear', PAINT,
+     '                    os64_memset(row + c, 0, (size_t)n * sizeof(*row));',
+     '                    os64_memset(row + c, 0xff, (size_t)n * sizeof(*row));'),
+    ('a-row-off-the-tile-is-not-clear', PAINT,
+     '            os64_memset(row, 0, (size_t)(x1 - x0) * sizeof(*row));',
+     '            os64_memset(row, 0xff, (size_t)(x1 - x0) * sizeof(*row));'),
+    ('a-row-off-the-tile-is-drawn', PAINT,
+     '        if ((round && !round_row(shape, y * SUB + SUB / 2, &a, &e)) || (!rep_y && (v < 0 || v >= h))) {',
+     '        if ((round && !round_row(shape, y * SUB + SUB / 2, &a, &e)) || ((void)rep_y, false)) {'),
+    ('a-cut-skips-the-near-edge', PAINT,
+     '    int64_t whole = min64(x1, max64(x0, -floor_div(-a, SUB)));',
+     '    int64_t whole = min64(x1, max64(x0, floor_div(a, SUB)));'),
+    ('a-cut-skips-the-far-edge', PAINT,
+     '    int64_t past = max64(whole, min64(x1, floor_div(e, SUB)));',
+     '    int64_t past = max64(whole, min64(x1, floor_div(e, SUB) + 1));'),
+    ('a-row-is-not-cut', PAINT,
+     '        if (round)\n            row_cut(row, x0, x1, a, e);',
+     '        (void)row_cut;'),
+    ('a-shadow-run-reads-one-pixel', PAINT,
+     '                    row[c + k] = (uint8_t)(m[k] * a / SUB);',
+     '                    row[c + k] = (uint8_t)(m[0] * a / SUB);'),
+    ('a-shadow-row-lands-on-the-first', PAINT,
+     '            uint8_t *row = alpha + r * (x1 - x0);',
+     '            uint8_t *row = alpha + ((void)r, 0);'),
     # yonder's half.
     ('another-page-keeps-the-last-ones', YONDER,
      '    // What the last page\'s paints kept is not this one\'s.\n    yonder_paint_cache_empty(g.paint_cache);\n',
@@ -174,6 +220,9 @@ mutants = [
     ('the-cache-counts-run-on', YONDER,
      '    yonder_paint_cache_counts_restart(g.paint_cache);\n}',
      '}'),
+    ('laying-is-taken-from-the-views-rest', YONDER,
+     '    for (int32_t s = PS_BACKGROUNDS; s <= PS_WARPS; s++)\n        inner += s_cost.total[s];',
+     '    for (int32_t s = PS_BACKGROUNDS; s <= PS_LAID; s++)\n        inner += s_cost.total[s];'),
     ('the-record-says-nothing-of-the-cache', YONDER,
      '    if (g.paint_cache != NULL)\n        dt_put(t, "; the paint cache:',
      '    if (false)\n        dt_put(t, "; the paint cache:'),

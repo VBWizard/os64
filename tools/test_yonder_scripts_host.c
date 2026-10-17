@@ -4527,6 +4527,9 @@ static void paint_cost_cases(void) {
     s_cost.total[PS_SCHEDULE]=5000000;
     s_cost.total[PS_RENDER]=24000000; s_cost.most[PS_RENDER]=13000000;
     s_cost.total[PS_VIEW]=20000000; s_cost.total[PS_TEXT]=4000000; s_cost.total[PS_TICKS]=8000000;
+    /* Laying is inside the stages that lay (YONDER_PERF.md § perf-3): said
+     * on its own, and not taken from the view's rest a second time. */
+    s_cost.total[PS_LAID]=2000000;
     diag_paint(&g.page);
     yonder_diag_render(g.page.diag,rec,sizeof(rec));
     check(strstr(rec,"\npaint: 2 paints in 1000.0 s (1 whole views), 3.0 Mpx of the view; 4 ticks, 5 schedules; "
@@ -4535,6 +4538,7 @@ static void paint_cost_cases(void) {
           strstr(rec,", schedule (a call) 1.0 (0.0)")!=NULL &&
           strstr(rec,"paint stages: ms a paint (most): render 12.0 (13.0), view 10.0 (0.0)")!=NULL &&
           strstr(rec,", text 2.0 (0.0)")!=NULL && strstr(rec,", ticks (a tick) 2.0 (0.0)")!=NULL &&
+          strstr(rec,", laid 1.0 (0.0), publish")!=NULL &&
           strstr(rec,"; window 2.0, the view's rest 8.0\n")!=NULL,
           "paint counts: each stage in milliseconds a paint, the window and the view's rest beside them");
     /* The paint cache's counts beside them (YONDER_PERF.md § perf-2), which

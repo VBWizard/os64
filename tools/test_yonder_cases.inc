@@ -357,6 +357,19 @@ static void paint_cases(void)
                     "pixels 0 0 4 4 ff0000ff ff3500ca ff3500ca ff0000ff"
                     " ff3500ca ffa5005a ffa5005a ff3500ca ff3500ca ffa5005a ffa5005a ff3500ca"
                     " ff0000ff ff3500ca ff3500ca ff0000ff\n");
+    // A rounded box cuts its gradient to its corners: each pixel's alpha
+    // times how much of it the row's span covers. A 2px radius in a 4px
+    // square: the top and bottom rows' spans start 174/256 px in (82/256
+    // of the edge pixel, alpha 51), the middle rows' 17/256 (239/256, ee).
+    paint_page_case("a rounded gradient is cut to its corners",
+                    "<!doctype html><style>body { margin: 0 } div { width: 4px; height: 4px;"
+                    " border-radius: 2px; background: linear-gradient(#ff0000, #ff0000) }"
+                    "</style><div></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "pixels 0 0 4 4 51ff0000 ffff0000 ffff0000 51ff0000"
+                    " eeff0000 ffff0000 ffff0000 eeff0000 eeff0000 ffff0000 ffff0000 eeff0000"
+                    " 51ff0000 ffff0000 ffff0000 51ff0000\n");
     // The body's gradient is the canvas's, its tile the root's box: a page
     // 4px tall repeats it every 4px down the whole view, as the browsers
     // do — the first pixel 1/8 down it, the last 7/8.
