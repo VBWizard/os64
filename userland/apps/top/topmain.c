@@ -148,6 +148,7 @@ static bool handle_key(top_view_t *view, char c)
         case 'a': case 'A': view->options.adaptiveUnits = !view->options.adaptiveUnits; return true;
         case 'c': case 'C': view->options.perCore = !view->options.perCore; return true;
         case 't': case 'T': view->options.showThreads = !view->options.showThreads; return true;
+        case 'u': case 'U': view->options.hideSplit = !view->options.hideSplit; return true;
         default: return false;
     }
 }
@@ -259,7 +260,8 @@ static void compose_help(const top_view_t *view)
     framef("  z          show or hide zombies\n");
     framef("  a          fixed or adaptive time units\n");
     framef("  c          machine or per-core accounting\n");
-    framef("  t          expand multi-threaded tasks into thread rows\n\n");
+    framef("  t          expand multi-threaded tasks into thread rows\n");
+    framef("  u          show or hide user/system CPU time\n\n");
     framef("  sort: %s %s   filter: %s\n",
            sort_name(view->sort), sort_direction(view),
            view->filter[0] ? view->filter : "(none)");
@@ -272,6 +274,7 @@ static void compose_help(const top_view_t *view)
            view->options.delayMS,
            view->options.noSummary ? "hidden" : "shown",
            view->options.logLedger ? "on" : "off");
+    framef("  user/system: %s\n\n", view->options.hideSplit ? "hidden" : "shown");
     framef("The numbers are the kernel's books, not samples.\n");
     framef("CPU%% is one core; summaries describe the whole machine.\n\n");
     framef("Press h or ? to return.\n");
@@ -282,7 +285,8 @@ static void compose_footer(const top_view_t *view)
     if (view->filterEditing)
         framef("\nfilter: %s_   Enter apply  Esc cancel\n", view->filterEdit);
     else
-        framef("\nq quit  ? help  s/S sort  / filter  i idle  z zombies  a units  c cores  t threads\n");
+        framef("\nq quit  ? help  s/S sort  / filter  i idle  z zombies  a units  c cores\n"
+               "t threads  u U/S\n");
 }
 
 // ── Small formatters ─────────────────────────────────────────────────────
@@ -464,11 +468,12 @@ int32_t topMain(const top_options_t *opts)
                view.filter[0] ? "\"" : "",
                view.filter[0] ? view.filter : "(none)",
                view.filter[0] ? "\"" : "");
-        framef("      idle tasks %s   zombies %s   time %s   cores %s\n",
+        framef("      idle tasks %s   zombies %s   time %s   cores %s   U/S %s\n",
                view.options.showIdle ? "shown" : "hidden",
                view.options.showZombies ? "shown" : "hidden",
                view.options.adaptiveUnits ? "adaptive" : "fixed",
-               view.options.perCore ? "per-core" : "machine");
+               view.options.perCore ? "per-core" : "machine",
+               view.options.hideSplit ? "hidden" : "shown");
 
         framef("tasks: %u shown, %u zombie%s%s, %u total\n",
                shownCount, (uint32_t)sample->zombies, sample->zombies == 1 ? "" : "s",
@@ -482,7 +487,8 @@ int32_t topMain(const top_options_t *opts)
         if (!view.options.noSummary && sample->summary_valid)
         {
             os64_monitor_core_split_t machine;
-            bool haveSplit = os64_monitor_machine_split(monitor, &machine) && machine.valid;
+            bool haveSplit = !view.options.hideSplit &&
+                             os64_monitor_machine_split(monitor, &machine) && machine.valid;
             char skewBuf[32];
             if (sample->skew_valid)
                 os64_snprintf(skewBuf, sizeof(skewBuf), "%c%lu.%lu",
@@ -508,7 +514,8 @@ int32_t topMain(const top_options_t *opts)
                         continue;
                     }
                     os64_monitor_core_split_t coreSplit;
-                    if (os64_monitor_core_split(monitor, core->id, &coreSplit) && coreSplit.valid)
+                    if (!view.options.hideSplit &&
+                        os64_monitor_core_split(monitor, core->id, &coreSplit) && coreSplit.valid)
                         framef("  core %2u: us %u%% sy %u%% id %u%% sched %u%%   (%lums)\n",
                                core->id, coreSplit.percent[0], coreSplit.percent[1],
                                coreSplit.percent[2], coreSplit.percent[3], core->delta.total / 1000);
@@ -524,12 +531,14 @@ int32_t topMain(const top_options_t *opts)
             framef("cores: %d   (interval unavailable - measuring)\n", coreCount);
         }
 
-        framef("\n%-6s %-9s %1s %2s %6s %6s %6s %10s  %s\n",
+        framef("\n%-6s %-9s %1s %2s %6s ",
                view.sort == TOP_SORT_TID ? "*TID" : "TID",
                view.sort == TOP_SORT_STATE ? "*STATE" : "STATE",
                "K", view.sort == TOP_SORT_CORE ? "*C" : "C",
-               view.sort == TOP_SORT_CPU ? "*CPU%" : "CPU%",
-               "USR%", "SYS%",
+               view.sort == TOP_SORT_CPU ? "*CPU%" : "CPU%");
+        if (!view.options.hideSplit)
+            framef("%6s %6s ", "USR%", "SYS%");
+        framef("%10s  %s\n",
                view.sort == TOP_SORT_TIME ? "*TIME" : "TIME",
                view.sort == TOP_SORT_NAME ? "*COMMAND" : "COMMAND");
 
@@ -539,21 +548,27 @@ int32_t topMain(const top_options_t *opts)
 
             // Per-task CPU% is of ONE CPU (the other half of the ruling):
             // 100.0 means "ate a whole core", however many cores exist.
-            char pctBuf[16], userBuf[16], systemBuf[16], timeBuf[24];
-            os64_monitor_split_t split;
-            bool haveTaskSplit = os64_monitor_task_split(monitor, e->info.pid, &split);
-            split_percent(userBuf, sizeof(userBuf), systemBuf, sizeof(systemBuf),
-                          haveTaskSplit ? &split : NULL);
+            char pctBuf[16], timeBuf[24];
             if (e->cpu.valid && intervalUS > 0)
                 os64_snprintf(pctBuf, sizeof(pctBuf), "%lu", e->cpu.percent);
             else
                 os64_strcopy(pctBuf, sizeof(pctBuf), "-");
             fmt_time(timeBuf, sizeof(timeBuf), e->info.runtime_us, view.options.adaptiveUnits);
 
-            framef("%-6lu %-9s %1s %2u %6s %6s %6s %10s  %s\n",
+            framef("%-6lu %-9s %1s %2u %6s ",
                    e->info.pid, os64_proc_state_name(e->info.state),
                    e->info.kernel ? "k" : " ",
-                   e->info.core, pctBuf, userBuf, systemBuf, timeBuf, e->info.name);
+                   e->info.core, pctBuf);
+            if (!view.options.hideSplit)
+            {
+                char userBuf[16], systemBuf[16];
+                os64_monitor_split_t split;
+                bool haveTaskSplit = os64_monitor_task_split(monitor, e->info.pid, &split);
+                split_percent(userBuf, sizeof(userBuf), systemBuf, sizeof(systemBuf),
+                              haveTaskSplit ? &split : NULL);
+                framef("%6s %6s ", userBuf, systemBuf);
+            }
+            framef("%10s  %s\n", timeBuf, e->info.name);
 
             // Attach sampled thread rows to their owning task for display.
             for (size_t t = 0; t < sample->thread_count; t++)
@@ -562,12 +577,7 @@ int32_t topMain(const top_options_t *opts)
                 if (tr->info.pid != e->info.pid)
                     continue;
 
-                char tPct[16], tUser[16], tSystem[16], tTime[24];
-                os64_monitor_split_t threadSplit;
-                bool haveThreadSplit = os64_monitor_thread_split(monitor, tr->info.pid,
-                                                                 tr->info.tid, &threadSplit);
-                split_percent(tUser, sizeof(tUser), tSystem, sizeof(tSystem),
-                              haveThreadSplit ? &threadSplit : NULL);
+                char tPct[16], tTime[24];
                 if (tr->cpu.valid && intervalUS > 0)
                     os64_snprintf(tPct, sizeof(tPct), "%lu", tr->cpu.percent);
                 else
@@ -575,10 +585,21 @@ int32_t topMain(const top_options_t *opts)
                 fmt_time(tTime, sizeof(tTime), tr->info.runtime_us,
                          view.options.adaptiveUnits);
 
-                framef("%-6lu %-9s %1s %2u %6s %6s %6s %10s   - %s\n",
+                framef("%-6lu %-9s %1s %2u %6s ",
                        tr->info.tid, os64_proc_state_name(tr->info.state),
                        e->info.kernel ? "k" : " ",
-                       tr->info.core, tPct, tUser, tSystem, tTime, e->info.name);
+                       tr->info.core, tPct);
+                if (!view.options.hideSplit)
+                {
+                    char tUser[16], tSystem[16];
+                    os64_monitor_split_t threadSplit;
+                    bool haveThreadSplit = os64_monitor_thread_split(monitor, tr->info.pid,
+                                                                     tr->info.tid, &threadSplit);
+                    split_percent(tUser, sizeof(tUser), tSystem, sizeof(tSystem),
+                                  haveThreadSplit ? &threadSplit : NULL);
+                    framef("%6s %6s ", tUser, tSystem);
+                }
+                framef("%10s   - %s\n", tTime, e->info.name);
 
             }
         }

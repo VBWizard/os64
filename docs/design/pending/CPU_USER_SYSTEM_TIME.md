@@ -269,6 +269,9 @@ reuse detection. Use raw deltas to compute percentages before independent
 rounding; one-point display differences between `CPU%` and `USR% + SYS%` are
 rounding, not new time.
 
+`top` shows the split by default; `u` toggles it in the display and `-u`
+starts with it hidden, including the split machine and per-core summaries.
+
 `top` consumes the new shared-monitor accessors in this slice. `htop` keeps
 using the existing total CPU and TIME fields; new columns or controls there
 are outside this slice. Build and exercise `htop` against the changed library
