@@ -24,12 +24,12 @@ yonder_ticker_t *yonder_ticker_start(int64_t window, uint32_t bell);
 // is forgotten; the window hands over the next one after it has looked.
 void yonder_ticker_set(yonder_ticker_t *t, uint64_t due_ms);
 // What the thread did since the counts last restarted (the paint counts
-// read them): its looks at the deadline — each ring, each wake, each
-// timeout — the most a ring came after its deadline (or after it was
+// read them): its rings, its looks at the deadline — each ring, each wake,
+// each timeout — the most a ring came after its deadline (or after it was
 // handed over, for one handed over already past), and the most a sleep
 // with a timeout lasted past it, in milliseconds.
 typedef struct {
-    uint64_t wakes, rang_late_most, overslept_most;
+    uint64_t rings, wakes, rang_late_most, overslept_most;
 } yonder_ticker_counts_t;
 // The counts so far; all zero for a NULL ticker.
 yonder_ticker_counts_t yonder_ticker_counts(yonder_ticker_t *t);

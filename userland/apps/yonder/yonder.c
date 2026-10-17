@@ -1691,7 +1691,10 @@ static struct {
     // picture's frame was shown against when it was due (ms): the most, and
     // the frames shown more than FRAME_LATE_MS late.
     uint64_t slept_most, late_most, late_frames;
-    uint64_t bells, past[PAST_COUNT];       // the ticker's rings; deadlines handed it already past
+    // The ticker's bells the loop took — rings made before the loop takes
+    // one arrive as one (the window's doorbell is a mask) — and the
+    // deadlines handed the ticker already past.
+    uint64_t bells, past[PAST_COUNT];
     uint64_t from_cycles;
     int64_t from_us;
 } s_cost;
@@ -4714,15 +4717,18 @@ static bool paint_lines(DiagText *t, DiagText *u)
            (unsigned long)(s_cost.scripts + s_cost.timers + s_cost.events), (unsigned long)s_cost.scripts,
            (unsigned long)s_cost.timers, (unsigned long)s_cost.events);
 
-    // The ticker's counts are its own: none once it has stopped, on the
-    // way out, or when it never started.
+    // The bells the loop took, then the ticker's own counts: its rings —
+    // more than the bells when rings were made before the loop took one —
+    // and none once it has stopped, on the way out, or when it never
+    // started.
+    dt_put(t, "; %lu bells taken", (unsigned long)s_cost.bells);
     yonder_ticker_counts_t ticker = yonder_ticker_counts(g.ticker);
     if (g.ticker != NULL)
-        dt_put(t, "; %lu bells, the ticker woke %lu times, rang at most %lu ms late, slept at most %lu ms "
-               "past its time", (unsigned long)s_cost.bells, (unsigned long)ticker.wakes,
+        dt_put(t, "; the ticker rang %lu times, woke %lu times, rang at most %lu ms late, slept at most %lu ms "
+               "past its time", (unsigned long)ticker.rings, (unsigned long)ticker.wakes,
                (unsigned long)ticker.rang_late_most, (unsigned long)ticker.overslept_most);
     else
-        dt_put(t, "; %lu bells, the ticker not running", (unsigned long)s_cost.bells);
+        dt_put(t, "; the ticker not running");
     dt_put(t, "; deadlines already past when handed to it:");
     for (int32_t i = 0; i < PAST_COUNT; i++)
         dt_put(t, "%s %s %lu", i ? "," : "", kPastDeadline[i], (unsigned long)s_cost.past[i]);
@@ -4959,12 +4965,18 @@ static int32_t attribute_picture(const Page *p, const flow_box_t *b)
     return i >= 0 && i < p->nbackground_map && p->bg_of != NULL ? p->bg_of[i] : -1;
 }
 
+// Whether a box's `background` attribute is what its background shows: a
+// sheet's picture or gradient replaces it, as glass_backdrop draws it.
+static bool attribute_shows(const flow_box_t *b)
+{
+    return !flow_background_has_image(b->style);
+}
+
 // Whether picture `k` is behind a box as glass_backdrop draws it: in a
-// sheet's layer, or the attribute's when no sheet gives the box a picture
-// or a gradient.
+// sheet's layer, or the attribute's when it shows (attribute_shows).
 static bool box_shows(const Page *p, const flow_box_t *b, int32_t k)
 {
-    if (flow_background_has_image(b->style))
+    if (!attribute_shows(b))
         return css_shows(p, b->style, k);
     return attribute_picture(p, b) == k;
 }
@@ -5003,13 +5015,14 @@ static bool picture_on_screen(int32_t k, bool mark)
             return true;
         mark_part(view);
     }
-    // Behind any other box: a `background` attribute's picture, and then a
-    // sheet's behind any box the view shows (the walk visits only those).
+    // Behind any other box: a `background` attribute's picture where it
+    // shows (attribute_shows), and then a sheet's behind any box the view
+    // shows (the walk visits only those).
     for (int32_t i = 0; p->bg_of != NULL && i < os64_page_nbackgrounds(model) && i < p->nbackground_map; i++) {
         if (p->bg_of[i] != k)
             continue;
         const flow_box_t *b = flow_box_for(p->tree, os64_page_background(model, i)->node);
-        if (b == NULL || b == owner ||
+        if (b == NULL || b == owner || !attribute_shows(b) ||
             !os64_rect_intersect(flow_box_doc_rect(b, scroll_now()), view, &meet))
             continue;
         seen = true;
@@ -5075,7 +5088,7 @@ static void pictures_seen(bool *seen, const bool *mark)
     // painter's own rule (picture_on_screen), each as box_shows answers.
     const yonder_verbs_t asking = {.backdrop = glass_backdrop};
     const flow_box_t *owner = yonder_canvas_owner(p->tree, &asking);
-    if (owner != NULL && flow_background_has_image(owner->style)) {
+    if (owner != NULL && !attribute_shows(owner)) {
         for (int32_t i = 0; i < flow_background_layers(owner->style); i++) {
             flow_layer_t l = flow_background_layer(owner->style, i);
             int32_t k = l.image != NULL ? css_picture(p, &l) : -1;
@@ -5086,6 +5099,7 @@ static void pictures_seen(bool *seen, const bool *mark)
                 mark_part(view);
         }
     } else if (owner != NULL) {
+        // The attribute shows: the branch above takes a sheet's picture.
         int32_t k = attribute_picture(p, owner);
         if (k >= 0 && k < p->npics) {
             seen[k] = true;
@@ -5098,7 +5112,8 @@ static void pictures_seen(bool *seen, const bool *mark)
         if (k < 0 || k >= p->npics)
             continue;
         const flow_box_t *b = flow_box_for(p->tree, os64_page_background(model, i)->node);
-        if (b == NULL || b == owner || !os64_rect_intersect(flow_box_doc_rect(b, scroll_now()), view, &meet))
+        if (b == NULL || b == owner || !attribute_shows(b) ||
+            !os64_rect_intersect(flow_box_doc_rect(b, scroll_now()), view, &meet))
             continue;
         seen[k] = true;
         if (mark != NULL && mark[k])

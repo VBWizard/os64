@@ -63,6 +63,7 @@ static int64_t tick(void *arg)
             uint64_t from = due > set_at ? due : set_at;
             if (now > from && now - from > t->counts.rang_late_most)
                 t->counts.rang_late_most = now - from;
+            t->counts.rings++;
             os64_lock_release(&t->lock);
             (void)os64_gui_event_ring(t->window, t->bell);
             continue;

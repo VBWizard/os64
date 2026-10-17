@@ -607,9 +607,15 @@ $(OBJ)/pic/%.S.o: %.S $(PIC_FLAGS_STAMP)
 # program lives under tests/, and a pattern-specific variable that matches
 # nothing is silent — the -O2 would simply stop applying with no diagnostic.
 # fpu_demo made exactly that move on the day /tests was created.
-OPTIMIZED_APPS := fpu_demo vncd yonder
+OPTIMIZED_APPS   := fpu_demo vncd yonder
+OPTIMIZED_CFLAGS := -O2
 $(foreach a,$(OPTIMIZED_APPS),\
-  $(eval $(OBJ)/$(if $(filter $(a),$(TESTS)),tests,apps)/$(a)/%.c.o: CFLAGS += -O2))
+  $(eval $(OBJ)/$(if $(filter $(a),$(TESTS)),tests,apps)/$(a)/%.c.o: CFLAGS += $(OPTIMIZED_CFLAGS)))
+
+# SSH uses private BearSSL primitives without widening libtls.so ABI.
+SSH_CFLAGS := -O2 -I$(CURDIR)/libtls/port/include
+$(OBJ)/apps/sshd/%.c.o: CFLAGS += $(SSH_CFLAGS)
+$(OBJ)/tests/sshtest/%.c.o: CFLAGS += $(SSH_CFLAGS)
 
 # AN OBJECT REBUILDS WHEN ITS FLAGS CHANGE. Make compares dates, and nothing
 # dates a flag: before these stamps, an edit to the flags relinked the old
@@ -617,16 +623,17 @@ $(foreach a,$(OPTIMIZED_APPS),\
 # under the new name. Each stamp holds a family's flags and is rewritten as
 # this file is read, only when they differ, so its date moves exactly when
 # they do. The PIC family's are the flags the obj/pic rules compile with;
-# the static family's are CFLAGS and the list above. A pattern-specific addition
-# elsewhere in this file (sshd's) is in neither: changing one wants a
-# `make clean`.
+# the static family's are CFLAGS and every pattern-specific addition to it.
+# So an addition is a variable, and its variable is in the static stamp: one
+# spelled inline, or left out of the stamp, relinks stale objects the day it
+# changes.
 flags_same = $(if $(subst x$(1),,x$(2))$(subst x$(2),,x$(1)),,same)
 define flags_stamp
 $(if $(call flags_same,$(strip $(2)),$(strip $(file <$(1)))),,$(file >$(1),$(strip $(2))))
 endef
 $(shell mkdir -p $(OBJ)/flags)
 $(eval $(call flags_stamp,$(PIC_FLAGS_STAMP),$(LIBOS64_CFLAGS) | $(LIBGZIP_CFLAGS) | $(LIBPNG_CFLAGS) | $(LIBFETCH_CFLAGS)))
-$(eval $(call flags_stamp,$(STATIC_FLAGS_STAMP),$(CFLAGS) | $(OPTIMIZED_APPS)))
+$(eval $(call flags_stamp,$(STATIC_FLAGS_STAMP),$(CFLAGS) | $(OPTIMIZED_APPS) | $(OPTIMIZED_CFLAGS) | $(SSH_CFLAGS)))
 
 $(OBJ)/%.c.o: %.c $(STATIC_FLAGS_STAMP)
 	@mkdir -p "$(dir $@)"
@@ -639,10 +646,5 @@ $(OBJ)/%.S.o: %.S $(STATIC_FLAGS_STAMP)
 .PHONY: clean
 clean:
 	rm -rf $(OBJ) $(BIN)
-
-# SSH uses private BearSSL primitives without widening libtls.so ABI.
-$(OBJ)/apps/sshd/%.c.o: CFLAGS += -O2 -I$(CURDIR)/libtls/port/include
-
-$(OBJ)/tests/sshtest/%.c.o: CFLAGS += -O2 -I$(CURDIR)/libtls/port/include
 
 -include $(OBJ)/pic/shared/decoration.c.d

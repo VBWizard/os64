@@ -4119,10 +4119,11 @@ static void picture_tick_cases(void) {
                "#c{width:50px;height:30px;background:url(c.gif)}</style>"
                "<img src=a.gif width=20 height=20><div id=c></div>"
                "<table background=e.gif width=40 height=20><tr><td>x</td></tr></table>"
+               "<table background=f.gif style='background-image:url(g.gif)' width=40 height=20><tr><td>y</td></tr></table>"
                "<div style='height:3000px'></div><img src=b.gif width=20 height=20>",false);
     pictures_start(&g.page);
     css_pictures(&g.page);
-    check(g.page.npics==5 && g.page.npics<=8,"picture ticks: five pictures, in every kind of place");
+    check(g.page.npics==7 && g.page.npics<=8,"picture ticks: seven pictures, in every kind of place");
     for(int32_t k=0;k<g.page.npics && k<8;k++) {
         memset(&fakes[k],0,sizeof(fakes[k]));
         fakes[k].frame.delay_ms=100; fakes[k].frame.width=fakes[k].frame.height=1;
@@ -4137,6 +4138,14 @@ static void picture_tick_cases(void) {
         if(strstr(g.page.pics[k].url,"b.gif")!=NULL) offscreen=!seen[k];
     }
     check(same && offscreen,"picture ticks: one pass answers what asking each picture apart does");
+    /* A `background` attribute a sheet's picture replaces is not shown, so
+     * its picture is not on screen — asked either way — while the sheet's is. */
+    bool hidden_seen=true, shown_seen=false;
+    for(int32_t k=0;k<g.page.npics;k++) {
+        if(strstr(g.page.pics[k].url,"f.gif")) hidden_seen=seen[k] || picture_on_screen(k,false);
+        if(strstr(g.page.pics[k].url,"g.gif")) shown_seen=seen[k] && picture_on_screen(k,false);
+    }
+    check(!hidden_seen && shown_seen,"picture ticks: an attribute's picture a sheet replaces is not on screen");
     bool marks_same=true;
     for(int32_t k=0;k<g.page.npics;k++) {
         memset(mark,0,sizeof(mark)); mark[k]=true;
@@ -4498,7 +4507,7 @@ static void paint_cost_cases(void) {
     diag_paint(&g.page);
     yonder_diag_render(g.page.diag,rec,sizeof(rec));
     check(strstr(rec,"\npaint: 2 paints in 1.0 s (1 whole views), 3.0 Mpx of the view; 4 ticks, 5 schedules; "
-                     "the main loop busy 75%; 0 layouts; frames late at most 0 ms, 0 more than 30 ms; the longest wait 0 ms; 0 script tasks: 0 scripts, 0 timers, 0 events; 0 bells, the ticker not running; deadlines already past when handed to it: settle 0, "
+                     "the main loop busy 75%; 0 layouts; frames late at most 0 ms, 0 more than 30 ms; the longest wait 0 ms; 0 script tasks: 0 scripts, 0 timers, 0 events; 0 bells taken; the ticker not running; deadlines already past when handed to it: settle 0, "
                      "layouts 0, ticks 0, arrival 0, stream 0, timers 0, pictures 0\n")!=NULL &&
           strstr(rec,", schedule (a call) 1.0 (0.0)")!=NULL &&
           strstr(rec,"paint stages: ms a paint (most): render 12.0 (13.0), view 10.0 (0.0)")!=NULL &&
@@ -4507,12 +4516,12 @@ static void paint_cost_cases(void) {
           "paint counts: each stage in milliseconds a paint, the window and the view's rest beside them");
     /* A running ticker says what it did. */
     g.ticker=(yonder_ticker_t *)&ticker_counts;
-    ticker_counts=(yonder_ticker_counts_t){.wakes=7,.rang_late_most=3,.overslept_most=2};
+    ticker_counts=(yonder_ticker_counts_t){.rings=9,.wakes=7,.rang_late_most=3,.overslept_most=2};
     diag_paint(&g.page);
     yonder_diag_render(g.page.diag,rec,sizeof(rec));
     g.ticker=NULL;
-    check(strstr(rec,"; 0 bells, the ticker woke 7 times, rang at most 3 ms late, slept at most 2 ms past its "
-                     "time; deadlines already past when handed to it: settle 0,")!=NULL,
+    check(strstr(rec,"; 0 bells taken; the ticker rang 9 times, woke 7 times, rang at most 3 ms late, slept at "
+                     "most 2 ms past its time; deadlines already past when handed to it: settle 0,")!=NULL,
           "paint counts: the ticker's own counts, while it runs");
     /* A deadline already past when it is handed to the ticker is counted
      * against where it came from. */
