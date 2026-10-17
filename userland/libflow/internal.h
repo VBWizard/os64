@@ -288,10 +288,17 @@ typedef struct {
 // `edge` when its next phase edge shows (f_motion_next_of,
 // F_NEXT_EDGES, from the layout's time) and `at` the time its style is the
 // element's at — the layout's, or the last tick's that moved it.
+// `text_reach`, for an element whose animations repaint in place and set
+// `text-shadow`: the farthest any frame's text shadow is offset, in px,
+// the easings' overshoot included — how far past the ink the layout gave
+// it a frame may draw, which is what the view's question asks
+// (flow_motion_due). 0 for any other: one that is not in place is due
+// wherever its element is, and asks the view nothing.
 typedef struct {
     flow_style_t base;
     FAnimation *anims;
     int32_t nanims;
+    int32_t text_reach;
     bool in_place;
     bool ticks;
     const FResolved **resolved;
@@ -331,11 +338,17 @@ bool f_motion_style(const FMotion *m, double now, flow_style_t *out, FAlloc allo
 uint8_t f_motion_effects(const FMotion *m, double now);
 // Whether every property `m`'s animations set only repaints where the
 // element, and what it holds, already draw — colours, opacity,
-// visibility, a background's position, the corners' curves. Such an
+// visibility, a background's position, the corners' curves — or around
+// its text by no more than FMotion.text_reach (a text shadow). Such an
 // animation can wait while its element is out of view; any other (a
-// transform, a size, a position, a shadow's offset) may carry what it
+// transform, a size, a position, a box shadow's offset) may carry what it
 // draws into view from anywhere (flow_motion_due).
 bool f_motion_in_place(const FMotion *m);
+// How far past [0, 1] an easing's output may go at most, either side: the
+// control points' reach for a Bézier, whose curve lies inside their hull —
+// at least the overshoot, which is all a bound needs — and 0 for the
+// others.
+double f_easing_overshoot(const flow_easing_t *e);
 // Whether every property `m`'s animations set is of the TICK SET, which
 // nothing but painting reads and nothing inherits: the transform's four
 // properties and its origin, opacity, the background's colour and
