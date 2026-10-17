@@ -7,6 +7,7 @@
 #undef main
 #define main yonder_fixture_main
 #include "../userland/apps/yonder/yonder.c"
+#include "paint_cache.h"
 #undef main
 #include "test_libflow_fonts.h"
 #include "../userland/libhtml/internal.h"
@@ -1996,6 +1997,10 @@ static void stream_slices(void) {
      * asks to be rung again; the next finishes, with the verdict already
      * waiting behind the chunks. */
     stream_window();
+    /* What the last page's paints kept (YONDER_PERF.md § perf-2). */
+    g.paint_cache=yonder_paint_cache_new(YONDER_PAINT_CACHE_BUDGET);
+    paint_cache_begin(g.paint_cache);
+    (void)paint_cache_make(g.paint_cache,(const uint8_t *)"k",1,paint_cache_hash((const uint8_t *)"k",1),64);
     start_trip("http://fixture.test/p",NULL,NAV_GO,NULL);
     check(g.stream.active && g.nav.id==1 && pool_work.job!=NULL && g.stop.disabled==false,
         "stream: a navigation starts a stream and lights Stop");
@@ -2019,6 +2024,10 @@ static void stream_slices(void) {
         !g.page.way.posted,"stream: the standing line and address are the head's");
     check(g.stop.disabled==true && g.reload.disabled==false,"stream: Stop goes out when the page is in");
     check(probe_text_is("t","end"),"stream: the last chunk's text is in the page");
+    check(yonder_paint_cache_counts(g.paint_cache).entries==0,
+        "stream: what the last page's paints kept is let go when this one is shown");
+    yonder_paint_cache_free(g.paint_cache);
+    g.paint_cache=NULL;
     stream_window_drop();
     /* The same five chunks with the verdict still to come: the worker rang
      * once per post and a stalled socket rings nothing more, so the slice
@@ -4521,13 +4530,33 @@ static void paint_cost_cases(void) {
     diag_paint(&g.page);
     yonder_diag_render(g.page.diag,rec,sizeof(rec));
     check(strstr(rec,"\npaint: 2 paints in 1000.0 s (1 whole views), 3.0 Mpx of the view; 4 ticks, 5 schedules; "
-                     "the main loop busy 75%; 0 layouts; frames late at most 0 ms, 0 more than 30 ms; the longest wait 0 ms; 0 script tasks: 0 scripts, 0 timers, 0 events; 0 bells taken; the ticker not running; deadlines already past when handed to it: settle 0, "
+                     "the main loop busy 75%; 0 layouts; frames late at most 0 ms, 0 more than 30 ms; the longest wait 0 ms; no paint cache; 0 script tasks: 0 scripts, 0 timers, 0 events; 0 bells taken; the ticker not running; deadlines already past when handed to it: settle 0, "
                      "layouts 0, ticks 0, arrival 0, stream 0, timers 0, pictures 0\n")!=NULL &&
           strstr(rec,", schedule (a call) 1.0 (0.0)")!=NULL &&
           strstr(rec,"paint stages: ms a paint (most): render 12.0 (13.0), view 10.0 (0.0)")!=NULL &&
           strstr(rec,", text 2.0 (0.0)")!=NULL && strstr(rec,", ticks (a tick) 2.0 (0.0)")!=NULL &&
           strstr(rec,"; window 2.0, the view's rest 8.0\n")!=NULL,
           "paint counts: each stage in milliseconds a paint, the window and the view's rest beside them");
+    /* The paint cache's counts beside them (YONDER_PERF.md § perf-2), which
+     * start again with the paint counts while what it holds stays. */
+    g.paint_cache=yonder_paint_cache_new(YONDER_PAINT_CACHE_BUDGET);
+    paint_cache_begin(g.paint_cache);
+    (void)paint_cache_make(g.paint_cache,(const uint8_t *)"k",1,paint_cache_hash((const uint8_t *)"k",1),2000);
+    diag_paint(&g.page);
+    yonder_diag_render(g.page.diag,rec,sizeof(rec));
+    check(strstr(rec,"; the paint cache: 0 blocks found, 1 made, 0 let go for room; pictures worked out without it "
+                     "0 times for room, 0 for memory; 2 KiB held in 1 blocks, of 32768 KiB; ")!=NULL,
+          "paint counts: what the paint cache found, made, let go and held");
+    {
+        /* The counts the checks below read are kept across the restart. */
+        __typeof__(s_cost) before=s_cost;
+        cost_reset();
+        check(yonder_paint_cache_counts(g.paint_cache).made==0 && yonder_paint_cache_counts(g.paint_cache).entries==1,
+              "paint counts: the cache's counts start again with them, and what it holds stays");
+        s_cost=before;
+    }
+    yonder_paint_cache_free(g.paint_cache);
+    g.paint_cache=NULL;
     /* A running ticker says what it did. */
     g.ticker=(yonder_ticker_t *)&ticker_counts;
     ticker_counts=(yonder_ticker_counts_t){.rings=9,.wakes=7,.rang_late_most=3,.overslept_most=2};

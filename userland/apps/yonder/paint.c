@@ -6,8 +6,10 @@
 // looks like. Nothing here knows about a surface.
 
 #include "paint.h"
+#include "paint_cache.h"
 #include "html/html.h"
 #include "os64/mem.h"
+#include "os64/str.h"
 #include <math.h>
 
 // A painter works in the coordinates of the box it paints — a fixed box's
@@ -43,6 +45,8 @@ typedef struct {
     const flow_box_t *canvas_owner;
     // Dark pages (paint.h), NULL for none.
     const yonder_dark_t *dark;
+    // The paint cache (paint.h), NULL for none.
+    yonder_paint_cache_t *cache;
     // A TEXT CLIP's text (PILE3.md § The text clip): when `penned`, a text
     // box draws its run and its decorations in `pen` — no shadows, no
     // relighting — and every other box draws nothing.
@@ -667,7 +671,9 @@ static void round_borders(const Painter *p, const flow_box_t *b, const Round *ou
 // where it may fall: OUTSIDE the border box for an outer shadow, inside the
 // padding box for an inset one. The blur is three box blurs, whose sum is
 // near enough the Gaussian CSS asks for (standard deviation half the blur
-// radius). Only the view's part, and the blur's reach around it, is made.
+// radius). Only the view's part, and the blur's reach around it, is made —
+// or, when the paint cache keeps it, the blocks of the whole mask that part
+// reads, which are the same pixels (shadow_kept).
 
 typedef struct {
     int64_t x, y, w, h;         // page pixels
@@ -773,6 +779,329 @@ static Round round_moved(const Round *s, int64_t dx, int64_t dy, int64_t by)
     return r;
 }
 
+// ── The paint cache's entries (YONDER_PERF.md § perf-2) ────────────────
+//
+// A gradient's tile, or a shadow's whole mask, kept in BLOCKs of 128 x 128
+// pixels (less at the picture's right and bottom edges), only the blocks a
+// paint's part reads, and only all of them: a picture whose blocks do not
+// all fit is worked out as it always was.
+
+#define BLOCK 128
+
+// An entry's key: the values that make its pixels, written out as bytes
+// (no padding, so equal values are equal keys) — the picture's, then the
+// block's place.
+typedef struct {
+    uint8_t b[64 + 16 * 8 + 128 * 13];
+    uint32_t n;
+} Key;
+
+static void key_put(Key *k, const void *v, uint32_t n)
+{
+    os64_memcpy(k->b + k->n, v, n);
+    k->n += n;
+}
+
+static void key_i64(Key *k, int64_t v)
+{
+    key_put(k, &v, sizeof(v));
+}
+
+static void key_round(Key *k, const Round *s)
+{
+    key_i64(k, s->l);
+    key_i64(k, s->t);
+    key_i64(k, s->r);
+    key_i64(k, s->b);
+    for (int c = 0; c < 4; c++)
+        for (int i = 0; i < 2; i++)
+            key_i64(k, s->rad[c][i]);
+}
+
+static int64_t floor_mod(int64_t a, int64_t b)
+{
+    return a - b * floor_div(a, b);
+}
+
+// The blocks of a picture `pw` x `ph`, `pixel` bytes a pixel, that a part
+// of a paint reads: for each column of the part, which block along x it
+// reads (an index into `bx`, -1 for none: off the picture) and where in it,
+// and the same down the rows; then every block the part reads, `nby` rows
+// of `nbx`, found or made by blocks_get.
+//
+// Making is in two steps so that an entry is published only once nothing
+// can fail before it is filled: PREPARE works out, once, what every block
+// the paint is missing needs — the picture's columns `c0` to `c1` and rows
+// `r0` to `r1` hold them all — and may fail for memory; FILL then writes
+// one block from that into its entry, and cannot. NULL prepare: the fill
+// works its block out on its own.
+typedef struct Blocks Blocks;
+typedef bool (*BlockPrepare)(const Painter *p, Blocks *bk, int64_t c0, int64_t r0, int64_t c1,
+                             int64_t r1);
+typedef void (*BlockFill)(const Painter *p, const Blocks *bk, int64_t bx, int64_t by, int64_t w,
+                          int64_t h, void *dst);
+struct Blocks {
+    int64_t pw, ph;
+    size_t pixel;
+    const void *what;               // what the fill works the pixels out from
+    Key key;
+    uint32_t klen;                  // the picture's part of the key
+    uint64_t base;                  // its hash
+    int32_t *xb, *xin, *yb, *yin;
+    int64_t *bx, *by;
+    int32_t *bw;                    // each block's width along x
+    int32_t nbx, nby;
+    void **blocks;
+    void *maps;                     // the allocation the arrays above live in
+    // What a prepare worked out: `scratch`, `sw` x `sh` pixels of the
+    // picture from (sx, sy), or NULL.
+    void *scratch;
+    int64_t sx, sy, sw, sh;
+};
+
+// One axis of the part, `n` from `from`, on a picture `size` long placed
+// at `origin`, taken into it when `wrap` (a repeating tile): each
+// position's block, an index into `dense`, which this fills, or -1 off the
+// picture, and its place in the block. How many blocks it reads.
+static int32_t axis_map(int64_t from, int64_t n, int64_t origin, int64_t size, bool wrap,
+                        int32_t *blk, int32_t *in, int64_t *dense)
+{
+    int32_t nd = 0, at = -1;
+    for (int64_t i = 0; i < n; i++) {
+        int64_t pos = from + i - origin;
+        if (wrap) {
+            pos = floor_mod(pos, size);
+        } else if (pos < 0 || pos >= size) {
+            blk[i] = -1;
+            in[i] = 0;
+            continue;
+        }
+        int64_t b = pos / BLOCK;
+        if (at < 0 || dense[at] != b) {
+            at = -1;
+            for (int32_t k = 0; k < nd && at < 0; k++)
+                if (dense[k] == b)
+                    at = k;
+            if (at < 0) {
+                dense[nd] = b;
+                at = nd++;
+            }
+        }
+        blk[i] = at;
+        in[i] = (int32_t)(pos - b * BLOCK);
+    }
+    return nd;
+}
+
+static void blocks_free(Blocks *bk)
+{
+    os64_free(bk->scratch);
+    os64_free(bk->blocks);
+    os64_free(bk->maps);
+}
+
+// The part `x0`.. (`nx` columns) by `y0`.. (`ny` rows), on the picture
+// placed at (ox, oy). False when there is no memory for the maps.
+static bool blocks_map(Blocks *bk, int64_t x0, int64_t nx, int64_t ox, bool wrap_x, int64_t y0,
+                       int64_t ny, int64_t oy, bool wrap_y)
+{
+    size_t ints = (size_t)(2 * nx + 2 * ny + nx), longs = (size_t)(nx + ny);
+    bk->maps = os64_malloc(longs * sizeof(int64_t) + ints * sizeof(int32_t));
+    bk->blocks = NULL;
+    if (bk->maps == NULL)
+        return false;
+    bk->bx = bk->maps;
+    bk->by = bk->bx + nx;
+    bk->xb = (int32_t *)(bk->by + ny);
+    bk->xin = bk->xb + nx;
+    bk->yb = bk->xin + nx;
+    bk->yin = bk->yb + ny;
+    bk->bw = bk->yin + ny;
+    bk->nbx = axis_map(x0, nx, ox, bk->pw, wrap_x, bk->xb, bk->xin, bk->bx);
+    bk->nby = axis_map(y0, ny, oy, bk->ph, wrap_y, bk->yb, bk->yin, bk->by);
+    for (int32_t i = 0; i < bk->nbx; i++)
+        bk->bw[i] = (int32_t)min64(BLOCK, bk->pw - bk->bx[i] * BLOCK);
+    bk->blocks = os64_calloc((size_t)bk->nbx * (size_t)bk->nby, sizeof(void *));
+    return bk->blocks != NULL || bk->nbx * bk->nby == 0;
+}
+
+// Block (i, j)'s key and its hash, written after the picture's.
+static uint64_t block_key(Blocks *bk, int32_t i, int32_t j)
+{
+    bk->key.n = bk->klen;
+    key_i64(&bk->key, bk->bx[i]);
+    key_i64(&bk->key, bk->by[j]);
+    return paint_cache_hash_from(bk->base, bk->key.b + bk->klen, bk->key.n - bk->klen);
+}
+
+static void blocks_release(const Painter *p, Blocks *bk)
+{
+    for (int32_t k = 0; k < bk->nbx * bk->nby; k++)
+        if (bk->blocks[k] != NULL)
+            paint_cache_release(p->cache, bk->blocks[k]);
+}
+
+// Every block the part reads, found or made with `prepare` and `fill`: the
+// ones held are found first, and the rest made only when they all fit
+// (paint_cache_room) and what they need has been worked out. False, with
+// none of them kept for the paint and the picture counted as refused, when
+// they do not fit or there is no memory.
+static bool blocks_get(const Painter *p, Blocks *bk, BlockPrepare prepare, BlockFill fill)
+{
+    size_t cost = 0;
+    int64_t c0 = INT64_MAX, r0 = INT64_MAX, c1 = 0, r1 = 0;
+    for (int32_t j = 0; j < bk->nby; j++)
+        for (int32_t i = 0; i < bk->nbx; i++) {
+            uint64_t hash = block_key(bk, i, j);
+            void **at = &bk->blocks[j * bk->nbx + i];
+            *at = paint_cache_find(p->cache, bk->key.b, bk->key.n, hash);
+            if (*at != NULL)
+                continue;
+            int64_t h = min64(BLOCK, bk->ph - bk->by[j] * BLOCK);
+            cost += paint_cache_cost(bk->key.n, (size_t)(bk->bw[i] * h) * bk->pixel);
+            c0 = min64(c0, bk->bx[i] * BLOCK);
+            c1 = max64(c1, bk->bx[i] * BLOCK + bk->bw[i]);
+            r0 = min64(r0, bk->by[j] * BLOCK);
+            r1 = max64(r1, bk->by[j] * BLOCK + h);
+        }
+    if (cost == 0)
+        return true;
+    if (!paint_cache_room(p->cache, cost)) {
+        blocks_release(p, bk);
+        paint_cache_refused(p->cache, false);
+        return false;
+    }
+    if (prepare != NULL && !prepare(p, bk, c0, r0, c1, r1)) {
+        blocks_release(p, bk);
+        paint_cache_refused(p->cache, true);
+        return false;
+    }
+    for (int32_t j = 0; j < bk->nby; j++)
+        for (int32_t i = 0; i < bk->nbx; i++) {
+            void **at = &bk->blocks[j * bk->nbx + i];
+            if (*at != NULL)
+                continue;
+            int64_t w = bk->bw[i], h = min64(BLOCK, bk->ph - bk->by[j] * BLOCK);
+            uint64_t hash = block_key(bk, i, j);
+            *at = paint_cache_make(p->cache, bk->key.b, bk->key.n, hash, (size_t)(w * h) * bk->pixel);
+            if (*at == NULL) {
+                blocks_release(p, bk);
+                paint_cache_refused(p->cache, true);
+                return false;
+            }
+            fill(p, bk, bk->bx[i], bk->by[j], w, h, *at);
+        }
+    return true;
+}
+
+// A shadow's mask, kept: its shape and the shape it is cut to (`times`,
+// whose coverage it is multiplied by — or what that leaves, when outer),
+// moved so the whole mask's corner is (0, 0), which by whole pixels
+// changes no pixel.
+typedef struct {
+    Round shape, times;
+    bool inset;
+    int64_t blur, reach;
+} ShadowMask;
+
+// The mask the missing blocks need, columns `c0` to `c1` and rows `r0` to
+// `r1`, made once as the view's part is (shadow_cast): those pixels and the
+// blur's reach around them, blurred together, so a block costs what its
+// share of the uncached path's work does.
+static bool mask_prepare(const Painter *p, Blocks *bk, int64_t c0, int64_t r0, int64_t c1,
+                         int64_t r1)
+{
+    (void)p;
+    const ShadowMask *sm = bk->what;
+    int64_t sc0 = max64(0, c0 - sm->reach), sc1 = min64(bk->pw, c1 + sm->reach);
+    int64_t sr0 = max64(0, r0 - sm->reach), sr1 = min64(bk->ph, r1 + sm->reach);
+    Mask m = {sc0, sr0, sc1 - sc0, sr1 - sr0, NULL};
+    m.a = os64_malloc((size_t)(m.w * m.h) * sizeof(*m.a));
+    if (m.a == NULL)
+        return false;
+    mask_cover(&m, &sm->shape, sm->inset);
+    if (!mask_blur(&m, sm->blur, sm->inset ? SUB : 0)) {
+        os64_free(m.a);
+        return false;
+    }
+    mask_times(&m, &sm->times, !sm->inset);
+    bk->scratch = m.a;
+    bk->sx = m.x;
+    bk->sy = m.y;
+    bk->sw = m.w;
+    bk->sh = m.h;
+    return true;
+}
+
+// Block (bx, by) of the mask, cut from what mask_prepare made: every pixel
+// of it is the reach or more inside that region's cut edges, so it is the
+// whole mask's.
+static void mask_fill(const Painter *p, const Blocks *bk, int64_t bx, int64_t by, int64_t w,
+                      int64_t h, void *dst)
+{
+    (void)p;
+    const uint16_t *from = bk->scratch;
+    uint16_t *out = dst;
+    for (int64_t r = 0; r < h; r++)
+        os64_memcpy(out + r * w, from + (by * BLOCK - bk->sy + r) * bk->sw + (bx * BLOCK - bk->sx),
+                    (size_t)w * sizeof(*out));
+}
+
+// The view's part of the shadow whose whole mask is (fx0, fy0) to (fx1,
+// fy1), drawn from the cache in `colour`. False when its blocks could not
+// be kept: the caller works it out as it always did.
+static bool shadow_kept(const Painter *p, const Round *shape, const Round *times, bool inset,
+                        int64_t blur, int64_t reach, int64_t fx0, int64_t fy0, int64_t fx1,
+                        int64_t fy1, uint32_t colour)
+{
+    int64_t x0 = max64(fx0, p->view.x), y0 = max64(fy0, p->view.y);
+    int64_t x1 = min64(fx1, (int64_t)p->view.x + p->view.w);
+    int64_t y1 = min64(fy1, (int64_t)p->view.y + p->view.h);
+    if (x1 <= x0 || y1 <= y0 || p->v->mask == NULL)
+        return true;
+    ShadowMask sm = {round_moved(shape, -fx0 * SUB, -fy0 * SUB, 0),
+                     round_moved(times, -fx0 * SUB, -fy0 * SUB, 0), inset, blur, reach};
+    Blocks bk = {.pw = fx1 - fx0, .ph = fy1 - fy0, .pixel = sizeof(uint16_t), .what = &sm};
+    key_put(&bk.key, "S", 1);
+    key_put(&bk.key, &sm.inset, 1);
+    key_i64(&bk.key, blur);
+    key_i64(&bk.key, bk.pw);
+    key_i64(&bk.key, bk.ph);
+    key_round(&bk.key, &sm.shape);
+    key_round(&bk.key, &sm.times);
+    bk.klen = bk.key.n;
+    bk.base = paint_cache_hash(bk.key.b, bk.klen);
+    if (!blocks_map(&bk, x0, x1 - x0, fx0, false, y0, y1 - y0, fy0, false)) {
+        blocks_free(&bk);
+        paint_cache_refused(p->cache, true);
+        return false;
+    }
+    if (!blocks_get(p, &bk, mask_prepare, mask_fill)) {
+        blocks_free(&bk);
+        return false;
+    }
+    uint8_t *alpha = os64_malloc((size_t)((x1 - x0) * (y1 - y0)));
+    if (alpha != NULL) {
+        uint32_t a = flow_alpha(colour);
+        for (int64_t y = y0; y < y1; y++) {
+            int32_t j = bk.yb[y - y0], in_y = bk.yin[y - y0];
+            for (int64_t x = x0; x < x1; x++) {
+                int32_t i = bk.xb[x - x0];
+                const uint16_t *block = bk.blocks[j * bk.nbx + i];
+                alpha[(y - y0) * (x1 - x0) + (x - x0)] =
+                    (uint8_t)(block[in_y * bk.bw[i] + bk.xin[x - x0]] * a / SUB);
+            }
+        }
+        p->v->mask(p->v->ctx,
+                   (os64_gui_rect_t){(int32_t)(x0 + p->off.x), (int32_t)(y0 + p->off.y),
+                                     (int32_t)(x1 - x0), (int32_t)(y1 - y0)},
+                   alpha, colour & 0xffffffu);
+        os64_free(alpha);
+    }
+    blocks_free(&bk);
+    return true;
+}
+
 void (*yonder_paint_stage)(yonder_paint_stage_t stage, bool begin);
 
 static void shadow_cast(const Painter *p, const flow_box_t *b, const Round *outer, const Round *inner,
@@ -827,10 +1156,14 @@ static void shadow_cast(const Painter *p, const flow_box_t *b, const Round *oute
     }
     // Where it can fall: around its shape by the blur's reach, outside the
     // border box (or inside the padding box), and in the view or the blur's
-    // reach of it.
+    // reach of it — or, from the cache, all of it.
     const Round *where = sh->inset ? inner : &shape;
+    const Round *times = sh->inset ? inner : outer;
     int64_t x0 = where->l / SUB - reach, y0 = where->t / SUB - reach;
     int64_t x1 = (where->r + SUB - 1) / SUB + reach, y1 = (where->b + SUB - 1) / SUB + reach;
+    if (p->cache != NULL &&
+        shadow_kept(p, &shape, times, sh->inset, blur, reach, x0, y0, x1, y1, colour))
+        return;
     x0 = max64(x0, (int64_t)p->view.x - reach);
     y0 = max64(y0, (int64_t)p->view.y - reach);
     x1 = min64(x1, (int64_t)p->view.x + p->view.w + reach);
@@ -844,7 +1177,7 @@ static void shadow_cast(const Painter *p, const flow_box_t *b, const Round *oute
     // An inset shadow is what its shape leaves, inside the padding box.
     mask_cover(&m, &shape, sh->inset);
     if (mask_blur(&m, blur, sh->inset ? SUB : 0)) {
-        mask_times(&m, sh->inset ? inner : outer, !sh->inset);
+        mask_times(&m, times, !sh->inset);
         mask_emit(p, &m, colour);
     }
     os64_free(m.a);
@@ -857,7 +1190,8 @@ static void shadow_cast(const Painter *p, const flow_box_t *b, const Round *oute
 // `background-repeat` says, and cut to its corners' curves. Each pixel of
 // it that the view shows is worked out on its own: where its middle falls
 // along the gradient's line (or ray), and the colour the stops give there,
-// mixed in premultiplied sRGB as CSS mixes colours with alpha.
+// mixed in premultiplied sRGB as CSS mixes colours with alpha — once a
+// tile, when the paint cache keeps it (tile_fill).
 
 #define GRADIENT_STOPS_MAX 128
 
@@ -867,6 +1201,9 @@ typedef struct {
     bool hint[GRADIENT_STOPS_MAX];
     int32_t n;
 } Stops;
+
+// A tile's key holds every stop (tile_kept).
+_Static_assert(sizeof(((Key *)0)->b) >= 100 + GRADIENT_STOPS_MAX * 13, "a gradient's key must fit its stops");
 
 // A stop's position on a line `len` px long, or NAN for none written.
 static double stop_at(flow_length_t l, double len)
@@ -1027,6 +1364,75 @@ static double wrap(double x, double size)
     return x - size * floor(x / size);
 }
 
+// What works a gradient's pixels out, its stops resolved: the line through
+// the tile's middle (cx, cy) along (dx, dy), `len` long, or the ray from
+// the centre (cx, cy) with radii rx and ry.
+typedef struct {
+    flow_gradient_kind_t kind;
+    bool repeating;
+    double dx, dy, len, cx, cy, rx, ry;
+    Stops stops;
+} Line;
+
+// The tile's pixel whose middle is (u, v) in the tile, as the verb takes
+// it: straight alpha on top.
+static uint32_t line_at(const Painter *p, const Line *l, double u, double v)
+{
+    double t = l->kind == FLOW_GRADIENT_LINEAR ? ((u - l->cx) * l->dx + (v - l->cy) * l->dy) / l->len + 0.5
+                                               : hypot((u - l->cx) / l->rx, (v - l->cy) / l->ry);
+    uint32_t c = paper_of(p, stops_colour(&l->stops, t, l->repeating));
+    return (uint32_t)flow_alpha(c) << 24 | (c & 0xffffffu);
+}
+
+// Block (bx, by) of a gradient's tile: each pixel the colour at its
+// middle, which is where the uncached path asks (x + 0.5 - tx, wrapped, is
+// the column plus a half).
+static void tile_fill(const Painter *p, const Blocks *bk, int64_t bx, int64_t by, int64_t w,
+                      int64_t h, void *dst)
+{
+    const Line *line = bk->what;
+    uint32_t *out = dst;
+    for (int64_t r = 0; r < h; r++)
+        for (int64_t c = 0; c < w; c++)
+            out[r * w + c] = line_at(p, line, bx * BLOCK + c + 0.5, by * BLOCK + r + 0.5);
+}
+
+// The blocks of `line`'s tile that the part `x0`..`x1` by `y0`..`y1` reads,
+// found or made (YONDER_PERF.md § perf-2). False when they could not be
+// kept, and `bk` holds nothing to free.
+static bool tile_kept(const Painter *p, const Line *line, const yonder_tile_t *tile, int64_t x0,
+                      int64_t x1, int64_t y0, int64_t y1, Blocks *bk)
+{
+    *bk = (Blocks){.pw = tile->at.w, .ph = tile->at.h, .pixel = sizeof(uint32_t), .what = line};
+    uint8_t kind = (uint8_t)line->kind, dark = p->dark != NULL;
+    key_put(&bk->key, "G", 1);
+    key_put(&bk->key, &kind, 1);
+    key_put(&bk->key, &line->repeating, 1);
+    key_put(&bk->key, &dark, 1);
+    key_i64(&bk->key, bk->pw);
+    key_i64(&bk->key, bk->ph);
+    const double geometry[7] = {line->dx, line->dy, line->len, line->cx, line->cy, line->rx, line->ry};
+    key_put(&bk->key, geometry, sizeof(geometry));
+    key_i64(&bk->key, line->stops.n);
+    for (int32_t i = 0; i < line->stops.n; i++) {
+        key_put(&bk->key, &line->stops.at[i], sizeof(line->stops.at[i]));
+        key_put(&bk->key, &line->stops.colour[i], sizeof(line->stops.colour[i]));
+        key_put(&bk->key, &line->stops.hint[i], 1);
+    }
+    bk->klen = bk->key.n;
+    bk->base = paint_cache_hash(bk->key.b, bk->klen);
+    if (!blocks_map(bk, x0, x1 - x0, tile->at.x, tile->repeat_x, y0, y1 - y0, tile->at.y, tile->repeat_y)) {
+        blocks_free(bk);
+        paint_cache_refused(p->cache, true);
+        return false;
+    }
+    if (!blocks_get(p, bk, NULL, tile_fill)) {
+        blocks_free(bk);
+        return false;
+    }
+    return true;
+}
+
 // Gradient `g` in `tile`, drawn over `area` (and the view), cut to `shape`
 // when `round`; a currentColor stop is `current`, the colour of the box it
 // is drawn on. False only when its pixels found no memory and nothing was
@@ -1123,41 +1529,51 @@ static bool gradient_paint(const Painter *p, const flow_gradient_t *g, const yon
         }
         len = rx;
     }
-    Stops stops;
-    if (!(len > 0) || !stops_resolve(g, len, current, &stops))
+    Line line = {g->kind, g->repeating, dx, dy, len, cx, cy, rx, ry, {{0}, {0}, {0}, 0}};
+    if (!(len > 0) || !stops_resolve(g, len, current, &line.stops))
         return true;
+    const Stops *stops = &line.stops;
     // One colour everywhere: the flat ellipse, and a repeating gradient
     // whose repeat is shorter than a pixel along the way it runs — none
     // at all, or one no pixel can show (§ 3.6) — which is its average. A
     // radial's repeat is shortest along its shorter radius.
-    double pixel_period = (stops.at[stops.n - 1] - stops.at[0]) *
+    double pixel_period = (stops->at[stops->n - 1] - stops->at[0]) *
                           (g->kind == FLOW_GRADIENT_LINEAR ? len : fmin(rx, ry));
     bool solid = flat || (g->repeating && !(pixel_period >= 1));
-    uint32_t solid_colour = g->repeating ? stops_average(&stops) : stops.colour[stops.n - 1];
+    uint32_t solid_colour = paper_of(p, g->repeating ? stops_average(stops) : stops->colour[stops->n - 1]);
+    uint32_t solid_px = (uint32_t)flow_alpha(solid_colour) << 24 | (solid_colour & 0xffffffu);
     bool rep_x = tile->repeat_x, rep_y = tile->repeat_y;
+    // One colour is a fill, already cheap; anything else is drawn from the
+    // tile when the cache keeps it.
+    Blocks bk;
+    bool kept = p->cache != NULL && !solid && tile_kept(p, &line, tile, x0, x1, y0, y1, &bk);
     uint32_t *out = os64_malloc((size_t)((x1 - x0) * (y1 - y0)) * sizeof(*out));
-    if (out == NULL)
+    if (out == NULL) {
+        if (kept)
+            blocks_free(&bk);
         return false;
+    }
     for (int64_t y = y0; y < y1; y++) {
         int64_t a = 0, e = 0;
         bool row = !round || round_row(shape, y * SUB + SUB / 2, &a, &e);
+        double v = y + 0.5 - ty;
+        // The tile's row this one reads, when the cache holds it: -1 off
+        // the tile, where the test below leaves the pixel clear.
+        int32_t j = kept ? bk.yb[y - y0] : -1;
         for (int64_t x = x0; x < x1; x++) {
             uint32_t *px_out = &out[(y - y0) * (x1 - x0) + (x - x0)];
-            double u = x + 0.5 - tx, v = y + 0.5 - ty;
+            double u = x + 0.5 - tx;
             if ((!rep_x && (u < 0 || u >= w)) || (!rep_y && (v < 0 || v >= h)) || !row) {
                 *px_out = 0;
                 continue;
             }
-            u = wrap(u, w);
-            v = wrap(v, h);
-            double t = g->kind == FLOW_GRADIENT_LINEAR
-                           ? ((u - cx) * dx + (v - cy) * dy) / len + 0.5
-                           : hypot((u - cx) / rx, (v - cy) / ry);
-            uint32_t c = paper_of(p, solid ? solid_colour : stops_colour(&stops, t, g->repeating));
-            uint32_t alpha = flow_alpha(c);
+            int32_t i = j >= 0 ? bk.xb[x - x0] : -1;
+            const uint32_t *block = i >= 0 ? bk.blocks[j * bk.nbx + i] : NULL;
+            uint32_t px = block != NULL ? block[bk.yin[y - y0] * bk.bw[i] + bk.xin[x - x0]]
+                        : solid ? solid_px : line_at(p, &line, wrap(u, w), wrap(v, h));
             if (round)
-                alpha = (uint32_t)(alpha * cover(x, a, e) / SUB);
-            *px_out = alpha << 24 | (c & 0xffffffu);
+                px = (uint32_t)((px >> 24) * cover(x, a, e) / SUB) << 24 | (px & 0xffffffu);
+            *px_out = px;
         }
     }
     p->v->pixels(p->v->ctx,
@@ -1165,6 +1581,8 @@ static bool gradient_paint(const Painter *p, const flow_gradient_t *g, const yon
                                    (int32_t)(x1 - x0), (int32_t)(y1 - y0)},
                  out);
     os64_free(out);
+    if (kept)
+        blocks_free(&bk);
     return true;
 }
 
@@ -1841,10 +2259,14 @@ const flow_box_t *yonder_canvas_owner(const flow_tree_t *tree, const yonder_verb
 
 
 void yonder_paint(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll,
-                  uint32_t paper, const yonder_dark_t *dark, const yonder_verbs_t *verbs)
+                  uint32_t paper, const yonder_dark_t *dark, yonder_paint_cache_t *cache,
+                  const yonder_verbs_t *verbs)
 {
     PaintGroups groups = {.depth = 0};
-    Painter p = {.v = verbs, .view = viewport, .scroll = scroll, .groups = &groups, .dark = dark};
+    Painter p = {.v = verbs, .view = viewport, .scroll = scroll, .groups = &groups, .dark = dark,
+                 .cache = cache};
+    if (cache != NULL)
+        paint_cache_begin(cache);
     if (dark != NULL)
         paper = dark->paper;
     const flow_box_t *root = flow_root(tree);

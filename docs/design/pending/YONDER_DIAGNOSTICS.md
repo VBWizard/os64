@@ -284,8 +284,9 @@ was shown, or since its record was last written on asking:
   included, and **`view`** the page's part of it; `window` is the
   difference. Inside the view: **`backgrounds`** (pictures behind boxes and
   the canvas), **`pictures`**, **`text`**, opacity **`groups`**, box
-  **`shadows`** (their masks built and blurred), **`gradients`** (computed
-  pixel by pixel), **`warps`** (turned boxes drawn through their matrix);
+  **`shadows`** (their masks built and blurred, or copied out of the paint
+  cache), **`gradients`** (computed pixel by pixel, or copied out of it),
+  **`warps`** (turned boxes drawn through their matrix);
   `the view's rest` is the view outside those. **`publish`** hands the
   damage to the compositor. **`ticks`** are per tick, not per paint: a
   tick's work finding what moved and marking it, before its paint.
@@ -293,9 +294,12 @@ was shown, or since its record was last written on asking:
   **`tasks`** per script task (a script, a timer or an event, its run),
   **`layouts`** per layout. The `paint:` line has grown since this
   example: the layouts, how late frames were, the loop's longest wait, the
-  script tasks by kind, the ticker's bells and its own counts, and the
+  script tasks by kind, the ticker's bells and its own counts, the
   deadlines already past when handed to it, by source (YONDER_PERF.md §
-  Measure first).
+  Measure first), and the paint cache's counts: the blocks it found and
+  made, what it let go for room, how often a picture was worked out
+  without it and why, and what it holds against its budget
+  (YONDER_PERF.md § perf-2).
 - Timed with the processor's counter, its rate taken from the clock across
   the same span, so the numbers are the machine's own: the P5's on the P5.
   A span with nothing painted keeps every other count and its stages

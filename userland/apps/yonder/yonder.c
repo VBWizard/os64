@@ -1180,6 +1180,10 @@ static struct {
     // The window's clock, for moving pictures and a slow page's owed
     // layout; NULL, and nothing moves and a layout waits for an event.
     yonder_ticker_t *ticker;
+    // What the painter keeps between paints (paint.h): emptied when another
+    // page is shown. NULL until the first paint, and when there was no
+    // memory for it: the page is then painted working everything out.
+    yonder_paint_cache_t *paint_cache;
     bool covered;                   // nobody can see the window: nothing moves
     // When a slow page's deferred layout is owed (pictures_settle), in
     // yonder_now_ms's milliseconds; YONDER_NEVER for none.
@@ -1751,6 +1755,7 @@ static void cost_reset(void)
     s_cost.from_cycles = cycles();
     s_cost.from_us = os64_micros();
     yonder_ticker_counts_restart(g.ticker);
+    yonder_paint_cache_counts_restart(g.paint_cache);
 }
 
 // A layout, timed (s_cost): page_lay_out_run is the layout itself.
@@ -2319,6 +2324,8 @@ static void arrive_now(Page *fresh, NavKind kind, const way_position_t *crumb,
     webfonts_leave();
     g.page = *fresh;
     os64_memset(fresh, 0, sizeof(*fresh));
+    // What the last page's paints kept is not this one's.
+    yonder_paint_cache_empty(g.paint_cache);
     // Its paints are counted from here (diag_paint), its readings anew.
     cost_reset();
     s_cost_readings = 0;
@@ -4725,6 +4732,16 @@ static bool paint_lines(DiagText *t, DiagText *u)
            (unsigned long)s_cost.late_frames, FRAME_LATE_MS);
     if (rate != 0)
         dt_put(t, "; the longest wait %lu ms", (unsigned long)(s_cost.slept_most / rate / 1000));
+    // What the painter kept (YONDER_PERF.md § perf-2).
+    yonder_paint_cache_counts_t kept = yonder_paint_cache_counts(g.paint_cache);
+    if (g.paint_cache != NULL)
+        dt_put(t, "; the paint cache: %lu blocks found, %lu made, %lu let go for room; pictures worked out "
+               "without it %lu times for room, %lu for memory; %lu KiB held in %lu blocks, of %lu KiB",
+               (unsigned long)kept.hits, (unsigned long)kept.made, (unsigned long)kept.evicted,
+               (unsigned long)kept.no_room, (unsigned long)kept.no_memory,
+               (unsigned long)(kept.bytes / 1024), (unsigned long)kept.entries, (unsigned long)(kept.budget / 1024));
+    else
+        dt_put(t, "; no paint cache");
     dt_put(t, "; %lu script tasks: %lu scripts, %lu timers, %lu events",
            (unsigned long)(s_cost.scripts + s_cost.timers + s_cost.events), (unsigned long)s_cost.scripts,
            (unsigned long)s_cost.timers, (unsigned long)s_cost.events);
@@ -8792,7 +8809,9 @@ static void view_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_
     os64_gui_rect_t view = {part.x - gl.dx, part.y - gl.dy, part.w, part.h};
     cost_begin(PS_VIEW);
     yonder_paint_stage = cost_painter;
-    yonder_paint(g.page.tree, view, scroll_now(), PAGE_PAPER, s_dark ? &kDark : NULL, &v);
+    if (g.paint_cache == NULL)
+        g.paint_cache = yonder_paint_cache_new(YONDER_PAINT_CACHE_BUDGET);
+    yonder_paint(g.page.tree, view, scroll_now(), PAGE_PAPER, s_dark ? &kDark : NULL, g.paint_cache, &v);
     yonder_paint_stage = NULL;
     box_bars(&gl, view);
     cost_end(PS_VIEW);
@@ -9815,6 +9834,9 @@ int main(int argc, char **argv)
     forms_drop();
     page_clear(&g.page);
     page_clear(&g.coming.page);
+    // After the departure write (page_clear), which reads its counts.
+    yonder_paint_cache_free(g.paint_cache);
+    g.paint_cache = NULL;
     way_jar_free(g.way.jar);
     if (g.cache != NULL)
         way_cache_close(g.cache);

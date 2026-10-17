@@ -205,9 +205,123 @@ at the top the main thread ~75% and the ticker ~25%, and at the bottom
 middle, Scratch 2000.exe beside the GIF strip, still fills the main
 thread: its paints are gradients and shadows (perf-2).
 
-**perf-2:** the gradient and shadow caches — each box's gradient pixels
-and blurred shadow mask kept between paints, keyed by what draws them —
-with their lifecycle table here before their code.
+**perf-2: the paint cache.** What a gradient and a blurred shadow cost is
+arithmetic on values that rarely change: a gradient works out each pixel
+in doubles (a hypot, often a pow), and a shadow blurs its mask six times.
+Both are worked out again for the dirty part at every paint, so a GIF
+beside a panel of gradient buttons pays for the panel eleven times a
+second. The cache keeps what that arithmetic makes, keyed by the values
+that make it, and a paint copies its part out.
+
+*What an entry is.* A gradient's entry is part of its TILE — the picture
+one copy of the gradient is, `w` x `h` (the tile's size, which for a
+gradient is its positioning area or what `background-size` makes of it),
+each pixel straight-alpha ARGB already relit for a dark page. Where a box
+draws the tile, how it repeats, and the box's rounded corners are not in
+it: a paint takes each pixel it draws from the tile (wrapped, as `wrap`
+does) and cuts it to the corners as it does now. A shadow's entry is part
+of its whole MASK — the shape's coverage, blurred, times what the box
+allows (outside its border box, or inside its padding box) — across the
+shape and the blur's reach around it, before its colour: a paint lays the
+view's part of it on in the colour, as `mask_emit` does now. An entry is
+one BLOCK of its picture, 128 x 128 pixels (less at the picture's right
+and bottom edges), and a paint makes only the blocks its part reads. So a
+picture larger than the view — a page-long box, or a tile
+`background-size` makes two and a half times its box, which an animated
+`background-position` slides under the box — is kept as the view's
+share of it, and a slide makes only the blocks a 128-pixel edge brings
+into view.
+
+*The key is what draws it, after it is worked out.* A gradient's: its
+kind, whether it repeats, its line (the direction and length) or its ray
+(centre and radii), its stops RESOLVED — positions, colours with
+currentColor already the box's, hints — the tile's size, whether the page
+is dark, and the block's place. Two gradients written differently that
+resolve the same share entries; one gradient on two boxes of one size
+shares them; a layout that makes the same box again finds them. A
+shadow's: its shape and the shape it is cut to, both moved so the mask's
+corner is (0, 0) — moved by whole pixels, which changes no pixel's
+coverage — whether it is inset, the blur, the mask's size, and the
+block's place. Its colour and offset are not in the key: the offset is in
+where the shape is, and the colour is laid on after.
+
+*The same pixels, by construction.* A tile pixel is the colour the
+gradient gives at its middle, which is what the uncached path asks at
+`x + 0.5 - tx` wrapped — the same doubles, since every operand is a whole
+number plus a half. The mask blocks a paint is missing are made
+together, as the uncached path makes the view's part: their pixels and
+the blur's reach around them, blurred once and cut into blocks after —
+a block blurring a halo of its own would cost, with a wide blur, many
+times what the whole does (Codex, #284 round 2) — and every pixel at
+least the reach inside a cut edge is the infinite plane's (the reasoning
+at `shadow_cast`, which holds on each axis). What every missing block
+needs is worked out before any entry is made, so an entry is published
+only once nothing can fail before it is filled. So a page painted with the cache is the page painted without it,
+pixel for pixel, and that is the test: the host suite paints each of its
+pages both ways, again after moving and duplicating boxes, and again with
+a budget too small to hold them, and the verbs each records must be the
+same.
+
+*What is not kept.* A gradient that is one colour (the flat ellipse, a
+repeat shorter than a pixel) is a fill, already cheap; an outer square
+shadow with no blur is rectangles, already cheap.
+
+| State | Begun | Changed | Let go |
+|---|---|---|---|
+| An entry (one block of a tile or a mask, and its key) | made at the first paint that draws from a block not held, when every block that picture's part needs fits (below) | used at each paint that draws from it: it goes to the front of the list, stamped with the paint; RELEASED — stamped with no paint and put at the back — when its picture's part could not be had whole | evicted from the back of the list when making another would pass the budget, if no paint has used it in the last two; all of them when another page is shown, and at exit |
+| The budget | 32 MiB across both kinds — pixels, keys and each entry's own bytes | — | — |
+| The list (most recently used first) and the table (by key's hash) | with the first entry | at each entry made, used, released or evicted | with the last entry |
+| The cache's counts (blocks found and made, evicted, pictures not kept and why, bytes and blocks held) | with the paint counts | at each draw that asks | restarted with the paint counts; written in the record's `paint:` section |
+
+*A picture is kept whole or not at all, and a paint never churns.* For
+each picture, a paint first finds the blocks its part needs that are
+held, then asks whether the rest fit — in what is free and what may be
+evicted — and only then makes them. When they do not fit, it makes none,
+releases the ones it found, and works the picture out for the view's part
+as the uncached path does; a block whose memory is refused releases the
+picture's blocks the same way. Nothing a picture cannot use is left
+holding the budget. And an entry used by this paint or the one before it
+is never evicted: a paint that needs more than the budget keeps the same
+pictures every paint and works out the same others, instead of evicting
+each block just before the same paint wants it again (the P5's reading
+below is what that looks like). A view whose pictures pass the budget
+costs what it costs today, and never more.
+
+*Who owns it.* The window does (`g`), and hands it to `yonder_paint`; NULL
+paints as before, which is how the host suite paints its oracle. It is
+emptied when another page is shown, not at a layout, a zoom, a resize or
+a dark toggle: the keys already say all of those, and what they made
+ages out. One window paints on one thread, so the cache has no lock.
+
+*The first reading (QEMU, emulated; the proportions are the point; the
+cache then kept bands, below).* danlegt's top from the local mirror,
+scripts on, the view 828 px wide, the same build with and without the
+cache (only `/bin/yonder` differs), 47 s each after the page settled:
+without it, 290 paints, every one a whole view, 130.4 ms each, gradients
+64.1 of them; with it, 608 paints (384 whole views), 59.5 ms each,
+gradients 16.3 — what is left is laying the copied pixels on the glass,
+which the cache does not change. The cache held 6 bands, 315 KiB, and
+found 1824 bands without making one. The main loop stayed busy (98-99%):
+it spends what it saved on painting twice as often, so the next reading
+to ask for is the P5's.
+
+*The P5's first reading, and why entries are blocks* (Chris, record
+0104, the screen 1920x1080, yonder full screen, the view about 1.75 Mpx;
+the cache then kept full-width bands of 64K pixels in 16 MiB and evicted
+least recently used first, whoever had used it). The top: 60 paints a
+second at 5.5 ms, gradients 0.3; the bottom: 20 a second, every one a
+whole view, at 10.9 ms (12.3 at half the view, before). The middle,
+Scratch 2000.exe beside the GIF strip: gradients still 25.7 ms a paint,
+the loop 93% busy — in 25 s the cache made 4237 bands, evicted 4130, and
+worked 2726 pictures out for want of room. Scratch 2000's panel lays
+three gradients at `background-size: 160% 160%, 170% 170%, 260% 260%`,
+slid by an animation of `background-position`, under a scanline
+gradient: a band the width of a tile 2.6 times the box's keeps 2.6 times
+what the view shows, the panel's share passed the budget, and LRU evicted
+each band just before the same paint wanted it. Blocks keep the view's
+share; the last two paints' entries are not evicted; and a picture whose
+blocks do not fit takes none of the budget (Codex, #284 round 1, found
+that last from the code).
 
 **Then measure again**, and decide whether these are still worth their
 complexity:
