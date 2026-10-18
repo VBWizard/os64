@@ -429,6 +429,9 @@ void kernel_init()
 	create_kernel_task();
 
 	ap_initialization_handler();
+	// Every thread, the BSP last, has now written its speculation controls:
+	// the one moment the report can say what the whole machine runs under.
+	spec_ctrl_report();
 
 	// Route the PIT through the IOAPIC. The vector is named rather than
 	// hard-coded because moving it is a live question, not a settled one — the

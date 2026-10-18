@@ -274,3 +274,48 @@ vector127:
     pop rax
 	sti
 	iretq
+
+# IPI_SPEC_CTRL_VECTOR (0x85) — write this thread's SPEC_CTRL to the policy
+# in force (spec_ctrl_set_policy). One MSR write and an EOI; the save-all
+# shape of vector130 because the C half runs on whatever was interrupted.
+.globl vector133
+vector133:
+	cld
+	cli
+	push rax
+	push rbx
+	push rcx
+	push rdx
+	push rsi
+	push rdi
+	push rbp
+	push r8
+	push r9
+	push r10
+	push r11
+	push r12
+	push r13
+	push r14
+	push r15
+	pushf
+	IRQ_ACCOUNT_ENTER 136
+	call spec_ctrl_apply_ISR
+	IRQ_ACCOUNT_EXIT
+	popf
+	pop r15
+	pop r14
+	pop r13
+	pop r12
+	pop r11
+	pop r10
+	pop r9
+	pop r8
+	pop rbp
+	pop rdi
+	pop rsi
+	pop rdx
+	pop rcx
+	pop rbx
+	pop rax
+	sti
+	iretq

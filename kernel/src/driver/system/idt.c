@@ -5,6 +5,7 @@ extern void vector123();
 extern void vector130();
 extern void vector131();   // IPI_WATCHPOINT_SYNC_VECTOR — watchpoint.c's per-core sync
 extern void vector132();   // IPI_FREEZE_VECTOR — stop every other core before a fatal report
+extern void vector133();   // IPI_SPEC_CTRL_VECTOR — write this thread's speculation controls
 extern void vector124();
 extern void vector125();
 extern void vector138();
@@ -165,6 +166,7 @@ void initialize_idt() {
 	set_idt_entry(IPI_ACCT_SETTLE_VECTOR, (uint64_t)&vector130, 0x28, 0x8E);		// CPU-time settle-on-read IPI
 	set_idt_entry(IPI_WATCHPOINT_SYNC_VECTOR, (uint64_t)&vector131, 0x28, 0x8E);	// Debug-register sync IPI
 	set_idt_entry(IPI_FREEZE_VECTOR, (uint64_t)&vector132, 0x28, 0x8E);		// Freeze-the-machine IPI
+	set_idt_entry(IPI_SPEC_CTRL_VECTOR, (uint64_t)&vector133, 0x28, 0x8E);		// Speculation-policy IPI
 	set_idt_entry(IPI_DISABLE_SCHEDULING_VECTOR, (uint64_t)&vector124, 0x28, 0x8E);		// AP Disable IPI
 	set_idt_entry(IPI_ENABLE_SCHEDULING_VECTOR, (uint64_t)&vector125, 0x28, 0x8E);		// AP Enable IPI
 	set_idt_entry(IPI_TIMER_SCHEDULE_VECTOR, (uint64_t)&_schedule_ap, 0x28, 0x8E);		// AP Scheduler (timer ISR)

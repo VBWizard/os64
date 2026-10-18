@@ -19,6 +19,7 @@
 #include "kmalloc.h"
 #include "memory/vma.h"        // call_in_kernel_context
 #include "printd.h"
+#include "smp_core.h"          // spec_ctrl_set_policy — the root file's `speculation =`
 #include "spinlock.h"
 #include "strings/strcmp.h"
 #include "strings/strlen.h"
@@ -299,6 +300,12 @@ static void root_line(const char *key, const char *value, void *user)
 	if (strcmp(key, "conf") == 0) {
 		conf_set_path(value);
 		*found = true;
+	} else if (strcmp(key, "speculation") == 0) {
+		// The CPU's speculation controls, machine-wide (smp_core.c). Read
+		// here because this is the system's root file and the setting is
+		// upstream of every program: the threads it governs are already
+		// running by the time any other file could be found.
+		spec_ctrl_set_policy(value);
 	}
 	// Unknown keys are NOT an error here. /etc/os64.conf is the system's root
 	// config and is expected to accumulate other knobs; a walker that
