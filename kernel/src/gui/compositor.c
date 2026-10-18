@@ -107,16 +107,10 @@ void gui_unlock(uint64_t irqflags)
 	spinlock_release_irqrestore(&kGuiLock, irqflags);
 }
 
-void gui_composite_counts(gui_composite_count_t *out)
+void gui_lock_counts(gui_lock_count_t *out, gui_composite_count_t *comp, bool restart)
 {
 	uint64_t flags = gui_lock(GUI_LOCK_OTHER);
-	*out = s_composite_counts;
-	gui_unlock(flags);
-}
-
-void gui_lock_counts(gui_lock_count_t *out, bool restart)
-{
-	uint64_t flags = gui_lock(GUI_LOCK_OTHER);
+	*comp = s_composite_counts;
 	for (int s = 0; s < GUI_LOCK_SITES; s++) {
 		out[s] = s_lock_counts[s];
 		if (restart)

@@ -52,14 +52,6 @@ typedef struct {
 	uint64_t max_wait_cycles, max_hold_cycles;
 } gui_lock_count_t;
 
-uint64_t gui_lock(gui_lock_site_t site);
-void gui_unlock(uint64_t irqflags);
-// Every site's counts into `out` (GUI_LOCK_SITES of them), the worst wait
-// and hold of each restarted when `restart`, so each read reports the
-// stretch since the last. The read is counted as OTHER.
-void gui_lock_counts(gui_lock_count_t *out, bool restart);
-const char *gui_lock_site_name(gui_lock_site_t site);
-
 // What the compositor's passes did (/sys/gui): every pass, the passes that
 // composited anything, the rectangles and pixels composited, how often the
 // damage list was full and fell back to one union of everything
@@ -71,7 +63,16 @@ typedef struct {
 	uint64_t passes, drawn, rects, pixels, collapses;
 	uint64_t holds[GUI_COMPOSITE_HOLD_BUCKETS];
 } gui_composite_count_t;
-void gui_composite_counts(gui_composite_count_t *out);
+
+uint64_t gui_lock(gui_lock_site_t site);
+void gui_unlock(uint64_t irqflags);
+// Every site's counts into `out` (GUI_LOCK_SITES of them) and the
+// compositor's into `comp`, in one hold of the lock so the two agree (the
+// composite site's acquisitions are the compositor's passes). The worst wait
+// and hold of each site restart when `restart`, so each read reports the
+// stretch since the last. The read is counted as OTHER.
+void gui_lock_counts(gui_lock_count_t *out, gui_composite_count_t *comp, bool restart);
+const char *gui_lock_site_name(gui_lock_site_t site);
 
 #include "gui/gui_types.h"
 

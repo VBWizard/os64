@@ -104,7 +104,7 @@ a few long passes or many ordinary ones.
 
 | State | Begun | Changed | Read | Let go |
 |---|---|---|---|---|
-| The compositor's counts | zero at boot | per pass, per collapse, and per composite-site release, all under the lock | by `/sys/gui` (`gui_composite_counts`) | never |
+| The compositor's counts | zero at boot | per pass, per collapse, and per composite-site release, all under the lock | by `/sys/gui` (`gui_lock_counts`, with the lock lines) | never |
 
 **The first reading (QEMU, emulated).** Two windows, idle, 27,044 passes
 (the composite site's acquisitions, as they should be), 31 that drew, no
