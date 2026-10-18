@@ -1386,6 +1386,25 @@ static void motion_cases(void) {
     check(strstr(g.status_text,"ANIMATIONS PAUSED")==NULL,
         "motion: a slow page with no animations has none paused");
     probe_drop();
+    /* A pause ends when nothing is left to move, and the record says so:
+     * "none", not "running" (flow_motion_pending asks whether any change
+     * is still to come, not whether anything was ever animated). */
+    now_ms=20000;
+    probe_page("<!doctype html><style>@keyframes tint{to{color:red}}"
+        "p{animation:tint 1s linear 1}</style><p>once</p>",false);
+    relayout(true);
+    g.page.diag=yonder_diag_new("http://m.test/",3,0);
+    say_laid_out(MOTION_COST_MS+1);
+    check(strstr(g.status_text,"ANIMATIONS PAUSED")!=NULL,
+        "motion: a slow page with an animation still to run pauses it");
+    now_ms=25000;
+    relayout(true);
+    say_laid_out(MOTION_COST_MS+1);
+    yonder_diag_render(g.page.diag,record,sizeof(record));
+    check(strstr(g.status_text,"ANIMATIONS PAUSED")==NULL && strstr(record,"animations: none")!=NULL,
+        "motion: a pause ends once its animations have run out, and the record says none are left");
+    yonder_diag_free(g.page.diag); g.page.diag=NULL;
+    probe_drop();
     /* The pause is the page's, not the view's: an animation in place and
      * out of view is paused all the same, and scrolling changes nothing. */
     probe_page("<!doctype html><style>body{margin:0}@keyframes tint{to{color:red}}"
@@ -4793,6 +4812,7 @@ static void webfont_cases(void) {
     pictures_settle();
     check(!s_web.moved && first_text_font()!=before && first_text_font()!=0,
           "web fonts: the page is laid out again in the face, named twice and listed once");
+
     yonder_diag_render(g.page.diag,record,sizeof(record));
     check(strstr(record,"MISSING font")==NULL,"web fonts: a family a face serves is not missing");
     diag_fonts(&g.page);
@@ -4822,6 +4842,42 @@ static void webfont_cases(void) {
               "web fonts: then the file names the font that failed");
     }
     web_drop();
+    /* The same for a font that ARRIVES: the last thing in owes the record
+     * whether it opened or failed, and an opened face moves the page, so
+     * the record waits for that layout too. */
+    fake_reset();
+    memset(&s_diag,0,sizeof(s_diag)); s_diag.next=1;
+    check(diag_dir_open()==NULL,"web fonts: the record has a directory again");
+    web_page("<style>@font-face{font-family:Web;src:url(ok.ttf)}p{font-family:Web}</style><p>hello");
+    {
+        char name[64]; yonder_diag_file_name(g.page.diag,name,sizeof(name));
+        check(font_land("ok.ttf","A",NULL) && g.page.record_owed &&
+              !has(diag_file("/tmp/diag",name),"when its pictures and fonts were in"),
+              "web fonts: the last font in, opened, owes the record until the page is laid out again");
+        pictures_settle();
+        check(!g.page.record_owed &&
+              has(diag_file("/tmp/diag",name),"\nwritten: when its pictures and fonts were in\n"),
+              "web fonts: then the record is written");
+    }
+    web_drop();
+    /* A source the layout cannot keep is refused silently on the record,
+     * and the badge is told after that layout (webfonts_feed). Reached
+     * here through memory: the face's address is a length nothing else on
+     * the page allocates, so failing that size fails only the copy of it
+     * the font table keeps (webfonts_add). */
+    {
+        char html[1024], src[701];
+        memset(src,'k',sizeof(src)-1); src[sizeof(src)-1]='\0';
+        snprintf(html,sizeof(html),"<style>@font-face{font-family:Web;src:url(%s.ttf)}p{font-family:Web}</style><p>hello",src);
+        g.badge_missing=g.badge_failed=0; g.badge_text[0]=0;
+        fail_size=strlen("https://fixture.test/")+strlen(src)+strlen(".ttf")+1;
+        web_page(html);
+        fail_size=0;
+        check(s_web.nfiles==0 && yonder_diag_failed_lines(g.page.diag)==1 &&
+              strstr(g.badge_text,"FAILED 1")!=NULL && !g.badge.hidden,
+              "web fonts: a source the layout could not keep is told on the badge");
+        web_drop();
+    }
     /* A face's next source, wanted by the layout after its first failed,
      * is waited for too: the file is not written while it is out. */
     fake_reset();

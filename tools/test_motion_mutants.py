@@ -70,6 +70,11 @@ UI_SETTINGS = 'userland/libos64/ui_settings.c'
 
 GARB = 'bash tools/test_garb_host.sh'
 LIBFLOW = 'bash tools/test_libflow_host.sh --motion'
+# The longest one mutant's cases may run. A motion case takes about 70-150 s
+# even with twenty harnesses running beside it; one that took the old
+# 1800 s cap was a stall, not a slow test (it ran in 95 s alone), and the
+# whole run waited on it. A timeout counts as caught, as it always has.
+CASE_SECONDS = 600
 WINDOW = 'bash tools/test_yonder_scripts_host.sh'
 UI_TEXT = 'python3 tools/test_ui_text_host.py --real'
 
@@ -1158,7 +1163,7 @@ for name, rel, old, new, cases in mutants:
         with log.open('w') as out:
             try:
                 result = subprocess.run(['bash', '-c', cases], cwd=root, stdout=out, stderr=out,
-                                        timeout=1800)
+                                        timeout=CASE_SECONDS)
                 code = result.returncode
             except subprocess.TimeoutExpired:
                 code = 'timeout'
