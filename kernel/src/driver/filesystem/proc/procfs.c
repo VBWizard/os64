@@ -50,7 +50,7 @@
 #include "CONFIG.h"
 #include "BasicRenderer.h"   // printf — the mount line belongs on the glass too
 #include "smp.h"             // core_local_storage_t (/proc/self's identity read)
-#include "smp_core.h"        // mpAcctSettleAll — the status files' freshness contract
+#include "smp_core.h"        // mpAcctSettleAll — status and syscall table freshness
 #include "accounting.h"
 #include "syscall.h"          // syscall_table names for the timing rows
 #include "os64/heap.h"       // os64_heap_report_t — what ring 3 publishes for /proc/<id>/heap
@@ -1218,6 +1218,9 @@ static void proc_gen_thread_status(synth_text_t *t, task_t *task, thread_t *th)
 // copies, so the task file does not claim one simultaneous instant.
 static void proc_gen_syscalls(synth_text_t *t, task_t *task, thread_t *single)
 {
+	// Match status: settle open spans before taking coherent row copies.
+	// mpAcctSettleAll coalesces nearby /proc reads to one request per tick.
+	mpAcctSettleAll();
 	accounting_syscall_row_t sums[ACCOUNTING_SYSCALL_ROWS] = {0};
 	accounting_syscall_row_t rows[ACCOUNTING_SYSCALL_ROWS];
 	for (thread_t *th = single ? single : task->threads; th != NULL;
