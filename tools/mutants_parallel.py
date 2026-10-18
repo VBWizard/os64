@@ -76,7 +76,7 @@ for d in dirs:
 NAME = re.compile(r"^\s{4}\('([^']+)',", re.M)
 # A harness is not a suite, so a name ending _mutants.py is never one.
 SUITE = re.compile(r"\b((?:bash|python3) tools/(?!\w*_mutants\.py)\w+\.(?:sh|py)(?: --[\w-]+)*)")
-BARE = re.compile(r"""['"](tools/(?!\w*_mutants\.py)\w+\.(sh|py))['"]""")
+BARE = re.compile(r"""['"](tools/(?!\w*_mutants\.py)\w+\.(sh|py)(?: --[\w-]+)*)['"]""")
 VERDICT = re.compile(r'^([a-z0-9][a-z0-9-]*): (caught|MISSED|did not build)$', re.M)
 TIMEOUT = re.compile(r'\btimeout=(\w+)')
 
