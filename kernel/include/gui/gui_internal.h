@@ -60,6 +60,19 @@ void gui_unlock(uint64_t irqflags);
 void gui_lock_counts(gui_lock_count_t *out, bool restart);
 const char *gui_lock_site_name(gui_lock_site_t site);
 
+// What the compositor's passes did (/sys/gui): every pass, the passes that
+// composited anything, the rectangles and pixels composited, how often the
+// damage list was full and fell back to one union of everything
+// (gui_damage_add_locked), and its holds of kGuiLock by length, so a run of
+// long passes shows. Bucket k counts holds under 250 us << k, the last
+// those longer. Written under kGuiLock.
+#define GUI_COMPOSITE_HOLD_BUCKETS 7
+typedef struct {
+	uint64_t passes, drawn, rects, pixels, collapses;
+	uint64_t holds[GUI_COMPOSITE_HOLD_BUCKETS];
+} gui_composite_count_t;
+void gui_composite_counts(gui_composite_count_t *out);
+
 #include "gui/gui_types.h"
 
 // Damage accumulation for callers that ALREADY hold kGuiLock (wm_* internals,

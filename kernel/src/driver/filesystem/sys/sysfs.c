@@ -1343,6 +1343,19 @@ static void sys_gen_gui(synth_text_t *t)
 		                sys_cycles_to_us(l->wait_cycles), sys_cycles_to_us(l->hold_cycles),
 		                sys_cycles_to_us(l->max_wait_cycles), sys_cycles_to_us(l->max_hold_cycles));
 	}
+	// What the compositor's passes did, totals since boot: a pass that
+	// composited nothing is the idle wake at the tick; a collapse is the
+	// damage list full and turned into one union of everything, which makes
+	// the next pass long (GUI_LOCK.md). Then its holds by length.
+	gui_composite_count_t comp;
+	gui_composite_counts(&comp);
+	synth_text_addf(t, "compositor: %lu passes, %lu drew, %lu rectangles, %lu pixels, "
+	                "%lu collapses of the damage list into one\n",
+	                comp.passes, comp.drawn, comp.rects, comp.pixels, comp.collapses);
+	synth_text_addf(t, "compositor holds: under 250 us %lu, under 500 us %lu, under 1 ms %lu, "
+	                "under 2 ms %lu, under 4 ms %lu, under 8 ms %lu, 8 ms or more %lu\n",
+	                comp.holds[0], comp.holds[1], comp.holds[2], comp.holds[3], comp.holds[4],
+	                comp.holds[5], comp.holds[6]);
 }
 
 // ── /sys/net (2026-08-20) ───────────────────────────────────────────────────
