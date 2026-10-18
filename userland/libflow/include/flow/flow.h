@@ -1049,6 +1049,21 @@ uint64_t flow_motion_tick_due(const flow_tree_t *tree, os64_gui_rect_t view, flo
 bool flow_motion_tick(flow_tree_t *tree, uint64_t now, flow_point_t scroll,
                       void (*mark)(void *ctx, const flow_box_t *box, os64_gui_rect_t r), void *ctx,
                       bool *moved);
+// What a layout made for the page's animations alone changed between the
+// tree on screen (`was`) and the one laid out to replace it (`now`), both
+// alive (YONDER_PERF.md § perf-4): when the two are the same boxes laid out
+// alike, and every value that changed is drawn where its element draws (the
+// in-place class and the tick set), `mark` is handed, from each tree in
+// turn, what each changed element paints — as flow_motion_tick hands a
+// tick's — and each box drawn outside it that takes from it what changed,
+// in page coordinates at `scroll`; true. False when they cannot be bounded
+// so — a box moved, the trees differ, a value changed that a layout
+// places, an element whose background the canvas may take, one with no box
+// of its own — or there is no memory: then repaint the whole view. Both
+// trees must be the page's at one width, zoom and cascade; what else the
+// page changed is the caller's to have marked.
+bool flow_layout_parts(const flow_tree_t *was, const flow_tree_t *now, flow_point_t scroll,
+                       void (*mark)(void *ctx, const flow_box_t *box, os64_gui_rect_t r), void *ctx);
 // Whether an animation of the tree, wherever its element is, still has a
 // change to show after the tree's time (flow_env_t.now_ms): one running,
 // or waiting out its delay — not one paused, over, or of nothing that can

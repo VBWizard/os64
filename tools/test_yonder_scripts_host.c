@@ -1198,6 +1198,59 @@ static void tick_cases(void) {
     clock_step=0;
 }
 
+/* A LAYOUT REPAINTS WHAT IT CHANGED (YONDER_PERF.md § perf-4): a layout
+ * for the animations alone whose changes are drawn in place marks the
+ * changed element, not the view, and the record counts it; one that moves
+ * a box marks the whole view, as before. */
+static const char kPartPage[]="<!doctype html><style>body{margin:0}"
+    "@keyframes glow{to{color:red}}@keyframes grow{to{width:300px}}"
+    "#c{width:40px;height:20px;animation:glow 1s linear infinite}"
+    "#w{width:40px;height:20px}</style><div id=c>x</div><div id=w>x</div>";
+static const char kGrowPage[]="<!doctype html><style>body{margin:0}"
+    "@keyframes grow{to{width:300px}}#w{width:40px;height:20px;animation:grow 1s linear infinite}"
+    "</style><div id=w>x</div>";
+
+static void motion_part_cases(void) {
+    bool was_run=s_animations, was_reduce=s_reduce_motion;
+    s_animations=true; s_reduce_motion=false;
+    clock_step=0; geometry_layout_delay=0;
+    for(int grow=0;grow<2;grow++) {
+        now_ms=100;
+        probe_page(grow?kGrowPage:kPartPage,false);
+        relayout(true);
+        motion_painted();
+        g.ui.any_dirty=false;
+        uint64_t parts_was=s_cost.layouts_parts;
+        now_ms=400;
+        motion_tick();
+        os64_gui_rect_t d=g.ui.dirty, v=g.view.bounds;
+        bool whole=d.x<=v.x && d.y<=v.y && d.x+d.w>=v.x+v.w && d.y+d.h>=v.y+v.h;
+        if(!grow)
+            check(g.ui.any_dirty && !whole && d.h<=40 && s_cost.layouts_parts==parts_was+1,
+                "layout parts: a colour's frame marks its element, not the view, and is counted");
+        else
+            check(g.ui.any_dirty && whole && s_cost.layouts_parts==parts_was,
+                "layout parts: a frame that moves a box marks the whole view");
+        motion_painted();
+        if(!grow) {
+            /* A sheet that changed waits for no layout of its own: the next
+             * frame's layout reads another cascade, so it marks the view. */
+            g.page.sheets_changed=true;
+            g.ui.any_dirty=false;
+            parts_was=s_cost.layouts_parts;
+            now_ms=700;
+            motion_tick();
+            d=g.ui.dirty;
+            whole=d.x<=v.x && d.y<=v.y && d.x+d.w>=v.x+v.w && d.y+d.h>=v.y+v.h;
+            check(g.ui.any_dirty && whole && s_cost.layouts_parts==parts_was,
+                "layout parts: a frame laid out from another cascade marks the whole view");
+            motion_painted();
+        }
+        probe_drop();
+    }
+    s_animations=was_run; s_reduce_motion=was_reduce;
+}
+
 static void motion_cases(void) {
     bool was_run=s_animations, was_reduce=s_reduce_motion;
     s_animations=true; s_reduce_motion=false;
@@ -4518,7 +4571,7 @@ static void paint_cost_cases(void) {
     cost_reset();
     diag_paint(&g.page);
     yonder_diag_render(g.page.diag,rec,sizeof(rec));
-    check(strstr(rec,"\npaint: nothing painted in 0.0 s; 0 ticks, 0 schedules; too short a span to time; 0 layouts, 0 of them for animations; ")!=NULL &&
+    check(strstr(rec,"\npaint: nothing painted in 0.0 s; 0 ticks, 0 schedules; too short a span to time; 0 layouts, 0 of them for animations, 0 of those repainting only what they changed; ")!=NULL &&
           strstr(rec,"paint stages")==NULL,
           "paint counts: nothing painted says so, and a span too short to time has no stages");
     check(lay_out_page(&g.page,800,600) && s_cost.layouts==1 && s_cost.total[PS_LAYOUTS]>0,
@@ -4530,7 +4583,7 @@ static void paint_cost_cases(void) {
     s_cost.from_cycles=cycles()-1000000000000ull;
     s_cost.from_us=os64_micros()-1000000000;
     s_cost.paints=2; s_cost.whole=1; s_cost.pixels=3000000; s_cost.ticks=4; s_cost.schedules=5;
-    s_cost.layouts=3; s_cost.layouts_motion=2;
+    s_cost.layouts=3; s_cost.layouts_motion=2; s_cost.layouts_parts=1;
     s_cost.waited=250000000000ull;   /* a quarter of the span asleep */
     s_cost.total[PS_SCHEDULE]=5000000;
     s_cost.total[PS_RENDER]=24000000; s_cost.most[PS_RENDER]=13000000;
@@ -4541,7 +4594,7 @@ static void paint_cost_cases(void) {
     diag_paint(&g.page);
     yonder_diag_render(g.page.diag,rec,sizeof(rec));
     check(strstr(rec,"\npaint: 2 paints in 1000.0 s (1 whole views), 3.0 Mpx of the view; 4 ticks, 5 schedules; "
-                     "the main loop busy 75%; 3 layouts, 2 of them for animations; frames late at most 0 ms, 0 more than 30 ms; the longest wait 0 ms; no paint cache; 0 script tasks: 0 scripts, 0 timers, 0 events; 0 bells taken; the ticker not running; deadlines already past when handed to it: settle 0, "
+                     "the main loop busy 75%; 3 layouts, 2 of them for animations, 1 of those repainting only what they changed; frames late at most 0 ms, 0 more than 30 ms; the longest wait 0 ms; no paint cache; 0 script tasks: 0 scripts, 0 timers, 0 events; 0 bells taken; the ticker not running; deadlines already past when handed to it: settle 0, "
                      "layouts 0, ticks 0, arrival 0, stream 0, timers 0, pictures 0\n")!=NULL &&
           strstr(rec,", schedule (a call) 1.0 (0.0)")!=NULL &&
           strstr(rec,"paint stages: ms a paint (most): render 12.0 (13.0), view 10.0 (0.0)")!=NULL &&
@@ -6041,6 +6094,7 @@ int main(void)
     native_refusals();
     switch_cases();
     motion_cases();
+    motion_part_cases();
     tick_cases();
     edit_and_kind_changes();
     password_edits();

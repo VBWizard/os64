@@ -2244,6 +2244,23 @@ static bool ticks_in_place(garb_prop_t p)
     }
 }
 
+bool f_styles_same(const flow_style_t *a, const flow_style_t *b)
+{
+    for (int p = 0; p < GARB_NPROPS; p++)
+        if (!same_value((garb_prop_t)p, a, b))
+            return false;
+    return true;
+}
+
+bool f_props_drawn_in_place(const FProps *props)
+{
+    for (int p = 0; p < GARB_NPROPS; p++)
+        if (f_props_has(props, (garb_prop_t)p) && !repaints_in_place((garb_prop_t)p) &&
+            !ticks_in_place((garb_prop_t)p))
+            return false;
+    return true;
+}
+
 bool f_motion_ticks(const FMotion *m)
 {
     for (int32_t a = 0; a < m->nanims; a++)
@@ -2253,6 +2270,20 @@ bool f_motion_ticks(const FMotion *m)
                 return false;
     return true;
 }
+
+bool f_motion_changed_props(const FMotion *m, const flow_style_t *a, const flow_style_t *b, FProps *out)
+{
+    bool any = false;
+    for (int32_t i = 0; i < m->nanims; i++)
+        for (int p = 0; p < GARB_NPROPS; p++)
+            if (f_props_has(&m->anims[i].props, (garb_prop_t)p) && animatable((garb_prop_t)p) &&
+                !f_props_has(out, (garb_prop_t)p) && !same_value((garb_prop_t)p, a, b)) {
+                f_props_add(out, (garb_prop_t)p);
+                any = true;
+            }
+    return any;
+}
+
 
 bool f_motion_changed(const FMotion *m, const flow_style_t *a, const flow_style_t *b)
 {

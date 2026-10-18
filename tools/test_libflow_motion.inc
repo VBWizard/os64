@@ -3744,6 +3744,202 @@ static void motion_tick_mark_cases(void)
     moving_close(&m);
 }
 
+// The page laid out again at `now` beside the tree on screen, not shown:
+// what a face does before it hands the old tree's parts over.
+static flow_tree_t *moving_beside(Moving *m, uint64_t now)
+{
+    m->p.env.now_ms = now;
+    return flow_layout(m->p.doc, m->p.page, 800, &m->p.env);
+}
+
+// Whether a mark was handed for a box of `node`, in either tree, and the
+// marks for its boxes joined.
+static bool marks_node(const TickMarks *k, const os64_html_node_t *node, os64_gui_rect_t *joined)
+{
+    bool any = false;
+    int64_t x0 = INT64_MAX, y0 = INT64_MAX, x1 = INT64_MIN, y1 = INT64_MIN;
+    for (int i = 0; i < k->n; i++)
+        if (k->box[i]->node == node) {
+            any = true;
+            x0 = k->r[i].x < x0 ? k->r[i].x : x0;
+            y0 = k->r[i].y < y0 ? k->r[i].y : y0;
+            x1 = (int64_t)k->r[i].x + k->r[i].w > x1 ? (int64_t)k->r[i].x + k->r[i].w : x1;
+            y1 = (int64_t)k->r[i].y + k->r[i].h > y1 ? (int64_t)k->r[i].y + k->r[i].h : y1;
+        }
+    if (any && joined != NULL)
+        *joined = (os64_gui_rect_t){(int32_t)x0, (int32_t)y0, (int32_t)(x1 - x0), (int32_t)(y1 - y0)};
+    return any;
+}
+
+// What a layout for the animations alone changed (flow_layout_parts): the
+// element whose values are drawn in place, where it was and is, and the
+// boxes drawn outside it that take what changed — by the rule the view's
+// question asks (stacked_from); nothing for a value holding still; and no
+// parts at all where a layout placed something, the canvas may take the
+// background, or the element has no box of its own.
+static void motion_layout_part_cases(void)
+{
+    static const struct {
+        const char *name, *style, *body, *id;
+        bool bounded, marks;
+    } kParts[] = {
+        {"layout parts: a text shadow marks its element", "@keyframes a{to{text-shadow:0 -10px 0 red}}",
+         "<div id=x style='animation:a 1s linear'>x</div>", "x", true, true},
+        {"layout parts: a colour marks its element", "@keyframes a{to{color:red}}",
+         "<div id=x style='animation:a 1s linear'>x</div>", "x", true, true},
+        {"layout parts: a turning element marks its group, what it holds drawn outside it included",
+         "@keyframes a{to{transform:rotate(90deg)}}",
+         "<div id=x style='animation:a 1s linear'><p style='position:absolute;left:400px;margin:0'>x</p></div>",
+         "x", true, true},
+        {"layout parts: a fading element marks its group, what it holds drawn outside it included",
+         "@keyframes a{to{opacity:.3}}",
+         "<div id=x style='animation:a 1s linear'><p style='position:absolute;left:400px;margin:0'>x</p></div>",
+         "x", true, true},
+        {"layout parts: a fixed box inside takes an inherited colour",
+         "@keyframes a{to{color:red}}",
+         "<div style='margin-top:200px;animation:a 1s linear'><p id=x style='position:fixed;top:0;margin:0'>x</p></div>",
+         "x", true, true},
+        {"layout parts: a positioned box inside takes a background by keyword",
+         "@keyframes a{to{background-color:blue}}",
+         "<div style='position:relative;margin-top:200px;animation:a 1s linear'>"
+         "<p id=x style='position:absolute;top:-150px;margin:0;background:inherit'>x</p></div>",
+         "x", true, true},
+        {"layout parts: one with a background of its own takes nothing",
+         "@keyframes a{to{background-color:blue}}",
+         "<div style='position:relative;margin-top:200px;animation:a 1s linear'>"
+         "<p id=x style='position:absolute;top:-150px;margin:0;background:green'>x</p></div>",
+         "x", true, false},
+        {"layout parts: nothing for a value holding still", "@keyframes a{to{color:red}}",
+         "<div id=x style='animation:a 1s steps(1,end)'>x</div>", "x", true, false},
+        {"layout parts: none where a layout places what changed", "@keyframes a{to{width:300px}}",
+         "<div id=x style='animation:a 1s linear'>x</div>", "x", false, false},
+        {"layout parts: none for the background the canvas takes",
+         "@keyframes a{to{background-color:blue}}body{animation:a 1s linear}",
+         "<div id=x>x</div>", "x", false, false},
+        {"layout parts: none for an element with no box of its own", "@keyframes a{to{color:red}}",
+         "<div id=x style='display:contents;animation:a 1s linear'><span>x</span></div>", "x", false, false},
+    };
+    // Two trees of the page at two widths, its only change a colour drawn
+    // in place: the boxes moved, so the compare refuses whatever changed.
+    {
+        Moving m;
+        moving_open(&m, MOTION_STYLE "@keyframes a{to{color:red}}</style>"
+                        "<div style='animation:a 1s linear'>a line long enough to wrap at one width and not "
+                        "at the other one, which it does</div>", 1000);
+        m.p.env.now_ms = 1300;
+        flow_tree_t *narrow = flow_layout(m.p.doc, m.p.page, 300, &m.p.env);
+        TickMarks k = {.n = 0};
+        expect("layout parts: none when the boxes moved",
+               narrow != NULL && !flow_layout_parts(m.tree, narrow, (flow_point_t){0, 0}, tick_mark, &k), NULL);
+        flow_free(narrow);
+        moving_close(&m);
+    }
+    for (size_t i = 0; i < sizeof(kParts) / sizeof(*kParts); i++) {
+        char html[1024];
+        snprintf(html, sizeof(html), MOTION_STYLE "%s</style>%s", kParts[i].style, kParts[i].body);
+        Moving m;
+        moving_open(&m, html, 1000);
+        flow_tree_t *now = moving_beside(&m, 1300);
+        TickMarks k = {.n = 0};
+        bool bounded = now != NULL && flow_layout_parts(m.tree, now, (flow_point_t){0, 0}, tick_mark, &k);
+        os64_gui_rect_t joined = {0, 0, 0, 0};
+        bool marks = marks_node(&k, motion_find(m.p.doc->document, kParts[i].id), &joined);
+        char detail[96];
+        snprintf(detail, sizeof(detail), "bounded %d marks %d (%d marks, %dx%d at %d,%d)", bounded, marks,
+                 k.n, joined.w, joined.h, joined.x, joined.y);
+        bool ok = bounded == kParts[i].bounded && (!kParts[i].bounded || marks == kParts[i].marks);
+        // The parts of an element the size of a line are that size, not the view.
+        if (ok && marks)
+            ok = joined.h < 400;
+        // A group's parts reach what it draws outside its own box: the
+        // positioned box 400 px across.
+        if (ok && strstr(kParts[i].name, "group") != NULL)
+            ok = (int64_t)joined.x + joined.w > 400;
+        expect(kParts[i].name, ok, detail);
+        flow_free(now);
+        moving_close(&m);
+    }
+}
+
+// The parts against the trees themselves: after a layout whose parts are
+// handed, every box that paints otherwise in the new tree than in the old —
+// any longhand of its style — lies inside one of the marks, with its ink,
+// where it was and where it is. A box's ink alone is no test: it holds what
+// the boxes inside it reach, so an ancestor's grows with a child's shadow
+// and paints nothing new. What the rule handed is not trusted here: the
+// trees are compared box by box.
+static bool inside_a_mark(const TickMarks *k, os64_gui_rect_t r)
+{
+    for (int i = 0; i < k->n; i++)
+        if (k->r[i].x <= r.x && k->r[i].y <= r.y && (int64_t)k->r[i].x + k->r[i].w >= (int64_t)r.x + r.w &&
+            (int64_t)k->r[i].y + k->r[i].h >= (int64_t)r.y + r.h)
+            return true;
+    return r.w <= 0 || r.h <= 0;
+}
+
+static os64_gui_rect_t inked_doc_rect(const flow_box_t *b)
+{
+    os64_gui_rect_t r = flow_box_doc_rect(b, (flow_point_t){0, 0});
+    return (os64_gui_rect_t){r.x - b->ink[FLOW_LEFT], r.y - b->ink[FLOW_TOP],
+                             r.w + b->ink[FLOW_LEFT] + b->ink[FLOW_RIGHT],
+                             r.h + b->ink[FLOW_TOP] + b->ink[FLOW_BOTTOM]};
+}
+
+static void motion_layout_part_oracle_cases(void)
+{
+    static const char *const kPages[] = {
+        "@keyframes a{to{text-shadow:0 -6px 0 red}}#e{animation:a 1s linear}</style>"
+        "<div id=e>one <span>two <b>three</b></span></div>",
+        "@keyframes a{to{color:red}}#e{position:relative;animation:a 1s linear}</style>"
+        "<div id=e>x<p style='position:absolute;left:300px;top:40px;margin:0'>y</p>"
+        "<p style='position:fixed;top:300px;margin:0'>z</p><span>w</span></div>",
+        "@keyframes a{to{background-color:blue}}#e{position:relative;animation:a 1s linear}</style>"
+        "<div id=e>x<p style='position:absolute;left:300px;margin:0;background:inherit'>y</p></div>",
+        "@keyframes a{to{opacity:.4}}#e{animation:a 1s linear}</style>"
+        "<div id=e>x<p style='position:absolute;left:300px;margin:0'>y</p></div>",
+        "@keyframes a{to{transform:rotate(30deg)}}#e{animation:a 1s linear}</style>"
+        "<div id=e>x<p style='position:absolute;left:300px;margin:0'>y</p></div>",
+        "@keyframes a{to{border-top-color:red}}#e{border:3px solid blue;animation:a 1s linear}</style>"
+        "<div id=e>x</div>",
+        "@keyframes a{to{box-shadow:10px 10px 0 4px red}}#e{animation:a 1s linear}</style><div id=e>x</div>",
+    };
+    for (size_t i = 0; i < sizeof(kPages) / sizeof(*kPages); i++) {
+        char html[1024];
+        snprintf(html, sizeof(html), MOTION_STYLE "%s", kPages[i]);
+        Moving m;
+        moving_open(&m, html, 1000);
+        flow_tree_t *now = moving_beside(&m, 1300);
+        TickMarks k = {.n = 0};
+        bool bounded = now != NULL && flow_layout_parts(m.tree, now, (flow_point_t){0, 0}, tick_mark, &k);
+        int differ = 0, outside = 0;
+        const flow_box_t *x = bounded ? flow_root(m.tree) : NULL, *y = bounded ? flow_root(now) : NULL;
+        while (x != NULL && y != NULL) {
+            if (!f_styles_same(x->style, y->style)) {
+                differ++;
+                outside += !inside_a_mark(&k, inked_doc_rect(x)) || !inside_a_mark(&k, inked_doc_rect(y));
+            }
+            if (x->first != NULL) {
+                x = x->first;
+                y = y->first;
+                continue;
+            }
+            while (x != NULL && x->next == NULL) {
+                x = x->parent;
+                y = y->parent;
+            }
+            x = x != NULL ? x->next : NULL;
+            y = y != NULL ? y->next : NULL;
+        }
+        char name[96], detail[96];
+        snprintf(name, sizeof(name), "layout parts: every box that paints otherwise is marked (page %zu)", i);
+        snprintf(detail, sizeof(detail), "bounded %d, %d boxes differ, %d outside the marks", bounded, differ,
+                 outside);
+        expect(name, bounded && differ > 0 && outside == 0, detail);
+        flow_free(now);
+        moving_close(&m);
+    }
+}
+
 // A tick with each of its allocations failed in turn is not taken, leaves
 // the tree as the tick before it left it, and leaks nothing; the next one
 // is the layout's.
@@ -4009,5 +4205,7 @@ static void motion_cases(void)
     motion_held_time_cases();
     motion_tick_cases();
     motion_reach_budget_cases();
+    motion_layout_part_cases();
+    motion_layout_part_oracle_cases();
     motion_sweep();
 }

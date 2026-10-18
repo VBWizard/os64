@@ -459,9 +459,16 @@ the record's layouts by cause; perf-4b is part 2.
    yonder lays the page out for its animations alone, with nothing else
    changed since the tree on screen (no script change, no picture or
    face arrived, the same width and zoom, `LAID_FOR_MOTION`), and every
-   animated value that changed is in the in-place class, then the box
-   trees are the same boxes in the same places. Only how some of them
-   paint has changed. The old tree is still alive when the new one is
+   animated value that changed is drawn where its element draws, then the
+   box trees are the same boxes in the same places. Only how some of them
+   paint has changed. "Drawn where its element draws" is the in-place
+   class and the tick set together. A tick moves a transform between
+   layouts, so the tree on screen holds the last tick's and the next layout
+   always finds it changed: a layout that refused the tick set would refuse
+   every frame on a page that also turns something, as danlegt's ad does.
+   An element animating its transform or its opacity is a group for the
+   animation's life (`is_group`), and a group's bounds hold all it paints,
+   through its matrix, the positioned boxes inside it included. The old tree is still alive when the new one is
    ready (`page_lay_out` keeps it until `page_show`), so libflow can
    hand over, for each animated element whose values changed, what it
    painted in the old tree and what it paints in the new one. That is its
@@ -480,9 +487,11 @@ the record's layouts by cause; perf-4b is part 2.
    the whole view as now. Each of these sends a layout to the whole view:
    - a box tree of a different shape;
    - a box at a different place;
-   - a changed value outside the class;
+   - a changed value that a layout places;
    - the root's or the body's background, which the canvas takes over the
-     whole view.
+     whole view;
+   - an element with no box of its own (`display: contents`), whose
+     descendants draw what it hands them.
 
    As a check that costs one walk, libflow compares the two trees box by
    box and treats any difference as "cannot bound". It compares the count,
@@ -564,6 +573,7 @@ compositing a whole-view frame cost what they do.
 | A layout's parts (old and new paint of each changed element) | not kept: handed through the mark callback while both trees are alive, between `flow_layout` and `page_show` | — | by yonder's `mark_part`, at once | at the end of the call; the old tree is freed by `page_show` as now |
 | (No flag: whether a layout may hand parts is derived from its cause, its cascade, its sizes and the old tree, above) | — | — | — | — |
 | The record's layouts by cause: for the animations alone, and of those the ones that painted parts | at a page shown, with the other counts | at each layout | at each write of the record | with the paint counts |
+| One layout's ask for parts (`s_parts`: the page, the view and its scroll; whether they were marked) | by `lay_out_shown`, before a layout for the animations | by `page_lay_out_run`, when it hands them | by `lay_out_shown`, after the layout | cleared after the layout that read it |
 
 *Tests.*
 - libflow:
@@ -574,8 +584,12 @@ compositing a whole-view frame cost what they do.
 - The parts: the old and new paint of the changed element. The whole
   view when a box moved, the tree's shape changed, or the canvas's
   element is animated.
-- yonder's oracle, extended: after an in-place layout, repainting only
-  the parts gives the same pixels as repainting the whole view.
+- An oracle that does not trust the rule: after a layout whose parts
+  are handed, the two trees compared box by box, every box whose style
+  differs lies inside a mark, with its ink, where it was and where it
+  is.
+- yonder: a colour's frame marks its element, not the view, and the
+  record counts it; a frame that moves a box marks the whole view.
 
 *How it is measured.* The QEMU page above: no layouts at the top. Then
 the P5 at danlegt's top, middle and bottom: the whole-view paints and
@@ -592,6 +606,14 @@ out 237 times. With the heading in view (a page of only it), it animates
 as before: 668 layouts in 32 s, all of them for animations, against 600
 on perf-3. That is a layout and a whole-view paint at every frame, which
 is perf-4b's and the stepped schedule's to cut.
+
+*perf-4b's reading (QEMU).* The same page of only the heading, in view:
+1,014 layouts in 32 s, every one for animations and every one repainting
+only what it changed, and 117 paints, none of them the whole view, against
+669 whole-view paints on perf-4a. 117 paints in 32 s is the heading's 3.6
+steps a second: a layout whose step changed nothing marks nothing. The
+layouts rose because a frame got cheaper; scheduling a stepped interval at
+its steps would take them to the steps' rate too.
 
 *Questions for review.*
 1. Is the in-place class the right home for `text-shadow`? Its ink is
