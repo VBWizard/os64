@@ -961,11 +961,13 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
     }
     // A layout for the animations alone repaints what it changed: the old
     // tree is read here, before page_show frees it and commits the timeline
-    // it points into. Only when the new tree reads the very cascade the old
-    // one was laid out from, at its sizes — a change of sheets or of the
-    // cascade's environment makes another cascade — so every change that is
-    // not an animation's reaches the glass by a mark of its own
-    // (YONDER_PERF.md § perf-4).
+    // it points into. Only when lay_out_shown asked — it does not when a
+    // picture's size or a face that came in waits to be laid out too — and
+    // the new tree reads the very cascade the old one was laid out from, at
+    // its sizes: a change of sheets or of the cascade's environment makes
+    // another cascade, and a script's change is laid out by script_rebuild
+    // before any other (page_rebuild_owed). Anything else marks the whole
+    // view (YONDER_PERF.md § perf-4).
     if (p == s_parts.page && p->tree != NULL && cascade == p->cascade && width == p->laid_width &&
         height == p->laid_height && zoom == p->laid_zoom)
         s_parts.marked = flow_layout_parts(p->tree, fresh, s_parts.scroll, layout_mark, &s_parts.view);
@@ -2202,7 +2204,10 @@ static bool lay_out_shown(bool again, LaidFor laid_for)
     page_timeline(&g.page);
     s_cost.layouts_motion += laid_for != LAID_FOR_PAGE;
     int32_t sx_was = g.sx, sy_was = g.sy;
-    s_parts.page = laid_for != LAID_FOR_PAGE ? &g.page : NULL;
+    // The parts bound what the animations changed and nothing else, so a
+    // layout that also takes in a picture's size or a face that came in —
+    // owed to the settle and consumed below — marks the whole view.
+    s_parts.page = laid_for != LAID_FOR_PAGE && !g.pictures_moved && !s_web.moved ? &g.page : NULL;
     s_parts.view = (os64_gui_rect_t){g.sx, g.sy, g.view.bounds.w, g.view.bounds.h};
     s_parts.scroll = scroll_now();
     s_parts.marked = false;

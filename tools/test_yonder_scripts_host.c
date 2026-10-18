@@ -1245,6 +1245,23 @@ static void motion_part_cases(void) {
             check(g.ui.any_dirty && whole && s_cost.layouts_parts==parts_was,
                 "layout parts: a frame laid out from another cascade marks the whole view");
             motion_painted();
+            /* A picture's size or a face that came in, waiting for its
+             * settle, is laid out by the frame's layout too, and the parts
+             * know only the animations: that frame marks the view. */
+            for(int k=0;k<2;k++) {
+                if(k==0) g.pictures_moved=true; else s_web.moved=true;
+                g.ui.any_dirty=false;
+                parts_was=s_cost.layouts_parts;
+                now_ms=1000+300*(uint64_t)k;
+                motion_tick();
+                d=g.ui.dirty;
+                whole=d.x<=v.x && d.y<=v.y && d.x+d.w>=v.x+v.w && d.y+d.h>=v.y+v.h;
+                check(g.ui.any_dirty && whole && s_cost.layouts_parts==parts_was &&
+                      !g.pictures_moved && !s_web.moved,
+                    k==0?"layout parts: a frame that also lays out a picture's size marks the whole view"
+                        :"layout parts: a frame that also lays out a face that came in marks the whole view");
+                motion_painted();
+            }
         }
         probe_drop();
     }

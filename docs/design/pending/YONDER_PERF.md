@@ -524,9 +524,13 @@ the record's layouts by cause; perf-4b is part 2.
    room). The cascade is rebuilt for any change of sheets or of its
    environment (`width`, `height`, `dark`, `reduced_motion`), so those
    cannot slip through. A script's change waits for its own rebuild
-   (`page_rebuild_owed` refuses a motion layout until then). A picture
-   or a face arriving marks the whole view itself, and libui's dirty marks
-   accumulate, so parts never undo it. Anything that moved a box is caught
+   (`page_rebuild_owed` refuses a motion layout until then). A picture's
+   size or a face that came in is laid out by the settle, which may wait;
+   a motion layout made while one waits takes it in too, so it does not
+   ask for parts (`g.pictures_moved`, `s_web.moved`): its parts would
+   leave the new face's text unpainted. libui's dirty marks accumulate, so
+   parts never undo a
+   whole-view mark made before them. Anything that moved a box is caught
    by the compare.
 
 Wherever the ad is out of view, part 1 alone takes its layouts to none;
@@ -577,7 +581,7 @@ compositing a whole-view frame cost what they do.
 |---|---|---|---|---|
 | An animation's text-shadow reach | when the element's styles are built with that animation (FMotion) | never: the keyframes' values are fixed | by `flow_motion_due`'s seen tests | with the styles |
 | A layout's parts (old and new paint of each changed element) | not kept: handed through the mark callback while both trees are alive, between `flow_layout` and `page_show` | — | by yonder's `mark_part`, at once | at the end of the call; the old tree is freed by `page_show` as now |
-| (No flag: whether a layout may hand parts is derived from its cause, its cascade, its sizes and the old tree, above) | — | — | — | — |
+| (No flag: whether a layout may hand parts is derived from its cause, what waits for the settle, its cascade, its sizes and the old tree, above) | — | — | — | — |
 | The record's layouts by cause: for the animations alone, and of those the ones that painted parts | at a page shown, with the other counts | at each layout | at each write of the record | with the paint counts |
 | One layout's ask for parts (`s_parts`: the page, the view and its scroll; whether they were marked) | by `lay_out_shown`, before a layout for the animations | by `page_lay_out_run`, when it hands them | by `lay_out_shown`, after the layout | cleared after the layout that read it |
 
