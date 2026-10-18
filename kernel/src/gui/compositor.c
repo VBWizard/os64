@@ -58,6 +58,7 @@ spinlock_t kGuiLock = 0;   // shared with window.c / gui_client.c via gui_intern
 // gui_lock's counts (gui_internal.h): one row a site, and who holds the lock
 // now and since when, so gui_unlock charges the hold to the site that took it.
 static gui_lock_count_t s_lock_counts[GUI_LOCK_SITES];
+static gui_composite_count_t s_composite_counts;
 static gui_lock_site_t s_lock_holder;
 static uint64_t s_lock_since;
 
@@ -95,12 +96,21 @@ void gui_unlock(uint64_t irqflags)
 	c->hold_cycles += hold;
 	if (hold > c->max_hold_cycles)
 		c->max_hold_cycles = hold;
+	if (s_lock_holder == GUI_LOCK_COMPOSITE) {
+		uint64_t per_us = kCPUCyclesPerSecond / 1000000;
+		uint64_t us = per_us != 0 ? hold / per_us : 0;
+		int k = 0;
+		while (k < GUI_COMPOSITE_HOLD_BUCKETS - 1 && us >= (250ull << k))
+			k++;
+		s_composite_counts.holds[k]++;
+	}
 	spinlock_release_irqrestore(&kGuiLock, irqflags);
 }
 
-void gui_lock_counts(gui_lock_count_t *out, bool restart)
+void gui_lock_counts(gui_lock_count_t *out, gui_composite_count_t *comp, bool restart)
 {
 	uint64_t flags = gui_lock(GUI_LOCK_OTHER);
+	*comp = s_composite_counts;
 	for (int s = 0; s < GUI_LOCK_SITES; s++) {
 		out[s] = s_lock_counts[s];
 		if (restart)
@@ -325,7 +335,10 @@ void gui_damage_add_locked(rect_t screen_rect)
 	}
 
 	// Full, and nothing merged cheaply — fall back to v1: one union rect for
-	// the whole frame. Over-redraws, never under-redraws.
+	// the whole frame. Over-redraws, never under-redraws. Counted, because a
+	// union across the screen makes the next pass long, and a long pass lets
+	// the list fill again (GUI_LOCK.md).
+	s_composite_counts.collapses++;
 	rect_t all = screen_rect;
 	for (uint32_t i = 0; i < kPendingDamageCount; i++)
 		all = rect_union(all, kPendingDamage[i]);
@@ -1654,8 +1667,19 @@ bool guicomp_thread(bool daemon)
 		// frame instead of racing the one being drawn.
 		rect_t damage[DAMAGE_MAX_RECTS];
 		uint32_t damage_count = kPendingDamageCount;
-		for (uint32_t i = 0; i < damage_count; i++)
+		bool drew = false;
+		for (uint32_t i = 0; i < damage_count; i++) {
 			damage[i] = composite_locked(kPendingDamage[i]);
+			if (!rect_is_empty(damage[i])) {
+				drew = true;
+				s_composite_counts.rects++;
+				s_composite_counts.pixels += (uint64_t)damage[i].w * (uint64_t)damage[i].h;
+			}
+		}
+		// Drawn means something survived the clip to the screen: damage from
+		// a window moved wholly off it composites nothing.
+		s_composite_counts.passes++;
+		s_composite_counts.drawn += drew;
 		kPendingDamageCount = 0;
 		// Every /dev/glass viewer learns what this frame changed. Here,
 		// after the pixels are down and before the lock goes, is what makes

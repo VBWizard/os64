@@ -64,3 +64,50 @@ hold the lock for microseconds.
 
 Each of these is kernel GUI concurrency work, so each gets a design note and
 Fable's review before code.
+
+## The compositor's passes, counted
+
+**Why.** On the P5 the same kernel showed yonder, at the same page position,
+in two states from one boot to the next (Quinn's handoff,
+`YONDER_LOCK_STATE_NOTE_FOR_OPUS.md`, beside THREAD_KERNEL_TIME.md). In the
+high state the compositor held the lock 60.6% of the time and a publish
+waited 5.12 ms for it. In the low state the figures were 22.9% and 0.38 ms.
+A publish held the lock about as long in both. The lock lines cannot say
+whether the compositor made more passes or longer ones, or what a long one
+was drawing.
+
+**A hypothesis the counts can test.** The damage list holds 16 rectangles.
+When it is full and a new one merges with none cheaply, the whole list
+becomes one union rectangle (`gui_damage_add_locked`). A union of
+rectangles from opposite sides of the screen covers most of it, so the next
+pass composites far more pixels and holds the lock longer. While it does,
+clients queue more damage, and the list fills again. That loop would be
+bistable: a system could sit in either state until something knocks it out.
+
+**What.** Two lines in `/sys/gui`, totals since boot, like the lock lines:
+- `compositor:` its passes, how many composited anything, the rectangles and
+  pixels composited, and the collapses of the damage list into one;
+- `compositor holds:` its holds of the lock by length, in buckets doubling
+  from 250 µs, so a run of long passes shows even when the average does not.
+
+A hold here is the composite site's, so it includes input routing and the
+window manager's work as well as compositing. A pass that composites
+nothing is mostly the idle wake at the tick; damage from a window wholly
+off the screen composites nothing too.
+
+How to read it: two `cat`s a minute apart, in each state. If collapses
+climb in the high state and pixels per pass rise with them, the loop is
+real, and the cure is the damage list. If collapses stay near zero and
+the passes are the same size, the high state is something else, such as
+which core the compositor runs on, and the holds' buckets say whether it is
+a few long passes or many ordinary ones.
+
+| State | Begun | Changed | Read | Let go |
+|---|---|---|---|---|
+| The compositor's counts | zero at boot | per pass, per collapse, and per composite-site release, all under the lock | by `/sys/gui` (`gui_lock_counts`, with the lock lines) | never |
+
+**The first reading (QEMU, emulated).** Two windows, idle, 27,044 passes
+(the composite site's acquisitions, as they should be), 31 that drew, no
+collapses, and 30 holds of 8 ms or more: under TCG a pass that draws is
+slow, so only the proportions and the agreement with the lock lines mean
+anything here.
