@@ -11,8 +11,15 @@ cleanup() {
     fi
 }
 trap cleanup EXIT
-make -C userland -j4 js-runtime-test > "$work/build.log" 2>&1
-flags=(-O1 -g -std=gnu11 -Wall -Wextra -Werror -ffreestanding -fno-builtin
+. tools/host_build.sh
+# A failed build says so here, not only in a log nobody reads: a mutant
+# harness counts any failure as its catch.
+if ! make -C userland -j"${HOST_BUILD_JOBS:-4}" js-runtime-test > "$work/build.log" 2>&1; then
+    tail -n 20 "$work/build.log" >&2
+    echo "yonder scripts: the JS runtime did not build (whole log: $work/build.log)" >&2
+    exit 2
+fi
+host_flags=(-O1 -g -std=gnu11 -Wall -Wextra -Werror -ffreestanding -fno-builtin
     -ffunction-sections -fdata-sections -fno-tree-loop-distribute-patterns
     -fno-stack-protector -DOS64_JS_TARGET
     -Iuserland/libmath/include -Iuserland/libjs/port -Iuserland/libjs/include
@@ -37,13 +44,16 @@ for source in tools/test_yonder_scripts_host.c tools/test_js_port_calendar.c too
     object="$work/${source//\//_}.o"
     private=()
     if [[ "$source" == userland/libdom/* ]]; then private=(-Dd_alloc=dom_fixture_private_alloc); fi
-    cc "${flags[@]}" "${private[@]}" -c "$source" -o "$object"
-    if [ "$source" = userland/libos64/str.c ]; then
-        objcopy --localize-symbol=memcpy --localize-symbol=memmove --localize-symbol=memset \
-            --localize-symbol=memcmp "$object" "$object-local"
-        object="$object-local"
-    fi
+    host_compile "$source" "$object" "${private[@]}"
     objects+=("$object")
+done
+host_wait
+for i in "${!objects[@]}"; do
+    if [ "${objects[$i]}" = "$work/userland_libos64_str.c.o" ]; then
+        objcopy --localize-symbol=memcpy --localize-symbol=memmove --localize-symbol=memset \
+            --localize-symbol=memcmp "${objects[$i]}" "${objects[$i]}-local"
+        objects[$i]="${objects[$i]}-local"
+    fi
 done
 mapfile -t maths < <(make -s -C userland math-host-flags | python3 -c '
 import shlex,sys
