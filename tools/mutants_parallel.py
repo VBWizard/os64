@@ -16,12 +16,14 @@ missing something the build reads fails every mutant for a reason that has
 nothing to do with it, and every one of them reads as caught. That happened:
 copies without shared/, which the userland makefile reads, turned hundreds of
 mutants whose cases build the JS runtime into catches that ran no check. The
-suites are the commands the harness names literally, `bash tools/<suite>.sh`
-or `python3 tools/<suite>.py` with any --flags; a harness that names none is
-refused. A worker's suites run in turn against ONE deadline, the shortest
-`timeout=` the harness gives its own case runs (BASELINE_SECONDS when it
-gives none), because a harness may run several of them under one case
-timeout. A baseline that fails or runs past it fails the worker, its process
+suites are what the harness names: `bash tools/<suite>.sh` or `python3
+tools/<suite>.py` with any --flags, or a bare quoted 'tools/<suite>.sh' or
+'.py' it runs by path; a harness that names none is refused. A worker's
+suites run in turn against ONE deadline, the shortest timeout the harness
+gives its own case runs, because a harness may run several of them under one
+case timeout. A `timeout=` names a number or a variable; for a variable, the
+numbers assigned to it count. A harness whose timeout cannot be read that way
+is refused, and one that sets none gets BASELINE_SECONDS. A baseline that fails or runs past it fails the worker, its process
 group is killed, and its mutants are summarized as "baseline failed": a
 baseline more patient than the harness would pass suites whose cases the
 harness then times out and counts as caught.
@@ -74,8 +76,24 @@ for d in dirs:
 NAME = re.compile(r"^\s{4}\('([^']+)',", re.M)
 # A harness is not a suite, so a name ending _mutants.py is never one.
 SUITE = re.compile(r"\b((?:bash|python3) tools/(?!\w*_mutants\.py)\w+\.(?:sh|py)(?: --[\w-]+)*)")
+BARE = re.compile(r"""['"](tools/(?!\w*_mutants\.py)\w+\.(sh|py)(?: --[\w-]+)*)['"]""")
 VERDICT = re.compile(r'^([a-z0-9][a-z0-9-]*): (caught|MISSED|did not build)$', re.M)
-TIMEOUT = re.compile(r'\btimeout=(\d+)')
+TIMEOUT = re.compile(r'\btimeout=(\w+)')
+
+
+def case_limit(harness, text):
+    """The shortest timeout the harness gives a case run, or BASELINE_SECONDS."""
+    limits = []
+    for t in TIMEOUT.findall(text):
+        if t.isdigit():
+            limits.append(int(t))
+            continue
+        assigned = [int(n) for line in re.findall(rf'^\s*{t}\s*=\s*(.*)$', text, re.M)
+                    for n in re.findall(r'\b\d+\b', line)]
+        if not assigned:
+            sys.exit(f'mutants_parallel: cannot read {harness}\'s case timeout `timeout={t}`')
+        limits.extend(assigned)
+    return min(limits, default=BASELINE_SECONDS)
 
 
 def plan(spec):
@@ -85,10 +103,12 @@ def plan(spec):
     if at < 0:
         sys.exit(f'mutants_parallel: {harness} has no `mutants = [` list')
     names = NAME.findall(text[at:])
-    suites = sorted(set(SUITE.findall(text)))
+    suites = set(SUITE.findall(text))
+    suites |= {('bash ' if kind == 'sh' else 'python3 ') + path for path, kind in BARE.findall(text)}
+    suites = sorted(suites)
     if not names or not suites:
         sys.exit(f'mutants_parallel: {harness} names no mutants or no suites to check first')
-    limit = min((int(t) for t in TIMEOUT.findall(text)), default=BASELINE_SECONDS)
+    limit = case_limit(harness, text)
     workers = max(1, min(int(n or 1), len(names)))
     share, extra = divmod(len(names), workers)
     jobs, at = [], 0
