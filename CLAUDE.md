@@ -612,6 +612,13 @@ arrives is the same bytes either way.
   against thread 1 when one is inexplicably slow. **`/tests/coreprobe`** is
   the ring-3 proof: `coreprobe -s 20` wanders and prints each core's rate for
   a dependent multiply chain and for every branch kind; siblings must agree.
+- **`env PINCORE=<apic> program` pins a program, and every thread it makes,
+  to that core** (`task_env_pin`, task.c). The number is the APIC id that
+  /proc's `core`/`affinity` lines and coreprobe's `apic` lines print. It is
+  read once, at birth, from an unpinned USER program's environment, and it
+  inherits like any variable, so a pinned shell pins everything it runs. A
+  value naming no running core leaves the program unpinned (DEBUG_TASK says
+  why). Fixture: `/tests/pincoretest`.
 
 **Core-Local Storage:**
 - Accessed via `get_core_local_storage()`

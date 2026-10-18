@@ -2414,6 +2414,46 @@ static bool task_measure_argv(const char *path, int argc, char **argv, size_t *b
 	return true;
 }
 
+// PINCORE=<apic id> in the environment a user program is born with pins it,
+// and every thread it makes, to that core: `env PINCORE=3 coreprobe`. The
+// number is the APIC id, the one /proc's `core` and `affinity` lines and
+// coreprobe's `apic` lines print, so what you read is what you type. It is
+// read at birth only, and a child inherits the variable with the rest of the
+// environment, so a pinned shell pins everything it runs. A value that is not
+// a running core's APIC id leaves the program unpinned, and a DEBUG_TASK line
+// says why; an empty one means unset.
+static uint64_t task_env_pin(const envpage_t *env, const char *path)
+{
+	const char *pin = env_get(env, "PINCORE");
+	if (pin == NULL)
+		return THREAD_NO_AFFINITY;
+
+	// Four digits is past any APIC id this kernel can bring up, and bounding
+	// the length is what keeps the accumulator from wrapping onto a real core.
+	uint64_t apic = 0;
+	int digits = 0;
+	for (const char *c = pin; *c != '\0'; c++, digits++)
+	{
+		if (*c < '0' || *c > '9' || digits == 4)
+		{
+			printd(DEBUG_TASK, "PINCORE: '%s' for %s is not an APIC id - not pinned\n", pin, path);
+			return THREAD_NO_AFFINITY;
+		}
+		apic = apic * 10 + (uint64_t)(*c - '0');
+	}
+	if (digits == 0)
+		return THREAD_NO_AFFINITY;   // `PINCORE=` with nothing after it: unpinned
+
+	for (uint64_t i = 0; i < kMPCoreCount; i++)
+		if ((uint64_t)kCPUInfo[i].apicID == apic)
+		{
+			printd(DEBUG_TASK, "PINCORE: %s pinned to APIC %lu\n", path, apic);
+			return apic;
+		}
+	printd(DEBUG_TASK, "PINCORE: APIC %lu for %s is not a running core - not pinned\n", apic, path);
+	return THREAD_NO_AFFINITY;
+}
+
 task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bool isKernelTask, uint64_t pinnedAPICID)
 {
 	return task_create_checked(path, argc, argv, parentTaskPtr, isKernelTask,
@@ -2593,6 +2633,11 @@ task_t *task_create_checked(char *path, int argc, char **argv, task_t *parentTas
 			panic("task_create: cannot copy the environment for kernel task %s\n", path);
 		return NULL;
 	}
+
+	// A pin the caller chose is part of that task's design, and a kernel task
+	// takes no orders from an environment; only an unpinned user program asks.
+	if (!isKernelTask && pinnedAPICID == THREAD_NO_AFFINITY)
+		pinnedAPICID = task_env_pin(inheritedEnv, path);
 
 	task_t* newTask = task_initialize(parentTaskPtr, isKernelTask, isIdleTask, pinnedAPICID);
 	newTask->env = inheritedEnv;
