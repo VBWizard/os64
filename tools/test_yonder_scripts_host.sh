@@ -14,7 +14,7 @@ trap cleanup EXIT
 . tools/host_build.sh
 # A failed build says so here, not only in a log nobody reads: a mutant
 # harness counts any failure as its catch.
-if ! make -C userland -j4 js-runtime-test > "$work/build.log" 2>&1; then
+if ! make -C userland -j"${HOST_BUILD_JOBS:-4}" js-runtime-test > "$work/build.log" 2>&1; then
     tail -n 20 "$work/build.log" >&2
     echo "yonder scripts: the JS runtime did not build (whole log: $work/build.log)" >&2
     exit 2

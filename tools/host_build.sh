@@ -19,7 +19,8 @@
 # and host_wait after the last.
 #
 # HOST_BUILD_JOBS caps the compiles running at once (default: every CPU); a
-# harness running twenty suites side by side sets it low. CCACHE_DISABLE=1
+# harness running twenty suites side by side sets it low, and a suite that
+# also runs make passes it to make's -j. CCACHE_DISABLE=1
 # compiles without the cache, as it does for the makefiles.
 
 if command -v ccache > /dev/null 2>&1; then

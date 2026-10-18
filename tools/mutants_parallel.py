@@ -16,8 +16,10 @@ missing something the build reads fails every mutant for a reason that has
 nothing to do with it, and every one of them reads as caught. That happened:
 copies without shared/, which the userland makefile reads, turned hundreds of
 mutants whose cases build the JS runtime into catches that ran no check. The
-suites are the `bash tools/<suite>.sh` commands the harness names; a harness
-that names none is refused.
+suites are the commands the harness names literally, `bash tools/<suite>.sh`
+or `python3 tools/<suite>.py` with any --flags; a harness that names none is
+refused. A baseline that fails, or runs past BASELINE_SECONDS, fails the
+worker, and its mutants are summarized as "baseline failed".
 
 A harness's mutants are its `mutants = [` list, and each is run with
 `--only <name>`. The harnesses match --only as a substring, so a name inside
@@ -38,6 +40,8 @@ import tempfile
 
 # What a suite builds from. The userland makefile reads ../abi and ../shared.
 TREE_DIRS = ('userland', 'tools', 'abi', 'shared')
+# The longest an unmutated suite may run: the harnesses' own cap on a case run.
+BASELINE_SECONDS = 1800
 
 parser = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
 parser.add_argument('harnesses', nargs='+', help='HARNESS.py[:WORKERS], from tools/')
@@ -50,7 +54,8 @@ args = parser.parse_args()
 
 src = args.src or pathlib.Path(subprocess.check_output(['git', 'rev-parse', '--show-toplevel'],
                                                        text=True).strip())
-out = args.out or pathlib.Path(tempfile.mkdtemp(prefix='mutants.'))
+# Absolute, because every worker runs from inside its own copy.
+out = (args.out or pathlib.Path(tempfile.mkdtemp(prefix='mutants.'))).resolve()
 out.mkdir(parents=True, exist_ok=True)
 dirs = TREE_DIRS + tuple(args.extra)
 for d in dirs:
@@ -58,7 +63,8 @@ for d in dirs:
         sys.exit(f'mutants_parallel: {src / d} is not a directory')
 
 NAME = re.compile(r"^\s{4}\('([^']+)',", re.M)
-SUITE = re.compile(r"bash (tools/[\w]+\.sh(?: --[\w-]+)*)")
+# A harness is not a suite, so a name ending _mutants.py is never one.
+SUITE = re.compile(r"\b((?:bash|python3) tools/(?!\w*_mutants\.py)\w+\.(?:sh|py)(?: --[\w-]+)*)")
 VERDICT = re.compile(r'^([a-z0-9][a-z0-9-]*): (caught|MISSED|did not build)$', re.M)
 
 
@@ -90,11 +96,15 @@ def work(job):
     with (root / 'out.txt').open('w') as o:
         for suite in suites:
             with (logs / 'baseline.log').open('a') as b:
-                b.write(f'$ bash {suite}\n')
+                b.write(f'$ {suite}\n')
                 b.flush()
-                if subprocess.run(['bash', '-c', f'bash {suite}'], cwd=root, env=env,
-                                  stdout=b, stderr=b).returncode != 0:
-                    o.write(f'BASELINE FAILED: bash {suite} (see {logs / "baseline.log"})\n')
+                try:
+                    code = subprocess.run(['bash', '-c', suite], cwd=root, env=env, stdout=b,
+                                          stderr=b, timeout=BASELINE_SECONDS).returncode
+                except subprocess.TimeoutExpired:
+                    code = 'timeout'
+                if code != 0:
+                    o.write(f'BASELINE FAILED ({code}): {suite} (see {logs / "baseline.log"})\n')
                     return harness, k, names, None
         for name in names:
             o.flush()
@@ -111,6 +121,8 @@ with concurrent.futures.ThreadPoolExecutor(max_workers=len(jobs)) as pool:
     for harness, k, names, text in pool.map(work, jobs):
         if text is None:
             broken.append(f'{harness} worker {k} ({len(names)} mutants not run)')
+            for name in names:
+                verdicts.setdefault(name, 'baseline failed')
             continue
         for name, verdict in VERDICT.findall(text):
             verdicts[name] = verdict
@@ -126,4 +138,4 @@ for line in summary:
         print(line)
 for b in broken:
     print(f'BASELINE FAILED, not run: {b}')
-sys.exit(0 if caught == len(verdicts) and not broken else 1)
+sys.exit(0 if caught == len(verdicts) else 1)
