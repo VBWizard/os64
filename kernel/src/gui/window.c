@@ -17,6 +17,7 @@ _Static_assert(GUI_WINDOW_TITLE_MAX == OS64_GUI_TITLE_MAX,
                "gui/window.h and abi os64/gui.h disagree on the title capacity");
 #include "gui/surface.h"
 #include "gui/compositor.h"
+#include "gui/visible.h"
 
 #include "CONFIG.h"
 #include "kernel.h"      // kTicksSinceStart — the stamp on a synthesized event
@@ -919,6 +920,17 @@ bool wm_pop_event(window_t *w, input_event_t *out)
 // damage rect, draw in its coordinates, and the clipping in surface.c cannot
 // be talked out of it. It is also a straight win — a 25x25 ball no longer
 // repaints an entire 768x480 console underneath it.
+//
+// AND EVERY PIXEL OF frame ∩ damage — the other half of the contract, and
+// what lets a window claim its whole frame in the claim walk (OCCLUSION.md).
+// Nothing is painted under a window, so a pixel it leaves alone shows
+// whatever the backbuffer held last frame. It holds because the
+// insets the decoration declares, the content sized to the frame minus
+// those insets (wm_create, wm_resize) and the painting below agree, on both
+// the decorated and the plain path, for every decoration view the kernel
+// accepts. test_window_opacity paints each kind of window over a sentinel
+// colour and fails on any that survives; the decoration's paint has the same
+// test on the host against prepared views (test_decoration_host.c).
 static void composite_one(surface_t *backbuffer, const window_t *w, rect_t damage)
 {
 	surface_t view = surface_view(backbuffer, damage);
@@ -1012,77 +1024,147 @@ static void composite_one(surface_t *backbuffer, const window_t *w, rect_t damag
 	             (rect_t){0, 0, (int32_t)w->content.width, (int32_t)w->content.height});
 }
 
-void wm_composite(surface_t *backbuffer, rect_t damage)
+bool wm_paint_window(surface_t *dst, const window_t *w, rect_t view)
 {
-	// Bottom-up so overlaps resolve by z-order; skip windows that don't
-	// touch the damage at all.
-	rect_t overlap;
-	for (window_t *w = s_bottom; w; w = w->above)
-		if (!wm_is_hidden(w) && rect_intersect(w->frame, damage, &overlap))
-			composite_one(backbuffer, w, damage);
+	composite_one(dst, w, view);
+	return s_decoration.header && wm_has_titlebar(w->flags);
 }
 
-// THE SAME QUESTION, ASKED ABOUT THE BACKGROUND (2026-08-25). The compositor
-// paints kDesktop into every damage rect before it paints any window — which
-// was free-ish when the background was the only thing under them, and stopped
-// being free the day the desktop shell became a FULLSCREEN WINDOW. Then every
-// damage rect cost two screenful-sized blits of the same pixels: the
-// compositor's background, and the shell's window painted straight over it.
-//
-// Chris measured it within the hour on the P5: guicomp at 17-20% while
-// dragging a large gterm, against 1% for a small gclock — the tell being that
-// the cost tracked the RECT AREA, which is what a redundant full-rect blit
-// looks like.
-//
-// So: if some window already covers this rect completely, the background
-// underneath it cannot be seen and is not painted. Self-correcting by
-// construction — if the shell dies, nothing covers the rect any more and the
-// kernel's test pattern comes straight back, which is exactly the floor
-// behaviour we wanted. It also pays off for a case that predates the shell: a
-// maximized window now suppresses the background blit too.
-bool wm_rect_is_covered(rect_t screen_rect)
-{
-	if (rect_is_empty(screen_rect))
-		return true;
+// The frames a claim walk holds at once (visible.h). More visible windows
+// than this is legal: the walk stops after the last frame it holds and the
+// windows below it are painted the old way, as when the pieces run out.
+#define WM_CLAIM_FRAMES 32
 
-	for (const window_t *w = s_top; w; w = w->below) {
-		rect_t covered;
+static inline visible_rect_t as_visible(rect_t r)
+{
+	return (visible_rect_t){r.x, r.y, r.w, r.h};
+}
+
+static inline rect_t as_rect(visible_rect_t r)
+{
+	return (rect_t){r.x, r.y, r.w, r.h};
+}
+
+static inline uint64_t area_of(rect_t r)
+{
+	return (uint64_t)r.w * (uint64_t)r.h;
+}
+
+// The visible windows above `stop` (all of them when NULL), top-down: their
+// frames and the windows themselves, at most WM_CLAIM_FRAMES. Answers how
+// many there are in all, which may be more than it wrote.
+//
+// A window claims its whole frame because it is opaque: composite_one
+// writes every pixel of frame ∩ view. The day a window can be seen
+// through, it must not claim here; it is painted over what is under it,
+// not instead of it.
+static int32_t claim_stack(const window_t *stop, visible_rect_t *frames, window_t **windows)
+{
+	int32_t n = 0;
+	for (window_t *w = s_top; w && w != stop; w = w->below) {
 		if (wm_is_hidden(w))
 			continue;
-		// Same containment test as wm_rect_is_occluded, and the same
-		// deliberate simplicity: ONE window must cover the whole rect. Two
-		// that jointly cover it read as uncovered and the background is
-		// painted — wasted work, never a wrong pixel.
-		//
-		// And the same opacity caveat, which matters MORE here: every os64
-		// window is fully opaque today. The day translucency lands, a
-		// see-through window must stop suppressing the background, or you
-		// will see through it to whatever the backbuffer last held.
-		if (rect_intersect(w->frame, screen_rect, &covered) &&
-		    covered.x == screen_rect.x && covered.y == screen_rect.y &&
-		    covered.w == screen_rect.w && covered.h == screen_rect.h)
-			return true;
+		if (n < WM_CLAIM_FRAMES) {
+			frames[n] = as_visible(w->frame);
+			windows[n] = w;
+		}
+		n++;
 	}
-	return false;
+	return n;
 }
 
-// Occlusion, the cheap half (2026-08-18). Painter's algorithm draws a covered
-// window and then draws over it: correct, and entirely wasted work — plus a
-// flush of framebuffer pixels that cannot possibly change. This answers the one
-// question that lets publish skip both.
+// The old painter, for what a claim walk could not finish: the background,
+// then every window touching `piece`, bottom-up and inside it, so the top
+// one wins as it always did. The windows the walk consumed miss the piece
+// by construction and are not painted at all.
+static uint64_t paint_bottom_up(surface_t *backbuffer, const surface_t *background, rect_t piece)
+{
+	surface_blit(backbuffer, piece.x, piece.y, background, piece);
+	uint64_t painted = area_of(piece);
+	rect_t overlap;
+	for (window_t *w = s_bottom; w; w = w->above)
+		if (!wm_is_hidden(w) && rect_intersect(w->frame, piece, &overlap)) {
+			composite_one(backbuffer, w, piece);
+			painted += area_of(overlap);
+		}
+	return painted;
+}
+
+wm_composite_result_t wm_composite(surface_t *backbuffer, const surface_t *background, rect_t damage)
+{
+	wm_composite_result_t result = {0};
+	visible_rect_t frames[WM_CLAIM_FRAMES];
+	window_t *windows[WM_CLAIM_FRAMES];
+	visible_piece_t pieces[VISIBLE_PIECES_MAX];
+	int32_t total = claim_stack(NULL, frames, windows);
+	int32_t consumed;
+	int32_t n = visible_claim(as_visible(damage), frames,
+	                          total < WM_CLAIM_FRAMES ? total : WM_CLAIM_FRAMES,
+	                          pieces, VISIBLE_PIECES_MAX, &consumed);
+	uint64_t covered = 0;
+	for (int32_t i = 0; i < n; i++) {
+		rect_t piece = as_rect(pieces[i].r);
+		covered += area_of(piece);
+		// A window paints what it claimed, once per piece and with the piece
+		// as its view: one call with a wider view would paint over pieces
+		// claimed by the windows above it.
+		if (pieces[i].owner != VISIBLE_UNCLAIMED) {
+			composite_one(backbuffer, windows[pieces[i].owner], piece);
+			result.painted += area_of(piece);
+		} else if (consumed == total) {
+			// Under no window at all: the background's.
+			surface_blit(backbuffer, piece.x, piece.y, background, piece);
+			result.painted += area_of(piece);
+		} else {
+			result.painted += paint_bottom_up(backbuffer, background, piece);
+			result.stopped = true;
+		}
+	}
+	result.fault = covered != area_of(damage);
+	return result;
+}
+
+size_t wm_visible_damage(const window_t *w, rect_t screen_rect, rect_t *out, size_t max)
+{
+	visible_rect_t frames[WM_CLAIM_FRAMES];
+	window_t *windows[WM_CLAIM_FRAMES];
+	visible_piece_t pieces[VISIBLE_PIECES_MAX];
+	// A minimized window shows nothing, and coming back damages its frame.
+	if (wm_is_hidden(w))
+		return 0;
+	int32_t total = claim_stack(w, frames, windows);
+	int32_t consumed;
+	int32_t n = visible_claim(as_visible(screen_rect), frames,
+	                          total < WM_CLAIM_FRAMES ? total : WM_CLAIM_FRAMES,
+	                          pieces, VISIBLE_PIECES_MAX, &consumed);
+	// The unclaimed pieces are what can be seen. A walk that stopped early
+	// leaves some under windows it never applied; they count as seen, which
+	// is more damage and never less.
+	size_t seen = 0;
+	rect_t bounds = {0, 0, 0, 0};
+	for (int32_t i = 0; i < n; i++) {
+		if (pieces[i].owner != VISIBLE_UNCLAIMED)
+			continue;
+		rect_t piece = as_rect(pieces[i].r);
+		bounds = seen == 0 ? piece : rect_union(bounds, piece);
+		if (seen < max)
+			out[seen] = piece;
+		seen++;
+	}
+	if (seen <= max)
+		return seen;
+	out[0] = bounds;
+	return 1;
+}
+
+// Is this rect inside ONE window above `w`? The cover sweep's test: two
+// windows that jointly cover a window read as not covering it, so its
+// client is told to stop only in the common shape, one window over
+// another. wm_visible_damage answers the exact question, the day a
+// consumer wants it (DEBTS).
 //
-// DELIBERATELY the simple test: is this rect inside ONE window above me? Two
-// windows that JOINTLY cover it read as visible here and still get composited.
-// Doing better means subtracting a real region (X11/Cairo territory) and
-// maintaining it as windows move — a bigger idea, its own slice, and one this
-// z-list can't answer in a walk. The common desktop shape is one window over
-// another, which is exactly what this catches.
-//
-// Note it takes no view on WINDOW opacity, because os64 has none yet: every
-// window is fully opaque (the X byte in XRGB is reserved for the translucency
-// row that hasn't landed). The day alpha exists, this function is where it
-// must be taught to stop trusting a covering frame — a window you can see
-// through occludes nothing.
+// Like claim_stack it trusts a covering frame because every window is
+// opaque; a window you can see through covers nothing.
 bool wm_rect_is_occluded(const window_t *w, rect_t screen_rect)
 {
 	if (rect_is_empty(screen_rect))

@@ -53,14 +53,19 @@ typedef struct {
 } gui_lock_count_t;
 
 // What the compositor's passes did (/sys/gui): every pass, the passes that
-// composited anything, the rectangles and pixels composited, how often the
-// damage list was full and fell back to one union of everything
-// (gui_damage_add_locked), and its holds of kGuiLock by length, so a run of
-// long passes shows. Bucket k counts holds under 250 us << k, the last
-// those longer. Written under kGuiLock.
+// composited anything, the rectangles and pixels composited, the pixels the
+// scene wrote into them (`painted`: the background and each window, so the
+// ratio to `pixels` is how many times each pixel was drawn), the rectangles
+// whose claim walk stopped early and were finished by the old painter
+// (`stops`, which draw pixels twice) and whose pieces did not add up to the
+// rectangle (`faults`, a geometry bug), how often the damage list was full
+// and fell back to one union of everything (gui_damage_add_locked), and its
+// holds of kGuiLock by length, so a run of long passes shows. Bucket k
+// counts holds under 250 us << k, the last those longer. Written under
+// kGuiLock.
 #define GUI_COMPOSITE_HOLD_BUCKETS 7
 typedef struct {
-	uint64_t passes, drawn, rects, pixels, collapses;
+	uint64_t passes, drawn, rects, pixels, painted, stops, faults, collapses;
 	uint64_t holds[GUI_COMPOSITE_HOLD_BUCKETS];
 } gui_composite_count_t;
 
