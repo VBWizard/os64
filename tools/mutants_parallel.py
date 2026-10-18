@@ -36,6 +36,13 @@ worker ran by accident never stands in for one its own worker did not.
 
 HOST_BUILD_JOBS (tools/host_build.sh) is set to --jobs in every worker, so
 twenty workers compiling at once do not ask for twenty machines.
+
+Each mutant's harness call is timed, and summary.txt gives the seconds
+beside its verdict. A mutant that took more than SLOW_TIMES its harness's
+median, and more than SLOW_SECONDS, is named at the end as SLOW: a stall
+or a test that grew is said the run it happens, not found later in the
+tail. The time is the whole `--only` call, so a name that is inside
+another's counts both.
 """
 import argparse
 import concurrent.futures
@@ -53,6 +60,10 @@ import tempfile
 TREE_DIRS = ('userland', 'tools', 'abi', 'shared')
 # The longest an unmutated suite may run when its harness sets no case limit.
 BASELINE_SECONDS = 1800
+# A mutant is SLOW past this many times its harness's median, and past this
+# many seconds (a fast harness's small jitter is not news).
+SLOW_TIMES = 5
+SLOW_SECONDS = 60
 
 parser = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
 parser.add_argument('harnesses', nargs='+', help='HARNESS.py[:WORKERS], from tools/')
@@ -149,20 +160,25 @@ def work(job):
                 code = bounded(suite, root, env, b, deadline - time.monotonic())
                 if code != 0:
                     o.write(f'BASELINE FAILED ({code}): {suite} (see {logs / "baseline.log"})\n')
-                    return harness, k, names, None
+                    return harness, k, names, None, {}
+        seconds = {}
         for name in names:
             o.flush()
+            began = time.monotonic()
             subprocess.run([sys.executable, f'tools/{harness}', '--only', name, '--logs', str(logs)],
                            cwd=root, env=env, stdout=o, stderr=subprocess.STDOUT)
-    return harness, k, names, (root / 'out.txt').read_text()
+            seconds[name] = time.monotonic() - began
+    return harness, k, names, (root / 'out.txt').read_text(), seconds
 
 
 jobs = [job for spec in args.harnesses for job in plan(spec)]
 print(f'mutants_parallel: {sum(len(j[2]) for j in jobs)} mutants, {len(jobs)} workers, in {out}',
       flush=True)
-verdicts, broken = {}, []
+verdicts, broken, took = {}, [], {}
 with concurrent.futures.ThreadPoolExecutor(max_workers=len(jobs)) as pool:
-    for harness, k, names, text in pool.map(work, jobs):
+    for harness, k, names, text, seconds in pool.map(work, jobs):
+        for name, t in seconds.items():
+            took[harness, name] = t
         if text is None:
             broken.append(f'{harness} worker {k} ({len(names)} mutants not run)')
             for name in names:
@@ -175,13 +191,25 @@ with concurrent.futures.ThreadPoolExecutor(max_workers=len(jobs)) as pool:
         for name in names:
             verdicts.setdefault((harness, name), 'no verdict')
 
-summary = sorted(f'{h[:-3]} {n}: {v}' for (h, n), v in verdicts.items())
+def line(key):
+    h, n = key
+    t = f' ({took[key]:.0f} s)' if key in took else ''
+    return f'{h[:-3]} {n}: {verdicts[key]}{t}'
+
+
+summary = sorted(line(key) for key in verdicts)
 (out / 'summary.txt').write_text('\n'.join(summary) + '\n')
 caught = sum(v == 'caught' for v in verdicts.values())
 print(f'caught {caught} of {len(verdicts)}')
-for line in summary:
-    if not line.endswith(': caught'):
-        print(line)
+for key in sorted(verdicts):
+    if verdicts[key] != 'caught':
+        print(line(key))
+for harness in sorted({h for h, _ in took}):
+    times = sorted(t for (h, _), t in took.items() if h == harness)
+    median = times[len(times) // 2]
+    for (h, n), t in sorted(took.items()):
+        if h == harness and t > SLOW_SECONDS and t > SLOW_TIMES * median:
+            print(f'SLOW: {h[:-3]} {n}: {t:.0f} s, {t / median:.0f}x the harness median of {median:.0f} s')
 for b in broken:
     print(f'BASELINE FAILED, not run: {b}')
 sys.exit(0 if caught == len(verdicts) else 1)
