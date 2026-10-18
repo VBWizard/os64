@@ -212,6 +212,9 @@ int main(int argc, char **argv)
         }
     }
     os64_printf("vendor %s  brand %s\n", vendor, brand);
+    // Every measurement below is bracketed by its own APIC reads and says
+    // so if the scheduler moved the task during it, the sampler's rule: a
+    // number from two cores is nobody's number.
     uint32_t apic0 = apic_now();
     os64_printf("apic %u", apic0);
     if (maxleaf >= 0xB) {
@@ -239,7 +242,8 @@ int main(int argc, char **argv)
         sink = x;
         (void)sink;
         uint64_t per_us = iters / (uint64_t)(t1 - t0);
-        os64_printf("imul %lu iter/us (~%lu MHz if 4 cycles each)\n", per_us, per_us * 4);
+        os64_printf("imul %lu iter/us (~%lu MHz if 4 cycles each)%s\n", per_us, per_us * 4,
+                    apic_now() == apic0 ? "" : " (moved)");
     }
 
     // copies
@@ -258,7 +262,8 @@ int main(int argc, char **argv)
             bytes += n;
             t1 = os64_micros();
         }
-        os64_printf("memcpy %lu MB/s\n", bytes / (uint64_t)(t1 - t0));
+        os64_printf("memcpy %lu MB/s%s\n", bytes / (uint64_t)(t1 - t0),
+                    apic_now() == apic0 ? "" : " (moved)");
         bytes = 0;
         t0 = os64_micros(); t1 = t0;
         while (t1 - t0 < ms * 1000) {
@@ -266,7 +271,8 @@ int main(int argc, char **argv)
             bytes += n;
             t1 = os64_micros();
         }
-        os64_printf("u32copy %lu MB/s\n", bytes / (uint64_t)(t1 - t0));
+        os64_printf("u32copy %lu MB/s%s\n", bytes / (uint64_t)(t1 - t0),
+                    apic_now() == apic0 ? "" : " (moved)");
         os64_free(src);
         os64_free(dst);
     }
@@ -280,7 +286,8 @@ int main(int argc, char **argv)
                 t1 = os64_micros();
             calls += 1000;
         }
-        os64_printf("syscalls %lu per ms\n", calls * 1000 / (uint64_t)(t1 - t0));
+        os64_printf("syscalls %lu per ms%s\n", calls * 1000 / (uint64_t)(t1 - t0),
+                    apic_now() == apic0 ? "" : " (moved)");
     }
     os64_printf("apic end %u\n", apic_now());
     return 0;
