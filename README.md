@@ -1,7 +1,7 @@
 # os64
 
 <p align="center">
-  <img src="https://github.com/VBWizard/os64/blob/userland/assets/images/os64_Overview_20261018.PNG" alt="Os64" width="2560">
+  <img src="https://raw.githubusercontent.com/VBWizard/os64/refs/heads/userland/assets/images/os64_Overview_20261018.PNG" alt="Os64" width="2560">
 </p>
 
 A 64-bit x86 operating system built for educational purposes.
