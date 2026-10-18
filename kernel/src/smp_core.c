@@ -503,16 +503,21 @@ volatile bool kSpecCtrlPresent;
 static char kSpecCtrlPolicy[24] = "fast";
 
 // The bits this CPU implements, by CPUID. Intel: leaf 7 EDX IBRS/IBPB[26],
-// STIBP[27], SSBD[31]. AMD: leaf 0x80000008 EBX IBRS[14], STIBP[15],
-// SSBD[24], PSFD[28]. Any bit set means the MSR itself is implemented.
+// STIBP[27], SSBD[31], PSFD in subleaf 2's EDX[0]. AMD: leaf 0x80000008
+// EBX IBRS[14], STIBP[15], SSBD[24], PSFD[28]. Any bit set means the MSR
+// itself is implemented.
 static uint64_t spec_ctrl_supported(void)
 {
 	uint32_t a = 0, b = 0, c = 0, d = 0;
 	uint64_t mask = 0;
 	if (__get_cpuid_count(7, 0, &a, &b, &c, &d)) {
+		uint32_t maxsub = a;
 		if (d & (1u << 26)) mask |= SPEC_CTRL_IBRS;
 		if (d & (1u << 27)) mask |= SPEC_CTRL_STIBP;
 		if (d & (1u << 31)) mask |= SPEC_CTRL_SSBD;
+		// Intel enumerates PSFD one subleaf over: CPUID.(7,2):EDX[0].
+		if (maxsub >= 2 && __get_cpuid_count(7, 2, &a, &b, &c, &d) && (d & 1u))
+			mask |= SPEC_CTRL_PSFD;
 	}
 	if (__get_cpuid(0x80000008, &a, &b, &c, &d)) {
 		if (b & (1u << 14)) mask |= SPEC_CTRL_IBRS;
@@ -599,9 +604,16 @@ bool spec_ctrl_set_policy(const char *value)
 	kSpecCtrlPolicy[sizeof(kSpecCtrlPolicy) - 1] = 0;
 	kSpecCtrlValue = want;
 
+	// Identify the thread and write it with interrupts off: this task is
+	// not pinned, and a preemption between learning which thread it is on
+	// and writing would record one thread as done while another was written.
+	uint64_t irq;
+	__asm__ volatile("pushfq\n\tpop %0\n\tcli" : "=r"(irq) :: "memory");
 	core_local_storage_t *cls = get_core_local_storage();
 	uint32_t self = cls ? (uint32_t)cls->apic_id : BOOTSTRAP_PROCESSOR_ID;
 	spec_ctrl_write_this_cpu(self);
+	if (irq & 0x200)
+		__asm__ volatile("sti" ::: "memory");
 	if (!kSMPInitDone)
 		return true;   // nothing else is up; bring-up will write this value
 	for (int i = 0; i < kMPCoreCount; i++) {
@@ -612,9 +624,7 @@ bool spec_ctrl_set_policy(const char *value)
 	// Bounded, and only with interrupts on (mpAcctSettleAll's rule: never
 	// wait for an interrupt-delivered answer with them off). A thread that
 	// has not confirmed by the report simply shows there as unconfirmed.
-	uint64_t flags;
-	__asm__ volatile("pushfq\n\tpop %0" : "=r"(flags));
-	if (flags & 0x200) {
+	if (irq & 0x200) {
 		uint64_t deadline = kTicksSinceStart + 10;
 		for (int i = 0; i < kMPCoreCount; i++) {
 			uint32_t apic_id = kCPUInfo[i].apicID;

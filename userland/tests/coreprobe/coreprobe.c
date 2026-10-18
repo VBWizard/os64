@@ -20,10 +20,12 @@
 //
 // coreprobe [ms]     — how long each measurement runs (default 500).
 // coreprobe -s [sec] — SAMPLE instead: for that many seconds, sleep a
-//                      little, then time the imul chain for 100 ms and print
-//                      one line — `<ms since start> apic <n> imul <rate>` —
-//                      so a thread the scheduler moves about reports every
-//                      core it visits and how fast that core ran it.
+//                      little, then time the imul chain and the chain with
+//                      one extra branch of each kind (taken, never-taken,
+//                      indirect, call/ret), 50 ms each, and print one line —
+//                      `<ms since boot> apic <n> imul <rate> +taken <rate> ...`
+//                      — so a thread the scheduler moves about reports every
+//                      core it visits and what a branch costs there.
 #include "os64/os64.h"
 
 static void cpuid(uint32_t leaf, uint32_t sub, uint32_t *a, uint32_t *b, uint32_t *c, uint32_t *d)
@@ -43,87 +45,6 @@ static void copy_u32(uint32_t *dst, const uint32_t *src, size_t n)
 {
     for (size_t i = 0; i < n; i++)
         dst[i] = src[i];
-}
-
-// A pointer chase over `bytes` of cache lines in a random cycle: the time
-// of one dependent load. Inside L1 or L2 it is a cycle count, so it scales
-// with the core clock; from DRAM it is nanoseconds of wire, so it does not.
-__attribute__((unused)) static uint64_t chase_ns10(uint8_t *buf, size_t bytes, int64_t ms)
-{
-    size_t lines = bytes / 64;
-    uint64_t seed = 0x9E3779B97F4A7C15ULL;
-    // Sattolo's shuffle: one cycle through every line.
-    for (size_t i = 0; i < lines; i++)
-        *(uint64_t *)(buf + i * 64) = i;
-    for (size_t i = lines - 1; i > 0; i--) {
-        seed = seed * 6364136223846793005ULL + 1442695040888963407ULL;
-        size_t j = (size_t)((seed >> 33) % i);
-        uint64_t t = *(uint64_t *)(buf + i * 64);
-        *(uint64_t *)(buf + i * 64) = *(uint64_t *)(buf + j * 64);
-        *(uint64_t *)(buf + j * 64) = t;
-    }
-    uint64_t p = 0, loads = 0;
-    int64_t t0 = os64_micros(), t1 = t0;
-    while (t1 - t0 < ms * 1000) {
-        for (uint32_t i = 0; i < 4096; i++)
-            p = *(uint64_t *)(buf + p * 64);
-        loads += 4096;
-        t1 = os64_micros();
-    }
-    __asm__ volatile("" :: "r"(p));
-    return (uint64_t)(t1 - t0) * 10000 / loads;   // tenths of a ns per load
-}
-
-// Three shapes of the same work, to tell a per-instruction cost from a
-// per-branch or per-fetch one. Each returns loop bodies per microsecond.
-//   chain64: the imul chain unrolled 64 deep — one taken branch per 64 steps
-//   nops:    256 nops per branch — pure front-end bandwidth, no dependencies
-//   indep:   16 independent adds per branch — ALU throughput, no latency
-__attribute__((unused)) static uint64_t chain64_rate(int64_t ms)
-{
-    uint64_t x = 1, iters = 0;
-    int64_t t0 = os64_micros(), t1 = t0;
-    while (t1 - t0 < ms * 1000) {
-        for (uint32_t i = 0; i < (1u << 12); i++) {
-#define STEP x = x * 0x5851F42D4C957F2DULL + 0x14057B7EF767814FULL;
-#define STEP8 STEP STEP STEP STEP STEP STEP STEP STEP
-            STEP8 STEP8 STEP8 STEP8 STEP8 STEP8 STEP8 STEP8
-            __asm__ volatile("" : "+r"(x));
-        }
-        iters += 1u << 12;
-        t1 = os64_micros();
-    }
-    __asm__ volatile("" :: "r"(x));
-    return iters / (uint64_t)(t1 - t0);
-}
-
-__attribute__((unused)) static uint64_t nops_rate(int64_t ms)
-{
-    uint64_t iters = 0;
-    int64_t t0 = os64_micros(), t1 = t0;
-    while (t1 - t0 < ms * 1000) {
-        for (uint32_t i = 0; i < (1u << 14); i++)
-            __asm__ volatile(".rept 256\n\tnop\n\t.endr");
-        iters += 1u << 14;
-        t1 = os64_micros();
-    }
-    return iters / (uint64_t)(t1 - t0);
-}
-
-__attribute__((unused)) static uint64_t indep_rate(int64_t ms)
-{
-    uint64_t a0 = 0, a1 = 0, a2 = 0, a3 = 0, a4 = 0, a5 = 0, a6 = 0, a7 = 0, iters = 0;
-    int64_t t0 = os64_micros(), t1 = t0;
-    while (t1 - t0 < ms * 1000) {
-        for (uint32_t i = 0; i < (1u << 16); i++) {
-            a0 += i; a1 += i; a2 += i; a3 += i; a4 += i; a5 += i; a6 += i; a7 += i;
-            a0 ^= i; a1 ^= i; a2 ^= i; a3 ^= i; a4 ^= i; a5 ^= i; a6 ^= i; a7 ^= i;
-            __asm__ volatile("" : "+r"(a0), "+r"(a1), "+r"(a2), "+r"(a3), "+r"(a4), "+r"(a5), "+r"(a6), "+r"(a7));
-        }
-        iters += 1u << 16;
-        t1 = os64_micros();
-    }
-    return iters / (uint64_t)(t1 - t0);
 }
 
 // The imul chain with one extra branch of a given KIND inside each loop
@@ -167,11 +88,6 @@ int main(int argc, char **argv)
 {
     if (argc > 1 && argv[1][0] == '-' && argv[1][1] == 's') {
         int64_t sec = (argc > 2) ? os64_atoi(argv[2]) : 30;
-        uint8_t *l1 = os64_malloc(16384), *l2 = os64_malloc(262144), *mem = os64_malloc(64u << 20);
-        if (l1 == NULL || l2 == NULL || mem == NULL) {
-            os64_printf("coreprobe: cannot map the chase buffers\n");
-            return 1;
-        }
         int64_t start = os64_micros();
         while (os64_micros() - start < sec * 1000000) {
             os64_sleep(20);
