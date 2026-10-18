@@ -18,12 +18,17 @@ copies without shared/, which the userland makefile reads, turned hundreds of
 mutants whose cases build the JS runtime into catches that ran no check. The
 suites are the commands the harness names literally, `bash tools/<suite>.sh`
 or `python3 tools/<suite>.py` with any --flags; a harness that names none is
-refused. A baseline that fails, or runs past BASELINE_SECONDS, fails the
-worker, and its mutants are summarized as "baseline failed".
+refused. A baseline that fails, or runs past the shortest `timeout=` the
+harness gives its own case runs (BASELINE_SECONDS when it gives none), fails
+the worker, and its mutants are summarized as "baseline failed": a baseline
+more patient than the harness would pass a suite whose cases the harness
+then times out and counts as caught.
 
-A harness's mutants are its `mutants = [` list, and each is run with
-`--only <name>`. The harnesses match --only as a substring, so a name inside
-another runs both; the summary keeps one verdict per name.
+A harness's mutants are its `mutants = [` list, split into as many balanced
+shares as there are workers, and each is run with `--only <name>`. The
+harnesses match --only as a substring, so a name inside another runs both;
+a worker reports verdicts for its own share only, so a mutant another
+worker ran by accident never stands in for one its own worker did not.
 
 HOST_BUILD_JOBS (tools/host_build.sh) is set to --jobs in every worker, so
 twenty workers compiling at once do not ask for twenty machines.
@@ -40,7 +45,7 @@ import tempfile
 
 # What a suite builds from. The userland makefile reads ../abi and ../shared.
 TREE_DIRS = ('userland', 'tools', 'abi', 'shared')
-# The longest an unmutated suite may run: the harnesses' own cap on a case run.
+# The longest an unmutated suite may run when its harness sets no case limit.
 BASELINE_SECONDS = 1800
 
 parser = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
@@ -66,6 +71,7 @@ NAME = re.compile(r"^\s{4}\('([^']+)',", re.M)
 # A harness is not a suite, so a name ending _mutants.py is never one.
 SUITE = re.compile(r"\b((?:bash|python3) tools/(?!\w*_mutants\.py)\w+\.(?:sh|py)(?: --[\w-]+)*)")
 VERDICT = re.compile(r'^([a-z0-9][a-z0-9-]*): (caught|MISSED|did not build)$', re.M)
+TIMEOUT = re.compile(r'\btimeout=(\d+)')
 
 
 def plan(spec):
@@ -78,14 +84,19 @@ def plan(spec):
     suites = sorted(set(SUITE.findall(text)))
     if not names or not suites:
         sys.exit(f'mutants_parallel: {harness} names no mutants or no suites to check first')
+    limit = min((int(t) for t in TIMEOUT.findall(text)), default=BASELINE_SECONDS)
     workers = max(1, min(int(n or 1), len(names)))
-    per = -(-len(names) // workers)
-    return [(harness, k, names[k * per:(k + 1) * per], suites) for k in range(workers)
-            if names[k * per:(k + 1) * per]]
+    share, extra = divmod(len(names), workers)
+    jobs, at = [], 0
+    for k in range(workers):
+        size = share + (k < extra)
+        jobs.append((harness, k, names[at:at + size], suites, limit))
+        at += size
+    return jobs
 
 
 def work(job):
-    harness, k, names, suites = job
+    harness, k, names, suites, limit = job
     root = out / f'{harness[:-3]}-{k}'
     for d in dirs:
         shutil.copytree(src / d, root / d, symlinks=True)
@@ -100,7 +111,7 @@ def work(job):
                 b.flush()
                 try:
                     code = subprocess.run(['bash', '-c', suite], cwd=root, env=env, stdout=b,
-                                          stderr=b, timeout=BASELINE_SECONDS).returncode
+                                          stderr=b, timeout=limit).returncode
                 except subprocess.TimeoutExpired:
                     code = 'timeout'
                 if code != 0:
@@ -122,14 +133,16 @@ with concurrent.futures.ThreadPoolExecutor(max_workers=len(jobs)) as pool:
         if text is None:
             broken.append(f'{harness} worker {k} ({len(names)} mutants not run)')
             for name in names:
-                verdicts.setdefault(name, 'baseline failed')
+                verdicts[harness, name] = 'baseline failed'
             continue
+        mine = set(names)
         for name, verdict in VERDICT.findall(text):
-            verdicts[name] = verdict
+            if name in mine:
+                verdicts[harness, name] = verdict
         for name in names:
-            verdicts.setdefault(name, 'no verdict')
+            verdicts.setdefault((harness, name), 'no verdict')
 
-summary = sorted(f'{n}: {v}' for n, v in verdicts.items())
+summary = sorted(f'{h[:-3]} {n}: {v}' for (h, n), v in verdicts.items())
 (out / 'summary.txt').write_text('\n'.join(summary) + '\n')
 caught = sum(v == 'caught' for v in verdicts.values())
 print(f'caught {caught} of {len(verdicts)}')
