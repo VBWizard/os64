@@ -18,11 +18,13 @@ copies without shared/, which the userland makefile reads, turned hundreds of
 mutants whose cases build the JS runtime into catches that ran no check. The
 suites are the commands the harness names literally, `bash tools/<suite>.sh`
 or `python3 tools/<suite>.py` with any --flags; a harness that names none is
-refused. A baseline that fails, or runs past the shortest `timeout=` the
-harness gives its own case runs (BASELINE_SECONDS when it gives none), fails
-the worker, and its mutants are summarized as "baseline failed": a baseline
-more patient than the harness would pass a suite whose cases the harness
-then times out and counts as caught.
+refused. A worker's suites run in turn against ONE deadline, the shortest
+`timeout=` the harness gives its own case runs (BASELINE_SECONDS when it
+gives none), because a harness may run several of them under one case
+timeout. A baseline that fails or runs past it fails the worker, its process
+group is killed, and its mutants are summarized as "baseline failed": a
+baseline more patient than the harness would pass suites whose cases the
+harness then times out and counts as caught.
 
 A harness's mutants are its `mutants = [` list, split into as many balanced
 shares as there are workers, and each is run with `--only <name>`. The
@@ -39,7 +41,9 @@ import os
 import pathlib
 import re
 import shutil
+import signal
 import subprocess
+import time
 import sys
 import tempfile
 
@@ -95,6 +99,18 @@ def plan(spec):
     return jobs
 
 
+def bounded(cmd, cwd, env, log, seconds):
+    """Run cmd in its own process group; past `seconds`, kill all of it."""
+    p = subprocess.Popen(['bash', '-c', cmd], cwd=cwd, env=env, stdout=log, stderr=log,
+                         start_new_session=True)
+    try:
+        return p.wait(timeout=max(seconds, 0))
+    except subprocess.TimeoutExpired:
+        os.killpg(p.pid, signal.SIGKILL)
+        p.wait()
+        return 'timeout'
+
+
 def work(job):
     harness, k, names, suites, limit = job
     root = out / f'{harness[:-3]}-{k}'
@@ -105,15 +121,12 @@ def work(job):
     logs = root / 'logs'
     logs.mkdir()
     with (root / 'out.txt').open('w') as o:
+        deadline = time.monotonic() + limit
         for suite in suites:
             with (logs / 'baseline.log').open('a') as b:
                 b.write(f'$ {suite}\n')
                 b.flush()
-                try:
-                    code = subprocess.run(['bash', '-c', suite], cwd=root, env=env, stdout=b,
-                                          stderr=b, timeout=limit).returncode
-                except subprocess.TimeoutExpired:
-                    code = 'timeout'
+                code = bounded(suite, root, env, b, deadline - time.monotonic())
                 if code != 0:
                     o.write(f'BASELINE FAILED ({code}): {suite} (see {logs / "baseline.log"})\n')
                     return harness, k, names, None

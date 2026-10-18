@@ -31,8 +31,12 @@ fi
 export CCACHE_BASEDIR="$PWD"
 # Debug info names the directory a compile ran in, so ccache keys a -g
 # compile on it unless told not to; a cache keyed on the copy's own path is
-# a cache no other copy can hit.
+# a cache no other copy can hit. Writing that directory as "." instead is
+# what makes the shared object honest in every copy: without it a hit
+# carries the first copy's path, and a sanitizer's report from one tree
+# points into another.
 export CCACHE_NOHASHDIR=1
+host_debug_map=(-fdebug-prefix-map="$PWD"=.)
 
 # One compile, in the background, with any flags this source alone needs
 # after the shared ones; it waits for a free slot first. host_wait collects
@@ -46,7 +50,7 @@ host_compile() {
         wait "${host_pids[0]}" || host_build_failed=1
         host_pids=("${host_pids[@]:1}")
     fi
-    "${host_cc[@]}" "${host_flags[@]}" "$@" -c "$src" -o "$obj" &
+    "${host_cc[@]}" "${host_flags[@]}" "${host_debug_map[@]}" "$@" -c "$src" -o "$obj" &
     host_pids+=("$!")
 }
 
