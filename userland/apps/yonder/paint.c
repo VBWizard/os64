@@ -47,6 +47,8 @@ typedef struct {
     const yonder_dark_t *dark;
     // The paint cache (paint.h), NULL for none.
     yonder_paint_cache_t *cache;
+    // Where the working buffers come from (scratch.h), NULL for the heap.
+    yonder_scratch_t *scratch;
     // A TEXT CLIP's text (PILE3.md § The text clip): when `penned`, a text
     // box draws its run and its decorations in `pen` — no shadows, no
     // relighting — and every other box draws nothing.
@@ -753,7 +755,7 @@ static void mask_emit(const Painter *p, const Mask *m, uint32_t colour)
     int64_t y1 = min64(m->y + m->h, (int64_t)p->view.y + p->view.h);
     if (x1 <= x0 || y1 <= y0 || p->v->mask == NULL)
         return;
-    uint8_t *alpha = os64_malloc((size_t)((x1 - x0) * (y1 - y0)));
+    uint8_t *alpha = yonder_scratch_take(p->scratch, (size_t)((x1 - x0) * (y1 - y0)));
     if (alpha == NULL)
         return;
     uint32_t a = flow_alpha(colour);
@@ -765,7 +767,7 @@ static void mask_emit(const Painter *p, const Mask *m, uint32_t colour)
                (os64_gui_rect_t){(int32_t)(x0 + p->off.x), (int32_t)(y0 + p->off.y),
                                  (int32_t)(x1 - x0), (int32_t)(y1 - y0)},
                alpha, colour & 0xffffffu);
-    os64_free(alpha);
+    yonder_scratch_give(p->scratch, alpha);
 }
 
 // A shape moved by (dx, dy) and grown by `by` on every side, its radii
@@ -893,9 +895,9 @@ static int32_t axis_map(int64_t from, int64_t n, int64_t origin, int64_t size, b
     return nd;
 }
 
-static void blocks_free(Blocks *bk)
+static void blocks_free(const Painter *p, Blocks *bk)
 {
-    os64_free(bk->scratch);
+    yonder_scratch_give(p->scratch, bk->scratch);
     os64_free(bk->blocks);
     os64_free(bk->maps);
 }
@@ -1031,17 +1033,16 @@ typedef struct {
 static bool mask_prepare(const Painter *p, Blocks *bk, int64_t c0, int64_t r0, int64_t c1,
                          int64_t r1)
 {
-    (void)p;
     const ShadowMask *sm = bk->what;
     int64_t sc0 = max64(0, c0 - sm->reach), sc1 = min64(bk->pw, c1 + sm->reach);
     int64_t sr0 = max64(0, r0 - sm->reach), sr1 = min64(bk->ph, r1 + sm->reach);
     Mask m = {sc0, sr0, sc1 - sc0, sr1 - sr0, NULL};
-    m.a = os64_malloc((size_t)(m.w * m.h) * sizeof(*m.a));
+    m.a = yonder_scratch_take(p->scratch, (size_t)(m.w * m.h) * sizeof(*m.a));
     if (m.a == NULL)
         return false;
     mask_cover(&m, &sm->shape, sm->inset);
     if (!mask_blur(&m, sm->blur, sm->inset ? SUB : 0)) {
-        os64_free(m.a);
+        yonder_scratch_give(p->scratch, m.a);
         return false;
     }
     mask_times(&m, &sm->times, !sm->inset);
@@ -1092,15 +1093,15 @@ static bool shadow_kept(const Painter *p, const Round *shape, const Round *times
     bk.klen = bk.key.n;
     bk.base = paint_cache_hash(bk.key.b, bk.klen);
     if (!blocks_map(&bk, x0, x1 - x0, fx0, false, y0, y1 - y0, fy0, false)) {
-        blocks_free(&bk);
+        blocks_free(p, &bk);
         paint_cache_refused(p->cache, true);
         return false;
     }
     if (!blocks_get(p, &bk, mask_prepare, mask_fill)) {
-        blocks_free(&bk);
+        blocks_free(p, &bk);
         return false;
     }
-    uint8_t *alpha = os64_malloc((size_t)((x1 - x0) * (y1 - y0)));
+    uint8_t *alpha = yonder_scratch_take(p->scratch, (size_t)((x1 - x0) * (y1 - y0)));
     if (alpha != NULL) {
         // The part lies inside the mask, so no run is off it.
         uint32_t a = flow_alpha(colour);
@@ -1118,9 +1119,9 @@ static bool shadow_kept(const Painter *p, const Round *shape, const Round *times
                    (os64_gui_rect_t){(int32_t)(x0 + p->off.x), (int32_t)(y0 + p->off.y),
                                      (int32_t)(x1 - x0), (int32_t)(y1 - y0)},
                    alpha, colour & 0xffffffu);
-        os64_free(alpha);
+        yonder_scratch_give(p->scratch, alpha);
     }
-    blocks_free(&bk);
+    blocks_free(p, &bk);
     return true;
 }
 
@@ -1193,7 +1194,7 @@ static void shadow_cast(const Painter *p, const flow_box_t *b, const Round *oute
     if (x1 <= x0 || y1 <= y0)
         return;
     Mask m = {x0, y0, x1 - x0, y1 - y0, NULL};
-    m.a = os64_malloc((size_t)(m.w * m.h) * sizeof(*m.a));
+    m.a = yonder_scratch_take(p->scratch, (size_t)(m.w * m.h) * sizeof(*m.a));
     if (m.a == NULL)
         return;
     // An inset shadow is what its shape leaves, inside the padding box.
@@ -1202,7 +1203,7 @@ static void shadow_cast(const Painter *p, const flow_box_t *b, const Round *oute
         mask_times(&m, times, !sh->inset);
         mask_emit(p, &m, colour);
     }
-    os64_free(m.a);
+    yonder_scratch_give(p->scratch, m.a);
 }
 
 // ── Gradients (Images 3 § 3) ────────────────────────────────────────────
@@ -1463,12 +1464,12 @@ static bool tile_kept(const Painter *p, const Line *line, const yonder_tile_t *t
     bk->klen = bk->key.n;
     bk->base = paint_cache_hash(bk->key.b, bk->klen);
     if (!blocks_map(bk, x0, x1 - x0, tile->at.x, tile->repeat_x, y0, y1 - y0, tile->at.y, tile->repeat_y)) {
-        blocks_free(bk);
+        blocks_free(p, bk);
         paint_cache_refused(p->cache, true);
         return false;
     }
     if (!blocks_get(p, bk, NULL, tile_fill)) {
-        blocks_free(bk);
+        blocks_free(p, bk);
         return false;
     }
     return true;
@@ -1588,10 +1589,10 @@ static bool gradient_paint(const Painter *p, const flow_gradient_t *g, const yon
     // tile when the cache keeps it.
     Blocks bk;
     bool kept = p->cache != NULL && !solid && tile_kept(p, &line, tile, x0, x1, y0, y1, &bk);
-    uint32_t *out = os64_malloc((size_t)((x1 - x0) * (y1 - y0)) * sizeof(*out));
+    uint32_t *out = yonder_scratch_take(p->scratch, (size_t)((x1 - x0) * (y1 - y0)) * sizeof(*out));
     if (out == NULL) {
         if (kept)
-            blocks_free(&bk);
+            blocks_free(p, &bk);
         return false;
     }
     for (int64_t y = y0; y < y1; y++) {
@@ -1627,9 +1628,9 @@ static bool gradient_paint(const Painter *p, const flow_gradient_t *g, const yon
                  (os64_gui_rect_t){(int32_t)(x0 + p->off.x), (int32_t)(y0 + p->off.y),
                                    (int32_t)(x1 - x0), (int32_t)(y1 - y0)},
                  out);
-    os64_free(out);
+    yonder_scratch_give(p->scratch, out);
     if (kept)
-        blocks_free(&bk);
+        blocks_free(p, &bk);
     return true;
 }
 
@@ -2307,11 +2308,11 @@ const flow_box_t *yonder_canvas_owner(const flow_tree_t *tree, const yonder_verb
 
 void yonder_paint(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll,
                   uint32_t paper, const yonder_dark_t *dark, yonder_paint_cache_t *cache,
-                  const yonder_verbs_t *verbs)
+                  yonder_scratch_t *scratch, const yonder_verbs_t *verbs)
 {
     PaintGroups groups = {.depth = 0};
     Painter p = {.v = verbs, .view = viewport, .scroll = scroll, .groups = &groups, .dark = dark,
-                 .cache = cache};
+                 .cache = cache, .scratch = scratch};
     if (cache != NULL)
         paint_cache_begin(cache);
     if (dark != NULL)

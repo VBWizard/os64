@@ -640,6 +640,89 @@ its steps would take them to the steps' rate too.
    a value a script set that changes paint and not shape, so that needs
    the general diff declined above.
 
+**perf-5: the paint's scratch.** In the middle of danlegt on the P5,
+yonder's main thread spent about a fifth of a core on `unmap` and another
+tenth on page faults (10/17: ~300 unmaps a second at ~660 µs each). The
+cause is how libos64 handles a block of 128 KB or more. It gets a region
+of its own (heap.c `HEAP_BIG_BYTES`) and is unmapped on free. So a buffer
+the painter takes and frees on every paint costs, every paint, a map,
+a page fault and a zeroed page for each page it touches, then an unmap
+and a TLB shootdown. A probe at every candidate site (QEMU, mid-page,
+4 s) counted 43 such regions, which was all of the heap's maps:
+
+| Site | Big buffers | What it holds |
+|---|---|---|
+| `gradient_paint` | 29 (~500 KB each) | the view's part of a gradient, copied from the cache's tile when the cache holds it |
+| `shadow_kept` | 11 (~140 KB) | a cached shadow's alpha |
+| `mask_prepare` | 3 | the mask a missing block needs |
+
+The opacity group's copy of what is under it (`glass_group_open`) and
+the transform and text-clip sheets (`pane_through_open`,
+`pane_clip_open`) stayed under the line in QEMU's window, but they are the
+same shape and full screen can carry them over it.
+
+**Fixed at the source, not in malloc** (Chris, 10/18). A cache of freed
+big blocks in libos64 would serve every program, but it would disarm
+MALLOC.md's ratified tripwire: freed addresses are never reused, so a
+stale pointer faults rather than reading the next owner's bytes. Nothing
+but yonder has the habit. So the painter owns its buffers instead:
+
+- **`yonder_scratch_t`** (scratch.c): a fixed set of slots, each a buffer
+  and its capacity, owned by the window like the paint cache and reached
+  through the `Painter` and the glass. `take(bytes)` lends the smallest
+  idle buffer that holds `bytes`. If none does, it allocates one with an
+  eighth to spare, rounded to whole pages, so a box that grows a little
+  between frames keeps its buffer. `give` returns it. A buffer is lent
+  DIRTY: every site above writes each byte before it reads one.
+- **Small requests are not pooled.** Below `YONDER_SCRATCH_FLOOR`
+  (64 KB) a request goes straight to `os64_malloc`. The heap carves those
+  from its pools without the kernel, so they cost nothing to free and
+  holding them would only take slots.
+- **Kept, but not forever.** The paint's end ages the slots, and a
+  buffer idle for `YONDER_SCRATCH_IDLE_PAINTS` paints is freed. Showing
+  another page frees every idle buffer. Idle buffers are held to
+  `YONDER_SCRATCH_KEEP` bytes in all: one given back past that is freed
+  instead of kept.
+- **One painter.** Only the window's main thread paints. The scratch has
+  no lock, and its header says so.
+
+| A slot is | When | It becomes |
+|---|---|---|
+| empty | `take` finds no idle buffer that holds the request | lent (a new buffer) |
+| idle | `take` and it is the smallest that holds the request | lent |
+| idle, too small | `take` finds no empty slot and no idle buffer that fits | lent (its buffer freed, a new one made) |
+| lent | `give` | idle, last used this paint |
+| lent | `give`, and keeping it would pass `YONDER_SCRATCH_KEEP` | empty (freed) |
+| idle | the paint ends, `YONDER_SCRATCH_IDLE_PAINTS` paints since its use | empty (freed) |
+| idle | another page is shown | empty (freed) |
+| any | the window closes (`yonder_scratch_free`) | gone |
+
+A `take` with every slot lent, which only a paint nesting more buffers
+than there are slots can cause, falls back to `os64_malloc`, and `give`
+frees a buffer no slot holds. A buffer never given back stays lent, the
+same leak a missed `free` is today. The host harness asserts that no
+slot is lent between paints.
+
+**Proof.** The host harness's `scratch_cases` walk the table above row by
+row, with its allocator shim's counts as the oracle: a buffer lent again
+is no allocation, and one freed is no longer live. Its oracle paints every
+page through one scratch shared by the whole suite, so each page paints
+on buffers the pages before it left dirty, and the pixels must match the
+painter's without it. `scratch_paint_cases` paints a page with a big
+gradient and a blurred shadow twice, with the cache and without, and the
+second paint must allocate no buffer of the scratch's size: that is what
+catches a site that goes back to the heap. A shadow's mask is prepared
+only while its blocks are missing, so the same is asked of a shadow
+painted again after the cache was emptied. `test_yonder_scratch_mutants.py`
+breaks each rule. In QEMU, the heap's own count of regions taken (4 s):
+
+| | Before | After | The scratch holds |
+|---|---|---|---|
+| Top of danlegt | 25–35 | 0 | 164 KB |
+| The middle | 43 | 0–1 | 1.3 MB |
+
+The P5's user/system split is the reading still owed.
+
 **Then measure again**, and decide whether these are still worth their
 complexity:
 

@@ -1224,6 +1224,11 @@ static struct {
     // page is shown. NULL until the first paint, and when there was no
     // memory for it: the page is then painted working everything out.
     yonder_paint_cache_t *paint_cache;
+    // The painter's working buffers, kept between paints (scratch.h): its
+    // idle ones freed when another page is shown. NULL until the first
+    // paint, and when there was no memory for it: each buffer then comes
+    // from the heap and goes back to it.
+    yonder_scratch_t *paint_scratch;
     bool covered;                   // nobody can see the window: nothing moves
     // When a slow page's deferred layout is owed (pictures_settle), in
     // yonder_now_ms's milliseconds; YONDER_NEVER for none.
@@ -2385,6 +2390,7 @@ static void arrive_now(Page *fresh, NavKind kind, const way_position_t *crumb,
     os64_memset(fresh, 0, sizeof(*fresh));
     // What the last page's paints kept is not this one's.
     yonder_paint_cache_empty(g.paint_cache);
+    yonder_scratch_drop(g.paint_scratch);
     // Its paints are counted from here (diag_paint), its readings anew.
     cost_reset();
     s_cost_readings = 0;
@@ -8165,6 +8171,17 @@ static void glass_pixels(void *ctx, os64_gui_rect_t r, const uint32_t *argb)
                     (uint32_t)at.w, (uint32_t)at.h, (uint32_t)r.w);
 }
 
+// The glass's working buffers come from the painter's scratch too.
+static void *glass_take(size_t bytes)
+{
+    return yonder_scratch_take(g.paint_scratch, bytes);
+}
+
+static void glass_give(void *p)
+{
+    yonder_scratch_give(g.paint_scratch, p);
+}
+
 static void glass_group_open(void *ctx, os64_gui_rect_t bounds)
 {
     const Glass *gl = ctx;
@@ -8177,7 +8194,7 @@ static void glass_group_open(void *ctx, os64_gui_rect_t bounds)
     gs->open[d].under = NULL;
     if (at.w <= 0 || at.h <= 0)
         return;
-    uint32_t *under = os64_malloc((size_t)at.w * (size_t)at.h * sizeof(uint32_t));
+    uint32_t *under = glass_take((size_t)at.w * (size_t)at.h * sizeof(uint32_t));
     if (under == NULL) {
         gs->open[d].at.w = 0;
         return;
@@ -8204,7 +8221,7 @@ static void glass_group_close(void *ctx, uint8_t alpha)
     for (size_t k = 0; k < (size_t)at.w * (size_t)at.h; k++)
         under[k] = keep | (under[k] & 0xffffffu);
     os64_draw_blend(gl->surf, at.x, at.y, under, (uint32_t)at.w, (uint32_t)at.h, (uint32_t)at.w);
-    os64_free(under);
+    glass_give(under);
     gs->open[d].under = NULL;
 }
 
@@ -8583,7 +8600,7 @@ static void pane_group_open(void *ctx, os64_gui_rect_t bounds)
     if (d < 0 || d >= GLASS_GROUPS || (a->open[d].under == NULL) == (b->open[d].under == NULL))
         return;
     for (GlassGroups *g = a; g != NULL; g = g == a ? b : NULL) {
-        os64_free(g->open[d].under);
+        glass_give(g->open[d].under);
         g->open[d].under = NULL;
     }
 }
@@ -8632,7 +8649,7 @@ static void pane_frame(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_g
 static void through_free(GlassThrough *t)
 {
     for (int k = 0; k < 2; k++)
-        os64_free(t->surf[k].pixels);
+        glass_give(t->surf[k].pixels);
     os64_free(t);
 }
 
@@ -8657,7 +8674,7 @@ static bool pane_through_open(void *ctx, os64_gui_rect_t bounds, const double m[
     os64_memset(t, 0, sizeof(*t));
     size_t n = (size_t)bounds.w * (size_t)bounds.h;
     for (int k = 0; k < 2; k++) {
-        t->surf[k].pixels = os64_malloc(n * sizeof(uint32_t));
+        t->surf[k].pixels = glass_take(n * sizeof(uint32_t));
         if (t->surf[k].pixels == NULL) {
             through_free(t);
             return false;
@@ -8712,7 +8729,7 @@ static void pane_through_close(void *ctx, uint8_t alpha)
 static void clip_free(GlassClip *c)
 {
     for (int k = 0; k < 3; k++)
-        os64_free(c->surf[k].pixels);
+        glass_give(c->surf[k].pixels);
     os64_free(c);
 }
 
@@ -8735,7 +8752,7 @@ static bool pane_clip_open(void *ctx, os64_gui_rect_t bounds)
     os64_memset(c, 0, sizeof(*c));
     size_t n = (size_t)bounds.w * (size_t)bounds.h;
     for (int k = 0; k < 3; k++) {
-        c->surf[k].pixels = os64_malloc(n * sizeof(uint32_t));
+        c->surf[k].pixels = glass_take(n * sizeof(uint32_t));
         if (c->surf[k].pixels == NULL) {
             clip_free(c);
             return false;
@@ -8886,9 +8903,13 @@ static void view_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_
     yonder_paint_stage = cost_painter;
     if (g.paint_cache == NULL)
         g.paint_cache = yonder_paint_cache_new(YONDER_PAINT_CACHE_BUDGET);
-    yonder_paint(g.page.tree, view, scroll_now(), PAGE_PAPER, s_dark ? &kDark : NULL, g.paint_cache, &v);
+    if (g.paint_scratch == NULL)
+        g.paint_scratch = yonder_scratch_new();
+    yonder_paint(g.page.tree, view, scroll_now(), PAGE_PAPER, s_dark ? &kDark : NULL, g.paint_cache,
+                 g.paint_scratch, &v);
     yonder_paint_stage = NULL;
     box_bars(&gl, view);
+    yonder_scratch_paint_end(g.paint_scratch);
     cost_end(PS_VIEW);
 }
 
@@ -9912,6 +9933,8 @@ int main(int argc, char **argv)
     // After the departure write (page_clear), which reads its counts.
     yonder_paint_cache_free(g.paint_cache);
     g.paint_cache = NULL;
+    yonder_scratch_free(g.paint_scratch);
+    g.paint_scratch = NULL;
     way_jar_free(g.way.jar);
     if (g.cache != NULL)
         way_cache_close(g.cache);
