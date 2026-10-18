@@ -406,6 +406,9 @@ void kernel_init()
 	}
     printf("SMP: Initializing ... ");
     kLimineSMPInfo = smp_request.response;
+    // The probe's MSR table is CPUID's answer, the same on every core; built
+    // here, single-threaded, so no two probes ever build it at once.
+    nmi_probe_init();
     init_SMP(kEnableSMP);
     printf("(%u core(s) initialized)\n", kMPCoreCount);
     // Say which scheduler this boot got — the mode is a cmdline decision now
@@ -429,9 +432,6 @@ void kernel_init()
 	create_kernel_task();
 
 	ap_initialization_handler();
-	// Every thread, the BSP last, has now written its speculation controls:
-	// the one moment the report can say what the whole machine runs under.
-	spec_ctrl_report();
 
 	// Route the PIT through the IOAPIC. The vector is named rather than
 	// hard-coded because moving it is a live question, not a settled one — the
@@ -583,6 +583,10 @@ void kernel_init()
 
 	ap_wake_up_aps();
 	BOOTMARK("aps-awake");
+	// Every thread has now run its init and written its speculation controls
+	// (the APs just did, in ap_wake_up_aps's handshake): the first moment the
+	// report can say what the whole machine runs under.
+	spec_ctrl_report();
 
 	kProcessSignals = true;
 	BOOTMARK("signals-on");

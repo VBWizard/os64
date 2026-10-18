@@ -67,7 +67,7 @@ typedef struct {
 	uint64_t rip, cs, rflags, rsp, ss;
 } nmi_frame_t;
 
-// How many configuration MSRs a snapshot can carry (nmi_probe_msr_init
+// How many configuration MSRs a snapshot can carry (nmi_probe_init
 // builds the list from CPUID; it is a dozen and a half on a Zen).
 #define NMI_PROBE_MSR_MAX 24
 
@@ -116,10 +116,8 @@ typedef struct {
 	// every thread (EFER, PAT, SPEC_CTRL); the rest are whatever the firmware
 	// and the previous boot left, so two threads of one core can differ and
 	// nothing else says so. Diff them when one thread is inexplicably slow.
-	// msrFailed marks a register the CPU refused (#GP) despite CPUID's promise.
 	uint32_t msrCount;
 	uint64_t msr[NMI_PROBE_MSR_MAX];
-	uint8_t  msrFailed[NMI_PROBE_MSR_MAX];
 	uint64_t dr7;
 
 	// Published LAST. A reader that sees this true is guaranteed to see every
@@ -134,12 +132,10 @@ typedef struct {
 // has always handled vector 2.
 bool nmi_probe_capture(nmi_regs_t *regs, nmi_frame_t *frame);
 
-// The rdmsr the #GP handler knows by address (exception_dispatch): a
-// configuration register the CPU refuses resumes at nmi_probe_rdmsr_after
-// with a zero result, and nmi_probe_rdmsr_refused raises the core's flag —
-// instead of a #GP ending the machine inside an NMI handler.
-extern char nmi_probe_rdmsr_insn[], nmi_probe_rdmsr_after[];
-void nmi_probe_rdmsr_refused(void);
+// Build the MSR table from CPUID. Once, single-threaded, before any core can
+// be probed: the capture reads the table from an NMI handler and must never
+// see it half-built.
+void nmi_probe_init(void);
 
 // Fire an NMI at one core and wait — WITH INTERRUPTS ENABLED — for its answer.
 // Returns false on timeout, which is not a failure but a verdict: a core that

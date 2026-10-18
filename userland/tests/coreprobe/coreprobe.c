@@ -10,8 +10,10 @@
 //             id, and AMD's leaf 0x8000001E (core id, threads per core, node)
 //             — the processor's OWN statement of which CPUs share a core.
 //   imul      a dependent multiply-add chain: iterations per microsecond.
-//             Each step is one imul (3 cycles on Zen) plus one add, so the
-//             core clock is roughly 4x this number in MHz.
+//             Built -O2 (the makefile's OPTIMIZED_APPS), so each step is one
+//             imul plus one add on the chain and the loop's own branch; on
+//             a Zen that is about four cycles, so the core clock is roughly
+//             4x this number in MHz.
 //   memcpy    libos64's memcpy, 8 MB to 8 MB, and a plain 32-bit copy loop
 //             like the compositor's blit, both in MB/s.
 //   syscalls  micros() round trips per millisecond.
@@ -173,13 +175,20 @@ int main(int argc, char **argv)
         int64_t start = os64_micros();
         while (os64_micros() - start < sec * 1000000) {
             os64_sleep(20);
-            uint32_t before = apic_now();
-            uint64_t rate = imul_rate(50), rt = taken_rate(50), rnt = nottaken_rate(50);
-            uint64_t rind = indirect_rate(50), rcr = callret_rate(50);
-            uint32_t after = apic_now();
+            // Each kernel is bracketed by its own APIC reads: a line is one
+            // core's only if every bracket agreed, else it is marked and the
+            // numbers are nobody's. (A move away and back inside one 50 ms
+            // kernel is the gap this cannot see.)
+            uint32_t apic = apic_now();
+            bool moved = false;
+            uint64_t rate = imul_rate(50);      moved |= apic_now() != apic;
+            uint64_t rt = taken_rate(50);       moved |= apic_now() != apic;
+            uint64_t rnt = nottaken_rate(50);   moved |= apic_now() != apic;
+            uint64_t rind = indirect_rate(50);  moved |= apic_now() != apic;
+            uint64_t rcr = callret_rate(50);    moved |= apic_now() != apic;
             // Time since BOOT, so two samplers started apart share one clock.
             os64_printf("%ld apic %u%s imul %lu +taken %lu +nottaken %lu +indirect %lu +callret %lu\n",
-                        os64_micros() / 1000, after, before == after ? "" : "(moved)",
+                        os64_micros() / 1000, apic, moved ? "(moved)" : "",
                         rate, rt, rnt, rind, rcr);
         }
         return 0;

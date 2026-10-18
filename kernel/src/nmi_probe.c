@@ -16,6 +16,7 @@
 #include <cpuid.h>   // __get_cpuid — which configuration MSRs this CPU has
 
 #include "nmi_probe.h"
+#include "msr.h"                 // rdmsr64 — the configuration registers
 #include "smp.h"
 #include "smp_core.h"
 #include "scheduler.h"
@@ -79,9 +80,14 @@ static volatile uint8_t kNmiProbeRequest[MAX_CPUS];
 // SPEC_CTRL since that day), the rest are whatever the firmware and the
 // previous boot left. This is where all of it becomes visible.
 //
-// The list is built ONCE from CPUID so a register the CPU does not implement
-// is never asked for, and probe_rdmsr is the belt to that brace: a refused
-// register marks its slot failed instead of taking the machine down.
+// NOTHING ON THIS LIST MAY FAULT. The reads run inside the NMI handler, and
+// a #GP there is not survivable in any honest way: its iretq re-enables NMI
+// delivery while the capture is still on IST2, so a second NMI would land
+// on the live handler's stack (SDM vol. 3 §7.7.1) — and the EXCOLD boot's
+// legacy #GP handler would simply halt. So a register is listed only when
+// the architecture or a CPUID bit promises it, and Zen's unit-config
+// registers only for the families that document them (and answered on the
+// P5's family 19h). A future family gets none of those rather than a guess.
 typedef struct {
 	uint32_t index;
 	const char *name;
@@ -89,8 +95,6 @@ typedef struct {
 
 static nmi_probe_msr_t kNmiProbeMsrs[NMI_PROBE_MSR_MAX];
 static uint32_t kNmiProbeMsrCount;
-static bool kNmiProbeMsrsBuilt;
-static volatile uint8_t kNmiProbeMsrFault[MAX_CPUS];
 
 static void msr_add(uint32_t index, const char *name)
 {
@@ -101,11 +105,9 @@ static void msr_add(uint32_t index, const char *name)
 	}
 }
 
-static void nmi_probe_msr_init(void)
+void nmi_probe_init(void)
 {
-	if (kNmiProbeMsrsBuilt) {
-		return;
-	}
+	kNmiProbeMsrCount = 0;
 	uint32_t a = 0, b = 0, c = 0, d = 0;
 	bool amd = false, intel = false;
 	if (__get_cpuid(0, &a, &b, &c, &d)) {
@@ -154,11 +156,15 @@ static void nmi_probe_msr_init(void)
 			msr_add(0xC00102B1, "CPPC_ENABLE");
 			msr_add(0xC00102B3, "CPPC_REQ");
 		}
-		if (family >= 0x17) {                    // Zen's unit configuration registers
+		// Zen's unit configuration registers: the three Linux touches on
+		// family 17h, all five on 19h where every one answered (the P5).
+		if (family == 0x17 || family == 0x19) {
 			msr_add(0xC0011020, "LS_CFG");
 			msr_add(0xC0011021, "IC_CFG");
-			msr_add(0xC0011022, "DC_CFG");
 			msr_add(0xC0011029, "DE_CFG");
+		}
+		if (family == 0x19) {
+			msr_add(0xC0011022, "DC_CFG");
 			msr_add(0xC001102A, "BU_CFG2");
 		}
 	}
@@ -171,29 +177,6 @@ static void nmi_probe_msr_init(void)
 			msr_add(0x774, "HWP_REQUEST");
 		}
 	}
-	kNmiProbeMsrsBuilt = true;
-}
-
-// noinline, because the instruction carries a global label and an inlined
-// copy would carry it twice.
-__attribute__((noinline)) static uint64_t probe_rdmsr(uint32_t index)
-{
-	uint32_t lo, hi;
-	__asm__ volatile(
-		".globl nmi_probe_rdmsr_insn\n\t"
-		"nmi_probe_rdmsr_insn:\n\t"
-		"rdmsr\n\t"
-		".globl nmi_probe_rdmsr_after\n\t"
-		"nmi_probe_rdmsr_after:"
-		: "=a"(lo), "=d"(hi) : "c"(index) : "memory");
-	return ((uint64_t)hi << 32) | lo;
-}
-
-void nmi_probe_rdmsr_refused(void)
-{
-	core_local_storage_t *cls = get_core_local_storage();
-	if (cls != NULL && (uint32_t)cls->apic_id < MAX_CPUS)
-		kNmiProbeMsrFault[cls->apic_id] = 1;
 }
 
 bool nmi_probe_capture(nmi_regs_t *regs, nmi_frame_t *frame)
@@ -248,14 +231,11 @@ bool nmi_probe_capture(nmi_regs_t *regs, nmi_frame_t *frame)
 	s->apicLVTTimer        = read_apic_register(kMPApicBase + APIC_LVT_TIMER_OFFSET);
 
 	// The configuration registers — the thread's, so only readable from here.
-	// A #GP inside this loop resumes past the rdmsr with the slot marked
-	// (nmi_probe_rdmsr_refused); the asker built the list before asking.
+	// Every index comes from the table nmi_probe_init built, which lists
+	// nothing this CPU could refuse (the doctrine at the table).
 	s->msrCount = kNmiProbeMsrCount;
-	for (uint32_t i = 0; i < s->msrCount; i++) {
-		kNmiProbeMsrFault[apic_id] = 0;
-		s->msr[i] = probe_rdmsr(kNmiProbeMsrs[i].index);
-		s->msrFailed[i] = kNmiProbeMsrFault[apic_id];
-	}
+	for (uint32_t i = 0; i < s->msrCount; i++)
+		s->msr[i] = rdmsr64(kNmiProbeMsrs[i].index);
 	__asm__ volatile("mov %0, dr7" : "=r"(s->dr7));
 
 	// Publish. Everything above must be visible before `valid` is, and must
@@ -480,16 +460,13 @@ void nmi_probe_render(const nmi_probe_snapshot_t *s, nmi_probe_line_fn emit, voi
 	        s->apicInServiceVector, s->apicTPR, s->apicPPR, s->apicLVTTimer);
 	emit(ctx, line);
 
-	// The thread's configuration registers, three a line, a refused one as
-	// #GP. Two threads of one core that disagree here are the finding.
+	// The thread's configuration registers, three a line. Two threads of one
+	// core that disagree here are the finding.
 	for (uint32_t i = 0; i < s->msrCount; i += 3) {
 		int n = sprintf(line, "  msr:");
 		for (uint32_t j = i; j < s->msrCount && j < i + 3; j++) {
 			const char *name = j < kNmiProbeMsrCount ? kNmiProbeMsrs[j].name : "?";
-			if (s->msrFailed[j])
-				n += sprintf(line + n, " %s=#GP", name);
-			else
-				n += sprintf(line + n, " %s=%016lx", name, s->msr[j]);
+			n += sprintf(line + n, " %s=%016lx", name, s->msr[j]);
 		}
 		sprintf(line + n, "\n");
 		emit(ctx, line);
@@ -539,10 +516,6 @@ bool nmi_probe_core(uint32_t apic_id, uint32_t timeout_ticks)
 		probe_emit("nmi_probe: refusing to probe the core doing the asking\n");
 		return false;
 	}
-
-	// The MSR list is CPUID's answer and the same on every core, so the asker
-	// builds it (once) before the target is asked to read it.
-	nmi_probe_msr_init();
 
 	kNmiSnapshot[apic_id].valid = 0;
 	__asm__ volatile("" ::: "memory");

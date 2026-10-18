@@ -31,7 +31,6 @@
 #include "thread.h"
 #include "BasicRenderer.h"      // the glass: bust the lock, kill the throttle, home the cursor
 #include "gui/compositor.h"     // gui_emergency_disable — same escape hatch panic() uses
-#include "nmi_probe.h"          // the probe's rdmsr fixup — a refused register resumes
 #include "tty.h"                // tty_emergency_direct — ditto, one layer up
 #include "io.h"                 // inb — the pager reads the 8042 by hand (IF=0, no IRQs)
 #include "watchpoint.h"         // the #DB seam: which watchpoint fired, and does it resume
@@ -637,20 +636,6 @@ void exception_dispatch(exception_context_t *ctx)
 	// stack with them.
 	exception_context_t *prev = kCurrentCtx[core];
 	kCurrentCtx[core] = ctx;
-
-	// The NMI probe's rdmsr (nmi_probe.c): a configuration register the CPU
-	// refuses despite CPUID's promise resumes past the instruction with a
-	// zero result and the probe's flag raised. The alternative is a #GP
-	// report from inside an NMI handler, which ends the machine to say that
-	// one register was absent.
-	if (ctx->vector == 13 && ctx->rip == (uint64_t)nmi_probe_rdmsr_insn) {
-		ctx->rip = (uint64_t)nmi_probe_rdmsr_after;
-		ctx->rax = 0;
-		ctx->rdx = 0;
-		nmi_probe_rdmsr_refused();
-		kCurrentCtx[core] = prev;
-		return;
-	}
 
 	if (ctx->vector == 14) {
 		uint64_t cr2;
