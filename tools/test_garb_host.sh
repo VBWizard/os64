@@ -21,20 +21,22 @@ trap cleanup EXIT
 # memset — and recurse until the stack or the machine runs out.
 # float-cast-overflow is not in GCC's `undefined`: a double cast to an
 # integer it does not fit is the undefined behaviour a number parser invites.
-cc -std=c11 -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined,float-cast-overflow \
-   -fno-sanitize-recover=all -fno-builtin -fno-tree-loop-distribute-patterns \
-   -I userland/libgarb/include -I userland/libgarb -I userland/libhtml/include \
-   -I userland/libos64/include -I userland -I abi/include \
-   tools/test_garb_host.c \
-   userland/libgarb/tokenize.c userland/libgarb/parse.c userland/libgarb/decode.c \
-   userland/libgarb/dump.c userland/libgarb/select.c \
-   userland/libgarb/values.c userland/libgarb/props.c \
-   userland/libgarb/media.c userland/libgarb/cascade.c \
-   userland/libhtml/core.c userland/libhtml/encoding.c \
-   userland/libhtml/tokenizer.c userland/libhtml/tree.c userland/libhtml/dom.c \
-   userland/libhtml/fragment.c userland/libhtml/serialize.c \
-   userland/libos64/str.c userland/libos64/fmt.c userland/libos64/arena.c \
-   -o "$work/garb_driver"
+. tools/host_build.sh
+host_flags=(-std=c11 -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined,float-cast-overflow
+   -fno-sanitize-recover=all -fno-builtin -fno-tree-loop-distribute-patterns
+   -I userland/libgarb/include -I userland/libgarb -I userland/libhtml/include
+   -I userland/libos64/include -I userland -I abi/include)
+host_sources=(tools/test_garb_host.c
+   userland/libgarb/tokenize.c userland/libgarb/parse.c userland/libgarb/decode.c
+   userland/libgarb/dump.c userland/libgarb/select.c
+   userland/libgarb/values.c userland/libgarb/props.c
+   userland/libgarb/media.c userland/libgarb/cascade.c
+   userland/libhtml/core.c userland/libhtml/encoding.c
+   userland/libhtml/tokenizer.c userland/libhtml/tree.c userland/libhtml/dom.c
+   userland/libhtml/fragment.c userland/libhtml/serialize.c
+   userland/libos64/str.c userland/libos64/fmt.c userland/libos64/arena.c)
+host_objects "$work"
+cc -fsanitize=address,undefined,float-cast-overflow "${host_objs[@]}" -o "$work/garb_driver"
 
 python3 tools/test_garb_suite.py "$work/garb_driver"
 "$work/garb_driver" --sweep tools/garb_corpus/sweep.css
