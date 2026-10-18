@@ -2078,6 +2078,10 @@ static void stream_slices(void) {
     g.paint_cache=yonder_paint_cache_new(YONDER_PAINT_CACHE_BUDGET);
     paint_cache_begin(g.paint_cache);
     (void)paint_cache_make(g.paint_cache,(const uint8_t *)"k",1,paint_cache_hash((const uint8_t *)"k",1),64);
+    /* And the buffers they left idle (§ perf-5). */
+    g.paint_scratch=yonder_scratch_new();
+    yonder_scratch_give(g.paint_scratch,yonder_scratch_take(g.paint_scratch,YONDER_SCRATCH_FLOOR));
+    check(yonder_scratch_counts(g.paint_scratch).idle==1,"stream: the last page's paint left a buffer idle");
     start_trip("http://fixture.test/p",NULL,NAV_GO,NULL);
     check(g.stream.active && g.nav.id==1 && pool_work.job!=NULL && g.stop.disabled==false,
         "stream: a navigation starts a stream and lights Stop");
@@ -2103,8 +2107,12 @@ static void stream_slices(void) {
     check(probe_text_is("t","end"),"stream: the last chunk's text is in the page");
     check(yonder_paint_cache_counts(g.paint_cache).entries==0,
         "stream: what the last page's paints kept is let go when this one is shown");
+    check(yonder_scratch_counts(g.paint_scratch).idle==0 && yonder_scratch_counts(g.paint_scratch).idle_bytes==0,
+        "stream: the buffers the last page's paints left idle are freed when this one is shown");
     yonder_paint_cache_free(g.paint_cache);
     g.paint_cache=NULL;
+    yonder_scratch_free(g.paint_scratch);
+    g.paint_scratch=NULL;
     stream_window_drop();
     /* The same five chunks with the verdict still to come: the worker rang
      * once per post and a stalled socket rings nothing more, so the slice

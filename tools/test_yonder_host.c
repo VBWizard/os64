@@ -88,6 +88,9 @@ static long s_alloc_left = -1;
 static long s_paint_alloc_left = -1;
 // Every byte asked for, and what paint_of's own painting asked for.
 static size_t s_alloc_bytes, s_paint_bytes;
+// Every allocation made: a buffer the scratch lends again is not one. And
+// those of the scratch's size, all and paint_of's own painting's.
+static uint64_t s_mallocs, s_big_mallocs, s_paint_big;
 
 void *os64_malloc(size_t size)
 {
@@ -97,8 +100,12 @@ void *os64_malloc(size_t size)
         s_alloc_left--;
     s_alloc_bytes += size;
     void *at = malloc(size != 0 ? size : 1);
-    if (at != NULL)
+    if (at != NULL) {
         live++;
+        s_mallocs++;
+        if (size >= YONDER_SCRATCH_FLOOR)
+            s_big_mallocs++;
+    }
     return at;
 }
 
@@ -498,43 +505,66 @@ static yonder_paint_cache_t *s_suite_cache, *s_small_cache;
 // When set, paint_of's own painting goes through this cache: a case that
 // counts what a cache did (paint_cache_cases).
 static yonder_paint_cache_t *s_through;
+// And through this scratch (scratch_paint_cases).
+static yonder_scratch_t *s_through_scratch;
 // When set, the oracle paints through this cache too: a case's own, after
 // something was done to it (paint_cache_cases).
 static yonder_paint_cache_t *s_oracle_extra;
+// The oracle's scratch, one for the whole suite: every page paints on the
+// buffers the pages before it left dirty, so a site that reads a byte it
+// did not write paints something else.
+static yonder_scratch_t *s_suite_scratch;
 
-// `t` painted through `view`, every pixel recorded, through `cache` (NULL
-// for none).
+// `t` painted through `view`, every pixel recorded, through `cache` and
+// `scratch` (NULL for none).
 static char *paint_whole(flow_tree_t *t, os64_page_t *page, os64_gui_rect_t view,
-                         yonder_paint_cache_t *cache)
+                         yonder_paint_cache_t *cache, yonder_scratch_t *scratch)
 {
     Rec rec = {{0}, view, false, page};
     out(&rec.out, "%s", "");
     yonder_verbs_t v = verbs_of(&rec);
     s_record_all = true;
     s_alloc_starved = s_paint_starved;
-    yonder_paint(t, view, (flow_point_t){view.x, view.y}, kEnv.paper, s_dark_paint, cache, &v);
+    yonder_paint(t, view, (flow_point_t){view.x, view.y}, kEnv.paper, s_dark_paint, cache, scratch,
+                 &v);
     s_alloc_starved = false;
     s_record_all = false;
+    if (scratch != NULL) {
+        yonder_scratch_paint_end(scratch);
+        expect("scratch: a paint gives back every buffer it takes",
+               yonder_scratch_counts(scratch).lent == 0, NULL);
+    }
     return rec.out.v;
 }
 
 // What the cache paints is what the painter works out: the page without
 // it, then through the suite's cache twice — the second paint finding what
-// the first made — and through the small one.
+// the first made — and through the small one. And what the scratch paints
+// too, alone and with the suite's cache: not when a case starves the
+// paint, which a buffer the scratch already holds would then outlive.
 static void paint_oracle(flow_tree_t *t, os64_page_t *page, os64_gui_rect_t view, const char *html)
 {
     if (s_suite_cache == NULL)
         return;
-    char *plain = paint_whole(t, page, view, NULL);
+    char *plain = paint_whole(t, page, view, NULL, NULL);
     yonder_paint_cache_t *through[4] = {s_suite_cache, s_suite_cache, s_small_cache, s_oracle_extra};
     for (int i = 0; i < 4 && through[i] != NULL; i++) {
-        char *kept = paint_whole(t, page, view, through[i]);
+        char *kept = paint_whole(t, page, view, through[i], NULL);
         bool same = plain != NULL && kept != NULL && strcmp(plain, kept) == 0;
         char what[160];
         snprintf(what, sizeof(what), "%s the paint cache paints what the painter works out: %.100s",
                  i == 3 ? "case's:" : i == 2 ? "small:" : i == 1 ? "again:" : "suite:", html);
         expect(what, same, same ? NULL : kept);
         free(kept);
+    }
+    for (int i = 0; i < 2 && s_suite_scratch != NULL && !s_paint_starved; i++) {
+        char *lent = paint_whole(t, page, view, i == 0 ? NULL : s_suite_cache, s_suite_scratch);
+        bool same = plain != NULL && lent != NULL && strcmp(plain, lent) == 0;
+        char what[160];
+        snprintf(what, sizeof(what), "%s the scratch paints what the painter works out: %.100s",
+                 i == 0 ? "alone:" : "cached:", html);
+        expect(what, same, same ? NULL : lent);
+        free(lent);
     }
     free(plain);
 }
@@ -568,9 +598,13 @@ static char *paint_of(const char *html, size_t len, int32_t width, os64_gui_rect
     s_alloc_starved = s_paint_starved;
     s_alloc_left = s_paint_alloc_left;
     size_t bytes = s_alloc_bytes;
+    uint64_t big = s_big_mallocs;
     if (t != NULL)
-        yonder_paint(t, view, (flow_point_t){view.x, view.y}, kEnv.paper, s_dark_paint, s_through, &v);
+        yonder_paint(t, view, (flow_point_t){view.x, view.y}, kEnv.paper, s_dark_paint, s_through,
+                     s_through_scratch, &v);
+    yonder_scratch_paint_end(s_through_scratch);
     s_paint_bytes = s_alloc_bytes - bytes;
+    s_paint_big = s_big_mallocs - big;
     s_alloc_starved = false;
     s_alloc_left = -1;
     if (t != NULL)
@@ -1601,6 +1635,198 @@ static void paint_cache_cases(void)
     yonder_paint_cache_free(c);
 }
 
+// The scratch's rules (YONDER_PERF.md § perf-5), a row of its table at a
+// time. The shim's own counts are the oracle: a buffer lent again is no
+// allocation, and one freed is no longer live.
+static void scratch_cases(void)
+{
+    const size_t big = 100 * 1024;
+    yonder_scratch_t *s = yonder_scratch_new();
+    expect("scratch: made", s != NULL, NULL);
+    if (s == NULL)
+        return;
+    size_t live0 = live;
+
+    // Below the floor, the heap's: taken and freed, never kept.
+    uint64_t m0 = s_mallocs;
+    void *small = yonder_scratch_take(s, YONDER_SCRATCH_FLOOR - 1);
+    yonder_scratch_give(s, small);
+    yonder_scratch_counts_t c = yonder_scratch_counts(s);
+    expect("scratch: a small request is the heap's", small != NULL && s_mallocs == m0 + 1 &&
+           c.unpooled == 1 && c.made == 0 && c.idle == 0 && live == live0, NULL);
+
+    // Empty slot, then lent, then idle; the same size lent again allocates
+    // nothing and is the same buffer.
+    m0 = s_mallocs;
+    char *a = yonder_scratch_take(s, big);
+    c = yonder_scratch_counts(s);
+    expect("scratch: a big request makes a buffer, lent", a != NULL && s_mallocs == m0 + 1 &&
+           c.made == 1 && c.lent == 1 && c.idle == 0, NULL);
+    memset(a, 0x5a, big);
+    yonder_scratch_give(s, a);
+    c = yonder_scratch_counts(s);
+    expect("scratch: given back, it is idle", c.lent == 0 && c.idle == 1 && c.idle_bytes >= big, NULL);
+    m0 = s_mallocs;
+    char *again = yonder_scratch_take(s, big);
+    c = yonder_scratch_counts(s);
+    expect("scratch: the same size is lent again, dirty, with no allocation",
+           again == a && s_mallocs == m0 && c.reused == 1 && c.lent == 1 && c.idle == 0 &&
+           c.idle_bytes == 0 && (unsigned char)again[big - 1] == 0x5a, NULL);
+    yonder_scratch_give(s, again);
+
+    // A little bigger fits the eighth to spare.
+    m0 = s_mallocs;
+    void *grown = yonder_scratch_take(s, big + big / 10);
+    expect("scratch: a box a little bigger keeps its buffer", grown == a && s_mallocs == m0, NULL);
+    yonder_scratch_give(s, grown);
+
+    // The smallest idle buffer that holds the request is the one lent.
+    void *two = yonder_scratch_take(s, 4 * big);
+    yonder_scratch_give(s, two);
+    void *fits = yonder_scratch_take(s, big / 2 + YONDER_SCRATCH_FLOOR);
+    expect("scratch: the smallest idle buffer that holds it is lent", fits == a, NULL);
+    void *next = yonder_scratch_take(s, big);
+    expect("scratch: and the next is the bigger one", next == two, NULL);
+    yonder_scratch_give(s, fits);
+    yonder_scratch_give(s, next);
+
+    // Idle buffers too small, and no empty slot: the smallest is freed and
+    // remade. Every slot lent: the heap's, freed on its way back.
+    yonder_scratch_drop(s);
+    expect("scratch: dropped, nothing is held", live == live0 && yonder_scratch_counts(s).idle == 0, NULL);
+    void *held[YONDER_SCRATCH_SLOTS];
+    for (int i = 0; i < YONDER_SCRATCH_SLOTS; i++)
+        held[i] = yonder_scratch_take(s, big + (size_t)i * 8192);
+    m0 = s_mallocs;
+    void *over = yonder_scratch_take(s, big);
+    c = yonder_scratch_counts(s);
+    expect("scratch: every slot lent, the heap's", over != NULL && s_mallocs == m0 + 1 &&
+           c.lent == YONDER_SCRATCH_SLOTS, NULL);
+    size_t live_lent = live;
+    yonder_scratch_give(s, over);
+    expect("scratch: a buffer no slot holds is freed", live == live_lent - 1, NULL);
+    for (int i = 0; i < YONDER_SCRATCH_SLOTS; i++)
+        yonder_scratch_give(s, held[i]);
+    m0 = s_mallocs;
+    size_t live_idle = live;
+    void *huge = yonder_scratch_take(s, 8 * big);
+    c = yonder_scratch_counts(s);
+    expect("scratch: none fits and none is empty: the smallest idle one is remade",
+           huge != NULL && huge != held[0] && s_mallocs == m0 + 1 && live == live_idle &&
+           c.idle == YONDER_SCRATCH_SLOTS - 1, NULL);
+    m0 = s_mallocs;
+    void *second = yonder_scratch_take(s, big + 8192);
+    expect("scratch: the next smallest is still kept", second == held[1] && s_mallocs == m0, NULL);
+    yonder_scratch_give(s, second);
+    yonder_scratch_give(s, huge);
+
+    // Idle long enough, freed at a paint's end; a lent one is not. Some
+    // paints go by first, so the paint it was given back in is not the
+    // first one.
+    yonder_scratch_drop(s);
+    for (int i = 0; i < 5; i++)
+        yonder_scratch_paint_end(s);
+    void *idle = yonder_scratch_take(s, big);
+    yonder_scratch_give(s, idle);
+    void *busy = yonder_scratch_take(s, 2 * big);
+    for (int i = 0; i < YONDER_SCRATCH_IDLE_PAINTS; i++)
+        yonder_scratch_paint_end(s);
+    c = yonder_scratch_counts(s);
+    expect("scratch: idle for the allowed paints, still kept", c.idle == 1 && c.lent == 1, NULL);
+    yonder_scratch_paint_end(s);
+    c = yonder_scratch_counts(s);
+    expect("scratch: one paint more, freed; the lent one kept", c.idle == 0 && c.lent == 1 &&
+           c.idle_bytes == 0, NULL);
+    yonder_scratch_drop(s);
+    expect("scratch: another page frees no lent buffer", yonder_scratch_counts(s).lent == 1, NULL);
+    yonder_scratch_give(s, busy);
+
+    // Idle buffers held to the keep: one given back past it is freed.
+    yonder_scratch_drop(s);
+    const size_t part = YONDER_SCRATCH_KEEP / 4;
+    void *quarter[5];
+    for (int i = 0; i < 5; i++)
+        quarter[i] = yonder_scratch_take(s, part - part / 8 - 8192);
+    for (int i = 0; i < 5; i++)
+        yonder_scratch_give(s, quarter[i]);
+    c = yonder_scratch_counts(s);
+    expect("scratch: idle buffers never hold more than the keep",
+           c.idle == 4 && c.idle_bytes <= YONDER_SCRATCH_KEEP && c.lent == 0, NULL);
+    m0 = s_mallocs;
+    c = yonder_scratch_counts(s);
+    void *past = yonder_scratch_take(s, YONDER_SCRATCH_KEEP);
+    yonder_scratch_counts_t d = yonder_scratch_counts(s);
+    yonder_scratch_give(s, past);
+    expect("scratch: a request past the keep is the heap's",
+           past != NULL && s_mallocs == m0 + 1 && d.unpooled == c.unpooled + 1 && d.made == c.made &&
+           d.lent == 0 && yonder_scratch_counts(s).idle == 4, NULL);
+
+    // No scratch at all: the heap's, every time.
+    m0 = s_mallocs;
+    void *none = yonder_scratch_take(NULL, big);
+    yonder_scratch_give(NULL, none);
+    yonder_scratch_counts_t z = yonder_scratch_counts(NULL);
+    expect("scratch: NULL takes from the heap and frees", none != NULL && s_mallocs == m0 + 1 &&
+           z.made == 0 && z.lent == 0, NULL);
+
+    yonder_scratch_free(s);
+    expect("scratch: freed, nothing is left", live == live0 - 1, NULL);
+}
+
+// What the painter takes from its scratch: a page painted again, with the
+// cache and without it, allocates no buffer of the scratch's size, so
+// every site that takes one gives it back to be lent again.
+static void scratch_paint_cases(void)
+{
+    static const char html[] =
+        "<style>body{margin:0}div{width:400px;height:300px;margin:30px;"
+        "background:linear-gradient(red,blue);box-shadow:0 0 20px 5px black}</style><div></div>";
+    for (int cached = 0; cached < 2; cached++) {
+        yonder_scratch_t *sc = yonder_scratch_new();
+        s_through = cached ? yonder_paint_cache_new(YONDER_PAINT_CACHE_BUDGET) : NULL;
+        s_through_scratch = sc;
+        os64_gui_rect_t view = {0, 0, 500, 400};
+        free(paint_of(html, sizeof(html) - 1, 500, view, NULL, true));
+        uint64_t first = s_paint_big;
+        yonder_scratch_counts_t c = yonder_scratch_counts(sc);
+        free(paint_of(html, sizeof(html) - 1, 500, view, NULL, true));
+        yonder_scratch_counts_t d = yonder_scratch_counts(sc);
+        char what[120];
+        snprintf(what, sizeof(what), "scratch: the first paint %stakes its big buffers from the scratch",
+                 cached ? "through the cache " : "");
+        expect(what, first > 0 && c.made > 0 && c.lent == 0, NULL);
+        snprintf(what, sizeof(what), "scratch: painted again %sit allocates none",
+                 cached ? "through the cache " : "");
+        expect(what, s_paint_big == 0 && d.made == c.made && d.reused > c.reused && d.lent == 0, NULL);
+        s_through_scratch = NULL;
+        yonder_paint_cache_free(s_through);
+        s_through = NULL;
+        yonder_scratch_free(sc);
+    }
+    // A shadow's mask is prepared when its blocks are missing, which with
+    // the cache is the first paint only: the cache emptied in between, the
+    // mask is made again, and from the scratch. (A shadow's blocks are
+    // smaller than the scratch's floor, so the cache's own entries are not
+    // counted.)
+    static const char shadow[] =
+        "<style>body{margin:0}div{width:400px;height:300px;margin:30px;"
+        "box-shadow:0 0 20px 5px black}</style><div></div>";
+    yonder_scratch_t *sc = yonder_scratch_new();
+    s_through = yonder_paint_cache_new(YONDER_PAINT_CACHE_BUDGET);
+    s_through_scratch = sc;
+    os64_gui_rect_t view = {0, 0, 500, 400};
+    free(paint_of(shadow, sizeof(shadow) - 1, 500, view, NULL, true));
+    uint64_t first = s_paint_big;
+    yonder_paint_cache_empty(s_through);
+    free(paint_of(shadow, sizeof(shadow) - 1, 500, view, NULL, true));
+    expect("scratch: a shadow's mask made again is the scratch's",
+           first > 0 && s_paint_big == 0 && yonder_paint_cache_counts(s_through).made > 0, NULL);
+    s_through_scratch = NULL;
+    yonder_paint_cache_free(s_through);
+    s_through = NULL;
+    yonder_scratch_free(sc);
+}
+
 int main(int argc, char **argv)
 {
     os64_text_options_t o = {
@@ -1627,6 +1853,9 @@ int main(int argc, char **argv)
     } else {
         s_suite_cache = yonder_paint_cache_new(YONDER_PAINT_CACHE_BUDGET);
         s_small_cache = yonder_paint_cache_new(SMALL_CACHE_BUDGET);
+        s_suite_scratch = yonder_scratch_new();
+        scratch_cases();
+        scratch_paint_cases();
         paint_cases();
         shadow_blur_cases();
         huge_corner_case();
@@ -1643,6 +1872,10 @@ int main(int argc, char **argv)
         paint_cache_cases();
         yonder_paint_cache_free(s_suite_cache);
         yonder_paint_cache_free(s_small_cache);
+        yonder_scratch_counts_t sc = yonder_scratch_counts(s_suite_scratch);
+        expect("scratch: the suite's paints lent buffers again", sc.reused > 0, NULL);
+        yonder_scratch_free(s_suite_scratch);
+        s_suite_scratch = NULL;
     }
     for (int i = 0; i < s_nfonts; i++)
         os64_text_font_release(s_fonts[i].font);

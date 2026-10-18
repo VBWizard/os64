@@ -7,6 +7,7 @@
 // by hand the way libflow's dumps are checked.
 
 #include "flow/flow.h"
+#include "scratch.h"
 
 // Everything is in PAGE coordinates — a box in a fixed subtree moved there
 // by the scroll, which the painter does for every verb — and the executor
@@ -136,7 +137,9 @@ void yonder_paint_cache_counts_restart(yonder_paint_cache_t *c);
 // nor the body has a background, colour or picture; `dark`, when not NULL,
 // paints the page dark (above) and its paper is the canvas instead.
 // `cache`, when not NULL, keeps what the painter works out between paints
-// (above); NULL paints the same pixels, working everything out.
+// (above); NULL paints the same pixels, working everything out. `scratch`
+// (scratch.h) lends the painter its working buffers; NULL takes each from
+// the heap and frees it, the same pixels again.
 // The painter's own work a caller may time: building and blurring a
 // shadow's mask, and computing a gradient's pixels, or copying either out
 // of the cache — the verbs it calls are the caller's to time. When set
@@ -147,7 +150,7 @@ extern void (*yonder_paint_stage)(yonder_paint_stage_t stage, bool begin);
 
 void yonder_paint(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll,
                   uint32_t paper, const yonder_dark_t *dark, yonder_paint_cache_t *cache,
-                  const yonder_verbs_t *verbs);
+                  yonder_scratch_t *scratch, const yonder_verbs_t *verbs);
 
 // One of `box`'s boxes — its border box `rect` (in any coordinates), or
 // the padding or content box inside it. A percentage padding counts as
