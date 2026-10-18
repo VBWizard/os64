@@ -1673,15 +1673,19 @@ bool guicomp_thread(bool daemon)
 		// frame instead of racing the one being drawn.
 		rect_t damage[DAMAGE_MAX_RECTS];
 		uint32_t damage_count = kPendingDamageCount;
+		bool drew = false;
 		for (uint32_t i = 0; i < damage_count; i++) {
 			damage[i] = composite_locked(kPendingDamage[i]);
 			if (!rect_is_empty(damage[i])) {
+				drew = true;
 				s_composite_counts.rects++;
 				s_composite_counts.pixels += (uint64_t)damage[i].w * (uint64_t)damage[i].h;
 			}
 		}
+		// Drawn means something survived the clip to the screen: damage from
+		// a window moved wholly off it composites nothing.
 		s_composite_counts.passes++;
-		s_composite_counts.drawn += damage_count > 0;
+		s_composite_counts.drawn += drew;
 		kPendingDamageCount = 0;
 		// Every /dev/glass viewer learns what this frame changed. Here,
 		// after the pixels are down and before the lock goes, is what makes

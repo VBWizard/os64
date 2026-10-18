@@ -92,7 +92,8 @@ bistable: a system could sit in either state until something knocks it out.
 
 A hold here is the composite site's, so it includes input routing and the
 window manager's work as well as compositing. A pass that composites
-nothing is the idle wake, mostly at the tick.
+nothing is mostly the idle wake at the tick; damage from a window wholly
+off the screen composites nothing too.
 
 How to read it: two `cat`s a minute apart, in each state. If collapses
 climb in the high state and pixels per pass rise with them, the loop is

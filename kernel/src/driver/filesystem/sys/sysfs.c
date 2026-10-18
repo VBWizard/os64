@@ -1344,7 +1344,7 @@ static void sys_gen_gui(synth_text_t *t)
 		                sys_cycles_to_us(l->max_wait_cycles), sys_cycles_to_us(l->max_hold_cycles));
 	}
 	// What the compositor's passes did, totals since boot: a pass that
-	// composited nothing is the idle wake at the tick; a collapse is the
+	// composited nothing is mostly the idle wake at the tick; a collapse is the
 	// damage list full and turned into one union of everything, which makes
 	// the next pass long (GUI_LOCK.md). Then its holds by length.
 	gui_composite_count_t comp;
