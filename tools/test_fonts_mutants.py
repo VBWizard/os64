@@ -17,6 +17,15 @@ edits the same tree; the per-mutant logs are in --logs.
 A table packed longer than it unpacks is not broken alone here: the zlib
 door's exact output limit refuses such a table too, so the early refusal
 in the unwrapper can be told apart from the code only by when it comes.
+
+Nor is the badge told after a layout that refused a font source
+(`webfonts_feed`'s unkept branch): a layout that is shown tells the badge
+itself (`webfonts_families_shown`), and so does a page's arrival, so the
+call is seen only after a layout that refused a source and then failed,
+until the next layout that does not. The suite proves the refusal reaches
+the badge ("a source the layout could not keep is told on the badge"); the
+failed-layout window needs the face-budget fixture and a font refused in
+the same layout, more fixture than a moment of a stale count earns.
 """
 import argparse
 import pathlib
@@ -676,9 +685,6 @@ mutants = [
     ('provider-loss-unsaid', YONDER,
      '        if (record != NULL && (st == OS64_FONT_NO_MEMORY || st == OS64_FONT_LIMIT))\n            record->short_of_memory = true;',
      '        (void)record;', WINDOW),
-    ('an-unkept-source-tells-no-badge', YONDER,
-     '        s_web.unkept = false;\n        badge_follow();',
-     '        s_web.unkept = false;', WINDOW),
 ]
 
 caught, missed, unbuilt = [], [], []
