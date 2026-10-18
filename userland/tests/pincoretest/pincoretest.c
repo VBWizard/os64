@@ -1,0 +1,226 @@
+// pincoretest — `PINCORE=<apic>` pins a program, and every thread it makes,
+// to the core it names (task.c task_env_pin).
+//
+// The parent pins a copy of itself to each running core in turn, by setting
+// PINCORE in its own environment and spawning: the child inherits the
+// variable exactly as `env PINCORE=3 prog` hands it over. The child then asks
+// two witnesses where it is:
+//
+//   CPUID     the APIC id of the core executing the instruction, read over
+//             and over across yields and sleeps, from the main thread AND
+//             from a second thread (which inherits the pin at birth, never
+//             from the environment). A thread that is merely STARTED on the
+//             right core and then wanders would fail here.
+//   /proc     each thread's `affinity` line, which is the pin itself: the
+//             record has to say what the scheduler is obeying.
+//
+// Then the refusals, which must leave a program UNPINNED (`affinity any`)
+// rather than pinned somewhere surprising: a word that is not a number, an
+// APIC id that is not a running core, and a number too long to be an APIC id.
+//
+// Core numbers are APIC ids, 0 .. /sys/cpu/count - 1 (sysfs.c's house
+// convention). Exit codes: 0xC02E0000 success, a distinct code per failure.
+
+#include "os64/os64.h"
+
+#define PCT_OK             0xC02E0000
+#define PCT_NO_COUNT       0xC02E0001   // /sys/cpu/count unreadable
+#define PCT_NO_SPAWN       0xC02E0002
+#define PCT_NO_THREAD      0xC02E0003
+#define PCT_WANDERED       0xC02E0004   // CPUID saw the pinned task on another core
+#define PCT_BAD_RECORD     0xC02E0005   // a thread's /proc affinity is not the pin
+#define PCT_NO_PROC        0xC02E0006   // /proc/self/thread unreadable
+#define PCT_REFUSAL_PINNED 0xC02E0007   // a refused PINCORE pinned the program anyway
+#define PCT_NO_SETENV      0xC02E0008
+
+#define SAMPLES 200
+
+static uint32_t apic_now(void)
+{
+    uint32_t a, b, c, d;
+    __asm__ volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(1), "c"(0));
+    return b >> 24;
+}
+
+// Read a small synthetic file into buf, NUL-terminated. False on failure.
+static bool read_small(const char *path, char *buf, size_t cap)
+{
+    int64_t h = os64_open(path, NULL);
+    if (h < 0)
+        return false;
+    size_t used = 0;
+    int64_t n;
+    while (used + 1 < cap && (n = os64_read((int32_t)h, buf + used, cap - 1 - used)) > 0)
+        used += (size_t)n;
+    os64_close((int32_t)h);
+    buf[used] = '\0';
+    return used > 0;
+}
+
+// Every sample, from whichever thread runs this, must be on `want`. The
+// yields and sleeps are what give the scheduler its chances to move it.
+static int64_t sample(void *arg)
+{
+    uint32_t want = (uint32_t)(uintptr_t)arg;
+    for (int i = 0; i < SAMPLES; i++)
+    {
+        if (apic_now() != want)
+            return PCT_WANDERED;
+        if (i % 50 == 49)
+            os64_sleep(10);
+        else
+            os64_yield();
+    }
+    return 0;
+}
+
+// Every thread of this task must carry `want` in its /proc affinity line
+// ("any" when want is NULL). Called while the second thread is still alive,
+// so both are listed.
+static uint32_t check_records(const char *want)
+{
+    int64_t d = os64_opendir("/proc/self/thread");
+    if (d < 0)
+        return PCT_NO_PROC;
+    int seen = 0;
+    uint32_t verdict = 0;
+    os64_dirent_t e;
+    while (verdict == 0 && os64_readdir((int32_t)d, &e) == 1)
+    {
+        char path[96], text[1024], line[32];
+        os64_snprintf(path, sizeof(path), "/proc/self/thread/%s/status", e.name);
+        if (!read_small(path, text, sizeof(text)))
+        {
+            verdict = PCT_NO_PROC;
+            break;
+        }
+        os64_snprintf(line, sizeof(line), "\naffinity\t%s\n", want ? want : "any");
+        size_t ll = os64_strlen(line);
+        bool found = false;
+        for (const char *p = text; *p && !found; p++)
+            found = os64_memcmp(p, line, ll) == 0;
+        if (!found)
+        {
+            os64_printf("pincoretest: thread %s does not say 'affinity %s'\n%s",
+                        e.name, want ? want : "any", text);
+            verdict = PCT_BAD_RECORD;
+        }
+        seen++;
+    }
+    os64_close((int32_t)d);
+    if (verdict == 0 && seen < 2)
+        verdict = PCT_NO_PROC;
+    return verdict;
+}
+
+// A second thread that parks until released, so /proc lists it while the
+// records are read.
+static volatile int gRelease;
+
+static int64_t sample_then_wait(void *arg)
+{
+    int64_t r = sample(arg);
+    while (!__atomic_load_n(&gRelease, __ATOMIC_ACQUIRE))
+        os64_sleep(1);
+    return r;
+}
+
+static int64_t idle_until_released(void *arg)
+{
+    (void)arg;
+    while (!__atomic_load_n(&gRelease, __ATOMIC_ACQUIRE))
+        os64_sleep(1);
+    return 0;
+}
+
+static uint32_t child_pinned(const char *apic_text)
+{
+    uint64_t apic;
+    if (!os64_parse_u64(apic_text, &apic))
+        return PCT_BAD_RECORD;
+    int64_t h = os64_thread(sample_then_wait, (void *)(uintptr_t)apic);
+    if (h < 0)
+        return PCT_NO_THREAD;
+    uint32_t verdict = (uint32_t)sample((void *)(uintptr_t)apic);
+    if (verdict == 0)
+        verdict = check_records(apic_text);
+    __atomic_store_n(&gRelease, 1, __ATOMIC_RELEASE);
+    int64_t theirs = 0;
+    os64_thread_join((int32_t)h, &theirs);
+    if (verdict == 0 && theirs != 0)
+        verdict = (uint32_t)theirs;
+    return verdict;
+}
+
+static uint32_t child_unpinned(void)
+{
+    int64_t h = os64_thread(idle_until_released, NULL);
+    if (h < 0)
+        return PCT_NO_THREAD;
+    uint32_t verdict = check_records(NULL);
+    __atomic_store_n(&gRelease, 1, __ATOMIC_RELEASE);
+    os64_thread_join((int32_t)h, NULL);
+    return verdict == PCT_BAD_RECORD ? PCT_REFUSAL_PINNED : verdict;
+}
+
+// Spawn this program with PINCORE=value and the given mode; answer its code.
+static uint32_t run_child(const char *value, char *const *argv)
+{
+    if (os64_setenv("PINCORE", value) != 0)
+        return PCT_NO_SETENV;
+    int64_t pid = os64_spawn("/tests/pincoretest", argv);
+    os64_unsetenv("PINCORE");
+    if (pid < 0)
+        return PCT_NO_SPAWN;
+    int32_t code = PCT_NO_SPAWN;
+    while (os64_wait(pid, &code) == OS64_INTERRUPTED)
+        ;
+    return (uint32_t)code;
+}
+
+int main(int argc, char **argv)
+{
+    if (argc == 3 && os64_streq(argv[1], "pinned"))
+        return child_pinned(argv[2]);
+    if (argc == 2 && os64_streq(argv[1], "unpinned"))
+        return child_unpinned();
+
+    char text[32];
+    uint64_t cores;
+    if (!read_small("/sys/cpu/count", text, sizeof(text)))
+        return PCT_NO_COUNT;
+    for (char *p = text; *p; p++)
+        if (*p == '\n')
+            *p = '\0';
+    if (!os64_parse_u64(text, &cores) || cores == 0)
+        return PCT_NO_COUNT;
+
+    for (uint64_t c = 0; c < cores; c++)
+    {
+        char apic[24];
+        os64_snprintf(apic, sizeof(apic), "%lu", c);
+        char *child[] = { "/tests/pincoretest", "pinned", apic, NULL };
+        uint32_t code = run_child(apic, child);
+        if (code != 0)
+        {
+            os64_printf("pincoretest: PINCORE=%s failed 0x%x\n", apic, code);
+            return (int)code;
+        }
+    }
+
+    char absent[24];
+    os64_snprintf(absent, sizeof(absent), "%lu", cores);   // one past the last core
+    const char *refused[] = { "x1", "1x", absent, "12345" };
+    char *child[] = { "/tests/pincoretest", "unpinned", NULL };
+    for (size_t i = 0; i < sizeof(refused) / sizeof(refused[0]); i++)
+    {
+        uint32_t code = run_child(refused[i], child);
+        if (code != 0)
+        {
+            os64_printf("pincoretest: PINCORE=%s failed 0x%x\n", refused[i], code);
+            return (int)code;
+        }
+    }
+    os64_printf("pincoretest: pinned to each of %lu cores; 4 refusals left unpinned\n", cores);
+    return PCT_OK;
+}

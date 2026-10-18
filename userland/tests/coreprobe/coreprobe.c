@@ -18,6 +18,9 @@
 //             like the compositor's blit, both in MB/s.
 //   syscalls  micros() round trips per millisecond.
 //
+// To measure one core on purpose rather than wherever the scheduler put it:
+// `env PINCORE=<apic> coreprobe`.
+//
 // coreprobe [ms]     — how long each measurement runs (default 500).
 // coreprobe -s [sec] — SAMPLE instead: for that many seconds, sleep a
 //                      little, then time the imul chain and the chain with

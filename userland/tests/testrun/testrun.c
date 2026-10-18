@@ -95,6 +95,7 @@ static const fixture_t kFixtures[] = {
     { "/tests/doorbelltest",    NULL, 0x600B0000,  0x600B0002, "GUI doorbell: owner, coalescing, overflow, worker wake, libui" },
     { "/tests/guiwake",         NULL, 0x60E00000,  0x60E00002, "GUI event wait: a ring landing mid-park wakes the waiter, not its backstop" },
     { "/tests/pintest",         NULL, 0x91A70000,  0,          "a handle closed by a sibling thread under a parked read: pipe, pty master, thread handle" },
+    { "/tests/pincoretest",     NULL, 0xC02E0000,  0,          "PINCORE=<apic> pins a program and its threads to that core; bad values leave it unpinned" },
     { "/tests/streamseat",      NULL, 0x57EA0000,  0,          "STREAM EOF refuses another seat; failed load and GRID reuse" },
     { "/tests/argsize",         NULL, 0xA2650000,  0,          "128 KiB spawn arguments arrive whole; too long, too many and too much are refused by name" },
     { "/tests/pipeexit",        NULL, 0x91E00000,  0,          "32 default-SIGPIPE exits preserve status 141" },
