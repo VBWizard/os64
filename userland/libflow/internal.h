@@ -359,6 +359,16 @@ bool f_motion_ticks(const FMotion *m);
 // in `b`: a blend in a transform is the same only as itself, so two worked
 // apart differ.
 bool f_motion_changed(const FMotion *m, const flow_style_t *a, const flow_style_t *b);
+// Each property `m`'s animations set that has another value in `a` than
+// in `b`, added to `out`; whether any was.
+bool f_motion_changed_props(const FMotion *m, const flow_style_t *a, const flow_style_t *b, FProps *out);
+// Whether every longhand has one value in `a` and in `b`, as the motion
+// compares them (f_motion_changed).
+bool f_styles_same(const flow_style_t *a, const flow_style_t *b);
+// Whether every property in `props` is drawn where its element already
+// draws: the in-place class (f_motion_in_place) or the tick set
+// (f_motion_ticks), whose frames a tick marks without a layout.
+bool f_props_drawn_in_place(const FProps *props);
 // Every property `m`'s animations set taken from `worked` into `live`,
 // each as a keyframe's discrete value is taken (its fields, and the
 // currentColor it holds).

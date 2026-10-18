@@ -846,6 +846,33 @@ static void page_show(Page *p, flow_tree_t *tree)
 // animations it built until script_rebuild publishes it.
 static bool page_lay_out(Page *p, int32_t width, int32_t height, uint32_t zoom, Page *reclaim);
 
+// A layout made for the page's animations alone asks for its parts:
+// lay_out_shown names the page laid out (`page`, NULL for none asked), the
+// view in page coordinates and its scroll, and page_lay_out_run says
+// whether it marked them (`marked`), in which case the whole view is not
+// marked. One call's: set before the layout and read after it.
+static struct {
+    const Page *page;
+    os64_gui_rect_t view;
+    flow_point_t scroll;
+    bool marked;
+} s_parts;
+
+static void mark_part(os64_gui_rect_t r);
+
+// A part a layout for the animations repaints (flow_layout_parts), cut to
+// the view `ctx` holds, in page coordinates, as a tick's are (tick_mark),
+// without its question of the canvas, which flow_layout_parts answers by
+// handing no parts.
+static void layout_mark(void *ctx, const flow_box_t *box, os64_gui_rect_t r)
+{
+    const os64_gui_rect_t *view = ctx;
+    os64_gui_rect_t meet;
+    (void)box;
+    if (os64_rect_intersect(r, *view, &meet))
+        mark_part(meet);
+}
+
 static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zoom, Page *reclaim)
 {
     if (page_rebuild_owed(p))
@@ -918,6 +945,32 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
             garb_cascade_free(cascade);
         return false;
     }
+    // A box keeps where it was scrolled to, as near as the new layout lets
+    // it: the range may have shrunk, and the element may make no scroll
+    // container now. Where it was is in device pixels, so a new zoom
+    // scales it with everything else the page holds. Before the tree is
+    // shown, so that the parts below compare it scrolled as the old one is.
+    for (int32_t i = 0; i < p->nbox_scrolls; i++) {
+        if (p->laid_zoom != 0 && p->laid_zoom != zoom) {
+            p->box_scrolls[i].at.x = scale_zoom(p->box_scrolls[i].at.x, zoom, p->laid_zoom);
+            p->box_scrolls[i].at.y = scale_zoom(p->box_scrolls[i].at.y, zoom, p->laid_zoom);
+        }
+        int32_t s = flow_scroller_for(fresh, p->box_scrolls[i].node);
+        if (s >= 0)
+            flow_scroll_set(fresh, s, p->box_scrolls[i].at);
+    }
+    // A layout for the animations alone repaints what it changed: the old
+    // tree is read here, before page_show frees it and commits the timeline
+    // it points into. Only when lay_out_shown asked — it does not when a
+    // picture's size or a face that came in waits to be laid out too — and
+    // the new tree reads the very cascade the old one was laid out from, at
+    // its sizes: a change of sheets or of the cascade's environment makes
+    // another cascade, and a script's change is laid out by script_rebuild
+    // before any other (page_rebuild_owed). Anything else marks the whole
+    // view (YONDER_PERF.md § perf-4).
+    if (p == s_parts.page && p->tree != NULL && cascade == p->cascade && width == p->laid_width &&
+        height == p->laid_height && zoom == p->laid_zoom)
+        s_parts.marked = flow_layout_parts(p->tree, fresh, s_parts.scroll, layout_mark, &s_parts.view);
     if (reclaim != NULL && reclaim != p) {
         flow_free(p->tree);
         p->tree = fresh;
@@ -928,19 +981,6 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
         garb_cascade_free(p->cascade);
         p->cascade = cascade;
         os64_memcpy(p->cascade_entry, entry, sizeof(entry));
-    }
-    // A box keeps where it was scrolled to, as near as the new layout lets
-    // it: the range may have shrunk, and the element may make no scroll
-    // container now. Where it was is in device pixels, so a new zoom
-    // scales it with everything else the page holds.
-    for (int32_t i = 0; i < p->nbox_scrolls; i++) {
-        if (p->laid_zoom != 0 && p->laid_zoom != zoom) {
-            p->box_scrolls[i].at.x = scale_zoom(p->box_scrolls[i].at.x, zoom, p->laid_zoom);
-            p->box_scrolls[i].at.y = scale_zoom(p->box_scrolls[i].at.y, zoom, p->laid_zoom);
-        }
-        int32_t s = flow_scroller_for(fresh, p->box_scrolls[i].node);
-        if (s >= 0)
-            flow_scroll_set(fresh, s, p->box_scrolls[i].at);
     }
     p->laid_width = width;
     p->laid_height = height;
@@ -1688,6 +1728,7 @@ static struct {
     uint32_t depth[PS_COUNT];
     uint64_t paints, whole, pixels, ticks, schedules, waited, scripts, timers, events, layouts;
     uint64_t layouts_motion;                // of `layouts`, those for the animations alone (LaidFor)
+    uint64_t layouts_parts;                 // of those, the ones that marked only what they changed
     uint64_t backward;                      // intervals whose counter stepped back
     // The longest one wait of the main loop (cycles), and how late a moving
     // picture's frame was shown against when it was due (ms): the most, and
@@ -2162,7 +2203,18 @@ static bool lay_out_shown(bool again, LaidFor laid_for)
     os64_ticks(&t0);
     page_timeline(&g.page);
     s_cost.layouts_motion += laid_for != LAID_FOR_PAGE;
+    int32_t sx_was = g.sx, sy_was = g.sy;
+    // The parts bound what the animations changed and nothing else, so a
+    // layout that also takes in a picture's size or a face that came in —
+    // owed to the settle and consumed below — marks the whole view.
+    s_parts.page = laid_for != LAID_FOR_PAGE && !g.pictures_moved && !s_web.moved ? &g.page : NULL;
+    s_parts.view = (os64_gui_rect_t){g.sx, g.sy, g.view.bounds.w, g.view.bounds.h};
+    s_parts.scroll = scroll_now();
+    s_parts.marked = false;
     bool laid = lay_out_page(&g.page, width, height);
+    bool parts = laid && s_parts.marked;
+    s_parts.page = NULL;
+    s_cost.layouts_parts += parts;
     os64_ticks(&t1);
     // A frame's layout; its paint is added when it is done (motion_painted).
     // One that fails is its half's last: its cost reads as past every limit
@@ -2210,7 +2262,9 @@ static bool lay_out_shown(bool again, LaidFor laid_for)
     pictures_schedule();
     if (laid_for == LAID_FOR_PAGE)
         say_laid_out(ms_between(&t0, &t1));
-    os64_ui_mark_dirty(&g.ui, &g.view);
+    // Its parts are marked, unless the view moved after all.
+    if (!parts || g.sx != sx_was || g.sy != sy_was)
+        os64_ui_mark_dirty(&g.ui, &g.view);
     return !flow_incomplete(g.page.tree);
 }
 
@@ -4732,8 +4786,9 @@ static bool paint_lines(DiagText *t, DiagText *u)
     if (s_cost.backward != 0)
         dt_put(t, "; the counter stepped back %lu times (the cores' counters disagree: these times are suspect)",
                (unsigned long)s_cost.backward);
-    dt_put(t, "; %lu layouts, %lu of them for animations", (unsigned long)s_cost.layouts,
-           (unsigned long)s_cost.layouts_motion);
+    dt_put(t, "; %lu layouts, %lu of them for animations, %lu of those repainting only what they changed",
+           (unsigned long)s_cost.layouts, (unsigned long)s_cost.layouts_motion,
+           (unsigned long)s_cost.layouts_parts);
     dt_put(t, "; frames late at most %lu ms, %lu more than %d ms", (unsigned long)s_cost.late_most,
            (unsigned long)s_cost.late_frames, FRAME_LATE_MS);
     if (rate != 0)
