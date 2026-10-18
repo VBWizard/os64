@@ -2,6 +2,7 @@
 .section .text
 .align 8
 .code64
+#include "irq_accounting.inc"
 
 
 # IPI_ACCT_SETTLE_VECTOR (0x82) — CPU-time settle-on-read. The C handler
@@ -29,10 +30,11 @@ vector130:
 	push r14
 	push r15
 	pushf
-	# Sixteen saved qwords precede the CPU frame: pass its interrupted CS so
-	# a settle that caught ring 3 closes a user span, not an ISR span.
-	mov rdi, [rsp + 136]
+	# Sixteen saved qwords precede the CPU frame. IRQ entry closes the
+	# interrupted mode before the settle handler reads this core's books.
+	IRQ_ACCOUNT_ENTER 136
 	call acct_settle_ISR
+	IRQ_ACCOUNT_EXIT
 	popf
 	pop r15
 	pop r14
@@ -86,7 +88,9 @@ vector131:
 	push r14
 	push r15
 	pushf
+	IRQ_ACCOUNT_ENTER 136
 	call watchpoint_sync_ISR
+	IRQ_ACCOUNT_EXIT
 	popf
 	pop r15
 	pop r14
@@ -126,7 +130,9 @@ vector123: # IPI_INVALIDATE_TLB_VECTOR
 	push r14
 	push r15
 	pushf
+	IRQ_ACCOUNT_ENTER 136
 	call inv_tlb_ISR
+	IRQ_ACCOUNT_EXIT
 	popf
     pop r15
     pop r14
@@ -165,7 +171,9 @@ vector124: # AP Disable vector (IPI_DISABLE_SCHEDULING_VECTOR)
 	push r14
 	push r15
 	pushf	
+	IRQ_ACCOUNT_ENTER 136
 	call disableAPScheduling_ISR 
+	IRQ_ACCOUNT_EXIT
 	popf
     pop r15
     pop r14
@@ -204,7 +212,9 @@ vector125: # AP Enable vector (IPI_ENABLE_SCHEDULING_VECTOR)
 	push r14
 	push r15
 	pushf
+	IRQ_ACCOUNT_ENTER 136
 	call enableAPScheduling_ISR
+	IRQ_ACCOUNT_EXIT
 	popf
     pop r15
     pop r14
@@ -243,7 +253,9 @@ vector127:
 	push r14
 	push r15
 	pushf
+	IRQ_ACCOUNT_ENTER 136
 	call ap_initialization_handler
+	IRQ_ACCOUNT_EXIT
 	popf
     pop r15
     pop r14

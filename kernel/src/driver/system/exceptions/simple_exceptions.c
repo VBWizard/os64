@@ -55,6 +55,22 @@ bool kTestingPageFaults = false;
 uint64_t kTestingPageFaultResumeRip = 0;
 volatile uint64_t kPageFaultCount;
 
+// Count a fault after it has a retryable mapping. Fatal faults never return
+// through this door; a file read includes a filesystem-cache hit because the
+// pager cannot distinguish it from device I/O at this boundary.
+static void record_resolved_fault(thread_t *fault_thread, bool did_read,
+                                  bool anon_zero)
+{
+    if (fault_thread != NULL && fault_thread != NO_THREAD)
+    {
+        __atomic_fetch_add(did_read ? &fault_thread->majorFaults : &fault_thread->minorFaults,
+                           1, __ATOMIC_RELAXED);
+        if (anon_zero)
+            __atomic_fetch_add(&fault_thread->anonZeroPages, 1, __ATOMIC_RELAXED);
+    }
+    kPageFaultCount++;
+}
+
 // ── The twin-resolve publish lock (2026-08-16) ──────────────────────────────
 //
 // Two threads of one task faulting on the SAME not-yet-present page both used
@@ -872,7 +888,12 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
     // Early faults have no task context until GS-based CLS is installed.
     // Do not read it to look up a VMA before that initialization.
     core_local_storage_t *cls = try_get_core_local_storage();
-    task_t *task = cls ? cls->task : NULL;
+    thread_t *fault_thread = cls ? cls->currentThread : NULL;
+    // A migrated thread can run before cls->task catches up. The thread owns
+    // the address space we must fault into, and a file read may later block
+    // and resume it on another core; retain this identity across that read.
+    task_t *task = (fault_thread != NULL && fault_thread != NO_THREAD)
+                   ? (task_t *)fault_thread->ownerTask : (cls ? cls->task : NULL);
     if (!task)
     {
         page_fault_panic("no task context (early boot?)", cr2, error_code, rip);
@@ -997,7 +1018,7 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
             printd(DEBUG_DEMAND_PAGING,
                    "CoW twin at 0x%016lx: winner already privatised, our copy discarded\n",
                    aligned);
-            kPageFaultCount++;
+            record_resolved_fault(fault_thread, false, false);
             return;
         }
         paging_map_page((pt_entry_t *)task->pml4v, aligned, new_phys, cow_flags);
@@ -1010,7 +1031,7 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
 
         printd(DEBUG_DEMAND_PAGING, "CoW: 0x%016lx privatised (old phys 0x%016lx -> new phys 0x%016lx)\n",
                aligned, old_phys, new_phys);
-        kPageFaultCount++;
+        record_resolved_fault(fault_thread, false, false);
         return;
     }
 
@@ -1070,7 +1091,8 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
             page_fault_panic("shared-object VMA covers an address outside its image",
                              cr2, error_code, rip);
 
-        uintptr_t phys = shared_object_resolve_page(so, page_idx);
+        bool did_read = false;
+        uintptr_t phys = shared_object_resolve_page(so, page_idx, &did_read);
         if (!phys)
         {
             // The image could not be materialised: out of memory, a disk read
@@ -1093,13 +1115,15 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
         }
 
         paging_map_page((pt_entry_t *)task->pml4v, aligned, phys, PAGE_PRESENT | PAGE_USER);
-        kPageFaultCount++;
+        record_resolved_fault(fault_thread, did_read, false);
         return;
     }
 
     // Ordinary demand page fault: page is not present yet.  Resolve via the
     // VMA's backing (static executables, anonymous memory).
-    uintptr_t phys = vma_resolve_backing_page(vma, cr2);
+    bool did_read = false;
+    bool anon_zero = (vma->flags & MAP_ANONYMOUS) || vma->file == NULL;
+    uintptr_t phys = vma_resolve_backing_page(vma, cr2, &did_read);
     if (!phys)
         page_fault_panic("failed to resolve the page", cr2, error_code, rip);
 
@@ -1138,7 +1162,7 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
         printd(DEBUG_DEMAND_PAGING,
                "Twin resolve at 0x%016lx: winner already published, our frame 0x%016lx freed\n",
                aligned, phys);
-        kPageFaultCount++;
+        record_resolved_fault(fault_thread, did_read, anon_zero);
         return;   // retry the access against the winner's mapping
     }
     paging_map_page((pt_entry_t *)task->pml4v, aligned, phys, flags);
@@ -1146,7 +1170,7 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
 
     printd(DEBUG_DEMAND_PAGING, "Mapped page at 0x%016lx with flags 0x%lx\n", aligned, flags);
 
-    kPageFaultCount++;
+    record_resolved_fault(fault_thread, did_read, anon_zero);
 }
 
 

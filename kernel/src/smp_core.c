@@ -784,11 +784,9 @@ extern volatile uint64_t kTicksSinceStart;
 // caller, THEN raise the flag so the nap ahead lands on idle.
 //
 // End: called after hlt returns, interrupts live again — wrapped in its own
-// cli window. Settles whatever span is open (if no dispatch intervened,
-// that span is the nap → flag still up → charged to idle; if the scheduler
-// ran meanwhile, dispatch already cleared the flag and charged the nap, and
-// this settle just charges the caller's genuine post-wake work), then drops
-// the flag. Idempotent when already down.
+// cli window. An ordinary IRQ or scheduler dispatch has already closed the
+// nap and cleared the redirect, so this settles the caller's post-wake tail.
+// If another wake source left the redirect up, End closes it here.
 void mpAcctHaltBegin(void)
 {
     accounting_halt_begin();
@@ -799,15 +797,16 @@ void mpAcctHaltEnd(void)
     accounting_halt_end();
 }
 
-void acct_settle_ISR(uint64_t interrupted_cs)
+void acct_settle_ISR(void)
 {
     core_local_storage_t *cls = get_core_local_storage();
     // The scheduler owns its open span between its entry and exit charges.
     // Its short prologue/epilogue windows still belong to the pass itself:
-    // do not settle there, where the saved interrupted CS may name a
-    // different thread. An active pass can settle into acctSchedCycles.
+    // do not settle there, where the saved scheduler frame may name a
+    // different thread. IRQ entry already closed the interrupted mode;
+    // an active pass can settle into acctSchedCycles.
     if (cls != NULL && (!mp_inScheduler[cls->apic_id] || cls->acctSchedSpanActive))
-        accounting_charge(interrupted_cs);
+        accounting_charge(0);
     if (cls != NULL)
         mp_acctSettleAck[cls->apic_id] = true;
     write_eoi();

@@ -31,6 +31,32 @@ static void sequence_end(uint64_t *sequence)
 	__atomic_fetch_add(sequence, 1, __ATOMIC_SEQ_CST);
 }
 
+// Entry and return run with IF masked on the thread's current core. A
+// saturated stack keeps the excess span in the remainder until it unwinds.
+static void cause_push(thread_t *thread, accounting_nested_cause_t cause)
+{
+	if (thread->acctCauseOverflow != 0 ||
+	    thread->acctCauseDepth == ACCOUNTING_CAUSE_NESTING)
+	{
+		if (thread->acctCauseOverflow != UINT16_MAX)
+			thread->acctCauseOverflow++;
+		return;
+	}
+	thread->acctCauseStack[thread->acctCauseDepth++] = (uint8_t)cause;
+}
+
+static void cause_pop(thread_t *thread, accounting_nested_cause_t cause)
+{
+	if (thread->acctCauseOverflow != 0)
+	{
+		thread->acctCauseOverflow--;
+		return;
+	}
+	if (thread->acctCauseDepth != 0 &&
+	    thread->acctCauseStack[thread->acctCauseDepth - 1] == cause)
+		thread->acctCauseDepth--;
+}
+
 // The caller has IF masked. Only the core executing this code writes its
 // open span, and the thread it names cannot run on another core at once.
 static void charge_locked(core_local_storage_t *cls, uint64_t cs,
@@ -72,6 +98,21 @@ static void charge_locked(core_local_storage_t *cls, uint64_t cs,
 			else
 			{
 				target->systemCycles += delta;
+				if (current->acctCauseOverflow == 0 && current->acctCauseDepth != 0)
+				{
+					uint8_t cause = current->acctCauseStack[current->acctCauseDepth - 1];
+					if (cause == ACCOUNTING_CAUSE_FAULT)
+						target->faultCycles += delta;
+					else if (cause == ACCOUNTING_CAUSE_INTERRUPT)
+						target->interruptCycles += delta;
+				}
+				else if (current->acctCauseOverflow == 0 && current->acctSelfIpiHalt)
+					target->selfIpiHaltCycles += delta;
+				else if (current->acctCauseOverflow == 0 && current->acctInSyscall)
+				{
+					target->acctSyscallCycles[current->acctSyscallNumber] += delta;
+					target->syscallCyclesTotal += delta;
+				}
 				cls->acctSystemCycles += delta;
 			}
 			sequence_end(&target->acctSequence);
@@ -96,10 +137,117 @@ void accounting_charge(uint64_t cs)
 	accounting_irq_restore(flags);
 }
 
+void accounting_exception_enter(uint64_t interrupted_cs, uint64_t vector)
+{
+	uint64_t flags = accounting_irq_save();
+	core_local_storage_t *cls = get_core_local_storage();
+	charge_locked(cls, interrupted_cs, false, false, false, false);
+	if (vector == 14 && cls != NULL && !cls->acctSchedSpanActive &&
+	    cls->currentThread != NULL && cls->currentThread != NO_THREAD)
+		cause_push(cls->currentThread, ACCOUNTING_CAUSE_FAULT);
+	accounting_irq_restore(flags);
+}
+
+void accounting_exception_exit(uint64_t vector)
+{
+	uint64_t flags = accounting_irq_save();
+	core_local_storage_t *cls = get_core_local_storage();
+	charge_locked(cls, 0, false, false, false, false);
+	if (vector == 14 && cls != NULL && !cls->acctSchedSpanActive &&
+	    cls->currentThread != NULL && cls->currentThread != NO_THREAD)
+		cause_pop(cls->currentThread, ACCOUNTING_CAUSE_FAULT);
+	accounting_irq_restore(flags);
+}
+
+static void interrupt_enter(uint64_t interrupted_cs, bool scheduler)
+{
+	uint64_t flags = accounting_irq_save();
+	// IRQ0 can fire before a core has installed its GS self pointer.
+	core_local_storage_t *cls = try_get_core_local_storage();
+	// Close an in-task hlt as idle, then charge the waking IRQ to its thread.
+	// Leaving the halt redirect up would put the handler in idleCycles.
+	charge_locked(cls, interrupted_cs, false, false, true, false);
+	if (cls != NULL && !cls->acctSchedSpanActive &&
+	    cls->currentThread != NULL && cls->currentThread != NO_THREAD)
+	{
+		thread_t *thread = cls->currentThread;
+		sequence_begin(&thread->acctSequence);
+		cause_push(thread, ACCOUNTING_CAUSE_INTERRUPT);
+		thread->interruptCount++;
+		sequence_end(&thread->acctSequence);
+		if (scheduler)
+			cls->acctSchedulerIRQOpen = true;
+	}
+	accounting_irq_restore(flags);
+}
+
+void accounting_interrupt_enter(uint64_t interrupted_cs)
+{
+	interrupt_enter(interrupted_cs, false);
+}
+
+void accounting_scheduler_interrupt_enter(uint64_t interrupted_cs)
+{
+	interrupt_enter(interrupted_cs, true);
+}
+
+void accounting_interrupt_exit(void)
+{
+	uint64_t flags = accounting_irq_save();
+	core_local_storage_t *cls = try_get_core_local_storage();
+	charge_locked(cls, 0, false, false, false, false);
+	if (cls != NULL && !cls->acctSchedSpanActive &&
+	    cls->currentThread != NULL && cls->currentThread != NO_THREAD)
+		cause_pop(cls->currentThread, ACCOUNTING_CAUSE_INTERRUPT);
+	accounting_irq_restore(flags);
+}
+
+void accounting_syscall_enter(uint64_t syscall_number)
+{
+	uint64_t flags = accounting_irq_save();
+	core_local_storage_t *cls = get_core_local_storage();
+	charge_locked(cls, 3, false, false, false, false);
+	thread_t *thread = cls != NULL ? cls->currentThread : NULL;
+	if (thread != NULL && thread != NO_THREAD)
+	{
+		uint16_t row = syscall_number < ACCOUNTING_SYSCALL_OVERFLOW
+		               ? (uint16_t)syscall_number : ACCOUNTING_SYSCALL_OVERFLOW;
+		sequence_begin(&thread->acctSequence);
+		thread->acctSyscallNumber = row;
+		thread->acctInSyscall = true;
+		thread->acctSyscallCalls[row]++;
+		sequence_end(&thread->acctSequence);
+	}
+	accounting_irq_restore(flags);
+}
+
+void accounting_syscall_exit(void)
+{
+	uint64_t flags = accounting_irq_save();
+	core_local_storage_t *cls = get_core_local_storage();
+	charge_locked(cls, 0, false, false, false, false);
+	thread_t *thread = cls != NULL ? cls->currentThread : NULL;
+	if (thread != NULL && thread != NO_THREAD)
+	{
+		sequence_begin(&thread->acctSequence);
+		thread->acctInSyscall = false;
+		sequence_end(&thread->acctSequence);
+	}
+	accounting_irq_restore(flags);
+}
+
 void accounting_begin_scheduler(uint64_t interrupted_cs)
 {
 	uint64_t flags = accounting_irq_save();
-	charge_locked(get_core_local_storage(), interrupted_cs, true, true, false, false);
+	core_local_storage_t *cls = get_core_local_storage();
+	thread_t *thread = cls != NULL ? cls->currentThread : NULL;
+	bool irq_open = cls != NULL && cls->acctSchedulerIRQOpen &&
+	                thread != NULL && thread != NO_THREAD;
+	charge_locked(cls, irq_open ? 0 : interrupted_cs, true, true, false, false);
+	if (irq_open)
+		cause_pop(thread, ACCOUNTING_CAUSE_INTERRUPT);
+	if (cls != NULL)
+		cls->acctSchedulerIRQOpen = false;
 	accounting_irq_restore(flags);
 }
 
@@ -123,6 +271,32 @@ void accounting_halt_end(void)
 	accounting_irq_restore(flags);
 }
 
+void accounting_self_ipi_halt_begin(void)
+{
+	// scheduler_trigger calls this with IF masked before its sti;hlt pair.
+	core_local_storage_t *cls = get_core_local_storage();
+	charge_locked(cls, 0, false, false, false, false);
+	thread_t *thread = cls != NULL ? cls->currentThread : NULL;
+	if (thread != NULL && thread != NO_THREAD)
+	{
+		sequence_begin(&thread->acctSequence);
+		thread->acctSelfIpiHalt = true;
+		thread->selfIpiHaltCount++;
+		sequence_end(&thread->acctSequence);
+	}
+}
+
+void accounting_self_ipi_halt_end(void)
+{
+	uint64_t flags = accounting_irq_save();
+	core_local_storage_t *cls = get_core_local_storage();
+	charge_locked(cls, 0, false, false, false, false);
+	thread_t *thread = cls != NULL ? cls->currentThread : NULL;
+	if (thread != NULL && thread != NO_THREAD)
+		thread->acctSelfIpiHalt = false;
+	accounting_irq_restore(flags);
+}
+
 bool accounting_read_thread(const thread_t *thread, accounting_thread_cycles_t *out)
 {
 	if (thread == NULL || out == NULL)
@@ -140,17 +314,61 @@ bool accounting_read_thread(const thread_t *thread, accounting_thread_cycles_t *
 			__atomic_load_n(&thread->userCycles, __ATOMIC_RELAXED),
 			__atomic_load_n(&thread->systemCycles, __ATOMIC_RELAXED),
 			__atomic_load_n(&thread->idleCycles, __ATOMIC_RELAXED),
+			__atomic_load_n(&thread->faultCycles, __ATOMIC_RELAXED),
+			__atomic_load_n(&thread->syscallCyclesTotal, __ATOMIC_RELAXED),
+			__atomic_load_n(&thread->interruptCycles, __ATOMIC_RELAXED),
+			__atomic_load_n(&thread->interruptCount, __ATOMIC_RELAXED),
+			__atomic_load_n(&thread->selfIpiHaltCycles, __ATOMIC_RELAXED),
+			__atomic_load_n(&thread->selfIpiHaltCount, __ATOMIC_RELAXED),
 		};
 		// Keep tuple loads before the closing sequence check.
 		__atomic_thread_fence(__ATOMIC_ACQUIRE);
 		uint64_t after = __atomic_load_n(&thread->acctSequence, __ATOMIC_ACQUIRE);
 		if (before == after && !(after & 1) &&
 		    copy.runtime >= copy.user && copy.runtime - copy.user >= copy.system &&
-		    copy.runtime - copy.user - copy.system == copy.idle)
+		    copy.runtime - copy.user - copy.system == copy.idle &&
+		    copy.fault <= copy.system &&
+		    copy.syscall <= copy.system - copy.fault &&
+		    copy.interrupt <= copy.system - copy.fault - copy.syscall &&
+		    copy.self_ipi_halt <= copy.system - copy.fault - copy.syscall - copy.interrupt)
 		{
 			*out = copy;
 			return true;
 		}
+		__builtin_ia32_pause();
+	}
+	return false;
+}
+
+bool accounting_read_syscalls(const thread_t *thread,
+                             accounting_syscall_row_t out[ACCOUNTING_SYSCALL_ROWS])
+{
+	if (thread == NULL || out == NULL)
+		return false;
+	for (unsigned attempt = 0; attempt < ACCOUNTING_READ_RETRIES; attempt++)
+	{
+		uint64_t before = __atomic_load_n(&thread->acctSequence, __ATOMIC_ACQUIRE);
+		if (before & 1)
+		{
+			__builtin_ia32_pause();
+			continue;
+		}
+		uint64_t total = 0;
+		bool overflow = false;
+		for (unsigned row = 0; row < ACCOUNTING_SYSCALL_ROWS; row++)
+		{
+			out[row].calls = __atomic_load_n(&thread->acctSyscallCalls[row], __ATOMIC_RELAXED);
+			out[row].cycles = __atomic_load_n(&thread->acctSyscallCycles[row], __ATOMIC_RELAXED);
+			if (UINT64_MAX - total < out[row].cycles)
+				overflow = true;
+			else
+				total += out[row].cycles;
+		}
+		uint64_t system = __atomic_load_n(&thread->systemCycles, __ATOMIC_RELAXED);
+		__atomic_thread_fence(__ATOMIC_ACQUIRE);
+		uint64_t after = __atomic_load_n(&thread->acctSequence, __ATOMIC_ACQUIRE);
+		if (!overflow && before == after && !(after & 1) && total <= system)
+			return true;
 		__builtin_ia32_pause();
 	}
 	return false;

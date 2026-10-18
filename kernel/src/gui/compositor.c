@@ -1738,8 +1738,9 @@ bool guicomp_thread(bool daemon)
 		// them, hlt time bills as run time — this thread is the one idler
 		// the scheduler cannot see, and top spent a day showing it at 95%
 		// of a core while the flush counter sat frozen. Begin settles the
-		// frame's real work onto us and routes the nap to the idle thread;
-		// End settles the nap and takes the meter back.
+		// frame's real work onto us and routes the nap to the idle thread.
+		// IRQ entry closes the nap before billing its handler; End settles
+		// our post-wake tail.
 		__asm__ volatile("cli" ::: "memory");
 		if (!input_pending() && kPendingDamageCount == 0 && !s_glass_regained) {
 			mpAcctHaltBegin();

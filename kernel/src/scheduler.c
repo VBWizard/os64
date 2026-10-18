@@ -1222,11 +1222,8 @@ void scheduler_trigger(core_local_storage_t *cls)
 		mp_restart_apic_timer_count();
     send_ipi(cls->apic_id, IPI_MANUAL_SCHEDULE_VECTOR, 0, 1, 0);
     // Wait until the ISR has run and cleared mp_waitingForScheduler.
-    // Using a checked loop rather than a bare sti;hlt because the ISR may
-    // fire before we reach hlt (e.g. during send_ipi's printd). If that
-    // happens the thread gets context-switched away mid-function; when it
-    // is later rescheduled it resumes here, the flag is already cleared,
-    // and the loop exits without blocking.
+    // The ISR may fire before this check and switch us away. The checked
+    // loop then exits on our later dispatch without sleeping again.
     __asm__ volatile("sti");
     // Re-fetch CLS on EVERY check, not just after the loop: the scheduler
     // pass this triggers switches us out, and since the fan-out we may be
@@ -1236,8 +1233,19 @@ void scheduler_trigger(core_local_storage_t *cls)
     // a core whose timer may be masked (tickless). The core that resumed us
     // cleared its own flag at scheduler_do entry, so the fresh read exits
     // immediately.
-    while (mp_waitingForScheduler[get_core_local_storage()->apic_id])
-        __asm__ volatile("hlt");
+    for (;;) {
+        // Keep the flag check and sti;hlt together under CLI. An IPI that
+        // arrives after the check stays pending until STI and wakes HLT;
+        // it cannot slip between the check and an unguarded halt.
+        __asm__ volatile("cli" ::: "memory");
+        if (!mp_waitingForScheduler[get_core_local_storage()->apic_id]) {
+            __asm__ volatile("sti" ::: "memory");
+            break;
+        }
+        accounting_self_ipi_halt_begin();
+        __asm__ volatile("sti\n\thlt" ::: "memory");
+        accounting_self_ipi_halt_end();
+    }
     cls = get_core_local_storage();
 }
 

@@ -31,7 +31,8 @@
 # and halts, so the tail below is simply never reached.
 
 .extern exception_dispatch
-.extern accounting_charge
+.extern accounting_exception_enter
+.extern accounting_exception_exit
 
 # The per-vector stubs. Two shapes, differing only in who supplies the error
 # code — which is the entire reason the old file needed two macros too.
@@ -81,13 +82,15 @@ exc_common:
     push r14
     push r15
 
-    # The common frame saves every register before this call. Its CS is at
-    # +144: close ring-3 time for user faults, or ring-0 time for nested ones.
+    # The common frame saves every register before this call. CS at +144
+    # closes the interrupted span; vector at +120 starts a #PF span after it.
+    # The depth lives on the thread because a resolver may park and migrate.
     mov rbx, rsp
     mov rdi, [rbx + 144]
     and edi, 3
+    mov rsi, [rbx + 120]
     and rsp, -16
-    call accounting_charge
+    call accounting_exception_enter
     mov rsp, rbx
 
     # rsp now IS the exception_context_t. Hand it over.
@@ -103,18 +106,13 @@ exc_common:
     call exception_dispatch
     mov rsp, rbx
 
-    # Dispatch may edit the return frame (signal delivery). Charge the
-    # kernel tail only when this iretq will actually enter ring 3.
-    mov rax, [rsp + 144]
-    and eax, 3
-    cmp eax, 3
-    jne exc_return_accounted
+    # Stamp both ring-3 and ring-0 returns. A recoverable fault inside a
+    # syscall closes its fault span before that syscall resumes here.
     mov rbx, rsp
     and rsp, -16
-    xor edi, edi
-    call accounting_charge
+    mov rdi, [rbx + 120]
+    call accounting_exception_exit
     mov rsp, rbx
-exc_return_accounted:
 
     # Resolved. Unwind in exact reverse and resume — possibly at a DIFFERENT
     # rip, because exception_dispatch is allowed to edit the context (the

@@ -17,10 +17,11 @@
 //   /proc/<id>/maps             the address space, one row per VMA
 //   /proc/<id>/ctl              WRITE: control.  READ: the vocabulary.
 //   /proc/<id>/thread/<tid>/status
+//   /proc/<id>/syscalls and /proc/<id>/thread/<tid>/syscalls
 //
-// Every file is TEXT, "key<TAB>value", one record per line — Plan 9's tradition
-// rather than Solaris's binary structs, because `cat` and `ls` already exist and
-// a report is not an ABI.
+// Every file is text, one record per line: keyed reports use "key<TAB>value"
+// and syscalls uses a column table. `cat` and `ls` already exist, and a
+// report is not a binary ABI.
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -49,8 +50,9 @@
 #include "CONFIG.h"
 #include "BasicRenderer.h"   // printf — the mount line belongs on the glass too
 #include "smp.h"             // core_local_storage_t (/proc/self's identity read)
-#include "smp_core.h"        // mpAcctSettleAll — the status files' freshness contract
+#include "smp_core.h"        // mpAcctSettleAll — status and syscall table freshness
 #include "accounting.h"
+#include "syscall.h"          // syscall_table names for the timing rows
 #include "os64/heap.h"       // os64_heap_report_t — what ring 3 publishes for /proc/<id>/heap
 #include "os64/syscall_numbers.h"   // OS64_SPAWN_ARG_MAX — how long a cmdline argument can be
 
@@ -58,6 +60,7 @@ extern uint64_t  kCPUCyclesPerSecond;  // boot-calibrated: the cycles→µs exch
 
 extern uint64_t kTicksSinceStart;
 extern uintptr_t kHHDMOffset;
+extern bool kUseOldExceptions;
 
 // A task's VMA list and handle table are walked WITHOUT a lock (os64 has no
 // per-task lock to take). A corrupted or concurrently-spliced list must not
@@ -103,10 +106,10 @@ typedef struct
 // The file names a task directory offers, in listing order. The order is the
 // order `ls /proc/7` prints, so it is arranged most-useful-first rather than
 // alphabetically.
-static const char *kProcTaskFiles[] = { "status", "cmdline", "cwd", "handles", "maps", "mem", "heap", "tty", "ctl" };
+static const char *kProcTaskFiles[] = { "status", "syscalls", "cmdline", "cwd", "handles", "maps", "mem", "heap", "tty", "ctl" };
 #define PROC_TASK_FILE_COUNT (sizeof(kProcTaskFiles) / sizeof(kProcTaskFiles[0]))
 
-static const char *kProcThreadFiles[] = { "status" };
+static const char *kProcThreadFiles[] = { "status", "syscalls" };
 #define PROC_THREAD_FILE_COUNT (sizeof(kProcThreadFiles) / sizeof(kProcThreadFiles[0]))
 
 // Classify an fs-local path. Purely syntactic, with ONE deliberate
@@ -298,12 +301,24 @@ static bool proc_task_accounting(task_t *task, accounting_thread_cycles_t *out,
 		if (UINT64_MAX - sum.runtime < one.runtime ||
 		    UINT64_MAX - sum.user < one.user ||
 		    UINT64_MAX - sum.system < one.system ||
-		    UINT64_MAX - sum.idle < one.idle)
+		    UINT64_MAX - sum.idle < one.idle ||
+		    UINT64_MAX - sum.fault < one.fault ||
+		    UINT64_MAX - sum.syscall < one.syscall ||
+		    UINT64_MAX - sum.interrupt < one.interrupt ||
+		    UINT64_MAX - sum.interrupt_count < one.interrupt_count ||
+		    UINT64_MAX - sum.self_ipi_halt < one.self_ipi_halt ||
+		    UINT64_MAX - sum.self_ipi_halt_count < one.self_ipi_halt_count)
 			return false;
 		sum.runtime += one.runtime;
 		sum.user += one.user;
 		sum.system += one.system;
 		sum.idle += one.idle;
+		sum.fault += one.fault;
+		sum.syscall += one.syscall;
+		sum.interrupt += one.interrupt;
+		sum.interrupt_count += one.interrupt_count;
+		sum.self_ipi_halt += one.self_ipi_halt;
+		sum.self_ipi_halt_count += one.self_ipi_halt_count;
 		*has_idle |= th->idleThread;
 	}
 	*out = sum;
@@ -471,6 +486,30 @@ static uint64_t proc_cycles_to_us(uint64_t cycles)
 	return per_us ? cycles / per_us : 0;
 }
 
+static void proc_add_system_causes(synth_text_t *t, const accounting_thread_cycles_t *cycles,
+                                   uint64_t system_us)
+{
+	uint64_t fault_us = proc_cycles_to_us(cycles->fault);
+	uint64_t syscall_us = proc_cycles_to_us(cycles->syscall);
+	uint64_t interrupt_us = proc_cycles_to_us(cycles->interrupt);
+	uint64_t halt_us = proc_cycles_to_us(cycles->self_ipi_halt);
+	if (!kUseOldExceptions)
+		synth_text_addf(t, "fault_us\t%lu\n", fault_us);
+	synth_text_addf(t, "syscall_us\t%lu\n", syscall_us);
+	synth_text_addf(t, "interrupts\t%lu\n", cycles->interrupt_count);
+	synth_text_addf(t, "interrupt_us\t%lu\n", interrupt_us);
+	synth_text_addf(t, "self_ipi_halts\t%lu\n", cycles->self_ipi_halt_count);
+	synth_text_addf(t, "self_ipi_halt_us\t%lu\n", halt_us);
+	if (!kUseOldExceptions)
+	{
+		// The raw counters are disjoint and bounded by system cycles. Derive
+		// the displayed remainder after conversion so these printed fields
+		// also sum exactly to system_us despite per-bucket truncation.
+		uint64_t other_us = system_us - fault_us - syscall_us - interrupt_us - halt_us;
+		synth_text_addf(t, "other_system_us\t%lu\n", other_us);
+	}
+}
+
 // The per-core CPU-time ledger lived here as proc_gen_cores until 2026-08-12;
 // it is sys_gen_cpu_time now (sysfs.c), one file per core under /sys/cpu.
 
@@ -525,7 +564,15 @@ static void proc_gen_task_status(synth_text_t *t, task_t *task)
 	synth_text_addf(t, "entry\t%p\n", (void *)task->entryPoint);
 	if (task->loadBias)
 		synth_text_addf(t, "bias\t%p\n", (void *)task->loadBias);
-	synth_text_addf(t, "faults\t%u minor %u major\n", task->minorFaults, task->majorFaults);
+	uint64_t minor_faults = 0, major_faults = 0, anon_zero_pages = 0;
+	for (thread_t *fault_th = task->threads; fault_th != NULL; fault_th = fault_th->taskNext)
+	{
+		minor_faults += __atomic_load_n(&fault_th->minorFaults, __ATOMIC_RELAXED);
+		major_faults += __atomic_load_n(&fault_th->majorFaults, __ATOMIC_RELAXED);
+		anon_zero_pages += __atomic_load_n(&fault_th->anonZeroPages, __ATOMIC_RELAXED);
+	}
+	synth_text_addf(t, "faults\t%lu minor %lu major\n", minor_faults, major_faults);
+	synth_text_addf(t, "anon_zero_pages\t%lu\n", anon_zero_pages);
 	synth_text_addf(t, "switches\t%u\n", task->cSwitches);
 	// Where the task's thread last ran — the answer to "whose plate did
 	// this time come off", without which per-core arithmetic is guesswork.
@@ -542,8 +589,7 @@ static void proc_gen_task_status(synth_text_t *t, task_t *task)
 	bool has_idle;
 	if (proc_task_accounting(task, &cycles, &has_idle))
 	{
-		// Convert disjoint buckets before summing: deriving a bucket from
-		// separately rounded totals can move it backward by one microsecond.
+		// Convert user, system, and idle separately; runtime is their printed sum.
 		uint64_t user = proc_cycles_to_us(cycles.user);
 		uint64_t system = proc_cycles_to_us(cycles.system);
 		uint64_t idle = proc_cycles_to_us(cycles.idle);
@@ -551,6 +597,7 @@ static void proc_gen_task_status(synth_text_t *t, task_t *task)
 		synth_text_addf(t, "runtime_us\t%lu\n", runtime);
 		synth_text_addf(t, "user_us\t%lu\n", user);
 		synth_text_addf(t, "system_us\t%lu\n", system);
+		proc_add_system_causes(t, &cycles, system);
 		if (has_idle)
 			synth_text_addf(t, "idle_us\t%lu\n", idle);
 	}
@@ -998,8 +1045,8 @@ static bool proc_copy_task_bytes(task_t *task, uintptr_t task_va,
 // regions have gone home to the kernel — is known only to the allocator that
 // owns it, and that allocator is libos64's malloc. So malloc publishes the
 // address of one struct at startup and the kernel renders the file: procfs
-// keeps the pen, the format, and the key<TAB>value grammar every other file
-// here uses, and the application writes not one line of it.
+// keeps the pen and the keyed-report grammar used by status and heap; the
+// application writes not one line of it.
 //
 // A program with no libos64 heap (a raw fixture, a foreign binary) says so
 // plainly rather than pretending to have an empty heap.
@@ -1137,6 +1184,11 @@ static void proc_gen_thread_status(synth_text_t *t, task_t *task, thread_t *th)
 	synth_text_addf(t, "rip\t%p\n", (void *)th->regs.RIP);
 	synth_text_addf(t, "rsp\t%p\n", (void *)th->regs.RSP);
 	synth_text_addf(t, "ticks\t%lu\n", th->totalRunTicks);
+	synth_text_addf(t, "faults\t%lu minor %lu major\n",
+	                __atomic_load_n(&th->minorFaults, __ATOMIC_RELAXED),
+	                __atomic_load_n(&th->majorFaults, __ATOMIC_RELAXED));
+	synth_text_addf(t, "anon_zero_pages\t%lu\n",
+	                __atomic_load_n(&th->anonZeroPages, __ATOMIC_RELAXED));
 	accounting_thread_cycles_t cycles;
 	if (accounting_read_thread(th, &cycles))
 	{
@@ -1148,6 +1200,7 @@ static void proc_gen_thread_status(synth_text_t *t, task_t *task, thread_t *th)
 		synth_text_addf(t, "runtime_us\t%lu\n", runtime);
 		synth_text_addf(t, "user_us\t%lu\n", user);
 		synth_text_addf(t, "system_us\t%lu\n", system);
+		proc_add_system_causes(t, &cycles, system);
 		if (th->idleThread)
 			synth_text_addf(t, "idle_us\t%lu\n", idle);
 	}
@@ -1158,6 +1211,48 @@ static void proc_gen_thread_status(synth_text_t *t, task_t *task, thread_t *th)
 	// renumbering safe, and reaching through it here is the one place a reader
 	// legitimately wants the raw word.
 	synth_text_addf(t, "signals\t%p\n", (void *)(uintptr_t)th->signals.sigind.bits);
+}
+
+// Each thread table is a coherent snapshot. Task rows are sums of those
+// snapshots, like the task status clocks; the threads can advance between
+// copies, so the task file does not claim one simultaneous instant.
+static void proc_gen_syscalls(synth_text_t *t, task_t *task, thread_t *single)
+{
+	// Match status: settle open spans before taking coherent row copies.
+	// mpAcctSettleAll coalesces nearby /proc reads to one request per tick.
+	mpAcctSettleAll();
+	accounting_syscall_row_t sums[ACCOUNTING_SYSCALL_ROWS] = {0};
+	accounting_syscall_row_t rows[ACCOUNTING_SYSCALL_ROWS];
+	for (thread_t *th = single ? single : task->threads; th != NULL;
+	     th = single ? NULL : th->taskNext)
+	{
+		if (!accounting_read_syscalls(th, rows))
+		{
+			synth_text_addf(t, "unavailable\n");
+			return;
+		}
+		for (unsigned i = 0; i < ACCOUNTING_SYSCALL_ROWS; i++)
+		{
+			if (UINT64_MAX - sums[i].calls < rows[i].calls ||
+			    UINT64_MAX - sums[i].cycles < rows[i].cycles)
+			{
+				synth_text_addf(t, "unavailable\n");
+				return;
+			}
+			sums[i].calls += rows[i].calls;
+			sums[i].cycles += rows[i].cycles;
+		}
+	}
+	synth_text_addf(t, "# number name calls us\n");
+	for (unsigned i = 0; i < ACCOUNTING_SYSCALL_ROWS; i++)
+	{
+		if (sums[i].calls == 0 && sums[i].cycles == 0)
+			continue;
+		const char *name = i == ACCOUNTING_SYSCALL_OVERFLOW ? ">=128" :
+		                   (syscall_table[i].name ? syscall_table[i].name : "-");
+		synth_text_addf(t, "%u %s %lu %lu\n", i, name, sums[i].calls,
+		                proc_cycles_to_us(sums[i].cycles));
+	}
 }
 
 // ── ctl ─────────────────────────────────────────────────────────────────────
@@ -1413,9 +1508,13 @@ static int proc_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 
 	if (pp.type == PROC_NODE_THREAD_FILE)
 	{
-		proc_gen_thread_status(&text, task, th);
+		if (strcmp(pp.name, "status") == 0)
+			proc_gen_thread_status(&text, task, th);
+		else
+			proc_gen_syscalls(&text, task, th);
 	}
 	else if (strcmp(pp.name, "status") == 0)   proc_gen_task_status(&text, task);
+	else if (strcmp(pp.name, "syscalls") == 0) proc_gen_syscalls(&text, task, NULL);
 	else if (strcmp(pp.name, "cmdline") == 0)  proc_gen_cmdline(&text, task);
 	else if (strcmp(pp.name, "cwd") == 0)      proc_gen_cwd(&text, task);
 	else if (strcmp(pp.name, "handles") == 0)  proc_gen_handles(&text, task);

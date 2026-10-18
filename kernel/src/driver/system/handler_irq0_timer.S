@@ -1,5 +1,6 @@
 .code64
 .intel_syntax noprefix
+#include "irq_accounting.inc"
 .extern kTicksSinceStart, kSystemCurrentTime, kUptime, kTicksPerSecond, kProcessSignals
 .extern processSignals
 .extern signalProcTickFrequency
@@ -11,6 +12,16 @@
 handler_irq0_asm:
     cld                     # DF clear before any C runs — an interrupt gate does not clear it, and ring 3 may have set it (see exc_common)
     push rax
+    push rcx
+    push rdx
+    push rbx
+    push rsi
+    push rdi
+    push r8
+    push r9
+    push r10
+    push r11
+	IRQ_ACCOUNT_ENTER 88
 
 	# Increment the number of ticks since the system was started
 	lock inc qword ptr [kTicksSinceStart]
@@ -42,7 +53,16 @@ send_pic_eoi:
     out 0x20, al
 
 irq0_eoi_done:
-
+	IRQ_ACCOUNT_EXIT
+	pop r11
+	pop r10
+	pop r9
+	pop r8
+	pop rdi
+	pop rsi
+	pop rbx
+	pop rdx
+	pop rcx
 	pop rax
 	iretq                    # Return from interrupt
 

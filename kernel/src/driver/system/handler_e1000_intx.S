@@ -1,6 +1,7 @@
 .code64
 .intel_syntax noprefix
 #include "utility_macros.inc"
+#include "irq_accounting.inc"
 
 # Vector 0x45 — the e1000's INTx doorbell (first wired 2026-08-06, the day
 # os64's packets stopped waiting to be noticed).
@@ -31,6 +32,7 @@ handler_e1000_intx_asm:
     push r9
     push r10
     push r11
+	IRQ_ACCOUNT_ENTER 88
 
     sub rsp, 8              # Align stack to 16 bytes before calling C code
     call e1000_isr
@@ -38,6 +40,7 @@ handler_e1000_intx_asm:
 
     mov rax, qword ptr [rip + kMPApicBase]
     mov dword ptr [rax + 0xB0], 0     # LAPIC EOI
+	IRQ_ACCOUNT_EXIT
 
     pop r11
     pop r10

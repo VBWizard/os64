@@ -97,9 +97,9 @@
 void mpAcctSettleAll(void);
 // The hlt-wait accounting bookends (smp.h's acctCurrentHalted doctrine):
 // Begin under cli right before sti;hlt — settles the caller's real work,
-// then routes the coming nap to this core's idle thread; End after the hlt
-// returns — settles the nap, drops the flag. For the compositor's idle
-// idiom, the one thread that halts outside the scheduler's view.
+// then routes the coming nap to this core's idle thread. Interrupt entry
+// closes the nap and drops the redirect so the waking handler counts as
+// work. End settles the post-wake tail and clears any remaining redirect.
 void mpAcctHaltBegin(void);
 void mpAcctHaltEnd(void);
 // Permanently stop every other core — the full stop that precedes a fatal

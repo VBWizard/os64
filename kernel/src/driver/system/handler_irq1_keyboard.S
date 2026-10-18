@@ -1,6 +1,7 @@
 .code64
 .intel_syntax noprefix
 #include "utility_macros.inc"
+#include "irq_accounting.inc"
 
 # IRQ1 (keyboard) entry. The actual 8042 read/dispatch lives in C
 # (ps2_handle_irq in keyboard.c) and is SHARED with the IRQ12 mouse handler:
@@ -24,6 +25,7 @@ handler_irq1_asm:
     push r9
     push r10
     push r11
+	IRQ_ACCOUNT_ENTER 88
 
     sub rsp, 8              # Align stack to 16 bytes before calling C code
     call ps2_handle_irq
@@ -43,6 +45,7 @@ irq1_send_pic_eoi:
     out 0x20, al
 
 irq1_eoi_done:
+	IRQ_ACCOUNT_EXIT
     pop r11
     pop r10
     pop r9
