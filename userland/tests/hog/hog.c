@@ -23,16 +23,22 @@
 #define MAX_THREADS 100
 #define HOG_ERROR_TOO_MANY_THREADS_REQUESTED 1;
 #define HOG_THREAD_NO_START 2
+#define HOG_THREAD_BAD_JOIN 3
 
-static volatile int64_t shared_slots[MAX_THREADS];
+typedef struct {
+    int64_t seconds;
+    int64_t idx;
+} burn_args_t;
+
+static volatile uint64_t shared_slots[MAX_THREADS];
 
 /// @brief The worker for hog, burns CPU cycles
-/// @param arg - int64_t - seconds to burn
-/// @return int furnace count
+/// @param arg - burn_args_t with duration and result slot
+/// @return requested tick count
 int64_t burn(void *arg)
 {
-
-    int64_t seconds = (int64_t)arg;
+    const burn_args_t *worker = arg;
+    int64_t seconds = worker->seconds;
     // The flame. volatile so the whole point doesn't optimize away.
     volatile uint64_t furnace = 0;
     os64_ticks_t start = {0}, now = {0};
@@ -53,7 +59,7 @@ int64_t burn(void *arg)
                 break;
         }
     }
-    // uint64_t burnedTicks = now.ticks - start.ticks;
+    shared_slots[worker->idx] = furnace;
     return endTick - start.ticks;
 }
 
@@ -65,6 +71,7 @@ int main(int argc, char **argv)
     const char *paramNumOfThreads = NULL;
     int64_t threadCount = 0;
     int64_t handles[MAX_THREADS];
+    burn_args_t workerArgs[MAX_THREADS];
     const os64_optspec_t specs[] = {
         {'n', "number", true, "the number of hog threads to run", .value_out = &paramNumOfThreads}};
 
@@ -101,10 +108,11 @@ int main(int argc, char **argv)
 
     for (int64_t i = 0; i < threadCount; i++)
     {
-        handles[i] = os64_thread(burn, (void *)seconds);
+        workerArgs[i] = (burn_args_t){.seconds = seconds, .idx = i};
+        handles[i] = os64_thread(burn, &workerArgs[i]);
         if (handles[i] < 0)
         {
-            os64_printf("threadtest: could not start thread %ld\n", i);
+            os64_printf("hog: could not start thread %ld\n", i);
             return HOG_THREAD_NO_START;
         }
     }
@@ -112,14 +120,16 @@ int main(int argc, char **argv)
     for (int64_t i = 0; i < threadCount; i++)
     {
         int64_t threadSeconds = 0;
-        os64_thread_join((int32_t)handles[i], &threadSeconds);
+        if (os64_thread_join((int32_t)handles[i], &threadSeconds) < 0)
+        {
+            os64_printf("hog: could not join thread %ld\n", i);
+            return HOG_THREAD_BAD_JOIN;
+        }
+        os64_close((int32_t)handles[i]);
         totalTicks += threadSeconds;
     }
-        /*    os64_printf("hog: burned %lu.%lus by the tick clock (furnace reads %lu)\n",
-                        burnedTicks / (start.per_second ? start.per_second : 1),
-                        (burnedTicks % (start.per_second ? start.per_second : 1)) / 10,
-                        (uint64_t)furnace);
-        */
-        os64_printf("Summary: %ld threads ran for a total of %ld ticks\n", threadCount, totalTicks);
-        return returnCode;
-    }
+    for (int64_t i = 0; i < threadCount; i++)
+        os64_printf("hog: thread %ld furnace count %lu\n", i, shared_slots[i]);
+    os64_printf("Summary: %ld threads ran for a total of %ld ticks\n", threadCount, totalTicks);
+    return returnCode;
+}
