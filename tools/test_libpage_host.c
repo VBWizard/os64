@@ -18,6 +18,7 @@
 
 #include "html/html.h"
 #include "page/page.h"
+#include "os64/url.h"   // OS64_URL_REF_MAX: the long-address cases are sized from it
 
 // libos64's formatter is linked for the URL resolver's sake and reaches for
 // the write syscall on printing paths nothing here calls. Answering "all of

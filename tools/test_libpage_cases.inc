@@ -197,8 +197,10 @@ static void resolve_in(void)
 static void long_reference(void)
 {
     // A8. An action too long to resolve was once sent to the page's own host
-    // instead, which is a different host to be wrong about (R7).
-    static char html[4096];
+    // instead, which is a different host to be wrong about (R7). The
+    // reference is sized from the limit itself, so it stays too long when
+    // the limit moves.
+    static char html[OS64_URL_REF_MAX + 256];
     size_t at = (size_t)snprintf(html, sizeof(html), "<a href='http://host/");
     while (at < sizeof(html) - 32)
         html[at++] = 'x';
@@ -854,11 +856,15 @@ static void long_query(void)
     // may be, and that is the same refusal family A gives a reference that
     // will not fit — not an address handed on for something further down to
     // choke on with less to say about why.
-    static char html[8192];
+    // The markup is about twice the query it builds, so the page is sized
+    // from the limit and the fields go on until the query itself is past it.
+    static char html[4 * OS64_URL_REF_MAX];
     size_t at = (size_t)snprintf(html, sizeof(html), "<form action=/s>");
-    for (int32_t i = 0; at < sizeof(html) - 64; i++)
-        at += (size_t)snprintf(html + at, sizeof(html) - at,
-                               "<input name=field%d value=padding>", i);
+    size_t query = 0;
+    for (int32_t i = 0; query <= OS64_URL_REF_MAX + 64 && at < sizeof(html) - 64; i++) {
+        at += (size_t)snprintf(html + at, sizeof(html) - at, "<input name=field%d value=padding>", i);
+        query += (size_t)snprintf(NULL, 0, "field%d=padding&", i);
+    }
     snprintf(html + at, sizeof(html) - at, "<input type=submit></form>");
     run((PCase){.steps = "F15",
                 .name = "F: a query longer than an address is refused",
