@@ -1055,8 +1055,9 @@ bool flow_motion_tick(flow_tree_t *tree, uint64_t now, flow_point_t scroll,
 // alike, and every value that changed is drawn where its element draws (the
 // in-place class and the tick set), `mark` is handed, from each tree in
 // turn, what each changed element paints — as flow_motion_tick hands a
-// tick's, plus the text on an inline element's lines, which its pieces
-// do not draw — and each box drawn outside it that takes from it what changed,
+// tick's, except that an inline element is marked by the block holding its
+// pieces, its text and any block split out of it — and each box drawn
+// outside it that takes from it what changed,
 // in page coordinates at `scroll`; true. False when they cannot be bounded
 // so — a box moved, the trees differ, a value changed that a layout
 // places, an element whose background the canvas may take, one with no box

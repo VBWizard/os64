@@ -473,11 +473,13 @@ the record's layouts by cause; perf-4b is part 2.
    hand over, for each animated element whose values changed, what it
    painted in the old tree and what it paints in the new one. That is its
    boxes' inked overflow, or its group's bounds when it opens one, as a
-   tick hands them, with one addition: an inline element's pieces draw
-   none of its text, which sits beside them on the line, so the text
-   boxes it holds are marked with each piece (`element_drawn_by`, the
-   rule the text clip already uses) — a text shadow reaches past the
-   piece and would otherwise leave trails. To that it adds
+   tick hands them, with one exception: an inline element's pieces draw
+   none of its text, which sits beside them on the line, nor a block
+   split out of it, which sits on lines of its own — so an inline is
+   marked by the nearest block with an element of its own, which holds
+   all of them (`pieces_holder`, the box `motion_due` already asks
+   about to decide whether an inline can be seen), which is more than the
+   inline draws. To that it adds
    the stacked boxes inside it that take what changed, by the rule
    `motion_due` already applies and through the same function, not a copy
    of it. A stacked box takes from the element what is handed down (the

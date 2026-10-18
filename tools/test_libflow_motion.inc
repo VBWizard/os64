@@ -3904,6 +3904,8 @@ static void motion_layout_part_oracle_cases(void)
         "@keyframes a{to{box-shadow:10px 10px 0 4px red}}#e{animation:a 1s linear}</style><div id=e>x</div>",
         "@keyframes a{to{text-shadow:0 -30px 0 red}}#e{animation:a 1s linear}</style>"
         "<div>one <span id=e>two</span> three</div>",
+        "@keyframes a{to{color:red}}#e{animation:a 1s linear}</style>"
+        "<div><span id=e><div>BLOCK</div>after</span></div>",
     };
     for (size_t i = 0; i < sizeof(kPages) / sizeof(*kPages); i++) {
         char html[1024];

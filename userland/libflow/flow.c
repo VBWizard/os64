@@ -1761,18 +1761,29 @@ static bool box_seen(const flow_box_t *b, os64_gui_rect_t view, flow_point_t scr
     return meets(doc_rect_of(b, inked, scroll), view);
 }
 
-// Whether what an element draws, its first box `b`, can be seen. An inline
-// element's first box is its piece on one line, and it may have pieces on
-// many, in several anonymous blocks when it is split round a block inside
-// it: the nearest block with an element of its own holds every piece, so
-// its box stands for them — more than the element draws, which can cost a
-// layout the element did not need and never one it did.
-static bool pieces_seen(const flow_box_t *b, os64_gui_rect_t view, flow_point_t scroll, int32_t reach)
+// The box that stands for what an element's box `b` draws. An inline
+// element's box is its piece on one line, and it may have pieces on many,
+// in several anonymous blocks when it is split round a block inside it;
+// its text and that block sit beside its pieces, not in them. The nearest
+// block with an element of its own holds every piece, the text and the
+// split blocks, so its box stands for them, more than the element draws. A
+// positioned box inside it may be drawn outside that block; such a box is
+// stacked, and the stacked boxes have a rule of their own. Any other box
+// stands for itself.
+static const flow_box_t *pieces_holder(const flow_box_t *b)
 {
     if (b->kind == FLOW_BOX_SPAN)
         while (b->parent != NULL && !(block_level(b->kind) && b->node != NULL))
             b = b->parent;
-    return box_seen(b, view, scroll, reach);
+    return b;
+}
+
+// Whether what an element draws, its first box `b`, can be seen, by the box
+// that stands for it (pieces_holder) — which can cost a layout the element
+// did not need and never one it did.
+static bool pieces_seen(const flow_box_t *b, os64_gui_rect_t view, flow_point_t scroll, int32_t reach)
+{
+    return box_seen(pieces_holder(b), view, scroll, reach);
 }
 
 // Whether what element `n` animates in place can be seen, `reach` past
@@ -3219,41 +3230,6 @@ static const FResolved *tick_resolved(void *ctx, int32_t a, int32_t frame, const
     return m->resolved[2 * (m->first[a] + frame) + (over != NULL)];
 }
 
-// The boxes that draw what an element's box `b` stands for: `b`, and for a
-// SPAN piece the boxes on its line that its element holds. A piece is its
-// text's sibling on the line, not its parent (flow_visit_text_clip), and
-// draws none of the text, so a value the text draws — a colour, a text
-// shadow — is drawn, and reaches, by those boxes.
-static void element_drawn_by(const flow_box_t *b, void (*each)(void *ctx, flow_box_t *box), void *ctx)
-{
-    each(ctx, (flow_box_t *)b);
-    if (b->kind != FLOW_BOX_SPAN || b->parent == NULL || b->node == NULL)
-        return;
-    for (const flow_box_t *c = b->parent->first; c != NULL; c = c->next)
-        if (c != b && node_within(c->node, b->node))
-            each(ctx, (flow_box_t *)c);
-}
-
-// A box's reach handed to `mark` in page coordinates at `scroll`: its
-// overflow rect grown by its ink and cut to its clips, as a group holds it
-// (layer_reach). An unpainted box reaches nothing.
-typedef struct {
-    void (*mark)(void *ctx, const flow_box_t *box, os64_gui_rect_t r);
-    void *ctx;
-    flow_point_t scroll;
-} Reach;
-
-static void mark_reach(void *ctx, flow_box_t *b)
-{
-    const Reach *rc = ctx;
-    os64_gui_rect_t r;
-    if (b->unpainted || !layer_reach(&(Layer){b, PART_WHOLE}, rc->scroll, &r))
-        return;
-    r = space_rect(b->frame, r, rc->scroll);
-    if (r.w > 0 && r.h > 0)
-        rc->mark(rc->ctx, b, r);
-}
-
 // A box's ink with its shadows as they are now, MERGED into what it was —
 // a box's ink only grows while its tree lives — and handed up as ink_reach
 // hands it.
@@ -3442,9 +3418,10 @@ static bool same_boxes(const flow_tree_t *a, const flow_tree_t *b)
 }
 
 // The parts of one tree: each changed element (`changed`, node -> what of it
-// changed) handed to `mark` — a group's bounds, else each box that draws it
-// by its reach (element_drawn_by) — and each stacked box drawn outside one
-// that takes from it what changed (stacked_from, the rule motion_due asks).
+// changed) handed to `mark` — a group's bounds, else the reach of each box
+// that stands for its boxes (pieces_holder, the rule motion_due's view asks)
+// — and each stacked box drawn outside one that takes from it what changed
+// (stacked_from, the rule motion_due asks).
 typedef struct {
     const flow_tree_t *t;
     const FMap *changed;
@@ -3456,8 +3433,13 @@ typedef struct {
 
 static void part_box(const Parts *pp, const flow_box_t *b)
 {
-    Reach rc = {pp->mark, pp->ctx, pp->scroll};
-    element_drawn_by(b, mark_reach, &rc);
+    os64_gui_rect_t r;
+    b = pieces_holder(b);
+    if (b->unpainted || !layer_reach(&(Layer){b, PART_WHOLE}, pp->scroll, &r))
+        return;
+    r = space_rect(b->frame, r, pp->scroll);
+    if (r.w > 0 && r.h > 0)
+        pp->mark(pp->ctx, b, r);
 }
 
 static bool part_from(void *ctx, const os64_html_node_t *a, const FStyled *st, const FProps *ask,
