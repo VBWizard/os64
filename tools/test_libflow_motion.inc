@@ -3885,6 +3885,34 @@ static os64_gui_rect_t inked_doc_rect(const flow_box_t *b)
                              r.h + b->ink[FLOW_TOP] + b->ink[FLOW_BOTTOM]};
 }
 
+// The stacked boxes' walk is held to a budget (PARTS_WALK_MAX): a page whose
+// stacked boxes nest hundreds deep inside the changed element would make it
+// cost more than repainting, so it refuses; one a few deep is bounded.
+static void motion_layout_part_depth_cases(void)
+{
+    static const int kDepth[] = {20, 500};
+    for (int d = 0; d < 2; d++) {
+        static char html[64000];
+        size_t n = (size_t)snprintf(html, sizeof(html), MOTION_STYLE
+            "@keyframes a{to{color:red}}#e{animation:a 1s linear}div{position:relative}</style><div id=e>");
+        for (int i = 0; i < kDepth[d]; i++)
+            n += (size_t)snprintf(html + n, sizeof(html) - n, "<div>");
+        n += (size_t)snprintf(html + n, sizeof(html) - n, "x");
+        for (int i = 0; i <= kDepth[d]; i++)
+            n += (size_t)snprintf(html + n, sizeof(html) - n, "</div>");
+        Moving m;
+        moving_open(&m, html, 1000);
+        flow_tree_t *now = moving_beside(&m, 1300);
+        TickMarks k = {.n = 0};
+        bool bounded = now != NULL && flow_layout_parts(m.tree, now, (flow_point_t){0, 0}, tick_mark, &k);
+        expect(d == 0 ? "layout parts: stacked boxes nested a few deep are bounded"
+                      : "layout parts: stacked boxes nested hundreds deep refuse, past the walk's budget",
+               now != NULL && bounded == (d == 0), NULL);
+        flow_free(now);
+        moving_close(&m);
+    }
+}
+
 static void motion_layout_part_oracle_cases(void)
 {
     static const char *const kPages[] = {
@@ -4210,6 +4238,7 @@ static void motion_cases(void)
     motion_tick_cases();
     motion_reach_budget_cases();
     motion_layout_part_cases();
+    motion_layout_part_depth_cases();
     motion_layout_part_oracle_cases();
     motion_sweep();
 }

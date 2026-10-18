@@ -1061,7 +1061,9 @@ bool flow_motion_tick(flow_tree_t *tree, uint64_t now, flow_point_t scroll,
 // in page coordinates at `scroll`; true. False when they cannot be bounded
 // so — a box moved, the trees differ, a value changed that a layout
 // places, an element whose background the canvas may take, one with no box
-// of its own — or there is no memory: then repaint the whole view. Both
+// of its own, stacked boxes nested so deep that finding which of them take
+// the change would cost more than the repaint — or there is no memory: then
+// repaint the whole view. Both
 // trees must be the page's at one width, zoom and cascade; what else the
 // page changed is the caller's to have marked.
 bool flow_layout_parts(const flow_tree_t *was, const flow_tree_t *now, flow_point_t scroll,

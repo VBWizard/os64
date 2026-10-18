@@ -3429,7 +3429,16 @@ typedef struct {
     void (*mark)(void *ctx, const flow_box_t *box, os64_gui_rect_t r);
     void *ctx;
     const flow_box_t *b;        // the stacked box stacked_from walks up from
+    int32_t visits;             // elements the walks have visited, against PARTS_WALK_MAX
 } Parts;
+
+// What the stacked boxes' walks may visit in one tree before the parts are
+// refused, checked between walks, so one walk's depth past it at most.
+// Each stacked box walks its ancestors, so stacked boxes nested deep inside
+// a changed element cost the square of the depth; past this a whole-view
+// repaint is the cheaper answer, and a page of ordinary depth stays far
+// below it.
+#define PARTS_WALK_MAX 16384
 
 static void part_box(const Parts *pp, const flow_box_t *b)
 {
@@ -3447,6 +3456,7 @@ static bool part_from(void *ctx, const os64_html_node_t *a, const FStyled *st, c
 {
     Parts *pp = ctx;
     (void)st;
+    pp->visits++;
     const FProps *ch = f_map_get(pp->changed, a);
     if (ch == NULL)
         return true;
@@ -3462,7 +3472,7 @@ static bool part_from(void *ctx, const os64_html_node_t *a, const FStyled *st, c
 static bool parts_in(const flow_tree_t *t, const FMap *changed, flow_point_t scroll,
                      void (*mark)(void *ctx, const flow_box_t *box, os64_gui_rect_t r), void *ctx)
 {
-    Parts pp = {t, changed, scroll, mark, ctx, NULL};
+    Parts pp = {t, changed, scroll, mark, ctx, NULL, 0};
     FMap grouped = {0};
     bool ok = true;
     // Every group's bounds in one pass (all_group_bounds) when any changed
@@ -3500,6 +3510,7 @@ static bool parts_in(const flow_tree_t *t, const FMap *changed, flow_point_t scr
         pp.b = t->stacked[i];
         if (pp.b->node != NULL)
             stacked_from(t, pp.b, part_from, &pp);
+        ok = pp.visits <= PARTS_WALK_MAX;
     }
     f_map_free(&grouped);
     os64_free(bounds);

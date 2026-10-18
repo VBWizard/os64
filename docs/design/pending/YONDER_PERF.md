@@ -497,7 +497,10 @@ the record's layouts by cause; perf-4b is part 2.
    - the root's or the body's background, which the canvas takes over the
      whole view;
    - an element with no box of its own (`display: contents`), whose
-     descendants draw what it hands them.
+     descendants draw what it hands them;
+   - stacked boxes nested so deep inside a changed element that walking
+     each one's ancestors (the cost is the square of the depth) would pass
+     `PARTS_WALK_MAX` visits in a tree; the repaint is cheaper there.
 
    As a check that costs one walk, libflow compares the two trees box by
    box and treats any difference as "cannot bound". It compares the count,
