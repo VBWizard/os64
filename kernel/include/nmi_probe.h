@@ -67,6 +67,10 @@ typedef struct {
 	uint64_t rip, cs, rflags, rsp, ss;
 } nmi_frame_t;
 
+// How many configuration MSRs a snapshot can carry (nmi_probe_init
+// builds the list from CPUID; it is a dozen and a half on a Zen).
+#define NMI_PROBE_MSR_MAX 24
+
 // Everything one core can truthfully say about itself in an NMI handler.
 // Filled ONLY by that core, read by everyone else — so every field is written
 // once, before done is published, and never touched again.
@@ -106,6 +110,16 @@ typedef struct {
 	uint32_t apicInServiceVector;  // highest ISR bit, 0 = nothing in service
 	uint32_t apicTPR, apicPPR, apicLVTTimer;
 
+	// The per-thread configuration registers (the table in nmi_probe.c),
+	// read standing on the core for the same reason the LAPIC fields are: an
+	// MSR answers for the thread that executes rdmsr. Some os64 writes on
+	// every thread (EFER, PAT, SPEC_CTRL); the rest are whatever the firmware
+	// and the previous boot left, so two threads of one core can differ and
+	// nothing else says so. Diff them when one thread is inexplicably slow.
+	uint32_t msrCount;
+	uint64_t msr[NMI_PROBE_MSR_MAX];
+	uint64_t dr7;
+
 	// Published LAST. A reader that sees this true is guaranteed to see every
 	// field above it, because the write is release-ordered by the compiler
 	// barrier in the capture path.
@@ -117,6 +131,11 @@ typedef struct {
 // false for a genuine hardware NMI, which falls through to the panic path that
 // has always handled vector 2.
 bool nmi_probe_capture(nmi_regs_t *regs, nmi_frame_t *frame);
+
+// Build the MSR table from CPUID. Once, single-threaded, before any core can
+// be probed: the capture reads the table from an NMI handler and must never
+// see it half-built.
+void nmi_probe_init(void);
 
 // Fire an NMI at one core and wait — WITH INTERRUPTS ENABLED — for its answer.
 // Returns false on timeout, which is not a failure but a verdict: a core that

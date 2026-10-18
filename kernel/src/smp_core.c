@@ -13,6 +13,8 @@
 #include <stdint.h>
 #include "serial_logging.h"
 #include "sprintf.h"   // snprintf — the settle tripwire's line formatter
+#include "strings/strcmp.h"   // strcmp — the speculation policy's keywords
+#include "strings/strcpy.h"   // strncpy — remembering the policy's name
 #include "exception_report.h"   // exception_wire_lock — the tripwire narrates atomically
 #include "kmalloc.h"
 #include "kernel.h"
@@ -452,6 +454,229 @@ void mp_determine_local_APIC_timer_speed()
     printd(DEBUG_SMP, "Local APIC timer *adjusted* frequency is %u MHz (average %u ticks per second)\n", displayedSpeed,cls->apicTicksPerSecond);
 }
 
+// ── SPEC_CTRL is the kernel's to write, on every thread (2026-10-18) ─────────
+//
+// IA32_SPEC_CTRL (MSR 0x48) carries the speculation controls an operating
+// system chooses — IBRS, STIBP, SSBD, PSFD — and it is PER HARDWARE THREAD.
+// os64 used to inherit it, and the P5's firmware (Ryzen 5 6600H) hands the
+// SECOND thread of every core SSBD set while the first thread's is clear —
+// because it writes the register on the first thread of each core and never
+// on the second, which keeps whatever it held: the reset value on a cold
+// boot, the last policy across a warm one (the boot line shows both).
+// Measured with /tests/coreprobe: thread 1 paid about six cycles for every
+// branch instruction, taken or not, a 2.5x loss on any loop — which made the
+// compositor three times slower per pixel whenever it landed on an odd APIC
+// and sent yonder spinning on kGuiLock (the per-boot "bad state" of
+// 2026-10-17/18). Every other instrument read "idle" and "halted"; the
+// /sys/cpu/<n>/probe MSR lines found the one register the two threads of a
+// core disagreed on.
+//
+// The policy is the one Linux and Windows apply — the kernel decides the
+// value and writes the same one on every thread — and the VALUE is a system
+// setting: `speculation =` in /etc/os64.conf (Chris, 2026-10-18: "default
+// it to make the OS performant", and when a mitigation is ever wanted it is
+// one line, applied evenly, not a firmware menu's accident).
+//
+//   fast      0 — no controls. The default, and what bring-up writes before
+//             any file can be read. os64 runs no sandboxed untrusted code
+//             that these mitigations protect, and the cost here is measured.
+//   guarded   every control this CPU reports: IBRS, STIBP, SSBD, PSFD.
+//   0x<hex>   the bits themselves, for the person who knows which one;
+//             bits the CPU does not report are dropped, and said so.
+//
+// Bring-up writes `fast` standing on each thread; the root file, read after
+// SMP is up, applies anything else through IPI_SPEC_CTRL_VECTOR, because the
+// register can only be written from the thread it belongs to. What each
+// thread inherited is kept and reported after bring-up and again when the
+// root file changes the policy (spec_ctrl_report), so a firmware that does
+// this again is seen on the glass instead of felt.
+#define SPEC_CTRL_MSR    0x48
+#define SPEC_CTRL_IBRS   (1ull << 0)
+#define SPEC_CTRL_STIBP  (1ull << 1)
+#define SPEC_CTRL_SSBD   (1ull << 2)
+#define SPEC_CTRL_PSFD   (1ull << 7)
+
+volatile uint64_t kSpecCtrlInherited[MAX_CPUS];
+volatile uint64_t kSpecCtrlApplied[MAX_CPUS];   // what each thread last wrote
+volatile uint64_t kSpecCtrlValue;               // the policy in force
+volatile bool kSpecCtrlPresent;
+static char kSpecCtrlPolicy[24] = "fast";
+
+// The bits this CPU implements, by CPUID. Intel: leaf 7 EDX IBRS/IBPB[26],
+// STIBP[27], SSBD[31], PSFD in subleaf 2's EDX[0]. AMD: leaf 0x80000008
+// EBX IBRS[14], STIBP[15], SSBD[24], PSFD[28]. Any bit set means the MSR
+// itself is implemented.
+static uint64_t spec_ctrl_supported(void)
+{
+	uint32_t a = 0, b = 0, c = 0, d = 0;
+	uint64_t mask = 0;
+	if (__get_cpuid_count(7, 0, &a, &b, &c, &d)) {
+		uint32_t maxsub = a;
+		if (d & (1u << 26)) mask |= SPEC_CTRL_IBRS;
+		if (d & (1u << 27)) mask |= SPEC_CTRL_STIBP;
+		if (d & (1u << 31)) mask |= SPEC_CTRL_SSBD;
+		// Intel enumerates PSFD one subleaf over: CPUID.(7,2):EDX[0].
+		if (maxsub >= 2 && __get_cpuid_count(7, 2, &a, &b, &c, &d) && (d & 1u))
+			mask |= SPEC_CTRL_PSFD;
+	}
+	if (__get_cpuid(0x80000008, &a, &b, &c, &d)) {
+		if (b & (1u << 14)) mask |= SPEC_CTRL_IBRS;
+		if (b & (1u << 15)) mask |= SPEC_CTRL_STIBP;
+		if (b & (1u << 24)) mask |= SPEC_CTRL_SSBD;
+		if (b & (1u << 28)) mask |= SPEC_CTRL_PSFD;
+	}
+	return mask;
+}
+
+static void spec_ctrl_write_this_cpu(uint32_t apic_id)
+{
+	uint64_t value = kSpecCtrlValue;
+	if (kSpecCtrlPresent)
+		wrmsr64(SPEC_CTRL_MSR, value);
+	if (apic_id < MAX_CPUS)
+		kSpecCtrlApplied[apic_id] = value;
+}
+
+static void spec_ctrl_init_this_cpu(uint32_t apic_id)
+{
+	if (spec_ctrl_supported() == 0)
+		return;
+	kSpecCtrlPresent = true;
+	uint64_t inherited = rdmsr64(SPEC_CTRL_MSR);
+	if (apic_id < MAX_CPUS)
+		kSpecCtrlInherited[apic_id] = inherited;
+	spec_ctrl_write_this_cpu(apic_id);
+	printd(DEBUG_SMP, "AP%u: SPEC_CTRL inherited 0x%lx, set to 0x%lx\n", apic_id, inherited, kSpecCtrlValue);
+}
+
+void spec_ctrl_apply_ISR(void)
+{
+	core_local_storage_t *cls = get_core_local_storage();
+	spec_ctrl_write_this_cpu(cls ? (uint32_t)cls->apic_id : MAX_CPUS);
+	write_eoi();
+}
+
+static bool spec_ctrl_parse_hex(const char *value, uint64_t *out)
+{
+	if (value[0] != '0' || (value[1] != 'x' && value[1] != 'X') || value[2] == 0)
+		return false;
+	uint64_t v = 0;
+	for (const char *c = value + 2; *c; c++) {
+		uint64_t digit;
+		if (*c >= '0' && *c <= '9') digit = (uint64_t)(*c - '0');
+		else if (*c >= 'a' && *c <= 'f') digit = (uint64_t)(*c - 'a' + 10);
+		else if (*c >= 'A' && *c <= 'F') digit = (uint64_t)(*c - 'A' + 10);
+		else return false;
+		if (v >> 60)
+			return false;
+		v = (v << 4) | digit;
+	}
+	*out = v;
+	return true;
+}
+
+bool spec_ctrl_set_policy(const char *value)
+{
+	if (value == NULL)
+		return false;
+	if (!kSpecCtrlPresent) {
+		printd(DEBUG_BOOT, "SPEC_CTRL: speculation = %s ignored: not implemented on this CPU\n", value);
+		return false;
+	}
+	uint64_t supported = spec_ctrl_supported();
+	uint64_t want;
+	if (strcmp(value, "fast") == 0) {
+		want = 0;
+	} else if (strcmp(value, "guarded") == 0) {
+		want = supported;
+	} else if (spec_ctrl_parse_hex(value, &want)) {
+		if (want & ~supported) {
+			printd(DEBUG_BOOT, "SPEC_CTRL: speculation = %s: bits 0x%lx are not implemented here, dropped\n",
+			       value, want & ~supported);
+			want &= supported;
+		}
+	} else {
+		printd(DEBUG_BOOT, "SPEC_CTRL: speculation = %s is not fast, guarded or 0x<hex>: keeping %s\n",
+		       value, kSpecCtrlPolicy);
+		return false;
+	}
+	strncpy(kSpecCtrlPolicy, value, sizeof(kSpecCtrlPolicy));
+	kSpecCtrlPolicy[sizeof(kSpecCtrlPolicy) - 1] = 0;
+	kSpecCtrlValue = want;
+
+	// Identify the thread and write it with interrupts off: this task is
+	// not pinned, and a preemption between learning which thread it is on
+	// and writing would record one thread as done while another was written.
+	uint64_t irq;
+	__asm__ volatile("pushfq\n\tpop %0\n\tcli" : "=r"(irq) :: "memory");
+	core_local_storage_t *cls = get_core_local_storage();
+	uint32_t self = cls ? (uint32_t)cls->apic_id : BOOTSTRAP_PROCESSOR_ID;
+	spec_ctrl_write_this_cpu(self);
+	if (irq & 0x200)
+		__asm__ volatile("sti" ::: "memory");
+	if (!kSMPInitDone)
+		return true;   // nothing else is up; bring-up will write this value
+	for (int i = 0; i < kMPCoreCount; i++) {
+		uint32_t apic_id = kCPUInfo[i].apicID;
+		if (apic_id != self)
+			send_ipi(apic_id, IPI_SPEC_CTRL_VECTOR, 0, 1, 0);
+	}
+	// Bounded, and only with interrupts on (mpAcctSettleAll's rule: never
+	// wait for an interrupt-delivered answer with them off). A thread that
+	// has not confirmed by the report simply shows there as unconfirmed.
+	if (irq & 0x200) {
+		uint64_t deadline = kTicksSinceStart + 10;
+		for (int i = 0; i < kMPCoreCount; i++) {
+			uint32_t apic_id = kCPUInfo[i].apicID;
+			while (apic_id < MAX_CPUS && kSpecCtrlApplied[apic_id] != want &&
+			       kTicksSinceStart < deadline)
+				__builtin_ia32_pause();
+		}
+	}
+	// The root file is read after bring-up's report has printed, so say it
+	// again: the glass must show the policy that is actually in force.
+	spec_ctrl_report();
+	return true;
+}
+
+// The boot line, glass and log: the policy in force, how many threads
+// confirmed it, and how many arrived with controls already set. Inherited
+// non-zero is not an error — it is the firmware's choice being overruled,
+// and the number worth knowing the day a machine is slow on half its CPUs.
+void spec_ctrl_report(void)
+{
+	if (!kSpecCtrlPresent) {
+		printf("SPEC_CTRL: not implemented on this CPU\n");
+		printd(DEBUG_BOOT, "SPEC_CTRL: not implemented on this CPU\n");
+		return;
+	}
+	uint32_t nonzero = 0, first = 0, confirmed = 0;
+	uint64_t firstVal = 0;
+	for (int i = 0; i < kMPCoreCount; i++) {
+		uint32_t id = kCPUInfo[i].apicID;
+		if (id >= MAX_CPUS)
+			continue;
+		if (kSpecCtrlApplied[id] == kSpecCtrlValue)
+			confirmed++;
+		if (kSpecCtrlInherited[id] != 0) {
+			if (nonzero == 0) {
+				first = id;
+				firstVal = kSpecCtrlInherited[id];
+			}
+			nonzero++;
+		}
+	}
+	char line[160];
+	if (nonzero == 0)
+		sprintf(line, "SPEC_CTRL: %s (0x%lx) on %u of %u threads; none inherited a non-zero value\n",
+		        kSpecCtrlPolicy, kSpecCtrlValue, confirmed, kMPCoreCount);
+	else
+		sprintf(line, "SPEC_CTRL: %s (0x%lx) on %u of %u threads; %u inherited non-zero (first: APIC %u = 0x%lx)\n",
+		        kSpecCtrlPolicy, kSpecCtrlValue, confirmed, kMPCoreCount, nonzero, first, firstVal);
+	printf("%s", line);
+	printd(DEBUG_BOOT, "%s", line);
+}
+
 // Interrupt handler for initializing an AP
 void ap_initialization_handler() {
     
@@ -576,6 +801,10 @@ void ap_initialization_handler() {
 	// SIGNAL_RFLAGS_DF). That one needed hand-written ring-3 asm to reach.
 	// This one needs a `std` and any syscall at all.
 	wrmsr64(SFMASK_MSR, (1 << 18) | (1 << 14) | (1 << 10) | (1 << 9) | (1 << 8));
+
+	// The speculation controls are this thread's and the kernel's to set —
+	// never inherited (the SPEC_CTRL block above has the day it cost).
+	spec_ctrl_init_this_cpu(apic_id);
 
 	init_core_local_storage(apic_id);
 	core_local_storage_t *cls = get_core_local_storage();

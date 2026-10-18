@@ -595,6 +595,23 @@ arrives is the same bytes either way.
   - Idle task
 - Inter-processor interrupts (IPIs) for scheduler coordination
 - Can be disabled via `nosmp` kernel cmdline
+- **The speculation controls are written, never inherited.** `IA32_SPEC_CTRL`
+  (IBRS/STIBP/SSBD/PSFD) is per hardware thread, and the P5's firmware hands
+  the SECOND thread of every core SSBD set with the first thread clear — on
+  that core it cost ~6 cycles per branch instruction, so anything branchy on
+  an odd APIC ran at 40% (the compositor at a third of its pixel rate, yonder
+  spinning on kGuiLock: the per-boot "bad state" of 2026-10-17/18).
+  Bring-up writes `fast` (0) on every thread; **`speculation =` in
+  `/etc/os64.conf`** (`fast` | `guarded` | `0x<hex>`, read by conf_init,
+  applied to every thread through `IPI_SPEC_CTRL_VECTOR`) is the system's
+  one place to choose otherwise, and `spec_ctrl_report` prints one boot
+  line with the policy in force, how many threads confirmed it, and how
+  many arrived with controls already set. **`/sys/cpu/<n>/probe` now reports that
+  thread's configuration MSRs** (DEBUGCTL, SPEC_CTRL, HWCR, P-state/CPPC,
+  Zen's unit config registers, DR7), read on the core itself — diff thread 0
+  against thread 1 when one is inexplicably slow. **`/tests/coreprobe`** is
+  the ring-3 proof: `coreprobe -s 20` wanders and prints each core's rate for
+  a dependent multiply chain and for every branch kind; siblings must agree.
 
 **Core-Local Storage:**
 - Accessed via `get_core_local_storage()`

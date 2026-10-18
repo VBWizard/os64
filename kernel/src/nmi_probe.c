@@ -13,8 +13,10 @@
 // LIVE shell: write "probe" to /sys/cpu/<n>/probe, read the answer back.
 
 #include <stddef.h>
+#include <cpuid.h>   // __get_cpuid — which configuration MSRs this CPU has
 
 #include "nmi_probe.h"
+#include "msr.h"                 // rdmsr64 — the configuration registers
 #include "smp.h"
 #include "smp_core.h"
 #include "scheduler.h"
@@ -68,6 +70,115 @@ static volatile uint8_t kNmiProbeRequest[MAX_CPUS];
 // our iretq. It snapshots and returns. It does not print, does not lock, and
 // does not dereference anything it was not handed.
 // ───────────────────────────────────────────────────────────────────────────
+// ── The per-thread configuration registers (2026-10-18) ─────────────────────
+//
+// Born the day the P5's second hardware threads turned out to run branchy
+// code 2.5x slower than the first — about six cycles per branch instruction,
+// taken or not, as if the predictor were off — while every instrument read
+// "idle" and "halted" and there was nothing to diff. Each register here is
+// per thread: a few os64 writes itself on every thread (EFER, PAT, and
+// SPEC_CTRL since that day), the rest are whatever the firmware and the
+// previous boot left. This is where all of it becomes visible.
+//
+// NOTHING ON THIS LIST MAY FAULT. The reads run inside the NMI handler, and
+// a #GP there is not survivable in any honest way: its iretq re-enables NMI
+// delivery while the capture is still on IST2, so a second NMI would land
+// on the live handler's stack (SDM vol. 3 §7.7.1) — and the EXCOLD boot's
+// legacy #GP handler would simply halt. So a register is listed only when
+// the architecture or a CPUID bit promises it, and Zen's unit-config
+// registers only for the families that document them (and answered on the
+// P5's family 19h). A future family gets none of those rather than a guess.
+typedef struct {
+	uint32_t index;
+	const char *name;
+} nmi_probe_msr_t;
+
+static nmi_probe_msr_t kNmiProbeMsrs[NMI_PROBE_MSR_MAX];
+static uint32_t kNmiProbeMsrCount;
+
+static void msr_add(uint32_t index, const char *name)
+{
+	if (kNmiProbeMsrCount < NMI_PROBE_MSR_MAX) {
+		kNmiProbeMsrs[kNmiProbeMsrCount].index = index;
+		kNmiProbeMsrs[kNmiProbeMsrCount].name = name;
+		kNmiProbeMsrCount++;
+	}
+}
+
+void nmi_probe_init(void)
+{
+	kNmiProbeMsrCount = 0;
+	uint32_t a = 0, b = 0, c = 0, d = 0;
+	bool amd = false, intel = false;
+	if (__get_cpuid(0, &a, &b, &c, &d)) {
+		amd   = (b == 0x68747541 && d == 0x69746e65 && c == 0x444d4163);   // "AuthenticAMD"
+		intel = (b == 0x756e6547 && d == 0x49656e69 && c == 0x6c65746e);   // "GenuineIntel"
+	}
+	uint32_t family = 0, f1_ecx = 0, f1_edx = 0;
+	if (__get_cpuid(1, &a, &b, &c, &d)) {
+		family = (a >> 8) & 0xF;
+		if (family == 0xF)
+			family += (a >> 20) & 0xFF;
+		f1_ecx = c;
+		f1_edx = d;
+	}
+	uint32_t f6_eax = 0, f6_ecx = 0, f7_edx = 0, e7_edx = 0, e8_ebx = 0;
+	if (__get_cpuid(6, &a, &b, &c, &d)) {
+		f6_eax = a;
+		f6_ecx = c;
+	}
+	if (__get_cpuid_count(7, 0, &a, &b, &c, &d))
+		f7_edx = d;
+	if (__get_cpuid(0x80000007, &a, &b, &c, &d))
+		e7_edx = d;
+	if (__get_cpuid(0x80000008, &a, &b, &c, &d))
+		e8_ebx = b;
+
+	msr_add(0x1D9, "DEBUGCTL");                  // the debug knobs: LBR, BTF
+	msr_add(0xC0000080, "EFER");
+	msr_add(0x277, "PAT");
+	if (f1_edx & (1u << 12))
+		msr_add(0x2FF, "MTRRdefType");
+	if (f6_ecx & 1u) {                           // APERF/MPERF = the effective clock
+		msr_add(0xE7, "MPERF");
+		msr_add(0xE8, "APERF");
+	}
+	if ((f7_edx & (1u << 26)) || (e8_ebx & ((1u << 14) | (1u << 15) | (1u << 24))))
+		msr_add(0x48, "SPEC_CTRL");              // IBRS, STIBP, SSBD, PSFD
+	if (amd) {
+		msr_add(0xC0010015, "HWCR");
+		if (e7_edx & (1u << 7)) {                // hardware P-states
+			msr_add(0xC0010062, "PSTATE_CTL");
+			msr_add(0xC0010063, "PSTATE_STATUS");
+		}
+		if (e8_ebx & (1u << 27)) {               // CPPC
+			msr_add(0xC00102B0, "CPPC_CAP1");
+			msr_add(0xC00102B1, "CPPC_ENABLE");
+			msr_add(0xC00102B3, "CPPC_REQ");
+		}
+		// Zen's unit configuration registers: the three Linux touches on
+		// family 17h, all five on 19h where every one answered (the P5).
+		if (family == 0x17 || family == 0x19) {
+			msr_add(0xC0011020, "LS_CFG");
+			msr_add(0xC0011021, "IC_CFG");
+			msr_add(0xC0011029, "DE_CFG");
+		}
+		if (family == 0x19) {
+			msr_add(0xC0011022, "DC_CFG");
+			msr_add(0xC001102A, "BU_CFG2");
+		}
+	}
+	if (intel) {
+		msr_add(0x1A0, "MISC_ENABLE");
+		if (f1_ecx & (1u << 7))                  // EIST
+			msr_add(0x199, "PERF_CTL");
+		if (f6_eax & (1u << 7)) {                // HWP
+			msr_add(0x770, "PM_ENABLE");
+			msr_add(0x774, "HWP_REQUEST");
+		}
+	}
+}
+
 bool nmi_probe_capture(nmi_regs_t *regs, nmi_frame_t *frame)
 {
 	core_local_storage_t *cls = get_core_local_storage();
@@ -118,6 +229,14 @@ bool nmi_probe_capture(nmi_regs_t *regs, nmi_frame_t *frame)
 	s->apicTPR             = read_apic_register(kMPApicBase + APIC_TPR_OFFSET);
 	s->apicPPR             = read_apic_register(kMPApicBase + APIC_PPR_OFFSET);
 	s->apicLVTTimer        = read_apic_register(kMPApicBase + APIC_LVT_TIMER_OFFSET);
+
+	// The configuration registers — the thread's, so only readable from here.
+	// Every index comes from the table nmi_probe_init built, which lists
+	// nothing this CPU could refuse (the doctrine at the table).
+	s->msrCount = kNmiProbeMsrCount;
+	for (uint32_t i = 0; i < s->msrCount; i++)
+		s->msr[i] = rdmsr64(kNmiProbeMsrs[i].index);
+	__asm__ volatile("mov %0, dr7" : "=r"(s->dr7));
 
 	// Publish. Everything above must be visible before `valid` is, and must
 	// not be sunk below it by the compiler.
@@ -339,6 +458,20 @@ void nmi_probe_render(const nmi_probe_snapshot_t *s, nmi_probe_line_fn emit, voi
 	// or below its priority class until the core is reset.
 	sprintf(line, "  lapic: inService=0x%02x TPR=0x%02x PPR=0x%02x LVTtimer=0x%08x\n",
 	        s->apicInServiceVector, s->apicTPR, s->apicPPR, s->apicLVTTimer);
+	emit(ctx, line);
+
+	// The thread's configuration registers, three a line. Two threads of one
+	// core that disagree here are the finding.
+	for (uint32_t i = 0; i < s->msrCount; i += 3) {
+		int n = sprintf(line, "  msr:");
+		for (uint32_t j = i; j < s->msrCount && j < i + 3; j++) {
+			const char *name = j < kNmiProbeMsrCount ? kNmiProbeMsrs[j].name : "?";
+			n += sprintf(line + n, " %s=%016lx", name, s->msr[j]);
+		}
+		sprintf(line + n, "\n");
+		emit(ctx, line);
+	}
+	sprintf(line, "  dr7=%016lx\n", s->dr7);
 	emit(ctx, line);
 
 	probe_walk_stack(emit, ctx, s);

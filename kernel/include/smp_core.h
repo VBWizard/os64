@@ -45,6 +45,10 @@
 // often the ONLY record (no serial capture), which makes this the difference
 // between a diagnosis and a photograph of a screen that already moved on.
 #define IPI_FREEZE_VECTOR 0x84
+// Apply the speculation policy (/etc/os64.conf `speculation =`) on the
+// receiving thread: SPEC_CTRL is per hardware thread and can only be written
+// standing on it (smp_core.c, spec_ctrl_set_policy).
+#define IPI_SPEC_CTRL_VECTOR 0x85
 
 // IRQ0's vector, and the headstone of an attempt to move it (2026-08-10).
 //
@@ -118,6 +122,14 @@ extern bool kCLSInitialized;
 extern bool kSMPInitDone;
 
 void ap_initialization_handler();
+// The boot line for the speculation controls every thread was brought up
+// with (smp_core.c); meaningful only once every thread has run its init.
+void spec_ctrl_report(void);
+// `speculation = <fast|guarded|0x..>` from /etc/os64.conf: parse, write this
+// thread, IPI the rest. Refuses loudly and keeps the policy in force on a
+// value it cannot honour. The ISR is the IPI's receiving half.
+bool spec_ctrl_set_policy(const char *value);
+void spec_ctrl_apply_ISR(void);
 void mp_enable_scheduling_vector(int apic_id);
 void mp_restart_apic_timer_count();
 void send_ipi(uint32_t apic_id, uint32_t vector, uint32_t delivery_mode, uint32_t level, uint32_t trigger_mode);
