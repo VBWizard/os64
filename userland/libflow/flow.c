@@ -3219,6 +3219,41 @@ static const FResolved *tick_resolved(void *ctx, int32_t a, int32_t frame, const
     return m->resolved[2 * (m->first[a] + frame) + (over != NULL)];
 }
 
+// The boxes that draw what an element's box `b` stands for: `b`, and for a
+// SPAN piece the boxes on its line that its element holds. A piece is its
+// text's sibling on the line, not its parent (flow_visit_text_clip), and
+// draws none of the text, so a value the text draws — a colour, a text
+// shadow — is drawn, and reaches, by those boxes.
+static void element_drawn_by(const flow_box_t *b, void (*each)(void *ctx, flow_box_t *box), void *ctx)
+{
+    each(ctx, (flow_box_t *)b);
+    if (b->kind != FLOW_BOX_SPAN || b->parent == NULL || b->node == NULL)
+        return;
+    for (const flow_box_t *c = b->parent->first; c != NULL; c = c->next)
+        if (c != b && node_within(c->node, b->node))
+            each(ctx, (flow_box_t *)c);
+}
+
+// A box's reach handed to `mark` in page coordinates at `scroll`: its
+// overflow rect grown by its ink and cut to its clips, as a group holds it
+// (layer_reach). An unpainted box reaches nothing.
+typedef struct {
+    void (*mark)(void *ctx, const flow_box_t *box, os64_gui_rect_t r);
+    void *ctx;
+    flow_point_t scroll;
+} Reach;
+
+static void mark_reach(void *ctx, flow_box_t *b)
+{
+    const Reach *rc = ctx;
+    os64_gui_rect_t r;
+    if (b->unpainted || !layer_reach(&(Layer){b, PART_WHOLE}, rc->scroll, &r))
+        return;
+    r = space_rect(b->frame, r, rc->scroll);
+    if (r.w > 0 && r.h > 0)
+        rc->mark(rc->ctx, b, r);
+}
+
 // A box's ink with its shadows as they are now, MERGED into what it was —
 // a box's ink only grows while its tree lives — and handed up as ink_reach
 // hands it.
@@ -3407,9 +3442,9 @@ static bool same_boxes(const flow_tree_t *a, const flow_tree_t *b)
 }
 
 // The parts of one tree: each changed element (`changed`, node -> what of it
-// changed) handed to `mark` as a tick hands it — a group's bounds, else
-// each of its boxes' reach — and each stacked box drawn outside one that
-// takes from it what changed (stacked_from, the rule motion_due asks).
+// changed) handed to `mark` — a group's bounds, else each box that draws it
+// by its reach (element_drawn_by) — and each stacked box drawn outside one
+// that takes from it what changed (stacked_from, the rule motion_due asks).
 typedef struct {
     const flow_tree_t *t;
     const FMap *changed;
@@ -3421,12 +3456,8 @@ typedef struct {
 
 static void part_box(const Parts *pp, const flow_box_t *b)
 {
-    os64_gui_rect_t r;
-    if (b->unpainted || !layer_reach(&(Layer){b, PART_WHOLE}, pp->scroll, &r))
-        return;
-    r = space_rect(b->frame, r, pp->scroll);
-    if (r.w > 0 && r.h > 0)
-        pp->mark(pp->ctx, b, r);
+    Reach rc = {pp->mark, pp->ctx, pp->scroll};
+    element_drawn_by(b, mark_reach, &rc);
 }
 
 static bool part_from(void *ctx, const os64_html_node_t *a, const FStyled *st, const FProps *ask,
@@ -3452,13 +3483,22 @@ static bool parts_in(const flow_tree_t *t, const FMap *changed, flow_point_t scr
     Parts pp = {t, changed, scroll, mark, ctx, NULL};
     FMap grouped = {0};
     bool ok = true;
+    // Every group's bounds in one pass (all_group_bounds) when any changed
+    // element opens one, so nested changing groups cost one walk, not one
+    // each; group_bounds alone when there is no memory for it.
+    bool groups = false;
+    for (int32_t k = 0; !groups && k < t->nlayers; k++)
+        groups = t->layers[k].part == PART_OPEN && t->layers[k].box->node != NULL &&
+                 f_map_get(changed, t->layers[k].box->node) != NULL;
+    os64_gui_rect_t *bounds = groups ? all_group_bounds(t, scroll) : NULL;
     for (int32_t k = 0; ok && k < t->nlayers; k++) {
         const Layer *l = &t->layers[k];
         if (l->part != PART_OPEN || l->box->node == NULL || f_map_get(changed, l->box->node) == NULL ||
             f_map_get(&grouped, l->box->node) != NULL)
             continue;
         int32_t end;
-        os64_gui_rect_t r = space_rect(l->box->frame, group_bounds(t, k, scroll, &end), scroll);
+        os64_gui_rect_t in = bounds != NULL ? bounds[k] : group_bounds(t, k, scroll, &end);
+        os64_gui_rect_t r = space_rect(l->box->frame, in, scroll);
         if (r.w > 0 && r.h > 0)
             mark(ctx, l->box, r);
         ok = f_map_put(&grouped, l->box->node, (void *)l);
@@ -3480,6 +3520,7 @@ static bool parts_in(const flow_tree_t *t, const FMap *changed, flow_point_t scr
             stacked_from(t, pp.b, part_from, &pp);
     }
     f_map_free(&grouped);
+    os64_free(bounds);
     return ok;
 }
 
