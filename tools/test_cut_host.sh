@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -eu
 cd "$(git rev-parse --show-toplevel)"
-work=$(mktemp -d /tmp/os64-cut-host.XXXXXX)
+work=$(mktemp -d -t os64-cut-host.XXXXXX)
 trap 'rm -rf "$work"' EXIT
 flags=(-std=gnu11 -g -O1 -Wall -Wextra -Werror -fno-builtin
        -fsanitize=address,undefined -fno-sanitize-recover=all -fno-pie

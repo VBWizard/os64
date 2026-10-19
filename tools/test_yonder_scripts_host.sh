@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
-work=$(mktemp -d /tmp/os64-yonder-scripts.XXXXXX)
+work=$(mktemp -d -t os64-yonder-scripts.XXXXXX)
 cleanup() {
     result=$?
     if [ "$result" -eq 0 ] && [ "${YONDER_SCRIPTS_KEEP:-0}" = 0 ]; then

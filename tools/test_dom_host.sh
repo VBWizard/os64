@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
-work=$(mktemp -d /tmp/os64-dom-host.XXXXXX)
+work=$(mktemp -d -t os64-dom-host.XXXXXX)
 cleanup() {
     result=$?
     if [ "$result" -eq 0 ] && [ "${DOM_HOST_KEEP:-0}" = 0 ]; then rm -rf "$work"; else echo "DOM host artifacts: $work" >&2; fi

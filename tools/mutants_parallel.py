@@ -3,6 +3,7 @@
 tree, and say which mutants were caught.
 
     tools/mutants_parallel.py test_motion_mutants.py:7 test_fonts_mutants.py:4
+    tools/mutants_parallel.py test_motion_mutants.py:2 --only name-one,name-two
 
 A harness edits its sources in place, so two of them must never share a tree.
 Each worker gets a copy of the directories the suites build from, made a git
@@ -33,6 +34,21 @@ shares as there are workers, and each is run with `--only <name>`. The
 harnesses match --only as a substring, so a name inside another runs both;
 a worker reports verdicts for its own share only, so a mutant another
 worker ran by accident never stands in for one its own worker did not.
+
+--only takes exact mutant names, from any of the harnesses named, and runs
+those alone: a review round's few through the same copies, baselines and
+cleanup as a full run. A name no harness has stops the run before it starts.
+
+A RUN CLEANS UP AFTER ITSELF. A suite keeps its work directory when it fails,
+so a person can look at the failure, and under a harness every caught mutant
+is a failure: a day of runs once left tens of gigabytes in /tmp. So each
+worker's TMPDIR is a directory inside its own copy (the suites make theirs
+with `mktemp`, which honours it), and when a worker is done its logs move to
+`<out>/logs/` and the copy goes, TMPDIR and all. The copy is removed only through discard(), which
+refuses any path that is not directly inside the run's directory or does not
+carry the mark the worker wrote when it made the copy. A worker whose
+baseline failed keeps its copy, said with its path, because that failure is
+the one someone has to look at.
 
 HOST_BUILD_JOBS (tools/host_build.sh) is set to --jobs in every worker, so
 twenty workers compiling at once do not ask for twenty machines.
@@ -72,7 +88,9 @@ parser.add_argument('--out', type=pathlib.Path, help='where the copies and logs 
 parser.add_argument('--with', dest='extra', action='append', default=[],
                     help='another top-level directory to copy')
 parser.add_argument('--jobs', type=int, default=2, help='compiles at once in each worker (HOST_BUILD_JOBS)')
+parser.add_argument('--only', help='exact mutant names, comma-separated: run these alone')
 args = parser.parse_args()
+only = set(filter(None, (args.only or '').split(','))) or None
 
 src = args.src or pathlib.Path(subprocess.check_output(['git', 'rev-parse', '--show-toplevel'],
                                                        text=True).strip())
@@ -114,6 +132,10 @@ def plan(spec):
     if at < 0:
         sys.exit(f'mutants_parallel: {harness} has no `mutants = [` list')
     names = NAME.findall(text[at:])
+    if only is not None:
+        names = [n for n in names if n in only]
+        if not names:
+            return []
     suites = set(SUITE.findall(text))
     suites |= {('bash ' if kind == 'sh' else 'python3 ') + path for path, kind in BARE.findall(text)}
     suites = sorted(suites)
@@ -142,13 +164,34 @@ def bounded(cmd, cwd, env, log, seconds):
         return 'timeout'
 
 
+# The mark a worker writes in the copy it makes: this run's own words, so
+# discard() deletes nothing it did not make.
+MARK = '.mutants_parallel_copy'
+RUN = f'mutants_parallel {os.getpid()} {time.time_ns()} {out}\n'
+
+
+def discard(root):
+    """Delete a worker's copy: a real directory directly inside `out` that
+    carries this run's mark, and nothing else."""
+    mark = root / MARK
+    if (root.parent != out or root.is_symlink() or not root.is_dir() or mark.is_symlink()
+            or not mark.is_file() or mark.read_text() != RUN):
+        print(f'mutants_parallel: not deleting {root}: not a copy this run made', flush=True)
+        return
+    shutil.rmtree(root)
+
+
 def work(job):
     harness, k, names, suites, limit = job
     root = out / f'{harness[:-3]}-{k}'
+    root.mkdir()
+    (root / MARK).write_text(RUN)
     for d in dirs:
         shutil.copytree(src / d, root / d, symlinks=True)
     subprocess.run(['git', 'init', '-q', '.'], cwd=root, check=True)
-    env = dict(os.environ, HOST_BUILD_JOBS=str(args.jobs))
+    tmp = root / 'tmp'
+    tmp.mkdir()
+    env = dict(os.environ, HOST_BUILD_JOBS=str(args.jobs), TMPDIR=str(tmp))
     logs = root / 'logs'
     logs.mkdir()
     with (root / 'out.txt').open('w') as o:
@@ -159,7 +202,8 @@ def work(job):
                 b.flush()
                 code = bounded(suite, root, env, b, deadline - time.monotonic())
                 if code != 0:
-                    o.write(f'BASELINE FAILED ({code}): {suite} (see {logs / "baseline.log"})\n')
+                    o.write(f'BASELINE FAILED ({code}): {suite} (see {logs / "baseline.log"}; '
+                            f'the copy is kept)\n')
                     return harness, k, names, None, {}
         seconds = {}
         for name in names:
@@ -168,10 +212,20 @@ def work(job):
             subprocess.run([sys.executable, f'tools/{harness}', '--only', name, '--logs', str(logs)],
                            cwd=root, env=env, stdout=o, stderr=subprocess.STDOUT)
             seconds[name] = time.monotonic() - began
-    return harness, k, names, (root / 'out.txt').read_text(), seconds
+    text = (root / 'out.txt').read_text()
+    kept = out / 'logs' / root.name
+    kept.parent.mkdir(exist_ok=True)
+    shutil.move(str(logs), str(kept))
+    shutil.move(str(root / 'out.txt'), str(kept / 'out.txt'))
+    discard(root)
+    return harness, k, names, text, seconds
 
 
 jobs = [job for spec in args.harnesses for job in plan(spec)]
+if only is not None:
+    unknown = only - {n for job in jobs for n in job[2]}
+    if unknown:
+        sys.exit(f'mutants_parallel: no harness named has {", ".join(sorted(unknown))}')
 print(f'mutants_parallel: {sum(len(j[2]) for j in jobs)} mutants, {len(jobs)} workers, in {out}',
       flush=True)
 verdicts, broken, took = {}, [], {}
