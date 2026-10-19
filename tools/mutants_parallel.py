@@ -56,7 +56,7 @@ mutant, goes on running with no parent. So each harness call has a process
 group of its own (harnessed()), and when it returns whatever is still in the
 group is killed and named at the end as LEFT RUNNING. A group of its own is
 also out of the terminal's reach, so stopping the run is the runner's job:
-Ctrl-C, Ctrl-\, a kill or a closed terminal (every signal that would end it
+Ctrl-C, Ctrl-\\, a kill or a closed terminal (every signal that would end it
 but SIGKILL, which nothing can catch) kills every group it started
 (baselines included), no worker starts another, and each finishes moving its
 logs and removing its copy before the run exits without a summary.
