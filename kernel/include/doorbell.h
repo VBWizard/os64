@@ -35,8 +35,14 @@ typedef struct doorbell
 {
 	thread_t*     thread;    // the sleeper this bell belongs to (NULL until registered)
 	volatile bool rung;      // set by a ringer, cleared by the sleeper
-	volatile uint64_t rung_tsc;  // when `rung` last went false -> true: the ring the sleeper is answering (racy by design, like the counts)
-	volatile uint32_t rung_apic; // which core's TSC stamped it — a sleeper compares TSCs only against its own core's (SCHEDULER.md: per-core TSCs are not one clock)
+	// When `rung` last went false -> true, and on which core: the ring the
+	// sleeper is answering. ONE word, because two racing ringers on the edge
+	// must not leave one's clock beside the other's core — per-core TSCs are
+	// not one clock (SCHEDULER.md), so a sleeper times only stamps its own
+	// core made. TSC in the high 56 bits, APIC id in the low 8 (0xFF = a core
+	// the byte cannot name: counted, never timed). Racy by design, like the
+	// counts: the later of two racing stamps wins, an under-report.
+	volatile uint64_t rung_stamp;
 	uint64_t      rings;     // every ring, whoever rang — diagnostics, racy by design
 	uint64_t      wakes;     // rings that found the thread parked and relinked it
 	uint64_t      rung_runnable; // rings that found it awake and off the CPU — answered by aging, not the boost
@@ -53,6 +59,18 @@ typedef struct doorbell
 // that matters.
 void doorbell_register(doorbell_t* db, thread_t* thread, const char* name);
 void doorbell_unregister(doorbell_t* db);
+
+// The edge stamp's one-word encoding (rung_stamp above). Stamp the edge from
+// any ringer — the ring verbs below do; a sleeper that re-arms its own bell
+// calls it too — and decode on the sleeper's side.
+#define DOORBELL_STAMP_APIC_UNKNOWN 0xFFu
+static inline uint64_t doorbell_stamp_make(uint64_t tsc, uint32_t apic)
+{
+	return (tsc << 8) | (apic < DOORBELL_STAMP_APIC_UNKNOWN ? apic : DOORBELL_STAMP_APIC_UNKNOWN);
+}
+static inline uint64_t doorbell_stamp_tsc(uint64_t stamp)  { return stamp >> 8; }
+static inline uint32_t doorbell_stamp_apic(uint64_t stamp) { return (uint32_t)(stamp & 0xFFu); }
+void doorbell_stamp_edge(doorbell_t* db);
 
 // RING. Interrupt-safe, lock-free, from anywhere: stores the bit, provokes a
 // pass on the thread's home core.

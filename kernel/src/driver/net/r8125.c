@@ -1000,6 +1000,35 @@ static bool r8125_setup_rings(r8125_t* r)
 	return true;
 }
 
+// ── Completions ─────────────────────────────────────────────────────────────
+//
+// Reap what the device has finished with and keep the books that depend on
+// it. ONE function, because two paths reap — the drain, and a transmit that
+// finds the ring full and collects before it gives up — and the books must
+// not depend on which one got there first: the watchdog's progress clock,
+// and the ring-full notice's recovery, whose proof is exactly "a completion
+// happened", whoever saw it. Lock held by the caller.
+static uint16_t r8125_reap_locked(r8125_t* r)
+{
+	uint16_t reaped = r8125_tx_reap(r->tx, R8125_TX_DESCS, &r->tx_clean, r->tx_next);
+	if (reaped == 0)
+		return 0;
+	r->tx_completions += reaped;
+	r->last_progress_tick = kTicksSinceStart;
+	if (r->tx_full_reported)
+	{
+		// A completion is the proof the ring-full notice was waiting for:
+		// the device is still completing, so the full ring was the
+		// producer's burst and not the device's death. Say so, so the log
+		// reads as a blip and not as a network that ended.
+		r->tx_full_reported = false;
+		printd(DEBUG_EXCEPTIONS,
+		       "r8125: transmit ring draining again — %u completed, tx_next=%u tx_clean=%u.\n",
+		       reaped, r->tx_next, r->tx_clean);
+	}
+	return reaped;
+}
+
 // ── Transmit ────────────────────────────────────────────────────────────────
 // Copy-based, per the seam's ownership contract: the caller's buffer must be
 // reusable the moment this returns, so the frame goes into OUR standing
@@ -1019,7 +1048,7 @@ static int32_t r8125_transmit(struct net_device* dev, const void* frame, uint16_
 
 	// Reap first: the ring may be "full" only because we have not collected
 	// what the device already finished.
-	r8125_tx_reap(r->tx, R8125_TX_DESCS, &r->tx_clean, r->tx_next);
+	r8125_reap_locked(r);
 
 	uint16_t index;
 	if (!r8125_tx_claim(R8125_TX_DESCS, r->tx_next, r->tx_clean, &index))
@@ -1029,7 +1058,7 @@ static int32_t r8125_transmit(struct net_device* dev, const void* frame, uint16_
 		// completely and leave nothing behind but a number nobody had
 		// reason to read. The frame is dropped here and TCP resends it.
 		//
-		// Two things look like this, and the drain's recovery line tells them
+		// Two things look like this, and the reap's recovery line tells them
 		// apart: a producer that outran the wire for a moment — a scaled
 		// window handing a burst to a gigabit link — which the next reaped
 		// completion answers within a tick, and a device that has stopped
@@ -1325,24 +1354,8 @@ bool r8125_drain(struct net_device* dev)
 
 	// Transmit completions first — cheap, and it frees slots for whatever
 	// the receive path below is about to answer.
-	uint16_t reaped = r8125_tx_reap(r->tx, R8125_TX_DESCS, &r->tx_clean, r->tx_next);
-	if (reaped != 0)
-	{
-		r->tx_completions += reaped;
-		r->last_progress_tick = kTicksSinceStart;
+	if (r8125_reap_locked(r) != 0)
 		moved = true;
-		if (r->tx_full_reported)
-		{
-			// A completion is the proof the ring-full notice was waiting
-			// for: the device is still completing, so the full ring was the
-			// producer's burst and not the device's death. Say so, so the
-			// log reads as a blip and not as a network that ended.
-			r->tx_full_reported = false;
-			printd(DEBUG_EXCEPTIONS,
-			       "r8125: transmit ring draining again — %u completed, tx_next=%u tx_clean=%u.\n",
-			       reaped, r->tx_next, r->tx_clean);
-		}
-	}
 
 	// Then every frame the device has finished with. Bounded per call: a
 	// wire delivering faster than we drain must not let one call run the

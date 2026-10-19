@@ -554,6 +554,19 @@ bool e1000_drain(struct net_device* dev)
 		return false;
 	bool moved = false;
 
+	// Overruns in POLLED mode (no INTx adopted, divorced after a storm, or
+	// NETPOLL): the card latches RXO in ICR whether or not anyone is
+	// listening, and with no handler reading ICR the drain is the only place
+	// the bit is ever seen. Reading clears it, which is why this is gated on
+	// the handler being absent — with INTx live the handler owns ICR and a
+	// second reader would swallow causes it was about to act on.
+	if (!kE1000UsesIntx)
+	{
+		uint32_t icr = e1000_read32(e, E1000_ICR);
+		if (icr & E1000_INT_RXO)
+			e->netdev.rx_overruns++;
+	}
+
 	// TX reclaim: every descriptor the hardware finished returns to the
 	// pool. Status is cleared as we go so a stale DD from three trips around
 	// the ring ago can never be mistaken for a fresh completion.
@@ -1018,9 +1031,9 @@ void e1000_isr(void)
 
 	e->intx_fires++;
 	// RXO is the card saying its receive ring ran out and frames were
-	// dropped: the seam's rx_overruns (net_device.h), counted here because
-	// the ICR read above is the only sight of the bit — the drain never
-	// sees it.
+	// dropped: the seam's rx_overruns (net_device.h). With INTx live this
+	// read of ICR is the only one, so the bit is counted here; in polled
+	// mode e1000_drain reads ICR instead and counts it there.
 	if (icr & E1000_INT_RXO)
 		e->netdev.rx_overruns++;
 	if (icr & E1000_INT_LSC)

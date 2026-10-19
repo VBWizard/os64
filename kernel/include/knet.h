@@ -25,16 +25,19 @@ extern task_t*    kKnetTask;
 // their wake — all in TSC cycles (kCPUCyclesPerSecond converts).
 extern volatile uint64_t kKnetWakes;
 extern volatile uint64_t kKnetDrainRounds;
-extern volatile uint64_t kKnetBudgetExhausted;   // wakes that spent their budget (time, or the round cap) with work left
+extern volatile uint64_t kKnetBudgetExhausted;   // wakes whose budget (time, or the round cap) ran out while the last round still moved — knet rang itself to come back and check
 extern volatile uint64_t kKnetWakeCyclesMax;
-// WAKE LATENCY: from a bell's leading edge (doorbell_t.rung_tsc) to the top
+// WAKE LATENCY: from a bell's leading edge (doorbell_t.rung_stamp) to the top
 // of the loop that answers it. This is the time a NIC's ring has to cover,
 // and the number that says whether knet is slow to DRAIN (wake_cycles_max)
 // or slow to be SCHEDULED (this) — pinned to the BSP, it waits behind
 // whatever the BSP is running when a ring finds it runnable but off the
-// CPU. The two "late" counts are wakes that waited longer than a
-// millisecond and longer than ten.
+// CPU. Only a wake answering a ring stamped on knet's own core is a sample
+// (a backstop wake has no ring; a ring from another core has another
+// clock); `Samples` is the average's denominator. The two "late" counts
+// are samples that waited longer than a millisecond and longer than ten.
 extern volatile uint64_t kKnetWakeLatencyMax;
+extern volatile uint64_t kKnetWakeLatencySamples;
 extern volatile uint64_t kKnetWakeLatencyTotal;
 extern volatile uint64_t kKnetWakeLatencyLate1ms;
 extern volatile uint64_t kKnetWakeLatencyLate10ms;

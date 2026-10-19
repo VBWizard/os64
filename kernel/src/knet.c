@@ -29,6 +29,7 @@ volatile uint64_t kKnetDrainRounds;
 volatile uint64_t kKnetBudgetExhausted;
 volatile uint64_t kKnetWakeCyclesMax;
 volatile uint64_t kKnetWakeLatencyMax;
+volatile uint64_t kKnetWakeLatencySamples;
 volatile uint64_t kKnetWakeLatencyTotal;
 volatile uint64_t kKnetWakeLatencyLate1ms;
 volatile uint64_t kKnetWakeLatencyLate10ms;
@@ -79,15 +80,17 @@ void knet_thread(void)
 		// are the waits the receive ring has to cover; lo's producers ring
 		// from wherever they run and are counted, not timed.
 		bool rung = kNetDoorbell.rung;
-		uint64_t rung_at = kNetDoorbell.rung_tsc;
-		uint32_t rung_apic = kNetDoorbell.rung_apic;
+		uint64_t stamp = kNetDoorbell.rung_stamp;
 		kNetDoorbell.rung = false;
 		__sync_synchronize();
 		kKnetWakes++;
 		uint64_t started = rdtsc();
-		if (rung && rung_apic == get_core_local_storage()->apic_id && started > rung_at)
+		uint64_t rung_at = doorbell_stamp_tsc(stamp);
+		if (rung && doorbell_stamp_apic(stamp) == get_core_local_storage()->apic_id &&
+		    started > rung_at)
 		{
 			uint64_t waited = started - rung_at;
+			kKnetWakeLatencySamples++;
 			kKnetWakeLatencyTotal += waited;
 			if (waited > kKnetWakeLatencyMax)
 				kKnetWakeLatencyMax = waited;
@@ -126,18 +129,21 @@ void knet_thread(void)
 		random_fold_fast_pools();
 		if (moved)
 		{
-			// Budget spent with work still on a ring: after the timers, come
-			// straight back rather than waiting for a ring nobody will send
-			// (the device already interrupted for the frames it holds).
+			// Budget spent while the last round was still moving: after the
+			// timers, come straight back rather than waiting for a ring nobody
+			// will send (the device already interrupted for the frames it
+			// holds). "Still moving" is not "still has work" — a drain
+			// reports what it did, not what remains, and the last round may
+			// have emptied the ring — so a trip here can be a false one. It
+			// costs one wake whose drains find nothing and park, which is the
+			// doorbell's own discipline (re-evaluate, never remember an edge)
+			// and cheaper than a confirmation round under every flood; the
+			// counter is named for what it counts.
 			kKnetBudgetExhausted++;
 			// Stamped like any ring (doorbell.c's edge rule), so the wake
 			// that answers it measures the timers' run and not the age of
 			// whatever ring last set the bit.
-			if (!kNetDoorbell.rung)
-			{
-				kNetDoorbell.rung_tsc  = rdtsc();
-				kNetDoorbell.rung_apic = get_core_local_storage()->apic_id;
-			}
+			doorbell_stamp_edge(&kNetDoorbell);
 			kNetDoorbell.rung = true;
 		}
 

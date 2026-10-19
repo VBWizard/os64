@@ -304,9 +304,11 @@ vncd and sshd, three quarters of the RTL8125's rings were landing while
 knet was runnable but off the CPU (`rung_runnable`), and the receive ring
 overran 57 times in three seconds under a page load — the ring's slack is
 exactly the latency it has to cover, and nothing measured it. The bell now
-stamps its leading edge (`rung_tsc`) and knet reads the stamp at the top of
-the loop that answers it: `wake_latency_max_us`, `_avg_us`, and counts of
-wakes that waited over 1 ms and over 10 ms. Read `late_10ms` beside a NIC's
+stamps its leading edge (`rung_stamp`: the TSC and the stamping core in one
+word, because per-core TSCs are not one clock and knet times only stamps
+its own core made) and knet reads the stamp at the top of the loop that
+answers it: `wake_latency_samples`, `_max_us`, `_avg_us`, and counts of
+samples that waited over 1 ms and over 10 ms. Read `late_10ms` beside a NIC's
 `rx_overruns`: climbing together means the drainer was scheduled late, and
 the home-core row in DEBTS is the answer; overruns alone means the drain
 itself is slower than the wire.

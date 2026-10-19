@@ -1749,8 +1749,9 @@ static void sys_gen_net_tcp(synth_text_t *t)
 // net/knet — the drainer thread and the doorbell it parks on (DOORBELL.md).
 // The numbers a person reads when a transfer is slower than the wire: how
 // often the drainer woke, how many drain rounds those wakes took, how often
-// it spent its whole budget with work still waiting, and the longest single
-// wake. The bell's own tally says who rang: `rings` counts every ring
+// its budget ran out while a round was still moving (so it rang itself to
+// come back and check), and the longest single wake. The bell's own tally
+// says who rang: `rings` counts every ring
 // (interrupt handlers and the tick alike), `wakes` the ones that found the
 // thread parked and relinked it — the rest found it already awake.
 static void sys_gen_net_knet(synth_text_t *t)
@@ -1762,17 +1763,18 @@ static void sys_gen_net_knet(synth_text_t *t)
 	synth_text_addf(t, "budget_exhausted: %lu\n", kKnetBudgetExhausted);
 	synth_text_addf(t, "wake_cycles_max: %lu\n", kKnetWakeCyclesMax);
 	// How long rings waited to be answered (knet.h): the time a NIC's ring
-	// has to cover, in microseconds. The average is over every wake, with a
-	// backstop wake (no ring to answer) counting as no wait. `late_*` are
-	// wakes over 1 ms and over 10 ms; a NIC's rx_overruns climbing beside
-	// late_10ms says the drainer was scheduled too late, not that it drained
-	// too slowly.
+	// has to cover, in microseconds, over the wakes that were timed (knet.h:
+	// a ring stamped on knet's own core). `late_*` are samples over 1 ms and
+	// over 10 ms; a NIC's rx_overruns climbing beside late_10ms says the
+	// drainer was scheduled too late, not that it drained too slowly.
 	uint64_t per_us = kCPUCyclesPerSecond / 1000000;
 	if (per_us == 0)
 		per_us = 1;
+	synth_text_addf(t, "wake_latency_samples: %lu\n", kKnetWakeLatencySamples);
 	synth_text_addf(t, "wake_latency_max_us: %lu\n", kKnetWakeLatencyMax / per_us);
 	synth_text_addf(t, "wake_latency_avg_us: %lu\n",
-	                kKnetWakes != 0 ? (kKnetWakeLatencyTotal / per_us) / kKnetWakes : 0);
+	                kKnetWakeLatencySamples != 0
+	                    ? (kKnetWakeLatencyTotal / per_us) / kKnetWakeLatencySamples : 0);
 	synth_text_addf(t, "wake_latency_late_1ms: %lu\n", kKnetWakeLatencyLate1ms);
 	synth_text_addf(t, "wake_latency_late_10ms: %lu\n", kKnetWakeLatencyLate10ms);
 	synth_text_addf(t, "bell_rings: %lu\n", kNetDoorbell.rings);
