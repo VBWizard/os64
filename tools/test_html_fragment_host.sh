@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-work=$(mktemp -d /tmp/os64-html-fragment.XXXXXX)
+work=$(mktemp -d -t os64-html-fragment.XXXXXX)
 trap 'rm -rf "$work"' EXIT
 cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer \
     -Iuserland/libhtml/include -Iuserland/libos64/include -Iabi/include \
