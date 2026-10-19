@@ -34,19 +34,21 @@
 typedef struct doorbell
 {
 	thread_t*     thread;    // the sleeper this bell belongs to (NULL until registered)
-	volatile bool rung;      // set by a ringer, cleared by the sleeper
-	// When `rung` last went false -> true, and on which core: the ring the
-	// sleeper is answering. ONE word, because two racing ringers on the edge
-	// must not leave one's clock beside the other's core — per-core TSCs are
-	// not one clock (SCHEDULER.md), so a sleeper times only stamps its own
-	// core made. The TSC's low 56 bits in the high 56, APIC id in the low 8
-	// (0xFF = a core the byte cannot name: counted, never timed). The sleeper
-	// subtracts modulo 2^56, so a TSC that already carries more than 56 bits
-	// (a host up for a year, a VM handed its host's count) measures the same
-	// as a fresh one; 2^56 cycles is months at any clock rate, far longer
-	// than any wait this measures. Racy by design, like the counts: the later
-	// of two racing stamps wins, an under-report.
-	volatile uint64_t rung_stamp;
+	// THE EDGE: the rung bit and the stamp of the ring that raised it, in ONE
+	// word, claimed by compare-and-swap. Bit 0 is RUNG; bits 1-7 are the
+	// raising core's APIC id (0x7F = a core the field cannot name: counted,
+	// never timed); bits 8-63 are the low 56 bits of that core's TSC. One
+	// word and one CAS because the bit and its stamp are a pair: a ringer
+	// that merely set a bit after another's stamp had already been consumed
+	// would hand the sleeper a stale clock as if it were its own. The raise
+	// either publishes bit+stamp together or finds the bit already up and
+	// publishes nothing; the sleeper's take clears the bit and reads the
+	// stamp in one operation. The core is recorded because per-core TSCs are
+	// not one clock (SCHEDULER.md) — a sleeper times only stamps its own
+	// core made — and the sleeper subtracts modulo 2^56, so a TSC that
+	// already carries more than 56 bits (a host up for a year, a VM handed
+	// its host's count) measures the same as a fresh one.
+	volatile uint64_t edge;
 	uint64_t      rings;     // every ring, whoever rang — diagnostics, racy by design
 	uint64_t      wakes;     // rings that found the thread parked and relinked it
 	uint64_t      rung_runnable; // rings that found it awake and off the CPU — answered by aging, not the boost
@@ -64,25 +66,37 @@ typedef struct doorbell
 void doorbell_register(doorbell_t* db, thread_t* thread, const char* name);
 void doorbell_unregister(doorbell_t* db);
 
-// The edge stamp's one-word encoding (rung_stamp above). Stamp the edge from
-// any ringer — the ring verbs below do; a sleeper that re-arms its own bell
-// calls it too — and decode on the sleeper's side.
-#define DOORBELL_STAMP_APIC_UNKNOWN 0xFFu
-#define DOORBELL_STAMP_TSC_MASK     ((1ull << 56) - 1)
-static inline uint64_t doorbell_stamp_make(uint64_t tsc, uint32_t apic)
+// The edge word's encoding (`edge` above) and the two atomic verbs on it.
+#define DOORBELL_EDGE_RUNG          1ull
+#define DOORBELL_EDGE_APIC_UNKNOWN  0x7Fu
+#define DOORBELL_EDGE_TSC_MASK      ((1ull << 56) - 1)
+static inline uint64_t doorbell_edge_make(uint64_t tsc, uint32_t apic)
 {
-	return ((tsc & DOORBELL_STAMP_TSC_MASK) << 8) |
-	       (apic < DOORBELL_STAMP_APIC_UNKNOWN ? apic : DOORBELL_STAMP_APIC_UNKNOWN);
+	uint64_t core = apic < DOORBELL_EDGE_APIC_UNKNOWN ? apic : DOORBELL_EDGE_APIC_UNKNOWN;
+	return ((tsc & DOORBELL_EDGE_TSC_MASK) << 8) | (core << 1) | DOORBELL_EDGE_RUNG;
 }
-static inline uint64_t doorbell_stamp_tsc(uint64_t stamp)  { return stamp >> 8; }
-static inline uint32_t doorbell_stamp_apic(uint64_t stamp) { return (uint32_t)(stamp & 0xFFu); }
-// Cycles from a stamp's TSC to `now` on the same core, modulo 2^56 — the
+static inline bool     doorbell_edge_rung(uint64_t edge) { return (edge & DOORBELL_EDGE_RUNG) != 0; }
+static inline uint32_t doorbell_edge_apic(uint64_t edge) { return (uint32_t)((edge >> 1) & 0x7Fu); }
+static inline uint64_t doorbell_edge_tsc(uint64_t edge)  { return edge >> 8; }
+// Cycles from the edge's TSC to `now` on the same core, modulo 2^56 — the
 // only subtraction that is right for a truncated stamp.
-static inline uint64_t doorbell_stamp_elapsed(uint64_t stamp, uint64_t now)
+static inline uint64_t doorbell_edge_elapsed(uint64_t edge, uint64_t now)
 {
-	return ((now & DOORBELL_STAMP_TSC_MASK) - doorbell_stamp_tsc(stamp)) & DOORBELL_STAMP_TSC_MASK;
+	return ((now & DOORBELL_EDGE_TSC_MASK) - doorbell_edge_tsc(edge)) & DOORBELL_EDGE_TSC_MASK;
 }
-void doorbell_stamp_edge(doorbell_t* db);
+static inline bool doorbell_rung(const doorbell_t* db) { return doorbell_edge_rung(db->edge); }
+
+// RAISE the edge: interrupt-safe, lock-free, from any core. Publishes the
+// rung bit and this core's stamp together, or finds the bit already up and
+// publishes nothing. Returns whether this call made the edge. The ring verbs
+// below call it; a sleeper re-arming its own bell calls it too.
+bool doorbell_raise(doorbell_t* db);
+
+// TAKE the edge: the sleeper's clear. Lowers the rung bit and returns the
+// word as it was — rung or not, and the stamp of the ring being answered —
+// in one atomic operation, so the stamp read can never belong to a later
+// ring than the bit.
+uint64_t doorbell_take(doorbell_t* db);
 
 // RING. Interrupt-safe, lock-free, from anywhere: stores the bit, provokes a
 // pass on the thread's home core.

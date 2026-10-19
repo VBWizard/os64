@@ -27,7 +27,7 @@ extern volatile uint64_t kKnetWakes;
 extern volatile uint64_t kKnetDrainRounds;
 extern volatile uint64_t kKnetBudgetExhausted;   // wakes whose budget (time, or the round cap) ran out while the last round still moved — knet rang itself to come back and check
 extern volatile uint64_t kKnetWakeCyclesMax;
-// HOW LONG A RING WAITED, from the bell's leading edge (doorbell_t.rung_stamp)
+// HOW LONG A RING WAITED, from the bell's leading edge (doorbell_t.edge)
 // to the top of the loop that answers it — the time a NIC's ring has to
 // cover. Only a ring stamped on knet's own core is a sample (another core
 // has another clock; a backstop wake has no ring), and the samples are split

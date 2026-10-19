@@ -16,7 +16,7 @@ static volatile uint32_t s_bell_count;
 void doorbell_register(doorbell_t* db, thread_t* thread, const char* name)
 {
 	db->thread = thread;
-	db->rung   = false;
+	db->edge   = 0;
 	db->rings  = 0;
 	db->wakes  = 0;
 	db->rung_runnable = 0;
@@ -49,24 +49,39 @@ void doorbell_unregister(doorbell_t* db)
 // The leading edge is stamped so the sleeper can measure how long a ring
 // waited for it (/sys/net/knet's wake latency). Only the edge: later rings
 // into an already-rung bell are answered by the same wake, and the wait that
-// matters is the oldest one's. Two ringers racing on the edge both stamp and
-// the later wins — an under-report, for a diagnostic — and because the
-// clock and the core travel in ONE word (doorbell.h), the survivor is a
-// matched pair, never one ringer's TSC beside the other's core. The core is
-// in the stamp because per-core TSCs are not one clock (SCHEDULER.md: under
-// QEMU/WSL2 they are desynchronized enough to make a cross-core difference
-// meaningless), so the sleeper measures only stamps its own core made — a
-// ring from another core is counted but not timed.
-void doorbell_stamp_edge(doorbell_t* db)
+// matters is the oldest one's. Bit and stamp go up in ONE compare-and-swap
+// (doorbell.h): two ringers racing on the edge each build their own word and
+// exactly one CAS lands, so the sleeper can never read one ringer's stamp
+// under another's bit, and a ringer that lost the race retries, finds the
+// bit up, and publishes nothing — never a bare bit over a stamp the sleeper
+// has already consumed. The core is in the stamp because per-core TSCs are
+// not one clock (SCHEDULER.md: under QEMU/WSL2 they are desynchronized
+// enough to make a cross-core difference meaningless), so the sleeper
+// measures only stamps its own core made — a ring from another core is
+// counted but not timed.
+bool doorbell_raise(doorbell_t* db)
 {
-	if (!db->rung)
-		db->rung_stamp = doorbell_stamp_make(rdtsc(), get_core_local_storage()->apic_id);
+	for (;;)
+	{
+		uint64_t old = db->edge;
+		if (doorbell_edge_rung(old))
+			return false;
+		uint64_t fresh = doorbell_edge_make(rdtsc(), get_core_local_storage()->apic_id);
+		if (__sync_bool_compare_and_swap(&db->edge, old, fresh))
+			return true;
+		// Lost the race to another ringer or to the sleeper's take: re-read
+		// and decide again on what is there now.
+	}
+}
+
+uint64_t doorbell_take(doorbell_t* db)
+{
+	return __sync_fetch_and_and(&db->edge, ~DOORBELL_EDGE_RUNG);
 }
 
 void doorbell_ring(doorbell_t* db)
 {
-	doorbell_stamp_edge(db);
-	db->rung = true;
+	doorbell_raise(db);
 	db->rings++;
 	__sync_synchronize();
 
@@ -87,8 +102,7 @@ void doorbell_ring(doorbell_t* db)
 
 void doorbell_ring_in_pass(doorbell_t* db)
 {
-	doorbell_stamp_edge(db);
-	db->rung = true;
+	doorbell_raise(db);
 	db->rings++;
 }
 
@@ -105,7 +119,7 @@ bool doorbell_park(doorbell_t* db, uint64_t backstop_ticks)
 	// second service point is what makes this window closed rather than
 	// merely small (scheduler_run_new_thread).
 	uint64_t flags = scheduler_lock_queues();
-	if (db->rung)
+	if (doorbell_rung(db))
 	{
 		scheduler_unlock_queues(flags);
 		return false;
@@ -126,7 +140,7 @@ void doorbell_service_locked(void)
 	for (uint32_t i = 0; i < n; i++)
 	{
 		doorbell_t* db = s_bells[i];
-		if (db == NULL || !db->rung)
+		if (db == NULL || !doorbell_rung(db))
 			continue;
 		thread_t* t = db->thread;
 		if (t == NULL)

@@ -75,10 +75,10 @@ void knet_thread(void)
 		// instead of vanishing into a cleared-after window (the classic lost
 		// wakeup, and the reason the e1000's old doorbell flag was consumed
 		// in this order too).
-		// Read the edge stamp BEFORE clearing: a ring landing after the clear
-		// re-stamps for the NEXT wake, and this wake answers the one before.
-		// A backstop wake (nothing rung) measures nothing — the stamp it
-		// would read belongs to a ring already answered. A stamp from another
+		// The take clears the bit and hands back the stamp in one atomic act:
+		// a ring landing after it raises a fresh edge for the NEXT wake, and
+		// this wake answers the one before. A backstop wake (nothing rung)
+		// measures nothing — the word it took carries no ring. A stamp from another
 		// core's TSC measures nothing either (doorbell.c's edge rule): the
 		// NIC interrupts and the tick ring from this thread's own core, which
 		// are the waits the receive ring has to cover; lo's producers ring
@@ -92,15 +92,13 @@ void knet_thread(void)
 		// response latency — the loop's work plus any preemption of it,
 		// wall time. Lumping them would let a long loop read as a late
 		// wake; the split does not go further than that (knet.h).
-		bool rung = kNetDoorbell.rung;
-		uint64_t stamp = kNetDoorbell.rung_stamp;
-		kNetDoorbell.rung = false;
-		__sync_synchronize();
+		uint64_t edge = doorbell_take(&kNetDoorbell);   // clears the bit, keeps the stamp — one act
+		bool rung = doorbell_edge_rung(edge);
 		kKnetWakes++;
 		uint64_t started = rdtsc();
-		if (rung && doorbell_stamp_apic(stamp) == get_core_local_storage()->apic_id)
+		if (rung && doorbell_edge_apic(edge) == get_core_local_storage()->apic_id)
 		{
-			uint64_t waited = doorbell_stamp_elapsed(stamp, started);
+			uint64_t waited = doorbell_edge_elapsed(edge, started);
 			if (parked)
 			{
 				kKnetWakeLatencySamples++;
@@ -162,11 +160,10 @@ void knet_thread(void)
 			// and cheaper than a confirmation round under every flood; the
 			// counter is named for what it counts.
 			kKnetBudgetExhausted++;
-			// Stamped like any ring (doorbell.c's edge rule), so the wake
-			// that answers it measures the timers' run and not the age of
+			// Raised like any ring (doorbell.c's edge rule), so the wake that
+			// answers it measures the timers' run and not the age of
 			// whatever ring last set the bit.
-			doorbell_stamp_edge(&kNetDoorbell);
-			kNetDoorbell.rung = true;
+			doorbell_raise(&kNetDoorbell);
 		}
 
 		// The e1000's runtime divorce (storm breaker #2 in e1000.c) happens
