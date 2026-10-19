@@ -12,6 +12,7 @@
 #include "CONFIG.h"
 #include "kmalloc.h"
 #include "memset.h"
+#include "memcpy.h"
 #include "serial_logging.h"
 #include "video.h"
 #include "BasicRenderer.h"
@@ -122,12 +123,10 @@ void surface_blit(surface_t *dst, int32_t dx, int32_t dy,
 	sc.x += dc.x - dx;
 	sc.y += dc.y - dy;
 
-	for (int32_t y = 0; y < dc.h; y++) {
-		uint32_t *d = surface_row(dst, dc.y + y) + dc.x;
-		const uint32_t *s = surface_row((surface_t *)src, sc.y + y) + sc.x;
-		for (int32_t x = 0; x < dc.w; x++)
-			d[x] = s[x];
-	}
+	for (int32_t y = 0; y < dc.h; y++)
+		memcpy(surface_row(dst, dc.y + y) + dc.x,
+		       surface_row((surface_t *)src, sc.y + y) + sc.x,
+		       (size_t)dc.w * sizeof(uint32_t));
 }
 
 void surface_blit_masked(surface_t *dst, int32_t dx, int32_t dy,
@@ -212,32 +211,14 @@ void surface_flush_rect(const surface_t *back, rect_t r)
 	if (!rect_intersect(c, fb_bounds, &c))
 		return;
 
-	// Row-by-row copy, widened to 64-bit stores. The framebuffer is mapped
-	// write-combining (PAGE_WC, paging.c), so stores to it are gathered into
-	// bus writes rather than cached; wider stores mean fewer of them.
-	// Alignment is chosen off the DESTINATION: a leading/trailing 32-bit store
-	// when the dst row start/end isn't 8-byte aligned, 64-bit stores for the
-	// body.
-	for (int32_t y = c.y; y < c.y + c.h; y++) {
-		const uint32_t *src = back->pixels + (size_t)y * back->pitch_px + c.x;
-		uint32_t *dst = (uint32_t *)kFrameBuffer.base_address
-		                + (size_t)y * kFrameBuffer.pixels_per_scan_line + c.x;
-		int32_t n = c.w;
-
-		if (((uintptr_t)dst & 7) && n) {  // unaligned head
-			*dst++ = *src++;
-			n--;
-		}
-		while (n >= 2) {                  // 64-bit body
-			// src may be 4-aligned only; read it as two 32-bit halves to
-			// keep the write (the expensive UC side) the wide one.
-			uint64_t v = (uint64_t)src[0] | ((uint64_t)src[1] << 32);
-			*(uint64_t *)dst = v;
-			src += 2;
-			dst += 2;
-			n -= 2;
-		}
-		if (n)                            // unaligned tail
-			*dst = *src;
-	}
+	// One memcpy a row. The framebuffer is mapped write-combining (PAGE_WC,
+	// paging.c), so stores to it are gathered into bus writes rather than
+	// cached, and a row of 128 pixels or more goes by memcpy's string copy,
+	// which aligns the destination and stores eight bytes a step. A
+	// framebuffer is memory, not a register, so memcpy's widths are allowed.
+	for (int32_t y = c.y; y < c.y + c.h; y++)
+		memcpy((uint32_t *)kFrameBuffer.base_address
+		           + (size_t)y * kFrameBuffer.pixels_per_scan_line + c.x,
+		       back->pixels + (size_t)y * back->pitch_px + c.x,
+		       (size_t)c.w * sizeof(uint32_t));
 }

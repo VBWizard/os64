@@ -45,7 +45,8 @@ void surface_free(surface_t *s);
 // Fill r (clipped) with a solid color.
 void surface_fill_rect(surface_t *dst, rect_t r, uint32_t color);
 
-// Copy src_rect from src onto dst at (dx,dy), clipped to both surfaces.
+// Copy src_rect from src onto dst at (dx,dy), clipped to both surfaces. The
+// two must not share pixels: each row is one memcpy.
 void surface_blit(surface_t *dst, int32_t dx, int32_t dy,
                   const surface_t *src, rect_t src_rect);
 
