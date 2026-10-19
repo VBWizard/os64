@@ -50,6 +50,12 @@ carry the mark the worker wrote when it made the copy. A worker whose
 baseline failed keeps its copy, said with its path, because that failure is
 the one someone has to look at.
 
+NOTHING A MUTANT STARTED OUTLIVES IT. A harness times a case out by killing
+the shell it started, and what that shell ran, a test driver looping on the
+mutant, goes on running with no parent. So each harness call has a process
+group of its own (harnessed()), and when it returns whatever is still in the
+group is killed and named at the end as LEFT RUNNING.
+
 HOST_BUILD_JOBS (tools/host_build.sh) is set to --jobs in every worker, so
 twenty workers compiling at once do not ask for twenty machines.
 
@@ -108,6 +114,7 @@ SUITE = re.compile(r"\b((?:bash|python3) tools/(?!\w*_mutants\.py)\w+\.(?:sh|py)
 BARE = re.compile(r"""['"](tools/(?!\w*_mutants\.py)\w+\.(sh|py)(?: --[\w-]+)*)['"]""")
 VERDICT = re.compile(r'^([a-z0-9][a-z0-9-]*): (caught|MISSED|did not build)$', re.M)
 TIMEOUT = re.compile(r'\btimeout=(\w+)')
+LEFT = re.compile(r"^LEFT RUNNING: (\S+)'s cases", re.M)
 
 
 def case_limit(harness, text):
@@ -181,6 +188,22 @@ def discard(root):
     shutil.rmtree(root)
 
 
+def harnessed(cmd, cwd, env, out):
+    """Run one harness call in a process group of its own, then kill whatever
+    is still in that group. A harness that times a case out kills only the
+    shell it started, and what the shell ran (a test driver looping on the
+    mutant) goes on; one did, on a core, for half an hour after its verdict.
+    True when something was left to kill."""
+    p = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=out, stderr=subprocess.STDOUT,
+                         start_new_session=True)
+    p.wait()
+    try:
+        os.killpg(p.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return False
+    return True
+
+
 def work(job):
     harness, k, names, suites, limit = job
     root = out / f'{harness[:-3]}-{k}'
@@ -209,8 +232,9 @@ def work(job):
         for name in names:
             o.flush()
             began = time.monotonic()
-            subprocess.run([sys.executable, f'tools/{harness}', '--only', name, '--logs', str(logs)],
-                           cwd=root, env=env, stdout=o, stderr=subprocess.STDOUT)
+            if harnessed([sys.executable, f'tools/{harness}', '--only', name, '--logs', str(logs)],
+                         root, env, o):
+                o.write(f'LEFT RUNNING: {name}\'s cases left processes behind; killed\n')
             seconds[name] = time.monotonic() - began
     text = (root / 'out.txt').read_text()
     kept = out / 'logs' / root.name
@@ -228,11 +252,13 @@ if only is not None:
         sys.exit(f'mutants_parallel: no harness named has {", ".join(sorted(unknown))}')
 print(f'mutants_parallel: {sum(len(j[2]) for j in jobs)} mutants, {len(jobs)} workers, in {out}',
       flush=True)
-verdicts, broken, took = {}, [], {}
+verdicts, broken, took, left = {}, [], {}, []
 with concurrent.futures.ThreadPoolExecutor(max_workers=len(jobs)) as pool:
     for harness, k, names, text, seconds in pool.map(work, jobs):
         for name, t in seconds.items():
             took[harness, name] = t
+        if text is not None:
+            left += [f'{harness[:-3]} {n}' for n in LEFT.findall(text)]
         if text is None:
             broken.append(f'{harness} worker {k} ({len(names)} mutants not run)')
             for name in names:
@@ -264,6 +290,8 @@ for harness in sorted({h for h, _ in took}):
     for (h, n), t in sorted(took.items()):
         if h == harness and t > SLOW_SECONDS and t > SLOW_TIMES * median:
             print(f'SLOW: {h[:-3]} {n}: {t:.0f} s, {t / median:.0f}x the harness median of {median:.0f} s')
+for n in left:
+    print(f'LEFT RUNNING, killed: {n}')
 for b in broken:
     print(f'BASELINE FAILED, not run: {b}')
 sys.exit(0 if caught == len(verdicts) else 1)
