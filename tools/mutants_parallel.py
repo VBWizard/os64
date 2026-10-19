@@ -24,8 +24,9 @@ suites run in turn against ONE deadline, the shortest timeout the harness
 gives its own case runs, because a harness may run several of them under one
 case timeout. A `timeout=` names a number or a variable; for a variable, the
 numbers assigned to it count. A harness whose timeout cannot be read that way
-is refused, and one that sets none gets BASELINE_SECONDS. A baseline that fails or runs past it fails the worker, its process
-group is killed, and its mutants are summarized as "baseline failed": a
+is refused, and one that sets none gets BASELINE_SECONDS. A baseline that
+fails or runs past it fails the worker; one that runs past it is killed with
+what it left (sweep), and its mutants are summarized as "baseline failed": a
 baseline more patient than the harness would pass suites whose cases the
 harness then times out and counts as caught.
 
@@ -52,15 +53,15 @@ the one someone has to look at.
 
 NOTHING A MUTANT STARTED OUTLIVES IT. A harness times a case out by killing
 the shell it started, and what that shell ran, a test driver looping on the
-mutant, goes on running with no parent. So each harness call has a process
-group of its own (harnessed()), and when it returns whatever is still in the
-group is killed and named at the end as LEFT RUNNING. A group of its own is
-also out of the terminal's reach, so stopping the run is the runner's job:
-Ctrl-C, Ctrl-\\, a kill or a closed terminal (every signal that would end it
-but SIGKILL, which nothing can catch) kills every group it started
-(baselines included), no worker starts another, and each finishes moving its
-logs and removing its copy before the run exits without a summary. Ctrl-Z
-stops the groups with the runner, and continuing it continues them.
+mutant, goes on running with no parent. So the runner is a subreaper (Linux):
+an orphan below it is adopted by the runner, and every call is tagged in its
+environment, so when a call returns, what it left is killed (sweep) and
+named at the end as LEFT RUNNING. The calls stay in the runner's process
+group, so the terminal's Ctrl-C, Ctrl-Z and Ctrl-\\ reach them as they reach
+the runner. Every signal that would end the runner (SIGKILL, which nothing
+can catch, aside) stops the run: the calls in flight are killed, no worker
+starts another, each finishes moving its logs and removing its copy, what
+the calls left is swept, and the run exits without a summary.
 
 HOST_BUILD_JOBS (tools/host_build.sh) is set to --jobs in every worker, so
 twenty workers compiling at once do not ask for twenty machines.
@@ -74,6 +75,7 @@ another's counts both.
 """
 import argparse
 import concurrent.futures
+import ctypes
 import os
 import pathlib
 import re
@@ -166,60 +168,119 @@ def plan(spec):
     return jobs
 
 
-# Every process group the runner has started and not yet finished with. A
-# group of its own keeps a suite or a harness out of the terminal's reach, so
-# Ctrl-C reaches the runner alone: stop_all() is what stops them, and a group
-# started once the run is stopping is killed as soon as it exists.
-LIVE = set()
-LIVE_LOCK = threading.Lock()
+# What a call leaves behind is the runner's to stop. The runner is a
+# subreaper (Linux's PR_SET_CHILD_SUBREAPER), so a process orphaned anywhere
+# below it is adopted by the runner instead of by init, and every call
+# carries CALL_VAR in its environment, which what it starts inherits: once a
+# call returns, its leftovers are the runner's adopted children with its tag,
+# and another worker's live calls, which carry their own, are never touched.
+# A process that clears its environment carries no tag, and is not swept.
+# The calls stay in the runner's process group, so the terminal's Ctrl-C,
+# Ctrl-Z and Ctrl-\ reach them as they reach the runner.
+CALL_VAR = 'MUTANTS_PARALLEL_CALL'
+RUN_TAG = f'{os.getpid()}.{time.time_ns()}'
 STOPPING = threading.Event()
+LIVE = set()            # the calls in flight, as Popen objects
+LIVE_LOCK = threading.Lock()
 
 
-def group_start(cmd, **kw):
-    """Popen in a process group of its own, known to stop_all()."""
-    p = subprocess.Popen(cmd, start_new_session=True, **kw)
-    with LIVE_LOCK:
-        LIVE.add(p.pid)
-    if STOPPING.is_set():
-        group_kill(p.pid)
-    return p
-
-
-def group_kill(pgid):
-    """SIGKILL a process group; False when nothing is left in it."""
+def subreaper():
+    """Make this process the adopter of orphans below it; False where the
+    system has no such thing (then a timed-out case's leftovers outlive it)."""
     try:
-        os.killpg(pgid, signal.SIGKILL)
-    except ProcessLookupError:
+        return ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0) == 0   # PR_SET_CHILD_SUBREAPER
+    except (OSError, AttributeError):
         return False
-    return True
 
 
-def group_done(p):
+def adopted(tag):
+    """This process's children that carry CALL_VAR `tag` (or, for a tag
+    ending in ':', any tag it begins) and that no call in flight is: the
+    processes a call left behind."""
+    me, found = os.getpid(), []
+    want = f'{CALL_VAR}={tag}'.encode()
     with LIVE_LOCK:
-        LIVE.discard(p.pid)
-
-
-def stop_all():
-    """The run is stopping: no worker starts another call, and every group
-    the runner started is killed."""
-    STOPPING.set()
-    with LIVE_LOCK:
-        groups = list(LIVE)
-    for g in groups:
-        group_kill(g)
-
-
-def bounded(cmd, cwd, env, log, seconds):
-    """Run cmd in its own process group; past `seconds`, kill all of it."""
-    p = group_start(['bash', '-c', cmd], cwd=cwd, env=env, stdout=log, stderr=log)
+        live = {p.pid for p in LIVE}
     try:
-        return p.wait(timeout=max(seconds, 0))
+        names = os.listdir('/proc')
+    except OSError:
+        return found
+    for d in names:
+        if not d.isdigit() or int(d) in live:
+            continue
+        try:
+            with open(f'/proc/{d}/stat') as f:
+                ppid = int(f.read().rsplit(')', 1)[1].split()[1])
+            if ppid != me:
+                continue
+            with open(f'/proc/{d}/environ', 'rb') as f:
+                env = f.read().split(b'\0')
+        except (OSError, ValueError, IndexError):
+            continue
+        if any(e == want or (tag.endswith(':') and e.startswith(want)) for e in env):
+            found.append(int(d))
+    return found
+
+
+def sweep(tag):
+    """Kill and reap what the call tagged `tag` left behind. Killing one
+    hands its children to the runner too, so it goes until none are left.
+    True when there was something."""
+    left = False
+    for _ in range(100):
+        pids = adopted(tag)
+        if not pids:
+            break
+        left = True
+        for pid in pids:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        for pid in pids:
+            try:
+                os.waitpid(pid, 0)
+            except ChildProcessError:
+                pass
+    return left
+
+
+def call(cmd, tag, timeout=None, **kw):
+    """Run one call tagged `tag`, in the runner's process group; past
+    `timeout`, kill it. Its exit code, or 'timeout'."""
+    env = dict(kw.pop('env', os.environ), **{CALL_VAR: tag})
+    p = subprocess.Popen(cmd, env=env, **kw)
+    with LIVE_LOCK:
+        LIVE.add(p)
+    if STOPPING.is_set():
+        p.kill()
+    try:
+        return p.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
-        group_kill(p.pid)
+        p.kill()
         p.wait()
         return 'timeout'
     finally:
-        group_done(p)
+        with LIVE_LOCK:
+            LIVE.discard(p)
+
+
+def stop():
+    """The run is stopping: no worker starts another call, the calls in
+    flight are killed, and what they leave is swept when the run ends."""
+    STOPPING.set()
+    with LIVE_LOCK:
+        live = list(LIVE)
+    for p in live:
+        p.kill()
+
+
+def bounded(cmd, tag, cwd, env, log, seconds):
+    """Run cmd as call `tag`; past `seconds`, kill it and what it left."""
+    code = call(['bash', '-c', cmd], tag, timeout=max(seconds, 0), cwd=cwd, env=env, stdout=log,
+                stderr=log)
+    sweep(tag)
+    return code
 
 
 # The mark a worker writes in the copy it makes: this run's own words, so
@@ -239,20 +300,6 @@ def discard(root):
     shutil.rmtree(root)
 
 
-def harnessed(cmd, cwd, env, out):
-    """Run one harness call in a process group of its own, then kill whatever
-    is still in that group. A harness that times a case out kills only the
-    shell it started, and what the shell ran (a test driver looping on the
-    mutant) goes on; one did, on a core, for half an hour after its verdict.
-    True when something was left to kill."""
-    p = group_start(cmd, cwd=cwd, env=env, stdout=out, stderr=subprocess.STDOUT)
-    try:
-        p.wait()
-        return group_kill(p.pid)
-    finally:
-        group_done(p)
-
-
 def work(job):
     harness, k, names, suites, limit = job
     root = out / f'{harness[:-3]}-{k}'
@@ -268,11 +315,12 @@ def work(job):
     logs.mkdir()
     with (root / 'out.txt').open('w') as o:
         deadline = time.monotonic() + limit
-        for suite in suites:
+        for i, suite in enumerate(suites):
             with (logs / 'baseline.log').open('a') as b:
                 b.write(f'$ {suite}\n')
                 b.flush()
-                code = bounded(suite, root, env, b, deadline - time.monotonic())
+                code = bounded(suite, f'{RUN_TAG}:{root.name}:baseline{i}', root, env, b,
+                               deadline - time.monotonic())
                 # A baseline the stop killed failed nothing: no copy to keep.
                 if STOPPING.is_set():
                     break
@@ -286,8 +334,10 @@ def work(job):
                 break
             o.flush()
             began = time.monotonic()
-            if harnessed([sys.executable, f'tools/{harness}', '--only', name, '--logs', str(logs)],
-                         root, env, o):
+            tag = f'{RUN_TAG}:{root.name}:{name}'
+            call([sys.executable, f'tools/{harness}', '--only', name, '--logs', str(logs)], tag,
+                 cwd=root, env=env, stdout=o, stderr=subprocess.STDOUT)
+            if sweep(tag):
                 o.write(f'LEFT RUNNING: {name}\'s cases left processes behind; killed\n')
             seconds[name] = time.monotonic() - began
     text = (root / 'out.txt').read_text()
@@ -313,37 +363,16 @@ def interrupted(signum, frame):
     raise KeyboardInterrupt
 
 
-def suspended(signum, frame):
-    """Ctrl-Z: the groups are out of the terminal's reach, so the runner
-    stops them before it stops itself, and continues them when it is
-    continued."""
-    with LIVE_LOCK:
-        groups = list(LIVE)
-    for g in groups:
-        try:
-            os.killpg(g, signal.SIGSTOP)
-        except ProcessLookupError:
-            pass
-    os.kill(os.getpid(), signal.SIGSTOP)
-    with LIVE_LOCK:
-        groups = list(LIVE)
-    for g in groups:
-        try:
-            os.killpg(g, signal.SIGCONT)
-        except ProcessLookupError:
-            pass
-
-
-# Every signal that would end the runner stops the run the same way: every
-# group it started is killed (stop_all), and the workers, which start nothing
-# more, finish moving their logs and removing their copies. From before the
-# first job is submitted, so no window lets the pool's shutdown wait out jobs
-# nobody stopped. The set is every signal the platform has but these, so a
-# signal this list never heard of is covered too:
+# Every signal that would end the runner stops the run the same way (stop):
+# the calls in flight are killed, the workers start nothing more and finish
+# moving their logs and removing their copies, and what the calls left is
+# swept. From before the first job is submitted, so no window lets the pool's
+# shutdown wait out jobs nobody stopped. The set is every signal the platform
+# has but these, so a signal this list never heard of is covered too:
 NOT_STOPS = {
-    'SIGKILL', 'SIGSTOP',                       # nothing can catch them; SIGKILL leaves the groups running
+    'SIGKILL', 'SIGSTOP',                       # nothing can catch them; SIGKILL leaves the calls running
     'SIGCHLD', 'SIGCONT', 'SIGURG', 'SIGWINCH',  # their default ends nothing
-    'SIGTSTP', 'SIGTTIN', 'SIGTTOU',            # job control: SIGTSTP is suspended()'s
+    'SIGTSTP', 'SIGTTIN', 'SIGTTOU',            # job control, the terminal's: the calls share its group
     'SIGPIPE',                                  # Python ignores it (a closed pipe is an OSError)
     'SIGSEGV', 'SIGBUS', 'SIGFPE', 'SIGILL',    # the interpreter's own faults: no handler of
 }                                               # Python's can run after one
@@ -354,15 +383,20 @@ for sig in signal.valid_signals():
         name = None
     if name not in NOT_STOPS:
         signal.signal(sig, interrupted)
-signal.signal(signal.SIGTSTP, suspended)
+if not subreaper():
+    print('mutants_parallel: this system cannot hand orphans to the runner: a case a harness '
+          'times out may leave its processes running', flush=True)
 results = []
-with concurrent.futures.ThreadPoolExecutor(max_workers=len(jobs)) as pool:
-    try:
-        futures = [pool.submit(work, job) for job in jobs]
-        for f in futures:
-            results.append(f.result())
-    except KeyboardInterrupt:
-        stop_all()
+try:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(jobs)) as pool:
+        try:
+            futures = [pool.submit(work, job) for job in jobs]
+            for f in futures:
+                results.append(f.result())
+        except KeyboardInterrupt:
+            stop()
+finally:
+    sweep(f'{RUN_TAG}:')
 if STOPPING.is_set():
     sys.exit(f'mutants_parallel: interrupted; every process it started is stopped, and the logs so far '
              f'are in {out / "logs"}')
