@@ -723,6 +723,77 @@ breaks each rule. In QEMU, the heap's own count of regions taken (4 s):
 
 The P5's user/system split is the reading still owed.
 
+**perf-6: what made a paint whole.** After the kernel's copies were made
+cheap (#309, #310), the P5 in the middle of danlegt (1920x1080, 10/19)
+read kGuiLock at under 5% of a core and yonder's main thread at 74%,
+nearly all of it user time: 44 paints a second, 47% of them whole views,
+about 85% of the pixels painted. And the record said that none of the
+618 layouts for animations in that minute had repainted only what it
+changed, which is perf-4's whole point. Nothing said why.
+
+- **The record says what marked each whole view.** Every site that marks
+  the view or the window whole goes through `mark_whole` with its cause
+  (`WholeBy`: a layout for the animations that refused its parts, any
+  other layout, a script's change, a scroll, a picture or a face that came
+  in, the window and its bars). The first cause since the last paint
+  names it. A paint of the whole view that no cause asked for was made
+  whole by the parts it marked when they reach across the view
+  (`s_parts_reach`, the union of `mark_part`'s marks), and by libui's own
+  marks otherwise (a hover or focus moved onto the view, the window laid
+  out). The `whole views:` line says the counts, and each `d` reading
+  carries it.
+- **And why a layout refused its parts.** `flow_layout_parts` says why it
+  returned false (`flow_parts_said_t`): which test of the box compare
+  failed (other layers, a box scrolled elsewhere, a box moved), a value a
+  layout places (and which property), an element with no box of its own,
+  a background the canvas may take, stacked boxes nested past the walk's
+  budget, no memory. yonder adds the reasons decided before libflow is
+  asked: a picture's size or a face laid out with it, another cascade,
+  another size, the view moved. The last refusal is named as a selector
+  would name it (`div#x.a.b`, `text in …`), but only when a record can be
+  written (yonder.conf's `diagnostics`): naming costs a string at every
+  refusal. The counts cost an increment, like every count here.
+
+**What it found.** In QEMU, every refusal was the same one: *an element
+with no box of its own, `span.home-scratch-character-performer`*. That
+span is inside the Scratch 2000 shop's `<button>`, and a button is a
+replaced element here (boxes.c `replaced`): its widget draws it, and
+nothing inside it gets a box. The span's looping `transform` changed its
+style at every frame, and "no box of its own" refuses the whole page's
+parts, because it was written for `display: contents`, whose descendants
+draw what it changes.
+
+**The rule, fixed.** An element that no box stands for, and nothing
+inside it either (`draws_none`), shows nothing of what changed, so its
+change is skipped rather than refused: a button's content, what is under
+`display: none`. `display: contents` still refuses, because its
+descendants have boxes. Asking the new tree alone is asking both: the box
+compare has already proved the trees' boxes stand for the same nodes.
+
+**Proof.** The libflow motion cases ask each refusal for its reason, its
+element and its property: a box that moved, another number of stacked
+boxes, stacked boxes reordered, a box scrolled elsewhere, a tree missing,
+the walk past its budget, a value a layout places (`z-index` before it
+moves anything), the canvas, `display: contents` with and without a box
+inside, and an anonymous box named by the element holding it; an element
+inside a button and one under `display: none` are bounded. The scripts
+suite checks the counts and the named element through a real frame, the
+naming gate, the first-cause rule, the parts' reach, and the record line
+word for word. `test_motion_mutants.py` breaks each reason and each
+check. Readings, the middle of danlegt:
+
+| | Layouts for animations, repainting only what they changed | Whole views | What made them whole |
+|---|---|---|---|
+| P5 1920x1080, before | 0 of 618 | 47% of paints | (not yet counted) |
+| QEMU, before | 0 of 28 | all | 28 refused layouts, 98 parts |
+| QEMU, after | 28 of 28 | all | 126 parts |
+| P5 2560x1440, after | 597 of 597 | 28% of paints | 656 parts, 2 the toolkit's |
+
+What is left is the parts: the GIF strip, the Scratch panel and the QR
+code's text are far apart in the view, and libui's one dirty rectangle
+is their union, so even a paint that is not whole averages a third of
+the view (1.1 Mpx of 3.3). That is the libui item below.
+
 **Then measure again**, and decide whether these are still worth their
 complexity:
 
@@ -737,8 +808,10 @@ complexity:
   other animation's mark, a picture arriving), before any code.
 - **libui paints the part** — the root panel's fill, and every widget's,
   cut to the dirty rectangle — and **the dirty area becomes a short list
-  of rectangles**, so two marks far apart paint two parts. Worth more on a
-  page without a moving background than on danlegt.
+  of rectangles**, so two marks far apart paint two parts. perf-6's
+  reading makes it the next one: once the layouts for animations marked
+  only their parts, every whole view left on the P5 was parts far apart
+  united into one rectangle.
 - **Moving pictures that share their ticks.** Pictures of one delay
   started a tick apart stay a tick apart, and each tick is a paint. A
   coarser display step (20-30 ms) would let them share, with each
@@ -756,8 +829,10 @@ complexity:
   paint to the compositor costs more than the paint (record 0114). Most of
   those paints should not have happened (perf-4), but each frame still
   moves its damage three times: the publish's copy (under `kGuiLock`,
-  interrupts off), the composite, and the flush. What each costs is for
-  a reading to say first.
+  interrupts off), the composite, and the flush. Read on the P5 after
+  #306, #309 and #310 (10/19, the middle at 1920x1080): publish 0.3 ms a
+  paint, the compositor's hold of kGuiLock 2.6% of a core, every wait on
+  the lock together under half a percent. Nothing is left here to take.
 - What the instrument says next: scaled frames kept, warps.
 
 Also owed to this slice (PILE3.md): the paused-animation test, "throttle,

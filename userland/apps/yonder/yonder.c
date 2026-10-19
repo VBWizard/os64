@@ -846,19 +846,69 @@ static void page_show(Page *p, flow_tree_t *tree)
 // animations it built until script_rebuild publishes it.
 static bool page_lay_out(Page *p, int32_t width, int32_t height, uint32_t zoom, Page *reclaim);
 
+// Why a layout for the page's animations alone marked the whole view
+// (s_cost.refused): libflow's reasons (flow_parts_why_t), then the ones
+// decided before libflow is asked.
+enum {
+    REFUSED_LOADS = FLOW_PARTS_COUNT,   // a picture's size or a face that came in was laid out with it
+    REFUSED_CASCADE,                    // the page was laid out from another cascade
+    REFUSED_SIZE,                       // at another width, height or zoom
+    REFUSED_VIEW,                       // the parts were marked, but the view moved with the layout
+    REFUSED_COUNT
+};
+
 // A layout made for the page's animations alone asks for its parts:
 // lay_out_shown names the page laid out (`page`, NULL for none asked), the
 // view in page coordinates and its scroll, and page_lay_out_run says
 // whether it marked them (`marked`), in which case the whole view is not
-// marked. One call's: set before the layout and read after it.
+// marked, and if not, why (`why`, of REFUSED_COUNT) and which element and
+// property refused (`what`, said while the old tree is alive, and only when
+// a record can be written; empty otherwise). One call's: set before the
+// layout and read after it.
 static struct {
     const Page *page;
     os64_gui_rect_t view;
     flow_point_t scroll;
     bool marked;
+    int32_t why;
+    char what[96];
 } s_parts;
 
 static void mark_part(os64_gui_rect_t r);
+
+// What refused a layout's parts, as the record says it (`out`, empty for
+// none named): the element as a selector would name it — its tag, id and
+// classes, the element holding it for a text — and the property a layout
+// places, when that was the reason.
+static void parts_what(char *out, size_t cap, const flow_parts_said_t *said)
+{
+    const os64_html_node_t *n = said->node;
+    const char *text = "";
+    if (n != NULL && n->kind != OS64_HTML_ELEMENT) {
+        text = "text in ";
+        n = n->parent;
+    }
+    size_t at = 0;
+    out[0] = '\0';
+    if (n != NULL && n->kind == OS64_HTML_ELEMENT) {
+        const os64_html_attr_t *id = os64_html_attr(n, "id"), *cls = os64_html_attr(n, "class");
+        at = (size_t)os64_snprintf(out, cap, "%s%s", text, n->name != NULL ? n->name : "?");
+        if (at < cap && id != NULL && id->value != NULL && id->value[0] != '\0')
+            at += (size_t)os64_snprintf(out + at, cap - at, "#%s", id->value);
+        for (const char *c = cls != NULL ? cls->value : NULL; c != NULL && *c != '\0' && at + 1 < cap;) {
+            while (*c == ' ' || *c == '\t' || *c == '\n')
+                c++;
+            if (*c == '\0')
+                break;
+            out[at++] = '.';
+            while (*c != '\0' && *c != ' ' && *c != '\t' && *c != '\n' && at + 1 < cap)
+                out[at++] = *c++;
+            out[at] = '\0';
+        }
+    }
+    if (said->why == FLOW_PARTS_PLACED && said->prop >= 0 && at < cap)
+        os64_snprintf(out + at, cap - at, "%s%s", at > 0 ? ", " : "", garb_prop_name((garb_prop_t)said->prop));
+}
 
 // A part a layout for the animations repaints (flow_layout_parts), cut to
 // the view `ctx` holds, in page coordinates, as a tick's are (tick_mark),
@@ -967,10 +1017,23 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
     // its sizes: a change of sheets or of the cascade's environment makes
     // another cascade, and a script's change is laid out by script_rebuild
     // before any other (page_rebuild_owed). Anything else marks the whole
-    // view (YONDER_PERF.md § perf-4).
-    if (p == s_parts.page && p->tree != NULL && cascade == p->cascade && width == p->laid_width &&
-        height == p->laid_height && zoom == p->laid_zoom)
-        s_parts.marked = flow_layout_parts(p->tree, fresh, s_parts.scroll, layout_mark, &s_parts.view);
+    // view (YONDER_PERF.md § perf-4), and says why (s_parts.why), naming
+    // what refused while the old tree it may point into is alive.
+    if (p == s_parts.page && p->tree != NULL) {
+        flow_parts_said_t said = {FLOW_PARTS_MARKED, NULL, -1};
+        if (cascade != p->cascade)
+            s_parts.why = REFUSED_CASCADE;
+        else if (width != p->laid_width || height != p->laid_height || zoom != p->laid_zoom)
+            s_parts.why = REFUSED_SIZE;
+        else {
+            s_parts.marked = flow_layout_parts(p->tree, fresh, s_parts.scroll, layout_mark, &s_parts.view, &said);
+            s_parts.why = said.why;
+        }
+        // Named only when a record can be written (yonder.conf's
+        // diagnostics): the name is a string made at every refusal.
+        if (s_diag.dir[0] != '\0')
+            parts_what(s_parts.what, sizeof(s_parts.what), &said);
+    }
     if (reclaim != NULL && reclaim != p) {
         flow_free(p->tree);
         p->tree = fresh;
@@ -1284,6 +1347,31 @@ static struct {
     uint8_t key_seq;
 } g;   // zeroed: the session's histories are large, and .data would carry them in the file
 
+// What marked the whole view for a paint (mark_whole), counted by the
+// paint (s_cost.whole_by). A paint of the whole view that none of yonder's
+// own whole marks asked for was made whole by the parts it marked
+// (mark_part) when they reach across the view, and by libui's own marks
+// otherwise: a hover or a focus moved onto the view, the window laid out.
+typedef enum {
+    WHOLE_PARTS, WHOLE_REFUSED, WHOLE_LAYOUT, WHOLE_SCRIPT, WHOLE_SCROLL, WHOLE_PICTURE, WHOLE_FACE, WHOLE_WINDOW,
+    WHOLE_TOOLKIT, WHOLE_COUNT
+} WholeBy;
+
+// The first thing to mark the whole view since the last paint (glass_paint),
+// WHOLE_PARTS while nothing has, and what the parts marked since then reach
+// in the window, together.
+static WholeBy s_whole_by;
+static os64_gui_rect_t s_parts_reach;
+
+// The whole view marked for repainting, and by what (s_whole_by): `root`
+// marks the window's every widget, the view among them.
+static void mark_whole(WholeBy by, bool root)
+{
+    if (s_whole_by == WHOLE_PARTS)
+        s_whole_by = by;
+    os64_ui_mark_dirty(&g.ui, root ? &g.root : &g.view);
+}
+
 // THE MEASURED LAYOUT (DOM.md § Geometry): a page not on screen, laid out
 // for its scripts' measurements at the view's size — the stream's parse as
 // far as it has gone, the page stream_finish holds, the page waiting for
@@ -1593,7 +1681,7 @@ static void badge_follow(void)
         os64_snprintf(g.badge_text + at, sizeof(g.badge_text) - at, "%s" YONDER_DIAG_FAILED " %lu",
                       at != 0 ? "  " : "", (unsigned long)failed);
     layout();
-    os64_ui_mark_dirty(&g.ui, &g.root);
+    mark_whole(WHOLE_WINDOW, true);
 }
 
 // What went wrong, said on the status line and recorded where the page's
@@ -1715,6 +1803,32 @@ static const char *const kPastDeadline[PAST_COUNT] = {
     "settle", "layouts", "ticks", "arrival", "stream", "timers", "pictures",
 };
 
+static const char *const kWholeBy[WHOLE_COUNT] = {
+    "parts that reached the whole view", "layouts for animations that refused their parts", "other layouts",
+    "scripts' changes", "scrolls", "pictures that came in", "faces that came in",
+    "the window, its bars, a page shown and settings", "the toolkit's own marks",
+};
+
+// Why a layout for the animations refused its parts (s_parts.why), as the
+// record says it.
+static const char *const kRefused[REFUSED_COUNT] = {
+    [FLOW_PARTS_MARKED] = "none",
+    [FLOW_PARTS_INCOMPLETE] = "a layout that stopped short",
+    [FLOW_PARTS_ANIMATED] = "other elements animated",
+    [FLOW_PARTS_LAYERS] = "the boxes in other layers",
+    [FLOW_PARTS_SCROLLED] = "a box scrolled elsewhere",
+    [FLOW_PARTS_MOVED] = "a box moved",
+    [FLOW_PARTS_PLACED] = "a value a layout places",
+    [FLOW_PARTS_NO_BOX] = "an element with no box of its own",
+    [FLOW_PARTS_CANVAS] = "a background the canvas may take",
+    [FLOW_PARTS_DEEP] = "stacked boxes nested too deep",
+    [FLOW_PARTS_MEMORY] = "no memory",
+    [REFUSED_LOADS] = "a picture's size or a face laid out with it",
+    [REFUSED_CASCADE] = "another cascade",
+    [REFUSED_SIZE] = "another width, height or zoom",
+    [REFUSED_VIEW] = "the view moved with it",
+};
+
 // Counted with the processor's time-stamp counter, not a system call: a
 // paint draws thousands of runs. That trusts the cores' counters to agree,
 // which nothing here can check — the thread may move between cores between
@@ -1734,6 +1848,12 @@ static struct {
     uint64_t paints, whole, pixels, ticks, schedules, waited, scripts, timers, events, layouts;
     uint64_t layouts_motion;                // of `layouts`, those for the animations alone (LaidFor)
     uint64_t layouts_parts;                 // of those, the ones that marked only what they changed
+    // The paints of the whole view, by what marked it (s_whole_by), and the
+    // layouts for the animations that marked it, by why (s_parts.why), with
+    // the last one's reason and what refused.
+    uint64_t whole_by[WHOLE_COUNT], refused[REFUSED_COUNT];
+    int32_t refused_last;
+    char refused_what[96];
     uint64_t backward;                      // intervals whose counter stepped back
     // The longest one wait of the main loop (cycles), and how late a moving
     // picture's frame was shown against when it was due (ms): the most, and
@@ -1992,7 +2112,7 @@ static void scroll_to(int32_t x, int32_t y)
     g.sy = y;
     clamp_scroll();
     sync_bars();
-    os64_ui_mark_dirty(&g.ui, &g.view);
+    mark_whole(WHOLE_SCROLL, false);
     forms_place();
     pictures_schedule();
     // The page moved under a pointer that did not: what it rests on now.
@@ -2216,6 +2336,11 @@ static bool lay_out_shown(bool again, LaidFor laid_for)
     s_parts.view = (os64_gui_rect_t){g.sx, g.sy, g.view.bounds.w, g.view.bounds.h};
     s_parts.scroll = scroll_now();
     s_parts.marked = false;
+    // Until the layout asks: parts not asked for were refused for what
+    // came in with the layout (a layout for the page is never counted),
+    // and parts asked for with no old tree to compare stopped short.
+    s_parts.why = s_parts.page == NULL ? REFUSED_LOADS : FLOW_PARTS_INCOMPLETE;
+    s_parts.what[0] = '\0';
     bool laid = lay_out_page(&g.page, width, height);
     bool parts = laid && s_parts.marked;
     s_parts.page = NULL;
@@ -2267,9 +2392,18 @@ static bool lay_out_shown(bool again, LaidFor laid_for)
     pictures_schedule();
     if (laid_for == LAID_FOR_PAGE)
         say_laid_out(ms_between(&t0, &t1));
-    // Its parts are marked, unless the view moved after all.
-    if (!parts || g.sx != sx_was || g.sy != sy_was)
-        os64_ui_mark_dirty(&g.ui, &g.view);
+    // Its parts are marked, unless the view moved after all. A layout for
+    // the animations that marks the whole view is counted by why, and the
+    // last one kept with what refused, when that was named.
+    if (!parts || g.sx != sx_was || g.sy != sy_was) {
+        if (laid_for != LAID_FOR_PAGE) {
+            int32_t why = parts ? REFUSED_VIEW : s_parts.why;
+            s_cost.refused[why]++;
+            s_cost.refused_last = why;
+            os64_strcopy(s_cost.refused_what, sizeof(s_cost.refused_what), parts ? "" : s_parts.what);
+        }
+        mark_whole(laid_for == LAID_FOR_PAGE ? WHOLE_LAYOUT : WHOLE_REFUSED, false);
+    }
     return !flow_incomplete(g.page.tree);
 }
 
@@ -2466,7 +2600,7 @@ static void arrive_now(Page *fresh, NavKind kind, const way_position_t *crumb,
     badge_follow();
     refresh_if_declared();
     buttons_follow();
-    os64_ui_mark_dirty(&g.ui, &g.view);
+    mark_whole(WHOLE_WINDOW, false);
 }
 
 // A page arrived. Its linked sheets are sent for first — those the stream
@@ -2595,7 +2729,7 @@ static void bar_show(bool up)
     os64_ui_set_enabled(&g.ui, &g.qyes, g.bar.armed);
     os64_ui_set_enabled(&g.ui, &g.qno, g.bar.armed);
     layout();
-    os64_ui_mark_dirty(&g.ui, &g.root);
+    mark_whole(WHOLE_WINDOW, true);
 }
 
 static void bar_forget(void)
@@ -3673,7 +3807,7 @@ static void picture_arrived(yonder_picture_job_t *job, yonder_picture_t *product
     }
     if (picture_moves_page(&g.page, job->index))
         g.pictures_moved = true;
-    os64_ui_mark_dirty(&g.ui, &g.view);
+    mark_whole(WHOLE_PICTURE, false);
 }
 
 // ── The page's web fonts (PILE3.md § Web fonts) ─────────────────────────
@@ -4529,7 +4663,7 @@ static void webfont_arrived(const yonder_webfont_job_t *job, yonder_webfont_t *p
     // Either way the page is laid out again: a face to draw, or the next
     // source to want.
     webfonts_move();
-    os64_ui_mark_dirty(&g.ui, &g.view);
+    mark_whole(WHOLE_FACE, false);
 }
 
 // The workers stopped with files out: each one with them is named as
@@ -4863,32 +4997,72 @@ static const char *dt_text(const DiagText *t)
 }
 
 // The counts so far, as `paint` and `paint stages` (paint_lines).
+// The paints of the whole view by what marked them (WholeBy), then the
+// layouts for the animations that marked it by why (s_parts.why), and the
+// last of those with what refused: a page painting whole views says which
+// rule to take up. False, with nothing written, when no paint was whole.
+static bool whole_lines(DiagText *w)
+{
+    if (s_cost.whole == 0)
+        return false;
+    dt_put(w, "%lu of %lu paints:", (unsigned long)s_cost.whole, (unsigned long)s_cost.paints);
+    const char *sep = "";
+    for (int32_t i = 0; i < WHOLE_COUNT; i++)
+        if (s_cost.whole_by[i] != 0) {
+            dt_put(w, "%s %lu %s", sep, (unsigned long)s_cost.whole_by[i], kWholeBy[i]);
+            sep = ",";
+        }
+    uint64_t refused = 0;
+    for (int32_t i = 0; i < REFUSED_COUNT; i++)
+        refused += s_cost.refused[i];
+    if (refused == 0)
+        return true;
+    dt_put(w, "; layouts for animations that marked the whole view, by why:");
+    sep = "";
+    for (int32_t i = 0; i < REFUSED_COUNT; i++)
+        if (s_cost.refused[i] != 0) {
+            dt_put(w, "%s %lu %s", sep, (unsigned long)s_cost.refused[i], kRefused[i]);
+            sep = ",";
+        }
+    dt_put(w, "; the last: %s%s%s", kRefused[s_cost.refused_last], s_cost.refused_what[0] != '\0' ? ", " : "",
+           s_cost.refused_what);
+    return true;
+}
+
 static void diag_paint(Page *p)
 {
-    DiagText t = {0}, u = {0};
+    DiagText t = {0}, u = {0}, w = {0};
     bool timed = paint_lines(&t, &u);
     yonder_diag_fact(p->diag, "paint", dt_text(&t));
     if (timed)
         yonder_diag_fact(p->diag, "paint stages", dt_text(&u));
     else
         yonder_diag_forget(p->diag, "paint stages");
+    if (whole_lines(&w))
+        yonder_diag_fact(p->diag, "whole views", dt_text(&w));
+    else
+        yonder_diag_forget(p->diag, "whole views");
     os64_free(t.s);
     os64_free(u.s);
+    os64_free(w.s);
 }
 
 // The counts kept as reading `n` of the page, with where the page was
 // scrolled, before they start again (diag_asked): each `d` adds one.
 static void diag_paint_reading(Page *p, uint32_t n)
 {
-    DiagText t = {0}, u = {0}, v = {0};
+    DiagText t = {0}, u = {0}, v = {0}, w = {0};
     bool timed = paint_lines(&t, &u);
-    dt_put(&v, "at y %ld: %s%s%s", (long)g.sy, dt_text(&t), timed ? " | " : "", timed ? dt_text(&u) : "");
+    bool whole = whole_lines(&w);
+    dt_put(&v, "at y %ld: %s%s%s%s%s", (long)g.sy, dt_text(&t), timed ? " | " : "", timed ? dt_text(&u) : "",
+           whole ? " | whole views: " : "", whole ? dt_text(&w) : "");
     char key[32];
     os64_snprintf(key, sizeof(key), "paint reading %u", (unsigned)n);
     yonder_diag_fact(p->diag, key, dt_text(&v));
     os64_free(t.s);
     os64_free(u.s);
     os64_free(v.s);
+    os64_free(w.s);
 }
 
 // A page's fonts on its record, at each write: how many faces and files
@@ -5020,6 +5194,7 @@ static void mark_part(os64_gui_rect_t r)
     os64_ui_widget_t part = {0};
     part.bounds = (os64_gui_rect_t){g.view.bounds.x + r.x - g.sx, g.view.bounds.y + r.y - g.sy,
                                     r.w, r.h};
+    s_parts_reach = os64_rect_union(s_parts_reach, part.bounds);
     os64_ui_mark_dirty(&g.ui, &part);
 }
 
@@ -5637,11 +5812,37 @@ static bool motion_pause_said(void)
     return true;
 }
 
+// A paint of `damage` counted (s_cost): the view's pixels it covers, and
+// when that is the whole view, what marked it — `by`, else the parts when
+// what they reach (`reach`) spans the view, else libui's own marks.
+static void paint_counted(os64_gui_rect_t damage, WholeBy by, os64_gui_rect_t reach)
+{
+    os64_gui_rect_t meet;
+    if (os64_rect_intersect(damage, g.view.bounds, &meet)) {
+        s_cost.pixels += (uint64_t)meet.w * (uint64_t)meet.h;
+        if (meet.w == g.view.bounds.w && meet.h == g.view.bounds.h) {
+            os64_gui_rect_t parts;
+            if (by == WHOLE_PARTS && (!os64_rect_intersect(reach, g.view.bounds, &parts) ||
+                                      parts.w != g.view.bounds.w || parts.h != g.view.bounds.h))
+                by = WHOLE_TOOLKIT;
+            s_cost.whole++;
+            s_cost.whole_by[by]++;
+        }
+    }
+    s_cost.paints++;
+}
+
 // libui's paint, timed (s_cost): its render, then the damage handed to
-// the compositor, as os64_ui_paint does both.
+// the compositor, as os64_ui_paint does both, then counted
+// (paint_counted). What marked the view is this paint's, so it starts
+// again here.
 static void glass_paint(void)
 {
     os64_gui_rect_t damage;
+    WholeBy by = s_whole_by;
+    os64_gui_rect_t reach = s_parts_reach;
+    s_whole_by = WHOLE_PARTS;
+    s_parts_reach = (os64_gui_rect_t){0, 0, 0, 0};
     cost_begin(PS_RENDER);
     bool painted = os64_ui_render(&g.ui, &damage);
     cost_end(PS_RENDER);
@@ -5652,12 +5853,7 @@ static void glass_paint(void)
     cost_begin(PS_PUBLISH);
     os64_draw_publish(g.ui.ctx, &damage);
     cost_end(PS_PUBLISH);
-    os64_gui_rect_t meet;
-    if (os64_rect_intersect(damage, g.view.bounds, &meet)) {
-        s_cost.pixels += (uint64_t)meet.w * (uint64_t)meet.h;
-        s_cost.whole += meet.w == g.view.bounds.w && meet.h == g.view.bounds.h;
-    }
-    s_cost.paints++;
+    paint_counted(damage, by, reach);
     cost_fold(PS_RENDER, PS_PUBLISH);
 }
 
@@ -6245,7 +6441,7 @@ static void forms_drop(void)
     os64_free(g.fw);
     g.fw = NULL;
     g.nfw = 0;
-    os64_ui_mark_dirty(&g.ui, &g.root);
+    mark_whole(WHOLE_WINDOW, true);
 }
 
 static void script_alert(void *opaque, const char *text, size_t length)
@@ -6367,7 +6563,7 @@ static bool script_rebuild(void)
                 ? "Out of memory laying out the changed page; this is the last layout that fit."
                 : "Out of memory laying out the changed page.");
             forms_build();
-            os64_ui_mark_dirty(&g.ui, &g.view);
+            mark_whole(WHOLE_SCRIPT, false);
             return false;
         }
         sheets_leave(p);
@@ -6409,7 +6605,7 @@ static bool script_rebuild(void)
         sync_bars();
         forms_place();
         pictures_schedule();
-        os64_ui_mark_dirty(&g.ui, &g.view);
+        mark_whole(WHOLE_SCRIPT, false);
         if (s_script_audit) {
             char line[128];
             os64_snprintf(line,sizeof(line),"yonder: rendering rebuild in %ld us",
@@ -9150,7 +9346,7 @@ static void dark_use(bool dark)
     s_dark = dark;
     coming_rejudge();
     (void)relayout(true);
-    os64_ui_mark_dirty(&g.ui, &g.root);
+    mark_whole(WHOLE_WINDOW, true);
 }
 
 // The animations' switches (Settings). Reduce motion changes what
@@ -9167,7 +9363,7 @@ static void motion_use(bool run, bool reduce)
     s_reduce_motion = reduce;
     coming_rejudge();
     (void)relayout(true);
-    os64_ui_mark_dirty(&g.ui, &g.root);
+    mark_whole(WHOLE_WINDOW, true);
 }
 
 // Ctrl with = or + zooms in, with - out, with 0 back to the settings'
@@ -9274,7 +9470,7 @@ static bool wheel_box(int32_t x, int32_t y, int32_t dx, int32_t dy)
         flow_point_t now = flow_scroll_set(t, i, to);
         if (now.x != was.x || now.y != was.y) {
             page_keep_box_scroll(&g.page, flow_scroller(t, i)->node, now);
-            os64_ui_mark_dirty(&g.ui, &g.view);
+            mark_whole(WHOLE_SCROLL, false);
             forms_place();
             pictures_schedule();
             hover(g.pointer_x, g.pointer_y);
@@ -9560,7 +9756,7 @@ static void on_resize(os64_ui_t *ui)
     sync_bars();
     forms_place();
     pictures_schedule();
-    os64_ui_mark_dirty(&g.ui, &g.root);
+    mark_whole(WHOLE_WINDOW, true);
 }
 
 static void on_close(os64_ui_t *ui)

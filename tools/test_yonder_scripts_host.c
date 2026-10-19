@@ -1212,6 +1212,9 @@ static const char kGrowPage[]="<!doctype html><style>body{margin:0}"
 
 static void motion_part_cases(void) {
     bool was_run=s_animations, was_reduce=s_reduce_motion;
+    char was_dir[sizeof(s_diag.dir)];
+    memcpy(was_dir,s_diag.dir,sizeof(was_dir));
+    snprintf(s_diag.dir,sizeof(s_diag.dir),"/tmp/diag");   /* what refused is named only with a record to write */
     s_animations=true; s_reduce_motion=false;
     clock_step=0; geometry_layout_delay=0;
     for(int grow=0;grow<2;grow++) {
@@ -1220,30 +1223,55 @@ static void motion_part_cases(void) {
         relayout(true);
         motion_painted();
         g.ui.any_dirty=false;
+        s_whole_by=WHOLE_PARTS;     /* as a paint leaves it */
         uint64_t parts_was=s_cost.layouts_parts;
+        uint64_t refused_was[REFUSED_COUNT];
+        memcpy(refused_was,s_cost.refused,sizeof(refused_was));
         now_ms=400;
         motion_tick();
         os64_gui_rect_t d=g.ui.dirty, v=g.view.bounds;
         bool whole=d.x<=v.x && d.y<=v.y && d.x+d.w>=v.x+v.w && d.y+d.h>=v.y+v.h;
         if(!grow)
-            check(g.ui.any_dirty && !whole && d.h<=40 && s_cost.layouts_parts==parts_was+1,
+            check(g.ui.any_dirty && !whole && d.h<=40 && s_cost.layouts_parts==parts_was+1 &&
+                  s_whole_by==WHOLE_PARTS,
                 "layout parts: a colour's frame marks its element, not the view, and is counted");
         else
-            check(g.ui.any_dirty && whole && s_cost.layouts_parts==parts_was,
-                "layout parts: a frame that moves a box marks the whole view");
+            check(g.ui.any_dirty && whole && s_cost.layouts_parts==parts_was &&
+                  s_cost.refused[FLOW_PARTS_MOVED]==refused_was[FLOW_PARTS_MOVED]+1 && s_cost.refused_last==FLOW_PARTS_MOVED &&
+                  strcmp(s_cost.refused_what,"div#w")==0 && s_whole_by==WHOLE_REFUSED,
+                "layout parts: a frame that moves a box marks the whole view, counted as a box moved, "
+                "named, and the paint's whole view laid to it");
+        s_whole_by=WHOLE_PARTS;
         motion_painted();
+        if(grow) {
+            /* With no record to write, the refusal is counted and nothing
+             * is named: no string is made at every frame for nobody. */
+            s_diag.dir[0]='\0';
+            memcpy(refused_was,s_cost.refused,sizeof(refused_was));
+            snprintf(s_cost.refused_what,sizeof(s_cost.refused_what),"stale");
+            now_ms=700;
+            motion_tick();
+            check(s_cost.refused[FLOW_PARTS_MOVED]==refused_was[FLOW_PARTS_MOVED]+1 &&
+                  s_cost.refused_what[0]=='\0',
+                "layout parts: without diagnostics a refusal is counted, and what refused is not named");
+            snprintf(s_diag.dir,sizeof(s_diag.dir),"/tmp/diag");
+            motion_painted();
+        }
         if(!grow) {
             /* A sheet that changed waits for no layout of its own: the next
              * frame's layout reads another cascade, so it marks the view. */
             g.page.sheets_changed=true;
             g.ui.any_dirty=false;
             parts_was=s_cost.layouts_parts;
+            memcpy(refused_was,s_cost.refused,sizeof(refused_was));
             now_ms=700;
             motion_tick();
             d=g.ui.dirty;
             whole=d.x<=v.x && d.y<=v.y && d.x+d.w>=v.x+v.w && d.y+d.h>=v.y+v.h;
-            check(g.ui.any_dirty && whole && s_cost.layouts_parts==parts_was,
-                "layout parts: a frame laid out from another cascade marks the whole view");
+            check(g.ui.any_dirty && whole && s_cost.layouts_parts==parts_was &&
+                  s_cost.refused[REFUSED_CASCADE]==refused_was[REFUSED_CASCADE]+1 && s_cost.refused_last==REFUSED_CASCADE &&
+                  s_cost.refused_what[0]=='\0',
+                "layout parts: a frame laid out from another cascade marks the whole view, counted so");
             motion_painted();
             /* A picture's size or a face that came in, waiting for its
              * settle, is laid out by the frame's layout too, and the parts
@@ -1252,12 +1280,14 @@ static void motion_part_cases(void) {
                 if(k==0) g.pictures_moved=true; else s_web.moved=true;
                 g.ui.any_dirty=false;
                 parts_was=s_cost.layouts_parts;
+                memcpy(refused_was,s_cost.refused,sizeof(refused_was));
                 now_ms=1000+300*(uint64_t)k;
                 motion_tick();
                 d=g.ui.dirty;
                 whole=d.x<=v.x && d.y<=v.y && d.x+d.w>=v.x+v.w && d.y+d.h>=v.y+v.h;
                 check(g.ui.any_dirty && whole && s_cost.layouts_parts==parts_was &&
-                      !g.pictures_moved && !s_web.moved,
+                      !g.pictures_moved && !s_web.moved && s_cost.refused[REFUSED_LOADS]==refused_was[REFUSED_LOADS]+1 &&
+                      s_cost.refused_last==REFUSED_LOADS,
                     k==0?"layout parts: a frame that also lays out a picture's size marks the whole view"
                         :"layout parts: a frame that also lays out a face that came in marks the whole view");
                 motion_painted();
@@ -1265,6 +1295,7 @@ static void motion_part_cases(void) {
         }
         probe_drop();
     }
+    memcpy(s_diag.dir,was_dir,sizeof(was_dir));
     s_animations=was_run; s_reduce_motion=was_reduce;
 }
 
@@ -4602,6 +4633,126 @@ static void web_drop(void) {
     probe_web=false;
     while(nfont_jobs>0) os64_free(font_jobs[--nfont_jobs].job);
 }
+static const os64_html_node_t *whole_find(const os64_html_node_t *n, const char *id) {
+    for(;n!=NULL;n=n->next) {
+        const os64_html_attr_t *a=n->kind==OS64_HTML_ELEMENT?os64_html_attr(n,"id"):NULL;
+        if(a!=NULL && a->value!=NULL && strcmp(a->value,id)==0) return n;
+        const os64_html_node_t *in=whole_find(n->first_child,id);
+        if(in!=NULL) return in;
+    }
+    return NULL;
+}
+
+/* WHAT MADE A PAINT WHOLE (YONDER_PERF.md § perf-6): a paint of the whole
+ * view is counted by the first whole mark since the last paint, else by
+ * the parts when they reach across the view, else by libui's own marks;
+ * the layouts for the animations that marked it, by why, and the last one
+ * named; all of it one record line, and on each reading. */
+static void whole_view_cases(void) {
+    fake_reset();
+    memset(&s_diag,0,sizeof(s_diag)); s_diag.next=1;
+    snprintf(saved_diagnostics,sizeof(saved_diagnostics),"/tmp/diag");
+    check(diag_dir_open()==NULL,"whole views: the record has a directory");
+    web_page("<div id=x class=' a  b'>t</div><p id=y>u</p>");
+    static char rec[8192];
+    os64_gui_rect_t was_view=g.view.bounds;
+    int32_t was_sx=g.sx, was_sy=g.sy;
+    g.view.bounds=(os64_gui_rect_t){0,40,800,560};
+    g.sx=0; g.sy=100;
+    os64_gui_rect_t view=g.view.bounds, small={10,50,20,20};
+
+    /* The first whole mark since the paint names it; the paint takes it. */
+    s_whole_by=WHOLE_PARTS; g.ui.any_dirty=false;
+    mark_whole(WHOLE_SCRIPT,false);
+    mark_whole(WHOLE_SCROLL,true);
+    check(s_whole_by==WHOLE_SCRIPT && g.ui.any_dirty,"whole views: the first whole mark since the paint names it");
+    cost_reset();
+    paint_counted(view,WHOLE_SCRIPT,(os64_gui_rect_t){0,0,0,0});
+    paint_counted(view,WHOLE_PARTS,view);
+    paint_counted(view,WHOLE_PARTS,small);
+    paint_counted(view,WHOLE_PARTS,(os64_gui_rect_t){0,0,0,0});
+    paint_counted(small,WHOLE_SCROLL,small);
+    paint_counted((os64_gui_rect_t){0,0,800,600},WHOLE_PARTS,(os64_gui_rect_t){-5,0,900,700});
+    check(s_cost.paints==6 && s_cost.whole==5 && s_cost.whole_by[WHOLE_SCRIPT]==1 &&
+          s_cost.whole_by[WHOLE_PARTS]==2 && s_cost.whole_by[WHOLE_TOOLKIT]==2 && s_cost.whole_by[WHOLE_SCROLL]==0 &&
+          s_cost.pixels==5ull*800*560+400,
+          "whole views: a whole paint is its mark's, the parts' when they span the view, the toolkit's when not; "
+          "a part of the view is no whole view");
+
+    /* The parts reach what they mark, in the window, together. */
+    s_parts_reach=(os64_gui_rect_t){0,0,0,0};
+    mark_part((os64_gui_rect_t){0,100,10,10});
+    mark_part((os64_gui_rect_t){790,650,10,10});
+    check(s_parts_reach.x==0 && s_parts_reach.y==40 && s_parts_reach.w==800 && s_parts_reach.h==560,
+          "whole views: the parts' reach is their marks' union, in the window");
+    s_parts_reach=(os64_gui_rect_t){0,0,0,0};
+
+    /* What refused, named as a selector would: tag, id, every class; the
+     * element holding a text; the property a layout places. */
+    const os64_html_node_t *x=whole_find(page_doc(&g.page)->document,"x");
+    char what[96];
+    flow_parts_said_t said={FLOW_PARTS_MOVED,x,-1};
+    parts_what(what,sizeof(what),&said);
+    bool named=strcmp(what,"div#x.a.b")==0;
+    said.node=x!=NULL?x->first_child:NULL;
+    parts_what(what,sizeof(what),&said);
+    named=named && strcmp(what,"text in div#x.a.b")==0;
+    said=(flow_parts_said_t){FLOW_PARTS_PLACED,x,GARB_Z_INDEX};
+    parts_what(what,sizeof(what),&said);
+    named=named && strcmp(what,"div#x.a.b, z-index")==0;
+    said=(flow_parts_said_t){FLOW_PARTS_PLACED,NULL,GARB_Z_INDEX};
+    parts_what(what,sizeof(what),&said);
+    named=named && strcmp(what,"z-index")==0;
+    said=(flow_parts_said_t){FLOW_PARTS_DEEP,NULL,-1};
+    parts_what(what,sizeof(what),&said);
+    named=named && what[0]=='\0';
+    char tiny[6];
+    said=(flow_parts_said_t){FLOW_PARTS_PLACED,x,GARB_Z_INDEX};
+    parts_what(tiny,sizeof(tiny),&said);
+    named=named && strcmp(tiny,"div#x")==0;
+    check(x!=NULL && named,"whole views: what refused is named as a selector would, cut to its room");
+
+    /* The record line, and on the reading. */
+    cost_reset();
+    s_cost.paints=10; s_cost.whole=4;
+    s_cost.whole_by[WHOLE_PARTS]=1; s_cost.whole_by[WHOLE_REFUSED]=3;
+    s_cost.refused[FLOW_PARTS_MOVED]=2; s_cost.refused[REFUSED_VIEW]=1;
+    s_cost.refused_last=FLOW_PARTS_MOVED;
+    snprintf(s_cost.refused_what,sizeof(s_cost.refused_what),"div#w");
+    diag_paint(&g.page);
+    yonder_diag_render(g.page.diag,rec,sizeof(rec));
+    static const char kLine[]="whole views: 4 of 10 paints: 1 parts that reached the whole view, 3 layouts for "
+        "animations that refused their parts; layouts for animations that marked the whole view, by why: 2 a box "
+        "moved, 1 the view moved with it; the last: a box moved, div#w";
+    char want[400];
+    snprintf(want,sizeof(want),"\n%s\n",kLine);
+    check(strstr(rec,want)!=NULL,"whole views: by what marked them, and the layouts by why, the last named");
+    diag_paint_reading(&g.page,7);
+    yonder_diag_render(g.page.diag,rec,sizeof(rec));
+    snprintf(want,sizeof(want)," | %s\n",kLine);
+    check(strstr(rec,"\npaint reading 7: at y 100: ")!=NULL && strstr(rec,want)!=NULL,
+          "whole views: a reading carries them after its stages");
+    /* Whole views with no layout among them say no reasons; none at all
+     * leaves no line. */
+    cost_reset();
+    s_cost.paints=3; s_cost.whole=2; s_cost.whole_by[WHOLE_SCROLL]=2;
+    diag_paint(&g.page);
+    yonder_diag_render(g.page.diag,rec,sizeof(rec));
+    check(strstr(rec,"\nwhole views: 2 of 3 paints: 2 scrolls\n")!=NULL,
+          "whole views: none from a layout for animations says no reasons");
+    cost_reset();
+    s_cost.paints=3;
+    diag_paint(&g.page);
+    yonder_diag_render(g.page.diag,rec,sizeof(rec));
+    check(strstr(rec,"\nwhole views:")==NULL,"whole views: no whole view, no line");
+
+    g.view.bounds=was_view; g.sx=was_sx; g.sy=was_sy;
+    s_whole_by=WHOLE_PARTS;
+    web_drop();
+    saved_diagnostics[0]='\0';
+    memset(&s_diag,0,sizeof(s_diag)); s_diag.next=1;
+}
+
 /* The paint counts on the record (YONDER_PERF.md § Measure first): what
  * nothing painted says, a paint's stages in milliseconds at the counter's
  * rate, and `d` writing the record on asking and starting them again. */
@@ -6192,6 +6343,7 @@ int main(void)
     if(getenv("YONDER_NO_STREAM")==NULL) diag_cases();
     webfont_cases();
     paint_cost_cases();
+    whole_view_cases();
     os64_text_font_release(probe_font);
     check(os64_text_destroy(probe_text)==OS64_FONT_OK,"all layout text released");
     check(live==0,"native and engine heap is empty");

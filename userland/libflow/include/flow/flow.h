@@ -1058,16 +1058,43 @@ bool flow_motion_tick(flow_tree_t *tree, uint64_t now, flow_point_t scroll,
 // tick's, except that an inline element is marked by the block holding its
 // pieces, its text and any block split out of it — and each box drawn
 // outside it that takes from it what changed,
-// in page coordinates at `scroll`; true. False when they cannot be bounded
-// so — a box moved, the trees differ, a value changed that a layout
-// places, an element whose background the canvas may take, one with no box
-// of its own, stacked boxes nested so deep that finding which of them take
-// the change would cost more than the repaint — or there is no memory: then
-// repaint the whole view. Both
+// in page coordinates at `scroll`; true. An element no box stands for, nor
+// any inside it (a button's content, what is under `display: none`), shows
+// nothing of what changed and is passed over. False when they cannot be
+// bounded so — then repaint the whole view — and `*said` (when not NULL)
+// names why (flow_parts_why_t), with the element and the property that
+// refused when one did. Both
 // trees must be the page's at one width, zoom and cascade; what else the
 // page changed is the caller's to have marked.
+typedef enum {
+    FLOW_PARTS_MARKED,          // the parts were handed to `mark`, or nothing changed
+    FLOW_PARTS_INCOMPLETE,      // a tree's layout stopped short
+    FLOW_PARTS_ANIMATED,        // the trees animate other elements
+    FLOW_PARTS_LAYERS,          // the boxes are painted in other layers or stacked otherwise
+    FLOW_PARTS_SCROLLED,        // a box scrolls to another place
+    FLOW_PARTS_MOVED,           // a box is laid out otherwise: placed, sized, cut, added or gone
+    FLOW_PARTS_PLACED,          // a value changed that a layout places
+    FLOW_PARTS_NO_BOX,          // a changed element makes no box of its own
+    FLOW_PARTS_CANVAS,          // the canvas may take a changed element's background
+    FLOW_PARTS_DEEP,            // stacked boxes nested so deep that finding which take the
+                                // change would cost more than the repaint
+    FLOW_PARTS_MEMORY,          // no memory
+    FLOW_PARTS_COUNT
+} flow_parts_why_t;
+typedef struct {
+    flow_parts_why_t why;
+    // What refused. MOVED: the node of the first box laid out otherwise,
+    // or of its nearest ancestor that has one (an anonymous box's is the
+    // element holding it), which may be a text; SCROLLED: the scroller's;
+    // PLACED, NO_BOX, CANVAS: the changed element. NULL for the others,
+    // and for MOVED when the trees differ only in how many scrollers they
+    // have.
+    const os64_html_node_t *node;
+    int32_t prop;               // PLACED: the garb_prop_t a layout places; -1 otherwise
+} flow_parts_said_t;
 bool flow_layout_parts(const flow_tree_t *was, const flow_tree_t *now, flow_point_t scroll,
-                       void (*mark)(void *ctx, const flow_box_t *box, os64_gui_rect_t r), void *ctx);
+                       void (*mark)(void *ctx, const flow_box_t *box, os64_gui_rect_t r), void *ctx,
+                       flow_parts_said_t *said);
 // Whether an animation of the tree, wherever its element is, still has a
 // change to show after the tree's time (flow_env_t.now_ms): one running,
 // or waiting out its delay — not one paused, over, or of nothing that can

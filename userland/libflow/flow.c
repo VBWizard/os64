@@ -3378,43 +3378,69 @@ static bool same_box(const flow_box_t *a, const flow_box_t *b)
            a->fixed == b->fixed && a->scroller == b->scroller && a->unpainted == b->unpainted;
 }
 
-// Whether two trees are the same boxes laid out alike (same_box), in the same
-// order, painted in the same layers, scrolled alike.
-static bool same_boxes(const flow_tree_t *a, const flow_tree_t *b)
+// The node a box stands for, or its nearest ancestor's when it stands for
+// none (an anonymous box), so that a difference can be named.
+static const os64_html_node_t *box_named(const flow_box_t *b)
 {
-    if (a->nstacked != b->nstacked || a->nlayers != b->nlayers || a->nscrollers != b->nscrollers)
-        return false;
+    while (b != NULL && b->node == NULL)
+        b = b->parent;
+    return b != NULL ? b->node : NULL;
+}
+
+// Whether two trees are the same boxes laid out alike (same_box), in the same
+// order, painted in the same layers, scrolled alike: FLOW_PARTS_MARKED when
+// they are, else what differs first, with the box's node at `*node` for a
+// box scrolled or laid out otherwise.
+static flow_parts_why_t boxes_differ(const flow_tree_t *a, const flow_tree_t *b, const os64_html_node_t **node)
+{
+    *node = NULL;
+    if (a->nstacked != b->nstacked || a->nlayers != b->nlayers)
+        return FLOW_PARTS_LAYERS;
+    if (a->nscrollers != b->nscrollers)
+        return FLOW_PARTS_MOVED;
     for (int32_t k = 0; k < a->nlayers; k++)
         if (a->layers[k].part != b->layers[k].part || a->layers[k].box->node != b->layers[k].box->node)
-            return false;
+            return FLOW_PARTS_LAYERS;
     for (int32_t k = 0; k < a->nscrollers; k++) {
         flow_point_t pa = flow_scroll_at(a, k), pb = flow_scroll_at(b, k);
-        if (pa.x != pb.x || pa.y != pb.y)
-            return false;
+        if (pa.x != pb.x || pa.y != pb.y) {
+            *node = box_named(flow_scroller(b, k));
+            return FLOW_PARTS_SCROLLED;
+        }
     }
     const flow_box_t *x = a->root, *y = b->root;
     while (x != NULL && y != NULL) {
-        if (!same_box(x, y) || (x->first == NULL) != (y->first == NULL))
-            return false;
+        if (!same_box(x, y) || (x->first == NULL) != (y->first == NULL)) {
+            *node = box_named(y);
+            return FLOW_PARTS_MOVED;
+        }
         if (x->first != NULL) {
             x = x->first;
             y = y->first;
             continue;
         }
         while (x != NULL && x->next == NULL) {
-            if (y->next != NULL)
-                return false;
+            if (y->next != NULL) {
+                *node = box_named(y->next);
+                return FLOW_PARTS_MOVED;
+            }
             x = x->parent;
             y = y->parent;
         }
         if (x == NULL)
             break;
-        if (y->next == NULL)
-            return false;
+        if (y->next == NULL) {
+            *node = box_named(x->next);
+            return FLOW_PARTS_MOVED;
+        }
         x = x->next;
         y = y->next;
     }
-    return x == NULL && y == NULL;
+    if (x != NULL || y != NULL) {
+        *node = box_named(x != NULL ? x : y);
+        return FLOW_PARTS_MOVED;
+    }
+    return FLOW_PARTS_MARKED;
 }
 
 // The parts of one tree: each changed element (`changed`, node -> what of it
@@ -3469,8 +3495,31 @@ static bool part_from(void *ctx, const os64_html_node_t *a, const FStyled *st, c
     return false;
 }
 
-static bool parts_in(const flow_tree_t *t, const FMap *changed, flow_point_t scroll,
-                     void (*mark)(void *ctx, const flow_box_t *box, os64_gui_rect_t r), void *ctx)
+// Whether element `n` draws nothing in `tree`: no box stands for it or for
+// anything inside it — what a replaced element holds (a button's content,
+// which its widget draws instead) and what is under a `display: none`.
+static bool draws_none(const flow_tree_t *tree, const os64_html_node_t *n)
+{
+    if (f_map_get(&tree->first, n) != NULL)
+        return false;
+    for (const os64_html_node_t *c = n->first_child; c != NULL;) {
+        if (f_map_get(&tree->first, c) != NULL)
+            return false;
+        if (c->first_child != NULL) {
+            c = c->first_child;
+            continue;
+        }
+        while (c != n && c->next == NULL)
+            c = c->parent;
+        c = c != n ? c->next : NULL;
+    }
+    return true;
+}
+
+// FLOW_PARTS_MARKED, else why not: the walks past PARTS_WALK_MAX, or no
+// memory.
+static flow_parts_why_t parts_in(const flow_tree_t *t, const FMap *changed, flow_point_t scroll,
+                                 void (*mark)(void *ctx, const flow_box_t *box, os64_gui_rect_t r), void *ctx)
 {
     Parts pp = {t, changed, scroll, mark, ctx, NULL, 0};
     FMap grouped = {0};
@@ -3506,51 +3555,85 @@ static bool parts_in(const flow_tree_t *t, const FMap *changed, flow_point_t scr
             b = b->parent;
         b = b != NULL ? b->next : NULL;
     }
-    for (int32_t i = 0; ok && i < t->nstacked; i++) {
+    flow_parts_why_t why = ok ? FLOW_PARTS_MARKED : FLOW_PARTS_MEMORY;
+    for (int32_t i = 0; why == FLOW_PARTS_MARKED && i < t->nstacked; i++) {
         pp.b = t->stacked[i];
         if (pp.b->node != NULL)
             stacked_from(t, pp.b, part_from, &pp);
-        ok = pp.visits <= PARTS_WALK_MAX;
+        if (pp.visits > PARTS_WALK_MAX)
+            why = FLOW_PARTS_DEEP;
     }
     f_map_free(&grouped);
     os64_free(bounds);
-    return ok;
+    return why;
 }
 
 bool flow_layout_parts(const flow_tree_t *was, const flow_tree_t *now, flow_point_t scroll,
-                       void (*mark)(void *ctx, const flow_box_t *box, os64_gui_rect_t r), void *ctx)
+                       void (*mark)(void *ctx, const flow_box_t *box, os64_gui_rect_t r), void *ctx,
+                       flow_parts_said_t *said)
 {
+    flow_parts_said_t none;
+    if (said == NULL)
+        said = &none;
+    *said = (flow_parts_said_t){FLOW_PARTS_MARKED, NULL, -1};
     if (was == NULL || now == NULL || was->styles == NULL || now->styles == NULL || was->incomplete ||
-        now->incomplete || was->styles->nanimated != now->styles->nanimated || !same_boxes(was, now))
+        now->incomplete) {
+        said->why = FLOW_PARTS_INCOMPLETE;
+        return false;
+    }
+    if (was->styles->nanimated != now->styles->nanimated) {
+        said->why = FLOW_PARTS_ANIMATED;
+        return false;
+    }
+    said->why = boxes_differ(was, now, &said->node);
+    if (said->why != FLOW_PARTS_MARKED)
         return false;
     int32_t n = now->styles->nanimated;
     FProps *changes = os64_calloc(n > 0 ? (size_t)n : 1, sizeof(*changes));
-    if (changes == NULL)
+    if (changes == NULL) {
+        said->why = FLOW_PARTS_MEMORY;
         return false;
+    }
     FMap changed = {0};
-    bool ok = true, any = false;
-    for (int32_t i = 0; ok && i < n; i++) {
+    bool any = false;
+    for (int32_t i = 0; said->why == FLOW_PARTS_MARKED && i < n; i++) {
         const os64_html_node_t *node = now->styles->animated[i];
         const FStyled *a = f_style_of(was->styles, node), *b = f_style_of(now->styles, node);
-        ok = was->styles->animated[i] == node && a != NULL && b != NULL;
+        if (was->styles->animated[i] != node || a == NULL || b == NULL) {
+            said->why = FLOW_PARTS_ANIMATED;
+            break;
+        }
         bool moved = false;
-        if (ok && a->motion != NULL)
+        if (a->motion != NULL)
             moved |= f_motion_changed_props(a->motion, &a->style, &b->style, &changes[i]);
-        if (ok && b->motion != NULL)
+        if (b->motion != NULL)
             moved |= f_motion_changed_props(b->motion, &a->style, &b->style, &changes[i]);
-        if (!ok || !moved)
+        // An element drawn by no box, its own or one inside it, shows
+        // nothing of what changed: there is nothing to mark. The trees'
+        // boxes stand for the same nodes (boxes_differ), so asking one tree
+        // is asking both.
+        if (!moved || draws_none(now, node))
             continue;
         // What changed must be drawn where the element draws, by boxes of
         // its own: an element that makes none (`display: contents`) is
         // drawn by its descendants', and the canvas may take its background
         // across the whole view (may_own_canvas).
-        ok = f_props_drawn_in_place(&changes[i]) && f_map_get(&now->first, node) != NULL &&
-             !may_own_canvas(now, node) && f_map_put(&changed, node, &changes[i]);
+        said->prop = f_props_placed(&changes[i]);
+        said->why = said->prop >= 0                         ? FLOW_PARTS_PLACED
+                    : f_map_get(&now->first, node) == NULL  ? FLOW_PARTS_NO_BOX
+                    : may_own_canvas(now, node)             ? FLOW_PARTS_CANVAS
+                    : !f_map_put(&changed, node, &changes[i]) ? FLOW_PARTS_MEMORY
+                                                            : FLOW_PARTS_MARKED;
+        if (said->why != FLOW_PARTS_MARKED && said->why != FLOW_PARTS_MEMORY)
+            said->node = node;
         any = true;
     }
-    if (ok && any)
-        ok = parts_in(was, &changed, scroll, mark, ctx) && parts_in(now, &changed, scroll, mark, ctx);
+    if (said->why == FLOW_PARTS_MARKED && any) {
+        said->why = parts_in(was, &changed, scroll, mark, ctx);
+        if (said->why == FLOW_PARTS_MARKED)
+            said->why = parts_in(now, &changed, scroll, mark, ctx);
+    }
     f_map_free(&changed);
     os64_free(changes);
-    return ok;
+    return said->why == FLOW_PARTS_MARKED;
 }
