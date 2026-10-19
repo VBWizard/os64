@@ -174,9 +174,9 @@ override ASFILES := $(shell find src -type f -name '*.S' | LC_ALL=C sort)
 override NASMFILES := $(shell find src -type f -name '*.asm' | LC_ALL=C sort)
 override OBJ := $(patsubst src/%,obj/%,$(SRC_CFILES:.c=.c.o) $(ASFILES:.S=.S.o) $(NASMFILES:.asm=.asm.o)) \
     $(patsubst test/%,obj/test/%,$(TEST_CFILES:.c=.c.o))
-override OBJ += obj/shared/decoration.c.o
+override OBJ += obj/shared/decoration.c.o obj/shared/copy_fill.c.o
 override HEADER_DEPS := $(patsubst src/%,obj/%,$(SRC_CFILES:.c=.c.d) $(ASFILES:.S=.S.d)) \
-    $(patsubst test/%,obj/test/%,$(TEST_CFILES:.c=.c.d)) obj/shared/decoration.c.d
+    $(patsubst test/%,obj/test/%,$(TEST_CFILES:.c=.c.d)) obj/shared/decoration.c.d obj/shared/copy_fill.c.d
 
 
 # Default target.

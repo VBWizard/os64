@@ -1,6 +1,7 @@
-// libos64's copy and fill (str.c) against a byte-by-byte reference: every
-// length to 300 at every alignment of both ends, the lengths either side of
-// each cutoff where the method changes, and memmove overlapping by every
+// The copy and fill (shared/copy_fill.c) against a byte-by-byte reference,
+// once per build, since ring 3 and the kernel change method at different
+// sizes: every length to 300 at every alignment of both ends, the lengths
+// either side of each build's cutoffs, and memmove overlapping by every
 // shift either way — each checked for the bytes it wrote, the bytes either
 // side it must not have, and the pointer it returns.
 #include <stddef.h>
@@ -98,8 +99,8 @@ int main(void)
             for (size_t b = 0; b < 16; b++)
                 copy_case(n, a, b);
     // Either side of where the method changes, and well past the last.
-    static const size_t kEdges[] = {2047, 2048, 2049, 4095, 4096, 4097, 131071, 131072, 131073,
-                                    200001, (size_t)1 << 20};
+    static const size_t kEdges[] = {511, 512, 513, 1535, 1536, 1537, 2047, 2048, 2049, 4095, 4096,
+                                    4097, 131071, 131072, 131073, 200001, (size_t)1 << 20};
     for (size_t k = 0; k < sizeof kEdges / sizeof *kEdges; k++)
         for (size_t a = 0; a < 16; a += 5)
             for (size_t b = 0; b < 16; b += 3) {
@@ -117,6 +118,12 @@ int main(void)
     for (size_t k = 0; k < sizeof kEdges / sizeof *kEdges; k++)
         for (long shift = -130; shift <= 130; shift += 13)
             move_case(kEdges[k], k, shift == 0 ? 1 : shift);
+    // Overlapping by less than a word, where a string copy that moves eight
+    // bytes a step reads what an earlier step of the same instruction wrote.
+    for (size_t k = 0; k < sizeof kEdges / sizeof *kEdges; k++)
+        for (long shift = -9; shift <= 9; shift++)
+            if (shift != 0)
+                move_case(kEdges[k], k, shift);
     printf("str: %d checks, %d failed\n", s_checks, s_failed);
     return s_failed != 0;
 }

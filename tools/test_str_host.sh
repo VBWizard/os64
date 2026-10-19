@@ -42,3 +42,16 @@ for flags in "-O1 -g -fsanitize=address,undefined -fno-sanitize-recover=all" "-O
     cc $flags -std=gnu11 -Wall -Wextra -Werror -o "$dir/test_str" tools/test_str_host.c "$dir/str-local.o"
     "$dir/test_str"
 done
+# And as the kernel builds them: copy_fill.c alone, with no SSE (so the
+# 16-byte moves are general-register pairs and the string instructions take
+# over at the kernel's own cutoffs), at -O0 and under the sanitizers.
+for flags in "-O0" "-O1 -g -fsanitize=address,undefined -fno-sanitize-recover=all"; do
+    # shellcheck disable=SC2086
+    cc $flags -std=gnu11 -Wall -Wextra -Werror -ffreestanding -mno-red-zone -mno-mmx -mno-sse -mno-sse2 \
+        -c shared/copy_fill.c -o "$dir/copy_fill.o"
+    objcopy --localize-symbol=memcpy --localize-symbol=memmove --localize-symbol=memset \
+        "$dir/copy_fill.o" "$dir/copy_fill-local.o"
+    # shellcheck disable=SC2086
+    cc $flags -std=gnu11 -Wall -Wextra -Werror -o "$dir/test_copy_fill" tools/test_str_host.c "$dir/copy_fill-local.o"
+    "$dir/test_copy_fill"
+done

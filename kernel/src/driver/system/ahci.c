@@ -539,6 +539,18 @@ printd(DEBUG_AHCI, "0x%08x\n", *address);
     printd(DEBUG_AHCI, "AHCI: SATA device found, name=%s\n", kBlockDeviceInfo[kBlockDeviceInfoCount - 1].ATADeviceModel);
 }
 
+// A copy of the controller's registers, read a dword at a time — the width
+// AHCI defines them in. memcpy is for memory (memcpy.h).
+_Static_assert(sizeof(HBA_MEM) % 4 == 0, "HBA_MEM is read in dwords");
+_Static_assert(sizeof(ahcicaps_t) % 4 == 0, "ahcicaps_t is read in dwords");
+static void ahci_snapshot(volatile void *dst, const volatile HBA_MEM *regs, size_t bytes)
+{
+	volatile uint32_t *to = dst;
+	const volatile uint32_t *from = (const volatile uint32_t *)regs;
+	for (size_t i = 0; i < bytes / 4; i++)
+		to[i] = from[i];
+}
+
 void init_AHCI_device(int device_index, bool function)
 {
     char buffer[150];
@@ -562,8 +574,8 @@ void init_AHCI_device(int device_index, bool function)
 	paging_map_pages((pt_entry_t*)kKernelPML4v, (uintptr_t)ahciABAR, (uintptr_t)ahciABAR , (ABARS_PAGE_COUNT * sizeof(HBA_MEM)) / PAGE_SIZE + 1,PAGE_PRESENT | PAGE_WRITE | PAGE_PCD);
 	//paging_map_page((pt_entry_t*)kKernelPML4v, kPCISATADevice.baseAdd[5],kPCISATADevice.baseAdd[5],PAGE_PRESENT | PAGE_WRITE | PAGE_PCD);
 	RELOAD_CR3
-	memcpy((void*)&kABARs[ahciHostCount++], (void*) ahciABAR, sizeof (HBA_MEM));
-	memcpy(&ahciCaps[ahciCapsCount++], (void*) ahciABAR, sizeof (ahcicaps_t));
+	ahci_snapshot(&kABARs[ahciHostCount++], ahciABAR, sizeof (HBA_MEM));
+	ahci_snapshot(&ahciCaps[ahciCapsCount++], ahciABAR, sizeof (ahcicaps_t));
 	if (!(ahciABAR->ghc.AE)) {
 		printd(DEBUG_AHCI,"switching to AHCI mode\n");
 		ahciABAR->ghc.AE=1;
