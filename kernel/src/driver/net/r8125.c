@@ -272,6 +272,7 @@ typedef struct
 	uint64_t last_rx_tick;    // when a frame last arrived
 	uint32_t tx_since_rx;         // frames sent since the last frame received
 	bool     stall_reported;      // one-shot, so a dead wire cannot flood the log
+	r8125_stall_t stall_kind;     // which verdict was reported — the recovery line says what healed, no more
 	// The transmit ring-full notice has its OWN one-shot, because it is a
 	// different event with a different recovery: the ring fills when the
 	// producer outruns the wire for a moment, and the next reaped completion
@@ -960,6 +961,7 @@ static bool r8125_setup_rings(r8125_t* r)
 	r->last_rx_tick = kTicksSinceStart;
 	r->tx_since_rx = 0;
 	r->stall_reported = false;
+	r->stall_kind = R8125_STALL_NONE;
 	r->tx_full_reported = false;
 	r->isr_acks = 0;
 	r->isr_last = 0;
@@ -1318,6 +1320,7 @@ static void r8125_check_stalled(r8125_t* r)
 	if (wedged && !r->stall_reported)
 	{
 		r->stall_reported = true;
+		r->stall_kind = verdict;
 		printd(DEBUG_EXCEPTIONS,
 		       "r8125: NETWORK STALLED — %s. "
 		       "tx_next=%u tx_clean=%u rx_cursor=%u (rings of %u/%u), "
@@ -1340,9 +1343,17 @@ static void r8125_check_stalled(r8125_t* r)
 	{
 		// Recovery deserves a line too: a log that records only the fall
 		// leaves the reader unable to tell a machine that healed from one
-		// that is still broken and merely quiet.
+		// that is still broken and merely quiet. It claims only what cleared
+		// the verdict that was reported: a wedge clears when the device
+		// completes (nothing here has seen an arrival), a deafness clears
+		// when a frame arrives (that is the only thing that resets the
+		// count). One line that said both would be half invented.
 		r->stall_reported = false;
-		printd(DEBUG_EXCEPTIONS, "r8125: network recovered — frames are completing and arriving again.\n");
+		printd(DEBUG_EXCEPTIONS, "r8125: network recovered — %s.\n",
+		       r->stall_kind == R8125_STALL_TX_WEDGED
+		           ? "the device is completing transmit descriptors again"
+		           : "frames are arriving again");
+		r->stall_kind = R8125_STALL_NONE;
 	}
 }
 
