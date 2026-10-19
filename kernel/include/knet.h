@@ -38,22 +38,27 @@ extern volatile uint64_t kKnetWakeCyclesMax;
 //                    BSP, knet waits behind whatever the BSP is running.
 //                    `Samples` is the average's denominator; the two "late"
 //                    counts are samples over a millisecond and over ten.
-//   SERVICE latency  the ring landed while this loop was already running
+//   RESPONSE latency the ring landed while this loop was already running
 //                    (a drain, the timers, the budget's self-ring) and
-//                    waited on the loop itself: how long the drain IS, not
-//                    how late it was scheduled.
+//                    waited for the loop to come round: the loop's own
+//                    work PLUS any time it spent preempted on the way —
+//                    wall time, like wake_cycles_max. Neither number
+//                    separates knet's CPU time from time it spent runnable
+//                    and off the CPU; that split needs the thread's CPU
+//                    accounting and is not measured here.
 //
-// A NIC's rx_overruns climbing beside wake late_10ms means knet was
-// scheduled late; beside service late_10ms, that the drain itself outlasts
-// the ring (wake_cycles_max says by how much).
+// A NIC's rx_overruns climbing beside wake late_10ms means a parked knet
+// was scheduled late; beside response late_10ms, that a running knet took
+// that long to come round, by its own work or by being preempted. Either
+// way the BSP is the contended resource (DEBTS, the home-core row).
 extern volatile uint64_t kKnetWakeLatencyMax;
 extern volatile uint64_t kKnetWakeLatencySamples;
 extern volatile uint64_t kKnetWakeLatencyTotal;
 extern volatile uint64_t kKnetWakeLatencyLate1ms;
 extern volatile uint64_t kKnetWakeLatencyLate10ms;
-extern volatile uint64_t kKnetServiceLatencySamples;
-extern volatile uint64_t kKnetServiceLatencyMax;
-extern volatile uint64_t kKnetServiceLatencyLate10ms;
+extern volatile uint64_t kKnetResponseLatencySamples;
+extern volatile uint64_t kKnetResponseLatencyMax;
+extern volatile uint64_t kKnetResponseLatencyLate10ms;
 
 // The daemon's body. task.c gives the "/knet" builtin this entry point.
 void knet_thread(void);

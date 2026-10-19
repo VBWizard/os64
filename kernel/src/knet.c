@@ -33,9 +33,9 @@ volatile uint64_t kKnetWakeLatencySamples;
 volatile uint64_t kKnetWakeLatencyTotal;
 volatile uint64_t kKnetWakeLatencyLate1ms;
 volatile uint64_t kKnetWakeLatencyLate10ms;
-volatile uint64_t kKnetServiceLatencySamples;
-volatile uint64_t kKnetServiceLatencyMax;
-volatile uint64_t kKnetServiceLatencyLate10ms;
+volatile uint64_t kKnetResponseLatencySamples;
+volatile uint64_t kKnetResponseLatencyMax;
+volatile uint64_t kKnetResponseLatencyLate10ms;
 
 // The nap between rings. The tick rings it once a tick, so this is never the
 // cadence anything runs at; it is the backstop for a ring that lands in the
@@ -88,9 +88,10 @@ void knet_thread(void)
 		// park SLEPT waited on the scheduler — the wake, the pick, the run —
 		// and that is wake latency. A ring answered without a sleep landed
 		// while this loop was already running (a drain, the timers, the
-		// budget's own self-ring) and waited on this loop: service latency,
-		// which says how long the drain is, not how late it was scheduled.
-		// Lumping them would let a slow drain read as a late schedule.
+		// budget's own self-ring) and waited for the loop to come round:
+		// response latency — the loop's work plus any preemption of it,
+		// wall time. Lumping them would let a long loop read as a late
+		// wake; the split does not go further than that (knet.h).
 		bool rung = kNetDoorbell.rung;
 		uint64_t stamp = kNetDoorbell.rung_stamp;
 		kNetDoorbell.rung = false;
@@ -113,11 +114,11 @@ void knet_thread(void)
 			}
 			else
 			{
-				kKnetServiceLatencySamples++;
-				if (waited > kKnetServiceLatencyMax)
-					kKnetServiceLatencyMax = waited;
+				kKnetResponseLatencySamples++;
+				if (waited > kKnetResponseLatencyMax)
+					kKnetResponseLatencyMax = waited;
 				if (waited > kCPUCyclesPerSecond / 100)
-					kKnetServiceLatencyLate10ms++;
+					kKnetResponseLatencyLate10ms++;
 			}
 		}
 

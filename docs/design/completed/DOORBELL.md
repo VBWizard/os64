@@ -310,12 +310,15 @@ times only stamps its own core made, subtracting modulo 2^56) and knet reads
 the stamp at the top of the loop that answers it, splitting the samples by
 what the ring waited on. `wake_latency_*` (samples, max, average, over 1 ms,
 over 10 ms) is the rings answered after the park had SLEPT — the wait was
-the scheduler's. `service_latency_*` (samples, max, over 10 ms) is the rings
-that landed while knet's loop was already running — the wait was the drain's
-own length. Read them beside a NIC's `rx_overruns`: climbing with wake
-`late_10ms` means the drainer was scheduled late, and the home-core row in
-DEBTS is the answer; climbing with service `late_10ms` means the drain
-itself outlasts the ring, and `wake_cycles_max` says by how much.
+the scheduler's. `response_latency_*` (samples, max, over 10 ms) is the rings
+that landed while knet's loop was already running — the wait was the loop
+coming round, its own work plus any preemption of it on the way, wall time
+like `wake_cycles_max`. Neither number separates knet's CPU time from time
+it spent runnable and off the CPU; that needs the thread's CPU accounting.
+Read them beside a NIC's `rx_overruns`: climbing with wake `late_10ms` means
+a parked drainer was scheduled late; with response `late_10ms`, that a
+running one took that long to come round. Either way the BSP is the
+contended resource, and the home-core row in DEBTS is the answer.
 
 **The per-frame wake, measured.** A 4MB download is ~2,900 frames and cost
 2,509 wakes; the upload ~2,740 segments and 4,281 wakes. That is a top half
