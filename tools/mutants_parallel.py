@@ -59,7 +59,8 @@ also out of the terminal's reach, so stopping the run is the runner's job:
 Ctrl-C, Ctrl-\\, a kill or a closed terminal (every signal that would end it
 but SIGKILL, which nothing can catch) kills every group it started
 (baselines included), no worker starts another, and each finishes moving its
-logs and removing its copy before the run exits without a summary.
+logs and removing its copy before the run exits without a summary. Ctrl-Z
+stops the groups with the runner, and continuing it continues them.
 
 HOST_BUILD_JOBS (tools/host_build.sh) is set to --jobs in every worker, so
 twenty workers compiling at once do not ask for twenty machines.
@@ -312,17 +313,48 @@ def interrupted(signum, frame):
     raise KeyboardInterrupt
 
 
-# Every signal whose default would end the runner (SIGPIPE's Python already
-# ignores) stops the run the same way: every group it started is killed
-# (stop_all), and the workers, which start nothing more, finish moving their
-# logs and removing their copies. From before the first job is submitted, so
-# no window lets the pool's shutdown wait out jobs nobody stopped. SIGKILL is
-# the one that cannot be caught: it leaves the groups running.
-STOP_SIGNALS = ('SIGINT', 'SIGTERM', 'SIGHUP', 'SIGQUIT', 'SIGUSR1', 'SIGUSR2', 'SIGALRM',
-                'SIGVTALRM', 'SIGPROF', 'SIGXCPU', 'SIGXFSZ')
-for name in STOP_SIGNALS:
-    if hasattr(signal, name):
-        signal.signal(getattr(signal, name), interrupted)
+def suspended(signum, frame):
+    """Ctrl-Z: the groups are out of the terminal's reach, so the runner
+    stops them before it stops itself, and continues them when it is
+    continued."""
+    with LIVE_LOCK:
+        groups = list(LIVE)
+    for g in groups:
+        try:
+            os.killpg(g, signal.SIGSTOP)
+        except ProcessLookupError:
+            pass
+    os.kill(os.getpid(), signal.SIGSTOP)
+    with LIVE_LOCK:
+        groups = list(LIVE)
+    for g in groups:
+        try:
+            os.killpg(g, signal.SIGCONT)
+        except ProcessLookupError:
+            pass
+
+
+# Every signal that would end the runner stops the run the same way: every
+# group it started is killed (stop_all), and the workers, which start nothing
+# more, finish moving their logs and removing their copies. From before the
+# first job is submitted, so no window lets the pool's shutdown wait out jobs
+# nobody stopped. The set is every signal the platform has but these, so a
+# signal this list never heard of is covered too:
+NOT_STOPS = {
+    'SIGKILL', 'SIGSTOP',                       # nothing can catch them; SIGKILL leaves the groups running
+    'SIGCHLD', 'SIGCONT', 'SIGURG', 'SIGWINCH',  # their default ends nothing
+    'SIGTSTP', 'SIGTTIN', 'SIGTTOU',            # job control: SIGTSTP is suspended()'s
+    'SIGPIPE',                                  # Python ignores it (a closed pipe is an OSError)
+    'SIGSEGV', 'SIGBUS', 'SIGFPE', 'SIGILL',    # the interpreter's own faults: no handler of
+}                                               # Python's can run after one
+for sig in signal.valid_signals():
+    try:
+        name = signal.Signals(sig).name
+    except ValueError:      # a real-time signal between SIGRTMIN and SIGRTMAX has no name
+        name = None
+    if name not in NOT_STOPS:
+        signal.signal(sig, interrupted)
+signal.signal(signal.SIGTSTP, suspended)
 results = []
 with concurrent.futures.ThreadPoolExecutor(max_workers=len(jobs)) as pool:
     try:
