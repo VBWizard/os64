@@ -168,7 +168,11 @@ static inline uint16_t r8125_ring_next(uint16_t index, uint16_t count)
 // and the counters; this decides.
 //
 //   TX_WEDGED  descriptors are outstanding and none has completed for
-//              longer than stall_ticks. The device has stopped.
+//              longer than stall_ticks. The device has stopped. The clock
+//              is the TRANSMIT engine's alone — arrivals do not reset it,
+//              or a transmit engine dead beside a live receive engine (the
+//              one-sided death this verdict exists for) would never expire
+//              it.
 //   DEAF       at least deaf_frames went out since the last arrival AND
 //              nothing has arrived for longer than stall_ticks. Both halves
 //              are load-bearing: silence on an idle machine is not a fault,
@@ -182,7 +186,7 @@ typedef enum
 	R8125_STALL_DEAF,
 } r8125_stall_t;
 
-r8125_stall_t r8125_stall_verdict(bool tx_outstanding, uint64_t ticks_since_progress,
+r8125_stall_t r8125_stall_verdict(bool tx_outstanding, uint64_t ticks_since_completion,
                                   uint32_t tx_since_rx, uint64_t ticks_since_rx,
                                   uint64_t stall_ticks, uint32_t deaf_frames);
 

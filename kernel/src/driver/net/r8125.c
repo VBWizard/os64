@@ -262,8 +262,12 @@ typedef struct
 	//               between arrivals as a matter of course. The rule itself
 	//               is r8125_stall_verdict (r8125_ring.c, host-tested).
 	uint64_t tx_completions;      // total descriptors reaped, ever
-	uint64_t last_progress_tick;  // when a completion or an arrival last happened
-	uint64_t last_rx_tick;        // when a frame last arrived
+	// Two clocks, one per direction, and they must not be merged: a wedged
+	// transmit engine beside a live receive engine is exactly the one-sided
+	// death TX WEDGED exists to name, and a clock that arrivals also reset
+	// would never let it expire.
+	uint64_t last_tx_completion_tick;   // when the device last completed a descriptor
+	uint64_t last_rx_tick;              // when a frame last arrived
 	uint32_t tx_since_rx;         // frames sent since the last frame received
 	bool     stall_reported;      // one-shot, so a dead wire cannot flood the log
 	// The transmit ring-full notice has its OWN one-shot, because it is a
@@ -950,7 +954,7 @@ static bool r8125_setup_rings(r8125_t* r)
 	// already zero (s_r8125 is static) and is written anyway, because a
 	// driver that can be re-initialized should not depend on that.
 	r->tx_completions = 0;
-	r->last_progress_tick = kTicksSinceStart;
+	r->last_tx_completion_tick = kTicksSinceStart;
 	r->last_rx_tick = kTicksSinceStart;
 	r->tx_since_rx = 0;
 	r->stall_reported = false;
@@ -1014,7 +1018,7 @@ static uint16_t r8125_reap_locked(r8125_t* r)
 	if (reaped == 0)
 		return 0;
 	r->tx_completions += reaped;
-	r->last_progress_tick = kTicksSinceStart;
+	r->last_tx_completion_tick = kTicksSinceStart;
 	if (r->tx_full_reported)
 	{
 		// A completion is the proof the ring-full notice was waiting for:
@@ -1068,21 +1072,24 @@ static int32_t r8125_transmit(struct net_device* dev, const void* frame, uint16_
 		// watchdog's alone. DEBUG_EXCEPTIONS because it is always lit
 		// (CONFIG.h's ruling), and one-shot because a stuck ring would
 		// otherwise write this line for every packet the stack still
-		// hopefully hands down.
-		bool first = !r->tx_full_reported;
-		r->tx_full_reported = true;
-		uint64_t completions = r->tx_completions;
-		uint16_t next = r->tx_next, clean = r->tx_clean;
-		spinlock_release_irqrestore(&r->lock, flags);
-		r->netdev.tx_errors++;
-		if (first)
+		// hopefully hands down. Printed UNDER the lock, like the recovery
+		// line in r8125_reap_locked: the flag and its line are one act, so a
+		// reaper on another core cannot log the recovery before this notice
+		// has been written — a log that said "draining again" before "full"
+		// would read as nonsense exactly when it was needed.
+		if (!r->tx_full_reported)
+		{
+			r->tx_full_reported = true;
 			printd(DEBUG_EXCEPTIONS,
 			       "r8125: TRANSMIT RING FULL — a frame was dropped for TCP to resend. "
 			       "tx_next=%u tx_clean=%u of %u, %lu completions since boot, %lu frames sent. "
 			       "A draining-again line within a tick means the producer outran the wire; "
 			       "none, then NETWORK STALLED, means the device stopped completing.\n",
-			       next, clean, (unsigned)R8125_TX_DESCS,
-			       completions, r->netdev.tx_frames);
+			       r->tx_next, r->tx_clean, (unsigned)R8125_TX_DESCS,
+			       r->tx_completions, r->netdev.tx_frames);
+		}
+		spinlock_release_irqrestore(&r->lock, flags);
+		r->netdev.tx_errors++;
 		return -1;   // ring full — the caller's to retry, and it is counted
 	}
 
@@ -1293,7 +1300,7 @@ static void r8125_check_stalled(r8125_t* r)
 {
 	uint64_t now = kTicksSinceStart;
 	r8125_stall_t verdict = r8125_stall_verdict(
-		r->tx_clean != r->tx_next, now - r->last_progress_tick,
+		r->tx_clean != r->tx_next, now - r->last_tx_completion_tick,
 		r->tx_since_rx, now - r->last_rx_tick,
 		R8125_STALL_TICKS, R8125_DEAF_FRAMES);
 	bool wedged = verdict != R8125_STALL_NONE;
@@ -1411,7 +1418,6 @@ bool r8125_drain(struct net_device* dev)
 		// Something arrived: the wire is alive in the direction that matters
 		// most for noticing it is not.
 		r->tx_since_rx = 0;
-		r->last_progress_tick = kTicksSinceStart;
 		r->last_rx_tick = kTicksSinceStart;
 		moved = true;
 	}
