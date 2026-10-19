@@ -257,8 +257,43 @@ static void allocation_failures(void)
     fail_allocation=0;os64_monitor_destroy(NULL);
     const os64_monitor_snapshot_t *s=(void*)1;assert(os64_monitor_sample(NULL,false,&s)<0 && !s);
 }
+
+static void task_events(void)
+{
+    setup();
+    os64_monitor_t *m=os64_monitor_create(4,4,4);
+    os64_monitor_task_events_t e;
+    assert(!os64_monitor_task_events(m,1,&e));
+    tasks[0].switches=100;tasks[0].minor_faults=50;tasks[0].major_faults=10;
+    sample(m,false);
+    assert(os64_monitor_task_events(m,1,&e) && !e.valid);
+    advance();tasks[0].switches+=17;tasks[0].minor_faults+=3;
+    reverse_order=true;sample(m,false);
+    assert(os64_monitor_task_events(m,1,&e) && e.valid && e.switches==17 && e.minor_faults==3 && !e.major_faults);
+    assert(os64_monitor_task_events(m,1,&e) && e.valid && e.switches==17);
+    assert(!os64_monitor_task_events(m,999,&e));
+    advance();tasks[0].major_faults=0;sample(m,false);
+    assert(os64_monitor_task_events(m,1,&e) && !e.valid);
+    advance();sample(m,false);
+    assert(os64_monitor_task_events(m,1,&e) && e.valid && !e.switches);
+    tasks[0].runtime_us=0;sample(m,false);
+    assert(os64_monitor_task_events(m,1,&e) && !e.valid);
+    tasks[0].name[0]=0;advance();sample(m,false);
+    assert(!os64_monitor_task_events(m,1,&e));
+    strcpy(tasks[0].name,"worker");advance();sample(m,false);
+    assert(os64_monitor_task_events(m,1,&e) && !e.valid);
+    fail_proc=true;const os64_monitor_snapshot_t *s;
+    assert(os64_monitor_sample(m,false,&s)<0);
+    assert(!os64_monitor_task_events(m,1,&e));
+    fail_proc=false;advance();sample(m,false);
+    assert(os64_monitor_task_events(m,1,&e) && !e.valid);
+    advance();sample(m,false);
+    assert(os64_monitor_task_events(m,1,&e) && e.valid);
+    assert(!os64_monitor_task_events(NULL,1,&e) && !os64_monitor_task_events(m,1,NULL));
+    os64_monitor_destroy(m);
+}
 int main(void)
 {
-    independent_consumers();gaps_and_resets();optional_sources();rounding_and_clocks();allocation_failures();
+    independent_consumers();gaps_and_resets();optional_sources();rounding_and_clocks();allocation_failures();task_events();
     assert(!live_allocations && !open_handles);puts("monitor: independent consumers, lifecycle, clocks, parsing, bounds and 1000 rounding intervals PASS");
 }
