@@ -178,11 +178,15 @@ static inline uint16_t r8125_ring_next(uint16_t index, uint16_t count)
 //              keeps the first frame after an idle spell from reading as two
 //              seconds of silence.
 //   DEAF       at least deaf_frames went out since the last arrival AND
-//              nothing has arrived for longer than stall_ticks. Both halves
-//              are load-bearing: silence on an idle machine is not a fault,
-//              and neither is a run of frames between two arrivals — a
-//              server streaming to a peer that coalesces its ACKs sends a
-//              hundred frames per arrival as a matter of course.
+//              the first of them went out longer than stall_ticks ago
+//              (ticks_since_silence: the driver's clock starts with the
+//              first frame SENT into the silence, not with the last
+//              arrival, so the burst that ends an idle spell gets its two
+//              seconds for an answer). Both halves are load-bearing:
+//              silence on an idle machine is not a fault, and neither is a
+//              run of frames between two arrivals — a server streaming to
+//              a peer that coalesces its ACKs sends a hundred frames per
+//              arrival as a matter of course.
 typedef enum
 {
 	R8125_STALL_NONE = 0,
@@ -191,7 +195,7 @@ typedef enum
 } r8125_stall_t;
 
 r8125_stall_t r8125_stall_verdict(bool tx_outstanding, uint64_t ticks_since_tx_clock,
-                                  uint32_t tx_since_rx, uint64_t ticks_since_rx,
+                                  uint32_t tx_since_rx, uint64_t ticks_since_silence,
                                   uint64_t stall_ticks, uint32_t deaf_frames);
 
 #endif // R8125_RING_H

@@ -618,6 +618,11 @@ static void test_stall_deaf_needs_count_and_time(void)
 	// Exactly the limit is not past it: the rule is "longer than".
 	CHECK(r8125_stall_verdict(false, 0, 5000, STALL_TICKS, STALL_TICKS, DEAF_FRAMES) == R8125_STALL_NONE,
 	      "silence equal to the limit is not yet a stall");
+	// The burst that ends an idle spell: 64 frames in a millisecond after
+	// two idle seconds. The driver's deaf clock started with the first of
+	// them, so the verdict sees one tick of silence, not two seconds.
+	CHECK(r8125_stall_verdict(false, 0, DEAF_FRAMES, 1, STALL_TICKS, DEAF_FRAMES) == R8125_STALL_NONE,
+	      "a burst into an idle link is given its time to be answered");
 	// Completions keep arriving (progress) but no frames do: still deaf —
 	// deaf is about arrivals, not about the transmit side moving.
 	CHECK(r8125_stall_verdict(true, 0, 5000, 5000, STALL_TICKS, DEAF_FRAMES) == R8125_STALL_DEAF,

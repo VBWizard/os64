@@ -269,7 +269,11 @@ typedef struct
 	// and when the first descriptor is handed to an empty ring — the moment
 	// there is something to wait for — and on nothing else.
 	uint64_t tx_clock_tick;   // the transmit watchdog's window start (see above)
-	uint64_t last_rx_tick;    // when a frame last arrived
+	uint64_t last_rx_tick;    // when a frame last arrived (the stall line reports it)
+	// The deaf clock starts with the first frame SENT into the silence, not
+	// with the silence itself: an idle link has nothing to receive, and the
+	// burst that ends the idle spell must get its two seconds for an answer.
+	uint64_t deaf_clock_tick; // when tx_since_rx last went 0 -> 1
 	uint32_t tx_since_rx;         // frames sent since the last frame received
 	bool     stall_reported;      // one-shot, so a dead wire cannot flood the log
 	r8125_stall_t stall_kind;     // which verdict was reported — the recovery line says what healed, no more
@@ -959,6 +963,7 @@ static bool r8125_setup_rings(r8125_t* r)
 	r->tx_completions = 0;
 	r->tx_clock_tick = kTicksSinceStart;
 	r->last_rx_tick = kTicksSinceStart;
+	r->deaf_clock_tick = kTicksSinceStart;
 	r->tx_since_rx = 0;
 	r->stall_reported = false;
 	r->stall_kind = R8125_STALL_NONE;
@@ -1128,7 +1133,9 @@ static int32_t r8125_transmit(struct net_device* dev, const void* frame, uint16_
 
 	r->netdev.tx_frames++;
 	r->netdev.tx_bytes += length;
-	r->tx_since_rx++;   // reset by the receive path; see the DEAF check in poll
+	if (r->tx_since_rx == 0)
+		r->deaf_clock_tick = kTicksSinceStart;   // the first frame into the silence starts the deaf clock
+	r->tx_since_rx++;   // reset by the receive path; see the DEAF check in the drain
 	spinlock_release_irqrestore(&r->lock, flags);
 	return 0;
 }
@@ -1313,7 +1320,7 @@ static void r8125_check_stalled(r8125_t* r)
 	uint64_t now = kTicksSinceStart;
 	r8125_stall_t verdict = r8125_stall_verdict(
 		r->tx_clean != r->tx_next, now - r->tx_clock_tick,
-		r->tx_since_rx, now - r->last_rx_tick,
+		r->tx_since_rx, now - r->deaf_clock_tick,
 		R8125_STALL_TICKS, R8125_DEAF_FRAMES);
 	bool wedged = verdict != R8125_STALL_NONE;
 
@@ -1339,7 +1346,7 @@ static void r8125_check_stalled(r8125_t* r)
 		       r->isr_acks, r->isr_last, r->isr_overrun_events,
 		       r->msi ? "MSI" : "tick-driven", r->msi_fires, r->msi_spurious);
 	}
-	else if (!wedged && r->stall_reported && r->tx_clean == r->tx_next)
+	else if (!wedged && r->stall_reported)
 	{
 		// Recovery deserves a line too: a log that records only the fall
 		// leaves the reader unable to tell a machine that healed from one
@@ -1347,7 +1354,10 @@ static void r8125_check_stalled(r8125_t* r)
 		// the verdict that was reported: a wedge clears when the device
 		// completes (nothing here has seen an arrival), a deafness clears
 		// when a frame arrives (that is the only thing that resets the
-		// count). One line that said both would be half invented.
+		// count). One line that said both would be half invented. The
+		// verdict clearing IS the recovery — it is not made to wait for an
+		// empty ring, which a busy stream never offers, and which would have
+		// left the one-shot armed through every later stall.
 		r->stall_reported = false;
 		printd(DEBUG_EXCEPTIONS, "r8125: network recovered — %s.\n",
 		       r->stall_kind == R8125_STALL_TX_WEDGED
