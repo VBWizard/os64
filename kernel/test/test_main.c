@@ -56,6 +56,7 @@
 
 extern bool test_window_minimum_clamp(void);
 extern bool test_window_opacity(void);
+extern bool test_surface_blit(void);
 extern volatile uint64_t kTicksSinceStart;
 extern volatile uint64_t kPageFaultCount;
 extern task_t *kKernelTask;
@@ -6028,6 +6029,7 @@ static bool test_backstop_preemption(void)
 static void register_builtin_tests(void)
 {
     test_register("window_minimum_clamp", test_window_minimum_clamp, TEST_PHASE_PREBOOT);
+    test_register("surface_blit", test_surface_blit, TEST_PHASE_PREBOOT);
 	test_register("kmalloc_not_null", test_kmalloc_not_null, TEST_PHASE_PREBOOT);
 	test_register("frame_table_scale", test_frame_table_scale, TEST_PHASE_PREBOOT);
 	test_register("allocator_try_refuses", test_allocator_try_refuses, TEST_PHASE_PREBOOT);
