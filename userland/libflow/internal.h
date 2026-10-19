@@ -365,10 +365,11 @@ bool f_motion_changed_props(const FMotion *m, const flow_style_t *a, const flow_
 // Whether every longhand has one value in `a` and in `b`, as the motion
 // compares them (f_motion_changed).
 bool f_styles_same(const flow_style_t *a, const flow_style_t *b);
-// Whether every property in `props` is drawn where its element already
-// draws: the in-place class (f_motion_in_place) or the tick set
-// (f_motion_ticks), whose frames a tick marks without a layout.
-bool f_props_drawn_in_place(const FProps *props);
+// The first property in `props` that is not drawn where its element already
+// draws — that is, neither in the in-place class (f_motion_in_place) nor in
+// the tick set (f_motion_ticks), whose frames a tick marks without a
+// layout — as a garb_prop_t; -1 when every one is.
+int32_t f_props_placed(const FProps *props);
 // Every property `m`'s animations set taken from `worked` into `live`,
 // each as a keyframe's discrete value is taken (its fields, and the
 // currentColor it holds).

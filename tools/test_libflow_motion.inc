@@ -3776,48 +3776,65 @@ static bool marks_node(const TickMarks *k, const os64_html_node_t *node, os64_gu
 // boxes drawn outside it that take what changed — by the rule the view's
 // question asks (stacked_from); nothing for a value holding still; and no
 // parts at all where a layout placed something, the canvas may take the
-// background, or the element has no box of its own.
+// background, or the element has no box of its own — each refusal said
+// with its reason (`why`), and the element and property that refused.
 static void motion_layout_part_cases(void)
 {
     static const struct {
         const char *name, *style, *body, *id;
         bool bounded, marks;
+        flow_parts_why_t why;
     } kParts[] = {
         {"layout parts: a text shadow marks its element", "@keyframes a{to{text-shadow:0 -10px 0 red}}",
-         "<div id=x style='animation:a 1s linear'>x</div>", "x", true, true},
+         "<div id=x style='animation:a 1s linear'>x</div>", "x", true, true, FLOW_PARTS_MARKED},
         {"layout parts: a colour marks its element", "@keyframes a{to{color:red}}",
-         "<div id=x style='animation:a 1s linear'>x</div>", "x", true, true},
+         "<div id=x style='animation:a 1s linear'>x</div>", "x", true, true, FLOW_PARTS_MARKED},
         {"layout parts: a turning element marks its group, what it holds drawn outside it included",
          "@keyframes a{to{transform:rotate(90deg)}}",
          "<div id=x style='animation:a 1s linear'><p style='position:absolute;left:400px;margin:0'>x</p></div>",
-         "x", true, true},
+         "x", true, true, FLOW_PARTS_MARKED},
         {"layout parts: a fading element marks its group, what it holds drawn outside it included",
          "@keyframes a{to{opacity:.3}}",
          "<div id=x style='animation:a 1s linear'><p style='position:absolute;left:400px;margin:0'>x</p></div>",
-         "x", true, true},
+         "x", true, true, FLOW_PARTS_MARKED},
         {"layout parts: a fixed box inside takes an inherited colour",
          "@keyframes a{to{color:red}}",
          "<div style='margin-top:200px;animation:a 1s linear'><p id=x style='position:fixed;top:0;margin:0'>x</p></div>",
-         "x", true, true},
+         "x", true, true, FLOW_PARTS_MARKED},
         {"layout parts: a positioned box inside takes a background by keyword",
          "@keyframes a{to{background-color:blue}}",
          "<div style='position:relative;margin-top:200px;animation:a 1s linear'>"
          "<p id=x style='position:absolute;top:-150px;margin:0;background:inherit'>x</p></div>",
-         "x", true, true},
+         "x", true, true, FLOW_PARTS_MARKED},
         {"layout parts: one with a background of its own takes nothing",
          "@keyframes a{to{background-color:blue}}",
          "<div style='position:relative;margin-top:200px;animation:a 1s linear'>"
          "<p id=x style='position:absolute;top:-150px;margin:0;background:green'>x</p></div>",
-         "x", true, false},
+         "x", true, false, FLOW_PARTS_MARKED},
         {"layout parts: nothing for a value holding still", "@keyframes a{to{color:red}}",
-         "<div id=x style='animation:a 1s steps(1,end)'>x</div>", "x", true, false},
-        {"layout parts: none where a layout places what changed", "@keyframes a{to{width:300px}}",
-         "<div id=x style='animation:a 1s linear'>x</div>", "x", false, false},
+         "<div id=x style='animation:a 1s steps(1,end)'>x</div>", "x", true, false, FLOW_PARTS_MARKED},
+        {"layout parts: none where what changed moved the element's box", "@keyframes a{to{width:300px}}",
+         "<div id=x style='animation:a 1s linear'>x</div>", "x", false, false, FLOW_PARTS_MOVED},
+        {"layout parts: none where a layout places what changed, though nothing moved yet",
+         "@keyframes a{to{z-index:9}}",
+         "<div id=x style='position:relative;z-index:1;animation:a 1s linear'>x</div>", "x", false, false,
+         FLOW_PARTS_PLACED},
         {"layout parts: none for the background the canvas takes",
          "@keyframes a{to{background-color:blue}}body{animation:a 1s linear}",
-         "<div id=x>x</div>", "x", false, false},
+         "<div id=x>x</div>", "x", false, false, FLOW_PARTS_CANVAS},
         {"layout parts: none for an element with no box of its own", "@keyframes a{to{color:red}}",
-         "<div id=x style='display:contents;animation:a 1s linear'><span>x</span></div>", "x", false, false},
+         "<div id=x style='display:contents;animation:a 1s linear'><span>x</span></div>", "x", false, false,
+         FLOW_PARTS_NO_BOX},
+        {"layout parts: none for an element with no box of its own around a bare text",
+         "@keyframes a{to{color:red}}",
+         "<div id=x style='display:contents;animation:a 1s linear'>x</div>", "x", false, false, FLOW_PARTS_NO_BOX},
+        {"layout parts: an element inside a button, which its widget draws instead, has nothing to mark",
+         "@keyframes a{to{transform:rotate(90deg)}}",
+         "<button><span id=x style='display:block;animation:a 1s linear'>x</span></button>", "x", true, false,
+         FLOW_PARTS_MARKED},
+        {"layout parts: an element under display:none has nothing to mark", "@keyframes a{to{color:red}}",
+         "<div style='display:none'><p id=x style='animation:a 1s linear'>x</p></div>", "x", true, false,
+         FLOW_PARTS_MARKED},
     };
     // Two trees of the page at two widths, its only change a colour drawn
     // in place: the boxes moved, so the compare refuses whatever changed.
@@ -3829,9 +3846,107 @@ static void motion_layout_part_cases(void)
         m.p.env.now_ms = 1300;
         flow_tree_t *narrow = flow_layout(m.p.doc, m.p.page, 300, &m.p.env);
         TickMarks k = {.n = 0};
-        expect("layout parts: none when the boxes moved",
-               narrow != NULL && !flow_layout_parts(m.tree, narrow, (flow_point_t){0, 0}, tick_mark, &k), NULL);
+        flow_parts_said_t said = {FLOW_PARTS_COUNT, NULL, 0};
+        expect("layout parts: none when the boxes moved, said so with a box that moved",
+               narrow != NULL && !flow_layout_parts(m.tree, narrow, (flow_point_t){0, 0}, tick_mark, &k, &said) &&
+                   said.why == FLOW_PARTS_MOVED && said.node != NULL && said.prop == -1,
+               NULL);
         flow_free(narrow);
+        moving_close(&m);
+    }
+    // A tree missing is a layout that stopped short, and a caller that asks
+    // no reason is answered all the same.
+    {
+        Moving m;
+        moving_open(&m, MOTION_STYLE "@keyframes a{to{color:red}}</style><div style='animation:a 1s linear'>x</div>",
+                    1000);
+        TickMarks k = {.n = 0};
+        flow_parts_said_t said = {FLOW_PARTS_COUNT, NULL, 0};
+        bool refused = !flow_layout_parts(NULL, m.tree, (flow_point_t){0, 0}, tick_mark, &k, &said) &&
+                       said.why == FLOW_PARTS_INCOMPLETE;
+        flow_tree_t *now = moving_beside(&m, 1300);
+        expect("layout parts: none for a tree missing, said as stopped short; NULL asks no reason",
+               refused && now != NULL && flow_layout_parts(m.tree, now, (flow_point_t){0, 0}, tick_mark, &k, NULL),
+               NULL);
+        flow_free(now);
+        moving_close(&m);
+    }
+    // One element scrolled in the old tree and not in the new: the boxes are
+    // alike but not where they show, said as scrolled, with the scroller.
+    {
+        Moving m;
+        moving_open(&m, MOTION_STYLE "@keyframes a{to{color:red}}</style>"
+                        "<div id=s style='overflow:auto;height:40px'><div style='height:400px;animation:a 1s linear'>"
+                        "x</div></div>", 1000);
+        const os64_html_node_t *s = motion_find(m.p.doc->document, "s");
+        int32_t i = flow_scroller_for(m.tree, s);
+        if (i >= 0)
+            flow_scroll_set(m.tree, i, (flow_point_t){0, 30});
+        flow_tree_t *now = moving_beside(&m, 1300);
+        TickMarks k = {.n = 0};
+        flow_parts_said_t said = {FLOW_PARTS_COUNT, NULL, 0};
+        bool bounded = now != NULL && flow_layout_parts(m.tree, now, (flow_point_t){0, 0}, tick_mark, &k, &said);
+        char detail[64];
+        snprintf(detail, sizeof(detail), "scroller %d bounded %d why %d", i, bounded, said.why);
+        expect("layout parts: none when a box scrolls elsewhere, said so with its scroller",
+               i >= 0 && now != NULL && !bounded && said.why == FLOW_PARTS_SCROLLED && said.node == s, detail);
+        flow_free(now);
+        moving_close(&m);
+    }
+    // A box that moves first in a box the page makes for no element (the
+    // anonymous block around a text beside a block) is named by the element
+    // holding it.
+    {
+        Moving m;
+        moving_open(&m, MOTION_STYLE "@keyframes a{to{font-size:40px}}</style>"
+                        "<div id=x style='height:300px'>a <span style='animation:a 1s linear'>w</span>"
+                        "<p>b</p></div>", 1000);
+        const os64_html_node_t *x = motion_find(m.p.doc->document, "x");
+        flow_tree_t *now = moving_beside(&m, 1300);
+        TickMarks k = {.n = 0};
+        flow_parts_said_t said = {FLOW_PARTS_COUNT, NULL, 0};
+        bool bounded = now != NULL && flow_layout_parts(m.tree, now, (flow_point_t){0, 0}, tick_mark, &k, &said);
+        char detail[64];
+        snprintf(detail, sizeof(detail), "bounded %d why %d named %d", bounded, said.why, said.node == x);
+        expect("layout parts: a box made for no element that moved is named by the element holding it",
+               x != NULL && now != NULL && !bounded && said.why == FLOW_PARTS_MOVED && said.node == x, detail);
+        flow_free(now);
+        moving_close(&m);
+    }
+    // A box that becomes positioned halfway (position is discrete) is a
+    // stacked box the old tree did not have: the trees paint in another
+    // number of layers.
+    {
+        Moving m;
+        moving_open(&m, MOTION_STYLE "@keyframes a{from{position:static}to{position:relative}}</style>"
+                        "<div style='animation:a 1s linear'>x</div>", 1000);
+        flow_tree_t *now = moving_beside(&m, 1800);
+        TickMarks k = {.n = 0};
+        flow_parts_said_t said = {FLOW_PARTS_COUNT, NULL, 0};
+        bool bounded = now != NULL && flow_layout_parts(m.tree, now, (flow_point_t){0, 0}, tick_mark, &k, &said);
+        char detail[48];
+        snprintf(detail, sizeof(detail), "bounded %d why %d", bounded, said.why);
+        expect("layout parts: none when the trees paint in another number of layers, said so",
+               now != NULL && !bounded && said.why == FLOW_PARTS_LAYERS, detail);
+        flow_free(now);
+        moving_close(&m);
+    }
+    // Two stacked boxes whose order an animated z-index swaps: the layers
+    // differ.
+    {
+        Moving m;
+        moving_open(&m, MOTION_STYLE "@keyframes a{to{z-index:9}}</style>"
+                        "<div style='position:relative;z-index:1;animation:a 1s linear'>x</div>"
+                        "<div style='position:relative;z-index:3'>y</div>", 1000);
+        flow_tree_t *now = moving_beside(&m, 1800);
+        TickMarks k = {.n = 0};
+        flow_parts_said_t said = {FLOW_PARTS_COUNT, NULL, 0};
+        bool bounded = now != NULL && flow_layout_parts(m.tree, now, (flow_point_t){0, 0}, tick_mark, &k, &said);
+        char detail[48];
+        snprintf(detail, sizeof(detail), "bounded %d why %d", bounded, said.why);
+        expect("layout parts: none when the stacking changed, said as other layers",
+               now != NULL && !bounded && said.why == FLOW_PARTS_LAYERS && said.node == NULL, detail);
+        flow_free(now);
         moving_close(&m);
     }
     for (size_t i = 0; i < sizeof(kParts) / sizeof(*kParts); i++) {
@@ -3841,13 +3956,24 @@ static void motion_layout_part_cases(void)
         moving_open(&m, html, 1000);
         flow_tree_t *now = moving_beside(&m, 1300);
         TickMarks k = {.n = 0};
-        bool bounded = now != NULL && flow_layout_parts(m.tree, now, (flow_point_t){0, 0}, tick_mark, &k);
+        flow_parts_said_t said = {FLOW_PARTS_COUNT, NULL, 0};
+        bool bounded = now != NULL && flow_layout_parts(m.tree, now, (flow_point_t){0, 0}, tick_mark, &k, &said);
+        const os64_html_node_t *x = motion_find(m.p.doc->document, kParts[i].id);
         os64_gui_rect_t joined = {0, 0, 0, 0};
-        bool marks = marks_node(&k, motion_find(m.p.doc->document, kParts[i].id), &joined);
-        char detail[96];
-        snprintf(detail, sizeof(detail), "bounded %d marks %d (%d marks, %dx%d at %d,%d)", bounded, marks,
-                 k.n, joined.w, joined.h, joined.x, joined.y);
+        bool marks = marks_node(&k, x, &joined);
+        char detail[128];
+        snprintf(detail, sizeof(detail), "bounded %d marks %d (%d marks, %dx%d at %d,%d) why %d prop %d", bounded,
+                 marks, k.n, joined.w, joined.h, joined.x, joined.y, said.why, said.prop);
         bool ok = bounded == kParts[i].bounded && (!kParts[i].bounded || marks == kParts[i].marks);
+        // What refused is said: the reason, the element whose change it was,
+        // and the property a layout places.
+        const os64_html_node_t *refuser = kParts[i].why == FLOW_PARTS_MARKED  ? NULL
+                                          : kParts[i].why == FLOW_PARTS_CANVAS ? said.node
+                                                                               : x;
+        ok = ok && said.why == kParts[i].why && said.node == refuser &&
+             said.prop == (kParts[i].why == FLOW_PARTS_PLACED ? (int32_t)GARB_Z_INDEX : -1);
+        if (ok && kParts[i].why == FLOW_PARTS_CANVAS)
+            ok = said.node != NULL && said.node->tag == OS64_HTML_TAG_BODY;
         // The parts of an element the size of a line are that size, not the view.
         if (ok && marks)
             ok = joined.h < 400;
@@ -3904,10 +4030,12 @@ static void motion_layout_part_depth_cases(void)
         moving_open(&m, html, 1000);
         flow_tree_t *now = moving_beside(&m, 1300);
         TickMarks k = {.n = 0};
-        bool bounded = now != NULL && flow_layout_parts(m.tree, now, (flow_point_t){0, 0}, tick_mark, &k);
+        flow_parts_said_t said = {FLOW_PARTS_COUNT, NULL, 0};
+        bool bounded = now != NULL && flow_layout_parts(m.tree, now, (flow_point_t){0, 0}, tick_mark, &k, &said);
         expect(d == 0 ? "layout parts: stacked boxes nested a few deep are bounded"
-                      : "layout parts: stacked boxes nested hundreds deep refuse, past the walk's budget",
-               now != NULL && bounded == (d == 0), NULL);
+                      : "layout parts: stacked boxes nested hundreds deep refuse, past the walk's budget, said so",
+               now != NULL && bounded == (d == 0) && said.why == (d == 0 ? FLOW_PARTS_MARKED : FLOW_PARTS_DEEP),
+               NULL);
         flow_free(now);
         moving_close(&m);
     }
@@ -3942,7 +4070,7 @@ static void motion_layout_part_oracle_cases(void)
         moving_open(&m, html, 1000);
         flow_tree_t *now = moving_beside(&m, 1300);
         TickMarks k = {.n = 0};
-        bool bounded = now != NULL && flow_layout_parts(m.tree, now, (flow_point_t){0, 0}, tick_mark, &k);
+        bool bounded = now != NULL && flow_layout_parts(m.tree, now, (flow_point_t){0, 0}, tick_mark, &k, NULL);
         int differ = 0, outside = 0;
         const flow_box_t *x = bounded ? flow_root(m.tree) : NULL, *y = bounded ? flow_root(now) : NULL;
         while (x != NULL && y != NULL) {

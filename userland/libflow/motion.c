@@ -2252,13 +2252,13 @@ bool f_styles_same(const flow_style_t *a, const flow_style_t *b)
     return true;
 }
 
-bool f_props_drawn_in_place(const FProps *props)
+int32_t f_props_placed(const FProps *props)
 {
     for (int p = 0; p < GARB_NPROPS; p++)
         if (f_props_has(props, (garb_prop_t)p) && !repaints_in_place((garb_prop_t)p) &&
             !ticks_in_place((garb_prop_t)p))
-            return false;
-    return true;
+            return p;
+    return -1;
 }
 
 bool f_motion_ticks(const FMotion *m)
