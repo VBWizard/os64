@@ -1,22 +1,23 @@
 #!/usr/bin/env python3
-"""One deliberate break at a time to libos64's copy and fill (str.c: the
-short moves from both ends, the passes and the ends read before them, the
-direction memmove picks, `rep movsb` and `rep stosb`), against
-tools/test_str_host.sh: a mutant is CAUGHT when it fails, MISSED when it
-passes, which means a test is missing and gets written. A build failure is
-neither.
+"""One deliberate break at a time to the copy and fill libos64 and the kernel
+share (shared/copy_fill.c: the short moves from both ends, the passes and
+the ends read before them, the direction memmove picks, `rep movsb` and
+`rep stosb`), against tools/test_str_host.sh, which runs both builds: a
+mutant is CAUGHT when it fails, MISSED when it passes, which means a test is
+missing and gets written. A build failure is neither.
 
 The shape is test_paint_cache_mutants.py's: each mutant is applied to the
-worktree's copy of str.c, the test is run, and the file is put back from the
-bytes read before the change, checked byte for byte, whatever happens. Run
-it from a clean tree, and never beside another harness that edits the same
-tree; the per-mutant logs are in --logs.
+worktree's copy of copy_fill.c, the test is run, and the file is put back
+from the bytes read before the change, checked byte for byte, whatever
+happens. Run it from a clean tree, and never beside another harness that
+edits the same tree; the per-mutant logs are in --logs.
 
-Left out because only speed can tell them apart: the cutoffs where the
-method changes, which short move a length on a boundary takes (the moves
-from each end overlap, so either neighbour copies it whole), memmove moving
-a region onto itself, and the order of a pass's reads among its writes
-(each pass's writes miss the region it reads in either direction).
+Left out because only speed can tell them apart: the cutoffs where either
+build changes method, whether the kernel's string forms align the
+destination before their eight-byte steps, which short move a length on a boundary takes (the
+moves from each end overlap, so either neighbour copies it whole), memmove
+moving a region onto itself, and the order of a pass's reads among its
+writes (each pass's writes miss the region it reads in either direction).
 """
 import argparse
 import pathlib
@@ -31,7 +32,7 @@ args = parser.parse_args()
 root = pathlib.Path(__file__).resolve().parent.parent
 args.logs.mkdir(parents=True, exist_ok=True)
 
-STR = 'userland/libos64/str.c'
+STR = 'shared/copy_fill.c'
 CASES = 'bash tools/test_str_host.sh'
 
 COPY_UP_ENDS = ('    v16 t0 = *(const v16 *)(s + n - 64), t1 = *(const v16 *)(s + n - 48);\n'
@@ -76,8 +77,16 @@ mutants = [
      '    if (n <= 16)\n        copy_short(dst, src, n);\n    else\n        copy_up(dst, src, n);'),
     # Longer copies, forward.
     ('the-rep-copy-falls-short',
-     '        __asm__ volatile("rep movsb" : "+D"(d), "+S"(s), "+c"(n) : : "memory");',
-     '        n--;\n        __asm__ volatile("rep movsb" : "+D"(d), "+S"(s), "+c"(n) : : "memory");'),
+     '    __asm__ volatile("rep movsb" : "+D"(d), "+S"(s), "+c"(n) : : "memory");',
+     '    n--;\n    __asm__ volatile("rep movsb" : "+D"(d), "+S"(s), "+c"(n) : : "memory");'),
+    # The kernel's string copy: bytes to the boundary, words, bytes.
+    ('the-kernel-copy-skips-its-head',
+     '    __asm__ volatile("rep movsb" : "+D"(d), "+S"(s), "+c"(head) : : "memory");',
+     '    d += head;\n    s += head;'),
+    ('the-kernel-copy-drops-a-word', '    __asm__ volatile("rep movsq" : "+D"(d), "+S"(s), "+c"(quads)',
+     '    quads -= quads > 0;\n    __asm__ volatile("rep movsq" : "+D"(d), "+S"(s), "+c"(quads)'),
+    ('the-kernel-copy-forgets-its-tail',
+     '    __asm__ volatile("rep movsb" : "+D"(d), "+S"(s), "+c"(tail) : : "memory");', '    (void)tail;'),
     ('the-end-is-read-after-the-passes', COPY_UP_ENDS + COPY_UP_LOOP, COPY_UP_LOOP + COPY_UP_ENDS),
     ('the-passes-stop-a-pass-early', 'left > 64; left -= 64, to += 64, from += 64)',
      'left > 128; left -= 64, to += 64, from += 64)'),
@@ -95,7 +104,14 @@ mutants = [
     # memset.
     ('the-fill-word-is-not-the-byte', '0x0101010101010101ull', '0x0101010101010100ull'),
     ('the-fill-vector-is-not-the-byte', '    v += b;', '    v += (uint8_t)(b + 1);'),
-    ('rep-stosb-fills-with-nothing', ': "a"(b) : "memory");', ': "a"(0) : "memory");'),
+    ('rep-stosb-fills-with-nothing', '"+c"(n) : "a"(b) : "memory");', '"+c"(n) : "a"(b ^ b) : "memory");'),
+    ('the-kernel-fill-skips-its-head', '    __asm__ volatile("rep stosb" : "+D"(d), "+c"(head) : "a"(b) : "memory");',
+     '    d += head;'),
+    ('the-kernel-fill-word-is-not-the-byte', ': "a"(w) : "memory");', ': "a"(w + 1) : "memory");'),
+    ('the-kernel-fill-drops-a-word', '    __asm__ volatile("rep stosq" : "+D"(d), "+c"(quads)',
+     '    quads -= quads > 0;\n    __asm__ volatile("rep stosq" : "+D"(d), "+c"(quads)'),
+    ('the-kernel-fill-forgets-its-tail', '    __asm__ volatile("rep stosb" : "+D"(d), "+c"(tail) : "a"(b) : "memory");',
+     '    (void)tail;'),
     ('the-fill-passes-stop-early', 'left > 64; left -= 64, to += 64) {', 'left > 128; left -= 64, to += 64) {'),
     ('the-fill-forgets-its-end', '        *(v16 *)(d + n - 16) = v;\n    } else if (n > 32) {',
      '    } else if (n > 32) {'),
