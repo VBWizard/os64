@@ -33,6 +33,9 @@ volatile uint64_t kKnetWakeLatencySamples;
 volatile uint64_t kKnetWakeLatencyTotal;
 volatile uint64_t kKnetWakeLatencyLate1ms;
 volatile uint64_t kKnetWakeLatencyLate10ms;
+volatile uint64_t kKnetServiceLatencySamples;
+volatile uint64_t kKnetServiceLatencyMax;
+volatile uint64_t kKnetServiceLatencyLate10ms;
 
 // The nap between rings. The tick rings it once a tick, so this is never the
 // cadence anything runs at; it is the backstop for a ring that lands in the
@@ -64,6 +67,7 @@ void knet_thread(void)
 	printd(DEBUG_NET, "knet: running on APIC %u, %u device(s) to drain\n",
 	       get_core_local_storage()->apic_id, kNetDeviceCount);
 
+	bool parked = false;   // did the park at the foot of the last turn actually sleep?
 	for (;;)
 	{
 		// CLEAR BEFORE THE WORK, never after: a ring that lands during the
@@ -79,25 +83,42 @@ void knet_thread(void)
 		// NIC interrupts and the tick ring from this thread's own core, which
 		// are the waits the receive ring has to cover; lo's producers ring
 		// from wherever they run and are counted, not timed.
+		//
+		// TWO KINDS OF WAIT, kept apart (knet.h). A ring answered after the
+		// park SLEPT waited on the scheduler — the wake, the pick, the run —
+		// and that is wake latency. A ring answered without a sleep landed
+		// while this loop was already running (a drain, the timers, the
+		// budget's own self-ring) and waited on this loop: service latency,
+		// which says how long the drain is, not how late it was scheduled.
+		// Lumping them would let a slow drain read as a late schedule.
 		bool rung = kNetDoorbell.rung;
 		uint64_t stamp = kNetDoorbell.rung_stamp;
 		kNetDoorbell.rung = false;
 		__sync_synchronize();
 		kKnetWakes++;
 		uint64_t started = rdtsc();
-		uint64_t rung_at = doorbell_stamp_tsc(stamp);
-		if (rung && doorbell_stamp_apic(stamp) == get_core_local_storage()->apic_id &&
-		    started > rung_at)
+		if (rung && doorbell_stamp_apic(stamp) == get_core_local_storage()->apic_id)
 		{
-			uint64_t waited = started - rung_at;
-			kKnetWakeLatencySamples++;
-			kKnetWakeLatencyTotal += waited;
-			if (waited > kKnetWakeLatencyMax)
-				kKnetWakeLatencyMax = waited;
-			if (waited > kCPUCyclesPerSecond / 1000)
-				kKnetWakeLatencyLate1ms++;
-			if (waited > kCPUCyclesPerSecond / 100)
-				kKnetWakeLatencyLate10ms++;
+			uint64_t waited = doorbell_stamp_elapsed(stamp, started);
+			if (parked)
+			{
+				kKnetWakeLatencySamples++;
+				kKnetWakeLatencyTotal += waited;
+				if (waited > kKnetWakeLatencyMax)
+					kKnetWakeLatencyMax = waited;
+				if (waited > kCPUCyclesPerSecond / 1000)
+					kKnetWakeLatencyLate1ms++;
+				if (waited > kCPUCyclesPerSecond / 100)
+					kKnetWakeLatencyLate10ms++;
+			}
+			else
+			{
+				kKnetServiceLatencySamples++;
+				if (waited > kKnetServiceLatencyMax)
+					kKnetServiceLatencyMax = waited;
+				if (waited > kCPUCyclesPerSecond / 100)
+					kKnetServiceLatencyLate10ms++;
+			}
 		}
 
 		uint64_t budget = (kCPUCyclesPerSecond / TICKS_PER_SECOND) * KNET_DRAIN_BUDGET_TICKS;
@@ -166,6 +187,6 @@ void knet_thread(void)
 		if (cycles > kKnetWakeCyclesMax)
 			kKnetWakeCyclesMax = cycles;
 
-		doorbell_park(&kNetDoorbell, KNET_BACKSTOP_TICKS);
+		parked = doorbell_park(&kNetDoorbell, KNET_BACKSTOP_TICKS);
 	}
 }

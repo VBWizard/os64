@@ -39,9 +39,13 @@ typedef struct doorbell
 	// sleeper is answering. ONE word, because two racing ringers on the edge
 	// must not leave one's clock beside the other's core — per-core TSCs are
 	// not one clock (SCHEDULER.md), so a sleeper times only stamps its own
-	// core made. TSC in the high 56 bits, APIC id in the low 8 (0xFF = a core
-	// the byte cannot name: counted, never timed). Racy by design, like the
-	// counts: the later of two racing stamps wins, an under-report.
+	// core made. The TSC's low 56 bits in the high 56, APIC id in the low 8
+	// (0xFF = a core the byte cannot name: counted, never timed). The sleeper
+	// subtracts modulo 2^56, so a TSC that already carries more than 56 bits
+	// (a host up for a year, a VM handed its host's count) measures the same
+	// as a fresh one; 2^56 cycles is months at any clock rate, far longer
+	// than any wait this measures. Racy by design, like the counts: the later
+	// of two racing stamps wins, an under-report.
 	volatile uint64_t rung_stamp;
 	uint64_t      rings;     // every ring, whoever rang — diagnostics, racy by design
 	uint64_t      wakes;     // rings that found the thread parked and relinked it
@@ -64,12 +68,20 @@ void doorbell_unregister(doorbell_t* db);
 // any ringer — the ring verbs below do; a sleeper that re-arms its own bell
 // calls it too — and decode on the sleeper's side.
 #define DOORBELL_STAMP_APIC_UNKNOWN 0xFFu
+#define DOORBELL_STAMP_TSC_MASK     ((1ull << 56) - 1)
 static inline uint64_t doorbell_stamp_make(uint64_t tsc, uint32_t apic)
 {
-	return (tsc << 8) | (apic < DOORBELL_STAMP_APIC_UNKNOWN ? apic : DOORBELL_STAMP_APIC_UNKNOWN);
+	return ((tsc & DOORBELL_STAMP_TSC_MASK) << 8) |
+	       (apic < DOORBELL_STAMP_APIC_UNKNOWN ? apic : DOORBELL_STAMP_APIC_UNKNOWN);
 }
 static inline uint64_t doorbell_stamp_tsc(uint64_t stamp)  { return stamp >> 8; }
 static inline uint32_t doorbell_stamp_apic(uint64_t stamp) { return (uint32_t)(stamp & 0xFFu); }
+// Cycles from a stamp's TSC to `now` on the same core, modulo 2^56 — the
+// only subtraction that is right for a truncated stamp.
+static inline uint64_t doorbell_stamp_elapsed(uint64_t stamp, uint64_t now)
+{
+	return ((now & DOORBELL_STAMP_TSC_MASK) - doorbell_stamp_tsc(stamp)) & DOORBELL_STAMP_TSC_MASK;
+}
 void doorbell_stamp_edge(doorbell_t* db);
 
 // RING. Interrupt-safe, lock-free, from anywhere: stores the bit, provokes a
@@ -84,7 +96,12 @@ void doorbell_ring_in_pass(doorbell_t* db);
 // backstop is the house rule that a missed edge costs a tick, never a hang.
 // Thread context only. Returns immediately, without sleeping, if the bell
 // was rung between the sleeper clearing it and this call.
-void doorbell_park(doorbell_t* db, uint64_t backstop_ticks);
+// Returns whether it SLEPT: false when the bell was already rung and the
+// park returned at once, true when the thread left the CPU and was woken (by
+// a ring or the backstop). The sleeper's diagnostics use the distinction —
+// a ring answered after a sleep waited on the scheduler, a ring answered
+// without one waited on the sleeper's own loop.
+bool doorbell_park(doorbell_t* db, uint64_t backstop_ticks);
 
 // ANSWER: the scheduler's half. Called from inside a pass, under the queue
 // lock, at both service points scheduler.c names. For every bell that is

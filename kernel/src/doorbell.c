@@ -92,7 +92,7 @@ void doorbell_ring_in_pass(doorbell_t* db)
 	db->rings++;
 }
 
-void doorbell_park(doorbell_t* db, uint64_t backstop_ticks)
+bool doorbell_park(doorbell_t* db, uint64_t backstop_ticks)
 {
 	thread_t* self = get_core_local_storage()->currentThread;
 
@@ -108,7 +108,7 @@ void doorbell_park(doorbell_t* db, uint64_t backstop_ticks)
 	if (db->rung)
 	{
 		scheduler_unlock_queues(flags);
-		return;
+		return false;
 	}
 	self->signals.sigdata[SIGSLEEP] = kTicksSinceStart + backstop_ticks;
 	sigset_add(&self->signals.sigind, SIGSLEEP);
@@ -117,6 +117,7 @@ void doorbell_park(doorbell_t* db, uint64_t backstop_ticks)
 	// The same door signal_raise(SIGSLEEP) walks through: a pass that finds
 	// SIGSLEEP pending on the outgoing thread parks it in ISLEEP.
 	scheduler_trigger(NULL);
+	return true;
 }
 
 void doorbell_service_locked(void)

@@ -1762,11 +1762,13 @@ static void sys_gen_net_knet(synth_text_t *t)
 	synth_text_addf(t, "drain_rounds: %lu\n", kKnetDrainRounds);
 	synth_text_addf(t, "budget_exhausted: %lu\n", kKnetBudgetExhausted);
 	synth_text_addf(t, "wake_cycles_max: %lu\n", kKnetWakeCyclesMax);
-	// How long rings waited to be answered (knet.h): the time a NIC's ring
-	// has to cover, in microseconds, over the wakes that were timed (knet.h:
-	// a ring stamped on knet's own core). `late_*` are samples over 1 ms and
-	// over 10 ms; a NIC's rx_overruns climbing beside late_10ms says the
-	// drainer was scheduled too late, not that it drained too slowly.
+	// How long rings waited to be answered (knet.h), in microseconds, over
+	// the rings that were timed (stamped on knet's own core) and split by
+	// what they waited on: `wake_latency_*` is the scheduler (the park had
+	// slept), `service_latency_*` is knet's own loop (the ring landed
+	// mid-drain). A NIC's rx_overruns climbing beside wake late_10ms says the
+	// drainer was scheduled too late; beside service late_10ms, that the
+	// drain itself outlasts the ring.
 	uint64_t per_us = kCPUCyclesPerSecond / 1000000;
 	if (per_us == 0)
 		per_us = 1;
@@ -1777,6 +1779,9 @@ static void sys_gen_net_knet(synth_text_t *t)
 	                    ? (kKnetWakeLatencyTotal / per_us) / kKnetWakeLatencySamples : 0);
 	synth_text_addf(t, "wake_latency_late_1ms: %lu\n", kKnetWakeLatencyLate1ms);
 	synth_text_addf(t, "wake_latency_late_10ms: %lu\n", kKnetWakeLatencyLate10ms);
+	synth_text_addf(t, "service_latency_samples: %lu\n", kKnetServiceLatencySamples);
+	synth_text_addf(t, "service_latency_max_us: %lu\n", kKnetServiceLatencyMax / per_us);
+	synth_text_addf(t, "service_latency_late_10ms: %lu\n", kKnetServiceLatencyLate10ms);
 	synth_text_addf(t, "bell_rings: %lu\n", kNetDoorbell.rings);
 	synth_text_addf(t, "bell_wakes: %lu\n", kNetDoorbell.wakes);
 	synth_text_addf(t, "bell_rung_runnable: %lu\n", kNetDoorbell.rung_runnable);

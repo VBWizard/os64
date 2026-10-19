@@ -304,14 +304,18 @@ vncd and sshd, three quarters of the RTL8125's rings were landing while
 knet was runnable but off the CPU (`rung_runnable`), and the receive ring
 overran 57 times in three seconds under a page load — the ring's slack is
 exactly the latency it has to cover, and nothing measured it. The bell now
-stamps its leading edge (`rung_stamp`: the TSC and the stamping core in one
-word, because per-core TSCs are not one clock and knet times only stamps
-its own core made) and knet reads the stamp at the top of the loop that
-answers it: `wake_latency_samples`, `_max_us`, `_avg_us`, and counts of
-samples that waited over 1 ms and over 10 ms. Read `late_10ms` beside a NIC's
-`rx_overruns`: climbing together means the drainer was scheduled late, and
-the home-core row in DEBTS is the answer; overruns alone means the drain
-itself is slower than the wire.
+stamps its leading edge (`rung_stamp`: the TSC's low 56 bits and the
+stamping core in one word, because per-core TSCs are not one clock and knet
+times only stamps its own core made, subtracting modulo 2^56) and knet reads
+the stamp at the top of the loop that answers it, splitting the samples by
+what the ring waited on. `wake_latency_*` (samples, max, average, over 1 ms,
+over 10 ms) is the rings answered after the park had SLEPT — the wait was
+the scheduler's. `service_latency_*` (samples, max, over 10 ms) is the rings
+that landed while knet's loop was already running — the wait was the drain's
+own length. Read them beside a NIC's `rx_overruns`: climbing with wake
+`late_10ms` means the drainer was scheduled late, and the home-core row in
+DEBTS is the answer; climbing with service `late_10ms` means the drain
+itself outlasts the ring, and `wake_cycles_max` says by how much.
 
 **The per-frame wake, measured.** A 4MB download is ~2,900 frames and cost
 2,509 wakes; the upload ~2,740 segments and 4,281 wakes. That is a top half
