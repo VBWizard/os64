@@ -54,7 +54,11 @@ NOTHING A MUTANT STARTED OUTLIVES IT. A harness times a case out by killing
 the shell it started, and what that shell ran, a test driver looping on the
 mutant, goes on running with no parent. So each harness call has a process
 group of its own (harnessed()), and when it returns whatever is still in the
-group is killed and named at the end as LEFT RUNNING.
+group is killed and named at the end as LEFT RUNNING. A group of its own is
+also out of the terminal's reach, so stopping the run is the runner's job:
+Ctrl-C, SIGTERM or SIGHUP kills every group it started (baselines included),
+no worker starts another, and each finishes moving its logs and removing its
+copy before the run exits without a summary.
 
 HOST_BUILD_JOBS (tools/host_build.sh) is set to --jobs in every worker, so
 twenty workers compiling at once do not ask for twenty machines.
@@ -77,6 +81,7 @@ import subprocess
 import time
 import sys
 import tempfile
+import threading
 
 # What a suite builds from. The userland makefile reads ../abi and ../shared.
 TREE_DIRS = ('userland', 'tools', 'abi', 'shared')
@@ -159,16 +164,60 @@ def plan(spec):
     return jobs
 
 
+# Every process group the runner has started and not yet finished with. A
+# group of its own keeps a suite or a harness out of the terminal's reach, so
+# Ctrl-C reaches the runner alone: stop_all() is what stops them, and a group
+# started once the run is stopping is killed as soon as it exists.
+LIVE = set()
+LIVE_LOCK = threading.Lock()
+STOPPING = threading.Event()
+
+
+def group_start(cmd, **kw):
+    """Popen in a process group of its own, known to stop_all()."""
+    p = subprocess.Popen(cmd, start_new_session=True, **kw)
+    with LIVE_LOCK:
+        LIVE.add(p.pid)
+    if STOPPING.is_set():
+        group_kill(p.pid)
+    return p
+
+
+def group_kill(pgid):
+    """SIGKILL a process group; False when nothing is left in it."""
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def group_done(p):
+    with LIVE_LOCK:
+        LIVE.discard(p.pid)
+
+
+def stop_all():
+    """The run is stopping: no worker starts another call, and every group
+    the runner started is killed."""
+    STOPPING.set()
+    with LIVE_LOCK:
+        groups = list(LIVE)
+    for g in groups:
+        group_kill(g)
+
+
 def bounded(cmd, cwd, env, log, seconds):
     """Run cmd in its own process group; past `seconds`, kill all of it."""
-    p = subprocess.Popen(['bash', '-c', cmd], cwd=cwd, env=env, stdout=log, stderr=log,
-                         start_new_session=True)
+    p = group_start(['bash', '-c', cmd], cwd=cwd, env=env, stdout=log, stderr=log)
     try:
         return p.wait(timeout=max(seconds, 0))
     except subprocess.TimeoutExpired:
-        os.killpg(p.pid, signal.SIGKILL)
+        group_kill(p.pid)
         p.wait()
         return 'timeout'
+    finally:
+        group_done(p)
 
 
 # The mark a worker writes in the copy it makes: this run's own words, so
@@ -194,14 +243,12 @@ def harnessed(cmd, cwd, env, out):
     shell it started, and what the shell ran (a test driver looping on the
     mutant) goes on; one did, on a core, for half an hour after its verdict.
     True when something was left to kill."""
-    p = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=out, stderr=subprocess.STDOUT,
-                         start_new_session=True)
-    p.wait()
+    p = group_start(cmd, cwd=cwd, env=env, stdout=out, stderr=subprocess.STDOUT)
     try:
-        os.killpg(p.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        return False
-    return True
+        p.wait()
+        return group_kill(p.pid)
+    finally:
+        group_done(p)
 
 
 def work(job):
@@ -224,12 +271,17 @@ def work(job):
                 b.write(f'$ {suite}\n')
                 b.flush()
                 code = bounded(suite, root, env, b, deadline - time.monotonic())
+                # A baseline the stop killed failed nothing: no copy to keep.
+                if STOPPING.is_set():
+                    break
                 if code != 0:
                     o.write(f'BASELINE FAILED ({code}): {suite} (see {logs / "baseline.log"}; '
                             f'the copy is kept)\n')
                     return harness, k, names, None, {}
         seconds = {}
         for name in names:
+            if STOPPING.is_set():
+                break
             o.flush()
             began = time.monotonic()
             if harnessed([sys.executable, f'tools/{harness}', '--only', name, '--logs', str(logs)],
@@ -253,23 +305,44 @@ if only is not None:
 print(f'mutants_parallel: {sum(len(j[2]) for j in jobs)} mutants, {len(jobs)} workers, in {out}',
       flush=True)
 verdicts, broken, took, left = {}, [], {}, []
+
+
+def interrupted(signum, frame):
+    raise KeyboardInterrupt
+
+
+# A terminal's Ctrl-C, a kill and a closed terminal all stop the run the same
+# way: every group it started is killed (stop_all), and the workers, which
+# start nothing more, finish moving their logs and removing their copies.
+signal.signal(signal.SIGTERM, interrupted)
+signal.signal(signal.SIGHUP, interrupted)
+results = []
 with concurrent.futures.ThreadPoolExecutor(max_workers=len(jobs)) as pool:
-    for harness, k, names, text, seconds in pool.map(work, jobs):
-        for name, t in seconds.items():
-            took[harness, name] = t
-        if text is not None:
-            left += [f'{harness[:-3]} {n}' for n in LEFT.findall(text)]
-        if text is None:
-            broken.append(f'{harness} worker {k} ({len(names)} mutants not run)')
-            for name in names:
-                verdicts[harness, name] = 'baseline failed'
-            continue
-        mine = set(names)
-        for name, verdict in VERDICT.findall(text):
-            if name in mine:
-                verdicts[harness, name] = verdict
+    futures = [pool.submit(work, job) for job in jobs]
+    try:
+        for f in futures:
+            results.append(f.result())
+    except KeyboardInterrupt:
+        stop_all()
+if STOPPING.is_set():
+    sys.exit(f'mutants_parallel: interrupted; every process it started is stopped, and the logs so far '
+             f'are in {out / "logs"}')
+for harness, k, names, text, seconds in results:
+    for name, t in seconds.items():
+        took[harness, name] = t
+    if text is not None:
+        left += [f'{harness[:-3]} {n}' for n in LEFT.findall(text)]
+    if text is None:
+        broken.append(f'{harness} worker {k} ({len(names)} mutants not run)')
         for name in names:
-            verdicts.setdefault((harness, name), 'no verdict')
+            verdicts[harness, name] = 'baseline failed'
+        continue
+    mine = set(names)
+    for name, verdict in VERDICT.findall(text):
+        if name in mine:
+            verdicts[harness, name] = verdict
+    for name in names:
+        verdicts.setdefault((harness, name), 'no verdict')
 
 def line(key):
     h, n = key
