@@ -138,14 +138,14 @@ void r8125_tx_post(r8125_desc_t* ring, uint16_t count, uint16_t index,
 	                (length & R8125_DESC_LEN_MASK));
 }
 
-r8125_stall_t r8125_stall_verdict(bool tx_outstanding, uint64_t ticks_since_completion,
+r8125_stall_t r8125_stall_verdict(bool tx_outstanding, uint64_t ticks_since_tx_clock,
                                   uint32_t tx_since_rx, uint64_t ticks_since_rx,
                                   uint64_t stall_ticks, uint32_t deaf_frames)
 {
 	// Wedged outranks deaf: a device that has stopped completing is the
 	// more specific accusation, and a deaf verdict on top of it would name
 	// the far end for a fault that is in this slot.
-	if (tx_outstanding && ticks_since_completion > stall_ticks)
+	if (tx_outstanding && ticks_since_tx_clock > stall_ticks)
 		return R8125_STALL_TX_WEDGED;
 	if (tx_since_rx >= deaf_frames && ticks_since_rx > stall_ticks)
 		return R8125_STALL_DEAF;

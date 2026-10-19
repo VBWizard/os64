@@ -265,9 +265,11 @@ typedef struct
 	// Two clocks, one per direction, and they must not be merged: a wedged
 	// transmit engine beside a live receive engine is exactly the one-sided
 	// death TX WEDGED exists to name, and a clock that arrivals also reset
-	// would never let it expire.
-	uint64_t last_tx_completion_tick;   // when the device last completed a descriptor
-	uint64_t last_rx_tick;              // when a frame last arrived
+	// would never let it expire. The transmit clock restarts on a completion
+	// and when the first descriptor is handed to an empty ring — the moment
+	// there is something to wait for — and on nothing else.
+	uint64_t tx_clock_tick;   // the transmit watchdog's window start (see above)
+	uint64_t last_rx_tick;    // when a frame last arrived
 	uint32_t tx_since_rx;         // frames sent since the last frame received
 	bool     stall_reported;      // one-shot, so a dead wire cannot flood the log
 	// The transmit ring-full notice has its OWN one-shot, because it is a
@@ -954,7 +956,7 @@ static bool r8125_setup_rings(r8125_t* r)
 	// already zero (s_r8125 is static) and is written anyway, because a
 	// driver that can be re-initialized should not depend on that.
 	r->tx_completions = 0;
-	r->last_tx_completion_tick = kTicksSinceStart;
+	r->tx_clock_tick = kTicksSinceStart;
 	r->last_rx_tick = kTicksSinceStart;
 	r->tx_since_rx = 0;
 	r->stall_reported = false;
@@ -1018,7 +1020,7 @@ static uint16_t r8125_reap_locked(r8125_t* r)
 	if (reaped == 0)
 		return 0;
 	r->tx_completions += reaped;
-	r->last_tx_completion_tick = kTicksSinceStart;
+	r->tx_clock_tick = kTicksSinceStart;
 	if (r->tx_full_reported)
 	{
 		// A completion is the proof the ring-full notice was waiting for:
@@ -1107,6 +1109,14 @@ static int32_t r8125_transmit(struct net_device* dev, const void* frame, uint16_
 		on_wire = 60;
 	}
 
+	// ARM THE TRANSMIT WATCHDOG when this descriptor is the first one
+	// outstanding. Its clock otherwise moves only on completions, and a ring
+	// that has sat empty for two seconds has had none — so without this, the
+	// first frame posted after an idle spell (an ARP reply, say) would read
+	// as two seconds of a device not completing, and the watchdog would cry
+	// wolf at the exact moment the network woke up.
+	if (r->tx_clean == r->tx_next)
+		r->tx_clock_tick = kTicksSinceStart;
 	r8125_tx_post(r->tx, R8125_TX_DESCS, index, on_wire);
 	r->tx_next = r8125_ring_next(r->tx_next, R8125_TX_DESCS);
 
@@ -1300,7 +1310,7 @@ static void r8125_check_stalled(r8125_t* r)
 {
 	uint64_t now = kTicksSinceStart;
 	r8125_stall_t verdict = r8125_stall_verdict(
-		r->tx_clean != r->tx_next, now - r->last_tx_completion_tick,
+		r->tx_clean != r->tx_next, now - r->tx_clock_tick,
 		r->tx_since_rx, now - r->last_rx_tick,
 		R8125_STALL_TICKS, R8125_DEAF_FRAMES);
 	bool wedged = verdict != R8125_STALL_NONE;

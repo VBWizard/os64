@@ -643,6 +643,11 @@ static void test_stall_tx_wedged(void)
 	// transmit engine's own, so the arrivals do not save the device.
 	CHECK(r8125_stall_verdict(true, 1000, 0, 1, STALL_TICKS, DEAF_FRAMES) == R8125_STALL_TX_WEDGED,
 	      "a live receive engine does not excuse a dead transmit engine");
+	// The first frame after an idle spell: the driver restarts the clock when
+	// it hands the first descriptor to an empty ring, so the verdict sees a
+	// fresh window, not the idle spell before it.
+	CHECK(r8125_stall_verdict(true, 0, 1, 1000, STALL_TICKS, DEAF_FRAMES) == R8125_STALL_NONE,
+	      "a just-armed window is not a wedge, however long the ring sat empty");
 }
 
 int main(void)
