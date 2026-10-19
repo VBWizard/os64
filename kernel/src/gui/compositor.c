@@ -1,14 +1,16 @@
 // compositor.c — the GUI compositor daemon and subsystem entry point.
 //
 // The pipeline (per frame): drain input → route events → recomposite damaged
-// screen regions into the RAM backbuffer (scene layers bottom-up, cursor
-// last) → flush only the damaged rects to the write-combining framebuffer.
-// The backbuffer is the canonical screen image; the framebuffer only ever
-// receives finished pixels, which is why nothing can flicker.
+// screen regions into the RAM backbuffer (the scene, cursor last) → flush
+// only the damaged rects to the write-combining framebuffer. The backbuffer
+// is the canonical screen image; the framebuffer only ever receives finished
+// pixels, which is why nothing can flicker.
 //
-// Scene layers: the desktop surface (bottom), the windows in z-order, then
-// the mouse cursor. The cursor needs no save-under trickery — recompositing
-// the damaged region rebuilds whatever it covered.
+// The scene is the windows in z-order over the desktop surface, and each
+// damaged pixel is written by the one of them that can be seen there
+// (OCCLUSION.md); the band, the switcher and the mouse cursor go over it.
+// The cursor needs no save-under trickery — recompositing the damaged
+// region rebuilds whatever it covered.
 
 #include "gui/compositor.h"
 #include "gui/surface.h"
@@ -404,10 +406,10 @@ static void paint_desktop(void)
 }
 
 // ---------------------------------------------------------------------------
-// Recomposite `damage` (screen coords) into the backbuffer: scene layers
-// bottom-up (desktop, windows), cursor last. Caller holds kGuiLock; the
-// caller flushes AFTER releasing it. This is the only writer of the
-// backbuffer.
+// Recomposite `damage` (screen coords) into the backbuffer: the scene (each
+// pixel by the window or desktop visible there), then the band, the
+// switcher and the cursor over it. Caller holds kGuiLock; the caller
+// flushes AFTER releasing it. This is the only writer of the backbuffer.
 // ---------------------------------------------------------------------------
 // The rubber band lives with the gesture state that drives it (below), but it
 // is a SCENE LAYER and has to be drawn from here — hence the one forward
@@ -425,23 +427,18 @@ static rect_t composite_locked(rect_t damage)
 	if (!rect_intersect(damage, screen, &damage))
 		return (rect_t){0, 0, 0, 0};
 
-	// Layer 0: desktop (same coordinates both sides — straight copy), UNLESS
-	// a window already covers this rect completely, in which case these
-	// pixels are about to be painted over and nobody can see them. Since the
-	// desktop shell is a fullscreen window, that is the common case now, and
-	// skipping it is what keeps a drag from costing two screenful blits per
-	// damage rect (wm_rect_is_covered carries the measurement).
-	if (!wm_rect_is_covered(damage))
-		surface_blit(&kBackbuffer, damage.x, damage.y, &kDesktop, damage);
+	// The scene: each pixel by the one window that can be seen there, or by
+	// the desktop surface where no window is.
+	wm_composite_result_t scene = wm_composite(&kBackbuffer, &kDesktop, damage);
+	s_composite_counts.painted += scene.painted;
+	s_composite_counts.stops += scene.stopped;
+	s_composite_counts.faults += scene.fault;
 
-	// Layer 1: windows, bottom-up by z-order.
-	wm_composite(&kBackbuffer, damage);
-
-	// Layer 2: the interactive-resize outline, when one is up. No-op
+	// Over the scene, the interactive-resize outline, when one is up. No-op
 	// otherwise, and the check is one pointer compare per damage rect.
 	band_composite(&kBackbuffer, damage);
 
-	// Layer 3: the Alt+Tab strip. Above the band because it is the more modal
+	// Then the Alt+Tab strip. Above the band because it is the more modal
 	// of the two — though in practice they cannot coexist, one needing a
 	// Ctrl+Alt mouse drag and the other Alt held on the keyboard.
 	switcher_composite(&kBackbuffer, damage);

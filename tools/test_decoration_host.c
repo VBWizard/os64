@@ -395,6 +395,57 @@ static void exercise(const os64_font_role_view_t *role)
     free(copy);os64_free(bytes);
 }
 
+/* A window claims its whole frame in the compositor's claim walk
+ * (OCCLUSION.md), so the decoration's paint and the client's content, placed
+ * as the kernel places it (frame minus the insets of the header the kernel
+ * paints with), must cover every pixel of frame and damage between them:
+ * nothing is painted underneath a window any more. The plain chrome is the
+ * kernel's own test_window_opacity. */
+static void opacity(const os64_font_role_view_t *role)
+{
+    enum {W=300,H=200};
+    const uint32_t sentinel=0x00fe01fd;
+    static uint32_t pixels[W*H];
+    const uint32_t borders[]={1,3,16},paddings[]={0,5};
+    const os64_decor_rect_t frames[]={{20,15,240,150},{-35,-20,240,150},{110,90,240,150}};
+    for (unsigned b=0;b<3;++b) for (unsigned p=0;p<2;++p) for (unsigned buttons=0;buttons<2;++buttons) {
+        os64_decor_header_t style;os64_decor_defaults(&style);
+        style.border=borders[b];style.padding_x=style.padding_y=paddings[p];
+        if (!buttons) {style.button_count=0;memset(style.buttons,0,sizeof(style.buttons));}
+        void *bytes=NULL;size_t length=0;
+        assert(os64_decor_prepare(role,&style,&bytes,&length)==OS64_FONT_OK);
+        os64_decor_view_t view;
+        assert(os64_decor_validate(bytes,length,&view));
+        for (unsigned settings=0;settings<2;++settings) for (unsigned f=0;f<3;++f) for (unsigned split=0;split<2;++split) {
+            os64_decor_header_t filtered;os64_decor_filter(view.header,settings,&filtered);
+            os64_decor_view_t effective=view;effective.header=&filtered;
+            os64_decor_insets_t in=os64_decor_insets(&filtered,true);
+            os64_decor_rect_t frame=frames[f];
+            os64_decor_state_t state={0,0,0,settings!=0};
+            for (size_t i=0;i<W*H;++i) pixels[i]=sentinel;
+            os64_decor_surface_t s={pixels,W,H,W};
+            /* The whole surface at once, or in pieces split at odd places. */
+            for (int x=0;x<W;x+=split?37:W) for (int y=0;y<H;y+=split?23:H) {
+                os64_decor_rect_t piece={x,y,split?37:W,split?23:H};
+                if (piece.x+piece.w>W) piece.w=W-piece.x;
+                if (piece.y+piece.h>H) piece.h=H-piece.y;
+                assert(os64_decor_paint(&effective,&s,frame,piece,true,(f&1)!=0,settings!=0,
+                    "Opacity",7,false,&state));
+            }
+            for (int y=frame.y+in.top;y<frame.y+frame.h-in.bottom;++y)
+                for (int x=frame.x+in.left;x<frame.x+frame.w-in.right;++x)
+                    if (x>=0 && y>=0 && x<W && y<H) pixels[y*W+x]=0x00c0c0c0;
+            for (int y=frame.y;y<frame.y+frame.h;++y) for (int x=frame.x;x<frame.x+frame.w;++x)
+                if (x>=0 && y>=0 && x<W && y<H && pixels[y*W+x]==sentinel) {
+                    fprintf(stderr,"decoration: opacity: border %u padding %u buttons %u settings %u "
+                        "frame %u split %u: (%d,%d) unpainted\n",borders[b],paddings[p],buttons,settings,f,split,x,y);
+                    abort();
+                }
+        }
+        os64_free(bytes);
+    }
+}
+
 static void controls(void)
 {
     os64_decor_header_t h;os64_decor_defaults(&h);
@@ -493,6 +544,7 @@ int main(void)
     os64_font_role_view_t role;
     assert(os64_font_set_view(set,OS64_FONT_ROLE_UI,&role)==OS64_FONT_OK);
     exercise(&role);
+    opacity(&role);
     os64_decor_header_t style;os64_decor_defaults(&style);
     for (size_t n=1;n<=24;++n) {
         void *bytes=(void *)1;size_t length=1;
@@ -511,6 +563,6 @@ int main(void)
     os64_font_set_release(set);
     assert(os64_text_destroy(text)==OS64_FONT_OK);
     assert(live==0);
-    puts("decoration: PASS lifetime, refusal, F2 parity, two-color endpoints and strength, finishes, restyle, split damage, translation, presets, bounded format");
+    puts("decoration: PASS lifetime, refusal, F2 parity, two-color endpoints and strength, finishes, restyle, split damage, translation, opacity, presets, bounded format");
     return 0;
 }

@@ -22,7 +22,8 @@ client API.
 |---|---|---|
 | 0. Surfaces | `gui/gui_types.h`, `gui/surface.{h,c}` | `rect_t`/`surface_t`, clipping blits/fills/text, `surface_flush_rect` (the ONLY code that touches the hardware framebuffer) |
 | 1. Input | `driver/system/mouse.c`, `keyboard.c` (`ps2_handle_irq`), `gui/input.{h,c}` | PS/2 drivers feed one unified event ring (`input_event_t`): keys + mouse in arrival order |
-| 2. Window system | `gui/window.{h,c}` | `window_t`, z-order list, chrome (titlebar/border), hit-testing, per-window event queues |
+| 2. Window system | `gui/window.{h,c}` | `window_t`, z-order list, chrome (titlebar/border), hit-testing, per-window event queues, which window each damaged pixel belongs to |
+| — | `gui/visible.{h,c}` | The claim walk: the pieces of a rect each window can be seen in, top-down (OCCLUSION.md). No kernel headers; `tools/test_visible_host.sh` checks it against a pixel oracle |
 | 3. Compositor | `gui/compositor.c` | The `/guicomp` daemon: frame loop = drain input → route → recomposite damage → flush; cursor; drag state machine |
 | 4. Client API | `gui/gui_client.{h,c}` | Handle-based, **syscall-shaped** functions apps call; the future userland boundary |
 | — | `gui/glass.{h,c}` | `/dev/glass`: each frame's damage fed to every open viewer, which copies the changed rectangles out of the backbuffer. See the chapter below |
@@ -35,11 +36,12 @@ client API.
    cacheable RAM surfaces; the uncached (PCD-mapped) hardware framebuffer only
    ever receives finished pixels via `surface_flush_rect`, and is **never
    read**. Scrolling/clears never do read-modify-write on UC memory.
-2. **Damage drives everything.** `gui_damage_add[_locked]()` accumulates one
-   union rect (v1); each frame the compositor recomposites only that region:
-   desktop → windows bottom-up (`wm_composite`) → cursor last → flush. Cursor
-   motion damages old∪new positions; the recomposite restores what was under
-   it — the backbuffer IS the save-under.
+2. **Damage drives everything.** `gui_damage_add[_locked]()` accumulates a
+   short list of rects; each frame the compositor recomposites only those:
+   each pixel by the one window, or the desktop, that can be seen there
+   (`wm_composite`, OCCLUSION.md) → band and switcher → cursor last → flush.
+   Cursor motion damages old∪new positions; the recomposite restores what was
+   under it — the backbuffer IS the save-under.
 3. **kGuiLock serializes all window-system state** (z-list, event queues,
    damage, handle table; see `gui/gui_internal.h`). `wm_*` functions assume it
    held; `gui_*` client calls and the compositor acquire it. Compositing (RAM,
@@ -424,8 +426,9 @@ transport by its own design (SIGNALS.md § "Explicitly not in scope").
 
 The first window fact after resize and close: **can anyone see this window?**
 `GUI_WINDOW_COVERED` is set when a window is minimized, or its whole frame is
-behind one window above it (`wm_rect_is_occluded`, the same single-window
-containment publish uses), or a text terminal holds the glass.
+behind one window above it (`wm_rect_is_occluded`'s single-window
+containment; publish and the compositor work out exactly what is visible,
+OCCLUSION.md), or a text terminal holds the glass.
 `wm_cover_sweep_locked` recomputes it every compositor frame, after the
 window manager has moved whatever it moved, and a flip queues one
 `WINDOW_COVERED` / `WINDOW_UNCOVERED` event.

@@ -392,27 +392,45 @@ static inline bool wm_has_event(const window_t *w)
     return gui_event_queue_pending(&w->event_queue);
 }
 
-// Composite every window that intersects `damage` (screen coords) into the
-// backbuffer, bottom-up, chrome + content. The desktop below and the cursor
-// above are the compositor's business, not ours.
-void wm_composite(surface_t *backbuffer, rect_t damage);
+// What one wm_composite did, for /sys/gui.
+typedef struct {
+	uint64_t painted;   // pixels the background and the windows wrote
+	bool stopped;       // the claim walk stopped early and the old painter took the rest
+	bool fault;         // the pieces did not add up to the rectangle: a geometry bug
+} wm_composite_result_t;
 
-// Is this screen rect completely hidden behind some window ABOVE `w`? The
-// only question publish needs to ask before spending a composite and a slow
-// framebuffer flush on pixels nobody can see. Caller holds kGuiLock.
+// Paint `damage` (screen coords, on the screen) into the backbuffer, each
+// pixel by the one layer that can be seen there: the topmost window over it
+// (chrome + content) or, under no window, `background` (OCCLUSION.md). The
+// claim walk (visible.h) splits `damage` into the piece each window owns;
+// when it stops early, what it left is painted the old way, the background
+// and then every window touching it bottom-up, and `stopped` says so. The
+// band, the switcher and the cursor above are the compositor's business.
+wm_composite_result_t wm_composite(surface_t *backbuffer, const surface_t *background, rect_t damage);
+
+// Paint `w` into `dst`, whose coordinates are the screen's, inside `view`
+// (which lies within `dst`): what wm_composite does for a piece `w` owns,
+// with whatever decoration is installed. Answers whether that decoration
+// painted the titlebar (false: the plain one, or none). `w` need not be in
+// the z-list, which is what lets test_window_opacity paint windows nobody
+// sees. Caller holds kGuiLock.
+bool wm_paint_window(surface_t *dst, const window_t *w, rect_t view);
+
+// The part of `screen_rect` no window above `w` covers: what a publish of
+// it can change on the glass. Writes the pieces to `out` (room for `max`, at
+// least 1) and answers how many; more than `max` become one, their bounding
+// box. 0 means none of it can be seen, which is also the answer for a
+// minimized `w`. Caller holds kGuiLock.
+size_t wm_visible_damage(const window_t *w, rect_t screen_rect, rect_t *out, size_t max);
+
+// Is this screen rect completely hidden behind ONE window above `w`? The
+// cover sweep's question. Caller holds kGuiLock.
 bool wm_rect_is_occluded(const window_t *w, rect_t screen_rect);
 
 // Recompute GUI_WINDOW_COVERED for every window and announce each flip with
 // a COVERED/UNCOVERED event. kGuiLock held. Cheap enough to run every
 // compositor frame (a dozen windows, each asked about the ones above it).
 void wm_cover_sweep_locked(void);
-
-// Is this screen rect completely covered by SOME window? The compositor asks
-// before painting the desktop background into a damage rect: if a window is
-// about to cover every pixel of it, the background underneath is invisible
-// and painting it is pure cost. Matters since the desktop shell became a
-// fullscreen window — see the comment at the definition for the measurement.
-bool wm_rect_is_covered(rect_t screen_rect);
 
 // Four-sided geometry is derived from the current immutable decoration.
 // Call under kGuiLock, including sizing at the client boundary.

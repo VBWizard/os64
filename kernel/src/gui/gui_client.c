@@ -536,6 +536,13 @@ int64_t gui_window_set_min_size(int64_t handle, uint32_t width, uint32_t height)
 	return valid ? 0 : GUI_ERR_BAD_ARGS;
 }
 
+// The most pieces of one publish's visible part that go on the damage list;
+// past it, their bounding box goes instead. Four is one rectangle minus one
+// cover in its middle, the ring. It is small because the list is: a full
+// list collapses into one union of everything pending, far worse than one
+// window's box, and /sys/gui's collapse count says whether this is right.
+#define PUBLISH_PIECES_MAX 4
+
 // Future syscall: SYSCALL_GUI_WINDOW_PUBLISH (19) — renamed from "present"
 // at design review ("present" doubles as an adjective and is swapchain
 // jargon besides). Damage rect is NULLABLE, so it stays OUT of the
@@ -580,9 +587,9 @@ int64_t gui_window_publish(int64_t handle, const rect_t *damage)
 	                                content_screen.y + local.y,
 	                                local.w, local.h};
 
-	// Occlusion (2026-08-18): if none of this rect can reach the glass, stop
-	// here — no damage, so no composite and no framebuffer flush of pixels that
-	// cannot change.
+	// Occlusion (OCCLUSION.md): only the part of this rect no window above
+	// covers can change the glass, so only that is damaged. None of it: no
+	// damage, no composite, no flush.
 	//
 	// The SNAPSHOT above still happened, and that is exactly why this check
 	// comes last. `content` holds the client's finished frame, so when the
@@ -597,14 +604,11 @@ int64_t gui_window_publish(int64_t handle, const rect_t *damage)
 	// insight, and the reason X11's VisibilityNotify never worked (it asked
 	// applications to volunteer, and they didn't). That half rides libui; see
 	// the occlusion row in DEBTS.
-	bool hidden = wm_rect_is_occluded(win, screen_damage);
+	rect_t seen[PUBLISH_PIECES_MAX];
+	size_t n = wm_visible_damage(win, screen_damage, seen, PUBLISH_PIECES_MAX);
+	for (size_t i = 0; i < n; i++)
+		gui_damage_add_locked(seen[i]);
 	gui_unlock(irqflags);
-
-	if (hidden)
-		return 0;
-
-	// Separate acquisition inside — kGuiLock is not recursive.
-	gui_damage_add(screen_damage);
 	return 0;
 }
 

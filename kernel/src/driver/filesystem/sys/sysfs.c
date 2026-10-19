@@ -1351,6 +1351,15 @@ static void sys_gen_gui(synth_text_t *t)
 	synth_text_addf(t, "compositor: %lu passes, %lu drew, %lu rectangles, %lu pixels, "
 	                "%lu collapses of the damage list into one\n",
 	                comp.passes, comp.drawn, comp.rects, comp.pixels, comp.collapses);
+	// Each damaged pixel is drawn by the one layer visible there, so painted
+	// over pixels is exactly 1.00 unless a rectangle's claim walk stopped
+	// early (the old painter draws what it left once per layer) or its pieces
+	// did not add up to it, which is a bug in the geometry and counted apart.
+	uint64_t times_x100 = comp.pixels ? comp.painted * 100 / comp.pixels : 0;
+	synth_text_addf(t, "compositor painted: %lu pixels by the background and windows, "
+	                "%lu.%02lu times each damaged pixel, %lu rectangles finished by the old "
+	                "painter, %lu partition faults\n",
+	                comp.painted, times_x100 / 100, times_x100 % 100, comp.stops, comp.faults);
 	synth_text_addf(t, "compositor holds: under 250 us %lu, under 500 us %lu, under 1 ms %lu, "
 	                "under 2 ms %lu, under 4 ms %lu, under 8 ms %lu, 8 ms or more %lu\n",
 	                comp.holds[0], comp.holds[1], comp.holds[2], comp.holds[3], comp.holds[4],
