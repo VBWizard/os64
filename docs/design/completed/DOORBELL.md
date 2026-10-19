@@ -297,6 +297,20 @@ idle link, 5,800 a second. The ring is once per TICK now
 The lesson is the counter's: a primitive that wakes things must count its
 wakes before anyone trusts it.
 
+**The counter the P5 asked for next (2026-10-18): how long a ring WAITS.**
+`wake_cycles_max` says how long knet took once it ran; it says nothing
+about how long the bell rang before it did. On a BSP shared with yonder,
+vncd and sshd, three quarters of the RTL8125's rings were landing while
+knet was runnable but off the CPU (`rung_runnable`), and the receive ring
+overran 57 times in three seconds under a page load — the ring's slack is
+exactly the latency it has to cover, and nothing measured it. The bell now
+stamps its leading edge (`rung_tsc`) and knet reads the stamp at the top of
+the loop that answers it: `wake_latency_max_us`, `_avg_us`, and counts of
+wakes that waited over 1 ms and over 10 ms. Read `late_10ms` beside a NIC's
+`rx_overruns`: climbing together means the drainer was scheduled late, and
+the home-core row in DEBTS is the answer; overruns alone means the drain
+itself is slower than the wire.
+
 **The per-frame wake, measured.** A 4MB download is ~2,900 frames and cost
 2,509 wakes; the upload ~2,740 segments and 4,281 wakes. That is a top half
 with no coalescing doing exactly what it says: one interrupt, one wake, one

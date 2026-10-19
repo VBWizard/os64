@@ -1761,6 +1761,20 @@ static void sys_gen_net_knet(synth_text_t *t)
 	synth_text_addf(t, "drain_rounds: %lu\n", kKnetDrainRounds);
 	synth_text_addf(t, "budget_exhausted: %lu\n", kKnetBudgetExhausted);
 	synth_text_addf(t, "wake_cycles_max: %lu\n", kKnetWakeCyclesMax);
+	// How long rings waited to be answered (knet.h): the time a NIC's ring
+	// has to cover, in microseconds. The average is over every wake, with a
+	// backstop wake (no ring to answer) counting as no wait. `late_*` are
+	// wakes over 1 ms and over 10 ms; a NIC's rx_overruns climbing beside
+	// late_10ms says the drainer was scheduled too late, not that it drained
+	// too slowly.
+	uint64_t per_us = kCPUCyclesPerSecond / 1000000;
+	if (per_us == 0)
+		per_us = 1;
+	synth_text_addf(t, "wake_latency_max_us: %lu\n", kKnetWakeLatencyMax / per_us);
+	synth_text_addf(t, "wake_latency_avg_us: %lu\n",
+	                kKnetWakes != 0 ? (kKnetWakeLatencyTotal / per_us) / kKnetWakes : 0);
+	synth_text_addf(t, "wake_latency_late_1ms: %lu\n", kKnetWakeLatencyLate1ms);
+	synth_text_addf(t, "wake_latency_late_10ms: %lu\n", kKnetWakeLatencyLate10ms);
 	synth_text_addf(t, "bell_rings: %lu\n", kNetDoorbell.rings);
 	synth_text_addf(t, "bell_wakes: %lu\n", kNetDoorbell.wakes);
 	synth_text_addf(t, "bell_rung_runnable: %lu\n", kNetDoorbell.rung_runnable);
@@ -1842,6 +1856,10 @@ static void sys_gen_net_card(synth_text_t *t, uint32_t index)
 	// NET_FRAME_MAX (counted, never truncated — net_device.h's rule).
 	synth_text_addf(t, "rx_dropped_no_handler: %lu\n", d->rx_dropped_no_handler);
 	synth_text_addf(t, "rx_dropped_too_big: %lu\n", d->rx_dropped_too_big);
+	// The card ran out of ring and dropped frames (net_device.h): the number
+	// that says a download's pauses are the drainer arriving late, read
+	// beside /sys/net/knet's wake_latency_late_10ms.
+	synth_text_addf(t, "rx_overruns: %lu\n", d->rx_overruns);
 }
 
 // cpu/<n>/time — one core's slice of the CPU-time ledger (/proc/cores' whole

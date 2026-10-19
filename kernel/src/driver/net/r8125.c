@@ -253,13 +253,17 @@ typedef struct
 	//   TX WEDGED   descriptors handed over and NONE coming back. The
 	//               device has stopped completing; the ring fills and then
 	//               every transmit fails forever.
-	//   DEAF        we are transmitting steadily and nothing at all is
-	//               arriving. The link, the far end, or the receive path is
-	//               gone. (Silence while IDLE is not a fault, which is why
-	//               this is measured against our own transmits and not
-	//               against the clock.)
+	//   DEAF        we are transmitting steadily and nothing at all has
+	//               arrived for seconds. The link, the far end, or the
+	//               receive path is gone. Both halves are required: silence
+	//               while IDLE is not a fault, and neither is a run of
+	//               frames sent between two arrivals — a server streaming to
+	//               a peer that coalesces its ACKs sends a hundred frames
+	//               between arrivals as a matter of course. The rule itself
+	//               is r8125_stall_verdict (r8125_ring.c, host-tested).
 	uint64_t tx_completions;      // total descriptors reaped, ever
 	uint64_t last_progress_tick;  // when a completion or an arrival last happened
+	uint64_t last_rx_tick;        // when a frame last arrived
 	uint32_t tx_since_rx;         // frames sent since the last frame received
 	bool     stall_reported;      // one-shot, so a dead wire cannot flood the log
 	uint64_t isr_acks;            // how many times the status register was cleared
@@ -940,6 +944,7 @@ static bool r8125_setup_rings(r8125_t* r)
 	// driver that can be re-initialized should not depend on that.
 	r->tx_completions = 0;
 	r->last_progress_tick = kTicksSinceStart;
+	r->last_rx_tick = kTicksSinceStart;
 	r->tx_since_rx = 0;
 	r->stall_reported = false;
 	r->isr_acks = 0;
@@ -1014,12 +1019,17 @@ static int32_t r8125_transmit(struct net_device* dev, const void* frame, uint16_
 		// RING FULL, AND SAYING SO. This used to bump a counter and return
 		// -1 in silence, which meant the machine could lose its network
 		// completely and leave nothing behind but a number nobody had
-		// reason to read. Every transmit from here on will fail the same
-		// way, so this is not a hiccup — it is the network ending.
+		// reason to read. The frame is dropped here and TCP resends it.
 		//
-		// DEBUG_EXCEPTIONS because it is always lit (CONFIG.h's ruling), and
-		// one-shot because a stuck ring would otherwise write this line for
-		// every packet the stack still hopefully hands down.
+		// Two things look like this, and the recovery line tells them apart:
+		// a device that has stopped completing (the ring never drains, every
+		// transmit fails from here on, and the watchdog's TX WEDGED check
+		// names it two seconds later), and a producer that outran the wire
+		// for a moment — a scaled window handing a burst to a gigabit link —
+		// which the recovery line answers within a tick. DEBUG_EXCEPTIONS
+		// because it is always lit (CONFIG.h's ruling), and one-shot because
+		// a stuck ring would otherwise write this line for every packet the
+		// stack still hopefully hands down.
 		bool first = !r->stall_reported;
 		r->stall_reported = true;
 		uint64_t completions = r->tx_completions;
@@ -1028,9 +1038,10 @@ static int32_t r8125_transmit(struct net_device* dev, const void* frame, uint16_
 		r->netdev.tx_errors++;
 		if (first)
 			printd(DEBUG_EXCEPTIONS,
-			       "r8125: TRANSMIT RING FULL — the device has stopped completing descriptors. "
+			       "r8125: TRANSMIT RING FULL — a frame was dropped for TCP to resend. "
 			       "tx_next=%u tx_clean=%u of %u, %lu completions since boot, %lu frames sent. "
-			       "THE NETWORK IS DOWN until this clears; read /sys/net for the counters.\n",
+			       "A recovery line within a tick means the producer outran the wire; "
+			       "none means the device stopped completing — read /sys/net for the counters.\n",
 			       next, clean, (unsigned)R8125_TX_DESCS,
 			       completions, r->netdev.tx_frames);
 		return -1;   // ring full — the caller's to retry, and it is counted
@@ -1140,20 +1151,24 @@ static void r8125_ack_status(r8125_t* r)
 	if ((status & (R8125_ISR_RDU | R8125_ISR_RXFOVW)) != 0)
 	{
 		r->isr_overrun_events++;
+		r->netdev.rx_overruns++;   // the seam's copy, for /sys/net (net_device.h)
 
 		// MILESTONES, NOT A FIRE HOSE. The detailed complaint below fires
 		// once per boot; this reports the ORDER OF MAGNITUDE as it grows —
 		// 10, 100, 1000 — which is the only thing anyone needs to know once
 		// overruns are survivable. A handful across a whole refresh is the
 		// wire briefly outrunning us and is fine. Thousands means the
-		// receive ring is still too small for this card, and the number
-		// says so without anybody having to go looking for it.
+		// receive ring is still too small for the gap between two drains,
+		// and the number says so without anybody having to go looking for
+		// it; the exact count and WHEN it moved are /sys/net's
+		// (rx_overruns beside /sys/net/knet's wake latency).
 		if (r->isr_overrun_events == r->isr_overrun_next_report)
 		{
 			printd(DEBUG_EXCEPTIONS,
 			       "r8125: %lu receive overruns so far (ring is %u descriptors) — "
 			       "each one is dropped frames and a retransmit, not a stall. "
-			       "If this keeps climbing, R8125_RX_DESCS wants to be bigger.\n",
+			       "rx_overruns in /sys/net counts them; if it keeps climbing, "
+			       "the drainer is waiting longer than the ring can cover.\n",
 			       r->isr_overrun_events, (unsigned)R8125_RX_DESCS);
 			r->isr_overrun_next_report *= 10;
 		}
@@ -1222,35 +1237,27 @@ static void r8125_ack_status(r8125_t* r)
 // anybody having thought to switch a debug bit on first.
 //
 // The point is to catch the failure EARLY. The ring-full complaint in
-// r8125_transmit is honest but late: by then 63 frames have already been
-// handed to a device that is not listening. These two checks fire at the
-// first opportunity that is unambiguous.
-#define R8125_STALL_TICKS   (2 * TICKS_PER_SECOND)  // outstanding, and nothing moving
-#define R8125_DEAF_FRAMES   64                      // sent this many, heard nothing back
+// r8125_transmit is honest but late: by then a ring of frames has already
+// been handed to a device that is not listening. These two checks fire at
+// the first opportunity that is unambiguous — and "unambiguous" is the
+// whole design: a false alarm here trains its reader to skip the line that
+// matters. The rule is r8125_stall_verdict (r8125_ring.c), pure and
+// host-tested; this function supplies the clock and the counters and prints.
+//
+// Two seconds (R8125_STALL_TICKS) is far longer than a 2.5GbE link needs
+// for anything, and short enough to name the culprit while the person is
+// still looking at the screen.
+#define R8125_STALL_TICKS   (2 * TICKS_PER_SECOND)  // nothing moving for this long
+#define R8125_DEAF_FRAMES   64                      // sent this many into the silence
 
 static void r8125_check_stalled(r8125_t* r)
 {
-	bool wedged = false;
-	const char* what = NULL;
-
-	// TX WEDGED: descriptors are outstanding and the device has completed
-	// none of them for two seconds. Two seconds is far longer than a 2.5GbE
-	// link needs for anything, and short enough to name the culprit while
-	// the person is still looking at the screen.
-	if (r->tx_clean != r->tx_next &&
-	    (kTicksSinceStart - r->last_progress_tick) > R8125_STALL_TICKS)
-	{
-		wedged = true;
-		what = "device is not completing transmit descriptors";
-	}
-	// DEAF: we are talking steadily and nothing is coming back. Measured
-	// against our OWN transmits rather than against the clock, because
-	// silence on an idle machine is not a fault — silence while shouting is.
-	else if (r->tx_since_rx >= R8125_DEAF_FRAMES)
-	{
-		wedged = true;
-		what = "sent frames are going out but nothing is arriving";
-	}
+	uint64_t now = kTicksSinceStart;
+	r8125_stall_t verdict = r8125_stall_verdict(
+		r->tx_clean != r->tx_next, now - r->last_progress_tick,
+		r->tx_since_rx, now - r->last_rx_tick,
+		R8125_STALL_TICKS, R8125_DEAF_FRAMES);
+	bool wedged = verdict != R8125_STALL_NONE;
 
 	if (wedged && !r->stall_reported)
 	{
@@ -1259,15 +1266,18 @@ static void r8125_check_stalled(r8125_t* r)
 		       "r8125: NETWORK STALLED — %s. "
 		       "tx_next=%u tx_clean=%u rx_cursor=%u (rings of %u/%u), "
 		       "tx_frames=%lu tx_errors=%lu rx_frames=%lu rx_errors=%lu, "
-		       "%lu completions, %u sent since the last arrival, "
-		       "%lu status acks, %lu receive overruns, "
+		       "%lu completions, %u sent since the last arrival %lu ticks ago, "
+		       "%lu status acks (last 0x%08x), %lu receive overruns, "
 		       "%s: %lu interrupts (%lu spurious).\n",
-		       what, r->tx_next, r->tx_clean, r->rx_cursor,
+		       verdict == R8125_STALL_TX_WEDGED
+		           ? "device is not completing transmit descriptors"
+		           : "sent frames are going out and nothing has arrived for seconds",
+		       r->tx_next, r->tx_clean, r->rx_cursor,
 		       (unsigned)R8125_TX_DESCS, (unsigned)R8125_RX_DESCS,
 		       r->netdev.tx_frames, r->netdev.tx_errors,
 		       r->netdev.rx_frames, r->netdev.rx_errors,
-		       r->tx_completions, r->tx_since_rx,
-		       r->isr_acks, r->isr_overrun_events,
+		       r->tx_completions, r->tx_since_rx, now - r->last_rx_tick,
+		       r->isr_acks, r->isr_last, r->isr_overrun_events,
 		       r->msi ? "MSI" : "tick-driven", r->msi_fires, r->msi_spurious);
 	}
 	else if (!wedged && r->stall_reported && r->tx_clean == r->tx_next)
@@ -1319,14 +1329,13 @@ bool r8125_drain(struct net_device* dev)
 	// under a budget of its own, so the protocol timers still get their
 	// turn. Whatever is left stays owned by us and is collected next call.
 	//
-	// THE BOUND IS THE RING SIZE, AND THAT COUPLING IS DELIBERATE (restated
-	// 2026-08-22, when the receive ring went 64 -> 256). The ring exists to
-	// absorb a burst that arrives faster than drains happen; draining less
-	// than a full ring per call would leave the tail of every burst sitting
-	// there, which is how the card ran out of descriptors in the first
-	// place. One call may therefore handle 256 frames instead of 64 —
-	// roughly a millisecond of copying and stack work at the sizes this
-	// traffic uses, which is the right trade against dropping frames.
+	// THE BOUND IS THE RING SIZE, AND THAT COUPLING IS DELIBERATE. The ring
+	// exists to absorb a burst that arrives faster than drains happen;
+	// draining less than a full ring per call would leave the tail of every
+	// burst sitting there, which is how the card ran out of descriptors in
+	// the first place. One call may therefore handle a whole ring — a few
+	// milliseconds of copying and stack work at R8125_RX_DESCS and the sizes
+	// this traffic uses, which is the right trade against dropping frames.
 	for (uint16_t drained = 0; drained < R8125_RX_DESCS; drained++)
 	{
 		uint16_t length;
@@ -1369,6 +1378,7 @@ bool r8125_drain(struct net_device* dev)
 		// most for noticing it is not.
 		r->tx_since_rx = 0;
 		r->last_progress_tick = kTicksSinceStart;
+		r->last_rx_tick = kTicksSinceStart;
 		moved = true;
 	}
 
@@ -1680,8 +1690,8 @@ static bool r8125_init_device(pci_device_t* dev)
 #define PCI_COMMAND_INTX_DISABLE  (1u << 10)
 
 // Every event this driver decodes (the ack's bit table). TOK is in: a
-// download answers every segment with an ACK, and the transmit ring is 64
-// deep, so completions must be reaped as they happen, not at the tick. On
+// download answers every segment with an ACK, and a tick's worth of ACKs
+// outruns the transmit ring, so completions must be reaped as they happen. On
 // a burst these coalesce into one message anyway — the mask says WHICH
 // bits may send, and a message is sent when the first of them sets.
 #define R8125_IMR_EVENTS (R8125_ISR_ROK | R8125_ISR_RER | R8125_ISR_TOK | R8125_ISR_TER | \

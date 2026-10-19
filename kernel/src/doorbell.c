@@ -7,6 +7,7 @@
 #include "signals.h"      // SIGSLEEP, the backstop nap
 #include "kernel.h"       // kTicksSinceStart
 #include "panic.h"
+#include "x86_64.h"       // rdtsc — the edge stamp (knet's wake latency)
 // kSMPInitDone comes from smp_core.h above
 
 static doorbell_t* s_bells[DOORBELL_MAX];
@@ -45,8 +46,20 @@ void doorbell_unregister(doorbell_t* db)
 	db->thread = NULL;
 }
 
+// The leading edge is stamped so the sleeper can measure how long a ring
+// waited for it (/sys/net/knet's wake latency). Only the edge: later rings
+// into an already-rung bell are answered by the same wake, and the wait that
+// matters is the oldest one's. Two ringers racing on the edge both stamp and
+// the later wins — an under-report, for a diagnostic.
+static inline void doorbell_stamp_edge(doorbell_t* db)
+{
+	if (!db->rung)
+		db->rung_tsc = rdtsc();
+}
+
 void doorbell_ring(doorbell_t* db)
 {
+	doorbell_stamp_edge(db);
 	db->rung = true;
 	db->rings++;
 	__sync_synchronize();
@@ -68,6 +81,7 @@ void doorbell_ring(doorbell_t* db)
 
 void doorbell_ring_in_pass(doorbell_t* db)
 {
+	doorbell_stamp_edge(db);
 	db->rung = true;
 	db->rings++;
 }

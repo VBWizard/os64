@@ -28,6 +28,10 @@ volatile uint64_t kKnetWakes;
 volatile uint64_t kKnetDrainRounds;
 volatile uint64_t kKnetBudgetExhausted;
 volatile uint64_t kKnetWakeCyclesMax;
+volatile uint64_t kKnetWakeLatencyMax;
+volatile uint64_t kKnetWakeLatencyTotal;
+volatile uint64_t kKnetWakeLatencyLate1ms;
+volatile uint64_t kKnetWakeLatencyLate10ms;
 
 // The nap between rings. The tick rings it once a tick, so this is never the
 // cadence anything runs at; it is the backstop for a ring that lands in the
@@ -56,10 +60,27 @@ void knet_thread(void)
 		// instead of vanishing into a cleared-after window (the classic lost
 		// wakeup, and the reason the e1000's old doorbell flag was consumed
 		// in this order too).
+		// Read the edge stamp BEFORE clearing: a ring landing after the clear
+		// re-stamps for the NEXT wake, and this wake answers the one before.
+		// A backstop wake (nothing rung) measures nothing — the stamp it
+		// would read belongs to a ring already answered.
+		bool rung = kNetDoorbell.rung;
+		uint64_t rung_at = kNetDoorbell.rung_tsc;
 		kNetDoorbell.rung = false;
 		__sync_synchronize();
 		kKnetWakes++;
 		uint64_t started = rdtsc();
+		if (rung && started > rung_at)
+		{
+			uint64_t waited = started - rung_at;
+			kKnetWakeLatencyTotal += waited;
+			if (waited > kKnetWakeLatencyMax)
+				kKnetWakeLatencyMax = waited;
+			if (waited > kCPUCyclesPerSecond / 1000)
+				kKnetWakeLatencyLate1ms++;
+			if (waited > kCPUCyclesPerSecond / 100)
+				kKnetWakeLatencyLate10ms++;
+		}
 
 		uint32_t rounds = 0;
 		bool moved;
@@ -93,6 +114,11 @@ void knet_thread(void)
 			// straight back rather than waiting for a ring nobody will send
 			// (the device already interrupted for the frames it holds).
 			kKnetBudgetExhausted++;
+			// Stamped like any ring (doorbell.c's edge rule), so the wake
+			// that answers it measures the timers' run and not the age of
+			// whatever ring last set the bit.
+			if (!kNetDoorbell.rung)
+				kNetDoorbell.rung_tsc = rdtsc();
 			kNetDoorbell.rung = true;
 		}
 

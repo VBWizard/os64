@@ -589,8 +589,62 @@ static void test_phy_best_common_mode(void)
 	CHECK(r8125_phy_mode_rank(0, true) == 0, "unknown speed");
 }
 
+// ── THE STALL WATCHDOG'S RULE ───────────────────────────────────────────
+//
+// The P5's log carried 8,326 "NETWORK STALLED" lines in nine days from a rule
+// that counted frames alone: a VNC server with a scaled window sends 64-160
+// frames between two arrivals as a matter of course. The rule now needs
+// silence in TIME as well as in count, and these cases are the ones that
+// were wrong or would be wrong without each half.
+#define STALL_TICKS 200
+#define DEAF_FRAMES 64
+
+static void test_stall_deaf_needs_count_and_time(void)
+{
+	// The VNC case: a hundred frames out, the last arrival 20 ms ago. Not deaf.
+	CHECK(r8125_stall_verdict(false, 2, 100, 2, STALL_TICKS, DEAF_FRAMES) == R8125_STALL_NONE,
+	      "frames without silence is a stream, not a stall");
+	// The idle case: nothing arrived for a minute, and nothing was sent either.
+	CHECK(r8125_stall_verdict(false, 6000, 0, 6000, STALL_TICKS, DEAF_FRAMES) == R8125_STALL_NONE,
+	      "silence while idle is not a fault");
+	// Below the frame threshold the clock alone never convicts.
+	CHECK(r8125_stall_verdict(false, 6000, DEAF_FRAMES - 1, 6000, STALL_TICKS, DEAF_FRAMES) == R8125_STALL_NONE,
+	      "one frame short of deaf");
+	// Both halves: sent plenty, heard nothing for longer than the limit.
+	CHECK(r8125_stall_verdict(false, 0, DEAF_FRAMES, STALL_TICKS + 1, STALL_TICKS, DEAF_FRAMES) == R8125_STALL_DEAF,
+	      "deaf at the threshold frame count");
+	CHECK(r8125_stall_verdict(false, 0, 5000, 5000, STALL_TICKS, DEAF_FRAMES) == R8125_STALL_DEAF,
+	      "deaf, well past both");
+	// Exactly the limit is not past it: the rule is "longer than".
+	CHECK(r8125_stall_verdict(false, 0, 5000, STALL_TICKS, STALL_TICKS, DEAF_FRAMES) == R8125_STALL_NONE,
+	      "silence equal to the limit is not yet a stall");
+	// Completions keep arriving (progress) but no frames do: still deaf —
+	// deaf is about arrivals, not about the transmit side moving.
+	CHECK(r8125_stall_verdict(true, 0, 5000, 5000, STALL_TICKS, DEAF_FRAMES) == R8125_STALL_DEAF,
+	      "a transmit side that completes does not excuse a silent receive side");
+}
+
+static void test_stall_tx_wedged(void)
+{
+	// Descriptors outstanding and nothing completed for longer than the limit.
+	CHECK(r8125_stall_verdict(true, STALL_TICKS + 1, 0, 0, STALL_TICKS, DEAF_FRAMES) == R8125_STALL_TX_WEDGED,
+	      "wedged");
+	// Nothing outstanding: the clock since the last completion means nothing.
+	CHECK(r8125_stall_verdict(false, 100000, 0, 0, STALL_TICKS, DEAF_FRAMES) == R8125_STALL_NONE,
+	      "an empty transmit ring cannot be wedged");
+	// Outstanding but recently completed: the device is working.
+	CHECK(r8125_stall_verdict(true, STALL_TICKS, 0, 0, STALL_TICKS, DEAF_FRAMES) == R8125_STALL_NONE,
+	      "outstanding at the limit is not yet wedged");
+	// Wedged outranks deaf when both hold.
+	CHECK(r8125_stall_verdict(true, 5000, 5000, 5000, STALL_TICKS, DEAF_FRAMES) == R8125_STALL_TX_WEDGED,
+	      "wedged is the more specific verdict");
+}
+
 int main(void)
 {
+	test_stall_deaf_needs_count_and_time();
+	test_stall_tx_wedged();
+
 	test_rx_init_gives_every_descriptor_to_the_device();
 	test_rx_not_ready_while_device_owns_it();
 	test_rx_delivers_then_refills();

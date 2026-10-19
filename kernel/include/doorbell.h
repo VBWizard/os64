@@ -35,6 +35,7 @@ typedef struct doorbell
 {
 	thread_t*     thread;    // the sleeper this bell belongs to (NULL until registered)
 	volatile bool rung;      // set by a ringer, cleared by the sleeper
+	volatile uint64_t rung_tsc; // when `rung` last went false -> true: the ring the sleeper is answering (racy by design, like the counts)
 	uint64_t      rings;     // every ring, whoever rang — diagnostics, racy by design
 	uint64_t      wakes;     // rings that found the thread parked and relinked it
 	uint64_t      rung_runnable; // rings that found it awake and off the CPU — answered by aging, not the boost
