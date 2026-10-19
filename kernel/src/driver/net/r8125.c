@@ -266,6 +266,13 @@ typedef struct
 	uint64_t last_rx_tick;        // when a frame last arrived
 	uint32_t tx_since_rx;         // frames sent since the last frame received
 	bool     stall_reported;      // one-shot, so a dead wire cannot flood the log
+	// The transmit ring-full notice has its OWN one-shot, because it is a
+	// different event with a different recovery: the ring fills when the
+	// producer outruns the wire for a moment, and the next reaped completion
+	// proves the device is still working. It must not borrow the watchdog's
+	// flag — a notice that set stall_reported would silence the TX WEDGED
+	// line the two seconds later that a genuinely stopped device deserves.
+	bool     tx_full_reported;
 	uint64_t isr_acks;            // how many times the status register was cleared
 	uint32_t isr_last;            // the last non-zero status seen
 	bool     isr_trouble_reported;// one-shot for the alarming bits
@@ -947,6 +954,7 @@ static bool r8125_setup_rings(r8125_t* r)
 	r->last_rx_tick = kTicksSinceStart;
 	r->tx_since_rx = 0;
 	r->stall_reported = false;
+	r->tx_full_reported = false;
 	r->isr_acks = 0;
 	r->isr_last = 0;
 	r->isr_trouble_reported = false;
@@ -1021,17 +1029,19 @@ static int32_t r8125_transmit(struct net_device* dev, const void* frame, uint16_
 		// completely and leave nothing behind but a number nobody had
 		// reason to read. The frame is dropped here and TCP resends it.
 		//
-		// Two things look like this, and the recovery line tells them apart:
-		// a device that has stopped completing (the ring never drains, every
-		// transmit fails from here on, and the watchdog's TX WEDGED check
-		// names it two seconds later), and a producer that outran the wire
-		// for a moment — a scaled window handing a burst to a gigabit link —
-		// which the recovery line answers within a tick. DEBUG_EXCEPTIONS
-		// because it is always lit (CONFIG.h's ruling), and one-shot because
-		// a stuck ring would otherwise write this line for every packet the
-		// stack still hopefully hands down.
-		bool first = !r->stall_reported;
-		r->stall_reported = true;
+		// Two things look like this, and the drain's recovery line tells them
+		// apart: a producer that outran the wire for a moment — a scaled
+		// window handing a burst to a gigabit link — which the next reaped
+		// completion answers within a tick, and a device that has stopped
+		// completing, where no recovery comes and the watchdog's TX WEDGED
+		// check names it two seconds later. That second line is why this
+		// notice has its own flag (tx_full_reported) and leaves the
+		// watchdog's alone. DEBUG_EXCEPTIONS because it is always lit
+		// (CONFIG.h's ruling), and one-shot because a stuck ring would
+		// otherwise write this line for every packet the stack still
+		// hopefully hands down.
+		bool first = !r->tx_full_reported;
+		r->tx_full_reported = true;
 		uint64_t completions = r->tx_completions;
 		uint16_t next = r->tx_next, clean = r->tx_clean;
 		spinlock_release_irqrestore(&r->lock, flags);
@@ -1040,8 +1050,8 @@ static int32_t r8125_transmit(struct net_device* dev, const void* frame, uint16_
 			printd(DEBUG_EXCEPTIONS,
 			       "r8125: TRANSMIT RING FULL — a frame was dropped for TCP to resend. "
 			       "tx_next=%u tx_clean=%u of %u, %lu completions since boot, %lu frames sent. "
-			       "A recovery line within a tick means the producer outran the wire; "
-			       "none means the device stopped completing — read /sys/net for the counters.\n",
+			       "A draining-again line within a tick means the producer outran the wire; "
+			       "none, then NETWORK STALLED, means the device stopped completing.\n",
 			       next, clean, (unsigned)R8125_TX_DESCS,
 			       completions, r->netdev.tx_frames);
 		return -1;   // ring full — the caller's to retry, and it is counted
@@ -1286,7 +1296,7 @@ static void r8125_check_stalled(r8125_t* r)
 		// leaves the reader unable to tell a machine that healed from one
 		// that is still broken and merely quiet.
 		r->stall_reported = false;
-		printd(DEBUG_EXCEPTIONS, "r8125: network recovered — the transmit ring is draining again.\n");
+		printd(DEBUG_EXCEPTIONS, "r8125: network recovered — frames are completing and arriving again.\n");
 	}
 }
 
@@ -1321,6 +1331,17 @@ bool r8125_drain(struct net_device* dev)
 		r->tx_completions += reaped;
 		r->last_progress_tick = kTicksSinceStart;
 		moved = true;
+		if (r->tx_full_reported)
+		{
+			// A completion is the proof the ring-full notice was waiting
+			// for: the device is still completing, so the full ring was the
+			// producer's burst and not the device's death. Say so, so the
+			// log reads as a blip and not as a network that ended.
+			r->tx_full_reported = false;
+			printd(DEBUG_EXCEPTIONS,
+			       "r8125: transmit ring draining again — %u completed, tx_next=%u tx_clean=%u.\n",
+			       reaped, r->tx_next, r->tx_clean);
+		}
 	}
 
 	// Then every frame the device has finished with. Bounded per call: a

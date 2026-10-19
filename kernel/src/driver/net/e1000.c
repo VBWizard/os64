@@ -1017,6 +1017,12 @@ void e1000_isr(void)
 	}
 
 	e->intx_fires++;
+	// RXO is the card saying its receive ring ran out and frames were
+	// dropped: the seam's rx_overruns (net_device.h), counted here because
+	// the ICR read above is the only sight of the bit — the drain never
+	// sees it.
+	if (icr & E1000_INT_RXO)
+		e->netdev.rx_overruns++;
 	if (icr & E1000_INT_LSC)
 	{
 		// Cable event: re-read reality rather than inferring it. One MMIO

@@ -50,11 +50,18 @@ void doorbell_unregister(doorbell_t* db)
 // waited for it (/sys/net/knet's wake latency). Only the edge: later rings
 // into an already-rung bell are answered by the same wake, and the wait that
 // matters is the oldest one's. Two ringers racing on the edge both stamp and
-// the later wins — an under-report, for a diagnostic.
+// the later wins — an under-report, for a diagnostic. The stamping core is
+// recorded with it because per-core TSCs are not one clock (SCHEDULER.md:
+// under QEMU/WSL2 they are desynchronized enough to make a cross-core
+// difference meaningless), so the sleeper measures only stamps its own
+// core made — a ring from another core is counted but not timed.
 static inline void doorbell_stamp_edge(doorbell_t* db)
 {
 	if (!db->rung)
-		db->rung_tsc = rdtsc();
+	{
+		db->rung_tsc  = rdtsc();
+		db->rung_apic = get_core_local_storage()->apic_id;
+	}
 }
 
 void doorbell_ring(doorbell_t* db)

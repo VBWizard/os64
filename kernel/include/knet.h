@@ -25,7 +25,7 @@ extern task_t*    kKnetTask;
 // their wake — all in TSC cycles (kCPUCyclesPerSecond converts).
 extern volatile uint64_t kKnetWakes;
 extern volatile uint64_t kKnetDrainRounds;
-extern volatile uint64_t kKnetBudgetExhausted;   // wakes that hit the round cap with work left
+extern volatile uint64_t kKnetBudgetExhausted;   // wakes that spent their budget (time, or the round cap) with work left
 extern volatile uint64_t kKnetWakeCyclesMax;
 // WAKE LATENCY: from a bell's leading edge (doorbell_t.rung_tsc) to the top
 // of the loop that answers it. This is the time a NIC's ring has to cover,

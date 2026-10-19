@@ -38,13 +38,23 @@ volatile uint64_t kKnetWakeLatencyLate10ms;
 // one window the service points do not cover (DOORBELL.md).
 #define KNET_BACKSTOP_TICKS (TICKS_PER_SECOND)
 
-// Drain rounds per wake before the timers get their turn. A round drains
-// every device; a device that emptied its ring in a round has nothing to
-// say in the next. Under a flood the rounds never come back empty, and the
-// timers — retransmission, TIME_WAIT, DHCP's patience — must still run, so
-// the loop hands them the CPU after this many rounds and rings its own bell
-// to come straight back. NAPI's budget, by another name.
-#define KNET_DRAIN_ROUNDS 64
+// The drain budget per wake, before the timers get their turn. A round
+// drains every device; a device that emptied its ring in a round has nothing
+// to say in the next. Under a flood the rounds never come back empty, and
+// the timers — retransmission, TIME_WAIT, DHCP's patience — must still run,
+// so the loop hands them the CPU when the budget is spent and rings its own
+// bell to come straight back. NAPI's budget, by another name.
+//
+// THE BUDGET IS TIME, with the round count as a backstop. A round's size is
+// each driver's ring — the RTL8125's is 1024 frames, chosen for how long the
+// card may wait for THIS thread (r8125.h) — so a budget counted in rounds
+// grows with every ring and a flood could hold the protocol clocks off for
+// seconds. Two ticks is the clocks' own granularity twice over; knet is
+// pinned, so the TSC it reads is one core's (SCHEDULER.md's rule), and a
+// preemption inside the window counts against the budget, as wall time
+// should.
+#define KNET_DRAIN_ROUNDS      64
+#define KNET_DRAIN_BUDGET_TICKS 2
 
 void knet_thread(void)
 {
@@ -63,14 +73,19 @@ void knet_thread(void)
 		// Read the edge stamp BEFORE clearing: a ring landing after the clear
 		// re-stamps for the NEXT wake, and this wake answers the one before.
 		// A backstop wake (nothing rung) measures nothing — the stamp it
-		// would read belongs to a ring already answered.
+		// would read belongs to a ring already answered. A stamp from another
+		// core's TSC measures nothing either (doorbell.c's edge rule): the
+		// NIC interrupts and the tick ring from this thread's own core, which
+		// are the waits the receive ring has to cover; lo's producers ring
+		// from wherever they run and are counted, not timed.
 		bool rung = kNetDoorbell.rung;
 		uint64_t rung_at = kNetDoorbell.rung_tsc;
+		uint32_t rung_apic = kNetDoorbell.rung_apic;
 		kNetDoorbell.rung = false;
 		__sync_synchronize();
 		kKnetWakes++;
 		uint64_t started = rdtsc();
-		if (rung && started > rung_at)
+		if (rung && rung_apic == get_core_local_storage()->apic_id && started > rung_at)
 		{
 			uint64_t waited = started - rung_at;
 			kKnetWakeLatencyTotal += waited;
@@ -82,6 +97,7 @@ void knet_thread(void)
 				kKnetWakeLatencyLate10ms++;
 		}
 
+		uint64_t budget = (kCPUCyclesPerSecond / TICKS_PER_SECOND) * KNET_DRAIN_BUDGET_TICKS;
 		uint32_t rounds = 0;
 		bool moved;
 		do
@@ -100,7 +116,7 @@ void knet_thread(void)
 			if (kNetLoopback != NULL && kNetLoopback->ops->drain(kNetLoopback))
 				moved = true;
 			rounds++;
-		} while (moved && rounds < KNET_DRAIN_ROUNDS);
+		} while (moved && rounds < KNET_DRAIN_ROUNDS && (rdtsc() - started) < budget);
 		kKnetDrainRounds += rounds;
 		// Thread context, so the pool may take its lock here: fold what the
 		// interrupt handlers and the tick have accumulated, and add this
@@ -118,7 +134,10 @@ void knet_thread(void)
 			// that answers it measures the timers' run and not the age of
 			// whatever ring last set the bit.
 			if (!kNetDoorbell.rung)
-				kNetDoorbell.rung_tsc = rdtsc();
+			{
+				kNetDoorbell.rung_tsc  = rdtsc();
+				kNetDoorbell.rung_apic = get_core_local_storage()->apic_id;
+			}
 			kNetDoorbell.rung = true;
 		}
 

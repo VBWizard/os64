@@ -147,6 +147,9 @@ typedef struct net_device
 	// the number to read beside it is /sys/net/knet's wake latency. Each
 	// one is a hole the sender fills after its retransmit timer — the
 	// mechanism behind a download that pauses for seconds and resumes.
+	// Real silicon reports it (the RTL8125's RDU/RXFOVW, the e1000's RXO);
+	// virtio-net is software and has no referent for it, the same way it
+	// has none for rx_errors.
 	uint64_t rx_overruns;
 } net_device_t;
 
