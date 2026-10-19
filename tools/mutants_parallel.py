@@ -56,9 +56,10 @@ mutant, goes on running with no parent. So each harness call has a process
 group of its own (harnessed()), and when it returns whatever is still in the
 group is killed and named at the end as LEFT RUNNING. A group of its own is
 also out of the terminal's reach, so stopping the run is the runner's job:
-Ctrl-C, SIGTERM or SIGHUP kills every group it started (baselines included),
-no worker starts another, and each finishes moving its logs and removing its
-copy before the run exits without a summary.
+Ctrl-C, Ctrl-\, a kill or a closed terminal (every signal that would end it
+but SIGKILL, which nothing can catch) kills every group it started
+(baselines included), no worker starts another, and each finishes moving its
+logs and removing its copy before the run exits without a summary.
 
 HOST_BUILD_JOBS (tools/host_build.sh) is set to --jobs in every worker, so
 twenty workers compiling at once do not ask for twenty machines.
@@ -311,15 +312,21 @@ def interrupted(signum, frame):
     raise KeyboardInterrupt
 
 
-# A terminal's Ctrl-C, a kill and a closed terminal all stop the run the same
-# way: every group it started is killed (stop_all), and the workers, which
-# start nothing more, finish moving their logs and removing their copies.
-signal.signal(signal.SIGTERM, interrupted)
-signal.signal(signal.SIGHUP, interrupted)
+# Every signal whose default would end the runner (SIGPIPE's Python already
+# ignores) stops the run the same way: every group it started is killed
+# (stop_all), and the workers, which start nothing more, finish moving their
+# logs and removing their copies. From before the first job is submitted, so
+# no window lets the pool's shutdown wait out jobs nobody stopped. SIGKILL is
+# the one that cannot be caught: it leaves the groups running.
+STOP_SIGNALS = ('SIGINT', 'SIGTERM', 'SIGHUP', 'SIGQUIT', 'SIGUSR1', 'SIGUSR2', 'SIGALRM',
+                'SIGVTALRM', 'SIGPROF', 'SIGXCPU', 'SIGXFSZ')
+for name in STOP_SIGNALS:
+    if hasattr(signal, name):
+        signal.signal(getattr(signal, name), interrupted)
 results = []
 with concurrent.futures.ThreadPoolExecutor(max_workers=len(jobs)) as pool:
-    futures = [pool.submit(work, job) for job in jobs]
     try:
+        futures = [pool.submit(work, job) for job in jobs]
         for f in futures:
             results.append(f.result())
     except KeyboardInterrupt:
