@@ -2410,15 +2410,14 @@ static bool test_doorbell_wakes_sleeper(void)
     uint64_t worst = 0;
     bool ok = true;
     for (int round = 0; round < 3 && ok; round++) {
-        kDoorbellTestBell.rung = false;
-        __sync_synchronize();
+        doorbell_take(&kDoorbellTestBell);   // lower the edge, as a sleeper does at its loop top
         uint64_t before = kTicksSinceStart;
         kDoorbellTestArm = true;                                // the BSP's next pass rings
         doorbell_park(&kDoorbellTestBell, 5 * TICKS_PER_SECOND);
         uint64_t took = kTicksSinceStart - before;
         if (took > worst)
             worst = took;
-        if (!kDoorbellTestBell.rung) {
+        if (!doorbell_rung(&kDoorbellTestBell)) {
             printd(DEBUG_TESTS, "\tFAIL: test_doorbell_wakes_sleeper - woke with the bell unrung after %lu ticks (the backstop, not the bell)\n", took);
             ok = false;
         } else if (took > 3) {

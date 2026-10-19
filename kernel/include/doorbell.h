@@ -34,7 +34,21 @@
 typedef struct doorbell
 {
 	thread_t*     thread;    // the sleeper this bell belongs to (NULL until registered)
-	volatile bool rung;      // set by a ringer, cleared by the sleeper
+	// THE EDGE: the rung bit and the stamp of the ring that raised it, in ONE
+	// word, claimed by compare-and-swap. Bit 0 is RUNG; bits 1-7 are the
+	// raising core's APIC id (0x7F = a core the field cannot name: counted,
+	// never timed); bits 8-63 are the low 56 bits of that core's TSC. One
+	// word and one CAS because the bit and its stamp are a pair: a ringer
+	// that merely set a bit after another's stamp had already been consumed
+	// would hand the sleeper a stale clock as if it were its own. The raise
+	// either publishes bit+stamp together or finds the bit already up and
+	// publishes nothing; the sleeper's take clears the bit and reads the
+	// stamp in one operation. The core is recorded because per-core TSCs are
+	// not one clock (SCHEDULER.md) — a sleeper times only stamps its own
+	// core made — and the sleeper subtracts modulo 2^56, so a TSC that
+	// already carries more than 56 bits (a host up for a year, a VM handed
+	// its host's count) measures the same as a fresh one.
+	volatile uint64_t edge;
 	uint64_t      rings;     // every ring, whoever rang — diagnostics, racy by design
 	uint64_t      wakes;     // rings that found the thread parked and relinked it
 	uint64_t      rung_runnable; // rings that found it awake and off the CPU — answered by aging, not the boost
@@ -52,6 +66,38 @@ typedef struct doorbell
 void doorbell_register(doorbell_t* db, thread_t* thread, const char* name);
 void doorbell_unregister(doorbell_t* db);
 
+// The edge word's encoding (`edge` above) and the two atomic verbs on it.
+#define DOORBELL_EDGE_RUNG          1ull
+#define DOORBELL_EDGE_APIC_UNKNOWN  0x7Fu
+#define DOORBELL_EDGE_TSC_MASK      ((1ull << 56) - 1)
+static inline uint64_t doorbell_edge_make(uint64_t tsc, uint32_t apic)
+{
+	uint64_t core = apic < DOORBELL_EDGE_APIC_UNKNOWN ? apic : DOORBELL_EDGE_APIC_UNKNOWN;
+	return ((tsc & DOORBELL_EDGE_TSC_MASK) << 8) | (core << 1) | DOORBELL_EDGE_RUNG;
+}
+static inline bool     doorbell_edge_rung(uint64_t edge) { return (edge & DOORBELL_EDGE_RUNG) != 0; }
+static inline uint32_t doorbell_edge_apic(uint64_t edge) { return (uint32_t)((edge >> 1) & 0x7Fu); }
+static inline uint64_t doorbell_edge_tsc(uint64_t edge)  { return edge >> 8; }
+// Cycles from the edge's TSC to `now` on the same core, modulo 2^56 — the
+// only subtraction that is right for a truncated stamp.
+static inline uint64_t doorbell_edge_elapsed(uint64_t edge, uint64_t now)
+{
+	return ((now & DOORBELL_EDGE_TSC_MASK) - doorbell_edge_tsc(edge)) & DOORBELL_EDGE_TSC_MASK;
+}
+static inline bool doorbell_rung(const doorbell_t* db) { return doorbell_edge_rung(db->edge); }
+
+// RAISE the edge: interrupt-safe, lock-free, from any core. Publishes the
+// rung bit and this core's stamp together, or finds the bit already up and
+// publishes nothing. Returns whether this call made the edge. The ring verbs
+// below call it; a sleeper re-arming its own bell calls it too.
+bool doorbell_raise(doorbell_t* db);
+
+// TAKE the edge: the sleeper's clear. Lowers the rung bit and returns the
+// word as it was — rung or not, and the stamp of the ring being answered —
+// in one atomic operation, so the stamp read can never belong to a later
+// ring than the bit.
+uint64_t doorbell_take(doorbell_t* db);
+
 // RING. Interrupt-safe, lock-free, from anywhere: stores the bit, provokes a
 // pass on the thread's home core.
 void doorbell_ring(doorbell_t* db);
@@ -64,7 +110,12 @@ void doorbell_ring_in_pass(doorbell_t* db);
 // backstop is the house rule that a missed edge costs a tick, never a hang.
 // Thread context only. Returns immediately, without sleeping, if the bell
 // was rung between the sleeper clearing it and this call.
-void doorbell_park(doorbell_t* db, uint64_t backstop_ticks);
+// Returns whether it SLEPT: false when the bell was already rung and the
+// park returned at once, true when the thread left the CPU and was woken (by
+// a ring or the backstop). The sleeper's diagnostics use the distinction —
+// a ring answered after a sleep waited on the scheduler, a ring answered
+// without one waited on the sleeper's own loop.
+bool doorbell_park(doorbell_t* db, uint64_t backstop_ticks);
 
 // ANSWER: the scheduler's half. Called from inside a pass, under the queue
 // lock, at both service points scheduler.c names. For every bell that is

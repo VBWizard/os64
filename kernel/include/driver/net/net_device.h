@@ -141,6 +141,16 @@ typedef struct net_device
 	// against one driver is that driver's private wrapper; this is what
 	// the sentence meant.
 	uint64_t rx_errors;
+	// The card ran out of receive descriptors (or receive FIFO) and dropped
+	// frames until the drain refilled it. Not the wire's fault and not the
+	// stack's: the ring was shallower than the gap between two drains, so
+	// the number to read beside it is /sys/net/knet's wake latency. Each
+	// one is a hole the sender fills after its retransmit timer — the
+	// mechanism behind a download that pauses for seconds and resumes.
+	// Real silicon reports it (the RTL8125's RDU/RXFOVW, the e1000's RXO);
+	// virtio-net is software and has no referent for it, the same way it
+	// has none for rx_errors.
+	uint64_t rx_overruns;
 } net_device_t;
 
 // The STACK side of the seam: where inbound frames go. Phase 2's ethernet

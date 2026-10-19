@@ -1758,8 +1758,9 @@ static void sys_gen_net_tcp(synth_text_t *t)
 // net/knet — the drainer thread and the doorbell it parks on (DOORBELL.md).
 // The numbers a person reads when a transfer is slower than the wire: how
 // often the drainer woke, how many drain rounds those wakes took, how often
-// it spent its whole budget with work still waiting, and the longest single
-// wake. The bell's own tally says who rang: `rings` counts every ring
+// its budget ran out while a round was still moving (so it rang itself to
+// come back and check), and the longest single wake. The bell's own tally
+// says who rang: `rings` counts every ring
 // (interrupt handlers and the tick alike), `wakes` the ones that found the
 // thread parked and relinked it — the rest found it already awake.
 static void sys_gen_net_knet(synth_text_t *t)
@@ -1770,6 +1771,27 @@ static void sys_gen_net_knet(synth_text_t *t)
 	synth_text_addf(t, "drain_rounds: %lu\n", kKnetDrainRounds);
 	synth_text_addf(t, "budget_exhausted: %lu\n", kKnetBudgetExhausted);
 	synth_text_addf(t, "wake_cycles_max: %lu\n", kKnetWakeCyclesMax);
+	// How long rings waited to be answered (knet.h), in microseconds, over
+	// the rings that were timed (stamped on knet's own core) and split by
+	// what they waited on: `wake_latency_*` is the scheduler (the park had
+	// slept), `response_latency_*` is a running loop coming round (the ring
+	// landed mid-drain; the loop's work plus any preemption of it). A NIC's
+	// rx_overruns climbing beside wake late_10ms says a parked drainer was
+	// scheduled too late; beside response late_10ms, that a running one
+	// took that long to come round.
+	uint64_t per_us = kCPUCyclesPerSecond / 1000000;
+	if (per_us == 0)
+		per_us = 1;
+	synth_text_addf(t, "wake_latency_samples: %lu\n", kKnetWakeLatencySamples);
+	synth_text_addf(t, "wake_latency_max_us: %lu\n", kKnetWakeLatencyMax / per_us);
+	synth_text_addf(t, "wake_latency_avg_us: %lu\n",
+	                kKnetWakeLatencySamples != 0
+	                    ? (kKnetWakeLatencyTotal / per_us) / kKnetWakeLatencySamples : 0);
+	synth_text_addf(t, "wake_latency_late_1ms: %lu\n", kKnetWakeLatencyLate1ms);
+	synth_text_addf(t, "wake_latency_late_10ms: %lu\n", kKnetWakeLatencyLate10ms);
+	synth_text_addf(t, "response_latency_samples: %lu\n", kKnetResponseLatencySamples);
+	synth_text_addf(t, "response_latency_max_us: %lu\n", kKnetResponseLatencyMax / per_us);
+	synth_text_addf(t, "response_latency_late_10ms: %lu\n", kKnetResponseLatencyLate10ms);
 	synth_text_addf(t, "bell_rings: %lu\n", kNetDoorbell.rings);
 	synth_text_addf(t, "bell_wakes: %lu\n", kNetDoorbell.wakes);
 	synth_text_addf(t, "bell_rung_runnable: %lu\n", kNetDoorbell.rung_runnable);
@@ -1851,6 +1873,10 @@ static void sys_gen_net_card(synth_text_t *t, uint32_t index)
 	// NET_FRAME_MAX (counted, never truncated — net_device.h's rule).
 	synth_text_addf(t, "rx_dropped_no_handler: %lu\n", d->rx_dropped_no_handler);
 	synth_text_addf(t, "rx_dropped_too_big: %lu\n", d->rx_dropped_too_big);
+	// The card ran out of ring and dropped frames (net_device.h): the number
+	// that says a download's pauses are the drainer arriving late, read
+	// beside /sys/net/knet's wake_latency_late_10ms.
+	synth_text_addf(t, "rx_overruns: %lu\n", d->rx_overruns);
 }
 
 // cpu/<n>/time — one core's slice of the CPU-time ledger (/proc/cores' whole

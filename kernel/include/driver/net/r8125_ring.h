@@ -157,4 +157,45 @@ static inline uint16_t r8125_ring_next(uint16_t index, uint16_t count)
 	return (uint16_t)((index + 1u) % count);
 }
 
+// ── THE STALL WATCHDOG'S RULE ───────────────────────────────────────────
+//
+// Pure for the same reason the ring protocol is: the driver's only rig is
+// the P5, and a watchdog rule that is wrong in either direction is costly
+// there — too eager and it writes thousands of false alarms a day that
+// train the reader to skip the one that matters (the deaf rule did exactly
+// that from 2026-09-23, when the P5 became a VNC server, until 2026-10-18);
+// too lazy and a dead network says nothing. The driver supplies the clock
+// and the counters; this decides.
+//
+//   TX_WEDGED  descriptors are outstanding and none has completed for
+//              longer than stall_ticks. The device has stopped. The clock
+//              (ticks_since_tx_clock) is the TRANSMIT engine's alone: it
+//              restarts on a completion and when the first descriptor is
+//              handed to an empty ring, and arrivals do not touch it — or a
+//              transmit engine dead beside a live receive engine (the
+//              one-sided death this verdict exists for) would never expire
+//              it. Starting it at the first outstanding descriptor is what
+//              keeps the first frame after an idle spell from reading as two
+//              seconds of silence.
+//   DEAF       at least deaf_frames went out since the last arrival AND
+//              the first of them went out longer than stall_ticks ago
+//              (ticks_since_silence: the driver's clock starts with the
+//              first frame SENT into the silence, not with the last
+//              arrival, so the burst that ends an idle spell gets its two
+//              seconds for an answer). Both halves are load-bearing:
+//              silence on an idle machine is not a fault, and neither is a
+//              run of frames between two arrivals — a server streaming to
+//              a peer that coalesces its ACKs sends a hundred frames per
+//              arrival as a matter of course.
+typedef enum
+{
+	R8125_STALL_NONE = 0,
+	R8125_STALL_TX_WEDGED,
+	R8125_STALL_DEAF,
+} r8125_stall_t;
+
+r8125_stall_t r8125_stall_verdict(bool tx_outstanding, uint64_t ticks_since_tx_clock,
+                                  uint32_t tx_since_rx, uint64_t ticks_since_silence,
+                                  uint64_t stall_ticks, uint32_t deaf_frames);
+
 #endif // R8125_RING_H

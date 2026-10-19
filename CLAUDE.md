@@ -420,7 +420,9 @@ loopback's queue beside them — `lo` is no card, so it is not in the table;
 knet exists whenever networking does, card or no card; NONET is the only
 boot without it. The tick rings the same bell once per tick, which
 is what keeps a NIC with no interrupt (virtio) at its old cadence.
-`/sys/net/knet` carries the counters (wakes, drain rounds, the longest wake)
+`/sys/net/knet` carries the counters (wakes, drain rounds, the longest wake,
+and how long rings waited to be answered — `wake_latency_*`, the time a
+NIC's receive ring has to cover; read it beside the NIC's `rx_overruns`)
 — read it FIRST when a transfer is slower than the wire; it caught a 5,800
 wakes-a-second loop the day it was born. The e1000 rings from its INTx
 handler, the RTL8125 from MSI (vector 0x46, P5 only), and every protocol's

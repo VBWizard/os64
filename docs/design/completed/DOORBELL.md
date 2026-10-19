@@ -63,8 +63,9 @@ typedef struct doorbell {
 
 Two verbs, and the rule that makes them safe is WHO MAY TAKE THE QUEUE LOCK.
 
-**`doorbell_ring(db)` — interrupt-safe, takes no lock, ever.** It stores
-`rung = true` and provokes a scheduler pass on the thread's home core: a
+**`doorbell_ring(db)` — interrupt-safe, takes no lock, ever.** It raises
+the edge (`doorbell_raise`: the rung bit and the ring's stamp, one
+compare-and-swap) and provokes a scheduler pass on the thread's home core: a
 self-IPI on `IPI_MANUAL_SCHEDULE_VECTOR` (0x7A) when that is this core, a
 remote IPI otherwise. That is the whole top half. The reason it cannot take
 `kSchedulerSwitchTasksLock` is the 9badced doctrine: the BSP's own pass holds
@@ -84,7 +85,7 @@ will service the bell below.
 
 **`doorbell_service_locked()` — runs inside every core's pass, under the
 queue lock, between the outgoing thread's requeue and the pick.** For each
-registered bell whose `rung` is set and whose thread is in ISLEEP: cancel the
+registered bell whose edge is raised and whose thread is in ISLEEP: cancel the
 SIGSLEEP backstop, relink RUNNABLE, and mark the thread `expedite`. The exact
 same three lines as `tty_summon_wake` uses to roust kworker, in the exact
 same place, for the exact same reasons. The service point sits AFTER the
@@ -107,13 +108,13 @@ closed, and a 300 Mbit/s download held at 180. `/sys` counts the case as
 sleeper's loop is:
 
     for (;;) {
-        db->rung = false;            // clear BEFORE the work, never after
+        doorbell_take(db);           // lower the edge BEFORE the work, never after
         do all the work there is;
         doorbell_park(db);           // sleep unless the bell rang meanwhile
     }
 
 `doorbell_park` takes the queue lock (thread context, IF off, the type-2
-idiom), and if `rung` is already true it returns without sleeping; otherwise
+idiom), and if the edge is already raised it returns without sleeping; otherwise
 it raises SIGSLEEP with a one-second backstop and provokes the pass that
 parks it. A ring that lands after the clear and before the lock is seen at
 the lock. A ring that lands after the lock is seen by the service in the
@@ -144,7 +145,7 @@ A kernel daemon minted the way kworker is, in `task_create`'s builtin name
 switch. Its body:
 
     for (;;) {
-        rung = false;
+        doorbell_take(&kNetDoorbell);                            // lower the edge first
         for every registered net_device: dev->ops->drain(dev);   // until the ring is empty
         tcp_poll(); dhcp_poll();                                 // the timers ride here too
         doorbell_park(&kNetDoorbell);
@@ -296,6 +297,31 @@ idle link, 5,800 a second. The ring is once per TICK now
 (`s_net_rung_at_tick`), and an idle link costs a few dozen wakes a second.
 The lesson is the counter's: a primitive that wakes things must count its
 wakes before anyone trusts it.
+
+**The counter the P5 asked for next (2026-10-18): how long a ring WAITS.**
+`wake_cycles_max` says how long knet took once it ran; it says nothing
+about how long the bell rang before it did. On a BSP shared with yonder,
+vncd and sshd, three quarters of the RTL8125's rings were landing while
+knet was runnable but off the CPU (`rung_runnable`), and the receive ring
+overran 57 times in three seconds under a page load — the ring's slack is
+exactly the latency it has to cover, and nothing measured it. The bell now
+stamps its leading edge (`edge`: the rung bit, the raising core and the
+TSC's low 56 bits in one word, raised by compare-and-swap so the bit and
+its stamp can never come from different ringers; per-core TSCs are not one
+clock, so knet times only stamps its own core made, subtracting modulo
+2^56) and knet takes the edge at the top of the loop that answers it — bit
+down, stamp in hand, one atomic act — splitting the samples by
+what the ring waited on. `wake_latency_*` (samples, max, average, over 1 ms,
+over 10 ms) is the rings answered after the park had SLEPT — the wait was
+the scheduler's. `response_latency_*` (samples, max, over 10 ms) is the rings
+that landed while knet's loop was already running — the wait was the loop
+coming round, its own work plus any preemption of it on the way, wall time
+like `wake_cycles_max`. Neither number separates knet's CPU time from time
+it spent runnable and off the CPU; that needs the thread's CPU accounting.
+Read them beside a NIC's `rx_overruns`: climbing with wake `late_10ms` means
+a parked drainer was scheduled late; with response `late_10ms`, that a
+running one took that long to come round. Either way the BSP is the
+contended resource, and the home-core row in DEBTS is the answer.
 
 **The per-frame wake, measured.** A 4MB download is ~2,900 frames and cost
 2,509 wakes; the upload ~2,740 segments and 4,281 wakes. That is a top half
