@@ -27,6 +27,11 @@ typedef struct {
 } os64_monitor_core_split_t;
 
 typedef struct {
+    uint64_t switches, minor_faults, major_faults;
+    bool valid; // consecutive observations of this task, with no counter reset
+} os64_monitor_task_events_t;
+
+typedef struct {
     os64_proc_info_t info;
     os64_monitor_usage_t cpu;
 } os64_monitor_task_t;
@@ -99,5 +104,11 @@ bool os64_monitor_core_split(const os64_monitor_t *monitor, uint32_t id,
                              os64_monitor_core_split_t *out);
 bool os64_monitor_machine_split(const os64_monitor_t *monitor,
                                 os64_monitor_core_split_t *out);
+
+// Event counts since the preceding sample, not lifetime totals or rates.
+// A missing task returns false. First sighting, a sampling gap, or a reset
+// leaves valid false. The snapshot and task record layouts remain unchanged.
+bool os64_monitor_task_events(const os64_monitor_t *monitor, uint64_t pid,
+                              os64_monitor_task_events_t *out);
 
 #endif

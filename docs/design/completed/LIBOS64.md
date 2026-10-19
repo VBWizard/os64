@@ -100,7 +100,8 @@ umbrella that pulled the world into every TU.
 | `<os64/str.h>` | str*/mem* primitives, including unsigned-byte ordering through `os64_strcmp` and bounded/string searches through `os64_memchr`, `os64_strchr`, and `os64_strrchr` |
 | `<os64/url.h>` | `os64_url_parse` — the `scheme://host:port/path` grammar RFC 1738 wrote once for http and gopher as siblings. Grammar only: no scheme table, no default ports, no percent-decoding, so a caller says which schemes it serves and what each implies |
 | `<os64/proc.h>` | `spawn`, `fork`, `exec*`, `waitpid`, `exit`, `kill`, `getcwd`/`chdir` |
-| `<os64/monitor.h>` | Per-consumer process/thread/core sampling, CPU deltas and percentages, system memory; used by `top` and `htop`. Contract and extension boundaries below. |
+| `<os64/monitor_io.h>` | Optional per-consumer network and block-cache sampling, counter deltas and monotonic rates; used by `sysstat` and available to other monitors. |
+| `<os64/monitor.h>` | Per-consumer process/thread/core sampling, CPU percentages, task event deltas and system memory; used by `top`, `htop` and `sysstat`. Contract and extension boundaries below. |
 | `<os64/pipe.h>` | `pipe`, `dup`/`dup2` |
 | `<os64/opt.h>` | the `CommandLineOption` getopt-style parser (kept from libChrisOS — it was good) |
 | `<os64/time.h>` | `time`, `sleep`, `gettime` |
@@ -110,7 +111,7 @@ umbrella that pulled the world into every TU.
 ## Shared monitoring
 
 `monitor.c` builds on the typed process readers in `procfs.c`. It owns the
-history and CPU arithmetic used by `top` and `htop`; its public header is
+history and CPU arithmetic used by `top`, `htop` and `sysstat`; its public header is
 `<os64/monitor.h>`. A terminal monitor or graphical Task Manager can consume
 the same results without implementing another version of that arithmetic.
 
@@ -154,6 +155,12 @@ Task counters are matched by ID, not directory order or a display row.
 The kernel's task IDs are assumed not to be reused within a monitor's lifetime;
 if that changes, the producer must expose an incarnation identifier.
 
+`os64_monitor_task_events()` returns context-switch and minor/major-fault
+deltas for a task across consecutive observations. It matches task IDs in
+the retained snapshots; first sightings, sampling gaps and decreasing
+counters make the result unavailable. This accessor preserves the public
+snapshot and task-record layouts and adds no per-sample allocation.
+
 `/proc` enumeration or clock failure returns an error and resets history.
 Disappearing task/thread reports are skipped. Optional memory failure sets
 `memory_valid=false`; missing or malformed core reports and reached capacities
@@ -173,10 +180,13 @@ partial samples are reported on screen. `top` hides CPU idle tasks by default;
 means kernel tasks named `idle` followed by digits, not sleeping user tasks.
 The view filter does not change the sampled CPU totals or history.
 
-The [htop interface](HTOP.md) is a second consumer: it owns selection,
-filtering, tree layout, activity history and terminal rendering. Network and
-disk-rate sampling, terminal mouse input, and the graphical Task Manager
-are separate extensions. Existing readers remain available for tools that
+The [htop interface](HTOP.md) owns selection, filtering, tree layout,
+activity history and terminal rendering. The
+[sysstat command](../../../userland/apps/sysstat/USAGE.md) consumes the same
+samples for bounded, noninteractive text or JSON reports over SSH, including
+optional task and thread details, network traffic and block-cache activity.
+Per-device disk throughput/latency, terminal mouse input, and the graphical
+Task Manager are separate extensions. Existing readers remain available for tools that
 only need a one-shot process list.
 
 Validation: `tools/test_monitor_host.sh` exercises independent consumers,
@@ -184,6 +194,39 @@ identity/lifecycle changes, thread toggles, failed sources, parsing, bounded
 samples, allocation failures, clock selection, overflow and percentage
 rounding under ASan/UBSan. `/tests/monitortest` exercises independent monitors
 against live kernel reports. `top` needs a separate interactive smoke test.
+
+### Optional network and block-cache sampling
+
+`monitor_io.c` exposes `<os64/monitor_io.h>` as an independent companion to
+CPU/task sampling. `os64_monitor_io_create(sources, interface_capacity)`
+selects network and/or cache sources and allocates two retained buffers.
+`os64_monitor_io_sample()` collects a borrowed snapshot; destroy the instance
+with `os64_monitor_io_destroy()`. Each consumer owns its history and cadence.
+There is no terminal, sleep or display policy in this module, and no change
+to the CPU monitor's public record layouts.
+
+Network sampling enumerates `/sys/net` NIC reports and reads `/sys/net/tcp`;
+cache sampling reads `/sys/cache`. Required fields are validated by key,
+unknown fields are accepted, and malformed/duplicate/missing fields invalidate
+that source. Partial flags report unavailable sources, interface census
+truncation and failed clocks. Network capacity must be positive; cache-only
+instances do not allocate interface arrays. The TCP reader stops before its
+listener and connection tables, although the kernel still generates the report.
+
+Each source carries availability, timestamp, delta validity and rate validity.
+Rates use the elapsed monotonic time between observations of that source,
+rounding down with overflow checks. Counter resets, gaps and first sightings
+invalidate deltas; failed clocks and nonpositive intervals invalidate rates.
+An interface matches by name and MAC, independently of enumeration order.
+A cache enabled-state change also starts a new baseline. Totals retain the
+producer's units: bytes/frames and TCP events for network, request segments
+and cache-line events for the block cache. Cache statistics do not substitute
+for per-device throughput, latency or all disk operations.
+
+`tools/test_monitor_io_host.sh` validates parsing, independent histories,
+identity changes, missing sources, bounded enumeration, resets, clocks,
+allocation failures and overflow under ASan/UBSan. The sysstat suite checks
+both text presentation and independently parsed JSON, including null values.
 
 ## The unified handle model
 

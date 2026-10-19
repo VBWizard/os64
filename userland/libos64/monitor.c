@@ -28,6 +28,7 @@ struct os64_monitor {
     size_t task_capacity, thread_capacity, core_capacity;
     unsigned current;
     bool have_previous;
+    bool events_previous_valid;
     uint64_t sequence;
     os64_ticks_t initial_ticks;
 };
@@ -441,12 +442,14 @@ int32_t os64_monitor_sample(os64_monitor_t *m, bool threads,
     if (os64_ticks(&s->ticks) < 0 || !s->ticks.per_second) goto failed;
     s->memory_valid = os64_memory(&s->memory) == 0;
     calculate(m, b, &m->buffers[m->current].snapshot);
+    m->events_previous_valid = m->have_previous;
     s->sequence = ++m->sequence;
     m->current ^= 1u; m->have_previous = true;
     *out = s;
     return 0;
 failed:
     m->have_previous = false;
+    m->events_previous_valid = false;
     os64_memset(&m->initial_ticks, 0, sizeof(m->initial_ticks));
     return -1;
 }
@@ -488,5 +491,34 @@ bool os64_monitor_machine_split(const os64_monitor_t *m,
 {
     if (!m || !out || !m->have_previous) return false;
     *out = m->buffers[m->current].machine_split;
+    return true;
+}
+
+bool os64_monitor_task_events(const os64_monitor_t *m, uint64_t pid,
+                              os64_monitor_task_events_t *out)
+{
+    if (!m || !out || !m->have_previous) return false;
+    *out = (os64_monitor_task_events_t){0};
+    const os64_monitor_snapshot_t *now = &m->buffers[m->current].snapshot;
+    const os64_monitor_snapshot_t *before = &m->buffers[m->current ^ 1u].snapshot;
+    const os64_proc_info_t *current = NULL;
+    for (size_t i = 0; i < now->task_count; i++)
+        if (now->tasks[i].info.pid == pid) { current = &now->tasks[i].info; break; }
+    if (!current) return false;
+    if (!m->events_previous_valid) return true;
+    for (size_t i = 0; i < before->task_count; i++) {
+        const os64_proc_info_t *prior = &before->tasks[i].info;
+        if (prior->pid != pid) continue;
+        if (current->runtime_us >= prior->runtime_us &&
+            current->switches >= prior->switches &&
+            current->minor_faults >= prior->minor_faults &&
+            current->major_faults >= prior->major_faults) {
+            out->switches = current->switches - prior->switches;
+            out->minor_faults = current->minor_faults - prior->minor_faults;
+            out->major_faults = current->major_faults - prior->major_faults;
+            out->valid = true;
+        }
+        break;
+    }
     return true;
 }

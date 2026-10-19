@@ -48,7 +48,7 @@
 #include <stdbool.h>
 
 typedef struct {
-	uint64_t hits;            // request bytes served from a line
+	uint64_t hits;            // request segments served from a resident line
 	uint64_t misses;          // request segments that required a fill
 	uint64_t fills;           // lines read from disk (one command each)
 	uint64_t evictions;       // LRU lines recycled to make room
