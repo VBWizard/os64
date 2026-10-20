@@ -261,7 +261,7 @@ static void list_reface(os64_ui_widget_t *w)
 
 static const os64_ui_class_t kListClass = {"listbox", list_paint, list_event, list_cancel,
                                           list_prepare, list_commit, list_discard,
-                                          list_destroy, list_metrics, list_reface};
+                                          list_destroy, list_metrics, list_reface, false};
 
 void os64_ui_listbox(os64_ui_listbox_t *list, size_t count,
                      const char *(*label)(size_t, void *),

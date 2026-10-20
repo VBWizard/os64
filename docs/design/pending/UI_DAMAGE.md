@@ -24,6 +24,37 @@ now marks only what it changed (597 of 597), and what is left is this one:
 - The whole views are about 54% of the pixels painted, at 18.7 ms a paint
   (the view's painting is most of it), with the main loop 85% busy.
 
+**What the built list showed (QEMU, 2026-10-19), and it corrects the
+above.** The whole views on danlegt's middle were NOT parts far apart
+uniting. They are the page's starfield: `body` carries `stars1.gif` (6
+frames, 90 ms each) and `html` has a background colour of its own, so
+`html` owns the canvas and `body` is an ordinary box over the whole page.
+Every frame marks body's part of the view, which IS the view, so every
+frame is a whole view, correctly: the starfield changes behind
+everything. The old label lumped that in with parts far apart because it
+asked only whether the parts' box spanned the view. With the list in
+place the record counts the dirty list (rectangles, the most in a paint,
+the full lists made one: 7 at most, one collapse in three minutes) and
+says a part as big as the view by name, so it now reads "1294 a moving
+part as big as the view" where it read "parts that reached the whole
+view".
+
+So the list does not remove danlegt's whole views; nothing that keeps
+the starfield moving can. What it removes is the cost of everything else:
+on the same page, scroll position and three minutes (TCG, so counts and
+pixels, not times):
+
+| | paints | whole | Mpx of the view | Mpx a paint |
+|---|---|---|---|---|
+| userland (one rectangle) | 2080 | 1129 | 757.8 | 0.36 |
+| the list | 2362 | 1274 | 571.0 | 0.24 |
+
+The paints between starfield frames dropped from about 0.30 Mpx to about
+0.03 (the view is 0.42 Mpx), a quarter fewer pixels in all while painting
+13% more often. The starfield's own cost is the next question, and a
+different item: a moving background behind the whole view repaints
+everything in front of it at the background's frame rate.
+
 The compositor solved the same problem on its side in 2026-08
 (`kernel/src/gui/compositor.c`, the damage list above `DAMAGE_MAX_RECTS`),
 and its comment carries the lessons this design takes.
@@ -58,19 +89,30 @@ dirty, and roughly where" is unchanged.
 
 ### 2. Painting
 
-`os64_ui_render` paints the list one rectangle at a time: `ui->dirty` is set
-to the rectangle, and `paint_recursive` runs as it does today, visiting the
-widgets that meet it. A widget that cuts its painting to `ui->dirty` (yonder's
-view does) needs no change.
+`os64_ui_render` walks the tree ONCE, parent before children, and paints
+each widget that meets any rectangle of the list. How depends on a new
+class flag, `paints_part`:
 
-**A widget that paints its whole bounds** is painted once for each
-rectangle it meets. For a button that costs nothing; for the root panel it
-is the whole window filled again for every rectangle. So `panel_paint`
-fills `bounds ∩ ui->dirty` and draws only the border edges that meet it.
-That is the "libui paints the part" half of the item, limited to what is
-big: the panel, and any widget class the survey finds that fills a large
-area. The survey (every `cls->paint` in libos64 and the apps) is part of
-the slice, written down here before the code.
+- **A `paints_part` class** paints only what `ui->dirty` covers of it, so
+  it is painted once for each rectangle it meets, with `ui->dirty` set to
+  that rectangle. The panel is one (it fills `bounds ∩ dirty` and draws
+  only the border edges that meet it), and so is yonder's view, which
+  already cut its painting to `ui->dirty`.
+- **Any other class** paints its whole bounds, as it always did, so it is
+  painted once, with `ui->dirty` the box around the rectangles it meets.
+
+Why the flag, and not every widget painted once per rectangle (this note's
+first plan): a widget that paints its whole bounds would then be painted
+whole once for every rectangle it meets, which is SLOWER than today for any
+big widget that does not cut, and every class would have to be surveyed
+and taught to cut before the slice could ship. With the flag nothing is
+slower than today: a class that cuts gets the list, and one that does not
+is painted exactly as before. Teaching another big class to cut (the
+textview, the dataview) is then a one-class change, measured on its own.
+
+The one walk keeps the toolkit's paint order: a widget is painted for all
+of its rectangles before any of its children is, so a parent painted for
+the second rectangle never overpaints a child painted for the first.
 
 Overlapping rectangles that the slack let through paint the same bytes
 twice, which is waste, never a wrong pixel: every widget repaints from
@@ -91,8 +133,9 @@ publish of the list (a new call, and kernel work with its own review), not
 a different libui.
 
 `os64_ui_render(ui, damage)` keeps its signature for its callers (gterm,
-appearance, yonder) and hands back the bounding box. A new
-`os64_ui_render_list` hands back the rectangles.
+appearance) and hands back the bounding box. A new `os64_ui_render_list`
+hands back the rectangles; `os64_ui_paint` publishes each of them, and
+yonder's paint does the same.
 
 ### 4. What yonder changes
 
@@ -102,9 +145,10 @@ appearance, yonder) and hands back the bounding box. A new
   view, so the `whole views:` line's "parts that reached the whole view"
   shrinks to what it says.
 - `ticks_before_paint` ticks every ticking animation when the whole view is
-  being painted anyway. Its test becomes "one rectangle covers the view",
-  which is what it meant: a list whose bounding box spans the view does not
-  repaint the view.
+  being painted anyway. Its test becomes "one rectangle covers the view"
+  (`os64_ui_dirty_covers`), which is what it meant: a list whose bounding
+  box spans the view does not repaint the view.
+- The view's class says `paints_part`.
 - `mark_part` and `mark_whole` are unchanged: they mark, and the list sorts
   out where.
 
@@ -120,6 +164,7 @@ appearance, yonder) and hands back the bounding box. A new
 | any | a mark of nothing (empty, or no widget) | unchanged |
 | any | render, painted | empty, and `ui->dirty` empty |
 | any | render with no root | unchanged (today's behaviour: nothing is painted) |
+| any | `any_dirty` cleared by hand (tests do it, an app may) | empty: `any_dirty` is the authority, and the next mark starts a new list |
 
 Growing an entry is not followed by a pass that merges it with the others
 (the compositor's choice too): a mark that bridges two entries can leave
@@ -132,9 +177,13 @@ if the counts ever show it, the fix is a sweep after an entry grows.
   marks, then for every pixel, whether the list covers it (it must cover
   every pixel marked), how many entries cover it (the waste), and that the
   list never exceeds MAX. Mutants for each rule.
-- **Host, libui:** a window with marks far apart paints only what they
-  mark (a canary pixel between them is not repainted); a root mark leaves
-  one rectangle; the panel fills only the rectangle being painted.
+- **Host, libui** (`tools/test_ui_damage_host.sh`, 13 mutants in
+  `tools/test_ui_damage_mutants.py`): a window with marks far apart paints
+  only what they mark (a canary on every pixel outside them survives); a
+  root mark leaves one rectangle; a full list collapses, counted; a
+  `paints_part` class is painted once a rectangle and any other once with
+  the box, parents before children; the panel fills and outlines only the
+  rectangle it is given; a hand clear of `any_dirty` clears the list.
 - **yonder:** the scripts suite's counts through a real frame (two parts
   far apart are two rectangles and no whole view); the `whole views:` line.
 - **QEMU and the P5:** the middle of danlegt at 2560x1440 again, against

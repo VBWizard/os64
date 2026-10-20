@@ -1350,11 +1350,16 @@ static struct {
 // What marked the whole view for a paint (mark_whole), counted by the
 // paint (s_cost.whole_by). A paint of the whole view that none of yonder's
 // own whole marks asked for was made whole by the parts it marked
-// (mark_part) when they reach across the view, and by libui's own marks
-// otherwise: a hover or a focus moved onto the view, the window laid out.
+// (mark_part) when they reach across the view, which is parts that
+// together covered it (merged, or a full dirty list made one rectangle),
+// and by libui's own marks otherwise: a hover or a focus moved onto the
+// view, the window laid out. Two moving things cover the view alone and
+// are whole marks of their own: the canvas's background (a frame of its
+// picture, a tick of its style), and one part as big as the view (mark_part
+// says so: a starfield on a body whose html has a background of its own).
 typedef enum {
     WHOLE_PARTS, WHOLE_REFUSED, WHOLE_LAYOUT, WHOLE_SCRIPT, WHOLE_SCROLL, WHOLE_PICTURE, WHOLE_FACE, WHOLE_WINDOW,
-    WHOLE_TOOLKIT, WHOLE_COUNT
+    WHOLE_BACKDROP, WHOLE_BIG_PART, WHOLE_TOOLKIT, WHOLE_COUNT
 } WholeBy;
 
 // The first thing to mark the whole view since the last paint (glass_paint),
@@ -1804,9 +1809,10 @@ static const char *const kPastDeadline[PAST_COUNT] = {
 };
 
 static const char *const kWholeBy[WHOLE_COUNT] = {
-    "parts that reached the whole view", "layouts for animations that refused their parts", "other layouts",
+    "parts that together covered the view", "layouts for animations that refused their parts", "other layouts",
     "scripts' changes", "scrolls", "pictures that came in", "faces that came in",
-    "the window, its bars, a page shown and settings", "the toolkit's own marks",
+    "the window, its bars, a page shown and settings", "the page's background moving behind the whole view",
+    "a moving part as big as the view", "the toolkit's own marks",
 };
 
 // Why a layout for the animations refused its parts (s_parts.why), as the
@@ -1846,6 +1852,10 @@ static struct {
     uint64_t now[PS_COUNT], total[PS_COUNT], most[PS_COUNT], began[PS_COUNT];
     uint32_t depth[PS_COUNT];
     uint64_t paints, whole, pixels, ticks, schedules, waited, scripts, timers, events, layouts;
+    // libui's dirty list: the rectangles the paints published, the most in
+    // one, and g.ui.damage_collapses when counting began (a full list made
+    // one rectangle is a whole view by parts).
+    uint64_t rects, rects_most, collapses_from;
     uint64_t layouts_motion;                // of `layouts`, those for the animations alone (LaidFor)
     uint64_t layouts_parts;                 // of those, the ones that marked only what they changed
     // The paints of the whole view, by what marked it (s_whole_by), and the
@@ -1922,6 +1932,7 @@ static void cost_fold(PaintStage from, PaintStage to)
 static void cost_reset(void)
 {
     os64_memset(&s_cost, 0, sizeof(s_cost));
+    s_cost.collapses_from = g.ui.damage_collapses;
     s_cost.from_cycles = cycles();
     s_cost.from_us = os64_micros();
     yonder_ticker_counts_restart(g.ticker);
@@ -5012,6 +5023,9 @@ static bool whole_lines(DiagText *w)
             dt_put(w, "%s %lu %s", sep, (unsigned long)s_cost.whole_by[i], kWholeBy[i]);
             sep = ",";
         }
+    dt_put(w, "; the dirty list: %lu rectangles, %lu at most in a paint, %lu full lists made one",
+           (unsigned long)s_cost.rects, (unsigned long)s_cost.rects_most,
+           (unsigned long)(g.ui.damage_collapses - s_cost.collapses_from));
     uint64_t refused = 0;
     for (int32_t i = 0; i < REFUSED_COUNT; i++)
         refused += s_cost.refused[i];
@@ -5188,12 +5202,21 @@ static uint64_t frame_delay(const Picture *pic)
 }
 
 // Marks a part of the view, in page coordinates, for repainting: libui
-// marks a widget's bounds, so a stand-in with the part's is how.
+// marks a widget's bounds, so a stand-in with the part's is how. A part
+// that covers the view is a whole view of its own (WHOLE_BIG_PART), not
+// parts that reached across it.
 static void mark_part(os64_gui_rect_t r)
 {
     os64_ui_widget_t part = {0};
     part.bounds = (os64_gui_rect_t){g.view.bounds.x + r.x - g.sx, g.view.bounds.y + r.y - g.sy,
                                     r.w, r.h};
+    const os64_gui_rect_t v = g.view.bounds;
+    if (part.bounds.x <= v.x && part.bounds.y <= v.y &&
+        (int64_t)part.bounds.x + part.bounds.w >= (int64_t)v.x + v.w &&
+        (int64_t)part.bounds.y + part.bounds.h >= (int64_t)v.y + v.h) {
+        mark_whole(WHOLE_BIG_PART, false);
+        return;
+    }
     s_parts_reach = os64_rect_union(s_parts_reach, part.bounds);
     os64_ui_mark_dirty(&g.ui, &part);
 }
@@ -5279,7 +5302,7 @@ static bool picture_on_screen(int32_t k, bool mark)
         seen = true;
         if (!mark)
             return true;
-        mark_part(view);
+        mark_whole(WHOLE_BACKDROP, false);
     }
     // Behind any other box: a `background` attribute's picture where it
     // shows (attribute_shows), and then a sheet's behind any box the view
@@ -5362,7 +5385,7 @@ static void pictures_seen(bool *seen, const bool *mark)
                 continue;
             seen[k] = true;
             if (mark != NULL && mark[k])
-                mark_part(view);
+                mark_whole(WHOLE_BACKDROP, false);
         }
     } else if (owner != NULL) {
         // The attribute shows: the branch above takes a sheet's picture.
@@ -5370,7 +5393,7 @@ static void pictures_seen(bool *seen, const bool *mark)
         if (k >= 0 && k < p->npics) {
             seen[k] = true;
             if (mark != NULL && mark[k])
-                mark_part(view);
+                mark_whole(WHOLE_BACKDROP, false);
         }
     }
     for (int32_t i = 0; p->bg_of != NULL && i < os64_page_nbackgrounds(model) && i < p->nbackground_map; i++) {
@@ -5665,10 +5688,11 @@ static void pictures_tick(void)
 }
 
 // A part a tick repaints (flow_motion_tick), cut to the view `ctx` holds,
-// in page coordinates, first: marks are joined into one rectangle, and one
-// outside the view would stretch it across the view. The box whose
+// in page coordinates, first: a mark outside the view paints what nobody
+// sees, and one that merges with another stretches it. The box whose
 // background the canvas takes paints the whole view wherever its box is,
-// and which box that is is the painter's to say from the styles a tick
+// so its mark is the whole view, said as the backdrop's (WHOLE_BACKDROP);
+// which box that is is the painter's to say from the styles a tick
 // changes — the root's background may be what moves — so it is asked at
 // each mark, of the styles before the tick and after it.
 static void tick_mark(void *ctx, const flow_box_t *box, os64_gui_rect_t r)
@@ -5677,7 +5701,7 @@ static void tick_mark(void *ctx, const flow_box_t *box, os64_gui_rect_t r)
     const yonder_verbs_t asking = {.backdrop = glass_backdrop};
     os64_gui_rect_t meet;
     if (box == yonder_canvas_owner(g.page.tree, &asking))
-        mark_part(*view);
+        mark_whole(WHOLE_BACKDROP, false);
     else if (os64_rect_intersect(r, *view, &meet))
         mark_part(meet);
 }
@@ -5734,15 +5758,13 @@ static void tick_page_run(uint64_t now, bool frame)
 // out of view was due — the ticking animations the view shows brought to
 // now when any is behind (flow_motion_tick_due, unpaced), so the paint
 // shows each at the time it is painted. Not a frame: its paint is the
-// scroll's. A paint of a part does not tick: what it repaints of an
-// animation is on the glass beside it already. The window loop asks before
-// each paint.
+// scroll's. A paint of parts does not tick, even parts far apart whose
+// box spans the view: what it repaints of an animation is on the glass
+// beside it already. The window loop asks before each paint.
 static void ticks_before_paint(void)
 {
     const os64_gui_rect_t v = g.view.bounds;
-    const os64_gui_rect_t d = g.ui.dirty;
-    if (!g.ui.any_dirty || d.x > v.x || d.y > v.y || (int64_t)d.x + d.w < (int64_t)v.x + v.w ||
-        (int64_t)d.y + d.h < (int64_t)v.y + v.h || !ticks_run() || frame_unpainted())
+    if (!os64_ui_dirty_covers(&g.ui, v) || !ticks_run() || frame_unpainted())
         return;
     uint64_t now = yonder_now_ms();
     os64_gui_rect_t view = {g.sx, g.sy, v.w, v.h};
@@ -5812,48 +5834,59 @@ static bool motion_pause_said(void)
     return true;
 }
 
-// A paint of `damage` counted (s_cost): the view's pixels it covers, and
-// when that is the whole view, what marked it — `by`, else the parts when
-// what they reach (`reach`) spans the view, else libui's own marks.
-static void paint_counted(os64_gui_rect_t damage, WholeBy by, os64_gui_rect_t reach)
+// A paint of the rectangles damage[0..count) counted (s_cost): the view's
+// pixels each covers, and when one covers the whole view, what marked it —
+// `by`, else the parts when what they reach (`reach`) spans the view (a
+// full list that became one rectangle, or one part as big as the view),
+// else libui's own marks.
+static void paint_counted(const os64_gui_rect_t *damage, uint32_t count, WholeBy by,
+                          os64_gui_rect_t reach)
 {
-    os64_gui_rect_t meet;
-    if (os64_rect_intersect(damage, g.view.bounds, &meet)) {
+    bool whole = false;
+    for (uint32_t i = 0; i < count; i++) {
+        os64_gui_rect_t meet;
+        if (!os64_rect_intersect(damage[i], g.view.bounds, &meet))
+            continue;
         s_cost.pixels += (uint64_t)meet.w * (uint64_t)meet.h;
-        if (meet.w == g.view.bounds.w && meet.h == g.view.bounds.h) {
-            os64_gui_rect_t parts;
-            if (by == WHOLE_PARTS && (!os64_rect_intersect(reach, g.view.bounds, &parts) ||
-                                      parts.w != g.view.bounds.w || parts.h != g.view.bounds.h))
-                by = WHOLE_TOOLKIT;
-            s_cost.whole++;
-            s_cost.whole_by[by]++;
-        }
+        whole = whole || (meet.w == g.view.bounds.w && meet.h == g.view.bounds.h);
+    }
+    if (whole) {
+        os64_gui_rect_t parts;
+        if (by == WHOLE_PARTS && (!os64_rect_intersect(reach, g.view.bounds, &parts) ||
+                                  parts.w != g.view.bounds.w || parts.h != g.view.bounds.h))
+            by = WHOLE_TOOLKIT;
+        s_cost.whole++;
+        s_cost.whole_by[by]++;
     }
     s_cost.paints++;
+    s_cost.rects += count;
+    if (count > s_cost.rects_most)
+        s_cost.rects_most = count;
 }
 
-// libui's paint, timed (s_cost): its render, then the damage handed to
-// the compositor, as os64_ui_paint does both, then counted
+// libui's paint, timed (s_cost): its render, then each dirty rectangle
+// handed to the compositor, as os64_ui_paint does both, then counted
 // (paint_counted). What marked the view is this paint's, so it starts
 // again here.
 static void glass_paint(void)
 {
-    os64_gui_rect_t damage;
+    os64_gui_rect_t damage[OS64_UI_DAMAGE_MAX];
     WholeBy by = s_whole_by;
     os64_gui_rect_t reach = s_parts_reach;
     s_whole_by = WHOLE_PARTS;
     s_parts_reach = (os64_gui_rect_t){0, 0, 0, 0};
     cost_begin(PS_RENDER);
-    bool painted = os64_ui_render(&g.ui, &damage);
+    uint32_t count = os64_ui_render_list(&g.ui, damage);
     cost_end(PS_RENDER);
-    if (!painted) {
+    if (count == 0) {
         os64_memset(s_cost.now, 0, sizeof(s_cost.now));
         return;
     }
     cost_begin(PS_PUBLISH);
-    os64_draw_publish(g.ui.ctx, &damage);
+    for (uint32_t i = 0; i < count; i++)
+        os64_draw_publish(g.ui.ctx, &damage[i]);
     cost_end(PS_PUBLISH);
-    paint_counted(damage, by, reach);
+    paint_counted(damage, count, by, reach);
     cost_fold(PS_RENDER, PS_PUBLISH);
 }
 
@@ -9558,6 +9591,7 @@ static const os64_ui_class_t kViewClass = {
     .name = "pageview",
     .paint = view_paint,
     .event = view_event,
+    .paints_part = true,   // view_paint paints what g.ui.dirty covers of it
 };
 
 // Which link, if any, is under the pointer, said on the status line.

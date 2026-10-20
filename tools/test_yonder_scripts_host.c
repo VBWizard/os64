@@ -1125,11 +1125,15 @@ static void tick_cases(void) {
         "html{animation:bg 1s infinite}</style><div style='height:20px'>short</div>",false);
     relayout(true);
     g.ui.any_dirty=false;
+    s_whole_by=WHOLE_PARTS;
     now_ms=900;
     motion_tick();
     d=g.ui.dirty; v=g.view.bounds;
     check(g.ui.any_dirty && d.y<=v.y && d.y+d.h>=v.y+v.h && d.x<=v.x && d.x+d.w>=v.x+v.w,
         "ticks: the canvas's owner, shorter than the view, repaints the whole view");
+    check(s_whole_by==WHOLE_BACKDROP && os64_ui_dirty_covers(&g.ui,v),
+        "ticks: the canvas's background moving is a whole view of its own, not the parts'");
+    s_whole_by=WHOLE_PARTS;
     probe_drop();
 
     /* Both halves on one page: a layout due wins; layouts that cost too
@@ -1178,6 +1182,21 @@ static void tick_cases(void) {
     pictures_tick();
     before_paint();
     check(tick_x("t")==50,"ticks: a picture's paint does not tick");
+    {
+        /* Two parts in opposite corners: their box is the view, and the
+         * list keeps them two small rectangles, which is no whole view. */
+        static os64_ui_widget_t corner[2];
+        corner[0].bounds=(os64_gui_rect_t){v.x,v.y,8,8};
+        corner[1].bounds=(os64_gui_rect_t){v.x+v.w-8,v.y+v.h-8,8,8};
+        g.ui.any_dirty=false;
+        os64_ui_mark_dirty(&g.ui,&corner[0]);
+        os64_ui_mark_dirty(&g.ui,&corner[1]);
+        d=g.ui.dirty;
+        before_paint();
+        check(tick_x("t")==50 && g.ui.damage_count==2 && d.x==v.x && d.y==v.y && d.w==v.w && d.h==v.h &&
+              !os64_ui_dirty_covers(&g.ui,v),
+            "ticks: parts far apart do not tick, though their box spans the view");
+    }
     scroll_to(0,1);
     before_paint();
     check(tick_x("t")==70 && g.tick_began==1500 && !g.tick_painting,
@@ -4667,17 +4686,26 @@ static void whole_view_cases(void) {
     mark_whole(WHOLE_SCROLL,true);
     check(s_whole_by==WHOLE_SCRIPT && g.ui.any_dirty,"whole views: the first whole mark since the paint names it");
     cost_reset();
-    paint_counted(view,WHOLE_SCRIPT,(os64_gui_rect_t){0,0,0,0});
-    paint_counted(view,WHOLE_PARTS,view);
-    paint_counted(view,WHOLE_PARTS,small);
-    paint_counted(view,WHOLE_PARTS,(os64_gui_rect_t){0,0,0,0});
-    paint_counted(small,WHOLE_SCROLL,small);
-    paint_counted((os64_gui_rect_t){0,0,800,600},WHOLE_PARTS,(os64_gui_rect_t){-5,0,900,700});
+    paint_counted(&view,1,WHOLE_SCRIPT,(os64_gui_rect_t){0,0,0,0});
+    paint_counted(&view,1,WHOLE_PARTS,view);
+    paint_counted(&view,1,WHOLE_PARTS,small);
+    paint_counted(&view,1,WHOLE_PARTS,(os64_gui_rect_t){0,0,0,0});
+    paint_counted(&small,1,WHOLE_SCROLL,small);
+    paint_counted(&(os64_gui_rect_t){0,0,800,600},1,WHOLE_PARTS,(os64_gui_rect_t){-5,0,900,700});
     check(s_cost.paints==6 && s_cost.whole==5 && s_cost.whole_by[WHOLE_SCRIPT]==1 &&
           s_cost.whole_by[WHOLE_PARTS]==2 && s_cost.whole_by[WHOLE_TOOLKIT]==2 && s_cost.whole_by[WHOLE_SCROLL]==0 &&
           s_cost.pixels==5ull*800*560+400,
           "whole views: a whole paint is its mark's, the parts' when they span the view, the toolkit's when not; "
           "a part of the view is no whole view");
+    /* Two parts in opposite corners: their box is the view, and they are
+       still two small paints, no whole view, each counted. */
+    paint_counted((os64_gui_rect_t[]){{0,40,10,10},{790,590,10,10}},2,WHOLE_PARTS,view);
+    /* A list with one rectangle that is the view is a whole view, once. */
+    paint_counted((os64_gui_rect_t[]){{0,40,10,10},{0,40,800,560}},2,WHOLE_PARTS,view);
+    check(s_cost.paints==8 && s_cost.whole==6 && s_cost.whole_by[WHOLE_PARTS]==3 &&
+          s_cost.pixels==6ull*800*560+400+300,
+          "whole views: parts far apart are small paints, however far their box reaches; "
+          "one rectangle that is the view makes the paint whole once");
 
     /* The parts reach what they mark, in the window, together. */
     s_parts_reach=(os64_gui_rect_t){0,0,0,0};
@@ -4685,6 +4713,17 @@ static void whole_view_cases(void) {
     mark_part((os64_gui_rect_t){790,650,10,10});
     check(s_parts_reach.x==0 && s_parts_reach.y==40 && s_parts_reach.w==800 && s_parts_reach.h==560,
           "whole views: the parts' reach is their marks' union, in the window");
+    s_parts_reach=(os64_gui_rect_t){0,0,0,0};
+    /* One part as big as the view (body's starfield under an html with a
+     * background of its own) is a whole view of its own, and no reach. */
+    s_whole_by=WHOLE_PARTS; g.ui.any_dirty=false;
+    mark_part((os64_gui_rect_t){g.sx,g.sy,800,560});
+    check(s_whole_by==WHOLE_BIG_PART && s_parts_reach.w==0 && os64_ui_dirty_covers(&g.ui,view),
+          "whole views: a part as big as the view is said as one");
+    s_whole_by=WHOLE_PARTS; g.ui.any_dirty=false;
+    mark_part((os64_gui_rect_t){g.sx,g.sy,800,559});
+    check(s_whole_by==WHOLE_PARTS && s_parts_reach.h==559,
+          "whole views: a part a row short of the view is a part");
     s_parts_reach=(os64_gui_rect_t){0,0,0,0};
 
     /* What refused, named as a selector would: tag, id, every class; the
@@ -4719,10 +4758,13 @@ static void whole_view_cases(void) {
     s_cost.refused[FLOW_PARTS_MOVED]=2; s_cost.refused[REFUSED_VIEW]=1;
     s_cost.refused_last=FLOW_PARTS_MOVED;
     snprintf(s_cost.refused_what,sizeof(s_cost.refused_what),"div#w");
+    s_cost.rects=13; s_cost.rects_most=3;
+    g.ui.damage_collapses=s_cost.collapses_from+2;
     diag_paint(&g.page);
     yonder_diag_render(g.page.diag,rec,sizeof(rec));
-    static const char kLine[]="whole views: 4 of 10 paints: 1 parts that reached the whole view, 3 layouts for "
-        "animations that refused their parts; layouts for animations that marked the whole view, by why: 2 a box "
+    static const char kLine[]="whole views: 4 of 10 paints: 1 parts that together covered the view, 3 layouts for "
+        "animations that refused their parts; the dirty list: 13 rectangles, 3 at most in a paint, 2 full lists "
+        "made one; layouts for animations that marked the whole view, by why: 2 a box "
         "moved, 1 the view moved with it; the last: a box moved, div#w";
     char want[400];
     snprintf(want,sizeof(want),"\n%s\n",kLine);
@@ -4738,7 +4780,8 @@ static void whole_view_cases(void) {
     s_cost.paints=3; s_cost.whole=2; s_cost.whole_by[WHOLE_SCROLL]=2;
     diag_paint(&g.page);
     yonder_diag_render(g.page.diag,rec,sizeof(rec));
-    check(strstr(rec,"\nwhole views: 2 of 3 paints: 2 scrolls\n")!=NULL,
+    check(strstr(rec,"\nwhole views: 2 of 3 paints: 2 scrolls; the dirty list: 0 rectangles, 0 at most in a "
+                     "paint, 0 full lists made one\n")!=NULL,
           "whole views: none from a layout for animations says no reasons");
     cost_reset();
     s_cost.paints=3;

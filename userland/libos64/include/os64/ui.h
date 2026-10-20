@@ -9,9 +9,10 @@
 // structs the APP owns — stack, static, or its own heap; libui never
 // allocates or frees widgets. What "lite" buys: no scene graph, no z-order
 // inside a window (children paint in list order), no incremental min-repaint
-// algebra — the dirty model is one union rect, the same choice the
-// compositor made at this population size. A foundation, not a dead end:
-// every one of those can grow inside this shape without an API break.
+// algebra — the dirty model is a short list of rectangles kept by the
+// compositor's own rule (os64/damage.h), the same choice it made at this
+// population size. A foundation, not a dead end: every one of those can grow
+// inside this shape without an API break.
 //
 // THE LOGIC/PAINT SPLIT (the Gnome 2 theme-engine seam, ruled sacred): a
 // widget's BEHAVIOR (press tracking, click firing, focus) lives in its
@@ -268,6 +269,15 @@ typedef struct os64_ui_class
     // back after a failed layout, and that way back cannot be refused. A
     // class without one is torn down with destroy.
     void (*reface)(os64_ui_widget_t *w);
+
+    // The class paints only what `w->ui->dirty` covers of its bounds, so
+    // libui paints it once for each dirty rectangle it meets, with `dirty`
+    // set to that rectangle. A class without it paints its whole bounds, and
+    // is painted once a render, with `dirty` the box around the rectangles
+    // it meets. Set it on a class that covers a large area, such as a panel
+    // or a document view: painted whole, it would be painted whole once for
+    // every rectangle beside it.
+    bool paints_part;
 } os64_ui_class_t;
 
 struct os64_ui_widget
@@ -343,6 +353,14 @@ struct os64_ui_widget
 
 // ── The UI context (one per widget tree) ────────────────────────────────────
 
+// The dirty list's two numbers. Eight rectangles hold a window's few
+// animated parts far apart; a full list becomes one rectangle, which is
+// what libui painted before it kept a list. Two marks merge when their
+// union wastes at most the slack in pixels: a mark inside another, or
+// sharing a whole edge with it, merges, and marks far apart stay apart.
+#define OS64_UI_DAMAGE_MAX   8
+#define OS64_UI_DAMAGE_SLACK 128
+
 struct os64_ui
 {
     os64_draw_ctx_t *ctx;        // the window's draw context (app-owned)
@@ -375,8 +393,19 @@ struct os64_ui
     os64_ui_widget_t *hover;     // current enabled control under the pointer
     uint8_t grab_button;         // button that owns the widget grab
     bool window_blurred;        // retain the logical focus target while its window is inactive
-    os64_gui_rect_t  dirty;      // union of everything needing repaint
+    // What needs repainting: up to OS64_UI_DAMAGE_MAX rectangles, kept by
+    // os64_ui_mark_dirty (the rule is os64/damage.h's). `dirty` is the box
+    // around them, and while a render paints a widget, what that widget is
+    // asked to paint (paints_part). `any_dirty` is the authority for "is
+    // anything dirty": while it is false the list is empty, whatever
+    // `damage_count` holds, so clearing it by hand clears the list. Mark
+    // through os64_ui_mark_dirty: a hand write to `dirty` reaches no list
+    // and paints nothing.
+    os64_gui_rect_t  dirty;
     bool             any_dirty;
+    os64_gui_rect_t  damage[OS64_UI_DAMAGE_MAX];
+    uint32_t         damage_count;
+    uint64_t         damage_collapses;  // a full list that became one rectangle
 
     // Called after the window changed size, once libui has refreshed the draw
     // context and stretched `root` to the new content area — the app's cue to
@@ -726,8 +755,14 @@ size_t os64_ui_text_snap(const char *s, size_t len, size_t offset, bool after);
 // free to be taller than that.
 int32_t os64_ui_control_min_height(os64_ui_t *ui);
 
-// Mark a widget (its current bounds) as needing repaint.
+// Mark a widget (its current bounds) as needing repaint. The bounds join the
+// dirty list: entries they contain go, then the compositor's rule
+// (os64/damage.h) merges them into an entry or appends them.
 void os64_ui_mark_dirty(os64_ui_t *ui, os64_ui_widget_t *w);
+
+// True when one dirty rectangle holds all of `r`. A list whose box spans `r`
+// does not repaint it, so this is the question "will `r` be painted whole?"
+bool os64_ui_dirty_covers(const os64_ui_t *ui, os64_gui_rect_t r);
 
 // Route one event. Pointer events hit-test to the deepest visible widget
 // (with a press grab: DOWN grabs, UP releases and fires on_click if it ends
@@ -739,14 +774,20 @@ void os64_ui_mark_dirty(os64_ui_t *ui, os64_ui_widget_t *w);
 // application callback or a widget consumed the event.
 bool os64_ui_dispatch(os64_ui_t *ui, const os64_gui_event_t *ev);
 
-// Repaint whatever is dirty and publish exactly that rect. No-op when clean.
+// Repaint whatever is dirty and publish exactly that: one publish for each
+// dirty rectangle. No-op when clean.
 void os64_ui_paint(os64_ui_t *ui);
 
 // Paint dirty widgets into the canvas without publishing. Returns true when
-// pending damage was processed, optionally reports that damage, and clears
-// it. Several UI contexts sharing a canvas can render first and publish their
-// combined damage once; damage may be NULL when the caller repaints a superset.
+// pending damage was processed, optionally reports the box around that
+// damage, and clears it. Several UI contexts sharing a canvas can render
+// first and publish their combined damage once; damage may be NULL when the
+// caller repaints a superset.
 bool os64_ui_render(os64_ui_t *ui, os64_gui_rect_t *damage);
+
+// os64_ui_render, handing back the rectangles themselves: their count (0 when
+// clean, nothing painted) and the rectangles in out[0..count).
+uint32_t os64_ui_render_list(os64_ui_t *ui, os64_gui_rect_t out[OS64_UI_DAMAGE_MAX]);
 
 // The canonical L2 loop, packaged: event_wait → dispatch → paint, until the
 // window dies (event_wait error) or `*running` (may be NULL) goes false —
