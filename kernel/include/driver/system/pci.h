@@ -223,6 +223,8 @@ extern pci_device_t* kPCIDeviceHeaders;
 extern pci_bridge_t* kPCIBridgeHeaders;
 extern pci_device_t* kPCIDeviceFunctions;
 extern uintptr_t kPCIBaseAddress;
+// The buses PCI Express configuration space covers, from the MCFG (acpi.c).
+extern uint8_t kPCIBusFirst, kPCIBusLast;
 
 char* getDeviceNameP(pci_device_t* node, char* buffer);
 uint32_t readPCIRegister(uint8_t bus, uint8_t device, uint8_t function, uint16_t offset);

@@ -275,16 +275,7 @@ void kernel_init()
 	// not a report.)
 	watchpoint_init();
 
-	printf("Initializing ACPI\n");
-	acpiFindTables();
-	// Read \_S5 out of the DSDT NOW, while the tables are mapped and the
-	// machine is healthy — the shutdown descent is the worst possible moment
-	// to be walking firmware tables for the first time (acpi.h).
-	acpi_prepare_s5();
-	if (kPCIBaseAddress)
-	{
-		kPCIBaseAddress = kHHDMOffset | kPCIBaseAddress;
-	}
+	acpi_init();
 
 	init_GDT();
 

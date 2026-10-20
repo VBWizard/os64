@@ -9,6 +9,7 @@
 #include "acpi.h"
 #include "pci_lookup.h"
 #include "paging.h"
+#include "panic.h"
 
 extern __uint128_t kDebugLevel;
 
@@ -17,6 +18,7 @@ pci_bridge_t* kPCIBridgeHeaders;
 pci_device_t* kPCIDeviceHeaders;
 pci_device_t* kPCIDeviceFunctions;
 uintptr_t kPCIBaseAddress=0;
+uint8_t kPCIBusFirst, kPCIBusLast;
 uint16_t bussesToScan[100];
 uint16_t bussesToScanCount;
 
@@ -395,9 +397,16 @@ void init_PCI()
 	kPCIBridgeHeaders = kmalloc(sizeof(pci_device_t) * PCI_BRIDGE_SLOTS);
 	kPCIDeviceFunctions = kmalloc(sizeof(pci_device_t) * PCI_FUNCTION_SLOTS);
 
+	// readPCIRegister reads configuration space through the MCFG's window,
+	// with no port-0xCF8 fallback: os64 targets q35 and modern hardware on
+	// purpose. Without the window every config read would land at
+	// PCI_MMIO_OFFSET past address zero, so refuse by name instead.
+	if (kPCIBaseAddress == 0)
+		panic("PCI: the ACPI tables describe no PCI Express configuration space (no MCFG segment 0)\n");
+
 	printd(DEBUG_PCI_DISCOVERY,"Iterating the PCI busses ...\n");
 	
-	for (uint16_t currBus=0;currBus<120;currBus++)
+	for (uint16_t currBus=kPCIBusFirst;currBus<=kPCIBusLast;currBus++)
 	{
 		printd(DEBUG_PCI_DISCOVERY | DEBUG_DETAILED, "Scanning bus %u\n", currBus);
 		for (uint16_t currSlot=0;currSlot<32;currSlot++)

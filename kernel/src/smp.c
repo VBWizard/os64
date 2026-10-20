@@ -170,13 +170,13 @@ unsigned int parse_mp_table()
 					kMPConfigTable[cnt].recType=IOAPIC;
 					recPtr+=8;
 					printd(DEBUG_SMP | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,"ID=%02X, Address=0x%08x, Enabled=%s\n",apic->apicid, apic->ioapicaddr, apic->flags&0x1?"yes":"no");
+					// ACPI's choice stands (acpi.c picks the IO APIC that
+					// serves the ISA IRQs); the MP table supplies one only when
+					// ACPI had none.
 					if (!kIOAPICAddress)
-					{
-						if (kIOAPICAddress!=(uintptr_t)apic->ioapicaddr)
-							printd(DEBUG_EXCEPTIONS, "SMP: WARNING - ACPI IO APIC address (0x%16lx) != MP table IO APIC address (0x%016lx)", kIOAPICAddress, apic->ioapicaddr);
-					}
-					else
 						kIOAPICAddress=(uintptr_t)apic->ioapicaddr;
+					else if (kIOAPICAddress!=(uintptr_t)apic->ioapicaddr)
+						printd(DEBUG_SMP, "SMP: MP table IO APIC 0x%08x is not ACPI's 0x%016lx - keeping ACPI's\n", apic->ioapicaddr, kIOAPICAddress);
 					break;
 				case 3:
 					printd(DEBUG_SMP | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,"\tIRQ:  ");
