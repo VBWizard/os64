@@ -23,6 +23,7 @@
 #include "bar.h"
 #include "mail.h"
 #include "paint.h"
+#include "paint_cache.h"
 #include "garb/cascade.h"
 #include "scale.h"
 #include "test_libflow_fonts.h"
@@ -86,6 +87,9 @@ static bool s_alloc_starved;
 // s_alloc_starved).
 static long s_alloc_left = -1;
 static long s_paint_alloc_left = -1;
+// While set, the next allocation fails and clears it: memory refused once,
+// then given (the paint cache asks again after letting entries go).
+static bool s_alloc_refuse_once;
 // Every byte asked for, and what paint_of's own painting asked for.
 static size_t s_alloc_bytes, s_paint_bytes;
 // Every allocation made: a buffer the scratch lends again is not one. And
@@ -96,6 +100,10 @@ void *os64_malloc(size_t size)
 {
     if (s_alloc_starved || s_alloc_left == 0)
         return NULL;
+    if (s_alloc_refuse_once) {
+        s_alloc_refuse_once = false;
+        return NULL;
+    }
     if (s_alloc_left > 0)
         s_alloc_left--;
     s_alloc_bytes += size;
@@ -1438,18 +1446,51 @@ static void paint_cache_cases(void)
 
     // The budget is the screen's: eight screens of four-byte pixels, never
     // under the floor, never over the ceiling, and 32-bit sides that would
-    // overflow multiplied out still answer the ceiling.
+    // overflow multiplied out still answer the ceiling — on a machine with
+    // memory to spare (the P5's 24 GiB).
+    const uint64_t roomy = (uint64_t)24 << 30;
     expect("cache: the budget is eight screens, between the floor and the ceiling",
-           yonder_paint_cache_budget(0, 0) == YONDER_PAINT_CACHE_FLOOR &&
-               yonder_paint_cache_budget(1024, 768) == YONDER_PAINT_CACHE_FLOOR &&
-               yonder_paint_cache_budget(2560, 1440) == (size_t)2560 * 1440 * 4 * 8 &&
-               yonder_paint_cache_budget(1024, 1024) == (size_t)32 << 20 &&
-               yonder_paint_cache_budget(1024, 1025) == (size_t)1024 * 1025 * 32 &&
-               yonder_paint_cache_budget(5120, 2880) == (size_t)5120 * 2880 * 32 &&
-               yonder_paint_cache_budget(8192, 4096) == YONDER_PAINT_CACHE_CEILING &&
-               yonder_paint_cache_budget(8192, 4097) == YONDER_PAINT_CACHE_CEILING &&
-               yonder_paint_cache_budget(UINT32_MAX, UINT32_MAX) == YONDER_PAINT_CACHE_CEILING,
+           yonder_paint_cache_budget(0, 0, roomy) == YONDER_PAINT_CACHE_FLOOR &&
+               yonder_paint_cache_budget(1024, 768, roomy) == YONDER_PAINT_CACHE_FLOOR &&
+               yonder_paint_cache_budget(2560, 1440, roomy) == (size_t)2560 * 1440 * 4 * 8 &&
+               yonder_paint_cache_budget(1024, 1024, roomy) == (size_t)32 << 20 &&
+               yonder_paint_cache_budget(1024, 1025, roomy) == (size_t)1024 * 1025 * 32 &&
+               yonder_paint_cache_budget(5120, 2880, roomy) == (size_t)5120 * 2880 * 32 &&
+               yonder_paint_cache_budget(8192, 4096, roomy) == YONDER_PAINT_CACHE_CEILING &&
+               yonder_paint_cache_budget(8192, 4097, roomy) == YONDER_PAINT_CACHE_CEILING &&
+               yonder_paint_cache_budget(UINT32_MAX, UINT32_MAX, roomy) == YONDER_PAINT_CACHE_CEILING,
            NULL);
+    // And never more than a sixteenth of the memory installed (a 4K panel
+    // on 2 GiB gets 128 MiB, not 253), never under the floor even so, and
+    // memory not known is the floor.
+    expect("cache: the budget is never more than a share of the machine's memory",
+           yonder_paint_cache_budget(3840, 2160, (uint64_t)2 << 30) == (size_t)128 << 20 &&
+               yonder_paint_cache_budget(3840, 2160, (uint64_t)256 << 20) == YONDER_PAINT_CACHE_FLOOR &&
+               yonder_paint_cache_budget(3840, 2160, 0) == YONDER_PAINT_CACHE_FLOOR &&
+               yonder_paint_cache_budget(2560, 1440, (uint64_t)4 << 30) == (size_t)2560 * 1440 * 32 &&
+               yonder_paint_cache_budget(UINT32_MAX, UINT32_MAX, UINT64_MAX) == YONDER_PAINT_CACHE_CEILING,
+           NULL);
+
+    // Memory refused below the budget: an entry no recent paint used is let
+    // go and the make asked again; one this paint uses never is.
+    {
+        yonder_paint_cache_t *m = yonder_paint_cache_new(YONDER_PAINT_CACHE_FLOOR);
+        const uint8_t ka[] = "a", kb[] = "b", kc[] = "c";
+        paint_cache_begin(m);
+        bool made_a = paint_cache_make(m, ka, 1, 1, 1000) != NULL;
+        paint_cache_begin(m);
+        paint_cache_begin(m);
+        s_alloc_refuse_once = true;
+        bool made_b = paint_cache_make(m, kb, 1, 2, 1000) != NULL;
+        bool a_gone = paint_cache_find(m, ka, 1, 1) == NULL;
+        s_alloc_refuse_once = true;
+        bool c_refused = paint_cache_make(m, kc, 1, 3, 1000) == NULL;
+        bool b_kept = paint_cache_find(m, kb, 1, 2) != NULL;
+        s_alloc_refuse_once = false;
+        expect("cache: memory refused lets go of what no recent paint used, never this paint's",
+               made_a && made_b && a_gone && c_refused && b_kept, NULL);
+        yonder_paint_cache_free(m);
+    }
 
     // A 200 x 50 tile is two blocks, 128 and 72 wide; its 230 x 80 mask
     // (the blur's reach of 15 each side) two more.

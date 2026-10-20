@@ -99,6 +99,9 @@ int64_t os64_stat(const char *p, os64_dirent_t *entry) {
     if(fake_is_dir(p)) { entry->flags=OS64_DE_DIR; return 0; }
     return fake_file(p)>=0 ? 0 : -1;
 }
+/* The window's paint asks the machine's memory when it makes its cache;
+ * no case here paints the window's view, so the answer is never used. */
+int64_t os64_memory(os64_memory_t *out) { memset(out,0,sizeof(*out)); return -1; }
 /* A directory's listing: one directory open at a time, which is all the
  * window ever asks for. */
 static char fake_listing[256];

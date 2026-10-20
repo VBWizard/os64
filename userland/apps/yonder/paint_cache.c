@@ -46,16 +46,18 @@ static bool kept_now(const yonder_paint_cache_t *c, const Entry *e)
     return e->stamp != 0 && e->stamp + 1 >= c->stamp;
 }
 
-size_t yonder_paint_cache_budget(uint32_t width, uint32_t height)
+size_t yonder_paint_cache_budget(uint32_t width, uint32_t height, uint64_t memory)
 {
     // Four bytes a pixel, the widest an entry holds (a tile's; a mask's is
     // one). The pixels are compared with the ceiling before they are
     // multiplied out, which no pair of 32-bit sides can then overflow.
     const uint64_t per_pixel = 4u * YONDER_PAINT_CACHE_SCREENS;
     uint64_t pixels = (uint64_t)width * height;
-    if (pixels > YONDER_PAINT_CACHE_CEILING / per_pixel)
-        return YONDER_PAINT_CACHE_CEILING;
-    uint64_t want = pixels * per_pixel;
+    uint64_t want = pixels > YONDER_PAINT_CACHE_CEILING / per_pixel ? YONDER_PAINT_CACHE_CEILING
+                                                                     : pixels * per_pixel;
+    uint64_t share = memory / YONDER_PAINT_CACHE_SHARE;
+    if (want > share)
+        want = share;
     return want < YONDER_PAINT_CACHE_FLOOR ? YONDER_PAINT_CACHE_FLOOR : (size_t)want;
 }
 
@@ -238,6 +240,14 @@ void *paint_cache_make(yonder_paint_cache_t *c, const uint8_t *key, uint32_t kle
     if (!buckets_fit(c))
         return NULL;
     Entry *e = os64_malloc(size);
+    // Memory refused below the budget: what neither this paint nor the one
+    // before it uses is let go, oldest first, asking again after each, so
+    // a cache that cannot grow gives its memory back instead of pinning it.
+    while (e == NULL && c->oldest != NULL && !kept_now(c, c->oldest)) {
+        let_go(c, c->oldest);
+        c->counts.evicted++;
+        e = os64_malloc(size);
+    }
     if (e == NULL)
         return NULL;
     os64_memset(e, 0, sizeof(*e));
