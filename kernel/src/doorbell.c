@@ -3,7 +3,7 @@
 
 #include "doorbell.h"
 #include "scheduler.h"
-#include "smp_core.h"     // send_ipi, IPI_MANUAL_SCHEDULE_VECTOR, BOOTSTRAP_PROCESSOR_ID
+#include "smp_core.h"     // send_ipi, IPI_MANUAL_SCHEDULE_VECTOR, BSP_CPU
 #include "signals.h"      // SIGSLEEP, the backstop nap
 #include "kernel.h"       // kTicksSinceStart
 #include "panic.h"
@@ -66,7 +66,7 @@ bool doorbell_raise(doorbell_t* db)
 		uint64_t old = db->edge;
 		if (doorbell_edge_rung(old))
 			return false;
-		uint64_t fresh = doorbell_edge_make(rdtsc(), get_core_local_storage()->apic_id);
+		uint64_t fresh = doorbell_edge_make(rdtsc(), get_core_local_storage()->cpu);
 		if (__sync_bool_compare_and_swap(&db->edge, old, fresh))
 			return true;
 		// Lost the race to another ringer or to the sleeper's take: re-read
@@ -95,8 +95,8 @@ void doorbell_ring(doorbell_t* db)
 	// a scheduling IPI at a core already in its pass, which is right: that
 	// pass answers the bell itself if it has not passed the service point,
 	// and the tick answers it within 10ms if it has (DOORBELL.md).
-	uint32_t target = (t->mp_apic == THREAD_NO_AFFINITY)
-	                  ? BOOTSTRAP_PROCESSOR_ID : (uint32_t)t->mp_apic;
+	uint32_t target = (t->pinnedCPU == THREAD_NO_AFFINITY)
+	                  ? BSP_CPU : (uint32_t)t->pinnedCPU;
 	send_ipi(target, IPI_MANUAL_SCHEDULE_VECTOR, 0, 1, 0);
 }
 

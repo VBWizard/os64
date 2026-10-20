@@ -76,7 +76,7 @@ typedef struct {
 // once, before done is published, and never touched again.
 typedef struct {
 	// Identity and freshness.
-	uint32_t apic_id;
+	uint32_t cpu;
 	uint64_t tsc;                  // when the snapshot was taken
 
 	// Where it was and how it got there.
@@ -145,7 +145,7 @@ void nmi_probe_init(void);
 // three callers want three different things: the boot sweep wants one summary
 // line, /sys/cpu/<n>/probe wants the full text in a file, and a live wedge
 // hunt wants it on the wire.
-bool nmi_probe_core(uint32_t apic_id, uint32_t timeout_ticks);
+bool nmi_probe_core(uint32_t cpu, uint32_t timeout_ticks);
 
 // Probe every core but this one and print a ONE-LINE liveness summary per
 // core (glass + wire). The full dumps stay in the snapshot slots, readable
@@ -155,7 +155,7 @@ bool nmi_probe_core(uint32_t apic_id, uint32_t timeout_ticks);
 void nmi_probe_sweep(void);
 
 // The last snapshot taken for a core, or NULL if it has never answered.
-const nmi_probe_snapshot_t *nmi_probe_last(uint32_t apic_id);
+const nmi_probe_snapshot_t *nmi_probe_last(uint32_t cpu);
 
 // Render a snapshot as text, one line at a time, through a caller-supplied
 // emitter — THE formatting lives here and only here, so the wire report and
@@ -169,6 +169,6 @@ void nmi_probe_render(const nmi_probe_snapshot_t *s, nmi_probe_line_fn emit, voi
 // under the exception wire lock. This is the crash-insurance copy the /sys
 // probe trigger writes the moment an answer lands: if the machine dies before
 // anyone reads the file, the answer still exists somewhere permanent.
-void nmi_probe_report_wire(uint32_t apic_id);
+void nmi_probe_report_wire(uint32_t cpu);
 
 #endif // NMI_PROBE_H

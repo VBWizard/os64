@@ -450,8 +450,8 @@ void exception_panic(const char* message, uint64_t rip, uint64_t error_code) {
     exception_wire_lock();
 
     EXCEPTION_PRINT("\n>>> EXCEPTION PANIC: %s <<<                      \n", message);
-    EXCEPTION_PRINT(">>> AP %lu (Thread 0x%08x) <<<                        \n",
-                    (uint64_t)read_apic_id(), core ? core->threadID : 0);
+    EXCEPTION_PRINT(">>> AP %u (APIC %u) (Thread 0x%08x) <<<                        \n",
+                    cpu_self(), read_apic_id().id, core ? core->threadID : 0);
     EXCEPTION_PRINT(">>> Faulting instruction: 0x%016lx <<<             \n", rip);
 
     if (error_code != 0xFFFFFFFFFFFFFFFF) {
@@ -497,7 +497,7 @@ void exception_panic(const char* message, uint64_t rip, uint64_t error_code) {
     EXCEPTION_PRINT(">>> CR2: 0x%016lx (page-fault address; STALE unless this is a #PF)  CR3: 0x%016lx <<<\n",
                     cr2_val, cr3_val);
     EXCEPTION_PRINT(">>> Interrupted RSP: 0x%016lx <<<      \n",
-                    core ? mp_isrSavedRSP[core->apic_id] : 0);
+                    core ? mp_isrSavedRSP[core->cpu] : 0);
 
     // The register set the fault interrupted. Free (already pushed by the
     // stub), always safe, and frequently the whole answer — CR2 says WHAT
@@ -560,7 +560,7 @@ void handle_double_fault_frame(uint64_t rip, uint64_t rsp, uint64_t rflags)
 	// EXCEPTION_PRINT, not FAULT_PRINT: a #DF is as dying as it gets. The wire
 	// copy is the only one that can be trusted to survive, and touching a log
 	// queue here risks a lock this core may already hold.
-	EXCEPTION_PRINT("\n>>> DOUBLE FAULT on AP %lu <<<\n", (uint64_t)read_apic_id());
+	EXCEPTION_PRINT("\n>>> DOUBLE FAULT on AP %u (APIC %u) <<<\n", cpu_self(), read_apic_id().id);
 	EXCEPTION_PRINT(">>> RIP=0x%016lx RSP=0x%016lx RFLAGS=0x%016lx <<<\n", rip, rsp, rflags);
 	// Name the usual suspects rather than making a reader decode bits.
 	if (rflags & 0x100)   EXCEPTION_PRINT(">>>   RFLAGS.TF set — single-step on a kernel thread <<<\n");

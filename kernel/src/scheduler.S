@@ -91,7 +91,7 @@ _schedule_ap:
     # 0x18: RSP (only if returning to a different privilege level)
     # 0x20: SS  (only if returning to a different privilege level)
     # We then push RBX below that frame before doing any work.
-    # NOTE: Throughout this routine we will use RAX (the apic_id) for the index into each mp_isrSaved array variable
+    # NOTE: Throughout this routine we will use RAX (the CPU number) for the index into each mp_isrSaved array variable
     # and RBX for the data to be stored to each mp_isrSaved array variable
     #
     # INTERRUPTS STAY OFF until mp_inScheduler is set (below).  The old `sti`
@@ -138,8 +138,8 @@ _schedule_ap:
     push rbx                            # Save original RBX value
 
     mov rbx, rax                        # Put the original RAX value in RBX
-	# APIC_ID is now in the RAX register
-	mov rax, [gs:CLS_APIC_ID_OFFSET]		# apic_id — offset auto-generated from CLS struct via asm-offsets.h
+	# The CPU number goes in RAX
+	mov rax, [gs:CLS_CPU_OFFSET]		# this CPU's number — offset auto-generated from CLS struct via asm-offsets.h
 
     push rbx                            # Save original RAX value
 
@@ -176,7 +176,7 @@ not_in_scheduler_continue:
 	mov byte ptr [mp_inScheduler + rax], 1
 
 	# Unwind the two entry pushes and record the frame base, ALL under the
-	# guard.  Register state on arrival here: RAX = apic_id, RBX = the
+	# guard.  Register state on arrival here: RAX = the CPU number, RBX = the
 	# interrupted thread's RAX, and the interrupted thread's RBX is one push
 	# deep on the stack.  Saving RAX's copy first frees RBX; popping the
 	# second leaves RSP pointing at the CPU-pushed interrupt frame EXACTLY —
@@ -231,7 +231,7 @@ not_in_scheduler_continue:
 	# only tolerable because the bounce path is data-clean as of 2026-08-10.
 	cmp rax, 0
 	jne over_check_signals
-	call _check_signals              # preserves RAX (apic_id) and RBX — leave it that way
+	call _check_signals              # preserves RAX (the CPU number) and RBX — leave it that way
 over_check_signals:
 
     mov rbx, cr3
@@ -367,13 +367,13 @@ OverSaveRegisters:
     # space no longer contained.)
 overSetESP:
 
-    # push RAX which has the apic_id, so that it is available when we get back from scheduling
+    # push RAX which has the CPU number, so that it is available when we get back from scheduling
     push rax
     # Call the scheduler
 	call scheduler_do
 
-	# Put the apic_id back in RAX
-	pop rax                 			# apic_id is now in EAX
+	# Put the CPU number back in RAX
+	pop rax                 			# the CPU number is now in EAX
     
     # Identify whether the new CS is ring 3 for setting the threadIsKernel entry.
     # (Informational/debug only since the ring0/ring3 return paths were unified —
@@ -565,10 +565,10 @@ scheduler_halt_and_catch_a_coffee2:
 	# same broken machinery to walk itself to the door.  Print and halt.
 	#
 	# Calling C from raw asm, three requirements: RDI/RSI are the SysV
-	# argument registers (apic_id becomes the %u), RSP must be 16-byte aligned
+	# argument registers (the CPU number becomes the %u), RSP must be 16-byte aligned
 	# at the call — free to clobber, since nothing here returns — and AL must
 	# carry the count of vector registers used by a varargs call, which is 0.
-	mov rsi, rax                       # apic_id → the format's %u
+	mov rsi, rax                       # the CPU number → the format's %u
 	lea rdi, [rip + hcf2_panic_msg]
 	and rsp, -16                       # SysV alignment; we never come back
 	xor eax, eax                       # varargs: zero vector regs used
@@ -630,4 +630,4 @@ temp_rsp:
 # The coffee trap's dying words (scheduler_halt_and_catch_a_coffee2).  Written
 # out here rather than inline so the exit path stays readable.
 hcf2_panic_msg:
-	.asciz "SCHEDULER: core %u reached the iretq with mp_inScheduler ALREADY CLEAR — the guard was dropped by someone who does not own it. Scheduler state is not trustworthy; halting. See SCHEDULER_REENTRANCY.md.\n"
+	.asciz "SCHEDULER: CPU %u reached the iretq with mp_inScheduler ALREADY CLEAR — the guard was dropped by someone who does not own it. Scheduler state is not trustworthy; halting. See SCHEDULER_REENTRANCY.md.\n"

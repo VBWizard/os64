@@ -4,7 +4,9 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-#define GDT_ENTRIES 128
+// Room for every CPU's TSS: each descriptor is two slots, starting at
+// GDT_FIRST_TSS_ENTRY, for up to MAX_CPUS (smp.h) CPUs.
+#define GDT_ENTRIES 192
 // Entry ORDER here is dictated by the SYSCALL/SYSRET hardware contract, not taste:
 //   SYSCALL loads CS = STAR[47:32] and SS = STAR[47:32] + 8
 //     -> kernel DATA must sit immediately after kernel CODE.

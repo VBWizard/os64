@@ -189,19 +189,19 @@ bool nmi_probe_capture(nmi_regs_t *regs, nmi_frame_t *frame)
 		return false;
 	}
 
-	uint32_t apic_id = (uint32_t)cls->apic_id;
-	if (apic_id >= MAX_CPUS || !kNmiProbeRequest[apic_id]) {
+	uint32_t cpu = (uint32_t)cls->cpu;
+	if (cpu >= MAX_CPUS || !kNmiProbeRequest[cpu]) {
 		return false;   // genuine hardware NMI — not ours to eat
 	}
 
-	nmi_probe_snapshot_t *s = &kNmiSnapshot[apic_id];
+	nmi_probe_snapshot_t *s = &kNmiSnapshot[cpu];
 
 	// Invalidate first: a reader must never see half of a NEW snapshot glued
 	// to half of the last one.
 	s->valid = 0;
 	__asm__ volatile("" ::: "memory");
 
-	s->apic_id = apic_id;
+	s->cpu = cpu;
 	s->tsc     = rdtsc();
 	s->frame   = *frame;
 	s->regs    = *regs;
@@ -216,10 +216,10 @@ bool nmi_probe_capture(nmi_regs_t *regs, nmi_frame_t *frame)
 	s->acctLastDispatchTSC = cls->acctLastDispatchTSC;
 
 	// The three bits that can each strike a core off the roster by themselves.
-	s->inScheduler      = mp_inScheduler[apic_id] ? 1 : 0;
-	s->settleAck        = mp_acctSettleAck[apic_id] ? 1 : 0;
-	s->schedulerEnabled = mp_schedulerEnabled[apic_id] ? 1 : 0;
-	s->lastIretqRIP     = mp_lastIretqRIP[apic_id];
+	s->inScheduler      = mp_inScheduler[cpu] ? 1 : 0;
+	s->settleAck        = mp_acctSettleAck[cpu] ? 1 : 0;
+	s->schedulerEnabled = mp_schedulerEnabled[cpu] ? 1 : 0;
+	s->lastIretqRIP     = mp_lastIretqRIP[cpu];
 
 	// The LAPIC's own opinion. Legal to ask only from here, because these
 	// registers are core-local: the same MMIO address read on another core
@@ -245,7 +245,7 @@ bool nmi_probe_capture(nmi_regs_t *regs, nmi_frame_t *frame)
 
 	// Consume the request LAST, so the asker's "done" test (valid && !request)
 	// cannot observe an answer that is still being written.
-	kNmiProbeRequest[apic_id] = 0;
+	kNmiProbeRequest[cpu] = 0;
 	return true;
 }
 
@@ -424,8 +424,8 @@ void nmi_probe_render(const nmi_probe_snapshot_t *s, nmi_probe_line_fn emit, voi
 	char line[200];
 	const nmi_regs_t *r = &s->regs;
 
-	sprintf(line, "core %u: RIP=%016lx CS=%04lx RFLAGS=%016lx (IF=%lu) RSP=%016lx SS=%04lx\n",
-	        s->apic_id, s->frame.rip, s->frame.cs, s->frame.rflags,
+	sprintf(line, "CPU %u (APIC %u): RIP=%016lx CS=%04lx RFLAGS=%016lx (IF=%lu) RSP=%016lx SS=%04lx\n",
+	        s->cpu, kCPUs[s->cpu].apic.id, s->frame.rip, s->frame.cs, s->frame.rflags,
 	        (s->frame.rflags >> 9) & 1, s->frame.rsp, s->frame.ss);
 	emit(ctx, line);
 
@@ -487,9 +487,9 @@ static void probe_line_to_wire(void *ctx, const char *line)
 	printd(DEBUG_EXCEPTIONS, "%s", line);
 }
 
-void nmi_probe_report_wire(uint32_t apic_id)
+void nmi_probe_report_wire(uint32_t cpu)
 {
-	const nmi_probe_snapshot_t *s = nmi_probe_last(apic_id);
+	const nmi_probe_snapshot_t *s = nmi_probe_last(cpu);
 	if (s == NULL) {
 		return;
 	}
@@ -503,25 +503,25 @@ void nmi_probe_report_wire(uint32_t apic_id)
 	exception_wire_unlock();
 }
 
-bool nmi_probe_core(uint32_t apic_id, uint32_t timeout_ticks)
+bool nmi_probe_core(uint32_t cpu, uint32_t timeout_ticks)
 {
 	char line[160];
 
-	if (apic_id >= MAX_CPUS || !kSMPInitDone) {
+	if (cpu >= kCPUCount || !kSMPInitDone) {
 		return false;
 	}
 
 	core_local_storage_t *cls = get_core_local_storage();
-	if (cls != NULL && (uint32_t)cls->apic_id == apic_id) {
+	if (cls != NULL && (uint32_t)cls->cpu == cpu) {
 		probe_emit("nmi_probe: refusing to probe the core doing the asking\n");
 		return false;
 	}
 
-	kNmiSnapshot[apic_id].valid = 0;
+	kNmiSnapshot[cpu].valid = 0;
 	__asm__ volatile("" ::: "memory");
-	kNmiProbeRequest[apic_id] = 1;
+	kNmiProbeRequest[cpu] = 1;
 
-	send_ipi(apic_id, 0, IPI_DELIVERY_NMI, 1, 0);
+	send_ipi(cpu, 0, IPI_DELIVERY_NMI, 1, 0);
 
 	// NEVER WAIT FOR AN INTERRUPT-DELIVERED ANSWER WITH INTERRUPTS OFF —
 	// mpAcctSettleAll paid for that lesson on 2026-08-10 with a two-core
@@ -530,17 +530,17 @@ bool nmi_probe_core(uint32_t apic_id, uint32_t timeout_ticks)
 	// wall-clock rather than a spin count, because a spin count means
 	// something different on every machine and under every emulator.
 	uint64_t deadline = kTicksSinceStart + (timeout_ticks ? timeout_ticks : 10);
-	while (!kNmiSnapshot[apic_id].valid && kTicksSinceStart < deadline) {
+	while (!kNmiSnapshot[cpu].valid && kTicksSinceStart < deadline) {
 		__builtin_ia32_pause();
 	}
 
-	if (!kNmiSnapshot[apic_id].valid) {
+	if (!kNmiSnapshot[cpu].valid) {
 		// Not a failure of the instrument — a finding, and the most damning
 		// one available. A core that will not answer an NMI is not merely
 		// stuck in software: it is off the bus, held in SMM, or gone.
-		kNmiProbeRequest[apic_id] = 0;
-		sprintf(line, "core %u: DID NOT ANSWER AN NMI within %lu ticks — off the bus, in SMM, or dead\n",
-		        apic_id, (uint64_t)(timeout_ticks ? timeout_ticks : 10));
+		kNmiProbeRequest[cpu] = 0;
+		sprintf(line, "CPU %u: DID NOT ANSWER AN NMI within %lu ticks — off the bus, in SMM, or dead\n",
+		        cpu, (uint64_t)(timeout_ticks ? timeout_ticks : 10));
 		probe_emit(line);
 		return false;
 	}
@@ -553,7 +553,7 @@ bool nmi_probe_core(uint32_t apic_id, uint32_t timeout_ticks)
 void nmi_probe_sweep(void)
 {
 	core_local_storage_t *cls = get_core_local_storage();
-	uint32_t self = cls ? (uint32_t)cls->apic_id : BOOTSTRAP_PROCESSOR_ID;
+	uint32_t self = cls ? (uint32_t)cls->cpu : BSP_CPU;
 	// 200: the summary line carries a symbol name now, and the longest name
 	// in the kernel is 55 bytes (test_page_fault_does_not_panic_...).
 	char line[200];
@@ -563,15 +563,14 @@ void nmi_probe_sweep(void)
 		return;
 	}
 
-	sprintf(line, "── NMI core sweep (asked from core %u) ──────────────────────\n", self);
+	sprintf(line, "── NMI CPU sweep (asked from CPU %u) ──────────────────────\n", self);
 	probe_emit(line);
 
-	for (int i = 0; i < kMPCoreCount; i++) {
-		uint32_t apic_id = kCPUInfo[i].apicID;
-		if (apic_id == self || apic_id >= MAX_CPUS) {
+	for (uint32_t cpu = 0; cpu < kCPUCount; cpu++) {
+		if (cpu == self) {
 			continue;
 		}
-		if (!nmi_probe_core(apic_id, 10)) {
+		if (!nmi_probe_core(cpu, 10)) {
 			continue;   // the timeout verdict has already printed itself
 		}
 
@@ -580,19 +579,19 @@ void nmi_probe_sweep(void)
 		// full-dumped ~20 lines per core, which on an 8-core P5 scrolled the
 		// entire boot off the glass; the dumps now wait in the snapshot
 		// slots for whoever reads /sys/cpu/<n>/probe.
-		const nmi_probe_snapshot_t *s = nmi_probe_last(apic_id);
+		const nmi_probe_snapshot_t *s = nmi_probe_last(cpu);
 		if (s == NULL) {
 			continue;
 		}
 		uint64_t off = 0;
 		const char *name = probe_sym_for_address(s->frame.rip, &off);
 		if (name != NULL) {
-			sprintf(line, "core %u: alive — %s+0x%lx ring%lu inSched=%u ack=%u enabled=%u inService=0x%02x\n",
-			        apic_id, name, off, s->frame.cs & 3, s->inScheduler,
+			sprintf(line, "CPU %u: alive — %s+0x%lx ring%lu inSched=%u ack=%u enabled=%u inService=0x%02x\n",
+			        cpu, name, off, s->frame.cs & 3, s->inScheduler,
 			        s->settleAck, s->schedulerEnabled, s->apicInServiceVector);
 		} else {
-			sprintf(line, "core %u: alive — RIP=%016lx ring%lu inSched=%u ack=%u enabled=%u inService=0x%02x\n",
-			        apic_id, s->frame.rip, s->frame.cs & 3, s->inScheduler,
+			sprintf(line, "CPU %u: alive — RIP=%016lx ring%lu inSched=%u ack=%u enabled=%u inService=0x%02x\n",
+			        cpu, s->frame.rip, s->frame.cs & 3, s->inScheduler,
 			        s->settleAck, s->schedulerEnabled, s->apicInServiceVector);
 		}
 		probe_emit(line);
@@ -600,10 +599,10 @@ void nmi_probe_sweep(void)
 	probe_emit("── end of sweep — full snapshots: /sys/cpu/<n>/probe ───────\n");
 }
 
-const nmi_probe_snapshot_t *nmi_probe_last(uint32_t apic_id)
+const nmi_probe_snapshot_t *nmi_probe_last(uint32_t cpu)
 {
-	if (apic_id >= MAX_CPUS || !kNmiSnapshot[apic_id].valid) {
+	if (cpu >= MAX_CPUS || !kNmiSnapshot[cpu].valid) {
 		return NULL;
 	}
-	return &kNmiSnapshot[apic_id];
+	return &kNmiSnapshot[cpu];
 }

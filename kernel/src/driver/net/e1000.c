@@ -96,7 +96,7 @@
 #include "CONFIG.h"
 #include "driver/system/pci.h"
 #include "driver/system/apic.h"  // ioapic_route_gsi / ioapic_mask_gsi — the INTx door
-#include "smp.h"                 // kCPUInfo — the BSP's APIC ID targets the doorbell
+#include "smp_core.h"            // BSP_CPU — the doorbell rings on the BSP
 #include "random.h"              // the interrupt's moment feeds the entropy pool
 #include "driver/net/net_device.h"
 #include "driver/net/e1000.h"
@@ -1142,7 +1142,6 @@ void e1000_enable_intx(void)
 	if (e->pci->interrupt_line > 2 && e->pci->interrupt_line < 16)
 		candidates[candidateCount++] = e->pci->interrupt_line;
 
-	uint8_t bspApicId = kCPUInfo[0].apicID;
 	bool confirmed = false;
 
 	for (uint8_t c = 0; c < candidateCount && !confirmed; c++)
@@ -1179,7 +1178,7 @@ void e1000_enable_intx(void)
 		// on a healthy boot is the price, and it is worth it.
 		printf("e1000: probing GSI %u for the INTx wire...\n", gsi);
 
-		if (!ioapic_route_gsi(gsi, 0x45, bspApicId, true /*level*/, true /*active low*/))
+		if (!ioapic_route_gsi(gsi, 0x45, BSP_CPU, true /*level*/, true /*active low*/))
 			return;   // no IOAPIC at all — polled it is
 
 		// Clean slate, then ring the test bell: unmask ONLY the link-status

@@ -1,25 +1,31 @@
-// pincoretest — `PINCORE=<apic>` pins a program, and every thread it makes,
-// to the core it names (task.c task_env_pin).
+// pincputest — `PINCPU=<n>` pins a program, and every thread it makes, to
+// CPU n (task.c task_env_pin).
 //
-// The parent pins a copy of itself to each running core in turn, by setting
-// PINCORE in its own environment and spawning: the child inherits the
-// variable exactly as `env PINCORE=3 prog` hands it over. The child then asks
+// The parent pins a copy of itself to each running CPU in turn, by setting
+// PINCPU in its own environment and spawning: the child inherits the
+// variable exactly as `env PINCPU=3 prog` hands it over. The child then asks
 // two witnesses where it is:
 //
-//   CPUID     the APIC id of the core executing the instruction, read over
+//   CPUID     the APIC ID of the CPU executing the instruction, read over
 //             and over across yields and sleeps, from the main thread AND
 //             from a second thread (which inherits the pin at birth, never
 //             from the environment). A thread that is merely STARTED on the
-//             right core and then wanders would fail here.
+//             right CPU and then wanders would fail here. CPUID speaks APIC
+//             IDs, so the child translates through each /sys/cpu/<n>/state's
+//             `apic:` line — on a machine with sparse IDs (a 3900X, or
+//             `make run-sparse`) CPU n is not APIC n, and this is the check
+//             that knows the difference.
 //   /proc     each thread's `affinity` line, which is the pin itself: the
 //             record has to say what the scheduler is obeying.
 //
-// Then the refusals, which must leave a program UNPINNED (`affinity any`)
-// rather than pinned somewhere surprising: a word that is not a number, an
-// APIC id that is not a running core, and a number too long to be an APIC id.
+// Then PINCORE, the variable's old name: still honoured when PINCPU is
+// absent, read as a CPU number, and outranked by PINCPU when both are set.
 //
-// Core numbers are APIC ids, 0 .. /sys/cpu/count - 1 (sysfs.c's house
-// convention). Exit codes: 0xC02E0000 success, a distinct code per failure.
+// Then the refusals, which must leave a program UNPINNED (`affinity any`)
+// rather than pinned somewhere surprising: a word that is not a number, a
+// CPU that is not running, and a number too long to be a CPU.
+//
+// Exit codes: 0xC02E0000 success, a distinct code per failure.
 
 #include "os64/os64.h"
 
@@ -27,11 +33,12 @@
 #define PCT_NO_COUNT       0xC02E0001   // /sys/cpu/count unreadable
 #define PCT_NO_SPAWN       0xC02E0002
 #define PCT_NO_THREAD      0xC02E0003
-#define PCT_WANDERED       0xC02E0004   // CPUID saw the pinned task on another core
+#define PCT_WANDERED       0xC02E0004   // CPUID saw the pinned task on another CPU
 #define PCT_BAD_RECORD     0xC02E0005   // a thread's /proc affinity is not the pin
 #define PCT_NO_PROC        0xC02E0006   // /proc/self/thread unreadable
-#define PCT_REFUSAL_PINNED 0xC02E0007   // a refused PINCORE pinned the program anyway
+#define PCT_REFUSAL_PINNED 0xC02E0007   // a refused value pinned the program anyway
 #define PCT_NO_SETENV      0xC02E0008
+#define PCT_NO_APIC        0xC02E0009   // /sys/cpu/<n>/state has no apic line
 
 #define SAMPLES 200
 
@@ -57,8 +64,34 @@ static bool read_small(const char *path, char *buf, size_t cap)
     return used > 0;
 }
 
-// Every sample, from whichever thread runs this, must be on `want`. The
-// yields and sleeps are what give the scheduler its chances to move it.
+// CPU `cpu`'s APIC ID, from its state file. False when the file or the line
+// is missing.
+static bool apic_of_cpu(uint64_t cpu, uint32_t *apic)
+{
+    char path[48], text[1024];
+    os64_snprintf(path, sizeof(path), "/sys/cpu/%lu/state", cpu);
+    if (!read_small(path, text, sizeof(text)))
+        return false;
+    for (const char *p = text; *p; p++)
+    {
+        if ((p == text || p[-1] == '\n') && os64_memcmp(p, "apic: ", 6) == 0)
+        {
+            uint64_t v = 0;
+            const char *q = p + 6;
+            if (*q < '0' || *q > '9')
+                return false;
+            while (*q >= '0' && *q <= '9')
+                v = v * 10 + (uint64_t)(*q++ - '0');
+            *apic = (uint32_t)v;
+            return true;
+        }
+    }
+    return false;
+}
+
+// Every sample, from whichever thread runs this, must be on the CPU whose
+// APIC ID is `arg`. The yields and sleeps are what give the scheduler its
+// chances to move it.
 static int64_t sample(void *arg)
 {
     uint32_t want = (uint32_t)(uintptr_t)arg;
@@ -101,7 +134,7 @@ static uint32_t check_records(const char *want)
             found = os64_memcmp(p, line, ll) == 0;
         if (!found)
         {
-            os64_printf("pincoretest: thread %s does not say 'affinity %s'\n%s",
+            os64_printf("pincputest: thread %s does not say 'affinity %s'\n%s",
                         e.name, want ? want : "any", text);
             verdict = PCT_BAD_RECORD;
         }
@@ -133,17 +166,20 @@ static int64_t idle_until_released(void *arg)
     return 0;
 }
 
-static uint32_t child_pinned(const char *apic_text)
+static uint32_t child_pinned(const char *cpu_text)
 {
-    uint64_t apic;
-    if (!os64_parse_u64(apic_text, &apic))
+    uint64_t cpu;
+    uint32_t apic;
+    if (!os64_parse_u64(cpu_text, &cpu))
         return PCT_BAD_RECORD;
+    if (!apic_of_cpu(cpu, &apic))
+        return PCT_NO_APIC;
     int64_t h = os64_thread(sample_then_wait, (void *)(uintptr_t)apic);
     if (h < 0)
         return PCT_NO_THREAD;
     uint32_t verdict = (uint32_t)sample((void *)(uintptr_t)apic);
     if (verdict == 0)
-        verdict = check_records(apic_text);
+        verdict = check_records(cpu_text);
     __atomic_store_n(&gRelease, 1, __ATOMIC_RELEASE);
     int64_t theirs = 0;
     os64_thread_join((int32_t)h, &theirs);
@@ -163,12 +199,15 @@ static uint32_t child_unpinned(void)
     return verdict == PCT_BAD_RECORD ? PCT_REFUSAL_PINNED : verdict;
 }
 
-// Spawn this program with PINCORE=value and the given mode; answer its code.
-static uint32_t run_child(const char *value, char *const *argv)
+// Spawn this program with PINCPU and PINCORE set as given (NULL = unset);
+// answer its code.
+static uint32_t run_child(const char *pincpu, const char *pincore, char *const *argv)
 {
-    if (os64_setenv("PINCORE", value) != 0)
+    if ((pincpu && os64_setenv("PINCPU", pincpu) != 0) ||
+        (pincore && os64_setenv("PINCORE", pincore) != 0))
         return PCT_NO_SETENV;
-    int64_t pid = os64_spawn("/tests/pincoretest", argv);
+    int64_t pid = os64_spawn("/tests/pincputest", argv);
+    os64_unsetenv("PINCPU");
     os64_unsetenv("PINCORE");
     if (pid < 0)
         return PCT_NO_SPAWN;
@@ -176,6 +215,12 @@ static uint32_t run_child(const char *value, char *const *argv)
     while (os64_wait(pid, &code) == OS64_INTERRUPTED)
         ;
     return (uint32_t)code;
+}
+
+static int report(const char *what, uint32_t code)
+{
+    os64_printf("pincputest: %s failed 0x%x\n", what, code);
+    return (int)code;
 }
 
 int main(int argc, char **argv)
@@ -186,41 +231,60 @@ int main(int argc, char **argv)
         return child_unpinned();
 
     char text[32];
-    uint64_t cores;
+    uint64_t cpus;
     if (!read_small("/sys/cpu/count", text, sizeof(text)))
         return PCT_NO_COUNT;
     for (char *p = text; *p; p++)
         if (*p == '\n')
             *p = '\0';
-    if (!os64_parse_u64(text, &cores) || cores == 0)
+    if (!os64_parse_u64(text, &cpus) || cpus == 0)
         return PCT_NO_COUNT;
 
-    for (uint64_t c = 0; c < cores; c++)
+    char what[64];
+    for (uint64_t c = 0; c < cpus; c++)
     {
-        char apic[24];
-        os64_snprintf(apic, sizeof(apic), "%lu", c);
-        char *child[] = { "/tests/pincoretest", "pinned", apic, NULL };
-        uint32_t code = run_child(apic, child);
+        char cpu[24];
+        os64_snprintf(cpu, sizeof(cpu), "%lu", c);
+        char *child[] = { "/tests/pincputest", "pinned", cpu, NULL };
+        uint32_t code = run_child(cpu, NULL, child);
         if (code != 0)
         {
-            os64_printf("pincoretest: PINCORE=%s failed 0x%x\n", apic, code);
-            return (int)code;
+            os64_snprintf(what, sizeof(what), "PINCPU=%s", cpu);
+            return report(what, code);
         }
+    }
+
+    // The old name, on the LAST CPU — the one whose number and APIC ID
+    // differ most on a sparse machine — and PINCPU outranking it.
+    char last[24];
+    os64_snprintf(last, sizeof(last), "%lu", cpus - 1);
+    char *pinned_last[] = { "/tests/pincputest", "pinned", last, NULL };
+    uint32_t code = run_child(NULL, last, pinned_last);
+    if (code != 0)
+    {
+        os64_snprintf(what, sizeof(what), "PINCORE=%s", last);
+        return report(what, code);
+    }
+    code = run_child(last, "x1", pinned_last);
+    if (code != 0)
+    {
+        os64_snprintf(what, sizeof(what), "PINCPU=%s over PINCORE=x1", last);
+        return report(what, code);
     }
 
     char absent[24];
-    os64_snprintf(absent, sizeof(absent), "%lu", cores);   // one past the last core
+    os64_snprintf(absent, sizeof(absent), "%lu", cpus);   // one past the last CPU
     const char *refused[] = { "x1", "1x", absent, "12345" };
-    char *child[] = { "/tests/pincoretest", "unpinned", NULL };
+    char *child[] = { "/tests/pincputest", "unpinned", NULL };
     for (size_t i = 0; i < sizeof(refused) / sizeof(refused[0]); i++)
     {
-        uint32_t code = run_child(refused[i], child);
+        code = run_child(refused[i], NULL, child);
         if (code != 0)
         {
-            os64_printf("pincoretest: PINCORE=%s failed 0x%x\n", refused[i], code);
-            return (int)code;
+            os64_snprintf(what, sizeof(what), "PINCPU=%s", refused[i]);
+            return report(what, code);
         }
     }
-    os64_printf("pincoretest: pinned to each of %lu cores; 4 refusals left unpinned\n", cores);
+    os64_printf("pincputest: pinned to each of %lu CPUs; PINCORE honoured; 4 refusals left unpinned\n", cpus);
     return PCT_OK;
 }

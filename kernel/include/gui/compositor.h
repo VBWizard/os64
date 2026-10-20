@@ -14,7 +14,7 @@ extern bool kEnableGUI;
 // kEnableGUI is set.
 void gui_start(void);
 
-// Where the compositor will be pinned: an APIC id, or THREAD_NO_AFFINITY
+// Where the compositor will be pinned: a CPU number, or THREAD_NO_AFFINITY
 // (tickless mode / single core). kernel_init uses this to route the input
 // IRQs (1, 12) at the same core, so a keystroke or mouse packet ends the
 // compositor's hlt-wait directly instead of waiting for a scheduler pass.

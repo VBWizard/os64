@@ -25,7 +25,8 @@ extern char kNetMaskString[];
 extern char kRootPartUUID[];
 extern char kTZString[];
 extern int kTSCCalibrationSeconds;
-extern int kMaxActiveCores;
+extern int kMaxCPUs;
+extern int kMaxCPUsAlias;
 extern int kBlockCacheCapMB;      // block_cache.c — CACHE=<MB>
 extern bool kBlockCacheDisabled;  // block_cache.c — NOCACHE
 bool kEnableAHCI = true, kEnableNVME = true;
@@ -315,9 +316,12 @@ static cmdopt_t cmdopts[] = {
     // = 50; GUI entries pass 10 for smooth animation). Validated after the
     // parse loop — out-of-range snaps back to the default, loudly.
     {"BACKSTOP", OPT_INT, &kSchedBackstopMS, 0, 0},
-    // Cap the number of cores init_SMP brings up (0 = use them all). The
-    // uncapped cores are never woken — they stay parked in Limine's AP loop.
-    {"MAXCORES", OPT_INT, &kMaxActiveCores, 0, 0},
+    // How many CPUs this boot numbers and brings up (0 = all of them): the
+    // first N of the roster's order, BSP first. The rest are never woken —
+    // they stay parked in Limine's AP loop. MAXCORES is its old name, kept as
+    // an alias that announces itself (cpu_roster_init).
+    {"MAXCPUS", OPT_INT, &kMaxCPUs, 0, 0},
+    {"MAXCORES", OPT_INT, &kMaxCPUsAlias, 0, 0},
     {"DEBUG_DETAILED", OPT_UINT128_OR, &kDebugLevel, DEBUG_DETAILED, 0},
     {"DEBUG_EXTRA_DETAILED", OPT_UINT128_OR, &kDebugLevel, DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, 0},
     {"AHCI", OPT_BOOL, &kEnableAHCI, true, 0},

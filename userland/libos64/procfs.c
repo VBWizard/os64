@@ -94,7 +94,7 @@ static int read_task_status(uint64_t pid, os64_proc_info_t *info,
         else if (os64_streq(line, "foreground")) info->foreground = os64_streq(value, "yes");
         else if (os64_streq(line, "shell")) info->shell = os64_streq(value, "yes");
         else if (os64_streq(line, "threads")) info->threads = (uint32_t)os64_atou(value);
-        else if (os64_streq(line, "core")) info->core = (uint32_t)os64_atou(value);
+        else if (os64_streq(line, "cpu")) info->core = (uint32_t)os64_atou(value);
         else if (os64_streq(line, "runtime_us")) info->runtime_us = os64_atou(value);
         else if (split && os64_streq(line, "user_us")) {
             if (split_fields & 1u || !os64_parse_u64(value, &split->user_us)) split_fields |= 8u;
@@ -239,7 +239,7 @@ static int read_thread_status(const char *path, os64_thread_info_t *info,
         if (os64_streq(line, "thread")) info->tid = os64_atou(value);
         else if (os64_streq(line, "task")) info->pid = os64_atou(value);
         else if (os64_streq(line, "state")) info->state = parse_state(value);
-        else if (os64_streq(line, "core")) info->core = (uint32_t)os64_atou(value);
+        else if (os64_streq(line, "cpu")) info->core = (uint32_t)os64_atou(value);
         else if (os64_streq(line, "runtime_us")) info->runtime_us = os64_atou(value);
         else if (split && os64_streq(line, "user_us")) {
             if (split_fields & 1u || !os64_parse_u64(value, &split->user_us)) split_fields |= 8u;

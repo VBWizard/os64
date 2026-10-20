@@ -401,7 +401,7 @@ void kernel_init()
     // here, single-threaded, so no two probes ever build it at once.
     nmi_probe_init();
     init_SMP(kEnableSMP);
-    printf("(%u core(s) initialized)\n", kMPCoreCount);
+    cpu_roster_print();
     // Say which scheduler this boot got — the mode is a cmdline decision now
     // (tickless default, SCHED=periodic opt-out), and a decision that changes
     // how every core behaves should be readable on the glass, not inferred.
@@ -443,9 +443,9 @@ void kernel_init()
 	// pacing). Text-mode boots keep them on the BSP.
 	// Vectors 0x41/0x4C, not the legacy 0x21/0x2C: AP LAPICs run with
 	// TPR = 0x30, which masks all vectors below 0x40 (see idt.c).
-	uint8_t inputIrqDest = kCPUInfo[0].apicID;
+	uint32_t inputIrqDest = BSP_CPU;
 	if (kEnableGUI && gui_compositor_affinity() != THREAD_NO_AFFINITY)
-		inputIrqDest = (uint8_t)gui_compositor_affinity();
+		inputIrqDest = (uint32_t)gui_compositor_affinity();
 	ioapic_adopt_isa_irq(1, 0x41, inputIrqDest, &kIRQ1UsesLapic);
 
 	// The wheel scrolls text VTs on text-only boots as well as GUI boots.
@@ -488,11 +488,11 @@ void kernel_init()
 	// boot time go" in one run.
 	BOOTMARK("preboot-done");
 
-        for (int cnt = 0; cnt < kMPCoreCount; cnt++)
+        for (uint32_t cnt = 0; cnt < kCPUCount; cnt++)
 	    {
 			char idleTaskName[10];
 			sprintf(idleTaskName, "/idle%u",cnt);
-			kIdleTasks[cnt] = task_create(idleTaskName, 0, NULL, kKernelTask, true, kCPUInfo[cnt].apicID);
+			kIdleTasks[cnt] = task_create(idleTaskName, 0, NULL, kKernelTask, true, cnt);
 			scheduler_submit_new_task(kIdleTasks[cnt]);
 			// Hand each core's CLS its idle THREAD — the target the
 			// accounting charge sites redirect to while acctCurrentHalted
@@ -513,7 +513,7 @@ void kernel_init()
 	BOOTMARK("logd+kworker-created");
 
 	// THE UNDERTAKER RUNS ANYWHERE (2026-08-09, Chris's ruling: "no reason for
-	// it to be pinned at all"). It used to be nailed to kCPUInfo[1], and that
+	// it to be pinned at all"). It used to be nailed to the second CPU, and that
 	// pin turned a runaway user program into an OS-WIDE outage: under tickless
 	// an AP does not preempt, so any syscall-free task landing on core 1 owned
 	// that core forever, kworker went RUNNABLE-and-never-running, and since it
@@ -525,7 +525,7 @@ void kernel_init()
 	// cure is an AP preemption backstop so no core can be owned forever —
 	// see the tickless note in scheduler.c's nudge loop.)
 	//
-	// The kMPCoreCount > 1 guard went with it, and it was load-bearing in the
+	// The more-than-one-CPU guard went with it, and it was load-bearing in the
 	// worst way: it existed ONLY because core 1 had to exist to be pinned to,
 	// which meant a `nosmp` or single-core boot got NO kworker — and therefore
 	// no burial at all, permanently, on exactly the machines least able to
@@ -552,7 +552,7 @@ void kernel_init()
 	// handler and by processSignals once per tick.
 	if (kEnableNet)
 	{
-		kKnetTask = task_create("/knet", 0, NULL, kKernelTask, true, BOOTSTRAP_PROCESSOR_ID);
+		kKnetTask = task_create("/knet", 0, NULL, kKernelTask, true, BSP_CPU);
 		kKnetTask->autoReap = true;
 		printd(DEBUG_TASK | DEBUG_DETAILED,
 		       "kernel_init: enabling /knet (pinned to the BSP; task=0x%08x, thread=0x%08x)\n",
@@ -1268,8 +1268,9 @@ void kernel_main()
 
 	// The log rings, as early as they can possibly exist (moved here from
 	// kernel_init 2026-08-18). They need exactly two things — kmalloc, which
-	// the line above just proved, and kLimineSMPInfo->cpu_count, which
-	// main.c set before kernel_main was ever called — and every printd
+	// the line above just proved, and the CPU roster, built from Limine's
+	// list (which main.c set before kernel_main was ever called) by the
+	// cpu_roster_init call just above them — and every printd
 	// BEFORE this point takes printd's `else` branch: formatted straight
 	// onto COM1 and stored nowhere, so it can never reach logd's file.
 	//
@@ -1285,6 +1286,9 @@ void kernel_main()
 	// Everything above this line is still serial-only, and that residue is
 	// now four lines — the banner, the commandline, and the debug level —
 	// because they print before the allocator exists.
+	//
+	// The CPU roster first: there is one ring per numbered CPU.
+	cpu_roster_init();
 	logging_queueing_init();
 
 	// kmalloc works now — give the console its RAM shadow so scrolling stops

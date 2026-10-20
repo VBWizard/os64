@@ -32,7 +32,7 @@
 // else going wrong, and it should be too simple to break.
 //
 //   %d   date, YYYY-MM-DD          %k   ticks since boot
-//   %t   time, HH:MM:SS            %c   core (the AP number, bare)
+//   %t   time, HH:MM:SS            %c   CPU number (the AP number, bare)
 //   %T   thread id, 4 hex digits   %g   category tag (the DEBUG_* flag)
 //   %l   level/priority digit      %m   the message itself
 //   %%   a literal '%'

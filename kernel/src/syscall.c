@@ -790,13 +790,13 @@ static inline uint32_t get_current_cpu_index(void)
 		return 0;
 	}
 
-	uint64_t apic_id = cls->apic_id;
-	if (apic_id >= MAX_CPUS)
+	uint64_t cpu = cls->cpu;
+	if (cpu >= MAX_CPUS)
 	{
 		return 0;
 	}
 
-	return (uint32_t)apic_id;
+	return (uint32_t)cpu;
 }
 
 // Boundary validation of user-pointer arguments, driven by the entry's

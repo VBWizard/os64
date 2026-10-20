@@ -36,7 +36,7 @@ typedef struct doorbell
 	thread_t*     thread;    // the sleeper this bell belongs to (NULL until registered)
 	// THE EDGE: the rung bit and the stamp of the ring that raised it, in ONE
 	// word, claimed by compare-and-swap. Bit 0 is RUNG; bits 1-7 are the
-	// raising core's APIC id (0x7F = a core the field cannot name: counted,
+	// raising CPU's number (0x7F = a CPU the field cannot name: counted,
 	// never timed); bits 8-63 are the low 56 bits of that core's TSC. One
 	// word and one CAS because the bit and its stamp are a pair: a ringer
 	// that merely set a bit after another's stamp had already been consumed
@@ -67,16 +67,18 @@ void doorbell_register(doorbell_t* db, thread_t* thread, const char* name);
 void doorbell_unregister(doorbell_t* db);
 
 // The edge word's encoding (`edge` above) and the two atomic verbs on it.
+// The ringer's CPU number takes seven bits; one the field cannot hold is
+// stored as UNKNOWN, which no CPU's sleeper will take as its own.
 #define DOORBELL_EDGE_RUNG          1ull
-#define DOORBELL_EDGE_APIC_UNKNOWN  0x7Fu
+#define DOORBELL_EDGE_CPU_UNKNOWN   0x7Fu
 #define DOORBELL_EDGE_TSC_MASK      ((1ull << 56) - 1)
-static inline uint64_t doorbell_edge_make(uint64_t tsc, uint32_t apic)
+static inline uint64_t doorbell_edge_make(uint64_t tsc, uint32_t cpu)
 {
-	uint64_t core = apic < DOORBELL_EDGE_APIC_UNKNOWN ? apic : DOORBELL_EDGE_APIC_UNKNOWN;
-	return ((tsc & DOORBELL_EDGE_TSC_MASK) << 8) | (core << 1) | DOORBELL_EDGE_RUNG;
+	uint64_t ringer = cpu < DOORBELL_EDGE_CPU_UNKNOWN ? cpu : DOORBELL_EDGE_CPU_UNKNOWN;
+	return ((tsc & DOORBELL_EDGE_TSC_MASK) << 8) | (ringer << 1) | DOORBELL_EDGE_RUNG;
 }
 static inline bool     doorbell_edge_rung(uint64_t edge) { return (edge & DOORBELL_EDGE_RUNG) != 0; }
-static inline uint32_t doorbell_edge_apic(uint64_t edge) { return (uint32_t)((edge >> 1) & 0x7Fu); }
+static inline uint32_t doorbell_edge_cpu(uint64_t edge)  { return (uint32_t)((edge >> 1) & 0x7Fu); }
 static inline uint64_t doorbell_edge_tsc(uint64_t edge)  { return edge >> 8; }
 // Cycles from the edge's TSC to `now` on the same core, modulo 2^56 — the
 // only subtraction that is right for a truncated stamp.

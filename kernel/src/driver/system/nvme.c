@@ -504,9 +504,9 @@ static uint64_t nvme_io_lock(nvme_controller_t* controller)
 	// needed disk I/O. That must never happen (the DMA bounce buffers and
 	// queues are HHDM/kmalloc-mapped); panic loudly instead of spinning
 	// silently forever with interrupts off.
-	int64_t me = kCLSInitialized ? (int64_t)get_core_local_storage()->apic_id : 0;
+	int64_t me = kCLSInitialized ? (int64_t)get_core_local_storage()->cpu : 0;
 	if (controller->ioLockOwner == me)
-		panic("NVMe: nested I/O on core %ld — disk read from a fault taken inside nvme_do_io?\n", me);
+		panic("NVMe: nested I/O on CPU %ld — disk read from a fault taken inside nvme_do_io?\n", me);
 
 	uint64_t flags = spinlock_acquire_irqsave(&controller->ioLock);
 	controller->ioLockOwner = me;

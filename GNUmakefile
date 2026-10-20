@@ -32,7 +32,10 @@ override USER_VARIABLE = $(if $(filter $(origin $(1)),default undefined),$(eval 
 # machine this OS runs on has (RNG_PROBE.md); exposing them keeps the
 # harness honest about the entropy pool's normal path. A boot on the bare
 # model (drop the +features) is how the pool's timing-only path is tested.
-QEMU_BASE_FLAGS = -machine q35 -cpu qemu64,+rdrand,+rdseed -m 8g -no-reboot -smp 8 \
+# -smp: the CPU topology, QEMU_SMP=<spec> on the command line for any
+# target. run-sparse is the one every SMP change should also boot.
+QEMU_SMP ?= 8
+QEMU_BASE_FLAGS = -machine q35 -cpu qemu64,+rdrand,+rdseed -m 8g -no-reboot -smp $(QEMU_SMP) \
                   -serial file:qemu_com1.log \
                   -monitor $(shell echo telnet:127.0.0.1:55555,server,nowait) \
 				 # -d $(shell echo int,cpu_reset,pcall,guest_errors)
@@ -323,6 +326,19 @@ debug: $(IMAGE_NAME).iso | $(DATA_IMAGE)
 		-cdrom $(IMAGE_NAME).iso \
 		-boot d \
 		$(QEMUFLAGS) $(QEMUDEBUGFLAGS)
+
+# The AMD 3900X's APIC layout: 24 CPUs whose APIC IDs are 0-5, 8-13, 16-21,
+# 24-29 (QEMU builds them die << 3 | core << 1 | thread, three cores in each
+# four-slot die, which is what Zen 2 does per CCX). A kernel that uses an
+# APIC ID as a CPU number boots fine on every dense machine and dies on
+# this one, so this is the acceptance test for anything that touches CPU
+# bring-up, IPIs or per-CPU state (CPU_NUMBERS.md). Add MAXCPUS=4 or nosmp
+# at the Limine menu (`e`) for the capped boots.
+QEMU_SPARSE_SMP = 24,sockets=1,dies=4,cores=3,threads=2
+
+.PHONY: run-sparse
+run-sparse:
+	$(MAKE) run QEMU_SMP=$(QEMU_SPARSE_SMP)
 
 # ── Network-attached variants ────────────────────────────────────────────────
 # Same run/debug, plus a virtio NIC on QEMU's user-mode NAT (guest 10.0.2.15,
