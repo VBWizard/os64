@@ -413,8 +413,7 @@ static void discard_font(os64_ui_t *ui, void *user, void *plan)
 static void relayout_all(void)
 {
     layout(&g.ui);
-    g.ui.dirty = g.root.bounds;
-    g.ui.any_dirty = true;
+    os64_ui_mark_dirty(&g.ui, &g.root);
 }
 
 // ── scrollbar <-> view wiring ───────────────────────────────────────────────

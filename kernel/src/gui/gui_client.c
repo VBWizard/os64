@@ -37,11 +37,13 @@ extern struct Framebuffer kFrameBuffer;
 extern uintptr_t kHHDMOffset;
 
 // ── The ABI layout lock (kernel side) ───────────────────────────────────────
-// abi/include/os64/gui.h defines ring 3's view of rect_t / surface_t /
-// input_event_t. Both sides assert the sizes and offsets at this boundary;
-// input.h also checks event numbers against the public constants.
+// rect_t is ring 3's os64_gui_rect_t itself (os64/rect.h); its size is
+// asserted anyway, as the boundary's. abi/include/os64/gui.h defines ring
+// 3's own view of surface_t / input_event_t, and both sides assert the
+// sizes and offsets at this boundary; input.h also checks event numbers
+// against the public constants.
 _Static_assert(GUI_WINDOW_TITLE_UTF8 == OS64_GUI_WINDOW_TITLE_UTF8, "title encoding ABI");
-_Static_assert(sizeof(rect_t) == 16, "rect_t drifted from the GUI ABI (os64/gui.h)");
+_Static_assert(sizeof(rect_t) == 16, "rect_t drifted from the GUI ABI (os64/rect.h)");
 _Static_assert(sizeof(surface_t) == 24, "surface_t drifted from the GUI ABI (os64/gui.h)");
 _Static_assert(sizeof(input_event_t) == 32, "input_event_t drifted from the GUI ABI (os64/gui.h)");
 _Static_assert(__builtin_offsetof(input_event_t, focus.other_handle) == 6, "focus handle ABI");

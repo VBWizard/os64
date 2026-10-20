@@ -3,13 +3,14 @@
 // The GUI syscall boundary is defined here for userland: the
 // three structs (rect, surface, input event), the window flags, the error
 // values, the color constants, and thin inline wrappers over the raw
-// syscalls. The kernel keeps its own headers (gui/gui_types.h, gui/input.h
-// — written dependency-free precisely so this day could come), and
-// gui_client.c carries _Static_asserts pinning BOTH sides to the same
-// sizes and offsets: if either definition drifts, the KERNEL BUILD breaks,
-// not a pixel. (The ext2 superblock plays the same trick with its on-disk
-// offsets — a layout that two parties must agree on gets a tripwire, not
-// trust.)
+// syscalls. The rect is the one struct both sides share outright
+// (os64/rect.h). For the others the kernel keeps its own headers
+// (gui/gui_types.h, gui/input.h — written dependency-free precisely so this
+// day could come), and gui_client.c carries _Static_asserts pinning BOTH
+// sides to the same sizes and offsets: if either definition drifts, the
+// KERNEL BUILD breaks, not a pixel. (The ext2 superblock plays the same
+// trick with its on-disk offsets — a layout that two parties must agree on
+// gets a tripwire, not trust.)
 //
 // Coordinates are CONTENT-local, origin top-left. Color is XRGB8888 (the X
 // byte reserved for future alpha). Drawing never crosses the ring — an app
@@ -25,6 +26,7 @@
 #include "os64/syscall.h"
 #include "os64/syscall_numbers.h"
 #include "os64/signal.h"   // OS64_INTERRUPTED — the one answer for "a signal cut your wait short"
+#include "os64/rect.h"     // os64_gui_rect_t, shared with the kernel
 
 // ── Errors (gui_client.h's values, verbatim) ────────────────────────────────
 #define OS64_GUI_ERR_INVALID_HANDLE  (-1)
@@ -215,14 +217,10 @@ typedef struct {
 #define OS64_GUI_COLOR_DESKTOP    0xff2a5566u
 
 // ── The three boundary structs ──────────────────────────────────────────────
-// Layout-locked against the kernel's gui_types.h / input.h by the asserts
-// in gui_client.c. Do not reorder fields on either side alone.
-
-typedef struct os64_gui_rect
-{
-    int32_t x, y;
-    int32_t w, h;
-} os64_gui_rect_t;
+// The rect is one definition for both sides (os64/rect.h, which the kernel's
+// gui_types.h includes). The surface and the input event are layout-locked
+// against the kernel's gui_types.h / input.h by the asserts in gui_client.c:
+// do not reorder their fields on either side alone.
 
 typedef struct os64_gui_surface
 {

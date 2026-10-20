@@ -19,6 +19,7 @@
 #include "gui/gui_client.h"
 #include "gui/gui_internal.h"
 #include "gui/glass.h"         // glass_damage_locked — every frame feeds /dev/glass
+#include "os64/damage.h"       // the damage list's rule, shared with libos64
 #include "driver/system/x86_64.h"   // rdtsc — the lock times itself for /sys/gui
 
 #include "tty.h"             // kTTY/kTTYFocused — glass ownership IS VT focus (VT8 chapter)
@@ -155,34 +156,10 @@ bool gui_owns_glass(void)
 // framebuffer ~100 times a second. The screen was mostly unchanged; we paid
 // retail for it anyway. Two small rects should cost two small rects.
 //
-// The design is deliberately the cheap one — a fixed array plus a merge
-// heuristic, NOT region algebra. Regions (X11's, Cairo's) split rectangles on
-// overlap to keep an exact non-overlapping cover, and they are the right
-// answer when you have thousands; here the whole population is "one ball, one
-// cursor, one console line, sometimes a dragged window", and an exact cover
-// would cost more to maintain than the overdraw it saves.
-//
-// Two rules keep it honest:
-//   1. MERGE WHEN MERGING IS CHEAP. Union two entries only if the union wastes
-//      no more than DAMAGE_MERGE_SLACK pixels beyond their own areas — so
-//      touching/overlapping rects collapse (and overlapping ones MUST, or the
-//      overlap composites twice) while distant ones stay apart. Without this,
-//      a list degenerates into a list of near-duplicates.
-//   2. OVERFLOW FALLS BACK TO v1. When the list is full and nothing merges
-//      cheaply, collapse everything into one union rect. Worst case is exactly
-//      today's behavior — never a wrong screen, only a slower one.
-//
-// Entries may still overlap (rule 1 tolerates SLACK, and merging is
-// pairwise-greedy with NO re-merge pass: a rect that bridges into entry i can
-// grow it until it swallows entry j whole, and nothing goes back to notice).
-// So the overlap is not strictly slack-bounded — the swallowed-entry case
-// composites and UC-flushes a duplicate of j's whole area. It is WASTE, never
-// wrongness: both passes composite identical bytes in identical z-order, so
-// the glass cannot disagree with itself. The geometry that triggers it (a
-// late rect bridging two established ones) is rare at this population size;
-// if it ever shows in the flush counter, the fix is a containment sweep after
-// a merge grows an entry, not a redesign. (Honesty upgrade from review,
-// 2026-08-19 — the first version of this comment claimed the slack bound.)
+// The list's rule (merge when merging is cheap, collapse to one union when
+// full, and why entries may still overlap) is shared with libos64's window
+// painting: shared/damage.c, os64/damage.h. What is the compositor's own is
+// the list itself and its two numbers, below.
 // ---------------------------------------------------------------------------
 // Sixteen since the rubber band (2026-08-19). An interactive resize adds the
 // four edges of the OLD outline and the four of the NEW one every time the
@@ -201,20 +178,6 @@ bool gui_owns_glass(void)
 
 static rect_t   kPendingDamage[DAMAGE_MAX_RECTS];
 static uint32_t kPendingDamageCount;   // 0 means "no damage"
-
-static inline int64_t rect_area(rect_t r)
-{
-	return rect_is_empty(r) ? 0 : (int64_t)r.w * (int64_t)r.h;
-}
-
-// Would unioning these two waste little enough to be worth one composite?
-// Overlapping rects always qualify: their union is never bigger than the sum
-// of their areas, so the test below passes by construction — which is what
-// guarantees the list never composites the same pixel twice for free.
-static inline bool damage_merge_is_cheap(rect_t a, rect_t b)
-{
-	return rect_area(rect_union(a, b)) <= rect_area(a) + rect_area(b) + DAMAGE_MERGE_SLACK;
-}
 
 // The canonical screen image (scene + cursor). Written by the compositor
 // thread only; /dev/glass readers on other threads copy its pixels, which is
@@ -317,35 +280,13 @@ static inline rect_t cursor_rect(void)
 
 void gui_damage_add_locked(rect_t screen_rect)
 {
-	if (rect_is_empty(screen_rect))
-		return;
-
-	// Merge into the first entry where merging is cheap. First-fit, not
-	// best-fit: the list is at most DAMAGE_MAX_RECTS long and the common case
-	// is one or two entries, so hunting for the optimal partner would cost
-	// more than the overdraw it saves.
-	for (uint32_t i = 0; i < kPendingDamageCount; i++) {
-		if (damage_merge_is_cheap(kPendingDamage[i], screen_rect)) {
-			kPendingDamage[i] = rect_union(kPendingDamage[i], screen_rect);
-			return;
-		}
-	}
-
-	if (kPendingDamageCount < DAMAGE_MAX_RECTS) {
-		kPendingDamage[kPendingDamageCount++] = screen_rect;
-		return;
-	}
-
-	// Full, and nothing merged cheaply — fall back to v1: one union rect for
-	// the whole frame. Over-redraws, never under-redraws. Counted, because a
-	// union across the screen makes the next pass long, and a long pass lets
-	// the list fill again (GUI_LOCK.md).
-	s_composite_counts.collapses++;
-	rect_t all = screen_rect;
-	for (uint32_t i = 0; i < kPendingDamageCount; i++)
-		all = rect_union(all, kPendingDamage[i]);
-	kPendingDamage[0] = all;
-	kPendingDamageCount = 1;
+	// The rule is shared/damage.c's. A full list that nothing merges into
+	// falls back to v1, one union rect for the whole frame, and is counted,
+	// because a union across the screen makes the next pass long, and a long
+	// pass lets the list fill again (GUI_LOCK.md).
+	if (os64_damage_add(kPendingDamage, &kPendingDamageCount, DAMAGE_MAX_RECTS, DAMAGE_MERGE_SLACK,
+	                    screen_rect))
+		s_composite_counts.collapses++;
 }
 
 void gui_damage_add(rect_t screen_rect)

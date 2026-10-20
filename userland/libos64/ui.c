@@ -4,6 +4,7 @@
 // away and left the desktop with nothing to click.
 
 #include "os64/ui.h"
+#include "os64/damage.h"
 #include "ui_internal.h"
 #include "os64/fmt.h"
 #include "os64/io.h"
@@ -47,13 +48,50 @@ void os64_ui_add_child(os64_ui_widget_t *parent, os64_ui_widget_t *child)
 	w->next_sibling = child;
 }
 
+static bool rect_holds(os64_gui_rect_t outer, os64_gui_rect_t r)
+{
+	return (int64_t)r.x >= outer.x && (int64_t)r.y >= outer.y &&
+	       (int64_t)r.x + r.w <= (int64_t)outer.x + outer.w &&
+	       (int64_t)r.y + r.h <= (int64_t)outer.y + outer.h;
+}
+
 void os64_ui_mark_dirty(os64_ui_t *ui, os64_ui_widget_t *w)
 {
-	if (w == (os64_ui_widget_t *)0)
+	if (w == (os64_ui_widget_t *)0 || os64_rect_is_empty(w->bounds))
 		return;
-	ui->dirty = ui->any_dirty ? os64_rect_union(ui->dirty, w->bounds)
-	                          : w->bounds;
+	os64_gui_rect_t r = w->bounds;
+	// `any_dirty` is the authority: a list it calls clean is empty, so a
+	// hand clear of the flag clears the list too.
+	if (!ui->any_dirty)
+		ui->damage_count = 0;
+	// A mark that holds entries swallows them first: the compositor's rule
+	// would merge it into the first and leave the others to be painted
+	// again, and a root mark (a resize, a theme) would repaint every part
+	// inside it twice.
+	uint32_t kept = 0;
+	for (uint32_t i = 0; i < ui->damage_count; i++)
+		if (!rect_holds(r, ui->damage[i]))
+			ui->damage[kept++] = ui->damage[i];
+	ui->damage_count = kept;
+	if (os64_damage_add(ui->damage, &ui->damage_count, OS64_UI_DAMAGE_MAX, OS64_UI_DAMAGE_SLACK, r))
+		ui->damage_collapses++;
+	ui->dirty = ui->any_dirty ? os64_rect_union(ui->dirty, r) : r;
 	ui->any_dirty = true;
+}
+
+bool os64_ui_dirty_covers(const os64_ui_t *ui, os64_gui_rect_t r)
+{
+	for (uint32_t i = 0; ui->any_dirty && i < ui->damage_count; i++)
+		if (rect_holds(ui->damage[i], r))
+			return true;
+	return false;
+}
+
+static void clean(os64_ui_t *ui)
+{
+	ui->any_dirty = false;
+	ui->dirty = (os64_gui_rect_t){0, 0, 0, 0};
+	ui->damage_count = 0;
 }
 
 void os64_ui_init(os64_ui_t *ui, os64_draw_ctx_t *ctx)
@@ -66,8 +104,8 @@ void os64_ui_init(os64_ui_t *ui, os64_draw_ctx_t *ctx)
 	ui->root = ui->grab = ui->focus = ui->hover = (os64_ui_widget_t *)0;
 	ui->grab_button = 0;
 	ui->window_blurred = false;
-	ui->any_dirty = false;
-	ui->dirty = (os64_gui_rect_t){0, 0, 0, 0};
+	clean(ui);
+	ui->damage_collapses = 0;
 	ui->on_resize = (void (*)(os64_ui_t *))0;
 	ui->on_close = (void (*)(os64_ui_t *))0;
 	ui->on_doorbell = NULL;
@@ -392,11 +430,12 @@ bool os64_ui_dispatch(os64_ui_t *ui, const os64_gui_event_t *ev)
 		//      the APP's (os64_ui_stack_vertical is a function you call, not a
 		//      mode you set) and libui has no way to guess which one.
 		//
-		// Then mark the ENTIRE surface dirty rather than unioning bounds: on a
-		// shrink the vacated area belongs to nobody's widget, and on a grow the
-		// newly exposed strip holds the window's background — neither is
-		// reachable from any widget rect, so a bounds-union repaint would
-		// leave visible litter exactly where the eye is already looking.
+		// Then mark the ENTIRE surface dirty (the root, stretched to it)
+		// rather than the widgets that moved: on a shrink the vacated area
+		// belongs to nobody's widget, and on a grow the newly exposed strip
+		// holds the window's background — neither is reachable from any
+		// widget rect, so their repaint would leave visible litter exactly
+		// where the eye is already looking.
 		os64_draw_ctx_refresh(ui->ctx);
 		if (!ui->root)
 			return true;
@@ -406,8 +445,7 @@ bool os64_ui_dispatch(os64_ui_t *ui, const os64_gui_event_t *ev)
 		if (ui->on_resize)
 			ui->on_resize(ui);
 		reconcile(ui);
-		ui->dirty = ui->root->bounds;
-		ui->any_dirty = true;
+		os64_ui_mark_dirty(ui, ui->root);
 		return true;
 	}
 	default:
@@ -417,18 +455,28 @@ bool os64_ui_dispatch(os64_ui_t *ui, const os64_gui_event_t *ev)
 
 // ── paint ───────────────────────────────────────────────────────────────────
 
-static void paint_recursive(os64_ui_widget_t *w, os64_ui_t *ui)
+static void paint_recursive(os64_ui_widget_t *w, os64_ui_t *ui, const os64_gui_rect_t *list,
+                            uint32_t count)
 {
 	if (w == (os64_ui_widget_t *)0 || w->hidden)
 		return;
 	w->ui = ui;   // a widget attached by hand still reaches the fonts
-	os64_gui_rect_t clip;
-	if (!os64_rect_intersect(w->bounds, ui->dirty, &clip))
+	os64_gui_rect_t met = {0, 0, 0, 0}, clip;
+	bool meets = false;
+	for (uint32_t i = 0; i < count; i++)
+		if (os64_rect_intersect(w->bounds, list[i], &clip)) {
+			met = meets ? os64_rect_union(met, list[i]) : list[i];
+			meets = true;
+		}
+	if (!meets)
 		return;
-	// Parent before children (children overpaint), whole widget even when
-	// only partly dirty: the canvas beyond the dirty rect just gets the same
-	// bytes it already shows (repaint-from-state), and only `dirty` is
-	// published. Widgets paint INSIDE their bounds by contract — the
+	// One walk, parent before children (children overpaint), so a widget
+	// painted for several rectangles is painted for all of them before any
+	// child is. A paints_part class is painted once for each rectangle it
+	// meets, cut to it; any other is painted whole, once, even when only
+	// partly dirty: the canvas beyond the rectangles just gets the same
+	// bytes it already shows (repaint-from-state), and only the rectangles
+	// are published. Widgets paint INSIDE their bounds by contract — the
 	// primitives clip to the CANVAS, so a widget that strays stomps a
 	// sibling, which is LIBDRAW.md's named fingerprint for this layer.
 	if (w->cls->paint) {
@@ -442,30 +490,57 @@ static void paint_recursive(os64_ui_widget_t *w, os64_ui_t *ui)
 			t.text_sel_bg = t.disabled_fg;
 			t.text_sel_fg = t.disabled_bg;
 		}
-		w->cls->paint(w, ui->ctx, &t);
+		if (w->cls->paints_part) {
+			for (uint32_t i = 0; i < count; i++)
+				if (os64_rect_intersect(w->bounds, list[i], &clip)) {
+					ui->dirty = list[i];
+					w->cls->paint(w, ui->ctx, &t);
+				}
+		} else {
+			ui->dirty = met;
+			w->cls->paint(w, ui->ctx, &t);
+		}
 	}
 	for (os64_ui_widget_t *c = w->first_child; c; c = c->next_sibling)
-		paint_recursive(c, ui);
+		paint_recursive(c, ui, list, count);
+}
+
+uint32_t os64_ui_render_list(os64_ui_t *ui, os64_gui_rect_t out[OS64_UI_DAMAGE_MAX])
+{
+	reconcile(ui);
+	if (!ui->any_dirty || ui->root == (os64_ui_widget_t *)0)
+		return 0;
+	// The walk reads a copy: `dirty` is rewritten for each paint, and the
+	// list is cleared after it, so a mark made while painting is dropped,
+	// as it always was.
+	uint32_t count = ui->damage_count;
+	for (uint32_t i = 0; i < count; i++)
+		out[i] = ui->damage[i];
+	paint_recursive(ui->root, ui, out, count);
+	clean(ui);
+	return count;
 }
 
 bool os64_ui_render(os64_ui_t *ui, os64_gui_rect_t *damage)
 {
-	reconcile(ui);
-	if (!ui->any_dirty || ui->root == (os64_ui_widget_t *)0)
+	os64_gui_rect_t list[OS64_UI_DAMAGE_MAX];
+	uint32_t count = os64_ui_render_list(ui, list);
+	if (count == 0)
 		return false;
-	paint_recursive(ui->root, ui);
-	if (damage)
-		*damage = ui->dirty;
-	ui->any_dirty = false;
-	ui->dirty = (os64_gui_rect_t){0, 0, 0, 0};
+	if (damage) {
+		*damage = list[0];
+		for (uint32_t i = 1; i < count; i++)
+			*damage = os64_rect_union(*damage, list[i]);
+	}
 	return true;
 }
 
 void os64_ui_paint(os64_ui_t *ui)
 {
-	os64_gui_rect_t damage;
-	if (os64_ui_render(ui, &damage))
-		os64_draw_publish(ui->ctx, &damage);
+	os64_gui_rect_t list[OS64_UI_DAMAGE_MAX];
+	uint32_t count = os64_ui_render_list(ui, list);
+	for (uint32_t i = 0; i < count; i++)
+		os64_draw_publish(ui->ctx, &list[i]);
 }
 
 // ── the packaged loop ───────────────────────────────────────────────────────
@@ -550,11 +625,23 @@ void os64_ui_stack_vertical_staged(os64_ui_t *ui, os64_ui_widget_t *parent)
 // Logic in event, look in paint, look reads only the theme. Swap a paint
 // pointer, keep the logic: that is the engine seam, working.
 
+// A panel is usually a window's root, so it meets every dirty rectangle: it
+// fills and outlines only what `dirty` covers of it (paints_part), or the
+// whole window would be filled again for each one.
 static void panel_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
                         const os64_ui_theme_t *t)
 {
-	os64_draw_fill_rect(&ctx->surf, w->bounds, t->panel_bg);
-	os64_draw_rect(&ctx->surf, w->bounds, t->panel_border);
+	os64_gui_rect_t part, b = w->bounds, edge;
+	if (!os64_rect_intersect(b, w->ui ? w->ui->dirty : b, &part))
+		return;
+	os64_draw_fill_rect(&ctx->surf, part, t->panel_bg);
+	const os64_gui_rect_t edges[4] = {
+		{b.x, b.y, b.w, 1}, {b.x, b.y + b.h - 1, b.w, 1},
+		{b.x, b.y, 1, b.h}, {b.x + b.w - 1, b.y, 1, b.h},
+	};
+	for (int i = 0; i < 4; i++)
+		if (os64_rect_intersect(edges[i], part, &edge))
+			os64_draw_fill_rect(&ctx->surf, edge, t->panel_border);
 }
 
 int32_t ui_control_min_height(os64_ui_t *ui, os64_font_role_t role)
@@ -713,12 +800,13 @@ static bool button_event(os64_ui_widget_t *w, os64_ui_t *ui,
 }
 
 const os64_ui_class_t os64_ui_panel_class  = { "panel",  panel_paint,  0, 0,
-	0, 0, 0, 0, 0, 0 };
+	0, 0, 0, 0, 0, 0, true };
 const os64_ui_class_t os64_ui_label_class  = { "label",  label_paint,  0, 0,
-	os64_ui_stage_caption, os64_ui_commit_caption, os64_ui_discard_caption, 0, label_metrics, 0 };
+	os64_ui_stage_caption, os64_ui_commit_caption, os64_ui_discard_caption, 0, label_metrics, 0,
+	false };
 const os64_ui_class_t os64_ui_button_class = { "button", button_paint, button_event, 0,
 	os64_ui_stage_caption, os64_ui_commit_caption, os64_ui_discard_caption, 0, button_metrics,
-	0 };
+	0, false };
 
 static void widget_zero(os64_ui_widget_t *w)
 {

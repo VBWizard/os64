@@ -12,6 +12,11 @@ static inline uint64_t spinlock_acquire_irqsave(pthread_mutex_t *lock)
 { pthread_mutex_lock(lock); return 0; }
 static inline void spinlock_release_irqrestore(pthread_mutex_t *lock, uint64_t flags)
 { (void)flags; pthread_mutex_unlock(lock); }
+typedef enum { GUI_LOCK_OTHER } gui_lock_site_t;
+static inline uint64_t gui_lock(gui_lock_site_t site)
+{ (void)site; pthread_mutex_lock(&kGuiLock); return 0; }
+static inline void gui_unlock(uint64_t flags)
+{ (void)flags; pthread_mutex_unlock(&kGuiLock); }
 HEADER
 cat > "$appearance_test_dir/gui/window.h" <<'HEADER'
 #include <stdint.h>
@@ -35,7 +40,7 @@ cc -D_XOPEN_SOURCE=700 -pthread -std=c11 -fno-builtin-memmove -g -O1 -Wall -Wext
     userland/libos64/ui_font_settings.c userland/libos64/ui_font.c userland/libos64/font_provider.c userland/libos64/font_adopt.c \
     userland/libos64/text.c userland/libos64/text_cache.c userland/libos64/text_decode.c \
     userland/libos64/text_bitmap.c userland/libos64/text_draw.c tools/fonts/fake_backend.c \
-    kernel/src/gui/event_queue.c kernel/src/appearance.c \
+    kernel/src/gui/event_queue.c kernel/src/appearance.c shared/damage.c \
     userland/libos64/conf.c userland/libos64/fmt.c "$appearance_test_dir/freetype_stub.c" \
     -Wl,--gc-sections,--wrap=os64_draw_ctx_refresh,--wrap=os64_conf_find_read,--wrap=os64_conf_find_bytes,--wrap=os64_conf_find,--wrap=os64_conf_target,--wrap=os64_conf_write_checked,--wrap=os64_slurp,--wrap=os64_font_config_install,--wrap=os64_font_config_discover,--wrap=os64_font_config_web_prepare,--wrap=os64_ui_font_app -o "$appearance_test_dir/test_appearance"
 "$appearance_test_dir/test_appearance"

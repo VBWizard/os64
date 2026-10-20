@@ -285,7 +285,7 @@ static void probe_metrics(os64_ui_widget_t *w, os64_ui_t *ui)
 static const os64_ui_class_t kProbeClass = {
     "probe", NULL, NULL, NULL,
     os64_ui_stage_caption, os64_ui_commit_caption, os64_ui_discard_caption,
-    NULL, probe_metrics, NULL
+    NULL, probe_metrics, NULL, false
 };
 static os64_ui_widget_t gProbe;
 

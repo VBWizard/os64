@@ -148,7 +148,7 @@ static void paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_theme
     draw_slot(s, secondary, ctx, t, inner, y);
 }
 const os64_ui_class_t os64_ui_status_class = {
-    "status", paint, NULL, NULL, prepare, commit, discard, destroy, metrics, reface
+    "status", paint, NULL, NULL, prepare, commit, discard, destroy, metrics, reface, false
 };
 void os64_ui_status_init(os64_ui_status_t *s)
 {

@@ -866,7 +866,7 @@ static void bar_scroll(os64_ui_scrollbar_t *bar,void *user)
     sync_bars(v);
 }
 const os64_ui_class_t os64_ui_dataview_class={"details",view_paint,view_event,view_cancel,
-    view_prepare,view_commit,view_discard,view_destroy,NULL,view_reface};
+    view_prepare,view_commit,view_discard,view_destroy,NULL,view_reface,false};
 void os64_ui_dataview_init(os64_ui_dataview_t *v)
 {
     *v=(os64_ui_dataview_t){0}; v->w.cls=&os64_ui_dataview_class; v->w.focusable=true;
