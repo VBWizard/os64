@@ -212,18 +212,27 @@ const os64_ui_textbuf_t sbuf_textbuf_template = {
 
 // ── load / save ─────────────────────────────────────────────────────────────
 
-int sbuf_load(sbuf_t *b, const char *path, char *err, size_t errcap)
+static int load_file(sbuf_t *b, const char *path, char *err, size_t errcap,
+                     bool allow_new)
 {
 	os64_dirent_t e;
 	if (os64_stat(path, &e) < 0) {
-		// No such file: an editor opens it EMPTY and creates it at save —
-		// that has been an editor's contract since ed.
+		if (!allow_new) {
+			os64_snprintf(err, errcap, "cannot inspect %s", path);
+			return -1;
+		}
+		// Command-line startup permits a new-file buffer when stat fails.
+		// Picker opens use the strict path above and preserve the document.
 		sbuf_t fresh;
 		if (!sbuf_init(&fresh))
 			goto oom;
 		sbuf_free(b);
 		*b = fresh;
 		return 1;
+	}
+	if (e.flags & OS64_DE_DIR) {
+		os64_snprintf(err, errcap, "not a file: %s", path);
+		return -1;
 	}
 	uint64_t size = e.size;
 
@@ -353,9 +362,20 @@ static void writer_put(sbuf_writer_t *wr, const char *s, size_t n)
 	}
 }
 
-int sbuf_save(sbuf_t *b, const char *path, char *err, size_t errcap)
+int sbuf_load(sbuf_t *b, const char *path, char *err, size_t errcap)
 {
-	int64_t fd = os64_open(path, "w");
+	return load_file(b, path, err, errcap, true);
+}
+
+int sbuf_load_existing(sbuf_t *b, const char *path, char *err, size_t errcap)
+{
+	return load_file(b, path, err, errcap, false);
+}
+
+static int save_file(sbuf_t *b, const char *path, char *err, size_t errcap,
+                     bool replace)
+{
+	int64_t fd = os64_open(path, replace ? "w" : "x");
 	if (fd < 0) {
 		os64_snprintf(err, errcap, "cannot write %s", path);
 		return -1;
@@ -395,4 +415,14 @@ int sbuf_save(sbuf_t *b, const char *path, char *err, size_t errcap)
 	}
 	b->dirty = false;
 	return 0;
+}
+
+int sbuf_save(sbuf_t *b, const char *path, char *err, size_t errcap)
+{
+	return save_file(b, path, err, errcap, true);
+}
+
+int sbuf_save_new(sbuf_t *b, const char *path, char *err, size_t errcap)
+{
+	return save_file(b, path, err, errcap, false);
 }

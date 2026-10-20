@@ -6,7 +6,7 @@
 //
 // Lineage seat (SCRIBE.md): quill holds ed's chair — the editor as a
 // conversation. scribe holds Bravo's (Xerox PARC, 1974): the screen IS the
-// document. Modeless, by ruling.
+// document. Editing is modeless; a pending file choice pauses the editor.
 //
 //   scribe <file>      edit a file (created on first save if absent)
 //   scribe             start empty; Save As names it
@@ -20,6 +20,8 @@
 #include "os64/draw.h"
 #include "os64/ui.h"
 #include "os64/ui_menu.h"
+#include "os64/ui_file_dialog.h"
+#include "os64/proc.h"
 #include "os64/str.h"
 #include "os64/fmt.h"
 #include "os64/io.h"
@@ -31,9 +33,9 @@
 #define SCRIBE_PATH_MAX  256
 #define SCRIBE_STATUS_MAX 96
 
-// One field serves file names and searches. MODE_QUITSAVE saves before
-// exiting; its label and Enter behavior distinguish it from Save As.
-typedef enum { MODE_NONE, MODE_OPEN, MODE_SAVEAS, MODE_FIND, MODE_QUITSAVE } field_mode_t;
+// The inline field serves Find and confirmations; file choices use the picker.
+typedef enum { MODE_NONE, MODE_FIND, MODE_OPEN_CONFIRM, MODE_QUITSAVE } field_mode_t;
+typedef enum { FILE_NONE, FILE_OPEN, FILE_SAVE, FILE_QUITSAVE } file_operation_t;
 
 typedef struct
 {
@@ -56,6 +58,11 @@ typedef struct
     os64_ui_dispatcher_t dispatcher;
     os64_ui_shortcut_router_t shortcuts;
     unsigned editing_target;
+    os64_ui_file_dialog_t file_dialog;
+    file_operation_t file_operation;
+    char file_seed[SCRIBE_PATH_MAX];
+    bool file_cleanup;
+    bool path_is_new;
     const scribe_hooks_t *hooks;
     os64_ui_widget_t mode_label;    // names what the field means right now
     os64_ui_textfield_t field;
@@ -135,7 +142,8 @@ static const char *kHelpLines[] = {
     "  The * beside the filename means the buffer differs from the disk.",
     "  Quitting then does not just leave: the entry field opens as",
     "  \"save before quit:\", prefilled with the current path, so Enter",
-    "  alone saves where the file came from and closes.",
+    "  alone saves where the file came from and closes. An unnamed file",
+    "  or a changed destination opens the Save dialog first.",
     "",
     "      Enter   save and quit (a failed save quits nothing)",
     "      Ctrl+Q  quit anyway, discarding the changes",
@@ -145,9 +153,13 @@ static const char *kHelpLines[] = {
     "  polite: the first press is a REQUEST an app may answer, and only",
     "  a second press within five seconds is an order.",
     "",
-    "THE ENTRY FIELD",
-    "  Open, Save As, find, and save-before-quit share one field below",
-    "  the buttons; the label names what it currently means. Enter acts,",
+    "FILE DIALOGS AND THE ENTRY FIELD",
+    "  Open and Save As browse folders in a separate window. Saving an",
+    "  unnamed document opens Save As too. Escape cancels the choice.",
+    "  Replacing an existing file requires the Replace button.",
+    "  Open asks before discarding unsaved edits; cancelling the file",
+    "  choice still keeps those edits. The editor waits while choosing.",
+    "  Find and confirmations use the field below the menu. Enter acts,",
     "  Esc cancels.",
     "  Ctrl+V pastes into it too - one line's worth, since it is one line.",
     "",
@@ -589,15 +601,19 @@ static void leave_mode(void)
 
 // ── file verbs ──────────────────────────────────────────────────────────────
 
-static void do_load(const char *path)
+static void load_document(const char *path, bool existing)
 {
     char err[SCRIBE_STATUS_MAX];
-    int rc = sbuf_load(&g.buf, path, err, sizeof(err));
+    int rc = existing ? sbuf_load_existing(&g.buf, path, err, sizeof(err)) :
+                        sbuf_load(&g.buf, path, err, sizeof(err));
     if (rc < 0) {
+        os64_ui_set_hidden(&g.ui, &g.status.w, false);
         status_show(err);
+        relayout_all();
         return;
     }
     os64_strcopy(g.path, sizeof(g.path), path);
+    g.path_is_new = rc == 1;
     g.view.top = 0;
     g.view.left_px = 0;
     g.view.cur_line = g.view.cur_col = 0;
@@ -612,47 +628,119 @@ static void do_load(const char *path)
     os64_ui_mark_dirty(&g.ui, &g.view.w);
 }
 
-// Returns whether the bytes actually reached the disk. The caller that quits
-// on success (request_quit's prompt) NEEDS that answer: quitting after a
-// failed write is the one bug an editor is never forgiven for, and a `void`
-// here would have made it the easy thing to write. A failure deliberately
-// leaves the field up with its error in the status line, so the next thing
-// the user types is a different path.
-static bool do_save(const char *path)
+static void do_load(const char *path) { load_document(path, false); }
+
+// Dirty state and a pending quit change only after the writer reports success.
+static bool save_document(const char *path, bool replace)
 {
     char err[SCRIBE_STATUS_MAX];
-    if (sbuf_save(&g.buf, path, err, sizeof(err)) < 0) {
+    int rc = replace ? sbuf_save(&g.buf, path, err, sizeof(err)) :
+                       sbuf_save_new(&g.buf, path, err, sizeof(err));
+    if (rc < 0) {
+        os64_ui_set_hidden(&g.ui, &g.status.w, false);
         status_show(err);
+        relayout_all();
         return false;
     }
     os64_strcopy(g.path, sizeof(g.path), path);
+    g.path_is_new = false;
     leave_mode();
     status_refresh();
     return true;
 }
+static bool do_save(const char *path) { return save_document(path, true); }
+
+static void file_choose(file_operation_t operation, const char *seed)
+{
+    if (g.file_operation != FILE_NONE) return;
+    os64_strcopy(g.file_seed, sizeof(g.file_seed), seed);
+    help_leave();
+    leave_mode();
+    g.file_operation = operation;
+    g.file_cleanup = false;
+    os64_ui_shortcut_reset(&g.shortcuts);
+    os64_ui_cancel_interaction(&g.ui);
+    os64_ui_set_enabled(&g.ui, &g.root, false);
+    os64_ui_set_enabled(&g.ui, &g.bar.w, false);
+}
+
+static void file_unlock(void)
+{
+    g.file_operation = FILE_NONE;
+    g.file_cleanup = false;
+    os64_ui_set_enabled(&g.ui, &g.root, true);
+    os64_ui_set_enabled(&g.ui, &g.bar.w, true);
+    os64_ui_set_focus(&g.ui, &g.view.w);
+    os64_ui_shortcut_reset(&g.shortcuts);
+}
+
+// Run between dispatcher turns: menus must finish retiring their windows
+// before a dialog can create a handle, and completed callbacks must return
+// before we release their storage or replace the document they displayed.
+static void file_step(void)
+{
+    if (g.file_operation == FILE_NONE) return;
+    os64_ui_file_dialog_t *d = &g.file_dialog;
+    if (!d->window && !g.file_cleanup) {
+        if (!os64_ui_dispatcher_can_create(&g.dispatcher)) return;
+        char directory[OS64_DIRECTORY_PATH], absolute[OS64_DIRECTORY_PATH];
+        const char *name = NULL;
+        os64_ui_file_options_t options = {
+            .mode = g.file_operation == FILE_OPEN ? OS64_UI_FILE_OPEN : OS64_UI_FILE_SAVE,
+            .title = g.file_operation == FILE_OPEN ? "Scribe - Open" : "Scribe - Save As",
+            .icons = g.icon_theme ? os64_icon_theme_provider(g.icon_theme) : NULL
+        };
+        if (*g.file_seed) {
+            char cwd[OS64_DIRECTORY_PATH];
+            if (g.file_seed[0] == '/') os64_strcopy(cwd, sizeof(cwd), "/");
+            else if (os64_getcwd(cwd, sizeof(cwd)) < 0) {
+                file_unlock(); status_show("cannot resolve the current folder"); return;
+            }
+            if (os64_directory_path(cwd, g.file_seed, absolute) != OS64_UI_OK) {
+                file_unlock(); status_show("file path is too long or invalid"); return;
+            }
+            os64_strcopy(directory, sizeof(directory), absolute);
+            size_t n = os64_strlen(directory);
+            while (n > 1 && directory[n - 1] != '/') --n;
+            name = absolute + n;
+            directory[n > 1 ? n - 1 : 1] = 0;
+            options.directory = directory;
+            if (g.file_operation != FILE_OPEN) options.filename = name;
+        }
+        os64_ui_status_code_t rc = os64_ui_file_dialog_open(d, &g.dispatcher, g.win, &options);
+        if (rc == OS64_UI_OK) return;
+        // A failed open can retain a native window when cleanup is refused.
+        g.file_cleanup = true;
+        os64_ui_set_hidden(&g.ui, &g.status.w, false);
+        status_show("could not open the file dialog");
+        relayout_all();
+    }
+    if (!g.file_cleanup && d->result == OS64_UI_FILE_PENDING) return;
+    bool accepted = !g.file_cleanup && d->result == OS64_UI_FILE_ACCEPTED;
+    bool replace = d->replace_existing;
+    char path[SCRIBE_PATH_MAX];
+    os64_strcopy(path, sizeof(path), d->path);
+    file_operation_t operation = g.file_operation;
+    if (os64_ui_file_dialog_close(d) != OS64_UI_OK) {
+        status_show("file dialog cleanup refused - close it again to retry");
+        return;
+    }
+    file_unlock();
+    if (!accepted) return;
+    if (operation == FILE_OPEN) load_document(path, true);
+    else if (save_document(path, replace) && operation == FILE_QUITSAVE)
+        g.running = false;
+}
 
 // ── quitting, which is a question when there is something to lose ───────────
-//
-// Ctrl+Q used to end the program on the spot, dirty buffer and all, on the
-// argument that the status line's `*` had been the warning. It was not much
-// of one (Chris, 2026-08-23), and Alt+F4 made it worse: the window system
-// asks the app first and only kills on the SECOND press, so scribe — which
-// answered neither — could be closed by any two presses and by no single one.
-//
-// Both verbs come here now, and both mean the same thing: with nothing
-// pending, go; with changes, ASK. The question is the field the user already
-// knows — the same one Open and Save As use — prefilled with the current path
-// so Enter alone is "save where it came from".
-//
-//   Enter   save and quit (a FAILED save quits nothing; the field stays up)
-//   ^Q      quit anyway, discarding — the escape hatch the old behavior was
-//   Esc     never mind, back to editing
-//
-// "Press the quit key a second time to mean it" is deliberately the window
-// system's own grammar one level down: Alt+F4 asks once and escalates on the
-// repeat, and so does this. Two doors, one habit.
+// Enter saves, Ctrl+Q discards, Escape returns to editing. A new destination
+// is chosen in the shared Save dialog; cancelling it cancels the quit too.
 static void request_quit(void)
 {
+    if (g.file_operation != FILE_NONE) {
+        if (g.file_dialog.window > 0) (void)os64_gui_window_focus(g.file_dialog.window);
+        return;
+    }
     // Already asking? Then this is the second press, and it means it.
     if (g.mode == MODE_QUITSAVE) {
         g.running = false;
@@ -725,16 +813,12 @@ static void field_submit(os64_ui_textfield_t *tf, void *user)
 {
     (void)user;
     switch (g.mode) {
-    case MODE_OPEN:   if (tf->buf[0]) do_load(tf->buf); break;
-    case MODE_SAVEAS: if (tf->buf[0]) (void)do_save(tf->buf); break;
+    case MODE_OPEN_CONFIRM: file_choose(FILE_OPEN, g.path); break;
     case MODE_FIND:   do_find(tf->buf); break;   // stays open: Enter = next
     case MODE_QUITSAVE:
-        // Only a save that REACHED THE DISK earns the exit. Anything else
-        // leaves the prompt standing with the reason in the status line.
-        if (tf->buf[0] == '\0')
-            status_show("name a file to save to, or ^Q to quit without saving");
-        else if (do_save(tf->buf))
-            g.running = false;
+        if (g.path[0] && os64_streq(tf->buf, g.path)) {
+            if (save_document(g.path, !g.path_is_new)) g.running = false;
+        } else file_choose(FILE_QUITSAVE, tf->buf);
         break;
     default: break;
     }
@@ -764,21 +848,28 @@ static void on_close_request(os64_ui_t *ui)
 
 static void command_open(void)
 {
-    enter_mode(MODE_OPEN, "open:", "");
+    if (g.file_operation != FILE_NONE) return;
+    if (g.buf.dirty) {
+        enter_mode(MODE_OPEN_CONFIRM, "open another file:", "");
+        os64_ui_set_hidden(&g.ui, &g.status.w, false);
+        relayout_all();
+        status_show("unsaved changes - Enter continues without saving, Esc cancels");
+    } else file_choose(FILE_OPEN, g.path);
 }
 
 static void command_save(void)
 {
+    if (g.file_operation != FILE_NONE) return;
     help_leave();   // Save means the document, wherever the eyes were
     if (g.path[0])
-        do_save(g.path);
+        save_document(g.path, !g.path_is_new);
     else
-        enter_mode(MODE_SAVEAS, "save as:", "");
+        file_choose(FILE_SAVE, "");
 }
 
 static void command_saveas(void)
 {
-    enter_mode(MODE_SAVEAS, "save as:", g.path);
+    file_choose(FILE_SAVE, g.path);
 }
 
 // Actions retain the editing target that opened a menu. Native popup focus
@@ -797,6 +888,7 @@ static void action_query(void *app, const os64_ui_action_context_t *context,
     (void)app;
     bool field = context->cookie == &g.field.w;
     state->enabled = true;
+    if (g.file_operation != FILE_NONE) { state->enabled = false; return; }
     if (id == ACT_CUT || id == ACT_COPY || id == ACT_PASTE) {
         state->enabled = field ? g.mode != MODE_NONE : true;
         if (!field && g.help_active && id != ACT_COPY) state->enabled = false;
@@ -925,6 +1017,7 @@ static bool build_actions(void)
 }
 static bool scribe_dispose(void)
 {
+    if (os64_ui_file_dialog_close(&g.file_dialog) != OS64_UI_OK) return false;
     if (os64_ui_menu_session_dispose(g.menus)) return false;
     g.menus = NULL;
     os64_ui_cancel_interaction(&g.ui);
@@ -946,6 +1039,17 @@ static void commands(void *user, const os64_gui_event_t *ev)
 {
     (void)user;
     if (!g.running || g.ui.quit) return;
+    if (g.file_operation != FILE_NONE) {
+        if (ev->type == OS64_GUI_EVENT_WINDOW_CLOSE) request_quit();
+        else if (ev->type == OS64_GUI_EVENT_WINDOW_RESIZE ||
+                 ev->type == OS64_GUI_EVENT_APPEARANCE ||
+                 ev->type == OS64_GUI_EVENT_WINDOW_FOCUS ||
+                 ev->type == OS64_GUI_EVENT_WINDOW_COVERED ||
+                 ev->type == OS64_GUI_EVENT_WINDOW_UNCOVERED ||
+                 ev->type == OS64_GUI_EVENT_INPUT_LOST)
+            os64_ui_dispatch(&g.ui, ev);
+        return;
+    }
     if (g.hooks && g.hooks->key && ev->type == OS64_GUI_EVENT_KEY_DOWN &&
         g.hooks->key(&g.ui,ev,g.hooks->user)) return;
     if (!app_shortcut(ev)) os64_ui_dispatch(&g.ui,ev);
@@ -1070,12 +1174,14 @@ int scribe_main(int argc, char **argv, const scribe_hooks_t *hooks)
     }
     g.running = true;
     os64_ui_paint(&g.ui);
-    while (g.running && !g.ui.quit)
+    while (g.running && !g.ui.quit) {
         if (os64_ui_dispatcher_turn(&g.dispatcher,true) < 0) break;
+        file_step();
+    }
     if (!scribe_dispose()) {
         // Native windows still borrow toolkit state if destruction refuses.
         // Leave it alive until process exit releases the windows.
-        os64_hprintf(OS64_STDERR,"scribe: popup cleanup refused\n");
+        os64_hprintf(OS64_STDERR,"scribe: window cleanup refused\n");
         return 1;
     }
     (void)os64_ui_dispatcher_destroy(&g.dispatcher,g.win);

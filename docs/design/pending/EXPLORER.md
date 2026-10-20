@@ -1,7 +1,7 @@
 # File Explorer — design and delivery plan
 
-Status: umbrella design, updated 2026-10-13. E1 and E2 are merged; E3 has a
-ready implementation design. The tracker below owns detailed acceptance status.
+Status: umbrella design, updated 2026-10-20. E1–E4 are merged; E5 integrates
+the shared file dialogs into Scribe. The tracker owns detailed acceptance status.
 Original inspected baseline: `userland` at `f3f5f50e`; E1/E2 inspection refreshed
 against `6d988565` in their linked slice designs.
 **Roam** is the application name, confirmed by Chris on 2026-10-11.
@@ -449,6 +449,9 @@ the first browser to simulate it.
 [E3's detailed contract](explorer/E03_DATA_VIEW.md) and
 [implementation packet](explorer/E03_HANDOFF.md) now have a reusable Details
 view and selection implementation; [evidence](explorer/evidence/e03/README.md)
-records validation scope. E3 awaits independent review and P5 acceptance.
-The first real directory browser follows accepted E3 in E4, without waiting
-for the separate E6 message-channel architecture.
+records validation scope. E3 and E4 are merged. [E5's Scribe record](explorer/E05_SCRIBE.md)
+describes the shared Open/Save dialog consumer and its verification. File
+associations remain separate; Roam configuration must select their
+configuration-file path. The [project tracker](explorer/README.md) owns current
+review and hardware acceptance status. E6 still requires its separate channel
+architecture.

@@ -121,10 +121,15 @@ honest failure mode is the same as quill's.
 ## Chrome
 
 The shared File/Edit/View/Help menu bar and keyboard shortcuts invoke
-one action registry. Open and Save As reveal the existing path textfield;
-a file picker remains separate work. Edit commands retain the editing target
-that opened the menu, so path/search-field clipboard commands cannot drift
-into the document when a native popup takes focus.
+one action registry. Open, Save As and unnamed Save use the shared file
+picker; a named Save writes directly. The picker starts beside the current
+file, or in HOME for an unnamed document. Save As proposes the current leaf
+name. The editor waits while choosing; Escape preserves its document and
+path. Open asks before replacing unsaved edits and requires a readable,
+existing file. Save As creates exclusively unless replacement was explicitly
+approved in the picker. Edit commands retain the editing target that opened
+the menu, so search/confirmation-field clipboard commands cannot drift into
+the document when a native popup takes focus.
 
 The bottom status widget holds file/dirty/line information, menu help, and
 operation notices. View independently hides the menu and status bars and
@@ -133,11 +138,14 @@ or Shift+F10 opens editing commands and Show Menu Bar without moving the
 caret or replacing the selection. A new operation notice re-shows hidden
 status so an error or save/discard prompt remains visible.
 
-Quit and Alt+F4 retain the existing unsaved-changes flow: Enter saves through
-the filename field; a second Ctrl+Q while the prompt is active discards.
-Save failures leave the prompt and document intact. Escape is offered to the
-menu controller before help/field/document behavior. The Interface and
-Document font roles remain independent.
+Quit and Alt+F4 ask about unsaved changes: Enter saves to the current path,
+or opens Save As for an unnamed document or changed destination; a second
+Ctrl+Q while the confirmation field is active discards. Cancelling Save As
+cancels the quit. Write or sync failures retain the document and keep the
+editor running. Escape is offered to the menu controller before
+help/field/document behavior. The Interface and Document font roles remain
+independent. [E5](../pending/explorer/E05_SCRIBE.md) records dialog integration
+and its validation.
 
 ## Input it needs (all already delivered)
 

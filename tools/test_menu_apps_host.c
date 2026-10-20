@@ -206,11 +206,30 @@ static void scribe_chrome_scrollbars(void)
     check_scroll_viewport();
     CHECK(os64_ui_action_invoke(g.action_views[0],ACT_STATUS).status==OS64_UI_OK);
     check_scroll_viewport();
-    enter_mode(MODE_OPEN,"open:",""); check_scroll_viewport();
+    enter_mode(MODE_FIND,"find:",""); check_scroll_viewport();
     field_cancel(&g.field,NULL); check_scroll_viewport();
     g.root.bounds.w-=80; g.root.bounds.h-=30;
     on_resize(&g.ui); check_scroll_viewport();
     menu_end(); sh_rm("/long");
+}
+static void scribe_menu_file_picker(void)
+{
+    current="Scribe menu file picker"; menu_begin();
+    menu_key('f',0x21,OS64_GUI_MOD_ALT);
+    CHECK(os64_ui_menu_active(g.menus));
+    menu_key('o',0x18,0);
+    CHECK(!os64_ui_menu_active(g.menus) && g.file_operation==FILE_OPEN);
+    CHECK(transport.creates==transport.destroys);
+    file_step();
+    CHECK(g.file_dialog.window>0 && g.root.disabled && g.bar.w.disabled);
+    menu_key(0,0x44,0); // F10 cannot reopen menus while choosing
+    CHECK(!os64_ui_menu_active(g.menus));
+    sh_dialog_finish(NULL,false);
+    CHECK(!g.root.disabled && !g.bar.w.disabled && SH_DOC_IS("document text\n"));
+    menu_key('f',0x21,OS64_GUI_MOD_ALT); menu_key('a',0x1e,0);
+    CHECK(g.file_operation==FILE_SAVE && !os64_ui_menu_active(g.menus));
+    file_step(); sh_dialog_finish(NULL,false);
+    menu_end();
 }
 static void scribe_build_refusals(void)
 {
@@ -418,6 +437,7 @@ int main(int argc,char **argv)
     scribe_menu_visibility_and_help();
     scribe_chrome_scrollbars();
     scribe_menu_quit_and_cleanup();
+    scribe_menu_file_picker();
     scribe_build_refusals();
     grootmenu_models_and_launch();
     grootmenu_empty_cascades();
