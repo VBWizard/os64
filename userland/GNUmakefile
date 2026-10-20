@@ -163,7 +163,7 @@ LIBOS64_SRCS := libos64/init.c libos64/url.c libos64/io.c libos64/linereader.c l
 # compiled with different flags than everything else and an object built for
 # one world must never be picked up by the other.
 LIBOS64_OBJS := $(patsubst %,$(OBJ)/pic/%.o,$(LIBOS64_SRCS))
-LIBOS64_OBJS += $(OBJ)/pic/shared/decoration.c.o
+LIBOS64_OBJS += $(OBJ)/pic/shared/decoration.c.o $(OBJ)/pic/shared/damage.c.o
 
 $(OBJ)/pic/shared/%.c.o: ../shared/%.c $(PIC_FLAGS_STAMP)
 	@mkdir -p $(@D)
@@ -662,3 +662,4 @@ clean:
 	rm -rf $(OBJ) $(BIN)
 
 -include $(OBJ)/pic/shared/decoration.c.d
+-include $(OBJ)/pic/shared/damage.c.d
