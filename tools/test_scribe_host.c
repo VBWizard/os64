@@ -20,7 +20,43 @@
 #include "test_ui_text_host.c"
 #undef main
 
+static int64_t sh_window_focus(int64_t window) { (void)window; return 0; }
+#define os64_gui_window_focus sh_window_focus
 #include "scribe.c"
+#undef os64_gui_window_focus
+
+/* These tests drive the app's ownership and I/O policy with controlled picker
+ * results. test_file_dialog_host drives the real picker and its widgets. */
+static bool sh_dialog_fail_open, sh_dialog_fail_close, sh_dialog_partial_open;
+static unsigned sh_dialog_opens;
+static os64_ui_file_mode_t sh_dialog_mode;
+static char sh_dialog_directory[OS64_DIRECTORY_PATH], sh_dialog_name[OS64_DIRECTORY_PATH];
+static bool sh_cwd_fail;
+int64_t os64_getcwd(char *out, size_t cap)
+{
+    if (sh_cwd_fail) return -1;
+    os64_strcopy(out, cap, "/work"); return 0;
+}
+os64_ui_status_code_t os64_ui_file_dialog_open(os64_ui_file_dialog_t *d,
+    os64_ui_dispatcher_t *dispatcher, int64_t parent, const os64_ui_file_options_t *options)
+{
+    (void)dispatcher; (void)parent;
+    ++sh_dialog_opens;
+    sh_dialog_mode = options->mode;
+    os64_strcopy(sh_dialog_directory, sizeof(sh_dialog_directory), options->directory ? options->directory : "<HOME>");
+    os64_strcopy(sh_dialog_name, sizeof(sh_dialog_name), options->filename ? options->filename : "");
+    *d = (os64_ui_file_dialog_t){.window=2,.result=OS64_UI_FILE_PENDING};
+    if (sh_dialog_fail_open) {
+        if (!sh_dialog_partial_open) d->window=0;
+        return OS64_UI_ERROR;
+    }
+    return OS64_UI_OK;
+}
+os64_ui_status_code_t os64_ui_file_dialog_close(os64_ui_file_dialog_t *d)
+{
+    if (d->window && sh_dialog_fail_close) return OS64_UI_BUSY;
+    d->window=0; return OS64_UI_OK;
+}
 #include "os64/clip.h"
 
 os64_ui_status_code_t os64_icon_theme_create(os64_icon_theme_t **out)
@@ -80,6 +116,7 @@ typedef struct { sh_file_t *f; size_t pos; bool open; } sh_handle_t;
 static sh_file_t sh_fs[8];
 static sh_handle_t sh_fd[4];
 static long sh_read_budget = -1;     /* bytes all reads may return; -1 = all */
+static bool sh_write_fail, sh_sync_fail;
 static size_t sh_read_chunk;         /* most one read returns; 0 = no limit */
 
 static sh_file_t *sh_find(const char *path, bool create)
@@ -126,7 +163,8 @@ int64_t os64_stat(const char *path, os64_dirent_t *e)
 }
 int64_t os64_open(const char *path, const char *mode)
 {
-    sh_file_t *f = sh_find(path, mode[0] == 'w');
+    if (mode[0] == 'x' && sh_find(path, false)) return -1;
+    sh_file_t *f = sh_find(path, mode[0] == 'w' || mode[0] == 'x');
     if (!f)
         return -1;
     for (int i = 0; i < 4; ++i)
@@ -156,6 +194,7 @@ int64_t os64_read(int32_t fd, void *p, size_t n)
 }
 int64_t os64_write(int32_t fd, const void *p, size_t n)
 {
+    if (sh_write_fail) return -1;
     sh_handle_t *h = &sh_fd[fd - 10];
     unsigned char *grown = realloc(h->f->bytes, h->f->len + n + 1);
     if (!grown)
@@ -176,7 +215,7 @@ int64_t os64_seek(int32_t fd, int64_t off, int32_t whence)
     return (int64_t)h->pos;
 }
 int64_t os64_close(int32_t fd) { sh_fd[fd - 10].open = false; return 0; }
-int64_t os64_sync(int32_t fd) { (void)fd; return 0; }
+int64_t os64_sync(int32_t fd) { (void)fd; return sh_sync_fail ? -1 : 0; }
 
 /* ── the window ────────────────────────────────────────────────────────── */
 
@@ -1186,6 +1225,108 @@ static void field_paste_cuts_at_letters(void)
     current = "";
 }
 
+static void sh_dialog_finish(const char *path, bool replace)
+{
+    CHECK(g.file_operation != FILE_NONE && g.file_dialog.window > 0);
+    g.file_dialog.result = path ? OS64_UI_FILE_ACCEPTED : OS64_UI_FILE_CANCELLED;
+    os64_strcopy(g.file_dialog.path, sizeof(g.file_dialog.path), path ? path : "");
+    g.file_dialog.replace_existing = replace;
+    file_step();
+}
+
+static void scribe_file_dialogs(void)
+{
+    current = "Scribe file dialog integration";
+    sh_scribe(16, "keep me\n", 8); g.running = true;
+    command_open();
+    CHECK(g.file_operation == FILE_OPEN && g.root.disabled);
+    unsigned opened = sh_dialog_opens;
+    g.dispatcher.dead_count = 1; file_step();
+    CHECK(sh_dialog_opens == opened); // wait for retired menus
+    g.dispatcher.dead_count = 0; file_step();
+    CHECK(sh_dialog_mode == OS64_UI_FILE_OPEN);
+    CHECK(!strcmp(sh_dialog_directory, "/") && !*sh_dialog_name);
+    command_open(); command_save(); command_saveas(); request_quit();
+    CHECK(sh_dialog_opens == opened + 1 && g.running);
+    os64_gui_event_t key = {.type=OS64_GUI_EVENT_KEY_DOWN}; key.key.ascii='!';
+    commands(NULL, &key);
+    CHECK(SH_DOC_IS("keep me\n"));
+    sh_dialog_finish(NULL, false);
+    CHECK(g.file_operation == FILE_NONE && !g.root.disabled && !g.buf.dirty);
+    CHECK(!strcmp(g.path, "/doc") && SH_DOC_IS("keep me\n"));
+
+    sh_key('!',0); CHECK(g.buf.dirty);
+    command_open(); CHECK(g.mode == MODE_OPEN_CONFIRM && g.file_operation == FILE_NONE);
+    field_cancel(&g.field,NULL); CHECK(g.buf.dirty && SH_DOC_IS("!keep me\n"));
+    command_open(); field_submit(&g.field,NULL); file_step();
+    sh_dialog_finish(NULL,false);
+    CHECK(g.buf.dirty && SH_DOC_IS("!keep me\n"));
+    command_open(); field_submit(&g.field,NULL); file_step();
+    sh_dialog_finish("/gone",false);
+    CHECK(g.buf.dirty && SH_DOC_IS("!keep me\n") && !strcmp(g.path,"/doc"));
+    sh_put("/next", "new\n", 4);
+    command_open(); field_submit(&g.field,NULL); file_step();
+    sh_dialog_finish("/next",false);
+    CHECK(!g.buf.dirty && SH_DOC_IS("new\n") && !strcmp(g.path,"/next"));
+
+    command_saveas(); file_step();
+    CHECK(sh_dialog_mode == OS64_UI_FILE_SAVE && !strcmp(sh_dialog_name,"next"));
+    sh_dialog_finish(NULL,false);
+    CHECK(!strcmp(g.path,"/next"));
+    os64_strcopy(g.path,sizeof(g.path),"notes.txt");
+    command_saveas(); file_step();
+    CHECK(!strcmp(sh_dialog_directory,"/work") && !strcmp(sh_dialog_name,"notes.txt"));
+    sh_dialog_finish(NULL,false);
+    sh_cwd_fail=true; command_saveas(); file_step(); sh_cwd_fail=false;
+    CHECK(g.file_operation==FILE_NONE && !g.root.disabled);
+    g.path[0]=0; sh_key('!',0);
+    command_save(); file_step();
+    CHECK(!strcmp(sh_dialog_directory,"<HOME>") && !*sh_dialog_name);
+    sh_put("/race", "the other writer\n",17);
+    sh_dialog_finish("/race",false);
+    CHECK(sh_file_is("/race","the other writer\n",17) && g.buf.dirty && !*g.path);
+    command_save(); file_step(); sh_dialog_finish("/race",true);
+    CHECK(!g.buf.dirty && !strcmp(g.path,"/race") && sh_file_is("/race","!new\n",5));
+    sh_key('?',0); command_save();
+    CHECK(!g.buf.dirty && g.file_operation==FILE_NONE && sh_file_is("/race","!?new\n",6));
+
+    sh_key('*',0); command_saveas(); file_step();
+    sh_write_fail=true; sh_dialog_finish("/failed",false); sh_write_fail=false;
+    CHECK(g.buf.dirty && !strcmp(g.path,"/race") && g.running);
+    sh_rm("/failed");
+    command_saveas(); file_step();
+    sh_sync_fail=true; sh_dialog_finish("/failed",false); sh_sync_fail=false;
+    CHECK(g.buf.dirty && !strcmp(g.path,"/race") && g.running);
+    sh_rm("/failed");
+
+    g.path[0]=0;
+    request_quit(); CHECK(g.mode==MODE_QUITSAVE);
+    field_submit(&g.field,NULL); file_step();
+    CHECK(g.file_operation==FILE_QUITSAVE);
+    sh_dialog_finish(NULL,false); CHECK(g.running && g.buf.dirty);
+    request_quit(); field_submit(&g.field,NULL); file_step();
+    sh_sync_fail=true; sh_dialog_finish("/failed",false); sh_sync_fail=false;
+    CHECK(g.running && g.buf.dirty && !*g.path); sh_rm("/failed");
+    request_quit(); field_submit(&g.field,NULL); file_step();
+    sh_dialog_fail_close=true; sh_dialog_finish("/saved",false);
+    CHECK(g.running && g.buf.dirty && !sh_find("/saved",false) && g.root.disabled);
+    CHECK(!scribe_dispose());
+    sh_dialog_fail_close=false; file_step();
+    CHECK(!g.running && !g.buf.dirty && sh_file_is("/saved","!?*new\n",7));
+
+    g.running=true;
+    sh_dialog_fail_open=true; command_open(); file_step();
+    CHECK(g.file_operation==FILE_NONE && !g.root.disabled && SH_DOC_IS("!?*new\n"));
+    sh_dialog_partial_open=true; sh_dialog_fail_close=true;
+    command_open(); file_step();
+    CHECK(g.file_operation==FILE_OPEN && g.file_dialog.window>0 && g.root.disabled);
+    sh_dialog_fail_close=false; file_step();
+    CHECK(g.file_operation==FILE_NONE && !g.root.disabled);
+    sh_dialog_partial_open=sh_dialog_fail_open=false;
+    sh_close(); sh_rm("/doc"); sh_rm("/next"); sh_rm("/race"); sh_rm("/saved");
+    current="";
+}
+
 int scribe_host_tests(int argc, char **argv)
 {
     sh_dir = argc > 1 ? argv[1] : "userland/libfreetype/fixtures";
@@ -1202,6 +1343,7 @@ int scribe_host_tests(int argc, char **argv)
     scribe_extent_is_lazy();
     scribe_limit_window_font_change();
     scribe_help_keeps_the_window();
+    scribe_file_dialogs();
 
     for (size_t i = 0; i < 8; ++i)
         free(sh_fs[i].bytes);

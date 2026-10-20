@@ -1,0 +1,23 @@
+stale_refs: working tree vs HEAD
+
+== Names this change RETIRED that survive only in prose (read every line):
+-- E04_HANDOFF
+   docs/design/pending/explorer/README.md:76: | E4 | Directory browser | Merged PR #267; P5 evidence separate | Quinn (design/integration), Sol (model/UI) | [Contract](E04_ROAM.md), [han
+   docs/design/pending/explorer/SESSION_LOG.md:879: Independent review and P5 acceptance remain pending; [the handoff](E04_HANDOFF.md)
+   docs/design/pending/explorer/evidence/e04/README.md:106: [P5 instructions](../../E04_HANDOFF.md) give the remaining hardware walkthrough.
+-- E04_ROAM
+   docs/design/pending/explorer/DECISIONS.md:281: - **Affected:** E4/E5; [E4 contract](E04_ROAM.md).
+   docs/design/pending/explorer/E04_HANDOFF.md:6: `5a521b63`. Worktree: `.worktrees/roam-e4`. [Design](E04_ROAM.md) and
+   docs/design/pending/explorer/HANDOFF.md:19: E4 is merged through PR #267 as `a3dd4b65`. Its [design](E04_ROAM.md) and
+   docs/design/pending/explorer/HANDOFF.md:59: | [E4 directory browser](E04_ROAM.md) | Merged PR #267 | Reuse the shared browser. |
+   docs/design/pending/explorer/README.md:61: [E3](E03_DATA_VIEW.md), or [E4](E04_ROAM.md). New slices use the
+   docs/design/pending/explorer/README.md:76: | E4 | Directory browser | Merged PR #267; P5 evidence separate | Quinn (design/integration), Sol (model/UI) | [Contract](E04_ROAM.md), [han
+-- evidence/e04/README.md
+   docs/design/pending/explorer/E04_HANDOFF.md:7: [evidence](evidence/e04/README.md) describe scope and validation. P5 acceptance
+   docs/design/pending/explorer/HANDOFF.md:20: [evidence](evidence/e04/README.md) describe the browser foundation. The old E4
+   docs/design/pending/explorer/README.md:76: | E4 | Directory browser | Merged PR #267; P5 evidence separate | Quinn (design/integration), Sol (model/UI) | [Contract](E04_ROAM.md), [han
+   docs/design/pending/explorer/SESSION_LOG.md:877: recovery, and live font/palette changes. [Evidence](evidence/e04/README.md)
+   docs/design/pending/explorer/SESSION_LOG.md:895: is recorded in [E4 validation](evidence/e04/README.md#pr-267--first-review-follow-up).
+   docs/design/pending/explorer/SESSION_LOG.md:911: pass. [Review evidence](evidence/e04/README.md#pr-267--second-review-follow-up)
+
+== No new superlative claims.

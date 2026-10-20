@@ -37,7 +37,7 @@ for index, source in enumerate(upstream + port):
                         '-I' + str(root / 'userland/libfreetype/upstream/include'),
                         *extra, '-c', str(source), '-o', str(target)], check=True)
     objects.append(str(target))
-sources = ['tools/test_file_dialog_host.c'] + ['userland/libos64/' + name + '.c' for name in
+sources = ['shared/damage.c', 'tools/test_file_dialog_host.c'] + ['userland/libos64/' + name + '.c' for name in
     ['directory', 'browser', 'ui_browser', 'ui_data', 'ui_dataview', 'ui_menu', 'ui_menu_widget',
      'ui_dispatcher', 'ui_icon', 'ui_action', 'ui_status', 'ui_font', 'ui',
      'ui_controls', 'ui_list', 'ui_text', 'font_provider', 'font_adopt', 'text',

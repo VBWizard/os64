@@ -50,10 +50,17 @@ void sbuf_free(sbuf_t *b);
 //        The buffer is exactly as it was before the call.
 int sbuf_load(sbuf_t *b, const char *path, char *err, size_t errcap);
 
+// Like load, but missing or uninspectable files leave the buffer unchanged.
+int sbuf_load_existing(sbuf_t *b, const char *path, char *err, size_t errcap);
+
 // Write the lines back joined by LF, with a final LF when `terminated`: an
 // unchanged buffer writes the bytes it was loaded from.
 // 0 on success, -1 with `err` filled on failure. Clears `dirty` on success.
 int sbuf_save(sbuf_t *b, const char *path, char *err, size_t errcap);
+
+// Create exclusively; refuse an existing destination without changing it.
+// Failure preserves dirty state, as with sbuf_save.
+int sbuf_save_new(sbuf_t *b, const char *path, char *err, size_t errcap);
 
 // The vtable template: copy it, point `user` at your sbuf_t, hand the copy
 // to ui_textview. (A template rather than a global-with-one-user, so two

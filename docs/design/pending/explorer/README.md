@@ -6,12 +6,13 @@ The repository records are the handoff; conversation memory is not required.
 
 ## Current position
 
-Updated: 2026-10-13.
+Updated: 2026-10-20.
 
-Active slice: [E4 — Roam](E04_ROAM.md) is implemented; review/P5 acceptance
-remain pending. [Try it](E04_HANDOFF.md). E3 PR #264 is merged;
-Chris authorized E4 after Quinn’s architectural check. File associations await
-the requested conversation before E5 (D018).
+Active slice: [E5 — Scribe dialog integration](E05_SCRIBE.md). E4 is merged
+through PR #267 as `a3dd4b65`; its old review-pending handoff is historical.
+The shared dialogs (`42410e34`) are being connected to Scribe before Yonder.
+Chris settled the association-storage requirement: Roam configuration must
+select the associations-file path. Association implementation is separate.
 
 - Application name: **Roam**, confirmed by Chris (D007).
 - Surrounding panes and bars, including the menu, must be independently
@@ -72,8 +73,8 @@ Create slice records when work begins, rather than maintaining 15 empty designs.
 | E1 | Actions, menus and status | E1A/E1K/E1B/E1C merged; production menus P5 tested | Quinn (E1C), Sol (E1A/E1B) | [E1A](E01A_HANDOFF.md), [E1K](E01K_HANDOFF.md), [E1B](E01B_HANDOFF.md); PR #254 `c6cc6e3c`, PR #257 `b36e9ddc` | [E1B evidence/walkthrough](evidence/e01b/README.md); P5 report precedes review fixes |
 | E2 | Icon vocabulary | Merged; P5 gallery visually accepted before final review fix | Quinn | [E2 contract](E02_ICONS.md), PR #261 `f39b0ae0` | [Host, packaging and QEMU evidence](evidence/e02/README.md) |
 | E3 | Data view and selection | Merged PR #264 `5a521b63`; P5 evidence separate | Quinn | [Contract](E03_DATA_VIEW.md), [implementation packet](E03_HANDOFF.md); [PR #264](https://github.com/VBWizard/os64/pull/264), original native source `8b5d13a7`; clock diagnostic follow-up recorded | [Evidence and transition map](evidence/e03/README.md) |
-| E4 | Directory browser | Draft PR #267; review/P5 pending | Quinn (design/integration), Sol (model/UI) | [Contract](E04_ROAM.md), [handoff](E04_HANDOFF.md), [PR #267](https://github.com/VBWizard/os64/pull/267), `243663dc` | [Host and native evidence](evidence/e04/README.md); no P5 claim |
-| E5 | Open/Save picker and launch reuse | Planned | Unassigned | — | None |
+| E4 | Directory browser | Merged PR #267; P5 evidence separate | Quinn (design/integration), Sol (model/UI) | [Contract](E04_ROAM.md), [handoff](E04_HANDOFF.md), [PR #267](https://github.com/VBWizard/os64/pull/267), `243663dc` | [Host and native evidence](evidence/e04/README.md); no P5 claim |
+| E5 | Open/Save picker and launch reuse | Scribe integration implemented; review/P5 pending; associations separate | Quinn | [Scribe record](E05_SCRIBE.md) | [Checks and walkthrough](E05_SCRIBE.md#acceptance) |
 | E6 | Local channel foundation | Planned | Unassigned | — | None |
 | E7 | Safe operation engine | Planned | Unassigned | — | None |
 | E8 | Transfer service | Planned | Unassigned | — | None |

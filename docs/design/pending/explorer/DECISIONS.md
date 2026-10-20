@@ -293,3 +293,15 @@ from a chain of historical entries.
 
 Add further choices when they become relevant. The umbrella's engineering
 requirements remain in force even where this log has no separate decision entry.
+
+
+## D019 — Scribe consumes the dialogs; association location is configurable
+
+- **Status:** Accepted customer instruction, 2026-10-20.
+- **Source:** Chris requested integrating yesterday's shared Open/Save dialogs
+  into Scribe so he can see and use them before Yonder adopts them.
+- **Decision:** Implement the Scribe consumer of `42410e34`. This is E5's
+  picker integration, not file-association launch policy. For associations,
+  Roam configuration must select the file path; no storage-format discussion
+  is needed before proceeding. This resolves D018's requested conversation.
+- **Affected:** [Scribe integration](E05_SCRIBE.md), later Roam associations.

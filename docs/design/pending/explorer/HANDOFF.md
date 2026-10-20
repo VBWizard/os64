@@ -1,6 +1,6 @@
 # Roam — latest handoff
 
-Updated: 2026-10-13. Design owner: Quinn.
+Updated: 2026-10-20. Design owner: Quinn.
 
 E1A is accepted. PR #254 merged into `userland` as `c6cc6e3c`; gallery relocation
 `2bc9f2f4` followed. Chris confirmed the P5 test complete. The diagnostic launches
@@ -10,12 +10,19 @@ user-reported, without a captured installed-binary hash.
 
 ## Resume point
 
-**E4 is implemented** in `codex/roam-e4`, worktree `.worktrees/roam-e4`,
-source `243663dc`, based on E3 merge `5a521b63`. [Design](E04_ROAM.md),
-[host/native evidence](evidence/e04/README.md) and [P5 walkthrough](E04_HANDOFF.md)
-are ready. Published as [draft PR #267](https://github.com/VBWizard/os64/pull/267) against `userland`.
-Independent review and Chris's P5 acceptance remain pending.
-File associations must be discussed with Chris before E5.
+**E5's Scribe consumer is implemented** on `codex/scribe-file-dialogs`, in
+`.worktrees/scribe-file-dialogs`, based on `aa04123c` plus shared-dialog commit
+`42410e34`. [Scope, checks and walkthrough](E05_SCRIBE.md). Review and Chris's
+P5 acceptance remain pending. Scribe is the first app consumer; Yonder remains
+part of the Modern Web work.
+
+E4 is merged through PR #267 as `a3dd4b65`. Its [design](E04_ROAM.md) and
+[evidence](evidence/e04/README.md) describe the browser foundation. The old E4
+worktree reference is historical.
+
+Chris settled association storage: Roam configuration must select the path of
+the associations file. No further storage-format discussion is required.
+File launching/associations are separate from this Scribe integration.
 
 E3 PR #264 is merged and its first review reported no major issues at
 `75662a5c`. Quinn's architectural check independently reran the core and real-font
@@ -39,7 +46,7 @@ was captured. [E2 evidence](evidence/e02/README.md) preserves that distinction.
 E3A/E3B are merged through [PR #264](https://github.com/VBWizard/os64/pull/264).
 [Evidence](evidence/e03/README.md) records host, native, packaging and delivery
 scope. The E3 design and implementation worktrees remain separate historical
-checkpoints; active E4 work belongs in `.worktrees/roam-e4`.
+checkpoints; active Scribe work belongs in `.worktrees/scribe-file-dialogs`.
 
 | Work | State | Next action |
 | --- | --- | --- |
@@ -49,7 +56,8 @@ checkpoints; active E4 work belongs in `.worktrees/roam-e4`.
 | E1C consumers | Approved and merged, PR #260; P5 tested | Reuse production menus. |
 | [E2 icons](E02_ICONS.md) | Merged, PR #261 | Reuse provider and shipped assets; [evidence](evidence/e02/README.md). |
 | [E3 data view and selection](E03_DATA_VIEW.md) | Merged PR #264 | Reuse the shared model and Details view; [P5 packet](E03_HANDOFF.md). |
-| [E4 directory browser](E04_ROAM.md) | Implemented; review/P5 pending | Review the branch and run [the P5 walkthrough](E04_HANDOFF.md). |
+| [E4 directory browser](E04_ROAM.md) | Merged PR #267 | Reuse the shared browser. |
+| [E5 Scribe dialogs](E05_SCRIBE.md) | Implemented; review/P5 pending | Review and try Open/Save in Scribe. |
 | E6 channels | Umbrella proposal only | Separate platform design and Fable review. |
 
 Install another icon set by extracting its folder, selecting its absolute path

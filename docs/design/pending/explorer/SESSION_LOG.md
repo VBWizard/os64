@@ -910,3 +910,30 @@ now cover that child. Controller tests and 3,931 real-font UI checks pass with
 ASan/UBSan/LeakSanitizer; the full userland build and stale-reference checks
 pass. [Review evidence](evidence/e04/README.md#pr-267--second-review-follow-up)
 records the allocation sweeps and remaining native-test scope.
+
+
+## 2026-10-20 — Scribe uses the shared file dialogs
+
+Chris clarified that the shared Open/Save dialogs were already implemented
+in `42410e34`; he requested Scribe as their first app consumer before Yonder.
+He settled association storage: Roam configuration selects the file path.
+D019 records that instruction without conflating it with picker integration.
+
+Quinn implemented the Scribe consumer on `codex/scribe-file-dialogs`, based on
+`aa04123c` plus the dialog branch. Open, Save As, unnamed Save and choosing a
+save-before-quit destination use the picker. Pending choice disables editing;
+Open asks about unsaved changes. Cancel and failed I/O preserve the document.
+Save without replacement consent creates exclusively. Strict picker Open
+preserves the buffer if a selected file disappears; CLI new-file startup stays
+available. Dialog cleanup precedes the parent and its borrowed resources.
+
+[E5 evidence](evidence/e05/README.md) records 2,584 Scribe, 1,655 menu and 1,928
+shared-dialog checks, all passing with ASan/UBSan/LeakSanitizer outside the
+sandbox after diagnosed attachment EPERM. Cross-build and final-build QEMU
+round trips passed; saved file bytes and the installed binary were verified
+offline. The delivery bundle is `/tmp/scribe-dialog-wire`.
+
+The old E4 review-pending status was stale: PR #267 is merged as `a3dd4b65`.
+The tracker and handoff now point to E5. Review and Chris's P5 walkthrough
+remain pending; no hardware acceptance is claimed. Yonder and associations
+remain separate implementation work.

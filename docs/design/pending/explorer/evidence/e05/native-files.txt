@@ -1,0 +1,4 @@
+Original after explicit replacement: b'Final replacement\n\n'
+Save As copy: b'EditFinal replacement\n\n'
+PASS: cancelling Open retained edits, Save As wrote the copy and preserved the original.
+PASS: installed Scribe matches the final cross-built binary byte-for-byte.

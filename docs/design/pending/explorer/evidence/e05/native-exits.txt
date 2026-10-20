@@ -1,0 +1,6 @@
+12:28:09 (6428,3): [user] husk: task 60 (scribe) started
+12:29:45 (16022,1): [user] husk: task 60 (scribe) exited code 0
+12:31:26 (5644,1): [user] husk: task 60 (scribe) started
+12:31:39 (6981,2): [user] husk: task 60 (scribe) exited code 0
+12:31:43 (7357,1): [user] husk: task 63 (scribe) started
+12:33:59 (20977,0): [user] husk: task 63 (scribe) exited code 0
