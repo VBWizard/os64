@@ -614,16 +614,18 @@ scheduler_return_accounted:
 
 .section .data
 .align 8
+# The per-CPU tables, indexed by CPU number (RAX above), and so sized by the
+# same MAX_CPUS every C per-CPU array uses, via asm-offsets.h.
 threadIsKernel:
-    .rept 128      # Room for 128 processors' values
+    .rept ASM_MAX_CPUS
     .byte 0
     .endr
-signals_update_count:	
-	.rept 8 
+signals_update_count:
+	.rept 8
 	.byte 0
 	.endr
 temp_rsp:
-	.rept 24
+	.rept ASM_MAX_CPUS
 	.quad 8
 	.endr
 

@@ -39,11 +39,13 @@ volatile core_local_storage_t kCoreLocalStorage[MAX_CPUS] = {0};
 // MAXCPUS=N: how many CPUs this boot numbers and brings up; 0 = all of them.
 // The rest are never woken — they stay parked in Limine's AP spin-loop. It
 // takes the first N of the roster's order, so the BSP is always one of them.
-int kMaxCPUs = 0;
+// -1 = not given, which is not the same as 0: MAXCPUS=0 must still win over a
+// stale MAXCORES=N.
+int kMaxCPUs = -1;
 // MAXCORES=N, the token's name before CPU was the word. Still honoured,
 // because boot tokens live in each machine's own limine.conf and do not
 // travel with a refresh; it says what it is called now, so it fades.
-int kMaxCPUsAlias = 0;
+int kMaxCPUsAlias = -1;
 
 // Number the CPUs (cpu_roster.h). Runs in kernel_main, on the BSP, before
 // the log rings — they are allocated one per numbered CPU — and before
@@ -51,32 +53,35 @@ int kMaxCPUsAlias = 0;
 // needs, and both exist by then.
 void cpu_roster_init(void)
 {
-	if (kMaxCPUsAlias > 0)
+	if (kMaxCPUsAlias >= 0)
 	{
 		printf("MAXCORES=%d is now spelled MAXCPUS=%d%s\n", kMaxCPUsAlias, kMaxCPUsAlias,
-		       kMaxCPUs > 0 ? " (MAXCPUS= given too, and it wins)" : "");
+		       kMaxCPUs >= 0 ? " (MAXCPUS= given too, and it wins)" : "");
 		printd(DEBUG_BOOT, "MAXCORES=%d is now spelled MAXCPUS=%d%s\n", kMaxCPUsAlias, kMaxCPUsAlias,
-		       kMaxCPUs > 0 ? " (MAXCPUS= given too, and it wins)" : "");
-		if (kMaxCPUs <= 0)
+		       kMaxCPUs >= 0 ? " (MAXCPUS= given too, and it wins)" : "");
+		if (kMaxCPUs < 0)
 			kMaxCPUs = kMaxCPUsAlias;
 	}
 	uint32_t cap = kEnableSMP ? (kMaxCPUs > 0 ? (uint32_t)kMaxCPUs : 0) : 1;
 
-	// Limine's list as plain IDs. A list longer than there are xAPIC IDs
-	// is clipped to that length: at most 255 of its entries could ever get
-	// a number.
-	static uint32_t ids[CPU_ROSTER_APIC_IDS];
-	uint64_t listed = kLimineSMPInfo->cpu_count;
-	if (listed > CPU_ROSTER_APIC_IDS)
-		listed = CPU_ROSTER_APIC_IDS;
-	for (uint64_t i = 0; i < listed; i++)
+	// Limine's WHOLE list as plain IDs, however long: the roster decides
+	// which entries are usable, and an addressable ID can sit after any
+	// number of x2APIC-only or repeated ones.
+	uint32_t listed = (uint32_t)kLimineSMPInfo->cpu_count;
+	if (listed == 0)
+		panic("CPU roster: Limine listed no CPUs, not even the BSP");
+	uint32_t *ids = kmalloc(listed * sizeof(uint32_t));
+	if (ids == NULL)
+		panic("CPU roster: no room for Limine's list of %u CPUs", listed);
+	for (uint32_t i = 0; i < listed; i++)
 		ids[i] = kLimineSMPInfo->cpus[i]->lapic_id;
 
 	static uint32_t slot[MAX_CPUS];
-	if (!cpu_roster_build(ids, (uint32_t)listed, kLimineSMPInfo->bsp_lapic_id, cap, MAX_CPUS,
+	if (!cpu_roster_build(ids, listed, kLimineSMPInfo->bsp_lapic_id, cap, MAX_CPUS,
 	                      slot, kApicToCPU, &kCPURosterReport))
 		panic("CPU roster: the BSP (APIC %u) is not among the %u CPUs Limine listed, or is not addressable",
-		      kLimineSMPInfo->bsp_lapic_id, (uint32_t)listed);
+		      kLimineSMPInfo->bsp_lapic_id, listed);
+	kfree(ids);
 
 	kCPUCount = kCPURosterReport.count;
 	for (uint32_t cpu = 0; cpu < kCPUCount; cpu++)
