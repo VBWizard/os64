@@ -39,7 +39,7 @@ extern pci_device_t* kPCIDeviceHeaders;
 extern const uint8_t bt_ax210_sfi[], bt_ax210_sfi_end[];
 extern const uint8_t bt_ax210_ddc[], bt_ax210_ddc_end[];
 extern pci_device_t* kPCIDeviceFunctions;
-extern uint8_t kPCIDeviceCount, kPCIFunctionCount;
+extern uint16_t kPCIDeviceCount, kPCIFunctionCount;
 extern uintptr_t kHHDMOffset;
 extern uintptr_t kKernelPML4v;
 extern bool kUSBQuiet;   // USBQUIET — the opt-in 2.4GHz hygiene flashlight

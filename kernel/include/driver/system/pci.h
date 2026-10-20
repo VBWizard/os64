@@ -16,7 +16,7 @@
 #define PCI_CONFIG_IO_ADDRESS 0xCF8
 #define PCI_CONFIG_DATA    	0xCFC
 #define PCI_DEVICE_SLOTS 	0x100
-#define PCI_BRIDGE_SLOTS 	0x10
+#define PCI_BRIDGE_SLOTS 	0x100
 #define PCI_FUNCTION_SLOTS 	0x100
 
 //PCI Classes
@@ -218,7 +218,7 @@ typedef struct
     uint64_t prefMemLimit, prefMemBase;
 } __attribute__((packed)) pci_bridge_t;
 
-extern uint8_t kPCIDeviceCount, kPCIBridgeCount, kPCIFunctionCount, kPCIBusCount;
+extern uint16_t kPCIDeviceCount, kPCIBridgeCount, kPCIFunctionCount, kPCIBusCount;
 extern pci_device_t* kPCIDeviceHeaders;
 extern pci_bridge_t* kPCIBridgeHeaders;
 extern pci_device_t* kPCIDeviceFunctions;

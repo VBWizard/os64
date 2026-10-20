@@ -104,7 +104,7 @@
 
 extern pci_device_t* kPCIDeviceHeaders;
 extern pci_device_t* kPCIDeviceFunctions;
-extern uint8_t kPCIDeviceCount, kPCIFunctionCount;
+extern uint16_t kPCIDeviceCount, kPCIFunctionCount;
 extern uintptr_t kHHDMOffset;
 extern uintptr_t kKernelPML4v;
 
