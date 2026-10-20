@@ -140,7 +140,9 @@ void accounting_charge(uint64_t cs)
 void accounting_exception_enter(uint64_t interrupted_cs, uint64_t vector)
 {
 	uint64_t flags = accounting_irq_save();
-	core_local_storage_t *cls = get_core_local_storage();
+	// A fault can arrive before this CPU has a CLS (early boot, an AP still
+	// waking); GS is then 0 and a plain CLS read faults again inside the fault.
+	core_local_storage_t *cls = try_get_core_local_storage();
 	charge_locked(cls, interrupted_cs, false, false, false, false);
 	if (vector == 14 && cls != NULL && !cls->acctSchedSpanActive &&
 	    cls->currentThread != NULL && cls->currentThread != NO_THREAD)
@@ -151,7 +153,7 @@ void accounting_exception_enter(uint64_t interrupted_cs, uint64_t vector)
 void accounting_exception_exit(uint64_t vector)
 {
 	uint64_t flags = accounting_irq_save();
-	core_local_storage_t *cls = get_core_local_storage();
+	core_local_storage_t *cls = try_get_core_local_storage();   // as on entry
 	charge_locked(cls, 0, false, false, false, false);
 	if (vector == 14 && cls != NULL && !cls->acctSchedSpanActive &&
 	    cls->currentThread != NULL && cls->currentThread != NO_THREAD)

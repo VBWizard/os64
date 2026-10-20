@@ -27,7 +27,7 @@ python
 assert bool(int(gdb.parse_and_eval('kCLSInitialized'))) == {ap}
 assert int(gdb.parse_and_eval('$gs_base')) == 0
 assert int(gdb.parse_and_eval('kKernelPML4v')) != 0
-cpu_id = int(gdb.parse_and_eval('apic_id')) if {ap} else 0
+cpu_id = int(gdb.parse_and_eval('cpu')) if {ap} else 0
 assert (cpu_id != 0) == {ap}
 print('Injecting on AP%d with global CLS flag=%d and GS base=0' % (cpu_id, {ap}))
 previous_contexts = [int(gdb.parse_and_eval('kCurrentCtx[%d]' % i))
@@ -78,7 +78,7 @@ def run_case(root, iso, kernel, legacy, pagefault, ap):
     serial = run / 'serial.log'
     script = run / 'test.gdb'
     script.write_text(GDB_TEST.format(
-        breakpoint='tbreak init_core_local_storage if apic_id != 0' if ap else 'tbreak logging_queueing_init',
+        breakpoint='tbreak init_core_local_storage if cpu != 0' if ap else 'tbreak logging_queueing_init',
         ap=ap,
         vector=14 if pagefault else 6,
         code='48a10100000000000000' if pagefault else '0f0b',
