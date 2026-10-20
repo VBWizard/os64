@@ -9759,10 +9759,48 @@ static void on_resize(os64_ui_t *ui)
     mark_whole(WHOLE_WINDOW, true);
 }
 
+// Why the window loop ended, said in the log as yonder leaves (left_said):
+// every way out is a clean exit with code 0, so without it the log cannot
+// tell a close the person asked for from one nobody did.
+static const char *s_leaving;
+
 static void on_close(os64_ui_t *ui)
 {
     (void)ui;
+    s_leaving = "the window was asked to close (WINDOW_CLOSE)";
     g.running = false;
+}
+
+static const char *gui_err_name(int64_t rc)
+{
+    switch (rc) {
+    case OS64_GUI_ERR_INVALID_HANDLE: return "INVALID_HANDLE: the window is gone";
+    case OS64_GUI_ERR_NO_RESOURCES: return "NO_RESOURCES";
+    case OS64_GUI_ERR_BAD_ARGS: return "BAD_ARGS";
+    case OS64_GUI_ERR_INTERRUPTED: return "INTERRUPTED: a signal ended the wait";
+    case OS64_GUI_ERR_NOT_OWNER: return "NOT_OWNER";
+    case OS64_GUI_ERR_NOT_RUNNING: return "NOT_RUNNING: no GUI";
+    case OS64_GUI_ERR_BUSY: return "BUSY: another thread waits on the window";
+    case OS64_GUI_ERR_NOT_FOCUSED: return "NOT_FOCUSED";
+    default: return "an answer no error names";
+    }
+}
+
+// One line in the log naming the way the window loop ended: the close,
+// libui's quit, or the event wait's answer (`woke`, anything but 1).
+static void left_said(int64_t woke)
+{
+    char said[192];
+    if (woke != 1)
+        os64_snprintf(said, sizeof(said), "yonder: leaving: the window's event wait answered %ld (%s)",
+                      (long)woke, gui_err_name(woke));
+    else if (s_leaving != NULL)
+        os64_snprintf(said, sizeof(said), "yonder: leaving: %s", s_leaving);
+    else if (g.ui.quit)
+        os64_snprintf(said, sizeof(said), "yonder: leaving: libui's quit");
+    else
+        os64_snprintf(said, sizeof(said), "yonder: leaving: the loop ended with nothing said why");
+    os64_debug_log(said);
 }
 
 static void scrolled_v(os64_ui_scrollbar_t *sb, void *user)
@@ -10036,9 +10074,10 @@ int main(int argc, char **argv)
     glass_paint();
     os64_gui_event_t ev;
     bool held = false;              // an event taken while looking for an empty queue
+    int64_t woke = 1;               // the event wait's last answer, said as yonder leaves
     while (g.running && !g.ui.quit) {
         uint64_t asleep = cycles();
-        int64_t woke = held ? 1 : os64_gui_event_wait(g.win, &ev);
+        woke = held ? 1 : os64_gui_event_wait(g.win, &ev);
         uint64_t slept = cycles_since(asleep);
         s_cost.waited += slept;
         if (slept > s_cost.slept_most)
@@ -10106,6 +10145,7 @@ int main(int argc, char **argv)
         }
     }
 
+    left_said(woke);
     // The clock and the Settings window's relay first: they only ring, and
     // nothing after this should.
     yonder_settings_close();
