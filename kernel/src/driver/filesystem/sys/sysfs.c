@@ -26,8 +26,15 @@
 // The namespace (grown consumer-first, like everything else):
 //
 //   /sys/                        the root: "bluetooth", "bus", "console", "cpu", "memory", "net",
-//                                "block", "cache", "conf", "gui", "log", "mounts",
+//                                "acpi", "block", "cache", "conf", "gui", "log", "mounts",
 //                                "openfiles", "random", "shlib", "clipboard", "appearance", "decorations", "mouse"
+//   /sys/acpi                    everything the firmware's ACPI tables
+//                                said, used or not: every table, the
+//                                FADT's power-management facts, the MADT's
+//                                CPUs and interrupt controllers, PCI's
+//                                configuration windows, the HPET, \_S5, and
+//                                the walk's problems. Read it FIRST on a
+//                                machine meeting os64 for the first time
 //   /sys/bluetooth/scan          discovery status; write "scan" to request.
 //   /sys/bluetooth/connection    LE HID peer status, slot commands and persistent bonds.
 //   /sys/bluetooth/devices       snapshot of the latest Classic/LE results.
@@ -175,6 +182,7 @@
 #include "driver/net/dhcp.h"            // kDhcpStats — the lease, and how it was got
 #include "driver/net/tcp.h"             // /sys/net/tcp — kTcpStats + the conn list
 #include "random.h"                     // /sys/random — the entropy pool's counters
+#include "driver/system/acpi.h"         // /sys/acpi — the firmware's tables, as walked at boot
 #include "gui/compositor.h"             // /sys/gui — kEnableGUI, seat, census
 #include "gui/gui_internal.h"           // /sys/gui — kGuiLock's counts by site (gui_lock)
 #include "video.h"                      // kFrameBuffer — the resolution it reports
@@ -375,6 +383,7 @@ typedef enum
 	SYS_NODE_SHLIBFILE,  // /shlib — every loaded shared object (2026-08-22)
 	SYS_NODE_CONFFILE,   // /conf — the config search path, and who took what (2026-08-23)
 	SYS_NODE_RANDOMFILE, // /random — the entropy pool: sources, seeding, counters (RANDOM.md)
+	SYS_NODE_ACPIFILE,   // /acpi — what the firmware's ACPI tables said (acpi_tables.h)
 	SYS_NODE_CONSOLEDIR, // /console
 	SYS_NODE_CONSOLEFONT,// /console/font — the VTs' face, readable and writable (CONSOLE_FONTS.md)
 	SYS_NODE_MEMDIR,     // /memory — the physical allocator (FRAMES.md)
@@ -503,6 +512,14 @@ static void sys_parse_path(const char *path, sys_path_t *out)
 		if (synth_next_component(path, &pos, comp, sizeof(comp)))
 			return;
 		out->type = SYS_NODE_SHLIBFILE;
+		return;
+	}
+
+	if (strcmp(comp, "acpi") == 0)
+	{
+		if (synth_next_component(path, &pos, comp, sizeof(comp)))
+			return;
+		out->type = SYS_NODE_ACPIFILE;
 		return;
 	}
 
@@ -825,25 +842,6 @@ static void sys_gen_cache(synth_text_t *t)
 	synth_text_addf(t, "discarded_races: %lu\n", s.discarded_races);
 }
 
-// /sys/shlib — every shared object the system has loaded, and what each one
-// is actually costing.
-//
-// Born 2026-08-22, the day libos64 became a .so and the whole userland
-// started sharing it. The claim the feature makes is "one copy, shared by
-// everybody" — and until this file existed there was no way to CHECK that
-// claim on a running machine, only a kernel regression test asserting it
-// about a two-task fixture. `resident` is the honest measurement: how many
-// pages of this object have actually been read, relocated and cached, which
-// is the memory the object costs the whole system no matter how many programs
-// are running it. Multiply by nothing; that is the total.
-//
-// This is also the seam an `ldd`-alike reads (the labor division: the kernel
-// grows the view, the utility that presents it is Chris's). Everything a
-// dependency lister needs is here — the objects, their dependency edges, and
-// where each one landed.
-//
-// Deliberately NOT a directory of per-object files: the interesting question
-// is almost always comparative ("what is loaded, what does it cost"), and a
 // ── /sys/random (RANDOM.md) ─────────────────────────────────────────────
 // The pool's own account of itself: what the CPU offers, what seeded the
 // pool and by which door, and the counters behind every claim. Rendered
@@ -872,8 +870,184 @@ static void sys_gen_random(synth_text_t *t)
 	synth_text_addf(t, "reads_refused: %lu\n", r->reads_refused);
 }
 
-// single readable table answers it in one `cat`. The clipboard's ruling
-// applies in reverse — a file that wants to stay a file.
+// ── /sys/acpi (acpi_tables.h) ───────────────────────────────────────────
+// What the firmware's ACPI tables said, used or not — rendered from the
+// record acpi_init wrote once at boot, so no lock and no firmware memory:
+// the tables themselves were unmapped when the walk ended. One fact per
+// line; a list repeats its key. The OEM fields and signatures are DATA,
+// escaped like every other column that came off somebody's hardware.
+
+static void sys_acpi_flags(synth_text_t *t, const char *key, uint32_t value,
+                           const char *(*name)(unsigned bit))
+{
+	synth_text_addf(t, "%s: 0x%08x", key, value);
+	for (unsigned bit = 0; bit < 32; bit++)
+	{
+		if (!(value & (1u << bit)))
+			continue;
+		const char *n = name(bit);
+		if (n != NULL)
+			synth_text_addf(t, " %s", n);
+		else
+			synth_text_addf(t, " bit%u", bit);
+	}
+	synth_text_addf(t, "\n");
+}
+
+static void sys_acpi_gas(synth_text_t *t, const char *key, const acpi_gas_t *g, const char *tail)
+{
+	if (g->address == 0)
+	{
+		synth_text_addf(t, "%s: none\n", key);
+		return;
+	}
+	const char *space = g->space == ACPI_SPACE_IO ? "io" :
+	                    g->space == ACPI_SPACE_MEMORY ? "memory" :
+	                    g->space == ACPI_SPACE_PCI ? "pci" : "other";
+	synth_text_addf(t, "%s: %s 0x%lx%s\n", key, space, g->address, tail);
+}
+
+// MPS INTI flags: polarity in bits 0-1, trigger in bits 2-3; 0 = "conforms
+// to the bus", which for ISA is active-high, edge.
+static const char *sys_acpi_polarity(uint16_t flags)
+{
+	static const char *const names[] = { "bus", "high", "reserved", "low" };
+	return names[flags & 3];
+}
+
+static const char *sys_acpi_trigger(uint16_t flags)
+{
+	static const char *const names[] = { "bus", "edge", "reserved", "level" };
+	return names[(flags >> 2) & 3];
+}
+
+static void sys_gen_acpi(synth_text_t *t)
+{
+	const acpi_info_t *a = acpi_info();
+	const acpi_used_t *used = acpi_used();
+	char e1[4 * 8 + 1], e2[4 * 8 + 1], e3[4 * 8 + 1];
+
+	synth_text_escape(a->rsdp_oem_id, e1, sizeof(e1));
+	synth_text_addf(t, "rsdp: 0x%016lx revision %u oem %s\n", a->rsdp_phys, a->rsdp_revision,
+	                e1[0] ? e1 : "-");
+	if (a->root_signature[0])
+		synth_text_addf(t, "root: %s 0x%016lx entries %u\n", a->root_signature, a->root_phys, a->root_entries);
+	else
+		synth_text_addf(t, "root: none\n");
+
+	for (uint32_t i = 0; i < a->table_count; i++)
+	{
+		const acpi_table_t *x = &a->tables[i];
+		synth_text_escape(x->signature, e1, sizeof(e1));
+		synth_text_escape(x->oem_id, e2, sizeof(e2));
+		synth_text_escape(x->oem_table_id, e3, sizeof(e3));
+		synth_text_addf(t, "table: %s 0x%016lx length %u revision %u oem %s %s checksum %s%s\n",
+		                e1, x->phys, x->length, x->revision, e2[0] ? e2 : "-", e3[0] ? e3 : "-",
+		                x->checksum_ok ? "ok" : "BAD", x->via_fadt ? " via-fadt" : "");
+	}
+
+	const acpi_fadt_info_t *f = &a->fadt;
+	if (!f->present)
+		synth_text_addf(t, "fadt: none\n");
+	else
+	{
+		synth_text_addf(t, "fadt: revision %u.%u profile %s sci_irq %u\n",
+		                f->revision, f->minor_version, acpi_profile_name(f->pm_profile), f->sci_interrupt);
+		synth_text_addf(t, "acpi_mode: smi_command 0x%x enable 0x%02x\n", f->smi_command, f->acpi_enable);
+		synth_text_addf(t, "pm1: event 0x%x/0x%x control 0x%x/0x%x\n",
+		                f->pm1a_event, f->pm1b_event, f->pm1a_control, f->pm1b_control);
+		synth_text_addf(t, "gpe: 0x%x/%u 0x%x/%u\n", f->gpe0, f->gpe0_length, f->gpe1, f->gpe1_length);
+		if (f->pm_timer)
+			synth_text_addf(t, "pm_timer: 0x%x %s\n", f->pm_timer, f->pm_timer_32bit ? "32-bit" : "24-bit");
+		else
+			synth_text_addf(t, "pm_timer: none\n");
+		if (f->century)
+			synth_text_addf(t, "rtc_century: cmos 0x%02x\n", f->century);
+		else
+			synth_text_addf(t, "rtc_century: none\n");
+		sys_acpi_flags(t, "boot_arch", f->boot_arch, acpi_boot_arch_flag_name);
+		sys_acpi_flags(t, "fadt_flags", f->flags, acpi_fadt_flag_name);
+		char tail[40];
+		sprintf(tail, " value 0x%02x%s", f->reset_value,
+		        (f->flags & ACPI_FADT_RESET_REG_SUP) ? "" : " (not supported)");
+		sys_acpi_gas(t, "reset", &f->reset_register, tail);
+		sys_acpi_gas(t, "sleep_control", &f->sleep_control, "");
+		if (f->hypervisor_vendor)
+			synth_text_addf(t, "hypervisor: 0x%016lx\n", f->hypervisor_vendor);
+	}
+
+	const acpi_madt_info_t *m = &a->madt;
+	if (!m->present)
+		synth_text_addf(t, "madt: none\n");
+	else
+	{
+		synth_text_addf(t, "madt: lapic 0x%lx flags 0x%x%s\n", m->lapic_address, m->flags,
+		                (m->flags & 1) ? " pcat-compat" : "");
+		synth_text_addf(t, "cpus: listed %u enabled %u online_capable %u x2apic %u\n",
+		                m->cpus, m->cpus_enabled, m->cpus_online_capable, m->x2apic_cpus);
+		for (uint32_t i = 0; i < m->ioapic_count; i++)
+			synth_text_addf(t, "ioapic: id %u 0x%08x gsi_base %u%s\n", m->ioapics[i].id,
+			                m->ioapics[i].address, m->ioapics[i].gsi_base,
+			                used->ioapic == (int)i ? " used" : "");
+		for (uint32_t i = 0; i < m->override_count; i++)
+		{
+			const acpi_override_t *o = &m->overrides[i];
+			synth_text_addf(t, "override: bus %u irq %u gsi %u polarity %s trigger %s\n",
+			                o->bus, o->source, o->gsi, sys_acpi_polarity(o->flags), sys_acpi_trigger(o->flags));
+		}
+		for (uint32_t i = 0; i < m->lapic_nmi_count; i++)
+		{
+			const acpi_lapic_nmi_t *n = &m->lapic_nmis[i];
+			if (n->uid == 0xFFFFFFFFu)
+				synth_text_addf(t, "lapic_nmi: cpu all lint %u polarity %s trigger %s\n",
+				                n->lint, sys_acpi_polarity(n->flags), sys_acpi_trigger(n->flags));
+			else
+				synth_text_addf(t, "lapic_nmi: cpu %u lint %u polarity %s trigger %s\n",
+				                n->uid, n->lint, sys_acpi_polarity(n->flags), sys_acpi_trigger(n->flags));
+		}
+		synth_text_addf(t, "madt_other: nmi_sources %u unknown_entries %u\n", m->nmi_sources, m->unknown_entries);
+	}
+
+	if (a->mcfg_count == 0)
+		synth_text_addf(t, "mcfg: none\n");
+	for (uint32_t i = 0; i < a->mcfg_count; i++)
+		synth_text_addf(t, "mcfg: segment %u buses %u-%u 0x%016lx%s\n", a->mcfg[i].segment,
+		                a->mcfg[i].start_bus, a->mcfg[i].end_bus, a->mcfg[i].base,
+		                used->mcfg == (int)i ? " used" : "");
+
+	const acpi_hpet_info_t *h = &a->hpet;
+	if (h->present)
+		synth_text_addf(t, "hpet: %s 0x%lx number %u comparators %u counter %s%s vendor 0x%04x min_tick %u\n",
+		                h->space == ACPI_SPACE_MEMORY ? "memory" : "other", h->address, h->number,
+		                h->comparators, h->counter_64bit ? "64-bit" : "32-bit",
+		                h->legacy_replacement ? " legacy-replacement" : "", h->vendor, h->min_tick);
+	else
+		synth_text_addf(t, "hpet: none\n");
+
+	const acpi_bgrt_info_t *b = &a->bgrt;
+	if (b->present)
+		synth_text_addf(t, "boot_logo: 0x%016lx type %s at %u,%u%s\n", b->image_address,
+		                b->image_type == 0 ? "bmp" : "other", b->offset_x, b->offset_y,
+		                (b->status & 1) ? " displayed" : "");
+	else
+		synth_text_addf(t, "boot_logo: none\n");
+
+	if (a->s5.present)
+		synth_text_addf(t, "s5: slp_typ_a %u slp_typ_b %u\n", a->s5.slp_typ_a, a->s5.slp_typ_b);
+	else
+		synth_text_addf(t, "s5: none\n");
+
+	synth_text_addf(t, "problems: %u\n", a->problem_count);
+	uint32_t kept = a->problem_count < ACPI_MAX_PROBLEMS ? a->problem_count : ACPI_MAX_PROBLEMS;
+	for (uint32_t i = 0; i < kept; i++)
+	{
+		const acpi_problem_t *p = &a->problems[i];
+		synth_text_escape(p->signature, e1, sizeof(e1));
+		synth_text_addf(t, "problem: %s 0x%016lx value 0x%lx %s\n", e1[0] ? e1 : "-",
+		                p->phys, p->value, acpi_problem_name(p->code));
+	}
+}
+
 // ── /sys/memory ─────────────────────────────────────────────────────────────
 
 static void sys_gen_memory_lock(synth_text_t *t, const char *name, const allocator_lock_stats_t *l)
@@ -943,6 +1117,27 @@ static void sys_gen_memory_ledger(synth_text_t *t)
 	sys_gen_memory_lock(t, "ledger", &s.ledger_lock);
 }
 
+// /sys/shlib — every shared object the system has loaded, and what each one
+// is actually costing.
+//
+// Born 2026-08-22, the day libos64 became a .so and the whole userland
+// started sharing it. The claim the feature makes is "one copy, shared by
+// everybody" — and until this file existed there was no way to CHECK that
+// claim on a running machine, only a kernel regression test asserting it
+// about a two-task fixture. `resident` is the honest measurement: how many
+// pages of this object have actually been read, relocated and cached, which
+// is the memory the object costs the whole system no matter how many programs
+// are running it. Multiply by nothing; that is the total.
+//
+// This is also the seam an `ldd`-alike reads (the labor division: the kernel
+// grows the view, the utility that presents it is Chris's). Everything a
+// dependency lister needs is here — the objects, their dependency edges, and
+// where each one landed.
+//
+// Deliberately NOT a directory of per-object files: the interesting question
+// is almost always comparative ("what is loaded, what does it cost"), and a
+// single readable table answers it in one `cat`. The clipboard's ruling
+// applies in reverse — a file that wants to stay a file.
 static void sys_gen_shlib(synth_text_t *t)
 {
 	synth_text_addf(t, "window: 0x%016lx-0x%016lx\n",
@@ -2214,6 +2409,7 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 	         && sp.type != SYS_NODE_SHLIBFILE && sp.type != SYS_NODE_CONFFILE
 	         && sp.type != SYS_NODE_MOUNTSFILE && sp.type != SYS_NODE_BLOCKFILE
 	         && sp.type != SYS_NODE_OPENFILESFILE && sp.type != SYS_NODE_RANDOMFILE
+	         && sp.type != SYS_NODE_ACPIFILE
 	         && sp.type != SYS_NODE_MEMFRAMES && sp.type != SYS_NODE_MEMLEDGER)
 		return -1;   // directories go through dops; everything else is not a file
 
@@ -2233,6 +2429,8 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 		sys_gen_shlib(&text);
 	else if (sp.type == SYS_NODE_RANDOMFILE)
 		sys_gen_random(&text);
+	else if (sp.type == SYS_NODE_ACPIFILE)
+		sys_gen_acpi(&text);
 	else if (sp.type == SYS_NODE_MEMFRAMES)
 		sys_gen_memory_frames(&text);
 	else if (sp.type == SYS_NODE_MEMLEDGER)
@@ -2481,7 +2679,7 @@ static int sys_read_dir(vfs_directory_t *vfs_dir, os64_dirent_t *entry)
 			// a listing that drops a name reads exactly like a name that
 			// does not exist.)
 			static const char *kSysRootDirs[] = { "bluetooth", "bus", "console", "cpu", "memory", "net" };
-			static const char *kSysRootFiles[] = { "block", "cache", "conf", "gui", "log", "mounts", "openfiles", "random", "shlib", "clipboard", "appearance", "decorations", "mouse" };
+			static const char *kSysRootFiles[] = { "acpi", "block", "cache", "conf", "gui", "log", "mounts", "openfiles", "random", "shlib", "clipboard", "appearance", "decorations", "mouse" };
 			const int kDirCount  = (int)(sizeof(kSysRootDirs) / sizeof(kSysRootDirs[0]));
 			const int kFileCount = (int)(sizeof(kSysRootFiles) / sizeof(kSysRootFiles[0]));
 			if (h->index < kDirCount)
@@ -2715,6 +2913,10 @@ static int sys_stat(const char *path, os64_dirent_t *entry, vfs_filesystem_t *vf
 
 		case SYS_NODE_RANDOMFILE:
 			strncpy(entry->name, "random", OS64_DIRENT_NAME_MAX);
+			return 0;
+
+		case SYS_NODE_ACPIFILE:
+			strncpy(entry->name, "acpi", OS64_DIRENT_NAME_MAX);
 			return 0;
 
 		case SYS_NODE_MOUNTSFILE:

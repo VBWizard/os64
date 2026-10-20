@@ -234,7 +234,21 @@ make -C kernel test-elf
 
 **System Drivers:**
 - **PCI** (`pci.c`): PCI device enumeration and configuration
-- **ACPI** (`acpi.c`): ACPI table parsing (RSDP, MADT, MCFG, etc.)
+- **ACPI** (`acpi.c`, `acpi_tables.c`): one walk at boot of everything
+  reachable from Limine's RSDP. **Firmware puts its tables wherever it
+  likes**, so each is mapped by its own address and Length (the header
+  first, then the whole table) through a read-only HHDM alias, and every
+  page mapped for the walk is unmapped when it ends. `acpi_tables.c` is
+  pure: `tools/test_acpi_host.sh` drives it under ASan with a `map` that
+  returns exactly the bytes asked for, so a read past them is a report. The
+  kernel takes the IOAPIC that serves GSI 0 (not the first one listed), the
+  ISA overrides, MCFG segment 0's bus range (PCI scans exactly those buses,
+  and panics by name without one), and `\_S5`. **`/sys/acpi`** shows
+  everything the walk found, used or not — every table and its checksum,
+  the FADT's power-management facts (PM timer, reset register, RTC century,
+  boot-architecture flags), CPUs, IOAPICs, overrides, the HPET, the
+  firmware's boot logo, and the walk's problems. Read it FIRST on a machine
+  meeting os64 for the first time.
 - **APIC** (`apic.c`): Local APIC and I/O APIC management
 - **RTC** (`rtc.c`): Real-time clock
 - **PIT** (`pit.c`): Programmable Interval Timer
