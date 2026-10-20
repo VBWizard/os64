@@ -2144,7 +2144,7 @@ static void stream_slices(void) {
      * waiting behind the chunks. */
     stream_window();
     /* What the last page's paints kept (YONDER_PERF.md § perf-2). */
-    g.paint_cache=yonder_paint_cache_new(YONDER_PAINT_CACHE_BUDGET);
+    g.paint_cache=yonder_paint_cache_new(YONDER_PAINT_CACHE_FLOOR);
     paint_cache_begin(g.paint_cache);
     (void)paint_cache_make(g.paint_cache,(const uint8_t *)"k",1,paint_cache_hash((const uint8_t *)"k",1),64);
     /* And the buffers they left idle (§ perf-5). */
@@ -4842,7 +4842,7 @@ static void paint_cost_cases(void) {
           "paint counts: each stage in milliseconds a paint, the window and the view's rest beside them");
     /* The paint cache's counts beside them (YONDER_PERF.md § perf-2), which
      * start again with the paint counts while what it holds stays. */
-    g.paint_cache=yonder_paint_cache_new(YONDER_PAINT_CACHE_BUDGET);
+    g.paint_cache=yonder_paint_cache_new(YONDER_PAINT_CACHE_FLOOR);
     paint_cache_begin(g.paint_cache);
     (void)paint_cache_make(g.paint_cache,(const uint8_t *)"k",1,paint_cache_hash((const uint8_t *)"k",1),2000);
     diag_paint(&g.page);

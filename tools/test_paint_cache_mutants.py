@@ -25,8 +25,9 @@ cost time: a run off the picture cut short, and a rounded row's column
 that its span covers wholly worked anyway; and a row its rounded shape
 misses drawn all the same, which the cut then leaves with no alpha, so
 only the colour under none differs. The window making its cache at its
-first paint, and timing what laying takes, are read off a QEMU record's
-paint lines: no host case paints the window's view.
+first paint, with the screen's budget, and timing what laying takes, are
+read off a QEMU record's paint lines (`of N KiB` is the budget): no host
+case paints the window's view.
 """
 import argparse
 import pathlib
@@ -72,6 +73,17 @@ mutants = [
     ('the-budget-is-not-kept', STORE,
      '    while (c->held + size > c->budget) {',
      '    while (false) {'),
+    # The budget is the screen's: eight of them, between the floor and the
+    # ceiling.
+    ('the-budget-has-no-floor', STORE,
+     '    return want < YONDER_PAINT_CACHE_FLOOR ? YONDER_PAINT_CACHE_FLOOR : (size_t)want;',
+     '    return (size_t)want;'),
+    ('the-budget-has-no-ceiling', STORE,
+     '    if (pixels > YONDER_PAINT_CACHE_CEILING / per_pixel)\n        return YONDER_PAINT_CACHE_CEILING;\n',
+     ''),
+    ('the-budget-is-one-screen', STORE,
+     '    const uint64_t per_pixel = 4u * YONDER_PAINT_CACHE_SCREENS;',
+     '    const uint64_t per_pixel = 4u;'),
     ('a-released-entry-keeps-its-paint', STORE,
      '    e->stamp = 0;\n    unlink_list(c, e);\n    push_oldest(c, e);',
      '    unlink_list(c, e);\n    push_oldest(c, e);'),

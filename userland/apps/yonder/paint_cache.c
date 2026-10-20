@@ -46,6 +46,19 @@ static bool kept_now(const yonder_paint_cache_t *c, const Entry *e)
     return e->stamp != 0 && e->stamp + 1 >= c->stamp;
 }
 
+size_t yonder_paint_cache_budget(uint32_t width, uint32_t height)
+{
+    // Four bytes a pixel, the widest an entry holds (a tile's; a mask's is
+    // one). The pixels are compared with the ceiling before they are
+    // multiplied out, which no pair of 32-bit sides can then overflow.
+    const uint64_t per_pixel = 4u * YONDER_PAINT_CACHE_SCREENS;
+    uint64_t pixels = (uint64_t)width * height;
+    if (pixels > YONDER_PAINT_CACHE_CEILING / per_pixel)
+        return YONDER_PAINT_CACHE_CEILING;
+    uint64_t want = pixels * per_pixel;
+    return want < YONDER_PAINT_CACHE_FLOOR ? YONDER_PAINT_CACHE_FLOOR : (size_t)want;
+}
+
 yonder_paint_cache_t *yonder_paint_cache_new(size_t budget)
 {
     yonder_paint_cache_t *c = os64_malloc(sizeof(*c));
