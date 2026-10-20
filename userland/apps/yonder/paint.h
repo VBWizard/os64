@@ -114,7 +114,26 @@ typedef struct {
 // working it out again. What a paint draws from it is what it draws
 // without it, pixel for pixel. One window's, on its one thread: no lock.
 typedef struct yonder_paint_cache yonder_paint_cache_t;
-#define YONDER_PAINT_CACHE_BUDGET ((size_t)32 << 20)
+// THE BUDGET IS THE SCREEN'S (yonder_paint_cache_budget): what the cache
+// keeps is the view's share of each picture, so the most it can want grows
+// with the largest the view can be, which is the screen, and the screen is
+// asked once, when the cache is made. Never the window's size: that changes
+// at every drag, and a budget that shrank with it would evict mid-gesture
+// what the next frame wants back. SCREENS of them, because a box can stack
+// a view's share of several gradients and shadows (Scratch 2000's panel
+// lays four), never more than a SHARE of the machine's installed memory (a
+// big panel on a small machine), never less than the FLOOR, and never more
+// than the CEILING (a 5K panel is about 450 MiB of it). Installed, not
+// free: the budget is set once, and what was free at the first paint says
+// nothing a minute later; a make the heap refuses below the budget lets
+// go of older entries instead (paint_cache_make).
+#define YONDER_PAINT_CACHE_FLOOR   ((size_t)32 << 20)
+#define YONDER_PAINT_CACHE_CEILING ((size_t)1 << 30)
+#define YONDER_PAINT_CACHE_SCREENS 8
+#define YONDER_PAINT_CACHE_SHARE   16   // at most 1/16 of installed memory
+// The budget for a screen of `width` x `height` pixels on a machine with
+// `memory` bytes installed (0 x 0, or 0 bytes, when not known: the floor).
+size_t yonder_paint_cache_budget(uint32_t width, uint32_t height, uint64_t memory);
 // An empty cache holding at most `budget` bytes, or NULL for no memory.
 yonder_paint_cache_t *yonder_paint_cache_new(size_t budget);
 // Every entry let go (another page is shown); the counts kept. NULL: nothing.

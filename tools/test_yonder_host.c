@@ -23,6 +23,7 @@
 #include "bar.h"
 #include "mail.h"
 #include "paint.h"
+#include "paint_cache.h"
 #include "garb/cascade.h"
 #include "scale.h"
 #include "test_libflow_fonts.h"
@@ -86,6 +87,9 @@ static bool s_alloc_starved;
 // s_alloc_starved).
 static long s_alloc_left = -1;
 static long s_paint_alloc_left = -1;
+// While set, the next allocation fails and clears it: memory refused once,
+// then given (the paint cache asks again after letting entries go).
+static bool s_alloc_refuse_once;
 // Every byte asked for, and what paint_of's own painting asked for.
 static size_t s_alloc_bytes, s_paint_bytes;
 // Every allocation made: a buffer the scratch lends again is not one. And
@@ -96,6 +100,10 @@ void *os64_malloc(size_t size)
 {
     if (s_alloc_starved || s_alloc_left == 0)
         return NULL;
+    if (s_alloc_refuse_once) {
+        s_alloc_refuse_once = false;
+        return NULL;
+    }
     if (s_alloc_left > 0)
         s_alloc_left--;
     s_alloc_bytes += size;
@@ -1436,10 +1444,58 @@ static void paint_cache_cases(void)
     free(paint_of(kCacheKeys, strlen(kCacheKeys), 400, view, NULL, true));
     s_dark_paint = NULL;
 
+    // The budget is the screen's: eight screens of four-byte pixels, never
+    // under the floor, never over the ceiling, and 32-bit sides that would
+    // overflow multiplied out still answer the ceiling — on a machine with
+    // memory to spare (the P5's 24 GiB).
+    const uint64_t roomy = (uint64_t)24 << 30;
+    expect("cache: the budget is eight screens, between the floor and the ceiling",
+           yonder_paint_cache_budget(0, 0, roomy) == YONDER_PAINT_CACHE_FLOOR &&
+               yonder_paint_cache_budget(1024, 768, roomy) == YONDER_PAINT_CACHE_FLOOR &&
+               yonder_paint_cache_budget(2560, 1440, roomy) == (size_t)2560 * 1440 * 4 * 8 &&
+               yonder_paint_cache_budget(1024, 1024, roomy) == (size_t)32 << 20 &&
+               yonder_paint_cache_budget(1024, 1025, roomy) == (size_t)1024 * 1025 * 32 &&
+               yonder_paint_cache_budget(5120, 2880, roomy) == (size_t)5120 * 2880 * 32 &&
+               yonder_paint_cache_budget(8192, 4096, roomy) == YONDER_PAINT_CACHE_CEILING &&
+               yonder_paint_cache_budget(8192, 4097, roomy) == YONDER_PAINT_CACHE_CEILING &&
+               yonder_paint_cache_budget(UINT32_MAX, UINT32_MAX, roomy) == YONDER_PAINT_CACHE_CEILING,
+           NULL);
+    // And never more than a sixteenth of the memory installed (a 4K panel
+    // on 2 GiB gets 128 MiB, not 253), never under the floor even so, and
+    // memory not known is the floor.
+    expect("cache: the budget is never more than a share of the machine's memory",
+           yonder_paint_cache_budget(3840, 2160, (uint64_t)2 << 30) == (size_t)128 << 20 &&
+               yonder_paint_cache_budget(3840, 2160, (uint64_t)256 << 20) == YONDER_PAINT_CACHE_FLOOR &&
+               yonder_paint_cache_budget(3840, 2160, 0) == YONDER_PAINT_CACHE_FLOOR &&
+               yonder_paint_cache_budget(2560, 1440, (uint64_t)4 << 30) == (size_t)2560 * 1440 * 32 &&
+               yonder_paint_cache_budget(UINT32_MAX, UINT32_MAX, UINT64_MAX) == YONDER_PAINT_CACHE_CEILING,
+           NULL);
+
+    // Memory refused below the budget: an entry no recent paint used is let
+    // go and the make asked again; one this paint uses never is.
+    {
+        yonder_paint_cache_t *m = yonder_paint_cache_new(YONDER_PAINT_CACHE_FLOOR);
+        const uint8_t ka[] = "a", kb[] = "b", kc[] = "c";
+        paint_cache_begin(m);
+        bool made_a = paint_cache_make(m, ka, 1, 1, 1000) != NULL;
+        paint_cache_begin(m);
+        paint_cache_begin(m);
+        s_alloc_refuse_once = true;
+        bool made_b = paint_cache_make(m, kb, 1, 2, 1000) != NULL;
+        bool a_gone = paint_cache_find(m, ka, 1, 1) == NULL;
+        s_alloc_refuse_once = true;
+        bool c_refused = paint_cache_make(m, kc, 1, 3, 1000) == NULL;
+        bool b_kept = paint_cache_find(m, kb, 1, 2) != NULL;
+        s_alloc_refuse_once = false;
+        expect("cache: memory refused lets go of what no recent paint used, never this paint's",
+               made_a && made_b && a_gone && c_refused && b_kept, NULL);
+        yonder_paint_cache_free(m);
+    }
+
     // A 200 x 50 tile is two blocks, 128 and 72 wide; its 230 x 80 mask
     // (the blur's reach of 15 each side) two more.
     const char *one = "<!doctype html><style>" CACHE_BOX "</style><div></div>";
-    yonder_paint_cache_t *c = yonder_paint_cache_new(YONDER_PAINT_CACHE_BUDGET);
+    yonder_paint_cache_t *c = yonder_paint_cache_new(YONDER_PAINT_CACHE_FLOOR);
     yonder_paint_cache_counts_t n = paint_through(c, one, view);
     expect("cache: a first paint makes the tile's blocks and the mask's",
            n.made == 4 && n.hits == 0 && n.entries == 4 && n.bytes > 200 * 50 * 4, NULL);
@@ -1520,7 +1576,7 @@ static void paint_cache_cases(void)
     // memory, finds the released block and makes the other.
     bool partial = false, counted = false, kept = false;
     for (long left = 0; left < 24 && !partial; left++) {
-        c = yonder_paint_cache_new(YONDER_PAINT_CACHE_BUDGET);
+        c = yonder_paint_cache_new(YONDER_PAINT_CACHE_FLOOR);
         s_paint_alloc_left = left;
         n = paint_through(c, a, view);
         s_paint_alloc_left = -1;
@@ -1544,7 +1600,7 @@ static void paint_cache_cases(void)
     // And a paint that kept none of the shadow counted why.
     bool every_refusal_counted = true;
     for (long left = 0; left < 16; left++) {
-        c = yonder_paint_cache_new(YONDER_PAINT_CACHE_BUDGET);
+        c = yonder_paint_cache_new(YONDER_PAINT_CACHE_FLOOR);
         s_paint_alloc_left = left;
         n = paint_through(c, shade, view);
         s_paint_alloc_left = -1;
@@ -1563,7 +1619,7 @@ static void paint_cache_cases(void)
                             " box-shadow: 0 0 200px #000000 }</style><div></div>";
     free(paint_of(wide_blur, strlen(wide_blur), 400, view, NULL, true));
     size_t plain = s_paint_bytes;
-    c = yonder_paint_cache_new(YONDER_PAINT_CACHE_BUDGET);
+    c = yonder_paint_cache_new(YONDER_PAINT_CACHE_FLOOR);
     n = paint_through(c, wide_blur, view);
     char said[96];
     snprintf(said, sizeof(said), "%zu bytes against %zu, %lu blocks made", s_paint_bytes, plain,
@@ -1594,7 +1650,7 @@ static void paint_cache_cases(void)
     for (int i = 0; i < 300; i++)
         at += (size_t)snprintf(many + at, sizeof(many) - at,
                                "<div style=\"background: linear-gradient(%ddeg, #ff0000, #0000ff)\"></div>", i);
-    c = yonder_paint_cache_new(YONDER_PAINT_CACHE_BUDGET);
+    c = yonder_paint_cache_new(YONDER_PAINT_CACHE_FLOOR);
     (void)paint_through(c, many, (os64_gui_rect_t){0, 0, 400, 2000});
     n = paint_through(c, many, (os64_gui_rect_t){0, 0, 400, 2000});
     expect("cache: a table grown past its first buckets finds every tile it holds",
@@ -1604,7 +1660,7 @@ static void paint_cache_cases(void)
     // One colour is a fill: a repeat shorter than a pixel is its average.
     const char *solid = "<!doctype html><style>div { width: 200px; height: 50px; background:"
                         " repeating-linear-gradient(90deg, #ff0000 0px, #0000ff 0.5px) }</style><div></div>";
-    c = yonder_paint_cache_new(YONDER_PAINT_CACHE_BUDGET);
+    c = yonder_paint_cache_new(YONDER_PAINT_CACHE_FLOOR);
     n = paint_through(c, solid, view);
     expect("cache: a gradient of one colour is not kept", n.made == 0 && n.no_room == 0, NULL);
     yonder_paint_cache_free(c);
@@ -1614,7 +1670,7 @@ static void paint_cache_cases(void)
     const char *wide = "<!doctype html><style>div { width: 70000px; height: 20px;"
                        " background: linear-gradient(90deg, #ff0000, #0000ff); box-shadow: 0 0 6px #000000 }"
                        "</style><div></div>";
-    c = yonder_paint_cache_new(YONDER_PAINT_CACHE_BUDGET);
+    c = yonder_paint_cache_new(YONDER_PAINT_CACHE_FLOOR);
     n = paint_through(c, wide, view);
     expect("cache: a picture far wider than the view is kept by the blocks the view reads",
            n.made == 8 && n.bytes < 8 * (128 * 128 * 4 + 4096), NULL);
@@ -1627,7 +1683,7 @@ static void paint_cache_cases(void)
     const char *tall = "<!doctype html><style>body { margin: 0 } div { width: 300px; height: 20000px;"
                        " background: linear-gradient(#ff0000, #0000ff); box-shadow: 0 0 6px #000000 }"
                        "</style><div></div>";
-    c = yonder_paint_cache_new(YONDER_PAINT_CACHE_BUDGET);
+    c = yonder_paint_cache_new(YONDER_PAINT_CACHE_FLOOR);
     n = paint_through(c, tall, (os64_gui_rect_t){0, 10000, 400, 100});
     expect("cache: a tall tile and mask are kept by the blocks the view reads", n.made == 6, NULL);
     n = paint_through(c, tall, (os64_gui_rect_t){0, 10020, 400, 100});
@@ -1783,7 +1839,7 @@ static void scratch_paint_cases(void)
         "background:linear-gradient(red,blue);box-shadow:0 0 20px 5px black}</style><div></div>";
     for (int cached = 0; cached < 2; cached++) {
         yonder_scratch_t *sc = yonder_scratch_new();
-        s_through = cached ? yonder_paint_cache_new(YONDER_PAINT_CACHE_BUDGET) : NULL;
+        s_through = cached ? yonder_paint_cache_new(YONDER_PAINT_CACHE_FLOOR) : NULL;
         s_through_scratch = sc;
         os64_gui_rect_t view = {0, 0, 500, 400};
         free(paint_of(html, sizeof(html) - 1, 500, view, NULL, true));
@@ -1812,7 +1868,7 @@ static void scratch_paint_cases(void)
         "<style>body{margin:0}div{width:400px;height:300px;margin:30px;"
         "box-shadow:0 0 20px 5px black}</style><div></div>";
     yonder_scratch_t *sc = yonder_scratch_new();
-    s_through = yonder_paint_cache_new(YONDER_PAINT_CACHE_BUDGET);
+    s_through = yonder_paint_cache_new(YONDER_PAINT_CACHE_FLOOR);
     s_through_scratch = sc;
     os64_gui_rect_t view = {0, 0, 500, 400};
     free(paint_of(shadow, sizeof(shadow) - 1, 500, view, NULL, true));
@@ -1851,7 +1907,7 @@ int main(int argc, char **argv)
     } else if (argc == 2 && strcmp(argv[1], "--write-corpus") == 0) {
         corpus(true);
     } else {
-        s_suite_cache = yonder_paint_cache_new(YONDER_PAINT_CACHE_BUDGET);
+        s_suite_cache = yonder_paint_cache_new(YONDER_PAINT_CACHE_FLOOR);
         s_small_cache = yonder_paint_cache_new(SMALL_CACHE_BUDGET);
         s_suite_scratch = yonder_scratch_new();
         scratch_cases();

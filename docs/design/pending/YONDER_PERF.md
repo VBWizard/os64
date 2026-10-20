@@ -269,8 +269,8 @@ shadow with no blur is rectangles, already cheap.
 
 | State | Begun | Changed | Let go |
 |---|---|---|---|
-| An entry (one block of a tile or a mask, and its key) | made at the first paint that draws from a block not held, when every block that picture's part needs fits (below) | used at each paint that draws from it: it goes to the front of the list, stamped with the paint; RELEASED — stamped with no paint and put at the back — when its picture's part could not be had whole | evicted from the back of the list when making another would pass the budget, if no paint has used it in the last two; all of them when another page is shown, and at exit |
-| The budget | 32 MiB across both kinds — pixels, keys and each entry's own bytes | — | — |
+| An entry (one block of a tile or a mask, and its key) | made at the first paint that draws from a block not held, when every block that picture's part needs fits (below) | used at each paint that draws from it: it goes to the front of the list, stamped with the paint; RELEASED — stamped with no paint and put at the back — when its picture's part could not be had whole | evicted from the back of the list when making another would pass the budget, or when the heap refuses the memory for another below it (asked again after each), if no paint has used it in the last two; all of them when another page is shown, and at exit |
+| The budget | eight screens of four-byte pixels across both kinds — pixels, keys and each entry's own bytes — never more than a sixteenth of the memory installed, never under 32 MiB nor over 1 GiB (`yonder_paint_cache_budget`), the screen and the memory asked once when the cache is made | — | — |
 | The list (most recently used first) and the table (by key's hash) | with the first entry | at each entry made, used, released or evicted | with the last entry |
 | The cache's counts (blocks found and made, evicted, pictures not kept and why, bytes and blocks held) | with the paint counts | at each draw that asks | restarted with the paint counts; written in the record's `paint:` section |
 

@@ -25,7 +25,8 @@ size_t paint_cache_cost(uint32_t klen, size_t bytes);
 bool paint_cache_room(const yonder_paint_cache_t *c, size_t cost);
 // Room for `bytes` kept under `key` (which no entry holds), this paint's,
 // for the caller to fill; NULL when it does not fit (ask paint_cache_room
-// first) or there is no memory.
+// first) or there is no memory even after letting go of every entry that
+// neither this paint nor the one before it uses.
 void *paint_cache_make(yonder_paint_cache_t *c, const uint8_t *key, uint32_t klen, uint64_t hash,
                        size_t bytes);
 // An entry this paint found or made and cannot use after all: no paint's,

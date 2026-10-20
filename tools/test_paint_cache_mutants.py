@@ -25,8 +25,9 @@ cost time: a run off the picture cut short, and a rounded row's column
 that its span covers wholly worked anyway; and a row its rounded shape
 misses drawn all the same, which the cut then leaves with no alpha, so
 only the colour under none differs. The window making its cache at its
-first paint, and timing what laying takes, are read off a QEMU record's
-paint lines: no host case paints the window's view.
+first paint, with the screen's budget, and timing what laying takes, are
+read off a QEMU record's paint lines (`of N KiB` is the budget): no host
+case paints the window's view.
 """
 import argparse
 import pathlib
@@ -72,6 +73,32 @@ mutants = [
     ('the-budget-is-not-kept', STORE,
      '    while (c->held + size > c->budget) {',
      '    while (false) {'),
+    # The budget is the screen's: eight of them, no more than a share of the
+    # memory installed, between the floor and the ceiling.
+    ('the-budget-has-no-floor', STORE,
+     '    return want < YONDER_PAINT_CACHE_FLOOR ? YONDER_PAINT_CACHE_FLOOR : (size_t)want;',
+     '    return (size_t)want;'),
+    ('the-budget-has-no-ceiling', STORE,
+     '    uint64_t want = pixels > YONDER_PAINT_CACHE_CEILING / per_pixel ? YONDER_PAINT_CACHE_CEILING\n'
+     '                                                                     : pixels * per_pixel;',
+     '    uint64_t want = pixels * per_pixel;'),
+    ('the-budget-is-one-screen', STORE,
+     '    const uint64_t per_pixel = 4u * YONDER_PAINT_CACHE_SCREENS;',
+     '    const uint64_t per_pixel = 4u;'),
+    ('the-budget-ignores-memory', STORE,
+     '    if (want > share)\n        want = share;\n',
+     '    if (want > share && false)\n        want = share;\n'),
+    ('the-budget-takes-an-eighth', STORE,
+     '    uint64_t share = memory / YONDER_PAINT_CACHE_SHARE;',
+     '    uint64_t share = memory / 8;'),
+    # Memory refused below the budget lets go and asks again, never of an
+    # entry this paint or the one before it uses.
+    ('memory-refused-is-not-asked-again', STORE,
+     '    while (e == NULL && c->oldest != NULL && !kept_now(c, c->oldest)) {',
+     '    while (e == NULL && c->oldest != NULL && false) {'),
+    ('memory-refused-lets-this-paint-go', STORE,
+     '    while (e == NULL && c->oldest != NULL && !kept_now(c, c->oldest)) {',
+     '    while (e == NULL && c->oldest != NULL) {'),
     ('a-released-entry-keeps-its-paint', STORE,
      '    e->stamp = 0;\n    unlink_list(c, e);\n    push_oldest(c, e);',
      '    unlink_list(c, e);\n    push_oldest(c, e);'),

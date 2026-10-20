@@ -9130,8 +9130,15 @@ static void view_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_
     os64_gui_rect_t view = {part.x - gl.dx, part.y - gl.dy, part.w, part.h};
     cost_begin(PS_VIEW);
     yonder_paint_stage = cost_painter;
-    if (g.paint_cache == NULL)
-        g.paint_cache = yonder_paint_cache_new(YONDER_PAINT_CACHE_BUDGET);
+    if (g.paint_cache == NULL) {
+        uint32_t sw = 0, sh = 0;
+        os64_memory_t mem = {0};
+        if (os64_gui_screen_info(&sw, &sh) != 0)
+            sw = sh = 0;
+        if (os64_memory(&mem) != 0)
+            mem.total = 0;
+        g.paint_cache = yonder_paint_cache_new(yonder_paint_cache_budget(sw, sh, mem.total));
+    }
     if (g.paint_scratch == NULL)
         g.paint_scratch = yonder_scratch_new();
     yonder_paint(g.page.tree, view, scroll_now(), PAGE_PAPER, s_dark ? &kDark : NULL, g.paint_cache,
