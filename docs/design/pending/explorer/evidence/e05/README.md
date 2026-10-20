@@ -1,6 +1,7 @@
 # E5 Scribe integration evidence
 
-Scribe is built on `aa04123c` with the shared dialogs from `42410e34`.
+Scribe implementation `29252438` is built on `aa04123c` with the shared dialogs
+from `42410e34`.
 [Source and binary hashes](sha256.txt) identify the tested implementation.
 
 ## Host
@@ -59,3 +60,9 @@ not establish a P5 latency measurement.
 
 Independent review and P5 acceptance remain pending. The [slice record](../../E05_SCRIBE.md)
 contains the hardware walkthrough and direct-write limitation.
+
+
+The [stale-reference audit](stale-refs.txt) reports E4 document identifiers and
+links moved by the status update. Those files still exist and the listed links
+remain intentional, including historical session/evidence records. Each hit
+was inspected; no retired code identifiers or new superlative claims remain.

@@ -937,3 +937,7 @@ The old E4 review-pending status was stale: PR #267 is merged as `a3dd4b65`.
 The tracker and handoff now point to E5. Review and Chris's P5 walkthrough
 remain pending; no hardware acceptance is claimed. Yonder and associations
 remain separate implementation work.
+
+Published implementation `29252438` as [draft PR #319](https://github.com/VBWizard/os64/pull/319)
+against `userland`, including the shared-dialog dependency. Review/P5 remain
+pending; the branch has not been merged.

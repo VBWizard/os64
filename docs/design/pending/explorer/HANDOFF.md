@@ -12,7 +12,9 @@ user-reported, without a captured installed-binary hash.
 
 **E5's Scribe consumer is implemented** on `codex/scribe-file-dialogs`, in
 `.worktrees/scribe-file-dialogs`, based on `aa04123c` plus shared-dialog commit
-`42410e34`. [Scope, checks and walkthrough](E05_SCRIBE.md). Review and Chris's
+`42410e34`. Implementation `29252438` is published in
+[draft PR #319](https://github.com/VBWizard/os64/pull/319).
+[Scope, checks and walkthrough](E05_SCRIBE.md). Review and Chris's
 P5 acceptance remain pending. Scribe is the first app consumer; Yonder remains
 part of the Modern Web work.
 

@@ -3,7 +3,8 @@
 ## Status and ownership
 
 Implemented, 2026-10-20. Review and P5 acceptance are pending. Quinn owns this integration; review is unassigned.
-Local branch `codex/scribe-file-dialogs`, worktree `.worktrees/scribe-file-dialogs`,
+Published as [draft PR #319](https://github.com/VBWizard/os64/pull/319).
+Implementation `29252438` is on `codex/scribe-file-dialogs`, worktree `.worktrees/scribe-file-dialogs`,
 starts from `aa04123c` and includes the shared-dialog commit `42410e34`.
 E4 is merged as `a3dd4b65`. This is userland composition; no kernel ABI changes
 or separate Fable architecture review are required.
