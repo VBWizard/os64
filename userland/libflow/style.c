@@ -4280,6 +4280,42 @@ const FStyled *f_style_of(const FStyles *styles, const os64_html_node_t *node)
     return styles != NULL ? f_map_get(&styles->map, node) : NULL;
 }
 
+const FStyled *f_style_beyond(const FStyles *styles, FStyles *extra, const os64_page_t *model,
+                              const os64_html_node_t *element)
+{
+    // The nearest ancestor the build styled, and the elements between.
+    int32_t depth = 0;
+    const os64_html_node_t *styled = element;
+    while (styled != NULL && styled->kind == OS64_HTML_ELEMENT && f_style_of(styles, styled) == NULL) {
+        styled = styled->parent;
+        depth++;
+    }
+    if (styled == NULL || styled->kind != OS64_HTML_ELEMENT || depth == 0)
+        return depth == 0 ? f_style_of(styles, element) : NULL;
+    // The ancestor's record is copied in, so styling its children reads it
+    // and writes nothing of the tree's (a child `rp` marks its parent).
+    FStyled *seed = f_arena_alloc(&extra->arena, sizeof(*seed));
+    if (seed == NULL)
+        return NULL;
+    *seed = *f_style_of(styles, styled);
+    if (!f_map_put(&extra->map, styled, seed))
+        return NULL;
+    const FStyled *root = f_style_of(styles, extra->doc->html);
+    Ctx c = {.doc = extra->doc, .model = model, .env = extra->env, .out = extra,
+             .quirks = extra->doc->quirks == OS64_HTML_QUIRKS,
+             .zoom = extra->env->zoom != 0 ? extra->env->zoom / 1000.0 : 1.0};
+    c.root_font = root != NULL ? root->style.font_size : css(&c, extra->env->viewport_font_px);
+    // Outermost first, each from the parent styled before it.
+    for (int32_t d = depth; d > 0; d--) {
+        const os64_html_node_t *n = element;
+        for (int32_t up = 1; up < d; up++)
+            n = n->parent;
+        if (style_element(&c, n) == NULL)
+            return NULL;
+    }
+    return f_map_get(&extra->map, element);
+}
+
 void f_style_free(FStyles *styles)
 {
     if (styles == NULL)

@@ -1359,6 +1359,41 @@ const flow_box_t *flow_control(const flow_tree_t *tree, int32_t i);
 // Like snprintf: answers the length the whole dump needs, writes what fits.
 int64_t flow_dump(const flow_tree_t *tree, char *out, size_t cap);
 
+// ── Computed values (CSSOM § getComputedStyle) ──────────────────────────
+//
+// AN ELEMENT'S STYLE AS A SCRIPT READS IT: each of libgarb's properties
+// (garb_prop_t, `prop` below) as its RESOLVED value — the computed value,
+// but the used one for the properties CSSOM names when the element has a
+// box (width and height, margins and padding, a positioned box's insets, a
+// line height that is not `normal`, transform and transform-origin) — in
+// CSS pixels, as the browsers serialise it (garb_css_number's numbers,
+// rgb() and rgba() colours, keywords in lower case). An element pass 1 did
+// not reach, one inside a `display: none` element, is styled for the
+// asking with `env`, which must be the environment `tree` was laid out
+// with, its cascade alive. A property libflow does not model is what the
+// page's sheets declared for it (on the element, or for an inherited one
+// on its nearest ancestor that declares it), as libgarb writes a value, or
+// nothing. `url` resolves a url() a sheet wrote as the face fetches it; a
+// url it leaves (NULL, or false) is written as the sheet wrote it.
+typedef struct flow_computed flow_computed_t;
+typedef struct {
+    bool (*url)(void *ctx, const char *written, uint32_t len, int32_t sheet, char *out, size_t cap);
+    void *ctx;
+} flow_computed_options_t;
+// NULL on no memory. The tree, the element and env's cascade outlive it;
+// `options` is copied.
+flow_computed_t *flow_computed_new(const flow_tree_t *tree, const flow_env_t *env,
+                                   const os64_html_node_t *element,
+                                   const flow_computed_options_t *options);
+// Whether the element has a computed style: false for a node that is no
+// element, or one not in the document's tree (detached, a template's).
+bool flow_computed_styled(const flow_computed_t *c);
+// Property `prop`'s resolved value, like snprintf: the length the whole
+// text needs, what fits written. "" for an element with no style or a
+// `prop` past the table.
+size_t flow_computed_text(const flow_computed_t *c, int32_t prop, char *out, size_t cap);
+void flow_computed_free(flow_computed_t *c);
+
 #pragma GCC visibility pop
 
 #endif
