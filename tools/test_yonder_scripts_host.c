@@ -4936,6 +4936,20 @@ static void diag_keep_cases(void) {
     loop_drop();
     keep_end();
 
+    /* The token spelling is injective: an address that holds `M%49SSING`
+     * of its own and one that holds MISSING are written apart. */
+    {
+        yonder_diag_t *d=yonder_diag_new("http://fixture.test/a?x=M%49SSING&y=MISSING&z=%2",1,0);
+        yonder_diag_fact(d,"literal","%25 and 75%");
+        char text[512]; yonder_diag_render(d,text,sizeof(text));
+        const char *want="address: http://fixture.test/a?x=M%2549SSING&y=M%49SSING&z=%2\n";
+        check(!strncmp(text,want,strlen(want)),
+            "diag: a `%` a reader would take for part of a spelling is written %25, so a literal M%49SSING "
+            "never reads back as the token, and any other `%` is written as it is");
+        check(has(text,"\nliteral: %2525 and 75%\n"),"diag: a literal %25 is written %2525, a lone `%` as it is");
+        yonder_diag_free(d);
+    }
+
     /* A head fact has room the page's other plain lines cannot take. */
     {
         yonder_diag_t *d=yonder_diag_new("http://fixture.test/many",1,0);

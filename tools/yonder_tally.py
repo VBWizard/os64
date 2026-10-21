@@ -36,17 +36,21 @@ import sys
 
 COUNT = re.compile(rb' \((\d+)\)$')
 ESCAPE = re.compile(rb'\\(\\|x[0-9A-Fa-f]{2})')
+PERCENT = re.compile(rb'M%49SSING|F%41ILED|%25')
+PERCENT_BACK = {b'M%49SSING': b'MISSING', b'F%41ILED': b'FAILED', b'%25': b'%'}
 
 
 def unescape(raw):
     """A field as the page wrote it: diag.c spells a backslash `\\\\`, a
-    byte below 0x20 or 0x7F `\\xHH`, and a token in data with its second
-    letter percent-encoded, which this reads back."""
+    byte below 0x20 or 0x7F `\\xHH`, a token in data with its second
+    letter percent-encoded, and a `%` of the data's own `%25`, which this
+    reads back in one pass from the left, so the data's bytes come back
+    exactly."""
     def one(m):
         e = m.group(1)
         return b'\\' if e == b'\\' else bytes([int(e[1:], 16)])
     raw = ESCAPE.sub(one, raw)
-    raw = raw.replace(b'M%49SSING', b'MISSING').replace(b'F%41ILED', b'FAILED')
+    raw = PERCENT.sub(lambda m: PERCENT_BACK[m.group(0)], raw)
     return raw.decode('utf-8', 'replace')
 
 

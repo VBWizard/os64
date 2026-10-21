@@ -84,6 +84,12 @@ class TallyCases(unittest.TestCase):
         self.assertEqual(b.site, 'b.test')
         self.assertIn(('global', 'MISSINGno\ttab'), b.missing)
 
+    def test_the_spelling_is_injective(self):
+        # A literal `M%49SSING` is written `M%2549SSING`, the token `M%49SSING`,
+        # a literal `%25` `%2525`, and any other `%` as it is.
+        self.assertEqual(tally.unescape(b'q=M%2549SSING&r=M%49SSING&s=%2525&t=75%&u=%2'),
+                         'q=M%49SSING&r=MISSING&s=%25&t=75%&u=%2')
+
     def test_ranked_by_files_then_asks(self):
         table = tally.tally_missing(self.records)
         globals_ = tally.ranked(table['global'])

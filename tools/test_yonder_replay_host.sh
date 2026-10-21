@@ -41,8 +41,8 @@ python3 -I tools/yonder_corpus_diff.py "$work/self/kept" "$work/self/out" | tail
 # reading what they lack as progress. (A page that arrived without the
 # time for its later timers is judged, and may read as progress: the two
 # replays were not given the same budget.)
-"$work/yonder-replay" "$work/self/kept" "$work/self/zero" --seconds 0 > "$work/zero.log"
-if python3 -I tools/yonder_corpus_diff.py "$work/self/kept" "$work/self/zero" > "$work/zero.diff"; then
+"$work/yonder-replay" "$work/self/kept" "$work/no-time" --seconds 0 > "$work/zero.log"
+if python3 -I tools/yonder_corpus_diff.py "$work/self/kept" "$work/no-time" > "$work/zero.diff"; then
     echo "replay: a corpus given no time passed the diff" >&2
     cat "$work/zero.diff" >&2
     exit 1

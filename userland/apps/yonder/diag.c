@@ -332,17 +332,29 @@ static bool starts(const char *s, const char *word)
 // backslash, spelled as an escape, and, with `tokens`, a token spelled with
 // its second letter percent-encoded wherever it appears in data, record
 // lines' data included, so a grep for a token finds only the records it
-// begins. A kept page's index spells no token: its addresses are matched
-// byte for byte, and nothing greps it for records.
+// begins. With `tokens`, a `%` of the data's own that a reader would take
+// for part of a spelling is written `%25`: one that begins `%25` itself, or
+// that stands where a token's spelled letter does (`M%49SSING`,
+// `F%41ILED`). That makes the spelling injective, so a literal `M%49SSING`
+// in an address reads back as itself (`M%2549SSING`), never as MISSING,
+// while every other `%` (`75%`, `%20`) is written as it is. A reader
+// decodes `M%49SSING`, `F%41ILED` and `%25` in one pass from the left. A
+// kept page's index spells no token: its addresses are matched byte for
+// byte, and nothing greps it for records.
 static void put_field(Out *o, const char *s, bool tokens)
 {
     static const char hex[] = "0123456789ABCDEF";
+    const char *first = s;
     for (; *s != '\0'; s++) {
         unsigned char c = (unsigned char)*s;
         if (tokens && (starts(s, YONDER_DIAG_MISSING) || starts(s, YONDER_DIAG_FAILED))) {
             char spelled[4] = {s[0], '%', hex[(unsigned char)s[1] >> 4], hex[(unsigned char)s[1] & 15]};
             put(o, spelled, 4);
             s++;
+        } else if (tokens && c == '%' &&
+                   (starts(s + 1, "25") || (s > first && s[-1] == 'M' && starts(s + 1, "49SSING")) ||
+                    (s > first && s[-1] == 'F' && starts(s + 1, "41ILED")))) {
+            puts_(o, "%25");
         } else if (c == '\\') {
             puts_(o, "\\\\");
         } else if (c < 0x20 || c == 0x7F) {

@@ -17,8 +17,13 @@
 // record lines: DATA that spells one, in any line, has its second letter
 // percent-encoded (`M%49SSING`, `F%41ILED`), which an address reads as the
 // same address. So `grep -l MISSING` is exactly the files with a MISSING
-// record. A byte that would break a line, and a backslash, are written
-// `\xHH` and `\\`.
+// record. A `%` of the data's own that a reader would take for part of a
+// spelling (one beginning `%25`, or standing where `M%49SSING`'s or
+// `F%41ILED`'s does) is written `%25`, so the spelling is injective and a
+// reader gets back the data's bytes exactly by decoding `M%49SSING`,
+// `F%41ILED` and `%25` in one pass from the left; every other `%` is
+// written as it is. A byte that would break a line, and a backslash, are
+// written `\xHH` and `\\`.
 //
 // THE PAGE KEPT beside its file, when yonder.conf says `keep_pages = on`
 // (MODERN_WEB.md rule 3: a kept page can be fed to the headless binding

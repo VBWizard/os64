@@ -6,6 +6,11 @@
  *     test_yonder_replay_host KEPT-DIR OUT-DIR [--seconds N] [--only TEXT]
  *     test_yonder_replay_host --self-test WORK-DIR
  *
+ * A whole replay is written into an OUT-DIR with no records in it, and is
+ * refused otherwise, since a record left from an earlier run would read as
+ * that page's; `--only` replays the records whose names hold TEXT and may
+ * add to one, saying how many it found there.
+ *
  * The window and every fake are tools/test_yonder_scripts_host.c's, the
  * headless binding: this file includes it for them and brings its own main.
  * For each `<name>.txt` in KEPT-DIR that has a `<name>.html`:
@@ -24,9 +29,11 @@
  *     that shows a page whose sheets are late), with the jobs the window
  *     submitted answered at the top of each turn: a script or a sheet from
  *     `<name>.d/index` by its exact address, as it came or as the failure
- *     it was where the page was kept. One the index has no line for is not
- *     made up either way: it stays out, as if still on the wire, and the
- *     record gains `REPLAY incomplete <kind> <url>` (rp_answer). Pictures
+ *     it was where the page was kept, each line answering one job. One
+ *     the index has no line for, or no line left for (asked more often
+ *     than where it was kept), is not made up either way: it stays out, as
+ *     if still on the wire, and the record gains `REPLAY incomplete <kind>
+ *     <url>` (rp_answer). Pictures
  *     and fonts are never answered: they are not kept, and a page shows
  *     without them, as it does while they come;
  *   - THE CLOCK. A turn with nothing to do moves the window's milliseconds
@@ -71,8 +78,9 @@
  * page written here, are replayed as corpora that must not pass silently
  * (rp_corpus_cases): a line taken out of the index, a damaged index, a
  * record with a line that had no memory, one whose table was full (which
- * IS judged), a `*.txt` that is not a record, no time to finish, and a
- * page that navigates.
+ * IS judged), a `*.txt` that is not a record, no time to finish, a script
+ * asked for more often than it was kept, a whole replay into a directory
+ * that holds records, and a page that navigates.
  */
 #define YONDER_HOST_FAKES_ONLY
 #pragma GCC diagnostic ignored "-Wunused-function"
@@ -131,7 +139,8 @@ static int rp_strcmp(const void *a, const void *b) { return strcmp(*(char *const
 
 /* A field as a page file or an index wrote it (diag.c): `\\` and `\xHH`
  * read back, and, with `tokens`, a token whose second letter was
- * percent-encoded. A new string. */
+ * percent-encoded and a `%` written `%25`, in one pass from the left, which
+ * gives back the data's bytes exactly. A new string. */
 static char *rp_unescape(const char *s, size_t n, bool tokens) {
     char *out=malloc(n+1); size_t o=0;
     for(size_t i=0;i<n;) {
@@ -141,6 +150,7 @@ static char *rp_unescape(const char *s, size_t n, bool tokens) {
         }
         if(tokens && i+9<=n && !memcmp(s+i,"M%49SSING",9)) { memcpy(out+o,"MISSING",7); o+=7; i+=9; continue; }
         if(tokens && i+8<=n && !memcmp(s+i,"F%41ILED",8)) { memcpy(out+o,"FAILED",6); o+=6; i+=8; continue; }
+        if(tokens && i+3<=n && !memcmp(s+i,"%25",3)) { out[o++]='%'; i+=3; continue; }
         out[o++]=s[i++];
     }
     out[o]='\0';
@@ -196,9 +206,11 @@ typedef RpKnown (*rp_lookup_t)(void *ctx, uint32_t kind, const char *url, RpAnsw
 /* The index of a kept page's folder (diag.h): its lines of the kinds this
  * runner answers, each file read when first asked for, and how often each
  * was handed out, so the second job for one address is given the second
- * line kept for it, and a job past the last is given the first again. A
- * kind it does not know is passed over: a later slice's lines answer that
- * slice's requests. */
+ * line kept for it. A job past the last has no line of its own: the page
+ * asked more often than where it was kept, and an answer made up from an
+ * earlier line would run a script or apply a sheet once more than the page
+ * did, so it is unknown (incomplete). A kind it does not know is passed
+ * over: a later slice's lines answer that slice's requests. */
 typedef struct { uint32_t kind; bool came; char *n, *url, *final, *label; char *bytes; size_t len; bool read; unsigned used; } RpEntry;
 typedef struct { char *folder; RpEntry *e; size_t n; bool versioned, damaged; } RpIndex;
 /* An index line's number, which names its file: decimal digits and nothing
@@ -248,13 +260,10 @@ static void rp_index_read(const char *folder, RpIndex *x) {
     free(text);
 }
 static RpKnown rp_index_lookup(void *ctx, uint32_t kind, const char *url, RpAnswer *out) {
-    RpIndex *x=ctx; RpEntry *first=NULL, *fresh=NULL;
-    for(size_t i=0;i<x->n;i++)
-        if(x->e[i].kind==kind && !strcmp(x->e[i].url,url)) {
-            if(first==NULL) first=&x->e[i];
-            if(fresh==NULL && x->e[i].used==0) fresh=&x->e[i];
-        }
-    RpEntry *pick=fresh!=NULL ? fresh : first;
+    RpIndex *x=ctx; RpEntry *pick=NULL;
+    for(size_t i=0;i<x->n && pick==NULL;i++)
+        if(x->e[i].kind==kind && !strcmp(x->e[i].url,url) && x->e[i].used==0)
+            pick=&x->e[i];
     if(pick==NULL) return RP_UNKNOWN;
     pick->used++;
     if(!pick->came) return RP_FAILED;
@@ -293,8 +302,9 @@ static bool rp_unfinished;
 static bool rp_trip_expected, rp_navigated;
 
 /* One REPLAY line: `head`, then `data` written as a page file writes data
- * (diag.c): a byte that would break the line, and a backslash, escaped,
- * and a token with its second letter percent-encoded. */
+ * (diag.c): a byte that would break the line, and a backslash, escaped, a
+ * token with its second letter percent-encoded, and a `%` a reader would
+ * take for part of a spelling as `%25`. */
 static void rp_line(const char *head, const char *data) {
     size_t n=strlen(head)+strlen(data)*4+32;
     rp_lines=realloc(rp_lines,rp_lines_len+n);
@@ -303,6 +313,8 @@ static void rp_line(const char *head, const char *data) {
     for(const char *s=data; *s; s++) {
         unsigned char c=(unsigned char)*s;
         if(!strncmp(s,"MISSING",7) || !strncmp(s,"FAILED",6)) { o+=sprintf(o,"%c%%%02X",s[0],(unsigned char)s[1]); s++; }
+        else if(c=='%' && (!strncmp(s+1,"25",2) || (s>data && s[-1]=='M' && !strncmp(s+1,"49SSING",7)) ||
+                           (s>data && s[-1]=='F' && !strncmp(s+1,"41ILED",6)))) o+=sprintf(o,"%%25");
         else if(c=='\\') o+=sprintf(o,"\\\\");
         else if(c<0x20 || c==0x7F) o+=sprintf(o,"\\x%02X",c);
         else *o++=(char)c;
@@ -696,7 +708,30 @@ static void rp_replay_one(const char *kept, const char *out, const char *name, u
     rp_index_free(&index); free(bytes); rp_record_free(&r);
 }
 
+/* The `*.txt` names in `dir`, which a replay's OUT-DIR holds as records. */
+static unsigned rp_count_records(const char *dir) {
+    DIR *d=opendir(dir);
+    unsigned n=0;
+    for(struct dirent *e; d!=NULL && (e=readdir(d))!=NULL; ) {
+        size_t len=strlen(e->d_name);
+        n+=len>4 && !strcmp(e->d_name+len-4,".txt");
+    }
+    if(d!=NULL) closedir(d);
+    return n;
+}
+
+/* A whole replay (no `only`) is written into an OUT-DIR that holds no
+ * records yet, and refused otherwise: a record left from an earlier run,
+ * for a page since removed or no longer replayable, would be read by the
+ * diff as that page's. A partial one (`only`) may add to one, and says how
+ * many records there were before it. */
 static int rp_replay_dir(const char *kept, const char *out, uint64_t budget_ms, const char *only, RpTally *t) {
+    unsigned before=rp_count_records(out);
+    if(only==NULL && before!=0) {
+        fprintf(stderr,"replay: %s already holds %u records; a whole replay is written into an empty "
+                       "or new directory\n",out,before);
+        return 2;
+    }
     DIR *d=opendir(kept);
     if(d==NULL) { fprintf(stderr,"replay: cannot read %s\n",kept); return 2; }
     if(!rp_exists(out) && mkdir(out,0777)!=0) { closedir(d); fprintf(stderr,"replay: cannot make %s\n",out); return 2; }
@@ -718,6 +753,9 @@ static int rp_replay_dir(const char *kept, const char *out, uint64_t budget_ms, 
     if(t->unjudged) printf("; %u unjudged",t->unjudged);
     if(t->leaked) printf("; %u did not let go of what they held",t->leaked);
     if(t->broken) printf("; %u broke the harness",t->broken);
+    if(only!=NULL)
+        printf("; a partial run (--only %s): %s held %u records before it, which stand except those it "
+               "wrote again",only,out,before);
     printf("\n");
     return t->unjudged ? 2 : t->leaked || t->broken ? 1 : 0;
 }
@@ -937,6 +975,39 @@ static unsigned rp_corpus_cases(const char *work, const char *kept, const char *
     }
     free(record); free(dir);
 
+    /* A page that asks for one address more often than where it was kept:
+     * the extra job has no line of its own, so it is not answered from the
+     * first one again (which would run the script twice); it is incomplete.
+     * Then a whole replay into an OUT-DIR that already holds records is
+     * refused, and a partial one adds to it. */
+    dir=rp_cat(work,"/twice","");
+    char *dfolder=rp_cat(dir,"/fixture.test-0001.d","");
+    mkdir(dir,0777); mkdir(dfolder,0777);
+    static const char kTwiceRecord[]="address: http://fixture.test/twice\nverdict: clean\nstatus: 200 OK\n"
+        "final address: http://fixture.test/twice\nbody: html\ncontent-type: text/html\nencrypted: no\n";
+    static const char kTwicePage[]="<!doctype html><p>twice</p><script src=t.js></script><script src=t.js></script>";
+    static const char kTwiceIndex[]="# yonder kept index 1\n1\tscript\thttp://fixture.test/t.js\tcame\thttp://fixture.test/t.js\t\n";
+    char *f1=rp_cat(dir,"/fixture.test-0001.txt",""), *f2=rp_cat(dir,"/fixture.test-0001.html","");
+    char *f3=rp_cat(dfolder,"/index",""), *f4=rp_cat(dfolder,"/1.js","");
+    if(!rp_write(f1,kTwiceRecord,sizeof(kTwiceRecord)-1) || !rp_write(f2,kTwicePage,sizeof(kTwicePage)-1) ||
+       !rp_write(f3,kTwiceIndex,sizeof(kTwiceIndex)-1) || !rp_write(f4,"1",1)) bad++;
+    rc=rp_replay_copy(dir,"fixture.test-0001.txt",60000,&t,&record);
+    if(rc!=0 || t.incomplete!=1 || t.clean!=0 || record==NULL ||
+       strstr(record,"\nREPLAY incomplete script http://fixture.test/t.js\n")==NULL) {
+        printf("  a script asked for twice and kept once was answered twice\n"); bad++;
+    }
+    free(record);
+    char *again=rp_cat(dir,"-out","");
+    RpTally t2={0};
+    if(rp_replay_dir(dir,again,60000,NULL,&t2)!=2 || t2.replayed!=0) {
+        printf("  a whole replay into a directory holding records was not refused\n"); bad++;
+    }
+    memset(&t2,0,sizeof(t2));
+    if(rp_replay_dir(dir,again,60000,"fixture",&t2)!=0 || t2.replayed!=1) {
+        printf("  a partial replay into a directory holding records was refused\n"); bad++;
+    }
+    free(again); free(f1); free(f2); free(f3); free(f4); free(dfolder); free(dir);
+
     /* A page that goes somewhere of its own: the replay stops there, says
      * where it went, and the timer the page set for later never fires. */
     dir=rp_cat(work,"/navigates","");
@@ -983,6 +1054,7 @@ static int rp_self_test(const char *work) {
          "if(o.offsetWidth!=300)sheetUnread();if(o.textContent!='caf\\u00e9')charsetLost();",NULL,NULL},
         {"file:///pages/f.js","document.title='from the file'; setTimeout(function(){ document.body.className='later' },250)",
          NULL,NULL},
+        {"http://fixture.test/M%49SSING/MISSING/s.js","document.body.className='came'",NULL,NULL},
         {NULL,NULL,NULL,NULL}};
     static char deep[16384];
     size_t at=(size_t)snprintf(deep,sizeof(deep),"<p id=t>deep</p>");
@@ -1019,6 +1091,13 @@ static int rp_self_test(const char *work) {
          "<!doctype html><p>no script runs</p><script>nothere()</script>",
          rp_head(200,"OK","text/html","","http://fixture.test/quiet",false,WAY_BODY_HTML),
          "nothere","scripts:",0,true},
+        /* An address holding `M%49SSING` of its own beside MISSING: the
+         * record writes them apart, and the replay must ask for the script
+         * by the same address the page did. */
+        {"an address that spells a token both ways","http://fixture.test/M%49SSING/MISSING/p.html",
+         "<!doctype html><p>percent</p><script src=s.js></script>",
+         rp_head(200,"OK","text/html","","http://fixture.test/M%49SSING/MISSING/p.html",false,WAY_BODY_HTML),
+         NULL,"M%2549SSING/M%49SSING/s.js: ran",0,false},
     };
     const char *dirs[]={"tools/yonder_loop_fixture","tools/yonder_script_fixture","tools/pages"};
     unsigned pages=0, bad=0;

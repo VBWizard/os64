@@ -352,7 +352,17 @@ was shown, or since its record was last written on asking:
   MISSING record, and `grep -c FAILED` is the FAILED count, plus one for
   the verdict when there are any. A byte below 0x20, 0x7F and a backslash
   are written `\xHH` and `\\` on every line, so no message can begin a
-  record line of its own.
+  record line of its own. **The spelling is injective** (Codex on #326):
+  a `%` of the data's own that a reader would take for part of a
+  spelling, one beginning `%25` or one standing where `M%49SSING`'s or
+  `F%41ILED`'s does, is written `%25`, so an address holding a literal
+  `M%49SSING` is written `M%2549SSING` and reads back as itself, never as
+  MISSING; every other `%` (`75%`, `%20`) is written as it is. A reader
+  gets the data's bytes back by undoing `\\` and `\xHH`, then `M%49SSING`,
+  `F%41ILED` and `%25` in one pass from the left (`tools/yonder_tally.py`'s
+  `unescape`, the replay's `rp_unescape`). Records written before this
+  wrote a `%25` of their own as it was, so in those a literal `%25` reads
+  back as `%`.
 - **The kinds are** `global`, `script` (`module`), `element`,
   `css-property`, `css-at-rule`, `css-function`, `css-value` and `font`.
   `css-value` (Fable's round-one P3, ruled in by Chris) is `<property>:
