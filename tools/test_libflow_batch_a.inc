@@ -244,6 +244,23 @@ static void batch_a_cases(void)
         "      block span 0 40 68 20 float-left\n"
         "        line 0 40 68 20 base 14\n"
         "          text \"abcdefghij\" 0 42 68 16 serif 16\n");
+    // A box of no width is still a line to break: break-word cuts its word
+    // to a character a line there, as it does at 1px (measuring min-content
+    // is said by Segs.measuring, never by a width of 0).
+    cascade_layout_case("overflow-wrap: break-word in a box of no width",
+        "<!doctype html><style>body { margin: 0 } div { width: 0; overflow-wrap: break-word }"
+        "</style><div>abc</div>", 200,
+        "page 200 60\n"
+        "block html 0 0 200 60\n"
+        "  block body 0 0 200 60\n"
+        "    block div 0 0 0 60\n"
+        "      line 0 0 0 20 base 14\n"
+        "        text \"a\" 0 2 8 16 serif 16\n"
+        "      line 0 20 0 20 base 14\n"
+        "        text \"b\" 0 22 8 16 serif 16\n"
+        "      line 0 40 0 20 base 14\n"
+        "        text \"c\" 0 42 8 16 serif 16\n");
+
     // ── letter-spacing (CSS Text 3 § 7.2) ──
 
     // It computes to a length, which is what a child inherits: 0.25em of

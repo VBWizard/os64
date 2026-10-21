@@ -722,6 +722,9 @@ typedef struct {
     // text's leading space is the same space and collapses into it. Pass 2
     // could not know — the picture's absence is the face's, at layout.
     bool drop_space;
+    // The segments measure min-content and max-content (ifc_intrinsic),
+    // not a line of a width: what word_pieces cuts differs.
+    bool measuring;
 } Segs;
 
 static Seg *seg_add(L *l, Segs *s, SegKind kind)
@@ -776,8 +779,8 @@ static int64_t space_advance(L *l, const Fonts *f)
 // under `overflow-wrap: anywhere` or `break-word` (and `word-break:
 // break-word`, which is `anywhere`) each is an EMERGENCY one, taken only
 // where the line holds no other — so only a word wider than the line `cw`
-// is cut, or, measuring min-content (`cw` 0), one whose breaks count there,
-// which `break-word`'s do not. Each piece but the last is a segment of its
+// is cut, or, measuring (Segs.measuring), one whose breaks count toward
+// min-content, which `break-word`'s do not. Each piece but the last is a segment of its
 // own, cut at the boundaries the run's carets give, which are its
 // clusters; the start of the last piece is returned for the caller to make
 // it, with the spaces after it, as any word.
@@ -792,7 +795,7 @@ static uint32_t word_pieces(L *l, Segs *s, const FItem *it, const char *text,
         return b0;
     if (!all) {
         int64_t w = caret_x(run, b1 - w0) - caret_x(run, b0 - w0);
-        if (cw > 0 ? w <= cw : !anywhere)
+        if (s->measuring ? !anywhere : w <= cw)
             return b0;
     }
     os64_text_run_view_t v;
@@ -5633,7 +5636,7 @@ static int64_t vframe(const FBox *b, int64_t base)
 // or on a line of its own when it clears (FLOATS.md, Decision 5).
 static Intr ifc_intrinsic(L *l, FBox *ifc)
 {
-    Segs s = {0};
+    Segs s = {.measuring = true};
     segments(l, ifc, 0, &s);
     Intr r = {0, 0};
     // The first line's indent is part of its first word and of the line,
