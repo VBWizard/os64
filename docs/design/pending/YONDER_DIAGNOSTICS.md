@@ -217,8 +217,11 @@ gets plain lines for its fonts at every write, after `sheets:`:
   was abandoned) writes its fonts section from its own rules and the
   families its layout staged, with their MISSING lines — never from the
   files the page on screen fetched.
-- The records: `FAILED font: <address>: <why>` for a file that did not
-  fetch, unwrap or open, or that the page's table of files could not keep,
+- The records: `FAILED font-fetch: <address>: <why>` for a file that did
+  not fetch, unwrap or open (its fetch decided it, which a replay cannot
+  reproduce: § The page kept), `FAILED font` for one never fetched (the
+  page's table of files could not keep it, or the workers would not take
+  it),
   and `MISSING font <family>` for a family with neither a page face nor a
   system family, its count the most lookups one layout made for it (each
   run of text in it, each time a list names it).
@@ -366,7 +369,8 @@ was shown, or since its record was last written on asking:
   wrote a `%25` of their own as it was, so in those a literal `%25` reads
   back as `%`.
 - **The kinds are** `global`, `script` (`module`), `element`,
-  `css-property`, `css-at-rule`, `css-function`, `css-value` and `font`.
+  `css-property`, `css-at-rule`, `css-function`, `css-value` and `font`,
+  and for pictures `picture-scheme` and `image`.
   `css-value` (Fable's round-one P3, ruled in by Chris) is `<property>:
   <words>` for a property libgarb reads, in two shapes. One is a
   declaration dropped though its value is bare words (`display: inline
@@ -463,31 +467,48 @@ file `<name>.txt`:
   kept, and the header says so.
 
 **Each name is claimed as the load begins** (`yonder_diag_claim`): the
-record's file is made where nothing is (os64_open's `x`), and with
-`keep_pages` the `<name>.d/` folder is made fresh and no `<name>.html` may
-be there already; a number that fails any of these is passed over for the
-next. So two yonders writing one directory, or a directory whose `.txt`
-was deleted and whose kept files were not, never pair a record with
+record's file is made where nothing is (os64_open's `x`), no
+`<name>.html` and no `<name>.d` may be there already, kept or not, and
+with `keep_pages` the folder is then made; a number that fails any of
+these is passed over for the next. So two yonders writing one directory,
+a directory whose `.txt` was deleted and whose kept files were not, or a
+keep-off load landing on a kept page's number, never pair a record with
 another's kept files, and the bytes are never renamed over a `.html`
 already there. A folder that kept nothing is removed when the record is
 let go. The claim is what every write under the name takes
-(`yonder_diag_claim_t`), so a record that could make none of 64 names has
-no claim: nothing of it is written, it is said once a run on the status
-line and in the log, and no file of anyone else's is written over.
+(`yonder_diag_claim_t`), so a record that could make none of 64 fresh
+names has no claim: nothing of it is written, it is said once a run on
+the status line and in the log, and no file of anyone else's is written
+over. The record's write proves its claimed file is still there first.
 
-A step of keeping that fails, or a claim that finds a name for the record
-but none in 64 whose kept files are fresh, ends the keeping of that page,
+A step of keeping that fails, or a fresh name whose folder cannot be
+made, ends the keeping of that page,
 is said once a run on the status line and in the log, and leaves the
 plain line `kept: not whole: a step of keeping the page failed` on the
 record. The scripts and
 sheets kept before it stay, and so do the page's bytes if they were
 already whole.
 
-**A replay reproduces a page's script and style, not its pictures or
-fonts**, which are not kept and which it never fetches: its record names
-their kinds on a `REPLAY not reproduced:` line, and the lines of those
-kinds are judged on neither side of a comparison
-(`tools/yonder_corpus_diff.py`).
+**A replay does not reproduce what a fetch it never performs decided**:
+pictures and fonts are not kept and never fetched in a replay. So yonder
+writes those outcomes under kinds of their own, MISSING `image` (a fetched
+picture's format) and FAILED `picture-fetch` and `font-fetch` (what a
+fetch, or the bytes it brought, came to); a replay's record names those
+kinds on a `REPLAY not reproduced:` line, and their lines are judged on
+neither side of a comparison (`tools/yonder_corpus_diff.py`). A picture or
+a font decided without a fetch (`MISSING picture-scheme`, `FAILED
+picture` for an address refused or never asked for, `MISSING font`) is
+reproduced and compared.
+
+**What a record is when it cannot be judged.** A claimed name holds
+`address: ...` and `verdict: unwritten` until the record replaces it, so a
+yonder that dies after claiming leaves a file every reader takes as
+unjudged, never a page that met nothing. And a record that lost ANY line
+(no room in its tables, no memory to keep a line or a value) says so with
+one marker, `REPLAY unjudged: lines lost`, beside the counts of what went;
+every reader takes it as unjudged, since the line it lost may be the one a
+change made. A page kept whole says `kept: whole`, the only kept page a
+replay replays.
 
 **The facts a replay rebuilds the head from**, on every page's record now:
 `final address` (written when the parse ends, so a page let go unshown
@@ -497,9 +518,8 @@ as the server named them (left out when it named none) and `encrypted`
 (`yes`/`no`). A page read with scripts off says `scripts: off`. These,
 `status`, `TLS`, `laid out at` and `kept` have room of their own past the
 512 plain lines a record keeps (`yonder_diag_head_fact`), so a page with
-more plain lines than that never loses one, and a replay judges it; a
-replay refuses only a record with a line that had no memory to be
-written.
+more plain lines than that never loses one of these; it does lose the
+others, and is unjudged.
 
 **A script's line carries its evaluation time**: `script <address>: ran in
 1520 us`, or `failed in ...`, the time `os64_js_run` took, compiling
@@ -531,7 +551,8 @@ now worth trusting.
   <format>`**, named by its first bytes (`yonder_diag_image_format`:
   `svg`, past an XML prolog, `webp`, `avif`, `ico`, `tiff`, or
   `unknown`), with its address on a plain line. A picture that failed
-  any other way is `FAILED picture` (Batch 3).
+  any other way is `FAILED picture-fetch` when its fetch decided it, and
+  `FAILED picture` when it was never fetched (Batch 3; § The page kept).
 - **A script is recorded by its whole address.** The engine's source name
   stops at OS64_JS_SOURCE_NAME_CAP (128); the host keeps each `src`
   script's address and the record names the task's script by it
@@ -603,7 +624,7 @@ each was a page dying on something that browsers have had since the 2000s.
   `pictures: 82, 0 shown`: that was the arrival write, from before any
   picture had come, and the failed picture had no line naming it. Now a
   picture that would not fetch, came with an error, or would not decode
-  is `FAILED picture: <address>: <why>`. The worker writes the why
+  is `FAILED picture-fetch: <address>: <why>`. The worker writes the why
   (`yonder_picture_t.why`): `HTTP 404`, `did not fetch (tls-failed)`,
   `could not be read`, `would not decode (malformed image)`. An error's
   body is no longer decoded as the picture: an HTML 404 page used to be

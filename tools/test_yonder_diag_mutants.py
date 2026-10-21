@@ -105,7 +105,7 @@ mutants = [
      '        why = ((void)os64_mkdir(dir), NULL);', WINDOW),
     # The pictures that were not shown.
     ('a-failed-picture-is-only-counted', YONDER,
-     '        os64_snprintf(line, sizeof(line), "%s: %s", url, why);\n        yonder_diag_failed(p->diag, "picture", line);',
+     '        os64_snprintf(line, sizeof(line), "%s: %s", url, why);\n        yonder_diag_failed(p->diag, asked != NULL ? "picture" : "picture-fetch", line);',
      '        os64_snprintf(line, sizeof(line), "%s: %s", url, why);', WINDOW),
     ('an-undecoded-picture-is-not-named', YONDER,
      '        yonder_diag_fact(p->diag, key, why);',

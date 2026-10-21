@@ -4129,7 +4129,7 @@ static void diag_picture_case(void) {
           "diag: unsupported WebP keeps both the format census and animation reason");
     check(g.page.waiting==0 && has(file,"\nwritten: when its pictures and fonts were in\n") &&
         has(file,"\npictures: 5, 0 shown, 5 could not be read, 0 past the memory kept, 0 still coming, 0 not asked for\n") &&
-        has(file,"FAILED picture: file:///absent.png"),
+        has(file,"FAILED picture-fetch: file:///absent.png"),
         "diag: the last picture in rewrites the file, every failure named");
     /* A picture of a page already gone takes nothing to zero: no write. */
     int writes=fake_writes;
@@ -4140,12 +4140,12 @@ static void diag_picture_case(void) {
     bool all_failed=true;
     for(int i=0;i<5;i++) all_failed=all_failed && g.page.pics[i].state==PIC_FAILED;
     check(has(text,"\nverdict: 1 MISSING, 4 FAILED\nMISSING image svg (1)\n") && all_failed,
-        "diag: a picture in a format yonder lacks is MISSING image; one that failed otherwise is FAILED picture");
+        "diag: a picture in a format yonder lacks is MISSING image; one whose fetch failed otherwise is FAILED picture-fetch");
     check(has(text,"\npicture file:///logo.svg: svg, which yonder does not decode\n") &&
-        has(text,"\nFAILED picture: file:///broken.png: would not decode (malformed image) (1)\n") &&
-        has(text,"\nFAILED picture: http://x.test/gone.png: HTTP 404 (1)\n") &&
-        has(text,"\nFAILED picture: http://x.test/far.png: did not fetch (tls-failed) (1)\n") &&
-        has(text,"\nFAILED picture: file:///absent.png: could not be read (1)\n"),
+        has(text,"\nFAILED picture-fetch: file:///broken.png: would not decode (malformed image) (1)\n") &&
+        has(text,"\nFAILED picture-fetch: http://x.test/gone.png: HTTP 404 (1)\n") &&
+        has(text,"\nFAILED picture-fetch: http://x.test/far.png: did not fetch (tls-failed) (1)\n") &&
+        has(text,"\nFAILED picture-fetch: file:///absent.png: could not be read (1)\n"),
         "diag: every picture not shown is named by its address, with the worker's why");
     yonder_diag_free(g.page.diag); g.page.diag=NULL;
     probe_drop();
@@ -5581,7 +5581,7 @@ static void webfont_cases(void) {
         pictures_settle();
         const char *file=diag_file("/tmp/diag",name);
         check(!g.page.record_owed && has(file,"\nwritten: when its pictures and fonts were in\n") &&
-              has(file,"FAILED font: https://fixture.test/gone.ttf: HTTP 404") &&
+              has(file,"FAILED font-fetch: https://fixture.test/gone.ttf: HTTP 404") &&
               has(file,"\nfont face 1: Web 400 normal: https://fixture.test/gone.ttf failed\n"),
               "web fonts: then the file names the font that failed");
     }
@@ -6480,7 +6480,7 @@ static void webfont_cases(void) {
     check(font_land("b.ttf",NULL,"HTTP 404") && s_web.files[0].state==WF_FAILED && s_web.moved,
           "web fonts: a failed file");
     yonder_diag_render(g.page.diag,record,sizeof(record));
-    check(strstr(record,"FAILED font: https://fixture.test/b.ttf: HTTP 404")!=NULL,
+    check(strstr(record,"FAILED font-fetch: https://fixture.test/b.ttf: HTTP 404")!=NULL,
           "web fonts: the failure is on the record");
     pictures_settle();
     check(web_file("https://fixture.test/c.ttf")==1 && s_web.files[1].state==WF_WAITING,
@@ -6681,7 +6681,7 @@ static void webfont_cases(void) {
     check(font_land("w.ttf","A",NULL) && s_web.files[0].state==WF_FAILED,
           "web fonts: past the held bytes, a file refused room fails");
     yonder_diag_render(g.page.diag,record,sizeof(record));
-    check(strstr(record,"FAILED font: https://fixture.test/w.ttf: no room to open it")!=NULL,
+    check(strstr(record,"FAILED font-fetch: https://fixture.test/w.ttf: no room to open it")!=NULL,
           "web fonts: and says why");
     font_open_refusals=0;
     s_web.held_bytes=0;

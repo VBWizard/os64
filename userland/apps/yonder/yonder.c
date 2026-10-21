@@ -3849,8 +3849,10 @@ static bool picture_moves_page(const Page *p, int32_t pic)
 // A picture that will not be shown, on the page's record by its address:
 // an unsupported format or variant is asked for and not had, MISSING image
 // <format>, with the address on a plain line; one that could not be asked
-// for (`asked`, the reason), would not fetch, came with an error the
-// server answered, or would not decode is FAILED picture.
+// for (`asked`, the reason) is FAILED picture; one whose fetch decided it
+// (it would not fetch, came with an error the server answered, or would
+// not decode) is FAILED picture-fetch, a kind of its own because a replay,
+// which fetches no picture, cannot reproduce it (MISSING image is one too).
 static void picture_failed(Page *p, const char *url, const yonder_picture_t *product,
                            const char *asked)
 {
@@ -3869,7 +3871,7 @@ static void picture_failed(Page *p, const char *url, const yonder_picture_t *pro
                                        product->why[0] != '\0' ? product->why : "no picture came");
         char line[OS64_FETCH_URL_MAX + 80];
         os64_snprintf(line, sizeof(line), "%s: %s", url, why);
-        yonder_diag_failed(p->diag, "picture", line);
+        yonder_diag_failed(p->diag, asked != NULL ? "picture" : "picture-fetch", line);
     }
     badge_follow();
 }
@@ -4591,14 +4593,18 @@ static const char *webfonts_refusal(os64_font_status_t st)
                                        : "would not open";
 }
 
-// A file is failed: named in the page's record, and the badge told.
-static void webfonts_fail(WebFontFile *w, const char *why)
+// A file is failed: named in the page's record, and the badge told. One
+// whose fetch decided it (`fetched`: the job came back, or its bytes would
+// not open) is FAILED font-fetch, a kind of its own because a replay,
+// which fetches no font, cannot reproduce it; one never fetched is FAILED
+// font.
+static void webfonts_fail(WebFontFile *w, const char *why, bool fetched)
 {
     w->state = WF_FAILED;
     w->failed_layout = geometry_layout_total;
     char line[OS64_FETCH_URL_MAX + 80];
     os64_snprintf(line, sizeof(line), "%s: %s", w->url, why);
-    yonder_diag_failed(g.page.diag, "font", line);
+    yonder_diag_failed(g.page.diag, fetched ? "font-fetch" : "font", line);
     badge_follow();
     // The record is written again once nothing is out and the page is laid
     // out (diag_pictures_in), whichever way the failure came.
@@ -4633,9 +4639,9 @@ static void webfonts_feed(bool laid)
             w->state = WF_READY;
             w->ready_layout = geometry_layout_total;
         } else if (st == OS64_FONT_LIMIT || st == OS64_FONT_NO_MEMORY)
-            webfonts_fail(w, "no room to open it");
+            webfonts_fail(w, "no room to open it", true);
         else
-            webfonts_fail(w, webfonts_refusal(st));
+            webfonts_fail(w, webfonts_refusal(st), true);
         webfonts_move();
     }
     // A size refused for room gets one more layout: the tree that held the
@@ -4694,7 +4700,7 @@ static void webfonts_feed(bool laid)
         }
         if (why != NULL) {
             s_web.waiting--;
-            webfonts_fail(w, why);
+            webfonts_fail(w, why, false);
             webfonts_move();
         } else {
             w->state = WF_WAITING;
@@ -4719,7 +4725,7 @@ static void webfonts_unhold(void)
         os64_free(w->sfnt);
         w->sfnt = NULL;
         s_web.held_bytes -= w->sfnt_len;
-        webfonts_fail(w, "no room to open it");
+        webfonts_fail(w, "no room to open it", true);
     }
 }
 
@@ -4760,7 +4766,7 @@ static void webfont_arrived(const yonder_webfont_job_t *job, yonder_webfont_t *p
             why = webfonts_refusal(st);
     }
     if (why != NULL) {
-        webfonts_fail(w, why);
+        webfonts_fail(w, why, true);
     } else {
         w->state = WF_READY;
         w->ready_layout = geometry_layout_total;
@@ -4783,7 +4789,7 @@ static void webfonts_orphaned(void)
         if (w->state != WF_WAITING)
             continue;
         s_web.waiting--;
-        webfonts_fail(w, "the workers stopped");
+        webfonts_fail(w, "the workers stopped", false);
         webfonts_move();
         any = true;
     }
