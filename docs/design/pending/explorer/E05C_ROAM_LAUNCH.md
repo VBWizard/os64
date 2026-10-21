@@ -56,6 +56,8 @@ were association persistence and a compact Open With browser. The refinement
 passes host and native checks; independent review and its P5 acceptance remain
 pending. See [refinement evidence](evidence/e05c/open-with/README.md).
 
+Open With refinement implementation `2800bef2` is pushed to PR #325.
+
 ## Handoff
 
 Next: independent review and P5 acceptance of the Open With refinement in

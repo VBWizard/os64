@@ -1092,3 +1092,6 @@ button-event driver was unreliable; controlled HMP press/release passed.
 Temporary diagnostics were removed before clean-build validation.
 
 Next: independent review and Chris’s P5 acceptance of the refinement in #325.
+
+Publication: refinement `2800bef2` is pushed to PR #325. The PR remains a draft
+on `userland`, awaiting independent review and P5 feedback.
