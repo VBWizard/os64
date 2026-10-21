@@ -117,6 +117,11 @@ Click the Settings icon in the title bar.
   PAUSED with what the frame took.
 - **Reduce motion**: tells pages you would rather see less movement; many
   turn their animations off when told.
+- **Modern web surface**: everything the Modern Web work has added to what
+  a page's scripts and style sheets can use. On unless `yonder.conf` says
+  `modern = off`. If a site that used to work stops working, turn it off
+  and the site gets the yonder it had before; the next page you open takes
+  the change, and that page's diagnostics file says `modern: off`.
 - **Apply** changes this window from the next page on. **Save as default**
   also writes the settings to `yonder.conf`, where every new yonder reads
   them.

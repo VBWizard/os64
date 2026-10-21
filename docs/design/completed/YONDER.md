@@ -128,6 +128,12 @@ remaining gates before recommending scripts for ordinary browsing.
   `motion = reduce`, has pages told `prefers-reduced-motion: reduce`;
   otherwise they are told `no-preference`. Apply re-judges the cascade
   and lays the page out again.
+- **Modern web surface**, on a row of its own: the Modern Web arc's kill
+  switch (MODERN_WEB.md, rule 4), `modern = on | off`, on when absent. A
+  navigation captures it beside the parser mode and the page keeps it, so
+  Apply reaches the next page and not the one on screen; a page made with
+  it off has none of the arc's globals or CSS properties, and its record
+  says `modern: off`.
 - **yonder's loop waits on its own window**, so a thread waits on the
   dialog's (without taking its events) and rings a doorbell on yonder's;
   the loop pumps the dialog and tells the thread it has. One ring is out

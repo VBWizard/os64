@@ -456,3 +456,134 @@ From 2026-10-07, so they are not re-argued from scratch:
 - Every PR states: the WPT directory and its count before and after, the
   corpus count before and after, and the P5 reading if the slice claims a
   speed.
+
+## As built
+
+### Slice 0a, as built
+
+Built by Opus on `opus/tmw-0a-runner`, from MODERN_WEB_BRIEFS.md § Slice
+0a and Quinn's finding 9 on the design review (the expectations' three
+sections), which arrived while it was built.
+
+**The runner.** `tools/wpt_fetch.sh` checks out WPT at `a699fb16` (shallow,
+partial, sparse: the briefs' directories, `resources`, `common`, and the
+suite's own `tools`) into `.vendor/wpt`, and builds WPT's `MANIFEST.json`
+over what is checked out (about 20 s; again only when the pin or the list
+moves). `tools/wpt/pages.py` turns the manifest's testharness entries under
+a directory into the pages a window can load. The manifest was the brief's
+first choice and it works on the sparse checkout; the filename rules the
+brief gave are kept as the fallback for a box without Python, and on
+`dom/nodes` the two agree on all 361 pages. `tools/test_yonder_wpt_host.c`
+includes the scripted-page host whole for its fakes (its `main` behind
+`YONDER_HOST_FAKES_ONLY`), and both build through
+`tools/yonder_host_build.sh`, so a WPT page takes the path a network page
+takes in yonder. The page is `http://wpt.test/<dir>/<page>`; scripts and
+sheets under that origin come from the checkout, `testharnessreport.js`
+from `tools/wpt/` (it writes the results into a `<pre
+id=os64-wpt-results>` the runner reads from the tree, each test's message
+included), and everything else, pictures and fonts too, fails as an
+unreachable fetch. The window's clock moves 10 ms a turn once the loop is
+idle, up to 60 s (180 s for a long-timeout page), and the microsecond clock
+behind a script task's deadline moves 1 ms a read, so a script that never
+ends is ended. Two runs of a directory print the same lines; `dom/nodes`
+takes about 20 s.
+
+**The expectations** are `tools/wpt/expected/<dir>.txt`, headed by the WPT
+commit, in three sections: `[required]` (each must pass, or the run fails
+naming it), `[passing]` (the baseline: a lost pass fails the run, a new one
+is listed) and `[excluded]` (a page not run, with its reason). `--update`
+rewrites `[passing]` alone. A page whose harness did not end OK fails
+whole: a pass it reported prints as a FAIL that says so. `--modern-off`
+runs the window with the switch off, to show the required tests are the
+slice's own. `--selftest` holds the runner to `tools/wpt/selftest/` both
+ways (file names and a fixture manifest) and the sections to their rules.
+
+**What the builder decided.** `.window.js` tests are run (the brief said
+not): WPT generates the same window page for them as for a `.any.js`'s
+window variant, so nothing about them is out of reach. Not run, and
+counted by reason on the summary: worker and shadow-realm variants, and XML
+documents (`.xhtml`, `.svg`; 47 in `dom/nodes`), since yonder parses HTML.
+`timeout=long` raises the runner's budget, though the harness inside yonder
+still gives such a page 10 s: it reads `meta.name`, and the binding has no
+`HTMLMetaElement`. The Settings box applies from the next page, not the one
+on screen. The fakes are shared by inclusion, not moved: slice 0b's replay
+runner can include the same file the same way.
+
+**The table.** `userland/libdom/modern.c`: a row is `{names, install}`, the
+NULL-terminated list of what it puts on window and its installer, walked by
+`d_modern_install` at the end of `os64_dom_create` when
+`os64_dom_options_t.modern` is set (the default). The DOM host holds the
+rows to their names (`tools/test_dom_modern.inc`): window's own names with
+the switch on, less those with it off, must equal the table's, so a slice's
+row needs no case of its own to prove its switch. A row that leaves an
+engine exception pending fails the creation (QuickJS's function
+constructors swallow an out-of-memory in `length` and `name`; the full
+installer sweep found one).
+
+**The first row: the interface objects**, cherry-picked from `8a6cca6d`
+with Chris's authorship and then made whole to their own rule (one
+interface per prototype of the binding's, or `instanceof` lies). HTMLElement
+had shared Element's prototype, so an SVG element was an HTMLElement; HTML
+elements now have a prototype of their own (`D_PROTO_HTML_ELEMENT`). The
+anchor, script and link prototypes, which arrived after the parked commit,
+get their interfaces. `Node` carries the node-type and document-position
+constants on itself and its prototype. `new DocumentFragment()` constructs;
+`new Document()` is an Illegal constructor.
+
+**The CSS side.** `Prop`, the shorthand table and the alias table carry
+`modern` (false everywhere today). `garb_read_declaration` takes a
+`garb_reading_t {quirks, modern_off}`; `garb_env_t.modern_off` carries the
+answer through a cascade (declarations, `@supports`, `var()`-held
+properties, the skip tally); a marked longhand leaves an unmarked
+shorthand's answer; libdom's style object has no member for a marked
+property while the switch is off. `GARB_MODERN_PROBE` lets the host suites
+prove the mark before anything is marked.
+
+**yonder.** `modern = on | off` (`yonder_settings_saved_modern`; absent is
+on, another word is on and said on the status line), a Settings box, the
+switch captured per navigation beside `scripting` and kept by the page for
+its life, handed to the script host and to the page's cascade, and a
+`modern: off` fact line in the page file.
+
+**Numbers.**
+
+| | before | after |
+|---|---|---|
+| `dom/nodes` pass | 844 of 4397 | 858 of 4406 |
+| harness errors (failing whole) | 69 | 67 |
+| `[required]` | — | 14, all passing; all 14 fail with `--modern-off` |
+| DOM host | 3734 / 21296 checks | 3794 / 22148, 0 failed |
+| scripted-page host | 5842 | 5888, 0 failed |
+
+The fourteen required tests are Node's eight constant tests, the two
+`DocumentFragment` constructor tests, `DocumentFragment.prototype`'s
+`getElementById`, `Node-cloneNode`'s `createDocumentFragment`, and the two
+`getElementsByTagName('*')` tests, which read `child.ELEMENT_NODE`. The
+parked shape, with no constants, had counted 905 on the runner's first
+draft: Node-cloneNode's `createElement` tests passed only while
+`Node.ELEMENT_NODE` was undefined, which skipped their checks of
+`attributes`, which the binding lacks.
+
+Why the rest of `dom/nodes` fails, by the harness's messages: 488 read a
+frame's document (`iframe`); 271 `createElementNS` and 213
+`setAttributeNS`; 307 expect a `DOMException` (the binding throws named
+Errors, LIBDOM.md § Budgets and errors); 282 `document.implementation`; 123
+`MutationObserver` (slice 5); 94 `createProcessingInstruction`; 65
+`DOMParser`; 94 CharacterData's `substringData`/`replaceData`/
+`insertData`/`deleteData`; 16 `attachShadow`. None is excluded: they run
+and fail, and the counts say why.
+
+The census: of the 1601 page records now on the P5 (the brief counted
+401), 181 name `Element`, `HTMLElement` or `Node` as a missing global (162
+`Element`, 43 `HTMLElement` with 529 asks, 12 `Node`), and 218 name at least
+one of this row's fifteen names. The interface names still missing most
+often are `NodeList`, `HTMLCollection` and seven `SVG*List`s (37 records
+each, one script), `HTMLIFrameElement` (23), `HTMLEmbedElement` and
+`HTMLMediaElement` (21), `EventTarget` (14).
+
+**Booked**: the interface objects for HTML elements that share
+HTMLElement's prototype, and `Text`/`Comment` and their constructors, in
+DEBTS.md § Classic browser scripting; the classic installers' trust in the
+engine's function constructors, there too. The mutant harnesses were not
+run (the briefs' rule); their anchors were checked against the changed
+files.

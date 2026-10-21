@@ -481,6 +481,12 @@ whatever it answered, and so does the creation: QuickJS's function
 constructors define `length` and `name` without saying when that ran out
 of memory.
 
+The style object follows the same switch for the CSS the arc adds: a
+property libgarb marks (`garb_prop_modern`) has no camel-case member while
+the option is clear, and a declaration of it is read as one libgarb does
+not know (`garb_reading_t.modern_off`), so `'aspectRatio' in el.style` and
+`setProperty` answer as they did before the arc.
+
 The first row is the interface objects (`classic.c`'s
 `d_interfaces_install`): `Node`, `CharacterData`, `DocumentFragment`,
 `Document`, `Element`, `HTMLElement` and the HTML element interfaces that

@@ -13,7 +13,7 @@ MODERN_WEB.md and its brief here is struck.
 
 | Slice | Builder | Reviewer | After |
 |---|---|---|---|
-| 0a the runner and the switch | Opus | Fable (the table), Chris | `userland` |
+| 0a the runner and the switch | Opus | Fable (the table), Chris | **Built** (MODERN_WEB.md § Slice 0a, as built) |
 | 0b the tally and the replay corpus | Opus | Chris | `userland`, beside 0a |
 | 1a storage and the small globals | Opus | Chris | 0a's table |
 | 1b the window's view, scroll and history | Opus | Chris | 0a's table |
@@ -117,111 +117,19 @@ caller", no history. Every comment the diff touches or makes false
 elsewhere is re-read before the PR opens. `tools/stale_refs.sh` before any
 commit that renames or removes a name.
 
-## Slice 0a: the runner and the switch
+## Slice 0a — built
 
-**Build.** Four things, one PR.
-
-1. **`tools/wpt_fetch.sh`**: a sparse, shallow checkout of
-   web-platform-tests at ONE pinned commit (a variable at the top of the
-   script; today's `main` is fine, written as a full SHA) into
-   `.vendor/wpt` (already in `.gitignore`), of the directories a list in
-   the script names: `resources`, `common`, `dom/nodes`, and the
-   directories the other briefs name (add them now so the fan-out finds
-   them: `webstorage`, `url`, `encoding`, `hr-time`, `user-timing`,
-   `cssom-view`, `html/browsers/history`, `css/cssom`, `css/mediaqueries`,
-   `fetch/api`, `xhr`, `html/semantics/scripting-1/the-script-element`,
-   `css/css-logical`, `css/css-sizing`, `css/css-images`, `css/css-text`,
-   `css/css-ui`, `css/css-overflow`). `git init`, `remote add`,
-   `fetch --depth 1 origin <sha>`, `sparse-checkout set <dirs>`,
-   `checkout FETCH_HEAD`. Re-running with the checkout present moves it to
-   the pin without re-fetching what it has. The box reaches GitHub (checked
-   2026-10-21).
-2. **The runner, `tools/test_yonder_wpt_host.c` and `.sh`**, on the
-   headless binding. The binding is `tools/test_yonder_scripts_host.c`:
-   it `#include`s `userland/apps/yonder/yonder.c` with `main` renamed and
-   fakes the OS (files, the work pool, fonts, the clocks) around it. Its
-   shape to reuse, read before designing: `stream_window()` builds a
-   window; `start_trip` + `yonder_mail_post_head` + `stream_post_body` +
-   `stream_post_verdict` deliver a page as the worker would;
-   `loop_settle()` turns the loop until nothing is owed; `script_land(tail,
-   source)` and `sheet_land` answer a `<script src>` or sheet job by the
-   tail of its address; `now_ms` and `clock_us` are the fake clocks a case
-   moves. The fakes live inside that file as statics. Two ways to reuse
-   them, your call, both used in the tree: include that file with its
-   `main` renamed (how it includes `test_js_port_host.c`; its unused case
-   functions then need `-Wno-unused-function` for the runner's unit under
-   `-Werror`), or move the fakes into a shared `tools/yonder_host_fakes.inc`
-   both files include (cleaner; touches a file four mutant harnesses name
-   by path, so check `tools/test_*_mutants.py` still anchor, per
-   `tools/anchorcheck.py` if it is in the kit, else by reading them).
-   The runner: arguments `--wpt <checkout> --dir <dir> --expect <file>
-   [--update] [--only <substring>]`. For each `.html` under the directory
-   (not `-ref.html`, not under `support/` or `resources/`), and for each
-   `.any.js` (which WPT runs through a generated wrapper: synthesise
-   `<!doctype html><script src=/resources/testharness.js></script><script
-   src=/resources/testharnessreport.js></script><script src=X.any.js>
-   </script>` for the window variant, reading the file's `// META:
-   script=` lines for extra scripts), deliver the page at
-   `http://wpt.test/<dir>/<file>`, answer every script and sheet job whose
-   path is under the checkout from the file, fail any other, then settle
-   with the clock ADVANCED between idle turns (10 ms a turn, which is the
-   tick) up to a virtual budget of 60 s so `step_timeout` and the harness's
-   own timeout fire deterministically. The results: our
-   `tools/wpt/testharnessreport.js` (served for `/resources/
-   testharnessreport.js` INSTEAD of the checkout's empty one) calls
-   `add_completion_callback` and appends an element, id
-   `os64-wpt-results`, whose text is one line per test, `PASS|FAIL|
-   TIMEOUT|NOTRUN <tab> <name>`, plus the harness status; the runner walks
-   the tree for that id after settle (the fixtures' `probe_text_is` shows
-   the walk). A page that never reports is `TIMEOUT` for the file. Output:
-   one line per test, a summary (`dom/nodes: 412 pass, 93 fail, 8 timeout
-   of 513`), and against `--expect`: new passes listed (add them), lost
-   passes listed and EXIT 1. `--update` rewrites the file, sorted, one
-   `<file>\t<test name>` per line. Document the runner in VERIFICATION.md
-   where the host suites are listed.
-3. **The switch and the table.** `os64_dom_options_t` gains `bool modern`
-   (default true in `os64_dom_default_options`). `userland/libdom/
-   modern.c` holds `d_modern_install(dom, ctx, global)`, called from
-   `os64_dom_create` after `d_window_install`, which walks a static table
-   `{ const char *name; int (*install)(os64_dom_t *, JSContext *,
-   JSValueConst global); }` when the option is set and returns at once
-   when it is not. The first row is the interface objects: cherry-pick
-   `8a6cca6d` (`opus/arc-interface-objects`: `Element`, `HTMLElement`,
-   `Node`, `Document`, `CharacterData`, `DocumentFragment`, the form and
-   image interfaces as Illegal constructors over the binding's own
-   prototypes, with `tools/test_dom_classic.inc` cases) and move its
-   install from `d_classic_install` into the table's row; its cases then
-   run with the option on and prove the names ABSENT with it off. In
-   libgarb, `Prop` in `props.c` gains `bool modern` (false for every
-   property today) and the parse is told whether marked properties are
-   known: find the one place a declaration's name is looked up in
-   `kProps` and give it the answer through the structure that already
-   reaches it (the parse's options or environment; NOT a global), so a
-   marked property with the switch off is unknown, which yonder already
-   records as `MISSING css-property`. yonder: `yonder_settings_saved_
-   modern()` reads `modern = on | off` from `yonder.conf` (absent is ON;
-   a value that is neither is refused loudly on the status line and read
-   as on), the Settings window gains the checkbox ("Modern web surface",
-   Apply and Save as default like the others, so `yonder_settings_open`
-   grows a parameter and a callback), and the one answer is handed to
-   libdom (`options.modern`) and to libgarb at every parse. A page file
-   fact line `modern: off` when it is off, so a record taken with the
-   switch off is never mistaken for a regression.
-4. **Acceptance.** Run the runner on `dom/nodes` before and after the
-   interface objects; commit both expectation states (the first commit
-   carries the "before"). Web.archive.org's player and DuckDuckGo's base
-   bundle are the P5 acceptance (tell Chris what to open).
-
-**Left to the builder.** The fakes' sharing; the runner's test
-discovery details (WPT's `.window.js` and `.worker.js` variants are NOT
-run: say so in VERIFICATION.md); how `.any.js` META lines are honoured
-(`script=` yes; `global=` picks the window variant only; `timeout=long`
-raises the virtual budget); whether the Settings checkbox needs a restart
-or applies to the next page (next page is enough; say which).
-
-**PR states.** `dom/nodes` before and after; the tally of records naming
-`Element`, `HTMLElement`, `Node` (grep the P5 files; 0b's tool may not
-exist yet).
+The brief is retired in favour of [MODERN_WEB.md § Slice 0a, as built](MODERN_WEB.md#slice-0a-as-built),
+which records the runner, the expectations' three sections, the table, the
+libgarb mark and the yonder switch as they ended up, with the numbers. What
+the fan-out needs from it: a global is a row in `userland/libdom/modern.c`
+(`{names, install}`, the names being exactly what the installer puts on
+window, which `tools/test_dom_modern.inc` holds it to); a CSS property is a
+row of `libgarb/props.c`'s table with `modern` set; a WPT directory is a
+line in `tools/wpt_fetch.sh`'s list and a `tools/wpt/expected/<dir>.txt`
+whose `[required]` names the tests that must pass and whose `[passing]` is
+committed before the code (`tools/test_yonder_wpt_host.sh <dir> --update`
+writes it; `--modern-off` shows the required tests are the slice's own).
 
 ## Slice 0b: the tally and the replay corpus
 
