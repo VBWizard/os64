@@ -70,6 +70,47 @@ upstream of the reviewer, not a filter on it.
   and ring-boundary work. Userland apps, GUI, and polish slices get reviewed
   here and merged.
 
+**THREE PASSES BEFORE CODEX SEES A PR (ruled 2026-10-21, after PR #327's
+evidence):** the builder builds, then three different minds read the diff,
+in this order, before Chris asks Codex for round 1.
+
+1. **The builder's own adversarial pass.** Not a review: the checklist a
+   careful author runs before asking for one. Every error branch and every
+   I/O path in the diff, asked "a short read, a missing file, a directory
+   where a file should be, a size past the cap, out of memory right here,
+   the same call twice, a failure between a temp write and its rename, a
+   name with a tab or newline in it": add the case, or say in the PR why it
+   cannot happen. The author built the mental model the code embodies and
+   checks the code against it, which is where the bugs live, so this pass
+   takes the cheap ones off the table and no more.
+2. **A cold reader.** ONE fresh Opus agent with nothing in its head but the
+   diff, the PR body and this file's opening rules: no brief, no builder
+   context, told to find what the author could not see, in Codex's shape
+   (file and line, one-sentence defect, a concrete failing input, verified
+   on the host where it can be). The builder fixes what survives and the
+   PR body gains a "Cold read" section saying what was found. One agent,
+   never a fan-out: this is a stranger reading, not a committee.
+3. **Fable's read:** architecture and design, plus the files that carry
+   lifetime, concurrency or ring-boundary risk. Fable rules what is a
+   defect and what is a design call, and a text-only fix never goes to
+   Chris.
+
+Then Codex, by the rules above. **If a Codex round is not clean, the PR
+goes back in-house** (the builder fixes, a cold reader reads the whole diff
+again, Fable reads) before Chris asks for the next round, so his hand-offs
+are one per PR at the end rather than one per finding, and the builders'
+caches stay warm because the loop is machine-paced. The done rule is
+unchanged: a clean round, or two text-only rounds in a row.
+
+The evidence, for whoever doubts the cost: #327 under Codex alone took six
+rounds for eighteen findings, every one legitimate and nearly all of them
+I/O edge cases in one file. After the three passes its next round was
+clean. #326, given the passes first, had a cold read find nine things
+Codex never raised (the regression gate passing broken pages among them)
+and Codex then find seven the cold reader never raised. The two reviewers
+see different things; the passes do not replace Codex, they make its
+rounds count.
+
 ## Project Overview
 
 os64 is a 64-bit x86 operating system kernel built for educational purposes. It uses the Limine bootloader protocol and boots on QEMU (or real hardware) in both BIOS and UEFI modes.
