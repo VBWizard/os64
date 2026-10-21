@@ -423,6 +423,10 @@ static void element(Buf *b, const FStyles *styles, const os64_html_node_t *n,
         putf(b, " word-break=%s", kWordBreak[s->word_break]);
     if (s->overflow_wrap != parent->overflow_wrap)
         putf(b, " overflow-wrap=%s", kOverflowWrap[s->overflow_wrap]);
+    if (s->letter_spacing != parent->letter_spacing) {
+        puts_(b, " letter-spacing=");
+        unit(b, s->letter_spacing);
+    }
     if (s->text_decoration & FLOW_DECORATION_UNDERLINE)
         puts_(b, " underline");
     if (s->text_decoration & FLOW_DECORATION_LINE_THROUGH)

@@ -72,6 +72,11 @@ typedef struct {
     /* Positive cell advance selects grid mode: one decoded input unit per
      * cell, no pair kerning. Grid mode accepts LATIN1 or CP437, not UTF-8. */
     os64_font_pos_t cell_advance;
+    /* Tracking (CSS Text 3 § 7.2): added after every cluster but a tab and
+     * the run's last, so none trails the run. A negative one narrows a
+     * cluster to no less than nothing: carets never go back. Grid mode
+     * takes none (BAD_ARGUMENT). */
+    os64_font_pos_t letter_spacing;
 } os64_text_layout_t;
 
 typedef struct {

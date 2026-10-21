@@ -59,6 +59,7 @@ typedef struct {
     Len flex_basis, row_gap, column_gap;     // AUTO: auto, and `normal`
     Len min_width, max_width, min_height, max_height;
     Len text_indent;                // UNSET: as inherited
+    Len letter_spacing;             // UNSET: as inherited
     FsKind fs_kind;
     int32_t fs_v;
     bool border_color_set[4];
@@ -387,6 +388,7 @@ static flow_style_t inherit(const Ctx *c, const flow_style_t *parent)
     s.text_transform = parent->text_transform;
     s.word_break = parent->word_break;
     s.overflow_wrap = parent->overflow_wrap;
+    s.letter_spacing = parent->letter_spacing;
     s.text_shadows = parent->text_shadows;
     s.ntext_shadows = parent->ntext_shadows;
     s.pixelated = parent->pixelated;
@@ -1883,6 +1885,10 @@ static void take(Spec *dst, const Spec *src, garb_prop_t prop)
     case GARB_TEXT_TRANSFORM: d->text_transform = s->text_transform; break;
     case GARB_WORD_BREAK: d->word_break = s->word_break; break;
     case GARB_OVERFLOW_WRAP: d->overflow_wrap = s->overflow_wrap; break;
+    case GARB_LETTER_SPACING:
+        dst->letter_spacing = src->letter_spacing;
+        d->letter_spacing = s->letter_spacing;
+        break;
     case GARB_TEXT_DECORATION_LINE: d->text_decoration = s->text_decoration; break;
     case GARB_VISIBILITY: d->visibility = s->visibility; break;
     case GARB_LIST_STYLE_TYPE: d->list_style_type = s->list_style_type; break;
@@ -2035,6 +2041,7 @@ static void initial_spec(const Ctx *c, Spec *out)
     out->min_width = out->max_width = out->min_height = out->max_height = kAuto;
     out->flex_basis = out->row_gap = out->column_gap = kAuto;
     out->text_indent = px(c, 0);
+    out->letter_spacing = px(c, 0);
     out->fs_kind = FS_KEYWORD;
     out->fs_v = 3;                                      // medium
 }
@@ -2070,6 +2077,7 @@ static void inherited_spec(const Ctx *c, const flow_style_t *parent, Spec *out)
     out->row_gap = len_of(parent->row_gap);
     out->column_gap = len_of(parent->column_gap);
     out->text_indent = len_of(parent->text_indent);
+    out->letter_spacing = (Len){L_PX, parent->letter_spacing, 0};
     out->fs_kind = FS_PX;
     out->fs_v = parent->font_size;
 }
@@ -3051,6 +3059,13 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
         if (v->kind == GARB_V_LENGTH || v->kind == GARB_V_PERCENTAGE || v->kind == GARB_V_CALC)
             author_len(a, v, false, &sp->text_indent);
         break;
+    case GARB_LETTER_SPACING:
+        // `normal` is no spacing (Text 3 § 7.2).
+        if (v->kind == GARB_V_KEYWORD)
+            sp->letter_spacing = (Len){L_PX, 0, 0};
+        else
+            author_len(a, v, false, &sp->letter_spacing);
+        break;
     case GARB_TEXT_TRANSFORM: {
         static const char *const words[] = {"none", "uppercase", "lowercase", "capitalize"};
         i = pick(v, words, F_ARRAY(words));
@@ -3630,6 +3645,10 @@ static void finish(const Ctx *c, Spec *sp, const flow_style_t *parent, bool item
     settle_box(c, s, item, root);
     if (sp->text_indent.kind != L_UNSET)
         s->text_indent = resolve(sp->text_indent, s->font_size, zero);
+    if (sp->letter_spacing.kind != L_UNSET) {
+        flow_length_t ls = resolve(sp->letter_spacing, s->font_size, zero);
+        s->letter_spacing = ls.kind == FLOW_LENGTH_PX ? ls.value : 0;
+    }
     s->min_width = resolve(sp->min_width, s->font_size, automatic);
     s->max_width = resolve(sp->max_width, s->font_size, automatic);
     s->min_height = resolve(sp->min_height, s->font_size, automatic);

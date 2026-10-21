@@ -678,6 +678,10 @@ typedef struct {
     // `keep-all` is `normal`: libflow breaks a line only at white space.
     flow_word_break_t word_break;
     flow_overflow_wrap_t overflow_wrap;
+    // `letter-spacing` (CSS Text 3 § 7.2), inherited: added after every
+    // character of a run of text but its last, so none trails a line; 0
+    // is `normal`. Negative narrows, never past a character's own start.
+    flow_unit_t letter_spacing;
     // This element's own decorations. CSS draws an ancestor's across its
     // descendants too, each in the colour of the element that drew it,
     // which is a fact libflow derives and not a property of the descendant.

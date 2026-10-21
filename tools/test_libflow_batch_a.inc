@@ -128,7 +128,54 @@ static void batch_a_cases(void)
         "      block span 0 40 68 20 float-left\n"
         "        line 0 40 68 20 base 14\n"
         "          text \"abcdefghij\" 0 42 68 16 serif 16\n");
+    // ── letter-spacing (CSS Text 3 § 7.2) ──
+
+    // It computes to a length, which is what a child inherits: 0.25em of
+    // 16 is 4, and the p's 32px font does not make it 8. normal is 0.
+    cascade_case("letter-spacing computes to a length, and that is inherited", 800,
+        "<!doctype html><style>div { letter-spacing: 0.25em } p { font-size: 32px }"
+        " span { letter-spacing: normal }</style><div><p>a<span>b</span></p></div>",
+        PAGE_OPEN
+        "  body block margin=8/8/8/8 holds-block\n"
+        "    div block letter-spacing=4 holds-block\n"
+        "      p block size=32 margin=32/0/32/0\n"
+        "        span inline letter-spacing=0\n");
+    // 2px after every character of a run but its last: "ab cd" is a 8, b
+    // 8, the space 4, c 8, d 8 and four spacings, 44. Two runs, ab and the
+    // b element's cd, each lose their last: 18 and 18. Measured for
+    // breaking, ab and its space are 20 + 6 and cd 18 more, past 40: ab
+    // ends its line, drawn 18 wide without its space. 0.25em of 8px is 2,
+    // after a's 4: ab is 10.
+    cascade_layout_case("letter-spacing: after every character of a run but the last",
+        "<!doctype html><style>body { margin: 0 } p { margin: 0; letter-spacing: 2px }</style>"
+        "<p>ab cd</p><p>ab<b>cd</b></p><p style='width: 40px'>ab cd</p>"
+        "<p style='letter-spacing: 0.25em; font-size: 8px'>ab</p>", 200,
+        "page 200 90\n"
+        "block html 0 0 200 90\n"
+        "  block body 0 0 200 90\n"
+        "    block p 0 0 200 20\n"
+        "      line 0 0 200 20 base 14\n"
+        "        text \"ab cd\" 0 2 44 16 serif 16\n"
+        "    block p 0 20 200 20\n"
+        "      line 0 20 200 20 base 14\n"
+        "        span b 18 22 18 16\n"
+        "        text \"ab\" 0 22 18 16 serif 16\n"
+        "        text \"cd\" 18 22 18 16 serif 16 bold\n"
+        "    block p 0 40 40 40\n"
+        "      line 0 40 40 20 base 14\n"
+        "        text \"ab\" 0 42 18 16 serif 16\n"
+        "      line 0 60 40 20 base 14\n"
+        "        text \"cd\" 0 62 18 16 serif 16\n"
+        "    block p 0 80 200 10\n"
+        "      line 0 80 200 10 base 7\n"
+        "        text \"ab\" 0 81 10 8 serif 8\n");
+
     s_modern_off = true;
+    cascade_case("letter-spacing: unknown with the Modern Web switch off", 800,
+        "<!doctype html><style>div { letter-spacing: 3px }</style><div>a</div>",
+        PAGE_OPEN
+        "  body block margin=8/8/8/8 holds-block\n"
+        "    div block\n");
     cascade_layout_case("word-break: unknown with the Modern Web switch off",
         "<!doctype html><style>body { margin: 0 } div { width: 40px; word-break: break-all }"
         "</style><div>abcdefghij</div>", 200,

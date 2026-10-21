@@ -317,7 +317,7 @@ static bool keep_run(L *l, os64_text_run_t *run)
 // in the engine's 32-bit coordinates however far along the line the run
 // starts.
 static os64_text_run_t *run_of(L *l, const Fonts *f, const char *text, uint32_t n,
-                               int64_t tab_origin, int64_t tab_interval)
+                               int64_t tab_origin, int64_t tab_interval, flow_unit_t spacing)
 {
     if (l->failed)
         return NULL;
@@ -328,6 +328,7 @@ static os64_text_run_t *run_of(L *l, const Fonts *f, const char *text, uint32_t 
         .font_count = f->count,
         .tab_origin = (os64_font_pos_t)(tab_origin % interval),
         .tab_interval = (os64_font_pos_t)interval,
+        .letter_spacing = spacing,
     };
     os64_text_run_t *run = NULL;
     if (os64_text_layout(l->env->text, (const uint8_t *)text, n, &opt, &run) != OS64_FONT_OK) {
@@ -345,7 +346,7 @@ static os64_text_run_t *run_of(L *l, const Fonts *f, const char *text, uint32_t 
 // A measuring run, or NULL with the engine's reason, failing nothing: the
 // caller decides whether LIMIT means "try less".
 static os64_text_run_t *run_try(L *l, const Fonts *f, const char *text, uint32_t n,
-                                int64_t tab_interval, os64_font_status_t *why)
+                                int64_t tab_interval, flow_unit_t spacing, os64_font_status_t *why)
 {
     os64_text_layout_t opt = {
         .encoding = OS64_TEXT_UTF8_WESTERN_V1,
@@ -353,6 +354,7 @@ static os64_text_run_t *run_try(L *l, const Fonts *f, const char *text, uint32_t
         .font_count = f->count,
         .tab_origin = 0,
         .tab_interval = (os64_font_pos_t)(tab_interval > 0 ? tab_interval : 64 * 8),
+        .letter_spacing = spacing,
     };
     os64_text_run_t *run = NULL;
     *why = os64_text_layout(l->env->text, (const uint8_t *)text, n, &opt, &run);
@@ -722,7 +724,7 @@ static bool ends_in_space(const Segs *s)
 static int64_t space_advance(L *l, const Fonts *f)
 {
     os64_font_status_t why;
-    os64_text_run_t *run = run_try(l, f, " ", 1, 0, &why);
+    os64_text_run_t *run = run_try(l, f, " ", 1, 0, 0, &why);
     if (run == NULL)
         return 0;
     int64_t w = caret_x(run, 1);
@@ -820,7 +822,8 @@ static void text_segments(L *l, Segs *s, const FItem *it, const char *text, uint
         os64_text_run_t *run = NULL;
         for (;;) {
             os64_font_status_t why;
-            run = l->failed ? NULL : run_try(l, &f, text + w0, w1 - w0, tab_interval, &why);
+            run = l->failed ? NULL : run_try(l, &f, text + w0, w1 - w0, tab_interval,
+                                                        style->letter_spacing, &why);
             if (run != NULL || l->failed || why != OS64_FONT_LIMIT)
                 break;
             uint32_t half = w0 + (w1 - w0) / 2;
@@ -894,7 +897,7 @@ static int64_t tab_interval_for(L *l, const flow_style_t *block)
     Fonts f;
     if (!fonts_for(l, block, &f))
         return 0;
-    os64_text_run_t *run = run_of(l, &f, " ", 1, 0, 64);
+    os64_text_run_t *run = run_of(l, &f, " ", 1, 0, 64, 0);
     if (run == NULL)
         return 0;
     int64_t w;
@@ -1082,7 +1085,7 @@ static void segments(L *l, FBox *ifc, int64_t cw, Segs *s)
             Fonts f;
             if (!fonts_for(l, it->style, &f))
                 return;
-            os64_text_run_t *run = run_of(l, &f, it->text, it->len, 0, 0);
+            os64_text_run_t *run = run_of(l, &f, it->text, it->len, 0, 0, 0);
             if (run == NULL)
                 return;
             os64_text_run_view_t v;
@@ -1587,7 +1590,7 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
                     // Tabs stop where the LINE's stops are, whatever this
                     // fragment starts after.
                     os64_text_run_t *run = run_of(l, &f, g->text + b0, b1 - b0,
-                                                  pre ? -pen : 0, tabs);
+                                                  pre ? -pen : 0, tabs, g->style->letter_spacing);
                     if (run == NULL || !keep_run(l, run))
                         break;
                     FFrag *fr = frag_add(l, line, FF_TEXT, rel_x, rel_y);
@@ -1717,7 +1720,7 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
                 Fonts f;
                 if (!fonts_for(l, g->style, &f))
                     break;
-                os64_text_run_t *run = run_of(l, &f, g->text, g->b1, 0, 0);
+                os64_text_run_t *run = run_of(l, &f, g->text, g->b1, 0, 0, 0);
                 if (run == NULL || !keep_run(l, run))
                     break;
                 FFrag *fr = frag_add(l, line, FF_MARKER, rel_x, rel_y);
@@ -2343,7 +2346,7 @@ static void place_marker(L *l, const FStyles *styles, FBox *b, int64_t content_x
     Fonts f;
     if (!fonts_for(l, b->style, &f))
         return;
-    os64_text_run_t *run = run_of(l, &f, b->marker, b->marker_len, 0, 0);
+    os64_text_run_t *run = run_of(l, &f, b->marker, b->marker_len, 0, 0, 0);
     if (run == NULL || !keep_run(l, run))
         return;
     FFrag *fr = alloc(l, sizeof(*fr));
