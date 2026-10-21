@@ -263,13 +263,24 @@ static char *wpt_attr(const char *tag, const char *end, const char *name) {
     return NULL;
 }
 
-/* An HTML test's <meta name=`name` content=...> lines: whether one says
- * `content` (NULL: any), each one's content added to `all` when it is
- * given. A variant is one, and so is a long timeout. */
-static bool wpt_html_meta(const char *html, const char *name, const char *content, wpt_list_t *all) {
+/* The first `needle` in the `len` bytes at `hay`, which may hold a NUL;
+ * NULL for none. */
+static const char *wpt_find(const char *hay, size_t len, const char *needle) {
+    size_t n=strlen(needle);
+    for(size_t i=0;n<=len && i<=len-n;i++)
+        if(hay[i]==needle[0] && memcmp(hay+i,needle,n)==0) return hay+i;
+    return NULL;
+}
+
+/* An HTML test's <meta name=`name` content=...> lines, in its `len` bytes:
+ * whether one says `content` (NULL: any), each one's content added to
+ * `all` when it is given. A variant is one, and so is a long timeout. */
+static bool wpt_html_meta(const char *html, size_t len, const char *name, const char *content,
+                          wpt_list_t *all) {
     bool found=false;
-    for(const char *p=html;(p=strstr(p,"<meta"))!=NULL;p++) {
-        const char *end=strchr(p,'>');
+    const char *stop=html+len;
+    for(const char *p=html;(p=wpt_find(p,(size_t)(stop-p),"<meta"))!=NULL;p++) {
+        const char *end=memchr(p,'>',(size_t)(stop-p));
         if(end==NULL) break;
         char *said=wpt_attr(p+5,end,"name"), *value=wpt_attr(p+5,end,"content");
         if(said!=NULL && value!=NULL && strcasecmp(said,name)==0 &&
@@ -370,9 +381,9 @@ static void wpt_consider(const char *source, const char *rel) {
                     source,checkout_rel,any ? WPT_ANY : WPT_WINDOW,-1);
         }
         wpt_meta_free(&m);
-    } else if(strstr(bytes,"/resources/testharness.js")!=NULL) {
+    } else if(wpt_find(bytes,len,"/resources/testharness.js")!=NULL) {
         wpt_list_t variants={0};
-        wpt_html_meta(bytes,"variant",NULL,&variants);
+        wpt_html_meta(bytes,len,"variant",NULL,&variants);
         if(variants.n==0) wpt_list_add(&variants,wpt_strdup(""));
         for(size_t i=0;i<variants.n;i++)
             wpt_page_add(wpt_fmt("%s%s",rel,variants.v[i]),source,checkout_rel,WPT_HTML,-1);
@@ -382,25 +393,42 @@ static void wpt_consider(const char *source, const char *rel) {
     free(bytes);
 }
 
-/* Every file under `path`, which is `rel` below <dir>, in name order. */
-static void wpt_walk(const char *path, const char *rel) {
+/* Every file under `path`, which is `rel` below <dir>, in name order.
+ * False, having said why, when a directory cannot be listed or an entry in
+ * it cannot be looked at: a directory the walk could not read is not a
+ * directory with no tests in it, and taking it for one would let --update
+ * drop the passes of the pages inside. */
+static bool wpt_walk(const char *path, const char *rel) {
     DIR *d=opendir(path);
-    if(d==NULL) return;
+    if(d==NULL) { fprintf(stderr,"wpt: cannot list %s: %s\n",path,strerror(errno)); return false; }
     wpt_list_t names={0};
-    for(struct dirent *e;(e=readdir(d))!=NULL;)
+    bool ok=true;
+    for(;;) {
+        errno=0;
+        struct dirent *e=readdir(d);
+        if(e==NULL) {
+            if(errno!=0) { fprintf(stderr,"wpt: cannot list %s: %s\n",path,strerror(errno)); ok=false; }
+            break;
+        }
         if(strcmp(e->d_name,".") && strcmp(e->d_name,"..")) wpt_list_add(&names,wpt_strdup(e->d_name));
+    }
     closedir(d);
     wpt_list_settle(&names);
-    for(size_t i=0;i<names.n;i++) {
+    for(size_t i=0;ok && i<names.n;i++) {
         char *child=wpt_join(path,names.v[i]), *child_rel=wpt_join(rel,names.v[i]);
         struct stat st;
-        if(stat(child,&st)==0 && S_ISDIR(st.st_mode) && !wpt_skipped_dir(names.v[i]))
-            wpt_walk(child,child_rel);
-        else if(stat(child,&st)==0 && S_ISREG(st.st_mode))
+        if(stat(child,&st)!=0) {
+            fprintf(stderr,"wpt: cannot look at %s: %s\n",child,strerror(errno));
+            ok=false;
+        } else if(S_ISDIR(st.st_mode)) {
+            if(!wpt_skipped_dir(names.v[i])) ok=wpt_walk(child,child_rel);
+        } else if(S_ISREG(st.st_mode)) {
             wpt_consider(child,child_rel);
+        }
         free(child); free(child_rel);
     }
     wpt_list_free(&names);
+    return ok;
 }
 
 // ── Serving the page and what it asks for ─────────────────────────────────
@@ -598,8 +626,10 @@ static void wpt_run(const wpt_page_t *page, wpt_outcome_t *out) {
         out->why="its source is missing, past the size a file may have here, or did not read whole";
         return;
     }
-    len=strlen(html);
-    if(page->kind==WPT_HTML) long_timeout=wpt_html_meta(html,"timeout","long",NULL);
+    /* A test's own bytes go to the parser as many as they are, a NUL among
+     * them included; the page made for a script test is a C string. */
+    if(page->kind!=WPT_HTML) len=strlen(html);
+    if(page->kind==WPT_HTML) long_timeout=wpt_html_meta(html,len,"timeout","long",NULL);
     if(page->long_timeout>=0) long_timeout=page->long_timeout;
     char *url=wpt_fmt("%s%s/%s",WPT_ORIGIN,wpt_dir,page->name);
     stream_window();
@@ -812,7 +842,7 @@ int main(int argc, char **argv) {
     wpt_list_t skipped={0};
     bool found=true;
     if(pages!=NULL) found=wpt_read_pages(pages,&skipped);
-    else wpt_walk(top,"");
+    else found=wpt_walk(top,"");
     free(top);
     wpt_expect_t e;
     bool judged=found && wpt_expect_read(expect,&e);

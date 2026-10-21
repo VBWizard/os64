@@ -63,6 +63,14 @@ if [ "$1" = --selftest ]; then
     mkdir "$work/wpt"
     ln -s "$(realpath "$checkout/resources")" "$work/wpt/resources"
     cp -r tools/wpt/selftest "$work/wpt/selftest"
+    # A test with a NUL byte before its test: the parser must be fed the
+    # whole page, not the page up to its first NUL. Made here, since a NUL
+    # is not something to keep in a text file in the tree.
+    printf '<!doctype html>\n<title>The runner'"'"'s own: a NUL in a page</title>\n<!-- \0 -->\n%s\n%s\n%s\n' \
+        '<script src="/resources/testharness.js"></script>' \
+        '<script src="/resources/testharnessreport.js"></script>' \
+        '<script>test(function() {}, "a page with a NUL byte in it is fed to the parser whole");</script>' \
+        > "$work/wpt/selftest/nul.html"
     cp tools/wpt/selftest.expect "$work/expect.txt"
 
     run --expect "$work/expect.txt"
@@ -188,6 +196,24 @@ if [ "$1" = --selftest ]; then
     run --expect "$work/short.txt" --short-read "$work/short.txt" --update
     [ "$rc" -eq 2 ] && cmp -s "$work/lost.txt" "$work/short.txt" ||
         fail "an expectation file read short was taken, or rewritten (exit $rc)"
+
+    # Found by file name, a directory the walk cannot list is not a
+    # directory with no tests: the run cannot be judged and --update writes
+    # nothing. The page beside it keeps the run from being empty, so it is
+    # the unlisted directory alone that has to refuse it. (Root reads any
+    # directory, so there is nothing to prove.)
+    if [ "$(id -u)" -ne 0 ]; then
+        mkdir "$work/wpt/selftest/locked"
+        cp tools/wpt/selftest/pass-fail.html "$work/wpt/selftest/locked/"
+        chmod 000 "$work/wpt/selftest/locked"
+        cp "$work/lost.txt" "$work/locked.txt"
+        run --expect "$work/locked.txt" --only pass-fail --update
+        chmod 755 "$work/wpt/selftest/locked"
+        [ "$rc" -eq 2 ] && cmp -s "$work/lost.txt" "$work/locked.txt" ||
+            fail "a directory that could not be listed was taken for an empty one (exit $rc)"
+    else
+        echo "wpt selftest: running as root, so the unlistable-directory case is not run" >&2
+    fi
 
     echo "wpt selftest: the runner's pages ran as tools/wpt/selftest.out says, found either way;" \
         "the expectations' three sections hold, unreadable ones and faulted runs are refused," \
