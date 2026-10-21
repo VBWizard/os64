@@ -457,6 +457,11 @@ static void element(Buf *b, const FStyles *styles, const os64_html_node_t *n,
         putf(b, " opacity=%d.%03d", s->opacity / 1000, s->opacity % 1000);
     if (s->pointer_events_none != parent->pointer_events_none)
         puts_(b, s->pointer_events_none ? " pointer-events=none" : " pointer-events=auto");
+    if (s->cursor != parent->cursor)
+        putf(b, " cursor=%s", f_cursor_words[s->cursor]);
+    static const char *const kUserSelect[] = {"auto", "text", "none", "contain", "all"};
+    if (s->user_select != FLOW_USER_SELECT_AUTO)
+        putf(b, " user-select=%s", kUserSelect[s->user_select]);
     if (s->flex_direction != FLOW_FLEX_ROW)
         putf(b, " flex-direction=%s", s_direction[s->flex_direction]);
     if (s->flex_wrap != FLOW_FLEX_NOWRAP)

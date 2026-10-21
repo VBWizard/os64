@@ -361,7 +361,7 @@ static flow_style_t initial(const Ctx *c)
     // insets, z-index auto, and a row that does not wrap, its alignments
     // normal, its items growing by nothing from an auto basis, order 0,
     // and gaps of normal; no grid tracks or areas, auto-placement by rows,
-    // and auto lines; and no transform.
+    // and auto lines; no transform; and the cursor and user-select auto.
     return s;
 }
 
@@ -390,6 +390,7 @@ static flow_style_t inherit(const Ctx *c, const flow_style_t *parent)
     s.pixelated = parent->pixelated;
     s.visibility = parent->visibility;
     s.pointer_events_none = parent->pointer_events_none;
+    s.cursor = parent->cursor;
     s.list_style_type = parent->list_style_type;
     s.list_style_position = parent->list_style_position;
     s.border_spacing[0] = parent->border_spacing[0];
@@ -1904,6 +1905,8 @@ static void take(Spec *dst, const Spec *src, garb_prop_t prop)
         break;
     case GARB_OPACITY: d->opacity = s->opacity; break;
     case GARB_POINTER_EVENTS: d->pointer_events_none = s->pointer_events_none; break;
+    case GARB_CURSOR: d->cursor = s->cursor; break;
+    case GARB_USER_SELECT: d->user_select = s->user_select; break;
     case GARB_FLEX_DIRECTION: d->flex_direction = s->flex_direction; break;
     case GARB_FLEX_WRAP: d->flex_wrap = s->flex_wrap; break;
     case GARB_JUSTIFY_CONTENT: d->justify_content = s->justify_content; break;
@@ -2936,6 +2939,14 @@ static uint8_t will_change_of(const garb_val_t *v)
     return bits;
 }
 
+const char *const f_cursor_words[] = {
+    "auto", "default", "none", "context-menu", "help", "pointer", "progress", "wait", "cell",
+    "crosshair", "text", "vertical-text", "alias", "copy", "move", "no-drop", "not-allowed",
+    "grab", "grabbing", "e-resize", "n-resize", "ne-resize", "nw-resize", "s-resize",
+    "se-resize", "sw-resize", "w-resize", "ew-resize", "ns-resize", "nesw-resize",
+    "nwse-resize", "col-resize", "row-resize", "all-scroll", "zoom-in", "zoom-out"};
+_Static_assert(F_ARRAY(f_cursor_words) == FLOW_CURSOR_ZOOM_OUT + 1, "flow_cursor_t");
+
 static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
 {
     const garb_val_t *v = &set->value;
@@ -3175,6 +3186,17 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
         // SVG's values are auto to an HTML box.
         s->pointer_events_none = is_word(v, "none");
         break;
+    case GARB_CURSOR:
+        if ((i = pick(v, f_cursor_words, F_ARRAY(f_cursor_words))) >= 0)
+            s->cursor = (flow_cursor_t)i;
+        break;
+    case GARB_USER_SELECT: {
+        static const char *const words[] = {"auto", "text", "none", "contain", "all"};
+        _Static_assert(F_ARRAY(words) == FLOW_USER_SELECT_ALL + 1, "flow_user_select_t");
+        if ((i = pick(v, words, F_ARRAY(words))) >= 0)
+            s->user_select = (flow_user_select_t)i;
+        break;
+    }
     case GARB_FLEX_DIRECTION: {
         static const char *const words[] = {"row", "row-reverse", "column", "column-reverse"};
         if ((i = pick(v, words, F_ARRAY(words))) >= 0)

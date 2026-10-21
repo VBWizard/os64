@@ -234,6 +234,27 @@ enum {
 };
 
 typedef enum { FLOW_VISIBLE = 0, FLOW_HIDDEN, FLOW_COLLAPSE } flow_visibility_t;
+
+// `cursor`'s shapes (CSS UI 4 § 5.2), in its order.
+typedef enum {
+    FLOW_CURSOR_AUTO = 0, FLOW_CURSOR_DEFAULT, FLOW_CURSOR_NONE, FLOW_CURSOR_CONTEXT_MENU,
+    FLOW_CURSOR_HELP, FLOW_CURSOR_POINTER, FLOW_CURSOR_PROGRESS, FLOW_CURSOR_WAIT,
+    FLOW_CURSOR_CELL, FLOW_CURSOR_CROSSHAIR, FLOW_CURSOR_TEXT, FLOW_CURSOR_VERTICAL_TEXT,
+    FLOW_CURSOR_ALIAS, FLOW_CURSOR_COPY, FLOW_CURSOR_MOVE, FLOW_CURSOR_NO_DROP,
+    FLOW_CURSOR_NOT_ALLOWED, FLOW_CURSOR_GRAB, FLOW_CURSOR_GRABBING, FLOW_CURSOR_E_RESIZE,
+    FLOW_CURSOR_N_RESIZE, FLOW_CURSOR_NE_RESIZE, FLOW_CURSOR_NW_RESIZE, FLOW_CURSOR_S_RESIZE,
+    FLOW_CURSOR_SE_RESIZE, FLOW_CURSOR_SW_RESIZE, FLOW_CURSOR_W_RESIZE, FLOW_CURSOR_EW_RESIZE,
+    FLOW_CURSOR_NS_RESIZE, FLOW_CURSOR_NESW_RESIZE, FLOW_CURSOR_NWSE_RESIZE,
+    FLOW_CURSOR_COL_RESIZE, FLOW_CURSOR_ROW_RESIZE, FLOW_CURSOR_ALL_SCROLL, FLOW_CURSOR_ZOOM_IN,
+    FLOW_CURSOR_ZOOM_OUT,
+} flow_cursor_t;
+
+// `user-select` (CSS UI 4 § 6.1).
+typedef enum {
+    FLOW_USER_SELECT_AUTO = 0, FLOW_USER_SELECT_TEXT, FLOW_USER_SELECT_NONE,
+    FLOW_USER_SELECT_CONTAIN, FLOW_USER_SELECT_ALL,
+} flow_user_select_t;
+
 typedef enum { FLOW_SEPARATE = 0, FLOW_COLLAPSE_BORDERS } flow_border_collapse_t;
 typedef enum { FLOW_CAPTION_TOP = 0, FLOW_CAPTION_BOTTOM } flow_caption_side_t;
 typedef enum { FLOW_FLOAT_NONE = 0, FLOW_FLOAT_LEFT, FLOW_FLOAT_RIGHT } flow_float_t;
@@ -702,6 +723,13 @@ typedef struct {
     // through the box to whatever is under it, though a descendant that
     // sets `auto` is still hit. Zero is `auto`, the initial value.
     bool pointer_events_none;
+    // `cursor` (CSS UI 4 § 5.2), inherited: the shape a pointer over the
+    // box takes, the keyword after whatever pictures the page named first.
+    // Kept for the face; nothing draws a shape (YONDER_HONEY_DO.md § 7).
+    flow_cursor_t cursor;
+    // `user-select` (CSS UI 4 § 6.1), not inherited: kept for the day text
+    // selection reads it; nothing selects differently by it.
+    flow_user_select_t user_select;
     // A box that leaves the flow — absolute or fixed — has its `display`
     // BLOCKIFIED (CSS 2.1 § 9.7), and this says the display the page gave
     // was inline-level: its static position is where it would have stood

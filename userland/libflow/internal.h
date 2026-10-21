@@ -530,6 +530,9 @@ void f_style_anonymous(const FStyles *styles, const flow_style_t *parent,
 // reads as the rules that fired. Like snprintf, it answers the length the
 // whole dump needs and writes what fits.
 int64_t f_style_dump(const FStyles *styles, char *out, size_t cap);
+// `cursor`'s keywords in flow_cursor_t's order (CSS UI 4 § 5.2): what
+// pass 1 reads a keyword as, and what a dump writes back.
+extern const char *const f_cursor_words[FLOW_CURSOR_ZOOM_OUT + 1];
 
 // ── Pass 2: the box tree (boxes.c) ──────────────────────────────────────
 //
