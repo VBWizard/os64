@@ -30,6 +30,14 @@ static const DModernRow kModern[] = {
                            "HTMLImageElement", "HTMLScriptElement", "HTMLAnchorElement",
                            "HTMLLinkElement", NULL},
      d_interfaces_install},
+    {(const char *const[]){"scrollX", "pageXOffset", "scrollY", "pageYOffset", "innerWidth",
+                           "innerHeight", "outerWidth", "outerHeight", "scroll", "scrollTo",
+                           "scrollBy", "onscroll", "onresize", NULL},
+     d_view_install},
+    {(const char *const[]){"matchMedia", "MediaQueryList", "MediaQueryListEvent", NULL}, d_media_install},
+    {(const char *const[]){"getComputedStyle", NULL}, d_computed_install},
+    {(const char *const[]){"onpopstate", "onhashchange", "PopStateEvent", "HashChangeEvent", NULL},
+     d_history_install},
 };
 
 int d_modern_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)

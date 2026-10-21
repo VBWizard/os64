@@ -441,6 +441,25 @@ int d_interfaces_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     return result;
 }
 
+int d_interface_install(JSContext *ctx, JSValueConst global, const char *name, JSValueConst prototype,
+                        JSValueConst parent, JSCFunction *construct)
+{
+    JSAtom tag = string_tag_key(ctx);
+    if (tag == JS_ATOM_NULL) return -1;
+    JSValue f = construct != NULL ? JS_NewCFunction2(ctx, construct, name, 1, JS_CFUNC_constructor, 0)
+                                  : JS_NewCFunction2(ctx, illegal_constructor, name, 0, JS_CFUNC_constructor_or_func, 0);
+    int result = JS_IsException(f) ? -1 : 0;
+    if (result == 0 && (JS_SetConstructor(ctx, f, prototype) < 0 || string_tag(ctx, prototype, tag, name) < 0 ||
+                        (JS_IsObject(parent) && interface_parent(ctx, f, parent) < 0))) {
+        JS_FreeValue(ctx, f);
+        result = -1;
+    }
+    JS_FreeAtom(ctx, tag);
+    if (result == 0)
+        result = JS_DefinePropertyValueStr(ctx, global, name, f, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE) < 0 ? -1 : 0;
+    return result;
+}
+
 int d_classic_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 {
     if (d_style_install(dom, ctx) < 0) return -1;

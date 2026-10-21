@@ -30,12 +30,15 @@ enum {
  * after it; -1 for Node, which inherits Object's. */
 int d_proto_parent(int kind);
 /* The event types the host dispatches, which are the ones on<type> names
- * and os64_dom_listens count. A script may listen for any other type. */
+ * and os64_dom_listens count. A script may listen for any other type. The
+ * handler properties of the ones from SCROLL on are the Modern Web arc's,
+ * installed by its table's rows (d_handler_install), not with the rest. */
 enum {
     D_EVENT_CLICK, D_EVENT_MOUSEDOWN, D_EVENT_MOUSEUP, D_EVENT_MOUSEOVER,
     D_EVENT_MOUSEOUT, D_EVENT_MOUSEMOVE, D_EVENT_KEYDOWN, D_EVENT_KEYPRESS,
     D_EVENT_KEYUP, D_EVENT_INPUT, D_EVENT_CHANGE, D_EVENT_SUBMIT, D_EVENT_RESET,
-    D_EVENT_FOCUS, D_EVENT_BLUR, D_EVENT_LOAD, D_EVENT_DOM_CONTENT_LOADED,
+    D_EVENT_FOCUS, D_EVENT_BLUR, D_EVENT_LOAD, D_EVENT_SCROLL, D_EVENT_RESIZE,
+    D_EVENT_POPSTATE, D_EVENT_HASHCHANGE, D_EVENT_DOM_CONTENT_LOADED,
     D_EVENT_COUNT
 };
 /* A wrapper, or another engine value the binding holds strongly. A node's
@@ -144,6 +147,36 @@ struct os64_dom {
     char *url;
     DNavigation navigation;
     os64_js_outcome_t report;
+    /* THE VIEW (view.c): the host's provider, and the view as the last
+     * os64_dom_view_step saw it, what its events are owed against. */
+    os64_dom_view_provider_t view;
+    os64_dom_view_t view_seen;
+    /* The view the MediaQueryLists were last judged against. */
+    os64_dom_view_t media_judged;
+    /* getComputedStyle's provider, and the snapshot it writes into, made
+     * at the first read and reused. */
+    os64_dom_computed_provider_t computed;
+    void *computed_opaque;
+    struct os64_dom_computed *snapshot;
+    JSClassID computed_class, media_class;
+    DValue *computed_prototype, *media_prototype, *media_event_prototype;
+    /* The page's MediaQueryLists, in the order they were made (view.c's
+     * DMedia): a list is the binding's while its object lives, and while a
+     * listener holds it. */
+    struct DMedia *media, *media_last;
+    /* HISTORY (window.c): the host's provider; the current entry's state as
+     * JSON, NULL for null; its value, parsed at the first read of
+     * history.state and the same object every read after (`state_read`);
+     * and whether the page asked to keep its own scroll. */
+    os64_dom_history_t history_host;
+    char *entry_state;
+    size_t entry_state_length;
+    DValue *entry_state_value;
+    bool entry_state_read, scroll_manual;
+    DValue *popstate_prototype, *hashchange_prototype;
+    /* JS_GetClassID of a plain object and of an array: the only objects
+     * a state's JSON carries. */
+    JSClassID plain_class, array_class;
 };
 typedef struct { char *data; size_t length; } DString;
 
@@ -192,6 +225,35 @@ int d_handler_attribute_set(os64_dom_t *dom, JSContext *ctx, const os64_html_nod
 int d_dispatch(os64_dom_t *dom, JSContext *ctx, JSValueConst event, const os64_html_node_t *node);
 JSValue d_event_new(os64_dom_t *dom, JSContext *ctx, const char *type, bool bubbles,
                     bool cancelable, bool trusted);
+/* d_event_new with the event's prototype `prototype` when it is an object
+ * (an Event interface's own, PopStateEvent's and the rest), else Event's. */
+JSValue d_event_new_proto(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype, const char *type,
+                          bool bubbles, bool cancelable, bool trusted);
+/* `new Event(type, {bubbles, cancelable})`'s steps, the event's prototype
+ * `prototype` (d_event_new_proto): what an Event interface's constructor
+ * does before it reads the members of its own. */
+JSValue d_event_construct(os64_dom_t *dom, JSContext *ctx, int argc, JSValueConst *argv,
+                          JSValueConst prototype);
+/* One event the host dispatches as one task, as os64_dom_dispatch does: at
+ * `node`, at window (both NULL), or at `lone`, a target that is no node.
+ * `make` builds the Event inside the task (its own prototype and fields);
+ * the caller has already asked whether anything listens. */
+os64_js_status_t d_host_dispatch(os64_dom_t *dom, const os64_html_node_t *node, DValue *lone,
+                                 const char *type, JSValue (*make)(os64_dom_t *, JSContext *, void *),
+                                 void *arg, bool *prevented, os64_js_outcome_t *outcome);
+/* The on<type> property of a handler type (D_EVENT_*) on `target`. */
+int d_handler_install(os64_dom_t *dom, JSContext *ctx, JSValueConst target, int kind);
+/* EventTarget's three methods on `target`, a prototype whose objects
+ * target_entry resolves. */
+int d_target_install(os64_dom_t *dom, JSContext *ctx, JSValueConst target);
+/* MediaQueryList's legacy addListener and removeListener: the `change`
+ * listener `callback` added to or removed from `self`. */
+JSValue d_listener_change(os64_dom_t *dom, JSContext *ctx, JSValueConst self, JSValueConst callback,
+                          bool add);
+/* Whether `self` is a MediaQueryList (view.c): 1 with its target record in
+ * *entry, made the first time it is asked for, 0 when it is something
+ * else, -1 with an exception pending when the record could not be made. */
+int d_media_target(os64_dom_t *dom, JSContext *ctx, JSValueConst self, DValue **entry);
 void d_report(os64_dom_t *dom, JSContext *ctx, JSValueConst error);
 int d_script_mark(os64_dom_t *dom, const os64_html_node_t *node);
 int d_script_mark_tree(os64_dom_t *dom, const os64_html_node_t *root);
@@ -285,6 +347,20 @@ int d_modern_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 const char *d_modern_name(size_t index);
 /* The table's rows' installers, each in the file its slice owns. */
 int d_interfaces_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+int d_view_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+int d_media_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+int d_computed_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+int d_history_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* An interface object `name` on `global` for `prototype`, made as the
+ * interface objects row makes its own (WebIDL § 3.7): the prototype's
+ * `constructor` and Symbol.toStringTag, the object's [[Prototype]]
+ * `parent` when that is an object, and `construct` its constructor, made
+ * constructor-only so it is never just called (it finds its binding with
+ * d_binding), or an Illegal constructor when NULL. */
+int d_interface_install(JSContext *ctx, JSValueConst global, const char *name, JSValueConst prototype,
+                        JSValueConst parent, JSCFunction *construct);
+/* The view's records freed, after the engine (os64_dom_free). */
+void d_view_free(os64_dom_t *dom);
 JSValue d_style(os64_dom_t *dom, JSContext *ctx, JSValueConst self);
 int d_style_install(os64_dom_t *dom, JSContext *ctx);
 extern JSClassExoticMethods d_node_exotic;

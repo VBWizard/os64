@@ -10,7 +10,7 @@ static JSClassID event_slot;
 static const char *const kinds[D_EVENT_COUNT] = {
     "click", "mousedown", "mouseup", "mouseover", "mouseout", "mousemove",
     "keydown", "keypress", "keyup", "input", "change", "submit", "reset",
-    "focus", "blur", "load", "DOMContentLoaded"
+    "focus", "blur", "load", "scroll", "resize", "popstate", "hashchange", "DOMContentLoaded"
 };
 
 enum { PHASE_NONE, PHASE_CAPTURING, PHASE_AT_TARGET, PHASE_BUBBLING };
@@ -38,11 +38,15 @@ static bool has_handler_name(int kind)
     return kind >= 0 && kind != D_EVENT_DOM_CONTENT_LOADED;
 }
 
-/* HTML's "window-reflecting body element event handler set", as far as the
- * types dispatched here reach: the body's onload is window's. */
+/* HTML's "window-reflecting body element event handler set" and the body's
+ * WindowEventHandlers, as far as the types dispatched here reach: the body's
+ * onload is window's, and so are its onscroll, onresize, onpopstate and
+ * onhashchange. */
 static bool window_reflecting(int kind)
 {
-    return kind == D_EVENT_LOAD || kind == D_EVENT_FOCUS || kind == D_EVENT_BLUR;
+    return kind == D_EVENT_LOAD || kind == D_EVENT_FOCUS || kind == D_EVENT_BLUR ||
+        kind == D_EVENT_SCROLL || kind == D_EVENT_RESIZE || kind == D_EVENT_POPSTATE ||
+        kind == D_EVENT_HASHCHANGE;
 }
 
 static void event_finalizer(JSRuntime *rt, JSValue value)
@@ -71,7 +75,14 @@ static uint64_t now_ms(const os64_dom_t *dom)
 JSValue d_event_new(os64_dom_t *dom, JSContext *ctx, const char *type, bool bubbles,
                     bool cancelable, bool trusted)
 {
-    JSValue object = JS_NewObjectClass(ctx, dom->event_class);
+    return d_event_new_proto(dom, ctx, JS_UNDEFINED, type, bubbles, cancelable, trusted);
+}
+
+JSValue d_event_new_proto(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype, const char *type,
+                          bool bubbles, bool cancelable, bool trusted)
+{
+    JSValue object = JS_IsObject(prototype) ? JS_NewObjectProtoClass(ctx, prototype, dom->event_class)
+                                            : JS_NewObjectClass(ctx, dom->event_class);
     if (JS_IsException(object)) return object;
     DEvent *event = js_mallocz(ctx, sizeof(*event));
     char *copy = event != NULL ? js_strdup(ctx, type) : NULL;
@@ -514,6 +525,9 @@ typedef struct {
     os64_js_outcome_t *host;
     /* HTML's load at window reads the document as its target. */
     bool document_target;
+    /* A target that is no node and not window (a MediaQueryList): the
+     * path is it alone. */
+    DValue *lone;
 } Dispatch;
 
 /* One step of the path: the target's records whose capture flag fits the
@@ -591,17 +605,19 @@ static bool element_has_handler(const os64_html_node_t *node, int kind)
 
 /* The DOM Standard's dispatch, for one event at one target: the path is the
  * target's ancestors and, past the document, window (except for load);
- * capture down, the target, then bubble up when the event bubbles. */
+ * capture down, the target, then bubble up when the event bubbles. A lone
+ * target (d->lone) is its path alone. */
 static int dispatch(Dispatch *d, const os64_html_node_t *node)
 {
     os64_dom_t *dom = d->dom;
     JSContext *ctx = d->ctx;
     DEvent *event = d->event;
     int kind = d_event_kind(event->type);
-    size_t length = 0;
+    size_t length = d->lone != NULL ? 1 : 0;
     const os64_html_node_t *top = node;
+    if (d->lone != NULL) node = NULL;
     for (const os64_html_node_t *at = node; at != NULL; at = at->parent) { length++; top = at; }
-    bool to_window = node == NULL || (top == document_node(dom) && kind != D_EVENT_LOAD);
+    bool to_window = d->lone == NULL && (node == NULL || (top == document_node(dom) && kind != D_EVENT_LOAD));
     if (to_window) length++;
     DValue **path = d_alloc(dom, length * sizeof(*path));
     if (path == NULL) {
@@ -609,7 +625,9 @@ static int dispatch(Dispatch *d, const os64_html_node_t *node)
         return -1;
     }
     JSValue target;
-    if (node == NULL)
+    if (d->lone != NULL)
+        target = JS_DupValue(ctx, d->lone->value);
+    else if (node == NULL)
         target = d->document_target ? d_wrap(dom, ctx, document_node(dom)) : JS_DupValue(ctx, dom->window->value);
     else target = d_wrap(dom, ctx, node);
     if (JS_IsException(target)) { d_free(dom, path); return -1; }
@@ -625,6 +643,7 @@ static int dispatch(Dispatch *d, const os64_html_node_t *node)
         path[count++] = entry;
     }
     if (to_window) path[count++] = dom->window;
+    if (d->lone != NULL) path[count++] = d->lone;
     JS_FreeValue(ctx, event->target);
     event->target = target;
     DActiveEvent active = {dom->current_event, JS_DupValue(ctx,d->object)};
@@ -653,9 +672,19 @@ static int dispatch(Dispatch *d, const os64_html_node_t *node)
 
 int d_dispatch(os64_dom_t *dom, JSContext *ctx, JSValueConst object, const os64_html_node_t *node)
 {
-    Dispatch d = {dom, ctx, (JSValue)object, JS_GetOpaque(object, dom->event_class), NULL, false};
+    Dispatch d = {dom, ctx, (JSValue)object, JS_GetOpaque(object, dom->event_class), NULL, false, NULL};
     if (d.event == NULL) { JS_ThrowTypeError(ctx, "Expected an Event"); return -1; }
     return dispatch(&d, node);
+}
+
+/* A script's dispatchEvent at any target: a node, window, or a lone one. */
+static int dispatch_at(os64_dom_t *dom, JSContext *ctx, JSValueConst object, DValue *entry)
+{
+    if (entry == dom->window || entry->node != NULL)
+        return d_dispatch(dom, ctx, object, entry == dom->window ? NULL : entry->node);
+    Dispatch d = {dom, ctx, (JSValue)object, JS_GetOpaque(object, dom->event_class), NULL, false, entry};
+    if (d.event == NULL) { JS_ThrowTypeError(ctx, "Expected an Event"); return -1; }
+    return dispatch(&d, NULL);
 }
 
 static bool define_number(JSContext *ctx, JSValueConst object, const char *name, double value)
@@ -719,6 +748,49 @@ static os64_js_status_t finish_task(os64_dom_t *dom, os64_js_outcome_t *outcome)
     return outcome->status;
 }
 
+os64_js_status_t d_host_dispatch(os64_dom_t *dom, const os64_html_node_t *node, DValue *lone,
+                                 const char *type, JSValue (*make)(os64_dom_t *, JSContext *, void *),
+                                 void *arg, bool *prevented, os64_js_outcome_t *outcome)
+{
+    char name[OS64_JS_SOURCE_NAME_CAP];
+    os64_snprintf(name, sizeof(name), "%s event", type);
+    os64_js_outcome_t begin;
+    if (os64_js_task_begin(dom->runtime, OS64_JS_ABI_ID, name, &begin) != OS64_JS_OK) {
+        *outcome = begin;
+        return outcome->status;
+    }
+    os64_js_outcome_t access;
+    JSContext *ctx = os64_js_context(dom->runtime, OS64_JS_ABI_ID, &access);
+    if (ctx == NULL) return finish_task(dom, outcome);
+    JSValue object = make(dom, ctx, arg);
+    if (JS_IsException(object)) { discard(ctx); return finish_task(dom, outcome); }
+    Dispatch d = {dom, ctx, object, JS_GetOpaque(object, dom->event_class), outcome,
+                  lone == NULL && node == NULL && d_event_kind(type) == D_EVENT_LOAD, lone};
+    /* Engine refusals between the wrapper's calls are latched by libjs and
+     * reported by task_end; the binding's own refusal is reported here. */
+    if (dispatch(&d, node) < 0 && JS_HasException(ctx)) {
+        JSValue error = JS_GetException(ctx);
+        d_report(dom, ctx, error);
+        JS_FreeValue(ctx, error);
+    }
+    if (prevented != NULL) *prevented = d.event->canceled;
+    JS_FreeValue(ctx, object);
+    return finish_task(dom, outcome);
+}
+
+/* A host event as os64_dom_event_t describes it: an Event with its mouse
+ * or key fields. */
+static JSValue host_event(os64_dom_t *dom, JSContext *ctx, void *arg)
+{
+    const os64_dom_event_t *ev = arg;
+    JSValue object = d_event_new(dom, ctx, ev->type, ev->bubbles, ev->cancelable, true);
+    if (!JS_IsException(object) && !event_fields(dom, ctx, object, ev)) {
+        JS_FreeValue(ctx, object);
+        return JS_EXCEPTION;
+    }
+    return object;
+}
+
 os64_js_status_t os64_dom_dispatch(os64_dom_t *dom, const os64_html_node_t *node,
                                    const os64_dom_event_t *ev, bool *prevented,
                                    os64_js_outcome_t *outcome)
@@ -737,35 +809,7 @@ os64_js_status_t os64_dom_dispatch(os64_dom_t *dom, const os64_html_node_t *node
         return outcome->status;
     }
     if (!os64_dom_listens(dom, ev->type)) return OS64_JS_OK;
-    char name[OS64_JS_SOURCE_NAME_CAP];
-    os64_snprintf(name, sizeof(name), "%s event", ev->type);
-    os64_js_outcome_t begin;
-    if (os64_js_task_begin(dom->runtime, OS64_JS_ABI_ID, name, &begin) != OS64_JS_OK) {
-        *outcome = begin;
-        return outcome->status;
-    }
-    os64_js_outcome_t access;
-    JSContext *ctx = os64_js_context(dom->runtime, OS64_JS_ABI_ID, &access);
-    if (ctx == NULL) return finish_task(dom, outcome);
-    JSValue object = d_event_new(dom, ctx, ev->type, ev->bubbles, ev->cancelable, true);
-    if (JS_IsException(object)) { discard(ctx); return finish_task(dom, outcome); }
-    if (!event_fields(dom, ctx, object, ev)) {
-        discard(ctx);
-        JS_FreeValue(ctx, object);
-        return finish_task(dom, outcome);
-    }
-    Dispatch d = {dom, ctx, object, JS_GetOpaque(object, dom->event_class), outcome,
-                  node == NULL && d_event_kind(ev->type) == D_EVENT_LOAD};
-    /* Engine refusals between the wrapper's calls are latched by libjs and
-     * reported by task_end; the binding's own refusal is reported here. */
-    if (dispatch(&d, node) < 0 && JS_HasException(ctx)) {
-        JSValue error = JS_GetException(ctx);
-        d_report(dom, ctx, error);
-        JS_FreeValue(ctx, error);
-    }
-    if (prevented != NULL) *prevented = d.event->canceled;
-    JS_FreeValue(ctx, object);
-    return finish_task(dom, outcome);
+    return d_host_dispatch(dom, node, NULL, ev->type, host_event, (void *)ev, prevented, outcome);
 }
 
 /* Attributes are counted once per tree version: a walk of the connected tree
@@ -819,6 +863,9 @@ static DValue *target_entry(os64_dom_t *dom, JSContext *ctx, JSValueConst self)
     if (JS_IsUndefined(self) || JS_IsNull(self) ||
         (JS_IsObject(self) && JS_VALUE_GET_PTR(self) == JS_VALUE_GET_PTR(dom->window->value)))
         return dom->window;
+    DValue *lone = NULL;
+    int media = d_media_target(dom, ctx, self, &lone);
+    if (media != 0) return media > 0 ? lone : NULL;
     const os64_html_node_t *node = d_node(dom, ctx, self);
     if (node == NULL) return NULL;
     DValue *entry = d_find(dom, node);
@@ -851,11 +898,9 @@ static int listener_options(JSContext *ctx, int argc, JSValueConst *argv, bool *
 
 enum { M_ADD, M_REMOVE, M_DISPATCH };
 
-static JSValue target_method(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv,
-                             int magic, JSValue *data)
+static JSValue target_method_on(os64_dom_t *dom, JSContext *ctx, JSValueConst self, int argc,
+                                JSValueConst *argv, int magic)
 {
-    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
-    if (dom == NULL) return JS_EXCEPTION;
     DValue *entry = target_entry(dom, ctx, self);
     if (entry == NULL) return JS_EXCEPTION;
     if (magic == M_DISPATCH) {
@@ -867,7 +912,7 @@ static JSValue target_method(JSContext *ctx, JSValueConst self, int argc, JSValu
         // A redispatched event stays cancelled: initEvent is the reset, and
         // a vetoed default action must not come back on the second try.
         event->trusted = false;
-        int result = d_dispatch(dom, ctx, argv[0], entry == dom->window ? NULL : entry->node);
+        int result = dispatch_at(dom, ctx, argv[0], entry);
         return result < 0 ? JS_EXCEPTION : JS_NewBool(ctx, result != 0);
     }
     if (argc < 2) return JS_ThrowTypeError(ctx, "Listener methods need a type and a callback");
@@ -904,8 +949,17 @@ static JSValue target_method(JSContext *ctx, JSValueConst self, int argc, JSValu
     return result;
 }
 
-/* on<type> for an element, the document or window. The body's
- * window-reflecting handlers are window's, whichever object is asked. */
+static JSValue target_method(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv,
+                             int magic, JSValue *data)
+{
+    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    if (dom == NULL) return JS_EXCEPTION;
+    return target_method_on(dom, ctx, self, argc, argv, magic);
+}
+
+/* on<type> for an element, the document, window or a lone target (a
+ * MediaQueryList's onchange). The body's window-reflecting handlers are
+ * window's, whichever object is asked. */
 static JSValue handler_property(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv,
                                 int magic, JSValue *data)
 {
@@ -1006,18 +1060,9 @@ static JSValue event_member(JSContext *ctx, JSValueConst self, int argc, JSValue
     }
 }
 
-static JSValue event_construct(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv,
-                               int magic, JSValue *data)
+JSValue d_event_construct(os64_dom_t *dom, JSContext *ctx, int argc, JSValueConst *argv,
+                          JSValueConst prototype)
 {
-    (void)self;
-    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
-    if (dom == NULL) return JS_EXCEPTION;
-    if (magic == 1) {
-        /* document.createEvent: an event initEvent must set up first. */
-        JSValue object = d_event_new(dom, ctx, "", false, false, false);
-        if (!JS_IsException(object)) ((DEvent *)JS_GetOpaque(object, dom->event_class))->initialized = false;
-        return object;
-    }
     if (argc < 1) return JS_ThrowTypeError(ctx, "Event needs a type");
     bool flags[2] = {false, false};
     if (argc > 1 && JS_IsObject(argv[1])) {
@@ -1033,9 +1078,24 @@ static JSValue event_construct(JSContext *ctx, JSValueConst self, int argc, JSVa
     }
     const char *type = JS_ToCString(ctx, argv[0]);
     if (type == NULL) return JS_EXCEPTION;
-    JSValue object = d_event_new(dom, ctx, type, flags[0], flags[1], false);
+    JSValue object = d_event_new_proto(dom, ctx, prototype, type, flags[0], flags[1], false);
     JS_FreeCString(ctx, type);
     return object;
+}
+
+static JSValue event_construct(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv,
+                               int magic, JSValue *data)
+{
+    (void)self;
+    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    if (dom == NULL) return JS_EXCEPTION;
+    if (magic == 1) {
+        /* document.createEvent: an event initEvent must set up first. */
+        JSValue object = d_event_new(dom, ctx, "", false, false, false);
+        if (!JS_IsException(object)) ((DEvent *)JS_GetOpaque(object, dom->event_class))->initialized = false;
+        return object;
+    }
+    return d_event_construct(dom, ctx, argc, argv, JS_UNDEFINED);
 }
 
 static int define_constants(JSContext *ctx, JSValueConst target)
@@ -1108,14 +1168,44 @@ int d_event_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
             d_method(dom, ctx, global, targets[i].name, target_method, targets[i].argc, targets[i].magic) < 0)
             return -1;
     JSValueConst holders[] = {dom->prototypes[D_PROTO_ELEMENT]->value, dom->prototypes[D_PROTO_DOCUMENT]->value, global};
-    for (int kind = 0; kind < D_EVENT_COUNT; kind++) {
+    for (int kind = 0; kind < D_EVENT_SCROLL; kind++) {
         if (!has_handler_name(kind)) continue;
-        char name[32] = "on";
-        os64_strcopy(name + 2, sizeof(name) - 2, kinds[kind]);
         for (size_t i = 0; i < sizeof(holders) / sizeof(holders[0]); i++)
-            if (d_accessor(dom, ctx, holders[i], name, handler_property, kind, true) < 0) return -1;
+            if (d_handler_install(dom, ctx, holders[i], kind) < 0) return -1;
     }
     return d_method(dom, ctx, dom->prototypes[D_PROTO_DOCUMENT]->value, "createEvent", event_construct, 1, 1);
+}
+
+int d_handler_install(os64_dom_t *dom, JSContext *ctx, JSValueConst target, int kind)
+{
+    char name[32] = "on";
+    os64_strcopy(name + 2, sizeof(name) - 2, kinds[kind]);
+    return d_accessor(dom, ctx, target, name, handler_property, kind, true);
+}
+
+int d_target_install(os64_dom_t *dom, JSContext *ctx, JSValueConst target)
+{
+    static const struct { const char *name; int magic, argc; } targets[] = {
+        {"addEventListener", M_ADD, 2}, {"removeEventListener", M_REMOVE, 2}, {"dispatchEvent", M_DISPATCH, 1}
+    };
+    for (size_t i = 0; i < sizeof(targets) / sizeof(targets[0]); i++)
+        if (d_method(dom, ctx, target, targets[i].name, target_method, targets[i].argc, targets[i].magic) < 0)
+            return -1;
+    return 0;
+}
+
+JSValue d_listener_change(os64_dom_t *dom, JSContext *ctx, JSValueConst self, JSValueConst callback,
+                          bool add)
+{
+    /* The legacy addListener(callback): addEventListener("change", callback),
+     * a null callback doing nothing (CSSOM View § MediaQueryList). */
+    if (JS_IsNull(callback) || JS_IsUndefined(callback)) return JS_UNDEFINED;
+    JSValue type = JS_NewString(ctx, "change");
+    if (JS_IsException(type)) return type;
+    JSValueConst args[2] = {type, callback};
+    JSValue result = target_method_on(dom, ctx, self, 2, args, add ? M_ADD : M_REMOVE);
+    JS_FreeValue(ctx, type);
+    return result;
 }
 
 /* Drain: every listener's callback goes with the registry. Records stay, as

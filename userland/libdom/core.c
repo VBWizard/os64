@@ -345,6 +345,7 @@ void os64_dom_free(os64_dom_t *dom)
     }
     d_timer_free(dom);
     d_window_free(dom);
+    d_view_free(dom);
     for (DValue *entry = dom->values; entry != NULL;) {
         DValue *next = entry->next;
         d_event_free(dom, entry);
