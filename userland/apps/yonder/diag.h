@@ -125,16 +125,26 @@ int64_t yonder_diag_keep_bytes_end(yonder_diag_t *d, const char *dir);
 // index names it by.
 typedef enum { YONDER_DIAG_KEPT_SCRIPT, YONDER_DIAG_KEPT_SHEET } yonder_diag_kept_t;
 
-// One sub-resource as the window received it, written whole as the next
-// `<name>.d/<n>.js` or `.css`, and the index written again whole with its
-// line. `url` is the address its job carried, `final` the one it came from
-// after redirects, `label` the charset its response named (a sheet's: a
-// replay parses the bytes again under it; "" for none).
+// One sub-resource as the window received it: when it came, written whole
+// as the next `<name>.d/<n>.js` or `.css`; when its fetch failed (`bytes`
+// NULL), no file, since a replay must fail it as the page saw it fail. The
+// index is written again whole with its line. `url` is the address its job
+// carried, `final` the one it came from after redirects, `label` the
+// charset its response named (a sheet's: a replay parses the bytes again
+// under it; "" for none).
 //
-// THE INDEX is a header line beginning `#`, then one line per file:
-//     <n> TAB <kind> TAB <url> TAB <final> TAB <label>
+// THE INDEX GROWS with what pages fetch (MODERN_WEB_BRIEFS.md § Slice 0b):
+// its first line is `# yonder kept index <version>`, more lines beginning
+// `#` say what the rest hold, and every other line is
+//     <n> TAB <kind> TAB what that kind carries
+// so a kind a later slice keeps (a `fetch`, a `storage` image) is one more
+// line shape and leaves these as they are; the version moves only when a
+// shape that exists changes, and a reader passes over a kind it does not
+// know. A script's and a sheet's line carries
+//     <url> TAB came|failed TAB <final> TAB <label>
 // with a byte below 0x20, 0x7F and a backslash in a field written `\xHH`
 // and `\\`, as a page file writes them.
+#define YONDER_DIAG_INDEX_VERSION 1
 int64_t yonder_diag_keep_resource(yonder_diag_t *d, const char *dir, yonder_diag_kept_t kind,
                                   const char *url, const char *final, const char *label,
                                   const void *bytes, size_t n);

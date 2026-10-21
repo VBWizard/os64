@@ -1692,8 +1692,8 @@ static void diag_kept(int64_t answer)
     status_rest(line);
 }
 
-// A script or sheet as the window received it, kept beside the record of
-// the page that asked for it.
+// A script or sheet as the window received it, or that it did not come
+// (`bytes` NULL), kept beside the record of the page that asked for it.
 static void diag_keep(yonder_diag_t *d, yonder_diag_kept_t kind, const char *url, const char *final,
                       const char *label, const void *bytes, size_t n)
 {
@@ -3503,15 +3503,17 @@ static void sheet_arrived(const yonder_sheet_job_t *job, yonder_sheet_t *got)
     Sheet *sh = &p->sheets[job->index];
     if (!sh->waiting)
         return;
+    // Kept as the page received it, a sheet that failed as a failure,
+    // beside the record of the page it is for: the stream's page has none
+    // of its own, its record is the stream's.
+    bool came = got != NULL && got->ok;
+    diag_keep(p == &g.stream.page ? g.stream.diag : p->diag, YONDER_DIAG_KEPT_SHEET, job->url,
+              came ? got->url : job->url, came ? got->label : "",
+              came ? (got->kept != NULL ? (const void *)got->kept : "") : NULL, came ? got->kept_len : 0);
     sh->waiting = false;
     sh->id = 0;
     if (sh->holds)
         p->sheets_waiting--;
-    // Kept as the page received it, beside the record of the page it is
-    // for: the stream's page has none of its own, its record is the stream's.
-    if (got != NULL && got->ok && got->kept != NULL)
-        diag_keep(p == &g.stream.page ? g.stream.diag : p->diag, YONDER_DIAG_KEPT_SHEET, job->url,
-                  got->url, got->label, got->kept, got->kept_len);
     if (got != NULL && got->ok) {
         sh->parsed = got->parsed;               // moved: the release frees nothing
         os64_memset(&got->parsed, 0, sizeof(got->parsed));
@@ -6841,10 +6843,12 @@ static yonder_scripts_t *scripts_for(uint64_t serial)
 static void script_arrived(const yonder_script_job_t *job, const yonder_script_t *got)
 {
     yonder_scripts_t *host = scripts_for(job->page);
-    // Kept as the host is handed it, decoded: a replay hands it over the same.
-    if (host != NULL && got != NULL && got->ok)
-        diag_keep(yonder_scripts_diag(host), YONDER_DIAG_KEPT_SCRIPT, job->url, got->url, "",
-                  got->source, got->length);
+    // Kept as the host is handed it, decoded, a fetch that failed as a
+    // failure: a replay hands it over the same.
+    bool came = got != NULL && got->ok;
+    if (host != NULL)
+        diag_keep(yonder_scripts_diag(host), YONDER_DIAG_KEPT_SCRIPT, job->url,
+                  came ? got->url : job->url, "", came ? got->source : NULL, came ? got->length : 0);
     if (host != NULL)
         yonder_scripts_fetched(host, job->token, got != NULL && got->ok ? got->source : NULL,
                                got != NULL ? got->length : 0);

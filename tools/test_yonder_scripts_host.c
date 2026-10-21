@@ -4815,7 +4815,7 @@ static void diag_keep_cases(void) {
      * a body cut into many small chunks: the kept file is the bytes
      * whatever the chunks and whatever they decode to. */
     char *body=pad_page("<link rel=stylesheet href=k.css><p id=out>caf\xE9</p><p>\x01" "a\xFF" "z</p>"
-        "<script src=k.js></script><p id=after>end</p>");
+        "<script src=k.js></script><script src=gone.js></script><p id=after>end</p>");
     size_t len=strlen(body);
     body[len-2]='\0';                   /* a NUL inside the page's last tag */
     stream_post_body((const uint8_t *)body,len,97);
@@ -4824,6 +4824,7 @@ static void diag_keep_cases(void) {
     check(sheet_land_as_worker("/k.css","@import 'i.css'; #out{color:red}","utf-8"),"keep: its sheet lands");
     check(sheet_land_as_worker("/i.css","p{margin:0}",""),"keep: the sheet's @import lands");
     check(script_land("/k.js","document.getElementById('out').textContent='ran'"),"keep: its script lands");
+    check(loop_settle() && g.stream.stopped && script_land("/gone.js",NULL),"keep: the next script's fetch fails");
     check(loop_settle() && g.page.tree!=NULL && probe_text_is("out","ran"),"keep: the page arrives");
     char base[64], path[128]; size_t n;
     snprintf(base,sizeof(base),"/tmp/kept/fixture.test-%04u",(unsigned)seq);
@@ -4833,12 +4834,16 @@ static void diag_keep_cases(void) {
         "keep: the page's bytes are kept as the parser was fed them, undecoded, in however many chunks");
     snprintf(path,sizeof(path),"%s.d/index",base);
     const char *index=fake_text(path);
-    check(has(index,"\n1\tsheet\thttps://fixture.test/k.css\thttps://fixture.test/k.css\tutf-8\n"
-        "2\tsheet\thttps://fixture.test/i.css\thttps://fixture.test/i.css\t\n"
-        "3\tscript\thttps://fixture.test/k.js\thttps://fixture.test/k.js\t\n") && index[0]=='#' &&
+    check(index!=NULL && !strncmp(index,"# yonder kept index 1\n",22) &&
+        has(index,"\n1\tsheet\thttps://fixture.test/k.css\tcame\thttps://fixture.test/k.css\tutf-8\n"
+        "2\tsheet\thttps://fixture.test/i.css\tcame\thttps://fixture.test/i.css\t\n"
+        "3\tscript\thttps://fixture.test/k.js\tcame\thttps://fixture.test/k.js\t\n"
+        "4\tscript\thttps://fixture.test/gone.js\tfailed\thttps://fixture.test/gone.js\t\n") &&
         has(index,"fonts and pictures are not kept"),
-        "keep: the index names each sheet and script in the order they came, with its addresses and label, "
-        "under a header saying what is not kept");
+        "keep: the index names its version, then each sheet and script in the order it came back, whether "
+        "it came, its addresses and label, under a header saying what is not kept");
+    snprintf(path,sizeof(path),"%s.d/4.js",base);
+    check(fake_text(path)==NULL,"keep: a script that did not come has a line and no file");
     snprintf(path,sizeof(path),"%s.d/1.css",base);
     check(fake_text(path)!=NULL && !strcmp(fake_text(path),"@import 'i.css'; #out{color:red}"),
         "keep: a sheet is kept as the bytes it was parsed from");

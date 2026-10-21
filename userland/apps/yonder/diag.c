@@ -638,18 +638,25 @@ int64_t yonder_diag_keep_resource(yonder_diag_t *d, const char *dir, yonder_diag
                           kind == YONDER_DIAG_KEPT_SCRIPT ? "js" : "css");
     int i = os64_snprintf(index, sizeof(index), "%s/index", folder);
     if (p <= 0 || (size_t)p >= sizeof(path) || i <= 0 || (size_t)i >= sizeof(index) ||
-        !write_whole(path, bytes, n))
+        (bytes != NULL && !write_whole(path, bytes, n)))
         return keep_failed(d);
     // The index's new line, measured and then written onto the lines it
     // has, and the index written again whole under its header.
+#define DIAG_STRING(x) #x
+#define DIAG_VERSION(x) DIAG_STRING(x)
     static const char kHeader[] =
-        "# this page's scripts and sheets as yonder received them; fonts and pictures are not kept\n"
-        "# <n>\t<kind>\t<address asked for>\t<address after redirects>\t<charset label>\n";
+        "# yonder kept index " DIAG_VERSION(YONDER_DIAG_INDEX_VERSION) "\n"
+        "# what this page fetched, as yonder received it: <n>\t<kind>\tthen what the kind carries\n"
+        "# script, sheet: <address asked for>\tcame|failed\t<address after redirects>\t<charset label>;"
+        " the file <n>.js or <n>.css when it came\n"
+        "# fonts and pictures are not kept\n";
+#undef DIAG_VERSION
+#undef DIAG_STRING
     char lead[32];
     os64_snprintf(lead, sizeof(lead), "%lu\t%s\t", (unsigned long)number, word);
-    const char *fields[3] = {url, final, label};
+    const char *fields[4] = {url, bytes != NULL ? "came" : "failed", final, label};
     Out m = {NULL, 0, 0};
-    for (int f = 0; f < 3; f++) {
+    for (int f = 0; f < 4; f++) {
         put_field(&m, fields[f] != NULL ? fields[f] : "", false);
         put(&m, "\t", 1);
     }
@@ -663,9 +670,9 @@ int64_t yonder_diag_keep_resource(yonder_diag_t *d, const char *dir, yonder_diag
         os64_memcpy(text + sizeof(kHeader) - 1, d->keep.index, d->keep.index_len);
     Out o = {text + sizeof(kHeader) - 1 + d->keep.index_len, line + 1, 0};
     puts_(&o, lead);
-    for (int f = 0; f < 3; f++) {
+    for (int f = 0; f < 4; f++) {
         put_field(&o, fields[f] != NULL ? fields[f] : "", false);
-        put(&o, f < 2 ? "\t" : "\n", 1);
+        put(&o, f < 3 ? "\t" : "\n", 1);
     }
     bool ok = write_whole(index, text, total);
     if (ok) {
