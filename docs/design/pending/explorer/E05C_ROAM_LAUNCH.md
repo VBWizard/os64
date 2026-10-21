@@ -2,9 +2,9 @@
 
 ## Status and ownership
 
-Implementation validated, 2026-10-21. Quinn owns `codex/roam-file-actions` in
+Reviewing, 2026-10-21. Quinn owns `codex/roam-file-actions` in
 `.worktrees/roam-file-actions`, based on `328cba6d` (PR #322, awaiting review).
-Branch publication pending. Scribe's shared dialogs are merged through #319. This slice
+Implementation `9f31fb0f` is pushed in [draft PR #325](https://github.com/VBWizard/os64/pull/325). Scribe's shared dialogs are merged through #319. This slice
 stacks on the dialog polish; the worker-lifetime design remains deferred.
 D012 architectural review does not apply: this is userland work, without kernel
 or syscall changes. Ordinary review and P5 acceptance remain required.
@@ -54,5 +54,6 @@ Independent review and P5 appearance/hardware acceptance remain pending.
 
 ## Handoff
 
-Next: publish the validated implementation for review. Review and merge pending. Thread lifetime remains a separate
+Next: independent review and P5 acceptance of PR #325. Retarget to userland
+after #322 merges; merge remains pending. Thread lifetime remains a separate
 slice, including the known dialog close delay and exited worker retention.

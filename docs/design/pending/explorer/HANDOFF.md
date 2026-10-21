@@ -16,8 +16,9 @@ PR #322 at `328cba6d`. Chris approved resuming file launching and associations;
 the worker-lifetime fix is deferred. No kernel work is included here.
 E5C host tests passed with ASan/UBSan/LSan, cross-build passed, and QEMU
 launch/chooser/clipboard/terminal/custom-config checks passed. [Evidence and
-P5 walkthrough](evidence/e05c/README.md). Next: publish for independent review;
-P5 acceptance remains pending.
+P5 walkthrough](evidence/e05c/README.md). Implementation `9f31fb0f` is pushed
+in [draft PR #325](https://github.com/VBWizard/os64/pull/325). Next: independent
+review and P5 acceptance; retarget to userland after #322 merges.
 
 
 **E5's Scribe consumer is accepted.** [PR #319](https://github.com/VBWizard/os64/pull/319)

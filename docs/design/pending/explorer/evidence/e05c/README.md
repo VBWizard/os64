@@ -1,6 +1,6 @@
 # E5C acceptance evidence — 2026-10-21
 
-These checks cover the production sources in the E5C implementation commit;
+These checks cover the production sources at E5C implementation `9f31fb0f`;
 [binary hashes](binary-sha256.txt) identify the installed app/library artifacts.
 P5 acceptance and independent review have not occurred.
 

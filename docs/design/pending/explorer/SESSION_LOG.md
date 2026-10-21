@@ -1032,3 +1032,10 @@ acceptance. Real file launching, cancellation, explicit application selection,
 clipboard, directory-with-spaces terminal launch and live config override passed.
 No P5 or independent-review result is claimed. Publication is the next action;
 this branch stacks on #322. The existing dialog-worker issues remain deferred.
+
+
+E5C publication: implementation `9f31fb0f` pushed to origin and opened as
+[draft PR #325](https://github.com/VBWizard/os64/pull/325), based on
+`codex/file-dialog-polish`. #322 remains open. Next: independent review and P5
+acceptance, then retarget #325 to userland after #322 merges. No review request
+comment or merge was sent. Worktree is clean after the handoff record commit.
