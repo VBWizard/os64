@@ -70,12 +70,7 @@ static JSValue wrapper_attach(os64_dom_t *dom, JSContext *ctx, DValue *entry,
 
 JSValue d_wrap(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node)
 {
-    if (!d_context(dom, ctx, OS64_JS_ABI_ID)) return JS_EXCEPTION;
-    if (node == NULL) return JS_NULL;
-    DValue *entry = d_find(dom, node);
-    if (entry != NULL) return JS_DupValue(ctx, entry->value);
-    entry = wrapper_prepare(dom, ctx, node, JS_UNDEFINED);
-    return entry != NULL ? wrapper_attach(dom, ctx, entry, node) : JS_EXCEPTION;
+    return d_wrap_constructed(dom, ctx, node, JS_UNDEFINED);
 }
 
 JSValue d_wrap_constructed(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node,
