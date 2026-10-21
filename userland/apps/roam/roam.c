@@ -43,7 +43,7 @@ typedef struct {
     bool initialized, menu_visible;
     os64_ui_file_dialog_t chooser;
     file_operation_t file_operation;
-    char file_path[OS64_DIRECTORY_PATH];
+    char file_path[OS64_DIRECTORY_PATH], association_config[OS64_LAUNCH_PATH];
     bool file_cleanup;
     unsigned children;
 } roam_t;
@@ -110,6 +110,14 @@ static void file_queue(roam_t *a,file_operation_t op,const char *path)
 {
     if(a->file_operation!=FILE_NONE) return;
     os64_strcopy(a->file_path,sizeof(a->file_path),path);
+    a->association_config[0]=0;
+    if (op!=FILE_TERMINAL) {
+        int64_t got=os64_conf_get("roam.conf","associations",a->association_config,
+            sizeof(a->association_config));
+        if (got==OS64_CONF_NO_FILE || got==OS64_CONF_NO_KEY)
+            os64_strcopy(a->association_config,sizeof(a->association_config),"file-associations.conf");
+        else if (got<0) a->association_config[0]=0;
+    }
     a->file_operation=op;
     os64_ui_set_enabled(&a->ui,&a->root,false);
     os64_ui_set_enabled(&a->ui,&a->bar.w,false);
@@ -154,16 +162,13 @@ static void file_step(roam_t *a)
         return;
     }
     if(a->file_operation==FILE_OPEN) {
-        char config[OS64_LAUNCH_PATH],application[OS64_LAUNCH_PATH];
-        int64_t got=os64_conf_get("roam.conf","associations",config,sizeof(config));
-        if(got==OS64_CONF_NO_FILE || got==OS64_CONF_NO_KEY)
-            os64_strcopy(config,sizeof(config),"file-associations.conf");
-        else if(got<0) {
+        char application[OS64_LAUNCH_PATH];
+        if (!*a->association_config) {
             file_unlock(a);
             os64_ui_browser_message(&a->browser_ui,"Could not read roam.conf. Use Open With.");
             return;
         }
-        os64_launch_status_t rc=os64_launch_association(config,a->file_path,application);
+        os64_launch_status_t rc=os64_launch_association(a->association_config,a->file_path,application);
         if(rc==OS64_LAUNCH_OK) {
             int64_t pid;
             rc=os64_launch_file(application,a->file_path,&pid);
@@ -179,7 +184,8 @@ static void file_step(roam_t *a)
     os64_ui_file_dialog_t *d=&a->chooser;
     if(!d->window && !a->file_cleanup) {
         if(!os64_ui_dispatcher_can_create(&a->dispatcher)) return;
-        os64_ui_file_options_t options={.mode=OS64_UI_FILE_OPEN,
+        os64_ui_file_options_t options={.mode=OS64_UI_FILE_APPLICATION,
+            .offer_association=*a->association_config && os64_launch_extension(a->file_path),
             .title="Open With - Choose Application",.directory="/bin",
             .icons=a->icons?os64_icon_theme_provider(a->icons):NULL};
         if(os64_ui_file_dialog_open(d,&a->dispatcher,a->window,&options)==OS64_UI_OK) return;
@@ -188,6 +194,7 @@ static void file_step(roam_t *a)
     }
     if(!a->file_cleanup && d->result==OS64_UI_FILE_PENDING) return;
     bool accepted=!a->file_cleanup && d->result==OS64_UI_FILE_ACCEPTED;
+    bool remember=accepted && d->remember_association;
     char application[OS64_DIRECTORY_PATH];
     os64_strcopy(application,sizeof(application),d->path);
     if(os64_ui_file_dialog_close(d)!=OS64_UI_OK) {
@@ -197,7 +204,14 @@ static void file_step(roam_t *a)
     file_unlock(a);
     if(accepted) {
         int64_t pid;
-        launched(a,os64_launch_file(application,a->file_path,&pid));
+        os64_launch_status_t rc=os64_launch_file(application,a->file_path,&pid);
+        launched(a,rc);
+        if (rc==OS64_LAUNCH_OK && remember) {
+            rc=os64_launch_remember(a->association_config,a->file_path,application);
+            os64_ui_browser_message(&a->browser_ui,rc==OS64_LAUNCH_OK ?
+                "Application started; association saved." :
+                "Application started, but the association could not be saved.");
+        }
     }
 }
 static void changed(os64_ui_dataview_t *view,

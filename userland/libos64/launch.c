@@ -29,6 +29,47 @@ static bool association(const char *key,const char *value,void *user)
     return true; /* Validate the tail even after a matching rule. */
 }
 
+const char *os64_launch_extension(const char *file)
+{
+    if (!absolute(file)) return NULL;
+    const char *leaf=file,*extension=NULL;
+    for (const char *p=file;*p;++p) {
+        if (*p=='/') { leaf=p+1; extension=NULL; }
+        else if (*p=='.') extension=p;
+    }
+    if (!extension || extension==leaf || !extension[1]) return NULL;
+    for (const char *p=extension+1;*p;++p)
+        if (*p=='\\' || *p=='#' || *p=='=' || (unsigned char)*p<=32) return NULL;
+    return extension;
+}
+
+static bool associations_valid(const char *text,size_t length,void *user)
+{
+    (void)user;
+    association_t a={0};
+    return os64_conf_parse(text,length,association,&a)>=0 && !a.invalid;
+}
+
+os64_launch_status_t os64_launch_remember(const char *config,const char *file,
+    const char *application)
+{
+    const char *extension=os64_launch_extension(file);
+    if (!config || !*config || os64_strlen(config)>=OS64_LAUNCH_PATH ||
+        !extension || !absolute(application)) return OS64_LAUNCH_INVALID;
+    size_t n=os64_strlen(application);
+    if (application[n-1]==' ' || application[n-1]=='\t') return OS64_LAUNCH_INVALID;
+    char source[OS64_CONF_PATH_MAX],target[OS64_CONF_PATH_MAX];
+    if (config[0]=='/') {
+        os64_strcopy(source,sizeof(source),config);
+        os64_strcopy(target,sizeof(target),config);
+    } else if (os64_conf_find(config,source,sizeof(source))<0 ||
+               os64_conf_target(config,target,sizeof(target))<0)
+        return OS64_LAUNCH_CONFIG_ERROR;
+    os64_conf_pair_t pair={extension,application};
+    return os64_conf_merge_checked(source,target,&pair,1,associations_valid,NULL)==0 ?
+        OS64_LAUNCH_OK : OS64_LAUNCH_CONFIG_ERROR;
+}
+
 os64_launch_status_t os64_launch_association(const char *config,const char *file,
     char out[OS64_LAUNCH_PATH])
 {
@@ -40,13 +81,7 @@ os64_launch_status_t os64_launch_association(const char *config,const char *file
     if(config[0]=='/') os64_strcopy(location,sizeof(location),config);
     else if(os64_conf_find(config,location,sizeof(location))<0)
         return OS64_LAUNCH_CONFIG_ERROR;
-    const char *leaf=file,*extension=NULL;
-    for(const char *p=file;*p;++p) {
-        if(*p=='/') { leaf=p+1; extension=NULL; }
-        else if(*p=='.') extension=p;
-    }
-    if(extension==leaf || (extension && !extension[1])) extension=NULL;
-    association_t a={.extension=extension};
+    association_t a={.extension=os64_launch_extension(file)};
     uint8_t *bytes=NULL; size_t length=0;
     if(os64_slurp(location,OS64_CONF_MAX-1,&bytes,&length)!=OS64_SLURP_OK)
         return OS64_LAUNCH_CONFIG_ERROR;

@@ -1066,3 +1066,29 @@ suite passed with ASan/UBSan/LSan enabled. Native dialog evidence is the parent'
 640×480 run; the earlier E5C native screenshots remain evidence for `9f31fb0f`,
 not a new full native run of this merge. The window-placement request is recorded
 in `334dcb0c` as a planned slice, without implementation.
+
+## 2026-10-21 — E5C Open With refinement
+
+Chris reports that the initial Roam file actions work on the P5, then requested
+a remember-association option and a compact Open With browser. PR #322 is
+merged; #325 targets userland. Thread lifetime and E5D placement stay deferred.
+
+Added application-picker mode: toolbar, location, directory list and a compact
+Open/Cancel/remember footer. Selection is derived from the live row because
+there is no editable filename. Other Open/Save controls are retained in their
+existing modes. Errors and incomplete listings remain visible when needed.
+
+Association persistence honors the chosen `roam.conf` value, validates the
+readable source and merged result, and atomically publishes through the shared
+checked config writer. The first bare-name override preserves lower-ladder
+defaults. Cancellation, unchecked choices and failed launches do not save.
+
+[Evidence](evidence/e05c/open-with/README.md): launch/config/lifecycle tests and
+4,760 dialog checks pass with ASan/UBSan/LSan outside the sandbox (sandbox LSan
+attachment failed with EPERM). Cross-build passes. QEMU verified compact layout,
+keyboard and mouse acceptance, custom-file persistence preserving other rules,
+and ordinary Open using the association after reboot. The QMP standalone
+button-event driver was unreliable; controlled HMP press/release passed.
+Temporary diagnostics were removed before clean-build validation.
+
+Next: independent review and Chris’s P5 acceptance of the refinement in #325.

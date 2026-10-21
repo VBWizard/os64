@@ -2,7 +2,9 @@
 
 These checks cover the production sources at E5C implementation `9f31fb0f`;
 [binary hashes](binary-sha256.txt) identify the installed app/library artifacts.
-P5 acceptance and independent review have not occurred.
+Chris subsequently reported that the initial additions work on the P5. His
+Open With follow-up and its validation are in the [refinement packet](open-with/README.md).
+Independent review remains pending.
 
 ## Host
 

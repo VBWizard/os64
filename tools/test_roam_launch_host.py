@@ -21,7 +21,7 @@ flags = ['-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
 flags += ['-I' + str(root / p) for p in
           ['userland/libos64/include', 'userland/libimage/include', 'abi/include']]
 sources = ['tools/test_roam_launch_host.c'] + [
-    'userland/libos64/' + name + '.c' for name in ['launch', 'conf', 'slurp', 'str']]
+    'userland/libos64/' + name + '.c' for name in ['launch', 'conf', 'slurp', 'str', 'fmt']]
 subprocess.run(['cc', *flags, *[str(root / s) for s in sources], '-o', str(binary)], check=True)
 print('Artifacts:', out, flush=True)
 if not args.build_only:

@@ -5,6 +5,8 @@
 #include "os64/fmt.h"
 #include "os64/conf.h"
 
+static const char file_remember_label[] = "Remember for this file type";
+
 static void file_report(os64_ui_file_dialog_t *d, const char *text)
 {
     if (!!*d->message_text != !!*text) d->footer_dirty = true;
@@ -18,8 +20,56 @@ static void file_place(os64_ui_widget_t *w, os64_gui_rect_t r, bool staged)
     else w->bounds = r;
 }
 
+/* The application picker keeps browsing prominent; its footer wraps only
+ * when the optional remember checkbox and action buttons need separate rows. */
+static os64_font_status_t file_application_layout(os64_ui_file_dialog_t *d, bool staged)
+{
+    int32_t pad=d->ui.theme.pad+4, gap=d->ui.theme.gap;
+    int32_t row=os64_ui_control_min_height(&d->ui), button=0, remember=0, open=0;
+    if (os64_ui_text_measure(&d->ui,OS64_FONT_ROLE_UI,"Cancel",6,&button) ||
+        os64_ui_text_measure(&d->ui,OS64_FONT_ROLE_UI,"Open",4,&open) ||
+        (d->offer_association && os64_ui_text_measure(&d->ui,OS64_FONT_ROLE_UI,
+            file_remember_label,sizeof(file_remember_label)-1,&remember))) return OS64_FONT_NO_MEMORY;
+    if (open>button) button=open;
+    button+=2*pad;
+    if (d->offer_association) remember+=d->ui.theme.checkbox_size+gap;
+    int32_t width=d->root.bounds.w-2*pad, minimum=2*button+gap;
+    if (remember>minimum) minimum=remember;
+    if (4*row>minimum) minimum=4*row;
+    bool wrap=d->offer_association && width<remember+2*button+2*gap;
+    bool message=*d->message_text!=0;
+    int32_t rows=1+wrap+message, footer=rows*row+(rows-1)*gap+2*pad;
+    int32_t min_height=7*row+6*gap+2*pad;
+    if (staged) {
+        d->staged_min_width=minimum+2*pad; d->staged_min_height=min_height;
+    } else {
+        d->min_width=minimum+2*pad; d->min_height=min_height;
+    }
+    if (width<minimum || d->root.bounds.h<min_height || row<=0) return OS64_FONT_LIMIT;
+    int32_t y=d->root.bounds.h-footer;
+    os64_gui_rect_t old=d->browser_area.bounds;
+    file_place(&d->browser_area,(os64_gui_rect_t){0,0,d->root.bounds.w,y},staged);
+    os64_font_status_t rc=os64_ui_browser_layout(&d->browser_ui,staged);
+    if (rc) { if (!staged) d->browser_area.bounds=old; return rc; }
+    file_place(&d->form,(os64_gui_rect_t){pad,y,width,footer},staged);
+    y+=pad;
+    file_place(&d->message,(os64_gui_rect_t){pad,y,width,message?row:0},staged);
+    if (message) y+=row+gap;
+    file_place(&d->remember.w,(os64_gui_rect_t){pad,y,remember,row},staged);
+    if (wrap) y+=row+gap;
+    file_place(&d->cancel,(os64_gui_rect_t){pad+width-2*button-gap,y,button,row},staged);
+    file_place(&d->accept,(os64_gui_rect_t){pad+width-button,y,button,row},staged);
+    if (!staged) {
+        os64_ui_set_hidden(&d->ui,&d->message,!message);
+        d->footer_dirty=false;
+        os64_ui_mark_dirty(&d->ui,&d->root);
+    }
+    return OS64_FONT_OK;
+}
+
 static os64_font_status_t file_layout(os64_ui_file_dialog_t *d, bool staged)
 {
+    if (d->mode == OS64_UI_FILE_APPLICATION) return file_application_layout(d, staged);
     int32_t pad = d->ui.theme.pad + 4, gap = d->ui.theme.gap;
     int32_t row = os64_ui_control_min_height(&d->ui);
     int32_t width = d->root.bounds.w - 2 * pad;
@@ -109,14 +159,18 @@ static void file_discarded(os64_ui_t *ui, void *user, void *p)
  * response. A second Enter from activating a file cannot authorize Replace. */
 static void file_controls(os64_ui_file_dialog_t *d)
 {
+    bool application = d->mode == OS64_UI_FILE_APPLICATION;
     bool ordinary = !d->confirm && !d->making_folder;
     os64_ui_cancel_interaction(&d->ui);
     os64_ui_set_enabled(&d->ui, &d->browser_area, ordinary);
     os64_ui_set_enabled(&d->ui, &d->name.w, ordinary);
     os64_ui_set_enabled(&d->ui, &d->hidden.w, ordinary);
     os64_ui_set_enabled(&d->ui, &d->new_folder, ordinary);
-    os64_ui_set_hidden(&d->ui, &d->name.w, d->making_folder);
-    os64_ui_set_hidden(&d->ui, &d->name_label, d->making_folder);
+    os64_ui_set_hidden(&d->ui, &d->name.w, d->making_folder || application);
+    os64_ui_set_hidden(&d->ui, &d->name_label, d->making_folder || application);
+    os64_ui_set_hidden(&d->ui, &d->hidden.w, application);
+    os64_ui_set_hidden(&d->ui, &d->new_folder, application);
+    os64_ui_set_hidden(&d->ui, &d->remember.w, !application || !d->offer_association);
     os64_ui_set_hidden(&d->ui, &d->accept, !ordinary);
     os64_ui_set_hidden(&d->ui, &d->cancel, !ordinary);
     os64_ui_set_hidden(&d->ui, &d->replace, !d->confirm);
@@ -126,7 +180,7 @@ static void file_controls(os64_ui_file_dialog_t *d)
     os64_ui_set_hidden(&d->ui, &d->folder_create, !d->making_folder);
     os64_ui_set_hidden(&d->ui, &d->folder_cancel, !d->making_folder);
     os64_ui_set_focus(&d->ui, d->confirm ? &d->keep :
-        d->making_folder ? &d->folder.w : &d->name.w);
+        d->making_folder ? &d->folder.w : application ? &d->browser_ui.details.w : &d->name.w);
 }
 
 static void file_cancel_prompt(os64_ui_file_dialog_t *d)
@@ -140,6 +194,7 @@ static void file_accept_path(os64_ui_file_dialog_t *d, const char *path, bool re
 {
     os64_strcopy(d->path, sizeof(d->path), path);
     d->replace_existing = replace;
+    d->remember_association = d->offer_association && d->remember.checked;
     d->result = OS64_UI_FILE_ACCEPTED;
 }
 static void file_navigate(os64_ui_file_dialog_t *d, const char *path)
@@ -156,12 +211,33 @@ static bool file_clean_text(const char *s)
     }
     return true;
 }
+/* A picker has no editable filename. Derive its target from the current
+ * selected row, including after a refresh replaces the directory model. */
+static void file_application_selection(os64_ui_file_dialog_t *d)
+{
+    if (d->mode != OS64_UI_FILE_APPLICATION) return;
+    os64_ui_selection_t *selection=os64_ui_dataview_selection(&d->browser_ui.details);
+    const os64_directory_t *dir=os64_browser_directory(d->browser);
+    uint64_t id=os64_ui_selection_focus(selection);
+    const os64_directory_entry_t *e=dir && os64_ui_selection_contains(selection,id) ?
+        os64_directory_entry(dir,id) : NULL;
+    d->selected_folder=0;
+    const char *name="";
+    if (e) {
+        if (e->entry.flags & OS64_DE_DIR) {
+            d->selected_folder=id; d->selected_domain=os64_directory_domain(dir);
+        } else name=e->entry.name;
+    }
+    if (!os64_streq(d->name.buf,name)) os64_ui_textfield_set(&d->ui,&d->name,name);
+}
+
 static void file_submit(os64_ui_file_dialog_t *d)
 {
     if (d->result != OS64_UI_FILE_PENDING || d->confirm || d->making_folder) return;
     if (d->layout_pending || os64_browser_loading(d->browser)) {
         file_report(d, "Wait for the folder to finish opening."); return;
     }
+    file_application_selection(d);
     if (d->selected_folder) {
         const os64_directory_t *dir = os64_browser_directory(d->browser);
         const os64_directory_entry_t *e = dir && d->selected_domain == os64_directory_domain(dir) ?
@@ -191,7 +267,7 @@ static void file_submit(os64_ui_file_dialog_t *d)
     if (!*leaf || os64_streq(leaf, ".") || os64_streq(leaf, "..")) {
         file_report(d, "Enter a file name after the folder path."); return;
     }
-    if (d->mode == OS64_UI_FILE_OPEN) {
+    if (d->mode != OS64_UI_FILE_SAVE) {
         if (exists < 0) { file_report(d, "That file could not be found or inspected."); return; }
         file_accept_path(d, path, false); return;
     }
@@ -282,6 +358,9 @@ static void file_changed(os64_ui_dataview_t *view,
     if (!(change->flags & (OS64_UI_DATAVIEW_SELECTION | OS64_UI_DATAVIEW_FOCUS))) return;
     os64_ui_selection_t *selection = os64_ui_dataview_selection(view);
     const os64_directory_t *dir = os64_browser_directory(d->browser);
+    if (d->mode == OS64_UI_FILE_APPLICATION) {
+        file_application_selection(d); return;
+    }
     if (!dir || os64_directory_domain(dir) != change->domain) return;
     uint64_t id = os64_ui_selection_focus(selection);
     const os64_directory_entry_t *e = os64_directory_entry(dir, id);
@@ -350,10 +429,10 @@ void os64_ui_file_dialog_event(os64_ui_file_dialog_t *d, const os64_gui_event_t 
         if (os64_ui_shortcut_match((os64_ui_shortcut_t){'l',OS64_GUI_MOD_CTRL}, event)) {
             os64_ui_browser_focus_address(&d->browser_ui); return;
         }
-        if (os64_ui_shortcut_match((os64_ui_shortcut_t){'f',OS64_GUI_MOD_CTRL}, event)) {
+        if (d->mode != OS64_UI_FILE_APPLICATION && os64_ui_shortcut_match((os64_ui_shortcut_t){'f',OS64_GUI_MOD_CTRL}, event)) {
             os64_ui_browser_focus_filter(&d->browser_ui); return;
         }
-        if (os64_ui_shortcut_match((os64_ui_shortcut_t){'h',OS64_GUI_MOD_CTRL}, event)) {
+        if (d->mode != OS64_UI_FILE_APPLICATION && os64_ui_shortcut_match((os64_ui_shortcut_t){'h',OS64_GUI_MOD_CTRL}, event)) {
             os64_ui_checkbox_set(&d->ui, &d->hidden, !d->hidden.checked);
             file_hidden_changed(&d->hidden, d); return;
         }
@@ -412,7 +491,7 @@ void os64_ui_file_dialog_update(os64_ui_file_dialog_t *d)
         d->selected_folder = 0;
         /* Save carries a proposed name through navigation. Open discards the
          * old folder's file name, except for the initial suggested name. */
-        if (*d->location && d->mode == OS64_UI_FILE_OPEN)
+        if (*d->location && d->mode != OS64_UI_FILE_SAVE)
             os64_ui_textfield_set(&d->ui, &d->name, "");
         os64_strcopy(d->location, sizeof(d->location), location);
     }
@@ -423,6 +502,17 @@ void os64_ui_file_dialog_update(os64_ui_file_dialog_t *d)
                 d->selected_folder)) d->selected_folder = 0;
     }
     os64_ui_browser_sync(&d->browser_ui);
+    if (d->mode == OS64_UI_FILE_APPLICATION) {
+        /* Routine item counts stay hidden, but navigation errors and truncated
+         * listings must still be visible in the compact browser. */
+        bool notice=d->browser_ui.help_token || d->browser_ui.notice_token ||
+            (!os64_browser_loading(d->browser) && os64_browser_status(d->browser,NULL)!=OS64_UI_OK);
+        if (notice != d->browser_ui.visible[OS64_UI_BROWSER_STATUS]) {
+            os64_ui_browser_show(&d->browser_ui,OS64_UI_BROWSER_STATUS,notice);
+            d->footer_dirty=true;
+        }
+    }
+    file_application_selection(d);
     os64_ui_checkbox_set(&d->ui, &d->hidden, os64_browser_hidden(d->browser));
     if (d->layout_pending || d->footer_dirty) file_resize(&d->ui);
     os64_ui_set_enabled(&d->ui, &d->accept, !d->layout_pending &&
@@ -451,6 +541,7 @@ static void file_paint_callback(void *user)
 static os64_ui_status_code_t file_compose(os64_ui_file_dialog_t *d,
     const os64_ui_file_options_t *options)
 {
+    d->offer_association = d->mode == OS64_UI_FILE_APPLICATION && options->offer_association;
     os64_ui_init(&d->ui, &d->draw);
     os64_ui_panel(&d->root);
     d->root.bounds = (os64_gui_rect_t){0,0,(int32_t)d->draw.surf.width,(int32_t)d->draw.surf.height};
@@ -458,6 +549,9 @@ static os64_ui_status_code_t file_compose(os64_ui_file_dialog_t *d,
     os64_ui_set_root(&d->ui, &d->root);
     os64_ui_panel(&d->browser_area); os64_ui_add_child(&d->root, &d->browser_area);
     os64_ui_browser_init(&d->browser_ui, &d->ui, &d->browser_area);
+    if (d->mode == OS64_UI_FILE_APPLICATION)
+        for (int i=OS64_UI_BROWSER_BREADCRUMBS; i<OS64_UI_BROWSER_PARTS; ++i)
+            os64_ui_browser_show(&d->browser_ui, (os64_ui_browser_part_t)i, false);
     d->browser_ui.details.on_change = file_changed;
     d->browser_ui.details.callback_user = d;
     os64_ui_panel(&d->form); os64_ui_add_child(&d->root, &d->form);
@@ -466,6 +560,7 @@ static os64_ui_status_code_t file_compose(os64_ui_file_dialog_t *d,
     d->name.on_change = file_name_changed;
     os64_ui_label(&d->message, d->message_text);
     os64_ui_checkbox(&d->hidden, "Show hidden files", false, file_hidden_changed, d);
+    os64_ui_checkbox(&d->remember, file_remember_label, false, NULL, NULL);
     os64_ui_label(&d->folder_label, "Folder");
     os64_ui_textfield(&d->folder, d->folder_text, sizeof(d->folder_text), file_folder_submit, NULL, d);
     os64_ui_widget_t *buttons[] = {&d->accept,&d->cancel,&d->new_folder,&d->replace,
@@ -474,7 +569,7 @@ static os64_ui_status_code_t file_compose(os64_ui_file_dialog_t *d,
         "New Folder", "Replace", "Keep File", "Create", "Cancel"};
     for (size_t i = 0; i < sizeof(buttons)/sizeof(*buttons); ++i)
         os64_ui_button(buttons[i], labels[i], file_clicked, d);
-    os64_ui_widget_t *children[] = {&d->name_label,&d->name.w,&d->hidden.w,&d->new_folder,
+    os64_ui_widget_t *children[] = {&d->name_label,&d->name.w,&d->hidden.w,&d->remember.w,&d->new_folder,
         &d->message,&d->accept,&d->cancel,&d->replace,&d->keep,
         &d->folder_label,&d->folder.w,&d->folder_create,&d->folder_cancel};
     for (size_t i = 0; i < sizeof(children)/sizeof(*children); ++i)
@@ -522,7 +617,8 @@ static os64_ui_status_code_t file_compose(os64_ui_file_dialog_t *d,
 os64_ui_status_code_t os64_ui_file_dialog_open(os64_ui_file_dialog_t *d,
     os64_ui_dispatcher_t *dispatcher, int64_t parent, const os64_ui_file_options_t *options)
 {
-    if (!d || !options || (options->mode != OS64_UI_FILE_SAVE && options->mode != OS64_UI_FILE_OPEN))
+    if (!d || !options || (options->mode != OS64_UI_FILE_SAVE && options->mode != OS64_UI_FILE_OPEN &&
+        options->mode != OS64_UI_FILE_APPLICATION))
         return OS64_UI_INVALID;
     if (d->window > 0) { (void)os64_gui_window_focus(d->window); return OS64_UI_BUSY; }
     char initial[OS64_DIRECTORY_PATH], check[OS64_DIRECTORY_PATH];
