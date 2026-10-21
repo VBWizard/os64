@@ -253,6 +253,11 @@ os64_work_id_t os64_work_submit(os64_work_pool_t *pool, const os64_work_t *work)
         font_jobs[nfont_jobs].id=++pool_ids; font_jobs[nfont_jobs].job=work->job;
         return font_jobs[nfont_jobs++].id;
     }
+    /* One slot: a picture that comes while another holds it is refused, as
+     * a full pool refuses, and yonder frees it; taking it would drop the
+     * held job's only reference. */
+    if(*(const uint32_t *)work->job==YONDER_JOB_PICTURE && pool_work.job!=NULL &&
+       *(const uint32_t *)pool_work.job==YONDER_JOB_PICTURE) return 0;
     pool_work=*work; pool_work_id=++pool_ids; return pool_work_id;
 }
 bool os64_work_reap(os64_work_pool_t *pool, os64_work_id_t *id, int64_t *verdict, void **job,
