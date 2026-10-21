@@ -393,7 +393,7 @@ leaves to the browser.
 | A text shadow's blur | the text is drawn by its verb onto the glass, with no mask to blur; a blurred text shadow is drawn sharp | a page whose glowing text matters |
 | Dotted, dashed, double, groove and ridge round a rounded box | the ring is drawn pixel by pixel in its side's tone, every style solid | a rounded box with a dashed border that matters |
 | Round dots | a dot is a square a width across | a page where it shows |
-| Clipping to the curve | a picture behind a rounded box, its `overflow`, its hit test and its children are all still cut square | a rounded box whose picture or content shows past the curve |
+| Clipping to the curve | a rounded box's `overflow`, its hit test and its children are all still cut square (its background picture follows the curve) | a rounded box whose content shows past the curve |
 | A shadow past its box's overflow | the walk prunes on overflow rects, which leave shadows out, so a shadow reaching into the view from a box outside it is not painted, and a group's bounds leave it out | a page whose shadow is cut where a box leaves the view |
 
 ## Gradients (slice S4a)
@@ -497,8 +497,16 @@ origin box's wherever a picture would take its own. A side of 0 draws
 nothing. The position is then worked out in the room that copy leaves,
 as before. The picture tiler scales each copy nearest-neighbour to its
 tile. The colour and the picture are both cut to the CLIP box, and on a
-rounded box the colour and the gradient follow that box's own curve: the
-outer radii less the inset, as the padding box's are.
+rounded box the colour, the gradient and the picture follow that box's own
+curve: the outer radii less the inset, as the padding box's are. A
+picture is drawn by the face, which knows no curve, so its straight parts
+are drawn as they are and each corner's square through the text clip's
+verbs (§ The text clip), the mask the shape painted in white as its
+colour is painted — the picture's edge is the colour's, pixel for pixel.
+Squares that meet (radii past the middle) are one square, the whole box;
+where no clip can be made (none in the verbs, no memory, too large, one
+already open) a corner keeps each row's pixels whose middle the shape
+holds.
 
 ### Proof
 
@@ -515,6 +523,20 @@ and a colour cut to the content box. In the guest,
 `/tests/pages/pile3-backgrounds.html` — sixteen boxes over a 40x20
 `banner.png` and gradients, two of them rounded — drew as headless Chrome
 draws it, but for the smoothing below.
+
+A rounded box's picture is proved against its colour. yonder's
+`round_picture_cases` paint each kind of corner both ways and ask every
+pixel: drawn once, whole where the colour is whole, through a mask of the
+colour's own share where it is laid in part, nowhere it is not; and with
+the clip refused, each row's pixels whose middle the ellipse, worked in
+doubles, holds. The scripted host's `round_picture_glass_cases` paint it
+through yonder's own face: a picture of one blue pixel matches the blue
+colour within 1 a channel, and a patterned one matches the square box
+outside the corners. `tools/test_yonder_corners_mutants.py` breaks each
+rule in turn. In the guest, `/tests/pages/rounded-pictures.html` — each
+kind of corner as a picture beside its flat colour, a moving one, a
+table's attribute and a picture clipped to the text — drew as headless
+Chrome draws it.
 
 ### Booked
 

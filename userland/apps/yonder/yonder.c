@@ -5229,11 +5229,22 @@ typedef struct {
     const flow_box_t *owner;    // the canvas's: asked apart from the walk
 } SheetPictureSeen;
 
+// Whether a box draws a background of its own: a text run, a line and a
+// marker carry their element's style, background and all, but the painter
+// draws none behind them (paint_box). Counting them would keep a picture
+// playing for text that overflows a box scrolled away, and mark text, or a
+// marker hung outside the box, for a picture that is not behind it.
+static bool box_draws_background(const flow_box_t *b)
+{
+    return b->kind != FLOW_BOX_TEXT && b->kind != FLOW_BOX_LINE && b->kind != FLOW_BOX_MARKER;
+}
+
 // One box of the view's walk: does a sheet put picture `k` behind it?
 static void sheet_picture_seen(void *ctx, const flow_box_t *b)
 {
     SheetPictureSeen *look = ctx;
-    if (b == look->owner || (look->seen && !look->mark) || !css_shows(&g.page, b->style, look->k))
+    if (b == look->owner || (look->seen && !look->mark) || !box_draws_background(b) ||
+        !css_shows(&g.page, b->style, look->k))
         return;
     os64_gui_rect_t meet;
     if (!os64_rect_intersect(flow_box_doc_rect(b, scroll_now()), look->view, &meet))
@@ -5337,7 +5348,8 @@ static void sheet_pictures_seen(void *ctx, const flow_box_t *b)
 {
     SheetPicturesSeen *look = ctx;
     os64_gui_rect_t meet;
-    if (b == look->owner || !os64_rect_intersect(flow_box_doc_rect(b, scroll_now()), look->view, &meet))
+    if (b == look->owner || !box_draws_background(b) ||
+        !os64_rect_intersect(flow_box_doc_rect(b, scroll_now()), look->view, &meet))
         return;
     for (int32_t i = 0; i < flow_background_layers(b->style); i++) {
         flow_layer_t l = flow_background_layer(b->style, i);

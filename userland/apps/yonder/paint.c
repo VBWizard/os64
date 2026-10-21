@@ -1646,6 +1646,8 @@ typedef struct {
 } LayerRun;
 
 static void text_clip(const Painter *p, const LayerRun *run);
+static void round_backdrop(const Painter *p, const flow_box_t *b, const Round *shape,
+                           int32_t layer, os64_gui_rect_t area, os64_gui_rect_t origin);
 
 // Whether layer `i` of `s`, or at `i == n` its colour, is cut to the text.
 static bool clipped_to_text(const flow_style_t *s, int32_t i, int32_t n)
@@ -1680,10 +1682,14 @@ static bool frame_layer(const Painter *p, const flow_box_t *b, const Round *oute
         if (yonder_background_tile(&l, yonder_box_edge(b, b->rect, l.origin), 0, 0, &tile))
             return gradient(p, l.gradient, &tile, cut, &shape, outer != NULL, s->color);
     } else if (l.image != NULL || (!sheet && i == 0)) {
-        os64_gui_rect_t area = on_page(p, cut);
         os64_gui_rect_t origin = on_page(p, yonder_box_edge(b, b->rect, l.origin));
-        (void)p->v->backdrop(p->v->ctx, b, sheet ? i : -1, &area, origin, area.x, area.y,
-                             on_page(p, p->view));
+        if (outer != NULL) {
+            round_backdrop(p, b, &shape, sheet ? i : -1, cut, origin);
+        } else {
+            os64_gui_rect_t area = on_page(p, cut);
+            (void)p->v->backdrop(p->v->ctx, b, sheet ? i : -1, &area, origin, area.x, area.y,
+                                 on_page(p, p->view));
+        }
     }
     return true;
 }
@@ -2166,6 +2172,132 @@ static void text_clip(const Painter *p, const LayerRun *run)
     }
     pen.pen = clip_solid(p, run);
     flow_visit_text_clip(run->b, pen_text, &pen);
+}
+
+// The pixels corner `c` of `s` (Round's order) can curve through: the
+// rectangle of its two radii, empty for a square corner.
+static os64_gui_rect_t corner_square(const Round *s, int c)
+{
+    int64_t rx = s->rad[c][0], ry = s->rad[c][1];
+    if (rx <= 0 || ry <= 0)
+        return (os64_gui_rect_t){0, 0, 0, 0};
+    int64_t x0 = c == 0 || c == 3 ? s->l : s->r - rx, y0 = c < 2 ? s->t : s->b - ry;
+    return held(floor_div(x0, SUB), floor_div(y0, SUB), -floor_div(-(x0 + rx), SUB),
+                -floor_div(-(y0 + ry), SUB));
+}
+
+static bool meets(os64_gui_rect_t a, os64_gui_rect_t b)
+{
+    os64_gui_rect_t m = cut(a, b);
+    return m.w > 0 && m.h > 0;
+}
+
+// Picture layer `layer` behind `b` across `part` of its area: tiled as
+// `origin` places it, or from the area's corner (`ox`, `oy`) for an
+// attribute's, wherever the part is.
+static void backdrop_part(const Painter *p, const flow_box_t *b, int32_t layer,
+                          os64_gui_rect_t part, os64_gui_rect_t origin, int32_t ox, int32_t oy)
+{
+    os64_gui_rect_t on = on_page(p, part);
+    (void)p->v->backdrop(p->v->ctx, b, layer, &on, origin, ox, oy, on_page(p, p->view));
+}
+
+// One corner's square `sq` of a rounded picture layer (round_backdrop):
+// through a clip whose mask is the shape's coverage there, painted as
+// round_background paints the shape's colour, so the picture's edge is the
+// colour's. A clip the verbs cannot make (none, no memory, too large, one
+// already open) leaves each row's pixels whose middle the shape holds.
+static void corner_backdrop(const Painter *p, const flow_box_t *b, const Round *shape,
+                            int32_t layer, os64_gui_rect_t sq, os64_gui_rect_t origin, int32_t ox,
+                            int32_t oy)
+{
+    if (p->v->clip_open != NULL && p->v->clip_fill != NULL && p->v->clip_close != NULL &&
+        p->v->clip_open(p->v->ctx, on_page(p, sq))) {
+        Painter mask = *p;
+        mask.view = sq;
+        round_background(&mask, b, shape, 0x00ffffffu);
+        p->v->clip_fill(p->v->ctx);
+        backdrop_part(p, b, layer, sq, origin, ox, oy);
+        p->v->clip_close(p->v->ctx);
+        return;
+    }
+    for (int64_t y = sq.y; y < (int64_t)sq.y + sq.h; y++) {
+        int64_t a, e;
+        if (!round_row(shape, y * SUB + SUB / 2, &a, &e))
+            continue;
+        // Pixel x's middle, x * SUB + SUB / 2, in [a, e).
+        int64_t x0 = max64(sq.x, -floor_div(SUB / 2 - a, SUB));
+        int64_t x1 = min64((int64_t)sq.x + sq.w, -floor_div(SUB / 2 - e, SUB));
+        if (x1 > x0)
+            backdrop_part(p, b, layer, held(x0, y, x1, y + 1), origin, ox, oy);
+    }
+}
+
+// A picture layer cut to `shape`, the layer's clip box `area` rounded as
+// the box is (frame_layer). Only a corner's square holds pixels the shape
+// leaves out or covers in part, so the rest of the area is drawn as it is,
+// in bands of rows each side's squares narrow, and each square through
+// corner_backdrop. Squares that meet — radii past the middle — are one
+// square, the whole area. Only what meets the view is drawn, and nothing
+// at all, no clip made, when the verbs say no picture is there.
+static void round_backdrop(const Painter *p, const flow_box_t *b, const Round *shape,
+                           int32_t layer, os64_gui_rect_t area, os64_gui_rect_t origin)
+{
+    os64_gui_rect_t corner = on_page(p, area);
+    if (!p->v->backdrop(p->v->ctx, b, layer, NULL, origin, corner.x, corner.y,
+                        on_page(p, p->view)))
+        return;
+    os64_gui_rect_t sq[4];
+    for (int c = 0; c < 4; c++)
+        sq[c] = cut(corner_square(shape, c), area);
+    bool met = false;
+    for (int c = 0; c < 4; c++)
+        for (int d = c + 1; d < 4; d++)
+            met = met || meets(sq[c], sq[d]);
+    if (met) {
+        sq[0] = area;
+        sq[1] = sq[2] = sq[3] = (os64_gui_rect_t){0, 0, 0, 0};
+    }
+    // The bands: the rows between one square's top or bottom and the next.
+    int64_t at[10];
+    int n = 0;
+    at[n++] = area.y;
+    at[n++] = (int64_t)area.y + area.h;
+    for (int c = 0; c < 4; c++) {
+        if (sq[c].w > 0 && sq[c].h > 0) {
+            at[n++] = sq[c].y;
+            at[n++] = (int64_t)sq[c].y + sq[c].h;
+        }
+    }
+    for (int i = 1; i < n; i++)
+        for (int j = i; j > 0 && at[j - 1] > at[j]; j--) {
+            int64_t t = at[j];
+            at[j] = at[j - 1];
+            at[j - 1] = t;
+        }
+    for (int i = 0; i + 1 < n; i++) {
+        if (at[i + 1] <= at[i])
+            continue;
+        // A square narrows the band from the side it starts at.
+        int64_t x0 = area.x, x1 = (int64_t)area.x + area.w;
+        for (int c = 0; c < 4; c++) {
+            if (sq[c].w <= 0 || sq[c].h <= 0 || sq[c].y > at[i] ||
+                (int64_t)sq[c].y + sq[c].h < at[i + 1])
+                continue;
+            if (sq[c].x == area.x)
+                x0 = max64(x0, (int64_t)sq[c].x + sq[c].w);
+            else
+                x1 = min64(x1, sq[c].x);
+        }
+        os64_gui_rect_t band = cut(held(x0, at[i], x1, at[i + 1]), p->view);
+        if (x1 > x0 && band.w > 0 && band.h > 0)
+            backdrop_part(p, b, layer, band, origin, corner.x, corner.y);
+    }
+    for (int c = 0; c < 4; c++) {
+        os64_gui_rect_t seen = cut(sq[c], p->view);
+        if (seen.w > 0 && seen.h > 0)
+            corner_backdrop(p, b, shape, layer, seen, origin, corner.x, corner.y);
+    }
 }
 
 static os64_gui_rect_t shifted(os64_gui_rect_t r, flow_point_t by)

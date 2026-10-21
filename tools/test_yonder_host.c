@@ -6,6 +6,7 @@
 
 #define _DEFAULT_SOURCE
 #include <fcntl.h>
+#include <math.h>
 #include <poll.h>
 #include <sched.h>
 #include <signal.h>
@@ -671,6 +672,219 @@ static void huge_corner_case(void)
     expect("radius: a box near the size limit paints its corner in range",
            got != NULL && !escaped && strstr(got, "fill 0 0 100 100 #fefefe") != NULL, got);
     free(got);
+}
+
+// ── A picture behind a rounded box (PILE3.md § Backgrounds) ─────────────
+//
+// A recording read back into a 200 x 100 canvas: how many times a picture
+// was tiled over each pixel, and whether through a clip; and each clip's
+// mask, the alpha its white fills leave.
+typedef struct {
+    int drawn[200 * 100];       // how many times a picture covers the pixel
+    bool clipped[200 * 100];    // one of them through a clip
+    int mask[200 * 100];        // a clip's mask there, 0..255; -1 none
+    int fill[200 * 100];        // the alpha of the last `colour` fill; 0 none
+    int clips, backdrops;
+    bool from_moved;            // an attribute's tiling corner changed
+    bool mask_strayed;          // a mask's fill reached past its clip
+} Canvas;
+
+static void canvas_read(Canvas *cv, const char *rec, uint32_t colour)
+{
+    memset(cv, 0, sizeof(*cv));
+    for (int k = 0; k < 200 * 100; k++)
+        cv->mask[k] = -1;
+    bool in_mask = false, in_clip = false;
+    os64_gui_rect_t clip = {0, 0, 0, 0};
+    int fx = INT32_MIN, fy = INT32_MIN;
+    for (const char *line = rec; line != NULL && *line != '\0';) {
+        const char *end = strchr(line, '\n');
+        int x, y, w, h, a, b;
+        unsigned rgb;
+        char tail[64] = "";
+        if (strncmp(line, "fill clip", 9) == 0) {
+            in_mask = false;
+        } else if (strncmp(line, "end clip", 8) == 0) {
+            in_clip = false;
+        } else if (sscanf(line, "clip %d %d %d %d", &x, &y, &w, &h) == 4) {
+            in_mask = in_clip = true;
+            clip = (os64_gui_rect_t){x, y, w, h};
+            cv->clips++;
+            for (int j = y; j < y + h; j++)
+                for (int i = x; i < x + w; i++)
+                    if (i >= 0 && i < 200 && j >= 0 && j < 100)
+                        cv->mask[j * 200 + i] = 0;
+        } else if (sscanf(line, "fill %d %d %d %d #%x%63s", &x, &y, &w, &h, &rgb, tail) >= 5) {
+            int alpha = tail[0] == '/' ? atoi(tail + 1) : 255;
+            if (in_mask && !inside((os64_gui_rect_t){x, y, w, h}, clip))
+                cv->mask_strayed = true;
+            for (int j = y; j < y + h; j++)
+                for (int i = x; i < x + w; i++) {
+                    if (i < 0 || i >= 200 || j < 0 || j >= 100)
+                        continue;
+                    if (in_mask && rgb == 0xffffff)
+                        cv->mask[j * 200 + i] = alpha;
+                    else if (!in_mask && rgb == colour)
+                        cv->fill[j * 200 + i] = alpha;
+                }
+        } else if (sscanf(line, "backdrop %d %d %d %d", &x, &y, &w, &h) == 4) {
+            cv->backdrops++;
+            if (sscanf(line, "backdrop %*d %*d %*d %*d from %d %d", &a, &b) == 2) {
+                if (fx != INT32_MIN && (a != fx || b != fy))
+                    cv->from_moved = true;
+                fx = a;
+                fy = b;
+            }
+            for (int j = y; j < y + h; j++)
+                for (int i = x; i < x + w; i++)
+                    if (i >= 0 && i < 200 && j >= 0 && j < 100) {
+                        cv->drawn[j * 200 + i]++;
+                        cv->clipped[j * 200 + i] |= in_clip;
+                    }
+        }
+        line = end != NULL ? end + 1 : NULL;
+    }
+}
+
+// `pic`, a page whose box has its picture, against `col`, the same box with
+// a colour in its place: the picture covers each pixel at most once, and
+// where the colour is laid whole it is drawn whole, unclipped or under a
+// full mask; where the colour is laid in part, through a clip whose mask is
+// the colour's share; where there is no colour, not at all.
+static void round_picture_case(const char *name, const char *pic, const char *col,
+                               os64_gui_rect_t view)
+{
+    static Canvas p, c;
+    bool escaped = false;
+    char *got = paint_of(pic, strlen(pic), 200, view, &escaped, true);
+    char *ref = paint_of(col, strlen(col), 200, view, NULL, true);
+    canvas_read(&p, got, 0);
+    canvas_read(&c, ref, 0x0000ff);
+    char why[160] = "";
+    for (int j = 0; j < 100 && why[0] == '\0'; j++)
+        for (int i = 0; i < 200 && why[0] == '\0'; i++) {
+            int k = j * 200 + i, share = c.fill[k];
+            bool full = p.drawn[k] == 1 && (!p.clipped[k] || p.mask[k] == 255);
+            if (p.drawn[k] > 1)
+                snprintf(why, sizeof(why), "(%d, %d) drawn %d times", i, j, p.drawn[k]);
+            else if (share == 255 && !full)
+                snprintf(why, sizeof(why), "(%d, %d) covered, not drawn whole", i, j);
+            else if (share > 0 && share < 255 && (!p.clipped[k] || p.mask[k] != share))
+                snprintf(why, sizeof(why), "(%d, %d) the colour's share %d, the mask's %d", i, j,
+                         share, p.clipped[k] ? p.mask[k] : -1);
+            else if (share == 0 && p.drawn[k] > 0 && (!p.clipped[k] || p.mask[k] > 0))
+                snprintf(why, sizeof(why), "(%d, %d) drawn where the shape is not", i, j);
+        }
+    expect(name, why[0] == '\0' && p.backdrops > 0, why[0] != '\0' ? why : got);
+    expect(name, !escaped, "a clip or a fill reached past the view");
+    expect(name, !p.from_moved, "an attribute's tiling corner moved between the parts");
+    expect(name, !p.mask_strayed, "a mask was painted past its clip");
+    free(got);
+    free(ref);
+}
+
+// The same box with its clips refused: each pixel whose middle the ellipse
+// holds is drawn once, unclipped, and none it leaves — worked here in
+// doubles from the CSS, for a box at (bx, by) of bw x bh whose four corners
+// are rx x ry (top-left, top-right, bottom-right, bottom-left). A middle
+// within 1/50 px of the curve could go either way, and is not asked.
+static void round_picture_refused_case(const char *name, const char *pic, int bx, int by,
+                                       int bw, int bh, const double rx[4], const double ry[4])
+{
+    static Canvas p;
+    s_clip_refused = true;
+    char *got = paint_of(pic, strlen(pic), 200, (os64_gui_rect_t){0, 0, 200, 100}, NULL, true);
+    s_clip_refused = false;
+    canvas_read(&p, got, 0);
+    char why[160] = "";
+    for (int j = 0; j < 100 && why[0] == '\0'; j++)
+        for (int i = 0; i < 200 && why[0] == '\0'; i++) {
+            double x = i + 0.5, y = j + 0.5, near = 1e9;
+            bool in = x > bx && x < bx + bw && y > by && y < by + bh;
+            // Each corner's ellipse centre, and whether the middle is in its square.
+            double cx[4] = {bx + rx[0], bx + bw - rx[1], bx + bw - rx[2], bx + rx[3]};
+            double cy[4] = {by + ry[0], by + ry[1], by + bh - ry[2], by + bh - ry[3]};
+            for (int c = 0; in && c < 4; c++) {
+                bool left = c == 0 || c == 3, top = c < 2;
+                if (rx[c] > 0 && ry[c] > 0 && (left ? x < cx[c] : x > cx[c]) &&
+                    (top ? y < cy[c] : y > cy[c])) {
+                    double u = (x - cx[c]) / rx[c], v = (y - cy[c]) / ry[c];
+                    double edge = sqrt(u * u + v * v);
+                    in = edge <= 1;
+                    near = fabs(edge - 1) * fmin(rx[c], ry[c]);
+                }
+            }
+            int k = j * 200 + i;
+            if (near < 0.02)
+                continue;
+            if (p.drawn[k] != (in ? 1 : 0) || p.clipped[k])
+                snprintf(why, sizeof(why), "(%d, %d) drawn %d times, its middle %s", i, j,
+                         p.drawn[k], in ? "inside" : "outside");
+        }
+    expect(name, why[0] == '\0' && p.clips == 0, why[0] != '\0' ? why : got);
+    free(got);
+}
+
+static void round_picture_cases(void)
+{
+#define ROUND_PAGE(box, bg) \
+    "<!doctype html><style>body { margin: 0 } div { margin: 10px 20px; width: 160px;" \
+    " height: 80px; " box "; background: " bg " }</style><div></div>"
+    os64_gui_rect_t all = {0, 0, 200, 100};
+    round_picture_case("a rounded box's picture follows its curve",
+                       ROUND_PAGE("border-radius: 30px", "url(p.gif)"),
+                       ROUND_PAGE("border-radius: 30px", "#0000ff"), all);
+    round_picture_case("each corner's own ellipse",
+                       ROUND_PAGE("border-radius: 30px 10px 40px 0 / 20px 30px 25px 0",
+                                  "url(p.gif)"),
+                       ROUND_PAGE("border-radius: 30px 10px 40px 0 / 20px 30px 25px 0",
+                                  "#0000ff"), all);
+    round_picture_case("a picture cut to the padding box takes the inner curve",
+                       ROUND_PAGE("border-radius: 30px; border: 8px solid #00ff00;"
+                                  " background-clip: padding-box", "url(p.gif)"),
+                       ROUND_PAGE("border-radius: 30px; border: 8px solid #00ff00;"
+                                  " background-clip: padding-box", "#0000ff"), all);
+    // The top-left square, 100 x 60, and the bottom-right one meet.
+    round_picture_case("radii past the middle: the whole box through one clip",
+                       ROUND_PAGE("border-radius: 100px 20px / 60px 20px", "url(p.gif)"),
+                       ROUND_PAGE("border-radius: 100px 20px / 60px 20px", "#0000ff"), all);
+    round_picture_case("an ellipse, its squares edge to edge",
+                       ROUND_PAGE("border-radius: 50%", "url(p.gif)"),
+                       ROUND_PAGE("border-radius: 50%", "#0000ff"), all);
+    round_picture_case("a view through a corner draws only what it shows",
+                       ROUND_PAGE("border-radius: 30px", "url(p.gif)"),
+                       ROUND_PAGE("border-radius: 30px", "#0000ff"),
+                       (os64_gui_rect_t){0, 0, 37, 23});
+    round_picture_case("a view through the middle draws the middle",
+                       ROUND_PAGE("border-radius: 30px", "url(p.gif)"),
+                       ROUND_PAGE("border-radius: 30px", "#0000ff"),
+                       (os64_gui_rect_t){60, 0, 80, 100});
+    // An attribute's picture is tiled from its area's corner, whichever
+    // part is drawn.
+    round_picture_case("an attribute's picture keeps one tiling corner",
+                       "<!doctype html><style>body { margin: 0 } table { margin: 10px 20px;"
+                       " border-spacing: 0; border-radius: 30px } td { padding: 0; width: 160px;"
+                       " height: 80px }</style><table background=p.gif><tr><td></td></tr></table>",
+                       "<!doctype html><style>body { margin: 0 } table { margin: 10px 20px;"
+                       " border-spacing: 0; border-radius: 30px; background: #0000ff } td {"
+                       " padding: 0; width: 160px; height: 80px }</style><table><tr><td></td>"
+                       "</tr></table>", all);
+    const double r30[4] = {30, 30, 30, 30};
+    round_picture_refused_case("no clip to be had: each row's pixels whose middle it holds",
+                               ROUND_PAGE("border-radius: 30px", "url(p.gif)"), 20, 10, 160,
+                               80, r30, r30);
+    const double ex[4] = {30, 10, 40, 0}, ey[4] = {20, 30, 25, 0};
+    round_picture_refused_case("no clip to be had, each corner its own ellipse",
+                               ROUND_PAGE("border-radius: 30px 10px 40px 0 / 20px 30px 25px 0",
+                                          "url(p.gif)"), 20, 10, 160, 80, ex, ey);
+    {
+        const char *html = ROUND_PAGE("border-radius: 30px", "#0000ff");
+        char *got = paint_of(html, strlen(html), 200, all, NULL, true);
+        expect("a rounded box with no picture makes no clip",
+               got != NULL && strstr(got, "clip") == NULL, got);
+        free(got);
+    }
+#undef ROUND_PAGE
 }
 
 // A shadow is shaded the same whatever part is repainted (Quinn, #203): the
@@ -1915,6 +2129,7 @@ int main(int argc, char **argv)
         paint_cases();
         shadow_blur_cases();
         huge_corner_case();
+        round_picture_cases();
         shadow_split_cases();
         canvas_owner_cases();
         dark_cases();
