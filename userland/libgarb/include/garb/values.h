@@ -104,6 +104,12 @@ typedef enum {
     // Will Change 1 § 2: the KEYWORD auto, or what it names, each a STRING
     // in lowercase (a list, as the animations' are).
     GARB_WILL_CHANGE,
+    // CSS UI 4 § 5.2: the KEYWORD a pointer over the box is shaped as; the
+    // pictures and their hotspots written before it are read, and only the
+    // keyword they fall back to is kept.
+    GARB_CURSOR,
+    // CSS UI 4 § 6.1: a KEYWORD.
+    GARB_USER_SELECT,
     GARB_NPROPS
 } garb_prop_t;
 

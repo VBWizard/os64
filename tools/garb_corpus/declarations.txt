@@ -1079,3 +1079,46 @@ IN: will-change: transform, all
 OUT: invalid
 IN: will-change: 3px
 OUT: invalid
+
+# ── cursor (CSS UI 4 § 5.2): the keyword a pointer falls back to, the
+# pictures before it read and not kept ──
+IN: cursor: pointer
+OUT: cursor: pointer
+IN: cursor: NWSE-Resize
+OUT: cursor: nwse-resize
+IN: cursor: url(hand.cur), pointer
+OUT: cursor: pointer
+IN: cursor: url("a.svg") 1 calc(2 + 0), url(b.png), copy
+OUT: cursor: copy
+IN: cursor: url(a.png) 3 -4, move
+OUT: cursor: move
+IN: cursor: image-set("a.png" 1x, "b.png" 2x) 5 6, grab
+OUT: cursor: grab
+IN: cursor: inherit
+OUT: cursor: inherit
+IN: cursor: url(a.png)
+OUT: invalid
+IN: cursor: url(a.png) alias
+OUT: invalid
+IN: cursor: url(a.png) 1px 2px, copy
+OUT: invalid
+IN: cursor: url(a.png) 3, move
+OUT: invalid
+IN: cursor: linear-gradient(red, blue), pointer
+OUT: invalid
+IN: cursor: pointer, auto
+OUT: invalid
+IN: cursor: en-resize
+OUT: invalid
+IN: cursor: hand
+OUT: invalid
+
+# ── user-select (CSS UI 4 § 6.1) ──
+IN: user-select: none
+OUT: user-select: none
+IN: user-select: contain
+OUT: user-select: contain
+IN: user-select: text contain
+OUT: invalid
+IN: user-select: visible
+OUT: invalid

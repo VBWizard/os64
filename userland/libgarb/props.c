@@ -135,6 +135,8 @@ static const Prop kProps[GARB_NPROPS] = {
     [GARB_ANIMATION_DELAY] = {"animation-delay", false, false},
     [GARB_ANIMATION_FILL_MODE] = {"animation-fill-mode", false, false},
     [GARB_WILL_CHANGE] = {"will-change", false, false},
+    [GARB_CURSOR] = {"cursor", true, true},
+    [GARB_USER_SELECT] = {"user-select", false, true},
 };
 
 const char *garb_prop_name(garb_prop_t prop)
@@ -485,6 +487,15 @@ static const char *const kDirection[] = {"normal", "reverse", "alternate", "alte
                                          NULL};
 static const char *const kPlayState[] = {"running", "paused", NULL};
 static const char *const kFillMode[] = {"none", "forwards", "backwards", "both", NULL};
+// CSS UI 4 § 5.2: the shapes a cursor names.
+static const char *const kCursor[] = {
+    "auto", "default", "none", "context-menu", "help", "pointer", "progress", "wait", "cell",
+    "crosshair", "text", "vertical-text", "alias", "copy", "move", "no-drop", "not-allowed",
+    "grab", "grabbing", "e-resize", "n-resize", "ne-resize", "nw-resize", "s-resize",
+    "se-resize", "sw-resize", "w-resize", "ew-resize", "ns-resize", "nesw-resize",
+    "nwse-resize", "col-resize", "row-resize", "all-scroll", "zoom-in", "zoom-out", NULL};
+// CSS UI 4 § 6.1.
+static const char *const kUserSelect[] = {"auto", "text", "none", "contain", "all", NULL};
 // The identifiers a <custom-ident> may not be (Values 4 § 4.2): the
 // CSS-wide keywords and `default`.
 static const char *const kNotCustom[] = {"inherit", "initial", "unset", "revert",
@@ -1952,6 +1963,7 @@ typedef enum {
     G_ITERATIONS,           // infinite | <number [0,∞]>
     G_ANIM_KEYWORD,
     G_WILL_CHANGE,          // auto | <animateable-feature>#
+    G_CURSOR,               // [[<url> | image-set()] [<x> <y>]?,]* <keyword>
 } Grammar;
 
 typedef struct {
@@ -2030,6 +2042,7 @@ static const Longhand kLonghands[] = {
     {GARB_ANIMATION_PLAY_STATE, G_ANIM_KEYWORD, kPlayState},
     {GARB_ANIMATION_DELAY, G_DELAY, NULL}, {GARB_ANIMATION_FILL_MODE, G_ANIM_KEYWORD, kFillMode},
     {GARB_WILL_CHANGE, G_WILL_CHANGE, NULL},
+    {GARB_CURSOR, G_CURSOR, kCursor}, {GARB_USER_SELECT, G_KEYWORDS, kUserSelect},
 };
 
 static bool longhand_one(Sets *s, VCur *c, const Longhand *l, garb_val_t *out);
@@ -2732,6 +2745,36 @@ static bool layered(const Longhand *l)
            l->g == G_EASING || l->g == G_ITERATIONS || l->g == G_ANIM_KEYWORD;
 }
 
+// `cursor` (CSS UI 4 § 5.2): pictures to try, each a url or an image-set()
+// with an optional hotspot of two numbers and a comma after it, then the
+// keyword the pointer falls back to. The pictures are read and dropped:
+// what is kept is the keyword.
+static bool cursor(Sets *s, VCur *c, const char *const *words, garb_val_t *out)
+{
+    const char *k;
+    for (;;) {
+        if ((k = vc_keyword(c, words)) != NULL) {
+            *out = kw(k);
+            return true;
+        }
+        garb_val_t picture, x, y;
+        const garb_value_t *t = vc_peek(c);
+        if (is_fn(t, "image-set") || is_fn(t, "-webkit-image-set"))
+            c->i++;
+        else if (!vc_url(c, &picture))
+            return false;
+        t = vc_peek(c);
+        if (t != NULL && t->kind != GARB_COMMA &&
+            (!vc_dim(c, ACCEPT_NUMBER, true, false, &s->a, &x) ||
+             !vc_dim(c, ACCEPT_NUMBER, true, false, &s->a, &y)))
+            return false;
+        t = vc_peek(c);
+        if (t == NULL || t->kind != GARB_COMMA)
+            return false;
+        c->i++;
+    }
+}
+
 static bool longhand(Sets *s, VCur *c, const Longhand *l, garb_val_t *out)
 {
     if (!layered(l))
@@ -3000,6 +3043,7 @@ static bool longhand_one(Sets *s, VCur *c, const Longhand *l, garb_val_t *out)
     case G_EASING: return easing(s, c, out);
     case G_ITERATIONS: return iterations(s, c, out);
     case G_WILL_CHANGE: return will_change(s, c, out);
+    case G_CURSOR: return cursor(s, c, l->words, out);
     }
     return false;
 }

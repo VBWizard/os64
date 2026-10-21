@@ -1571,6 +1571,24 @@ static int modern_marks(void)
     MODERN_CHECK(names > GARB_NPROPS && once && all_known && garb_prop_name_at(-1) == NULL &&
                  strcmp(garb_prop_name_at(0), garb_prop_name(0)) == 0,
                  "the names are the longhands' and the rest, each once, each read");
+    // Every name the switch takes away, read by name with it off and on: a
+    // CSS-wide keyword, which every property takes, is no declaration at
+    // all with it off and sets at least one longhand with it on.
+    int32_t marked = 0;
+    for (int32_t k = 0; garb_prop_name_at(k) != NULL; k++) {
+        const char *nm = garb_prop_name_at(k);
+        if (garb_prop_known(nm, strlen(nm), true))
+            continue;
+        char decl[96];
+        snprintf(decl, sizeof(decl), "%s: inherit", nm);
+        marked++;
+        if (modern_reads(decl, off, p, GARB_SETS_MAX) != 0 ||
+            modern_reads(decl, on, p, GARB_SETS_MAX) <= 0) {
+            printf("libgarb modern: %s is read with modern_off, or not without it - FAILED\n", nm);
+            failed++;
+        }
+    }
+    MODERN_CHECK(marked >= 3, "the names the switch takes away are read by name");
     MODERN_CHECK(!garb_prop_known("animation-name", 14, true) &&
                  !garb_prop_known("grid-gap", 8, true) &&
                  !garb_prop_known("-webkit-transform", 17, true) &&
