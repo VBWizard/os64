@@ -29,7 +29,11 @@
  *     that shows a page whose sheets are late), with the jobs the window
  *     submitted answered at the top of each turn: a script or a sheet from
  *     `<name>.d/index` by its exact address, as it came or as the failure
- *     it was where the page was kept, each line answering one job. One
+ *     it was where the page was kept, each line answering one job, and IN
+ *     THE INDEX'S ORDER, which is the order the products reached the window
+ *     where the page was kept: a job whose line comes later waits for it,
+ *     so async scripts run in the order they ran there (rp_order), and a
+ *     job still waiting when the replay ends is incomplete. One
  *     the index has no line for, or no line left for (asked more often
  *     than where it was kept), is not made up either way: it stays out, as
  *     if still on the wire, and the record gains `REPLAY incomplete <kind>
@@ -391,8 +395,44 @@ static void *rp_sheet_product(const yonder_sheet_job_t *job, RpKnown known, cons
     }
     return got;
 }
+/* The address a script's or a sheet's job carries. */
+static const char *rp_job_url(const RpJob *j) {
+    return j->kind==YONDER_JOB_SCRIPT ? ((const yonder_script_job_t *)j->work.job)->url
+                                      : ((const yonder_sheet_job_t *)j->work.job)->url;
+}
+/* THE KEPT ORDER, when the answers come from a kept index (NULL when they
+ * come from a self-test's own site, which has none): its lines are in the
+ * order the products reached the window where the page was kept, and the
+ * replay hands them over in that order, so two async scripts run in the
+ * order they ran there whatever order the replay submitted them in. */
+static RpIndex *rp_order;
+
+/* The first index line no job has taken: the next the kept order hands
+ * over. NULL when every line is taken. */
+static const RpEntry *rp_next_line(void) {
+    for(size_t i=0;rp_order!=NULL && i<rp_order->n;i++)
+        if(rp_order->e[i].used==0) return &rp_order->e[i];
+    return NULL;
+}
+/* Whether a line for this job is still to come in the kept order. */
+static bool rp_line_left(const RpJob *j) {
+    for(size_t i=0;i<rp_order->n;i++)
+        if(rp_order->e[i].used==0 && rp_order->e[i].kind==j->kind && !strcmp(rp_order->e[i].url,rp_job_url(j)))
+            return true;
+    return false;
+}
+/* Whether job `j` may be answered now: a navigation's at once; a script's
+ * or a sheet's when it is the job the kept order's next line names, or has
+ * no line left at all (which makes it incomplete). */
+static bool rp_turn_of(const RpJob *j) {
+    if(j->kind==YONDER_JOB_TRIP || rp_order==NULL) return true;
+    const RpEntry *head=rp_next_line();
+    if(head!=NULL && head->kind==j->kind && !strcmp(head->url,rp_job_url(j))) return true;
+    return !rp_line_left(j);
+}
 /* One round trip of the network: every job out when it began that the
- * replay answers, answered in the order it was submitted. A job submitted
+ * replay answers and whose turn it is (rp_turn_of), in the order it was
+ * submitted; a job whose line comes later waits for it. A job submitted
  * while answering waits for the next. A navigation's job comes back with
  * nothing: everything it had to say went down the mailbox. A script or a
  * sheet the source knows nothing of is not made up, neither as content
@@ -403,13 +443,12 @@ static void rp_answer(void) {
     os64_work_id_t last=rp_ids;
     for(;;) {
         size_t i=0;
-        while(i<rp_njobs && !(rp_jobs[i].id<=last && rp_answers(&rp_jobs[i]))) i++;
+        while(i<rp_njobs && !(rp_jobs[i].id<=last && rp_answers(&rp_jobs[i]) && rp_turn_of(&rp_jobs[i]))) i++;
         if(i==rp_njobs) return;
         RpJob *j=&rp_jobs[i];
         void *product=NULL;
         if(j->kind!=YONDER_JOB_TRIP) {
-            const char *url=j->kind==YONDER_JOB_SCRIPT ? ((const yonder_script_job_t *)j->work.job)->url
-                                                       : ((const yonder_sheet_job_t *)j->work.job)->url;
+            const char *url=rp_job_url(j);
             RpAnswer a;
             RpKnown known=rp_lookup(rp_lookup_ctx,j->kind,url,&a);
             if(known==RP_UNKNOWN) {
@@ -427,6 +466,18 @@ static void rp_answer(void) {
 static bool rp_answerable(void) {
     for(size_t i=0;i<rp_njobs;i++) if(rp_answers(&rp_jobs[i])) return true;
     return false;
+}
+/* The replay is over: a job still waiting for its line's turn never got
+ * it (the line before it named a job this replay never asked for), so it
+ * is incomplete, as one with no line is. A job whose turn it was and that
+ * the budget ended before answering is not: the page is then unfinished,
+ * and says so. */
+static void rp_waiting_incomplete(void) {
+    for(size_t i=0;i<rp_njobs;i++)
+        if(rp_answers(&rp_jobs[i]) && rp_jobs[i].kind!=YONDER_JOB_TRIP && !rp_turn_of(&rp_jobs[i])) {
+            rp_jobs[i].unknown=true;
+            rp_incomplete_add(rp_jobs[i].kind==YONDER_JOB_SCRIPT ? "script" : "sheet",rp_job_url(&rp_jobs[i]));
+        }
 }
 /* What is never answered (pictures, fonts, what the source knew nothing
  * of), let go as the pool lets go a job it was destroyed holding. */
@@ -489,11 +540,13 @@ static RpEnd rp_settle(uint64_t budget_ms, uint32_t next) {
     }
 }
 /* A window as the record's page had, the page delivered, the loop settled,
- * the page left. The departure write is on the fake disk, in load->dir. */
-static RpRan rp_run(const RpLoad *load, rp_lookup_t lookup, void *ctx) {
+ * the page left. The departure write is on the fake disk, in load->dir.
+ * `order`: the kept index whose order the answers follow (rp_order), NULL
+ * for a source with none. */
+static RpRan rp_run(const RpLoad *load, rp_lookup_t lookup, void *ctx, RpIndex *order) {
     RpRan ran={0};
     unsigned failed=failures;
-    rp_lookup=lookup; rp_lookup_ctx=ctx;
+    rp_lookup=lookup; rp_lookup_ctx=ctx; rp_order=order;
     rp_lines_len=0; rp_incomplete=0; rp_unfinished=false;
     rp_trip_expected=!load->local; rp_navigated=false;
     /* A text context of the page's own: what one page's glyphs left in its
@@ -531,6 +584,7 @@ static RpRan rp_run(const RpLoad *load, rp_lookup_t lookup, void *ctx) {
         }
     }
     ran.end=rp_settle(load->budget_ms,s_diag.next);
+    rp_waiting_incomplete();
     ran.arrived=page_doc(&g.page)!=NULL;
     /* ONLY A PAGE REPLAYED TO A VERDICT IS JUDGED (yonder_corpus_diff.py):
      * what stopped short says why, on the record itself, so its lines are
@@ -550,7 +604,7 @@ static RpRan rp_run(const RpLoad *load, rp_lookup_t lookup, void *ctx) {
      * records. */
     clock_step=0;
     rp_release_all();
-    pool_submit_hook=NULL; pool_cancel_hook=NULL; pool_open=false; g.pool=NULL;
+    pool_submit_hook=NULL; pool_cancel_hook=NULL; pool_open=false; g.pool=NULL; rp_order=NULL;
     if(g.stream.active) stream_drop();
     inputs_drop();
     yonder_scripts_free(g.page.scripts); g.page.scripts=NULL;
@@ -668,7 +722,7 @@ static void rp_replay_one(const char *kept, const char *out, const char *name, u
     }
     fake_reset(); snprintf(fake_dirs[nfake_dirs++],256,"/tmp/replay");
     size_t live_before=live;
-    RpRan ran=rp_run(&load,rp_index_lookup,&index);
+    RpRan ran=rp_run(&load,rp_index_lookup,&index,&index);
     char written[256]; size_t wlen=0;
     const char *record=rp_written("/tmp/replay",r.address,load.seq,written,sizeof(written),&wlen);
     t->replayed++;
@@ -1008,6 +1062,32 @@ static unsigned rp_corpus_cases(const char *work, const char *kept, const char *
     }
     free(again); free(f1); free(f2); free(f3); free(f4); free(dfolder); free(dir);
 
+    /* Two async scripts that came back in the reverse of the order they
+     * were asked for: the replay hands them over as they came where the
+     * page was kept, and the page sees that order. */
+    dir=rp_cat(work,"/order","");
+    dfolder=rp_cat(dir,"/fixture.test-0001.d","");
+    mkdir(dir,0777); mkdir(dfolder,0777);
+    static const char kOrderRecord[]="address: http://fixture.test/order\nverdict: clean\nstatus: 200 OK\n"
+        "final address: http://fixture.test/order\nbody: html\ncontent-type: text/html\nencrypted: no\n";
+    static const char kOrderPage[]="<!doctype html><script>var order=[];</script>"
+        "<script async src=a.js></script><script async src=b.js></script>"
+        "<script>setTimeout(function(){if(order.join()!='b,a')wrongOrder()},1000)</script>";
+    static const char kOrderIndex[]="# yonder kept index 1\n"
+        "1\tscript\thttp://fixture.test/b.js\tcame\thttp://fixture.test/b.js\t\n"
+        "2\tscript\thttp://fixture.test/a.js\tcame\thttp://fixture.test/a.js\t\n";
+    f1=rp_cat(dir,"/fixture.test-0001.txt",""); f2=rp_cat(dir,"/fixture.test-0001.html","");
+    f3=rp_cat(dfolder,"/index",""); f4=rp_cat(dfolder,"/1.js","");
+    char *f5=rp_cat(dfolder,"/2.js","");
+    if(!rp_write(f1,kOrderRecord,sizeof(kOrderRecord)-1) || !rp_write(f2,kOrderPage,sizeof(kOrderPage)-1) ||
+       !rp_write(f3,kOrderIndex,sizeof(kOrderIndex)-1) || !rp_write(f4,"order.push('b')",15) ||
+       !rp_write(f5,"order.push('a')",15)) bad++;
+    rc=rp_replay_copy(dir,"fixture.test-0001.txt",60000,&t,&record);
+    if(rc!=0 || t.clean!=1 || t.incomplete!=0 || t.unfinished!=0 || record==NULL || strstr(record,"wrongOrder")!=NULL) {
+        printf("  two async scripts did not run in the order they were kept in\n"); bad++;
+    }
+    free(record); free(f1); free(f2); free(f3); free(f4); free(f5); free(dfolder); free(dir);
+
     /* A page that goes somewhere of its own: the replay stops there, says
      * where it went, and the timer the page set for later never fires. */
     dir=rp_cat(work,"/navigates","");
@@ -1139,7 +1219,7 @@ static int rp_self_test(const char *work) {
             load.dir="/tmp/kept"; load.keep=true; load.budget_ms=60000;
             fake_reset(); snprintf(fake_dirs[nfake_dirs++],256,"/tmp/kept");
             size_t live_before=live;
-            RpRan ran=rp_run(&load,rp_site_lookup,&site);
+            RpRan ran=rp_run(&load,rp_site_lookup,&site,NULL);
             pages++;
             size_t wlen;
             const char *record=rp_written("/tmp/kept",address,load.seq,name,sizeof(name),&wlen);

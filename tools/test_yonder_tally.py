@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """tools/yonder_tally.py on three hand-made page files, and a directory that
-also holds what is not one: a note, and a kept page's bytes and folder.
-Run with `python3 -I tools/test_yonder_tally.py`; tools/test_yonder_replay_host.sh
+also holds what is not one: a note, and a kept page's bytes and folder;
+then page files that are not whole (cut short, or not matching their
+verdict), a path not there and a directory that cannot be listed, each an
+error. Run with `python3 -I tools/test_yonder_tally.py`; tools/test_yonder_replay_host.sh
 runs it with the replay's own cases."""
 import contextlib
 import importlib.util
 import io
+import os
 import pathlib
 import tempfile
 import unittest
@@ -114,6 +117,37 @@ class TallyCases(unittest.TestCase):
         rc, out = self.run_main('--surface', 'fetch', 'localStorage')
         self.assertEqual(rc, 0)
         self.assertIn('surface fetch, localStorage: 3 of 3 files, 2 of 2 sites, 17 asks', out)
+
+    def run_err(self, *paths):
+        err = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            rc = tally.main([str(p) for p in paths])
+        return rc, err.getvalue()
+
+    def test_a_record_cut_short_is_an_error(self):
+        (self.root / 'cut-0009.txt').write_bytes(b'address: https://cut.test/\n')
+        rc, err = self.run_err(self.root)
+        self.assertEqual(rc, 2)
+        self.assertIn('cut-0009.txt: not a whole page file: its second line is not a verdict', err)
+
+    def test_a_record_whose_lines_do_not_match_its_verdict_is_an_error(self):
+        (self.root / 'short-0009.txt').write_bytes(
+            b'address: https://short.test/\nverdict: 2 MISSING, 1 FAILED\nMISSING global fetch (1)\n')
+        rc, err = self.run_err(self.root)
+        self.assertEqual(rc, 2)
+        self.assertIn('its verdict counts 2 MISSING and 1 FAILED lines, and it holds 1 and 0', err)
+
+    @unittest.skipIf(hasattr(os, 'geteuid') and os.geteuid() == 0, 'root lists any directory')
+    def test_a_directory_that_cannot_be_listed_is_an_error(self):
+        locked = self.root / 'locked'
+        locked.mkdir()
+        locked.chmod(0)
+        try:
+            rc, err = self.run_err(locked)
+        finally:
+            locked.chmod(0o755)
+        self.assertEqual(rc, 2)
+        self.assertIn('cannot be listed', err)
 
     def test_a_path_not_there_is_an_error(self):
         err = io.StringIO()

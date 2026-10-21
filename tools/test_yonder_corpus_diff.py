@@ -3,11 +3,14 @@
 that gained a line, one that lost one, one whose counts alone moved, one
 the second replay did not write, and one only it wrote; then a page whose
 replay was incomplete, never reached a verdict, or recovered, in each
-direction; and a page file that cannot be read. Run with `python3 -I`;
+direction; a page file cut short or whose counts do not reconcile, which
+is unjudged; and a page file or directories that cannot be read. Run with
+`python3 -I`;
 tools/test_yonder_replay_host.sh runs it."""
 import contextlib
 import importlib.util
 import io
+import os
 import pathlib
 import tempfile
 import unittest
@@ -148,6 +151,35 @@ class DiffCases(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertIn('regressions: 0 pages\n', out)
         self.assertIn('recovered: 1 pages\n  better-0002.txt', out)
+
+    def test_a_before_record_cut_short_is_unjudged(self):
+        # Read as it is, the cut record would make every failure it had
+        # read as progress.
+        self.settle_the_rest()
+        (self.before / 'better-0002.txt').write_text('address: https://better.test/\n')
+        rc, out = self.run_main(self.before, self.after)
+        self.assertEqual(rc, 2)
+        self.assertIn('progress: 0 pages\n', out)
+        self.assertIn('unjudged: 1 pages\n  better-0002.txt  ', out)
+        self.assertIn('its second line is not a verdict', out)
+
+    def test_a_record_whose_counts_do_not_reconcile_is_unjudged(self):
+        self.settle_the_rest()
+        (self.after / 'worse-0001.txt').write_text('address: https://worse.test/\nverdict: 2 MISSING\nMISSING global fetch (1)\n')
+        rc, out = self.run_main(self.before, self.after)
+        self.assertEqual(rc, 2)
+        self.assertIn('unjudged: 1 pages\n  worse-0001.txt  ', out)
+
+    @unittest.skipIf(hasattr(os, 'geteuid') and os.geteuid() == 0, 'root lists any directory')
+    def test_a_directory_that_cannot_be_listed_is_an_error(self):
+        self.before.chmod(0)
+        self.after.chmod(0)
+        try:
+            rc, _ = self.run_main(self.before, self.after)
+        finally:
+            self.before.chmod(0o755)
+            self.after.chmod(0o755)
+        self.assertEqual(rc, 2)
 
     def test_an_unreadable_page_file_is_an_error(self):
         (self.after / 'odd.txt').mkdir()

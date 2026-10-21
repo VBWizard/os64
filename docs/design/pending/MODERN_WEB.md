@@ -613,7 +613,11 @@ the record says it was laid out, with a text context of its own; its jobs
 are answered at the top of each turn in submission order, a script or a
 sheet from the index by its exact address as it came or as it failed,
 each line answering one job (a job past the lines kept for its address is
-incomplete, never a second run of the first). A whole replay is written
+incomplete, never a second run of the first), and in the index's order,
+which is the order the products reached the window where the page was
+kept: a job whose line comes later waits for it, so two async scripts run
+in the order they ran there whatever order the replay asked for them, and
+a job still waiting when the replay ends is incomplete. A whole replay is written
 into an OUT-DIR with no records in it, and refused otherwise; `--only`
 may add to one, and says so. Records spell a token injectively: a `%`
 that a reader would take for part of a spelling is written `%25`
@@ -645,17 +649,21 @@ when the before-record reached a verdict, never progress; one whose
 after-record is incomplete is listed to be recorded again, as newly
 incomplete when the before-record was not, and is neither; one that
 reached a verdict where it had not is recovered, and not compared. A page
-the after directory lacks is a regression, and a page file it cannot read
-answers 2.
+the after directory lacks is a regression. A directory it cannot list or
+a page file it cannot read answers 2, and so does a page file that is not
+whole: the tally's reader requires the second line to be a verdict and the
+record lines to be exactly the ones it counts, so a record cut short is
+listed as unjudged rather than read as a page that stopped failing; the
+tally answers 2 for one too.
 
 **Proof.**
 
 | Check | Result |
 |---|---|
 | Scripted-page host (`tools/test_yonder_scripts_host.sh`): the keep cases (a windows-1252 page posted in 97-byte chunks with a NUL inside kept byte for byte; the index, its version, each file, a failed script's line and no file; the facts; a page let go unshown; a stream stopped before its verdict leaving nothing; a folder that cannot be made; a name another yonder took, bytes and a folder left from before, each passed over; an empty folder removed; a head fact kept past a full table; an address's own `%` written apart from the token spelling; the setting off keeping nothing) and the script time (a forced layout's 2,500 µs on the line) | 5,904 checks, zero failures (5,842 before the slice) |
-| The replay's self-test (`tools/test_yonder_replay_host.sh`): the 29 fixture pages of `tools/yonder_loop_fixture`, `yonder_script_fixture` and `pages`, and ten hand-made (a sheet that imports another from its redirected address and is read under its label, a page in windows-1252 from an encrypted fetch, a text body, a file's page and its script and timer, an error page, a failed script with a module and a global, a page too deep to read to its end, a picture by itself, a 1,400-pixel window, scripts off, an address holding `M%49SSING` of its own beside MISSING), kept with keep_pages on, written to real files, replayed | 39 pages; every replayed record is the kept one line for line (the paint stages aside: the processor's counter times them); the corpus diff between the two finds nothing. Then, each as a corpus of its own: a script's index line taken out reads `incomplete` with no FAILED line for it; a damaged index, a record with a line that had no memory, and a `*.txt` that is not a record are unjudged (answer 2), while one whose table was full is judged; no time reads `unfinished`; a script asked for twice and kept once reads `incomplete`; a whole replay into a directory holding records is refused; a page that navigates stops there. The whole corpus given no time: its 5 unfinished pages are the diff's 5 broken, and it fails |
+| The replay's self-test (`tools/test_yonder_replay_host.sh`): the 29 fixture pages of `tools/yonder_loop_fixture`, `yonder_script_fixture` and `pages`, and ten hand-made (a sheet that imports another from its redirected address and is read under its label, a page in windows-1252 from an encrypted fetch, a text body, a file's page and its script and timer, an error page, a failed script with a module and a global, a page too deep to read to its end, a picture by itself, a 1,400-pixel window, scripts off, an address holding `M%49SSING` of its own beside MISSING), kept with keep_pages on, written to real files, replayed | 39 pages; every replayed record is the kept one line for line (the paint stages aside: the processor's counter times them); the corpus diff between the two finds nothing. Then, each as a corpus of its own: a script's index line taken out reads `incomplete` with no FAILED line for it; a damaged index, a record with a line that had no memory, and a `*.txt` that is not a record are unjudged (answer 2), while one whose table was full is judged; no time reads `unfinished`; a script asked for twice and kept once reads `incomplete`; two async scripts kept in the reverse of the order they were asked for run in the kept order; a whole replay into a directory holding records is refused; a page that navigates stops there. The whole corpus given no time: its 5 unfinished pages are the diff's 5 broken, and it fails |
 | Hand mutants of the runner and the keepers (not the mutant harnesses) | caught: a sheet read without its label, the head's `encrypted`, `body` and status ignored, sheets left unanswered, the clock not moved, a file page's script refused, the view's width ignored and scripts-off ignored (both missed first, and the two hand-made pages that catch them were written for them), the bytes not kept, the rename skipped, a script not kept, the time not measured, the temporary not removed, the not-whole line not written |
-| `tools/test_yonder_tally.py`, `tools/test_yonder_corpus_diff.py` | 8 and 9 tests pass |
+| `tools/test_yonder_tally.py`, `tools/test_yonder_corpus_diff.py` | 11 and 12 tests pass |
 | Guest (QEMU, GUI entry, headless): `yonder` started from `/home/gui.conf`, `/home/kp/kp.html` (a script, a sheet that imports another, a script that 404s) typed into it, `/home` read back with `debugfs` | `kept/file-0001.html` byte-identical to the page, `.d/` with `1.js`, `2.css`, `3.css` and the index's four lines, the failed one included; `e2fsck -fn` clean on `/home`. Replayed on the host: the same MISSING and FAILED lines, plus the timer's death at 300 ms, which the guest's arrival write predates. Not a P5 run |
 | The P5's existing records | `replayed 0, clean 0, incomplete 0, unfinished 0; 1601 records carry no kept bytes`: the replay of those records is impossible, as the brief said |
 | Anchors of every mutant harness that names a file this slice touched | 334 anchors, all found once (one, `sheets-failure-holds-nothing`, kept by writing the sheet's line before its wait is counted down). The mutant harnesses were not run |

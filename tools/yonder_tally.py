@@ -25,16 +25,20 @@ after a `--`.)
 A directory is read for its `*.txt` files, not below it: a kept page's
 `.html` and `.d/` beside its record are not records. A file that does not
 begin `address: ` is passed over and counted on stderr; a path that is not
-there, or a file that cannot be read, is an error (exit 2). Run it with
+there, a directory that cannot be listed, a file that cannot be read, and
+a page file that is not whole (its verdict missing, or not matching its
+record lines) are errors (exit 2). Run it with
 `python3 -I`; it imports nothing but the standard library.
 """
 import argparse
 import collections
+import os
 import pathlib
 import re
 import sys
 
 COUNT = re.compile(rb' \((\d+)\)$')
+VERDICT = re.compile(rb'verdict: (?:clean|(\d+) MISSING, (\d+) FAILED|(\d+) MISSING|(\d+) FAILED)')
 ESCAPE = re.compile(rb'\\(\\|x[0-9A-Fa-f]{2})')
 PERCENT = re.compile(rb'M%49SSING|F%41ILED|%25')
 PERCENT_BACK = {b'M%49SSING': b'MISSING', b'F%41ILED': b'FAILED', b'%25': b'%'}
@@ -74,7 +78,8 @@ class Record:
     count}, its FAILED lines as {(what, message): count}, and, for a record
     a replay wrote (tools/test_yonder_replay_host.c), its `REPLAY
     incomplete <kind> <url>` lines, what the replay had nothing kept for,
-    and its other `REPLAY` lines, why the replay reached no verdict."""
+    and its other `REPLAY` lines, why the replay reached no verdict.
+    `lost`: the record says some lines had no memory to be named."""
 
     def __init__(self, path, address):
         self.path = path
@@ -84,52 +89,92 @@ class Record:
         self.failed = {}
         self.incomplete = []
         self.unfinished = []
+        self.lost = False
+
+
+class Unreadable(Exception):
+    """A path given that is not there, a directory that cannot be listed,
+    or a file that cannot be read: a tally of what could be read would
+    read as a census of everything."""
+
+
+class NotWhole(Unreadable):
+    """A page file that is not whole: its second line is not a verdict, or
+    its record lines are not the ones the verdict counts (a file cut short,
+    or edited). Read as it is, every line it lost would read as a page that
+    stopped asking."""
 
 
 def read_record(path):
-    """The record in `path`, or None when it is not a page file."""
+    """The record in `path`, or None when it is not a page file (its first
+    line is not an address). NotWhole when it is page-shaped and not
+    whole: the second line must be `verdict: clean` or the counts of the
+    tokens with records, and the record lines must be exactly that many of
+    each. `lost` is set when the record says it could not keep or name
+    some lines, which a count cannot show."""
     data = path.read_bytes()
     lines = data.split(b'\n')
     if not lines or not lines[0].startswith(b'address: '):
         return None
+    verdict = VERDICT.fullmatch(lines[1]) if len(lines) > 1 else None
+    if verdict is None:
+        raise NotWhole(f'{path}: not a whole page file: its second line is not a verdict')
+    want_missing = int(verdict.group(1) or verdict.group(3) or 0)
+    want_failed = int(verdict.group(2) or verdict.group(4) or 0)
     rec = Record(path, unescape(lines[0][len(b'address: '):]))
+    seen_missing = seen_failed = 0
     for line in lines[2:]:
         m = COUNT.search(line)
         if line.startswith(b'MISSING ') and m:
+            seen_missing += 1
             body = line[len(b'MISSING '):m.start()]
             kind, _, name = body.partition(b' ')
             key = (unescape(kind), unescape(name))
             rec.missing[key] = rec.missing.get(key, 0) + int(m.group(1))
         elif line.startswith(b'FAILED ') and m:
+            seen_failed += 1
             body = line[len(b'FAILED '):m.start()]
             what, _, message = body.partition(b': ')
             key = (unescape(what), unescape(message))
             rec.failed[key] = rec.failed.get(key, 0) + int(m.group(1))
+        elif line.startswith(b'MISSING ') or line.startswith(b'FAILED '):
+            raise NotWhole(f'{path}: not a whole page file: a record line with no count')
         elif line.startswith(b'REPLAY incomplete '):
             rec.incomplete.append(unescape(line[len(b'REPLAY incomplete '):]))
         elif line.startswith(b'REPLAY '):
             rec.unfinished.append(unescape(line[len(b'REPLAY '):]))
+        elif line.startswith(b'some lines not kept: '):
+            rec.lost = True
+    if (seen_missing, seen_failed) != (want_missing, want_failed):
+        raise NotWhole(f'{path}: not a whole page file: its verdict counts {want_missing} MISSING and '
+                       f'{want_failed} FAILED lines, and it holds {seen_missing} and {seen_failed}')
     return rec
 
 
-class Unreadable(Exception):
-    """A path given that is not there, or a file that cannot be read: a
-    tally of what could be read would read as a census of everything."""
+def page_files(directory):
+    """The `*.txt` files in a directory, by name, files only (a directory
+    that happens to be named `*.txt` is not a record). Unreadable when the
+    directory cannot be listed: read as empty, it would read as a corpus
+    that asked for nothing."""
+    try:
+        with os.scandir(directory) as entries:
+            names = sorted(e.name for e in entries if e.name.endswith('.txt') and e.is_file())
+    except OSError as e:
+        raise Unreadable(f'{directory}: cannot be listed: {e.strerror or e}') from e
+    return [pathlib.Path(directory) / n for n in names]
 
 
 def read_records(paths):
     """Every record under the paths given: a file is read as one, a
-    directory for its `*.txt` files, in name order (a directory that
-    happens to be named `*.txt` is not a record and is passed over).
-    Unreadable when a path is not there or a file cannot be read."""
+    directory for its `*.txt` files (page_files). Unreadable when a path
+    is not there, a directory cannot be listed, a file cannot be read, or
+    a page file is not whole (NotWhole)."""
     records, passed = [], 0
     for p in map(pathlib.Path, paths):
         if not p.exists():
             raise Unreadable(f'{p}: no such file or directory')
-        files = sorted(p.glob('*.txt')) if p.is_dir() else [p]
+        files = page_files(p) if p.is_dir() else [p]
         for f in files:
-            if not f.is_file():
-                continue
             try:
                 rec = read_record(f)
             except OSError as e:

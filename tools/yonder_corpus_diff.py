@@ -25,15 +25,21 @@ The rest each have a heading of their own, and none is progress:
   regression nor progress, and never silent.
 - RECOVERED: the after-record reached a verdict where the before-record
   did not; its lines are not compared with a record that was not the page.
+- UNJUDGED: a page file on either side that is not whole (its verdict
+  missing, or not matching its record lines; a file cut short reads as a
+  page that stopped asking for everything it lost), or whose record says
+  some lines had no memory to be named. Listed with why, and judged on
+  neither side.
 - A page the after directory does not have is a regression, since whatever
   it gained cannot be seen.
 
-Exit 1 when there is any regression, 2 when a directory or a page file in
-it cannot be read, 0 otherwise. Run it with `python3 -I`; the records are
+Exit 2 when a directory cannot be listed, a page file in it cannot be
+read, or any page is unjudged; else 1 when there is any regression; else 0. Run it with `python3 -I`; the records are
 data, read by tools/yonder_tally.py's reader, loaded from beside this file.
 """
 import argparse
 import importlib.util
+import os
 import pathlib
 import sys
 
@@ -63,20 +69,34 @@ def state_of(rec):
     return 'broken' if rec.unfinished else 'verdict'
 
 
-def read_dir(path):
+def read_dir(path, unjudged):
     """{file name: record} for the page files in a directory. Unreadable
-    (tally's) when a `*.txt` there is not a file or cannot be read: a page
-    left out of the comparison would read as a page that did not change."""
+    (tally's) when the directory cannot be listed, or a `*.txt` there is not
+    a file or cannot be read: a page left out of the comparison would read
+    as a page that did not change. A page file that is not whole (tally's
+    NotWhole), or whose record says it lost lines it could not name, is not
+    judged: it goes in `unjudged` as {name: reason} instead."""
     pages = {}
-    for f in sorted(pathlib.Path(path).glob('*.txt')):
+    try:
+        with os.scandir(path) as entries:
+            names = sorted(e.name for e in entries if e.name.endswith('.txt'))
+    except OSError as e:
+        raise tally.Unreadable(f'{path}: cannot be listed: {e.strerror or e}') from e
+    for name in names:
+        f = pathlib.Path(path) / name
         if not f.is_file():
             raise tally.Unreadable(f'{f}: not a file')
         try:
             rec = tally.read_record(f)
+        except tally.NotWhole as e:
+            unjudged[name] = str(e)
+            continue
         except OSError as e:
             raise tally.Unreadable(f'{f}: {e.strerror or e}') from e
-        if rec is not None:
-            pages[f.name] = rec
+        if rec is not None and rec.lost:
+            unjudged[name] = f'{f}: its record says some lines had no memory to be named'
+        elif rec is not None:
+            pages[name] = rec
     return pages
 
 
@@ -120,11 +140,16 @@ def main(argv=None):
         if not pathlib.Path(d).is_dir():
             print(f'yonder_corpus_diff: {d} is not a directory', file=sys.stderr)
             return 2
+    unjudged = {}
     try:
-        before, after = read_dir(args.before), read_dir(args.after)
+        before, after = read_dir(args.before, unjudged), read_dir(args.after, unjudged)
     except tally.Unreadable as e:
         print(f'yonder_corpus_diff: {e}', file=sys.stderr)
         return 2
+    # A page not judged on one side is judged on neither.
+    for name in unjudged:
+        before.pop(name, None)
+        after.pop(name, None)
     table, gone, new = diff(before, after)
     # Regressions and progress are always said, the rest when they have a
     # page; each line under a page says what it gained, lost, or why the
@@ -146,6 +171,10 @@ def main(argv=None):
             print(f'  {name}  {before[name].address}')
     if new:
         print(f'only in {args.after}: {len(new)} pages')
+    if unjudged:
+        print(f'unjudged: {len(unjudged)} pages')
+        for name, why in sorted(unjudged.items()):
+            print(f'  {name}  {why}')
     gained = sum(len(lines) for _, lines in table['regressions'].values())
     lost = sum(len(lines) for _, lines in table['progress'].values())
     incomplete = len(table['to record again']) + len(table['newly incomplete'])
@@ -153,6 +182,8 @@ def main(argv=None):
     print(f'before: {len(before)} pages, {clean(before)} clean; after: {len(after)} pages, '
           f'{clean(after)} clean, {incomplete} incomplete, {broken} broken; '
           f'{gained} lines gained, {lost} lines lost')
+    if unjudged:
+        return 2
     return 1 if table['regressions'] or table['broken'] or gone else 0
 
 
