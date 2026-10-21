@@ -115,6 +115,8 @@ typedef enum {
     GARB_WORD_BREAK, GARB_OVERFLOW_WRAP,
     // CSS Text 3 § 7.2: the KEYWORD normal, or a LENGTH.
     GARB_LETTER_SPACING,
+    // CSS Overflow 4 § 4.1's one-value form, clip or ellipsis: a KEYWORD.
+    GARB_TEXT_OVERFLOW,
     GARB_NPROPS
 } garb_prop_t;
 

@@ -1165,3 +1165,15 @@ IN: letter-spacing: normal 10px
 OUT: invalid
 IN: letter-spacing: auto
 OUT: invalid
+
+# ── text-overflow (Overflow 4 § 4.1, one value: clip or ellipsis) ──
+IN: text-overflow: ellipsis
+OUT: text-overflow: ellipsis
+IN: text-overflow: CLIP
+OUT: text-overflow: clip
+IN: text-overflow: "-"
+OUT: invalid
+IN: text-overflow: clip ellipsis
+OUT: invalid
+IN: text-overflow: fade
+OUT: invalid

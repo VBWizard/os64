@@ -140,6 +140,7 @@ static const Prop kProps[GARB_NPROPS] = {
     [GARB_WORD_BREAK] = {"word-break", true, true},
     [GARB_OVERFLOW_WRAP] = {"overflow-wrap", true, true},
     [GARB_LETTER_SPACING] = {"letter-spacing", true, true},
+    [GARB_TEXT_OVERFLOW] = {"text-overflow", false, true},
 };
 
 const char *garb_prop_name(garb_prop_t prop)
@@ -503,6 +504,9 @@ static const char *const kUserSelect[] = {"auto", "text", "none", "contain", "al
 // beside `overflow-wrap: anywhere`) and § 5.4.
 static const char *const kWordBreak[] = {"normal", "keep-all", "break-all", "break-word", NULL};
 static const char *const kOverflowWrap[] = {"normal", "break-word", "anywhere", NULL};
+// CSS Overflow 4 § 4.1 as one value: its strings, fade() and the second
+// value of a pair are not read, and a value using one is invalid.
+static const char *const kTextOverflow[] = {"clip", "ellipsis", NULL};
 // The identifiers a <custom-ident> may not be (Values 4 § 4.2): the
 // CSS-wide keywords and `default`.
 static const char *const kNotCustom[] = {"inherit", "initial", "unset", "revert",
@@ -2055,6 +2059,7 @@ static const Longhand kLonghands[] = {
     // Text 3 § 7.2; the Quirks standard's unitless lengths include it (§
     // 3.2). Text 4's percentage of the font size is not read.
     {GARB_LETTER_SPACING, G_SPACING_TEXT, NULL},
+    {GARB_TEXT_OVERFLOW, G_KEYWORDS, kTextOverflow},
 };
 
 static bool longhand_one(Sets *s, VCur *c, const Longhand *l, garb_val_t *out);
