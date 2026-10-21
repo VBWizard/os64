@@ -14,20 +14,14 @@ from the bytes read before the change, checked byte for byte, whatever
 happens. Run it from a clean tree, and never beside another harness that
 edits the same tree; the per-mutant logs are in --logs.
 
-Each run is the leader of its own process group, and a run past its
-timeout is killed whole: killing only the shell leaves a looping driver
-spinning after the harness is gone.
-
 Left out, because nothing can tell them apart from the code: the corner
 square's far edges rounded down instead of up (every radius reaching the
 painter is whole pixels), and a band of no rows skipped or drawn (held
 makes it empty).
 """
 import argparse
-import os
 import pathlib
 import re
-import signal
 import subprocess
 import sys
 
@@ -145,19 +139,6 @@ mutants = [
 ]
 
 
-def run_cases(log):
-    """The cases in a process group of their own; on timeout the group dies."""
-    with log.open('w') as out:
-        proc = subprocess.Popen(['bash', '-c', CASES], cwd=root, stdout=out, stderr=out,
-                                start_new_session=True)
-        try:
-            return proc.wait(timeout=TIMEOUT)
-        except subprocess.TimeoutExpired:
-            os.killpg(proc.pid, signal.SIGKILL)
-            proc.wait()
-            return 'timeout'
-
-
 caught, missed, unbuilt = [], [], []
 for name, rel, old, new in mutants:
     if args.only and args.only not in name:
@@ -172,7 +153,13 @@ for name, rel, old, new in mutants:
     log = args.logs / f'{name}.log'
     try:
         path.write_text(text.replace(old, new))
-        code = run_cases(log)
+        with log.open('w') as out:
+            try:
+                result = subprocess.run(['bash', '-c', CASES], cwd=root, stdout=out, stderr=out,
+                                        timeout=TIMEOUT)
+                code = result.returncode
+            except subprocess.TimeoutExpired:
+                code = 'timeout'
     finally:
         path.write_bytes(original)
         if path.read_bytes() != original:
