@@ -141,6 +141,10 @@ static const Prop kProps[GARB_NPROPS] = {
     [GARB_OVERFLOW_WRAP] = {"overflow-wrap", true, true},
     [GARB_LETTER_SPACING] = {"letter-spacing", true, true},
     [GARB_TEXT_OVERFLOW] = {"text-overflow", false, true},
+    [GARB_OUTLINE_WIDTH] = {"outline-width", false, true},
+    [GARB_OUTLINE_STYLE] = {"outline-style", false, true},
+    [GARB_OUTLINE_COLOR] = {"outline-color", false, true},
+    [GARB_OUTLINE_OFFSET] = {"outline-offset", false, true},
 };
 
 const char *garb_prop_name(garb_prop_t prop)
@@ -507,6 +511,9 @@ static const char *const kOverflowWrap[] = {"normal", "break-word", "anywhere", 
 // CSS Overflow 4 § 4.1 as one value: its strings, fade() and the second
 // value of a pair are not read, and a value using one is invalid.
 static const char *const kTextOverflow[] = {"clip", "ellipsis", NULL};
+// CSS UI 4 § 3.3: a border's styles but `hidden`, and `auto`.
+static const char *const kOutlineStyle[] = {"auto", "none", "dotted", "dashed", "solid", "double",
+                                            "groove", "ridge", "inset", "outset", NULL};
 // The identifiers a <custom-ident> may not be (Values 4 § 4.2): the
 // CSS-wide keywords and `default`.
 static const char *const kNotCustom[] = {"inherit", "initial", "unset", "revert",
@@ -1976,6 +1983,9 @@ typedef enum {
     G_WILL_CHANGE,          // auto | <animateable-feature>#
     G_CURSOR,               // [[<url> | image-set()] [<x> <y>]?,]* <keyword>
     G_SPACING_TEXT,         // normal | <length>, a unitless one in quirks
+    G_OUTLINE_WIDTH,        // <line-width>, never unitless
+    G_OUTLINE_COLOR,        // auto | <color>
+    G_LENGTH,               // <length>, negative too
 } Grammar;
 
 typedef struct {
@@ -2060,6 +2070,8 @@ static const Longhand kLonghands[] = {
     // 3.2). Text 4's percentage of the font size is not read.
     {GARB_LETTER_SPACING, G_SPACING_TEXT, NULL},
     {GARB_TEXT_OVERFLOW, G_KEYWORDS, kTextOverflow},
+    {GARB_OUTLINE_WIDTH, G_OUTLINE_WIDTH, NULL}, {GARB_OUTLINE_STYLE, G_KEYWORDS, kOutlineStyle},
+    {GARB_OUTLINE_COLOR, G_OUTLINE_COLOR, NULL}, {GARB_OUTLINE_OFFSET, G_LENGTH, NULL},
 };
 
 static bool longhand_one(Sets *s, VCur *c, const Longhand *l, garb_val_t *out);
@@ -3063,6 +3075,14 @@ static bool longhand_one(Sets *s, VCur *c, const Longhand *l, garb_val_t *out)
     case G_CURSOR: return cursor(s, c, l->words, out);
     case G_SPACING_TEXT:
         return kw_or_dim(s, c, kNormal, ACCEPT_LENGTH, true, true, out);
+    case G_OUTLINE_WIDTH: return kw_or_dim(s, c, kBorderWidth, ACCEPT_LENGTH, false, false, out);
+    case G_OUTLINE_COLOR:
+        if (vc_keyword(c, kAuto) != NULL) {
+            *out = kw("auto");
+            return true;
+        }
+        return vc_color(c, out);
+    case G_LENGTH: return vc_dim(c, ACCEPT_LENGTH, true, false, &s->a, out);
     }
     return false;
 }
@@ -3075,7 +3095,7 @@ typedef enum {
     SH_BACKGROUND_POSITION, SH_FONT, SH_LIST_STYLE, SH_TEXT_DECORATION, SH_OVERFLOW, SH_INSET,
     SH_FLEX, SH_FLEX_FLOW, SH_GAP,
     SH_GRID_COLUMN, SH_GRID_ROW, SH_GRID_AREA, SH_PLACE_ITEMS, SH_PLACE_SELF, SH_PLACE_CONTENT,
-    SH_BORDER_RADIUS, SH_ANIMATION,
+    SH_BORDER_RADIUS, SH_ANIMATION, SH_OUTLINE,
 } Shorthand;
 
 // `modern` as Prop's.
@@ -3096,7 +3116,7 @@ static const struct { const char *name; Shorthand sh; bool modern; } kShorthands
     {"grid-area", SH_GRID_AREA, false},
     {"place-items", SH_PLACE_ITEMS, false}, {"place-self", SH_PLACE_SELF, false},
     {"place-content", SH_PLACE_CONTENT, false}, {"border-radius", SH_BORDER_RADIUS, false},
-    {"animation", SH_ANIMATION, false},
+    {"animation", SH_ANIMATION, false}, {"outline", SH_OUTLINE, true},
 };
 
 // What `animation` sets, in the order libgarb lists the longhands.
@@ -3156,6 +3176,9 @@ static int shorthand_longhands(Shorthand sh, garb_prop_t *out)
     case SH_PLACE_CONTENT: out[n++] = GARB_ALIGN_CONTENT; out[n++] = GARB_JUSTIFY_CONTENT; break;
     case SH_BORDER_RADIUS: for (int k = 0; k < 4; k++) out[n++] = (garb_prop_t)(GARB_BORDER_TOP_LEFT_RADIUS + k); break;
     case SH_ANIMATION: for (int k = 0; k < A_N; k++) out[n++] = kAnimationProps[k]; break;
+    case SH_OUTLINE:
+        out[n++] = GARB_OUTLINE_WIDTH; out[n++] = GARB_OUTLINE_STYLE; out[n++] = GARB_OUTLINE_COLOR;
+        break;
     }
     return n;
 }
@@ -3326,6 +3349,36 @@ static bool flex_shorthand(Sets *s, VCur *c)
     return true;
 }
 
+// `outline` (CSS UI 4 § 3.1): a width, a style and a colour, any order,
+// each at most once; each left out is its initial value (medium, none,
+// auto).
+static bool outline_shorthand(Sets *s, VCur *c)
+{
+    static const Longhand kParts[3] = {
+        {GARB_OUTLINE_WIDTH, G_OUTLINE_WIDTH, NULL}, {GARB_OUTLINE_STYLE, G_KEYWORDS, kOutlineStyle},
+        {GARB_OUTLINE_COLOR, G_OUTLINE_COLOR, NULL}};
+    garb_val_t v[3] = {kw("medium"), kw("none"), kw("auto")};
+    bool have[3] = {false, false, false};
+    while (!vc_done(c)) {
+        // A reader that refuses may have written its answer: each tries
+        // into its own.
+        garb_val_t one;
+        int k = 0;
+        for (; k < 3; k++)
+            if (!have[k] && knows(s, kParts[k].prop) && longhand_one(s, c, &kParts[k], &one))
+                break;
+        if (k == 3)
+            return false;
+        v[k] = one;
+        have[k] = true;
+    }
+    if (!have[0] && !have[1] && !have[2])
+        return false;
+    for (int k = 0; k < 3; k++)
+        set(s, kParts[k].prop, &v[k]);
+    return true;
+}
+
 static bool shorthand(Sets *s, VCur *c, Shorthand sh)
 {
     static const garb_prop_t kAll[4] = {0, 1, 2, 3};
@@ -3346,6 +3399,7 @@ static bool shorthand(Sets *s, VCur *c, Shorthand sh)
     case SH_BORDER_COLOR: return box4(s, c, GARB_BORDER_TOP_COLOR, bcolor_one);
     case SH_BACKGROUND: return background(s, c);
     case SH_ANIMATION: return animation(s, c);
+    case SH_OUTLINE: return outline_shorthand(s, c);
     case SH_BACKGROUND_POSITION: {
         // A position per layer, each split into its two longhands' lists.
         Layers xs = {0}, ys = {0};

@@ -1177,3 +1177,49 @@ IN: text-overflow: clip ellipsis
 OUT: invalid
 IN: text-overflow: fade
 OUT: invalid
+
+# ── outline (CSS UI 4 § 3) ──
+IN: outline: 2px dashed red
+OUT: outline-width: 2px; outline-style: dashed; outline-color: rgb(255, 0, 0)
+IN: outline: red solid
+OUT: outline-width: medium; outline-style: solid; outline-color: rgb(255, 0, 0)
+IN: outline: auto
+OUT: outline-width: medium; outline-style: auto; outline-color: auto
+IN: outline: none
+OUT: outline-width: medium; outline-style: none; outline-color: auto
+IN: outline: thick
+OUT: outline-width: thick; outline-style: none; outline-color: auto
+IN: outline: inherit
+OUT: outline-width: inherit; outline-style: inherit; outline-color: inherit
+IN: outline: thin outset thick
+OUT: invalid
+IN: outline: invert solid
+OUT: invalid
+IN: outline: hidden
+OUT: invalid
+IN: outline-width: 0
+OUT: outline-width: 0px
+IN: outline-width: 1%
+OUT: invalid
+IN: outline-width: -1px
+OUT: invalid
+IN: quirks outline-width: 3
+OUT: invalid
+IN: outline-style: auto
+OUT: outline-style: auto
+IN: outline-style: hidden
+OUT: invalid
+IN: outline-color: auto
+OUT: outline-color: auto
+IN: outline-color: currentColor
+OUT: outline-color: currentcolor
+IN: outline-color: invert
+OUT: invalid
+IN: outline-offset: -2px
+OUT: outline-offset: -2px
+IN: outline-offset: calc(3rem + 4vw)
+OUT: outline-offset: calc(3rem + 4vw)
+IN: outline-offset: 1%
+OUT: invalid
+IN: outline-offset: auto
+OUT: invalid

@@ -117,6 +117,10 @@ typedef enum {
     GARB_LETTER_SPACING,
     // CSS Overflow 4 § 4.1's one-value form, clip or ellipsis: a KEYWORD.
     GARB_TEXT_OVERFLOW,
+    // CSS UI 4 § 3.2-3.5: a width (a LENGTH, or the KEYWORD thin, medium or
+    // thick), a style (a KEYWORD, a border's but hidden, or auto), a colour
+    // (a COLOR, or the KEYWORD auto) and an offset (a LENGTH).
+    GARB_OUTLINE_WIDTH, GARB_OUTLINE_STYLE, GARB_OUTLINE_COLOR, GARB_OUTLINE_OFFSET,
     GARB_NPROPS
 } garb_prop_t;
 
