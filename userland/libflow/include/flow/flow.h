@@ -954,9 +954,9 @@ struct flow_box {
     // miss what is drawn.
     os64_gui_rect_t overflow;
     // How far past `overflow` what it or anything in it paints may reach,
-    // in pixels, on each side in CSS's side order: its shadows, which are
-    // in no box's overflow, and the glyph ink, decorations and marker
-    // shapes the painter draws past it. A group that composites the box
+    // in pixels, on each side in CSS's side order: its shadows and its
+    // outline, which are in no box's overflow, and the glyph ink,
+    // decorations and marker shapes the painter draws past it. A group that composites the box
     // must hold it, so this is AT LEAST that far: never less, and more
     // where a shadow paints nothing it is counted for (the bounds
     // contract, PILE3.md § Transforms, the painter, Booked).

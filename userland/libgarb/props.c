@@ -1140,7 +1140,7 @@ static bool edge_offset(Sets *s, const char *edge, const garb_val_t *offset, gar
     return true;
 }
 
-// A position, x and y (Values 4 § 9): one keyword or length-percentage, two,
+// A position, x and y (Values 4 § 8.3): one keyword or length-percentage, two,
 // or two keywords each with an offset. `three` also takes Backgrounds 3's
 // three-part form, a keyword pair with one offset (`<bg-position>`), which
 // only a background's position may be written in.
@@ -2783,7 +2783,7 @@ static bool layered(const Longhand *l)
            l->g == G_EASING || l->g == G_ITERATIONS || l->g == G_ANIM_KEYWORD;
 }
 
-// One number of a <ratio> (Values 4 § 6.1): <number [0,∞]>, a calc()
+// One number of a <ratio> (Values 4 § 5.7): <number [0,∞]>, a calc()
 // worked out as it is written, and held at 0 below.
 static bool ratio_number(Sets *s, VCur *c, garb_val_t *out)
 {
@@ -3739,7 +3739,7 @@ static const struct {
     {"-webkit-animation-fill-mode", "animation-fill-mode", false},
 };
 
-// CSS Logical 1's flow-relative longhands (§ 4, § 5) and the border sides'
+// CSS Logical 1's flow-relative longhands (§ 4) and the border sides'
 // shorthands, each the physical name it maps to in a horizontal,
 // left-to-right writing mode — the only one libflow lays out — so the
 // cascade orders a flow-relative declaration against its physical twin by

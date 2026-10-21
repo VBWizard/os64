@@ -367,7 +367,9 @@ static flow_style_t initial(const Ctx *c)
     // insets, z-index auto, and a row that does not wrap, its alignments
     // normal, its items growing by nothing from an auto basis, order 0,
     // and gaps of normal; no grid tracks or areas, auto-placement by rows,
-    // and auto lines; no transform; and the cursor and user-select auto.
+    // and auto lines; no transform; the cursor and user-select auto;
+    // normal word breaking and spacing; no outline, ratio or ellipsis; and
+    // a picture filling its box.
     return s;
 }
 

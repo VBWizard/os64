@@ -506,7 +506,7 @@ IN: background-image: linear-gradient(to, red, blue)
 OUT: invalid
 IN: background-image: radial-gradient(at, red, blue)
 OUT: invalid
-# A gradient's centre is a <position> (Values 4 § 9), which has no
+# A gradient's centre is a <position> (Values 4 § 8.3), which has no
 # three-part form: that is a background's alone (Backgrounds 3 § 3.6).
 IN: background-image: radial-gradient(at right 3% center, red, blue)
 OUT: invalid

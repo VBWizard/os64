@@ -198,7 +198,7 @@ typedef enum {
     GARB_V_FUNCTIONS,
     // `number` in `unit`, GARB_U_S or GARB_U_MS (Values 4 § 7.3).
     GARB_V_TIME,
-    // A <ratio> (Values 4 § 6.1): its width and height in `items`, two
+    // A <ratio> (Values 4 § 5.7): its width and height in `items`, two
     // NUMBERs, neither negative, a calc() worked out; `keyword` "auto" when
     // aspect-ratio wrote auto beside it, NULL otherwise.
     GARB_V_RATIO,

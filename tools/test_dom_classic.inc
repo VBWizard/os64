@@ -123,7 +123,7 @@ static void dom_classic_cases(void)
         "try{style.cssText}catch(e){capped=e.name==='QuotaExceededError'}assert(capped);"
         "style.cssText='';assert(style.cssText==='');",
         "classic-inline-style");
-    /* CSSOM § 6.7.1: every property libgarb reads is a member camel-cased,
+    /* CSSOM § 6.6.1: every property libgarb reads is a member camel-cased,
      * dashed as written, and webkit-cased when it is a -webkit- name, a
      * shorthand or an alias as much as a longhand; each sets and reads the
      * declaration of its own name. */

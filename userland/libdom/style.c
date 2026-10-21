@@ -231,7 +231,7 @@ int d_style_install(os64_dom_t *dom, JSContext *ctx)
     if (dom->style_prototype == NULL) return -1;
     JS_SetClassProto(ctx,dom->style_class,JS_DupValue(ctx,prototype));
     /* Each property name libgarb reads is a member three ways (CSSOM §
-     * 6.7.1): camel-cased (`marginInlineStart`, `WebkitTransform`),
+     * 6.6.1): camel-cased (`marginInlineStart`, `WebkitTransform`),
      * webkit-cased for a `-webkit-` name (`webkitTransform`) and dashed as
      * written (`margin-inline-start`), shorthands and aliases as well as
      * longhands. One the Modern Web arc added goes with the switch, as its

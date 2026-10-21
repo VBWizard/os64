@@ -8555,8 +8555,9 @@ static bool glass_backdrop(void *ctx, const flow_box_t *b, int32_t layer,
     return true;
 }
 
-// A picture that arrived is drawn into its box, scaled and blended
-// (scale.c); one on its way, or that will not come, keeps its frame.
+// A picture that arrived is drawn where object-fit and object-position put
+// it in its box, scaled and blended (scale.c), and cut to the box; one on
+// its way, or that will not come, keeps its frame.
 static void glass_image(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_gui_rect_t clip)
 {
     const Glass *gl = ctx;

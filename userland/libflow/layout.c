@@ -344,7 +344,8 @@ static bool keep_run(L *l, os64_text_run_t *run)
 // start, relative to the run's own origin. The stops repeat every
 // interval, so the origin is handed over reduced modulo it: the same stops,
 // in the engine's 32-bit coordinates however far along the line the run
-// starts.
+// starts. `spacing` is the text's letter-spacing, 0 for a run that is not
+// the page's text (a space measured, a marker).
 static os64_text_run_t *run_of(L *l, const Fonts *f, const char *text, uint32_t n,
                                int64_t tab_origin, int64_t tab_interval, flow_unit_t spacing)
 {
@@ -429,7 +430,8 @@ bool flow_replaced_fixed(const flow_style_t *style)
 }
 
 // A replaced box's size, against a containing block `cbw` wide and `cbh`
-// tall. `cbh` is negative where that height is not definite, and then a
+// tall. Its ratio is the page's aspect-ratio where it gave one (Sizing 4 §
+// 4.1), else the picture's own. `cbh` is negative where that height is not definite, and then a
 // percentage height is as if unset (§ 10.5) and the box's own ratio decides
 // it; an absolute box's containing block always has one (§ 10.6.5), so its
 // `height: 100%` is that block's height, not its width times the ratio.
@@ -484,9 +486,10 @@ static Replaced replaced_size(L *l, const os64_html_node_t *node, const flow_sty
         }
         return r;
     }
-    // A picture whose size is not known yet is guessed square from the
-    // side the page gave, until it arrives; anything else keeps its own
-    // default on the side the page left unset (a frame's 300 by 150).
+    // A picture whose size is not known yet takes its other side from the
+    // page's ratio, or is guessed square from the side the page gave,
+    // until it arrives; anything else keeps its own default on the side
+    // the page left unset (a frame's 300 by 150), or the ratio's.
     bool img = node->ns == OS64_HTML_NS_HTML && node->tag == OS64_HTML_TAG_IMG;
     if (img && (w_set || h_set)) {
         r.w = w_set ? w : ratio ? ratio_width(s, h, fw, fh) : h;
@@ -768,14 +771,6 @@ static int64_t space_advance(L *l, const Fonts *f)
     return w;
 }
 
-// A text's words: measured ONCE, then cut at its spaces. A text longer than
-// the engine takes in one run (OS64_TEXT_BYTES_MAX) is measured in WINDOWS
-// cut after a space, so a word never straddles two; a window with no space
-// in it is cut at a character boundary, and the word it splits stays one
-// word — two segments with no opportunity between them. Never a refusal.
-// Spaces holding a tab are the exception to "once": a tab is as wide as
-// the way to the line's next stop, so the breaker walks them where the
-// line puts them (spaces_width).
 // Where a word may be cut between its characters (CSS Text 3 § 5.1, §
 // 5.4): every boundary is an opportunity under `word-break: break-all`;
 // under `overflow-wrap: anywhere` or `break-word` (and `word-break:
@@ -823,6 +818,16 @@ static uint32_t word_pieces(L *l, Segs *s, const FItem *it, const char *text,
     return b0;
 }
 
+// A text's words: measured ONCE, then cut at its spaces, and at its
+// characters where word-break or overflow-wrap say (word_pieces). A text
+// longer than
+// the engine takes in one run (OS64_TEXT_BYTES_MAX) is measured in WINDOWS
+// cut after a space, so a word never straddles two; a window with no space
+// in it is cut at a character boundary, and the word it splits stays one
+// word — two segments with no opportunity between them. Never a refusal.
+// Spaces holding a tab are the exception to "once": a tab is as wide as
+// the way to the line's next stop, so the breaker walks them where the
+// line puts them (spaces_width).
 static void text_segments(L *l, Segs *s, const FItem *it, const char *text, uint32_t n,
                           const flow_style_t *style, int64_t tab_interval, int64_t cw)
 {
