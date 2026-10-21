@@ -12,7 +12,11 @@ going is what a slice changed. A page whose set GAINED a line is a
 regression and is printed with the lines it gained; a page that lost lines
 is progress and is printed with those. A page the after directory does
 not have is counted with the regressions, since whatever it gained cannot
-be seen. Exit 1 when there is any regression, 0 otherwise.
+be seen. A page whose after-record says `REPLAY incomplete` asked for
+something the corpus never kept, so what it shows is not the page: it is
+listed on its own as needing to be recorded again, with what it asked
+for, and is neither a regression nor progress. Exit 1 when there is any
+regression, 0 otherwise.
 
 Run it with `python3 -I`; the records are data, read by
 tools/yonder_tally.py's reader, loaded from beside this file.
@@ -52,10 +56,14 @@ def read_dir(path):
 
 
 def diff(before, after):
-    """(regressions, progress, gone, new): the first two {name: (address,
-    lines gained or lost)}, then the names only one side has."""
-    regressions, progress = {}, {}
+    """(regressions, progress, rerecord, gone, new): the first two {name:
+    (address, lines gained or lost)}, then {name: (address, what the replay
+    had nothing kept for)}, then the names only one side has."""
+    regressions, progress, rerecord = {}, {}, {}
     for name in sorted(before.keys() & after.keys()):
+        if after[name].incomplete:
+            rerecord[name] = (after[name].address, after[name].incomplete)
+            continue
         was, now = lines_of(before[name]), lines_of(after[name])
         if now - was:
             regressions[name] = (after[name].address, sorted(now - was))
@@ -63,11 +71,11 @@ def diff(before, after):
             progress[name] = (after[name].address, sorted(was - now))
     gone = sorted(before.keys() - after.keys())
     new = sorted(after.keys() - before.keys())
-    return regressions, progress, gone, new
+    return regressions, progress, rerecord, gone, new
 
 
 def clean(pages):
-    return sum(1 for r in pages.values() if not r.missing and not r.failed)
+    return sum(1 for r in pages.values() if not r.missing and not r.failed and not r.incomplete)
 
 
 def main(argv=None):
@@ -82,13 +90,19 @@ def main(argv=None):
             print(f'yonder_corpus_diff: {d} is not a directory', file=sys.stderr)
             return 2
     before, after = read_dir(args.before), read_dir(args.after)
-    regressions, progress, gone, new = diff(before, after)
+    regressions, progress, rerecord, gone, new = diff(before, after)
     for title, table, sign in (('regressions', regressions, '+'), ('progress', progress, '-')):
         print(f'{title}: {len(table)} pages')
         for name, (address, lines) in table.items():
             print(f'  {name}  {address}')
             for line in lines:
                 print(f'    {sign} {line}')
+    if rerecord:
+        print(f'to record again: {len(rerecord)} pages asked for what the corpus never kept')
+        for name, (address, asked) in rerecord.items():
+            print(f'  {name}  {address}')
+            for what in asked:
+                print(f'    ? {what}')
     if gone:
         print(f'missing from {args.after}: {len(gone)} pages')
         for name in gone:
@@ -98,7 +112,7 @@ def main(argv=None):
     gained = sum(len(lines) for _, lines in regressions.values())
     lost = sum(len(lines) for _, lines in progress.values())
     print(f'before: {len(before)} pages, {clean(before)} clean; after: {len(after)} pages, '
-          f'{clean(after)} clean; {gained} lines gained, {lost} lines lost')
+          f'{clean(after)} clean, {len(rerecord)} incomplete; {gained} lines gained, {lost} lines lost')
     return 1 if regressions or gone else 0
 
 

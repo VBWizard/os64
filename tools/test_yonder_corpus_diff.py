@@ -72,7 +72,8 @@ class DiffCases(unittest.TestCase):
         self.assertNotIn('counts-0003', out)
         self.assertIn('pages\n  gone-0004.txt  https://gone.test/\n', out)
         self.assertIn('only in', out)
-        self.assertIn('before: 4 pages, 1 clean; after: 4 pages, 2 clean; 1 lines gained, 2 lines lost', out)
+        self.assertIn('before: 4 pages, 1 clean; after: 4 pages, 2 clean, 0 incomplete; '
+                      '1 lines gained, 2 lines lost', out)
 
     def test_progress_alone_passes(self):
         (self.after / 'worse-0001.txt').write_text(BEFORE['worse-0001.txt'])
@@ -86,6 +87,23 @@ class DiffCases(unittest.TestCase):
         rc, out = self.run_main(self.before, self.after)
         self.assertEqual(rc, 1)
         self.assertIn('gone-0004.txt', out)
+
+    def test_an_incomplete_replay_is_to_record_again(self):
+        # The replay met a script the corpus never kept: its record gained a
+        # FAILED line and lost one, and neither counts.
+        (self.after / 'worse-0001.txt').write_text(BEFORE['worse-0001.txt'])
+        (self.after / 'gone-0004.txt').write_text(BEFORE['gone-0004.txt'])
+        (self.after / 'better-0002.txt').write_text(
+            'address: https://better.test/\nverdict: 1 FAILED\n'
+            'FAILED script https://better.test/new.js: TypeError: no (1)\n'
+            'REPLAY incomplete script https://better.test/M%49SSING.js\n')
+        rc, out = self.run_main(self.before, self.after)
+        self.assertEqual(rc, 0)
+        self.assertIn('regressions: 0 pages\nprogress: 0 pages\n', out)
+        self.assertIn('to record again: 1 pages asked for what the corpus never kept\n'
+                      '  better-0002.txt  https://better.test/\n'
+                      '    ? script https://better.test/MISSING.js\n', out)
+        self.assertIn('after: 5 pages, 2 clean, 1 incomplete; 0 lines gained, 0 lines lost', out)
 
     def test_not_a_directory(self):
         rc, _ = self.run_main(self.before, self.after / 'nothere')

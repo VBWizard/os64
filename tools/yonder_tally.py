@@ -66,7 +66,9 @@ def site_of(address):
 
 class Record:
     """One page file: its address, its MISSING lines as {(kind, name):
-    count} and its FAILED lines as {(what, message): count}."""
+    count}, its FAILED lines as {(what, message): count}, and, for a record
+    a replay wrote, its `REPLAY incomplete <kind> <url>` lines: what the
+    replay had nothing kept for (tools/test_yonder_replay_host.c)."""
 
     def __init__(self, path, address):
         self.path = path
@@ -74,6 +76,7 @@ class Record:
         self.site = site_of(address)
         self.missing = {}
         self.failed = {}
+        self.incomplete = []
 
 
 def read_record(path):
@@ -95,6 +98,8 @@ def read_record(path):
             what, _, message = body.partition(b': ')
             key = (unescape(what), unescape(message))
             rec.failed[key] = rec.failed.get(key, 0) + int(m.group(1))
+        elif line.startswith(b'REPLAY incomplete '):
+            rec.incomplete.append(unescape(line[len(b'REPLAY incomplete '):]))
     return rec
 
 
