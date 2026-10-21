@@ -10,7 +10,45 @@
 > FEATURES; it never licensed a half-rule. The evidence that produced the
 > ruling is in [`docs/browser_second_draft.md`](docs/browser_second_draft.md).
 > JavaScript comes after the first daily-driver graphical browser, which is
-> a ruling too, and LIBPAGE.md carries what it costs.
+> a ruling too, and LIBPAGE.md carries what it costs. (It did come after:
+> the DOM arc and the engine port, DOM.md and JAVASCRIPT.md, with scripts
+> behind the Settings switch.)
+
+## Where the campaign stands (2026-10-19)
+
+The ladder below is climbed, and the body of this file is its record. What
+followed it, each with its own document: `wend` (§ The face), then yonder,
+the graphical browser (`docs/design/completed/YONDER.md`), its cascade and
+layout arcs through Pile 3 (PILE3.md), the JavaScript engine port
+(JAVASCRIPT.md) and the DOM binding (DOM.md), and the performance slice
+(YONDER_PERF.md). yonder is Chris's daily driver for the old web and most
+of the middle-aged one. What is open, in priority order:
+
+1. **yonder 1.0's last stragglers** (YONDER_PERF.md § Then measure again):
+   the P5 whole-views reading on the uncommitted perf-6 record work, the
+   dirty-rectangle-list decision, "throttle, not freeze", the frame-timing
+   switch, the paused-animation test. Small, mostly readings.
+2. **The between-arcs batch** (`docs/design/pending/YONDER_HONEY_DO.md`):
+   Chris's list of 2026-10-19 — underlined links, the jQuery load death, a
+   menu bar with Favorites and History, persistent cookies with a switch,
+   the right-click menu (open in new window, copy link, copy image address,
+   save picture as, save link as) with its download, text selection and
+   the I-beam, the wheel through vncd — plus transitions and `:hover`, the
+   fonts rows (S9a5, WOFF2, named families), and the census's own bugs.
+   All of it 1.0; none of it waits for the arc.
+3. **The Modern Web, which is yonder 2.0**
+   (`docs/design/pending/MODERN_WEB.md`): the platform floor built whole
+   from the standards with web-platform-tests as the oracle, in tiers —
+   storage and the small globals, fetch, modules, the cheap CSS, incremental
+   relayout and the frame, SVG, the bytecode cache; then banking's iframes
+   and policy. The engine risk was measured on 2026-10-19: 2.8x Chrome on
+   page-shaped work, zero syntax failures on 23 MB of real bundles.
+4. **Media and YouTube**: a separate arc after an audio driver. Not
+   scheduled.
+
+Who does what, ruled 2026-10-19: Fable holds the overall design and the
+hard feature designs; Opus designs the rest and writes the code; Quinn
+builds what Chris hands her; Chris rules and tests before every commit.
 
 *2026-08-31/09-01, the insomnia session. Chris named the boss fight — a
 graphical browser, os64 as daily driver — and ratified the shape: tiny
@@ -819,10 +857,13 @@ Codex round is Chris's call.
 
 - Small PRs off `userland`; Chris branches each feature off the last and
   merges forward as reviews complete.
-- Chris tests before ANY commit; nothing merges without Fable's review
-  (standing ruling).
-- Codex auto-review is OFF (2026-09-01). Requesting a Codex round is
-  CHRIS'S act alone — never post `@codex review`, never assume a round.
+- Chris tests before ANY commit. Review follows the risk (CLAUDE.md):
+  a slice that touches the kernel, a park loop or the fetch machinery goes
+  to Fable; a userland-only slice is reviewed by its builder and Chris
+  (ruled 2026-10-11).
+- A Codex round is Chris's call per PR; when he asks for one, the model
+  posts `@codex review` and runs the rounds by CLAUDE.md's rules, and stops
+  at round ten to tell him.
 - Harness: `make run-net` (virtio + slirp + pcap; plain `make run` has no
   NIC). Guest reaches the host's loopback at 10.0.2.2; slirp NATs outbound
   to the real internet. The valet test dialect: `GET <name>\n` →
