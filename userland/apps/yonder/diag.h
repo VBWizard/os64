@@ -33,7 +33,8 @@
 // `<n>.css` in the order they came, and an `index` naming them. `<name>` is
 // the page file's name without its `.txt`.
 //
-// Pure apart from the writers (yonder_diag_write and the keepers): no
+// Pure apart from the writers (the claim, yonder_diag_write and the
+// keepers) and yonder_diag_next_seq's reading of a directory: no
 // clock, no window.
 
 #include <stdbool.h>
@@ -108,46 +109,62 @@ bool yonder_diag_file_name(const yonder_diag_t *d, char *out, size_t cap);
 // "unknown".
 const char *yonder_diag_image_format(const uint8_t *bytes, size_t len);
 
-// Written into `dir` whole: rendered, put in a temporary file beside the
-// real one and renamed over it, so a reader never meets half a file. 0, or
-// negative when any step failed (the temporary is then removed).
-int64_t yonder_diag_write(const yonder_diag_t *d, const char *dir);
-
 // The sequence a run starts from in `dir`: one past the highest a file
 // there already carries, so a run never writes over the census an earlier
 // one kept. 1 for an empty or unreadable directory.
 uint32_t yonder_diag_next_seq(const char *dir);
 
+// THE CLAIM: the proof that a name in a directory is this record's own.
+// Only a successful exclusive claim makes one, and the record's file, its
+// page's bytes and its folder are written only through it, so nothing is
+// ever written under a name the record did not claim.
+typedef struct yonder_diag_claim yonder_diag_claim_t;
+
 // THE RECORD'S NAME, CLAIMED in `dir` before anything is written under it,
 // so two yonders writing one directory, or one whose sequence was counted
-// before a file went, never pair one record with another's kept files. The
-// record's number moves up from where it began until `<name>.txt` can be
-// made where nothing is (os64_open's "x"; the record as it stands goes in
-// it), and, with `keep`, until `<name>.d/` can be made fresh and no
-// `<name>.html` is there; the number it ends on is yonder_diag_seq's. A
-// record that finds no such name in YONDER_DIAG_CLAIM_TRIES tries is not
-// kept (the keepers below answer as for a failed step), and takes the
-// first number whose file it can make, or the one it began with.
-// Answers 0, or negative when `keep` asked for kept files and none could be
-// claimed. Without a claim with `keep`, the keepers keep nothing.
+// before a file went, never write over each other's records or pair one
+// record with another's kept files. The record's number moves up from
+// where it began until `<name>.txt` can be made where nothing is
+// (os64_open's "x"; the record as it stands goes in it), and, with `keep`,
+// until `<name>.d/` can be made fresh and no `<name>.html` is there; the
+// number it ends on is yonder_diag_seq's. A record that finds no such name
+// in YONDER_DIAG_CLAIM_TRIES tries takes the first number whose file it
+// can make, and nothing of its page is kept; one that can make none in as
+// many tries has NO CLAIM, keeps the number it began with, and nothing of
+// it is written. A record claims once: a second call answers 0 and changes
+// nothing.
+// Answers 0; -1 when `keep` asked for kept files and the name holds none
+// (the keepers answer as for a failed step); YONDER_DIAG_UNCLAIMED with
+// no claim.
 #define YONDER_DIAG_CLAIM_TRIES 64
+#define YONDER_DIAG_UNCLAIMED (-2)
 int64_t yonder_diag_claim(yonder_diag_t *d, const char *dir, bool keep);
+// The record's claim; NULL when it has none, which every writer below
+// takes as nothing to write.
+const yonder_diag_claim_t *yonder_diag_claimed(const yonder_diag_t *d);
+
+// The claim's record written under its name whole: rendered, put in a
+// temporary file beside the real one and renamed over it, so a reader
+// never meets half a file. 0, or negative with no claim or when any step
+// failed (the temporary is then removed).
+int64_t yonder_diag_write(const yonder_diag_claim_t *c);
 
 // ── Keeping the page (keep_pages) ──
 //
 // Each answers 0, or negative when nothing more of this page will be kept:
 // the step that failed, and every call after it, since a kept page missing
 // a piece would replay as a different page. The record then carries the
-// plain line `kept: not whole: ...`, which a replay reads. A NULL record
-// keeps nothing and answers 0.
+// plain line `kept: not whole: ...`, which a replay reads. No claim keeps
+// nothing and answers 0, and a claim made without `keep` has no folder,
+// so its keepers answer as for a failed step.
 
 // The next `n` bytes the page's parser was fed, appended to a temporary
 // file beside `<name>.html`, which is begun at the first call.
-int64_t yonder_diag_keep_bytes(yonder_diag_t *d, const char *dir, const void *bytes, size_t n);
+int64_t yonder_diag_keep_bytes(const yonder_diag_claim_t *c, const void *bytes, size_t n);
 // The parser has had all the bytes it will be fed: the temporary file is
 // renamed to `<name>.html` (an empty one for a page of no bytes), never
 // over one there already, which is a failed step.
-int64_t yonder_diag_keep_bytes_end(yonder_diag_t *d, const char *dir);
+int64_t yonder_diag_keep_bytes_end(const yonder_diag_claim_t *c);
 
 // What a kept sub-resource is: its file's extension, and the word the
 // index names it by.
@@ -173,7 +190,7 @@ typedef enum { YONDER_DIAG_KEPT_SCRIPT, YONDER_DIAG_KEPT_SHEET } yonder_diag_kep
 // with a byte below 0x20, 0x7F and a backslash in a field written `\xHH`
 // and `\\`, as a page file writes them.
 #define YONDER_DIAG_INDEX_VERSION 1
-int64_t yonder_diag_keep_resource(yonder_diag_t *d, const char *dir, yonder_diag_kept_t kind,
+int64_t yonder_diag_keep_resource(const yonder_diag_claim_t *c, yonder_diag_kept_t kind,
                                   const char *url, const char *final, const char *label,
                                   const void *bytes, size_t n);
 

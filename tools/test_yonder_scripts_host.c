@@ -19,6 +19,8 @@ os64_js_status_t __real_os64_js_create_with_teardown(const os64_js_config_t *,
 #include "../userland/apps/yonder/settings.c"
 #undef s
 
+static yonder_diag_t *diag_new_claimed(const char *url, uint32_t seq);
+
 /* THE DISK, FAKED, for the page files (YONDER_DIAGNOSTICS.md): directories
  * and files in memory, reached only under a directory a case made or
  * seeded. Every other path opens nothing, as the window's fixtures always
@@ -1142,7 +1144,7 @@ static void tick_cases(void) {
     check(g.tick_painting && g.tick_began==690 && tick_x("t")==59,
         "ticks: one not taken lays out instead, as the tick's frame");
     motion_painted();
-    g.page.diag=yonder_diag_new("http://t.test/",1,0);
+    g.page.diag=diag_new_claimed("http://t.test/",1);
     now_ms=710;
     motion_tick();
     clock_us+=201000; now_ms=911;
@@ -1212,7 +1214,7 @@ static void tick_cases(void) {
     clock_us+=1000;
     motion_painted();
     geometry_layout_delay=0;
-    g.page.diag=yonder_diag_new("http://t.test/",2,0);
+    g.page.diag=diag_new_claimed("http://t.test/",2);
     said=motion_pause_said();
     yonder_diag_render(g.page.diag,record,sizeof(record));
     check(said && motion_next()==YONDER_NEVER &&
@@ -1429,7 +1431,7 @@ static void motion_cases(void) {
     check(motion_next()==YONDER_NEVER && ticker_due==YONDER_NEVER,"motion: a covered window lays out for none");
     g.covered=false;
     geometry_layout_delay=201000; now_ms=800;
-    g.page.diag=yonder_diag_new("http://m.test/",1,0);
+    g.page.diag=diag_new_claimed("http://m.test/",1);
     motion_tick();
     check(g.motion_began==800 && motion_next()==YONDER_NEVER,
         "motion: a page whose frame for an animation took more than MOTION_COST_MS lays out for none");
@@ -1456,7 +1458,7 @@ static void motion_cases(void) {
     now_ms=1000;
     probe_page(kMotionPage,false);
     relayout(true);
-    g.page.diag=yonder_diag_new("http://m.test/",2,0);
+    g.page.diag=diag_new_claimed("http://m.test/",2);
     say_laid_out(MOTION_COST_MS+1);
     check(motion_next()==YONDER_NEVER,"motion: a page whose own layout was too slow lays out for no animation");
     check(strstr(g.status_text,"ANIMATIONS PAUSED: the layout took 201 ms, over 200")!=NULL,
@@ -1497,7 +1499,7 @@ static void motion_cases(void) {
     probe_page("<!doctype html><style>@keyframes tint{to{color:red}}"
         "p{animation:tint 1s linear 1}</style><p>once</p>",false);
     relayout(true);
-    g.page.diag=yonder_diag_new("http://m.test/",3,0);
+    g.page.diag=diag_new_claimed("http://m.test/",3);
     say_laid_out(MOTION_COST_MS+1);
     check(strstr(g.status_text,"ANIMATIONS PAUSED")!=NULL,
         "motion: a slow page with an animation still to run pauses it");
@@ -4028,6 +4030,14 @@ static const char *diag_file(const char *dir, const char *name) {
     return fake_text(path);
 }
 static bool has(const char *text, const char *needle) { return text!=NULL && strstr(text,needle)!=NULL; }
+/* A page's record as a load makes one (diag_begin): its name claimed in
+ * the directory yonder.conf names, when it names one, since a record with
+ * no claim is never written. */
+static yonder_diag_t *diag_new_claimed(const char *url, uint32_t seq) {
+    yonder_diag_t *d=yonder_diag_new(url,seq,0);
+    if(d!=NULL && s_diag.dir[0]!='\0') yonder_diag_claim(d,s_diag.dir,false);
+    return d;
+}
 /* The keyword rule: MISSING and FAILED begin record lines, sit on the
  * verdict line, and appear nowhere else, in every file any case wrote. */
 static void diag_tokens_exclusive(void) {
@@ -4077,7 +4087,7 @@ static void diag_picture_case(void) {
     probe_page("<img src=file:///logo.svg><img src=file:///broken.png><img src=http://x.test/gone.png>"
         "<img src=http://x.test/far.png><img src=file:///absent.png>",true);
     pictures_start(&g.page);
-    g.page.diag=yonder_diag_new("http://x.test/",1,0);
+    g.page.diag=diag_new_claimed("http://x.test/",1);
     for(int i=0;i<5;i++) g.page.pics[i].state=PIC_WAITING;
     g.page.waiting=g.page.in_flight=5;
     yonder_picture_job_t job={.kind=YONDER_JOB_PICTURE,.index=0,.generation=g.page_serial};
@@ -4139,7 +4149,7 @@ static void diag_picture_case(void) {
 static void diag_picture_unshown_case(void) {
     probe_page("<img src=file:///kept.png><img src=file:///asked.png>",true);
     pictures_start(&g.page);
-    g.page.diag=yonder_diag_new("http://x.test/",1,0);
+    g.page.diag=diag_new_claimed("http://x.test/",1);
     g.page.pics[0].state=PIC_WAITING;
     g.page.waiting=g.page.in_flight=1;
     g.page.kept_bytes=PICTURES_KEPT_MAX;
@@ -4164,7 +4174,7 @@ static void diag_picture_unshown_case(void) {
  * Workers that stop with pictures out leave each of those named. */
 static void diag_picture_workerless_case(void) {
     probe_page("<img src=file:///one.png><img src=file:///two.png>",true);
-    g.page.diag=yonder_diag_new("http://w.test/",1,0);
+    g.page.diag=diag_new_claimed("http://w.test/",1);
     g.badge_missing=g.badge_failed=UINT32_MAX;
     pictures_start(&g.page);        /* this harness has no worker pool */
     char name[64]; yonder_diag_file_name(g.page.diag,name,sizeof(name));
@@ -4179,7 +4189,7 @@ static void diag_picture_workerless_case(void) {
     probe_drop();
     probe_page("<img src=file:///out.png>",true);
     pictures_start(&g.page);        /* the table, before the record exists */
-    g.page.diag=yonder_diag_new("http://w.test/",2,0);
+    g.page.diag=diag_new_claimed("http://w.test/",2);
     g.page.pics[0].state=PIC_WAITING; g.page.waiting=g.page.in_flight=1;
     /* What the record learned silently since arrival reaches the badge when
      * the last picture is in, even one that arrives whole. */
@@ -4204,7 +4214,7 @@ static void diag_picture_workerless_case(void) {
     /* One with the workers and one still queued behind them: both named. */
     probe_page("<img src=file:///with.png><img src=file:///behind.png>",true);
     pictures_start(&g.page);
-    g.page.diag=yonder_diag_new("http://w.test/",3,0);
+    g.page.diag=diag_new_claimed("http://w.test/",3);
     g.page.pics[0].state=PIC_WAITING; g.page.pics[1].state=PIC_QUEUED;
     g.page.next_pic=1; g.page.waiting=2; g.page.in_flight=1;
     pictures_orphaned(&g.page);
@@ -4223,7 +4233,7 @@ static void diag_picture_workerless_case(void) {
 static void diag_picture_unasked_case(void) {
     probe_page("<img src='data:image/png;base64,iVBORw0KGgo='><img src='http://[bad'>"
         "<img src=file:///slow.png><img src='x:asset'>",true);
-    g.page.diag=yonder_diag_new("http://u.test/",1,0);
+    g.page.diag=diag_new_claimed("http://u.test/",1);
     pictures_start(&g.page);        /* no workers: slow.png is refused too */
     char text[4096]; yonder_diag_render(g.page.diag,text,sizeof(text));
     check(has(text,"MISSING picture-scheme data (1)") && has(text,"FAILED picture: http://[bad: the address was refused (") &&
@@ -4302,7 +4312,7 @@ static void diag_lost_overflow_case(void) {
 static void diag_arriving_released_case(void) {
     static Page p;
     memset(&p,0,sizeof(p));
-    p.diag=yonder_diag_new("http://fixture.test/",77,0);
+    p.diag=diag_new_claimed("http://fixture.test/",77);
     s_arriving.staged=true; s_arriving.seq=yonder_diag_seq(p.diag);
     webfonts_served(&s_arriving.families,"Staged",6,WF_SERVED_NONE,"Test Sans");
     diag_leave(&p);
@@ -4340,7 +4350,7 @@ static void diag_css_unasked_case(void) {
     /* A page whose only picture is refused before the table: nothing will
      * ever come in to write the record, so meeting it writes it. */
     probe_page("<img src='data:image/png;base64,iVBORw0KGgo='>",true);
-    g.page.diag=yonder_diag_new("http://only.test/",1,0);
+    g.page.diag=diag_new_claimed("http://only.test/",1);
     pictures_start(&g.page);
     char only[64]; yonder_diag_file_name(g.page.diag,only,sizeof(only));
     check(g.page.npics==0 && has(diag_file("/tmp/diag",only),"MISSING picture-scheme data (1)"),
@@ -4348,7 +4358,7 @@ static void diag_css_unasked_case(void) {
     yonder_diag_free(g.page.diag); g.page.diag=NULL;
     probe_drop();
     probe_page("<style>p{background-image:url('data:image/png;base64,AAAA')}</style><p>x</p>",true);
-    g.page.diag=yonder_diag_new("http://c.test/",1,0);
+    g.page.diag=diag_new_claimed("http://c.test/",1);
     css_pictures(&g.page);
     css_pictures(&g.page);          /* every layout meets it again */
     char text[2048]; yonder_diag_render(g.page.diag,text,sizeof(text));
@@ -4568,7 +4578,7 @@ static void picture_tick_cases(void) {
 static void diag_picture_moves_case(void) {
     probe_page("<img src=file:///grows.png>",true);
     pictures_start(&g.page);
-    g.page.diag=yonder_diag_new("http://m.test/",1,0);
+    g.page.diag=diag_new_claimed("http://m.test/",1);
     g.page.pics[0].state=PIC_WAITING; g.page.waiting=g.page.in_flight=1;
     g.pictures_moved=true;
     yonder_picture_job_t *job=os64_calloc(1,sizeof(*job));
@@ -5113,7 +5123,7 @@ static int32_t web_file(const char *url) {
 static void web_page_scripted(const char *html, bool scripts) {
     probe_web=true;
     probe_page(html,scripts);
-    g.page.diag=yonder_diag_new(g.page.way.url,1,0);
+    g.page.diag=diag_new_claimed(g.page.way.url,1);
     check(g.page.diag!=NULL && page_lay_out(&g.page,800,600,g.zoom,&g.page),"web fonts: the page laid out on its record");
     g.pool=(os64_work_pool_t *)&pool_fake; pool_open=true;
     webfonts_feed(true);
@@ -6130,7 +6140,7 @@ static void webfont_cases(void) {
                      "<p style='font-family:Aa'>a</p><p style='font-family:Bb'>b</p>");
             /* A fresh record, so the lines are this layout's alone. */
             yonder_diag_free(g.page.diag);
-            g.page.diag=yonder_diag_new(g.page.way.url,1,0);
+            g.page.diag=diag_new_claimed(g.page.way.url,1);
             fail_at=attempts+cut;
             bool laid=lay_out_page(&g.page,800,600);
             diag_fonts(&g.page);
@@ -6231,7 +6241,7 @@ static void webfont_cases(void) {
         memset(&g.page,0,sizeof(g.page));
         /* Its own record, so its MISSING line is the staged one's. */
         yonder_diag_free(fresh.diag);
-        fresh.diag=yonder_diag_new("http://fixture.test/fresh",99,0);
+        fresh.diag=diag_new_claimed("http://fixture.test/fresh",99);
         s_arriving.staged=true; s_arriving.seq=yonder_diag_seq(fresh.diag);
         webfonts_served(&s_arriving.families,"Nope",4,WF_SERVED_NONE,"Test Sans");
         diag_observe(&fresh,"when the page was left");

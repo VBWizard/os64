@@ -27,9 +27,17 @@ typedef struct {
     bool more;
 } Table;
 
+// THE CLAIM (diag.h): the directory this record's name was claimed in, and
+// the record it is the proof for. Only yonder_diag_claim sets `dir`.
+struct yonder_diag_claim {
+    yonder_diag_t *record;
+    char *dir;
+};
+
 struct yonder_diag {
     char *url;
     uint32_t seq;
+    struct yonder_diag_claim claim;
     int64_t began_us;
     Table missing, failed, facts;
     // A line went with no memory even to name it (yonder_diag_short).
@@ -185,6 +193,7 @@ void yonder_diag_free(yonder_diag_t *d)
         (void)os64_unlink(d->keep.folder);
     os64_free(d->keep.folder);
     os64_free(d->keep.index);
+    os64_free(d->claim.dir);
     table_free(&d->missing);
     table_free(&d->failed);
     table_free(&d->facts);
@@ -543,14 +552,14 @@ static bool write_whole(const char *path, const void *bytes, size_t n)
     return ok;
 }
 
-int64_t yonder_diag_write(const yonder_diag_t *d, const char *dir)
+static bool kept_path(const yonder_diag_t *d, const char *dir, const char *suffix, char *out, size_t cap);
+
+int64_t yonder_diag_write(const yonder_diag_claim_t *c)
 {
-    char name[96], path[OS64_PATH_MAX];
-    if (d == NULL || dir == NULL || !yonder_diag_file_name(d, name, sizeof(name)))
+    char path[OS64_PATH_MAX];
+    if (c == NULL || !kept_path(c->record, c->dir, ".txt", path, sizeof(path)))
         return -1;
-    int n = os64_snprintf(path, sizeof(path), "%s/%s", dir, name);
-    if (n <= 0 || (size_t)n >= sizeof(path))
-        return -1;
+    const yonder_diag_t *d = c->record;
     size_t need = yonder_diag_render(d, NULL, 0);
     char *text = os64_malloc(need + 1);
     if (text == NULL)
@@ -562,6 +571,16 @@ int64_t yonder_diag_write(const yonder_diag_t *d, const char *dir)
 }
 
 // ── The page kept ───────────────────────────────────────────────────────
+//
+// NOTHING IS WRITTEN UNDER A NAME THIS RECORD DID NOT CLAIM: the record's
+// file, its page's bytes and its folder are written only through the
+// yonder_diag_claim_t a successful exclusive claim makes, which nothing
+// else can.
+
+const yonder_diag_claim_t *yonder_diag_claimed(const yonder_diag_t *d)
+{
+    return d != NULL && d->claim.dir != NULL ? &d->claim : NULL;
+}
 
 // `<dir>/<name><suffix>`, where `<name>` is the page file's name without
 // its `.txt`.
@@ -597,9 +616,25 @@ static bool claim_file(const yonder_diag_t *d, const char *path)
     return true;
 }
 
+// The name at `path` taken as this record's: the proof made, which holds
+// its own copy of `dir`. False, with the file removed, when there is no
+// memory for the copy.
+static bool claim_take(yonder_diag_t *d, const char *dir, const char *path)
+{
+    d->claim.dir = copy(dir);
+    if (d->claim.dir == NULL) {
+        (void)os64_unlink(path);
+        return false;
+    }
+    d->claim.record = d;
+    return true;
+}
+
 int64_t yonder_diag_claim(yonder_diag_t *d, const char *dir, bool keep)
 {
     if (d == NULL || dir == NULL)
+        return YONDER_DIAG_UNCLAIMED;
+    if (d->claim.dir != NULL)
         return 0;
     char path[OS64_PATH_MAX], html[OS64_PATH_MAX], folder[OS64_PATH_MAX];
     os64_dirent_t e;
@@ -608,30 +643,32 @@ int64_t yonder_diag_claim(yonder_diag_t *d, const char *dir, bool keep)
         if (!kept_path(d, dir, ".txt", path, sizeof(path)) || !claim_file(d, path))
             continue;
         if (!keep)
-            return 0;
+            return claim_take(d, dir, path) ? 0 : YONDER_DIAG_UNCLAIMED;
         // Its kept files' names must be fresh too: the folder made here,
         // and no page's bytes by that name left from before.
         if (kept_path(d, dir, ".html", html, sizeof(html)) && os64_stat(html, &e) != 0 &&
             kept_path(d, dir, ".d", folder, sizeof(folder)) && os64_mkdir(folder) == 0) {
-            size_t n = os64_strlen(folder) + 1;
-            d->keep.folder = os64_malloc(n);
-            if (d->keep.folder != NULL) {
-                os64_memcpy(d->keep.folder, folder, n);
-                return 0;
+            if (!claim_take(d, dir, path)) {
+                (void)os64_unlink(folder);
+                break;
             }
+            d->keep.folder = copy(folder);
+            if (d->keep.folder != NULL)
+                return 0;
             (void)os64_unlink(folder);
             return keep_failed(d);
         }
         (void)os64_unlink(path);
     }
-    // No name with fresh kept files: the record takes the first that is
-    // free, or the one it began with, and nothing of the page is kept.
+    // No name with fresh kept files: the record takes the first name it
+    // can make, and nothing of the page is kept. With none, it has no
+    // claim, and nothing of it is written.
     d->seq = first;
     for (uint32_t tries = 0; tries < YONDER_DIAG_CLAIM_TRIES; tries++, d->seq++)
         if (kept_path(d, dir, ".txt", path, sizeof(path)) && claim_file(d, path))
-            return keep ? keep_failed(d) : 0;
+            return !claim_take(d, dir, path) ? YONDER_DIAG_UNCLAIMED : keep ? keep_failed(d) : 0;
     d->seq = first;
-    return keep ? keep_failed(d) : 0;
+    return YONDER_DIAG_UNCLAIMED;
 }
 
 // The page's bytes are let go unkept: their temporary file is closed and
@@ -659,10 +696,10 @@ static int64_t keep_failed(yonder_diag_t *d)
 
 // The temporary file the page's bytes go to, begun: only for a record whose
 // name claimed its kept files' names (yonder_diag_claim).
-static bool keep_begin(yonder_diag_t *d, const char *dir)
+static bool keep_begin(yonder_diag_t *d)
 {
     char path[OS64_PATH_MAX], temp[OS64_PATH_MAX];
-    if (d->keep.folder == NULL || !kept_path(d, dir, ".html", path, sizeof(path)) ||
+    if (d->keep.folder == NULL || !kept_path(d, d->claim.dir, ".html", path, sizeof(path)) ||
         !temp_beside(path, temp, sizeof(temp)))
         return false;
     size_t n = os64_strlen(temp) + 1;
@@ -678,28 +715,30 @@ static bool keep_begin(yonder_diag_t *d, const char *dir)
     return true;
 }
 
-int64_t yonder_diag_keep_bytes(yonder_diag_t *d, const char *dir, const void *bytes, size_t n)
+int64_t yonder_diag_keep_bytes(const yonder_diag_claim_t *c, const void *bytes, size_t n)
 {
-    if (d == NULL)
+    if (c == NULL)
         return 0;
+    yonder_diag_t *d = c->record;
     if (d->keep.failed || d->keep.ended)
         return d->keep.failed ? -1 : 0;
-    if (!d->keep.open && !keep_begin(d, dir))
+    if (!d->keep.open && !keep_begin(d))
         return keep_failed(d);
     return write_all(d->keep.handle, bytes, n) ? 0 : keep_failed(d);
 }
 
-int64_t yonder_diag_keep_bytes_end(yonder_diag_t *d, const char *dir)
+int64_t yonder_diag_keep_bytes_end(const yonder_diag_claim_t *c)
 {
-    if (d == NULL)
+    if (c == NULL)
         return 0;
+    yonder_diag_t *d = c->record;
     if (d->keep.failed || d->keep.ended)
         return d->keep.failed ? -1 : 0;
     // Never over a page's bytes already there: the name was claimed fresh
     // (yonder_diag_claim), so one there now is another's.
     char path[OS64_PATH_MAX];
     os64_dirent_t e;
-    if ((!d->keep.open && !keep_begin(d, dir)) || !kept_path(d, dir, ".html", path, sizeof(path)) ||
+    if ((!d->keep.open && !keep_begin(d)) || !kept_path(d, c->dir, ".html", path, sizeof(path)) ||
         os64_stat(path, &e) == 0)
         return keep_failed(d);
     d->keep.open = false;
@@ -715,15 +754,15 @@ int64_t yonder_diag_keep_bytes_end(yonder_diag_t *d, const char *dir)
     return 0;
 }
 
-int64_t yonder_diag_keep_resource(yonder_diag_t *d, const char *dir, yonder_diag_kept_t kind,
+int64_t yonder_diag_keep_resource(const yonder_diag_claim_t *c, yonder_diag_kept_t kind,
                                   const char *url, const char *final, const char *label,
                                   const void *bytes, size_t n)
 {
-    if (d == NULL)
+    if (c == NULL)
         return 0;
+    yonder_diag_t *d = c->record;
     if (d->keep.failed)
         return -1;
-    (void)dir;
     // The folder is the one the record's name claimed, made then and so
     // this record's alone: nothing in it is anyone else's to replace.
     const char *folder = d->keep.folder;

@@ -5,54 +5,58 @@
     yonder_corpus_diff.py BEFORE-DIR AFTER-DIR
 
 Each directory holds page files by the same names, as
-tools/test_yonder_replay_host.sh writes them. ONLY A PAGE REPLAYED TO A
-VERDICT IS JUDGED: one whose record carries no `REPLAY` line. Such a page
+tools/test_yonder_replay_host.sh writes them, each read through
+tools/yonder_records.py, the one reader of page files, which says what
+state its page reached. ONLY A PAGE REPLAYED TO A VERDICT IS JUDGED: one
+whose record carries no `REPLAY` line. Such a page
 is the set of its record lines, `MISSING <kind> <name>` and `FAILED <what>:
 <message>`, with their counts left out: a count moves with timing, and a
 line appearing or going is what a slice changed. Judged on both sides, a
 page whose set GAINED a line is a regression, printed with the lines it
 gained, and one that lost lines is progress, printed with those.
 
-The rest each have a heading of their own, and none is progress:
+The rest each have a heading of their own, by the after-record's state
+(the reader's State, whose order is the precedence: a record that says it
+is both is the later), and none is progress:
 
-- BROKEN: the after-record says the replay reached no verdict (`REPLAY`
-  and a reason other than `incomplete`: the page never arrived, or asked
-  for the next turn for ever), so what it shows is not the page. A
-  regression when the before-record reached one; still broken otherwise.
+- BROKEN: the after-record says `REPLAY unfinished`, the replay reached no
+  verdict (the page never arrived, or asked for the next turn for ever),
+  so what it shows is not the page. A regression when the before-record
+  reached one; still broken otherwise.
 - TO RECORD AGAIN: the after-record says `REPLAY incomplete`, the page
   asked for something the corpus never kept. Listed with what it asked
   for, as newly incomplete when the before-record was not; neither a
   regression nor progress, and never silent.
 - RECOVERED: the after-record reached a verdict where the before-record
   did not; its lines are not compared with a record that was not the page.
-- UNJUDGED: a page file on either side that is not whole (its verdict
-  missing, or not matching its record lines; a file cut short reads as a
-  page that stopped asking for everything it lost), or whose record says
-  some lines had no memory to be named. Listed with why, and judged on
-  neither side.
+- UNJUDGED: a `*.txt` on either side the reader cannot judge (one that
+  cannot be read, is not a page file, or is not whole: a file cut short
+  reads as a page that stopped asking for everything it lost), or whose
+  record says some lines had no memory to be named. Listed with why, and
+  judged on neither side.
 - A page the after directory does not have is a regression, since whatever
   it gained cannot be seen.
 
-Exit 2 when a directory cannot be listed, a page file in it cannot be
-read, or any page is unjudged; else 1 when there is any regression; else 0. Run it with `python3 -I`; the records are
-data, read by tools/yonder_tally.py's reader, loaded from beside this file.
+Exit 2 when a directory cannot be listed or any page is unjudged; else 1
+when there is any regression; else 0. Run it with `python3 -I`; the
+records are data, and the reader is loaded from beside this file.
 """
 import argparse
 import importlib.util
-import os
 import pathlib
 import sys
 
 
-def load_tally():
-    path = pathlib.Path(__file__).resolve().parent / 'yonder_tally.py'
-    spec = importlib.util.spec_from_file_location('yonder_tally', path)
+def load_records():
+    path = pathlib.Path(__file__).resolve().parent / 'yonder_records.py'
+    spec = importlib.util.spec_from_file_location('yonder_records', path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
 
-tally = load_tally()
+records = load_records()
+State = records.State
 
 
 def lines_of(rec):
@@ -62,41 +66,22 @@ def lines_of(rec):
     return out
 
 
-def state_of(rec):
-    """'incomplete', 'broken', or 'verdict'."""
-    if rec.incomplete:
-        return 'incomplete'
-    return 'broken' if rec.unfinished else 'verdict'
-
-
 def read_dir(path, unjudged):
-    """{file name: record} for the page files in a directory. Unreadable
-    (tally's) when the directory cannot be listed, or a `*.txt` there is not
-    a file or cannot be read: a page left out of the comparison would read
-    as a page that did not change. A page file that is not whole (tally's
-    NotWhole), or whose record says it lost lines it could not name, is not
-    judged: it goes in `unjudged` as {name: reason} instead."""
+    """{file name: record} for the page files in a directory: each read
+    whole by the reader, and one it cannot judge, or whose record says it
+    lost lines it could not name, put in `unjudged` as {name: reason}
+    instead. Unreadable (the reader's) when the directory cannot be
+    listed: read as empty, it would read as a corpus that did not
+    change."""
     pages = {}
-    try:
-        with os.scandir(path) as entries:
-            names = sorted(e.name for e in entries if e.name.endswith('.txt'))
-    except OSError as e:
-        raise tally.Unreadable(f'{path}: cannot be listed: {e.strerror or e}') from e
-    for name in names:
-        f = pathlib.Path(path) / name
-        if not f.is_file():
-            raise tally.Unreadable(f'{f}: not a file')
-        try:
-            rec = tally.read_record(f)
-        except tally.NotWhole as e:
-            unjudged[name] = str(e)
-            continue
-        except OSError as e:
-            raise tally.Unreadable(f'{f}: {e.strerror or e}') from e
-        if rec is not None and rec.lost:
-            unjudged[name] = f'{f}: its record says some lines had no memory to be named'
-        elif rec is not None:
-            pages[name] = rec
+    for f in records.page_files(path):
+        rec = records.read(f)
+        if isinstance(rec, records.Unjudged):
+            unjudged[f.name] = str(rec)
+        elif rec.lost:
+            unjudged[f.name] = f'{f}: its record says some lines had no memory to be named'
+        else:
+            pages[f.name] = rec
     return pages
 
 
@@ -107,12 +92,15 @@ def diff(before, after):
                            'to record again', 'recovered')}
     for name in sorted(before.keys() & after.keys()):
         was, now = before[name], after[name]
-        b, a = state_of(was), state_of(now)
-        if a == 'incomplete':
-            out['to record again' if b == 'incomplete' else 'newly incomplete'][name] = (now.address, now.incomplete)
-        elif a == 'broken':
-            out['still broken' if b == 'broken' else 'broken'][name] = (now.address, now.unfinished)
-        elif b != 'verdict':
+        b, a = was.state, now.state
+        if a == State.UNFINISHED:
+            # Why it reached no verdict, then what it asked for that was
+            # never kept, which is detail here.
+            said = [f'unfinished {w}' for w in now.unfinished] + [f'incomplete {i}' for i in now.incomplete]
+            out['still broken' if b == State.UNFINISHED else 'broken'][name] = (now.address, said)
+        elif a == State.INCOMPLETE:
+            out['to record again' if b == State.INCOMPLETE else 'newly incomplete'][name] = (now.address, now.incomplete)
+        elif b != State.VERDICT:
             out['recovered'][name] = (now.address, [])
         else:
             gained, lost = lines_of(now) - lines_of(was), lines_of(was) - lines_of(now)
@@ -126,7 +114,7 @@ def diff(before, after):
 
 
 def clean(pages):
-    return sum(1 for r in pages.values() if state_of(r) == 'verdict' and not r.missing and not r.failed)
+    return sum(1 for r in pages.values() if r.state == State.VERDICT and not r.missing and not r.failed)
 
 
 def main(argv=None):
@@ -143,7 +131,7 @@ def main(argv=None):
     unjudged = {}
     try:
         before, after = read_dir(args.before, unjudged), read_dir(args.after, unjudged)
-    except tally.Unreadable as e:
+    except records.Unreadable as e:
         print(f'yonder_corpus_diff: {e}', file=sys.stderr)
         return 2
     # A page not judged on one side is judged on neither.

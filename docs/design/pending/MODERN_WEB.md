@@ -753,8 +753,9 @@ slice's names (on 2026-10-21, `localStorage sessionStorage` is 480 of
 1,601 files, 42 of 268 sites). `--kind` narrows it to one kind; a name is
 matched exactly. `--failed` ranks the FAILED lines with the pages they
 were on, a picture's or a font's by its reason rather than its address.
-The tool reads `*.txt` in the directories it is given, passes over what is
-not a page file, and imports nothing outside the standard library.
+The tool reads `*.txt` in the directories it is given through the one
+reader (below), names every one it cannot judge and answers 2, and imports
+nothing outside the standard library.
 
 **keep_pages** (`keep_pages = on` beside `diagnostics =` in yonder.conf;
 YONDER_DIAGNOSTICS.md § The page kept has the file shapes). The page's
@@ -779,8 +780,9 @@ nothing is, with keep_pages its folder must be made fresh and no `.html`
 may be there, and a number that fails is passed over, so two yonders on
 one directory, or a `.txt` deleted from beside its kept files, never pair a
 record with another's pages, and the bytes are never renamed over a
-`.html` already there. No Settings line: there is none for `diagnostics`
-either.
+`.html` already there. A record that can claim no name has no claim, and
+nothing of it is written. No Settings line: there is none for
+`diagnostics` either.
 
 **The index grows** (Quinn's finding 8): its first line names the format,
 `# yonder kept index 1`, and every line is `<n>`, `<kind>`, then what that
@@ -844,11 +846,14 @@ the replay there (`REPLAY incomplete navigation <url>`): the next page is
 not in the index, and a page left running would fire timers that never
 fired where it was kept. **Only a page replayed to a verdict is judged**:
 one that never arrived, or asked for the next turn for ever, gains `REPLAY
-unfinished <why>` and reads `unfinished`. A `*.txt` that is not a record, a
-record with a line that had no memory to be written, and an index the
-runner cannot read (its format, or
-a line number that is not a decimal number, which would otherwise become
-a path) are unjudged and make the answer 2. The page is left as yonder
+unfinished <why>` and reads `unfinished`. A `*.txt` that is not a whole
+record, a record with a line that had no memory to be written or that was
+kept not whole, a folder whose index is missing, unreadable, of another
+format, damaged (a line number that is not a decimal number, which would
+otherwise become a path) or names a file that is not there, and a replay
+whose record cannot be written are unjudged: nothing is written for the
+page, and the answer is 2. An OUT-DIR or KEPT-DIR that cannot be listed
+refuses the run before anything is written. The page is left as yonder
 leaves it when it closes, which is the departure write.
 
 **The diff** (`tools/yonder_corpus_diff.py BEFORE AFTER`) judges only
@@ -859,12 +864,46 @@ when the before-record reached a verdict, never progress; one whose
 after-record is incomplete is listed to be recorded again, as newly
 incomplete when the before-record was not, and is neither; one that
 reached a verdict where it had not is recovered, and not compared. A page
-the after directory lacks is a regression. A directory it cannot list or
-a page file it cannot read answers 2, and so does a page file that is not
-whole: the tally's reader requires the second line to be a verdict and the
-record lines to be exactly the ones it counts, so a record cut short is
-listed as unjudged rather than read as a page that stopped failing; the
-tally answers 2 for one too.
+the after directory lacks is a regression. A directory it cannot list
+answers 2, and so does any `*.txt` the reader cannot judge, each listed as
+unjudged with why: a record cut short is never read as a page that
+stopped failing.
+
+**Two invariants, held by structure rather than by each site** (Chris's
+ruling, 2026-10-21: three Codex rounds had each found one of them reaching
+a site it had not, because each was enforced by hand at every read and
+write).
+
+- *Only a page replayed to a verdict is judged as the page.* In the
+  runner, what a page came to is one `RpState` — verdict, incomplete,
+  unfinished, unjudged, in that order of precedence — decided by
+  `rp_outcome` alone from the record the replay wrote, which
+  `rp_record_read` reads whole. Every file the runner touches goes
+  through `tools/test_yonder_replay_fs.c`, whose every call answers done,
+  absent (an answer only where the caller says nothing there is
+  legitimate) or a fault, and a fault becomes an unjudged page or a
+  refused run. `tools/test_yonder_replay_host.sh` fails when the runner
+  calls a host file function anywhere else. On the Python side,
+  `tools/yonder_records.py` is the one reader of page files: `read()`
+  answers a `Record`, carrying the `State` its REPLAY lines say, or an
+  `Unjudged` naming why (a file that cannot be read, is not a page file,
+  begins with a byte order mark, has a carriage return, a second verdict
+  line, a record line with no count, counts that do not reconcile, or a
+  REPLAY line of no known state), and the tally and the diff read records
+  through it alone; the diff's headings follow `State`'s order.
+- *Nothing is written under a name the record did not claim.*
+  `yonder_diag_write` and the keepers take a `yonder_diag_claim_t`, which
+  only a successful exclusive `yonder_diag_claim` makes;
+  `yonder_diag_claimed` answers NULL for a record without one, and a NULL
+  claim writes nothing.
+
+The sites they govern: the runner's reads of KEPT-DIR, each record, its
+`.html`, its folder, its index and each kept file, its listing and making
+of OUT-DIR, its write of each replayed record, and the self-test's own
+fixtures; the tally's and the diff's records; and yonder's record file,
+page bytes, kept scripts and sheets and index. The self-test's grep and
+the claim's type govern them, so a site added later is held by them and
+not by this list.
 
 **Proof.**
 

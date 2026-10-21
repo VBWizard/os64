@@ -7,7 +7,9 @@
 #       writes its record again into OUT-DIR; compare two such directories
 #       with tools/yonder_corpus_diff.py
 #   tools/test_yonder_replay_host.sh
-#       the proof: the census tools' tests, then the runner's self-test,
+#       the proof: the runner's door to the host's files held to (no file
+#       call anywhere in the runner but tools/test_yonder_replay_fs.c), the
+#       census tools' tests, then the runner's self-test,
 #       which keeps the fixture pages as yonder would, replays them, and
 #       requires every replayed record to be the page's own, and the corpus
 #       diff to find nothing between them; then the same corpus given no
@@ -30,15 +32,22 @@ if [ "$#" -gt 0 ]; then
     "$work/yonder-replay" "$@"
     exit
 fi
+# A file call made around the door would answer a fault as an empty answer
+# again: the runner may call the host's file functions nowhere else.
+if grep -nE '\b(fopen|freopen|fread|fwrite|fclose|fdopen|opendir|fdopendir|readdir|closedir|scandir|mkdir|rmdir|stat|lstat|fstat|access|chmod|unlink|remove|rename|open|creat|truncate)[[:space:]]*\(' \
+        tools/test_yonder_replay_host.c; then
+    echo "replay: the runner calls the host's files around tools/test_yonder_replay_fs.c" >&2
+    exit 1
+fi
+TMPDIR="$work" python3 -I tools/test_yonder_records.py
 TMPDIR="$work" python3 -I tools/test_yonder_tally.py
 TMPDIR="$work" python3 -I tools/test_yonder_corpus_diff.py
 mkdir "$work/self"
 "$work/yonder-replay" --self-test "$work/self"
 python3 -I tools/yonder_corpus_diff.py "$work/self/kept" "$work/self/out" | tail -n 1
 # The same corpus given no time: the pages that cannot arrive in none say
-# so on their records, and the diff calls each broken (or, when its record
-# is incomplete too, to be recorded again) and fails, never reading what
-# they lack as progress. (A page that arrived without the time for its
+# so on their records, and the diff calls each broken (whatever else its
+# record says) and fails, never reading what they lack as progress. (A page that arrived without the time for its
 # later timers is judged, and may read as progress: the two replays were
 # not given the same budget.)
 "$work/yonder-replay" "$work/self/kept" "$work/no-time" --seconds 0 > "$work/zero.log"
@@ -48,10 +57,9 @@ if python3 -I tools/yonder_corpus_diff.py "$work/self/kept" "$work/no-time" > "$
     exit 1
 fi
 broken=$(sed -n 's/^broken: \([0-9]*\) pages$/\1/p' "$work/zero.diff")
-newly=$(sed -n 's/^newly incomplete: \([0-9]*\) pages$/\1/p' "$work/zero.diff")
 unfinished=$(sed -n 's/.*, unfinished \([0-9]*\).*/\1/p' "$work/zero.log" | tail -n 1)
-[ -n "$broken" ] && [ "$((broken + ${newly:-0}))" = "$unfinished" ] || {
-    echo "replay: the pages given no time were not each called broken or incomplete" >&2
+[ -n "$broken" ] && [ "$broken" = "$unfinished" ] || {
+    echo "replay: the pages given no time were not each called broken" >&2
     cat "$work/zero.diff" >&2
     exit 1
 }

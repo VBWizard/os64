@@ -335,7 +335,9 @@ was shown, or since its record was last written on asking:
   lists in browse order across runs. Each load then CLAIMS its name as it
   begins (`yonder_diag_claim`, § The page kept, below): its file is made
   only where nothing is, and a number another yonder took meanwhile is
-  passed over, so two yonders on one directory never write one name.
+  passed over, so two yonders on one directory never write one name; a
+  load that finds no name it can make in 64 has no file this time, and
+  never writes over another's.
 - **A load that never became a page has a file too**: no such file, a 404
   that was not a page, out of memory starting it, too busy to start. Each
   is `FAILED page: <the status line's sentence>`. "One file per page load"
@@ -359,7 +361,7 @@ was shown, or since its record was last written on asking:
   `M%49SSING` is written `M%2549SSING` and reads back as itself, never as
   MISSING; every other `%` (`75%`, `%20`) is written as it is. A reader
   gets the data's bytes back by undoing `\\` and `\xHH`, then `M%49SSING`,
-  `F%41ILED` and `%25` in one pass from the left (`tools/yonder_tally.py`'s
+  `F%41ILED` and `%25` in one pass from the left (`tools/yonder_records.py`'s
   `unescape`, the replay's `rp_unescape`). Records written before this
   wrote a `%25` of their own as it was, so in those a literal `%25` reads
   back as `%`.
@@ -468,12 +470,16 @@ next. So two yonders writing one directory, or a directory whose `.txt`
 was deleted and whose kept files were not, never pair a record with
 another's kept files, and the bytes are never renamed over a `.html`
 already there. A folder that kept nothing is removed when the record is
-let go.
+let go. The claim is what every write under the name takes
+(`yonder_diag_claim_t`), so a record that could make none of 64 names has
+no claim: nothing of it is written, it is said once a run on the status
+line and in the log, and no file of anyone else's is written over.
 
-A step of keeping that fails, a claim that finds no fresh name in 64
-numbers among them, ends the keeping of that page, is said once a run on
-the status line and in the log, and leaves the plain line `kept: not
-whole: a step of keeping the page failed` on the record. The scripts and
+A step of keeping that fails, or a claim that finds a name for the record
+but none in 64 whose kept files are fresh, ends the keeping of that page,
+is said once a run on the status line and in the log, and leaves the
+plain line `kept: not whole: a step of keeping the page failed` on the
+record. The scripts and
 sheets kept before it stay, and so do the page's bytes if they were
 already whole.
 

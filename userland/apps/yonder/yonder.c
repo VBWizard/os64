@@ -497,15 +497,15 @@ static bool s_script_audit;
 // THE PAGE FILES (YONDER_DIAGNOSTICS.md): the directory yonder.conf's
 // `diagnostics` names, empty when it names none or the directory could not
 // be made (said once, at the start); the sequence the next load's claim
-// begins at (diag_begin); and whether a failed write has been said, which
-// is said once a run.
+// begins at (diag_begin); and whether a failed write, and a load whose
+// record could claim no name, have been said, each said once a run.
 // `keep`: yonder.conf's `keep_pages`, which keeps each page beside its file
 // (diag.h), read with the directory; a page that could not be kept is said
 // once a run too.
 static struct {
     char dir[OS64_PATH_MAX];
     uint32_t next;
-    bool write_said;
+    bool write_said, claim_said;
     bool keep, keep_said;
 } s_diag = {.next = 1};
 
@@ -1666,25 +1666,41 @@ static void diag_kept(int64_t answer);
 
 // A load's record, numbered in browse order, its name claimed in the
 // directory before anything is written under it (yonder_diag_claim): a
-// number another yonder took meanwhile is passed over. NULL on no memory:
-// the load goes on unrecorded.
+// number another yonder took meanwhile is passed over. A record that can
+// claim no name is kept for the badge and never written: that is said once
+// a run, in the log and on the status line. NULL on no memory: the load
+// goes on unrecorded.
 static yonder_diag_t *diag_begin(const char *url)
 {
     yonder_diag_t *d = yonder_diag_new(url, s_diag.next, os64_micros());
-    if (d != NULL && s_diag.dir[0] != '\0')
-        diag_kept(yonder_diag_claim(d, s_diag.dir, s_diag.keep));
+    if (d != NULL && s_diag.dir[0] != '\0') {
+        int64_t claimed = yonder_diag_claim(d, s_diag.dir, s_diag.keep);
+        if (claimed != YONDER_DIAG_UNCLAIMED) {
+            diag_kept(claimed);
+        } else if (!s_diag.claim_said) {
+            s_diag.claim_said = true;
+            char line[OS64_PATH_MAX + 128];
+            os64_snprintf(line, sizeof(line), "No page file for this page: none of %u names from %lu on could "
+                          "be made in %s; the rest are tried.", (unsigned)YONDER_DIAG_CLAIM_TRIES, (unsigned long)s_diag.next,
+                          s_diag.dir);
+            os64_debug_log(line);
+            status_rest(line);
+        }
+    }
     s_diag.next = (d != NULL ? yonder_diag_seq(d) : s_diag.next) + 1;
     return d;
 }
 
-// The record as it stands, written when yonder.conf asks for files; true
-// when the file was written. A failure is said once a run, in the log and
-// on the status line.
+// The record as it stands, written under the name its load claimed when
+// yonder.conf asks for files; true when the file was written. A record
+// with no claim is not written, and its load said so (diag_begin); a
+// failure is said once a run, in the log and on the status line.
 static bool diag_write(const yonder_diag_t *d)
 {
-    if (d == NULL || s_diag.dir[0] == '\0')
+    const yonder_diag_claim_t *c = yonder_diag_claimed(d);
+    if (c == NULL || s_diag.dir[0] == '\0')
         return false;
-    if (yonder_diag_write(d, s_diag.dir) == 0)
+    if (yonder_diag_write(c) == 0)
         return true;
     if (s_diag.write_said)
         return false;
@@ -1719,7 +1735,7 @@ static void diag_keep(yonder_diag_t *d, yonder_diag_kept_t kind, const char *url
                       const char *label, const void *bytes, size_t n)
 {
     if (s_diag.keep)
-        diag_kept(yonder_diag_keep_resource(d, s_diag.dir, kind, url, final, label, bytes, n));
+        diag_kept(yonder_diag_keep_resource(yonder_diag_claimed(d), kind, url, final, label, bytes, n));
 }
 
 // The badge follows the shown page's counts; its width moves the status
@@ -7825,7 +7841,7 @@ static void stream_finish(os64_fetch_status_t fetch, const char *reason)
     // The parser has been handed every byte it will have: a kept page's
     // bytes are whole.
     if (s_diag.keep)
-        diag_kept(yonder_diag_keep_bytes_end(g.stream.diag, s_diag.dir));
+        diag_kept(yonder_diag_keep_bytes_end(yonder_diag_claimed(g.stream.diag)));
     NavKind kind = g.stream.kind;
     way_position_t crumb = g.stream.crumb;
     char fragment[sizeof(g.stream.fragment)];
@@ -8035,7 +8051,7 @@ static size_t stream_take(uint8_t *chunk, size_t cap)
     }
     g.stream.bytes += n;
     if (s_diag.keep && n != 0)
-        diag_kept(yonder_diag_keep_bytes(g.stream.diag, s_diag.dir, chunk, n));
+        diag_kept(yonder_diag_keep_bytes(yonder_diag_claimed(g.stream.diag), chunk, n));
     return n;
 }
 

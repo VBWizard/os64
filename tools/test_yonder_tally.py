@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""tools/yonder_tally.py on three hand-made page files, and a directory that
-also holds what is not one: a note, and a kept page's bytes and folder;
-then page files that are not whole (cut short, or not matching their
-verdict), a path not there and a directory that cannot be listed, each an
-error. Run with `python3 -I tools/test_yonder_tally.py`; tools/test_yonder_replay_host.sh
+"""tools/yonder_tally.py on three hand-made page files in a directory that
+also holds a kept page's bytes and folder, which are not read; then a
+`*.txt` that is not a page file, page files that are not whole (cut short,
+or not matching their verdict), a path not there and a directory that
+cannot be listed, each an error. Run with `python3 -I tools/test_yonder_tally.py`; tools/test_yonder_replay_host.sh
 runs it with the replay's own cases."""
 import contextlib
 import importlib.util
@@ -59,14 +59,11 @@ class TallyCases(unittest.TestCase):
         root = pathlib.Path(self.dir.name)
         for name, text in RECORDS.items():
             (root / name).write_bytes(text)
-        (root / 'notes.txt').write_bytes(b'not a page file\n')
         (root / 'a.test-0001.html').write_bytes(b'<p>MISSING global x (1)</p>\n')
         (root / 'a.test-0001.d').mkdir()
         (root / 'a.test-0001.d' / 'index').write_bytes(b'1\tscript\thttps://a.test/x.js\n')
         self.root = root
-        with contextlib.redirect_stderr(io.StringIO()) as err:
-            self.records = tally.read_records([str(root)])
-        self.err = err.getvalue()
+        self.records = tally.read_records([str(root)])
 
     def tearDown(self):
         self.dir.cleanup()
@@ -79,7 +76,6 @@ class TallyCases(unittest.TestCase):
 
     def test_only_page_files_are_read(self):
         self.assertEqual(len(self.records), 3)
-        self.assertIn('1 file(s) passed over', self.err)
 
     def test_decoding(self):
         b = [r for r in self.records if r.path.name.startswith('b.')][0]
@@ -123,6 +119,14 @@ class TallyCases(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
             rc = tally.main([str(p) for p in paths])
         return rc, err.getvalue()
+
+    def test_a_txt_that_is_not_a_page_file_is_an_error(self):
+        # Passed over, it would make a census of fewer pages than were
+        # handed in read as one of all of them.
+        (self.root / 'notes.txt').write_bytes(b'not a page file\n')
+        rc, err = self.run_err(self.root)
+        self.assertEqual(rc, 2)
+        self.assertIn("notes.txt: not a page file: its first line is not `address: `", err)
 
     def test_a_record_cut_short_is_an_error(self):
         (self.root / 'cut-0009.txt').write_bytes(b'address: https://cut.test/\n')
