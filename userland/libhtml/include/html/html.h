@@ -231,9 +231,13 @@ const char *os64_html_status_name(int64_t status);
  * `os64_html_encode_windows_1252` is the Encoding Standard's single-byte
  * encoder for that index. False means the encoding has no byte for the code
  * point, which is a fact and not an error: what to send instead belongs to
- * whoever is doing the sending. */
+ * whoever is doing the sending.
+ *
+ * `os64_html_decode_windows_1252` is its decoder, the same index read the
+ * other way: every byte names a code point, so it cannot fail. */
 const char *os64_html_encoding_for_label(const char *label, size_t len);
 bool os64_html_encode_windows_1252(uint32_t cp, uint8_t *out);
+uint32_t os64_html_decode_windows_1252(uint8_t byte);
 
 /* ── CHANGING A DOCUMENT (docs/design/pending/DOM.md) ─────────────────────
  *
