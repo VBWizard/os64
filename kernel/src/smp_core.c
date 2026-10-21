@@ -159,7 +159,7 @@ void send_ipi(uint32_t cpu, uint32_t vector, uint32_t delivery_mode, uint32_t le
 		      sender_cpu, vector, cpu, kCPUCount);
 	if (mp_inScheduler[cpu] && vector == IPI_MANUAL_SCHEDULE_VECTOR)
 	{
-		printd(DEBUG_SMP | DEBUG_DETAILED,"MP: send_ipi_int - NOT sending an scheduling IPI because we're already in the scheduler");
+		printd(DEBUG_SMP | DEBUG_DETAILED,"MP: send_ipi - NOT sending a scheduling IPI to AP%u, which is already in the scheduler\n", cpu);
 		return;
 	}
     printd(DEBUG_SMP | DEBUG_DETAILED,"MP: AP%u sending IPI 0x%02x to AP%u\n",sender_cpu, vector, cpu);

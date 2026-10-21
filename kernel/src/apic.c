@@ -66,11 +66,6 @@ uint8_t acpiGetAPICVersion()
     return apicReadRegister(APIC_REGISTER_VERSION);
 }
 
-uint8_t apciGetAPICID()
-{
-    return apicReadRegister(APIC_REGISTER_APIC_ID_OFFSET);
-}
-
 uint64_t apicGetAPICBase(void)
 {
    uint64_t rax = rdmsr64(IA32_APIC_BASE_MSR);
