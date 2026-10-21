@@ -69,11 +69,11 @@ every scroll or keystroke live in the function-call column, and those will
 feel sluggish rather than broken. That is the low-single-digit X, and it is
 accepted.
 
-**Never read an engine timing off the QEMU harness.** The box runs QEMU
-without hardware acceleration (Windows 10's WSL2 has no KVM), so the guest
-emulates the CPU instruction by instruction and took the full 60 s budget on
-the benchmark the P5 finished in 4.65 s. The harness proves behaviour; the
-P5 measures speed.
+**Never read an engine timing off the QEMU harness.** The harness runs
+QEMU without hardware acceleration (the box has a KVM device, but the
+harness does not use it), so the guest emulates the CPU instruction by
+instruction and took the full 60 s budget on the benchmark the P5 finished
+in 4.65 s. The harness proves behaviour; the P5 measures speed.
 
 The second stated risk stands unmeasured: a bank's bot detection may refuse
 an honest unknown browser whatever it implements. Reddit and Amazon refused
@@ -98,13 +98,27 @@ slice is made, not where it lands. Four rules.
 2. **The oracle, before the sites.** Every slice names its web-platform-tests
    directory and its pass rate is the acceptance. A slice cannot regress a
    directory that passed. § The oracle, below.
-3. **The corpus, before every merge.** Slice 0 turns the P5's page files
-   (about 400 of them under `/home/tmp/yonder/backup`, each naming what a
-   real page asked for and what failed) and the headless binding (the host
-   harness that runs yonder's own loop and scripts without a screen,
-   `tools/test_yonder_scripts_host.c`) into one number: how many corpus
-   pages load clean, before and after the change. A PR that lowers it does
-   not merge until it says why.
+3. **The corpus, before every merge.** Two instruments, because the
+   P5's page files are RECORDS and not pages: each of the 401 under
+   `/home/tmp/yonder/backup` names what a real page asked for and what
+   failed (YONDER_DIAGNOSTICS.md), and nothing on the P5 keeps a page's
+   bytes (the cache keeps sheets and pictures, never pages; CACHE.md § 2).
+   So the census TALLY (slice 0b) ranks the records' `MISSING` names and
+   says, for a slice's surface, how many records asked for it: the
+   before-and-after that needs no replay, and the number that orders the
+   slices. And the REPLAY CORPUS (slice 0b too) is what a merge is judged
+   against: a `keep_pages` setting makes yonder write, beside each page
+   file, the page's bytes and every script and sheet it fetched, so a
+   kept page can be fed to the headless binding (the host harness that
+   runs yonder's own loop and scripts without a screen,
+   `tools/test_yonder_scripts_host.c`) with its sub-resources answered
+   from disk and no network at all, and its record written again. The
+   corpus number is how many kept pages replay clean, and the diff tool
+   names every page whose record gained a `FAILED` or a `MISSING` line
+   since the last run. A PR that lowers the count, or adds a `FAILED`
+   anywhere, does not merge until it says why. The corpus grows by Chris
+   browsing with the setting on; until it holds his sites, the tally is
+   the number and the PR says so.
 4. **One kill switch, not many.** `modern = on | off` in `yonder.conf`,
    with a box in Settings that writes it: it turns every global, element
    and CSS property this arc added off at once, so Chris can keep browsing
@@ -140,19 +154,29 @@ writes each test's name and verdict through the headless binding to the
 host, the way the diagnostics page files are written today. So the runner
 is:
 
-- the suite pinned by commit under `userland/tests/wpt/` (a checkout is
-  large; the tree carries only the directories slices name, by a script
-  that fetches a pinned commit, as libhtml's fixtures are pinned);
+- the suite at a pinned commit, OUTSIDE the tree: `tools/wpt_fetch.sh`
+  checks out only the directories the slices name (a sparse, shallow
+  clone; the whole suite is gigabytes) into `.vendor/wpt`, which
+  `.gitignore` already covers. The pin is one line in that script; a
+  slice that needs a newer directory moves the pin for everyone and says
+  so in its PR. The tree carries no copy of the suite, only what it
+  wrote against it;
 - a host program on the headless binding that loads one WPT page from
-  disk, serves its relative fetches from the checkout (WPT pages load
-  helper scripts by relative path, and some fetch resources, so the runner
-  answers `fetch` for `file:`-shaped paths under the checkout and nothing
-  else), runs the loop until the harness reports done or a time budget
-  ends, and prints one line per test;
-- a per-directory expectation file, checked in, naming the tests that pass,
-  so a slice's PR shows the directory's count going up and a regression
-  shows as a named test going down. Browsers do exactly this, and call
-  them expectations.
+  disk, answers the page's sub-resource fetches from the checkout (a WPT
+  page loads `/resources/testharness.js` and its helpers by absolute
+  path, so the runner answers script and sheet jobs whose address is
+  under the checkout, and nothing else; the `fetch` cases come with
+  slice 2, which teaches the runner to serve two origins), runs the loop
+  until the harness reports done or a time budget ends, and prints one
+  line per test. The results leave the page through the document itself:
+  our `testharnessreport.js` writes each test's name and verdict into an
+  element it appends when the harness reports completion, and the runner
+  reads that element out of the tree once the loop settles. No new seam,
+  and the same tree walk the fixtures already use;
+- a per-directory expectation file, checked in under `tools/wpt/`,
+  naming the tests that pass, so a slice's PR shows the directory's count
+  going up and a regression shows as a named test going down. Browsers
+  do exactly this, and call them expectations.
 
 Three honest limits. WPT cannot judge fidelity (does the page LOOK right)
 or feel (is it pleasant at the P5's speed); those remain Chris's, on the
@@ -201,31 +225,52 @@ under the 2026-10-11 ruling (a userland-only design is its builder's);
 "Fable design" means the design document is Fable's before Opus builds. Every
 slice ends with the corpus number and the P5 beside Chrome.
 
-**Slice 0: the runner, the corpus, the switch.** The WPT runner above, the
-corpus count on the headless binding, the `modern web` switch and its
-table, and the interface objects already written and parked on
+**Slice 0a: the runner and the switch.** The WPT runner above, the
+`modern` switch and its table (§ How the slices run side by side has the
+table's shape), and the interface objects already written and parked on
 `opus/arc-interface-objects` (`Element`, `HTMLElement` and the constructor
-names on `window`) landed through it as the first consumer. Oracle: WPT
+names on `window`) landed through the table as its first row. Oracle: WPT
 `dom/nodes/` for the interface objects, and the runner proving itself on
 `dom/` tests that already pass. Acceptance: web.archive.org's player and
 DuckDuckGo's base bundle stop dying on `Element.prototype`. Opus.
 
-**Slice 1: storage and the small globals.** `localStorage` and
+**Slice 0b: the tally and the replay corpus.** The census tally over the
+P5's page files; `keep_pages` in `yonder.conf`, which makes yonder write
+a page's bytes and its fetched scripts and sheets beside its page file
+(rule 3); the replay runner on the headless binding that feeds a kept
+page back with its sub-resources answered from disk; and the diff tool
+that names every page whose record got worse. Oracle: the runner replays
+the fixture pages the scripted-page host already carries and writes the
+records those cases expect. Acceptance: the P5 browsing with the setting
+on for an evening yields a corpus that replays on the host. Opus, beside
+0a: the two touch different files.
+
+**Slice 1a: storage and the small globals.** `localStorage` and
 `sessionStorage` (per origin, on disk under the profile folder,
-`<profile>/storage/<origin>/` — YONDER_HONEY_DO.md § Where yonder's files
-live names the folder and its setting — with the 5 MB quota browsers use
-and a Settings line to clear them), `performance`
-(`now`, `timing` as the challenge scripts read it, `mark`/`measure`),
-`URL`/`URLSearchParams`, `TextEncoder`/`TextDecoder`, `screen`,
-`devicePixelRatio`, `getComputedStyle` over libgarb's computed values,
-`scrollTo`/`scrollBy`/`scrollX`/`scrollY`/`innerWidth`/`innerHeight`
-(the engine already scrolls the page for fragment links),
-`history.pushState`/`replaceState`/`popstate`, `matchMedia` over the media
-queries libgarb already evaluates. Oracle: WPT `webstorage/`, `url/`,
-`encoding/`, `html/browsers/history/`, `cssom-view/` (the scroll and
-size members). Acceptance: osdev.wiki's banner and menus (MediaWiki's
-`isCompatible` gate), grokipedia's contents links, the transform demos.
-Opus.
+`<profile>/storage/<origin>` — YONDER_HONEY_DO.md § Where yonder's files
+live names the folder and its `profile =` setting, and this slice is the
+setting's first consumer, since the between-arcs batch had not started
+when the slices were handed out — with the 5 MB quota browsers use and a
+Settings line to clear them), `performance` (`now`, `timing` as the
+challenge scripts read it, `mark`/`measure`), `URL`/`URLSearchParams`,
+`TextEncoder`/`TextDecoder`, `screen`, `devicePixelRatio`. Everything
+here lives in libdom and files; nothing needs the loop or layout. Oracle:
+WPT `webstorage/`, `url/`, `encoding/`, `hr-time/`. Acceptance:
+osdev.wiki's banner and menus (MediaWiki's `isCompatible` gate), the
+transform demos. Opus.
+
+**Slice 1b: the window's view, the scroll and the history.**
+`getComputedStyle` over libflow's computed values (a provider in the
+shape of the geometry one, because the answer is the laid-out box's),
+`scrollTo`/`scrollBy`/`scrollX`/`scrollY`/`innerWidth`/`innerHeight`/
+`outerWidth`/`outerHeight` (the engine already scrolls the page for
+fragment links), `history.pushState`/`replaceState`/`state`/`popstate`,
+`matchMedia` over the media queries libgarb already evaluates, with
+`change` events when the view resizes. Everything here needs the window:
+its view, its loop, its back-and-forward list. Oracle: WPT
+`cssom-view/` (the scroll and size members), `html/browsers/history/`,
+`css/cssom/getComputedStyle-*`. Acceptance: grokipedia's contents links,
+danlegt's `matchMedia` asks. Opus, beside 1a.
 
 **Slice 2: fetch.** `fetch` with `Headers`, `Request`, `Response`, the body
 readers (`text`, `json`, `arrayBuffer`, `blob` as bytes), `AbortController`;
@@ -244,8 +289,14 @@ credential leak, not a layout bug.
 module graph fetched in parallel and evaluated in order, dynamic
 `import()`, `import.meta.url`, `defer` and `async` ordering as the HTML
 standard states it, `nomodule` honoured. QuickJS already parses and links
-modules; the work is yonder's loader and the standard's ordering. Oracle:
-WPT `html/semantics/scripting-1/the-script-element/module/`. Acceptance:
+modules, but libjs evaluates only classic scripts today
+(`JS_EVAL_TYPE_GLOBAL` is the one flag `runtime.c` passes), so the slice
+adds the engine's module entry to libjs's contract: a module evaluation
+whose imports are resolved by a host loader the runtime is given, under
+the same budget, outcome and teardown rules as a classic run. yonder's
+loader fetches the graph through the script jobs it has and evaluates in
+the standard's order. Oracle: WPT
+`html/semantics/scripting-1/the-script-element/module/`. Acceptance:
 GitHub's page runs its scripts at all. Opus.
 
 **Slice 4: CSS batch A, the cheap thousands.** Logical properties
@@ -280,8 +331,12 @@ GitHub's icons, suckless's logo. **Fable design** for the renderer's seam
 
 **Slice 7: the bytecode cache.** Per bundle, keyed by the cache's own entry
 identity (the response's validators), capped in bytes, compressed with
-libgzip, invalidated with the response. The timing instrument lands in
-slice 0 so this slice's before-and-after is a number on the P5. Opus.
+libgzip, invalidated with the response. libjs gains a compile-to-bytes
+and a run-from-bytes pair over the engine's own `JS_WriteObject` and
+`JS_ReadObject`, tied to the engine's build so a cache written by one
+build is never read by another. The timing instrument (compile time per
+script, in the page file) lands in slice 0b so this slice's
+before-and-after is a number on the P5. Opus.
 
 **Slice 8: generated content and the rest of the census's CSS.**
 `::before`/`::after` with `content` (144 asks, the icon fonts' whole
@@ -294,6 +349,72 @@ document), CSP, referrer and cookie rules across redirects, `SameSite` and
 the public-suffix list. Custom elements (`customElements.define`, GitHub's
 `react-partial` and friends) join here or the end of Tier 0 as the census
 says once modules run.
+
+## How the slices run side by side (2026-10-21)
+
+Chris opened the arc on 2026-10-21 with a week's model usage to spend and
+asked for the slices to be built in parallel. The slices were cut
+independent on purpose, so the plan is one builder per slice, each in its
+own worktree off `userland`, each ending in its own PR. What follows is
+what keeps eight builders from colliding in one tree, and it is as much
+design as the slices themselves.
+
+**The order.** Slices 0a and 0b first, side by side: they touch different
+files. The fan-out (1a, 1b, 2, 3, 4, 7) starts once 0a's table exists,
+because every one of them registers in it; a fan-out slice that opens
+before 0a has merged branches from 0a's branch and says so in its PR
+(DOM_BRIEFS.md's stacking rule). Slices 5, 6 and 8 wait: 5 and 6 are
+Fable designs written while the fan-out builds, and 8 shares libgarb with
+4.
+
+**The table, which is the switch.** libdom gains `modern.c`: one static
+table of rows, each a name and an installer, walked once at runtime
+creation by `d_modern_install` when `os64_dom_options_t.modern` is set
+(the default). A slice adds ONE FILE and ONE ROW: `storage.c` and
+`{"localStorage", d_storage_install}`, and so on. With the option clear
+the walk does not run, so the name does not exist, which is what a page's
+feature detection needs to see (rule 1). The interface objects are the
+first row. On the CSS side libgarb's property table marks each property
+this arc adds, and a parse is told whether marked properties are known;
+not known reads exactly as an unknown property does today, the
+`MISSING css-property` line. yonder reads `modern` from `yonder.conf`
+once at start (absent is on) and hands the one answer to both libraries
+at creation; there is no global and no second switch.
+
+**Who owns which files.** A builder edits what its row names and nothing
+else without saying so in the PR; the shared files are listed so the
+rebase order below resolves them rather than a merge fight.
+
+| Slice | Owns | Touches shared |
+|---|---|---|
+| 0a | `tools/test_yonder_wpt_host.{c,sh}`, `tools/wpt_fetch.sh`, `tools/wpt/`, `libdom/modern.c`, the interface objects in `libdom/classic.c` | `dom.h` (the option), `yonder/settings.{c,h}` (`modern`), `libgarb/props.c` (the mark) |
+| 0b | `yonder/diag.{c,h}` (bytes, kept sub-resources, compile time), `tools/test_yonder_replay_host.{c,sh}`, `tools/yonder_tally.py`, `tools/yonder_corpus_diff.py` | `yonder/settings.{c,h}` (`keep_pages`), the stream's arrival path in `yonder.c` |
+| 1a | `libdom/storage.c`, `libdom/url.c`, `libdom/encoding.c`, `libdom/performance.c`, `libdom/screen.c`, `yonder/storage.c` (the files) | `yonder/settings.{c,h}` (`profile`), `modern.c` (rows) |
+| 1b | `libdom/view.c` (scroll, size, `matchMedia`, the computed-style provider) | `libdom/window.c` (`history`), `yonder.c`'s view and resize paths, `modern.c` (rows) |
+| 2 | `libdom/fetch.c`, `libdom/xhr.c`, `yonder/fetch_job.c`, `libway/origin.c` (origins, CORS) | `scripts.h` (the job hook), `modern.c` (rows), the WPT runner (two origins) |
+| 3 | the module entry in `libjs` (`runtime.c`, `js.h`), `yonder/modules.c` (the graph) | `yonder/scripts.c` (the loader hook), `libdom/window.c` (script kind) |
+| 4 | `libgarb/props.c`, `values.c` and `libflow` for the named properties | `yonder/paint.c` (`outline`, `text-overflow`) |
+| 7 | the bytes pair in `libjs`, `libway/cache.c` (a bytecode entry beside a script's) | `yonder/script_job.c` |
+
+Landing order, a lean Chris moves: 0a, 0b, 1a, 1b, 4, 2, 3, 7. A later
+slice rebases onto what landed before it; `settings.c` and `modern.c`
+gain one reader or one row per slice, which rebases clean when each slice
+adds rather than edits.
+
+**What every PR states**, so Chris can judge it without re-deriving: its
+WPT directory and its count before and after (the expectation file's
+diff is the proof); how many of the 401 records named its surface (the
+tally); the corpus count before and after once kept pages exist; and the
+P5 reading if it claims a speed. A builder commits on its own branch and
+opens the PR; Chris tests before anything merges; Fable reads 0a's table
+and slice 2's CORS section before those merge; a Codex round is Chris's
+call per PR.
+
+**The harness budget** (SUCCESSION.md's rules, restated because eight
+builders share one box): the host harnesses prove the slice; a QEMU boot
+is for what needs the wire or the disk (slice 2's fetch over slirp,
+slice 1a's files under `/home`), one VM per slice at a time, under
+`timeout`, on its own monitor port, killed by PID when done.
 
 ## Decisions reopened, and their state
 
@@ -324,8 +445,10 @@ From 2026-10-07, so they are not re-argued from scratch:
 
 - Fable holds this document, the hard designs it marks, and the review of
   each slice's design section before code. Opus designs the rest and
-  builds all of it; Quinn builds what Chris hands her (the save dialog is
-  hers today). Chris rules direction and tests before every commit.
+  builds all of it, from the briefs in MODERN_WEB_BRIEFS.md; Quinn reads
+  this document before the fan-out starts (Chris's 2026-10-21 call) and
+  builds what Chris hands her. Chris rules direction and tests before
+  anything merges.
 - A slice touching the kernel (the pointer shapes, a clipboard change, the
   compositor) goes to Fable's review by CLAUDE.md's "match the reviewer to
   the risk". Userland-only slices are reviewed by their owner and Chris;
