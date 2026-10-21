@@ -1036,6 +1036,29 @@ static void switch_cases(void) {
     apply(&settings_fixture.d,true);
     check(settings_modern==1 && os64_streq(saved_modern,"on") && strstr(settings_report,"modern")==NULL,
         "modern: and on");
+    /* THE PROFILE FOLDER: absent is /home/yogi/.yonder; a full path is
+     * obeyed without its trailing slashes; anything else is the default,
+     * said. */
+    char profile[256];
+    saved_profile[0]=0;
+    check(yonder_settings_saved_profile(profile,sizeof(profile))==NULL && os64_streq(profile,"/home/yogi/.yonder"),
+        "profile: absent is the default, and nothing is said");
+    strcpy(saved_profile,"/home/me/browser//");
+    check(yonder_settings_saved_profile(profile,sizeof(profile))==NULL && os64_streq(profile,"/home/me/browser"),
+        "profile: a full path, without its trailing slashes");
+    strcpy(saved_profile,"relative/place");
+    const char *profile_refused=yonder_settings_saved_profile(profile,sizeof(profile));
+    check(profile_refused!=NULL && strstr(profile_refused,"not a folder's full path")!=NULL &&
+          os64_streq(profile,"/home/yogi/.yonder"), "profile: anything else is the default, refused loudly");
+    saved_profile[0]=0;
+    /* Clear page storage acts at once and says what it did. */
+    yonder_settings_on_clear_storage(NULL);
+    cleared(NULL,NULL);
+    check(strstr(settings_report,"no page storage to clear")!=NULL,"Clear page storage with nothing to clear says so");
+    yonder_settings_on_clear_storage(storage_clear);
+    cleared(NULL,NULL);
+    check(strstr(settings_report,"Page storage is not kept in this window")!=NULL,
+        "Clear page storage in a window that keeps none says so");
     settings_fixture.dark.checked=false;
     settings_fixture.scripts.checked=false;
     apply(&settings_fixture.d,true);
@@ -6466,6 +6489,185 @@ static void webfont_cases(void) {
     s_faces.families=NULL; s_faces.text=NULL;
 }
 
+/* ── PAGE STORAGE IN THE WINDOW (storage.h, MODERN_WEB.md § Slice 1a) ──
+ * localStorage in its file under the profile folder: made, written at a
+ * task's end, coalesced, written at departure, full; sessionStorage across
+ * a navigation in the window; a profile that cannot be made; Clear page
+ * storage; and the timing and the screen a page reads. */
+#define STORE_FILE "/tmp/profile/storage/http%3A%2F%2Ffixture.test"
+/* The page's next navigation in this window, as loop_page's but keeping
+ * the window, to `address`, which the head says the page came from. */
+static void storage_page(const char *address, const char *rest) {
+    start_trip(address,NULL,NAV_GO,NULL);
+    char *html=pad_page(rest);
+    way_head_t h=stream_head("text/html","",false);
+    os64_strcopy(h.url,sizeof(h.url),address);
+    yonder_mail_post_head(g.stream.mail,&h);
+    stream_post_body((const uint8_t *)html,strlen(html),YONDER_STREAM_CHUNK);
+    stream_post_verdict(true,OS64_FETCH_OK,"");
+    free(html);
+}
+/* Whether the store file holds `key` as `value` (NULL: holds no `key`). */
+typedef struct { const char *key, *value; bool found, right; } StoreLook;
+static bool store_look(void *opaque, const char *key, size_t key_length, const char *value, size_t value_length) {
+    StoreLook *l=opaque;
+    if(strlen(l->key)!=key_length || memcmp(l->key,key,key_length)) return true;
+    l->found=true;
+    l->right=l->value!=NULL && value!=NULL && strlen(l->value)==value_length && !memcmp(l->value,value,value_length);
+    return false;
+}
+static bool store_holds(const char *key, const char *value) {
+    int f=fake_file(STORE_FILE);
+    if(f<0) return false;
+    StoreLook l={key,value,false,false};
+    if(!os64_dom_storage_walk(fake_files[f].data,fake_files[f].len,store_look,&l)) return false;
+    return value==NULL ? !l.found : l.found && l.right;
+}
+static void storage_window_cases(void) {
+    fake_reset();
+    s_storage=yonder_storage_new("/tmp/profile");
+    s_storage_said[0]='\0';
+    loop_page("<p id=out>start</p><script>localStorage.setItem('a','1');"
+        "setTimeout(function(){localStorage.setItem('b','2')},50);"
+        "setTimeout(function(){localStorage.setItem('c','3')},5000);</script>");
+    check(loop_settle() && g.page.tree!=NULL,"storage: the page arrives");
+    check(fake_is_dir("/tmp/profile") && fake_is_dir("/tmp/profile/storage") && store_holds("a","1"),
+        "storage: the profile folder is made, and a task's write is in the origin's file at its end");
+    int writes=fake_writes;
+    now_ms=150;
+    check(script_turn() && fake_writes==writes && store_holds("b",NULL),
+        "storage: a write within a second of the last commit waits");
+    check(yonder_scripts_storage_due(g.page.scripts)==1100,"storage: and is due a second after it");
+    now_ms=1100;
+    storage_turn();
+    check(fake_writes==writes+1 && store_holds("b","2") && store_holds("a","1"),
+        "storage: the loop commits it when it is due, merged onto the file");
+    /* Another window writes the file: this page reads it at its next task. */
+    fake_second++;
+    {
+        static const char kOther[]="os64 storage 1\n+1 1\nab\n+1 1\nb2\n+5 1\nother1\n";
+        int f=fake_file(STORE_FILE);
+        free(fake_files[f].data);
+        fake_files[f].data=malloc(sizeof(kOther)); memcpy(fake_files[f].data,kOther,sizeof(kOther));
+        fake_files[f].len=sizeof(kOther)-1; fake_files[f].mtime=fake_second;
+    }
+    now_ms=5100;
+    check(script_turn() && store_holds("other","1") && store_holds("c","3"),
+        "storage: a commit merges onto what another window wrote");
+    storage_page("http://fixture.test/two","<p id=out>start</p><script>"
+        "sessionStorage.setItem('s','kept');localStorage.setItem('d','4');</script>");
+    check(loop_settle() && g.page.tree!=NULL,"storage: the second page arrives");
+    /* A second write, in a task within a second of the first commit, is
+     * left for the departure commit. */
+    storage_page("http://fixture.test/three","<p id=out>start</p><script>"
+        "document.getElementById('out').textContent=sessionStorage.getItem('s')+' '+localStorage.getItem('d');"
+        "localStorage.setItem('first','1');"
+        "document.addEventListener('DOMContentLoaded',function(){localStorage.setItem('e','5')});</script>");
+    check(loop_settle() && g.page.tree!=NULL && probe_text_is("out","kept 4"),
+        "storage: sessionStorage survives a navigation in the window, and localStorage is the file's");
+    check(store_holds("first","1") && store_holds("e",NULL),"storage: the second write waits for its second");
+    storage_page("http://elsewhere.test/","<p id=out>start</p><script>"
+        "document.getElementById('out').textContent=String(sessionStorage.getItem('s'))+' '+localStorage.length;</script>");
+    check(loop_settle() && g.page.tree!=NULL && probe_text_is("out","null 0"),
+        "storage: another origin has its own areas");
+    check(store_holds("e","5"),"storage: the page that left made its departure commit");
+    check(fake_file("/tmp/profile/storage/http%3A%2F%2Felsewhere.test")<0,
+        "storage: an origin that stored nothing has no file");
+    /* Clear page storage: the files go, and so do the pages' maps. */
+    char line[160];
+    storage_clear(line,sizeof(line));
+    check(fake_file(STORE_FILE)<0 && strstr(line,"1 stored site gone")!=NULL,
+        "storage: Clear page storage removes the origins' files and says how many");
+    storage_page("http://fixture.test/four","<p id=out>start</p><script>"
+        "document.getElementById('out').textContent=String(sessionStorage.getItem('s'))+' '+localStorage.length;</script>");
+    check(loop_settle() && g.page.tree!=NULL && probe_text_is("out","null 0"),
+        "storage: after a clear a page finds nothing, either area");
+    loop_drop();
+    yonder_storage_free(s_storage);
+    s_storage=NULL;
+}
+static void storage_full_cases(void) {
+    fake_reset();
+    s_storage=yonder_storage_new("/tmp/profile");
+    loop_page("<p id=out>start</p><script>localStorage.setItem('mine','x');"
+        "setTimeout(function(){localStorage.setItem('later','y')},400);</script>");
+    check(loop_settle() && g.page.tree!=NULL && store_holds("mine","x"),"storage full: the page's first write");
+    now_ms=500;
+    check(script_turn() && store_holds("later",NULL),"storage full: a second write, not yet due");
+    /* Another window fills the store to its quota before it is. */
+    size_t units=OS64_DOM_STORAGE_QUOTA/2-6;            /* 'k' and 'mine'='x' with it: the whole quota */
+    char *records=malloc(units+128);
+    int head=snprintf(records,128,"os64 storage 1\n+4 1\nminex\n+1 %zu\nk",units);
+    memset(records+head,'v',units); records[head+units]='\n';
+    int f=fake_file(STORE_FILE);
+    free(fake_files[f].data);
+    fake_files[f].data=records; fake_files[f].len=(size_t)head+units+1; fake_files[f].mtime=++fake_second;
+    now_ms=1100;
+    storage_turn();
+    char record[8192];
+    yonder_diag_render(g.page.diag,record,sizeof(record));
+    check(strstr(record,"FAILED storage: localStorage of http://fixture.test is full; not kept: later")!=NULL,
+        "storage full: the commit keeps nothing and the record names the key it could not keep");
+    check(store_holds("later",NULL) && store_holds("mine","x"),"storage full: the store is as the other window left it");
+    loop_drop();
+    yonder_storage_free(s_storage);
+    s_storage=NULL;
+    /* A profile whose folder cannot be made: the page's storage works for
+     * its life, and the status line says why it is not kept. */
+    fake_reset();
+    s_storage=yonder_storage_new("/nowhere/profile");
+    s_storage_said[0]='\0';
+    loop_page("<p id=out>start</p><script>localStorage.setItem('a','1');"
+        "document.getElementById('out').textContent=localStorage.getItem('a');</script>");
+    check(loop_settle() && g.page.tree!=NULL && probe_text_is("out","1"),"storage: a page whose store cannot be kept still works");
+    storage_turn();
+    check(strstr(g.status_text,"Page storage is not kept: /nowhere/profile/storage cannot be made.")!=NULL,
+        "storage: the status line says the profile folder cannot be made");
+    check(!fake_is_dir("/nowhere"),"storage: nothing is made outside a parent that exists");
+    loop_drop();
+    yonder_storage_free(s_storage);
+    s_storage=NULL;
+}
+/* The page reads its navigation's timing and the screen it is on. */
+static void timing_window_cases(void) {
+    fake_reset();
+    clock_us=10000000;
+    loop_page("<p id=out>start</p><script>var t=performance.timing;"
+        "document.getElementById('out').textContent=[t.navigationStart>0,t.fetchStart===t.navigationStart,"
+        "t.responseStart>=t.fetchStart,t.domLoading>=t.responseStart,t.domInteractive,t.loadEventEnd,"
+        "performance.now()>=0,screen.width,devicePixelRatio,performance.navigation.type].join();"
+        "window.addEventListener('load',function(){setTimeout(function(){var t=performance.timing;"
+        "document.getElementById('out').textContent=[t.domInteractive>=t.domLoading,"
+        "t.domContentLoadedEventEnd>=t.domContentLoadedEventStart,t.domComplete>=t.domInteractive,"
+        "t.loadEventEnd>=t.loadEventStart,t.loadEventStart>0].join()},10)});</script>");
+    check(loop_settle() && g.page.tree!=NULL,"timing: the page arrives");
+    check(probe_text_is("out","true,true,true,true,0,0,true,1024,1,0"),
+        "timing: a page's script reads its navigation's milestones so far, the screen and the zoom");
+    now_ms+=20;
+    check(script_turn() && probe_text_is("out","true,true,true,true,true"),
+        "timing: after its load, the page reads every milestone");
+    loop_drop();
+}
+/* With the switch off, none of slice 1a's names exists. */
+static void storage_modern_off_cases(void) {
+    loop_modern_off=true;
+    loop_page("<p id=out>start</p><script>document.getElementById('out').textContent="
+        "[typeof localStorage,typeof sessionStorage,typeof Storage,typeof performance,typeof URL,"
+        "typeof URLSearchParams,typeof TextEncoder,typeof TextDecoder,typeof screen,typeof devicePixelRatio,"
+        "typeof btoa,typeof atob].join();</script>");
+    loop_modern_off=false;
+    check(loop_settle() && g.page.tree!=NULL && probe_text_is("out",
+        "undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined"),
+        "modern off: storage, performance, URL, the encoders, screen and base64 do not exist");
+    loop_drop();
+}
+static void storage_cases(void) {
+    storage_window_cases();
+    storage_full_cases();
+    timing_window_cases();
+    storage_modern_off_cases();
+}
+
 static void diag_cases(void) {
     diag_unit_cases();
     diag_setting_cases();
@@ -6600,6 +6802,7 @@ int main(void)
     reporting_teardown();
     if(getenv("YONDER_NO_STREAM")==NULL) join_cases();
     if(getenv("YONDER_NO_STREAM")==NULL) diag_cases();
+    if(getenv("YONDER_NO_STREAM")==NULL) storage_cases();
     webfont_cases();
     paint_cost_cases();
     whole_view_cases();
