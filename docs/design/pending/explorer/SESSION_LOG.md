@@ -941,3 +941,87 @@ remain separate implementation work.
 Published implementation `29252438` as [draft PR #319](https://github.com/VBWizard/os64/pull/319)
 against `userland`, including the shared-dialog dependency. Review/P5 remain
 pending; the branch has not been merged.
+
+
+## 2026-10-20 — E5 accepted; compact dialogs and shared size memory
+
+Chris reported successful Scribe use and resizing on P5, followed by a clean
+Codex review. PR #319 merged as `ddaad166`; no installed binary hash was
+captured. Chris authorized the follow-up. Quinn implemented E5A on
+`codex/file-dialog-polish` from `5fb5f7a6`.
+
+The footer uses two rows at normal widths, wraps actions at narrow widths,
+and allocates a message row when needed. Open and Save read one shared
+`file-dialog.conf` size via the configured ladder. Completed resizes publish
+a whole pair atomically; Cancel retains it, closing an older dialog does not
+rewrite it, and screen/font clamping or maximize/restore do not replace it.
+
+[E5A evidence](evidence/e05a/README.md) records 4,223 dialog and 2,584 Scribe
+checks with ASan/UBSan/LeakSanitizer, cross-build and native QEMU checks across
+two applications. The delivery bundle is `/tmp/file-dialog-polish-wire`.
+Review and P5 acceptance of E5A remain pending. Parent-owned stacking is the
+separate window-manager follow-up; Yonder and configurable associations-file
+storage remain separate work.
+
+Published E5A implementation `5efff386` as [draft PR #322](https://github.com/VBWizard/os64/pull/322)
+against `userland`; it has not been merged.
+
+
+### E5A — P5 acceptance report and dialog Pin observation
+
+Chris tested at 2560 × 1440 with a customized Appearance Workshop appearance
+and Frame Studio composition. Both Open and Save As looked correct. Resizing
+Open persisted across reopening, opening Save As and a reboot. Navigation and
+New Folder passed. This is user-reported hardware evidence without a captured
+installed binary hash or screenshot; the plain QEMU captures do not represent
+his customized appearance.
+
+Chris noted the dialog titlebar's Pin button. Investigation confirms that the
+ordinary decorated dialog inherits the selected frame's Pin action, which
+controls global pinned stacking. Parent-owned stacking is not implemented.
+Omitting independent Pin as part of that ownership policy is a proposed
+follow-up, not a code change in E5A. PR #322 remains open and draft; independent
+review and merge are separate from the P5 acceptance report.
+
+
+### E5A review R1 — restore after resolution changes
+
+Chris asked to address the review finding and noted that he switches the P5
+between 2560×1440, 1920×1080 and 1024×768. The kernel checks its dimension
+ceiling before FIT_SCREEN; the original host stub missed that guard ordering.
+Quinn first reproduced failures with a corrected stub, then clamped the
+requested size against screen info before creation, with the documented ABI
+bound as the query-failure fallback. The saved preference is preserved.
+The expanded Open/Save/display matrix passes 4,621 sanitizer checks, including
+LeakSanitizer, and the cross-build passes. The previous P5 acceptance report
+predates this correction; review and targeted hardware retesting remain open.
+
+Native R1 verification at 1024×768 opened both dialogs with a saved
+5000×2700 preference. Their frames fitted the display, and cancellation
+preserved the original config pair. The bundle was refreshed.
+
+
+### R1 P5 approval; E5B close latency diagnosed
+
+Chris verified Save As almost filling 2560×1440, rebooted at 1024×768 and found
+it fully visible, then rebooted at 2560×1440 and found the original large size
+restored. He approved R1. No installed binary hash was captured.
+
+He also reported a variable, roughly one-second delay when dismissing either
+dialog through X, Cancel or Escape. Quinn traced their shared cleanup to
+browser worker joins. A native diagnostic using unchanged production code
+measured idle one-worker pools closing in 1–11 ms, versus 206–980 ms for two
+workers. The jobs pipe tracks one waiting reader; the displaced reader waits
+for the one-second backstop. [E5B](E05B_CLOSE_LATENCY.md) records source, native
+timings and follow-up scope. No production fix was made during this diagnosis.
+
+## 2026-10-21 — PR #322 second-review fixes
+
+Chris assigned two additional findings. Both reproduced: the unplanned early
+font adoption could make dialogs fail on a smaller display; the first resize
+out of maximized state was incorrectly discarded even for a manual drag.
+The fixes retain transactional font fallback and preserve the last normal-size
+baseline through special window states. Five regression failures became 4,693
+passing ASan/UBSan/LSan checks, with cross-build and native QEMU validation in
+[the evidence packet](evidence/e05a/review-r2/README.md). P5 and independent
+re-review remain pending. The worker-lifetime fix remains deferred.

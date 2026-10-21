@@ -1,19 +1,20 @@
-# yonder_host_build.sh — sourced by the headless binding's suites, never run:
-# builds yonder's window, every library it links and the hosted fakes of
-# tools/test_yonder_scripts_host.c around one main source, under ASan and
-# UBSan. One list, so a suite that includes that file for its window and
-# fakes (the replay runner) links exactly what the scripted-page host does.
+# yonder_host_build.sh — sourced by the suites that run yonder's own window
+# headless, never run: it builds a binary from a test unit that includes
+# yonder.c (the headless binding, tools/test_yonder_scripts_host.c, which
+# fakes the OS around it) and every library the window links, under ASan
+# and UBSan.
 #
-#   . tools/host_build.sh            (after cd to the top of the tree)
-#   . tools/yonder_host_build.sh
-#   yonder_host_build MAIN.c WORK BINARY
+#   . tools/yonder_host_build.sh        (after cd to the top of the tree)
+#   yonder_host_build "$work" <unit.c> <binary> [flags for the unit alone]
 #
-# MAIN.c is tools/test_yonder_scripts_host.c itself, or a file that
-# includes it. A failed build answers 2, having said so with the log's
-# tail: a mutant harness counts any failure as its catch.
+# A failed build says so on stderr and answers 2, not only in a log nobody
+# reads: a mutant harness counts any failure as its catch.
+
+. tools/host_build.sh
 
 yonder_host_build() {
-    local main=$1 work=$2 binary=$3
+    local work=$1 unit=$2 binary=$3
+    shift 3
     if ! make -C userland -j"${HOST_BUILD_JOBS:-4}" js-runtime-test > "$work/build.log" 2>&1; then
         tail -n 20 "$work/build.log" >&2
         echo "yonder host: the JS runtime did not build (whole log: $work/build.log)" >&2
@@ -31,8 +32,8 @@ yonder_host_build() {
         -Iabi/include -Itools -Itools/fonts
         -isystem userland/obj/js/upstream -fsanitize=address,undefined -fno-sanitize-recover=all)
     local objects=() source object private
-    for source in "$main" tools/test_js_port_calendar.c tools/test_libflow_fonts.c \
-        userland/libjs/runtime/runtime.c userland/libdom/{core,node,collection,content,event,timer,window,geometry,classic,style,mixin}.c \
+    for source in "$unit" tools/test_js_port_calendar.c tools/test_libflow_fonts.c \
+        userland/libjs/runtime/runtime.c userland/libdom/{core,node,collection,content,event,timer,window,geometry,classic,style,mixin,modern}.c \
         userland/apps/yonder/{scripts,geometry,paint,paint_cache,scratch,scale,warp,agent,bar,diag}.c \
         userland/libhtml/{core,encoding,tokenizer,tree,dom,fragment,serialize}.c \
         userland/libpage/{core,state,resolve,value,submit,encode,refresh,activate,number,range}.c \
@@ -45,15 +46,16 @@ yonder_host_build() {
         object="$work/${source//\//_}.o"
         private=()
         if [[ "$source" == userland/libdom/* ]]; then private=(-Dd_alloc=dom_fixture_private_alloc); fi
+        if [ "$source" = "$unit" ]; then private=("$@"); fi
         host_compile "$source" "$object" "${private[@]}"
         objects+=("$object")
     done
-    host_wait || return 1
+    host_wait || return 2
     local i
     for i in "${!objects[@]}"; do
         if [ "${objects[$i]}" = "$work/userland_libos64_str.c.o" ]; then
             objcopy --localize-symbol=memcpy --localize-symbol=memmove --localize-symbol=memset \
-                --localize-symbol=memcmp "${objects[$i]}" "${objects[$i]}-local"
+                --localize-symbol=memcmp "${objects[$i]}" "${objects[$i]}-local" || return 2
             objects[$i]="${objects[$i]}-local"
         fi
     done
@@ -64,5 +66,5 @@ for line in sys.stdin:
     if line.startswith("MATH_OBJS="): print("\n".join(shlex.split(line.split("=",1)[1])[0].split()))
 ')
     cc -fsanitize=address,undefined -pthread -Wl,-z,noexecstack,--gc-sections,--wrap=flow_layout,--wrap=flow_motion_tick,--wrap=os64_js_create_with_teardown,--wrap=os64_text_font_open,--wrap=os64_text_font_open_like \
-        userland/obj/js/core.o "${maths[@]}" "${objects[@]}" -o "$binary"
+        userland/obj/js/core.o "${maths[@]}" "${objects[@]}" -o "$binary" || return 2
 }

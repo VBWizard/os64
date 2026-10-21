@@ -466,14 +466,14 @@ bool os64_ui_theme_session(os64_ui_theme_t *theme, uint64_t *installed, uint64_t
     (void)theme; (void)installed; (void)hint; return false;
 }
 static char saved_scripts[8], saved_zoom[8], saved_seconds[8], saved_diagnostics[256], saved_appearance[8],
-    saved_animations[8], saved_motion[16], saved_keep_pages[16], settings_report[256];
+    saved_animations[8], saved_motion[16], saved_keep_pages[16], saved_modern[16], settings_report[256];
 int64_t os64_conf_get(const char *file, const char *key, char *out, size_t cap) {
     check(os64_streq(file,"yonder.conf"),"settings read Yonder configuration");
     const char *value=os64_streq(key,"scripts") ? saved_scripts :
         os64_streq(key,"zoom") ? saved_zoom : os64_streq(key,"script_seconds") ? saved_seconds :
         os64_streq(key,"diagnostics") ? saved_diagnostics : os64_streq(key,"appearance") ? saved_appearance :
         os64_streq(key,"animations") ? saved_animations : os64_streq(key,"motion") ? saved_motion :
-        os64_streq(key,"keep_pages") ? saved_keep_pages : "";
+        os64_streq(key,"keep_pages") ? saved_keep_pages : os64_streq(key,"modern") ? saved_modern : "";
     if(!value[0]) return OS64_CONF_NO_KEY;
     os64_strcopy(out,cap,value); return 0;
 }
@@ -485,6 +485,7 @@ int64_t os64_conf_set(const char *file, const char *key, const char *value) {
     if(os64_streq(key,"appearance")) os64_strcopy(saved_appearance,sizeof(saved_appearance),value);
     if(os64_streq(key,"animations")) os64_strcopy(saved_animations,sizeof(saved_animations),value);
     if(os64_streq(key,"motion")) os64_strcopy(saved_motion,sizeof(saved_motion),value);
+    if(os64_streq(key,"modern")) os64_strcopy(saved_modern,sizeof(saved_modern),value);
     return 0;
 }
 void os64_ui_settings_report(os64_ui_settings_t *dialog, const char *text) {
@@ -583,6 +584,7 @@ static os64_font_status_t probe_fonts(void *ctx, const flow_family_list_t *famil
 static void probe_page(const char *html, bool scripts) {
     os64_memset(&g,0,sizeof(g));
     g.scripts_on=scripts; g.way.agent=YONDER_AGENT; g.settle_due=YONDER_NEVER;
+    g.modern=g.page.modern=true;
     g.zoom=g.zoom_default=1000;
     os64_ui_init(&g.ui,NULL);
     if(probe_borrow_font)
@@ -608,7 +610,7 @@ static void probe_page(const char *html, bool scripts) {
         /* A finished document's inline scripts are queued as CONNECTED
          * scripts, in tree order: the shown page's ready list, one a turn. */
         g.page.scripts=scripts_host(g.page.way.doc,os64_page_shared_state(g.page.way.model),
-            g.page.way.url,false,++g.pages_made,g.page.diag);
+            g.page.way.url,false,++g.pages_made,g.page.diag,g.page.modern);
         for (os64_html_node_t *n=g.page.way.doc->document;n;n=(os64_html_node_t *)next_within(n,g.page.way.doc->document))
             if(os64_dom_script_kind(n)==OS64_DOM_SCRIPT_CLASSIC && os64_html_attr(n,"src")==NULL)
                 yonder_scripts_connected(g.page.scripts,n);
@@ -939,8 +941,9 @@ static void settings_zoom_capture(uint32_t zoom) { settings_zoom=zoom; }
 static uint32_t settings_seconds;
 static int settings_dark=-1;
 static void settings_dark_capture(bool dark) { settings_dark=dark; }
-static int settings_run=-1, settings_reduce=-1;
+static int settings_run=-1, settings_reduce=-1, settings_modern=-1;
 static void settings_motion_capture(bool run, bool reduce) { settings_run=run; settings_reduce=reduce; }
+static void settings_modern_capture(bool modern) { settings_modern=modern; }
 static void settings_capture(const char *agent, bool enabled, uint32_t seconds) {
     check(os64_streq(agent,YONDER_AGENT),"settings preserves agent while applying scripts");
     settings_applied=enabled;
@@ -957,6 +960,8 @@ static void switch_cases(void) {
     settings_fixture.zoom_use=settings_zoom_capture;
     settings_fixture.dark_use=settings_dark_capture;
     settings_fixture.motion_use=settings_motion_capture;
+    settings_fixture.modern_use=settings_modern_capture;
+    settings_fixture.modern.checked=true;
     strcpy(settings_fixture.zoom_buf,"125");
     saved_appearance[0]=0;
     check(!yonder_settings_saved_dark(),"pages are light unless yonder.conf says dark");
@@ -1007,6 +1012,30 @@ static void switch_cases(void) {
           os64_streq(saved_motion,"no-preference") && yonder_settings_saved_animations() &&
           !yonder_settings_saved_reduce_motion(),
         "motion settings: and back");
+    /* THE MODERN SWITCH (MODERN_WEB.md, rule 4): absent is on, present is
+     * obeyed, anything else is on and said; Apply hands it over, Save
+     * writes it. */
+    const char *refused="unset";
+    saved_modern[0]=0;
+    check(yonder_settings_saved_modern(&refused) && refused==NULL,"modern: absent is on, and nothing is said");
+    strcpy(saved_modern,"Off");
+    check(!yonder_settings_saved_modern(&refused) && refused==NULL,"modern: `modern = off` is obeyed, either case");
+    strcpy(saved_modern,"on");
+    check(yonder_settings_saved_modern(&refused) && refused==NULL,"modern: `modern = on` is on");
+    strcpy(saved_modern,"maybe");
+    check(yonder_settings_saved_modern(&refused) && refused!=NULL && strstr(refused,"not on or off")!=NULL,
+        "modern: any other word is on, refused loudly for the status line");
+    saved_modern[0]=0;
+    settings_fixture.modern.checked=false;
+    apply(&settings_fixture.d,false);
+    check(settings_modern==0 && saved_modern[0]==0 && strstr(settings_report,"modern web off")!=NULL,
+        "modern: Apply hands this window the switch without saving it, and says so");
+    apply(&settings_fixture.d,true);
+    check(os64_streq(saved_modern,"off") && !yonder_settings_saved_modern(NULL),"modern: Save as default writes off");
+    settings_fixture.modern.checked=true;
+    apply(&settings_fixture.d,true);
+    check(settings_modern==1 && os64_streq(saved_modern,"on") && strstr(settings_report,"modern")==NULL,
+        "modern: and on");
     settings_fixture.dark.checked=false;
     settings_fixture.scripts.checked=false;
     apply(&settings_fixture.d,true);
@@ -1925,7 +1954,7 @@ static void bounded_resources(void) {
     probe_page("<script>var held=document.body;</script><script>document.body.id='later';</script>",true);
     yonder_scripts_free(g.page.scripts); g.page.scripts=NULL;
     fail_at=attempts+1;
-    check(scripts_host(g.page.way.doc,os64_page_shared_state(page_model(&g.page)),g.page.way.url,false,1,NULL)==NULL,
+    check(scripts_host(g.page.way.doc,os64_page_shared_state(page_model(&g.page)),g.page.way.url,false,1,NULL,true)==NULL,
         "a script host the heap refuses publishes nothing");
     fail_at=0;
     probe_drop();
@@ -2105,6 +2134,7 @@ static void input_cases(void) {
 static void stream_window(void) {
     os64_memset(&g,0,sizeof(g));
     g.scripts_on=false; g.way.agent=YONDER_AGENT; g.way.name="yonder"; g.settle_due=YONDER_NEVER;
+    g.modern=true;
     g.zoom=g.zoom_default=1000;
     os64_ui_init(&g.ui,NULL);
     os64_ui_panel(&g.root);
@@ -2497,9 +2527,11 @@ static char *pad_page(const char *rest) {
     return html;
 }
 static bool loop_encrypted;     /* the next loop_page's head: arrived encrypted */
+static bool loop_modern_off;    /* the next loop_page's window: the modern switch off */
 static void loop_page(const char *rest) {
     stream_window();
     g.scripts_on=true; g.script_ms=5000; now_ms=100;
+    g.modern=!loop_modern_off;
     start_trip("http://fixture.test/p",NULL,NAV_GO,NULL);
     char *html=pad_page(rest);
     way_head_t h=stream_head("text/html","",false);
@@ -3010,6 +3042,7 @@ static void loop_string_timer_throws(void) {
     check(strstr(g.status_text,"queued jobs")==NULL,"loop: nothing says the previous turn has queued jobs");
     loop_drop();
 }
+static void loop_modern(void);
 static void loop_cases(void) {
     loop_throw_after_queue();
     loop_string_timer_throws();
@@ -3032,7 +3065,38 @@ static void loop_cases(void) {
     loop_limit();
     loop_local_file();
     loop_write_cases();
+    loop_modern();
 }
+/* THE MODERN SWITCH, in the window: a page takes the switch its navigation
+ * found, so its script surface has the arc's names or not, its record says
+ * `modern: off` when it was off, and flipping the switch reaches the next
+ * page and not the one on screen. */
+static void loop_modern(void) {
+    static const char page[]="<p id=out>start</p><script>document.getElementById('out').textContent="
+        "typeof Element+' '+typeof Node+' '+('Element' in window);</script>";
+    char record[8192];
+    loop_page(page);
+    check(loop_settle() && g.page.tree!=NULL && g.page.modern && probe_text_is("out","function function true"),
+        "modern on: a page's scripts see the arc's names");
+    yonder_diag_render(g.page.diag,record,sizeof(record));
+    check(strstr(record,"modern:")==NULL,"modern on: the record says nothing of it");
+    check(!garb_cascade_env(g.page.cascade).modern_off,"modern on: the page's cascade knows the arc's properties");
+    modern_use(false);
+    check(g.page.modern && !g.modern,"modern: Settings' switch leaves the page on screen as it was made");
+    start_trip("http://fixture.test/next",NULL,NAV_GO,NULL);
+    check(g.stream.active && !g.stream.modern,"modern: the next navigation takes the switch as it now stands");
+    loop_drop();
+    loop_modern_off=true;
+    loop_page(page);
+    loop_modern_off=false;
+    check(loop_settle() && g.page.tree!=NULL && !g.page.modern && probe_text_is("out","undefined undefined false"),
+        "modern off: the arc's names do not exist, so feature detection finds them missing");
+    yonder_diag_render(g.page.diag,record,sizeof(record));
+    check(strstr(record,"\nmodern: off\n")!=NULL,"modern off: the record says so, so it is never read as a regression");
+    check(garb_cascade_env(g.page.cascade).modern_off,"modern off: the page's cascade does not know the arc's properties");
+    loop_drop();
+}
+
 /* A page that arrives starts its animations at the layout that shows it,
  * and is judged by its own costs: the page before it was too slow to
  * animate. The page it replaced goes with its timeline. */
@@ -6757,9 +6821,9 @@ static void covered_link_cases(void) {
     probe_drop();
 }
 
-/* A program that includes this file for the window and its fakes, and
- * brings its own cases, defines YONDER_HOST_FAKES_ONLY first (the replay
- * runner, tools/test_yonder_replay_host.c). */
+/* A unit that includes this file for the window and its fakes alone (the
+ * WPT runner, the replay runner) defines YONDER_HOST_FAKES_ONLY and brings
+ * its own main. */
 #ifndef YONDER_HOST_FAKES_ONLY
 int main(void)
 {

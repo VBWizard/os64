@@ -280,6 +280,167 @@ void os64_dom_set_global_miss(os64_dom_t *dom, void (*heard)(void *opaque, const
         JS_SetGlobalMissHandler(ctx, heard, opaque);
 }
 
+/* An interface object: there to be named, never to be called. */
+static JSValue illegal_constructor(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv)
+{
+    (void)self; (void)argc; (void)argv;
+    return JS_ThrowTypeError(ctx, "Illegal constructor");
+}
+
+/* `new DocumentFragment()` (DOM § 4.7): an empty fragment of the window's
+ * document. Made as a JS_CFUNC_constructor, so the engine refuses every
+ * call that is not a construct call before this runs (WebIDL: an
+ * interface's constructor is never just called), whatever `this` the
+ * caller chose; a function made that way carries no data, so it finds its
+ * binding through its context (d_binding). The fragment's prototype is
+ * new.target's `prototype`, so `class F extends DocumentFragment` makes an
+ * F, and DocumentFragment's when that is not an object (WebIDL's "get
+ * prototype from constructor"; there is one realm), read before the
+ * fragment is made, since reading it may run a page's getter. */
+static JSValue fragment_constructor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv)
+{
+    (void)argc; (void)argv;
+    os64_dom_t *dom = d_binding(ctx);
+    if (dom == NULL) return JS_EXCEPTION;
+    JSValue prototype = JS_GetPropertyStr(ctx, new_target, "prototype");
+    if (JS_IsException(prototype)) return JS_EXCEPTION;
+    int64_t status;
+    os64_html_node_t *fragment = os64_html_create_fragment(dom->document, &status);
+    JSValue made = fragment != NULL ? d_wrap_constructed(dom, ctx, fragment, prototype)
+                                    : d_html_error(ctx, status);
+    JS_FreeValue(ctx, prototype);
+    return made;
+}
+
+/* An interface object's [[Prototype]] set to its parent interface's. The
+ * engine's JS_SetPrototype takes its reference to the new prototype before
+ * it copies a shape the object shares, and keeps it when that copy runs out
+ * of memory, which leaves the parent alive past the runtime. Giving the
+ * object a shape of its own first (`length`'s flags changed and changed
+ * back, either of which fails cleanly) leaves the set nothing to
+ * allocate. Every interface object's `length` is 0. */
+static int interface_parent(JSContext *ctx, JSValueConst f, JSValueConst parent)
+{
+    if (JS_DefinePropertyValueStr(ctx, f, "length", JS_NewInt32(ctx, 0),
+                                  JS_PROP_CONFIGURABLE | JS_PROP_WRITABLE) < 0 ||
+        JS_DefinePropertyValueStr(ctx, f, "length", JS_NewInt32(ctx, 0), JS_PROP_CONFIGURABLE) < 0)
+        return -1;
+    return JS_SetPrototype(ctx, f, parent) < 0 ? -1 : 0;
+}
+
+/* Node's constants (DOM § 4.4), on the interface object and its prototype,
+ * as WebIDL puts every constant: what `n.nodeType === Node.ELEMENT_NODE`
+ * reads. */
+static int node_constants(JSContext *ctx, JSValueConst target)
+{
+    static const struct { const char *name; int value; } kConstants[] = {
+        {"ELEMENT_NODE", 1}, {"ATTRIBUTE_NODE", 2}, {"TEXT_NODE", 3}, {"CDATA_SECTION_NODE", 4},
+        {"ENTITY_REFERENCE_NODE", 5}, {"ENTITY_NODE", 6}, {"PROCESSING_INSTRUCTION_NODE", 7},
+        {"COMMENT_NODE", 8}, {"DOCUMENT_NODE", 9}, {"DOCUMENT_TYPE_NODE", 10},
+        {"DOCUMENT_FRAGMENT_NODE", 11}, {"NOTATION_NODE", 12},
+        {"DOCUMENT_POSITION_DISCONNECTED", 0x01}, {"DOCUMENT_POSITION_PRECEDING", 0x02},
+        {"DOCUMENT_POSITION_FOLLOWING", 0x04}, {"DOCUMENT_POSITION_CONTAINS", 0x08},
+        {"DOCUMENT_POSITION_CONTAINED_BY", 0x10}, {"DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC", 0x20},
+    };
+    for (unsigned i = 0; i < sizeof(kConstants) / sizeof(kConstants[0]); i++)
+        if (JS_DefinePropertyValueStr(ctx, target, kConstants[i].name, JS_NewInt32(ctx, kConstants[i].value),
+                                      JS_PROP_ENUMERABLE) < 0)
+            return -1;
+    return 0;
+}
+
+/* Symbol.toStringTag as a key, read off the global's Symbol before any page
+ * has run; JS_ATOM_NULL when it cannot be read. */
+static JSAtom string_tag_key(JSContext *ctx)
+{
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue symbol = JS_GetPropertyStr(ctx, global, "Symbol");
+    JSValue tag = JS_GetPropertyStr(ctx, symbol, "toStringTag");
+    JS_FreeValue(ctx, global);
+    JS_FreeValue(ctx, symbol);
+    JSAtom key = JS_IsSymbol(tag) ? JS_ValueToAtom(ctx, tag) : JS_ATOM_NULL;
+    JS_FreeValue(ctx, tag);
+    return key;
+}
+
+/* An interface prototype object's own `[Symbol.toStringTag]`: its
+ * interface's name, configurable and neither writable nor enumerable, as
+ * WebIDL § 3.7.3 has it. Object.prototype.toString reads it, so
+ * `String(document.body)` is "[object HTMLElement]". */
+static int string_tag(JSContext *ctx, JSValueConst prototype, JSAtom key, const char *name)
+{
+    JSValue text = JS_NewString(ctx, name);
+    if (JS_IsException(text)) return -1;
+    return JS_DefinePropertyValue(ctx, prototype, key, text, JS_PROP_CONFIGURABLE) < 0 ? -1 : 0;
+}
+
+/* The interface objects for the prototypes the binding has (WebIDL § 3.7):
+ * `Element.prototype` is what every element inherits, so `el instanceof
+ * Element` holds and a page may patch the prototype, as the Wayback
+ * Machine's player does. One interface per prototype: an interface with no
+ * prototype of its own here (Text and Comment share CharacterData's; most
+ * HTML elements have only HTMLElement's) is not installed, since aliasing
+ * it to a broader one would make `instanceof` lie, and the census says what
+ * is missing. Each prototype's `constructor` is its interface, and each
+ * interface object inherits its parent's (`Object.getPrototypeOf(
+ * HTMLElement) === Element`), as its prototype inherits its parent
+ * prototype (d_proto_parent); Node's is Function.prototype. An interface
+ * whose standard gives it a constructor the binding can honour constructs
+ * (DocumentFragment); the rest are Illegal constructors, as WebIDL makes
+ * an interface without one (`new Document()`, which makes an XML document,
+ * is one of these here). Node's constants come with Node, and each
+ * prototype's Symbol.toStringTag with its interface. The Modern Web
+ * table's row (modern.c), so all of it exists only while options.modern is
+ * set. */
+int d_interfaces_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
+{
+    static const struct { const char *name; unsigned proto; } kInterfaces[] = {
+        {"Node", D_PROTO_NODE}, {"CharacterData", D_PROTO_CHARACTER_DATA},
+        {"DocumentFragment", D_PROTO_FRAGMENT}, {"Document", D_PROTO_DOCUMENT},
+        {"Element", D_PROTO_ELEMENT}, {"HTMLElement", D_PROTO_HTML_ELEMENT},
+        {"HTMLFormElement", D_PROTO_FORM}, {"HTMLInputElement", D_PROTO_INPUT},
+        {"HTMLTextAreaElement", D_PROTO_TEXTAREA}, {"HTMLSelectElement", D_PROTO_SELECT},
+        {"HTMLButtonElement", D_PROTO_BUTTON}, {"HTMLImageElement", D_PROTO_IMAGE},
+        {"HTMLScriptElement", D_PROTO_SCRIPT}, {"HTMLAnchorElement", D_PROTO_ANCHOR},
+        {"HTMLLinkElement", D_PROTO_LINK},
+    };
+    _Static_assert(sizeof(kInterfaces) / sizeof(kInterfaces[0]) == D_PROTO_COUNT,
+                   "an interface object for each of the binding's prototypes");
+    /* Each interface object made so far, by prototype kind, borrowed from
+     * the global that holds it; the table names a parent before its
+     * children. */
+    JSValue made[D_PROTO_COUNT];
+    for (unsigned k = 0; k < D_PROTO_COUNT; k++) made[k] = JS_UNDEFINED;
+    JSAtom tag = string_tag_key(ctx);
+    if (tag == JS_ATOM_NULL) return -1;
+    int result = 0;
+    for (unsigned i = 0; result == 0 && i < sizeof(kInterfaces) / sizeof(kInterfaces[0]); i++) {
+        unsigned proto = kInterfaces[i].proto;
+        JSValueConst prototype = dom->prototypes[proto]->value;
+        int parent = d_proto_parent((int)proto);
+        result = -1;
+        if (parent >= 0 && JS_IsUndefined(made[parent])) break;
+        JSValue f = proto == D_PROTO_FRAGMENT
+            ? JS_NewCFunction2(ctx, fragment_constructor, kInterfaces[i].name, 0, JS_CFUNC_constructor, 0)
+            : JS_NewCFunction2(ctx, illegal_constructor, kInterfaces[i].name, 0, JS_CFUNC_constructor_or_func, 0);
+        if (JS_IsException(f)) break;
+        if (JS_SetConstructor(ctx, f, prototype) < 0 ||
+            string_tag(ctx, prototype, tag, kInterfaces[i].name) < 0 ||
+            (parent >= 0 && interface_parent(ctx, f, made[parent]) < 0) ||
+            (proto == D_PROTO_NODE && (node_constants(ctx, f) < 0 || node_constants(ctx, prototype) < 0))) {
+            JS_FreeValue(ctx, f);
+            break;
+        }
+        made[proto] = f;
+        if (JS_DefinePropertyValueStr(ctx, global, kInterfaces[i].name, f,
+                                      JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE) < 0)
+            break;
+        result = 0;
+    }
+    JS_FreeAtom(ctx, tag);
+    return result;
+}
+
 int d_classic_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 {
     if (d_style_install(dom, ctx) < 0) return -1;

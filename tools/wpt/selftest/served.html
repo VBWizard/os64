@@ -1,0 +1,15 @@
+<!doctype html>
+<title>The runner's own: what is served</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<script>var loaded = [];</script>
+<script src="support/helper.js"></script>
+<script src="/selftest/support/helper.js?again"></script>
+<script src="http://elsewhere.test/selftest/support/helper.js"></script>
+<script src="/selftest/support/handler.py"></script>
+<script src="/../../etc/hostname"></script>
+<script>
+test(function() {
+  assert_array_equals(loaded, ["helper", "helper"]);
+}, "a file of the checkout is served, by a relative or an absolute path, and nothing else is");
+</script>

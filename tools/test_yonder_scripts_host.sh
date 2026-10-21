@@ -11,7 +11,6 @@ cleanup() {
     fi
 }
 trap cleanup EXIT
-. tools/host_build.sh
 . tools/yonder_host_build.sh
-yonder_host_build tools/test_yonder_scripts_host.c "$work" "$work/yonder-scripts"
+yonder_host_build "$work" tools/test_yonder_scripts_host.c "$work/yonder-scripts"
 "$work/yonder-scripts" "$@"

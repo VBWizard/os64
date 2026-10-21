@@ -13,8 +13,8 @@ MODERN_WEB.md and its brief here is struck.
 
 | Slice | Builder | Reviewer | After |
 |---|---|---|---|
-| 0a the runner and the switch | Opus | Fable (the table), Chris | `userland` |
-| 0b the tally and the replay corpus | Opus, **Built** | Chris | `userland`, beside 0a |
+| 0a the runner and the switch | Opus | Fable (the table), Chris | **Built** (MODERN_WEB.md § Slice 0a, as built) |
+| 0b the tally and the replay corpus | Opus | Chris | **Built** (MODERN_WEB.md § Slice 0b, as built) |
 | 1a storage and the small globals | Opus | Chris | 0a's table |
 | 1b the window's view, scroll and history | Opus | Chris | 0a's table |
 | 2 fetch | Opus | Fable (origins and CORS), Chris | 0a's table |
@@ -22,9 +22,14 @@ MODERN_WEB.md and its brief here is struck.
 | 4 CSS batch A | Opus | Chris | 0a's mark in libgarb |
 | 7 the bytecode cache | Opus | Chris | 0a |
 
-Slices 5 (incremental relayout, then the frame), 6 (SVG) and 8 (generated
-content) are not briefed here: 5 and 6 are Fable designs, written while
-the fan-out builds; 8 shares libgarb with 4 and follows it.
+| 5a–5d relayout, the observer, the frame | Opus | Fable (5b's rule, 5c's graft), Chris | [RELAYOUT.md](RELAYOUT.md) is the brief; 5a after 0a, 5b/5c in sequence, 5d after 5c |
+| 6a–6c SVG | Opus | Fable (6b's door and backend verb), Chris | [SVG.md](SVG.md) is the brief; 6a after 0a, 6b after 0a's mark in libgarb, 6c after 6b |
+
+Slices 5 and 6 are Fable designs (2026-10-21) and their documents are
+their briefs: each names its cuts, the seams, the oracle and what is left
+to the builder, so no second brief is written here. Slice 8 (generated
+content) shares libgarb with 4 and follows it; its brief is written when 4
+lands.
 
 ## What every slice does the same way
 
@@ -83,10 +88,19 @@ this arc adds carries 0a's mark in libgarb's table for the same reason.
 `.vendor/wpt`; add your directories to its list. Run the WPT runner
 against your directory before you write a line, and commit that count as
 the directory's expectation file under `tools/wpt/` in your FIRST commit,
-so the PR's diff of that file is the proof. A test that passes by accident
-of a bug is still a pass; a test that fails for a reason outside the slice
-(needs `iframe`, needs `fetch`, needs a server) is listed in the as-built
-section by the reason, in a count, not by name.
+so the PR's diff of that file is the proof. **Two gates, not one**
+(Quinn's finding 9: a regression baseline alone lets an interface ship
+passing a tenth of its tests). The expectation file has three sections:
+`required`, the tests that MUST pass before the interface's row joins the
+table enabled, chosen by the builder from the directory as the ones that
+exercise the interface's essential behaviour and named one by one, and
+read by Fable or Chris in the PR; `passing`, every test that passes
+(the regression baseline: losing one fails the run); and `excluded`,
+each test the slice knowingly does not run WITH ITS REASON (`needs
+iframe`, `needs a server`, `needs fetch`), so what was never exercised is
+named, never a count. A test whose harness status is not OK (the harness
+reported an error or timed out) is a failure whatever its subtests say.
+A test that passes by accident of a bug is still a pass.
 
 **The proof, in the house's shape.** A host harness under ASan and UBSan
 (`tools/test_*_host.sh`, built with `tools/host_build.sh`), cases by hand
@@ -98,6 +112,21 @@ host first; a QEMU boot is for what needs the wire or the disk. The
 mutant harnesses are NOT part of this run unless Chris asks (they take an
 hour each and the box is shared); say in the PR that they were not run.
 
+**Three passes before Codex sees it** (ruled 2026-10-21 after #327's
+first five Codex rounds found eleven legitimate things, nearly all of them
+I/O and error-path edge cases a cold reader asks about and an author does
+not). Before the PR opens: (1) YOUR OWN ADVERSARIAL PASS over the diff,
+every error branch and every I/O path, asking of each "a short read, a
+missing file, a directory where a file should be, a size past the cap,
+out of memory right here, the same call twice": add the case or say in
+the PR why it cannot happen. (2) A COLD READER: one fresh Opus agent, no
+brief and no builder context, given only the PR's diff and the house's
+review rules (CLAUDE.md's opening), asked for findings in Codex's shape;
+you fix what it finds and say in the PR what it found. One agent, never a
+fan-out. (3) FABLE'S READ, architecture and design, plus the files that
+carry lifetime, concurrency or ring-boundary risk. Then Chris asks Codex
+for round 1, and the rounds run by CLAUDE.md's rules.
+
 **The harness budget.** One QEMU at a time per slice, always under
 `timeout`, windowed only if Chris asks, serial to your scratchpad, your
 own monitor port (0a 55570, 0b 55571, 1a 55572, 1b 55573, 2 55574,
@@ -107,8 +136,8 @@ own monitor port (0a 55570, 0b 55571, 1a 55572, 1b 55573, 2 55574,
 
 **What every PR states.** The WPT directory and its count before and
 after; how many of the P5's page records name the slice's surface
-(0b's tally, `tools/yonder_tally.py DIR --surface NAME...`; before 0b
-lands, grep the records by hand, they are plain text); the corpus count before and after once kept pages exist; the P5
+(0b's tally; before 0b lands, grep the records by hand, they are plain
+text); the corpus count before and after once kept pages exist; the P5
 reading if the slice claims a speed (you cannot take it; say what Chris
 should run).
 
@@ -117,195 +146,35 @@ caller", no history. Every comment the diff touches or makes false
 elsewhere is re-read before the PR opens. `tools/stale_refs.sh` before any
 commit that renames or removes a name.
 
-## Slice 0a: the runner and the switch
+## Slice 0a — built
 
-**Build.** Four things, one PR.
+The brief is retired in favour of [MODERN_WEB.md § Slice 0a, as built](MODERN_WEB.md#slice-0a-as-built),
+which records the runner, the expectations' three sections, the table, the
+libgarb mark and the yonder switch as they ended up, with the numbers. What
+the fan-out needs from it: a global is a row in `userland/libdom/modern.c`
+(`{names, install}`, the names being exactly what the installer puts on
+window, which `tools/test_dom_modern.inc` holds it to); a CSS property is a
+row of `libgarb/props.c`'s table with `modern` set; a WPT directory is a
+line in `tools/wpt_fetch.sh`'s list and a `tools/wpt/expected/<dir>.txt`
+whose `[required]` names the tests that must pass and whose `[passing]` is
+committed before the code (`tools/test_yonder_wpt_host.sh <dir> --update`
+writes it; `--modern-off` shows the required tests are the slice's own).
 
-1. **`tools/wpt_fetch.sh`**: a sparse, shallow checkout of
-   web-platform-tests at ONE pinned commit (a variable at the top of the
-   script; today's `main` is fine, written as a full SHA) into
-   `.vendor/wpt` (already in `.gitignore`), of the directories a list in
-   the script names: `resources`, `common`, `dom/nodes`, and the
-   directories the other briefs name (add them now so the fan-out finds
-   them: `webstorage`, `url`, `encoding`, `hr-time`, `user-timing`,
-   `cssom-view`, `html/browsers/history`, `css/cssom`, `css/mediaqueries`,
-   `fetch/api`, `xhr`, `html/semantics/scripting-1/the-script-element`,
-   `css/css-logical`, `css/css-sizing`, `css/css-images`, `css/css-text`,
-   `css/css-ui`, `css/css-overflow`). `git init`, `remote add`,
-   `fetch --depth 1 origin <sha>`, `sparse-checkout set <dirs>`,
-   `checkout FETCH_HEAD`. Re-running with the checkout present moves it to
-   the pin without re-fetching what it has. The box reaches GitHub (checked
-   2026-10-21).
-2. **The runner, `tools/test_yonder_wpt_host.c` and `.sh`**, on the
-   headless binding. The binding is `tools/test_yonder_scripts_host.c`:
-   it `#include`s `userland/apps/yonder/yonder.c` with `main` renamed and
-   fakes the OS (files, the work pool, fonts, the clocks) around it. Its
-   shape to reuse, read before designing: `stream_window()` builds a
-   window; `start_trip` + `yonder_mail_post_head` + `stream_post_body` +
-   `stream_post_verdict` deliver a page as the worker would;
-   `loop_settle()` turns the loop until nothing is owed; `script_land(tail,
-   source)` and `sheet_land` answer a `<script src>` or sheet job by the
-   tail of its address; `now_ms` and `clock_us` are the fake clocks a case
-   moves. The fakes live inside that file as statics. Two ways to reuse
-   them, your call, both used in the tree: include that file with its
-   `main` renamed (how it includes `test_js_port_host.c`; its unused case
-   functions then need `-Wno-unused-function` for the runner's unit under
-   `-Werror`), or move the fakes into a shared `tools/yonder_host_fakes.inc`
-   both files include (cleaner; touches a file four mutant harnesses name
-   by path, so check `tools/test_*_mutants.py` still anchor, per
-   `tools/anchorcheck.py` if it is in the kit, else by reading them).
-   The runner: arguments `--wpt <checkout> --dir <dir> --expect <file>
-   [--update] [--only <substring>]`. For each `.html` under the directory
-   (not `-ref.html`, not under `support/` or `resources/`), and for each
-   `.any.js` (which WPT runs through a generated wrapper: synthesise
-   `<!doctype html><script src=/resources/testharness.js></script><script
-   src=/resources/testharnessreport.js></script><script src=X.any.js>
-   </script>` for the window variant, reading the file's `// META:
-   script=` lines for extra scripts), deliver the page at
-   `http://wpt.test/<dir>/<file>`, answer every script and sheet job whose
-   path is under the checkout from the file, fail any other, then settle
-   with the clock ADVANCED between idle turns (10 ms a turn, which is the
-   tick) up to a virtual budget of 60 s so `step_timeout` and the harness's
-   own timeout fire deterministically. The results: our
-   `tools/wpt/testharnessreport.js` (served for `/resources/
-   testharnessreport.js` INSTEAD of the checkout's empty one) calls
-   `add_completion_callback` and appends an element, id
-   `os64-wpt-results`, whose text is one line per test, `PASS|FAIL|
-   TIMEOUT|NOTRUN <tab> <name>`, plus the harness status; the runner walks
-   the tree for that id after settle (the fixtures' `probe_text_is` shows
-   the walk). A page that never reports is `TIMEOUT` for the file. Output:
-   one line per test, a summary (`dom/nodes: 412 pass, 93 fail, 8 timeout
-   of 513`), and against `--expect`: new passes listed (add them), lost
-   passes listed and EXIT 1. `--update` rewrites the file, sorted, one
-   `<file>\t<test name>` per line. Document the runner in VERIFICATION.md
-   where the host suites are listed.
-3. **The switch and the table.** `os64_dom_options_t` gains `bool modern`
-   (default true in `os64_dom_default_options`). `userland/libdom/
-   modern.c` holds `d_modern_install(dom, ctx, global)`, called from
-   `os64_dom_create` after `d_window_install`, which walks a static table
-   `{ const char *name; int (*install)(os64_dom_t *, JSContext *,
-   JSValueConst global); }` when the option is set and returns at once
-   when it is not. The first row is the interface objects: cherry-pick
-   `8a6cca6d` (`opus/arc-interface-objects`: `Element`, `HTMLElement`,
-   `Node`, `Document`, `CharacterData`, `DocumentFragment`, the form and
-   image interfaces as Illegal constructors over the binding's own
-   prototypes, with `tools/test_dom_classic.inc` cases) and move its
-   install from `d_classic_install` into the table's row; its cases then
-   run with the option on and prove the names ABSENT with it off. In
-   libgarb, `Prop` in `props.c` gains `bool modern` (false for every
-   property today) and the parse is told whether marked properties are
-   known: find the one place a declaration's name is looked up in
-   `kProps` and give it the answer through the structure that already
-   reaches it (the parse's options or environment; NOT a global), so a
-   marked property with the switch off is unknown, which yonder already
-   records as `MISSING css-property`. yonder: `yonder_settings_saved_
-   modern()` reads `modern = on | off` from `yonder.conf` (absent is ON;
-   a value that is neither is refused loudly on the status line and read
-   as on), the Settings window gains the checkbox ("Modern web surface",
-   Apply and Save as default like the others, so `yonder_settings_open`
-   grows a parameter and a callback), and the one answer is handed to
-   libdom (`options.modern`) and to libgarb at every parse. A page file
-   fact line `modern: off` when it is off, so a record taken with the
-   switch off is never mistaken for a regression.
-4. **Acceptance.** Run the runner on `dom/nodes` before and after the
-   interface objects; commit both expectation states (the first commit
-   carries the "before"). Web.archive.org's player and DuckDuckGo's base
-   bundle are the P5 acceptance (tell Chris what to open).
+## Slice 0b — built
 
-**Left to the builder.** The fakes' sharing; the runner's test
-discovery details (WPT's `.window.js` and `.worker.js` variants are NOT
-run: say so in VERIFICATION.md); how `.any.js` META lines are honoured
-(`script=` yes; `global=` picks the window variant only; `timeout=long`
-raises the virtual budget); whether the Settings checkbox needs a restart
-or applies to the next page (next page is enough; say which).
-
-**PR states.** `dom/nodes` before and after; the tally of records naming
-`Element`, `HTMLElement`, `Node` (grep the P5 files; 0b's tool may not
-exist yet).
-
-## Slice 0b: the tally and the replay corpus — built
-
-**Built, 2026-10-21.** MODERN_WEB.md § Slice 0b, as built, is the record of
-what was built, the census, and where it departs from this brief. The brief
-below is struck: kept as it was handed out, and no longer the specification.
-
-**Build.** Four things, one PR, no libdom change.
-
-1. **`tools/yonder_tally.py <dir>...`**: over page files
-   (YONDER_DIAGNOSTICS.md's format; `address:`, `verdict:`, `MISSING <kind>
-   <name> (<count>)`, `FAILED <what>: <message> (<count>)`), a ranked table
-   of `MISSING` names by how many files name them and by total asks,
-   split by kind; `--surface <name>...` prints how many files name ANY of
-   the given names, which is the number every fan-out PR states;
-   `--failed` ranks the FAILED messages with their addresses. Python 3,
-   standard library, `-I`-safe (it reads files it was handed; the P5's
-   records are data). Fetch the 401 records to a scratch directory to run
-   it: the P5 is `ssh -o IdentitiesOnly=yes -o BatchMode=yes -i
-   ~/.ssh/os64_models yogi@192.168.137.246`, files under
-   `/home/tmp/yonder/backup/`, one `cat` per file (os64's sshd has no
-   scp). Put the ranked table, as it stands, in the as-built section: it
-   is the arc's census, quoted in MODERN_WEB.md § The tiers from memory.
-2. **`keep_pages` in `yonder.conf`** (`yonder_settings_saved_keep_pages()`,
-   default off, meaningful only with `diagnostics =` set; a Settings line
-   beside the diagnostics one if there is one, else none). With it on,
-   beside each page file `<name>.txt` yonder writes `<name>.html`: the
-   page's bytes AS THE PARSER WAS FED THEM (the stream's body chunks after
-   transfer decoding, before character decoding: `yonder.c`'s stream turn
-   is where they pass, `g.stream`; DOM_D4.md § The stream), and a
-   directory `<name>.d/` holding every script source and sheet the page
-   fetched, each as the job's PRODUCT (a script's product is decoded
-   UTF-8 text, `yonder_script_t`; a sheet's is whatever `sheet.c` hands
-   the window; keep each as the window received it, so a replay feeds the
-   same thing), named `<n>.js` / `<n>.css` with an `index` file of
-   `<n>\t<kind>\t<url as the job carried it>` lines. The page file gains
-   fact lines a replay needs to rebuild the head: `content-type:`,
-   `charset:`, and `encrypted:` beside the `status:` it has. Writes follow
-   the temp-and-rename rule; a page let go unshown is kept too (its record
-   is written at departure already, `diag_leave`). Fonts and pictures are
-   not kept (say so in the index's header line).
-3. **The replay runner, `tools/test_yonder_replay_host.c` and `.sh
-   <kept-dir> <out-dir>`**, on the headless binding (0a's brief § 2 says
-   how the binding is reused; coordinate with 0a on the shared fakes by
-   reading its branch, `opus/tmw-0a-runner`, before choosing; if 0a has
-   not chosen yet, take the include-with-renamed-main route and let 0a
-   converge). For every `<name>.txt` with a `<name>.html`: a window,
-   `start_trip` to the recorded address, a head from the fact lines, the
-   bytes posted in the stream's chunk size, the verdict, then settle with
-   the clock advanced as 0a's runner does; script and sheet jobs are
-   answered from `<name>.d/index` by exact URL, fonts and pictures
-   refused; the record is rendered (`yonder_diag_render`) to
-   `<out-dir>/<name>.txt`; one line per page `clean` or `N MISSING, M
-   FAILED`; a summary `replayed P, clean C`. No network, ever: a job for
-   an address the index lacks fails as a fetch failure does.
-4. **`tools/yonder_corpus_diff.py <before-dir> <after-dir>`**: per page,
-   the set of `MISSING kind name` and `FAILED what: message` lines (counts
-   ignored); pages that GAINED a line are regressions, printed with the
-   lines, exit 1; pages that lost lines are progress, printed; totals.
-   This is what a fan-out PR runs when kept pages exist.
-5. **The compile-time instrument** (MODERN_WEB.md slice 7 needs it): the
-   page file's per-script line gains the script's evaluation time in
-   microseconds (around `os64_js_run` in `scripts.c`, `os64_micros`), so
-   slice 7's cache shows as that number falling. The harness's fake clock
-   makes it deterministic in cases.
-
-**Proof.** Scripted-page host cases: a page kept on the fake disk has the
-bytes, the index and the facts the brief names; a page let go unshown is
-kept; the setting off keeps nothing; a kept page replays to the same
-record the direct load produced (the replay runner's own case set, built
-from the fixture pages the scripted-page host already carries, run by its
-`.sh`); the diff tool on two hand-made directories reports the regression
-and the progress and exits as specified; the tally on three hand-made
-records ranks as expected (a Python test file beside it, run by the `.sh`).
-
-**Left to the builder.** The `.d/` file naming beyond `<n>`; whether a
-sheet's product is bytes or text (read `sheet.c`); how a chunked body is
-appended under temp-and-rename (append to the temp during the stream,
-rename at the verdict; a page that never gets its verdict leaves the
-temp, and the next write of that name replaces it).
-
-**PR states.** The replay of the P5's existing records is impossible
-(they carry no bytes): say so, and give Chris the two lines to put in his
-`yonder.conf` on the P5 to start the corpus. The tally table.
+The brief is retired in favour of [MODERN_WEB.md § Slice 0b, as built](MODERN_WEB.md#slice-0b-as-built),
+which records the census, keep_pages and its index, the facts a replay
+rebuilds a head from, the replay runner and the diff as they ended up,
+with the numbers. What the fan-out needs from it: a PR's census number is
+`python3 -I tools/yonder_tally.py DIR --surface NAME...` over the P5's
+records (how many files and sites name any of the slice's names); once
+kept pages exist, `tools/test_yonder_replay_host.sh KEPT OUT` replays them
+into an empty OUT, and `python3 -I tools/yonder_corpus_diff.py BEFORE
+AFTER` compares two replays made the same way: a regression exits 1, and
+only a page replayed to a verdict is judged. A slice that adds something
+pages fetch adds a `<kind>` line shape to the kept index
+(`userland/apps/yonder/diag.h`) and its answer to the runner; a request the
+index has no line for reads `REPLAY incomplete`, a corpus to record again.
 
 ## Slice 1a: storage and the small globals
 
@@ -322,15 +191,31 @@ temp, and the next write of that name replaces it).
   page's (`dom->url`, scheme, host, port; an opaque origin, such as
   `about:blank` or a `file:` page, gets a `localStorage` that works and is
   never written to disk, which is what browsers do for file pages). libdom
-  holds the map; FILES ARE YONDER'S: a provider in the shape of
-  `os64_dom_cookies_t` (`os64_dom_set_storage`), with `load(opaque,
-  origin, out image)` at first touch and `store(opaque, origin, image)`
-  after a task that changed it, where the image is one byte buffer libdom
-  serialises and parses itself, so the format is libdom's and yonder only
-  moves bytes. yonder (`userland/apps/yonder/storage.c`) keeps
-  `<profile>/storage/<origin-as-filename>` (the origin with every byte
-  outside `[A-Za-z0-9.-]` percent-encoded), temp-and-rename, coalesced to
-  at most one write a second plus one at the page's departure. **This
+  holds the map; FILES ARE YONDER'S, and THE FILE IS THE SHARED STATE,
+  not any window's copy (Quinn's finding 3: two windows on one origin,
+  each flushing its whole snapshot, lose each other's writes; HTML defines
+  local storage as one state shared by every window). So the provider is
+  per-OPERATION, not per-image: `os64_dom_set_storage` installs
+  `fresh(opaque, origin, &identity)` — asked at the first touch in each
+  task, answering whether the store moved since the binding last read it
+  (yonder answers from one `stat`: the file's size and modification time
+  as its identity, which is one syscall per task that touches storage) —
+  `load(opaque, origin, out image)` to read it when it has, and
+  `commit(opaque, origin, changes)`, where `changes` is the binding's own
+  list of sets and removes since its last commit, never its whole map.
+  yonder (`userland/apps/yonder/storage.c`) commits by READ, MERGE, WRITE:
+  read the file as it stands now, apply this window's changes on top
+  (a `clear` is a change that removes every key present at read time, so
+  a stale window's later commit cannot resurrect them), write by
+  temp-and-rename. What can still be lost is one key written by two
+  windows inside one coalescing interval, where the later commit wins,
+  which is a browser's last-writer-wins per key. The image format is
+  libdom's and yonder only moves bytes, as before. Commits are coalesced
+  to at most one a second plus one at the page's departure; the quota is
+  checked against the merged size at commit, and a commit that would pass
+  it is refused with the keys it could not keep named in the page file.
+  The file is `<profile>/storage/<origin-as-filename>` (the origin with
+  every byte outside `[A-Za-z0-9.-]` percent-encoded). **This
   slice introduces `profile =`** (YONDER_HONEY_DO.md § Where yonder's
   files live: default `/home/yogi/.yonder`, created with its parents on
   first use, the status line says if it cannot): `yonder_settings_saved_
@@ -378,6 +263,12 @@ temp, and the next write of that name replaces it).
   harness gives a constant), and **`devicePixelRatio`** on window: the
   zoom as a ratio (`g.zoom` thousandths over 1000), which is what Chrome
   reports under zoom.
+- **`base64.c`: `btoa` and `atob`** (HTML § 8.3; the census puts `btoa`
+  fifteenth by files, 161 across 11 sites, and no slice had it): `btoa`
+  takes a string whose every code unit is below 256 and answers its base64,
+  `InvalidCharacterError` otherwise; `atob` forgives whitespace as the
+  forgiving-base64 algorithm says, refuses the rest with the same error,
+  and answers a string of the bytes. One file, one row.
 
 **Oracle.** WPT `webstorage/`, `url/` (the `.any.js` ones; `url/
 resources/urltestdata.json` is loaded by `fetch` in some tests, which
@@ -440,11 +331,18 @@ resolution; what `screen` says in the harness.
   gains an optional state value, kept as the structured-clone-lite the
   binding can hold: a JSON serialisation of `state`, `DataCloneError` for
   what JSON cannot carry, which is the honest subset). The URL must be
-  same-origin or `SecurityError`. Back and Forward into a same-document
-  entry do not fetch: they set `location`, fire `popstate` with the state
-  as a task, and scroll to the fragment if any. `hashchange` on window
-  when only the fragment changed, by any route. `history.length` counts
-  them.
+  same-origin or `SecurityError`. Three routes, three event rules, and
+  they are not interchangeable (Quinn's finding 11; routers call
+  `pushState` precisely to change the URL WITHOUT a navigation): a STATE
+  UPDATE (`pushState`, `replaceState`) changes `location` and `state` and
+  fires NOTHING, not `popstate`, not `hashchange`, whatever the fragment
+  did; a FRAGMENT NAVIGATION (a link to `#x`, `location.hash = `) adds a
+  same-document entry, scrolls, fires `popstate` then `hashchange`; a
+  TRAVERSAL (Back, Forward, `history.go`) into a same-document entry does
+  not fetch, sets `location`, fires `popstate` with the entry's state,
+  then `hashchange` if the fragment differs from the one left, then
+  scrolls to the fragment. A fixture proves `pushState` to a different
+  fragment fires neither event. `history.length` counts entries.
 - **`matchMedia(text)`** → a `MediaQueryList` (`matches`, `media` as
   serialised by libgarb's own dump, `onchange`, `addEventListener('change')`,
   and the legacy `addListener`/`removeListener`), evaluated through
@@ -529,10 +427,17 @@ unsure.
   `http` rejects with `TypeError` and writes a page-file fact, the
   question bar is for navigations, not scripts.
 - **`libdom/xhr.c`: `XMLHttpRequest`** over the same job: `open` (async
-  and SYNC: a synchronous request runs the fetch inline on the window
-  thread through `way_fetch_whole`, bounded by the task's budget, and
-  writes a `sync xhr` fact line because it stalls the window; the old web
-  is full of them and refusing is a half API), `setRequestHeader`, `send`,
+  and SYNC: a synchronous request runs THE SAME JOB to completion on the
+  window thread — `yonder_fetch_run` called inline with the same options,
+  so the credentials rule, the redirect verdict and the CORS judgement are
+  one code path whether the request is asynchronous, synchronous or a
+  module's — bounded by the task's budget, with a `sync xhr` fact line
+  because it stalls the window; the old web is full of them and refusing
+  is a half API. NEVER `way_fetch_whole`: it replaces the caller's hooks
+  with the page's cookie handling, follows redirects by its own rule and
+  keeps no response headers (`libway/load.c`; Quinn's finding 2), so a
+  request through it would be a second, less protected transport),
+  `setRequestHeader`, `send`,
   `abort`, `readyState` and `readystatechange`, `status`, `statusText`,
   `responseURL`, `responseType` (`""`, `text`, `json`, `arraybuffer`,
   `blob`, `document` as `NotSupportedError` until the parser can be
@@ -609,31 +514,41 @@ origin, not per page).
 
 - **libjs's module entry** (`userland/libjs/runtime/runtime.c`, `js.h`,
   `CONTRACT.md`). Today `evaluate` passes `JS_EVAL_TYPE_GLOBAL` and
-  nothing else exists. Add: `os64_js_eval_module(runtime, source, length,
-  name, outcome)` which compiles with `JS_EVAL_TYPE_MODULE |
-  JS_EVAL_FLAG_COMPILE_ONLY`, then evaluates the module through
-  `JS_EvalFunction` (its promise is drained by the ordinary job queue
-  under the turn's budget; a rejection is the outcome's exception);
+  nothing else exists. Three facts about the pinned engine shape the
+  contract, two of them from Quinn's probe (MODERN_WEB_REVIEW.md,
+  findings 1 and 6): `__JS_EvalInternal` RESOLVES a module's imports
+  before returning it even under `JS_EVAL_FLAG_COMPILE_ONLY` (quickjs.c
+  near line 37166, beside upstream's own comment "could add a flag to
+  avoid resolution if necessary"), and the loader it calls is
+  synchronous, so compiling an entry whose imports are not fetched yet
+  FAILS; a module with a top-level `await` can have an EMPTY job queue
+  while its evaluation promise is still pending (it awaits a timer or a
+  fetch), so "drained" is not "finished". Add, as one lineage:
+  `os64_js_module_compile(runtime, source, length, name, &module,
+  outcome)`, compiling with `JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_
+  ONLY` and a new flag the patch adds, `JS_EVAL_FLAG_NO_RESOLVE`, under
+  which the compiled module is kept UNRESOLVED behind a handle;
+  `os64_js_module_requests(module, callback, opaque)`, the static import
+  specifiers of that handle (`JS_GetModuleRequests`, the patch's second
+  half, over the `req_module_entries` of a `JSModuleDef`);
   `os64_js_set_module_loader(runtime, normalize, load, opaque)` installing
-  QuickJS's `JS_SetModuleLoaderFunc` with the host's two callbacks
-  (resolve a specifier against the importing module's name, which is its
-  URL; and hand back a module's SOURCE for a resolved name, or NULL with a
-  reason); `import.meta.url` set to the module's name through
-  `JS_SetModuleLoaderFunc`'s normaliser plus the port's `js_module_set_
-  import_meta` equivalent (read `quickjs-libc.c` upstream for the shape;
-  the port does not link libc, so write the eight lines). AND the one
-  thing the engine does not offer: **the static import list of a
-  compiled module**, so the host can prefetch the graph before linking.
-  QuickJS's loader callback is synchronous and is called during linking;
-  with the sources not yet fetched it can only fail. So: a patch in
-  `userland/libjs/patches/` adding `JS_GetModuleRequests(ctx, module,
-  &count)` that returns the compiled module's request specifiers (the
-  `req_module_entries` of a `JSModuleDef`), exposed as
-  `os64_js_module_requests(runtime, source, length, name, callback,
-  opaque, outcome)` which compiles with COMPILE_ONLY, calls back per
-  specifier, and frees the module. Teardown: a compiled-but-unlinked
-  module is freed with the context (check TEARDOWN.md's reclaim rules
-  and add the case).
+  `JS_SetModuleLoaderFunc` with the host's two callbacks (resolve a
+  specifier against the importing module's name, which is its URL; hand
+  back a module's SOURCE for a resolved name, or NULL with a reason);
+  `os64_js_module_run(module, outcome)`, which resolves (upstream's
+  `JS_ResolveModule`) now that every source can be answered, evaluates
+  through `JS_EvalFunction` and keeps the evaluation promise under the
+  handle; and `os64_js_module_state(module, outcome)` — PENDING,
+  FULFILLED or REJECTED with the rejection as the outcome's exception —
+  which the host asks after every turn's drain, not only the first,
+  because the promise settles whenever the thing it awaits arrives. A
+  handle is released by the host (`os64_js_module_release`) or with the
+  runtime, and a pending evaluation at teardown is torn down with the
+  runtime under TEARDOWN.md's rules (add the case: an unresolved module,
+  and a pending evaluation). `import.meta.url` is set to the module's
+  name through the normaliser plus the port's `js_module_set_import_meta`
+  equivalent (read `quickjs-libc.c` upstream for the shape; the port does
+  not link libc, so write the eight lines).
 - **yonder's loader, `userland/apps/yonder/modules.c`**, driven from
   `scripts.c` where `OS64_DOM_SCRIPT_MODULE` is recognised and skipped
   today (`scripts.c:579`, `yonder.c:7693`): a module script element
@@ -652,14 +567,24 @@ origin, not per page).
   `nomodule` classic scripts are skipped now that modules run; `type=
   importmap` is recorded as `MISSING script importmap` and not run. A
   fetch failure anywhere in the graph fails the entry with an `error`
-  event on the element and a page-file `FAILED` line. **Dynamic
-  `import()`**: the engine calls the loader synchronously when the job
-  runs; a module not in the map is fetched INLINE on the window thread
-  through `way_fetch_whole` under the task's budget, and a fact line
+  event on the element and a page-file `FAILED` line. The entry's
+  evaluation state is asked after every turn's drain (`os64_js_module_
+  state`): a module awaiting a fetch or a timer stays PENDING across
+  turns, is not reported as done, and is torn down with the page if it
+  never settles. **Dynamic `import()`**: the engine calls the loader
+  synchronously when the job runs; a module not in the map is fetched
+  INLINE on the window thread under the task's budget, and a fact line
   `inline import` goes in the page file because it stalls the window.
-  That is the lean, not a ruling: a DEBTS row books the asynchronous
-  loader (prefetching the graph when `import()` is seen is not possible
-  without parsing the argument, which may be any expression).
+  Inline means THE SAME TRANSPORT as every other script request — slice
+  2's fetch job run to completion on the window thread, with its
+  credentials, redirect and CORS policy — never `way_fetch_whole`, which
+  replaces the caller's hooks with ordinary page cookie handling, follows
+  redirects by its own rule and keeps no response headers
+  (`libway/load.c`, Quinn's finding 2). Until slice 2 lands, the inline
+  path is a classic script fetch, as the paragraph below says. That is
+  the lean, not a ruling: a DEBTS row books the asynchronous loader
+  (prefetching the graph when `import()` is seen is not possible without
+  parsing the argument, which may be any expression).
 - **`type=module` CSP and CORS**: module scripts are fetched with CORS
   (`crossorigin` honoured; cross-origin module without the allow header
   fails); until slice 2 lands, the job sends the request as a classic
@@ -685,10 +610,9 @@ import fetched inline, every module path absent with `modern` off
 (modules are then recorded as MISSING as today).
 
 **Left to the builder.** The map's memory cap (charge it to the
-binding's `max_bytes`); the patch's shape against the pinned QuickJS;
-whether `JS_EvalFunction`'s promise needs a job to settle before the task
-ends (it does when the module has a top-level await; the ordinary drain
-covers it).
+binding's `max_bytes`); the patch's shape against the pinned QuickJS
+(the no-resolve flag and the request getter are one patch file, with
+Quinn's probe from the review as its first test).
 
 **PR states.** The WPT directory before and after; the tally for
 `MISSING script module`; GitHub's record before and after on the P5
@@ -751,6 +675,11 @@ consumer in libflow or yonder's painter:
   `-offset`, after the box's own paint, taking no layout space; `auto`
   draws as `solid`. The default sheet's focus ring, if it uses something
   else today, moves to `outline` (read `libgarb`'s default sheet).
+- **`user-select`** (CSS UI 4; 627 files across 78 sites in the census,
+  eighth among properties, and no slice had it): parsed and kept on the
+  computed style (`auto`, `text`, `none`, `all`, `contain`) for the day
+  text selection exists (YONDER_HONEY_DO.md § 7 reads it then); nothing is
+  drawn differently now, as with `cursor`, and the as-built says so.
 
 **Oracle.** The testharness tests under WPT `css/css-logical/parsing/`,
 `css/css-sizing/parsing/` (the `aspect-ratio-*` files), `css/css-images/
@@ -788,17 +717,24 @@ keys on the run's text and face alone: read `text_cache.c`).
   `JS_WriteObject` with `JS_WRITE_OBJ_BYTECODE`, the blob prefixed by a
   BUILD TAG (a hash over the pinned upstream version string, the port's
   ABI id and the limits that shape bytecode, computed once at startup) and
-  a SHA-256 of the source (libtls has it; check the link); and
-  `os64_js_run_bytes(runtime, bytes, count, name, outcome)` which refuses
-  a blob whose tag is not this build's or whose digest is not the
-  source's (the caller passes the source's digest it keeps with the
-  cache entry), then `JS_ReadObject` with `JS_READ_OBJ_BYTECODE` and
-  `JS_EvalFunction` under the same turn, budget and outcome rules as
-  `os64_js_run`. QuickJS's reader TRUSTS its input: a blob is never read
-  unless its digest matched, and that is the whole security story, stated
-  in the contract: the cache directory is trusted as the binary is, and a
-  tampered blob with a correct digest is the same threat as a tampered
-  binary. Say so in DEBTS as a known limit of a cache under `/var/cache`.
+  a SHA-256 of the SOURCE (libtls has it; check the link), the payload's
+  LENGTH, and a SHA-256 of the PAYLOAD ITSELF — the source digest says
+  which source this bytecode is for, the payload digest says the bytes
+  are the ones written (Quinn's finding 5: a bit flip in the bytecode
+  leaves the source digest true); and `os64_js_run_bytes(runtime, bytes,
+  count, name, outcome)` which checks the framing (magic, tag, lengths
+  within `count`), the tag, the source digest against the one the caller
+  keeps with the cache entry, and the payload digest against the payload,
+  and refuses on any mismatch WITHOUT handing a byte to the engine; then
+  `JS_ReadObject` with `JS_READ_OBJ_BYTECODE` and `JS_EvalFunction` under
+  the same turn, budget and outcome rules as `os64_js_run`. A refusal is a
+  cache MISS to the caller (compile fresh, overwrite the entry), never an
+  error the page sees. QuickJS's reader TRUSTS its input (its manual says
+  so): the digests are an integrity check, not authentication; the cache
+  directory is trusted as the binary is, and a tampered blob rewritten
+  with matching digests is the same threat as a tampered binary. Say so
+  in the contract and in DEBTS as a known limit of a cache under
+  `/var/cache`.
 - **The cache entry** (`libway/cache.c`, CACHE.md): beside a script
   response's entry, a sibling keyed by the entry's identity plus the
   suffix the cache's naming allows, holding the compressed blob
@@ -823,10 +759,13 @@ keys on the run's text and face alone: read `text_cache.c`).
 
 **Oracle.** libjs's host suite: round trip gives the same result as a
 source run (a fixture that computes and prints), a wrong tag refused
-without reading, a wrong digest refused, a truncated or bit-flipped blob
-with a forced-correct digest under ASan to see what the reader does (if
-it crashes, the digest is the guard and the test documents that; if it
-reports, better); the cache host suite for the sibling entry's lifetime.
+without reading, a wrong source digest refused, a truncated blob and a
+bit-flipped blob each refused by the framing or the payload digest
+without reaching the engine (every byte position flipped in turn on a
+small blob, under ASan: the reader must never be entered), and the
+reader's behaviour on a corrupt payload whose digests were REWRITTEN to
+match, documented as what a trusted-directory compromise costs; the cache
+host suite for the sibling entry's lifetime.
 
 **Acceptance.** The P5's second visit to YouTube's front page: the
 compile seconds gone from the page file's line; danlegt's scripts show

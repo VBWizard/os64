@@ -1,0 +1,129 @@
+{
+ "items": {
+  "testharness": {
+   "selftest": {
+    "clock.html": [
+     "0000000000000000000000000000000000000000",
+     [
+      null,
+      {}
+     ]
+    ],
+    "excluded.html": [
+     "0000000000000000000000000000000000000000",
+     [
+      null,
+      {}
+     ]
+    ],
+    "long.html": [
+     "0000000000000000000000000000000000000000",
+     [
+      null,
+      {
+       "timeout": "long"
+      }
+     ]
+    ],
+    "meta.any.js": [
+     "0000000000000000000000000000000000000000",
+     [
+      "selftest/meta.any.html",
+      {
+       "script_metadata": [
+        [
+         "title",
+         "The runner's own: a script test"
+        ],
+        [
+         "script",
+         "support/helper.js"
+        ]
+       ]
+      }
+     ],
+     [
+      "selftest/meta.any.worker.html",
+      {}
+     ]
+    ],
+    "nul.html": [
+     "0000000000000000000000000000000000000000",
+     [
+      null,
+      {}
+     ]
+    ],
+    "pass-fail.html": [
+     "0000000000000000000000000000000000000000",
+     [
+      null,
+      {}
+     ]
+    ],
+    "runaway.html": [
+     "0000000000000000000000000000000000000000",
+     [
+      null,
+      {}
+     ]
+    ],
+    "served.html": [
+     "0000000000000000000000000000000000000000",
+     [
+      null,
+      {}
+     ]
+    ],
+    "short.html": [
+     "0000000000000000000000000000000000000000",
+     [
+      null,
+      {}
+     ]
+    ],
+    "timeout.html": [
+     "0000000000000000000000000000000000000000",
+     [
+      null,
+      {}
+     ]
+    ],
+    "variant.html": [
+     "0000000000000000000000000000000000000000",
+     [
+      "selftest/variant.html?first",
+      {}
+     ],
+     [
+      "selftest/variant.html?second",
+      {}
+     ]
+    ],
+    "window-only.window.js": [
+     "0000000000000000000000000000000000000000",
+     [
+      "selftest/window-only.window.html",
+      {}
+     ]
+    ],
+    "worker-only.any.js": [
+     "0000000000000000000000000000000000000000",
+     [
+      "selftest/worker-only.any.worker.html",
+      {}
+     ]
+    ],
+    "xml.xhtml": [
+     "0000000000000000000000000000000000000000",
+     [
+      null,
+      {}
+     ]
+    ]
+   }
+  }
+ },
+ "url_base": "/",
+ "version": 9
+}

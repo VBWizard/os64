@@ -1,0 +1,16 @@
+stale_refs: working tree vs HEAD
+
+== Names this change RETIRED that survive only in prose (read every line):
+-- ../../E05_SCRIBE.md
+   docs/design/pending/explorer/evidence/e05/README.md:63: as `ddaad166`. The [slice record](../../E05_SCRIBE.md) contains the hardware
+-- E05_SCRIBE
+   docs/design/completed/SCRIBE.md:147: independent. [E5](../pending/explorer/E05_SCRIBE.md) records dialog integration
+   docs/design/pending/EXPLORER.md:452: records validation scope. E3 and E4 are merged. [E5's Scribe record](explorer/E05_SCRIBE.md)
+   docs/design/pending/explorer/DECISIONS.md:307: - **Affected:** [Scribe integration](E05_SCRIBE.md), later Roam associations.
+   docs/design/pending/explorer/HANDOFF.md:63: | [E5 Scribe dialogs](E05_SCRIBE.md) | Accepted; PR #319 merged, P5 tested | [E5A layout and size follow-up](E05A_DIALOG_POLISH.md). |
+   docs/design/pending/explorer/README.md:78: | E5 | Open/Save picker and launch reuse | Scribe accepted, PR #319 merged; E5A follow-up active; associations separate | Quinn | [Scribe re
+   docs/design/pending/explorer/evidence/e05/README.md:63: as `ddaad166`. The [slice record](../../E05_SCRIBE.md) contains the hardware
+
+== No new superlative claims.
+
+Inspection: the E05_SCRIBE record remains at its existing path. All listed links still resolve; these are status updates, not retired files or code names.

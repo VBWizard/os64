@@ -1,0 +1,30 @@
+PASS	clock.html	timers fire in their order as the clock moves
+EXCLUDED	excluded.html	the selftest proves an excluded page is not run
+PASS	long.html	a page that says its timeout is long has the runner's long budget
+PASS	meta.any.html	a .any.js runs as WPT's window page, its META scripts first
+PASS	nul.html	a name with a NUL (\0) in it is reported whole
+PASS	nul.html	a page with a NUL byte in it is fed to the parser whole
+PASS	pass-fail.html	a test that passes
+FAIL	pass-fail.html	a test that fails	assert_equals: arithmetic expected 3 but got 2
+TIMEOUT	runaway.html	(no results: its scripts were stopped (time or memory))
+PASS	served.html	a file of the checkout is served, by a relative or an absolute path, and nothing else is
+TIMEOUT	short.html	(no results: the harness never reported)
+HARNESS	timeout.html	TIMEOUT (the page fails whole)
+FAIL	timeout.html	a pass on a page whose harness timed out	it passed, on a page whose harness did not end OK
+TIMEOUT	timeout.html	a test that never ends	Test timed out
+PASS	variant.html?first	each variant is a page of its own, at its own address ?first
+PASS	variant.html?second	each variant is a page of its own, at its own address ?second
+PASS	window-only.window.html	a .window.js runs as WPT's window page, which sets no GLOBAL
+selftest: 10 pass, 2 fail, 3 timeout, 0 notrun, 0 precondition failed of 15, in 12 pages (2 never reported; 1 harness errors, failing whole, 1 of the fails passes on those pages)
+selftest: not run: 1 pages the expectations exclude
+NEW	clock.html	timers fire in their order as the clock moves
+NEW	long.html	a page that says its timeout is long has the runner's long budget
+NEW	meta.any.html	a .any.js runs as WPT's window page, its META scripts first
+NEW	nul.html	a name with a NUL (\0) in it is reported whole
+NEW	nul.html	a page with a NUL byte in it is fed to the parser whole
+NEW	pass-fail.html	a test that passes
+NEW	served.html	a file of the checkout is served, by a relative or an absolute path, and nothing else is
+NEW	variant.html?first	each variant is a page of its own, at its own address ?first
+NEW	variant.html?second	each variant is a page of its own, at its own address ?second
+NEW	window-only.window.html	a .window.js runs as WPT's window page, which sets no GLOBAL
+wpt: 10 new passes; --update adds them to expect.txt

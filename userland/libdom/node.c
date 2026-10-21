@@ -32,16 +32,20 @@ static int node_prototype_kind(const os64_html_node_t *node)
         if (node->tag == OS64_HTML_TAG_SCRIPT) return D_PROTO_SCRIPT;
         if (node->tag == OS64_HTML_TAG_A) return D_PROTO_ANCHOR;
         if (node->tag == OS64_HTML_TAG_LINK) return D_PROTO_LINK;
+        return D_PROTO_HTML_ELEMENT;
     }
     return D_PROTO_ELEMENT;
 }
 
+/* A wrapper for a node of `node`'s kind, not yet attached: its prototype is
+ * the kind's, or `prototype` when that is an object (a constructor's
+ * new.target's, d_wrap_constructed). */
 static DValue *wrapper_prepare(os64_dom_t *dom, JSContext *ctx,
-                                const os64_html_node_t *node)
+                                const os64_html_node_t *node, JSValueConst prototype)
 {
     DValue *entry = d_alloc(dom, sizeof(*entry));
     if (entry == NULL) { d_error(ctx, "QuotaExceededError", "DOM wrapper quota exceeded"); return NULL; }
-    JSValue value = JS_NewObjectProtoClass(ctx,
+    JSValue value = JS_NewObjectProtoClass(ctx, JS_IsObject(prototype) ? prototype :
         dom->prototypes[node_prototype_kind(node)]->value, dom->node_class);
     if (JS_IsException(value)) { d_free(dom, entry); return NULL; }
     entry->value = value;
@@ -66,11 +70,17 @@ static JSValue wrapper_attach(os64_dom_t *dom, JSContext *ctx, DValue *entry,
 
 JSValue d_wrap(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node)
 {
+    return d_wrap_constructed(dom, ctx, node, JS_UNDEFINED);
+}
+
+JSValue d_wrap_constructed(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node,
+                           JSValueConst prototype)
+{
     if (!d_context(dom, ctx, OS64_JS_ABI_ID)) return JS_EXCEPTION;
     if (node == NULL) return JS_NULL;
     DValue *entry = d_find(dom, node);
     if (entry != NULL) return JS_DupValue(ctx, entry->value);
-    entry = wrapper_prepare(dom, ctx, node);
+    entry = wrapper_prepare(dom, ctx, node, prototype);
     return entry != NULL ? wrapper_attach(dom, ctx, entry, node) : JS_EXCEPTION;
 }
 
@@ -381,7 +391,7 @@ static JSValue method(JSContext *ctx, JSValueConst self, int argc,
         int deep = argc > 0 ? JS_ToBool(ctx, argv[0]) : 0;
         if (deep < 0) return JS_EXCEPTION;
         int64_t status;
-        DValue *entry = wrapper_prepare(dom, ctx, node);
+        DValue *entry = wrapper_prepare(dom, ctx, node, JS_UNDEFINED);
         if (entry == NULL) return JS_EXCEPTION;
         os64_html_node_t *copy = os64_page_node_clone(dom->state, node, deep != 0, &status);
         /* HTML's cloning steps carry a script's ALREADY STARTED to its copy. */
@@ -482,13 +492,21 @@ static unsigned method_prototypes(int magic)
     }
 }
 
+int d_proto_parent(int kind)
+{
+    if (kind == D_PROTO_NODE) return -1;
+    if (kind == D_PROTO_HTML_ELEMENT) return D_PROTO_ELEMENT;
+    return kind > D_PROTO_HTML_ELEMENT ? D_PROTO_HTML_ELEMENT : D_PROTO_NODE;
+}
+
 int d_node_install(os64_dom_t *dom, JSContext *ctx)
 {
     if (!d_context(dom, ctx, OS64_JS_ABI_ID)) return -1;
-    // Kind prototypes inherit Node; HTML-specific prototypes inherit Element.
-    // The registry retains these engine values through the same drain as wrappers.
+    // Each prototype is made after the one it inherits (d_proto_parent).
+    // The registry retains these engine values through the same drain as
+    // wrappers.
     for (int kind = 0; kind < D_PROTO_COUNT; kind++) {
-        int parent = kind >= D_PROTO_INPUT ? D_PROTO_ELEMENT : D_PROTO_NODE;
+        int parent = d_proto_parent(kind);
         JSValue value = kind == D_PROTO_NODE ? JS_NewObject(ctx) :
             JS_NewObjectProto(ctx, dom->prototypes[parent]->value);
         if (JS_IsException(value)) return -1;

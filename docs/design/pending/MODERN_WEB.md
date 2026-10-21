@@ -96,10 +96,15 @@ slice is made, not where it lands. Four rules.
    object never lands behind the kill switch either; the switch is for
    finished surface that turns out to hurt, not for drafts.
 2. **The oracle, before the sites.** Every slice names its web-platform-tests
-   directory and its pass rate is the acceptance. A slice cannot regress a
-   directory that passed. § The oracle, below.
+   directory, and TWO gates read it (Quinn, 2026-10-21: a regression
+   baseline alone lets an interface ship passing a tenth of its tests): a
+   REQUIRED set, the tests named one by one as the interface's essential
+   behaviour, every one of which passes before the interface's row joins
+   the table enabled; and the baseline, every test that passes, which a
+   slice cannot shrink. What a slice knowingly does not run is excluded
+   BY NAME with its reason, never as a count. § The oracle, below.
 3. **The corpus, before every merge.** Two instruments, because the
-   P5's page files are RECORDS and not pages: each of those under
+   P5's page files are RECORDS and not pages: each of the 1,601 under
    `/home/tmp/yonder/backup` names what a real page asked for and what
    failed (YONDER_DIAGNOSTICS.md), and nothing on the P5 keeps a page's
    bytes (the cache keeps sheets and pictures, never pages; CACHE.md § 2).
@@ -318,7 +323,10 @@ A layout that reuses the boxes a change did not touch; then
 `html/webappapis/animation-frames/`, `dom/nodes/MutationObserver-*`.
 Acceptance: the perf record's layouts-per-second on danlegt, unchanged
 with rAF on. **Fable design**, because it changes what libflow's tree IS
-between layouts.
+between layouts: [RELAYOUT.md](RELAYOUT.md) (2026-10-21), which cuts it
+into 5a (the change log in libhtml, `MutationObserver`, the instrument),
+5b (the cascade updated in place, pass 1 reused), 5c (the layout memo)
+and 5d (`requestAnimationFrame`).
 
 **Slice 6: SVG.** Inline `<svg>` in the tree, and SVG as a picture
 (`<img src="x.svg">`, the census's `MISSING image svg`): a renderer for
@@ -327,7 +335,13 @@ paths, the basic shapes, fills and strokes, transforms, `use`/`symbol`,
 libgarb already parses. Oracle: WPT `svg/` (structure and painting; the
 reftests when the runner can compare pictures). Acceptance: Google's and
 GitHub's icons, suckless's logo. **Fable design** for the renderer's seam
-(what libflow hands it, what it hands back, and where it runs), Opus builds.
+(what libflow hands it, what it hands back, and where it runs), Opus
+builds: [SVG.md](SVG.md) (2026-10-21), which makes an `<svg>` a replaced
+box to the layout, puts the renderer in a library of its own that fills
+and strokes through FreeType's rasterizer and stroker behind one new verb
+on the font backend table, and cuts it into 6a (the reftest runner, which
+slices 4 and 8 need too), 6b (the renderer's core) and 6c (gradients, text,
+the picture path).
 
 **Slice 7: the bytecode cache.** Per bundle, keyed by the cache's own entry
 identity (the response's validators), capped in bytes, compressed with
@@ -360,12 +374,22 @@ what keeps eight builders from colliding in one tree, and it is as much
 design as the slices themselves.
 
 **The order.** Slices 0a and 0b first, side by side: they touch different
-files. The fan-out (1a, 1b, 2, 3, 4, 7) starts once 0a's table exists,
-because every one of them registers in it; a fan-out slice that opens
-before 0a has merged branches from 0a's branch and says so in its PR
-(DOM_BRIEFS.md's stacking rule). Slices 5, 6 and 8 wait: 5 and 6 are
-Fable designs written while the fan-out builds, and 8 shares libgarb with
-4.
+files (both built 2026-10-21, PRs #327 and #326). The fan-out starts once
+0a's table exists, because every one of them registers in it; a fan-out
+slice that opens before 0a has merged branches from `opus/tmw-0a-runner`
+and says so in its PR (DOM_BRIEFS.md's stacking rule). **Three builders at
+a time, not six** (ruled 2026-10-21 after two builders spent a percent of
+the five-hour usage window a minute: the weekly budget was the plan's
+premise, the five-hour window is the real pacing limit, and a builder
+paused by a wall mid-edit is worse than one that never started). The
+first three: **1a, 1b and 4**, none of which needs fetch, each in its own
+worktree off 0a's branch. The second three, when the first three's PRs
+are open: **2, 3 and 7**; 3 after 2 if the window is tight, because its
+inline import rides 2's transport. Then 5a and 6a, which 0a alone
+unblocks, and 5b, 5c, 6b, 6c in their documents' order. Slice 8 follows 4.
+Every builder reads MODERN_WEB_BRIEFS.md as it stands on
+`fable/modern-web` AFTER Quinn's review (2512ba11 and later), not the
+copy a 0a or 0b branch carries, which predates it.
 
 **The table, which is the switch.** libdom gains `modern.c`: one static
 table of rows, each a name and an installer, walked once at runtime
@@ -456,6 +480,192 @@ From 2026-10-07, so they are not re-argued from scratch:
 - Every PR states: the WPT directory and its count before and after, the
   corpus count before and after, and the P5 reading if the slice claims a
   speed.
+
+## Review record
+
+**Quinn, 2026-10-21, at `30833121`** ([MODERN_WEB_REVIEW.md](MODERN_WEB_REVIEW.md)):
+eleven findings, all taken, the direction kept. Five P1: the pinned
+QuickJS resolves imports even under compile-only, so modules need a
+no-resolve flag and an explicit link step (slice 3, verified against
+`quickjs.c`); a synchronous request through `way_fetch_whole` would be a
+second, less protected transport, so sync XHR and dynamic `import()` run
+the one fetch job inline (slices 2 and 3, verified against `load.c`);
+per-window `localStorage` snapshots lose each other's writes, so the file
+is the shared state and a window commits its own changes by read, merge,
+write (slice 1a); `MutationObserver` cannot be rebuilt from a lossy
+layout log, so the document gains one mutation-time callback and the
+binding queues records as the standard does (RELAYOUT.md); a source
+digest does not validate bytecode, so the blob carries a payload digest
+and framing and a mismatch is a miss (slice 7). Six P2: a module's
+top-level await outlives the drain, so evaluation has a state asked after
+every turn (slice 3); the memo compared a counter every update moved, so
+the cascade has a sheet generation and an update counter, and untouched
+is a bit of its own beside steady (RELAYOUT.md); the replay index grows
+with the features that fetch, and an unrecorded request is "incomplete",
+not a failure (slice 0b); the WPT gate gains the required set and named
+exclusions (rule 2, slice 0a); a standalone SVG picture owns its own
+cascade (SVG.md); `pushState` fires nothing, fragment navigation and
+traversal each their own events (slice 1b). The two builders already
+running (0a, 0b) were told their changes the same afternoon.
+
+## As built
+
+### Slice 0a, as built
+
+Built by Opus on `opus/tmw-0a-runner`, from MODERN_WEB_BRIEFS.md § Slice
+0a and Quinn's finding 9 on the design review (the expectations' three
+sections), which arrived while it was built.
+
+**The runner.** `tools/wpt_fetch.sh` checks out WPT at `a699fb16` (shallow,
+partial, sparse: the briefs' directories, `resources`, `common`, and the
+suite's own `tools`) into `.vendor/wpt`, and builds WPT's `MANIFEST.json`
+over what is checked out (about 20 s; again only when the pin or the list
+moves). `tools/wpt/pages.py` turns the manifest's testharness entries under
+a directory into the pages a window can load. The manifest was the brief's
+first choice and it works on the sparse checkout; the filename rules the
+brief gave are kept as the fallback for a box without Python, and on
+`dom/nodes` the two agree on all 361 pages. `tools/test_yonder_wpt_host.c`
+includes the scripted-page host whole for its fakes (its `main` behind
+`YONDER_HOST_FAKES_ONLY`), and both build through
+`tools/yonder_host_build.sh`, so a WPT page takes the path a network page
+takes in yonder. The page is `http://wpt.test/<dir>/<page>`; scripts and
+sheets under that origin come from the checkout, `testharnessreport.js`
+from `tools/wpt/` (it writes the results into a `<pre
+id=os64-wpt-results>` the runner reads from the tree, each test's message
+included), and everything else, pictures and fonts too, fails as an
+unreachable fetch. The window's clock moves 10 ms a turn once the loop is
+idle, up to 60 s (180 s for a long-timeout page), and the microsecond clock
+behind a script task's deadline moves 1 ms a read, so a script that never
+ends is ended. Two runs of a directory print the same lines; `dom/nodes`
+takes about 20 s.
+
+**The expectations** are `tools/wpt/expected/<dir>.txt`, headed by the WPT
+commit, in three sections: `[required]` (each must pass, or the run fails
+naming it), `[passing]` (the baseline: a lost pass fails the run, a new one
+is listed) and `[excluded]` (a page not run, with its reason). `--update`
+rewrites `[passing]` alone. A page whose harness did not end OK fails
+whole: a pass it reported prints as a FAIL that says so. Only a page run
+to a verdict may change the expectations, so `--update` writes last, and
+only for a run with no fault, at least one page, and no page left unrun (a
+source missing, too large or not read whole, or a file a page asked for
+from the checkout not read whole, is an UNJUDGED page, whichever discovery
+found it); a page name an expectation line cannot hold, a page outside the
+checkout or listed twice, a directory that cannot be listed, and a missing
+harness or report script stop the run before any page;
+an expectation file that exists and cannot be read whole makes the run
+unjudgeable too. `--modern-off` runs the
+window with the switch off, to show the required tests are the slice's
+own: green only when none of them passes, a LEAKED one failing the run.
+`--selftest` holds the runner to `tools/wpt/selftest/` both
+ways (file names and a fixture manifest) and the sections to their rules.
+
+**What the builder decided.** `.window.js` tests are run (the brief said
+not): WPT generates the same window page for them as for a `.any.js`'s
+window variant, so nothing about them is out of reach. Not run, and
+counted by reason on the summary: worker and shadow-realm variants, and XML
+documents (`.xhtml`, `.svg`; 47 in `dom/nodes`), since yonder parses HTML.
+`timeout=long` raises the runner's budget, though the harness inside yonder
+still gives such a page 10 s: it reads `meta.name`, and the binding has no
+`HTMLMetaElement`. The Settings box applies from the next page, not the one
+on screen. The fakes are shared by inclusion, not moved: slice 0b's replay
+runner can include the same file the same way.
+
+**The table.** `userland/libdom/modern.c`: a row is `{names, install}`, the
+NULL-terminated list of what it puts on window and its installer, walked by
+`d_modern_install` at the end of `os64_dom_create` when
+`os64_dom_options_t.modern` is set (the default). The DOM host holds the
+rows to their names (`tools/test_dom_modern.inc`): window's own names with
+the switch on, less those with it off, must equal the table's, so a slice's
+row needs no case of its own to prove its switch. A row that leaves an
+engine exception pending fails the creation (QuickJS's function
+constructors swallow an out-of-memory in `length` and `name`; the full
+installer sweep found one). The switch takes away the table's names and
+what its rows put on them (each prototype's `constructor` and
+Symbol.toStringTag, Node's constants), nothing else: the prototype chain's
+levels, which this slice corrected (below), are the same with it on or off (Fable's
+ruling on Codex's fourth round: the separate HTMLElement prototype fixes
+the binding's structure and is not surface the arc adds, and no page
+detects a feature by comparing prototypes). The DOM host holds that too.
+
+**The first row: the interface objects**, cherry-picked from `8a6cca6d`
+with Chris's authorship and then made whole to their own rule (one
+interface per prototype of the binding's, or `instanceof` lies). HTMLElement
+had shared Element's prototype, so an SVG element was an HTMLElement; HTML
+elements now have a prototype of their own (`D_PROTO_HTML_ELEMENT`). The
+anchor, script and link prototypes, which arrived after the parked commit,
+get their interfaces. `Node` carries the node-type and document-position
+constants on itself and its prototype, and each prototype's
+`Symbol.toStringTag` is its interface's name, which is what
+`Object.prototype.toString` reports. Each interface object inherits its
+parent interface's, as its prototype inherits the parent prototype.
+`new DocumentFragment()` constructs, and any call without `new` is refused
+by the engine (a constructor-only function); `new Document()` is an Illegal
+constructor. Setting an interface object's own [[Prototype]] met an engine
+leak: QuickJS's `JS_SetPrototype` keeps its reference to the new prototype
+when the shape copy it then needs runs out of memory, so the installer
+gives each interface object a shape of its own first (`interface_parent`,
+`classic.c`), which the full installer sweep proves.
+
+**The CSS side.** `Prop`, the shorthand table and the alias table carry
+`modern` (false everywhere today). `garb_read_declaration` takes a
+`garb_reading_t {quirks, modern_off}`; `garb_env_t.modern_off` carries the
+answer through a cascade (declarations, `@supports`, `var()`-held
+properties, the skip tally); a marked longhand leaves an unmarked
+shorthand's answer, and the shorthand reads no part of its value that only
+the marked longhand takes, so `animation: spin` is invalid while
+`animation-name` is marked and the switch is off, as it would be in an
+engine without that longhand; libdom's style object has no member for a marked
+property while the switch is off. `GARB_MODERN_PROBE` lets the host suites
+prove the mark before anything is marked.
+
+**yonder.** `modern = on | off` (`yonder_settings_saved_modern`; absent is
+on, another word is on and said on the status line), a Settings box, the
+switch captured per navigation beside `scripting` and kept by the page for
+its life, handed to the script host and to the page's cascade, and a
+`modern: off` fact line in the page file.
+
+**Numbers.**
+
+| | before | after |
+|---|---|---|
+| `dom/nodes` pass | 844 of 4397 | 858 of 4406 |
+| harness errors (failing whole) | 69 | 67 |
+| `[required]` | — | 14, all passing; none passes with `--modern-off` (a green run) |
+| DOM host | 3734 / 21296 checks | 3810 / 22416, 0 failed |
+| scripted-page host | 5842 | 5888, 0 failed |
+
+The fourteen required tests are Node's eight constant tests, the two
+`DocumentFragment` constructor tests, `DocumentFragment.prototype`'s
+`getElementById`, `Node-cloneNode`'s `createDocumentFragment`, and the two
+`getElementsByTagName('*')` tests, which read `child.ELEMENT_NODE`. The
+parked shape, with no constants, had counted 905 on the runner's first
+draft: Node-cloneNode's `createElement` tests passed only while
+`Node.ELEMENT_NODE` was undefined, which skipped their checks of
+`attributes`, which the binding lacks.
+
+Why the rest of `dom/nodes` fails, by the harness's messages: 488 read a
+frame's document (`iframe`); 271 `createElementNS` and 213
+`setAttributeNS`; 307 expect a `DOMException` (the binding throws named
+Errors, LIBDOM.md § Budgets and errors); 282 `document.implementation`; 123
+`MutationObserver` (slice 5); 94 `createProcessingInstruction`; 65
+`DOMParser`; 94 CharacterData's `substringData`/`replaceData`/
+`insertData`/`deleteData`; 16 `attachShadow`. None is excluded: they run
+and fail, and the counts say why.
+
+The census: of the 1601 page records now on the P5 (the brief counted
+401), 181 name `Element`, `HTMLElement` or `Node` as a missing global (162
+`Element`, 43 `HTMLElement` with 529 asks, 12 `Node`), and 218 name at least
+one of this row's fifteen names. The interface names still missing most
+often are `NodeList`, `HTMLCollection` and seven `SVG*List`s (37 records
+each, one script), `HTMLIFrameElement` (23), `HTMLEmbedElement` and
+`HTMLMediaElement` (21), `EventTarget` (14).
+
+**Booked**: the interface objects for HTML elements that share
+HTMLElement's prototype, and `Text`/`Comment` and their constructors, in
+DEBTS.md § Classic browser scripting; the classic installers' trust in the
+engine's function constructors, there too. The mutant harnesses were not
+run (the briefs' rule); their anchors were checked against the changed
+files.
 
 ### Slice 0b, as built
 

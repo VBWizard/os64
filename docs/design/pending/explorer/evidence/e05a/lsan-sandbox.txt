@@ -1,0 +1,6 @@
+==8==unpoisoning: 0x7bcfd3618150 3ff0
+==8==LeakSanitizer: checking for leaks==9==Could not attach to thread 8 (errno 1).
+==9==Failed suspending threads.
+==8==LeakSanitizer has encountered a fatal error.
+==8==HINT: For debugging, try setting environment variable LSAN_OPTIONS=verbosity=1:log_threads=1
+==8==HINT: LeakSanitizer does not work under ptrace (strace, gdb, etc)

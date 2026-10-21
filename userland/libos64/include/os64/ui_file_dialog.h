@@ -31,6 +31,10 @@ typedef struct {
  * Close failures preserve storage for retry; do not free a live dialog.
  * A failed open can also leave window live if cleanup was refused; close it.
  *
+ * Open and Save share file-dialog.conf through the configured search path.
+ * Completed resizes remember the content size, including before Cancel;
+ * display/font clamping and maximize/restore do not replace that preference.
+ *
  * replace_existing records explicit replacement consent. When false, Save
  * callers must create exclusively (mode "x") or publish with NOREPLACE:
  * metadata failure cannot establish absence, and a file can appear after
@@ -58,6 +62,8 @@ typedef struct os64_ui_file_dialog {
     uint64_t pending_domain, pending_id, selected_domain, selected_folder;
     int32_t min_width, min_height, staged_min_width, staged_min_height;
     int32_t applied_min_width, applied_min_height;
+    uint32_t size_width, size_height;
+    bool size_ready, footer_dirty;
     bool confirm, making_folder, layout_pending, registered;
 } os64_ui_file_dialog_t;
 

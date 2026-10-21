@@ -24,9 +24,8 @@ cleanup() {
     fi
 }
 trap cleanup EXIT
-. tools/host_build.sh
 . tools/yonder_host_build.sh
-yonder_host_build tools/test_yonder_replay_host.c "$work" "$work/yonder-replay"
+yonder_host_build "$work" tools/test_yonder_replay_host.c "$work/yonder-replay"
 if [ "$#" -gt 0 ]; then
     "$work/yonder-replay" "$@"
     exit

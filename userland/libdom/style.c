@@ -62,7 +62,8 @@ static int parse(os64_dom_t *dom, JSContext *ctx, const char *s, size_t n,
     if (garb_decl_is_custom(&out->decl)) return 1;
     garb_set_t *sets = d_alloc(dom,sizeof(*sets)*GARB_NPROPS);
     if (sets == NULL) { d_error(ctx,"QuotaExceededError","Inline style value quota exceeded");return -1; }
-    int count = garb_read_declaration(out,&out->decl,dom->document->quirks == OS64_HTML_QUIRKS,sets);
+    garb_reading_t how = {.quirks = dom->document->quirks == OS64_HTML_QUIRKS, .modern_off = !dom->options.modern};
+    int count = garb_read_declaration(out,&out->decl,how,sets);
     d_free(dom,sets);
     if (out->incomplete) {
         d_error(ctx,"QuotaExceededError","Inline style value quota exceeded");return -1;
@@ -226,7 +227,11 @@ int d_style_install(os64_dom_t *dom, JSContext *ctx)
     dom->style_prototype = d_retain(dom,ctx,prototype);
     if (dom->style_prototype == NULL) return -1;
     JS_SetClassProto(ctx,dom->style_class,JS_DupValue(ctx,prototype));
+    /* A property's camel-case member exists while libgarb reads it: one
+     * the Modern Web arc added goes with the switch, as its name does from
+     * every declaration (`'aspectRatio' in el.style` is how pages ask). */
     for (int i = 0; i < GARB_NPROPS; i++) {
+        if (garb_prop_modern((garb_prop_t)i) && !dom->options.modern) continue;
         const char *name = garb_prop_name((garb_prop_t)i);
         char camel[128];size_t at = 0;
         for (size_t j = 0; name[j] && at+1 < sizeof(camel); j++) {

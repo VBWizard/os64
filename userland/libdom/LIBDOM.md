@@ -50,8 +50,11 @@ and control properties. `window` names the global object, and so do `self`, `fra
 unconfigurable, and the window's `length`, its frame count, is 0. Document landmarks
 are read from the attached tree rather than trusted parser-time pointers.
 
-Kind prototypes inherit Node, and the HTML control prototypes inherit Element.
-The supported properties and methods are placed on those chains:
+Kind prototypes inherit Node. An HTML element's prototype is HTMLElement's,
+which inherits Element's, or, for the elements with members of their own
+(the form controls, form, image, script, anchor and link), a prototype that
+inherits HTMLElement's; an element of another namespace (SVG, MathML) has
+Element's. The supported properties and methods are placed on those chains:
 
 | Kind | Surface beyond Node |
 | --- | --- |
@@ -67,7 +70,10 @@ Node supplies tree navigation, ownerDocument, childNodes, nodeType/nodeName,
 nodeValue/textContent and tree methods. A property absent from a node's chain
 reads undefined and is absent from `in`; assignment may create an ordinary
 expando. Borrowed methods and accessors still validate native receivers.
-Interface constructors and a complete DOM surface are outside this slice.
+With the Modern Web switch on, the prototypes are named on window by
+interface objects (§ The Modern Web's surface): DocumentFragment's
+constructs an empty fragment, and the rest are Illegal constructors. The
+surface is the one this file lists.
 
 Child collections and tag queries are native live objects with `length`,
 `item(index)` and indexed access. A query refreshes against the HTML version;
@@ -454,3 +460,61 @@ storage. Detached image prefetch is deferred with Chris; displayed images use
 the native picture-loading path. Source-preserving CSS text and attribute image
 dimensions are bounded consumer implementations, not complete CSSOM/image
 interfaces. Host acceptance and remaining J5/P5 work are in the design record.
+
+## The Modern Web's surface
+
+`os64_dom_options_t.modern` is the Modern Web arc's kill switch
+(MODERN_WEB.md, rule 4), set in `os64_dom_default_options`. Everything the
+arc adds to window is installed by one table, `modern.c`'s, walked once at
+creation after the classic window is whole: with the option clear the walk
+does not run and none of those names exists, which is what a page's feature
+detection needs to see. What goes is the table's names and what its rows
+put on them (each prototype's `constructor` and Symbol.toStringTag, Node's
+constants); the prototype chain's levels are the same either way. A row is
+the names it puts on window and the
+installer that puts them there; a slice adds its file and its row and
+installs no global anywhere else.
+
+The DOM host holds every row to its names (`tools/test_dom_modern.inc`):
+window's own names with the option set, less those with it clear, must be
+exactly the table's names. A name installed outside the table is on window
+both ways, and a name a row installs without listing it is on window only
+one way; either fails the suite, so a new row needs no case of its own for
+the switch. A row that leaves an engine exception pending has failed
+whatever it answered, and so does the creation: QuickJS's function
+constructors define `length` and `name` without saying when that ran out
+of memory.
+
+The style object follows the same switch for the CSS the arc adds: a
+property libgarb marks (`garb_prop_modern`) has no camel-case member while
+the option is clear, and a declaration of it is read as one libgarb does
+not know (`garb_reading_t.modern_off`), so `'aspectRatio' in el.style` and
+`setProperty` answer as they did before the arc.
+
+The first row is the interface objects (`classic.c`'s
+`d_interfaces_install`): `Node`, `CharacterData`, `DocumentFragment`,
+`Document`, `Element`, `HTMLElement` and the HTML element interfaces that
+have a prototype of their own, each named for exactly one of the binding's
+prototypes (WebIDL § 3.7), so `instanceof` answers truly and a page may
+patch `Element.prototype`. Each interface object inherits its parent's
+(`Object.getPrototypeOf(HTMLElement) === Element`), as each prototype
+inherits its parent prototype; `Node`'s is `Function.prototype`. `Node`
+carries the node-type and document-position constants, on itself and its
+prototype, as WebIDL puts a constant. Each prototype's own
+`Symbol.toStringTag` is its interface's name, so
+`Object.prototype.toString.call(document.body)` is `[object HTMLElement]`
+(WebIDL § 3.7.3; a Text says `CharacterData`, whose prototype it shares).
+`new DocumentFragment()` makes an
+empty fragment of the window's document, whose prototype is new.target's
+`prototype` (so a subclass makes its own kind; DocumentFragment's when that
+is not an object), and any call of it without `new`
+is refused by the engine itself, the function being made as a constructor
+only (it finds its binding through the anchor, which is its own class's
+prototype in the binding's context); every other interface is an "Illegal
+constructor", `Document` among them, since `new Document()` makes an XML
+document. An interface
+whose nodes share a broader prototype (Text, Comment, `HTMLDivElement`) is
+not installed: naming the broader prototype for it would make `instanceof`
+lie. Each prototype's `constructor` is its interface object; with the
+switch off it is what it was before the arc (`Image` for the image
+prototype, inherited from `Object.prototype` for the rest).

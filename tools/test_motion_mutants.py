@@ -82,8 +82,8 @@ UI_TEXT = 'python3 tools/test_ui_text_host.py --real'
 mutants = [
     # libgarb: the grammars and the Compatibility Standard's names.
     ('the-prefixed-shorthand-is-not-read', PROPS,
-     '    {"-webkit-animation", "animation"},',
-     '    {"-webkit-animationx", "animation"},', GARB),
+     '    {"-webkit-animation", "animation", false},',
+     '    {"-webkit-animationx", "animation", false},', GARB),
     ('a-time-takes-any-unit', VALUES,
      '    else if (ieq(t->unit, t->unit_len, "ms"))\n        out->unit = GARB_U_MS;\n    else\n        return false;',
      '    else\n        out->unit = GARB_U_MS;', GARB),
@@ -447,8 +447,8 @@ mutants = [
      '                        .dark = s_dark};', WINDOW),
     ('the-cascade-is-kept-across-reduce', YONDER,
      '                                                  garb_cascade_env(cascade).reduced_motion !=\n'
-     '                                                      view.reduced_motion))) {',
-     '                                                  false))) {', WINDOW),
+     '                                                      view.reduced_motion ||\n',
+     '                                                  false ||\n', WINDOW),
     # libgarb: @keyframes at any scale, and Animations 2's duration keyword.
     ('keyframes-group-across-easings', CASCADE,
      '            while (j < n && at[j].offset == at[i].offset && easing_cmp(at[j].easing, at[i].easing) == 0)',
@@ -468,7 +468,7 @@ mutants = [
      '            at[j + 1] = x;\n'
      '        }', GARB),
     ('the-shorthand-auto-is-a-name', PROPS,
-     '        } else if (!have[A_DURATION] && vc_keyword(c, kAuto) != NULL) {',
+     '        } else if (open[A_DURATION] && vc_keyword(c, kAuto) != NULL) {',
      '        } else if (false && vc_keyword(c, kAuto) != NULL) {', GARB),
     # libflow: a failed layout's timeline, an inline element's pieces, and
     # what float, position, overflow and currentColor make of each other

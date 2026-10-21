@@ -1,0 +1,4 @@
+849 (0x0033) AP3: wm: created window 1 'desktop' at (0,0) 1024x768
+862 (0x0035) AP1: wm: created window 2 'scribe' at (140,90) 640x440
+5516 (0x0035) AP1: wm: created window 3 'Scribe - Open' at (0,0) 1024x768
+9181 (0x0035) AP1: wm: created window 4 'Scribe - Save As' at (0,0) 1024x768

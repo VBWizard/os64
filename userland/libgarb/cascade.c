@@ -170,6 +170,13 @@ struct garb_cascade {
     uint32_t allocs_failed;
 };
 
+// How this cascade reads a declaration: in its document's mode, knowing the
+// properties its environment knows (garb_env_t.modern_off).
+static garb_reading_t reading(const garb_cascade_t *c)
+{
+    return (garb_reading_t){.quirks = c->quirks == OS64_HTML_QUIRKS, .modern_off = c->env.modern_off};
+}
+
 static void *alloc(garb_cascade_t *c, size_t n)
 {
     void *p = os64_arena_calloc(c->self.arena, 1, n);
@@ -837,7 +844,7 @@ static bool read_decl(garb_cascade_t *c, garb_parsed_t *owner, const garb_decl_t
     }
     garb_prop_t props[GARB_SETS_MAX];
     if (garb_decl_has_var(d)) {
-        if (prop_longhands(d->name, d->len, props) == 0) {
+        if (prop_longhands(d->name, d->len, c->env.modern_off, props) == 0) {
             skipped(c, GARB_SKIP_PROPERTY, d->name, d->len);
             return false;
         }
@@ -845,11 +852,11 @@ static bool read_decl(garb_cascade_t *c, garb_parsed_t *owner, const garb_decl_t
         return true;
     }
     garb_set_t sets[GARB_SETS_MAX];
-    int32_t n = garb_read_declaration(owner, d, c->quirks == OS64_HTML_QUIRKS, sets);
+    int32_t n = garb_read_declaration(owner, d, reading(c), sets);
     if (n <= 0) {
         // Which it was is asked only of what was dropped: the property
         // table is a walk.
-        if (prop_longhands(d->name, d->len, props) == 0)
+        if (prop_longhands(d->name, d->len, c->env.modern_off, props) == 0)
             skipped(c, GARB_SKIP_PROPERTY, d->name, d->len);
         else if (only_words(d->value, d->nvalue))
             skipped_value(c, d->name, d->len, d->value, d->nvalue);
@@ -987,10 +994,10 @@ static int32_t key_offsets(garb_cascade_t *c, const garb_rule_t *r, double **out
 // Whether a keyframe drops a declaration of `name`: every longhand of
 // Animations 1 is dropped there but its timing function, which is the
 // keyframe's own easing (§ 3, § 3.1).
-static bool key_dropped(const garb_decl_t *d, bool *easing)
+static bool key_dropped(const garb_cascade_t *c, const garb_decl_t *d, bool *easing)
 {
     garb_prop_t props[GARB_SETS_MAX];
-    int32_t n = prop_longhands(d->name, d->len, props);
+    int32_t n = prop_longhands(d->name, d->len, c->env.modern_off, props);
     *easing = n == 1 && props[0] == GARB_ANIMATION_TIMING_FUNCTION;
     for (int32_t k = 0; k < n && !*easing; k++)
         if (props[k] >= GARB_ANIMATION_NAME && props[k] <= GARB_ANIMATION_FILL_MODE)
@@ -1040,7 +1047,7 @@ static void add_keyframes(garb_cascade_t *c, garb_parsed_t *owner, const garb_ru
             const garb_decl_t *d = &items[j].decl;
             bool is_easing;
             if (items[j].kind != GARB_ITEM_DECL || d->important || garb_decl_is_custom(d) ||
-                key_dropped(d, &is_easing))
+                key_dropped(c, d, &is_easing))
                 continue;
             Decl read;
             if (!read_decl(c, owner, d, &read))
@@ -1160,10 +1167,10 @@ static bool supports_in_parens(garb_cascade_t *c, garb_parsed_t *owner, SCur *s)
     const garb_decl_t *d = &items[0].decl;
     if (garb_decl_is_custom(d) || garb_decl_has_var(d)) {
         garb_prop_t props[GARB_SETS_MAX];
-        return garb_decl_is_custom(d) || prop_longhands(d->name, d->len, props) > 0;
+        return garb_decl_is_custom(d) || prop_longhands(d->name, d->len, c->env.modern_off, props) > 0;
     }
     garb_set_t sets[GARB_SETS_MAX];
-    int32_t read = garb_read_declaration(owner, d, c->quirks == OS64_HTML_QUIRKS, sets);
+    int32_t read = garb_read_declaration(owner, d, reading(c), sets);
     for (int32_t k = 0; k < read; k++)
         if (garb_set_approximated(&sets[k]))
             return false;
@@ -1471,7 +1478,7 @@ static int32_t key_sets(garb_cascade_t *c, const Decl *d, const CustomMap *custo
     garb_decl_t read = d->decl;
     read.value = v.v;
     read.nvalue = v.n;
-    int32_t n = garb_read_declaration(&c->self, &read, c->quirks == OS64_HTML_QUIRKS, out);
+    int32_t n = garb_read_declaration(&c->self, &read, reading(c), out);
     return n > 0 ? n : 0;
 }
 
@@ -2051,11 +2058,11 @@ static void cascade_element(garb_cascade_t *c, const os64_html_node_t *el,
             garb_decl_t read = d->decl;
             read.value = out.v;
             read.nvalue = out.n;
-            n = garb_read_declaration(&c->self, &read, c->quirks == OS64_HTML_QUIRKS, sets);
+            n = garb_read_declaration(&c->self, &read, reading(c), sets);
         }
         if (n <= 0) {
             garb_prop_t props[GARB_SETS_MAX];
-            int32_t np = prop_longhands(d->decl.name, d->decl.len, props);
+            int32_t np = prop_longhands(d->decl.name, d->decl.len, c->env.modern_off, props);
             for (int32_t k = 0; k < np; k++) {
                 sets[k].prop = props[k];
                 os64_memset(&sets[k].value, 0, sizeof(sets[k].value));
