@@ -14,6 +14,47 @@ typedef struct os64_dom os64_dom_t;
 /* Live timers per page; one more throws QuotaExceededError. */
 #define OS64_DOM_TIMERS_MAX 4096
 
+/* The screen a page is told it is on (CSSOM View § The Screen interface),
+ * in CSS pixels: the whole display, and what of it a window may take. */
+typedef struct {
+    int32_t width, height, avail_width, avail_height;
+    uint32_t color_depth;
+} os64_dom_screen_t;
+
+/* A page's navigation timing (Navigation Timing; performance.timing and the
+ * `navigation` entry), as far as it has gone. The time origin is when the
+ * navigation began: `origin_us` on the host's now_us clock and
+ * `origin_epoch_us` on the wall clock, microseconds since the Unix epoch.
+ * Each milestone is microseconds after the origin, OS64_DOM_TIMING_NOT_YET
+ * until it has happened; `type` is how the navigation came about and
+ * `redirects` how many redirects it followed. */
+#define OS64_DOM_TIMING_NOT_YET UINT64_MAX
+typedef enum {
+    OS64_DOM_TIMING_FETCH_START = 0,
+    OS64_DOM_TIMING_RESPONSE_START,
+    OS64_DOM_TIMING_RESPONSE_END,
+    OS64_DOM_TIMING_DOM_LOADING,
+    OS64_DOM_TIMING_DOM_INTERACTIVE,
+    OS64_DOM_TIMING_DOM_CONTENT_LOADED_START,
+    OS64_DOM_TIMING_DOM_CONTENT_LOADED_END,
+    OS64_DOM_TIMING_DOM_COMPLETE,
+    OS64_DOM_TIMING_LOAD_START,
+    OS64_DOM_TIMING_LOAD_END,
+    OS64_DOM_TIMING_COUNT
+} os64_dom_milestone_t;
+typedef enum {
+    OS64_DOM_NAVIGATE = 0,       /* a link, an address, a form, a script's location = */
+    OS64_DOM_NAVIGATE_RELOADED,  /* Reload, or location.reload() */
+    OS64_DOM_NAVIGATE_TRAVERSED  /* back or forward through the history */
+} os64_dom_navigation_type_t;
+typedef struct {
+    uint64_t origin_us;
+    int64_t origin_epoch_us;
+    uint64_t at[OS64_DOM_TIMING_COUNT];
+    os64_dom_navigation_type_t type;
+    uint32_t redirects;
+} os64_dom_timing_t;
+
 /* What a script asked the host to do to a node, after its task. These reach
  * widgets and the model, which a script's task must not. */
 typedef enum {
@@ -63,13 +104,28 @@ typedef struct {
      * script's business. An empty write asks without writing (open()). NULL
      * is a host with no parser: every write is BAD_ARGUMENT. */
     int64_t (*write)(void *opaque, const char *utf8, size_t length);
+    /* The host's microsecond clock, monotonic: performance.now() reads it
+     * against the timing's origin. NULL reads now_ms's milliseconds. */
+    uint64_t (*now_us)(void *opaque);
+    /* The page's navigation timing as it stands, written into `out`, asked
+     * whenever a script reads it (the clock's origin when performance is
+     * first touched). It must not enter JS. NULL: the origin is the
+     * binding's creation and no milestone has happened. */
+    void (*timing)(void *opaque, os64_dom_timing_t *out);
+    /* What `screen` reports, copied at creation. */
+    os64_dom_screen_t screen;
+    /* The page's zoom in thousandths, asked when devicePixelRatio is read:
+     * a page zoomed to 125% is told 1.25, as Chrome tells it. NULL is
+     * 1000. It must not enter JS. */
+    uint32_t (*zoom)(void *opaque);
     void *host_opaque;
 } os64_dom_options_t;
 
 static inline os64_dom_options_t os64_dom_default_options(void)
 {
     const os64_dom_options_t options = {
-        .max_bytes = OS64_DOM_DEFAULT_MAX_BYTES, .scripting = true, .modern = true
+        .max_bytes = OS64_DOM_DEFAULT_MAX_BYTES, .scripting = true, .modern = true,
+        .screen = {1024, 768, 1024, 768, 24}
     };
     return options;
 }
@@ -204,6 +260,104 @@ typedef struct {
 } os64_dom_cookies_t;
 void os64_dom_set_cookies(os64_dom_t *dom, const os64_dom_cookies_t *cookies);
 
+/* WEB STORAGE (HTML § 12.2): localStorage and sessionStorage, each a map
+ * of strings per origin, the page's origin being its address's scheme,
+ * host and port. libdom holds the map a page sees; where an area is KEPT
+ * is the host's, through a provider per area, and the store is the shared
+ * state, not any one page's copy of it: another window on the same origin
+ * may change it at any time. So the binding reads the store when a task
+ * first touches the area and the store has moved since it last read it,
+ * and hands back only what this page changed, never its whole map; the
+ * host merges that onto the store as it then stands
+ * (os64_dom_storage_merge). A page whose origin is opaque (about:blank, a
+ * file, a gopher menu), or an area with no provider, keeps its map for its
+ * own life and nowhere else.
+ *
+ * Strings keep every code unit a script gave them, a lone surrogate and
+ * U+0000 included, as WTF-8; the store is bytes the host moves and does
+ * not read. An area holds at most OS64_DOM_STORAGE_QUOTA bytes, counted as
+ * the standard's quota counts them: the UTF-16 code units of every key and
+ * value, two bytes each. A setItem that would pass it throws
+ * QuotaExceededError and changes nothing. */
+#define OS64_DOM_STORAGE_QUOTA ((size_t)5 * 1024 * 1024)
+/* Changes are handed over at most this often, and once more as the
+ * binding is drained. */
+#define OS64_DOM_STORAGE_COMMIT_MS 1000
+typedef enum {
+    OS64_DOM_STORAGE_LOCAL = 0,
+    OS64_DOM_STORAGE_SESSION,
+    OS64_DOM_STORAGE_AREAS
+} os64_dom_storage_area_t;
+typedef enum {
+    OS64_DOM_STORAGE_OK = 0,
+    /* The store and the changes together would pass the quota: nothing was
+     * kept, and the page sees the store again. */
+    OS64_DOM_STORAGE_FULL = -1,
+    /* The store could not be read or written: the page's area keeps its
+     * map for the page's life from here, and asks the provider nothing
+     * more. */
+    OS64_DOM_STORAGE_FAILED = -2
+} os64_dom_storage_status_t;
+/* A provider, all on the owner thread, none entering JS; `origin` is the
+ * serialized origin ("https://example.com"), borrowed for the call.
+ * identity: a value that changes whenever the store does (yonder's: the
+ * file's size and modification time), 0 for no store; asked at the first
+ * touch in each task, and a value other than the one the binding last
+ * loaded means the store moved and is loaded again.
+ * load: the store's image, written into `out` when it fits in `cap`;
+ * answers its length either way (0 for none), negative when it cannot be
+ * read. The binding asks again with room when it did not fit.
+ * commit: this page's changes since its last commit (a change list in
+ * os64_dom_storage_merge's format), merged onto the store as it stands. */
+typedef struct {
+    uint64_t (*identity)(void *opaque, const char *origin);
+    int64_t (*load)(void *opaque, const char *origin, void *out, size_t cap);
+    os64_dom_storage_status_t (*commit)(void *opaque, const char *origin, const void *changes,
+                                        size_t length);
+    void *opaque;
+} os64_dom_storage_t;
+/* Copied; NULL removes the area's provider. Install before the first
+ * script: an area already touched keeps what it has and reads the store
+ * at its next touch. */
+void os64_dom_set_storage(os64_dom_t *dom, os64_dom_storage_area_t area,
+                          const os64_dom_storage_t *storage);
+/* Between tasks: the task that just ran is over, so the next touch asks the
+ * provider again, and an area with changes commits them when they are due:
+ * at once when the area has not committed for OS64_DOM_STORAGE_COMMIT_MS
+ * of the host's now_ms (or ever), else that long after its last commit.
+ * os64_dom_drain commits what is left, due or not. A host that never
+ * settles asks the provider once per area and commits at drain. */
+void os64_dom_storage_settle(os64_dom_t *dom);
+/* When the next commit is due on the now_ms clock: UINT64_MAX with nothing
+ * to commit. */
+uint64_t os64_dom_storage_due(const os64_dom_t *dom);
+/* Forgets both areas' maps and their changes not yet committed, so their
+ * next touch reads the store as it is: "Clear page storage" while a page
+ * is open. Owner thread, outside callbacks. */
+void os64_dom_storage_forget(os64_dom_t *dom);
+
+/* THE STORE'S BYTES, libdom's format and the host's to move: an image is a
+ * store's whole content, a change list is a commit's. Both are
+ * "os64 storage 1\n" and then records, `+<key bytes> <value bytes>\n`
+ * followed by the key, the value and "\n" for a set, `-<key bytes>\n`, the
+ * key and "\n" for a removal (an image holds only sets). The merge applies
+ * a change list to an image (NULL with length 0 for no store) as it stands
+ * and answers the new image in `*out` (os64_malloc'd; the caller frees it
+ * with os64_free; NULL, length 0, for an image with nothing in it):
+ * OS64_DOM_STORAGE_FULL when the result would hold more than the quota and
+ * more than the image did, OS64_DOM_STORAGE_FAILED when either input is not
+ * in the format or there was no memory. *out is NULL on any refusal. */
+os64_dom_storage_status_t os64_dom_storage_merge(const void *image, size_t image_length,
+                                                 const void *changes, size_t changes_length,
+                                                 void **out, size_t *out_length);
+/* Each record of an image or a change list, in order: `value` is NULL for a
+ * removal. `each` answers false to stop. False when the bytes are not in
+ * the format. */
+bool os64_dom_storage_walk(const void *bytes, size_t length,
+                           bool (*each)(void *opaque, const char *key, size_t key_length,
+                                        const char *value, size_t value_length),
+                           void *opaque);
+
 /* Owner-thread census hook (YONDER_DIAGNOSTICS.md): `heard` is told each
  * name a lookup on window did not find, before the lookup answers as it
  * always does, so what the page sees is unchanged. The name is borrowed
@@ -226,7 +380,8 @@ os64_dom_geometry_stats_t os64_dom_geometry_stats(os64_dom_t *dom, bool reset);
 
 /* Owner-thread only, outside JS callbacks. Idempotent; NULL is a no-op.
  * Drain closes bindings and releases C-retained JS values even when libjs
- * has entered a sticky failed state. Native records remain alive through
+ * has entered a sticky failed state. It first commits each storage area's
+ * changes to its provider, which is a page's departure commit. Native records remain alive through
  * engine finalizers; os64_dom_free releases their native node holds.
  * The required order is drain, os64_js_destroy (or destroy_report), then
  * os64_dom_free, followed by model/state/document teardown. */

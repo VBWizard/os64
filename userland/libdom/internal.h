@@ -131,6 +131,9 @@ struct os64_dom {
     bool attribute_scanned;
     unsigned dispatching;
     DActiveEvent *current_event;
+    /* The classes of plain event targets (d_event_target). */
+    JSClassID target_classes[8];
+    unsigned target_class_count;
     bool sweep_pending;
     DListener *invoking;
     DValue *invoking_entry;
@@ -144,6 +147,29 @@ struct os64_dom {
     char *url;
     DNavigation navigation;
     os64_js_outcome_t report;
+    /* DataView's constructor and its buffer, byteOffset and byteLength
+     * getters as the engine made them, for reading a buffer source
+     * (encoding.c). */
+    DValue *data_view[4];
+    /* Web storage (storage.c): an area per os64_dom_storage_area_t, made
+     * at its first touch, and the provider each is kept by. */
+    struct DStorageArea *storage[OS64_DOM_STORAGE_AREAS];
+    os64_dom_storage_t storage_providers[OS64_DOM_STORAGE_AREAS];
+    /* performance (performance.c): its object (a plain event target), the
+     * marks and measures it buffers (an engine Array, in the order made),
+     * its timing and navigation objects, the navigation entry, and the
+     * entries' prototypes. The time origin is read once, at the first ask. */
+    DValue *performance, *performance_entries, *performance_timing, *performance_navigation,
+        *navigation_entry;
+    DValue *entry_prototypes[5];
+    bool time_origin_known;
+    uint64_t time_origin_us;
+    int64_t time_origin_epoch_us;
+    /* screen and screen.orientation (screen.c), each made once. */
+    DValue *screen, *orientation;
+    /* Symbol.iterator as the engine made it, for reading an iterable a
+     * page hands over (url.c). */
+    DValue *iterator_symbol;
 };
 typedef struct { char *data; size_t length; } DString;
 
@@ -190,6 +216,16 @@ int d_handler_attribute_set(os64_dom_t *dom, JSContext *ctx, const os64_html_nod
  * default was not prevented, 0 when it was, -1 with an exception pending
  * when the binding refused its own storage or the runtime failed under it. */
 int d_dispatch(os64_dom_t *dom, JSContext *ctx, JSValueConst event, const os64_html_node_t *node);
+/* A PLAIN EVENT TARGET: an object that is neither a node nor window and
+ * is an EventTarget all the same (performance, screen.orientation), whose
+ * opaque is its own registry entry, which holds its listeners. A row
+ * registers the object's class and gives its prototype the three
+ * EventTarget methods with d_event_target, and an on<type> property for one
+ * of the binding's event types with d_event_handler. d_dispatch_plain is
+ * d_dispatch at one: the path is the target alone. */
+int d_event_target(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype, JSClassID class_id);
+int d_event_handler(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype, int kind);
+int d_dispatch_plain(os64_dom_t *dom, JSContext *ctx, JSValueConst event, DValue *target);
 JSValue d_event_new(os64_dom_t *dom, JSContext *ctx, const char *type, bool bubbles,
                     bool cancelable, bool trusted);
 void d_report(os64_dom_t *dom, JSContext *ctx, JSValueConst error);
@@ -285,6 +321,36 @@ int d_modern_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 const char *d_modern_name(size_t index);
 /* The table's rows' installers, each in the file its slice owns. */
 int d_interfaces_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+int d_storage_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+int d_performance_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+int d_url_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+int d_encoding_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+int d_screen_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+int d_base64_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* An interface object for a prototype a row made (WebIDL § 3.7): its
+ * `prototype` and the prototype's `constructor` and Symbol.toStringTag
+ * (`name`). `constructor` makes an instance, given new.target, and refuses
+ * a call without `new` (JS_CFUNC_constructor); NULL makes an Illegal
+ * constructor. `parent`, when an object, is the parent interface's object,
+ * which this one inherits. JS_EXCEPTION when it could not be made. */
+JSValue d_interface_new(JSContext *ctx, const char *name, int length, JSCFunction *constructor,
+                        JSValueConst prototype, JSValueConst parent);
+/* A string's text exactly as the engine holds it, as UTF-8 with a NUL a
+ * byte like any other and, unless `scalar`, a lone surrogate as the
+ * three bytes the engine writes for it (WTF-8): what JS_NewStringLen
+ * reads back as the same string. `scalar` makes each lone surrogate
+ * U+FFFD, WebIDL's USVString. Charged to the binding's budget like
+ * d_string; false with an exception pending. */
+bool d_string_text(os64_dom_t *dom, JSContext *ctx, JSValueConst value, DString *out, bool scalar);
+/* The origin an address has (HTML § Origins), serialized: `scheme://host`
+ * and `:port` when it is not the scheme's default, for an address whose
+ * scheme gives it a tuple origin (http, https, ws, wss, ftp), else "null",
+ * an opaque origin. False when it does not fit in cap. */
+bool d_origin(const char *url, char *out, size_t cap);
+/* The binding's storage (storage.c): what os64_dom_drain commits, and what
+ * os64_dom_free frees. */
+void d_storage_drain(os64_dom_t *dom);
+void d_storage_free(os64_dom_t *dom);
 JSValue d_style(os64_dom_t *dom, JSContext *ctx, JSValueConst self);
 int d_style_install(os64_dom_t *dom, JSContext *ctx);
 extern JSClassExoticMethods d_node_exotic;
