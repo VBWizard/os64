@@ -287,6 +287,12 @@ IN: text-indent: -10px
 OUT: text-indent: -10px
 IN: text-indent: 5% hanging
 OUT: text-indent: 5%
+IN: text-indent: each-line 1em hanging
+OUT: text-indent: 1em
+IN: text-indent: hanging 20% hanging
+OUT: invalid
+IN: text-indent: each-line each-line 1em
+OUT: invalid
 IN: text-transform: uppercase
 OUT: text-transform: uppercase
 
@@ -500,6 +506,16 @@ IN: background-image: linear-gradient(to, red, blue)
 OUT: invalid
 IN: background-image: radial-gradient(at, red, blue)
 OUT: invalid
+# A gradient's centre is a <position> (Values 4 § 9), which has no
+# three-part form: that is a background's alone (Backgrounds 3 § 3.6).
+IN: background-image: radial-gradient(at right 3% center, red, blue)
+OUT: invalid
+IN: background-image: radial-gradient(at left 4px top, red, blue)
+OUT: invalid
+IN: background-image: radial-gradient(at right 30% top 60px, red, blue)
+OUT: background-image: radial-gradient(...)
+IN: background-position: right 3% center
+OUT: background-position-x: calc(100% - 3%); background-position-y: 50%
 IN: background-image: radial-gradient(circle 20%, red, blue)
 OUT: invalid
 IN: background-image: radial-gradient(circle 10px 20px, red, blue)

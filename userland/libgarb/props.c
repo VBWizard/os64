@@ -1106,7 +1106,11 @@ static bool edge_offset(Sets *s, const char *edge, const garb_val_t *offset, gar
     return true;
 }
 
-static bool position(Sets *s, VCur *c, garb_val_t *x, garb_val_t *y)
+// A position, x and y (Values 4 § 9): one keyword or length-percentage, two,
+// or two keywords each with an offset. `three` also takes Backgrounds 3's
+// three-part form, a keyword pair with one offset (`<bg-position>`), which
+// only a background's position may be written in.
+static bool position(Sets *s, VCur *c, bool three, garb_val_t *x, garb_val_t *y)
 {
     // Up to four parts, each a keyword or a length-percentage.
     const char *word[4] = {NULL, NULL, NULL, NULL};
@@ -1162,6 +1166,8 @@ static bool position(Sets *s, VCur *c, garb_val_t *x, garb_val_t *y)
     }
     // Three or four: keyword-offset pairs, an offset after any keyword but
     // center, one pair horizontal and one vertical, in either order.
+    if (n == 3 && !three)
+        return false;
     const char *pw[2];
     const garb_val_t *po[2];
     int pairs = 0;
@@ -1336,7 +1342,7 @@ static bool radial_prelude(Sets *s, const Group *g)
         Sets strict = *s;
         strict.quirks = false;
         garb_val_t x, y;
-        bool ok = position(&strict, &c, &x, &y);
+        bool ok = position(&strict, &c, false, &x, &y);
         s->a.short_of_memory |= strict.a.short_of_memory;
         if (!ok)
             return false;
@@ -1511,7 +1517,7 @@ static bool radial_geometry(Sets *s, const Group *g, bool have, garb_val_t *out)
         if (vc_keyword(&c, kAt) != NULL) {
             Sets strict = *s;
             strict.quirks = false;
-            bool ok = position(&strict, &c, &parts[2], &parts[3]);
+            bool ok = position(&strict, &c, false, &parts[2], &parts[3]);
             s->a.short_of_memory |= strict.a.short_of_memory;
             if (!ok)
                 return false;
@@ -1702,7 +1708,7 @@ static bool background_layers(Sets *s, VCur *c, Layers lists[L_N], garb_val_t *c
                 have_img = true;
             } else if (!have_pos &&
                        (knows(s, GARB_BACKGROUND_POSITION_X) || knows(s, GARB_BACKGROUND_POSITION_Y)) &&
-                       position(s, c, &x, &y)) {
+                       position(s, c, true, &x, &y)) {
                 l[L_X] = x;
                 l[L_Y] = y;
                 have_pos = true;
@@ -2782,10 +2788,18 @@ static bool longhand_one(Sets *s, VCur *c, const Longhand *l, garb_val_t *out)
         return kw_or_dim(s, c, kVerticalAlign, ACCEPT_LENGTH | ACCEPT_PERCENT, true, true, out);
     case G_DECORATION_LINE: return decoration_line(s, c, out);
     case G_INDENT: {
+        // Text 3 § 8.1: a length-percentage && hanging? && each-line?, each
+        // keyword at most once.
         bool got = false;
+        const char *said[2] = {NULL, NULL};
         while (!vc_done(c)) {
-            if (vc_keyword(c, kIndentWords) != NULL)
+            if ((k = vc_keyword(c, kIndentWords)) != NULL) {
+                int slot = os64_streq(k, "hanging") ? 0 : 1;
+                if (said[slot] != NULL)
+                    return false;
+                said[slot] = k;
                 continue;
+            }
             if (got || !vc_dim(c, ACCEPT_LENGTH | ACCEPT_PERCENT, true, s->quirks, &s->a, out))
                 return false;
             got = true;
@@ -3274,7 +3288,7 @@ static bool shorthand(Sets *s, VCur *c, Shorthand sh)
         Layers xs = {0}, ys = {0};
         bool ok = knows(s, GARB_BACKGROUND_POSITION_X) || knows(s, GARB_BACKGROUND_POSITION_Y);
         while (ok) {
-            if (!position(s, c, &x, &y) || !layers_add(s, &xs, &x) || !layers_add(s, &ys, &y)) {
+            if (!position(s, c, true, &x, &y) || !layers_add(s, &xs, &x) || !layers_add(s, &ys, &y)) {
                 ok = false;
                 break;
             }
