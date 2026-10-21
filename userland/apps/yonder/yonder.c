@@ -76,6 +76,15 @@ static bool s_dark;
 static bool s_reduce_motion;
 static bool s_animations = true;
 
+// PAGE STORAGE (storage.h): the window's store over the profile folder
+// (yonder.conf's `profile`), which every page's localStorage and
+// sessionStorage are kept by; NULL keeps each page's for its own life. The
+// problem last said on the status line, so one is said once. And the
+// display the window is on, read at the start, which `screen` reports.
+static yonder_storage_t *s_storage;
+static char s_storage_said[OS64_PATH_MAX + 96];
+static os64_dom_screen_t s_screen;
+
 // The pages a navigation asks for. libway adds, on a GET, the pictures
 // yonder shows by themselves (YONDER.md § A picture asked for by itself),
 // libimage's list, at half the weight.
@@ -1257,6 +1266,10 @@ static struct {
         bool stopped, ending, ended;
         uint64_t ended_ms;
         bool scriptless;                // its host could not be made: no script runs
+        // Its navigation timing (performance.timing), from the moment it
+        // started: its scripts' host is handed it when it is made, and
+        // hears the milestones after that (stream_mark).
+        os64_dom_timing_t timing;
         // THE STREAM'S PAGE (DOM_D7.md § D7d): the parse so far as a page
         // with a sheet table, filled as the parse reveals sheets
         // (stream_sheets) and moved to the page that arrives. Its
@@ -2490,6 +2503,14 @@ static void refresh_if_declared(void)
         os64_ui_textfield_set(&g.ui, &g.field, later);
 }
 
+// A milestone of a page's navigation timing (stream_mark's, for a page
+// past its stream, whose host is its own now), reached now.
+static void page_mark(yonder_scripts_t *host, os64_dom_milestone_t which)
+{
+    int64_t now = os64_micros();
+    yonder_scripts_mark(host, which, now > 0 ? (uint64_t)now : 0);
+}
+
 // A page is shown: laid out BESIDE the one on screen and swapped in only
 // once the layout exists, so a page this machine cannot lay out costs a
 // sentence and not the page the person was reading.
@@ -2604,7 +2625,11 @@ static void arrive_now(Page *fresh, NavKind kind, const way_position_t *crumb,
         os64_js_outcome_t out;
         int64_t began = task_begin(g.page.scripts);
         const os64_html_document_t *doc = page_doc(&g.page);
+        // The document is complete as its load event begins.
+        page_mark(g.page.scripts, OS64_DOM_TIMING_DOM_COMPLETE);
+        page_mark(g.page.scripts, OS64_DOM_TIMING_LOAD_START);
         yonder_scripts_dispatch(g.page.scripts, NULL, &loaded, NULL, &out);
+        page_mark(g.page.scripts, OS64_DOM_TIMING_LOAD_END);
         task_said(g.page.scripts, true, "load", &out, began);
         if (script_rebuild())
             asks_perform(g.page.scripts, doc, true);
@@ -2687,6 +2712,36 @@ static void stream_modern_capture(void)
         yonder_diag_fact(g.stream.diag, "modern", "off");
 }
 
+// THE PAGE'S NAVIGATION TIMING (performance.timing, the navigation entry):
+// its origin is the moment the navigation began, on os64_micros' clock and
+// the wall clock's, and the fetch starts then.
+static void stream_timing_start(NavKind kind)
+{
+    os64_dom_timing_t *t = &g.stream.timing;
+    int64_t now = os64_micros();
+    t->origin_us = now > 0 ? (uint64_t)now : 0;
+    os64_time_t wall;
+    t->origin_epoch_us = os64_time(&wall) == 0 && wall.ticks_per_second != 0
+        ? wall.epoch * 1000000 + (int64_t)((uint64_t)wall.ticks_into_second * 1000000 / wall.ticks_per_second)
+        : 0;
+    for (int i = 0; i < OS64_DOM_TIMING_COUNT; i++)
+        t->at[i] = OS64_DOM_TIMING_NOT_YET;
+    t->at[OS64_DOM_TIMING_FETCH_START] = 0;
+    t->type = kind == NAV_RELOAD ? OS64_DOM_NAVIGATE_RELOADED
+            : kind == NAV_BACK || kind == NAV_FORWARD ? OS64_DOM_NAVIGATE_TRAVERSED
+            : OS64_DOM_NAVIGATE;
+}
+
+// A milestone of the page arriving, now: kept, and told to its scripts'
+// host when it has one.
+static void stream_mark(os64_dom_milestone_t which)
+{
+    int64_t now = os64_micros();
+    uint64_t at = now > 0 ? (uint64_t)now : 0;
+    g.stream.timing.at[which] = at > g.stream.timing.origin_us ? at - g.stream.timing.origin_us : 0;
+    yonder_scripts_mark(g.stream.scripts, which, at);
+}
+
 static void open_local(const char *path, NavKind kind, const way_position_t *crumb)
 {
     uint8_t *bytes = NULL;
@@ -2711,6 +2766,10 @@ static void open_local(const char *path, NavKind kind, const way_position_t *cru
         return;
     }
     os64_memset(&g.stream, 0, sizeof(g.stream));
+    // A file's response is its read, done before the stream begins.
+    stream_timing_start(kind);
+    stream_mark(OS64_DOM_TIMING_RESPONSE_START);
+    stream_mark(OS64_DOM_TIMING_RESPONSE_END);
     g.stream.diag = diag;
     g.stream.local = bytes;
     g.stream.local_len = len;
@@ -2822,11 +2881,6 @@ static void bar_answered(bool yes)
 // as long as the job still holds its own.
 static void stream_drop(void)
 {
-    // A load that never became a page writes its record here, with what it
-    // got as far as; one that did took its record with it (stream_finish).
-    diag_write(g.stream.diag);
-    yonder_diag_free(g.stream.diag);
-    g.stream.diag = NULL;
     if (g.asker == ASK_WORKER)
         bar_forget();
     os64_html_document_t *doc = g.stream.parser != NULL ? os64_html_parser_abandon(g.stream.parser) : NULL;
@@ -2836,6 +2890,13 @@ static void stream_drop(void)
     sheets_free(&g.stream.page);
     measured_forget(doc);
     yonder_scripts_free(g.stream.scripts);
+    // A load that never became a page writes its record here, with what it
+    // got as far as; one that did took its record with it (stream_finish).
+    // The host borrows the record (its storage's departure commit writes
+    // there), so the record goes after it.
+    diag_write(g.stream.diag);
+    yonder_diag_free(g.stream.diag);
+    g.stream.diag = NULL;
     os64_page_state_free(g.stream.state);
     os64_html_document_free(doc);
     os64_free(g.stream.local);
@@ -2924,6 +2985,7 @@ static void start_trip(const char *url, os64_page_request_t *request, NavKind ki
     if (request != NULL && kind != NAV_RELOAD && g.page.tree != NULL)
         os64_strcopy(trip->referrer, sizeof(trip->referrer), g.page.way.url);
     os64_memset(&g.stream, 0, sizeof(g.stream));
+    stream_timing_start(kind);
     if (request != NULL) {
         g.stream.has_fragment = request->has_fragment;
         if (request->has_fragment)
@@ -5591,8 +5653,8 @@ static uint64_t tick_next(void)
 // its next tick (tick_next) — none of them for a covered window — the
 // moment a page waiting for its
 // sheets is shown whatever is still coming, the moment a script the stream
-// is stopped at stops waiting for its sheets, and the next timer of each
-// page's scripts, covered or not.
+// is stopped at stops waiting for its sheets, and the next timer and the
+// next storage commit of each page's scripts, covered or not.
 // The earliest deadline offered so far (deadline_offer): when, where the
 // first offered at that moment came from (for the counts), and whether any
 // offered at that moment is the bell's to meet.
@@ -5603,9 +5665,9 @@ typedef struct {
 } NextDeadline;
 
 // A deadline offered to `d`. The loop meets a script's timer (script_turn,
-// and the stream's and the arriving page's turns), the settle
-// (pictures_settle) and the stream's wait for its sheets (stream_turn)
-// itself, after the events; the bell meets the rest (pictures_tick,
+// and the stream's and the arriving page's turns), a storage commit
+// (storage_turn), the settle (pictures_settle) and the stream's wait for its
+// sheets (stream_turn) itself, after the events; the bell meets the rest (pictures_tick,
 // motion_tick, coming_show). Two at one moment are common — the clock
 // steps by the tick — and the moment is the bell's if either is.
 static void deadline_offer(NextDeadline *d, uint64_t due, PastDeadline from)
@@ -5636,8 +5698,11 @@ static void pictures_schedule(void)
     // counting while another window is in front (DOM_D7.md § The clock).
     const yonder_scripts_t *hosts[] = {g.page.scripts, g.stream.scripts,
                                        g.coming.active ? g.coming.page.scripts : NULL};
-    for (size_t i = 0; i < sizeof(hosts) / sizeof(hosts[0]); i++)
+    for (size_t i = 0; i < sizeof(hosts) / sizeof(hosts[0]); i++) {
         deadline_offer(&d, yonder_scripts_timer_next(hosts[i]), PAST_TIMERS);
+        // Its storage's next commit, which the loop meets (storage_turn).
+        deadline_offer(&d, yonder_scripts_storage_due(hosts[i]), PAST_TIMERS);
+    }
     // The pictures on screen, found in one pass when any could be next or
     // at the next moment.
     bool asks = false;
@@ -6749,6 +6814,13 @@ static uint64_t script_now(void *opaque)
     return yonder_now_ms();
 }
 
+// devicePixelRatio: the window's zoom, as it stands when a script asks.
+static uint32_t script_zoom(void *opaque)
+{
+    (void)opaque;
+    return g.zoom;
+}
+
 // focus(), blur() and a reset nobody cancelled reach widgets, which a task
 // must not: each is kept, held, and performed when the task is over.
 static void script_activate(void *opaque, const os64_html_node_t *node, os64_dom_activation_t what)
@@ -6798,7 +6870,8 @@ static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state
 {
     yonder_scripts_options_t options = {url, g.script_ms, serial, script_alert, script_fetch,
                                         script_cancel, script_activate, script_write, script_now,
-                                        script_geometry, doc, diag, encrypted, modern};
+                                        script_geometry, doc, diag, encrypted, modern,
+                                        s_storage, &g.stream.timing, s_screen, script_zoom};
     yonder_scripts_t *host = yonder_scripts_new(doc, state, &options);
     yonder_scripts_set_user_agent(host, script_user_agent, NULL);
     const os64_dom_cookies_t cookies = {script_cookies_get, script_cookies_set, host};
@@ -7223,6 +7296,43 @@ static bool script_turn(void)
     if (rendered)
         asks_perform(g.page.scripts, doc, true);
     return rendered;
+}
+
+// PAGE STORAGE'S TURN: each page's storage commits what is due when no task
+// has (a task's own end commits what is due then), and a store that could
+// not be kept is said on the status line, once.
+static void storage_turn(void)
+{
+    yonder_scripts_t *hosts[] = {g.page.scripts, g.stream.scripts, g.coming.active ? g.coming.page.scripts : NULL};
+    uint64_t now = yonder_now_ms();
+    for (size_t i = 0; i < sizeof(hosts) / sizeof(hosts[0]); i++)
+        if (yonder_scripts_storage_due(hosts[i]) <= now)
+            yonder_scripts_storage_settle(hosts[i]);
+    const char *problem = yonder_storage_problem(s_storage);
+    if (problem != NULL && !os64_streq(problem, s_storage_said)) {
+        os64_strcopy(s_storage_said, sizeof(s_storage_said), problem);
+        status_rest(problem);
+    }
+}
+
+// Settings' "Clear page storage": the store emptied, and every page open
+// now forgets what it had, so its next touch reads the empty store.
+static void storage_clear(char *line, size_t cap)
+{
+    if (s_storage == NULL) {
+        os64_strcopy(line, cap, "Page storage is not kept in this window; there is nothing to clear.");
+        return;
+    }
+    int64_t removed = yonder_storage_clear(s_storage);
+    yonder_scripts_t *hosts[] = {g.page.scripts, g.stream.scripts, g.coming.active ? g.coming.page.scripts : NULL};
+    for (size_t i = 0; i < sizeof(hosts) / sizeof(hosts[0]); i++)
+        yonder_scripts_storage_forget(hosts[i]);
+    s_storage_said[0] = '\0';
+    if (removed < 0)
+        os64_strcopy(line, cap, "Cleared this window's page storage; some stored files could not be removed.");
+    else
+        os64_snprintf(line, cap, "Cleared page storage: %ld stored site%s gone.", (long)removed,
+                      removed == 1 ? "" : "s");
 }
 
 // ── Input events ────────────────────────────────────────────────────────
@@ -7738,6 +7848,7 @@ static bool stream_parser(const void *first, size_t n)
     g.stream.parser = os64_html_parser_new(&opt);
     if (g.stream.parser == NULL)
         return false;
+    stream_mark(OS64_DOM_TIMING_DOM_LOADING);
     if (g.stream.head.body == WAY_BODY_TEXT) {
         static const char kOpen[] = "<!doctype html><plaintext>";
         os64_html_parser_feed(g.stream.parser, kOpen, sizeof(kOpen) - 1);
@@ -7897,7 +8008,9 @@ static void stream_finish(os64_fetch_status_t fetch, const char *reason)
         g.finishing.fragment = fragment;
         g.finishing.cap = sizeof(fragment);
         g.finishing.has_fragment = &has_fragment;
+        page_mark(fresh.scripts, OS64_DOM_TIMING_DOM_CONTENT_LOADED_START);
         yonder_scripts_dispatch(fresh.scripts, doc->document, &loaded, NULL, &out);
+        page_mark(fresh.scripts, OS64_DOM_TIMING_DOM_CONTENT_LOADED_END);
         task_said(fresh.scripts, true, "DOMContentLoaded", &out, began);
         asks_perform(fresh.scripts, doc, false);
         os64_memset(&g.finishing, 0, sizeof(g.finishing));
@@ -8031,6 +8144,7 @@ static void stream_parse_over(void)
 {
     g.stream.ended = true;
     g.stream.ended_ms = yonder_now_ms();
+    stream_mark(OS64_DOM_TIMING_DOM_INTERACTIVE);
     stream_sheets();
     yonder_scripts_parse_ended(g.stream.scripts);
 }
@@ -8138,6 +8252,7 @@ static bool stream_turn(void)
     yonder_mail_t *mail = g.stream.mail;
     if (mail != NULL && !g.stream.has_head && yonder_mail_take_head(mail, &g.stream.head)) {
         g.stream.has_head = true;
+        stream_mark(OS64_DOM_TIMING_RESPONSE_START);
         if (g.stream.head.body != WAY_BODY_TEXT && !stream_parser(NULL, 0)) {
             stream_failed("Out of memory reading that page.");
             stop_trip();
@@ -8145,8 +8260,10 @@ static bool stream_turn(void)
             return false;
         }
     }
-    if (mail != NULL && !g.stream.has_verdict && yonder_mail_take_verdict(mail, &g.stream.verdict))
+    if (mail != NULL && !g.stream.has_verdict && yonder_mail_take_verdict(mail, &g.stream.verdict)) {
         g.stream.has_verdict = true;
+        stream_mark(OS64_DOM_TIMING_RESPONSE_END);
+    }
     yonder_scripts_t *host = g.stream.scripts;
     uint64_t serial = g.stream.serial;
     if (yonder_scripts_connected_pending(host))
@@ -10050,6 +10167,10 @@ int main(int argc, char **argv)
     const char *modern_refused;
     g.modern = yonder_settings_saved_modern(&modern_refused);
     const char *diag_refused = diag_dir_open();
+    char profile[OS64_PATH_MAX];
+    const char *profile_refused = yonder_settings_saved_profile(profile, sizeof(profile));
+    s_storage = yonder_storage_new(profile);    // NULL keeps each page's storage for its own life
+    yonder_settings_on_clear_storage(storage_clear);
     int address_arg = s_script_audit ? 2 : 1;
     const char *first = argc > address_arg ? argv[address_arg] : NULL;
     char title[OS64_GUI_TITLE_MAX] = "yonder";
@@ -10074,6 +10195,13 @@ int main(int argc, char **argv)
     if (os64_draw_ctx_init(&g.ctx, g.win) != 0) {
         os64_gui_window_destroy(g.win);
         return 1;
+    }
+    // The display, for `screen`: what a window may take of it is not known
+    // here, so it is all of it.
+    {
+        uint32_t sw = 0, sh = 0;
+        if (os64_gui_screen_info(&sw, &sh) == 0 && sw > 0 && sh > 0 && sw <= INT32_MAX && sh <= INT32_MAX)
+            s_screen = (os64_dom_screen_t){(int32_t)sw, (int32_t)sh, (int32_t)sw, (int32_t)sh, 24};
     }
     g.hover_link = g.pressed_link = -1;
     s_env.replaced_size = replaced_size;
@@ -10144,13 +10272,17 @@ int main(int argc, char **argv)
         status_rest("Type an address, or a path to an HTML file, and press Enter.");
     // What yonder.conf asked for and could not have: said last, so it is
     // still there to read when the window first shows, and in one line, so
-    // neither refusal hides the other.
-    if (diag_refused != NULL || modern_refused != NULL) {
-        char said[512];
-        os64_snprintf(said, sizeof(said), "%s%s%s", diag_refused != NULL ? diag_refused : "",
-                      diag_refused != NULL && modern_refused != NULL ? " " : "",
-                      modern_refused != NULL ? modern_refused : "");
-        status_rest(said);
+    // no refusal hides another.
+    {
+        const char *refused[] = {diag_refused, modern_refused, profile_refused};
+        char said[512] = "";
+        for (size_t i = 0; i < sizeof(refused) / sizeof(refused[0]); i++)
+            if (refused[i] != NULL) {
+                size_t at = os64_strlen(said);
+                os64_snprintf(said + at, sizeof(said) - at, "%s%s", at != 0 ? " " : "", refused[i]);
+            }
+        if (said[0] != '\0')
+            status_rest(said);
     }
     os64_ui_set_focus(&g.ui, first != NULL ? &g.view : &g.field.w);
     sync_bars();
@@ -10213,6 +10345,7 @@ int main(int argc, char **argv)
         bool stream_more = stream_turn();
         bool coming_more = coming_turn();
         bool scripts_ready = script_turn();
+        storage_turn();
         pictures_settle();
         before_paint();
         glass_paint();
@@ -10268,6 +10401,9 @@ int main(int argc, char **argv)
     way_jar_free(g.way.jar);
     if (g.cache != NULL)
         way_cache_close(g.cache);
+    // The pages made their departure commits as they went (page_clear).
+    yonder_storage_free(s_storage);
+    s_storage = NULL;
     // Nothing is left to read an agent: the workers are gone, and the pages.
     yonder_agents_release();
     os64_font_set_release(s_controls_set);  // yonder's own reference to the lent face

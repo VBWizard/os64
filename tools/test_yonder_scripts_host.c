@@ -25,10 +25,14 @@ os64_js_status_t __real_os64_js_create_with_teardown(const os64_js_config_t *,
  * had it. Handles from FAKE_HANDLE up are the fake's. */
 #define FAKE_HANDLE 1000
 #define FAKE_FILES 128
-static struct { char path[256]; char *data; size_t len; bool used; } fake_files[FAKE_FILES];
+/* A file's modification time is the fake second it was last published in
+ * (fake_second, which a case moves), as a real disk's is in whole
+ * seconds. */
+static struct { char path[256]; char *data; size_t len; bool used; uint64_t mtime; } fake_files[FAKE_FILES];
 static char fake_dirs[16][256];
 static int nfake_dirs, fake_writes, fake_dir_at;
 static bool fake_fail_open;
+static uint64_t fake_second = 1;
 static const char *fake_parent(const char *path, char *out, size_t cap) {
     snprintf(out,cap,"%s",path); char *slash=strrchr(out,'/');
     if(slash==NULL) return NULL;
@@ -46,6 +50,7 @@ static int fake_file(const char *path) {
 static void fake_reset(void) {
     for(int i=0;i<FAKE_FILES;i++) free(fake_files[i].data);
     memset(fake_files,0,sizeof(fake_files)); nfake_dirs=0; fake_writes=0; fake_fail_open=false;
+    fake_second=1;
     snprintf(fake_dirs[nfake_dirs++],256,"/tmp");
 }
 static const char *fake_text(const char *path) {
@@ -80,9 +85,11 @@ int64_t os64_rename(const char *from, const char *to) {
     int old=fake_file(to);
     if(old>=0) { free(fake_files[old].data); memset(&fake_files[old],0,sizeof(fake_files[old])); }
     snprintf(fake_files[f].path,256,"%s",to);
+    fake_files[f].mtime=fake_second;
     fake_writes++;
     return 0;
 }
+int64_t os64_sync(int32_t h) { (void)h; return 0; }
 int64_t os64_unlink(const char *p) {
     int f=fake_file(p);
     if(f<0) return -1;
@@ -97,7 +104,10 @@ int64_t os64_mkdir(const char *p) {
 int64_t os64_stat(const char *p, os64_dirent_t *entry) {
     memset(entry,0,sizeof(*entry));
     if(fake_is_dir(p)) { entry->flags=OS64_DE_DIR; return 0; }
-    return fake_file(p)>=0 ? 0 : -1;
+    int f=fake_file(p);
+    if(f<0) return -1;
+    entry->size=fake_files[f].len; entry->mtime=fake_files[f].mtime;
+    return 0;
 }
 /* The window's paint asks the machine's memory when it makes its cache;
  * no case here paints the window's view, so the answer is never used. */
@@ -432,10 +442,21 @@ const os64_image_frame_t *os64_image_sequence_frame(const os64_image_sequence_t 
     if(sequence==NULL) { check(false,"unexpected animation read"); return NULL; }
     return &sequence->frame;
 }
-/* A file a case serves (open_local), or none. */
+/* A file a case serves (open_local), or none; and the fake disk's files
+ * (page storage reads its stores this way), whole. fake_slurp_fail makes
+ * every read of a fake file fail, as a disk that cannot be read does. */
 static const char *slurp_path, *slurp_bytes;
+static bool fake_slurp_fail;
 os64_slurp_status_t os64_slurp(const char *path, size_t cap, uint8_t **bytes, size_t *length) {
-    (void)cap; *bytes=NULL; *length=0;
+    *bytes=NULL; *length=0;
+    int f=fake_file(path);
+    if(f>=0) {
+        if(fake_slurp_fail) return OS64_SLURP_IO_ERROR;
+        if(fake_files[f].len>cap) return OS64_SLURP_TOO_BIG;
+        *length=fake_files[f].len; *bytes=os64_malloc(*length+1);
+        memcpy(*bytes,fake_files[f].data,*length); (*bytes)[*length]=0;
+        return OS64_SLURP_OK;
+    }
     if(slurp_path==NULL || !os64_streq(path,slurp_path)) return OS64_SLURP_NO_FILE;
     *length=strlen(slurp_bytes); *bytes=os64_malloc(*length+1); memcpy(*bytes,slurp_bytes,*length+1);
     return OS64_SLURP_OK;
@@ -445,14 +466,14 @@ bool os64_ui_theme_session(os64_ui_theme_t *theme, uint64_t *installed, uint64_t
     (void)theme; (void)installed; (void)hint; return false;
 }
 static char saved_scripts[8], saved_zoom[8], saved_seconds[8], saved_diagnostics[256], saved_appearance[8],
-    saved_animations[8], saved_motion[16], saved_modern[16], settings_report[256];
+    saved_animations[8], saved_motion[16], saved_modern[16], saved_profile[256], settings_report[256];
 int64_t os64_conf_get(const char *file, const char *key, char *out, size_t cap) {
     check(os64_streq(file,"yonder.conf"),"settings read Yonder configuration");
     const char *value=os64_streq(key,"scripts") ? saved_scripts :
         os64_streq(key,"zoom") ? saved_zoom : os64_streq(key,"script_seconds") ? saved_seconds :
         os64_streq(key,"diagnostics") ? saved_diagnostics : os64_streq(key,"appearance") ? saved_appearance :
         os64_streq(key,"animations") ? saved_animations : os64_streq(key,"motion") ? saved_motion :
-        os64_streq(key,"modern") ? saved_modern : "";
+        os64_streq(key,"modern") ? saved_modern : os64_streq(key,"profile") ? saved_profile : "";
     if(!value[0]) return OS64_CONF_NO_KEY;
     os64_strcopy(out,cap,value); return 0;
 }
