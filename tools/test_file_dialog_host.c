@@ -11,16 +11,56 @@
 
 static os64_gui_surface_t native_surface;
 static bool native_owned, destroy_refused;
-static unsigned minimum_calls;
+static unsigned minimum_calls, size_writes;
+static char saved_size[64];
+static bool fail_size_write, fail_screen_info;
+static uint32_t native_flags, screen_width = 1600, screen_height = 1000;
+static const char *startup_fonts;
+static uint32_t startup_font_size=32;
+static void native_resize(uint32_t width, uint32_t height)
+{
+    free(native_surface.pixels);
+    native_surface=(os64_gui_surface_t){calloc((size_t)width*height,4),width,height,width};
+    CHECK(native_surface.pixels != NULL);
+}
+int64_t os64_conf_get(const char *name,const char *key,char *out,size_t cap)
+{
+    CHECK(!strcmp(name,"file-dialog.conf") && !strcmp(key,"size"));
+    if (!*saved_size) { *out=0;return OS64_CONF_NO_FILE; }
+    if (strlen(saved_size)>=cap) { *out=0;return OS64_CONF_TRUNCATED; }
+    snprintf(out,cap,"%s",saved_size);return 0;
+}
+int64_t os64_conf_write_checked(const char *name,const os64_conf_pair_t *pairs,size_t count,
+    bool (*validate)(const char *,size_t,void *),void *user)
+{
+    (void)validate;(void)user;
+    CHECK(!strcmp(name,"file-dialog.conf") && count==1 && !strcmp(pairs[0].key,"size"));
+    ++size_writes;
+    if(fail_size_write)return OS64_CONF_IO_ERROR;
+    snprintf(saved_size,sizeof(saved_size),"%s",pairs[0].value);return 0;
+}
 uint64_t file_test_syscall(uint64_t nr,uint64_t a,uint64_t b,uint64_t c,
     uint64_t e,uint64_t f,uint64_t g)
 {
     (void)a;(void)c;(void)g;
     switch(nr){
-    case SYSCALL_GUI_WINDOW_CREATE:
+    case SYSCALL_GUI_SCREEN_INFO:
+        if(fail_screen_info)return (uint64_t)OS64_GUI_ERR_NOT_RUNNING;
+        *(uint32_t *)(uintptr_t)a=screen_width;
+        *(uint32_t *)(uintptr_t)b=screen_height;return 0;
+    case SYSCALL_GUI_WINDOW_CREATE: {
+        /* Match the native guard: it rejects before applying FIT_SCREEN. */
+        uint32_t limit=OS64_GUI_WINDOW_DIM_MAX;
+        if(screen_width>limit)limit=screen_width;
+        if(screen_height>limit)limit=screen_height;
+        if(e>limit || f>limit)return (uint64_t)OS64_GUI_ERR_BAD_ARGS;
         CHECK(!native_owned);
-        native_surface=(os64_gui_surface_t){calloc(e*f,4),(uint32_t)e,(uint32_t)f,(uint32_t)e};
+        CHECK(g & OS64_GUI_CREATE_FIT_SCREEN);
+        if(e>screen_width)e=screen_width;
+        if(f>screen_height)f=screen_height;
+        native_resize(e,f);native_flags=0;
         native_owned=true;return 91;
+    }
     case SYSCALL_GUI_WINDOW_GET_SURFACE:
         if(!native_surface.pixels)return (uint64_t)-1;
         *(os64_gui_surface_t *)(uintptr_t)b=native_surface;return 0;
@@ -28,7 +68,15 @@ uint64_t file_test_syscall(uint64_t nr,uint64_t a,uint64_t b,uint64_t c,
         if(destroy_refused)return (uint64_t)OS64_GUI_ERR_BUSY;
         if(native_owned)free(native_surface.pixels);
         native_surface=(os64_gui_surface_t){0};native_owned=false;return 0;
-    case SYSCALL_GUI_WINDOW_SET_MIN_SIZE: ++minimum_calls;return 0;
+    case SYSCALL_GUI_WINDOW_GET_STATE:
+        *(os64_gui_window_state_t *)(uintptr_t)b=(os64_gui_window_state_t){.flags=native_flags};return 0;
+    case SYSCALL_GUI_WINDOW_SET_MIN_SIZE:
+        ++minimum_calls;
+        if(b>screen_width || c>screen_height)return (uint64_t)OS64_GUI_ERR_BAD_ARGS;
+        if(b>native_surface.width || c>native_surface.height)
+            native_resize(b>native_surface.width?b:native_surface.width,
+                c>native_surface.height?c:native_surface.height);
+        return 0;
     case SYSCALL_GUI_WINDOW_FOCUS:
     case SYSCALL_GUI_WINDOW_PUBLISH:
     case SYSCALL_GUI_EVENT_POLL: return 0;
@@ -37,7 +85,7 @@ uint64_t file_test_syscall(uint64_t nr,uint64_t a,uint64_t b,uint64_t c,
 }
 
 int os64_ui_font_follow(os64_ui_t *ui)
-{ (void)ui;return OS64_FONT_OK; }
+{ return startup_fonts ? ui_test_adopt(ui,startup_fonts,startup_font_size) : OS64_FONT_OK; }
 
 void *os64_calloc(size_t n, size_t size)
 { void *p=os64_malloc(n*size); if(p)memset(p,0,n*size); return p; }
@@ -354,11 +402,169 @@ static void lifecycle_tests(void)
     CHECK(os64_ui_file_dialog_open(d,NULL,0,&options)==OS64_UI_INVALID && !d->window);
     free(d);
 }
+static void resize_event(os64_ui_file_dialog_t *d,uint32_t w,uint32_t h,uint32_t flags)
+{
+    native_flags=flags;native_resize(w,h);
+    os64_gui_event_t event={.type=OS64_GUI_EVENT_WINDOW_RESIZE};
+    os64_ui_file_dialog_event(d,&event);
+    os64_ui_file_dialog_update(d);
+}
+static void size_tests(const char *font_dir)
+{
+    current="shared size preference";
+    os64_ui_file_dialog_t *d=calloc(1,sizeof(*d));
+    os64_ui_file_options_t options={.mode=OS64_UI_FILE_OPEN,.directory="/home"};
+    size_writes=0;
+    CHECK(os64_ui_file_dialog_open(d,NULL,0,&options)==OS64_UI_OK);
+    CHECK(d->draw.surf.width==880 && d->draw.surf.height==700 && size_writes==0);
+    resize_event(d,960,760,0);
+    CHECK(size_writes==1 && !strcmp(saved_size,"960,760"));
+    key(d,27,0x01,0);CHECK(d->result==OS64_UI_FILE_CANCELLED);
+    CHECK(os64_ui_file_dialog_close(d)==OS64_UI_OK && size_writes==1);
+    options.mode=OS64_UI_FILE_SAVE;
+    CHECK(os64_ui_file_dialog_open(d,NULL,0,&options)==OS64_UI_OK);
+    CHECK(d->draw.surf.width==960 && d->draw.surf.height==760);
+    /* Another process publishes a new size while this dialog stays open. */
+    strcpy(saved_size,"1100,800");
+    resize_event(d,960,760,0);
+    CHECK(size_writes==1 && !strcmp(saved_size,"1100,800"));
+    resize_event(d,1600,1000,OS64_GUI_WINDOW_MAXIMIZED);
+    resize_event(d,960,760,0);
+    CHECK(size_writes==1 && !strcmp(saved_size,"1100,800"));
+    fail_size_write=true;resize_event(d,1000,780,0);fail_size_write=false;
+    CHECK(size_writes==2 && !strcmp(saved_size,"1100,800") && d->result==OS64_UI_FILE_PENDING);
+    CHECK(os64_ui_file_dialog_close(d)==OS64_UI_OK && size_writes==2);
+    CHECK(os64_ui_file_dialog_open(d,NULL,0,&options)==OS64_UI_OK);
+    CHECK(d->draw.surf.width==1100 && d->draw.surf.height==800);
+    CHECK(os64_ui_file_dialog_close(d)==OS64_UI_OK);
+    const char *bad[]={"-1,700","900,0","1000,garbage","1,2,3","99999999999999999999,700","900x700"};
+    for(size_t i=0;i<sizeof(bad)/sizeof(*bad);++i){
+        strcpy(saved_size,bad[i]);
+        CHECK(os64_ui_file_dialog_open(d,NULL,0,&options)==OS64_UI_OK);
+        CHECK(d->draw.surf.width==880 && d->draw.surf.height==700);
+        CHECK(os64_ui_file_dialog_close(d)==OS64_UI_OK);
+    }
+    strcpy(saved_size,"32767,32767");
+    CHECK(os64_ui_file_dialog_open(d,NULL,0,&options)==OS64_UI_OK);
+    CHECK(d->draw.surf.width==screen_width && d->draw.surf.height==screen_height);
+    CHECK(os64_ui_file_dialog_close(d)==OS64_UI_OK && size_writes==2);
+    strcpy(saved_size,"1,1");startup_fonts=font_dir;
+    CHECK(os64_ui_file_dialog_open(d,NULL,0,&options)==OS64_UI_OK);
+    CHECK(d->draw.surf.width>400 && d->draw.surf.height>300 && !d->layout_pending);
+    CHECK(d->hidden.w.bounds.y<d->accept.bounds.y);
+    CHECK(d->name.w.bounds.h>32);
+    /* A queued native resize caused by setting the minimum is not a user choice. */
+    os64_gui_event_t event={.type=OS64_GUI_EVENT_WINDOW_RESIZE};
+    os64_ui_file_dialog_event(d,&event);
+    CHECK(size_writes==2 && !strcmp(saved_size,"1,1"));
+    CHECK(os64_ui_file_dialog_close(d)==OS64_UI_OK);
+    startup_fonts=NULL;saved_size[0]=0;free(d);
+}
+static void display_size_tests(void)
+{
+    current="saved size after display change";
+    os64_ui_file_dialog_t *d=calloc(1,sizeof(*d));CHECK(d!=NULL);
+    const uint32_t displays[][2]={{2560,1440},{1920,1080},{1024,768},{5120,2880}};
+    const uint32_t preferences[][2]={{2500,1360},{5000,2700},{800,5000}};
+    const os64_ui_file_mode_t modes[]={OS64_UI_FILE_OPEN,OS64_UI_FILE_SAVE};
+    unsigned before=size_writes;
+    for(size_t p=0;p<sizeof(preferences)/sizeof(*preferences);++p){
+        char original[64];
+        snprintf(original,sizeof(original),"%u,%u",preferences[p][0],preferences[p][1]);
+        strcpy(saved_size,original);
+        for(size_t i=0;i<sizeof(displays)/sizeof(*displays);++i){
+            screen_width=displays[i][0];screen_height=displays[i][1];
+            for(size_t m=0;m<sizeof(modes)/sizeof(*modes);++m){
+                os64_ui_file_options_t options={.mode=modes[m],.directory="/home"};
+                os64_ui_status_code_t rc=os64_ui_file_dialog_open(d,NULL,0,&options);
+                CHECK(rc==OS64_UI_OK);
+                if(rc==OS64_UI_OK){
+                    CHECK(d->draw.surf.width==(preferences[p][0]<screen_width?preferences[p][0]:screen_width));
+                    CHECK(d->draw.surf.height==(preferences[p][1]<screen_height?preferences[p][1]:screen_height));
+                    CHECK(!d->layout_pending && d->result==OS64_UI_FILE_PENDING);
+                    key(d,27,0x01,0);
+                }
+                CHECK(os64_ui_file_dialog_close(d)==OS64_UI_OK && !d->window);
+                CHECK(size_writes==before && !strcmp(saved_size,original));
+            }
+        }
+    }
+    screen_width=1024;screen_height=768;fail_screen_info=true;
+    strcpy(saved_size,"5000,2700");
+    os64_ui_file_options_t options={.mode=OS64_UI_FILE_OPEN,.directory="/home"};
+    CHECK(os64_ui_file_dialog_open(d,NULL,0,&options)==OS64_UI_OK);
+    CHECK(d->draw.surf.width==1024 && d->draw.surf.height==768);
+    CHECK(os64_ui_file_dialog_close(d)==OS64_UI_OK);
+    CHECK(size_writes==before && !strcmp(saved_size,"5000,2700"));
+    fail_screen_info=false;screen_width=1600;screen_height=1000;saved_size[0]=0;
+    free(d);
+}
+static void review_resize_tests(const char *font_dir)
+{
+    current="review: oversized startup font and manual resize from maximized";
+    os64_ui_file_dialog_t *d=calloc(1,sizeof(*d));CHECK(d!=NULL);
+    unsigned before=size_writes;
+    screen_width=640;screen_height=480;
+    strcpy(saved_size,"2500,1360");startup_fonts=font_dir;startup_font_size=96;
+    for(int mode=0;mode<2;++mode) {
+        os64_ui_file_options_t options={.mode=mode?OS64_UI_FILE_OPEN:OS64_UI_FILE_SAVE,.directory="/home"};
+        os64_ui_status_code_t rc=os64_ui_file_dialog_open(d,NULL,0,&options);
+        CHECK(rc==OS64_UI_OK);
+        if(rc==OS64_UI_OK) {
+            CHECK(!d->layout_pending && d->name.w.bounds.h<96);
+            CHECK(d->accept.bounds.y+d->accept.bounds.h<=(int32_t)d->draw.surf.height);
+            CHECK(d->min_width<=640 && d->min_height<=480);
+            key(d,27,0x01,0);CHECK(d->result==OS64_UI_FILE_CANCELLED);
+        }
+        CHECK(os64_ui_file_dialog_close(d)==OS64_UI_OK);
+        CHECK(size_writes==before && !strcmp(saved_size,"2500,1360"));
+    }
+    startup_fonts=NULL;startup_font_size=32;screen_width=1600;screen_height=1000;
+    strcpy(saved_size,"960,760");
+    os64_ui_file_options_t options={.mode=OS64_UI_FILE_OPEN,.directory="/home"};
+    CHECK(os64_ui_file_dialog_open(d,NULL,0,&options)==OS64_UI_OK);
+    resize_event(d,1600,1000,OS64_GUI_WINDOW_MAXIMIZED);
+    resize_event(d,1200,850,0); /* WM clears MAXIMIZED before the drag's event. */
+    CHECK(size_writes==before+1 && !strcmp(saved_size,"1200,850"));
+    key(d,27,0x01,0);
+    CHECK(os64_ui_file_dialog_close(d)==OS64_UI_OK);
+    options.mode=OS64_UI_FILE_SAVE;
+    CHECK(os64_ui_file_dialog_open(d,NULL,0,&options)==OS64_UI_OK);
+    CHECK(d->draw.surf.width==1200 && d->draw.surf.height==850);
+    resize_event(d,1600,1000,OS64_GUI_WINDOW_MAXIMIZED);
+    resize_event(d,1200,850,0); /* A true restore must not republish stale settings. */
+    CHECK(size_writes==before+1);
+    CHECK(os64_ui_file_dialog_close(d)==OS64_UI_OK);
+    saved_size[0]=0;free(d);
+}
+static void compact_tests(void)
+{
+    current="compact and wrapped footer";
+    os64_ui_file_dialog_t *d=dialog_new(OS64_UI_FILE_SAVE);
+    int32_t top=d->browser_area.bounds.h;
+    CHECK(d->new_folder.bounds.y==d->accept.bounds.y);
+    CHECK(d->new_folder.bounds.x+d->new_folder.bounds.w<d->cancel.bounds.x);
+    CHECK(d->cancel.bounds.x<d->accept.bounds.x);
+    CHECK(d->message.bounds.h==0);
+    input(d,"existing.txt");os64_ui_file_dialog_update(d);
+    CHECK(d->confirm && d->message.bounds.h>0 && d->browser_area.bounds.h<top);
+    file_cancel_prompt(d);os64_ui_file_dialog_update(d);
+    CHECK(d->browser_area.bounds.h==top && d->message.bounds.h==0);
+    d->root.bounds.w=d->min_width;
+    file_resize(&d->ui);
+    CHECK(!d->layout_pending && d->new_folder.bounds.y<d->accept.bounds.y);
+    CHECK(d->new_folder.bounds.x+d->new_folder.bounds.w<=d->root.bounds.w);
+    CHECK(d->name.w.bounds.w>0 && d->accept.bounds.y+d->accept.bounds.h<=d->root.bounds.h);
+    dialog_free(d);
+}
 int main(int argc,char **argv)
 {
     add_file("/",true);add_file("/home",true);add_file("/home/existing.txt",false);
     add_file("/home/folder",true);add_file("/home/.hidden",false);
     save_tests();open_tests();folder_tests();navigation_tests();lifecycle_tests();
+    compact_tests();size_tests(argc>1?argv[1]:"userland/libfreetype/fixtures");
+    display_size_tests();
+    review_resize_tests(argc>1?argv[1]:"userland/libfreetype/fixtures");
     layout_tests(argc>1?argv[1]:"userland/libfreetype/fixtures",argc>2?argv[2]:NULL);
     printf("file dialogs: %lu checks, %d failures\n",checks,failures);
     return failures?1:0;

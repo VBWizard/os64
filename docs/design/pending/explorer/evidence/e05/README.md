@@ -58,8 +58,10 @@ previous dialog finished closing under TCG. The repeated interaction waits
 for teardown and checks the resulting screen and file bytes. These runs do
 not establish a P5 latency measurement.
 
-Independent review and P5 acceptance remain pending. The [slice record](../../E05_SCRIBE.md)
-contains the hardware walkthrough and direct-write limitation.
+After these captures, Chris reported a clean Codex review and successful P5
+use, including resizing; no installed binary hash was captured. PR #319 merged
+as `ddaad166`. The [slice record](../../E05_SCRIBE.md) contains the hardware
+walkthrough and direct-write limitation.
 
 
 The [stale-reference audit](stale-refs.txt) reports E4 document identifiers and

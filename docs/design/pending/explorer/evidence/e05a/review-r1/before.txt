@@ -1,0 +1,17 @@
+FAIL /home/yogi/src/os64/.worktrees/file-dialog-polish/tools/test_file_dialog_host.c:447 [shared size preference] os64_ui_file_dialog_open(d,NULL,0,&options)==OS64_UI_OK
+FAIL /home/yogi/src/os64/.worktrees/file-dialog-polish/tools/test_file_dialog_host.c:448 [shared size preference] d->draw.surf.width==screen_width && d->draw.surf.height==screen_height
+FAIL /home/yogi/src/os64/.worktrees/file-dialog-polish/tools/test_file_dialog_host.c:479 [saved size after display change] rc==OS64_UI_OK
+FAIL /home/yogi/src/os64/.worktrees/file-dialog-polish/tools/test_file_dialog_host.c:479 [saved size after display change] rc==OS64_UI_OK
+FAIL /home/yogi/src/os64/.worktrees/file-dialog-polish/tools/test_file_dialog_host.c:479 [saved size after display change] rc==OS64_UI_OK
+FAIL /home/yogi/src/os64/.worktrees/file-dialog-polish/tools/test_file_dialog_host.c:479 [saved size after display change] rc==OS64_UI_OK
+FAIL /home/yogi/src/os64/.worktrees/file-dialog-polish/tools/test_file_dialog_host.c:479 [saved size after display change] rc==OS64_UI_OK
+FAIL /home/yogi/src/os64/.worktrees/file-dialog-polish/tools/test_file_dialog_host.c:479 [saved size after display change] rc==OS64_UI_OK
+FAIL /home/yogi/src/os64/.worktrees/file-dialog-polish/tools/test_file_dialog_host.c:479 [saved size after display change] rc==OS64_UI_OK
+FAIL /home/yogi/src/os64/.worktrees/file-dialog-polish/tools/test_file_dialog_host.c:479 [saved size after display change] rc==OS64_UI_OK
+FAIL /home/yogi/src/os64/.worktrees/file-dialog-polish/tools/test_file_dialog_host.c:479 [saved size after display change] rc==OS64_UI_OK
+FAIL /home/yogi/src/os64/.worktrees/file-dialog-polish/tools/test_file_dialog_host.c:479 [saved size after display change] rc==OS64_UI_OK
+FAIL /home/yogi/src/os64/.worktrees/file-dialog-polish/tools/test_file_dialog_host.c:479 [saved size after display change] rc==OS64_UI_OK
+FAIL /home/yogi/src/os64/.worktrees/file-dialog-polish/tools/test_file_dialog_host.c:479 [saved size after display change] rc==OS64_UI_OK
+FAIL /home/yogi/src/os64/.worktrees/file-dialog-polish/tools/test_file_dialog_host.c:494 [saved size after display change] os64_ui_file_dialog_open(d,NULL,0,&options)==OS64_UI_OK
+FAIL /home/yogi/src/os64/.worktrees/file-dialog-polish/tools/test_file_dialog_host.c:495 [saved size after display change] d->draw.surf.width==1024 && d->draw.surf.height==768
+file dialogs: 4443 checks, 16 failures

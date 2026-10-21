@@ -1,0 +1,13 @@
+Offline inspection after clean QEMU shutdown:
+
+$ debugfs -R "cat /file-dialog.conf" final-home.ext2
+size = 480,440
+
+$ e2fsck -fn final-home.ext2
+Pass 1: Checking inodes, blocks, and sizes
+Pass 2: Checking directory structure
+Pass 3: Checking directory connectivity
+Pass 4: Checking reference counts
+Pass 5: Checking group summary information
+OS64HOME: 17/65536 files (5.9% non-contiguous), 19580/1048576 blocks
+Exit status: 0
