@@ -972,7 +972,8 @@ struct flow_box {
     // `overflow` is not visible: the ellipsis its lines end in where their
     // content passes their end, laid out in its own fonts — U+2026, or
     // three periods where those fonts have no glyph for it — and owned by
-    // the tree. Where it goes is the painter's. NULL otherwise.
+    // the tree. Where it goes is the painter's, when flow_visit hands it
+    // each of the box's lines. NULL otherwise.
     const os64_text_run_t *ellipsis;
     // TEXT: where those bytes are in the node's processed text — what a
     // selection maps a pixel back through — when the node is a TEXT node.
@@ -1363,7 +1364,9 @@ int32_t flow_box_scroller(const flow_box_t *box);
 bool flow_box_covered(const flow_tree_t *tree, const flow_box_t *box, flow_point_t scroll);
 
 // Every box that meets `viewport` but the LINE boxes, which paint nothing of
-// their own (flow_hit can still answer one), and the unpainted ones, in
+// their own (flow_hit can still answer one) — except a line of a box with
+// an ellipsis (flow_box_t.ellipsis), handed over after its pieces, which
+// may end in it — and the unpainted ones, in
 // painting order (CSS 2.1 Appendix E): each stacking context's own
 // background, then its members of negative z-index, then its own content —
 // the block-level boxes, their backgrounds and borders, then the inline

@@ -56,21 +56,72 @@ static void object_rect_cases(void)
            object_rect_is(FLOW_OBJECT_CONTAIN, half, half, 0, 30, 10, 20, 100, 50), NULL);
 }
 
+// Each is the cold reader's case, worked by hand: the div 40 wide, the
+// ellipsis 8, the limit 32.
+static void ellipsis_review_cases(void)
+{
+    const char *kDiv = "<!doctype html><style>body { margin: 0 } div { width: 40px;"
+                       " overflow: hidden; white-space: nowrap; text-overflow: ellipsis;"
+                       " color: #00ff00 } b { font-weight: normal } i { display: inline-block;"
+                       " background: #0000ff } span { background: #0000ff }</style>";
+    char html[512];
+    // ab is 16; an inline-block past the limit, with content or empty, is
+    // left out whole, and the ellipsis follows ab.
+    snprintf(html, sizeof(html), "%s<div>ab<i>cdefghij</i></div>"
+             "<div>ab<i style='width: 30px; height: 10px'></i></div>", kDiv);
+    paint_page_case("text-overflow: an inline-block past the limit is left out",
+                    html, 200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "text \"ab\" 0 14 #00ff00 clip 0 0 40 20\n"
+                    "text \"\" 16 14 #00ff00 clip 0 0 40 20\n"
+                    "text \"ab\" 0 34 #00ff00 clip 0 20 40 20\n"
+                    "text \"\" 16 34 #00ff00 clip 0 20 40 20\n");
+    // abcd ends at the limit and efgh is left out; a repaint of only the
+    // ellipsis's part of the glass (34, 0, 6 x 20) draws it, the line
+    // being handed over whatever piece of it meets the view.
+    snprintf(html, sizeof(html), "%s<div>abcd<b>efgh</b></div>", kDiv);
+    paint_page_case("text-overflow: a repaint of only the ellipsis draws it",
+                    html, 200, (os64_gui_rect_t){34, 0, 6, 20}, true,
+                    "fill 34 0 6 20 #fefefe\n"
+                    "text \"\" 32 14 #00ff00\n");
+    // An inline box's piece is cut where what is kept ends: its background
+    // 0..32, as its text.
+    snprintf(html, sizeof(html), "%s<div><span>abcdefghij</span></div>", kDiv);
+    paint_page_case("text-overflow: an inline box's piece is cut with its text",
+                    html, 200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "fill 0 2 32 16 #0000ff\n"
+                    "text \"abcdefghij\" 0 14 #00ff00 clip 0 0 32 20\n"
+                    "text \"\" 32 14 #00ff00 clip 0 0 40 20\n");
+    // pre-wrap: abc and six spaces end the first line, 48 wide, but the
+    // spaces hang (Text 3 § 4.1.3): abc is 24 and fits, so no ellipsis.
+    paint_page_case("text-overflow: spaces that hang do not overflow a line",
+                    "<!doctype html><style>body { margin: 0 } div { width: 40px;"
+                    " overflow: hidden; white-space: pre-wrap; text-overflow: ellipsis }</style>"
+                    "<div>abc      de</div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "text \"abc      \" 0 14 #101010 clip 0 0 40 40\n"
+                    "text \"de\" 0 34 #101010 clip 0 0 40 40\n");
+}
+
 static void batch_a_paint_cases(void)
 {
     object_rect_cases();
+    ellipsis_review_cases();
     // text-overflow: the div is 40 wide, its line abcdefghij 68. The
     // ellipsis is 8 (16px serif), so what is kept ends by 32: abcd, a-d
-    // 8 each. The text is drawn cut there, and the ellipsis at 32 on the
-    // line's baseline, in the div's colour.
+    // 8 each. The text is drawn cut there, and then, the line handed over
+    // after its pieces, the ellipsis at 32 on the line's baseline, in the
+    // div's colour.
     paint_page_case("text-overflow: an ellipsis ends a line that passes its end",
                     "<!doctype html><style>body { margin: 0 } div { width: 40px; overflow: hidden;"
                     " white-space: nowrap; text-overflow: ellipsis; color: #00ff00 }</style>"
                     "<div>abcdefghij</div>",
                     200, (os64_gui_rect_t){0, 0, 200, 100}, true,
                     "fill 0 0 200 100 #fefefe\n"
-                    "text \"\" 32 14 #00ff00 clip 0 0 40 20\n"
-                    "text \"abcdefghij\" 0 14 #00ff00 clip 0 0 32 20\n");
+                    "text \"abcdefghij\" 0 14 #00ff00 clip 0 0 32 20\n"
+                    "text \"\" 32 14 #00ff00 clip 0 0 40 20\n");
     // Across boxes: ab (16), then the b's cdefgh from 16; the limit 32
     // keeps cd of it, to 32, which is where its ellipsis goes; the i
     // element past the limit is not drawn. A line that fits has none, and
@@ -83,8 +134,8 @@ static void batch_a_paint_cases(void)
                     200, (os64_gui_rect_t){0, 0, 200, 100}, true,
                     "fill 0 0 200 100 #fefefe\n"
                     "text \"ab\" 0 14 #101010 clip 0 0 40 20\n"
-                    "text \"\" 32 14 #101010 clip 0 0 40 20\n"
                     "text \"cdefgh\" 16 14 #101010 clip 0 0 32 20\n"
+                    "text \"\" 32 14 #101010 clip 0 0 40 20\n"
                     "text \"abc\" 0 34 #101010 clip 0 20 40 20\n"
                     "text \"abcdefghij\" 0 54 #101010\n");
     // An outline is a ring round the border box (5, 5, 20 x 10), out by its

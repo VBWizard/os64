@@ -60,6 +60,21 @@ static void outline_door_cases(void)
 // A block's ellipsis (flow_box_t.ellipsis): made for a block whose
 // text-overflow is ellipsis and whose overflow is not visible, of U+2026
 // in its own fonts (the test faces have every scalar), and for no other.
+// flow_visit's record of the kinds it hands over: a LINE only as the
+// last box of a line of a box with an ellipsis, after its pieces.
+typedef struct {
+    char kinds[64];
+    int n;
+} KindLog;
+
+static void log_kind(void *ctx, const flow_box_t *b)
+{
+    KindLog *k = ctx;
+    if (k->n < 63 && b->kind >= FLOW_BOX_LINE)
+        k->kinds[k->n++] = b->kind == FLOW_BOX_LINE ? 'L' : b->kind == FLOW_BOX_TEXT ? 'T' : 'o';
+    k->kinds[k->n] = '\0';
+}
+
 static void ellipsis_door_cases(void)
 {
     Sheeted p;
@@ -82,6 +97,12 @@ static void ellipsis_door_cases(void)
            para != NULL && para->ellipsis == NULL, NULL);
     expect("text-overflow: none on a block that clips without asking",
            sect != NULL && sect->ellipsis == NULL, NULL);
+    // The div's one line is handed over after its text; the p's and the
+    // section's are not.
+    KindLog log = {{0}, 0};
+    flow_visit(tree, (os64_gui_rect_t){0, 0, 100, 600}, (flow_point_t){0, 0}, log_kind, &log);
+    expect("text-overflow: the walk hands over a line of a box with an ellipsis, after it",
+           strcmp(log.kinds, "TLTT") == 0, log.kinds);
     flow_free(tree);
     sheeted_close(&p);
 }

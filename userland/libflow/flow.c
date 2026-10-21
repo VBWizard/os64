@@ -2635,6 +2635,10 @@ static void visit_inline(const Visit *outer, const flow_box_t *b)
             for (const flow_box_t *f = c->first; f != NULL; f = f->next)
                 if (!f->stacked && !f->unpainted && meets(f->overflow, v->view))
                     visit_piece(v, f);
+            // A line that may end in its block's ellipsis, after its
+            // pieces, for the painter to draw the ellipsis over them.
+            if (b->ellipsis != NULL)
+                v->visit(v->ctx, c);
         } else if (c->kind == FLOW_BOX_MARKER) {
             if (!c->unpainted && meets(c->overflow, v->view))
                 v->visit(v->ctx, c);

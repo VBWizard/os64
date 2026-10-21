@@ -1974,18 +1974,18 @@ static bool is_frame(const flow_box_t *b)
 // ── The ellipsis (CSS Overflow 4 § 4.1) ─────────────────────────────────
 //
 // A line whose block has an ellipsis (flow_box_t.ellipsis) and whose
-// content passes the line's end ends in it: what does not fit before the
-// line's end less the ellipsis is not drawn — a text across that limit
-// keeps the characters that end before it, a box past it nothing — and the
-// ellipsis is drawn right after what is kept, in the block's colour on the
-// line's baseline, by the box whose kept part ends there (the walk hands
-// the painter a line's boxes, not the line). A line that would keep
-// nothing is cut and not ellipsed: its first character or atom is clipped
-// rather than ellipsed.
+// content passes the line's end — pre-wrap spaces that hang there do not
+// count — ends in it: what does not fit before the line's end less the
+// ellipsis is not drawn — a text across that limit keeps the characters
+// that end before it, an atom past it nothing, its content included, and
+// an inline box's piece is cut where what is kept ends — and the ellipsis
+// is drawn right after what is kept, in the block's colour on the line's
+// baseline, when the walk hands the painter the line, after the line's
+// pieces. A line that would keep nothing is cut and not ellipsed: its
+// first character or atom is clipped rather than ellipsed.
 typedef struct {
     bool on;
     int64_t limit, at;      // where what is kept must end; where the ellipsis starts
-    const flow_box_t *owner;    // the last box whose kept part ends at `at`
 } LineCut;
 
 // How much of a text box is kept before `limit`, in whole pixels from its
@@ -2007,16 +2007,33 @@ static bool line_content(const flow_box_t *k)
     return k->kind == FLOW_BOX_TEXT || k->kind == FLOW_BOX_ATOMIC || k->kind == FLOW_BOX_MARKER;
 }
 
+// Where a box's content on its line ends: its right edge, but for a text
+// whose white space is preserved and wraps, whose spaces at its end hang
+// (CSS Text 3 § 4.1.3) and take no room on the line.
+static int64_t content_end(const flow_box_t *k)
+{
+    int64_t right = (int64_t)k->rect.x + k->rect.w;
+    if (k->kind != FLOW_BOX_TEXT || k->style->white_space != FLOW_WS_PRE_WRAP || k->run == NULL)
+        return right;
+    uint32_t n = k->length;
+    while (n > 0 && k->text[n - 1] == ' ')
+        n--;
+    os64_text_caret_t c;
+    if (n == k->length || os64_text_caret(k->run, n, OS64_TEXT_BEFORE, &c) != OS64_FONT_OK)
+        return right;
+    return (int64_t)k->rect.x + (c.x + 63) / 64;
+}
+
 static LineCut line_cut(const flow_box_t *line)
 {
-    LineCut c = {false, 0, 0, NULL};
+    LineCut c = {false, 0, 0};
     const flow_box_t *block = line != NULL ? line->parent : NULL;
     if (line == NULL || line->kind != FLOW_BOX_LINE || block == NULL || block->ellipsis == NULL)
         return c;
     int64_t edge = (int64_t)line->rect.x + line->rect.w, reach = INT64_MIN;
     for (const flow_box_t *k = line->first; k != NULL; k = k->next)
         if (line_content(k))
-            reach = max64(reach, (int64_t)k->rect.x + k->rect.w);
+            reach = max64(reach, content_end(k));
     os64_text_run_view_t v;
     if (reach <= edge || os64_text_run_view(block->ellipsis, &v) != OS64_FONT_OK)
         return c;
@@ -2025,30 +2042,45 @@ static LineCut line_cut(const flow_box_t *line)
     for (const flow_box_t *k = line->first; k != NULL; k = k->next) {
         if (!line_content(k))
             continue;
-        int64_t right = (int64_t)k->rect.x + k->rect.w, end = INT64_MIN;
+        int64_t right = (int64_t)k->rect.x + k->rect.w;
         if (right <= c.limit)
-            end = right;
+            at = max64(at, right);
         else if (k->kind == FLOW_BOX_TEXT && k->rect.x < c.limit && text_kept(k, c.limit) > 0)
-            end = (int64_t)k->rect.x + text_kept(k, c.limit);
-        if (end != INT64_MIN && end >= at) {
-            at = end;
-            c.owner = k;
-        }
+            at = max64(at, (int64_t)k->rect.x + text_kept(k, c.limit));
     }
     c.on = at != INT64_MIN;
     c.at = at;
     return c;
 }
 
-// A line's ellipsis, where line_cut puts it.
-static void ellipsis(const Painter *p, const flow_box_t *line, const LineCut *c)
+// Whether a box is an atom left out of a cut line, or inside one: an atom
+// there is drawn whole or not at all.
+static bool past_ellipsis(const flow_box_t *b)
 {
+    for (const flow_box_t *a = b; a != NULL; a = a->parent) {
+        if (a->kind != FLOW_BOX_ATOMIC || a->parent == NULL || a->parent->kind != FLOW_BOX_LINE)
+            continue;
+        LineCut c = line_cut(a->parent);
+        if (c.on && (int64_t)a->rect.x + a->rect.w > c.limit)
+            return true;
+    }
+    return false;
+}
+
+// A line's ellipsis, where line_cut puts it.
+static void ellipsis(const Painter *p, const flow_box_t *line)
+{
+    LineCut c = line_cut(line);
+    if (!c.on || p->penned)
+        return;
     const flow_box_t *block = line->parent;
     flow_box_t e = *line;
     e.kind = FLOW_BOX_TEXT;
     e.style = block->style;
     e.run = block->ellipsis;
-    p->v->text(p->v->ctx, &e, (int32_t)max64(INT32_MIN, min64(INT32_MAX, c->at + p->off.x)),
+    e.text = NULL;
+    e.length = 0;
+    p->v->text(p->v->ctx, &e, (int32_t)max64(INT32_MIN, min64(INT32_MAX, c.at + p->off.x)),
                (int32_t)((int64_t)line->baseline + p->off.y), on_page(p, p->view),
                ink_of(p, block->style->color));
 }
@@ -2088,15 +2120,16 @@ static void paint_box(void *ctx, const flow_box_t *b)
     clipped.view = (os64_gui_rect_t){(int32_t)((int64_t)v.x - clipped.off.x),
                                      (int32_t)((int64_t)v.y - clipped.off.y), v.w, v.h};
     // On a line that ends in an ellipsis, what passes its limit is not
-    // drawn: a text is cut at the last character that fits, a box with no
-    // content of its own (a picture, a control) is left out whole.
-    LineCut lc = line_content(b) ? line_cut(b->parent) : (LineCut){false, 0, 0, NULL};
-    Painter whole = clipped;
-    if (lc.on && lc.owner == b && !clipped.penned)
-        ellipsis(&whole, b->parent, &lc);
+    // drawn: a text is cut at the last character that fits, an inline
+    // box's piece where what is kept ends, an atom past it is left out
+    // with everything in it.
+    if (past_ellipsis(b))
+        return;
+    LineCut lc = b->kind == FLOW_BOX_TEXT || b->kind == FLOW_BOX_SPAN || b->kind == FLOW_BOX_MARKER
+                     ? line_cut(b->parent) : (LineCut){false, 0, 0};
     if (lc.on && (int64_t)b->rect.x + b->rect.w > lc.limit) {
         int64_t keep = b->kind == FLOW_BOX_TEXT ? (int64_t)b->rect.x + text_kept(b, lc.limit)
-                     : b->first == NULL ? b->rect.x : INT64_MAX;
+                     : b->kind == FLOW_BOX_SPAN ? lc.at : b->rect.x;
         int64_t room = keep - clipped.view.x;
         if (keep <= b->rect.x || room <= 0)
             return;
@@ -2107,6 +2140,9 @@ static void paint_box(void *ctx, const flow_box_t *b)
         return;
     switch (b->kind) {
     case FLOW_BOX_LINE:
+        // The walk hands a line over only after its pieces, and only when
+        // its block has an ellipsis.
+        ellipsis(p, b);
         return;
     case FLOW_BOX_MARKER:
         if (flow_marker_is_shape(b->style)) {
