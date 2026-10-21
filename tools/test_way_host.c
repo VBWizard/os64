@@ -446,6 +446,13 @@ static void entries(void)
     }
     expect("entries: the oldest crumb dropped past the cap takes its state with it",
            s.depth == WAY_HISTORY_MAX && s.history[0].document == 3 && s.ahead == 0, NULL);
+    left = crumb_of("http://h/far", 4, "far");
+    way_forward_entry(&s, &left);
+    left = crumb_of("http://h/near", 4, "near");
+    way_forward_entry(&s, &left);
+    expect("entries: an entry put ahead takes its state, nearest last",
+           left.state == NULL && way_next(&s, &crumb) && strcmp(crumb.url, "http://h/near") == 0 &&
+               strcmp(crumb.state, "near") == 0 && s.ahead == 2, NULL);
     way_history_clear(&s);
     expect("entries: clearing frees every state and empties both lists",
            s.depth == 0 && s.ahead == 0 && live == before, NULL);

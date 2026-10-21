@@ -379,6 +379,9 @@ void way_went_back_entry(way_session_t *session, way_crumb_t *left, way_crumb_t 
 bool way_next(way_session_t *session, way_crumb_t *out);
 void way_went_forward(way_session_t *session, const char *url, const way_position_t *where);
 void way_went_forward_entry(way_session_t *session, way_crumb_t *left, way_crumb_t *arrived);
+// An entry put where Forward goes, nearest last, its state taken: what a
+// face does with entries a page made ahead of itself before it was shown.
+void way_forward_entry(way_session_t *session, way_crumb_t *ahead);
 
 // Every crumb's state freed and both lists emptied: what a face does with
 // a session it is done with.

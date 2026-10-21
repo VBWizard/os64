@@ -190,6 +190,11 @@ void way_went_forward(way_session_t *s, const char *url, const way_position_t *w
     os64_free(arrived.state);
 }
 
+void way_forward_entry(way_session_t *s, way_crumb_t *ahead)
+{
+    push(s->forward, &s->ahead, ahead);
+}
+
 void way_history_clear(way_session_t *s)
 {
     while (s->depth > 0)
