@@ -1,0 +1,326 @@
+#!/usr/bin/env bash
+# test_yonder_wpt_host.sh — one web-platform-tests directory through yonder's
+# own window, headless, against its expectation file (MODERN_WEB.md § The
+# oracle; tools/test_yonder_wpt_host.c says what is run, how, and what the
+# three sections of an expectation file mean).
+#
+#   tools/test_yonder_wpt_host.sh dom/nodes             against the expectations
+#   tools/test_yonder_wpt_host.sh dom/nodes --update    rewrite [passing] from this run
+#   tools/test_yonder_wpt_host.sh dom/nodes --only Node-cloneNode
+#   tools/test_yonder_wpt_host.sh --selftest            the runner's own pages
+#
+# The suite comes from tools/wpt_fetch.sh, at its pin, in .vendor/wpt
+# (WPT_DIR elsewhere); a directory's expectations are
+# tools/wpt/expected/<dir>.txt. The pages are those WPT's MANIFEST.json
+# lists, through tools/wpt/pages.py, when the checkout has one, and those
+# found by file name when it does not. Exit 1 is a required test failed or
+# a pass lost (with --modern-off, a required test that passed); 2, a run
+# that could not be judged.
+#
+# --selftest runs tools/wpt/selftest/, pages whose every outcome is known,
+# beside the checkout's own resources, found by file name and again through
+# a manifest (tools/wpt/selftest.manifest.json), and holds the runner to
+# tools/wpt/selftest.out line for line both ways; then holds --expect, --modern-off,
+# --update and the expectation file's three sections to what they promise.
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+if [ $# -lt 1 ] || { [[ "$1" == -* ]] && [ "$1" != --selftest ]; }; then
+    echo "usage: tools/test_yonder_wpt_host.sh <wpt directory> [--update] [--only <substring>]" >&2
+    echo "       tools/test_yonder_wpt_host.sh --selftest" >&2
+    exit 2
+fi
+# A directory names a place in the checkout and an expectation file under
+# tools/wpt/expected/, so one that is absolute or climbs out with .. would
+# be read, and with --update written, somewhere else.
+if [ "$1" != --selftest ]; then
+    dir=${1%/}
+    case "/$dir/" in
+        //|*/../*|//*) echo "wpt: $1 is not a directory inside the checkout" >&2; exit 2 ;;
+    esac
+fi
+checkout=${WPT_DIR:-.vendor/wpt}
+if [ ! -f "$checkout/resources/testharness.js" ]; then
+    echo "wpt: no checkout in $checkout; run tools/wpt_fetch.sh" >&2
+    exit 2
+fi
+work=$(mktemp -d -t os64-yonder-wpt.XXXXXX)
+cleanup() {
+    result=$?
+    if [ "$result" -le 1 ] && [ "${YONDER_WPT_KEEP:-0}" = 0 ]; then
+        rm -rf "$work"
+    else
+        echo "WPT runner artifacts: $work" >&2
+    fi
+}
+trap cleanup EXIT
+. tools/yonder_host_build.sh
+# The runner includes the scripted-page host whole for its fakes; that
+# host's cases are compiled in and never called.
+yonder_host_build "$work" tools/test_yonder_wpt_host.c "$work/yonder-wpt" -Wno-unused-function
+runner=("$work/yonder-wpt" --report tools/wpt/testharnessreport.js)
+
+if [ "$1" = --selftest ]; then
+    fail() { echo "wpt selftest: $*" >&2; exit 2; }
+    # The runner, its output with the work directory's name taken out,
+    # and its exit status in $rc; what it says on stderr in err.txt.
+    run() {
+        rc=0
+        "${runner[@]}" --wpt "$work/wpt" --dir selftest "$@" > "$work/raw.txt" 2> "$work/err.txt" || rc=$?
+        sed "s|$work/||g" "$work/raw.txt" > "$work/out.txt"
+    }
+    section() { sed -n "/^\\[$1\\]\$/,/^\\[/p" "$2" | sed '1d;/^\[/d'; }
+    mkdir "$work/wpt"
+    ln -s "$(realpath "$checkout/resources")" "$work/wpt/resources"
+    cp -r tools/wpt/selftest "$work/wpt/selftest"
+    # A test with a NUL byte before its test: the parser must be fed the
+    # whole page, not the page up to its first NUL. Made here, since a NUL
+    # is not something to keep in a text file in the tree. A NUL in a test's
+    # name must come back escaped, and the lines after it whole.
+    printf '<!doctype html>\n<title>The runner'"'"'s own: a NUL in a page</title>\n<!-- \0 -->\n%s\n%s\n%s\n%s\n' \
+        '<script src="/resources/testharness.js"></script>' \
+        '<script src="/resources/testharnessreport.js"></script>' \
+        '<script>test(function() {}, "a name with a NUL (\u0000) in it is reported whole");</script>' \
+        '<script>test(function() {}, "a page with a NUL byte in it is fed to the parser whole");</script>' \
+        > "$work/wpt/selftest/nul.html"
+    cp tools/wpt/selftest.expect "$work/expect.txt"
+
+    run --expect "$work/expect.txt"
+    [ "$rc" -eq 0 ] && diff -u tools/wpt/selftest.out "$work/out.txt" ||
+        fail "found by file name, the output is not tools/wpt/selftest.out (exit $rc)"
+
+    python3 -I tools/wpt/pages.py tools/wpt/selftest.manifest.json selftest > "$work/pages.txt"
+    run --expect "$work/expect.txt" --pages "$work/pages.txt"
+    grep -v '^selftest: not run: [0-9]* pages, ' "$work/out.txt" > "$work/listed.txt" || true
+    [ "$rc" -eq 0 ] && diff -u tools/wpt/selftest.out "$work/listed.txt" ||
+        fail "listed by the manifest, the output is not tools/wpt/selftest.out (exit $rc)"
+    grep -qx 'selftest: not run: 2 pages, a worker or shadow-realm variant' "$work/out.txt" &&
+        grep -qx 'selftest: not run: 1 pages, an XML document' "$work/out.txt" ||
+        fail "the manifest's worker variants and XML document were not counted as not run"
+
+    run --expect "$work/expect.txt" --update
+    [ "$rc" -eq 0 ] || fail "--update failed (exit $rc)"
+    # The same update twice is the same file, and leaves no temp behind.
+    cp "$work/expect.txt" "$work/again.txt"
+    run --expect "$work/again.txt" --update
+    [ "$rc" -eq 0 ] && cmp -s "$work/expect.txt" "$work/again.txt" &&
+        [ -z "$(find "$work" -maxdepth 1 -name '*.new')" ] ||
+        fail "a second --update wrote a different file, or left its temp (exit $rc)"
+    for name in required excluded; do
+        diff <(section "$name" tools/wpt/selftest.expect) <(section "$name" "$work/expect.txt") > /dev/null ||
+            fail "--update changed [$name], which is written by hand"
+    done
+    section passing "$work/expect.txt" > "$work/passing.txt"
+    [ "$(wc -l < "$work/passing.txt")" -eq "$(grep -c '^NEW' tools/wpt/selftest.out)" ] &&
+        LC_ALL=C sort -c "$work/passing.txt" ||
+        fail "--update did not write each pass once, in order"
+    ! grep -q '^timeout.html' "$work/passing.txt" ||
+        fail "a page whose harness timed out passed a test"
+
+    run --expect "$work/expect.txt"
+    [ "$rc" -eq 0 ] && ! grep -q '^NEW\|^LOST\|^REQUIRED' "$work/out.txt" ||
+        fail "a run against its own passes found a difference (exit $rc)"
+
+    cp "$work/expect.txt" "$work/lost.txt"
+    printf '\npass-fail.html\ta pass that is gone\n' >> "$work/lost.txt"
+    run --expect "$work/lost.txt"
+    [ "$rc" -eq 1 ] && grep -qx 'LOST	pass-fail.html	a pass that is gone' "$work/out.txt" ||
+        fail "a pass the file has after a blank line, and the run lacks, was not LOST, exit 1 (exit $rc)"
+
+    sed 's/^\[required\]$/[required]\npass-fail.html\ta test that fails/' "$work/expect.txt" > "$work/required.txt"
+    run --expect "$work/required.txt"
+    [ "$rc" -eq 1 ] && grep -qx 'REQUIRED	pass-fail.html	a test that fails' "$work/out.txt" ||
+        fail "a required test that failed did not fail the run (exit $rc)"
+
+    run --expect "$work/lost.txt" --only clock --update
+    grep -qx 'pass-fail.html	a pass that is gone' "$work/lost.txt" ||
+        fail "--update with --only dropped a line it did not select"
+
+    printf '[excluded]\nclock.html\n' > "$work/bad.txt"
+    run --expect "$work/bad.txt"
+    [ "$rc" -eq 2 ] || fail "an exclusion with no reason was taken (exit $rc)"
+    printf 'clock.html\ttimers fire in their order as the clock moves\n' > "$work/bad.txt"
+    run --expect "$work/bad.txt"
+    [ "$rc" -eq 2 ] || fail "a line in no section was taken (exit $rc)"
+    printf '[required]\nexcluded.html\tx\n[excluded]\nexcluded.html\twhy\n' > "$work/bad.txt"
+    run --expect "$work/bad.txt"
+    [ "$rc" -eq 2 ] || fail "a test required of an excluded page was taken (exit $rc)"
+
+    # Expectations that exist and cannot be read judge nothing, and --update
+    # leaves them where they are.
+    mkdir "$work/dir.txt"
+    run --expect "$work/dir.txt" --update
+    [ "$rc" -eq 2 ] && [ -d "$work/dir.txt" ] || fail "a directory was taken for expectations (exit $rc)"
+    truncate -s $((16 * 1024 * 1024 + 1)) "$work/big.txt"
+    run --expect "$work/big.txt" --update
+    [ "$rc" -eq 2 ] && [ "$(stat -c %s "$work/big.txt")" -eq $((16 * 1024 * 1024 + 1)) ] ||
+        fail "an expectation file past the size it may have was taken, or rewritten (exit $rc)"
+    # A run with a fault rewrites nothing, whatever its pages said.
+    cp "$work/lost.txt" "$work/fault.txt"
+    run --expect "$work/fault.txt" --update --fault
+    [ "$rc" -eq 2 ] && cmp -s "$work/lost.txt" "$work/fault.txt" ||
+        fail "--update with a fault rewrote the expectations (exit $rc)"
+
+    # With the switch off, a required test that passes leaked through it.
+    printf '[required]\npass-fail.html\ta test that passes\n[passing]\n' > "$work/leak.txt"
+    run --expect "$work/leak.txt" --modern-off
+    [ "$rc" -eq 1 ] && grep -qx 'LEAKED	pass-fail.html	a test that passes' "$work/out.txt" ||
+        fail "a required test passing with the switch off was not LEAKED, exit 1 (exit $rc)"
+    printf '[required]\npass-fail.html\ta test that fails\n[passing]\nclock.html\tgone\n' > "$work/gated.txt"
+    run --expect "$work/gated.txt" --modern-off
+    [ "$rc" -eq 0 ] && ! grep -q '^LEAKED\|^LOST' "$work/out.txt" ||
+        fail "with the switch off, every required test absent was not a green run (exit $rc)"
+    run --expect "$work/gated.txt" --modern-off --update
+    [ "$rc" -eq 2 ] || fail "--update was taken with the switch off (exit $rc)"
+
+    # Only a page run to a verdict may change the expectations: a manifest
+    # naming a source that is not there, or one past the size a file may
+    # have, is a run that cannot be judged, and --update writes nothing.
+    truncate -s $((16 * 1024 * 1024 + 1)) "$work/wpt/selftest/huge.html"
+    for page in ghost.html huge.html; do
+        printf '{"items":{"testharness":{"selftest":{"%s":["%s",[null,{}]]}}},"url_base":"/","version":9}\n' \
+            "$page" "$(printf '0%.0s' {1..40})" > "$work/manifest.json"
+        python3 -I tools/wpt/pages.py "$work/manifest.json" selftest > "$work/one.txt"
+        cp "$work/lost.txt" "$work/unjudged.txt"
+        run --expect "$work/unjudged.txt" --pages "$work/one.txt" --update
+        [ "$rc" -eq 2 ] && cmp -s "$work/lost.txt" "$work/unjudged.txt" &&
+            grep -q "^UNJUDGED	$page	" "$work/out.txt" ||
+            fail "a listed page whose source is $page was not UNJUDGED, exit 2, the file untouched (exit $rc)"
+    done
+    # Found by file name, a test file too large to read is listed all the
+    # same, and is UNJUDGED.
+    cp "$work/lost.txt" "$work/unjudged.txt"
+    run --expect "$work/unjudged.txt" --only huge --update
+    [ "$rc" -eq 2 ] && cmp -s "$work/lost.txt" "$work/unjudged.txt" &&
+        grep -q "^UNJUDGED	huge.html	" "$work/out.txt" ||
+        fail "found by file name, a source past the cap was not UNJUDGED, exit 2, the file untouched (exit $rc)"
+    # A read that stops short is no read: a test source read short is
+    # UNJUDGED, listed by the manifest or found by file name, and an
+    # expectation file read short cannot be judged; --update writes nothing.
+    src="$work/wpt/selftest/pass-fail.html"
+    printf '{"items":{"testharness":{"selftest":{"pass-fail.html":["%s",[null,{}]]}}},"url_base":"/","version":9}\n' \
+        "$(printf '0%.0s' {1..40})" > "$work/manifest.json"
+    python3 -I tools/wpt/pages.py "$work/manifest.json" selftest > "$work/one.txt"
+    for how in --pages --only; do
+        what="$work/one.txt"
+        [ "$how" = --only ] && what=pass-fail
+        cp "$work/lost.txt" "$work/short.txt"
+        run --expect "$work/short.txt" "$how" "$what" --short-read "$src" --update
+        [ "$rc" -eq 2 ] && cmp -s "$work/lost.txt" "$work/short.txt" &&
+            grep -q "^UNJUDGED	pass-fail.html	" "$work/out.txt" ||
+            fail "a source read short ($how) was not UNJUDGED, exit 2, the file untouched (exit $rc)"
+    done
+    cp "$work/lost.txt" "$work/short.txt"
+    run --expect "$work/short.txt" --short-read "$work/short.txt" --update
+    [ "$rc" -eq 2 ] && cmp -s "$work/lost.txt" "$work/short.txt" ||
+        fail "an expectation file read short was taken, or rewritten (exit $rc)"
+
+    # Found by file name, a directory the walk cannot list is not a
+    # directory with no tests: the run cannot be judged and --update writes
+    # nothing. The page beside it keeps the run from being empty, so it is
+    # the unlisted directory alone that has to refuse it. (Root reads any
+    # directory, so there is nothing to prove.)
+    if [ "$(id -u)" -ne 0 ]; then
+        mkdir "$work/wpt/selftest/locked"
+        cp tools/wpt/selftest/pass-fail.html "$work/wpt/selftest/locked/"
+        chmod 000 "$work/wpt/selftest/locked"
+        cp "$work/lost.txt" "$work/locked.txt"
+        run --expect "$work/locked.txt" --only pass-fail --update
+        chmod 755 "$work/wpt/selftest/locked"
+        [ "$rc" -eq 2 ] && cmp -s "$work/lost.txt" "$work/locked.txt" ||
+            fail "a directory that could not be listed was taken for an empty one (exit $rc)"
+    else
+        echo "wpt selftest: running as root, so the unlistable-directory case is not run" >&2
+    fi
+
+    # A run of no page judges nothing, and --update from it writes nothing:
+    # an --only that selects no page, and one whose every page is excluded.
+    for what in no-such-page excluded; do
+        cp "$work/lost.txt" "$work/none.txt"
+        run --expect "$work/none.txt" --only "$what" --update
+        [ "$rc" -eq 2 ] && cmp -s "$work/lost.txt" "$work/none.txt" ||
+            fail "a run of no page (--only $what) was judged, or rewrote the file (exit $rc)"
+    done
+
+    # A file a page asks for that is in the checkout and does not read whole
+    # makes the page UNJUDGED: the fetch it saw fail would have been served.
+    cp "$work/lost.txt" "$work/served.txt"
+    run --expect "$work/served.txt" --only served --short-read "$work/wpt/selftest/support/helper.js" --update
+    [ "$rc" -eq 2 ] && cmp -s "$work/lost.txt" "$work/served.txt" &&
+        grep -q "^UNJUDGED	served.html	" "$work/out.txt" ||
+        fail "a served file read short was not UNJUDGED, exit 2, the file untouched (exit $rc)"
+    # Without the harness or the report script every page would time out,
+    # so no page is run at all.
+    for how in "--short-read $work/wpt/resources/testharness.js" "--report $work/no-report.js"; do
+        cp "$work/lost.txt" "$work/served.txt"
+        # shellcheck disable=SC2086
+        run --expect "$work/served.txt" --only pass-fail $how --update
+        [ "$rc" -eq 2 ] && cmp -s "$work/lost.txt" "$work/served.txt" && [ ! -s "$work/out.txt" ] ||
+            fail "a run without its harness or report ($how) ran pages, or rewrote the file (exit $rc)"
+    done
+
+    # A page whose name an expectation line cannot hold cannot be run, found
+    # by file name: a tab in it, or a # that would read as a comment.
+    for name in 'tab	name.html' '#hash.html'; do
+        mkdir -p "$work/wpt/named-${#name}"
+        cp tools/wpt/selftest/pass-fail.html "$work/wpt/named-${#name}/$name"
+        run --dir "named-${#name}" --expect "$work/none.txt" --update
+        [ "$rc" -eq 2 ] && cmp -s "$work/lost.txt" "$work/none.txt" && [ ! -s "$work/out.txt" ] ||
+            fail "a page named \"$name\" was run, or the file rewritten (exit $rc)"
+    done
+    # A --pages line that is not as pages.py writes it is refused, and no
+    # page is run: a source outside the checkout or the directory, a kind or
+    # a timeout it does not name, a carriage return, a page listed twice.
+    line='run	pass-fail.html	selftest/pass-fail.html	html	normal'
+    for bad in 'run	other.html	selftest/../../etc/hostname	html	normal' \
+               'run	other.html	/etc/hostname	html	normal' \
+               'run	other.html	other/pass-fail.html	html	normal' \
+               'run	other.html	selftest/pass-fail.html	xhtml	normal' \
+               "run	other.html	selftest/pass-fail.html	html	normal$(printf '\r')" \
+               "$line"; do
+        printf '%s\n%s\n' "$line" "$bad" > "$work/bad-pages.txt"
+        run --expect "$work/none.txt" --pages "$work/bad-pages.txt" --update
+        [ "$rc" -eq 2 ] && cmp -s "$work/lost.txt" "$work/none.txt" && [ ! -s "$work/out.txt" ] ||
+            fail "the --pages line \"$bad\" was taken (exit $rc)"
+    done
+    # pages.py refuses a manifest entry it cannot write as a line, or one
+    # that names a file outside the directory, and writes nothing.
+    for key in '../up.html' 'tab\tname.html'; do
+        printf '{"items":{"testharness":{"selftest":{"%s":["%s",[null,{}]]}}},"url_base":"/","version":9}\n' \
+            "$key" "$(printf '0%.0s' {1..40})" > "$work/manifest.json"
+        if python3 -I tools/wpt/pages.py "$work/manifest.json" selftest > "$work/one.txt" 2> /dev/null ||
+            [ -s "$work/one.txt" ]; then
+            fail "pages.py took the manifest entry $key"
+        fi
+    done
+    # The driver itself refuses a directory outside the checkout, before
+    # anything else: its expectation file would be written outside
+    # tools/wpt/expected. (The runner and pages.py refuse one too, so it is
+    # the driver's own word that shows it was the driver.)
+    for bad in "../$(basename "$checkout")/resources" /etc ''; do
+        rc=0; tools/test_yonder_wpt_host.sh "$bad" > /dev/null 2> "$work/err.txt" || rc=$?
+        [ "$rc" -eq 2 ] && grep -q 'is not a directory inside the checkout' "$work/err.txt" ||
+            fail "the driver took the directory \"$bad\" (exit $rc)"
+    done
+
+    echo "wpt selftest: the runner's pages ran as tools/wpt/selftest.out says, found either way;" \
+        "the expectations' three sections hold, unreadable ones and faulted runs are refused," \
+        "and the switch's proof fails on a leak"
+    exit 0
+fi
+
+shift
+if [ ! -d "$checkout/$dir" ]; then
+    echo "wpt: no $checkout/$dir; add $dir to tools/wpt_fetch.sh's list and run it" >&2
+    exit 2
+fi
+expect=tools/wpt/expected/$dir.txt
+mkdir -p "$(dirname "$expect")"
+pages=()
+if [ -f "$checkout/MANIFEST.json" ]; then
+    python3 -I tools/wpt/pages.py "$checkout/MANIFEST.json" "$dir" > "$work/pages.txt" ||
+        { echo "wpt: pages.py could not list $dir's pages from the manifest" >&2; exit 2; }
+    pages=(--pages "$work/pages.txt")
+else
+    echo "wpt: no $checkout/MANIFEST.json; finding the tests by file name" >&2
+fi
+"${runner[@]}" --wpt "$checkout" --dir "$dir" --expect "$expect" "${pages[@]}" "$@"

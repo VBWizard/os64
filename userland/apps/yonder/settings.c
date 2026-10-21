@@ -27,14 +27,16 @@
 #define CONF_SCRIPT_SECONDS "script_seconds"
 #define CONF_ANIMATIONS "animations"
 #define CONF_MOTION "motion"
+#define CONF_MODERN "modern"
 
 // The list's height, in rows; the dialog's rows are a line of words, the
 // list, field, cache row, zoom row, the page-script switch with the
-// script time limit beside it, and the animations' two switches. Cache
-// usage appears on the dialog's status line; a body must fit the helper's
-// window, which is sized for this many rows and no more.
+// script time limit beside it, the animations' two switches, and the
+// modern switch. Cache usage appears on the dialog's status line; a body
+// must fit the helper's window, which is sized for this many rows and no
+// more.
 #define LIST_ROWS 6
-#define BODY_ROWS (LIST_ROWS + 6)
+#define BODY_ROWS (LIST_ROWS + 7)
 
 // Whole-percent zoom limits; yonder's keyboard steps lie between them.
 #define ZOOM_MIN 25
@@ -69,6 +71,9 @@ static struct {
     // Run animations and Reduce motion, on a row of their own.
     os64_ui_checkbox_t run, reduce;
     void (*motion_use)(bool run, bool reduce);
+    // The Modern Web arc's surface, on a row of its own.
+    os64_ui_checkbox_t modern;
+    void (*modern_use)(bool modern);
     // The relay: `thread` waits for events at the dialog's window and
     // rings `bell` on `window`, then waits on `pumped` until the loop has
     // handled them — one ring outstanding at a time, so it never spins on
@@ -132,6 +137,25 @@ bool yonder_settings_saved_reduce_motion(void)
     char value[16];
     return os64_conf_get(CONF_NAME, CONF_MOTION, value, sizeof(value)) == 0 &&
            os64_streq_nocase(value, "reduce");
+}
+
+bool yonder_settings_saved_modern(const char **refused)
+{
+    char value[8];
+    if (refused != NULL)
+        *refused = NULL;
+    int64_t rc = os64_conf_get(CONF_NAME, CONF_MODERN, value, sizeof(value));
+    if (rc == OS64_CONF_NO_FILE || rc == OS64_CONF_NO_KEY)
+        return true;
+    if (rc == 0 && os64_streq_nocase(value, "off"))
+        return false;
+    if (rc != 0 || !os64_streq_nocase(value, "on")) {
+        static const char kRefused[] = "yonder.conf's modern is not on or off; the modern web surface is on.";
+        os64_debug_log("yonder: yonder.conf's modern is not on or off; using on");
+        if (refused != NULL)
+            *refused = kRefused;
+    }
+    return true;
 }
 
 bool yonder_settings_saved_scripts(void)
@@ -404,6 +428,12 @@ static bool arrange(os64_ui_settings_t *d, os64_gui_rect_t b, int32_t row, bool 
     int32_t motion_y = last + 3 * row;
     place(&s.run.w, (os64_gui_rect_t){b.x, motion_y, run_w, row}, staged);
     place(&s.reduce.w, (os64_gui_rect_t){b.x + run_w + row, motion_y, reduce_w, row}, staged);
+    int32_t modern_w = 0;
+    if (os64_ui_text_measure(&d->ui, OS64_FONT_ROLE_UI, s.modern.w.text, os64_strlen(s.modern.w.text),
+                             &modern_w) ||
+        modern_w + 2 * row > b.w)
+        return false;
+    place(&s.modern.w, (os64_gui_rect_t){b.x, last + 4 * row, modern_w + 2 * row, row}, staged);
     return true;
 }
 
@@ -449,6 +479,7 @@ static void apply(os64_ui_settings_t *d, bool save)
     s.zoom_use(zoom);
     s.dark_use(s.dark.checked);
     s.motion_use(s.run.checked, s.reduce.checked);
+    s.modern_use(s.modern.checked);
     const char *name = yonder_agent_name(agent);
     // A cache that cannot keep anything has no box to tick, and saves no
     // `cache = off` that would outlive whatever stopped it.
@@ -470,6 +501,7 @@ static void apply(os64_ui_settings_t *d, bool save)
                                           s.run.checked ? "on" : "off") == 0 &&
                            os64_conf_set(CONF_NAME, CONF_MOTION,
                                           s.reduce.checked ? "reduce" : "no-preference") == 0 &&
+                           os64_conf_set(CONF_NAME, CONF_MODERN, s.modern.checked ? "on" : "off") == 0 &&
                            (!s.usable || (os64_conf_set(CONF_NAME, CONF_CACHE,
                                                         keeping ? "on" : "off") == 0 &&
                                           os64_conf_set(CONF_NAME, CONF_CACHE_MB,
@@ -477,10 +509,11 @@ static void apply(os64_ui_settings_t *d, bool save)
     if (!saved)
         os64_strcopy(line, sizeof(line), "Applied here, but yonder.conf could not be written.");
     else
-        os64_snprintf(line, sizeof(line), "%s: zoom %d%%%s, asking as %s, %s, scripts %s (%u s)%s",
+        os64_snprintf(line, sizeof(line), "%s: zoom %d%%%s, asking as %s, %s, scripts %s (%u s)%s%s",
                       save ? "Saved" : "Applied", (int)(zoom / 10), s.dark.checked ? ", dark" : "",
                       name != NULL ? name : "the agent typed", keeping ? kept : "keeping nothing",
                       s.scripts.checked ? "on" : "off", (unsigned)seconds,
+                      s.modern.checked ? "" : ", modern web off",
                       save ? ", here and in new windows." : ", here.");
     os64_ui_settings_report(d, line);
 }
@@ -490,7 +523,8 @@ void yonder_settings_open(int64_t parent, uint32_t bell, const char *agent,
                           way_cache_t *cache, bool scripts, uint32_t script_seconds, uint32_t zoom,
                           void (*zoom_use)(uint32_t thousandths), bool dark,
                           void (*dark_use)(bool dark), bool run, bool reduce,
-                          void (*motion_use)(bool run, bool reduce))
+                          void (*motion_use)(bool run, bool reduce), bool modern,
+                          void (*modern_use)(bool modern))
 {
     // Open already: the helper brings it forward and keeps what was typed.
     if (!os64_ui_settings_open(&s.d, parent, "yonder Settings", BODY_ROWS, arrange, apply, NULL))
@@ -499,6 +533,7 @@ void yonder_settings_open(int64_t parent, uint32_t bell, const char *agent,
     s.zoom_use = zoom_use;
     s.dark_use = dark_use;
     s.motion_use = motion_use;
+    s.modern_use = modern_use;
     s.cache = cache;
     s.usable = false;
     s.window = parent;
@@ -529,10 +564,13 @@ void yonder_settings_open(int64_t parent, uint32_t bell, const char *agent,
     os64_ui_checkbox(&s.dark, "Dark pages", dark, NULL, NULL);
     os64_ui_checkbox(&s.run, "Run animations", run, NULL, NULL);
     os64_ui_checkbox(&s.reduce, "Reduce motion", reduce, NULL, NULL);
+    // It takes effect from the next page: a page's script surface is made
+    // with its runtime, and its sheets are read with the same answer.
+    os64_ui_checkbox(&s.modern, "Modern web surface (from the next page)", modern, NULL, NULL);
     os64_ui_widget_t *kids[] = {&s.heading, &s.list.w,     &s.field.w, &s.keep.w,  &s.size.w,
                                 &s.mb,      &s.empty,      &s.zoom_words, &s.zoom.w, &s.percent,
                                 &s.scripts.w, &s.limit_words, &s.limit.w, &s.limit_value,
-                                &s.dark.w, &s.run.w, &s.reduce.w};
+                                &s.dark.w, &s.run.w, &s.reduce.w, &s.modern.w};
     for (size_t i = 0; i < sizeof(kids) / sizeof(kids[0]); i++)
         os64_ui_add_child(&s.d.body, kids[i]);
     os64_ui_listbox_set(&s.d.ui, &s.list, yonder_agent_npresets(), selected);

@@ -18,7 +18,8 @@
 
 #pragma GCC visibility push(default)
 
-// What a media query and a viewport unit are judged against.
+// What a media query and a viewport unit are judged against, and which
+// properties the cascade reads.
 typedef struct {
     double width, height;           // the viewport, in CSS pixels
     // The person's colour scheme: what `prefers-color-scheme` answers,
@@ -28,6 +29,13 @@ typedef struct {
     // `prefers-reduced-motion` answers, `reduce` when true and
     // `no-preference` when false.
     bool reduced_motion;
+    // Whether the Modern Web arc's properties are taken away
+    // (garb_reading_t): the cascade reads every declaration, and every
+    // `@supports` condition, with this answer, and records a marked
+    // property it then cannot read as it records any other
+    // (garb_cascade_skips). Clear, the default an environment built field
+    // by field gets, knows them.
+    bool modern_off;
 } garb_env_t;
 
 // An `@import` (Cascade 4 § 2.1): the address as written — resolved

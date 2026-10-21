@@ -61,7 +61,8 @@ const char *garb_set_approximation(const garb_set_t *set);
 
 // The longhands a property name sets — itself for a longhand, all of them
 // for a shorthand — into `out` (GARB_SETS_MAX long). 0 for a name libgarb
-// does not read.
-int32_t prop_longhands(const char *name, size_t len, garb_prop_t *out);
+// does not read; with `modern_off`, the names and longhands marked modern
+// are not read (garb_reading_t).
+int32_t prop_longhands(const char *name, size_t len, bool modern_off, garb_prop_t *out);
 
 #endif

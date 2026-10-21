@@ -574,6 +574,10 @@ typedef struct Page {
     way_page_t way;
     struct Page *reuse_sheets;   // source of ready linked parses during a rebuild
     bool scripting;
+    // Whether the page has the Modern Web arc's surface: its script host's
+    // globals and the properties its cascade reads (garb_env_t.modern_off),
+    // as the switch stood when its navigation began.
+    bool modern;
     // The page's script host (scripts.h), and the control state its
     // scripts and its models share: made by the stream at the first script
     // that runs, owned by the page from then on, freed after the models.
@@ -930,11 +934,13 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
     garb_cascade_t *cascade = p->cascade;
     int32_t entry[SHEETS_MAX] = {0};
     garb_env_t view = css_view(width, height, zoom);
+    view.modern_off = !p->modern;
     if (cascade == NULL || p->sheets_changed || (cascade != NULL && (garb_cascade_env(cascade).width != view.width ||
                                                   garb_cascade_env(cascade).height != view.height ||
                                                   garb_cascade_env(cascade).dark != view.dark ||
                                                   garb_cascade_env(cascade).reduced_motion !=
-                                                      view.reduced_motion))) {
+                                                      view.reduced_motion ||
+                                                  garb_cascade_env(cascade).modern_off != view.modern_off))) {
         garb_sheet_in_t in[SHEETS_MAX];
         int32_t n = 0;
         const os64_page_t *model = page_model(p);
@@ -1160,6 +1166,9 @@ static struct {
     int32_t pointer_x, pointer_y;   // where the pointer last was, for hover
     bool running;
     bool scripts_on;
+    // The Modern Web arc's switch (yonder.conf's `modern`, Settings): what
+    // the next navigation captures, so a page keeps the answer it began with.
+    bool modern;
     // Each script task's budget (Settings' script time limit, yonder.conf's
     // script_seconds), in milliseconds.
     uint64_t script_ms;
@@ -1216,6 +1225,7 @@ static struct {
         bool has_fragment;
         char fragment[256];
         bool scripting;             // the parser mode, captured when the navigation started
+        bool modern;                // the modern switch, captured then too
         bool has_head;
         way_head_t head;
         os64_html_parser_t *parser; // NULL until the head (HTML), or until a text body's first bytes are in hand (stream_open)
@@ -2667,6 +2677,16 @@ static void arrive(Page *fresh, NavKind kind, const way_position_t *crumb, const
 // network does.
 static bool stream_parser(const void *first, size_t n);
 
+// The modern switch as the navigation starting now finds it, which is the
+// page's for its life. A record taken with it off says so, so a page that
+// lacks the arc's surface is never read as one that lost it.
+static void stream_modern_capture(void)
+{
+    g.stream.modern = g.modern;
+    if (!g.modern)
+        yonder_diag_fact(g.stream.diag, "modern", "off");
+}
+
 static void open_local(const char *path, NavKind kind, const way_position_t *crumb)
 {
     uint8_t *bytes = NULL;
@@ -2698,6 +2718,7 @@ static void open_local(const char *path, NavKind kind, const way_position_t *cru
     if (crumb != NULL)
         g.stream.crumb = *crumb;
     g.stream.scripting = g.scripts_on;
+    stream_modern_capture();
     g.stream.serial = ++g.pages_made;
     g.stream.has_head = true;
     g.stream.head.body = WAY_BODY_HTML;
@@ -2941,6 +2962,7 @@ static void start_trip(const char *url, os64_page_request_t *request, NavKind ki
     g.stream.mail = mail;
     g.stream.kind = kind;
     g.stream.scripting = g.scripts_on;
+    stream_modern_capture();
     if (crumb != NULL)
         g.stream.crumb = *crumb;
     char line[512];
@@ -6772,11 +6794,11 @@ static void script_cookies_set(void *opaque, const char *text, size_t length)
 
 static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state_t *state,
                                       const char *url, bool encrypted, uint64_t serial,
-                                      yonder_diag_t *diag)
+                                      yonder_diag_t *diag, bool modern)
 {
     yonder_scripts_options_t options = {url, g.script_ms, serial, script_alert, script_fetch,
                                         script_cancel, script_activate, script_write, script_now,
-                                        script_geometry, doc, diag, encrypted};
+                                        script_geometry, doc, diag, encrypted, modern};
     yonder_scripts_t *host = yonder_scripts_new(doc, state, &options);
     yonder_scripts_set_user_agent(host, script_user_agent, NULL);
     const os64_dom_cookies_t cookies = {script_cookies_get, script_cookies_set, host};
@@ -7749,6 +7771,7 @@ static void stream_finish(os64_fetch_status_t fetch, const char *reason)
     Page fresh;
     os64_memset(&fresh, 0, sizeof(fresh));
     fresh.scripting = g.stream.scripting;
+    fresh.modern = g.stream.modern;
     os64_html_document_t *doc = os64_html_parser_finish(g.stream.parser);
     g.stream.parser = NULL;
     if (doc == NULL) {
@@ -7766,7 +7789,7 @@ static void stream_finish(os64_fetch_status_t fetch, const char *reason)
         g.stream.state = os64_page_state_create(doc, 0);
         g.stream.scripts = g.stream.state != NULL
             ? scripts_host(doc, g.stream.state, g.stream.head.url, g.stream.head.encrypted, g.stream.serial,
-                           g.stream.diag) : NULL;
+                           g.stream.diag, g.stream.modern) : NULL;
         if (g.stream.scripts == NULL) {
             os64_page_state_free(g.stream.state);
             g.stream.state = NULL;
@@ -7943,7 +7966,7 @@ static yonder_stop_t stream_stop(os64_html_node_t *script)
         g.stream.state = os64_page_state_create(doc, 0);
         g.stream.scripts = g.stream.state != NULL
             ? scripts_host(doc, g.stream.state, g.stream.head.url, g.stream.head.encrypted, g.stream.serial,
-                           g.stream.diag) : NULL;
+                           g.stream.diag, g.stream.modern) : NULL;
         if (g.stream.scripts == NULL) {
             os64_page_state_free(g.stream.state);
             g.stream.state = NULL;
@@ -8031,6 +8054,7 @@ static Page *stream_page(void)
     os64_strcopy(p->way.url, sizeof(p->way.url), g.stream.head.url);
     p->serial = g.stream.serial;
     p->scripting = g.stream.scripting;
+    p->modern = g.stream.modern;
     return p;
 }
 
@@ -9418,6 +9442,14 @@ static void motion_use(bool run, bool reduce)
     mark_whole(WHOLE_WINDOW, true);
 }
 
+// The modern switch (Settings): the next page made takes it, and the page on
+// screen keeps the surface it was made with, which a script runtime cannot
+// shed and a page half switched would show.
+static void modern_use(bool modern)
+{
+    g.modern = modern;
+}
+
 // Ctrl with = or + zooms in, with - out, with 0 back to the settings'
 // default; Ctrl and the wheel steps too, up to zoom in. Wherever focus is
 // in the window, as a browser does. True when the event was one.
@@ -10015,6 +10047,8 @@ int main(int argc, char **argv)
     s_animations = yonder_settings_saved_animations();
     s_reduce_motion = yonder_settings_saved_reduce_motion();
     g.script_ms = (uint64_t)yonder_settings_saved_script_seconds() * 1000;
+    const char *modern_refused;
+    g.modern = yonder_settings_saved_modern(&modern_refused);
     const char *diag_refused = diag_dir_open();
     int address_arg = s_script_audit ? 2 : 1;
     const char *first = argc > address_arg ? argv[address_arg] : NULL;
@@ -10108,9 +10142,16 @@ int main(int argc, char **argv)
         (void)os64_gui_event_ring(g.win, BELL_STREAM);
     else
         status_rest("Type an address, or a path to an HTML file, and press Enter.");
-    // Said last, so it is still there to read when the window first shows.
-    if (diag_refused != NULL)
-        status_rest(diag_refused);
+    // What yonder.conf asked for and could not have: said last, so it is
+    // still there to read when the window first shows, and in one line, so
+    // neither refusal hides the other.
+    if (diag_refused != NULL || modern_refused != NULL) {
+        char said[512];
+        os64_snprintf(said, sizeof(said), "%s%s%s", diag_refused != NULL ? diag_refused : "",
+                      diag_refused != NULL && modern_refused != NULL ? " " : "",
+                      modern_refused != NULL ? modern_refused : "");
+        status_rest(said);
+    }
     os64_ui_set_focus(&g.ui, first != NULL ? &g.view : &g.field.w);
     sync_bars();
 
@@ -10153,7 +10194,7 @@ int main(int argc, char **argv)
                 yonder_settings_open(g.win, BELL_SETTINGS, g.way.agent, settings_use, g.cache,
                                      g.scripts_on, (uint32_t)(g.script_ms / 1000), g.zoom_default,
                                      zoom_use, s_dark, dark_use, s_animations, s_reduce_motion,
-                                     motion_use);
+                                     motion_use, g.modern, modern_use);
             else if (!bar_event(&ev) && !zoom_event(&ev) && !key_event(&ev) && !password_key(&ev))
                 os64_ui_dispatch(&g.ui, &ev);
             // What the event became, as DOM events, now libui is done with it.

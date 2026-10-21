@@ -110,6 +110,11 @@ typedef enum {
 // The longhand's name, and whether it is inherited by default.
 const char *garb_prop_name(garb_prop_t prop);
 bool garb_prop_inherited(garb_prop_t prop);
+// Whether the Modern Web arc added it: a property so marked is known only
+// to a reading whose `modern_off` is clear (garb_reading_t, garb_env_t), so
+// the arc's switch (MODERN_WEB.md, rule 4) takes it away whole, as if
+// libgarb had never read it.
+bool garb_prop_modern(garb_prop_t prop);
 
 // ── Typed values ────────────────────────────────────────────────────────
 
@@ -267,12 +272,22 @@ static inline double garb_hold(double v, double limit)
 // read; GARB_DECL_INVALID when the value does not fit the grammar; and
 // GARB_DECL_HELD for a value holding var() or env(), which is not read
 // here — the cascade reads it once they are replaced (garb_decl_has_var
-// asks the same question first). `quirks` lets the few properties quirks
-// mode allows take a length without a unit. Values that must live on (a
-// family name, a url) point into `owner`'s arena.
+// asks the same question first). Values that must live on (a family name,
+// a url) point into `owner`'s arena.
 #define GARB_DECL_INVALID (-1)
 #define GARB_DECL_HELD    (-2)
-int32_t garb_read_declaration(garb_parsed_t *owner, const garb_decl_t *decl, bool quirks,
+// How a declaration is read. `quirks` lets the few properties quirks mode
+// allows take a length without a unit. `modern_off` makes every name the
+// Modern Web arc added (garb_prop_modern, and the shorthands and aliases
+// marked beside them) one libgarb does not read, answered 0 as any such
+// name is, and reads a shorthand as an engine without its marked longhands
+// would: a part of its value only one of them takes makes it invalid.
+// Zero for each is a standards-mode reading that knows them all.
+typedef struct {
+    bool quirks;
+    bool modern_off;
+} garb_reading_t;
+int32_t garb_read_declaration(garb_parsed_t *owner, const garb_decl_t *decl, garb_reading_t how,
                               garb_set_t *out);
 bool garb_decl_has_var(const garb_decl_t *decl);
 // Whether a declaration names a custom property (`--name`), whose value is

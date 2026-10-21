@@ -74,6 +74,15 @@ bool d_context(os64_dom_t *dom, JSContext *ctx, const char *abi)
     return true;
 }
 
+os64_dom_t *d_binding(JSContext *ctx)
+{
+    JSClassID id = os64_js_class_id(&anchor_slot);
+    JSValue anchor = JS_GetClassProto(ctx, id);
+    os64_dom_t *dom = JS_GetOpaque(anchor, id);
+    JS_FreeValue(ctx, anchor);
+    return d_context(dom, ctx, OS64_JS_ABI_ID) ? dom : NULL;
+}
+
 os64_dom_t *d_callback(JSContext *ctx, JSValueConst *data, const char *abi)
 {
     JSClassID id;
@@ -243,6 +252,10 @@ os64_dom_t *os64_dom_create(os64_js_runtime_t *runtime, os64_html_document_t *do
     JS_SetOpaque(anchor, dom);
     dom->anchor = d_retain(dom, ctx, anchor);
     if (dom->anchor == NULL) goto fail;
+    /* The anchor is also its own class's prototype in this context, where
+     * no page reaches it: that is how a function made without data finds
+     * its binding (d_binding). */
+    JS_SetClassProto(ctx, dom->anchor_class, JS_DupValue(ctx, dom->anchor->value));
     JSValue guard = JS_NewObject(ctx);
     if (JS_IsException(guard)) goto fail;
     if (JS_PreventExtensions(ctx, guard) < 0) { JS_FreeValue(ctx, guard); goto fail; }
@@ -285,6 +298,7 @@ os64_dom_t *os64_dom_create(os64_js_runtime_t *runtime, os64_html_document_t *do
     if (installed >= 0) installed = d_event_install(dom, ctx, global);
     if (installed >= 0) installed = d_timer_install(dom, ctx, global);
     if (installed >= 0) installed = d_window_install(dom, ctx, global);
+    if (installed >= 0) installed = d_modern_install(dom, ctx, global);
     JS_FreeValue(ctx, global);
     if (installed < 0) goto fail;
     outcome->status = OS64_JS_OK;
