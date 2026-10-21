@@ -383,7 +383,7 @@ int64_t yonder_sheet_run(void *job, bool (*cancelled)(void *), void *ctx, void *
 /* As sheet.c releases a sheet job and what it made. */
 void yonder_sheet_release(void *job, void *product) {
     yonder_sheet_t *got=product;
-    if(got) { garb_free(&got->parsed); os64_free(got); }
+    if(got) { garb_free(&got->parsed); os64_free(got->kept); os64_free(got); }
     os64_free(job);
 }
 int64_t yonder_script_run(void *job, bool (*cancelled)(void *), void *ctx, void **out) {
@@ -445,13 +445,14 @@ bool os64_ui_theme_session(os64_ui_theme_t *theme, uint64_t *installed, uint64_t
     (void)theme; (void)installed; (void)hint; return false;
 }
 static char saved_scripts[8], saved_zoom[8], saved_seconds[8], saved_diagnostics[256], saved_appearance[8],
-    saved_animations[8], saved_motion[16], settings_report[256];
+    saved_animations[8], saved_motion[16], saved_keep_pages[16], settings_report[256];
 int64_t os64_conf_get(const char *file, const char *key, char *out, size_t cap) {
     check(os64_streq(file,"yonder.conf"),"settings read Yonder configuration");
     const char *value=os64_streq(key,"scripts") ? saved_scripts :
         os64_streq(key,"zoom") ? saved_zoom : os64_streq(key,"script_seconds") ? saved_seconds :
         os64_streq(key,"diagnostics") ? saved_diagnostics : os64_streq(key,"appearance") ? saved_appearance :
-        os64_streq(key,"animations") ? saved_animations : os64_streq(key,"motion") ? saved_motion : "";
+        os64_streq(key,"animations") ? saved_animations : os64_streq(key,"motion") ? saved_motion :
+        os64_streq(key,"keep_pages") ? saved_keep_pages : "";
     if(!value[0]) return OS64_CONF_NO_KEY;
     os64_strcopy(out,cap,value); return 0;
 }
@@ -4579,8 +4580,9 @@ static void diag_page_cases(void) {
     const char *text=diag_file("/tmp/diag",name);
     check(has(text,"address: http://fixture.test/p\nverdict: clean\n") && !has(text,"MISSING") && !has(text,"FAILED") &&
         has(text,"\nwritten: when the page arrived\n") && has(text,"\nfinal address: http://fixture.test/final\n") &&
-        has(text,"\nscript http://fixture.test/final#inline-1: ran\n") && !has(text,"script load"),
-        "diag: a clean page's file says clean, carries no token, and says what ran");
+        has(text,"\nscript http://fixture.test/final#inline-1: ran in 0 us\n") && !has(text,"script load"),
+        "diag: a clean page's file says clean, carries no token, and says what ran and how long the "
+        "engine took over it, on the clock that stood still");
     check(g.badge_text[0]=='\0' && g.badge.hidden,"diag: a clean page shows no badge");
     loop_drop();
     check(has(diag_file("/tmp/diag",name),"\nwritten: when the page was left\n"),"diag: leaving rewrites the file");
@@ -4719,6 +4721,202 @@ static void diag_long_source_case(void) {
     check(has(text,want),"diag source: a long src script is named by its whole address");
     free(text);
     loop_drop();
+}
+
+/* THE SCRIPT LINE'S TIME (MODERN_WEB.md slice 7's instrument): the engine's
+ * evaluation of a script, on the harness's clock, which a forced layout
+ * moves by geometry_layout_delay and nothing else moves here. */
+static void diag_script_time_case(void) {
+    geometry_layout_delay=2500;
+    loop_page("<p id=out>x</p><script>document.getElementById('out').textContent=String(document.body.offsetWidth>0)</script>"
+        "<script>nothere()</script>");
+    check(loop_settle() && probe_text_is("out","true"),"diag time: a script that measures runs");
+    geometry_layout_delay=0;
+    char text[4096]; yonder_diag_render(g.page.diag,text,sizeof(text));
+    check(has(text,"\nscript http://fixture.test/final#inline-1: ran in 2500 us\n") &&
+        has(text,"\nscript http://fixture.test/final#inline-2: failed in 0 us\n"),
+        "diag time: a script's line says how long the engine took over it, the layout it forced included, "
+        "and a script that died says it too");
+    loop_drop();
+}
+
+/* A sheet job answered as sheet.c answers it: `css` parsed under `label`
+ * and the document's encoding, and, for a window that keeps its pages,
+ * carrying back the bytes it was parsed from and the label. NULL `css` is a
+ * fetch that failed. False when no such job is out. */
+static bool sheet_land_as_worker(const char *tail, const char *css, const char *label) {
+    for(int i=0;i<nsheet_jobs;i++) {
+        yonder_sheet_job_t *job=sheet_jobs[i].job;
+        size_t n=strlen(job->url), t=strlen(tail);
+        if(n<t || strcmp(job->url+n-t,tail)!=0) continue;
+        os64_work_id_t id=sheet_jobs[i].id;
+        sheet_jobs[i]=sheet_jobs[--nsheet_jobs];
+        yonder_sheet_t *got=os64_calloc(1,sizeof(*got));
+        os64_strcopy(got->url,sizeof(got->url),job->url);
+        if(css!=NULL) {
+            got->ok=garb_parse_sheet((const uint8_t *)css,strlen(css),label[0] ? label : NULL,
+                job->environment[0] ? job->environment : NULL,&got->parsed)==GARB_OK;
+            os64_strcopy(got->label,sizeof(got->label),label);
+            if(got->ok && job->keep) {
+                got->kept=os64_malloc(strlen(css)); memcpy(got->kept,css,strlen(css)); got->kept_len=strlen(css);
+            }
+        }
+        reaped(id,job,got);
+        return true;
+    }
+    return false;
+}
+/* A file on the fake disk, its bytes and length; NULL when there is none. */
+static const char *fake_bytes(const char *path, size_t *len) {
+    int f=fake_file(path); *len=f>=0 ? fake_files[f].len : 0;
+    return f>=0 ? fake_files[f].data : NULL;
+}
+/* Whether any file on the fake disk is a temporary one still standing. */
+static bool fake_temp_left(void) {
+    for(int f=0;f<FAKE_FILES;f++)
+        if(fake_files[f].used && strlen(fake_files[f].path)>4 &&
+           !strcmp(fake_files[f].path+strlen(fake_files[f].path)-4,".new")) return true;
+    return false;
+}
+static unsigned fake_count(const char *suffix) {
+    unsigned n=0;
+    for(int f=0;f<FAKE_FILES;f++) {
+        size_t a=strlen(fake_files[f].path), b=strlen(suffix);
+        n+=fake_files[f].used && a>=b && !strcmp(fake_files[f].path+a-b,suffix);
+    }
+    return n;
+}
+/* keep_pages starting a run, in a fresh /tmp/kept. */
+static void keep_begin(bool on) {
+    fake_reset();
+    memset(&s_diag,0,sizeof(s_diag)); s_diag.next=1;
+    snprintf(saved_diagnostics,sizeof(saved_diagnostics),"/tmp/kept");
+    snprintf(saved_keep_pages,sizeof(saved_keep_pages),"%s",on ? "on" : "off");
+    check(diag_dir_open()==NULL && s_diag.keep==on,"keep: keep_pages is read with the diagnostics directory");
+}
+static void keep_end(void) {
+    saved_diagnostics[0]=saved_keep_pages[0]='\0';
+    memset(&s_diag,0,sizeof(s_diag)); s_diag.next=1;
+    fake_reset();
+}
+
+/* THE PAGE KEPT (keep_pages, diag.h): the bytes as the parser was fed them,
+ * each script and sheet as the window received it, the index naming them,
+ * and the facts a replay rebuilds the head from. */
+static void diag_keep_cases(void) {
+    keep_begin(true);
+    stream_window(); g.scripts_on=true; g.script_ms=5000; now_ms=100;
+    start_trip("http://fixture.test/kept",NULL,NAV_GO,NULL);
+    uint32_t seq=yonder_diag_seq(g.stream.diag);
+    way_head_t h=stream_head("text/html","windows-1252",false);
+    h.encrypted=true; os64_strcopy(h.url,sizeof(h.url),"https://fixture.test/final");
+    yonder_mail_post_head(g.stream.mail,&h);
+    /* A byte that is a character only in the page's encoding, a NUL, and
+     * a body cut into many small chunks: the kept file is the bytes
+     * whatever the chunks and whatever they decode to. */
+    char *body=pad_page("<link rel=stylesheet href=k.css><p id=out>caf\xE9</p><p>\x01" "a\xFF" "z</p>"
+        "<script src=k.js></script><p id=after>end</p>");
+    size_t len=strlen(body);
+    body[len-2]='\0';                   /* a NUL inside the page's last tag */
+    stream_post_body((const uint8_t *)body,len,97);
+    stream_post_verdict(true,OS64_FETCH_OK,"");
+    check(loop_settle() && g.stream.stopped,"keep: the page stops at its script");
+    check(sheet_land_as_worker("/k.css","@import 'i.css'; #out{color:red}","utf-8"),"keep: its sheet lands");
+    check(sheet_land_as_worker("/i.css","p{margin:0}",""),"keep: the sheet's @import lands");
+    check(script_land("/k.js","document.getElementById('out').textContent='ran'"),"keep: its script lands");
+    check(loop_settle() && g.page.tree!=NULL && probe_text_is("out","ran"),"keep: the page arrives");
+    char base[64], path[128]; size_t n;
+    snprintf(base,sizeof(base),"/tmp/kept/fixture.test-%04u",(unsigned)seq);
+    snprintf(path,sizeof(path),"%s.html",base);
+    const char *kept=fake_bytes(path,&n);
+    check(kept!=NULL && n==len && memcmp(kept,body,len)==0,
+        "keep: the page's bytes are kept as the parser was fed them, undecoded, in however many chunks");
+    snprintf(path,sizeof(path),"%s.d/index",base);
+    const char *index=fake_text(path);
+    check(has(index,"\n1\tsheet\thttps://fixture.test/k.css\thttps://fixture.test/k.css\tutf-8\n"
+        "2\tsheet\thttps://fixture.test/i.css\thttps://fixture.test/i.css\t\n"
+        "3\tscript\thttps://fixture.test/k.js\thttps://fixture.test/k.js\t\n") && index[0]=='#' &&
+        has(index,"fonts and pictures are not kept"),
+        "keep: the index names each sheet and script in the order they came, with its addresses and label, "
+        "under a header saying what is not kept");
+    snprintf(path,sizeof(path),"%s.d/1.css",base);
+    check(fake_text(path)!=NULL && !strcmp(fake_text(path),"@import 'i.css'; #out{color:red}"),
+        "keep: a sheet is kept as the bytes it was parsed from");
+    snprintf(path,sizeof(path),"%s.d/3.js",base);
+    check(fake_text(path)!=NULL && !strcmp(fake_text(path),"document.getElementById('out').textContent='ran'"),
+        "keep: a script is kept as the source the page ran");
+    char name[64]; yonder_diag_file_name(g.page.diag,name,sizeof(name));
+    const char *text=diag_file("/tmp/kept",name);
+    check(has(text,"\nstatus: 200 OK\nfinal address: https://fixture.test/final\nbody: html\n"
+        "content-type: text/html\ncharset: windows-1252\nencrypted: yes\n") && !has(text,"\nscripts: off\n") &&
+        !has(text,"\nkept: "),
+        "keep: the page file carries the facts a replay rebuilds the head from");
+    check(!fake_temp_left(),"keep: no temporary file is left");
+    loop_drop();
+    free(body);
+
+    /* A page let go unshown: its sheet never comes, and another address is
+     * asked for while it waits. It was kept when its parse ended. */
+    stream_window(); g.scripts_on=true; g.script_ms=5000; now_ms=100;
+    start_trip("http://fixture.test/unshown",NULL,NAV_GO,NULL);
+    seq=yonder_diag_seq(g.stream.diag);
+    h=stream_head("text/html","",false);
+    yonder_mail_post_head(g.stream.mail,&h);
+    const char *waits="<link rel=stylesheet href=never.css><p>waiting</p>";
+    stream_post_body((const uint8_t *)waits,strlen(waits),YONDER_STREAM_CHUNK);
+    stream_post_verdict(true,OS64_FETCH_OK,"");
+    check(loop_settle() && g.coming.active && g.page.tree==NULL,"keep: the page waits for its sheet");
+    start_trip("http://fixture.test/elsewhere",NULL,NAV_GO,NULL);
+    snprintf(base,sizeof(base),"/tmp/kept/fixture.test-%04u",(unsigned)seq);
+    snprintf(path,sizeof(path),"%s.html",base);
+    kept=fake_bytes(path,&n);
+    snprintf(name,sizeof(name),"fixture.test-%04u.txt",(unsigned)seq);
+    check(kept!=NULL && n==strlen(waits) && memcmp(kept,waits,n)==0 &&
+        has(diag_file("/tmp/kept",name),"\nwritten: when the page was left\n"),
+        "keep: a page let go unshown is kept, and its record is written at its departure");
+    /* A stream let go before its verdict keeps nothing, and leaves nothing. */
+    seq=yonder_diag_seq(g.stream.diag);
+    yonder_mail_post_head(g.stream.mail,&h);
+    stream_post_body((const uint8_t *)"<p>half",7,YONDER_STREAM_CHUNK);
+    (void)stream_turn();
+    stop_trip();
+    snprintf(path,sizeof(path),"/tmp/kept/fixture.test-%04u.html",(unsigned)seq);
+    snprintf(name,sizeof(name),"fixture.test-%04u.txt",(unsigned)seq);
+    check(fake_text(path)==NULL && !fake_temp_left() && diag_file("/tmp/kept",name)!=NULL,
+        "keep: a page stopped before all its bytes came keeps none, its temporary file goes, and its record is written");
+    loop_drop();
+
+    /* No room for the page's folder: the page is not whole, its record says
+     * so, and the status line says so once a run. */
+    stream_window(); g.scripts_on=true; g.script_ms=5000; now_ms=100;
+    while(nfake_dirs<16) { snprintf(fake_dirs[nfake_dirs],256,"/full/%d",nfake_dirs); nfake_dirs++; }
+    start_trip("http://fixture.test/nofolder",NULL,NAV_GO,NULL);
+    h=stream_head("text/html","",false);
+    yonder_mail_post_head(g.stream.mail,&h);
+    const char *needs="<p id=out>x</p><script src=s.js></script>";
+    stream_post_body((const uint8_t *)needs,strlen(needs),YONDER_STREAM_CHUNK);
+    stream_post_verdict(true,OS64_FETCH_OK,"");
+    check(loop_settle() && g.stream.stopped,"keep failed: the page stops at its script");
+    check(script_land("/s.js","1") && has(g.status_rest,"could not be kept in /tmp/kept") && s_diag.keep_said,
+        "keep failed: a script with no folder to go to is said on the status line");
+    check(loop_settle() && g.page.tree!=NULL,"keep failed: the page arrives all the same");
+    yonder_diag_file_name(g.page.diag,name,sizeof(name));
+    text=diag_file("/tmp/kept",name);
+    snprintf(path,sizeof(path),"/tmp/kept/%.*s.html",(int)(strlen(name)-4),name);
+    check(has(text,"\nkept: not whole: a step of keeping the page failed\n") && fake_text(path)==NULL &&
+        !fake_temp_left(),
+        "keep failed: the record says the page is not whole, and nothing more of it is kept");
+    loop_drop();
+    keep_end();
+
+    /* The setting off: the page files are written and nothing is kept. */
+    keep_begin(false);
+    loop_page("<p>plain</p>");
+    check(loop_settle() && g.page.tree!=NULL,"keep off: the page arrives");
+    loop_drop();
+    check(fake_count(".txt")==1 && fake_count(".html")==0 && fake_count("/index")==0 && nfake_dirs==2,
+        "keep off: the page file is written and nothing beside it");
+    keep_end();
 }
 
 /* The font job whose address ends with `tail` answered: an SFNT of
@@ -6399,7 +6597,9 @@ static void diag_cases(void) {
     diag_arriving_released_case();
     diag_picture_moves_case();
     diag_long_source_case();
+    diag_script_time_case();
     diag_tokens_exclusive();
+    diag_keep_cases();
     /* Setting absent: no file, while the badge still counts. */
     int writes=fake_writes;
     memset(&s_diag,0,sizeof(s_diag)); s_diag.next=1;

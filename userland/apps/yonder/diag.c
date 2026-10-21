@@ -34,6 +34,19 @@ struct yonder_diag {
     Table missing, failed, facts;
     // A line went with no memory even to name it (yonder_diag_short).
     bool short_of_memory;
+    // THE PAGE KEPT (diag.h): the temporary file the page's bytes are
+    // appended to while its parser is fed them (`open`, its `handle` and
+    // path), whether they were renamed into place (`ended`), how many
+    // sub-resources are kept and the index's lines, and whether a step
+    // failed, which ends the keeping of this page.
+    struct {
+        bool open, ended, failed;
+        int32_t handle;
+        char *temp;
+        uint32_t resources;
+        char *index;
+        size_t index_len;
+    } keep;
 };
 
 static char *copy(const char *s)
@@ -155,10 +168,14 @@ yonder_diag_t *yonder_diag_new(const char *url, uint32_t seq, int64_t began_us)
     return d;
 }
 
+static void keep_abandon(yonder_diag_t *d);
+
 void yonder_diag_free(yonder_diag_t *d)
 {
     if (d == NULL)
         return;
+    keep_abandon(d);
+    os64_free(d->keep.index);
     table_free(&d->missing);
     table_free(&d->failed);
     table_free(&d->facts);
@@ -292,15 +309,17 @@ static bool starts(const char *s, const char *word)
 }
 
 // `s` as one line holds it: a byte that would end or bend a line, and a
-// backslash, spelled as an escape, and a token spelled with its second
-// letter percent-encoded wherever it appears in data, record lines' data
-// included, so a grep for a token finds only the records it begins.
-static void put_text(Out *o, const char *s)
+// backslash, spelled as an escape, and, with `tokens`, a token spelled with
+// its second letter percent-encoded wherever it appears in data, record
+// lines' data included, so a grep for a token finds only the records it
+// begins. A kept page's index spells no token: its addresses are matched
+// byte for byte, and nothing greps it for records.
+static void put_field(Out *o, const char *s, bool tokens)
 {
     static const char hex[] = "0123456789ABCDEF";
     for (; *s != '\0'; s++) {
         unsigned char c = (unsigned char)*s;
-        if (starts(s, YONDER_DIAG_MISSING) || starts(s, YONDER_DIAG_FAILED)) {
+        if (tokens && (starts(s, YONDER_DIAG_MISSING) || starts(s, YONDER_DIAG_FAILED))) {
             char spelled[4] = {s[0], '%', hex[(unsigned char)s[1] >> 4], hex[(unsigned char)s[1] & 15]};
             put(o, spelled, 4);
             s++;
@@ -313,6 +332,11 @@ static void put_text(Out *o, const char *s)
             put(o, s, 1);
         }
     }
+}
+
+static void put_text(Out *o, const char *s)
+{
+    put_field(o, s, true);
 }
 
 static void put_count(Out *o, uint32_t n)
@@ -461,29 +485,200 @@ static bool write_all(int32_t h, const char *p, size_t n)
     return true;
 }
 
+// The temporary file beside `path` a whole write goes through: named for
+// this task, so two yonders writing one name never share one.
+static bool temp_beside(const char *path, char *out, size_t cap)
+{
+    int t = os64_snprintf(out, cap, "%s.%lu.new", path, (unsigned long)os64_taskid());
+    return t > 0 && (size_t)t < cap;
+}
+
+// `n` bytes written whole as `path`: into the temporary file beside it,
+// renamed over it, so a reader never meets half a file. The temporary is
+// removed when a step fails.
+static bool write_whole(const char *path, const void *bytes, size_t n)
+{
+    char temp[OS64_PATH_MAX];
+    if (!temp_beside(path, temp, sizeof(temp)))
+        return false;
+    int64_t h = os64_open(temp, "w");
+    bool ok = h >= 0 && write_all((int32_t)h, bytes, n);
+    if (h >= 0)
+        ok = os64_close((int32_t)h) == 0 && ok;
+    ok = ok && os64_rename(temp, path) == 0;
+    if (!ok && h >= 0)
+        (void)os64_unlink(temp);
+    return ok;
+}
+
 int64_t yonder_diag_write(const yonder_diag_t *d, const char *dir)
 {
-    char name[96], path[OS64_PATH_MAX], temp[OS64_PATH_MAX];
+    char name[96], path[OS64_PATH_MAX];
     if (d == NULL || dir == NULL || !yonder_diag_file_name(d, name, sizeof(name)))
         return -1;
     int n = os64_snprintf(path, sizeof(path), "%s/%s", dir, name);
-    int t = os64_snprintf(temp, sizeof(temp), "%s.%lu.new", path, (unsigned long)os64_taskid());
-    if (n <= 0 || (size_t)n >= sizeof(path) || t <= 0 || (size_t)t >= sizeof(temp))
+    if (n <= 0 || (size_t)n >= sizeof(path))
         return -1;
     size_t need = yonder_diag_render(d, NULL, 0);
     char *text = os64_malloc(need + 1);
     if (text == NULL)
         return -1;
     yonder_diag_render(d, text, need + 1);
-    int64_t h = os64_open(temp, "w");
-    bool ok = h >= 0 && write_all((int32_t)h, text, need);
-    if (h >= 0)
-        ok = os64_close((int32_t)h) == 0 && ok;
-    ok = ok && os64_rename(temp, path) == 0;
-    if (!ok && h >= 0)
-        (void)os64_unlink(temp);
+    bool ok = write_whole(path, text, need);
     os64_free(text);
     return ok ? 0 : -1;
+}
+
+// ── The page kept ───────────────────────────────────────────────────────
+
+// `<dir>/<name><suffix>`, where `<name>` is the page file's name without
+// its `.txt`.
+static bool kept_path(const yonder_diag_t *d, const char *dir, const char *suffix, char *out, size_t cap)
+{
+    char name[96];
+    if (dir == NULL || !yonder_diag_file_name(d, name, sizeof(name)))
+        return false;
+    name[os64_strlen(name) - 4] = '\0';
+    int n = os64_snprintf(out, cap, "%s/%s%s", dir, name, suffix);
+    return n > 0 && (size_t)n < cap;
+}
+
+// The page's bytes are let go unkept: their temporary file is closed and
+// removed.
+static void keep_abandon(yonder_diag_t *d)
+{
+    if (d->keep.open) {
+        (void)os64_close(d->keep.handle);
+        (void)os64_unlink(d->keep.temp);
+        d->keep.open = false;
+    }
+    os64_free(d->keep.temp);
+    d->keep.temp = NULL;
+}
+
+// A step of keeping the page failed: nothing more of it is kept, and its
+// record says so, so a replay of what was kept is not taken for the page.
+static int64_t keep_failed(yonder_diag_t *d)
+{
+    keep_abandon(d);
+    d->keep.failed = true;
+    yonder_diag_fact(d, "kept", "not whole: a step of keeping the page failed");
+    return -1;
+}
+
+// The temporary file the page's bytes go to, begun.
+static bool keep_begin(yonder_diag_t *d, const char *dir)
+{
+    char path[OS64_PATH_MAX], temp[OS64_PATH_MAX];
+    if (!kept_path(d, dir, ".html", path, sizeof(path)) || !temp_beside(path, temp, sizeof(temp)))
+        return false;
+    size_t n = os64_strlen(temp) + 1;
+    d->keep.temp = os64_malloc(n);
+    if (d->keep.temp == NULL)
+        return false;
+    os64_memcpy(d->keep.temp, temp, n);
+    int64_t h = os64_open(temp, "w");
+    if (h < 0)
+        return false;
+    d->keep.handle = (int32_t)h;
+    d->keep.open = true;
+    return true;
+}
+
+int64_t yonder_diag_keep_bytes(yonder_diag_t *d, const char *dir, const void *bytes, size_t n)
+{
+    if (d == NULL)
+        return 0;
+    if (d->keep.failed || d->keep.ended)
+        return d->keep.failed ? -1 : 0;
+    if (!d->keep.open && !keep_begin(d, dir))
+        return keep_failed(d);
+    return write_all(d->keep.handle, bytes, n) ? 0 : keep_failed(d);
+}
+
+int64_t yonder_diag_keep_bytes_end(yonder_diag_t *d, const char *dir)
+{
+    if (d == NULL)
+        return 0;
+    if (d->keep.failed || d->keep.ended)
+        return d->keep.failed ? -1 : 0;
+    char path[OS64_PATH_MAX];
+    if ((!d->keep.open && !keep_begin(d, dir)) || !kept_path(d, dir, ".html", path, sizeof(path)))
+        return keep_failed(d);
+    d->keep.open = false;
+    bool ok = os64_close(d->keep.handle) == 0;
+    ok = ok && os64_rename(d->keep.temp, path) == 0;
+    if (!ok) {
+        (void)os64_unlink(d->keep.temp);
+        return keep_failed(d);
+    }
+    os64_free(d->keep.temp);
+    d->keep.temp = NULL;
+    d->keep.ended = true;
+    return 0;
+}
+
+int64_t yonder_diag_keep_resource(yonder_diag_t *d, const char *dir, yonder_diag_kept_t kind,
+                                  const char *url, const char *final, const char *label,
+                                  const void *bytes, size_t n)
+{
+    if (d == NULL)
+        return 0;
+    if (d->keep.failed)
+        return -1;
+    char folder[OS64_PATH_MAX], path[OS64_PATH_MAX], index[OS64_PATH_MAX];
+    if (!kept_path(d, dir, ".d", folder, sizeof(folder)))
+        return keep_failed(d);
+    os64_dirent_t e;
+    if (d->keep.resources == 0 && os64_stat(folder, &e) != 0 && os64_mkdir(folder) != 0)
+        return keep_failed(d);
+    uint32_t number = d->keep.resources + 1;
+    const char *word = kind == YONDER_DIAG_KEPT_SCRIPT ? "script" : "sheet";
+    int p = os64_snprintf(path, sizeof(path), "%s/%lu.%s", folder, (unsigned long)number,
+                          kind == YONDER_DIAG_KEPT_SCRIPT ? "js" : "css");
+    int i = os64_snprintf(index, sizeof(index), "%s/index", folder);
+    if (p <= 0 || (size_t)p >= sizeof(path) || i <= 0 || (size_t)i >= sizeof(index) ||
+        !write_whole(path, bytes, n))
+        return keep_failed(d);
+    // The index's new line, measured and then written onto the lines it
+    // has, and the index written again whole under its header.
+    static const char kHeader[] =
+        "# this page's scripts and sheets as yonder received them; fonts and pictures are not kept\n"
+        "# <n>\t<kind>\t<address asked for>\t<address after redirects>\t<charset label>\n";
+    char lead[32];
+    os64_snprintf(lead, sizeof(lead), "%lu\t%s\t", (unsigned long)number, word);
+    const char *fields[3] = {url, final, label};
+    Out m = {NULL, 0, 0};
+    for (int f = 0; f < 3; f++) {
+        put_field(&m, fields[f] != NULL ? fields[f] : "", false);
+        put(&m, "\t", 1);
+    }
+    size_t line = os64_strlen(lead) + m.at;
+    size_t total = sizeof(kHeader) - 1 + d->keep.index_len + line;
+    char *text = os64_malloc(total + 1);
+    if (text == NULL)
+        return keep_failed(d);
+    os64_memcpy(text, kHeader, sizeof(kHeader) - 1);
+    if (d->keep.index_len != 0)
+        os64_memcpy(text + sizeof(kHeader) - 1, d->keep.index, d->keep.index_len);
+    Out o = {text + sizeof(kHeader) - 1 + d->keep.index_len, line + 1, 0};
+    puts_(&o, lead);
+    for (int f = 0; f < 3; f++) {
+        put_field(&o, fields[f] != NULL ? fields[f] : "", false);
+        put(&o, f < 2 ? "\t" : "\n", 1);
+    }
+    bool ok = write_whole(index, text, total);
+    if (ok) {
+        // The lines without the header: the next index begins from them.
+        os64_memmove(text, text + sizeof(kHeader) - 1, total - (sizeof(kHeader) - 1));
+        os64_free(d->keep.index);
+        d->keep.index = text;
+        d->keep.index_len = total - (sizeof(kHeader) - 1);
+        d->keep.resources = number;
+        return 0;
+    }
+    os64_free(text);
+    return keep_failed(d);
 }
 
 // The sequence a name `<anything>-<digits>.txt` carries, 0 for any other.

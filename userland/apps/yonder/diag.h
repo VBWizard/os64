@@ -20,7 +20,16 @@
 // record. A byte that would break a line, and a backslash, are written
 // `\xHH` and `\\`.
 //
-// Pure apart from yonder_diag_write: no clock, no window.
+// THE PAGE KEPT beside its file, when yonder.conf says `keep_pages = on`
+// (MODERN_WEB.md rule 3: a kept page can be fed to the headless binding
+// again, tools/test_yonder_replay_host.sh): `<name>.html`, the page's bytes
+// as its parser was fed them, and a directory `<name>.d/` holding each
+// script and sheet the page fetched as the window received it, `<n>.js` and
+// `<n>.css` in the order they came, and an `index` naming them. `<name>` is
+// the page file's name without its `.txt`.
+//
+// Pure apart from the writers (yonder_diag_write and the keepers): no
+// clock, no window.
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -40,6 +49,9 @@ typedef struct yonder_diag yonder_diag_t;
 // the caller's clock (kept for the caller: this file reads no clock).
 // NULL on no memory.
 yonder_diag_t *yonder_diag_new(const char *url, uint32_t seq, int64_t began_us);
+// Lets the record go. A page's bytes still being kept (keep_bytes without
+// keep_bytes_end) go with it: their temporary file is removed, since a page
+// that never had all its bytes cannot be fed again as it was.
 void yonder_diag_free(yonder_diag_t *d);
 uint32_t yonder_diag_seq(const yonder_diag_t *d);
 int64_t yonder_diag_began(const yonder_diag_t *d);
@@ -93,5 +105,38 @@ int64_t yonder_diag_write(const yonder_diag_t *d, const char *dir);
 // there already carries, so a run never writes over the census an earlier
 // one kept. 1 for an empty or unreadable directory.
 uint32_t yonder_diag_next_seq(const char *dir);
+
+// ── Keeping the page (keep_pages) ──
+//
+// Each answers 0, or negative when nothing more of this page will be kept:
+// the step that failed, and every call after it, since a kept page missing
+// a piece would replay as a different page. The record then carries the
+// plain line `kept: not whole: ...`, which a replay reads. A NULL record
+// keeps nothing and answers 0.
+
+// The next `n` bytes the page's parser was fed, appended to a temporary
+// file beside `<name>.html`, which is begun at the first call.
+int64_t yonder_diag_keep_bytes(yonder_diag_t *d, const char *dir, const void *bytes, size_t n);
+// The parser has had all the bytes it will be fed: the temporary file is
+// renamed over `<name>.html` (an empty one for a page of no bytes).
+int64_t yonder_diag_keep_bytes_end(yonder_diag_t *d, const char *dir);
+
+// What a kept sub-resource is: its file's extension, and the word the
+// index names it by.
+typedef enum { YONDER_DIAG_KEPT_SCRIPT, YONDER_DIAG_KEPT_SHEET } yonder_diag_kept_t;
+
+// One sub-resource as the window received it, written whole as the next
+// `<name>.d/<n>.js` or `.css`, and the index written again whole with its
+// line. `url` is the address its job carried, `final` the one it came from
+// after redirects, `label` the charset its response named (a sheet's: a
+// replay parses the bytes again under it; "" for none).
+//
+// THE INDEX is a header line beginning `#`, then one line per file:
+//     <n> TAB <kind> TAB <url> TAB <final> TAB <label>
+// with a byte below 0x20, 0x7F and a backslash in a field written `\xHH`
+// and `\\`, as a page file writes them.
+int64_t yonder_diag_keep_resource(yonder_diag_t *d, const char *dir, yonder_diag_kept_t kind,
+                                  const char *url, const char *final, const char *label,
+                                  const void *bytes, size_t n);
 
 #endif

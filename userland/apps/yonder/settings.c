@@ -23,6 +23,7 @@
 
 #define CONF_ZOOM "zoom"
 #define CONF_DIAGNOSTICS "diagnostics"
+#define CONF_KEEP_PAGES "keep_pages"
 #define CONF_APPEARANCE "appearance"
 #define CONF_SCRIPT_SECONDS "script_seconds"
 #define CONF_ANIMATIONS "animations"
@@ -201,6 +202,19 @@ bool yonder_settings_saved_diagnostics(char *out, size_t cap)
         return false;
     }
     return true;
+}
+
+bool yonder_settings_saved_keep_pages(void)
+{
+    char value[8];
+    int64_t rc = os64_conf_get(CONF_NAME, CONF_KEEP_PAGES, value, sizeof(value));
+    if (rc == OS64_CONF_NO_FILE || rc == OS64_CONF_NO_KEY)
+        return false;
+    if (rc == 0 && os64_streq_nocase(value, "on"))
+        return true;
+    if (rc != 0 || !os64_streq_nocase(value, "off"))
+        os64_debug_log("yonder: yonder.conf's keep_pages is neither on nor off; pages are not kept");
+    return false;
 }
 
 way_cache_t *yonder_settings_cache_open(void)
