@@ -999,3 +999,18 @@ predates this correction; review and targeted hardware retesting remain open.
 Native R1 verification at 1024×768 opened both dialogs with a saved
 5000×2700 preference. Their frames fitted the display, and cancellation
 preserved the original config pair. The bundle was refreshed.
+
+
+### R1 P5 approval; E5B close latency diagnosed
+
+Chris verified Save As almost filling 2560×1440, rebooted at 1024×768 and found
+it fully visible, then rebooted at 2560×1440 and found the original large size
+restored. He approved R1. No installed binary hash was captured.
+
+He also reported a variable, roughly one-second delay when dismissing either
+dialog through X, Cancel or Escape. Quinn traced their shared cleanup to
+browser worker joins. A native diagnostic using unchanged production code
+measured idle one-worker pools closing in 1–11 ms, versus 206–980 ms for two
+workers. The jobs pipe tracks one waiting reader; the displaced reader waits
+for the one-second backstop. [E5B](E05B_CLOSE_LATENCY.md) records source, native
+timings and follow-up scope. No production fix was made during this diagnosis.

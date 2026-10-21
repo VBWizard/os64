@@ -23,7 +23,12 @@ Workshop appearance and Frame Studio composition: size sharing survived
 reopening and reboot; navigation and New Folder passed. No installed binary
 hash was captured. Review R1 fixes restored sizes exceeding the native creation ceiling after a
 display change; [details and evidence](E05A_DIALOG_POLISH.md#review-r1--saved-size-after-a-display-change).
-The correction awaits review and targeted P5 retesting; merge remains pending. Parent-owned
+Chris approved R1 after a P5 2560×1440 → 1024×768 → 2560×1440 reboot round trip:
+the dialog fitted the smaller display and restored its original large size.
+Review and merge remain pending. His X/Cancel/Escape close-delay report is
+[diagnosed separately in E5B](E05B_CLOSE_LATENCY.md): two idle workers share a
+single-waiter pipe and one can wait for the one-second fallback wake.
+No production latency fix has been implemented. Parent-owned
 stacking is a separate window-manager task; Chris's observation about the
 inherited Pin button is recorded in the E5A follow-up notes.
 Scribe is the first app consumer; Yonder remains part of the Modern Web work.

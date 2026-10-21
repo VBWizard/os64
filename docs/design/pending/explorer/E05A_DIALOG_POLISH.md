@@ -86,5 +86,9 @@ suite reproduced 16 failures before the code fix and passes 4,621 checks after
 it with ASan/UBSan/LeakSanitizer enabled. Cross-build passed. Native QEMU at
 1024×768 opened both dialogs from a 5000×2700 preference and retained that
 preference after cancellation. [Review evidence](evidence/e05a/review-r1/README.md).
-The earlier P5 report predates R1; this correction awaits targeted P5 retesting
-and review.
+Chris subsequently verified R1 on P5: Save As was sized almost to the full
+2560×1440 display, then was fully visible after rebooting at 1024×768. After
+rebooting back to 2560×1440, it restored the original large size. Chris approved
+the fix. No installed binary hash was captured; independent review and merge
+remain separate. His later close-delay report is tracked in
+[E5B](E05B_CLOSE_LATENCY.md).

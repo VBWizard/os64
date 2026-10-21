@@ -41,5 +41,7 @@ reading the config afterwards showed [the original 5000,2700 pair](preference-pr
 The VM shut down cleanly. Repository images and P5 files were not changed.
 
 [Stale-reference audit](stale-refs.txt) found no retired names or new
-superlative claims in the code change. The original P5 acceptance predates
-this correction; targeted P5 retesting and review of R1 remain pending.
+superlative claims in the code change. Chris subsequently approved R1 after a P5 round trip: an almost-full-screen
+Save As at 2560×1440 fitted completely after a reboot at 1024×768, then restored
+its original size after rebooting at 2560×1440. This is user-reported evidence
+without an installed binary hash; independent review and merge remain separate.
