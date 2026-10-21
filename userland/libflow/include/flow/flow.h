@@ -259,6 +259,12 @@ typedef enum {
     FLOW_CURSOR_ZOOM_OUT,
 } flow_cursor_t;
 
+// `object-fit` (CSS Images 3 § 4.5).
+typedef enum {
+    FLOW_OBJECT_FILL = 0, FLOW_OBJECT_CONTAIN, FLOW_OBJECT_COVER, FLOW_OBJECT_NONE,
+    FLOW_OBJECT_SCALE_DOWN,
+} flow_object_fit_t;
+
 // `user-select` (CSS UI 4 § 6.1).
 typedef enum {
     FLOW_USER_SELECT_AUTO = 0, FLOW_USER_SELECT_TEXT, FLOW_USER_SELECT_NONE,
@@ -649,6 +655,13 @@ typedef struct {
     // styles', and live as long as they do.
     const flow_shadow_t *box_shadows, *text_shadows;
     int32_t nbox_shadows, ntext_shadows;
+    // How a picture fills its content box (CSS Images 3 § 4.5, § 4.6):
+    // stretched to it, scaled to fit inside or to cover it, at its own
+    // size, or the smaller of those two, placed by `object_position` — x
+    // then y, PX or PERCENT of the room the picture leaves — and cut to
+    // the box. Neither inherited.
+    flow_object_fit_t object_fit;
+    flow_length_t object_position[2];
     // A picture scaled is drawn with its pixels kept square and hard
     // (`image-rendering: pixelated`, `crisp-edges` and their older
     // spellings), not smoothed. Inherited.

@@ -60,6 +60,7 @@ typedef struct {
     Len min_width, max_width, min_height, max_height;
     Len text_indent;                // UNSET: as inherited
     Len letter_spacing;             // UNSET: as inherited
+    Len object_position[2];         // UNSET: 50%
     FsKind fs_kind;
     int32_t fs_v;
     bool border_color_set[4];
@@ -359,6 +360,7 @@ static flow_style_t initial(const Ctx *c)
         s.padding[i] = (flow_length_t){FLOW_LENGTH_PX, 0, 0};
     }
     s.transform_origin[0] = s.transform_origin[1] = (flow_length_t){FLOW_LENGTH_PERCENT, 50 * 64, 0};
+    s.object_position[0] = s.object_position[1] = (flow_length_t){FLOW_LENGTH_PERCENT, 50 * 64, 0};
     // Everything else starts at zero bytes, which is each property's
     // initial value: auto width and height, no borders, left, baseline,
     // normal, disc outside, separate, top, no float, static with auto
@@ -1929,6 +1931,11 @@ static void take(Spec *dst, const Spec *src, garb_prop_t prop)
         d->outline_color = s->outline_color;
         break;
     case GARB_OUTLINE_OFFSET: dst->outline_offset = src->outline_offset; break;
+    case GARB_OBJECT_FIT: d->object_fit = s->object_fit; break;
+    case GARB_OBJECT_POSITION:
+        dst->object_position[0] = src->object_position[0];
+        dst->object_position[1] = src->object_position[1];
+        break;
     case GARB_USER_SELECT: d->user_select = s->user_select; break;
     case GARB_FLEX_DIRECTION: d->flex_direction = s->flex_direction; break;
     case GARB_FLEX_WRAP: d->flex_wrap = s->flex_wrap; break;
@@ -2094,6 +2101,8 @@ static void inherited_spec(const Ctx *c, const flow_style_t *parent, Spec *out)
     out->text_indent = len_of(parent->text_indent);
     out->letter_spacing = (Len){L_PX, parent->letter_spacing, 0};
     out->outline_px = parent->outline_width;
+    out->object_position[0] = len_of(parent->object_position[0]);
+    out->object_position[1] = len_of(parent->object_position[1]);
     out->outline_offset = (Len){L_PX, parent->outline_offset, 0};
     out->outline_color_set = !(parent->current_colours & FLOW_CURRENT_OUTLINE);
     out->fs_kind = FS_PX;
@@ -3253,6 +3262,17 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
             s->outline_color = colour_of(v->color);
         break;
     case GARB_OUTLINE_OFFSET: author_len(a, v, false, &sp->outline_offset); break;
+    case GARB_OBJECT_FIT: {
+        static const char *const words[] = {"fill", "contain", "cover", "none", "scale-down"};
+        _Static_assert(F_ARRAY(words) == FLOW_OBJECT_SCALE_DOWN + 1, "flow_object_fit_t");
+        if ((i = pick(v, words, F_ARRAY(words))) >= 0)
+            s->object_fit = (flow_object_fit_t)i;
+        break;
+    }
+    case GARB_OBJECT_POSITION:
+        for (int32_t k = 0; k < 2 && v->kind == GARB_V_LENGTH && k < v->nitems; k++)
+            author_len(a, &v->items[k], false, &sp->object_position[k]);
+        break;
     case GARB_CURSOR:
         if ((i = pick(v, f_cursor_words, F_ARRAY(f_cursor_words))) >= 0)
             s->cursor = (flow_cursor_t)i;
@@ -3681,6 +3701,9 @@ static void finish(const Ctx *c, Spec *sp, const flow_style_t *parent, bool item
                                        ? s->current_colours & ~FLOW_CURRENT_OUTLINE
                                        : s->current_colours | FLOW_CURRENT_OUTLINE);
     s->outline_width = s->outline_style != FLOW_BORDER_NONE ? sp->outline_px : 0;
+    const flow_length_t half = {FLOW_LENGTH_PERCENT, 50 * 64, 0};
+    for (int k = 0; k < 2; k++)
+        s->object_position[k] = resolve(sp->object_position[k], s->font_size, half);
     if (sp->outline_offset.kind != L_UNSET) {
         flow_length_t off = resolve(sp->outline_offset, s->font_size, zero);
         s->outline_offset = off.kind == FLOW_LENGTH_PX ? off.value : 0;

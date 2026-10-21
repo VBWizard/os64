@@ -433,6 +433,16 @@ static void element(Buf *b, const FStyles *styles, const os64_html_node_t *n,
         puts_(b, " line-through");
     if (s->visibility != parent->visibility)
         putf(b, " visibility=%s", s_visibility[s->visibility]);
+    static const char *const kObjectFit[] = {"fill", "contain", "cover", "none", "scale-down"};
+    if (s->object_fit != FLOW_OBJECT_FILL)
+        putf(b, " object-fit=%s", kObjectFit[s->object_fit]);
+    const flow_length_t half = {FLOW_LENGTH_PERCENT, 50 * 64, 0};
+    if (!length_eq(s->object_position[0], half) || !length_eq(s->object_position[1], half)) {
+        puts_(b, " object-position=");
+        length(b, s->object_position[0]);
+        puts_(b, "/");
+        length(b, s->object_position[1]);
+    }
     if (s->pixelated != parent->pixelated)
         puts_(b, s->pixelated ? " pixelated" : " smooth");
     if (s->list_style_type != parent->list_style_type)

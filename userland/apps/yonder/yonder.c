@@ -8568,7 +8568,14 @@ static void glass_image(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_
     if (i >= 0 && i < p->nimage_map && p->pic_of[i] >= 0 && p->pics[p->pic_of[i]].state == PIC_SHOWN) {
         uint32_t w, h;
         const uint32_t *px = picture_pixels(&p->pics[p->pic_of[i]], &w, &h);
-        os64_gui_rect_t box = {c.x + gl->dx, c.y + gl->dy, c.w, c.h};
+        // Placed by object-fit and object-position at its size at the
+        // page's zoom, and cut to its content box (CSS Images 3 § 4.5).
+        os64_gui_rect_t at = yonder_object_rect(b->style, c, zoomed_px(w, p->laid_zoom),
+                                                zoomed_px(h, p->laid_zoom));
+        os64_gui_rect_t box = {at.x + gl->dx, at.y + gl->dy, at.w, at.h};
+        os64_gui_rect_t content = {c.x + gl->dx, c.y + gl->dy, c.w, c.h};
+        if (!os64_rect_intersect(cut, content, &cut))
+            return;
         yonder_draw_picture(gl->surf->pixels, gl->surf->pitch_px, cut, box, !b->style->pixelated,
                             px, w, h);
         return;

@@ -2,8 +2,57 @@
 // 4): what the painter draws for each property that is drawn, worked by
 // hand as test_yonder_cases.inc's are. The view is 200 x 100.
 
+// A picture's place in its content box (yonder_object_rect), each worked
+// by hand: the box 10, 20, 100 x 50; a square picture 100 x 100, and a
+// small one 40 x 30. A percentage position is of the room left, which is
+// negative where the picture is the bigger.
+static bool object_rect_is(flow_object_fit_t fit, flow_length_t x, flow_length_t y, uint32_t iw,
+                           uint32_t ih, int32_t ax, int32_t ay, int32_t aw, int32_t ah)
+{
+    flow_style_t s;
+    memset(&s, 0, sizeof(s));
+    s.object_fit = fit;
+    s.object_position[0] = x;
+    s.object_position[1] = y;
+    os64_gui_rect_t r = yonder_object_rect(&s, (os64_gui_rect_t){10, 20, 100, 50}, iw, ih);
+    return r.x == ax && r.y == ay && r.w == aw && r.h == ah;
+}
+
+static void object_rect_cases(void)
+{
+    const flow_length_t half = {FLOW_LENGTH_PERCENT, 50 * 64, 0};
+    const flow_length_t zero = {FLOW_LENGTH_PERCENT, 0, 0};
+    // `right 10px` and `bottom 0`: 100% less 10px, and 100%.
+    const flow_length_t right10 = {FLOW_LENGTH_PERCENT, 100 * 64, -10 * 64};
+    const flow_length_t bottom = {FLOW_LENGTH_PERCENT, 100 * 64, 0};
+    expect("object-fit: fill is the content box",
+           object_rect_is(FLOW_OBJECT_FILL, half, half, 100, 100, 10, 20, 100, 50), NULL);
+    // The square is taller in shape than the box: it fits by the height,
+    // 50 x 50, centred in the 50 left across: x 35.
+    expect("object-fit: contain fits inside, centred",
+           object_rect_is(FLOW_OBJECT_CONTAIN, half, half, 100, 100, 35, 20, 50, 50), NULL);
+    // And covers by the width, 100 x 100, half the -50 left down: y -5.
+    expect("object-fit: cover covers, centred, past the box",
+           object_rect_is(FLOW_OBJECT_COVER, half, half, 100, 100, 10, -5, 100, 100), NULL);
+    expect("object-position: cover from the top left",
+           object_rect_is(FLOW_OBJECT_COVER, zero, zero, 100, 100, 10, 20, 100, 100), NULL);
+    // 40 x 30 at its size, centred: 30 and 10 in.
+    expect("object-fit: none is its own size",
+           object_rect_is(FLOW_OBJECT_NONE, half, half, 40, 30, 40, 30, 40, 30), NULL);
+    expect("object-fit: scale-down is none when that fits",
+           object_rect_is(FLOW_OBJECT_SCALE_DOWN, half, half, 40, 30, 40, 30, 40, 30), NULL);
+    expect("object-fit: scale-down is contain when none does not",
+           object_rect_is(FLOW_OBJECT_SCALE_DOWN, half, half, 100, 100, 35, 20, 50, 50), NULL);
+    // 60 left across, less 10: 10 + 50; 20 down: 20 + 20.
+    expect("object-position: an edge and an offset",
+           object_rect_is(FLOW_OBJECT_NONE, right10, bottom, 40, 30, 60, 40, 40, 30), NULL);
+    expect("object-fit: a picture with no size fills",
+           object_rect_is(FLOW_OBJECT_CONTAIN, half, half, 0, 30, 10, 20, 100, 50), NULL);
+}
+
 static void batch_a_paint_cases(void)
 {
+    object_rect_cases();
     // An outline is a ring round the border box (5, 5, 20 x 10), out by its
     // offset, 1, and 2 wide: -3 a side from the box to 2, 2, 26 x 16,
     // drawn as a square 2px border is, after the box's background.

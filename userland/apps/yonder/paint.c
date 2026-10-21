@@ -275,6 +275,35 @@ os64_gui_rect_t yonder_box_edge(const flow_box_t *box, os64_gui_rect_t rect, flo
                              (int32_t)min64(h, INT32_MAX - y)};
 }
 
+os64_gui_rect_t yonder_object_rect(const flow_style_t *s, os64_gui_rect_t box, uint32_t iw,
+                                   uint32_t ih)
+{
+    flow_object_fit_t fit = s->object_fit;
+    if (iw == 0 || ih == 0)
+        return box;
+    if (fit == FLOW_OBJECT_SCALE_DOWN)
+        fit = iw <= (uint32_t)max64(0, box.w) && ih <= (uint32_t)max64(0, box.h)
+                  ? FLOW_OBJECT_NONE : FLOW_OBJECT_CONTAIN;
+    int64_t w = box.w, h = box.h;
+    if (fit == FLOW_OBJECT_NONE) {
+        w = iw;
+        h = ih;
+    } else if (fit == FLOW_OBJECT_CONTAIN || fit == FLOW_OBJECT_COVER) {
+        // The picture wider in shape than the box fits by its width, and
+        // covers by its height.
+        bool wider = (int64_t)iw * box.h > (int64_t)ih * box.w;
+        if (wider == (fit == FLOW_OBJECT_CONTAIN))
+            h = nearest((int64_t)box.w * ih, iw);
+        else
+            w = nearest((int64_t)box.h * iw, ih);
+    }
+    w = min64(w, INT32_MAX);
+    h = min64(h, INT32_MAX);
+    int32_t x = place_axis(s->object_position[0], box.x, (int32_t)max64(INT32_MIN, box.w - w));
+    int32_t y = place_axis(s->object_position[1], box.y, (int32_t)max64(INT32_MIN, box.h - h));
+    return (os64_gui_rect_t){x, y, (int32_t)w, (int32_t)h};
+}
+
 // A size written for one axis of a `room`-px origin box, in px up to what
 // an int32_t says (so that scaling it by a picture's side fits 64 bits);
 // -1 for auto.

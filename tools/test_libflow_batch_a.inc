@@ -257,6 +257,25 @@ static void batch_a_cases(void)
         "        text \"x\" 0 28 8 16 serif 16\n");
     outline_door_cases();
 
+    // ── object-fit and object-position (CSS Images 3 § 4.5, § 4.6) ──
+
+    // Neither inherited; inherit takes the parent's. `right 1em top 2px`
+    // is 100% less 16, and 2; a three-part position is a background's
+    // alone, so `right 1em top` would be no declaration at all.
+    cascade_case("object-fit and object-position", 800,
+        "<!doctype html><style>img { object-fit: cover; object-position: right 1em top 2px }"
+        " p { object-fit: inherit; object-position: inherit } span { object-position: center }"
+        " b { object-position: right 1em top }</style>"
+        "<div style='object-fit: none; object-position: 10%'><p><img src=a.png><span>s</span>"
+        "<b>b</b></div>",
+        PAGE_OPEN
+        "  body block margin=8/8/8/8 holds-block\n"
+        "    div block object-fit=none object-position=10%/50% holds-block\n"
+        "      p block margin=16/0/16/0 object-fit=none object-position=10%/50%\n"
+        "        img inline object-fit=cover object-position=100%-16/2\n"
+        "        span inline\n"
+        "        b inline weight=700\n");
+
     // ── CSS Logical 1, in a horizontal left-to-right writing mode ──
 
     // A flow-relative declaration is its physical twin's for the cascade:
@@ -292,6 +311,12 @@ static void batch_a_cases(void)
         PAGE_OPEN
         "  body block margin=8/8/8/8 holds-block\n"
         "    div block\n");
+    cascade_case("object-fit: unknown with the Modern Web switch off", 800,
+        "<!doctype html><style>img { object-fit: cover; object-position: 0 0 }</style>"
+        "<img src=a.png>",
+        PAGE_OPEN
+        "  body block margin=8/8/8/8\n"
+        "    img inline\n");
     cascade_case("letter-spacing: unknown with the Modern Web switch off", 800,
         "<!doctype html><style>div { letter-spacing: 3px }</style><div>a</div>",
         PAGE_OPEN
