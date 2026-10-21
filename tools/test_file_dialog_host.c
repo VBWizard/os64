@@ -13,7 +13,7 @@ static os64_gui_surface_t native_surface;
 static bool native_owned, destroy_refused;
 static unsigned minimum_calls, size_writes;
 static char saved_size[64];
-static bool fail_size_write;
+static bool fail_size_write, fail_screen_info;
 static uint32_t native_flags, screen_width = 1600, screen_height = 1000;
 static const char *startup_fonts;
 static void native_resize(uint32_t width, uint32_t height)
@@ -43,13 +43,23 @@ uint64_t file_test_syscall(uint64_t nr,uint64_t a,uint64_t b,uint64_t c,
 {
     (void)a;(void)c;(void)g;
     switch(nr){
-    case SYSCALL_GUI_WINDOW_CREATE:
+    case SYSCALL_GUI_SCREEN_INFO:
+        if(fail_screen_info)return (uint64_t)OS64_GUI_ERR_NOT_RUNNING;
+        *(uint32_t *)(uintptr_t)a=screen_width;
+        *(uint32_t *)(uintptr_t)b=screen_height;return 0;
+    case SYSCALL_GUI_WINDOW_CREATE: {
+        /* Match the native guard: it rejects before applying FIT_SCREEN. */
+        uint32_t limit=OS64_GUI_WINDOW_DIM_MAX;
+        if(screen_width>limit)limit=screen_width;
+        if(screen_height>limit)limit=screen_height;
+        if(e>limit || f>limit)return (uint64_t)OS64_GUI_ERR_BAD_ARGS;
         CHECK(!native_owned);
         CHECK(g & OS64_GUI_CREATE_FIT_SCREEN);
         if(e>screen_width)e=screen_width;
         if(f>screen_height)f=screen_height;
         native_resize(e,f);native_flags=0;
         native_owned=true;return 91;
+    }
     case SYSCALL_GUI_WINDOW_GET_SURFACE:
         if(!native_surface.pixels)return (uint64_t)-1;
         *(os64_gui_surface_t *)(uintptr_t)b=native_surface;return 0;
@@ -449,6 +459,45 @@ static void size_tests(const char *font_dir)
     CHECK(os64_ui_file_dialog_close(d)==OS64_UI_OK);
     startup_fonts=NULL;saved_size[0]=0;free(d);
 }
+static void display_size_tests(void)
+{
+    current="saved size after display change";
+    os64_ui_file_dialog_t *d=calloc(1,sizeof(*d));CHECK(d!=NULL);
+    const uint32_t displays[][2]={{2560,1440},{1920,1080},{1024,768},{5120,2880}};
+    const uint32_t preferences[][2]={{2500,1360},{5000,2700},{800,5000}};
+    const os64_ui_file_mode_t modes[]={OS64_UI_FILE_OPEN,OS64_UI_FILE_SAVE};
+    unsigned before=size_writes;
+    for(size_t p=0;p<sizeof(preferences)/sizeof(*preferences);++p){
+        char original[64];
+        snprintf(original,sizeof(original),"%u,%u",preferences[p][0],preferences[p][1]);
+        strcpy(saved_size,original);
+        for(size_t i=0;i<sizeof(displays)/sizeof(*displays);++i){
+            screen_width=displays[i][0];screen_height=displays[i][1];
+            for(size_t m=0;m<sizeof(modes)/sizeof(*modes);++m){
+                os64_ui_file_options_t options={.mode=modes[m],.directory="/home"};
+                os64_ui_status_code_t rc=os64_ui_file_dialog_open(d,NULL,0,&options);
+                CHECK(rc==OS64_UI_OK);
+                if(rc==OS64_UI_OK){
+                    CHECK(d->draw.surf.width==(preferences[p][0]<screen_width?preferences[p][0]:screen_width));
+                    CHECK(d->draw.surf.height==(preferences[p][1]<screen_height?preferences[p][1]:screen_height));
+                    CHECK(!d->layout_pending && d->result==OS64_UI_FILE_PENDING);
+                    key(d,27,0x01,0);
+                }
+                CHECK(os64_ui_file_dialog_close(d)==OS64_UI_OK && !d->window);
+                CHECK(size_writes==before && !strcmp(saved_size,original));
+            }
+        }
+    }
+    screen_width=1024;screen_height=768;fail_screen_info=true;
+    strcpy(saved_size,"5000,2700");
+    os64_ui_file_options_t options={.mode=OS64_UI_FILE_OPEN,.directory="/home"};
+    CHECK(os64_ui_file_dialog_open(d,NULL,0,&options)==OS64_UI_OK);
+    CHECK(d->draw.surf.width==1024 && d->draw.surf.height==768);
+    CHECK(os64_ui_file_dialog_close(d)==OS64_UI_OK);
+    CHECK(size_writes==before && !strcmp(saved_size,"5000,2700"));
+    fail_screen_info=false;screen_width=1600;screen_height=1000;saved_size[0]=0;
+    free(d);
+}
 static void compact_tests(void)
 {
     current="compact and wrapped footer";
@@ -475,6 +524,7 @@ int main(int argc,char **argv)
     add_file("/home/folder",true);add_file("/home/.hidden",false);
     save_tests();open_tests();folder_tests();navigation_tests();lifecycle_tests();
     compact_tests();size_tests(argc>1?argv[1]:"userland/libfreetype/fixtures");
+    display_size_tests();
     layout_tests(argc>1?argv[1]:"userland/libfreetype/fixtures",argc>2?argv[2]:NULL);
     printf("file dialogs: %lu checks, %d failures\n",checks,failures);
     return failures?1:0;

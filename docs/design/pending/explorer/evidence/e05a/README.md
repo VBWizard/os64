@@ -1,6 +1,9 @@
 # E5A dialog polish evidence
 
 Built from `codex/file-dialog-polish`, based on `5fb5f7a6`.
+The [R1 follow-up](review-r1/README.md) records the creation-limit fix, revised
+binary hashes, 4,621 passing dialog checks and a native smaller-display check.
+The original captures and hashes below predate that correction.
 [Source and binary hashes](sha256.txt) identify the tested implementation.
 
 ## Host and build

@@ -59,6 +59,32 @@ the exact installed payload was not independently identified.
 ladder and writes to its top directory. Moving that ladder to `/home/yogi`
 moves the preference destination without a source change. Invalid sizes fall
 back to the default; dimensions are decimal integers from 1 through 32767,
-separated by a comma. Native creation clamps to the display; composition
+separated by a comma. The caller clamps to the current display before native
+creation, which then fits the frame decorations; composition
 raises the minimum for the current font. A screen too small for those controls
 can refuse creation. The stored preference is unchanged by these adjustments.
+
+
+## Review R1 — saved size after a display change
+
+The [review finding](https://github.com/VBWizard/os64/pull/322#discussion_r4332568298)
+identified a creation-order problem: the kernel rejects dimensions above
+`wm_dim_max()` before applying FIT_SCREEN. The host stub omitted that preliminary
+limit and fitted the request directly, so the original screen-clamp checks
+did not expose the failure.
+
+Open now queries the screen and bounds each requested dimension before window
+creation. If that query fails, the documented `OS64_GUI_WINDOW_DIM_MAX` provides
+a safe bound for the native dimension guard; FIT_SCREEN still accounts for
+decorations. These adjustments do not write back to the shared preference.
+The original larger size can be restored when returning to a larger display.
+
+The corrected stub enforces the native guard first. Regression cases exercise
+Open and Save at 2560×1440, 1920×1080, 1024×768 and 5120×2880, with 2500×1360,
+5000×2700 and 800×5000 preferences, plus a failed screen query. The expanded
+suite reproduced 16 failures before the code fix and passes 4,621 checks after
+it with ASan/UBSan/LeakSanitizer enabled. Cross-build passed. Native QEMU at
+1024×768 opened both dialogs from a 5000×2700 preference and retained that
+preference after cancellation. [Review evidence](evidence/e05a/review-r1/README.md).
+The earlier P5 report predates R1; this correction awaits targeted P5 retesting
+and review.

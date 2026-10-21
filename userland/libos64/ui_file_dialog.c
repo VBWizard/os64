@@ -302,8 +302,8 @@ static bool file_size_parse(const char *text, uint32_t *width, uint32_t *height)
         if (*text < '0' || *text > '9') return false;
         while (*text >= '0' && *text <= '9') {
             size[i] = size[i] * 10 + (uint32_t)(*text++ - '0');
-            /* Bound arithmetic before native creation; FIT_SCREEN supplies
-             * the actual display limit, including its decorations. */
+            /* Bound arithmetic before native creation. Open clamps to the
+             * screen; FIT_SCREEN then accounts for its decorations. */
             if (size[i] > 32767) return false;
         }
         if (!size[i] || (i == 0 ? *text++ != ',' : *text != 0)) return false;
@@ -533,8 +533,16 @@ os64_ui_status_code_t os64_ui_file_dialog_open(os64_ui_file_dialog_t *d,
     char value[32];
     if (os64_conf_get("file-dialog.conf", "size", value, sizeof(value)) == 0)
         (void)file_size_parse(value, &width, &height);
-    /* Composition raises the native floor to the measured controls before
-     * the first paint. FIT_SCREEN still limits the initial allocation. */
+    /* The kernel checks its dimension ceiling before FIT_SCREEN. Bound the
+     * request first; FIT_SCREEN then subtracts the current frame's insets.
+     * Without screen info, the ABI ceiling is safe on supported displays.
+     * These opening adjustments must not overwrite the saved preference. */
+    uint32_t screen_width, screen_height;
+    if (os64_gui_screen_info(&screen_width, &screen_height) != 0)
+        screen_width = screen_height = OS64_GUI_WINDOW_DIM_MAX;
+    if (width > screen_width) width = screen_width;
+    if (height > screen_height) height = screen_height;
+    /* Composition raises the native floor to the measured controls. */
     if (width < OS64_GUI_MIN_CONTENT) width = OS64_GUI_MIN_CONTENT;
     if (height < OS64_GUI_MIN_CONTENT) height = OS64_GUI_MIN_CONTENT;
     d->window = os64_gui_window_create_content(title,x,y,width,height,OS64_GUI_CREATE_FIT_SCREEN);

@@ -21,7 +21,9 @@ based on `5fb5f7a6`. Implementation `5efff386` is in
 complete. Chris reported P5 acceptance at 2560 × 1440 with his Appearance
 Workshop appearance and Frame Studio composition: size sharing survived
 reopening and reboot; navigation and New Folder passed. No installed binary
-hash was captured. Independent review and merge remain pending. Parent-owned
+hash was captured. Review R1 fixes restored sizes exceeding the native creation ceiling after a
+display change; [details and evidence](E05A_DIALOG_POLISH.md#review-r1--saved-size-after-a-display-change).
+The correction awaits review and targeted P5 retesting; merge remains pending. Parent-owned
 stacking is a separate window-manager task; Chris's observation about the
 inherited Pin button is recorded in the E5A follow-up notes.
 Scribe is the first app consumer; Yonder remains part of the Modern Web work.

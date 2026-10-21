@@ -982,3 +982,20 @@ controls global pinned stacking. Parent-owned stacking is not implemented.
 Omitting independent Pin as part of that ownership policy is a proposed
 follow-up, not a code change in E5A. PR #322 remains open and draft; independent
 review and merge are separate from the P5 acceptance report.
+
+
+### E5A review R1 — restore after resolution changes
+
+Chris asked to address the review finding and noted that he switches the P5
+between 2560×1440, 1920×1080 and 1024×768. The kernel checks its dimension
+ceiling before FIT_SCREEN; the original host stub missed that guard ordering.
+Quinn first reproduced failures with a corrected stub, then clamped the
+requested size against screen info before creation, with the documented ABI
+bound as the query-failure fallback. The saved preference is preserved.
+The expanded Open/Save/display matrix passes 4,621 sanitizer checks, including
+LeakSanitizer, and the cross-build passes. The previous P5 acceptance report
+predates this correction; review and targeted hardware retesting remain open.
+
+Native R1 verification at 1024×768 opened both dialogs with a saved
+5000×2700 preference. Their frames fitted the display, and cancellation
+preserved the original config pair. The bundle was refreshed.
