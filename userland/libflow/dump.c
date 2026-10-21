@@ -392,6 +392,12 @@ static void element(Buf *b, const FStyles *styles, const os64_html_node_t *n,
         }
     if (s->box_sizing == FLOW_BORDER_BOX)
         puts_(b, " border-box");
+    if (s->aspect_ratio > 0) {
+        // To three places: the ratio is a double, and a dump is text.
+        int64_t milli = (int64_t)(s->aspect_ratio * 1000 + 0.5);
+        putf(b, " aspect-ratio=%s%lld.%03lld", s->aspect_natural ? "auto/" : "",
+             (long long)(milli / 1000), (long long)(milli % 1000));
+    }
     static const char *const kOverflow[] = {"visible", "hidden", "clip", "scroll", "auto"};
     if (s->overflow_x != FLOW_OVERFLOW_VISIBLE || s->overflow_y != FLOW_OVERFLOW_VISIBLE)
         putf(b, " overflow=%s/%s", kOverflow[s->overflow_x], kOverflow[s->overflow_y]);

@@ -286,6 +286,86 @@ static void batch_a_cases(void)
         "        text \"x\" 0 28 8 16 serif 16\n");
     outline_door_cases();
 
+    // ── aspect-ratio (CSS Sizing 4 § 4) ──
+
+    // Kept as width over height, to three places in the dump; `auto`
+    // beside it is shown; a degenerate ratio is none.
+    cascade_case("aspect-ratio: its ratio, auto beside it, a degenerate one none", 800,
+        "<!doctype html><style>div { aspect-ratio: 16 / 9 } p { aspect-ratio: 2 auto }"
+        " span { aspect-ratio: 0 / 1 } b { aspect-ratio: 1 / 0 }</style>"
+        "<div><p>a<span>b</span><b>c</b></p></div>",
+        PAGE_OPEN
+        "  body block margin=8/8/8/8 holds-block\n"
+        "    div block aspect-ratio=1.778 holds-block\n"
+        "      p block margin=16/0/16/0 aspect-ratio=auto/2.000\n"
+        "        span inline\n"
+        "        b inline weight=700\n");
+    // Blocks, 16px text 20 a line. a: 100 wide, 2 to 1: 50. b: 50 high,
+    // 16/9 across, 88.9, drawn 89. c: 40 wide at 4 is 10, but its two
+    // lines are 40: min-height auto holds it to its content (§ 4.3). d
+    // scrolls and e has a min-height of its own, so neither grows: 10. f:
+    // border-box, the ratio its border box's, 100 by 50 with 10 of padding
+    // round a 30 content. g: `auto 2` is the content box's, 80 by 40, 60
+    // with its padding.
+    cascade_layout_case("aspect-ratio: a block's height from its width, or its width from its height",
+        "<!doctype html><style>body { margin: 0 } p { margin: 0 }"
+        " .a { width: 100px; aspect-ratio: 2 } .b { height: 50px; aspect-ratio: 16 / 9 }"
+        " .c { width: 40px; aspect-ratio: 4 } .d { width: 40px; aspect-ratio: 4; overflow: hidden }"
+        " .e { width: 40px; aspect-ratio: 4; min-height: 0 }"
+        " .f { width: 100px; padding: 10px; box-sizing: border-box; aspect-ratio: 2 }"
+        " .g { width: 100px; padding: 10px; box-sizing: border-box; aspect-ratio: auto 2 }</style>"
+        "<div class=a></div><div class=b></div><div class=c>ab cd ef</div>"
+        "<div class=d>ab cd ef</div><div class=e>ab cd ef</div><div class=f></div>"
+        "<div class=g></div>", 200,
+        "page 200 270\n"
+        "block html 0 0 200 270\n"
+        "  block body 0 0 200 270\n"
+        "    block div 0 0 100 50\n"
+        "    block div 0 50 89 50\n"
+        "    block div 0 100 40 40\n"
+        "      line 0 100 40 20 base 14\n"
+        "        text \"ab cd\" 0 102 36 16 serif 16\n"
+        "      line 0 120 40 20 base 14\n"
+        "        text \"ef\" 0 122 12 16 serif 16\n"
+        "    block div 0 140 40 10 scroller 0 range 0 30\n"
+        "      line 0 140 40 20 base 14 clip 0 140 40 10\n"
+        "        text \"ab cd\" 0 142 36 16 serif 16 clip 0 140 40 10\n"
+        "      line 0 160 40 20 base 14 clip 0 140 40 10\n"
+        "        text \"ef\" 0 162 12 16 serif 16 clip 0 140 40 10\n"
+        "    block div 0 150 40 10\n"
+        "      line 0 150 40 20 base 14\n"
+        "        text \"ab cd\" 0 152 36 16 serif 16\n"
+        "      line 0 170 40 20 base 14\n"
+        "        text \"ef\" 0 172 12 16 serif 16\n"
+        "    block div 0 160 100 50\n"
+        "    block div 0 210 100 60\n");
+    // Pictures (the test oracle's known.png is 40 x 30): a ratio alone is
+    // the page's, 80 by 80; `auto 1` keeps the picture's own 4 to 3, 80 by
+    // 60; one not known at 2 to 1 is 80 by 40, not guessed square. An
+    // inline-block 20 high at 3 is 60 wide. A box with a ratio is not
+    // auto-high for margins: the two 10s meet between the divs, never
+    // through one (the p's 16 above wins over 10).
+    cascade_layout_case("aspect-ratio: pictures, an inline-block, margins",
+        "<!doctype html><style>body { margin: 0 } img { display: block }"
+        " .p { width: 80px; aspect-ratio: 1 } .q { width: 80px; aspect-ratio: auto 1 }"
+        " .r { width: 80px; aspect-ratio: 2 } span { display: inline-block; height: 20px;"
+        " aspect-ratio: 3 } div.m { margin: 10px 0; aspect-ratio: 10 }</style>"
+        "<img class=p src=known.png><img class=q src=known.png><img class=r src=missing.png>"
+        "<p>x<span></span></p><div class=m></div><div class=m></div>", 200,
+        "page 200 298\n"
+        "block html 0 0 200 298\n"
+        "  block body 0 0 200 288\n"
+        "    replaced img 0 0 80 80\n"
+        "    replaced img 0 80 80 60\n"
+        "    replaced img 0 140 80 40\n"
+        "    block p 0 196 200 26\n"
+        "      line 0 196 200 26 base 20\n"
+        "        text \"x\" 0 204 8 16 serif 16\n"
+        "        atomic span 8 196 60 20\n"
+        "          block span 8 196 60 20\n"
+        "    block div 0 238 200 20\n"
+        "    block div 0 268 200 20\n");
+
     // ── text-overflow (CSS Overflow 4 § 4.1) ──
 
     // Not inherited; the line is laid out as it would be, past its block:
@@ -365,6 +445,13 @@ static void batch_a_cases(void)
         PAGE_OPEN
         "  body block margin=8/8/8/8 holds-block\n"
         "    div block\n");
+    cascade_layout_case("aspect-ratio: unknown with the Modern Web switch off",
+        "<!doctype html><style>body { margin: 0 } div { width: 100px; aspect-ratio: 2 }</style>"
+        "<div></div>", 200,
+        "page 200 0\n"
+        "block html 0 0 200 0\n"
+        "  block body 0 0 200 0\n"
+        "    block div 0 0 100 0\n");
     cascade_case("letter-spacing: unknown with the Modern Web switch off", 800,
         "<!doctype html><style>div { letter-spacing: 3px }</style><div>a</div>",
         PAGE_OPEN

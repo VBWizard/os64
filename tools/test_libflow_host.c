@@ -1539,6 +1539,14 @@ int main(int argc, char **argv)
         ".i{position:relative;top:4px} .a{position:absolute;bottom:0;right:0}"
         ".s{grid-column:span 2}</style><div class=g><p>one<p class=i>two<span class=a>x</span>"
         "<p class=s>three<p>four</div>", 300);
+    // Slice 4's properties: cut words, spacing, ratios, an ellipsis made.
+    layout_relation_sweep("a page of CSS batch A",
+        "<!doctype html><style>.w{width:40px;word-break:break-all;letter-spacing:1px}"
+        ".o{width:40px;overflow-wrap:anywhere;outline:1px solid;outline-offset:2px}"
+        ".r{width:80px;aspect-ratio:2} .t{width:40px;overflow:hidden;white-space:nowrap;"
+        "text-overflow:ellipsis} img{width:30px;aspect-ratio:1;object-fit:cover}</style>"
+        "<div class=w>abcdefghij klmnop</div><div class=o>ab abcdefghijkl</div>"
+        "<div class=r>x</div><div class=t>abcdefghij</div><img src=known.png>", 300);
     // A tall first cell in a table the failure stops: its lines, not
     // placed, must not reach the page's edges.
     layout_relation_sweep("a tall cell in a table that stops",

@@ -1933,6 +1933,10 @@ static void take(Spec *dst, const Spec *src, garb_prop_t prop)
     case GARB_OUTLINE_OFFSET: dst->outline_offset = src->outline_offset; break;
     case GARB_OBJECT_FIT: d->object_fit = s->object_fit; break;
     case GARB_TEXT_OVERFLOW: d->text_overflow = s->text_overflow; break;
+    case GARB_ASPECT_RATIO:
+        d->aspect_ratio = s->aspect_ratio;
+        d->aspect_natural = s->aspect_natural;
+        break;
     case GARB_OBJECT_POSITION:
         dst->object_position[0] = src->object_position[0];
         dst->object_position[1] = src->object_position[1];
@@ -3263,6 +3267,17 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
             s->outline_color = colour_of(v->color);
         break;
     case GARB_OUTLINE_OFFSET: author_len(a, v, false, &sp->outline_offset); break;
+    case GARB_ASPECT_RATIO:
+        // A degenerate ratio is `auto` (Sizing 4 § 4.1); one past what a
+        // layout could use either way is held where a length is.
+        s->aspect_ratio = 0;
+        s->aspect_natural = v->kind != GARB_V_RATIO || v->keyword != NULL;
+        if (v->kind == GARB_V_RATIO && v->nitems == 2 && v->items[0].number > 0 &&
+            v->items[1].number > 0) {
+            double r = v->items[0].number / v->items[1].number;
+            s->aspect_ratio = r > F_INT_MAX ? F_INT_MAX : r < 1.0 / F_INT_MAX ? 1.0 / F_INT_MAX : r;
+        }
+        break;
     case GARB_TEXT_OVERFLOW:
         s->text_overflow = is_word(v, "ellipsis") ? FLOW_TEXT_OVERFLOW_ELLIPSIS
                                                   : FLOW_TEXT_OVERFLOW_CLIP;

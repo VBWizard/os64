@@ -175,6 +175,35 @@ static int64_t clamp_height(const flow_style_t *s, int64_t h, int64_t frame)
     return h;
 }
 
+// ── Preferred aspect ratios (CSS Sizing 4 § 4) ──────────────────────────
+//
+// A box with a ratio (flow_style_t.aspect_ratio) and one of its width and
+// height left to it takes that one from the other, measured on its content
+// box, or on its border box where box-sizing says so and `auto` was not
+// written beside the ratio (§ 4.1). The two below answer CONTENT sizes
+// from a content size, `hf` and `vf` being the box's frames across and
+// down, held where a length is.
+static int64_t ratio_size(const flow_style_t *s, int64_t from, int64_t from_frame,
+                          int64_t to_frame, bool down)
+{
+    bool border = s->box_sizing == FLOW_BORDER_BOX && !s->aspect_natural;
+    double given = (double)(border ? from + from_frame : from);
+    double size = down ? given / s->aspect_ratio : given * s->aspect_ratio;
+    double most = (double)F_INT_MAX * FLOW_UNITS_PER_PX;
+    int64_t n = size >= most ? (int64_t)most : (int64_t)(size + 0.5);
+    return max64(0, border ? n - to_frame : n);
+}
+
+static int64_t ratio_height(const flow_style_t *s, int64_t w, int64_t hf, int64_t vf)
+{
+    return ratio_size(s, w, hf, vf, true);
+}
+
+static int64_t ratio_width(const flow_style_t *s, int64_t h, int64_t hf, int64_t vf)
+{
+    return ratio_size(s, h, vf, hf, false);
+}
+
 static void fail(L *l)
 {
     l->failed = true;
@@ -420,19 +449,22 @@ static Replaced replaced_size(L *l, const os64_html_node_t *node, const flow_sty
     bool known = l->env->replaced_size != NULL &&
                  l->env->replaced_size(l->env->ctx, node, &iw, &ih) && iw >= 0 && ih >= 0;
     int64_t kw = f_css_units(l->env, iw), kh = f_css_units(l->env, ih);
+    // The page's ratio (Sizing 4 § 4.1) stands in for the picture's own,
+    // unless it said `auto` beside it and the picture has one.
+    bool ratio = s->aspect_ratio > 0 && !(s->aspect_natural && known && kw > 0 && kh > 0);
     if (known) {
         if (w_set && h_set) {
             r.w = w;
             r.h = h;
         } else if (w_set) {
             r.w = w;
-            r.h = kw > 0 ? mul_div(w, kh, kw) : kh;
+            r.h = ratio ? ratio_height(s, w, fw, fh) : kw > 0 ? mul_div(w, kh, kw) : kh;
         } else if (h_set) {
             r.h = h;
-            r.w = kh > 0 ? mul_div(h, kw, kh) : kw;
+            r.w = ratio ? ratio_width(s, h, fw, fh) : kh > 0 ? mul_div(h, kw, kh) : kw;
         } else {
             r.w = kw;
-            r.h = kh;
+            r.h = ratio ? ratio_height(s, kw, fw, fh) : kh;
         }
         // §10.4's limits, the picture's own ratio kept in whichever
         // dimension the page left to it (`img { max-width: 100% }`). The
@@ -457,8 +489,8 @@ static Replaced replaced_size(L *l, const os64_html_node_t *node, const flow_sty
     // default on the side the page left unset (a frame's 300 by 150).
     bool img = node->ns == OS64_HTML_NS_HTML && node->tag == OS64_HTML_TAG_IMG;
     if (img && (w_set || h_set)) {
-        r.w = w_set ? w : h;
-        r.h = h_set ? h : w;
+        r.w = w_set ? w : ratio ? ratio_width(s, h, fw, fh) : h;
+        r.h = h_set ? h : ratio ? ratio_height(s, w, fw, fh) : w;
         return r;
     }
     if (img) {
@@ -487,6 +519,10 @@ static Replaced replaced_size(L *l, const os64_html_node_t *node, const flow_sty
         r.w = w;
     if (h_set)
         r.h = h;
+    if (ratio && h_set && !w_set)
+        r.w = ratio_width(s, h, fw, fh);
+    else if (ratio && !h_set)
+        r.h = ratio_height(s, r.w, fw, fh);
     return r;
 }
 
@@ -1012,6 +1048,9 @@ static void segments(L *l, FBox *ifc, int64_t cw, Segs *s)
                     r.w = room;
                 } else if (width_given(st)) {
                     r.w = content_of(st, st->width, cw, fw);
+                } else if (st->aspect_ratio > 0 && height_given(st)) {
+                    // Its height and its ratio give its width (Sizing 4 § 4.1).
+                    r.w = ratio_width(st, content_of(st, st->height, 0, fh), fw, fh);
                 } else {
                     // intrinsic() answers border-box widths with the frame's
                     // percentages at 0 (the containing block is not known
@@ -5062,6 +5101,13 @@ static void block_at(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t 
         if (b->kind == FB_REPLACED && !height_given(s))
             rep.h = replaced_for(l, b, 0, b->flex_w, cbw);
     }
+    // A width left to it and a height given: the ratio gives the width
+    // (Sizing 4 § 4.1), held to its limits.
+    if (forced_w < 0 && b->kind != FB_REPLACED && s->aspect_ratio > 0 &&
+        s->width.kind == FLOW_LENGTH_AUTO && height_given(s) && !b->abs_h_set) {
+        int64_t hf = hframe(b, cbw), vf = vframe(b, cbw);
+        forced_w = clamp_width(s, ratio_width(s, content_of(s, s->height, 0, vf), hf, vf), cbw, hf);
+    }
     int64_t mt = len(s->margin[FLOW_TOP], cbw), mb = len(s->margin[FLOW_BOTTOM], cbw);
     clearance(l, b, cur, mt);
     if (avoids_floats(b) && (l->space != NULL && (l->space->any || l->space->nwait > 0))) {
@@ -5091,8 +5137,14 @@ static void block_at(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t 
     // margins meet each other, only across a height of auto and a
     // min-height of zero.
     bool min_height = s->min_height.kind == FLOW_LENGTH_PX && s->min_height.value > 0;
-    bool bottom_open = !root && height_auto && !min_height && b->border[FLOW_BOTTOM] == 0 &&
-                       b->padding[FLOW_BOTTOM] == 0;
+    // A height left to it that its ratio gives from its width (Sizing 4 §
+    // 4.1): not auto for a margin to collapse through, and at least its
+    // content's where min-height is auto and the box does not scroll — the
+    // automatic minimum of § 4.3, its min-content height held by its
+    // maximum, which clamp_height applies after.
+    bool by_ratio = height_auto && s->aspect_ratio > 0 && b->kind != FB_REPLACED && !b->flex_sized;
+    bool bottom_open = !root && height_auto && !by_ratio && !min_height &&
+                       b->border[FLOW_BOTTOM] == 0 && b->padding[FLOW_BOTTOM] == 0;
     int64_t vframe_px = b->border[FLOW_TOP] + b->padding[FLOW_TOP] + b->padding[FLOW_BOTTOM] +
                         b->border[FLOW_BOTTOM];
 
@@ -5240,6 +5292,12 @@ static void block_at(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t 
         if (floats_end != INT64_MIN)
             content_h = max64(content_h, floats_end - content_top);
         pm_out = margin_of(mb);
+    }
+    if (by_ratio) {
+        int64_t want = ratio_height(s, cw, b->w - cw, vframe_px);
+        bool scrolls = s->overflow_y != FLOW_OVERFLOW_VISIBLE && s->overflow_y != FLOW_OVERFLOW_CLIP;
+        content_h = s->min_height.kind == FLOW_LENGTH_AUTO && !scrolls ? max64(want, content_h)
+                                                                       : want;
     }
     // Content taller than a max-height is drawn past it.
     content_h = clamp_height(s, max64(0, content_h), vframe_px);

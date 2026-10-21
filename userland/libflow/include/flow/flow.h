@@ -677,6 +677,15 @@ typedef struct {
     // Whether width, height and their limits measure the content box or
     // the border box (CSS Sizing 3 § 4.1).
     flow_box_sizing_t box_sizing;
+    // `aspect-ratio` (CSS Sizing 4 § 4.1), not inherited: the ratio a box
+    // keeps between its width and its height when one of them is left to
+    // it, width over height, or 0 for none (`auto`, or a ratio of 0 or of
+    // nothing). `aspect_natural` says `auto` was written beside it: a
+    // replaced box with a ratio of its own keeps that instead, and the
+    // ratio is the content box's; without it the ratio is the box
+    // box-sizing names.
+    double aspect_ratio;
+    bool aspect_natural;
     // Computed as CSS Overflow 3 § 3 says: a visible or clip axis beside
     // one that scrolls or hides becomes auto or hidden.
     flow_overflow_t overflow_x, overflow_y;
