@@ -172,6 +172,7 @@ static void fixture_free(DomFixture *fixture)
     os64_page_state_free(fixture->state);
     os64_html_document_free(fixture->document);
     memset(fixture, 0, sizeof(*fixture));
+    if (live != 0 || dom_live != 0) fprintf(stderr, "teardown: live=%zu dom_live=%zu\n", live, dom_live);
     check(live == 0 && dom_live == 0 && !dom_allocations, "ordered teardown releases all native and engine storage");
 }
 static int dom_script(DomFixture *fixture, const char *source, const char *name)
@@ -179,7 +180,7 @@ static int dom_script(DomFixture *fixture, const char *source, const char *name)
     os64_js_outcome_t outcome;
     os64_js_status_t result = os64_js_run(fixture->runtime, source, strlen(source), name, &outcome);
     if (result != OS64_JS_OK)
-        fprintf(stderr, "DOM script %s: status=%d limit=%d message=%s\n", name, result, outcome.limit, outcome.message);
+        fprintf(stderr, "DOM script %s: status=%d limit=%d message=%s\n%s\n", name, result, outcome.limit, outcome.message, outcome.stack_trace);
     check(result == OS64_JS_OK, name);
     return result == OS64_JS_OK;
 }
@@ -216,6 +217,9 @@ static char *native_serialized(const os64_html_node_t *node)
 #include "test_dom_events.inc"
 #include "test_dom_classic.inc"
 #include "test_dom_modern.inc"
+#include "test_dom_storage.inc"
+#include "test_dom_text.inc"
+#include "test_dom_view.inc"
 #define GEOMETRY_ASSERT "function assert(x,m){if(!x)throw Error(m||'assertion');}" \
     "function throws(n,f){let ok=false;try{f()}catch(e){ok=e.name===n}assert(ok,n)}"
 
@@ -380,9 +384,17 @@ int main(int argc, char **argv)
     if(argc==2&&!strcmp(argv[1],"--reclaim")){dom_reclaim_cases();printf("DOM reclaim probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--clone")){dom_clone_control_cases();dom_clone_native_cases();dom_clone_state_cap_cases();dom_clone_character_data_cases();dom_clone_allocation_cases();printf("DOM clone probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--events")){dom_event_cases();printf("DOM events probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--modern")){dom_modern_cases();dom_storage_cases();dom_base64_cases();dom_encoding_cases();dom_screen_cases();dom_performance_cases();dom_url_cases();dom_storage_engine_cases();printf("DOM modern probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     bool mutation_mode=argc==2&&!strcmp(argv[1],"--mutants");
     dom_classic_cases();
     dom_modern_cases();
+    dom_storage_cases();
+    dom_base64_cases();
+    dom_encoding_cases();
+    dom_screen_cases();
+    dom_performance_cases();
+    dom_url_cases();
+    dom_storage_engine_cases();
     dom_geometry_cases();
     dom_global_miss_cases();
     dom_surface_cases();
