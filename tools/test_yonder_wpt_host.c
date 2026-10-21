@@ -37,9 +37,10 @@
  * sheet the page asks for whose address is under http://wpt.test/ is
  * answered from the checkout (a .py handler is not: nothing here runs
  * one), /resources/testharnessreport.js from --report (tools/wpt/'s, which
- * leaves the results in the tree), and everything else fails as a fetch
- * that did not arrive does. Pictures and fonts always fail. The bytes are
- * served as they are on disk, which WPT writes in UTF-8.
+ * leaves the results in the tree; read once, before any page, and a run
+ * without it cannot be judged), and everything else fails as a fetch that
+ * did not arrive does. Pictures and fonts always fail. The bytes are served
+ * as they are on disk, which WPT writes in UTF-8.
  *
  * THE CLOCK: the loop is turned until nothing is owed, then the window's
  * clock moves one 10 ms tick and it is turned again, up to a budget of 60 s
@@ -55,8 +56,9 @@
  * is a HARNESS line with its message, and that page FAILS WHOLE: none of
  * its tests is a pass, and one the harness said passed is a FAIL line that
  * says so. A page never run to a verdict (its source missing, past
- * WPT_FILE_MAX, or not read whole; its navigation never started) is an
- * UNJUDGED line, and the run cannot be judged (exit 2). Then the summary.
+ * WPT_FILE_MAX, or not read whole; a file it asked for in the checkout not
+ * read whole; its navigation never started) is an UNJUDGED line, and the
+ * run cannot be judged (exit 2). Then the summary.
  *
  * THE EXPECTATIONS (--expect) are three sections of `page<tab>...` lines,
  * `#` lines being comments (MODERN_WEB.md § The oracle):
@@ -74,20 +76,30 @@
  * they are, since they are written by hand; with --only it keeps the
  * [passing] lines of pages the substring does not select. The only thing
  * that may change the file is a page run to a verdict, so it writes last,
- * beside the file and renamed over it, and only for a run every page of
- * which was: an UNJUDGED page, or a fault in the window's fakes (the host's
- * check() failing, a page's or the teardown's), fails the run (exit 2)
- * whatever the results and leaves the file as it was. --fault fakes a
- * fault, for the selftest. */
+ * beside the file and renamed over it, and only for a run that ran a page
+ * and every page of which was: an UNJUDGED page, a run of no page at all,
+ * or a fault in the window's fakes (the host's check() failing, a page's or
+ * the teardown's), fails the run (exit 2) whatever the results and leaves
+ * the file as it was. --fault fakes a fault, for the selftest.
+ *
+ * WHAT CANNOT BE JUDGED AT ALL (exit 2 before any page runs): a --dir or a
+ * page that is absolute, climbs out with `..`, or has a name an
+ * expectation line cannot hold (a tab, a newline, a carriage return, a
+ * leading #); a page listed twice; a --pages line that is not as pages.py
+ * writes it; a directory the walk cannot list, or an entry in one it
+ * cannot look at; the report script or the checkout's testharness.js not
+ * read whole. */
 #define YONDER_HOST_FAKES_ONLY
 #include "test_yonder_scripts_host.c"
 
 #include <ctype.h>
 #include <errno.h>
 #include <dirent.h>
+#include <fcntl.h>
 #include <stdarg.h>
 #include <strings.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #define WPT_ORIGIN "http://wpt.test/"
 #define WPT_REPORT_PATH "resources/testharnessreport.js"
@@ -165,21 +177,29 @@ static void wpt_list_free(wpt_list_t *l) {
 }
 
 /* A whole file, NUL-terminated; NULL when it is not a regular file, is
- * past WPT_FILE_MAX, cannot be opened, or does not read whole (fewer bytes
- * than its size, or a read error). */
+ * past WPT_FILE_MAX, cannot be opened, or does not read whole (other than
+ * its size in bytes, or a read error). The file is judged by what was
+ * opened, not by its name looked up again, and the open does not wait, so
+ * a name that has become a pipe is refused rather than read forever. */
 static char *wpt_slurp(const char *path, size_t *len) {
+    int fd=open(path,O_RDONLY|O_NONBLOCK|O_CLOEXEC);
+    if(fd<0) return NULL;
     struct stat st;
-    if(stat(path,&st)!=0 || !S_ISREG(st.st_mode) || (uint64_t)st.st_size>WPT_FILE_MAX) return NULL;
-    FILE *f=fopen(path,"rb");
-    if(f==NULL) return NULL;
+    FILE *f=NULL;
+    if(fstat(fd,&st)!=0 || !S_ISREG(st.st_mode) || (uint64_t)st.st_size>WPT_FILE_MAX ||
+       (f=fdopen(fd,"rb"))==NULL) {
+        close(fd);
+        return NULL;
+    }
     size_t want=(size_t)st.st_size;
     char *bytes=wpt_must(malloc(want+1));
     size_t asked=want>0 && wpt_short_read!=NULL && !strcmp(path,wpt_short_read) ? want-1 : want;
     size_t got=fread(bytes,1,asked,f);
-    bool whole=got==want && !ferror(f);
+    bool whole=got==want && fgetc(f)==EOF && !ferror(f);
     fclose(f);
     /* A read that stopped short is no file at all: what it lost may be the
-     * part that mattered. */
+     * part that mattered. One that found more than the file's size is a
+     * file being written while it was read, and no better. */
     if(!whole) { free(bytes); return NULL; }
     bytes[got]='\0';
     *len=got;
@@ -189,6 +209,25 @@ static bool wpt_ends(const char *s, const char *tail) {
     size_t n=strlen(s), t=strlen(tail);
     return n>=t && strcmp(s+n-t,tail)==0;
 }
+/* Why `name`, a page's name or a path below the checkout, cannot be one;
+ * NULL when it can. An expectation line is a page's name and a tab, so a
+ * name holding a tab, a newline or a carriage return cannot be written
+ * down, and one that begins with # would be read back as a comment. A path
+ * is the checkout's only when it is relative and never climbs out. */
+static const char *wpt_bad_name(const char *name) {
+    if(name[0]=='\0') return "it is empty";
+    if(name[0]=='/') return "it is absolute";
+    if(name[0]=='#') return "it begins with #, which an expectation file reads as a comment";
+    if(strpbrk(name,"\t\n\r")!=NULL) return "it holds a tab, a newline or a carriage return";
+    size_t path=strcspn(name,"?");
+    for(size_t i=0;i<path;) {
+        size_t n=strcspn(name+i,"/?");
+        if(n==2 && name[i]=='.' && name[i+1]=='.') return "it climbs out of the checkout with ..";
+        i+=n+1;
+    }
+    return NULL;
+}
+
 /* `a/b`, or `b` when `a` is empty; malloc'd. */
 static char *wpt_join(const char *a, const char *b) { return a[0] ? wpt_fmt("%s/%s",a,b) : wpt_strdup(b); }
 
@@ -211,8 +250,10 @@ static void wpt_pages_free(void) {
 
 /* What tools/wpt/pages.py made of the manifest: its `run` lines as pages,
  * and its `skip` lines counted by their reason, into `skipped` as
- * `reason` strings, once per page. False when it cannot be read or a line
- * is not one of the two. */
+ * `reason` strings, once per page. False, having said why, when it cannot
+ * be read or a line is not one of the two as pages.py writes it: a source
+ * outside <dir> (the runner reads only the checkout), a kind or a timeout
+ * it does not name. */
 static bool wpt_read_pages(const char *path, wpt_list_t *skipped) {
     size_t len=0;
     char *text=wpt_slurp(path,&len);
@@ -230,6 +271,24 @@ static bool wpt_read_pages(const char *path, wpt_list_t *skipped) {
         if(n==3 && !strcmp(field[0],"skip")) {
             wpt_list_add(skipped,wpt_strdup(field[2]));
         } else if(n==5 && !strcmp(field[0],"run")) {
+            size_t dn=strlen(wpt_dir);
+            const char *bad=wpt_bad_name(field[2]);
+            if(bad==NULL && (strncmp(field[2],wpt_dir,dn)!=0 || field[2][dn]!='/'))
+                bad="it is not under the directory";
+            if(bad!=NULL) {
+                fprintf(stderr,"wpt: %s: the source of %s, %s: %s\n",path,field[1],field[2],bad);
+                ok=false;
+                continue;
+            }
+            if(strcmp(field[3],"html") && strcmp(field[3],"any") && strcmp(field[3],"window"))
+                bad="its kind is none of html, any and window";
+            else if(strcmp(field[4],"long") && strcmp(field[4],"normal"))
+                bad="its timeout is neither long nor normal";
+            if(bad!=NULL) {
+                fprintf(stderr,"wpt: %s: the page %s: %s\n",path,field[1],bad);
+                ok=false;
+                continue;
+            }
             wpt_kind_t kind=!strcmp(field[3],"any") ? WPT_ANY : !strcmp(field[3],"window") ? WPT_WINDOW : WPT_HTML;
             char *source=wpt_join(wpt_root,field[2]);
             wpt_page_add(wpt_strdup(field[1]),source,field[2],kind,!strcmp(field[4],"long"));
@@ -433,9 +492,18 @@ static bool wpt_walk(const char *path, const char *rel) {
 
 // ── Serving the page and what it asks for ─────────────────────────────────
 
+/* The report script, read once before any page runs. */
+static char *wpt_report_bytes;
+static size_t wpt_report_len;
+/* A file the page under way asked for is in the checkout and did not read
+ * whole. The page saw a fetch fail that a server would have answered, so
+ * what it reported is not its verdict, and its run is UNJUDGED. */
+static bool wpt_serve_broken;
+
 /* What an address serves, malloc'd with its length: a file of the
  * checkout, or the report script this runner serves in place of the
- * suite's; NULL for anything this runner does not serve. */
+ * suite's; NULL for anything this runner does not serve, and for a file
+ * that is there and does not read whole, which sets wpt_serve_broken. */
 static char *wpt_serve(const char *url, size_t *len) {
     size_t o=strlen(WPT_ORIGIN);
     if(strncmp(url,WPT_ORIGIN,o)!=0) return NULL;
@@ -456,10 +524,19 @@ static char *wpt_serve(const char *url, size_t *len) {
     if(!strcmp(path,"..") || !strncmp(path,"../",3) || strstr(path,"/../")!=NULL ||
        wpt_ends(path,"/..") || wpt_ends(path,".py")) {
     } else if(!strcmp(path,WPT_REPORT_PATH)) {
-        bytes=wpt_slurp(wpt_report,len);
+        bytes=wpt_must(malloc(wpt_report_len+1));
+        memcpy(bytes,wpt_report_bytes,wpt_report_len+1);
+        *len=wpt_report_len;
     } else {
+        /* What is not there, or is not a file, fails as a fetch a server
+         * would refuse. */
         char *file=wpt_join(wpt_root,path);
-        bytes=wpt_slurp(file,len);
+        struct stat st;
+        if(stat(file,&st)==0 ? S_ISREG(st.st_mode)
+                             : !(errno==ENOENT || errno==ENOTDIR || errno==ENAMETOOLONG)) {
+            bytes=wpt_slurp(file,len);
+            if(bytes==NULL) wpt_serve_broken=true;
+        }
         free(file);
     }
     free(path);
@@ -594,8 +671,8 @@ static char *wpt_wrapper(const wpt_page_t *page, bool *long_timeout) {
 
 /* A page's outcome: its result lines when it reported; why it did not when
  * it ran and did not; and `unjudged` when it was never run to a verdict at
- * all (its source could not be read, the window would not start it), which
- * is the run's failure and not the page's. */
+ * all (its source, or a file it asked for, could not be read; the window
+ * would not start it), which is the run's failure and not the page's. */
 typedef struct { wpt_list_t lines; bool reported, unjudged; const char *why; } wpt_outcome_t;
 
 /* The results element's text, if the page has one: its text children
@@ -632,6 +709,7 @@ static void wpt_run(const wpt_page_t *page, wpt_outcome_t *out) {
     if(page->kind==WPT_HTML) long_timeout=wpt_html_meta(html,len,"timeout","long",NULL);
     if(page->long_timeout>=0) long_timeout=page->long_timeout;
     char *url=wpt_fmt("%s%s/%s",WPT_ORIGIN,wpt_dir,page->name);
+    wpt_serve_broken=false;
     stream_window();
     g.scripts_on=true; g.script_ms=5000; now_ms=100; clock_step=1000;
     g.modern=!wpt_modern_off;
@@ -678,6 +756,12 @@ static void wpt_run(const wpt_page_t *page, wpt_outcome_t *out) {
     check(nscript_jobs==0,"wpt: every script fetch was answered or cancelled");
     nscript_jobs=0;
     clock_step=0;
+    if(wpt_serve_broken) {
+        wpt_list_free(&out->lines);
+        out->reported=false;
+        out->unjudged=true;
+        out->why="a file it asked for is in the checkout and did not read whole";
+    }
 }
 
 // ── The expectation file ──────────────────────────────────────────────────
@@ -779,7 +863,9 @@ static int wpt_update(const char *expect, const wpt_expect_t *e, const wpt_list_
      * the diff of every expectation written against it. */
     char *head_path=wpt_join(wpt_root,".git/HEAD"), *head=wpt_slurp(head_path,&(size_t){0});
     size_t hex=head!=NULL ? strspn(head,"0123456789abcdef") : 0;
-    char *temp=wpt_fmt("%s.new",expect);
+    /* Written beside it under this run's own name and renamed over it: a
+     * failure on the way leaves the file as it was and no temp behind. */
+    char *temp=wpt_fmt("%s.%ld.new",expect,(long)getpid());
     FILE *f=fopen(temp,"w");
     int rc=0;
     if(f==NULL) {
@@ -796,12 +882,39 @@ static int wpt_update(const char *expect, const wpt_expect_t *e, const wpt_list_
         for(size_t i=0;i<e->excluded_text.n;i++) fprintf(f,"%s\n",e->excluded_text.v[i]);
         fprintf(f,"[passing]\n");
         for(size_t i=0;i<kept.n;i++) fprintf(f,"%s\n",kept.v[i]);
-        if(fclose(f)!=0 || rename(temp,expect)!=0) { fprintf(stderr,"wpt: cannot write %s\n",expect); rc=2; }
+        bool whole=!ferror(f);
+        if(fclose(f)!=0) whole=false;
+        if(!whole || rename(temp,expect)!=0) {
+            fprintf(stderr,"wpt: cannot write %s\n",expect);
+            unlink(temp);
+            rc=2;
+        }
         else printf("wpt: %s lists %zu passes\n",expect,kept.n);
     }
     free(temp); free(head); free(head_path);
     wpt_list_free(&kept);
     return rc;
+}
+
+/* Whether every page found can be run and written down: each name one an
+ * expectation line can hold, each source the checkout's, and no page twice
+ * (two runs of one name would be judged as one). Says why when not. */
+static bool wpt_pages_sound(void) {
+    bool ok=true;
+    for(size_t i=0;i<wpt_npages;i++) {
+        const char *bad=wpt_bad_name(wpt_pages[i].name);
+        if(bad==NULL) bad=wpt_bad_name(wpt_pages[i].rel);
+        if(bad!=NULL) { fprintf(stderr,"wpt: the page %s cannot be run: %s\n",wpt_pages[i].name,bad); ok=false; }
+    }
+    if(wpt_npages<2) return ok;
+    const char **names=wpt_must(malloc(wpt_npages*sizeof(*names)));
+    for(size_t i=0;i<wpt_npages;i++) names[i]=wpt_pages[i].name;
+    qsort(names,wpt_npages,sizeof(*names),wpt_cmp);
+    for(size_t i=1;i<wpt_npages;i++)
+        if(!strcmp(names[i],names[i-1]) && (i<2 || strcmp(names[i],names[i-2])))
+            { fprintf(stderr,"wpt: the page %s is listed more than once\n",names[i]); ok=false; }
+    free(names);
+    return ok;
 }
 
 static int wpt_usage(void) {
@@ -832,6 +945,20 @@ int main(int argc, char **argv) {
         fprintf(stderr,"wpt: --update writes the switch on's baseline, and --modern-off turns it off\n");
         return 2;
     }
+    if(wpt_bad_name(wpt_dir)!=NULL) {
+        fprintf(stderr,"wpt: the directory %s: %s\n",wpt_dir,wpt_bad_name(wpt_dir));
+        return 2;
+    }
+    /* Every page needs the harness and the report; without either, every
+     * page would time out, and that is the checkout's failure, not theirs. */
+    wpt_report_bytes=wpt_slurp(wpt_report,&wpt_report_len);
+    char *harness_path=wpt_join(wpt_root,"resources/testharness.js");
+    size_t harness_len=0;
+    char *harness=wpt_slurp(harness_path,&harness_len);
+    bool served=wpt_report_bytes!=NULL && harness!=NULL;
+    if(!served) fprintf(stderr,"wpt: %s cannot be read whole\n",harness==NULL ? harness_path : wpt_report);
+    free(harness); free(harness_path);
+    if(!served) { free(wpt_report_bytes); return 2; }
     char *top=wpt_join(wpt_root,wpt_dir);
     struct stat st;
     if(stat(top,&st)!=0 || !S_ISDIR(st.st_mode)) {
@@ -843,6 +970,7 @@ int main(int argc, char **argv) {
     bool found=true;
     if(pages!=NULL) found=wpt_read_pages(pages,&skipped);
     else found=wpt_walk(top,"");
+    found=found && wpt_pages_sound();
     free(top);
     wpt_expect_t e;
     bool judged=found && wpt_expect_read(expect,&e);
@@ -856,7 +984,18 @@ int main(int argc, char **argv) {
         if(found) wpt_expect_free(&e);
         wpt_pages_free();
         wpt_list_free(&skipped);
+        free(wpt_report_bytes);
         return 2;
+    }
+    /* An exclusion naming no page found is said, not refused: the page it
+     * meant runs and is judged, so it hides nothing; it is a line to mend. */
+    for(size_t i=0;i<e.excluded.n;i++) {
+        if(!wpt_selected(e.excluded.v[i],only)) continue;
+        size_t n=strcspn(e.excluded.v[i],"\t");
+        bool there=false;
+        for(size_t k=0;!there && k<wpt_npages;k++)
+            there=strlen(wpt_pages[k].name)==n && !strncmp(wpt_pages[k].name,e.excluded.v[i],n);
+        if(!there) fprintf(stderr,"wpt: %s excludes %.*s, which is not among the pages\n",expect,(int)n,e.excluded.v[i]);
     }
     os64_text_options_t options={.memory={.alloc=probe_alloc,.free=probe_free},
         .backend=flow_test_backend(),.memory_cap=8*1024*1024};
@@ -960,21 +1099,28 @@ int main(int argc, char **argv) {
     if(wpt_fault) check(false,"wpt: the fault --fault asked for");
     wpt_list_free(&skipped);
     wpt_pages_free();
+    free(wpt_report_bytes);
     os64_text_font_release(probe_font);
     check(os64_text_destroy(probe_text)==OS64_FONT_OK,"all layout text released");
     check(live==0,"native and engine heap is empty");
     /* Written last, and only by a run that can be judged, since the only
      * thing that may change the file is a page run to a verdict: a fault
      * anywhere, a page's or the teardown's, or a page never run (its source
-     * unreadable, its navigation never started), leaves the expectations as
-     * they were, and the run cannot be judged (exit 2). */
+     * or a file it asked for unreadable, its navigation never started),
+     * leaves the expectations as they were, and the run cannot be judged
+     * (exit 2). */
     if(unjudged!=0)
         fprintf(stderr,"wpt: %u pages were never run to a verdict%s\n",unjudged,
             update ? "; the expectations are not rewritten" : "");
     if(failures!=0)
         fprintf(stderr,"wpt: %u faults in the window's fakes%s\n",failures,
             update ? "; the expectations are not rewritten" : "");
-    if(failures!=0 || unjudged!=0) {
+    /* A run of no page judges nothing (an --only that selects none, every
+     * page excluded, a directory with no tests), and --update from it would
+     * be a baseline of nothing. */
+    if(ran==0)
+        fprintf(stderr,"wpt: no page was run%s\n",update ? "; the expectations are not rewritten" : "");
+    if(failures!=0 || unjudged!=0 || ran==0) {
         rc=2;
     } else if(update) {
         int written=wpt_update(expect,&e,&passes,only);

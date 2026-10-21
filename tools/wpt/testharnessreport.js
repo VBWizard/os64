@@ -8,8 +8,8 @@
  * line for the harness (`HARNESS`, its status, its message) and one per
  * test (its status, its name, its message), tab-separated, and the runner
  * reads that element out of the tree once the loop settles. A backslash,
- * tab, carriage return or newline in a name or a message is written \\,
- * \t, \r or \n, so a line is always one test.
+ * tab, carriage return, newline or NUL in a name or a message is written
+ * \\, \t, \r, \n or \0, so a line is always one test, and all of it.
  *
  * The harness's own output is off: it builds its table of results with
  * parts of the DOM a page under test may be the first to need, and the
@@ -22,7 +22,7 @@ add_completion_callback(function (tests, harness_status) {
     function one_line(text) {
         return String(text === undefined || text === null ? "" : text)
             .replace(/\\/g, "\\\\").replace(/\t/g, "\\t")
-            .replace(/\r/g, "\\r").replace(/\n/g, "\\n");
+            .replace(/\r/g, "\\r").replace(/\n/g, "\\n").replace(/\0/g, "\\0");
     }
     var lines = ["HARNESS\t" + harness_names[harness_status.status] + "\t" +
                  one_line(harness_status.message)];

@@ -1139,10 +1139,17 @@ written by hand, which is the point of them. Only a page run to a verdict
 may change the file, so it writes last, and not at all for a run that
 cannot be judged (exit 2): one with a fault in the window's fakes, one with
 a page never run (an UNJUDGED line: its source missing, too large or not
-read whole, its navigation never started; listed so whether the manifest
-or the file names found it), and one whose expectation file exists and
-cannot be read whole (a file that does not exist is three empty
-sections). A slice commits its
+read whole, a file it asked for in the checkout not read whole, its
+navigation never started; listed so whether the manifest or the file names
+found it), one that ran no page at all (an `--only` that selects none), and
+one whose expectation file exists and cannot be read whole (a file that
+does not exist is three empty sections). Nothing runs at all, also exit 2,
+when what was found cannot be trusted or written down: a directory or page
+outside the checkout (absolute, or climbing out with `..`), a page name an
+expectation line cannot hold (a tab, a newline, a carriage return, a
+leading `#`), a page listed twice, a `--pages` line not as `pages.py`
+writes it, a directory the walk cannot list, or the report script or the
+checkout's `testharness.js` not read whole. A slice commits its
 directory's file BEFORE its code, so the diff of that file is the proof.
 **A page whose harness did not end OK fails whole**: none of its tests is a
 pass, whatever the harness said of each, so a page that errored halfway
@@ -1180,7 +1187,8 @@ lines, a `.window.js`, an excluded page, what is served and what is
 refused, and the files that must not be run at all — found by file name and
 again through a fixture manifest, and holds the output to
 `tools/wpt/selftest.out` line for line both ways; then holds the three
-sections, `--expect` and `--update` to what they promise. Run it after
+sections, `--expect`, `--update` and each refusal above to what they
+promise. Run it after
 touching the runner, `pages.py`, the fakes it borrows, or the report
 script.
 

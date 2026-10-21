@@ -16,8 +16,12 @@ included), `source` the file it comes from relative to the checkout,
 `kind` html, any or window, and `timeout` long or normal. A page the runner
 cannot load in a window is a `skip <tab> page <tab> reason` line instead: a
 worker or shadow-realm variant (there are no workers), and an XML document
-(.xhtml, .xht, .svg, .xml: yonder parses HTML). Standard library only, and
-safe under python3 -I: it reads the files it is handed and writes stdout.
+(.xhtml, .xht, .svg, .xml: yonder parses HTML). An entry that cannot be
+written as a line, or that names a file outside <dir> (a tab, a newline or
+a carriage return in it; absolute; a `..` in its path), stops it with
+nothing written and a nonzero exit, since the manifest is input it did not
+make. Standard library only, and safe under python3 -I: it reads the files
+it is handed and writes stdout.
 """
 import json
 import sys
@@ -34,6 +38,15 @@ def entries(node, path):
             yield at, value
 
 
+def refuse(what, name):
+    """Why `name` cannot be a line's field, or a path inside <dir>; None."""
+    if any(c in name for c in '\t\n\r'):
+        return f'{what} {name!r} holds a tab, a newline or a carriage return'
+    if name.startswith('/') or '..' in name.split('?', 1)[0].split('/'):
+        return f'{what} {name!r} is outside the directory'
+    return None
+
+
 def main():
     if len(sys.argv) != 3:
         sys.exit('usage: pages.py <MANIFEST.json> <dir>')
@@ -42,25 +55,39 @@ def main():
     if manifest.get('version') != 9:
         sys.exit(f"pages.py: MANIFEST.json is version {manifest.get('version')}, this reads 9")
     directory = sys.argv[2].strip('/')
+    why = refuse('the directory', directory) if directory else 'the directory is empty'
+    if why:
+        sys.exit(f'pages.py: {why}')
     node = manifest['items'].get('testharness', {})
     for part in directory.split('/'):
         node = node.get(part, {})
     prefix = directory + '/'
+    lines = []
     for source, value in entries(node, directory):
+        why = refuse('the source', source)
+        if why is None and not source.startswith(prefix):
+            why = f'the source {source!r} is outside the directory'
+        if why:
+            sys.exit(f'pages.py: {why}')
         for url, extras in value[1:]:
             url = (url or '/' + source).lstrip('/')
             if not url.startswith(prefix):
                 continue
             page = url[len(prefix):]
+            why = refuse('the page', page)
+            if why:
+                sys.exit(f'pages.py: {why}')
             path = page.split('?', 1)[0]
             if path.endswith(XML):
-                print(f'skip\t{page}\tan XML document')
+                lines.append(f'skip\t{page}\tan XML document')
             elif source.endswith('.js') and not path.endswith(('.any.html', '.window.html')):
-                print(f'skip\t{page}\ta worker or shadow-realm variant')
+                lines.append(f'skip\t{page}\ta worker or shadow-realm variant')
             else:
                 kind = 'any' if source.endswith('.any.js') else 'window' if source.endswith('.js') else 'html'
                 timeout = 'long' if extras.get('timeout') == 'long' else 'normal'
-                print(f'run\t{page}\t{source}\t{kind}\t{timeout}')
+                lines.append(f'run\t{page}\t{source}\t{kind}\t{timeout}')
+    for line in lines:
+        print(line)
 
 
 main()
