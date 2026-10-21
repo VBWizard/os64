@@ -105,8 +105,9 @@ typedef enum {
     // in lowercase (a list, as the animations' are).
     GARB_WILL_CHANGE,
     // CSS UI 4 § 5.1.1: the KEYWORD a pointer over the box is shaped as; the
-    // pictures and their hotspots written before it are read, and only the
-    // keyword they fall back to is kept.
+    // pictures (urls, and image-set()s of urls and strings) and their
+    // hotspots written before it are read against their grammar, and only
+    // the keyword they fall back to is kept.
     GARB_CURSOR,
     // CSS UI 4 § 6.1: a KEYWORD.
     GARB_USER_SELECT,

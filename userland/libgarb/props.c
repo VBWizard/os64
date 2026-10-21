@@ -2834,10 +2834,54 @@ static bool aspect_ratio(Sets *s, VCur *c, garb_val_t *out)
     return out->items != NULL;
 }
 
+// A cursor's image-set() (CSS UI 4 § 5.1.1's <url-set>, Images 4 § 2.2):
+// options split by commas, each a url or a string, then a resolution
+// (`2x`, `192dpi`, `2dppx`, `75dpcm`) and a type(<string>), each at most
+// once, in either order. Read and dropped, as the cursor's url is.
+static bool url_set(const garb_value_t *f)
+{
+    VCur args[64];
+    int32_t n = fn_args(f, args, 64);
+    if (n < 1)
+        return false;
+    static const char *const kRes[] = {"x", "dppx", "dpi", "dpcm", NULL};
+    for (int32_t i = 0; i < n; i++) {
+        VCur *a = &args[i];
+        garb_val_t u;
+        const garb_value_t *t = vc_peek(a);
+        if (t != NULL && t->kind == GARB_STRING)
+            a->i++;
+        else if (!vc_url(a, &u))
+            return false;
+        bool res = false, type = false;
+        while ((t = vc_peek(a)) != NULL) {
+            bool is_res = false;
+            for (int k = 0; t->kind == GARB_DIMENSION && kRes[k] != NULL; k++)
+                is_res |= ieq(t->unit, t->unit_len, kRes[k]);
+            if (!res && is_res && t->number > 0) {
+                res = true;
+            } else if (!type && is_fn(t, "type")) {
+                VCur in = {t->children, t->nchildren, 0};
+                const garb_value_t *s = vc_peek(&in);
+                if (s == NULL || s->kind != GARB_STRING)
+                    return false;
+                in.i++;
+                if (!vc_done(&in))
+                    return false;
+                type = true;
+            } else {
+                return false;
+            }
+            a->i++;
+        }
+    }
+    return true;
+}
+
 // `cursor` (CSS UI 4 § 5.1.1): pictures to try, each a url or an image-set()
-// with an optional hotspot of two numbers and a comma after it, then the
-// keyword the pointer falls back to. The pictures are read and dropped:
-// what is kept is the keyword.
+// (url_set) with an optional hotspot of two numbers and a comma after it,
+// then the keyword the pointer falls back to. The pictures are read and
+// dropped: what is kept is the keyword.
 static bool cursor(Sets *s, VCur *c, const char *const *words, garb_val_t *out)
 {
     const char *k;
@@ -2848,7 +2892,7 @@ static bool cursor(Sets *s, VCur *c, const char *const *words, garb_val_t *out)
         }
         garb_val_t picture, x, y;
         const garb_value_t *t = vc_peek(c);
-        if (is_fn(t, "image-set") || is_fn(t, "-webkit-image-set"))
+        if ((is_fn(t, "image-set") || is_fn(t, "-webkit-image-set")) && url_set(t))
             c->i++;
         else if (!vc_url(c, &picture))
             return false;
