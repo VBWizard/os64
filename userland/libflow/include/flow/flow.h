@@ -70,10 +70,11 @@ typedef struct {
 enum { FLOW_TOP = 0, FLOW_RIGHT = 1, FLOW_BOTTOM = 2, FLOW_LEFT = 3 };
 
 // flow_style_t.current_colours: a side's border colour (1 << side), the
-// background colour, and the text's fill colour.
+// background colour, the text's fill colour, and the outline's.
 #define FLOW_CURRENT_BORDER(side) ((uint8_t)(1u << (side)))
 #define FLOW_CURRENT_BACKGROUND ((uint8_t)0x10)
 #define FLOW_CURRENT_FILL ((uint8_t)0x20)
+#define FLOW_CURRENT_OUTLINE ((uint8_t)0x40)
 
 // ── Colours ─────────────────────────────────────────────────────────────
 //
@@ -748,6 +749,16 @@ typedef struct {
     // box takes, the keyword after whatever pictures the page named first.
     // Kept for the face; nothing draws a shape (YONDER_HONEY_DO.md § 7).
     flow_cursor_t cursor;
+    // `outline` (CSS UI 4 § 3): drawn outside the border edge, past it by
+    // `outline_offset`, `outline_width` wide, after the box's own paint and
+    // taking no room (flow_outline_rect). The width is 0 when the style is
+    // none, as a border's is; `auto` is drawn solid, and `outline_auto`
+    // says it was asked for. The colour's currentColor, and its `auto`,
+    // are the element's colour (current_colours). Not inherited.
+    flow_unit_t outline_width, outline_offset;
+    flow_border_style_t outline_style;
+    bool outline_auto;
+    uint32_t outline_color;
     // `user-select` (CSS UI 4 § 6.1), not inherited: kept for the day text
     // selection reads it; nothing selects differently by it.
     flow_user_select_t user_select;
@@ -1212,6 +1223,13 @@ bool flow_marker_is_shape(const flow_style_t *s);
 // above it. A small font puts it past the line box, which is why a group's
 // bounds ask too.
 os64_gui_rect_t flow_decoration_rect(const flow_box_t *box, uint32_t line);
+// Where the painter draws a box's outline (CSS UI 4 § 3): its border box
+// grown on every side by the outline's offset and then its width, the
+// outline the ring between that and the border box grown by the offset
+// alone. False for a box that draws none: no width, or a box that paints
+// no frame of its own (a text, a line, an inline box's piece — whose
+// outline is booked).
+bool flow_outline_rect(const flow_box_t *box, os64_gui_rect_t *out);
 // The square a shape marker (flow_marker_is_shape) is drawn in: a third of
 // its font size across and at least 3 pixels, centred in the box less a
 // quarter of the size at its end, on the height a line-through takes.

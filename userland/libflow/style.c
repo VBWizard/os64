@@ -63,6 +63,9 @@ typedef struct {
     FsKind fs_kind;
     int32_t fs_v;
     bool border_color_set[4];
+    bool outline_color_set;     // false: currentColor (or auto), resolved in finish
+    int32_t outline_px;         // the declared width in 26.6; the style decides if drawn
+    Len outline_offset;
     int32_t border_px[4];       // declared widths in 26.6; style decides if drawn
     bool bolder;
     FProps taken;               // FStyled.taken
@@ -1916,6 +1919,16 @@ static void take(Spec *dst, const Spec *src, garb_prop_t prop)
     case GARB_OPACITY: d->opacity = s->opacity; break;
     case GARB_POINTER_EVENTS: d->pointer_events_none = s->pointer_events_none; break;
     case GARB_CURSOR: d->cursor = s->cursor; break;
+    case GARB_OUTLINE_WIDTH: dst->outline_px = src->outline_px; break;
+    case GARB_OUTLINE_STYLE:
+        d->outline_style = s->outline_style;
+        d->outline_auto = s->outline_auto;
+        break;
+    case GARB_OUTLINE_COLOR:
+        dst->outline_color_set = src->outline_color_set;
+        d->outline_color = s->outline_color;
+        break;
+    case GARB_OUTLINE_OFFSET: dst->outline_offset = src->outline_offset; break;
     case GARB_USER_SELECT: d->user_select = s->user_select; break;
     case GARB_FLEX_DIRECTION: d->flex_direction = s->flex_direction; break;
     case GARB_FLEX_WRAP: d->flex_wrap = s->flex_wrap; break;
@@ -2042,6 +2055,8 @@ static void initial_spec(const Ctx *c, Spec *out)
     out->flex_basis = out->row_gap = out->column_gap = kAuto;
     out->text_indent = px(c, 0);
     out->letter_spacing = px(c, 0);
+    out->outline_px = css(c, 3);                        // medium
+    out->outline_offset = px(c, 0);
     out->fs_kind = FS_KEYWORD;
     out->fs_v = 3;                                      // medium
 }
@@ -2078,6 +2093,9 @@ static void inherited_spec(const Ctx *c, const flow_style_t *parent, Spec *out)
     out->column_gap = len_of(parent->column_gap);
     out->text_indent = len_of(parent->text_indent);
     out->letter_spacing = (Len){L_PX, parent->letter_spacing, 0};
+    out->outline_px = parent->outline_width;
+    out->outline_offset = (Len){L_PX, parent->outline_offset, 0};
+    out->outline_color_set = !(parent->current_colours & FLOW_CURRENT_OUTLINE);
     out->fs_kind = FS_PX;
     out->fs_v = parent->font_size;
 }
@@ -3219,6 +3237,22 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
         // SVG's values are auto to an HTML box.
         s->pointer_events_none = is_word(v, "none");
         break;
+    case GARB_OUTLINE_WIDTH: author_border_width(a, v, &sp->outline_px); break;
+    case GARB_OUTLINE_STYLE:
+        // `auto` is the platform's ring; here it is drawn solid.
+        s->outline_auto = is_word(v, "auto");
+        if (s->outline_auto)
+            s->outline_style = FLOW_BORDER_SOLID;
+        else
+            author_border_style(v, &s->outline_style);
+        break;
+    case GARB_OUTLINE_COLOR:
+        // currentColor and auto are left for finish, which knows the colour.
+        sp->outline_color_set = v->kind == GARB_V_COLOR && !v->color.current;
+        if (sp->outline_color_set)
+            s->outline_color = colour_of(v->color);
+        break;
+    case GARB_OUTLINE_OFFSET: author_len(a, v, false, &sp->outline_offset); break;
     case GARB_CURSOR:
         if ((i = pick(v, f_cursor_words, F_ARRAY(f_cursor_words))) >= 0)
             s->cursor = (flow_cursor_t)i;
@@ -3507,6 +3541,11 @@ static bool author(Ctx *c, const os64_html_node_t *n, Spec *sp, const Spec *ua,
         if (sp->border_px[i] == 0 && author_sets(st, GARB_BORDER_TOP_STYLE + i) &&
             !author_declares(st, GARB_BORDER_TOP_WIDTH + i))
             sp->border_px[i] = css(c, 3);
+    // The outline the same: no origin but the author declares one, and its
+    // initial width is medium too.
+    if (sp->outline_px == 0 && author_sets(st, GARB_OUTLINE_STYLE) &&
+        !author_declares(st, GARB_OUTLINE_WIDTH))
+        sp->outline_px = css(c, 3);
     return true;
 }
 
@@ -3636,6 +3675,16 @@ static void finish(const Ctx *c, Spec *sp, const flow_style_t *parent, bool item
     }
     if (s->current_colours & FLOW_CURRENT_FILL)
         s->fill = s->color;
+    if (!sp->outline_color_set)
+        s->outline_color = s->color;
+    s->current_colours = (uint8_t)(sp->outline_color_set
+                                       ? s->current_colours & ~FLOW_CURRENT_OUTLINE
+                                       : s->current_colours | FLOW_CURRENT_OUTLINE);
+    s->outline_width = s->outline_style != FLOW_BORDER_NONE ? sp->outline_px : 0;
+    if (sp->outline_offset.kind != L_UNSET) {
+        flow_length_t off = resolve(sp->outline_offset, s->font_size, zero);
+        s->outline_offset = off.kind == FLOW_LENGTH_PX ? off.value : 0;
+    }
     s->width = resolve(sp->width, s->font_size, automatic);
     s->height = resolve(sp->height, s->font_size, automatic);
     for (int i = 0; i < 4; i++) {

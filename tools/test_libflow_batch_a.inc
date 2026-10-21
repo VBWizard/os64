@@ -3,6 +3,60 @@
 // anything, laid out — every dump worked from the specification by hand,
 // as test_libflow_cascade.inc's are. The viewport is WIDTH x 600.
 
+// The first box of an element with tag `tag` and kind `kind`, in tree order.
+static const flow_box_t *batch_a_box(const flow_box_t *b, os64_html_tag_t tag, flow_box_kind_t kind)
+{
+    if (b == NULL)
+        return NULL;
+    if (b->kind == kind && b->node != NULL && b->node->kind == OS64_HTML_ELEMENT &&
+        b->node->tag == tag)
+        return b;
+    for (const flow_box_t *c = b->first; c != NULL; c = c->next) {
+        const flow_box_t *found = batch_a_box(c, tag, kind);
+        if (found != NULL)
+            return found;
+    }
+    return NULL;
+}
+
+// Where an outline is drawn, and the ink it adds (flow_outline_rect, the
+// box's ink): the div's border box 0 0 20 10, grown by its offset and its
+// width, 1 + 2, on every side: -3 -3 26 16, reaching 3 past the box on
+// every side. Its ink is measured past its overflow, which its span's 20
+// tall line takes 10 below it: 3 above, right and left, none below. The
+// span is an inline box's piece, which draws none; a negative offset past
+// the box's middle draws none either (an empty rect).
+static void outline_door_cases(void)
+{
+    Sheeted p;
+    sheeted_open(&p, "<!doctype html><style>body { margin: 0 } div { width: 20px; height: 10px;"
+                     " outline: 2px solid red; outline-offset: 1px } span { outline: 1px solid }"
+                     " p { margin: 0; width: 10px; height: 4px; outline: 1px solid;"
+                     " outline-offset: -4px }</style><div><span>x</span></div><p></p>",
+                 100, 600);
+    flow_tree_t *tree = flow_layout(p.doc, p.page, 100, &p.env);
+    const flow_box_t *root = tree != NULL ? flow_root(tree) : NULL;
+    const flow_box_t *div = batch_a_box(root, OS64_HTML_TAG_DIV, FLOW_BOX_BLOCK);
+    const flow_box_t *span = batch_a_box(root, OS64_HTML_TAG_SPAN, FLOW_BOX_SPAN);
+    const flow_box_t *para = batch_a_box(root, OS64_HTML_TAG_P, FLOW_BOX_BLOCK);
+    os64_gui_rect_t r = {0, 0, 0, 0};
+    expect("outline: drawn round the border box, grown by its offset and its width",
+           div != NULL && flow_outline_rect(div, &r) && r.x == -3 && r.y == -3 && r.w == 26 &&
+               r.h == 16, NULL);
+    char ink[64];
+    snprintf(ink, sizeof(ink), "%d %d %d %d", div ? div->ink[0] : -1, div ? div->ink[1] : -1,
+             div ? div->ink[2] : -1, div ? div->ink[3] : -1);
+    expect("outline: in the box's ink, past its overflow", strcmp(ink, "3 3 0 3") == 0, ink);
+    expect("outline: an inline box's piece draws none (booked)",
+           span != NULL && !flow_outline_rect(span, &r), NULL);
+    // p: 10 x 4 at y 30 (after the div's 10 and its 20 tall line), less 4
+    // a side and plus 1: -3 across a 4px height is no rect.
+    expect("outline: an offset that turns the ring inside out draws none",
+           para != NULL && !flow_outline_rect(para, &r), NULL);
+    flow_free(tree);
+    sheeted_close(&p);
+}
+
 static void batch_a_cases(void)
 {
     // cursor is inherited, the keyword after the pictures kept; user-select
@@ -170,6 +224,39 @@ static void batch_a_cases(void)
         "      line 0 80 200 10 base 7\n"
         "        text \"ab\" 0 81 10 8 serif 8\n");
 
+    // ── outline (CSS UI 4 § 3) ──
+
+    // Not inherited. A style alone draws medium (3) in the element's
+    // colour; auto is drawn solid; none draws nothing whatever its colour;
+    // an offset in ems is the element's own; inherit takes the parent's
+    // colour as it computed, the div's red.
+    cascade_case("outline: its width, style, colour and offset", 800,
+        "<!doctype html><style>div { outline: 2px dashed red; outline-offset: 3px; color: blue }"
+        " p { outline-style: solid } span { outline: auto } b { outline: none;"
+        " outline-color: red } i { outline: 1em solid; outline-offset: -0.5em }"
+        " em { outline-color: inherit; outline-style: dotted }</style>"
+        "<div><p>a<span>s</span><b>b</b><i>i</i></p><em>e</em></div>",
+        PAGE_OPEN
+        "  body block margin=8/8/8/8 holds-block\n"
+        "    div block color=#0000ff outline=2:dashed:#ff0000 outline-offset=3 holds-block\n"
+        "      p block margin=16/0/16/0 outline=3:solid:#0000ff\n"
+        "        span inline outline=3:auto:#0000ff\n"
+        "        b inline weight=700\n"
+        "        i inline italic outline=16:solid:#0000ff outline-offset=-8\n"
+        "      em inline italic outline=3:dotted:#ff0000\n");
+    // It takes no room: the div is where it would be without one.
+    cascade_layout_case("outline: takes no room",
+        "<!doctype html><style>body { margin: 0 } div { width: 20px; height: 10px;"
+        " outline: 2px solid red; outline-offset: 1px }</style><div></div><p>x</p>", 100,
+        "page 100 62\n"
+        "block html 0 0 100 62\n"
+        "  block body 0 0 100 46\n"
+        "    block div 0 0 20 10\n"
+        "    block p 0 26 100 20\n"
+        "      line 0 26 100 20 base 14\n"
+        "        text \"x\" 0 28 8 16 serif 16\n");
+    outline_door_cases();
+
     // ── CSS Logical 1, in a horizontal left-to-right writing mode ──
 
     // A flow-relative declaration is its physical twin's for the cascade:
@@ -200,6 +287,11 @@ static void batch_a_cases(void)
         PAGE_OPEN
         "  body block margin=8/8/8/8 holds-block\n"
         "    p block margin=16/0/16/1\n");
+    cascade_case("outline: unknown with the Modern Web switch off", 800,
+        "<!doctype html><style>div { outline: 2px solid red }</style><div>a</div>",
+        PAGE_OPEN
+        "  body block margin=8/8/8/8 holds-block\n"
+        "    div block\n");
     cascade_case("letter-spacing: unknown with the Modern Web switch off", 800,
         "<!doctype html><style>div { letter-spacing: 3px }</style><div>a</div>",
         PAGE_OPEN

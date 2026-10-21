@@ -651,6 +651,7 @@ static void paint_case(const char *name, const char *html, int32_t width, os64_g
 }
 
 #include "test_yonder_cases.inc"
+#include "test_yonder_batch_a.inc"
 
 // A blurred shadow cannot be worked pixel by pixel by hand, so what a blur
 // must do is checked: the mask reaches three box blurs past the shape on
@@ -2127,6 +2128,7 @@ int main(int argc, char **argv)
         scratch_cases();
         scratch_paint_cases();
         paint_cases();
+        batch_a_paint_cases();
         shadow_blur_cases();
         huge_corner_case();
         round_picture_cases();

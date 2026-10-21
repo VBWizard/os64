@@ -1797,6 +1797,28 @@ static void frame(const Painter *p, const flow_box_t *b)
         borders(p, b);
 }
 
+// A box's outline (CSS UI 4 § 3): a ring of the outline's width, style and
+// colour round where libflow says it is (flow_outline_rect), drawn as a
+// square border is — so its styles are a border's, dotted to outset — after
+// the box's own paint and over it. Square whatever the box's radius:
+// following the corners is booked.
+static void outline(const Painter *p, const flow_box_t *b)
+{
+    os64_gui_rect_t ring;
+    if (p->penned || !flow_outline_rect(b, &ring))
+        return;
+    flow_style_t s = *b->style;
+    for (int k = 0; k < 4; k++) {
+        s.border_width[k] = b->style->outline_width;
+        s.border_style[k] = b->style->outline_style;
+        s.border_color[k] = b->style->outline_color;
+    }
+    flow_box_t drawn = *b;
+    drawn.style = &s;
+    drawn.rect = ring;
+    borders(p, &drawn);
+}
+
 // The picture or control inside an atom's borders and padding. A percentage
 // padding resolved against a width the public tree does not carry, so it
 // counts as none here; pictures and controls rarely have one.
@@ -1989,6 +2011,7 @@ static void paint_box(void *ctx, const flow_box_t *b)
         else if (is_frame(b) && p->v->frame != NULL)
             p->v->frame(p->v->ctx, b, on_page(p, content_of(b)), on_page(p, p->view),
                         ink_of(p, FRAME_INK), paper_of(p, FRAME_PAPER));
+        outline(p, b);
         return;
     case FLOW_BOX_SPAN:
         // An inline box's borders open on its first piece and close on its
@@ -2006,6 +2029,7 @@ static void paint_box(void *ctx, const flow_box_t *b)
         if (b->parent != NULL && b->parent->kind == FLOW_BOX_ATOMIC && b->parent->node == b->node)
             return;
         frame(p, b);
+        outline(p, b);
         return;
     }
 }

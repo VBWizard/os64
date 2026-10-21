@@ -1044,6 +1044,22 @@ os64_gui_rect_t flow_decoration_rect(const flow_box_t *box, uint32_t line)
     return held_rect(box->rect.x, y, (int64_t)box->rect.x + box->rect.w, y + thick);
 }
 
+bool flow_outline_rect(const flow_box_t *box, os64_gui_rect_t *out)
+{
+    const flow_style_t *s = box->style;
+    int64_t w = size_px(s->outline_width);
+    if (w <= 0 || !paints_frame(box))
+        return false;
+    // The offset may be negative: it may take the ring inside the border
+    // box, and past its middle, where the ring's inner edge is gone.
+    int64_t off = s->outline_offset;
+    int64_t grow = (off >= 0 ? (off + 32) / 64 : -((32 - off) / 64)) + w;
+    *out = held_rect((int64_t)box->rect.x - grow, (int64_t)box->rect.y - grow,
+                     (int64_t)box->rect.x + box->rect.w + grow,
+                     (int64_t)box->rect.y + box->rect.h + grow);
+    return out->w > 0 && out->h > 0;
+}
+
 os64_gui_rect_t flow_marker_shape_rect(const flow_box_t *box)
 {
     int64_t size = size_px(box->style->font_size);
@@ -1107,6 +1123,10 @@ static void own_ink(flow_box_t *b)
         os64_gui_rect_t r = flow_marker_shape_rect(b);
         past_box(b, r.x, r.y, (int64_t)r.x + r.w, (int64_t)r.y + r.h, most, NULL);
     }
+    // An outline is drawn past the border box and in no box's overflow.
+    os64_gui_rect_t ring;
+    if (flow_outline_rect(b, &ring))
+        past_box(b, ring.x, ring.y, (int64_t)ring.x + ring.w, (int64_t)ring.y + ring.h, most, NULL);
     for (int32_t i = 0; i < nbox + ntext; i++) {
         bool text = i >= nbox;
         const flow_shadow_t *sh = text ? &s->text_shadows[i - nbox] : &s->box_shadows[i];
