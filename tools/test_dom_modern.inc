@@ -131,7 +131,9 @@ static void dom_modern_cases(void)
         "assert(Object.prototype.toString.call(b)==='[object Object]'&&"
         "Object.getOwnPropertySymbols(Object.getPrototypeOf(b)).indexOf(Symbol.toStringTag)<0);"
         /* tools/test_dom_host.sh marks animation-name as the arc's */
-        "assert(!('animationName' in b.style)&&'color' in b.style);"
+        "assert(!('animationName' in b.style)&&!('animation-name' in b.style)&&'color' in b.style);"
+        /* the shorthand is still read, for the longhands that are not marked */
+        "assert('animation' in b.style);"
         "b.style.setProperty('animation-name','spin');b.style.color='red';"
         "assert(b.style.getPropertyValue('animation-name')===''&&b.style.color==='red');"
         "assert(typeof Image==='function'&&new Image().tagName==='IMG');",

@@ -123,6 +123,21 @@ static void dom_classic_cases(void)
         "try{style.cssText}catch(e){capped=e.name==='QuotaExceededError'}assert(capped);"
         "style.cssText='';assert(style.cssText==='');",
         "classic-inline-style");
+    /* CSSOM § 6.7.1: every property libgarb reads is a member camel-cased,
+     * dashed as written, and webkit-cased when it is a -webkit- name, a
+     * shorthand or an alias as much as a longhand; each sets and reads the
+     * declaration of its own name. */
+    dom_script(&f,CLASSIC_ASSERT
+        "var box=document.createElement('div');document.body.appendChild(box);var style=box.style;"
+        "style['margin-top']='5px';assert(style.marginTop==='5px'&&style['margin-top']==='5px');"
+        "style.margin='1px 2px';assert(style.margin==='1px 2px'&&style['margin']==='1px 2px');"
+        "assert(box.getAttribute('style').indexOf('margin:1px 2px')>=0);"
+        "style['border-top']='bogus';assert(style.borderTop==='');"
+        "assert('webkitTransform' in style&&'WebkitTransform' in style&&'-webkit-transform' in style);"
+        "style.webkitTransform='none';assert(style['-webkit-transform']==='none'&&style.WebkitTransform==='none');"
+        "assert('gridGap' in style&&'grid-gap' in style&&!('-webkit-margin' in style));"
+        "assert(!('display-x' in style)&&!Object.prototype.hasOwnProperty.call(style,'margin'));",
+        "classic-inline-style-names");
     dom_script(&f,CLASSIC_ASSERT
         "assert(window.event===undefined);var outer=new Event('outer'),inner=new Event('inner');"
         "document.body.addEventListener('inner',function(e){assert(event===e&&e===inner)});"

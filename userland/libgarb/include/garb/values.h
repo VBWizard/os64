@@ -115,6 +115,14 @@ bool garb_prop_inherited(garb_prop_t prop);
 // the arc's switch (MODERN_WEB.md, rule 4) takes it away whole, as if
 // libgarb had never read it.
 bool garb_prop_modern(garb_prop_t prop);
+// Every name a declaration may set a property by, each once, for whatever
+// lists them (an inline style object's members): the longhands' in
+// garb_prop_t's order, then the shorthands' and the aliases'. NULL past
+// the last. garb_prop_known says whether a reading with `modern_off` reads
+// a name: a marked name, and a shorthand all of whose longhands are
+// marked, are not read with it.
+const char *garb_prop_name_at(int32_t k);
+bool garb_prop_known(const char *name, size_t len, bool modern_off);
 
 // ── Typed values ────────────────────────────────────────────────────────
 

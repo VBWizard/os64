@@ -3494,6 +3494,28 @@ int32_t prop_longhands(const char *name, size_t len, bool modern_off, garb_prop_
     return kept;
 }
 
+#define NSHORTHANDS ((int32_t)(sizeof(kShorthands) / sizeof(kShorthands[0])))
+#define NALIASES ((int32_t)(sizeof(kAliases) / sizeof(kAliases[0])))
+
+const char *garb_prop_name_at(int32_t k)
+{
+    if (k < 0)
+        return NULL;
+    if (k < GARB_NPROPS)
+        return kProps[k].name;
+    k -= GARB_NPROPS;
+    if (k < NSHORTHANDS)
+        return kShorthands[k].name;
+    k -= NSHORTHANDS;
+    return k < NALIASES ? kAliases[k].name : NULL;
+}
+
+bool garb_prop_known(const char *name, size_t len, bool modern_off)
+{
+    garb_prop_t props[GARB_SETS_MAX];
+    return prop_longhands(name, len, modern_off, props) > 0;
+}
+
 // ── Declarations ────────────────────────────────────────────────────────
 
 // var() and env() alike: each is replaced before the value can be read

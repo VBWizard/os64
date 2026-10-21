@@ -6,7 +6,10 @@
  * observe the same source. Edits replace matching declarations instead of
  * accumulating a new declaration on each mouse move. */
 #define STYLE_MAX ((size_t)65536)
-enum { S_TEXT = GARB_NPROPS, S_GET, S_SET, S_REMOVE, S_PRIORITY };
+/* A member's magic is the index of the property name it stands for
+ * (garb_prop_name_at), or one of these, which sit below D_SET past every
+ * name's index. */
+enum { S_TEXT = 0xF00, S_GET, S_SET, S_REMOVE, S_PRIORITY };
 
 static bool space(unsigned char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\f'; }
 static bool equal(const char *a, size_t n, const char *b)
@@ -179,7 +182,7 @@ static JSValue member(JSContext *ctx, JSValueConst self, int argc,
         return budget(dom,ctx) ? JS_UNDEFINED : JS_EXCEPTION;
     }
     DString name = {0}, value = {0}, priority = {0};
-    const char *property = magic < GARB_NPROPS ? garb_prop_name((garb_prop_t)magic) : NULL;
+    const char *property = magic < S_TEXT ? garb_prop_name_at(magic) : NULL;
     if (property == NULL) {
         if (argc < 1) return JS_ThrowTypeError(ctx,"Missing CSS property name");
         if (!d_string(dom,ctx,argv[0],&name)) return JS_EXCEPTION;
@@ -227,19 +230,31 @@ int d_style_install(os64_dom_t *dom, JSContext *ctx)
     dom->style_prototype = d_retain(dom,ctx,prototype);
     if (dom->style_prototype == NULL) return -1;
     JS_SetClassProto(ctx,dom->style_class,JS_DupValue(ctx,prototype));
-    /* A property's camel-case member exists while libgarb reads it: one
-     * the Modern Web arc added goes with the switch, as its name does from
-     * every declaration (`'aspectRatio' in el.style` is how pages ask). */
-    for (int i = 0; i < GARB_NPROPS; i++) {
-        if (garb_prop_modern((garb_prop_t)i) && !dom->options.modern) continue;
-        const char *name = garb_prop_name((garb_prop_t)i);
-        char camel[128];size_t at = 0;
-        for (size_t j = 0; name[j] && at+1 < sizeof(camel); j++) {
-            if (name[j] == '-' && name[j+1]) camel[at++] = name[++j] - ('a'-'A');
-            else camel[at++] = name[j];
+    /* Each property name libgarb reads is a member three ways (CSSOM §
+     * 6.7.1): camel-cased (`marginInlineStart`, `WebkitTransform`),
+     * webkit-cased for a `-webkit-` name (`webkitTransform`) and dashed as
+     * written (`margin-inline-start`), shorthands and aliases as well as
+     * longhands. One the Modern Web arc added goes with the switch, as its
+     * name does from every declaration (`'aspectRatio' in el.style` is how
+     * pages ask). */
+    const char *name;
+    for (int32_t i = 0; (name = garb_prop_name_at(i)) != NULL; i++) {
+        size_t length = os64_strlen(name);
+        if (i >= S_TEXT || length >= 128) return -1;
+        if (!garb_prop_known(name,length,!dom->options.modern)) continue;
+        char camel[128], webkit[128];size_t at = 0, wat = 0;
+        bool upper = false, prefixed = length > 8 && os64_memcmp(name,"-webkit-",8) == 0;
+        for (size_t j = 0; j < length; j++) {
+            if (name[j] == '-') { upper = true;continue; }
+            char c = upper && name[j] >= 'a' && name[j] <= 'z' ? name[j] - ('a'-'A') : name[j];
+            upper = false;
+            camel[at++] = c;
+            if (prefixed) { webkit[wat] = wat == 0 && c >= 'A' && c <= 'Z' ? c + ('a'-'A') : c;wat++; }
         }
-        camel[at] = '\0';
+        camel[at] = '\0';webkit[wat] = '\0';
         if (d_accessor(dom,ctx,prototype,camel,member,i,true) < 0) return -1;
+        if (prefixed && d_accessor(dom,ctx,prototype,webkit,member,i,true) < 0) return -1;
+        if (at != length && d_accessor(dom,ctx,prototype,name,member,i,true) < 0) return -1;
     }
     if (d_accessor(dom,ctx,prototype,"cssText",member,S_TEXT,true) < 0 ||
         d_method(dom,ctx,prototype,"getPropertyValue",member,1,S_GET) < 0 ||
