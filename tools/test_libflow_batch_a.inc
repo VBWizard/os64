@@ -170,7 +170,36 @@ static void batch_a_cases(void)
         "      line 0 80 200 10 base 7\n"
         "        text \"ab\" 0 81 10 8 serif 8\n");
 
+    // ── CSS Logical 1, in a horizontal left-to-right writing mode ──
+
+    // A flow-relative declaration is its physical twin's for the cascade:
+    // the later of margin-left and margin-inline-start wins, and so does
+    // margin-right after margin-inline-end; #x's padding-inline outranks
+    // p's padding-left by specificity, whatever the order. padding-block
+    // is top and bottom, 1em of 16. inline-size is the width,
+    // max-block-size the max-height, border-block-start the top border,
+    // inset-inline-start the left inset.
+    cascade_case("flow-relative properties are their physical twins in the cascade", 800,
+        "<!doctype html><style>p { margin-left: 1px; margin-inline-start: 2px;"
+        " margin-inline-end: 3px; margin-right: 4px }"
+        " #x { padding-inline: 5px 6px } p { padding-left: 7px; padding-block: 1em }"
+        " div { inline-size: 50%; max-block-size: 10px; border-block-start: 2px solid red;"
+        " inset-inline-start: 3px; position: relative }</style>"
+        "<p id=x>a</p><p>b</p><div>c</div>",
+        PAGE_OPEN
+        "  body block margin=8/8/8/8 holds-block\n"
+        "    p block margin=16/4/16/2 padding=16/6/16/5\n"
+        "    p block margin=16/4/16/2 padding=16/0/16/7\n"
+        "    div block border=2:solid:#ff0000/0:none:ink/0:none:ink/0:none:ink width=50%"
+        " max-height=10 position=relative inset=auto/auto/auto/3\n");
+
     s_modern_off = true;
+    cascade_case("flow-relative properties: unknown with the Modern Web switch off", 800,
+        "<!doctype html><style>p { margin-left: 1px; margin-inline-start: 2px;"
+        " padding-inline: 5px }</style><p>a</p>",
+        PAGE_OPEN
+        "  body block margin=8/8/8/8 holds-block\n"
+        "    p block margin=16/0/16/1\n");
     cascade_case("letter-spacing: unknown with the Modern Web switch off", 800,
         "<!doctype html><style>div { letter-spacing: 3px }</style><div>a</div>",
         PAGE_OPEN
