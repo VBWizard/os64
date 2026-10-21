@@ -1122,3 +1122,26 @@ IN: user-select: text contain
 OUT: invalid
 IN: user-select: visible
 OUT: invalid
+
+# ── word-break and overflow-wrap (Text 3 § 5.2, § 5.5) ──
+IN: word-break: break-all
+OUT: word-break: break-all
+IN: word-break: Keep-All
+OUT: word-break: keep-all
+IN: word-break: break-word
+OUT: word-break: break-word
+IN: word-break: manual
+OUT: invalid
+IN: word-break: normal keep-all
+OUT: invalid
+IN: overflow-wrap: anywhere
+OUT: overflow-wrap: anywhere
+IN: overflow-wrap: break-word
+OUT: overflow-wrap: break-word
+IN: overflow-wrap: break-all
+OUT: invalid
+# word-wrap is overflow-wrap's legacy name (Text 3 § 5.5).
+IN: word-wrap: break-word
+OUT: overflow-wrap: break-word
+IN: word-wrap: anywhere anywhere
+OUT: invalid

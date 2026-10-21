@@ -137,6 +137,8 @@ static const Prop kProps[GARB_NPROPS] = {
     [GARB_WILL_CHANGE] = {"will-change", false, false},
     [GARB_CURSOR] = {"cursor", true, true},
     [GARB_USER_SELECT] = {"user-select", false, true},
+    [GARB_WORD_BREAK] = {"word-break", true, true},
+    [GARB_OVERFLOW_WRAP] = {"overflow-wrap", true, true},
 };
 
 const char *garb_prop_name(garb_prop_t prop)
@@ -496,6 +498,10 @@ static const char *const kCursor[] = {
     "nwse-resize", "col-resize", "row-resize", "all-scroll", "zoom-in", "zoom-out", NULL};
 // CSS UI 4 § 6.1.
 static const char *const kUserSelect[] = {"auto", "text", "none", "contain", "all", NULL};
+// CSS Text 3 § 5.2 (`break-word` is its legacy value, read as `normal`
+// beside `overflow-wrap: anywhere`) and § 5.5.
+static const char *const kWordBreak[] = {"normal", "keep-all", "break-all", "break-word", NULL};
+static const char *const kOverflowWrap[] = {"normal", "break-word", "anywhere", NULL};
 // The identifiers a <custom-ident> may not be (Values 4 § 4.2): the
 // CSS-wide keywords and `default`.
 static const char *const kNotCustom[] = {"inherit", "initial", "unset", "revert",
@@ -2043,6 +2049,7 @@ static const Longhand kLonghands[] = {
     {GARB_ANIMATION_DELAY, G_DELAY, NULL}, {GARB_ANIMATION_FILL_MODE, G_ANIM_KEYWORD, kFillMode},
     {GARB_WILL_CHANGE, G_WILL_CHANGE, NULL},
     {GARB_CURSOR, G_CURSOR, kCursor}, {GARB_USER_SELECT, G_KEYWORDS, kUserSelect},
+    {GARB_WORD_BREAK, G_KEYWORDS, kWordBreak}, {GARB_OVERFLOW_WRAP, G_KEYWORDS, kOverflowWrap},
 };
 
 static bool longhand_one(Sets *s, VCur *c, const Longhand *l, garb_val_t *out);
@@ -3461,14 +3468,16 @@ static bool shorthand(Sets *s, VCur *c, Shorthand sh)
     return false;
 }
 
-// The Compatibility Standard's legacy name aliases (§ 3.4.1) that are read:
-// a prefixed name every engine reads as its standard twin is no one
-// engine's dialect, so it is the twin — a longhand's or a shorthand's.
-// `modern` as Prop's; an alias of a marked twin is unknown with it anyway.
+// The legacy name aliases that are read — the Compatibility Standard's (§
+// 3.4.1), and those a specification names itself: a prefixed name every
+// engine reads as its standard twin is no one engine's dialect, so it is
+// the twin — a longhand's or a shorthand's. `modern` as Prop's; an alias
+// of a marked twin is unknown with it anyway.
 static const struct {
     const char *name, *twin;
     bool modern;
 } kAliases[] = {
+    {"word-wrap", "overflow-wrap", true},       // Text 3 § 5.5
     {"-webkit-background-clip", "background-clip", false},
     {"-webkit-transform", "transform", false},
     {"-webkit-transform-origin", "transform-origin", false},

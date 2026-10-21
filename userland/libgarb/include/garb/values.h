@@ -110,6 +110,9 @@ typedef enum {
     GARB_CURSOR,
     // CSS UI 4 § 6.1: a KEYWORD.
     GARB_USER_SELECT,
+    // CSS Text 3 § 5.2 and § 5.5, each a KEYWORD; `word-wrap` is the
+    // second's legacy name.
+    GARB_WORD_BREAK, GARB_OVERFLOW_WRAP,
     GARB_NPROPS
 } garb_prop_t;
 
