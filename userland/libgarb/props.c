@@ -147,6 +147,7 @@ static const Prop kProps[GARB_NPROPS] = {
     [GARB_OUTLINE_OFFSET] = {"outline-offset", false, true},
     [GARB_OBJECT_FIT] = {"object-fit", false, true},
     [GARB_OBJECT_POSITION] = {"object-position", false, true},
+    [GARB_ASPECT_RATIO] = {"aspect-ratio", false, true},
 };
 
 const char *garb_prop_name(garb_prop_t prop)
@@ -1991,6 +1992,7 @@ typedef enum {
     G_OUTLINE_COLOR,        // auto | <color>
     G_LENGTH,               // <length>, negative too
     G_POSITION,             // <position>, as x and y
+    G_RATIO,                // auto || <ratio>
 } Grammar;
 
 typedef struct {
@@ -2078,6 +2080,7 @@ static const Longhand kLonghands[] = {
     {GARB_OUTLINE_WIDTH, G_OUTLINE_WIDTH, NULL}, {GARB_OUTLINE_STYLE, G_KEYWORDS, kOutlineStyle},
     {GARB_OUTLINE_COLOR, G_OUTLINE_COLOR, NULL}, {GARB_OUTLINE_OFFSET, G_LENGTH, NULL},
     {GARB_OBJECT_FIT, G_KEYWORDS, kObjectFit}, {GARB_OBJECT_POSITION, G_POSITION, NULL},
+    {GARB_ASPECT_RATIO, G_RATIO, NULL},
 };
 
 static bool longhand_one(Sets *s, VCur *c, const Longhand *l, garb_val_t *out);
@@ -2780,6 +2783,57 @@ static bool layered(const Longhand *l)
            l->g == G_EASING || l->g == G_ITERATIONS || l->g == G_ANIM_KEYWORD;
 }
 
+// One number of a <ratio> (Values 4 § 6.1): <number [0,∞]>, a calc()
+// worked out as it is written, and held at 0 below.
+static bool ratio_number(Sets *s, VCur *c, garb_val_t *out)
+{
+    garb_val_t v;
+    double n = 0;
+    bool number = true;
+    if (!vc_dim(c, ACCEPT_NUMBER, false, false, &s->a, &v))
+        return false;
+    if (v.kind == GARB_V_NUMBER)
+        n = v.number;
+    else if (!(v.kind == GARB_V_CALC && calc_settled(v.calc, &n, &number) && number))
+        return false;
+    *out = number_val(n > 0 ? n : 0);
+    return true;
+}
+
+// `aspect-ratio` (CSS Sizing 4 § 4.1): auto, a ratio — a width and an
+// optional `/ height`, which is 1 when it is left out — or both, either
+// order.
+static bool aspect_ratio(Sets *s, VCur *c, garb_val_t *out)
+{
+    bool have_auto = false, have_ratio = false;
+    garb_val_t two[2];
+    while (!vc_done(c)) {
+        if (!have_auto && vc_keyword(c, kAuto) != NULL) {
+            have_auto = true;
+            continue;
+        }
+        if (have_ratio || !ratio_number(s, c, &two[0]))
+            return false;
+        two[1] = number_val(1);
+        if (is_delim_v(vc_peek(c), '/')) {
+            c->i++;
+            if (!ratio_number(s, c, &two[1]))
+                return false;
+        }
+        have_ratio = true;
+    }
+    if (!have_ratio) {
+        *out = kw("auto");
+        return have_auto;
+    }
+    os64_memset(out, 0, sizeof(*out));
+    out->kind = GARB_V_RATIO;
+    out->keyword = have_auto ? "auto" : NULL;
+    out->items = keep(s, two, 2);
+    out->nitems = 2;
+    return out->items != NULL;
+}
+
 // `cursor` (CSS UI 4 § 5.1.1): pictures to try, each a url or an image-set()
 // with an optional hotspot of two numbers and a comma after it, then the
 // keyword the pointer falls back to. The pictures are read and dropped:
@@ -3089,6 +3143,7 @@ static bool longhand_one(Sets *s, VCur *c, const Longhand *l, garb_val_t *out)
         }
         return vc_color(c, out);
     case G_LENGTH: return vc_dim(c, ACCEPT_LENGTH, true, false, &s->a, out);
+    case G_RATIO: return aspect_ratio(s, c, out);
     case G_POSITION: {
         // Not quirky: the Quirks standard's unitless lengths are a
         // background position's, not this one's.
@@ -3853,6 +3908,13 @@ static void val(Out *o, const garb_val_t *v)
         put(o, ")");
         return;
     }
+    if (v->kind == GARB_V_RATIO) {
+        put(o, v->keyword != NULL ? "auto " : "");
+        val(o, &v->items[0]);
+        put(o, " / ");
+        val(o, &v->items[1]);
+        return;
+    }
     if (v->nitems > 0) {
         for (int32_t k = 0; k < v->nitems; k++) {
             if (k > 0)
@@ -3891,6 +3953,7 @@ static void val(Out *o, const garb_val_t *v)
     case GARB_V_CALC: calc(o, v->calc, AT_TOP); break;
     case GARB_V_IMAGE: put_n(o, v->text, v->len); put(o, "(...)"); break;
     case GARB_V_TRACKS: case GARB_V_FUNCTION: case GARB_V_LAYERS: case GARB_V_FUNCTIONS:
+    case GARB_V_RATIO:
         break;                      // always with items, above
     }
 }

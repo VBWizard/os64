@@ -125,6 +125,8 @@ typedef enum {
     // two items are x and y, each a length-percentage, its keywords as the
     // percentages they are (`right 10px` a calc(100% - 10px)).
     GARB_OBJECT_FIT, GARB_OBJECT_POSITION,
+    // CSS Sizing 4 § 4.1: the KEYWORD auto, or a RATIO.
+    GARB_ASPECT_RATIO,
     GARB_NPROPS
 } garb_prop_t;
 
@@ -195,6 +197,10 @@ typedef enum {
     GARB_V_FUNCTIONS,
     // `number` in `unit`, GARB_U_S or GARB_U_MS (Values 4 § 7.3).
     GARB_V_TIME,
+    // A <ratio> (Values 4 § 6.1): its width and height in `items`, two
+    // NUMBERs, neither negative, a calc() worked out; `keyword` "auto" when
+    // aspect-ratio wrote auto beside it, NULL otherwise.
+    GARB_V_RATIO,
 } garb_vkind_t;
 
 typedef enum {

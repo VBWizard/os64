@@ -1255,3 +1255,35 @@ IN: quirks object-position: 10 20
 OUT: invalid
 IN: object-position: inherit
 OUT: object-position: inherit
+
+# ── aspect-ratio (Sizing 4 § 4.1): auto || <ratio>, a height left out 1 ──
+IN: aspect-ratio: auto
+OUT: aspect-ratio: auto
+IN: aspect-ratio: 16 / 9
+OUT: aspect-ratio: 16 / 9
+IN: aspect-ratio: 16/9
+OUT: aspect-ratio: 16 / 9
+IN: aspect-ratio: 1.5
+OUT: aspect-ratio: 1.5 / 1
+IN: aspect-ratio: auto 4 / 3
+OUT: aspect-ratio: auto 4 / 3
+IN: aspect-ratio: 4 / 3 auto
+OUT: aspect-ratio: auto 4 / 3
+IN: aspect-ratio: 0 / 0
+OUT: aspect-ratio: 0 / 0
+IN: aspect-ratio: calc(2 + 1) / calc(4 - 3)
+OUT: aspect-ratio: 3 / 1
+IN: aspect-ratio: 16 / -9
+OUT: invalid
+IN: aspect-ratio: 16 9
+OUT: invalid
+IN: aspect-ratio: 16px / 9px
+OUT: invalid
+IN: aspect-ratio: auto / 16
+OUT: invalid
+IN: aspect-ratio: 16 /
+OUT: invalid
+IN: aspect-ratio: auto auto
+OUT: invalid
+IN: aspect-ratio: auto 1 / 1 auto
+OUT: invalid
