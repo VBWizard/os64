@@ -70,6 +70,13 @@ void yonder_diag_failed_seen(yonder_diag_t *d, const char *what, const char *mes
 // A plain line, `key: value`, kept where its key was first set and
 // replaced by a later setting of the same key.
 void yonder_diag_fact(yonder_diag_t *d, const char *key, const char *value);
+// The same line, for a fact a replay rebuilds the page from (the head, the
+// width it was laid out at, whether it was kept whole): it has room of its
+// own past YONDER_DIAG_FACTS_MAX, so a page with more plain lines than that
+// never loses one of these, and a replay never rebuilds a head from
+// defaults it did not know it was taking.
+#define YONDER_DIAG_HEAD_FACTS 16
+void yonder_diag_head_fact(yonder_diag_t *d, const char *key, const char *value);
 // The plain lines whose keys begin `prefix` let go, the rest kept in
 // order — and so are those of them that met no room, so a set of lines
 // rewritten whole, when there may be fewer now, is counted once.
@@ -106,6 +113,21 @@ int64_t yonder_diag_write(const yonder_diag_t *d, const char *dir);
 // one kept. 1 for an empty or unreadable directory.
 uint32_t yonder_diag_next_seq(const char *dir);
 
+// THE RECORD'S NAME, CLAIMED in `dir` before anything is written under it,
+// so two yonders writing one directory, or one whose sequence was counted
+// before a file went, never pair one record with another's kept files. The
+// record's number moves up from where it began until `<name>.txt` can be
+// made where nothing is (os64_open's "x"; the record as it stands goes in
+// it), and, with `keep`, until `<name>.d/` can be made fresh and no
+// `<name>.html` is there; the number it ends on is yonder_diag_seq's. A
+// record that finds no such name in YONDER_DIAG_CLAIM_TRIES tries is not
+// kept (the keepers below answer as for a failed step), and takes the
+// first number whose file it can make, or the one it began with.
+// Answers 0, or negative when `keep` asked for kept files and none could be
+// claimed. Without a claim with `keep`, the keepers keep nothing.
+#define YONDER_DIAG_CLAIM_TRIES 64
+int64_t yonder_diag_claim(yonder_diag_t *d, const char *dir, bool keep);
+
 // ── Keeping the page (keep_pages) ──
 //
 // Each answers 0, or negative when nothing more of this page will be kept:
@@ -118,7 +140,8 @@ uint32_t yonder_diag_next_seq(const char *dir);
 // file beside `<name>.html`, which is begun at the first call.
 int64_t yonder_diag_keep_bytes(yonder_diag_t *d, const char *dir, const void *bytes, size_t n);
 // The parser has had all the bytes it will be fed: the temporary file is
-// renamed over `<name>.html` (an empty one for a page of no bytes).
+// renamed to `<name>.html` (an empty one for a page of no bytes), never
+// over one there already, which is a failed step.
 int64_t yonder_diag_keep_bytes_end(yonder_diag_t *d, const char *dir);
 
 // What a kept sub-resource is: its file's extension, and the word the

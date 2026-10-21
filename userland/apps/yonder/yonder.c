@@ -496,8 +496,9 @@ static bool s_script_audit;
 
 // THE PAGE FILES (YONDER_DIAGNOSTICS.md): the directory yonder.conf's
 // `diagnostics` names, empty when it names none or the directory could not
-// be made (said once, at the start); the sequence the next load is given;
-// and whether a failed write has been said, which is said once a run.
+// be made (said once, at the start); the sequence the next load's claim
+// begins at (diag_begin); and whether a failed write has been said, which
+// is said once a run.
 // `keep`: yonder.conf's `keep_pages`, which keeps each page beside its file
 // (diag.h), read with the directory; a page that could not be kept is said
 // once a run too.
@@ -1651,11 +1652,19 @@ static const char *diag_dir_open(void)
     return NULL;
 }
 
-// A load's record, numbered in browse order. NULL on no memory: the load
-// goes on unrecorded.
+static void diag_kept(int64_t answer);
+
+// A load's record, numbered in browse order, its name claimed in the
+// directory before anything is written under it (yonder_diag_claim): a
+// number another yonder took meanwhile is passed over. NULL on no memory:
+// the load goes on unrecorded.
 static yonder_diag_t *diag_begin(const char *url)
 {
-    return yonder_diag_new(url, s_diag.next++, os64_micros());
+    yonder_diag_t *d = yonder_diag_new(url, s_diag.next, os64_micros());
+    if (d != NULL && s_diag.dir[0] != '\0')
+        diag_kept(yonder_diag_claim(d, s_diag.dir, s_diag.keep));
+    s_diag.next = (d != NULL ? yonder_diag_seq(d) : s_diag.next) + 1;
+    return d;
 }
 
 // The record as it stands, written when yonder.conf asks for files; true
@@ -1680,7 +1689,9 @@ static bool diag_write(const yonder_diag_t *d)
 
 // What a keeper answered (diag.h): a page that could not be kept is said
 // once a run, in the log and on the status line, and the next page is
-// tried. What was kept of it stays, and its record says it is not whole.
+// tried. The scripts and sheets kept of it before the failure stay, and so
+// do its bytes if they were already whole; bytes still in their temporary
+// file go with it. Its record says it is not whole.
 static void diag_kept(int64_t answer)
 {
     if (answer == 0 || s_diag.keep_said)
@@ -2035,11 +2046,11 @@ static void diag_arrived(Page *p, uint64_t laid_ms)
     if (p->diag == NULL)
         return;
     char v[96];
-    yonder_diag_fact(p->diag, "final address", p->way.url);
+    yonder_diag_head_fact(p->diag, "final address", p->way.url);
     os64_snprintf(v, sizeof(v), "%ld ms", (long)((os64_micros() - yonder_diag_began(p->diag)) / 1000));
     yonder_diag_fact(p->diag, "arrived after", v);
     os64_snprintf(v, sizeof(v), "%d px in %lu ms", (int)p->laid_width, (unsigned long)laid_ms);
-    yonder_diag_fact(p->diag, "laid out at", v);
+    yonder_diag_head_fact(p->diag, "laid out at", v);
     diag_observe(p, "when the page arrived");
     diag_write(p->diag);
 }
@@ -7843,7 +7854,7 @@ static void stream_finish(os64_fetch_status_t fetch, const char *reason)
         os64_snprintf(bytes, sizeof(bytes), "%lu", (unsigned long)g.stream.bytes);
         yonder_diag_fact(fresh.diag, "bytes", bytes);
         if (g.stream.head.tls_version) {
-            yonder_diag_fact(fresh.diag, "TLS", g.stream.head.tls_version == 0x0304 ? "1.3" :
+            yonder_diag_head_fact(fresh.diag, "TLS", g.stream.head.tls_version == 0x0304 ? "1.3" :
                 g.stream.head.tls_fallback ? "1.2 (fallback)" : "1.2");
         }
         // The server's answer, for every page from the network. One that is
@@ -7853,7 +7864,7 @@ static void stream_finish(os64_fetch_status_t fetch, const char *reason)
             char status[16 + HTTP_REASON_MAX];
             os64_snprintf(status, sizeof(status), "%d %s", (int)g.stream.head.status,
                           g.stream.head.reason);
-            yonder_diag_fact(fresh.diag, "status", status);
+            yonder_diag_head_fact(fresh.diag, "status", status);
             if (g.stream.head.status >= 400) {
                 os64_snprintf(status, sizeof(status), "HTTP %d %s", (int)g.stream.head.status,
                               g.stream.head.reason);
@@ -7865,20 +7876,22 @@ static void stream_finish(os64_fetch_status_t fetch, const char *reason)
         // its redirects and what libway judged its body to be; for a page
         // from the network, its type and charset as the server named them
         // and whether it arrived encrypted; and a page read with scripts
-        // off says so.
+        // off says so. They, the status and TLS above, and the width it is
+        // laid out at have room a page's other plain lines cannot take
+        // (yonder_diag_head_fact).
         static const char *const kBodies[] = {[WAY_BODY_HTML] = "html", [WAY_BODY_TEXT] = "text",
                                               [WAY_BODY_IMAGE] = "image"};
-        yonder_diag_fact(fresh.diag, "final address", g.stream.head.url);
-        yonder_diag_fact(fresh.diag, "body", kBodies[g.stream.head.body]);
+        yonder_diag_head_fact(fresh.diag, "final address", g.stream.head.url);
+        yonder_diag_head_fact(fresh.diag, "body", kBodies[g.stream.head.body]);
         if (g.stream.local == NULL) {
             if (g.stream.head.content_type[0] != '\0')
-                yonder_diag_fact(fresh.diag, "content-type", g.stream.head.content_type);
+                yonder_diag_head_fact(fresh.diag, "content-type", g.stream.head.content_type);
             if (g.stream.head.charset[0] != '\0')
-                yonder_diag_fact(fresh.diag, "charset", g.stream.head.charset);
-            yonder_diag_fact(fresh.diag, "encrypted", g.stream.head.encrypted ? "yes" : "no");
+                yonder_diag_head_fact(fresh.diag, "charset", g.stream.head.charset);
+            yonder_diag_head_fact(fresh.diag, "encrypted", g.stream.head.encrypted ? "yes" : "no");
         }
         if (!fresh.scripting)
-            yonder_diag_fact(fresh.diag, "scripts", "off");
+            yonder_diag_head_fact(fresh.diag, "scripts", "off");
     }
     // The sheets the stream sent for move with it, still out or landed,
     // and keep their jobs, which name this serial: no sheet is fetched

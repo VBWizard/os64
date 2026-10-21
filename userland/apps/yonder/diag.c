@@ -34,12 +34,14 @@ struct yonder_diag {
     Table missing, failed, facts;
     // A line went with no memory even to name it (yonder_diag_short).
     bool short_of_memory;
-    // THE PAGE KEPT (diag.h): the temporary file the page's bytes are
+    // THE PAGE KEPT (diag.h): the folder its name claimed (yonder_diag_
+    // claim; NULL when none was), the temporary file the page's bytes are
     // appended to while its parser is fed them (`open`, its `handle` and
     // path), whether they were renamed into place (`ended`), how many
     // sub-resources are kept and the index's lines, and whether a step
     // failed, which ends the keeping of this page.
     struct {
+        char *folder;
         bool open, ended, failed;
         int32_t handle;
         char *temp;
@@ -118,13 +120,15 @@ static void table_found(Table *t, const char *a, const char *b, bool both)
 }
 
 // The line keyed `a` (and `b`, when `both`), found or added. NULL when the
-// table is full or memory ran out: the line is then counted as lost, once.
+// table holds `max` lines already (more, when lines kept past the others'
+// room were added: yonder_diag_head_fact) or memory ran out: the line is
+// then counted as lost, once.
 static Line *table_line(Table *t, const char *a, const char *b, bool both, uint32_t max)
 {
     for (uint32_t i = 0; i < t->n; i++)
         if (same_key(&t->lines[i], a, b, both))
             return &t->lines[i];
-    if (t->n == max) {
+    if (t->n >= max) {
         table_lose(t, a, b, both);
         return NULL;
     }
@@ -175,6 +179,11 @@ void yonder_diag_free(yonder_diag_t *d)
     if (d == NULL)
         return;
     keep_abandon(d);
+    // A folder that kept nothing goes; its name stays the record's, whose
+    // file holds it.
+    if (d->keep.folder != NULL && d->keep.resources == 0)
+        (void)os64_unlink(d->keep.folder);
+    os64_free(d->keep.folder);
     os64_free(d->keep.index);
     table_free(&d->missing);
     table_free(&d->failed);
@@ -219,11 +228,12 @@ void yonder_diag_failed(yonder_diag_t *d, const char *what, const char *message)
         l->count = saturating(l->count, 1);
 }
 
-void yonder_diag_fact(yonder_diag_t *d, const char *key, const char *value)
+// A plain line set, in a table of `max` lines.
+static void fact_set(yonder_diag_t *d, const char *key, const char *value, uint32_t max)
 {
     if (d == NULL)
         return;
-    Line *l = table_line(&d->facts, key, "", false, YONDER_DIAG_FACTS_MAX);
+    Line *l = table_line(&d->facts, key, "", false, max);
     if (l == NULL)
         return;
     // A value with no memory to keep is not left empty, nor the one before
@@ -234,6 +244,16 @@ void yonder_diag_fact(yonder_diag_t *d, const char *key, const char *value)
         return;
     os64_free(l->b);
     l->b = v;
+}
+
+void yonder_diag_fact(yonder_diag_t *d, const char *key, const char *value)
+{
+    fact_set(d, key, value, YONDER_DIAG_FACTS_MAX);
+}
+
+void yonder_diag_head_fact(yonder_diag_t *d, const char *key, const char *value)
+{
+    fact_set(d, key, value, YONDER_DIAG_FACTS_MAX + YONDER_DIAG_HEAD_FACTS);
 }
 
 void yonder_diag_forget(yonder_diag_t *d, const char *prefix)
@@ -543,6 +563,65 @@ static bool kept_path(const yonder_diag_t *d, const char *dir, const char *suffi
     return n > 0 && (size_t)n < cap;
 }
 
+static int64_t keep_failed(yonder_diag_t *d);
+
+// The record's file made at `path` only if nothing is there, with the
+// record as it stands in it, so the name is claimed by a file that reads as
+// a record from the start. False when something is there, or it could not
+// be made.
+static bool claim_file(const yonder_diag_t *d, const char *path)
+{
+    int64_t h = os64_open(path, "x");
+    if (h < 0)
+        return false;
+    size_t need = yonder_diag_render(d, NULL, 0);
+    char *text = os64_malloc(need + 1);
+    if (text != NULL) {
+        yonder_diag_render(d, text, need + 1);
+        (void)write_all((int32_t)h, text, need);
+        os64_free(text);
+    }
+    (void)os64_close((int32_t)h);
+    return true;
+}
+
+int64_t yonder_diag_claim(yonder_diag_t *d, const char *dir, bool keep)
+{
+    if (d == NULL || dir == NULL)
+        return 0;
+    char path[OS64_PATH_MAX], html[OS64_PATH_MAX], folder[OS64_PATH_MAX];
+    os64_dirent_t e;
+    uint32_t first = d->seq;
+    for (uint32_t tries = 0; tries < YONDER_DIAG_CLAIM_TRIES; tries++, d->seq++) {
+        if (!kept_path(d, dir, ".txt", path, sizeof(path)) || !claim_file(d, path))
+            continue;
+        if (!keep)
+            return 0;
+        // Its kept files' names must be fresh too: the folder made here,
+        // and no page's bytes by that name left from before.
+        if (kept_path(d, dir, ".html", html, sizeof(html)) && os64_stat(html, &e) != 0 &&
+            kept_path(d, dir, ".d", folder, sizeof(folder)) && os64_mkdir(folder) == 0) {
+            size_t n = os64_strlen(folder) + 1;
+            d->keep.folder = os64_malloc(n);
+            if (d->keep.folder != NULL) {
+                os64_memcpy(d->keep.folder, folder, n);
+                return 0;
+            }
+            (void)os64_unlink(folder);
+            return keep_failed(d);
+        }
+        (void)os64_unlink(path);
+    }
+    // No name with fresh kept files: the record takes the first that is
+    // free, or the one it began with, and nothing of the page is kept.
+    d->seq = first;
+    for (uint32_t tries = 0; tries < YONDER_DIAG_CLAIM_TRIES; tries++, d->seq++)
+        if (kept_path(d, dir, ".txt", path, sizeof(path)) && claim_file(d, path))
+            return keep ? keep_failed(d) : 0;
+    d->seq = first;
+    return keep ? keep_failed(d) : 0;
+}
+
 // The page's bytes are let go unkept: their temporary file is closed and
 // removed.
 static void keep_abandon(yonder_diag_t *d)
@@ -562,15 +641,17 @@ static int64_t keep_failed(yonder_diag_t *d)
 {
     keep_abandon(d);
     d->keep.failed = true;
-    yonder_diag_fact(d, "kept", "not whole: a step of keeping the page failed");
+    yonder_diag_head_fact(d, "kept", "not whole: a step of keeping the page failed");
     return -1;
 }
 
-// The temporary file the page's bytes go to, begun.
+// The temporary file the page's bytes go to, begun: only for a record whose
+// name claimed its kept files' names (yonder_diag_claim).
 static bool keep_begin(yonder_diag_t *d, const char *dir)
 {
     char path[OS64_PATH_MAX], temp[OS64_PATH_MAX];
-    if (!kept_path(d, dir, ".html", path, sizeof(path)) || !temp_beside(path, temp, sizeof(temp)))
+    if (d->keep.folder == NULL || !kept_path(d, dir, ".html", path, sizeof(path)) ||
+        !temp_beside(path, temp, sizeof(temp)))
         return false;
     size_t n = os64_strlen(temp) + 1;
     d->keep.temp = os64_malloc(n);
@@ -602,8 +683,12 @@ int64_t yonder_diag_keep_bytes_end(yonder_diag_t *d, const char *dir)
         return 0;
     if (d->keep.failed || d->keep.ended)
         return d->keep.failed ? -1 : 0;
+    // Never over a page's bytes already there: the name was claimed fresh
+    // (yonder_diag_claim), so one there now is another's.
     char path[OS64_PATH_MAX];
-    if ((!d->keep.open && !keep_begin(d, dir)) || !kept_path(d, dir, ".html", path, sizeof(path)))
+    os64_dirent_t e;
+    if ((!d->keep.open && !keep_begin(d, dir)) || !kept_path(d, dir, ".html", path, sizeof(path)) ||
+        os64_stat(path, &e) == 0)
         return keep_failed(d);
     d->keep.open = false;
     bool ok = os64_close(d->keep.handle) == 0;
@@ -626,11 +711,12 @@ int64_t yonder_diag_keep_resource(yonder_diag_t *d, const char *dir, yonder_diag
         return 0;
     if (d->keep.failed)
         return -1;
-    char folder[OS64_PATH_MAX], path[OS64_PATH_MAX], index[OS64_PATH_MAX];
-    if (!kept_path(d, dir, ".d", folder, sizeof(folder)))
-        return keep_failed(d);
-    os64_dirent_t e;
-    if (d->keep.resources == 0 && os64_stat(folder, &e) != 0 && os64_mkdir(folder) != 0)
+    (void)dir;
+    // The folder is the one the record's name claimed, made then and so
+    // this record's alone: nothing in it is anyone else's to replace.
+    const char *folder = d->keep.folder;
+    char path[OS64_PATH_MAX], index[OS64_PATH_MAX];
+    if (folder == NULL)
         return keep_failed(d);
     uint32_t number = d->keep.resources + 1;
     const char *word = kind == YONDER_DIAG_KEPT_SCRIPT ? "script" : "sheet";

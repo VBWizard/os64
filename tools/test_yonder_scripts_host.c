@@ -83,9 +83,19 @@ int64_t os64_rename(const char *from, const char *to) {
     fake_writes++;
     return 0;
 }
+/* A file, or a directory with nothing in it, as os64_unlink removes either. */
 int64_t os64_unlink(const char *p) {
     int f=fake_file(p);
-    if(f<0) return -1;
+    if(f<0) {
+        char parent[256];
+        for(int i=0;i<FAKE_FILES;i++)
+            if(fake_files[i].used && fake_parent(fake_files[i].path,parent,sizeof(parent)) && !strcmp(parent,p))
+                return -1;
+        for(int i=0;i<nfake_dirs;i++) if(!strcmp(fake_dirs[i],p)) {
+            memmove(fake_dirs[i],fake_dirs[i+1],(size_t)(nfake_dirs-i-1)*sizeof(fake_dirs[0])); nfake_dirs--; return 0;
+        }
+        return -1;
+    }
     free(fake_files[f].data); memset(&fake_files[f],0,sizeof(fake_files[f])); return 0;
 }
 int64_t os64_mkdir(const char *p) {
@@ -4902,20 +4912,21 @@ static void diag_keep_cases(void) {
         "keep: a page stopped before all its bytes came keeps none, its temporary file goes, and its record is written");
     loop_drop();
 
-    /* No room for the page's folder: the page is not whole, its record says
-     * so, and the status line says so once a run. */
+    /* No room for the page's folder: no name with fresh kept files can be
+     * claimed, the page is not whole, its record says so, and the log and
+     * the status line say so once a run. */
     stream_window(); g.scripts_on=true; g.script_ms=5000; now_ms=100;
     while(nfake_dirs<16) { snprintf(fake_dirs[nfake_dirs],256,"/full/%d",nfake_dirs); nfake_dirs++; }
     start_trip("http://fixture.test/nofolder",NULL,NAV_GO,NULL);
+    check(s_diag.keep_said && has(last_debug,"could not be kept in /tmp/kept"),
+        "keep failed: a page whose kept files cannot be claimed is said as it starts");
     h=stream_head("text/html","",false);
     yonder_mail_post_head(g.stream.mail,&h);
     const char *needs="<p id=out>x</p><script src=s.js></script>";
     stream_post_body((const uint8_t *)needs,strlen(needs),YONDER_STREAM_CHUNK);
     stream_post_verdict(true,OS64_FETCH_OK,"");
     check(loop_settle() && g.stream.stopped,"keep failed: the page stops at its script");
-    check(script_land("/s.js","1") && has(g.status_rest,"could not be kept in /tmp/kept") && s_diag.keep_said,
-        "keep failed: a script with no folder to go to is said on the status line");
-    check(loop_settle() && g.page.tree!=NULL,"keep failed: the page arrives all the same");
+    check(script_land("/s.js","1") && loop_settle() && g.page.tree!=NULL,"keep failed: the page arrives all the same");
     yonder_diag_file_name(g.page.diag,name,sizeof(name));
     text=diag_file("/tmp/kept",name);
     snprintf(path,sizeof(path),"/tmp/kept/%.*s.html",(int)(strlen(name)-4),name);
@@ -4923,6 +4934,52 @@ static void diag_keep_cases(void) {
         !fake_temp_left(),
         "keep failed: the record says the page is not whole, and nothing more of it is kept");
     loop_drop();
+    keep_end();
+
+    /* A head fact has room the page's other plain lines cannot take. */
+    {
+        yonder_diag_t *d=yonder_diag_new("http://fixture.test/many",1,0);
+        for(unsigned i=0;i<YONDER_DIAG_FACTS_MAX+5;i++) { char k[16]; snprintf(k,sizeof(k),"script %u",i); yonder_diag_fact(d,k,"ran"); }
+        yonder_diag_head_fact(d,"body","html");
+        yonder_diag_fact(d,"one more","lost");
+        char *big=malloc(1<<16); yonder_diag_render(d,big,1<<16);
+        check(has(big,"\nbody: html\n") && !has(big,"one more") && has(big,"\nfacts not kept: 6\n"),
+            "keep: a head fact is kept on a page whose plain lines fill the table, which still counts the rest");
+        free(big); yonder_diag_free(d);
+    }
+
+    /* THE NAME IS CLAIMED: another yonder's record at the next number, a
+     * page's bytes left from before at the one after, and a folder at the
+     * one after that are each passed over; the record and what is kept
+     * beside it take the first number all of whose names are fresh, and
+     * touch nothing of the others'. */
+    keep_begin(true);
+    uint32_t next=s_diag.next;
+    char other[64], left[64], folder[64];
+    snprintf(other,sizeof(other),"/tmp/kept/fixture.test-%04u.txt",(unsigned)next);
+    snprintf(left,sizeof(left),"/tmp/kept/fixture.test-%04u.html",(unsigned)next+1);
+    snprintf(folder,sizeof(folder),"/tmp/kept/fixture.test-%04u.d",(unsigned)next+2);
+    int64_t fh=os64_open(other,"w"); os64_write((int32_t)fh,"address: another yonder's\n",26); os64_close((int32_t)fh);
+    fh=os64_open(left,"w"); os64_write((int32_t)fh,"<p>left from before",19); os64_close((int32_t)fh);
+    os64_mkdir(folder);
+    loop_page("<p id=out>x</p><script src=c.js></script>");
+    check(loop_settle() && script_land("/c.js","1") && loop_settle() && g.page.tree!=NULL,
+        "claim: the page arrives");
+    check(yonder_diag_seq(g.page.diag)==next+3 && s_diag.next==next+4,"claim: the record takes the first fresh number");
+    snprintf(path,sizeof(path),"/tmp/kept/fixture.test-%04u.d/index",(unsigned)next+3);
+    char html_path[64]; snprintf(html_path,sizeof(html_path),"/tmp/kept/fixture.test-%04u.html",(unsigned)next+3);
+    check(!strcmp(fake_text(other),"address: another yonder's\n") && !strcmp(fake_text(left),"<p>left from before") &&
+        fake_is_dir(folder) && fake_text(path)!=NULL && fake_text(html_path)!=NULL,
+        "claim: the others' files are untouched, and the kept bytes and index are under the claimed name");
+    loop_drop();
+    /* A page that fetched nothing to keep leaves no folder behind. */
+    loop_page("<p>nothing to fetch</p>");
+    seq=yonder_diag_seq(g.stream.diag);
+    check(loop_settle() && g.page.tree!=NULL,"claim: a page with nothing to fetch arrives");
+    loop_drop();
+    snprintf(path,sizeof(path),"/tmp/kept/fixture.test-%04u.d",(unsigned)seq);
+    snprintf(html_path,sizeof(html_path),"/tmp/kept/fixture.test-%04u.html",(unsigned)seq);
+    check(!fake_is_dir(path) && fake_text(html_path)!=NULL,"claim: its empty folder goes, its bytes stay");
     keep_end();
 
     /* The setting off: the page files are written and nothing is kept. */
