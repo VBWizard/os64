@@ -10,13 +10,14 @@ user-reported, without a captured installed-binary hash.
 
 ## Resume point
 
-**E5's Scribe consumer is implemented** on `codex/scribe-file-dialogs`, in
-`.worktrees/scribe-file-dialogs`, based on `aa04123c` plus shared-dialog commit
-`42410e34`. Implementation `29252438` is published in
-[draft PR #319](https://github.com/VBWizard/os64/pull/319).
-[Scope, checks and walkthrough](E05_SCRIBE.md). Review and Chris's
-P5 acceptance remain pending. Scribe is the first app consumer; Yonder remains
-part of the Modern Web work.
+**E5's Scribe consumer is accepted.** [PR #319](https://github.com/VBWizard/os64/pull/319)
+merged as `ddaad166`; Chris reported a clean review and successful P5 use,
+including resizing. No installed binary hash was captured.
+
+Active follow-up: [E5A compact footer and shared size memory](E05A_DIALOG_POLISH.md),
+owned by Quinn on `codex/file-dialog-polish`, worktree `.worktrees/file-dialog-polish`,
+based on `5fb5f7a6`. Parent-owned stacking is a separate window-manager task.
+Scribe is the first app consumer; Yonder remains part of the Modern Web work.
 
 E4 is merged through PR #267 as `a3dd4b65`. Its [design](E04_ROAM.md) and
 [evidence](evidence/e04/README.md) describe the browser foundation. The old E4
@@ -48,7 +49,7 @@ was captured. [E2 evidence](evidence/e02/README.md) preserves that distinction.
 E3A/E3B are merged through [PR #264](https://github.com/VBWizard/os64/pull/264).
 [Evidence](evidence/e03/README.md) records host, native, packaging and delivery
 scope. The E3 design and implementation worktrees remain separate historical
-checkpoints; active Scribe work belongs in `.worktrees/scribe-file-dialogs`.
+checkpoints; active dialog work belongs in `.worktrees/file-dialog-polish`.
 
 | Work | State | Next action |
 | --- | --- | --- |
@@ -59,7 +60,7 @@ checkpoints; active Scribe work belongs in `.worktrees/scribe-file-dialogs`.
 | [E2 icons](E02_ICONS.md) | Merged, PR #261 | Reuse provider and shipped assets; [evidence](evidence/e02/README.md). |
 | [E3 data view and selection](E03_DATA_VIEW.md) | Merged PR #264 | Reuse the shared model and Details view; [P5 packet](E03_HANDOFF.md). |
 | [E4 directory browser](E04_ROAM.md) | Merged PR #267 | Reuse the shared browser. |
-| [E5 Scribe dialogs](E05_SCRIBE.md) | Implemented; review/P5 pending | Review and try Open/Save in Scribe. |
+| [E5 Scribe dialogs](E05_SCRIBE.md) | Accepted; PR #319 merged, P5 tested | [E5A layout and size follow-up](E05A_DIALOG_POLISH.md). |
 | E6 channels | Umbrella proposal only | Separate platform design and Fable review. |
 
 Install another icon set by extracting its folder, selecting its absolute path

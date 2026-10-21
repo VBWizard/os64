@@ -941,3 +941,24 @@ remain separate implementation work.
 Published implementation `29252438` as [draft PR #319](https://github.com/VBWizard/os64/pull/319)
 against `userland`, including the shared-dialog dependency. Review/P5 remain
 pending; the branch has not been merged.
+
+
+## 2026-10-20 — E5 accepted; compact dialogs and shared size memory
+
+Chris reported successful Scribe use and resizing on P5, followed by a clean
+Codex review. PR #319 merged as `ddaad166`; no installed binary hash was
+captured. Chris authorized the follow-up. Quinn implemented E5A on
+`codex/file-dialog-polish` from `5fb5f7a6`.
+
+The footer uses two rows at normal widths, wraps actions at narrow widths,
+and allocates a message row when needed. Open and Save read one shared
+`file-dialog.conf` size via the configured ladder. Completed resizes publish
+a whole pair atomically; Cancel retains it, closing an older dialog does not
+rewrite it, and screen/font clamping or maximize/restore do not replace it.
+
+[E5A evidence](evidence/e05a/README.md) records 4,223 dialog and 2,584 Scribe
+checks with ASan/UBSan/LeakSanitizer, cross-build and native QEMU checks across
+two applications. The delivery bundle is `/tmp/file-dialog-polish-wire`.
+Review and P5 acceptance of E5A remain pending. Parent-owned stacking is the
+separate window-manager follow-up; Yonder and configurable associations-file
+storage remain separate work.

@@ -3,9 +3,11 @@
 #include "os64/io.h"
 #include "os64/str.h"
 #include "os64/fmt.h"
+#include "os64/conf.h"
 
 static void file_report(os64_ui_file_dialog_t *d, const char *text)
 {
+    if (!!*d->message_text != !!*text) d->footer_dirty = true;
     os64_strcopy(d->message_text, sizeof(d->message_text), text);
     os64_ui_mark_dirty(&d->ui, &d->message);
 }
@@ -18,7 +20,7 @@ static void file_place(os64_ui_widget_t *w, os64_gui_rect_t r, bool staged)
 
 static os64_font_status_t file_layout(os64_ui_file_dialog_t *d, bool staged)
 {
-    int32_t pad = d->ui.theme.pad + 8, gap = d->ui.theme.gap;
+    int32_t pad = d->ui.theme.pad + 4, gap = d->ui.theme.gap;
     int32_t row = os64_ui_control_min_height(&d->ui);
     int32_t width = d->root.bounds.w - 2 * pad;
     int32_t button = 0, label = 0, hidden = 0;
@@ -33,11 +35,26 @@ static os64_font_status_t file_layout(os64_ui_file_dialog_t *d, bool staged)
     if (os64_ui_text_measure(&d->ui, OS64_FONT_ROLE_UI, "File name", 9, &label) ||
         os64_ui_text_measure(&d->ui, OS64_FONT_ROLE_UI, "Show hidden files", 17, &hidden))
         return OS64_FONT_NO_MEMORY;
-    button += 2 * pad; label += pad; hidden += row + pad;
-    int32_t footer = 4 * row + 3 * gap + 2 * pad;
-    int32_t minimum = 3 * button + 2 * gap;
-    if (hidden + button + gap > minimum) minimum = hidden + button + gap;
-    if (width < minimum || d->root.bounds.h < footer + 3 * row || row <= 0)
+    button += 2 * pad; label += pad;
+    hidden += d->ui.theme.checkbox_size + gap;
+    int32_t minimum = hidden + button + gap;
+    if (2 * button + gap > minimum) minimum = 2 * button + gap;
+    if (label + 4 * row > minimum) minimum = label + 4 * row;
+    bool wrap = width < hidden + 3 * button + 3 * gap;
+    bool message = *d->message_text != 0;
+    int32_t rows = 2 + wrap + message;
+    int32_t footer = rows * row + (rows - 1) * gap + 2 * pad;
+    /* Reserve the minimum for wrapped controls and a message. The actual
+     * footer only uses those rows when needed, leaving the rest to browsing. */
+    int32_t min_height = 7 * row + 3 * gap + 2 * pad;
+    if (staged) {
+        d->staged_min_width = minimum + 2 * pad;
+        d->staged_min_height = min_height;
+    } else {
+        d->min_width = minimum + 2 * pad;
+        d->min_height = min_height;
+    }
+    if (width < minimum || d->root.bounds.h < min_height || row <= 0)
         return OS64_FONT_LIMIT;
     int32_t y = d->root.bounds.h - footer;
     os64_gui_rect_t area = {0, 0, d->root.bounds.w, y};
@@ -54,22 +71,20 @@ static os64_font_status_t file_layout(os64_ui_file_dialog_t *d, bool staged)
     file_place(&d->folder_label, (os64_gui_rect_t){pad,y,label,row}, staged);
     file_place(&d->folder.w, (os64_gui_rect_t){pad+label,y,width-label,row}, staged);
     y += row + gap;
+    file_place(&d->message, (os64_gui_rect_t){pad,y,width,message ? row : 0}, staged);
+    if (message) y += row + gap;
     file_place(&d->hidden.w, (os64_gui_rect_t){pad,y,hidden,row}, staged);
-    file_place(&d->new_folder, (os64_gui_rect_t){pad+width-button,y,button,row}, staged);
-    y += row + gap;
-    file_place(&d->message, (os64_gui_rect_t){pad,y,width,row}, staged);
-    y += row + gap;
-    os64_gui_rect_t primary = {pad+width-2*button-gap,y,button,row};
-    os64_gui_rect_t secondary = {pad+width-button,y,button,row};
+    file_place(&d->new_folder, (os64_gui_rect_t){pad+hidden+gap,y,button,row}, staged);
+    if (wrap) y += row + gap;
+    os64_gui_rect_t secondary = {pad+width-2*button-gap,y,button,row};
+    os64_gui_rect_t primary = {pad+width-button,y,button,row};
     file_place(&d->accept, primary, staged); file_place(&d->cancel, secondary, staged);
     file_place(&d->replace, primary, staged); file_place(&d->keep, secondary, staged);
     file_place(&d->folder_create, primary, staged); file_place(&d->folder_cancel, secondary, staged);
-    if (staged) {
-        d->staged_min_width = minimum + 2 * pad;
-        d->staged_min_height = footer + 3 * row;
-    } else {
-        d->min_width = minimum + 2 * pad;
-        d->min_height = footer + 3 * row;
+    if (!staged) {
+        os64_ui_set_hidden(&d->ui, &d->message, !message);
+        d->footer_dirty = false;
+        os64_ui_mark_dirty(&d->ui, &d->root);
     }
     return OS64_FONT_OK;
 }
@@ -90,7 +105,7 @@ static void file_committed(os64_ui_t *ui, void *user, void *p)
 static void file_discarded(os64_ui_t *ui, void *user, void *p)
 { (void)ui; (void)user; (void)p; }
 
-/* The prompt disables the underlying file_controls and moves focus to the safe
+/* The prompt disables the underlying controls and moves focus to the safe
  * response. A second Enter from activating a file cannot authorize Replace. */
 static void file_controls(os64_ui_file_dialog_t *d)
 {
@@ -193,9 +208,9 @@ static void file_submit(os64_ui_file_dialog_t *d)
         os64_strcopy(d->pending_path, sizeof(d->pending_path), path);
         d->confirm = true;
         file_controls(d);
-        os64_snprintf(d->message_text, sizeof(d->message_text),
-            "Replace the existing file: %s?", path);
-        os64_ui_mark_dirty(&d->ui, &d->message);
+        char message[sizeof(d->message_text)];
+        os64_snprintf(message, sizeof(message), "Replace the existing file: %s?", path);
+        file_report(d, message);
     } else file_accept_path(d, path, false);
 }
 static void file_name_submit(os64_ui_textfield_t *tf, void *user)
@@ -240,7 +255,7 @@ static void file_clicked(os64_ui_widget_t *w, void *user)
         os64_dirent_t entry;
         if (os64_stat(d->pending_path, &entry) < 0 || (entry.flags & OS64_DE_DIR)) {
             file_cancel_prompt(d);
-            file_report(d, "The destination file_changed. Choose it again.");
+            file_report(d, "The destination file changed. Choose it again.");
         } else file_accept_path(d, d->pending_path, true);
     }
 }
@@ -278,6 +293,52 @@ static void file_changed(os64_ui_dataview_t *view,
     }
 }
 
+/* Width and height are one value so concurrent applications publish a whole
+ * pair. Read at every open; closing an older dialog never writes it back. */
+static bool file_size_parse(const char *text, uint32_t *width, uint32_t *height)
+{
+    uint32_t size[2] = {0};
+    for (size_t i = 0; i < 2; ++i) {
+        if (*text < '0' || *text > '9') return false;
+        while (*text >= '0' && *text <= '9') {
+            size[i] = size[i] * 10 + (uint32_t)(*text++ - '0');
+            /* Bound arithmetic before native creation; FIT_SCREEN supplies
+             * the actual display limit, including its decorations. */
+            if (size[i] > 32767) return false;
+        }
+        if (!size[i] || (i == 0 ? *text++ != ',' : *text != 0)) return false;
+    }
+    *width = size[0]; *height = size[1];
+    return true;
+}
+static void file_size_baseline(os64_ui_file_dialog_t *d)
+{
+    d->size_width = d->draw.surf.width;
+    d->size_height = d->draw.surf.height;
+}
+static void file_size_remember(os64_ui_file_dialog_t *d)
+{
+    bool changed = d->size_width != d->draw.surf.width ||
+        d->size_height != d->draw.surf.height;
+    file_size_baseline(d);
+    os64_gui_window_state_t state;
+    if (os64_gui_window_get_state(d->window, &state) != 0) {
+        d->size_suspended = true; return;
+    }
+    bool suspended = (state.flags & (OS64_GUI_WINDOW_MAXIMIZED | OS64_GUI_WINDOW_MINIMIZED)) != 0;
+    bool restoring = d->size_suspended;
+    d->size_suspended = suspended;
+    if (!d->size_ready || !changed || suspended || restoring || d->layout_pending) return;
+    char value[32];
+    os64_snprintf(value, sizeof(value), "%u,%u", d->size_width, d->size_height);
+    os64_conf_pair_t pair = {"size", value};
+    /* The WM emits resize on completion of a drag. Persistence is best effort:
+     * a read-only configuration destination must not prevent choosing a file.
+     * The checked writer atomically replaces the pair, preserving the old file
+     * on failure; this generated decimal value needs no extra validator. */
+    (void)os64_conf_write_checked("file-dialog.conf", &pair, 1, NULL, NULL);
+}
+
 void os64_ui_file_dialog_event(os64_ui_file_dialog_t *d, const os64_gui_event_t *event)
 {
     if (!d || d->window <= 0 || !event || d->result != OS64_UI_FILE_PENDING) return;
@@ -307,6 +368,7 @@ void os64_ui_file_dialog_event(os64_ui_file_dialog_t *d, const os64_gui_event_t 
         }
     }
     (void)os64_ui_dispatch(&d->ui, event);
+    if (event->type == OS64_GUI_EVENT_WINDOW_RESIZE) file_size_remember(d);
     if (d->ui.quit) d->result = OS64_UI_FILE_CANCELLED;
     else file_activate_pending(d);
 }
@@ -363,7 +425,7 @@ void os64_ui_file_dialog_update(os64_ui_file_dialog_t *d)
     }
     os64_ui_browser_sync(&d->browser_ui);
     os64_ui_checkbox_set(&d->ui, &d->hidden, os64_browser_hidden(d->browser));
-    if (d->layout_pending) file_resize(&d->ui);
+    if (d->layout_pending || d->footer_dirty) file_resize(&d->ui);
     os64_ui_set_enabled(&d->ui, &d->accept, !d->layout_pending &&
         !os64_browser_loading(d->browser) && (*d->name.buf || d->selected_folder));
     if (d->min_width != d->applied_min_width || d->min_height != d->applied_min_height) {
@@ -375,6 +437,7 @@ void os64_ui_file_dialog_update(os64_ui_file_dialog_t *d)
             d->root.bounds.w = (int32_t)d->draw.surf.width;
             d->root.bounds.h = (int32_t)d->draw.surf.height;
             file_resize(&d->ui);
+            file_size_baseline(d);
         }
     }
     os64_ui_paint(&d->ui);
@@ -390,6 +453,8 @@ static os64_ui_status_code_t file_compose(os64_ui_file_dialog_t *d,
     const os64_ui_file_options_t *options)
 {
     os64_ui_init(&d->ui, &d->draw);
+    /* Adopt the current font before measuring the restored window minimum. */
+    (void)os64_ui_font_follow(&d->ui);
     os64_ui_panel(&d->root);
     d->root.bounds = (os64_gui_rect_t){0,0,(int32_t)d->draw.surf.width,(int32_t)d->draw.surf.height};
     d->root.user = d;
@@ -421,6 +486,14 @@ static os64_ui_status_code_t file_compose(os64_ui_file_dialog_t *d,
     if (os64_ui_font_planner(&d->ui, file_plan, file_committed, file_discarded, d) != OS64_FONT_OK)
         return OS64_UI_NO_MEMORY;
     os64_font_status_t font_rc = file_layout(d, false);
+    if (font_rc == OS64_FONT_LIMIT &&
+        os64_gui_window_set_min_size(d->window, d->min_width, d->min_height) == 0) {
+        d->applied_min_width = d->min_width; d->applied_min_height = d->min_height;
+        if (os64_draw_ctx_refresh(&d->draw) != 0) return OS64_UI_ERROR;
+        d->root.bounds.w = (int32_t)d->draw.surf.width;
+        d->root.bounds.h = (int32_t)d->draw.surf.height;
+        font_rc = file_layout(d, false);
+    }
     if (font_rc != OS64_FONT_OK)
         return font_rc == OS64_FONT_NO_MEMORY ? OS64_UI_NO_MEMORY : OS64_UI_LIMIT;
     os64_ui_status_code_t rc = os64_browser_create(&d->browser_ui.details,
@@ -456,13 +529,20 @@ os64_ui_status_code_t os64_ui_file_dialog_open(os64_ui_file_dialog_t *d,
     }
     const char *title = options->title ? options->title :
         options->mode == OS64_UI_FILE_SAVE ? "Save As" : "Open";
-    d->window = os64_gui_window_create_content(title,x,y,880,700,OS64_GUI_CREATE_FIT_SCREEN);
+    uint32_t width = 880, height = 700;
+    char value[32];
+    if (os64_conf_get("file-dialog.conf", "size", value, sizeof(value)) == 0)
+        (void)file_size_parse(value, &width, &height);
+    /* Composition raises the native floor to the measured controls before
+     * the first paint. FIT_SCREEN still limits the initial allocation. */
+    if (width < OS64_GUI_MIN_CONTENT) width = OS64_GUI_MIN_CONTENT;
+    if (height < OS64_GUI_MIN_CONTENT) height = OS64_GUI_MIN_CONTENT;
+    d->window = os64_gui_window_create_content(title,x,y,width,height,OS64_GUI_CREATE_FIT_SCREEN);
     if (d->window <= 0) { d->window = 0; return OS64_UI_ERROR; }
     os64_ui_status_code_t rc = OS64_UI_ERROR;
     if (os64_draw_ctx_init(&d->draw, d->window) != 0) goto fail;
     rc = file_compose(d, options);
     if (rc) goto fail;
-    (void)os64_ui_font_follow(&d->ui);
     file_resize(&d->ui);
     rc = os64_browser_navigate(d->browser, initial);
     if (rc != OS64_UI_OK && rc != OS64_UI_BUSY) goto fail;
@@ -472,6 +552,8 @@ os64_ui_status_code_t os64_ui_file_dialog_open(os64_ui_file_dialog_t *d,
         d->registered = true;
     }
     os64_ui_file_dialog_update(d);
+    file_size_baseline(d);
+    d->size_ready = true;
     return OS64_UI_OK;
 fail:
     (void)os64_ui_file_dialog_close(d);
