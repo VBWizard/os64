@@ -29,7 +29,8 @@ Disposable copies of the repository disks, Q35, 4 CPUs, 4 GiB RAM, 1024 × 768,
 and the kernel built 2026-10-21 01:34:18 UTC. The root copy received the rebuilt
 Scribe, filedialogtest and library dependencies. The scratch ISO's first boot
 entry enabled GUI, BACKSTOP=10 and DEBUG_GUI. Repository disks and P5 files
-were not modified. No hardware acceptance of this follow-up is claimed.
+were not modified by this QEMU run. Chris's subsequent hardware report is
+recorded separately below.
 
 1. Scribe [Open initially](open-full.png), then Ctrl+Alt+right-drag resized it
    to [680 × 500 content pixels](open-resized.png). Cancel closed it.
@@ -53,6 +54,17 @@ pair was `480,440`, and read-only `e2fsck -fn` passed with exit status zero.
 The [stale-reference audit](stale-refs.txt) lists live E5 document links; each
 was inspected and remains valid.
 
-Parent-owned stacking is outside this change. Review and Chris's P5 check of
-this follow-up remain pending. The [slice record](../../E05A_DIALOG_POLISH.md)
+## P5 report
+
+Chris tested at 2560 × 1440 with an Appearance Workshop appearance and a Frame
+Studio composition. He reported both dialogs looking correct; resizing Open
+was retained when reopening Open and opening Save As, including after reboot.
+Navigation and New Folder also passed his checks. No installed binary hash or
+hardware screenshot was captured. The plain QEMU frame above does not show
+his customized appearance/composition.
+
+He noted that the Pin button appears in the dialog titlebar. This is inherited
+from the selected frame's ordinary-window actions. Parent-owned stacking and
+a corresponding dialog Pin policy are separate follow-up work.
+Independent review and merge remain pending. The [slice record](../../E05A_DIALOG_POLISH.md)
 contains delivery and acceptance instructions.

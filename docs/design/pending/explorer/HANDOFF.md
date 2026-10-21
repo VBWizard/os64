@@ -18,7 +18,12 @@ Active follow-up: [E5A compact footer and shared size memory](E05A_DIALOG_POLISH
 owned by Quinn on `codex/file-dialog-polish`, worktree `.worktrees/file-dialog-polish`,
 based on `5fb5f7a6`. Implementation `5efff386` is in
 [draft PR #322](https://github.com/VBWizard/os64/pull/322), with host/native checks
-complete and review/P5 acceptance pending. Parent-owned stacking is a separate window-manager task.
+complete. Chris reported P5 acceptance at 2560 × 1440 with his Appearance
+Workshop appearance and Frame Studio composition: size sharing survived
+reopening and reboot; navigation and New Folder passed. No installed binary
+hash was captured. Independent review and merge remain pending. Parent-owned
+stacking is a separate window-manager task; Chris's observation about the
+inherited Pin button is recorded in the E5A follow-up notes.
 Scribe is the first app consumer; Yonder remains part of the Modern Web work.
 
 E4 is merged through PR #267 as `a3dd4b65`. Its [design](E04_ROAM.md) and

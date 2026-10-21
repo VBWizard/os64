@@ -23,8 +23,19 @@ associations and Yonder integration remain separate work.
 checks passed with ASan, UBSan and LeakSanitizer enabled. Cross-build passed.
 Native QEMU verified resize/Cancel/restoration across Scribe and filedialogtest,
 wrapped controls, replacement message expansion, and preservation of the
-newer preference when an older dialog closes. Review and P5 acceptance of
-this follow-up remain pending.
+newer preference when an older dialog closes. Chris reported successful P5
+acceptance at 2560 × 1440 with an Appearance Workshop appearance and a Frame
+Studio composition: both dialogs looked correct, Open and Save As shared the
+resized dimensions across reopening and a reboot, and navigation and New
+Folder worked. This is user-reported evidence; no installed binary hash or
+hardware screenshot was captured. Independent review and merge remain pending.
+
+Chris also noted the Pin titlebar button on the dialogs. They inherit the
+selected frame's actions as ordinary decorated windows. Pin currently raises
+a window into the global pinned band; parent-relative stacking remains separate
+work. Proposed follow-up: omit independent Pin for parent-owned file dialogs
+when adding their ownership/stacking policy, consistently in frame painting,
+hit testing and the keyboard action. This proposal is not implemented in E5A.
 
 ## Delivery and P5 walkthrough
 
@@ -32,7 +43,8 @@ Bundle: `/tmp/file-dialog-polish-wire`, with `SHA256SUMS`. Install `scribe`
 to `/bin`, `libos64.so` to `/lib`, and `filedialogtest` to `/tests` through the
 usual os64get routes. Rebuild/deploy these consumers together: the app-owned
 dialog structure changed. Close applications using the previous library
-before replacing it. This bundle has not been installed on P5.
+before replacing it. Chris has tested the follow-up on P5 as recorded above;
+the exact installed payload was not independently identified.
 
 1. Open Scribe's picker and check the compact footer. Resize narrow enough to
    wrap the action buttons; the checkbox and New Folder should remain usable.

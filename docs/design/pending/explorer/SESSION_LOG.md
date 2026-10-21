@@ -965,3 +965,20 @@ storage remain separate work.
 
 Published E5A implementation `5efff386` as [draft PR #322](https://github.com/VBWizard/os64/pull/322)
 against `userland`; it has not been merged.
+
+
+### E5A — P5 acceptance report and dialog Pin observation
+
+Chris tested at 2560 × 1440 with a customized Appearance Workshop appearance
+and Frame Studio composition. Both Open and Save As looked correct. Resizing
+Open persisted across reopening, opening Save As and a reboot. Navigation and
+New Folder passed. This is user-reported hardware evidence without a captured
+installed binary hash or screenshot; the plain QEMU captures do not represent
+his customized appearance.
+
+Chris noted the dialog titlebar's Pin button. Investigation confirms that the
+ordinary decorated dialog inherits the selected frame's Pin action, which
+controls global pinned stacking. Parent-owned stacking is not implemented.
+Omitting independent Pin as part of that ownership policy is a proposed
+follow-up, not a code change in E5A. PR #322 remains open and draft; independent
+review and merge are separate from the P5 acceptance report.
