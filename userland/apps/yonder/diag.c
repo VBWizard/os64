@@ -451,8 +451,9 @@ size_t yonder_diag_render(const yonder_diag_t *d, char *out, size_t cap)
     if (d->short_of_memory)
         puts_(&o, "some lines not kept: no memory to name them\n");
     // ONE MARKER for every way a line was lost, which the readers key on:
-    // a record missing a line, whatever the cause, cannot be judged, since
-    // the line it lost may be the one a change made or mended.
+    // a replay or a diff of a record missing a line, whatever the cause,
+    // cannot judge it, since the line it lost may be the one a change made
+    // or mended; the census tally counts the lines it kept.
     bool lost = d->short_of_memory;
     const Table *tables[3] = {&d->missing, &d->failed, &d->facts};
     for (int i = 0; i < 3; i++)
@@ -612,9 +613,10 @@ static bool kept_path(const yonder_diag_t *d, const char *dir, const char *suffi
 static int64_t keep_failed(yonder_diag_t *d);
 
 // The record's file made at `path` only if nothing is there, holding its
-// address and `verdict: unwritten`, which every reader takes as a record it
-// cannot judge, so a name claimed and never written (a yonder that died, a
-// write that failed) is never read as a page that met nothing. The real
+// address and `verdict: unwritten`, which no reader judges or counts (the
+// tally names it as damage), so a name claimed and never written (a yonder
+// that died, a write that failed) is never read as a page that met
+// nothing. The real
 // record replaces it. False when something is there, or it could not be
 // made.
 static bool claim_file(const yonder_diag_t *d, const char *path)
@@ -848,6 +850,11 @@ int64_t yonder_diag_keep_resource(const yonder_diag_claim_t *c, yonder_diag_kept
         d->keep.index = text;
         d->keep.index_len = total - (sizeof(kHeader) - 1);
         d->keep.resources = number;
+        // The record says how many lines its index holds, so a replay can
+        // tell its own index from one that is not.
+        char count[16];
+        os64_snprintf(count, sizeof(count), "%lu", (unsigned long)number);
+        yonder_diag_head_fact(d, "kept lines", count);
         return 0;
     }
     os64_free(text);

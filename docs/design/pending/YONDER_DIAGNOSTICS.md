@@ -502,13 +502,17 @@ reproduced and compared.
 
 **What a record is when it cannot be judged.** A claimed name holds
 `address: ...` and `verdict: unwritten` until the record replaces it, so a
-yonder that dies after claiming leaves a file every reader takes as
-unjudged, never a page that met nothing. And a record that lost ANY line
-(no room in its tables, no memory to keep a line or a value) says so with
-one marker, `REPLAY unjudged: lines lost`, beside the counts of what went;
-every reader takes it as unjudged, since the line it lost may be the one a
-change made. A page kept whole says `kept: whole`, the only kept page a
-replay replays.
+yonder that dies after claiming leaves a file no reader judges or counts
+(the census tally names it as damage), never a page that met nothing. And
+a record that lost ANY line (no room in its tables, no memory to keep a
+line or a value) says so with one marker, `REPLAY unjudged: lines lost`,
+beside the counts of what went; a replay and the corpus diff take it as
+unjudged, since the line it lost may be the one a change made, while the
+tally counts the lines it kept. A page kept whole says `kept: whole`, the
+only kept page a replay replays, and every record says `bytes: N`, what
+the parser was fed, and, when its page kept scripts or sheets, `kept
+lines: N`, how many lines its index holds: on the host nothing else binds
+a record to its kept files.
 
 **The facts a replay rebuilds the head from**, on every page's record now:
 `final address` (written when the parse ends, so a page let go unshown

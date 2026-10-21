@@ -25,14 +25,17 @@ after a `--`.)
 A directory is read for its `*.txt` files, not below it: a kept page's
 `.html` and `.d/` beside its record are not records. Every record is read
 through tools/yonder_records.py, the one reader of page files, which
-judges it whole and says its State. THE TALLY COUNTS VERDICTS ONLY: a
-record whose page was incomplete, unfinished or unjudged (it lost lines,
-or was never written) is not counted, and stderr says how many of each
-and which. A path that is not there, a directory that cannot be listed,
-and any `*.txt` the reader cannot judge (one that cannot be read, is not
-a page file, or is not whole) are each named, and the answer is 2, since
-a census of the files that could be read would read as a census of all
-of them. Run it with `python3 -I`; it imports nothing but the standard
+judges it whole and says its State. A CENSUS IS NOT A DIFF: it counts
+every page yonder recorded, a record that lost lines included (what it
+kept is what the page asked for, and partial is still asked; stderr says
+how many records lost lines), and a replay's record only when its page
+reached a verdict (stderr says how many of each other state, and which).
+A path that is not there, a directory that cannot be listed, a claimed
+name's placeholder that was never written (damage: a yonder stopped
+between claim and write), and any `*.txt` the reader cannot judge (one
+that cannot be read, is not a page file, or is not whole) are each named,
+and the answer is 2, since a census of the files that could be read would
+read as a census of all of them. Run it with `python3 -I`; it imports nothing but the standard
 library and that reader, loaded from beside this file.
 """
 import argparse
@@ -64,12 +67,14 @@ class NotJudged(Unreadable):
 
 
 def read_records(paths):
-    """Every record under the paths given whose page reached a VERDICT: a
-    file is read as one, a directory for its `*.txt` files, and every other
-    State is said on stderr, by state and by file, and not counted.
-    Unreadable when a path is not there or a directory cannot be listed;
-    NotJudged, naming every one, when any file could not be judged."""
-    records, unjudged, other = [], [], collections.defaultdict(list)
+    """Every record under the paths given that the census counts: a file is
+    read as one, a directory for its `*.txt` files. A record that lost
+    lines is counted, and their number said on stderr; a replay's record
+    whose page did not reach a verdict is said on stderr, by state and by
+    file, and not counted. Unreadable when a path is not there or a
+    directory cannot be listed; NotJudged, naming every one, when any file
+    could not be judged or is a placeholder never written."""
+    records, unjudged, other, lost = [], [], collections.defaultdict(list), 0
     for p in map(pathlib.Path, paths):
         if not p.exists():
             raise Unreadable(f'{p}: no such file or directory')
@@ -78,12 +83,19 @@ def read_records(paths):
             rec = records_module.read(f)
             if isinstance(rec, records_module.Unjudged):
                 unjudged.append(rec)
+            elif rec.unwritten:
+                unjudged.append(records_module.Unjudged(f, f'damage: {rec.reason}'))
+            elif rec.lost:
+                lost += 1
+                records.append(rec)
             elif rec.state != records_module.State.VERDICT:
                 other[rec.state].append(rec)
             else:
                 records.append(rec)
     if unjudged:
         raise NotJudged(unjudged)
+    if lost:
+        print(f'yonder_tally: {lost} record(s) lost lines; the lines they kept are counted', file=sys.stderr)
     if other:
         print('yonder_tally: not counted: ' + ', '.join(f'{len(other[s])} {s.name.lower()}' for s in sorted(other)),
               file=sys.stderr)

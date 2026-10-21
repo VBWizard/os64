@@ -4,8 +4,10 @@
 
     yonder_corpus_diff.py BEFORE-DIR AFTER-DIR
 
-Each directory holds page files by the same names, as
-tools/test_yonder_replay_host.sh writes them, each read through
+Each directory holds the records two replays of ONE kept corpus wrote, by
+the same names, as tools/test_yonder_replay_host.sh writes them; a record
+no replay wrote (yonder's own, with no state line) is not compared. Each
+is read through
 tools/yonder_records.py, the one reader of page files, which says what
 state its page came to: a replay's record says it on its second line. ONLY
 A PAGE REPLAYED TO A VERDICT IS JUDGED. Such a page is the set of its
@@ -42,11 +44,15 @@ is both is the later), and none is progress:
   did not; its lines are not compared with a record that was not the page.
 - UNJUDGED: a `*.txt` on either side the reader cannot judge (one that
   cannot be read, is not a page file, or is not whole: a file cut short
-  reads as a page that stopped asking for everything it lost), or whose
-  record says its page is unjudged (it lost lines, it was never written,
-  or its replay said so). Listed with why, and judged on neither side.
+  reads as a page that stopped asking for everything it lost), a record
+  no replay wrote, or one whose replay says its page is unjudged (its kept
+  record lost lines or was never written, a harness check failed, its
+  record could not be written). Listed with why, and judged on neither
+  side.
 - A page the after directory does not have is a regression, since whatever
-  it gained cannot be seen.
+  it gained cannot be seen; a page only the after directory has is
+  unjudged, since the before replay did not replay it (it stopped, or was
+  partial).
 
 Exit 2 when a directory cannot be listed or any page is unjudged; else 1
 when there is any regression, broken page, missing page or newly
@@ -80,9 +86,10 @@ def lines_of(rec, skip):
 
 
 def read_dir(path, unjudged):
-    """{file name: record} for the page files in a directory: each read
-    whole by the reader, and one it cannot judge, or whose record says its
-    page is UNJUDGED, put in `unjudged` as {name: reason} instead.
+    """{file name: record} for the replays' records in a directory: each
+    read whole by the reader, and one it cannot judge, that a replay did
+    not write, or whose record says its page is UNJUDGED, put in
+    `unjudged` as {name: reason} instead.
     Unreadable (the reader's) when the directory cannot be listed: read as
     empty, it would read as a corpus that did not change."""
     pages = {}
@@ -90,6 +97,9 @@ def read_dir(path, unjudged):
         rec = records.read(f)
         if isinstance(rec, records.Unjudged):
             unjudged[f.name] = str(rec)
+        elif not rec.replay:
+            unjudged[f.name] = (f"{f}: not a replay's record (a replay's says its state on its second line); "
+                                'the diff compares replays of one kept corpus')
         elif rec.state == State.UNJUDGED:
             unjudged[f.name] = f'{f}: unjudged: {rec.reason}'
         else:
@@ -179,8 +189,12 @@ def main(argv=None):
         print(f'missing from {args.after}: {len(gone)} pages')
         for name in gone:
             print(f'  {name}  {before[name].address}')
-    if new:
-        print(f'only in {args.after}: {len(new)} pages')
+    # Both replays read one kept corpus, so a page only the after one has
+    # is a page the before one never replayed (it stopped, or was
+    # partial): nothing to compare it with, and never silent.
+    for name in new:
+        unjudged[name] = f'{name}: {args.before} did not replay this page'
+        after.pop(name, None)
     if unjudged:
         print(f'unjudged: {len(unjudged)} pages')
         for name, why in sorted(unjudged.items()):

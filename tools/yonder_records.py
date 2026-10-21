@@ -88,9 +88,13 @@ STATE_LINE = re.compile(rb'REPLAY state: (verdict|incomplete|unfinished|unjudged
 class Record:
     """One page file read whole: its address, its MISSING lines as {(kind,
     name): count}, its FAILED lines as {(what, message): count}, its
-    `state` and, for UNJUDGED, its `reason`; and on a replay's record its
-    REPLAY detail lines (`incomplete`, `unfinished`) and the kinds its
-    `REPLAY not reproduced:` line names (`not_reproduced`)."""
+    `state` and, for UNJUDGED, its `reason`; whether a replay wrote it
+    (`replay`), and on a replay's record its REPLAY detail lines
+    (`incomplete`, `unfinished`) and the kinds its `REPLAY not reproduced:`
+    line names (`not_reproduced`). A record yonder wrote that is UNJUDGED
+    says why in a flag too: `lost`, it lost lines (the lines it kept are
+    read, and a census counts them), or `unwritten`, it is a claimed
+    name's placeholder."""
 
     def __init__(self, path, address):
         self.path = path
@@ -102,6 +106,9 @@ class Record:
         self.unfinished = []
         self.state = State.VERDICT
         self.reason = ''
+        self.replay = False
+        self.lost = False
+        self.unwritten = False
         self.not_reproduced = set()
 
 
@@ -139,6 +146,7 @@ def read_body(lines, rec, replay):
         raise Malformed(f'not a whole page file: its {where} line is not a verdict')
     if lines[0] == UNWRITTEN and not replay:
         rec.state, rec.reason = State.UNJUDGED, 'its name was claimed and its record never written'
+        rec.unwritten = True
         return
     verdict = VERDICT.fullmatch(lines[0])
     if verdict is None:
@@ -163,7 +171,7 @@ def read_body(lines, rec, replay):
         elif line.startswith(b'verdict: '):
             raise Malformed('not a whole page file: a second verdict line')
         elif line == LINES_LOST and not replay:
-            rec.state, rec.reason = State.UNJUDGED, 'its record lost lines it could not keep'
+            rec.state, rec.reason, rec.lost = State.UNJUDGED, 'its record lost lines it could not keep', True
         elif replay and line.startswith(b'REPLAY incomplete '):
             rec.incomplete.append(unescape(line[len(b'REPLAY incomplete '):]))
         elif replay and line.startswith(b'REPLAY unfinished '):
@@ -190,8 +198,10 @@ def read(path):
     other carries the window's record from its verdict on, whose REPLAY
     detail lines must agree with the state (a VERDICT has none, an
     INCOMPLETE page an incomplete line and no unfinished one, an UNFINISHED
-    page an unfinished line). A RECORD YONDER WROTE has its verdict
-    second, and no REPLAY line but the one saying it lost lines."""
+    page an unfinished line) and which says what it does not reproduce. A
+    RECORD YONDER WROTE has its verdict second (or the placeholder's
+    `verdict: unwritten`), and no REPLAY line but the one saying it lost
+    lines."""
     path = pathlib.Path(path)
     try:
         if not path.is_file():
@@ -222,6 +232,7 @@ def read(path):
             return rec
         if lines[-1] != b'end' or len(lines) < 3:
             raise Malformed("a replay's record without its `end`: it was cut short")
+        rec.replay = True
         rec.state = State[state.group(1).decode().upper()]
         rec.reason = unescape(state.group(2) or b'')
         if b'end' in lines[2:-1]:
@@ -234,6 +245,8 @@ def read(path):
                   State.UNFINISHED: bool(rec.unfinished)}[rec.state]
         if not agrees:
             raise Malformed("a replay's record whose REPLAY lines do not agree with its state")
+        if not rec.not_reproduced:
+            raise Malformed("a replay's record that does not say what it does not reproduce")
     except Malformed as e:
         return Unjudged(path, str(e))
     except UnicodeDecodeError:

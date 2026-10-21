@@ -6,6 +6,7 @@
 
 #include <dirent.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -18,11 +19,13 @@ static RpFs rp_fs_fault(RpFault *f, const char *path, const char *what, int err)
     return RP_FS_FAULT;
 }
 
-/* A whole file into `*bytes` (malloc'd, NUL-terminated past `*len`). */
 RpFs rp_fs_read(const char *path, char **bytes, size_t *len, RpFault *f) {
     *bytes=NULL; if(len!=NULL) *len=0;
-    FILE *file=fopen(path,"rb");
-    if(file==NULL) return errno==ENOENT ? RP_FS_ABSENT : rp_fs_fault(f,path,"cannot be opened",errno);
+    int fd=open(path,O_RDONLY|O_NOFOLLOW|O_CLOEXEC);
+    if(fd<0 && errno==ELOOP) return rp_fs_fault(f,path,"is a symbolic link, which nothing kept is",errno);
+    if(fd<0) return errno==ENOENT ? RP_FS_ABSENT : rp_fs_fault(f,path,"cannot be opened",errno);
+    FILE *file=fdopen(fd,"rb");
+    if(file==NULL) { int err=errno; close(fd); return rp_fs_fault(f,path,"cannot be opened",err); }
     char *data=NULL; size_t n=0, cap=0;
     for(;;) {
         if(n+65536+1>cap) {
@@ -50,7 +53,7 @@ RpFs rp_fs_write(const char *path, const void *bytes, size_t len, RpFault *f) {
     FILE *file=fopen(temp,"wb");
     if(file==NULL) return rp_fs_fault(f,temp,"cannot be made",errno);
     errno=0;
-    bool ok=fwrite(bytes,1,len,file)==len && fflush(file)==0;
+    bool ok=fwrite(bytes,1,len,file)==len && fflush(file)==0 && fsync(fileno(file))==0;
     int err=errno;
     if(fclose(file)!=0 && ok) { ok=false; err=errno; }
     if(ok && rename(temp,path)!=0) { ok=false; err=errno; }
@@ -64,7 +67,8 @@ RpFs rp_fs_write(const char *path, const void *bytes, size_t len, RpFault *f) {
 /* What is at `path`: a directory (`*dir` true) or anything else. */
 RpFs rp_fs_kind(const char *path, bool *dir, RpFault *f) {
     struct stat st;
-    if(stat(path,&st)!=0) return errno==ENOENT ? RP_FS_ABSENT : rp_fs_fault(f,path,"cannot be looked at",errno);
+    if(lstat(path,&st)!=0) return errno==ENOENT ? RP_FS_ABSENT : rp_fs_fault(f,path,"cannot be looked at",errno);
+    if(S_ISLNK(st.st_mode)) return rp_fs_fault(f,path,"is a symbolic link, which nothing kept is",ELOOP);
     *dir=S_ISDIR(st.st_mode);
     return RP_FS_OK;
 }
@@ -73,8 +77,8 @@ RpFs rp_fs_kind(const char *path, bool *dir, RpFault *f) {
 RpFs rp_fs_mkdir(const char *path, RpFault *f) {
     if(mkdir(path,0777)==0) return RP_FS_OK;
     int err=errno;
-    bool dir=false;
-    if(err==EEXIST && rp_fs_kind(path,&dir,f)==RP_FS_OK && dir) return RP_FS_OK;
+    struct stat st;
+    if(err==EEXIST && stat(path,&st)==0 && S_ISDIR(st.st_mode)) return RP_FS_OK;
     return rp_fs_fault(f,path,"cannot be made a directory",err);
 }
 
@@ -91,10 +95,10 @@ RpFs rp_fs_mode(const char *path, unsigned mode, RpFault *f) {
 }
 
 RpFs rp_fs_same(const char *a, const char *b, bool *same, RpFault *f) {
-    char x[PATH_MAX], y[PATH_MAX];
-    if(realpath(a,x)==NULL) return errno==ENOENT ? RP_FS_ABSENT : rp_fs_fault(f,a,"cannot be resolved",errno);
-    if(realpath(b,y)==NULL) return errno==ENOENT ? RP_FS_ABSENT : rp_fs_fault(f,b,"cannot be resolved",errno);
-    *same=strcmp(x,y)==0;
+    struct stat x, y;
+    if(stat(a,&x)!=0) return errno==ENOENT ? RP_FS_ABSENT : rp_fs_fault(f,a,"cannot be looked at",errno);
+    if(stat(b,&y)!=0) return errno==ENOENT ? RP_FS_ABSENT : rp_fs_fault(f,b,"cannot be looked at",errno);
+    *same=x.st_dev==y.st_dev && x.st_ino==y.st_ino;
     return RP_FS_OK;
 }
 
@@ -122,7 +126,7 @@ RpFs rp_fs_list(const char *dir, const char *suffix, char ***names, size_t *n, R
             break;
         }
         size_t len=strlen(e->d_name);
-        if(len>want && !strcmp(e->d_name+len-want,suffix)) {
+        if(len>=want && !strcmp(e->d_name+len-want,suffix)) {
             *names=realloc(*names,(*n+1)*sizeof(**names));
             (*names)[(*n)++]=strdup(e->d_name);
         }

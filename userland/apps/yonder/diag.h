@@ -44,11 +44,15 @@
 #define YONDER_DIAG_MISSING "MISSING"
 #define YONDER_DIAG_FAILED "FAILED"
 // The line a record carries when any of its lines was lost (no room, no
-// memory, a value with no memory to keep): every reader takes such a
-// record as one it cannot judge.
+// memory, a value with no memory to keep): a replay and the corpus diff
+// take such a record as one they cannot judge; the census tally counts the
+// lines it kept, since what a page asked for is asked for however much of
+// it was written down, and says how many records lost lines.
 #define YONDER_DIAG_LINES_LOST "REPLAY unjudged: lines lost"
-// A claimed name's file before its record is written: its second line,
-// which every reader takes as a record it cannot judge.
+// A claimed name's file before its record is written: its second line.
+// A replay and the diff take it as a record they cannot judge; the tally
+// takes it as damage (a yonder that stopped between claim and write) and
+// names it.
 #define YONDER_DIAG_UNWRITTEN "verdict: unwritten"
 
 // Distinct record lines kept, and plain lines: a page that asks for more
@@ -183,7 +187,8 @@ typedef enum { YONDER_DIAG_KEPT_SCRIPT, YONDER_DIAG_KEPT_SHEET } yonder_diag_kep
 // One sub-resource as the window received it: when it came, written whole
 // as the next `<name>.d/<n>.js` or `.css`; when its fetch failed (`bytes`
 // NULL), no file, since a replay must fail it as the page saw it fail. The
-// index is written again whole with its line. `url` is the address its job
+// index is written again whole with its line, and the record's `kept lines`
+// fact says how many it holds. `url` is the address its job
 // carried, `final` the one it came from after redirects, `label` the
 // charset its response named (a sheet's: a replay parses the bytes again
 // under it; "" for none).

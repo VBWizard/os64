@@ -9,11 +9,11 @@
 #   tools/test_yonder_replay_host.sh
 #       the proof: the census tools' tests, then the runner's self-test,
 #       which keeps the fixture pages as yonder would, replays them, and
-#       requires every replayed record to be the page's own, and the corpus
-#       diff to find nothing between them; then a page kept with a picture
-#       whose fetch failed, which the diff must not read as progress; the
-#       same corpus written under a file-size limit, whose records must each
-#       be whole or say they could not be written; and the corpus given no
+#       requires every replayed record to be the page's own; then the same
+#       corpus replayed again, which the corpus diff must find no different;
+#       an OUT-DIR that is the kept directory by a bind mount, refused; the
+#       corpus written under a file-size limit, whose records must each be
+#       whole or say they could not be written; and the corpus given no
 #       time, whose unfinished pages the diff must call broken
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
@@ -39,16 +39,30 @@ TMPDIR="$work" python3 -I tools/test_yonder_tally.py
 TMPDIR="$work" python3 -I tools/test_yonder_corpus_diff.py
 mkdir "$work/self"
 "$work/yonder-replay" --self-test "$work/self"
-python3 -I tools/yonder_corpus_diff.py "$work/self/kept" "$work/self/out" | tail -n 1
-# A page kept with a picture that failed, replayed without it: the diff
-# compares no picture line on either side, so it is neither progress nor a
-# regression.
-python3 -I tools/yonder_corpus_diff.py "$work/self/picture" "$work/self/picture-out" > "$work/picture.diff" &&
-    grep -q '^progress: 0 pages$' "$work/picture.diff" || {
-    echo "replay: the diff read a picture the replay does not reproduce" >&2
-    cat "$work/picture.diff" >&2
+# The diff compares a replay with a replay of the same kept corpus, never
+# kept records with replayed ones: the same corpus replayed twice must
+# differ in nothing.
+"$work/yonder-replay" "$work/self/kept" "$work/again" > "$work/again.log"
+python3 -I tools/yonder_corpus_diff.py "$work/self/out" "$work/again" > "$work/again.diff" || {
+    echo "replay: the same corpus replayed twice did not diff clean" >&2
+    cat "$work/again.diff" >&2
     exit 1
 }
+tail -n 1 "$work/again.diff"
+# An OUT-DIR that is the kept directory by another path (a bind mount) is
+# the kept directory: refused before anything is written.
+mkdir "$work/bound"
+if unshare -rm true 2> /dev/null; then
+    if unshare -rm sh -c 'mount --bind "$1" "$2" && exec "$3" "$1" "$2" --only fixture' sh \
+            "$work/self/kept" "$work/bound" "$work/yonder-replay" > "$work/bound.log" 2>&1 ||
+            ! grep -q 'is the kept directory itself' "$work/bound.log"; then
+        echo "replay: a bind mount of the kept directory was not refused as OUT-DIR" >&2
+        cat "$work/bound.log" >&2
+        exit 1
+    fi
+else
+    echo "replay: no user namespace here, so the bind-mount case is skipped"
+fi
 # The same corpus written under a file-size limit, as a quota or a full
 # disk would cut it (the signal ignored, so a write past it fails rather
 # than ending the run): every record that could not be written whole is
@@ -77,11 +91,11 @@ print(f'size limit: {len(files)} records, every one whole, {unjudged} saying the
 PY
 # The same corpus given no time: the pages that cannot arrive in none say
 # so on their records, and the diff calls each broken (whatever else its
-# record says) and fails, never reading what they lack as progress. (A page that arrived without the time for its
-# later timers is judged, and may read as progress: the two replays were
-# not given the same budget.)
+# record says) and fails, never reading what they lack as progress. (A
+# page that arrived without the time for its later timers is judged, and
+# may read as progress: the two replays were not given the same budget.)
 "$work/yonder-replay" "$work/self/kept" "$work/no-time" --seconds 0 > "$work/zero.log"
-if python3 -I tools/yonder_corpus_diff.py "$work/self/kept" "$work/no-time" > "$work/zero.diff"; then
+if python3 -I tools/yonder_corpus_diff.py "$work/self/out" "$work/no-time" > "$work/zero.diff"; then
     echo "replay: a corpus given no time passed the diff" >&2
     cat "$work/zero.diff" >&2
     exit 1

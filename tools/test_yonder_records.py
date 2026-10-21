@@ -56,6 +56,8 @@ MALFORMED = {
                                                 b'REPLAY incomplete script x\nend\n', 'do not agree with its state'),
     'an incomplete state with nothing incomplete': (b'address: https://a.test/\nREPLAY state: incomplete x\n'
                                                     b'verdict: clean\nend\n', 'do not agree with its state'),
+    "a judged replay's record that does not say what it does not reproduce": (
+        b'address: https://a.test/\nREPLAY state: verdict\nverdict: clean\nend\n', 'does not say what it does not reproduce'),
     'a stray kind on the not-reproduced line': (b'address: https://a.test/\nREPLAY state: verdict\nverdict: clean\n'
                                                 b'REPLAY not reproduced: image global\nend\n',
                                                 'naming what a replay does reproduce: global'),
@@ -139,8 +141,10 @@ class ReaderCases(unittest.TestCase):
         rec = self.read(b'address: https://a.test/\nverdict: clean\nfailures not kept: 12728\n'
                         b'REPLAY unjudged: lines lost\n')
         self.assertEqual((rec.state, rec.reason), (records.State.UNJUDGED, 'its record lost lines it could not keep'))
+        self.assertTrue(rec.lost)
+        self.assertEqual(rec.missing, {})
         rec = self.read(b'address: https://a.test/\nverdict: unwritten\n')
-        self.assertEqual(rec.state, records.State.UNJUDGED)
+        self.assertEqual((rec.state, rec.unwritten, rec.replay), (records.State.UNJUDGED, True, False))
 
     def test_every_txt_is_listed(self):
         (self.root / 'b.txt').write_bytes(b'')
