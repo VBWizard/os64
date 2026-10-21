@@ -121,6 +121,10 @@ typedef enum {
     // thick), a style (a KEYWORD, a border's but hidden, or auto), a colour
     // (a COLOR, or the KEYWORD auto) and an offset (a LENGTH).
     GARB_OUTLINE_WIDTH, GARB_OUTLINE_STYLE, GARB_OUTLINE_COLOR, GARB_OUTLINE_OFFSET,
+    // CSS Images 3 § 4.5-4.6: a KEYWORD, and a position as a LENGTH whose
+    // two items are x and y, each a length-percentage, its keywords as the
+    // percentages they are (`right 10px` a calc(100% - 10px)).
+    GARB_OBJECT_FIT, GARB_OBJECT_POSITION,
     GARB_NPROPS
 } garb_prop_t;
 

@@ -145,6 +145,8 @@ static const Prop kProps[GARB_NPROPS] = {
     [GARB_OUTLINE_STYLE] = {"outline-style", false, true},
     [GARB_OUTLINE_COLOR] = {"outline-color", false, true},
     [GARB_OUTLINE_OFFSET] = {"outline-offset", false, true},
+    [GARB_OBJECT_FIT] = {"object-fit", false, true},
+    [GARB_OBJECT_POSITION] = {"object-position", false, true},
 };
 
 const char *garb_prop_name(garb_prop_t prop)
@@ -514,6 +516,8 @@ static const char *const kTextOverflow[] = {"clip", "ellipsis", NULL};
 // CSS UI 4 § 3.3: a border's styles but `hidden`, and `auto`.
 static const char *const kOutlineStyle[] = {"auto", "none", "dotted", "dashed", "solid", "double",
                                             "groove", "ridge", "inset", "outset", NULL};
+// CSS Images 3 § 4.5; Images 4's pairs (`cover scale-down`) are not read.
+static const char *const kObjectFit[] = {"fill", "contain", "cover", "none", "scale-down", NULL};
 // The identifiers a <custom-ident> may not be (Values 4 § 4.2): the
 // CSS-wide keywords and `default`.
 static const char *const kNotCustom[] = {"inherit", "initial", "unset", "revert",
@@ -1986,6 +1990,7 @@ typedef enum {
     G_OUTLINE_WIDTH,        // <line-width>, never unitless
     G_OUTLINE_COLOR,        // auto | <color>
     G_LENGTH,               // <length>, negative too
+    G_POSITION,             // <position>, as x and y
 } Grammar;
 
 typedef struct {
@@ -2072,6 +2077,7 @@ static const Longhand kLonghands[] = {
     {GARB_TEXT_OVERFLOW, G_KEYWORDS, kTextOverflow},
     {GARB_OUTLINE_WIDTH, G_OUTLINE_WIDTH, NULL}, {GARB_OUTLINE_STYLE, G_KEYWORDS, kOutlineStyle},
     {GARB_OUTLINE_COLOR, G_OUTLINE_COLOR, NULL}, {GARB_OUTLINE_OFFSET, G_LENGTH, NULL},
+    {GARB_OBJECT_FIT, G_KEYWORDS, kObjectFit}, {GARB_OBJECT_POSITION, G_POSITION, NULL},
 };
 
 static bool longhand_one(Sets *s, VCur *c, const Longhand *l, garb_val_t *out);
@@ -3083,6 +3089,22 @@ static bool longhand_one(Sets *s, VCur *c, const Longhand *l, garb_val_t *out)
         }
         return vc_color(c, out);
     case G_LENGTH: return vc_dim(c, ACCEPT_LENGTH, true, false, &s->a, out);
+    case G_POSITION: {
+        // Not quirky: the Quirks standard's unitless lengths are a
+        // background position's, not this one's.
+        Sets strict = *s;
+        strict.quirks = false;
+        garb_val_t xy[2];
+        bool ok = position(&strict, c, false, &xy[0], &xy[1]);
+        s->a.short_of_memory |= strict.a.short_of_memory;
+        if (!ok)
+            return false;
+        os64_memset(out, 0, sizeof(*out));
+        out->kind = GARB_V_LENGTH;
+        out->items = keep(s, xy, 2);
+        out->nitems = 2;
+        return out->items != NULL;
+    }
     }
     return false;
 }

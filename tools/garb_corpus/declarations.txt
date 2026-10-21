@@ -1223,3 +1223,35 @@ IN: outline-offset: 1%
 OUT: invalid
 IN: outline-offset: auto
 OUT: invalid
+
+# ── object-fit and object-position (Images 3 § 4.5, § 4.6) ──
+IN: object-fit: cover
+OUT: object-fit: cover
+IN: object-fit: Scale-Down
+OUT: object-fit: scale-down
+IN: object-fit: cover scale-down
+OUT: invalid
+IN: object-fit: auto
+OUT: invalid
+IN: object-position: center
+OUT: object-position: 50% 50%
+IN: object-position: left bottom
+OUT: object-position: 0% 100%
+IN: object-position: top
+OUT: object-position: 50% 0%
+IN: object-position: 10px 20%
+OUT: object-position: 10px 20%
+IN: object-position: right 30% top 60px
+OUT: object-position: calc(100% - 30%) 60px
+IN: object-position: bottom 10% right 20%
+OUT: object-position: calc(100% - 20%) calc(100% - 10%)
+IN: object-position: right 3% center
+OUT: invalid
+IN: object-position: 1px 2px 3px
+OUT: invalid
+IN: object-position: left right
+OUT: invalid
+IN: quirks object-position: 10 20
+OUT: invalid
+IN: object-position: inherit
+OUT: object-position: inherit
