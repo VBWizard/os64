@@ -3,6 +3,90 @@
 # [excluded] are written by hand; tools/test_yonder_wpt_host.sh css/css-ui/parsing --update
 # rewrites [passing].
 [required]
+# Slice 4: cursor (its keywords and its pictures' fallback), outline and its
+# longhands, user-select. Each fails with the switch off.
+cursor-valid.html	e.style['cursor'] = "alias" should set the property value
+cursor-valid.html	e.style['cursor'] = "all-scroll" should set the property value
+cursor-valid.html	e.style['cursor'] = "auto" should set the property value
+cursor-valid.html	e.style['cursor'] = "cell" should set the property value
+cursor-valid.html	e.style['cursor'] = "col-resize" should set the property value
+cursor-valid.html	e.style['cursor'] = "context-menu" should set the property value
+cursor-valid.html	e.style['cursor'] = "copy" should set the property value
+cursor-valid.html	e.style['cursor'] = "crosshair" should set the property value
+cursor-valid.html	e.style['cursor'] = "default" should set the property value
+cursor-valid.html	e.style['cursor'] = "e-resize" should set the property value
+cursor-valid.html	e.style['cursor'] = "ew-resize" should set the property value
+cursor-valid.html	e.style['cursor'] = "grab" should set the property value
+cursor-valid.html	e.style['cursor'] = "grabbing" should set the property value
+cursor-valid.html	e.style['cursor'] = "help" should set the property value
+cursor-valid.html	e.style['cursor'] = "move" should set the property value
+cursor-valid.html	e.style['cursor'] = "n-resize" should set the property value
+cursor-valid.html	e.style['cursor'] = "ne-resize" should set the property value
+cursor-valid.html	e.style['cursor'] = "nesw-resize" should set the property value
+cursor-valid.html	e.style['cursor'] = "no-drop" should set the property value
+cursor-valid.html	e.style['cursor'] = "none" should set the property value
+cursor-valid.html	e.style['cursor'] = "not-allowed" should set the property value
+cursor-valid.html	e.style['cursor'] = "ns-resize" should set the property value
+cursor-valid.html	e.style['cursor'] = "nw-resize" should set the property value
+cursor-valid.html	e.style['cursor'] = "nwse-resize" should set the property value
+cursor-valid.html	e.style['cursor'] = "pointer" should set the property value
+cursor-valid.html	e.style['cursor'] = "progress" should set the property value
+cursor-valid.html	e.style['cursor'] = "row-resize" should set the property value
+cursor-valid.html	e.style['cursor'] = "s-resize" should set the property value
+cursor-valid.html	e.style['cursor'] = "se-resize" should set the property value
+cursor-valid.html	e.style['cursor'] = "sw-resize" should set the property value
+cursor-valid.html	e.style['cursor'] = "text" should set the property value
+cursor-valid.html	e.style['cursor'] = "url(\\"https://example.com/\\") 5 6, grab" should set the property value
+cursor-valid.html	e.style['cursor'] = "url(\\"https://example.com/\\"), alias" should set the property value
+cursor-valid.html	e.style['cursor'] = "url(\\"https://example.com/\\"), url(\\"https://example.com/\\") 3 -4, move" should set the property value
+cursor-valid.html	e.style['cursor'] = "vertical-text" should set the property value
+cursor-valid.html	e.style['cursor'] = "w-resize" should set the property value
+cursor-valid.html	e.style['cursor'] = "wait" should set the property value
+cursor-valid.html	e.style['cursor'] = "zoom-in" should set the property value
+cursor-valid.html	e.style['cursor'] = "zoom-out" should set the property value
+outline-color-valid.html	e.style['outline-color'] = "auto" should set the property value
+outline-color-valid.html	e.style['outline-color'] = "rgba(10, 20, 30, 0.4)" should set the property value
+outline-offset-valid.html	e.style['outline-offset'] = "1px" should set the property value
+outline-offset-valid.html	e.style['outline-offset'] = "2em" should set the property value
+outline-offset-valid.html	e.style['outline-offset'] = "calc(3rem + 4vw)" should set the property value
+outline-style-valid.html	e.style['outline-style'] = "auto" should set the property value
+outline-style-valid.html	e.style['outline-style'] = "dashed" should set the property value
+outline-style-valid.html	e.style['outline-style'] = "dotted" should set the property value
+outline-style-valid.html	e.style['outline-style'] = "double" should set the property value
+outline-style-valid.html	e.style['outline-style'] = "groove" should set the property value
+outline-style-valid.html	e.style['outline-style'] = "inset" should set the property value
+outline-style-valid.html	e.style['outline-style'] = "none" should set the property value
+outline-style-valid.html	e.style['outline-style'] = "outset" should set the property value
+outline-style-valid.html	e.style['outline-style'] = "ridge" should set the property value
+outline-style-valid.html	e.style['outline-style'] = "solid" should set the property value
+outline-valid.html	e.style['outline'] = "1px" should set the property value
+outline-valid.html	e.style['outline'] = "auto" should set the property value
+outline-valid.html	e.style['outline'] = "calc(2em + 3ex)" should set the property value
+outline-valid.html	e.style['outline'] = "dashed thin" should set the property value
+outline-valid.html	e.style['outline'] = "dashed" should set the property value
+outline-valid.html	e.style['outline'] = "dotted" should set the property value
+outline-valid.html	e.style['outline'] = "double" should set the property value
+outline-valid.html	e.style['outline'] = "groove" should set the property value
+outline-valid.html	e.style['outline'] = "inset" should set the property value
+outline-valid.html	e.style['outline'] = "medium" should set the property value
+outline-valid.html	e.style['outline'] = "none" should set the property value
+outline-valid.html	e.style['outline'] = "outset" should set the property value
+outline-valid.html	e.style['outline'] = "rgba(10, 20, 30, 0.4)" should set the property value
+outline-valid.html	e.style['outline'] = "ridge" should set the property value
+outline-valid.html	e.style['outline'] = "solid" should set the property value
+outline-valid.html	e.style['outline'] = "thick" should set the property value
+outline-valid.html	e.style['outline'] = "thin" should set the property value
+outline-width-valid.html	e.style['outline-width'] = "1px" should set the property value
+outline-width-valid.html	e.style['outline-width'] = "2em" should set the property value
+outline-width-valid.html	e.style['outline-width'] = "calc(2em + 3ex)" should set the property value
+outline-width-valid.html	e.style['outline-width'] = "medium" should set the property value
+outline-width-valid.html	e.style['outline-width'] = "thick" should set the property value
+outline-width-valid.html	e.style['outline-width'] = "thin" should set the property value
+user-select-valid-contain.html	e.style['user-select'] = "contain" should set the property value
+user-select-valid.html	e.style['user-select'] = "all" should set the property value
+user-select-valid.html	e.style['user-select'] = "auto" should set the property value
+user-select-valid.html	e.style['user-select'] = "none" should set the property value
+user-select-valid.html	e.style['user-select'] = "text" should set the property value
 [excluded]
 # Pages whose tests read getComputedStyle, which slice 1b brings; each runs
 # again once it lands.

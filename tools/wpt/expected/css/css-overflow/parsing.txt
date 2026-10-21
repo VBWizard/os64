@@ -3,6 +3,9 @@
 # [excluded] are written by hand; tools/test_yonder_wpt_host.sh css/css-overflow/parsing --update
 # rewrites [passing].
 [required]
+# Slice 4: text-overflow's clip and ellipsis. Each fails with the switch off.
+text-overflow-valid.html	e.style['text-overflow'] = "clip" should set the property value
+text-overflow-valid.html	e.style['text-overflow'] = "ellipsis" should set the property value
 [excluded]
 # Pages whose tests read getComputedStyle, which slice 1b brings; each runs
 # again once it lands.

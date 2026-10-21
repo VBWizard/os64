@@ -3,6 +3,22 @@
 # [excluded] are written by hand; tools/test_yonder_wpt_host.sh css/css-text/parsing --update
 # rewrites [passing].
 [required]
+# Slice 4: letter-spacing, word-break, overflow-wrap and its legacy name
+# word-wrap. Each fails with the switch off.
+letter-spacing-valid.html	e.style['letter-spacing'] = "-10px" should set the property value
+letter-spacing-valid.html	e.style['letter-spacing'] = "20px" should set the property value
+letter-spacing-valid.html	e.style['letter-spacing'] = "calc(2em + 3ex)" should set the property value
+letter-spacing-valid.html	e.style['letter-spacing'] = "normal" should set the property value
+overflow-wrap-valid.html	e.style['overflow-wrap'] = "anywhere" should set the property value
+overflow-wrap-valid.html	e.style['overflow-wrap'] = "break-word" should set the property value
+overflow-wrap-valid.html	e.style['overflow-wrap'] = "normal" should set the property value
+word-break-valid.html	e.style['word-break'] = "break-all" should set the property value
+word-break-valid.html	e.style['word-break'] = "break-word" should set the property value
+word-break-valid.html	e.style['word-break'] = "keep-all" should set the property value
+word-break-valid.html	e.style['word-break'] = "normal" should set the property value
+word-wrap-valid.html	e.style['word-wrap'] = "anywhere" should set the property value
+word-wrap-valid.html	e.style['word-wrap'] = "break-word" should set the property value
+word-wrap-valid.html	e.style['word-wrap'] = "normal" should set the property value
 [excluded]
 # Pages whose tests read getComputedStyle, which slice 1b brings; each runs
 # again once it lands.

@@ -3,6 +3,15 @@
 # [excluded] are written by hand; tools/test_yonder_wpt_host.sh css/css-sizing/aspect-ratio/parsing --update
 # rewrites [passing].
 [required]
+# Slice 4: aspect-ratio read (auto, a ratio, both). Each fails with the
+# switch off.
+aspect-ratio-valid.html	e.style['aspect-ratio'] = "0 / 0" should set the property value
+aspect-ratio-valid.html	e.style['aspect-ratio'] = "0 / 9" should set the property value
+aspect-ratio-valid.html	e.style['aspect-ratio'] = "16 / 0" should set the property value
+aspect-ratio-valid.html	e.style['aspect-ratio'] = "16 / 9" should set the property value
+aspect-ratio-valid.html	e.style['aspect-ratio'] = "16.3 / 1" should set the property value
+aspect-ratio-valid.html	e.style['aspect-ratio'] = "16.3 / 9.4" should set the property value
+aspect-ratio-valid.html	e.style['aspect-ratio'] = "auto" should set the property value
 [excluded]
 # Pages whose tests read getComputedStyle, which slice 1b brings; each runs
 # again once it lands.
