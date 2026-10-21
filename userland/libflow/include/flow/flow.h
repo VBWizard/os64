@@ -779,8 +779,9 @@ typedef struct {
     // Kept for the face; nothing draws a shape (YONDER_HONEY_DO.md § 7).
     flow_cursor_t cursor;
     // `outline` (CSS UI 4 § 3): drawn outside the border edge, past it by
-    // `outline_offset`, `outline_width` wide, after the box's own paint and
-    // taking no room (flow_outline_rect). The width is 0 when the style is
+    // `outline_offset`, `outline_width` wide, last in its stacking context,
+    // over everything painted in it (flow_visitor_t.outline), and taking no
+    // room (flow_outline_rect). The width is 0 when the style is
     // none, as a border's is; `auto` is drawn solid, and `outline_auto`
     // says it was asked for. The colour's currentColor, and its `auto`,
     // are the element's colour (current_colours). Not inherited.
@@ -1017,6 +1018,9 @@ struct flow_box {
     // subtrees that hold none, so a page without floats pays nothing for
     // them.
     bool holds_float;
+    // It, or a box below it, draws an outline (flow_outline_rect): the
+    // outline step of flow_visit_groups walks only the subtrees that do.
+    bool holds_outline;
     // Painted as a layer of its own, in paint order, and never through its
     // tree ancestors: their walks skip it. A positioned box is; so is a
     // block-level box in the flow below full opacity, a stacking context
@@ -1402,11 +1406,18 @@ void flow_visit(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t 
 // draw it upright instead, so a face that refuses to lay it loses nothing.
 // A face that blends nothing
 // may leave `open` and `close` NULL, which is flow_visit.
+// `outline`, when not NULL, is handed each box that draws an outline
+// (flow_outline_rect) and meets the viewport, LAST in its stacking context
+// — after every box painted in it, before the context's group closes
+// (CSS 2.1 Appendix E, step 10) — once there and never through `visit`:
+// an outline is painted over everything of its context, its own content
+// included.
 typedef struct {
     void (*visit)(void *ctx, const flow_box_t *box);
     void (*open)(void *ctx, const flow_box_t *box, os64_gui_rect_t bounds);
     void (*close)(void *ctx, const flow_box_t *box);
     void *ctx;
+    void (*outline)(void *ctx, const flow_box_t *box);
 } flow_visitor_t;
 
 void flow_visit_groups(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll,

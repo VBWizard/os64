@@ -42,8 +42,11 @@ _Static_assert(FLOW_BOX_BLOCK == (int)FB_BLOCK && FLOW_BOX_REPLACED == (int)FB_R
 // background and borders — and its BODY — everything else of its own —
 // with the members of negative z-index between the two. A GROUP — a
 // stacking context below full opacity — is bracketed by an OPEN and a
-// CLOSE around everything it paints, which a face composites whole.
-typedef enum { PART_WHOLE = 0, PART_SELF, PART_BODY, PART_OPEN, PART_CLOSE } LayerPart;
+// CLOSE around everything it paints, which a face composites whole. Last
+// in each context its OUTLINES: those of every box painted in it
+// (Appendix E, step 10).
+typedef enum { PART_WHOLE = 0, PART_SELF, PART_BODY, PART_OPEN, PART_CLOSE,
+               PART_OUTLINES } LayerPart;
 
 typedef struct {
     const flow_box_t *box;
@@ -1125,7 +1128,8 @@ static void own_ink(flow_box_t *b)
     }
     // An outline is drawn past the border box and in no box's overflow.
     os64_gui_rect_t ring;
-    if (flow_outline_rect(b, &ring))
+    b->holds_outline = flow_outline_rect(b, &ring);
+    if (b->holds_outline)
         past_box(b, ring.x, ring.y, (int64_t)ring.x + ring.w, (int64_t)ring.y + ring.h, most, NULL);
     for (int32_t i = 0; i < nbox + ntext; i++) {
         bool text = i >= nbox;
@@ -1159,6 +1163,9 @@ static void own_ink(flow_box_t *b)
 static void ink_up(const flow_box_t *b)
 {
     flow_box_t *up = (flow_box_t *)b->parent;
+    // An outline below is its context's to paint, whichever layer it is in
+    // (visit_outlines walks into stacked boxes that are not contexts).
+    up->holds_outline |= b->holds_outline;
     if (b->stacked)
         return;
     os64_gui_rect_t c = b->overflow, p = up->overflow;
@@ -1559,6 +1566,7 @@ static void emit_context(Stack *st, int32_t c)
         else
             layer(st, st->entry[m[k]], PART_WHOLE);
     }
+    layer(st, box, PART_OUTLINES);
     if (is_group(box))
         layer(st, box, PART_CLOSE);
 }
@@ -1575,8 +1583,8 @@ static bool stack_build(flow_tree_t *t)
     st.order = os64_calloc((size_t)n + 1, sizeof(int32_t));
     st.first = os64_calloc((size_t)n + 2, sizeof(int32_t));
     st.count = os64_calloc((size_t)n + 2, sizeof(int32_t));
-    // Each context two layers at most, and an open and a close.
-    st.layers = os64_calloc((size_t)n * 4 + 4, sizeof(Layer));
+    // Each context two layers at most, its outlines, and an open and a close.
+    st.layers = os64_calloc((size_t)n * 5 + 5, sizeof(Layer));
     st.painted = os64_calloc((size_t)n + 1, sizeof(*st.painted));
     bool ok = ctx != NULL && tmp != NULL && st.context != NULL && st.order != NULL &&
               st.first != NULL && st.count != NULL && st.layers != NULL && st.painted != NULL;
@@ -2818,6 +2826,26 @@ static os64_gui_rect_t *all_group_bounds(const flow_tree_t *tree, flow_point_t s
     return out;
 }
 
+// Step 10 of a context `b`: the outlines of every box painted in it — its
+// own and its descendants', a positioned one's that is no context of its
+// own too, but none of a context inside it, which paints its own — each
+// that meets `view`, a rect in document coordinates, by its overflow
+// grown by its ink. Only the subtrees that hold an outline are walked.
+static void visit_outlines(const flow_box_t *b, bool top, os64_gui_rect_t view,
+                           flow_point_t scroll, const flow_visitor_t *visitor)
+{
+    if (!b->holds_outline || b->unpainted || (!top && b->stacked && makes_context(b)))
+        return;
+    os64_gui_rect_t ring;
+    if (flow_outline_rect(b, &ring)) {
+        flow_point_t o = flow_box_doc_offset(b, scroll);
+        if (meets(moved(ring, o.x, o.y), view))
+            visitor->outline(visitor->ctx, b);
+    }
+    for (const flow_box_t *c = b->first; c != NULL; c = c->next)
+        visit_outlines(c, false, view, scroll, visitor);
+}
+
 // The layers in paint order (stack_build), each against the viewport in
 // its box's own coordinates: a fixed box's are the viewport's. A WHOLE box
 // is its two-phase walk; a SELF, the box alone; a BODY, the rest of that
@@ -2826,7 +2854,7 @@ static os64_gui_rect_t *all_group_bounds(const flow_tree_t *tree, flow_point_t s
 void flow_visit(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll,
                 void (*visit)(void *ctx, const flow_box_t *box), void *ctx)
 {
-    flow_visitor_t v = {visit, NULL, NULL, ctx};
+    flow_visitor_t v = {visit, NULL, NULL, ctx, NULL};
     flow_visit_groups(tree, viewport, scroll, &v);
 }
 
@@ -2912,6 +2940,10 @@ void flow_visit_groups(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_p
             visit_inline(&v, b);
             break;
         }
+        case PART_OUTLINES:
+            if (visitor->outline != NULL)
+                visit_outlines(b, true, view, scroll, visitor);
+            break;
         case PART_OPEN: case PART_CLOSE: break;     // heard above
         }
     }
@@ -3030,7 +3062,7 @@ const flow_box_t *flow_hit(const flow_tree_t *tree, int32_t x, int32_t y, flow_p
         case PART_WHOLE: h = hit(tree, b, (int32_t)px, (int32_t)py); break;
         case PART_SELF: h = hit_self(b, (int32_t)px, (int32_t)py); break;
         case PART_BODY: h = hit_kids(tree, b, (int32_t)px, (int32_t)py); break;
-        case PART_OPEN: case PART_CLOSE: break;     // a group is no box of its own
+        case PART_OPEN: case PART_CLOSE: case PART_OUTLINES: break;     // no box's own
         }
         if (h != NULL)
             return h;

@@ -1362,7 +1362,7 @@ static void motion_effect_cases(void)
     expect("motion: will-change: opacity stacks it",
            w != NULL && w->stacked && w->style->animating == 0, NULL);
     MotionGroups seen = {{NULL}, 0};
-    flow_visitor_t v = {motion_group_visit, motion_group_open, NULL, &seen};
+    flow_visitor_t v = {motion_group_visit, motion_group_open, NULL, &seen, NULL};
     flow_visit_groups(m.tree, (os64_gui_rect_t){0, 0, 800, 600}, (flow_point_t){0, 0}, &v);
     bool g1_open = false, w_open = false;
     for (int32_t i = 0; i < seen.n; i++) {

@@ -105,10 +105,45 @@ static void ellipsis_review_cases(void)
                     "text \"de\" 0 34 #101010 clip 0 0 40 40\n");
 }
 
+// An outline is painted last in its stacking context (CSS 2.1 Appendix E,
+// step 10): over a later sibling's background, and over the box's own
+// content.
+static void outline_order_cases(void)
+{
+    // The div 0, 0, 20 x 10, its ring -2, -2, 24 x 14; the p after it,
+    // 0, 10, 30 x 10, green. The ring's bottom rows (y 11, then 10) and
+    // its right columns (x 21, then 20) are drawn after the p, over it;
+    // its top rows and left columns are off the view.
+    paint_page_case("outline: drawn over what follows it",
+                    "<!doctype html><style>body { margin: 0 } div { height: 10px; width: 20px;"
+                    " outline: 2px solid #ff0000 } p { margin: 0; height: 10px; width: 30px;"
+                    " background: #00ff00 }</style><div></div><p></p>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "fill 0 10 30 10 #00ff00\n"
+                    "fill 0 11 22 1 #ff0000\nfill 0 10 21 1 #ff0000\n"
+                    "fill 21 0 1 11 #ff0000\nfill 20 0 1 10 #ff0000\n");
+    // An inset ring, the usual focus ring: the div 5, 5, 20 x 10 with an
+    // offset of -4, so the ring is 7, 7, 16 x 6, inside the box, over its
+    // child's green.
+    paint_page_case("outline: an inset ring is drawn over the box's content",
+                    "<!doctype html><style>body { margin: 0 } div { margin: 5px; width: 20px;"
+                    " height: 10px; outline: 2px solid #ff0000; outline-offset: -4px }"
+                    " p { margin: 0; height: 10px; background: #00ff00 }</style><div><p></p></div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "fill 5 5 20 10 #00ff00\n"
+                    "fill 7 7 16 1 #ff0000\nfill 8 8 14 1 #ff0000\n"
+                    "fill 7 12 16 1 #ff0000\nfill 8 11 14 1 #ff0000\n"
+                    "fill 7 8 1 4 #ff0000\nfill 8 9 1 2 #ff0000\n"
+                    "fill 22 8 1 4 #ff0000\nfill 21 9 1 2 #ff0000\n");
+}
+
 static void batch_a_paint_cases(void)
 {
     object_rect_cases();
     ellipsis_review_cases();
+    outline_order_cases();
     // text-overflow: the div is 40 wide, its line abcdefghij 68. The
     // ellipsis is 8 (16px serif), so what is kept ends by 32: abcd, a-d
     // 8 each. The text is drawn cut there, and then, the line handed over

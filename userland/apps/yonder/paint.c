@@ -1833,8 +1833,9 @@ static void frame(const Painter *p, const flow_box_t *b)
 
 // A box's outline (CSS UI 4 § 3): a ring of the outline's width, style and
 // colour round where libflow says it is (flow_outline_rect), drawn as a
-// square border is — so its styles are a border's, dotted to outset — after
-// the box's own paint and over it. Square whatever the box's radius:
+// square border is — so its styles are a border's, dotted to outset — when
+// the walk hands it over, last in its stacking context, over everything
+// painted in it (paint_outline). Square whatever the box's radius:
 // following the corners is booked.
 static void outline(const Painter *p, const flow_box_t *b)
 {
@@ -2090,17 +2091,17 @@ static void ellipsis(const Painter *p, const flow_box_t *line)
 #define FRAME_INK 0x0000eeu
 #define FRAME_PAPER 0xf0f0f0u
 
-static void paint_box(void *ctx, const flow_box_t *b)
+// The painter for one box, in its own coordinates; false when nothing of
+// it is to be drawn. The box's own coordinates: a fixed one's view is the
+// page's less the scroll, a sticky one's less its push, and the painter's
+// shift (a group drawn upright) applied. A box an ancestor's `overflow`
+// clips is drawn only inside the clip, asked in the coordinates being
+// painted — what clips a sticky box from outside stays put as the box
+// moves — and every verb is handed the view, so the view is narrowed.
+static bool box_painter(const Painter *outer, const flow_box_t *b, Painter *out)
 {
-    const Painter *outer = ctx;
     if (b->style->visibility != FLOW_VISIBLE || outer->groups->hidden != 0)
-        return;
-    // The box's own coordinates: a fixed one's view is the page's less the
-    // scroll, a sticky one's less its push, and the painter's shift (a
-    // group drawn upright) applied. A box an ancestor's `overflow` clips is
-    // drawn only inside the clip, asked in the coordinates being painted —
-    // what clips a sticky box from outside stays put as the box moves — and
-    // every verb is handed the view, so the view is narrowed.
+        return false;
     Painter clipped = *outer;
     clipped.off = flow_box_doc_offset(b, outer->scroll);
     clipped.off.x = sum32(clipped.off.x, outer->shift.x);
@@ -2114,11 +2115,29 @@ static void paint_box(void *ctx, const flow_box_t *b)
         int64_t x1 = min64((int64_t)v.x + v.w, (int64_t)c.x + c.w);
         int64_t y1 = min64((int64_t)v.y + v.h, (int64_t)c.y + c.h);
         if (x1 <= x0 || y1 <= y0)
-            return;
+            return false;
         v = (os64_gui_rect_t){(int32_t)x0, (int32_t)y0, (int32_t)(x1 - x0), (int32_t)(y1 - y0)};
     }
     clipped.view = (os64_gui_rect_t){(int32_t)((int64_t)v.x - clipped.off.x),
                                      (int32_t)((int64_t)v.y - clipped.off.y), v.w, v.h};
+    *out = clipped;
+    return true;
+}
+
+// A box's outline, handed over last in its stacking context
+// (flow_visitor_t.outline); none for a box left out of a line's ellipsis.
+static void paint_outline(void *ctx, const flow_box_t *b)
+{
+    Painter p;
+    if (box_painter(ctx, b, &p) && !past_ellipsis(b))
+        outline(&p, b);
+}
+
+static void paint_box(void *ctx, const flow_box_t *b)
+{
+    Painter clipped;
+    if (!box_painter(ctx, b, &clipped))
+        return;
     // On a line that ends in an ellipsis, what passes its limit is not
     // drawn: a text is cut at the last character that fits, an inline
     // box's piece where what is kept ends, an atom past it is left out
@@ -2178,7 +2197,6 @@ static void paint_box(void *ctx, const flow_box_t *b)
         else if (is_frame(b) && p->v->frame != NULL)
             p->v->frame(p->v->ctx, b, on_page(p, content_of(b)), on_page(p, p->view),
                         ink_of(p, FRAME_INK), paper_of(p, FRAME_PAPER));
-        outline(p, b);
         return;
     case FLOW_BOX_SPAN:
         // An inline box's borders open on its first piece and close on its
@@ -2196,7 +2214,6 @@ static void paint_box(void *ctx, const flow_box_t *b)
         if (b->parent != NULL && b->parent->kind == FLOW_BOX_ATOMIC && b->parent->node == b->node)
             return;
         frame(p, b);
-        outline(p, b);
         return;
     }
 }
@@ -2673,7 +2690,7 @@ void yonder_paint(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_
         }
     }
     if (root != NULL) {
-        flow_visitor_t v = {paint_box, group_open, group_close, &p};
+        flow_visitor_t v = {paint_box, group_open, group_close, &p, paint_outline};
         flow_visit_groups(tree, viewport, scroll, &v);
     }
 }

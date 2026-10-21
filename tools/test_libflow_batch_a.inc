@@ -75,6 +75,51 @@ static void log_kind(void *ctx, const flow_box_t *b)
     k->kinds[k->n] = '\0';
 }
 
+// The outline step (flow_visitor_t.outline): each box's outline handed
+// over once, last in its stacking context. The page: a with an outline,
+// then a positioned z-index 1 context b holding c with one, then d. The
+// root context paints a and d, then its member b's context — b, c, and
+// c's outline, last in b's — and then, last of all (step 10 comes after
+// the members of step 9), a's outline.
+typedef struct {
+    char seq[128];
+    int n;
+} OutlineLog;
+
+static void outline_log(OutlineLog *k, char what, const flow_box_t *b)
+{
+    if (b->node == NULL || b->node->kind != OS64_HTML_ELEMENT || b->kind == FLOW_BOX_LINE ||
+        b->node->tag == OS64_HTML_TAG_HTML || b->node->tag == OS64_HTML_TAG_BODY || k->n > 120)
+        return;
+    k->seq[k->n++] = what;
+    k->seq[k->n++] = (char)os64_html_attr(b->node, "id")->value[0];
+    k->seq[k->n] = '\0';
+}
+
+static void outline_visit(void *ctx, const flow_box_t *b) { outline_log(ctx, 'v', b); }
+static void outline_ring(void *ctx, const flow_box_t *b) { outline_log(ctx, 'o', b); }
+
+static void outline_step_cases(void)
+{
+    Sheeted p;
+    sheeted_open(&p, "<!doctype html><style>div { height: 10px; outline: 1px solid }"
+                     " #b { position: relative; z-index: 1; outline: none } #d { outline: none }"
+                     "</style><div id=a></div><div id=b><div id=c></div></div><div id=d></div>",
+                 200, 600);
+    flow_tree_t *tree = flow_layout(p.doc, p.page, 200, &p.env);
+    OutlineLog log = {{0}, 0};
+    flow_visitor_t vis = {outline_visit, NULL, NULL, &log, outline_ring};
+    flow_visit_groups(tree, (os64_gui_rect_t){0, 0, 200, 600}, (flow_point_t){0, 0}, &vis);
+    expect("outline: each last in its stacking context", strcmp(log.seq, "vavdvbvcocoa") == 0,
+           log.seq);
+    OutlineLog plain = {{0}, 0};
+    flow_visit(tree, (os64_gui_rect_t){0, 0, 200, 600}, (flow_point_t){0, 0}, outline_visit, &plain);
+    expect("outline: flow_visit hands over no outline step", strcmp(plain.seq, "vavdvbvc") == 0,
+           plain.seq);
+    flow_free(tree);
+    sheeted_close(&p);
+}
+
 static void ellipsis_door_cases(void)
 {
     Sheeted p;
@@ -356,6 +401,7 @@ static void batch_a_cases(void)
         "      line 0 26 100 20 base 14\n"
         "        text \"x\" 0 28 8 16 serif 16\n");
     outline_door_cases();
+    outline_step_cases();
 
     // ── aspect-ratio (CSS Sizing 4 § 4) ──
 
