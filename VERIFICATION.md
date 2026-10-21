@@ -1127,13 +1127,18 @@ at, in three sections. `[required]` names, one by one, the tests that
 exercise what the slice's interface is for: every one must pass or the run
 fails (exit 1) naming it, and that is what gates enabling the interface.
 `--modern-off` runs the window with the arc's switch off, which is how a
-slice shows its required tests are its own surface's: each one fails.
+slice shows its required tests are its own surface's: the run is green
+only when none of them passes, and one that does is listed as LEAKED and
+fails it (the baseline is not compared, and `--update` is refused).
 `[passing]` is the baseline, every test that passes: one that goes missing
 fails the run and is named, and one that newly passes is listed to add.
 `[excluded]` names each page the slice knowingly does not run, with its
 reason after a tab (`needs iframe`), so what was never exercised is named,
 never counted. `--update` rewrites `[passing]` alone; the other two are
-written by hand, which is the point of them. A slice commits its
+written by hand, which is the point of them. It writes last, and not at
+all for a run with a fault in the window's fakes, which cannot be judged
+(exit 2); neither can a run whose expectation file exists and cannot be
+read (a file that does not exist is three empty sections). A slice commits its
 directory's file BEFORE its code, so the diff of that file is the proof.
 **A page whose harness did not end OK fails whole**: none of its tests is a
 pass, whatever the harness said of each, so a page that errored halfway

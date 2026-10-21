@@ -497,7 +497,9 @@ patch `Element.prototype`. Each interface object inherits its parent's
 inherits its parent prototype; `Node`'s is `Function.prototype`. `Node`
 carries the node-type and document-position constants, on itself and its
 prototype, as WebIDL puts a constant. `new DocumentFragment()` makes an
-empty fragment of the window's document, and any call of it without `new`
+empty fragment of the window's document, whose prototype is new.target's
+`prototype` (so a subclass makes its own kind; DocumentFragment's when that
+is not an object), and any call of it without `new`
 is refused by the engine itself, the function being made as a constructor
 only (it finds its binding through the anchor, which is its own class's
 prototype in the binding's context); every other interface is an "Illegal

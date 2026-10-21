@@ -493,9 +493,12 @@ commit, in three sections: `[required]` (each must pass, or the run fails
 naming it), `[passing]` (the baseline: a lost pass fails the run, a new one
 is listed) and `[excluded]` (a page not run, with its reason). `--update`
 rewrites `[passing]` alone. A page whose harness did not end OK fails
-whole: a pass it reported prints as a FAIL that says so. `--modern-off`
-runs the window with the switch off, to show the required tests are the
-slice's own. `--selftest` holds the runner to `tools/wpt/selftest/` both
+whole: a pass it reported prints as a FAIL that says so. `--update` writes
+last, and only for a run with no fault; an expectation file that exists
+and cannot be read makes the run unjudgeable. `--modern-off` runs the
+window with the switch off, to show the required tests are the slice's
+own: green only when none of them passes, a LEAKED one failing the run.
+`--selftest` holds the runner to `tools/wpt/selftest/` both
 ways (file names and a fixture manifest) and the sections to their rules.
 
 **What the builder decided.** `.window.js` tests are run (the brief said
@@ -558,7 +561,7 @@ its life, handed to the script host and to the page's cascade, and a
 |---|---|---|
 | `dom/nodes` pass | 844 of 4397 | 858 of 4406 |
 | harness errors (failing whole) | 69 | 67 |
-| `[required]` | — | 14, all passing; all 14 fail with `--modern-off` |
+| `[required]` | — | 14, all passing; none passes with `--modern-off` (a green run) |
 | DOM host | 3734 / 21296 checks | 3794 / 22220, 0 failed |
 | scripted-page host | 5842 | 5888, 0 failed |
 

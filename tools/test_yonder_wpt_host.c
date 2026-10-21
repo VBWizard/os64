@@ -3,7 +3,7 @@
  *
  *   test_yonder_wpt_host --wpt <checkout> --dir <dir> --expect <file>
  *                        [--pages <file>] [--update] [--only <substring>]
- *                        [--report <file>] [--modern-off]
+ *                        [--report <file>] [--modern-off] [--fault]
  *
  * The window is the scripted-page host's (that file is included whole,
  * without its main, for its fakes of the OS: the pool, the mailbox, the
@@ -11,7 +11,10 @@
  * takes in yonder: a navigation, a head, the body in the stream's chunks,
  * the verdict, then turns of the loop. Its modern switch is on, as yonder's
  * is unless yonder.conf says otherwise; --modern-off turns it off, which is
- * how a slice shows its required tests are its own surface's (they fail).
+ * how a slice shows its required tests are its own surface's: then every
+ * [required] test that passes is listed as LEAKED and fails the run, the
+ * baseline is not compared (it is the switch on's), and --update is
+ * refused.
  *
  * WHAT IS RUN: with --pages, the pages that file lists, which
  * tools/wpt/pages.py makes from WPT's own MANIFEST.json (the suite's list of
@@ -59,15 +62,20 @@
  *               listed as NEW.
  *   [excluded]  page<tab>reason: a page the slice knowingly does not run,
  *               and why.
+ * A file that does not exist is three empty sections; one that exists and
+ * cannot be read makes the run one that cannot be judged (exit 2).
  * --update rewrites [passing] from this run and copies the other two as
  * they are, since they are written by hand; with --only it keeps the
- * [passing] lines of pages the substring does not select. A fault in the
- * window's fakes (the host's check() failing) fails the run whatever the
- * results. */
+ * [passing] lines of pages the substring does not select. It writes last,
+ * beside the file and renamed over it, and only for a run with no fault: a
+ * fault in the window's fakes (the host's check() failing, a page's or the
+ * teardown's) fails the run (exit 2) whatever the results and leaves the
+ * file as it was. --fault fakes one, for the selftest. */
 #define YONDER_HOST_FAKES_ONLY
 #include "test_yonder_scripts_host.c"
 
 #include <ctype.h>
+#include <errno.h>
 #include <dirent.h>
 #include <stdarg.h>
 #include <strings.h>
@@ -100,6 +108,9 @@ static size_t wpt_npages, wpt_pages_cap;
 static bool wpt_navigated;
 /* The window's modern switch is off (--modern-off). */
 static bool wpt_modern_off;
+/* --fault: a fault in the fakes after the last page, as if one had been
+ * met, for the selftest to prove a faulted run rewrites nothing. */
+static bool wpt_fault;
 
 static void *wpt_must(void *p) {
     if(p==NULL) { fprintf(stderr,"wpt: out of memory\n"); exit(2); }
@@ -613,14 +624,27 @@ typedef struct {
     wpt_list_t required_text, excluded_text;
 } wpt_expect_t;
 
-/* The file at `path` into `e`; an absent file is three empty sections.
- * False, having said why, for a line outside any section or an exclusion
- * that gives no reason. */
+/* The file at `path` into `e`; a file that does not exist is three empty
+ * sections. False, having said why, for one that exists and cannot be read
+ * (a directory, past WPT_FILE_MAX, refused), a line outside any section, or
+ * an exclusion that gives no reason: a run against expectations it could
+ * not read would judge nothing, and --update would replace them. */
 static bool wpt_expect_read(const char *path, wpt_expect_t *e) {
     memset(e,0,sizeof(*e));
+    struct stat st;
+    if(stat(path,&st)!=0) {
+        if(errno==ENOENT) return true;
+        fprintf(stderr,"wpt: %s: %s\n",path,strerror(errno));
+        return false;
+    }
+    if(!S_ISREG(st.st_mode)) { fprintf(stderr,"wpt: %s is not a file\n",path); return false; }
+    if((uint64_t)st.st_size>WPT_FILE_MAX) {
+        fprintf(stderr,"wpt: %s is past the %u bytes an expectation file may hold\n",path,WPT_FILE_MAX);
+        return false;
+    }
     size_t len=0;
     char *text=wpt_slurp(path,&len);
-    if(text==NULL) return true;
+    if(text==NULL) { fprintf(stderr,"wpt: %s could not be read\n",path); return false; }
     enum { NONE, REQUIRED, PASSING, EXCLUDED } section=NONE;
     bool ok=true;
     /* Every line, a blank one included: only what follows the last newline,
@@ -715,7 +739,7 @@ static int wpt_update(const char *expect, const wpt_expect_t *e, const wpt_list_
 
 static int wpt_usage(void) {
     fprintf(stderr,"usage: test_yonder_wpt_host --wpt <checkout> --dir <dir> --expect <file>"
-        " [--pages <file>] [--update] [--only <substring>] [--report <file>] [--modern-off]\n");
+        " [--pages <file>] [--update] [--only <substring>] [--report <file>] [--modern-off] [--fault]\n");
     return 2;
 }
 
@@ -731,9 +755,14 @@ int main(int argc, char **argv) {
         else if(i+1<argc && !strcmp(argv[i],"--only")) only=argv[++i];
         else if(i+1<argc && !strcmp(argv[i],"--report")) wpt_report=argv[++i];
         else if(!strcmp(argv[i],"--modern-off")) wpt_modern_off=true;
+        else if(!strcmp(argv[i],"--fault")) wpt_fault=true;
         else return wpt_usage();
     }
     if(wpt_root==NULL || wpt_dir==NULL || expect==NULL) return wpt_usage();
+    if(update && wpt_modern_off) {
+        fprintf(stderr,"wpt: --update writes the switch on's baseline, and --modern-off turns it off\n");
+        return 2;
+    }
     char *top=wpt_join(wpt_root,wpt_dir);
     struct stat st;
     if(stat(top,&st)!=0 || !S_ISDIR(st.st_mode)) {
@@ -825,37 +854,52 @@ int main(int argc, char **argv) {
         for(j=i;j<skipped.n && !strcmp(skipped.v[j],skipped.v[i]);j++) {}
         printf("%s: not run: %zu pages, %s\n",wpt_dir,j-i,skipped.v[i]);
     }
-    unsigned lost=0, gained=0, missing=0;
-    for(size_t i=0;i<e.required.n;i++)
-        if(wpt_selected(e.required.v[i],only) && !wpt_has(&passes,e.required.v[i])) {
-            printf("REQUIRED\t%s\n",e.required.v[i]); missing++;
-        }
-    for(size_t i=0;i<e.passing.n;i++)
-        if(wpt_selected(e.passing.v[i],only) && !wpt_has(&passes,e.passing.v[i])) {
-            printf("LOST\t%s\n",e.passing.v[i]); lost++;
-        }
-    for(size_t i=0;i<passes.n;i++)
-        if(!wpt_has(&e.passing,passes.v[i])) { printf("NEW\t%s\n",passes.v[i]); gained++; }
     int rc=0;
-    if(missing>0) { printf("wpt: %u required tests did not pass\n",missing); rc=1; }
-    if(update) {
-        int written=wpt_update(expect,&e,&passes,only);
-        if(written!=0) rc=written;
-    } else if(lost>0) {
-        printf("wpt: %u passes lost against %s\n",lost,expect); rc=1;
-    } else if(gained>0) {
-        printf("wpt: %u new passes; --update adds them to %s\n",gained,expect);
+    if(wpt_modern_off) {
+        /* The switch's proof: every required test is the surface's own, so
+         * none may pass without it. The baseline is the switch on's, so it
+         * is not compared. */
+        unsigned leaked=0, gone=0;
+        for(size_t i=0;i<e.required.n;i++) {
+            if(!wpt_selected(e.required.v[i],only)) continue;
+            if(wpt_has(&passes,e.required.v[i])) { printf("LEAKED\t%s\n",e.required.v[i]); leaked++; }
+            else gone++;
+        }
+        printf("wpt: with the switch off, %u required tests do not pass and %u do\n",gone,leaked);
+        if(leaked>0) { printf("wpt: %u required tests pass without the surface they require\n",leaked); rc=1; }
+    } else {
+        unsigned lost=0, gained=0, missing=0;
+        for(size_t i=0;i<e.required.n;i++)
+            if(wpt_selected(e.required.v[i],only) && !wpt_has(&passes,e.required.v[i])) {
+                printf("REQUIRED\t%s\n",e.required.v[i]); missing++;
+            }
+        for(size_t i=0;i<e.passing.n;i++)
+            if(wpt_selected(e.passing.v[i],only) && !wpt_has(&passes,e.passing.v[i])) {
+                printf("LOST\t%s\n",e.passing.v[i]); lost++;
+            }
+        for(size_t i=0;i<passes.n;i++)
+            if(!wpt_has(&e.passing,passes.v[i])) { printf("NEW\t%s\n",passes.v[i]); gained++; }
+        if(missing>0) { printf("wpt: %u required tests did not pass\n",missing); rc=1; }
+        if(!update && lost>0) { printf("wpt: %u passes lost against %s\n",lost,expect); rc=1; }
+        else if(!update && gained>0) printf("wpt: %u new passes; --update adds them to %s\n",gained,expect);
     }
-    wpt_expect_free(&e);
-    wpt_list_free(&passes);
+    if(wpt_fault) check(false,"wpt: the fault --fault asked for");
     wpt_list_free(&skipped);
     wpt_pages_free();
     os64_text_font_release(probe_font);
     check(os64_text_destroy(probe_text)==OS64_FONT_OK,"all layout text released");
     check(live==0,"native and engine heap is empty");
+    /* Written last, and only by a run that can be judged: a fault anywhere,
+     * a page's or the teardown's, leaves the expectations as they were. */
     if(failures!=0) {
-        fprintf(stderr,"wpt: %u faults in the window's fakes\n",failures);
-        return 2;
+        fprintf(stderr,"wpt: %u faults in the window's fakes%s\n",failures,
+            update ? "; the expectations are not rewritten" : "");
+        rc=2;
+    } else if(update) {
+        int written=wpt_update(expect,&e,&passes,only);
+        if(written!=0) rc=written;
     }
+    wpt_expect_free(&e);
+    wpt_list_free(&passes);
     return rc;
 }

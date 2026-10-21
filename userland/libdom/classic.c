@@ -292,15 +292,24 @@ static JSValue illegal_constructor(JSContext *ctx, JSValueConst self, int argc, 
  * call that is not a construct call before this runs (WebIDL: an
  * interface's constructor is never just called), whatever `this` the
  * caller chose; a function made that way carries no data, so it finds its
- * binding through its context (d_binding). */
+ * binding through its context (d_binding). The fragment's prototype is
+ * new.target's `prototype`, so `class F extends DocumentFragment` makes an
+ * F, and DocumentFragment's when that is not an object (WebIDL's "get
+ * prototype from constructor"; there is one realm), read before the
+ * fragment is made, since reading it may run a page's getter. */
 static JSValue fragment_constructor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv)
 {
-    (void)new_target; (void)argc; (void)argv;
+    (void)argc; (void)argv;
     os64_dom_t *dom = d_binding(ctx);
     if (dom == NULL) return JS_EXCEPTION;
+    JSValue prototype = JS_GetPropertyStr(ctx, new_target, "prototype");
+    if (JS_IsException(prototype)) return JS_EXCEPTION;
     int64_t status;
     os64_html_node_t *fragment = os64_html_create_fragment(dom->document, &status);
-    return fragment != NULL ? d_wrap(dom, ctx, fragment) : d_html_error(ctx, status);
+    JSValue made = fragment != NULL ? d_wrap_constructed(dom, ctx, fragment, prototype)
+                                    : d_html_error(ctx, status);
+    JS_FreeValue(ctx, prototype);
+    return made;
 }
 
 /* An interface object's [[Prototype]] set to its parent interface's. The

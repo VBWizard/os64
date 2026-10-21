@@ -37,12 +37,15 @@ static int node_prototype_kind(const os64_html_node_t *node)
     return D_PROTO_ELEMENT;
 }
 
+/* A wrapper for a node of `node`'s kind, not yet attached: its prototype is
+ * the kind's, or `prototype` when that is an object (a constructor's
+ * new.target's, d_wrap_constructed). */
 static DValue *wrapper_prepare(os64_dom_t *dom, JSContext *ctx,
-                                const os64_html_node_t *node)
+                                const os64_html_node_t *node, JSValueConst prototype)
 {
     DValue *entry = d_alloc(dom, sizeof(*entry));
     if (entry == NULL) { d_error(ctx, "QuotaExceededError", "DOM wrapper quota exceeded"); return NULL; }
-    JSValue value = JS_NewObjectProtoClass(ctx,
+    JSValue value = JS_NewObjectProtoClass(ctx, JS_IsObject(prototype) ? prototype :
         dom->prototypes[node_prototype_kind(node)]->value, dom->node_class);
     if (JS_IsException(value)) { d_free(dom, entry); return NULL; }
     entry->value = value;
@@ -71,7 +74,18 @@ JSValue d_wrap(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node)
     if (node == NULL) return JS_NULL;
     DValue *entry = d_find(dom, node);
     if (entry != NULL) return JS_DupValue(ctx, entry->value);
-    entry = wrapper_prepare(dom, ctx, node);
+    entry = wrapper_prepare(dom, ctx, node, JS_UNDEFINED);
+    return entry != NULL ? wrapper_attach(dom, ctx, entry, node) : JS_EXCEPTION;
+}
+
+JSValue d_wrap_constructed(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node,
+                           JSValueConst prototype)
+{
+    if (!d_context(dom, ctx, OS64_JS_ABI_ID)) return JS_EXCEPTION;
+    if (node == NULL) return JS_NULL;
+    DValue *entry = d_find(dom, node);
+    if (entry != NULL) return JS_DupValue(ctx, entry->value);
+    entry = wrapper_prepare(dom, ctx, node, prototype);
     return entry != NULL ? wrapper_attach(dom, ctx, entry, node) : JS_EXCEPTION;
 }
 
@@ -382,7 +396,7 @@ static JSValue method(JSContext *ctx, JSValueConst self, int argc,
         int deep = argc > 0 ? JS_ToBool(ctx, argv[0]) : 0;
         if (deep < 0) return JS_EXCEPTION;
         int64_t status;
-        DValue *entry = wrapper_prepare(dom, ctx, node);
+        DValue *entry = wrapper_prepare(dom, ctx, node, JS_UNDEFINED);
         if (entry == NULL) return JS_EXCEPTION;
         os64_html_node_t *copy = os64_page_node_clone(dom->state, node, deep != 0, &status);
         /* HTML's cloning steps carry a script's ALREADY STARTED to its copy. */

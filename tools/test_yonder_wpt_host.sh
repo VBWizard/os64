@@ -14,12 +14,13 @@
 # tools/wpt/expected/<dir>.txt. The pages are those WPT's MANIFEST.json
 # lists, through tools/wpt/pages.py, when the checkout has one, and those
 # found by file name when it does not. Exit 1 is a required test failed or
-# a pass lost; 2, a run that could not be judged.
+# a pass lost (with --modern-off, a required test that passed); 2, a run
+# that could not be judged.
 #
 # --selftest runs tools/wpt/selftest/, pages whose every outcome is known,
 # beside the checkout's own resources, found by file name and again through
 # a manifest (tools/wpt/selftest.manifest.json), and holds the runner to
-# tools/wpt/selftest.out line for line both ways; then holds --expect,
+# tools/wpt/selftest.out line for line both ways; then holds --expect, --modern-off,
 # --update and the expectation file's three sections to what they promise.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
@@ -119,8 +120,36 @@ if [ "$1" = --selftest ]; then
     run --expect "$work/bad.txt"
     [ "$rc" -eq 2 ] || fail "a test required of an excluded page was taken (exit $rc)"
 
+    # Expectations that exist and cannot be read judge nothing, and --update
+    # leaves them where they are.
+    mkdir "$work/dir.txt"
+    run --expect "$work/dir.txt" --update
+    [ "$rc" -eq 2 ] && [ -d "$work/dir.txt" ] || fail "a directory was taken for expectations (exit $rc)"
+    truncate -s $((16 * 1024 * 1024 + 1)) "$work/big.txt"
+    run --expect "$work/big.txt" --update
+    [ "$rc" -eq 2 ] && [ "$(stat -c %s "$work/big.txt")" -eq $((16 * 1024 * 1024 + 1)) ] ||
+        fail "an expectation file past the size it may have was taken, or rewritten (exit $rc)"
+    # A run with a fault rewrites nothing, whatever its pages said.
+    cp "$work/lost.txt" "$work/fault.txt"
+    run --expect "$work/fault.txt" --update --fault
+    [ "$rc" -eq 2 ] && cmp -s "$work/lost.txt" "$work/fault.txt" ||
+        fail "--update with a fault rewrote the expectations (exit $rc)"
+
+    # With the switch off, a required test that passes leaked through it.
+    printf '[required]\npass-fail.html\ta test that passes\n[passing]\n' > "$work/leak.txt"
+    run --expect "$work/leak.txt" --modern-off
+    [ "$rc" -eq 1 ] && grep -qx 'LEAKED	pass-fail.html	a test that passes' "$work/out.txt" ||
+        fail "a required test passing with the switch off was not LEAKED, exit 1 (exit $rc)"
+    printf '[required]\npass-fail.html\ta test that fails\n[passing]\nclock.html\tgone\n' > "$work/gated.txt"
+    run --expect "$work/gated.txt" --modern-off
+    [ "$rc" -eq 0 ] && ! grep -q '^LEAKED\|^LOST' "$work/out.txt" ||
+        fail "with the switch off, every required test absent was not a green run (exit $rc)"
+    run --expect "$work/gated.txt" --modern-off --update
+    [ "$rc" -eq 2 ] || fail "--update was taken with the switch off (exit $rc)"
+
     echo "wpt selftest: the runner's pages ran as tools/wpt/selftest.out says, found either way;" \
-        "the expectations' three sections hold"
+        "the expectations' three sections hold, unreadable ones and faulted runs are refused," \
+        "and the switch's proof fails on a leak"
     exit 0
 fi
 

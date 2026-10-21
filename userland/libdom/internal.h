@@ -162,6 +162,12 @@ int d_method(os64_dom_t *dom, JSContext *ctx, JSValueConst target,
 int d_accessor(os64_dom_t *dom, JSContext *ctx, JSValueConst target,
                const char *name, JSCFunctionData *fn, int magic, bool writable);
 JSValue d_wrap(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node);
+/* d_wrap for an interface's constructor: a node with no wrapper yet gets
+ * one whose prototype is `prototype` when that is an object (new.target's,
+ * WebIDL's "get prototype from constructor"), else its kind's; identity,
+ * holds and the registry are d_wrap's. */
+JSValue d_wrap_constructed(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node,
+                           JSValueConst prototype);
 const os64_html_node_t *d_node(os64_dom_t *dom, JSContext *ctx, JSValueConst value);
 DValue *d_find(os64_dom_t *dom, const os64_html_node_t *node);
 int d_geometry_install(os64_dom_t *dom, JSContext *ctx);
