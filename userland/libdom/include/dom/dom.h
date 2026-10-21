@@ -30,9 +30,11 @@ typedef struct {
     bool scripting;
     /* The Modern Web arc's surface (MODERN_WEB.md § The rules that keep the
      * other 99% safe): set, every row of modern.c's table installs its
-     * globals at creation; clear, none of them exists, as in a binding
-     * built before the arc, so a page's feature detection takes the path it
-     * takes where they are missing. */
+     * globals at creation; clear, none of the names the table installs
+     * exists on window, so a page's feature detection takes the path it
+     * takes where they are missing. The binding's own prototype chain,
+     * which the arc corrected (HTMLElement's prototype between Element's
+     * and the HTML elements'), is the same either way. */
     bool modern;
     /* The UTF-8 message is borrowed during this owner-thread call. The host
      * copies it if needed and must not enter JS or a nested event loop here. */

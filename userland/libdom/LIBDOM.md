@@ -467,7 +467,8 @@ interfaces. Host acceptance and remaining J5/P5 work are in the design record.
 arc adds to window is installed by one table, `modern.c`'s, walked once at
 creation after the classic window is whole: with the option clear the walk
 does not run and none of those names exists, which is what a page's feature
-detection needs to see. A row is the names it puts on window and the
+detection needs to see. The binding's own prototype chain is the same
+either way. A row is the names it puts on window and the
 installer that puts them there; a slice adds its file and its row and
 installs no global anywhere else.
 

@@ -523,7 +523,12 @@ the switch on, less those with it off, must equal the table's, so a slice's
 row needs no case of its own to prove its switch. A row that leaves an
 engine exception pending fails the creation (QuickJS's function
 constructors swallow an out-of-memory in `length` and `name`; the full
-installer sweep found one).
+installer sweep found one). The switch takes away the table's names and
+what its rows put on them, nothing else: the binding's own prototype chain,
+which this slice corrected (below), is the same with it on or off (Fable's
+ruling on Codex's fourth round: the separate HTMLElement prototype fixes
+the binding's structure and is not surface the arc adds, and no page
+detects a feature by comparing prototypes). The DOM host holds that too.
 
 **The first row: the interface objects**, cherry-picked from `8a6cca6d`
 with Chris's authorship and then made whole to their own rule (one

@@ -54,6 +54,37 @@ static void modern_names_free(char **names, size_t n)
     free(names);
 }
 
+/* The shape of the binding's prototype chains, for nodes of every kind it
+ * tells apart: for each, each level down to Object.prototype, as the names
+ * the binding put there, leaving out what the interface row adds (each
+ * prototype's `constructor`, Node's constants). malloc'd; NULL when the
+ * script did not run. */
+static char *modern_chain_shape(DomFixture *f)
+{
+    if (!dom_script(f, MODERN_ASSERT
+        "var holder=document.createElement('div');holder.innerHTML='<svg><circle/></svg>';"
+        "var nodes=[document,document.body,document.createElement('div'),document.createElement('input'),"
+        "document.createElement('a'),document.createElement('script'),holder.firstChild,"
+        "document.createTextNode('t'),document.createComment('c'),document.createDocumentFragment()];"
+        "var row=/(^constructor$|_NODE$|^DOCUMENT_POSITION_)/;"
+        "globalThis.chainShape=nodes.map(function(n){var levels=[];"
+        "for(var p=Object.getPrototypeOf(n);p&&p!==Object.prototype;p=Object.getPrototypeOf(p))"
+        "levels.push(Object.getOwnPropertyNames(p).filter(function(k){return !row.test(k)}).sort().join(','));"
+        "return levels.join(' / ')}).join('\\n');", "modern-chain-shape"))
+        return NULL;
+    os64_js_outcome_t outcome;
+    JSContext *ctx = os64_js_context(f->runtime, OS64_JS_ABI_ID, &outcome);
+    if (ctx == NULL) return NULL;
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue shape = JS_GetPropertyStr(ctx, global, "chainShape");
+    const char *text = JS_ToCString(ctx, shape);
+    char *copy = text != NULL ? strdup(text) : NULL;
+    JS_FreeCString(ctx, text);
+    JS_FreeValue(ctx, shape);
+    JS_FreeValue(ctx, global);
+    return copy;
+}
+
 static void dom_modern_cases(void)
 {
     check(os64_dom_default_options().modern, "modern: the switch is on unless a host turns it off");
@@ -70,12 +101,13 @@ static void dom_modern_cases(void)
         "s.setProperty('animation-name','spin');assert(s.getPropertyValue('animation-name')==='spin');",
         "modern-on-style-member");
     check(on != NULL, "modern: window's names with the switch on");
+    char *chain_on = modern_chain_shape(&f);
     fixture_free(&f);
 
     os64_dom_options_t options = os64_dom_default_options();
     options.modern = false;
     f = fixture_new(&options);
-    if (!fixture_ready(&f)) { modern_names_free(on, non); return; }
+    if (!fixture_ready(&f)) { modern_names_free(on, non); free(chain_on); return; }
     size_t noff = 0;
     char **off = modern_global_names(&f, &noff);
     check(off != NULL, "modern: window's names with the switch off");
@@ -113,6 +145,15 @@ static void dom_modern_cases(void)
             exact = false;
         }
     check(exact, "modern: the switch adds exactly the table's names to window, and nothing else");
+    /* The switch takes away the table's names, not the binding's own
+     * structure: the prototype chains have the same levels, holding the
+     * same members, either way. */
+    char *chain_off = modern_chain_shape(&f);
+    check(chain_on != NULL && chain_off != NULL && strcmp(chain_on, chain_off) == 0 &&
+          strstr(chain_on, " / ") != NULL,
+          "modern: the binding's prototype chains are the same with the switch on and off");
+    free(chain_on);
+    free(chain_off);
     modern_names_free(on, non);
     modern_names_free(off, noff);
     fixture_free(&f);
