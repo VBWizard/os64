@@ -653,6 +653,9 @@ struct FBox {
     // formatting context with items — never both. Out-of-flow children may
     // hang under either kind.
     bool ifc;
+    // An inline formatting context's ellipsis (flow_box_t.ellipsis), made
+    // once, the first time its lines are laid out; NULL for none.
+    os64_text_run_t *ellipsis;
     // POSITION.md. `positioned`: a block-level box whose position is not
     // static — but a table's row, group or column, laid out static (booked)
     // — whose public box is stacked (flow_box_t.stacked): reached from the

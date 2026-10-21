@@ -1396,6 +1396,26 @@ typedef struct {
     int64_t rel_x, rel_y;
 } Later;
 
+// A context's ellipsis (flow_box_t.ellipsis): U+2026 in the block's fonts,
+// or three periods when the run of it is the engine's missing-glyph marker
+// (a placement of no font). Kept with the layout's runs; one that cannot be
+// made is no ellipsis, and the painter cuts the line instead.
+static void ellipsis_of(L *l, FBox *ifc, const Fonts *bf)
+{
+    const flow_style_t *s = ifc->style;
+    if (s->text_overflow != FLOW_TEXT_OVERFLOW_ELLIPSIS || s->overflow_x == FLOW_OVERFLOW_VISIBLE)
+        return;
+    os64_text_run_t *run = run_of(l, bf, "\xe2\x80\xa6", 3, 0, 0, 0);
+    os64_text_run_view_t v;
+    if (run != NULL && os64_text_run_view(run, &v) == OS64_FONT_OK &&
+        (v.glyph_count == 0 || v.glyphs[0].font_identity == 0)) {
+        os64_text_run_release(run);
+        run = run_of(l, bf, "...", 3, 0, 0, 0);
+    }
+    if (run != NULL && keep_run(l, run))
+        ifc->ellipsis = run;
+}
+
 static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw, Cursor *cur)
 {
     // Pass 2 stopped inside this context: its last line was broken without
@@ -1405,6 +1425,8 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
     segments(l, ifc, cw, &s);
     Fonts bf;
     bool have_block_font = fonts_for(l, ifc->style, &bf);
+    if (have_block_font && ifc->ellipsis == NULL)
+        ellipsis_of(l, ifc, &bf);
     Open open = {0};
     // The x each open inline's piece on the current line starts at.
     int64_t *open_x = NULL;

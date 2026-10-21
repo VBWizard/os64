@@ -259,6 +259,9 @@ typedef enum {
     FLOW_CURSOR_ZOOM_OUT,
 } flow_cursor_t;
 
+// `text-overflow`, its one-value form (CSS Overflow 4 § 4.1).
+typedef enum { FLOW_TEXT_OVERFLOW_CLIP = 0, FLOW_TEXT_OVERFLOW_ELLIPSIS } flow_text_overflow_t;
+
 // `object-fit` (CSS Images 3 § 4.5).
 typedef enum {
     FLOW_OBJECT_FILL = 0, FLOW_OBJECT_CONTAIN, FLOW_OBJECT_COVER, FLOW_OBJECT_NONE,
@@ -677,6 +680,10 @@ typedef struct {
     // Computed as CSS Overflow 3 § 3 says: a visible or clip axis beside
     // one that scrolls or hides becomes auto or hidden.
     flow_overflow_t overflow_x, overflow_y;
+    // What a line its content overflows ends in (CSS Overflow 4 § 4.1),
+    // on a block whose overflow is not visible: cut (clip), or an
+    // ellipsis (flow_box_t.ellipsis). Not inherited.
+    flow_text_overflow_t text_overflow;
 
     flow_text_align_t text_align;
     flow_vertical_align_t vertical_align;
@@ -952,6 +959,12 @@ struct flow_box {
     const os64_text_run_t *run;
     const char *text;
     uint32_t length;
+    // A box holding lines whose `text-overflow` is ellipsis and whose
+    // `overflow` is not visible: the ellipsis its lines end in where their
+    // content passes their end, laid out in its own fonts — U+2026, or
+    // three periods where those fonts have no glyph for it — and owned by
+    // the tree. Where it goes is the painter's. NULL otherwise.
+    const os64_text_run_t *ellipsis;
     // TEXT: where those bytes are in the node's processed text — what a
     // selection maps a pixel back through — when the node is a TEXT node.
     // Under an ELEMENT they are text the page never wrote there (a `q`'s

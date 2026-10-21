@@ -57,6 +57,35 @@ static void outline_door_cases(void)
     sheeted_close(&p);
 }
 
+// A block's ellipsis (flow_box_t.ellipsis): made for a block whose
+// text-overflow is ellipsis and whose overflow is not visible, of U+2026
+// in its own fonts (the test faces have every scalar), and for no other.
+static void ellipsis_door_cases(void)
+{
+    Sheeted p;
+    sheeted_open(&p, "<!doctype html><style>div, p { width: 40px; white-space: nowrap;"
+                     " text-overflow: ellipsis } div { overflow: hidden }"
+                     " section { overflow: hidden }</style>"
+                     "<div>abcdefghij</div><p>abcdefghij</p><section>abcdefghij</section>",
+                 100, 600);
+    flow_tree_t *tree = flow_layout(p.doc, p.page, 100, &p.env);
+    const flow_box_t *root = tree != NULL ? flow_root(tree) : NULL;
+    const flow_box_t *div = batch_a_box(root, OS64_HTML_TAG_DIV, FLOW_BOX_BLOCK);
+    const flow_box_t *para = batch_a_box(root, OS64_HTML_TAG_P, FLOW_BOX_BLOCK);
+    const flow_box_t *sect = batch_a_box(root, OS64_HTML_TAG_SECTION, FLOW_BOX_BLOCK);
+    os64_text_run_view_t v;
+    expect("text-overflow: a block that clips has its ellipsis, U+2026, 8 wide",
+           div != NULL && div->ellipsis != NULL &&
+               os64_text_run_view(div->ellipsis, &v) == OS64_FONT_OK && v.byte_count == 3 &&
+               memcmp(v.bytes, "\xe2\x80\xa6", 3) == 0 && v.advance_x == 8 * 64, NULL);
+    expect("text-overflow: none on a block whose overflow is visible",
+           para != NULL && para->ellipsis == NULL, NULL);
+    expect("text-overflow: none on a block that clips without asking",
+           sect != NULL && sect->ellipsis == NULL, NULL);
+    flow_free(tree);
+    sheeted_close(&p);
+}
+
 static void batch_a_cases(void)
 {
     // cursor is inherited, the keyword after the pictures kept; user-select
@@ -257,6 +286,20 @@ static void batch_a_cases(void)
         "        text \"x\" 0 28 8 16 serif 16\n");
     outline_door_cases();
 
+    // ── text-overflow (CSS Overflow 4 § 4.1) ──
+
+    // Not inherited; the line is laid out as it would be, past its block:
+    // where it is cut and the ellipsis goes is the painter's.
+    cascade_case("text-overflow: not inherited", 800,
+        "<!doctype html><style>div { text-overflow: ellipsis } p { text-overflow: clip }"
+        "</style><div><p>a</p><span>b</span></div>",
+        PAGE_OPEN
+        "  body block margin=8/8/8/8 holds-block\n"
+        "    div block text-overflow=ellipsis holds-block\n"
+        "      p block margin=16/0/16/0\n"
+        "      span inline\n");
+    ellipsis_door_cases();
+
     // ── object-fit and object-position (CSS Images 3 § 4.5, § 4.6) ──
 
     // Neither inherited; inherit takes the parent's. `right 1em top 2px`
@@ -317,6 +360,11 @@ static void batch_a_cases(void)
         PAGE_OPEN
         "  body block margin=8/8/8/8\n"
         "    img inline\n");
+    cascade_case("text-overflow: unknown with the Modern Web switch off", 800,
+        "<!doctype html><style>div { text-overflow: ellipsis }</style><div>a</div>",
+        PAGE_OPEN
+        "  body block margin=8/8/8/8 holds-block\n"
+        "    div block\n");
     cascade_case("letter-spacing: unknown with the Modern Web switch off", 800,
         "<!doctype html><style>div { letter-spacing: 3px }</style><div>a</div>",
         PAGE_OPEN

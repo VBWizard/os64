@@ -53,6 +53,34 @@ static void object_rect_cases(void)
 static void batch_a_paint_cases(void)
 {
     object_rect_cases();
+    // text-overflow: the div is 40 wide, its line abcdefghij 68. The
+    // ellipsis is 8 (16px serif), so what is kept ends by 32: abcd, a-d
+    // 8 each. The text is drawn cut there, and the ellipsis at 32 on the
+    // line's baseline, in the div's colour.
+    paint_page_case("text-overflow: an ellipsis ends a line that passes its end",
+                    "<!doctype html><style>body { margin: 0 } div { width: 40px; overflow: hidden;"
+                    " white-space: nowrap; text-overflow: ellipsis; color: #00ff00 }</style>"
+                    "<div>abcdefghij</div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "text \"\" 32 14 #00ff00 clip 0 0 40 20\n"
+                    "text \"abcdefghij\" 0 14 #00ff00 clip 0 0 32 20\n");
+    // Across boxes: ab (16), then the b's cdefgh from 16; the limit 32
+    // keeps cd of it, to 32, which is where its ellipsis goes; the i
+    // element past the limit is not drawn. A line that fits has none, and
+    // nor has a block whose overflow is visible: its text runs on.
+    paint_page_case("text-overflow: the ellipsis after the last box kept, none where it fits",
+                    "<!doctype html><style>body { margin: 0 } div { width: 40px; overflow: hidden;"
+                    " white-space: nowrap; text-overflow: ellipsis } p { margin: 0; width: 40px;"
+                    " white-space: nowrap; text-overflow: ellipsis }</style>"
+                    "<div>ab<b>cdefgh</b><i>xyz</i></div><div>abc</div><p>abcdefghij</p>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "text \"ab\" 0 14 #101010 clip 0 0 40 20\n"
+                    "text \"\" 32 14 #101010 clip 0 0 40 20\n"
+                    "text \"cdefgh\" 16 14 #101010 clip 0 0 32 20\n"
+                    "text \"abc\" 0 34 #101010 clip 0 20 40 20\n"
+                    "text \"abcdefghij\" 0 54 #101010\n");
     // An outline is a ring round the border box (5, 5, 20 x 10), out by its
     // offset, 1, and 2 wide: -3 a side from the box to 2, 2, 26 x 16,
     // drawn as a square 2px border is, after the box's background.

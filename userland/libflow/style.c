@@ -1932,6 +1932,7 @@ static void take(Spec *dst, const Spec *src, garb_prop_t prop)
         break;
     case GARB_OUTLINE_OFFSET: dst->outline_offset = src->outline_offset; break;
     case GARB_OBJECT_FIT: d->object_fit = s->object_fit; break;
+    case GARB_TEXT_OVERFLOW: d->text_overflow = s->text_overflow; break;
     case GARB_OBJECT_POSITION:
         dst->object_position[0] = src->object_position[0];
         dst->object_position[1] = src->object_position[1];
@@ -3262,6 +3263,10 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
             s->outline_color = colour_of(v->color);
         break;
     case GARB_OUTLINE_OFFSET: author_len(a, v, false, &sp->outline_offset); break;
+    case GARB_TEXT_OVERFLOW:
+        s->text_overflow = is_word(v, "ellipsis") ? FLOW_TEXT_OVERFLOW_ELLIPSIS
+                                                  : FLOW_TEXT_OVERFLOW_CLIP;
+        break;
     case GARB_OBJECT_FIT: {
         static const char *const words[] = {"fill", "contain", "cover", "none", "scale-down"};
         _Static_assert(F_ARRAY(words) == FLOW_OBJECT_SCALE_DOWN + 1, "flow_object_fit_t");
